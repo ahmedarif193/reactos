@@ -22,7 +22,6 @@
 #include <assert.h>
 
 #include "ntstatus.h"
-#define WIN32_NO_STATUS
 #include "dbghelp_private.h"
 #include "winternl.h"
 #include "wine/debug.h"
@@ -39,11 +38,7 @@ static BOOL arm_get_addr(HANDLE hThread, const CONTEXT* ctx,
 #ifdef __arm__
     case cpu_addr_pc:    addr->Offset = ctx->Pc; return TRUE;
     case cpu_addr_stack: addr->Offset = ctx->Sp; return TRUE;
-#ifdef __REACTOS__
     case cpu_addr_frame: addr->Offset = ctx->R11; return TRUE;
-#else
-    case cpu_addr_frame: addr->Offset = ctx->Fp; return TRUE;
-#endif
 #endif
     default: addr->Mode = -1;
         return FALSE;
@@ -95,13 +90,13 @@ static BOOL arm_stack_walk(struct cpu_stack_walk *csw, STACKFRAME64 *frame,
     /* sanity check */
     if (curr_mode >= stm_done) return FALSE;
 
-    TRACE("Enter: PC=%s Frame=%s Return=%s Stack=%s Mode=%s Count=%s\n",
+    TRACE("Enter: PC=%s Frame=%s Return=%s Stack=%s Mode=%s Count=%I64u\n",
           wine_dbgstr_addr(&frame->AddrPC),
           wine_dbgstr_addr(&frame->AddrFrame),
           wine_dbgstr_addr(&frame->AddrReturn),
           wine_dbgstr_addr(&frame->AddrStack),
           curr_mode == stm_start ? "start" : "ARM",
-          wine_dbgstr_longlong(curr_count));
+          curr_count);
 
     if (curr_mode == stm_start)
     {
@@ -128,24 +123,20 @@ static BOOL arm_stack_walk(struct cpu_stack_walk *csw, STACKFRAME64 *frame,
     /* set frame information */
     frame->AddrStack.Offset = context->ctx.Sp;
     frame->AddrReturn.Offset = context->ctx.Lr;
-#ifdef __REACTOS__
     frame->AddrFrame.Offset = context->ctx.R11;
-#else
-    frame->AddrFrame.Offset = context->ctx.Fp;
-#endif
     frame->AddrPC.Offset = context->ctx.Pc;
 
     frame->Far = TRUE;
     frame->Virtual = TRUE;
     inc_curr_count();
 
-    TRACE("Leave: PC=%s Frame=%s Return=%s Stack=%s Mode=%s Count=%s FuncTable=%p\n",
+    TRACE("Leave: PC=%s Frame=%s Return=%s Stack=%s Mode=%s Count=%I64u FuncTable=%p\n",
           wine_dbgstr_addr(&frame->AddrPC),
           wine_dbgstr_addr(&frame->AddrFrame),
           wine_dbgstr_addr(&frame->AddrReturn),
           wine_dbgstr_addr(&frame->AddrStack),
           curr_mode == stm_start ? "start" : "ARM",
-          wine_dbgstr_longlong(curr_count),
+          curr_count,
           frame->FuncTableEntry);
 
     return TRUE;
@@ -188,13 +179,8 @@ static void *arm_fetch_context_reg(union ctx *pctx, unsigned regno, unsigned *si
     case CV_ARM_R0 +  8: *size = sizeof(ctx->R8); return &ctx->R8;
     case CV_ARM_R0 +  9: *size = sizeof(ctx->R9); return &ctx->R9;
     case CV_ARM_R0 + 10: *size = sizeof(ctx->R10); return &ctx->R10;
-#ifdef __REACTOS__
     case CV_ARM_R0 + 11: *size = sizeof(ctx->R11); return &ctx->R11;
     case CV_ARM_R0 + 12: *size = sizeof(ctx->R12); return &ctx->R12;
-#else
-    case CV_ARM_R0 + 11: *size = sizeof(ctx->Fp); return &ctx->Fp;
-    case CV_ARM_R0 + 12: *size = sizeof(ctx->Ip); return &ctx->Ip;
-#endif
 
     case CV_ARM_SP: *size = sizeof(ctx->Sp); return &ctx->Sp;
     case CV_ARM_LR: *size = sizeof(ctx->Lr); return &ctx->Lr;
@@ -255,7 +241,7 @@ static BOOL arm_fetch_minidump_module(struct dump_context* dc, unsigned index, u
     return FALSE;
 }
 
-DECLSPEC_HIDDEN struct cpu cpu_arm = {
+struct cpu cpu_arm = {
     IMAGE_FILE_MACHINE_ARMNT,
     4,
     CV_ARM_R0 + 11,

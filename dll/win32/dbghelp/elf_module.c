@@ -28,7 +28,6 @@
 #include "winternl.h"
 
 #include "wine/debug.h"
-#include "wine/heap.h"
 
 #define ELF_INFO_DEBUG_HEADER   0x0001
 #define ELF_INFO_MODULE         0x0002
@@ -39,7 +38,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(dbghelp);
 struct elf_info
 {
     unsigned                    flags;          /* IN  one (or several) of the ELF_INFO constants */
-    DWORD_PTR                   dbg_hdr_addr;   /* OUT address of debug header (if ELF_INFO_DEBUG_HEADER is set) */
+    DWORD64                     dbg_hdr_addr;   /* OUT address of debug header (if ELF_INFO_DEBUG_HEADER is set) */
     struct module*              module;         /* OUT loaded module (if ELF_INFO_MODULE is set) */
     const WCHAR*                module_name;    /* OUT found module name (if ELF_INFO_NAME is set) */
 };
@@ -121,6 +120,21 @@ struct elf_module_info
 
 #define ELF_AT_SYSINFO_EHDR    33
 
+static DWORD elf_get_machine(unsigned mach)
+{
+    switch (mach)
+    {
+    default:
+        FIXME("No mapping yet for ELF e_machine %u\n", mach);
+        /* fall through */
+    case /*EM_NONE*/      0: return IMAGE_FILE_MACHINE_UNKNOWN;
+    case /*EM_386*/       3: return IMAGE_FILE_MACHINE_I386;
+    case /*EM_ARM*/      40: return IMAGE_FILE_MACHINE_ARMNT;
+    case /*EM_X86_64*/   62: return IMAGE_FILE_MACHINE_AMD64;
+    case /*EM_AARCH64*/ 183: return IMAGE_FILE_MACHINE_ARM64;
+    }
+}
+
 /******************************************************************
  *		elf_map_section
  *
@@ -147,14 +161,14 @@ static const char* elf_map_section(struct image_section_map* ism)
     size = fmap->sect[ism->sidx].shdr.sh_offset + fmap->sect[ism->sidx].shdr.sh_size - ofst;
     if (!(mapping = CreateFileMappingW(fmap->handle, NULL, PAGE_READONLY, 0, ofst + size, NULL)))
     {
-        ERR("map creation %p failed %u offset %lu %lu size %lu\n", fmap->handle, GetLastError(), ofst, ofst % 4096, size);
+        ERR("map creation %p failed %lu offset %Iu %Iu size %Iu\n", fmap->handle, GetLastError(), ofst, ofst % 4096, size);
         return IMAGE_NO_MAP;
     }
     fmap->sect[ism->sidx].mapped = MapViewOfFile(mapping, FILE_MAP_READ, 0, ofst, size);
     CloseHandle(mapping);
     if (!fmap->sect[ism->sidx].mapped)
     {
-        ERR("map %p failed %u offset %lu %lu size %lu\n", fmap->handle, GetLastError(), ofst, ofst % 4096, size);
+        ERR("map %p failed %lu offset %Iu %Iu size %Iu\n", fmap->handle, GetLastError(), ofst, ofst % 4096, size);
         return IMAGE_NO_MAP;
     }
     return fmap->sect[ism->sidx].mapped + (fmap->sect[ism->sidx].shdr.sh_offset & (sysinfo.dwAllocationGranularity - 1));
@@ -421,7 +435,7 @@ static BOOL elf_map_file(struct elf_map_file_data* emfd, struct image_file_map* 
     case from_file:
         if (!(dos_path = get_dos_file_name(emfd->u.file.filename))) return FALSE;
         fmap->u.elf.handle = CreateFileW(dos_path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-        heap_free(dos_path);
+        HeapFree(GetProcessHeap(), 0, dos_path);
         if (fmap->u.elf.handle == INVALID_HANDLE_VALUE) return FALSE;
         break;
     case from_handle:
@@ -587,7 +601,7 @@ BOOL elf_map_handle(HANDLE handle, struct image_file_map* fmap)
     return elf_map_file(&emfd, fmap);
 }
 
-static void elf_module_remove(struct process* pcs, struct module_format* modfmt)
+static void elf_module_remove(struct module_format* modfmt)
 {
     image_unmap_file(&modfmt->u.elf_info->file_map);
     HeapFree(GetProcessHeap(), 0, modfmt);
@@ -684,8 +698,7 @@ static void elf_hash_symtab(struct module* module, struct pool* pool,
         {
         case ELF_STT_FILE:
             if (symname)
-                compiland = symt_new_compiland(module, sym.st_value,
-                                               source_new(module, NULL, symname));
+                compiland = symt_new_compiland(module, symt_ptr_to_symref(&module->top->symt), symname);
             else
                 compiland = NULL;
             continue;
@@ -748,7 +761,7 @@ static void elf_hash_symtab(struct module* module, struct pool* pool,
  */
 static const struct elf_sym *elf_lookup_symtab(const struct module* module,
                                                const struct hash_table* ht_symtab,
-                                               const char* name, const struct symt* compiland)
+                                               const char* name, symref_t symref_compiland)
 {
     struct symtab_elt*          weak_result = NULL; /* without compiland name */
     struct symtab_elt*          result = NULL;
@@ -757,19 +770,19 @@ static const struct elf_sym *elf_lookup_symtab(const struct module* module,
     const char*                 compiland_name;
     const char*                 compiland_basename;
     const char*                 base;
+    struct symt_compiland      *compiland = (struct symt_compiland*)SYMT_SYMREF_TO_PTR(symref_compiland);
 
-    /* we need weak match up (at least) when symbols of same name, 
+    /* we need weak match up (at least) when symbols of same name,
      * defined several times in different compilation units,
      * are merged in a single one (hence a different filename for c.u.)
      */
     if (compiland)
     {
-        compiland_name = source_get(module,
-                                    ((const struct symt_compiland*)compiland)->source);
+        compiland_name = ((const struct symt_compiland*)compiland)->filename;
         compiland_basename = file_nameA(compiland_name);
     }
     else compiland_name = compiland_basename = NULL;
-    
+
     hash_table_iter_init(ht_symtab, &hti, name);
     while ((ste = hash_table_iter_up(&hti)))
     {
@@ -780,7 +793,7 @@ static const struct elf_sym *elf_lookup_symtab(const struct module* module,
             continue;
         if (ste->compiland && compiland_name)
         {
-            const char* filename = source_get(module, ste->compiland->source);
+            const char* filename = ste->compiland->filename;
             if (strcmp(filename, compiland_name))
             {
                 base = file_nameA(filename);
@@ -790,9 +803,11 @@ static const struct elf_sym *elf_lookup_symtab(const struct module* module,
         if (result)
         {
             FIXME("Already found symbol %s (%s) in symtab %s @%08x and %s @%08x\n",
-                  name, compiland_name,
-                  source_get(module, result->compiland->source), (unsigned int)result->sym.st_value,
-                  source_get(module, ste->compiland->source), (unsigned int)ste->sym.st_value);
+                  debugstr_a(name), debugstr_a(compiland_name),
+                  debugstr_a(result->compiland->filename),
+                  (unsigned int)result->sym.st_value,
+                  debugstr_a(ste->compiland->filename),
+                  (unsigned int)ste->sym.st_value);
         }
         else
         {
@@ -803,7 +818,7 @@ static const struct elf_sym *elf_lookup_symtab(const struct module* module,
     if (!result && !(result = weak_result))
     {
         FIXME("Couldn't find symbol %s!%s in symtab\n",
-              debugstr_w(module->module.ModuleName), name);
+              debugstr_w(module->modulename), debugstr_a(name));
         return NULL;
     }
     return &result->sym;
@@ -827,6 +842,7 @@ static void elf_finish_stabs_info(struct module* module, const struct hash_table
     struct symt_ht*             sym;
     const struct elf_sym*       symp;
     struct elf_module_info*     elf_info = module->format_info[DFI_ELF]->u.elf_info;
+    DWORD64                     size;
 
     hash_table_iter_init(&module->ht_symbols, &hti, NULL);
     while ((ptr = hash_table_iter_up(&hti)))
@@ -835,31 +851,31 @@ static void elf_finish_stabs_info(struct module* module, const struct hash_table
         switch (sym->symt.tag)
         {
         case SymTagFunction:
-            if (((struct symt_function*)sym)->address != elf_info->elf_addr &&
-                ((struct symt_function*)sym)->size)
+            size = addr_range_size(&((struct symt_function*)sym)->ranges[0]);
+            if (((struct symt_function*)sym)->ranges[0].low != elf_info->elf_addr && size)
             {
                 break;
             }
-            symp = elf_lookup_symtab(module, symtab, sym->hash_elt.name, 
+            symp = elf_lookup_symtab(module, symtab, sym->hash_elt.name,
                                      ((struct symt_function*)sym)->container);
             if (symp)
             {
-                if (((struct symt_function*)sym)->address != elf_info->elf_addr &&
-                    ((struct symt_function*)sym)->address != elf_info->elf_addr + symp->st_value)
-                    FIXME("Changing address for %p/%s!%s from %08lx to %s\n",
-                          sym, debugstr_w(module->module.ModuleName), sym->hash_elt.name,
-                          ((struct symt_function*)sym)->address,
-                          wine_dbgstr_longlong(elf_info->elf_addr + symp->st_value));
-                if (((struct symt_function*)sym)->size && ((struct symt_function*)sym)->size != symp->st_size)
-                    FIXME("Changing size for %p/%s!%s from %08lx to %08x\n",
-                          sym, debugstr_w(module->module.ModuleName), sym->hash_elt.name,
-                          ((struct symt_function*)sym)->size, (unsigned int)symp->st_size);
+                if (((struct symt_function*)sym)->ranges[0].low != elf_info->elf_addr &&
+                    ((struct symt_function*)sym)->ranges[0].low != elf_info->elf_addr + symp->st_value)
+                    FIXME("Changing address for %p/%s!%s from %I64x to %I64x\n",
+                          sym, debugstr_w(module->modulename), debugstr_a(sym->hash_elt.name),
+                          ((struct symt_function*)sym)->ranges[0].low,
+                          elf_info->elf_addr + symp->st_value);
+                if (size && size != symp->st_size)
+                    FIXME("Changing size for %p/%s!%s from %I64x to %I64x\n",
+                          sym, debugstr_w(module->modulename), debugstr_a(sym->hash_elt.name),
+                          size, symp->st_size);
 
-                ((struct symt_function*)sym)->address = elf_info->elf_addr + symp->st_value;
-                ((struct symt_function*)sym)->size    = symp->st_size;
+                ((struct symt_function*)sym)->ranges[0].low = elf_info->elf_addr + symp->st_value;
+                ((struct symt_function*)sym)->ranges[0].high = elf_info->elf_addr + symp->st_value + symp->st_size;
             } else
                 FIXME("Couldn't find %s!%s\n",
-                      debugstr_w(module->module.ModuleName), sym->hash_elt.name);
+                      debugstr_w(module->modulename), debugstr_a(sym->hash_elt.name));
             break;
         case SymTagData:
             switch (((struct symt_data*)sym)->kind)
@@ -869,22 +885,22 @@ static void elf_finish_stabs_info(struct module* module, const struct hash_table
                 if (((struct symt_data*)sym)->u.var.kind != loc_absolute ||
                     ((struct symt_data*)sym)->u.var.offset != elf_info->elf_addr)
                     break;
-                symp = elf_lookup_symtab(module, symtab, sym->hash_elt.name, 
+                symp = elf_lookup_symtab(module, symtab, sym->hash_elt.name,
                                          ((struct symt_data*)sym)->container);
                 if (symp)
                 {
                     if (((struct symt_data*)sym)->u.var.offset != elf_info->elf_addr &&
                         ((struct symt_data*)sym)->u.var.offset != elf_info->elf_addr + symp->st_value)
-                        FIXME("Changing address for %p/%s!%s from %08lx to %s\n",
-                              sym, debugstr_w(module->module.ModuleName), sym->hash_elt.name,
-                              ((struct symt_function*)sym)->address,
-                              wine_dbgstr_longlong(elf_info->elf_addr + symp->st_value));
+                        FIXME("Changing address for %p/%s!%s from %I64x to %I64x\n",
+                              sym, debugstr_w(module->modulename), debugstr_a(sym->hash_elt.name),
+                              ((struct symt_function*)sym)->ranges[0].low,
+                              elf_info->elf_addr + symp->st_value);
                     ((struct symt_data*)sym)->u.var.offset = elf_info->elf_addr + symp->st_value;
                     ((struct symt_data*)sym)->kind = elf_is_local_symbol(symp->st_info) ?
                         DataIsFileStatic : DataIsGlobal;
                 } else
                     FIXME("Couldn't find %s!%s\n",
-                          debugstr_w(module->module.ModuleName), sym->hash_elt.name);
+                          debugstr_w(module->modulename), debugstr_a(sym->hash_elt.name));
                 break;
             default:;
             }
@@ -930,7 +946,7 @@ static int elf_new_wine_thunks(struct module* module, const struct hash_table* h
             ULONG64     ref_addr;
             struct location loc;
 
-            symt = symt_find_nearest(module, addr);
+            symt = (struct symt_ht*)SYMT_SYMREF_TO_PTR(symt_find_nearest(module, addr));
             if (symt && !symt_get_address(&symt->symt, &ref_addr))
                 ref_addr = addr;
             if (!symt || addr != ref_addr)
@@ -942,8 +958,8 @@ static int elf_new_wine_thunks(struct module* module, const struct hash_table* h
                 switch (ste->sym.st_info & 0xf)
                 {
                 case ELF_STT_FUNC:
-                    symt_new_function(module, ste->compiland, ste->ht_elt.name,
-                                      addr, ste->sym.st_size, NULL);
+                    symt_new_function(module, symt_ptr_to_symref(&ste->compiland->symt), ste->ht_elt.name,
+                                      addr, ste->sym.st_size, 0, 0);
                     break;
                 case ELF_STT_OBJECT:
                     loc.kind = loc_absolute;
@@ -951,7 +967,7 @@ static int elf_new_wine_thunks(struct module* module, const struct hash_table* h
                     loc.offset = addr;
                     symt_new_global_variable(module, ste->compiland, ste->ht_elt.name,
                                              elf_is_local_symbol(ste->sym.st_info),
-                                             loc, ste->sym.st_size, NULL);
+                                             loc, ste->sym.st_size, 0);
                     break;
                 default:
                     FIXME("Shouldn't happen\n");
@@ -1067,12 +1083,8 @@ static BOOL elf_load_debug_info_from_map(struct module* module,
         }
         lret = dwarf2_parse(module, module->reloc_delta, thunks, fmap);
         ret = ret || lret;
-    }
-    if (wcsstr(module->module.ModuleName, S_ElfW) ||
-        !wcscmp(module->module.ModuleName, S_WineLoaderW))
-    {
         /* add the thunks for native libraries */
-        if (!(dbghelp_options & SYMOPT_PUBLICS_ONLY))
+        if (module->is_wine_builtin)
             elf_new_wine_thunks(module, ht_symtab, thunks);
     }
     /* add all the public symbols from symtab */
@@ -1128,6 +1140,12 @@ static BOOL elf_fetch_file_info(struct process* process, const WCHAR* name, ULON
     image_unmap_file(&fmap);
     return TRUE;
 }
+
+static const struct module_format_vtable elf_module_format_vtable =
+{
+    elf_module_remove,
+    NULL,
+};
 
 static BOOL elf_load_file_from_fmap(struct process* pcs, const WCHAR* filename,
                                     struct image_file_map* fmap, ULONG_PTR load_offset,
@@ -1213,12 +1231,12 @@ static BOOL elf_load_file_from_fmap(struct process* pcs, const WCHAR* filename,
         {
             ULONG_PTR rva_dyn = elf_get_map_rva(&ism);
 
-            TRACE("For module %s, got ELF (start=%lx dyn=%lx), link_map (start=%lx dyn=%lx)\n",
+            TRACE("For module %s, got ELF (start=%Ix dyn=%Ix), link_map (start=%Ix dyn=%Ix)\n",
                   debugstr_w(filename), (ULONG_PTR)fmap->u.elf.elf_start, rva_dyn,
                   load_offset, dyn_addr);
             if (dyn_addr && load_offset + rva_dyn != dyn_addr)
             {
-                WARN("\thave to relocate: %lx\n", dyn_addr - rva_dyn);
+                WARN("\thave to relocate: %Ix\n", dyn_addr - rva_dyn);
                 modbase = dyn_addr - rva_dyn;
             }
 	} else WARN("For module %s, no .dynamic section\n", debugstr_w(filename));
@@ -1227,8 +1245,10 @@ static BOOL elf_load_file_from_fmap(struct process* pcs, const WCHAR* filename,
         modfmt = HeapAlloc(GetProcessHeap(), 0,
                           sizeof(struct module_format) + sizeof(struct elf_module_info));
         if (!modfmt) return FALSE;
-        elf_info->module = module_new(pcs, filename, DMT_ELF, FALSE, modbase,
-                                      fmap->u.elf.elf_size, 0, calc_crc32(fmap->u.elf.handle));
+        elf_info->module = module_new(pcs, filename, DMT_ELF,
+                                      module_is_wine_host(filename, L".so"), FALSE, modbase,
+                                      fmap->u.elf.elf_size, 0, 0,
+                                      elf_get_machine(fmap->u.elf.elfhdr.e_machine));
         if (!elf_info->module)
         {
             HeapFree(GetProcessHeap(), 0, modfmt);
@@ -1238,23 +1258,17 @@ static BOOL elf_load_file_from_fmap(struct process* pcs, const WCHAR* filename,
         elf_module_info = (void*)(modfmt + 1);
         elf_info->module->format_info[DFI_ELF] = modfmt;
         modfmt->module      = elf_info->module;
-        modfmt->remove      = elf_module_remove;
-        modfmt->loc_compute = NULL;
+        modfmt->vtable      = &elf_module_format_vtable;
         modfmt->u.elf_info  = elf_module_info;
 
         elf_module_info->elf_addr = load_offset;
 
         elf_module_info->file_map = *fmap;
         elf_reset_file_map(fmap);
-        if (dbghelp_options & SYMOPT_DEFERRED_LOADS)
-        {
-            elf_info->module->module.SymType = SymDeferred;
-            ret = TRUE;
-        }
-        else ret = elf_load_debug_info(pcs, elf_info->module);
 
         elf_module_info->elf_mark = 1;
         elf_module_info->elf_loader = 0;
+        ret = TRUE;
     } else ret = TRUE;
 
     if (elf_info->flags & ELF_INFO_NAME)
@@ -1291,7 +1305,7 @@ static BOOL elf_load_file(struct process* pcs, const WCHAR* filename,
     struct image_file_map       fmap;
     struct elf_map_file_data    emfd;
 
-    TRACE("Processing elf file '%s' at %08lx\n", debugstr_w(filename), load_offset);
+    TRACE("Processing elf file '%s' at %08Ix\n", debugstr_w(filename), load_offset);
 
     emfd.kind = from_file;
     emfd.u.file.filename = filename;
@@ -1329,41 +1343,53 @@ static BOOL elf_load_file_cb(void *param, HANDLE handle, const WCHAR *filename)
 /******************************************************************
  *		elf_search_auxv
  *
- * locate some a value from the debuggee auxiliary vector
+ * Locate a value from the debuggee auxiliary vector
  */
 static BOOL elf_search_auxv(const struct process* pcs, unsigned type, ULONG_PTR* val)
 {
     char        buffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME];
     SYMBOL_INFO*si = (SYMBOL_INFO*)buffer;
-    BYTE*       addr;
-    BYTE*       str;
-    BYTE*       str_max;
+    const unsigned ptr_size = pcs->is_host_64bit ? 8 : 4;
+    UINT64      envp;
+    UINT64      addr;
+    UINT64      str;
+    UINT64      str_max;
 
     si->SizeOfStruct = sizeof(*si);
     si->MaxNameLen = MAX_SYM_NAME;
-    if (!SymFromName(pcs->handle, "libwine.so.1!__wine_main_environ", si) ||
-        !(addr = (void*)(DWORD_PTR)si->Address) ||
-        !ReadProcessMemory(pcs->handle, addr, &addr, sizeof(addr), NULL) ||
-        !addr)
+    if (!SymFromName(pcs->handle, "ntdll.so!main_envp", si) ||
+        !si->Address ||
+        !read_process_integral_value(pcs, si->Address, &envp, ptr_size) ||
+        !envp)
     {
         FIXME("can't find symbol in module\n");
         return FALSE;
     }
     /* walk through envp[] */
     /* envp[] strings are located after the auxiliary vector, so protect the walk */
-    str_max = (void*)(DWORD_PTR)~0L;
-    while (ReadProcessMemory(pcs->handle, addr, &str, sizeof(str), NULL) &&
-           (addr = (void*)((DWORD_PTR)addr + sizeof(str))) != NULL && str != NULL)
-        str_max = min(str_max, str);
+    str_max = ~(UINT64)0u;
+    addr = envp;
+    for (;;)
+    {
+        if (!read_process_integral_value(pcs, addr, &str, ptr_size) || (addr += ptr_size) <= ptr_size)
+            return FALSE;
+        if (!str) break;
+        /* It can be some env vars have been changed, pointing to a different location */
+        if (str >= envp)
+            str_max = min(str_max, str);
+    }
 
     /* Walk through the end of envp[] array.
      * Actually, there can be several NULLs at the end of envp[]. This happens when an env variable is
      * deleted, the last entry is replaced by an extra NULL.
      */
-    while (addr < str_max && ReadProcessMemory(pcs->handle, addr, &str, sizeof(str), NULL) && str == NULL)
-        addr = (void*)((DWORD_PTR)addr + sizeof(str));
+    for (; addr < str_max; addr += ptr_size)
+    {
+        if (!read_process_integral_value(pcs, addr, &str, ptr_size)) return FALSE;
+        if (str) break;
+    }
 
-    if (pcs->is_64bit)
+    if (pcs->is_host_64bit)
     {
         struct
         {
@@ -1371,7 +1397,7 @@ static BOOL elf_search_auxv(const struct process* pcs, unsigned type, ULONG_PTR*
             UINT64 a_val;
         } auxv;
 
-        while (ReadProcessMemory(pcs->handle, addr, &auxv, sizeof(auxv), NULL) && auxv.a_type)
+        while (read_process_memory(pcs, addr, &auxv, sizeof(auxv)) && auxv.a_type)
         {
             if (auxv.a_type == type)
             {
@@ -1389,7 +1415,7 @@ static BOOL elf_search_auxv(const struct process* pcs, unsigned type, ULONG_PTR*
             UINT32 a_val;
         } auxv;
 
-        while (ReadProcessMemory(pcs->handle, addr, &auxv, sizeof(auxv), NULL) && auxv.a_type)
+        while (read_process_memory(pcs, addr, &auxv, sizeof(auxv)) && auxv.a_type)
         {
             if (auxv.a_type == type)
             {
@@ -1414,7 +1440,6 @@ static BOOL elf_search_and_load_file(struct process* pcs, const WCHAR* filename,
 {
     BOOL                ret = FALSE;
     struct module*      module;
-    static const WCHAR  S_libstdcPPW[] = {'l','i','b','s','t','d','c','+','+','\0'};
 
     if (filename == NULL || *filename == '\0') return FALSE;
     if ((module = module_is_already_loaded(pcs, filename)))
@@ -1424,7 +1449,7 @@ static BOOL elf_search_and_load_file(struct process* pcs, const WCHAR* filename,
         return module->module.SymType;
     }
 
-    if (wcsstr(filename, S_libstdcPPW)) return FALSE; /* We know we can't do it */
+    if (wcsstr(filename, L"libstdc++")) return FALSE; /* We know we can't do it */
     ret = elf_load_file(pcs, filename, load_offset, dyn_addr, elf_info);
     /* if relative pathname, try some absolute base dirs */
     if (!ret && filename == file_name(filename))
@@ -1436,8 +1461,7 @@ static BOOL elf_search_and_load_file(struct process* pcs, const WCHAR* filename,
         load_elf.elf_info    = elf_info;
 
         ret = search_unix_path(filename, process_getenv(pcs, L"LD_LIBRARY_PATH"), elf_load_file_cb, &load_elf)
-            || search_unix_path(filename, BINDIR, elf_load_file_cb, &load_elf)
-            || search_dll_path(pcs, filename, elf_load_file_cb, &load_elf);
+            || search_dll_path(pcs, filename, IMAGE_FILE_MACHINE_UNKNOWN, elf_load_file_cb, &load_elf);
     }
 
     return ret;
@@ -1459,7 +1483,7 @@ static BOOL elf_enum_modules_internal(const struct process* pcs,
     char bufstr[256];
     ULONG_PTR lm_addr;
 
-    if (pcs->is_64bit)
+    if (pcs->is_host_64bit)
     {
         struct
         {
@@ -1549,10 +1573,7 @@ static BOOL elf_enum_modules_internal(const struct process* pcs,
         ULONG_PTR ehdr_addr;
 
         if (elf_search_auxv(pcs, ELF_AT_SYSINFO_EHDR, &ehdr_addr))
-        {
-            static const WCHAR vdsoW[] = {'[','v','d','s','o',']','.','s','o',0};
-            cb(vdsoW, ehdr_addr, 0, TRUE, user);
-        }
+            cb(L"[vdso].so", ehdr_addr, 0, TRUE, user);
     }
     return TRUE;
 }
@@ -1662,7 +1683,7 @@ static struct module* elf_load_module(struct process* pcs, const WCHAR* name, UL
 {
     struct elf_load     el;
 
-    TRACE("(%p %s %08lx)\n", pcs, debugstr_w(name), addr);
+    TRACE("(%p %s %08Ix)\n", pcs, debugstr_w(name), addr);
 
     el.elf_info.flags = ELF_INFO_MODULE;
     el.ret = FALSE;
@@ -1753,16 +1774,20 @@ static const struct loader_ops elf_loader_ops =
 BOOL elf_read_wine_loader_dbg_info(struct process* pcs, ULONG_PTR addr)
 {
     struct elf_info     elf_info;
-    WCHAR *loader;
-    BOOL ret;
+    BOOL ret = FALSE;
+    const WCHAR *loader;
 
     elf_info.flags = ELF_INFO_DEBUG_HEADER | ELF_INFO_MODULE;
     loader = get_wine_loader_name(pcs);
-    ret = elf_search_and_load_file(pcs, loader, addr, 0, &elf_info);
-    heap_free(loader);
+    if (loader) ret = elf_search_and_load_file(pcs, loader, addr, 0, &elf_info);
     if (!ret || !elf_info.dbg_hdr_addr) return FALSE;
-
-    TRACE("Found ELF debug header %#lx\n", elf_info.dbg_hdr_addr);
+    if (elf_info.dbg_hdr_addr != (ULONG_PTR)elf_info.dbg_hdr_addr)
+    {
+        ERR("Unable to access ELF libraries (outside 32bit limit)\n");
+        module_remove(pcs, elf_info.module);
+        return FALSE;
+    }
+    TRACE("Found ELF debug header %#I64x\n", elf_info.dbg_hdr_addr);
     elf_info.module->format_info[DFI_ELF]->u.elf_info->elf_loader = 1;
     module_set_module(elf_info.module, S_WineLoaderW);
     pcs->dbg_hdr_addr = elf_info.dbg_hdr_addr;

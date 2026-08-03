@@ -1,11 +1,9 @@
-#
-# dbghelp spec file for reactos. Do not replace with wine ones!
-#
-@ stdcall DbgHelpCreateUserDump(str ptr ptr)
-@ stdcall DbgHelpCreateUserDumpW(str ptr ptr)
+@ stub DbgHelpCreateUserDump
+@ stub DbgHelpCreateUserDumpW
 @ stdcall EnumDirTree(long str str ptr ptr ptr)
 @ stdcall EnumDirTreeW(long wstr wstr ptr ptr ptr)
-@ stdcall EnumerateLoadedModules(long ptr ptr)
+@ stdcall -arch=win32 EnumerateLoadedModules(long ptr ptr)
+@ stdcall -arch=win64 EnumerateLoadedModules(long ptr ptr) EnumerateLoadedModules64
 @ stdcall EnumerateLoadedModules64(long ptr ptr)
 @ stdcall EnumerateLoadedModulesEx(long ptr ptr) EnumerateLoadedModules64
 @ stdcall EnumerateLoadedModulesExW(long ptr ptr) EnumerateLoadedModulesW64
@@ -13,130 +11,154 @@
 @ stdcall ExtensionApiVersion()
 @ stdcall FindDebugInfoFile(str str ptr)
 @ stdcall FindDebugInfoFileEx(str str ptr ptr ptr)
-@ stdcall FindDebugInfoFileExW(str str str ptr ptr)
+@ stub FindDebugInfoFileExW
 @ stdcall FindExecutableImage(str str str)
 @ stdcall FindExecutableImageEx(str str ptr ptr ptr)
 @ stdcall FindExecutableImageExW(wstr wstr ptr ptr ptr)
-@ stdcall FindFileInPath(ptr str str ptr long long long str ptr ptr)
-@ stdcall FindFileInSearchPath(ptr str str long long long str)
+@ stub FindFileInPath
+@ stub FindFileInSearchPath
 @ stdcall GetTimestampForLoadedLibrary(long)
 @ stdcall ImageDirectoryEntryToData(ptr long long ptr)
 @ stdcall ImageDirectoryEntryToDataEx(ptr long long ptr ptr)
-@ stdcall ImageNtHeader(ptr) ntdll.RtlImageNtHeader
-@ stdcall ImageRvaToSection(ptr ptr long) ntdll.RtlImageRvaToSection
-@ stdcall ImageRvaToVa(ptr ptr long ptr) ntdll.RtlImageRvaToVa
+@ stdcall -import ImageNtHeader(ptr) RtlImageNtHeader
+@ stdcall -import ImageRvaToSection(ptr ptr long) RtlImageRvaToSection
+@ stdcall -import ImageRvaToVa(ptr ptr long ptr) RtlImageRvaToVa
 @ stdcall ImagehlpApiVersion()
 @ stdcall ImagehlpApiVersionEx(ptr)
 @ stdcall MakeSureDirectoryPathExists(str)
-@ stdcall MapDebugInformation(long str str long)
+@ stdcall -arch=win32 MapDebugInformation(long str str long)
 @ stdcall MiniDumpReadDumpStream(ptr long ptr ptr ptr)
 @ stdcall MiniDumpWriteDump(ptr long ptr long ptr ptr ptr)
 @ stdcall SearchTreeForFile(str str ptr)
 @ stdcall SearchTreeForFileW(wstr wstr ptr)
-@ stdcall StackWalk(long long long ptr ptr ptr ptr ptr ptr)
+@ stdcall -arch=win32 StackWalk(long long long ptr ptr ptr ptr ptr ptr)
+@ stdcall -arch=win64 StackWalk(long long long ptr ptr ptr ptr ptr ptr) StackWalk64
 @ stdcall StackWalk64(long long long ptr ptr ptr ptr ptr ptr)
-@ stdcall SymAddSourceStream(ptr double str ptr ptr)
-@ stdcall SymAddSourceStreamA(ptr double str ptr ptr)
-@ stdcall SymAddSourceStreamW(ptr double str ptr ptr)
+@ stdcall StackWalkEx(long long long ptr ptr ptr ptr ptr ptr long)
+@ stub SymAddSourceStream
+@ stub SymAddSourceStreamA
+@ stub SymAddSourceStreamW
 @ stdcall SymAddSymbol(ptr int64 str int64 long long)
 @ stdcall SymAddSymbolW(ptr int64 wstr int64 long long)
+@ stdcall SymAddrIncludeInlineTrace(long int64)
 @ stdcall SymCleanup(long)
-@ stdcall SymDeleteSymbol(ptr double str double long)
-@ stdcall SymDeleteSymbolW(ptr double str double long)
+@ stub SymCompareInlineTrace
+@ stub SymDeleteSymbol
+@ stub SymDeleteSymbolW
 @ stdcall SymEnumLines(ptr int64 str str ptr ptr)
-@ stdcall SymEnumLinesW(ptr double str str ptr ptr)
-@ stdcall SymEnumProcesses(ptr ptr)
-@ stdcall SymEnumSourceFileTokens(ptr double ptr)
+@ stub SymEnumLinesW
+@ stub SymEnumProcesses
+@ stub SymEnumSourceFileTokens
 @ stdcall SymEnumSourceFiles(ptr int64 str ptr ptr)
 @ stdcall SymEnumSourceFilesW(ptr int64 wstr ptr ptr)
 @ stdcall SymEnumSourceLines(ptr int64 str str long long ptr ptr)
 @ stdcall SymEnumSourceLinesW(ptr int64 wstr wstr long long ptr ptr)
-@ stdcall SymEnumSym(ptr double ptr ptr)
+@ stub SymEnumSym
 @ stdcall SymEnumSymbols(ptr int64 str ptr ptr)
-@ stdcall SymEnumSymbolsForAddr(ptr double ptr ptr)
-@ stdcall SymEnumSymbolsForAddrW(ptr double ptr ptr)
+@ stub SymEnumSymbolsForAddr
+@ stub SymEnumSymbolsForAddrW
 @ stdcall SymEnumSymbolsW(ptr int64 wstr ptr ptr)
 @ stdcall SymEnumTypes(ptr int64 ptr ptr)
-@ stdcall SymEnumTypesByName(ptr double str ptr ptr)
-@ stdcall SymEnumTypesByNameW(ptr double str ptr ptr)
+@ stdcall SymEnumTypesByName(ptr int64 str ptr ptr)
+@ stdcall SymEnumTypesByNameW(ptr int64 wstr ptr ptr)
 @ stdcall SymEnumTypesW(ptr int64 ptr ptr)
-@ stdcall SymEnumerateModules(long ptr ptr)
+@ stdcall -arch=win32 SymEnumerateModules(long ptr ptr)
+@ stdcall -arch=win64 SymEnumerateModules(long ptr ptr) SymEnumerateModules64
 @ stdcall SymEnumerateModules64(long ptr ptr)
 @ stdcall SymEnumerateModulesW64(long ptr ptr)
-@ stdcall SymEnumerateSymbols(long long ptr ptr)
+@ stdcall -arch=win32 SymEnumerateSymbols(long long ptr ptr)
+@ stdcall -arch=win64 SymEnumerateSymbols(long int64 ptr ptr) SymEnumerateSymbols64
 @ stdcall SymEnumerateSymbols64(long int64 ptr ptr)
-@ stdcall SymEnumerateSymbolsW(ptr long ptr ptr)
-@ stdcall SymEnumerateSymbolsW64(ptr double ptr ptr)
-@ stdcall SymFindDebugInfoFile(ptr str str ptr ptr)
-@ stdcall SymFindDebugInfoFileW(ptr str str ptr ptr)
-@ stdcall SymFindExecutableImage(ptr str str ptr ptr)
-@ stdcall SymFindExecutableImageW(ptr str str ptr ptr)
+@ stub SymEnumerateSymbolsW
+@ stub SymEnumerateSymbolsW64
+@ stub SymFindDebugInfoFile
+@ stub SymFindDebugInfoFileW
+@ stub SymFindExecutableImage
+@ stub SymFindExecutableImageW
 @ stdcall SymFindFileInPath(long str str ptr long long long ptr ptr ptr)
 @ stdcall SymFindFileInPathW(long wstr wstr ptr long long long ptr ptr ptr)
 @ stdcall SymFromAddr(ptr int64 ptr ptr)
 @ stdcall SymFromAddrW(ptr int64 ptr ptr)
 @ stdcall SymFromIndex(long int64 long ptr)
 @ stdcall SymFromIndexW(long int64 long ptr)
+@ stdcall SymFromInlineContext(long int64 long ptr ptr)
+@ stdcall SymFromInlineContextW(long int64 long ptr ptr)
 @ stdcall SymFromName(long str ptr)
-@ stdcall SymFromNameW(long str ptr)
-@ stdcall SymFromToken(ptr double long ptr)
-@ stdcall SymFromTokenW(ptr double long ptr)
-@ stdcall SymFunctionTableAccess(long long)
+@ stdcall SymFromNameW(long wstr ptr)
+@ stub SymFromToken
+@ stub SymFromTokenW
+@ stdcall -arch=win32 SymFunctionTableAccess(long long)
+@ stdcall -arch=win64 SymFunctionTableAccess(long int64) SymFunctionTableAccess64
 @ stdcall SymFunctionTableAccess64(long int64)
+@ stub SymGetFileLineOffsets64
+@ stub SymGetHomeDirectory
+@ stub SymGetHomeDirectoryW
 @ stdcall SymGetExtendedOption(long)
-@ stdcall SymGetFileLineOffsets64(ptr str str ptr long)
-@ stdcall SymGetHomeDirectory(long str ptr)
-@ stdcall SymGetHomeDirectoryW(long str ptr)
-@ stdcall SymGetLineFromAddr(long long ptr ptr)
+@ stdcall -arch=win32 SymGetLineFromAddr(long long ptr ptr)
+@ stdcall -arch=win64 SymGetLineFromAddr(long int64 ptr ptr) SymGetLineFromAddr64
 @ stdcall SymGetLineFromAddr64(long int64 ptr ptr)
+@ stub SymGetLineFromAddrW
 @ stdcall SymGetLineFromAddrW64(long int64 ptr ptr)
-@ stdcall SymGetLineFromName(long str str long ptr ptr)
+@ stdcall SymGetLineFromInlineContext(long int64 long int64 ptr ptr)
+@ stdcall SymGetLineFromInlineContextW(long int64 long int64 ptr ptr)
+@ stdcall -arch=win32 SymGetLineFromName(long str str long ptr ptr)
+@ stdcall -arch=win64 SymGetLineFromName(long str str long ptr ptr) SymGetLineFromName64
 @ stdcall SymGetLineFromName64(long str str long ptr ptr)
 @ stdcall SymGetLineFromNameW64(long wstr wstr long ptr ptr)
-@ stdcall SymGetLineNext(long ptr)
+@ stdcall -arch=win32 SymGetLineNext(long ptr)
+@ stdcall -arch=win64 SymGetLineNext(long ptr) SymGetLineNext64
 @ stdcall SymGetLineNext64(long ptr)
-@ stdcall SymGetLineNextW64(ptr ptr)
-@ stdcall SymGetLinePrev(long ptr)
+@ stdcall SymGetLineNextW64(long ptr)
+@ stdcall -arch=win32 SymGetLinePrev(long ptr)
+@ stdcall -arch=win64 SymGetLinePrev(long ptr) SymGetLinePrev64
 @ stdcall SymGetLinePrev64(long ptr)
-@ stdcall SymGetLinePrevW64(ptr ptr)
-@ stdcall SymGetModuleBase(long long)
+@ stdcall SymGetLinePrevW64(long ptr)
+@ stdcall -arch=win32 SymGetModuleBase(long long)
+@ stdcall -arch=win64 SymGetModuleBase(long int64) SymGetModuleBase64
 @ stdcall SymGetModuleBase64(long int64)
-@ stdcall SymGetModuleInfo(long long ptr)
+@ stdcall -arch=win32 SymGetModuleInfo(long ptr ptr)
+@ stdcall -arch=win64 SymGetModuleInfo(long int64 ptr) SymGetModuleInfo64
 @ stdcall SymGetModuleInfo64(long int64 ptr)
-@ stdcall SymGetModuleInfoW(long long ptr)
+@ stdcall -arch=win32 SymGetModuleInfoW(long long ptr)
+@ stdcall -arch=win64 SymGetModuleInfoW(long int64 ptr) SymGetModuleInfoW64
 @ stdcall SymGetModuleInfoW64(long int64 ptr)
 @ stub SymGetOmapBlockBase
 @ stdcall SymGetOptions()
-@ stdcall SymGetScope(ptr double long ptr)
-@ stdcall SymGetScopeW(ptr double long ptr)
+@ stub SymGetScope
+@ stub SymGetScopeW
 @ stdcall SymGetSearchPath(long ptr long)
 @ stdcall SymGetSearchPathW(long ptr long)
-@ stdcall SymGetSourceFile(ptr double str str str long)
-@ stdcall SymGetSourceFileFromToken(ptr ptr str str long)
-@ stdcall SymGetSourceFileFromTokenW(ptr ptr str str long)
+@ stub SymGetSourceFile
+@ stub SymGetSourceFileFromToken
+@ stub SymGetSourceFileFromTokenW
 @ stdcall SymGetSourceFileToken(ptr int64 str ptr ptr)
 @ stdcall SymGetSourceFileTokenW(ptr int64 wstr ptr ptr)
-@ stdcall SymGetSourceFileW(ptr double str str str long)
-@ stdcall SymGetSourceVarFromToken(ptr ptr str str str long)
-@ stdcall SymGetSourceVarFromTokenW(ptr ptr str str str long)
-@ stdcall SymGetSymFromAddr(long long ptr ptr)
+@ stub SymGetSourceFileW
+@ stub SymGetSourceVarFromToken
+@ stub SymGetSourceVarFromTokenW
+@ stdcall -arch=win32 SymGetSymFromAddr(long long ptr ptr)
+@ stdcall -arch=win64 SymGetSymFromAddr(long int64 ptr ptr) SymGetSymFromAddr64
 @ stdcall SymGetSymFromAddr64(long int64 ptr ptr)
-@ stdcall SymGetSymFromName(long str ptr)
+@ stdcall -arch=win32 SymGetSymFromName(long str ptr)
+@ stdcall -arch=win64 SymGetSymFromName(long str ptr) SymGetSymFromName64
 @ stdcall SymGetSymFromName64(long str ptr)
-@ stdcall SymGetSymNext(long ptr)
+@ stdcall -arch=win32 SymGetSymNext(long ptr)
+@ stdcall -arch=win64 SymGetSymNext(long ptr) SymGetSymNext64
 @ stdcall SymGetSymNext64(long ptr)
-@ stdcall SymGetSymPrev(long ptr)
+@ stdcall -arch=win32 SymGetSymPrev(long ptr)
+@ stdcall -arch=win64 SymGetSymPrev(long ptr) SymGetSymPrev64
 @ stdcall SymGetSymPrev64(long ptr)
-@ stdcall SymGetSymbolFile(ptr str str long str ptr str ptr)
-@ stdcall SymGetSymbolFileW(ptr str str long str ptr str ptr)
+@ stub SymGetSymbolFile
+@ stub SymGetSymbolFileW
 @ stdcall SymGetTypeFromName(ptr int64 str ptr)
-@ stdcall SymGetTypeFromNameW(ptr double str ptr)
+@ stub SymGetTypeFromNameW
 @ stdcall SymGetTypeInfo(ptr int64 long long ptr)
-@ stdcall SymGetTypeInfoEx(ptr double ptr)
-@ stdcall SymGetUnwindInfo(ptr double ptr ptr)
+@ stub SymGetTypeInfoEx
+@ stub SymGetUnwindInfo
 @ stdcall SymInitialize(long str long)
 @ stdcall SymInitializeW(long wstr long)
-@ stdcall SymLoadModule(long long str str long long)
+@ stdcall -arch=win32 SymLoadModule(long long str str long long)
+@ stdcall -arch=win64 SymLoadModule(long long str str int64 long) SymLoadModule64
 @ stdcall SymLoadModule64(long long str str int64 long)
 @ stdcall SymLoadModuleEx(long long str str int64 long ptr long)
 @ stdcall SymLoadModuleExW(long long wstr wstr int64 long ptr long)
@@ -145,15 +167,18 @@
 @ stdcall SymMatchString(str str long) SymMatchStringA
 @ stdcall SymMatchStringA(str str long)
 @ stdcall SymMatchStringW(wstr wstr long)
-@ stdcall SymNext(ptr ptr)
-@ stdcall SymNextW(ptr ptr)
-@ stdcall SymPrev(ptr ptr)
-@ stdcall SymPrevW(ptr ptr)
+@ stub SymNext
+@ stub SymNextW
+@ stub SymPrev
+@ stub SymPrevW
+@ stdcall SymQueryInlineTrace(long int64 long int64 int64 ptr ptr)
 @ stdcall SymRefreshModuleList(long)
-@ stdcall SymRegisterCallback(long ptr ptr)
+@ stdcall -arch=win32 SymRegisterCallback(long ptr ptr)
+@ stdcall -arch=win64 SymRegisterCallback(long ptr ptr) SymRegisterCallback64
 @ stdcall SymRegisterCallback64(long ptr int64)
 @ stdcall SymRegisterCallbackW64(long ptr int64)
-@ stdcall SymRegisterFunctionEntryCallback(ptr ptr ptr)
+@ stdcall -arch=win32 SymRegisterFunctionEntryCallback(long ptr ptr)
+@ stdcall -arch=win64 SymRegisterFunctionEntryCallback(long ptr ptr) SymRegisterFunctionEntryCallback64
 @ stdcall SymRegisterFunctionEntryCallback64(ptr ptr int64)
 @ stdcall SymSearch(long int64 long long str int64 ptr ptr long)
 @ stdcall SymSearchW(long int64 long long wstr int64 ptr ptr long)
@@ -164,47 +189,54 @@
 @ stdcall SymSetOptions(long)
 @ stdcall SymSetParentWindow(long)
 @ stdcall SymSetScopeFromAddr(ptr int64)
-@ stdcall SymSetScopeFromIndex(ptr double long)
+@ stdcall SymSetScopeFromIndex(ptr int64 long)
+@ stdcall SymSetScopeFromInlineContext(ptr int64 long)
 @ stdcall SymSetSearchPath(long str)
 @ stdcall SymSetSearchPathW(long wstr)
-@ stdcall SymSrvDeltaName(ptr str str str str)
-@ stdcall SymSrvDeltaNameW(ptr str str str str)
+@ stub SymSrvDeltaName
+@ stub SymSrvDeltaNameW
 @ stdcall SymSrvGetFileIndexInfo(str ptr long)
-@ stdcall SymSrvGetFileIndexInfoW(str ptr long)
-@ stdcall SymSrvGetFileIndexString(ptr str str str ptr long)
-@ stdcall SymSrvGetFileIndexStringW(ptr str str str ptr long)
+@ stdcall SymSrvGetFileIndexInfoW(wstr ptr long)
+@ stub SymSrvGetFileIndexString
+@ stub SymSrvGetFileIndexStringW
 @ stdcall SymSrvGetFileIndexes(str ptr ptr ptr long)
-@ stdcall SymSrvGetFileIndexesW(str ptr ptr ptr long)
-@ stdcall SymSrvGetSupplement(ptr str str str)
-@ stdcall SymSrvGetSupplementW(ptr str str str)
-@ stdcall SymSrvIsStore(ptr str)
-@ stdcall SymSrvIsStoreW(ptr str)
-@ stdcall SymSrvStoreFile(ptr str str long)
-@ stdcall SymSrvStoreFileW(ptr str str long)
-@ stdcall SymSrvStoreSupplement(ptr str str str long)
-@ stdcall SymSrvStoreSupplementW(ptr str str str long)
+@ stdcall SymSrvGetFileIndexesW(wstr ptr ptr ptr long)
+@ stub SymSrvGetSupplement
+@ stub SymSrvGetSupplementW
+@ stub SymSrvIsStore
+@ stub SymSrvIsStoreW
+@ stub SymSrvStoreFile
+@ stub SymSrvStoreFileW
+@ stub SymSrvStoreSupplement
+@ stub SymSrvStoreSupplementW
+# @ stub SymSetSymWithAddr64 no longer present ??
 @ stub SymSetSymWithAddr64
-@ stdcall SymUnDName(ptr str long)
+@ stdcall -arch=win32 SymUnDName(ptr str long)
+@ stdcall -arch=win64 SymUnDName(ptr str long) SymUnDName64
 @ stdcall SymUnDName64(ptr str long)
-@ stdcall SymUnloadModule(long long)
+@ stdcall -arch=win32 SymUnloadModule(long long)
+@ stdcall -arch=win64 SymUnloadModule(long int64) SymUnloadModule64
 @ stdcall SymUnloadModule64(long int64)
 @ stdcall UnDecorateSymbolName(str ptr long long)
 @ stdcall UnDecorateSymbolNameW(wstr ptr long long)
-@ stdcall UnmapDebugInformation(ptr)
+@ stdcall -arch=win32 UnmapDebugInformation(ptr)
 @ stdcall WinDbgExtensionDllInit(ptr long long)
-#@ stdcall block
-#@ stdcall chksym
-@ stdcall -stub dbghelp(ptr ptr)
-#@ stdcall dh
-#@ stdcall fptr
-#@ stdcall homedir
-#@ stdcall itoldyouso
-#@ stdcall lmi
-#@ stdcall lminfo
-#@ stdcall omap
-#@ stdcall srcfiles
-#@ stdcall stack_force_ebp
-#@ stdcall stackdbg
-#@ stdcall sym
-#@ stdcall symsrv
-#@ stdcall vc7fpo
+#@ stub block
+#@ stub chksym
+#@ stub dbghelp
+#@ stub dh
+#@ stub fptr
+#@ stub homedir
+#@ stub itoldyouso
+#@ stub lmi
+#@ stub lminfo
+#@ stub omap
+#@ stub srcfiles
+#@ stub stack_force_ebp
+#@ stub stackdbg
+#@ stub sym
+#@ stub symsrv
+#@ stub vc7fpo
+
+# wine extensions
+@ stdcall wine_get_module_information(long int64 ptr long)

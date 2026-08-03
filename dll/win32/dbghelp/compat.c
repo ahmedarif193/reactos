@@ -1,6 +1,6 @@
 #include "dbghelp_private.h"
 
-void* __HeapAlloc(int heap, int flags, size_t size)
+void* __HeapAlloc(HANDLE heap, DWORD flags, SIZE_T size)
 {
     void * ret = malloc(size);
     if(flags & HEAP_ZERO_MEMORY)
@@ -8,9 +8,39 @@ void* __HeapAlloc(int heap, int flags, size_t size)
     return ret;
 }
 
-void* __HeapReAlloc(int heap, DWORD d2, void *slab, SIZE_T newsize)
+void* __HeapReAlloc(HANDLE heap, DWORD flags, void *slab, SIZE_T newsize)
 {
     return realloc(slab, newsize);
+}
+
+WCHAR* __wcsdupW(const WCHAR *str)
+{
+    SIZE_T size = (strlenW(str) + 1) * sizeof(*str);
+    WCHAR *ret = malloc(size);
+
+    if (ret) memcpy(ret, str, size);
+    return ret;
+}
+
+WCHAR *get_dos_file_name(const WCHAR *filename)
+{
+    return __wcsdupW(filename);
+}
+
+char * CDECL __unDName(char *buffer, const char *mangled, int len,
+                       void * (CDECL *alloc_func)(size_t),
+                       void (CDECL *free_func)(void *), unsigned short flags)
+{
+    return NULL;
+}
+
+BOOL sw_read_mem(struct cpu_stack_walk *walk, DWORD64 address, void *buffer, DWORD size)
+{
+    DWORD read = 0;
+
+    if (walk->is32)
+        return walk->u.s32.f_read_mem(walk->hProcess, address, buffer, size, &read);
+    return walk->u.s64.f_read_mem(walk->hProcess, address, buffer, size, &read);
 }
 
 WCHAR* lstrcpynW(WCHAR* lpString1, const WCHAR* lpString2, int iMaxLength)
@@ -141,6 +171,19 @@ BOOL __GetFileSizeEx(HANDLE file, PLARGE_INTEGER fsize)
         return FALSE;
     fsize->QuadPart = ftell((FILE*)file);
     return TRUE;
+}
+
+DWORD __GetFileSize(HANDLE file, PDWORD high)
+{
+    long current = ftell((FILE *)file);
+    long size;
+
+    if (current == -1 || fseek((FILE *)file, 0, SEEK_END) == -1) return (DWORD)-1;
+    size = ftell((FILE *)file);
+    fseek((FILE *)file, current, SEEK_SET);
+    if (size == -1) return (DWORD)-1;
+    if (high) *high = 0;
+    return (DWORD)size;
 }
 
 BOOL __CloseHandle(HANDLE handle)

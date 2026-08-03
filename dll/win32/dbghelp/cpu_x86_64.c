@@ -21,10 +21,7 @@
 
 #include <assert.h>
 
-#define NONAMELESSUNION
-#define NONAMELESSSTRUCT
 #include "ntstatus.h"
-#define WIN32_NO_STATUS
 #include "dbghelp_private.h"
 #include "winternl.h"
 #include "wine/debug.h"
@@ -54,7 +51,7 @@ typedef union _UNWIND_CODE
         BYTE CodeOffset;
         BYTE UnwindOp : 4;
         BYTE OpInfo   : 4;
-    } u;
+    };
     USHORT FrameOffset;
 } UNWIND_CODE, *PUNWIND_CODE;
 
@@ -125,14 +122,14 @@ static void dump_unwind_info(struct cpu_stack_walk* csw, ULONG64 base, RUNTIME_F
     RUNTIME_FUNCTION snext;
     ULONG64 addr;
 
-    TRACE("**** func %x-%x\n", function->BeginAddress, function->EndAddress);
+    TRACE("**** func %lx-%lx\n", function->BeginAddress, function->EndAddress);
     for (;;)
     {
         if (function->UnwindData & 1)
         {
             if (!sw_read_mem(csw, base + function->UnwindData, &snext, sizeof(snext)))
             {
-                TRACE("Couldn't unwind RUNTIME_INFO at %lx\n", base + function->UnwindData);
+                TRACE("Couldn't unwind RUNTIME_INFO at %Ix\n", base + function->UnwindData);
                 return;
             }
             TRACE("unwind info for function %p-%p chained to function %p-%p\n",
@@ -146,7 +143,7 @@ static void dump_unwind_info(struct cpu_stack_walk* csw, ULONG64 base, RUNTIME_F
             !sw_read_mem(csw, addr + FIELD_OFFSET(UNWIND_INFO, UnwindCode),
                          info->UnwindCode, info->CountOfCodes * sizeof(UNWIND_CODE)))
         {
-            FIXME("couldn't read memory for UNWIND_INFO at %lx\n", addr);
+            FIXME("couldn't read memory for UNWIND_INFO at %Ix\n", addr);
             return;
         }
         TRACE("unwind info at %p flags %x prolog 0x%x bytes function %p-%p\n",
@@ -159,14 +156,14 @@ static void dump_unwind_info(struct cpu_stack_walk* csw, ULONG64 base, RUNTIME_F
 
         for (i = 0; i < info->CountOfCodes; i++)
         {
-            TRACE("    0x%x: ", info->UnwindCode[i].u.CodeOffset);
-            switch (info->UnwindCode[i].u.UnwindOp)
+            TRACE("    0x%x: ", info->UnwindCode[i].CodeOffset);
+            switch (info->UnwindCode[i].UnwindOp)
             {
             case UWOP_PUSH_NONVOL:
-                TRACE("pushq %%%s\n", reg_names[info->UnwindCode[i].u.OpInfo]);
+                TRACE("pushq %%%s\n", reg_names[info->UnwindCode[i].OpInfo]);
                 break;
             case UWOP_ALLOC_LARGE:
-                if (info->UnwindCode[i].u.OpInfo)
+                if (info->UnwindCode[i].OpInfo)
                 {
                     count = *(DWORD*)&info->UnwindCode[i+1];
                     i += 2;
@@ -179,7 +176,7 @@ static void dump_unwind_info(struct cpu_stack_walk* csw, ULONG64 base, RUNTIME_F
                 TRACE("subq $0x%x,%%rsp\n", count);
                 break;
             case UWOP_ALLOC_SMALL:
-                count = (info->UnwindCode[i].u.OpInfo + 1) * 8;
+                count = (info->UnwindCode[i].OpInfo + 1) * 8;
                 TRACE("subq $0x%x,%%rsp\n", count);
                 break;
             case UWOP_SET_FPREG:
@@ -188,29 +185,42 @@ static void dump_unwind_info(struct cpu_stack_walk* csw, ULONG64 base, RUNTIME_F
                 break;
             case UWOP_SAVE_NONVOL:
                 count = *(USHORT*)&info->UnwindCode[i+1] * 8;
-                TRACE("movq %%%s,0x%x(%%rsp)\n", reg_names[info->UnwindCode[i].u.OpInfo], count);
+                TRACE("movq %%%s,0x%x(%%rsp)\n", reg_names[info->UnwindCode[i].OpInfo], count);
                 i++;
                 break;
             case UWOP_SAVE_NONVOL_FAR:
                 count = *(DWORD*)&info->UnwindCode[i+1];
-                TRACE("movq %%%s,0x%x(%%rsp)\n", reg_names[info->UnwindCode[i].u.OpInfo], count);
+                TRACE("movq %%%s,0x%x(%%rsp)\n", reg_names[info->UnwindCode[i].OpInfo], count);
                 i += 2;
                 break;
             case UWOP_SAVE_XMM128:
                 count = *(USHORT*)&info->UnwindCode[i+1] * 16;
-                TRACE("movaps %%xmm%u,0x%x(%%rsp)\n", info->UnwindCode[i].u.OpInfo, count);
+                TRACE("movaps %%xmm%u,0x%x(%%rsp)\n", info->UnwindCode[i].OpInfo, count);
                 i++;
                 break;
             case UWOP_SAVE_XMM128_FAR:
                 count = *(DWORD*)&info->UnwindCode[i+1];
-                TRACE("movaps %%xmm%u,0x%x(%%rsp)\n", info->UnwindCode[i].u.OpInfo, count);
+                TRACE("movaps %%xmm%u,0x%x(%%rsp)\n", info->UnwindCode[i].OpInfo, count);
                 i += 2;
                 break;
             case UWOP_PUSH_MACHFRAME:
-                TRACE("PUSH_MACHFRAME %u\n", info->UnwindCode[i].u.OpInfo);
+                TRACE("PUSH_MACHFRAME %u\n", info->UnwindCode[i].OpInfo);
                 break;
+            case UWOP_EPILOG:
+                if (info->Version == 2)
+                {
+                    unsigned int offset;
+                    if (info->UnwindCode[i].OpInfo)
+                        offset = info->UnwindCode[i].CodeOffset;
+                    else
+                        offset = (info->UnwindCode[i+1].OpInfo << 8) + info->UnwindCode[i+1].CodeOffset;
+                    TRACE("UWOP_EPILOG %u offset %u\n", info->UnwindCode[i].OpInfo, offset);
+                    i += 1;
+                    break;
+                }
+                /* Fall through */
             default:
-                FIXME("unknown code %u\n", info->UnwindCode[i].u.UnwindOp);
+                FIXME("unknown code %u\n", info->UnwindCode[i].UnwindOp);
                 break;
             }
         }
@@ -257,17 +267,18 @@ static void set_int_reg(CONTEXT *context, int reg, ULONG64 val)
 
 static void set_float_reg(CONTEXT *context, int reg, M128A val)
 {
-    *(&context->u.s.Xmm0 + reg) = val;
+    *(&context->Xmm0 + reg) = val;
 }
 
 static int get_opcode_size(UNWIND_CODE op)
 {
-    switch (op.u.UnwindOp)
+    switch (op.UnwindOp)
     {
     case UWOP_ALLOC_LARGE:
-        return 2 + (op.u.OpInfo != 0);
+        return 2 + (op.OpInfo != 0);
     case UWOP_SAVE_NONVOL:
     case UWOP_SAVE_XMM128:
+    case UWOP_EPILOG:
         return 2;
     case UWOP_SAVE_NONVOL_FAR:
     case UWOP_SAVE_XMM128_FAR:
@@ -289,10 +300,10 @@ static BOOL is_inside_epilog(struct cpu_stack_walk* csw, DWORD64 pc,
     if ((op0 & 0xf8) == 0x48)
     {
         if (!sw_read_mem(csw, pc + 1, &op1, 1)) return FALSE;
-        if (!sw_read_mem(csw, pc + 2, &op2, 1)) return FALSE;
         switch (op1)
         {
         case 0x81: /* add $nnnn,%rsp */
+            if (!sw_read_mem(csw, pc + 2, &op2, 1)) return FALSE;
             if (op0 == 0x48 && op2 == 0xc4)
             {
                 pc += 7;
@@ -300,6 +311,7 @@ static BOOL is_inside_epilog(struct cpu_stack_walk* csw, DWORD64 pc,
             }
             return FALSE;
         case 0x83: /* add $n,%rsp */
+            if (!sw_read_mem(csw, pc + 2, &op2, 1)) return FALSE;
             if (op0 == 0x48 && op2 == 0xc4)
             {
                 pc += 4;
@@ -307,6 +319,7 @@ static BOOL is_inside_epilog(struct cpu_stack_walk* csw, DWORD64 pc,
             }
             return FALSE;
         case 0x8d: /* lea n(reg),%rsp */
+            if (!sw_read_mem(csw, pc + 2, &op2, 1)) return FALSE;
             if (op0 & 0x06) return FALSE;  /* rex.RX must be cleared */
             if (((op2 >> 3) & 7) != 4) return FALSE;  /* dest reg mus be %rsp */
             if ((op2 & 7) == 4) return FALSE;  /* no SIB byte allowed */
@@ -456,7 +469,7 @@ static BOOL default_unwind(struct cpu_stack_walk* csw, CONTEXT* context)
 {
     if (!sw_read_mem(csw, context->Rsp, &context->Rip, sizeof(DWORD64)))
     {
-        WARN("Cannot read new frame offset %s\n", wine_dbgstr_longlong(context->Rsp));
+        WARN("Cannot read new frame offset %I64x\n", context->Rsp);
         return FALSE;
     }
     context->Rsp += sizeof(DWORD64);
@@ -484,13 +497,13 @@ static BOOL interpret_function_table_entry(struct cpu_stack_walk* csw,
             !sw_read_mem(csw, base + function->UnwindData + FIELD_OFFSET(UNWIND_INFO, UnwindCode),
                          info->UnwindCode, info->CountOfCodes * sizeof(UNWIND_CODE)))
         {
-            WARN("Couldn't read unwind_code at %lx\n", base + function->UnwindData);
+            WARN("Couldn't read unwind_code at %Ix\n", base + function->UnwindData);
             return FALSE;
         }
 
-        if (info->Version != 1)
+        if (info->Version != 1 && info->Version != 2)
         {
-            WARN("unknown unwind info version %u at %lx\n", info->Version, base + function->UnwindData);
+            WARN("unknown unwind info version %u at %Ix\n", info->Version, base + function->UnwindData);
             return FALSE;
         }
 
@@ -515,21 +528,21 @@ static BOOL interpret_function_table_entry(struct cpu_stack_walk* csw,
 
         for (i = 0; i < info->CountOfCodes; i += get_opcode_size(info->UnwindCode[i]))
         {
-            if (prolog_offset < info->UnwindCode[i].u.CodeOffset) continue; /* skip it */
+            if (prolog_offset < info->UnwindCode[i].CodeOffset) continue; /* skip it */
 
-            switch (info->UnwindCode[i].u.UnwindOp)
+            switch (info->UnwindCode[i].UnwindOp)
             {
             case UWOP_PUSH_NONVOL:  /* pushq %reg */
                 if (!sw_read_mem(csw, context->Rsp, &value, sizeof(DWORD64))) return FALSE;
-                set_int_reg(context, info->UnwindCode[i].u.OpInfo, value);
+                set_int_reg(context, info->UnwindCode[i].OpInfo, value);
                 context->Rsp += sizeof(ULONG64);
                 break;
             case UWOP_ALLOC_LARGE:  /* subq $nn,%rsp */
-                if (info->UnwindCode[i].u.OpInfo) context->Rsp += *(DWORD*)&info->UnwindCode[i+1];
+                if (info->UnwindCode[i].OpInfo) context->Rsp += *(DWORD*)&info->UnwindCode[i+1];
                 else context->Rsp += *(USHORT*)&info->UnwindCode[i+1] * 8;
                 break;
             case UWOP_ALLOC_SMALL:  /* subq $n,%rsp */
-                context->Rsp += (info->UnwindCode[i].u.OpInfo + 1) * 8;
+                context->Rsp += (info->UnwindCode[i].OpInfo + 1) * 8;
                 break;
             case UWOP_SET_FPREG:  /* leaq nn(%rsp),%framereg */
                 context->Rsp = newframe;
@@ -537,22 +550,22 @@ static BOOL interpret_function_table_entry(struct cpu_stack_walk* csw,
             case UWOP_SAVE_NONVOL:  /* movq %reg,n(%rsp) */
                 off = newframe + *(USHORT*)&info->UnwindCode[i+1] * 8;
                 if (!sw_read_mem(csw, off, &value, sizeof(DWORD64))) return FALSE;
-                set_int_reg(context, info->UnwindCode[i].u.OpInfo, value);
+                set_int_reg(context, info->UnwindCode[i].OpInfo, value);
                 break;
             case UWOP_SAVE_NONVOL_FAR:  /* movq %reg,nn(%rsp) */
                 off = newframe + *(DWORD*)&info->UnwindCode[i+1];
                 if (!sw_read_mem(csw, off, &value, sizeof(DWORD64))) return FALSE;
-                set_int_reg(context, info->UnwindCode[i].u.OpInfo, value);
+                set_int_reg(context, info->UnwindCode[i].OpInfo, value);
                 break;
             case UWOP_SAVE_XMM128:  /* movaps %xmmreg,n(%rsp) */
                 off = newframe + *(USHORT*)&info->UnwindCode[i+1] * 16;
                 if (!sw_read_mem(csw, off, &floatvalue, sizeof(M128A))) return FALSE;
-                set_float_reg(context, info->UnwindCode[i].u.OpInfo, floatvalue);
+                set_float_reg(context, info->UnwindCode[i].OpInfo, floatvalue);
                 break;
             case UWOP_SAVE_XMM128_FAR:  /* movaps %xmmreg,nn(%rsp) */
                 off = newframe + *(DWORD*)&info->UnwindCode[i+1];
                 if (!sw_read_mem(csw, off, &floatvalue, sizeof(M128A))) return FALSE;
-                set_float_reg(context, info->UnwindCode[i].u.OpInfo, floatvalue);
+                set_float_reg(context, info->UnwindCode[i].OpInfo, floatvalue);
                 break;
             case UWOP_PUSH_MACHFRAME:
                 if (info->Flags & UNW_FLAG_CHAININFO)
@@ -566,15 +579,18 @@ static BOOL interpret_function_table_entry(struct cpu_stack_walk* csw,
                     break;
                 }
 
-                if (info->UnwindCode[i].u.OpInfo)
+                if (info->UnwindCode[i].OpInfo)
                     context->Rsp += 0x8;
 
                 if (!sw_read_mem(csw, context->Rsp, &context->Rip, sizeof(DWORD64))) return FALSE;
                 if (!sw_read_mem(csw, context->Rsp + 24, &context->Rsp, sizeof(DWORD64))) return FALSE;
                 mach_frame = TRUE;
                 break;
+            case UWOP_EPILOG:
+                if (info->Version == 2)
+                    break; /* nothing to do */
             default:
-                FIXME("unknown code %u\n", info->UnwindCode[i].u.UnwindOp);
+                FIXME("unknown code %u\n", info->UnwindCode[i].UnwindOp);
                 break;
             }
         }
@@ -598,7 +614,8 @@ static BOOL fetch_next_frame(struct cpu_stack_walk *csw, union ctx *pcontext,
     DWORD64 cfa;
     RUNTIME_FUNCTION*       rtf;
     DWORD64                 base;
-    CONTEXT *context = &pcontext->ctx;
+    CONTEXT                *context = &pcontext->ctx;
+    DWORD64                 input_Rip = context->Rip;
 
     if (!curr_pc || !(base = sw_module_base(csw, curr_pc))) return FALSE;
     rtf = sw_table_access(csw, curr_pc);
@@ -607,17 +624,17 @@ static BOOL fetch_next_frame(struct cpu_stack_walk *csw, union ctx *pcontext,
     {
         return interpret_function_table_entry(csw, context, rtf, base);
     }
-    else if (dwarf2_virtual_unwind(csw, curr_pc, pcontext, &cfa))
+    else if (dwarf2_virtual_unwind(csw, curr_pc, pcontext, &cfa) && input_Rip != context->Rip)
     {
         context->Rsp = cfa;
-        TRACE("next function rip=%016lx\n", context->Rip);
-        TRACE("  rax=%016lx rbx=%016lx rcx=%016lx rdx=%016lx\n",
+        TRACE("next function rip=%016Ix\n", context->Rip);
+        TRACE("  rax=%016Ix rbx=%016Ix rcx=%016Ix rdx=%016Ix\n",
               context->Rax, context->Rbx, context->Rcx, context->Rdx);
-        TRACE("  rsi=%016lx rdi=%016lx rbp=%016lx rsp=%016lx\n",
+        TRACE("  rsi=%016Ix rdi=%016Ix rbp=%016Ix rsp=%016Ix\n",
               context->Rsi, context->Rdi, context->Rbp, context->Rsp);
-        TRACE("   r8=%016lx  r9=%016lx r10=%016lx r11=%016lx\n",
+        TRACE("   r8=%016Ix  r9=%016Ix r10=%016Ix r11=%016Ix\n",
               context->R8, context->R9, context->R10, context->R11);
-        TRACE("  r12=%016lx r13=%016lx r14=%016lx r15=%016lx\n",
+        TRACE("  r12=%016Ix r13=%016Ix r14=%016Ix r15=%016Ix\n",
               context->R12, context->R13, context->R14, context->R15);
         return TRUE;
     }
@@ -634,13 +651,13 @@ static BOOL x86_64_stack_walk(struct cpu_stack_walk *csw, STACKFRAME64 *frame,
     if (curr_mode >= stm_done) return FALSE;
     assert(!csw->is32);
 
-    TRACE("Enter: PC=%s Frame=%s Return=%s Stack=%s Mode=%s Count=%s\n",
+    TRACE("Enter: PC=%s Frame=%s Return=%s Stack=%s Mode=%s Count=%I64u\n",
           wine_dbgstr_addr(&frame->AddrPC),
           wine_dbgstr_addr(&frame->AddrFrame),
           wine_dbgstr_addr(&frame->AddrReturn),
           wine_dbgstr_addr(&frame->AddrStack),
           curr_mode == stm_start ? "start" : "64bit",
-          wine_dbgstr_longlong(curr_count));
+          curr_count);
 
     if (curr_mode == stm_start)
     {
@@ -681,33 +698,22 @@ static BOOL x86_64_stack_walk(struct cpu_stack_walk *csw, STACKFRAME64 *frame,
         union ctx newctx = *context;
 
         if (!fetch_next_frame(csw, &newctx, frame->AddrPC.Offset - deltapc, NULL))
-        {
-            /*
-             * The current frame is valid, but there is no parent frame to
-             * report (end-of-stack). Return this frame and terminate the walk
-             * on the next call, which matches Windows-observed behavior.
-             */
-            frame->AddrReturn.Mode = AddrModeFlat;
-            frame->AddrReturn.Offset = 0;
-        }
-        else
-        {
-            frame->AddrReturn.Mode = AddrModeFlat;
-            frame->AddrReturn.Offset = newctx.ctx.Rip;
-        }
+            goto done_err;
+        frame->AddrReturn.Mode = AddrModeFlat;
+        frame->AddrReturn.Offset = newctx.ctx.Rip;
     }
 
     frame->Far = TRUE;
     frame->Virtual = TRUE;
     curr_count++;
 
-    TRACE("Leave: PC=%s Frame=%s Return=%s Stack=%s Mode=%s Count=%s FuncTable=%p\n",
+    TRACE("Leave: PC=%s Frame=%s Return=%s Stack=%s Mode=%s Count=%I64u FuncTable=%p\n",
           wine_dbgstr_addr(&frame->AddrPC),
           wine_dbgstr_addr(&frame->AddrFrame),
           wine_dbgstr_addr(&frame->AddrReturn),
           wine_dbgstr_addr(&frame->AddrStack),
           curr_mode == stm_start ? "start" : "64bit",
-          wine_dbgstr_longlong(curr_count),
+          curr_count,
           frame->FuncTableEntry);
 
     return TRUE;
@@ -726,31 +732,46 @@ static BOOL x86_64_stack_walk(struct cpu_stack_walk *csw, STACKFRAME64 *frame,
 static void*    x86_64_find_runtime_function(struct module* module, DWORD64 addr)
 {
 #ifdef __x86_64__
-    RUNTIME_FUNCTION*   rtf;
-    ULONG               size;
-    int                 min, max;
+    RUNTIME_FUNCTION       *func = NULL;
+    const RUNTIME_FUNCTION *rtf;
+    ULONG                   size;
 
-    rtf = (RUNTIME_FUNCTION*)pe_map_directory(module, IMAGE_DIRECTORY_ENTRY_EXCEPTION, &size);
-    if (rtf) for (min = 0, max = size / sizeof(*rtf); min <= max; )
+    rtf = (const RUNTIME_FUNCTION*)pe_map_directory(module, IMAGE_DIRECTORY_ENTRY_EXCEPTION, &size);
+    if (rtf)
     {
-        int pos = (min + max) / 2;
-        if (addr < module->module.BaseOfImage + rtf[pos].BeginAddress) max = pos - 1;
-        else if (addr >= module->module.BaseOfImage + rtf[pos].EndAddress) min = pos + 1;
-        else
+        int   lo, hi;
+
+        for (lo = 0, hi = size / sizeof(*rtf); lo <= hi; )
         {
-            rtf += pos;
-            while (rtf->UnwindData & 1)  /* follow chained entry */
+            int pos = (lo + hi) / 2;
+            if (addr < module->module.BaseOfImage + rtf[pos].BeginAddress) hi = pos - 1;
+            else if (addr >= module->module.BaseOfImage + rtf[pos].EndAddress) lo = pos + 1;
+            else if ((func = fetch_buffer(module->process, sizeof(*func))))
             {
-                FIXME("RunTime_Function outside IMAGE_DIRECTORY_ENTRY_EXCEPTION unimplemented yet!\n");
-                return NULL;
-                /* we need to read into the other process */
-                /* rtf = (RUNTIME_FUNCTION*)(module->module.BaseOfImage + (rtf->UnwindData & ~1)); */
+                *func = rtf[pos];
+                while (func && (func->UnwindData & 1))
+                {
+                    const BYTE *next = pe_lock_region_from_rva(module, func->UnwindData & ~1, sizeof(*func), NULL);
+                    if (next)
+                    {
+                        *func = *(const RUNTIME_FUNCTION *)next;
+                        pe_unlock_region(module, next);
+                    }
+                    else
+                    {
+                        WARN("Couldn't find chained RUNTIME_FUNCTION\n");
+                        func = NULL;
+                    }
+                }
+                break;
             }
-            return rtf;
         }
+        pe_unmap_directory(module, IMAGE_DIRECTORY_ENTRY_EXCEPTION, (const char*)rtf);
     }
-#endif
+    return func;
+#else
     return NULL;
+#endif
 }
 
 static unsigned x86_64_map_dwarf_register(unsigned regno, const struct module* module, BOOL eh_frame)
@@ -832,31 +853,31 @@ static void *x86_64_fetch_context_reg(union ctx *pctx, unsigned regno, unsigned 
     case CV_AMD64_R15: *size = sizeof(ctx->R15); return &ctx->R15;
     case CV_AMD64_RIP: *size = sizeof(ctx->Rip); return &ctx->Rip;
 
-    case CV_AMD64_XMM0 + 0: *size = sizeof(ctx->u.s.Xmm0 ); return &ctx->u.s.Xmm0;
-    case CV_AMD64_XMM0 + 1: *size = sizeof(ctx->u.s.Xmm1 ); return &ctx->u.s.Xmm1;
-    case CV_AMD64_XMM0 + 2: *size = sizeof(ctx->u.s.Xmm2 ); return &ctx->u.s.Xmm2;
-    case CV_AMD64_XMM0 + 3: *size = sizeof(ctx->u.s.Xmm3 ); return &ctx->u.s.Xmm3;
-    case CV_AMD64_XMM0 + 4: *size = sizeof(ctx->u.s.Xmm4 ); return &ctx->u.s.Xmm4;
-    case CV_AMD64_XMM0 + 5: *size = sizeof(ctx->u.s.Xmm5 ); return &ctx->u.s.Xmm5;
-    case CV_AMD64_XMM0 + 6: *size = sizeof(ctx->u.s.Xmm6 ); return &ctx->u.s.Xmm6;
-    case CV_AMD64_XMM0 + 7: *size = sizeof(ctx->u.s.Xmm7 ); return &ctx->u.s.Xmm7;
-    case CV_AMD64_XMM8 + 0: *size = sizeof(ctx->u.s.Xmm8 ); return &ctx->u.s.Xmm8;
-    case CV_AMD64_XMM8 + 1: *size = sizeof(ctx->u.s.Xmm9 ); return &ctx->u.s.Xmm9;
-    case CV_AMD64_XMM8 + 2: *size = sizeof(ctx->u.s.Xmm10); return &ctx->u.s.Xmm10;
-    case CV_AMD64_XMM8 + 3: *size = sizeof(ctx->u.s.Xmm11); return &ctx->u.s.Xmm11;
-    case CV_AMD64_XMM8 + 4: *size = sizeof(ctx->u.s.Xmm12); return &ctx->u.s.Xmm12;
-    case CV_AMD64_XMM8 + 5: *size = sizeof(ctx->u.s.Xmm13); return &ctx->u.s.Xmm13;
-    case CV_AMD64_XMM8 + 6: *size = sizeof(ctx->u.s.Xmm14); return &ctx->u.s.Xmm14;
-    case CV_AMD64_XMM8 + 7: *size = sizeof(ctx->u.s.Xmm15); return &ctx->u.s.Xmm15;
+    case CV_AMD64_XMM0 + 0: *size = sizeof(ctx->Xmm0 ); return &ctx->Xmm0;
+    case CV_AMD64_XMM0 + 1: *size = sizeof(ctx->Xmm1 ); return &ctx->Xmm1;
+    case CV_AMD64_XMM0 + 2: *size = sizeof(ctx->Xmm2 ); return &ctx->Xmm2;
+    case CV_AMD64_XMM0 + 3: *size = sizeof(ctx->Xmm3 ); return &ctx->Xmm3;
+    case CV_AMD64_XMM0 + 4: *size = sizeof(ctx->Xmm4 ); return &ctx->Xmm4;
+    case CV_AMD64_XMM0 + 5: *size = sizeof(ctx->Xmm5 ); return &ctx->Xmm5;
+    case CV_AMD64_XMM0 + 6: *size = sizeof(ctx->Xmm6 ); return &ctx->Xmm6;
+    case CV_AMD64_XMM0 + 7: *size = sizeof(ctx->Xmm7 ); return &ctx->Xmm7;
+    case CV_AMD64_XMM8 + 0: *size = sizeof(ctx->Xmm8 ); return &ctx->Xmm8;
+    case CV_AMD64_XMM8 + 1: *size = sizeof(ctx->Xmm9 ); return &ctx->Xmm9;
+    case CV_AMD64_XMM8 + 2: *size = sizeof(ctx->Xmm10); return &ctx->Xmm10;
+    case CV_AMD64_XMM8 + 3: *size = sizeof(ctx->Xmm11); return &ctx->Xmm11;
+    case CV_AMD64_XMM8 + 4: *size = sizeof(ctx->Xmm12); return &ctx->Xmm12;
+    case CV_AMD64_XMM8 + 5: *size = sizeof(ctx->Xmm13); return &ctx->Xmm13;
+    case CV_AMD64_XMM8 + 6: *size = sizeof(ctx->Xmm14); return &ctx->Xmm14;
+    case CV_AMD64_XMM8 + 7: *size = sizeof(ctx->Xmm15); return &ctx->Xmm15;
 
-    case CV_AMD64_ST0 + 0: *size = sizeof(ctx->u.s.Legacy[0]); return &ctx->u.s.Legacy[0];
-    case CV_AMD64_ST0 + 1: *size = sizeof(ctx->u.s.Legacy[1]); return &ctx->u.s.Legacy[1];
-    case CV_AMD64_ST0 + 2: *size = sizeof(ctx->u.s.Legacy[2]); return &ctx->u.s.Legacy[2];
-    case CV_AMD64_ST0 + 3: *size = sizeof(ctx->u.s.Legacy[3]); return &ctx->u.s.Legacy[3];
-    case CV_AMD64_ST0 + 4: *size = sizeof(ctx->u.s.Legacy[4]); return &ctx->u.s.Legacy[4];
-    case CV_AMD64_ST0 + 5: *size = sizeof(ctx->u.s.Legacy[5]); return &ctx->u.s.Legacy[5];
-    case CV_AMD64_ST0 + 6: *size = sizeof(ctx->u.s.Legacy[6]); return &ctx->u.s.Legacy[6];
-    case CV_AMD64_ST0 + 7: *size = sizeof(ctx->u.s.Legacy[7]); return &ctx->u.s.Legacy[7];
+    case CV_AMD64_ST0 + 0: *size = sizeof(ctx->Legacy[0]); return &ctx->Legacy[0];
+    case CV_AMD64_ST0 + 1: *size = sizeof(ctx->Legacy[1]); return &ctx->Legacy[1];
+    case CV_AMD64_ST0 + 2: *size = sizeof(ctx->Legacy[2]); return &ctx->Legacy[2];
+    case CV_AMD64_ST0 + 3: *size = sizeof(ctx->Legacy[3]); return &ctx->Legacy[3];
+    case CV_AMD64_ST0 + 4: *size = sizeof(ctx->Legacy[4]); return &ctx->Legacy[4];
+    case CV_AMD64_ST0 + 5: *size = sizeof(ctx->Legacy[5]); return &ctx->Legacy[5];
+    case CV_AMD64_ST0 + 6: *size = sizeof(ctx->Legacy[6]); return &ctx->Legacy[6];
+    case CV_AMD64_ST0 + 7: *size = sizeof(ctx->Legacy[7]); return &ctx->Legacy[7];
 
     case CV_AMD64_EFLAGS: *size = sizeof(ctx->EFlags); return &ctx->EFlags;
     case CV_AMD64_ES: *size = sizeof(ctx->SegEs); return &ctx->SegEs;
@@ -948,47 +969,10 @@ static BOOL x86_64_fetch_minidump_thread(struct dump_context* dc, unsigned index
 
 static BOOL x86_64_fetch_minidump_module(struct dump_context* dc, unsigned index, unsigned flags)
 {
-    /* FIXME: not sure about the flags... */
-    if (1)
-    {
-        /* FIXME: crop values across module boundaries, */
-#ifdef __x86_64__
-        struct process*         pcs;
-        struct module*          module;
-        const RUNTIME_FUNCTION* rtf;
-        ULONG                   size;
-
-        if (!(pcs = process_find_by_handle(dc->process->handle)) ||
-            !(module = module_find_by_addr(pcs, dc->modules[index].base, DMT_UNKNOWN)))
-            return FALSE;
-        rtf = (const RUNTIME_FUNCTION*)pe_map_directory(module, IMAGE_DIRECTORY_ENTRY_EXCEPTION, &size);
-        if (rtf)
-        {
-            const RUNTIME_FUNCTION* end = (const RUNTIME_FUNCTION*)((const char*)rtf + size);
-            UNWIND_INFO ui;
-
-            while (rtf + 1 < end)
-            {
-                while (rtf->UnwindData & 1)  /* follow chained entry */
-                {
-                    FIXME("RunTime_Function outside IMAGE_DIRECTORY_ENTRY_EXCEPTION unimplemented yet!\n");
-                    return FALSE;
-                    /* we need to read into the other process */
-                    /* rtf = (RUNTIME_FUNCTION*)(module->module.BaseOfImage + (rtf->UnwindData & ~1)); */
-                }
-                if (read_process_memory(dc->process, dc->modules[index].base + rtf->UnwindData, &ui, sizeof(ui)))
-                    minidump_add_memory_block(dc, dc->modules[index].base + rtf->UnwindData,
-                                              FIELD_OFFSET(UNWIND_INFO, UnwindCode) + ui.CountOfCodes * sizeof(UNWIND_CODE), 0);
-                rtf++;
-            }
-        }
-#endif
-    }
-
-    return TRUE;
+    return FALSE;
 }
 
-DECLSPEC_HIDDEN struct cpu cpu_x86_64 = {
+struct cpu cpu_x86_64 = {
     IMAGE_FILE_MACHINE_AMD64,
     8,
     CV_AMD64_RSP,

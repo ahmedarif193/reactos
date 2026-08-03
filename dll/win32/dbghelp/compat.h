@@ -7,14 +7,20 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <wchar.h>
 #include <ctype.h>
 #include <wctype.h>
 
+#ifdef DBGHELP_STATIC_LIB
 #define wcsnicmp strncmpiW
 #define wcsicmp strcmpiW
+#define wcslen strlenW
+#define wcscpy strcpyW
+#define wcscat strcatW
+#define wcscmp strcmpW
 #define wcsrchr strrchrW
 #define wcschr strchrW
+#define wcsdup __wcsdupW
+#endif
 
 typedef HANDLE HWND;
 
@@ -41,6 +47,9 @@ typedef int (*FARPROC)();
 
 // Wine stuff
 #define DECLSPEC_HIDDEN
+#define __WINE_ALLOC_SIZE(...)
+#define __WINE_DEALLOC(...)
+#define __WINE_MALLOC
 #define WINE_DEFAULT_DEBUG_CHANNEL(x)
 #define WINE_DECLARE_DEBUG_CHANNEL(x)
 extern const char *wine_dbgstr_an( const char * s, int n );
@@ -70,6 +79,7 @@ static __inline const char *wine_dbgstr_w( const WCHAR *s ){return wine_dbgstr_w
 #define FIXME(fmt, ...)
 #define TRACE(fmt, ...)
 #define ERR(fmt, ...)
+#define MESSAGE(fmt, ...)
 #endif
 
 #define TRACE_ON(x) FALSE
@@ -102,8 +112,11 @@ typedef enum _EXCEPTION_DISPOSITION
 #define ERROR_CALL_NOT_IMPLEMENTED                         120
 #define ERROR_INVALID_NAME                                 123
 #define ERROR_MOD_NOT_FOUND                                126
+#define ERROR_BAD_EXE_FORMAT                               193
 #define ERROR_NO_MORE_ITEMS                                259
 #define ERROR_INVALID_ADDRESS                              487
+#define ERROR_BAD_FORMAT                                   11
+#define ERROR_SUCCESS                                      0
 
 // winnls.h
 #define CP_ACP 0
@@ -127,6 +140,7 @@ INT __WideCharToMultiByte( UINT page, DWORD flags, LPCWSTR src, INT srclen, LPST
 #define IMAGE_FILE_MACHINE_ARMNT      0x1c4
 #define IMAGE_FILE_MACHINE_POWERPC    0x1f0
 #define IMAGE_FILE_MACHINE_ARM64      0xaa64
+#define IMAGE_FILE_MACHINE_UNKNOWN    0
 #define DLL_PROCESS_DETACH	0
 #define DLL_PROCESS_ATTACH	1
 #define DLL_THREAD_ATTACH	2
@@ -696,7 +710,9 @@ PRUNTIME_FUNCTION WINAPI RtlLookupFunctionEntry(ULONG_PTR,DWORD*,UNWIND_HISTORY_
 
 #endif
 
+#if !defined(TARGET_arm64)
 typedef CONTEXT *PCONTEXT;
+#endif
 
 typedef
 EXCEPTION_DISPOSITION
@@ -733,7 +749,11 @@ typedef struct _EXCEPTION_REGISTRATION_RECORD
 #define HeapAlloc __HeapAlloc
 #define HeapReAlloc __HeapReAlloc
 #define HeapFree(x,y,z) free(z)
-#define GetProcessHeap() 1
+#define HeapCreate(options,initial,maximum) ((HANDLE)(ULONG_PTR)1)
+#define HeapDestroy(heap) TRUE
+#define HEAP_NO_SERIALIZE 0x00000001
+#define LocalFree(ptr) free(ptr)
+#define GetProcessHeap() ((HANDLE)(ULONG_PTR)1)
 #define GetProcessId(x) 8
 #define lstrcpynW __lstrcpynW
 #define CloseHandle __CloseHandle
@@ -755,13 +775,15 @@ typedef struct _EXCEPTION_REGISTRATION_RECORD
 #define GetEnvironmentVariableW(x, y, z) 0
 #define GetCurrentDirectoryW(x, y) 0
 #define GetFileSizeEx __GetFileSizeEx
+#define GetFileSize __GetFileSize
 #define ReadProcessMemory(a,b,c,d,e) 0
 #define GetCurrentProcess() (HANDLE)1
 #define IsWow64Process __IsWow64Process
 #define FILE_BEGIN	0
 
-void* __HeapAlloc(int heap, int flags, size_t size);
-void* __HeapReAlloc(int heap, DWORD d2, void *slab, SIZE_T newsize);
+void* __HeapAlloc(HANDLE heap, DWORD flags, SIZE_T size);
+void* __HeapReAlloc(HANDLE heap, DWORD flags, void *slab, SIZE_T newsize);
+WCHAR* __wcsdupW(const WCHAR *str);
 WCHAR* __lstrcpynW(WCHAR* lpString1, const WCHAR* lpString2, int iMaxLength);
 BOOL __CloseHandle(HANDLE handle);
 HANDLE __CreateFileW(LPCWSTR lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode, LPSECURITY_ATTRIBUTES lpSecurityAttributes, DWORD dwCreationDisposition, DWORD dwFlagsAndAttributes, HANDLE hTemplateFile);
@@ -771,6 +793,7 @@ void* __MapViewOfFile(HANDLE file,DWORD d1,DWORD d2,DWORD d3,SIZE_T s);
 BOOL __UnmapViewOfFile(const void*);
 LPSTR __lstrcpynA(LPSTR,LPCSTR,int);
 BOOL __GetFileSizeEx(HANDLE,PLARGE_INTEGER);
+DWORD __GetFileSize(HANDLE,PDWORD);
 BOOL WINAPI __IsWow64Process(HANDLE,BOOL*);
 #define OPEN_EXISTING	3
 #define FILE_MAP_READ SECTION_MAP_READ
@@ -1089,6 +1112,8 @@ typedef struct _IMAGEHLP_MODULEW64
     BOOL                        TypeInfo;
     BOOL                        SourceIndexed;
     BOOL                        Publics;
+    DWORD                       MachineType;
+    DWORD                       Reserved;
 } IMAGEHLP_MODULEW64, *PIMAGEHLP_MODULEW64;
 typedef struct _IMAGEHLP_LINE64
 {
@@ -1103,8 +1128,55 @@ typedef enum
     SYMOPT_EX_DISABLEACCESSTIMEUPDATE,
     SYMOPT_EX_MAX,
 /* __WINESRC__ */
-    SYMOPT_EX_WINE_NATIVE_MODULES = 1000
+    SYMOPT_EX_WINE_NATIVE_MODULES = 1000,
+    SYMOPT_EX_WINE_EXTENSION_API,
+    SYMOPT_EX_WINE_MODULE_REAL_PATH,
+    SYMOPT_EX_WINE_SOURCE_ACTUAL_PATH
 } IMAGEHLP_EXTENDED_OPTIONS;
+
+enum dhext_module_type
+{
+    DMT_UNKNOWN,
+    DMT_ELF,
+    DMT_MACHO,
+    DMT_PE,
+};
+
+enum dhext_debug_format
+{
+    DHEXT_FORMAT_DWARF2 = 0x0001,
+    DHEXT_FORMAT_DWARF3 = 0x0002,
+    DHEXT_FORMAT_DWARF4 = 0x0004,
+    DHEXT_FORMAT_DWARF5 = 0x0008,
+    DHEXT_FORMAT_STABS  = 0x0010,
+};
+
+struct dhext_module_information
+{
+    enum dhext_module_type type;
+    unsigned is_wine_builtin : 1,
+             is_virtual : 1,
+             has_file_image : 1;
+    unsigned debug_format_bitmask;
+};
+
+typedef struct _SYMSRV_INDEX_INFOW
+{
+    DWORD sizeofstruct;
+    WCHAR file[MAX_PATH + 1];
+    BOOL stripped;
+    DWORD timestamp;
+    DWORD size;
+    WCHAR dbgfile[MAX_PATH + 1];
+    WCHAR pdbfile[MAX_PATH + 1];
+    GUID guid;
+    DWORD sig;
+    DWORD age;
+} SYMSRV_INDEX_INFOW, *PSYMSRV_INDEX_INFOW;
+
+typedef struct _OMAP OMAP, *POMAP;
+typedef struct _MINIDUMP_EXCEPTION_INFORMATION MINIDUMP_EXCEPTION_INFORMATION;
+typedef struct _MINIDUMP_USER_STREAM_INFORMATION MINIDUMP_USER_STREAM_INFORMATION;
 typedef struct _SRCCODEINFO
 {
     DWORD       SizeOfStruct;
@@ -1122,6 +1194,7 @@ BOOL WINAPI SymCleanup(HANDLE hProcess);
 BOOL WINAPI SymAddSymbolW(HANDLE hProcess, ULONG64 BaseOfDll, PCWSTR name, DWORD64 addr, DWORD size, DWORD flags);
 BOOL  WINAPI SymGetModuleInfoW64(HANDLE hProcess, DWORD64 dwAddr, PIMAGEHLP_MODULEW64 ModuleInfo);
 BOOL WINAPI SymMatchStringW(PCWSTR string, PCWSTR re, BOOL _case);
+BOOL WINAPI SymMatchStringA(PCSTR string, PCSTR re, BOOL _case);
 DWORD WINAPI SymLoadModule(HANDLE hProcess, HANDLE hFile, PCSTR ImageName,
                            PCSTR ModuleName, DWORD BaseOfDll, DWORD SizeOfDll);
 DWORD64 WINAPI SymLoadModuleEx(HANDLE, HANDLE, PCSTR, PCSTR, DWORD64, DWORD,
@@ -1130,6 +1203,7 @@ DWORD64 WINAPI SymLoadModuleExW(HANDLE, HANDLE, PCWSTR, PCWSTR, DWORD64, DWORD,
                                 PMODLOAD_DATA, DWORD);
 DWORD64 WINAPI SymGetModuleBase64(HANDLE, DWORD64);
 BOOL WINAPI SymUnloadModule(HANDLE hProcess, DWORD BaseOfDll);
+BOOL WINAPI SymUnloadModule64(HANDLE hProcess, DWORD64 BaseOfDll);
 PVOID   WINAPI SymFunctionTableAccess(HANDLE, DWORD);
 PVOID WINAPI SymFunctionTableAccess64(HANDLE, DWORD64);
 BOOL WINAPI SymFromAddr(HANDLE hProcess, DWORD64 Address, DWORD64* Displacement, PSYMBOL_INFO Symbol);
@@ -1137,6 +1211,10 @@ BOOL WINAPI SymEnumLines(HANDLE hProcess, ULONG64 base, PCSTR compiland, PCSTR s
 DWORD WINAPI SymSetOptions(DWORD opts);
 BOOL WINAPI SymSetExtendedOption(IMAGEHLP_EXTENDED_OPTIONS option, BOOL value);
 BOOL WINAPI SymGetLineFromAddr64(HANDLE hProcess, DWORD64 dwAddr, PDWORD pdwDisplacement, PIMAGEHLP_LINE64 Line);
+BOOL WINAPI SymGetLineNext64(HANDLE hProcess, PIMAGEHLP_LINE64 Line);
+DWORD WINAPI SymGetOptions(void);
+BOOL WINAPI SymSetScopeFromAddr(HANDLE hProcess, ULONG64 addr);
+BOOL WINAPI SymSrvGetFileIndexInfoW(PCWSTR file, PSYMSRV_INDEX_INFOW info, DWORD flags);
 typedef BOOL (CALLBACK *PFIND_EXE_FILE_CALLBACKW)(HANDLE, PCWSTR, PVOID);
 #define FindExecutableImageExW __FindExecutableImageExW
 HANDLE __FindExecutableImageExW(PCWSTR, PCWSTR, PWSTR, PFIND_EXE_FILE_CALLBACKW, PVOID);
@@ -1189,6 +1267,7 @@ typedef BOOL (CALLBACK *PSYM_ENUMSYMBOLS_CALLBACK64)(PCSTR, DWORD64, ULONG, PVOI
 typedef BOOL (CALLBACK *PSYM_ENUMSYMBOLS_CALLBACK64W)(PCWSTR, DWORD64, ULONG, PVOID);
 
 BOOL WINAPI SymEnumerateModulesW64(HANDLE hProcess, PSYM_ENUMMODULES_CALLBACKW64 EnumModulesCallback, PVOID UserContext);
+BOOL WINAPI EnumerateLoadedModulesW64(HANDLE process, PENUMLOADED_MODULES_CALLBACKW64 callback, PVOID user);
 
 typedef struct _tagADDRESS
 {
@@ -1258,6 +1337,8 @@ typedef struct _IMAGEHLP_MODULE64
     BOOL                        TypeInfo;
     BOOL                        SourceIndexed;
     BOOL                        Publics;
+    DWORD                       MachineType;
+    DWORD                       Reserved;
 } IMAGEHLP_MODULE64, *PIMAGEHLP_MODULE64;
 typedef DWORD   RVA;
 typedef ULONG64 RVA64;
@@ -1447,6 +1528,15 @@ typedef enum _IMAGEHLP_SYMBOL_TYPE_INFO
     TI_GET_UDTKIND,
     TI_IS_EQUIV_TO,
     TI_GET_CALLING_CONVENTION,
+    TI_IS_CLOSE_EQUIV_TO,
+    TI_GTIEX_REQS_VALID,
+    TI_GET_VIRTUALBASEOFFSET,
+    TI_GET_VIRTUALBASEDISPINDEX,
+    TI_GET_IS_REFERENCE,
+    TI_GET_INDIRECTVIRTUALBASECLASS,
+    TI_GET_VIRTUALBASETABLETYPE,
+    TI_GET_OBJECTPOINTERTYPE,
+    IMAGEHLP_SYMBOL_TYPE_INFO_MAX,
 } IMAGEHLP_SYMBOL_TYPE_INFO;
 typedef struct _SOURCEFILE
 {
@@ -1617,6 +1707,18 @@ enum SymTagEnum
    SymTagCustomType,
    SymTagManagedType,
    SymTagDimension,
+   SymTagCallSite,
+   SymTagInlineSite,
+   SymTagBaseInterface,
+   SymTagVectorType,
+   SymTagMatrixType,
+   SymTagHLSLType,
+   SymTagCaller,
+   SymTagCallee,
+   SymTagExport,
+   SymTagHeapAllocationSite,
+   SymTagCoffGroup,
+   SymTagInlinee,
    SymTagMax
 };
 
@@ -1640,6 +1742,9 @@ enum BasicType
     btBit = 29,
     btBSTR = 30,
     btHresult = 31,
+    btChar16 = 32,
+    btChar32 = 33,
+    btChar8 = 34,
 };
 
 /* kind of UDT */
@@ -2447,6 +2552,19 @@ struct tagVARIANT {
 typedef VARIANT *LPVARIANT;
 typedef VARIANT VARIANTARG;
 typedef VARIANTARG *LPVARIANTARG;
+
+#define V_VT(A)         ((A)->n1.n2.vt)
+#define V_UNION(A,B)    ((A)->n1.n2.n3.B)
+#define V_BYREF(A)      V_UNION(A,byref)
+#define V_I1(A)         V_UNION(A,cVal)
+#define V_I2(A)         V_UNION(A,iVal)
+#define V_I4(A)         V_UNION(A,lVal)
+#define V_I8(A)         V_UNION(A,llVal)
+#define V_UINT(A)       V_UNION(A,uintVal)
+#define V_UI1(A)        V_UNION(A,bVal)
+#define V_UI2(A)        V_UNION(A,uiVal)
+#define V_UI4(A)        V_UNION(A,ulVal)
+#define V_UI8(A)        V_UNION(A,ullVal)
 
 // wine/windef16.h
 typedef DWORD SEGPTR;

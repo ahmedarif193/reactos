@@ -46,17 +46,19 @@ static void rsym_finalize_function(struct module* module, struct symt_function* 
 {
     IMAGEHLP_LINE64     il;
     struct location     loc;
+    DWORD               displacement;
 
     if (!func) return;
-    symt_normalize_function(module, func);
     /* To define the debug-start of the function, we use the second line number.
      * Not 100% bullet proof, but better than nothing
      */
-    if (symt_fill_func_line_info(module, func, func->address, &il) &&
-        symt_get_func_line_next(module, &il))
+    il.SizeOfStruct = sizeof(il);
+    if (SymGetLineFromAddr64(module->process->handle, func->ranges[0].low,
+                             &displacement, &il) &&
+        SymGetLineNext64(module->process->handle, &il))
     {
         loc.kind = loc_absolute;
-        loc.offset = il.Address - func->address;
+        loc.offset = il.Address - func->ranges[0].low;
         symt_add_function_point(module, func, SymTagFuncDebugStart,
                                 &loc, NULL);
     }
@@ -212,8 +214,8 @@ BOOL rsym_parse(struct module* module, DWORD64 load_offset,
             if (!func)
             {
                 func = sparse_array_add(&func_table, Entry.FunctionOffset, &pool);
-                func->func = symt_new_function(module, NULL, Strings + Entry.FunctionOffset,
-                    Address, 0, NULL);
+                func->func = symt_new_function(module, 0, Strings + Entry.FunctionOffset,
+                    Address, 0, 0, 0);
                 func->Address = Address;
                 func->next = first_func;
                 first_func = func;
