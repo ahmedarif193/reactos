@@ -17,11 +17,6 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifdef __REACTOS__
-#define _USE_MATH_DEFINES
-#include <wine/config.h>
-#include <wine/port.h>
-#endif
 
 #include <math.h>
 #include <limits.h>
