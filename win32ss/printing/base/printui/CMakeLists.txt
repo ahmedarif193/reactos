@@ -8,7 +8,7 @@ list(APPEND SOURCE
 
 add_library(printui MODULE ${SOURCE} printui.rc)
 set_module_type(printui win32dll)
-target_link_libraries(printui wine)
+target_link_libraries(printui wine wine_dll_canunload)
 add_importlibs(printui shell32 msvcrt kernel32 ntdll)
 add_cd_file(TARGET printui DESTINATION reactos/system32 FOR all)
 set_wine_module(printui)
