@@ -27,6 +27,7 @@ else()
 endif()
 
 add_subdirectory(delayimp)
+add_subdirectory(dmoguids)
 add_subdirectory(dmilib)
 #add_subdirectory(dnslib) Nothing links to this lib.
 add_subdirectory(drivers)
