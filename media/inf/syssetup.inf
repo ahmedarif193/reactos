@@ -65,6 +65,7 @@ AddReg=Classes
 11,,dmusic.dll,1
 11,,dplayx.dll,1
 11,,dsound.dll,1
+11,,dssenh.dll,1
 11,,dxdiagn.dll,1
 11,,fontext.dll,1
 11,,hhctrl.ocx,1
