@@ -22,6 +22,4 @@
 #include <wine/list.h>
 #include <wine/unicode.h>
 
-#include "schannel_priv.h"
-
 #endif /* !_SCHANNEL_PCH_ */
