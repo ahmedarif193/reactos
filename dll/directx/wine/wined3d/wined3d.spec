@@ -358,7 +358,31 @@
 @ cdecl wined3d_vertex_declaration_get_parent(ptr)
 @ cdecl wined3d_vertex_declaration_incref(ptr)
 
-# ReactOS builds the vkd3d-shader subset, not the full Vulkan runtime.
+@ stdcall vkd3d_D3DPreprocess(ptr long ptr ptr ptr ptr ptr) D3DPreprocess
+@ stdcall vkd3d_D3DCompile2VKD3D(ptr long ptr ptr ptr ptr ptr long long long ptr long ptr ptr long) D3DCompile2VKD3D
+
+@ cdecl vkd3d_acquire_vk_queue(ptr)
+@ cdecl vkd3d_create_device(ptr ptr ptr)
+@ cdecl vkd3d_create_image_resource(ptr ptr ptr)
+@ cdecl vkd3d_create_instance(ptr ptr)
+@ cdecl vkd3d_create_root_signature_deserializer(ptr long ptr ptr)
+@ cdecl vkd3d_create_versioned_root_signature_deserializer(ptr long ptr ptr)
+@ cdecl vkd3d_get_device_parent(ptr)
+@ cdecl vkd3d_get_dxgi_format(long)
+@ cdecl vkd3d_get_vk_device(ptr)
+@ cdecl vkd3d_get_vk_format(long)
+@ cdecl vkd3d_get_vk_physical_device(ptr)
+@ cdecl vkd3d_get_vk_queue_family_index(ptr)
+@ cdecl vkd3d_instance_decref(ptr)
+@ cdecl vkd3d_instance_from_device(ptr)
+@ cdecl vkd3d_instance_get_vk_instance(ptr)
+@ cdecl vkd3d_instance_incref(ptr)
+@ cdecl vkd3d_release_vk_queue(ptr)
+@ cdecl vkd3d_resource_decref(ptr)
+@ cdecl vkd3d_resource_incref(ptr)
+@ cdecl vkd3d_serialize_root_signature(ptr long ptr ptr)
+@ cdecl vkd3d_serialize_versioned_root_signature(ptr ptr ptr)
+@ cdecl vkd3d_queue_signal_on_cpu(ptr ptr long)
 
 @ cdecl vkd3d_shader_compile(ptr ptr ptr)
 @ cdecl vkd3d_shader_convert_root_signature(ptr long ptr)

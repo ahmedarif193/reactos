@@ -490,11 +490,7 @@ static BOOL wined3d_dll_init(HINSTANCE hInstDLL)
         else putenv( "VKD3D_SHADER_DEBUG=none" );
     }
 
-#ifdef __REACTOS__
-    vkd3d_shader_set_log_callback(vkd3d_log_callback);
-#else
     vkd3d_utils_set_log_callback(vkd3d_log_callback);
-#endif
 
     return TRUE;
 }
