@@ -112,6 +112,7 @@ struct winetest_thread_data
     char strings[2000];              /* buffer for debug strings */
     char context[8][128];            /* data to print before messages */
     unsigned int context_count;      /* number of context prefixes */
+    int condition;                   /* current condition */
 };
 
 extern struct winetest_thread_data *winetest_get_thread_data(void);
@@ -121,7 +122,11 @@ extern int winetest_vprintf( const char *msg, va_list args );
 extern int winetest_get_time(void);
 
 extern int winetest_get_mainargs( char*** pargv );
+#if defined(__REACTOS__) && !defined(WINETEST_WAIT_CHILD_PROCESS_INFO)
 extern void winetest_wait_child_process( HANDLE process );
+#else
+extern void winetest_wait_child_process( const PROCESS_INFORMATION *info );
+#endif
 
 #ifdef STANDALONE
 #define START_TEST(name) \
@@ -227,13 +232,11 @@ static const char winetest_color_bright_purple[] = "\x1b[1;95m";
 static int winetest_printf( const char *msg, ... ) __WINE_PRINTF_ATTR(1,2);
 static int winetest_printf( const char *msg, ... )
 {
-    struct winetest_thread_data *data = winetest_get_thread_data();
     va_list valist;
     int ret;
 
-    fprintf( stdout, __winetest_file_line_prefix ": ", data->current_file, data->current_line );
     va_start( valist, msg );
-    ret = vfprintf( stdout, msg, valist );
+    ret = winetest_vprintf( msg, valist );
     va_end( valist );
 
     return ret;
@@ -253,9 +256,10 @@ static void winetest_print_location( const char *msg, ... ) __WINE_PRINTF_ATTR(1
 static void winetest_print_location( const char *msg, ... )
 {
     struct winetest_thread_data *data = winetest_get_thread_data();
+    char elapsed[64];
     va_list valist;
 
-    winetest_printf( "%s:%d ", data->current_file, data->current_line );
+    winetest_printf( "%s:%d:%s ", data->current_file, data->current_line, winetest_elapsed( elapsed ) );
     va_start( valist, msg );
     winetest_vprintf( msg, valist );
     va_end( valist );
@@ -266,30 +270,28 @@ static void winetest_print_context( const char *msgtype )
     struct winetest_thread_data *data = winetest_get_thread_data();
     unsigned int i;
 
-    winetest_printf( "%s", msgtype );
+    winetest_print_location( "%s", msgtype );
     for (i = 0; i < data->context_count; ++i)
-        fprintf( stdout, "%s: ", data->context[i] );
+        winetest_printf( "%s: ", data->context[i] );
 }
 
 static inline void winetest_subtest( const char *name )
 {
-    struct winetest_thread_data* data = winetest_get_thread_data();
-    fprintf(stdout, __winetest_file_line_prefix ": Subtest %s\n",
-        data->current_file, data->current_line, name);
+    winetest_print_lock();
+    winetest_print_location( "Subtest %s\n", name );
+    winetest_print_unlock();
 }
 
 static inline void winetest_ignore_exceptions( BOOL ignore )
 {
+    winetest_print_lock();
     winetest_print_location( "IgnoreExceptions=%d\n", ignore ? 1 : 0 );
+    winetest_print_unlock();
 }
 
 static inline int broken( int condition )
 {
-    return ((strcmp(winetest_platform, "windows") == 0)
-#ifndef USE_WINE_TODOS
-    || (strcmp(winetest_platform, "reactos") == 0)
-#endif
-    ) && condition;
+    return !winetest_platform_is_wine && condition;
 }
 
 static LONG winetest_add_line( void )
@@ -308,9 +310,9 @@ static LONG winetest_add_line( void )
     count = InterlockedIncrement(line_counters + index) - 1;
     if (count == winetest_mute_threshold)
     {
-        //winetest_print_lock();
+        winetest_print_lock();
         winetest_print_location( "Line has been silenced after %d occurrences\n", winetest_mute_threshold );
-        //winetest_print_unlock();
+        winetest_print_unlock();
     }
 
     return count;
@@ -335,22 +337,42 @@ static int winetest_vok( int condition, const char *msg, va_list args )
     {
         if (condition)
         {
-            winetest_print_context( "Test succeeded inside todo block: " );
-            vfprintf(stdout, msg, args);
-            if ((data->nocount_level & 2) == 0)
-            InterlockedIncrement(&winetest_todo_failures);
+            winetest_print_lock();
+            if (data->flaky_level)
+            {
+                if (winetest_color) winetest_printf( winetest_color_dark_purple );
+                winetest_print_context( "Test succeeded inside flaky todo block: " );
+                winetest_vprintf( msg, args );
+                InterlockedIncrement( &winetest_flaky_failures );
+            }
+            else
+            {
+                if (winetest_color) winetest_printf( winetest_color_dark_red );
+                winetest_print_context( "Test succeeded inside todo block: " );
+                winetest_vprintf( msg, args );
+                InterlockedIncrement( &winetest_todo_failures );
+            }
+            if (winetest_color) winetest_printf( winetest_color_reset );
+            winetest_print_unlock();
             return 0;
         }
         else
         {
-            /* show todos even if traces are disabled*/
-            /*if (winetest_debug > 0)*/
+            if (!winetest_debug ||
+                winetest_add_line() < winetest_mute_threshold)
             {
-                winetest_print_context( "Test marked todo: " );
-                vfprintf(stdout, msg, args);
+                if (winetest_debug > 0)
+                {
+                    winetest_print_lock();
+                    if (winetest_color) winetest_printf( winetest_color_yellow );
+                    winetest_print_context( "Test marked todo: " );
+                    winetest_vprintf( msg, args );
+                    if (winetest_color) winetest_printf( winetest_color_reset );
+                    winetest_print_unlock();
+                }
+                InterlockedIncrement( &winetest_todo_successes );
             }
-            if ((data->nocount_level & 1) == 0)
-            InterlockedIncrement(&winetest_todo_successes);
+            else InterlockedIncrement( &winetest_muted_todo_successes );
             return 1;
         }
     }
@@ -358,58 +380,95 @@ static int winetest_vok( int condition, const char *msg, va_list args )
     {
         if (!condition)
         {
-            winetest_print_context( "Test failed: " );
-            vfprintf(stdout, msg, args);
-            if ((data->nocount_level & 2) == 0)
-            InterlockedIncrement(&winetest_failures);
+            winetest_print_lock();
+            if (data->flaky_level)
+            {
+                if (winetest_color) winetest_printf( winetest_color_bright_purple );
+                winetest_print_context( "Test marked flaky: " );
+                winetest_vprintf( msg, args );
+                InterlockedIncrement( &winetest_flaky_failures );
+            }
+            else
+            {
+                if (winetest_color) winetest_printf( winetest_color_bright_red );
+                winetest_print_context( "Test failed: " );
+                winetest_vprintf( msg, args );
+                InterlockedIncrement( &winetest_failures );
+            }
+            if (winetest_color) winetest_printf( winetest_color_reset );
+            winetest_print_unlock();
             return 0;
         }
         else
         {
-            if (winetest_report_success && (data->nocount_level & 1) == 0)
+            if (winetest_report_success ||
+                (winetest_time && winetest_get_time() >= winetest_last_time + 1000))
             {
-                winetest_printf("Test succeeded\n");
+                winetest_print_lock();
+                if (winetest_color) winetest_printf( winetest_color_green );
+                winetest_print_location("Test succeeded\n");
+                if (winetest_color) winetest_printf( winetest_color_reset );
+                winetest_print_unlock();
             }
-            if ((data->nocount_level & 1) == 0)
-            InterlockedIncrement(&winetest_successes);
+            InterlockedIncrement( &winetest_successes );
             return 1;
         }
     }
 }
 
-void winetest_ok( int condition, const char *msg, ... ) __WINE_PRINTF_ATTR(2,3);
-#ifdef STANDALONE
-void winetest_ok( int condition, const char *msg, ... )
+static void winetest_ok_( const char *msg, ... ) __WINE_PRINTF_ATTR(1,2);
+static inline void winetest_ok_( const char *msg, ... )
 {
     va_list valist;
 
     va_start(valist, msg);
-    winetest_vok(condition, msg, valist);
+    winetest_vok(winetest_get_thread_data()->condition, msg, valist);
     va_end(valist);
 }
-#endif // STANDALONE
 
-void winetest_trace( const char *msg, ... ) __WINE_PRINTF_ATTR(1,2);
-#ifdef STANDALONE
-void winetest_trace( const char *msg, ... )
+static inline int winetest_should_log( int condition )
+{
+    struct winetest_thread_data *data = winetest_get_thread_data();
+    data->condition = condition;
+
+    /* if test is todo, then we would always log, otherwise we only log if test failed. */
+    return data->todo_level || !condition;
+}
+
+#define winetest_ok(cond, ...) (winetest_should_log(cond) ? winetest_ok_(__VA_ARGS__) : winetest_ok_(NULL))
+
+static void winetest_trace( const char *msg, ... ) __WINE_PRINTF_ATTR(1,2);
+static inline void winetest_trace( const char *msg, ... )
 {
     va_list valist;
 
-    if (winetest_debug > 0)
+    if (!winetest_debug)
+        return;
+    if (winetest_add_line() < winetest_mute_threshold)
     {
+        winetest_print_lock();
         winetest_print_context( "" );
         va_start(valist, msg);
-        vfprintf(stdout, msg, valist);
+        winetest_vprintf( msg, valist );
         va_end(valist);
+        winetest_print_unlock();
     }
+    else InterlockedIncrement( &winetest_muted_traces );
 }
-#endif // STANDALONE
 
 static void winetest_vskip( const char *msg, va_list args )
 {
-    winetest_print_context( "Tests skipped: " );
-    vfprintf(stdout, msg, args);
-    winetest_skipped++;
+    if (winetest_add_line() < winetest_mute_threshold)
+    {
+        winetest_print_lock();
+        if (winetest_color) winetest_printf( winetest_color_blue );
+        winetest_print_context( "Tests skipped: " );
+        winetest_vprintf( msg, args );
+        if (winetest_color) winetest_printf( winetest_color_reset );
+        winetest_print_unlock();
+        InterlockedIncrement( &winetest_skipped );
+    }
+    else InterlockedIncrement( &winetest_muted_skipped );
 }
 
 /*
@@ -420,27 +479,21 @@ static void winetest_vskip( const char *msg, va_list args )
  *   - msg - failure message format;
  *   - args - arguments for the failure message
  */
-void winetest_skip( const char *msg, ... ) __WINE_PRINTF_ATTR(1,2);
-#ifdef STANDALONE
-void winetest_skip( const char *msg, ... )
+static void winetest_skip( const char *msg, ... ) __WINE_PRINTF_ATTR(1,2);
+static inline void winetest_skip( const char *msg, ... )
 {
     va_list valist;
     va_start(valist, msg);
     winetest_vskip(msg, valist);
     va_end(valist);
 }
-#endif // STANDALONE
 
 static void winetest_win_skip( const char *msg, ... ) __WINE_PRINTF_ATTR(1,2);
 static inline void winetest_win_skip( const char *msg, ... )
 {
     va_list valist;
     va_start(valist, msg);
-    if ((strcmp(winetest_platform, "windows") == 0)
-#if !defined(USE_WINE_TODOS) || defined(USE_WIN_SKIP)
-    || (strcmp(winetest_platform, "reactos") == 0)
-#endif
-    )
+    if (!winetest_platform_is_wine)
         winetest_vskip(msg, valist);
     else
         winetest_vok(0, msg, valist);
@@ -685,10 +738,7 @@ void winetest_print_unlock(void)
 
 int winetest_vprintf( const char *msg, va_list args )
 {
-    struct winetest_thread_data *data = winetest_get_thread_data();
-
-    fprintf(stdout, __winetest_file_line_prefix ": ", data->current_file, data->current_line);
-    return vfprintf(stdout, msg, args);
+    return vprintf( msg, args );
 }
 
 int winetest_get_time(void)
@@ -702,6 +752,7 @@ int winetest_get_mainargs( char ***pargv )
     return winetest_argc;
 }
 
+#if defined(__REACTOS__) && !defined(WINETEST_WAIT_CHILD_PROCESS_INFO)
 void winetest_wait_child_process( HANDLE process )
 {
     DWORD exit_code = 1;
@@ -727,6 +778,48 @@ void winetest_wait_child_process( HANDLE process )
         }
     }
 }
+#else
+void winetest_wait_child_process( const PROCESS_INFORMATION *info )
+{
+    DWORD ret;
+
+    winetest_ok( info->hProcess != NULL, "No child process handle (CreateProcess failed?)\n" );
+    if (!info->hProcess) return;
+
+    ret = WaitForSingleObject( info->hProcess, 30000 );
+    if (ret == WAIT_TIMEOUT)
+        winetest_ok( 0, "Timed out waiting for the child process\n" );
+    else if (ret != WAIT_OBJECT_0)
+        winetest_ok( 0, "Could not wait for the child process: %d le=%u\n",
+                     (UINT)ret, (UINT)GetLastError() );
+    else
+    {
+        DWORD exit_code;
+        GetExitCodeProcess( info->hProcess, &exit_code );
+        if (exit_code > 255)
+        {
+            winetest_print_lock();
+            if (winetest_color) winetest_printf( winetest_color_bright_red );
+            winetest_print_location( "unhandled exception %08x in child process %04x\n",
+                                     (UINT)exit_code, (UINT)info->dwProcessId );
+            if (winetest_color) winetest_printf( winetest_color_reset );
+            winetest_print_unlock();
+            InterlockedIncrement( &winetest_failures );
+        }
+        else if (exit_code)
+        {
+            winetest_print_lock();
+            winetest_print_location( "%u failures in child process\n", (UINT)exit_code );
+            winetest_print_unlock();
+            while (exit_code-- > 0) InterlockedIncrement( &winetest_failures );
+        }
+
+        if (!CloseHandle( info->hProcess ))
+            ok( 0, "failed to close process handle, error %lu\n", GetLastError() );
+        CloseHandle( info->hThread );
+    }
+}
+#endif
 
 /* Find a test by name */
 static const struct test *find_test( const char *name )
