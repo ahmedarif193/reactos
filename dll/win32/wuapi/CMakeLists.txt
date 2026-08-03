@@ -23,8 +23,8 @@ add_library(wuapi MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/wuapi.def)
 
 set_module_type(wuapi win32dll)
-target_link_libraries(wuapi uuid wine wuguid)
-add_importlibs(wuapi msvcrt kernel32 ntdll)
+target_link_libraries(wuapi uuid wine wine_dll_canunload wine_dll_register wuguid)
+add_importlibs(wuapi ole32 advapi32 msvcrt kernel32 ntdll)
 add_dependencies(wuapi stdole2) # wuapi_tlb.tlb needs stdole2.tlb
 add_pch(wuapi precomp.h SOURCE)
 add_cd_file(TARGET wuapi DESTINATION reactos/system32 FOR all)
