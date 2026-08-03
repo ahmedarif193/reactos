@@ -901,8 +901,8 @@ HRESULT STDMETHODCALLTYPE CBandSiteBase::Exec(const GUID *pguidCmdGroup, DWORD n
                 else
                 {
                     /* Update a single band */
-                    if (pvaIn->n1.n2.vt == VT_I4)
-                        hRet = _UpdateBand(pvaIn->n1.n2.n3.lVal);
+                    if (V_VT(pvaIn) == VT_I4)
+                        hRet = _UpdateBand(V_I4(pvaIn));
                     else
                         hRet = E_FAIL;
                 }

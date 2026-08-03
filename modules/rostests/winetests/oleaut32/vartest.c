@@ -41,69 +41,6 @@
 
 #include "wine/test.h"
 
-#ifdef __REACTOS__
-/* FIXME: Removing these hacks requires fixing our incompatible wine/test.h and wine/debug.h. */
-static inline const char* wine_dbg_sprintf(const char* format, ...)
-{
-    static char buffer[256];
-    va_list args;
-    va_start(args, format);
-    vsnprintf(buffer, sizeof(buffer), format, args);
-    va_end(args);
-    return buffer;
-}
-
-#if defined(__oaidl_h__) && defined(V_VT)
-static inline const char *wine_dbgstr_vt( VARTYPE vt )
-{
-    static const char *const variant_types[] =
-    {
-        "VT_EMPTY","VT_NULL","VT_I2","VT_I4","VT_R4","VT_R8","VT_CY","VT_DATE",
-        "VT_BSTR","VT_DISPATCH","VT_ERROR","VT_BOOL","VT_VARIANT","VT_UNKNOWN",
-        "VT_DECIMAL","15","VT_I1","VT_UI1","VT_UI2","VT_UI4","VT_I8","VT_UI8",
-        "VT_INT","VT_UINT","VT_VOID","VT_HRESULT","VT_PTR","VT_SAFEARRAY",
-        "VT_CARRAY","VT_USERDEFINED","VT_LPSTR","VT_LPWSTR","32","33","34","35",
-        "VT_RECORD","VT_INT_PTR","VT_UINT_PTR","39","40","41","42","43","44","45",
-        "46","47","48","49","50","51","52","53","54","55","56","57","58","59","60",
-        "61","62","63","VT_FILETIME","VT_BLOB","VT_STREAM","VT_STORAGE",
-        "VT_STREAMED_OBJECT","VT_STORED_OBJECT","VT_BLOB_OBJECT","VT_CF","VT_CLSID",
-        "VT_VERSIONED_STREAM"
-    };
-
-    static const char *const variant_flags[16] =
-    {
-        "",
-        "|VT_VECTOR",
-        "|VT_ARRAY",
-        "|VT_VECTOR|VT_ARRAY",
-        "|VT_BYREF",
-        "|VT_VECTOR|VT_BYREF",
-        "|VT_ARRAY|VT_BYREF",
-        "|VT_VECTOR|VT_ARRAY|VT_BYREF",
-        "|VT_RESERVED",
-        "|VT_VECTOR|VT_RESERVED",
-        "|VT_ARRAY|VT_RESERVED",
-        "|VT_VECTOR|VT_ARRAY|VT_RESERVED",
-        "|VT_BYREF|VT_RESERVED",
-        "|VT_VECTOR|VT_BYREF|VT_RESERVED",
-        "|VT_ARRAY|VT_BYREF|VT_RESERVED",
-        "|VT_VECTOR|VT_ARRAY|VT_BYREF|VT_RESERVED",
-    };
-
-    if (vt & ~VT_TYPEMASK)
-        return wine_dbg_sprintf( "%s%s", wine_dbgstr_vt(vt&VT_TYPEMASK), variant_flags[vt>>12] );
-
-    if (vt < sizeof(variant_types)/sizeof(*variant_types))
-        return variant_types[vt];
-
-    if (vt == VT_BSTR_BLOB)
-        return "VT_BSTR_BLOB";
-
-    return wine_dbg_sprintf( "vt(invalid %x)", vt );
-}
-#endif /* defined(__oaidl_h__) && defined(V_VT) */
-#endif /* __REACTOS__ */
-
 static HMODULE hOleaut32;
 
 static const WCHAR sz12[] = {'1','2','\0'};
@@ -609,6 +546,13 @@ static void test_var_call2( int line, HRESULT (WINAPI *func)(LPVARIANT,LPVARIANT
     ok_(__FILE__,line)( is_expected_variant( right, &old_right ), "Modified right argument %s / %s\n",
                         wine_dbgstr_variant(&old_right), wine_dbgstr_variant(right));
     VariantClear( &result );
+}
+
+static void test_var_call2_commutative( int line, HRESULT (WINAPI *func)(LPVARIANT,LPVARIANT,LPVARIANT),
+                            VARIANT *left, VARIANT *right, VARIANT *expected )
+{
+    test_var_call2( line, func, left, right, expected );
+    test_var_call2( line, func, right, left, expected );
 }
 
 #define test_bstr_var(a,b) _test_bstr_var(__LINE__,a,b)
@@ -2708,7 +2652,7 @@ static void test_DateFromUDate( int line, WORD d, WORD m, WORD y, WORD h, WORD m
                                 WORD dw, WORD dy, ULONG flags, HRESULT r, DATE dt )
 {
     UDATE ud;
-    double out;
+    DOUBLE out;
     HRESULT res;
 
     ud.st.wYear = y;
@@ -2784,7 +2728,7 @@ static void test_st2dt(int line, WORD d, WORD m, WORD y, WORD h, WORD mn,
                        WORD s, WORD ms, INT r, double dt, double dt2)
 {
     SYSTEMTIME st;
-    double out;
+    DOUBLE out;
     INT res;
 
     st.wYear = y;
@@ -2858,7 +2802,7 @@ static void test_dos2dt(int line, WORD d, WORD m, WORD y, WORD h, WORD mn,
                         WORD s, INT r, double dt)
 {
     unsigned short dosDate, dosTime;
-    double out;
+    DOUBLE out;
     INT res;
 
     out = 0.0;
@@ -3220,7 +3164,7 @@ static void test_VarSub(void)
     VARTYPE i;
     BSTR lbstr, rbstr;
     HRESULT hres, expectedhres;
-    double r;
+    DOUBLE r;
 
     CHECKPTR(VarSub);
 
@@ -4472,13 +4416,13 @@ static HRESULT (WINAPI *pVarXor)(LPVARIANT,LPVARIANT,LPVARIANT);
         V_VT(&left) = VT_##vt1; V_##vt1(&left) = val1;   \
         V_VT(&right) = VT_##vt2; V_##vt2(&right) = val2; \
         V_VT(&exp) = VT_##rvt; V_##rvt(&exp) = rval;     \
-        test_var_call2( __LINE__, pVarXor, &left, &right, &exp )
+        test_var_call2_commutative( __LINE__, pVarXor, &left, &right, &exp )
 
 #define VARXORCY(vt1,val1,val2,rvt,rval)                 \
         V_VT(&left) = VT_##vt1; V_##vt1(&left) = val1;   \
         V_VT(&right) = VT_CY; V_CY(&right).int64 = val2; \
         V_VT(&exp) = VT_##rvt; V_##rvt(&exp) = rval;     \
-        test_var_call2( __LINE__, pVarXor, &left, &right, &exp )
+        test_var_call2_commutative( __LINE__, pVarXor, &left, &right, &exp )
 
 static void test_VarXor(void)
 {
@@ -5206,13 +5150,13 @@ static HRESULT (WINAPI *pVarOr)(LPVARIANT,LPVARIANT,LPVARIANT);
         V_VT(&left) = VT_##vt1; V_##vt1(&left) = val1;   \
         V_VT(&right) = VT_##vt2; V_##vt2(&right) = val2; \
         V_VT(&exp) = VT_##rvt; V_##rvt(&exp) = rval;     \
-        test_var_call2( __LINE__, pVarOr, &left, &right, &exp )
+        test_var_call2_commutative( __LINE__, pVarOr, &left, &right, &exp )
 
 #define VARORCY(vt1,val1,val2,rvt,rval)                  \
         V_VT(&left) = VT_##vt1; V_##vt1(&left) = val1;   \
         V_VT(&right) = VT_CY; V_CY(&right).int64 = val2; \
         V_VT(&exp) = VT_##rvt; V_##rvt(&exp) = rval;     \
-        test_var_call2( __LINE__, pVarOr, &left, &right, &exp )
+        test_var_call2_commutative( __LINE__, pVarOr, &left, &right, &exp )
 
 static void test_VarOr(void)
 {
@@ -5947,7 +5891,7 @@ static HRESULT (WINAPI *pVarEqv)(LPVARIANT,LPVARIANT,LPVARIANT);
     V_VT(&left) = VT_##vt1; V_##vt1(&left) = val1;   \
     V_VT(&right) = VT_##vt2; V_##vt2(&right) = val2; \
     V_VT(&exp) = VT_##rvt; V_##rvt(&exp) = rval;     \
-    test_var_call2( __LINE__, pVarEqv, &left, &right, &exp )
+    test_var_call2_commutative( __LINE__, pVarEqv, &left, &right, &exp )
 
 static void test_VarEqv(void)
 {
@@ -6086,7 +6030,7 @@ static HRESULT (WINAPI *pVarMul)(LPVARIANT,LPVARIANT,LPVARIANT);
         V_VT(&left) = VT_##vt1; V_##vt1(&left) = val1;   \
         V_VT(&right) = VT_##vt2; V_##vt2(&right) = val2; \
         V_VT(&exp) = VT_##rvt; V_##rvt(&exp) = rval;     \
-        test_var_call2( __LINE__, pVarMul, &left, &right, &exp )
+        test_var_call2_commutative( __LINE__, pVarMul, &left, &right, &exp )
 
 static void test_VarMul(void)
 {
@@ -6094,7 +6038,7 @@ static void test_VarMul(void)
     VARTYPE i;
     BSTR lbstr, rbstr;
     HRESULT hres;
-    double r;
+    DOUBLE r;
 
     CHECKPTR(VarMul);
 
@@ -6257,7 +6201,7 @@ static HRESULT (WINAPI *pVarAdd)(LPVARIANT,LPVARIANT,LPVARIANT);
         V_VT(&left) = VT_##vt1; V_##vt1(&left) = val1;   \
         V_VT(&right) = VT_##vt2; V_##vt2(&right) = val2; \
         V_VT(&exp) = VT_##rvt; V_##rvt(&exp) = rval;     \
-        test_var_call2( __LINE__, pVarAdd, &left, &right, &exp )
+        test_var_call2_commutative( __LINE__, pVarAdd, &left, &right, &exp )
 
 static void test_VarAdd(void)
 {
@@ -6265,7 +6209,7 @@ static void test_VarAdd(void)
     VARTYPE i;
     BSTR lbstr, rbstr;
     HRESULT hres;
-    double r;
+    DOUBLE r;
 
     CHECKPTR(VarAdd);
 
@@ -6850,7 +6794,7 @@ static HRESULT (WINAPI *pVarAnd)(LPVARIANT,LPVARIANT,LPVARIANT);
         V_VT(&left) = VT_##vt1; V_##vt1(&left) = val1;   \
         V_VT(&right) = VT_##vt2; V_##vt2(&right) = val2; \
         V_VT(&exp) = VT_##rvt; V_##rvt(&exp) = rval;     \
-        test_var_call2( __LINE__, pVarAnd, &left, &right, &exp )
+        test_var_call2_commutative( __LINE__, pVarAnd, &left, &right, &exp )
 
 #define VARANDCY(vt1,val1,val2,rvt,rval)                 \
         V_VT(&left) = VT_##vt1; V_##vt1(&left) = val1;   \
@@ -7528,7 +7472,19 @@ static void test_cmp( int line, LCID lcid, UINT flags, VARIANT *left, VARIANT *r
     hres = VarCmp(left,right,lcid,flags);
     ok_(__FILE__,line)(hres == result, "VarCmp(%s,%s): expected 0x%lx, got hres=0x%lx\n",
                        wine_dbgstr_variant(left), wine_dbgstr_variant(right), result, hres );
+
+    /* Invert and run once more. */
+    if (result == VARCMP_LT) result = VARCMP_GT;
+    else if (result == VARCMP_GT) result = VARCMP_LT;
+
+    /* Unfortunately VT_INT is special and is only accepted for the left operand. */
+    if ((V_VT(left) & VT_TYPEMASK) == VT_INT) return;
+
+    hres = VarCmp(right, left, lcid, flags);
+    ok_(__FILE__,line)(hres == result, "VarCmp(%s,%s): expected 0x%lx, got hres=0x%lx\n",
+                       wine_dbgstr_variant(right), wine_dbgstr_variant(left), result, hres );
 }
+
 static void test_cmpex( int line, LCID lcid, VARIANT *left, VARIANT *right,
                         HRESULT res1, HRESULT res2, HRESULT res3, HRESULT res4 )
 {
@@ -8334,7 +8290,7 @@ static void test_VarDiv(void)
     BSTR num1_str, num2_str;
     VARTYPE i;
     HRESULT hres;
-    double r;
+    DOUBLE r;
 
     CHECKPTR(VarDiv);
 
@@ -9802,6 +9758,27 @@ static void test_VarImp(void)
             "VARIMP: DECIMAL value %#I64x, expected %d\n",
 	    V_I8(&result), -3);
     }
+
+    /* All-ones left Imp Null returns Null for every numeric type: the
+     * three-valued "True Imp unknown = unknown" rule applies to any bit
+     * pattern that matches VARIANT_TRUE in the operand's width, including
+     * VT_UI1 0xFF (despite being unsigned). */
+    VARIMP(I2,-1,NULL,0,NULL,0);
+    VARIMP(I4,-1,NULL,0,NULL,0);
+    VARIMP(R8,-1.0,NULL,0,NULL,0);
+    VARIMP(DATE,-1.0,NULL,0,NULL,0);
+    VARIMP(UI1,255,NULL,0,NULL,0);
+
+    /* VT_CY stores values scaled by 10000 in .int64, so CY -1 has .int64 of
+     * -10000 (not -1). Previously Wine's all-ones check compared against -1
+     * and never fired, producing a bitwise result instead of Null. */
+    V_VT(&left) = VT_CY;
+    V_CY(&left).int64 = -10000;
+    V_VT(&right) = VT_NULL;
+    V_I4(&right) = 0;
+    V_VT(&exp) = VT_NULL;
+    V_I4(&exp) = 0;
+    test_var_call2(__LINE__, pVarImp, &left, &right, &exp);
 
     SysFreeString(false_str);
     SysFreeString(true_str);

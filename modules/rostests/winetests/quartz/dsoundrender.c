@@ -80,7 +80,7 @@ static HRESULT WINAPI PB_Read(IPropertyBag *iface, LPCOLESTR name, VARIANT *var,
     char temp[50];
     WideCharToMultiByte(CP_ACP, 0, name, -1, temp, sizeof(temp)-1, NULL, NULL);
     temp[sizeof(temp)-1] = 0;
-    trace("Trying to read %s, type %u\n", temp, var->n1.n2.vt);
+    trace("Trying to read %s, type %u\n", temp, V_VT(var));
     if (!lstrcmpW(name, dsguid))
     {
         static const WCHAR defaultplayback[] =
@@ -90,8 +90,8 @@ static HRESULT WINAPI PB_Read(IPropertyBag *iface, LPCOLESTR name, VARIANT *var,
             'A','A','F','1','-','4','D','D','A','8',
             'F','2','B','5','C','0','3','}',0
         };
-        ok(var->n1.n2.vt == VT_BSTR, "Wrong type asked: %u\n", var->n1.n2.vt);
-        var->n1.n2.n3.bstrVal = SysAllocString(defaultplayback);
+        ok(V_VT(var) == VT_BSTR, "Wrong type asked: %u\n", V_VT(var));
+        V_BSTR(var) = SysAllocString(defaultplayback);
         return S_OK;
     }
     ok(0, "Unknown property '%s' queried\n", temp);
