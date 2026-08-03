@@ -16,22 +16,12 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#pragma once
-
 #include <assert.h>
 
+#ifdef __REACTOS__
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
 #endif
-
-#if defined(__REACTOS__) && (!defined(DLL_EXPORT_VERSION) || (DLL_EXPORT_VERSION < 0x0A00))
-static inline HRESULT mmdevapi_SetThreadDescription(HANDLE thread, PCWSTR description)
-{
-    UNREFERENCED_PARAMETER(thread);
-    UNREFERENCED_PARAMETER(description);
-    return S_OK;
-}
-#define SetThreadDescription mmdevapi_SetThreadDescription
 #endif
 
 #include <endpointvolume.h>
@@ -42,17 +32,72 @@ static inline HRESULT mmdevapi_SetThreadDescription(HANDLE thread, PCWSTR descri
 #ifndef __REACTOS__
 #include <wine/unixlib.h>
 #else
+typedef HMODULE unixlib_module_t;
 typedef ULONG_PTR unixlib_handle_t;
 #endif
 
 #include "unixlib.h"
-#include "mmdevdrv.h"
+
+struct audio_session {
+    GUID guid;
+    struct list clients;
+
+    IMMDevice *device;
+
+    float master_vol;
+    UINT32 channel_count;
+    float *channel_vols;
+    BOOL mute;
+
+    WCHAR *display_name;
+    WCHAR *icon_path;
+    GUID grouping_param;
+
+    struct list entry;
+};
+
+typedef struct audio_session_wrapper {
+    IAudioSessionControl2 IAudioSessionControl2_iface;
+    IChannelAudioVolume IChannelAudioVolume_iface;
+    ISimpleAudioVolume ISimpleAudioVolume_iface;
+
+    LONG ref;
+
+    struct audio_client *client;
+    struct audio_session *session;
+} AudioSessionWrapper;
+
+struct audio_client {
+    IAudioClient3 IAudioClient3_iface;
+    IAudioRenderClient IAudioRenderClient_iface;
+    IAudioCaptureClient IAudioCaptureClient_iface;
+    IAudioClock IAudioClock_iface;
+    IAudioClock2 IAudioClock2_iface;
+    IAudioClockAdjustment IAudioClockAdjustment_iface;
+    IAudioStreamVolume IAudioStreamVolume_iface;
+
+    LONG ref;
+
+    IMMDevice *parent;
+    IUnknown *marshal;
+
+    EDataFlow dataflow;
+    float *vols;
+    UINT32 channel_count;
+    stream_handle stream;
+
+    struct audio_session *session;
+    struct audio_session_wrapper *session_wrapper;
+
+    struct list entry;
+    char *device_name;
+};
 
 extern HRESULT MMDevEnum_Create(REFIID riid, void **ppv);
 extern void MMDevEnum_Free(void);
 
 typedef struct _DriverFuncs {
-    HMODULE module;
+    unixlib_module_t module;
     unixlib_handle_t module_unixlib;
     WCHAR module_name[64];
 
@@ -61,9 +106,6 @@ typedef struct _DriverFuncs {
      * priority value reflecting the likelihood that they are actually
      * valid. See enum _DriverPriority. */
     int priority;
-
-    void (WINAPI *pget_device_guid)(EDataFlow flow, const char *name, GUID *guid);
-    BOOL (WINAPI *pget_device_name_from_guid)(GUID *guid, char **name, EDataFlow *flow);
 } DriverFuncs;
 
 extern DriverFuncs drvs;
@@ -102,11 +144,19 @@ extern HRESULT AudioEndpointVolume_Create(MMDevice *parent, IAudioEndpointVolume
 extern HRESULT AudioSessionManager_Create(IMMDevice *device, IAudioSessionManager2 **ppv);
 extern HRESULT SpatialAudioClient_Create(IMMDevice *device, ISpatialAudioClient **out);
 
+extern BOOL get_device_name_from_guid( const GUID *guid, char **name, EDataFlow *flow );
 extern HRESULT load_devices_from_reg(void);
 extern HRESULT load_driver_devices(EDataFlow flow);
 
-extern void main_loop_stop(void);
-
 extern const WCHAR drv_keyW[];
 
+extern HRESULT get_audio_session(const GUID *sessionguid, IMMDevice *device, UINT channels,
+                                 struct audio_session **out);
+extern HRESULT get_audio_session_wrapper(const GUID *guid, IMMDevice *device,
+                                         struct audio_session_wrapper **out);
 extern HRESULT get_audio_sessions(IMMDevice *device, GUID **ret, int *ret_count);
+
+extern struct audio_session_wrapper *session_wrapper_create(struct audio_client *client);
+
+extern void sessions_lock(void);
+extern void sessions_unlock(void);
