@@ -20,10 +20,12 @@
 
 #define TAG(x) x
 #define ENUM16 ENUM
+#define FLAGS ENUM16
 
 #else /* MANAGED_ENUMS */
 
 #define TAG(x) tag##x
 #define ENUM16 typedef enum
+#define FLAGS ENUM16
 
 #endif  /* MANAGED_ENUMS */

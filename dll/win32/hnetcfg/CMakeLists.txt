@@ -12,17 +12,10 @@ list(APPEND SOURCE
 
 add_library(hnetcfg MODULE
     ${SOURCE}
-    hnetcfg.rc
     ${CMAKE_CURRENT_BINARY_DIR}/hnetcfg.def)
 
-add_typelib(hnetcfg_tlb.idl)
-
-list(APPEND hnetcfg_rc_deps
-    ${CMAKE_CURRENT_SOURCE_DIR}/hnetcfg.rgs
-    ${CMAKE_CURRENT_SOURCE_DIR}/hnetcfg_tlb.rgs
-    ${CMAKE_CURRENT_BINARY_DIR}/hnetcfg_tlb.tlb)
-
-set_source_files_properties(hnetcfg.rc PROPERTIES OBJECT_DEPENDS "${hnetcfg_rc_deps}")
+add_idl_reg_scripts(hnetcfg registry hnetcfg.idl)
+add_idl_reg_scripts(hnetcfg regtypelib hnetcfg_tlb.idl)
 set_module_type(hnetcfg win32dll)
 add_dependencies(hnetcfg stdole2)
 target_link_libraries(hnetcfg wine wine_dll_register wine_dll_canunload uuid)

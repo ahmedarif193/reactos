@@ -20,6 +20,7 @@ list(APPEND SOURCE
     expr.c
     hash.c
     header.c
+    metadata.c
     proxy.c
     register.c
     server.c

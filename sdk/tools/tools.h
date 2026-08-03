@@ -180,6 +180,10 @@ struct strarray
 
 static const struct strarray empty_strarray;
 
+#define STRARRAY_FOR_EACH(cursor,array) \
+    for (const char **__p = (array)->str, *cursor = NULL; \
+         __p - (array)->str < (array)->count && (cursor = *__p, 1); __p++)
+
 static inline void strarray_add( struct strarray *array, const char *str )
 {
     if (array->count == array->size)
@@ -198,17 +202,17 @@ static inline void strarray_addall( struct strarray *array, struct strarray adde
     for (i = 0; i < added.count; i++) strarray_add( array, added.str[i] );
 }
 
-static inline int strarray_exists( const struct strarray *array, const char *str )
+static inline int strarray_exists( struct strarray array, const char *str )
 {
     unsigned int i;
 
-    for (i = 0; i < array->count; i++) if (!strcmp( array->str[i], str )) return 1;
+    for (i = 0; i < array.count; i++) if (!strcmp( array.str[i], str )) return 1;
     return 0;
 }
 
 static inline void strarray_add_uniq( struct strarray *array, const char *str )
 {
-    if (!strarray_exists( array, str )) strarray_add( array, str );
+    if (!strarray_exists( *array, str )) strarray_add( array, str );
 }
 
 static inline void strarray_addall_uniq( struct strarray *array, struct strarray added )
