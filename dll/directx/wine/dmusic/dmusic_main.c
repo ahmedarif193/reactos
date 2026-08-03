@@ -216,12 +216,14 @@ int even_or_odd (DWORD number) {
 }
 
 /* FOURCC to string conversion for debug messages */
+#ifndef __REACTOS__
 const char *debugstr_fourcc (DWORD fourcc) {
     if (!fourcc) return "'null'";
     return wine_dbg_sprintf ("\'%c%c%c%c\'",
 		(char)(fourcc), (char)(fourcc >> 8),
         (char)(fourcc >> 16), (char)(fourcc >> 24));
 }
+#endif
 
 /* DMUS_VERSION struct to string conversion for debug messages */
 static const char *debugstr_dmversion(const DMUS_VERSION *version)
