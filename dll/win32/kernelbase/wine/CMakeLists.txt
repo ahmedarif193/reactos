@@ -43,7 +43,10 @@ list(APPEND SOURCE_STATIC
     #console.c #looks like ReactOS console.c is nothing like wine.
     debug.c
     locale.c
+    main.c
     path.c
+    registry.c
+    security.c
     string.c
     version.c
     )
