@@ -1536,6 +1536,15 @@ NTSTATUS
 NTAPI
 RtlImpersonateSelf(IN SECURITY_IMPERSONATION_LEVEL ImpersonationLevel);
 
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlDeriveCapabilitySidsFromName(
+    _In_ PUNICODE_STRING CapabilityName,
+    _Out_ PSID CapabilityGroupSid,
+    _Out_ PSID CapabilitySid
+);
+
 _IRQL_requires_max_(APC_LEVEL)
 NTSYSAPI
 NTSTATUS
