@@ -65,7 +65,7 @@ target_link_libraries(gdi32
     atan2
     ${PSEH_LIB})
 
-add_importlibs(gdi32 user32 advapi32 kernel32 ntdll)
+add_importlibs(gdi32 user32 advapi32 msvcrt kernel32 ntdll)
 add_pch(gdi32 include/precomp.h SOURCE)
 add_dependencies(gdi32 psdk)
 add_cd_file(TARGET gdi32 DESTINATION reactos/system32 FOR all)
