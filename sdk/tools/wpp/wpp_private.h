@@ -166,12 +166,6 @@ pp_if_state_t pp_pop_if(void);
 pp_if_state_t pp_if_state(void);
 int pp_get_if_depth(void);
 
-#ifdef __REACTOS__
-#ifndef __GNUC__
-#define __attribute__(x)  /*nothing*/
-#endif
-#endif
-
 int ppy_error(const char *s, ...) __attribute__((format (printf, 1, 2)));
 int ppy_warning(const char *s, ...) __attribute__((format (printf, 1, 2)));
 
