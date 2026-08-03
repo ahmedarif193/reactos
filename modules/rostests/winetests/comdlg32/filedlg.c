@@ -29,10 +29,6 @@
 #include "cderr.h"
 #include "dlgs.h"
 
-#ifdef __REACTOS__
-#include <reactos/undocuser.h>
-#endif
-
 /* ##### */
 
 static BOOL resizesupported = TRUE;

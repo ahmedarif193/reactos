@@ -59,13 +59,13 @@ static void test_PageSetupDlgA(void)
     LPPAGESETUPDLGA pDlg;
     DWORD res;
 
-    pDlg = HeapAlloc(GetProcessHeap(), 0, (sizeof(PAGESETUPDLGA)) * 2);
+    pDlg = malloc((sizeof(PAGESETUPDLGA)) * 2);
     if (!pDlg) return;
 
     SetLastError(0xdeadbeef);
     res = PageSetupDlgA(NULL);
     ok( !res && (CommDlgExtendedError() == CDERR_INITIALIZATION),
-        "returned %u with %u and 0x%x (expected '0' and "
+        "returned %lu with %lu and 0x%lx (expected '0' and "
         "CDERR_INITIALIZATION)\n", res, GetLastError(), CommDlgExtendedError());
 
     ZeroMemory(pDlg, sizeof(PAGESETUPDLGA));
@@ -73,7 +73,7 @@ static void test_PageSetupDlgA(void)
     SetLastError(0xdeadbeef);
     res = PageSetupDlgA(pDlg);
     ok( !res && (CommDlgExtendedError() == CDERR_STRUCTSIZE),
-        "returned %u with %u and 0x%x (expected '0' and "
+        "returned %lu with %lu and 0x%lx (expected '0' and "
         "CDERR_STRUCTSIZE)\n", res, GetLastError(), CommDlgExtendedError());
 
     ZeroMemory(pDlg, sizeof(PAGESETUPDLGA));
@@ -82,7 +82,7 @@ static void test_PageSetupDlgA(void)
     SetLastError(0xdeadbeef);
     res = PageSetupDlgA(pDlg);
     ok( !res && (CommDlgExtendedError() == CDERR_STRUCTSIZE),
-        "returned %u with %u and 0x%x (expected '0' and CDERR_STRUCTSIZE)\n",
+        "returned %lu with %lu and 0x%lx (expected '0' and CDERR_STRUCTSIZE)\n",
         res, GetLastError(), CommDlgExtendedError());
 
 
@@ -92,12 +92,12 @@ static void test_PageSetupDlgA(void)
     SetLastError(0xdeadbeef);
     res = PageSetupDlgA(pDlg);
     ok( res || (CommDlgExtendedError() == PDERR_NODEFAULTPRN),
-        "returned %u with %u and 0x%x (expected '!= 0' or '0' and "
+        "returned %lu with %lu and 0x%lx (expected '!= 0' or '0' and "
         "PDERR_NODEFAULTPRN)\n", res, GetLastError(), CommDlgExtendedError());
 
     if (!res && (CommDlgExtendedError() == PDERR_NODEFAULTPRN)) {
         skip("No printer configured.\n");
-        HeapFree(GetProcessHeap(), 0, pDlg);
+        free(pDlg);
         return;
     }
 
@@ -108,8 +108,7 @@ static void test_PageSetupDlgA(void)
     GlobalFree(pDlg->hDevMode);
     GlobalFree(pDlg->hDevNames);
 
-    HeapFree(GetProcessHeap(), 0, pDlg);
-
+    free(pDlg);
 }
 
 /* ########################### */
@@ -126,6 +125,28 @@ static UINT_PTR CALLBACK print_hook_proc(HWND hdlg, UINT msg, WPARAM wp, LPARAM 
     return 0;
 }
 
+static UINT_PTR CALLBACK printer_properties_hook_procA(HWND hdlg, UINT msg, WPARAM wp, LPARAM lp)
+{
+    DEVMODEA* dm;
+    PRINTDLGA* dlg;
+
+    if (msg == WM_INITDIALOG)
+    {
+        PostMessageW(hdlg, WM_COMMAND, psh2, lp);
+    }
+    if (msg == WM_COMMAND && wp == psh2)
+    {
+        dlg = (PRINTDLGA*)lp;
+        dm = GlobalLock(dlg->hDevMode);
+        dm->dmDuplex = 999;
+        dm->dmPaperSize = 888;
+        GlobalUnlock(dlg->hDevMode);
+        PostMessageW(hdlg, WM_COMMAND, IDOK, FALSE);
+        return TRUE;
+    }
+    return 0;
+}
+
 static void test_PrintDlgA(void)
 {
     DWORD res, n_copies = 0;
@@ -138,7 +159,7 @@ static void test_PrintDlgA(void)
     LPSTR  ptr;
     DEVMODEA *dm;
 
-    pDlg = HeapAlloc(GetProcessHeap(), 0, (sizeof(PRINTDLGA)) * 2);
+    pDlg = malloc((sizeof(PRINTDLGA)) * 2);
     if (!pDlg) return;
 
 
@@ -146,7 +167,7 @@ static void test_PrintDlgA(void)
     SetLastError(0xdeadbeef);
     res = PrintDlgA(NULL);
     ok( !res && (CommDlgExtendedError() == CDERR_INITIALIZATION),
-        "returned %d with 0x%x and 0x%x (expected '0' and "
+        "returned %ld with 0x%lx and 0x%lx (expected '0' and "
         "CDERR_INITIALIZATION)\n", res, GetLastError(), CommDlgExtendedError());
 
     ZeroMemory(pDlg, sizeof(PRINTDLGA));
@@ -154,7 +175,7 @@ static void test_PrintDlgA(void)
     SetLastError(0xdeadbeef);
     res = PrintDlgA(pDlg);
     ok( !res && (CommDlgExtendedError() == CDERR_STRUCTSIZE),
-        "returned %d with 0x%x and 0x%x (expected '0' and "
+        "returned %ld with 0x%lx and 0x%lx (expected '0' and "
         "CDERR_STRUCTSIZE)\n", res, GetLastError(), CommDlgExtendedError());
 
     ZeroMemory(pDlg, sizeof(PRINTDLGA));
@@ -163,7 +184,7 @@ static void test_PrintDlgA(void)
     SetLastError(0xdeadbeef);
     res = PrintDlgA(pDlg);
     ok( !res && (CommDlgExtendedError() == CDERR_STRUCTSIZE),
-        "returned %u with %u and 0x%x (expected '0' and "
+        "returned %lu with %lu and 0x%lx (expected '0' and "
         "CDERR_STRUCTSIZE)\n", res, GetLastError(), CommDlgExtendedError());
 
 
@@ -173,12 +194,12 @@ static void test_PrintDlgA(void)
     SetLastError(0xdeadbeef);
     res = PrintDlgA(pDlg);
     ok( res || (CommDlgExtendedError() == PDERR_NODEFAULTPRN),
-        "returned %d with 0x%x and 0x%x (expected '!= 0' or '0' and "
+        "returned %ld with 0x%lx and 0x%lx (expected '!= 0' or '0' and "
         "PDERR_NODEFAULTPRN)\n", res, GetLastError(), CommDlgExtendedError());
 
     if (!res && (CommDlgExtendedError() == PDERR_NODEFAULTPRN)) {
         skip("No printer configured.\n");
-        HeapFree(GetProcessHeap(), 0, pDlg);
+        free(pDlg);
         return;
     }
 
@@ -213,7 +234,7 @@ static void test_PrintDlgA(void)
         res = GetProfileStringA(PrinterPortsA, device, emptyA, buffer, sizeof(buffer));
         ptr = strchr(buffer, ',');
         ok( (res > 1) && (ptr != NULL),
-            "got %u with %u and %p for '%s' (expected '>1' and '!= NULL')\n",
+            "got %lu with %lu and %p for '%s' (expected '>1' and '!= NULL')\n",
             res, GetLastError(), ptr, buffer);
 
         if (ptr) ptr[0] = '\0';
@@ -240,7 +261,7 @@ static void test_PrintDlgA(void)
         pDlg->Flags = PD_ENABLEPRINTHOOK;
         pDlg->lpfnPrintHook = print_hook_proc;
         res = PrintDlgA(pDlg);
-        ok(res, "PrintDlg error %#x\n", CommDlgExtendedError());
+        ok(res, "PrintDlg error %#lx\n", CommDlgExtendedError());
         /* Version of Microsoft XPS Document Writer driver shipped before Win7
          * reports that it can print multiple copies, but returns 1.
          */
@@ -248,8 +269,8 @@ static void test_PrintDlgA(void)
         ok(pDlg->hDevMode != 0, "hDevMode should not be 0\n");
         dm = GlobalLock(pDlg->hDevMode);
         /* some broken drivers use always PD_USEDEVMODECOPIES */
-        ok((S1(U1(*dm)).dmCopies == 1) || broken(S1(U1(*dm)).dmCopies == 123),
-            "expected dm->dmCopies 1, got %d\n", S1(U1(*dm)).dmCopies);
+        ok((dm->dmCopies == 1) || broken(dm->dmCopies == 123),
+            "expected dm->dmCopies 1, got %d\n", dm->dmCopies);
         GlobalUnlock(pDlg->hDevMode);
         GlobalFree(pDlg->hDevMode);
         GlobalFree(pDlg->hDevNames);
@@ -259,17 +280,93 @@ static void test_PrintDlgA(void)
         pDlg->Flags = PD_ENABLEPRINTHOOK | PD_USEDEVMODECOPIES;
         pDlg->lpfnPrintHook = print_hook_proc;
         res = PrintDlgA(pDlg);
-        ok(res, "PrintDlg error %#x\n", CommDlgExtendedError());
+        ok(res, "PrintDlg error %#lx\n", CommDlgExtendedError());
         ok(pDlg->nCopies == 1, "expected nCopies 1, got %d\n", pDlg->nCopies);
         ok(pDlg->hDevMode != 0, "hDevMode should not be 0\n");
         dm = GlobalLock(pDlg->hDevMode);
-        ok(S1(U1(*dm)).dmCopies == 123, "expected dm->dmCopies 123, got %d\n", S1(U1(*dm)).dmCopies);
+        ok(dm->dmCopies == 123, "expected dm->dmCopies 123, got %d\n", dm->dmCopies);
         GlobalUnlock(pDlg->hDevMode);
         GlobalFree(pDlg->hDevMode);
         GlobalFree(pDlg->hDevNames);
     }
 
-    HeapFree(GetProcessHeap(), 0, pDlg);
+    ZeroMemory(pDlg, sizeof(*pDlg));
+
+    pDlg->lStructSize = sizeof(*pDlg);
+    pDlg->Flags = PD_ENABLEPRINTHOOK;
+    pDlg->lpfnPrintHook = printer_properties_hook_procA;
+
+    pDlg->hDevMode = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, sizeof(DEVMODEA));
+    dm = GlobalLock(pDlg->hDevMode);
+    dm->dmSize = sizeof(*dm);
+    dm->dmFields |= DM_DUPLEX | DM_PAPERSIZE;
+    dm->dmDuplex = 123;
+    dm->dmPaperSize = 321;
+    GlobalUnlock(pDlg->hDevMode);
+
+    PrintDlgA(pDlg);
+    dm = GlobalLock(pDlg->hDevMode);
+    ok(dm->dmDuplex == 999, "expected 999, but got %d.\n", dm->dmDuplex);
+    ok(dm->dmPaperSize == 888, "expected 888, but got %d.\n", dm->dmPaperSize);
+    GlobalUnlock(pDlg->hDevMode);
+    GlobalFree(pDlg->hDevMode);
+
+    free(pDlg);
+}
+
+static UINT_PTR CALLBACK printer_properties_hook_procW(HWND hdlg, UINT msg, WPARAM wp, LPARAM lp)
+{
+    DEVMODEW* dm;
+    PRINTDLGW* dlg;
+
+    if (msg == WM_INITDIALOG)
+    {
+        PostMessageW(hdlg, WM_COMMAND, psh2, lp);
+    }
+    if (msg == WM_COMMAND && wp == psh2)
+    {
+        dlg = (PRINTDLGW*)lp;
+        dm = GlobalLock(dlg->hDevMode);
+        dm->dmDuplex = 999;
+        dm->dmPaperSize = 888;
+        GlobalUnlock(dlg->hDevMode);
+        PostMessageW(hdlg, WM_COMMAND, IDOK, FALSE);
+        return TRUE;
+    }
+    return 0;
+}
+
+void test_PrintDlgW(void)
+{
+    PRINTDLGW pd = { 0 };
+    DEVMODEW* dm;
+    DWORD name_size = 0;
+
+    GetDefaultPrinterW(NULL, &name_size);
+    if(name_size == 0)
+    {
+        skip("No printer configured.\n");
+        return;
+    }
+
+    pd.lStructSize = sizeof(pd);
+    pd.Flags = PD_ENABLEPRINTHOOK;
+    pd.lpfnPrintHook = printer_properties_hook_procW;
+
+    pd.hDevMode = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, sizeof(DEVMODEW));
+    dm = GlobalLock(pd.hDevMode);
+    dm->dmSize = sizeof(*dm);
+    dm->dmFields |= DM_DUPLEX | DM_PAPERSIZE;
+    dm->dmDuplex = 123;
+    dm->dmPaperSize = 321;
+    GlobalUnlock(pd.hDevMode);
+
+    PrintDlgW(&pd);
+    dm = GlobalLock(pd.hDevMode);
+    ok(dm->dmDuplex == 999, "expected 999, but got %d.\n", dm->dmDuplex);
+    ok(dm->dmPaperSize == 888, "expected 888, but got %d.\n", dm->dmPaperSize);
+    GlobalUnlock(pd.hDevMode);
+    GlobalFree(pd.hDevMode);
 }
 
 /* ########################### */
@@ -308,7 +405,7 @@ static HRESULT WINAPI callback_SelectionChange(IPrintDialogCallback *iface)
 static HRESULT WINAPI callback_HandleMessage(IPrintDialogCallback *iface,
     HWND hdlg, UINT msg, WPARAM wp, LPARAM lp, LRESULT *res)
 {
-    trace("callback_HandleMessage %p,%04x,%lx,%lx,%p\n", hdlg, msg, wp, lp, res);
+    trace("callback_HandleMessage %p,%04x,%Ix,%Ix,%p\n", hdlg, msg, wp, lp, res);
     /* *res = PD_RESULT_PRINT; */
     return S_OK;
 }
@@ -375,7 +472,7 @@ static void test_PrintDlgExW(void)
 
     /* PrintDlgEx not present before w2k */
     if (!pPrintDlgExW) {
-        skip("PrintDlgExW not available\n");
+        win_skip("PrintDlgExW not available\n");
         return;
     }
 
@@ -386,11 +483,11 @@ static void test_PrintDlgExW(void)
         SetLastError(0xdeadbeef);
         res = pPrintDlgExW(NULL);
         ok( (res == E_INVALIDARG),
-            "got 0x%x with %u and %u (expected 'E_INVALIDARG')\n",
+            "got 0x%lx with %lu and %lu (expected 'E_INVALIDARG')\n",
             res, GetLastError(), CommDlgExtendedError() );
     }
 
-    pDlg = HeapAlloc(GetProcessHeap(), 0, (sizeof(PRINTDLGEXW)) + 8);
+    pDlg = malloc(sizeof(PRINTDLGEXW) + 8);
     if (!pDlg) return;
 
     /* lStructSize must be exact */
@@ -400,7 +497,7 @@ static void test_PrintDlgExW(void)
     SetLastError(0xdeadbeef);
     res = pPrintDlgExW(pDlg);
     ok( (res == E_INVALIDARG),
-        "got 0x%x with %u and %u (expected 'E_INVALIDARG')\n",
+        "got 0x%lx with %lu and %lu (expected 'E_INVALIDARG')\n",
         res, GetLastError(), CommDlgExtendedError());
 
 
@@ -410,7 +507,7 @@ static void test_PrintDlgExW(void)
     SetLastError(0xdeadbeef);
     res = pPrintDlgExW(pDlg);
     ok( (res == E_INVALIDARG),
-        "got 0x%x with %u and %u (expected 'E_INVALIDARG')\n",
+        "got 0x%lx with %lu and %lu (expected 'E_INVALIDARG')\n",
         res, GetLastError(), CommDlgExtendedError());
 
 
@@ -419,7 +516,7 @@ static void test_PrintDlgExW(void)
     SetLastError(0xdeadbeef);
     res = pPrintDlgExW(pDlg);
     ok( (res == E_HANDLE),
-        "got 0x%x with %u and %u (expected 'E_HANDLE')\n",
+        "got 0x%lx with %lu and %lu (expected 'E_HANDLE')\n",
         res, GetLastError(), CommDlgExtendedError());
 
     /* nStartPage must be START_PAGE_GENERAL for the general page or a valid property sheet index */
@@ -428,7 +525,7 @@ static void test_PrintDlgExW(void)
     pDlg->hwndOwner = GetDesktopWindow();
     pDlg->Flags = PD_RETURNDEFAULT | PD_NOWARNING | PD_NOPAGENUMS;
     res = pPrintDlgExW(pDlg);
-    ok((res == E_INVALIDARG), "got 0x%x (expected 'E_INVALIDARG')\n", res);
+    ok((res == E_INVALIDARG), "got 0x%lx (expected 'E_INVALIDARG')\n", res);
 
     /* Use PD_NOPAGENUMS or set nMaxPageRanges and lpPageRanges */
     ZeroMemory(pDlg, sizeof(PRINTDLGEXW));
@@ -437,7 +534,7 @@ static void test_PrintDlgExW(void)
     pDlg->Flags = PD_RETURNDEFAULT | PD_NOWARNING;
     pDlg->nStartPage = START_PAGE_GENERAL;
     res = pPrintDlgExW(pDlg);
-    ok((res == E_INVALIDARG), "got 0x%x (expected 'E_INVALIDARG')\n", res);
+    ok((res == E_INVALIDARG), "got 0x%lx (expected 'E_INVALIDARG')\n", res);
 
     /* this is invalid: a valid lpPageRanges with 0 for nMaxPageRanges */
     ZeroMemory(pDlg, sizeof(PRINTDLGEXW));
@@ -447,7 +544,7 @@ static void test_PrintDlgExW(void)
     pDlg->lpPageRanges = pagerange;
     pDlg->nStartPage = START_PAGE_GENERAL;
     res = pPrintDlgExW(pDlg);
-    ok((res == E_INVALIDARG), "got 0x%x (expected 'E_INVALIDARG')\n", res);
+    ok((res == E_INVALIDARG), "got 0x%lx (expected 'E_INVALIDARG')\n", res);
 
     /* this is invalid: NULL for lpPageRanges with a valid nMaxPageRanges */
     ZeroMemory(pDlg, sizeof(PRINTDLGEXW));
@@ -457,7 +554,7 @@ static void test_PrintDlgExW(void)
     pDlg->nMaxPageRanges = 1;
     pDlg->nStartPage = START_PAGE_GENERAL;
     res = pPrintDlgExW(pDlg);
-    ok((res == E_INVALIDARG), "got 0x%x (expected 'E_INVALIDARG')\n", res);
+    ok((res == E_INVALIDARG), "got 0x%lx (expected 'E_INVALIDARG')\n", res);
 
     /* this works: lpPageRanges with a valid nMaxPageRanges */
     ZeroMemory(pDlg, sizeof(PRINTDLGEXW));
@@ -471,11 +568,11 @@ static void test_PrintDlgExW(void)
     if (res == E_FAIL)
     {
         skip("No printer configured.\n");
-        HeapFree(GetProcessHeap(), 0, pDlg);
+        free(pDlg);
         return;
     }
 
-    ok(res == S_OK, "got 0x%x (expected S_OK)\n", res);
+    ok(res == S_OK, "got 0x%lx (expected S_OK)\n", res);
 
     dn = GlobalLock(pDlg->hDevNames);
     ok(dn != NULL, "expected '!= NULL' for GlobalLock(%p)\n",pDlg->hDevNames);
@@ -498,7 +595,7 @@ static void test_PrintDlgExW(void)
     pDlg->Flags = PD_RETURNDEFAULT | PD_NOWARNING | PD_NOPAGENUMS;
     pDlg->nStartPage = START_PAGE_GENERAL;
     res = pPrintDlgExW(pDlg);
-    ok(res == S_OK, "got 0x%x (expected S_OK)\n", res);
+    ok(res == S_OK, "got 0x%lx (expected S_OK)\n", res);
     GlobalFree(pDlg->hDevMode);
     GlobalFree(pDlg->hDevNames);
 
@@ -509,7 +606,7 @@ static void test_PrintDlgExW(void)
     pDlg->Flags = PD_RETURNDEFAULT | PD_NOWARNING | PD_NOPAGENUMS | PD_RETURNDC;
     pDlg->nStartPage = START_PAGE_GENERAL;
     res = pPrintDlgExW(pDlg);
-    ok(res == S_OK, "got 0x%x (expected S_OK)\n", res);
+    ok(res == S_OK, "got 0x%lx (expected S_OK)\n", res);
     ok(pDlg->hDC != NULL, "HDC missing for PD_RETURNDC\n");
     GlobalFree(pDlg->hDevMode);
     GlobalFree(pDlg->hDevNames);
@@ -522,7 +619,7 @@ static void test_PrintDlgExW(void)
     pDlg->Flags = PD_RETURNDEFAULT | PD_NOWARNING | PD_NOPAGENUMS | PD_RETURNIC;
     pDlg->nStartPage = START_PAGE_GENERAL;
     res = pPrintDlgExW(pDlg);
-    ok(res == S_OK, "got 0x%x (expected S_OK)\n", res);
+    ok(res == S_OK, "got 0x%lx (expected S_OK)\n", res);
     ok(pDlg->hDC != NULL, "HDC missing for PD_RETURNIC\n");
     GlobalFree(pDlg->hDevMode);
     GlobalFree(pDlg->hDevNames);
@@ -533,7 +630,7 @@ static void test_PrintDlgExW(void)
     if (!winetest_interactive)
     {
         skip("interactive PrintDlgEx tests (set WINETEST_INTERACTIVE=1)\n");
-        HeapFree(GetProcessHeap(), 0, pDlg);
+        free(pDlg);
         return;
     }
 
@@ -545,14 +642,14 @@ static void test_PrintDlgExW(void)
     pDlg->lpCallback = &unknown;
     pDlg->dwResultAction = S_OK;
     res = pPrintDlgExW(pDlg);
-    ok(res == S_OK, "got 0x%x (expected S_OK)\n", res);
-    ok(pDlg->dwResultAction == PD_RESULT_PRINT, "expected PD_RESULT_PRINT, got %#x\n", pDlg->dwResultAction);
+    ok(res == S_OK, "got 0x%lx (expected S_OK)\n", res);
+    ok(pDlg->dwResultAction == PD_RESULT_PRINT, "expected PD_RESULT_PRINT, got %#lx\n", pDlg->dwResultAction);
     ok(pDlg->hDC != NULL, "HDC missing for PD_RETURNIC\n");
     GlobalFree(pDlg->hDevMode);
     GlobalFree(pDlg->hDevNames);
     DeleteDC(pDlg->hDC);
 
-    HeapFree(GetProcessHeap(), 0, pDlg);
+    free(pDlg);
 }
 
 static BOOL abort_proc_called = FALSE;
@@ -602,7 +699,7 @@ static void test_abort_proc(void)
 
     ok(job_id > 0 ||
        GetLastError() == ERROR_SPL_NO_STARTDOC, /* Vista can fail with this error when using the XPS driver */
-       "StartDocA failed ret %d gle %d\n", job_id, GetLastError());
+       "StartDocA failed ret %d gle %ld\n", job_id, GetLastError());
 
     if(job_id <= 0)
     {
@@ -630,7 +727,7 @@ static void test_abort_proc(void)
 end:
     SetLastError(0xdeadbeef);
     if(!DeleteFileA(filename))
-        trace("Failed to delete temporary file (err = %x)\n", GetLastError());
+        trace("Failed to delete temporary file (err = %lx)\n", GetLastError());
 }
 
 /* ########################### */
@@ -642,6 +739,7 @@ START_TEST(printdlg)
 
     test_PageSetupDlgA();
     test_PrintDlgA();
+    test_PrintDlgW();
     test_PrintDlgExW();
     test_abort_proc();
 }
