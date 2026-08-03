@@ -15,6 +15,14 @@
 
 #include <ntoskrnl.h>
 
+#if defined(_M_ARM64)
+#define KBD_PS2_SUPPORTED 0
+#else
+#define KBD_PS2_SUPPORTED 1
+#endif
+
+#if KBD_PS2_SUPPORTED
+
 #define KBD_STATUS_REG          0x64
 #define KBD_CNTL_REG            0x64
 #define KBD_DATA_REG            0x60
@@ -56,7 +64,11 @@ static unsigned char keyb_layout[2][128] =
 
 typedef UCHAR byte_t;
 
+#endif /* KBD_PS2_SUPPORTED */
+
 /* FUNCTIONS *****************************************************************/
+
+#if KBD_PS2_SUPPORTED
 
 static VOID
 KbdSendCommandToMouse(UCHAR Command)
@@ -90,22 +102,18 @@ KbdSendCommandToMouse(UCHAR Command)
     return;
 }
 
+#endif /* KBD_PS2_SUPPORTED */
+
 VOID KbdEnableMouse(VOID)
 {
-#if defined(_M_ARM64)
-    /* No PS/2 controller on ARM64 platforms */
-    return;
-#else
+#if KBD_PS2_SUPPORTED
     KbdSendCommandToMouse(MOU_ENAB);
 #endif
 }
 
 VOID KbdDisableMouse(VOID)
 {
-#if defined(_M_ARM64)
-    /* No PS/2 controller on ARM64 platforms */
-    return;
-#else
+#if KBD_PS2_SUPPORTED
     KbdSendCommandToMouse(MOU_DISAB);
 #endif
 }
@@ -113,6 +121,7 @@ VOID KbdDisableMouse(VOID)
 CHAR
 KdbpTryGetCharKeyboard(PULONG ScanCode, ULONG Retry)
 {
+#if KBD_PS2_SUPPORTED
     static byte_t last_key = 0;
     static byte_t shift = 0;
     char c;
@@ -152,6 +161,11 @@ KdbpTryGetCharKeyboard(PULONG ScanCode, ULONG Retry)
     }
 
     return -1;
+#else
+    UNREFERENCED_PARAMETER(ScanCode);
+    UNREFERENCED_PARAMETER(Retry);
+    return -1;
+#endif
 }
 
 /* EOF */
