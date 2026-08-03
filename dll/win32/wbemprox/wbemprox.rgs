@@ -9,6 +9,10 @@ HKCR
         {
             InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
         }
+        '{674B6698-EE92-11D0-AD71-00C04FD8FDFF}' = s 'WBEM Call Context'
+        {
+            InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
+        }
         '{CB8555CC-9128-11D1-AD9B-00C04FD8FDFF}' = s 'WBEM Administrative Locator'
         {
             InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
