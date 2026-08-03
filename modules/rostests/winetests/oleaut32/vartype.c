@@ -2496,7 +2496,7 @@ static void test_VarR4ChangeTypeEx(void)
  */
 
 #undef CONV_TYPE
-#define CONV_TYPE double
+#define CONV_TYPE DOUBLE
 
 static void test_VarR8FromI1(void)
 {
@@ -4502,11 +4502,7 @@ static void test_VarBstrFromI4(void)
 
   lcid = MAKELCID(MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US), SORT_DEFAULT);
 
-#ifdef __REACTOS__
-  value = (-2147483647 - 1);
-#else
   value = -2147483648;
-#endif
   hres = VarBstrFromI4(value, lcid, LOCALE_NOUSEROVERRIDE, &bstr);
   ok(hres == S_OK, "got hres 0x%08lx\n", hres);
   if (bstr)

@@ -545,8 +545,7 @@ PPB_Load( IPersistPropertyBag * iface, IPropertyBag *pPropBag,
     {
         VfwPinImpl *pin;
 
-        This->driver_info = qcap_driver_init( This->pOutputPin,
-               var.__VARIANT_NAME_1.__VARIANT_NAME_2.__VARIANT_NAME_3.ulVal );
+        This->driver_info = qcap_driver_init(This->pOutputPin, V_I4(&var));
         if (This->driver_info)
         {
             pin = (VfwPinImpl *)This->pOutputPin;

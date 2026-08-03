@@ -3,9 +3,13 @@ add_definitions(
     -D__WINESRC__
     -DUSE_WINE_TODOS
     -DWINETEST_USE_DBGSTR_LONGLONG
+    -DWINETEST_USE_DBG_SPRINTF
+    -DWINETEST_USE_DBGSTR_VT
     -D_USE_MATH_DEFINES
     -Dstrcasecmp=_stricmp
 )
+
+include_directories(BEFORE ${REACTOS_SOURCE_DIR}/sdk/include/ucrt)
 
 add_idl_Headers(oleaut32_idlheaders test_reg.idl test_tlb.idl tmarshal.idl test_simple.idl)
 generate_idl_iids(test_reg.idl test_tlb.idl tmarshal.idl test_simple.idl)
@@ -37,7 +41,7 @@ add_executable(oleaut32_winetest
 add_idl_reg_scripts(oleaut32_winetest regtypelib test_reg.idl test_tlb.idl tmarshal.idl test_simple.idl)
 target_link_libraries(oleaut32_winetest uuid)
 set_module_type(oleaut32_winetest win32cui)
-add_importlibs(oleaut32_winetest oleaut32 ole32 rpcrt4 user32 gdi32 advapi32 msvcrt kernel32)
+add_importlibs(oleaut32_winetest oleaut32 ole32 rpcrt4 user32 gdi32 advapi32 ucrtbase kernel32)
 
 if(MSVC)
     add_importlibs(oleaut32_winetest ntdll)

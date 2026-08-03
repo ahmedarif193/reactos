@@ -142,7 +142,7 @@ const USHORT FADF_CREATEVECTOR = 0x2000; /* This array is a vector */
 
 /* Variant */
 
-cpp_quote("#if (__STDC__ && !defined(_FORCENAMELESSUNION)) || defined(NONAMELESSUNION)")
+cpp_quote("#ifdef NONAMELESSUNION")
 cpp_quote("#define __VARIANT_NAME_1 n1")
 cpp_quote("#define __VARIANT_NAME_2 n2")
 cpp_quote("#define __VARIANT_NAME_3 n3")
@@ -230,7 +230,7 @@ typedef VARIANT *LPVARIANT;
 typedef VARIANT VARIANTARG;
 typedef VARIANTARG *LPVARIANTARG;
 
-cpp_quote("#ifdef MIDL_PASS")
+cpp_quote("#if 0")
 typedef const VARIANT *REFVARIANT;
 cpp_quote("#elif !defined(_REFVARIANT_DEFINED)")
 cpp_quote("#define _REFVARIANT_DEFINED")
