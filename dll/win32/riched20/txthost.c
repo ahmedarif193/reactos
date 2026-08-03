@@ -28,8 +28,10 @@
 #include "wine/debug.h"
 #include "editstr.h"
 #include "rtf.h"
+#ifdef __REACTOS__
 #include "undocuser.h"
 #include "riched20.h"
+#endif
 
 WINE_DEFAULT_DEBUG_CHANNEL(richedit);
 

@@ -26,11 +26,11 @@ list(APPEND SOURCE
 list(APPEND riched20_rc_deps
     ${CMAKE_CURRENT_SOURCE_DIR}/riched_tom.rgs
     ${CMAKE_CURRENT_BINARY_DIR}/riched_tom.tlb)
-set_source_files_properties(version.rc PROPERTIES OBJECT_DEPENDS "${riched20_rc_deps}")
+set_source_files_properties(rsrc.rc PROPERTIES OBJECT_DEPENDS "${riched20_rc_deps}")
 
 add_library(riched20 MODULE
     ${SOURCE}
-    version.rc
+    rsrc.rc
     ${CMAKE_CURRENT_BINARY_DIR}/riched20.def)
 
 if(MSVC AND ARCH STREQUAL "i386")
