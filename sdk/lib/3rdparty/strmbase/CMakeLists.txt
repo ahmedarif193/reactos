@@ -1,23 +1,11 @@
-add_definitions(-D__WINESRC__)
-
-list(APPEND SOURCE
-    audio.c
+add_library(strmbase STATIC
     dispatch.c
-    dllfunc.c
-    enumpins.c
     filter.c
     mediatype.c
-    outputqueue.c
     pin.c
     pospass.c
-    qualitycontrol.c
     renderer.c
-    seeking.c
-    transform.c
-    video.c
-    window.c
-    precomp.h)
+    seeking.c)
 
-add_library(strmbase ${SOURCE})
-add_pch(strmbase precomp.h SOURCE)
+target_compile_definitions(strmbase PRIVATE __WINESRC__)
 add_dependencies(strmbase psdk dxsdk)
