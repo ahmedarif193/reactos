@@ -18,9 +18,6 @@
 
 #define COBJMACROS
 #define CONST_VTABLE
-#ifndef __REACTOS__
-#define NONAMELESSUNION
-#endif
 
 #include <stdio.h>
 #include <wine/test.h>
@@ -118,15 +115,15 @@ static HRESULT WINAPI PropertyStorage_ReadMultiple(IPropertyStorage *This, ULONG
         ok(rgpspec != NULL, "rgpspec = NULL\n");
         ok(rgpropvar != NULL, "rgpropvar = NULL\n");
 
-        ok(rgpspec[0].ulKind == PRSPEC_PROPID, "rgpspec[0].ulKind = %d\n", rgpspec[0].ulKind);
-        ok(rgpspec[0].propid == PID_CODEPAGE, "rgpspec[0].propid = %d\n", rgpspec[0].propid);
+        ok(rgpspec[0].ulKind == PRSPEC_PROPID, "rgpspec[0].ulKind = %ld\n", rgpspec[0].ulKind);
+        ok(rgpspec[0].propid == PID_CODEPAGE, "rgpspec[0].propid = %ld\n", rgpspec[0].propid);
 
         rgpropvar[0].vt = VT_I2;
         rgpropvar[0].iVal = 1234;
     } else {
         CHECK_EXPECT(ReadMultiple);
 
-        ok(cpspec == 10, "cpspec = %u\n", cpspec);
+        ok(cpspec == 10, "cpspec = %lu\n", cpspec);
         ok(rgpspec == (void*)0xdeadbeef, "rgpspec = %p\n", rgpspec);
         ok(rgpropvar != NULL, "rgpropvar = NULL\n");
 
@@ -151,10 +148,10 @@ static HRESULT WINAPI PropertyStorage_WriteMultiple(IPropertyStorage *This, ULON
 {
     CHECK_EXPECT(WriteMultiple);
 
-    ok(cpspec == 20, "cpspec = %d\n", cpspec);
+    ok(cpspec == 20, "cpspec = %ld\n", cpspec);
     ok(rgpspec == (void*)0xdeadbeef, "rgpspec = %p\n", rgpspec);
     ok(rgpropvar == (void*)0xdeadbeef, "rgpropvar = %p\n", rgpspec);
-    ok(propidNameFirst == PID_FIRST_USABLE, "propidNameFirst = %d\n", propidNameFirst);
+    ok(propidNameFirst == PID_FIRST_USABLE, "propidNameFirst = %ld\n", propidNameFirst);
     return S_OK;
 }
 
@@ -274,8 +271,8 @@ static HRESULT WINAPI PropertySetStorage_Create(IPropertySetStorage *This,
     ok(IsEqualGUID(rfmtid, &FMTID_Test) || IsEqualGUID(rfmtid, &FMTID_NotExisting),
             "Incorrect rfmtid value\n");
     ok(pclsid == NULL, "pclsid != NULL\n");
-    ok(grfFlags == PROPSETFLAG_ANSI, "grfFlags = %x\n", grfFlags);
-    ok(grfMode == STGM_READ, "grfMode = %x\n", grfMode);
+    ok(grfFlags == PROPSETFLAG_ANSI, "grfFlags = %lx\n", grfFlags);
+    ok(grfMode == STGM_READ, "grfMode = %lx\n", grfMode);
 
     *ppprstg = &PropertyStorage;
     return S_OK;
@@ -287,7 +284,7 @@ static HRESULT WINAPI PropertySetStorage_Open(IPropertySetStorage *This,
     CHECK_EXPECT(Open);
 
     if(IsEqualGUID(rfmtid, &FMTID_Test)) {
-        ok(grfMode == STGM_READ, "grfMode = %x\n", grfMode);
+        ok(grfMode == STGM_READ, "grfMode = %lx\n", grfMode);
 
         *ppprstg = &PropertyStorage;
         return S_OK;
@@ -350,14 +347,14 @@ static void test_SHPropStg_functions(void)
     hres = pSHPropStgCreate(&PropertySetStorage, &FMTID_Test, NULL, PROPSETFLAG_DEFAULT,
             STGM_READ, OPEN_EXISTING, &property_storage, &codepage);
     ok(codepage == 1234, "codepage = %d\n", codepage);
-    ok(hres == S_OK, "hres = %x\n", hres);
+    ok(hres == S_OK, "hres = %lx\n", hres);
     CHECK_CALLED(Open);
     CHECK_CALLED(ReadMultipleCodePage);
 
     SET_EXPECT(Open);
     hres = pSHPropStgCreate(&PropertySetStorage, &FMTID_NotExisting, NULL,
             PROPSETFLAG_DEFAULT, STGM_READ, OPEN_EXISTING, &property_storage, &codepage);
-    ok(hres == STG_E_FILENOTFOUND, "hres = %x\n", hres);
+    ok(hres == STG_E_FILENOTFOUND, "hres = %lx\n", hres);
     CHECK_CALLED(Open);
 
     SET_EXPECT(Open);
@@ -368,7 +365,7 @@ static void test_SHPropStg_functions(void)
     hres = pSHPropStgCreate(&PropertySetStorage, &FMTID_Test, NULL, PROPSETFLAG_ANSI,
             STGM_READ, CREATE_ALWAYS, &property_storage, &codepage);
     ok(codepage == 1234, "codepage = %d\n", codepage);
-    ok(hres == S_OK, "hres = %x\n", hres);
+    ok(hres == S_OK, "hres = %lx\n", hres);
     CHECK_CALLED(Open);
     CHECK_CALLED(Release);
     CHECK_CALLED(Delete);
@@ -381,7 +378,7 @@ static void test_SHPropStg_functions(void)
     hres = pSHPropStgCreate(&PropertySetStorage, &FMTID_NotExisting, NULL, PROPSETFLAG_ANSI,
             STGM_READ, CREATE_ALWAYS, &property_storage, &codepage);
     ok(codepage == 1234, "codepage = %d\n", codepage);
-    ok(hres == S_OK, "hres = %x\n", hres);
+    ok(hres == S_OK, "hres = %lx\n", hres);
     CHECK_CALLED(Open);
     CHECK_CALLED(Create);
     CHECK_CALLED(ReadMultipleCodePage);
@@ -389,7 +386,7 @@ static void test_SHPropStg_functions(void)
     SET_EXPECT(Open);
     hres = pSHPropStgCreate(&PropertySetStorage, &FMTID_Test, &FMTID_NotExisting,
             PROPSETFLAG_DEFAULT, STGM_READ, OPEN_EXISTING, &property_storage, NULL);
-    ok(hres == S_OK, "hres = %x\n", hres);
+    ok(hres == S_OK, "hres = %lx\n", hres);
     CHECK_CALLED(Open);
 
     SET_EXPECT(Stat);
@@ -397,7 +394,7 @@ static void test_SHPropStg_functions(void)
     SET_EXPECT(WriteMultiple);
     codepage = 0;
     hres = pSHPropStgWriteMultiple(property_storage, &codepage, 20, (void*)0xdeadbeef, (void*)0xdeadbeef, PID_FIRST_USABLE);
-    ok(hres == S_OK, "hres = %x\n", hres);
+    ok(hres == S_OK, "hres = %lx\n", hres);
     ok(codepage == 1234, "codepage = %d\n", codepage);
     CHECK_CALLED(Stat);
     CHECK_CALLED(ReadMultipleCodePage);
@@ -407,7 +404,7 @@ static void test_SHPropStg_functions(void)
     SET_EXPECT(ReadMultipleCodePage);
     SET_EXPECT(WriteMultiple);
     hres = pSHPropStgWriteMultiple(property_storage, NULL, 20, (void*)0xdeadbeef, (void*)0xdeadbeef, PID_FIRST_USABLE);
-    ok(hres == S_OK, "hres = %x\n", hres);
+    ok(hres == S_OK, "hres = %lx\n", hres);
     CHECK_CALLED(Stat);
     CHECK_CALLED(ReadMultipleCodePage);
     CHECK_CALLED(WriteMultiple);
@@ -416,7 +413,7 @@ static void test_SHPropStg_functions(void)
     SET_EXPECT(WriteMultiple);
     codepage = 1000;
     hres = pSHPropStgWriteMultiple(property_storage, &codepage, 20, (void*)0xdeadbeef, (void*)0xdeadbeef, PID_FIRST_USABLE);
-    ok(hres == S_OK, "hres = %x\n", hres);
+    ok(hres == S_OK, "hres = %lx\n", hres);
     ok(codepage == 1000, "codepage = %d\n", codepage);
     CHECK_CALLED(Stat);
     CHECK_CALLED(WriteMultiple);
@@ -427,7 +424,7 @@ static void test_SHPropStg_functions(void)
     SET_EXPECT(ReadMultipleCodePage);
     SET_EXPECT(Stat);
     hres = pSHPropStgReadMultiple(property_storage, 0, 10, (void*)0xdeadbeef, read);
-    ok(hres == S_OK, "hres = %x\n", hres);
+    ok(hres == S_OK, "hres = %lx\n", hres);
     CHECK_CALLED(ReadMultiple);
     CHECK_CALLED(ReadMultipleCodePage);
     CHECK_CALLED(Stat);
@@ -435,7 +432,7 @@ static void test_SHPropStg_functions(void)
     SET_EXPECT(ReadMultiple);
     SET_EXPECT(Stat);
     hres = pSHPropStgReadMultiple(property_storage, 1251, 10, (void*)0xdeadbeef, read);
-    ok(hres == S_OK, "hres = %x\n", hres);
+    ok(hres == S_OK, "hres = %lx\n", hres);
     CHECK_CALLED(ReadMultiple);
     CHECK_CALLED(Stat);
 }
@@ -717,19 +714,19 @@ static void test_SHCreateQueryCancelAutoPlayMoniker(void)
     }
 
     hr = pSHCreateQueryCancelAutoPlayMoniker(NULL);
-    ok(hr == E_INVALIDARG, "got 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "got 0x%08lx\n", hr);
 
     hr = pSHCreateQueryCancelAutoPlayMoniker(&mon);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "got 0x%08lx\n", hr);
 
     sys = -1;
     hr = IMoniker_IsSystemMoniker(mon, &sys);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
-    ok(sys == MKSYS_CLASSMONIKER, "got %d\n", sys);
+    ok(hr == S_OK, "got 0x%08lx\n", hr);
+    ok(sys == MKSYS_CLASSMONIKER, "got %ld\n", sys);
 
     memset(&clsid, 0, sizeof(clsid));
     hr = IMoniker_GetClassID(mon, &clsid);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "got 0x%08lx\n", hr);
     ok(IsEqualGUID(&clsid, &CLSID_ClassMoniker), "got %s\n", wine_dbgstr_guid(&clsid));
 
     /* extract used CLSID that implements this hook */
@@ -738,7 +735,7 @@ static void test_SHCreateQueryCancelAutoPlayMoniker(void)
 
     CreateBindCtx(0, &ctxt);
     hr = IMoniker_BindToObject(mon, ctxt, &test_moniker, &IID_IQueryCancelAutoPlay, (void**)&unk);
-    ok(hr == E_NOTIMPL, "got 0x%08x\n", hr);
+    ok(hr == E_NOTIMPL, "got 0x%08lx\n", hr);
     IBindCtx_Release(ctxt);
 
     CHECK_CALLED(autoplay_BindToObject);
@@ -748,7 +745,8 @@ static void test_SHCreateQueryCancelAutoPlayMoniker(void)
 }
 
 #define WM_EXPECTED_VALUE WM_APP
-#define DROPTEST_FILENAME "c:\\wintest.bin"
+#define DROP_NC_AREA       1
+#define DROP_WIDE_FILENAME 2
 struct DragParam {
     HWND hwnd;
     HANDLE ready;
@@ -756,33 +754,81 @@ struct DragParam {
 
 static LRESULT WINAPI drop_window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
-    static BOOL expected;
+    static DWORD flags;
+    static char expected_filename[MAX_PATH];
 
     switch (msg) {
     case WM_EXPECTED_VALUE:
     {
-        expected = lparam;
+        lstrcpynA(expected_filename, (const char*)wparam, sizeof(expected_filename));
+        flags = lparam;
         break;
     }
     case WM_DROPFILES:
     {
         HDROP hDrop = (HDROP)wparam;
         char filename[MAX_PATH] = "dummy";
+        WCHAR filenameW[MAX_PATH] = L"dummy", expected_filenameW[MAX_PATH];
         POINT pt;
         BOOL r;
-        UINT num;
+        UINT num, len;
+        winetest_push_context("%s(%lu)", wine_dbgstr_a(expected_filename), flags);
+
         num = DragQueryFileA(hDrop, 0xffffffff, NULL, 0);
         ok(num == 1, "expected 1, got %u\n", num);
+
         num = DragQueryFileA(hDrop, 0xffffffff, (char*)0xdeadbeef, 0xffffffff);
         ok(num == 1, "expected 1, got %u\n", num);
+
+        len = strlen(expected_filename);
+        num = DragQueryFileA(hDrop, 0, NULL, 0);
+        ok(num == len, "expected %u, got %u\n", len, num);
+
+        num = DragQueryFileA(hDrop, 0, filename, 0);
+        ok(num == len, "expected %u, got %u\n", len, num);
+        ok(!strcmp(filename, "dummy"), "got %s\n", filename);
+
         num = DragQueryFileA(hDrop, 0, filename, sizeof(filename));
-        ok(num == strlen(DROPTEST_FILENAME), "got %u\n", num);
-        ok(!strcmp(filename, DROPTEST_FILENAME), "got %s\n", filename);
+        ok(num == len, "expected %u, got %u\n", len, num);
+        ok(!strcmp(filename, expected_filename), "expected %s, got %s\n",
+           expected_filename, filename);
+
+        memset(filename, 0xaa, sizeof(filename));
+        num = DragQueryFileA(hDrop, 0, filename, 2);
+        ok(num == 1, "expected 1, got %u\n", num);
+        ok(filename[0] == expected_filename[0], "expected '%c', got '%c'\n",
+           expected_filename[0], filename[0]);
+        ok(filename[1] == '\0', "expected nul, got %#x\n", (BYTE)filename[1]);
+
+        MultiByteToWideChar(CP_ACP, 0, expected_filename, -1,
+                            expected_filenameW, ARRAY_SIZE(expected_filenameW));
+
+        len = wcslen(expected_filenameW);
+        num = DragQueryFileW(hDrop, 0, NULL, 0);
+        ok(num == len, "expected %u, got %u\n", len, num);
+
+        num = DragQueryFileW(hDrop, 0, filenameW, 0);
+        ok(num == len, "expected %u, got %u\n", len, num);
+        ok(!wcscmp(filenameW, L"dummy"), "got %s\n", wine_dbgstr_w(filenameW));
+
+        num = DragQueryFileW(hDrop, 0, filenameW, ARRAY_SIZE(filename));
+        ok(num == len, "expected %u, got %u\n", len, num);
+        ok(!wcscmp(filenameW, expected_filenameW), "expected %s, got %s\n",
+           wine_dbgstr_w(expected_filenameW), wine_dbgstr_w(filenameW));
+
+        memset(filenameW, 0xaa, sizeof(filenameW));
+        num = DragQueryFileW(hDrop, 0, filenameW, 2);
+        ok(num == 1, "expected 1, got %u\n", num);
+        ok(filenameW[0] == expected_filenameW[0], "expected '%lc', got '%lc'\n",
+           expected_filenameW[0], filenameW[0]);
+        ok(filenameW[1] == L'\0', "expected nul, got %#x\n", (WCHAR)filenameW[1]);
+
         r = DragQueryPoint(hDrop, &pt);
-        ok(r == expected, "expected %d, got %d\n", expected, r);
-        ok(pt.x == 10, "expected 10, got %d\n", pt.x);
-        ok(pt.y == 20, "expected 20, got %d\n", pt.y);
+        ok(r == !(flags & DROP_NC_AREA), "expected %d, got %d\n", !(flags & DROP_NC_AREA), r);
+        ok(pt.x == 10, "expected 10, got %ld\n", pt.x);
+        ok(pt.y == 20, "expected 20, got %ld\n", pt.y);
         DragFinish(hDrop);
+        winetest_pop_context();
         return 0;
     }
     }
@@ -805,13 +851,13 @@ static DWORD WINAPI drop_window_therad(void *arg)
 
     param->hwnd = CreateWindowA("drop test", NULL, 0, 0, 0, 0, 0,
                                 NULL, 0, NULL, 0);
-    ok(param->hwnd != NULL, "CreateWindow failed: %d\n", GetLastError());
+    ok(param->hwnd != NULL, "CreateWindow failed: %ld\n", GetLastError());
 
     memset(&info, 0, sizeof(info));
     info.cbSize = sizeof(info);
     r = GetWindowInfo(param->hwnd, &info);
     ok(r, "got %d\n", r);
-    ok(!(info.dwExStyle & WS_EX_ACCEPTFILES), "got %08x\n", info.dwExStyle);
+    ok(!(info.dwExStyle & WS_EX_ACCEPTFILES), "got %08lx\n", info.dwExStyle);
 
     DragAcceptFiles(param->hwnd, TRUE);
 
@@ -819,7 +865,7 @@ static DWORD WINAPI drop_window_therad(void *arg)
     info.cbSize = sizeof(info);
     r = GetWindowInfo(param->hwnd, &info);
     ok(r, "got %d\n", r);
-    ok((info.dwExStyle & WS_EX_ACCEPTFILES), "got %08x\n", info.dwExStyle);
+    ok((info.dwExStyle & WS_EX_ACCEPTFILES), "got %08lx\n", info.dwExStyle);
 
     SetEvent(param->ready);
 
@@ -843,52 +889,91 @@ static void test_DragQueryFile(BOOL non_client_flag)
     DWORD rc;
     HGLOBAL hDrop;
     DROPFILES *pDrop;
-    int ret;
+    int ret, i;
     BOOL r;
+    static const struct {
+        UINT codepage;
+        const char* filename;
+    } testcase[] = {
+        { 0, "c:\\wintest.bin" },
+        { 932, "d:\\\x89\xb9\x8a\x79_02.CHY" },
+    };
 
     param.ready = CreateEventA(NULL, FALSE, FALSE, NULL);
     ok(param.ready != NULL, "can't create event\n");
     hThread = CreateThread(NULL, 0, drop_window_therad, &param, 0, NULL);
 
     rc = WaitForSingleObject(param.ready, 5000);
-    ok(rc == WAIT_OBJECT_0, "got %u\n", rc);
+    ok(rc == WAIT_OBJECT_0, "got %lu\n", rc);
 
-    hDrop = GlobalAlloc(GHND, sizeof(DROPFILES) + (strlen(DROPTEST_FILENAME) + 2) * sizeof(WCHAR));
-    pDrop = GlobalLock(hDrop);
-    pDrop->pt.x = 10;
-    pDrop->pt.y = 20;
-    pDrop->fNC = non_client_flag;
-    pDrop->pFiles = sizeof(DROPFILES);
-    ret = MultiByteToWideChar(CP_ACP, 0, DROPTEST_FILENAME, -1,
-                              (LPWSTR)(pDrop + 1), strlen(DROPTEST_FILENAME) + 1);
-    ok(ret > 0, "got %d\n", ret);
-    pDrop->fWide = TRUE;
-    GlobalUnlock(hDrop);
+    for (i = 0; i < ARRAY_SIZE(testcase); i++)
+    {
+        winetest_push_context("%d", i);
+        if (testcase[i].codepage && testcase[i].codepage != GetACP())
+        {
+            skip("need codepage %u for this test\n", testcase[i].codepage);
+            winetest_pop_context();
+            continue;
+        }
 
-    r = PostMessageA(param.hwnd, WM_EXPECTED_VALUE, 0, !non_client_flag);
-    ok(r, "got %d\n", r);
+        ret = MultiByteToWideChar(CP_ACP, 0, testcase[i].filename, -1, NULL, 0);
+        ok(ret > 0, "got %d\n", ret);
+        hDrop = GlobalAlloc(GHND, sizeof(DROPFILES) + (ret + 1) * sizeof(WCHAR));
+        pDrop = GlobalLock(hDrop);
+        pDrop->pt.x = 10;
+        pDrop->pt.y = 20;
+        pDrop->fNC = non_client_flag;
+        pDrop->pFiles = sizeof(DROPFILES);
+        ret = MultiByteToWideChar(CP_ACP, 0, testcase[i].filename, -1,
+                                  (LPWSTR)(pDrop + 1), ret);
+        ok(ret > 0, "got %d\n", ret);
+        pDrop->fWide = TRUE;
+        GlobalUnlock(hDrop);
 
-    r = PostMessageA(param.hwnd, WM_DROPFILES, (WPARAM)hDrop, 0);
-    ok(r, "got %d\n", r);
+        r = PostMessageA(param.hwnd, WM_EXPECTED_VALUE,
+                         (WPARAM)testcase[i].filename, DROP_WIDE_FILENAME | (non_client_flag ? DROP_NC_AREA : 0));
+        ok(r, "got %d\n", r);
+
+        r = PostMessageA(param.hwnd, WM_DROPFILES, (WPARAM)hDrop, 0);
+        ok(r, "got %d\n", r);
+
+        hDrop = GlobalAlloc(GHND, sizeof(DROPFILES) + strlen(testcase[i].filename) + 2);
+        pDrop = GlobalLock(hDrop);
+        pDrop->pt.x = 10;
+        pDrop->pt.y = 20;
+        pDrop->fNC = non_client_flag;
+        pDrop->pFiles = sizeof(DROPFILES);
+        strcpy((char *)(pDrop + 1), testcase[i].filename);
+        pDrop->fWide = FALSE;
+        GlobalUnlock(hDrop);
+
+        r = PostMessageA(param.hwnd, WM_EXPECTED_VALUE,
+                         (WPARAM)testcase[i].filename, non_client_flag ? DROP_NC_AREA : 0);
+        ok(r, "got %d\n", r);
+
+        r = PostMessageA(param.hwnd, WM_DROPFILES, (WPARAM)hDrop, 0);
+        ok(r, "got %d\n", r);
+
+        winetest_pop_context();
+    }
 
     r = PostMessageA(param.hwnd, WM_QUIT, 0, 0);
     ok(r, "got %d\n", r);
 
     rc = WaitForSingleObject(hThread, 5000);
-    ok(rc == WAIT_OBJECT_0, "got %d\n", rc);
+    ok(rc == WAIT_OBJECT_0, "got %ld\n", rc);
 
     CloseHandle(param.ready);
     CloseHandle(hThread);
 }
 #undef WM_EXPECTED_VALUE
-#undef DROPTEST_FILENAME
+#undef DROP_NC_AREA
+#undef DROP_WIDE_FILENAME
 
 static void test_SHCreateSessionKey(void)
 {
-    static const WCHAR session_format[] = {
-                'S','o','f','t','w','a','r','e','\\','M','i','c','r','o','s','o','f','t','\\',
-                'W','i','n','d','o','w','s','\\','C','u','r','r','e','n','t','V','e','r','s','i','o','n','\\',
-                'E','x','p','l','o','r','e','r','\\','S','e','s','s','i','o','n','I','n','f','o','\\','%','u',0};
+    static const WCHAR session_format[] =
+                L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\SessionInfo\\%u";
     HKEY hkey, hkey2;
     HRESULT hr;
     DWORD session;
@@ -906,14 +991,14 @@ static void test_SHCreateSessionKey(void)
 
     hkey = (HKEY)0xdeadbeef;
     hr = pSHCreateSessionKey(0, &hkey);
-    ok(hr == E_ACCESSDENIED, "got 0x%08x\n", hr);
+    ok(hr == E_ACCESSDENIED, "got 0x%08lx\n", hr);
     ok(hkey == NULL, "got %p\n", hkey);
 
     hr = pSHCreateSessionKey(KEY_READ, &hkey);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "got 0x%08lx\n", hr);
 
     hr = pSHCreateSessionKey(KEY_READ, &hkey2);
-    ok(hr == S_OK, "got 0x%08x\n", hr);
+    ok(hr == S_OK, "got 0x%08lx\n", hr);
     ok(hkey != hkey2, "got %p, %p\n", hkey, hkey2);
 
     RegCloseKey(hkey);
@@ -937,10 +1022,10 @@ static void test_dragdrophelper(void)
     HRESULT hr;
 
     hr = CoCreateInstance(&CLSID_DragDropHelper, NULL, CLSCTX_INPROC_SERVER, &IID_IDropTargetHelper, (void **)&target);
-    ok(hr == S_OK, "Failed to create IDropTargetHelper, %#x\n", hr);
+    ok(hr == S_OK, "Failed to create IDropTargetHelper, %#lx\n", hr);
 
     hr = IDropTargetHelper_QueryInterface(target, &IID_IDragSourceHelper, (void **)&dragsource);
-    ok(hr == S_OK, "QI failed, %#x\n", hr);
+    ok(hr == S_OK, "QI failed, %#lx\n", hr);
     IDragSourceHelper_Release(dragsource);
 
     IDropTargetHelper_Release(target);
@@ -953,7 +1038,7 @@ START_TEST(shellole)
     init();
 
     hr = CoInitialize(NULL);
-    ok(hr == S_OK, "CoInitialize failed (0x%08x)\n", hr);
+    ok(hr == S_OK, "CoInitialize failed (0x%08lx)\n", hr);
     if (hr != S_OK)
         return;
 
