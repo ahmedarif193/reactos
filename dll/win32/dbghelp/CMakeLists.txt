@@ -33,7 +33,7 @@ if(NOT CMAKE_CROSSCOMPILING)
         target_compile_options(dbghelphost PRIVATE -fshort-wchar)
     endif()
     if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64")
-        target_compile_definitions(dbghelphost PRIVATE _TARGET_PE64)
+        target_compile_definitions(dbghelphost PRIVATE _TARGET_PE64 _WIN64)
     endif()
 else()
     add_definitions(
