@@ -27,7 +27,7 @@
  */
 #pragma once
 
-#ifdef __REACTOS__
+#if defined(__REACTOS__) && !defined(__WINESRC__)
 #error "Do not use this header, use NDK!"
 #endif
 

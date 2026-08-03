@@ -18,7 +18,21 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include "uxthemep.h"
+#include <stdarg.h>
+
+#include "windef.h"
+#include "winbase.h"
+#include "wingdi.h"
+#include "winuser.h"
+#include "vfwmsgs.h"
+#include "uxtheme.h"
+#include "vssym32.h"
+
+#include "msstyles.h"
+
+#include "wine/debug.h"
+
+WINE_DEFAULT_DEBUG_CHANNEL(uxtheme);
 
 /***********************************************************************
  *      GetThemeSysBool                                     (UXTHEME.@)
@@ -28,12 +42,11 @@ BOOL WINAPI GetThemeSysBool(HTHEME hTheme, int iBoolID)
     HRESULT hr;
     PTHEME_PROPERTY tp;
     BOOL ret;
-    PTHEME_CLASS ptc = ValidateHandle(hTheme);
 
     TRACE("(%p, %d)\n", hTheme, iBoolID);
     SetLastError(0);
-    if(ptc) {
-        if((tp = MSSTYLES_FindMetric(ptc->tf, TMT_BOOL, iBoolID))) {
+    if(hTheme) {
+        if((tp = MSSTYLES_FindMetric(TMT_BOOL, iBoolID))) {
             hr = MSSTYLES_GetPropertyBool(tp, &ret);
             if(SUCCEEDED(hr))
                 return ret;
@@ -59,12 +72,11 @@ COLORREF WINAPI GetThemeSysColor(HTHEME hTheme, int iColorID)
 {
     HRESULT hr;
     PTHEME_PROPERTY tp;
-    PTHEME_CLASS ptc = ValidateHandle(hTheme);
 
     TRACE("(%p, %d)\n", hTheme, iColorID);
     SetLastError(0);
-    if(ptc) {
-        if((tp = MSSTYLES_FindMetric(ptc->tf, TMT_COLOR, iColorID + TMT_FIRSTCOLOR))) {
+    if(hTheme) {
+        if((tp = MSSTYLES_FindMetric(TMT_COLOR, iColorID))) {
             COLORREF color;
             hr = MSSTYLES_GetPropertyColor(tp, &color);
             if(SUCCEEDED(hr))
@@ -92,11 +104,10 @@ HRESULT WINAPI GetThemeSysFont(HTHEME hTheme, int iFontID, LOGFONTW *plf)
 {
     HRESULT hr = S_OK;
     PTHEME_PROPERTY tp;
-    PTHEME_CLASS ptc = ValidateHandle(hTheme);
 
     TRACE("(%p, %d)\n", hTheme, iFontID);
-    if(ptc) {
-        if((tp = MSSTYLES_FindMetric(ptc->tf, TMT_FONT, iFontID))) {
+    if(hTheme) {
+        if((tp = MSSTYLES_FindMetric(TMT_FONT, iFontID))) {
             HDC hdc = GetDC(NULL);
             hr = MSSTYLES_GetPropertyFont(tp, hdc, plf);
             ReleaseDC(NULL, hdc);
@@ -134,16 +145,15 @@ HRESULT WINAPI GetThemeSysFont(HTHEME hTheme, int iFontID, LOGFONTW *plf)
 HRESULT WINAPI GetThemeSysInt(HTHEME hTheme, int iIntID, int *piValue)
 {
     PTHEME_PROPERTY tp;
-    PTHEME_CLASS ptc = ValidateHandle(hTheme);
 
     TRACE("(%p, %d)\n", hTheme, iIntID);
-    if(!ptc)
+    if(!hTheme)
         return E_HANDLE;
     if(iIntID < TMT_FIRSTINT || iIntID > TMT_LASTINT) {
         WARN("Unknown IntID: %d\n", iIntID);
         return STG_E_INVALIDPARAMETER;
     }
-    if((tp = MSSTYLES_FindMetric(ptc->tf , TMT_INT, iIntID)))
+    if((tp = MSSTYLES_FindMetric(TMT_INT, iIntID)))
         return MSSTYLES_GetPropertyInt(tp, piValue);
     return E_PROP_ID_UNSUPPORTED;
 }
@@ -153,9 +163,7 @@ HRESULT WINAPI GetThemeSysInt(HTHEME hTheme, int iIntID, int *piValue)
  */
 int WINAPI GetThemeSysSize(HTHEME hTheme, int iSizeID)
 {
-    PTHEME_PROPERTY tp;
-    int i, id = -1;
-    int metricMap[] = {
+    static const int metricMap[] = {
         SM_CXVSCROLL, TMT_SCROLLBARWIDTH,
         SM_CYHSCROLL, TMT_SCROLLBARHEIGHT,
         SM_CXSIZE, TMT_CAPTIONBARWIDTH,
@@ -167,10 +175,11 @@ int WINAPI GetThemeSysSize(HTHEME hTheme, int iSizeID)
         SM_CXMENUSIZE, TMT_MENUBARWIDTH,
         SM_CYMENUSIZE, TMT_MENUBARHEIGHT
     };
-    PTHEME_CLASS ptc = ValidateHandle(hTheme);
+    PTHEME_PROPERTY tp;
+    int i, id = -1;
 
-    if(ptc) {
-        for(i=0; i<sizeof(metricMap)/sizeof(metricMap[0]); i+=2) {
+    if(hTheme) {
+        for(i=0; i<ARRAY_SIZE(metricMap); i+=2) {
             if(metricMap[i] == iSizeID) {
                 id = metricMap[i+1];
                 break;
@@ -178,7 +187,7 @@ int WINAPI GetThemeSysSize(HTHEME hTheme, int iSizeID)
         }
         SetLastError(0);
         if(id != -1) {
-            if((tp = MSSTYLES_FindMetric(ptc->tf, TMT_SIZE, id))) {
+            if((tp = MSSTYLES_FindMetric(TMT_SIZE, id))) {
                 if(SUCCEEDED(MSSTYLES_GetPropertyInt(tp, &i))) {
                     return i;
                 }
@@ -190,12 +199,6 @@ int WINAPI GetThemeSysSize(HTHEME hTheme, int iSizeID)
             return 0;
         }
     }
-
-
-    // TODO: Check if this is correct
-    // In windows for SM_CXFRAME this function returns what seems to be the non client metric iBorderWidth
-    if (iSizeID == SM_CXFRAME)
-        return GetSystemMetrics(SM_CXFRAME) - GetSystemMetrics(SM_CXDLGFRAME);
     return GetSystemMetrics(iSizeID);
 }
 
@@ -206,16 +209,15 @@ HRESULT WINAPI GetThemeSysString(HTHEME hTheme, int iStringID,
                                  LPWSTR pszStringBuff, int cchMaxStringChars)
 {
     PTHEME_PROPERTY tp;
-    PTHEME_CLASS ptc = ValidateHandle(hTheme);
 
     TRACE("(%p, %d)\n", hTheme, iStringID);
-    if(!ptc)
+    if(!hTheme)
         return E_HANDLE;
     if(iStringID < TMT_FIRSTSTRING || iStringID > TMT_LASTSTRING) {
         WARN("Unknown StringID: %d\n", iStringID);
         return STG_E_INVALIDPARAMETER;
     }
-    if((tp = MSSTYLES_FindMetric(ptc->tf, TMT_STRING, iStringID)))
+    if((tp = MSSTYLES_FindMetric(TMT_STRING, iStringID)))
         return MSSTYLES_GetPropertyString(tp, pszStringBuff, cchMaxStringChars);
     return E_PROP_ID_UNSUPPORTED;
 }

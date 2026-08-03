@@ -24,10 +24,7 @@
 #define TMTVS_RESERVEDHIGH 19999
 
 /* AEROWIZARDSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_AEROWIZARDSTYLE (const WCHAR []){'A','E','R','O','W','I','Z','A','R','D','S','T','Y','L','E',0}
-#define VSCLASS_AEROWIZARD (const WCHAR []){'A','E','R','O','W','I','Z','A','R','D',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_AEROWIZARDSTYLE L"AEROWIZARDSTYLE"
 #define VSCLASS_AEROWIZARD L"AEROWIZARD"
 #else
@@ -59,10 +56,7 @@ enum CONTENTAREASTATES {
 };
 
 /* BUTTONSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_BUTTONSTYLE (const WCHAR []){'B','U','T','T','O','N','S','T','Y','L','E',0}
-#define VSCLASS_BUTTON (const WCHAR []){'B','U','T','T','O','N',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_BUTTONSTYLE L"BUTTONSTYLE"
 #define VSCLASS_BUTTON L"BUTTON"
 #else
@@ -78,6 +72,10 @@ enum BUTTONPARTS {
     BP_USERBUTTON = 5,
     BP_COMMANDLINK = 6,
     BP_COMMANDLINKGLYPH = 7,
+    BP_RADIOBUTTON_HCDISABLED = 8,
+    BP_CHECKBOX_HCDISABLED = 9,
+    BP_GROUPBOX_HCDISABLED = 10,
+    BP_PUSHBUTTONDROPDOWN = 11,
 };
 
 #define BUTTONSTYLEPARTS BUTTONPARTS;
@@ -147,11 +145,13 @@ enum COMMANDLINKGLYPHSTATES {
     CMDLGS_DEFAULTED = 5,
 };
 
+enum PUSHBUTTONDROPDOWNSTATES {
+    PBDDS_NORMAL = 1,
+    PBDDS_DISABLED = 2,
+};
+
 /* COMBOBOXSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_COMBOBOXSTYLE (const WCHAR []){'C','O','M','B','O','B','O','X','S','T','Y','L','E',0}
-#define VSCLASS_COMBOBOX (const WCHAR []){'C','O','M','B','O','B','O','X',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_COMBOBOXSTYLE L"COMBOBOXSTYLE"
 #define VSCLASS_COMBOBOX L"COMBOBOX"
 #else
@@ -168,6 +168,7 @@ enum COMBOBOXPARTS {
     CP_DROPDOWNBUTTONRIGHT = 6,
     CP_DROPDOWNBUTTONLEFT = 7,
     CP_CUEBANNER = 8,
+    CP_DROPDOWNITEM = 9,
 };
 
 #define COMBOBOXSTYLEPARTS COMBOBOXPARTS;
@@ -221,11 +222,13 @@ enum CUEBANNERSTATES {
     CBCB_DISABLED = 4,
 };
 
+enum DROPDOWNITEMSTATES {
+    CBDI_NORMAL = 1,
+    CBDI_HIGHLIGHTED = 2,
+};
+
 /* COMMUNICATIONSSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_COMMUNICATIONSSTYLE (const WCHAR []){'C','O','M','M','U','N','I','C','A','T','I','O','N','S','S','T','Y','L','E',0}
-#define VSCLASS_COMMUNICATIONS (const WCHAR []){'C','O','M','M','U','N','I','C','A','T','I','O','N','S',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_COMMUNICATIONSSTYLE L"COMMUNICATIONSSTYLE"
 #define VSCLASS_COMMUNICATIONS L"COMMUNICATIONS"
 #else
@@ -246,10 +249,7 @@ enum TABSTATES {
 };
 
 /* CONTROLPANELSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_CONTROLPANELSTYLE (const WCHAR []){'C','O','N','T','R','O','L','P','A','N','E','L','S','T','Y','L','E',0}
-#define VSCLASS_CONTROLPANEL (const WCHAR []){'C','O','N','T','R','O','L','P','A','N','E','L',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_CONTROLPANELSTYLE L"CONTROLPANELSTYLE"
 #define VSCLASS_CONTROLPANEL L"CONTROLPANEL"
 #else
@@ -309,10 +309,7 @@ enum SECTIONTITLELINKSTATES {
 };
 
 /* DATEPICKERSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_DATEPICKERSTYLE (const WCHAR []){'D','A','T','E','P','I','C','K','E','R','S','T','Y','L','E',0}
-#define VSCLASS_DATEPICKER (const WCHAR []){'D','A','T','E','P','I','C','K','E','R',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_DATEPICKERSTYLE L"DATEPICKERSTYLE"
 #define VSCLASS_DATEPICKER L"DATEPICKER"
 #else
@@ -349,10 +346,7 @@ enum SHOWCALENDARBUTTONRIGHTSTATES {
 };
 
 /* DRAGDROPSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_DRAGDROPSTYLE (const WCHAR []){'D','R','A','G','D','R','O','P','S','T','Y','L','E',0}
-#define VSCLASS_DRAGDROP (const WCHAR []){'D','R','A','G','D','R','O','P',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_DRAGDROPSTYLE L"DRAGDROPSTYLE"
 #define VSCLASS_DRAGDROP L"DRAGDROP"
 #else
@@ -404,10 +398,7 @@ enum NONESTATES {
 };
 
 /* EDITSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_EDITSTYLE (const WCHAR []){'E','D','I','T','S','T','Y','L','E',0}
-#define VSCLASS_EDIT (const WCHAR []){'E','D','I','T',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_EDITSTYLE L"EDITSTYLE"
 #define VSCLASS_EDIT L"EDIT"
 #else
@@ -485,10 +476,7 @@ enum EDITBORDER_HVSCROLLSTATES {
 };
 
 /* EXPLORERBARSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_EXPLORERBARSTYLE (const WCHAR []){'E','X','P','L','O','R','E','R','B','A','R','S','T','Y','L','E',0}
-#define VSCLASS_EXPLORERBAR (const WCHAR []){'E','X','P','L','O','R','E','R','B','A','R',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_EXPLORERBARSTYLE L"EXPLORERBARSTYLE"
 #define VSCLASS_EXPLORERBAR L"EXPLORERBAR"
 #else
@@ -559,10 +547,7 @@ enum SPECIALGROUPEXPANDSTATES {
 };
 
 /* FLYOUTSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_FLYOUTSTYLE (const WCHAR []){'F','L','Y','O','U','T','S','T','Y','L','E',0}
-#define VSCLASS_FLYOUT (const WCHAR []){'F','L','Y','O','U','T',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_FLYOUTSTYLE L"FLYOUTSTYLE"
 #define VSCLASS_FLYOUT L"FLYOUT"
 #else
@@ -606,10 +591,7 @@ enum LINKHEADERSTATES {
 };
 
 /* HEADERSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_HEADERSTYLE (const WCHAR []){'H','E','A','D','E','R','S','T','Y','L','E',0}
-#define VSCLASS_HEADER (const WCHAR []){'H','E','A','D','E','R',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_HEADERSTYLE L"HEADERSTYLE"
 #define VSCLASS_HEADER L"HEADER"
 #else
@@ -684,10 +666,7 @@ enum HEADEROVERFLOWSTATES {
 };
 
 /* LISTBOXSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_LISTBOXSTYLE (const WCHAR []){'L','I','S','T','B','O','X','S','T','Y','L','E',0}
-#define VSCLASS_LISTBOX (const WCHAR []){'L','I','S','T','B','O','X',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_LISTBOXSTYLE L"LISTBOXSTYLE"
 #define VSCLASS_LISTBOX L"LISTBOX"
 #else
@@ -741,10 +720,7 @@ enum ITEMSTATES {
 };
 
 /* LISTVIEWSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_LISTVIEWSTYLE (const WCHAR []){'L','I','S','T','V','I','E','W','S','T','Y','L','E',0}
-#define VSCLASS_LISTVIEW (const WCHAR []){'L','I','S','T','V','I','E','W',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_LISTVIEWSTYLE L"LISTVIEWSTYLE"
 #define VSCLASS_LISTVIEW L"LISTVIEW"
 #else
@@ -827,10 +803,7 @@ enum COLLAPSEBUTTONSTATES {
 };
 
 /* MENUSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_MENUSTYLE (const WCHAR []){'M','E','N','U','S','T','Y','L','E',0}
-#define VSCLASS_MENU (const WCHAR []){'M','E','N','U',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_MENUSTYLE L"MENUSTYLE"
 #define VSCLASS_MENU L"MENU"
 #else
@@ -923,9 +896,7 @@ enum SYSTEMRESTORESTATES {
 };
 
 /* NAVIGATION class */
-#if defined(__GNUC__)
-#define VSCLASS_NAVIGATION (const WCHAR []){'N','A','V','I','G','A','T','I','O','N',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_NAVIGATION L"NAVIGATION"
 #else
 static const WCHAR VSCLASS_NAVIGATION [] = {'N','A','V','I','G','A','T','I','O','N',0};
@@ -959,10 +930,7 @@ enum NAV_MENUBUTTONSTATES {
 };
 
 /* PROGRESSSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_PROGRESSSTYLE (const WCHAR []){'P','R','O','G','R','E','S','S','S','T','Y','L','E',0}
-#define VSCLASS_PROGRESS (const WCHAR []){'P','R','O','G','R','E','S','S',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_PROGRESSSTYLE L"PROGRESSSTYLE"
 #define VSCLASS_PROGRESS L"PROGRESS"
 #else
@@ -1012,10 +980,7 @@ enum FILLVERTSTATES {
 };
 
 /* REBARSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_REBARSTYLE (const WCHAR []){'R','E','B','A','R','S','T','Y','L','E',0}
-#define VSCLASS_REBAR (const WCHAR []){'R','E','B','A','R',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_REBARSTYLE L"REBARSTYLE"
 #define VSCLASS_REBAR L"REBAR"
 #else
@@ -1061,10 +1026,7 @@ enum SPLITTERVERTSTATES {
 };
 
 /* SCROLLBARSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_SCROLLBARSTYLE (const WCHAR []){'S','C','R','O','L','L','B','A','R','S','T','Y','L','E',0}
-#define VSCLASS_SCROLLBAR (const WCHAR []){'S','C','R','O','L','L','B','A','R',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_SCROLLBARSTYLE L"SCROLLBARSTYLE"
 #define VSCLASS_SCROLLBAR L"SCROLLBAR"
 #else
@@ -1083,6 +1045,7 @@ enum SCROLLBARPARTS {
     SBP_GRIPPERHORZ = 8,
     SBP_GRIPPERVERT = 9,
     SBP_SIZEBOX = 10,
+    SBP_SIZEBOXBKGND = 11,
 };
 
 #define SCROLLBARSTYLEPARTS SCROLLBARPARTS;
@@ -1130,16 +1093,12 @@ enum SIZEBOXSTATES {
 };
 
 /* SPINSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_SPINSTYLE (const WCHAR []){'S','P','I','N','S','T','Y','L','E',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_SPINSTYLE L"SPINSTYLE"
 #else
 static const WCHAR VSCLASS_SPINSTYLE [] = {'S','P','I','N','S','T','Y','L','E',0};
 #endif
-#if defined(__GNUC__)
-#define VSCLASS_SPIN (const WCHAR []){'S','P','I','N',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_SPIN L"SPIN"
 #else
 static const WCHAR VSCLASS_SPIN [] = {'S','P','I','N',0};
@@ -1183,10 +1142,7 @@ enum DOWNHORZSTATES {
 };
 
 /* STATUSSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_STATUSSTYLE (const WCHAR []){'S','T','A','T','U','S','S','T','Y','L','E',0}
-#define VSCLASS_STATUS (const WCHAR []){'S','T','A','T','U','S',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_STATUSSTYLE L"STATUSSTYLE"
 #define VSCLASS_STATUS L"STATUS"
 #else
@@ -1203,10 +1159,7 @@ enum STATUSPARTS {
 #define STATUSSTYLEPARTS STATUSPARTS;
 
 /* TABSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_TABSTYLE (const WCHAR []){'T','A','B','S','T','Y','L','E',0}
-#define VSCLASS_TAB (const WCHAR []){'T','A','B',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_TABSTYLE L"TABSTYLE"
 #define VSCLASS_TAB L"TAB"
 #else
@@ -1295,10 +1248,7 @@ enum TOPTABITEMBOTHEDGESTATES {
 };
 
 /* TASKDIALOGSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_TASKDIALOGSTYLE (const WCHAR []){'T','A','S','K','D','I','A','L','O','G','S','T','Y','L','E',0}
-#define VSCLASS_TASKDIALOG (const WCHAR []){'T','A','S','K','D','I','A','L','O','G',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_TASKDIALOGSTYLE L"TASKDIALOGSTYLE"
 #define VSCLASS_TASKDIALOG L"TASKDIALOG"
 #else
@@ -1343,12 +1293,12 @@ enum EXPANDOBUTTONSTATES {
     TDLGEBS_EXPANDEDNORMAL = 4,
     TDLGEBS_EXPANDEDHOVER = 5,
     TDLGEBS_EXPANDEDPRESSED = 6,
+    TDLGEBS_NORMALDISABLED = 7,
+    TDLGEBS_EXPANDEDDISABLED = 8,
 };
 
 /* TEXTSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_TEXTSTYLE (const WCHAR []){'T','E','X','T','S','T','Y','L','E',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_TEXTSTYLE L"TEXTSTYLE"
 #else
 static const WCHAR VSCLASS_TEXTSTYLE [] = {'T','E','X','T','S','T','Y','L','E',0};
@@ -1379,10 +1329,7 @@ enum CONTROLLABELSTATES {
 };
 
 /* TOOLBARSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_TOOLBARSTYLE (const WCHAR []){'T','O','O','L','B','A','R','S','T','Y','L','E',0}
-#define VSCLASS_TOOLBAR (const WCHAR []){'T','O','O','L','B','A','R',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_TOOLBARSTYLE L"TOOLBARSTYLE"
 #define VSCLASS_TOOLBAR L"TOOLBAR"
 #else
@@ -1397,6 +1344,7 @@ enum TOOLBARPARTS {
     TP_SPLITBUTTONDROPDOWN = 4,
     TP_SEPARATOR = 5,
     TP_SEPARATORVERT = 6,
+    TP_DROPDOWNBUTTONGLYPH = 7,
 };
 
 #define TOOLBARSTYLEPARTS TOOLBARPARTS;
@@ -1413,10 +1361,7 @@ enum TOOLBARSTYLESTATES {
 };
 
 /* TOOLTIPSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_TOOLTIPSTYLE (const WCHAR []){'T','O','O','L','T','I','P','S','T','Y','L','E',0}
-#define VSCLASS_TOOLTIP (const WCHAR []){'T','O','O','L','T','I','P',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_TOOLTIPSTYLE L"TOOLTIPSTYLE"
 #define VSCLASS_TOOLTIP L"TOOLTIP"
 #else
@@ -1431,6 +1376,7 @@ enum TOOLTIPPARTS {
     TTP_BALLOONTITLE = 4,
     TTP_CLOSE = 5,
     TTP_BALLOONSTEM = 6,
+    TTP_WRENCH = 7,
 };
 
 #define TOOLTIPSTYLEPARTS TOOLTIPPARTS;
@@ -1460,11 +1406,14 @@ enum BALLOONSTEMSTATES {
     TTBSS_POINTINGDOWNLEFTWALL = 6,
 };
 
+enum WRENCHSTATES {
+    TTWS_NORMAL = 1,
+    TTWS_HOT = 2,
+    TTWS_PRESSED = 3,
+};
+
 /* TRACKBARSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_TRACKBARSTYLE (const WCHAR []){'T','R','A','C','K','B','A','R','S','T','Y','L','E',0}
-#define VSCLASS_TRACKBAR (const WCHAR []){'T','R','A','C','K','B','A','R',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_TRACKBARSTYLE L"TRACKBARSTYLE"
 #define VSCLASS_TRACKBAR L"TRACKBAR"
 #else
@@ -1556,10 +1505,7 @@ enum TICSVERTSTATES {
 };
 
 /* TREEVIEWSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_TREEVIEWSTYLE (const WCHAR []){'T','R','E','E','V','I','E','W','S','T','Y','L','E',0}
-#define VSCLASS_TREEVIEW (const WCHAR []){'T','R','E','E','V','I','E','W',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_TREEVIEWSTYLE L"TREEVIEWSTYLE"
 #define VSCLASS_TREEVIEW L"TREEVIEW"
 #else
@@ -1596,10 +1542,7 @@ enum HOTGLYPHSTATES {
 };
 
 /* WINDOWSTYLE class */
-#if defined(__GNUC__)
-#define VSCLASS_WINDOWSTYLE (const WCHAR []){'W','I','N','D','O','W','S','T','Y','L','E',0}
-#define VSCLASS_WINDOW (const WCHAR []){'W','I','N','D','O','W',0}
-#elif defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #define VSCLASS_WINDOWSTYLE L"WINDOWSTYLE"
 #define VSCLASS_WINDOW L"WINDOW"
 #else
@@ -1646,6 +1589,7 @@ enum WINDOWPARTS {
     WP_FRAMEBOTTOMSIZINGTEMPLATE = 36,
     WP_SMALLFRAMEBOTTOMSIZINGTEMPLATE = 37,
     WP_FRAME = 38,
+    WP_BORDER = 39,
 };
 
 #define WINDOWSTYLEPARTS WINDOWPARTS;
@@ -1713,6 +1657,13 @@ enum MINBUTTONSTATES {
     MINBS_HOT = 2,
     MINBS_PUSHED = 3,
     MINBS_DISABLED = 4,
+};
+
+enum MAXBUTTONSTATES {
+    MAXBS_NORMAL = 1,
+    MAXBS_HOT = 2,
+    MAXBS_PUSHED = 3,
+    MAXBS_DISABLED = 4,
 };
 
 enum RESTOREBUTTONSTATES {

@@ -38,6 +38,7 @@
 /* Minimum size of the rectangle between the arrows */
 #define SCROLL_MIN_RECT  4
 
+#ifndef __REACTOS__
 enum SCROLL_HITTEST
 {
     SCROLL_NOWHERE,      /* Outside the scroll bar */
@@ -47,6 +48,7 @@ enum SCROLL_HITTEST
     SCROLL_BOTTOM_RECT,  /* Rectangle between the thumb and the bottom arrow */
     SCROLL_BOTTOM_ARROW  /* Bottom or right arrow */
 };
+#endif
 
 static HWND tracking_win = 0;
 static enum SCROLL_HITTEST tracking_hot_part = SCROLL_NOWHERE;
