@@ -82,6 +82,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(d3dxof_parsing);
 #define CLSIDFMT "<%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X>"
 
 /* FOURCC to string conversion for debug messages */
+#ifndef __REACTOS__
 static const char *debugstr_fourcc(DWORD fourcc)
 {
     if (!fourcc) return "'null'";
@@ -89,6 +90,7 @@ static const char *debugstr_fourcc(DWORD fourcc)
         (char)(fourcc), (char)(fourcc >> 8),
         (char)(fourcc >> 16), (char)(fourcc >> 24));
 }
+#endif
 
 static const char* get_primitive_string(DWORD token)
 {
