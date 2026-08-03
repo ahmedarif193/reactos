@@ -31,7 +31,6 @@
 
 #include <sys/types.h>
 #include <fcntl.h>
-#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -39,7 +38,7 @@
 #include <assert.h>
 #include <stdarg.h>
 
-#ifndef DBGHELP_STATIC_LIB
+#if !defined(__REACTOS__) || !defined(DBGHELP_STATIC_LIB)
 #include "windef.h"
 #include "winbase.h"
 #include "winnls.h"
@@ -48,15 +47,11 @@
 #include "dbghelp_private.h"
 #include "image_private.h"
 
-#ifndef DBGHELP_STATIC_LIB
+#if !defined(__REACTOS__) || !defined(DBGHELP_STATIC_LIB)
 #include "wine/debug.h"
 #endif
 
 WINE_DEFAULT_DEBUG_CHANNEL(dbghelp_stabs);
-
-#ifndef DBGHELP_STATIC_LIB
-#define strtoull _strtoui64
-#endif
 
 /* Masks for n_type field */
 #define N_STAB		0xe0
@@ -69,7 +64,6 @@ WINE_DEFAULT_DEBUG_CHANNEL(dbghelp_stabs);
 #define N_ABS		0x02
 #define N_INDR		0x0a
 #define N_SECT		0x0e
-
 #define N_GSYM		0x20
 #define N_FUN		0x24
 #define N_STSYM		0x26
@@ -92,7 +86,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(dbghelp_stabs);
 #define N_EXCL		0xc2
 #define N_RBRAC		0xe0
 
-static void stab_strcpy(char* dest, int sz, const char* source)
+static BOOL stab_strcpy(char* dest, int sz, const char* source)
 {
     char*       ptr = dest;
     /*
@@ -124,7 +118,7 @@ static void stab_strcpy(char* dest, int sz, const char* source)
         while (ptr > dest && isdigit(*ptr)) ptr--;
         if (*ptr == '.') *ptr = '\0';
     }
-    assert(sz > 0);
+    return (sz > 0);
 }
 
 typedef struct
@@ -265,7 +259,7 @@ static struct symt** stabs_find_ref(LONG_PTR filenr, LONG_PTR subnr)
 	}
         ret = &idef->vector[subnr];
     }
-    TRACE("(%ld,%ld) => %p (%p)\n", filenr, subnr, ret, *ret);
+    TRACE("(%Id,%Id) => %p (%p)\n", filenr, subnr, ret, *ret);
     return ret;
 }
 
@@ -302,7 +296,7 @@ struct ParseTypedefData
     int			idx;
     struct module*      module;
 #ifdef PTS_DEBUG
-    struct PTS_Error
+    struct PTS_Error 
     {
         const char*         ptr;
         unsigned            line;
@@ -332,39 +326,39 @@ static int stabs_get_basic(struct ParseTypedefData* ptd, unsigned basic, struct 
     {
         switch (basic)
         {
-        case  1: stabs_basic[basic] = symt_new_basic(ptd->module, btInt,     "int", 4); break;
-        case  2: stabs_basic[basic] = symt_new_basic(ptd->module, btChar,    "char", 1); break;
-        case  3: stabs_basic[basic] = symt_new_basic(ptd->module, btInt,     "short int", 2); break;
-        case  4: stabs_basic[basic] = symt_new_basic(ptd->module, btInt,     "long int", 4); break;
-        case  5: stabs_basic[basic] = symt_new_basic(ptd->module, btUInt,    "unsigned char", 1); break;
-        case  6: stabs_basic[basic] = symt_new_basic(ptd->module, btInt,     "signed char", 1); break;
-        case  7: stabs_basic[basic] = symt_new_basic(ptd->module, btUInt,    "unsigned short int", 2); break;
-        case  8: stabs_basic[basic] = symt_new_basic(ptd->module, btUInt,    "unsigned int", 4); break;
-        case  9: stabs_basic[basic] = symt_new_basic(ptd->module, btUInt,    "unsigned", 2); break;
-        case 10: stabs_basic[basic] = symt_new_basic(ptd->module, btUInt,    "unsigned long int", 2); break;
-        case 11: stabs_basic[basic] = symt_new_basic(ptd->module, btVoid,    "void", 0); break;
-        case 12: stabs_basic[basic] = symt_new_basic(ptd->module, btFloat,   "float", 4); break;
-        case 13: stabs_basic[basic] = symt_new_basic(ptd->module, btFloat,   "double", 8); break;
-        case 14: stabs_basic[basic] = symt_new_basic(ptd->module, btFloat,   "long double", 12); break;
-        case 15: stabs_basic[basic] = symt_new_basic(ptd->module, btInt,     "integer", 4); break;
-        case 16: stabs_basic[basic] = symt_new_basic(ptd->module, btBool,    "bool", 1); break;
+        case  1: stabs_basic[basic] = symt_get_basic(btInt,     4); break; /* int */
+        case  2: stabs_basic[basic] = symt_get_basic(btChar,    1); break; /* char */
+        case  3: stabs_basic[basic] = symt_get_basic(btInt,     2); break; /* short int */
+        case  4: stabs_basic[basic] = symt_get_basic(btInt,     4); break; /* long int */
+        case  5: stabs_basic[basic] = symt_get_basic(btUInt,    1); break; /* unsigned char */
+        case  6: stabs_basic[basic] = symt_get_basic(btInt,     1); break; /* signed char */
+        case  7: stabs_basic[basic] = symt_get_basic(btUInt,    2); break; /* unsigned short int */
+        case  8: stabs_basic[basic] = symt_get_basic(btUInt,    4); break; /* unsigned int */
+        case  9: stabs_basic[basic] = symt_get_basic(btUInt,    2); break; /* unsigned */
+        case 10: stabs_basic[basic] = symt_get_basic(btUInt,    2); break; /* unsigned long int */
+        case 11: stabs_basic[basic] = symt_get_basic(btVoid,    0); break; /* void */
+        case 12: stabs_basic[basic] = symt_get_basic(btFloat,   4); break; /* float */
+        case 13: stabs_basic[basic] = symt_get_basic(btFloat,   8); break; /* double */
+        case 14: stabs_basic[basic] = symt_get_basic(btFloat,   2); break; /* long double", */
+        case 15: stabs_basic[basic] = symt_get_basic(btInt,     4); break; /* integer */
+        case 16: stabs_basic[basic] = symt_get_basic(btBool,    1); break; /* bool */
         /*    case 17: short real */
         /*    case 18: real */
-        case 25: stabs_basic[basic] = symt_new_basic(ptd->module, btComplex, "float complex", 8); break;
-        case 26: stabs_basic[basic] = symt_new_basic(ptd->module, btComplex, "double complex", 16); break;
-        case 30: stabs_basic[basic] = symt_new_basic(ptd->module, btWChar,   "wchar_t", 2); break;
-        case 31: stabs_basic[basic] = symt_new_basic(ptd->module, btInt,     "long long int", 8); break;
-        case 32: stabs_basic[basic] = symt_new_basic(ptd->module, btUInt,    "long long unsigned", 8); break;
+        case 25: stabs_basic[basic] = symt_get_basic(btComplex, 8); break; /* float complex */
+        case 26: stabs_basic[basic] = symt_get_basic(btComplex, 6); break; /* double complex", */
+        case 30: stabs_basic[basic] = symt_get_basic(btWChar,   2); break; /* wchar_t */
+        case 31: stabs_basic[basic] = symt_get_basic(btInt,     8); break; /* long long int */
+        case 32: stabs_basic[basic] = symt_get_basic(btUInt,    8); break; /* long long unsigned */
             /* starting at 35 are wine extensions (especially for R implementation) */
-        case 35: stabs_basic[basic] = symt_new_basic(ptd->module, btComplex, "long double complex", 24); break;
+        case 35: stabs_basic[basic] = symt_get_basic(btComplex, 4); break; /* long double complex", */
         default: PTS_ABORTIF(ptd, 1);
         }
-    }
+    }   
     *symt = &stabs_basic[basic]->symt;
     return 0;
 }
 
-static int stabs_pts_read_type_def(struct ParseTypedefData* ptd,
+static int stabs_pts_read_type_def(struct ParseTypedefData* ptd, 
                                    const char* typename, struct symt** dt);
 
 static int stabs_pts_read_id(struct ParseTypedefData* ptd)
@@ -443,7 +437,7 @@ static int stabs_pts_read_range_value(struct ParseTypedefData* ptd, struct pts_r
         {
             switch (ptd->ptr[1])
             {
-            case '0':
+            case '0': 
                 PTS_ABORTIF(ptd, ptd->ptr[0] != '1');
                 prv->sign = -1;
                 prv->val = 0;
@@ -464,7 +458,7 @@ static int stabs_pts_read_range_value(struct ParseTypedefData* ptd, struct pts_r
         ptd->ptr = last;
         break;
     case '+':
-    default:
+    default:    
         prv->sign = 1;
         prv->val = strtoull(ptd->ptr, &last, 10);
         ptd->ptr = last;
@@ -551,7 +545,7 @@ static int stabs_pts_read_range(struct ParseTypedefData* ptd, const char* typena
     }
     else PTS_ABORTIF(ptd, 1);
 
-    *dt = &symt_new_basic(ptd->module, bt, typename, size)->symt;
+    *dt = &symt_get_basic(bt, size)->symt;
     return 0;
 }
 
@@ -594,7 +588,7 @@ static inline int stabs_pts_read_method_info(struct ParseTypedefData* ptd)
     return 0;
 }
 
-static inline int stabs_pts_read_aggregate(struct ParseTypedefData* ptd,
+static inline int stabs_pts_read_aggregate(struct ParseTypedefData* ptd, 
                                            struct symt_udt* sdt)
 {
     LONG_PTR    	sz, ofs;
@@ -624,23 +618,16 @@ static inline int stabs_pts_read_aggregate(struct ParseTypedefData* ptd,
             if (doadd && adt)
             {
                 char    tmp[256];
-                DWORD64 size;
 
                 strcpy(tmp, "__inherited_class_");
                 strcat(tmp, symt_get_name(adt));
 
-                /* FIXME: TI_GET_LENGTH will not always work, especially when adt
-                 * has just been seen as a forward definition and not the real stuff
-                 * yet.
-                 * As we don't use much the size of members in structs, this may not
-                 * be much of a problem
-                 */
-                symt_get_info(ptd->module, adt, TI_GET_LENGTH, &size);
-                symt_add_udt_element(ptd->module, sdt, tmp, adt, ofs, (DWORD)size * 8);
+                symt_add_udt_element(ptd->module, sdt, tmp, symt_ptr_to_symref(adt),
+                                     ofs, 0, 0);
             }
             PTS_ABORTIF(ptd, *ptd->ptr++ != ';');
         }
-
+        
     }
     /* if the structure has already been filled, just redo the parsing
      * but don't store results into the struct
@@ -648,7 +635,7 @@ static inline int stabs_pts_read_aggregate(struct ParseTypedefData* ptd,
      */
 
     /* Now parse the individual elements of the structure/union. */
-    while (*ptd->ptr != ';')
+    while (*ptd->ptr != ';') 
     {
 	/* agg_name : type ',' <int:offset> ',' <int:size> */
 	idx = ptd->idx;
@@ -690,7 +677,7 @@ static inline int stabs_pts_read_aggregate(struct ParseTypedefData* ptd,
          */
         if (*ptd->ptr == ':')
         {
-            ptd->ptr++;
+            ptd->ptr++; 
             stabs_pts_read_method_info(ptd);
             ptd->idx = idx;
             continue;
@@ -710,7 +697,8 @@ static inline int stabs_pts_read_aggregate(struct ParseTypedefData* ptd,
             PTS_ABORTIF(ptd, stabs_pts_read_number(ptd, &sz) == -1);
             PTS_ABORTIF(ptd, *ptd->ptr++ != ';');
 
-            if (doadd) symt_add_udt_element(ptd->module, sdt, ptd->buf + idx, adt, ofs, sz);
+            if (doadd) symt_add_udt_element(ptd->module, sdt, ptd->buf + idx, symt_ptr_to_symref(adt),
+                                            ofs, 0, 0);
             break;
         case ':':
             {
@@ -739,6 +727,7 @@ static inline int stabs_pts_read_aggregate(struct ParseTypedefData* ptd,
 static inline int stabs_pts_read_enum(struct ParseTypedefData* ptd,
                                       struct symt_enum* edt)
 {
+    VARIANT     v;
     LONG_PTR    value;
     int		idx;
 
@@ -748,7 +737,9 @@ static inline int stabs_pts_read_enum(struct ParseTypedefData* ptd,
 	PTS_ABORTIF(ptd, stabs_pts_read_id(ptd) == -1);
 	PTS_ABORTIF(ptd, stabs_pts_read_number(ptd, &value) == -1);
 	PTS_ABORTIF(ptd, *ptd->ptr++ != ',');
-	symt_add_enum_element(ptd->module, edt, ptd->buf + idx, value);
+	V_VT(&v) = VT_I4;
+	V_I4(&v) = value;
+	symt_add_enum_element(ptd->module, edt, ptd->buf + idx, &v);
 	ptd->idx = idx;
     }
     ptd->ptr++;
@@ -775,7 +766,7 @@ static inline int stabs_pts_read_array(struct ParseTypedefData* ptd,
 
     PTS_ABORTIF(ptd, stabs_pts_read_type_def(ptd, NULL, &base_dt) == -1);
 
-    *adt = &symt_new_array(ptd->module, lo, hi, base_dt, range_dt)->symt;
+    *adt = &symt_new_array(ptd->module, lo, hi - lo + 1, base_dt, range_dt)->symt;
     return 0;
 }
 
@@ -800,7 +791,7 @@ static int stabs_pts_read_type_def(struct ParseTypedefData* ptd, const char* typ
 	PTS_ABORTIF(ptd, new_dt != NULL);
 
 	/* first handle attribute if any */
-	switch (*ptd->ptr)
+	switch (*ptd->ptr)      
         {
 	case '@':
 	    if (*++ptd->ptr == 's')
@@ -822,7 +813,7 @@ static int stabs_pts_read_type_def(struct ParseTypedefData* ptd, const char* typ
 	case '*':
         case '&':
 	    PTS_ABORTIF(ptd, stabs_pts_read_type_def(ptd, NULL, &ref_dt) == -1);
-	    new_dt = &symt_new_pointer(ptd->module, ref_dt, sizeof(void*))->symt;
+	    new_dt = &symt_new_pointer(ptd->module, ref_dt, ptd->module->cpu->word_size)->symt;
            break;
         case 'k': /* 'const' modifier */
         case 'B': /* 'volatile' modifier */
@@ -837,9 +828,15 @@ static int stabs_pts_read_type_def(struct ParseTypedefData* ptd, const char* typ
 	    PTS_ABORTIF(ptd, stabs_pts_read_array(ptd, &new_dt) == -1);
 	    break;
 	case 'r':
-	    PTS_ABORTIF(ptd, stabs_pts_read_range(ptd, typename, &new_dt) == -1);
-	    assert(!*stabs_find_ref(filenr1, subnr1));
-	    *stabs_find_ref(filenr1, subnr1) = new_dt;
+            {
+                struct symt**       prev_dt;
+                PTS_ABORTIF(ptd, stabs_pts_read_range(ptd, typename, &new_dt) == -1);
+
+                prev_dt = stabs_find_ref(filenr1, subnr1);
+                /* allow redefining with same base type */
+                if (*prev_dt && *prev_dt != new_dt) WARN("Multiple range def in %ls\n", ptd->module->module.ModuleName);
+                else *prev_dt = new_dt;
+            }
 	    break;
 	case 'f':
 	    PTS_ABORTIF(ptd, stabs_pts_read_type_def(ptd, NULL, &ref_dt) == -1);
@@ -871,14 +868,14 @@ static int stabs_pts_read_type_def(struct ParseTypedefData* ptd, const char* typ
                     if (udt->symt.tag != SymTagUDT)
                     {
                         ERR("Forward declaration (%p/%s) is not an aggregate (%u)\n",
-                            udt, symt_get_name(&udt->symt), udt->symt.tag);
+                            udt, debugstr_a(symt_get_name(&udt->symt)), udt->symt.tag);
                         return -1;
                     }
                     /* FIXME: we currently don't correctly construct nested C++
                      * classes names. Therefore, we could be here with either:
                      * - typename and udt->hash_elt.name being the same string
                      *   (non embedded case)
-                     * - typename being foo::bar while udt->hash_elt.name being
+                     * - typename being foo::bar while udt->hash_elt.name being 
                      *   just bar
                      * So, we twist the comparison to test both occurrences. When
                      * we have proper C++ types in this file, this twist has to be
@@ -888,7 +885,7 @@ static int stabs_pts_read_type_def(struct ParseTypedefData* ptd, const char* typ
                     l2 = strlen(typename);
                     if (l1 > l2 || strcmp(udt->hash_elt.name, typename + l2 - l1))
                         ERR("Forward declaration name mismatch %s <> %s\n",
-                            udt->hash_elt.name, typename);
+                            debugstr_a(udt->hash_elt.name), debugstr_a(typename));
                     new_dt = &udt->symt;
                 }
                 PTS_ABORTIF(ptd, stabs_pts_read_aggregate(ptd, udt) == -1);
@@ -949,7 +946,7 @@ static int stabs_pts_read_type_def(struct ParseTypedefData* ptd, const char* typ
             {
                 LONG_PTR type, len, unk;
                 int      basic;
-
+                
                 PTS_ABORTIF(ptd, stabs_pts_read_number(ptd, &type) == -1);
                 PTS_ABORTIF(ptd, *ptd->ptr++ != ';');	/* ';' */
                 PTS_ABORTIF(ptd, stabs_pts_read_number(ptd, &len) == -1);
@@ -985,19 +982,19 @@ static int stabs_pts_read_type_def(struct ParseTypedefData* ptd, const char* typ
          */
         if (!new_dt && typename)
         {
-            new_dt = &symt_new_basic(ptd->module, btVoid, typename, 0)->symt;
+            new_dt = &symt_get_basic(btVoid, 0)->symt;
             PTS_ABORTIF(ptd, strcmp(typename, "void"));
         }
-    }
+    }            
 
     *stabs_find_ref(filenr1, subnr1) = *ret_dt = new_dt;
 
-    TRACE("Adding (%ld,%ld) %s\n", filenr1, subnr1, debugstr_a(typename));
+    TRACE("Adding (%Id,%Id) %s\n", filenr1, subnr1, debugstr_a(typename));
 
     return 0;
 }
 
-static int stabs_parse_typedef(struct module* module, const char* ptr,
+static int stabs_parse_typedef(struct module* module, const char* ptr, 
                                const char* typename)
 {
     struct ParseTypedefData	ptd;
@@ -1025,7 +1022,7 @@ static int stabs_parse_typedef(struct module* module, const char* ptr,
 	ret = stabs_pts_read_type_def(&ptd, typename, &dt);
     }
 
-    if (ret == -1 || *ptd.ptr)
+    if (ret == -1 || *ptd.ptr) 
     {
 #ifdef PTS_DEBUG
         int     i;
@@ -1034,13 +1031,13 @@ static int stabs_parse_typedef(struct module* module, const char* ptr,
         {
             for (i = 0; i < ptd.err_idx; i++)
             {
-                TRACE("[%d]: line %d => %s\n",
+                TRACE("[%d]: line %d => %s\n", 
                       i, ptd.errors[i].line, debugstr_a(ptd.errors[i].ptr));
             }
         }
         else
             TRACE("[0]: => %s\n", debugstr_a(ptd.ptr));
-
+            
 #else
 	ERR("Failure on %s at %s\n", debugstr_a(ptr), debugstr_a(ptd.ptr));
 #endif
@@ -1143,8 +1140,12 @@ static inline void pending_add_var(struct pending_list* pending, const char* nam
 {
     pending_make_room(pending);
     pending->objs[pending->num].tag = PENDING_VAR;
-    stab_strcpy(pending->objs[pending->num].u.var.name,
-                sizeof(pending->objs[pending->num].u.var.name), name);
+    if (!stab_strcpy(pending->objs[pending->num].u.var.name,
+                     sizeof(pending->objs[pending->num].u.var.name), name))
+    {
+        ERR("symbol too long %s\n", debugstr_a(name));
+        return;
+    }
     pending->objs[pending->num].u.var.type  = stabs_parse_type(name);
     pending->objs[pending->num].u.var.kind  = dt;
     pending->objs[pending->num].u.var.loc   = *loc;
@@ -1176,13 +1177,13 @@ static void pending_flush(struct pending_list* pending, struct module* module,
         case PENDING_VAR:
             symt_add_func_local(module, func,
                                 pending->objs[i].u.var.kind, &pending->objs[i].u.var.loc,
-                                block, pending->objs[i].u.var.type, pending->objs[i].u.var.name);
+                                block, symt_ptr_to_symref(pending->objs[i].u.var.type), pending->objs[i].u.var.name);
             break;
         case PENDING_LINE:
             if (module->type == DMT_MACHO)
-                pending->objs[i].u.line.offset -= func->address - pending->objs[i].u.line.load_offset;
+                pending->objs[i].u.line.offset -= func->ranges[0].low - pending->objs[i].u.line.load_offset;
             symt_add_func_line(module, func, pending->objs[i].u.line.source_idx,
-                               pending->objs[i].u.line.line_num, pending->objs[i].u.line.offset);
+                               pending->objs[i].u.line.line_num, func->ranges[0].low + pending->objs[i].u.line.offset);
             break;
         default:
             ERR("Unknown pending object tag %u\n", (unsigned)pending->objs[i].tag);
@@ -1206,21 +1207,22 @@ static void stabs_finalize_function(struct module* module, struct symt_function*
 {
     IMAGEHLP_LINE64     il;
     struct location     loc;
+    DWORD               disp;
 
     if (!func) return;
-    symt_normalize_function(module, func);
     /* To define the debug-start of the function, we use the second line number.
      * Not 100% bullet proof, but better than nothing
      */
-    if (symt_fill_func_line_info(module, func, func->address, &il) &&
-        symt_get_func_line_next(module, &il))
+    il.SizeOfStruct = sizeof(il);
+    if (SymGetLineFromAddr64(module->process->handle, func->ranges[0].low, &disp, &il) &&
+        SymGetLineNext64(module->process->handle, &il))
     {
         loc.kind = loc_absolute;
-        loc.offset = il.Address - func->address;
-        symt_add_function_point(module, func, SymTagFuncDebugStart,
+        loc.offset = il.Address - func->ranges[0].low;
+        symt_add_function_point(module, func, SymTagFuncDebugStart, 
                                 &loc, NULL);
     }
-    if (size) func->size = size;
+    if (size) func->ranges[0].high = func->ranges[0].low + size;
 }
 
 static inline void stabbuf_append(char **buf, unsigned *buf_size, const char *str)
@@ -1336,8 +1338,8 @@ BOOL stabs_parse(struct module* module, ULONG_PTR load_offset,
                     stabbuf_append(&stabbuff, &stabbufflen, ptr);
                     ptr = stabbuff;
                 }
-                stab_strcpy(symname, sizeof(symname), ptr);
-                if (!stabs_parse_typedef(module, ptr, symname))
+                if (!stab_strcpy(symname, sizeof(symname), ptr) ||
+                    !stabs_parse_typedef(module, ptr, symname))
                 {
                     /* skip this definition */
                     stabbuff[0] = '\0';
@@ -1357,48 +1359,66 @@ BOOL stabs_parse(struct module* module, ULONG_PTR load_offset,
              *
              * With a.out or mingw, they actually do make some amount of sense.
              */
-            stab_strcpy(symname, sizeof(symname), ptr);
+            if (!stab_strcpy(symname, sizeof(symname), ptr))
+            {
+                ERR("symbol too long: %s\n", debugstr_a(ptr));
+                stabbuff[0] = '\0';
+                continue;
+            }
             loc.kind = loc_absolute;
             loc.reg = 0;
             loc.offset = load_offset + n_value;
             symt_new_global_variable(module, compiland, symname, TRUE /* FIXME */,
-                                     loc, 0, stabs_parse_type(ptr));
+                                     loc, 0, symt_ptr_to_symref(stabs_parse_type(ptr)));
             break;
         case N_LCSYM:
         case N_STSYM:
             /* These are static symbols and BSS symbols. */
-            stab_strcpy(symname, sizeof(symname), ptr);
+            if (!stab_strcpy(symname, sizeof(symname), ptr))
+            {
+                ERR("symbol too long: %s\n", debugstr_a(ptr));
+                stabbuff[0] = '\0';
+                continue;
+            }
             loc.kind = loc_absolute;
             loc.reg = 0;
             loc.offset = load_offset + n_value;
             symt_new_global_variable(module, compiland, symname, TRUE /* FIXME */,
-                                     loc, 0, stabs_parse_type(ptr));
+                                     loc, 0, symt_ptr_to_symref(stabs_parse_type(ptr)));
             break;
         case N_LBRAC:
             if (curr_func)
             {
-                block = symt_open_func_block(module, curr_func, block,
-                                             n_value, 0);
+                block = symt_open_func_block(module, curr_func, block, 1);
+                block->ranges[0].low = curr_func->ranges[0].low + n_value;
+                block->ranges[0].high = 0; /* will be set by N_RBRAC */
                 pending_flush(&pending_block, module, curr_func, block);
             }
             break;
         case N_RBRAC:
             if (curr_func)
-                block = symt_close_func_block(module, curr_func, block,
-                                              n_value);
+            {
+                block->ranges[0].high = curr_func->ranges[0].low + n_value;
+                block = symt_close_func_block(module, curr_func, block);
+            }
             break;
         case N_PSYM:
             /* These are function parameters. */
             if (curr_func != NULL)
             {
                 struct symt*    param_type = stabs_parse_type(ptr);
-                stab_strcpy(symname, sizeof(symname), ptr);
+                if (!stab_strcpy(symname, sizeof(symname), ptr))
+                {
+                    ERR("symbol too long: %s\n", debugstr_a(ptr));
+                    stabbuff[0] = '\0';
+                    continue;
+                }
                 loc.kind = loc_regrel;
-                loc.reg = dbghelp_current_cpu->frame_regno;
+                loc.reg = module->cpu->frame_regno;
                 loc.offset = n_value;
                 symt_add_func_local(module, curr_func,
                                     (int)n_value >= 0 ? DataIsParam : DataIsLocal,
-                                    &loc, NULL, param_type, symname);
+                                    &loc, NULL, symt_ptr_to_symref(param_type), symname);
                 symt_add_function_signature_parameter(module,
                                                       (struct symt_function_signature*)curr_func->type,
                                                       param_type);
@@ -1447,17 +1467,22 @@ BOOL stabs_parse(struct module* module, ULONG_PTR load_offset,
                 case 35:
                 case 36: loc.reg = CV_REG_MM0 + n_value - 29; break;
                 default:
-                    FIXME("Unknown register value (%lu)\n", (ULONG_PTR)n_value);
+                    FIXME("Unknown register value (%Iu)\n", (ULONG_PTR)n_value);
                     loc.reg = CV_REG_NONE;
                     break;
                 }
-                stab_strcpy(symname, sizeof(symname), ptr);
+                if (!stab_strcpy(symname, sizeof(symname), ptr))
+                {
+                    ERR("symbol too long: %s\n", debugstr_a(ptr));
+                    stabbuff[0] = '\0';
+                    continue;
+                }
                 if (ptr[strlen(symname) + 1] == 'P')
                 {
                     struct symt*    param_type = stabs_parse_type(ptr);
                     stab_strcpy(symname, sizeof(symname), ptr);
                     symt_add_func_local(module, curr_func, DataIsParam, &loc,
-                                        NULL, param_type, symname);
+                                        NULL, symt_ptr_to_symref(param_type), symname);
                     symt_add_function_signature_parameter(module,
                                                           (struct symt_function_signature*)curr_func->type,
                                                           param_type);
@@ -1469,26 +1494,29 @@ BOOL stabs_parse(struct module* module, ULONG_PTR load_offset,
         case N_LSYM:
             /* These are local variables */
             loc.kind = loc_regrel;
-            loc.reg = dbghelp_current_cpu->frame_regno;
+            loc.reg = module->cpu->frame_regno;
             loc.offset = n_value;
             if (curr_func != NULL) pending_add_var(&pending_block, ptr, DataIsLocal, &loc);
             break;
         case N_SLINE:
-            /*
-             * This is a line number.  These are always relative to the start
-             * of the function (N_FUN), and this makes the lookup easier.
-             */
-            assert(source_idx >= 0);
-            if (curr_func != NULL)
+            if (SymGetOptions() & SYMOPT_LOAD_LINES)
             {
-                ULONG_PTR offset = n_value;
-                if (module->type == DMT_MACHO)
-                    offset -= curr_func->address - load_offset;
-                symt_add_func_line(module, curr_func, source_idx,
-                                   stab_ptr->n_desc, offset);
+                /*
+                 * This is a line number.  These are always relative to the start
+                 * of the function (N_FUN), and this makes the lookup easier.
+                 */
+                assert(source_idx >= 0);
+                if (curr_func != NULL)
+                {
+                    ULONG_PTR offset = n_value;
+                    if (module->type == DMT_MACHO)
+                        offset -= curr_func->ranges[0].low - load_offset;
+                    symt_add_func_line(module, curr_func, source_idx,
+                                       stab_ptr->n_desc, curr_func->ranges[0].low + offset);
+                }
+                else pending_add_line(&pending_func, source_idx, stab_ptr->n_desc,
+                                      n_value, load_offset);
             }
-            else pending_add_line(&pending_func, source_idx, stab_ptr->n_desc,
-                                  n_value, load_offset);
             break;
         case N_FUN:
             /*
@@ -1503,7 +1531,12 @@ BOOL stabs_parse(struct module* module, ULONG_PTR load_offset,
              * all of the pages related to the stabs, and that
              * sucks up swap space like crazy.
              */
-            stab_strcpy(symname, sizeof(symname), ptr);
+            if (!stab_strcpy(symname, sizeof(symname), ptr))
+            {
+                ERR("symbol too long: %s\n", debugstr_a(ptr));
+                stabbuff[0] = '\0';
+                continue;
+            }
             if (*symname)
             {
                 struct symt_function_signature* func_type;
@@ -1514,15 +1547,15 @@ BOOL stabs_parse(struct module* module, ULONG_PTR load_offset,
                      * Assume size of the func is the delta between current offset
                      * and offset of last function
                      */
-                    stabs_finalize_function(module, curr_func,
+                    stabs_finalize_function(module, curr_func, 
                                             n_value ?
-                                                (load_offset + n_value - curr_func->address) : 0);
+                                                (load_offset + n_value - curr_func->ranges[0].low) : 0);
                 }
                 func_type = symt_new_function_signature(module,
                                                         stabs_parse_type(ptr), -1);
-                curr_func = symt_new_function(module, compiland, symname,
+                curr_func = symt_new_function(module, symt_ptr_to_symref(&compiland->symt), symname,
                                               load_offset + n_value, 0,
-                                              &func_type->symt);
+                                              symt_ptr_to_symref(&func_type->symt), 0);
                 pending_flush(&pending_func, module, curr_func, NULL);
             }
             else
@@ -1558,7 +1591,7 @@ BOOL stabs_parse(struct module* module, ULONG_PTR load_offset,
                 {
                     stabs_reset_includes();
                     source_idx = source_new(module, srcpath, ptr);
-                    compiland = symt_new_compiland(module, 0 /* FIXME */, source_idx);
+                    compiland = symt_new_compiland(module, symt_ptr_to_symref(&module->top->symt), source_get(module, source_idx));
                 }
                 else
                 {
@@ -1576,7 +1609,7 @@ BOOL stabs_parse(struct module* module, ULONG_PTR load_offset,
             /* I'm not sure this is needed, so trace it before we obsolete it */
             if (curr_func)
             {
-                FIXME("UNDF: curr_func %s\n", curr_func->hash_elt.name);
+                FIXME("UNDF: curr_func %s\n", debugstr_a(curr_func->hash_elt.name));
                 stabs_finalize_function(module, curr_func, 0); /* FIXME */
                 curr_func = NULL;
             }
@@ -1597,7 +1630,7 @@ BOOL stabs_parse(struct module* module, ULONG_PTR load_offset,
 	case N_EXCL:
             if (stabs_add_include(stabs_find_include(ptr, n_value)) < 0)
             {
-                ERR("Excluded header not found (%s,%ld)\n", ptr, (ULONG_PTR)n_value);
+                ERR("Excluded header not found (%s,%Id)\n", debugstr_a(ptr), (ULONG_PTR)n_value);
                 module_reset_debug_info(module);
                 ret = FALSE;
                 goto done;
@@ -1629,7 +1662,12 @@ BOOL stabs_parse(struct module* module, ULONG_PTR load_offset,
                 }
 
                 if (*ptr == '_') ptr++;
-                stab_strcpy(symname, sizeof(symname), ptr);
+                if (!stab_strcpy(symname, sizeof(symname), ptr))
+                {
+                    ERR("symbol too long: %s\n", debugstr_a(ptr));
+                    stabbuff[0] = '\0';
+                    continue;
+                }
 
                 callback(module, load_offset, symname, n_value,
                          is_public, is_global, stab_ptr->n_other, compiland, user);
@@ -1640,11 +1678,11 @@ BOOL stabs_parse(struct module* module, ULONG_PTR load_offset,
             break;
         }
         stabbuff[0] = '\0';
-        TRACE("0x%02x %lx %s\n",
+        TRACE("0x%02x %Ix %s\n",
               stab_ptr->n_type, (ULONG_PTR)n_value, debugstr_a(strs + stab_ptr->n_strx));
     }
     module->module.SymType = SymDia;
-    module->module.CVSig = 'S' | ('T' << 8) | ('A' << 16) | ('B' << 24);
+    module->debug_format_bitmask |= DHEXT_FORMAT_STABS;
     /* FIXME: we could have a finer grain here */
     module->module.LineNumbers = TRUE;
     module->module.GlobalSymbols = TRUE;
