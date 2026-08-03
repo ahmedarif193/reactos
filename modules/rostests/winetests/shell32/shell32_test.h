@@ -18,7 +18,6 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#pragma once
 
 /* Helper function for creating .lnk files */
 typedef struct
@@ -34,5 +33,5 @@ typedef struct
     WORD  hotkey;
 } lnk_desc_t;
 
-#define create_lnk(a,b,c)     create_lnk_(__LINE__, (a), (b), (c))
-void create_lnk_(int,const WCHAR*,lnk_desc_t*,int);
+#define create_lnk(a,b)     create_lnk_(__LINE__, (a), (b))
+void create_lnk_(int,const WCHAR*,lnk_desc_t*);

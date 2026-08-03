@@ -22,6 +22,22 @@
 #ifndef __WINE_SHELL_MAIN_H
 #define __WINE_SHELL_MAIN_H
 
+#include <stdarg.h>
+#include <stdlib.h>
+
+#include "windef.h"
+#include "winbase.h"
+#include "wingdi.h"
+#include "winuser.h"
+#include "winnls.h"
+#include "commctrl.h"
+#include "objbase.h"
+#include "docobj.h"
+#include "shlobj.h"
+#include "shellapi.h"
+#include "shlwapi.h"
+#include "wine/list.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -51,6 +67,10 @@ SH32_ExtCoCreateInstance(
     _In_ DWORD dwClsCtx,
     _In_ REFIID riid,
     _Out_ LPVOID *ppv);
+
+#ifdef __REACTOS__
+HRESULT WINAPI WineShell32_GetClassObject(REFCLSID clsid, REFIID riid, void **obj);
+#endif
 
 /* Iconcache */
 #define INVALID_INDEX -1
@@ -127,6 +147,7 @@ HRESULT IDataObject_Constructor(HWND hwndOwner, LPCITEMIDLIST pMyPidl, PCUITEMID
 HRESULT IEnumFORMATETC_Constructor(UINT cfmt, const FORMATETC afmt[], IEnumFORMATETC **enumerator);
 
 LPCLASSFACTORY	IClassFactory_Constructor(REFCLSID);
+HRESULT ItemMenu_Constructor(IShellFolder*, LPCITEMIDLIST, const LPCITEMIDLIST*, UINT, REFIID, void**);
 IContextMenu2 *	ISvItemCm_Constructor(LPSHELLFOLDER pSFParent, LPCITEMIDLIST pidl, const LPCITEMIDLIST *aPidls, UINT uItemCount);
 HRESULT WINAPI INewItem_Constructor(IUnknown * pUnkOuter, REFIID riif, LPVOID *ppv);
 IContextMenu2 * ISvStaticItemCm_Constructor(LPSHELLFOLDER pSFParent, LPCITEMIDLIST pidl, LPCITEMIDLIST *apidl, UINT cidl, HKEY hKey);
@@ -157,15 +178,34 @@ HRESULT WINAPI CPanel_ExtractIconW(LPITEMIDLIST pidl, LPCWSTR pszFile, UINT nIco
     DROPEFFECT_NONE)))
 
 
-HGLOBAL RenderHDROP(LPITEMIDLIST pidlRoot, LPITEMIDLIST * apidl, UINT cidl) DECLSPEC_HIDDEN;
-HGLOBAL RenderSHELLIDLIST (LPITEMIDLIST pidlRoot, LPITEMIDLIST * apidl, UINT cidl) DECLSPEC_HIDDEN;
-HGLOBAL RenderFILENAMEA (LPITEMIDLIST pidlRoot, LPITEMIDLIST * apidl, UINT cidl) DECLSPEC_HIDDEN;
-HGLOBAL RenderFILENAMEW (LPITEMIDLIST pidlRoot, LPITEMIDLIST * apidl, UINT cidl) DECLSPEC_HIDDEN;
+HGLOBAL RenderHDROP(const ITEMIDLIST *root_pidl, const ITEMIDLIST **pidls, unsigned int count) DECLSPEC_HIDDEN;
+HGLOBAL RenderSHELLIDLIST(const ITEMIDLIST *root_pidl, const ITEMIDLIST **pidls, unsigned int count) DECLSPEC_HIDDEN;
+HGLOBAL RenderFILENAMEA(const ITEMIDLIST *root_pidl, const ITEMIDLIST **pidls, unsigned int count) DECLSPEC_HIDDEN;
+HGLOBAL RenderFILENAMEW(const ITEMIDLIST *root_pidl, const ITEMIDLIST **pidls, unsigned int count) DECLSPEC_HIDDEN;
 
 HRESULT SHELL_GetShellExtensionRegCLSID(
     HKEY hKey,
     LPCWSTR KeyName,
     CLSID *pClsId);
+
+static inline WCHAR *strdupAtoW(const char *str)
+{
+    WCHAR *ret;
+    DWORD len;
+
+    if (!str) return NULL;
+
+    len = MultiByteToWideChar(CP_ACP, 0, str, -1, NULL, 0);
+#ifdef __REACTOS__
+    ret = (WCHAR *)malloc(len * sizeof(WCHAR));
+#else
+    ret = malloc(len * sizeof(WCHAR));
+#endif
+    if (ret)
+        MultiByteToWideChar(CP_ACP, 0, str, -1, ret, len);
+
+    return ret;
+}
 
 /* Change Notification */
 void InitChangeNotifications(void) DECLSPEC_HIDDEN;

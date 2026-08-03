@@ -28,7 +28,6 @@
 #include "shldisp.h"
 #include "shlobj.h"
 
-#include "wine/heap.h"
 #include "wine/test.h"
 
 static HWND hMainWnd, hEdit;
@@ -50,7 +49,7 @@ static void test_invalid_init(void)
         win_skip("CLSID_AutoComplete is not registered\n");
         return;
     }
-    ok(hr == S_OK, "no IID_IAutoComplete (0x%08x)\n", hr);
+    ok(hr == S_OK, "no IID_IAutoComplete (0x%08lx)\n", hr);
 
     /* AutoComplete source */
     hr = CoCreateInstance(&CLSID_ACLMulti, NULL, CLSCTX_INPROC_SERVER,
@@ -61,7 +60,7 @@ static void test_invalid_init(void)
         IAutoComplete_Release(ac);
         return;
     }
-    ok(hr == S_OK, "no IID_IACList (0x%08x)\n", hr);
+    ok(hr == S_OK, "no IID_IACList (0x%08lx)\n", hr);
 
     edit_control = CreateWindowExA(0, "EDIT", "Some text", 0, 10, 10, 300, 300,
                        hMainWnd, NULL, hinst, NULL);
@@ -71,14 +70,14 @@ static void test_invalid_init(void)
     hr = IAutoComplete_Init(ac, NULL, acSource, NULL, NULL);
     ok(hr == E_INVALIDARG ||
        broken(hr == S_OK), /* Win2k/XP/Win2k3 */
-       "Init returned 0x%08x\n", hr);
+       "Init returned 0x%08lx\n", hr);
     if (hr == E_INVALIDARG)
     {
         LONG ref;
 
         IUnknown_AddRef(acSource);
         ref = IUnknown_Release(acSource);
-        ok(ref == 1, "Expected AutoComplete source refcount to be 1, got %d\n", ref);
+        ok(ref == 1, "Expected AutoComplete source refcount to be 1, got %ld\n", ref);
     }
 
 if (0)
@@ -88,43 +87,43 @@ if (0)
      * object after this call succeeds would fail, because initialization
      * state is determined by whether a non-NULL window handle is stored. */
     hr = IAutoComplete_Init(ac, (HWND)0xdeadbeef, acSource, NULL, NULL);
-    ok(hr == S_OK, "Init returned 0x%08x\n", hr);
+    ok(hr == S_OK, "Init returned 0x%08lx\n", hr);
 
     /* Tests crash on older Windows. */
     hr = IAutoComplete_Init(ac, NULL, NULL, NULL, NULL);
-    ok(hr == E_INVALIDARG, "Init returned 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Init returned 0x%08lx\n", hr);
 
     hr = IAutoComplete_Init(ac, edit_control, NULL, NULL, NULL);
-    ok(hr == E_INVALIDARG, "Init returned 0x%08x\n", hr);
+    ok(hr == E_INVALIDARG, "Init returned 0x%08lx\n", hr);
 }
 
     /* bind to edit control */
     hr = IAutoComplete_Init(ac, edit_control, acSource, NULL, NULL);
-    ok(hr == S_OK, "Init returned 0x%08x\n", hr);
+    ok(hr == S_OK, "Init returned 0x%08lx\n", hr);
 
     /* try invalid parameters after successful initialization .*/
     hr = IAutoComplete_Init(ac, NULL, NULL, NULL, NULL);
     ok(hr == E_INVALIDARG ||
        hr == E_FAIL, /* Win2k/XP/Win2k3 */
-       "Init returned 0x%08x\n", hr);
+       "Init returned 0x%08lx\n", hr);
 
     hr = IAutoComplete_Init(ac, NULL, acSource, NULL, NULL);
     ok(hr == E_INVALIDARG ||
        hr == E_FAIL, /* Win2k/XP/Win2k3 */
-       "Init returned 0x%08x\n", hr);
+       "Init returned 0x%08lx\n", hr);
 
     hr = IAutoComplete_Init(ac, edit_control, NULL, NULL, NULL);
     ok(hr == E_INVALIDARG ||
        hr == E_FAIL, /* Win2k/XP/Win2k3 */
-       "Init returned 0x%08x\n", hr);
+       "Init returned 0x%08lx\n", hr);
 
     /* try initializing twice on the same control */
     hr = IAutoComplete_Init(ac, edit_control, acSource, NULL, NULL);
-    ok(hr == E_FAIL, "Init returned 0x%08x\n", hr);
+    ok(hr == E_FAIL, "Init returned 0x%08lx\n", hr);
 
     /* try initializing with a different control */
     hr = IAutoComplete_Init(ac, hEdit, acSource, NULL, NULL);
-    ok(hr == E_FAIL, "Init returned 0x%08x\n", hr);
+    ok(hr == E_FAIL, "Init returned 0x%08lx\n", hr);
 
     DestroyWindow(edit_control);
 
@@ -133,7 +132,7 @@ if (0)
     hr = IAutoComplete_Init(ac, hEdit, acSource, NULL, NULL);
     ok(hr == E_UNEXPECTED ||
        hr == E_FAIL, /* Win2k/XP/Win2k3 */
-       "Init returned 0x%08x\n", hr);
+       "Init returned 0x%08lx\n", hr);
 
     IUnknown_Release(acSource);
     IAutoComplete_Release(ac);
@@ -153,7 +152,7 @@ static IAutoComplete *test_init(void)
         win_skip("CLSID_AutoComplete is not registered\n");
         return NULL;
     }
-    ok(r == S_OK, "no IID_IAutoComplete (0x%08x)\n", r);
+    ok(r == S_OK, "no IID_IAutoComplete (0x%08lx)\n", r);
 
     /* AutoComplete source */
     r = CoCreateInstance(&CLSID_ACLMulti, NULL, CLSCTX_INPROC_SERVER,
@@ -164,14 +163,14 @@ static IAutoComplete *test_init(void)
         IAutoComplete_Release(ac);
         return NULL;
     }
-    ok(r == S_OK, "no IID_IACList (0x%08x)\n", r);
+    ok(r == S_OK, "no IID_IACList (0x%08lx)\n", r);
 
     user_data = GetWindowLongPtrA(hEdit, GWLP_USERDATA);
     ok(user_data == 0, "Expected the edit control user data to be zero\n");
 
     /* bind to edit control */
     r = IAutoComplete_Init(ac, hEdit, acSource, NULL, NULL);
-    ok(r == S_OK, "Init returned 0x%08x\n", r);
+    ok(r == S_OK, "Init returned 0x%08lx\n", r);
 
     user_data = GetWindowLongPtrA(hEdit, GWLP_USERDATA);
     ok(user_data == 0, "Expected the edit control user data to be zero\n");
@@ -179,10 +178,10 @@ static IAutoComplete *test_init(void)
     /* bind a different object to the same edit control */
     r = CoCreateInstance(&CLSID_AutoComplete, NULL, CLSCTX_INPROC_SERVER,
                          &IID_IAutoComplete, (LPVOID*)&ac2);
-    ok(r == S_OK, "no IID_IAutoComplete (0x%08x)\n", r);
+    ok(r == S_OK, "no IID_IAutoComplete (0x%08lx)\n", r);
 
     r = IAutoComplete_Init(ac2, hEdit, acSource, NULL, NULL);
-    ok(r == S_OK, "Init returned 0x%08x\n", r);
+    ok(r == S_OK, "Init returned 0x%08lx\n", r);
     IAutoComplete_Release(ac2);
 
     IUnknown_Release(acSource);
@@ -237,7 +236,7 @@ static void createMainWnd(void)
 }
 
 static WNDPROC HijackerWndProc_prev;
-static const WCHAR HijackerWndProc_txt[] = {'H','i','j','a','c','k','e','d',0};
+static const WCHAR HijackerWndProc_txt[] = L"Hijacked";
 static LRESULT CALLBACK HijackerWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch(msg) {
@@ -276,6 +275,9 @@ struct string_enumerator
     int cur;
     UINT num_resets;
     UINT num_expand;
+    UINT num_next;
+    HRESULT no_next_str_hr;
+    HRESULT next_str_hr;
     WCHAR last_expand[32];
 };
 
@@ -317,7 +319,7 @@ static ULONG WINAPI string_enumerator_Release(IEnumString *iface)
     ULONG ref = InterlockedDecrement(&this->ref);
 
     if (!ref)
-        heap_free(this);
+        free(this);
 
     return ref;
 }
@@ -325,24 +327,27 @@ static ULONG WINAPI string_enumerator_Release(IEnumString *iface)
 static HRESULT WINAPI string_enumerator_Next(IEnumString *iface, ULONG num, LPOLESTR *strings, ULONG *num_returned)
 {
     struct string_enumerator *this = impl_from_IEnumString(iface);
-    int i, len;
+    int len;
 
-    *num_returned = 0;
-    for (i = 0; i < num; i++)
-    {
-        if (this->cur >= this->data_len)
-            return S_FALSE;
+    this->num_next++;
 
-        len = lstrlenW(this->data[this->cur]) + 1;
+    /* Strings are always enumerated one at a time. */
+    ok(num == 1, "Expected request for only 1 string, got %lu\n", num);
 
-        strings[i] = CoTaskMemAlloc(len * sizeof(WCHAR));
-        memcpy(strings[i], this->data[this->cur], len * sizeof(WCHAR));
+    /* Write a bogus value through num_returned to show it is completely ignored. */
+    *num_returned = 0xdeadbeef;
 
-        (*num_returned)++;
-        this->cur++;
-    }
+    if (this->cur >= this->data_len)
+        return this->no_next_str_hr;
 
-    return S_OK;
+    len = lstrlenW(this->data[this->cur]) + 1;
+
+    strings[0] = CoTaskMemAlloc(len * sizeof(WCHAR));
+    memcpy(strings[0], this->data[this->cur], len * sizeof(WCHAR));
+
+    this->cur++;
+
+    return this->next_str_hr;
 }
 
 static HRESULT WINAPI string_enumerator_Reset(IEnumString *iface)
@@ -426,13 +431,15 @@ static HRESULT string_enumerator_create(void **ppv, WCHAR **suggestions, int cou
 {
     struct string_enumerator *object;
 
-    object = heap_alloc_zero(sizeof(*object));
+    object = calloc(1, sizeof(*object));
     object->IEnumString_iface.lpVtbl = &string_enumerator_vtbl;
     object->IACList_iface.lpVtbl = &aclist_vtbl;
     object->ref = 1;
     object->data = suggestions;
     object->data_len = count;
     object->cur = 0;
+    object->no_next_str_hr = S_FALSE;
+    object->next_str_hr = S_OK;
 
     *ppv = &object->IEnumString_iface;
 
@@ -459,7 +466,7 @@ static void check_dropdown_(const char *file, UINT line, IAutoCompleteDropDown *
     HRESULT hr;
 
     hr = IAutoCompleteDropDown_GetDropDownStatus(acdropdown, &flags, &str);
-    ok_(file, line)(hr == S_OK, "IAutoCompleteDropDown_GetDropDownStatus failed: %x\n", hr);
+    ok_(file, line)(hr == S_OK, "IAutoCompleteDropDown_GetDropDownStatus failed: %lx\n", hr);
     if (hr != S_OK) return;
     if (list_num) ok_(file, line)(flags & ACDD_VISIBLE, "AutoComplete DropDown not visible\n");
     else
@@ -480,7 +487,7 @@ static void check_dropdown_(const char *file, UINT line, IAutoCompleteDropDown *
         SendMessageW(hwnd_edit, WM_KEYDOWN, VK_DOWN, 0);
         SendMessageW(hwnd_edit, WM_KEYUP, VK_DOWN, 0xc0000000);
         hr = IAutoCompleteDropDown_GetDropDownStatus(acdropdown, &flags, &str);
-        ok_(file, line)(hr == S_OK, "IAutoCompleteDropDown_GetDropDownStatus failed: %x\n", hr);
+        ok_(file, line)(hr == S_OK, "IAutoCompleteDropDown_GetDropDownStatus failed: %lx\n", hr);
         ok_(file, line)(flags & ACDD_VISIBLE, "AutoComplete DropDown not visible\n");
         if (hr == S_OK)
         {
@@ -497,11 +504,11 @@ static void check_dropdown_(const char *file, UINT line, IAutoCompleteDropDown *
 static void test_aclist_expand(HWND hwnd_edit, void *enumerator, IAutoCompleteDropDown *acdropdown)
 {
     struct string_enumerator *obj = (struct string_enumerator*)enumerator;
-    static WCHAR str1[] = {'t','e','s','t',0};
-    static WCHAR str1a[] = {'t','e','s','t','\\',0};
-    static WCHAR str2[] = {'t','e','s','t','\\','f','o','o','\\','b','a','r','\\','b','a',0};
-    static WCHAR str2a[] = {'t','e','s','t','\\','f','o','o','\\','b','a','r','\\',0};
-    static WCHAR str2b[] = {'t','e','s','t','\\','f','o','o','\\','b','a','r','\\','b','a','z','_','b','b','q','\\',0};
+    static WCHAR str1[] = L"test";
+    static WCHAR str1a[] = L"test\\";
+    static WCHAR str2[] = L"test\\foo\\bar\\ba";
+    static WCHAR str2a[] = L"test\\foo\\bar\\";
+    static WCHAR str2b[] = L"test\\foo\\bar\\baz_bbq\\";
     HRESULT hr;
     obj->num_resets = 0;
 
@@ -555,7 +562,7 @@ static void test_aclist_expand(HWND hwnd_edit, void *enumerator, IAutoCompleteDr
     ok(lstrcmpW(obj->last_expand, str1a) == 0, "Expected %s, got %s\n", wine_dbgstr_w(str1a), wine_dbgstr_w(obj->last_expand));
     ok(obj->num_resets == 6, "Expected 6 resets, got %u\n", obj->num_resets);
     hr = IAutoCompleteDropDown_ResetEnumerator(acdropdown);
-    ok(hr == S_OK, "IAutoCompleteDropDown_ResetEnumerator failed: %x\n", hr);
+    ok(hr == S_OK, "IAutoCompleteDropDown_ResetEnumerator failed: %lx\n", hr);
     SendMessageW(hwnd_edit, WM_CHAR, 'o', 1);
     dispatch_messages();
     ok(obj->num_expand == 6, "Expected 6 expansions, got %u\n", obj->num_expand);
@@ -565,21 +572,20 @@ static void test_aclist_expand(HWND hwnd_edit, void *enumerator, IAutoCompleteDr
 
 static void test_prefix_filtering(HWND hwnd_edit)
 {
-    static WCHAR htt[]  = {'h','t','t',0};
-    static WCHAR www[]  = {'w','w','w','.',0};
-    static WCHAR str0[] = {'w','w','w','.','a','x',0};
-    static WCHAR str1[] = {'h','t','t','p','s',':','/','/','w','w','w','.','a','c',0};
-    static WCHAR str2[] = {'a','a',0};
-    static WCHAR str3[] = {'a','b',0};
-    static WCHAR str4[] = {'h','t','t','p',':','/','/','a','0',0};
-    static WCHAR str5[] = {'h','t','t','p','s',':','/','/','h','t','a',0};
-    static WCHAR str6[] = {'h','f','o','o',0};
-    static WCHAR str7[] = {'h','t','t','p',':','/','/','w','w','w','.','a','d','d',0};
-    static WCHAR str8[] = {'w','w','w','.','w','w','w','.','?',0};
-    static WCHAR str9[] = {'h','t','t','p',':','/','/','a','b','c','.','a','a','.','c','o','m',0};
-    static WCHAR str10[]= {'f','t','p',':','/','/','a','b','c',0};
-    static WCHAR str11[]= {'f','i','l','e',':','/','/','a','a',0};
-    static WCHAR str12[]= {'f','t','p',':','/','/','w','w','w','.','a','a',0};
+    static WCHAR www[]  = L"www.";
+    static WCHAR str0[] = L"www.ax";
+    static WCHAR str1[] = L"https://www.ac";
+    static WCHAR str2[] = L"aa";
+    static WCHAR str3[] = L"ab";
+    static WCHAR str4[] = L"http://a0";
+    static WCHAR str5[] = L"https://hta";
+    static WCHAR str6[] = L"hfoo";
+    static WCHAR str7[] = L"http://www.add";
+    static WCHAR str8[] = L"www.www.?";
+    static WCHAR str9[] = L"http://abc.aa.com";
+    static WCHAR str10[]= L"ftp://abc";
+    static WCHAR str11[]= L"file://aa";
+    static WCHAR str12[]= L"ftp://www.aa";
     static WCHAR *suggestions[] = { str0, str1, str2, str3, str4, str5, str6, str7, str8, str9, str10, str11, str12 };
     static WCHAR *sorted1[] = { str4, str2, str3, str9, str1, str7, str0 };
     static WCHAR *sorted2[] = { str3, str9 };
@@ -595,17 +601,17 @@ static void test_prefix_filtering(HWND hwnd_edit)
     HRESULT hr;
 
     hr = CoCreateInstance(&CLSID_AutoComplete, NULL, CLSCTX_INPROC_SERVER, &IID_IAutoComplete2, (void**)&autocomplete);
-    ok(hr == S_OK, "CoCreateInstance failed: %x\n", hr);
+    ok(hr == S_OK, "CoCreateInstance failed: %lx\n", hr);
 
     hr = IAutoComplete2_QueryInterface(autocomplete, &IID_IAutoCompleteDropDown, (LPVOID*)&acdropdown);
-    ok(hr == S_OK, "No IAutoCompleteDropDown interface: %x\n", hr);
+    ok(hr == S_OK, "No IAutoCompleteDropDown interface: %lx\n", hr);
 
     string_enumerator_create((void**)&enumerator, suggestions, ARRAY_SIZE(suggestions));
 
     hr = IAutoComplete2_SetOptions(autocomplete, ACO_FILTERPREFIXES | ACO_AUTOSUGGEST | ACO_AUTOAPPEND);
-    ok(hr == S_OK, "IAutoComplete2_SetOptions failed: %x\n", hr);
+    ok(hr == S_OK, "IAutoComplete2_SetOptions failed: %lx\n", hr);
     hr = IAutoComplete2_Init(autocomplete, hwnd_edit, enumerator, NULL, NULL);
-    ok(hr == S_OK, "IAutoComplete_Init failed: %x\n", hr);
+    ok(hr == S_OK, "IAutoComplete_Init failed: %lx\n", hr);
 
     SendMessageW(hwnd_edit, EM_SETSEL, 0, -1);
     SendMessageW(hwnd_edit, WM_CHAR, 'a', 1);
@@ -655,7 +661,7 @@ static void test_prefix_filtering(HWND hwnd_edit)
     check_dropdown(acdropdown, hwnd_edit, sorted5, ARRAY_SIZE(sorted5));
     SendMessageW(hwnd_edit, WM_CHAR, 't', 1);
     SendMessageW(hwnd_edit, WM_GETTEXT, ARRAY_SIZE(buffer), (LPARAM)buffer);
-    ok(lstrcmpW(htt, buffer) == 0, "Expected %s, got %s\n", wine_dbgstr_w(htt), wine_dbgstr_w(buffer));
+    ok(lstrcmpW(L"htt", buffer) == 0, "Expected L\"htt\", got %s\n", wine_dbgstr_w(buffer));
     check_dropdown(acdropdown, hwnd_edit, NULL, 0);
     SendMessageW(hwnd_edit, WM_CHAR, 'p', 1);
     SendMessageW(hwnd_edit, WM_CHAR, ':', 1);
@@ -689,13 +695,101 @@ static void test_prefix_filtering(HWND hwnd_edit)
     IUnknown_Release(enumerator);
 }
 
+static void test_string_enumerator(HWND hwnd_edit)
+{
+    static WCHAR str0[] = L"aa";
+    static WCHAR *suggestions[] = { str0 };
+    IUnknown *enumerator;
+    struct string_enumerator *obj;
+    IAutoComplete2 *autocomplete;
+    IAutoCompleteDropDown *acdropdown;
+    WCHAR buffer[20];
+    HRESULT hr;
+
+    hr = CoCreateInstance(&CLSID_AutoComplete, NULL, CLSCTX_INPROC_SERVER, &IID_IAutoComplete2, (void**)&autocomplete);
+    ok(hr == S_OK, "CoCreateInstance failed: %lx\n", hr);
+
+    hr = IAutoComplete2_QueryInterface(autocomplete, &IID_IAutoCompleteDropDown, (LPVOID*)&acdropdown);
+    ok(hr == S_OK, "No IAutoCompleteDropDown interface: %lx\n", hr);
+
+    string_enumerator_create((void**)&enumerator, suggestions, ARRAY_SIZE(suggestions));
+    obj = (struct string_enumerator*)enumerator;
+
+    hr = IAutoComplete2_SetOptions(autocomplete, ACO_AUTOSUGGEST | ACO_AUTOAPPEND);
+    ok(hr == S_OK, "IAutoComplete2_SetOptions failed: %lx\n", hr);
+    hr = IAutoComplete2_Init(autocomplete, hwnd_edit, enumerator, NULL, NULL);
+    ok(hr == S_OK, "IAutoComplete_Init failed: %lx\n", hr);
+    ok(obj->num_next == 0, "Expected 0 next calls, got %u\n", obj->num_next);
+
+    /* Returning S_FALSE immediately from the string enumerator Next method yields
+     * no usable suggestion strings. */
+    obj->data_len = 0;
+    obj->num_next = 0;
+    obj->no_next_str_hr = S_FALSE;
+    obj->next_str_hr = S_OK;
+    SendMessageW(hwnd_edit, EM_SETSEL, 0, -1);
+    SendMessageW(hwnd_edit, WM_CHAR, 'a', 1);
+    dispatch_messages();
+    ok(obj->num_next == 1, "Expected 1 next call, got %u\n", obj->num_next);
+    SendMessageW(hwnd_edit, WM_GETTEXT, ARRAY_SIZE(buffer), (LPARAM)buffer);
+    ok(lstrcmpW(L"a", buffer) == 0, "Expected \"a\", got %s\n", wine_dbgstr_w(buffer));
+    hr = IAutoCompleteDropDown_ResetEnumerator(acdropdown);
+    ok(hr == S_OK, "IAutoCompleteDropDown_ResetEnumerator failed: %lx\n", hr);
+
+    /* Returning a failure HRESULT in the same scenario yields the same behavior. */
+    obj->data_len = 0;
+    obj->num_next = 0;
+    obj->no_next_str_hr = E_NOTIMPL;
+    obj->next_str_hr = S_OK;
+    SendMessageW(hwnd_edit, EM_SETSEL, 0, -1);
+    SendMessageW(hwnd_edit, WM_CHAR, 'a', 1);
+    dispatch_messages();
+    ok(obj->num_next == 1, "Expected 1 next call, got %u\n", obj->num_next);
+    SendMessageW(hwnd_edit, WM_GETTEXT, ARRAY_SIZE(buffer), (LPARAM)buffer);
+    ok(lstrcmpW(L"a", buffer) == 0, "Expected \"a\", got %s\n", wine_dbgstr_w(buffer));
+    hr = IAutoCompleteDropDown_ResetEnumerator(acdropdown);
+    ok(hr == S_OK, "IAutoCompleteDropDown_ResetEnumerator failed: %lx\n", hr);
+
+    /* Any string retrieved when returning S_FALSE from the string enumerator
+     * Next method is ignored. */
+    obj->data_len = ARRAY_SIZE(suggestions);
+    obj->num_next = 0;
+    obj->no_next_str_hr = S_FALSE;
+    obj->next_str_hr = S_FALSE;
+    SendMessageW(hwnd_edit, EM_SETSEL, 0, -1);
+    SendMessageW(hwnd_edit, WM_CHAR, 'a', 1);
+    dispatch_messages();
+    ok(obj->num_next == 1, "Expected 1 next call, got %u\n", obj->num_next);
+    SendMessageW(hwnd_edit, WM_GETTEXT, ARRAY_SIZE(buffer), (LPARAM)buffer);
+    ok(lstrcmpW(L"a", buffer) == 0, "Expected \"a\", got %s\n", wine_dbgstr_w(buffer));
+    hr = IAutoCompleteDropDown_ResetEnumerator(acdropdown);
+    ok(hr == S_OK, "IAutoCompleteDropDown_ResetEnumerator failed: %lx\n", hr);
+
+    /* Returning a failure HRESULT in the same scenario yields the same behavior. */
+    obj->data_len = ARRAY_SIZE(suggestions);
+    obj->num_next = 0;
+    obj->no_next_str_hr = S_FALSE;
+    obj->next_str_hr = E_NOTIMPL;
+    SendMessageW(hwnd_edit, EM_SETSEL, 0, -1);
+    SendMessageW(hwnd_edit, WM_CHAR, 'a', 1);
+    dispatch_messages();
+    ok(obj->num_next == 1, "Expected 1 next call, got %u\n", obj->num_next);
+    SendMessageW(hwnd_edit, WM_GETTEXT, ARRAY_SIZE(buffer), (LPARAM)buffer);
+    ok(lstrcmpW(L"a", buffer) == 0, "Expected \"a\", got %s\n", wine_dbgstr_w(buffer));
+    hr = IAutoCompleteDropDown_ResetEnumerator(acdropdown);
+    ok(hr == S_OK, "IAutoCompleteDropDown_ResetEnumerator failed: %lx\n", hr);
+
+    IAutoComplete2_Release(autocomplete);
+    IUnknown_Release(enumerator);
+}
+
 static void test_custom_source(void)
 {
-    static WCHAR str_alpha[] = {'t','e','s','t','1',0};
-    static WCHAR str_alpha2[] = {'t','e','s','t','2',0};
-    static WCHAR str_beta[] = {'a','u','t','o',' ','c','o','m','p','l','e','t','e',0};
-    static WCHAR str_au[] = {'a','u',0};
-    static WCHAR str_aut[] = {'a','u','t',0};
+    static WCHAR str_alpha[] = L"test1";
+    static WCHAR str_alpha2[] = L"test2";
+    static WCHAR str_beta[] = L"auto complete";
+    static WCHAR str_au[] = L"au";
+    static WCHAR str_aut[] = L"aut";
     static WCHAR *suggestions[] = { str_alpha, str_alpha2, str_beta };
     struct string_enumerator *obj;
     IUnknown *enumerator;
@@ -711,20 +805,20 @@ static void test_custom_source(void)
     hwnd_edit = CreateWindowA("Edit", "", WS_OVERLAPPED | WS_VISIBLE | WS_CHILD | WS_BORDER, 50, 5, 200, 20, hMainWnd, 0, NULL, 0);
 
     hr = CoCreateInstance(&CLSID_AutoComplete, NULL, CLSCTX_INPROC_SERVER, &IID_IAutoComplete2, (void**)&autocomplete);
-    ok(hr == S_OK, "CoCreateInstance failed: %x\n", hr);
+    ok(hr == S_OK, "CoCreateInstance failed: %lx\n", hr);
 
     hr = IAutoComplete2_QueryInterface(autocomplete, &IID_IAutoCompleteDropDown, (LPVOID*)&acdropdown);
-    ok(hr == S_OK, "No IAutoCompleteDropDown interface: %x\n", hr);
+    ok(hr == S_OK, "No IAutoCompleteDropDown interface: %lx\n", hr);
 
     string_enumerator_create((void**)&enumerator, suggestions, ARRAY_SIZE(suggestions));
     obj = (struct string_enumerator*)enumerator;
 
     hr = IAutoComplete2_SetOptions(autocomplete, ACO_AUTOSUGGEST | ACO_AUTOAPPEND);
-    ok(hr == S_OK, "IAutoComplete2_SetOptions failed: %x\n", hr);
+    ok(hr == S_OK, "IAutoComplete2_SetOptions failed: %lx\n", hr);
     hr = IAutoCompleteDropDown_ResetEnumerator(acdropdown);
-    ok(hr == S_OK, "IAutoCompleteDropDown_ResetEnumerator failed: %x\n", hr);
+    ok(hr == S_OK, "IAutoCompleteDropDown_ResetEnumerator failed: %lx\n", hr);
     hr = IAutoComplete2_Init(autocomplete, hwnd_edit, enumerator, NULL, NULL);
-    ok(hr == S_OK, "IAutoComplete_Init failed: %x\n", hr);
+    ok(hr == S_OK, "IAutoComplete_Init failed: %lx\n", hr);
 
     SetFocus(hwnd_edit);
     SendMessageW(hwnd_edit, WM_CHAR, 'a', 1);
@@ -740,7 +834,7 @@ static void test_custom_source(void)
     ok(buffer[0] == '\0', "Expected empty string, got %s\n", wine_dbgstr_w(buffer));
     ok(obj->num_resets == 1, "Expected 1 reset, got %u\n", obj->num_resets);
     hr = IAutoCompleteDropDown_ResetEnumerator(acdropdown);
-    ok(hr == S_OK, "IAutoCompleteDropDown_ResetEnumerator failed: %x\n", hr);
+    ok(hr == S_OK, "IAutoCompleteDropDown_ResetEnumerator failed: %lx\n", hr);
     ok(obj->num_resets == 1, "Expected 1 reset, got %u\n", obj->num_resets);
     obj->num_resets = 0;
 
@@ -762,7 +856,7 @@ static void test_custom_source(void)
     SendMessageW(hwnd_edit, WM_GETTEXT, ARRAY_SIZE(buffer), (LPARAM)buffer);
     ok(buffer[0] == '\0', "Expected empty string, got %s\n", wine_dbgstr_w(buffer));
     hr = IAutoCompleteDropDown_ResetEnumerator(acdropdown);
-    ok(hr == S_OK, "IAutoCompleteDropDown_ResetEnumerator failed: %x\n", hr);
+    ok(hr == S_OK, "IAutoCompleteDropDown_ResetEnumerator failed: %lx\n", hr);
 
     HijackerWndProc_prev = (WNDPROC)SetWindowLongPtrW(hwnd_edit, GWLP_WNDPROC, (LONG_PTR)HijackerWndProc2);
     SendMessageW(hwnd_edit, WM_CHAR, 'a', 1);
@@ -775,17 +869,17 @@ static void test_custom_source(void)
     /* end of hijacks */
 
     hr = IAutoCompleteDropDown_GetDropDownStatus(acdropdown, &flags, NULL);
-    ok(hr == S_OK, "IAutoCompleteDropDown_GetDropDownStatus failed: %x\n", hr);
+    ok(hr == S_OK, "IAutoCompleteDropDown_GetDropDownStatus failed: %lx\n", hr);
     ok(flags & ACDD_VISIBLE, "AutoComplete DropDown should be visible\n");
     SendMessageW(hwnd_edit, WM_SETTEXT, 0, (LPARAM)str_au);
     dispatch_messages();
     hr = IAutoCompleteDropDown_GetDropDownStatus(acdropdown, &flags, NULL);
-    ok(hr == S_OK, "IAutoCompleteDropDown_GetDropDownStatus failed: %x\n", hr);
+    ok(hr == S_OK, "IAutoCompleteDropDown_GetDropDownStatus failed: %lx\n", hr);
     ok(!(flags & ACDD_VISIBLE), "AutoComplete DropDown should have been hidden\n");
     SendMessageW(hwnd_edit, WM_SETTEXT, 0, (LPARAM)str_aut);
     dispatch_messages();
     hr = IAutoCompleteDropDown_GetDropDownStatus(acdropdown, &flags, NULL);
-    ok(hr == S_OK, "IAutoCompleteDropDown_GetDropDownStatus failed: %x\n", hr);
+    ok(hr == S_OK, "IAutoCompleteDropDown_GetDropDownStatus failed: %lx\n", hr);
     ok(!(flags & ACDD_VISIBLE), "AutoComplete DropDown should be hidden\n");
     SendMessageW(hwnd_edit, WM_GETTEXT, ARRAY_SIZE(buffer), (LPARAM)buffer);
     ok(lstrcmpW(str_aut, buffer) == 0, "Expected %s, got %s\n", wine_dbgstr_w(str_aut), wine_dbgstr_w(buffer));
@@ -794,7 +888,7 @@ static void test_custom_source(void)
     obj->num_resets = 0;
 
     hr = IAutoCompleteDropDown_ResetEnumerator(acdropdown);
-    ok(hr == S_OK, "IAutoCompleteDropDown_ResetEnumerator failed: %x\n", hr);
+    ok(hr == S_OK, "IAutoCompleteDropDown_ResetEnumerator failed: %lx\n", hr);
     SendMessageW(hwnd_edit, WM_CHAR, 'x', 1);
     dispatch_messages();
     ok(obj->num_resets == 1, "Expected 1 reset, got %u\n", obj->num_resets);
@@ -807,6 +901,7 @@ static void test_custom_source(void)
     IUnknown_Release(enumerator);
 
     test_prefix_filtering(hwnd_edit);
+    test_string_enumerator(hwnd_edit);
 
     ShowWindow(hMainWnd, SW_HIDE);
     DestroyWindow(hwnd_edit);
@@ -821,7 +916,7 @@ START_TEST(autocomplete)
     POINT orig_pos;
 
     r = CoInitialize(NULL);
-    ok(r == S_OK, "CoInitialize failed (0x%08x). Tests aborted.\n", r);
+    ok(r == S_OK, "CoInitialize failed (0x%08lx). Tests aborted.\n", r);
     if (r != S_OK)
         return;
 

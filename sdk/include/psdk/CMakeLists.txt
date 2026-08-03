@@ -130,6 +130,7 @@ list(APPEND SOURCE
     servprov.idl
 #   sesprp.idl
     shdeprecated.idl
+    shimgdata.idl
     shldisp.idl
     shobjidl.idl
     shtypes.idl
