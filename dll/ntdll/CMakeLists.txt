@@ -45,9 +45,11 @@ list(APPEND SOURCE
     rtl/xstate.c)
 
 if(ARCH STREQUAL "amd64")
-    list(APPEND SOURCE
-        rtl/xstate_wow64.c
-        wow64.c)
+    list(APPEND SOURCE rtl/xstate_wow64.c)
+endif()
+
+if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64")
+    list(APPEND SOURCE wow64.c)
 endif()
 
 if(ARCH STREQUAL "i386")
