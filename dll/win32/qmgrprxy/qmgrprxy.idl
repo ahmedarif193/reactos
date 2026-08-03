@@ -20,7 +20,13 @@
 #pragma makedep proxy
 #pragma makedep register
 
+#ifdef __REACTOS__
+#define QMGRPRXY_EMBEDDED_BITS
+#endif
 #include "bits.idl"
+#ifdef __REACTOS__
+#undef QMGRPRXY_EMBEDDED_BITS
+#endif
 
 #define DO_NO_IMPORTS
 #include "bits1_5.idl"
@@ -32,4 +38,4 @@
     threading(both),
     uuid(5ce34c0d-0dc9-4c1f-897c-daa1b78cee7c)  /* IBackgroundCopyManager */
 ]
-coclass PSFactoryBuffer { interface IFactoryBuffer; }
+coclass PSFactoryBuffer { interface IPSFactoryBuffer; }
