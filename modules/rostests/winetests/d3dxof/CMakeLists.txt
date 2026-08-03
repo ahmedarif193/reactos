@@ -1,0 +1,5 @@
+add_definitions(-DUSE_WINE_TODOS)
+add_executable(d3dxof_winetest d3dxof.c testlist.c)
+set_module_type(d3dxof_winetest win32cui)
+add_importlibs(d3dxof_winetest d3dxof msvcrt kernel32)
+add_rostests_file(TARGET d3dxof_winetest)
