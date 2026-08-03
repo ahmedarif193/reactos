@@ -19,7 +19,6 @@
  *
  */
 
-#define NONAMELESSUNION
 #define COBJMACROS
 #define CONST_VTABLE
 
@@ -39,22 +38,17 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(inetcpl);
 
-DECLSPEC_HIDDEN HMODULE hcpl;
+HMODULE hcpl;
 
 /*********************************************************************
  *  DllMain (inetcpl.@)
  */
 BOOL WINAPI DllMain(HINSTANCE hdll, DWORD reason, LPVOID reserved)
 {
-    TRACE("(%p, %d, %p)\n", hdll, reason, reserved);
+    TRACE("(%p, %ld, %p)\n", hdll, reason, reserved);
 
     switch (reason)
     {
-#ifndef __REACTOS__
-        case DLL_WINE_PREATTACH:
-            return FALSE;  /* prefer native version */
-#endif
-
         case DLL_PROCESS_ATTACH:
             DisableThreadLibraryCalls(hdll);
             hcpl = hdll;
@@ -77,24 +71,13 @@ HRESULT WINAPI DllInstall(BOOL bInstall, LPCWSTR cmdline)
  */
 static int CALLBACK propsheet_callback(HWND hwnd, UINT msg, LPARAM lparam)
 {
-#ifdef __REACTOS__
-    // NOTE: This callback is needed to set large icon correctly.
-    HICON hIcon;
-#endif
-    TRACE("(%p, 0x%08x/%d, 0x%lx)\n", hwnd, msg, msg, lparam);
+
+    TRACE("(%p, 0x%08x/%d, 0x%Ix)\n", hwnd, msg, msg, lparam);
     switch (msg)
     {
         case PSCB_INITIALIZED:
-#ifdef __REACTOS__
-        {
-            hIcon = LoadIconW(hcpl, MAKEINTRESOURCEW(ICO_MAIN));
-            SendMessageW(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hIcon);
-            break;
-        }
-#else
             SendMessageW(hwnd, WM_SETICON, ICON_BIG, (LPARAM) LoadIconW(hcpl, MAKEINTRESOURCEW(ICO_MAIN)));
             break;
-#endif
     }
     return 0;
 }
@@ -124,25 +107,25 @@ static void display_cpl_sheets(HWND parent)
     /* Fill out all PROPSHEETPAGE */
     psp[id].dwSize = sizeof (PROPSHEETPAGEW);
     psp[id].hInstance = hcpl;
-    psp[id].u.pszTemplate = MAKEINTRESOURCEW(IDD_GENERAL);
+    psp[id].pszTemplate = MAKEINTRESOURCEW(IDD_GENERAL);
     psp[id].pfnDlgProc = general_dlgproc;
     id++;
 
     psp[id].dwSize = sizeof (PROPSHEETPAGEW);
     psp[id].hInstance = hcpl;
-    psp[id].u.pszTemplate = MAKEINTRESOURCEW(IDD_SECURITY);
+    psp[id].pszTemplate = MAKEINTRESOURCEW(IDD_SECURITY);
     psp[id].pfnDlgProc = security_dlgproc;
     id++;
 
     psp[id].dwSize = sizeof (PROPSHEETPAGEW);
     psp[id].hInstance = hcpl;
-    psp[id].u.pszTemplate = MAKEINTRESOURCEW(IDD_CONTENT);
+    psp[id].pszTemplate = MAKEINTRESOURCEW(IDD_CONTENT);
     psp[id].pfnDlgProc = content_dlgproc;
     id++;
 
     psp[id].dwSize = sizeof (PROPSHEETPAGEW);
     psp[id].hInstance = hcpl;
-    psp[id].u.pszTemplate = MAKEINTRESOURCEW(IDD_CONNECTIONS);
+    psp[id].pszTemplate = MAKEINTRESOURCEW(IDD_CONNECTIONS);
     psp[id].pfnDlgProc = connections_dlgproc;
     id++;
 
@@ -151,10 +134,10 @@ static void display_cpl_sheets(HWND parent)
     psh.dwFlags = PSH_PROPSHEETPAGE | PSH_USEICONID | PSH_USECALLBACK;
     psh.hwndParent = parent;
     psh.hInstance = hcpl;
-    psh.u.pszIcon = MAKEINTRESOURCEW(ICO_MAIN);
+    psh.pszIcon = MAKEINTRESOURCEW(ICO_MAIN);
     psh.pszCaption = MAKEINTRESOURCEW(IDS_CPL_NAME);
     psh.nPages = id;
-    psh.u3.ppsp = psp;
+    psh.ppsp = psp;
     psh.pfnCallback = propsheet_callback;
 
     /* display the dialog */
@@ -180,7 +163,7 @@ static void display_cpl_sheets(HWND parent)
  */
 LONG CALLBACK CPlApplet(HWND hWnd, UINT command, LPARAM lParam1, LPARAM lParam2)
 {
-    TRACE("(%p, %u, 0x%lx, 0x%lx)\n", hWnd, command, lParam1, lParam2);
+    TRACE("(%p, %u, 0x%Ix, 0x%Ix)\n", hWnd, command, lParam1, lParam2);
 
     switch (command)
     {
