@@ -20,11 +20,10 @@
 
 #define COBJMACROS
 
+#include <stdarg.h>
 #ifdef __REACTOS__
 #define WIN32_NO_STATUS
 #endif
-
-#include <stdarg.h>
 #include "windef.h"
 #include "winbase.h"
 #include "winreg.h"
@@ -53,7 +52,11 @@
 #include "wine/exception.h"
 
 #include "msipriv.h"
+#ifdef __REACTOS__
 #include "winemsi_s.h"
+#else
+#include "winemsi.h"
+#endif
 #include "resource.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(msi);
@@ -339,8 +342,6 @@ static void free_package_structures( MSIPACKAGE *package )
 static void MSI_FreePackage( MSIOBJECTHDR *arg)
 {
     MSIPACKAGE *package = (MSIPACKAGE *)arg;
-
-    msi_destroy_assembly_caches( package );
 
     if( package->dialog )
         msi_dialog_destroy( package->dialog );
@@ -744,10 +745,15 @@ static VOID set_installer_properties(MSIPACKAGE *package)
     msi_set_property( package->db, L"AdminUser", L"1", -1 );
     msi_set_property( package->db, L"Privileged", L"1", -1 );
     msi_set_property( package->db, L"MsiRunningElevated", L"1", -1 );
+    msi_set_property( package->db, L"MsiTrueAdminUser", L"1", -1 );
 
     /* set the os things */
     OSVersion.dwOSVersionInfoSize = sizeof(OSVersion);
+#ifdef __REACTOS__
     RtlGetVersion((PRTL_OSVERSIONINFOW)&OSVersion);
+#else
+    RtlGetVersion(&OSVersion);
+#endif
     verval = OSVersion.dwMinorVersion + OSVersion.dwMajorVersion * 100;
     if (verval > 603)
     {
@@ -784,7 +790,7 @@ static VOID set_installer_properties(MSIPACKAGE *package)
     msi_set_property( package->db, L"Intel", bufstr, len );
     if (sys_info.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_INTEL)
     {
-        GetSystemDirectoryW( pth, MAX_PATH );
+        wcscpy( pth, sysdir );
         PathAddBackslashW( pth );
         msi_set_property( package->db, L"SystemFolder", pth, -1 );
 
@@ -798,13 +804,14 @@ static VOID set_installer_properties(MSIPACKAGE *package)
         PathAddBackslashW( pth );
         msi_set_property( package->db, L"CommonFilesFolder", pth, -1 );
     }
-    else if (sys_info.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64)
+    else if (sys_info.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64 ||
+             sys_info.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_ARM64)
     {
         msi_set_property( package->db, L"MsiAMD64", bufstr, -1 );
         msi_set_property( package->db, L"Msix64", bufstr, -1 );
         msi_set_property( package->db, L"VersionNT64", verstr, -1 );
 
-        GetSystemDirectoryW( pth, MAX_PATH );
+        wcscpy( pth, sysdir );
         PathAddBackslashW( pth );
         msi_set_property( package->db, L"System64Folder", pth, -1 );
 
@@ -941,6 +948,7 @@ static MSIPACKAGE *alloc_package( void )
         list_init( &package->patches );
         list_init( &package->binaries );
         list_init( &package->cabinet_streams );
+        list_init( &package->drlocators );
     }
 
     return package;
@@ -972,6 +980,7 @@ void msi_adjust_privilege_properties( MSIPACKAGE *package )
     msi_set_property( package->db, L"AdminUser", L"1", -1 );
     msi_set_property( package->db, L"Privileged", L"1", -1 );
     msi_set_property( package->db, L"MsiRunningElevated", L"1", -1 );
+    msi_set_property( package->db, L"MsiTrueAdminUser", L"1", -1 );
 }
 
 MSIPACKAGE *MSI_CreatePackage( MSIDATABASE *db )
@@ -1107,6 +1116,8 @@ static UINT parse_suminfo( MSISUMMARYINFO *si, MSIPACKAGE *package )
     package->version = msi_suminfo_get_int32( si, PID_PAGECOUNT );
     TRACE("version: %d\n", package->version);
 
+    package->platform = PLATFORM_INTEL;
+
     template = msi_suminfo_dup_string( si, PID_TEMPLATE );
     if (!template)
         return ERROR_SUCCESS; /* native accepts missing template property */
@@ -1114,13 +1125,8 @@ static UINT parse_suminfo( MSISUMMARYINFO *si, MSIPACKAGE *package )
     TRACE("template: %s\n", debugstr_w(template));
 
     p = wcschr( template, ';' );
-    if (!p)
-    {
-        WARN("invalid template string %s\n", debugstr_w(template));
-        free( template );
-        return ERROR_PATCH_PACKAGE_INVALID;
-    }
-    *p = 0;
+    if (p) *p++ = 0;
+
     platform = template;
     if ((q = wcschr( platform, ',' ))) *q = 0;
     package->platform = parse_platform( platform );
@@ -1136,8 +1142,8 @@ static UINT parse_suminfo( MSISUMMARYINFO *si, MSIPACKAGE *package )
         free( template );
         return ERROR_INSTALL_PLATFORM_UNSUPPORTED;
     }
-    p++;
-    if (!*p)
+
+    if (!p || !*p)
     {
         free( template );
         return ERROR_SUCCESS;
@@ -1168,27 +1174,39 @@ static UINT parse_suminfo( MSISUMMARYINFO *si, MSIPACKAGE *package )
     return ERROR_SUCCESS;
 }
 
+static BOOL validate_package_platform( enum platform platform )
+{
+    USHORT proc_machine, native_machine;
+    IsWow64Process2( GetCurrentProcess(), &proc_machine, &native_machine );
+    switch (platform)
+    {
+    case PLATFORM_INTEL:
+        return native_machine == IMAGE_FILE_MACHINE_I386 ||
+               native_machine == IMAGE_FILE_MACHINE_AMD64 ||
+               native_machine == IMAGE_FILE_MACHINE_ARM64;
+    case PLATFORM_X64:
+        return native_machine == IMAGE_FILE_MACHINE_AMD64 ||
+               native_machine == IMAGE_FILE_MACHINE_ARM64;
+    case PLATFORM_ARM:
+        return native_machine == IMAGE_FILE_MACHINE_ARM;
+    case PLATFORM_ARM64:
+        return native_machine == IMAGE_FILE_MACHINE_ARM64;
+    case PLATFORM_INTEL64:
+    default:
+        return FALSE;
+    }
+}
+
 static UINT validate_package( MSIPACKAGE *package )
 {
     UINT i;
 
-    if (package->platform == PLATFORM_INTEL64)
+    if (!validate_package_platform( package->platform ))
         return ERROR_INSTALL_PLATFORM_UNSUPPORTED;
-#ifndef __arm__
-    if (package->platform == PLATFORM_ARM)
-        return ERROR_INSTALL_PLATFORM_UNSUPPORTED;
-#endif
-#ifndef __aarch64__
-    if (package->platform == PLATFORM_ARM64)
-        return ERROR_INSTALL_PLATFORM_UNSUPPORTED;
-#endif
-    if (package->platform == PLATFORM_X64)
-    {
-        if (!is_64bit && !is_wow64)
-            return ERROR_INSTALL_PLATFORM_UNSUPPORTED;
-        if (package->version < 200)
-            return ERROR_INSTALL_PACKAGE_INVALID;
-    }
+
+    if (package->platform == PLATFORM_X64 && package->version < 200)
+        return ERROR_INSTALL_PACKAGE_INVALID;
+
     if (!package->num_langids)
     {
         return ERROR_SUCCESS;
@@ -1329,58 +1347,6 @@ UINT msi_set_original_database_property( MSIDATABASE *db, const WCHAR *package )
     return r;
 }
 
-#ifdef __REACTOS__
-BOOL WINAPI ApphelpCheckRunAppEx(HANDLE FileHandle, PVOID Unk1, PVOID Unk2, PCWSTR ApplicationName, PVOID Environment, USHORT ExeType, PULONG Reason, PVOID *SdbQueryAppCompatData, PULONG SdbQueryAppCompatDataSize,
-    PVOID *SxsData, PULONG SxsDataSize, PULONG FusionFlags, PULONG64 SomeFlag1, PULONG SomeFlag2);
-BOOL WINAPI SE_DynamicShim(LPCWSTR ProcessImage, PVOID hsdb, PVOID pQueryResult, LPCSTR Module, LPDWORD lpdwDynamicToken);
-PVOID WINAPI SdbInitDatabase(DWORD flags, LPCWSTR path);
-PVOID WINAPI SdbReleaseDatabase(PVOID hsdb);
-
-#define HID_DOS_PATHS 0x1
-#define SDB_DATABASE_MAIN_SHIM 0x80030000
-
-#define APPHELP_VALID_RESULT 0x10000
-#define APPHELP_RESULT_FOUND 0x40000
-
-static void
-AppHelpCheckPackage(LPCWSTR szPackage)
-{
-    USHORT ExeType = 0;
-    ULONG Reason = 0;
-
-    PVOID QueryResult = NULL;
-    ULONG QueryResultSize = 0;
-
-    HANDLE Handle = NULL;
-    BOOL Continue = ApphelpCheckRunAppEx(
-        Handle, NULL, NULL, szPackage, NULL, ExeType, &Reason, &QueryResult, &QueryResultSize, NULL,
-        NULL, NULL, NULL, NULL);
-
-    if (Continue)
-    {
-        if ((Reason & (APPHELP_VALID_RESULT | APPHELP_RESULT_FOUND)) == (APPHELP_VALID_RESULT | APPHELP_RESULT_FOUND))
-        {
-            DWORD dwToken;
-            PVOID hsdb = SdbInitDatabase(HID_DOS_PATHS | SDB_DATABASE_MAIN_SHIM, NULL);
-            if (hsdb)
-            {
-                BOOL bShim = SE_DynamicShim(szPackage, hsdb, QueryResult, "msi.dll", &dwToken);
-                ERR("ReactOS HACK(CORE-13283): Used SE_DynamicShim %d!\n", bShim);
-
-                SdbReleaseDatabase(hsdb);
-            }
-            else
-            {
-                ERR("Unable to open SDB_DATABASE_MAIN_SHIM\n");
-            }
-        }
-    }
-
-    if (QueryResult)
-        RtlFreeHeap(RtlGetProcessHeap(), 0, QueryResult);
-}
-#endif
-
 UINT MSI_OpenPackageW(LPCWSTR szPackage, DWORD dwOptions, MSIPACKAGE **pPackage)
 {
     MSIDATABASE *db;
@@ -1419,10 +1385,6 @@ UINT MSI_OpenPackageW(LPCWSTR szPackage, DWORD dwOptions, MSIPACKAGE **pPackage)
 
             file = cachefile;
         }
-#ifdef __REACTOS__
-        AppHelpCheckPackage(file);
-#endif
-
         r = MSI_OpenDatabaseW( file, MSIDBOPEN_READONLY, &db );
         if (r != ERROR_SUCCESS)
         {

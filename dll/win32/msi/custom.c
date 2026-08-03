@@ -24,7 +24,9 @@
 #include <stdio.h>
 
 #include "ntstatus.h"
+#ifdef __REACTOS__
 #define WIN32_NO_STATUS
+#endif
 #include "windef.h"
 #include "winbase.h"
 #include "winerror.h"
@@ -34,15 +36,17 @@
 #include "oleauto.h"
 
 #include "msipriv.h"
+#ifdef __REACTOS__
 #include "winemsi_s.h"
+#else
+#include "winemsi.h"
+#endif
 #include "wine/asm.h"
 #include "wine/debug.h"
-#include "wine/unicode.h"
 #include "wine/exception.h"
 
 #ifdef __REACTOS__
 #undef WIN32_NO_STATUS
-#include <psdk/ntstatus.h>
 #include <ndk/mmfuncs.h>
 #endif
 
@@ -468,21 +472,7 @@ static void handle_msi_break( const WCHAR *action )
     DebugBreak();
 }
 
-#if defined __i386__ && defined _MSC_VER
-__declspec(naked) UINT custom_proc_wrapper(MsiCustomActionEntryPoint entry, MSIHANDLE hinst)
-{
-    __asm
-    {
-        push ebp
-        mov ebp, esp
-        sub esp, 4
-        push [ebp+12]
-        call [ebp+8]
-        leave
-        ret
-    }
-}
-#elif defined __i386__ && defined __GNUC__
+#ifdef __i386__
 /* wrapper for apps that don't declare the thread function correctly */
 extern UINT custom_proc_wrapper( MsiCustomActionEntryPoint entry, MSIHANDLE hinst );
 __ASM_GLOBAL_FUNC(custom_proc_wrapper,
@@ -575,11 +565,11 @@ UINT CDECL __wine_msi_call_dll_function(DWORD client_pid, const GUID *guid)
         {
             r = custom_proc_wrapper( fn, hPackage );
         }
-        __EXCEPT_PAGE_FAULT
+        __EXCEPT_ALL
         {
-            ERR( "Custom action (%s:%s) caused a page fault: %#lx\n",
+            ERR( "Custom action (%s:%s) caused an exception: %#lx\n",
                  debugstr_w(dll), debugstr_a(proc), GetExceptionCode() );
-            r = ERROR_SUCCESS;
+            r = ERROR_INSTALL_FAILURE;
         }
         __ENDTRY;
     }
@@ -599,13 +589,6 @@ static HANDLE get_admin_token(void)
     TOKEN_ELEVATION_TYPE type;
     TOKEN_LINKED_TOKEN linked;
     DWORD size;
-
-#ifdef __REACTOS__
-#ifndef GetCurrentThreadEffectiveToken
-#define GetCurrentProcessToken() ((HANDLE)~(ULONG_PTR)3)
-#define GetCurrentThreadEffectiveToken() GetCurrentProcessToken()
-#endif
-#endif
 
     if (!GetTokenInformation(GetCurrentThreadEffectiveToken(), TokenElevationType, &type, sizeof(type), &size)
             || type == TokenElevationTypeFull)
@@ -640,7 +623,7 @@ static DWORD custom_start_server(MSIPACKAGE *package, DWORD arch)
     if ((sizeof(void *) == 8 || is_wow64) && arch == SCS_32BIT_BINARY)
         GetSystemWow64DirectoryW(path, MAX_PATH - ARRAY_SIZE(L"\\msiexec.exe"));
     else
-        GetSystemDirectoryW(path, MAX_PATH - ARRAY_SIZE(L"\\msiexec.exe"));
+        wcscpy(path, sysdir);
     lstrcatW(path, L"\\msiexec.exe");
     swprintf(cmdline, ARRAY_SIZE(cmdline), L"%s -Embedding %d", path, GetCurrentProcessId());
 
@@ -868,17 +851,6 @@ static UINT HANDLE_CustomType1( MSIPACKAGE *package, const WCHAR *source, const 
     if (!(binary = get_temp_binary(package, source)))
         return ERROR_FUNCTION_FAILED;
 
-#if defined(__REACTOS__) && defined(_M_AMD64)
-    {
-        DWORD arch;
-        get_binary_type(binary->tmpfile, &arch);
-        if (arch == SCS_32BIT_BINARY) {
-            ERR("%s is a 32 bit custom action. Returning as ERROR_SUCCESS\n", debugstr_w(source));
-            return ERROR_SUCCESS; // HACK: NO WOW64! return as executed though it's not true
-        }
-    }
-#endif
-
     TRACE("Calling function %s from %s\n", debugstr_w(target), debugstr_w(binary->tmpfile));
 
     if (!(info = do_msidbCustomActionTypeDll( package, type, binary->tmpfile, target, action )))
@@ -986,17 +958,6 @@ static UINT HANDLE_CustomType17( MSIPACKAGE *package, const WCHAR *source, const
         ERR("invalid file key %s\n", debugstr_w( source ));
         return ERROR_FUNCTION_FAILED;
     }
-
-#if defined(__REACTOS__) && defined(_M_AMD64)
-    {
-        DWORD arch;
-        get_binary_type(file->TargetPath, &arch);
-        if (arch == SCS_32BIT_BINARY) {
-            ERR("%s is a 32 bit custom action. Returning as ERROR_SUCCESS\n", debugstr_w(source));
-            return ERROR_SUCCESS; // HACK: NO WOW64! return as executed though it's not true
-        }
-    }
-#endif
 
     if (!(info = do_msidbCustomActionTypeDll( package, type, file->TargetPath, target, action )))
         return ERROR_FUNCTION_FAILED;
