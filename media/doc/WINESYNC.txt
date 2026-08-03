@@ -68,7 +68,7 @@ dll/win32/browseui            # Out of sync
 dll/win32/cabinet             # Synced to Wine-11.14
 dll/win32/cfgmgr32            # Synced to Wine-11.14
 dll/win32/clusapi             # Synced to Wine-11.14
-dll/win32/combase             # Synced to Wine-10.0
+dll/win32/combase             # Synced to Wine-11.14
 dll/win32/comcat              # Synced to Wine-11.14
 dll/win32/comdlg32            # Synced to Wine-11.14
 dll/win32/coml2               # Synced to Wine-11.14
