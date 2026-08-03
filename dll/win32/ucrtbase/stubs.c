@@ -39,25 +39,11 @@ int __cdecl __acrt_initialize_sse2(void)
 #ifdef _MSC_VER
 #pragma warning(disable:4163) // not available as an intrinsic function
 #pragma warning(disable:4164) // intrinsic function not declared
-#pragma function(fma)
-#pragma function(fmaf)
 #pragma function(log2)
 #pragma function(log2f)
 #pragma function(lrint)
 #pragma function(lrintf)
 #endif
-
-double fma(double x, double y, double z)
-{
-    // Simplistic implementation
-    return (x * y) + z;
-}
-
-float fmaf(float x, float y, float z)
-{
-    // Simplistic implementation
-    return (x * y) + z;
-}
 
 double log2(double x)
 {

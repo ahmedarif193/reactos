@@ -56,6 +56,7 @@ list(APPEND SOURCE
 
 add_library(vkd3d STATIC ${SOURCE})
 add_dependencies(vkd3d psdk)
+target_link_libraries(vkd3d PUBLIC libucrtbase)
 target_compile_definitions(vkd3d PRIVATE
     LIBVKD3D_SOURCE
     LIBVKD3D_UTILS_SOURCE)

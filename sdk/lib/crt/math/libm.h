@@ -13,6 +13,7 @@
 #include <stdint.h>
 #include <float.h>
 #include <math.h>
+#include <errno.h>
 
 // Define _STATIC_ASSERT for compatibility with legacy CRT headers
 #ifndef _STATIC_ASSERT
@@ -25,6 +26,7 @@ _STATIC_ASSERT(sizeof(double) == 8);
 _STATIC_ASSERT(sizeof(long double) == 8);
 
 _Check_return_ int __cdecl _isnanf(_In_ float _X);
+double __cdecl scalbn(double, int);
 #define isnan _isnan
 #define isnanf _isnanf
 
@@ -59,6 +61,12 @@ static inline void fp_force_eval(double x)
 	volatile double y;
 	y = x;
     (void)y;
+}
+
+static inline float fp_barrierf(float x)
+{
+	volatile float y = x;
+	return y;
 }
 
 #define FORCE_EVAL(x) do {                    \
