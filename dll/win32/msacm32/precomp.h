@@ -7,6 +7,7 @@
 #define WIN32_NO_STATUS
 #define NOBITMAP
 
+#include <msacmdrv.h>
 #include "wineacm.h"
 
 #include <wine/debug.h>
