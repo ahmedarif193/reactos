@@ -27,27 +27,6 @@
 #include "dinputd.h"
 #include "wine/list.h"
 
-#ifdef __REACTOS__
-#ifndef HID_USAGE_PAGE_PID
-#define HID_USAGE_PAGE_PID ((USAGE) 0x0F)
-#endif
-#ifndef DIPROP_PHYSICALRANGE
-#define DIPROP_PHYSICALRANGE MAKEDIPROP(18)
-#endif
-#ifndef DIPROP_LOGICALRANGE
-#define DIPROP_LOGICALRANGE MAKEDIPROP(19)
-#endif
-#ifndef DIPROPPOINTER
-typedef struct DIPROPPOINTER
-{
-    DIPROPHEADER diph;
-    UINT_PTR uData;
-} DIPROPPOINTER, *LPDIPROPPOINTER;
-typedef const DIPROPPOINTER *LPCDIPROPPOINTER;
-#endif
-#define wReportId wReserved
-#endif
-
 extern HINSTANCE DINPUT_instance;
 
 struct dinput
@@ -77,6 +56,8 @@ extern HRESULT keyboard_enum_device( DWORD type, DWORD flags, DIDEVICEINSTANCEW 
 extern HRESULT keyboard_create_device( struct dinput *dinput, const GUID *guid, IDirectInputDevice8W **out );
 extern HRESULT hid_joystick_enum_device( DWORD type, DWORD flags, DIDEVICEINSTANCEW *instance, DWORD version, int index );
 extern HRESULT hid_joystick_create_device( struct dinput *dinput, const GUID *guid, IDirectInputDevice8W **out );
+extern HRESULT hid_joystick_refresh_devices(void);
+extern void hid_joystick_cleanup_devices(void);
 
 struct DevicePlayer {
     GUID instance_guid;
