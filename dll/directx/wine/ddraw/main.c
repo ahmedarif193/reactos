@@ -32,10 +32,6 @@ WINE_DEFAULT_DEBUG_CHANNEL(ddraw);
 
 static struct list global_ddraw_list = LIST_INIT(global_ddraw_list);
 
-#ifdef __REACTOS__
-static HINSTANCE instance;
-#endif
-
 /* value of ForceRefreshRate */
 DWORD force_refresh_rate = 0;
 
@@ -790,23 +786,6 @@ HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void **out)
     return S_OK;
 }
 
-#ifdef __REACTOS__
-HRESULT WINAPI DllCanUnloadNow(void)
-{
-    TRACE("\n");
-    return S_FALSE;
-}
-
-HRESULT WINAPI DllRegisterServer(void)
-{
-    return __wine_register_resources(instance);
-}
-
-HRESULT WINAPI DllUnregisterServer(void)
-{
-    return __wine_unregister_resources(instance);
-}
-#endif
 
 /***********************************************************************
  * DllMain (DDRAW.0)
@@ -850,10 +829,6 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
             UnregisterClassA(DDRAW_WINDOW_CLASS_NAME, inst);
             return FALSE;
         }
-
-#ifdef __REACTOS__
-        instance = inst;
-#endif
 
         /* On Windows one can force the refresh rate that DirectDraw uses by
          * setting an override value in dxdiag.  This is documented in KB315614
