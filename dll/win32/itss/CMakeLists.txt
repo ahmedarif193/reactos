@@ -1,5 +1,5 @@
 
-add_definitions(-D__ROS_LONG64__ -D_CRT_NON_CONFORMING_SWPRINTFS)
+add_definitions(-D__ROS_LONG64__)
 spec2def(itss.dll itss.spec)
 
 list(APPEND SOURCE
@@ -21,7 +21,7 @@ add_library(itss MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/itss.def)
 
 set_module_type(itss win32dll)
-target_link_libraries(itss uuid wine oldnames)
+target_link_libraries(itss uuid wine wine_dll_register oldnames)
 add_importlibs(itss urlmon shlwapi ole32 msvcrt kernel32 ntdll)
 add_pch(itss precomp.h "${PCH_SKIP_SOURCE}")
 add_dependencies(itss wineheaders)
