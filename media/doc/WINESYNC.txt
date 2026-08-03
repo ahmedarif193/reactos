@@ -161,7 +161,7 @@ dll/win32/oleaut32            # Synced to WineStaging-4.18
 dll/win32/olecli32            # Synced to Wine-11.14
 dll/win32/oledlg              # Synced to WineStaging-4.18
 dll/win32/olepro32            # Synced to Wine-11.14
-dll/win32/olesvr32            # Synced to WineStaging-4.18
+dll/win32/olesvr32            # Synced to Wine-11.14
 dll/win32/olethk32            # Synced to Wine-11.14
 dll/win32/pdh                 # Synced to WineStaging-4.18
 dll/win32/pidgen              # Synced to Wine-11.14
