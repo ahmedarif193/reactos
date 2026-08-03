@@ -765,6 +765,7 @@
 @ stdcall RtlCreateRegistryKey(long wstr)
 @ stdcall RtlCreateSecurityDescriptor(ptr long)
 @ stdcall RtlCreateServiceSid(ptr ptr ptr) # Exists in Windows 2003 SP 2
+@ stdcall -version=0xA00+ RtlDeriveCapabilitySidsFromName(ptr ptr ptr)
 @ stdcall RtlCreateSystemVolumeInformationFolder(ptr)
 @ stdcall RtlCreateTagHeap(ptr long wstr wstr)
 @ stdcall RtlCreateTimer(ptr ptr ptr ptr long long long)
