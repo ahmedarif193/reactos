@@ -1880,6 +1880,13 @@ GetDllDirectoryW(
 
 UINT WINAPI GetDriveTypeA(LPCSTR);
 UINT WINAPI GetDriveTypeW(LPCWSTR);
+#if (NTDDI_VERSION >= NTDDI_WIN7SP1) && (defined(_AMD64_) || defined(_X86_))
+WINBASEAPI
+DWORD64
+WINAPI
+GetEnabledXStateFeatures(
+  VOID);
+#endif
 LPSTR WINAPI GetEnvironmentStrings(void);
 LPWSTR WINAPI GetEnvironmentStringsW(void);
 DWORD WINAPI GetEnvironmentVariableA(LPCSTR,LPSTR,DWORD);

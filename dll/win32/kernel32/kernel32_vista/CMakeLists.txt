@@ -11,6 +11,7 @@ list(APPEND SOURCE
     EnumSystemLocalesEx.c
     firmware.c
     GetActiveProcessorCount.c
+    GetEnabledXStateFeatures.c
     GetLocaleInfoEx.c
     GetFileInformationByHandleEx.c
     GetFinalPathNameByHandle.c

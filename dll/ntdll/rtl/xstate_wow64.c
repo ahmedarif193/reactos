@@ -149,12 +149,14 @@ RtlpGetXStateSize(ULONG64 Mask)
            SharedUserData->XState.Features[Index].Size - sizeof(XSAVE_FORMAT);
 }
 
+#ifndef __REACTOS__
 ULONG64
 NTAPI
 RtlGetEnabledExtendedFeatures(ULONG64 FeatureMask)
 {
     return SharedUserData->XState.EnabledFeatures & FeatureMask;
 }
+#endif
 
 NTSTATUS
 NTAPI
