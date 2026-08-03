@@ -7,15 +7,13 @@ list(APPEND COMMON_SOURCE
     asmname.c
     assembly.c
     fusion.c
-    precomp.h
     ${CMAKE_CURRENT_BINARY_DIR}/fusion_stubs.c)
 
 add_library(fusion_common STATIC ${COMMON_SOURCE})
-target_compile_definitions(fusion_common PRIVATE _CRT_NON_CONFORMING_SWPRINTFS)
+target_compile_definitions(fusion_common PRIVATE __WINESRC__)
 target_link_libraries(fusion_common oldnames)
 add_dependencies(fusion_common psdk)
-add_pch(fusion_common precomp.h COMMON_SOURCE)
-set_wine_module_FIXME(fusion_common) # CORE-5743: No ARRAY_SIZE and CONST_VTABLE
+set_wine_module(fusion_common)
 
 add_library(fusion MODULE
     version.rc
@@ -23,7 +21,7 @@ add_library(fusion MODULE
 
 set_module_type(fusion win32dll)
 target_link_libraries(fusion fusion_common uuid wine)
-add_importlibs(fusion bcrypt advapi32 dbghelp shlwapi user32 msvcrt kernel32 ntdll)
+add_importlibs(fusion bcrypt dbghelp shlwapi version user32 msvcrt kernel32 ntdll)
 add_cd_file(TARGET fusion DESTINATION reactos/Microsoft.NET/Framework/v1.0.3705 FOR all)
 add_cd_file(TARGET fusion DESTINATION reactos/system32 FOR all)
 
