@@ -437,6 +437,34 @@ OutputLine_stub(FILE *file, EXPORT *pexp)
     return 1;
 }
 
+static int
+IsDuplicateStub(EXPORT *pexports, unsigned int index)
+{
+    EXPORT *pexp = &pexports[index];
+    unsigned int i;
+
+    if (pexp->nCallingConvention != CC_STUB && !(pexp->uFlags & FL_STUB))
+        return 0;
+
+    if (pexp->strName.len == 1 && pexp->strName.buf[0] == '@')
+        return 0;
+
+    for (i = 0; i < index; i++)
+    {
+        EXPORT *previous = &pexports[i];
+
+        if (!previous->bVersionIncluded ||
+            (previous->nCallingConvention != CC_STUB && !(previous->uFlags & FL_STUB)))
+            continue;
+
+        if (previous->strName.len == pexp->strName.len &&
+            !memcmp(previous->strName.buf, pexp->strName.buf, pexp->strName.len))
+            return 1;
+    }
+
+    return 0;
+}
+
 void
 OutputHeader_asmstub(FILE *file, char *libname)
 {
@@ -1737,7 +1765,7 @@ int main(int argc, char *argv[])
 
         for (i = 0; i < cExports; i++)
         {
-            if (pexports[i].bVersionIncluded)
+            if (pexports[i].bVersionIncluded && !IsDuplicateStub(pexports, i))
                 OutputLine_stub(file, &pexports[i]);
         }
 

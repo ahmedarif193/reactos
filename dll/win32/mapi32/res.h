@@ -19,8 +19,6 @@
 *
 */
 
-#pragma once
-
 #include <windef.h>
 
 /* Strings */
