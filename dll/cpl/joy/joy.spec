@@ -1,1 +1,2 @@
-@ stdcall CPlApplet(ptr long ptr ptr)
+@ stdcall CPlApplet(long long long long)
+# @ stub ShowJoyCPL
