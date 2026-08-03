@@ -125,7 +125,7 @@ dll/win32/msacm32.drv         # Synced to Wine-11.14
 dll/win32/msadp32.acm         # Synced to Wine-11.14
 dll/win32/mscat32             # Synced to Wine-11.14
 dll/win32/mscms               # Synced to Wine-11.14
-dll/win32/mscoree             # Synced to Wine-10.0
+dll/win32/mscoree             # Synced to Wine-11.14
 dll/win32/msftedit            # Synced to Wine-11.14
 dll/win32/msg711.acm          # Synced to Wine-11.14
 dll/win32/msgsm32.acm         # Synced to Wine-11.14
