@@ -39,9 +39,6 @@
 #define WIN32_NO_STATUS
 #endif
 #include "ntstatus.h"
-#ifndef __REACTOS__
-#define WIN32_NO_STATUS
-#endif
 #include "windef.h"
 #include "winbase.h"
 #include "winnls.h"

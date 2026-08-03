@@ -1302,6 +1302,11 @@
 @ stdcall lstrlen(str) lstrlenA
 @ stdcall lstrlenA(str)
 @ stdcall lstrlenW(wstr)
+@ stdcall timeBeginPeriod(long)
+@ stdcall timeEndPeriod(long)
+@ stdcall timeGetDevCaps(ptr long)
+@ stdcall timeGetSystemTime(ptr long)
+@ stdcall timeGetTime()
 ;@ stdcall -arch=x86_64 uaw_lstrcmpW(wstr wstr)
 ;@ stdcall -arch=x86_64 uaw_lstrcmpiW(wstr wstr)
 ;@ stdcall -arch=x86_64 uaw_lstrlenW(wstr)
