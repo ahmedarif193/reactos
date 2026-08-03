@@ -63,7 +63,7 @@ dll/win32/bcrypt              # Synced to WineStaging-1.9.23 (+ winetest synced 
 dll/win32/bcryptprimitives    # Synced to Wine-11.14
 dll/win32/bluetoothapis       # Synced to Wine-10.0
 dll/win32/browseui            # Out of sync
-dll/win32/cabinet             # Synced to WineStaging-4.18
+dll/win32/cabinet             # Synced to Wine-11.14
 dll/win32/clusapi             # Synced to Wine-11.14
 dll/win32/combase             # Synced to Wine-10.0
 dll/win32/comcat              # Synced to Wine-11.14
