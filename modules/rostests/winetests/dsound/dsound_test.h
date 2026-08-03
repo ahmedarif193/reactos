@@ -18,25 +18,9 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef _DSOUND_TEST_H_
-#define _DSOUND_TEST_H_
-
-#include <math.h>
-
-#define WIN32_NO_STATUS
-#define _INC_WINDOWS
-#define COM_NO_WINDOWS_H
-#define COBJMACROS
-
-#include <wine/test.h>
-
-#include <wingdi.h>
-#include <mmreg.h>
-#include <mmsystem.h>
-#include <dsound.h>
-#include <dsconf.h>
-#include <ks.h>
-#include <ksmedia.h>
+#include "wingdi.h"
+#include "mmreg.h"
+#include "combaseapi.h" /* APTTYPE, APTTYPEQUALIFIER */
 
 static const unsigned int formats[][4]={
     { 8000,  8, 1, 0 },
@@ -88,10 +72,15 @@ static const unsigned int formats[][4]={
     {96000, 32, 1, 0 },
     {96000, 32, 2, 0 }
 };
-#define NB_FORMATS (sizeof(formats)/sizeof(*formats))
 
 static const unsigned int format_tags[] = {WAVE_FORMAT_PCM, WAVE_FORMAT_IEEE_FLOAT};
-#define NB_TAGS (sizeof(format_tags)/sizeof(*format_tags))
+
+#define APTTYPE_UNITIALIZED APTTYPE_CURRENT
+struct apt_data
+{
+    APTTYPE type;
+    APTTYPEQUALIFIER qualifier;
+};
 
 /* The time slice determines how often we will service the buffer */
 #define TIME_SLICE     31
@@ -109,5 +98,4 @@ extern void test_buffer8(LPDIRECTSOUND8,LPDIRECTSOUNDBUFFER*,
 extern const char * getDSBCAPS(DWORD xmask);
 extern int align(int length, int align);
 extern const char * format_string(const WAVEFORMATEX* wfx);
-
-#endif /* !_DSOUND_TEST_H_ */
+extern void check_apttype(struct apt_data *);
