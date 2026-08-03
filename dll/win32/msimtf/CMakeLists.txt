@@ -13,7 +13,7 @@ add_library(msimtf MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/msimtf.def)
 
 set_module_type(msimtf win32dll)
-target_link_libraries(msimtf uuid wine)
+target_link_libraries(msimtf uuid wine wine_dll_canunload wine_dll_register)
 add_importlibs(msimtf imm32 msvcrt kernel32 ntdll)
 add_pch(msimtf precomp.h SOURCE)
 add_cd_file(TARGET msimtf DESTINATION reactos/system32 FOR all)
