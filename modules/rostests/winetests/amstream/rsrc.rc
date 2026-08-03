@@ -1,7 +1,7 @@
 /*
- *      MultiMedia Streams private interfaces (AMSTREAM.DLL)
+ * Resource file for amstream tests.
  *
- * Copyright 2004 Christian Costa
+ * Copyright 2020 Anton Baskanov
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -18,26 +18,8 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __AMSTREAM_PRIVATE_INCLUDED__
-#define __AMSTREAM_PRIVATE_INCLUDED__
-
-#include <stdarg.h>
-#include <stdbool.h>
-
 #include "windef.h"
-#include "winbase.h"
-#include "wtypes.h"
-#include "wingdi.h"
-#include "winuser.h"
-#include "dshow.h"
-#include "mmstream.h"
-#include "austream.h"
-#include "amstream.h"
 
-HRESULT multimedia_stream_create(IUnknown *outer, void **out);
-HRESULT AMAudioData_create(IUnknown *pUnkOuter, LPVOID *ppObj);
-HRESULT filter_create(IUnknown *outer, void **out);
-HRESULT ddraw_stream_create(IUnknown *outer, void **out);
-HRESULT audio_stream_create(IUnknown *outer, void **out);
-
-#endif /* __AMSTREAM_PRIVATE_INCLUDED__ */
+/* ffmpeg -f lavfi -i smptebars -f lavfi -i "sine=frequency=1000" -t 0.1 -r 10 -ar 8000 -f avi -vcodec rawvideo -vf scale=32x24 -acodec pcm_u8 test.avi */
+/* @makedep: test.avi */
+test.avi RCDATA "test.avi"
