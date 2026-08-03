@@ -61,7 +61,7 @@ static HRESULT WINAPI factory_QueryInterface(IActivationFactory *iface, REFIID i
     {
 #ifdef __REACTOS__
         *out = &impl->IActivationFactory_iface;
-        IInspectable_AddRef(*(IActivationFactory**)out);
+        IInspectable_AddRef(*(IActivationFactory **)out);
 #else
         IInspectable_AddRef((*out = &impl->IActivationFactory_iface));
 #endif
@@ -105,7 +105,7 @@ static HRESULT WINAPI factory_GetTrustLevel(IActivationFactory *iface, TrustLeve
 {
     struct factory *impl = impl_from_IActivationFactory(iface);
 
-    FIXME("iface %p, trust_level %p stub!\n", iface, trust_level);
+    TRACE("iface %p, trust_level %p.\n", iface, trust_level);
 
     if (!impl->trusted) return E_NOTIMPL;
 
@@ -137,7 +137,6 @@ static struct factory trusted_factory = {{&factory_vtbl}, 0, TRUE};
 
 HRESULT WINAPI DllCanUnloadNow(void)
 {
-    FIXME("stub!\n");
     return S_OK;
 }
 
@@ -145,25 +144,25 @@ HRESULT WINAPI DllGetActivationFactory(HSTRING classid, IActivationFactory **fac
 {
     const WCHAR *buffer = WindowsGetStringRawBuffer(classid, NULL);
 
-    FIXME("class %s, factory %p stub!\n", debugstr_w(buffer), factory);
+    TRACE("class %s, factory %p.\n", debugstr_w(buffer), factory);
 
     if (!wcscmp(buffer, L"Wine.Test.Class"))
     {
 #ifdef __REACTOS__
-         *factory = &class_factory.IActivationFactory_iface;
-         IActivationFactory_AddRef(*factory);
+        *factory = &class_factory.IActivationFactory_iface;
+        IActivationFactory_AddRef(*factory);
 #else
-         IActivationFactory_AddRef((*factory = &class_factory.IActivationFactory_iface));
+        IActivationFactory_AddRef((*factory = &class_factory.IActivationFactory_iface));
 #endif
         return S_OK;
     }
     if (!wcscmp(buffer, L"Wine.Test.Trusted"))
     {
 #ifdef __REACTOS__
-         *factory = &trusted_factory.IActivationFactory_iface;
-         IActivationFactory_AddRef(*factory);
+        *factory = &trusted_factory.IActivationFactory_iface;
+        IActivationFactory_AddRef(*factory);
 #else
-         IActivationFactory_AddRef((*factory = &trusted_factory.IActivationFactory_iface));
+        IActivationFactory_AddRef((*factory = &trusted_factory.IActivationFactory_iface));
 #endif
         return S_OK;
     }

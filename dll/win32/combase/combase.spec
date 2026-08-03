@@ -59,6 +59,9 @@
 @ stub NdrProxyForwardingFunction31
 @ stub NdrProxyForwardingFunction32
 @ stub NdrOleInitializeExtension
+@ stdcall RoFailFastWithErrorContextInternal2(long long ptr)
+@ stub RoFailFastWithErrorContextInternal
+@ stub UpdateProcessTracing
 @ stdcall CLIPFORMAT_UserFree(ptr ptr)
 @ stdcall CLIPFORMAT_UserMarshal(ptr ptr ptr)
 @ stdcall CLIPFORMAT_UserSize(ptr long ptr)
@@ -72,7 +75,7 @@
 @ stub ClearCleanupFlag
 @ stdcall CoAddRefServerProcess()
 @ stub CoAllowUnmarshalerCLSID
-@ stdcall -stub CoCancelCall(long long)
+@ stub CoCancelCall
 @ stdcall CoCopyProxy(ptr ptr)
 @ stdcall CoCreateErrorInfo(ptr) CreateErrorInfo
 @ stdcall CoCreateFreeThreadedMarshaler(ptr ptr)
@@ -85,7 +88,7 @@
 @ stdcall CoDecodeProxy(long int64 ptr)
 @ stdcall CoDecrementMTAUsage(ptr)
 @ stdcall CoDisableCallCancellation(ptr)
-@ stdcall -stub CoDisconnectContext(long)
+@ stub CoDisconnectContext
 @ stdcall CoDisconnectObject(ptr long)
 @ stdcall CoEnableCallCancellation(ptr)
 @ stdcall CoFileTimeNow(ptr)
@@ -97,7 +100,7 @@
 @ stdcall CoGetCallContext(ptr ptr)
 @ stdcall CoGetCallState(long ptr)
 @ stdcall CoGetCallerTID(ptr)
-@ stdcall -stub CoGetCancelObject(long ptr ptr)
+@ stub CoGetCancelObject
 @ stdcall CoGetClassObject(ptr long ptr ptr ptr)
 @ stub CoGetClassVersion
 @ stdcall CoGetContextToken(ptr)
@@ -115,7 +118,7 @@
 @ stdcall CoGetPSClsid(ptr ptr)
 @ stub CoGetProcessIdentifier
 @ stdcall CoGetStandardMarshal(ptr ptr long ptr long ptr)
-@ stdcall -stub CoGetStdMarshalEx(ptr long ptr)
+@ stub CoGetStdMarshalEx
 @ stub CoGetSystemSecurityPermissions
 @ stdcall CoGetTreatAsClass(ptr ptr)
 @ stdcall CoImpersonateClient()
@@ -125,6 +128,7 @@
 @ stdcall CoInitializeWOW(long long)
 @ stub CoInvalidateRemoteMachineBindings
 @ stdcall CoIsHandlerConnected(ptr)
+@ stdcall CoIsOle1Class(ptr)
 @ stdcall CoLockObjectExternal(ptr long long)
 @ stdcall CoMarshalHresult(ptr long)
 @ stdcall CoMarshalInterThreadInterfaceInStream(ptr ptr ptr)
@@ -135,7 +139,7 @@
 @ stdcall CoQueryClientBlanket(ptr ptr ptr ptr ptr ptr ptr)
 @ stdcall CoQueryProxyBlanket(ptr ptr ptr ptr ptr ptr ptr ptr)
 @ stub CoReactivateObject
-@ stub CoRegisterActivationFilter
+@ stdcall CoRegisterActivationFilter(ptr)
 @ stdcall CoRegisterChannelHook(ptr ptr)
 @ stdcall CoRegisterClassObject(ptr ptr long long ptr)
 @ stdcall CoRegisterInitializeSpy(ptr ptr)
@@ -161,6 +165,7 @@
 @ stdcall CoTaskMemFree(ptr)
 @ stdcall CoTaskMemRealloc(ptr long)
 @ stub CoTestCancel
+@ stdcall CoTreatAsClass(ptr ptr)
 @ stdcall CoUninitialize()
 @ stub CoUnloadingWOW
 @ stdcall CoUnmarshalHresult(ptr ptr)
@@ -217,13 +222,13 @@
 @ stdcall HPALETTE_UserMarshal(ptr ptr ptr)
 @ stdcall HPALETTE_UserSize(ptr long ptr)
 @ stdcall HPALETTE_UserUnmarshal(ptr ptr ptr)
-@ stub HSTRING_UserFree
+@ stdcall HSTRING_UserFree(ptr ptr)
 @ stub -arch=win64 HSTRING_UserFree64
-@ stub HSTRING_UserMarshal
+@ stdcall HSTRING_UserMarshal(ptr ptr ptr)
 @ stub -arch=win64 HSTRING_UserMarshal64
-@ stub HSTRING_UserSize
+@ stdcall HSTRING_UserSize(ptr long ptr)
 @ stub -arch=win64 HSTRING_UserSize64
-@ stub HSTRING_UserUnmarshal
+@ stdcall HSTRING_UserUnmarshal(ptr ptr ptr)
 @ stub -arch=win64 HSTRING_UserUnmarshal64
 @ stdcall HWND_UserFree(ptr ptr)
 @ stdcall HWND_UserMarshal(ptr ptr ptr)
@@ -285,15 +290,13 @@
 @ stdcall RoActivateInstance(ptr ptr)
 @ stub RoCaptureErrorContext
 @ stub RoClearError
-@ stub RoFailFastWithErrorContext
-@ stub RoFailFastWithErrorContextInternal
-@ stub RoFailFastWithErrorContextInternal2
+@ stdcall RoFailFastWithErrorContext(long)
 @ stub RoFreeParameterizedTypeExtra
 @ stub RoGetActivatableClassRegistration
 @ stdcall RoGetActivationFactory(ptr ptr ptr)
 @ stdcall RoGetAgileReference(long ptr ptr ptr)
 @ stdcall RoGetApartmentIdentifier(ptr)
-@ stub RoGetErrorReportingFlags
+@ stdcall RoGetErrorReportingFlags(ptr)
 @ stub RoGetMatchingRestrictedErrorInfo
 @ stdcall RoGetParameterizedTypeInstanceIID(long ptr ptr ptr ptr)
 @ stdcall RoGetServerActivatableClasses(ptr ptr ptr)
@@ -308,7 +311,7 @@
 @ stdcall RoRegisterForApartmentShutdown(ptr ptr ptr)
 @ stub RoReportCapabilityCheckFailure
 @ stub RoReportFailedDelegate
-@ stub RoReportUnhandledError
+@ stdcall RoReportUnhandledError(ptr)
 @ stub RoResolveRestrictedErrorInfoReference
 @ stub RoRevokeActivationFactories
 @ stdcall RoSetErrorReportingFlags(long)
@@ -323,7 +326,6 @@
 @ stdcall StringFromGUID2(ptr ptr long)
 @ stdcall StringFromIID(ptr ptr) StringFromCLSID
 @ stub UpdateDCOMSettings
-@ stub UpdateProcessTracing
 @ stdcall WdtpInterfacePointer_UserFree(ptr)
 @ stub -arch=win64 WdtpInterfacePointer_UserFree64
 @ stdcall WdtpInterfacePointer_UserMarshal(ptr long ptr ptr ptr)

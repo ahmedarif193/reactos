@@ -26,6 +26,7 @@ list(APPEND SOURCE
 #   cmdbas.idl
 #   cmdtxt.idl
     comcat.idl
+    comsvcs.idl
     commoncontrols.idl
     control.idl
     cor.idl
