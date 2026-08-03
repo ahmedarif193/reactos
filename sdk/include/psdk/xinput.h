@@ -110,14 +110,17 @@
  * which are being used.
  */
 
-#define XINPUT_DEVTYPE_GAMEPAD          0x01
-#define XINPUT_DEVSUBTYPE_GAMEPAD       0x01
-#define XINPUT_DEVSUBTYPE_WHEEL         0x02
-#define XINPUT_DEVSUBTYPE_ARCADE_STICK  0x03
-#define XINPUT_DEVSUBTYPE_FLIGHT_SICK   0x04
-#define XINPUT_DEVSUBTYPE_DANCE_PAD     0x05
-#define XINPUT_DEVSUBTYPE_GUITAR        0x06
-#define XINPUT_DEVSUBTYPE_DRUM_KIT      0x08
+#define XINPUT_DEVTYPE_GAMEPAD             0x01
+#define XINPUT_DEVSUBTYPE_GAMEPAD          0x01
+#define XINPUT_DEVSUBTYPE_WHEEL            0x02
+#define XINPUT_DEVSUBTYPE_ARCADE_STICK     0x03
+#define XINPUT_DEVSUBTYPE_FLIGHT_STICK     0x04
+#define XINPUT_DEVSUBTYPE_DANCE_PAD        0x05
+#define XINPUT_DEVSUBTYPE_GUITAR           0x06
+#define XINPUT_DEVSUBTYPE_GUITAR_ALTERNATE 0x07
+#define XINPUT_DEVSUBTYPE_DRUM_KIT         0x08
+#define XINPUT_DEVSUBTYPE_GUITAR_BASS      0x0b
+#define XINPUT_DEVSUBTYPE_ARCADE_PAD       0x13
 
 /*
  * These are used with the XInputGetCapabilities function to
@@ -156,6 +159,11 @@
 #define XUSER_MAX_COUNT                 4
 #define XUSER_INDEX_ANY                 0x000000FF
 
+#define XINPUT_CAPS_FFB_SUPPORTED       0x0001
+#define XINPUT_CAPS_WIRELESS            0x0002
+#define XINPUT_CAPS_PMD_SUPPORTED       0x0008
+#define XINPUT_CAPS_NO_NAVIGATION       0x0010
+
 /*
  * Defines the structure of an xbox 360 joystick.
  */
@@ -170,26 +178,10 @@ typedef struct _XINPUT_GAMEPAD {
     SHORT sThumbRY;
 } XINPUT_GAMEPAD, *PXINPUT_GAMEPAD;
 
-typedef struct _XINPUT_GAMEPAD_EX {
-    WORD wButtons;
-    BYTE bLeftTrigger;
-    BYTE bRightTrigger;
-    SHORT sThumbLX;
-    SHORT sThumbLY;
-    SHORT sThumbRX;
-    SHORT sThumbRY;
-    DWORD dwPaddingReserved;
-} XINPUT_GAMEPAD_EX, *PXINPUT_GAMEPAD_EX;
-
 typedef struct _XINPUT_STATE {
     DWORD dwPacketNumber;
     XINPUT_GAMEPAD Gamepad;
 } XINPUT_STATE, *PXINPUT_STATE;
-
-typedef struct _XINPUT_STATE_EX {
-    DWORD dwPacketNumber;
-    XINPUT_GAMEPAD_EX Gamepad;
-} XINPUT_STATE_EX, *PXINPUT_STATE_EX;
 
 /*
  * Defines the structure of how much vibration is set on both the
@@ -218,6 +210,16 @@ typedef struct _XINPUT_CAPABILITIES {
     XINPUT_VIBRATION Vibration;
 } XINPUT_CAPABILITIES, *PXINPUT_CAPABILITIES;
 
+typedef struct _XINPUT_CAPABILITIES_EX
+{
+    XINPUT_CAPABILITIES Capabilities;
+    WORD  VendorId;
+    WORD  ProductId;
+    WORD  VersionNumber;
+    WORD  unk1;
+    DWORD unk2;
+} XINPUT_CAPABILITIES_EX, *PXINPUT_CAPABILITIES_EX;
+
 /*
  * Defines the structure for a joystick input event which is
  * retrieved using the function XInputGetKeystroke
@@ -245,10 +247,11 @@ DWORD WINAPI XInputSetState(DWORD, XINPUT_VIBRATION*);
 DWORD WINAPI XInputGetState(DWORD, XINPUT_STATE*);
 DWORD WINAPI XInputGetKeystroke(DWORD, DWORD, PXINPUT_KEYSTROKE);
 DWORD WINAPI XInputGetCapabilities(DWORD, DWORD, XINPUT_CAPABILITIES*);
+DWORD WINAPI XInputGetCapabilitiesEx(DWORD, DWORD, DWORD, XINPUT_CAPABILITIES_EX*);
 DWORD WINAPI XInputGetDSoundAudioDeviceGuids(DWORD, GUID*, GUID*);
 DWORD WINAPI XInputGetBatteryInformation(DWORD, BYTE, XINPUT_BATTERY_INFORMATION*);
 
-DWORD WINAPI XInputGetStateEx(DWORD, XINPUT_STATE_EX*);
+DWORD WINAPI XInputGetStateEx(DWORD, XINPUT_STATE*);
 
 #ifdef __cplusplus
 }
