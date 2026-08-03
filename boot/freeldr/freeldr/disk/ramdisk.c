@@ -1083,7 +1083,14 @@ FatCopyFileFromIso(
     FileOffset = (ULONGLONG)Record->ExtentLocationL * ISO_SECTOR_SIZE;
     Remaining = Record->DataLengthL;
 
-    if (FileOffset + Remaining > Context->Source->Size)
+    /*
+     * ISO producers may use an out-of-range sentinel extent for empty files.
+     * Since there is no payload to read in that case, only validate extents
+     * for files that actually contain data.
+     */
+    if (Remaining != 0 &&
+        (FileOffset >= Context->Source->Size ||
+         Remaining > Context->Source->Size - FileOffset))
         return FALSE;
 
     if (Remaining > ULONG_MAX)
@@ -3008,11 +3015,11 @@ RamDiskInitialize(
                         RamDiskErrorShown = TRUE;
                     }
                     RamDiskRequestedSize = 0;
-                    TRACE("RamDiskInitialize: continuing with read-only media because writable buffer allocation failed\n");
+                    TRACE("RamDiskInitialize: continuing with read-only media because writable image construction failed\n");
                     RamDiskBase = OriginalBase;
                     RamDiskVolumeOffset = 0;
                     RamDiskVolumeLength = 0;
-                    goto WritableFallback;
+                    goto WritableReady;
                 }
 
                 if ((OriginalBase != gInitRamDiskBase) &&
@@ -3066,8 +3073,6 @@ WritableReady:
     /* Adjust the Ramdisk image length if needed */
     if (!RamDiskImageLength || (RamDiskImageLength > RamDiskFileSize - RamDiskImageOffset))
         RamDiskImageLength = RamDiskFileSize - RamDiskImageOffset;
-
-WritableFallback:
 
     /* Ensure a fresh filesystem mount the next time ramdisk(0) is accessed. */
     if (RamDiskVolumeLength == 0)
