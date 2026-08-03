@@ -121,7 +121,7 @@ RtlWow64IsWowGuestMachineSupported(USHORT machine, BOOLEAN *supported)
     return status;
 }
 
-#ifdef _WIN64
+#if defined(_WIN64) && (!defined(__REACTOS__) || !defined(_M_ARM64))
 
 NTSTATUS
 WINAPI

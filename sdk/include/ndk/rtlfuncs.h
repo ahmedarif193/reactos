@@ -4162,6 +4162,20 @@ RtlZombifyActivationContext(
 // WOW64 Functions
 //
 NTSYSAPI
+USHORT
+NTAPI
+RtlWow64GetCurrentMachine(VOID);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlWow64GetProcessMachines(
+    _In_ HANDLE ProcessHandle,
+    _Out_opt_ PUSHORT ProcessMachine,
+    _Out_opt_ PUSHORT NativeMachine
+);
+
+NTSYSAPI
 NTSTATUS
 NTAPI
 RtlWow64EnableFsRedirection(
