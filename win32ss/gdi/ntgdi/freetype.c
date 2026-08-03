@@ -215,6 +215,7 @@ UNICODE_STRING g_FontRegPath =
 static PFAST_MUTEX      g_FreeTypeLock;
 
 static RTL_STATIC_LIST_HEAD(g_FontListHead);
+static LONG             g_FontInstanceId;
 static BOOL             g_RenderingEnabled = TRUE;
 
 #define ASSERT_FREETYPE_LOCK_HELD() \
@@ -1626,6 +1627,7 @@ IntGdiLoadFontsFromMemory(PGDI_LOAD_FONT pLoadFont,
     }
 
     /* set face */
+    FontGDI->iUnique = InterlockedIncrement(&g_FontInstanceId);
     FontGDI->SharedFace = SharedFace;
     FontGDI->CharSet = ANSI_CHARSET;
     FontGDI->OriginalItalic = FALSE;
@@ -1885,6 +1887,7 @@ IntGdiAddFontResourceSingle(
     HANDLE FileHandle;
     PVOID Buffer = NULL;
     IO_STATUS_BLOCK Iosb;
+    FILE_STANDARD_INFORMATION StandardInfo;
     PVOID SectionObject;
     SIZE_T ViewSize = 0, Length;
     LARGE_INTEGER SectionSize;
@@ -1933,6 +1936,17 @@ IntGdiAddFontResourceSingle(
         return 0;
     }
 
+    Status = ZwQueryInformationFile(FileHandle, &Iosb, &StandardInfo,
+                                    sizeof(StandardInfo), FileStandardInformation);
+    if (!NT_SUCCESS(Status) || StandardInfo.EndOfFile.QuadPart <= 0 ||
+        StandardInfo.EndOfFile.QuadPart > MAXULONG)
+    {
+        DPRINT1("Could not query font file size: %wZ\n", &PathName);
+        ZwClose(FileHandle);
+        RtlFreeUnicodeString(&PathName);
+        return 0;
+    }
+
     Status = ObReferenceObjectByHandle(FileHandle, FILE_READ_DATA, NULL,
                                        KernelMode, (PVOID*)&FileObject, NULL);
     if (!NT_SUCCESS(Status))
@@ -1970,7 +1984,7 @@ IntGdiAddFontResourceSingle(
 
     RtlZeroMemory(&LoadFont, sizeof(LoadFont));
     LoadFont.pFileName          = &PathName;
-    LoadFont.Memory             = SharedMem_Create(Buffer, ViewSize, TRUE);
+    LoadFont.Memory             = SharedMem_Create(Buffer, StandardInfo.EndOfFile.LowPart, TRUE);
     LoadFont.Characteristics    = Characteristics;
     RtlInitUnicodeString(&LoadFont.RegValueName, NULL);
     LoadFont.CharSet            = DEFAULT_CHARSET;
@@ -6411,8 +6425,120 @@ ftGdiRealizationInfo(PFONTGDI Font, PREALIZATION_INFO Info)
             Info->iTechnology = RI_TECH_FIXED;
     }
     Info->iUniq = Font->FontObj.iUniq;
-    Info->dwUnknown = -1;
+    Info->dwUnknown = Font->iUnique;
     return TRUE;
+}
+
+BOOL
+FASTCALL
+ftGdiGetFontRealizationInfo(PFONTGDI Font, PFONT_REALIZATION_INFO Info)
+{
+    REALIZATION_INFO realization;
+
+    ftGdiRealizationInfo(Font, &realization);
+    Info->Flags = realization.iTechnology;
+    Info->CacheNum = realization.iUniq;
+    Info->InstanceId = realization.dwUnknown;
+    Info->FileCount = 1;
+    Info->FaceIndex = Font->SharedFace->Face->face_index & 0xffff;
+    Info->Simulations = 0;
+    if (EMUBOLD_NEEDED(Font->OriginalWeight, Font->RequestWeight))
+        Info->Simulations |= 1;
+    if (Font->RequestItalic && !Font->OriginalItalic)
+        Info->Simulations |= 2;
+    return TRUE;
+}
+
+static PFONTGDI
+FindFontByInstanceIdInList(DWORD InstanceId, PLIST_ENTRY Head)
+{
+    PLIST_ENTRY Entry;
+
+    for (Entry = Head->Flink; Entry != Head; Entry = Entry->Flink)
+    {
+        PFONT_ENTRY FontEntry = CONTAINING_RECORD(Entry, FONT_ENTRY, ListEntry);
+
+        if (FontEntry->Font->iUnique == InstanceId)
+            return FontEntry->Font;
+    }
+    return NULL;
+}
+
+static PFONTGDI
+FindFontByInstanceId(DWORD InstanceId)
+{
+    PPROCESSINFO Process = PsGetCurrentProcessWin32Process();
+    PFONTGDI Font;
+
+    if (Process && (Font = FindFontByInstanceIdInList(InstanceId, &Process->PrivateFontListHead)))
+        return Font;
+    return FindFontByInstanceIdInList(InstanceId, &g_FontListHead);
+}
+
+BOOL
+FASTCALL
+ftGdiGetFontFileInfo(DWORD InstanceId, DWORD FileIndex, PFONT_FILE_INFO Info,
+                     SIZE_T Size, PSIZE_T Needed)
+{
+    PFONTGDI Font;
+    SIZE_T RequiredSize;
+    BOOL Ret = FALSE;
+
+    if (FileIndex)
+        return FALSE;
+
+    IntLockFreeType();
+    if (!(Font = FindFontByInstanceId(InstanceId)))
+        goto done;
+
+    RequiredSize = FIELD_OFFSET(FONT_FILE_INFO, FileName) + sizeof(WCHAR);
+    if (Font->Filename)
+        RequiredSize += wcslen(Font->Filename) * sizeof(WCHAR);
+    if (Needed)
+        *Needed = RequiredSize;
+
+    if (!Info || Size < RequiredSize)
+        goto done;
+
+    RtlZeroMemory(&Info->WriteTime, sizeof(Info->WriteTime));
+    Info->FileSize.QuadPart = Font->SharedFace->Memory->BufferSize;
+    if (Font->Filename)
+        RtlCopyMemory(Info->FileName, Font->Filename,
+                      RequiredSize - FIELD_OFFSET(FONT_FILE_INFO, FileName));
+    else
+        Info->FileName[0] = UNICODE_NULL;
+    Ret = TRUE;
+
+done:
+    IntUnLockFreeType();
+    return Ret;
+}
+
+BOOL
+FASTCALL
+ftGdiGetFontFileData(DWORD InstanceId, DWORD FileIndex, ULONGLONG Offset,
+                     PVOID Buffer, SIZE_T Size)
+{
+    PFONTGDI Font;
+    BOOL Ret = FALSE;
+
+    if (FileIndex)
+        return FALSE;
+
+    IntLockFreeType();
+    if (!(Font = FindFontByInstanceId(InstanceId)))
+        goto done;
+    if (Offset > Font->SharedFace->Memory->BufferSize ||
+        Size > Font->SharedFace->Memory->BufferSize - (SIZE_T)Offset)
+        goto done;
+
+    if (Size)
+        RtlCopyMemory(Buffer, (BYTE *)Font->SharedFace->Memory->Buffer + (SIZE_T)Offset, Size);
+    Ret = TRUE;
+
+done:
+    IntUnLockFreeType();
+    return Ret;
 }
 
 
