@@ -13,7 +13,6 @@ add_library(devenum MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/devenum.def)
 
 add_idl_reg_scripts(devenum registry devenum_classes.idl)
-target_compile_definitions(devenum PRIVATE USE_NEW_WINE_REGISTER_RESOURCES)
 set_module_type(devenum win32dll UNICODE)
 target_link_libraries(devenum dmoguids strmiids uuid wine wine_dll_canunload)
 add_delay_importlibs(devenum msvfw32)
