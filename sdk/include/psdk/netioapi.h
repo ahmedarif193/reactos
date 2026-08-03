@@ -14,40 +14,20 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
- *
- * Mirrored into sdk/include/psdk/ from sdk/include/wine/netioapi.h on the
- * dev-nt6-1 branch so that Win7-level code can see the Vista+ IP Helper v2
- * API surface (MIB_IPINTERFACE_ROW, MIB_UNICASTIPADDRESS_ROW,
- * MIB_IPFORWARD_ROW2, MIB_IPNET_ROW2 and the associated Convert, Get and
- * Notify function families). The previous PSDK stub only exposed MIB_IF_ROW2
- * behind an _WS2IPDEF_ include-order trick; this version is self-contained
- * via the explicit prerequisite includes below.
  */
 
-#ifndef _NETIOAPI_H_
-#define _NETIOAPI_H_
+#ifndef __WINE_NETIOAPI_H
+#define __WINE_NETIOAPI_H
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-/*
- * The body below requires winsock2-era types (SOCKADDR_INET, ADDRESS_FAMILY,
- * etc.) and therefore cannot coexist with the legacy winsock.h 1.x view. We
- * gate on _WS2IPDEF_ (the include-guard macro of ws2ipdef.h) so that callers
- * who already pulled in <winsock2.h> / <ws2ipdef.h> see the declarations,
- * while callers who use the legacy <winsock.h> path get an empty header and
- * don't suffer struct sockaddr / ip_mreq redefinitions. This matches the
- * pre-existing behaviour of the ReactOS PSDK stub that lived here before.
- */
-#ifdef _WS2IPDEF_
-
-#include <ifdef.h>        /* NET_LUID, NET_IFINDEX, IFTYPE, TUNNEL_TYPE, NET_IF_*, SCOPE_ID, ScopeLevelCount */
-#include <ntddndis.h>     /* NDIS_MEDIUM, NDIS_PHYSICAL_MEDIUM */
-#include <nldef.h>        /* NL_ROUTE_PROTOCOL/ORIGIN, NL_DAD_STATE, NL_INTERFACE_OFFLOAD_ROD, ... */
+#include <ntddndis.h>
 
 #ifndef IPHLPAPI_DLL_LINKAGE
-#define IPHLPAPI_DLL_LINKAGE    /* import decoration handled by the .spec link stubs */
+#if defined(__REACTOS__) && defined(__GNUC__)
+/* FIXME: CORE-6504 */
+#define IPHLPAPI_DLL_LINKAGE
+#else
+#define IPHLPAPI_DLL_LINKAGE DECLSPEC_IMPORT
+#endif
 #endif
 
 #ifndef ANY_SIZE
@@ -294,6 +274,9 @@ IPHLPAPI_DLL_LINKAGE DWORD WINAPI ConvertInterfaceNameToLuidW(const WCHAR*,NET_L
 IPHLPAPI_DLL_LINKAGE DWORD WINAPI ConvertLengthToIpv4Mask(ULONG,ULONG*);
 IPHLPAPI_DLL_LINKAGE void WINAPI FreeMibTable(void*);
 IPHLPAPI_DLL_LINKAGE DWORD WINAPI GetAnycastIpAddressTable(ADDRESS_FAMILY,MIB_ANYCASTIPADDRESS_TABLE**);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI GetBestRoute2(NET_LUID *luid, NET_IFINDEX index, const SOCKADDR_INET *source,
+                                                const SOCKADDR_INET *destination, ULONG options,
+                                                PMIB_IPFORWARD_ROW2 bestroute, SOCKADDR_INET *bestaddress);
 IPHLPAPI_DLL_LINKAGE NET_IF_COMPARTMENT_ID WINAPI GetCurrentThreadCompartmentId(void);
 IPHLPAPI_DLL_LINKAGE DWORD WINAPI GetIfEntry2(MIB_IF_ROW2*);
 IPHLPAPI_DLL_LINKAGE DWORD WINAPI GetIfEntry2Ex(MIB_IF_TABLE_LEVEL,MIB_IF_ROW2*);
@@ -301,6 +284,7 @@ IPHLPAPI_DLL_LINKAGE DWORD WINAPI GetIfTable2(MIB_IF_TABLE2**);
 IPHLPAPI_DLL_LINKAGE DWORD WINAPI GetIfTable2Ex(MIB_IF_TABLE_LEVEL,MIB_IF_TABLE2**);
 IPHLPAPI_DLL_LINKAGE DWORD WINAPI GetIpForwardEntry2(MIB_IPFORWARD_ROW2*);
 IPHLPAPI_DLL_LINKAGE DWORD WINAPI GetIpForwardTable2(ADDRESS_FAMILY,MIB_IPFORWARD_TABLE2**);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI GetIpInterfaceEntry(MIB_IPINTERFACE_ROW*);
 IPHLPAPI_DLL_LINKAGE DWORD WINAPI GetIpInterfaceTable(ADDRESS_FAMILY,MIB_IPINTERFACE_TABLE**);
 IPHLPAPI_DLL_LINKAGE DWORD WINAPI GetIpNetEntry2(MIB_IPNET_ROW2*);
 IPHLPAPI_DLL_LINKAGE DWORD WINAPI GetIpNetTable2(ADDRESS_FAMILY,MIB_IPNET_TABLE2**);
@@ -310,10 +294,4 @@ IPHLPAPI_DLL_LINKAGE DWORD WINAPI SetCurrentThreadCompartmentId(NET_IF_COMPARTME
 IPHLPAPI_DLL_LINKAGE PCHAR WINAPI if_indextoname(NET_IFINDEX,PCHAR);
 IPHLPAPI_DLL_LINKAGE NET_IFINDEX WINAPI if_nametoindex(PCSTR);
 
-#endif /* _WS2IPDEF_ */
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif /* _NETIOAPI_H_ */
+#endif /* __WINE_NETIOAPI_H */
