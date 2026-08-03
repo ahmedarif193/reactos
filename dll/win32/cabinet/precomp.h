@@ -8,6 +8,7 @@
 #define _INC_WINDOWS
 #define COM_NO_WINDOWS_H
 
+#include <limits.h>
 #include "cabinet.h"
 
 #include <wine/debug.h>

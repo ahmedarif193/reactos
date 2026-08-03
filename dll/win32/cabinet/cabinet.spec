@@ -1,7 +1,7 @@
-1 stdcall -private GetDllVersion()
-2 stdcall -private DllGetVersion (ptr)
+1 stub GetDllVersion
+2 stdcall -private DllGetVersion(ptr) cabinet_DllGetVersion
 3 stdcall Extract(ptr str)
-4 stdcall -private DeleteExtractedFiles(ptr)
+4 stub DeleteExtractedFiles
 10 cdecl FCICreate(ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr)
 11 cdecl FCIAddFile(long ptr ptr long ptr ptr ptr long)
 12 cdecl FCIFlushFolder(long ptr ptr)
@@ -12,3 +12,9 @@
 22 cdecl FDICopy(long ptr ptr long ptr ptr ptr)
 23 cdecl FDIDestroy(long)
 24 cdecl FDITruncateCabinet(long ptr long)
+30 stdcall CreateCompressor(long ptr ptr)
+33 stdcall Compress(ptr ptr long ptr long ptr)
+35 stdcall CloseCompressor(ptr)
+40 stdcall CreateDecompressor(long ptr ptr)
+43 stdcall Decompress(ptr ptr long ptr long ptr)
+45 stdcall CloseDecompressor(ptr)
