@@ -594,7 +594,7 @@ RegisterTypeLibraries(
             continue;
         }
 
-        __wine_register_resources(hmod);
+        __wine_register_resources_module(hmod);
 
         if (pItemsData && pNotify)
         {

@@ -1,6 +1,4 @@
 
-add_definitions(-DUSE_NEW_WINE_REGISTER_RESOURCES)
-
 spec2def(mscoree.dll mscoree.spec)
 
 list(APPEND SOURCE

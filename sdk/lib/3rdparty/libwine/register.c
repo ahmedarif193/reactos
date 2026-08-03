@@ -8,6 +8,14 @@
  * License as published by the Free Software Foundation; either
  * version 2.1 of the License, or (at your option) any later version.
  *
+ * In addition to the permissions in the GNU Lesser General Public License,
+ * the authors give you unlimited permission to link the compiled version
+ * of this file with other programs, and to distribute those programs
+ * without any restriction coming from the use of this file.  (The GNU
+ * Lesser General Public License restrictions do apply in other respects;
+ * for example, they cover modification of the file, and distribution when
+ * not linked into another program.)
+ *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
@@ -18,7 +26,6 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include "config.h"
 #include <stdarg.h>
 
 #define COBJMACROS
@@ -32,7 +39,7 @@
 
 static inline void *image_base(void)
 {
-#if defined(__MINGW32__) || defined(_MSC_VER)
+#ifdef __WINE_PE_BUILD
     extern IMAGE_DOS_HEADER __ImageBase;
     return (void *)&__ImageBase;
 #else
@@ -109,33 +116,7 @@ static BOOL CALLBACK register_resource( HMODULE module, LPCWSTR type, LPWSTR nam
     return SUCCEEDED(info->result);
 }
 
-HRESULT __wine_register_resources( HMODULE module )
-{
-    struct reg_info info;
-
-    info.registrar = NULL;
-    info.do_register = TRUE;
-    info.result = S_OK;
-    EnumResourceNamesW( module, regtypeW, register_resource, (LONG_PTR)&info );
-    if (info.registrar) IRegistrar_Release( info.registrar );
-    return info.result;
-}
-
-HRESULT __wine_unregister_resources( HMODULE module )
-{
-    struct reg_info info;
-
-    info.registrar = NULL;
-    info.do_register = FALSE;
-    info.result = S_OK;
-    EnumResourceNamesW( module, regtypeW, register_resource, (LONG_PTR)&info );
-    if (info.registrar) IRegistrar_Release( info.registrar );
-    return info.result;
-}
-
-// FIXME: Workaround until all modules use the new prototype
-// See rpcproxy.h
-HRESULT __cdecl __wine_register_resources_new(void)
+HRESULT __cdecl __wine_register_resources(void)
 {
     struct reg_info info;
 
@@ -147,7 +128,7 @@ HRESULT __cdecl __wine_register_resources_new(void)
     return info.result;
 }
 
-HRESULT __cdecl __wine_unregister_resources_new(void)
+HRESULT __cdecl __wine_unregister_resources(void)
 {
     struct reg_info info;
 
@@ -158,3 +139,17 @@ HRESULT __cdecl __wine_unregister_resources_new(void)
     if (info.registrar) IRegistrar_Release( info.registrar );
     return info.result;
 }
+
+#ifdef __REACTOS__
+HRESULT __cdecl __wine_register_resources_module(HMODULE module)
+{
+    struct reg_info info;
+
+    info.registrar = NULL;
+    info.do_register = TRUE;
+    info.result = S_OK;
+    EnumResourceNamesW( module, regtypeW, register_resource, (LONG_PTR)&info );
+    if (info.registrar) IRegistrar_Release( info.registrar );
+    return info.result;
+}
+#endif

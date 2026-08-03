@@ -186,14 +186,10 @@ RPCRTAPI HRESULT RPC_ENTRY
 RPCRTAPI HRESULT RPC_ENTRY
   NdrDllUnregisterProxy( HMODULE hDll, const ProxyFileInfo **pProxyFileList, const CLSID *pclsid );
 
-#ifdef USE_NEW_WINE_REGISTER_RESOURCES // This needs a global fix. See wine git rev 1331a8e.
-#define __wine_register_resources __wine_register_resources_new
-#define __wine_unregister_resources __wine_unregister_resources_new
 HRESULT __cdecl __wine_register_resources(void);
 HRESULT __cdecl __wine_unregister_resources(void);
-#else
-HRESULT __cdecl __wine_register_resources( HMODULE module );
-HRESULT __cdecl __wine_unregister_resources( HMODULE module );
+#ifdef __REACTOS__
+HRESULT __cdecl __wine_register_resources_module(HMODULE module);
 #endif
 
 #define CSTDSTUBBUFFERRELEASE(pFactory) \
@@ -278,13 +274,8 @@ ULONG WINAPI CStdStubBuffer2_Release(IRpcStubBuffer *This) \
 #endif
 
 #ifdef WINE_REGISTER_DLL
-#ifdef USE_NEW_WINE_REGISTER_RESOURCES
 # define WINE_DO_REGISTER_DLL(pfl, clsid) return __wine_register_resources()
 # define WINE_DO_UNREGISTER_DLL(pfl, clsid) return __wine_unregister_resources()
-#else
-# define WINE_DO_REGISTER_DLL(pfl, clsid) return __wine_register_resources( hProxyDll )
-# define WINE_DO_UNREGISTER_DLL(pfl, clsid) return __wine_unregister_resources( hProxyDll )
-#endif
 #else
 # define WINE_DO_REGISTER_DLL(pfl, clsid)   return NdrDllRegisterProxy( hProxyDll, (pfl), (clsid) )
 # define WINE_DO_UNREGISTER_DLL(pfl, clsid) return NdrDllUnregisterProxy( hProxyDll, (pfl), (clsid) )

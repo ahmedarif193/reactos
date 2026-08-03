@@ -105,8 +105,8 @@ void free_sinks(struct list *sink_list);
 #define szwSystemTIPKey L"SOFTWARE\\Microsoft\\CTF\\TIP"
 #define szwSystemCTFKey L"SOFTWARE\\Microsoft\\CTF"
 
-HRESULT __wine_register_resources(HMODULE module);
-HRESULT __wine_unregister_resources(HMODULE module);
+HRESULT __wine_register_resources(void);
+HRESULT __wine_unregister_resources(void);
 
 BOOL ProcessAttach(HINSTANCE hinstDLL);
 VOID ProcessDetach(HINSTANCE hinstDLL);

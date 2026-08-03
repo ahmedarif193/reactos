@@ -108,7 +108,7 @@ HRESULT WINAPI DllRegisterServer(void)
 {
     TRACE("\n");
     SHDOCVW_DllRegisterServer();
-    return __wine_register_resources(instance);
+    return __wine_register_resources();
 }
 
 /***********************************************************************
@@ -118,7 +118,7 @@ HRESULT WINAPI DllUnregisterServer(void)
 {
     TRACE("\n");
     SHDOCVW_DllUnregisterServer();
-    return __wine_unregister_resources(instance);
+    return __wine_unregister_resources();
 }
 #endif
 
