@@ -61,6 +61,7 @@ list(APPEND SOURCE
     eventtoken.idl
     exdisp.idl
     fusion.idl
+    gameinput.idl
     hlink.idl
     hstring.idl
     htiface.idl
@@ -155,10 +156,24 @@ list(APPEND SOURCE
     wbemcli.idl
     wbemdisp.idl
     wbemprov.idl
+    weakreference.idl
     wia_lh.idl
     wia_xp.idl
+    windows.devices.geolocation.idl
+    windows.devices.haptics.idl
+    windows.devices.power.idl
     windows.foundation.collections.idl
     windows.foundation.idl
+    windows.foundation.numerics.idl
+    windows.gaming.input.custom.idl
+    windows.gaming.input.forcefeedback.idl
+    windows.gaming.input.idl
+    windows.storage.fileproperties.idl
+    windows.storage.idl
+    windows.storage.search.idl
+    windows.storage.streams.idl
+    windows.system.idl
+    windows.system.power.idl
     windowscontracts.idl
     wincodec.idl
     wincodecsdk.idl

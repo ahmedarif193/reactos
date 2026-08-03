@@ -85,6 +85,8 @@ typedef enum _HID_STRING_TYPE
 	HID_STRING_MAX
 } HID_STRING_TYPE;
 
+#ifdef NT_INCLUDED
+
 enum DeviceObjectState {
   DeviceObjectStarted = 0,
   DeviceObjectStopped,
@@ -101,20 +103,6 @@ typedef NTSTATUS
 (NTAPI *PHIDP_GETCAPS)(
   _In_ PHIDP_PREPARSED_DATA PreparsedData,
   _Out_ PHIDP_CAPS Capabilities);
-
-typedef struct _HID_COLLECTION_INFORMATION {
-  ULONG  DescriptorSize;
-  BOOLEAN  Polled;
-  UCHAR  Reserved1[1];
-  USHORT  VendorID;
-  USHORT  ProductID;
-  USHORT  VersionNumber;
-} HID_COLLECTION_INFORMATION, *PHID_COLLECTION_INFORMATION;
-
-typedef struct _HID_DRIVER_CONFIG {
-  ULONG  Size;
-  ULONG  RingBufferSize;
-} HID_DRIVER_CONFIG, *PHID_DRIVER_CONFIG;
 
 typedef struct _HID_INTERFACE_HIDPARSE {
 #ifdef __cplusplus
@@ -146,6 +134,22 @@ typedef struct _HID_INTERFACE_NOTIFY_PNP {
   PHID_STATUS_CHANGE  StatusChangeFn;
   PVOID  CallbackContext;
 } HID_INTERFACE_NOTIFY_PNP, *PHID_INTERFACE_NOTIFY_PNP;
+
+#endif /* NT_INCLUDED */
+
+typedef struct _HID_COLLECTION_INFORMATION {
+  ULONG  DescriptorSize;
+  BOOLEAN  Polled;
+  UCHAR  Reserved1[1];
+  USHORT  VendorID;
+  USHORT  ProductID;
+  USHORT  VersionNumber;
+} HID_COLLECTION_INFORMATION, *PHID_COLLECTION_INFORMATION;
+
+typedef struct _HID_DRIVER_CONFIG {
+  ULONG  Size;
+  ULONG  RingBufferSize;
+} HID_DRIVER_CONFIG, *PHID_DRIVER_CONFIG;
 
 typedef struct _HID_XFER_PACKET {
   PUCHAR  reportBuffer;

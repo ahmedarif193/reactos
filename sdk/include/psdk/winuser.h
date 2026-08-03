@@ -4073,7 +4073,7 @@ typedef struct tagRAWKEYBOARD {
 typedef struct tagRAWHID {
 	DWORD dwSizeHid;
 	DWORD dwCount;
-	BYTE bRawData;
+	BYTE bRawData[1];
 } RAWHID,*PRAWHID,*LPRAWHID;
 
 typedef struct tagRAWINPUT {
@@ -4093,6 +4093,9 @@ typedef struct tagRAWINPUTDEVICE {
 } RAWINPUTDEVICE,*PRAWINPUTDEVICE,*LPRAWINPUTDEVICE;
 
 typedef const RAWINPUTDEVICE *PCRAWINPUTDEVICE;
+
+#define RAWINPUT_ALIGN(x) (((x) + sizeof(DWORD_PTR) - 1) & ~(sizeof(DWORD_PTR) - 1))
+#define NEXTRAWINPUTBLOCK(ptr) ((PRAWINPUT)RAWINPUT_ALIGN((ULONG_PTR)((PBYTE)(ptr) + (ptr)->header.dwSize)))
 
 typedef struct tagRAWINPUTDEVICELIST {
 	HANDLE hDevice;
@@ -5001,6 +5004,9 @@ HWND WINAPI GetNextDlgTabItem(_In_ HWND, _In_opt_ HWND, _In_ BOOL);
 #define GetNextWindow(h,c) GetWindow(h,c)
 HWND WINAPI GetOpenClipboardWindow(void);
 HWND WINAPI GetParent(_In_ HWND);
+#if (WINVER >= 0x0602)
+BOOL WINAPI GetPointerType(_In_ UINT32, _Out_ POINTER_INPUT_TYPE*);
+#endif
 
 int
 WINAPI
