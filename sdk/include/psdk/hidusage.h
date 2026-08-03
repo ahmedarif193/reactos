@@ -1,25 +1,20 @@
 /*
- * hidusage.h
+ * Copyright (C) 2015 Austin English
  *
- * HID usages
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  *
- * This file is part of the w32api package.
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
  *
- * Contributors:
- *   Created by Casper S. Hornstrup <chorns@users.sourceforge.net>
- *
- * THIS SOFTWARE IS NOT COPYRIGHTED
- *
- * This source code is offered for use in the public domain. You may
- * use, modify or distribute it freely.
- *
- * This code is distributed in the hope that it will be useful but
- * WITHOUT ANY WARRANTY. ALL WARRANTIES, EXPRESS OR IMPLIED ARE HEREBY
- * DISCLAIMED. This includes but is not limited to warranties of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
- *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
-
 #ifndef __HIDUSAGE_H
 #define __HIDUSAGE_H
 
@@ -29,12 +24,30 @@ extern "C" {
 
 typedef USHORT USAGE, *PUSAGE;
 
+#define HID_USAGE_CONSUMERCTRL                   ((USAGE) 0x01)
+
+#define HID_USAGE_CONSUMER_VOLUME                ((USAGE) 0xE0)
+
+#define HID_USAGE_DIGITIZER_PEN                  ((USAGE) 0x02)
+#define HID_USAGE_DIGITIZER_TOUCH_SCREEN         ((USAGE) 0x04)
+#define HID_USAGE_DIGITIZER_TOUCH_PAD            ((USAGE) 0x05)
+#define HID_USAGE_DIGITIZER_FINGER               ((USAGE) 0x22)
+#define HID_USAGE_DIGITIZER_TIP_PRESSURE         ((USAGE) 0x30)
+#define HID_USAGE_DIGITIZER_IN_RANGE             ((USAGE) 0x32)
+#define HID_USAGE_DIGITIZER_X_TILT               ((USAGE) 0x3D)
+#define HID_USAGE_DIGITIZER_Y_TILT               ((USAGE) 0x3E)
+#define HID_USAGE_DIGITIZER_AZIMUTH              ((USAGE) 0x3F)
+#define HID_USAGE_DIGITIZER_TIP_SWITCH           ((USAGE) 0x42)
+#define HID_USAGE_DIGITIZER_BARREL_SWITCH        ((USAGE) 0x44)
+#define HID_USAGE_DIGITIZER_CONFIDENCE           ((USAGE) 0x47)
+
 #define HID_USAGE_GENERIC_POINTER             ((USAGE) 0x01)
 #define HID_USAGE_GENERIC_MOUSE               ((USAGE) 0x02)
 #define HID_USAGE_GENERIC_JOYSTICK            ((USAGE) 0x04)
 #define HID_USAGE_GENERIC_GAMEPAD             ((USAGE) 0x05)
 #define HID_USAGE_GENERIC_KEYBOARD            ((USAGE) 0x06)
 #define HID_USAGE_GENERIC_KEYPAD              ((USAGE) 0x07)
+#define HID_USAGE_GENERIC_MULTI_AXIS_CONTROLLER ((USAGE) 0x08)
 #define HID_USAGE_GENERIC_SYSTEM_CTL          ((USAGE) 0x80)
 #define HID_USAGE_GENERIC_X                   ((USAGE) 0x30)
 #define HID_USAGE_GENERIC_Y                   ((USAGE) 0x31)
@@ -185,27 +198,68 @@ typedef USHORT USAGE, *PUSAGE;
 #define HID_USAGE_PAGE_TELEPHONY          ((USAGE) 0x0B)
 #define HID_USAGE_PAGE_CONSUMER           ((USAGE) 0x0C)
 #define HID_USAGE_PAGE_DIGITIZER          ((USAGE) 0x0D)
+#define HID_USAGE_PAGE_HAPTICS            ((USAGE) 0x0E)
+#define HID_USAGE_PAGE_PID                ((USAGE) 0x0F)
 #define HID_USAGE_PAGE_UNICODE            ((USAGE) 0x10)
 #define HID_USAGE_PAGE_ALPHANUMERIC       ((USAGE) 0x14)
+#define HID_USAGE_PAGE_VENDOR_DEFINED_BEGIN ((USAGE) 0xff00)
+#define HID_USAGE_PAGE_VENDOR_DEFINED_END   ((USAGE) 0xffff)
 
-#define HID_USAGE_TELEPHONY_PHONE               ((USAGE) 0x01)
-#define HID_USAGE_TELEPHONY_ANSWERING_MACHINE   ((USAGE) 0x02)
-#define HID_USAGE_TELEPHONY_MESSAGE_CONTROLS    ((USAGE) 0x03)
-#define HID_USAGE_TELEPHONY_HANDSET             ((USAGE) 0x04)
-#define HID_USAGE_TELEPHONY_HEADSET             ((USAGE) 0x05)
-#define HID_USAGE_TELEPHONY_KEYPAD              ((USAGE) 0x06)
-#define HID_USAGE_TELEPHONY_PROGRAMMABLE_BUTTON ((USAGE) 0x07)
-
+#define HID_USAGE_SIMULATION_FLIGHT_SIMULATION_DEVICE          ((USAGE) 0x01)
+#define HID_USAGE_SIMULATION_AUTOMOBILE_SIMULATION_DEVICE      ((USAGE) 0x02)
 #define HID_USAGE_SIMULATION_RUDDER       ((USAGE) 0xBA)
 #define HID_USAGE_SIMULATION_THROTTLE     ((USAGE) 0xBB)
+#define HID_USAGE_SIMULATION_ACCELERATOR  ((USAGE) 0xC4)
+#define HID_USAGE_SIMULATION_BRAKE        ((USAGE) 0xC5)
+#define HID_USAGE_SIMULATION_CLUTCH       ((USAGE) 0xC6)
+#define HID_USAGE_SIMULATION_STEERING     ((USAGE) 0xC8)
 
+#define HID_USAGE_TELEPHONY_PHONE                ((USAGE) 0x01)
+#define HID_USAGE_TELEPHONY_ANSWERING_MACHINE    ((USAGE) 0x02)
+#define HID_USAGE_TELEPHONY_MESSAGE_CONTROLS     ((USAGE) 0x03)
+#define HID_USAGE_TELEPHONY_HANDSET              ((USAGE) 0x04)
+#define HID_USAGE_TELEPHONY_HEADSET              ((USAGE) 0x05)
+#define HID_USAGE_TELEPHONY_KEYPAD               ((USAGE) 0x06)
+#define HID_USAGE_TELEPHONY_PROGRAMMABLE_BUTTON  ((USAGE) 0x07)
+#define HID_USAGE_TELEPHONY_REDIAL               ((USAGE) 0x24)
+#define HID_USAGE_TELEPHONY_TRANSFER             ((USAGE) 0x25)
+#define HID_USAGE_TELEPHONY_DROP                 ((USAGE) 0x26)
+#define HID_USAGE_TELEPHONY_LINE                 ((USAGE) 0x2A)
+#define HID_USAGE_TELEPHONY_RING_ENABLE          ((USAGE) 0x2D)
+#define HID_USAGE_TELEPHONY_SEND                 ((USAGE) 0x31)
+#define HID_USAGE_TELEPHONY_KEYPAD_0             ((USAGE) 0xB0)
+#define HID_USAGE_TELEPHONY_KEYPAD_D             ((USAGE) 0xBF)
+#define HID_USAGE_TELEPHONY_HOST_AVAILABLE       ((USAGE) 0xF1)
 
-#define HID_USAGE_CONSUMERCTRL          ((USAGE)0x01)
-#define HID_USAGE_DIGITIZER_PEN         ((USAGE)0x02)
-#define HID_USAGE_DIGITIZER_IN_RANGE    ((USAGE)0x32)
-#define HID_USAGE_DIGITIZER_TIP_SWITCH  ((USAGE)0x42)
-#define HID_USAGE_DIGITIZER_BARREL_SWITCH ((USAGE)0x44)
+#define HID_USAGE_HAPTICS_SIMPLE_CONTROLLER         ((USAGE) 0x01)
+#define HID_USAGE_HAPTICS_WAVEFORM_LIST             ((USAGE) 0x10)
+#define HID_USAGE_HAPTICS_DURATION_LIST             ((USAGE) 0x11)
+#define HID_USAGE_HAPTICS_AUTO_TRIGGER              ((USAGE) 0x20)
+#define HID_USAGE_HAPTICS_MANUAL_TRIGGER            ((USAGE) 0x21)
+#define HID_USAGE_HAPTICS_AUTO_ASSOCIATED_CONTROL   ((USAGE) 0x22)
+#define HID_USAGE_HAPTICS_INTENSITY                 ((USAGE) 0x23)
+#define HID_USAGE_HAPTICS_REPEAT_COUNT              ((USAGE) 0x24)
+#define HID_USAGE_HAPTICS_RETRIGGER_PERIOD          ((USAGE) 0x25)
+#define HID_USAGE_HAPTICS_WAVEFORM_VENDOR_PAGE      ((USAGE) 0x26)
+#define HID_USAGE_HAPTICS_WAVEFORM_VENDOR_ID        ((USAGE) 0x27)
+#define HID_USAGE_HAPTICS_WAVEFORM_CUTOFF_TIME      ((USAGE) 0x28)
+#define HID_USAGE_HAPTICS_WAVEFORM_BEGIN            ((USAGE) 0x1000)
+/* Differs from https://usb.org/sites/default/files/hut1_22.pdf */
+/* Waveform None */
+#define HID_USAGE_HAPTICS_WAVEFORM_STOP             ((USAGE) 0x1001)
+/* Waveform Stop */
+#define HID_USAGE_HAPTICS_WAVEFORM_NULL             ((USAGE) 0x1002)
+#define HID_USAGE_HAPTICS_WAVEFORM_CLICK            ((USAGE) 0x1003)
+#define HID_USAGE_HAPTICS_WAVEFORM_BUZZ             ((USAGE) 0x1004)
+#define HID_USAGE_HAPTICS_WAVEFORM_RUMBLE           ((USAGE) 0x1005)
+#define HID_USAGE_HAPTICS_WAVEFORM_PRESS            ((USAGE) 0x1006)
+#define HID_USAGE_HAPTICS_WAVEFORM_RELEASE          ((USAGE) 0x1007)
+#define HID_USAGE_HAPTICS_WAVEFORM_END              ((USAGE) 0x1FFF)
+#define HID_USAGE_HAPTICS_WAVEFORM_VENDOR_BEGIN     ((USAGE) 0x2000)
+#define HID_USAGE_HAPTICS_WAVEFORM_VENDOR_END       ((USAGE) 0x2FFF)
 
+#define HID_USAGE_MS_BTH_HF_DIALNUMBER           ((USAGE) 0x21)
+#define HID_USAGE_MS_BTH_HF_DIALMEMORY           ((USAGE) 0x22)
 
 #ifdef __cplusplus
 }

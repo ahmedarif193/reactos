@@ -204,6 +204,7 @@ list(APPEND SOURCE
 #    cluscfgguids.c
     cmdtreeiid.c
     ctffunc_g.c
+    devpkey.c
 #    ctfspui_g.c
 #    hnclsid.c
     ieguids.c
