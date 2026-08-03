@@ -488,9 +488,9 @@
 @ stub -version=0x600+ SHCreateDefaultPropertiesOp # Vista:327
 @ stdcall SHCreateDirectoryExA(long str ptr) # 2k3:278, Vista:328
 @ stdcall SHCreateDirectoryExW(long wstr ptr) # 2k3:279, Vista:329
-@ stub -version=0x600+ SHCreateItemFromIDList # Vista:330
-@ stub -version=0x600+ SHCreateItemFromParsingName # Vista:331
-@ stub -version=0x600+ SHCreateItemFromRelativeName # Vista:332
+@ stdcall -version=0x600+ SHCreateItemFromIDList(ptr ptr ptr) # Vista:330
+@ stdcall -version=0x600+ SHCreateItemFromParsingName(wstr ptr ptr ptr) # Vista:331
+@ stdcall -version=0x600+ SHCreateItemFromRelativeName(ptr wstr ptr ptr ptr) # Vista:332
 @ stub -version=0x600+ SHCreateItemInKnownFolder # Vista:333
 @ stub -version=0x600+ SHCreateItemWithParent # Vista:334
 @ stub SHCreateLocalServerRunDll # 2k3:280, Vista:335
@@ -529,6 +529,7 @@
 @ stub -version=0x600+ SHGetFolderPathEx # Vista:368
 @ stdcall SHGetFolderPathW(long long long long ptr) # 2k3:307, Vista:369
 @ stdcall -version=0x600+ SHGetIDListFromObject(ptr ptr) # Vista:370
+@ stdcall -version=0x600+ SHGetItemFromObject(ptr ptr ptr)
 @ stdcall SHGetIconOverlayIndexA(str long) # 2k3:308, Vista:371
 @ stdcall SHGetIconOverlayIndexW(wstr long) # 2k3:309, Vista:372
 @ stdcall SHGetInstanceExplorer(long) shcore.GetProcessReference # 2k3:310, Vista:373
