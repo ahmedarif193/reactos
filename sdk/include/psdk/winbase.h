@@ -2424,6 +2424,9 @@ BOOL WINAPI IsValidSid(PSID);
 BOOL WINAPI IsWellKnownSid(PSID,WELL_KNOWN_SID_TYPE);
 BOOL WINAPI IsWow64Process(HANDLE,PBOOL);
 #endif
+#if (_WIN32_WINNT >= 0x0A00)
+BOOL WINAPI IsWow64Process2(HANDLE,PUSHORT,PUSHORT);
+#endif
 void WINAPI LeaveCriticalSection(LPCRITICAL_SECTION);
 #define LimitEmsPages(n)
 _Ret_maybenull_ HINSTANCE WINAPI LoadLibraryA(_In_ LPCSTR);
