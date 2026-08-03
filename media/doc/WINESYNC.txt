@@ -200,7 +200,7 @@ dll/win32/snmpapi             # Synced to Wine-11.14
 dll/win32/softpub             # Synced to Wine-11.14
 dll/win32/stdole2.tlb         # Synced to Wine-11.14
 dll/win32/stdole32.tlb        # Synced to Wine-11.14
-dll/win32/sti                 # Synced to WineStaging-4.18
+dll/win32/sti                 # Synced to Wine-11.14
 dll/win32/sxs                 # Synced to WineStaging-4.18
 dll/win32/t2embed             # Synced to Wine-11.14
 dll/win32/tapi32              # Synced to WineStaging-4.18
