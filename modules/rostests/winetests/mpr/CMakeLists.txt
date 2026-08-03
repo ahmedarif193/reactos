@@ -1,7 +1,5 @@
 
-add_definitions(
-    -DUSE_WINE_TODOS
-    -D_WINE)
+add_definitions(-D_WINE)
 
 add_executable(mpr_winetest mpr.c testlist.c)
 set_module_type(mpr_winetest win32cui)
