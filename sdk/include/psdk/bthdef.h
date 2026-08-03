@@ -453,6 +453,21 @@ typedef struct _BTH_HCI_EVENT_INFO {
   UCHAR    connected;
 } BTH_HCI_EVENT_INFO, *PBTH_HCI_EVENT_INFO;
 
+typedef enum _AUTHENTICATION_REQUIREMENTS {
+  MITMProtectionNotRequired = 0x00,
+  MITMProtectionRequired = 0x01,
+  MITMProtectionNotRequiredBonding = 0x02,
+  MITMProtectionRequiredBonding = 0x03,
+  MITMProtectionNotRequiredGeneralBonding = 0x04,
+  MITMProtectionRequiredGeneralBonding = 0x05,
+  MITMProtectionNotDefined = 0xff
+} AUTHENTICATION_REQUIREMENTS;
+
+#define IsMITMProtectionRequired(requirements) \
+  ((MITMProtectionRequired == (requirements)) || \
+   (MITMProtectionRequiredBonding == (requirements)) || \
+   (MITMProtectionRequiredGeneralBonding == (requirements)))
+
 #define MAX_UUIDS_IN_QUERY 12
 #define BTH_VID_DEFAULT_VALUE 0xFFFF
 
