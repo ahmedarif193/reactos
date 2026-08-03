@@ -5,6 +5,8 @@
 #include <config.h>
 
 #include <stdarg.h>
+#include <stdlib.h>
+#include <wchar.h>
 
 #define WIN32_NO_STATUS
 #include <windef.h>
