@@ -9,7 +9,7 @@ list(APPEND SOURCE
 
 add_library(msftedit MODULE ${SOURCE})
 set_module_type(msftedit win32dll)
-target_link_libraries(msftedit uuid wine)
+target_link_libraries(msftedit uuid wine wine_dll_version)
 add_importlibs(msftedit riched20 msvcrt kernel32 ntdll)
 add_cd_file(TARGET msftedit DESTINATION reactos/system32 FOR all)
 set_wine_module(msftedit)
