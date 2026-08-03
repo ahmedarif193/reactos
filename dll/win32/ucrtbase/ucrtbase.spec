@@ -2623,7 +2623,7 @@
 @ cdecl towctrans(long long)
 @ cdecl towlower(long)
 @ cdecl towupper(long)
-@ cdecl -stub trunc(double)
+@ cdecl trunc(double)
 @ cdecl truncf(float)
 @ cdecl truncl(double) trunc
 @ stub unexpected
