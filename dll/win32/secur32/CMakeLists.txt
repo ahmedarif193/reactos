@@ -1,11 +1,14 @@
 
 add_definitions(-D__SECUR32__)
-include_directories(${REACTOS_SOURCE_DIR}/sdk/include/reactos/subsys)
+include_directories(
+    ${REACTOS_SOURCE_DIR}/sdk/include/reactos/subsys
+    ${REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/mbedtls)
 spec2def(secur32.dll secur32.spec ADD_IMPORTLIB)
 
 list(APPEND SOURCE
     dllmain.c
     lsalpc.c
+    schannel.c
     sspi.c
     stubs.c
     thunks.c
@@ -17,6 +20,7 @@ list(APPEND SOURCE
     wine/negotiate.c
     wine/ntlm.c
     wine/util.c
+    schannel_mbedtls.c
     precomp.h)
 
 add_library(secur32 MODULE
@@ -27,6 +31,6 @@ add_library(secur32 MODULE
 
 set_module_type(secur32 win32dll UNICODE)
 target_link_libraries(secur32 lsalib wine)
-add_importlibs(secur32 advapi32 netapi32 msvcrt kernel32 ntdll)
+add_importlibs(secur32 mbedtls crypt32 ncrypt advapi32 netapi32 msvcrt kernel32 ntdll)
 add_pch(secur32 precomp.h SOURCE)
 add_cd_file(TARGET secur32 DESTINATION reactos/system32 FOR all)

@@ -563,6 +563,7 @@ static void SECUR32_initializeProviders(void)
     /* Now load the built-in providers (in Wine, this is done before the registry loading) */
 #ifdef __REACTOS__
 /// FIXME: Interim Wine code until we get Samuel's rewrite!
+    SECUR32_initSchannelSP();
     /* First load built-in providers */
     SECUR32_initNTLMSP();
     SECUR32_initKerberosSP();
@@ -650,9 +651,7 @@ SecurePackage *SECUR32_findPackageA(PCSTR packageName)
     TRACE("\n");
     EnterCriticalSection(&cs);
 
-#ifndef __REACTOS__
     SECUR32_deinitSchannelSP();
-#endif
 
     if (packageTable)
     {

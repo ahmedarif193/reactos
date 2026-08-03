@@ -374,9 +374,11 @@ user32 -
   win32ss/user/user32_vista/input.c        # Synced to Wine-10.0
   win32ss/user/user32_vista/misc.c         # Synced to Wine-10.0
   win32ss/user/user32_vista/win.c          # Synced to Wine-10.0
-schannel.c
-  dll/win32/schannel/schannel_wine.c    # synced to wine-1.7.17 (secur32/schannel.c)
-  dll/win32/schannel/secur32_wine.c     # partial sync to wine-1.7.17 (secur32/secur32.c)
+schannel -
+  dll/win32/schannel                    # Synced to Wine-11.14
+  dll/win32/secur32/schannel.c          # Synced to Wine-11.14
+  modules/rostests/winetests/schannel   # Synced to Wine-11.14
+  modules/rostests/winetests/secur32/schannel.c # Synced to Wine-11.14
 
 secur32 -
   dll/win32/secur32/sspi.c              # Partially synced to WineStaging-1.7.55 (secur32.c)

@@ -11,6 +11,8 @@
 
 #include <stdarg.h>
 
+#define SCHANNEL_USE_BLACKLISTS
+
 /* SDK/DDK/NDK Headers. */
 #define WIN32_NO_STATUS
 #define _INC_WINDOWS
@@ -24,7 +26,13 @@
 #include <ndk/rtlfuncs.h>
 
 #include <secext.h>
+#include <rpc.h>
 #include <security.h>
+#include <wine/debug.h>
+
+#ifndef ARRAY_SIZE
+#define ARRAY_SIZE ARRAYSIZE
+#endif
 
 #include "secur32_priv.h"
 #include "thunks.h"

@@ -3,10 +3,6 @@
 #define NDEBUG
 #include <reactos/debug.h>
 
-#define SEC_ENTRY WINAPI
-
-typedef PVOID PSECURITY_PACKAGE_OPTIONS, PSecurityUserData;
-
 SECURITY_STATUS
 SEC_ENTRY
 DeleteSecurityPackageA(LPSTR pszPackageName)
