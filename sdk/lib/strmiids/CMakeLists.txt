@@ -1,2 +1,6 @@
 
-add_library(strmiids strmiids.c)
+add_library(strmiids
+    evr.c
+    strmiids.c)
+
+add_dependencies(strmiids psdk dxsdk)
