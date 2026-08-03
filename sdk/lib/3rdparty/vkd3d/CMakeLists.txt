@@ -78,3 +78,30 @@ endif()
 
 add_library(vkd3d_shader INTERFACE)
 target_link_libraries(vkd3d_shader INTERFACE vkd3d)
+
+add_library(vkd3d_compiler STATIC
+    libs/vkd3d-utils/vkd3d_utils_main.c)
+add_dependencies(vkd3d_compiler psdk)
+target_compile_definitions(vkd3d_compiler PRIVATE
+    LIBVKD3D_UTILS_SOURCE
+    D3DCompile=vkd3d_D3DCompile
+    D3DCompile2=vkd3d_D3DCompile2
+    D3DCompile2VKD3D=vkd3d_D3DCompile2VKD3D
+    D3DCreateBlob=vkd3d_D3DCreateBlob
+    D3DDisassemble=vkd3d_D3DDisassemble
+    D3DGetBlobPart=vkd3d_D3DGetBlobPart
+    D3DGetDebugInfo=vkd3d_D3DGetDebugInfo
+    D3DGetInputAndOutputSignatureBlob=vkd3d_D3DGetInputAndOutputSignatureBlob
+    D3DGetInputSignatureBlob=vkd3d_D3DGetInputSignatureBlob
+    D3DGetOutputSignatureBlob=vkd3d_D3DGetOutputSignatureBlob
+    D3DPreprocess=vkd3d_D3DPreprocess
+    D3DStripShader=vkd3d_D3DStripShader)
+target_include_directories(vkd3d_compiler PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/private
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/vkd3d-common
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/vkd3d-shader
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/vkd3d-utils
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/vkd3d)
+target_link_libraries(vkd3d_compiler PUBLIC vkd3d)
