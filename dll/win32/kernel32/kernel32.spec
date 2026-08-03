@@ -765,6 +765,7 @@
 @ stdcall IsValidLocale(long long)
 @ stdcall -version=0x501-0x502 IsValidUILanguage(long)
 @ stdcall IsWow64Process(ptr ptr)
+@ stdcall -version=0xA00+ IsWow64Process2(ptr ptr ptr)
 @ stdcall -version=0x601+ K32EmptyWorkingSet(long) EmptyWorkingSet
 @ stdcall -version=0x601+ K32EnumDeviceDrivers(ptr long ptr) EnumDeviceDrivers
 @ stdcall -version=0x601+ K32EnumPageFilesA(ptr ptr) EnumPageFilesA
