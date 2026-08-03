@@ -206,7 +206,11 @@ END
 STRINGTABLE
 BEGIN
     IDS_CANCELLING "正在取消..."
-    IDS_REMAINING  "剩餘"
+    IDS_REMAINING1 "剩餘 %1!u! %2"
+    IDS_REMAINING2 "剩餘 %1!u! %2 %3!u! %4"
+    IDS_SECONDS    "秒"
+    IDS_MINUTES    "分"
+    IDS_HOURS      "小時"
 END
 
 STRINGTABLE

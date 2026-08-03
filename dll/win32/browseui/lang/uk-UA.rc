@@ -191,7 +191,11 @@ END
 STRINGTABLE
 BEGIN
     IDS_CANCELLING "Скасування..."
-    IDS_REMAINING  "Залишається"
+    IDS_REMAINING1 "Залишилося %1!u! %2"
+    IDS_REMAINING2 "Залишилося %1!u! %2 and %3!u! %4"
+    IDS_SECONDS    "сек."
+    IDS_MINUTES    "хв."
+    IDS_HOURS      "год."
 END
 
 STRINGTABLE
