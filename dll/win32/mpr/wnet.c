@@ -37,9 +37,6 @@
 #include "wine/debug.h"
 #include "mprres.h"
 #include "wnetpriv.h"
-#ifdef __REACTOS__
-#include <wine/unicode.h>
-#endif
 
 WINE_DEFAULT_DEBUG_CHANNEL(mpr);
 
@@ -134,29 +131,22 @@ static PWNetProviderTable providerTable;
 
 static void _tryLoadProvider(PCWSTR provider)
 {
-    static const WCHAR servicePrefix[] = { 'S','y','s','t','e','m','\\',
-     'C','u','r','r','e','n','t','C','o','n','t','r','o','l','S','e','t','\\',
-     'S','e','r','v','i','c','e','s','\\',0 };
-    static const WCHAR serviceFmt[] = { '%','s','%','s','\\',
-     'N','e','t','w','o','r','k','P','r','o','v','i','d','e','r',0 };
     WCHAR serviceName[MAX_PATH];
     HKEY hKey;
 
     TRACE("%s\n", debugstr_w(provider));
-    swprintf(serviceName, serviceFmt, servicePrefix, provider);
+    swprintf(serviceName, ARRAY_SIZE(serviceName), L"%s%s\\NetworkProvider",
+             L"System\\CurrentControlSet\\Services\\", provider);
     serviceName[ARRAY_SIZE(serviceName) - 1] = '\0';
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, serviceName, 0, KEY_READ, &hKey) ==
      ERROR_SUCCESS)
     {
-        static const WCHAR szProviderPath[] = { 'P','r','o','v','i','d','e','r',
-         'P','a','t','h',0 };
         WCHAR providerPath[MAX_PATH];
         DWORD type, size = sizeof(providerPath);
 
-        if (RegQueryValueExW(hKey, szProviderPath, NULL, &type,
-         (LPBYTE)providerPath, &size) == ERROR_SUCCESS && (type == REG_SZ || type == REG_EXPAND_SZ))
+        if (RegQueryValueExW(hKey, L"ProviderPath", NULL, &type, (BYTE *)providerPath, &size) == ERROR_SUCCESS
+            && (type == REG_SZ || type == REG_EXPAND_SZ))
         {
-            static const WCHAR szProviderName[] = { 'N','a','m','e',0 };
             PWSTR name = NULL;
 
             if (type == REG_EXPAND_SZ)
@@ -166,14 +156,14 @@ static void _tryLoadProvider(PCWSTR provider)
             }
 
             size = 0;
-            RegQueryValueExW(hKey, szProviderName, NULL, NULL, NULL, &size);
+            RegQueryValueExW(hKey, L"Name", NULL, NULL, NULL, &size);
             if (size)
             {
-                name = HeapAlloc(GetProcessHeap(), 0, size);
-                if (RegQueryValueExW(hKey, szProviderName, NULL, &type,
-                 (LPBYTE)name, &size) != ERROR_SUCCESS || type != REG_SZ)
+                name = malloc(size);
+                if (RegQueryValueExW(hKey, L"Name", NULL, &type, (BYTE *)name, &size) != ERROR_SUCCESS
+                    || type != REG_SZ)
                 {
-                    HeapFree(GetProcessHeap(), 0, name);
+                    free(name);
                     name = NULL;
                 }
             }
@@ -200,7 +190,7 @@ static void _tryLoadProvider(PCWSTR provider)
                         provider->getCaps = getCaps;
                         provider->dwSpecVersion = getCaps(WNNC_SPEC_VERSION);
                         provider->dwNetType = getCaps(WNNC_NET_TYPE);
-                        TRACE("net type is 0x%08x\n", provider->dwNetType);
+                        TRACE("net type is 0x%08lx\n", provider->dwNetType);
                         provider->dwEnumScopes = getCaps(WNNC_ENUMERATION);
                         if (provider->dwEnumScopes)
                         {
@@ -244,7 +234,7 @@ static void _tryLoadProvider(PCWSTR provider)
                     {
                         WARN("Provider %s didn't export NPGetCaps\n",
                          debugstr_w(provider));
-                        HeapFree(GetProcessHeap(), 0, name);
+                        free(name);
                         FreeLibrary(hLib);
                     }
 
@@ -254,7 +244,7 @@ static void _tryLoadProvider(PCWSTR provider)
                 {
                     WARN("Couldn't load library %s for provider %s\n",
                      debugstr_w(providerPath), debugstr_w(provider));
-                    HeapFree(GetProcessHeap(), 0, name);
+                    free(name);
                 }
             }
             else
@@ -264,7 +254,7 @@ static void _tryLoadProvider(PCWSTR provider)
             }
         }
         else
-            WARN("Couldn't open value %s\n", debugstr_w(szProviderPath));
+            WARN("Couldn't open value ProviderPath\n");
         RegCloseKey(hKey);
     }
     else
@@ -272,112 +262,26 @@ static void _tryLoadProvider(PCWSTR provider)
          debugstr_w(provider));
 }
 
-#ifdef __REACTOS__
-static void _restoreSavedConnection(HKEY connection, WCHAR * local)
-{
-    NETRESOURCEW net;
-    DWORD type, prov, index, size;
-
-    net.lpProvider = NULL;
-    net.lpRemoteName = NULL;
-    net.lpLocalName = NULL;
-
-    TRACE("Restoring: %S\n", local);
-
-    size = sizeof(DWORD);
-    if (RegQueryValueExW(connection, L"ConnectionType", NULL, &type, (BYTE *)&net.dwType, &size) != ERROR_SUCCESS)
-       return;
-
-    if (type != REG_DWORD || size != sizeof(DWORD))
-        return;
-
-    if (RegQueryValueExW(connection, L"ProviderName", NULL, &type, NULL, &size) != ERROR_SUCCESS)
-        return;
-
-    if (type != REG_SZ)
-        return;
-
-    net.lpProvider = HeapAlloc(GetProcessHeap(), 0, size);
-    if (!net.lpProvider)
-        return;
-
-    if (RegQueryValueExW(connection, L"ProviderName", NULL, NULL, (BYTE *)net.lpProvider, &size) != ERROR_SUCCESS)
-        goto cleanup;
-
-    size = sizeof(DWORD);
-    if (RegQueryValueExW(connection, L"ProviderType", NULL, &type, (BYTE *)&prov, &size) != ERROR_SUCCESS)
-        goto cleanup;
-
-    if (type != REG_DWORD || size != sizeof(DWORD))
-        goto cleanup;
-
-    index = _findProviderIndexW(net.lpProvider);
-    if (index == BAD_PROVIDER_INDEX)
-        goto cleanup;
-
-    if (providerTable->table[index].dwNetType != prov)
-        goto cleanup;
-
-    if (RegQueryValueExW(connection, L"RemotePath", NULL, &type, NULL, &size) != ERROR_SUCCESS)
-        goto cleanup;
-
-    if (type != REG_SZ)
-        goto cleanup;
-
-    net.lpRemoteName = HeapAlloc(GetProcessHeap(), 0, size);
-    if (!net.lpRemoteName)
-        goto cleanup;
-
-    if (RegQueryValueExW(connection, L"RemotePath", NULL, NULL, (BYTE *)net.lpRemoteName, &size) != ERROR_SUCCESS)
-        goto cleanup;
-
-    size = strlenW(local);
-    net.lpLocalName = HeapAlloc(GetProcessHeap(), 0, size * sizeof(WCHAR) + 2 * sizeof(WCHAR));
-    if (!net.lpLocalName)
-        goto cleanup;
-
-    strcpyW(net.lpLocalName, local);
-    net.lpLocalName[size] = ':';
-    net.lpLocalName[size + 1] = 0;
-
-    TRACE("Attempting connection\n");
-
-    WNetAddConnection2W(&net, NULL, NULL, 0);
-
-cleanup:
-    HeapFree(GetProcessHeap(), 0, net.lpProvider);
-    HeapFree(GetProcessHeap(), 0, net.lpRemoteName);
-    HeapFree(GetProcessHeap(), 0, net.lpLocalName);
-}
-#endif
-
 void wnetInit(HINSTANCE hInstDll)
 {
-    static const WCHAR providerOrderKey[] = { 'S','y','s','t','e','m','\\',
-     'C','u','r','r','e','n','t','C','o','n','t','r','o','l','S','e','t','\\',
-     'C','o','n','t','r','o','l','\\',
-     'N','e','t','w','o','r','k','P','r','o','v','i','d','e','r','\\',
-     'O','r','d','e','r',0 };
-     static const WCHAR providerOrder[] = { 'P','r','o','v','i','d','e','r',
-      'O','r','d','e','r',0 };
     HKEY hKey;
 
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, providerOrderKey, 0, KEY_READ, &hKey)
-     == ERROR_SUCCESS)
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"System\\CurrentControlSet\\Control\\NetworkProvider\\Order",
+                      0, KEY_READ, &hKey) == ERROR_SUCCESS)
     {
         DWORD size = 0;
 
-        RegQueryValueExW(hKey, providerOrder, NULL, NULL, NULL, &size);
+        RegQueryValueExW(hKey, L"ProviderOrder", NULL, NULL, NULL, &size);
         if (size)
         {
-            PWSTR providers = HeapAlloc(GetProcessHeap(), 0, size);
+            WCHAR *providers = malloc(size);
 
             if (providers)
             {
                 DWORD type;
 
-                if (RegQueryValueExW(hKey, providerOrder, NULL, &type,
-                 (LPBYTE)providers, &size) == ERROR_SUCCESS && type == REG_SZ)
+                if (RegQueryValueExW(hKey, L"ProviderOrder", NULL, &type, (BYTE *)providers, &size)
+                    == ERROR_SUCCESS && type == REG_SZ)
                 {
                     PWSTR ptr;
                     DWORD numToAllocate;
@@ -394,8 +298,7 @@ void wnetInit(HINSTANCE hInstDll)
                         }
                     }
                     providerTable =
-                     HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
-                     sizeof(WNetProviderTable)
+                     calloc(1, sizeof(WNetProviderTable)
                      + (numToAllocate - 1) * sizeof(WNetProvider));
                     if (providerTable)
                     {
@@ -405,9 +308,8 @@ void wnetInit(HINSTANCE hInstDll)
 
                         entireNetworkLen = LoadStringW(hInstDll,
                          IDS_ENTIRENETWORK, (LPWSTR)&stringresource, 0);
-                        providerTable->entireNetwork = HeapAlloc(
-                         GetProcessHeap(), 0, (entireNetworkLen + 1) *
-                         sizeof(WCHAR));
+                        providerTable->entireNetwork = malloc(
+                         (entireNetworkLen + 1) * sizeof(WCHAR));
                         if (providerTable->entireNetwork)
                         {
                             memcpy(providerTable->entireNetwork, stringresource, entireNetworkLen*sizeof(WCHAR));
@@ -424,69 +326,11 @@ void wnetInit(HINSTANCE hInstDll)
                         }
                     }
                 }
-                HeapFree(GetProcessHeap(), 0, providers);
+                free(providers);
             }
         }
         RegCloseKey(hKey);
     }
-
-#ifdef __REACTOS__
-    if (providerTable)
-    {
-        HKEY user_profile;
-
-        if (RegOpenCurrentUser(KEY_ALL_ACCESS, &user_profile) == ERROR_SUCCESS)
-        {
-            HKEY network;
-            WCHAR subkey[8] = {'N', 'e', 't', 'w', 'o', 'r', 'k', 0};
-
-            if (RegOpenKeyExW(user_profile, subkey, 0, KEY_READ, &network) == ERROR_SUCCESS)
-            {
-                DWORD size, max;
-
-                TRACE("Enumerating remembered connections\n");
-
-                if (RegQueryInfoKey(network, NULL, NULL, NULL, &max, &size, NULL, NULL, NULL, NULL, NULL, NULL) == ERROR_SUCCESS)
-                {
-                    WCHAR *local;
-
-                    TRACE("There are %lu connections\n", max);
-
-                    local = HeapAlloc(GetProcessHeap(), 0, (size + 1) * sizeof(WCHAR));
-                    if (local)
-                    {
-                        DWORD index;
-
-                        for (index = 0; index < max; ++index)
-                        {
-                            DWORD len = size + 1;
-                            HKEY connection;
-
-                            TRACE("Trying connection %lu\n", index);
-
-                            if (RegEnumKeyExW(network, index, local, &len, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
-                                continue;
-
-                            TRACE("It is %S\n", local);
-
-                            if (RegOpenKeyExW(network, local, 0, KEY_READ, &connection) != ERROR_SUCCESS)
-                                continue;
-
-                            _restoreSavedConnection(connection, local);
-                            RegCloseKey(connection);
-                        }
-
-                        HeapFree(GetProcessHeap(), 0, local);
-                    }
-                }
-
-                RegCloseKey(network);
-            }
-
-            RegCloseKey(user_profile);
-        }
-    }
-#endif
 }
 
 void wnetFree(void)
@@ -497,11 +341,11 @@ void wnetFree(void)
 
         for (i = 0; i < providerTable->numProviders; i++)
         {
-            HeapFree(GetProcessHeap(), 0, providerTable->table[i].name);
+            free(providerTable->table[i].name);
             FreeModule(providerTable->table[i].hLib);
         }
-        HeapFree(GetProcessHeap(), 0, providerTable->entireNetwork);
-        HeapFree(GetProcessHeap(), 0, providerTable);
+        free(providerTable->entireNetwork);
+        free(providerTable);
         providerTable = NULL;
     }
 }
@@ -532,7 +376,7 @@ static LPNETRESOURCEW _copyNetResourceForEnumW(LPNETRESOURCEW lpNet)
 
     if (lpNet)
     {
-        ret = HeapAlloc(GetProcessHeap(), 0, sizeof(NETRESOURCEW));
+        ret = malloc(sizeof(NETRESOURCEW));
         if (ret)
         {
             size_t len;
@@ -542,7 +386,7 @@ static LPNETRESOURCEW _copyNetResourceForEnumW(LPNETRESOURCEW lpNet)
             if (lpNet->lpRemoteName)
             {
                 len = lstrlenW(lpNet->lpRemoteName) + 1;
-                ret->lpRemoteName = HeapAlloc(GetProcessHeap(), 0, len * sizeof(WCHAR));
+                ret->lpRemoteName = malloc(len * sizeof(WCHAR));
                 if (ret->lpRemoteName)
                     lstrcpyW(ret->lpRemoteName, lpNet->lpRemoteName);
             }
@@ -557,16 +401,15 @@ static void _freeEnumNetResource(LPNETRESOURCEW lpNet)
 {
     if (lpNet)
     {
-        HeapFree(GetProcessHeap(), 0, lpNet->lpRemoteName);
-        HeapFree(GetProcessHeap(), 0, lpNet);
+        free(lpNet->lpRemoteName);
+        free(lpNet);
     }
 }
 
 static PWNetEnumerator _createGlobalEnumeratorW(DWORD dwScope, DWORD dwType,
  DWORD dwUsage, LPNETRESOURCEW lpNet)
 {
-    PWNetEnumerator ret = HeapAlloc(GetProcessHeap(),
-     HEAP_ZERO_MEMORY, sizeof(WNetEnumerator));
+    WNetEnumerator *ret = calloc(1, sizeof(WNetEnumerator));
 
     if (ret)
     {
@@ -588,7 +431,7 @@ static PWNetEnumerator _createProviderEnumerator(DWORD dwScope, DWORD dwType,
         ret = NULL;
     else
     {
-        ret = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(WNetEnumerator));
+        ret = calloc(1, sizeof(WNetEnumerator));
         if (ret)
         {
             ret->enumType      = WNET_ENUMERATOR_TYPE_PROVIDER;
@@ -605,8 +448,7 @@ static PWNetEnumerator _createProviderEnumerator(DWORD dwScope, DWORD dwType,
 static PWNetEnumerator _createContextEnumerator(DWORD dwScope, DWORD dwType,
  DWORD dwUsage)
 {
-    PWNetEnumerator ret = HeapAlloc(GetProcessHeap(),
-     HEAP_ZERO_MEMORY, sizeof(WNetEnumerator));
+    WNetEnumerator *ret = calloc(1, sizeof(WNetEnumerator));
 
     if (ret)
     {
@@ -621,17 +463,17 @@ static PWNetEnumerator _createContextEnumerator(DWORD dwScope, DWORD dwType,
 static PWNetEnumerator _createConnectedEnumerator(DWORD dwScope, DWORD dwType,
  DWORD dwUsage)
 {
-    PWNetEnumerator ret = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(WNetEnumerator));
+    WNetEnumerator *ret = calloc(1, sizeof(WNetEnumerator));
     if (ret)
     {
         ret->enumType = WNET_ENUMERATOR_TYPE_CONNECTED;
         ret->dwScope = dwScope;
         ret->dwType  = dwType;
         ret->dwUsage = dwUsage;
-        ret->specific.handles = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(HANDLE) * providerTable->numProviders);
+        ret->specific.handles = calloc(providerTable->numProviders, sizeof(HANDLE));
         if (!ret->specific.handles)
         {
-            HeapFree(GetProcessHeap(), 0, ret);
+            free(ret);
             ret = NULL;
         }
     }
@@ -641,7 +483,7 @@ static PWNetEnumerator _createConnectedEnumerator(DWORD dwScope, DWORD dwType,
 static PWNetEnumerator _createRememberedEnumerator(DWORD dwScope, DWORD dwType,
  HKEY remembered)
 {
-    PWNetEnumerator ret = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(WNetEnumerator));
+    WNetEnumerator *ret = calloc(1, sizeof(WNetEnumerator));
     if (ret)
     {
         ret->enumType = WNET_ENUMERATOR_TYPE_REMEMBERED;
@@ -732,7 +574,7 @@ static DWORD _thunkNetResourceArrayWToA(const NETRESOURCEW *lpNetArrayIn,
         }
     }
     ret = numToThunk < *lpcCount ? WN_MORE_DATA : WN_SUCCESS;
-    TRACE("numToThunk is %d, *lpcCount is %d, returning %d\n", numToThunk,
+    TRACE("numToThunk is %ld, *lpcCount is %ld, returning %ld\n", numToThunk,
      *lpcCount, ret);
     return ret;
 }
@@ -817,7 +659,7 @@ static DWORD _thunkNetResourceArrayAToW(const NETRESOURCEA *lpNetArrayIn,
         }
     }
     ret = numToThunk < *lpcCount ? WN_MORE_DATA : WN_SUCCESS;
-    TRACE("numToThunk is %d, *lpcCount is %d, returning %d\n", numToThunk,
+    TRACE("numToThunk is %ld, *lpcCount is %ld, returning %ld\n", numToThunk,
      *lpcCount, ret);
     return ret;
 }
@@ -832,7 +674,7 @@ DWORD WINAPI WNetOpenEnumA( DWORD dwScope, DWORD dwType, DWORD dwUsage,
 {
     DWORD ret;
 
-    TRACE( "(%08X, %08X, %08X, %p, %p)\n",
+    TRACE( "(%08lX, %08lX, %08lX, %p, %p)\n",
 	    dwScope, dwType, dwUsage, lpNet, lphEnum );
 
     if (!lphEnum)
@@ -854,8 +696,7 @@ DWORD WINAPI WNetOpenEnumA( DWORD dwScope, DWORD dwType, DWORD dwUsage,
             ret = _thunkNetResourceArrayAToW(lpNet, &count, buf, &size);
             if (ret == WN_MORE_DATA)
             {
-                lpNetWide = HeapAlloc(GetProcessHeap(), 0,
-                 size);
+                lpNetWide = malloc(size);
                 if (lpNetWide)
                 {
                     ret = _thunkNetResourceArrayAToW(lpNet, &count, lpNetWide,
@@ -871,14 +712,14 @@ DWORD WINAPI WNetOpenEnumA( DWORD dwScope, DWORD dwType, DWORD dwUsage,
                 ret = WNetOpenEnumW(dwScope, dwType, dwUsage, lpNetWide,
                  lphEnum);
             if (allocated)
-                HeapFree(GetProcessHeap(), 0, lpNetWide);
+                free(lpNetWide);
         }
         else
             ret = WNetOpenEnumW(dwScope, dwType, dwUsage, NULL, lphEnum);
     }
     if (ret)
         SetLastError(ret);
-    TRACE("Returning %d\n", ret);
+    TRACE("Returning %ld\n", ret);
     return ret;
 }
 
@@ -924,7 +765,7 @@ DWORD WINAPI WNetOpenEnumW( DWORD dwScope, DWORD dwType, DWORD dwUsage,
 {
     DWORD ret;
 
-    TRACE( "(%08X, %08X, %08X, %p, %p)\n",
+    TRACE( "(%08lX, %08lX, %08lX, %p, %p)\n",
           dwScope, dwType, dwUsage, lpNet, lphEnum );
 
     if (!lphEnum)
@@ -1036,13 +877,13 @@ DWORD WINAPI WNetOpenEnumW( DWORD dwScope, DWORD dwType, DWORD dwUsage,
                 }
                 break;
             default:
-                WARN("unknown scope 0x%08x\n", dwScope);
+                WARN("unknown scope 0x%08lx\n", dwScope);
                 ret = WN_BAD_VALUE;
         }
     }
     if (ret)
         SetLastError(ret);
-    TRACE("Returning %d\n", ret);
+    TRACE("Returning %ld\n", ret);
     return ret;
 }
 
@@ -1072,7 +913,7 @@ DWORD WINAPI WNetEnumResourceA( HANDLE hEnum, LPDWORD lpcCount,
     else
     {
         DWORD localCount = *lpcCount, localSize = *lpBufferSize;
-        LPVOID localBuffer = HeapAlloc(GetProcessHeap(), 0, localSize);
+        void *localBuffer = malloc(localSize);
 
         if (localBuffer)
         {
@@ -1090,14 +931,14 @@ DWORD WINAPI WNetEnumResourceA( HANDLE hEnum, LPDWORD lpcCount,
                  lpBuffer, lpBufferSize);
                 *lpcCount = localCount;
             }
-            HeapFree(GetProcessHeap(), 0, localBuffer);
+            free(localBuffer);
         }
         else
             ret = WN_OUT_OF_MEMORY;
     }
     if (ret)
         SetLastError(ret);
-    TRACE("Returning %d\n", ret);
+    TRACE("Returning %ld\n", ret);
     return ret;
 }
 
@@ -1178,7 +1019,7 @@ static DWORD _enumerateProvidersW(PWNetEnumerator enumerator, LPDWORD lpcCount,
         *lpcCount = count;
         ret = count > 0 ? WN_SUCCESS : WN_MORE_DATA;
     }
-    TRACE("Returning %d\n", ret);
+    TRACE("Returning %ld\n", ret);
     return ret;
 }
 
@@ -1269,7 +1110,7 @@ static DWORD _enumerateGlobalPassthroughW(PWNetEnumerator enumerator,
                 enumerator->providerDone = TRUE;
         }
     }
-    TRACE("Returning %d\n", ret);
+    TRACE("Returning %ld\n", ret);
     return ret;
 }
 
@@ -1308,10 +1149,10 @@ static DWORD _enumerateGlobalW(PWNetEnumerator enumerator, LPDWORD lpcCount,
              lpBufferSize);
             break;
         default:
-            WARN("unexpected scope 0x%08x\n", enumerator->dwScope);
+            WARN("unexpected scope 0x%08lx\n", enumerator->dwScope);
             ret = WN_NO_MORE_ENTRIES;
     }
-    TRACE("Returning %d\n", ret);
+    TRACE("Returning %ld\n", ret);
     return ret;
 }
 
@@ -1413,7 +1254,7 @@ static DWORD _enumerateContextW(PWNetEnumerator enumerator, LPDWORD lpcCount,
             *lpBufferSize = bytesNeeded;
         }
     }
-    TRACE("Returning %d\n", ret);
+    TRACE("Returning %ld\n", ret);
     return ret;
 }
 
@@ -1455,7 +1296,7 @@ static DWORD _enumerateConnectedW(PWNetEnumerator enumerator, DWORD* user_count,
     handles = enumerator->specific.handles;
     left = *user_size;
     size = *user_size;
-    buffer = HeapAlloc(GetProcessHeap(), 0, *user_size);
+    buffer = malloc(*user_size);
     if (!buffer)
         return WN_NO_NETWORK;
 
@@ -1534,15 +1375,11 @@ static DWORD _enumerateConnectedW(PWNetEnumerator enumerator, DWORD* user_count,
     if (ret != WN_MORE_DATA && ret != WN_NO_MORE_ENTRIES)
         ret = WN_SUCCESS;
 
-    HeapFree(GetProcessHeap(), 0, buffer);
+    free(buffer);
 
-    TRACE("Returning %d\n", ret);
+    TRACE("Returning %ld\n", ret);
     return ret;
 }
-
-static const WCHAR connectionType[] = { 'C','o','n','n','e','c','t','i','o','n','T','y','p','e',0 };
-static const WCHAR providerName[] = { 'P','r','o','v','i','d','e','r','N','a','m','e',0 };
-static const WCHAR remotePath[] = { 'R','e','m','o','t','e','P','a','t','h',0 };
 
 static WCHAR *get_reg_str(HKEY hkey, const WCHAR *value, DWORD *len)
 {
@@ -1551,7 +1388,7 @@ static WCHAR *get_reg_str(HKEY hkey, const WCHAR *value, DWORD *len)
 
     if (!RegQueryValueExW(hkey, value, NULL, &type, NULL, len) && type == REG_SZ)
     {
-        if (!(ret = HeapAlloc(GetProcessHeap(), 0, *len))) return NULL;
+        if (!(ret = malloc(*len))) return NULL;
         RegQueryValueExW(hkey, value, 0, 0, (BYTE *)ret, len);
     }
 
@@ -1606,7 +1443,7 @@ static DWORD _enumeratorRememberedW(PWNetEnumerator enumerator, DWORD* user_coun
         if (size_left > 0)
         {
             size = sizeof(DWORD);
-            RegQueryValueExW(connection, connectionType, NULL, NULL, (BYTE *)&net_buffer->dwType, &size);
+            RegQueryValueExW(connection, L"ConnectionType", NULL, NULL, (BYTE *)&net_buffer->dwType, &size);
             if (type != RESOURCETYPE_ANY && net_buffer->dwType != type)
             {
                 size_left += sizeof(NETRESOURCEW);
@@ -1634,7 +1471,7 @@ static DWORD _enumeratorRememberedW(PWNetEnumerator enumerator, DWORD* user_coun
         }
 
         registry_size = 0;
-        registry_string = get_reg_str(connection, providerName, &registry_size);
+        registry_string = get_reg_str(connection, L"ProviderName", &registry_size);
         if (registry_string)
         {
             full_size += registry_size;
@@ -1649,11 +1486,11 @@ static DWORD _enumeratorRememberedW(PWNetEnumerator enumerator, DWORD* user_coun
             else
                 ret = WN_MORE_DATA;
 
-            HeapFree(GetProcessHeap(), 0, registry_string);
+            free(registry_string);
         }
 
         registry_size = 0;
-        registry_string = get_reg_str(connection, remotePath, &registry_size);
+        registry_string = get_reg_str(connection, L"RemotePath", &registry_size);
         if (registry_string)
         {
             full_size += registry_size;
@@ -1668,7 +1505,7 @@ static DWORD _enumeratorRememberedW(PWNetEnumerator enumerator, DWORD* user_coun
             else
                 ret = WN_MORE_DATA;
 
-            HeapFree(GetProcessHeap(), 0, registry_string);
+            free(registry_string);
         }
 
         RegCloseKey(connection);
@@ -1752,7 +1589,7 @@ DWORD WINAPI WNetEnumResourceW( HANDLE hEnum, LPDWORD lpcCount,
     }
     if (ret)
         SetLastError(ret);
-    TRACE("Returning %d\n", ret);
+    TRACE("Returning %ld\n", ret);
     return ret;
 }
 
@@ -1793,7 +1630,7 @@ DWORD WINAPI WNetCloseEnum( HANDLE hEnum )
                     if (providerTable->table[index].dwEnumScopes && handles[index])
                         providerTable->table[index].closeEnum(handles[index]);
                 }
-                HeapFree(GetProcessHeap(), 0, handles);
+                free(handles);
                 ret = WN_SUCCESS;
                 break;
             case WNET_ENUMERATOR_TYPE_REMEMBERED:
@@ -1804,13 +1641,13 @@ DWORD WINAPI WNetCloseEnum( HANDLE hEnum )
                 WARN("bogus enumerator type!\n");
                 ret = WN_BAD_HANDLE;
         }
-        HeapFree(GetProcessHeap(), 0, hEnum);
+        free(hEnum);
     }
     else
         ret = WN_BAD_HANDLE;
     if (ret)
         SetLastError(ret);
-    TRACE("Returning %d\n", ret);
+    TRACE("Returning %ld\n", ret);
     return ret;
 }
 
@@ -1836,12 +1673,12 @@ DWORD WINAPI WNetGetResourceInformationA( LPNETRESOURCEA lpNetResource,
         DWORD size = 1024, count = 1;
         DWORD len;
 
-        lpNetResourceW = HeapAlloc(GetProcessHeap(), 0, size);
+        lpNetResourceW = malloc(size);
         ret = _thunkNetResourceArrayAToW(lpNetResource, &count, lpNetResourceW, &size);
         if (ret == WN_MORE_DATA)
         {
-            HeapFree(GetProcessHeap(), 0, lpNetResourceW);
-            lpNetResourceW = HeapAlloc(GetProcessHeap(), 0, size);
+            free(lpNetResourceW);
+            lpNetResourceW = malloc(size);
             if (lpNetResourceW)
                 ret = _thunkNetResourceArrayAToW(lpNetResource,
                         &count, lpNetResourceW, &size);
@@ -1851,17 +1688,17 @@ DWORD WINAPI WNetGetResourceInformationA( LPNETRESOURCEA lpNetResource,
         if (ret == WN_SUCCESS)
         {
             LPWSTR lpSystemW = NULL;
-            LPVOID lpBufferW;
+            NETRESOURCEW *lpBufferW;
             size = 1024;
-            lpBufferW = HeapAlloc(GetProcessHeap(), 0, size);
+            lpBufferW = malloc(size);
             if (lpBufferW)
             {
                 ret = WNetGetResourceInformationW(lpNetResourceW,
                         lpBufferW, &size, &lpSystemW);
                 if (ret == WN_MORE_DATA)
                 {
-                    HeapFree(GetProcessHeap(), 0, lpBufferW);
-                    lpBufferW = HeapAlloc(GetProcessHeap(), 0, size);
+                    free(lpBufferW);
+                    lpBufferW = malloc(size);
                     if (lpBufferW)
                         ret = WNetGetResourceInformationW(lpNetResourceW,
                             lpBufferW, &size, &lpSystemW);
@@ -1872,12 +1709,10 @@ DWORD WINAPI WNetGetResourceInformationA( LPNETRESOURCEA lpNetResource,
                 {
                     ret = _thunkNetResourceArrayWToA(lpBufferW,
                             &count, lpBuffer, cbBuffer);
-                    HeapFree(GetProcessHeap(), 0, lpNetResourceW);
-                    lpNetResourceW = lpBufferW;
                     size = sizeof(NETRESOURCEA);
-                    size += WideCharToMultiByte(CP_ACP, 0, lpNetResourceW->lpRemoteName,
+                    size += WideCharToMultiByte(CP_ACP, 0, lpBufferW->lpRemoteName,
                             -1, NULL, 0, NULL, NULL);
-                    size += WideCharToMultiByte(CP_ACP, 0, lpNetResourceW->lpProvider,
+                    size += WideCharToMultiByte(CP_ACP, 0, lpBufferW->lpProvider,
                             -1, NULL, 0, NULL, NULL);
 
                     len = WideCharToMultiByte(CP_ACP, 0, lpSystemW,
@@ -1894,20 +1729,20 @@ DWORD WINAPI WNetGetResourceInformationA( LPNETRESOURCEA lpNetResource,
                 }
                 else
                     ret = WN_OUT_OF_MEMORY;
-                HeapFree(GetProcessHeap(), 0, lpBufferW);
+                free(lpBufferW);
             }
             else
                 ret = WN_OUT_OF_MEMORY;
-            HeapFree(GetProcessHeap(), 0, lpSystemW);
+            free(lpSystemW);
         }
-        HeapFree(GetProcessHeap(), 0, lpNetResourceW);
+        free(lpNetResourceW);
     }
     else
         ret = WN_NO_NETWORK;
 
     if (ret)
         SetLastError(ret);
-    TRACE("Returning %d\n", ret);
+    TRACE("Returning %ld\n", ret);
     return ret;
 }
 
@@ -2152,9 +1987,6 @@ static DWORD wnet_use_provider( struct use_connection_context *ctxt, NETRESOURCE
     return ret;
 }
 
-static const WCHAR providerType[] = { 'P','r','o','v','i','d','e','r','T','y','p','e',0 };
-static const WCHAR userName[] = { 'U','s','e','r','N','a','m','e',0 };
-
 static DWORD wnet_use_connection( struct use_connection_context *ctxt )
 {
     WNetProvider *provider = NULL;
@@ -2231,15 +2063,16 @@ static DWORD wnet_use_connection( struct use_connection_context *ctxt )
             {
                 DWORD dword_arg = RESOURCETYPE_DISK;
                 DWORD len = (lstrlenW(provider->name) + 1) * sizeof(WCHAR);
-                static const WCHAR empty[1] = {0};
 
-                RegSetValueExW(network, connectionType, 0, REG_DWORD, (const BYTE *)&dword_arg, sizeof(DWORD));
-                RegSetValueExW(network, providerName, 0, REG_SZ, (const BYTE *)provider->name, len);
-                RegSetValueExW(network, providerType, 0, REG_DWORD, (const BYTE *)&provider->dwNetType, sizeof(DWORD));
+                RegSetValueExW(network, L"ConnectionType", 0, REG_DWORD, (const BYTE *)&dword_arg,
+                               sizeof(DWORD));
+                RegSetValueExW(network, L"ProviderName", 0, REG_SZ, (const BYTE *)provider->name, len);
+                RegSetValueExW(network, L"ProviderType", 0, REG_DWORD,
+                               (const BYTE *)&provider->dwNetType, sizeof(DWORD));
                 len = (lstrlenW(netres.lpRemoteName) + 1) * sizeof(WCHAR);
-                RegSetValueExW(network, remotePath, 0, REG_SZ, (const BYTE *)netres.lpRemoteName, len);
-                len = sizeof(empty);
-                RegSetValueExW(network, userName, 0, REG_SZ, (const BYTE *)empty, len);
+                RegSetValueExW(network, L"RemotePath", 0, REG_SZ, (const BYTE *)netres.lpRemoteName, len);
+                len = sizeof(L"");
+                RegSetValueExW(network, L"UserName", 0, REG_SZ, (const BYTE *) L"", len);
                 RegCloseKey(network);
             }
 
@@ -2258,7 +2091,7 @@ DWORD WINAPI WNetUseConnectionW( HWND hwndOwner, NETRESOURCEW *resource, LPCWSTR
 {
     struct use_connection_context ctxt;
 
-    TRACE( "(%p, %p, %p, %s, 0x%08X, %p, %p, %p)\n",
+    TRACE( "(%p, %p, %p, %s, 0x%08lX, %p, %p, %p)\n",
            hwndOwner, resource, password, debugstr_w(userid), flags,
            accessname, buffer_size, result );
 
@@ -2320,7 +2153,7 @@ static LPWSTR strdupAtoW( LPCSTR str )
 
     if (!str) return NULL;
     len = MultiByteToWideChar( CP_ACP, 0, str, -1, NULL, 0 );
-    ret = HeapAlloc( GetProcessHeap(), 0, len * sizeof(WCHAR) );
+    ret = malloc( len * sizeof(WCHAR) );
     if (ret) MultiByteToWideChar( CP_ACP, 0, str, -1, ret, len );
     return ret;
 }
@@ -2339,10 +2172,10 @@ static void netresource_a_to_w( NETRESOURCEA *resourceA, NETRESOURCEW *resourceW
 
 static void free_netresourceW( NETRESOURCEW *resource )
 {
-    HeapFree(GetProcessHeap(), 0, resource->lpLocalName);
-    HeapFree(GetProcessHeap(), 0, resource->lpRemoteName);
-    HeapFree(GetProcessHeap(), 0, resource->lpComment);
-    HeapFree(GetProcessHeap(), 0, resource->lpProvider);
+    free(resource->lpLocalName);
+    free(resource->lpRemoteName);
+    free(resource->lpComment);
+    free(resource->lpProvider);
 }
 
 /*****************************************************************
@@ -2356,7 +2189,7 @@ DWORD WINAPI WNetUseConnectionA( HWND hwndOwner, NETRESOURCEA *resource,
     NETRESOURCEW resourceW;
     DWORD ret;
 
-    TRACE( "(%p, %p, %p, %s, 0x%08X, %p, %p, %p)\n", hwndOwner, resource, password, debugstr_a(userid), flags,
+    TRACE( "(%p, %p, %p, %s, 0x%08lX, %p, %p, %p)\n", hwndOwner, resource, password, debugstr_a(userid), flags,
         accessname, buffer_size, result );
 
     netresource_a_to_w(resource, &resourceW);
@@ -2376,8 +2209,8 @@ DWORD WINAPI WNetUseConnectionA( HWND hwndOwner, NETRESOURCEA *resource,
     ret = wnet_use_connection(&ctxt);
 
     free_netresourceW(&resourceW);
-    HeapFree(GetProcessHeap(), 0, ctxt.password);
-    HeapFree(GetProcessHeap(), 0, ctxt.userid);
+    free(ctxt.password);
+    free(ctxt.userid);
 
     return ret;
 }
@@ -2409,7 +2242,7 @@ DWORD WINAPI WNetCancelConnection2A( LPCSTR lpName, DWORD dwFlags, BOOL fForce )
         return ERROR_NOT_CONNECTED;
 
     ret = WNetCancelConnection2W(name, dwFlags, fForce);
-    HeapFree(GetProcessHeap(), 0, name);
+    free(name);
 
     return ret;
 }
@@ -2508,7 +2341,7 @@ DWORD WINAPI WNetGetConnectionA( LPCSTR lpLocalName,
 
         if (len)
         {
-            PWSTR wideLocalName = HeapAlloc(GetProcessHeap(), 0, len * sizeof(WCHAR));
+            WCHAR *wideLocalName = malloc(len * sizeof(WCHAR));
 
             if (wideLocalName)
             {
@@ -2539,8 +2372,7 @@ DWORD WINAPI WNetGetConnectionA( LPCSTR lpLocalName,
                 }
                 else if (ret == WN_MORE_DATA)
                 {
-                    PWSTR wideRemote = HeapAlloc(GetProcessHeap(), 0,
-                     wideRemoteSize * sizeof(WCHAR));
+                    WCHAR *wideRemote = malloc(wideRemoteSize * sizeof(WCHAR));
 
                     if (wideRemote)
                     {
@@ -2560,12 +2392,12 @@ DWORD WINAPI WNetGetConnectionA( LPCSTR lpLocalName,
                                 ret = WN_MORE_DATA;
                             }
                         }
-                        HeapFree(GetProcessHeap(), 0, wideRemote);
+                        free(wideRemote);
                     }
                     else
                         ret = WN_OUT_OF_MEMORY;
                 }
-                HeapFree(GetProcessHeap(), 0, wideLocalName);
+                free(wideLocalName);
             }
             else
                 ret = WN_OUT_OF_MEMORY;
@@ -2575,7 +2407,7 @@ DWORD WINAPI WNetGetConnectionA( LPCSTR lpLocalName,
     }
     if (ret)
         SetLastError(ret);
-    TRACE("Returning %d\n", ret);
+    TRACE("Returning %ld\n", ret);
     return ret;
 }
 
@@ -2593,7 +2425,7 @@ static DWORD get_drive_connection( WCHAR letter, LPWSTR remote, LPDWORD size )
                             FILE_SHARE_READ|FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
                             0, 0 )) == INVALID_HANDLE_VALUE)
     {
-        ERR( "failed to open mount manager err %u\n", GetLastError() );
+        ERR( "failed to open mount manager err %lu\n", GetLastError() );
         return ret;
     }
     memset( data, 0, sizeof(*data) );
@@ -2630,18 +2462,16 @@ static DWORD get_drive_connection( WCHAR letter, LPWSTR remote, LPDWORD size )
     DWORD index;
     WCHAR local[3] = {letter, ':', 0};
 
-    if (providerTable != NULL)
+    if (providerTable)
     {
         for (index = 0; index < providerTable->numProviders; index++)
         {
-            if(providerTable->table[index].getCaps(WNNC_CONNECTION) &
-                WNNC_CON_GETCONNECTIONS)
+            WNetProvider *provider = &providerTable->table[index];
+
+            if ((provider->getCaps(WNNC_CONNECTION) & WNNC_CON_GETCONNECTIONS) &&
+                provider->getConnection)
             {
-                if (providerTable->table[index].getConnection)
-                    ret = providerTable->table[index].getConnection(
-                        local, remote, size);
-                else
-                    ret = WN_NO_NETWORK;
+                ret = provider->getConnection(local, remote, size);
                 if (ret == WN_SUCCESS || ret == WN_MORE_DATA)
                     break;
             }
@@ -2698,7 +2528,7 @@ DWORD WINAPI WNetGetConnectionW( LPCWSTR lpLocalName,
     }
     if (ret)
         SetLastError(ret);
-    TRACE("Returning %d\n", ret);
+    TRACE("Returning %ld\n", ret);
     return ret;
 }
 
@@ -2708,7 +2538,7 @@ DWORD WINAPI WNetGetConnectionW( LPCWSTR lpLocalName,
 DWORD WINAPI WNetSetConnectionA( LPCSTR lpName, DWORD dwProperty,
                                  LPVOID pvValue )
 {
-    FIXME( "(%s, %08X, %p): stub\n", debugstr_a(lpName), dwProperty, pvValue );
+    FIXME( "(%s, %08lX, %p): stub\n", debugstr_a(lpName), dwProperty, pvValue );
 
     SetLastError(WN_NO_NETWORK);
     return WN_NO_NETWORK;
@@ -2720,7 +2550,7 @@ DWORD WINAPI WNetSetConnectionA( LPCSTR lpName, DWORD dwProperty,
 DWORD WINAPI WNetSetConnectionW( LPCWSTR lpName, DWORD dwProperty,
                                  LPVOID pvValue )
 {
-    FIXME( "(%s, %08X, %p): stub\n", debugstr_w(lpName), dwProperty, pvValue );
+    FIXME( "(%s, %08lX, %p): stub\n", debugstr_w(lpName), dwProperty, pvValue );
 
     SetLastError(WN_NO_NETWORK);
     return WN_NO_NETWORK;
@@ -2734,7 +2564,7 @@ DWORD WINAPI WNetGetUniversalNameA ( LPCSTR lpLocalPath, DWORD dwInfoLevel,
 {
     DWORD err, size;
 
-    FIXME( "(%s, 0x%08X, %p, %p): stub\n",
+    FIXME( "(%s, 0x%08lX, %p, %p): stub\n",
            debugstr_a(lpLocalPath), dwInfoLevel, lpBuffer, lpBufferSize);
 
     switch (dwInfoLevel)
@@ -2781,7 +2611,7 @@ DWORD WINAPI WNetGetUniversalNameW ( LPCWSTR lpLocalPath, DWORD dwInfoLevel,
 {
     DWORD err, size;
 
-    FIXME( "(%s, 0x%08X, %p, %p): stub\n",
+    FIXME( "(%s, 0x%08lX, %p, %p): stub\n",
            debugstr_w(lpLocalPath), dwInfoLevel, lpBuffer, lpBufferSize);
 
     switch (dwInfoLevel)
@@ -2844,7 +2674,7 @@ DWORD WINAPI WNetClearConnections ( HWND owner )
     }
 
     size = 0x1000;
-    resources = HeapAlloc(GetProcessHeap(), 0, size);
+    resources = malloc(size);
     if (!resources)
     {
         WNetCloseEnum(connected);
@@ -2874,7 +2704,7 @@ DWORD WINAPI WNetClearConnections ( HWND owner )
             break;
     }
 
-    HeapFree(GetProcessHeap(), 0, resources);
+    free(resources);
     WNetCloseEnum(connected);
 
     return ret;
@@ -2953,22 +2783,10 @@ DWORD WINAPI WNetConnectionDialog1W( LPCONNECTDLGSTRUCTW lpConnDlgStruct )
  */
 DWORD WINAPI WNetDisconnectDialog( HWND hwnd, DWORD dwType )
 {
-#ifdef __REACTOS__
-    DWORD dwRet;
-    HMODULE hDll = LoadLibraryW(L"netplwiz.dll");
-    static BOOL (WINAPI *pSHDisconnectNetDrives)(PVOID);
-    pSHDisconnectNetDrives = (VOID *) GetProcAddress(hDll, "SHDisconnectNetDrives");
-    
-    dwRet = pSHDisconnectNetDrives(NULL);
-    
-    FreeLibrary(hDll);
-    return dwRet;
-#else
-    FIXME( "(%p, %08X): stub\n", hwnd, dwType );
+    FIXME( "(%p, %08lX): stub\n", hwnd, dwType );
 
     SetLastError(WN_NO_NETWORK);
     return WN_NO_NETWORK;
-#endif
 }
 
 /*********************************************************************
@@ -3000,7 +2818,7 @@ DWORD WINAPI WNetGetLastErrorA( LPDWORD lpError,
                                 LPSTR lpErrorBuf, DWORD nErrorBufSize,
                                 LPSTR lpNameBuf, DWORD nNameBufSize )
 {
-    FIXME( "(%p, %p, %d, %p, %d): stub\n",
+    FIXME( "(%p, %p, %ld, %p, %ld): stub\n",
            lpError, lpErrorBuf, nErrorBufSize, lpNameBuf, nNameBufSize );
 
     SetLastError(WN_NO_NETWORK);
@@ -3014,7 +2832,7 @@ DWORD WINAPI WNetGetLastErrorW( LPDWORD lpError,
                                 LPWSTR lpErrorBuf, DWORD nErrorBufSize,
                          LPWSTR lpNameBuf, DWORD nNameBufSize )
 {
-    FIXME( "(%p, %p, %d, %p, %d): stub\n",
+    FIXME( "(%p, %p, %ld, %p, %ld): stub\n",
            lpError, lpErrorBuf, nErrorBufSize, lpNameBuf, nNameBufSize );
 
     SetLastError(WN_NO_NETWORK);
@@ -3040,14 +2858,14 @@ DWORD WINAPI WNetGetNetworkInformationA( LPCSTR lpProvider,
         len = MultiByteToWideChar(CP_ACP, 0, lpProvider, -1, NULL, 0);
         if (len)
         {
-            LPWSTR wideProvider = HeapAlloc(GetProcessHeap(), 0, len * sizeof(WCHAR));
+            WCHAR *wideProvider = malloc(len * sizeof(WCHAR));
 
             if (wideProvider)
             {
                 MultiByteToWideChar(CP_ACP, 0, lpProvider, -1, wideProvider,
                  len);
                 ret = WNetGetNetworkInformationW(wideProvider, lpNetInfoStruct);
-                HeapFree(GetProcessHeap(), 0, wideProvider);
+                free(wideProvider);
             }
             else
                 ret = WN_OUT_OF_MEMORY;
@@ -3057,7 +2875,7 @@ DWORD WINAPI WNetGetNetworkInformationA( LPCSTR lpProvider,
     }
     if (ret)
         SetLastError(ret);
-    TRACE("Returning %d\n", ret);
+    TRACE("Returning %ld\n", ret);
     return ret;
 }
 
@@ -3105,7 +2923,7 @@ DWORD WINAPI WNetGetNetworkInformationW( LPCWSTR lpProvider,
     }
     if (ret)
         SetLastError(ret);
-    TRACE("Returning %d\n", ret);
+    TRACE("Returning %ld\n", ret);
     return ret;
 }
 
@@ -3117,7 +2935,7 @@ DWORD WINAPI WNetGetProviderNameA( DWORD dwNetType,
 {
     DWORD ret;
 
-    TRACE("(0x%08x, %s, %p)\n", dwNetType, debugstr_a(lpProvider),
+    TRACE("(0x%08lx, %s, %p)\n", dwNetType, debugstr_a(lpProvider),
      lpBufferSize);
 
     if (!lpProvider)
@@ -3160,7 +2978,7 @@ DWORD WINAPI WNetGetProviderNameA( DWORD dwNetType,
     }
     if (ret)
         SetLastError(ret);
-    TRACE("Returning %d\n", ret);
+    TRACE("Returning %ld\n", ret);
     return ret;
 }
 
@@ -3172,7 +2990,7 @@ DWORD WINAPI WNetGetProviderNameW( DWORD dwNetType,
 {
     DWORD ret;
 
-    TRACE("(0x%08x, %s, %p)\n", dwNetType, debugstr_w(lpProvider),
+    TRACE("(0x%08lx, %s, %p)\n", dwNetType, debugstr_w(lpProvider),
      lpBufferSize);
 
     if (!lpProvider)
@@ -3213,6 +3031,6 @@ DWORD WINAPI WNetGetProviderNameW( DWORD dwNetType,
     }
     if (ret)
         SetLastError(ret);
-    TRACE("Returning %d\n", ret);
+    TRACE("Returning %ld\n", ret);
     return ret;
 }
