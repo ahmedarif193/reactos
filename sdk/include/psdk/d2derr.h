@@ -1,9 +1,5 @@
 /*
- * DirectX 10 GUID definitions
- *
- * Copyright 2000 Alexandre Julliard
- * Copyright 2000 Francois Gouget
- * Copyright 2003 Raphael Junqueira
+ * Copyright 2014 Henri Verbeet for CodeWeavers
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -20,22 +16,11 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include <stdarg.h>
+#ifndef __WINE_D2DERR_H
+#define __WINE_D2DERR_H
 
-#include "windef.h"
-#include "winbase.h"
-#include "wingdi.h"
-#include "winuser.h"
+#define D2DERR_FILE_NOT_FOUND           HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)
+#define D2DERR_INSUFFICIENT_BUFFER      HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER)
+#define D2DERR_UNSUPPORTED_PIXEL_FORMAT WINCODEC_ERR_UNSUPPORTEDPIXELFORMAT
 
-#include "objbase.h"
-#include "olectl.h"
-#include "initguid.h"
-#include "dxva.h"
-
-#if 0
-#include "d3d10_1.h"
-#include "d3d11.h"
-#include "d3d10_1shader.h"
-#endif
-
-#include "d3d11shader.h"
+#endif /* __WINE_D2DERR_H */
