@@ -2,6 +2,7 @@
  * uxtheme Double-buffered Drawing API
  *
  * Copyright (C) 2008 Reece H. Dunn
+ * Copyright 2017 Nikolay Sivov for CodeWeavers
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -18,8 +19,19 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include "uxthemep.h"
-#include <wine/heap.h>
+#include <stdlib.h>
+#include <stdarg.h>
+
+#include "windef.h"
+#include "winbase.h"
+#include "winuser.h"
+#include "wingdi.h"
+#include "vfwmsgs.h"
+#include "uxtheme.h"
+
+#include "wine/debug.h"
+
+WINE_DEFAULT_DEBUG_CHANNEL(uxtheme);
 
 struct paintbuffer
 {
@@ -34,7 +46,7 @@ static void free_paintbuffer(struct paintbuffer *buffer)
 {
     DeleteObject(buffer->bitmap);
     DeleteDC(buffer->memorydc);
-    heap_free(buffer);
+    free(buffer);
 }
 
 static struct paintbuffer *get_buffer_obj(HPAINTBUFFER handle)
@@ -66,11 +78,7 @@ HRESULT WINAPI BufferedPaintUnInit(VOID)
 HPAINTBUFFER WINAPI BeginBufferedPaint(HDC targetdc, const RECT *rect,
         BP_BUFFERFORMAT format, BP_PAINTPARAMS *params, HDC *retdc)
 {
-#if (defined(_MSC_VER))
-    char bmibuf[FIELD_OFFSET(BITMAPINFO, bmiColors) + 256 * sizeof(RGBQUAD)];
-#else
     char bmibuf[FIELD_OFFSET(BITMAPINFO, bmiColors[256])];
-#endif
     BITMAPINFO *bmi = (BITMAPINFO *)bmibuf;
     struct paintbuffer *buffer;
 
@@ -86,7 +94,7 @@ HPAINTBUFFER WINAPI BeginBufferedPaint(HDC targetdc, const RECT *rect,
     if (params)
         FIXME("painting parameters are ignored\n");
 
-    buffer = heap_alloc(sizeof(*buffer));
+    buffer = malloc(sizeof(*buffer));
     buffer->targetdc = targetdc;
     buffer->rect = *rect;
     buffer->memorydc = CreateCompatibleDC(targetdc);
@@ -133,7 +141,6 @@ HPAINTBUFFER WINAPI BeginBufferedPaint(HDC targetdc, const RECT *rect,
 
     return (HPAINTBUFFER)buffer;
 }
-
 
 /***********************************************************************
  *      EndBufferedPaint                                   (UXTHEME.@)
