@@ -76,7 +76,7 @@
 @ stub CoInstall
 @ stub CoInvalidateRemoteMachineBindings
 @ stdcall CoIsHandlerConnected(ptr) combase.CoIsHandlerConnected
-@ stdcall CoIsOle1Class(ptr)
+@ stdcall CoIsOle1Class(ptr) combase.CoIsOle1Class
 @ stdcall CoLoadLibrary(wstr long)
 @ stdcall CoLockObjectExternal(ptr long long) combase.CoLockObjectExternal
 @ stdcall CoMarshalHresult(ptr long) combase.CoMarshalHresult
@@ -89,7 +89,7 @@
 @ stdcall CoQueryProxyBlanket(ptr ptr ptr ptr ptr ptr ptr ptr) combase.CoQueryProxyBlanket
 @ stub CoQueryReleaseObject
 @ stub CoReactivateObject
-@ stub CoRegisterActivationFilter
+@ stdcall CoRegisterActivationFilter(ptr) combase.CoRegisterActivationFilter
 @ stdcall CoRegisterChannelHook(ptr ptr) combase.CoRegisterChannelHook
 @ stdcall CoRegisterClassObject(ptr ptr long long ptr) combase.CoRegisterClassObject
 @ stdcall CoRegisterInitializeSpy(ptr ptr) combase.CoRegisterInitializeSpy
@@ -115,7 +115,7 @@
 @ stdcall CoTaskMemFree(ptr) combase.CoTaskMemFree
 @ stdcall CoTaskMemRealloc(ptr long) combase.CoTaskMemRealloc
 @ stub CoTestCancel
-@ stdcall CoTreatAsClass(ptr ptr)
+@ stdcall CoTreatAsClass(ptr ptr) combase.CoTreatAsClass
 @ stdcall CoUninitialize() combase.CoUninitialize
 @ stub CoUnloadingWOW
 @ stdcall CoUnmarshalHresult(ptr ptr) combase.CoUnmarshalHresult
