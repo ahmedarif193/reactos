@@ -133,7 +133,7 @@ dll/win32/msisip              # Synced to Wine-11.14
 dll/win32/msisys.ocx          # Synced to Wine-11.14
 dll/win32/msnet32             # Synced to Wine-11.14
 dll/win32/mspatcha            # Synced to Wine-11.14
-dll/win32/msrle32             # Synced to WineStaging-4.18
+dll/win32/msrle32             # Synced to Wine-11.14
 dll/win32/mssign32            # Synced to Wine-11.14
 dll/win32/mssip32             # Synced to Wine-11.14
 dll/win32/mstask              # Synced to Wine-11.14
