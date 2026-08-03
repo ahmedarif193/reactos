@@ -69,7 +69,10 @@ DWORD WINAPI AllocateAndGetUdpExTableFromStack(PVOID*,BOOL,HANDLE,DWORD,DWORD);
 DWORD WINAPI AllocateAndGetUdpExTable2FromStack(PVOID*,BOOL,HANDLE,DWORD,DWORD,UDP_TABLE_CLASS);
 #endif
 
-#if (NTDDI_VERSION >= NTDDI_VISTA)
+#if (NTDDI_VERSION >= NTDDI_VISTA) && defined(_WINSOCK2API_)
+#ifndef _WS2IPDEF_
+#include <ws2ipdef.h>
+#endif
 #include <netioapi.h>
 #endif
 
