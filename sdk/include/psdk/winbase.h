@@ -419,6 +419,11 @@ extern "C" {
 #define SEM_NOALIGNMENTFAULTEXCEPT	0x0004
 #define SEM_NOOPENFILEERRORBOX		0x8000
 /* end ntapi.h */
+
+/* RaiseFailFastException flags */
+#define FAIL_FAST_GENERATE_EXCEPTION_ADDRESS 0x0001
+#define FAIL_FAST_NO_HARD_ERROR_DLG          0x0002
+
 #define SLE_ERROR 1
 #define SLE_MINORERROR 2
 #define SLE_WARNING 3
@@ -2109,6 +2114,7 @@ BOOL WINAPI GetProcessTimes(HANDLE,LPFILETIME,LPFILETIME,LPFILETIME,LPFILETIME);
 DWORD WINAPI GetProcessVersion(DWORD);
 HWINSTA WINAPI GetProcessWindowStation(void);
 BOOL WINAPI GetProcessWorkingSetSize(_In_ HANDLE, _Out_ PSIZE_T, _Out_ PSIZE_T);
+UINT WINAPI GetErrorMode(VOID);
 UINT WINAPI GetProfileIntA(_In_ LPCSTR, _In_ LPCSTR, _In_ INT);
 UINT WINAPI GetProfileIntW(_In_ LPCWSTR, _In_ LPCWSTR, _In_ INT);
 
@@ -3059,6 +3065,7 @@ BOOL WINAPI SetProcessAffinityMask(_In_ HANDLE, _In_ DWORD_PTR);
 BOOL WINAPI SetProcessPriorityBoost(_In_ HANDLE, _In_ BOOL);
 BOOL WINAPI SetProcessShutdownParameters(DWORD,DWORD);
 BOOL WINAPI SetProcessWorkingSetSize(_In_ HANDLE, _In_ SIZE_T, _In_ SIZE_T);
+BOOL WINAPI SetProcessWorkingSetSizeEx(_In_ HANDLE, _In_ SIZE_T, _In_ SIZE_T, _In_ DWORD);
 #if (_WIN32_WINNT >= 0x0600)
 VOID WINAPI SetSecurityAccessMask(SECURITY_INFORMATION,LPDWORD);
 #endif
