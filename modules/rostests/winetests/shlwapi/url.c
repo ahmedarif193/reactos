@@ -311,15 +311,9 @@ static struct
     { L"file://foo/%F0%9F%8D%B7/bar", L"file://foo/\xf0\x9f\x8d\xb7/bar" }, /* with 4 btyes utf-8 */
     { L"file://foo/%F0%9F%8D%B7/bar", L"file://foo/\xd83c\xdf77/bar", URL_UNESCAPE_AS_UTF8 },
     /* non-escaped chars between multi-byte escaped chars */
-#if defined(__REACTOS__) && defined(_MSC_VER)
-    { L"file://foo/%E4%B8%ADabc%E6%96%87/bar", L"file://foo/\x4e2d""abc""\u6587/bar", URL_UNESCAPE_AS_UTF8 },
-    { L"file://foo/%E4B8%AD/bar", L"file://foo/\ufffd""B8\ufffd/bar", URL_UNESCAPE_AS_UTF8 },
-    { L"file://foo/%E4%G8%AD/bar", L"file://foo/\ufffd""%G8\ufffd/bar", URL_UNESCAPE_AS_UTF8 },
-#else
     { L"file://foo/%E4%B8%ADabc%E6%96%87/bar", L"file://foo/\x4e2d""abc""\x6587/bar", URL_UNESCAPE_AS_UTF8 },
     { L"file://foo/%E4B8%AD/bar", L"file://foo/\xfffd""B8\xfffd/bar", URL_UNESCAPE_AS_UTF8 },
     { L"file://foo/%E4%G8%AD/bar", L"file://foo/\xfffd""%G8\xfffd/bar", URL_UNESCAPE_AS_UTF8 },
-#endif
     { L"file://foo/%G4%B8%AD/bar", L"file://foo/%G4\xfffd\xfffd/bar", URL_UNESCAPE_AS_UTF8 },
 };
 
@@ -679,12 +673,6 @@ static void test_UrlGetPart(void)
     ok(hr == E_INVALIDARG, "Got hr %#lx.\n", hr);
     ok(!strcmp(buffer, "x"), "Got result %s.\n", debugstr_a(buffer));
     ok(!size, "Got size %lu.\n", size);
-#ifdef __REACTOS__
-    if (LOBYTE(LOWORD(GetVersion())) < 6) {
-        skip("UrlGetPart test list broken on WS03.\n");
-        goto skip_UrlGetPartTestList;
-    }
-#endif
 
     for (i = 0; i < ARRAY_SIZE(tests); ++i)
     {
@@ -777,9 +765,6 @@ static void test_UrlGetPart(void)
     }
 
     /* Test non-ASCII characters. */
-#ifdef __REACTOS__
-skip_UrlGetPartTestList:
-#endif
 
     size = ARRAY_SIZE(bufferW);
     wcscpy(bufferW, L"x");
@@ -860,13 +845,8 @@ static void test_UrlEscapeA(void)
     size = 1;
     empty_string[0] = 127;
     ret = UrlEscapeA("/woningplan/woonkamer basis.swf", empty_string, &size, URL_ESCAPE_AS_UTF8);
-#ifdef __REACTOS__
-    ok(ret == E_NOTIMPL || broken(ret == E_POINTER) /* Vista */, "Got unexpected hr %#lx.\n", ret);
-    ok(size == 1 || broken(size == 34) /* Vista */, "Got unexpected size %lu.\n", size);
-#else
     ok(ret == E_NOTIMPL, "Got unexpected hr %#lx.\n", ret);
     ok(size == 1, "Got unexpected size %lu.\n", size);
-#endif
     ok(empty_string[0] == 127, "String has changed, empty_string[0] = %d\n", empty_string[0]);
 
     for (i = 0; i < ARRAY_SIZE(TEST_ESCAPE); i++) {
@@ -889,11 +869,6 @@ static void test_UrlEscapeW(void)
     HRESULT ret;
     WCHAR wc;
     int i;
-#ifdef __REACTOS__
-    DWORD _ntVersion = GetVersion();
-    BYTE _ntMajor = LOBYTE(LOWORD(_ntVersion));
-    BYTE _ntMinor = HIBYTE(LOWORD(_ntVersion));
-#endif
 
     /* Check error paths */
 
@@ -968,11 +943,6 @@ static void test_UrlEscapeW(void)
     for (i = 0; i < ARRAY_SIZE(TEST_ESCAPEW); i++) {
         WCHAR ret_url[INTERNET_MAX_URL_LENGTH];
 
-#ifdef __REACTOS__
-        /* TEST_ESCAPEW[6, 7] is incorrect for WS03, Vista. */
-        if ((i == 6 || i == 7) && (_ntMajor < 6 || (_ntMajor == 6 && _ntMinor == 0)))
-            continue;
-#endif
         size = INTERNET_MAX_URL_LENGTH;
         ret = UrlEscapeW(TEST_ESCAPEW[i].url, ret_url, &size, TEST_ESCAPEW[i].flags);
         ok(ret == S_OK, "Got unexpected hr %#lx for %s.\n", ret, debugstr_w(TEST_ESCAPEW[i].url));

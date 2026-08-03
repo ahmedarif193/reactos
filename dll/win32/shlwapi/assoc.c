@@ -31,8 +31,8 @@
 #ifdef __REACTOS__
 #include "shlwapi_undoc.h"
 #include "evalcmd.h"
-#endif
 #include "wine/unicode.h"
+#endif
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(shell);
@@ -95,11 +95,9 @@ static BOOL SHLWAPI_ParamAToW(LPCSTR lpszParam, LPWSTR lpszBuff, DWORD dwLen,
  *  Success: S_OK. lpInterface contains the new object.
  *  Failure: An HRESULT error code indicating the error.
  *
-#ifndef __REACTOS__ // WRONG NOTES!
  * NOTES
  *  clsid  must be equal to CLSID_QueryAssociations and
  *  refiid must be equal to IID_IQueryAssociations, IID_IUnknown or this function will fail
-#endif
  */
 HRESULT WINAPI AssocCreate(CLSID clsid, REFIID refiid, void **lpInterface)
 {
@@ -132,6 +130,7 @@ HRESULT WINAPI AssocCreate(CLSID clsid, REFIID refiid, void **lpInterface)
 }
 
 
+#ifdef __REACTOS__
 struct AssocPerceivedInfo
 {
     PCWSTR Type;
@@ -297,6 +296,7 @@ static const struct AssocPerceivedInfo* AssocFindByType(LPCWSTR pszType)
     }
     return NULL;
 }
+#endif
 
 
 /*************************************************************************
@@ -320,7 +320,11 @@ static const struct AssocPerceivedInfo* AssocFindByType(LPCWSTR pszType)
  *  lppszType is optional and it can be NULL.
  *  if lpType or lpFlag are NULL, the function will crash.
  *  if lpszExt is NULL, an error is returned.
+ *
+ * BUGS
+ *   Unimplemented.
  */
+#ifdef __REACTOS__
 HRESULT WINAPI AssocGetPerceivedType(LPCWSTR lpszExt, PERCEIVED *lpType,
                                      INT *lpFlag, LPWSTR *lppszType)
 {
@@ -379,6 +383,18 @@ HRESULT WINAPI AssocGetPerceivedType(LPCWSTR lpszExt, PERCEIVED *lpType,
     }
     return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
 }
+#else
+HRESULT WINAPI AssocGetPerceivedType(LPCWSTR lpszExt, PERCEIVED *lpType,
+                                     INT *lpFlag, LPWSTR *lppszType)
+{
+  FIXME("(%s, %p, %p, %p) not supported\n", debugstr_w(lpszExt), lpType, lpFlag, lppszType);
+
+  if (lpszExt == NULL)
+    return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+
+  return E_NOTIMPL;
+}
+#endif
 
 /*************************************************************************
  * AssocQueryKeyW  [SHLWAPI.@]
