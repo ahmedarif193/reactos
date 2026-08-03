@@ -25,11 +25,7 @@
 
 #define COBJMACROS
 #include <d3d8.h>
-#ifdef __REACTOS__
-#include <wine/winternl.h>
-#else
 #include <winternl.h>
-#endif
 #include "wine/test.h"
 
 static bool is_win64 = sizeof(void *) > sizeof(int);
