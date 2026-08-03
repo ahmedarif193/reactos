@@ -628,6 +628,7 @@
 @ stdcall GetTempPathA(long ptr)
 @ stdcall GetTempPathW(long ptr)
 @ stdcall GetThreadContext(long ptr)
+@ stdcall -version=0xA00+ GetThreadDescription(ptr ptr)
 @ stdcall -stub -version=0x600+ GetThreadErrorMode()
 @ stdcall -version=0x601+ GetThreadGroupAffinity(long ptr)
 @ stdcall GetThreadIOPendingFlag(long ptr)
