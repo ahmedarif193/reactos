@@ -1,6 +1,6 @@
-#@ stdcall AccessCheck(ptr long long ptr ptr ptr ptr ptr)
-#@ stdcall AccessCheckAndAuditAlarmW(wstr ptr wstr wstr ptr long ptr long ptr ptr ptr)
-#@ stdcall AccessCheckByType(ptr ptr long long ptr long ptr ptr ptr ptr ptr)
+@ stdcall AccessCheck(ptr long long ptr ptr ptr ptr ptr)
+@ stdcall AccessCheckAndAuditAlarmW(wstr ptr wstr wstr ptr long ptr long ptr ptr ptr)
+@ stdcall AccessCheckByType(ptr ptr long long ptr long ptr ptr ptr ptr ptr)
 #@ stub AccessCheckByTypeAndAuditAlarmW
 #@ stub AccessCheckByTypeResultList
 #@ stub AccessCheckByTypeResultListAndAuditAlarmByHandleW
@@ -9,31 +9,31 @@
 #@ stdcall AcquireSRWLockShared(ptr) ntdll.RtlAcquireSRWLockShared
 # #@ stub AcquireStateLock
 #@ stdcall ActivateActCtx(ptr ptr)
-#@ stdcall AddAccessAllowedAce(ptr long long ptr)
-#@ stdcall AddAccessAllowedAceEx(ptr long long long ptr)
-#@ stdcall AddAccessAllowedObjectAce(ptr long long long ptr ptr ptr)
-#@ stdcall AddAccessDeniedAce(ptr long long ptr)
-#@ stdcall AddAccessDeniedAceEx(ptr long long long ptr)
-#@ stdcall AddAccessDeniedObjectAce(ptr long long long ptr ptr ptr)
-#@ stdcall AddAce(ptr long long ptr long)
-#@ stdcall AddAuditAccessAce(ptr long long ptr long long)
-#@ stdcall AddAuditAccessAceEx(ptr long long long ptr long long)
-#@ stdcall AddAuditAccessObjectAce(ptr long long long ptr ptr ptr long long)
+@ stdcall AddAccessAllowedAce(ptr long long ptr)
+@ stdcall AddAccessAllowedAceEx(ptr long long long ptr)
+@ stdcall AddAccessAllowedObjectAce(ptr long long long ptr ptr ptr)
+@ stdcall AddAccessDeniedAce(ptr long long ptr)
+@ stdcall AddAccessDeniedAceEx(ptr long long long ptr)
+@ stdcall AddAccessDeniedObjectAce(ptr long long long ptr ptr ptr)
+@ stdcall AddAce(ptr long long ptr long)
+@ stdcall AddAuditAccessAce(ptr long long ptr long long)
+@ stdcall AddAuditAccessAceEx(ptr long long long ptr long long)
+@ stdcall AddAuditAccessObjectAce(ptr long long long ptr ptr ptr long long)
 #@ stdcall AddConsoleAliasA(str str str)
 #@ stdcall AddConsoleAliasW(wstr wstr wstr)
 #@ stdcall AddDllDirectory(wstr)
-#@ stdcall AddMandatoryAce(ptr long long long ptr)
+@ stdcall AddMandatoryAce(ptr long long long ptr)
 #@ stdcall AddRefActCtx(ptr)
 # #@ stub AddResourceAttributeAce
 # #@ stub AddSIDToBoundaryDescriptor
 # #@ stub AddScopedPolicyIDAce
 #@ stdcall AddVectoredContinueHandler(long ptr) ntdll.RtlAddVectoredContinueHandler
 #@ stdcall AddVectoredExceptionHandler(long ptr) ntdll.RtlAddVectoredExceptionHandler
-#@ stdcall AdjustTokenGroups(long long ptr long ptr ptr)
-#@ stdcall AdjustTokenPrivileges(long long ptr long ptr ptr)
+@ stdcall AdjustTokenGroups(long long ptr long ptr ptr)
+@ stdcall AdjustTokenPrivileges(long long ptr long ptr ptr)
 #@ stdcall AllocConsole()
-#@ stdcall AllocateAndInitializeSid(ptr long long long long long long long long long ptr)
-#@ stdcall AllocateLocallyUniqueId(ptr)
+@ stdcall AllocateAndInitializeSid(ptr long long long long long long long long long ptr)
+@ stdcall AllocateLocallyUniqueId(ptr)
 #@ stdcall AllocateUserPhysicalPages(long ptr ptr)
 #@ stdcall AllocateUserPhysicalPagesNuma(long ptr ptr long)
 # #@ stub AppContainerDeriveSidFromMoniker
@@ -64,8 +64,8 @@
 # #@ stub AppXReleaseAppXContext
 # #@ stub AppXUpdatePackageCapabilities
 # #@ stub ApplicationUserModelIdFromProductId
-#@ stdcall AreAllAccessesGranted(long long)
-#@ stdcall AreAnyAccessesGranted(long long)
+@ stdcall AreAllAccessesGranted(long long)
+@ stdcall AreAnyAccessesGranted(long long)
 #@ stdcall AreFileApisANSI()
 # #@ stub AreThereVisibleLogoffScriptsInternal
 # #@ stub AreThereVisibleShutdownScriptsInternal
@@ -130,7 +130,7 @@
 # #@ stub CheckIfStateChangeNotificationExists
 #@ stdcall CheckRemoteDebuggerPresent(long ptr)
 # #@ stub CheckTokenCapability
-#@ stdcall CheckTokenMembership(long ptr ptr)
+@ stdcall CheckTokenMembership(long ptr ptr)
 # #@ stub CheckTokenMembershipEx
 @ stdcall ChrCmpIA(long long)
 @ stdcall ChrCmpIW(long long)
@@ -166,17 +166,17 @@
 #@ stdcall ConvertFiberToThread()
 #@ stdcall ConvertThreadToFiber(ptr)
 #@ stdcall ConvertThreadToFiberEx(ptr long)
-#@ stdcall ConvertToAutoInheritPrivateObjectSecurity(ptr ptr ptr ptr long ptr)
+@ stdcall ConvertToAutoInheritPrivateObjectSecurity(ptr ptr ptr ptr long ptr)
 #@ stdcall CopyContext(ptr long ptr)
 #@ stdcall CopyFile2(wstr wstr ptr)
 #@ stdcall CopyFileExW(wstr wstr ptr ptr ptr long)
 #@ stdcall CopyFileW(wstr wstr long)
 #@ stdcall -arch=x86_64 CopyMemoryNonTemporal(ptr ptr long) ntdll.RtlCopyMemoryNonTemporal
-#@ stdcall CopySid(long ptr ptr)
+@ stdcall CopySid(long ptr ptr)
 # #@ stub CouldMultiUserAppsBehaviorBePossibleForPackage
 #@ stdcall CreateActCtxW(ptr)
 # #@ stub CreateAppContainerToken
-#@ stdcall CreateBoundaryDescriptorW(wstr long)
+@ stdcall CreateBoundaryDescriptorW(wstr long)
 #@ stdcall CreateConsoleScreenBuffer(long long ptr long ptr)
 #@ stdcall CreateDirectoryA(str ptr)
 #@ stdcall CreateDirectoryExW(wstr wstr ptr)
@@ -205,9 +205,9 @@
 #@ stdcall CreateNamedPipeW(wstr long long long long long long ptr)
 #@ stdcall CreatePipe(ptr ptr ptr long)
 # #@ stub CreatePrivateNamespaceW
-#@ stdcall CreatePrivateObjectSecurity(ptr ptr ptr long long ptr)
-#@ stdcall CreatePrivateObjectSecurityEx(ptr ptr ptr ptr long long long ptr)
-#@ stdcall CreatePrivateObjectSecurityWithMultipleInheritance(ptr ptr ptr ptr long long long long ptr)
+@ stdcall CreatePrivateObjectSecurity(ptr ptr ptr long long ptr)
+@ stdcall CreatePrivateObjectSecurityEx(ptr ptr ptr ptr long long long ptr)
+@ stdcall CreatePrivateObjectSecurityWithMultipleInheritance(ptr ptr ptr ptr long long long long ptr)
 #@ stdcall CreateProcessA(str str ptr ptr long long ptr str ptr ptr)
 #@ stdcall CreateProcessAsUserA(long str str ptr ptr long long ptr str ptr ptr)
 #@ stdcall CreateProcessAsUserW(long wstr wstr ptr ptr long long ptr wstr ptr ptr)
@@ -217,7 +217,7 @@
 #@ stdcall CreatePseudoConsole(long long long long ptr)
 #@ stdcall CreateRemoteThread(long ptr long ptr long long ptr)
 #@ stdcall CreateRemoteThreadEx(long ptr long ptr ptr long ptr ptr)
-#@ stdcall CreateRestrictedToken(long long long ptr long ptr long ptr ptr)
+@ stdcall CreateRestrictedToken(long long long ptr long ptr long ptr ptr)
 #@ stdcall CreateSemaphoreExW(ptr long long wstr long long)
 #@ stdcall CreateSemaphoreW(ptr long long wstr)
 # #@ stub CreateStateAtom
@@ -237,7 +237,7 @@
 #@ stdcall CreateTimerQueueTimer(ptr long ptr ptr long long long)
 #@ stdcall CreateWaitableTimerExW(ptr wstr long long)
 #@ stdcall CreateWaitableTimerW(ptr long wstr)
-#@ stdcall CreateWellKnownSid(long ptr ptr ptr)
+@ stdcall CreateWellKnownSid(long ptr ptr ptr)
 #@ stdcall CtrlRoutine(ptr)
 # #@ stub CveEventWrite
 #@ stdcall DeactivateActCtx(long long)
@@ -250,7 +250,8 @@
 #@ stdcall DefineDosDeviceW(long wstr wstr)
 #@ stdcall DelayLoadFailureHook(str str)
 # #@ stub DelayLoadFailureHookLookup
-#@ stdcall DeleteAce(ptr long)
+@ stdcall DeriveCapabilitySidsFromName(ptr ptr ptr ptr ptr)
+@ stdcall DeleteAce(ptr long)
 # #@ stub DeleteBoundaryDescriptor
 #@ stdcall DeleteCriticalSection(ptr) ntdll.RtlDeleteCriticalSection
 #@ stdcall DeleteFiber(ptr)
@@ -264,14 +265,14 @@
 #@ stdcall DeleteTimerQueueEx(long long)
 #@ stdcall DeleteTimerQueueTimer(long long long)
 #@ stdcall DeleteVolumeMountPointW(wstr)
-#@ stdcall DestroyPrivateObjectSecurity(ptr)
+@ stdcall DestroyPrivateObjectSecurity(ptr)
 #@ stdcall DeviceIoControl(long long ptr long ptr long ptr ptr)
-#@ stdcall DisablePredefinedHandleTableInternal(long)
+@ stdcall DisablePredefinedHandleTableInternal(long)
 #@ stdcall DisableThreadLibraryCalls(long)
 #@ stdcall DisassociateCurrentThreadFromCallback(ptr) ntdll.TpDisassociateCallback
 #@ stdcall DiscardVirtualMemory(ptr long)
 #@ stdcall DisconnectNamedPipe(long)
-#@ stdcall DnsHostnameToComputerNameExW(wstr ptr ptr)
+@ stdcall DnsHostnameToComputerNameExW(wstr ptr ptr)
 # #@ stub DsBindWithSpnExW
 # #@ stub DsCrackNamesW
 # #@ stub DsFreeDomainControllerInfoW
@@ -285,8 +286,8 @@
 # #@ stub DsWriteNgcKeyW
 #@ stdcall DuplicateHandle(long long long ptr long long long)
 # #@ stub DuplicateStateContainerHandle
-#@ stdcall DuplicateToken(long long ptr)
-#@ stdcall DuplicateTokenEx(long long ptr long long ptr)
+@ stdcall DuplicateToken(long long ptr)
+@ stdcall DuplicateTokenEx(long long ptr long long ptr)
 #@ stdcall EmptyWorkingSet(long)
 #@ stdcall EncodePointer(ptr) ntdll.RtlEncodePointer
 # #@ stub EncodeRemotePointer
@@ -327,9 +328,9 @@
 #@ stdcall EnumUILanguagesW(ptr long long)
 # #@ stub EnumerateStateAtomValues
 # #@ stub EnumerateStateContainerItems
-#@ stdcall EqualDomainSid(ptr ptr ptr)
-#@ stdcall EqualPrefixSid(ptr ptr)
-#@ stdcall EqualSid(ptr ptr)
+@ stdcall EqualDomainSid(ptr ptr ptr)
+@ stdcall EqualPrefixSid(ptr ptr)
+@ stdcall EqualSid(ptr ptr)
 #@ stdcall EscapeCommFunction(long long)
 #@ stdcall EventActivityIdControl(long ptr) ntdll.EtwEventActivityIdControl
 #@ stdcall EventEnabled(int64 ptr) ntdll.EtwEventEnabled
@@ -365,7 +366,7 @@
 #@ stdcall FindFirstFileExW(wstr long ptr long ptr long)
 #@ stdcall FindFirstFileNameW(wstr long ptr ptr)
 #@ stdcall FindFirstFileW(wstr ptr)
-#@ stdcall FindFirstFreeAce(ptr ptr)
+@ stdcall FindFirstFreeAce(ptr ptr)
 #@ stdcall FindFirstStreamW(wstr long ptr long)
 #@ stdcall FindFirstVolumeW(ptr long)
 #@ stdcall FindNLSString(long long wstr long wstr long ptr)
@@ -404,15 +405,15 @@
 #@ stdcall FreeLibraryAndExitThread(long long)
 #@ stdcall FreeLibraryWhenCallbackReturns(ptr ptr) ntdll.TpCallbackUnloadDllOnCompletion
 #@ stdcall FreeResource(long)
-#@ stdcall FreeSid(ptr)
+@ stdcall FreeSid(ptr)
 #@ stdcall FreeUserPhysicalPages(long ptr ptr)
 #@ stdcall GenerateConsoleCtrlEvent(long long)
 # #@ stub GenerateGPNotificationInternal
 #@ stdcall GetACP()
 #@ stdcall GetAcceptLanguagesA(ptr ptr)
 #@ stdcall GetAcceptLanguagesW(ptr ptr)
-#@ stdcall GetAce(ptr long ptr)
-#@ stdcall GetAclInformation(ptr ptr long long)
+@ stdcall GetAce(ptr long ptr)
+@ stdcall GetAclInformation(ptr ptr long long)
 # #@ stub GetAdjustObjectAttributesForPrivateNamespaceRoutine
 # #@ stub GetAlternatePackageRoots
 # #@ stub GetAppContainerAce
@@ -443,8 +444,8 @@
 #@ stdcall GetCommandLineW()
 #@ stdcall GetCompressedFileSizeA(str ptr)
 #@ stdcall GetCompressedFileSizeW(wstr ptr)
-#@ stdcall GetComputerNameExA(long ptr ptr)
-#@ stdcall GetComputerNameExW(long ptr ptr)
+@ stdcall GetComputerNameExA(long ptr ptr)
+@ stdcall GetComputerNameExW(long ptr ptr)
 #@ stdcall GetConsoleAliasA(str ptr long str)
 ##@ stub GetConsoleAliasExesA
 #@ stdcall GetConsoleAliasExesLengthA()
@@ -539,7 +540,7 @@
 #@ stdcall GetFileInformationByHandleEx(long long ptr long)
 #@ stdcall GetFileMUIInfo(long wstr ptr ptr)
 #@ stdcall GetFileMUIPath(long wstr wstr ptr ptr ptr ptr)
-#@ stdcall GetFileSecurityW(wstr long ptr long ptr)
+@ stdcall GetFileSecurityW(wstr long ptr long ptr)
 #@ stdcall GetFileSize(long ptr)
 #@ stdcall GetFileSizeEx(long ptr)
 #@ stdcall GetFileTime(long ptr ptr ptr)
@@ -563,13 +564,13 @@
 #@ stdcall GetGeoInfoEx(ptr long ptr long)
 #@ stdcall GetHandleInformation(long ptr)
 # #@ stub GetHivePath
-# #@ stub GetIntegratedDisplaySize
+@ stdcall GetIntegratedDisplaySize(ptr)
 # #@ stub GetIsEdpEnabled
-#@ stdcall GetKernelObjectSecurity(long long ptr long ptr)
+@ stdcall GetKernelObjectSecurity(long long ptr long ptr)
 #@ stdcall GetLargePageMinimum()
 #@ stdcall GetLargestConsoleWindowSize(long)
 #@ stdcall GetLastError() kernelbase_GetLastError
-#@ stdcall GetLengthSid(ptr)
+@ stdcall GetLengthSid(ptr)
 #@ stdcall GetLocalTime(ptr)
 #@ stdcall GetLocaleInfoA(long long ptr long)
 #@ stdcall GetLocaleInfoEx(wstr long ptr long)
@@ -648,7 +649,7 @@
 #@ stdcall GetPhysicallyInstalledSystemMemory(ptr)
 # #@ stub GetPreviousFgPolicyRefreshInfoInternal
 #@ stdcall GetPriorityClass(long)
-#@ stdcall GetPrivateObjectSecurity(ptr long ptr long ptr)
+@ stdcall GetPrivateObjectSecurity(ptr long ptr long ptr)
 #@ stdcall GetProcAddress(long str)
 # #@ stub GetProcAddressForCaller
 # #@ stub GetProcessDefaultCpuSets
@@ -679,20 +680,20 @@
 #@ stdcall GetQueuedCompletionStatusEx(ptr ptr long ptr long long)
 # #@ stub GetRegistryExtensionFlags
 # #@ stub GetRoamingLastObservedChangeTime
-#@ stdcall GetSecurityDescriptorControl(ptr ptr ptr)
-#@ stdcall GetSecurityDescriptorDacl(ptr ptr ptr ptr)
-#@ stdcall GetSecurityDescriptorGroup(ptr ptr ptr)
-#@ stdcall GetSecurityDescriptorLength(ptr)
-#@ stdcall GetSecurityDescriptorOwner(ptr ptr ptr)
+@ stdcall GetSecurityDescriptorControl(ptr ptr ptr)
+@ stdcall GetSecurityDescriptorDacl(ptr ptr ptr ptr)
+@ stdcall GetSecurityDescriptorGroup(ptr ptr ptr)
+@ stdcall GetSecurityDescriptorLength(ptr)
+@ stdcall GetSecurityDescriptorOwner(ptr ptr ptr)
 #@ stub GetSecurityDescriptorRMControl
-#@ stdcall GetSecurityDescriptorSacl(ptr ptr ptr ptr)
+@ stdcall GetSecurityDescriptorSacl(ptr ptr ptr ptr)
 # #@ stub GetSerializedAtomBytes
 # #@ stub GetSharedLocalFolder
 #@ stdcall GetShortPathNameW(wstr ptr long)
-#@ stdcall GetSidIdentifierAuthority(ptr)
-#@ stdcall GetSidLengthRequired(long)
-#@ stdcall GetSidSubAuthority(ptr long)
-#@ stdcall GetSidSubAuthorityCount(ptr)
+@ stdcall GetSidIdentifierAuthority(ptr)
+@ stdcall GetSidLengthRequired(long)
+@ stdcall GetSidSubAuthority(ptr long)
+@ stdcall GetSidSubAuthorityCount(ptr)
 # #@ stub GetStagedPackageOrigin
 # #@ stub GetStagedPackagePathByFullName
 #@ stdcall GetStartupInfoW(ptr)
@@ -765,7 +766,7 @@
 #@ stdcall GetTimeFormatW(long long ptr wstr ptr long)
 #@ stdcall GetTimeZoneInformation(ptr)
 #@ stdcall GetTimeZoneInformationForYear(long ptr ptr)
-#@ stdcall GetTokenInformation(long long ptr long ptr)
+@ stdcall GetTokenInformation(long long ptr long ptr)
 #@ stdcall GetTraceEnableFlags(int64) ntdll.EtwGetTraceEnableFlags
 #@ stdcall GetTraceEnableLevel(int64) ntdll.EtwGetTraceEnableLevel
 #@ stdcall -ret64 GetTraceLoggerHandle(ptr) ntdll.EtwGetTraceLoggerHandle
@@ -792,7 +793,7 @@
 #@ stdcall GetVolumeNameForVolumeMountPointW(wstr ptr long)
 #@ stdcall GetVolumePathNameW(wstr ptr long)
 #@ stdcall GetVolumePathNamesForVolumeNameW(wstr ptr long ptr)
-#@ stdcall GetWindowsAccountDomainSid(ptr ptr ptr)
+@ stdcall GetWindowsAccountDomainSid(ptr ptr ptr)
 #@ stdcall GetWindowsDirectoryA(ptr long)
 #@ stdcall GetWindowsDirectoryW(ptr long)
 #@ stdcall GetWriteWatch(long ptr long ptr ptr ptr)
@@ -822,16 +823,16 @@
 #@ stdcall IdnToAscii(long wstr long ptr long)
 #@ stdcall IdnToNameprepUnicode(long wstr long ptr long)
 #@ stdcall IdnToUnicode(long wstr long ptr long)
-#@ stdcall ImpersonateAnonymousToken(long)
-#@ stdcall ImpersonateLoggedOnUser(long)
-#@ stdcall ImpersonateNamedPipeClient(long)
-#@ stdcall ImpersonateSelf(long)
+@ stdcall ImpersonateAnonymousToken(long)
+@ stdcall ImpersonateLoggedOnUser(long)
+@ stdcall ImpersonateNamedPipeClient(long)
+@ stdcall ImpersonateSelf(long)
 # #@ stub IncrementPackageStatusVersion
 #@ stdcall InitOnceBeginInitialize(ptr long ptr ptr)
 #@ stdcall InitOnceComplete(ptr long ptr)
 #@ stdcall InitOnceExecuteOnce(ptr ptr ptr ptr)
 #@ stdcall InitOnceInitialize(ptr) ntdll.RtlRunOnceInitialize
-#@ stdcall InitializeAcl(ptr long long)
+@ stdcall InitializeAcl(ptr long long)
 #@ stdcall InitializeConditionVariable(ptr) ntdll.RtlInitializeConditionVariable
 #@ stdcall InitializeContext(ptr long ptr ptr)
 #@ stdcall InitializeContext2(ptr long ptr ptr int64)
@@ -843,8 +844,8 @@
 #@ stdcall InitializeProcessForWsWatch(long)
 #@ stdcall InitializeSListHead(ptr) ntdll.RtlInitializeSListHead
 #@ stdcall InitializeSRWLock(ptr) ntdll.RtlInitializeSRWLock
-#@ stdcall InitializeSecurityDescriptor(ptr long)
-#@ stdcall InitializeSid(ptr ptr long)
+@ stdcall InitializeSecurityDescriptor(ptr long)
+@ stdcall InitializeSid(ptr ptr long)
 # #@ stub InitializeSynchronizationBarrier
 # #@ stub InstallELAMCertificateInfo
 #@ stdcall -arch=i386 InterlockedCompareExchange(ptr long long)
@@ -908,17 +909,17 @@
 #@ stdcall IsThreadAFiber()
 #@ stdcall IsThreadpoolTimerSet(ptr) ntdll.TpIsTimerSet
 # #@ stub IsTimeZoneRedirectionEnabled
-#@ stdcall IsTokenRestricted(long)
-#@ stdcall IsValidAcl(ptr)
+@ stdcall IsTokenRestricted(long)
+@ stdcall IsValidAcl(ptr)
 #@ stdcall IsValidCodePage(long)
 #@ stdcall IsValidLanguageGroup(long long)
 #@ stdcall IsValidLocale(long long)
 #@ stdcall IsValidLocaleName(wstr)
 #@ stdcall IsValidNLSVersion(long wstr ptr)
 #@ stub IsValidRelativeSecurityDescriptor
-#@ stdcall IsValidSecurityDescriptor(ptr)
-#@ stdcall IsValidSid(ptr)
-#@ stdcall IsWellKnownSid(ptr long)
+@ stdcall IsValidSecurityDescriptor(ptr)
+@ stdcall IsValidSid(ptr)
+@ stdcall IsWellKnownSid(ptr long)
 #@ stdcall IsWow64Process(ptr ptr)
 #@ stdcall IsWow64Process2(ptr ptr ptr)
 #@ stdcall K32EmptyWorkingSet(long) EmptyWorkingSet
@@ -979,10 +980,10 @@
 #@ stdcall LockFile(long long long long long)
 #@ stdcall LockFileEx(long long long long long ptr)
 #@ stdcall LockResource(long)
-#@ stdcall MakeAbsoluteSD(ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr)
+@ stdcall MakeAbsoluteSD(ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr)
 #@ stub MakeAbsoluteSD2
-#@ stdcall MakeSelfRelativeSD(ptr ptr ptr)
-#@ stdcall MapGenericMask(ptr ptr)
+@ stdcall MakeSelfRelativeSD(ptr ptr ptr)
+@ stdcall MapGenericMask(ptr ptr)
 # #@ stub MapPredefinedHandleInternal
 #@ stdcall MapUserPhysicalPages(ptr long ptr)
 #@ stdcall MapViewOfFile(long long long long long)
@@ -1012,10 +1013,10 @@
 #@ stdcall NormalizeString(long wstr long ptr long)
 #@ stub NotifyMountMgr
 #@ stub NotifyRedirectedStringChange
-#@ stdcall ObjectCloseAuditAlarmW(wstr ptr long)
-#@ stdcall ObjectDeleteAuditAlarmW(wstr ptr long)
-#@ stdcall ObjectOpenAuditAlarmW(wstr ptr wstr wstr ptr long long long ptr long long ptr)
-#@ stdcall ObjectPrivilegeAuditAlarmW(wstr ptr long long ptr long)
+@ stdcall ObjectCloseAuditAlarmW(wstr ptr long)
+@ stdcall ObjectDeleteAuditAlarmW(wstr ptr long)
+@ stdcall ObjectOpenAuditAlarmW(wstr ptr wstr wstr ptr long long long ptr long long ptr)
+@ stdcall ObjectPrivilegeAuditAlarmW(wstr ptr long long ptr long)
 # #@ stub OfferVirtualMemory
 #@ stdcall OpenEventA(long long str)
 #@ stdcall OpenEventW(long long wstr)
@@ -1028,7 +1029,7 @@
 # #@ stub OpenPackageInfoByFullNameForUser
 # #@ stub OpenPrivateNamespaceW
 #@ stdcall OpenProcess(long long long)
-#@ stdcall OpenProcessToken(long long ptr)
+@ stdcall OpenProcessToken(long long ptr)
 #@ stub OpenRegKey
 #@ stdcall OpenSemaphoreW(long long wstr)
 # #@ stub OpenState
@@ -1037,7 +1038,7 @@
 # #@ stub OpenStateExplicitForUserSid
 # #@ stub OpenStateExplicitForUserSidString
 #@ stdcall OpenThread(long long long)
-#@ stdcall OpenThreadToken(long long long ptr)
+@ stdcall OpenThreadToken(long long long ptr)
 #@ stdcall OpenWaitableTimerW(long long wstr)
 #@ stdcall OutputDebugStringA(str)
 #@ stdcall OutputDebugStringW(wstr)
@@ -1181,26 +1182,26 @@
 #@ stdcall PeekConsoleInputA(ptr ptr long ptr)
 #@ stdcall PeekConsoleInputW(ptr ptr long ptr)
 #@ stdcall PeekNamedPipe(long ptr long ptr ptr ptr)
-#@ stdcall PerfCreateInstance(long ptr wstr long)
+@ stdcall PerfCreateInstance(long ptr wstr long)
 # #@ stub PerfDecrementULongCounterValue
 # #@ stub PerfDecrementULongLongCounterValue
-#@ stdcall PerfDeleteInstance(long ptr)
+@ stdcall PerfDeleteInstance(long ptr)
 # #@ stub PerfIncrementULongCounterValue
 # #@ stub PerfIncrementULongLongCounterValue
 # #@ stub PerfQueryInstance
-#@ stdcall PerfSetCounterRefValue(long ptr long ptr)
-#@ stdcall PerfSetCounterSetInfo(long ptr long)
-# #@ stub PerfSetULongCounterValue
-# #@ stub PerfSetULongLongCounterValue
-#@ stdcall PerfStartProvider(ptr ptr ptr)
-#@ stdcall PerfStartProviderEx(ptr ptr ptr)
-#@ stdcall PerfStopProvider(long)
+@ stdcall PerfSetCounterRefValue(long ptr long ptr)
+@ stdcall PerfSetCounterSetInfo(long ptr long)
+@ stdcall PerfSetULongCounterValue(long ptr long long)
+@ stdcall PerfSetULongLongCounterValue(long ptr long int64)
+@ stdcall PerfStartProvider(ptr ptr ptr)
+@ stdcall PerfStartProviderEx(ptr ptr ptr)
+@ stdcall PerfStopProvider(long)
 # #@ stub PoolPerAppKeyStateInternal
 #@ stdcall PostQueuedCompletionStatus(long long ptr ptr)
 #@ stdcall PrefetchVirtualMemory(ptr ptr ptr long)
 #@ stub PrivCopyFileExW
-#@ stdcall PrivilegeCheck(ptr ptr ptr)
-#@ stdcall PrivilegedServiceAuditAlarmW(wstr wstr long ptr long)
+@ stdcall PrivilegeCheck(ptr ptr ptr)
+@ stdcall PrivilegedServiceAuditAlarmW(wstr wstr long ptr long)
 #@ stdcall ProcessIdToSessionId(long ptr)
 # #@ stub ProductIdFromPackageFamilyName
 # #@ stub PsmCreateKey
@@ -1293,31 +1294,31 @@
 # #@ stub ReclaimVirtualMemory
 # #@ stub RefreshPolicyExInternal
 # #@ stub RefreshPolicyInternal
-#@ stdcall RegCloseKey(long)
-#@ stdcall RegCopyTreeW(long wstr long)
-#@ stdcall RegCreateKeyExA(long str long ptr long long ptr ptr ptr)
+@ stdcall RegCloseKey(long)
+@ stdcall RegCopyTreeW(long wstr long)
+@ stdcall RegCreateKeyExA(long str long ptr long long ptr ptr ptr)
 # #@ stub RegCreateKeyExInternalA
 # #@ stub RegCreateKeyExInternalW
-#@ stdcall RegCreateKeyExW(long wstr long ptr long long ptr ptr ptr)
-#@ stdcall RegDeleteKeyExA(long str long long)
+@ stdcall RegCreateKeyExW(long wstr long ptr long long ptr ptr ptr)
+@ stdcall RegDeleteKeyExA(long str long long)
 # #@ stub RegDeleteKeyExInternalA
 # #@ stub RegDeleteKeyExInternalW
-#@ stdcall RegDeleteKeyExW(long wstr long long)
-#@ stdcall RegDeleteKeyValueA(long str str)
-#@ stdcall RegDeleteKeyValueW(long wstr wstr)
-#@ stdcall RegDeleteTreeA(long str)
-#@ stdcall RegDeleteTreeW(long wstr)
-#@ stdcall RegDeleteValueA(long str)
-#@ stdcall RegDeleteValueW(long wstr)
+@ stdcall RegDeleteKeyExW(long wstr long long)
+@ stdcall RegDeleteKeyValueA(long str str)
+@ stdcall RegDeleteKeyValueW(long wstr wstr)
+@ stdcall RegDeleteTreeA(long str)
+@ stdcall RegDeleteTreeW(long wstr)
+@ stdcall RegDeleteValueA(long str)
+@ stdcall RegDeleteValueW(long wstr)
 # #@ stub RegDisablePredefinedCacheEx
-#@ stdcall RegEnumKeyExA(long long ptr ptr ptr ptr ptr ptr)
-#@ stdcall RegEnumKeyExW(long long ptr ptr ptr ptr ptr ptr)
-#@ stdcall RegEnumValueA(long long ptr ptr ptr ptr ptr ptr)
-#@ stdcall RegEnumValueW(long long ptr ptr ptr ptr ptr ptr)
-#@ stdcall RegFlushKey(long)
-#@ stdcall RegGetKeySecurity(long long ptr ptr)
-#@ stdcall RegGetValueA(long str str long ptr ptr ptr)
-#@ stdcall RegGetValueW(long wstr wstr long ptr ptr ptr)
+@ stdcall RegEnumKeyExA(long long ptr ptr ptr ptr ptr ptr)
+@ stdcall RegEnumKeyExW(long long ptr ptr ptr ptr ptr ptr)
+@ stdcall RegEnumValueA(long long ptr ptr ptr ptr ptr ptr)
+@ stdcall RegEnumValueW(long long ptr ptr ptr ptr ptr ptr)
+@ stdcall RegFlushKey(long)
+@ stdcall RegGetKeySecurity(long long ptr ptr)
+@ stdcall RegGetValueA(long str str long ptr ptr ptr)
+@ stdcall RegGetValueW(long wstr wstr long ptr ptr ptr)
 # #@ stub RegKrnGetAppKeyEventAddressInternal
 # #@ stub RegKrnGetAppKeyLoaded
 # #@ stub RegKrnGetClassesEnumTableAddressInternal
@@ -1326,34 +1327,34 @@
 # #@ stub RegKrnResetAppKeyLoaded
 # #@ stub RegKrnSetDllHasThreadStateGlobal
 # #@ stub RegKrnSetTermsrvRegistryExtensionFlags
-#@ stdcall RegLoadAppKeyA(str ptr long long long)
-#@ stdcall RegLoadAppKeyW(wstr ptr long long long)
-#@ stdcall RegLoadKeyA(long str str)
-#@ stdcall RegLoadKeyW(long wstr wstr)
-#@ stdcall RegLoadMUIStringA(long str str long ptr long str)
-#@ stdcall RegLoadMUIStringW(long wstr wstr long ptr long wstr)
-#@ stdcall RegNotifyChangeKeyValue(long long long long long)
-#@ stdcall RegOpenCurrentUser(long ptr)
-#@ stdcall RegOpenKeyExA(long str long long ptr)
+@ stdcall RegLoadAppKeyA(str ptr long long long)
+@ stdcall RegLoadAppKeyW(wstr ptr long long long)
+@ stdcall RegLoadKeyA(long str str)
+@ stdcall RegLoadKeyW(long wstr wstr)
+@ stdcall RegLoadMUIStringA(long str str long ptr long str)
+@ stdcall RegLoadMUIStringW(long wstr wstr long ptr long wstr)
+@ stdcall RegNotifyChangeKeyValue(long long long long long)
+@ stdcall RegOpenCurrentUser(long ptr)
+@ stdcall RegOpenKeyExA(long str long long ptr)
 # #@ stub RegOpenKeyExInternalA
 # #@ stub RegOpenKeyExInternalW
-#@ stdcall RegOpenKeyExW(long wstr long long ptr)
-#@ stdcall RegOpenUserClassesRoot(ptr long long ptr)
-#@ stdcall RegQueryInfoKeyA(long ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr)
-#@ stdcall RegQueryInfoKeyW(long ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr)
-#@ stdcall RegQueryValueExA(long str ptr ptr ptr ptr)
-#@ stdcall RegQueryValueExW(long wstr ptr ptr ptr ptr)
-#@ stdcall RegRestoreKeyA(long str long)
-#@ stdcall RegRestoreKeyW(long wstr long)
-#@ stdcall RegSaveKeyExA(long str ptr long)
-#@ stdcall RegSaveKeyExW(long wstr ptr long)
-#@ stdcall RegSetKeySecurity(long long ptr)
-#@ stdcall RegSetKeyValueA(long str str long ptr long)
-#@ stdcall RegSetKeyValueW(long wstr wstr long ptr long)
-#@ stdcall RegSetValueExA(long str long long ptr long)
-#@ stdcall RegSetValueExW(long wstr long long ptr long)
-#@ stdcall RegUnLoadKeyA(long str)
-#@ stdcall RegUnLoadKeyW(long wstr)
+@ stdcall RegOpenKeyExW(long wstr long long ptr)
+@ stdcall RegOpenUserClassesRoot(ptr long long ptr)
+@ stdcall RegQueryInfoKeyA(long ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr)
+@ stdcall RegQueryInfoKeyW(long ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr)
+@ stdcall RegQueryValueExA(long str ptr ptr ptr ptr)
+@ stdcall RegQueryValueExW(long wstr ptr ptr ptr ptr)
+@ stdcall RegRestoreKeyA(long str long)
+@ stdcall RegRestoreKeyW(long wstr long)
+@ stdcall RegSaveKeyExA(long str ptr long)
+@ stdcall RegSaveKeyExW(long wstr ptr long)
+@ stdcall RegSetKeySecurity(long long ptr)
+@ stdcall RegSetKeyValueA(long str str long ptr long)
+@ stdcall RegSetKeyValueW(long wstr wstr long ptr long)
+@ stdcall RegSetValueExA(long str long long ptr long)
+@ stdcall RegSetValueExW(long wstr long long ptr long)
+@ stdcall RegUnLoadKeyA(long str)
+@ stdcall RegUnLoadKeyW(long wstr)
 # #@ stub RegisterBadMemoryNotification
 # #@ stub RegisterGPNotificationInternal
 # #@ stub RegisterStateChangeNotification
@@ -1368,7 +1369,7 @@
 #@ stdcall ReleaseSemaphore(long long ptr)
 #@ stdcall ReleaseSemaphoreWhenCallbackReturns(ptr long long) ntdll.TpCallbackReleaseSemaphoreOnCompletion
 # #@ stub ReleaseStateLock
-#@ stdcall RemapPredefinedHandleInternal(long long)
+@ stdcall RemapPredefinedHandleInternal(long long)
 #@ stdcall RemoveDirectoryA(str)
 #@ stdcall RemoveDirectoryW(wstr)
 #@ stdcall RemoveDllDirectory(ptr)
@@ -1387,38 +1388,38 @@
 #@ stdcall ResolveLocaleName(wstr ptr long)
 #@ stdcall RestoreLastError(long) ntdll.RtlRestoreLastWin32Error
 #@ stdcall ResumeThread(long)
-#@ stdcall RevertToSelf()
+@ stdcall RevertToSelf()
 # #@ stub RsopLoggingEnabledInternal
 # #@ stub SHCoCreateInstance
 #@ stdcall SHExpandEnvironmentStringsA(str ptr long) ExpandEnvironmentStringsA
 #@ stdcall SHExpandEnvironmentStringsW(wstr ptr long) ExpandEnvironmentStringsW
 @ stdcall SHLoadIndirectString(wstr ptr long ptr)
 # #@ stub SHLoadIndirectStringInternal
-#@ stdcall SHRegCloseUSKey(ptr)
-#@ stdcall SHRegCreateUSKeyA(str long long ptr long)
-#@ stdcall SHRegCreateUSKeyW(wstr long long ptr long)
-#@ stdcall SHRegDeleteEmptyUSKeyA(long str long)
-#@ stdcall SHRegDeleteEmptyUSKeyW(long wstr long)
-#@ stdcall SHRegDeleteUSValueA(long str long)
-#@ stdcall SHRegDeleteUSValueW(long wstr long)
-#@ stdcall SHRegEnumUSKeyA(long long str ptr long)
-#@ stdcall SHRegEnumUSKeyW(long long wstr ptr long)
-#@ stdcall SHRegEnumUSValueA(long long ptr ptr ptr ptr ptr long)
-#@ stdcall SHRegEnumUSValueW(long long ptr ptr ptr ptr ptr long)
-#@ stdcall SHRegGetBoolUSValueA(str str long long)
-#@ stdcall SHRegGetBoolUSValueW(wstr wstr long long)
-#@ stdcall SHRegGetUSValueA(str str ptr ptr ptr long ptr long)
-#@ stdcall SHRegGetUSValueW(wstr wstr ptr ptr ptr long ptr long)
-#@ stdcall SHRegOpenUSKeyA(str long long ptr long)
-#@ stdcall SHRegOpenUSKeyW(wstr long long ptr long)
-#@ stdcall SHRegQueryInfoUSKeyA(long ptr ptr ptr ptr long)
-#@ stdcall SHRegQueryInfoUSKeyW(long ptr ptr ptr ptr long)
-#@ stdcall SHRegQueryUSValueA(long str ptr ptr ptr long ptr long)
-#@ stdcall SHRegQueryUSValueW(long wstr ptr ptr ptr long ptr long)
-#@ stdcall SHRegSetUSValueA(str str long ptr long long)
-#@ stdcall SHRegSetUSValueW(wstr wstr long ptr long long)
-#@ stdcall SHRegWriteUSValueA(long str long ptr long long)
-#@ stdcall SHRegWriteUSValueW(long wstr long ptr long long)
+@ stdcall SHRegCloseUSKey(ptr)
+@ stdcall SHRegCreateUSKeyA(str long long ptr long)
+@ stdcall SHRegCreateUSKeyW(wstr long long ptr long)
+@ stdcall SHRegDeleteEmptyUSKeyA(long str long)
+@ stdcall SHRegDeleteEmptyUSKeyW(long wstr long)
+@ stdcall SHRegDeleteUSValueA(long str long)
+@ stdcall SHRegDeleteUSValueW(long wstr long)
+@ stdcall SHRegEnumUSKeyA(long long str ptr long)
+@ stdcall SHRegEnumUSKeyW(long long wstr ptr long)
+@ stdcall SHRegEnumUSValueA(long long ptr ptr ptr ptr ptr long)
+@ stdcall SHRegEnumUSValueW(long long ptr ptr ptr ptr ptr long)
+@ stdcall SHRegGetBoolUSValueA(str str long long)
+@ stdcall SHRegGetBoolUSValueW(wstr wstr long long)
+@ stdcall SHRegGetUSValueA(str str ptr ptr ptr long ptr long)
+@ stdcall SHRegGetUSValueW(wstr wstr ptr ptr ptr long ptr long)
+@ stdcall SHRegOpenUSKeyA(str long long ptr long)
+@ stdcall SHRegOpenUSKeyW(wstr long long ptr long)
+@ stdcall SHRegQueryInfoUSKeyA(long ptr ptr ptr ptr long)
+@ stdcall SHRegQueryInfoUSKeyW(long ptr ptr ptr ptr long)
+@ stdcall SHRegQueryUSValueA(long str ptr ptr ptr long ptr long)
+@ stdcall SHRegQueryUSValueW(long wstr ptr ptr ptr long ptr long)
+@ stdcall SHRegSetUSValueA(str str long ptr long long)
+@ stdcall SHRegSetUSValueW(wstr wstr long ptr long long)
+@ stdcall SHRegWriteUSValueA(long str long ptr long long)
+@ stdcall SHRegWriteUSValueW(long wstr long ptr long long)
 @ stdcall SHTruncateString(str long)
 # #@ stub SaveAlternatePackageRootPath
 # #@ stub SaveStateRootFolderPath
@@ -1426,8 +1427,8 @@
 #@ stdcall ScrollConsoleScreenBufferW(long ptr ptr ptr ptr)
 #@ stdcall SearchPathA(str str str long ptr ptr)
 #@ stdcall SearchPathW(wstr wstr wstr long ptr ptr)
-#@ stdcall SetAclInformation(ptr ptr long long)
-#@ stdcall SetCachedSigningLevel(ptr long long long)
+@ stdcall SetAclInformation(ptr ptr long long)
+@ stdcall SetCachedSigningLevel(ptr long long long)
 #@ stdcall SetCalendarInfoW(long long long wstr)
 # #@ stub SetClientDynamicTimeZoneInformation
 # #@ stub SetClientTimeZoneInformation
@@ -1436,11 +1437,11 @@
 #@ stdcall SetCommMask(long long)
 #@ stdcall SetCommState(long ptr)
 #@ stdcall SetCommTimeouts(long ptr)
-#@ stdcall SetComputerNameA(str)
+@ stdcall SetComputerNameA(str)
 # #@ stub SetComputerNameEx2W
-#@ stdcall SetComputerNameExA(long str)
-#@ stdcall SetComputerNameExW(long wstr)
-#@ stdcall SetComputerNameW(wstr)
+@ stdcall SetComputerNameExA(long str)
+@ stdcall SetComputerNameExW(long wstr)
+@ stdcall SetComputerNameW(wstr)
 #@ stdcall SetConsoleActiveScreenBuffer(long)
 #@ stdcall SetConsoleCP(long)
 #@ stdcall SetConsoleCtrlHandler(ptr long)
@@ -1479,22 +1480,22 @@
 # #@ stub SetFileIoOverlappedRange
 #@ stdcall SetFilePointer(long long ptr long)
 #@ stdcall SetFilePointerEx(long int64 ptr long)
-#@ stdcall SetFileSecurityW(wstr long ptr)
+@ stdcall SetFileSecurityW(wstr long ptr)
 #@ stdcall SetFileTime(long ptr ptr ptr)
 #@ stdcall SetFileValidData(ptr int64)
 #@ stdcall SetHandleCount(long)
 #@ stdcall SetHandleInformation(long long long)
 # #@ stub SetIsDeveloperModeEnabled
 # #@ stub SetIsSideloadingEnabled
-#@ stdcall SetKernelObjectSecurity(long long ptr)
+@ stdcall SetKernelObjectSecurity(long long ptr)
 #@ stub SetLastConsoleEventActive
 #@ stdcall SetLastError(long) ntdll.RtlSetLastWin32Error
 #@ stdcall SetLocalTime(ptr)
 #@ stdcall SetLocaleInfoW(long long wstr)
 #@ stdcall SetNamedPipeHandleState(long ptr ptr ptr)
 #@ stdcall SetPriorityClass(long long)
-#@ stdcall SetPrivateObjectSecurity(long ptr ptr ptr long)
-#@ stdcall SetPrivateObjectSecurityEx(long ptr ptr long ptr long)
+@ stdcall SetPrivateObjectSecurity(long ptr ptr ptr long)
+@ stdcall SetPrivateObjectSecurityEx(long ptr ptr long ptr long)
 #@ stdcall SetProcessAffinityUpdateMode(long long)
 #@ stdcall SetProcessDefaultCpuSets(ptr ptr long)
 #@ stdcall SetProcessGroupAffinity(long ptr ptr)
@@ -1508,12 +1509,12 @@
 # #@ stub SetProtectedPolicy
 # #@ stub SetRoamingLastObservedChangeTime
 #@ stub SetSecurityAccessMask
-#@ stdcall SetSecurityDescriptorControl(ptr long long)
-#@ stdcall SetSecurityDescriptorDacl(ptr long ptr long)
-#@ stdcall SetSecurityDescriptorGroup(ptr ptr long)
-#@ stdcall SetSecurityDescriptorOwner(ptr ptr long)
+@ stdcall SetSecurityDescriptorControl(ptr long long)
+@ stdcall SetSecurityDescriptorDacl(ptr long ptr long)
+@ stdcall SetSecurityDescriptorGroup(ptr ptr long)
+@ stdcall SetSecurityDescriptorOwner(ptr ptr long)
 #@ stub SetSecurityDescriptorRMControl
-#@ stdcall SetSecurityDescriptorSacl(ptr long ptr long)
+@ stdcall SetSecurityDescriptorSacl(ptr long ptr long)
 # #@ stub SetStateVersion
 #@ stdcall SetStdHandle(long long)
 #@ stdcall SetStdHandleEx(long long ptr)
@@ -1533,7 +1534,7 @@
 #@ stdcall SetThreadPriorityBoost(long long)
 #@ stdcall SetThreadSelectedCpuSets(ptr ptr long)
 #@ stdcall SetThreadStackGuarantee(ptr)
-#@ stdcall SetThreadToken(ptr ptr)
+@ stdcall SetThreadToken(ptr ptr)
 #@ stdcall SetThreadUILanguage(long)
 #@ stdcall SetThreadpoolStackInformation(ptr ptr)
 #@ stdcall SetThreadpoolThreadMaximum(ptr long) ntdll.TpSetPoolMaxThreads
@@ -1543,7 +1544,7 @@
 #@ stdcall SetThreadpoolWait(ptr long ptr) ntdll.TpSetWait
 # #@ stub SetThreadpoolWaitEx
 #@ stdcall SetTimeZoneInformation(ptr)
-#@ stdcall SetTokenInformation(long long ptr long)
+@ stdcall SetTokenInformation(long long ptr long)
 #@ stdcall SetUnhandledExceptionFilter(ptr)
 #@ stdcall SetUserGeoID(long)
 #@ stdcall SetUserGeoName(wstr)
