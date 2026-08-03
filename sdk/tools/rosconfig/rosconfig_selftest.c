@@ -437,6 +437,9 @@ int rosconfig_self_test(void)
     expect(&test, generate_cmake(generated_path) == 0, "CMake fragment regenerates for the LattePanda Mu HTTP boot option");
     expect(&test, file_contains(generated_path, "set(ROSCONFIG_PROFILE \"lattepandamu\" CACHE STRING \"Target profile\")"), "the LattePanda Mu profile is emitted");
     expect(&test, file_contains(generated_path, "set(FREELDR_HTTP_BOOT TRUE CACHE BOOL \"Enable HTTP boot\")"), "the LattePanda Mu HTTP boot option is emitted");
+    set_value(http_boot, "n");
+    expect(&test, generate_cmake(generated_path) == 0, "CMake fragment regenerates with LattePanda Mu HTTP boot disabled");
+    expect(&test, file_contains(generated_path, "set(FREELDR_HTTP_BOOT FALSE CACHE BOOL \"Enable HTTP boot\")"), "the LattePanda Mu HTTP boot option can be disabled");
     set_value(profile_amd64, "generic");
 
     set_value(enable, "n");
