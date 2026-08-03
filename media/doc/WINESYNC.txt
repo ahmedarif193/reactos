@@ -115,7 +115,7 @@ dll/win32/mciseq              # Synced to Wine-11.14
 dll/win32/mciwave             # Synced to Wine-11.14
 dll/win32/mgmtapi             # Synced to Wine-11.14
 dll/win32/mlang               # Synced to Wine-11.14
-dll/win32/mmdevapi            # Synced to Wine-10.0
+dll/win32/mmdevapi            # Synced to Wine-11.14
 dll/win32/mpr                 # Synced to Wine-11.14
 dll/win32/mprapi              # Synced to Wine-11.14
 dll/win32/msacm32             # Synced to Wine-11.14

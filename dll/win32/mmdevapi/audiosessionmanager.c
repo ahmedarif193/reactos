@@ -26,9 +26,6 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(mmdevapi);
 
-extern HRESULT get_audio_session_wrapper(const GUID *guid, IMMDevice *device,
-                                         struct audio_session_wrapper **out);
-
 static CRITICAL_SECTION g_sessions_lock;
 static CRITICAL_SECTION_DEBUG g_sessions_lock_debug =
 {
@@ -167,13 +164,20 @@ static HRESULT create_session_enumerator(IMMDevice *device, IAudioSessionEnumera
         free(enumerator);
         return hr;
     }
-    enumerator->IAudioSessionEnumerator_iface.lpVtbl = (IAudioSessionEnumeratorVtbl *)&IAudioSessionEnumerator_vtbl;
+    enumerator->IAudioSessionEnumerator_iface.lpVtbl = &IAudioSessionEnumerator_vtbl;
     IMMDevice_AddRef(device);
     enumerator->device = device;
     enumerator->ref = 1;
     *ppv = &enumerator->IAudioSessionEnumerator_iface;
     return S_OK;
 }
+
+struct session_mgr
+{
+    IAudioSessionManager2 IAudioSessionManager2_iface;
+    IMMDevice *device;
+    LONG ref;
+};
 
 static inline struct session_mgr *impl_from_IAudioSessionManager2(IAudioSessionManager2 *iface)
 {
@@ -325,7 +329,7 @@ HRESULT AudioSessionManager_Create(IMMDevice *device, IAudioSessionManager2 **pp
     if (!This)
         return E_OUTOFMEMORY;
 
-    This->IAudioSessionManager2_iface.lpVtbl = (IAudioSessionManager2Vtbl *)&AudioSessionManager2_Vtbl;
+    This->IAudioSessionManager2_iface.lpVtbl = &AudioSessionManager2_Vtbl;
     This->device = device;
     This->ref = 1;
 

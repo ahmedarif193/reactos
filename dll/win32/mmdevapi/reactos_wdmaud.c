@@ -23,6 +23,7 @@
 #include "winreg.h"
 #include "mmsystem.h"
 #include "mmreg.h"
+#include "audiopolicy.h"
 #include "setupapi.h"
 #include "ks.h"
 #include "ksmedia.h"
@@ -54,6 +55,7 @@ struct reactos_stream
     HANDLE io_handle;
     HANDLE event;
     HANDLE stop_event;
+    HANDLE timer_thread;
     CRITICAL_SECTION lock;
     WAVEFORMATEX format;
     UINT32 frame_size;
@@ -70,6 +72,8 @@ struct reactos_stream
 
 static HANDLE wdmaud_handle = INVALID_HANDLE_VALUE;
 static WCHAR wdmaud_path[MAX_PATH];
+
+static DWORD WINAPI reactos_timer_thread(void *param);
 
 static const GUID wdmaud_category = {STATIC_KSCATEGORY_WDMAUD};
 
@@ -716,8 +720,6 @@ BOOL reactos_audio_driver_init(DriverFuncs *driver)
     driver->module_unixlib = 1;
     lstrcpyW(driver->module_name, L"wdmaud.drv");
     driver->priority = Priority_Preferred;
-    driver->pget_device_guid = reactos_get_device_guid;
-    driver->pget_device_name_from_guid = reactos_get_device_name_from_guid;
 
     return TRUE;
 }
@@ -808,10 +810,11 @@ static NTSTATUS reactos_release_stream(struct release_stream_params *params)
         SetEvent(stream->stop_event);
     if (stream->event)
         SetEvent(stream->event);
-    if (params->timer_thread)
+    if (stream->timer_thread)
     {
-        WaitForSingleObject(params->timer_thread, 1000);
-        CloseHandle(params->timer_thread);
+        WaitForSingleObject(stream->timer_thread, 1000);
+        CloseHandle(stream->timer_thread);
+        stream->timer_thread = NULL;
     }
 
     set_stream_state(stream, KSSTATE_STOP);
@@ -845,6 +848,17 @@ static NTSTATUS reactos_start(struct start_params *params)
         stream->capture_locked = FALSE;
         stream->started = TRUE;
         LeaveCriticalSection(&stream->lock);
+        stream->timer_thread = CreateThread(NULL, 0, reactos_timer_thread, stream, 0, NULL);
+        if (!stream->timer_thread)
+        {
+            EnterCriticalSection(&stream->lock);
+            stream->started = FALSE;
+            LeaveCriticalSection(&stream->lock);
+            set_stream_state(stream, KSSTATE_PAUSE);
+            params->result = E_FAIL;
+            return STATUS_SUCCESS;
+        }
+        SetThreadPriority(stream->timer_thread, THREAD_PRIORITY_TIME_CRITICAL);
         if (stream->event)
             SetEvent(stream->event);
     }
@@ -866,6 +880,12 @@ static NTSTATUS reactos_stop(struct stop_params *params)
     LeaveCriticalSection(&stream->lock);
     if (stream->stop_event)
         SetEvent(stream->stop_event);
+    if (stream->timer_thread)
+    {
+        WaitForSingleObject(stream->timer_thread, 1000);
+        CloseHandle(stream->timer_thread);
+        stream->timer_thread = NULL;
+    }
     params->result = set_stream_state(stream, KSSTATE_PAUSE);
     if (stream->event)
         SetEvent(stream->event);
@@ -1117,6 +1137,27 @@ static void reactos_capture_timer_loop(struct reactos_stream *stream)
     }
 }
 
+static DWORD WINAPI reactos_timer_thread(void *param)
+{
+    struct reactos_stream *stream = param;
+
+    SetThreadDescription(GetCurrentThread(), L"audio_client_timer");
+
+    if (stream->flow == eCapture)
+    {
+        reactos_capture_timer_loop(stream);
+        return 0;
+    }
+
+    while (!stream->closing && stream->started)
+    {
+        if (stream->event)
+            SetEvent(stream->event);
+        Sleep(10);
+    }
+    return 0;
+}
+
 static NTSTATUS reactos_is_format_supported(struct is_format_supported_params *params)
 {
     HRESULT hr = validate_format(params->device, params->flow, params->fmt_in);
@@ -1124,13 +1165,6 @@ static NTSTATUS reactos_is_format_supported(struct is_format_supported_params *p
     if (SUCCEEDED(hr))
     {
         params->result = S_OK;
-        return STATUS_SUCCESS;
-    }
-
-    if (params->share == AUDCLNT_SHAREMODE_SHARED && params->fmt_out)
-    {
-        fill_mix_format(params->device, params->flow, params->fmt_out);
-        params->result = S_FALSE;
         return STATUS_SUCCESS;
     }
 
@@ -1284,12 +1318,9 @@ NTSTATUS reactos_mmdevapi_call(unsigned int code, void *args)
         case process_detach:
             return STATUS_SUCCESS;
 
-        case main_loop:
-        {
-            struct main_loop_params *params = args;
-            SetEvent(params->event);
+        case main_loop_start:
+        case main_loop_stop:
             return STATUS_SUCCESS;
-        }
 
         case get_endpoint_ids:
             fill_endpoint_ids(args);
@@ -1310,26 +1341,9 @@ NTSTATUS reactos_mmdevapi_call(unsigned int code, void *args)
         case reset:
             return reactos_reset(args);
 
-        case timer_loop:
-        {
-            struct timer_loop_params *params = args;
-            struct reactos_stream *stream = stream_from_handle(params->stream);
-
-            if (stream && stream->flow == eCapture)
-            {
-                reactos_capture_timer_loop(stream);
-                return STATUS_SUCCESS;
-            }
-
-            while (stream && !stream->closing && stream->started)
-            {
-                if (stream->event)
-                    SetEvent(stream->event);
-                Sleep(10);
-                stream = stream_from_handle(params->stream);
-            }
+        case midi_get_driver:
+            ((WCHAR *)args)[0] = 0;
             return STATUS_SUCCESS;
-        }
 
         case get_render_buffer:
             return reactos_get_render_buffer(args);
@@ -1404,12 +1418,45 @@ NTSTATUS reactos_mmdevapi_call(unsigned int code, void *args)
         }
 
         case midi_init:
+        {
+            struct midi_init_params *params = args;
+            *params->err = MMSYSERR_NODRIVER;
+            return STATUS_SUCCESS;
+        }
+
         case midi_release:
+            return STATUS_SUCCESS;
+
         case midi_out_message:
+        {
+            struct midi_out_message_params *params = args;
+            *params->err = MMSYSERR_NODRIVER;
+            params->notify->send_notify = FALSE;
+            return STATUS_SUCCESS;
+        }
+
         case midi_in_message:
+        {
+            struct midi_in_message_params *params = args;
+            *params->err = MMSYSERR_NODRIVER;
+            params->notify->send_notify = FALSE;
+            return STATUS_SUCCESS;
+        }
+
         case midi_notify_wait:
+        {
+            struct midi_notify_wait_params *params = args;
+            *params->quit = TRUE;
+            params->notify->send_notify = FALSE;
+            return STATUS_SUCCESS;
+        }
+
         case aux_message:
-            return STATUS_NOT_IMPLEMENTED;
+        {
+            struct aux_message_params *params = args;
+            *params->err = MMSYSERR_NODRIVER;
+            return STATUS_SUCCESS;
+        }
 
         default:
             FIXME("Unhandled ReactOS mmdevapi backend call %u.\n", code);
