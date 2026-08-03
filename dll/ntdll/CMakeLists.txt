@@ -46,6 +46,9 @@ list(APPEND SOURCE
     rtl/wait.c
     rtl/xstate.c)
 
+set_source_files_properties(rtl/capability.c PROPERTIES
+    COMPILE_DEFINITIONS "__WINE_PE_BUILD;SYMCRYPT_PLATFORM_WINE=1")
+
 if(ARCH STREQUAL "amd64")
     list(APPEND SOURCE rtl/xstate_wow64.c)
 endif()
