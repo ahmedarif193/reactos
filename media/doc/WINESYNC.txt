@@ -253,7 +253,7 @@ comctl32 -
   dll/win32/comctl32/datetime.c            # Synced to Wine-6.0
   dll/win32/comctl32/*                     # Synced to Wine-5.0
 
-dll/cpl/bthprops              # Synced to Wine-10.0
+dll/cpl/bthprops              # Synced to Wine-11.14
 dll/cpl/inetcpl               # Synced to Wine-11.14
 dll/cpl/joy                   # Synced to Wine-10.0
 
