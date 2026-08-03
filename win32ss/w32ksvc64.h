@@ -752,3 +752,5 @@
     SVC_(UserGetProp, 2)
     SVC_(UserIsMouseInPointerEnabled, 0)
     SVC_(UserSetProcessDpiAwarenessContext, 2)
+    SVC_(GdiGetFontFileData, 5)
+    SVC_(GdiGetFontFileInfo, 5)

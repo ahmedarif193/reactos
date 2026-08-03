@@ -1149,7 +1149,154 @@ NtGdiGetFontResourceInfoInternalW(
     return bRet;
 }
 
-/* @unimplemented */
+DWORD
+APIENTRY
+NtGdiGetFontFileInfo(
+    _In_ UINT uFileCollectionID,
+    _In_ UINT uFileIndex,
+    _Out_writes_bytes_(cjSize) PFONT_FILE_INFO pffi,
+    _In_ SIZE_T cjSize,
+    _Out_opt_ PSIZE_T pcjActualSize)
+{
+    PFONT_FILE_INFO Buffer;
+    SIZE_T RequiredSize = 0;
+    NTSTATUS Status = STATUS_SUCCESS;
+    BOOL Ret;
+
+    ftGdiGetFontFileInfo(uFileCollectionID, uFileIndex, NULL, 0, &RequiredSize);
+    if (!RequiredSize)
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (pcjActualSize)
+    {
+        _SEH2_TRY
+        {
+            ProbeForWrite(pcjActualSize, sizeof(*pcjActualSize), 1);
+            *pcjActualSize = RequiredSize;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END
+        if (!NT_SUCCESS(Status))
+        {
+            SetLastNtError(Status);
+            return FALSE;
+        }
+    }
+
+    if (!pffi || cjSize < RequiredSize)
+    {
+        EngSetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+
+    Buffer = ExAllocatePoolWithTag(PagedPool, RequiredSize, TAG_FINF);
+    if (!Buffer)
+    {
+        EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return FALSE;
+    }
+
+    Ret = ftGdiGetFontFileInfo(uFileCollectionID, uFileIndex, Buffer,
+                               RequiredSize, NULL);
+    if (Ret)
+    {
+        _SEH2_TRY
+        {
+            ProbeForWrite(pffi, RequiredSize, 1);
+            RtlCopyMemory(pffi, Buffer, RequiredSize);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END
+        if (!NT_SUCCESS(Status))
+        {
+            SetLastNtError(Status);
+            Ret = FALSE;
+        }
+    }
+
+    ExFreePoolWithTag(Buffer, TAG_FINF);
+    return Ret;
+}
+
+DWORD
+APIENTRY
+NtGdiGetFontFileData(
+    _In_ UINT uFileCollectionID,
+    _In_ UINT uFileIndex,
+    _In_ PULONGLONG pullFileOffset,
+    _Out_writes_bytes_(cjBuf) PVOID pvBuf,
+    _In_ SIZE_T cjBuf)
+{
+    PVOID Buffer = NULL;
+    ULONGLONG Offset;
+    NTSTATUS Status = STATUS_SUCCESS;
+    BOOL Ret;
+
+    if (!pullFileOffset || (!pvBuf && cjBuf) || cjBuf > MAXULONG)
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    _SEH2_TRY
+    {
+        ProbeForRead(pullFileOffset, sizeof(*pullFileOffset), 1);
+        Offset = *pullFileOffset;
+        if (cjBuf)
+            ProbeForWrite(pvBuf, cjBuf, 1);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END
+    if (!NT_SUCCESS(Status))
+    {
+        SetLastNtError(Status);
+        return FALSE;
+    }
+
+    if (cjBuf && !(Buffer = ExAllocatePoolWithTag(PagedPool, cjBuf, TAG_FINF)))
+    {
+        EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return FALSE;
+    }
+
+    Ret = ftGdiGetFontFileData(uFileCollectionID, uFileIndex, Offset, Buffer, cjBuf);
+    if (Ret && cjBuf)
+    {
+        _SEH2_TRY
+        {
+            RtlCopyMemory(pvBuf, Buffer, cjBuf);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END
+        if (!NT_SUCCESS(Status))
+        {
+            SetLastNtError(Status);
+            Ret = FALSE;
+        }
+    }
+
+    if (Buffer)
+        ExFreePoolWithTag(Buffer, TAG_FINF);
+    if (!Ret && NT_SUCCESS(Status))
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+    return Ret;
+}
+
 BOOL
 APIENTRY
 NtGdiGetRealizationInfo(
@@ -1161,9 +1308,43 @@ NtGdiGetRealizationInfo(
   PTEXTOBJ pTextObj;
   PFONTGDI pFontGdi;
   PDC_ATTR pdcattr;
+  BOOL Modern = hf == (HFONT)(LONG_PTR)-1;
   BOOL Ret = FALSE;
   INT i = 0;
   REALIZATION_INFO ri;
+  FONT_REALIZATION_INFO fri;
+  DWORD ModernSize = 0;
+  NTSTATUS Status = STATUS_SUCCESS;
+
+  if (Modern)
+  {
+     if (!pri)
+     {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+     }
+     _SEH2_TRY
+     {
+        ProbeForRead(pri, sizeof(DWORD), 1);
+        ModernSize = ((PFONT_REALIZATION_INFO)pri)->Size;
+     }
+     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+     {
+        Status = _SEH2_GetExceptionCode();
+     }
+     _SEH2_END
+     if (!NT_SUCCESS(Status))
+     {
+        SetLastNtError(Status);
+        return FALSE;
+     }
+     if (ModernSize != FIELD_OFFSET(FONT_REALIZATION_INFO, FileCount) &&
+         ModernSize != sizeof(FONT_REALIZATION_INFO))
+     {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+     }
+  }
 
   pDc = DC_LockDc(hdc);
   if (!pDc)
@@ -1173,17 +1354,53 @@ NtGdiGetRealizationInfo(
   }
   pdcattr = pDc->pdcattr;
   pTextObj = RealizeFontInit(pdcattr->hlfntNew);
-  ASSERT(pTextObj != NULL);
+  if (!pTextObj)
+  {
+     DC_UnlockDc(pDc);
+     EngSetLastError(ERROR_INVALID_HANDLE);
+     return FALSE;
+  }
   pFontGdi = ObjToGDI(pTextObj->Font, FONT);
+
+  if (Modern)
+  {
+     RtlZeroMemory(&fri, sizeof(fri));
+     fri.Size = ModernSize;
+     Ret = ftGdiGetFontRealizationInfo(pFontGdi, &fri);
+  }
+  else
+  {
+     Ret = ftGdiRealizationInfo(pFontGdi, &ri);
+  }
+
   TEXTOBJ_UnlockText(pTextObj);
   DC_UnlockDc(pDc);
 
-  Ret = ftGdiRealizationInfo(pFontGdi, &ri);
+  if (Modern && Ret)
+  {
+     _SEH2_TRY
+     {
+        ProbeForWrite(pri, ModernSize, 1);
+        RtlCopyMemory(pri, &fri, ModernSize);
+     }
+     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+     {
+        Status = _SEH2_GetExceptionCode();
+     }
+     _SEH2_END
+     if (!NT_SUCCESS(Status))
+     {
+        SetLastNtError(Status);
+        return FALSE;
+     }
+     return TRUE;
+  }
+
   if (Ret)
   {
      if (pri)
      {
-        NTSTATUS Status = STATUS_SUCCESS;
+        Status = STATUS_SUCCESS;
         _SEH2_TRY
         {
             ProbeForWrite(pri, sizeof(REALIZATION_INFO), 1);
