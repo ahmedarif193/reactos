@@ -2893,6 +2893,16 @@ RtlGetCurrentProcessorNumber(
     VOID
 );
 
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSYSAPI
+ULONG64
+NTAPI
+RtlGetEnabledExtendedFeatures(
+    _In_ ULONG64 FeatureMask
+);
+#endif
+
 
 //
 // Thread Pool Functions
