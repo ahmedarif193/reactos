@@ -4,6 +4,8 @@ include_directories(include/internal/mingw-w64)
 list(APPEND MSVCRTEX_SOURCE
     ${CRT_STARTUP_SOURCE}
     math/sincos.c
+    math/exp2.c
+    math/exp2f.c
     misc/fltused.c
     misc/isblank.c
     misc/iswblank.c
@@ -26,8 +28,6 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     list(APPEND MSVCRTEX_SOURCE
         math/round.c
         math/roundf.c
-        math/exp2.c
-        math/exp2f.c
         )
 endif()
 
