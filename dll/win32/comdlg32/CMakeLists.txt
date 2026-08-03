@@ -13,7 +13,7 @@ list(APPEND SOURCE
     filedlgbrowser.c
     finddlg.c
     fontdlg.c
-    #itemdlg.c /* Win 7 */
+    itemdlg.c
     printdlg.c
     precomp.h
     ${CMAKE_CURRENT_BINARY_DIR}/comdlg32_stubs.c)
@@ -23,11 +23,12 @@ add_library(comdlg32 MODULE
     rsrc.rc
     ${CMAKE_CURRENT_BINARY_DIR}/comdlg32.def)
 
+add_idl_reg_scripts(comdlg32 registry comdlg32_classes.idl)
 set_module_type(comdlg32 win32dll)
-target_compile_definitions(comdlg32 PRIVATE _CRT_NON_CONFORMING_SWPRINTFS)
-target_link_libraries(comdlg32 uuid wine oldnames)
-add_delay_importlibs(comdlg32 ole32)
-add_importlibs(comdlg32 shell32 shlwapi comctl32 winspool user32 gdi32 advapi32 msvcrt kernel32 ntdll)
+target_compile_definitions(comdlg32 PRIVATE _COMDLG32_)
+target_link_libraries(comdlg32 uuid wine oldnames wine_dll_register)
+add_delay_importlibs(comdlg32 ole32 winspool)
+add_importlibs(comdlg32 shell32 shlwapi comctl32 user32 gdi32 advapi32 msvcrt kernel32 ntdll)
 add_pch(comdlg32 precomp.h SOURCE)
 add_cd_file(TARGET comdlg32 DESTINATION reactos/system32 FOR all)
-set_wine_module_FIXME(comdlg32) # CORE-5743: No ARRAY_SIZE and CONST_VTABLE
+set_wine_module_FIXME(comdlg32)
