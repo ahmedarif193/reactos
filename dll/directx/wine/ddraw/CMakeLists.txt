@@ -1,6 +1,5 @@
 
 add_definitions(
-    -D__ROS_LONG64__
     -DUSE_WIN32_OPENGL)
 
 spec2def(ddraw.dll ddraw.spec ADD_IMPORTLIB)

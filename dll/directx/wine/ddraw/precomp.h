@@ -11,5 +11,6 @@
 #define COM_NO_WINDOW_H
 
 #include "ddraw_private.h"
+#include <winnls.h>
 
 #endif /* !_WINE_DDRAW_PRECOMP_H */
