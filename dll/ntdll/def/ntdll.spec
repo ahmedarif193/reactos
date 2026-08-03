@@ -1058,7 +1058,7 @@
 @ stdcall RtlIsActivationContextActive(ptr)
 @ stdcall RtlIsCriticalSectionLocked(ptr)
 @ stdcall RtlIsCriticalSectionLockedByThread(ptr)
-@ stdcall -version=0x600+ -arch=x86_64 RtlIsCurrentProcess(ptr)
+@ stdcall -version=0x600+ -arch=x86_64,arm64 RtlIsCurrentProcess(ptr)
 @ stdcall -stub -version=0x600+ RtlIsCurrentThreadAttachExempt()
 @ stdcall RtlIsDosDeviceName_U(wstr)
 @ stdcall RtlIsGenericTableEmpty(ptr)
