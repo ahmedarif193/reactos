@@ -64,8 +64,11 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
             string/strnlen-avx2.cpp
             string/strnlen-sse2.cpp
         )
-        set_source_files_properties(string/strnlen-sse2.cpp PROPERTIES COMPILE_OPTIONS "-msse2")
-        set_source_files_properties(string/strnlen-avx2.cpp PROPERTIES COMPILE_OPTIONS "-mavx2")
+        # Keep the unbounded SIMD tail loop from calling back into the wcslen dispatcher.
+        set_source_files_properties(string/strnlen-sse2.cpp PROPERTIES
+            COMPILE_OPTIONS "-msse2;-fno-builtin-wcslen")
+        set_source_files_properties(string/strnlen-avx2.cpp PROPERTIES
+            COMPILE_OPTIONS "-mavx2;-fno-builtin-wcslen")
     endif()
 endif()
 
