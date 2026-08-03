@@ -1150,6 +1150,12 @@ if (0)
         hres = pStrRetToBufW(&strret, NULL, wbuf, 10);
         ok(hres == E_FAIL, "StrRetToBufW returned %08lx\n", hres);
         ok(!wbuf[0], "StrRetToBuf returned %s\n", wine_dbgstr_w(wbuf));
+
+        memset(wbuf, 0xbf, sizeof(wbuf));
+        strret.uType = 3;
+        hres = pStrRetToBufW(&strret, NULL, wbuf, 10);
+        ok(hres == E_FAIL, "StrRetToBufW returned %08lx\n", hres);
+        ok(!wbuf[0], "StrRetToBuf returned %s\n", wine_dbgstr_w(wbuf));
     }
     else
         win_skip("StrRetToBufW() is not available\n");
@@ -1176,11 +1182,7 @@ if (0)
 
         memset(buf, 0xbf, sizeof(buf));
         ret = pwnsprintfA(buf + 1, -1, "%s", str1);
-#ifdef __REACTOS__
-        ok(ret == -1 || broken(ret == 0) /* WS03 */, "got %d.\n", ret);
-#else
         ok(ret == -1, "got %d.\n", ret);
-#endif
         expect_eq(buf[0], (CHAR)0xbf, CHAR, "%x");
         if (!broken(1))
         {
@@ -1191,11 +1193,7 @@ if (0)
 
         memset(buf, 0xbf, sizeof(buf));
         ret = pwnsprintfA(buf + 1, 0, "%s", str1);
-#ifdef __REACTOS__
-        ok(ret == -1 || broken(ret == 0) /* WS03 */, "got %d.\n", ret);
-#else
         ok(ret == -1, "got %d.\n", ret);
-#endif
         expect_eq(buf[0], (CHAR)0xbf, CHAR, "%x");
         expect_eq(buf[1], (CHAR)0xbf, CHAR, "%x");
 
@@ -1218,11 +1216,7 @@ if (0)
 
         memset(wbuf, 0xbf, sizeof(wbuf));
         ret = pwnsprintfW(wbuf + 1, -1, fmt, wstr1);
-#ifdef __REACTOS__
-        ok(ret == -1 || broken(ret == 0) /* WS03 */, "got %d.\n", ret);
-#else
         ok(ret == -1, "got %d.\n", ret);
-#endif
         expect_eq(wbuf[0], (WCHAR)0xbfbf, WCHAR, "%x");
         if (!broken(1))
         {
@@ -1233,11 +1227,7 @@ if (0)
 
         memset(wbuf, 0xbf, sizeof(wbuf));
         ret = pwnsprintfW(wbuf + 1, 0, fmt, wstr1);
-#ifdef __REACTOS__
-        ok(ret == -1 || broken(ret == 0) /* WS03 */, "got %d.\n", ret);
-#else
         ok(ret == -1, "got %d.\n", ret);
-#endif
         expect_eq(wbuf[0], (WCHAR)0xbfbf, WCHAR, "%x");
         expect_eq(wbuf[1], (WCHAR)0xbfbf, WCHAR, "%x");
 
@@ -1861,16 +1851,6 @@ static void test_printf_format(void)
     ok(!!ntdll__snprintf, "_snprintf not found.\n");
     ntdll__snwprintf = (void *)GetProcAddress(hntdll, "_snwprintf");
     ok(!!ntdll__snwprintf, "_snwprintf not found.\n");
-#ifdef __REACTOS__
-    DWORD _ntVersion = GetVersion();
-    BYTE _ntMajor = LOBYTE(LOWORD(_ntVersion));
-    BYTE _ntMinor = HIBYTE(LOWORD(_ntVersion));
-
-    if (_ntMajor < 6 || (_ntMajor == 6 && _ntMinor == 0)) {
-      skip("These tests are broken on WS03 and Vista.\n");
-      return;
-    }
-#endif
 
     for (i = 0; i < ARRAY_SIZE(tests); ++i)
     {

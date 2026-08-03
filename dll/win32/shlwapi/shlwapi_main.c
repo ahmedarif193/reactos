@@ -29,17 +29,119 @@
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(shell);
-
-DECLSPEC_HIDDEN HINSTANCE shlwapi_hInstance = 0;
-DECLSPEC_HIDDEN DWORD SHLWAPI_ThreadRef_index = TLS_OUT_OF_INDEXES;
+#ifndef __REACTOS__
+WINE_DECLARE_DEBUG_CHANNEL(string);
+#endif
 
 #ifdef __REACTOS__
+DECLSPEC_HIDDEN HINSTANCE shlwapi_hInstance = 0;
+DECLSPEC_HIDDEN DWORD SHLWAPI_ThreadRef_index = TLS_OUT_OF_INDEXES;
 extern CRITICAL_SECTION g_csZoneMgrLock;
 extern CRITICAL_SECTION g_csBagCacheLock;
 VOID FreeViewStatePropertyBagCache(VOID);
 VOID SHLWAPI_DeleteCachedZonesManager(VOID);
 VOID SHPolicyCache_DllProcessAttach(VOID);
 VOID SHPolicyCache_DllProcessDetach(VOID);
+#else
+HINSTANCE shlwapi_hInstance = 0;
+
+static int (CDECL *ntdll__vsnprintf)( char *str, size_t len, const char *format, va_list args );
+static int (CDECL *ntdll__vsnwprintf)( WCHAR *str, size_t len, const WCHAR *format, va_list args );
+
+
+/***********************************************************************
+ *           wvnsprintfA   (SHLWAPI.@)
+ *
+ * Print formatted output to a string, up to a maximum number of chars.
+ *
+ * PARAMS
+ * buffer [O] Destination for output string
+ * maxlen [I] Maximum number of characters to write
+ * spec   [I] Format string
+ *
+ * RETURNS
+ *  Success: The number of characters written.
+ *  Failure: -1.
+ */
+INT WINAPI wvnsprintfA( LPSTR buffer, INT maxlen, LPCSTR spec, va_list args )
+{
+    INT ret;
+
+    TRACE_(string)( "%p %u %s\n", buffer, maxlen, debugstr_a(spec) );
+
+    if (!maxlen) return -1;
+    if (maxlen < 0)
+    {
+        buffer[0] = 0;
+        return -1;
+    }
+    if ((ret = ntdll__vsnprintf( buffer, maxlen, spec, args )) == -1)
+        buffer[maxlen - 1] = 0;
+    return ret;
+}
+
+/***********************************************************************
+ *           wvnsprintfW   (SHLWAPI.@)
+ *
+ * See wvnsprintfA.
+ */
+INT WINAPI wvnsprintfW( LPWSTR buffer, INT maxlen, LPCWSTR spec, va_list args )
+{
+    INT ret;
+
+    TRACE_(string)( "%p %u %s\n", buffer, maxlen, debugstr_w(spec) );
+
+    if (!maxlen) return -1;
+    if (maxlen < 0)
+    {
+        buffer[0] = 0;
+        return -1;
+    }
+    if ((ret = ntdll__vsnwprintf( buffer, maxlen, spec, args )) == -1)
+        buffer[maxlen - 1] = 0;
+    return ret;
+}
+
+/*************************************************************************
+ *           wnsprintfA   (SHLWAPI.@)
+ *
+ * Print formatted output to a string, up to a maximum number of chars.
+ *
+ * PARAMS
+ * lpOut      [O] Destination for output string
+ * cchLimitIn [I] Maximum number of characters to write
+ * lpFmt      [I] Format string
+ *
+ * RETURNS
+ *  Success: The number of characters written.
+ *  Failure: -1.
+ */
+int WINAPIV wnsprintfA(LPSTR lpOut, int cchLimitIn, LPCSTR lpFmt, ...)
+{
+    va_list valist;
+    INT res;
+
+    va_start( valist, lpFmt );
+    res = wvnsprintfA( lpOut, cchLimitIn, lpFmt, valist );
+    va_end( valist );
+    return res;
+}
+
+/*************************************************************************
+ *           wnsprintfW   (SHLWAPI.@)
+ *
+ * See wnsprintfA.
+ */
+int WINAPIV wnsprintfW(LPWSTR lpOut, int cchLimitIn, LPCWSTR lpFmt, ...)
+{
+    va_list valist;
+    INT res;
+
+    va_start( valist, lpFmt );
+    res = wvnsprintfW( lpOut, cchLimitIn, lpFmt, valist );
+    va_end( valist );
+    return res;
+}
 #endif
 
 /*************************************************************************
@@ -64,6 +166,7 @@ VOID SHPolicyCache_DllProcessDetach(VOID);
  */
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID fImpLoad)
 {
+#ifdef __REACTOS__
 	TRACE("%p 0x%x %p\n", hinstDLL, fdwReason, fImpLoad);
 	switch (fdwReason)
 	{
@@ -71,69 +174,38 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID fImpLoad)
             DisableThreadLibraryCalls(hinstDLL);
 	    shlwapi_hInstance = hinstDLL;
 	    SHLWAPI_ThreadRef_index = TlsAlloc();
-#ifdef __REACTOS__
 	    InitializeCriticalSection(&g_csZoneMgrLock);
 	    InitializeCriticalSection(&g_csBagCacheLock);
 	    SHPolicyCache_DllProcessAttach();
-#endif
 	    break;
 	  case DLL_PROCESS_DETACH:
             if (fImpLoad) break;
-#ifdef __REACTOS__
 	    FreeViewStatePropertyBagCache();
 	    SHLWAPI_DeleteCachedZonesManager();
 	    DeleteCriticalSection(&g_csBagCacheLock);
 	    DeleteCriticalSection(&g_csZoneMgrLock);
 	    SHPolicyCache_DllProcessDetach();
-#endif
 	    if (SHLWAPI_ThreadRef_index != TLS_OUT_OF_INDEXES) TlsFree(SHLWAPI_ThreadRef_index);
 	    break;
 	}
 	return TRUE;
-}
+#else
+    TRACE("%p 0x%lx %p\n", hinstDLL, fdwReason, fImpLoad);
+    switch (fdwReason)
+    {
+    case DLL_PROCESS_ATTACH:
+    {
+        HANDLE hntdll = GetModuleHandleW(L"ntdll.dll");
 
-/***********************************************************************
- * DllGetVersion [SHLWAPI.@]
- *
- * Retrieve "shlwapi.dll" version information.
- *
- * PARAMS
- *     pdvi [O] pointer to version information structure.
- *
- * RETURNS
- *     Success: S_OK. pdvi is updated with the version information
- *     Failure: E_INVALIDARG, if pdvi->cbSize is not set correctly.
- *
- * NOTES
- *     You may pass either a DLLVERSIONINFO of DLLVERSIONINFO2 structure
- *     as pdvi, provided that the size is set correctly.
- *     Returns version as shlwapi.dll from IE5.01.
- */
-HRESULT WINAPI DllGetVersion (DLLVERSIONINFO *pdvi)
-{
-  DLLVERSIONINFO2 *pdvi2 = (DLLVERSIONINFO2*)pdvi;
-
-  TRACE("(%p)\n",pdvi);
-
-  if (!pdvi)
-    return E_INVALIDARG;
-
-  switch (pdvi2->info1.cbSize)
-  {
-  case sizeof(DLLVERSIONINFO2):
-    pdvi2->dwFlags = 0;
-    pdvi2->ullVersion = MAKEDLLVERULL(6, 0, 2800, 1612);
-    /* Fall through */
-  case sizeof(DLLVERSIONINFO):
-    pdvi2->info1.dwMajorVersion = 6;
-    pdvi2->info1.dwMinorVersion = 0;
-    pdvi2->info1.dwBuildNumber = 2800;
-    pdvi2->info1.dwPlatformID = DLLVER_PLATFORM_WINDOWS;
-    return S_OK;
- }
-
- WARN("pdvi->cbSize = %ld, unhandled\n", pdvi2->info1.cbSize);
- return E_INVALIDARG;
+        ntdll__vsnprintf = (void *)GetProcAddress(hntdll, "_vsnprintf");
+        ntdll__vsnwprintf = (void *)GetProcAddress(hntdll, "_vsnwprintf");
+        DisableThreadLibraryCalls(hinstDLL);
+        shlwapi_hInstance = hinstDLL;
+        break;
+    }
+    }
+    return TRUE;
+#endif
 }
 
 /*************************************************************************

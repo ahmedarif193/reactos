@@ -34,7 +34,9 @@
 #include "shlobj.h"
 #include "mlang.h"
 #include "ddeml.h"
+#ifdef __REACTOS__
 #include "wine/unicode.h"
+#endif
 #include "wine/debug.h"
 
 #include "resource.h"
@@ -55,7 +57,7 @@ static void FillNumberFmt(NUMBERFMTW *fmt, LPWSTR decimal_buffer, int decimal_bu
   WCHAR *c;
 
   GetLocaleInfoW(LOCALE_USER_DEFAULT, LOCALE_ILZERO|LOCALE_RETURN_NUMBER, (LPWSTR)&fmt->LeadingZero, sizeof(fmt->LeadingZero)/sizeof(WCHAR));
-  GetLocaleInfoW(LOCALE_USER_DEFAULT, LOCALE_INEGNUMBER|LOCALE_RETURN_NUMBER, (LPWSTR)&fmt->LeadingZero, sizeof(fmt->NegativeOrder)/sizeof(WCHAR));
+  GetLocaleInfoW(LOCALE_USER_DEFAULT, LOCALE_INEGNUMBER|LOCALE_RETURN_NUMBER, (LPWSTR)&fmt->NegativeOrder, sizeof(fmt->NegativeOrder)/sizeof(WCHAR));
   fmt->NumDigits = 0;
   GetLocaleInfoW(LOCALE_USER_DEFAULT, LOCALE_SDECIMAL, decimal_buffer, decimal_bufwlen);
   GetLocaleInfoW(LOCALE_USER_DEFAULT, LOCALE_STHOUSAND, thousand_buffer, thousand_bufwlen);
@@ -80,7 +82,6 @@ static void FillNumberFmt(NUMBERFMTW *fmt, LPWSTR decimal_buffer, int decimal_bu
   else
     fmt->Grouping *= 10;
 }
-
 /*************************************************************************
  * FormatInt   [internal]
  *
@@ -111,7 +112,6 @@ static int FormatInt(LONGLONG qdwValue, LPWSTR pszBuf, int cchBuf)
   
   return GetNumberFormatW(LOCALE_USER_DEFAULT, 0, c, &fmt, pszBuf, cchBuf);
 }
-
 /*************************************************************************
  * FormatDouble   [internal]
  *
@@ -123,12 +123,11 @@ static int FormatInt(LONGLONG qdwValue, LPWSTR pszBuf, int cchBuf)
  */
 static int FormatDouble(double value, int decimals, LPWSTR pszBuf, int cchBuf)
 {
-  static const WCHAR flfmt[] = {'%','f',0};
   WCHAR buf[64];
   NUMBERFMTW fmt;
   WCHAR decimal[8], thousand[8];
-  
-  swprintf(buf, 64, flfmt, value);
+
+  swprintf(buf, 64, L"%f", value);
 
   FillNumberFmt(&fmt, decimal, ARRAY_SIZE(decimal), thousand, ARRAY_SIZE(thousand));
   fmt.NumDigits = decimals;
@@ -234,8 +233,8 @@ HRESULT WINAPI StrRetToBufA (LPSTRRET src, const ITEMIDLIST *pidl, LPSTR dest, U
 	    break;
 
 	  default:
-	    FIXME("unknown type!\n");
-	    return E_NOTIMPL;
+	    WARN("unknown type!\n");
+	    return E_FAIL;
 	}
 	return S_OK;
 }
@@ -255,8 +254,7 @@ HRESULT WINAPI StrRetToBufW (LPSTRRET src, const ITEMIDLIST *pidl, LPWSTR dest, 
     if (!src)
     {
         WARN("Invalid lpStrRet would crash under Win32!\n");
-        if (dest)
-            *dest = '\0';
+        *dest = '\0';
         return E_FAIL;
     }
 
@@ -294,8 +292,8 @@ HRESULT WINAPI StrRetToBufW (LPSTRRET src, const ITEMIDLIST *pidl, LPWSTR dest, 
         break;
 
     default:
-        FIXME("unknown type!\n");
-        return E_NOTIMPL;
+        WARN("unknown type!\n");
+        return E_FAIL;
     }
 
     return S_OK;
@@ -474,7 +472,6 @@ LPSTR WINAPI StrFormatKBSizeA(LONGLONG llBytes, LPSTR lpszDest, UINT cchMax)
  */
 LPWSTR WINAPI StrFormatKBSizeW(LONGLONG llBytes, LPWSTR lpszDest, UINT cchMax)
 {
-  static const WCHAR kb[] = {' ','K','B',0};
   LONGLONG llKB = (llBytes + 1023) >> 10;
   int len;
 
@@ -486,7 +483,7 @@ LPWSTR WINAPI StrFormatKBSizeW(LONGLONG llBytes, LPWSTR lpszDest, UINT cchMax)
   len = lstrlenW(lpszDest);
   if (cchMax - len < 4)
       return NULL;
-  lstrcatW(lpszDest, kb);
+  lstrcatW(lpszDest, L" KB");
   return lpszDest;
 }
 
@@ -924,7 +921,7 @@ HRESULT WINAPI StrFormatByteSizeEx(LONGLONG llBytes, SFBS_FLAGS flags, LPWSTR lp
 #ifdef __REACTOS__
   WCHAR szBuff[40], wszFormat[40];
 #else
-  WCHAR wszAdd[] = {' ','?','B',0};
+  WCHAR wszAdd[] = L" ?B";
 #endif
   double dBytes;
   UINT i = 0;
@@ -1303,4 +1300,3 @@ BOOL WINAPI DoesStringRoundTripW(LPCWSTR lpSrcStr, LPSTR lpDst, INT iLen)
     SHAnsiToUnicode(lpDst, szBuff, MAX_PATH);
     return !wcscmp(lpSrcStr, szBuff);
 }
-

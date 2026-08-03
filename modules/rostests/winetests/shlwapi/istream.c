@@ -760,11 +760,7 @@ static void test_SHCreateMemStream(void)
 
     num = ~0;
     hr = IStream_Read(stream, buff, sizeof(buff), &num);
-#ifdef __REACTOS__
-    ok(hr == S_FALSE || broken(hr == S_OK) /* WS03 */, "Unexpected hr %#lx.\n", hr);
-#else
     ok(hr == S_FALSE, "Unexpected hr %#lx.\n", hr);
-#endif
     ok(num == 0, "expected 0, got 0x%08lx\n", num);
 
     num = ~0;
@@ -787,11 +783,7 @@ static void test_SHCreateMemStream(void)
 
     num = ~0;
     hr = IStream_Read(stream, buff, sizeof(buff), &num);
-#ifdef __REACTOS__
-    ok(hr == S_FALSE || broken(hr == S_OK) /* WS03 */, "Unexpected hr %#lx.\n", hr);
-#else
     ok(hr == S_FALSE, "Unexpected hr %#lx.\n", hr);
-#endif
     ok(num == 0, "expected 0, got 0x%08lx\n", num);
 
     num = ~0;
@@ -814,11 +806,7 @@ static void test_SHCreateMemStream(void)
 
     num = ~0;
     hr = IStream_Read(stream, buff, sizeof(buff), &num);
-#ifdef __REACTOS__
-    ok(hr == S_FALSE || broken(hr == S_OK) /* WS03 */, "Unexpected hr %#lx.\n", hr);
-#else
     ok(hr == S_FALSE, "Unexpected hr %#lx.\n", hr);
-#endif
     ok(num == 0, "expected 0, got 0x%08lx\n", num);
 
     hr = IStream_Clone(stream, &stream2);
