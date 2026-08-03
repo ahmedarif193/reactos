@@ -12,6 +12,16 @@ extern "C" {
 #endif
 
 WINBASEAPI
+BOOL
+WINAPI
+GetProductInfo(
+    _In_ DWORD dwOSMajorVersion,
+    _In_ DWORD dwOSMinorVersion,
+    _In_ DWORD dwSpMajorVersion,
+    _In_ DWORD dwSpMinorVersion,
+    _Out_ PDWORD pdwReturnedProductType);
+
+WINBASEAPI
 VOID
 WINAPI
 GetSystemTimePreciseAsFileTime(
