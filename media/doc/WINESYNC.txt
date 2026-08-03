@@ -19,7 +19,7 @@ base/ctf/msctf                  # Forked at Wine-10.12
 
 sdk/tools/unicode               # Synced to WineStaging-4.18
 sdk/tools/widl                  # Synced to Wine-11.14
-sdk/tools/wpp                   # Synced to Wine-10.0 (Module was moved into wrc tool)
+sdk/tools/wpp                   # Synced to Wine-11.14 (Module was moved into wrc tool)
 
 The following headers are shared with Wine.
 sdk/include/psdk/rpcproxy.h     # Synced to Wine-11.14
