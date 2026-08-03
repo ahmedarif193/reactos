@@ -28,5 +28,5 @@
 
 1 TYPELIB control_tlb.tlb
 
-1 WINE_REGISTRY control_tlb.rgs
-2 WINE_REGISTRY quartz_strmif.rgs
+2 WINE_REGISTRY control_tlb.rgs
+3 WINE_REGISTRY quartz_strmif.rgs

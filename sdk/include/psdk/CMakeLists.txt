@@ -54,10 +54,12 @@ list(APPEND SOURCE
     dwrite_1.idl
     dwrite_2.idl
     dwrite_3.idl
+    dvdif.idl
     dxgiformat.idl
 #   dyngraph.idl
     emptyvc.idl
     endpointvolume.idl
+    evr.idl
     eventtoken.idl
     exdisp.idl
     fusion.idl
