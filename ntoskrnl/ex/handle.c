@@ -1333,16 +1333,13 @@ BOOLEAN ExpKdbgExtHandle(ULONG Argc, PCHAR Argv[])
     HANDLE ProcessId;
     EXHANDLE ExHandle;
     PLIST_ENTRY Entry;
+    PLIST_ENTRY NextEntry;
     PEPROCESS Process;
     WCHAR KeyPath[256];
-    PFILE_OBJECT FileObject;
     PHANDLE_TABLE HandleTable;
     POBJECT_HEADER ObjectHeader;
     PHANDLE_TABLE_ENTRY TableEntry;
-    ULONG NeededLength = 0;
-    ULONG NameLength;
-    PCM_KEY_CONTROL_BLOCK Kcb, CurrentKcb;
-    POBJECT_HEADER_NAME_INFO ObjectNameInfo;
+    ULONG TableCount = 0;
 
     if (Argc > 1)
     {
@@ -1368,7 +1365,11 @@ BOOLEAN ExpKdbgExtHandle(ULONG Argc, PCHAR Argv[])
             }
 
             /* In the end, we always want a PID */
-            ProcessId = PsGetProcessId(Process);
+            if (!NT_SUCCESS(KdbpSafeReadMemory(&ProcessId, &Process->UniqueProcessId, sizeof(ProcessId))))
+            {
+                KdbpPrint("Unreadable EPROCESS: %p\n", Process);
+                return TRUE;
+            }
         }
         else
         {
@@ -1385,119 +1386,214 @@ BOOLEAN ExpKdbgExtHandle(ULONG Argc, PCHAR Argv[])
         ProcessId = PsGetCurrentProcessId();
     }
 
-    for (Entry = HandleTableListHead.Flink;
-         Entry != &HandleTableListHead;
-         Entry = Entry->Flink)
+    Entry = HandleTableListHead.Flink;
+    while (Entry != &HandleTableListHead &&
+           Entry != NULL &&
+           TableCount++ < 65536)
     {
+        HANDLE_TABLE HandleTableSnapshot;
+
         /* Only return matching PID
          * 0 matches everything
          */
         HandleTable = CONTAINING_RECORD(Entry, HANDLE_TABLE, HandleTableList);
-        if (ProcessId != 0 && HandleTable->UniqueProcessId != ProcessId)
+        if (!NT_SUCCESS(KdbpSafeReadMemory(&HandleTableSnapshot, HandleTable, sizeof(HandleTableSnapshot))))
         {
-            continue;
+            KdbpPrint("%p: <unreadable handle table>\n", HandleTable);
+            break;
         }
+        NextEntry = HandleTableSnapshot.HandleTableList.Flink;
+
+        if (ProcessId != 0 && HandleTableSnapshot.UniqueProcessId != ProcessId)
+            goto NextTable;
 
         KdbpPrint("\n");
 
-        KdbpPrint("Handle table at %p with %d entries in use\n", HandleTable, HandleTable->HandleCount);
+        KdbpPrint("Handle table at %p with %d entries in use\n", HandleTable, HandleTableSnapshot.HandleCount);
 
         ExHandle.Value = 0;
         while ((TableEntry = ExpLookupHandleTableEntry(HandleTable, ExHandle)))
         {
-            if ((TableEntry->Object) &&
-                (TableEntry->NextFreeTableEntry != -2))
-            {
-                ObjectHeader = ObpGetHandleObject(TableEntry);
+            HANDLE_TABLE_ENTRY TableEntrySnapshot;
 
-                KdbpPrint("%p: Object: %p GrantedAccess: %x Entry: %p\n", ExHandle.Value, &ObjectHeader->Body, TableEntry->GrantedAccess, TableEntry);
-                KdbpPrint("Object: %p Type: (%x) %wZ\n", &ObjectHeader->Body, ObjectHeader->Type, &ObjectHeader->Type->Name);
+            if (!NT_SUCCESS(KdbpSafeReadMemory(&TableEntrySnapshot, TableEntry, sizeof(TableEntrySnapshot))))
+            {
+                KdbpPrint("%p: <unreadable handle entry %p>\n", ExHandle.Value, TableEntry);
+                break;
+            }
+
+            if ((TableEntrySnapshot.Object) &&
+                (TableEntrySnapshot.NextFreeTableEntry != -2))
+            {
+                OBJECT_HEADER ObjectHeaderSnapshot;
+                OBJECT_TYPE ObjectTypeSnapshot;
+
+                ObjectHeader = (POBJECT_HEADER)
+                    ((ULONG_PTR)TableEntrySnapshot.Object & ~OBJ_HANDLE_ATTRIBUTES);
+                if (!NT_SUCCESS(KdbpSafeReadMemory(&ObjectHeaderSnapshot, ObjectHeader, sizeof(ObjectHeaderSnapshot))))
+                {
+                    KdbpPrint("%p: ObjectHeader %p is unreadable\n", ExHandle.Value, ObjectHeader);
+                    goto NextHandle;
+                }
+
+                KdbpPrint("%p: Object: %p GrantedAccess: %x Entry: %p\n", ExHandle.Value, &ObjectHeader->Body, TableEntrySnapshot.GrantedAccess, TableEntry);
+                KdbpPrint("Object: %p Type: (%p) ", &ObjectHeader->Body, ObjectHeaderSnapshot.Type);
+                if (ObjectHeaderSnapshot.Type != NULL &&
+                    NT_SUCCESS(KdbpSafeReadMemory(&ObjectTypeSnapshot, ObjectHeaderSnapshot.Type, sizeof(ObjectTypeSnapshot))))
+                {
+                    KdbpPrintUnicodeString(&ObjectTypeSnapshot.Name);
+                }
+                else
+                {
+                    KdbpPrint("<unreadable>");
+                }
+                KdbpPrint("\n");
                 KdbpPrint("\tObjectHeader: %p\n", ObjectHeader);
-                KdbpPrint("\t\tHandleCount: %u PointerCount: %u\n", ObjectHeader->HandleCount, ObjectHeader->PointerCount);
+                KdbpPrint("\t\tHandleCount: %u PointerCount: %u\n", ObjectHeaderSnapshot.HandleCount, ObjectHeaderSnapshot.PointerCount);
 
                 /* Specific objects debug prints */
 
                 /* For file, display path */
-                if (ObjectHeader->Type == IoFileObjectType)
+                if (ObjectHeaderSnapshot.Type == IoFileObjectType)
                 {
-                    FileObject = (PFILE_OBJECT)&ObjectHeader->Body;
+                    FILE_OBJECT FileObjectSnapshot;
 
-                    KdbpPrint("\t\t\tName: %wZ\n", &FileObject->FileName);
+                    KdbpPrint("\t\t\tName: ");
+                    if (NT_SUCCESS(KdbpSafeReadMemory(&FileObjectSnapshot, &ObjectHeader->Body, sizeof(FileObjectSnapshot))))
+                    {
+                        KdbpPrintUnicodeString(&FileObjectSnapshot.FileName);
+                    }
+                    else
+                    {
+                        KdbpPrint("<unreadable>");
+                    }
+                    KdbpPrint("\n");
                 }
 
                 /* For directory, and win32k objects, display object name */
-                else if (ObjectHeader->Type == ObpDirectoryObjectType ||
-                         ObjectHeader->Type == ExWindowStationObjectType ||
-                         ObjectHeader->Type == ExDesktopObjectType ||
-                         ObjectHeader->Type == MmSectionObjectType)
+                else if (ObjectHeaderSnapshot.Type == ObpDirectoryObjectType ||
+                         ObjectHeaderSnapshot.Type == ExWindowStationObjectType ||
+                         ObjectHeaderSnapshot.Type == ExDesktopObjectType ||
+                         ObjectHeaderSnapshot.Type == MmSectionObjectType)
                 {
-                    ObjectNameInfo = OBJECT_HEADER_TO_NAME_INFO(ObjectHeader);
-                    if (ObjectNameInfo != NULL && ObjectNameInfo->Name.Buffer != NULL)
+                    if (ObjectHeaderSnapshot.NameInfoOffset != 0)
                     {
-                        KdbpPrint("\t\t\tName: %wZ\n", &ObjectNameInfo->Name);
+                        OBJECT_HEADER_NAME_INFO ObjectNameSnapshot;
+                        POBJECT_HEADER_NAME_INFO ObjectNameInfo;
+
+                        ObjectNameInfo = (POBJECT_HEADER_NAME_INFO)
+                            ((PCHAR)ObjectHeader - ObjectHeaderSnapshot.NameInfoOffset);
+                        KdbpPrint("\t\t\tName: ");
+                        if (NT_SUCCESS(KdbpSafeReadMemory(&ObjectNameSnapshot, ObjectNameInfo, sizeof(ObjectNameSnapshot))))
+                        {
+                            KdbpPrintUnicodeString(&ObjectNameSnapshot.Name);
+                        }
+                        else
+                        {
+                            KdbpPrint("<unreadable>");
+                        }
+                        KdbpPrint("\n");
                     }
                 }
 
                 /* For registry keys, display full path */
-                else if (ObjectHeader->Type == CmpKeyObjectType)
+                else if (ObjectHeaderSnapshot.Type == CmpKeyObjectType)
                 {
-                    Kcb = ((PCM_KEY_BODY)&ObjectHeader->Body)->KeyControlBlock;
-                    if (!Kcb->Delete)
+                    CM_KEY_BODY KeyBodySnapshot;
+                    PCM_KEY_CONTROL_BLOCK CurrentKcb;
+                    ULONG KeyDepth = 0;
+                    ULONG FirstCharacter = RTL_NUMBER_OF(KeyPath) - 1;
+                    BOOLEAN Complete = TRUE;
+
+                    KeyPath[FirstCharacter] = UNICODE_NULL;
+                    if (!NT_SUCCESS(KdbpSafeReadMemory(&KeyBodySnapshot, &ObjectHeader->Body, sizeof(KeyBodySnapshot))))
                     {
-                        CurrentKcb = Kcb;
-
-                        /* See: CmpQueryNameInformation() */
-
-                        while (CurrentKcb != NULL)
-                        {
-                            if (CurrentKcb->NameBlock->Compressed)
-                                NeededLength += CmpCompressedNameSize(CurrentKcb->NameBlock->Name, CurrentKcb->NameBlock->NameLength);
-                            else
-                                NeededLength += CurrentKcb->NameBlock->NameLength;
-
-                            NeededLength += sizeof(OBJ_NAME_PATH_SEPARATOR);
-
-                            CurrentKcb = CurrentKcb->ParentKcb;
-                        }
-
-                        if (NeededLength < sizeof(KeyPath))
-                        {
-                            CurrentKcb = Kcb;
-
-                            while (CurrentKcb != NULL)
-                            {
-                                if (CurrentKcb->NameBlock->Compressed)
-                                {
-                                    NameLength = CmpCompressedNameSize(CurrentKcb->NameBlock->Name, CurrentKcb->NameBlock->NameLength);
-                                    CmpCopyCompressedName(&KeyPath[(NeededLength - NameLength)/sizeof(WCHAR)],
-                                                          NameLength,
-                                                          CurrentKcb->NameBlock->Name,
-                                                          CurrentKcb->NameBlock->NameLength);
-                                }
-                                else
-                                {
-                                    NameLength = CurrentKcb->NameBlock->NameLength;
-                                    RtlCopyMemory(&KeyPath[(NeededLength - NameLength)/sizeof(WCHAR)],
-                                                  CurrentKcb->NameBlock->Name,
-                                                  NameLength);
-                                }
-
-                                NeededLength -= NameLength;
-                                NeededLength -= sizeof(OBJ_NAME_PATH_SEPARATOR);
-                                KeyPath[NeededLength/sizeof(WCHAR)] = OBJ_NAME_PATH_SEPARATOR;
-
-                                CurrentKcb = CurrentKcb->ParentKcb;
-                            }
-                        }
-
-                        KdbpPrint("\t\t\tName: %S\n", KeyPath);
+                        KdbpPrint("\t\t\tName: <unreadable key body>\n");
+                        goto NextHandle;
                     }
+                    CurrentKcb = KeyBodySnapshot.KeyControlBlock;
+                    while (CurrentKcb != NULL && KeyDepth++ < 256)
+                    {
+                        CM_KEY_CONTROL_BLOCK KcbSnapshot;
+                        CM_NAME_CONTROL_BLOCK NameSnapshot;
+                        ULONG CharacterCount;
+                        ULONG Character;
+
+                        if (!NT_SUCCESS(KdbpSafeReadMemory(&KcbSnapshot, CurrentKcb, sizeof(KcbSnapshot))) ||
+                            KcbSnapshot.Delete ||
+                            KcbSnapshot.NameBlock == NULL ||
+                            !NT_SUCCESS(KdbpSafeReadMemory(&NameSnapshot, KcbSnapshot.NameBlock, sizeof(NameSnapshot))))
+                        {
+                            Complete = FALSE;
+                            break;
+                        }
+                        CharacterCount = NameSnapshot.Compressed ?
+                            NameSnapshot.NameLength :
+                            NameSnapshot.NameLength / sizeof(WCHAR);
+                        if (CharacterCount > FirstCharacter || FirstCharacter - CharacterCount == 0)
+                        {
+                            Complete = FALSE;
+                            break;
+                        }
+                        FirstCharacter -= CharacterCount;
+                        if (NameSnapshot.Compressed)
+                        {
+                            UCHAR CompressedName[RTL_NUMBER_OF(KeyPath)];
+
+                            if (!NT_SUCCESS(KdbpSafeReadMemory(CompressedName, KcbSnapshot.NameBlock->Name, CharacterCount)))
+                            {
+                                Complete = FALSE;
+                                break;
+                            }
+                            for (Character = 0; Character < CharacterCount; Character++)
+                                KeyPath[FirstCharacter + Character] = CompressedName[Character];
+                        }
+                        else if (!NT_SUCCESS(KdbpSafeReadMemory(&KeyPath[FirstCharacter], KcbSnapshot.NameBlock->Name, CharacterCount * sizeof(WCHAR))))
+                        {
+                            Complete = FALSE;
+                            break;
+                        }
+                        KeyPath[--FirstCharacter] = OBJ_NAME_PATH_SEPARATOR;
+                        CurrentKcb = KcbSnapshot.ParentKcb;
+                    }
+                    if (KeyDepth >= 256)
+                        Complete = FALSE;
+
+                    KdbpPrint("\t\t\tName: ");
+                    if (!Complete)
+                        KdbpPrint("<truncated or unreadable>");
+                    if (FirstCharacter < RTL_NUMBER_OF(KeyPath) - 1)
+                    {
+                        UNICODE_STRING KeyPathString;
+
+                        KeyPathString.Buffer = &KeyPath[FirstCharacter];
+                        KeyPathString.Length = (USHORT)
+                            ((RTL_NUMBER_OF(KeyPath) - 1 - FirstCharacter) * sizeof(WCHAR));
+                        KeyPathString.MaximumLength = KeyPathString.Length + sizeof(WCHAR);
+                        KdbpPrintUnicodeString(&KeyPathString);
+                    }
+                    KdbpPrint("\n");
                 }
             }
 
+NextHandle:
+            if (ExHandle.Value > MAXULONG_PTR - INDEX_TO_HANDLE_VALUE(1))
+                break;
             ExHandle.Value += INDEX_TO_HANDLE_VALUE(1);
+            if (KdbpIsOutputAborted())
+                return TRUE;
         }
+
+NextTable:
+        if (NextEntry == Entry)
+        {
+            KdbpPrint("!handle: self-linked handle-table entry %p.\n", Entry);
+            break;
+        }
+        Entry = NextEntry;
     }
+    if (TableCount >= 65536)
+        KdbpPrint("!handle: handle-table enumeration stopped at 65536 entries.\n");
 
     return TRUE;
 }

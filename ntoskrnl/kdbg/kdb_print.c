@@ -143,6 +143,8 @@ KdbPutsN(
 {
     CSTRING Output;
 
+    KdbpCaptureOutput(String, Length);
+
     Output.Buffer = String;
     Output.Length = Output.MaximumLength = Length;
     KdbPrintString(&Output);
