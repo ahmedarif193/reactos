@@ -1,0 +1,4 @@
+#define REACTOS_STR_FILE_DESCRIPTION  "ReactOS ACPI Time and Alarm Control Utility"
+#define REACTOS_STR_INTERNAL_NAME     "acpitimectl"
+#define REACTOS_STR_ORIGINAL_FILENAME "acpitimectl.exe"
+#include <reactos/version.rc>
