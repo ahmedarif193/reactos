@@ -579,11 +579,7 @@ GetDriveTypeW(IN LPCWSTR lpRootPathName)
             {
                 return DeviceMap.Query.DriveType[Index];
             }
-            /* Otherwise, return we don't know the type */
-            else
-            {
-                return DRIVE_UNKNOWN;
-            }
+            /* Otherwise, query the mapped volume through the slow path. */
         }
 
         /* We couldn't find ourselves, do it the slow way */
