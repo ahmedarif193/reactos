@@ -128,6 +128,7 @@ list(APPEND SOURCE
     pstore.idl
     restrictederrorinfo.idl
     richole.idl
+    robuffer.idl
     roparameterizediid.idl
 #   row.idl
 #   rowchg.idl
@@ -175,10 +176,12 @@ list(APPEND SOURCE
     windows.devices.power.idl
     windows.foundation.collections.idl
     windows.foundation.idl
+    windows.foundation.metadata.idl
     windows.foundation.numerics.idl
     windows.gaming.input.custom.idl
     windows.gaming.input.forcefeedback.idl
     windows.gaming.input.idl
+    windows.media.idl
     windows.networking.connectivity.idl
     windows.networking.idl
     windows.storage.fileproperties.idl
