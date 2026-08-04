@@ -18,21 +18,18 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#define WIN32_NO_STATUS
+#include <stdarg.h>
+#include <math.h>
+#include <process.h>
 
-#include <stdio.h>
-
-extern void _cdecl __getmainargs(int *argc, char** *argv, char** *envp,
-                                int expand_wildcards, int *new_mode);
-extern void _cdecl __wgetmainargs(int *argc, wchar_t** *wargv, wchar_t** *wenvp,
-                                 int expand_wildcards, int *new_mode);
+#include "windef.h"
 
 /*********************************************************************
  *		__getmainargs (MSVCRT20.@)
  *
  * new_mode is not a pointer in msvcrt20.
  */
-void _cdecl MSVCRT20__getmainargs( int *argc, char** *argv, char** *envp,
+void CDECL MSVCRT20__getmainargs( int *argc, char** *argv, char** *envp,
                                   int expand_wildcards, int new_mode )
 {
     __getmainargs( argc, argv, envp, expand_wildcards, &new_mode );
@@ -43,8 +40,17 @@ void _cdecl MSVCRT20__getmainargs( int *argc, char** *argv, char** *envp,
  *
  * new_mode is not a pointer in msvcrt20.
  */
-void _cdecl MSVCRT20__wgetmainargs( int *argc, wchar_t** *wargv, wchar_t** *wenvp,
+void CDECL MSVCRT20__wgetmainargs( int *argc, WCHAR** *wargv, WCHAR** *wenvp,
                                    int expand_wildcards, int new_mode )
 {
     __wgetmainargs( argc, wargv, wenvp, expand_wildcards, &new_mode );
+}
+
+
+/*********************************************************************
+ *      _matherr (MSVCRT20.@)
+ */
+int CDECL MSVCRT20__matherr(struct _exception *e)
+{
+    return 0;
 }
