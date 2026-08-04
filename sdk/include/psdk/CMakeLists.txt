@@ -108,6 +108,7 @@ list(APPEND SOURCE
     msxml6.idl
     natupnp.idl
     netcon.idl
+    netlistmgr.idl
     netfw.idl
     oaidl.idl
     objectarray.idl
