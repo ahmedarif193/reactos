@@ -40,6 +40,7 @@ extern "C" {
 #define IPI_FROZEN_STATE_THAW           3
 #define IPI_FROZEN_STATE_OWNER          4
 #define IPI_FROZEN_STATE_TARGET_FREEZE  5
+#define IPI_FROZEN_STATE_SAVING         6
 #define IPI_FROZEN_FLAG_ACTIVE          0x20
 
 //
