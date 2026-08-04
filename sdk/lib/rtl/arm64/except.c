@@ -28,6 +28,18 @@
 
 /* RtlLookupFunctionEntry/RtlVirtualUnwind prototypes come from the NDK */
 
+static VOID RtlpArm64CaptureNonVolatileRegisters(_Out_ DISPATCHER_CONTEXT_NONVOLREG_ARM64 *NonVolatileRegisters, _In_ PCONTEXT Context)
+{
+    ULONG Index;
+
+    RtlCopyMemory(NonVolatileRegisters->GpNvRegs, &Context->X19, sizeof(NonVolatileRegisters->GpNvRegs));
+
+    for (Index = 0; Index < NONVOL_FP_NUMREG_ARM64; Index++)
+    {
+        NonVolatileRegisters->FpNvRegs[Index] = Context->V[Index + 8].D[0];
+    }
+}
+
 static
 BOOLEAN
 RtlpArm64IsStackPointerValid(
@@ -217,6 +229,7 @@ RtlDispatchException(
     PRUNTIME_FUNCTION FunctionEntry;
     PEXCEPTION_ROUTINE ExceptionRoutine;
     DISPATCHER_CONTEXT DispatcherContext;
+    DISPATCHER_CONTEXT_NONVOLREG_ARM64 NonVolatileRegisters;
     PVOID HandlerData;
     EXCEPTION_DISPOSITION Disposition;
     ULONG Frames;
@@ -254,6 +267,7 @@ RtlDispatchException(
         }
 
         EstablisherFrame = 0;
+        RtlpArm64CaptureNonVolatileRegisters(&NonVolatileRegisters, &UnwindContext);
         ExceptionRoutine = RtlVirtualUnwind(UNW_FLAG_EHANDLER,
                                             (ULONG64)ImageBase,
                                             LookupPc,
@@ -282,6 +296,7 @@ RtlDispatchException(
             DispatcherContext.LanguageHandler = ExceptionRoutine;
             DispatcherContext.HandlerData = HandlerData;
             DispatcherContext.ScopeIndex = 0;
+            DispatcherContext.NonVolatileRegisters = NonVolatileRegisters.Buffer;
 
             Disposition = ExceptionRoutine(ExceptionRecord,
                                            (PVOID)(ULONG_PTR)EstablisherFrame,

@@ -25,6 +25,20 @@
 #define ARM64_PACKED_FUNCTION_LENGTH_MASK 0x7FFUL
 #define ARM64_XDATA_FUNCTION_LENGTH_MASK 0x3FFFFUL
 
+VOID NTAPI RtlRestoreContext(_In_ PCONTEXT ContextRecord, _In_opt_ PEXCEPTION_RECORD ExceptionRecord);
+
+static VOID RtlpArm64CaptureNonVolatileRegisters(_Out_ DISPATCHER_CONTEXT_NONVOLREG_ARM64 *NonVolatileRegisters, _In_ PCONTEXT Context)
+{
+    ULONG Index;
+
+    RtlCopyMemory(NonVolatileRegisters->GpNvRegs, &Context->X19, sizeof(NonVolatileRegisters->GpNvRegs));
+
+    for (Index = 0; Index < NONVOL_FP_NUMREG_ARM64; Index++)
+    {
+        NonVolatileRegisters->FpNvRegs[Index] = Context->V[Index + 8].D[0];
+    }
+}
+
 typedef struct _ARM64_RT_FUNCTION
 {
     DWORD BeginAddress;
@@ -718,6 +732,7 @@ RtlUnwindEx(
 {
     EXCEPTION_RECORD LocalExceptionRecord;
     DISPATCHER_CONTEXT DispatcherContext;
+    DISPATCHER_CONTEXT_NONVOLREG_ARM64 NonVolatileRegisters;
     PEXCEPTION_ROUTINE ExceptionRoutine;
     EXCEPTION_DISPOSITION Disposition;
     PRUNTIME_FUNCTION FunctionEntry;
@@ -749,6 +764,7 @@ RtlUnwindEx(
     DispatcherContext.ContextRecord = ContextRecord;
     DispatcherContext.HistoryTable = HistoryTable;
     DispatcherContext.TargetPc = (ULONG64)(ULONG_PTR)TargetIp;
+    DispatcherContext.NonVolatileRegisters = NonVolatileRegisters.Buffer;
 
     RtlpGetStackLimits(&StackLow, &StackHigh);
     if (TargetFrame != NULL)
@@ -780,6 +796,7 @@ RtlUnwindEx(
 
         FrameContext = UnwindContext;
         DispatcherContext.ControlPc = LookupPc;
+        RtlpArm64CaptureNonVolatileRegisters(&NonVolatileRegisters, &UnwindContext);
         ExceptionRoutine = RtlVirtualUnwind(UNW_FLAG_UHANDLER,
                                             ImageBase,
                                             LookupPc,
@@ -847,7 +864,7 @@ RtlUnwindEx(
 
             FrameContext.X0 = (ULONG64)(ULONG_PTR)ReturnValue;
             *ContextRecord = FrameContext;
-            return;
+            RtlRestoreContext(ContextRecord, ExceptionRecord);
         }
 
         *ContextRecord = UnwindContext;
