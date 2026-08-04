@@ -3502,7 +3502,7 @@ static int map_to_lowercase(DWORD flags, const WCHAR *src, int srclen, WCHAR *ds
         if ((flags & NORM_IGNORESYMBOLS) && (get_char_typeW(wch) & (C1_PUNCT | C1_SPACE)))
             continue;
         if (pos < dstlen)
-            dst[pos] = tolowerW(wch);
+            dst[pos] = (!(flags & LCMAP_LINGUISTIC_CASING) && wch == 0x0130) ? wch : tolowerW(wch);
         pos++;
     }
     return pos;
@@ -3517,7 +3517,7 @@ static int map_to_uppercase(DWORD flags, const WCHAR *src, int srclen, WCHAR *ds
         if ((flags & NORM_IGNORESYMBOLS) && (get_char_typeW(wch) & (C1_PUNCT | C1_SPACE)))
             continue;
         if (pos < dstlen)
-            dst[pos] = toupperW(wch);
+            dst[pos] = (!(flags & LCMAP_LINGUISTIC_CASING) && wch == 0x0131) ? wch : toupperW(wch);
         pos++;
     }
     return pos;
