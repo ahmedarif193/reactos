@@ -525,6 +525,9 @@ DWORD WINAPI AdapterDiscoveryThread(LPVOID Context) {
                              0 : WSAGetLastError();
                     } else {
                         error("socket() failed: %d\n", WSAGetLastError());
+                        FreeAdapter(Adapter);
+                        Adapter = NULL;
+                        continue;
                     }
                 } else {
                     Adapter->DhclientInfo.rfdesc =
