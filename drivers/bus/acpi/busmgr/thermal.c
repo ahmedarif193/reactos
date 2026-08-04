@@ -26,6 +26,12 @@ typedef struct _ACPI_THERMAL_TRIP
     UINT64 Temperature;
 } ACPI_THERMAL_TRIP, *PACPI_THERMAL_TRIP;
 
+typedef struct _ACPI_THERMAL_PROCESSOR_REQUEST
+{
+    ACPI_HANDLE Handle;
+    PVOID Request;
+} ACPI_THERMAL_PROCESSOR_REQUEST, *PACPI_THERMAL_PROCESSOR_REQUEST;
+
 typedef struct _ACPI_THERMAL_ZONE
 {
     struct acpi_device *Device;
@@ -48,6 +54,8 @@ typedef struct _ACPI_THERMAL_ZONE
     BOOLEAN PassiveCoolingFailed;
     BOOLEAN CriticalEngaged;
     BOOLEAN HotEngaged;
+    ACPI_THERMAL_PROCESSOR_REQUEST ProcessorRequests[ACPI_THERMAL_MAX_COOLING_DEVICES];
+    ULONG ProcessorRequestCount;
     ACPI_HANDLE CoolingDevices[ACPI_THERMAL_MAX_COOLING_DEVICES];
     ULONG CoolingDeviceCount;
 } ACPI_THERMAL_ZONE, *PACPI_THERMAL_ZONE;
@@ -193,135 +201,33 @@ acpi_thermal_refresh_trips(
             zone->PollMilliseconds);
 }
 
-static ACPI_STATUS
-acpi_processor_get_throttle_control(
-    ACPI_HANDLE handle,
-    BOOLEAN minimum,
-    UINT64 *control,
-    ULONG *percentage)
+static LONG
+acpi_thermal_find_processor_request(
+    PACPI_THERMAL_PROCESSOR_REQUEST requests,
+    ULONG count,
+    ACPI_HANDLE handle)
 {
-    ACPI_BUFFER buffer = {ACPI_ALLOCATE_BUFFER, NULL};
-    ACPI_OBJECT *package;
-    ACPI_OBJECT *state;
-    ACPI_STATUS status;
-    UINT64 selected_control = 0;
-    UINT64 selected_percentage = minimum ? ACPI_UINT64_MAX : 0;
-    BOOLEAN found = FALSE;
     ULONG i;
 
-    status = AcpiEvaluateObject(handle, "_TSS", NULL, &buffer);
-    if (ACPI_FAILURE(status))
-        goto Exit;
-    package = buffer.Pointer;
-    if (!package || package->Type != ACPI_TYPE_PACKAGE)
-    {
-        status = AE_BAD_DATA;
-        goto Exit;
+    for (i = 0; i < count; i++) {
+        if (requests[i].Handle == handle)
+            return (LONG)i;
     }
-
-    for (i = 0; i < package->Package.Count; i++)
-    {
-        state = &package->Package.Elements[i];
-        if (state->Type != ACPI_TYPE_PACKAGE || state->Package.Count < 5 || state->Package.Elements[0].Type != ACPI_TYPE_INTEGER || state->Package.Elements[3].Type != ACPI_TYPE_INTEGER)
-            continue;
-        if (!found || (minimum ? state->Package.Elements[0].Integer.Value < selected_percentage : state->Package.Elements[0].Integer.Value > selected_percentage))
-        {
-            selected_percentage = state->Package.Elements[0].Integer.Value;
-            selected_control = state->Package.Elements[3].Integer.Value;
-            found = TRUE;
-        }
-    }
-    if (!found || selected_percentage > 100)
-    {
-        status = AE_BAD_DATA;
-        goto Exit;
-    }
-    *control = selected_control;
-    *percentage = (ULONG)selected_percentage;
-    status = AE_OK;
-
-Exit:
-    if (buffer.Pointer)
-        AcpiOsFree(buffer.Pointer);
-    return status;
+    return -1;
 }
 
-static ACPI_STATUS
-acpi_processor_get_ptc_register(
-    ACPI_HANDLE handle,
-    ACPI_GENERIC_ADDRESS *control_register)
+static VOID
+acpi_thermal_release_processor_requests(
+    PACPI_THERMAL_ZONE zone)
 {
-    ACPI_BUFFER buffer = {ACPI_ALLOCATE_BUFFER, NULL};
-    ACPI_RESOURCE *resource = NULL;
-    ACPI_OBJECT *package;
-    ACPI_OBJECT *object;
-    ACPI_STATUS status;
+    ULONG i;
 
-    status = AcpiEvaluateObject(handle, "_PTC", NULL, &buffer);
-    if (ACPI_FAILURE(status))
-        goto Exit;
-    package = buffer.Pointer;
-    if (!package || package->Type != ACPI_TYPE_PACKAGE || package->Package.Count < 2)
-    {
-        status = AE_BAD_DATA;
-        goto Exit;
+    for (i = 0; i < zone->ProcessorRequestCount; i++) {
+        if (zone->ProcessorRequests[i].Request)
+            PoDeleteThermalRequest(zone->ProcessorRequests[i].Request);
     }
-    object = &package->Package.Elements[0];
-    if (object->Type != ACPI_TYPE_BUFFER || object->Buffer.Length > MAXUSHORT)
-    {
-        status = AE_BAD_DATA;
-        goto Exit;
-    }
-    status = AcpiBufferToResource(object->Buffer.Pointer, (UINT16)object->Buffer.Length, &resource);
-    if (ACPI_FAILURE(status))
-        goto Exit;
-    if (!resource || resource->Type != ACPI_RESOURCE_TYPE_GENERIC_REGISTER)
-    {
-        status = AE_BAD_DATA;
-        goto Exit;
-    }
-
-    control_register->SpaceId = resource->Data.GenericReg.SpaceId;
-    control_register->BitWidth = resource->Data.GenericReg.BitWidth;
-    control_register->BitOffset = resource->Data.GenericReg.BitOffset;
-    control_register->AccessWidth = resource->Data.GenericReg.AccessSize;
-    control_register->Address = resource->Data.GenericReg.Address;
-    status = AE_OK;
-
-Exit:
-    if (resource)
-        AcpiOsFree(resource);
-    if (buffer.Pointer)
-        AcpiOsFree(buffer.Pointer);
-    return status;
-}
-
-int
-acpi_processor_set_thermal_limit(
-    ACPI_HANDLE handle,
-    int type)
-{
-    ACPI_GENERIC_ADDRESS control_register;
-    ACPI_STATUS status;
-    UINT64 control;
-    ULONG percentage;
-    BOOLEAN minimum = type != ACPI_PROCESSOR_LIMIT_NONE;
-
-    RtlZeroMemory(&control_register, sizeof(control_register));
-    status = acpi_processor_get_throttle_control(handle, minimum, &control, &percentage);
-    if (ACPI_FAILURE(status))
-        return_VALUE(-1);
-    status = acpi_processor_get_ptc_register(handle, &control_register);
-    if (ACPI_FAILURE(status))
-        return_VALUE(-1);
-    status = AcpiWrite(control, &control_register);
-    if (ACPI_FAILURE(status))
-    {
-        DPRINT1("ACPI: Processor thermal throttle write failed: %s space=%u address=0x%I64x\n", AcpiFormatException(status), control_register.SpaceId, control_register.Address);
-        return_VALUE(-1);
-    }
-    DPRINT1("ACPI: Processor thermal limit set to %lu%% control=0x%I64x\n", percentage, control);
-    return_VALUE(0);
+    RtlZeroMemory(zone->ProcessorRequests, sizeof(zone->ProcessorRequests));
+    zone->ProcessorRequestCount = 0;
 }
 
 static ULONG
@@ -331,14 +237,29 @@ acpi_thermal_apply_processor_list(
     PULONG targets)
 {
     ACPI_BUFFER buffer = {ACPI_ALLOCATE_BUFFER, NULL};
+    ACPI_THERMAL_PROCESSOR_REQUEST new_requests[ACPI_THERMAL_MAX_COOLING_DEVICES];
+    COUNTED_REASON_CONTEXT reason_context;
+    UNICODE_STRING reason_string;
+    struct acpi_device *target_device;
     ACPI_OBJECT *package;
     ACPI_OBJECT *object;
     ACPI_STATUS status;
+    NTSTATUS request_status;
+    LONG old_index;
     ULONG applied = 0;
+    ULONG count = 0;
     ULONG i;
+    UCHAR throttle = limit == ACPI_PROCESSOR_LIMIT_NONE ? 100 : 0;
 
     if (targets)
         *targets = 0;
+
+    RtlZeroMemory(new_requests, sizeof(new_requests));
+    RtlZeroMemory(&reason_context, sizeof(reason_context));
+    RtlInitUnicodeString(&reason_string, L"ACPI thermal zone passive cooling");
+    reason_context.Version = POWER_REQUEST_CONTEXT_VERSION;
+    reason_context.Flags = POWER_REQUEST_CONTEXT_SIMPLE_STRING;
+    reason_context.SimpleString = reason_string;
 
     status = AcpiEvaluateObject(zone->Handle, "_PSL", NULL, &buffer);
     if (ACPI_FAILURE(status))
@@ -351,11 +272,39 @@ acpi_thermal_apply_processor_list(
         object = &package->Package.Elements[i];
         if (object->Type != ACPI_TYPE_LOCAL_REFERENCE || !object->Reference.Handle)
             continue;
+        if (acpi_thermal_find_processor_request(new_requests, count, object->Reference.Handle) >= 0)
+            continue;
+        if (count >= ACPI_THERMAL_MAX_COOLING_DEVICES)
+            break;
         if (targets)
             (*targets)++;
-        if (acpi_processor_set_thermal_limit(object->Reference.Handle, limit) == 0)
+        new_requests[count].Handle = object->Reference.Handle;
+        old_index = acpi_thermal_find_processor_request(zone->ProcessorRequests, zone->ProcessorRequestCount, object->Reference.Handle);
+        if (old_index >= 0)
+        {
+            new_requests[count].Request = zone->ProcessorRequests[old_index].Request;
+            zone->ProcessorRequests[old_index].Request = NULL;
+        }
+        else if (!acpi_bus_get_device(object->Reference.Handle, &target_device) && target_device->pdo && zone->Device->pdo)
+        {
+            request_status = PoCreateThermalRequest(&new_requests[count].Request, target_device->pdo, zone->Device->pdo, &reason_context, 0);
+            if (NT_SUCCESS(request_status) && !PoGetThermalRequestSupport(new_requests[count].Request, PoThermalRequestPassive))
+            {
+                PoDeleteThermalRequest(new_requests[count].Request);
+                new_requests[count].Request = NULL;
+            }
+        }
+        if (new_requests[count].Request && NT_SUCCESS(PoSetThermalPassiveCooling(new_requests[count].Request, throttle)))
             applied++;
+        count++;
     }
+
+    for (i = 0; i < zone->ProcessorRequestCount; i++) {
+        if (zone->ProcessorRequests[i].Request)
+            PoDeleteThermalRequest(zone->ProcessorRequests[i].Request);
+    }
+    RtlCopyMemory(zone->ProcessorRequests, new_requests, count * sizeof(new_requests[0]));
+    zone->ProcessorRequestCount = count;
 
 Exit:
     if (buffer.Pointer)
@@ -559,7 +508,7 @@ acpi_thermal_check(
     }
     zone->ActiveMask = new_active_mask;
 
-    if (zone->Passive.Valid && temperature >= zone->Passive.Temperature && (!zone->PassiveEngaged || reason == ACPI_THERMAL_NOTIFY_DEVICES))
+    if (zone->Passive.Valid && temperature >= zone->Passive.Temperature && (!zone->PassiveEngaged || zone->PassiveCoolingFailed || reason == ACPI_THERMAL_NOTIFY_DEVICES))
     {
         ULONG throttled = acpi_thermal_apply_processor_list(zone, ACPI_PROCESSOR_LIMIT_DECREMENT, &targets);
         zone->PassiveEngaged = TRUE;
@@ -738,8 +687,7 @@ acpi_thermal_remove(
     KeWaitForSingleObject(&zone->WorkIdleEvent, Executive, KernelMode, FALSE, NULL);
     ExAcquireFastMutex(&zone->PolicyLock);
     acpi_thermal_release_cooling_policy(zone);
-    if (zone->PassiveEngaged)
-        acpi_thermal_apply_processor_list(zone, ACPI_PROCESSOR_LIMIT_NONE, NULL);
+    acpi_thermal_release_processor_requests(zone);
     ExReleaseFastMutex(&zone->PolicyLock);
     device->driver_data = NULL;
     ExFreePoolWithTag(zone, ACPI_THERMAL_TAG);

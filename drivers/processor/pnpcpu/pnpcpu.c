@@ -999,10 +999,13 @@ PnpcpuSetPerfLevel(
 {
     ULONG ProcessorNumber = KeGetCurrentProcessorNumberEx(NULL);
     PPNPCPU_DEVICE_EXTENSION DeviceExtension;
+    LONG ThermalLimit;
     ULONG Index;
     ULONG Selected = 0;
-    ULONG Difference = MAXULONG;
+    ULONG SelectedPercentage = 0;
+    ULONG LowestPercentage = MAXULONG;
     ULONGLONG Value;
+    BOOLEAN Found = FALSE;
     NTSTATUS Status;
 
     if (ProcessorNumber >= MAXIMUM_PROCESSORS)
@@ -1010,6 +1013,12 @@ PnpcpuSetPerfLevel(
     DeviceExtension = InterlockedCompareExchangePointer((PVOID volatile *)&PnpcpuProcessors[ProcessorNumber], NULL, NULL);
     if (!DeviceExtension || DeviceExtension->Removing)
         return STATUS_DEVICE_NOT_READY;
+    ThermalLimit = InterlockedCompareExchange(&DeviceExtension->ThermalLimit, 0, 0);
+    if (ThermalLimit < 0)
+        ThermalLimit = 0;
+    if (ThermalLimit > 100)
+        ThermalLimit = 100;
+    Throttle = (UCHAR)min((ULONG)Throttle, (ULONG)ThermalLimit);
     if (DeviceExtension->PerfMode == PNPCPU_PERF_CPPC)
     {
         Value = ((ULONGLONG)DeviceExtension->CppcHighest * Throttle) / 100;
@@ -1021,11 +1030,17 @@ PnpcpuSetPerfLevel(
         return STATUS_NOT_SUPPORTED;
     for (Index = 0; Index < DeviceExtension->PerfStateCount; Index++)
     {
-        ULONG StateDifference = DeviceExtension->PerfStates[Index].Percentage > Throttle ? DeviceExtension->PerfStates[Index].Percentage - Throttle : Throttle - DeviceExtension->PerfStates[Index].Percentage;
+        ULONG Percentage = DeviceExtension->PerfStates[Index].Percentage;
 
-        if (StateDifference < Difference)
+        if (Percentage < LowestPercentage)
         {
-            Difference = StateDifference;
+            LowestPercentage = Percentage;
+            Selected = Index;
+        }
+        if (Percentage <= Throttle && (!Found || Percentage > SelectedPercentage))
+        {
+            Found = TRUE;
+            SelectedPercentage = Percentage;
             Selected = Index;
         }
     }
@@ -1033,6 +1048,81 @@ PnpcpuSetPerfLevel(
     if (NT_SUCCESS(Status) && NT_SUCCESS(PnpcpuReadRegister(&DeviceExtension->PerfStatus, &Value)) && Value != DeviceExtension->PerfStates[Selected].Status)
         DPRINT1("PNPCPU: CPU %lu P-state status 0x%I64x expected 0x%lx\n", ProcessorNumber, Value, DeviceExtension->PerfStates[Selected].Status);
     return Status;
+}
+
+static
+VOID
+NTAPI
+PnpcpuThermalInterfaceReference(
+    _In_ PVOID Context)
+{
+    PPNPCPU_DEVICE_EXTENSION DeviceExtension = Context;
+
+    ObReferenceObject(DeviceExtension->Self);
+}
+
+static
+VOID
+NTAPI
+PnpcpuThermalInterfaceDereference(
+    _In_ PVOID Context)
+{
+    PPNPCPU_DEVICE_EXTENSION DeviceExtension = Context;
+
+    ObDereferenceObject(DeviceExtension->Self);
+}
+
+static
+VOID
+PnpcpuPassiveCooling(
+    _Inout_opt_ PVOID Context,
+    _In_ ULONG Percentage)
+{
+    PPNPCPU_DEVICE_EXTENSION DeviceExtension = Context;
+    KAFFINITY PreviousAffinity;
+    NTSTATUS Status;
+
+    if (!DeviceExtension)
+        return;
+    if (Percentage > 100)
+        Percentage = 100;
+    InterlockedExchange(&DeviceExtension->ThermalLimit, (LONG)Percentage);
+    if (!DeviceExtension->Started || DeviceExtension->Removing || !DeviceExtension->PowerRegistered || !DeviceExtension->ProcessorNumberValid || DeviceExtension->ProcessorNumber >= sizeof(KAFFINITY) * 8)
+        return;
+    PreviousAffinity = KeSetSystemAffinityThreadEx((KAFFINITY)1 << DeviceExtension->ProcessorNumber);
+    Status = PnpcpuSetPerfLevel((UCHAR)Percentage);
+    KeRevertToUserAffinityThreadEx(PreviousAffinity);
+    if (!NT_SUCCESS(Status))
+        DPRINT1("PNPCPU: CPU %lu thermal limit %lu%% failed, status 0x%08lx\n", DeviceExtension->ProcessorNumber, Percentage, Status);
+}
+
+static
+NTSTATUS
+PnpcpuQueryThermalInterface(
+    _In_ PPNPCPU_DEVICE_EXTENSION DeviceExtension,
+    _In_ PIO_STACK_LOCATION Stack)
+{
+    PTHERMAL_COOLING_INTERFACE Interface;
+
+    if (!Stack->Parameters.QueryInterface.InterfaceType || RtlCompareMemory(Stack->Parameters.QueryInterface.InterfaceType, &GUID_THERMAL_COOLING_INTERFACE, sizeof(GUID)) != sizeof(GUID))
+        return STATUS_NOT_SUPPORTED;
+    if (!DeviceExtension->Started || DeviceExtension->Removing || !DeviceExtension->PowerRegistered || DeviceExtension->PerfMode == PNPCPU_PERF_NONE)
+        return STATUS_DEVICE_NOT_READY;
+    if (!Stack->Parameters.QueryInterface.Interface || Stack->Parameters.QueryInterface.Size < sizeof(*Interface))
+        return STATUS_BUFFER_TOO_SMALL;
+    if (Stack->Parameters.QueryInterface.Version != THERMAL_COOLING_INTERFACE_VERSION)
+        return STATUS_NOT_SUPPORTED;
+    Interface = (PTHERMAL_COOLING_INTERFACE)Stack->Parameters.QueryInterface.Interface;
+    RtlZeroMemory(Interface, sizeof(*Interface));
+    Interface->Size = sizeof(*Interface);
+    Interface->Version = THERMAL_COOLING_INTERFACE_VERSION;
+    Interface->Context = DeviceExtension;
+    Interface->InterfaceReference = PnpcpuThermalInterfaceReference;
+    Interface->InterfaceDereference = PnpcpuThermalInterfaceDereference;
+    Interface->Flags = ThermalDeviceFlagPassiveCooling;
+    Interface->PassiveCooling = PnpcpuPassiveCooling;
+    Interface->InterfaceReference(Interface->Context);
+    return STATUS_SUCCESS;
 }
 
 static
@@ -1496,6 +1586,16 @@ PnpcpuPnp(
             IoCompleteRequest(Irp, IO_NO_INCREMENT);
             return Status;
 
+        case IRP_MN_QUERY_INTERFACE:
+            Status = PnpcpuQueryThermalInterface(DeviceExtension, Stack);
+            if (NT_SUCCESS(Status))
+            {
+                Irp->IoStatus.Status = Status;
+                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                return Status;
+            }
+            break;
+
         case IRP_MN_STOP_DEVICE:
             DeviceExtension->Started = FALSE;
             PnpcpuReleaseAcpiInterface(DeviceExtension);
@@ -1576,6 +1676,7 @@ PnpcpuAddDevice(
     RtlZeroMemory(DeviceExtension, sizeof(*DeviceExtension));
     DeviceExtension->Self = DeviceObject;
     DeviceExtension->Pdo = PhysicalDeviceObject;
+    DeviceExtension->ThermalLimit = 100;
     IoInitializeRemoveLock(&DeviceExtension->RemoveLock, PNPCPU_TAG, 0, 0);
     ExInitializeFastMutex(&DeviceExtension->ConfigurationLock);
     KeInitializeEvent(&DeviceExtension->WorkIdleEvent, NotificationEvent, TRUE);
