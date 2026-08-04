@@ -2129,12 +2129,8 @@ PciPdoAppendBarRequirements(
         ULONGLONG Maximum = Windows[i].End;
         ULONGLONG AlignmentMask = Length - 1;
 
-        if (!(Flags & PCI_ADDRESS_IO_SPACE) &&
-            Windows[i].Prefetchable &&
-            !(Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE))
-        {
+        if (!(Flags & PCI_ADDRESS_IO_SPACE) && Windows[i].Prefetchable && !(Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE))
             continue;
-        }
 
         /* The root bridge also publishes the VGA and option-ROM apertures
          * below 1 MiB.  Only a 20-bit memory BAR may be placed there; an
@@ -3962,6 +3958,29 @@ PdoWriteConfig(
     return STATUS_SUCCESS;
 }
 
+static
+VOID
+PciPdoDisableDecodes(_Inout_ PPDO_DEVICE_EXTENSION DeviceExtension)
+{
+    USHORT Command;
+    USHORT DisabledCommand;
+
+    if (PciPdoGetBusDataByOffset(DeviceExtension, &Command, FIELD_OFFSET(PCI_COMMON_CONFIG, Command), sizeof(Command)) != sizeof(Command))
+    {
+        DPRINT1("PCI PDO: failed to read command register while disabling %u:%02x:%02x.%u\n", PciPdoGetSegment(DeviceExtension), (UCHAR)DeviceExtension->PciDevice->BusNumber, DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber, DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber);
+        return;
+    }
+
+    DisabledCommand = Command & ~(PCI_ENABLE_IO_SPACE | PCI_ENABLE_MEMORY_SPACE | PCI_ENABLE_BUS_MASTER);
+    if (DisabledCommand != Command && PciPdoSetBusDataByOffset(DeviceExtension, &DisabledCommand, FIELD_OFFSET(PCI_COMMON_CONFIG, Command), sizeof(DisabledCommand)) != sizeof(DisabledCommand))
+    {
+        DPRINT1("PCI PDO: failed to disable command decoding for %u:%02x:%02x.%u\n", PciPdoGetSegment(DeviceExtension), (UCHAR)DeviceExtension->PciDevice->BusNumber, DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber, DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber);
+        return;
+    }
+
+    DeviceExtension->PciDevice->PciConfig.Command = DisabledCommand;
+}
+
 static NTSTATUS
 PdoQueryDeviceRelations(
     IN PDEVICE_OBJECT DeviceObject,
@@ -4101,14 +4120,19 @@ PdoPnpControl(
 
         case IRP_MN_QUERY_STOP_DEVICE:
         case IRP_MN_CANCEL_STOP_DEVICE:
-        case IRP_MN_STOP_DEVICE:
         case IRP_MN_QUERY_REMOVE_DEVICE:
         case IRP_MN_CANCEL_REMOVE_DEVICE:
+            Status = STATUS_SUCCESS;
+            break;
+
+        case IRP_MN_STOP_DEVICE:
         case IRP_MN_SURPRISE_REMOVAL:
+            PciPdoDisableDecodes(DeviceExtension);
             Status = STATUS_SUCCESS;
             break;
 
         case IRP_MN_REMOVE_DEVICE:
+            PciPdoDisableDecodes(DeviceExtension);
             IoReleaseRemoveLockAndWait(&DeviceExtension->RemoveLock, Irp);
             Status = STATUS_SUCCESS;
             Irp->IoStatus.Status = Status;
