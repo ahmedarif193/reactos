@@ -47,17 +47,27 @@ KiProcessorFreezeHandler(
     PKPRCB CurrentPrcb = KeGetCurrentPrcb();
 
     /* Make sure this is a freeze request */
-    if (CurrentPrcb->IpiFrozen != IPI_FROZEN_STATE_TARGET_FREEZE)
+    if ((CurrentPrcb == NULL) ||
+        (TrapFrame == NULL) ||
+        (CurrentPrcb->IpiFrozen != IPI_FROZEN_STATE_TARGET_FREEZE))
     {
         /* Not a freeze request, return FALSE to signal it is unhandled */
         return FALSE;
     }
 
-    /* We are frozen now */
-    CurrentPrcb->IpiFrozen = IPI_FROZEN_STATE_FROZEN;
+    /* Claim the request, but do not publish a stable context before saving it. */
+    if (InterlockedCompareExchange((PLONG)&CurrentPrcb->IpiFrozen, IPI_FROZEN_STATE_SAVING, IPI_FROZEN_STATE_TARGET_FREEZE) !=
+        IPI_FROZEN_STATE_TARGET_FREEZE)
+    {
+        return FALSE;
+    }
 
     /* Save the processor state */
     KiSaveProcessorState(TrapFrame, ExceptionFrame);
+    KeMemoryBarrier();
+
+    /* The owner may consume ProcessorState only after this publication. */
+    InterlockedExchange((PLONG)&CurrentPrcb->IpiFrozen, IPI_FROZEN_STATE_FROZEN);
 
     /* Wait for the freeze owner to release us */
     while (CurrentPrcb->IpiFrozen != IPI_FROZEN_STATE_THAW)
@@ -131,6 +141,9 @@ KxFreezeExecution(
         {
             /* Only the active processor is allowed to change IpiFrozen */
             ASSERT(TargetPrcb->IpiFrozen == IPI_FROZEN_STATE_RUNNING);
+
+            RtlZeroMemory(&TargetPrcb->ProcessorState.ContextFrame, sizeof(TargetPrcb->ProcessorState.ContextFrame));
+            KeMemoryBarrier();
 
             /* Request target to freeze */
             TargetPrcb->IpiFrozen = IPI_FROZEN_STATE_TARGET_FREEZE;
