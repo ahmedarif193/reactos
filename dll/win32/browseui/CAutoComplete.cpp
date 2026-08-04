@@ -661,6 +661,7 @@ CAutoComplete::CAutoComplete()
     : m_bInSetText(FALSE), m_bInSelectItem(FALSE), m_bEditHasFocus(FALSE)
     , m_bDowner(TRUE), m_dwOptions(ACO_AUTOAPPEND | ACO_AUTOSUGGEST)
     , m_bEnabled(TRUE), m_hwndCombo(NULL), m_hFont(NULL), m_bResized(FALSE)
+    , m_bWindowRef(FALSE)
     , m_hwndEdit(NULL), m_fnOldEditProc(NULL), m_fnOldWordBreakProc(NULL)
     , m_hThread(NULL), m_pThread(NULL)
 {
@@ -1566,6 +1567,7 @@ LRESULT CAutoComplete::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &b
 
     // add reference so we won't be deleted during message processing
     AddRef();
+    m_bWindowRef = TRUE;
     return 0; // success
 }
 
@@ -1600,7 +1602,11 @@ LRESULT CAutoComplete::OnNCDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL
 VOID CAutoComplete::OnFinalMessage(HWND)
 {
     // The message loop is finished, now we can safely destruct!
-    Release();
+    if (m_bWindowRef)
+    {
+        m_bWindowRef = FALSE;
+        Release();
+    }
 }
 
 // WM_EXITSIZEMOVE
