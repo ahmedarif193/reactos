@@ -145,4 +145,65 @@ RosSymGetAddressInformation(PROSSYM_INFO RosSymInfo,
   return TRUE;
 }
 
+static
+BOOLEAN
+RosSymCopyStringBounded(IN PROSSYM_INFO RosSymInfo, IN ULONG Offset, OUT PCHAR Destination, IN ULONG DestinationLength)
+{
+  PCSTR Source;
+  SIZE_T Length;
+
+  if (Destination == NULL)
+    return TRUE;
+
+  if (DestinationLength == 0 || Offset >= RosSymInfo->StringsLength)
+    return FALSE;
+
+  Source = RosSymInfo->Strings + Offset;
+  Length = strnlen(Source, RosSymInfo->StringsLength - Offset);
+  if (Length == RosSymInfo->StringsLength - Offset)
+    return FALSE;
+
+  if (Length >= DestinationLength)
+    Length = DestinationLength - 1;
+  memcpy(Destination, Source, Length);
+  Destination[Length] = '\0';
+  return TRUE;
+}
+
+BOOLEAN
+RosSymGetAddressInformationEx(PROSSYM_INFO RosSymInfo, ULONG_PTR RelativeAddress, ULONG *SymbolAddress, ULONG *LineNumber, char *FileName, ULONG FileNameLength, char *FunctionName, ULONG FunctionNameLength)
+{
+  PROSSYM_ENTRY RosSymEntry;
+
+  if (RosSymInfo == NULL ||
+      RosSymInfo->Symbols == NULL || RosSymInfo->SymbolsCount == 0 ||
+      RosSymInfo->Strings == NULL || RosSymInfo->StringsLength == 0)
+    {
+      return FALSE;
+    }
+
+  if ((FileName != NULL && FileNameLength == 0) ||
+      (FunctionName != NULL && FunctionNameLength == 0))
+    {
+      return FALSE;
+    }
+
+  RosSymEntry = FindEntry(RosSymInfo, RelativeAddress);
+  if (RosSymEntry == NULL)
+    return FALSE;
+
+  if (SymbolAddress != NULL)
+    *SymbolAddress = RosSymEntry->Address;
+  if (LineNumber != NULL)
+    *LineNumber = RosSymEntry->SourceLine;
+
+  if (!RosSymCopyStringBounded(RosSymInfo, RosSymEntry->FileOffset, FileName, FileNameLength) ||
+      !RosSymCopyStringBounded(RosSymInfo, RosSymEntry->FunctionOffset, FunctionName, FunctionNameLength))
+    {
+      return FALSE;
+    }
+
+  return TRUE;
+}
+
 /* EOF */
