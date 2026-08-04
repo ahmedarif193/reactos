@@ -101,6 +101,7 @@ AddReg=Classes
 11,,ntobjshex.dll,1
 11,,objsel.dll,1
 11,,oleacc.dll,1
+11,,opcservices.dll,1
 11,,oleaut32.dll,1
 11,,olepro32.dll,1
 11,,propsys.dll,1

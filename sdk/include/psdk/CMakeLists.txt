@@ -97,6 +97,7 @@ list(APPEND SOURCE
     mmdeviceapi.idl
     msaatext.idl
     mscoree.idl
+    msopc.idl
     msctf.idl
     msdadc.idl
     mshtmhst.idl
