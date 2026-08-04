@@ -1,5 +1,7 @@
 #include "precomp.h"
 
+#include <poclass.h>
+
 #define NDEBUG
 #include <debug.h>
 
@@ -18,6 +20,37 @@ typedef struct _ACPI_GPE_INTERFACE_CONTEXT
 } ACPI_GPE_INTERFACE_CONTEXT, *PACPI_GPE_INTERFACE_CONTEXT;
 
 #define ACPI_NOTIFY_STACK_TARGETS 4
+
+BOOLEAN AcpiHardwareIdContains(PPDO_DEVICE_DATA DeviceData, PCWSTR HardwareId)
+{
+    PWSTR Current;
+
+    if (!DeviceData || !DeviceData->HardwareIDs || !HardwareId)
+        return FALSE;
+
+    for (Current = DeviceData->HardwareIDs; *Current; Current += wcslen(Current) + 1)
+    {
+        if (wcsstr(Current, HardwareId))
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static VOID AcpiFanActiveCooling(PVOID Context, BOOLEAN Engaged)
+{
+    PDEVICE_OBJECT DeviceObject = Context;
+    PPDO_DEVICE_DATA DeviceData;
+
+    if (!DeviceObject)
+        return;
+
+    DeviceData = DeviceObject->DeviceExtension;
+    if (!DeviceData->AcpiHandle)
+        return;
+
+    if (!NT_SUCCESS(AcpiThermalSetPower(DeviceData->AcpiHandle, Engaged)))
+        DPRINT1("ACPI: Fan active cooling %s failed\n", Engaged ? "on" : "off");
+}
 
 static
 NTSTATUS
@@ -832,6 +865,7 @@ Bus_PDO_QueryInterface(PPDO_DEVICE_DATA DeviceData,
   PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation(Irp);
   PACPI_INTERFACE_STANDARD AcpiInterface;
   PACPI_INTERFACE_STANDARD2 AcpiInterface2;
+  PTHERMAL_COOLING_INTERFACE ThermalInterface;
 
   if (IrpSp->Parameters.QueryInterface.Version != 1)
   {
@@ -840,7 +874,26 @@ Bus_PDO_QueryInterface(PPDO_DEVICE_DATA DeviceData,
       return STATUS_INVALID_PARAMETER;
   }
 
-  if (RtlCompareMemory(IrpSp->Parameters.QueryInterface.InterfaceType,
+  if (RtlCompareMemory(IrpSp->Parameters.QueryInterface.InterfaceType, &GUID_THERMAL_COOLING_INTERFACE, sizeof(GUID)) == sizeof(GUID))
+  {
+      if (!AcpiHardwareIdContains(DeviceData, L"PNP0C0B"))
+          return STATUS_NOT_SUPPORTED;
+      if (IrpSp->Parameters.QueryInterface.Size < sizeof(THERMAL_COOLING_INTERFACE))
+          return STATUS_BUFFER_TOO_SMALL;
+
+      ThermalInterface = (PTHERMAL_COOLING_INTERFACE)IrpSp->Parameters.QueryInterface.Interface;
+      RtlZeroMemory(ThermalInterface, sizeof(*ThermalInterface));
+      ThermalInterface->Size = sizeof(*ThermalInterface);
+      ThermalInterface->Version = THERMAL_COOLING_INTERFACE_VERSION;
+      ThermalInterface->Context = DeviceData->Common.Self;
+      ThermalInterface->InterfaceReference = AcpiInterfaceReference;
+      ThermalInterface->InterfaceDereference = AcpiInterfaceDereference;
+      ThermalInterface->Flags = ThermalDeviceFlagActiveCooling;
+      ThermalInterface->ActiveCooling = AcpiFanActiveCooling;
+      AcpiInterfaceReference(DeviceData->Common.Self);
+      return STATUS_SUCCESS;
+  }
+  else if (RtlCompareMemory(IrpSp->Parameters.QueryInterface.InterfaceType,
                         &GUID_ACPI_INTERFACE_STANDARD, sizeof(GUID)) == sizeof(GUID))
   {
       DPRINT("GUID_ACPI_INTERFACE_STANDARD\n");

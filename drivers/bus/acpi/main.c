@@ -272,9 +272,11 @@ ACPIDispatchDeviceControl(
     PCOMMON_DEVICE_DATA     commonData;
     ULONG Caps = 0;
     HANDLE ThreadHandle;
+    BOOLEAN IsThermalQuery;
 
     irpStack = IoGetCurrentIrpStackLocation (Irp);
     ASSERT (IRP_MJ_DEVICE_CONTROL == irpStack->MajorFunction);
+    IsThermalQuery = irpStack->Parameters.DeviceIoControl.IoControlCode == IOCTL_THERMAL_QUERY_INFORMATION;
 
     commonData = (PCOMMON_DEVICE_DATA) DeviceObject->DeviceExtension;
 
@@ -423,6 +425,13 @@ ACPIDispatchDeviceControl(
             DPRINT("IOCTL_BATTERY_QUERY_TAG is not supported!\n");
             break;
 
+        case IOCTL_THERMAL_QUERY_INFORMATION:
+        case IOCTL_THERMAL_SET_COOLING_POLICY:
+        case IOCTL_RUN_ACTIVE_COOLING_METHOD:
+        case IOCTL_THERMAL_SET_PASSIVE_LIMIT:
+            status = AcpiThermalDeviceControl((PPDO_DEVICE_DATA)commonData, Irp);
+            break;
+
         default:
             DPRINT1("Unsupported IOCTL: %x\n", irpStack->Parameters.DeviceIoControl.IoControlCode);
             break;
@@ -435,7 +444,8 @@ ACPIDispatchDeviceControl(
     }
     else
     {
-        IoMarkIrpPending(Irp);
+        if (!IsThermalQuery)
+            IoMarkIrpPending(Irp);
     }
 
     return status;

@@ -203,6 +203,7 @@ Bus_PlugInDevice (
     pdoData->AcpiHandle = Device->handle;
     InitializeListHead(&pdoData->NotificationList);
     KeInitializeSpinLock(&pdoData->NotificationLock);
+    AcpiThermalInitialize(pdoData);
 
     if (isPciRoot)
     {
