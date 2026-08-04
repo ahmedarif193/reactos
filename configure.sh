@@ -109,6 +109,63 @@ fex_arm64ec_enabled() {
 	return 1
 }
 
+# KDBG on x86 uses the Zydis and Zycore revisions nested in FEX. Fetch only
+# that dependency chain here; recursively fetching FEX would also download its
+# large test-binary submodules.
+kdb_zydis_enabled() {
+	KDB_CMAKEOPTS_UPPER=$(printf '%s' "$ROS_CMAKEOPTS" | tr '[:lower:]' '[:upper:]')
+	case "$ARCH" in
+		i386|amd64)
+			;;
+		*)
+			return 1
+			;;
+	esac
+
+	case " $KDB_CMAKEOPTS_UPPER " in
+		*" -DKD_DEBUGGER=NONE "*|*" -DKD_DEBUGGER:STRING=NONE "*|*" -DKD_DEBUGGER=EXTERNAL "*|*" -DKD_DEBUGGER:STRING=EXTERNAL "*|*" -DKDBG=OFF "*|*" -DKDBG:BOOL=OFF "*|*" -DKDBG=FALSE "*|*" -DKDBG:BOOL=FALSE "*|*" -DKDBG=0 "*|*" -DKDBG:BOOL=0 "*)
+			return 1
+			;;
+		*" -DKD_DEBUGGER=KDBG "*|*" -DKD_DEBUGGER:STRING=KDBG "*|*" -DKDBG=ON "*|*" -DKDBG:BOOL=ON "*|*" -DKDBG=TRUE "*|*" -DKDBG:BOOL=TRUE "*|*" -DKDBG=1 "*|*" -DKDBG:BOOL=1 "*)
+			return 0
+			;;
+	esac
+
+	case "$(rosconfig_cache_get KD_DEBUGGER)" in
+		NONE|none|EXTERNAL|external)
+			return 1
+			;;
+		KDBG|kdbg)
+			return 0
+			;;
+	esac
+
+	[ "$BUILD_TYPE" = "Debug" ] || [ "$(rosconfig_cache_get DBG)" = "y" ]
+}
+
+sync_kdb_submodules() {
+	kdb_zydis_enabled || return 0
+
+	KDB_FEX_DIR="$REACTOS_SOURCE_DIR/submodules/fex-arm64ec"
+	KDB_ZYDIS_DIR="$KDB_FEX_DIR/External/zydis"
+	KDB_ZYCORE_DIR="$KDB_ZYDIS_DIR/dependencies/zycore"
+	if [ -f "$KDB_ZYDIS_DIR/src/MetaInfo.c" ] && [ -f "$KDB_ZYCORE_DIR/src/API/Memory.c" ]; then
+		return 0
+	fi
+
+	command -v git >/dev/null 2>&1 || fail "git is required to initialize the KDBG disassembler submodules"
+	git -C "$REACTOS_SOURCE_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "KDBG requires Zydis and Zycore; configure from a recursive Git checkout"
+
+	echo "Syncing KDBG Zydis submodules..."
+	git -C "$REACTOS_SOURCE_DIR" submodule sync -- submodules/fex-arm64ec || fail "failed to sync FEX submodule metadata"
+	git -C "$REACTOS_SOURCE_DIR" submodule update --init --depth 1 -- submodules/fex-arm64ec || fail "failed to initialize the FEX submodule"
+	git -C "$KDB_FEX_DIR" submodule sync -- External/zydis || fail "failed to sync Zydis submodule metadata"
+	git -C "$KDB_FEX_DIR" submodule update --init --depth 1 -- External/zydis || fail "failed to initialize the Zydis submodule"
+	git -C "$KDB_ZYDIS_DIR" submodule sync -- dependencies/zycore || fail "failed to sync Zycore submodule metadata"
+	git -C "$KDB_ZYDIS_DIR" submodule update --init --depth 1 -- dependencies/zycore || fail "failed to initialize the Zycore submodule"
+	[ -f "$KDB_ZYDIS_DIR/src/MetaInfo.c" ] && [ -f "$KDB_ZYCORE_DIR/src/API/Memory.c" ] || fail "KDBG Zydis submodules are incomplete after synchronization"
+}
+
 sync_arm64_submodules() {
 	[ "$ARCH" = "arm64" ] || return 0
 
@@ -415,6 +472,7 @@ if [ "$ROSCONFIG_OK" = "1" ]; then
 fi
 echo
 
+sync_kdb_submodules
 sync_arm64_submodules
 prepare_arm64_fex_source
 
