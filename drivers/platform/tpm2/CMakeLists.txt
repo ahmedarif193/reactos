@@ -1,0 +1,6 @@
+add_library(tpm2 MODULE tpm2.c tpm2.rc)
+set_module_type(tpm2 kernelmodedriver)
+target_link_libraries(tpm2 wdmguid)
+add_importlibs(tpm2 ntoskrnl hal)
+add_cd_file(TARGET tpm2 DESTINATION reactos/system32/drivers FOR all)
+add_driver_inf(tpm2 tpm2.inf)
