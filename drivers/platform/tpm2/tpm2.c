@@ -391,6 +391,7 @@ Tpm2EvaluateAcpiStartRevision(
     PACPI_EVAL_INPUT_BUFFER_COMPLEX Input;
     PACPI_EVAL_OUTPUT_BUFFER Output;
     PACPI_METHOD_ARGUMENT Argument;
+    ULONG InputLength;
     ULONG_PTR Information;
     NTSTATUS Status;
 
@@ -412,11 +413,12 @@ Tpm2EvaluateAcpiStartRevision(
     Argument->DataLength = 0;
     Argument->Argument = 0;
     Argument = ACPI_METHOD_NEXT_ARGUMENT(Argument);
-    Input->Size = (ULONG)((PUCHAR)Argument - (PUCHAR)Input);
-    Status = Tpm2SendIoctlSynchronously(DeviceExtension->LowerDevice, IOCTL_ACPI_EVAL_METHOD, Input, Input->Size, Output, sizeof(OutputStorage), &Information);
+    InputLength = (ULONG)((PUCHAR)Argument - (PUCHAR)Input);
+    Input->Size = InputLength - FIELD_OFFSET(ACPI_EVAL_INPUT_BUFFER_COMPLEX, Argument);
+    Status = Tpm2SendIoctlSynchronously(DeviceExtension->LowerDevice, IOCTL_ACPI_EVAL_METHOD, Input, InputLength, Output, sizeof(OutputStorage), &Information);
     if (!NT_SUCCESS(Status))
         return Status;
-    if (Information < FIELD_OFFSET(ACPI_EVAL_OUTPUT_BUFFER, Argument) || Output->Signature != ACPI_EVAL_OUTPUT_BUFFER_SIGNATURE || Output->Count != 1 || Output->Argument[0].Type != ACPI_METHOD_ARGUMENT_INTEGER)
+    if (Information < FIELD_OFFSET(ACPI_EVAL_OUTPUT_BUFFER, Argument) + ACPI_METHOD_ARGUMENT_LENGTH(0) || Output->Signature != ACPI_EVAL_OUTPUT_BUFFER_SIGNATURE || Output->Length > Information || Output->Length < FIELD_OFFSET(ACPI_EVAL_OUTPUT_BUFFER, Argument) + ACPI_METHOD_ARGUMENT_LENGTH_FROM_ARGUMENT(&Output->Argument[0]) || Output->Count != 1 || Output->Argument[0].Type != ACPI_METHOD_ARGUMENT_INTEGER)
         return STATUS_ACPI_INVALID_DATA;
     return Output->Argument[0].Argument == 0 ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
 }
