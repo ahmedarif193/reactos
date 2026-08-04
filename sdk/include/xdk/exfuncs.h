@@ -574,6 +574,50 @@ ExAllocatePoolWithTagPriority(
   _In_ ULONG Tag,
   _In_ __drv_strictTypeMatch(__drv_typeExpr) EX_POOL_PRIORITY Priority);
 
+#if (NTDDI_VERSION >= NTDDI_WIN10_VB)
+
+__drv_allocatesMem(Mem)
+_Check_return_
+_Ret_maybenull_
+_When_((Flags & POOL_FLAG_PAGED) != 0, _IRQL_requires_max_(APC_LEVEL))
+_When_((Flags & POOL_FLAG_PAGED) == 0, _IRQL_requires_max_(DISPATCH_LEVEL))
+_Post_writable_byte_size_(NumberOfBytes)
+NTKERNELAPI
+PVOID
+NTAPI
+ExAllocatePool2(
+  _In_ POOL_FLAGS Flags,
+  _In_ SIZE_T NumberOfBytes,
+  _In_ ULONG Tag);
+
+__drv_allocatesMem(Mem)
+_Check_return_
+_Ret_maybenull_
+_When_((Flags & POOL_FLAG_PAGED) != 0, _IRQL_requires_max_(APC_LEVEL))
+_When_((Flags & POOL_FLAG_PAGED) == 0, _IRQL_requires_max_(DISPATCH_LEVEL))
+_Post_writable_byte_size_(NumberOfBytes)
+NTKERNELAPI
+PVOID
+NTAPI
+ExAllocatePool3(
+  _In_ POOL_FLAGS Flags,
+  _In_ SIZE_T NumberOfBytes,
+  _In_ ULONG Tag,
+  _In_reads_opt_(ExtendedParametersCount) PCPOOL_EXTENDED_PARAMETER ExtendedParameters,
+  _In_ ULONG ExtendedParametersCount);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTKERNELAPI
+VOID
+NTAPI
+ExFreePool2(
+  _Pre_notnull_ __drv_freesMem(P) PVOID P,
+  _In_ ULONG Tag,
+  _In_reads_opt_(ExtendedParametersCount) PCPOOL_EXTENDED_PARAMETER ExtendedParameters,
+  _In_ ULONG ExtendedParametersCount);
+
+#endif /* NTDDI_VERSION >= NTDDI_WIN10_VB */
+
 FORCEINLINE
 __drv_allocatesMem(Mem)
 _When_((PoolType & PagedPool) != 0, _IRQL_requires_max_(APC_LEVEL))
