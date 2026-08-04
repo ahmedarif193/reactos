@@ -121,6 +121,18 @@ KiArm64LoadInterruptHeadNoFence(
     return (PKINTERRUPT)ReadPointerNoFence((PVOID const volatile *)&KiArm64IntTable[IntId]);
 }
 
+PKINTERRUPT NTAPI KiArm64QueryInterrupt(_In_ ULONG IntId)
+{
+    if (IntId >= ARM64_MAX_INTID)
+        return NULL;
+    return KiArm64LoadInterruptHeadNoFence(IntId);
+}
+
+ULONG NTAPI KiArm64QueryInterruptLimit(VOID)
+{
+    return ARM64_MAX_INTID;
+}
+
 ULONG KiTimerIsrCallCount = 0;
 ULONG KiInitInterruptsCallCount = 0;
 ULONG KiTimerStartedFlag = 0;
