@@ -126,7 +126,9 @@ RegisterToTrapFrame[] =
     {"ebp",     FIELD_OFFSET(KDB_KTRAP_FRAME, Ebp),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Ebp)}
 #elif defined(_M_AMD64)
     {"rip",     FIELD_OFFSET(KDB_KTRAP_FRAME, Rip),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Rip)},
+    {"pc",      FIELD_OFFSET(KDB_KTRAP_FRAME, Rip),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Rip)},
     {"eflags",  FIELD_OFFSET(KDB_KTRAP_FRAME, EFlags),  RTL_FIELD_SIZE(KDB_KTRAP_FRAME, EFlags)},
+    {"rflags",  FIELD_OFFSET(KDB_KTRAP_FRAME, EFlags),  RTL_FIELD_SIZE(KDB_KTRAP_FRAME, EFlags)},
     {"rax",     FIELD_OFFSET(KDB_KTRAP_FRAME, Rax),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Rax)},
     {"rbx",     FIELD_OFFSET(KDB_KTRAP_FRAME, Rbx),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Rbx)},
     {"rcx",     FIELD_OFFSET(KDB_KTRAP_FRAME, Rcx),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Rcx)},
@@ -134,12 +136,24 @@ RegisterToTrapFrame[] =
     {"rsi",     FIELD_OFFSET(KDB_KTRAP_FRAME, Rsi),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Rsi)},
     {"rdi",     FIELD_OFFSET(KDB_KTRAP_FRAME, Rdi),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Rdi)},
     {"rsp",     FIELD_OFFSET(KDB_KTRAP_FRAME, Rsp),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Rsp)},
-    {"rbp",     FIELD_OFFSET(KDB_KTRAP_FRAME, Rbp),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Rbp)}
+    {"sp",      FIELD_OFFSET(KDB_KTRAP_FRAME, Rsp),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Rsp)},
+    {"rbp",     FIELD_OFFSET(KDB_KTRAP_FRAME, Rbp),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Rbp)},
+    {"fp",      FIELD_OFFSET(KDB_KTRAP_FRAME, Rbp),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Rbp)},
+    {"r8",      FIELD_OFFSET(KDB_KTRAP_FRAME, R8),      RTL_FIELD_SIZE(KDB_KTRAP_FRAME, R8)},
+    {"r9",      FIELD_OFFSET(KDB_KTRAP_FRAME, R9),      RTL_FIELD_SIZE(KDB_KTRAP_FRAME, R9)},
+    {"r10",     FIELD_OFFSET(KDB_KTRAP_FRAME, R10),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, R10)},
+    {"r11",     FIELD_OFFSET(KDB_KTRAP_FRAME, R11),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, R11)},
+    {"r12",     FIELD_OFFSET(KDB_KTRAP_FRAME, R12),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, R12)},
+    {"r13",     FIELD_OFFSET(KDB_KTRAP_FRAME, R13),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, R13)},
+    {"r14",     FIELD_OFFSET(KDB_KTRAP_FRAME, R14),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, R14)},
+    {"r15",     FIELD_OFFSET(KDB_KTRAP_FRAME, R15),     RTL_FIELD_SIZE(KDB_KTRAP_FRAME, R15)}
 #elif defined(_M_ARM64)
     {"pc",      FIELD_OFFSET(KDB_KTRAP_FRAME, Pc),      RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Pc)},
     {"sp",      FIELD_OFFSET(KDB_KTRAP_FRAME, Sp),      RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Sp)},
     {"lr",      FIELD_OFFSET(KDB_KTRAP_FRAME, Lr),      RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Lr)},
     {"fp",      FIELD_OFFSET(KDB_KTRAP_FRAME, Fp),      RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Fp)},
+    {"x30",     FIELD_OFFSET(KDB_KTRAP_FRAME, Lr),      RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Lr)},
+    {"x29",     FIELD_OFFSET(KDB_KTRAP_FRAME, Fp),      RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Fp)},
     {"cpsr",    FIELD_OFFSET(KDB_KTRAP_FRAME, Cpsr),    RTL_FIELD_SIZE(KDB_KTRAP_FRAME, Cpsr)},
     {"x0",      FIELD_OFFSET(KDB_KTRAP_FRAME, X0),      RTL_FIELD_SIZE(KDB_KTRAP_FRAME, X0)},
     {"x1",      FIELD_OFFSET(KDB_KTRAP_FRAME, X1),      RTL_FIELD_SIZE(KDB_KTRAP_FRAME, X1)},
@@ -192,6 +206,64 @@ RegisterToTrapFrame[] =
 static const INT RegisterToTrapFrameCount = sizeof (RegisterToTrapFrame) / sizeof (RegisterToTrapFrame[0]);
 
 /* FUNCTIONS *****************************************************************/
+
+static LONG
+KdbpFindRegister(IN PCSTR RegisterName)
+{
+    LONG Index;
+
+    for (Index = 0; Index < RegisterToTrapFrameCount; Index++)
+    {
+        if (stricmp(RegisterToTrapFrame[Index].Name, RegisterName) == 0)
+            return Index;
+    }
+
+    return -1;
+}
+
+NTSTATUS
+KdbpGetRegisterValue(IN PKDB_KTRAP_FRAME TrapFrame, IN PCSTR RegisterName, OUT PULONGLONG Value, OUT PULONG RegisterSize OPTIONAL)
+{
+    LONG Index;
+    PVOID Register;
+
+    Index = KdbpFindRegister(RegisterName);
+    if (Index < 0)
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+    if (RegisterToTrapFrame[Index].Size > sizeof(*Value))
+        return STATUS_INFO_LENGTH_MISMATCH;
+
+    Register = (PVOID)((ULONG_PTR)TrapFrame + RegisterToTrapFrame[Index].Offset);
+    *Value = 0;
+    RtlCopyMemory(Value, Register, RegisterToTrapFrame[Index].Size);
+
+    if (RegisterSize)
+        *RegisterSize = RegisterToTrapFrame[Index].Size;
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+KdbpSetRegisterValue(IN OUT PKDB_KTRAP_FRAME TrapFrame, IN PCSTR RegisterName, IN ULONGLONG Value)
+{
+    LONG Index;
+    ULONG Size;
+    PVOID Register;
+
+    Index = KdbpFindRegister(RegisterName);
+    if (Index < 0)
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+
+    Size = RegisterToTrapFrame[Index].Size;
+    if (Size > sizeof(Value))
+        return STATUS_INFO_LENGTH_MISMATCH;
+    if (Size < sizeof(Value) && (Value >> (Size * 8)) != 0)
+        return STATUS_INTEGER_OVERFLOW;
+
+    Register = (PVOID)((ULONG_PTR)TrapFrame + RegisterToTrapFrame[Index].Offset);
+    RtlCopyMemory(Register, &Value, Size);
+    return STATUS_SUCCESS;
+}
 
 ULONGLONG
 RpnBinaryOperatorAdd(
@@ -441,6 +513,64 @@ RpnpTopStack(
     return TRUE;
 }
 
+/* Parse the unsigned integer syntax accepted by strtoull(..., base 0), while
+ * retaining an explicit overflow result. The kernel CRT saturates overflowing
+ * values, which otherwise turns a mistyped address into MAXULONGLONG. */
+static BOOLEAN
+RpnpParseIntegerLiteral(IN PCSTR Start, OUT PCHAR *End, OUT PULONGLONG Value, OUT PBOOLEAN Overflow)
+{
+    PCSTR Cursor = Start;
+    ULONG Base;
+    ULONG Digit;
+    BOOLEAN SawDigit = FALSE;
+
+    if (Cursor[0] == '0' &&
+        (Cursor[1] == 'x' || Cursor[1] == 'X') &&
+        isxdigit(Cursor[2]))
+    {
+        Base = 16;
+        Cursor += 2;
+    }
+    else if (Cursor[0] == '0')
+    {
+        Base = 8;
+    }
+    else
+    {
+        Base = 10;
+    }
+
+    *Value = 0;
+    *Overflow = FALSE;
+    for (;; Cursor++)
+    {
+        if (*Cursor >= '0' && *Cursor <= '9')
+            Digit = *Cursor - '0';
+        else if (*Cursor >= 'a' && *Cursor <= 'f')
+            Digit = *Cursor - 'a' + 10;
+        else if (*Cursor >= 'A' && *Cursor <= 'F')
+            Digit = *Cursor - 'A' + 10;
+        else
+            break;
+
+        if (Digit >= Base)
+            break;
+
+        SawDigit = TRUE;
+        if (*Value > (MAXULONGLONG - Digit) / Base)
+        {
+            *Overflow = TRUE;
+        }
+        else if (!*Overflow)
+        {
+            *Value = *Value * Base + Digit;
+        }
+    }
+
+    *End = (PCHAR)Cursor;
+    return SawDigit;
+}
+
 /*!\brief Parses an expression.
  *
  * This functions parses the given expression until the end of string or a closing
@@ -483,6 +613,7 @@ RpnpParseExpression(
     UCHAR MemorySize;
     CHAR Buffer[16];
     BOOLEAN First;
+    BOOLEAN LiteralOverflow;
 
     ASSERT(Stack);
     ASSERT(Expression);
@@ -637,9 +768,18 @@ get_operand:
             else
             {
                 /* Immediate value */
-                ull = strtoull(p, &pend, 0);
-                if (p != pend)
+                if (RpnpParseIntegerLiteral(p, &pend, &ull, &LiteralOverflow))
                 {
+                    if (LiteralOverflow)
+                    {
+                        CONST_STRCPY(ErrMsg, "Integer literal overflow");
+
+                        if (ErrOffset)
+                            *ErrOffset = CharacterOffset;
+
+                        return FALSE;
+                    }
+
                     RpnOp.Type = RpnOpImmediate;
                     RpnOp.CharacterOffset = CharacterOffset;
                     RpnOp.Data.Immediate = ull;
