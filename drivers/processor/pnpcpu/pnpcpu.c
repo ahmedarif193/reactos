@@ -1426,14 +1426,14 @@ PnpcpuWorker(
     PPNPCPU_WORK_CONTEXT WorkContext = Context;
     PPNPCPU_DEVICE_EXTENSION DeviceExtension = WorkContext->DeviceExtension;
 
-    ExAcquireFastMutex(&DeviceExtension->ConfigurationLock);
+    KeWaitForSingleObject(&DeviceExtension->ConfigurationLock, Executive, KernelMode, FALSE, NULL);
     if (DeviceExtension->Started && !DeviceExtension->Removing)
     {
         PnpcpuRefreshCapabilities(DeviceExtension);
         PnpcpuRefreshPowerConfiguration(DeviceExtension);
         PnpcpuPublishProperties(DeviceExtension);
     }
-    ExReleaseFastMutex(&DeviceExtension->ConfigurationLock);
+    KeReleaseMutex(&DeviceExtension->ConfigurationLock, FALSE);
     if (InterlockedDecrement(&DeviceExtension->WorkCount) == 0)
         KeSetEvent(&DeviceExtension->WorkIdleEvent, IO_NO_INCREMENT, FALSE);
     IoReleaseRemoveLock(&DeviceExtension->RemoveLock, DeviceExtension);
@@ -1531,7 +1531,7 @@ PnpcpuStartDevice(
 {
     NTSTATUS Status;
 
-    ExAcquireFastMutex(&DeviceExtension->ConfigurationLock);
+    KeWaitForSingleObject(&DeviceExtension->ConfigurationLock, Executive, KernelMode, FALSE, NULL);
     DeviceExtension->UidValid = PnpcpuQueryInteger(DeviceExtension, PNPCPU_METHOD('_', 'U', 'I', 'D'), &DeviceExtension->Uid);
     DeviceExtension->ProximityValid = PnpcpuQueryInteger(DeviceExtension, PNPCPU_METHOD('_', 'P', 'X', 'M'), &DeviceExtension->ProximityDomain);
     PnpcpuQueryMat(DeviceExtension);
@@ -1540,7 +1540,7 @@ PnpcpuStartDevice(
     DeviceExtension->Started = TRUE;
     PnpcpuRefreshPowerConfiguration(DeviceExtension);
     PnpcpuPublishProperties(DeviceExtension);
-    ExReleaseFastMutex(&DeviceExtension->ConfigurationLock);
+    KeReleaseMutex(&DeviceExtension->ConfigurationLock, FALSE);
 
     Status = PnpcpuQueryAcpiInterface(DeviceExtension);
     if (NT_SUCCESS(Status))
@@ -1593,19 +1593,19 @@ PnpcpuPnp(
         case IRP_MN_STOP_DEVICE:
             DeviceExtension->Started = FALSE;
             PnpcpuReleaseAcpiInterface(DeviceExtension);
-            ExAcquireFastMutex(&DeviceExtension->ConfigurationLock);
+            KeWaitForSingleObject(&DeviceExtension->ConfigurationLock, Executive, KernelMode, FALSE, NULL);
             PnpcpuUnregisterPowerConfiguration(DeviceExtension);
             PnpcpuReleasePowerConfiguration(DeviceExtension);
-            ExReleaseFastMutex(&DeviceExtension->ConfigurationLock);
+            KeReleaseMutex(&DeviceExtension->ConfigurationLock, FALSE);
             break;
 
         case IRP_MN_SURPRISE_REMOVAL:
             DeviceExtension->Started = FALSE;
             DeviceExtension->Removing = TRUE;
             PnpcpuReleaseAcpiInterface(DeviceExtension);
-            ExAcquireFastMutex(&DeviceExtension->ConfigurationLock);
+            KeWaitForSingleObject(&DeviceExtension->ConfigurationLock, Executive, KernelMode, FALSE, NULL);
             PnpcpuUnregisterPowerConfiguration(DeviceExtension);
-            ExReleaseFastMutex(&DeviceExtension->ConfigurationLock);
+            KeReleaseMutex(&DeviceExtension->ConfigurationLock, FALSE);
             break;
 
         case IRP_MN_REMOVE_DEVICE:
@@ -1672,7 +1672,7 @@ PnpcpuAddDevice(
     DeviceExtension->Pdo = PhysicalDeviceObject;
     DeviceExtension->ThermalLimit = 100;
     IoInitializeRemoveLock(&DeviceExtension->RemoveLock, PNPCPU_TAG, 0, 0);
-    ExInitializeFastMutex(&DeviceExtension->ConfigurationLock);
+    KeInitializeMutex(&DeviceExtension->ConfigurationLock, 0);
     KeInitializeEvent(&DeviceExtension->WorkIdleEvent, NotificationEvent, TRUE);
     Status = IoAttachDeviceToDeviceStackSafe(DeviceObject, PhysicalDeviceObject, &DeviceExtension->LowerDevice);
     if (!NT_SUCCESS(Status))
