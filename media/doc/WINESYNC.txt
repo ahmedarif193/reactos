@@ -250,7 +250,7 @@ dll/win32/wintypes            # Synced to Wine-11.14
 dll/win32/wldap32             # Synced to Wine-11.14
 dll/win32/wmi                 # Synced to Wine-11.14
 dll/win32/wmiutils            # Synced to Wine-11.14
-dll/win32/wmvcore             # Synced to WineStaging-4.18
+dll/win32/wmvcore             # Synced to Wine-11.14
 dll/win32/wsdapi              # Synced to Wine-11.14
 dll/win32/wshom.ocx           # Synced to Wine-11.14
 dll/win32/wtsapi32            # Synced to Wine-11.14
