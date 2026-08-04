@@ -630,7 +630,7 @@ NtSetIoCompletion(
     _In_ PVOID CompletionKey,
     _In_ PVOID CompletionContext,
     _In_ NTSTATUS CompletionStatus,
-    _In_ ULONG CompletionInformation
+    _In_ SIZE_T CompletionInformation
 );
 
 NTSYSCALLAPI
@@ -1182,7 +1182,7 @@ ZwSetIoCompletion(
     _In_ PVOID CompletionKey,
     _In_ PVOID CompletionContext,
     _In_ NTSTATUS CompletionStatus,
-    _In_ ULONG CompletionInformation
+    _In_ SIZE_T CompletionInformation
 );
 
 NTSYSAPI

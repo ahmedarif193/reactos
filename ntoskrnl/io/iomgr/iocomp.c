@@ -579,7 +579,7 @@ NtSetIoCompletion(IN HANDLE IoCompletionPortHandle,
                   IN PVOID CompletionKey,
                   IN PVOID CompletionContext,
                   IN NTSTATUS CompletionStatus,
-                  IN ULONG CompletionInformation)
+                  IN SIZE_T CompletionInformation)
 {
     NTSTATUS Status;
     PKQUEUE Queue;
