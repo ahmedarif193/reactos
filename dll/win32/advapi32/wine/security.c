@@ -274,6 +274,7 @@ BOOL ADVAPI_GetComputerSid(PSID sid)
     return TRUE;
 }
 
+#ifndef __REACTOS__
 DWORD WINAPI
 GetEffectiveRightsFromAclA( PACL pacl, PTRUSTEEA pTrustee, PACCESS_MASK pAccessRights )
 {
@@ -291,6 +292,7 @@ GetEffectiveRightsFromAclW( PACL pacl, PTRUSTEEW pTrustee, PACCESS_MASK pAccessR
     *pAccessRights = STANDARD_RIGHTS_ALL | SPECIFIC_RIGHTS_ALL;
     return 0;
 }
+#endif
 
 /*	##############################################
 	######	SECURITY DESCRIPTOR FUNCTIONS	######
@@ -317,6 +319,7 @@ GetEffectiveRightsFromAclW( PACL pacl, PTRUSTEEW pTrustee, PACCESS_MASK pAccessR
  *  Success: ERROR_SUCCESS
  *  Failure: nonzero error code from Winerror.h
  */
+#ifndef __REACTOS__
 DWORD WINAPI BuildSecurityDescriptorA(
     IN PTRUSTEEA pOwner,
     IN PTRUSTEEA pGroup,
@@ -463,6 +466,7 @@ done:
     LocalFree( desc.Dacl );
     return ret;
 } 
+#endif
 
 static const WCHAR * const WellKnownPrivNames[SE_MAX_WELL_KNOWN_PRIVILEGE + 1] =
 {
@@ -513,6 +517,7 @@ const WCHAR *get_wellknown_privilege_name(const LUID *luid)
  *
  * See LookupPrivilegeValueA.
  */
+#ifndef __REACTOS__
 BOOL WINAPI
 LookupPrivilegeValueW( LPCWSTR lpSystemName, LPCWSTR lpName, PLUID lpLuid )
 {
@@ -545,6 +550,7 @@ LookupPrivilegeValueW( LPCWSTR lpSystemName, LPCWSTR lpName, PLUID lpLuid )
     SetLastError(ERROR_NO_SUCH_PRIVILEGE);
     return FALSE;
 }
+#endif
 
 /******************************************************************************
  * LookupPrivilegeValueA			[ADVAPI32.@]
@@ -560,6 +566,7 @@ LookupPrivilegeValueW( LPCWSTR lpSystemName, LPCWSTR lpName, PLUID lpLuid )
  *  Success: TRUE. lpLuid contains the requested LUID.
  *  Failure: FALSE.
  */
+#ifndef __REACTOS__
 BOOL WINAPI
 LookupPrivilegeValueA( LPCSTR lpSystemName, LPCSTR lpName, PLUID lpLuid )
 {
@@ -574,6 +581,7 @@ LookupPrivilegeValueA( LPCSTR lpSystemName, LPCSTR lpName, PLUID lpLuid )
     RtlFreeUnicodeString(&lpSystemNameW);
     return ret;
 }
+#endif
 
 BOOL WINAPI LookupPrivilegeDisplayNameA( LPCSTR lpSystemName, LPCSTR lpName, LPSTR lpDisplayName,
                                          LPDWORD cchDisplayName, LPDWORD lpLanguageId )
@@ -584,6 +592,7 @@ BOOL WINAPI LookupPrivilegeDisplayNameA( LPCSTR lpSystemName, LPCSTR lpName, LPS
     return FALSE;
 }
 
+#ifndef __REACTOS__
 BOOL WINAPI LookupPrivilegeDisplayNameW( LPCWSTR lpSystemName, LPCWSTR lpName, LPWSTR lpDisplayName,
                                          LPDWORD cchDisplayName, LPDWORD lpLanguageId )
 {
@@ -592,6 +601,7 @@ BOOL WINAPI LookupPrivilegeDisplayNameW( LPCWSTR lpSystemName, LPCWSTR lpName, L
 
     return FALSE;
 }
+#endif
 
 /******************************************************************************
  * LookupPrivilegeNameA			[ADVAPI32.@]
@@ -672,6 +682,7 @@ LookupPrivilegeNameA( LPCSTR lpSystemName, PLUID lpLuid, LPSTR lpName,
  *  On success, *cchName will contain the number of characters stored in
  *  lpName, NOT including the NULL terminator.
  */
+#ifndef __REACTOS__
 BOOL WINAPI
 LookupPrivilegeNameW( LPCWSTR lpSystemName, PLUID lpLuid, LPWSTR lpName,
  LPDWORD cchName)
@@ -706,6 +717,7 @@ LookupPrivilegeNameW( LPCWSTR lpSystemName, PLUID lpLuid, LPWSTR lpName,
         return TRUE;
     }
 }
+#endif
 
 /******************************************************************************
  * GetFileSecurityA [ADVAPI32.@]
@@ -747,6 +759,7 @@ GetFileSecurityA( LPCSTR lpFileName,
 /******************************************************************************
  * LookupAccountSidA [ADVAPI32.@]
  */
+#ifndef __REACTOS__
 BOOL WINAPI
 LookupAccountSidA(
 	IN LPCSTR system,
@@ -800,6 +813,7 @@ LookupAccountSidA(
 
     return r;
 }
+#endif
 
 /******************************************************************************
  * LookupAccountSidLocalA [ADVAPI32.@]
@@ -829,6 +843,7 @@ LookupAccountSidLocalA(
  *   name_use    []
  */
 
+#ifndef __REACTOS__
 BOOL WINAPI
 LookupAccountSidW(
 	IN LPCWSTR system,
@@ -992,6 +1007,7 @@ LookupAccountSidW(
     SetLastError(ERROR_NONE_MAPPED);
     return FALSE;
 }
+#endif
 
 /******************************************************************************
  * LookupAccountSidLocalW [ADVAPI32.@]
@@ -1063,12 +1079,14 @@ SynchronizeWindows31FilesAndWindowsNTRegistry( DWORD x1, DWORD x2, DWORD x3,
  * PARAMS
  *   x1 []
  */
+#ifndef __REACTOS__
 BOOL WINAPI
 NotifyBootConfigStatus( BOOL x1 )
 {
 	FIXME("(0x%08d):stub\n",x1);
 	return TRUE;
 }
+#endif
 
 /******************************************************************************
  * LookupAccountNameA [ADVAPI32.@]
@@ -1387,6 +1405,7 @@ BOOL lookup_local_user_name( const LSA_UNICODE_STRING *account_and_domain,
 /******************************************************************************
  * LookupAccountNameW [ADVAPI32.@]
  */
+#ifndef __REACTOS__
 BOOL WINAPI LookupAccountNameW( LPCWSTR lpSystemName, LPCWSTR lpAccountName, PSID Sid,
                                 LPDWORD cbSid, LPWSTR ReferencedDomainName,
                                 LPDWORD cchReferencedDomainName, PSID_NAME_USE peUse )
@@ -1426,10 +1445,12 @@ BOOL WINAPI LookupAccountNameW( LPCWSTR lpSystemName, LPCWSTR lpAccountName, PSI
     SetLastError( ERROR_NONE_MAPPED );
     return FALSE;
 }
+#endif
 
 /******************************************************************************
  * AccessCheckAndAuditAlarmA [ADVAPI32.@]
  */
+#ifndef __REACTOS__
 BOOL WINAPI AccessCheckAndAuditAlarmA(LPCSTR Subsystem, LPVOID HandleId, LPSTR ObjectTypeName,
   LPSTR ObjectName, PSECURITY_DESCRIPTOR SecurityDescriptor, DWORD DesiredAccess,
   PGENERIC_MAPPING GenericMapping, BOOL ObjectCreation, LPDWORD GrantedAccess,
@@ -1479,6 +1500,7 @@ BOOL WINAPI PrivilegedServiceAuditAlarmA( LPCSTR SubsystemName, LPCSTR ServiceNa
 
     return TRUE;
 }
+#endif
 
 #define HKEY_SPECIAL_ROOT_FIRST   HKEY_CLASSES_ROOT
 #define HKEY_SPECIAL_ROOT_LAST    HKEY_DYN_DATA
@@ -1502,6 +1524,7 @@ BOOL WINAPI PrivilegedServiceAuditAlarmA( LPCSTR SubsystemName, LPCSTR ServiceNa
  * RETURNS
  *  ERROR_SUCCESS if all's well, and a WIN32 error code otherwise.
  */
+#ifndef __REACTOS__
 DWORD WINAPI GetSecurityInfo( HANDLE handle, SE_OBJECT_TYPE type, SECURITY_INFORMATION SecurityInfo,
                               PSID *ppsidOwner, PSID *ppsidGroup, PACL *ppDacl, PACL *ppSacl,
                               PSECURITY_DESCRIPTOR *ppSecurityDescriptor )
@@ -1633,6 +1656,7 @@ DWORD WINAPI GetSecurityInfo( HANDLE handle, SE_OBJECT_TYPE type, SECURITY_INFOR
 
     return ERROR_SUCCESS;
 }
+#endif
 
 /******************************************************************************
  * GetSecurityInfoExA [ADVAPI32.@]
@@ -2117,6 +2141,7 @@ static DWORD trustee_to_sid( DWORD nDestinationSidLength, PSID pDestinationSid, 
 /******************************************************************************
  * SetEntriesInAclA [ADVAPI32.@]
  */
+#ifndef __REACTOS__
 DWORD WINAPI SetEntriesInAclA( ULONG count, PEXPLICIT_ACCESSA pEntries,
                                PACL OldAcl, PACL* NewAcl )
 {
@@ -2386,6 +2411,7 @@ exit:
     free(ppsid);
     return ret;
 }
+#endif
 
 /******************************************************************************
  * SetNamedSecurityInfoA [ADVAPI32.@]
@@ -2412,6 +2438,7 @@ DWORD WINAPI SetNamedSecurityInfoA(LPSTR pObjectName,
 /******************************************************************************
  * SetNamedSecurityInfoW [ADVAPI32.@]
  */
+#ifndef __REACTOS__
 DWORD WINAPI SetNamedSecurityInfoW(LPWSTR pObjectName,
         SE_OBJECT_TYPE ObjectType, SECURITY_INFORMATION SecurityInfo,
         PSID psidOwner, PSID psidGroup, PACL pDacl, PACL pSacl)
@@ -2463,6 +2490,7 @@ DWORD WINAPI SetNamedSecurityInfoW(LPWSTR pObjectName,
     }
     return err;
 }
+#endif
 
 /******************************************************************************
  * GetExplicitEntriesFromAclA [ADVAPI32.@]
@@ -2477,6 +2505,7 @@ DWORD WINAPI GetExplicitEntriesFromAclA( PACL pacl, PULONG pcCountOfExplicitEntr
 /******************************************************************************
  * GetExplicitEntriesFromAclW [ADVAPI32.@]
  */
+#ifndef __REACTOS__
 DWORD WINAPI GetExplicitEntriesFromAclW( PACL pacl, PULONG count, PEXPLICIT_ACCESSW *list )
 {
     ACL_SIZE_INFORMATION sizeinfo;
@@ -2581,6 +2610,7 @@ DWORD WINAPI GetAuditedPermissionsFromAclW( PACL pacl, PTRUSTEEW pTrustee, PACCE
     return ERROR_CALL_NOT_IMPLEMENTED;
 
 }
+#endif
 
 /******************************************************************************
  * ConvertStringSecurityDescriptorToSecurityDescriptorA [ADVAPI32.@]
@@ -2769,11 +2799,8 @@ DWORD WINAPI GetNamedSecurityInfoA(const char *pObjectName,
 /******************************************************************************
  * GetNamedSecurityInfoW [ADVAPI32.@]
  */
-#ifdef __REACTOS__
-DWORD WINAPI GetNamedSecurityInfoW( WCHAR *name, SE_OBJECT_TYPE type,
-#else
+#ifndef __REACTOS__
 DWORD WINAPI GetNamedSecurityInfoW( const WCHAR *name, SE_OBJECT_TYPE type,
-#endif
     SECURITY_INFORMATION info, PSID* owner, PSID* group, PACL* dacl,
     PACL* sacl, PSECURITY_DESCRIPTOR* descriptor )
 {
@@ -2834,6 +2861,7 @@ DWORD WINAPI GetNamedSecurityInfoW( const WCHAR *name, SE_OBJECT_TYPE type,
     }
     return err;
 }
+#endif
 
 /******************************************************************************
  * GetNamedSecurityInfoExW [ADVAPI32.@]
@@ -2862,6 +2890,7 @@ DWORD WINAPI GetNamedSecurityInfoExA( LPCSTR object, SE_OBJECT_TYPE type,
 /******************************************************************************
  * DecryptFileW [ADVAPI32.@]
  */
+#ifndef __REACTOS__
 BOOL WINAPI DecryptFileW(LPCWSTR lpFileName, DWORD dwReserved)
 {
     FIXME("(%s, %08lx): stub\n", debugstr_w(lpFileName), dwReserved);
@@ -2918,6 +2947,7 @@ BOOL WINAPI FileEncryptionStatusA(LPCSTR lpFileName, LPDWORD lpStatus)
     *lpStatus = FILE_SYSTEM_NOT_SUPPORT;
     return TRUE;
 }
+#endif
 
 static NTSTATUS combine_dacls(ACL *parent, ACL *child, ACL **result)
 {
@@ -2980,6 +3010,7 @@ static NTSTATUS combine_dacls(ACL *parent, ACL *child, ACL **result)
 /******************************************************************************
  * SetSecurityInfo [ADVAPI32.@]
  */
+#ifndef __REACTOS__
 DWORD WINAPI SetSecurityInfo(HANDLE handle, SE_OBJECT_TYPE ObjectType, 
                       SECURITY_INFORMATION SecurityInfo, PSID psidOwner,
                       PSID psidGroup, PACL pDacl, PACL pSacl)
@@ -3115,10 +3146,12 @@ DWORD WINAPI SetSecurityInfo(HANDLE handle, SE_OBJECT_TYPE ObjectType,
         free(dacl);
     return RtlNtStatusToDosError(status);
 }
+#endif
 
 /******************************************************************************
  * SaferCreateLevel   [ADVAPI32.@]
  */
+#ifndef __REACTOS__
 BOOL WINAPI SaferCreateLevel(DWORD ScopeId, DWORD LevelId, DWORD OpenFlags,
                              SAFER_LEVEL_HANDLE* LevelHandle, LPVOID lpReserved)
 {
@@ -3148,6 +3181,7 @@ BOOL WINAPI SaferCloseLevel(SAFER_LEVEL_HANDLE handle)
     FIXME("(%p) stub\n", handle);
     return TRUE;
 }
+#endif
 
 /******************************************************************************
  * TreeSetNamedSecurityInfoW   [ADVAPI32.@]
@@ -3165,6 +3199,7 @@ DWORD WINAPI TreeSetNamedSecurityInfoW(WCHAR *name, SE_OBJECT_TYPE type, SECURIT
 /******************************************************************************
  * TreeResetNamedSecurityInfoW   [ADVAPI32.@]
  */
+#ifndef __REACTOS__
 DWORD WINAPI TreeResetNamedSecurityInfoW( LPWSTR pObjectName,
                 SE_OBJECT_TYPE ObjectType, SECURITY_INFORMATION SecurityInfo,
                 PSID pOwner, PSID pGroup, PACL pDacl, PACL pSacl,
@@ -3177,10 +3212,12 @@ DWORD WINAPI TreeResetNamedSecurityInfoW( LPWSTR pObjectName,
 
     return ERROR_SUCCESS;
 }
+#endif
 
 /******************************************************************************
  * SaferGetPolicyInformation   [ADVAPI32.@]
  */
+#ifndef __REACTOS__
 BOOL WINAPI SaferGetPolicyInformation(DWORD scope, SAFER_POLICY_INFO_CLASS class, DWORD size,
                                       PVOID buffer, PDWORD required, LPVOID lpReserved)
 {
@@ -3198,6 +3235,7 @@ BOOL WINAPI SaferIdentifyLevel(DWORD count, SAFER_CODE_PROPERTIES *properties, S
     *handle = (SAFER_LEVEL_HANDLE)0xdeadbeef;
     return TRUE;
 }
+#endif
 
 /******************************************************************************
  * SaferSetLevelInformation   [ADVAPI32.@]

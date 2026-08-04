@@ -267,8 +267,8 @@
 @ stdcall GetMultipleTrusteeOperationW(ptr)
 @ stdcall GetMultipleTrusteeW(ptr)
 @ stdcall GetNamedSecurityInfoA(str long long ptr ptr ptr ptr ptr)
-@ stub GetNamedSecurityInfoExA
-@ stub GetNamedSecurityInfoExW
+@ stdcall GetNamedSecurityInfoExA(str long long str str ptr ptr ptr ptr)
+@ stdcall GetNamedSecurityInfoExW(wstr long long wstr wstr ptr ptr ptr ptr)
 @ stdcall GetNamedSecurityInfoW(wstr long long ptr ptr ptr ptr ptr)
 @ stdcall GetNumberOfEventLogRecords(long ptr)
 @ stdcall GetOldestEventLogRecord(long ptr)
@@ -348,8 +348,8 @@
 @ stdcall LookupPrivilegeNameW(wstr ptr ptr long)
 @ stdcall LookupPrivilegeValueA(ptr ptr ptr)
 @ stdcall LookupPrivilegeValueW(ptr ptr ptr)
-@ stub LookupSecurityDescriptorPartsA
-@ stub LookupSecurityDescriptorPartsW
+@ stdcall LookupSecurityDescriptorPartsA(ptr ptr ptr ptr ptr ptr ptr)
+@ stdcall LookupSecurityDescriptorPartsW(ptr ptr ptr ptr ptr ptr ptr)
 @ stdcall LsaAddAccountRights(ptr ptr ptr long)
 @ stdcall LsaAddPrivilegesToAccount(ptr ptr)
 @ stdcall LsaClearAuditLog(ptr)
@@ -583,11 +583,11 @@
 @ stdcall SaferGetPolicyInformation(long long long ptr ptr ptr)
 @ stdcall SaferIdentifyLevel(long ptr ptr ptr)
 @ stdcall SaferRecordEventLogEntry(ptr wstr ptr)
-@ stub SaferSetLevelInformation
+@ stdcall SaferSetLevelInformation(ptr long ptr long)
 @ stub SaferSetPolicyInformation
 @ stub SaferiChangeRegistryScope
 @ stub SaferiCompareTokenLevels
-@ stub SaferiIsExecutableFileType
+@ stdcall SaferiIsExecutableFileType(wstr long)
 @ stub SaferiPopulateDefaultsInRegistry
 @ stub SaferiRecordEventLogEntry
 @ stub SaferiReplaceProcessThreadTokens
