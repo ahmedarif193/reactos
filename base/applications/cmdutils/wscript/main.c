@@ -354,32 +354,6 @@ static void WINAPIV print_resource(unsigned int id, ...)
     int len;
     va_list va_args;
 
-#ifdef __REACTOS__
-    #ifndef CSCRIPT_BUILD
-    #define APPNAME L"WScript"
-    #else
-    #define APPNAME L"CScript"
-    #endif
-    const WCHAR *str = NULL;
-    switch (id)
-    {
-        case IDS_USAGE: str = L"Usage: " APPNAME L" scriptname.extension [option...] [arguments...]\n"; break;
-        case IDS_NO_SCRIPT_FILE: str = L"Input Error: There is no script file specified.\n"; break;
-        case IDS_FILE_NOT_FOUND: str = L"Input Error: Can not find script file ""%1"".\n"; break;
-        case IDS_SCRIPT_LOAD_ERROR: str = APPNAME L" Error: Loading script ""%1"" failed (%2).\n"; break;
-        case IDS_TIMEOUT_EXCEEDED: str = L"Script execution time was exceeded on script ""%1"".\n\nScript execution was terminated.\n"; break;
-    }
-    if(!str)
-    {
-        WINE_FIXME("Missing string %u\n", id);
-        return;
-    }
-    len = lstrlenW(str);
-    fmt = malloc(++len * sizeof(WCHAR));
-    if(!fmt)
-        return;
-    lstrcpyW(fmt, str);
-#else
     if(!(len = LoadStringW(GetModuleHandleW(NULL), id, (WCHAR *)&fmt, 0))) {
         WINE_FIXME("LoadString failed with %ld\n", GetLastError());
         return;
@@ -391,7 +365,6 @@ static void WINAPIV print_resource(unsigned int id, ...)
         return;
 
     LoadStringW(GetModuleHandleW(NULL), id, fmt, len);
-#endif
 
     va_start(va_args, id);
     output_formatstring(fmt, va_args);
@@ -684,6 +657,7 @@ static BSTR get_script_str(const WCHAR *filename)
     HANDLE file, map;
     DWORD size, len;
     BSTR ret;
+    int flags;
 
     file = CreateFileW(filename, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY, NULL);
     if(file == INVALID_HANDLE_VALUE)
@@ -705,20 +679,27 @@ static BSTR get_script_str(const WCHAR *filename)
     if(!file_map)
         return NULL;
 
-#ifdef __REACTOS__
-    if(size >= 2 && (BYTE)file_map[0] == 0xFF && (BYTE)file_map[1] == 0xFE) // UTF-16LE
+    flags = IS_TEXT_UNICODE_UNICODE_MASK;
+    if(IsTextUnicode(file_map, size, &flags))
     {
-        ret = SysAllocStringLen(NULL, size - 2);
-        if (ret)
-            CopyMemory(ret, file_map + 2, size - 2);
+        const WCHAR *start = (const WCHAR *)file_map;
+        DWORD count = size / sizeof(WCHAR);
+
+        if(flags & IS_TEXT_UNICODE_SIGNATURE)
+        {
+            start++;
+            count--;
+        }
+        ret = SysAllocStringLen(start, count);
         UnmapViewOfFile(file_map);
         return ret;
     }
-#endif
 
+    /* Not Unicode, fall back to system ANSI code page. */
     len = MultiByteToWideChar(CP_ACP, 0, file_map, size, NULL, 0);
     ret = SysAllocStringLen(NULL, len);
-    MultiByteToWideChar(CP_ACP, 0, file_map, size, ret, len);
+    if(ret)
+        MultiByteToWideChar(CP_ACP, 0, file_map, size, ret, len);
 
     UnmapViewOfFile(file_map);
     return ret;

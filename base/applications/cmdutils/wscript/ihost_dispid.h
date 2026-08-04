@@ -16,8 +16,6 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#pragma once
-
 #define IHOST_NAME_DISPID              DISPID_VALUE
 #define IHOST_APPLICATION_DISPID       100
 #define IHOST_FULLNAME_DISPID          101

@@ -48,6 +48,22 @@ ok(WScript.Interactive === false, "WScript.Interactive = " + WScript.Interactive
 WScript.Interactive = true;
 ok(WScript.Interactive === true, "WScript.Interactive = " + WScript.Interactive);
 ok(WScript.Application === WScript, "WScript.Application = " + WScript.Application);
+WScript.Sleep(0);
+try {
+    WScript.Sleep(-1);
+    ok(false, "expected exception");
+}catch(e) {}
+
+ok(WScript.Timeout === 0, "default Timeout = " + WScript.Timeout);
+WScript.Timeout = 30;
+ok(WScript.Timeout === 30, "WScript.Timeout = " + WScript.Timeout);
+WScript.Timeout = 0;
+ok(WScript.Timeout === 0, "WScript.Timeout = " + WScript.Timeout);
+try {
+    WScript.Timeout = -1;
+    ok(false, "expected exception for negative Timeout");
+}catch(e) {}
+ok(WScript.Timeout === 0, "Timeout after negative = " + WScript.Timeout);
 
 var obj = WScript.CreateObject("Wine.Test");
 obj.ok(true, "Broken WScript.CreateObject object?");
