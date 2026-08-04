@@ -295,6 +295,12 @@ User32CreateWindowEx(DWORD dwExStyle,
         plstrClassVersion = &lstrClassVersion;
     }
 
+    if (lpLibFileName)
+    {
+        wceW.cbSize = sizeof(wceW);
+        ClassFound = GetClassInfoExW(hInstance, ClassName.Buffer, &wceW);
+    }
+
     for (;;)
     {
         Handle = NtUserCreateWindowEx(dwExStyle,
@@ -338,6 +344,9 @@ User32CreateWindowEx(DWORD dwExStyle,
 #endif
 
 cleanup:
+    if (pCtx)
+        RtlReleaseActivationContext(pCtx);
+
     if (!Unicode)
     {
         if (!IS_ATOM(lpClassName))
