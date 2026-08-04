@@ -271,6 +271,9 @@ PciAcpiEvalMethod(
     _In_ ULONG OutputBufferSize,
     _Out_opt_ PULONG BytesReturned);
 
+NTSTATUS
+PciAcpiSetPower(_In_ ULONG Segment, _In_ ULONG Bus, _In_ ULONG Device, _In_ ULONG Function, _In_ ULONG State);
+
 /* pci.c - State transition helpers */
 
 NTSTATUS
