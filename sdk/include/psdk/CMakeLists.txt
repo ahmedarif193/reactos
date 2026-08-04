@@ -179,6 +179,8 @@ list(APPEND SOURCE
     windows.gaming.input.custom.idl
     windows.gaming.input.forcefeedback.idl
     windows.gaming.input.idl
+    windows.networking.connectivity.idl
+    windows.networking.idl
     windows.storage.fileproperties.idl
     windows.storage.idl
     windows.storage.search.idl
