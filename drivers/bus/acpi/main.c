@@ -14,6 +14,51 @@ DRIVER_ADD_DEVICE Bus_AddDevice;
 extern struct acpi_device *sleep_button;
 extern struct acpi_device *power_button;
 
+static
+NTSTATUS
+AcpiGetSystemTableIoctl(
+    _Inout_ PIRP Irp,
+    _In_ PIO_STACK_LOCATION IrpStack)
+{
+    PACPI_GET_SYSTEM_TABLE_INPUT Input;
+    ACPI_TABLE_HEADER *Table;
+    ACPI_STATUS AcpiStatus;
+    CHAR Signature[5];
+    ULONG InputLength;
+    ULONG OutputLength;
+    ULONG TableLength;
+
+    InputLength = IrpStack->Parameters.DeviceIoControl.InputBufferLength;
+    OutputLength = IrpStack->Parameters.DeviceIoControl.OutputBufferLength;
+    if (InputLength < sizeof(*Input))
+        return STATUS_INVALID_PARAMETER;
+    Input = Irp->AssociatedIrp.SystemBuffer;
+    if (!Input || Input->Instance == 0)
+        return STATUS_INVALID_PARAMETER;
+    RtlCopyMemory(Signature, Input->Signature, sizeof(Input->Signature));
+    Signature[4] = ANSI_NULL;
+    AcpiStatus = AcpiGetTable(Signature, Input->Instance, &Table);
+    if (AcpiStatus == AE_NOT_FOUND)
+        return STATUS_NOT_FOUND;
+    if (ACPI_FAILURE(AcpiStatus) || !Table)
+        return STATUS_UNSUCCESSFUL;
+    TableLength = Table->Length;
+    if (TableLength < sizeof(*Table))
+    {
+        AcpiPutTable(Table);
+        return STATUS_ACPI_INVALID_DATA;
+    }
+    Irp->IoStatus.Information = TableLength;
+    if (OutputLength < TableLength)
+    {
+        AcpiPutTable(Table);
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    RtlCopyMemory(Irp->AssociatedIrp.SystemBuffer, Table, TableLength);
+    AcpiPutTable(Table);
+    return STATUS_SUCCESS;
+}
+
 UNICODE_STRING ProcessorHardwareIds = {0, 0, NULL};
 LPWSTR ProcessorIdString = NULL;
 LPWSTR ProcessorNameString = NULL;
@@ -245,6 +290,10 @@ ACPIDispatchDeviceControl(
 
         switch (irpStack->Parameters.DeviceIoControl.IoControlCode)
         {
+            case IOCTL_ACPI_GET_SYSTEM_TABLE:
+                status = AcpiGetSystemTableIoctl(Irp, irpStack);
+                break;
+
             case IOCTL_ACPI_EVAL_METHOD_FOR_PCI:
             {
                 /*

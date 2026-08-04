@@ -105,6 +105,11 @@ typedef struct _FDO_DEVICE_DATA
     BOOLEAN         PciInterfaceRegistered;
     BOOLEAN         PciInterfaceEnabled;
 
+    // Device interface for ACPI system table services
+    UNICODE_STRING  SystemInterfaceName;
+    BOOLEAN         SystemInterfaceRegistered;
+    BOOLEAN         SystemInterfaceEnabled;
+
 } FDO_DEVICE_DATA, *PFDO_DEVICE_DATA;
 
 #define FDO_FROM_PDO(pdoData) \
