@@ -37,9 +37,6 @@
 #include "winbase.h"
 #include "winnls.h"
 #include "winuser.h"
-#ifdef __REACTOS__
-#include <versionhelpers.h>
-#endif
 
 static char *buf_to_string(const unsigned char *bin, int len, int nr)
 {
@@ -2120,13 +2117,6 @@ static void test__strtod(void)
 
     for (i=0; i<ARRAY_SIZE(tests); i++)
     {
-#ifdef __REACTOS__
-        if ((i == 19) && IsReactOS())
-        {
-            skip("Skipping i == 19, because it crashes on ReactOS\n");
-            continue;
-        }
-#endif
         errno = 0xdeadbeef;
         d = strtod(tests[i].str, &end);
         ok(d == tests[i].ret, "%d) d = %.16e\n", i, d);
@@ -4897,7 +4887,6 @@ static void test_mbsrev(void)
     _setmbcp(cp);
 }
 
-#ifndef __REACTOS__
 static void test__tolower_l(void)
 {
     int ret;
@@ -4928,7 +4917,6 @@ static void test__tolower_l(void)
 
     setlocale(LC_ALL, "C");
 }
-#endif
 
 static void test__strnicmp_l(void)
 {
@@ -5215,9 +5203,7 @@ START_TEST(string)
     test__mbbtype();
     test_wcsncpy();
     test_mbsrev();
-#ifndef __REACTOS__
     test__tolower_l();
-#endif
     test__strnicmp_l();
     test_toupper();
 }
