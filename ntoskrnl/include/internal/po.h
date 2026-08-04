@@ -346,6 +346,8 @@ PopInitializeEventSupport(
     VOID
 );
 
+VOID NTAPI PopInitializeThermalRequests(VOID);
+
 //
 // Notifications
 //
