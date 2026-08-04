@@ -1,0 +1,8 @@
+; Resource Hub connection broker
+[AddReg]
+HKLM,"SYSTEM\CurrentControlSet\Services\reshub","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\reshub","Group",0x00000000,"Boot Bus Extender"
+HKLM,"SYSTEM\CurrentControlSet\Services\reshub","ImagePath",0x00020000,"system32\drivers\reshub.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\reshub","Start",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\reshub","Tag",0x00010001,0x00000002
+HKLM,"SYSTEM\CurrentControlSet\Services\reshub","Type",0x00010001,0x00000001
