@@ -553,10 +553,10 @@ AcpiTimeWorker(
     PACPITIME_WORK_CONTEXT WorkContext = Context;
     PACPITIME_DEVICE_EXTENSION DeviceExtension = WorkContext->DeviceExtension;
 
-    ExAcquireFastMutex(&DeviceExtension->MethodMutex);
+    KeWaitForSingleObject(&DeviceExtension->MethodMutex, Executive, KernelMode, FALSE, NULL);
     if (DeviceExtension->Started && !DeviceExtension->Removing)
         AcpiTimeRefresh(DeviceExtension);
-    ExReleaseFastMutex(&DeviceExtension->MethodMutex);
+    KeReleaseMutex(&DeviceExtension->MethodMutex, FALSE);
     if (InterlockedDecrement(&DeviceExtension->WorkCount) == 0)
         KeSetEvent(&DeviceExtension->WorkIdleEvent, IO_NO_INCREMENT, FALSE);
     IoReleaseRemoveLock(&DeviceExtension->RemoveLock, DeviceExtension);
@@ -670,13 +670,13 @@ AcpiTimeStart(
 {
     NTSTATUS Status;
 
-    ExAcquireFastMutex(&DeviceExtension->MethodMutex);
+    KeWaitForSingleObject(&DeviceExtension->MethodMutex, Executive, KernelMode, FALSE, NULL);
     if (!AcpiTimeRefresh(DeviceExtension))
     {
-        ExReleaseFastMutex(&DeviceExtension->MethodMutex);
+        KeReleaseMutex(&DeviceExtension->MethodMutex, FALSE);
         return STATUS_DEVICE_PROTOCOL_ERROR;
     }
-    ExReleaseFastMutex(&DeviceExtension->MethodMutex);
+    KeReleaseMutex(&DeviceExtension->MethodMutex, FALSE);
     Status = AcpiTimeQueryInterface(DeviceExtension);
     if (!NT_SUCCESS(Status))
     {
@@ -754,7 +754,7 @@ AcpiTimeDeviceControl(
         Status = STATUS_DEVICE_NOT_READY;
         goto Complete;
     }
-    ExAcquireFastMutex(&DeviceExtension->MethodMutex);
+    KeWaitForSingleObject(&DeviceExtension->MethodMutex, Executive, KernelMode, FALSE, NULL);
     switch (ControlCode)
     {
         case IOCTL_ACPITIME_QUERY_INFORMATION:
@@ -852,7 +852,7 @@ AcpiTimeDeviceControl(
             Status = STATUS_INVALID_DEVICE_REQUEST;
             break;
     }
-    ExReleaseFastMutex(&DeviceExtension->MethodMutex);
+    KeReleaseMutex(&DeviceExtension->MethodMutex, FALSE);
 
 Complete:
     IoReleaseRemoveLock(&DeviceExtension->RemoveLock, Irp);
@@ -885,8 +885,8 @@ AcpiTimePnp(
             AcpiTimeSetDeviceInterface(DeviceExtension, FALSE);
             AcpiTimeReleaseInterface(DeviceExtension);
             KeWaitForSingleObject(&DeviceExtension->WorkIdleEvent, Executive, KernelMode, FALSE, NULL);
-            ExAcquireFastMutex(&DeviceExtension->MethodMutex);
-            ExReleaseFastMutex(&DeviceExtension->MethodMutex);
+            KeWaitForSingleObject(&DeviceExtension->MethodMutex, Executive, KernelMode, FALSE, NULL);
+            KeReleaseMutex(&DeviceExtension->MethodMutex, FALSE);
             break;
 
         case IRP_MN_SURPRISE_REMOVAL:
@@ -957,7 +957,7 @@ AcpiTimeAddDevice(
     RtlZeroMemory(DeviceExtension, sizeof(*DeviceExtension));
     DeviceExtension->PhysicalDevice = PhysicalDeviceObject;
     IoInitializeRemoveLock(&DeviceExtension->RemoveLock, ACPITIME_TAG, 0, 0);
-    ExInitializeFastMutex(&DeviceExtension->MethodMutex);
+    KeInitializeMutex(&DeviceExtension->MethodMutex, 0);
     KeInitializeEvent(&DeviceExtension->WorkIdleEvent, NotificationEvent, TRUE);
     Status = IoAttachDeviceToDeviceStackSafe(DeviceObject, PhysicalDeviceObject, &DeviceExtension->LowerDevice);
     if (!NT_SUCCESS(Status))

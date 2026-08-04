@@ -19,7 +19,7 @@ typedef struct _ACPITIME_DEVICE_EXTENSION
     PDEVICE_OBJECT PhysicalDevice;
     PDEVICE_OBJECT LowerDevice;
     IO_REMOVE_LOCK RemoveLock;
-    FAST_MUTEX MethodMutex;
+    KMUTEX MethodMutex;
     ACPI_INTERFACE_STANDARD AcpiInterface;
     UNICODE_STRING InterfaceName;
     BOOLEAN InterfaceAcquired;
