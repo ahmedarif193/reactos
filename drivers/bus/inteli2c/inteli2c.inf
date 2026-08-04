@@ -1,0 +1,61 @@
+[Version]
+Signature = "$Windows NT$"
+Class = System
+ClassGUID = {4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider = %ReactOS%
+DriverVer = 08/04/2026,1.0.0.0
+
+[ControlFlags]
+ExcludeFromSelect = *
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[Manufacturer]
+%ReactOS% = ReactOS,NTx86,NTamd64,NTarm64
+
+[ReactOS.NTx86]
+%IntelI2c.DeviceDesc% = IntelI2c_Inst,PCI\VEN_8086&DEV_54E8
+%IntelI2c.DeviceDesc% = IntelI2c_Inst,PCI\VEN_8086&DEV_54E9
+%IntelI2c.DeviceDesc% = IntelI2c_Inst,PCI\VEN_8086&DEV_54EA
+%IntelI2c.DeviceDesc% = IntelI2c_Inst,PCI\VEN_8086&DEV_54EB
+%IntelI2c.DeviceDesc% = IntelI2c_Inst,PCI\VEN_8086&DEV_54C5
+%IntelI2c.DeviceDesc% = IntelI2c_Inst,PCI\VEN_8086&DEV_54C6
+
+[ReactOS.NTamd64]
+%IntelI2c.DeviceDesc% = IntelI2c_Inst,PCI\VEN_8086&DEV_54E8
+%IntelI2c.DeviceDesc% = IntelI2c_Inst,PCI\VEN_8086&DEV_54E9
+%IntelI2c.DeviceDesc% = IntelI2c_Inst,PCI\VEN_8086&DEV_54EA
+%IntelI2c.DeviceDesc% = IntelI2c_Inst,PCI\VEN_8086&DEV_54EB
+%IntelI2c.DeviceDesc% = IntelI2c_Inst,PCI\VEN_8086&DEV_54C5
+%IntelI2c.DeviceDesc% = IntelI2c_Inst,PCI\VEN_8086&DEV_54C6
+
+[ReactOS.NTarm64]
+%IntelI2c.DeviceDesc% = IntelI2c_Inst,PCI\VEN_8086&DEV_54E8
+%IntelI2c.DeviceDesc% = IntelI2c_Inst,PCI\VEN_8086&DEV_54E9
+%IntelI2c.DeviceDesc% = IntelI2c_Inst,PCI\VEN_8086&DEV_54EA
+%IntelI2c.DeviceDesc% = IntelI2c_Inst,PCI\VEN_8086&DEV_54EB
+%IntelI2c.DeviceDesc% = IntelI2c_Inst,PCI\VEN_8086&DEV_54C5
+%IntelI2c.DeviceDesc% = IntelI2c_Inst,PCI\VEN_8086&DEV_54C6
+
+[IntelI2c_Inst.NT]
+CopyFiles = IntelI2c_CopyFiles
+
+[IntelI2c_CopyFiles]
+inteli2c.sys
+
+[IntelI2c_Inst.NT.Services]
+AddService = INTELI2C,0x00000002,IntelI2c_Service
+
+[IntelI2c_Service]
+DisplayName = %IntelI2c.ServiceDesc%
+ServiceType = 1
+StartType = 3
+ErrorControl = 1
+ServiceBinary = %12%\inteli2c.sys
+LoadOrderGroup = Extended Base
+
+[Strings]
+ReactOS = "ReactOS Project"
+IntelI2c.DeviceDesc = "Intel Alder Lake-N Serial I/O I2C Controller"
+IntelI2c.ServiceDesc = "ReactOS Intel Serial I/O I2C Driver"

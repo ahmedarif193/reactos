@@ -1,0 +1,5 @@
+add_library(inteli2c MODULE inteli2c.c inteli2c.rc)
+set_module_type(inteli2c kernelmodedriver)
+add_importlibs(inteli2c ntoskrnl hal)
+add_cd_file(TARGET inteli2c DESTINATION reactos/system32/drivers FOR all)
+add_driver_inf(inteli2c inteli2c.inf)
