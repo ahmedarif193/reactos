@@ -3529,7 +3529,9 @@ NtReadFile(IN HANDLE FileHandle,
         /* Remember we are sync */
         Synchronous = TRUE;
     }
-    else if (!(ByteOffset) &&
+    else if ((!(ByteOffset) ||
+              ((CapturedByteOffset.u.LowPart == FILE_USE_FILE_POINTER_POSITION) &&
+               (CapturedByteOffset.u.HighPart == -1))) &&
              !(FileObject->Flags & (FO_NAMED_PIPE | FO_MAILSLOT)))
     {
         /* Otherwise, this was async I/O without a byte offset, so fail */
@@ -4722,7 +4724,9 @@ NtWriteFile(IN HANDLE FileHandle,
         /* Remember we are sync */
         Synchronous = TRUE;
     }
-    else if (!(ByteOffset) &&
+    else if ((!(ByteOffset) ||
+              ((CapturedByteOffset.u.LowPart == FILE_USE_FILE_POINTER_POSITION) &&
+               (CapturedByteOffset.u.HighPart == -1))) &&
              !(FileObject->Flags & (FO_NAMED_PIPE | FO_MAILSLOT)))
     {
         /* Otherwise, this was async I/O without a byte offset, so fail */
