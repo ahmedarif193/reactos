@@ -20,6 +20,7 @@ ACPI_MODULE_NAME               ("acpi_fan")
 #define ACPI_FAN_FPS_CONTROL    0
 #define ACPI_FAN_FPS_TRIP_POINT 1
 #define ACPI_FAN_FPS_SPEED      2
+#define ACPI_FAN_MAX_DEVICES    32
 
 static int acpi_fan_add(struct acpi_device *device);
 static int acpi_fan_remove(struct acpi_device *device, int type);
@@ -33,6 +34,10 @@ static struct acpi_driver acpi_fan_driver = {
     ACPI_FAN_HID,
     {acpi_fan_add, acpi_fan_remove}
 };
+
+static FAST_MUTEX acpi_fan_list_lock;
+static ACPI_HANDLE acpi_fan_handles[ACPI_FAN_MAX_DEVICES];
+static ULONG acpi_fan_handle_count;
 
 static BOOLEAN
 acpi_fan_has_advanced_control(
@@ -208,7 +213,7 @@ acpi_fan_force_d0(
 }
 
 static int
-acpi_fan_add(
+acpi_fan_force_device_maximum(
     struct acpi_device *device)
 {
     ACPI_STATUS status = AE_NOT_FOUND;
@@ -219,17 +224,13 @@ acpi_fan_add(
     if (!device)
         return_VALUE(-1);
 
-    sprintf(acpi_device_name(device), "%s", ACPI_FAN_DEVICE_NAME);
-    sprintf(acpi_device_class(device), "%s", ACPI_FAN_CLASS);
-
     if (acpi_fan_has_advanced_control(device->handle)) {
         status = acpi_fan_get_fine_grain(device->handle, &fine_grain);
         if (ACPI_SUCCESS(status)) {
             if (fine_grain) {
                 control = ACPI_FAN_MAX_PERCENT;
             } else {
-                status = acpi_fan_get_max_control(device->handle,
-                                                  &control);
+                status = acpi_fan_get_max_control(device->handle, &control);
             }
         }
 
@@ -258,15 +259,82 @@ acpi_fan_add(
     return_VALUE(0);
 }
 
+int
+acpi_fan_force_maximum(
+    ACPI_HANDLE handle)
+{
+    struct acpi_device *device = NULL;
+
+    if (!handle || acpi_bus_get_device(handle, &device) || !device)
+        return_VALUE(-1);
+    return_VALUE(acpi_fan_force_device_maximum(device));
+}
+
+void
+acpi_fan_force_all_maximum(void)
+{
+    ACPI_HANDLE handles[ACPI_FAN_MAX_DEVICES];
+    ULONG count;
+    ULONG i;
+
+    ExAcquireFastMutex(&acpi_fan_list_lock);
+    count = acpi_fan_handle_count;
+    RtlCopyMemory(handles, acpi_fan_handles, count * sizeof(handles[0]));
+    ExReleaseFastMutex(&acpi_fan_list_lock);
+
+    for (i = 0; i < count; i++)
+        acpi_fan_force_maximum(handles[i]);
+}
+
+static int
+acpi_fan_add(
+    struct acpi_device *device)
+{
+    ULONG i;
+    int result;
+
+    if (!device)
+        return_VALUE(-1);
+
+    sprintf(acpi_device_name(device), "%s", ACPI_FAN_DEVICE_NAME);
+    sprintf(acpi_device_class(device), "%s", ACPI_FAN_CLASS);
+    result = acpi_fan_force_device_maximum(device);
+    if (result)
+        return_VALUE(result);
+
+    ExAcquireFastMutex(&acpi_fan_list_lock);
+    for (i = 0; i < acpi_fan_handle_count; i++) {
+        if (acpi_fan_handles[i] == device->handle)
+            break;
+    }
+    if (i == acpi_fan_handle_count && acpi_fan_handle_count < ACPI_FAN_MAX_DEVICES)
+        acpi_fan_handles[acpi_fan_handle_count++] = device->handle;
+    ExReleaseFastMutex(&acpi_fan_list_lock);
+    return_VALUE(0);
+}
+
 static int
 acpi_fan_remove(
     struct acpi_device *device,
     int type)
 {
+    ULONG i;
+
     UNREFERENCED_PARAMETER(type);
 
     if (!device)
         return_VALUE(-1);
+
+    ExAcquireFastMutex(&acpi_fan_list_lock);
+    for (i = 0; i < acpi_fan_handle_count; i++) {
+        if (acpi_fan_handles[i] != device->handle)
+            continue;
+        acpi_fan_handle_count--;
+        acpi_fan_handles[i] = acpi_fan_handles[acpi_fan_handle_count];
+        acpi_fan_handles[acpi_fan_handle_count] = NULL;
+        break;
+    }
+    ExReleaseFastMutex(&acpi_fan_list_lock);
 
     /*
      * This is a fail-safe driver. Do not lower or disable cooling when the
@@ -280,6 +348,9 @@ acpi_fan_init(void)
 {
     int result;
 
+    ExInitializeFastMutex(&acpi_fan_list_lock);
+    acpi_fan_handle_count = 0;
+    RtlZeroMemory(acpi_fan_handles, sizeof(acpi_fan_handles));
     result = acpi_bus_register_driver(&acpi_fan_driver);
     if (result < 0)
         return_VALUE(-15);
