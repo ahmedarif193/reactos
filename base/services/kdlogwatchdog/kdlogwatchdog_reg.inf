@@ -1,0 +1,9 @@
+; Debug-only kernel debug-log watchdog heartbeat service
+[AddReg]
+HKLM,"SYSTEM\CurrentControlSet\Services\KdLogWatchdog","DisplayName",0x00000000,"Kernel Debug Log Watchdog"
+HKLM,"SYSTEM\CurrentControlSet\Services\KdLogWatchdog","Description",0x00000000,"Emits the periodic debugger heartbeat used by the kernel debug-log watchdog."
+HKLM,"SYSTEM\CurrentControlSet\Services\KdLogWatchdog","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\KdLogWatchdog","ImagePath",0x00020000,"%SystemRoot%\system32\kdlogwatchdog.exe"
+HKLM,"SYSTEM\CurrentControlSet\Services\KdLogWatchdog","ObjectName",0x00000000,"LocalSystem"
+HKLM,"SYSTEM\CurrentControlSet\Services\KdLogWatchdog","Start",0x00010001,0x00000002
+HKLM,"SYSTEM\CurrentControlSet\Services\KdLogWatchdog","Type",0x00010001,0x00000010

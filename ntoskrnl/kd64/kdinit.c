@@ -428,6 +428,11 @@ KdInitSystem(
             return TRUE;
         }
 
+#if DBG && defined(KDBG)
+        if (LoaderBlock != NULL)
+            KdpLogWatchdogInitialize(LoaderBlock);
+#endif
+
         /* Check if we have a loader block */
         if (LoaderBlock)
         {

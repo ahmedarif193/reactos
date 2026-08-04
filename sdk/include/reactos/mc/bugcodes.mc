@@ -1726,6 +1726,18 @@ Language=English
 A fatal error occurred in the USB driver stack.
 .
 
+MessageId=0x133
+Severity=Success
+Facility=System
+SymbolicName=DPC_WATCHDOG_VIOLATION
+Language=English
+A watchdog detected that the system stopped making forward progress.
+
+If Parameter1 is 2, the internal-debugger log made no progress for the number
+of seconds in Parameter2. Parameter3 is the configured timeout in seconds and
+Parameter4 is the processor that detected the stall.
+.
+
 MessageId=0x139
 Severity=Success
 Facility=System

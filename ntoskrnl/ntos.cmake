@@ -312,6 +312,9 @@ list(APPEND SOURCE
 
 if(DBG)
     list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/se/debug.c)
+    if(KDBG)
+        list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/kdwatchdog.c)
+    endif()
 endif()
 
 list(APPEND ASM_SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/zw.S)

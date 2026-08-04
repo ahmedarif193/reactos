@@ -105,6 +105,9 @@ KeUpdateSystemTime(IN PKTRAP_FRAME TrapFrame,
     InterruptTime.QuadPart = *(ULONGLONG*)&SharedUserData->InterruptTime;
     InterruptTime.QuadPart += Increment;
     KiWriteSystemTime(&MmWriteableSharedUserData->InterruptTime, InterruptTime);
+#if DBG && defined(KDBG)
+    KdpLogWatchdogCheck(InterruptTime.QuadPart);
+#endif
 
     /* Check for timer expiration */
     KiCheckForTimerExpiration(Prcb, TrapFrame, InterruptTime);
