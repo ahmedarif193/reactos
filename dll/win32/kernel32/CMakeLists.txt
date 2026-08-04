@@ -141,6 +141,10 @@ add_library(kernel32 MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/kernel32_stubs.c
     ${CMAKE_CURRENT_BINARY_DIR}/kernel32.def)
 
+if(NOT MSVC)
+    set_source_files_properties(kernel32.rc PROPERTIES COMPILE_OPTIONS "--codepage=65001")
+endif()
+
 set_module_type(kernel32 win32dll ENTRYPOINT DllMain 12)
 #############################################
 ## HACK FOR MSVC COMPILATION WITH win32dll ##
