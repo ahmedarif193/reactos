@@ -277,7 +277,6 @@ static BOOL parse_data_type(struct parser *parser, WCHAR **line)
             /* "hex(xx):" is special */
             val = wcstoul(*line, &end, 16);
 #ifdef __REACTOS__
-            /* Up to 8 hex digits, "hex(000000002)" is invalid */
             if (*end != ')' || *(end + 1) != ':' || (val == ~0u && errno == ERANGE) || end - *line > 8)
 #else
             if (*end != ')' || *(end + 1) != ':' || (val == ~0u && errno == ERANGE))
@@ -382,10 +381,7 @@ static LONG open_key(struct parser *parser, WCHAR *path)
                           KEY_ALL_ACCESS|parser->sam, NULL, &parser->hkey, NULL);
 
     if (res == ERROR_SUCCESS)
-    {
-        parser->key_name = malloc((lstrlenW(path) + 1) * sizeof(WCHAR));
-        lstrcpyW(parser->key_name, path);
-    }
+        parser->key_name = wcsdup(path);
     else
         parser->hkey = NULL;
 
@@ -641,8 +637,7 @@ static WCHAR *quoted_value_name_state(struct parser *parser, WCHAR *pos)
         goto invalid;
 
     /* copy the value name in case we need to parse multiple lines and the buffer is overwritten */
-    parser->value_name = malloc((lstrlenW(val_name) + 1) * sizeof(WCHAR));
-    lstrcpyW(parser->value_name, val_name);
+    parser->value_name = wcsdup(val_name);
 
     set_state(parser, DATA_START);
     return p;
@@ -773,42 +768,35 @@ static WCHAR *hex_data_state(struct parser *parser, WCHAR *pos)
 {
     WCHAR *line = pos;
 #ifdef __REACTOS__
-    WCHAR Buffer[10] = { 0 };
-    WCHAR* ret;
+    WCHAR buffer[10] = {0};
     BOOL unicode_in_ascii = FALSE;
-    BOOL result;
 #endif
 
     if (!*line)
         goto set_value;
 
 #ifdef __REACTOS__
-    if ((!parser->is_unicode) &&
-        (parser->data_type == REG_EXPAND_SZ) &&
-        (parser->parse_type == REG_BINARY))
+    if (!parser->is_unicode && parser->data_type == REG_EXPAND_SZ && parser->parse_type == REG_BINARY)
     {
-        memcpy(Buffer, pos, 18);
-        Buffer[_countof(Buffer) - 1] = UNICODE_NULL;
-        ret = wcsstr(Buffer, L"00,"); // Any UNICODE characters?
-        unicode_in_ascii = (ret != NULL);
+        memcpy(buffer, pos, 18);
+        buffer[ARRAY_SIZE(buffer) - 1] = 0;
+        unicode_in_ascii = wcsstr(buffer, L"00,") != NULL;
+        if (unicode_in_ascii) parser->is_unicode = TRUE;
     }
-
-    if (unicode_in_ascii)
+#endif
+#ifdef __REACTOS__
+    if (!convert_hex_csv_to_hex(parser, &line))
     {
-        parser->is_unicode = TRUE;
-        result = convert_hex_csv_to_hex(parser, &line);
-        parser->is_unicode = FALSE;
+        if (unicode_in_ascii) parser->is_unicode = FALSE;
+        goto invalid;
     }
-    else 
-    {
-        result = convert_hex_csv_to_hex(parser, &line);
-    }
-
-    if (!result)
 #else
     if (!convert_hex_csv_to_hex(parser, &line))
-#endif
         goto invalid;
+#endif
+#ifdef __REACTOS__
+    if (unicode_in_ascii) parser->is_unicode = FALSE;
+#endif
 
     if (parser->backslash)
     {
@@ -817,18 +805,11 @@ static WCHAR *hex_data_state(struct parser *parser, WCHAR *pos)
     }
 
 #ifdef __REACTOS__
-    if (unicode_in_ascii)
-    {
-        parser->is_unicode = TRUE;
-        prepare_hex_string_data(parser);
-        parser->is_unicode = FALSE;
-    }
-    else 
-    {
-        prepare_hex_string_data(parser);
-    }
-#else
+    if (unicode_in_ascii) parser->is_unicode = TRUE;
+#endif
     prepare_hex_string_data(parser);
+#ifdef __REACTOS__
+    if (unicode_in_ascii) parser->is_unicode = FALSE;
 #endif
 
 set_value:
@@ -887,7 +868,7 @@ invalid:
 /* handler for parser UNKNOWN_DATA state */
 static WCHAR *unknown_data_state(struct parser *parser, WCHAR *pos)
 {
-    FIXME("Unknown registry data type [0x%x]\n", parser->data_type);
+    FIXME("Unknown registry data type [0x%lx]\n", parser->data_type);
 
     set_state(parser, LINE_START);
     return pos;
@@ -1099,6 +1080,6 @@ error:
 
 invalid:
     output_message(STRING_INVALID_SYNTAX);
-    output_message(STRING_FUNC_HELP, _wcsupr(argvW[1]));
+    output_message(STRING_FUNC_HELP, wcsupr(argvW[1]));
     return 1;
 }
