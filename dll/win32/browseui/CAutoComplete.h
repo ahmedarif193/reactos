@@ -215,6 +215,7 @@ protected:
     HWND m_hwndCombo; // the combobox if any
     HFONT m_hFont; // the font
     BOOL m_bResized; // re-sized by size-box?
+    BOOL m_bWindowRef; // the drop-down window holds a reference?
     RECT m_rcEdit; // in screen coordinates, to watch the position
     HWND m_hwndEdit; // the textbox
     WNDPROC m_fnOldEditProc; // old textbox procedure
