@@ -1,3 +1,6 @@
-add_subdirectory(intelgpio)
-add_subdirectory(intelocwdt)
+if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
+    add_subdirectory(intelgpio)
+    add_subdirectory(intelpmc)
+    add_subdirectory(intelocwdt)
+endif()
 add_subdirectory(tpm2)
