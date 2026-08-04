@@ -7,7 +7,7 @@
 typedef [handle] wchar_t *WKSSVC_IDENTIFY_HANDLE;
 typedef [handle] wchar_t *WKSSVC_IMPERSONATE_HANDLE;
 
-cpp_quote("#ifndef _LMJOIN_H")
+cpp_quote("#if !defined(_LMJOIN_H) && !defined(__WINE_LMJOIN_H)")
 typedef enum _NETSETUP_JOIN_STATUS
 {
     NetSetupUnknownStatus = 0,
