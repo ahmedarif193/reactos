@@ -150,7 +150,8 @@ WSAAPI
 WsProcGetTCatalog(IN PWSPROCESS Process)
 {
     /* Check if the catalogs have been modified */
-    if (WsCheckCatalogState(Process->ProtocolCatalogEvent))
+    if (!Process->ProtocolCatalog->ItemCount ||
+        WsCheckCatalogState(Process->ProtocolCatalogEvent))
     {
         /* Modification happened, reload them */
         WsTcRefreshFromRegistry(Process->ProtocolCatalog,
@@ -166,7 +167,8 @@ WSAAPI
 WsProcGetNsCatalog(IN PWSPROCESS Process)
 {
     /* Check if the catalogs have been modified */
-    if (WsCheckCatalogState(Process->NamespaceCatalogEvent))
+    if (!Process->NamespaceCatalog->ItemCount ||
+        WsCheckCatalogState(Process->NamespaceCatalogEvent))
     {
         /* Modification happened, reload them */
         WsNcRefreshFromRegistry(Process->NamespaceCatalog,
