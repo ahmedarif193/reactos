@@ -37,9 +37,6 @@ typedef struct _ARM64_DISPATCHER_CONTEXT
     PUCHAR NonVolatileRegisters;
 } ARM64_DISPATCHER_CONTEXT, *PARM64_DISPATCHER_CONTEXT;
 
-typedef EXCEPTION_DISPOSITION (__cdecl *PTERMINATION_HANDLER)(BOOLEAN, PVOID);
-typedef EXCEPTION_DISPOSITION (__cdecl *PEXCEPTION_FILTER)(PEXCEPTION_POINTERS, PVOID);
-
 /* RtlUnwindEx is declared by the SDK headers */
 
 EXCEPTION_DISPOSITION
@@ -109,7 +106,7 @@ __C_specific_handler(
             {
                 HandlerAddress = ScopeTable->ScopeRecord[Index].HandlerAddress;
                 TerminationHandler = (PTERMINATION_HANDLER)(ImageBase + HandlerAddress);
-                TerminationHandler(TRUE, EstablisherFrame);
+                TerminationHandler(TRUE, (DWORD64)EstablisherFrame);
             }
             else if (ScopeTable->ScopeRecord[Index].JumpTarget == TargetIpOffset)
             {
@@ -131,7 +128,7 @@ __C_specific_handler(
             else
             {
                 ExceptionFilter = (PEXCEPTION_FILTER)(ImageBase + HandlerAddress);
-                FilterResult = ExceptionFilter(&ExceptionPointers, EstablisherFrame);
+                FilterResult = ExceptionFilter(&ExceptionPointers, (DWORD64)EstablisherFrame);
             }
 
             if (FilterResult < 0)

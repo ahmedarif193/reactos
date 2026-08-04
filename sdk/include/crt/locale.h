@@ -91,6 +91,13 @@ extern "C" {
     _In_ int _Category,
     _In_z_ const char *_Locale);
 
+  _CRTIMP
+  _locale_t
+  __cdecl
+  _wcreate_locale(
+    _In_ int _Category,
+    _In_z_ const wchar_t *_Locale);
+
   void
   __cdecl
   _free_locale(
@@ -122,6 +129,21 @@ _CRTIMP
 unsigned int
 __cdecl
 ___lc_codepage_func(void);
+
+_CRTIMP
+wchar_t**
+__cdecl
+___lc_locale_name_func(void);
+
+_CRTIMP
+void*
+__cdecl
+_Gettnames(void);
+
+_CRTIMP
+void*
+__cdecl
+_W_Gettnames(void);
 
 #ifndef _WLOCALE_DEFINED
 #define _WLOCALE_DEFINED

@@ -1,7 +1,5 @@
 /*
- * acrt function needed for compatibility with mingw
- *
- * Copyright 2019 Alexandre Julliard
+ * Copyright 2025 Yuxuan Shui for CodeWeavers
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -26,22 +24,40 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-/* this function is part of the import lib for compatibility with ucrt runtime */
-#if 0
-#pragma makedep implib
-#endif
+#include <corecrt_startup.h>
 
-#include "include/stdio.h"
-#include <wine/asm.h>
+extern _PIFV __xi_a[];
+extern _PIFV __xi_z[];
+extern _PVFV __xc_a[];
+extern _PVFV __xc_z[];
+extern _PVFV __xt_a[];
+extern _PVFV __xt_z[];
 
-#undef __iob_func
-extern FILE * __cdecl __iob_func(void);
-
-/*********************************************************************
- *		__acrt_iob_func(UCRTBASE.@)
- */
-FILE * __cdecl __acrt_iob_func(unsigned idx)
+static inline int fallback_initterm_e(_PIFV *table, _PIFV *end)
 {
-    return __iob_func() + idx;
+#if _MSVCR_VER < 80
+    int res;
+    for (res = 0; !res && table < end; table++)
+        if (*table) res = (*table)();
+    return res;
+#else
+    return _initterm_e(table, end);
+#endif
 }
-__ASM_GLOBAL_IMPORT(__acrt_iob_func)
+
+static __cdecl void do_global_dtors(void)
+{
+    _initterm(__xt_a, __xt_z);
+}
+
+static void do_global_ctors(void)
+{
+    if (fallback_initterm_e(__xi_a, __xi_z) != 0) return;
+    _initterm(__xc_a, __xc_z);
+
+#ifdef _UCRT
+    _crt_atexit(do_global_dtors);
+#else
+    _onexit((_onexit_t)do_global_dtors);
+#endif
+}
