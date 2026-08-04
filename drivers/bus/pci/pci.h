@@ -130,6 +130,15 @@ typedef struct _PCI_ROOT_BUS_INTERFACE
     ULONG MaxBus;
 } PCI_ROOT_BUS_INTERFACE, *PPCI_ROOT_BUS_INTERFACE;
 
+#define PCI_MAX_ADDRESS_WINDOWS 8
+
+typedef struct _PCI_ADDRESS_WINDOW
+{
+    ULONGLONG Start;
+    ULONGLONG End;
+    BOOLEAN Prefetchable;
+} PCI_ADDRESS_WINDOW, *PPCI_ADDRESS_WINDOW;
+
 /* Functional Device Object device extension for the PCI driver device object */
 typedef struct _FDO_DEVICE_EXTENSION
 {
@@ -145,6 +154,11 @@ typedef struct _FDO_DEVICE_EXTENSION
     ULONG BusRangeStart;
     // Highest bus number owned by this root bridge
     ULONG BusRangeEnd;
+    // Address apertures decoded by this bus, supplied by ACPI or its parent bridge
+    ULONG IoWindowCount;
+    PCI_ADDRESS_WINDOW IoWindows[PCI_MAX_ADDRESS_WINDOWS];
+    ULONG MemoryWindowCount;
+    PCI_ADDRESS_WINDOW MemoryWindows[PCI_MAX_ADDRESS_WINDOWS];
     // Remove lock for PnP IRP serialization
     IO_REMOVE_LOCK RemoveLock;
     // Current state of the driver

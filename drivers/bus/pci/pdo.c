@@ -2037,6 +2037,131 @@ PciPdoRoutedInterruptLine(
 }
 
 
+#define PCI_MAX_BASE_RESOURCE_DESCRIPTORS 64
+
+static
+VOID
+PciPdoInitializeBarRequirement(
+    _Out_ PIO_RESOURCE_DESCRIPTOR Descriptor,
+    _In_ UCHAR Option,
+    _In_ ULONGLONG Minimum,
+    _In_ ULONGLONG Maximum,
+    _In_ ULONG Length,
+    _In_ ULONG Flags)
+{
+    RtlZeroMemory(Descriptor, sizeof(*Descriptor));
+    Descriptor->Option = Option;
+    Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+
+    if (Flags & PCI_ADDRESS_IO_SPACE)
+    {
+        Descriptor->Type = CmResourceTypePort;
+        Descriptor->Flags = CM_RESOURCE_PORT_IO |
+                            CM_RESOURCE_PORT_16_BIT_DECODE |
+                            CM_RESOURCE_PORT_POSITIVE_DECODE |
+                            CM_RESOURCE_PORT_BAR;
+        Descriptor->u.Port.Length = Length;
+        Descriptor->u.Port.Alignment = (Option == IO_RESOURCE_PREFERRED) ? 1 : Length;
+        Descriptor->u.Port.MinimumAddress.QuadPart = Minimum;
+        Descriptor->u.Port.MaximumAddress.QuadPart = Maximum;
+    }
+    else
+    {
+        Descriptor->Type = CmResourceTypeMemory;
+        Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
+                            CM_RESOURCE_MEMORY_BAR |
+            ((Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0);
+        Descriptor->u.Memory.Length = Length;
+        Descriptor->u.Memory.Alignment = (Option == IO_RESOURCE_PREFERRED) ? 1 : Length;
+        Descriptor->u.Memory.MinimumAddress.QuadPart = Minimum;
+        Descriptor->u.Memory.MaximumAddress.QuadPart = Maximum;
+    }
+}
+
+static
+PIO_RESOURCE_DESCRIPTOR
+PciPdoAppendBarRequirements(
+    _In_opt_ PFDO_DEVICE_EXTENSION FdoExtension,
+    _Inout_ PIO_RESOURCE_DESCRIPTOR Descriptor,
+    _In_ PIO_RESOURCE_DESCRIPTOR DescriptorEnd,
+    _In_ ULONGLONG Base,
+    _In_ ULONGLONG Length,
+    _In_ ULONG Flags,
+    _In_ ULONGLONG MaximumAddress)
+{
+    PPCI_ADDRESS_WINDOW Windows;
+    ULONG WindowCount;
+    ULONG i;
+    BOOLEAN AddedAlternative = FALSE;
+    BOOLEAN HasPreferred = (Base != 0);
+
+    if (Length == 0 || Length > MAXULONG)
+        return Descriptor;
+
+    if (HasPreferred && Descriptor < DescriptorEnd)
+    {
+        PciPdoInitializeBarRequirement(Descriptor++, IO_RESOURCE_PREFERRED, Base, Base + Length - 1, (ULONG)Length, Flags);
+    }
+
+    if (FdoExtension)
+    {
+        if (Flags & PCI_ADDRESS_IO_SPACE)
+        {
+            Windows = FdoExtension->IoWindows;
+            WindowCount = FdoExtension->IoWindowCount;
+        }
+        else
+        {
+            Windows = FdoExtension->MemoryWindows;
+            WindowCount = FdoExtension->MemoryWindowCount;
+        }
+    }
+    else
+    {
+        Windows = NULL;
+        WindowCount = 0;
+    }
+
+    for (i = 0; i < WindowCount && Descriptor < DescriptorEnd; i++)
+    {
+        ULONGLONG Minimum = Windows[i].Start;
+        ULONGLONG Maximum = Windows[i].End;
+        ULONGLONG AlignmentMask = Length - 1;
+
+        if (!(Flags & PCI_ADDRESS_IO_SPACE) &&
+            Windows[i].Prefetchable &&
+            !(Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE))
+        {
+            continue;
+        }
+
+        if (Maximum > MaximumAddress)
+            Maximum = MaximumAddress;
+
+        if (Minimum > MAXULONGLONG - AlignmentMask)
+            continue;
+
+        Minimum = (Minimum + AlignmentMask) & ~AlignmentMask;
+        if (Minimum == 0)
+            Minimum = Length;
+
+        if (Minimum > Maximum || AlignmentMask > Maximum - Minimum)
+            continue;
+
+        PciPdoInitializeBarRequirement(Descriptor++, (!HasPreferred && !AddedAlternative) ? 0 : IO_RESOURCE_ALTERNATIVE, Minimum, Maximum, (ULONG)Length, Flags);
+        AddedAlternative = TRUE;
+    }
+
+    /* Legacy firmware and non-ACPI buses may not publish parent apertures. */
+    if (WindowCount == 0 && Descriptor < DescriptorEnd)
+    {
+        PciPdoInitializeBarRequirement(Descriptor++, HasPreferred ? IO_RESOURCE_ALTERNATIVE : 0, Length, MaximumAddress, (ULONG)Length, Flags);
+    }
+
+    return Descriptor;
+}
+
+
 static NTSTATUS
 PdoQueryResourceRequirements(
     IN PDEVICE_OBJECT DeviceObject,
@@ -2063,7 +2188,7 @@ PdoQueryResourceRequirements(
     UCHAR MsiMessageCount;
     ULONG MessageNumberLimit;
     ULONG BaseDescriptorCount;
-    IO_RESOURCE_DESCRIPTOR BaseDescriptors[32];
+    IO_RESOURCE_DESCRIPTOR BaseDescriptors[PCI_MAX_BASE_RESOURCE_DESCRIPTORS];
     ULONG RequirementsBusNumber;
     BOOLEAN MsixOption;
     BOOLEAN MsiOption;
@@ -2170,61 +2295,7 @@ PdoQueryResourceRequirements(
                 continue;
             }
 
-            Descriptor->Option = IO_RESOURCE_PREFERRED;
-            if (Flags & PCI_ADDRESS_IO_SPACE)
-            {
-                Descriptor->Type = CmResourceTypePort;
-                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_PORT_IO |
-                                    CM_RESOURCE_PORT_16_BIT_DECODE |
-                                    CM_RESOURCE_PORT_POSITIVE_DECODE;
-
-                Descriptor->u.Port.Length = Length;
-                Descriptor->u.Port.Alignment = 1;
-                Descriptor->u.Port.MinimumAddress.QuadPart = Base;
-                Descriptor->u.Port.MaximumAddress.QuadPart = Base + Length - 1;
-            }
-            else
-            {
-                Descriptor->Type = CmResourceTypeMemory;
-                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
-                    ((Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0);
-
-                Descriptor->u.Memory.Length = Length;
-                Descriptor->u.Memory.Alignment = 1;
-                Descriptor->u.Memory.MinimumAddress.QuadPart = Base;
-                Descriptor->u.Memory.MaximumAddress.QuadPart = Base + Length - 1;
-            }
-            Descriptor++;
-
-            Descriptor->Option = IO_RESOURCE_ALTERNATIVE;
-            if (Flags & PCI_ADDRESS_IO_SPACE)
-            {
-                Descriptor->Type = CmResourceTypePort;
-                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_PORT_IO |
-                                    CM_RESOURCE_PORT_16_BIT_DECODE |
-                                    CM_RESOURCE_PORT_POSITIVE_DECODE;
-
-                Descriptor->u.Port.Length = Length;
-                Descriptor->u.Port.Alignment = Length;
-                Descriptor->u.Port.MinimumAddress.QuadPart = 0;
-                Descriptor->u.Port.MaximumAddress.QuadPart = MaximumAddress;
-            }
-            else
-            {
-                Descriptor->Type = CmResourceTypeMemory;
-                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
-                    ((Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0);
-
-                Descriptor->u.Memory.Length = Length;
-                Descriptor->u.Memory.Alignment = Length;
-                Descriptor->u.Memory.MinimumAddress.QuadPart = 0;
-                Descriptor->u.Memory.MaximumAddress.QuadPart = MaximumAddress;
-            }
-            Descriptor++;
+            Descriptor = PciPdoAppendBarRequirements(FdoExtension, Descriptor, BaseDescriptors + RTL_NUMBER_OF(BaseDescriptors), Base, Length, Flags, MaximumAddress);
         }
 
         /* FIXME: Check ROM address */
@@ -2248,61 +2319,7 @@ PdoQueryResourceRequirements(
                 continue;
             }
 
-            Descriptor->Option = IO_RESOURCE_PREFERRED;
-            if (Flags & PCI_ADDRESS_IO_SPACE)
-            {
-                Descriptor->Type = CmResourceTypePort;
-                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_PORT_IO |
-                                    CM_RESOURCE_PORT_16_BIT_DECODE |
-                                    CM_RESOURCE_PORT_POSITIVE_DECODE;
-
-                Descriptor->u.Port.Length = Length;
-                Descriptor->u.Port.Alignment = 1;
-                Descriptor->u.Port.MinimumAddress.QuadPart = Base;
-                Descriptor->u.Port.MaximumAddress.QuadPart = Base + Length - 1;
-            }
-            else
-            {
-                Descriptor->Type = CmResourceTypeMemory;
-                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
-                    ((Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0);
-
-                Descriptor->u.Memory.Length = Length;
-                Descriptor->u.Memory.Alignment = 1;
-                Descriptor->u.Memory.MinimumAddress.QuadPart = Base;
-                Descriptor->u.Memory.MaximumAddress.QuadPart = Base + Length - 1;
-            }
-            Descriptor++;
-
-            Descriptor->Option = IO_RESOURCE_ALTERNATIVE;
-            if (Flags & PCI_ADDRESS_IO_SPACE)
-            {
-                Descriptor->Type = CmResourceTypePort;
-                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_PORT_IO |
-                                    CM_RESOURCE_PORT_16_BIT_DECODE |
-                                    CM_RESOURCE_PORT_POSITIVE_DECODE;
-
-                Descriptor->u.Port.Length = Length;
-                Descriptor->u.Port.Alignment = Length;
-                Descriptor->u.Port.MinimumAddress.QuadPart = 0;
-                Descriptor->u.Port.MaximumAddress.QuadPart = MaximumAddress;
-            }
-            else
-            {
-                Descriptor->Type = CmResourceTypeMemory;
-                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
-                    ((Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0);
-
-                Descriptor->u.Memory.Length = Length;
-                Descriptor->u.Memory.Alignment = Length;
-                Descriptor->u.Memory.MinimumAddress.QuadPart = 0;
-                Descriptor->u.Memory.MaximumAddress.QuadPart = MaximumAddress;
-            }
-            Descriptor++;
+            Descriptor = PciPdoAppendBarRequirements(FdoExtension, Descriptor, BaseDescriptors + RTL_NUMBER_OF(BaseDescriptors), Base, Length, Flags, MaximumAddress);
         }
 
         if (DeviceExtension->PciDevice->PciConfig.BaseClass == PCI_CLASS_BRIDGE_DEV)
@@ -2361,7 +2378,7 @@ PdoQueryResourceRequirements(
                                     CM_RESOURCE_PORT_WINDOW_DECODE;
                 Descriptor->u.Port.Length = IoLength;
                 Descriptor->u.Port.Alignment = 0x1000;
-                Descriptor->u.Port.MinimumAddress.QuadPart = 0;
+                Descriptor->u.Port.MinimumAddress.QuadPart = 0x1000;
                 Descriptor->u.Port.MaximumAddress.QuadPart = IoMax;
                 Descriptor++;
             }
@@ -2383,7 +2400,8 @@ PdoQueryResourceRequirements(
                 Descriptor->Option = IO_RESOURCE_PREFERRED;
                 Descriptor->Type = CmResourceTypeMemory;
                 Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE;
+                Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
+                                    CM_RESOURCE_MEMORY_WINDOW_DECODE;
                 Descriptor->u.Memory.Length = MemLength;
                 Descriptor->u.Memory.Alignment = 1;
                 Descriptor->u.Memory.MinimumAddress.QuadPart = MemBaseFull;
@@ -2394,10 +2412,11 @@ PdoQueryResourceRequirements(
                 Descriptor->Option = IO_RESOURCE_ALTERNATIVE;
                 Descriptor->Type = CmResourceTypeMemory;
                 Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE;
+                Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
+                                    CM_RESOURCE_MEMORY_WINDOW_DECODE;
                 Descriptor->u.Memory.Length = MemLength;
                 Descriptor->u.Memory.Alignment = 0x100000;
-                Descriptor->u.Memory.MinimumAddress.QuadPart = 0;
+                Descriptor->u.Memory.MinimumAddress.QuadPart = 0x100000;
                 Descriptor->u.Memory.MaximumAddress.QuadPart = 0xFFFFFFFF;
                 Descriptor++;
             }
@@ -2428,7 +2447,8 @@ PdoQueryResourceRequirements(
                 Descriptor->Type = CmResourceTypeMemory;
                 Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
                 Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
-                                    CM_RESOURCE_MEMORY_PREFETCHABLE;
+                                    CM_RESOURCE_MEMORY_PREFETCHABLE |
+                                    CM_RESOURCE_MEMORY_WINDOW_DECODE;
                 Descriptor->u.Memory.Length = (ULONG)PrefLength;
                 Descriptor->u.Memory.Alignment = 1;
                 Descriptor->u.Memory.MinimumAddress.QuadPart = PrefBaseFull;
@@ -2440,10 +2460,11 @@ PdoQueryResourceRequirements(
                 Descriptor->Type = CmResourceTypeMemory;
                 Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
                 Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
-                                    CM_RESOURCE_MEMORY_PREFETCHABLE;
+                                    CM_RESOURCE_MEMORY_PREFETCHABLE |
+                                    CM_RESOURCE_MEMORY_WINDOW_DECODE;
                 Descriptor->u.Memory.Length = (ULONG)PrefLength;
                 Descriptor->u.Memory.Alignment = 0x100000;
-                Descriptor->u.Memory.MinimumAddress.QuadPart = 0;
+                Descriptor->u.Memory.MinimumAddress.QuadPart = 0x100000;
                 Descriptor->u.Memory.MaximumAddress.QuadPart = PrefMax;
                 Descriptor++;
             }
@@ -2634,7 +2655,7 @@ PdoQueryResources(
                                    NULL))
                 break;
 
-            if (Length)
+            if (Length && Base != 0)
                 ResCount++;
         }
 
@@ -2664,7 +2685,7 @@ PdoQueryResources(
                                    NULL))
                 break;
 
-            if (Length != 0)
+            if (Length != 0 && Base != 0)
                 ResCount++;
         }
 
@@ -2763,7 +2784,7 @@ PdoQueryResources(
                                    NULL))
                 break;
 
-            if (Length == 0)
+            if (Length == 0 || Base == 0)
             {
                 DPRINT("Unused address register\n");
                 continue;
@@ -2825,7 +2846,7 @@ PdoQueryResources(
                                    NULL))
                 break;
 
-            if (Length == 0)
+            if (Length == 0 || Base == 0)
             {
                 DPRINT("Unused address register\n");
                 continue;
@@ -2910,7 +2931,8 @@ PdoQueryResources(
             {
                 Descriptor->Type = CmResourceTypeMemory;
                 Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
-                Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE;
+                Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
+                                    CM_RESOURCE_MEMORY_WINDOW_DECODE;
                 Descriptor->u.Memory.Start.QuadPart = MemBaseFull;
                 Descriptor->u.Memory.Length = MemLimitFull - MemBaseFull + 1;
                 Descriptor++;
@@ -2935,7 +2957,8 @@ PdoQueryResources(
                 Descriptor->Type = CmResourceTypeMemory;
                 Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
                 Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
-                                    CM_RESOURCE_MEMORY_PREFETCHABLE;
+                                    CM_RESOURCE_MEMORY_PREFETCHABLE |
+                                    CM_RESOURCE_MEMORY_WINDOW_DECODE;
                 Descriptor->u.Memory.Start.QuadPart = PrefBaseFull;
                 Descriptor->u.Memory.Length = (ULONG)(PrefLimitFull - PrefBaseFull + 1);
                 Descriptor++;
@@ -3343,6 +3366,210 @@ PdoQueryInterface(
     return Status;
 }
 
+static
+NTSTATUS
+PciPdoProgramType0Bars(
+    _Inout_ PPDO_DEVICE_EXTENSION DeviceExtension,
+    _In_ PCM_RESOURCE_LIST ResourceList)
+{
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR Assigned[PCI_TYPE0_ADDRESSES];
+    BOOLEAN Used[PCI_TYPE0_ADDRESSES];
+    PCM_FULL_RESOURCE_DESCRIPTOR FullDescriptor;
+    PCI_COMMON_CONFIG *PciConfig = &DeviceExtension->PciDevice->PciConfig;
+    ULONG OriginalBars[PCI_TYPE0_ADDRESSES];
+    ULONG AssignedCount = 0;
+    ULONG FullIndex;
+    UCHAR Bar;
+    USHORT OriginalCommand;
+    USHORT DisabledCommand;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (PCI_CONFIGURATION_TYPE(PciConfig) != PCI_DEVICE_TYPE)
+        return STATUS_SUCCESS;
+
+    RtlZeroMemory(Assigned, sizeof(Assigned));
+    RtlZeroMemory(Used, sizeof(Used));
+    RtlCopyMemory(OriginalBars, PciConfig->u.type0.BaseAddresses, sizeof(OriginalBars));
+    FullDescriptor = &ResourceList->List[0];
+    for (FullIndex = 0; FullIndex < ResourceList->Count; FullIndex++)
+    {
+        PCM_PARTIAL_RESOURCE_LIST PartialList = &FullDescriptor->PartialResourceList;
+        ULONG PartialIndex;
+
+        for (PartialIndex = 0; PartialIndex < PartialList->Count; PartialIndex++)
+        {
+            PCM_PARTIAL_RESOURCE_DESCRIPTOR PartialDescriptor = &PartialList->PartialDescriptors[PartialIndex];
+
+            if (AssignedCount >= RTL_NUMBER_OF(Assigned))
+                break;
+            if (PartialDescriptor->Type == CmResourceTypeMemory &&
+                !(PartialDescriptor->Flags & CM_RESOURCE_MEMORY_WINDOW_DECODE))
+            {
+                Assigned[AssignedCount++] = PartialDescriptor;
+            }
+            else if (PartialDescriptor->Type == CmResourceTypePort &&
+                     !(PartialDescriptor->Flags & CM_RESOURCE_PORT_WINDOW_DECODE))
+            {
+                Assigned[AssignedCount++] = PartialDescriptor;
+            }
+        }
+
+        FullDescriptor = CmiGetNextResourceDescriptor(FullDescriptor);
+    }
+
+    OriginalCommand = PciConfig->Command;
+    DisabledCommand = OriginalCommand & ~(PCI_ENABLE_MEMORY_SPACE | PCI_ENABLE_IO_SPACE);
+    if (DisabledCommand != OriginalCommand &&
+        PciPdoSetBusDataByOffset(DeviceExtension, &DisabledCommand, FIELD_OFFSET(PCI_COMMON_CONFIG, Command), sizeof(DisabledCommand)) != sizeof(DisabledCommand))
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    for (Bar = 0; Bar < PCI_TYPE0_ADDRESSES;)
+    {
+        UCHAR CurrentBar = Bar;
+        UCHAR NextBar;
+        ULONGLONG Base;
+        ULONGLONG Length;
+        ULONGLONG MaximumAddress;
+        ULONGLONG AssignedBase = 0;
+        ULONGLONG AddressMask;
+        ULONGLONG BarValue;
+        ULONG Flags;
+        ULONG ResourceIndex;
+        ULONG LowPart;
+        ULONG HighPart = 0;
+        ULONG ReadLow = 0;
+        ULONG ReadHigh = 0;
+        BOOLEAN Found = FALSE;
+        BOOLEAN IsIo;
+
+        if (!PdoGetRangeLength(DeviceExtension, CurrentBar, &Base, &Length, &Flags, &NextBar, &MaximumAddress))
+        {
+            Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+            break;
+        }
+        Bar = NextBar;
+        if (Length == 0)
+            continue;
+
+        IsIo = !!(Flags & PCI_ADDRESS_IO_SPACE);
+        for (ResourceIndex = 0; ResourceIndex < AssignedCount; ResourceIndex++)
+        {
+            PCM_PARTIAL_RESOURCE_DESCRIPTOR Resource = Assigned[ResourceIndex];
+
+            if (Used[ResourceIndex])
+                continue;
+            if ((IsIo && Resource->Type != CmResourceTypePort) ||
+                (!IsIo && Resource->Type != CmResourceTypeMemory))
+            {
+                continue;
+            }
+            if (Resource->u.Memory.Length != Length)
+                continue;
+
+            AssignedBase = Resource->u.Memory.Start.QuadPart;
+            Used[ResourceIndex] = TRUE;
+            Found = TRUE;
+            break;
+        }
+
+        if (!Found)
+        {
+            if (Base == 0)
+            {
+                DPRINT1("PCI PDO: no assigned resource for BAR%u on %02x:%02x.%u\n",
+                        CurrentBar,
+                        (UCHAR)DeviceExtension->PciDevice->BusNumber,
+                        DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
+                        DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber);
+                Status = STATUS_CONFLICTING_ADDRESSES;
+                break;
+            }
+            continue;
+        }
+
+        if (AssignedBase == 0 || AssignedBase > MaximumAddress ||
+            Length - 1 > MaximumAddress - AssignedBase ||
+            (AssignedBase & (Length - 1)) != 0)
+        {
+            DPRINT1("PCI PDO: invalid BAR%u assignment 0x%I64x len 0x%I64x max 0x%I64x\n",
+                    CurrentBar, AssignedBase, Length, MaximumAddress);
+            Status = STATUS_CONFLICTING_ADDRESSES;
+            break;
+        }
+
+        AddressMask = IsIo ? PCI_ADDRESS_IO_ADDRESS_MASK_64 : PCI_ADDRESS_MEMORY_ADDRESS_MASK_64;
+        BarValue = (AssignedBase & AddressMask) | (Flags & ~AddressMask);
+        LowPart = (ULONG)BarValue;
+        HighPart = (ULONG)(BarValue >> 32);
+
+        if (PciPdoSetBusDataByOffset(DeviceExtension, &LowPart, 0x10 + CurrentBar * sizeof(ULONG), sizeof(LowPart)) != sizeof(LowPart))
+        {
+            Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+            break;
+        }
+        if (NextBar == CurrentBar + 2 &&
+            PciPdoSetBusDataByOffset(DeviceExtension, &HighPart, 0x10 + (CurrentBar + 1) * sizeof(ULONG), sizeof(HighPart)) != sizeof(HighPart))
+        {
+            Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+            break;
+        }
+
+        if (PciPdoGetBusDataByOffset(DeviceExtension, &ReadLow, 0x10 + CurrentBar * sizeof(ULONG), sizeof(ReadLow)) != sizeof(ReadLow) ||
+            (NextBar == CurrentBar + 2 &&
+             PciPdoGetBusDataByOffset(DeviceExtension, &ReadHigh, 0x10 + (CurrentBar + 1) * sizeof(ULONG), sizeof(ReadHigh)) != sizeof(ReadHigh)))
+        {
+            Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+            break;
+        }
+
+        BarValue = ((ULONGLONG)ReadHigh << 32) | ReadLow;
+        if ((BarValue & AddressMask) != AssignedBase)
+        {
+            DPRINT1("PCI PDO: BAR%u readback mismatch assigned 0x%I64x read 0x%I64x\n",
+                    CurrentBar, AssignedBase, BarValue & AddressMask);
+            Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+            break;
+        }
+
+        PciConfig->u.type0.BaseAddresses[CurrentBar] = ReadLow;
+        if (NextBar == CurrentBar + 2)
+            PciConfig->u.type0.BaseAddresses[CurrentBar + 1] = ReadHigh;
+
+        DPRINT1("PCI PDO: assigned BAR%u=0x%I64x len=0x%I64x for %02x:%02x.%u\n",
+                CurrentBar,
+                AssignedBase,
+                Length,
+                (UCHAR)DeviceExtension->PciDevice->BusNumber,
+                DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
+                DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber);
+    }
+
+    if (!NT_SUCCESS(Status))
+    {
+        ULONG RestoreBar;
+
+        for (RestoreBar = 0; RestoreBar < PCI_TYPE0_ADDRESSES; RestoreBar++)
+        {
+            if (PciPdoSetBusDataByOffset(DeviceExtension, &OriginalBars[RestoreBar], 0x10 + RestoreBar * sizeof(ULONG), sizeof(ULONG)) != sizeof(ULONG))
+                DPRINT1("PCI PDO: failed to restore BAR%lu after start failure\n", RestoreBar);
+        }
+        RtlCopyMemory(PciConfig->u.type0.BaseAddresses, OriginalBars, sizeof(OriginalBars));
+    }
+
+    if (DisabledCommand != OriginalCommand)
+    {
+        if (PciPdoSetBusDataByOffset(DeviceExtension, &OriginalCommand, FIELD_OFFSET(PCI_COMMON_CONFIG, Command), sizeof(OriginalCommand)) != sizeof(OriginalCommand) &&
+            NT_SUCCESS(Status))
+        {
+            Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        }
+    }
+
+    return Status;
+}
+
 static NTSTATUS
 PdoStartDevice(
     IN PDEVICE_OBJECT DeviceObject,
@@ -3381,8 +3608,6 @@ PdoStartDevice(
     if (!RawResList)
         return STATUS_SUCCESS;
 
-    /* TODO: Assign the other resources we get to the card */
-
     TranslatedResList = IrpSp->Parameters.StartDevice.AllocatedResourcesTranslated;
     TranslatedFullDesc = TranslatedResList ? &TranslatedResList->List[0] : NULL;
 
@@ -3411,6 +3636,10 @@ PdoStartDevice(
             return STATUS_UNSUCCESSFUL;
         }
     }
+    Status = PciPdoProgramType0Bars(DeviceExtension, RawResList);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
     PciPdoCacheMsiInfo(DeviceExtension);
     PciPdoPublishDeviceProperties(DeviceExtension);
     if (DeviceExtension->PciDevice->MsixCapability)
