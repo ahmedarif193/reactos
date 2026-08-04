@@ -1,0 +1,46 @@
+[Version]
+Signature = "$Windows NT$"
+Class = System
+ClassGUID = {4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider = %ReactOS%
+DriverVer = 08/04/2026,1.0.0.0
+
+[ControlFlags]
+ExcludeFromSelect = *
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[Manufacturer]
+%ReactOS% = ReactOS
+
+[ReactOS]
+%PowerResource.DeviceDesc% = AcpiPlat_Inst,ACPI\ACPI_PWR
+%PowerButton.DeviceDesc% = AcpiPlat_Inst,ACPI\PNP0C0C
+%SleepButton.DeviceDesc% = AcpiPlat_Inst,ACPI\PNP0C0E
+%PlatformResource.DeviceDesc% = AcpiPlat_Inst,ACPI\INT340E
+
+[AcpiPlat_Inst.NT]
+CopyFiles = AcpiPlat_CopyFiles
+
+[AcpiPlat_CopyFiles]
+acpiplat.sys
+
+[AcpiPlat_Inst.NT.Services]
+AddService = ACPIPLAT,0x00000002,AcpiPlat_Service
+
+[AcpiPlat_Service]
+DisplayName = %AcpiPlat.ServiceDesc%
+ServiceType = 1
+StartType = 3
+ErrorControl = 1
+ServiceBinary = %12%\acpiplat.sys
+LoadOrderGroup = Extended Base
+
+[Strings]
+ReactOS = "ReactOS Project"
+PowerResource.DeviceDesc = "ACPI Power Resource"
+PowerButton.DeviceDesc = "ACPI Power Button"
+SleepButton.DeviceDesc = "ACPI Sleep Button"
+PlatformResource.DeviceDesc = "ACPI Motherboard Resource"
+AcpiPlat.ServiceDesc = "ReactOS ACPI Platform Device Driver"

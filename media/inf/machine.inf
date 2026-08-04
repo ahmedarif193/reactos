@@ -44,9 +44,7 @@ HKR, , Icon,           0, "-27"
 %*PNP0C02.DeviceDesc% = NO_DRV,*PNP0C02
 %*PNP0C04.DeviceDesc% = NO_DRV,*PNP0C04
 %*PNP0C0B.DeviceDesc% = NO_DRV,*PNP0C0B
-%*PNP0C0C.DeviceDesc% = NO_DRV,*PNP0C0C
 %*PNP0C0D.DeviceDesc% = NO_DRV,*PNP0C0D
-%*PNP0C0E.DeviceDesc% = NO_DRV,*PNP0C0E
 %*PNP0C0F.DeviceDesc% = NO_DRV,*PNP0C0F
 %*PNP0C15.DeviceDesc% = NO_DRV,*PNP0C15
 
