@@ -1477,6 +1477,10 @@ static void CALLBACK waitqueue_thread_proc( void *param )
     LARGE_INTEGER now, timeout;
     DWORD num_handles;
     NTSTATUS status;
+#ifdef __REACTOS__
+    BOOLEAN duplicated_handles[MAXIMUM_WAITQUEUE_OBJECTS];
+    DWORD i;
+#endif
 
     TRACE( "starting wait queue thread\n" );
     set_thread_name(L"wine_threadpool_waitqueue");
@@ -1525,7 +1529,13 @@ static void CALLBACK waitqueue_thread_proc( void *param )
                 /* NtWaitForMultipleObjects() fails if any invalid handles are passed, and one invalid handle
                  * should not affect other waiting items. The calling app is allowed to close waitable timer
                  * handles immediately after submission, so we need a duplicate for those in particular. */
+#ifdef __REACTOS__
+                HANDLE source_handle = wait->u.wait.duped_handle ? wait->u.wait.duped_handle : wait->u.wait.handle;
+                handles[num_handles] = source_handle;
+                duplicated_handles[num_handles] = source_handle && NT_SUCCESS(NtDuplicateObject(NtCurrentProcess(), source_handle, NtCurrentProcess(), &handles[num_handles], 0, 0, DUPLICATE_SAME_ACCESS));
+#else
                 handles[num_handles] = wait->u.wait.duped_handle ? wait->u.wait.duped_handle : wait->u.wait.handle;
+#endif
                 update_serials[num_handles] = wait->update_serial;
                 num_handles++;
             }
@@ -1549,6 +1559,10 @@ static void CALLBACK waitqueue_thread_proc( void *param )
             handles[num_handles] = bucket->update_event;
             RtlLeaveCriticalSection( &waitqueue.cs );
             status = NtWaitForMultipleObjects( num_handles + 1, handles, WaitAny, bucket->alertable, &timeout );
+#ifdef __REACTOS__
+            for (i = 0; i < num_handles; ++i)
+                if (duplicated_handles[i]) NtClose( handles[i] );
+#endif
             RtlEnterCriticalSection( &waitqueue.cs );
 
             if (status >= STATUS_WAIT_0 && status < STATUS_WAIT_0 + num_handles)
