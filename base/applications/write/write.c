@@ -23,19 +23,18 @@
 #include <stdarg.h>
 
 #include <windows.h>
+#include <shlobj.h>
 #include "resources.h"
 
-static const WCHAR SZ_WORDPAD[]   = {'\\','w','o','r','d','p','a','d','.','e','x','e',0};
-
-int CALLBACK wWinMain(HINSTANCE hInstance, HINSTANCE hOldInstance, LPWSTR szCmdParagraph, int res)
+int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hOldInstance, LPSTR szCmdParagraph, int res)
 {
     WCHAR path[MAX_PATH];
     STARTUPINFOW stinf;
     PROCESS_INFORMATION info;
 
-    if (!GetSystemDirectoryW(path, MAX_PATH - 1 - lstrlenW(SZ_WORDPAD)))
+    if (FAILED(SHGetFolderPathW(NULL, CSIDL_PROGRAM_FILES, NULL, 0, path)))
 	goto failed;
-    lstrcatW(path, SZ_WORDPAD);
+    lstrcatW(path, L"\\Windows NT\\Accessories\\wordpad.exe");
 
     stinf.cb = sizeof(STARTUPINFOW);
     GetStartupInfoW(&stinf);
