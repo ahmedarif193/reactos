@@ -75,7 +75,7 @@
  85 cdecl ldap_compare_ext_sW(ptr wstr wstr wstr ptr ptr ptr)
  86 cdecl ldap_compare_sA(ptr str str str)
  87 cdecl ldap_compare_sW(ptr wstr wstr wstr)
- 88 cdecl ldap_connect(ptr ptr)
+ 88 cdecl ldap_connect(ptr ptr) WLDAP32_ldap_connect
  89 cdecl ldap_control_free(ptr) ldap_control_freeA
  90 cdecl ldap_control_freeA(ptr)
  91 cdecl ldap_control_freeW(ptr)
@@ -185,7 +185,7 @@
 195 cdecl ldap_search_ext_s(ptr str long str ptr long ptr ptr ptr long ptr) ldap_search_ext_sA
 196 cdecl ldap_search_ext_sA(ptr str long str ptr long ptr ptr ptr long ptr)
 197 cdecl ldap_escape_filter_element(str long ptr long) ldap_escape_filter_elementA
-198 stub ldap_set_dbg_flags
+198 cdecl ldap_set_dbg_flags(long)
 199 stub ldap_set_dbg_routine
 200 cdecl ldap_memfree(ptr) ldap_memfreeA
 201 cdecl ldap_startup(ptr ptr)
