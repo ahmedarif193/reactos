@@ -1285,14 +1285,23 @@ static void test_default_client_accessible_object(void)
     hr = IAccessible_get_accName(acc, vid, &str);
     ok(hr == S_OK, "got %lx\n", hr);
     /* Window names don't have keyboard shortcuts */
+#ifndef __REACTOS__
     todo_wine ok(!lstrcmpW(str, L"wnd &t &junk") ||
+#else
+    ok(!lstrcmpW(str, L"wnd &t &junk") ||
+#endif
        broken(!lstrcmpW(str, L"wnd t &junk")), /* Windows < 10 1607 */
        "name = %s\n", wine_dbgstr_w(str));
     SysFreeString(str);
 
     hr = IAccessible_get_accKeyboardShortcut(acc, vid, &str);
+#ifndef __REACTOS__
     todo_wine ok(hr == S_FALSE || broken(hr == S_OK), "got %lx\n", hr);
     todo_wine ok(str == NULL || broken(!lstrcmpW(str, L"Alt+t")), "str = %s\n", wine_dbgstr_w(str));
+#else
+    ok(hr == S_FALSE || broken(hr == S_OK), "got %lx\n", hr);
+    ok(str == NULL || broken(!lstrcmpW(str, L"Alt+t")), "str = %s\n", wine_dbgstr_w(str));
+#endif
     SysFreeString(str);
 
     V_I4(&vid) = 1;
