@@ -49,6 +49,9 @@ server_addr_t *GetAddress(const WCHAR *name, INTERNET_PORT port)
 
     TRACE("%s\n", debugstr_w(name));
 
+#ifdef __REACTOS__
+    init_winsock();
+#endif
     memset( &hints, 0, sizeof(hints) );
     hints.ai_socktype = SOCK_STREAM;
     ret = GetAddrInfoW(name, NULL, &hints, &res);
