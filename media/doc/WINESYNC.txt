@@ -145,7 +145,7 @@ dll/win32/mstask              # Synced to Wine-11.14
 dll/win32/msvcirt             # Synced to Wine-11.14
 dll/win32/msvcrt              # Synced to Wine-11.14
 dll/win32/msvcrt20            # Synced to Wine-11.14
-dll/win32/msvcrt40            # Out of sync
+dll/win32/msvcrt40            # Synced to Wine-11.14
 dll/win32/msvfw32             # Synced to Wine-11.14
 dll/win32/msvidc32            # Synced to Wine-11.14
 dll/win32/msxml               # Synced to Wine-11.14
