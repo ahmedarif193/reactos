@@ -54,12 +54,6 @@ typedef ptrdiff_t ssize_t;
 #include <stdlib.h>
 #include <sys/types.h>
 
-#ifdef __REACTOS__
-#ifndef ssize_t
-typedef long ssize_t;
-#endif
-#endif /* __REACTOS__ */
-
 /* Simplified large file handling.
 	I used to have a check here that prevents building for a library with conflicting large file setup
 	(application that uses 32 bit offsets with library that uses 64 bits).
