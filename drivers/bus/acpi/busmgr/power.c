@@ -79,7 +79,7 @@ struct acpi_power_resource
 	acpi_bus_id		name;
 	UINT32			system_level;
 	UINT32			order;
-	//struct mutex resource_lock;
+	FAST_MUTEX		resource_lock;
 	struct list_head reference;
 };
 
@@ -187,47 +187,52 @@ acpi_power_on (
 	ACPI_HANDLE handle, struct acpi_device *dev)
 {
 	int result = 0;
-	int found = 0;
 	ACPI_STATUS status = AE_OK;
 	struct acpi_power_resource *resource = NULL;
 	struct list_head *node, *next;
 	struct acpi_power_reference *ref;
+	BOOLEAN first_reference;
 
 	result = acpi_power_get_context(handle, &resource);
 	if (result)
 		return result;
 
-	//mutex_lock(&resource->resource_lock);
+	ExAcquireFastMutex(&resource->resource_lock);
 	list_for_each_safe(node, next, &resource->reference) {
 		ref = container_of(node, struct acpi_power_reference, node);
 		if (dev->handle == ref->device->handle) {
 			ACPI_DEBUG_PRINT((ACPI_DB_INFO, "Device [%s] already referenced by resource [%s]\n",
 				  dev->pnp.bus_id, resource->name));
-			found = 1;
-			break;
+			ExReleaseFastMutex(&resource->resource_lock);
+			return 0;
 		}
 	}
 
-	if (!found) {
-		ref = ExAllocatePoolWithTag(NonPagedPool,sizeof (struct acpi_power_reference),'IPCA');
-		if (!ref) {
-			ACPI_DEBUG_PRINT((ACPI_DB_INFO, "kmalloc() failed\n"));
-			//mutex_unlock(&resource->resource_lock);
-			return -1;//-ENOMEM;
-		}
-		list_add_tail(&ref->node, &resource->reference);
-		ref->device = dev;
-		ACPI_DEBUG_PRINT((ACPI_DB_INFO, "Device [%s] added to resource [%s] references\n",
-			  dev->pnp.bus_id, resource->name));
+	first_reference = list_empty(&resource->reference);
+	ref = ExAllocatePoolWithTag(NonPagedPool, sizeof(struct acpi_power_reference), 'IPCA');
+	if (!ref) {
+		ACPI_DEBUG_PRINT((ACPI_DB_INFO, "kmalloc() failed\n"));
+		ExReleaseFastMutex(&resource->resource_lock);
+		return -1;
 	}
-	//mutex_unlock(&resource->resource_lock);
+	ref->device = dev;
+	list_add_tail(&ref->node, &resource->reference);
+	ACPI_DEBUG_PRINT((ACPI_DB_INFO, "Device [%s] added to resource [%s] references\n",
+		  dev->pnp.bus_id, resource->name));
 
-	status = AcpiEvaluateObject(resource->device->handle, "_ON", NULL, NULL);
-	if (ACPI_FAILURE(status))
-		return_VALUE(-15);
+	if (first_reference) {
+		status = AcpiEvaluateObject(resource->device->handle, "_ON", NULL, NULL);
+		if (ACPI_FAILURE(status)) {
+			list_del(&ref->node);
+			ExFreePoolWithTag(ref, 'IPCA');
+			ExReleaseFastMutex(&resource->resource_lock);
+			return_VALUE(-15);
+		}
+	}
 
 	/* Update the power resource's _device_ power state */
 	resource->device->power.state = ACPI_STATE_D0;
+	ExReleaseFastMutex(&resource->resource_lock);
 
 	return 0;
 }
@@ -242,38 +247,47 @@ acpi_power_off_device (
 	ACPI_STATUS status = AE_OK;
 	struct acpi_power_resource *resource = NULL;
 	struct list_head *node, *next;
-	struct acpi_power_reference *ref;
+	struct acpi_power_reference *ref = NULL;
 
 	result = acpi_power_get_context(handle, &resource);
 	if (result)
 		return result;
 
-	//mutex_lock(&resource->resource_lock);
+	ExAcquireFastMutex(&resource->resource_lock);
 	list_for_each_safe(node, next, &resource->reference) {
 		ref = container_of(node, struct acpi_power_reference, node);
 		if (dev->handle == ref->device->handle) {
 			list_del(&ref->node);
-			ExFreePool(ref);
 			ACPI_DEBUG_PRINT((ACPI_DB_INFO, "Device [%s] removed from resource [%s] references\n",
 			    dev->pnp.bus_id, resource->name));
 			break;
 		}
+		ref = NULL;
+	}
+	if (!ref) {
+		ExReleaseFastMutex(&resource->resource_lock);
+		return 0;
 	}
 
 	if (!list_empty(&resource->reference)) {
 		ACPI_DEBUG_PRINT((ACPI_DB_INFO, "Cannot turn resource [%s] off - resource is in use\n",
 		    resource->name));
-		//mutex_unlock(&resource->resource_lock);
+		ExFreePoolWithTag(ref, 'IPCA');
+		ExReleaseFastMutex(&resource->resource_lock);
 		return 0;
 	}
-	//mutex_unlock(&resource->resource_lock);
 
 	status = AcpiEvaluateObject(resource->device->handle, "_OFF", NULL, NULL);
-	if (ACPI_FAILURE(status))
+	if (ACPI_FAILURE(status)) {
+		list_add_tail(&ref->node, &resource->reference);
+		ExReleaseFastMutex(&resource->resource_lock);
 		return -1;
+	}
 
 	/* Update the power resource's _device_ power state */
 	resource->device->power.state = ACPI_STATE_D3;
+	ExFreePoolWithTag(ref, 'IPCA');
+	ExReleaseFastMutex(&resource->resource_lock);
 
 	ACPI_DEBUG_PRINT((ACPI_DB_INFO, "Resource [%s] turned off\n",
 			  resource->name));
@@ -358,7 +372,7 @@ int acpi_enable_wakeup_device_power(struct acpi_device *dev, int sleep_state)
 	if (!dev || !dev->wakeup.flags.valid)
 		return -1;
 
-	//mutex_lock(&acpi_device_lock);
+	ExAcquireFastMutex(&dev->power_lock);
 
 	if (dev->wakeup.prepare_count++)
 		goto out;
@@ -385,7 +399,7 @@ int acpi_enable_wakeup_device_power(struct acpi_device *dev, int sleep_state)
 		dev->wakeup.prepare_count = 0;
 
  out:
-	//mutex_unlock(&acpi_device_lock);
+	ExReleaseFastMutex(&dev->power_lock);
 	return err;
 }
 
@@ -403,7 +417,7 @@ int acpi_disable_wakeup_device_power(struct acpi_device *dev)
 	if (!dev || !dev->wakeup.flags.valid)
 		return -1;
 
-	//mutex_lock(&acpi_device_lock);
+	ExAcquireFastMutex(&dev->power_lock);
 
 	if (--dev->wakeup.prepare_count > 0)
 		goto out;
@@ -432,7 +446,7 @@ int acpi_disable_wakeup_device_power(struct acpi_device *dev)
 	}
 
  out:
-	//mutex_unlock(&acpi_device_lock);
+	ExReleaseFastMutex(&dev->power_lock);
 	return err;
 }
 
@@ -558,7 +572,7 @@ acpi_power_add (
 		return_VALUE(-4);
 
 	resource->device = device;
-	//mutex_init(&resource->resource_lock);
+	ExInitializeFastMutex(&resource->resource_lock);
 	INIT_LIST_HEAD(&resource->reference);
 
 	strcpy(resource->name, device->pnp.bus_id);
@@ -596,8 +610,10 @@ acpi_power_add (
 		acpi_device_bid(device), state?"on":"off");
 
 end:
-	if (result)
-		ExFreePool(resource);
+	if (result) {
+		device->driver_data = NULL;
+		ExFreePoolWithTag(resource, 'IPCA');
+	}
 
 	return result;
 }
@@ -616,14 +632,15 @@ acpi_power_remove (
 
 	resource = acpi_driver_data(device);
 
-	//mutex_lock(&resource->resource_lock);
+	ExAcquireFastMutex(&resource->resource_lock);
 	list_for_each_safe(node, next, &resource->reference) {
 		struct acpi_power_reference *ref = container_of(node, struct acpi_power_reference, node);
 		list_del(&ref->node);
-		ExFreePool(ref);
+		ExFreePoolWithTag(ref, 'IPCA');
 	}
-	//mutex_unlock(&resource->resource_lock);
-	ExFreePool(resource);
+	ExReleaseFastMutex(&resource->resource_lock);
+	device->driver_data = NULL;
+	ExFreePoolWithTag(resource, 'IPCA');
 
 	return_VALUE(0);
 }
@@ -643,17 +660,19 @@ static int acpi_power_resume(struct acpi_device *device, int state)
 	if (result)
 		return result;
 
-	//mutex_lock(&resource->resource_lock);
+	ExAcquireFastMutex(&resource->resource_lock);
 	if (state == ACPI_POWER_RESOURCE_STATE_OFF &&
 	    !list_empty(&resource->reference)) {
 		ref = container_of(resource->reference.next, struct acpi_power_reference, node);
-		//mutex_unlock(&resource->resource_lock);
-		result = acpi_power_on(device->handle, ref->device);
-		return result;
+		UNREFERENCED_PARAMETER(ref);
+		if (ACPI_FAILURE(AcpiEvaluateObject(resource->device->handle, "_ON", NULL, NULL)))
+			result = -15;
+		else
+			resource->device->power.state = ACPI_STATE_D0;
 	}
 
-	//mutex_unlock(&resource->resource_lock);
-	return 0;
+	ExReleaseFastMutex(&resource->resource_lock);
+	return result;
 }
 
 int

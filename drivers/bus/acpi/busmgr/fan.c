@@ -201,15 +201,7 @@ static int
 acpi_fan_force_d0(
     struct acpi_device *device)
 {
-    UINT32 force_power_state;
-    int result;
-
-    force_power_state = device->flags.force_power_state;
-    device->flags.force_power_state = 1;
-    result = acpi_bus_set_power(device->handle, ACPI_STATE_D0);
-    device->flags.force_power_state = force_power_state;
-
-    return result;
+    return acpi_bus_set_power(device->handle, ACPI_STATE_D0);
 }
 
 static int
