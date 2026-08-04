@@ -1596,58 +1596,118 @@ CcInitView (
 BOOLEAN
 ExpKdbgExtFileCache(ULONG Argc, PCHAR Argv[])
 {
+    LIST_ENTRY ListHead;
     PLIST_ENTRY ListEntry;
-    UNICODE_STRING NoName = RTL_CONSTANT_STRING(L"No name for File");
+    ULONG CacheMapCount = 0;
+
+    UNREFERENCED_PARAMETER(Argv);
+    if (Argc != 1)
+    {
+        KdbpPrint("Usage: !filecache\n");
+        return TRUE;
+    }
 
     KdbpPrint("  Usage Summary (in kb)\n");
     KdbpPrint("Shared\t\tMapped\tDirty\tName\n");
-    /* No need to lock the spin lock here, we're in DBG */
-    for (ListEntry = CcCleanSharedCacheMapList.Flink;
-         ListEntry != &CcCleanSharedCacheMapList;
-         ListEntry = ListEntry->Flink)
+    if (!NT_SUCCESS(KdbpSafeReadMemory(&ListHead, &CcCleanSharedCacheMapList, sizeof(ListHead))))
     {
-        PLIST_ENTRY Vacbs;
-        ULONG Mapped = 0, Dirty = 0;
-        PROS_SHARED_CACHE_MAP SharedCacheMap;
-        PUNICODE_STRING FileName;
-        PWSTR Extra = L"";
+        KdbpPrint("!filecache: cache-map list head is unreadable.\n");
+        return TRUE;
+    }
 
-        SharedCacheMap = CONTAINING_RECORD(ListEntry, ROS_SHARED_CACHE_MAP, SharedCacheMapLinks);
+    /* KDB freezes peer processors, so the list is stable. Still use guarded
+     * snapshots: debugger commands must diagnose damaged state, not fault on
+     * it, and none of the normal Unicode formatters are safe at DISPATCH. */
+    ListEntry = ListHead.Flink;
+    while (ListEntry != &CcCleanSharedCacheMapList &&
+           ListEntry != NULL &&
+           CacheMapCount++ < 65536)
+    {
+        ROS_SHARED_CACHE_MAP SharedCacheMapSnapshot;
+        FILE_OBJECT FileObjectSnapshot;
+        FSRTL_COMMON_FCB_HEADER FcbHeaderSnapshot;
+        UNICODE_STRING FileNameSnapshot;
+        PROS_SHARED_CACHE_MAP SharedCacheMapAddress;
+        PLIST_ENTRY VacbHeadAddress;
+        LIST_ENTRY VacbHead;
+        PLIST_ENTRY VacbEntry;
+        PLIST_ENTRY NextEntry;
+        ULONG VacbCount = 0;
+        ULONG Mapped = 0, Dirty = 0;
+        BOOLEAN HaveFileName = FALSE;
+        BOOLEAN IsFastFatName = FALSE;
+
+        SharedCacheMapAddress = CONTAINING_RECORD(ListEntry, ROS_SHARED_CACHE_MAP, SharedCacheMapLinks);
+        if (!NT_SUCCESS(KdbpSafeReadMemory(&SharedCacheMapSnapshot, SharedCacheMapAddress, sizeof(SharedCacheMapSnapshot))))
+        {
+            KdbpPrint("%p\t<unreadable cache map>\n", SharedCacheMapAddress);
+            break;
+        }
+        NextEntry = SharedCacheMapSnapshot.SharedCacheMapLinks.Flink;
 
         /* Dirty size */
-        Dirty = (SharedCacheMap->DirtyPages * PAGE_SIZE) / 1024;
+        Dirty = (SharedCacheMapSnapshot.DirtyPages * PAGE_SIZE) / 1024;
 
         /* First, count for all the associated VACB */
-        for (Vacbs = SharedCacheMap->CacheMapVacbListHead.Flink;
-             Vacbs != &SharedCacheMap->CacheMapVacbListHead;
-             Vacbs = Vacbs->Flink)
+        VacbHeadAddress = &SharedCacheMapAddress->CacheMapVacbListHead;
+        VacbHead = SharedCacheMapSnapshot.CacheMapVacbListHead;
+        VacbEntry = VacbHead.Flink;
+        while (VacbEntry != VacbHeadAddress &&
+               VacbEntry != NULL &&
+               VacbCount++ < 65536)
         {
+            LIST_ENTRY VacbLinks;
+
+            if (!NT_SUCCESS(KdbpSafeReadMemory(&VacbLinks, VacbEntry, sizeof(VacbLinks))))
+                break;
             Mapped += VACB_MAPPING_GRANULARITY / 1024;
+            if (VacbLinks.Flink == VacbEntry)
+                break;
+            VacbEntry = VacbLinks.Flink;
         }
 
         /* Setup name */
-        if (SharedCacheMap->FileObject != NULL &&
-            SharedCacheMap->FileObject->FileName.Length != 0)
+        if (SharedCacheMapSnapshot.FileObject != NULL &&
+            NT_SUCCESS(KdbpSafeReadMemory(&FileObjectSnapshot, SharedCacheMapSnapshot.FileObject, sizeof(FileObjectSnapshot))))
         {
-            FileName = &SharedCacheMap->FileObject->FileName;
-        }
-        else if (SharedCacheMap->FileObject != NULL &&
-                 SharedCacheMap->FileObject->FsContext != NULL &&
-                 ((PFSRTL_COMMON_FCB_HEADER)(SharedCacheMap->FileObject->FsContext))->NodeTypeCode == 0x0502 &&
-                 ((PFSRTL_COMMON_FCB_HEADER)(SharedCacheMap->FileObject->FsContext))->NodeByteSize == 0x1F8 &&
-                 ((PUNICODE_STRING)(((PUCHAR)SharedCacheMap->FileObject->FsContext) + 0x100))->Length != 0)
-        {
-            FileName = (PUNICODE_STRING)(((PUCHAR)SharedCacheMap->FileObject->FsContext) + 0x100);
-            Extra = L" (FastFAT)";
-        }
-        else
-        {
-            FileName = &NoName;
+            if (FileObjectSnapshot.FileName.Length != 0)
+            {
+                FileNameSnapshot = FileObjectSnapshot.FileName;
+                HaveFileName = TRUE;
+            }
+            else if (FileObjectSnapshot.FsContext != NULL &&
+                     NT_SUCCESS(KdbpSafeReadMemory(&FcbHeaderSnapshot, FileObjectSnapshot.FsContext, sizeof(FcbHeaderSnapshot))) &&
+                     FcbHeaderSnapshot.NodeTypeCode == 0x0502 &&
+                     FcbHeaderSnapshot.NodeByteSize == 0x1F8 &&
+                     NT_SUCCESS(KdbpSafeReadMemory(&FileNameSnapshot, ((PUCHAR)FileObjectSnapshot.FsContext) + 0x100, sizeof(FileNameSnapshot))) &&
+                     FileNameSnapshot.Length != 0)
+            {
+                HaveFileName = TRUE;
+                IsFastFatName = TRUE;
+            }
         }
 
         /* And print */
-        KdbpPrint("%p\t%d\t%d\t%wZ%S\n", SharedCacheMap, Mapped, Dirty, FileName, Extra);
+        KdbpPrint("%p\t%lu\t%lu\t", SharedCacheMapAddress, Mapped, Dirty);
+        if (HaveFileName)
+            KdbpPrintUnicodeString(&FileNameSnapshot);
+        else
+            KdbpPrint("No name for File");
+        if (IsFastFatName)
+            KdbpPrint(" (FastFAT)");
+        KdbpPrint("\n");
+
+        if (NextEntry == ListEntry)
+        {
+            KdbpPrint("!filecache: self-linked cache-map entry %p.\n", ListEntry);
+            break;
+        }
+        ListEntry = NextEntry;
+        if (KdbpIsOutputAborted())
+            return TRUE;
     }
+    if (CacheMapCount >= 65536)
+        KdbpPrint("!filecache: cache-map enumeration stopped at 65536 entries.\n");
 
     return TRUE;
 }
