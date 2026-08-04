@@ -17,7 +17,10 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#pragma once
+#include <stdlib.h>
+
+#include <windef.h>
+#include <winuser.h>
 
 #define MAX_STRING_LEN 255
 
@@ -72,9 +75,16 @@
 #define ID_EDIT_CUT 1311
 #define ID_EDIT_PASTE 1312
 #define ID_EDIT_CLEAR 1313
-#define ID_BULLET 1314
+#define ID_BULLETONOFF 1314
+#define ID_BULLET 1315
+#define ID_NUMBERING 1316
+#define ID_LCLETTER 1317
+#define ID_UCLETTER 1318
+#define ID_LCROMAN 1319
+#define ID_UCROMAN 1320
+#define ID_LISTMENU 1325
 
-#define ID_FONTSETTINGS 1315
+#define ID_FONTSETTINGS 1330
 
 #define ID_FORMAT_BOLD 1400
 #define ID_FORMAT_ITALIC 1401
@@ -186,14 +196,10 @@
 #define IDI_WORDPAD 102
 
 #ifdef __REACTOS__
-
-#define IDI_RTFDOC  103
+#define IDI_RTFDOC 103
 #define IDC_ZOOM 104
-
 #else
-
 #define IDC_ZOOM 103
-
 #endif
 
 #define STRING_ALL_FILES 1400
