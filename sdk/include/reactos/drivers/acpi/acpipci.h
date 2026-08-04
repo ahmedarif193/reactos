@@ -44,6 +44,14 @@ DEFINE_GUID(GUID_ACPI_PCI_INTERFACE,
     CTL_CODE(FILE_DEVICE_ACPI, 0x10, METHOD_BUFFERED, FILE_READ_ACCESS | FILE_WRITE_ACCESS)
 
 /*
+ * Ask acpi.sys to transition the ACPI namespace device that corresponds to a
+ * PCI function.  This applies both _PRx power resources and _PSx methods;
+ * changing PMCSR alone is insufficient when platform power wells are gated.
+ */
+#define IOCTL_ACPI_SET_POWER_FOR_PCI \
+    CTL_CODE(FILE_DEVICE_ACPI, 0x12, METHOD_BUFFERED, FILE_READ_ACCESS | FILE_WRITE_ACCESS)
+
+/*
  * Signature for ACPI_PCI_EVAL_INPUT_BUFFER
  * 'ApcE' = ACPI PCI Eval
  */
@@ -91,6 +99,17 @@ typedef struct _ACPI_PCI_EVAL_INPUT_BUFFER {
     ULONG InputBufferSize;
 
 } ACPI_PCI_EVAL_INPUT_BUFFER, *PACPI_PCI_EVAL_INPUT_BUFFER;
+
+#define ACPI_PCI_SET_POWER_INPUT_BUFFER_SIGNATURE 'PcpA'
+
+typedef struct _ACPI_PCI_SET_POWER_INPUT_BUFFER {
+    ULONG Signature;
+    ULONG Segment;
+    ULONG Bus;
+    ULONG Device;
+    ULONG Function;
+    ULONG State;
+} ACPI_PCI_SET_POWER_INPUT_BUFFER, *PACPI_PCI_SET_POWER_INPUT_BUFFER;
 
 /*
  * Minimum size validation for ACPI_PCI_EVAL_INPUT_BUFFER

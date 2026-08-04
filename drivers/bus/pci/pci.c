@@ -399,6 +399,40 @@ PciAcpiEvalMethod(
     return Status;
 }
 
+NTSTATUS
+PciAcpiSetPower(_In_ ULONG Segment, _In_ ULONG Bus, _In_ ULONG Device, _In_ ULONG Function, _In_ ULONG State)
+{
+    ACPI_PCI_SET_POWER_INPUT_BUFFER InputBuffer;
+    KEVENT Event;
+    IO_STATUS_BLOCK IoStatusBlock;
+    PIRP Irp;
+    NTSTATUS Status;
+
+    Status = PciOpenAcpiInterface();
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlZeroMemory(&InputBuffer, sizeof(InputBuffer));
+    InputBuffer.Signature = ACPI_PCI_SET_POWER_INPUT_BUFFER_SIGNATURE;
+    InputBuffer.Segment = Segment;
+    InputBuffer.Bus = Bus;
+    InputBuffer.Device = Device;
+    InputBuffer.Function = Function;
+    InputBuffer.State = State;
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+    Irp = IoBuildDeviceIoControlRequest(IOCTL_ACPI_SET_POWER_FOR_PCI, AcpiInterfaceDeviceObject, &InputBuffer, sizeof(InputBuffer), NULL, 0, FALSE, &Event, &IoStatusBlock);
+    if (!Irp)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Status = IoCallDriver(AcpiInterfaceDeviceObject, Irp);
+    if (Status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+        Status = IoStatusBlock.Status;
+    }
+    return Status;
+}
+
 static NTSTATUS
 NTAPI
 PciDispatchDeviceControl(

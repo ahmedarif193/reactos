@@ -305,6 +305,10 @@ ACPIDispatchDeviceControl(
                 break;
             }
 
+            case IOCTL_ACPI_SET_POWER_FOR_PCI:
+                status = AcpiSetPowerForPciDeviceIoctl(fdoData, Irp);
+                break;
+
             default:
                 DPRINT("ACPI FDO: Unknown IOCTL 0x%X\n",
                        irpStack->Parameters.DeviceIoControl.IoControlCode);

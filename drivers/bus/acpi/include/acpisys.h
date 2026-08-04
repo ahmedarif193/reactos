@@ -146,6 +146,10 @@ AcpiEvalMethodForPciDeviceIoctl(
 
 NTSTATUS
 NTAPI
+AcpiSetPowerForPciDeviceIoctl(_In_ PFDO_DEVICE_DATA FdoData, _Inout_ PIRP Irp);
+
+NTSTATUS
+NTAPI
 Bus_CreateClose (
     PDEVICE_OBJECT  DeviceObject,
     PIRP            Irp

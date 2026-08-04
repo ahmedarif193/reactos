@@ -1032,3 +1032,43 @@ AcpiEvalMethodForPciDeviceIoctl(
 
     return Status;
 }
+
+NTSTATUS
+NTAPI
+AcpiSetPowerForPciDeviceIoctl(_In_ PFDO_DEVICE_DATA FdoData, _Inout_ PIRP Irp)
+{
+    PIO_STACK_LOCATION IoStack;
+    PACPI_PCI_SET_POWER_INPUT_BUFFER InputBuffer;
+    ACPI_HANDLE AcpiHandle = NULL;
+    struct acpi_device *Device;
+    int Result;
+
+    UNREFERENCED_PARAMETER(FdoData);
+
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    if (IoStack->Parameters.DeviceIoControl.InputBufferLength < sizeof(*InputBuffer) || !Irp->AssociatedIrp.SystemBuffer)
+        return STATUS_INFO_LENGTH_MISMATCH;
+
+    InputBuffer = Irp->AssociatedIrp.SystemBuffer;
+    if (InputBuffer->Signature != ACPI_PCI_SET_POWER_INPUT_BUFFER_SIGNATURE || InputBuffer->State > ACPI_STATE_D3)
+        return STATUS_INVALID_PARAMETER;
+
+    if (!AcpiFindPciDeviceInNamespace(InputBuffer->Segment, InputBuffer->Bus, InputBuffer->Device, InputBuffer->Function, &AcpiHandle))
+        return STATUS_NOT_FOUND;
+
+    Result = acpi_bus_get_device(AcpiHandle, &Device);
+    if (Result || !Device->flags.power_manageable)
+        return STATUS_NOT_SUPPORTED;
+
+    /* PMCSR D3 proves that a cached/inferred ACPI D0 cannot be trusted here. */
+    Device->flags.force_power_state = 1;
+    Result = acpi_bus_set_power(AcpiHandle, InputBuffer->State);
+    if (Result)
+    {
+        DPRINT1("ACPI: PCI %lu:%lu:%lu.%lu failed platform transition to D%lu (0x%x)\n", InputBuffer->Segment, InputBuffer->Bus, InputBuffer->Device, InputBuffer->Function, InputBuffer->State, Result);
+        return STATUS_DEVICE_POWER_FAILURE;
+    }
+
+    DPRINT1("ACPI: PCI %lu:%lu:%lu.%lu platform power is D%lu\n", InputBuffer->Segment, InputBuffer->Bus, InputBuffer->Device, InputBuffer->Function, InputBuffer->State);
+    return STATUS_SUCCESS;
+}
