@@ -2094,6 +2094,7 @@ PciPdoAppendBarRequirements(
     ULONG i;
     BOOLEAN AddedAlternative = FALSE;
     BOOLEAN HasPreferred = (Base != 0);
+    BOOLEAN IsLegacyMemoryBar = !(Flags & PCI_ADDRESS_IO_SPACE) && ((Flags & PCI_ADDRESS_MEMORY_TYPE_MASK) == PCI_TYPE_20BIT);
 
     if (Length == 0 || Length > MAXULONG)
         return Descriptor;
@@ -2135,6 +2136,12 @@ PciPdoAppendBarRequirements(
             continue;
         }
 
+        /* The root bridge also publishes the VGA and option-ROM apertures
+         * below 1 MiB.  Only a 20-bit memory BAR may be placed there; an
+         * ordinary 32/64-bit BAR must use a real PCI memory aperture. */
+        if (!(Flags & PCI_ADDRESS_IO_SPACE) && !IsLegacyMemoryBar && Minimum < 0x100000)
+            Minimum = 0x100000;
+
         if (Maximum > MaximumAddress)
             Maximum = MaximumAddress;
 
@@ -2155,7 +2162,11 @@ PciPdoAppendBarRequirements(
     /* Legacy firmware and non-ACPI buses may not publish parent apertures. */
     if (WindowCount == 0 && Descriptor < DescriptorEnd)
     {
-        PciPdoInitializeBarRequirement(Descriptor++, HasPreferred ? IO_RESOURCE_ALTERNATIVE : 0, Length, MaximumAddress, (ULONG)Length, Flags);
+        ULONGLONG Minimum = Length;
+
+        if (!(Flags & PCI_ADDRESS_IO_SPACE) && !IsLegacyMemoryBar && Minimum < 0x100000)
+            Minimum = 0x100000;
+        PciPdoInitializeBarRequirement(Descriptor++, HasPreferred ? IO_RESOURCE_ALTERNATIVE : 0, Minimum, MaximumAddress, (ULONG)Length, Flags);
     }
 
     return Descriptor;
