@@ -1,22 +1,3 @@
-/*
- * Copyright 2004 by Krzysztof Foltman
- * Copyright 2007 by Alexander N. Sørnes <alex@thehandofagony.com>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
- */
-
 #include <windef.h>
 #include <winuser.h>
 
@@ -27,48 +8,9 @@
 #define REACTOS_STR_ORIGINAL_FILENAME "wordpad.exe"
 #include <reactos/version.rc>
 
-#include <reactos/manifest_exe.rc>
-
-MAINACCELTABLE ACCELERATORS
-BEGIN
-    "1",          ID_BACK_1,          VIRTKEY, CONTROL
-    "2",          ID_BACK_2,          VIRTKEY, CONTROL
-    VK_F3,        ID_FIND_NEXT,       VIRTKEY
-    "L",          ID_ALIGN_LEFT,      VIRTKEY, CONTROL
-    "E",          ID_ALIGN_CENTER,    VIRTKEY, CONTROL
-    "R",          ID_ALIGN_RIGHT,     VIRTKEY, CONTROL
-    "F",          ID_FIND,            VIRTKEY, CONTROL
-    "H",          ID_REPLACE,         VIRTKEY, CONTROL
-    "A",          ID_EDIT_SELECTALL,  VIRTKEY, CONTROL
-    "X",          ID_EDIT_CUT,        VIRTKEY, CONTROL
-    "C",          ID_EDIT_COPY,       VIRTKEY, CONTROL
-    "Z",          ID_EDIT_UNDO,       VIRTKEY, CONTROL
-    "Y",          ID_EDIT_REDO,       VIRTKEY, CONTROL
-    "B",          ID_FORMAT_BOLD,     VIRTKEY, CONTROL
-    "I",          ID_FORMAT_ITALIC,   VIRTKEY, CONTROL
-    "U",          ID_FORMAT_UNDERLINE,VIRTKEY, CONTROL
-    "N",          ID_FILE_NEW,        VIRTKEY, CONTROL
-    "O",          ID_FILE_OPEN,       VIRTKEY, CONTROL
-    "S",          ID_FILE_SAVE,       VIRTKEY, CONTROL
-    "P",          ID_PRINT,           VIRTKEY, CONTROL
-END
-
-/* @makedep: toolbar.bmp */
-IDB_TOOLBAR BITMAP "res/toolbar.bmp"
-
-/* @makedep: formatbar.bmp */
-IDB_FORMATBAR BITMAP "res/formatbar.bmp"
-
-/* @makedep: wordpad.ico */
-IDI_WORDPAD ICON "res/wordpad.ico"
-
 /* @makedep: document.ico */
 IDI_RTFDOC ICON "res/document.ico"
 
-/* @makedep: zoom.cur */
-IDC_ZOOM CURSOR "res/zoom.cur"
-
-/* UTF-8 */
 #pragma code_page(65001)
 
 #ifdef LANGUAGE_CS_CZ
@@ -79,9 +21,6 @@ IDC_ZOOM CURSOR "res/zoom.cur"
 #endif
 #ifdef LANGUAGE_DE_DE
     #include "lang/de-DE.rc"
-#endif
-#ifdef LANGUAGE_EN_US
-    #include "lang/en-US.rc"
 #endif
 #ifdef LANGUAGE_ES_ES
     #include "lang/es-ES.rc"
