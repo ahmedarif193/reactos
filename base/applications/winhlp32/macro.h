@@ -19,8 +19,6 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#pragma once
-
 #include <stdarg.h>
 
 #include "windef.h"
@@ -28,7 +26,6 @@
 
 struct lexret {
   LPCSTR        proto;
-  BOOL          bool;
   LONG          integer;
   LPCSTR        string;
   FARPROC       function;
