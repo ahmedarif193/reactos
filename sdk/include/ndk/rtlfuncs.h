@@ -4095,7 +4095,7 @@ RtlReleaseActivationContext(
 );
 
 NTSYSAPI
-NTSTATUS
+VOID
 NTAPI
 RtlDeactivateActivationContext(
     _In_ ULONG dwFlags,
@@ -4115,7 +4115,7 @@ NTAPI
 RtlFreeThreadActivationContextStack(VOID);
 
 NTSYSAPI
-PRTL_ACTIVATION_CONTEXT_STACK_FRAME
+VOID
 FASTCALL
 RtlDeactivateActivationContextUnsafeFast(
     _In_ PRTL_CALLER_ALLOCATED_ACTIVATION_CONTEXT_STACK_FRAME_EXTENDED Frame
