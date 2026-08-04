@@ -20,8 +20,6 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#pragma once
-
 #define MAX_LANGUAGE_NUMBER     255
 #define MAX_STRING_LEN          255
 
@@ -172,6 +170,7 @@ BOOL WINHELP_CreateIndexWindow(BOOL);
 void WINHELP_DeleteBackSet(WINHELP_WINDOW*);
 HLPFILE* WINHELP_LookupHelpFile(LPCSTR lpszFile);
 HLPFILE_WINDOWINFO* WINHELP_GetWindowInfo(HLPFILE* hlpfile, LPCSTR name);
+HLPFILE_WINDOWINFO* WINHELP_GetPopupWindowInfo(HLPFILE* hlpfile, WINHELP_WINDOW* parent, LPARAM mouse);
 void WINHELP_LayoutMainWindow(WINHELP_WINDOW* win);
 WINHELP_WINDOW* WINHELP_GrabWindow(WINHELP_WINDOW*);
 BOOL WINHELP_ReleaseWindow(WINHELP_WINDOW*);
