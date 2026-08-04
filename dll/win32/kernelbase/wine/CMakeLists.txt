@@ -48,6 +48,7 @@ list(APPEND SOURCE_STATIC
     registry.c
     security.c
     string.c
+    thread.c
     version.c
     )
 
