@@ -1,0 +1,5 @@
+#define REACTOS_VERSION_DLL
+#define REACTOS_STR_FILE_DESCRIPTION  "ReactOS Intel Alder Lake GPIO Driver"
+#define REACTOS_STR_INTERNAL_NAME     "intelgpio"
+#define REACTOS_STR_ORIGINAL_FILENAME "intelgpio.sys"
+#include <reactos/version.rc>
