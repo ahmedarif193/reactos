@@ -23,6 +23,7 @@ add_executable(msvcrt_winetest
     ${PCH_SKIP_SOURCE})
 
 target_compile_definitions(msvcrt_winetest PRIVATE
+    __WINESRC__
     WINETEST_USE_DBGSTR_LONGLONG
     USE_WINE_TODOS
     USE_WIN_SKIP
