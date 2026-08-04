@@ -9,6 +9,14 @@ typedef struct _ACPI_NOTIFICATION_TARGET
     PVOID Context;
 } ACPI_NOTIFICATION_TARGET, *PACPI_NOTIFICATION_TARGET;
 
+typedef struct _ACPI_GPE_INTERFACE_CONTEXT
+{
+    ACPI_HANDLE GpeDevice;
+    ULONG GpeNumber;
+    PGPE_SERVICE_ROUTINE ServiceRoutine;
+    PVOID ServiceContext;
+} ACPI_GPE_INTERFACE_CONTEXT, *PACPI_GPE_INTERFACE_CONTEXT;
+
 #define ACPI_NOTIFY_STACK_TARGETS 4
 
 static
@@ -67,6 +75,75 @@ AcpiPdoFromContext(PVOID Context)
     }
 
     return (PPDO_DEVICE_DATA)DeviceObject->DeviceExtension;
+}
+
+static
+UINT32
+ACPI_SYSTEM_XFACE
+AcpiInterfaceGpeThunk(
+    ACPI_HANDLE GpeDevice,
+    UINT32 GpeNumber,
+    PVOID Context)
+{
+    PACPI_GPE_INTERFACE_CONTEXT GpeContext = Context;
+
+    UNREFERENCED_PARAMETER(GpeDevice);
+    UNREFERENCED_PARAMETER(GpeNumber);
+    if (GpeContext->ServiceRoutine(GpeContext, GpeContext->ServiceContext))
+        return ACPI_INTERRUPT_HANDLED;
+    return ACPI_INTERRUPT_NOT_HANDLED;
+}
+
+static
+NTSTATUS
+AcpiInterfaceConnectGpe(
+    PPDO_DEVICE_DATA DeviceData,
+    ULONG GpeNumber,
+    KINTERRUPT_MODE Mode,
+    BOOLEAN Shareable,
+    PGPE_SERVICE_ROUTINE ServiceRoutine,
+    PVOID ServiceContext,
+    PACPI_GPE_INTERFACE_CONTEXT *ObjectContext)
+{
+    PACPI_GPE_INTERFACE_CONTEXT GpeContext;
+    ACPI_STATUS Status;
+    UINT32 Type;
+
+    UNREFERENCED_PARAMETER(Shareable);
+    if (!DeviceData || !ServiceRoutine || !ObjectContext)
+        return STATUS_INVALID_PARAMETER;
+    GpeContext = ExAllocatePoolWithTag(NonPagedPool, sizeof(*GpeContext), ACPI_NOTIFY_TAG);
+    if (!GpeContext)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    GpeContext->GpeDevice = NULL;
+    GpeContext->GpeNumber = GpeNumber;
+    GpeContext->ServiceRoutine = ServiceRoutine;
+    GpeContext->ServiceContext = ServiceContext;
+    Type = Mode == Latched ? ACPI_GPE_EDGE_TRIGGERED : ACPI_GPE_LEVEL_TRIGGERED;
+    Status = AcpiInstallGpeHandler(GpeContext->GpeDevice, GpeNumber, Type, AcpiInterfaceGpeThunk, GpeContext);
+    if (ACPI_FAILURE(Status))
+    {
+        ExFreePoolWithTag(GpeContext, ACPI_NOTIFY_TAG);
+        return AcpiStatusToNtStatus(Status);
+    }
+    *ObjectContext = GpeContext;
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+AcpiInterfaceDisconnectGpe(
+    PACPI_GPE_INTERFACE_CONTEXT GpeContext)
+{
+    ACPI_STATUS Status;
+
+    if (!GpeContext)
+        return STATUS_INVALID_PARAMETER;
+    AcpiDisableGpe(GpeContext->GpeDevice, GpeContext->GpeNumber);
+    Status = AcpiRemoveGpeHandler(GpeContext->GpeDevice, GpeContext->GpeNumber, AcpiInterfaceGpeThunk);
+    if (ACPI_SUCCESS(Status) || Status == AE_NOT_EXIST)
+        ExFreePoolWithTag(GpeContext, ACPI_NOTIFY_TAG);
+    return AcpiStatusToNtStatus(Status == AE_NOT_EXIST ? AE_OK : Status);
 }
 
 VOID
@@ -272,18 +349,23 @@ AcpiInterfaceConnectVector(PDEVICE_OBJECT Context,
                            PVOID ServiceContext,
                            PVOID ObjectContext)
 {
-  UNIMPLEMENTED;
+  PPDO_DEVICE_DATA DeviceData = AcpiPdoFromContext(Context);
+  PACPI_GPE_INTERFACE_CONTEXT GpeContext;
+  NTSTATUS Status;
 
-  return STATUS_NOT_IMPLEMENTED;
+  if (!ObjectContext)
+      return STATUS_INVALID_PARAMETER;
+  Status = AcpiInterfaceConnectGpe(DeviceData, GpeNumber, Mode, Shareable, ServiceRoutine, ServiceContext, &GpeContext);
+  if (NT_SUCCESS(Status))
+      *(PVOID *)ObjectContext = GpeContext;
+  return Status;
 }
 
 NTSTATUS
 NTAPI
 AcpiInterfaceDisconnectVector(PVOID ObjectContext)
 {
-  UNIMPLEMENTED;
-
-  return STATUS_NOT_IMPLEMENTED;
+  return AcpiInterfaceDisconnectGpe(ObjectContext);
 }
 
 NTSTATUS
@@ -291,9 +373,12 @@ NTAPI
 AcpiInterfaceEnableEvent(PDEVICE_OBJECT Context,
                          PVOID ObjectContext)
 {
-  UNIMPLEMENTED;
+  PACPI_GPE_INTERFACE_CONTEXT GpeContext = ObjectContext;
 
-  return STATUS_NOT_IMPLEMENTED;
+  UNREFERENCED_PARAMETER(Context);
+  if (!GpeContext)
+      return STATUS_INVALID_PARAMETER;
+  return AcpiStatusToNtStatus(AcpiEnableGpe(GpeContext->GpeDevice, GpeContext->GpeNumber));
 }
 
 NTSTATUS
@@ -301,9 +386,12 @@ NTAPI
 AcpiInterfaceDisableEvent(PDEVICE_OBJECT Context,
                           PVOID ObjectContext)
 {
-  UNIMPLEMENTED;
+  PACPI_GPE_INTERFACE_CONTEXT GpeContext = ObjectContext;
 
-  return STATUS_NOT_IMPLEMENTED;
+  UNREFERENCED_PARAMETER(Context);
+  if (!GpeContext)
+      return STATUS_INVALID_PARAMETER;
+  return AcpiStatusToNtStatus(AcpiDisableGpe(GpeContext->GpeDevice, GpeContext->GpeNumber));
 }
 
 NTSTATUS
@@ -311,9 +399,12 @@ NTAPI
 AcpiInterfaceClearStatus(PDEVICE_OBJECT Context,
                          PVOID ObjectContext)
 {
-  UNIMPLEMENTED;
+  PACPI_GPE_INTERFACE_CONTEXT GpeContext = ObjectContext;
 
-  return STATUS_NOT_IMPLEMENTED;
+  UNREFERENCED_PARAMETER(Context);
+  if (!GpeContext)
+      return STATUS_INVALID_PARAMETER;
+  return AcpiStatusToNtStatus(AcpiClearGpe(GpeContext->GpeDevice, GpeContext->GpeNumber));
 }
 
 /*
@@ -351,16 +442,7 @@ AcpiInterface2ConnectVector(
     PVOID ServiceContext,
     PVOID *ObjectContext)
 {
-    UNREFERENCED_PARAMETER(Context);
-    UNREFERENCED_PARAMETER(GpeNumber);
-    UNREFERENCED_PARAMETER(Mode);
-    UNREFERENCED_PARAMETER(Shareable);
-    UNREFERENCED_PARAMETER(ServiceRoutine);
-    UNREFERENCED_PARAMETER(ServiceContext);
-    UNREFERENCED_PARAMETER(ObjectContext);
-
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    return AcpiInterfaceConnectGpe(AcpiPdoFromContext2(Context), GpeNumber, Mode, Shareable, ServiceRoutine, ServiceContext, (PACPI_GPE_INTERFACE_CONTEXT *)ObjectContext);
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -373,10 +455,7 @@ AcpiInterface2DisconnectVector(
     PVOID ObjectContext)
 {
     UNREFERENCED_PARAMETER(Context);
-    UNREFERENCED_PARAMETER(ObjectContext);
-
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    return AcpiInterfaceDisconnectGpe(ObjectContext);
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -388,11 +467,12 @@ AcpiInterface2EnableEvent(
     PVOID Context,
     PVOID ObjectContext)
 {
-    UNREFERENCED_PARAMETER(Context);
-    UNREFERENCED_PARAMETER(ObjectContext);
+    PACPI_GPE_INTERFACE_CONTEXT GpeContext = ObjectContext;
 
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    UNREFERENCED_PARAMETER(Context);
+    if (!GpeContext)
+        return STATUS_INVALID_PARAMETER;
+    return AcpiStatusToNtStatus(AcpiEnableGpe(GpeContext->GpeDevice, GpeContext->GpeNumber));
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -404,11 +484,12 @@ AcpiInterface2DisableEvent(
     PVOID Context,
     PVOID ObjectContext)
 {
-    UNREFERENCED_PARAMETER(Context);
-    UNREFERENCED_PARAMETER(ObjectContext);
+    PACPI_GPE_INTERFACE_CONTEXT GpeContext = ObjectContext;
 
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    UNREFERENCED_PARAMETER(Context);
+    if (!GpeContext)
+        return STATUS_INVALID_PARAMETER;
+    return AcpiStatusToNtStatus(AcpiDisableGpe(GpeContext->GpeDevice, GpeContext->GpeNumber));
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -420,11 +501,12 @@ AcpiInterface2ClearStatus(
     PVOID Context,
     PVOID ObjectContext)
 {
-    UNREFERENCED_PARAMETER(Context);
-    UNREFERENCED_PARAMETER(ObjectContext);
+    PACPI_GPE_INTERFACE_CONTEXT GpeContext = ObjectContext;
 
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    UNREFERENCED_PARAMETER(Context);
+    if (!GpeContext)
+        return STATUS_INVALID_PARAMETER;
+    return AcpiStatusToNtStatus(AcpiClearGpe(GpeContext->GpeDevice, GpeContext->GpeNumber));
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
