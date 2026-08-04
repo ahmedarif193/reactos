@@ -1525,6 +1525,9 @@ int CDECL __STRINGTOLD_L( _LDOUBLE *value, char **endptr,
     pthreadlocinfo locinfo;
     const char *beg, *p;
     int err, ret = 0;
+#ifdef __REACTOS__
+    int parsed_exp;
+#endif
     struct fpnum fp;
 
     if (flags) FIXME("flags not supported: %x\n", flags);
@@ -1540,11 +1543,18 @@ int CDECL __STRINGTOLD_L( _LDOUBLE *value, char **endptr,
     beg = p;
 
     fp = fpnum_parse(strtod_str_get, strtod_str_unget, &p, locinfo, TRUE);
+#ifdef __REACTOS__
+    parsed_exp = fp.exp;
+#endif
     if (endptr) *endptr = (p == beg ? (char*)str : (char*)p);
     if (p == beg) ret = 4;
 
     err = fpnum_ldouble(&fp, d);
+#ifdef __REACTOS__
+    if (err) ret = (d->exp & 0x7fff ? 2 : parsed_exp == INT_MIN ? 1 : 0);
+#else
     if (err) ret = (d->exp & 0x7fff ? 2 : 1);
+#endif
     return ret;
 }
 
