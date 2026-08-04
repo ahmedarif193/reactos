@@ -83,7 +83,9 @@ DsRolepGetBasicInfo(
     Buffer->MachineRole = DsRole_RoleStandaloneWorkstation;
     Buffer->DomainNameFlat = (LPWSTR)((LPBYTE)Buffer +
                                       sizeof(DSROLER_PRIMARY_DOMAIN_INFO_BASIC));
-    wcscpy(Buffer->DomainNameFlat, PolicyInfo->PolicyAccountDomainInfo.DomainName.Buffer);
+    if (PolicyInfo->PolicyAccountDomainInfo.DomainName.Length)
+        RtlCopyMemory(Buffer->DomainNameFlat, PolicyInfo->PolicyAccountDomainInfo.DomainName.Buffer, PolicyInfo->PolicyAccountDomainInfo.DomainName.Length);
+    Buffer->DomainNameFlat[PolicyInfo->PolicyAccountDomainInfo.DomainName.Length / sizeof(WCHAR)] = UNICODE_NULL;
 
     LsaIFree_LSAPR_POLICY_INFORMATION(PolicyAccountDomainInformation,
                                       PolicyInfo);
