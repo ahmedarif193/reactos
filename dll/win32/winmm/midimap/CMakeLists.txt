@@ -4,6 +4,7 @@ spec2def(midimap.dll midimap.spec)
 add_library(midimap MODULE
     midimap.c
     midimap.rc
+    ${CMAKE_CURRENT_BINARY_DIR}/midimap_stubs.c
     ${CMAKE_CURRENT_BINARY_DIR}/midimap.def)
 
 set_module_type(midimap win32dll UNICODE)
