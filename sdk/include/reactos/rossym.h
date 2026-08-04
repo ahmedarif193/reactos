@@ -156,6 +156,13 @@ BOOLEAN RosSymGetAddressInformation(PROSSYM_INFO RosSymInfo,
                                     ULONG *LineNumber,
                                     char *FileName,
                                     char *FunctionName);
+
+/*
+ * Bounded variant for debugger and crash-path consumers.  The original API
+ * predates sized string buffers and is retained for source compatibility.
+ * SymbolAddress receives the RVA of the selected line record when requested.
+ */
+BOOLEAN RosSymGetAddressInformationEx(PROSSYM_INFO RosSymInfo, ULONG_PTR RelativeAddress, ULONG *SymbolAddress, ULONG *LineNumber, char *FileName, ULONG FileNameLength, char *FunctionName, ULONG FunctionNameLength);
 #endif
 VOID RosSymFreeInfo(PROSSYM_LINEINFO RosSymLineInfo);
 VOID RosSymDelete(PROSSYM_INFO RosSymInfo);
