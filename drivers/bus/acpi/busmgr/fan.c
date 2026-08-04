@@ -21,6 +21,24 @@ ACPI_MODULE_NAME               ("acpi_fan")
 #define ACPI_FAN_FPS_TRIP_POINT 1
 #define ACPI_FAN_FPS_SPEED      2
 #define ACPI_FAN_MAX_DEVICES    32
+#define ACPI_FAN_MAX_REQUESTS   32
+#define ACPI_FAN_LEVEL_OFF      (-1)
+#define ACPI_FAN_LEVEL_MAXIMUM  10
+
+typedef struct _ACPI_FAN_REQUEST
+{
+    PVOID Source;
+    LONG Level;
+} ACPI_FAN_REQUEST, *PACPI_FAN_REQUEST;
+
+typedef struct _ACPI_FAN_CONTEXT
+{
+    struct acpi_device *Device;
+    FAST_MUTEX PolicyLock;
+    ACPI_FAN_REQUEST Requests[ACPI_FAN_MAX_REQUESTS];
+    ULONG RequestCount;
+    LONG AppliedLevel;
+} ACPI_FAN_CONTEXT, *PACPI_FAN_CONTEXT;
 
 static int acpi_fan_add(struct acpi_device *device);
 static int acpi_fan_remove(struct acpi_device *device, int type);
@@ -36,8 +54,8 @@ static struct acpi_driver acpi_fan_driver = {
 };
 
 static FAST_MUTEX acpi_fan_list_lock;
-static ACPI_HANDLE acpi_fan_handles[ACPI_FAN_MAX_DEVICES];
-static ULONG acpi_fan_handle_count;
+static PACPI_FAN_CONTEXT acpi_fan_contexts[ACPI_FAN_MAX_DEVICES];
+static ULONG acpi_fan_context_count;
 
 static BOOLEAN
 acpi_fan_has_advanced_control(
@@ -48,9 +66,7 @@ acpi_fan_has_advanced_control(
     UINT32 i;
 
     for (i = 0; i < sizeof(methods) / sizeof(methods[0]); i++) {
-        if (ACPI_FAILURE(AcpiGetHandle(handle,
-                                      (ACPI_STRING)methods[i],
-                                      &method))) {
+        if (ACPI_FAILURE(AcpiGetHandle(handle, (ACPI_STRING)methods[i], &method))) {
             return FALSE;
         }
     }
@@ -182,6 +198,63 @@ end:
 }
 
 static ACPI_STATUS
+acpi_fan_get_trip_control(
+    ACPI_HANDLE handle,
+    ULONG level,
+    UINT64 *control)
+{
+    ACPI_BUFFER buffer = {ACPI_ALLOCATE_BUFFER, NULL};
+    ACPI_OBJECT *fps;
+    ACPI_OBJECT *state;
+    ACPI_OBJECT *elements;
+    ACPI_STATUS status;
+    UINT32 i;
+    UINT32 j;
+
+    if (level >= ACPI_FAN_LEVEL_MAXIMUM)
+        return AE_BAD_PARAMETER;
+
+    status = AcpiEvaluateObject(handle, "_FPS", NULL, &buffer);
+    if (ACPI_FAILURE(status))
+        goto end;
+
+    fps = (ACPI_OBJECT *)buffer.Pointer;
+    if (!fps || fps->Type != ACPI_TYPE_PACKAGE || fps->Package.Count < 2 || fps->Package.Elements[0].Type != ACPI_TYPE_INTEGER || fps->Package.Elements[0].Integer.Value != 0) {
+        status = AE_BAD_DATA;
+        goto end;
+    }
+
+    status = AE_NOT_FOUND;
+    for (i = 1; i < fps->Package.Count; i++) {
+        state = &fps->Package.Elements[i];
+        if (state->Type != ACPI_TYPE_PACKAGE || state->Package.Count < ACPI_FAN_FPS_COUNT) {
+            status = AE_BAD_DATA;
+            break;
+        }
+
+        elements = state->Package.Elements;
+        for (j = 0; j < ACPI_FAN_FPS_COUNT; j++) {
+            if (elements[j].Type != ACPI_TYPE_INTEGER || elements[j].Integer.Value > ACPI_UINT32_MAX) {
+                status = AE_BAD_DATA;
+                break;
+            }
+        }
+        if (ACPI_FAILURE(status) && status != AE_NOT_FOUND)
+            break;
+        if (elements[ACPI_FAN_FPS_TRIP_POINT].Integer.Value != level)
+            continue;
+        *control = elements[ACPI_FAN_FPS_CONTROL].Integer.Value;
+        status = AE_OK;
+        break;
+    }
+
+end:
+    if (buffer.Pointer)
+        AcpiOsFree(buffer.Pointer);
+    return status;
+}
+
+static ACPI_STATUS
 acpi_fan_set_level(
     ACPI_HANDLE handle,
     UINT64 control)
@@ -198,109 +271,253 @@ acpi_fan_set_level(
 }
 
 static int
-acpi_fan_force_d0(
-    struct acpi_device *device)
+acpi_fan_apply_level_locked(
+    PACPI_FAN_CONTEXT context,
+    LONG level)
 {
-    return acpi_bus_set_power(device->handle, ACPI_STATE_D0);
+    struct acpi_device *device = context->Device;
+    ACPI_STATUS status = AE_NOT_FOUND;
+    BOOLEAN fine_grain = FALSE;
+    UINT64 control = 0;
+    LONG applied_level = level;
+    int result;
+
+    if (level < ACPI_FAN_LEVEL_OFF || level > ACPI_FAN_LEVEL_MAXIMUM)
+        return_VALUE(-1);
+    if (context->AppliedLevel == level)
+        return_VALUE(0);
+
+    if (acpi_fan_has_advanced_control(device->handle)) {
+        if (level == ACPI_FAN_LEVEL_OFF) {
+            status = acpi_fan_set_level(device->handle, 0);
+        } else if (level == ACPI_FAN_LEVEL_MAXIMUM) {
+            status = acpi_fan_get_fine_grain(device->handle, &fine_grain);
+            if (ACPI_SUCCESS(status)) {
+                if (fine_grain)
+                    control = ACPI_FAN_MAX_PERCENT;
+                else
+                    status = acpi_fan_get_max_control(device->handle, &control);
+            }
+            if (ACPI_SUCCESS(status))
+                status = acpi_fan_set_level(device->handle, control);
+        } else {
+            status = acpi_fan_get_trip_control(device->handle, (ULONG)level, &control);
+            if (ACPI_SUCCESS(status)) {
+                status = acpi_fan_set_level(device->handle, control);
+            } else {
+                status = acpi_fan_get_max_control(device->handle, &control);
+                if (ACPI_SUCCESS(status))
+                    status = acpi_fan_set_level(device->handle, control);
+                applied_level = ACPI_FAN_LEVEL_MAXIMUM;
+            }
+        }
+
+        if (ACPI_SUCCESS(status)) {
+            context->AppliedLevel = applied_level;
+            DPRINT1("ACPI: Fan [%s] set to thermal level %ld with _FSL(%lu)\n",
+                    acpi_device_bid(device), level, (ULONG)control);
+            return_VALUE(0);
+        }
+
+        DPRINT1("ACPI: Fan [%s] advanced control failed: %s; falling back to D%u\n",
+                acpi_device_bid(device), AcpiFormatException(status),
+                level == ACPI_FAN_LEVEL_OFF ? ACPI_STATE_D3 : ACPI_STATE_D0);
+    }
+
+    result = acpi_bus_set_power(device->handle, level == ACPI_FAN_LEVEL_OFF ? ACPI_STATE_D3 : ACPI_STATE_D0);
+    if (result) {
+        DPRINT1("ACPI: Fan [%s] could not be set to D%u: 0x%x\n",
+                acpi_device_bid(device),
+                level == ACPI_FAN_LEVEL_OFF ? ACPI_STATE_D3 : ACPI_STATE_D0,
+                result);
+        return_VALUE(-15);
+    }
+
+    context->AppliedLevel = level;
+    DPRINT1("ACPI: Fan [%s] set to D%u for thermal level %ld\n",
+            acpi_device_bid(device),
+            level == ACPI_FAN_LEVEL_OFF ? ACPI_STATE_D3 : ACPI_STATE_D0,
+            level);
+    return_VALUE(0);
 }
 
 static int
 acpi_fan_force_device_maximum(
-    struct acpi_device *device)
+    PACPI_FAN_CONTEXT context)
 {
-    ACPI_STATUS status = AE_NOT_FOUND;
-    BOOLEAN fine_grain = FALSE;
-    UINT64 control = 0;
-    int result;
-
-    if (!device)
+    if (!context || !context->Device)
         return_VALUE(-1);
+    context->AppliedLevel = ACPI_FAN_LEVEL_OFF;
+    return_VALUE(acpi_fan_apply_level_locked(context, ACPI_FAN_LEVEL_MAXIMUM));
+}
 
-    if (acpi_fan_has_advanced_control(device->handle)) {
-        status = acpi_fan_get_fine_grain(device->handle, &fine_grain);
-        if (ACPI_SUCCESS(status)) {
-            if (fine_grain) {
-                control = ACPI_FAN_MAX_PERCENT;
-            } else {
-                status = acpi_fan_get_max_control(device->handle, &control);
-            }
-        }
+static PACPI_FAN_CONTEXT
+acpi_fan_acquire_context(
+    ACPI_HANDLE handle)
+{
+    PACPI_FAN_CONTEXT context = NULL;
+    ULONG i;
 
-        if (ACPI_SUCCESS(status))
-            status = acpi_fan_set_level(device->handle, control);
-
-        if (ACPI_SUCCESS(status)) {
-            DPRINT1("ACPI: Fan [%s] forced to maximum with _FSL(%lu)\n",
-                    acpi_device_bid(device), (ULONG)control);
-            return_VALUE(0);
-        }
-
-        DPRINT1("ACPI: Fan [%s] advanced control failed: %s; "
-                "falling back to D0\n",
-                acpi_device_bid(device), AcpiFormatException(status));
+    ExAcquireFastMutex(&acpi_fan_list_lock);
+    for (i = 0; i < acpi_fan_context_count; i++) {
+        if (acpi_fan_contexts[i]->Device->handle != handle)
+            continue;
+        context = acpi_fan_contexts[i];
+        ExAcquireFastMutex(&context->PolicyLock);
+        break;
     }
+    ExReleaseFastMutex(&acpi_fan_list_lock);
+    return context;
+}
 
-    result = acpi_fan_force_d0(device);
-    if (result) {
-        DPRINT1("ACPI: Fan [%s] could not be forced to D0: 0x%x\n",
-                acpi_device_bid(device), result);
-        return_VALUE(-15);
+static LONG
+acpi_fan_effective_level(
+    PACPI_FAN_CONTEXT context)
+{
+    LONG level = ACPI_FAN_LEVEL_OFF;
+    ULONG i;
+
+    for (i = 0; i < context->RequestCount; i++) {
+        if (context->Requests[i].Level == ACPI_FAN_LEVEL_MAXIMUM)
+            return ACPI_FAN_LEVEL_MAXIMUM;
+        if (level == ACPI_FAN_LEVEL_OFF || context->Requests[i].Level < level)
+            level = context->Requests[i].Level;
     }
+    return level;
+}
 
-    DPRINT1("ACPI: Fan [%s] forced to D0\n", acpi_device_bid(device));
-    return_VALUE(0);
+static int
+acpi_fan_update_request_locked(
+    PACPI_FAN_CONTEXT context,
+    PVOID source,
+    LONG level)
+{
+    ULONG index;
+
+    if (!source || level < ACPI_FAN_LEVEL_OFF || level > ACPI_FAN_LEVEL_MAXIMUM)
+        return_VALUE(-1);
+    for (index = 0; index < context->RequestCount; index++) {
+        if (context->Requests[index].Source == source)
+            break;
+    }
+    if (level == ACPI_FAN_LEVEL_OFF) {
+        if (index < context->RequestCount) {
+            context->RequestCount--;
+            context->Requests[index] = context->Requests[context->RequestCount];
+            RtlZeroMemory(&context->Requests[context->RequestCount], sizeof(context->Requests[0]));
+        }
+    } else if (index < context->RequestCount) {
+        context->Requests[index].Level = level;
+    } else {
+        if (context->RequestCount >= ACPI_FAN_MAX_REQUESTS)
+            return_VALUE(-12);
+        context->Requests[context->RequestCount].Source = source;
+        context->Requests[context->RequestCount].Level = level;
+        context->RequestCount++;
+    }
+    return_VALUE(acpi_fan_apply_level_locked(context, acpi_fan_effective_level(context)));
 }
 
 int
 acpi_fan_force_maximum(
     ACPI_HANDLE handle)
 {
-    struct acpi_device *device = NULL;
+    PACPI_FAN_CONTEXT context;
+    int result;
 
-    if (!handle || acpi_bus_get_device(handle, &device) || !device)
+    if (!handle)
         return_VALUE(-1);
-    return_VALUE(acpi_fan_force_device_maximum(device));
+    context = acpi_fan_acquire_context(handle);
+    if (!context)
+        return_VALUE(-1);
+    result = acpi_fan_force_device_maximum(context);
+    ExReleaseFastMutex(&context->PolicyLock);
+    return_VALUE(result);
 }
 
 void
 acpi_fan_force_all_maximum(void)
 {
-    ACPI_HANDLE handles[ACPI_FAN_MAX_DEVICES];
-    ULONG count;
     ULONG i;
 
     ExAcquireFastMutex(&acpi_fan_list_lock);
-    count = acpi_fan_handle_count;
-    RtlCopyMemory(handles, acpi_fan_handles, count * sizeof(handles[0]));
+    for (i = 0; i < acpi_fan_context_count; i++) {
+        ExAcquireFastMutex(&acpi_fan_contexts[i]->PolicyLock);
+        acpi_fan_force_device_maximum(acpi_fan_contexts[i]);
+        ExReleaseFastMutex(&acpi_fan_contexts[i]->PolicyLock);
+    }
     ExReleaseFastMutex(&acpi_fan_list_lock);
+}
 
-    for (i = 0; i < count; i++)
-        acpi_fan_force_maximum(handles[i]);
+int
+acpi_fan_set_thermal_level(
+    ACPI_HANDLE handle,
+    PVOID source,
+    LONG level)
+{
+    PACPI_FAN_CONTEXT context;
+    int result;
+
+    context = acpi_fan_acquire_context(handle);
+    if (!context)
+        return_VALUE(-1);
+    result = acpi_fan_update_request_locked(context, source, level);
+    ExReleaseFastMutex(&context->PolicyLock);
+    return_VALUE(result);
+}
+
+void
+acpi_fan_set_all_thermal_levels(
+    PVOID source,
+    LONG level)
+{
+    ULONG i;
+
+    ExAcquireFastMutex(&acpi_fan_list_lock);
+    for (i = 0; i < acpi_fan_context_count; i++) {
+        ExAcquireFastMutex(&acpi_fan_contexts[i]->PolicyLock);
+        acpi_fan_update_request_locked(acpi_fan_contexts[i], source, level);
+        ExReleaseFastMutex(&acpi_fan_contexts[i]->PolicyLock);
+    }
+    ExReleaseFastMutex(&acpi_fan_list_lock);
 }
 
 static int
 acpi_fan_add(
     struct acpi_device *device)
 {
-    ULONG i;
+    PACPI_FAN_CONTEXT context;
     int result;
 
     if (!device)
         return_VALUE(-1);
 
+    context = ExAllocatePoolWithTag(NonPagedPool, sizeof(*context), 'naFA');
+    if (!context)
+        return_VALUE(-12);
+    RtlZeroMemory(context, sizeof(*context));
+    context->Device = device;
+    context->AppliedLevel = ACPI_FAN_LEVEL_OFF;
+    ExInitializeFastMutex(&context->PolicyLock);
+
     sprintf(acpi_device_name(device), "%s", ACPI_FAN_DEVICE_NAME);
     sprintf(acpi_device_class(device), "%s", ACPI_FAN_CLASS);
-    result = acpi_fan_force_device_maximum(device);
-    if (result)
+    ExAcquireFastMutex(&context->PolicyLock);
+    result = acpi_fan_force_device_maximum(context);
+    ExReleaseFastMutex(&context->PolicyLock);
+    if (result) {
+        ExFreePoolWithTag(context, 'naFA');
         return_VALUE(result);
+    }
 
     ExAcquireFastMutex(&acpi_fan_list_lock);
-    for (i = 0; i < acpi_fan_handle_count; i++) {
-        if (acpi_fan_handles[i] == device->handle)
-            break;
+    if (acpi_fan_context_count >= ACPI_FAN_MAX_DEVICES) {
+        ExReleaseFastMutex(&acpi_fan_list_lock);
+        ExFreePoolWithTag(context, 'naFA');
+        return_VALUE(-12);
     }
-    if (i == acpi_fan_handle_count && acpi_fan_handle_count < ACPI_FAN_MAX_DEVICES)
-        acpi_fan_handles[acpi_fan_handle_count++] = device->handle;
+    acpi_fan_contexts[acpi_fan_context_count++] = context;
+    device->driver_data = context;
     ExReleaseFastMutex(&acpi_fan_list_lock);
     return_VALUE(0);
 }
@@ -310,28 +527,42 @@ acpi_fan_remove(
     struct acpi_device *device,
     int type)
 {
+    PACPI_FAN_CONTEXT context;
+    BOOLEAN found = FALSE;
     ULONG i;
 
     UNREFERENCED_PARAMETER(type);
 
-    if (!device)
+    if (!device || !device->driver_data)
         return_VALUE(-1);
+    context = device->driver_data;
 
     ExAcquireFastMutex(&acpi_fan_list_lock);
-    for (i = 0; i < acpi_fan_handle_count; i++) {
-        if (acpi_fan_handles[i] != device->handle)
+    for (i = 0; i < acpi_fan_context_count; i++) {
+        if (acpi_fan_contexts[i] != context)
             continue;
-        acpi_fan_handle_count--;
-        acpi_fan_handles[i] = acpi_fan_handles[acpi_fan_handle_count];
-        acpi_fan_handles[acpi_fan_handle_count] = NULL;
+        ExAcquireFastMutex(&context->PolicyLock);
+        acpi_fan_context_count--;
+        acpi_fan_contexts[i] = acpi_fan_contexts[acpi_fan_context_count];
+        acpi_fan_contexts[acpi_fan_context_count] = NULL;
+        found = TRUE;
         break;
     }
     ExReleaseFastMutex(&acpi_fan_list_lock);
+
+    if (!found) {
+        DPRINT1("ACPI: Fan [%s] removal context was not registered\n", acpi_device_bid(device));
+        return_VALUE(-1);
+    }
 
     /*
      * This is a fail-safe driver. Do not lower or disable cooling when the
      * driver is detached.
      */
+    acpi_fan_force_device_maximum(context);
+    ExReleaseFastMutex(&context->PolicyLock);
+    device->driver_data = NULL;
+    ExFreePoolWithTag(context, 'naFA');
     return_VALUE(0);
 }
 
@@ -341,8 +572,8 @@ acpi_fan_init(void)
     int result;
 
     ExInitializeFastMutex(&acpi_fan_list_lock);
-    acpi_fan_handle_count = 0;
-    RtlZeroMemory(acpi_fan_handles, sizeof(acpi_fan_handles));
+    acpi_fan_context_count = 0;
+    RtlZeroMemory(acpi_fan_contexts, sizeof(acpi_fan_contexts));
     result = acpi_bus_register_driver(&acpi_fan_driver);
     if (result < 0)
         return_VALUE(-15);
