@@ -194,19 +194,14 @@ int acpi_bus_get_private_data(ACPI_HANDLE handle, void **data)
                                  Power Management
    -------------------------------------------------------------------------- */
 
-int
-acpi_bus_get_power (
-	ACPI_HANDLE		handle,
-	int			*state)
+static int
+acpi_bus_get_power_locked(
+	struct acpi_device *device,
+	int *state)
 {
 	int			result = 0;
 	ACPI_STATUS             status = 0;
-	struct acpi_device	*device = NULL;
 	unsigned long long		psc = 0;
-
-	result = acpi_bus_get_device(handle, &device);
-	if (result)
-		return_VALUE(result);
 
 	*state = ACPI_STATE_UNKNOWN;
 
@@ -244,6 +239,25 @@ acpi_bus_get_power (
 	return_VALUE(0);
 }
 
+int
+acpi_bus_get_power(
+	ACPI_HANDLE handle,
+	int *state)
+{
+	struct acpi_device *device = NULL;
+	int result;
+
+	if (!state)
+		return_VALUE(AE_BAD_PARAMETER);
+	result = acpi_bus_get_device(handle, &device);
+	if (result)
+		return_VALUE(result);
+	ExAcquireFastMutex(&device->power_lock);
+	result = acpi_bus_get_power_locked(device, state);
+	ExReleaseFastMutex(&device->power_lock);
+	return_VALUE(result);
+}
+
 
 int
 acpi_bus_set_power (
@@ -262,12 +276,14 @@ acpi_bus_set_power (
 
 	if ((state < ACPI_STATE_D0) || (state > ACPI_STATE_D3))
 		return_VALUE(AE_BAD_PARAMETER);
+	ExAcquireFastMutex(&device->power_lock);
 
 	/* Make sure this is a valid target state */
 
 	if (!device->flags.power_manageable) {
 		DPRINT1( "Device is not power manageable\n");
-		return_VALUE(AE_NOT_FOUND);
+		result = AE_NOT_FOUND;
+		goto end;
 	}
 	/*
 	 * Get device's current power state
@@ -283,20 +299,24 @@ acpi_bus_set_power (
 		 * So if the acpi_power_nocheck is set, it is unnecessary to
 		 * get the power state by calling acpi_bus_get_power.
 		 */
-		acpi_bus_get_power(device->handle, &device->power.state);
+		result = acpi_bus_get_power_locked(device, &device->power.state);
+		if (result)
+			goto end;
 	//}
 
 	if ((state == device->power.state) && !device->flags.force_power_state) {
 		DPRINT1("Device is already at D%d\n", state);
-		return 0;
+		goto end;
 	}
 	if (!device->power.states[state].flags.valid) {
 		DPRINT1( "Device does not support D%d\n", state);
-		return AE_NOT_FOUND;
+		result = AE_NOT_FOUND;
+		goto end;
 	}
 	if (device->parent && (state < device->parent->power.state)) {
 		DPRINT1( "Cannot set device to a higher-powered state than parent\n");
-		return AE_NOT_FOUND;
+		result = AE_NOT_FOUND;
+		goto end;
 	}
 
 	/*
@@ -338,6 +358,7 @@ acpi_bus_set_power (
 	}
 
 end:
+	ExReleaseFastMutex(&device->power_lock);
 	if (result)
 		DPRINT( "Error transitioning device [%s] to D%d\n",
 			device->pnp.bus_id, state);
@@ -1154,6 +1175,7 @@ acpi_bus_add (
 		return_VALUE(-12);
 	}
 	memset(device, 0, sizeof(struct acpi_device));
+	ExInitializeFastMutex(&device->power_lock);
 
 	device->handle = handle;
 	device->parent = parent;
