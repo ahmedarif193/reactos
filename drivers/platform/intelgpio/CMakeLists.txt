@@ -1,0 +1,5 @@
+add_library(intelgpio MODULE intelgpio.c intelgpio.rc)
+set_module_type(intelgpio kernelmodedriver)
+add_importlibs(intelgpio ntoskrnl hal)
+add_cd_file(TARGET intelgpio DESTINATION reactos/system32/drivers FOR all)
+add_driver_inf(intelgpio intelgpio.inf)

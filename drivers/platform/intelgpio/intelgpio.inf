@@ -1,0 +1,40 @@
+[Version]
+Signature = "$Windows NT$"
+Class = System
+ClassGUID = {4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider = %ReactOS%
+DriverVer = 08/04/2026,1.0.0.0
+
+[ControlFlags]
+ExcludeFromSelect = *
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[Manufacturer]
+%ReactOS% = ReactOS
+
+[ReactOS]
+%IntelGpio.DeviceDesc% = IntelGpio_Inst,ACPI\INTC1057
+
+[IntelGpio_Inst.NT]
+CopyFiles = IntelGpio_CopyFiles
+
+[IntelGpio_CopyFiles]
+intelgpio.sys
+
+[IntelGpio_Inst.NT.Services]
+AddService = INTELGPIO,0x00000002,IntelGpio_Service
+
+[IntelGpio_Service]
+DisplayName = %IntelGpio.ServiceDesc%
+ServiceType = 1
+StartType = 3
+ErrorControl = 1
+ServiceBinary = %12%\intelgpio.sys
+LoadOrderGroup = Extended Base
+
+[Strings]
+ReactOS = "ReactOS Project"
+IntelGpio.DeviceDesc = "Intel Alder Lake-N GPIO Controller"
+IntelGpio.ServiceDesc = "ReactOS Intel GPIO Controller Driver"
