@@ -97,6 +97,10 @@ static BOOLEAN KdbpCmdReady(ULONG Argc, PCHAR Argv[]);
 static BOOLEAN KdbpCmdDpc(ULONG Argc, PCHAR Argv[]);
 static BOOLEAN KdbpCmdTimer(ULONG Argc, PCHAR Argv[]);
 static BOOLEAN KdbpCmdInterrupt(ULONG Argc, PCHAR Argv[]);
+static BOOLEAN KdbpCmdInterrupts(ULONG Argc, PCHAR Argv[]);
+static BOOLEAN KdbpCmdPci(ULONG Argc, PCHAR Argv[]);
+static BOOLEAN KdbpCmdDeviceTree(ULONG Argc, PCHAR Argv[]);
+static BOOLEAN KdbpCmdDeviceNode(ULONG Argc, PCHAR Argv[]);
 static BOOLEAN KdbpCmdLocks(ULONG Argc, PCHAR Argv[]);
 static BOOLEAN KdbpCmdApc(ULONG Argc, PCHAR Argv[]);
 static BOOLEAN KdbpCmdDispatcher(ULONG Argc, PCHAR Argv[]);
@@ -602,6 +606,10 @@ static const struct
     { "!dpc", "!dpc [cpu]", "Display normal and threaded DPC queues for a processor.", KdbpCmdDpc },
     { "!timer", "!timer [address]", "List queued timers or display one timer.", KdbpCmdTimer },
     { "!interrupt", "!interrupt address", "Display a kernel interrupt object.", KdbpCmdInterrupt },
+    { "!irqs", "!irqs [vector]", "List connected interrupt vectors or inspect one vector.", KdbpCmdInterrupts },
+    { "!pci", "!pci bus:device.function", "Display live PCI BAR, interrupt and MSI/MSI-X configuration.", KdbpCmdPci },
+    { "!devtree", "!devtree", "List the PnP device tree and DEVICE_NODE addresses.", KdbpCmdDeviceTree },
+    { "!devnode", "!devnode address", "Display a PnP device node and its assigned resources.", KdbpCmdDeviceNode },
     { "!locks", "!locks [address]", "List executive resources or display one resource.", KdbpCmdLocks },
     { "!apc", "!apc [tid]", "Display queued kernel and user APCs for a thread.", KdbpCmdApc },
     { "!dispatcher", "!dispatcher address", "Display a dispatcher object header and waiters.", KdbpCmdDispatcher },
@@ -5560,6 +5568,818 @@ KdbpCmdInterrupt(ULONG Argc, PCHAR Argv[])
     return TRUE;
 }
 
+static VOID KdbpPrintInterruptLine(_In_ PKINTERRUPT Address, _In_ const KINTERRUPT *Interrupt)
+{
+    KdbpPrint("  %p vec %03lu cpu %d irql %u/%u %s %s count %lu/%lu ISR ", Address, Interrupt->Vector, Interrupt->Number, Interrupt->Irql, Interrupt->SynchronizeIrql, Interrupt->Mode == LevelSensitive ? "level" : "edge", Interrupt->ShareVector ? "shared" : "exclusive", Interrupt->ServiceCount, Interrupt->DispatchCount);
+    KdbpPrintRoutineAddress((PVOID)Interrupt->ServiceRoutine);
+    KdbpPrint(" context %p\n", Interrupt->ServiceContext);
+}
+
+static BOOLEAN KdbpPrintInterruptChain(_In_ ULONG Vector, _In_ PKINTERRUPT Head, _In_opt_ PVOID Handler, _In_ BOOLEAN ShowInvalid)
+{
+    KINTERRUPT Snapshot;
+    PLIST_ENTRY Entry;
+    PLIST_ENTRY ListHead;
+    PLIST_ENTRY Visited[64];
+    ULONG Count;
+
+    if (Head == NULL ||
+        (ULONG_PTR)Head > MAXULONG_PTR - sizeof(Snapshot) ||
+        !NT_SUCCESS(KdbpSafeReadMemory(&Snapshot, Head, sizeof(Snapshot))) ||
+        Snapshot.Type != InterruptObject ||
+        Snapshot.Size < sizeof(Snapshot) ||
+        Snapshot.Vector != Vector ||
+        Snapshot.Number >= KeNumberProcessors ||
+        Snapshot.Irql > HIGH_LEVEL ||
+        Snapshot.SynchronizeIrql < Snapshot.Irql ||
+        Snapshot.SynchronizeIrql > HIGH_LEVEL ||
+        Snapshot.Mode > Latched)
+    {
+        if (ShowInvalid)
+            KdbpPrint("Vector 0x%lx head %p: <invalid or unreadable KINTERRUPT>\n", Vector, Head);
+        return FALSE;
+    }
+
+    KdbpPrint("Vector 0x%lx head %p", Vector, Head);
+    if (Handler != NULL)
+        KdbpPrint(" handler %p", Handler);
+    KdbpPrint(":\n");
+    KdbpPrintInterruptLine(Head, &Snapshot);
+    ListHead = &Head->InterruptListEntry;
+    Entry = Snapshot.InterruptListEntry.Flink;
+    Count = 0;
+    while (Entry != NULL && Entry != ListHead && Count < RTL_NUMBER_OF(Visited))
+    {
+        LIST_ENTRY Links;
+        PKINTERRUPT Interrupt;
+        ULONG Index;
+
+        for (Index = 0; Index < Count; Index++)
+        {
+            if (Visited[Index] == Entry)
+            {
+                KdbpPrint("  %p <cyclic interrupt chain>\n", Entry);
+                return TRUE;
+            }
+        }
+        Visited[Count++] = Entry;
+        if ((ULONG_PTR)Entry < FIELD_OFFSET(KINTERRUPT, InterruptListEntry))
+        {
+            KdbpPrint("  %p <invalid interrupt chain entry>\n", Entry);
+            break;
+        }
+        Interrupt = CONTAINING_RECORD(Entry, KINTERRUPT, InterruptListEntry);
+        if (!NT_SUCCESS(KdbpSafeReadMemory(&Links, Entry, sizeof(Links))) || !NT_SUCCESS(KdbpSafeReadMemory(&Snapshot, Interrupt, sizeof(Snapshot))))
+        {
+            KdbpPrint("  %p <unreadable interrupt chain entry>\n", Entry);
+            break;
+        }
+        if (Snapshot.Type != InterruptObject ||
+            Snapshot.Size < sizeof(Snapshot) ||
+            Snapshot.Vector != Vector ||
+            Snapshot.Number >= KeNumberProcessors ||
+            Snapshot.Irql > HIGH_LEVEL ||
+            Snapshot.SynchronizeIrql < Snapshot.Irql ||
+            Snapshot.SynchronizeIrql > HIGH_LEVEL ||
+            Snapshot.Mode > Latched)
+        {
+            KdbpPrint("  %p <invalid interrupt object>\n", Interrupt);
+            break;
+        }
+        KdbpPrintInterruptLine(Interrupt, &Snapshot);
+        if (Links.Flink == Entry)
+        {
+            KdbpPrint("  <self-linked interrupt chain>\n");
+            break;
+        }
+        Entry = Links.Flink;
+    }
+    if (Count >= RTL_NUMBER_OF(Visited))
+        KdbpPrint("  <interrupt chain truncated at %lu objects>\n", (ULONG)RTL_NUMBER_OF(Visited));
+    return TRUE;
+}
+
+#ifdef _M_AMD64
+static BOOLEAN KdbpPrintInterruptVector(_In_ ULONG Vector, _In_ BOOLEAN ShowUnused)
+{
+    extern KI_INTERRUPT_DISPATCH_ENTRY KiUnexpectedRange[256];
+    extern KI_INTERRUPT_DISPATCH_ENTRY KiUnexpectedRangeEnd[];
+    PVOID Handler;
+    PKINTERRUPT Head;
+
+    Handler = KeQueryInterruptHandler(Vector);
+    if (Handler >= (PVOID)KiUnexpectedRange && Handler <= (PVOID)KiUnexpectedRangeEnd)
+    {
+        if (ShowUnused)
+            KdbpPrint("Vector 0x%02lx: unused\n", Vector);
+        return FALSE;
+    }
+
+    if ((ULONG_PTR)Handler < FIELD_OFFSET(KINTERRUPT, DispatchCode))
+        return FALSE;
+    Head = CONTAINING_RECORD(Handler, KINTERRUPT, DispatchCode);
+    if (!KdbpPrintInterruptChain(Vector, Head, Handler, FALSE))
+    {
+        if (ShowUnused)
+        {
+            KdbpPrint("Vector 0x%02lx: system handler ", Vector);
+            KdbpPrintRoutineAddress(Handler);
+            KdbpPrint("\n");
+        }
+        return FALSE;
+    }
+    return TRUE;
+}
+#elif defined(_M_ARM64)
+static BOOLEAN KdbpPrintArm64Interrupt(_In_ ULONG IntId, _In_ BOOLEAN ShowUnused)
+{
+    PKINTERRUPT NTAPI KiArm64QueryInterrupt(ULONG IntId);
+    VOID NTAPI HalArm64DbgGicState(ULONG IntId, PULONG Priority, PULONG Enable, PULONG Pending, PULONG Active);
+    PKINTERRUPT Head;
+    ULONG Priority;
+    ULONG Enable;
+    ULONG Pending;
+    ULONG Active;
+    BOOLEAN HasChain;
+    BOOLEAN HasGicState;
+
+    Head = KiArm64QueryInterrupt(IntId);
+    HalArm64DbgGicState(IntId, &Priority, &Enable, &Pending, &Active);
+    HasGicState = Priority != MAXULONG || Enable != MAXULONG || Pending != MAXULONG || Active != MAXULONG;
+    HasChain = Head != NULL;
+    if (HasChain)
+        (VOID)KdbpPrintInterruptChain(IntId, Head, NULL, TRUE);
+    if (HasGicState && (ShowUnused || HasChain || Enable == 1 || Pending == 1 || Active == 1))
+        KdbpPrint("  GIC intid 0x%lx priority 0x%02lx enabled %s pending %s active %s (current CPU for SGI/PPI)\n", IntId, Priority, Enable == MAXULONG ? "?" : Enable ? "yes" : "no", Pending == MAXULONG ? "?" : Pending ? "yes" : "no", Active == MAXULONG ? "?" : Active ? "yes" : "no");
+    if (ShowUnused && !HasChain && !HasGicState)
+    {
+        KdbpPrint("Interrupt ID 0x%lx: unused or unavailable\n", IntId);
+        return FALSE;
+    }
+    if (!HasChain && (!HasGicState || (!ShowUnused && Enable != 1 && Pending != 1 && Active != 1)))
+        return FALSE;
+    return TRUE;
+}
+#endif
+
+static BOOLEAN KdbpCmdInterrupts(ULONG Argc, PCHAR Argv[])
+{
+#ifdef _M_AMD64
+    ULONG_PTR Value;
+    ULONG Vector;
+
+    if (Argc > 2)
+    {
+        KdbpPrint("Usage: !irqs [vector]\n");
+        return TRUE;
+    }
+    if (Argc == 2)
+    {
+        if (!KdbpGetHexNumber(Argv[1], &Value) || Value > 0xFF)
+        {
+            KdbpPrint("!irqs: Invalid vector '%s'.\n", Argv[1]);
+            return TRUE;
+        }
+        (VOID)KdbpPrintInterruptVector((ULONG)Value, TRUE);
+        return TRUE;
+    }
+
+    KdbpPrint("Connected interrupt vectors:\n");
+    for (Vector = 0x20; Vector <= 0xFF; Vector++)
+    {
+        (VOID)KdbpPrintInterruptVector(Vector, FALSE);
+        if (KdbOutputAborted)
+            break;
+    }
+#elif defined(_M_ARM64)
+    ULONG NTAPI KiArm64QueryInterruptLimit(VOID);
+    ULONG_PTR Value;
+    ULONG Limit;
+    ULONG IntId;
+
+    Limit = KiArm64QueryInterruptLimit();
+    if (Argc > 2)
+    {
+        KdbpPrint("Usage: !irqs [intid]\n");
+        return TRUE;
+    }
+    if (Argc == 2)
+    {
+        if (!KdbpGetHexNumber(Argv[1], &Value) || Value >= Limit)
+        {
+            KdbpPrint("!irqs: Invalid interrupt ID '%s' (limit 0x%lx).\n", Argv[1], Limit);
+            return TRUE;
+        }
+        (VOID)KdbpPrintArm64Interrupt((ULONG)Value, TRUE);
+        return TRUE;
+    }
+
+    KdbpPrint("Connected or enabled ARM64 interrupt IDs:\n");
+    for (IntId = 0; IntId < Limit; IntId++)
+    {
+        (VOID)KdbpPrintArm64Interrupt(IntId, FALSE);
+        if (KdbOutputAborted)
+            break;
+    }
+#else
+    UNREFERENCED_PARAMETER(Argc);
+    UNREFERENCED_PARAMETER(Argv);
+    KdbpPrint("!irqs: Vector enumeration is currently available on AMD64 only; use !interrupt address on this architecture.\n");
+#endif
+    return TRUE;
+}
+
+static BOOLEAN KdbpParsePciLocation(_In_ PCHAR Text, _Out_ PULONG Bus, _Out_ PULONG Device, _Out_ PULONG Function)
+{
+    CHAR Part[16];
+    PCHAR Colon;
+    PCHAR Dot;
+    SIZE_T Length;
+    ULONG_PTR Value;
+
+    Colon = strchr(Text, ':');
+    Dot = Colon ? strchr(Colon + 1, '.') : NULL;
+    if (Colon == NULL || Dot == NULL || strchr(Dot + 1, '.') != NULL || strchr(Colon + 1, ':') != NULL)
+        return FALSE;
+
+    Length = Colon - Text;
+    if (Length == 0 || Length >= sizeof(Part))
+        return FALSE;
+    RtlCopyMemory(Part, Text, Length);
+    Part[Length] = ANSI_NULL;
+    if (!KdbpGetHexNumber(Part, &Value) || Value > 0xFF)
+        return FALSE;
+    *Bus = (ULONG)Value;
+
+    Length = Dot - Colon - 1;
+    if (Length == 0 || Length >= sizeof(Part))
+        return FALSE;
+    RtlCopyMemory(Part, Colon + 1, Length);
+    Part[Length] = ANSI_NULL;
+    if (!KdbpGetHexNumber(Part, &Value) || Value >= PCI_MAX_DEVICES)
+        return FALSE;
+    *Device = (ULONG)Value;
+
+    Length = strlen(Dot + 1);
+    if (Length == 0 || Length >= sizeof(Part))
+        return FALSE;
+    RtlCopyMemory(Part, Dot + 1, Length + 1);
+    if (!KdbpGetHexNumber(Part, &Value) || Value >= PCI_MAX_FUNCTION)
+        return FALSE;
+    *Function = (ULONG)Value;
+    return TRUE;
+}
+
+static USHORT KdbpReadPciUshort(_In_reads_bytes_(sizeof(PCI_COMMON_CONFIG)) const UCHAR *Config, _In_ ULONG Offset)
+{
+    USHORT Value;
+
+    RtlCopyMemory(&Value, Config + Offset, sizeof(Value));
+    return Value;
+}
+
+static ULONG KdbpReadPciUlong(_In_reads_bytes_(sizeof(PCI_COMMON_CONFIG)) const UCHAR *Config, _In_ ULONG Offset)
+{
+    ULONG Value;
+
+    RtlCopyMemory(&Value, Config + Offset, sizeof(Value));
+    return Value;
+}
+
+static VOID KdbpPrintPciCapabilities(_In_ const PCI_COMMON_CONFIG *Config, _In_ ULONG BytesRead)
+{
+    const UCHAR *Raw = (const UCHAR *)Config;
+    UCHAR Visited[sizeof(PCI_COMMON_CONFIG) / 8];
+    UCHAR Offset;
+    ULONG Count;
+
+    if (!(Config->Status & PCI_STATUS_CAPABILITIES_LIST) || BytesRead < PCI_COMMON_HDR_LENGTH)
+        return;
+
+    if (PCI_CONFIGURATION_TYPE(Config) == PCI_DEVICE_TYPE)
+        Offset = Config->u.type0.CapabilitiesPtr;
+    else if (PCI_CONFIGURATION_TYPE(Config) == PCI_BRIDGE_TYPE)
+        Offset = Config->u.type1.CapabilitiesPtr;
+    else
+        Offset = Config->u.type2.CapabilitiesPtr;
+
+    RtlZeroMemory(Visited, sizeof(Visited));
+    KdbpPrint("  Capabilities:\n");
+    for (Count = 0; Offset != 0 && Count < 48; Count++)
+    {
+        UCHAR Id;
+        UCHAR Next;
+
+        Offset &= ~3;
+        if (Offset < 0x40 || (ULONG)Offset + sizeof(PCI_CAPABILITIES_HEADER) > BytesRead || (Visited[Offset / 8] & (1 << (Offset % 8))))
+        {
+            KdbpPrint("    0x%02x <invalid or cyclic capability pointer>\n", Offset);
+            break;
+        }
+        Visited[Offset / 8] |= (1 << (Offset % 8));
+        Id = Raw[Offset];
+        Next = Raw[Offset + 1];
+        KdbpPrint("    [0x%02x] id 0x%02x", Offset, Id);
+        if (Id == PCI_CAPABILITY_ID_POWER_MANAGEMENT && (ULONG)Offset + 8 <= BytesRead)
+        {
+            USHORT Capabilities = KdbpReadPciUshort(Raw, Offset + 2);
+            USHORT Pmcsr = KdbpReadPciUshort(Raw, Offset + 4);
+            KdbpPrint(" PM version=%u state=D%u PME-enable=%u PME-status=%u", Capabilities & 7, Pmcsr & 3, !!(Pmcsr & 0x100), !!(Pmcsr & 0x8000));
+        }
+        else if (Id == PCI_CAPABILITY_ID_MSI && (ULONG)Offset + 4 <= BytesRead)
+        {
+            USHORT Control = KdbpReadPciUshort(Raw, Offset + 2);
+            KdbpPrint(" MSI enabled=%u messages=%u/%u 64bit=%u maskable=%u", Control & 1, 1U << ((Control >> 4) & 7), 1U << ((Control >> 1) & 7), !!(Control & 0x80), !!(Control & 0x100));
+        }
+        else if (Id == PCI_CAPABILITY_ID_MSIX && (ULONG)Offset + 12 <= BytesRead)
+        {
+            USHORT Control = KdbpReadPciUshort(Raw, Offset + 2);
+            ULONG Table = KdbpReadPciUlong(Raw, Offset + 4);
+            ULONG Pba = KdbpReadPciUlong(Raw, Offset + 8);
+            KdbpPrint(" MSI-X enabled=%u masked=%u count=%u table=BIR%u+0x%08lx pba=BIR%u+0x%08lx", !!(Control & 0x8000), !!(Control & 0x4000), (Control & 0x7FF) + 1, Table & 7, Table & ~7UL, Pba & 7, Pba & ~7UL);
+        }
+        else if (Id == PCI_CAPABILITY_ID_PCI_EXPRESS && (ULONG)Offset + 4 <= BytesRead)
+        {
+            USHORT Express = KdbpReadPciUshort(Raw, Offset + 2);
+            KdbpPrint(" PCIe version=%u type=%u slot=%u", Express & 0xF, (Express >> 4) & 0xF, !!(Express & 0x100));
+        }
+        KdbpPrint(" next=0x%02x\n", Next);
+        Offset = Next;
+    }
+}
+
+static BOOLEAN KdbpCmdPci(ULONG Argc, PCHAR Argv[])
+{
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    ULONG NTAPI HalpKdReadPciConfig(ULONG BusNumber, ULONG SlotNumber, PVOID Buffer, ULONG Offset, ULONG Length);
+    PCI_COMMON_CONFIG Config;
+    PCI_SLOT_NUMBER Slot;
+#endif
+    ULONG Bus;
+    ULONG Device;
+    ULONG Function;
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    ULONG BytesRead;
+    ULONG HeaderType;
+    ULONG BarCount;
+    ULONG Bar;
+#endif
+
+    if (Argc != 2 || !KdbpParsePciLocation(Argv[1], &Bus, &Device, &Function))
+    {
+        KdbpPrint("Usage: !pci bus:device.function (hexadecimal BDF, for example !pci 0:15.0)\n");
+        return TRUE;
+    }
+
+#if !defined(_M_AMD64) && !defined(_M_ARM64)
+    KdbpPrint("!pci: Live PCI configuration reads are unavailable on this architecture; use !devnode for cached PnP resources.\n");
+    return TRUE;
+#else
+    RtlFillMemory(&Config, sizeof(Config), 0xFF);
+    Slot.u.AsULONG = 0;
+    Slot.u.bits.DeviceNumber = Device;
+    Slot.u.bits.FunctionNumber = Function;
+    BytesRead = HalpKdReadPciConfig(Bus, Slot.u.AsULONG, &Config, 0, sizeof(Config));
+    if (BytesRead == MAXULONG)
+    {
+        KdbpPrint("!pci: No debugger-safe PCI configuration path is currently available; refusing an unsafe read.\n");
+        return TRUE;
+    }
+    if (BytesRead < sizeof(USHORT) || Config.VendorID == PCI_INVALID_VENDORID)
+    {
+        KdbpPrint("PCI %02lx:%02lx.%lx: no device or configuration access failed (%lu byte(s)).\n", Bus, Device, Function, BytesRead);
+        return TRUE;
+    }
+
+    HeaderType = PCI_CONFIGURATION_TYPE(&Config);
+    KdbpPrint("PCI %02lx:%02lx.%lx vendor/device %04x:%04x revision %02x class %02x:%02x:%02x\n", Bus, Device, Function, Config.VendorID, Config.DeviceID, Config.RevisionID, Config.BaseClass, Config.SubClass, Config.ProgIf);
+    KdbpPrint("  Command/status 0x%04x/0x%04x header 0x%02x cacheline %u latency %u\n", Config.Command, Config.Status, Config.HeaderType, Config.CacheLineSize, Config.LatencyTimer);
+    if (HeaderType == PCI_DEVICE_TYPE)
+        BarCount = PCI_TYPE0_ADDRESSES;
+    else if (HeaderType == PCI_BRIDGE_TYPE)
+        BarCount = PCI_TYPE1_ADDRESSES;
+    else
+        BarCount = 0;
+
+    for (Bar = 0; Bar < BarCount; Bar++)
+    {
+        ULONG Low = Config.u.type0.BaseAddresses[Bar];
+
+        if (Low & PCI_ADDRESS_IO_SPACE)
+        {
+            KdbpPrint("  BAR%lu I/O  0x%08lx%s\n", Bar, Low & PCI_ADDRESS_IO_ADDRESS_MASK, Low ? "" : " (unassigned)");
+        }
+        else
+        {
+            ULONG Type = Low & PCI_ADDRESS_MEMORY_TYPE_MASK;
+            ULONGLONG Address = Low & PCI_ADDRESS_MEMORY_ADDRESS_MASK;
+
+            if (Type == PCI_TYPE_64BIT && Bar + 1 < BarCount)
+            {
+                Address |= (ULONGLONG)Config.u.type0.BaseAddresses[Bar + 1] << 32;
+                KdbpPrint("  BAR%lu mem64 0x%I64x prefetch=%u%s\n", Bar, Address, !!(Low & PCI_ADDRESS_MEMORY_PREFETCHABLE), Address ? "" : " (unassigned)");
+                Bar++;
+            }
+            else
+            {
+                KdbpPrint("  BAR%lu mem%u 0x%I64x prefetch=%u%s\n", Bar, Type == PCI_TYPE_20BIT ? 20 : 32, Address, !!(Low & PCI_ADDRESS_MEMORY_PREFETCHABLE), Address ? "" : " (unassigned)");
+            }
+        }
+    }
+
+    if (HeaderType == PCI_DEVICE_TYPE)
+        KdbpPrint("  Interrupt line/pin %u/%u subsystem %04x:%04x\n", Config.u.type0.InterruptLine, Config.u.type0.InterruptPin, Config.u.type0.SubVendorID, Config.u.type0.SubSystemID);
+    else if (HeaderType == PCI_BRIDGE_TYPE)
+        KdbpPrint("  Interrupt line/pin %u/%u buses %u-%u-%u\n", Config.u.type1.InterruptLine, Config.u.type1.InterruptPin, Config.u.type1.PrimaryBus, Config.u.type1.SecondaryBus, Config.u.type1.SubordinateBus);
+    KdbpPrintPciCapabilities(&Config, BytesRead);
+    return TRUE;
+#endif
+}
+
+static ULONGLONG KdbpResourceRangeEnd(_In_ ULONGLONG Start, _In_ ULONGLONG Length)
+{
+    if (Length == 0)
+        return Start;
+    if (Start > MAXULONGLONG - (Length - 1))
+        return MAXULONGLONG;
+    return Start + Length - 1;
+}
+
+static BOOLEAN KdbpRangeContains(_In_ ULONG_PTR Start, _In_ ULONG_PTR End, _In_ ULONG_PTR Address, _In_ SIZE_T Size)
+{
+    return Size != 0 && Address >= Start && Address <= End && Size - 1 <= End - Address;
+}
+
+static VOID KdbpPrintCmResourceDescriptor(_In_ ULONG Index, _In_ const CM_PARTIAL_RESOURCE_DESCRIPTOR *Descriptor)
+{
+    ULONGLONG Start;
+    ULONGLONG Length;
+    ULONGLONG End;
+
+    KdbpPrint("    [%02lu] type %3u flags 0x%04x share %u ", Index, Descriptor->Type, Descriptor->Flags, Descriptor->ShareDisposition);
+    switch (Descriptor->Type)
+    {
+        case CmResourceTypePort:
+            Start = Descriptor->u.Port.Start.QuadPart;
+            Length = Descriptor->u.Port.Length;
+            End = KdbpResourceRangeEnd(Start, Length);
+            KdbpPrint("port 0x%I64x-0x%I64x%s%s\n", Start, End, Descriptor->Flags & CM_RESOURCE_PORT_BAR ? " BAR" : "", Descriptor->Flags & CM_RESOURCE_PORT_WINDOW_DECODE ? " window" : "");
+            break;
+        case CmResourceTypeMemory:
+            Start = Descriptor->u.Memory.Start.QuadPart;
+            Length = Descriptor->u.Memory.Length;
+            End = KdbpResourceRangeEnd(Start, Length);
+            KdbpPrint("memory 0x%I64x-0x%I64x%s%s%s\n", Start, End, Descriptor->Flags & CM_RESOURCE_MEMORY_BAR ? " BAR" : "", Descriptor->Flags & CM_RESOURCE_MEMORY_WINDOW_DECODE ? " window" : "", Descriptor->Flags & CM_RESOURCE_MEMORY_PREFETCHABLE ? " prefetch" : "");
+            break;
+        case CmResourceTypeMemoryLarge:
+            Start = Descriptor->u.Memory.Start.QuadPart;
+            if ((Descriptor->Flags & CM_RESOURCE_MEMORY_LARGE) == CM_RESOURCE_MEMORY_LARGE_40)
+                Length = (ULONGLONG)Descriptor->u.Memory40.Length40 << 8;
+            else if ((Descriptor->Flags & CM_RESOURCE_MEMORY_LARGE) == CM_RESOURCE_MEMORY_LARGE_48)
+                Length = (ULONGLONG)Descriptor->u.Memory48.Length48 << 16;
+            else if ((Descriptor->Flags & CM_RESOURCE_MEMORY_LARGE) == CM_RESOURCE_MEMORY_LARGE_64)
+                Length = (ULONGLONG)Descriptor->u.Memory64.Length64 << 32;
+            else
+            {
+                KdbpPrint("<invalid large-memory encoding>\n");
+                break;
+            }
+            End = KdbpResourceRangeEnd(Start, Length);
+            KdbpPrint("large-memory 0x%I64x-0x%I64x\n", Start, End);
+            break;
+        case CmResourceTypeInterrupt:
+            KdbpPrint("%s vector %lu level %lu affinity 0x%Ix\n", Descriptor->Flags & CM_RESOURCE_INTERRUPT_MESSAGE ? "message" : "line", Descriptor->u.Interrupt.Vector, Descriptor->u.Interrupt.Level, Descriptor->u.Interrupt.Affinity);
+            break;
+        case CmResourceTypeDma:
+            KdbpPrint("DMA channel %lu port %lu\n", Descriptor->u.Dma.Channel, Descriptor->u.Dma.Port);
+            break;
+        case CmResourceTypeBusNumber:
+            Start = Descriptor->u.BusNumber.Start;
+            Length = Descriptor->u.BusNumber.Length;
+            End = KdbpResourceRangeEnd(Start, Length);
+            KdbpPrint("bus %I64u-%I64u\n", Start, End);
+            break;
+        case CmResourceTypeConnection:
+            KdbpPrint("connection class/type %u/%u id %08lx:%08lx\n", Descriptor->u.Connection.Class, Descriptor->u.Connection.Type, Descriptor->u.Connection.IdHighPart, Descriptor->u.Connection.IdLowPart);
+            break;
+        case CmResourceTypeDeviceSpecific:
+            KdbpPrint("device-specific %lu byte(s)\n", Descriptor->u.DeviceSpecificData.DataSize);
+            break;
+        default:
+            KdbpPrint("raw %08lx %08lx %08lx\n", Descriptor->u.DevicePrivate.Data[0], Descriptor->u.DevicePrivate.Data[1], Descriptor->u.DevicePrivate.Data[2]);
+            break;
+    }
+}
+
+static VOID KdbpPrintCmResourceList(_In_ PCSTR Label, _In_opt_ PCM_RESOURCE_LIST Address)
+{
+    ULONG FullCount;
+    ULONG FullIndex;
+    ULONG TotalDescriptors;
+    PCM_FULL_RESOURCE_DESCRIPTOR Full;
+    NTSTATUS Status;
+
+    KdbpPrint("  %s: %p", Label, Address);
+    if (Address == NULL)
+    {
+        KdbpPrint("\n");
+        return;
+    }
+    if ((ULONG_PTR)Address > MAXULONG_PTR - sizeof(FullCount))
+    {
+        KdbpPrint(" <invalid address>\n");
+        return;
+    }
+    Status = KdbpSafeReadMemory(&FullCount, Address, sizeof(FullCount));
+    if (!NT_SUCCESS(Status))
+    {
+        KdbpPrint(" <unreadable>\n");
+        return;
+    }
+    if (FullCount == 0)
+    {
+        KdbpPrint(" <empty>\n");
+        return;
+    }
+    if (FullCount > 16)
+    {
+        KdbpPrint(" <invalid count %lu>\n", FullCount);
+        return;
+    }
+    KdbpPrint(" (%lu full list(s))\n", FullCount);
+    Full = (PCM_FULL_RESOURCE_DESCRIPTOR)((ULONG_PTR)Address + FIELD_OFFSET(CM_RESOURCE_LIST, List));
+    TotalDescriptors = 0;
+    for (FullIndex = 0; FullIndex < FullCount; FullIndex++)
+    {
+        CM_FULL_RESOURCE_DESCRIPTOR Header;
+        PCM_PARTIAL_RESOURCE_DESCRIPTOR DescriptorAddress;
+        ULONG DescriptorIndex;
+
+        RtlZeroMemory(&Header, sizeof(Header));
+        if ((ULONG_PTR)Full > MAXULONG_PTR - FIELD_OFFSET(CM_FULL_RESOURCE_DESCRIPTOR, PartialResourceList.PartialDescriptors))
+        {
+            KdbpPrint("    full[%lu] %p <invalid address>\n", FullIndex, Full);
+            return;
+        }
+        Status = KdbpSafeReadMemory(&Header, Full, FIELD_OFFSET(CM_FULL_RESOURCE_DESCRIPTOR, PartialResourceList.PartialDescriptors));
+        if (!NT_SUCCESS(Status) || Header.PartialResourceList.Count > 256 || TotalDescriptors > 1024 - Header.PartialResourceList.Count)
+        {
+            KdbpPrint("    full[%lu] %p <unreadable or invalid>\n", FullIndex, Full);
+            return;
+        }
+        TotalDescriptors += Header.PartialResourceList.Count;
+        KdbpPrint("    full[%lu] interface %d bus %lu version %u.%u count %lu\n", FullIndex, Header.InterfaceType, Header.BusNumber, Header.PartialResourceList.Version, Header.PartialResourceList.Revision, Header.PartialResourceList.Count);
+        DescriptorAddress = &Full->PartialResourceList.PartialDescriptors[0];
+        for (DescriptorIndex = 0; DescriptorIndex < Header.PartialResourceList.Count; DescriptorIndex++)
+        {
+            CM_PARTIAL_RESOURCE_DESCRIPTOR Descriptor;
+            ULONG_PTR Next;
+
+            Status = KdbpSafeReadMemory(&Descriptor, DescriptorAddress, sizeof(Descriptor));
+            if (!NT_SUCCESS(Status))
+            {
+                KdbpPrint("    [%02lu] %p <unreadable>\n", DescriptorIndex, DescriptorAddress);
+                return;
+            }
+            KdbpPrintCmResourceDescriptor(DescriptorIndex, &Descriptor);
+            if ((ULONG_PTR)DescriptorAddress > MAXULONG_PTR - sizeof(Descriptor))
+            {
+                KdbpPrint("    [%02lu] %p <invalid address>\n", DescriptorIndex, DescriptorAddress);
+                return;
+            }
+            Next = (ULONG_PTR)DescriptorAddress + sizeof(Descriptor);
+            if (Descriptor.Type == CmResourceTypeDeviceSpecific)
+            {
+                if (DescriptorIndex + 1 != Header.PartialResourceList.Count || Descriptor.u.DeviceSpecificData.DataSize > 64 * 1024 || Next > MAXULONG_PTR - Descriptor.u.DeviceSpecificData.DataSize)
+                {
+                    KdbpPrint("    <invalid device-specific data placement or length>\n");
+                    return;
+                }
+                Next += Descriptor.u.DeviceSpecificData.DataSize;
+            }
+            DescriptorAddress = (PCM_PARTIAL_RESOURCE_DESCRIPTOR)Next;
+        }
+        Full = (PCM_FULL_RESOURCE_DESCRIPTOR)DescriptorAddress;
+        if (KdbOutputAborted)
+            return;
+    }
+}
+
+static VOID KdbpPrintIoResourceRequirements(_In_opt_ PIO_RESOURCE_REQUIREMENTS_LIST Address)
+{
+    IO_RESOURCE_REQUIREMENTS_LIST Header;
+    PIO_RESOURCE_LIST List;
+    ULONG_PTR Start;
+    ULONG_PTR End;
+    ULONG Alternative;
+    NTSTATUS Status;
+
+    KdbpPrint("  requirements: %p", Address);
+    if (Address == NULL)
+    {
+        KdbpPrint("\n");
+        return;
+    }
+    RtlZeroMemory(&Header, sizeof(Header));
+    Start = (ULONG_PTR)Address;
+    Status = KdbpSafeReadMemory(&Header, Address, FIELD_OFFSET(IO_RESOURCE_REQUIREMENTS_LIST, List));
+    if (!NT_SUCCESS(Status) || Header.ListSize < FIELD_OFFSET(IO_RESOURCE_REQUIREMENTS_LIST, List) + FIELD_OFFSET(IO_RESOURCE_LIST, Descriptors) || Header.ListSize > 1024 * 1024 || Header.AlternativeLists == 0 || Header.AlternativeLists > 64 || Start > MAXULONG_PTR - Header.ListSize)
+    {
+        KdbpPrint(" <unreadable or invalid>\n");
+        return;
+    }
+    End = Start + Header.ListSize;
+    KdbpPrint(" size %lu interface %d bus %lu slot 0x%lx alternatives %lu\n", Header.ListSize, Header.InterfaceType, Header.BusNumber, Header.SlotNumber, Header.AlternativeLists);
+    List = (PIO_RESOURCE_LIST)(Start + FIELD_OFFSET(IO_RESOURCE_REQUIREMENTS_LIST, List));
+    for (Alternative = 0; Alternative < Header.AlternativeLists; Alternative++)
+    {
+        IO_RESOURCE_LIST ListHeader;
+        PIO_RESOURCE_DESCRIPTOR DescriptorAddress;
+        ULONG Index;
+
+        RtlZeroMemory(&ListHeader, sizeof(ListHeader));
+        if (!KdbpRangeContains(Start, End, (ULONG_PTR)List, FIELD_OFFSET(IO_RESOURCE_LIST, Descriptors)))
+        {
+            KdbpPrint("    alternative[%lu] %p <outside requirements list>\n", Alternative, List);
+            return;
+        }
+        Status = KdbpSafeReadMemory(&ListHeader, List, FIELD_OFFSET(IO_RESOURCE_LIST, Descriptors));
+        if (!NT_SUCCESS(Status) || ListHeader.Count > 256 || (SIZE_T)ListHeader.Count > (End - (ULONG_PTR)&List->Descriptors[0]) / sizeof(IO_RESOURCE_DESCRIPTOR))
+        {
+            KdbpPrint("    alternative[%lu] %p <unreadable or invalid>\n", Alternative, List);
+            return;
+        }
+        KdbpPrint("    alternative[%lu] version %u.%u count %lu\n", Alternative, ListHeader.Version, ListHeader.Revision, ListHeader.Count);
+        DescriptorAddress = &List->Descriptors[0];
+        for (Index = 0; Index < ListHeader.Count; Index++, DescriptorAddress++)
+        {
+            IO_RESOURCE_DESCRIPTOR Descriptor;
+            BOOLEAN IsBar;
+
+            if (!KdbpRangeContains(Start, End, (ULONG_PTR)DescriptorAddress, sizeof(Descriptor)))
+            {
+                KdbpPrint("      [%02lu] %p <outside requirements list>\n", Index, DescriptorAddress);
+                return;
+            }
+            Status = KdbpSafeReadMemory(&Descriptor, DescriptorAddress, sizeof(Descriptor));
+            if (!NT_SUCCESS(Status))
+            {
+                KdbpPrint("      [%02lu] %p <unreadable>\n", Index, DescriptorAddress);
+                return;
+            }
+            KdbpPrint("      [%02lu] option 0x%02x type %u flags 0x%04x share %u ", Index, Descriptor.Option, Descriptor.Type, Descriptor.Flags, Descriptor.ShareDisposition);
+            if (Descriptor.Type == CmResourceTypeMemory || Descriptor.Type == CmResourceTypePort)
+            {
+                IsBar = (Descriptor.Type == CmResourceTypeMemory) ? !!(Descriptor.Flags & CM_RESOURCE_MEMORY_BAR) : !!(Descriptor.Flags & CM_RESOURCE_PORT_BAR);
+                KdbpPrint("0x%I64x-0x%I64x length 0x%lx align 0x%lx%s\n", Descriptor.u.Generic.MinimumAddress.QuadPart, Descriptor.u.Generic.MaximumAddress.QuadPart, Descriptor.u.Generic.Length, Descriptor.u.Generic.Alignment, IsBar ? " BAR" : "");
+            }
+            else if (Descriptor.Type == CmResourceTypeInterrupt)
+                KdbpPrint("%s %lu-%lu affinity 0x%Ix\n", Descriptor.Flags & CM_RESOURCE_INTERRUPT_MESSAGE ? "message" : "line", Descriptor.u.Interrupt.MinimumVector, Descriptor.u.Interrupt.MaximumVector, Descriptor.u.Interrupt.TargetedProcessors);
+            else if (Descriptor.Type == CmResourceTypeBusNumber)
+                KdbpPrint("bus %lu-%lu length %lu\n", Descriptor.u.BusNumber.MinBusNumber, Descriptor.u.BusNumber.MaxBusNumber, Descriptor.u.BusNumber.Length);
+            else if (Descriptor.Type == CmResourceTypeConnection)
+                KdbpPrint("connection class/type %u/%u id %08lx:%08lx\n", Descriptor.u.Connection.Class, Descriptor.u.Connection.Type, Descriptor.u.Connection.IdHighPart, Descriptor.u.Connection.IdLowPart);
+            else
+                KdbpPrint("raw %08lx %08lx %08lx\n", Descriptor.u.DevicePrivate.Data[0], Descriptor.u.DevicePrivate.Data[1], Descriptor.u.DevicePrivate.Data[2]);
+        }
+        List = (PIO_RESOURCE_LIST)DescriptorAddress;
+        if (KdbOutputAborted)
+            return;
+    }
+}
+
+static BOOLEAN KdbpCmdDeviceTree(ULONG Argc, PCHAR Argv[])
+{
+    PDEVICE_NODE Node;
+    PDEVICE_NODE Visited[256];
+    ULONG Count;
+    ULONG TrackedCount;
+
+    UNREFERENCED_PARAMETER(Argv);
+    if (Argc != 1)
+    {
+        KdbpPrint("Usage: !devtree\n");
+        return TRUE;
+    }
+
+    Node = IopRootDeviceNode;
+    Count = 0;
+    TrackedCount = 0;
+    KdbpPrint("PnP device tree:\n");
+    while (Node != NULL && Count < 4096)
+    {
+        DEVICE_NODE Snapshot;
+        ULONG Indent;
+        ULONG Index;
+
+        for (Index = 0; Index < TrackedCount; Index++)
+        {
+            if (Visited[Index] == Node)
+            {
+                KdbpPrint("%p <cyclic DEVICE_NODE tree link>\n", Node);
+                return TRUE;
+            }
+        }
+        if (TrackedCount < RTL_NUMBER_OF(Visited))
+            Visited[TrackedCount++] = Node;
+        Count++;
+
+        if (!NT_SUCCESS(KdbpSafeReadMemory(&Snapshot, Node, sizeof(Snapshot))))
+        {
+            KdbpPrint("%p <unreadable DEVICE_NODE>\n", Node);
+            break;
+        }
+        Indent = min(Snapshot.Level, 24UL);
+        KdbpPrint("%*s%p state %u problem %lu PDO %p ", Indent * 2, "", Node, Snapshot.State, Snapshot.Problem, Snapshot.PhysicalDeviceObject);
+        KdbpPrintRemoteUnicodeString(&Snapshot.InstancePath);
+        KdbpPrint("\n");
+        if (Snapshot.Child != NULL && Snapshot.Child != Node)
+        {
+            DEVICE_NODE Child;
+
+            if (!NT_SUCCESS(KdbpSafeReadMemory(&Child, Snapshot.Child, sizeof(Child))) || Snapshot.Level == MAXULONG || Child.Parent != Node || Child.Level != Snapshot.Level + 1)
+            {
+                KdbpPrint("%p <invalid child link from %p>\n", Snapshot.Child, Node);
+                break;
+            }
+            Node = Snapshot.Child;
+            continue;
+        }
+        for (;;)
+        {
+            if (Snapshot.Sibling != NULL && Snapshot.Sibling != Node)
+            {
+                DEVICE_NODE Sibling;
+
+                if (!NT_SUCCESS(KdbpSafeReadMemory(&Sibling, Snapshot.Sibling, sizeof(Sibling))) || Sibling.Parent != Snapshot.Parent || Sibling.Level != Snapshot.Level)
+                {
+                    KdbpPrint("%p <invalid sibling link from %p>\n", Snapshot.Sibling, Node);
+                    Node = NULL;
+                    break;
+                }
+                Node = Snapshot.Sibling;
+                break;
+            }
+            if (Node == IopRootDeviceNode || Snapshot.Parent == NULL || Snapshot.Parent == Node)
+            {
+                Node = NULL;
+                break;
+            }
+            Node = Snapshot.Parent;
+            {
+                DEVICE_NODE Parent;
+
+                if (!NT_SUCCESS(KdbpSafeReadMemory(&Parent, Node, sizeof(Parent))) || Snapshot.Level == 0 || Parent.Level + 1 != Snapshot.Level)
+                {
+                    KdbpPrint("%p <invalid parent DEVICE_NODE>\n", Node);
+                    Node = NULL;
+                    break;
+                }
+                Snapshot = Parent;
+            }
+            if (Node == IopRootDeviceNode && Snapshot.Parent != NULL)
+            {
+                KdbpPrint("%p <root DEVICE_NODE has a parent>\n", Node);
+                Node = NULL;
+                break;
+            }
+        }
+        if (KdbOutputAborted)
+            break;
+    }
+    if (Count >= 4096)
+        KdbpPrint("<device tree truncated at 4096 nodes>\n");
+    return TRUE;
+}
+
+static BOOLEAN KdbpCmdDeviceNode(ULONG Argc, PCHAR Argv[])
+{
+    ULONG_PTR Address;
+    PDEVICE_NODE Node;
+    DEVICE_NODE Snapshot;
+    NTSTATUS Status;
+
+    if (!KdbpGetSingleAddressArgument(Argv[0], Argc, Argv, &Address))
+        return TRUE;
+    Node = (PDEVICE_NODE)Address;
+    Status = KdbpSafeReadMemory(&Snapshot, Node, sizeof(Snapshot));
+    if (!NT_SUCCESS(Status))
+    {
+        KdbpPrint("!devnode: DEVICE_NODE %p is unreadable (0x%08lx).\n", Node, Status);
+        return TRUE;
+    }
+    KdbpPrint("DEVICE_NODE %p\n  instance: ", Node);
+    KdbpPrintRemoteUnicodeString(&Snapshot.InstancePath);
+    KdbpPrint("\n  service:  ");
+    KdbpPrintRemoteUnicodeString(&Snapshot.ServiceName);
+    KdbpPrint("\n  state/previous/problem: %u / %u / %lu\n  flags/user/capability:  0x%08lx / 0x%08lx / 0x%08lx\n  PDO/parent/child/sibling: %p / %p / %p / %p\n  interface/bus child-interface/bus: %d/%lu %d/%lu\n", Snapshot.State, Snapshot.PreviousState, Snapshot.Problem, Snapshot.Flags, Snapshot.UserFlags, Snapshot.CapabilityFlags, Snapshot.PhysicalDeviceObject, Snapshot.Parent, Snapshot.Child, Snapshot.Sibling, Snapshot.InterfaceType, Snapshot.BusNumber, Snapshot.ChildInterfaceType, Snapshot.ChildBusNumber);
+    KdbpPrintCmResourceList("boot resources", Snapshot.BootResources);
+    KdbpPrintCmResourceList("assigned resources", Snapshot.ResourceList);
+    KdbpPrintCmResourceList("translated resources", Snapshot.ResourceListTranslated);
+    KdbpPrintIoResourceRequirements(Snapshot.ResourceRequirements);
+    return TRUE;
+}
+
 static VOID
 KdbpPrintResource(IN PERESOURCE Resource)
 {
@@ -8487,6 +9307,10 @@ KdbpCliInterpretInitFile(VOID)
     if (!p1)
         return;
 
+#if DBG
+    KdpLogWatchdogSuspend();
+#endif
+
     /* Execute the commands in the init file */
     KdbPuts("KDB: Executing KDBinit file...\n");
     while (p1[0] != '\0')
@@ -8528,6 +9352,9 @@ KdbpCliInterpretInitFile(VOID)
         while (p1[0] == '\r' || p1[0] == '\n')
             p1++;
     }
+#if DBG
+    KdpLogWatchdogResume();
+#endif
     KdbPuts("KDB: KDBinit executed\n");
 }
 

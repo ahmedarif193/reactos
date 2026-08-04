@@ -905,10 +905,7 @@ HalArm64DbgGicState(
     *Pending = 0xFFFFFFFF;
     *Active = 0xFFFFFFFF;
 
-    if (IntId >= 32)
-        return;
-
-    if (HalpGicUseSysRegs)
+    if (IntId < 32 && HalpGicUseSysRegs)
     {
         ULONG Cpu = KeGetCurrentProcessorNumber();
         ULONG_PTR SgiBase = HalpGicrSgiBase(Cpu);
@@ -923,12 +920,18 @@ HalArm64DbgGicState(
         *Pending = (*HalpMmio(SgiBase, GICR_ISPENDR0) >> IntId) & 1u;
         *Active = (*HalpMmio(SgiBase, GICR_ISACTIVER0) >> IntId) & 1u;
     }
-    else if (HalpGicdBase != 0)
+    else if (IntId < 1020 && HalpGicdBase != 0)
     {
-        volatile UCHAR *PrioBytes =
-            (volatile UCHAR *)HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IPRIORITYR);
+        volatile UCHAR *PrioBytes;
+        ULONG RegisterOffset;
+        ULONG Bit;
+
+        PrioBytes = (volatile UCHAR *)HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IPRIORITYR);
+        RegisterOffset = (IntId / 32) * sizeof(ULONG);
+        Bit = IntId % 32;
         *Prio = PrioBytes[IntId];
-        *Enable = (*HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ISENABLER) >> IntId) & 1u;
-        *Pending = (*HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ISPENDR) >> IntId) & 1u;
+        *Enable = (*HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ISENABLER + RegisterOffset) >> Bit) & 1u;
+        *Pending = (*HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ISPENDR + RegisterOffset) >> Bit) & 1u;
+        *Active = (*HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ISACTIVER + RegisterOffset) >> Bit) & 1u;
     }
 }
