@@ -207,6 +207,7 @@ list(APPEND SOURCE
     wmiutils.idl
     wmsbuffer.idl
     wmsdkidl.idl
+    wmsecure.idl
     wsdbase.idl
     wsddisco.idl
     wsdxml.idl
