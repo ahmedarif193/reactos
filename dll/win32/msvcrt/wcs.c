@@ -2155,7 +2155,9 @@ int CDECL _wctomb_l(char *dst, wchar_t ch, _locale_t locale)
     int len;
 #ifdef __REACTOS__
     int maxlen;
-    if (locale)
+    if (!dst)
+        maxlen = 0;
+    else if (locale)
         maxlen = locale->locinfo->mb_cur_max;
     else
         maxlen = get_locinfo()->mb_cur_max;
