@@ -1,0 +1,7 @@
+add_definitions(-DUSE_WINE_TODOS -D__WINESRC__)
+
+add_executable(threadpoolwinrt_winetest threadpool.c testlist.c)
+target_link_libraries(threadpoolwinrt_winetest uuid)
+set_module_type(threadpoolwinrt_winetest win32cui)
+add_importlibs(threadpoolwinrt_winetest combase msvcrt kernel32)
+add_rostests_file(TARGET threadpoolwinrt_winetest)
