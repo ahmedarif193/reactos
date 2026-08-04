@@ -5,12 +5,24 @@
  */
 
 #include <ntddk.h>
+#include <initguid.h>
+#include <gpio.h>
 #include <reactos/drivers/reshubio.h>
+#include <reactos/drivers/intelgpio.h>
 
 #define NDEBUG
 #include <debug.h>
 
 #define RH_TAG 'bHuR'
+
+#define RH_AML_LARGE_HEADER_LENGTH 3
+#define RH_AML_GPIO_MINIMUM_LENGTH 23
+#define RH_AML_GPIO_CONNECTION_TYPE 4
+#define RH_AML_GPIO_INT_FLAGS 7
+#define RH_AML_GPIO_PIN_CONFIG 9
+#define RH_AML_GPIO_DEBOUNCE 12
+#define RH_AML_GPIO_PIN_TABLE_OFFSET 14
+#define RH_AML_GPIO_RESOURCE_SOURCE_OFFSET 17
 
 typedef struct _RH_CONNECTION_ENTRY
 {
@@ -244,6 +256,219 @@ RhQueryConnection(
 }
 
 static
+USHORT
+RhReadUshort(
+    _In_reads_bytes_(sizeof(USHORT)) const UCHAR *Buffer)
+{
+    USHORT Value;
+
+    RtlCopyMemory(&Value, Buffer, sizeof(Value));
+    return Value;
+}
+
+static
+NTSTATUS
+RhParseGpioConnection(
+    _In_ PRH_CONNECTION_ENTRY Entry,
+    _Out_ PUSHORT PinTableOffset,
+    _Out_ PUSHORT PinCount,
+    _Out_ PUCHAR IoRestriction,
+    _Out_ PUCHAR PinConfiguration,
+    _Out_ PUSHORT DebounceTimeout)
+{
+    PUCHAR Properties = (PUCHAR)Entry->Properties;
+    ULONG DescriptorLength;
+    USHORT ResourceSourceOffset;
+
+    if (Entry->Class != CM_RESOURCE_CONNECTION_CLASS_GPIO || Entry->Type != CM_RESOURCE_CONNECTION_TYPE_GPIO_IO || Entry->PropertiesLength < RH_AML_GPIO_MINIMUM_LENGTH)
+        return STATUS_INVALID_DEVICE_REQUEST;
+    if (!(Properties[0] & 0x80) || Properties[RH_AML_GPIO_CONNECTION_TYPE] != 1)
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    DescriptorLength = RH_AML_LARGE_HEADER_LENGTH + RhReadUshort(Properties + 1);
+    if (DescriptorLength > Entry->PropertiesLength || DescriptorLength < RH_AML_GPIO_MINIMUM_LENGTH)
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    *PinTableOffset = RhReadUshort(Properties + RH_AML_GPIO_PIN_TABLE_OFFSET);
+    ResourceSourceOffset = RhReadUshort(Properties + RH_AML_GPIO_RESOURCE_SOURCE_OFFSET);
+    if (*PinTableOffset < RH_AML_GPIO_MINIMUM_LENGTH || ResourceSourceOffset < *PinTableOffset || ResourceSourceOffset > DescriptorLength || (ResourceSourceOffset - *PinTableOffset) % sizeof(USHORT))
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    *PinCount = (ResourceSourceOffset - *PinTableOffset) / sizeof(USHORT);
+    if (!*PinCount)
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    *IoRestriction = Properties[RH_AML_GPIO_INT_FLAGS] & 3;
+    *PinConfiguration = Properties[RH_AML_GPIO_PIN_CONFIG];
+    *DebounceTimeout = RhReadUshort(Properties + RH_AML_GPIO_DEBOUNCE);
+    return STATUS_SUCCESS;
+}
+
+static
+ULONG
+RhGpioDebounceExponent(
+    _In_ USHORT DebounceTimeout)
+{
+    ULONGLONG PeriodUnits;
+    ULONG Exponent = 0;
+
+    if (!DebounceTimeout)
+        return INTELGPIO_DEBOUNCE_PRESERVE;
+    PeriodUnits = ((ULONGLONG)DebounceTimeout * 1000 + 31249) / 31250;
+    while (PeriodUnits > 1 && Exponent < 15)
+    {
+        PeriodUnits = (PeriodUnits + 1) >> 1;
+        Exponent++;
+    }
+    return Exponent;
+}
+
+static
+NTSTATUS
+RhOpenIntelGpio(
+    _Out_ PFILE_OBJECT *FileObject,
+    _Out_ PDEVICE_OBJECT *DeviceObject)
+{
+    PWCHAR InterfaceList = NULL;
+    UNICODE_STRING InterfaceName;
+    NTSTATUS Status;
+
+    *FileObject = NULL;
+    *DeviceObject = NULL;
+    Status = IoGetDeviceInterfaces(&GUID_DEVINTERFACE_INTEL_GPIO, NULL, 0, &InterfaceList);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (!InterfaceList[0])
+    {
+        ExFreePool(InterfaceList);
+        return STATUS_DEVICE_NOT_CONNECTED;
+    }
+    RtlInitUnicodeString(&InterfaceName, InterfaceList);
+    Status = IoGetDeviceObjectPointer(&InterfaceName, FILE_READ_DATA | FILE_WRITE_DATA, FileObject, DeviceObject);
+    ExFreePool(InterfaceList);
+    return Status;
+}
+
+static
+NTSTATUS
+RhSendSynchronousIoctl(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ ULONG IoControlCode,
+    _Inout_updates_bytes_(BufferLength) PVOID Buffer,
+    _In_ ULONG BufferLength)
+{
+    IO_STATUS_BLOCK IoStatus;
+    KEVENT Event;
+    PIRP Irp;
+    NTSTATUS Status;
+
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+    Irp = IoBuildDeviceIoControlRequest(IoControlCode, DeviceObject, Buffer, BufferLength, Buffer, BufferLength, FALSE, &Event, &IoStatus);
+    if (!Irp)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    Status = IoCallDriver(DeviceObject, Irp);
+    if (Status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+        Status = IoStatus.Status;
+    }
+    return Status;
+}
+
+static
+NTSTATUS
+RhAccessGpioConnection(
+    _In_ PRH_CONNECTION_ENTRY Entry,
+    _Inout_ PIRP Irp,
+    _In_ PIO_STACK_LOCATION IrpStack)
+{
+    PFILE_OBJECT GpioFileObject;
+    PDEVICE_OBJECT GpioDeviceObject;
+    PUCHAR Buffer = Irp->AssociatedIrp.SystemBuffer;
+    ULONG IoControlCode = IrpStack->Parameters.DeviceIoControl.IoControlCode;
+    ULONG BufferLength;
+    USHORT PinTableOffset;
+    USHORT PinCount;
+    USHORT DebounceTimeout;
+    UCHAR IoRestriction;
+    UCHAR PinConfiguration;
+    ULONG PinIndex;
+    NTSTATUS Status;
+
+    Status = RhParseGpioConnection(Entry, &PinTableOffset, &PinCount, &IoRestriction, &PinConfiguration, &DebounceTimeout);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    BufferLength = (PinCount + 7) / 8;
+    if (IoControlCode == IOCTL_GPIO_READ_PINS)
+    {
+        if (IoRestriction == 2)
+            return STATUS_ACCESS_DENIED;
+        if (!Buffer || IrpStack->Parameters.DeviceIoControl.OutputBufferLength < BufferLength)
+            return STATUS_BUFFER_TOO_SMALL;
+        RtlZeroMemory(Buffer, BufferLength);
+    }
+    else if (IoControlCode == IOCTL_GPIO_WRITE_PINS)
+    {
+        if (IoRestriction == 1)
+            return STATUS_ACCESS_DENIED;
+        if (!Buffer || IrpStack->Parameters.DeviceIoControl.InputBufferLength < BufferLength)
+            return STATUS_BUFFER_TOO_SMALL;
+    }
+    else
+    {
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    Status = RhOpenIntelGpio(&GpioFileObject, &GpioDeviceObject);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    for (PinIndex = 0; PinIndex < PinCount; PinIndex++)
+    {
+        ULONG PinNumber = RhReadUshort(Entry->Properties + PinTableOffset + PinIndex * sizeof(USHORT));
+
+        if (IoRestriction != 3)
+        {
+            INTELGPIO_PIN_CONFIGURATION Configuration;
+
+            RtlZeroMemory(&Configuration, sizeof(Configuration));
+            Configuration.Version = INTELGPIO_INTERFACE_VERSION;
+            Configuration.PinNumber = PinNumber;
+            Configuration.Direction = IoControlCode == IOCTL_GPIO_READ_PINS ? IntelGpioDirectionInput : IntelGpioDirectionOutput;
+            Configuration.InitialValue = !!(Buffer[PinIndex / 8] & (1U << (PinIndex % 8)));
+            Configuration.PullConfiguration = PinConfiguration == 1 ? IntelGpioPullUp20K : PinConfiguration == 2 ? IntelGpioPullDown20K : PinConfiguration == 3 ? IntelGpioPullNone : IntelGpioPullPreserve;
+            Configuration.DebounceExponent = RhGpioDebounceExponent(DebounceTimeout);
+            Status = RhSendSynchronousIoctl(GpioDeviceObject, IOCTL_INTELGPIO_CONFIGURE_PIN, &Configuration, sizeof(Configuration));
+            if (!NT_SUCCESS(Status))
+                break;
+        }
+        if (IoControlCode == IOCTL_GPIO_READ_PINS)
+        {
+            INTELGPIO_PIN_INFORMATION Information;
+
+            RtlZeroMemory(&Information, sizeof(Information));
+            Information.Version = INTELGPIO_INTERFACE_VERSION;
+            Information.PinNumber = PinNumber;
+            Status = RhSendSynchronousIoctl(GpioDeviceObject, IOCTL_INTELGPIO_QUERY_PIN, &Information, sizeof(Information));
+            if (!NT_SUCCESS(Status))
+                break;
+            if (Information.Value)
+                Buffer[PinIndex / 8] |= 1U << (PinIndex % 8);
+        }
+        else
+        {
+            INTELGPIO_PIN_WRITE Write;
+
+            Write.Version = INTELGPIO_INTERFACE_VERSION;
+            Write.PinNumber = PinNumber;
+            Write.Value = !!(Buffer[PinIndex / 8] & (1U << (PinIndex % 8)));
+            Status = RhSendSynchronousIoctl(GpioDeviceObject, IOCTL_INTELGPIO_WRITE_PIN, &Write, sizeof(Write));
+            if (!NT_SUCCESS(Status))
+                break;
+        }
+    }
+    ObDereferenceObject(GpioFileObject);
+    if (NT_SUCCESS(Status))
+        Irp->IoStatus.Information = IoControlCode == IOCTL_GPIO_READ_PINS ? BufferLength : 0;
+    return Status;
+}
+
+static
 NTSTATUS
 NTAPI
 RhDeviceControl(
@@ -251,11 +476,16 @@ RhDeviceControl(
     _Inout_ PIRP Irp)
 {
     PIO_STACK_LOCATION IrpStack = IoGetCurrentIrpStackLocation(Irp);
+    PRH_CONNECTION_ENTRY Entry = IrpStack->FileObject ? IrpStack->FileObject->FsContext : NULL;
     NTSTATUS Status;
 
     UNREFERENCED_PARAMETER(DeviceObject);
     Irp->IoStatus.Information = 0;
-    switch (IrpStack->Parameters.DeviceIoControl.IoControlCode)
+    if (Entry && Entry->Class == CM_RESOURCE_CONNECTION_CLASS_GPIO)
+    {
+        Status = RhAccessGpioConnection(Entry, Irp, IrpStack);
+    }
+    else switch (IrpStack->Parameters.DeviceIoControl.IoControlCode)
     {
         case IOCTL_RH_QUERY_CONNECTION_PROPERTIES:
             Status = RhQueryConnection(Irp, IrpStack);
