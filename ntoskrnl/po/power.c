@@ -32,133 +32,11 @@ SYSTEM_POWER_CAPABILITIES PopCapabilities;
 #define POP_PROCESSOR_POWER_TAG 'pPoP'
 #define POP_PROCESSOR_PERF_PERIOD_MS 100
 #define POP_MAXIMUM_PERF_STATES 32
-#define POP_THERMAL_REQUEST_TAG 'rToP'
-#define POP_THERMAL_REQUEST_SIGNATURE 'qThP'
-
-typedef struct _POP_THERMAL_REQUEST
-{
-    ULONG Signature;
-    LIST_ENTRY ListEntry;
-    PDEVICE_OBJECT TargetDeviceObject;
-    PDEVICE_OBJECT PolicyDeviceObject;
-    THERMAL_COOLING_INTERFACE Interface;
-    BOOLEAN InterfaceAcquired;
-    UCHAR PassiveThrottle;
-    BOOLEAN ActiveEngaged;
-} POP_THERMAL_REQUEST, *PPOP_THERMAL_REQUEST;
-
-static LIST_ENTRY PopThermalRequestList;
-static KGUARDED_MUTEX PopThermalRequestLock;
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
 static WORKER_THREAD_ROUTINE PopPassivePowerCall;
 
-static
-NTSTATUS
-NTAPI
-PopThermalQueryCompletion(
-    _In_ PDEVICE_OBJECT DeviceObject,
-    _In_ PIRP Irp,
-    _In_ PVOID Context)
-{
-    UNREFERENCED_PARAMETER(DeviceObject);
-    UNREFERENCED_PARAMETER(Irp);
-    KeSetEvent((PKEVENT)Context, IO_NO_INCREMENT, FALSE);
-    return STATUS_MORE_PROCESSING_REQUIRED;
-}
-
-static
-NTSTATUS
-PopQueryThermalInterface(
-    _In_ PDEVICE_OBJECT TargetDeviceObject,
-    _Out_ PTHERMAL_COOLING_INTERFACE Interface)
-{
-    PDEVICE_OBJECT DeviceObject;
-    PIO_STACK_LOCATION Stack;
-    KEVENT Event;
-    PIRP Irp;
-    NTSTATUS Status;
-
-    RtlZeroMemory(Interface, sizeof(*Interface));
-    Interface->Size = sizeof(*Interface);
-    Interface->Version = THERMAL_COOLING_INTERFACE_VERSION;
-    DeviceObject = IoGetAttachedDeviceReference(TargetDeviceObject);
-    Irp = IoAllocateIrp(DeviceObject->StackSize, FALSE);
-    if (!Irp)
-    {
-        ObDereferenceObject(DeviceObject);
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-    KeInitializeEvent(&Event, NotificationEvent, FALSE);
-    Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
-    Stack = IoGetNextIrpStackLocation(Irp);
-    Stack->MajorFunction = IRP_MJ_PNP;
-    Stack->MinorFunction = IRP_MN_QUERY_INTERFACE;
-    Stack->Parameters.QueryInterface.InterfaceType = &GUID_THERMAL_COOLING_INTERFACE;
-    Stack->Parameters.QueryInterface.Size = sizeof(*Interface);
-    Stack->Parameters.QueryInterface.Version = THERMAL_COOLING_INTERFACE_VERSION;
-    Stack->Parameters.QueryInterface.Interface = (PINTERFACE)Interface;
-    Stack->Parameters.QueryInterface.InterfaceSpecificData = NULL;
-    IoSetCompletionRoutine(Irp, PopThermalQueryCompletion, &Event, TRUE, TRUE, TRUE);
-    IoCallDriver(DeviceObject, Irp);
-    KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
-    Status = Irp->IoStatus.Status;
-    IoFreeIrp(Irp);
-    ObDereferenceObject(DeviceObject);
-    return Status;
-}
-
-static
-BOOLEAN
-PopAcquireThermalInterface(
-    _Inout_ PPOP_THERMAL_REQUEST Request)
-{
-    NTSTATUS Status;
-
-    if (Request->InterfaceAcquired)
-        return TRUE;
-    Status = PopQueryThermalInterface(Request->TargetDeviceObject, &Request->Interface);
-    if (!NT_SUCCESS(Status))
-        return FALSE;
-    Request->InterfaceAcquired = TRUE;
-    return TRUE;
-}
-
-static
-UCHAR
-PopGetPassiveThermalLimit(
-    _In_ PDEVICE_OBJECT TargetDeviceObject)
-{
-    PPOP_THERMAL_REQUEST Request;
-    PLIST_ENTRY Entry;
-    UCHAR Limit = 100;
-
-    for (Entry = PopThermalRequestList.Flink; Entry != &PopThermalRequestList; Entry = Entry->Flink)
-    {
-        Request = CONTAINING_RECORD(Entry, POP_THERMAL_REQUEST, ListEntry);
-        if (Request->TargetDeviceObject == TargetDeviceObject && Request->PassiveThrottle < Limit)
-            Limit = Request->PassiveThrottle;
-    }
-    return Limit;
-}
-
-static
-BOOLEAN
-PopGetActiveThermalState(
-    _In_ PDEVICE_OBJECT TargetDeviceObject)
-{
-    PPOP_THERMAL_REQUEST Request;
-    PLIST_ENTRY Entry;
-
-    for (Entry = PopThermalRequestList.Flink; Entry != &PopThermalRequestList; Entry = Entry->Flink)
-    {
-        Request = CONTAINING_RECORD(Entry, POP_THERMAL_REQUEST, ListEntry);
-        if (Request->TargetDeviceObject == TargetDeviceObject && Request->ActiveEngaged)
-            return TRUE;
-    }
-    return FALSE;
-}
 _Use_decl_annotations_
 static
 VOID
@@ -569,6 +447,7 @@ PoInitSystem(IN ULONG BootPhase)
     /* Initialize the power capabilities */
     RtlZeroMemory(&PopCapabilities, sizeof(SYSTEM_POWER_CAPABILITIES));
     PopInitializeEventSupport();
+    PopInitializeThermalRequests();
 
     /* Get the Command Line */
     CommandLine = KeLoaderBlock->LoadOptions;
@@ -597,10 +476,6 @@ PoInitSystem(IN ULONG BootPhase)
     /* Initialize volume support */
     InitializeListHead(&PopVolumeDevices);
     KeInitializeGuardedMutex(&PopVolumeLock);
-
-    /* Initialize Windows 10 thermal request aggregation. */
-    InitializeListHead(&PopThermalRequestList);
-    KeInitializeGuardedMutex(&PopThermalRequestLock);
 
     /* Initialize support for dope */
     KeInitializeSpinLock(&PopDopeGlobalLock);
@@ -859,138 +734,6 @@ PoInitializePrcb(IN PKPRCB Prcb)
 }
 
 /* PUBLIC FUNCTIONS **********************************************************/
-
-NTSTATUS
-NTAPI
-PoCreateThermalRequest(
-    _Outptr_ PVOID *ThermalRequest,
-    _In_ PDEVICE_OBJECT TargetDeviceObject,
-    _In_ PDEVICE_OBJECT PolicyDeviceObject,
-    _In_ PCOUNTED_REASON_CONTEXT Context,
-    _In_ ULONG Flags)
-{
-    PPOP_THERMAL_REQUEST Request;
-
-    UNREFERENCED_PARAMETER(Flags);
-    if (!ThermalRequest || !TargetDeviceObject || !PolicyDeviceObject || !Context)
-        return STATUS_INVALID_PARAMETER;
-    *ThermalRequest = NULL;
-    Request = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Request), POP_THERMAL_REQUEST_TAG);
-    if (!Request)
-        return STATUS_INSUFFICIENT_RESOURCES;
-    RtlZeroMemory(Request, sizeof(*Request));
-    Request->Signature = POP_THERMAL_REQUEST_SIGNATURE;
-    Request->TargetDeviceObject = TargetDeviceObject;
-    Request->PolicyDeviceObject = PolicyDeviceObject;
-    Request->PassiveThrottle = 100;
-    ObReferenceObject(TargetDeviceObject);
-    ObReferenceObject(PolicyDeviceObject);
-    KeAcquireGuardedMutex(&PopThermalRequestLock);
-    InsertTailList(&PopThermalRequestList, &Request->ListEntry);
-    PopAcquireThermalInterface(Request);
-    KeReleaseGuardedMutex(&PopThermalRequestLock);
-    *ThermalRequest = Request;
-    return STATUS_SUCCESS;
-}
-
-BOOLEAN
-NTAPI
-PoGetThermalRequestSupport(
-    _In_ PVOID ThermalRequest,
-    _In_ PO_THERMAL_REQUEST_TYPE Type)
-{
-    PPOP_THERMAL_REQUEST Request = ThermalRequest;
-    BOOLEAN Supported = FALSE;
-
-    if (!Request || Request->Signature != POP_THERMAL_REQUEST_SIGNATURE)
-        return FALSE;
-    KeAcquireGuardedMutex(&PopThermalRequestLock);
-    if (PopAcquireThermalInterface(Request))
-    {
-        if (Type == PoThermalRequestPassive)
-            Supported = (Request->Interface.Flags & ThermalDeviceFlagPassiveCooling) != 0 && Request->Interface.PassiveCooling != NULL;
-        else if (Type == PoThermalRequestActive)
-            Supported = (Request->Interface.Flags & ThermalDeviceFlagActiveCooling) != 0 && Request->Interface.ActiveCooling != NULL;
-    }
-    KeReleaseGuardedMutex(&PopThermalRequestLock);
-    return Supported;
-}
-
-NTSTATUS
-NTAPI
-PoSetThermalPassiveCooling(
-    _Inout_ PVOID ThermalRequest,
-    _In_ UCHAR Throttle)
-{
-    PPOP_THERMAL_REQUEST Request = ThermalRequest;
-    UCHAR Limit;
-
-    if (!Request || Request->Signature != POP_THERMAL_REQUEST_SIGNATURE || Throttle > 100)
-        return STATUS_INVALID_PARAMETER;
-    KeAcquireGuardedMutex(&PopThermalRequestLock);
-    if (!PopAcquireThermalInterface(Request) || !(Request->Interface.Flags & ThermalDeviceFlagPassiveCooling) || !Request->Interface.PassiveCooling)
-    {
-        KeReleaseGuardedMutex(&PopThermalRequestLock);
-        return STATUS_NOT_SUPPORTED;
-    }
-    Request->PassiveThrottle = Throttle;
-    Limit = PopGetPassiveThermalLimit(Request->TargetDeviceObject);
-    Request->Interface.PassiveCooling(Request->Interface.Context, Limit);
-    KeReleaseGuardedMutex(&PopThermalRequestLock);
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS
-NTAPI
-PoSetThermalActiveCooling(
-    _Inout_ PVOID ThermalRequest,
-    _In_ BOOLEAN Engaged)
-{
-    PPOP_THERMAL_REQUEST Request = ThermalRequest;
-    BOOLEAN Active;
-
-    if (!Request || Request->Signature != POP_THERMAL_REQUEST_SIGNATURE)
-        return STATUS_INVALID_PARAMETER;
-    KeAcquireGuardedMutex(&PopThermalRequestLock);
-    if (!PopAcquireThermalInterface(Request) || !(Request->Interface.Flags & ThermalDeviceFlagActiveCooling) || !Request->Interface.ActiveCooling)
-    {
-        KeReleaseGuardedMutex(&PopThermalRequestLock);
-        return STATUS_NOT_SUPPORTED;
-    }
-    Request->ActiveEngaged = Engaged != FALSE;
-    Active = PopGetActiveThermalState(Request->TargetDeviceObject);
-    Request->Interface.ActiveCooling(Request->Interface.Context, Active);
-    KeReleaseGuardedMutex(&PopThermalRequestLock);
-    return STATUS_SUCCESS;
-}
-
-VOID
-NTAPI
-PoDeleteThermalRequest(
-    _Inout_ PVOID ThermalRequest)
-{
-    PPOP_THERMAL_REQUEST Request = ThermalRequest;
-    UCHAR Limit;
-    BOOLEAN Active;
-
-    if (!Request || Request->Signature != POP_THERMAL_REQUEST_SIGNATURE)
-        return;
-    KeAcquireGuardedMutex(&PopThermalRequestLock);
-    RemoveEntryList(&Request->ListEntry);
-    Request->Signature = 0;
-    Limit = PopGetPassiveThermalLimit(Request->TargetDeviceObject);
-    Active = PopGetActiveThermalState(Request->TargetDeviceObject);
-    if (Request->InterfaceAcquired && (Request->Interface.Flags & ThermalDeviceFlagPassiveCooling) && Request->Interface.PassiveCooling)
-        Request->Interface.PassiveCooling(Request->Interface.Context, Limit);
-    if (Request->InterfaceAcquired && (Request->Interface.Flags & ThermalDeviceFlagActiveCooling) && Request->Interface.ActiveCooling)
-        Request->Interface.ActiveCooling(Request->Interface.Context, Active);
-    KeReleaseGuardedMutex(&PopThermalRequestLock);
-    if (Request->InterfaceAcquired && Request->Interface.InterfaceDereference)
-        Request->Interface.InterfaceDereference(Request->Interface.Context);
-    ObDereferenceObject(Request->PolicyDeviceObject);
-    ObDereferenceObject(Request->TargetDeviceObject);
-    ExFreePoolWithTag(Request, POP_THERMAL_REQUEST_TAG);
-}
 
 /*
  * @unimplemented
