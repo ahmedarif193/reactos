@@ -179,6 +179,8 @@ list(APPEND SOURCE
     windows.foundation.idl
     windows.foundation.metadata.idl
     windows.foundation.numerics.idl
+    windows.graphics.display.idl
+    windows.graphics.idl
     windows.gaming.input.custom.idl
     windows.gaming.input.forcefeedback.idl
     windows.gaming.input.idl
