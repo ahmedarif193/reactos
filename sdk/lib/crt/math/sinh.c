@@ -10,6 +10,8 @@
  */
 double sinh(double x)
 {
+ if (x != x) return x + x;
+
  if(x >= 0.0)
  {
    const double epos = exp(x);
