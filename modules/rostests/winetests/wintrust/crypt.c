@@ -685,7 +685,10 @@ static void test_CryptCATAdminAddRemoveCatalog(void)
     SetLastError(0xdeadbeef);
     hcatinfo = pCryptCATAdminAddCatalog(hcatadmin, tmpfileW, basenameW, 0);
     error = GetLastError();
-    todo_wine {
+#ifndef __REACTOS__
+    todo_wine
+#endif
+    {
     ok(hcatinfo == NULL, "CryptCATAdminAddCatalog succeeded\n");
     ok(error == ERROR_BAD_FORMAT, "got %lu expected ERROR_BAD_FORMAT\n", GetLastError());
     }
@@ -704,7 +707,10 @@ static void test_CryptCATAdminAddRemoveCatalog(void)
     hcatinfo = pCryptCATAdminAddCatalog(hcatadmin, tmpfileW, NULL, 0);
     error = GetLastError();
     ok(hcatinfo == NULL, "CryptCATAdminAddCatalog succeeded\n");
-    todo_wine ok(error == ERROR_BAD_FORMAT, "got %lu expected ERROR_BAD_FORMAT\n", GetLastError());
+#ifndef __REACTOS__
+    todo_wine
+#endif
+    ok(error == ERROR_BAD_FORMAT, "got %lu expected ERROR_BAD_FORMAT\n", GetLastError());
 
     DeleteFileA(tmpfile);
     file = CreateFileA(tmpfile, GENERIC_WRITE, 0, NULL, CREATE_NEW, 0, NULL);
@@ -719,12 +725,17 @@ static void test_CryptCATAdminAddRemoveCatalog(void)
         win_skip("Not enough rights\n");
         goto cleanup;
     }
-    todo_wine ok(hcatinfo != NULL, "CryptCATAdminAddCatalog failed %lu\n", GetLastError());
+#ifndef __REACTOS__
+    todo_wine
+#endif
+    ok(hcatinfo != NULL, "CryptCATAdminAddCatalog failed %lu\n", GetLastError());
 
     info.cbStruct = sizeof(info);
     info.wszCatalogFile[0] = 0;
     ret = pCryptCATCatalogInfoFromContext(hcatinfo, &info, 0);
+#ifndef __REACTOS__
     todo_wine
+#endif
     {
     ok(ret, "CryptCATCatalogInfoFromContext failed %lu\n", GetLastError());
     ok(info.wszCatalogFile[0] != 0, "Expected a filename\n");
@@ -747,7 +758,9 @@ static void test_CryptCATAdminAddRemoveCatalog(void)
     lstrcatA(catfilepath, "\\{DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF}\\winetest.cat");
     attrs = GetFileAttributesA(catfilepath);
     ok(attrs != INVALID_FILE_ATTRIBUTES, "Expected %s to exist\n", catfilepath);
+#ifndef __REACTOS__
     todo_wine
+#endif
     ok(attrs == FILE_ATTRIBUTE_SYSTEM ||
        attrs == (FILE_ATTRIBUTE_NOT_CONTENT_INDEXED | FILE_ATTRIBUTE_SYSTEM), /* Vista */
        "File has wrong attributes : %08lx\n", attrs);
