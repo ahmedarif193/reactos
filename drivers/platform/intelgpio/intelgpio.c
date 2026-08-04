@@ -13,6 +13,10 @@
 
 #define INTELGPIO_TAG 'oGpI'
 #define INTELGPIO_COMMUNITY_COUNT 4
+#define INTELGPIO_GROUP_COUNT 13
+#define INTELGPIO_GPIO_COUNT 360
+#define INTELGPIO_PENDING_WORD_COUNT ((INTELGPIO_GPIO_COUNT + 31) / 32)
+#define INTELGPIO_MAXIMUM_WAIT_MS 180000
 
 #define INTELGPIO_REVID 0x000
 #define INTELGPIO_PADBAR 0x00c
@@ -23,7 +27,12 @@
 #define INTELGPIO_GPI_IE 0x120
 
 #define INTELGPIO_PADCFG0_RXEVCFG_MASK 0x06000000
+#define INTELGPIO_PADCFG0_RXEVCFG_LEVEL 0x00000000
+#define INTELGPIO_PADCFG0_RXEVCFG_EDGE 0x02000000
+#define INTELGPIO_PADCFG0_RXEVCFG_EDGE_BOTH 0x06000000
 #define INTELGPIO_PADCFG0_PREGFRXSEL 0x01000000
+#define INTELGPIO_PADCFG0_RXINV 0x00800000
+#define INTELGPIO_PADCFG0_ROUTE_IOAPIC 0x00100000
 #define INTELGPIO_PADCFG0_ROUTE_MASK 0x001e0000
 #define INTELGPIO_PADCFG0_PMODE_MASK 0x00003c00
 #define INTELGPIO_PADCFG0_RXDIS 0x00000200
@@ -69,6 +78,12 @@ typedef struct _INTELGPIO_DEVICE_EXTENSION
     KSPIN_LOCK RegisterLock;
     UNICODE_STRING InterfaceName;
     INTELGPIO_COMMUNITY Communities[INTELGPIO_COMMUNITY_COUNT];
+    PKINTERRUPT InterruptObject;
+    KEVENT InterruptEvent;
+    KDPC InterruptDpc;
+    volatile LONG PendingInterrupts[INTELGPIO_PENDING_WORD_COUNT];
+    ULONG EnabledInterrupts[INTELGPIO_GROUP_COUNT];
+    BOOLEAN InterruptConnected;
     BOOLEAN Started;
 } INTELGPIO_DEVICE_EXTENSION, *PINTELGPIO_DEVICE_EXTENSION;
 
@@ -215,6 +230,217 @@ IntelGpioGetLockState(
     if (IntelGpioRead32(Community, INTELGPIO_PADCFGLOCK + Group->RegisterNumber * 8 + sizeof(ULONG)) & (1UL << GroupOffset))
         State |= INTELGPIO_PIN_STATE_TX_LOCKED;
     return State;
+}
+
+static
+BOOLEAN
+IntelGpioClaimPendingInterrupt(
+    _In_ PINTELGPIO_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG RequestedPin,
+    _Out_ PULONG TriggeredPin)
+{
+    ULONG FirstWord = 0;
+    ULONG LastWord = INTELGPIO_PENDING_WORD_COUNT;
+    ULONG WordIndex;
+
+    if (RequestedPin != INTELGPIO_ANY_PIN)
+    {
+        FirstWord = RequestedPin / 32;
+        LastWord = FirstWord + 1;
+    }
+    for (WordIndex = FirstWord; WordIndex < LastWord; WordIndex++)
+    {
+        ULONG BitStart = RequestedPin == INTELGPIO_ANY_PIN ? 0 : RequestedPin % 32;
+        ULONG BitEnd = RequestedPin == INTELGPIO_ANY_PIN ? 32 : BitStart + 1;
+        ULONG Bit;
+
+        for (Bit = BitStart; Bit < BitEnd; Bit++)
+        {
+            LONG Mask = (LONG)(1UL << Bit);
+            LONG OldValue;
+            LONG NewValue;
+
+            do
+            {
+                OldValue = DeviceExtension->PendingInterrupts[WordIndex];
+                if (!(OldValue & Mask))
+                    break;
+                NewValue = OldValue & ~Mask;
+            } while (InterlockedCompareExchange(&DeviceExtension->PendingInterrupts[WordIndex], NewValue, OldValue) != OldValue);
+            if (OldValue & Mask)
+            {
+                *TriggeredPin = WordIndex * 32 + Bit;
+                return TRUE;
+            }
+        }
+    }
+    return FALSE;
+}
+
+static
+VOID
+NTAPI
+IntelGpioInterruptDpc(
+    _In_ PKDPC Dpc,
+    _In_opt_ PVOID DeferredContext,
+    _In_opt_ PVOID SystemArgument1,
+    _In_opt_ PVOID SystemArgument2)
+{
+    PINTELGPIO_DEVICE_EXTENSION DeviceExtension = DeferredContext;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+    KeSetEvent(&DeviceExtension->InterruptEvent, IO_NO_INCREMENT, FALSE);
+}
+
+static
+BOOLEAN
+NTAPI
+IntelGpioInterruptService(
+    _In_ PKINTERRUPT Interrupt,
+    _In_ PVOID ServiceContext)
+{
+    PINTELGPIO_DEVICE_EXTENSION DeviceExtension = ServiceContext;
+    BOOLEAN Handled = FALSE;
+    ULONG GroupIndex;
+
+    UNREFERENCED_PARAMETER(Interrupt);
+    for (GroupIndex = 0; GroupIndex < INTELGPIO_GROUP_COUNT; GroupIndex++)
+    {
+        const INTELGPIO_GROUP *Group = &IntelGpioGroups[GroupIndex];
+        PINTELGPIO_COMMUNITY Community = &DeviceExtension->Communities[Group->Community];
+        ULONG Pending;
+        ULONG Bit;
+
+        if (!Community->RegisterBase || !DeviceExtension->EnabledInterrupts[GroupIndex])
+            continue;
+        Pending = IntelGpioRead32(Community, INTELGPIO_GPI_IS + Group->RegisterNumber * sizeof(ULONG));
+        Pending &= IntelGpioRead32(Community, INTELGPIO_GPI_IE + Group->RegisterNumber * sizeof(ULONG));
+        Pending &= DeviceExtension->EnabledInterrupts[GroupIndex];
+        if (!Pending)
+            continue;
+        WRITE_REGISTER_ULONG((PULONG)((PUCHAR)Community->RegisterBase + INTELGPIO_GPI_IS + Group->RegisterNumber * sizeof(ULONG)), Pending);
+        for (Bit = 0; Bit < Group->PinCount; Bit++)
+        {
+            ULONG GpioNumber;
+
+            if (!(Pending & (1UL << Bit)))
+                continue;
+            GpioNumber = Group->GpioBase + Bit;
+            InterlockedOr(&DeviceExtension->PendingInterrupts[GpioNumber / 32], (LONG)(1UL << (GpioNumber % 32)));
+        }
+        Handled = TRUE;
+    }
+    if (Handled)
+        KeInsertQueueDpc(&DeviceExtension->InterruptDpc, NULL, NULL);
+    return Handled;
+}
+
+static
+NTSTATUS
+IntelGpioConfigureInterrupt(
+    _In_ PINTELGPIO_DEVICE_EXTENSION DeviceExtension,
+    _In_ PINTELGPIO_INTERRUPT_CONFIGURATION Configuration)
+{
+    const INTELGPIO_GROUP *Group;
+    PINTELGPIO_COMMUNITY Community;
+    PULONG PadConfig0;
+    ULONG HardwarePin;
+    ULONG GroupIndex;
+    ULONG GroupOffset;
+    ULONG Mask;
+    ULONG InterruptEnable;
+    ULONG Value;
+    KIRQL OldIrql;
+
+    if (Configuration->Mode > IntelGpioInterruptEdgeBoth || !IntelGpioResolvePin(Configuration->PinNumber, &Group, &HardwarePin))
+        return STATUS_INVALID_PARAMETER;
+    if (!DeviceExtension->InterruptConnected && Configuration->Mode != IntelGpioInterruptDisabled)
+        return STATUS_NOT_SUPPORTED;
+    if (!IntelGpioIsHostOwned(DeviceExtension, Configuration->PinNumber))
+        return STATUS_ACCESS_DENIED;
+    GroupIndex = (ULONG)(Group - IntelGpioGroups);
+    GroupOffset = HardwarePin - Group->FirstPin;
+    Mask = 1UL << GroupOffset;
+    Community = &DeviceExtension->Communities[Group->Community];
+    PadConfig0 = IntelGpioGetPadRegister(DeviceExtension, Configuration->PinNumber, 0);
+    if (!PadConfig0)
+        return STATUS_INVALID_PARAMETER;
+
+    KeAcquireSpinLock(&DeviceExtension->RegisterLock, &OldIrql);
+    InterruptEnable = IntelGpioRead32(Community, INTELGPIO_GPI_IE + Group->RegisterNumber * sizeof(ULONG));
+    InterruptEnable &= ~Mask;
+    WRITE_REGISTER_ULONG((PULONG)((PUCHAR)Community->RegisterBase + INTELGPIO_GPI_IE + Group->RegisterNumber * sizeof(ULONG)), InterruptEnable);
+    DeviceExtension->EnabledInterrupts[GroupIndex] &= ~Mask;
+    if (Configuration->Mode == IntelGpioInterruptDisabled)
+    {
+        if (!(IntelGpioGetLockState(DeviceExtension, Configuration->PinNumber) & INTELGPIO_PIN_STATE_CONFIG_LOCKED))
+        {
+            Value = READ_REGISTER_ULONG(PadConfig0);
+            Value &= ~INTELGPIO_PADCFG0_ROUTE_IOAPIC;
+            WRITE_REGISTER_ULONG(PadConfig0, Value);
+        }
+        KeReleaseSpinLock(&DeviceExtension->RegisterLock, OldIrql);
+        return STATUS_SUCCESS;
+    }
+    if (IntelGpioIsAcpiMode(DeviceExtension, Configuration->PinNumber) || (IntelGpioGetLockState(DeviceExtension, Configuration->PinNumber) & INTELGPIO_PIN_STATE_CONFIG_LOCKED))
+    {
+        KeReleaseSpinLock(&DeviceExtension->RegisterLock, OldIrql);
+        return STATUS_ACCESS_DENIED;
+    }
+
+    Value = READ_REGISTER_ULONG(PadConfig0);
+    Value &= ~(INTELGPIO_PADCFG0_PMODE_MASK | INTELGPIO_PADCFG0_RXDIS | INTELGPIO_PADCFG0_ROUTE_MASK | INTELGPIO_PADCFG0_RXEVCFG_MASK | INTELGPIO_PADCFG0_RXINV);
+    Value |= INTELGPIO_PADCFG0_ROUTE_IOAPIC;
+    if (Configuration->Mode == IntelGpioInterruptLevelLow || Configuration->Mode == IntelGpioInterruptEdgeFalling)
+        Value |= INTELGPIO_PADCFG0_RXINV;
+    if (Configuration->Mode == IntelGpioInterruptEdgeRising || Configuration->Mode == IntelGpioInterruptEdgeFalling)
+        Value |= INTELGPIO_PADCFG0_RXEVCFG_EDGE;
+    else if (Configuration->Mode == IntelGpioInterruptEdgeBoth)
+        Value |= INTELGPIO_PADCFG0_RXEVCFG_EDGE_BOTH;
+    else
+        Value |= INTELGPIO_PADCFG0_RXEVCFG_LEVEL;
+    WRITE_REGISTER_ULONG(PadConfig0, Value);
+    WRITE_REGISTER_ULONG((PULONG)((PUCHAR)Community->RegisterBase + INTELGPIO_GPI_IS + Group->RegisterNumber * sizeof(ULONG)), Mask);
+    DeviceExtension->EnabledInterrupts[GroupIndex] |= Mask;
+    WRITE_REGISTER_ULONG((PULONG)((PUCHAR)Community->RegisterBase + INTELGPIO_GPI_IE + Group->RegisterNumber * sizeof(ULONG)), InterruptEnable | Mask);
+    KeReleaseSpinLock(&DeviceExtension->RegisterLock, OldIrql);
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+IntelGpioWaitInterrupt(
+    _In_ PINTELGPIO_DEVICE_EXTENSION DeviceExtension,
+    _Inout_ PINTELGPIO_INTERRUPT_WAIT Wait)
+{
+    const INTELGPIO_GROUP *Group;
+    LARGE_INTEGER Timeout;
+    PLARGE_INTEGER TimeoutPointer;
+    ULONG HardwarePin;
+    NTSTATUS Status;
+
+    if (Wait->PinNumber != INTELGPIO_ANY_PIN && !IntelGpioResolvePin(Wait->PinNumber, &Group, &HardwarePin))
+        return STATUS_INVALID_PARAMETER;
+    if (!DeviceExtension->InterruptConnected)
+        return STATUS_NOT_SUPPORTED;
+    if (Wait->TimeoutMilliseconds > INTELGPIO_MAXIMUM_WAIT_MS)
+        return STATUS_INVALID_PARAMETER;
+    if (IntelGpioClaimPendingInterrupt(DeviceExtension, Wait->PinNumber, &Wait->TriggeredPin))
+        return STATUS_SUCCESS;
+    if (!Wait->TimeoutMilliseconds)
+        return STATUS_TIMEOUT;
+    if (KeGetCurrentIrql() > APC_LEVEL)
+        return STATUS_INVALID_DEVICE_STATE;
+    Timeout.QuadPart = -((LONGLONG)Wait->TimeoutMilliseconds * 10000);
+    TimeoutPointer = &Timeout;
+    Status = KeWaitForSingleObject(&DeviceExtension->InterruptEvent, Executive, KernelMode, FALSE, TimeoutPointer);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (!DeviceExtension->Started)
+        return STATUS_DEVICE_NOT_READY;
+    return IntelGpioClaimPendingInterrupt(DeviceExtension, Wait->PinNumber, &Wait->TriggeredPin) ? STATUS_SUCCESS : STATUS_RETRY;
 }
 
 static
@@ -366,13 +592,33 @@ IntelGpioUnmapCommunities(
 {
     ULONG Index;
 
+    DeviceExtension->Started = FALSE;
+    KeSetEvent(&DeviceExtension->InterruptEvent, IO_NO_INCREMENT, FALSE);
+    for (Index = 0; Index < INTELGPIO_GROUP_COUNT; Index++)
+    {
+        const INTELGPIO_GROUP *Group = &IntelGpioGroups[Index];
+        PINTELGPIO_COMMUNITY Community = &DeviceExtension->Communities[Group->Community];
+        ULONG InterruptEnable;
+
+        if (!Community->RegisterBase || !DeviceExtension->EnabledInterrupts[Index])
+            continue;
+        InterruptEnable = IntelGpioRead32(Community, INTELGPIO_GPI_IE + Group->RegisterNumber * sizeof(ULONG));
+        InterruptEnable &= ~DeviceExtension->EnabledInterrupts[Index];
+        WRITE_REGISTER_ULONG((PULONG)((PUCHAR)Community->RegisterBase + INTELGPIO_GPI_IE + Group->RegisterNumber * sizeof(ULONG)), InterruptEnable);
+        DeviceExtension->EnabledInterrupts[Index] = 0;
+    }
+    if (DeviceExtension->InterruptConnected)
+    {
+        IoDisconnectInterrupt(DeviceExtension->InterruptObject);
+        DeviceExtension->InterruptObject = NULL;
+        DeviceExtension->InterruptConnected = FALSE;
+    }
     for (Index = 0; Index < INTELGPIO_COMMUNITY_COUNT; Index++)
     {
         if (DeviceExtension->Communities[Index].RegisterBase)
             MmUnmapIoSpace(DeviceExtension->Communities[Index].RegisterBase, DeviceExtension->Communities[Index].RegisterLength);
         RtlZeroMemory(&DeviceExtension->Communities[Index], sizeof(DeviceExtension->Communities[Index]));
     }
-    DeviceExtension->Started = FALSE;
 }
 
 static
@@ -382,22 +628,31 @@ IntelGpioStartHardware(
     _In_ PCM_RESOURCE_LIST Resources)
 {
     PCM_PARTIAL_RESOURCE_LIST PartialList;
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR InterruptDescriptor = NULL;
     ULONG ResourceIndex;
     ULONG CommunityIndex = 0;
+    NTSTATUS Status;
 
     if (!Resources || !Resources->Count)
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     if (DeviceExtension->Started)
         IntelGpioUnmapCommunities(DeviceExtension);
+    KeResetEvent(&DeviceExtension->InterruptEvent);
+    RtlZeroMemory((PVOID)DeviceExtension->PendingInterrupts, sizeof(DeviceExtension->PendingInterrupts));
     PartialList = &Resources->List[0].PartialResourceList;
-    for (ResourceIndex = 0; ResourceIndex < PartialList->Count && CommunityIndex < INTELGPIO_COMMUNITY_COUNT; ResourceIndex++)
+    for (ResourceIndex = 0; ResourceIndex < PartialList->Count; ResourceIndex++)
     {
         PCM_PARTIAL_RESOURCE_DESCRIPTOR Descriptor = &PartialList->PartialDescriptors[ResourceIndex];
         PINTELGPIO_COMMUNITY Community;
         ULONG RevisionValue;
         ULONG PadBar;
 
-        if (Descriptor->Type != CmResourceTypeMemory)
+        if (Descriptor->Type == CmResourceTypeInterrupt && !InterruptDescriptor)
+        {
+            InterruptDescriptor = Descriptor;
+            continue;
+        }
+        if (Descriptor->Type != CmResourceTypeMemory || CommunityIndex >= INTELGPIO_COMMUNITY_COUNT)
             continue;
         Community = &DeviceExtension->Communities[CommunityIndex];
         Community->RegisterLength = Descriptor->u.Memory.Length;
@@ -426,6 +681,16 @@ IntelGpioStartHardware(
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
     DeviceExtension->Started = TRUE;
+    if (InterruptDescriptor)
+    {
+        Status = IoConnectInterrupt(&DeviceExtension->InterruptObject, IntelGpioInterruptService, DeviceExtension, NULL, InterruptDescriptor->u.Interrupt.Vector, (KIRQL)InterruptDescriptor->u.Interrupt.Level, (KIRQL)InterruptDescriptor->u.Interrupt.Level, (InterruptDescriptor->Flags & CM_RESOURCE_INTERRUPT_LATCHED) ? Latched : LevelSensitive, InterruptDescriptor->ShareDisposition == CmResourceShareShared, InterruptDescriptor->u.Interrupt.Affinity, FALSE);
+        if (!NT_SUCCESS(Status))
+        {
+            IntelGpioUnmapCommunities(DeviceExtension);
+            return Status;
+        }
+        DeviceExtension->InterruptConnected = TRUE;
+    }
     return STATUS_SUCCESS;
 }
 
@@ -492,6 +757,7 @@ IntelGpioDeviceControl(
     ULONG OutputLength = IrpStack->Parameters.DeviceIoControl.OutputBufferLength;
     NTSTATUS Status;
 
+    Irp->IoStatus.Information = 0;
     Status = IoAcquireRemoveLock(&DeviceExtension->RemoveLock, Irp);
     if (!NT_SUCCESS(Status))
         goto Complete;
@@ -531,6 +797,28 @@ IntelGpioDeviceControl(
                 Status = STATUS_REVISION_MISMATCH;
             else
                 Status = IntelGpioWritePin(DeviceExtension, Buffer);
+            break;
+
+        case IOCTL_INTELGPIO_CONFIGURE_INTERRUPT:
+            if (!Buffer || InputLength < sizeof(INTELGPIO_INTERRUPT_CONFIGURATION))
+                Status = STATUS_BUFFER_TOO_SMALL;
+            else if (((PINTELGPIO_INTERRUPT_CONFIGURATION)Buffer)->Version != INTELGPIO_INTERFACE_VERSION)
+                Status = STATUS_REVISION_MISMATCH;
+            else
+                Status = IntelGpioConfigureInterrupt(DeviceExtension, Buffer);
+            break;
+
+        case IOCTL_INTELGPIO_WAIT_INTERRUPT:
+            if (!Buffer || InputLength < sizeof(INTELGPIO_INTERRUPT_WAIT) || OutputLength < sizeof(INTELGPIO_INTERRUPT_WAIT))
+                Status = STATUS_BUFFER_TOO_SMALL;
+            else if (((PINTELGPIO_INTERRUPT_WAIT)Buffer)->Version != INTELGPIO_INTERFACE_VERSION)
+                Status = STATUS_REVISION_MISMATCH;
+            else
+            {
+                Status = IntelGpioWaitInterrupt(DeviceExtension, Buffer);
+                if (NT_SUCCESS(Status))
+                    Irp->IoStatus.Information = sizeof(INTELGPIO_INTERRUPT_WAIT);
+            }
             break;
 
         default:
@@ -583,6 +871,8 @@ IntelGpioPnp(
 
         case IRP_MN_REMOVE_DEVICE:
             IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, FALSE);
+            DeviceExtension->Started = FALSE;
+            KeSetEvent(&DeviceExtension->InterruptEvent, IO_NO_INCREMENT, FALSE);
             Status = IoAcquireRemoveLock(&DeviceExtension->RemoveLock, Irp);
             if (NT_SUCCESS(Status))
                 IoReleaseRemoveLockAndWait(&DeviceExtension->RemoveLock, Irp);
@@ -640,6 +930,8 @@ IntelGpioAddDevice(
     }
     IoInitializeRemoveLock(&DeviceExtension->RemoveLock, INTELGPIO_TAG, 0, 0);
     KeInitializeSpinLock(&DeviceExtension->RegisterLock);
+    KeInitializeEvent(&DeviceExtension->InterruptEvent, SynchronizationEvent, FALSE);
+    KeInitializeDpc(&DeviceExtension->InterruptDpc, IntelGpioInterruptDpc, DeviceExtension);
     Status = IoRegisterDeviceInterface(PhysicalDeviceObject, &GUID_DEVINTERFACE_INTEL_GPIO, NULL, &DeviceExtension->InterfaceName);
     if (!NT_SUCCESS(Status))
     {
