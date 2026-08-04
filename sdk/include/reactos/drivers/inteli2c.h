@@ -1,0 +1,58 @@
+/*
+ * PROJECT:     ReactOS Intel Serial I/O I2C interface
+ * LICENSE:     LGPL-2.1-or-later
+ */
+
+#pragma once
+
+#include <guiddef.h>
+
+DEFINE_GUID(GUID_DEVINTERFACE_INTEL_I2C, 0xe8fdfeca, 0x40bb, 0x46c1, 0x9f, 0xe2, 0x5e, 0x55, 0x72, 0x7d, 0x40, 0x7d);
+
+#define INTELI2C_INTERFACE_VERSION 1
+#define INTELI2C_MAXIMUM_TIMEOUT_MS 180000
+
+#define IOCTL_INTELI2C_QUERY_CONTROLLER CTL_CODE(FILE_DEVICE_CONTROLLER, 0x810, METHOD_BUFFERED, FILE_READ_ACCESS)
+#define IOCTL_INTELI2C_EXECUTE_TRANSFER CTL_CODE(FILE_DEVICE_CONTROLLER, 0x811, METHOD_BUFFERED, FILE_READ_ACCESS | FILE_WRITE_ACCESS)
+
+#define INTELI2C_ADDRESS_MODE_7BIT 0
+#define INTELI2C_ADDRESS_MODE_10BIT 1
+
+typedef enum _INTELI2C_TRANSFER_DIRECTION
+{
+    IntelI2cTransferDirectionRead = 1,
+    IntelI2cTransferDirectionWrite = 2
+} INTELI2C_TRANSFER_DIRECTION;
+
+typedef struct _INTELI2C_CONTROLLER_INFORMATION
+{
+    ULONG Version;
+    ULONG ControllerIndex;
+    ULONG PciDeviceId;
+    ULONG InputClockHz;
+    ULONG MaximumConnectionSpeed;
+    ULONG TxFifoDepth;
+    ULONG RxFifoDepth;
+} INTELI2C_CONTROLLER_INFORMATION, *PINTELI2C_CONTROLLER_INFORMATION;
+
+typedef struct _INTELI2C_TRANSFER_ENTRY
+{
+    ULONG Direction;
+    ULONG DelayInUs;
+    ULONG BufferOffset;
+    ULONG BufferLength;
+    ULONG Transferred;
+} INTELI2C_TRANSFER_ENTRY, *PINTELI2C_TRANSFER_ENTRY;
+
+typedef struct _INTELI2C_TRANSFER_REQUEST
+{
+    ULONG Version;
+    ULONG ControllerIndex;
+    USHORT SlaveAddress;
+    USHORT AddressMode;
+    ULONG ConnectionSpeed;
+    ULONG TimeoutMilliseconds;
+    ULONG TransferCount;
+    ULONG Reserved;
+    INTELI2C_TRANSFER_ENTRY Transfers[ANYSIZE_ARRAY];
+} INTELI2C_TRANSFER_REQUEST, *PINTELI2C_TRANSFER_REQUEST;
