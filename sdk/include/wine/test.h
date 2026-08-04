@@ -132,7 +132,10 @@ extern int winetest_vprintf( const char *msg, va_list args );
 extern int winetest_get_time(void);
 
 extern int winetest_get_mainargs( char*** pargv );
-#if defined(__REACTOS__) && !defined(WINETEST_WAIT_CHILD_PROCESS_INFO)
+#if defined(__REACTOS__) && defined(WINETEST_WAIT_CHILD_PROCESS_INFO)
+extern void winetest_wait_child_process_info( const PROCESS_INFORMATION *info );
+#define winetest_wait_child_process winetest_wait_child_process_info
+#elif defined(__REACTOS__)
 extern void winetest_wait_child_process( HANDLE process );
 #else
 extern void winetest_wait_child_process( const PROCESS_INFORMATION *info );
