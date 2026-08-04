@@ -15,7 +15,8 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include "netapi32.h"
+#include "wine/debug.h"
+#include "nbcmdqueue.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(netbios);
 
@@ -60,7 +61,7 @@ struct NBCmdQueue *NBCmdQueueCreate(HANDLE heap)
     if (queue)
     {
         queue->heap = heap;
-        InitializeCriticalSection(&queue->cs);
+        InitializeCriticalSectionEx(&queue->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
         queue->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": NBCmdQueue.cs");
         queue->head = NULL;
     }
