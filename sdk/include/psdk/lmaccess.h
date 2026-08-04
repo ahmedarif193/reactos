@@ -532,6 +532,26 @@ typedef struct _LOCALGROUP_MEMBERS_INFO_3 {
 typedef struct _LOCALGROUP_USERS_INFO_0 {
 	LPWSTR lgrui0_name;
 } LOCALGROUP_USERS_INFO_0,*PLOCALGROUP_USERS_INFO_0,*LPLOCALGROUP_USERS_INFO_0;
+
+typedef struct _NET_VALIDATE_PASSWORD_HASH {
+    ULONG  Length;
+    LPBYTE Hash;
+} NET_VALIDATE_PASSWORD_HASH, *PNET_VALIDATE_PASSWORD_HASH;
+
+typedef struct _NET_VALIDATE_PERSISTED_FIELDS {
+    ULONG                       PresentFields;
+    FILETIME                    PasswordLastSet;
+    FILETIME                    BadPasswordTime;
+    FILETIME                    LockoutTime;
+    ULONG                       BadPasswordCount;
+    ULONG                       PasswordHistoryLength;
+    PNET_VALIDATE_PASSWORD_HASH PasswordHistory;
+} NET_VALIDATE_PERSISTED_FIELDS, *PNET_VALIDATE_PERSISTED_FIELDS;
+
+typedef struct _NET_VALIDATE_OUTPUT_ARG {
+    NET_VALIDATE_PERSISTED_FIELDS ChangedPersistedFields;
+    DWORD                ValidationStatus;
+} NET_VALIDATE_OUTPUT_ARG, *PNET_VALIDATE_OUTPUT_ARG;
 typedef struct _NET_DISPLAY_USER {
 	LPWSTR usri1_name;
 	LPWSTR usri1_comment;
@@ -648,6 +668,8 @@ NET_API_STATUS WINAPI NetQueryDisplayInformation(LPCWSTR,DWORD,DWORD,DWORD,DWORD
 NET_API_STATUS WINAPI NetGetDisplayInformationIndex(LPCWSTR,DWORD,LPCWSTR,PDWORD);
 NET_API_STATUS WINAPI NetGetDCName(LPCWSTR,LPCWSTR,PBYTE*);
 NET_API_STATUS WINAPI NetGetAnyDCName(LPCWSTR,LPCWSTR,PBYTE*);
+NET_API_STATUS WINAPI NetValidatePasswordPolicy(LPCWSTR, LPVOID, DWORD, LPVOID, LPVOID*);
+NET_API_STATUS WINAPI NetValidatePasswordPolicyFree(LPVOID*);
 NET_API_STATUS WINAPI I_NetLogonControl(LPCWSTR,DWORD,DWORD,PBYTE*);
 NET_API_STATUS WINAPI I_NetLogonControl2(LPCWSTR,DWORD,DWORD,PBYTE,PBYTE*);
 NTSTATUS WINAPI NetEnumerateTrustedDomains(LPWSTR,LPWSTR*);

@@ -5,7 +5,7 @@
 @ stdcall DsAddressToSiteNamesW(wstr long ptr wstr)
 @ stdcall DsDeregisterDnsHostRecordsA(str str ptr ptr str)
 @ stdcall DsDeregisterDnsHostRecordsW(wstr wstr ptr ptr wstr)
-8 stdcall DsEnumerateDomainTrustsA(wstr long ptr ptr)
+8 stdcall DsEnumerateDomainTrustsA(str long ptr ptr)
 9 stdcall DsEnumerateDomainTrustsW(wstr long ptr ptr)
 @ stub DsGetDcCloseW
 @ stdcall DsGetDcNameA(str str ptr str long ptr)
@@ -14,13 +14,13 @@
 @ stdcall DsGetDcNameWithAccountW(wstr wstr long wstr ptr wstr long ptr)
 @ stub DsGetDcNextA
 @ stub DsGetDcNextW
-@ stub DsGetDcOpenA
-@ stub DsGetDcOpenW
+@ stdcall DsGetDcOpenA(str long str ptr str long ptr)
+@ stdcall DsGetDcOpenW(wstr long wstr ptr wstr long ptr)
 @ stdcall DsGetDcSiteCoverageA(str ptr str)
 @ stdcall DsGetDcSiteCoverageW(wstr ptr wstr)
 @ stdcall DsGetForestTrustInformationW(wstr wstr long ptr)
-@ stdcall DsGetSiteNameA(str str)
-@ stdcall DsGetSiteNameW(wstr wstr)
+@ stdcall DsGetSiteNameA(str ptr)
+@ stdcall DsGetSiteNameW(wstr ptr)
 @ stdcall DsMergeForestTrustInformationW(wstr ptr ptr ptr)
 @ stub DsRoleAbortDownlevelServerUpgrade
 @ stub DsRoleCancel
@@ -251,8 +251,8 @@
 @ stdcall NetUserSetGroups(wstr wstr long ptr long)
 @ stdcall NetUserSetInfo(wstr wstr long ptr ptr)
 @ stdcall NetValidateName(wstr wstr wstr wstr long)
-@ stub NetValidatePasswordPolicy
-@ stub NetValidatePasswordPolicyFree
+@ stdcall NetValidatePasswordPolicy(wstr ptr long ptr ptr)
+@ stdcall NetValidatePasswordPolicyFree(ptr)
 @ stdcall NetWkstaGetInfo(wstr long ptr)
 @ stdcall NetWkstaSetInfo(wstr long ptr ptr)
 @ stdcall NetWkstaTransportAdd(wstr long ptr ptr)
@@ -338,3 +338,49 @@
 @ stub RxNetServerEnum
 @ stub RxNetUserPasswordSet
 @ stub RxRemoteApi
+@ stdcall DavGetHTTPFromUNCPath(wstr ptr ptr)
+@ stdcall DavGetUNCFromHTTPPath(wstr ptr ptr)
+@ stub DsAddressToSiteNames
+@ stub DsAddressToSiteNamesEx
+@ stub DsDeregisterDnsHostRecords
+@ stub DsGetDcClose
+@ stub DsGetDcNext
+@ stub DsGetDcSiteCoverage
+@ stub DsValidateSubnetName
+@ stdcall NetFreeAadJoinInformation(ptr)
+@ stdcall NetGetAadJoinInformation(wstr ptr)
+@ stub NetRplAdapterAdd
+@ stub NetRplAdapterDel
+@ stub NetRplAdapterEnum
+@ stub NetRplBootAdd
+@ stub NetRplBootDel
+@ stub NetRplBootEnum
+@ stub NetRplClose
+@ stub NetRplConfigAdd
+@ stub NetRplConfigDel
+@ stub NetRplConfigEnum
+@ stub NetRplGetInfo
+@ stub NetRplOpen
+@ stub NetRplProfileAdd
+@ stub NetRplProfileClone
+@ stub NetRplProfileDel
+@ stub NetRplProfileEnum
+@ stub NetRplProfileGetInfo
+@ stub NetRplProfileSetInfo
+@ stub NetRplSetInfo
+@ stub NetRplSetSecurity
+@ stub NetRplVendorAdd
+@ stub NetRplVendorDel
+@ stub NetRplVendorEnum
+@ stub NetRplWkstaAdd
+@ stub NetRplWkstaClone
+@ stub NetRplWkstaDel
+@ stub NetRplWkstaEnum
+@ stub NetRplWkstaGetInfo
+@ stub NetRplWkstaSetInfo
+@ stub NetpAllocStrFromStr
+@ stub NetpAllocTStrFromString
+@ stub NetpDbgDisplayServerInfo
+@ stub NetpSetConfigBool
+@ stub NetpSetConfigDword
+@ stub NetpSetConfigTStrArray
