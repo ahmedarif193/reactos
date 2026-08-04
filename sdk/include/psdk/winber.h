@@ -1,64 +1,44 @@
 /*
-  winber.h - Header file for the Windows LDAP Basic Encoding Rules API
+ * Copyright 2021 Hans Leidekker for CodeWeavers
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+ */
 
-  Written by Filip Navara <xnavara@volny.cz>
+#ifndef __WINE_WINBER_H
+#define __WINE_WINBER_H
 
-  References:
-    The C LDAP Application Program Interface
-    http://www.watersprings.org/pub/id/draft-ietf-ldapext-ldap-c-api-05.txt
+#define LBER_ERROR   (~0L)
+#define LBER_DEFAULT (~0L)
 
-    Lightweight Directory Access Protocol Reference
-    http://msdn.microsoft.com/library/en-us/netdir/ldap/ldap_reference.asp (DEAD_LINK)
+typedef int ber_int_t;
+typedef unsigned int ber_tag_t;
+typedef unsigned int ber_len_t;
 
-  This library is distributed in the hope that it will be useful,
-  but WITHOUT ANY WARRANTY; without even the implied warranty of
-  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
-*/
+void CDECL ber_free( BerElement *, int );
+void CDECL ber_bvfree( BERVAL * );
 
-#ifndef _WINBER_H
-#define _WINBER_H
+BerElement * CDECL ber_alloc_t( int ) __WINE_DEALLOC(ber_free);
+BERVAL * CDECL ber_bvdup( BERVAL * ) __WINE_DEALLOC(ber_bvfree);
+void CDECL ber_bvecfree( BERVAL ** );
+ULONG CDECL ber_first_element( BerElement *, ULONG *, char ** );
+int CDECL ber_flatten( BerElement *, BERVAL ** );
+BerElement * CDECL ber_init( BERVAL * ) __WINE_DEALLOC(ber_free);
+ULONG CDECL ber_next_element( BerElement *, ULONG *, char * );
+ULONG CDECL ber_peek_tag( BerElement *, ULONG * );
+int WINAPIV ber_printf( BerElement *, char *, ... );
+ULONG WINAPIV ber_scanf( BerElement *, char *, ... );
+ULONG CDECL ber_skip_tag( BerElement *, ULONG * );
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#ifndef WINBERAPI
-#define WINBERAPI DECLSPEC_IMPORT
-#endif
-
-typedef struct berelement BerElement;
-typedef ULONG ber_len_t;
-#include <pshpack4.h>
-typedef struct berval {
-	ber_len_t bv_len;
-	char *bv_val;
-} BerValue, LDAP_BERVAL, *PLDAP_BERVAL, BERVAL, *PBERVAL;
-#include <poppack.h>
-
-typedef ULONG ber_tag_t;
-typedef INT ber_int_t;
-typedef UINT ber_uint_t;
-typedef INT ber_slen_t;
-
-#define LBER_ERROR ((ber_tag_t)-1)
-#define LBER_DEFAULT ((ber_tag_t)-1)
-#define LBER_USE_DER 0x01
-
-WINBERAPI BerElement *ber_init(const BerValue*);
-WINBERAPI int ber_printf(BerElement*,const char*,...);
-WINBERAPI int ber_flatten(BerElement*,BerValue**);
-WINBERAPI ber_tag_t ber_scanf(BerElement*,const char*,...);
-WINBERAPI ber_tag_t ber_peek_tag(BerElement*,ber_len_t*);
-WINBERAPI ber_tag_t ber_skip_tag(BerElement*,ber_len_t*);
-WINBERAPI ber_tag_t ber_first_element(BerElement*,ber_len_t*,char**);
-WINBERAPI ber_tag_t ber_next_element(BerElement*,ber_len_t*,char*);
-WINBERAPI void ber_bvfree(BerValue*);
-WINBERAPI void ber_bvecfree(BerValue**);
-WINBERAPI void ber_free(BerElement*,int);
-WINBERAPI BerValue *ber_bvdup(BerValue*);
-WINBERAPI BerElement *ber_alloc_t(int);
-
-#ifdef __cplusplus
-}
-#endif
-#endif /* _WINBER_H */
+#endif /* __WINE_WINBER_H */

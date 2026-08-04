@@ -18,13 +18,13 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include "config.h"
+#include <stdarg.h>
+#include "windef.h"
+#include "winternl.h"
+#include "winbase.h"
 
 #include "wine/debug.h"
-#include <stdarg.h>
-
-#include "windef.h"
-#include "winbase.h"
+#include "winldap_private.h"
 
 HINSTANCE hwldap32;
 
@@ -32,13 +32,18 @@ WINE_DEFAULT_DEBUG_CHANNEL(wldap32);
 
 BOOL WINAPI DllMain( HINSTANCE hinst, DWORD reason, LPVOID reserved )
 {
-    TRACE( "(%p, %d, %p)\n", hinst, reason, reserved );
+    TRACE( "(%p, %#lx, %p)\n", hinst, reason, reserved );
 
     switch (reason)
     {
     case DLL_PROCESS_ATTACH:
         hwldap32 = hinst;
         DisableThreadLibraryCalls( hinst );
+        if (TRACE_ON( wldap32 ))
+        {
+            int ld_debug = -1;
+            ldap_set_option( NULL, LDAP_OPT_DEBUG_LEVEL, &ld_debug );
+        }
         break;
     }
     return TRUE;
