@@ -356,8 +356,7 @@ IopFreeDeviceNode(
     ASSERT(IsListEmpty(&DeviceNode->TargetDeviceNotify));
 
     /* Release the node's resource-DB grant before it goes away */
-    if (PnpEnableParallelEnum)
-        IopResDbRelease(DeviceNode);
+    IopResDbRelease(DeviceNode);
 
     KeAcquireSpinLock(&IopDeviceTreeLock, &OldIrql);
 
