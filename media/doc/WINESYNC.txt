@@ -173,6 +173,7 @@ dll/win32/oledlg              # Synced to Wine-11.14
 dll/win32/olepro32            # Synced to Wine-11.14
 dll/win32/olesvr32            # Synced to Wine-11.14
 dll/win32/olethk32            # Synced to Wine-11.14
+dll/win32/opcservices         # Synced to Wine-11.14
 dll/win32/pdh                 # Synced to Wine-11.14
 dll/win32/pidgen              # Synced to Wine-11.14
 dll/win32/powrprof            # Forked from Wine-11.14
