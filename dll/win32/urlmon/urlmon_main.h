@@ -33,6 +33,28 @@
 
 #include "wine/list.h"
 
+#ifdef __REACTOS__
+#include <stdlib.h>
+#include <string.h>
+
+static inline WCHAR *urlmon_wcsdup(const WCHAR *str)
+{
+    size_t size;
+    WCHAR *ret;
+
+    if (!str)
+        return NULL;
+
+    size = (lstrlenW(str) + 1) * sizeof(*str);
+    ret = malloc(size);
+
+    if (ret)
+        memcpy(ret, str, size);
+    return ret;
+}
+#define wcsdup urlmon_wcsdup
+#endif
+
 extern HINSTANCE hProxyDll;
 extern HRESULT PersistentZoneIdentifier_Construct(IUnknown *pUnkOuter, LPVOID *ppobj);
 extern HRESULT SecManagerImpl_Construct(IUnknown *pUnkOuter, LPVOID *ppobj);

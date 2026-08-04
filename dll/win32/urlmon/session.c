@@ -122,12 +122,7 @@ HRESULT register_namespace(IClassFactory *cf, REFIID clsid, LPCWSTR protocol, BO
     new_name_space->cf = cf;
     new_name_space->clsid = *clsid;
     new_name_space->urlmon = urlmon_protocol;
-#ifdef __REACTOS__
-    if ((new_name_space->protocol = malloc((wcslen(protocol) + 1) * sizeof(*protocol))))
-        wcscpy(new_name_space->protocol, protocol);
-#else
     new_name_space->protocol = wcsdup(protocol);
-#endif
 
     EnterCriticalSection(&session_cs);
 
