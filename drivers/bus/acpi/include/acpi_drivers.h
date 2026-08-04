@@ -155,6 +155,11 @@ int acpi_fan_init(void);
 void acpi_fan_exit(void);
 int acpi_fan_force_maximum(ACPI_HANDLE handle);
 void acpi_fan_force_all_maximum(void);
+int acpi_fan_set_thermal_level(ACPI_HANDLE handle, PVOID source, LONG level);
+void acpi_fan_set_all_thermal_levels(PVOID source, LONG level);
+
+#define ACPI_FAN_THERMAL_LEVEL_OFF      (-1)
+#define ACPI_FAN_THERMAL_LEVEL_MAXIMUM  10
 
 
 /* --------------------------------------------------------------------------

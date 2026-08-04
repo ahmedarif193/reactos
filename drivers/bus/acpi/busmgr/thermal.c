@@ -18,6 +18,7 @@ ACPI_MODULE_NAME("acpi_thermal")
 #define ACPI_THERMAL_MIN_POLL_MS 1000
 #define ACPI_THERMAL_MAX_POLL_MS 30000
 #define ACPI_THERMAL_PASSIVE_HYSTERESIS 20
+#define ACPI_THERMAL_MAX_COOLING_DEVICES 64
 
 typedef struct _ACPI_THERMAL_TRIP
 {
@@ -32,6 +33,7 @@ typedef struct _ACPI_THERMAL_ZONE
     KTIMER Timer;
     KDPC TimerDpc;
     EX_RUNDOWN_REF Rundown;
+    FAST_MUTEX PolicyLock;
     KEVENT WorkIdleEvent;
     volatile LONG WorkCount;
     volatile LONG Removing;
@@ -43,8 +45,11 @@ typedef struct _ACPI_THERMAL_ZONE
     UINT64 LastTemperature;
     ULONG ActiveMask;
     BOOLEAN PassiveEngaged;
+    BOOLEAN PassiveCoolingFailed;
     BOOLEAN CriticalEngaged;
     BOOLEAN HotEngaged;
+    ACPI_HANDLE CoolingDevices[ACPI_THERMAL_MAX_COOLING_DEVICES];
+    ULONG CoolingDeviceCount;
 } ACPI_THERMAL_ZONE, *PACPI_THERMAL_ZONE;
 
 typedef struct _ACPI_THERMAL_WORK
@@ -121,6 +126,34 @@ acpi_thermal_fraction(
     LONG fraction = temperature % 10;
 
     return (ULONG)(fraction < 0 ? -fraction : fraction);
+}
+
+static VOID
+acpi_thermal_set_active_cooling_policy(
+    PACPI_THERMAL_ZONE zone)
+{
+    ACPI_OBJECT arguments[3];
+    ACPI_OBJECT_LIST argument_list;
+    ACPI_STATUS status;
+
+    RtlZeroMemory(arguments, sizeof(arguments));
+    arguments[0].Type = ACPI_TYPE_INTEGER;
+    arguments[0].Integer.Value = ACPI_THERMAL_MODE_ACTIVE;
+    arguments[1].Type = ACPI_TYPE_INTEGER;
+    arguments[1].Integer.Value = 5;
+    arguments[2].Type = ACPI_TYPE_INTEGER;
+    arguments[2].Integer.Value = 5;
+    argument_list.Count = 3;
+    argument_list.Pointer = arguments;
+    status = AcpiEvaluateObject(zone->Handle, "_SCP", &argument_list, NULL);
+    if (status == AE_NOT_FOUND)
+        return;
+    if (ACPI_FAILURE(status)) {
+        DPRINT1("ACPI: Thermal [%s] could not select active cooling policy: %s\n",
+                acpi_device_bid(zone->Device), AcpiFormatException(status));
+        return;
+    }
+    DPRINT1("ACPI: Thermal [%s] selected active cooling policy\n", acpi_device_bid(zone->Device));
 }
 
 static VOID
@@ -294,7 +327,8 @@ acpi_processor_set_thermal_limit(
 static ULONG
 acpi_thermal_apply_processor_list(
     PACPI_THERMAL_ZONE zone,
-    int limit)
+    int limit,
+    PULONG targets)
 {
     ACPI_BUFFER buffer = {ACPI_ALLOCATE_BUFFER, NULL};
     ACPI_OBJECT *package;
@@ -302,6 +336,9 @@ acpi_thermal_apply_processor_list(
     ACPI_STATUS status;
     ULONG applied = 0;
     ULONG i;
+
+    if (targets)
+        *targets = 0;
 
     status = AcpiEvaluateObject(zone->Handle, "_PSL", NULL, &buffer);
     if (ACPI_FAILURE(status))
@@ -312,7 +349,11 @@ acpi_thermal_apply_processor_list(
     for (i = 0; i < package->Package.Count; i++)
     {
         object = &package->Package.Elements[i];
-        if (object->Type == ACPI_TYPE_LOCAL_REFERENCE && object->Reference.Handle && acpi_processor_set_thermal_limit(object->Reference.Handle, limit) == 0)
+        if (object->Type != ACPI_TYPE_LOCAL_REFERENCE || !object->Reference.Handle)
+            continue;
+        if (targets)
+            (*targets)++;
+        if (acpi_processor_set_thermal_limit(object->Reference.Handle, limit) == 0)
             applied++;
     }
 
@@ -322,10 +363,29 @@ Exit:
     return applied;
 }
 
-static ULONG
-acpi_thermal_activate_level(
+static LONG
+acpi_thermal_find_cooling_device(
+    ACPI_HANDLE *handles,
+    ULONG count,
+    ACPI_HANDLE handle)
+{
+    ULONG i;
+
+    for (i = 0; i < count; i++) {
+        if (handles[i] == handle)
+            return (LONG)i;
+    }
+    return -1;
+}
+
+static VOID
+acpi_thermal_collect_level(
     PACPI_THERMAL_ZONE zone,
-    ULONG level)
+    ULONG level,
+    BOOLEAN active,
+    ACPI_HANDLE *handles,
+    LONG *levels,
+    PULONG count)
 {
     static const char *active_lists[ACPI_THERMAL_ACTIVE_LEVELS] =
     {
@@ -336,30 +396,103 @@ acpi_thermal_activate_level(
     ACPI_OBJECT *package;
     ACPI_OBJECT *object;
     ACPI_STATUS status;
-    ULONG activated = 0;
+    LONG index;
     ULONG i;
 
-    if (level >= ACPI_THERMAL_ACTIVE_LEVELS)
-        return 0;
     status = AcpiEvaluateObject(zone->Handle, (ACPI_STRING)active_lists[level], NULL, &buffer);
     if (ACPI_FAILURE(status))
         goto Exit;
     package = buffer.Pointer;
     if (!package || package->Type != ACPI_TYPE_PACKAGE)
         goto Exit;
-    for (i = 0; i < package->Package.Count; i++)
-    {
+    for (i = 0; i < package->Package.Count; i++) {
         object = &package->Package.Elements[i];
         if (object->Type != ACPI_TYPE_LOCAL_REFERENCE || !object->Reference.Handle)
             continue;
-        if (acpi_fan_force_maximum(object->Reference.Handle) == 0 || acpi_bus_set_power(object->Reference.Handle, ACPI_STATE_D0) == 0)
-            activated++;
+        index = acpi_thermal_find_cooling_device(handles, *count, object->Reference.Handle);
+        if (index < 0) {
+            if (*count >= ACPI_THERMAL_MAX_COOLING_DEVICES) {
+                DPRINT1("ACPI: Thermal [%s] has more than %u cooling devices\n",
+                        acpi_device_bid(zone->Device),
+                        ACPI_THERMAL_MAX_COOLING_DEVICES);
+                break;
+            }
+            index = (LONG)(*count);
+            handles[index] = object->Reference.Handle;
+            levels[index] = ACPI_FAN_THERMAL_LEVEL_OFF;
+            (*count)++;
+        }
+        if (active && (levels[index] == ACPI_FAN_THERMAL_LEVEL_OFF || (LONG)level < levels[index]))
+            levels[index] = (LONG)level;
     }
 
 Exit:
     if (buffer.Pointer)
         AcpiOsFree(buffer.Pointer);
+}
+
+static ULONG
+acpi_thermal_update_active_policy(
+    PACPI_THERMAL_ZONE zone,
+    ULONG active_mask,
+    PBOOLEAN policy_failed)
+{
+    ACPI_HANDLE handles[ACPI_THERMAL_MAX_COOLING_DEVICES];
+    LONG levels[ACPI_THERMAL_MAX_COOLING_DEVICES];
+    LONG index;
+    ULONG count = 0;
+    ULONG activated = 0;
+    ULONG i;
+    int result;
+
+    *policy_failed = FALSE;
+    RtlZeroMemory(handles, sizeof(handles));
+    for (i = 0; i < ACPI_THERMAL_MAX_COOLING_DEVICES; i++)
+        levels[i] = ACPI_FAN_THERMAL_LEVEL_OFF;
+    for (i = 0; i < ACPI_THERMAL_ACTIVE_LEVELS; i++) {
+        if (zone->Active[i].Valid)
+            acpi_thermal_collect_level(zone, i, (active_mask & (1u << i)) != 0, handles, levels, &count);
+    }
+
+    for (i = 0; i < zone->CoolingDeviceCount; i++) {
+        index = acpi_thermal_find_cooling_device(handles, count, zone->CoolingDevices[i]);
+        if (index >= 0)
+            continue;
+        result = acpi_fan_set_thermal_level(zone->CoolingDevices[i], zone, ACPI_FAN_THERMAL_LEVEL_OFF);
+        if (result)
+            acpi_bus_set_power(zone->CoolingDevices[i], ACPI_STATE_D3);
+    }
+
+    for (i = 0; i < count; i++) {
+        result = acpi_fan_set_thermal_level(handles[i], zone, levels[i]);
+        if (result)
+            result = acpi_bus_set_power(handles[i], levels[i] == ACPI_FAN_THERMAL_LEVEL_OFF ? ACPI_STATE_D3 : ACPI_STATE_D0);
+        if (levels[i] != ACPI_FAN_THERMAL_LEVEL_OFF) {
+            if (!result)
+                activated++;
+            else
+                *policy_failed = TRUE;
+        }
+    }
+
+    RtlCopyMemory(zone->CoolingDevices, handles, count * sizeof(handles[0]));
+    zone->CoolingDeviceCount = count;
     return activated;
+}
+
+static VOID
+acpi_thermal_release_cooling_policy(
+    PACPI_THERMAL_ZONE zone)
+{
+    ULONG i;
+
+    for (i = 0; i < zone->CoolingDeviceCount; i++) {
+        if (acpi_fan_set_thermal_level(zone->CoolingDevices[i], zone, ACPI_FAN_THERMAL_LEVEL_OFF))
+            acpi_bus_set_power(zone->CoolingDevices[i], ACPI_STATE_D3);
+    }
+    acpi_fan_set_all_thermal_levels(&zone->CriticalEngaged, ACPI_FAN_THERMAL_LEVEL_OFF);
+    zone->CoolingDeviceCount = 0;
+    zone->ActiveMask = 0;
 }
 
 static VOID
@@ -369,13 +502,18 @@ acpi_thermal_check(
 {
     UINT64 temperature;
     ULONG new_active_mask = 0;
+    ULONG changed_active_mask;
+    ULONG activated;
+    ULONG targets;
     ULONG level;
     LONG celsius_tenths;
+    BOOLEAN emergency;
+    BOOLEAN active_policy_failed;
 
     if (!acpi_thermal_evaluate_integer(zone->Handle, "_TMP", &temperature))
     {
         DPRINT1("ACPI: Thermal [%s] _TMP evaluation failed\n", acpi_device_bid(zone->Device));
-        acpi_fan_force_all_maximum();
+        acpi_fan_set_all_thermal_levels(&zone->CriticalEngaged, ACPI_FAN_THERMAL_LEVEL_MAXIMUM);
         return;
     }
     celsius_tenths = acpi_thermal_celsius_tenths(temperature);
@@ -388,7 +526,6 @@ acpi_thermal_check(
         if (!zone->CriticalEngaged)
             DPRINT1("ACPI: Thermal [%s] CRITICAL trip reached; forcing maximum cooling\n", acpi_device_bid(zone->Device));
         zone->CriticalEngaged = TRUE;
-        acpi_fan_force_all_maximum();
     }
     else
     {
@@ -399,7 +536,6 @@ acpi_thermal_check(
         if (!zone->HotEngaged)
             DPRINT1("ACPI: Thermal [%s] HOT trip reached; forcing maximum cooling\n", acpi_device_bid(zone->Device));
         zone->HotEngaged = TRUE;
-        acpi_fan_force_all_maximum();
     }
     else
     {
@@ -411,30 +547,35 @@ acpi_thermal_check(
         if (!zone->Active[level].Valid || temperature < zone->Active[level].Temperature)
             continue;
         new_active_mask |= 1u << level;
-        if (!(zone->ActiveMask & (1u << level)))
-        {
-            ULONG activated = acpi_thermal_activate_level(zone, level);
-            DPRINT1("ACPI: Thermal [%s] active trip AC%lu reached; %lu cooling devices activated\n", acpi_device_bid(zone->Device), level, activated);
-            if (activated == 0)
-                acpi_fan_force_all_maximum();
-        }
+    }
+    changed_active_mask = zone->ActiveMask ^ new_active_mask;
+    activated = acpi_thermal_update_active_policy(zone, new_active_mask, &active_policy_failed);
+    for (level = 0; level < ACPI_THERMAL_ACTIVE_LEVELS; level++) {
+        if (!(changed_active_mask & (1u << level)))
+            continue;
+        DPRINT1("ACPI: Thermal [%s] active trip AC%lu %s\n",
+                acpi_device_bid(zone->Device), level,
+                (new_active_mask & (1u << level)) ? "reached" : "cleared");
     }
     zone->ActiveMask = new_active_mask;
 
-    if (zone->Passive.Valid && temperature >= zone->Passive.Temperature && !zone->PassiveEngaged)
+    if (zone->Passive.Valid && temperature >= zone->Passive.Temperature && (!zone->PassiveEngaged || reason == ACPI_THERMAL_NOTIFY_DEVICES))
     {
-        ULONG throttled = acpi_thermal_apply_processor_list(zone, ACPI_PROCESSOR_LIMIT_DECREMENT);
+        ULONG throttled = acpi_thermal_apply_processor_list(zone, ACPI_PROCESSOR_LIMIT_DECREMENT, &targets);
         zone->PassiveEngaged = TRUE;
-        DPRINT1("ACPI: Thermal [%s] passive trip reached; %lu processors throttled\n", acpi_device_bid(zone->Device), throttled);
-        if (throttled == 0)
-            acpi_fan_force_all_maximum();
+        zone->PassiveCoolingFailed = targets == 0 || throttled != targets;
+        DPRINT1("ACPI: Thermal [%s] passive trip reached; %lu/%lu processors throttled\n", acpi_device_bid(zone->Device), throttled, targets);
     }
-    else if (zone->PassiveEngaged && zone->Passive.Valid && temperature < zone->Passive.Temperature && zone->Passive.Temperature - temperature > ACPI_THERMAL_PASSIVE_HYSTERESIS)
+    else if (zone->PassiveEngaged && (!zone->Passive.Valid || (temperature < zone->Passive.Temperature && zone->Passive.Temperature - temperature > ACPI_THERMAL_PASSIVE_HYSTERESIS)))
     {
-        ULONG restored = acpi_thermal_apply_processor_list(zone, ACPI_PROCESSOR_LIMIT_NONE);
+        ULONG restored = acpi_thermal_apply_processor_list(zone, ACPI_PROCESSOR_LIMIT_NONE, &targets);
         zone->PassiveEngaged = FALSE;
-        DPRINT1("ACPI: Thermal [%s] passive trip cleared; %lu processors restored\n", acpi_device_bid(zone->Device), restored);
+        zone->PassiveCoolingFailed = FALSE;
+        DPRINT1("ACPI: Thermal [%s] passive trip cleared; %lu/%lu processors restored\n", acpi_device_bid(zone->Device), restored, targets);
     }
+
+    emergency = zone->CriticalEngaged || zone->HotEngaged || (new_active_mask != 0 && (activated == 0 || active_policy_failed)) || zone->PassiveCoolingFailed;
+    acpi_fan_set_all_thermal_levels(&zone->CriticalEngaged, emergency ? ACPI_FAN_THERMAL_LEVEL_MAXIMUM : ACPI_FAN_THERMAL_LEVEL_OFF);
 }
 
 static VOID
@@ -443,13 +584,22 @@ acpi_thermal_worker(
 {
     PACPI_THERMAL_WORK work = context;
     PACPI_THERMAL_ZONE zone = work->Zone;
+    LARGE_INTEGER due_time;
+    ULONG old_poll_milliseconds;
 
-    if (!InterlockedCompareExchange(&zone->Removing, 0, 0))
-    {
-        if (work->Reason == ACPI_THERMAL_NOTIFY_THRESHOLDS || work->Reason == ACPI_THERMAL_NOTIFY_DEVICES)
+    ExAcquireFastMutex(&zone->PolicyLock);
+    if (!InterlockedCompareExchange(&zone->Removing, 0, 0)) {
+        if (work->Reason == ACPI_THERMAL_NOTIFY_THRESHOLDS || work->Reason == ACPI_THERMAL_NOTIFY_DEVICES) {
+            old_poll_milliseconds = zone->PollMilliseconds;
             acpi_thermal_refresh_trips(zone);
+            if (zone->PollMilliseconds != old_poll_milliseconds) {
+                due_time.QuadPart = -(LONGLONG)zone->PollMilliseconds * 10000;
+                KeSetTimerEx(&zone->Timer, due_time, zone->PollMilliseconds, &zone->TimerDpc);
+            }
+        }
         acpi_thermal_check(zone, work->Reason);
     }
+    ExReleaseFastMutex(&zone->PolicyLock);
     if (InterlockedDecrement(&zone->WorkCount) == 0)
         KeSetEvent(&zone->WorkIdleEvent, IO_NO_INCREMENT, FALSE);
     ExReleaseRundownProtection(&zone->Rundown);
@@ -473,7 +623,10 @@ acpi_thermal_queue_check(
     work = ExAllocatePoolWithTag(NonPagedPool, sizeof(*work), ACPI_THERMAL_TAG);
     if (!work)
     {
-        acpi_fan_force_all_maximum();
+        if (KeGetCurrentIrql() == PASSIVE_LEVEL)
+            acpi_fan_set_all_thermal_levels(&zone->CriticalEngaged, ACPI_FAN_THERMAL_LEVEL_MAXIMUM);
+        else
+            DPRINT1("ACPI: Thermal [%s] could not queue a policy check at IRQL %lu\n", acpi_device_bid(zone->Device), KeGetCurrentIrql());
         ExReleaseRundownProtection(&zone->Rundown);
         return;
     }
@@ -543,9 +696,11 @@ acpi_thermal_add(
     sprintf(acpi_device_name(device), "%s", ACPI_THERMAL_DEVICE_NAME);
     sprintf(acpi_device_class(device), "%s", ACPI_THERMAL_CLASS);
     ExInitializeRundownProtection(&zone->Rundown);
+    ExInitializeFastMutex(&zone->PolicyLock);
     KeInitializeEvent(&zone->WorkIdleEvent, NotificationEvent, TRUE);
     KeInitializeTimerEx(&zone->Timer, NotificationTimer);
     KeInitializeDpc(&zone->TimerDpc, acpi_thermal_timer_dpc, zone);
+    acpi_thermal_set_active_cooling_policy(zone);
     acpi_thermal_refresh_trips(zone);
 
     status = AcpiInstallNotifyHandler(zone->Handle, ACPI_DEVICE_NOTIFY, acpi_thermal_notify, zone);
@@ -559,6 +714,7 @@ acpi_thermal_add(
 
     due_time.QuadPart = -10000000LL;
     KeSetTimerEx(&zone->Timer, due_time, zone->PollMilliseconds, &zone->TimerDpc);
+    acpi_thermal_queue_check(zone, ACPI_THERMAL_NOTIFY_TEMPERATURE);
     return_VALUE(0);
 }
 
@@ -580,6 +736,11 @@ acpi_thermal_remove(
     AcpiRemoveNotifyHandler(zone->Handle, ACPI_DEVICE_NOTIFY, acpi_thermal_notify);
     ExWaitForRundownProtectionRelease(&zone->Rundown);
     KeWaitForSingleObject(&zone->WorkIdleEvent, Executive, KernelMode, FALSE, NULL);
+    ExAcquireFastMutex(&zone->PolicyLock);
+    acpi_thermal_release_cooling_policy(zone);
+    if (zone->PassiveEngaged)
+        acpi_thermal_apply_processor_list(zone, ACPI_PROCESSOR_LIMIT_NONE, NULL);
+    ExReleaseFastMutex(&zone->PolicyLock);
     device->driver_data = NULL;
     ExFreePoolWithTag(zone, ACPI_THERMAL_TAG);
     return_VALUE(0);
