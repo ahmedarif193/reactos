@@ -81,6 +81,7 @@ list(APPEND IDL_SOURCES
 #    netcfgp.idl
 #    netcfgx.idl
     netcon.idl
+    netlistmgr.idl
 #    netconp.idl
 #    netfwv6.idl
 #    netfwv6clsid
