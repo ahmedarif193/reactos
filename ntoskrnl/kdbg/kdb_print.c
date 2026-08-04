@@ -162,20 +162,22 @@ KdbPrintf(
     ...)
 {
     va_list ap;
-    SIZE_T Length;
+    INT Result;
+    USHORT Length;
     CHAR Buffer[1024];
 
     /* Format the string */
     va_start(ap, Format);
-    Length = _vsnprintf(Buffer,
-                        sizeof(Buffer),
-                        Format,
-                        ap);
-    Length = min(Length, MAXUSHORT - sizeof(ANSI_NULL));
+    Result = _vsnprintf(Buffer, sizeof(Buffer) - 1, Format, ap);
     va_end(ap);
+    if (Result < 0 || Result >= sizeof(Buffer))
+        Length = sizeof(Buffer) - 1;
+    else
+        Length = (USHORT)Result;
+    Buffer[Length] = ANSI_NULL;
 
     /* Send it to the debugger directly */
-    KdbPutsN(Buffer, (USHORT)Length);
+    KdbPutsN(Buffer, Length);
 }
 
 SIZE_T
