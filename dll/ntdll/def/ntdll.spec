@@ -907,6 +907,8 @@
 @ stdcall RtlFirstFreeAce(ptr ptr)
 @ stdcall -stub -version=0x600+ RtlFlsAlloc(long long long long)
 @ stdcall -stub -version=0x600+ RtlFlsFree(long)
+@ stdcall -version=0x600+ RtlFlsGetValue(long ptr)
+@ stdcall -version=0x600+ RtlFlsSetValue(long ptr)
 @ stdcall RtlFlushSecureMemoryCache(ptr ptr)
 @ stdcall RtlFormatCurrentUserKeyPath(ptr)
 @ stdcall RtlFormatMessage(ptr long long long long ptr ptr long ptr)
