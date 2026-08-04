@@ -74,6 +74,18 @@ typedef struct _PDO_DEVICE_DATA
     ULONG NotificationRegistrationCount;
     BOOLEAN NotificationHandlersInstalled;
     BOOLEAN PciRootLogged;
+    volatile LONG ThermalStamp;
+    UCHAR ThermalCoolingPolicy;
+    UCHAR ThermalPassiveLimit;
+    UCHAR ThermalActiveLevel;
+    BOOLEAN ThermalNotificationRegistered;
+    LIST_ENTRY ThermalRequestList;
+    FAST_MUTEX ThermalRequestMutex;
+    IO_CSQ ThermalCsq;
+    LIST_ENTRY ThermalPendingIrpList;
+    KSPIN_LOCK ThermalPendingIrpLock;
+    EX_RUNDOWN_REF ThermalWorkRundown;
+    volatile LONG ThermalStopping;
 
 } PDO_DEVICE_DATA, *PPDO_DEVICE_DATA;
 
@@ -208,6 +220,16 @@ VOID
 AcpiInterfaceResetNotifications(
     PPDO_DEVICE_DATA DeviceData
     );
+
+NTSTATUS NTAPI AcpiInterfaceNotificationsRegister(PDEVICE_OBJECT Context, PDEVICE_NOTIFY_CALLBACK NotificationHandler, PVOID NotificationContext);
+VOID NTAPI AcpiInterfaceNotificationsUnregister(PDEVICE_OBJECT Context, PDEVICE_NOTIFY_CALLBACK NotificationHandler);
+
+BOOLEAN AcpiHardwareIdContains(PPDO_DEVICE_DATA DeviceData, PCWSTR HardwareId);
+VOID AcpiThermalInitialize(PPDO_DEVICE_DATA DeviceData);
+NTSTATUS AcpiThermalStart(PPDO_DEVICE_DATA DeviceData);
+VOID AcpiThermalStop(PPDO_DEVICE_DATA DeviceData);
+NTSTATUS AcpiThermalSetPower(ACPI_HANDLE Handle, BOOLEAN Engaged);
+NTSTATUS AcpiThermalDeviceControl(PPDO_DEVICE_DATA DeviceData, PIRP Irp);
 
 
 NTSTATUS
