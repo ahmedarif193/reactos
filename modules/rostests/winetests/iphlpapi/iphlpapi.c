@@ -35,6 +35,8 @@
  */
 
 #include <stdarg.h>
+#include "ntstatus.h"
+#define WIN32_NO_STATUS
 #include "winsock2.h"
 #include "windef.h"
 #include "winbase.h"
@@ -48,10 +50,6 @@
 #include "wine/test.h"
 #include <stdio.h>
 #include <stdlib.h>
-#ifdef __REACTOS__
-#include <versionhelpers.h>
-const IN6_ADDR in6addr_loopback = {{ IN6ADDR_LOOPBACK_INIT }};
-#endif
 
 #define ICMP_MINLEN 8 /* copied from dlls/iphlpapi/ip_icmp.h file */
 
@@ -71,62 +69,12 @@ static DWORD (WINAPI *pParseNetworkString)(const WCHAR*,DWORD,NET_ADDRESS_INFO*,
 static DWORD (WINAPI *pNotifyUnicastIpAddressChange)(ADDRESS_FAMILY, PUNICAST_IPADDRESS_CHANGE_CALLBACK,
                                                 PVOID, BOOLEAN, HANDLE *);
 static DWORD (WINAPI *pCancelMibChangeNotify2)(HANDLE);
+static DWORD (WINAPI *pGetIpInterfaceEntry)(MIB_IPINTERFACE_ROW*);
+static DWORD (WINAPI *pGetIpInterfaceTable)(ADDRESS_FAMILY family, MIB_IPINTERFACE_TABLE **table);
 
-#if defined(__REACTOS__) && (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
-static DWORD (WINAPI *pConvertInterfaceAliasToLuid)(const WCHAR*,NET_LUID*);
-static DWORD (WINAPI *pConvertInterfaceLuidToAlias)(NET_LUID*,WCHAR*,SIZE_T);
-static DWORD (WINAPI *pConvertGuidToStringA)(const GUID*,char*,DWORD);
-static DWORD (WINAPI *pConvertGuidToStringW)(const GUID*,WCHAR*,DWORD);
-static DWORD (WINAPI *pConvertStringToGuidW)(const WCHAR*,GUID*);
-static DWORD (WINAPI *pGetIfEntry2)(PMIB_IF_ROW2);
-static DWORD (WINAPI *pGetIfTable2)(PMIB_IF_TABLE2*);
-static DWORD (WINAPI *pGetIfTable2Ex)(MIB_IF_TABLE_LEVEL,MIB_IF_TABLE2**);
-static DWORD (WINAPI *pGetIpForwardTable2)(ADDRESS_FAMILY,MIB_IPFORWARD_TABLE2**);
-static DWORD (WINAPI *pGetIpNetTable2)(ADDRESS_FAMILY,MIB_IPNET_TABLE2**);
-static void (WINAPI *pFreeMibTable)(void*);
-static DWORD (WINAPI *pConvertInterfaceGuidToLuid)(const GUID*,NET_LUID*);
-static DWORD (WINAPI *pConvertInterfaceIndexToLuid)(NET_IFINDEX,NET_LUID*);
-static DWORD (WINAPI *pConvertInterfaceLuidToGuid)(const NET_LUID*,GUID*);
-static DWORD (WINAPI *pConvertInterfaceLuidToIndex)(const NET_LUID*,NET_IFINDEX*);
-static DWORD (WINAPI *pConvertInterfaceLuidToNameA)(const NET_LUID*,char*,SIZE_T);
-static DWORD (WINAPI *pConvertInterfaceLuidToNameW)(const NET_LUID*,WCHAR*,SIZE_T);
-static DWORD (WINAPI *pConvertInterfaceNameToLuidA)(const char*,NET_LUID*);
-static DWORD (WINAPI *pConvertInterfaceNameToLuidW)(const WCHAR*,NET_LUID*);
-static NET_IF_COMPARTMENT_ID (WINAPI *pGetCurrentThreadCompartmentId)();
-static char* (WINAPI *pif_indextoname)(NET_IFINDEX,char*);
-static IF_INDEX (WINAPI *pif_nametoindex)(const char*);
-
-#define ConvertInterfaceAliasToLuid    pConvertInterfaceAliasToLuid
-#define ConvertInterfaceLuidToAlias    pConvertInterfaceLuidToAlias
-#define ConvertGuidToStringA           pConvertGuidToStringA
-#define ConvertGuidToStringW           pConvertGuidToStringW
-#define ConvertStringToGuidW           pConvertStringToGuidW
-#define GetIfEntry2                    pGetIfEntry2
-#define GetIfTable2                    pGetIfTable2
-#define GetIfTable2Ex                  pGetIfTable2Ex
-#define GetIpForwardTable2             pGetIpForwardTable2
-#define GetIpNetTable2                 pGetIpNetTable2
-#define FreeMibTable                   pFreeMibTable
-#define ConvertInterfaceGuidToLuid     pConvertInterfaceGuidToLuid
-#define ConvertInterfaceIndexToLuid    pConvertInterfaceIndexToLuid
-#define ConvertInterfaceLuidToGuid     pConvertInterfaceLuidToGuid
-#define ConvertInterfaceLuidToIndex    pConvertInterfaceLuidToIndex
-#define ConvertInterfaceLuidToNameA    pConvertInterfaceLuidToNameA
-#define ConvertInterfaceLuidToNameW    pConvertInterfaceLuidToNameW
-#define ConvertInterfaceNameToLuidA    pConvertInterfaceNameToLuidA
-#define ConvertInterfaceNameToLuidW    pConvertInterfaceNameToLuidW
-#define GetCurrentThreadCompartmentId  pGetCurrentThreadCompartmentId
-#define if_indextoname                 pif_indextoname
-#define if_nametoindex                 pif_nametoindex
-
-/* Wine mistakes */
-#define GetUnicastIpAddressTable       pGetUnicastIpAddressTable
-#define ConvertLengthToIpv4Mask        pConvertLengthToIpv4Mask
-#else
 DWORD WINAPI ConvertGuidToStringA( const GUID *, char *, DWORD );
 DWORD WINAPI ConvertGuidToStringW( const GUID *, WCHAR *, DWORD );
 DWORD WINAPI ConvertStringToGuidW( const WCHAR *, GUID * );
-#endif
 
 static void loadIPHlpApi(void)
 {
@@ -144,34 +92,8 @@ static void loadIPHlpApi(void)
     pParseNetworkString = (void *)GetProcAddress(hLibrary, "ParseNetworkString");
     pNotifyUnicastIpAddressChange = (void *)GetProcAddress(hLibrary, "NotifyUnicastIpAddressChange");
     pCancelMibChangeNotify2 = (void *)GetProcAddress(hLibrary, "CancelMibChangeNotify2");
-#if defined(__REACTOS__) && (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
-    ConvertInterfaceAliasToLuid = (void *)GetProcAddress(hLibrary, "ConvertInterfaceAliasToLuid");
-    ConvertInterfaceLuidToAlias = (void *)GetProcAddress(hLibrary, "ConvertInterfaceLuidToAlias");
-    ConvertGuidToStringA = (void *)GetProcAddress(hLibrary, "ConvertGuidToStringA");
-    ConvertGuidToStringW = (void *)GetProcAddress(hLibrary, "ConvertGuidToStringW");
-    ConvertStringToGuidW = (void *)GetProcAddress(hLibrary, "ConvertStringToGuidW");
-    GetIfEntry2 = (void *)GetProcAddress(hLibrary, "GetIfEntry2");
-    GetIfTable2 = (void *)GetProcAddress(hLibrary, "GetIfTable2");
-    GetIfTable2Ex = (void *)GetProcAddress(hLibrary, "GetIfTable2Ex");
-    GetIpForwardTable2 = (void *)GetProcAddress(hLibrary, "GetIpForwardTable2");
-    GetIpNetTable2 = (void *)GetProcAddress(hLibrary, "GetIpNetTable2");
-    FreeMibTable = (void *)GetProcAddress(hLibrary, "FreeMibTable");
-    ConvertInterfaceGuidToLuid = (void *)GetProcAddress(hLibrary, "ConvertInterfaceGuidToLuid");
-    ConvertInterfaceIndexToLuid = (void *)GetProcAddress(hLibrary, "ConvertInterfaceIndexToLuid");
-    ConvertInterfaceLuidToGuid = (void *)GetProcAddress(hLibrary, "ConvertInterfaceLuidToGuid");
-    ConvertInterfaceLuidToIndex = (void *)GetProcAddress(hLibrary, "ConvertInterfaceLuidToIndex");
-    ConvertInterfaceLuidToNameA = (void *)GetProcAddress(hLibrary, "ConvertInterfaceLuidToNameA");
-    ConvertInterfaceLuidToNameW = (void *)GetProcAddress(hLibrary, "ConvertInterfaceLuidToNameW");
-    ConvertInterfaceNameToLuidA = (void *)GetProcAddress(hLibrary, "ConvertInterfaceNameToLuidA");
-    ConvertInterfaceNameToLuidW = (void *)GetProcAddress(hLibrary, "ConvertInterfaceNameToLuidW");
-    GetCurrentThreadCompartmentId = (void *)GetProcAddress(hLibrary, "GetCurrentThreadCompartmentId");
-    if_indextoname = (void *)GetProcAddress(hLibrary, "if_indextoname");
-    if_nametoindex = (void *)GetProcAddress(hLibrary, "if_nametoindex");
-
-    /* If we can't get FreeMibTable(), use free(). */
-    if (!FreeMibTable)
-        FreeMibTable = (void (WINAPI *)(void *))free;
-#endif
+    pGetIpInterfaceTable = (void *)GetProcAddress(hLibrary, "GetIpInterfaceTable");
+    pGetIpInterfaceEntry = (void *)GetProcAddress(hLibrary, "GetIpInterfaceEntry");
   }
 }
 
@@ -308,10 +230,6 @@ static void testGetIfTable(void)
     DWORD apiReturn;
     ULONG dwSize = 0;
 
-#if defined(__REACTOS__) && (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
-    if (!GetIfEntry2)
-        skip("Missing APIs!\n");
-#endif
     apiReturn = GetIfTable(NULL, NULL, FALSE);
     if (apiReturn == ERROR_NOT_SUPPORTED) {
         skip("GetIfTable is not supported\n");
@@ -339,9 +257,6 @@ static void testGetIfTable(void)
             DWORD i, index;
 
             if (winetest_debug > 1) trace( "interface table: %lu entries\n", buf->dwNumEntries );
-#if defined(__REACTOS__) && (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
-            if (GetIfEntry2) {
-#endif
             for (i = 0; i < buf->dwNumEntries; i++)
             {
                 MIB_IFROW *row = &buf->table[i];
@@ -370,22 +285,12 @@ static void testGetIfTable(void)
                 WideCharToMultiByte( CP_ACP, 0, row2.Description, -1, descr, sizeof(descr), NULL, NULL );
                 ok( !strcmp( (char *)row->bDescr, descr ), "got %s vs %s\n", row->bDescr, descr );
                 guid = &row2.InterfaceGuid;
-#ifdef __REACTOS__
-                _snwprintf( name, ARRAY_SIZE(name), L"\\DEVICE\\TCPIP_{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
-                            guid->Data1, guid->Data2, guid->Data3, guid->Data4[0], guid->Data4[1],
-                            guid->Data4[2], guid->Data4[3], guid->Data4[4], guid->Data4[5],
-                            guid->Data4[6], guid->Data4[7]);
-#else
                 swprintf( name, ARRAY_SIZE(name), L"\\DEVICE\\TCPIP_{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
                           guid->Data1, guid->Data2, guid->Data3, guid->Data4[0], guid->Data4[1],
                           guid->Data4[2], guid->Data4[3], guid->Data4[4], guid->Data4[5],
                           guid->Data4[6], guid->Data4[7]);
-#endif
                 ok( !wcscmp( row->wszName, name ), "got %s vs %s\n", debugstr_w( row->wszName ), debugstr_w( name ) );
             }
-#if defined(__REACTOS__) && (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
-            }
-#endif
         }
         free(buf);
     }
@@ -398,12 +303,6 @@ static void testGetIpForwardTable(void)
     MIB_IPFORWARDTABLE *buf;
     MIB_IPFORWARD_TABLE2 *table2;
     MIB_UNICASTIPADDRESS_TABLE *unicast;
-#if defined(__REACTOS__) && (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
-    if (!GetIpForwardTable2 || !GetUnicastIpAddressTable || !ConvertLengthToIpv4Mask) {
-        skip("Missing APIs!\n");
-        return;
-    }
-#endif
 
     err = GetIpForwardTable( NULL, NULL, FALSE );
     ok( err == ERROR_INVALID_PARAMETER, "got %ld\n", err );
@@ -487,10 +386,6 @@ static void testGetIpNetTable(void)
     MIB_IPNET_TABLE2 *table2;
     ULONG dwSize = 0;
     unsigned int i;
-#if defined(__REACTOS__) && (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
-    if (!GetIpNetTable2)
-        skip("Missing APIs!\n");
-#endif
 
     igmp3_addr = ipv4_addr( 224, 0, 0, 22 );
     ssdp_addr = ipv4_addr( 239, 255, 255, 250 );
@@ -549,16 +444,10 @@ static void testGetIpNetTable(void)
                 else if (buf->table[i].dwAddr == ssdp_addr)
                     ssdp_found = TRUE;
             }
-#if defined(__REACTOS__)
-            if (LOBYTE(LOWORD(GetVersion())) >= 6)
-#endif
             ok( igmp3_found, "%s not found.\n", ntoa( igmp3_addr ));
             ok( ssdp_found || broken(!ssdp_found) /* 239.255.255.250 is always present since Win10 */,
                 "%s not found.\n", ntoa( ssdp_addr ));
 
-#if defined(__REACTOS__) && (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
-            if(GetIpNetTable2) {
-#endif
             ret = GetIpNetTable2( AF_INET, &table2 );
             ok( !ret, "got ret %lu.\n", ret );
             for (i = 0; i < table2->NumEntries; ++i)
@@ -573,9 +462,6 @@ static void testGetIpNetTable(void)
                 }
             }
             FreeMibTable( table2 );
-#if defined(__REACTOS__) && (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
-            }
-#endif
         }
 
         if (apiReturn == NO_ERROR && winetest_debug > 1)
@@ -1059,34 +945,55 @@ static void testSetTcpEntry(void)
 }
 
 static BOOL icmp_send_echo_test_apc_expect;
-static void WINAPI icmp_send_echo_test_apc_xp(void *context)
-{
-    ok(icmp_send_echo_test_apc_expect, "Unexpected APC execution\n");
-    ok(context == (void*)0xdeadc0de, "Wrong context: %p\n", context);
-    icmp_send_echo_test_apc_expect = FALSE;
-}
+static int icmp_send_echo_test_line;
+static IO_STATUS_BLOCK icmp_send_echo_io;
 
 static void WINAPI icmp_send_echo_test_apc(void *context, IO_STATUS_BLOCK *io_status, ULONG reserved)
 {
-    icmp_send_echo_test_apc_xp(context);
-    ok(io_status->Status == 0, "Got IO Status 0x%08lx\n", io_status->Status);
-    ok(io_status->Information == sizeof(ICMP_ECHO_REPLY) + 32 /* sizeof(senddata) */,
-        "Got IO Information %Iu\n", io_status->Information);
+    ok_(__FILE__, icmp_send_echo_test_line)(icmp_send_echo_test_apc_expect, "Unexpected APC execution\n");
+    ok_(__FILE__, icmp_send_echo_test_line)(!reserved, "Got reserved %#lx\n", reserved);
+    ok_(__FILE__, icmp_send_echo_test_line)(context == (void*)0xdeadc0de, "Wrong context: %p\n", context);
+    icmp_send_echo_test_apc_expect = FALSE;
+    icmp_send_echo_io = *io_status;
+}
+
+struct test_echo_thread_params
+{
+    HANDLE icmp;
+    HANDLE event;
+    PIO_APC_ROUTINE apc;
+    void *apc_context;
+    IPAddr address;
+    char *senddata;
+    DWORD send_data_size;
+    char *replydata;
+    DWORD replysz;
+    DWORD timeout;
+};
+
+static DWORD CALLBACK test_echo_thread(void *params)
+{
+    struct test_echo_thread_params *p = params;
+    BOOL ret;
+
+    ret = IcmpSendEcho2(p->icmp, p->event, p->apc, p->apc_context, p->address, p->senddata, p->send_data_size,
+            NULL, p->replydata, p->replysz, p->timeout);
+    ok(!ret && GetLastError() == ERROR_IO_PENDING, "got ret %d, error %ld.\n", ret, GetLastError());
+    return 0;
 }
 
 static void testIcmpSendEcho(void)
 {
     /* The APC's signature is different pre-Vista */
-    const PIO_APC_ROUTINE apc = broken(LOBYTE(LOWORD(GetVersion())) < 6)
-                                ? (PIO_APC_ROUTINE)icmp_send_echo_test_apc_xp
-                                : icmp_send_echo_test_apc;
     HANDLE icmp;
     char senddata[32], replydata[sizeof(senddata) + sizeof(ICMP_ECHO_REPLY)];
     char replydata2[sizeof(replydata) + sizeof(IO_STATUS_BLOCK)];
     DWORD ret, error, replysz = sizeof(replydata);
+    struct test_echo_thread_params p;
+    IP_OPTION_INFORMATION opt;
     IPAddr address;
     ICMP_ECHO_REPLY *reply;
-    HANDLE event;
+    HANDLE event, thread;
     INT i;
 
     memset(senddata, 0, sizeof(senddata));
@@ -1140,6 +1047,12 @@ static void testIcmpSendEcho(void)
 
     SetLastError(0xdeadbeef);
     ret = IcmpSendEcho(icmp, address, NULL, 0, NULL, replydata, replysz, 1000);
+    error = GetLastError();
+    ok (ret, "IcmpSendEcho failed unexpectedly with error %ld\n", error);
+
+    memset(&opt, 0, sizeof(opt));
+    SetLastError(0xdeadbeef);
+    ret = IcmpSendEcho(icmp, address, NULL, 0, &opt, replydata, replysz, 1000);
     error = GetLastError();
     ok (ret, "IcmpSendEcho failed unexpectedly with error %ld\n", error);
 
@@ -1337,9 +1250,6 @@ static void testIcmpSendEcho(void)
     ok(WaitForSingleObjectEx(event, 0, TRUE) == WAIT_TIMEOUT, "Event was unexpectedly signalled.\n");
 
     /* synchronous tests */
-#ifdef __REACTOS__
-    if (LOBYTE(LOWORD(GetVersion())) >= 6) {
-#endif
     SetLastError(0xdeadbeef);
     address = htonl(INADDR_LOOPBACK);
     replysz = sizeof(ICMP_ECHO_REPLY) + sizeof(IO_STATUS_BLOCK);
@@ -1358,6 +1268,12 @@ static void testIcmpSendEcho(void)
     replysz = sizeof(ICMP_ECHO_REPLY) + sizeof(IO_STATUS_BLOCK) + ICMP_MINLEN;
     ret = IcmpSendEcho2(icmp, NULL, NULL, NULL, address, senddata, ICMP_MINLEN, NULL, replydata2, replysz, 1000);
     ok(ret, "IcmpSendEcho2 failed unexpectedly with error %ld\n", GetLastError());
+
+    SetLastError(0xdeadbeef);
+    ret = IcmpSendEcho2Ex(icmp, NULL, NULL, NULL, 0x01010101, address, senddata, ICMP_MINLEN, NULL, replydata2, replysz, 1000);
+    ok(!ret, "IcmpSendEcho2 succeded unexpectedly\n");
+    error = GetLastError();
+    ok(error == ERROR_INVALID_NETNAME, "got %ld\n", error);
 
     SetLastError(0xdeadbeef);
     replysz = sizeof(replydata2);
@@ -1392,11 +1308,39 @@ static void testIcmpSendEcho(void)
     ok(reply->Status == IP_SUCCESS, "Expect status: 0x%08x, got: 0x%08lx\n", IP_SUCCESS, reply->Status);
     ok(reply->DataSize == sizeof(senddata), "Got size: %d\n", reply->DataSize);
     ok(!memcmp(senddata, reply->Data, min(sizeof(senddata), reply->DataSize)), "Data mismatch\n");
-#ifdef __REACTOS__
-    }
-#endif
 
     /* asynchronous tests with event */
+
+    replysz = sizeof(replydata2);
+    ResetEvent(event);
+    p.icmp = icmp;
+    p.event = event;
+    p.apc = icmp_send_echo_test_apc;
+    p.apc_context = (void *)0xdeadbeef;
+    ret = inet_pton(AF_INET, "192.18.1.1", &address);
+    ok(ret, "got error %u.\n", WSAGetLastError());
+    p.address = address;
+    p.senddata = senddata;
+    p.send_data_size = sizeof(senddata);
+    p.replydata = replydata2;
+    p.replysz = replysz;
+    p.timeout = 30;
+    memset(replydata2, 0xcc, sizeof(replydata2));
+    reply = (ICMP_ECHO_REPLY*)replydata2;
+    thread = CreateThread(NULL, 0, test_echo_thread, &p, 0, NULL);
+
+    ret = WaitForSingleObject(thread, INFINITE);
+    ok(ret == WAIT_OBJECT_0, "got %lu.\n", ret);
+    IcmpCloseHandle(icmp); /* completion is delivered even if icmp handle is closed */
+    icmp = IcmpCreateFile();
+    ok (icmp != INVALID_HANDLE_VALUE, "IcmpCreateFile failed unexpectedly with error %ld\n", GetLastError());
+
+    CloseHandle(thread);
+    ret = WaitForSingleObject(event, INFINITE);
+    ok(ret == WAIT_OBJECT_0, "got %lu.\n", ret);
+    ok(reply->Status == IP_REQ_TIMED_OUT, "Expect status: 0x%08x, got: 0x%08lx\n", IP_REQ_TIMED_OUT, reply->Status);
+    ok(!reply->DataSize, "got size %d.\n", reply->DataSize);
+
     SetLastError(0xdeadbeef);
     replysz = sizeof(replydata2);
     address = htonl(INADDR_LOOPBACK);
@@ -1411,19 +1355,16 @@ static void testIcmpSendEcho(void)
     {
         ok(!ret, "IcmpSendEcho2 returned success unexpectedly\n");
         ok(error == ERROR_IO_PENDING, "Expect last error: 0x%08x, got: 0x%08lx\n", ERROR_IO_PENDING, error);
+        IcmpCloseHandle(icmp); /* completion is delivered even if icmp handle is closed */
+        icmp = IcmpCreateFile();
+        ok (icmp != INVALID_HANDLE_VALUE, "IcmpCreateFile failed unexpectedly with error %ld\n", GetLastError());
         ret = WaitForSingleObjectEx(event, 2000, TRUE);
         ok(ret == WAIT_OBJECT_0, "WaitForSingleObjectEx failed unexpectedly with %lu\n", ret);
         reply = (ICMP_ECHO_REPLY*)replydata2;
         ok(ntohl(reply->Address) == INADDR_LOOPBACK, "Address mismatch, expect: %s, got: %s\n", ntoa(INADDR_LOOPBACK),
            ntoa(reply->Address));
-#ifdef __REACTOS__
-    if (LOBYTE(LOWORD(GetVersion())) >= 6) {
-#endif
         ok(reply->Status == IP_SUCCESS, "Expect status: 0x%08x, got: 0x%08lx\n", IP_SUCCESS, reply->Status);
         ok(reply->DataSize == sizeof(senddata), "Got size: %d\n", reply->DataSize);
-#ifdef __REACTOS__
-    }
-#endif
         if (winetest_debug > 1)
         {
             reply = (ICMP_ECHO_REPLY*)replydata2;
@@ -1449,15 +1390,25 @@ static void testIcmpSendEcho(void)
     reply = (ICMP_ECHO_REPLY*)replydata2;
     ok(ntohl(reply->Address) == INADDR_LOOPBACK, "Address mismatch, expect: %s, got: %s\n", ntoa(INADDR_LOOPBACK),
        ntoa(reply->Address));
-#ifdef __REACTOS__
-    if (LOBYTE(LOWORD(GetVersion())) >= 6) {
-#endif
     ok(reply->Status == IP_SUCCESS, "Expect status: 0x%08x, got: 0x%08lx\n", IP_SUCCESS, reply->Status);
     ok(reply->DataSize == sizeof(senddata), "Got size: %d\n", reply->DataSize);
-#ifdef __REACTOS__
-    }
-#endif
     /* pre-Vista, reply->Data is an offset; otherwise it's a pointer, so hardcode the offset */
+    ok(!memcmp(senddata, reply + 1, min(sizeof(senddata), reply->DataSize)), "Data mismatch\n");
+
+    SetLastError(0xdeadbeef);
+    for (i = 0; i < ARRAY_SIZE(senddata); i++) senddata[i] = i & 0xff;
+    ret = IcmpSendEcho2(icmp, event, icmp_send_echo_test_apc, NULL, address, senddata, sizeof(senddata),
+            NULL, replydata2, replysz, 1000);
+    error = GetLastError();
+    ok(!ret, "IcmpSendEcho2 returned success unexpectedly\n");
+    ok(error == ERROR_IO_PENDING, "Expect last error: 0x%08x, got: 0x%08lx\n", ERROR_IO_PENDING, error);
+    ret = WaitForSingleObjectEx(event, 2000, TRUE);
+    ok(ret == WAIT_OBJECT_0, "WaitForSingleObjectEx failed unexpectedly with %lu\n", ret);
+    reply = (ICMP_ECHO_REPLY*)replydata2;
+    ok(ntohl(reply->Address) == INADDR_LOOPBACK, "Address mismatch, expect: %s, got: %s\n", ntoa(INADDR_LOOPBACK),
+       ntoa(reply->Address));
+    ok(reply->Status == IP_SUCCESS, "Expect status: 0x%08x, got: 0x%08lx\n", IP_SUCCESS, reply->Status);
+    ok(reply->DataSize == sizeof(senddata), "Got size: %d\n", reply->DataSize);
     ok(!memcmp(senddata, reply + 1, min(sizeof(senddata), reply->DataSize)), "Data mismatch\n");
 
     CloseHandle(event);
@@ -1468,21 +1419,22 @@ static void testIcmpSendEcho(void)
     address = htonl(INADDR_LOOPBACK);
     for (i = 0; i < ARRAY_SIZE(senddata); i++) senddata[i] = ~i & 0xff;
     icmp_send_echo_test_apc_expect = TRUE;
-    /*
-       NOTE: Supplying both event and apc has varying behavior across Windows versions, so not tested.
-    */
-#if defined(__REACTOS__) && defined(_MSC_VER)
-    /* The call to IcmpSendEcho2() below with the invalid APC context causes
-     * stack corruption on WS03 and ReactOS when compiled with MSVC but not GCC. */
-    if (LOBYTE(LOWORD(GetVersion())) >= 6) {
-#endif
-    ret = IcmpSendEcho2(icmp, NULL, apc, (void*)0xdeadc0de, address, senddata, sizeof(senddata), NULL, replydata2, replysz, 1000);
+    memset(&icmp_send_echo_io, 0xcc, sizeof(icmp_send_echo_io));
+    icmp_send_echo_test_line = __LINE__;
+    ret = IcmpSendEcho2(icmp, NULL, icmp_send_echo_test_apc, (void*)0xdeadc0de, address, senddata, sizeof(senddata),
+            NULL, replydata2, replysz, 1000);
     error = GetLastError();
     ok(!ret, "IcmpSendEcho2 returned success unexpectedly\n");
     ok(error == ERROR_IO_PENDING, "Expect last error: 0x%08x, got: 0x%08lx\n", ERROR_IO_PENDING, error);
+    IcmpCloseHandle(icmp);
+    icmp = IcmpCreateFile();
+    ok (icmp != INVALID_HANDLE_VALUE, "IcmpCreateFile failed unexpectedly with error %ld\n", GetLastError());
+
     SleepEx(200, TRUE);
     SleepEx(0, TRUE);
     ok(icmp_send_echo_test_apc_expect == FALSE, "APC was not executed!\n");
+    ok(!icmp_send_echo_io.Status, "got %#lx.\n", icmp_send_echo_io.Status);
+    ok(icmp_send_echo_io.Information == sizeof(replydata), "got %Iu.\n", icmp_send_echo_io.Information);
     reply = (ICMP_ECHO_REPLY*)replydata2;
     ok(ntohl(reply->Address) == INADDR_LOOPBACK, "Address mismatch, expect: %s, got: %s\n", ntoa(INADDR_LOOPBACK),
        ntoa(reply->Address));
@@ -1490,9 +1442,6 @@ static void testIcmpSendEcho(void)
     ok(reply->DataSize == sizeof(senddata), "Got size: %d\n", reply->DataSize);
     /* pre-Vista, reply->Data is an offset; otherwise it's a pointer, so hardcode the offset */
     ok(!memcmp(senddata, reply + 1, min(sizeof(senddata), reply->DataSize)), "Data mismatch\n");
-#if defined(__REACTOS__) && defined(_MSC_VER)
-    }
-#endif
 
     IcmpCloseHandle(icmp);
 }
@@ -1522,10 +1471,6 @@ static void testIcmpParseReplies( void )
     ok( reply.Status == 12345, "status %ld\n", reply.Status );
     ok( !reply.Reserved, "reserved %d\n", reply.Reserved );
 
-#if defined(__REACTOS__) && defined(_MSC_VER)
-    /* This crashes on WS03 when compiled with MSVC. It does work on ReactOS. */
-    if (LOBYTE(LOWORD(GetVersion())) >= 6) {
-#endif
     reply.Reserved = 3;
     SetLastError( 0xdeadbeef );
     ret = IcmpParseReplies( &reply, sizeof(reply) );
@@ -1533,9 +1478,184 @@ static void testIcmpParseReplies( void )
     ok( GetLastError() == 0xdeadbeef, "gle %ld\n", GetLastError() );
     ok( reply.Status == 12345, "status %ld\n", reply.Status );
     ok( !reply.Reserved, "reserved %d\n", reply.Reserved );
-#if defined(__REACTOS__) && defined(_MSC_VER)
+}
+
+static void test_Icmp6SendEcho(void)
+{
+    char senddata[32], replydata[sizeof(senddata) + sizeof(ICMPV6_ECHO_REPLY)];
+    struct sockaddr_in6 src_addr, address;
+    IP_OPTION_INFORMATION opt;
+    ICMPV6_ECHO_REPLY *reply;
+    DWORD ret, replysz;
+    char str[256];
+    HANDLE event;
+    HANDLE icmp;
+
+    icmp = Icmp6CreateFile();
+    ok(icmp != INVALID_HANDLE_VALUE, "got error %ld.\n", GetLastError());
+
+    memset(senddata, 0xdd, sizeof(senddata));
+
+    memset(&src_addr, 0, sizeof(src_addr));
+    memset(&address, 0, sizeof(address));
+    ret = inet_pton( AF_INET6, "::1", &address.sin6_addr);
+    ok(ret, "got error %u.\n", WSAGetLastError());
+
+    SetLastError(0xdeadbeef);
+    replysz = sizeof(replydata);
+    memset(replydata, 0xcc, sizeof(replydata));
+    reply = (ICMPV6_ECHO_REPLY*)replydata;
+    ret = Icmp6SendEcho2(icmp, NULL, NULL, NULL, &src_addr, &address, senddata, sizeof(senddata), NULL,
+            replydata, replysz, 1000);
+    todo_wine_if(!ret && GetLastError() == ERROR_ACCESS_DENIED)
+    ok(ret == 1, "got ret %lu, error %ld.\n", ret, GetLastError());
+    if (!ret)
+    {
+        skip( "ipv6 ping is prohibited.\n" );
+        IcmpCloseHandle(icmp);
+        return;
     }
-#endif
+    ok(!GetLastError(), "got %ld.\n", GetLastError());
+    ok(!reply->Status, "got %lu.\n", reply->Status);
+    ok(!memcmp(reply->Address.sin6_addr, &address.sin6_addr, sizeof(address.sin6_addr)), "got %s.\n",
+            inet_ntop(AF_INET6, (void *)&reply->Address.sin6_addr, str, sizeof(str)));
+    ok(!reply->Address.sin6_port, "got %#x.\n", reply->Address.sin6_port);
+    ok(!reply->Address.sin6_flowinfo, "got %#lx.\n", reply->Address.sin6_flowinfo);
+    ok(!reply->Address.sin6_scope_id, "got %#lx.\n", reply->Address.sin6_scope_id);
+    ok(!memcmp(reply + 1, senddata, sizeof(senddata)), "reply data does not match.\n");
+
+    memset(&src_addr, 0, sizeof(src_addr));
+    memset(&address, 0, sizeof(address));
+    memset(&opt, 0, sizeof(opt));
+    ret = inet_pton( AF_INET6, "::1", &address.sin6_addr);
+    ok(ret, "got error %u.\n", WSAGetLastError());
+    ret = inet_pton( AF_INET6, "::1", &src_addr.sin6_addr);
+    ok(ret, "got error %u.\n", WSAGetLastError());
+    memset(replydata, 0xcc, sizeof(replydata));
+    ret = Icmp6SendEcho2(icmp, NULL, NULL, NULL, &src_addr, &address, senddata, sizeof(senddata), &opt,
+            replydata, replysz, 1000);
+    ok(!ret && GetLastError() == IP_GENERAL_FAILURE, "got ret %#lx, error %ld.\n", ret, GetLastError());
+    ok(reply->Status == IP_GENERAL_FAILURE, "got %#lx.\n", reply->Status);
+
+    opt.Ttl = 1;
+    ret = Icmp6SendEcho2(icmp, NULL, NULL, NULL, &src_addr, &address, senddata, sizeof(senddata), &opt,
+            replydata, replysz, 1000);
+    ok(ret == 1, "got ret %lu, error %ld.\n", ret, GetLastError());
+    ok(!GetLastError(), "got %ld.\n", GetLastError());
+    ok(!reply->Status, "got %#lx.\n", reply->Status);
+    ok(!memcmp(reply->Address.sin6_addr, &address.sin6_addr, sizeof(address.sin6_addr)), "got %s.\n",
+            inet_ntop(AF_INET6, (void *)&reply->Address.sin6_addr, str, sizeof(str)));
+    ok(!reply->Address.sin6_port, "got %#x.\n", reply->Address.sin6_port);
+    ok(!reply->Address.sin6_flowinfo, "got %#lx.\n", reply->Address.sin6_flowinfo);
+    ok(!reply->Address.sin6_scope_id, "got %#lx.\n", reply->Address.sin6_scope_id);
+    ok(!memcmp(reply + 1, senddata, sizeof(senddata)), "reply data does not match.\n");
+
+    memset(&src_addr, 0, sizeof(src_addr));
+    memset(&address, 0, sizeof(address));
+    event = CreateEventW(NULL, FALSE, FALSE, NULL);
+
+    icmp_send_echo_test_apc_expect = FALSE;
+    icmp_send_echo_test_line = __LINE__;
+    memset(&icmp_send_echo_io, 0xcc, sizeof(icmp_send_echo_io));
+    memset(replydata, 0xcc, sizeof(replydata));
+    replysz = sizeof(replydata);
+    ret = Icmp6SendEcho2(icmp, NULL, icmp_send_echo_test_apc, (void*)0xdeadc0de, &src_addr, &address, senddata,
+            sizeof(senddata), NULL, replydata, replysz, 1000);
+    ok(!ret && GetLastError() == ERROR_INVALID_NETNAME, "got ret %lu, error %ld.\n", ret, GetLastError());
+
+    ret = inet_pton( AF_INET6, "::1", &address.sin6_addr);
+    ok(ret, "got error %u.\n", WSAGetLastError());
+
+    icmp_send_echo_test_apc_expect = TRUE;
+    icmp_send_echo_test_line = __LINE__;
+    memset(&icmp_send_echo_io, 0xcc, sizeof(icmp_send_echo_io));
+    memset(replydata, 0xcc, sizeof(replydata));
+    replysz = sizeof(replydata);
+    ret = Icmp6SendEcho2(icmp, NULL, icmp_send_echo_test_apc, (void*)0xdeadc0de, &src_addr, &address, senddata,
+            sizeof(senddata), NULL, replydata, replysz, 1000);
+    ok(!ret && GetLastError() == ERROR_IO_PENDING, "got ret %lu, error %ld.\n", ret, GetLastError());
+    ret = WaitForSingleObjectEx(event, INFINITE, TRUE);
+    ok(ret == WAIT_IO_COMPLETION, "got %#lx.\n", ret);
+    ok(!icmp_send_echo_io.Status, "got %#lx.\n", icmp_send_echo_io.Status);
+    ok(icmp_send_echo_io.Information == sizeof(replydata), "got %Iu.\n", icmp_send_echo_io.Information);
+    ok(!reply->Status, "got %#lx.\n", reply->Status);
+    ok(!icmp_send_echo_test_apc_expect, "APC was not called.\n");
+    ok(!memcmp(reply->Address.sin6_addr, &address.sin6_addr, sizeof(address.sin6_addr)), "got %s.\n",
+            inet_ntop(AF_INET6, (void *)&reply->Address.sin6_addr, str, sizeof(str)));
+    ok(!reply->Address.sin6_port, "got %#x.\n", reply->Address.sin6_port);
+    ok(!reply->Address.sin6_flowinfo, "got %#lx.\n", reply->Address.sin6_flowinfo);
+    ok(!reply->Address.sin6_scope_id, "got %#lx.\n", reply->Address.sin6_scope_id);
+    ok(!memcmp(reply + 1, senddata, sizeof(senddata)), "reply data does not match.\n");
+
+    ret = inet_pton( AF_INET6, "::1", &address.sin6_addr);
+    icmp_send_echo_test_apc_expect = FALSE;
+    icmp_send_echo_test_line = __LINE__;
+    memset(replydata, 0xcc, sizeof(replydata));
+    replysz = sizeof(replydata);
+    ret = Icmp6SendEcho2(icmp, event, icmp_send_echo_test_apc, (void*)0xdeadc0de, &src_addr, &address, senddata,
+            sizeof(senddata), NULL, replydata, replysz, 1000);
+    ok(!ret && GetLastError() == ERROR_IO_PENDING, "got ret %lu, error %ld.\n", ret, GetLastError());
+    ret = WaitForSingleObjectEx(event, INFINITE, TRUE);
+    ok(ret == WAIT_OBJECT_0, "got %#lx.\n", ret);
+    icmp_send_echo_test_line = __LINE__;
+    SleepEx(0, TRUE);
+    ok(!reply->Status, "got %#lx.\n", reply->Status);
+    ok(!memcmp(reply->Address.sin6_addr, &address.sin6_addr, sizeof(address.sin6_addr)), "got %s.\n",
+            inet_ntop(AF_INET6, (void *)&reply->Address.sin6_addr, str, sizeof(str)));
+    ok(!reply->Address.sin6_port, "got %#x.\n", reply->Address.sin6_port);
+    ok(!reply->Address.sin6_flowinfo, "got %#lx.\n", reply->Address.sin6_flowinfo);
+    ok(!reply->Address.sin6_scope_id, "got %#lx.\n", reply->Address.sin6_scope_id);
+    ok(!memcmp(reply + 1, senddata, sizeof(senddata)), "reply data does not match.\n");
+
+    memset(replydata, 0xcc, sizeof(replydata));
+    replysz = sizeof(replydata);
+    opt.Ttl = 0;
+    icmp_send_echo_test_apc_expect = TRUE;
+    icmp_send_echo_test_line = __LINE__;
+    memset(&icmp_send_echo_io, 0xcc, sizeof(icmp_send_echo_io));
+    ret = Icmp6SendEcho2(icmp, NULL, icmp_send_echo_test_apc, (void*)0xdeadc0de, &src_addr, &address, senddata,
+            sizeof(senddata), &opt, replydata, replysz, 1000);
+    ok(!ret && GetLastError() == ERROR_IO_PENDING, "got ret %lu, error %ld.\n", ret, GetLastError());
+    ret = WaitForSingleObjectEx(event, INFINITE, TRUE);
+    ok(ret == WAIT_IO_COMPLETION, "got %#lx.\n", ret);
+    ok(!icmp_send_echo_test_apc_expect, "APC was not called.\n");
+    todo_wine ok(icmp_send_echo_io.Status == STATUS_INVALID_PARAMETER, "got %#lx.\n", icmp_send_echo_io.Status);
+    ok(icmp_send_echo_io.Information == sizeof(ICMPV6_ECHO_REPLY), "got %Iu.\n", icmp_send_echo_io.Information);
+    ok(reply->Status == IP_GENERAL_FAILURE, "got %#lx.\n", reply->Status);
+    ok(IN6_IS_ADDR_UNSPECIFIED((IN6_ADDR *)&reply->Address.sin6_addr), "got %s.\n",
+            inet_ntop(AF_INET6, (void *)&reply->Address.sin6_addr, str, sizeof(str)));
+    ok(!reply->Address.sin6_port, "got %#x.\n", reply->Address.sin6_port);
+    ok(!reply->Address.sin6_flowinfo, "got %#lx.\n", reply->Address.sin6_flowinfo);
+    ok(!reply->Address.sin6_scope_id, "got %#lx.\n", reply->Address.sin6_scope_id);
+
+    ResetEvent(event);
+    ret = inet_pton( AF_INET6, "::ffff", &src_addr.sin6_addr);
+    ok(ret, "got error %u.\n", WSAGetLastError());
+    ret = Icmp6SendEcho2(icmp, event, NULL, NULL, &src_addr, &address, senddata,
+            sizeof(senddata), NULL, replydata, replysz, 1000);
+    ok(!ret && GetLastError() == ERROR_INVALID_NETNAME, "got ret %lu, error %ld.\n", ret, GetLastError());
+
+    CloseHandle(event);
+    ret = IcmpCloseHandle(icmp);
+    ok(ret, "got error %u.\n", WSAGetLastError());
+}
+
+static void testIcmp6ParseReplies( void )
+{
+    ICMPV6_ECHO_REPLY reply = { 0 };
+    DWORD ret;
+
+    SetLastError( 0xdeadbeef );
+    ret = Icmp6ParseReplies( &reply, sizeof(reply) );
+    ok( ret == 1, "got %ld.\n", ret );
+    ok( GetLastError() == 0xdeadbeef, "got error %ld.\n", GetLastError() );
+
+    reply.Status = 12345;
+    SetLastError( 0xdeadbeef );
+    ret = Icmp6ParseReplies( &reply, sizeof(reply) );
+    ok( ret == 0, "ret %ld\n", ret );
+    ok( GetLastError() == 12345, "got error %ld.\n", GetLastError() );
+    ok( reply.Status == 12345, "got %ld,\n", reply.Status );
 }
 
 static void testWinNT4Functions(void)
@@ -1558,6 +1678,8 @@ static void testWinNT4Functions(void)
   testSetTcpEntry();
   testIcmpSendEcho();
   testIcmpParseReplies();
+  test_Icmp6SendEcho();
+  testIcmp6ParseReplies();
 }
 
 static void testGetInterfaceInfo(void)
@@ -1589,14 +1711,8 @@ static void testGetInterfaceInfo(void)
         {
             MIB_IFROW row = { .dwIndex = buf->Adapter[i].Index };
             GetIfEntry( &row );
-#ifdef __REACTOS__
-            if (LOBYTE(LOWORD(GetVersion())) >= 6) {
-#endif
             ok( !wcscmp( buf->Adapter[i].Name, row.wszName ), "got %s vs %s\n",
                 debugstr_w( buf->Adapter[i].Name ), debugstr_w( row.wszName ) );
-#ifdef __REACTOS__
-            }
-#endif
             ok( row.dwType != IF_TYPE_SOFTWARE_LOOPBACK, "got loopback\n" );
         }
         free(buf);
@@ -1612,12 +1728,6 @@ static void testGetAdaptersInfo(void)
     DWORD err;
     ULONG len = 0;
     MIB_IFROW row;
-#if defined(__REACTOS__) && (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
-    if(!ConvertInterfaceIndexToLuid || !ConvertInterfaceLuidToGuid) {
-        skip("Missing APIs!\n");
-        return;
-    }
-#endif
 
     err = GetAdaptersInfo( NULL, NULL );
     ok( err == ERROR_INVALID_PARAMETER, "got %ld\n", err );
@@ -1767,26 +1877,34 @@ static void testGetBestInterfaceEx(void)
 
 static void testGetBestRoute(void)
 {
-    DWORD apiReturn;
+    MIB_IFROW if_row;
+    DWORD err;
     MIB_IPFORWARDROW bestRoute;
 
-    apiReturn = GetBestRoute( INADDR_ANY, 0, &bestRoute );
-    trace( "GetBestRoute([0.0.0.0], 0, [...]) = %lu\n", apiReturn );
-    if (apiReturn == ERROR_NOT_SUPPORTED)
+    err = GetBestRoute( INADDR_ANY, 0, &bestRoute );
+    trace( "GetBestRoute([0.0.0.0], 0, [...]) = %lu\n", err );
+    if (err == ERROR_NOT_SUPPORTED)
     {
         skip( "GetBestRoute is not supported\n" );
         return;
     }
 
-    apiReturn = GetBestRoute( INADDR_ANY, 0, NULL );
-    ok( apiReturn == ERROR_INVALID_PARAMETER,
+    err = GetBestRoute( INADDR_ANY, 0, NULL );
+    ok( err == ERROR_INVALID_PARAMETER,
         "GetBestRoute([0.0.0.0], 0, NULL) returned %lu, expected %d\n",
-        apiReturn, ERROR_INVALID_PARAMETER );
+        err, ERROR_INVALID_PARAMETER );
 
-    apiReturn = GetBestRoute( INADDR_LOOPBACK, 0, &bestRoute );
-    ok( apiReturn == NO_ERROR,
+    memset( &bestRoute, 0xcc, sizeof(bestRoute));
+    err = GetBestRoute( htonl( INADDR_LOOPBACK ), 0, &bestRoute );
+    ok( err == NO_ERROR,
         "GetBestRoute([127.0.0.1], 0, NULL) returned %lu, expected %d\n",
-        apiReturn, NO_ERROR );
+        err, NO_ERROR );
+    ok( bestRoute.dwForwardMask == 0xffffffff, "got %#lx.\n", bestRoute.dwForwardMask );
+
+    if_row.dwIndex = bestRoute.dwForwardIfIndex;
+    err = GetIfEntry( &if_row );
+    ok( !err, "got %lu.\n", err );
+    ok( if_row.dwType == IF_TYPE_SOFTWARE_LOOPBACK, "got %#lx.\n", if_row.dwType );
 }
 
 /*
@@ -1830,12 +1948,6 @@ static void testNotifyAddrChange(void)
     HANDLE handle;
     BOOL success;
 
-#ifdef __REACTOS__
-    if (IsReactOS()) {
-        skip("FIXME: testNotifyAddrChange() hangs on ReactOS! (works on Windows)\n");
-        return;
-    }
-#endif
     handle = NULL;
     ZeroMemory(&overlapped, sizeof(overlapped));
     ret = NotifyAddrChange(&handle, &overlapped);
@@ -1915,10 +2027,6 @@ static void test_GetAdaptersAddresses(void)
     IP_ADAPTER_ADDRESSES *aa, *ptr;
     IP_ADAPTER_UNICAST_ADDRESS *ua;
 
-#if defined(__REACTOS__) && (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
-    if (!ConvertInterfaceLuidToGuid)
-        skip("Missing APIs!\n");
-#endif
     ret = GetAdaptersAddresses(AF_UNSPEC, 0, NULL, NULL, NULL);
     ok(ret == ERROR_INVALID_PARAMETER, "expected ERROR_INVALID_PARAMETER got %lu\n", ret);
 
@@ -1932,9 +2040,6 @@ static void test_GetAdaptersAddresses(void)
     osize = 0x7fffffff;
     ret = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_SKIP_FRIENDLY_NAME, NULL, NULL, &osize);
     ok(ret == ERROR_BUFFER_OVERFLOW, "expected ERROR_BUFFER_OVERFLOW, got %lu\n", ret);
-#ifdef __REACTOS__
-    if (LOBYTE(LOWORD(GetVersion())) >= 6)
-#endif
     ok(osize == size, "expected %ld, got %ld\n", size, osize);
 
     ptr = malloc(size);
@@ -2007,16 +2112,10 @@ static void test_GetAdaptersAddresses(void)
             if (ua->Flags & IP_ADAPTER_ADDRESS_DNS_ELIGIBLE)
                 dns_eligible_found = TRUE;
 
-#ifdef __REACTOS__
-            if (LOBYTE(LOWORD(GetVersion())) >= 6) {
-#endif
             if(ua->Address.lpSockaddr->sa_family == AF_INET)
                 ok(aa->Ipv4Enabled == TRUE, "expected Ipv4Enabled flag to be set in interface %ls\n", aa->FriendlyName);
             else if(ua->Address.lpSockaddr->sa_family == AF_INET6)
                 ok(aa->Ipv6Enabled == TRUE, "expected Ipv6Enabled flag to be set in interface %ls\n", aa->FriendlyName);
-#ifdef __REACTOS__
-            }
-#endif
 
             ua = ua->Next;
         }
@@ -2038,9 +2137,6 @@ static void test_GetAdaptersAddresses(void)
               aa->Ipv4Metric, aa->Ipv6Metric, wine_dbgstr_guid((GUID*) &aa->NetworkGuid),
               aa->ConnectionType, aa->TunnelType);
 
-#if defined(__REACTOS__) && (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
-        if (ConvertInterfaceLuidToGuid) {
-#endif
         status = ConvertInterfaceLuidToGuid(&aa->Luid, &guid);
         ok(!status, "got %lu\n", status);
         sprintf(buf, "{%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x}",
@@ -2048,9 +2144,6 @@ static void test_GetAdaptersAddresses(void)
                 guid.Data4[2], guid.Data4[3], guid.Data4[4], guid.Data4[5],
                 guid.Data4[6], guid.Data4[7]);
         ok(!strcasecmp(aa->AdapterName, buf), "expected '%s' got '%s'\n", aa->AdapterName, buf);
-#if defined(__REACTOS__) && (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
-        }
-#endif
     }
     ok(dns_eligible_found, "Did not find any dns eligible addresses.\n");
     free(ptr);
@@ -2118,17 +2211,12 @@ static void test_GetExtendedTcpTable(void)
    we make, and associates it with our process. */
 static void test_GetExtendedTcpTable_owner( int family )
 {
+    BOOL found_it;
     SOCKET sock;
     int port;
     DWORD i, ret;
     void *raw_table = NULL;
 
-#ifdef __REACTOS__
-    if (LOBYTE(LOWORD(GetVersion())) < 6) {
-        skip("This test is invalid for this NT version.\n");
-        return;
-    }
-#endif
     winetest_push_context( "%s", family == AF_INET ? "AF_INET" : "AF_INET6" );
 
     sock = socket( family, SOCK_STREAM, IPPROTO_TCP );
@@ -2179,7 +2267,7 @@ static void test_GetExtendedTcpTable_owner( int family )
     if (family == AF_INET)
     {
         MIB_TCPTABLE_OWNER_PID *table = raw_table;
-        BOOL found_it = FALSE;
+        found_it = FALSE;
         for (i = 0; i < table->dwNumEntries; i++)
         {
             MIB_TCPROW_OWNER_PID *row = &table->table[i];
@@ -2196,7 +2284,7 @@ static void test_GetExtendedTcpTable_owner( int family )
     else
     {
         MIB_TCP6TABLE_OWNER_PID *table = raw_table;
-        BOOL found_it = FALSE;
+        found_it = FALSE;
         for (i = 0; i < table->dwNumEntries; i++)
         {
             MIB_TCP6ROW_OWNER_PID *row = &table->table[i];
@@ -2206,6 +2294,186 @@ static void test_GetExtendedTcpTable_owner( int family )
                 ok( row->dwOwningPid == GetCurrentProcessId(), "unexpected socket owner %04lx\n", row->dwOwningPid );
                 found_it = TRUE;
                 break;
+            }
+        }
+        ok( found_it, "no table entry for socket\n" );
+    }
+
+    free( raw_table );
+    raw_table = NULL;
+    ret = get_extended_tcp_table( family, TCP_TABLE_OWNER_MODULE_ALL, &raw_table );
+    if (ret != ERROR_SUCCESS)
+    {
+        skip( "error %lu getting TCP table\n", ret );
+        goto done;
+    }
+
+    if (family == AF_INET)
+    {
+        MIB_TCPTABLE_OWNER_MODULE *t = raw_table;
+        TCPIP_OWNER_MODULE_BASIC_INFO *info;
+        MIB_TCPROW_OWNER_MODULE entry;
+        WCHAR mod[MAX_PATH], *name;
+        DWORD sz, expected, name_len;
+        BYTE buf[MAX_PATH + sizeof(TCPIP_OWNER_MODULE_BASIC_INFO) + 128];
+        HANDLE process;
+        char *p;
+
+        info = (TCPIP_OWNER_MODULE_BASIC_INFO *)buf;
+
+        mod[0] = 0;
+        GetModuleFileNameW( NULL, mod, ARRAY_SIZE(mod) );
+        name = wcsrchr( mod, '\\' );
+        ok( !!name, "could not get name, mod %s.\n", debugstr_w(mod) );
+        ++name;
+        name_len = (wcslen( name ) + 1) * sizeof(WCHAR);
+        expected = sizeof(TCPIP_OWNER_MODULE_BASIC_INFO) + name_len + (wcslen( mod ) + 1) * sizeof(WCHAR);
+        memset( &entry, 0, sizeof(entry) );
+
+        sz = sizeof(buf);
+        ret = GetOwnerModuleFromTcpEntry( NULL, TCPIP_OWNER_MODULE_INFO_BASIC, buf, &sz );
+        ok( ret == ERROR_INVALID_PARAMETER, "got %lu.\n", ret );
+
+        entry.dwOwningPid = 0;
+        ret = GetOwnerModuleFromTcpEntry( &entry, TCPIP_OWNER_MODULE_INFO_BASIC, buf, &sz );
+        ok( ret == ERROR_NOT_FOUND, "got %lu.\n", ret );
+
+        entry.dwOwningPid = 0xffff;
+        ret = GetOwnerModuleFromTcpEntry( &entry, TCPIP_OWNER_MODULE_INFO_BASIC, buf, &sz );
+        ok( ret == ERROR_INVALID_PARAMETER, "got %lu.\n", ret );
+
+        entry.dwOwningPid = GetCurrentProcessId();
+        sz = 1;
+        ret = GetOwnerModuleFromTcpEntry( &entry, TCPIP_OWNER_MODULE_INFO_BASIC, buf, &sz );
+        ok( ret == ERROR_INSUFFICIENT_BUFFER, "got %lu.\n", ret );
+        ok( sz == expected, "got %lu, expected %lu.\n", sz, expected );
+
+        ret = GetOwnerModuleFromTcpEntry( &entry, TCPIP_OWNER_MODULE_INFO_BASIC, buf, &sz );
+        ok( !ret, "got %lu.\n", ret );
+
+        p = (char *)(info + 1);
+        ok( (char *)info->pModuleName == p, "got %p, %p.\n", info, p );
+        p += name_len;
+        ok( (char *)info->pModulePath == p, "got %p, %p.\n", info, p);
+        ok( !wcscmp( info->pModuleName, name ), "got %s, %s.\n", debugstr_w(info->pModuleName), debugstr_w(name) );
+
+        found_it = FALSE;
+        for (i = 0; i < t->dwNumEntries; ++i)
+        {
+            info = (TCPIP_OWNER_MODULE_BASIC_INFO *)buf;
+
+            memset(buf, 0xcc, sizeof(buf));
+            sz = sizeof(buf) + 1;
+            ret = GetOwnerModuleFromTcpEntry( &t->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, buf, &sz );
+            ok(sz == sizeof(buf) + 1, "got %ld.\n", sz);
+            ok( !ret || ret == ERROR_NOT_FOUND || ret == ERROR_ACCESS_DENIED
+                || ret == ERROR_MOD_NOT_FOUND,
+                /* This is weird, newer Windows seems to return non-zero OwningModuleInfo[0] sometimes but then
+                 * GetOwnerModuleFromTcp6Entry always fails with ERROR_MOD_NOT_FOUND, while that succeeds for the
+                 * same PID in MIB_TCPTABLE_OWNER_MODULE and zeroed OwningModuleInfo */
+                "got %#lx, pid %ld, info %#I64x.\n", ret, t->table[i].dwOwningPid, t->table[i].OwningModuleInfo[0] );
+
+            memset( &entry, 0, sizeof(entry) );
+            entry.dwOwningPid = t->table[i].dwOwningPid;
+            if (entry.dwOwningPid == GetCurrentProcessId())
+                found_it = TRUE;
+            ret = GetOwnerModuleFromTcpEntry( &entry, TCPIP_OWNER_MODULE_INFO_BASIC, buf, &sz );
+            process = OpenProcess( PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.dwOwningPid );
+            ok( !ret || ret == ERROR_NOT_FOUND || ret == ERROR_ACCESS_DENIED,
+                "got %#lx, pid %ld, info %#I64x.\n", ret, t->table[i].dwOwningPid, t->table[i].OwningModuleInfo[0] );
+            if (!ret && !wcscmp( info->pModuleName, L"System" ))
+            {
+                ok( !wcscmp( info->pModulePath, L"System" ), "got %s.\n", debugstr_w(info->pModulePath) );
+            }
+            else if (ret == ERROR_ACCESS_DENIED)
+            {
+                process = OpenProcess( PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.dwOwningPid );
+                ok( !process && GetLastError() == ERROR_ACCESS_DENIED, "got process %p, err %lu.\n", process, GetLastError() );
+            }
+        }
+        ok( found_it, "no table entry for socket\n" );
+    }
+    else
+    {
+        MIB_TCP6TABLE_OWNER_MODULE *t = raw_table;
+        TCPIP_OWNER_MODULE_BASIC_INFO *info;
+        MIB_TCP6ROW_OWNER_MODULE entry;
+        WCHAR mod[MAX_PATH], *name;
+        DWORD sz, expected, name_len;
+        BYTE buf[MAX_PATH + sizeof(TCPIP_OWNER_MODULE_BASIC_INFO) + 128];
+        HANDLE process;
+        char *p;
+
+        info = (TCPIP_OWNER_MODULE_BASIC_INFO *)buf;
+
+        mod[0] = 0;
+        GetModuleFileNameW( NULL, mod, ARRAY_SIZE(mod) );
+        name = wcsrchr( mod, '\\' );
+        ok( !!name, "could not get name, mod %s.\n", debugstr_w(mod) );
+        ++name;
+        name_len = (wcslen( name ) + 1) * sizeof(WCHAR);
+        expected = sizeof(TCPIP_OWNER_MODULE_BASIC_INFO) + name_len + (wcslen( mod ) + 1) * sizeof(WCHAR);
+        memset( &entry, 0, sizeof(entry) );
+
+        sz = sizeof(buf);
+        ret = GetOwnerModuleFromTcp6Entry( NULL, TCPIP_OWNER_MODULE_INFO_BASIC, buf, &sz );
+        ok( ret == ERROR_INVALID_PARAMETER, "got %lu.\n", ret );
+
+        entry.dwOwningPid = 0;
+        ret = GetOwnerModuleFromTcp6Entry( &entry, TCPIP_OWNER_MODULE_INFO_BASIC, buf, &sz );
+        ok( ret == ERROR_NOT_FOUND, "got %lu.\n", ret );
+
+        entry.dwOwningPid = 0xffff;
+        ret = GetOwnerModuleFromTcp6Entry( &entry, TCPIP_OWNER_MODULE_INFO_BASIC, buf, &sz );
+        ok( ret == ERROR_INVALID_PARAMETER, "got %lu.\n", ret );
+
+        entry.dwOwningPid = GetCurrentProcessId();
+        sz = 1;
+        ret = GetOwnerModuleFromTcp6Entry( &entry, TCPIP_OWNER_MODULE_INFO_BASIC, buf, &sz );
+        ok( ret == ERROR_INSUFFICIENT_BUFFER, "got %lu.\n", ret );
+        ok( sz == expected, "got %lu, expected %lu.\n", sz, expected );
+
+        ret = GetOwnerModuleFromTcp6Entry( &entry, TCPIP_OWNER_MODULE_INFO_BASIC, buf, &sz );
+        ok( !ret, "got %lu.\n", ret );
+
+        p = (char *)(info + 1);
+        ok( (char *)info->pModuleName == p, "got %p, %p.\n", info, p );
+        p += name_len;
+        ok( (char *)info->pModulePath == p, "got %p, %p.\n", info, p);
+        ok( !wcscmp( info->pModuleName, name ), "got %s, %s.\n", debugstr_w(info->pModuleName), debugstr_w(name) );
+
+        found_it = FALSE;
+        for (i = 0; i < t->dwNumEntries; ++i)
+        {
+            info = (TCPIP_OWNER_MODULE_BASIC_INFO *)buf;
+
+            memset(buf, 0xcc, sizeof(buf));
+            sz = sizeof(buf) + 1;
+            ret = GetOwnerModuleFromTcp6Entry( &t->table[i], TCPIP_OWNER_MODULE_INFO_BASIC, buf, &sz );
+            ok(sz == sizeof(buf) + 1, "got %ld.\n", sz);
+            ok( !ret || ret == ERROR_NOT_FOUND || ret == ERROR_ACCESS_DENIED
+                || ret == ERROR_MOD_NOT_FOUND,
+                /* This is weird, newer Windows seems to return non-zero OwningModuleInfo[0] sometimes but then
+                 * GetOwnerModuleFromTcp6Entry always fails with ERROR_MOD_NOT_FOUND, while that succeeds for the
+                 * same PID in MIB_TCPTABLE_OWNER_MODULE and zeroed OwningModuleInfo */
+                "got %#lx, pid %ld, info %#I64x.\n", ret, t->table[i].dwOwningPid, t->table[i].OwningModuleInfo[0] );
+
+            memset( &entry, 0, sizeof(entry) );
+            entry.dwOwningPid = t->table[i].dwOwningPid;
+            if (entry.dwOwningPid == GetCurrentProcessId())
+                found_it = TRUE;
+            ret = GetOwnerModuleFromTcp6Entry( &entry, TCPIP_OWNER_MODULE_INFO_BASIC, buf, &sz );
+            process = OpenProcess( PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.dwOwningPid );
+            ok( !ret || ret == ERROR_NOT_FOUND || ret == ERROR_ACCESS_DENIED,
+                "got %#lx, pid %ld, info %#I64x.\n", ret, t->table[i].dwOwningPid, t->table[i].OwningModuleInfo[0] );
+            if (!ret && !wcscmp( info->pModuleName, L"System" ))
+            {
+                ok( !wcscmp( info->pModulePath, L"System" ), "got %s.\n", debugstr_w(info->pModulePath) );
+            }
+            else if (ret == ERROR_ACCESS_DENIED)
+            {
+                process = OpenProcess( PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.dwOwningPid );
+                ok( !process && GetLastError() == ERROR_ACCESS_DENIED, "got process %p, err %lu.\n", process, GetLastError() );
             }
         }
         ok( found_it, "no table entry for socket\n" );
@@ -2322,12 +2590,6 @@ static void test_GetExtendedUdpTable_owner( int family )
     DWORD i, ret;
     void *raw_table = NULL;
 
-#ifdef __REACTOS__
-    if (LOBYTE(LOWORD(GetVersion())) < 6) {
-        skip("This test is invalid for this NT version.\n");
-        return;
-    }
-#endif
     winetest_push_context( "%s", family == AF_INET ? "AF_INET" : "AF_INET6" );
 
     sock = socket( family, SOCK_DGRAM, IPPROTO_UDP );
@@ -2539,17 +2801,10 @@ static void convert_luid_to_name( NET_LUID *luid, WCHAR *expect_nameW, int len )
             break;
         }
     }
-#ifdef __REACTOS__
-    if (prefix)
-        _snwprintf( expect_nameW, len, L"%s_%d", prefix, luid->Info.NetLuidIndex );
-    else
-        _snwprintf( expect_nameW, len, L"iftype%d_%d", luid->Info.IfType, luid->Info.NetLuidIndex );
-#else
     if (prefix)
         swprintf( expect_nameW, len, L"%s_%d", prefix, luid->Info.NetLuidIndex );
     else
         swprintf( expect_nameW, len, L"iftype%d_%d", luid->Info.IfType, luid->Info.NetLuidIndex );
-#endif
 }
 
 static void test_interface_identifier_conversion(void)
@@ -2566,17 +2821,6 @@ static void test_interface_identifier_conversion(void)
     NET_IFINDEX index;
     MIB_IF_TABLE2 *table;
 
-#if defined(__REACTOS__) && (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
-    if (!ConvertInterfaceIndexToLuid || !ConvertInterfaceLuidToIndex ||
-        !ConvertInterfaceLuidToGuid || !ConvertInterfaceGuidToLuid ||
-        !ConvertInterfaceLuidToNameW || !ConvertInterfaceLuidToNameA ||
-        !ConvertInterfaceNameToLuidW || !ConvertInterfaceNameToLuidA ||
-        !pConvertInterfaceAliasToLuid || !pConvertInterfaceLuidToAlias ||
-        !GetIfTable2 || !if_nametoindex || !if_indextoname) {
-        skip("Missing APIs!\n");
-        return;
-    }
-#endif
     ret = GetIfTable2( &table );
     ok( !ret, "got %ld\n", ret );
 
@@ -2683,13 +2927,8 @@ static void test_interface_identifier_conversion(void)
         luid.Info.Reserved = luid.Info.NetLuidIndex = luid.Info.IfType = 0xdead;
         ret = ConvertInterfaceNameToLuidA( NULL, &luid );
         ok( ret == ERROR_INVALID_NAME, "got %lu\n", ret );
-#if defined(__REACTOS__) && defined(_MSC_VER)
-        ok( luid.Info.Reserved == 0xffdead, "reserved set\n" );
-        ok( luid.Info.NetLuidIndex == 0xffdead, "index set\n" );
-#else
         ok( luid.Info.Reserved == 0xdead, "reserved set\n" );
         ok( luid.Info.NetLuidIndex == 0xdead, "index set\n" );
-#endif
         ok( luid.Info.IfType == 0xdead, "type set\n" );
 
         ret = ConvertInterfaceNameToLuidA( nameA, NULL );
@@ -2739,16 +2978,6 @@ static void test_interface_identifier_conversion_failure(void)
     static const GUID guid_zero;
     static const GUID guid_ones = { 0xffffffffUL, 0xffff, 0xffff, { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff } };
 
-#if defined(__REACTOS__) && (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
-    if (!ConvertInterfaceIndexToLuid || !ConvertInterfaceLuidToIndex ||
-        !ConvertInterfaceLuidToGuid || !ConvertInterfaceGuidToLuid ||
-        !ConvertInterfaceLuidToNameW || !ConvertInterfaceLuidToNameA ||
-        !ConvertInterfaceNameToLuidW || !ConvertInterfaceNameToLuidA ||
-        !if_nametoindex || !if_indextoname) {
-        skip("Missing APIs!\n");
-        return;
-    }
-#endif
     /* ConvertInterfaceIndexToLuid */
     ret = ConvertInterfaceIndexToLuid( 0, NULL );
     ok( ret == ERROR_INVALID_PARAMETER, "expected ERROR_INVALID_PARAMETER, got %lu\n", ret );
@@ -2830,12 +3059,6 @@ static void test_GetIfEntry2(void)
     MIB_IF_ROW2 row;
     NET_IFINDEX index;
 
-#if defined(__REACTOS__) && (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
-    if (!GetIfEntry2) {
-        skip("Missing APIs!\n");
-        return;
-    }
-#endif
     if (!(index = get_interface_index()))
     {
         skip( "no suitable interface found\n" );
@@ -2861,12 +3084,6 @@ static void test_GetIfTable2(void)
     DWORD ret;
     MIB_IF_TABLE2 *table;
 
-#if defined(__REACTOS__) && (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
-    if (!GetIfTable2) {
-        skip("Missing APIs!\n");
-        return;
-    }
-#endif
     table = NULL;
     ret = GetIfTable2( &table );
     ok( ret == NO_ERROR, "got %lu\n", ret );
@@ -2879,12 +3096,6 @@ static void test_GetIfTable2Ex(void)
     DWORD ret;
     MIB_IF_TABLE2 *table;
 
-#if defined(__REACTOS__) && (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
-    if (!GetIfTable2Ex) {
-        skip("Missing APIs!\n");
-        return;
-    }
-#endif
     table = NULL;
     ret = GetIfTable2Ex( MibIfTableNormal, &table );
     ok( ret == NO_ERROR, "got %lu\n", ret );
@@ -3193,16 +3404,6 @@ static void test_ParseNetworkString(void)
     ipv4_address_tests[] =
     {
         {"1.2.3.4",               {{{1, 2, 3, 4}}}},
-#if defined(__REACTOS__) && defined(_MSC_VER) && _MSC_VER < 1930
-        {"1.2.3.4a",              {0}, ERROR_INVALID_PARAMETER},
-        {"1.2.3.0x4a",            {0}, ERROR_INVALID_PARAMETER},
-        {"1.2.3",                 {0}, ERROR_INVALID_PARAMETER},
-        {"a1.2.3.4",              {0}, ERROR_INVALID_PARAMETER},
-        {"0xdeadbeef",            {0}, ERROR_INVALID_PARAMETER},
-        {"1.2.3.4:22",            {0}, ERROR_INVALID_PARAMETER},
-        {"::1",                   {0}, ERROR_INVALID_PARAMETER},
-        {"winehq.org",            {0}, ERROR_INVALID_PARAMETER},
-#else
         {"1.2.3.4a",              {}, ERROR_INVALID_PARAMETER},
         {"1.2.3.0x4a",            {}, ERROR_INVALID_PARAMETER},
         {"1.2.3",                 {}, ERROR_INVALID_PARAMETER},
@@ -3211,7 +3412,6 @@ static void test_ParseNetworkString(void)
         {"1.2.3.4:22",            {}, ERROR_INVALID_PARAMETER},
         {"::1",                   {}, ERROR_INVALID_PARAMETER},
         {"winehq.org",            {}, ERROR_INVALID_PARAMETER},
-#endif
     };
     struct
     {
@@ -3223,17 +3423,10 @@ static void test_ParseNetworkString(void)
     ipv4_service_tests[] =
     {
         {"1.2.3.4:22",            {{{1, 2, 3, 4}}}, 22},
-#if defined(__REACTOS__) && defined(_MSC_VER) && _MSC_VER < 1930
-        {"winehq.org:22",         {0}, 0, ERROR_INVALID_PARAMETER},
-        {"1.2.3.4",               {0}, 0, ERROR_INVALID_PARAMETER},
-        {"1.2.3.4:0",             {0}, 0, ERROR_INVALID_PARAMETER},
-        {"1.2.3.4:65536",         {0}, 0, ERROR_INVALID_PARAMETER},
-#else
         {"winehq.org:22",         {}, 0, ERROR_INVALID_PARAMETER},
         {"1.2.3.4",               {}, 0, ERROR_INVALID_PARAMETER},
         {"1.2.3.4:0",             {}, 0, ERROR_INVALID_PARAMETER},
         {"1.2.3.4:65536",         {}, 0, ERROR_INVALID_PARAMETER},
-#endif
     };
     WCHAR wstr[IP6_ADDRESS_STRING_BUFFER_LENGTH] = {'1','2','7','.','0','.','0','.','1',':','2','2',0};
     NET_ADDRESS_INFO info;
@@ -3349,12 +3542,6 @@ static void test_ConvertGuidToString( void )
     WCHAR bufW[39];
     GUID guid = { 0xa, 0xb, 0xc, { 0xd, 0, 0xe, 0xf } }, guid2;
 
-#if defined(__REACTOS__) && (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
-    if (!ConvertGuidToStringA || !ConvertGuidToStringW) {
-        skip("Missing APIs!\n");
-        return;
-    }
-#endif
     err = ConvertGuidToStringA( &guid, bufA, 38 );
     ok( err, "got %ld\n", err );
     err = ConvertGuidToStringA( &guid, bufA, 39 );
@@ -3379,14 +3566,591 @@ static void test_compartments(void)
 {
     NET_IF_COMPARTMENT_ID id;
 
-#if defined(__REACTOS__) && (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
-    if (!GetCurrentThreadCompartmentId) {
-        skip("Missing APIs!\n");
-        return;
-    }
-#endif
     id = GetCurrentThreadCompartmentId();
     ok(id == NET_IF_COMPARTMENT_ID_PRIMARY, "got %u\n", id);
+}
+
+static void test_GetIpInterface(void)
+{
+    MIB_IPINTERFACE_ROW entry_row;
+    MIB_IPINTERFACE_TABLE *table;
+    MIB_IF_ROW2 *if_info = NULL;
+    MIB_IPINTERFACE_ROW *row;
+    MIB_IF_TABLE2 *if_table;
+    unsigned int i, j;
+    BOOL connected, is_loopback, loopback_found = FALSE;
+    DWORD err;
+
+    if (!pGetIpInterfaceTable || !pGetIpInterfaceEntry)
+    {
+        win_skip( "GetIpInterfaceTable or GetIpInterfaceEntry is not available\n" );
+        return;
+    }
+
+    err = GetIfTable2( &if_table );
+    ok( !err, "got %ld\n", err );
+
+    err = pGetIpInterfaceTable( AF_UNSPEC, NULL );
+    ok( err == ERROR_INVALID_PARAMETER, "got %lu.\n", err );
+
+    err = pGetIpInterfaceTable( AF_UNSPEC, &table );
+    ok( !err, "got %lu.\n", err );
+    for (i = 0; i < table->NumEntries; ++i)
+    {
+        row = &table->Table[i];
+        ok( row->Family == AF_INET || row->Family == AF_INET6, "got %d.\n", row->Family );
+        for (j = 0; j < if_table->NumEntries; ++j)
+        {
+            if_info = &if_table->Table[j];
+            if (if_info->InterfaceIndex == row->InterfaceIndex) break;
+        }
+        ok( j < if_table->NumEntries, "could not find interface.\n" );
+        ok( row->InterfaceLuid.Value == if_info->InterfaceLuid.Value, "luid doesn't match.\n" );
+        is_loopback = (if_info->Type == IF_TYPE_SOFTWARE_LOOPBACK);
+        if (is_loopback) loopback_found = TRUE;
+        if (row->Family == AF_INET)
+            ok( row->SitePrefixLength == 64, "got %lu.\n", row->SitePrefixLength );
+        if (is_loopback)
+        {
+            ok( !row->DadTransmits, "got %lu.\n", row->DadTransmits );
+            ok( row->SitePrefixLength == 64, "got %lu.\n", row->SitePrefixLength );
+        }
+        ok( row->MinRouterAdvertisementInterval == 200, "got %lu.\n", row->MinRouterAdvertisementInterval );
+        ok( row->MaxRouterAdvertisementInterval == 600, "got %lu.\n", row->MaxRouterAdvertisementInterval );
+        if (is_loopback)
+            todo_wine ok( row->NlMtu == ~0u, "got %lu.\n", row->NlMtu );
+        connected = (if_info->MediaConnectState == MediaConnectStateConnected);
+        ok( row->Connected == connected, "got %d, expected %d.\n", row->Connected, connected );
+
+        err = GetIpInterfaceEntry( NULL );
+        ok( err == ERROR_INVALID_PARAMETER, "got %ld\n", err );
+
+        memset( &entry_row, 0, sizeof(entry_row) );
+        entry_row.Family = AF_UNSPEC;
+        entry_row.InterfaceLuid = row->InterfaceLuid;
+        err = GetIpInterfaceEntry( &entry_row );
+        ok( err == ERROR_INVALID_PARAMETER, "got %ld\n", err );
+
+        memset( &entry_row, 0xcc, sizeof(entry_row) );
+        entry_row.Family = row->Family;
+        entry_row.InterfaceLuid = row->InterfaceLuid;
+        err = pGetIpInterfaceEntry( &entry_row );
+        ok( !err, "got %ld\n", err );
+        ok( entry_row.Family == row->Family, "got %d, expected %d.\n", entry_row.Family, row->Family );
+        ok( entry_row.InterfaceLuid.Value == row->InterfaceLuid.Value, "got %#I64x, expected %#I64x.\n",
+            entry_row.InterfaceLuid.Value, row->InterfaceLuid.Value );
+        ok( entry_row.InterfaceIndex == row->InterfaceIndex, "got %lu, expected %lu.\n",
+            entry_row.InterfaceIndex, row->InterfaceIndex );
+        ok( entry_row.BaseReachableTime == row->BaseReachableTime, "got %lu, expected %lu.\n",
+            entry_row.BaseReachableTime, row->BaseReachableTime );
+
+        memset( &entry_row, 0xcc, sizeof(entry_row) );
+        entry_row.Family = row->Family;
+        entry_row.InterfaceIndex = row->InterfaceIndex;
+        err = GetIpInterfaceEntry( &entry_row );
+        ok( err == ERROR_NOT_FOUND, "got %ld\n", err );
+
+        memset( &entry_row, 0xcc, sizeof(entry_row) );
+        entry_row.Family = row->Family;
+        entry_row.InterfaceLuid.Value = 0;
+        entry_row.InterfaceIndex = row->InterfaceIndex;
+        err = GetIpInterfaceEntry( &entry_row );
+        ok( !err, "got %ld\n", err );
+        ok( entry_row.Family == row->Family, "got %d, expected %d.\n", entry_row.Family, row->Family );
+        ok( entry_row.InterfaceLuid.Value == row->InterfaceLuid.Value, "got %#I64x, expected %#I64x.\n",
+            entry_row.InterfaceLuid.Value, row->InterfaceLuid.Value );
+        ok( entry_row.InterfaceIndex == row->InterfaceIndex, "got %lu, expected %lu.\n",
+            entry_row.InterfaceIndex, row->InterfaceIndex );
+        ok( entry_row.BaseReachableTime == row->BaseReachableTime, "got %lu, expected %lu.\n",
+            entry_row.BaseReachableTime, row->BaseReachableTime );
+    }
+    ok( loopback_found, "loopback not found.\n" );
+    FreeMibTable( table );
+    FreeMibTable( if_table );
+}
+
+static MIB_IPFORWARD_ROW2 *find_ipforward_row( MIB_IPFORWARD_TABLE2 *table, DWORD ifindex )
+{
+    unsigned int i;
+
+    for (i = 0; i < table->NumEntries; ++i)
+    {
+        if (ifindex == table->Table[i].InterfaceIndex) return &table->Table[i];
+    }
+    return NULL;
+}
+
+static void test_best_routes(void)
+{
+    static const IN6_ADDR link_local_prefix = {{ IN6ADDR_LINKLOCALPREFIX_INIT }};
+
+    DWORD ret, index, link_local_index = ~0u, loopback_index = ~0u, default_route_index = ~0u;
+    struct sockaddr_in6 dst6, src6, best6, link_local_addr6, global_addr6;
+    struct sockaddr_in src4, global_addr4;
+    NET_LUID link_local_luid = { 0 }, luid;
+    MIB_UNICASTIPADDRESS_ROW uni_row;
+    MIB_IPFORWARD_ROW2 fwd_row, *r;
+    MIB_IPFORWARD_TABLE2 *table;
+    char s[256], s2[256];
+    SOCKADDR_INET best4, dst4;
+    unsigned int i;
+
+    memset( &dst6, 0, sizeof(src6) );
+    dst6.sin6_family = AF_INET6;
+    ret = inet_pton( AF_INET6, "::1", &dst6.sin6_addr);
+    ok(ret, "got error %u.\n", WSAGetLastError());
+    ret = GetBestRoute2( NULL, 0, NULL, (SOCKADDR_INET *)&dst6, 0, NULL, (SOCKADDR_INET *)&best6 );
+    ok( ret == ERROR_INVALID_PARAMETER, "got error %lu.\n", ret );
+    ret = GetBestRoute2( NULL, 0, NULL, NULL, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( ret == ERROR_INVALID_PARAMETER, "got error %lu.\n", ret );
+    ret = GetBestRoute2( NULL, 0, NULL, (SOCKADDR_INET *)&dst6, 0, &fwd_row, NULL );
+    ok( ret == ERROR_INVALID_PARAMETER, "got error %lu.\n", ret );
+
+    ret = GetIpForwardTable2( AF_INET6, &table );
+    ok( !ret, "got error %lu.\n", ret );
+
+    for (i = 0; i < table->NumEntries; ++i)
+    {
+        if (IN6_IS_ADDR_LINKLOCAL(&table->Table[i].DestinationPrefix.Prefix.Ipv6.sin6_addr))
+        {
+            if (link_local_index == ~0u)
+            {
+                link_local_index = table->Table[i].InterfaceIndex;
+                link_local_luid = table->Table[i].InterfaceLuid;
+            }
+        }
+        if (IN6_IS_ADDR_LOOPBACK(&table->Table[i].DestinationPrefix.Prefix.Ipv6.sin6_addr))
+            loopback_index = table->Table[i].InterfaceIndex;
+    }
+    ok( link_local_index != ~0u, "could not find any link local route.\n" );
+    ok( loopback_index != ~0u, "could not find loopback route.\n" );
+
+    /* Test with link local address. */
+    memset( &dst6, 0, sizeof(dst6) );
+    dst6.sin6_family = AF_INET6;
+    dst6.sin6_addr = link_local_prefix;
+    dst6.sin6_scope_id = link_local_index;
+    dst6.sin6_addr.u.Byte[15] = 1;
+    ret = GetBestInterfaceEx( (struct sockaddr *)&dst6, &index );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( index == link_local_index, "got %lu, expected %lu.\n", index, link_local_index );
+
+    memset( &fwd_row, 0xcc, sizeof(fwd_row) );
+    ret = GetBestRoute2( NULL, 0xdeadbeef, NULL, (SOCKADDR_INET *)&dst6, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( ret == ERROR_FILE_NOT_FOUND, "got error %lu.\n", ret );
+    ok( !fwd_row.InterfaceIndex, "got %#lx.\n", fwd_row.InterfaceIndex );
+
+    memset( &fwd_row, 0xcc, sizeof(fwd_row) );
+    dst6.sin6_scope_id = loopback_index;
+    ret = GetBestRoute2( NULL, link_local_index, NULL, (SOCKADDR_INET *)&dst6, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( ret == ERROR_INVALID_PARAMETER, "got error %lu.\n", ret );
+    ok( !fwd_row.InterfaceIndex, "got %#lx.\n", fwd_row.InterfaceIndex );
+
+    memset( &fwd_row, 0xcc, sizeof(fwd_row) );
+    dst6.sin6_scope_id = link_local_index;
+    ret = GetBestRoute2( NULL, loopback_index, NULL, (SOCKADDR_INET *)&dst6, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( ret == ERROR_INVALID_PARAMETER, "got error %lu.\n", ret );
+    ok( !fwd_row.InterfaceIndex, "got %#lx.\n", fwd_row.InterfaceIndex );
+
+    memset( &fwd_row, 0xcc, sizeof(fwd_row) );
+    dst6.sin6_scope_id = 0xdeadbeef;
+    ret = GetBestRoute2( NULL, link_local_index, NULL, (SOCKADDR_INET *)&dst6, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( ret == ERROR_INVALID_PARAMETER, "got error %lu.\n", ret );
+    ok( !fwd_row.InterfaceIndex, "got %#lx.\n", fwd_row.InterfaceIndex );
+
+    dst6.sin6_scope_id = link_local_index;
+
+    memset( &fwd_row, 0xcc, sizeof(fwd_row) );
+    memset( &best6, 0xcc, sizeof(best6) );
+    ret = GetBestRoute2( NULL, link_local_index, NULL, (SOCKADDR_INET *)&dst6, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( fwd_row.InterfaceIndex == link_local_index, "got %lu, expected %lu.\n", fwd_row.InterfaceIndex, link_local_index );
+    ok( !fwd_row.Loopback, "got %d.\n", fwd_row.Loopback );
+    ok( IN6_IS_ADDR_LINKLOCAL(&fwd_row.DestinationPrefix.Prefix.Ipv6.sin6_addr), "expected link local prefix.\n" );
+    ok( IN6_IS_ADDR_UNSPECIFIED(&fwd_row.NextHop.Ipv6.sin6_addr), "expected unspecifed address.\n" );
+    ok( best6.sin6_family == AF_INET6, "got %u.\n", best6.sin6_family );
+    ok( best6.sin6_scope_id == link_local_index, "got %lu, expected %lu.\n", best6.sin6_scope_id, link_local_index );
+    memset( &uni_row, 0, sizeof(uni_row) );
+    *(struct sockaddr_in6 *)&uni_row.Address = best6;
+    uni_row.InterfaceIndex = fwd_row.InterfaceIndex;
+    ret = GetUnicastIpAddressEntry( &uni_row );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( !memcmp( &uni_row.Address, &best6, sizeof(best6) ), "got different address.\n" );
+    link_local_addr6 = best6;
+
+    memset( &fwd_row, 0xcc, sizeof(fwd_row) );
+    dst6.sin6_scope_id = link_local_index;
+    ret = GetBestRoute2( &link_local_luid, 0xdeadbeef, NULL, (SOCKADDR_INET *)&dst6, 0, &fwd_row,
+                         (SOCKADDR_INET *)&best6 );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( fwd_row.InterfaceIndex == link_local_index, "got %lu, expected %lu.\n", fwd_row.InterfaceIndex, link_local_index );
+    ok( IN6_IS_ADDR_UNSPECIFIED(&fwd_row.NextHop.Ipv6.sin6_addr), "expected unspecifed address.\n" );
+
+    dst6.sin6_scope_id = link_local_index;
+    memset( &fwd_row, 0xcc, sizeof(fwd_row) );
+    ret = GetBestRoute2( NULL, 0, NULL, (SOCKADDR_INET *)&dst6, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( fwd_row.InterfaceIndex == link_local_index, "got %lu, expected %lu.\n", fwd_row.InterfaceIndex, link_local_index );
+    ok( !fwd_row.Loopback, "got %d.\n", fwd_row.Loopback );
+
+    dst6.sin6_scope_id = 0;
+    memset( &fwd_row, 0xcc, sizeof(fwd_row) );
+    ret = GetBestRoute2( NULL, link_local_index, NULL, (SOCKADDR_INET *)&dst6, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( fwd_row.InterfaceIndex == link_local_index, "got %lu, expected %lu.\n", fwd_row.InterfaceIndex, link_local_index );
+    ok( !fwd_row.Loopback, "got %d.\n", fwd_row.Loopback );
+    ok( best6.sin6_scope_id == link_local_index, "got %lu, expected %lu.\n", best6.sin6_scope_id, link_local_index );
+    ok( IN6_IS_ADDR_UNSPECIFIED(&fwd_row.NextHop.Ipv6.sin6_addr), "expected unspecifed address.\n" );
+
+    /* With both scope_id in destination address and interface unspecified Windows returns a row for a random
+     * matching route, not even necessarily a link local one. */
+    dst6.sin6_scope_id = 0;
+    memset( &fwd_row, 0xcc, sizeof(fwd_row) );
+    ret = GetBestRoute2( NULL, 0, NULL, (SOCKADDR_INET *)&dst6, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( !ret, "got error %lu.\n", ret );
+    r = find_ipforward_row( table, fwd_row.InterfaceIndex );
+    ok( !!r, "got NULL.\n" );
+    ok( best6.sin6_scope_id == fwd_row.InterfaceIndex, "got %lu, expected %lu.\n", best6.sin6_scope_id,
+        fwd_row.InterfaceIndex );
+    ok( IN6_IS_ADDR_UNSPECIFIED(&fwd_row.NextHop.Ipv6.sin6_addr), "expected unspecifed address.\n" );
+
+    dst6.sin6_scope_id = 0;
+    ret = GetBestInterfaceEx( (struct sockaddr *)&dst6, &index );
+    ok( !ret, "got error %lu.\n", ret );
+    r = find_ipforward_row( table, index );
+    ok( !!r, "got NULL.\n" );
+
+    memset( &src6, 0, sizeof(src6) );
+    src6.sin6_family = AF_INET6;
+    ret = inet_pton( AF_INET6, "dead:beaf:dead:beaf::beaf", &src6.sin6_addr);
+    ok(ret, "got error %u.\n", WSAGetLastError());
+    dst6.sin6_scope_id = 0;
+    ret = GetBestRoute2( NULL, 0, (SOCKADDR_INET *)&src6, (SOCKADDR_INET *)&dst6, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( ret == ERROR_NOT_FOUND, "got error %lu.\n", ret );
+
+    ret = GetBestRoute2( NULL, 0, (SOCKADDR_INET *)&link_local_addr6, (SOCKADDR_INET *)&dst6, 0, &fwd_row,
+                         (SOCKADDR_INET *)&best6 );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( best6.sin6_scope_id == link_local_index, "got %lu, expected %lu.\n", best6.sin6_scope_id, link_local_index );
+
+    dst6.sin6_scope_id = 0;
+    ret = GetBestRoute2( &link_local_luid, 0, (SOCKADDR_INET *)&src6, (SOCKADDR_INET *)&dst6, 0, &fwd_row,
+                         (SOCKADDR_INET *)&best6 );
+    ok( ret == ERROR_NOT_FOUND, "got error %lu.\n", ret );
+
+    dst6.sin6_scope_id = link_local_index;
+    ret = GetBestRoute2( &link_local_luid, 0, (SOCKADDR_INET *)&link_local_addr6, (SOCKADDR_INET *)&dst6, 0, &fwd_row,
+                         (SOCKADDR_INET *)&best6 );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( best6.sin6_scope_id == link_local_index, "got %lu, expected %lu.\n", best6.sin6_scope_id, link_local_index );
+
+    /* src address with non-matching or unknown family is ignored. */
+    src6.sin6_family = AF_INET;
+    ret = GetBestRoute2( NULL, 0, (SOCKADDR_INET *)&src6, (SOCKADDR_INET *)&dst6, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( !ret, "got error %lu.\n", ret );
+    src6.sin6_family = 0xbeed;
+    ret = GetBestRoute2( NULL, 0, (SOCKADDR_INET *)&src6, (SOCKADDR_INET *)&dst6, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( !ret, "got error %lu.\n", ret );
+
+    /* zero src address is ignored. */
+    memset( &src6, 0, sizeof(src6) );
+    src6.sin6_family = AF_INET6;
+    ret = GetBestRoute2( NULL, 0, (SOCKADDR_INET *)&src6, (SOCKADDR_INET *)&dst6, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( !ret, "got error %lu.\n", ret );
+
+    /* Specified source address not matching destination, result is weird. */
+    memset( &src6, 0, sizeof(src6) );
+    src6.sin6_family = AF_INET6;
+    ret = inet_pton( AF_INET6, "::1", &src6.sin6_addr);
+    ok(ret, "got error %u.\n", WSAGetLastError());
+    dst6.sin6_scope_id = 0;
+    memset( &best6, 0xcc, sizeof(best6) );
+    memset( &fwd_row, 0xcc, sizeof(fwd_row) );
+    ret = GetBestRoute2( &link_local_luid, 0, (SOCKADDR_INET *)&src6, (SOCKADDR_INET *)&dst6, 0, &fwd_row,
+                         (SOCKADDR_INET *)&best6 );
+    todo_wine ok( !ret, "got error %lu.\n", ret );
+    todo_wine ok( !memcmp( &src6, &best6, sizeof(best6) ), "got different address %s.\n",
+                  inet_ntop( AF_INET6, &best6.sin6_addr, s, sizeof(s) ));
+    ok( !fwd_row.InterfaceIndex, "got %lu.\n", fwd_row.InterfaceIndex );
+    ok( IN6_IS_ADDR_UNSPECIFIED(&fwd_row.DestinationPrefix.Prefix.Ipv6.sin6_addr), "expected unspecifed address.\n" );
+
+    /* Specified source address takes precedence over specified interface. */
+    dst6.sin6_scope_id = 0;
+    memset( &best6, 0xcc, sizeof(best6) );
+    memset( &fwd_row, 0xcc, sizeof(fwd_row) );
+    src6 = link_local_addr6;
+    src6.sin6_port = 1;
+    ret = GetBestRoute2( &link_local_luid, loopback_index, (SOCKADDR_INET *)&src6, (SOCKADDR_INET *)&dst6, 0, &fwd_row,
+                         (SOCKADDR_INET *)&best6 );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( fwd_row.InterfaceIndex == link_local_index, "got %lu, expected %lu.\n", fwd_row.InterfaceIndex, link_local_index );
+    ok( !fwd_row.Loopback, "got %d.\n", fwd_row.Loopback );
+    ok( best6.sin6_scope_id == link_local_index, "got %lu, expected %lu.\n", best6.sin6_scope_id, link_local_index );
+    ok( !memcmp( &best6, &link_local_addr6, sizeof(best6) ), "got different address.\n" );
+
+    src6.sin6_scope_id = 0;
+    ret = GetBestRoute2( NULL, loopback_index, (SOCKADDR_INET *)&src6, (SOCKADDR_INET *)&dst6, 0, &fwd_row,
+                         (SOCKADDR_INET *)&best6 );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( fwd_row.InterfaceIndex == link_local_index, "got %lu, expected %lu.\n", fwd_row.InterfaceIndex, link_local_index );
+
+    src6.sin6_scope_id = 0xffff;
+    ret = GetBestRoute2( NULL, loopback_index, (SOCKADDR_INET *)&src6, (SOCKADDR_INET *)&dst6, 0, &fwd_row,
+                         (SOCKADDR_INET *)&best6 );
+    ok( ret == ERROR_NOT_FOUND, "got error %lu.\n", ret );
+    ok( !fwd_row.InterfaceIndex, "got %lu, expected %lu.\n", fwd_row.InterfaceIndex, link_local_index );
+
+    src6.sin6_scope_id = link_local_index;
+    ret = GetBestRoute2( NULL, loopback_index, (SOCKADDR_INET *)&src6, (SOCKADDR_INET *)&dst6, 0, &fwd_row,
+                         (SOCKADDR_INET *)&best6 );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( fwd_row.InterfaceIndex == link_local_index, "got %lu, expected %lu.\n", fwd_row.InterfaceIndex, link_local_index );
+
+    luid.Value = 0xdeadbeef;
+    ret = GetBestRoute2( &luid, 0xdeadbeef, (SOCKADDR_INET *)&link_local_addr6, (SOCKADDR_INET *)&dst6, 0, &fwd_row,
+                         (SOCKADDR_INET *)&best6 );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( fwd_row.InterfaceIndex == link_local_index, "got %lu, expected %lu.\n", fwd_row.InterfaceIndex, link_local_index );
+
+    /* ... but if iface index is specified without luid that will still fail for invalid index. */
+    ret = GetBestRoute2( NULL, 0xdeadbeef, (SOCKADDR_INET *)&link_local_addr6, (SOCKADDR_INET *)&dst6, 0, &fwd_row,
+                         (SOCKADDR_INET *)&best6 );
+    ok( ret == ERROR_FILE_NOT_FOUND, "got error %lu.\n", ret );
+
+    luid.Value = 0xdeadbeef;
+    ret = GetBestRoute2( &luid, 0xdeadbeef, NULL, (SOCKADDR_INET *)&dst6, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( ret == ERROR_NOT_FOUND, "got error %lu.\n", ret );
+
+    /* Test with global address. */
+    ret = inet_pton( AF_INET6, "2ead:beaf:dead:beaf::beaf", &dst6.sin6_addr);
+    ok(ret, "got error %u.\n", WSAGetLastError());
+
+    dst6.sin6_scope_id = 0xdeadbeef;
+    ret = GetBestInterfaceEx( (struct sockaddr *)&dst6, &index );
+    ok( ret == ERROR_INVALID_PARAMETER, "got error %lu.\n", ret );
+
+    dst6.sin6_scope_id = link_local_index;
+    ret = GetBestInterfaceEx( (struct sockaddr *)&dst6, &index );
+    ok( ret == ERROR_INVALID_PARAMETER, "got error %lu.\n", ret );
+
+    dst6.sin6_scope_id = 0;
+    ret = GetBestInterfaceEx( (struct sockaddr *)&dst6, &index );
+    if (ret == ERROR_NETWORK_UNREACHABLE)
+    {
+        skip( "Global IPv6 address is unreachable.\n" );
+        goto loopback_ipv6;
+    }
+    ok( !ret, "got error %lu.\n", ret );
+    r = find_ipforward_row( table, index );
+    ok( !!r, "got NULL.\n" );
+    default_route_index = index;
+    dst6.sin6_scope_id = index;
+    ret = GetBestInterfaceEx( (struct sockaddr *)&dst6, &index );
+    ok( ret == ERROR_INVALID_PARAMETER, "got error %lu.\n", ret );
+
+    ret = GetBestRoute2( NULL, 0, NULL, (SOCKADDR_INET *)&dst6, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( ret == ERROR_INVALID_PARAMETER, "got error %lu.\n", ret );
+
+    dst6.sin6_scope_id = 0;
+    ret = GetBestRoute2( NULL, 0, NULL, (SOCKADDR_INET *)&dst6, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( fwd_row.InterfaceIndex == index, "got %lu, %lu.\n", fwd_row.InterfaceIndex, index );
+    ok( !IN6_IS_ADDR_UNSPECIFIED(&fwd_row.NextHop.Ipv6.sin6_addr)
+        || broken( IN6_IS_ADDR_UNSPECIFIED(&fwd_row.NextHop.Ipv6.sin6_addr) /* Win10 1507-1709 */),
+        "got unspecified address.\n" );
+
+    ret = GetBestRoute2( NULL, index, NULL, (SOCKADDR_INET *)&dst6, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( fwd_row.InterfaceIndex == index, "got %lu, %lu.\n", fwd_row.InterfaceIndex, index );
+    global_addr6 = best6;
+
+    memset( &src6, 0, sizeof(src6) );
+    src6.sin6_family = AF_INET6;
+    ret = inet_pton( AF_INET6, "dead:beaf:dead:beaf::beaf", &src6.sin6_addr);
+    ok(ret, "got error %u.\n", WSAGetLastError());
+
+    ret = GetBestRoute2( NULL, 0, (SOCKADDR_INET *)&src6, (SOCKADDR_INET *)&dst6, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( ret == ERROR_NOT_FOUND, "got error %lu.\n", ret );
+
+    src6 = global_addr6;
+    src6.sin6_port = 28;
+    ret = GetBestRoute2( NULL, link_local_index, (SOCKADDR_INET *)&src6, (SOCKADDR_INET *)&dst6, 0, &fwd_row,
+                         (SOCKADDR_INET *)&best6 );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( fwd_row.InterfaceIndex == index, "got %lu, %lu.\n", fwd_row.InterfaceIndex, index );
+    ok( !best6.sin6_scope_id, "got %lu.\n", best6.sin6_scope_id );
+    ok( !memcmp( &global_addr6, &best6, sizeof(best6) ), "got different address.\n" );
+    ok( !IN6_IS_ADDR_UNSPECIFIED(&fwd_row.NextHop.Ipv6.sin6_addr)
+        || broken( IN6_IS_ADDR_UNSPECIFIED(&fwd_row.NextHop.Ipv6.sin6_addr) /* Win10 1507-1709 */),
+        "got unspecified address.\n" );
+
+    src6.sin6_scope_id = 1;
+    ret = GetBestRoute2( NULL, link_local_index, (SOCKADDR_INET *)&src6, (SOCKADDR_INET *)&dst6, 0, &fwd_row,
+                         (SOCKADDR_INET *)&best6 );
+    ok( ret == ERROR_INVALID_PARAMETER, "got error %lu.\n", ret );
+
+    memset( &src6, 0, sizeof(src6) );
+    src6.sin6_family = AF_INET6;
+    ret = inet_pton( AF_INET6, "::1", &src6.sin6_addr);
+    ok(ret, "got error %u.\n", WSAGetLastError());
+    memset( &best6, 0xcc, sizeof(best6) );
+    memset( &fwd_row, 0xcc, sizeof(fwd_row) );
+    ret = GetBestRoute2( NULL, 0, (SOCKADDR_INET *)&src6, (SOCKADDR_INET *)&dst6, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( ret == ERROR_NETWORK_UNREACHABLE, "got error %lu.\n", ret );
+    ok( !fwd_row.InterfaceIndex, "got %lu.\n", fwd_row.InterfaceIndex );
+    ok( !fwd_row.InterfaceLuid.Value, "got %#I64x.\n", fwd_row.InterfaceLuid.Value );
+    ok( IN6_IS_ADDR_UNSPECIFIED(&best6.sin6_addr), "expected unspecifed address.\n" );
+    ok( IN6_IS_ADDR_UNSPECIFIED(&fwd_row.NextHop.Ipv6.sin6_addr), "expected unspecifed address.\n" );
+
+    luid.Value = 0;
+    ret = GetBestRoute2( &luid, 0xdeadbeef, NULL, (SOCKADDR_INET *)&dst6, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( fwd_row.InterfaceIndex == index, "got %lu, %lu.\n", fwd_row.InterfaceIndex, index );
+    ok( !best6.sin6_scope_id, "got %lu.\n", best6.sin6_scope_id );
+    memset( &uni_row, 0, sizeof(uni_row) );
+    *(struct sockaddr_in6 *)&uni_row.Address = best6;
+    uni_row.InterfaceIndex = fwd_row.InterfaceIndex;
+    ret = GetUnicastIpAddressEntry( &uni_row );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( !memcmp( &uni_row.Address, &best6, sizeof(best6) ), "got different address.\n" );
+    ok( !IN6_IS_ADDR_UNSPECIFIED(&fwd_row.NextHop.Ipv6.sin6_addr)
+        || broken( IN6_IS_ADDR_UNSPECIFIED(&fwd_row.NextHop.Ipv6.sin6_addr) /* Win10 1507-1709 */),
+        "got unspecified address.\n" );
+
+    memset( &fwd_row, 0xcc, sizeof(fwd_row) );
+    memset( &best6, 0xcc, sizeof(best6) );
+    ret = GetBestRoute2( NULL, loopback_index, NULL, (SOCKADDR_INET *)&dst6, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( ret == ERROR_NETWORK_UNREACHABLE, "got error %lu.\n", ret );
+    ok( !fwd_row.InterfaceIndex, "got %#lx.\n", fwd_row.InterfaceIndex );
+    ok( !best6.sin6_scope_id, "got %lu.\n", best6.sin6_scope_id );
+    ok( IN6_IS_ADDR_UNSPECIFIED(&fwd_row.NextHop.Ipv6.sin6_addr), "expected unspecifed address.\n" );
+
+    memset( &dst6.sin6_addr, 0, sizeof(dst6.sin6_addr) );
+    ret = GetBestRoute2( NULL, 0, NULL, (SOCKADDR_INET *)&dst6, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( fwd_row.InterfaceIndex == index, "got %lu, %lu.\n", fwd_row.InterfaceIndex, index );
+    ok( !memcmp( &global_addr6, &best6, sizeof(best6) ), "got different address.\n" );
+
+    /* Test with loopback address. */
+loopback_ipv6:
+    ret = inet_pton( AF_INET6, "::1", &dst6.sin6_addr);
+    ok(ret, "got error %u.\n", WSAGetLastError());
+    dst6.sin6_scope_id = loopback_index;
+    ret = GetBestInterfaceEx( (struct sockaddr *)&dst6, &index );
+    ok( ret == ERROR_INVALID_PARAMETER, "got error %lu.\n", ret );
+
+    dst6.sin6_scope_id = 0;
+    ret = GetBestInterfaceEx( (struct sockaddr *)&dst6, &index );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( index == loopback_index, "got %lu, expected %lu.\n", index, loopback_index );
+    ok( !best6.sin6_scope_id, "got %lu.\n", best6.sin6_scope_id );
+
+    dst6.sin6_scope_id = loopback_index;
+    ret = GetBestRoute2( NULL, loopback_index, NULL, (SOCKADDR_INET *)&dst6, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( ret == ERROR_INVALID_PARAMETER, "got error %lu.\n", ret );
+
+    dst6.sin6_scope_id = 0;
+    ret = GetBestRoute2( NULL, loopback_index, NULL, (SOCKADDR_INET *)&dst6, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( fwd_row.InterfaceIndex == loopback_index, "got %lu, %lu.\n", fwd_row.InterfaceIndex, loopback_index );
+    ret = GetBestRoute2( NULL, 0, NULL, (SOCKADDR_INET *)&dst6, 0, &fwd_row, (SOCKADDR_INET *)&best6 );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( fwd_row.InterfaceIndex == loopback_index, "got %lu, %lu.\n", fwd_row.InterfaceIndex, loopback_index );
+    ok( !best6.sin6_scope_id, "got %lu.\n", best6.sin6_scope_id );
+    ok( !memcmp( &dst6, &best6, sizeof(best6) ), "got different address.\n" );
+
+    memset( &best6, 0xcc, sizeof(best6) );
+    if (default_route_index != ~0u)
+    {
+        ok( default_route_index != loopback_index, "got same interfaces.\n" );
+        ret = GetBestRoute2( NULL, default_route_index, NULL, (SOCKADDR_INET *)&dst6, 0, &fwd_row,
+                             (SOCKADDR_INET *)&best6 );
+        ok( ret == ERROR_INVALID_PARAMETER, "got error %lu.\n", ret );
+        ok( !fwd_row.InterfaceIndex, "got %#lx.\n", fwd_row.InterfaceIndex );
+    }
+
+    /* Test with ipv4 */
+    memset( &dst4, 0xcc, sizeof(dst4) );
+    dst4.Ipv4.sin_family = AF_INET;
+    ret = inet_pton( AF_INET, "25.25.0.0", &dst4.Ipv4.sin_addr);
+    ok(ret, "got error %u.\n", WSAGetLastError());
+
+    ret = GetBestInterfaceEx( (struct sockaddr *)&dst4, &index );
+    if (ret == ERROR_NETWORK_UNREACHABLE)
+    {
+        skip( "Global IPv4 address is unreachable.\n" );
+        goto done;
+    }
+    ok( !ret, "got error %lu.\n", ret );
+    default_route_index = index;
+
+    memset( &fwd_row, 0xcc, sizeof(fwd_row) );
+    memset( &best4, 0xcc, sizeof(best4) );
+    ret = GetBestRoute2( NULL, default_route_index, NULL, &dst4, 0, &fwd_row, &best4 );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( fwd_row.InterfaceIndex == default_route_index, "got %lu, expected %lu.\n", fwd_row.InterfaceIndex,
+        default_route_index );
+    ok( fwd_row.NextHop.Ipv4.sin_addr.s_addr, "expected specified next hop.\n" );
+    memset( &uni_row, 0, sizeof(uni_row) );
+    *(struct sockaddr_in *)&uni_row.Address = best4.Ipv4;
+    uni_row.InterfaceIndex = fwd_row.InterfaceIndex;
+    ret = GetUnicastIpAddressEntry( &uni_row );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( !memcmp( &uni_row.Address, &best4, sizeof(best4) ), "got different address, %s, %s.\n",
+        inet_ntop( AF_INET, &best4.Ipv4.sin_addr, s, sizeof(s) ), inet_ntop( AF_INET,
+        &uni_row.Address.Ipv4.sin_addr, s2, sizeof(s2) ) );
+    /* GetBestRoute2 zeroes the whole SOCKADDR_INET, not just IPv4 part. */
+    ok( !best4.Ipv6.sin6_addr.u.Word[7], "got %#x.\n", best4.Ipv6.sin6_addr.u.Word[7] );
+    global_addr4 = best4.Ipv4;
+
+    src4.sin_family = AF_INET;
+    ret = inet_pton( AF_INET, "127.0.0.1", &src4.sin_addr );
+    ok(ret, "got error %u.\n", WSAGetLastError());
+    memset( &best4, 0xcc, sizeof(best4) );
+    ret = GetBestRoute2( NULL, 0, (SOCKADDR_INET *)&src4, &dst4, 0, &fwd_row, &best4 );
+    ok( ret == ERROR_NETWORK_UNREACHABLE, "got error %lu.\n", ret );
+    ok( !best4.Ipv4.sin_family, "got %u.\n", best4.Ipv4.sin_family );
+    ok( !best4.Ipv6.sin6_addr.u.Word[7], "got %#x.\n", best4.Ipv6.sin6_addr.u.Word[7] );
+
+    src4 = global_addr4;
+    ret = GetBestRoute2( NULL, loopback_index, (SOCKADDR_INET *)&src4, &dst4, 0, &fwd_row,
+                         &best4 );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( fwd_row.InterfaceIndex == default_route_index, "got %lu, expected %lu.\n", fwd_row.InterfaceIndex,
+        link_local_index );
+    ok( fwd_row.NextHop.Ipv4.sin_addr.s_addr, "expected specified next hop.\n" );
+    ok( !memcmp( &global_addr4, &best4, sizeof(best4.Ipv4) ), "got different address.\n" );
+
+    memset( &src4, 0xcc, sizeof(src4) );
+    memset( &fwd_row, 0xcc, sizeof(fwd_row) );
+    ret = GetBestRoute2( NULL, default_route_index, (SOCKADDR_INET *)&src4, &dst4, 0, &fwd_row,
+                         &best4 );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( fwd_row.InterfaceIndex == default_route_index, "got %lu, expected %lu.\n", fwd_row.InterfaceIndex,
+        link_local_index );
+
+    src4 = best4.Ipv4;
+    ret = GetBestRoute2( NULL, default_route_index, (SOCKADDR_INET *)&src4, &dst4, 0, &fwd_row,
+                         &best4 );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( fwd_row.InterfaceIndex == default_route_index, "got %lu, expected %lu.\n", fwd_row.InterfaceIndex,
+        link_local_index );
+    ok( fwd_row.NextHop.Ipv4.sin_addr.s_addr, "expected specified next hop.\n" );
+
+    ret = GetBestRoute2( NULL, loopback_index, NULL, &dst4, 0, &fwd_row, &best4 );
+    ok( ret == ERROR_NETWORK_UNREACHABLE, "got error %lu.\n", ret );
+
+    ret = inet_pton( AF_INET, "127.0.0.1", &dst4.Ipv4.sin_addr);
+    ok(ret, "got error %u.\n", WSAGetLastError());
+    ret = GetBestRoute2( NULL, default_route_index, NULL, &dst4, 0, &fwd_row, &best4 );
+    ok( ret == ERROR_INVALID_PARAMETER, "got error %lu.\n", ret );
+
+    ret = GetBestRoute2( NULL, 0, NULL, &dst4, 0, &fwd_row, &best4 );
+    ok( !ret, "got error %lu.\n", ret );
+    ok( !fwd_row.NextHop.Ipv4.sin_addr.s_addr, "expected unspecified next hop.\n" );
+
+done:
+    FreeMibTable( table );
 }
 
 START_TEST(iphlpapi)
@@ -3430,6 +4194,8 @@ START_TEST(iphlpapi)
     test_NotifyUnicastIpAddressChange();
     test_ConvertGuidToString();
     test_compartments();
+    test_GetIpInterface();
+    test_best_routes();
     freeIPHlpApi();
   }
 

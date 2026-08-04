@@ -418,6 +418,19 @@ IcmpSendEcho2(
     return nReplies;
 }
 
+#ifdef __REACTOS__
+DWORD WINAPI IcmpSendEcho2Ex(HANDLE IcmpHandle, HANDLE Event, PIO_APC_ROUTINE ApcRoutine, PVOID ApcContext, IPAddr SourceAddress, IPAddr DestinationAddress, LPVOID RequestData, WORD RequestSize, PIP_OPTION_INFORMATION RequestOptions, LPVOID ReplyBuffer, DWORD ReplySize, DWORD Timeout)
+{
+    if (SourceAddress != INADDR_ANY)
+    {
+        SetLastError(ERROR_INVALID_NETNAME);
+        return 0;
+    }
+
+    return IcmpSendEcho2(IcmpHandle, Event, ApcRoutine, ApcContext, DestinationAddress, RequestData, RequestSize, RequestOptions, ReplyBuffer, ReplySize, Timeout);
+}
+#endif
+
 DWORD
 WINAPI
 IcmpSendEcho(

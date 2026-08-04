@@ -2,7 +2,7 @@
 include_directories(BEFORE ${REACTOS_SOURCE_DIR}/sdk/include/wine)
 
 add_executable(iphlpapi_winetest iphlpapi.c testlist.c)
-target_link_libraries(iphlpapi_winetest wine)
+target_link_libraries(iphlpapi_winetest wine ws2_32_inaddr)
 set_module_type(iphlpapi_winetest win32cui)
 add_importlibs(iphlpapi_winetest iphlpapi ws2_32 msvcrt kernel32 ntdll)
 add_rostests_file(TARGET iphlpapi_winetest)
@@ -27,4 +27,3 @@ target_compile_definitions(iphlpapi_winetest PRIVATE
     WINETEST_USE_DBGSTR_LONGLONG
     __WINE_WINSOCKAPI_STDLIB_H
     strcasecmp=_stricmp)
-
