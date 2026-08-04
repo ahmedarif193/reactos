@@ -12,49 +12,6 @@
 #define NDEBUG
 #include <debug.h>
 
-/* NT10 POOL_FLAGS ***********************************************************/
-
-typedef ULONG64 POOL_FLAGS;
-
-#define POOL_FLAG_USE_QUOTA         0x0000000000000001ULL
-#define POOL_FLAG_UNINITIALIZED     0x0000000000000002ULL
-#define POOL_FLAG_SESSION           0x0000000000000004ULL
-#define POOL_FLAG_CACHE_ALIGNED     0x0000000000000008ULL
-#define POOL_FLAG_RAISE_ON_FAILURE  0x0000000000000020ULL
-#define POOL_FLAG_NON_PAGED         0x0000000000000040ULL
-#define POOL_FLAG_NON_PAGED_EXECUTE 0x0000000000000080ULL
-#define POOL_FLAG_PAGED             0x0000000000000100ULL
-
-typedef enum _POOL_EXTENDED_PARAMETER_TYPE
-{
-    PoolExtendedParameterInvalidType = 0,
-    PoolExtendedParameterPriority,
-    PoolExtendedParameterSecurePool,
-    PoolExtendedParameterNumaNode,
-    PoolExtendedParameterDcacheAligned,
-    PoolExtendedParameterSecurePoolTag,
-    PoolExtendedParameterProcessorGroup,
-    PoolExtendedParameterMax
-} POOL_EXTENDED_PARAMETER_TYPE;
-
-typedef struct DECLSPEC_ALIGN(16) _POOL_EXTENDED_PARAMETER
-{
-    struct
-    {
-        ULONG64 Type : 8;
-        ULONG64 Optional : 1;
-        ULONG64 Reserved : 55;
-    };
-    union
-    {
-        ULONG64 Reserved2;
-        PVOID Reserved3;
-        EX_POOL_PRIORITY Priority;
-        ULONG NumaNode;
-        USHORT ProcessorGroup;
-    };
-} POOL_EXTENDED_PARAMETER, *PPOOL_EXTENDED_PARAMETER;
-
 /* PRIVATE FUNCTIONS *********************************************************/
 
 static
@@ -108,7 +65,7 @@ NTAPI
 ExAllocatePool3(IN POOL_FLAGS Flags,
                 IN SIZE_T NumberOfBytes,
                 IN ULONG Tag,
-                IN PPOOL_EXTENDED_PARAMETER ExtendedParameters,
+                IN PCPOOL_EXTENDED_PARAMETER ExtendedParameters,
                 IN ULONG ExtendedParametersCount)
 {
     /* Priority/NUMA/group placement hints carry no meaning on a single-node,
@@ -126,7 +83,7 @@ VOID
 NTAPI
 ExFreePool2(IN PVOID P,
             IN ULONG Tag,
-            IN PPOOL_EXTENDED_PARAMETER Params,
+            IN PCPOOL_EXTENDED_PARAMETER Params,
             IN ULONG Count)
 {
     UNREFERENCED_PARAMETER(Params);
