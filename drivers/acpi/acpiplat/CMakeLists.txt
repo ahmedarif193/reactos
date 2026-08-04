@@ -1,0 +1,5 @@
+add_library(acpiplat MODULE acpiplat.c acpiplat.rc)
+set_module_type(acpiplat kernelmodedriver)
+add_importlibs(acpiplat ntoskrnl hal)
+add_cd_file(TARGET acpiplat DESTINATION reactos/system32/drivers FOR all)
+add_driver_inf(acpiplat acpiplat.inf)
