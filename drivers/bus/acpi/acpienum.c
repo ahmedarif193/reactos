@@ -324,6 +324,7 @@ Bus_PlugInDevice (
     }
 
 	RtlCopyMemory (pdoData->HardwareIDs, temp, index*sizeof(WCHAR));
+	Device->pdo = pdo;
 
     if (hasPciExpressCid)
     {
