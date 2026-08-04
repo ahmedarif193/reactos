@@ -575,6 +575,13 @@ KdpQueryDebugTimestamp(VOID);
 #define KdpQueryDebugTimestamp() KeQueryInterruptTime()
 #endif
 
+#if DBG && defined(KDBG)
+VOID NTAPI KdpLogWatchdogInitialize(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock);
+VOID NTAPI KdpLogWatchdogDisable(VOID);
+VOID NTAPI KdpLogWatchdogNotePrint(VOID);
+VOID NTAPI KdpLogWatchdogCheck(_In_ ULONGLONG CurrentInterruptTime);
+#endif
+
 extern CHAR KdpMessageBuffer[KDP_MSG_BUFFER_SIZE];
 extern CHAR KdpPathBuffer[KDP_MSG_BUFFER_SIZE];
 

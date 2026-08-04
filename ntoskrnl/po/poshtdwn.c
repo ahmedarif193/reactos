@@ -233,6 +233,10 @@ PopGracefulShutdown(IN PVOID Context)
 {
     PEPROCESS Process = NULL;
 
+#if DBG && defined(KDBG)
+    KdpLogWatchdogDisable();
+#endif
+
     /* Process the registered waits and work items */
     PopProcessShutDownLists();
 
@@ -400,4 +404,3 @@ PoRequestShutdownEvent(OUT PVOID *Event)
     if (Event) *Event = &PopShutdownEvent;
     return STATUS_SUCCESS;
 }
-
