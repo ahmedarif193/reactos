@@ -1896,8 +1896,12 @@ static void ok_method_sequence_(const struct prov_method_sequence *expected_list
     }
 
     /* Handle trailing optional/todo_wine methods. */
+#ifdef __REACTOS__
+    while (expected->prov && (expected->flags & (METHOD_OPTIONAL | METHOD_TODO)))
+#else
     while (expected->prov && ((expected->flags & METHOD_OPTIONAL) ||
                 ((expected->flags & METHOD_TODO) && !strcmp(winetest_platform, "wine"))))
+#endif
     {
         if (expected->flags & METHOD_TODO)
             todo_wine ok_(file, line)(0, "%d: expected %s_%s\n", count, expected->prov->prov_name,
@@ -8473,7 +8477,11 @@ static void test_UiaNodeFromHandle(const char *name)
         Sleep(10);
         hr = CoGetApartmentType(&apt_type, &apt_qualifier);
     }
+#ifndef __REACTOS__
     todo_wine ok(hr == S_OK || broken(hr == CO_E_NOTINITIALIZED), "Unexpected hr %#lx\n", hr);
+#else
+    ok(hr == S_OK || broken(hr == CO_E_NOTINITIALIZED), "Unexpected hr %#lx\n", hr);
+#endif
     if (SUCCEEDED(hr))
     {
         ok(apt_type == APTTYPE_MTA, "Unexpected apt_type %#x\n", apt_type);
