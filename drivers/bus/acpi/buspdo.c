@@ -334,6 +334,91 @@ BuspUseAddressResource(
 }
 
 static
+BOOLEAN
+BuspGetConnectionResourceInfo(
+    _In_ ACPI_RESOURCE *Resource,
+    _Out_ PUCHAR ConnectionClass,
+    _Out_ PUCHAR ConnectionType,
+    _Out_ PUCHAR ShareDisposition)
+{
+    ACPI_RESOURCE_COMMON_SERIALBUS *SerialBus;
+
+    if (Resource->Type == ACPI_RESOURCE_TYPE_GPIO)
+    {
+        ACPI_RESOURCE_GPIO *Gpio = &Resource->Data.Gpio;
+
+        if (Gpio->ProducerConsumer == ACPI_PRODUCER || Gpio->ConnectionType != ACPI_RESOURCE_GPIO_TYPE_IO)
+            return FALSE;
+
+        *ConnectionClass = CM_RESOURCE_CONNECTION_CLASS_GPIO;
+        *ConnectionType = CM_RESOURCE_CONNECTION_TYPE_GPIO_IO;
+        *ShareDisposition = Gpio->Shareable == ACPI_SHARED ? CmResourceShareShared : CmResourceShareDeviceExclusive;
+        return TRUE;
+    }
+
+    if (Resource->Type != ACPI_RESOURCE_TYPE_SERIAL_BUS)
+        return FALSE;
+
+    SerialBus = &Resource->Data.CommonSerialBus;
+    if (SerialBus->ProducerConsumer == ACPI_PRODUCER)
+        return FALSE;
+
+    *ConnectionClass = CM_RESOURCE_CONNECTION_CLASS_SERIAL;
+    *ShareDisposition = SerialBus->ConnectionSharing ? CmResourceShareShared : CmResourceShareDeviceExclusive;
+    switch (SerialBus->Type)
+    {
+        case ACPI_RESOURCE_SERIAL_TYPE_I2C:
+            *ConnectionType = CM_RESOURCE_CONNECTION_TYPE_SERIAL_I2C;
+            return TRUE;
+
+        case ACPI_RESOURCE_SERIAL_TYPE_SPI:
+            *ConnectionType = CM_RESOURCE_CONNECTION_TYPE_SERIAL_SPI;
+            return TRUE;
+
+        case ACPI_RESOURCE_SERIAL_TYPE_UART:
+            *ConnectionType = CM_RESOURCE_CONNECTION_TYPE_SERIAL_UART;
+            return TRUE;
+
+        default:
+            return FALSE;
+    }
+}
+
+static
+ULONGLONG
+BuspGetConnectionId(
+    _In_ PPDO_DEVICE_DATA DeviceData,
+    _In_ ULONG ResourceIndex,
+    _In_ UCHAR ConnectionClass,
+    _In_ UCHAR ConnectionType)
+{
+    ACPI_BUFFER Path = {ACPI_ALLOCATE_BUFFER, NULL};
+    ULONGLONG Hash = 1469598103934665603ULL;
+    PUCHAR Character;
+
+    if (ACPI_SUCCESS(AcpiGetName(DeviceData->AcpiHandle, ACPI_FULL_PATHNAME, &Path)) && Path.Pointer)
+    {
+        for (Character = Path.Pointer; *Character; Character++)
+        {
+            Hash ^= *Character;
+            Hash *= 1099511628211ULL;
+        }
+        ACPI_FREE(Path.Pointer);
+    }
+    else
+    {
+        Hash ^= (ULONG_PTR)DeviceData->AcpiHandle;
+        Hash *= 1099511628211ULL;
+    }
+
+    Hash ^= ResourceIndex;
+    Hash *= 1099511628211ULL;
+    Hash ^= ((ULONG)ConnectionClass << 8) | ConnectionType;
+    Hash *= 1099511628211ULL;
+    return Hash ? Hash : 1;
+}
+
+static
 NTSTATUS
 BuspCountRequirementsFromAcpiResources(
     _In_ PPDO_DEVICE_DATA DeviceData,
@@ -470,6 +555,18 @@ BuspCountRequirementsFromAcpiResources(
                 NumberOfResources++;
                 break;
 
+            case ACPI_RESOURCE_TYPE_GPIO:
+            case ACPI_RESOURCE_TYPE_SERIAL_BUS:
+            {
+                UCHAR ConnectionClass;
+                UCHAR ConnectionType;
+                UCHAR ShareDisposition;
+
+                if (BuspGetConnectionResourceInfo(resource, &ConnectionClass, &ConnectionType, &ShareDisposition))
+                    NumberOfResources++;
+                break;
+            }
+
             default:
                 break;
         }
@@ -507,6 +604,7 @@ BuspCreateRequirementsListFromAcpiResources(
     PIO_RESOURCE_REQUIREMENTS_LIST RequirementsList;
     PIO_RESOURCE_DESCRIPTOR RequirementDescriptor;
     ULONG i;
+    ULONG ResourceIndex = 0;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -563,6 +661,8 @@ BuspCreateRequirementsListFromAcpiResources(
     while (resource->Type != ACPI_RESOURCE_TYPE_END_TAG &&
            resource->Type != ACPI_RESOURCE_TYPE_END_DEPENDENT)
     {
+        ULONG CurrentResourceIndex = ResourceIndex++;
+
         if (resource->Type == ACPI_RESOURCE_TYPE_START_DEPENDENT)
         {
             if (SeenStartDependent)
@@ -1086,6 +1186,30 @@ BuspCreateRequirementsListFromAcpiResources(
                 break;
             }
 
+            case ACPI_RESOURCE_TYPE_GPIO:
+            case ACPI_RESOURCE_TYPE_SERIAL_BUS:
+            {
+                UCHAR ConnectionClass;
+                UCHAR ConnectionType;
+                UCHAR ShareDisposition;
+                ULONGLONG ConnectionId;
+
+                if (!BuspGetConnectionResourceInfo(resource, &ConnectionClass, &ConnectionType, &ShareDisposition))
+                    break;
+
+                ConnectionId = BuspGetConnectionId(DeviceData, CurrentResourceIndex, ConnectionClass, ConnectionType);
+                RequirementDescriptor->Option = CurrentRes ? 0 : IO_RESOURCE_PREFERRED;
+                RequirementDescriptor->Type = CmResourceTypeConnection;
+                RequirementDescriptor->ShareDisposition = ShareDisposition;
+                RequirementDescriptor->Flags = 0;
+                RequirementDescriptor->u.Connection.Class = ConnectionClass;
+                RequirementDescriptor->u.Connection.Type = ConnectionType;
+                RequirementDescriptor->u.Connection.IdLowPart = (ULONG)ConnectionId;
+                RequirementDescriptor->u.Connection.IdHighPart = (ULONG)(ConnectionId >> 32);
+                RequirementDescriptor++;
+                break;
+            }
+
             default:
                 break;
         }
@@ -1133,6 +1257,7 @@ BuspCreateResourceListFromAcpiResources(
     PCM_RESOURCE_LIST ResourceList;
     PCM_PARTIAL_RESOURCE_DESCRIPTOR ResourceDescriptor;
     ULONG i;
+    ULONG ResourceIndex = 0;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -1186,6 +1311,8 @@ BuspCreateResourceListFromAcpiResources(
     resource = FirstResource;
     while (resource && resource->Type != ACPI_RESOURCE_TYPE_END_TAG)
     {
+        ULONG CurrentResourceIndex = ResourceIndex++;
+
         switch (resource->Type)
         {
             case ACPI_RESOURCE_TYPE_EXTENDED_IRQ:
@@ -1673,6 +1800,29 @@ BuspCreateResourceListFromAcpiResources(
                         DPRINT1("ACPI: Unsupported generic register space 0x%x\n", gen->SpaceId);
                         break;
                 }
+                break;
+            }
+
+            case ACPI_RESOURCE_TYPE_GPIO:
+            case ACPI_RESOURCE_TYPE_SERIAL_BUS:
+            {
+                UCHAR ConnectionClass;
+                UCHAR ConnectionType;
+                UCHAR ShareDisposition;
+                ULONGLONG ConnectionId;
+
+                if (!BuspGetConnectionResourceInfo(resource, &ConnectionClass, &ConnectionType, &ShareDisposition))
+                    break;
+
+                ConnectionId = BuspGetConnectionId(DeviceData, CurrentResourceIndex, ConnectionClass, ConnectionType);
+                ResourceDescriptor->Type = CmResourceTypeConnection;
+                ResourceDescriptor->ShareDisposition = ShareDisposition;
+                ResourceDescriptor->Flags = 0;
+                ResourceDescriptor->u.Connection.Class = ConnectionClass;
+                ResourceDescriptor->u.Connection.Type = ConnectionType;
+                ResourceDescriptor->u.Connection.IdLowPart = (ULONG)ConnectionId;
+                ResourceDescriptor->u.Connection.IdHighPart = (ULONG)(ConnectionId >> 32);
+                ResourceDescriptor++;
                 break;
             }
 
