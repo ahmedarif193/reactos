@@ -271,10 +271,7 @@ void acpi_power_exit (void);
 #define ACPI_PROCESSOR_NOTIFY_PERFORMANCE 0x80
 #define ACPI_PROCESSOR_NOTIFY_POWER	0x81
 #define ACPI_PROCESSOR_LIMIT_NONE	0x00
-#define ACPI_PROCESSOR_LIMIT_INCREMENT	0x01
 #define ACPI_PROCESSOR_LIMIT_DECREMENT	0x02
-
-int acpi_processor_set_thermal_limit(ACPI_HANDLE handle, int type);
 
 
 /* --------------------------------------------------------------------------

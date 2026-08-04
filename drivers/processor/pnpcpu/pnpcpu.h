@@ -8,6 +8,7 @@
 
 #include <ntddk.h>
 #include <ntpoapi.h>
+#include <poclass.h>
 #include <wdmguid.h>
 #include <acpiioct.h>
 
@@ -108,6 +109,7 @@ typedef struct _PNPCPU_DEVICE_EXTENSION
     PNPCPU_IDLE_STATE IdleStates[PNPCPU_MAX_IDLE_STATES];
     ULONG PerfMode;
     ULONG PerfStateCount;
+    volatile LONG ThermalLimit;
     PNPCPU_PERF_STATE PerfStates[PNPCPU_MAX_PERF_STATES];
     PNPCPU_REGISTER PerfControl;
     PNPCPU_REGISTER PerfStatus;
