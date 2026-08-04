@@ -213,6 +213,7 @@ list(APPEND SOURCE
 #    ncclsid.c
 #    ndisguid.c
     netfwv6clsid.c
+    npi_moduleid.c
 #    oledbdat.c
 #    oledbdepiid.c
 #    oledbiid.c

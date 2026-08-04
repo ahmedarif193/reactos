@@ -1,0 +1,7 @@
+add_executable(nsi_winetest nsi.c testlist.c)
+set_module_type(nsi_winetest win32cui)
+target_link_libraries(nsi_winetest uuid wine)
+target_include_directories(nsi_winetest BEFORE PRIVATE ${REACTOS_SOURCE_DIR}/sdk/include/wine)
+target_compile_definitions(nsi_winetest PRIVATE __WINESRC__ WINETEST_USE_DBGSTR_LONGLONG)
+add_importlibs(nsi_winetest nsi iphlpapi ws2_32 msvcrt kernel32 ntdll)
+add_rostests_file(TARGET nsi_winetest)
