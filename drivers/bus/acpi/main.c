@@ -91,7 +91,7 @@ Bus_AddDevice(
                       NULL,
                       FILE_DEVICE_ACPI,
                       FILE_DEVICE_SECURE_OPEN,
-                      TRUE,
+                      FALSE,
                       &deviceObject);
     if (!NT_SUCCESS(status))
     {
