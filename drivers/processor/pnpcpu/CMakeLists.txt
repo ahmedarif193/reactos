@@ -1,0 +1,5 @@
+add_library(pnpcpu MODULE pnpcpu.c guid.c pnpcpu.rc)
+set_module_type(pnpcpu kernelmodedriver)
+add_importlibs(pnpcpu ntoskrnl hal)
+add_cd_file(TARGET pnpcpu DESTINATION reactos/system32/drivers FOR all)
+add_driver_inf(pnpcpu processor.inf)
