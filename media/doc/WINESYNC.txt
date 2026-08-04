@@ -214,6 +214,7 @@ dll/win32/sxs                 # Synced to Wine-11.14
 dll/win32/t2embed             # Synced to Wine-11.14
 dll/win32/tapi32              # Synced to Wine-11.14
 dll/win32/taskschd            # Synced to Wine-11.14
+dll/win32/threadpoolwinrt     # Synced to Wine-11.14
 dll/win32/traffic             # Synced to Wine-11.14
 dll/win32/twain_32            # Synced to Wine-11.14
 dll/win32/twaindsm            # Synced to Wine-11.14
