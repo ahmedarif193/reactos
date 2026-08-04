@@ -77,6 +77,43 @@ AcpiPlatReportDevice(
 static
 NTSTATUS
 NTAPI
+AcpiPlatPassThroughCompletion(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PIRP Irp,
+    _In_ PVOID Context)
+{
+    PACPIPLAT_DEVICE_EXTENSION DeviceExtension = Context;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+    IoReleaseRemoveLock(&DeviceExtension->RemoveLock, Irp);
+    return STATUS_CONTINUE_COMPLETION;
+}
+
+static
+NTSTATUS
+NTAPI
+AcpiPlatPassThrough(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp)
+{
+    PACPIPLAT_DEVICE_EXTENSION DeviceExtension = DeviceObject->DeviceExtension;
+    NTSTATUS Status;
+
+    Status = IoAcquireRemoveLock(&DeviceExtension->RemoveLock, Irp);
+    if (!NT_SUCCESS(Status))
+    {
+        Irp->IoStatus.Status = Status;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return Status;
+    }
+    IoCopyCurrentIrpStackLocationToNext(Irp);
+    IoSetCompletionRoutine(Irp, AcpiPlatPassThroughCompletion, DeviceExtension, TRUE, TRUE, TRUE);
+    return IoCallDriver(DeviceExtension->LowerDevice, Irp);
+}
+
+static
+NTSTATUS
+NTAPI
 AcpiPlatPnp(
     _In_ PDEVICE_OBJECT DeviceObject,
     _Inout_ PIRP Irp)
@@ -176,6 +213,11 @@ DriverEntry(
     _In_ PUNICODE_STRING RegistryPath)
 {
     UNREFERENCED_PARAMETER(RegistryPath);
+    DriverObject->MajorFunction[IRP_MJ_CREATE] = AcpiPlatPassThrough;
+    DriverObject->MajorFunction[IRP_MJ_CLOSE] = AcpiPlatPassThrough;
+    DriverObject->MajorFunction[IRP_MJ_CLEANUP] = AcpiPlatPassThrough;
+    DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = AcpiPlatPassThrough;
+    DriverObject->MajorFunction[IRP_MJ_SYSTEM_CONTROL] = AcpiPlatPassThrough;
     DriverObject->MajorFunction[IRP_MJ_PNP] = AcpiPlatPnp;
     DriverObject->MajorFunction[IRP_MJ_POWER] = AcpiPlatPower;
     DriverObject->DriverExtension->AddDevice = AcpiPlatAddDevice;

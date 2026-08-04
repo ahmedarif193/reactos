@@ -245,9 +245,9 @@ ButtonWaitThread(PVOID Context)
     }
     else
     {
-       if (strstr(event.bus_id, "PWRF"))
+       if (strstr(event.device_class, ACPI_BUTTON_SUBCLASS_POWER))
            ButtonEvent = SYS_BUTTON_POWER;
-       else if (strstr(event.bus_id, "SLPF"))
+       else if (strstr(event.device_class, ACPI_BUTTON_SUBCLASS_SLEEP))
            ButtonEvent = SYS_BUTTON_SLEEP;
        else
            ButtonEvent = 0;

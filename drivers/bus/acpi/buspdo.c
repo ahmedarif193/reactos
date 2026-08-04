@@ -2357,6 +2357,15 @@ Bus_PDO_PnP (
                                                &DeviceData->InterfaceName);
         }
         else if (device->flags.hardware_id &&
+                 (strstr(device->pnp.hardware_id, ACPI_BUTTON_HID_POWER) ||
+                  strstr(device->pnp.hardware_id, ACPI_BUTTON_HID_SLEEP)))
+        {
+            status = IoRegisterDeviceInterface(DeviceData->Common.Self,
+                                               &GUID_DEVICE_SYS_BUTTON,
+                                               NULL,
+                                               &DeviceData->InterfaceName);
+        }
+        else if (device->flags.hardware_id &&
                  strstr(device->pnp.hardware_id, ACPI_PROCESSOR_HID))
         {
             status = IoRegisterDeviceInterface(DeviceData->Common.Self,
