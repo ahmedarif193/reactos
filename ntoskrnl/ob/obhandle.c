@@ -3418,21 +3418,8 @@ NTSTATUS
 NTAPI
 NtClose(IN HANDLE Handle)
 {
-    NTSTATUS Status;
-    EXHANDLE ExHandle;
-
     /* Call the internal API */
-    Status = ObpCloseHandle(Handle, ExGetPreviousMode());
-    if (Status == STATUS_INVALID_HANDLE)
-    {
-        ExHandle.GenericHandleOverlay = Handle;
-        if ((ExHandle.Index & (LOW_LEVEL_ENTRIES - 1)) &&
-            ExpLookupHandleTableEntry((PHANDLE_TABLE)PsGetCurrentProcess()->ObjectTable, ExHandle))
-        {
-            Status = STATUS_SUCCESS;
-        }
-    }
-    return Status;
+    return ObpCloseHandle(Handle, ExGetPreviousMode());
 }
 
 NTSTATUS
