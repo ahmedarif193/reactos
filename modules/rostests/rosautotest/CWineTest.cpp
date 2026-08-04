@@ -347,7 +347,8 @@ CWineTest::RunTest(CTestInfo* TestInfo)
     DWORD BytesAvailable;
     stringstream ss, ssFinish;
     DWORD StartTime;
-    float TotalTime;
+    DWORD TotalTime;
+    char TotalTimeString[32];
     string tailString;
     CPipe Pipe;
     char Buffer[1024];
@@ -407,9 +408,10 @@ CWineTest::RunTest(CTestInfo* TestInfo)
     if(!tailString.empty())
         StringOut(tailString);
 
-    TotalTime = ((float)GetTickCount() - StartTime)/1000;
+    TotalTime = GetTickCount() - StartTime;
+    snprintf(TotalTimeString, sizeof(TotalTimeString), "%lu.%02lu", TotalTime / 1000, ((TotalTime % 1000) * 100) / 1000);
     ssFinish << "Test " << TestInfo->Test << " completed in ";
-    ssFinish << setprecision(2) << fixed << TotalTime << " seconds." << endl;
+    ssFinish << TotalTimeString << " seconds." << endl;
     StringOut(ssFinish.str());
     TestInfo->Log += ssFinish.str();
 }
