@@ -204,6 +204,22 @@ BOOL WINAPI CryptCATAdminAcquireContext2(HCATADMIN *catAdmin, const GUID *sys, c
     return TRUE;
 }
 
+#ifdef __REACTOS__
+static BOOL is_valid_catalog_file(const WCHAR *filename)
+{
+    struct cryptcat *catalog;
+    BOOL valid;
+
+    catalog = CryptCATOpen((WCHAR *)filename, CRYPTCAT_OPEN_EXISTING, 0, 0, 0);
+    if (catalog == INVALID_HANDLE_VALUE) return FALSE;
+
+    valid = catalog->inner != NULL;
+    CryptCATClose(catalog);
+    if (!valid) SetLastError(ERROR_BAD_FORMAT);
+    return valid;
+}
+#endif
+
 /***********************************************************************
  *             CryptCATAdminAddCatalog (WINTRUST.@)
  */
@@ -213,12 +229,31 @@ HCATINFO WINAPI CryptCATAdminAddCatalog(HCATADMIN catAdmin, PWSTR catalogFile,
     static const WCHAR slashW[] = {'\\',0};
     struct catadmin *ca = catAdmin;
     struct catinfo *ci;
+#ifdef __REACTOS__
+    WCHAR generated_name[MAX_PATH];
+#endif
     WCHAR *target;
     DWORD len;
 
     TRACE("%p %s %s %ld\n", catAdmin, debugstr_w(catalogFile),
           debugstr_w(selectBaseName), flags);
 
+#ifdef __REACTOS__
+    if (!ca || ca->magic != CATADMIN_MAGIC || !catalogFile || flags)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return NULL;
+    }
+    if (!is_valid_catalog_file(catalogFile)) return NULL;
+
+    if (!selectBaseName)
+    {
+        if (!GetTempFileNameW(ca->path, L"cat", 0, generated_name)) return NULL;
+        selectBaseName = wcsrchr(generated_name, '\\');
+        if (selectBaseName) selectBaseName++;
+        else selectBaseName = generated_name;
+    }
+#else
     if (!selectBaseName)
     {
         FIXME("NULL basename not handled\n");
@@ -230,6 +265,7 @@ HCATINFO WINAPI CryptCATAdminAddCatalog(HCATADMIN catAdmin, PWSTR catalogFile,
         SetLastError(ERROR_INVALID_PARAMETER);
         return NULL;
     }
+#endif
 
     len = lstrlenW(ca->path) + lstrlenW(selectBaseName) + 2;
     if (!(target = malloc(len * sizeof(WCHAR))))
