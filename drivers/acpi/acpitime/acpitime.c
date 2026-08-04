@@ -400,11 +400,7 @@ AcpiTimeWriteTimer(
     return FALSE;
 }
 
-static
-BOOLEAN
-AcpiTimeReadClock(
-    _In_ PACPITIME_DEVICE_EXTENSION DeviceExtension,
-    _Out_ PACPITIME_TIME_INFORMATION Time)
+static BOOLEAN AcpiTimeReadClock(_In_ PACPITIME_DEVICE_EXTENSION DeviceExtension, _Out_ PACPITIME_TIME_INFORMATION Time, _Out_ PNTSTATUS MethodStatus)
 {
     PACPI_EVAL_OUTPUT_BUFFER OutputBuffer;
     PACPI_METHOD_ARGUMENT Argument;
@@ -413,15 +409,29 @@ AcpiTimeReadClock(
     NTSTATUS Status;
 
     Status = AcpiTimeEvaluateNoArguments(DeviceExtension, ACPITIME_METHOD('_', 'G', 'R', 'T'), &OutputBuffer, &OutputLength);
+    *MethodStatus = Status;
     if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("ACPITIME: _GRT evaluation failed, status 0x%08lx\n", Status);
         return FALSE;
+    }
     if (!AcpiTimeFirstArgumentValid(OutputBuffer, OutputLength))
+    {
+        DPRINT1("ACPITIME: _GRT returned invalid envelope count=%lu length=%lu allocation=%lu\n", OutputBuffer->Count, OutputBuffer->Length, OutputLength);
+        *MethodStatus = STATUS_ACPI_INVALID_DATA;
         goto Exit;
+    }
     Argument = &OutputBuffer->Argument[0];
     if (Argument->Type != ACPI_METHOD_ARGUMENT_BUFFER || Argument->DataLength < sizeof(*Time))
+    {
+        DPRINT1("ACPITIME: _GRT returned type=%u length=%u, expected a %lu-byte buffer\n", Argument->Type, Argument->DataLength, (ULONG)sizeof(*Time));
+        *MethodStatus = STATUS_ACPI_INVALID_DATA;
         goto Exit;
+    }
     RtlCopyMemory(Time, Argument->Data, sizeof(*Time));
     Valid = AcpiTimeValidateClock(Time, TRUE);
+    *MethodStatus = Valid ? STATUS_SUCCESS : STATUS_DEVICE_DATA_ERROR;
+    DPRINT1("ACPITIME: _GRT raw %04u-%02u-%02u %02u:%02u:%02u.%03u valid=%u timezone=%d daylight=%u reserved=%u/%u/%u accepted=%u\n", Time->Year, Time->Month, Time->Day, Time->Hour, Time->Minute, Time->Second, Time->Milliseconds, Time->Valid, Time->Timezone, Time->Daylight, Time->Reserved[0], Time->Reserved[1], Time->Reserved[2], Valid);
 Exit:
     ExFreePoolWithTag(OutputBuffer, ACPITIME_TAG);
     return Valid;
@@ -496,6 +506,7 @@ AcpiTimeRefresh(
     ULONG TimerCount;
     ULONG Timer;
     NTSTATUS Status;
+    NTSTATUS TimeStatus = STATUS_NOT_SUPPORTED;
 
     if (!AcpiTimeQueryInteger(DeviceExtension, ACPITIME_METHOD('_', 'G', 'C', 'P'), &DeviceExtension->Capabilities))
     {
@@ -504,7 +515,14 @@ AcpiTimeRefresh(
     }
     DeviceExtension->Capabilities &= ACPITIME_CAP_VALID_MASK;
     if (DeviceExtension->Capabilities & ACPITIME_CAP_REAL_TIME)
-        TimeValid = AcpiTimeReadClock(DeviceExtension, &Time);
+    {
+        TimeValid = AcpiTimeReadClock(DeviceExtension, &Time, &TimeStatus);
+        if (TimeStatus == STATUS_OBJECT_NAME_NOT_FOUND || TimeStatus == STATUS_OBJECT_PATH_NOT_FOUND)
+        {
+            DeviceExtension->Capabilities &= ~(ACPITIME_CAP_REAL_TIME | ACPITIME_CAP_MILLISECOND_TIME);
+            DPRINT1("ACPITIME: firmware advertised an unusable real-time clock; masking clock capabilities\n");
+        }
+    }
     TimerCount = (DeviceExtension->Capabilities & ACPITIME_CAP_DC_WAKE) ? 2 : ((DeviceExtension->Capabilities & ACPITIME_CAP_AC_WAKE) ? 1 : 0);
     for (Timer = 0; Timer < TimerCount; Timer++)
     {
@@ -777,6 +795,7 @@ AcpiTimeDeviceControl(
         case IOCTL_ACPITIME_GET_TIME:
         {
             PACPITIME_TIME_INFORMATION Time = Buffer;
+            NTSTATUS MethodStatus;
 
             if (OutputLength < sizeof(*Time))
             {
@@ -789,7 +808,7 @@ AcpiTimeDeviceControl(
                 break;
             }
             RtlZeroMemory(Time, sizeof(*Time));
-            Status = AcpiTimeReadClock(DeviceExtension, Time) ? STATUS_SUCCESS : STATUS_IO_DEVICE_ERROR;
+            Status = AcpiTimeReadClock(DeviceExtension, Time, &MethodStatus) ? STATUS_SUCCESS : MethodStatus;
             if (NT_SUCCESS(Status))
                 Information = sizeof(*Time);
             break;
