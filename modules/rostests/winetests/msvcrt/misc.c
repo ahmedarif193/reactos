@@ -28,6 +28,7 @@
 #ifdef __REACTOS__
 #include <versionhelpers.h>
 #endif
+#include <sys/stat.h>
 
 static inline BOOL almost_equal(double d1, double d2) {
     if(d1-d2>-1e-30 && d1-d2<1e-30)
@@ -367,7 +368,7 @@ static void test__popen(const char *name)
 
     tempf = _tempnam(".", "wne");
     ok(tempf != NULL, "_tempnam failed\n");
-    fd = _open(tempf, _O_CREAT | _O_WRONLY);
+    fd = _open(tempf, _O_CREAT | _O_WRONLY, _S_IWRITE);
     ok(fd != -1, "open failed\n");
 
     sprintf(buf, "\"%s\" misc popen %d", name, fd);
