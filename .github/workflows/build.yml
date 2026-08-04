@@ -52,6 +52,13 @@ jobs:
     - name: Source checkout
       uses: actions/checkout@v6
 
+    - name: Checkout KDB disassembler dependencies
+      if: ${{ matrix.config == 'Debug' && (matrix.arch == 'i386' || matrix.arch == 'amd64') }}
+      run: |
+        git submodule update --init --depth 1 submodules/fex-arm64ec
+        git -C submodules/fex-arm64ec submodule update --init --depth 1 External/zydis
+        git -C submodules/fex-arm64ec/External/zydis submodule update --init --depth 1 dependencies/zycore
+
     - name: Install host build tools
       run: |
         sudo apt-get update
@@ -119,4 +126,3 @@ jobs:
         path: |
           ${{steps.configure.outputs.outdir}}/bootcd.iso
           ${{steps.configure.outputs.outdir}}/livecd.iso
-
