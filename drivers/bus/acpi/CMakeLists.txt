@@ -207,6 +207,7 @@ list(APPEND ACPI_SOURCE
     opregion.c
     pnp.c
     power.c
+    thermal.c
     buspdo.c
     main.c)
 

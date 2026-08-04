@@ -2394,6 +2394,12 @@ Bus_PDO_PnP (
             }
         }
 
+        {
+            NTSTATUS ThermalStatus = AcpiThermalStart(DeviceData);
+            if (!NT_SUCCESS(ThermalStatus))
+                DPRINT1("ACPI: Failed to start thermal notifications: 0x%lx\n", ThermalStatus);
+        }
+
         state.DeviceState = PowerDeviceD0;
         PoSetPowerState(DeviceData->Common.Self, DevicePowerState, state);
         DeviceData->Common.DevicePowerState = PowerDeviceD0;
@@ -2402,6 +2408,8 @@ Bus_PDO_PnP (
         break;
 
     case IRP_MN_STOP_DEVICE:
+
+        AcpiThermalStop(DeviceData);
 
         if (DeviceData->InterfaceName.Length != 0)
         {
@@ -2442,6 +2450,8 @@ Bus_PDO_PnP (
         break;
 
     case IRP_MN_REMOVE_DEVICE:
+        AcpiThermalStop(DeviceData);
+
         if (DeviceData->InterfaceName.Length != 0)
         {
             NTSTATUS InterfaceStatus = IoSetDeviceInterfaceState(&DeviceData->InterfaceName, FALSE);
