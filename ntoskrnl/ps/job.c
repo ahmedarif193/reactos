@@ -24,6 +24,10 @@ static FAST_MUTEX PsJobListLock;
 
 BOOLEAN PspUseJobSchedulingClasses;
 
+#define PS_JOB_STATUS_ACCOUNTING_FOLDED       0x00000002
+#define PS_JOB_STATUS_NEW_PROCESS_REPORTED    0x00000004
+#define PS_JOB_STATUS_EXIT_PROCESS_REPORTED   0x00000008
+
 CHAR PspJobSchedulingClasses[PSP_JOB_SCHEDULING_CLASSES] =
 {
     1 * 6,
@@ -119,8 +123,32 @@ NTAPI
 PspAssignProcessToJob(PEPROCESS Process,
     PEJOB Job)
 {
-    DPRINT("PspAssignProcessToJob() is unimplemented!\n");
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    KeEnterGuardedRegion();
+    ExAcquireResourceExclusiveLite(&Job->JobLock, TRUE);
+
+    if (Job->ActiveProcessLimit && Job->ActiveProcesses >= Job->ActiveProcessLimit)
+    {
+        Status = STATUS_QUOTA_EXCEEDED;
+    }
+    else
+    {
+        InsertTailList(&Job->ProcessListHead, &Process->JobLinks);
+        Job->TotalProcesses++;
+        Job->ActiveProcesses++;
+        InterlockedAnd((PLONG)&Process->JobStatus, ~(PS_JOB_STATUS_ACCOUNTING_FOLDED | PS_JOB_STATUS_NEW_PROCESS_REPORTED | PS_JOB_STATUS_EXIT_PROCESS_REPORTED));
+
+        if (Job->CompletionPort)
+        {
+            IoSetIoCompletion(Job->CompletionPort, Job->CompletionKey, PsGetProcessId(Process), STATUS_SUCCESS, JOB_OBJECT_MSG_NEW_PROCESS, TRUE);
+            InterlockedOr((PLONG)&Process->JobStatus, PS_JOB_STATUS_NEW_PROCESS_REPORTED);
+        }
+    }
+
+    ExReleaseResourceLite(&Job->JobLock);
+    KeLeaveGuardedRegion();
+    return Status;
 }
 
 NTSTATUS
@@ -138,7 +166,18 @@ NTAPI
 PspRemoveProcessFromJob(IN PEPROCESS Process,
                         IN PEJOB Job)
 {
-    /* FIXME */
+    KeEnterGuardedRegion();
+    ExAcquireResourceExclusiveLite(&Job->JobLock, TRUE);
+
+    if (Process->JobLinks.Flink)
+    {
+        RemoveEntryList(&Process->JobLinks);
+        Process->JobLinks.Flink = NULL;
+        Process->JobLinks.Blink = NULL;
+    }
+
+    ExReleaseResourceLite(&Job->JobLock);
+    KeLeaveGuardedRegion();
 }
 
 VOID
@@ -146,7 +185,36 @@ NTAPI
 PspExitProcessFromJob(IN PEJOB Job,
                       IN PEPROCESS Process)
 {
-    /* FIXME */
+    PROCESS_VALUES Values;
+
+    KeQueryValuesProcess(&Process->Pcb, &Values);
+
+    KeEnterGuardedRegion();
+    ExAcquireResourceExclusiveLite(&Job->JobLock, TRUE);
+
+    if (!(Process->JobStatus & PS_JOB_STATUS_ACCOUNTING_FOLDED))
+    {
+        Job->TotalUserTime.QuadPart += Values.TotalUserTime.QuadPart;
+        Job->TotalKernelTime.QuadPart += Values.TotalKernelTime.QuadPart;
+        Job->ReadOperationCount += Values.IoInfo.ReadOperationCount;
+        Job->WriteOperationCount += Values.IoInfo.WriteOperationCount;
+        Job->OtherOperationCount += Values.IoInfo.OtherOperationCount;
+        Job->ReadTransferCount += Values.IoInfo.ReadTransferCount;
+        Job->WriteTransferCount += Values.IoInfo.WriteTransferCount;
+        Job->OtherTransferCount += Values.IoInfo.OtherTransferCount;
+        InterlockedOr((PLONG)&Process->JobStatus, PS_JOB_STATUS_ACCOUNTING_FOLDED);
+    }
+
+    if (!(Process->JobStatus & PS_JOB_STATUS_EXIT_PROCESS_REPORTED))
+    {
+        if (Job->ActiveProcesses) Job->ActiveProcesses--;
+        if (Job->CompletionPort) IoSetIoCompletion(Job->CompletionPort, Job->CompletionKey, PsGetProcessId(Process), STATUS_SUCCESS, JOB_OBJECT_MSG_EXIT_PROCESS, TRUE);
+        if (!Job->ActiveProcesses && Job->CompletionPort) IoSetIoCompletion(Job->CompletionPort, Job->CompletionKey, NULL, STATUS_SUCCESS, JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO, TRUE);
+        InterlockedOr((PLONG)&Process->JobStatus, PS_JOB_STATUS_EXIT_PROCESS_REPORTED);
+    }
+
+    ExReleaseResourceLite(&Job->JobLock);
+    KeLeaveGuardedRegion();
 }
 
 /*
@@ -220,7 +288,20 @@ NtAssignProcessToJobObject (
                         /* let's actually assign the process to the job as we're not holding
                         the process lock anymore! */
                         Status = PspAssignProcessToJob(Process, Job);
+                        if (!NT_SUCCESS(Status) && ExAcquireRundownProtection(&Process->RundownProtect))
+                        {
+                            if (Process->Job == Job)
+                            {
+                                Process->Job = NULL;
+                                ObDereferenceObject(Job);
+                            }
+                            ExReleaseRundownProtection(&Process->RundownProtect);
+                        }
                     }
+                }
+                else
+                {
+                    Status = STATUS_PROCESS_IS_TERMINATING;
                 }
 
                 ObDereferenceObject(Job);
@@ -773,6 +854,7 @@ NtSetInformationJobObject (
     ACCESS_MASK DesiredAccess;
     KPROCESSOR_MODE PreviousMode;
     ULONG RequiredLength, RequiredAlign;
+    JOBOBJECT_ASSOCIATE_COMPLETION_PORT CompletionPortInfo;
 
     PAGED_CODE();
 
@@ -815,6 +897,19 @@ NtSetInformationJobObject (
         return STATUS_INFO_LENGTH_MISMATCH;
     }
 
+    if (JobInformationClass == JobObjectAssociateCompletionPortInformation)
+    {
+        _SEH2_TRY
+        {
+            RtlCopyMemory(&CompletionPortInfo, JobInformation, sizeof(CompletionPortInfo));
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+    }
+
     /* Open the given job */
     DesiredAccess = JOB_OBJECT_SET_ATTRIBUTES;
     if (JobInformationClass == JobObjectSecurityLimitInformation)
@@ -836,6 +931,59 @@ NtSetInformationJobObject (
     KeEnterGuardedRegionThread(CurrentThread);
     switch (JobInformationClass)
     {
+        case JobObjectAssociateCompletionPortInformation:
+        {
+            PJOBOBJECT_ASSOCIATE_COMPLETION_PORT PortInfo = &CompletionPortInfo;
+            PVOID CompletionPort = NULL;
+            PVOID OldCompletionPort = NULL;
+            PLIST_ENTRY NextEntry;
+
+            KeLeaveGuardedRegionThread(CurrentThread);
+            if (PortInfo->CompletionPort)
+            {
+                Status = ObReferenceObjectByHandle(PortInfo->CompletionPort, IO_COMPLETION_MODIFY_STATE, IoCompletionType, PreviousMode, &CompletionPort, NULL);
+                if (!NT_SUCCESS(Status))
+                {
+                    ObDereferenceObject(Job);
+                    return Status;
+                }
+            }
+
+            KeEnterGuardedRegionThread(CurrentThread);
+            ExAcquireResourceExclusiveLite(&Job->JobLock, TRUE);
+            if (CompletionPort && Job->CompletionPort)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+            }
+            else
+            {
+                OldCompletionPort = Job->CompletionPort;
+                Job->CompletionPort = CompletionPort;
+                Job->CompletionKey = CompletionPort ? PortInfo->CompletionKey : NULL;
+                Status = STATUS_SUCCESS;
+
+                if (CompletionPort)
+                {
+                    for (NextEntry = Job->ProcessListHead.Flink; NextEntry != &Job->ProcessListHead; NextEntry = NextEntry->Flink)
+                    {
+                        PEPROCESS Process = CONTAINING_RECORD(NextEntry, EPROCESS, JobLinks);
+                        if (!(Process->JobStatus & PS_JOB_STATUS_EXIT_PROCESS_REPORTED))
+                        {
+                            IoSetIoCompletion(Job->CompletionPort, Job->CompletionKey, PsGetProcessId(Process), STATUS_SUCCESS, JOB_OBJECT_MSG_NEW_PROCESS, TRUE);
+                            InterlockedOr((PLONG)&Process->JobStatus, PS_JOB_STATUS_NEW_PROCESS_REPORTED);
+                        }
+                    }
+                }
+            }
+            ExReleaseResourceLite(&Job->JobLock);
+            KeLeaveGuardedRegionThread(CurrentThread);
+
+            if (!NT_SUCCESS(Status) && CompletionPort) ObDereferenceObject(CompletionPort);
+            if (OldCompletionPort) ObDereferenceObject(OldCompletionPort);
+            KeEnterGuardedRegionThread(CurrentThread);
+            break;
+        }
+
         case JobObjectExtendedLimitInformation:
             DPRINT1("Class JobObjectExtendedLimitInformation not implemented\n");
             Status = STATUS_SUCCESS;
