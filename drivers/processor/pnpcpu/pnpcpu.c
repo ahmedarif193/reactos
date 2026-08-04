@@ -60,12 +60,9 @@ PnpcpuForwardSynchronously(
     KeInitializeEvent(&Event, NotificationEvent, FALSE);
     IoCopyCurrentIrpStackLocationToNext(Irp);
     IoSetCompletionRoutine(Irp, PnpcpuCompletion, &Event, TRUE, TRUE, TRUE);
-    Status = IoCallDriver(DeviceExtension->LowerDevice, Irp);
-    if (Status == STATUS_PENDING)
-    {
-        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
-        Status = Irp->IoStatus.Status;
-    }
+    IoCallDriver(DeviceExtension->LowerDevice, Irp);
+    KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+    Status = Irp->IoStatus.Status;
     return Status;
 }
 
@@ -1501,12 +1498,9 @@ PnpcpuQueryAcpiInterface(
     Stack->Parameters.QueryInterface.Interface = (PINTERFACE)&DeviceExtension->AcpiInterface;
     Stack->Parameters.QueryInterface.InterfaceSpecificData = NULL;
     IoSetCompletionRoutine(Irp, PnpcpuCompletion, &Event, TRUE, TRUE, TRUE);
-    Status = IoCallDriver(DeviceExtension->LowerDevice, Irp);
-    if (Status == STATUS_PENDING)
-    {
-        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
-        Status = Irp->IoStatus.Status;
-    }
+    IoCallDriver(DeviceExtension->LowerDevice, Irp);
+    KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+    Status = Irp->IoStatus.Status;
     IoFreeIrp(Irp);
     if (NT_SUCCESS(Status))
         DeviceExtension->InterfaceAcquired = TRUE;
