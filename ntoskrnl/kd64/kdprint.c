@@ -171,6 +171,9 @@ KdpPrintString(
 
     /* Send the packet */
     KdSendPacket(PACKET_TYPE_KD_DEBUG_IO, &Header, &Data, &KdpContext);
+#if DBG && defined(KDBG)
+    KdpLogWatchdogNotePrint();
+#endif
 
     /* Check if the user pressed CTRL+C */
     return KdpPollBreakInWithPortLock();
