@@ -11,8 +11,10 @@ LANGUAGE LANG_CHINESE, SUBLANG_CHINESE_TRADITIONAL
 
 STRINGTABLE
 {
-    STRING_CMDLINE_NOT_SUPPORTED, "錯誤: 不支援命令列\n"
+    STRING_COMMAND_NOT_SUPPORTED, "錯誤: 不支援命令列\n"
     STRING_ALIAS_NOT_FOUND, "錯誤: 找不到別名\n"
     STRING_INVALID_QUERY, "錯誤: 無效的查詢\n"
     STRING_INVALID_PATH, "錯誤: 無效的 PATH 命令語法\n"
+    STRING_USAGE, "Supply a command\n"
+    STRING_HELP, "Example usage: wmic ALIAS get PROPERTY[,PROPERTY2,...]\n"
 }

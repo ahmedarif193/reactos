@@ -265,7 +265,7 @@ base/applications/cmdutils/cscript  # Synced to Wine-11.14
 base/applications/cmdutils/reg      # Synced to Wine-11.14
 base/applications/cmdutils/schtasks # Synced to Wine-11.14
 base/applications/cmdutils/taskkill # Synced to Wine-11.14
-base/applications/cmdutils/wmic     # Synced to WineStaging-4.0
+base/applications/cmdutils/wmic     # Synced to Wine-11.14
 base/applications/cmdutils/wscript  # Synced to Wine-11.14
 base/applications/cmdutils/xcopy    # Synced to Wine-11.14
 base/applications/games/winmine     # Synced to WineStaging-2.16 with our own resources.

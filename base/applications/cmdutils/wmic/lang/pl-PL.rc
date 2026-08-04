@@ -2,8 +2,10 @@ LANGUAGE LANG_POLISH, SUBLANG_DEFAULT
 
 STRINGTABLE
 {
-    STRING_CMDLINE_NOT_SUPPORTED, "Błąd: Funkcja lub operacja nie jest obsługiwana\n"
+    STRING_COMMAND_NOT_SUPPORTED, "Błąd: Funkcja lub operacja nie jest obsługiwana\n"
     STRING_ALIAS_NOT_FOUND, "Błąd: Alias nie został znaleziony\n"
     STRING_INVALID_QUERY, "Błąd: Nieprawidłowa kwerenda\n"
     STRING_INVALID_PATH, "Błąd: Nieprawidłowa składnia PATH\n"
+    STRING_USAGE, "Supply a command\n"
+    STRING_HELP, "Example usage: wmic ALIAS get PROPERTY[,PROPERTY2,...]\n"
 }
