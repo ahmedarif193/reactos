@@ -2772,7 +2772,9 @@ static void test_MapFont(IMLangFontLink *font_link, IMLangFontLink2 *font_link2)
     ok(ret == E_INVALIDARG, "IMLangFontLink2_MapFont: expected E_INVALIDARG, got %08lx\n", ret);
 
     ret = IMLangFontLink2_MapFont(font_link2, hdc, 0, ch, &new_font);
+#ifndef __REACTOS__
     todo_wine
+#endif
     ok(ret == S_OK || broken(ret == E_FAIL), /* got E_FAIL on winxp and win2k */
        "IMLangFontLink2_MapFont: expected S_OK || E_FAIL, got %08lx\n", ret);
     ret = IMLangFontLink2_MapFont(font_link2, hdc, codepages, 0, NULL);

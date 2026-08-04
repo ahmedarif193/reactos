@@ -3517,8 +3517,16 @@ static HRESULT WINAPI fnIMLangFontLink2_MapFont(IMLangFontLink2* This,
     else
     {
         if (pFont == NULL) return E_INVALIDARG;
+#ifdef __REACTOS__
+        if (FAILED(fnIMLangFontLink2_GetCharCodePages(This, chSrc, &dwCodePages)) || !dwCodePages)
+            return E_FAIL;
+
+        old_font = GetCurrentObject(hDC, OBJ_FONT);
+        return map_font(hDC, dwCodePages, old_font, pFont);
+#else
         FIXME("the situation where dwCodepages is set to zero is not implemented\n");
         return E_FAIL;
+#endif
     }
 }
 
