@@ -22,11 +22,55 @@
 extern PRTL_START_POOL_THREAD RtlpStartThreadFunc;
 extern PRTL_EXIT_POOL_THREAD RtlpExitThreadFunc;
 HANDLE TimerThreadHandle = NULL;
+static HANDLE TimerThreadEvent = NULL;
+
+static ULONG
+NTAPI
+RtlpTimerThreadProc(
+    _In_ PVOID Parameter)
+{
+    HANDLE Event = Parameter;
+    NTSTATUS Status;
+
+    do
+    {
+        Status = NtWaitForSingleObject(Event, TRUE, NULL);
+    } while (Status == STATUS_USER_APC || Status == STATUS_ALERTED);
+
+    RtlpExitThreadFunc(Status);
+    return Status;
+}
 
 NTSTATUS
 RtlpInitializeTimerThread(VOID)
 {
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status;
+
+    if (TimerThreadHandle)
+        return STATUS_SUCCESS;
+
+    Status = NtCreateEvent(&TimerThreadEvent, EVENT_ALL_ACCESS, NULL, NotificationEvent, FALSE);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = RtlpStartThreadFunc(RtlpTimerThreadProc, TimerThreadEvent, &TimerThreadHandle);
+    if (NT_SUCCESS(Status))
+        Status = NtResumeThread(TimerThreadHandle, NULL);
+
+    if (!NT_SUCCESS(Status))
+    {
+        if (TimerThreadHandle)
+        {
+            NtTerminateThread(TimerThreadHandle, Status);
+            NtClose(TimerThreadHandle);
+            TimerThreadHandle = NULL;
+        }
+
+        NtClose(TimerThreadEvent);
+        TimerThreadEvent = NULL;
+    }
+
+    return Status;
 }
 
 static inline PLARGE_INTEGER get_nt_timeout( PLARGE_INTEGER pTime, ULONG timeout )
