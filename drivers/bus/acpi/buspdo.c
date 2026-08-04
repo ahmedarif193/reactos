@@ -4,10 +4,13 @@
 #include <initguid.h>
 #include <devpkey.h>
 #include <poclass.h>
+#include <reactos/drivers/reshubio.h>
 #include <wdmguid.h>
 
 #define NDEBUG
 #include <debug.h>
+
+ACPI_STATUS AcpiRsCreateAmlResources(ACPI_BUFFER *ResourceList, ACPI_BUFFER *OutputBuffer);
 
 #ifdef ALLOC_PRAGMA
 #pragma alloc_text (PAGE, Bus_PDO_PnP)
@@ -417,6 +420,107 @@ BuspGetConnectionId(
     Hash *= 1099511628211ULL;
     return Hash ? Hash : 1;
 }
+
+#ifndef UNIT_TEST
+static
+VOID
+BuspRegisterConnectionResource(
+    _In_ ACPI_RESOURCE *Resource,
+    _In_ ULONGLONG ConnectionId,
+    _In_ UCHAR ConnectionClass,
+    _In_ UCHAR ConnectionType)
+{
+    static const UNICODE_STRING ResourceHubName = RTL_CONSTANT_STRING(RESOURCE_HUB_DEVICE_NAME);
+    ACPI_BUFFER ResourceBuffer;
+    ACPI_BUFFER AmlBuffer = {ACPI_ALLOCATE_BUFFER, NULL};
+    ACPI_RESOURCE *ResourceCopy;
+    ACPI_RESOURCE *EndTag;
+    PRH_REGISTER_CONNECTION_INPUT Input;
+    PFILE_OBJECT FileObject = NULL;
+    PDEVICE_OBJECT DeviceObject = NULL;
+    IO_STATUS_BLOCK IoStatus;
+    KEVENT Event;
+    PIRP Irp;
+    ACPI_STATUS AcpiStatus;
+    NTSTATUS Status;
+    ULONG EndTagLength = ACPI_RS_SIZE(ACPI_RESOURCE_END_TAG);
+    ULONG ResourceBufferLength;
+    ULONG InputLength;
+    USHORT AmlPayloadLength;
+    ULONG PropertiesLength;
+
+    if (Resource->Length > MAXULONG - EndTagLength)
+        return;
+    ResourceBufferLength = Resource->Length + EndTagLength;
+    ResourceCopy = ExAllocatePoolWithTag(PagedPool, ResourceBufferLength, 'cRhA');
+    if (!ResourceCopy)
+        return;
+    RtlCopyMemory(ResourceCopy, Resource, Resource->Length);
+    EndTag = (ACPI_RESOURCE *)((PUCHAR)ResourceCopy + Resource->Length);
+    RtlZeroMemory(EndTag, EndTagLength);
+    EndTag->Type = ACPI_RESOURCE_TYPE_END_TAG;
+    EndTag->Length = EndTagLength;
+    ResourceBuffer.Length = ResourceBufferLength;
+    ResourceBuffer.Pointer = ResourceCopy;
+    AcpiStatus = AcpiRsCreateAmlResources(&ResourceBuffer, &AmlBuffer);
+    ExFreePoolWithTag(ResourceCopy, 'cRhA');
+    if (ACPI_FAILURE(AcpiStatus) || !AmlBuffer.Pointer || AmlBuffer.Length < 3)
+    {
+        if (AmlBuffer.Pointer)
+            ACPI_FREE(AmlBuffer.Pointer);
+        return;
+    }
+    RtlCopyMemory(&AmlPayloadLength, (PUCHAR)AmlBuffer.Pointer + 1, sizeof(AmlPayloadLength));
+    PropertiesLength = 3 + AmlPayloadLength;
+    if (!(*(PUCHAR)AmlBuffer.Pointer & 0x80) || PropertiesLength > AmlBuffer.Length || PropertiesLength > MAXULONG - FIELD_OFFSET(RH_REGISTER_CONNECTION_INPUT, Properties))
+    {
+        ACPI_FREE(AmlBuffer.Pointer);
+        return;
+    }
+
+    InputLength = FIELD_OFFSET(RH_REGISTER_CONNECTION_INPUT, Properties) + PropertiesLength;
+    Input = ExAllocatePoolWithTag(PagedPool, InputLength, 'iRhA');
+    if (!Input)
+    {
+        ACPI_FREE(AmlBuffer.Pointer);
+        return;
+    }
+    RtlZeroMemory(Input, FIELD_OFFSET(RH_REGISTER_CONNECTION_INPUT, Properties));
+    Input->Version = RH_REGISTER_CONNECTION_VERSION;
+    Input->ConnectionId.QuadPart = ConnectionId;
+    Input->Class = ConnectionClass;
+    Input->Type = ConnectionType;
+    Input->PropertiesLength = PropertiesLength;
+    RtlCopyMemory(Input->Properties, AmlBuffer.Pointer, PropertiesLength);
+    ACPI_FREE(AmlBuffer.Pointer);
+
+    Status = IoGetDeviceObjectPointer((PUNICODE_STRING)&ResourceHubName, FILE_READ_DATA | FILE_WRITE_DATA, &FileObject, &DeviceObject);
+    if (NT_SUCCESS(Status))
+    {
+        KeInitializeEvent(&Event, NotificationEvent, FALSE);
+        Irp = IoBuildDeviceIoControlRequest(IOCTL_RH_REGISTER_CONNECTION, DeviceObject, Input, InputLength, NULL, 0, FALSE, &Event, &IoStatus);
+        if (Irp)
+        {
+            Status = IoCallDriver(DeviceObject, Irp);
+            if (Status == STATUS_PENDING)
+            {
+                KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+                Status = IoStatus.Status;
+            }
+        }
+        else
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+        }
+        ObDereferenceObject(FileObject);
+    }
+    if (!NT_SUCCESS(Status))
+        DPRINT1("ACPI: Resource Hub registration failed for %08lx%08lx (0x%08lx)\n", (ULONG)(ConnectionId >> 32), (ULONG)ConnectionId, Status);
+    ExFreePoolWithTag(Input, 'iRhA');
+}
+#else
+#define BuspRegisterConnectionResource(Resource, ConnectionId, ConnectionClass, ConnectionType) ((void)0)
+#endif
 
 static
 NTSTATUS
@@ -1206,6 +1310,7 @@ BuspCreateRequirementsListFromAcpiResources(
                 RequirementDescriptor->u.Connection.Type = ConnectionType;
                 RequirementDescriptor->u.Connection.IdLowPart = (ULONG)ConnectionId;
                 RequirementDescriptor->u.Connection.IdHighPart = (ULONG)(ConnectionId >> 32);
+                BuspRegisterConnectionResource(resource, ConnectionId, ConnectionClass, ConnectionType);
                 RequirementDescriptor++;
                 break;
             }
@@ -1822,6 +1927,7 @@ BuspCreateResourceListFromAcpiResources(
                 ResourceDescriptor->u.Connection.Type = ConnectionType;
                 ResourceDescriptor->u.Connection.IdLowPart = (ULONG)ConnectionId;
                 ResourceDescriptor->u.Connection.IdHighPart = (ULONG)(ConnectionId >> 32);
+                BuspRegisterConnectionResource(resource, ConnectionId, ConnectionClass, ConnectionType);
                 ResourceDescriptor++;
                 break;
             }
