@@ -2688,10 +2688,13 @@ NtQueryEaFile(IN HANDLE FileHandle,
 
     Irp->Tail.Overlay.AuxiliaryBuffer =
         (PVOID)CapturedEaList;
-    Irp->Flags |= IRP_BUFFERED_IO |
-                  IRP_DEALLOCATE_BUFFER |
-                  IRP_INPUT_OPERATION |
-                  IRP_DEFER_IO_COMPLETION;
+    Irp->Flags |= IRP_DEFER_IO_COMPLETION;
+    if (Irp->AssociatedIrp.SystemBuffer)
+    {
+        Irp->Flags |= IRP_BUFFERED_IO |
+                      IRP_DEALLOCATE_BUFFER |
+                      IRP_INPUT_OPERATION;
+    }
 
     Status = IopPerformSynchronousRequest(DeviceObject,
                                           Irp,
