@@ -29,6 +29,7 @@ target_compile_definitions(msvcrt_winetest PRIVATE
     USE_WIN_SKIP
     _CRT_NONSTDC_NO_DEPRECATE
     _USE_MATH_DEFINES
+    WINETEST_WAIT_CHILD_PROCESS_INFO
     WIN32_NO_STATUS=
     __msvcrt_ulong=ULONG)
 
