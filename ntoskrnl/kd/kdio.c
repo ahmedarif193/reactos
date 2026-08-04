@@ -763,7 +763,22 @@ KdReceivePacket(
 
     if (PacketType == PACKET_TYPE_KD_POLL_BREAKIN)
     {
-        /* We don't support breaks-in */
+        UCHAR Byte;
+
+        /*
+         * KDBG uses the native KD terminal multiplexer rather than kdcom.dll,
+         * so it must poll the configured serial provider itself.  Do not take
+         * KdpSerialSpinLock here: this runs from the clock interrupt and may
+         * have interrupted a debug-print operation that owns that lock.
+         */
+        if (KdpDebugMode.Serial &&
+            (SerialPortInfo.Address != NULL) &&
+            KdPortGetByteEx(&SerialPortInfo, &Byte) &&
+            (Byte == BREAKIN_PACKET_BYTE))
+        {
+            return KdPacketReceived;
+        }
+
         return KdPacketTimedOut;
     }
 
