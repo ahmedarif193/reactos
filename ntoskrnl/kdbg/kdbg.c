@@ -189,9 +189,13 @@ KdReceivePacket(
 {
     if (PacketType == PACKET_TYPE_KD_POLL_BREAKIN)
     {
-        // FIXME TODO: Implement break-in for the debugger
-        // and return KdPacketReceived when handled properly.
-        return KdPacketTimedOut;
+        /*
+         * Poll the selected terminal transport.  KDBG owns the debugger
+         * state-machine packets, but break-in is transport input just like
+         * prompt input; swallowing it made serial BREAKIN_PACKET_BYTE (and
+         * the equivalent KDGDB request) incapable of entering KDBG.
+         */
+        return pKdReceivePacket(PacketType, MessageHeader, MessageData, DataLength, Context);
     }
 
     if (PacketType == PACKET_TYPE_KD_DEBUG_IO)
