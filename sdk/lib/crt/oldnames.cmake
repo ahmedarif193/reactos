@@ -23,13 +23,39 @@ if(NOT MSVC)
         set_target_properties(oldnames PROPERTIES IMPORTED_LOCATION ${LIBRARY_PRIVATE_DIR}/oldnames.a)
         add_dependencies(oldnames oldnames_target)
         set_target_properties(oldnames PROPERTIES LINKER_LANGUAGE "C")
+
+    set(UCRTOLDNAMES_PRIVATE_DIR ${CMAKE_CURRENT_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/ucrtoldnames.dir)
+    if(LLVM_DLLTOOL_MACHINE)
+        set(_ucrtoldnames_dlltool_args -d ${CMAKE_CURRENT_SOURCE_DIR}/moldname-ucrtbase.def -k -l ucrtoldnames.a -m ${LLVM_DLLTOOL_MACHINE} -t ucrtoldnames)
+    else()
+        set(_ucrtoldnames_dlltool_args --def ${CMAKE_CURRENT_SOURCE_DIR}/moldname-ucrtbase.def --kill-at --output-lib=ucrtoldnames.a -t ucrtoldnames)
+    endif()
+    add_custom_command(
+        OUTPUT ${UCRTOLDNAMES_PRIVATE_DIR}/ucrtoldnames.a
+        COMMAND ${CMAKE_COMMAND} -E rm -f ${UCRTOLDNAMES_PRIVATE_DIR}/ucrtoldnames.a
+        COMMAND ${CMAKE_DLLTOOL} ${_ucrtoldnames_dlltool_args}
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/moldname-ucrtbase.def
+        WORKING_DIRECTORY ${UCRTOLDNAMES_PRIVATE_DIR})
+    add_custom_target(ucrtoldnames_target DEPENDS ${UCRTOLDNAMES_PRIVATE_DIR}/ucrtoldnames.a)
+    _add_library(ucrtoldnames STATIC IMPORTED GLOBAL)
+    set_target_properties(ucrtoldnames PROPERTIES IMPORTED_LOCATION ${UCRTOLDNAMES_PRIVATE_DIR}/ucrtoldnames.a)
+    add_dependencies(ucrtoldnames ucrtoldnames_target)
+    set_target_properties(ucrtoldnames PROPERTIES LINKER_LANGUAGE "C")
 else()
     add_asm_files(oldnames_asm oldnames-common.S oldnames-msvcrt.S)
     add_library(oldnames ${oldnames_asm})
     set_target_properties(oldnames PROPERTIES LINKER_LANGUAGE "C")
+
+    add_library(ucrtoldnames INTERFACE)
+    target_link_libraries(ucrtoldnames INTERFACE oldnames)
 endif()
 
 target_compile_definitions(oldnames INTERFACE
     _CRT_DECLARE_NONSTDC_NAMES=1 # This must be set to 1
+    _CRT_NONSTDC_NO_DEPRECATE
+)
+
+target_compile_definitions(ucrtoldnames INTERFACE
+    _CRT_DECLARE_NONSTDC_NAMES=1
     _CRT_NONSTDC_NO_DEPRECATE
 )
