@@ -17,6 +17,7 @@
 static DECLSPEC_ALIGN(8) volatile LONG64 KdpLogWatchdogLastPrintTime;
 static ULONGLONG KdpLogWatchdogTimeout;
 static volatile LONG KdpLogWatchdogState;
+static volatile LONG KdpLogWatchdogSuspendCount;
 
 #if defined(KDBG) && DBG
 static BOOLEAN KdpLogWatchdogIsSeparator(_In_ CHAR Character)
@@ -75,14 +76,13 @@ static ULONG KdpLogWatchdogReadOption(_In_opt_ PCSTR LoadOptions)
 }
 #endif
 
-VOID
-NTAPI
-KdpLogWatchdogInitialize(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
+VOID NTAPI KdpLogWatchdogInitialize(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
 #if defined(KDBG) && DBG
     ULONG Seconds;
 
     Seconds = KdpLogWatchdogReadOption(LoaderBlock != NULL ? LoaderBlock->LoadOptions : NULL);
+    InterlockedExchange(&KdpLogWatchdogSuspendCount, 0);
     if (Seconds == 0)
     {
         InterlockedExchange(&KdpLogWatchdogState, 0);
@@ -99,18 +99,15 @@ KdpLogWatchdogInitialize(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 #endif
 }
 
-VOID
-NTAPI
-KdpLogWatchdogDisable(VOID)
+VOID NTAPI KdpLogWatchdogDisable(VOID)
 {
 #if defined(KDBG) && DBG
     InterlockedExchange(&KdpLogWatchdogState, 0);
+    InterlockedExchange(&KdpLogWatchdogSuspendCount, 0);
 #endif
 }
 
-VOID
-NTAPI
-KdpLogWatchdogNotePrint(VOID)
+VOID NTAPI KdpLogWatchdogNotePrint(VOID)
 {
 #if defined(KDBG) && DBG
     if (InterlockedCompareExchange(&KdpLogWatchdogState, 1, 1) == 1)
@@ -118,9 +115,33 @@ KdpLogWatchdogNotePrint(VOID)
 #endif
 }
 
-VOID
-NTAPI
-KdpLogWatchdogCheck(_In_ ULONGLONG CurrentInterruptTime)
+VOID NTAPI KdpLogWatchdogSuspend(VOID)
+{
+#if defined(KDBG) && DBG
+    if (InterlockedCompareExchange(&KdpLogWatchdogState, 1, 1) == 1)
+    {
+        InterlockedIncrement(&KdpLogWatchdogSuspendCount);
+        KdpLogWatchdogNotePrint();
+    }
+#endif
+}
+
+VOID NTAPI KdpLogWatchdogResume(VOID)
+{
+#if defined(KDBG) && DBG
+    LONG Count;
+
+    for (;;)
+    {
+        Count = InterlockedCompareExchange(&KdpLogWatchdogSuspendCount, 0, 0);
+        if (Count <= 0 || InterlockedCompareExchange(&KdpLogWatchdogSuspendCount, Count - 1, Count) == Count)
+            break;
+    }
+    KdpLogWatchdogNotePrint();
+#endif
+}
+
+VOID NTAPI KdpLogWatchdogCheck(_In_ ULONGLONG CurrentInterruptTime)
 {
 #if defined(KDBG) && DBG
     ULONGLONG LastPrintTime;
@@ -128,7 +149,7 @@ KdpLogWatchdogCheck(_In_ ULONGLONG CurrentInterruptTime)
 
     if (InterlockedCompareExchange(&KdpLogWatchdogState, 1, 1) != 1)
         return;
-    if (!KdDebuggerEnabled || KdPitchDebugger || KdEnteredDebugger)
+    if (!KdDebuggerEnabled || KdPitchDebugger || KdEnteredDebugger || InterlockedCompareExchange(&KdpLogWatchdogSuspendCount, 0, 0) != 0)
     {
         InterlockedExchange64(&KdpLogWatchdogLastPrintTime, CurrentInterruptTime);
         return;
