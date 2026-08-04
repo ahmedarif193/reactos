@@ -1145,6 +1145,45 @@ NTSTATUS WINAPI RtlDeleteTimer(HANDLE TimerQueue, HANDLE Timer,
  *
  * timerqueue.cs held by caller.
  */
+#ifdef __REACTOS__
+#define TICKS_100NS_PER_SECOND 10000000ULL
+
+static ULONGLONG qpc_from_100ns( ULONGLONG value )
+{
+    LARGE_INTEGER counter, frequency;
+    ULONGLONG seconds, remainder;
+
+    NtQueryPerformanceCounter( &counter, &frequency );
+    seconds = value / TICKS_100NS_PER_SECOND;
+    remainder = value % TICKS_100NS_PER_SECOND;
+    if (seconds > MAXLONGLONG / frequency.QuadPart)
+        return MAXLONGLONG;
+    return seconds * frequency.QuadPart + remainder * frequency.QuadPart / TICKS_100NS_PER_SECOND;
+}
+
+static ULONGLONG qpc_to_100ns( ULONGLONG value )
+{
+    LARGE_INTEGER counter, frequency;
+    ULONGLONG seconds, remainder;
+
+    NtQueryPerformanceCounter( &counter, &frequency );
+    seconds = value / frequency.QuadPart;
+    remainder = value % frequency.QuadPart;
+    if (seconds > MAXLONGLONG / TICKS_100NS_PER_SECOND)
+        return MAXLONGLONG;
+    return seconds * TICKS_100NS_PER_SECOND + remainder * TICKS_100NS_PER_SECOND / frequency.QuadPart;
+}
+
+static ULONGLONG qpc_add_100ns( ULONGLONG base, ULONGLONG value )
+{
+    ULONGLONG delta = qpc_from_100ns( value );
+
+    if (delta >= MAXLONGLONG - base)
+        return MAXLONGLONG;
+    return base + delta;
+}
+#endif
+
 static void submit_expired_timers( struct list *queue, ULONGLONG queue_now, ULONGLONG rel_now )
 {
     struct threadpool_object *other_timer;
@@ -1170,7 +1209,11 @@ static void submit_expired_timers( struct list *queue, ULONGLONG queue_now, ULON
             if (queue == &timerqueue.abs_timers)
                 timer->u.timer.timeout = rel_now;
 
+#ifdef __REACTOS__
+            timer->u.timer.timeout = qpc_add_100ns( timer->u.timer.timeout, (ULONGLONG)timer->u.timer.period * 10000 );
+#else
             timer->u.timer.timeout += (ULONGLONG)timer->u.timer.period * 10000;
+#endif
             if (timer->u.timer.timeout <= rel_now)
                 timer->u.timer.timeout = rel_now + 1;
 
@@ -1207,6 +1250,11 @@ static ULONGLONG get_next_timeout( struct list *list )
             break;
 
         timeout_lower = other_timer->u.timer.timeout;
+#ifdef __REACTOS__
+        if (list == &timerqueue.rel_timers)
+            new_timeout = qpc_add_100ns( timeout_lower, (ULONGLONG)other_timer->u.timer.window_length * 10000 );
+        else
+#endif
         new_timeout   = timeout_lower + (ULONGLONG)other_timer->u.timer.window_length * 10000;
         if (new_timeout < timeout_upper)
             timeout_upper = new_timeout;
@@ -1230,7 +1278,11 @@ static void update_timers( ULONGLONG rel_now )
     {
         timeout.QuadPart = get_next_timeout( &timerqueue.rel_timers );
         if (timeout.QuadPart > rel_now)
+#ifdef __REACTOS__
+            timeout.QuadPart = -(LONGLONG)qpc_to_100ns( timeout.QuadPart - rel_now );
+#else
             timeout.QuadPart = rel_now - timeout.QuadPart;
+#endif
         else
             timeout.QuadPart = 0;
     }
@@ -3241,7 +3293,11 @@ VOID WINAPI TpSetTimer( TP_TIMER *timer, LARGE_INTEGER *timeout, LONG period, LO
         {
             LARGE_INTEGER rel_now;
             NtQueryPerformanceCounter( &rel_now, NULL );
+#ifdef __REACTOS__
+            timestamp = qpc_add_100ns( rel_now.QuadPart, 0 - (ULONGLONG)timeout->QuadPart );
+#else
             timestamp = rel_now.QuadPart - timeout->QuadPart;
+#endif
             pending_timers = &timerqueue.rel_timers;
         }
         else if (!period)
@@ -3253,7 +3309,11 @@ VOID WINAPI TpSetTimer( TP_TIMER *timer, LARGE_INTEGER *timeout, LONG period, LO
         {
             LARGE_INTEGER rel_now;
             NtQueryPerformanceCounter( &rel_now, NULL );
+#ifdef __REACTOS__
+            timestamp = qpc_add_100ns( rel_now.QuadPart, (ULONGLONG)period * 10000 );
+#else
             timestamp = rel_now.QuadPart + (ULONGLONG)period * 10000;
+#endif
             pending_timers = &timerqueue.rel_timers;
             submit_timer = TRUE;
         }
