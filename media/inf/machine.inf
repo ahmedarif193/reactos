@@ -51,7 +51,6 @@ HKR, , Icon,           0, "-27"
 %*PNP0C15.DeviceDesc% = NO_DRV,*PNP0C15
 
 %SWENUM.DeviceDesc%   = SWENUM_Inst, ROOT\SWENUM
-%ACPI\ACPI0007.DeviceDesc% = NO_DRV,ACPI\ACPI0007
 %ACPI\ACPI0013.DeviceDesc% = NO_DRV,ACPI\ACPI0013
 %ACPI\ARMH0011.DeviceDesc% = NO_DRV,ACPI\ARMH0011
 %ACPI\FixedButton.DeviceDesc% = NO_DRV,ACPI\FixedButton

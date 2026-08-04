@@ -1,0 +1,40 @@
+[Version]
+Signature = "$Windows NT$"
+Class = Processor
+ClassGUID = {50127DC3-0F36-415e-A6CC-4CB3BE910B65}
+Provider = %ReactOS%
+DriverVer = 08/04/2026,1.0.0.0
+
+[ControlFlags]
+ExcludeFromSelect = *
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[Manufacturer]
+%ReactOS% = ReactOS
+
+[ReactOS]
+%ProcessorModule.DeviceDesc% = Pnpcpu_Inst,ACPI\ACPI0007
+
+[Pnpcpu_Inst.NT]
+CopyFiles = Pnpcpu_CopyFiles
+
+[Pnpcpu_CopyFiles]
+pnpcpu.sys
+
+[Pnpcpu_Inst.NT.Services]
+AddService = PNPCPU,0x00000002,Pnpcpu_Service
+
+[Pnpcpu_Service]
+DisplayName = %Pnpcpu.ServiceDesc%
+ServiceType = 1
+StartType = 3
+ErrorControl = 1
+ServiceBinary = %12%\pnpcpu.sys
+LoadOrderGroup = Extended Base
+
+[Strings]
+ReactOS = "ReactOS Project"
+ProcessorModule.DeviceDesc = "Processor Module"
+Pnpcpu.ServiceDesc = "ReactOS Processor Module Driver"
