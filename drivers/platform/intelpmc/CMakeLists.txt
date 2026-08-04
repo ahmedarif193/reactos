@@ -1,0 +1,6 @@
+add_library(intelpmc MODULE intelpmc.c intelpmc.rc)
+set_module_type(intelpmc kernelmodedriver)
+target_link_libraries(intelpmc wdmguid)
+add_importlibs(intelpmc ntoskrnl hal)
+add_cd_file(TARGET intelpmc DESTINATION reactos/system32/drivers FOR all)
+add_driver_inf(intelpmc intelpmc.inf)

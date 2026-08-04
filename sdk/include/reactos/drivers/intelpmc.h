@@ -1,0 +1,42 @@
+/*
+ * PROJECT:         ReactOS Intel Power Management Controller interface
+ * LICENSE:         GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ */
+
+#pragma once
+
+/* {852FE91C-137D-4B83-99C9-923363E5E0AD} */
+DEFINE_GUID(GUID_DEVINTERFACE_REACTOS_INTEL_PMC,
+    0x852FE91C, 0x137D, 0x4B83,
+    0x99, 0xC9, 0x92, 0x33, 0x63, 0xE5, 0xE0, 0xAD);
+
+#define INTELPMC_INTERFACE_VERSION 1
+#define INTELPMC_LPM_MAP_COUNT 6
+#define INTELPMC_LPM_MODE_COUNT 8
+#define INTELPMC_PPFEAR_COUNT 9
+
+#define INTELPMC_FLAG_LPIT_BASE       0x00000001
+#define INTELPMC_FLAG_DEFAULT_BASE    0x00000002
+#define INTELPMC_FLAG_READ_DISABLED   0x00000004
+#define INTELPMC_FLAG_SLEEP_PREPARED  0x00000008
+
+typedef struct _INTELPMC_INFORMATION
+{
+    ULONG Version;
+    ULONG Flags;
+    ULONG ProcessorModel;
+    ULONG ActiveProcessors;
+    ULONGLONG PhysicalBase;
+    ULONG SlpS0Residency;
+    ULONG PmConfiguration;
+    ULONG LtrIgnore;
+    ULONG LpmEnable;
+    ULONG LpmPriority;
+    ULONG LpmResidency[INTELPMC_LPM_MODE_COUNT];
+    ULONG LpmStatus[INTELPMC_LPM_MAP_COUNT];
+    ULONG LpmLiveStatus[INTELPMC_LPM_MAP_COUNT];
+    UCHAR PowerGatingStatus[INTELPMC_PPFEAR_COUNT];
+    UCHAR Reserved[3];
+} INTELPMC_INFORMATION, *PINTELPMC_INFORMATION;
+
+#define IOCTL_INTELPMC_QUERY_INFORMATION CTL_CODE(FILE_DEVICE_UNKNOWN, 0x920, METHOD_BUFFERED, FILE_READ_ACCESS)
