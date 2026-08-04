@@ -1,3 +1,4 @@
+add_subdirectory(acpitimectl)
 add_subdirectory(at)
 add_subdirectory(attrib)
 add_subdirectory(certutil)
