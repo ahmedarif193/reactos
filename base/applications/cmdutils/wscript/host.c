@@ -404,9 +404,6 @@ static HRESULT WINAPI Host_DisconnectObject(IHost *iface, IDispatch *Object)
 
 static HRESULT WINAPI Host_Sleep(IHost *iface, LONG Time)
 {
-#ifdef __REACTOS__
-    UNREFERENCED_PARAMETER(iface);
-#endif
     TRACE("(%ld)\n", Time);
     if (Time < 0)
         return E_INVALIDARG;
