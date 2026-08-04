@@ -18,8 +18,6 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#pragma once
-
 #include <windef.h>
 
 /* Local #defines */
@@ -28,7 +26,6 @@
 #define RC_CTRLC      2
 #define RC_INITERROR  4
 #define RC_WRITEERROR 5
-#define RC_HELP       6
 
 #define OPT_ASSUMEDIR    0x00000001
 #define OPT_RECURSIVE    0x00000002
@@ -72,3 +69,4 @@
 #define STRING_FILE_CHAR        115
 #define STRING_DIR_CHAR         116
 #define STRING_HELP             117
+#define STRING_NOCOPYTOSELF     118
