@@ -229,6 +229,7 @@ dll/win32/wbemdisp            # Synced to Wine-11.14
 dll/win32/wbemprox            # Synced to Wine-11.14
 dll/win32/webservices         # Synced to Wine-11.14
 dll/win32/windows.networking.connectivity # Synced to Wine-11.14
+dll/win32/windows.networking.hostname # Synced to Wine-11.14
 dll/win32/windowscodecs       # Synced to Wine-11.14
 dll/win32/windowscodecsext    # Synced to Wine-11.14
 dll/win32/l3codeca.acm        # Synced to Wine-11.14
