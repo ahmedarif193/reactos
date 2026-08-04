@@ -267,10 +267,9 @@ WsNcRefreshFromRegistry(IN PNSCATALOG Catalog,
                                              &UniqueId);
         if (ErrorCode != ERROR_SUCCESS) break;
 
-        /* Check if we've changed till now */
-        if (UniqueId == Catalog->UniqueId)
+        /* An empty catalog may be populated after process initialization. */
+        if ((UniqueId == Catalog->UniqueId) && Catalog->ItemCount)
         {
-            /* We haven't, so return */
             ErrorCode = ERROR_SUCCESS;
             break;
         }
