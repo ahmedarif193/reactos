@@ -82,7 +82,7 @@ typedef struct _PNPCPU_DEVICE_EXTENSION
     PDEVICE_OBJECT Pdo;
     PDEVICE_OBJECT LowerDevice;
     IO_REMOVE_LOCK RemoveLock;
-    FAST_MUTEX ConfigurationLock;
+    KMUTEX ConfigurationLock;
     ACPI_INTERFACE_STANDARD AcpiInterface;
     BOOLEAN InterfaceAcquired;
     BOOLEAN NotificationsRegistered;
