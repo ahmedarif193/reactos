@@ -198,6 +198,14 @@ IopFindBusNumberResource(
     ASSERT(IoDesc->Type == CmDesc->Type);
     ASSERT(IoDesc->Type == CmResourceTypeBusNumber);
 
+    if (IoDesc->u.BusNumber.Length == 0 ||
+        IoDesc->u.BusNumber.MinBusNumber > IoDesc->u.BusNumber.MaxBusNumber ||
+        IoDesc->u.BusNumber.Length - 1 >
+            IoDesc->u.BusNumber.MaxBusNumber - IoDesc->u.BusNumber.MinBusNumber)
+    {
+        return FALSE;
+    }
+
     for (Start = IoDesc->u.BusNumber.MinBusNumber;
          Start <= IoDesc->u.BusNumber.MaxBusNumber - IoDesc->u.BusNumber.Length + 1;
          Start++)
@@ -207,7 +215,14 @@ IopFindBusNumberResource(
 
         if (IopCheckDescriptorForConflict(CmDesc, &ConflictingDesc))
         {
-            Start += ConflictingDesc.u.BusNumber.Start + ConflictingDesc.u.BusNumber.Length;
+            ULONG NextStart = ConflictingDesc.u.BusNumber.Start +
+                              ConflictingDesc.u.BusNumber.Length;
+
+            if (NextStart <= Start)
+                return FALSE;
+
+            /* The loop increment advances from NextStart - 1 to NextStart. */
+            Start = NextStart - 1;
         }
         else
         {
@@ -235,6 +250,16 @@ IopFindMemoryResource(
     if (IoDesc->u.Memory.Alignment == 0)
         IoDesc->u.Memory.Alignment = 1;
 
+    if (IoDesc->u.Memory.Length == 0 ||
+        (ULONGLONG)IoDesc->u.Memory.MinimumAddress.QuadPart >
+            (ULONGLONG)IoDesc->u.Memory.MaximumAddress.QuadPart ||
+        IoDesc->u.Memory.Length - 1 >
+            (ULONGLONG)IoDesc->u.Memory.MaximumAddress.QuadPart -
+            (ULONGLONG)IoDesc->u.Memory.MinimumAddress.QuadPart)
+    {
+        return FALSE;
+    }
+
     for (Start = (ULONGLONG)IoDesc->u.Memory.MinimumAddress.QuadPart;
          Start <= (ULONGLONG)IoDesc->u.Memory.MaximumAddress.QuadPart - IoDesc->u.Memory.Length + 1;
          Start += IoDesc->u.Memory.Alignment)
@@ -244,8 +269,21 @@ IopFindMemoryResource(
 
         if (IopCheckDescriptorForConflict(CmDesc, &ConflictingDesc))
         {
-            Start += (ULONGLONG)ConflictingDesc.u.Memory.Start.QuadPart +
-                     ConflictingDesc.u.Memory.Length;
+            ULONGLONG Alignment = IoDesc->u.Memory.Alignment;
+            ULONGLONG ConflictEnd =
+                (ULONGLONG)ConflictingDesc.u.Memory.Start.QuadPart +
+                ConflictingDesc.u.Memory.Length;
+            ULONGLONG NextStart;
+
+            if (ConflictEnd > MAXULONGLONG - (Alignment - 1))
+                return FALSE;
+
+            NextStart = ((ConflictEnd + Alignment - 1) / Alignment) * Alignment;
+            if (NextStart <= Start || NextStart < Alignment)
+                return FALSE;
+
+            /* The loop increment advances from here to NextStart. */
+            Start = NextStart - Alignment;
         }
         else
         {
@@ -273,6 +311,16 @@ IopFindPortResource(
     if (IoDesc->u.Port.Alignment == 0)
         IoDesc->u.Port.Alignment = 1;
 
+    if (IoDesc->u.Port.Length == 0 ||
+        (ULONGLONG)IoDesc->u.Port.MinimumAddress.QuadPart >
+            (ULONGLONG)IoDesc->u.Port.MaximumAddress.QuadPart ||
+        IoDesc->u.Port.Length - 1 >
+            (ULONGLONG)IoDesc->u.Port.MaximumAddress.QuadPart -
+            (ULONGLONG)IoDesc->u.Port.MinimumAddress.QuadPart)
+    {
+        return FALSE;
+    }
+
     for (Start = (ULONGLONG)IoDesc->u.Port.MinimumAddress.QuadPart;
          Start <= (ULONGLONG)IoDesc->u.Port.MaximumAddress.QuadPart - IoDesc->u.Port.Length + 1;
          Start += IoDesc->u.Port.Alignment)
@@ -282,7 +330,21 @@ IopFindPortResource(
 
         if (IopCheckDescriptorForConflict(CmDesc, &ConflictingDesc))
         {
-            Start += (ULONGLONG)ConflictingDesc.u.Port.Start.QuadPart + ConflictingDesc.u.Port.Length;
+            ULONGLONG Alignment = IoDesc->u.Port.Alignment;
+            ULONGLONG ConflictEnd =
+                (ULONGLONG)ConflictingDesc.u.Port.Start.QuadPart +
+                ConflictingDesc.u.Port.Length;
+            ULONGLONG NextStart;
+
+            if (ConflictEnd > MAXULONGLONG - (Alignment - 1))
+                return FALSE;
+
+            NextStart = ((ConflictEnd + Alignment - 1) / Alignment) * Alignment;
+            if (NextStart <= Start || NextStart < Alignment)
+                return FALSE;
+
+            /* The loop increment advances from here to NextStart. */
+            Start = NextStart - Alignment;
         }
         else
         {
@@ -894,6 +956,14 @@ IopCheckResourceDescriptor(
 
                     if (rStart < r2End && r2Start < rEnd)
                     {
+                        if (((ResDesc->Flags & CM_RESOURCE_MEMORY_WINDOW_DECODE) &&
+                             rStart <= r2Start && rEnd >= r2End) ||
+                            ((ResDesc2->Flags & CM_RESOURCE_MEMORY_WINDOW_DECODE) &&
+                             r2Start <= rStart && r2End >= rEnd))
+                        {
+                            break;
+                        }
+
                         if (!Silent)
                         {
                             DPRINT1("Resource conflict: Memory (0x%I64x to 0x%I64x vs. 0x%I64x to 0x%I64x)\n",
@@ -918,6 +988,14 @@ IopCheckResourceDescriptor(
 
                     if (rStart < r2End && r2Start < rEnd)
                     {
+                        if (((ResDesc->Flags & CM_RESOURCE_PORT_WINDOW_DECODE) &&
+                             rStart <= r2Start && rEnd >= r2End) ||
+                            ((ResDesc2->Flags & CM_RESOURCE_PORT_WINDOW_DECODE) &&
+                             r2Start <= rStart && r2End >= rEnd))
+                        {
+                            break;
+                        }
+
                         if (!Silent)
                         {
                             DPRINT1("Resource conflict: Port (0x%I64x to 0x%I64x vs. 0x%I64x to 0x%I64x)\n",
@@ -957,6 +1035,22 @@ IopCheckResourceDescriptor(
 
                     if (rStart < r2End && r2Start < rEnd)
                     {
+                        /*
+                         * A PCI root bridge owns a bus-number window that
+                         * contains the ranges assigned to its downstream
+                         * bridges.  Those parent/child ranges are not a
+                         * conflict.  Preserve detection of equal or partially
+                         * overlapping sibling ranges while accepting strict
+                         * containment in either direction.
+                         */
+                        if ((ResDesc->ShareDisposition == CmResourceShareShared &&
+                             rStart < r2Start && rEnd >= r2End) ||
+                            (ResDesc2->ShareDisposition == CmResourceShareShared &&
+                             r2Start < rStart && r2End >= rEnd))
+                        {
+                            break;
+                        }
+
                         if (!Silent)
                         {
                             DPRINT1("Resource conflict: Bus number (0x%x to 0x%x vs. 0x%x to 0x%x)\n",
@@ -995,7 +1089,7 @@ ByeBye:
     if (Result && ConflictingDescriptor)
     {
         RtlCopyMemory(ConflictingDescriptor,
-                      ResDesc,
+                      ResDesc2,
                       sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR));
     }
 
