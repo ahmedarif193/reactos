@@ -542,7 +542,8 @@ extern "C" {
 #define SPDRP_REMOVAL_POLICY_HW_DEFAULT	32
 #define SPDRP_REMOVAL_POLICY_OVERRIDE	33
 #define SPDRP_INSTALL_STATE	34
-#define SPDRP_MAXIMUM_PROPERTY	35
+#define SPDRP_BASE_CONTAINERID	36
+#define SPDRP_MAXIMUM_PROPERTY	37
 #define SPDSL_IGNORE_DISK	1
 #define SPDSL_DISALLOW_NEGATIVE_ADJUST	2
 
@@ -673,8 +674,6 @@ typedef PVOID HDEVINFO;
 typedef PVOID HSPFILEQ;
 typedef PVOID HSPFILELOG;
 typedef UINT DI_FUNCTION;
-
-typedef PVOID HSTRING_TABLE;
 
 typedef enum {
     SetupFileLogSourceFilename,
@@ -1629,6 +1628,17 @@ SetupDiGetDeviceInterfaceDetailW(
 WINSETUPAPI
 BOOL
 WINAPI
+SetupDiGetDeviceInterfacePropertyKeys(
+  _In_ HDEVINFO DeviceInfoSet,
+  _In_ PSP_DEVICE_INTERFACE_DATA DeviceInterfaceData,
+  _Out_writes_to_opt_(PropertyKeyCount, *RequiredPropertyKeyCount) DEVPROPKEY *PropertyKeyArray,
+  _In_ DWORD PropertyKeyCount,
+  _Out_ PDWORD RequiredPropertyKeyCount,
+  _In_ DWORD Flags);
+
+WINSETUPAPI
+BOOL
+WINAPI
 SetupDiGetDeviceInterfacePropertyW(
   _In_ HDEVINFO DeviceInfoSet,
   _In_ PSP_DEVICE_INTERFACE_DATA DeviceInterfaceData,
@@ -1637,6 +1647,17 @@ SetupDiGetDeviceInterfacePropertyW(
   _Out_writes_bytes_to_opt_(PropertyBufferSize, *RequiredSize) PBYTE PropertyBuffer,
   _In_ DWORD PropertyBufferSize,
   _Out_opt_ PDWORD RequiredSize,
+  _In_ DWORD Flags);
+
+WINSETUPAPI
+BOOL
+WINAPI
+SetupDiGetDevicePropertyKeys(
+  _In_ HDEVINFO DeviceInfoSet,
+  _In_ PSP_DEVINFO_DATA DeviceInfoData,
+  _Out_writes_to_opt_(PropertyKeyCount, *RequiredPropertyKeyCount) DEVPROPKEY *PropertyKeyArray,
+  _In_ DWORD PropertyKeyCount,
+  _Out_ PDWORD RequiredPropertyKeyCount,
   _In_ DWORD Flags);
 
 _Success_(return != FALSE)
@@ -1877,6 +1898,30 @@ SetupDiSetClassRegistryPropertyW(
   _In_ DWORD PropertyBufferSize,
   _In_opt_ PCWSTR MachineName,
   _Reserved_ PVOID Reserved);
+
+WINSETUPAPI
+BOOL
+WINAPI
+SetupDiSetDeviceInterfacePropertyW(
+  _In_ HDEVINFO DeviceInfoSet,
+  _In_ PSP_DEVICE_INTERFACE_DATA DeviceInterfaceData,
+  _In_ CONST DEVPROPKEY *PropertyKey,
+  _In_ DEVPROPTYPE PropertyType,
+  _In_reads_bytes_opt_(PropertyBufferSize) CONST BYTE *PropertyBuffer,
+  _In_ DWORD PropertyBufferSize,
+  _In_ DWORD Flags);
+
+WINSETUPAPI
+BOOL
+WINAPI
+SetupDiSetDevicePropertyW(
+  _In_ HDEVINFO DeviceInfoSet,
+  _In_ PSP_DEVINFO_DATA DeviceInfoData,
+  _In_ CONST DEVPROPKEY *PropertyKey,
+  _In_ DEVPROPTYPE PropertyType,
+  _In_reads_bytes_opt_(PropertyBufferSize) CONST BYTE *PropertyBuffer,
+  _In_ DWORD PropertyBufferSize,
+  _In_ DWORD Flags);
 
 WINSETUPAPI BOOL WINAPI SetupDiSetDeviceInstallParamsA(_In_ HDEVINFO, _In_opt_ PSP_DEVINFO_DATA, _In_ PSP_DEVINSTALL_PARAMS_A);
 WINSETUPAPI BOOL WINAPI SetupDiSetDeviceInstallParamsW(_In_ HDEVINFO, _In_opt_ PSP_DEVINFO_DATA, _In_ PSP_DEVINSTALL_PARAMS_W);
@@ -2434,19 +2479,6 @@ WINSETUPAPI DWORD WINAPI pSetupOpenAndMapForRead(PCWSTR, PDWORD, PHANDLE, PHANDL
 WINSETUPAPI DWORD WINAPI pSetupStringFromGuid(LPGUID, PWSTR, DWORD);
 
 
-WINSETUPAPI DWORD  WINAPI pSetupStringTableAddString(HSTRING_TABLE, LPWSTR, DWORD);
-WINSETUPAPI DWORD  WINAPI pSetupStringTableAddStringEx(HSTRING_TABLE, LPWSTR, DWORD, LPVOID, DWORD);
-WINSETUPAPI VOID   WINAPI pSetupStringTableDestroy(HSTRING_TABLE);
-WINSETUPAPI HSTRING_TABLE WINAPI pSetupStringTableDuplicate(HSTRING_TABLE);
-WINSETUPAPI BOOL   WINAPI pSetupStringTableGetExtraData(HSTRING_TABLE, DWORD, LPVOID, DWORD);
-WINSETUPAPI HSTRING_TABLE WINAPI pSetupStringTableInitialize(VOID);
-WINSETUPAPI HSTRING_TABLE WINAPI pSetupStringTableInitializeEx(DWORD, DWORD);
-WINSETUPAPI DWORD  WINAPI pSetupStringTableLookUpString(HSTRING_TABLE, LPWSTR, DWORD);
-WINSETUPAPI DWORD  WINAPI pSetupStringTableLookUpStringEx(HSTRING_TABLE, LPWSTR, DWORD, LPVOID, DWORD);
-WINSETUPAPI BOOL   WINAPI pSetupStringTableSetExtraData(HSTRING_TABLE, DWORD, LPVOID, DWORD);
-WINSETUPAPI LPWSTR WINAPI pSetupStringTableStringFromId(HSTRING_TABLE, DWORD);
-WINSETUPAPI BOOL   WINAPI pSetupStringTableStringFromIdEx(HSTRING_TABLE, DWORD, LPWSTR, LPDWORD);
-
 WINSETUPAPI PSTR WINAPI pSetupUnicodeToMultiByte(PCWSTR lpUnicodeStr, UINT uCodePage);
 WINSETUPAPI BOOL WINAPI pSetupUnmapAndCloseFile(HANDLE, HANDLE, PVOID);
 
@@ -2527,6 +2559,7 @@ WINSETUPAPI PSTR WINAPI UnicodeToMultiByte(PCWSTR lpUnicodeStr, UINT uCodePage);
 #define SetupDiSetClassInstallParams	SetupDiSetClassInstallParamsW
 #define SetupDiSetClassRegistryProperty	SetupDiSetClassRegistryPropertyW
 #define SetupDiSetDeviceInstallParams	SetupDiSetDeviceInstallParamsW
+#define SetupDiSetDeviceProperty	SetupDiSetDevicePropertyW
 #define SetupDiSetDeviceRegistryProperty	SetupDiSetDeviceRegistryPropertyW
 #define SetupDiSetDriverInstallParams	SetupDiSetDriverInstallParamsW
 #define SetupDiSetSelectedDriver	SetupDiSetSelectedDriverW
