@@ -69,7 +69,11 @@ static inline char *strdupWA( const WCHAR *src )
     if (src)
     {
         int len = WideCharToMultiByte( CP_ACP, 0, src, -1, NULL, 0, NULL, NULL );
+#ifdef __REACTOS__
+        if ((dst = GlobalAlloc( GMEM_FIXED, len ))) WideCharToMultiByte( CP_ACP, 0, src, -1, dst, len, NULL, NULL );
+#else
         if ((dst = malloc( len ))) WideCharToMultiByte( CP_ACP, 0, src, -1, dst, len, NULL, NULL );
+#endif
     }
     return dst;
 }
