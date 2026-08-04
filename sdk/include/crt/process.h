@@ -17,6 +17,11 @@
 extern "C" {
 #endif
 
+#ifndef _CRTBLD
+  _CRTIMP void __cdecl __getmainargs(int *, char ***, char ***, int, int *);
+  _CRTIMP void __cdecl __wgetmainargs(int *, wchar_t ***, wchar_t ***, int, int *);
+#endif
+
 #define _P_WAIT 0
 #define _P_NOWAIT 1
 #define _OLD_P_OVERLAY 2
