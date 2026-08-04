@@ -202,6 +202,9 @@ list(APPEND SOURCE
     wmiutils.idl
     wmsbuffer.idl
     wmsdkidl.idl
+    wsdbase.idl
+    wsddisco.idl
+    wsdxml.idl
     wtypes.idl
     wuapi.idl
     xmldom.idl
