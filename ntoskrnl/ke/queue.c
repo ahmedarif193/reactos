@@ -248,8 +248,9 @@ KeReadStateQueue(IN PKQUEUE Queue)
  */
 PLIST_ENTRY
 NTAPI
-KeRemoveQueue(IN PKQUEUE Queue,
+KiRemoveQueue(IN PKQUEUE Queue,
               IN KPROCESSOR_MODE WaitMode,
+              IN BOOLEAN Alertable,
               IN PLARGE_INTEGER Timeout OPTIONAL)
 {
     PLIST_ENTRY QueueEntry;
@@ -280,6 +281,7 @@ KeRemoveQueue(IN PKQUEUE Queue,
         Thread->WaitIrql = KeRaiseIrqlToSynchLevel();
         KxQueueThreadWait();
     }
+    Thread->Alertable = Alertable;
 
     PreviousQueue = Thread->Queue;
     QueueEntry = &Thread->QueueListEntry;
@@ -352,12 +354,10 @@ KeRemoveQueue(IN PKQUEUE Queue,
             }
             else
             {
-                /* Fail if there's a User APC Pending */
-                if ((WaitMode != KernelMode) &&
-                    (Thread->ApcState.UserApcPending))
+                Status = KiCheckAlertability(Thread, Alertable, WaitMode);
+                if ((NTSTATUS)Status != STATUS_WAIT_0)
                 {
-                    /* Return the status and increase the pending threads */
-                    QueueEntry = (PLIST_ENTRY)STATUS_USER_APC;
+                    QueueEntry = (PLIST_ENTRY)Status;
                     Queue->CurrentCount++;
                     break;
                 }
@@ -452,6 +452,7 @@ WaitStart:
             /* Start another wait */
             Thread->WaitIrql = KeRaiseIrqlToSynchLevel();
             KxQueueThreadWait();
+            Thread->Alertable = Alertable;
             KiAcquireDispatcherObject(&Queue->Header);
             Queue->CurrentCount--;
         }
@@ -461,6 +462,15 @@ WaitStart:
     KiReleaseDispatcherObject(&Queue->Header);
     KiExitDispatcher(Thread->WaitIrql);
     return QueueEntry;
+}
+
+PLIST_ENTRY
+NTAPI
+KeRemoveQueue(IN PKQUEUE Queue,
+              IN KPROCESSOR_MODE WaitMode,
+              IN PLARGE_INTEGER Timeout OPTIONAL)
+{
+    return KiRemoveQueue(Queue, WaitMode, FALSE, Timeout);
 }
 
 /*

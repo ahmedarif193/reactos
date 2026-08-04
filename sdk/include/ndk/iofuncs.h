@@ -25,6 +25,8 @@ Author:
 #include <umtypes.h>
 #include <iotypes.h>
 
+struct _FILE_IO_COMPLETION_INFORMATION;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -561,6 +563,18 @@ NtRemoveIoCompletion(
     _Out_ PVOID *CompletionContext,
     _Out_ PIO_STATUS_BLOCK IoStatusBlock,
     _In_opt_ PLARGE_INTEGER Timeout
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtRemoveIoCompletionEx(
+    _In_ HANDLE IoCompletionHandle,
+    _Out_writes_to_(Count, *NumEntriesRemoved) struct _FILE_IO_COMPLETION_INFORMATION *IoCompletionInformation,
+    _In_ ULONG Count,
+    _Out_ PULONG NumEntriesRemoved,
+    _In_opt_ PLARGE_INTEGER Timeout,
+    _In_ BOOLEAN Alertable
 );
 
 NTSYSCALLAPI
@@ -1124,6 +1138,18 @@ ZwRemoveIoCompletion(
     _In_opt_ PLARGE_INTEGER Timeout
 );
 
+NTSYSAPI
+NTSTATUS
+NTAPI
+ZwRemoveIoCompletionEx(
+    _In_ HANDLE IoCompletionHandle,
+    _Out_writes_to_(Count, *NumEntriesRemoved) struct _FILE_IO_COMPLETION_INFORMATION *IoCompletionInformation,
+    _In_ ULONG Count,
+    _Out_ PULONG NumEntriesRemoved,
+    _In_opt_ PLARGE_INTEGER Timeout,
+    _In_ BOOLEAN Alertable
+);
+
 #ifdef NTOS_MODE_USER
 NTSYSAPI
 NTSTATUS
@@ -1235,4 +1261,3 @@ ZwWriteFileGather(
 #endif
 
 #endif
-

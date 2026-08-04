@@ -33,6 +33,13 @@ static const INFORMATION_CLASS_INFO IoCompletionInfoClass[] =
     IQS_SAME(IO_COMPLETION_BASIC_INFORMATION, ULONG, ICIF_QUERY),
 };
 
+typedef struct _FILE_IO_COMPLETION_INFORMATION
+{
+    PVOID KeyContext;
+    PVOID ApcContext;
+    IO_STATUS_BLOCK IoStatusBlock;
+} FILE_IO_COMPLETION_INFORMATION, *PFILE_IO_COMPLETION_INFORMATION;
+
 /* PRIVATE FUNCTIONS *********************************************************/
 
 NTSTATUS
@@ -600,6 +607,154 @@ NtSetIoCompletion(IN HANDLE IoCompletionPortHandle,
     }
 
     /* Return status */
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+NtRemoveIoCompletionEx(IN HANDLE IoCompletionHandle,
+                       OUT PFILE_IO_COMPLETION_INFORMATION IoCompletionInformation,
+                       IN ULONG Count,
+                       OUT PULONG NumEntriesRemoved,
+                       IN PLARGE_INTEGER Timeout OPTIONAL,
+                       IN BOOLEAN Alertable)
+{
+    FILE_IO_COMPLETION_INFORMATION Information;
+    LARGE_INTEGER SafeTimeout, ZeroTimeout = {{0}};
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    KPROCESSOR_MODE WaitMode;
+    KLOCK_QUEUE_HANDLE ApcLock;
+    PIOP_MINI_COMPLETION_PACKET Packet;
+    PLIST_ENTRY ListEntry;
+    PKTHREAD Thread = KeGetCurrentThread();
+    PKQUEUE Queue;
+    NTSTATUS Status;
+    ULONG Removed = 0;
+    PIRP Irp;
+    BOOLEAN UserApcQueued = FALSE;
+    PAGED_CODE();
+
+    if (!Count || Count > MAXULONG / sizeof(*IoCompletionInformation))
+        return STATUS_INVALID_PARAMETER;
+
+    if (PreviousMode != KernelMode)
+    {
+        _SEH2_TRY
+        {
+            ProbeForWrite(IoCompletionInformation,
+                          Count * sizeof(*IoCompletionInformation),
+                          TYPE_ALIGNMENT(FILE_IO_COMPLETION_INFORMATION));
+            ProbeForWriteUlong(NumEntriesRemoved);
+            if (Timeout)
+            {
+                SafeTimeout = ProbeForReadLargeInteger(Timeout);
+                Timeout = &SafeTimeout;
+            }
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+    }
+
+    Status = ObReferenceObjectByHandle(IoCompletionHandle,
+                                       IO_COMPLETION_MODIFY_STATE,
+                                       IoCompletionType,
+                                       PreviousMode,
+                                       (PVOID *)&Queue,
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    WaitMode = Alertable ? PreviousMode : KernelMode;
+
+    if (Alertable && PreviousMode != KernelMode)
+    {
+        KiAcquireApcLockRaiseToSynch(Thread, &ApcLock);
+        UserApcQueued = !IsListEmpty(&Thread->ApcState.ApcListHead[UserMode]);
+        if (UserApcQueued)
+            Thread->ApcState.UserApcPending = TRUE;
+        KiReleaseApcLock(&ApcLock);
+    }
+
+    if (UserApcQueued && Thread->Queue != Queue)
+    {
+        Status = STATUS_USER_APC;
+    }
+    else
+    {
+        for (;;)
+        {
+            ListEntry = KiRemoveQueue(Queue,
+                                      Removed ? KernelMode : WaitMode,
+                                      Removed ? FALSE : Alertable,
+                                      Removed ? &ZeroTimeout : Timeout);
+            Status = (NTSTATUS)(ULONG_PTR)ListEntry;
+            if (Status == STATUS_TIMEOUT || Status == STATUS_USER_APC ||
+                Status == STATUS_ALERTED)
+                break;
+            Status = STATUS_SUCCESS;
+
+            Packet = CONTAINING_RECORD(ListEntry,
+                                       IOP_MINI_COMPLETION_PACKET,
+                                       ListEntry);
+            if (Packet->PacketType == IopCompletionPacketIrp)
+            {
+                Irp = CONTAINING_RECORD(ListEntry,
+                                        IRP,
+                                        Tail.Overlay.ListEntry);
+                Information.KeyContext = Irp->Tail.CompletionKey;
+                Information.ApcContext = Irp->Overlay.AsynchronousParameters.UserApcContext;
+                Information.IoStatusBlock = Irp->IoStatus;
+                IoFreeIrp(Irp);
+            }
+            else
+            {
+                Information.KeyContext = Packet->KeyContext;
+                Information.ApcContext = Packet->ApcContext;
+                Information.IoStatusBlock.Status = Packet->IoStatus;
+                Information.IoStatusBlock.Information = Packet->IoStatusInformation;
+                IopFreeMiniPacket(Packet);
+            }
+
+            _SEH2_TRY
+            {
+                IoCompletionInformation[Removed] = Information;
+            }
+            _SEH2_EXCEPT(ExSystemExceptionFilter())
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+
+            if (!NT_SUCCESS(Status) || ++Removed == Count)
+                break;
+        }
+    }
+
+    if (Removed)
+    {
+        if (Alertable && PreviousMode != KernelMode)
+        {
+            KiAcquireApcLockRaiseToSynch(Thread, &ApcLock);
+            Thread->ApcState.UserApcPending = FALSE;
+            KiReleaseApcLock(&ApcLock);
+        }
+        Status = STATUS_SUCCESS;
+    }
+
+    _SEH2_TRY
+    {
+        *NumEntriesRemoved = Removed;
+    }
+    _SEH2_EXCEPT(ExSystemExceptionFilter())
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    ObDereferenceObject(Queue);
     return Status;
 }
 

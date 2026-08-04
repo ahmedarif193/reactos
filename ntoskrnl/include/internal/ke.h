@@ -749,6 +749,15 @@ KiInsertQueue(
     BOOLEAN Head
 );
 
+PLIST_ENTRY
+NTAPI
+KiRemoveQueue(
+    IN PKQUEUE Queue,
+    IN KPROCESSOR_MODE WaitMode,
+    IN BOOLEAN Alertable,
+    IN PLARGE_INTEGER Timeout OPTIONAL
+);
+
 VOID
 NTAPI
 KiTimerExpiration(
