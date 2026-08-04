@@ -129,7 +129,7 @@ static void concat_W( WCHAR *buffer, const WCHAR *src1, const WCHAR *src2, const
         if (src2) while (*src2 == '\\') src2++;
     }
 
-    if (src2)
+    if (src2 && *src2)
     {
         strcpyW( buffer, src2 );
         buffer += strlenW(buffer );
@@ -1274,6 +1274,19 @@ exit:
 }
 
 /***********************************************************************
+ *            SetupInstallFileExA   (SETUPAPI.@)
+ */
+#ifdef __REACTOS__
+BOOL WINAPI SetupInstallFileExA( HINF hinf, PINFCONTEXT inf_context, PCSTR source, PCSTR root,
+                                 PCSTR dest, DWORD style, PSP_FILE_CALLBACK_A handler,
+                                 PVOID context, PBOOL in_use )
+{
+    if (in_use) FIXME("no file in use support\n");
+    return SetupInstallFileA( hinf, inf_context, source, root, dest, style, handler, context );
+}
+#endif
+
+/***********************************************************************
  *            SetupInstallFileW   (SETUPAPI.@)
  */
 BOOL WINAPI SetupInstallFileW( HINF hinf, PINFCONTEXT inf_context, PCWSTR source, PCWSTR root,
@@ -1341,6 +1354,19 @@ BOOL WINAPI SetupInstallFileW( HINF hinf, PINFCONTEXT inf_context, PCWSTR source
     HeapFree( GetProcessHeap(), 0, buffer );
     return ret;
 }
+
+/***********************************************************************
+ *            SetupInstallFileExW   (SETUPAPI.@)
+ */
+#ifdef __REACTOS__
+BOOL WINAPI SetupInstallFileExW( HINF hinf, PINFCONTEXT inf_context, PCWSTR source, PCWSTR root,
+                                 PCWSTR dest, DWORD style, PSP_FILE_CALLBACK_W handler,
+                                 PVOID context, PBOOL in_use )
+{
+    if (in_use) FIXME("no file in use support\n");
+    return SetupInstallFileW( hinf, inf_context, source, root, dest, style, handler, context );
+}
+#endif
 
 /***********************************************************************
  *            SetupCommitFileQueueW   (SETUPAPI.@)

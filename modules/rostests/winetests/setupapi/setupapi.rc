@@ -23,3 +23,6 @@
 
 /* @makedep: setupapi.manifest */
 1 RT_MANIFEST setupapi.manifest
+
+coinst.dll TESTDLL "coinst.dll"
+selfreg.dll TESTDLL "selfreg.dll"

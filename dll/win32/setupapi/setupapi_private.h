@@ -1,6 +1,6 @@
 /*
  * Copyright 2001 Andreas Mohr
- * Copyright 2005-2006 Hervé Poussineau
+ * Copyright 2005-2006 HervÃ© Poussineau
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -20,6 +20,7 @@
 #ifndef __SETUPAPI_PRIVATE_H
 #define __SETUPAPI_PRIVATE_H
 
+#include <stdbool.h>
 #include <wchar.h>
 
 #define WIN32_NO_STATUS
@@ -55,6 +56,12 @@
 WINE_DEFAULT_DEBUG_CHANNEL(setupapi);
 
 #ifdef __REACTOS__
+#ifndef ARRAY_SIZE
+#define ARRAY_SIZE(array) (sizeof(array) / sizeof((array)[0]))
+#endif
+#endif
+
+#ifdef __REACTOS__
 #undef __WINESRC__
 #endif
 
@@ -64,6 +71,21 @@ WINE_DEFAULT_DEBUG_CHANNEL(setupapi);
 #define SETUP_CLASS_IMAGE_LIST_MAGIC 0xd00ff058
 
 #define CMP_MAGIC  0x01234567
+
+typedef PVOID HSTRING_TABLE;
+
+DWORD WINAPI pSetupStringTableAddString(HSTRING_TABLE, LPWSTR, DWORD);
+DWORD WINAPI pSetupStringTableAddStringEx(HSTRING_TABLE, LPWSTR, DWORD, LPVOID, DWORD);
+VOID WINAPI pSetupStringTableDestroy(HSTRING_TABLE);
+HSTRING_TABLE WINAPI pSetupStringTableDuplicate(HSTRING_TABLE);
+BOOL WINAPI pSetupStringTableGetExtraData(HSTRING_TABLE, DWORD, LPVOID, DWORD);
+HSTRING_TABLE WINAPI pSetupStringTableInitialize(VOID);
+HSTRING_TABLE WINAPI pSetupStringTableInitializeEx(DWORD, DWORD);
+DWORD WINAPI pSetupStringTableLookUpString(HSTRING_TABLE, LPWSTR, DWORD);
+DWORD WINAPI pSetupStringTableLookUpStringEx(HSTRING_TABLE, LPWSTR, DWORD, LPVOID, DWORD);
+BOOL WINAPI pSetupStringTableSetExtraData(HSTRING_TABLE, DWORD, LPVOID, DWORD);
+LPWSTR WINAPI pSetupStringTableStringFromId(HSTRING_TABLE, DWORD);
+BOOL WINAPI pSetupStringTableStringFromIdEx(HSTRING_TABLE, DWORD, LPWSTR, LPDWORD);
 
 struct DeviceInterface /* Element of DeviceInfo.InterfaceListHead */
 {
@@ -246,6 +268,9 @@ struct FileLog /* HSPFILELOG */
 };
 
 extern HINSTANCE hInstance;
+#ifdef __REACTOS__
+#define SETUPAPI_hInstance hInstance
+#endif
 extern OSVERSIONINFOEXW OsVersionInfo;
 
 /*
@@ -369,6 +394,8 @@ WINAPI
 pSetupStringFromGuid(LPGUID lpGUID, PWSTR pString, DWORD dwStringLen);
 
 DWORD WINAPI CaptureAndConvertAnsiArg(LPCSTR pSrc, LPWSTR *pDst);
+
+bool array_reserve(void **elements, size_t *capacity, size_t count, size_t size);
 
 VOID WINAPI MyFree(LPVOID lpMem);
 LPVOID WINAPI MyMalloc(DWORD dwSize);

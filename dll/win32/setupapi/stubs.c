@@ -74,6 +74,71 @@ BOOL WINAPI SetupSetSourceListW(DWORD flags, PCWSTR *list, UINT count)
     return FALSE;
 }
 
+/***********************************************************************
+ *      SetupQueryDrivesInDiskSpaceListA (SETUPAPI.@)
+ */
+BOOL WINAPI SetupQueryDrivesInDiskSpaceListA(HDSKSPC disk_space, PSTR return_buffer,
+                                              DWORD return_buffer_size, PDWORD required_size)
+{
+    FIXME("%p, %p, %lu, %p: stub\n", disk_space, return_buffer, return_buffer_size, required_size);
+    return FALSE;
+}
+
+/***********************************************************************
+ *      SetupQueryDrivesInDiskSpaceListW (SETUPAPI.@)
+ */
+BOOL WINAPI SetupQueryDrivesInDiskSpaceListW(HDSKSPC disk_space, PWSTR return_buffer,
+                                              DWORD return_buffer_size, PDWORD required_size)
+{
+    FIXME("%p, %p, %lu, %p: stub\n", disk_space, return_buffer, return_buffer_size, required_size);
+    return FALSE;
+}
+
+/***********************************************************************
+ *              SetupLogFileW  (SETUPAPI.@)
+ */
+BOOL WINAPI SetupLogFileW(HSPFILELOG file_log, PCWSTR section, PCWSTR source, PCWSTR target,
+                          DWORD checksum, PCWSTR tag, PCWSTR description, PCWSTR other, DWORD flags)
+{
+    FIXME("(%p, %s, '%s', '%s', %lu, %s, %s, %s, %lu): stub\n", file_log,
+          debugstr_w(section), debugstr_w(source), debugstr_w(target), checksum,
+          debugstr_w(tag), debugstr_w(description), debugstr_w(other), flags);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+/***********************************************************************
+ *              SetupLogFileA  (SETUPAPI.@)
+ */
+BOOL WINAPI SetupLogFileA(HSPFILELOG file_log, PCSTR section, PCSTR source, PCSTR target,
+                          DWORD checksum, PCSTR tag, PCSTR description, PCSTR other, DWORD flags)
+{
+    FIXME("(%p, %p, '%s', '%s', %lu, %p, %p, %p, %lu): stub\n", file_log,
+          section, source, target, checksum, tag, description, other, flags);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+/***********************************************************************
+ *              SetupDiDrawMiniIcon  (SETUPAPI.@)
+ */
+INT WINAPI SetupDiDrawMiniIcon(HDC hdc, RECT rect, INT index, DWORD flags)
+{
+    FIXME("(%p, %s, %d, %lx) stub\n", hdc, wine_dbgstr_rect(&rect), index, flags);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return 0;
+}
+
+/***********************************************************************
+ *              SetupDiGetClassBitmapIndex  (SETUPAPI.@)
+ */
+BOOL WINAPI SetupDiGetClassBitmapIndex(const GUID *class, PINT index)
+{
+    FIXME("(%s, %p) stub\n", debugstr_guid(class), index);
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
 
 /***********************************************************************
  *      SetupDiRemoveDevice(SETUPAPI.@)

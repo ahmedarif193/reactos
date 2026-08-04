@@ -22,6 +22,7 @@
 #include "setupapi_private.h"
 
 #include <pseh/pseh2.h>
+#include <devpkey.h>
 
 /* Unicode constants */
 static const WCHAR BackSlash[] = {'\\',0};
@@ -75,6 +76,35 @@ struct GetSectionCallbackInfo
     WCHAR BestSection[LINE_LEN + 1];
     DWORD BestScore1, BestScore2, BestScore3, BestScore4, BestScore5;
 };
+
+#ifdef __REACTOS__
+bool array_reserve(void **elements, size_t *capacity, size_t count, size_t size)
+{
+    unsigned int new_capacity, max_capacity;
+    void *new_elements;
+
+    if (count <= *capacity)
+        return true;
+
+    max_capacity = ~(size_t)0 / size;
+    if (count > max_capacity)
+        return false;
+
+    new_capacity = max(4, *capacity);
+    while (new_capacity < count && new_capacity <= max_capacity / 2)
+        new_capacity *= 2;
+    if (new_capacity < count)
+        new_capacity = max_capacity;
+
+    if (!(new_elements = realloc(*elements, new_capacity * size)))
+        return false;
+
+    *elements = new_elements;
+    *capacity = new_capacity;
+
+    return true;
+}
+#endif
 
 
 
@@ -3149,28 +3179,29 @@ struct PropertyMapEntry
     DWORD   regType;
     LPCSTR  nameA;
     LPCWSTR nameW;
+    DEVPROPTYPE devPropType;
 };
 
 static struct PropertyMapEntry PropertyMap[] = {
-    { REG_SZ, "DeviceDesc", REGSTR_VAL_DEVDESC },
-    { REG_MULTI_SZ, "HardwareId", REGSTR_VAL_HARDWAREID },
-    { REG_MULTI_SZ, "CompatibleIDs", REGSTR_VAL_COMPATIBLEIDS },
+    { REG_SZ, "DeviceDesc", REGSTR_VAL_DEVDESC, DEVPROP_TYPE_STRING },
+    { REG_MULTI_SZ, "HardwareId", REGSTR_VAL_HARDWAREID, DEVPROP_TYPE_STRING_LIST },
+    { REG_MULTI_SZ, "CompatibleIDs", REGSTR_VAL_COMPATIBLEIDS, DEVPROP_TYPE_STRING_LIST },
     { 0, NULL, NULL }, /* SPDRP_UNUSED0 */
-    { REG_SZ, "Service", REGSTR_VAL_SERVICE },
+    { REG_SZ, "Service", REGSTR_VAL_SERVICE, DEVPROP_TYPE_STRING },
     { 0, NULL, NULL }, /* SPDRP_UNUSED1 */
     { 0, NULL, NULL }, /* SPDRP_UNUSED2 */
-    { REG_SZ, "Class", REGSTR_VAL_CLASS },
-    { REG_SZ, "ClassGUID", REGSTR_VAL_CLASSGUID },
-    { REG_SZ, "Driver", REGSTR_VAL_DRIVER },
-    { REG_DWORD, "ConfigFlags", REGSTR_VAL_CONFIGFLAGS },
-    { REG_SZ, "Mfg", REGSTR_VAL_MFG },
+    { REG_SZ, "Class", REGSTR_VAL_CLASS, DEVPROP_TYPE_STRING },
+    { REG_SZ, "ClassGUID", REGSTR_VAL_CLASSGUID, DEVPROP_TYPE_GUID },
+    { REG_SZ, "Driver", REGSTR_VAL_DRIVER, DEVPROP_TYPE_STRING },
+    { REG_DWORD, "ConfigFlags", REGSTR_VAL_CONFIGFLAGS, DEVPROP_TYPE_UINT32 },
+    { REG_SZ, "Mfg", REGSTR_VAL_MFG, DEVPROP_TYPE_STRING },
     { REG_SZ, "FriendlyName", REGSTR_VAL_FRIENDLYNAME },
-    { REG_SZ, "LocationInformation", REGSTR_VAL_LOCATION_INFORMATION },
-    { 0, NULL, NULL }, /* SPDRP_PHYSICAL_DEVICE_OBJECT_NAME */
-    { REG_DWORD, "Capabilities", REGSTR_VAL_CAPABILITIES },
-    { REG_DWORD, "UINumber", REGSTR_VAL_UI_NUMBER },
-    { REG_MULTI_SZ, "UpperFilters", REGSTR_VAL_UPPERFILTERS },
-    { REG_MULTI_SZ, "LowerFilters", REGSTR_VAL_LOWERFILTERS },
+    { REG_SZ, "LocationInformation", REGSTR_VAL_LOCATION_INFORMATION, DEVPROP_TYPE_STRING },
+    { 0, NULL, NULL, DEVPROP_TYPE_STRING }, /* SPDRP_PHYSICAL_DEVICE_OBJECT_NAME */
+    { REG_DWORD, "Capabilities", REGSTR_VAL_CAPABILITIES, DEVPROP_TYPE_INT32 },
+    { REG_DWORD, "UINumber", REGSTR_VAL_UI_NUMBER, DEVPROP_TYPE_INT32 },
+    { REG_MULTI_SZ, "UpperFilters", REGSTR_VAL_UPPERFILTERS, DEVPROP_TYPE_STRING_LIST },
+    { REG_MULTI_SZ, "LowerFilters", REGSTR_VAL_LOWERFILTERS, DEVPROP_TYPE_STRING_LIST },
     { 0, NULL, NULL }, /* SPDRP_BUSTYPEGUID */
     { 0, NULL, NULL }, /* SPDRP_LEGACYBUSTYPE */
     { 0, NULL, NULL }, /* SPDRP_BUSNUMBER */
@@ -3187,7 +3218,589 @@ static struct PropertyMapEntry PropertyMap[] = {
     { 0, NULL, NULL }, /* SPDRP_REMOVAL_POLICY_HW_DEFAULT */
     { 0, NULL, NULL }, /* SPDRP_REMOVAL_POLICY_OVERRIDE */
     { 0, NULL, NULL }, /* SPDRP_INSTALL_STATE */
+    { 0, NULL, NULL }, /* unused */
+    { REG_SZ, "ContainerId", L"ContainerId", DEVPROP_TYPE_GUID }, /* SPDRP_BASE_CONTAINERID */
 };
+
+#ifdef __REACTOS__
+static BOOL is_valid_property_type(DEVPROPTYPE prop_type)
+{
+    DWORD type = prop_type & DEVPROP_MASK_TYPE;
+    DWORD typemod = prop_type & DEVPROP_MASK_TYPEMOD;
+
+    if (type > MAX_DEVPROP_TYPE)
+        return FALSE;
+    if (typemod > MAX_DEVPROP_TYPEMOD)
+        return FALSE;
+
+    if (typemod == DEVPROP_TYPEMOD_ARRAY &&
+        (type == DEVPROP_TYPE_EMPTY || type == DEVPROP_TYPE_NULL ||
+         type == DEVPROP_TYPE_STRING || type == DEVPROP_TYPE_SECURITY_DESCRIPTOR_STRING))
+        return FALSE;
+
+    if (typemod == DEVPROP_TYPEMOD_LIST &&
+        !(type == DEVPROP_TYPE_STRING || type == DEVPROP_TYPE_SECURITY_DESCRIPTOR_STRING))
+        return FALSE;
+
+    return TRUE;
+}
+
+static struct DeviceInfo *get_device_info(HDEVINFO devinfo, PSP_DEVINFO_DATA data)
+{
+    struct DeviceInfoSet *set = devinfo;
+    struct DeviceInfo *device;
+
+    if (!set || devinfo == INVALID_HANDLE_VALUE || set->magic != SETUP_DEVICE_INFO_SET_MAGIC)
+    {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return NULL;
+    }
+    if (!data || data->cbSize != sizeof(*data) || !data->Reserved)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return NULL;
+    }
+
+    device = (struct DeviceInfo *)data->Reserved;
+    if (device->set != set)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return NULL;
+    }
+    return device;
+}
+
+static struct DeviceInterface *get_device_interface(HDEVINFO devinfo, SP_DEVICE_INTERFACE_DATA *data)
+{
+    struct DeviceInfoSet *set = devinfo;
+    struct DeviceInterface *iface;
+
+    if (!set || devinfo == INVALID_HANDLE_VALUE || set->magic != SETUP_DEVICE_INFO_SET_MAGIC)
+    {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return NULL;
+    }
+    if (!data || data->cbSize != sizeof(*data) || !data->Reserved)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return NULL;
+    }
+
+    iface = (struct DeviceInterface *)data->Reserved;
+    if (!iface->DeviceInfo || iface->DeviceInfo->set != set)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return NULL;
+    }
+    return iface;
+}
+
+static DWORD get_device_reg_properties(HKEY base_key, DEVPROPKEY *buf, DWORD buf_len, DWORD *req_len)
+{
+    HKEY properties;
+    DEVPROPKEY *keys;
+    LSTATUS error;
+    DWORD i, count = 0;
+
+    if (req_len)
+        *req_len = 0;
+    if ((error = RegOpenKeyExW(base_key, L"Properties", 0, KEY_ENUMERATE_SUB_KEYS, &properties)))
+        return error == ERROR_FILE_NOT_FOUND ? ERROR_SUCCESS : error;
+
+    keys = HeapAlloc(GetProcessHeap(), 0, sizeof(*keys) * buf_len);
+    if (!keys && buf_len)
+    {
+        RegCloseKey(properties);
+        return ERROR_NOT_ENOUGH_MEMORY;
+    }
+
+    for (i = 0; ; i++)
+    {
+        WCHAR guid_string[39];
+        HKEY format_key;
+        GUID guid;
+        DWORD len, j;
+
+        len = ARRAY_SIZE(guid_string);
+        if ((error = RegEnumKeyExW(properties, i, guid_string, &len, NULL, NULL, NULL, NULL)))
+        {
+            if (error == ERROR_NO_MORE_ITEMS)
+                error = ERROR_SUCCESS;
+            break;
+        }
+        if ((error = RegOpenKeyExW(properties, guid_string, 0, KEY_ENUMERATE_SUB_KEYS, &format_key)))
+            break;
+        guid_string[37] = UNICODE_NULL;
+        if (UuidFromStringW(&guid_string[1], &guid) != RPC_S_OK)
+        {
+            RegCloseKey(format_key);
+            continue;
+        }
+
+        for (j = 0; ; j++)
+        {
+            DEVPROPID pid;
+            WCHAR key_name[6];
+
+            len = 5;
+            if ((error = RegEnumKeyExW(format_key, j, key_name, &len, NULL, NULL, NULL, NULL)))
+            {
+                if (error == ERROR_NO_MORE_ITEMS)
+                    error = ERROR_SUCCESS;
+                break;
+            }
+            swscanf(key_name, L"%04X", &pid);
+            if (++count <= buf_len)
+            {
+                keys[count - 1].fmtid = guid;
+                keys[count - 1].pid = pid;
+            }
+        }
+        RegCloseKey(format_key);
+        if (error)
+            break;
+    }
+
+    RegCloseKey(properties);
+    if (!error)
+    {
+        if (req_len)
+            *req_len = count;
+        if (buf_len < count)
+            error = ERROR_INSUFFICIENT_BUFFER;
+        else if (count)
+            memcpy(buf, keys, count * sizeof(*keys));
+    }
+    HeapFree(GetProcessHeap(), 0, keys);
+    return error;
+}
+
+static DWORD get_device_reg_property(HKEY base_key, const DEVPROPKEY *prop_key,
+                                     DEVPROPTYPE *prop_type, BYTE *buf, DWORD buf_size,
+                                     DWORD *req_size, DWORD flags)
+{
+    WCHAR prop_path[55] = L"Properties\\";
+    HKEY property;
+    DWORD size = 0, value_type;
+    LSTATUS error;
+
+    if (!prop_key)
+        return ERROR_INVALID_DATA;
+    if (!prop_type || (!buf && buf_size))
+        return ERROR_INVALID_USER_BUFFER;
+    if (flags)
+        return ERROR_INVALID_FLAGS;
+
+    SETUPDI_GuidToString(&prop_key->fmtid, prop_path + 11);
+    swprintf(prop_path + 49, ARRAY_SIZE(prop_path) - 49, L"\\%04X", prop_key->pid);
+    if (!(error = RegOpenKeyExW(base_key, prop_path, 0, KEY_QUERY_VALUE, &property)))
+    {
+        size = buf_size;
+        error = RegQueryValueExW(property, NULL, NULL, &value_type, buf, &size);
+        RegCloseKey(property);
+    }
+
+    switch (error)
+    {
+        case ERROR_SUCCESS:
+        case ERROR_MORE_DATA:
+            *prop_type = value_type & 0xffff;
+            error = (error == ERROR_MORE_DATA || !buf) ? ERROR_INSUFFICIENT_BUFFER : ERROR_SUCCESS;
+            break;
+        case ERROR_FILE_NOT_FOUND:
+            *prop_type = DEVPROP_TYPE_EMPTY;
+            size = 0;
+            error = ERROR_NOT_FOUND;
+            break;
+        default:
+            *prop_type = DEVPROP_TYPE_EMPTY;
+            size = 0;
+            break;
+    }
+
+    if (req_size)
+        *req_size = size;
+    return error;
+}
+
+static DWORD set_device_reg_property(HKEY base_key, const DEVPROPKEY *key, DEVPROPTYPE type,
+                                     const BYTE *buf, DWORD buf_size)
+{
+    HKEY properties, property;
+    WCHAR prop_path[44];
+    LSTATUS error;
+
+    error = RegCreateKeyExW(base_key, L"Properties", 0, NULL, 0, KEY_READ | KEY_WRITE,
+                            NULL, &properties, NULL);
+    if (error)
+        return error;
+
+    SETUPDI_GuidToString(&key->fmtid, prop_path);
+    swprintf(&prop_path[38], ARRAY_SIZE(prop_path) - 38, L"\\%04X", key->pid);
+    switch (type)
+    {
+        case DEVPROP_TYPE_EMPTY:
+            error = RegDeleteKeyW(properties, prop_path);
+            break;
+        case DEVPROP_TYPE_NULL:
+            if (!(error = RegOpenKeyW(properties, prop_path, &property)))
+            {
+                error = RegDeleteValueW(property, NULL);
+                RegCloseKey(property);
+            }
+            break;
+        default:
+            if (!(error = RegCreateKeyExW(properties, prop_path, 0, NULL, 0, KEY_READ | KEY_WRITE,
+                                          NULL, &property, NULL)))
+            {
+                error = RegSetValueExW(property, NULL, 0, 0xffff0000 | (0xffff & type), buf, buf_size);
+                RegCloseKey(property);
+            }
+            break;
+    }
+
+    RegCloseKey(properties);
+    return error == ERROR_FILE_NOT_FOUND ? ERROR_NOT_FOUND : error;
+}
+
+BOOL WINAPI SetupDiGetDeviceInterfacePropertyKeys(HDEVINFO devinfo, SP_DEVICE_INTERFACE_DATA *iface_data,
+                                                   DEVPROPKEY *buf, DWORD buf_len, DWORD *req_len, DWORD flags)
+{
+    DEVPROPKEY default_props[] = { DEVPKEY_DeviceInterface_Enabled,
+                                   DEVPKEY_DeviceInterface_ClassGuid,
+                                   DEVPKEY_Device_InstanceId };
+    struct DeviceInterface *iface;
+    HKEY key;
+    DWORD error, required = 0;
+
+    if (!(iface = get_device_interface(devinfo, iface_data)))
+        return FALSE;
+    if (flags)
+    {
+        SetLastError(ERROR_INVALID_FLAGS);
+        return FALSE;
+    }
+    if (!buf && buf_len)
+    {
+        SetLastError(ERROR_INVALID_USER_BUFFER);
+        return FALSE;
+    }
+
+    key = SetupDiOpenDeviceInterfaceRegKey(devinfo, iface_data, 0, KEY_QUERY_VALUE);
+    if (key == INVALID_HANDLE_VALUE)
+        return FALSE;
+    error = get_device_reg_properties(key, buf, buf_len, &required);
+    RegCloseKey(key);
+    if (!error || error == ERROR_INSUFFICIENT_BUFFER)
+    {
+        required += ARRAY_SIZE(default_props);
+        if (required <= buf_len)
+            memcpy(&buf[required - ARRAY_SIZE(default_props)], default_props, sizeof(default_props));
+        else
+            error = ERROR_INSUFFICIENT_BUFFER;
+    }
+    if (req_len)
+        *req_len = required;
+    SetLastError(error);
+    return !error;
+}
+
+BOOL WINAPI SetupDiGetDeviceInterfacePropertyW(HDEVINFO devinfo, SP_DEVICE_INTERFACE_DATA *iface_data,
+                                                const DEVPROPKEY *key, DEVPROPTYPE *type, BYTE *buf,
+                                                DWORD buf_size, DWORD *req_size, DWORD flags)
+{
+    struct DeviceInterface *iface;
+    HKEY reg_key;
+    DWORD error = ERROR_SUCCESS;
+
+    if (!(iface = get_device_interface(devinfo, iface_data)))
+        return FALSE;
+    if (!type || (!buf && buf_size))
+    {
+        SetLastError(ERROR_INVALID_USER_BUFFER);
+        return FALSE;
+    }
+    if (!key)
+    {
+        SetLastError(ERROR_INVALID_DATA);
+        return FALSE;
+    }
+    if (flags)
+    {
+        SetLastError(ERROR_INVALID_FLAGS);
+        return FALSE;
+    }
+
+    if (IsEqualDevPropKey(*key, DEVPKEY_DeviceInterface_Enabled))
+    {
+        *type = DEVPROP_TYPE_BOOLEAN;
+        if (buf_size >= sizeof(DEVPROP_BOOLEAN))
+            *buf = (iface->Flags & SPINT_ACTIVE) ? DEVPROP_TRUE : DEVPROP_FALSE;
+        else
+            error = ERROR_INSUFFICIENT_BUFFER;
+        if (req_size)
+            *req_size = sizeof(DEVPROP_BOOLEAN);
+    }
+    else if (IsEqualDevPropKey(*key, DEVPKEY_DeviceInterface_ClassGuid))
+    {
+        *type = DEVPROP_TYPE_GUID;
+        if (buf_size >= sizeof(iface->InterfaceClassGuid))
+            memcpy(buf, &iface->InterfaceClassGuid, sizeof(iface->InterfaceClassGuid));
+        else
+            error = ERROR_INSUFFICIENT_BUFFER;
+        if (req_size)
+            *req_size = sizeof(GUID);
+    }
+    else if (IsEqualDevPropKey(*key, DEVPKEY_Device_InstanceId))
+    {
+        DWORD size = (wcslen(iface->DeviceInfo->instanceId) + 1) * sizeof(WCHAR);
+
+        *type = DEVPROP_TYPE_STRING;
+        if (buf_size >= size)
+            wcscpy((WCHAR *)buf, iface->DeviceInfo->instanceId);
+        else
+            error = ERROR_INSUFFICIENT_BUFFER;
+        if (req_size)
+            *req_size = size;
+    }
+    else
+    {
+        reg_key = SetupDiOpenDeviceInterfaceRegKey(devinfo, iface_data, 0, KEY_QUERY_VALUE);
+        if (reg_key == INVALID_HANDLE_VALUE)
+            return FALSE;
+        error = get_device_reg_property(reg_key, key, type, buf, buf_size, req_size, flags);
+        RegCloseKey(reg_key);
+    }
+
+    SetLastError(error);
+    return !error;
+}
+
+BOOL WINAPI SetupDiSetDeviceInterfacePropertyW(HDEVINFO devinfo, SP_DEVICE_INTERFACE_DATA *iface_data,
+                                                const DEVPROPKEY *key, DEVPROPTYPE type, const BYTE *buf,
+                                                DWORD buf_size, DWORD flags)
+{
+    struct DeviceInterface *iface;
+    HKEY reg_key;
+    DWORD error;
+
+    if (!(iface = get_device_interface(devinfo, iface_data)))
+        return FALSE;
+    if (buf_size && !buf)
+    {
+        SetLastError(ERROR_INVALID_USER_BUFFER);
+        return FALSE;
+    }
+    if (!key || !is_valid_property_type(type) ||
+        (!(buf && buf_size) && type != DEVPROP_TYPE_EMPTY && type != DEVPROP_TYPE_NULL) ||
+        (buf && buf_size && (type == DEVPROP_TYPE_EMPTY || type == DEVPROP_TYPE_NULL)))
+    {
+        SetLastError(ERROR_INVALID_DATA);
+        return FALSE;
+    }
+    if (flags)
+    {
+        SetLastError(ERROR_INVALID_FLAGS);
+        return FALSE;
+    }
+
+    if (IsEqualDevPropKey(*key, DEVPKEY_DeviceInterface_Enabled))
+    {
+        DEVPROP_BOOLEAN value;
+
+        if (type != DEVPROP_TYPE_BOOLEAN || buf_size != sizeof(value) || !buf)
+        {
+            SetLastError(ERROR_INVALID_DATA);
+            return FALSE;
+        }
+        value = *(const DEVPROP_BOOLEAN *)buf;
+        if (value != DEVPROP_FALSE && value != DEVPROP_TRUE)
+        {
+            SetLastError(ERROR_INVALID_DATA);
+            return FALSE;
+        }
+        error = !!(iface->Flags & SPINT_ACTIVE) == !!value ? ERROR_SUCCESS : ERROR_ACCESS_DENIED;
+        SetLastError(error);
+        return !error;
+    }
+
+    reg_key = SetupDiOpenDeviceInterfaceRegKey(devinfo, iface_data, 0, KEY_READ | KEY_WRITE);
+    if (reg_key == INVALID_HANDLE_VALUE)
+        return FALSE;
+    error = set_device_reg_property(reg_key, key, type, buf, buf_size);
+    RegCloseKey(reg_key);
+    SetLastError(error);
+    return !error;
+}
+
+BOOL WINAPI SetupDiGetDevicePropertyKeys(HDEVINFO devinfo, PSP_DEVINFO_DATA device_data,
+                                         DEVPROPKEY *keys, DWORD keys_len, DWORD *required, DWORD flags)
+{
+    struct DeviceInfoSet *set = devinfo;
+    struct DeviceInfo *device;
+    HKEY key;
+    DWORD error;
+
+    if (flags)
+    {
+        SetLastError(ERROR_INVALID_FLAGS);
+        return FALSE;
+    }
+    if (!keys && keys_len)
+    {
+        SetLastError(ERROR_INVALID_USER_BUFFER);
+        return FALSE;
+    }
+    if (!(device = get_device_info(devinfo, device_data)))
+        return FALSE;
+
+    key = SETUPDI_OpenDevKey(set->HKLM, device, KEY_QUERY_VALUE);
+    if (key == INVALID_HANDLE_VALUE)
+        return FALSE;
+    error = get_device_reg_properties(key, keys, keys_len, required);
+    RegCloseKey(key);
+    SetLastError(error);
+    return !error;
+}
+
+static DWORD get_device_property(struct DeviceInfo *device, HDEVINFO devinfo,
+                                 PSP_DEVINFO_DATA device_data, const DEVPROPKEY *prop_key,
+                                 DEVPROPTYPE *prop_type, BYTE *buf, DWORD buf_size,
+                                 DWORD *req_size, DWORD flags)
+{
+    struct DeviceInfoSet *set = devinfo;
+    HKEY key;
+    DWORD error = ERROR_SUCCESS;
+
+    if (!prop_key)
+        return ERROR_INVALID_DATA;
+    if (!prop_type || (!buf && buf_size))
+        return ERROR_INVALID_USER_BUFFER;
+    if (flags)
+        return ERROR_INVALID_FLAGS;
+
+    if (IsEqualGUID(&prop_key->fmtid, &DEVPKEY_Device_DeviceDesc.fmtid) && prop_key->pid >= 2)
+    {
+        DWORD reg_prop = prop_key->pid - 2, size, type;
+
+        if (reg_prop >= ARRAY_SIZE(PropertyMap) || !PropertyMap[reg_prop].devPropType)
+            goto custom_property;
+        type = PropertyMap[reg_prop].devPropType;
+        if (type == DEVPROP_TYPE_GUID)
+        {
+            WCHAR guid_string[39];
+
+            size = sizeof(GUID);
+            if (!SetupDiGetDeviceRegistryPropertyW(devinfo, device_data, reg_prop, NULL,
+                                                   (BYTE *)guid_string, sizeof(guid_string), NULL))
+                error = GetLastError();
+            else if (buf_size >= sizeof(GUID))
+            {
+                if (guid_string[0] == L'{' && guid_string[37] == L'}')
+                {
+                    guid_string[37] = UNICODE_NULL;
+                    UuidFromStringW(&guid_string[1], (GUID *)buf);
+                }
+                else
+                    error = ERROR_INVALID_DATA;
+            }
+            else
+                error = ERROR_INSUFFICIENT_BUFFER;
+        }
+        else if (!SetupDiGetDeviceRegistryPropertyW(devinfo, device_data, reg_prop, NULL,
+                                                    buf, buf_size, &size))
+            error = GetLastError();
+
+        if (error != ERROR_INVALID_DATA)
+        {
+            *prop_type = type;
+            if (req_size)
+                *req_size = size;
+        }
+        else
+            error = ERROR_NOT_FOUND;
+        return error;
+    }
+    if (IsEqualDevPropKey(*prop_key, DEVPKEY_Device_InstanceId))
+    {
+        DWORD size = (wcslen(device->instanceId) + 1) * sizeof(WCHAR);
+
+        *prop_type = DEVPROP_TYPE_STRING;
+        if (buf_size >= size)
+            wcscpy((WCHAR *)buf, device->instanceId);
+        else
+            error = ERROR_INSUFFICIENT_BUFFER;
+        if (req_size)
+            *req_size = size;
+        return error;
+    }
+    if (IsEqualDevPropKey(*prop_key, DEVPKEY_Device_ContainerId))
+        return get_device_property(device, devinfo, device_data, &DEVPKEY_Device_BaseContainerId,
+                                   prop_type, buf, buf_size, req_size, flags);
+
+custom_property:
+    key = SETUPDI_OpenDevKey(set->HKLM, device, KEY_QUERY_VALUE);
+    if (key == INVALID_HANDLE_VALUE)
+        return GetLastError();
+    error = get_device_reg_property(key, prop_key, prop_type, buf, buf_size, req_size, flags);
+    RegCloseKey(key);
+    return error;
+}
+
+BOOL WINAPI SetupDiGetDevicePropertyW(HDEVINFO devinfo, PSP_DEVINFO_DATA device_data,
+                                      const DEVPROPKEY *prop_key, DEVPROPTYPE *prop_type,
+                                      BYTE *prop_buffer, DWORD prop_buffer_size,
+                                      DWORD *required_size, DWORD flags)
+{
+    struct DeviceInfo *device;
+    DWORD error;
+
+    if (!(device = get_device_info(devinfo, device_data)))
+        return FALSE;
+    error = get_device_property(device, devinfo, device_data, prop_key, prop_type,
+                                prop_buffer, prop_buffer_size, required_size, flags);
+    SetLastError(error);
+    return !error;
+}
+
+BOOL WINAPI SetupDiSetDevicePropertyW(HDEVINFO devinfo, PSP_DEVINFO_DATA device_data,
+                                      const DEVPROPKEY *key, DEVPROPTYPE type,
+                                      const BYTE *buffer, DWORD size, DWORD flags)
+{
+    struct DeviceInfoSet *set = devinfo;
+    struct DeviceInfo *device;
+    HKEY reg_key;
+    DWORD error;
+
+    if (!(device = get_device_info(devinfo, device_data)))
+        return FALSE;
+    if (!key || !is_valid_property_type(type) ||
+        (buffer && !size && type != DEVPROP_TYPE_EMPTY && type != DEVPROP_TYPE_NULL) ||
+        (buffer && size && (type == DEVPROP_TYPE_EMPTY || type == DEVPROP_TYPE_NULL)))
+    {
+        SetLastError(ERROR_INVALID_DATA);
+        return FALSE;
+    }
+    if (size && !buffer)
+    {
+        SetLastError(ERROR_INVALID_USER_BUFFER);
+        return FALSE;
+    }
+    if (flags)
+    {
+        SetLastError(ERROR_INVALID_FLAGS);
+        return FALSE;
+    }
+
+    reg_key = SETUPDI_OpenDevKey(set->HKLM, device, KEY_READ | KEY_WRITE);
+    if (reg_key == INVALID_HANDLE_VALUE)
+        return FALSE;
+    error = set_device_reg_property(reg_key, key, type, buffer, size);
+    RegCloseKey(reg_key);
+    SetLastError(error);
+    return !error;
+}
+#endif
 
 /***********************************************************************
  *		SetupDiGetDeviceRegistryPropertyA (SETUPAPI.@)
