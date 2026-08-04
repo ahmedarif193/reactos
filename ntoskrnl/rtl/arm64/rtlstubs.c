@@ -36,6 +36,18 @@ typedef struct _DISPATCHER_CONTEXT {
 } DISPATCHER_CONTEXT, *PDISPATCHER_CONTEXT;
 #endif
 
+typedef union _RTL_ARM64_NONVOLATILE_REGISTERS
+{
+    UCHAR Buffer[(11 + 8) * sizeof(ULONG64)];
+    struct
+    {
+        ULONG64 GpNvRegs[11];
+        double FpNvRegs[8];
+    };
+} RTL_ARM64_NONVOLATILE_REGISTERS;
+
+VOID NTAPI RtlRestoreContext(_In_ PCONTEXT ContextRecord, _In_opt_ PEXCEPTION_RECORD ExceptionRecord);
+
 PVOID
 NTAPI
 RtlPcToFileHeader(
@@ -627,6 +639,18 @@ RtlVirtualUnwind(
     return NULL;
 }
 
+static VOID RtlpArm64CaptureNonVolatileRegisters(_Out_ RTL_ARM64_NONVOLATILE_REGISTERS *NonVolatileRegisters, _In_ PCONTEXT Context)
+{
+    ULONG Index;
+
+    RtlCopyMemory(NonVolatileRegisters->GpNvRegs, &Context->X19, sizeof(NonVolatileRegisters->GpNvRegs));
+
+    for (Index = 0; Index < RTL_NUMBER_OF(NonVolatileRegisters->FpNvRegs); Index++)
+    {
+        NonVolatileRegisters->FpNvRegs[Index] = Context->V[Index + 8].D[0];
+    }
+}
+
 VOID
 NTAPI
 RtlUnwindEx(
@@ -639,6 +663,7 @@ RtlUnwindEx(
 {
     EXCEPTION_RECORD LocalExceptionRecord;
     DISPATCHER_CONTEXT DispatcherContext;
+    RTL_ARM64_NONVOLATILE_REGISTERS NonVolatileRegisters;
     PEXCEPTION_ROUTINE ExceptionRoutine;
     EXCEPTION_DISPOSITION Disposition;
     PRUNTIME_FUNCTION FunctionEntry;
@@ -679,6 +704,7 @@ RtlUnwindEx(
     DispatcherContext.ContextRecord = &UnwindContext;
     DispatcherContext.HistoryTable = HistoryTable;
     DispatcherContext.TargetPc = (ULONG64)(ULONG_PTR)TargetIp;
+    DispatcherContext.NonVolatileRegisters = NonVolatileRegisters.Buffer;
 
     {
         PKTHREAD Thread = KeGetCurrentThread();
@@ -720,6 +746,7 @@ RtlUnwindEx(
 
         FrameContext = UnwindContext;
         DispatcherContext.ControlPc = LookupPc;
+        RtlpArm64CaptureNonVolatileRegisters(&NonVolatileRegisters, &UnwindContext);
 
         ExceptionRoutine = RtlVirtualUnwind(UNW_FLAG_UHANDLER,
                                             ImageBase,
@@ -793,7 +820,7 @@ RtlUnwindEx(
 
             FrameContext.X[0] = (ULONG64)(ULONG_PTR)ReturnValue;
             *ContextRecord = FrameContext;
-            return;
+            RtlRestoreContext(ContextRecord, ExceptionRecord);
         }
 
         *ContextRecord = UnwindContext;
