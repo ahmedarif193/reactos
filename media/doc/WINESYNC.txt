@@ -273,7 +273,7 @@ base/applications/extrac32          # Synced to Wine-11.14
 base/applications/iexplore          # Synced to Wine-11.14
 base/applications/notepad           # Forked at Wine-20041201
 base/applications/winhlp32          # Synced to Wine-11.14
-base/applications/wordpad           # Synced to WineStaging-1.9.16
+base/applications/wordpad           # Synced to Wine-11.14
 base/applications/write             # Synced to Wine-11.14
 base/services/rpcss                 # Synced to Wine-10.0
 base/services/schedsvc              # Synced to Wine-11.14

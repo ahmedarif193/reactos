@@ -1,17 +1,21 @@
 
-remove_definitions(-D_WIN32_IE=0x600)
-
 list(APPEND SOURCE
     olecallback.c
     print.c
     registry.c
     wordpad.c)
 
-file(GLOB wordpad_rc_deps res/*.*)
-add_rc_deps(rsrc.rc ${wordpad_rc_deps})
-add_executable(wordpad ${SOURCE} rsrc.rc)
+add_rc_deps(wordpad.rc
+    ${CMAKE_CURRENT_SOURCE_DIR}/formatbar.bmp
+    ${CMAKE_CURRENT_SOURCE_DIR}/toolbar.bmp
+    ${CMAKE_CURRENT_SOURCE_DIR}/wordpad.ico
+    ${CMAKE_CURRENT_SOURCE_DIR}/wordpad.manifest
+    ${CMAKE_CURRENT_SOURCE_DIR}/zoom.cur)
+add_rc_deps(rsrc.rc ${CMAKE_CURRENT_SOURCE_DIR}/res/document.ico)
+add_executable(wordpad ${SOURCE} wordpad.rc rsrc.rc)
 set_module_type(wordpad win32gui)
 target_link_libraries(wordpad wine uuid)
+set_wine_module_FIXME(wordpad)
 add_importlibs(wordpad comdlg32 ole32 shell32 user32 gdi32 advapi32 comctl32 msvcrt kernel32 ntdll)
 add_cd_file(TARGET wordpad DESTINATION reactos/system32 FOR all)
 add_cd_file(TARGET wordpad DESTINATION "Program Files/Windows NT/Accessories" FOR all)

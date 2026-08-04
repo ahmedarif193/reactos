@@ -20,19 +20,18 @@
 
 #define COBJMACROS
 
-#define WIN32_NO_STATUS
-#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <richedit.h>
+#include <ole2.h>
 #include <richole.h>
-#include <wine/debug.h>
 
+#include "wine/debug.h"
 #include "wordpad.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(wordpad);
 
 struct IRichEditOleCallbackImpl {
-    const IRichEditOleCallbackVtbl *vtbl;
+    IRichEditOleCallback IRichEditOleCallback_iface;
     IStorage *stg;
     int item_num;
 };
@@ -75,10 +74,9 @@ static HRESULT STDMETHODCALLTYPE RichEditOleCallback_GetNewStorage(
     LPSTORAGE *lplpstg)
 {
     WCHAR name[32];
-    static const WCHAR template[] = {'R','E','O','L','E','_','%','u','\0'};
 
     WINE_TRACE("(%p, %p)\n", This, lplpstg);
-    wsprintfW(name, template, olecallback.item_num++);
+    wsprintfW(name, L"REOLE_%u", olecallback.item_num++);
     return IStorage_CreateStorage(olecallback.stg, name,
                       STGM_READWRITE | STGM_SHARE_EXCLUSIVE | STGM_CREATE,
                       0, 0, lplpstg);
@@ -108,7 +106,7 @@ static HRESULT STDMETHODCALLTYPE RichEditOleCallback_QueryInsertObject(
     LPSTORAGE lpstg,
     LONG cp)
 {
-    WINE_TRACE("(%p, %p, %p, %d)\n", This, lpclsid, lpstg, cp);
+    WINE_TRACE("(%p, %p, %p, %ld)\n", This, lpclsid, lpstg, cp);
     return S_OK;
 }
 
@@ -128,7 +126,7 @@ static HRESULT STDMETHODCALLTYPE RichEditOleCallback_QueryAcceptData(
     BOOL fReally,
     HGLOBAL hMetaPict)
 {
-    WINE_TRACE("(%p, %p, %p, %x, %d, %p)\n",
+    WINE_TRACE("(%p, %p, %p, %lx, %d, %p)\n",
                This, lpdataobj, lpcfFormat, reco, fReally, hMetaPict);
     return S_OK;
 }
@@ -147,7 +145,7 @@ static HRESULT STDMETHODCALLTYPE RichEditOleCallback_GetClipboardData(
     DWORD reco,
     LPDATAOBJECT *lplpdataobj)
 {
-    WINE_TRACE("(%p, %p, %x, %p)\n", This, lpchrg, reco, lplpdataobj);
+    WINE_TRACE("(%p, %p, %lx, %p)\n", This, lpchrg, reco, lplpdataobj);
     return E_NOTIMPL;
 }
 
@@ -157,7 +155,7 @@ static HRESULT STDMETHODCALLTYPE RichEditOleCallback_GetDragDropEffect(
     DWORD grfKeyState,
     LPDWORD pdwEffect)
 {
-    WINE_TRACE("(%p, %d, %x, %p)\n", This, fDrag, grfKeyState, pdwEffect);
+    WINE_TRACE("(%p, %d, %lx, %p)\n", This, fDrag, grfKeyState, pdwEffect);
     if (pdwEffect)
           *pdwEffect = DROPEFFECT_COPY;
     return S_OK;
@@ -197,7 +195,7 @@ struct IRichEditOleCallbackVtbl olecallbackVtbl = {
 };
 
 struct IRichEditOleCallbackImpl olecallback = {
-    &olecallbackVtbl, NULL, 0
+    { &olecallbackVtbl }, NULL, 0
 };
 
 HRESULT setup_richedit_olecallback(HWND hEditorWnd)
@@ -206,6 +204,6 @@ HRESULT setup_richedit_olecallback(HWND hEditorWnd)
           STGM_READWRITE | STGM_SHARE_EXCLUSIVE | STGM_DELETEONRELEASE,
           0, &olecallback.stg);
 
-    SendMessageW(hEditorWnd, EM_SETOLECALLBACK, 0, (LPARAM)&olecallback);
+    SendMessageW(hEditorWnd, EM_SETOLECALLBACK, 0, (LPARAM)&olecallback.IRichEditOleCallback_iface);
     return hr;
 }
