@@ -153,6 +153,8 @@ void acpi_ec_exit (void);
 
 int acpi_fan_init(void);
 void acpi_fan_exit(void);
+int acpi_fan_force_maximum(ACPI_HANDLE handle);
+void acpi_fan_force_all_maximum(void);
 
 
 /* --------------------------------------------------------------------------
@@ -314,6 +316,9 @@ void acpi_system_exit (void);
 #define ACPI_THERMAL_MODE_ACTIVE	0x00
 #define ACPI_THERMAL_MODE_PASSIVE	0x01
 #define ACPI_THERMAL_PATH_POWEROFF	"/sbin/poweroff"
+
+int acpi_thermal_init(void);
+void acpi_thermal_exit(void);
 
 /* Motherboard devices */
 int acpi_motherboard_init(void);
