@@ -1,0 +1,40 @@
+[Version]
+Signature = "$Windows NT$"
+Class = System
+ClassGUID = {4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider = %ReactOS%
+DriverVer = 08/04/2026,1.0.0.0
+
+[ControlFlags]
+ExcludeFromSelect = *
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[Manufacturer]
+%ReactOS% = ReactOS
+
+[ReactOS]
+%IntelPmc.DeviceDesc% = IntelPmc_Inst,ACPI\INT33A1
+
+[IntelPmc_Inst.NT]
+CopyFiles = IntelPmc_CopyFiles
+
+[IntelPmc_CopyFiles]
+intelpmc.sys
+
+[IntelPmc_Inst.NT.Services]
+AddService = INTELPMC,0x00000002,IntelPmc_Service
+
+[IntelPmc_Service]
+DisplayName = %IntelPmc.ServiceDesc%
+ServiceType = 1
+StartType = 3
+ErrorControl = 1
+ServiceBinary = %12%\intelpmc.sys
+LoadOrderGroup = Extended Base
+
+[Strings]
+ReactOS = "ReactOS Project"
+IntelPmc.DeviceDesc = "Intel Power Management Controller"
+IntelPmc.ServiceDesc = "ReactOS Intel Power Management Controller Driver"
