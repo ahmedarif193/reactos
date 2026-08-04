@@ -1334,6 +1334,8 @@ PiInitializeDevNode(
     {
         DeviceNode->BootResources = (PCM_RESOURCE_LIST)IoStatusBlock.Information;
         IopDeviceNodeSetFlag(DeviceNode, DNF_HAS_BOOT_CONFIG);
+        IopResDbEnsureSeeded();
+        IopResDbReserve(DeviceNode, DeviceNode->BootResources, NULL);
     }
     else
     {
@@ -1767,9 +1769,8 @@ IopSendRemoveDevice(IN PDEVICE_OBJECT DeviceObject)
     /* Drivers should never fail a IRP_MN_REMOVE_DEVICE request */
     PiIrpSendRemoveCheckVpb(DeviceObject, IRP_MN_REMOVE_DEVICE);
 
-    /* Release the grant from the DB on the flag path; keep the RESOURCEMAP copy in sync either way. */
-    if (PnpEnableParallelEnum)
-        IopResDbRelease(DeviceNode);
+    /* Keep the owner-aware database and RESOURCEMAP in sync. */
+    IopResDbRelease(DeviceNode);
 
     if (DeviceNode->ResourceList)
     {
@@ -2352,6 +2353,8 @@ PiFakeResourceRebalance(
     if (bootConfig)
     {
         PiSetDevNodeFlag(DeviceNode, DNF_HAS_BOOT_CONFIG);
+        IopResDbRelease(DeviceNode);
+        IopResDbReserve(DeviceNode, bootConfig, NULL);
     }
 
     PiClearDevNodeFlag(DeviceNode, DNF_RESOURCE_REQUIREMENTS_CHANGED);

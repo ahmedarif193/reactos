@@ -1110,8 +1110,7 @@ IopLegacyResourceAllocation(
         return STATUS_NOT_IMPLEMENTED;
     }
 
-    Status = IopFixupResourceListWithRequirements(ResourceRequirements,
-                                                  AllocatedResources);
+    Status = IopFixupResourceListWithRequirements(ResourceRequirements, AllocatedResources, NULL);
     if (!NT_SUCCESS(Status))
     {
         if (Status == STATUS_CONFLICTING_ADDRESSES)

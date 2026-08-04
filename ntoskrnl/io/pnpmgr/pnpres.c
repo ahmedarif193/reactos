@@ -55,6 +55,10 @@ HalpGetMessageRoutingInfo(
 #define IOP_APIC_MAX_GSI          HAL_ACPI_MAX_GSI_PINS
 #endif
 
+static
+BOOLEAN
+IopCheckResourceDescriptor(IN PCM_PARTIAL_RESOURCE_DESCRIPTOR ResDesc, IN PCM_RESOURCE_LIST ResourceList, IN BOOLEAN Silent, OUT OPTIONAL PCM_PARTIAL_RESOURCE_DESCRIPTOR ConflictingDescriptor);
+
 FORCEINLINE
 PIO_RESOURCE_LIST
 IopGetNextResourceList(
@@ -167,27 +171,17 @@ IopConsolidateInterruptDescriptors(
 
 static
 BOOLEAN
-IopCheckDescriptorForConflict(
-    PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc,
-    OPTIONAL PCM_PARTIAL_RESOURCE_DESCRIPTOR ConflictingDescriptor)
+IopCheckDescriptorForConflict(PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc, OPTIONAL PCM_RESOURCE_LIST PendingList, OPTIONAL PCM_PARTIAL_RESOURCE_DESCRIPTOR ConflictingDescriptor, _In_opt_ PDEVICE_NODE DeviceNode)
 {
-    CM_RESOURCE_LIST CmList;
-    NTSTATUS Status;
+    /* Resource assignment must account for boot resources even when the
+     * corresponding device has no driver and therefore never receives an
+     * assigned-resource list. The owner-aware database tracks both kinds. */
+    IopResDbEnsureSeeded();
+    if (IopResDbCheckDescriptor(CmDesc, DeviceNode, ConflictingDescriptor))
+        return TRUE;
 
-    /* The DB path checks conflicts in-memory instead of re-scanning the registry */
-    if (PnpEnableParallelEnum)
-        return IopResDbCheckDescriptor(CmDesc, ConflictingDescriptor);
-
-    CmList.Count = 1;
-    CmList.List[0].InterfaceType = InterfaceTypeUndefined;
-    CmList.List[0].BusNumber = 0;
-    CmList.List[0].PartialResourceList.Version = 1;
-    CmList.List[0].PartialResourceList.Revision = 1;
-    CmList.List[0].PartialResourceList.Count = 1;
-    CmList.List[0].PartialResourceList.PartialDescriptors[0] = *CmDesc;
-
-    Status = IopDetectResourceConflict(&CmList, TRUE, ConflictingDescriptor);
-    if (Status == STATUS_CONFLICTING_ADDRESSES)
+    /* Also protect earlier descriptors in this allocation transaction. */
+    if (PendingList && IopCheckResourceDescriptor(CmDesc, PendingList, TRUE, ConflictingDescriptor))
         return TRUE;
 
     return FALSE;
@@ -195,9 +189,7 @@ IopCheckDescriptorForConflict(
 
 static
 BOOLEAN
-IopFindBusNumberResource(
-    IN PIO_RESOURCE_DESCRIPTOR IoDesc,
-    OUT PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc)
+IopFindBusNumberResource(IN PIO_RESOURCE_DESCRIPTOR IoDesc, IN OPTIONAL PCM_RESOURCE_LIST PendingList, OUT PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc, _In_opt_ PDEVICE_NODE DeviceNode)
 {
     ULONG Start;
     CM_PARTIAL_RESOURCE_DESCRIPTOR ConflictingDesc;
@@ -220,7 +212,7 @@ IopFindBusNumberResource(
         CmDesc->u.BusNumber.Length = IoDesc->u.BusNumber.Length;
         CmDesc->u.BusNumber.Start = Start;
 
-        if (IopCheckDescriptorForConflict(CmDesc, &ConflictingDesc))
+        if (IopCheckDescriptorForConflict(CmDesc, PendingList, &ConflictingDesc, DeviceNode))
         {
             ULONG NextStart = ConflictingDesc.u.BusNumber.Start +
                               ConflictingDesc.u.BusNumber.Length;
@@ -243,9 +235,7 @@ IopFindBusNumberResource(
 
 static
 BOOLEAN
-IopFindMemoryResource(
-    IN PIO_RESOURCE_DESCRIPTOR IoDesc,
-    OUT PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc)
+IopFindMemoryResource(IN PIO_RESOURCE_DESCRIPTOR IoDesc, IN OPTIONAL PCM_RESOURCE_LIST PendingList, OUT PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc, _In_opt_ PDEVICE_NODE DeviceNode)
 {
     ULONGLONG Start;
     CM_PARTIAL_RESOURCE_DESCRIPTOR ConflictingDesc;
@@ -274,7 +264,7 @@ IopFindMemoryResource(
         CmDesc->u.Memory.Length = IoDesc->u.Memory.Length;
         CmDesc->u.Memory.Start.QuadPart = (LONGLONG)Start;
 
-        if (IopCheckDescriptorForConflict(CmDesc, &ConflictingDesc))
+        if (IopCheckDescriptorForConflict(CmDesc, PendingList, &ConflictingDesc, DeviceNode))
         {
             ULONGLONG Alignment = IoDesc->u.Memory.Alignment;
             ULONGLONG ConflictEnd =
@@ -304,9 +294,7 @@ IopFindMemoryResource(
 
 static
 BOOLEAN
-IopFindPortResource(
-    IN PIO_RESOURCE_DESCRIPTOR IoDesc,
-    OUT PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc)
+IopFindPortResource(IN PIO_RESOURCE_DESCRIPTOR IoDesc, IN OPTIONAL PCM_RESOURCE_LIST PendingList, OUT PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc, _In_opt_ PDEVICE_NODE DeviceNode)
 {
     ULONGLONG Start;
     CM_PARTIAL_RESOURCE_DESCRIPTOR ConflictingDesc;
@@ -335,7 +323,7 @@ IopFindPortResource(
         CmDesc->u.Port.Length = IoDesc->u.Port.Length;
         CmDesc->u.Port.Start.QuadPart = (LONGLONG)Start;
 
-        if (IopCheckDescriptorForConflict(CmDesc, &ConflictingDesc))
+        if (IopCheckDescriptorForConflict(CmDesc, PendingList, &ConflictingDesc, DeviceNode))
         {
             ULONGLONG Alignment = IoDesc->u.Port.Alignment;
             ULONGLONG ConflictEnd =
@@ -366,9 +354,7 @@ IopFindPortResource(
 
 static
 BOOLEAN
-IopFindDmaResource(
-    IN PIO_RESOURCE_DESCRIPTOR IoDesc,
-    OUT PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc)
+IopFindDmaResource(IN PIO_RESOURCE_DESCRIPTOR IoDesc, IN OPTIONAL PCM_RESOURCE_LIST PendingList, OUT PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc, _In_opt_ PDEVICE_NODE DeviceNode)
 {
     ULONG Channel;
 
@@ -382,7 +368,7 @@ IopFindDmaResource(
         CmDesc->u.Dma.Channel = Channel;
         CmDesc->u.Dma.Port = 0;
 
-        if (!IopCheckDescriptorForConflict(CmDesc, NULL))
+        if (!IopCheckDescriptorForConflict(CmDesc, PendingList, NULL, DeviceNode))
         {
             DPRINT1("Satisfying DMA requirement with channel 0x%x\n", Channel);
             return TRUE;
@@ -394,9 +380,7 @@ IopFindDmaResource(
 
 static
 BOOLEAN
-IopFindInterruptResource(
-    IN PIO_RESOURCE_DESCRIPTOR IoDesc,
-    OUT PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc)
+IopFindInterruptResource(IN PIO_RESOURCE_DESCRIPTOR IoDesc, IN OPTIONAL PCM_RESOURCE_LIST PendingList, OUT PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc, _In_opt_ PDEVICE_NODE DeviceNode)
 {
     ULONG Vector;
 
@@ -521,7 +505,7 @@ IopFindInterruptResource(
             CmDesc->u.Interrupt.Level = Vector;
             CmDesc->u.Interrupt.Affinity = (KAFFINITY)-1;
 
-            if (!IopCheckDescriptorForConflict(CmDesc, NULL))
+            if (!IopCheckDescriptorForConflict(CmDesc, PendingList, NULL, DeviceNode))
             {
                 DPRINT1("Satisfying interrupt requirement with IRQ 0x%x\n", Vector);
                 return TRUE;
@@ -536,9 +520,7 @@ IopFindInterruptResource(
 }
 
 NTSTATUS NTAPI
-IopFixupResourceListWithRequirements(
-    IN PIO_RESOURCE_REQUIREMENTS_LIST RequirementsList,
-    OUT PCM_RESOURCE_LIST *ResourceList)
+IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST RequirementsList, OUT PCM_RESOURCE_LIST *ResourceList, _In_opt_ PDEVICE_NODE DeviceNode)
 {
     ULONG i, OldCount;
     BOOLEAN AlternateRequired = FALSE;
@@ -733,7 +715,7 @@ IopFixupResourceListWithRequirements(
                 {
                     case CmResourceTypeInterrupt:
                         /* Find an available interrupt */
-                        if (!IopFindInterruptResource(IoDesc, &NewDesc))
+                        if (!IopFindInterruptResource(IoDesc, *ResourceList, &NewDesc, DeviceNode))
                         {
                             DPRINT1("Failed to find an available interrupt resource (0x%x to 0x%x)\n",
                                     IoDesc->u.Interrupt.MinimumVector, IoDesc->u.Interrupt.MaximumVector);
@@ -744,7 +726,7 @@ IopFixupResourceListWithRequirements(
 
                     case CmResourceTypePort:
                         /* Find an available port range */
-                        if (!IopFindPortResource(IoDesc, &NewDesc))
+                        if (!IopFindPortResource(IoDesc, *ResourceList, &NewDesc, DeviceNode))
                         {
                             DPRINT1("Failed to find an available port resource (0x%I64x to 0x%I64x length: 0x%x)\n",
                                     IoDesc->u.Port.MinimumAddress.QuadPart, IoDesc->u.Port.MaximumAddress.QuadPart,
@@ -756,7 +738,7 @@ IopFixupResourceListWithRequirements(
 
                     case CmResourceTypeMemory:
                         /* Find an available memory range */
-                        if (!IopFindMemoryResource(IoDesc, &NewDesc))
+                        if (!IopFindMemoryResource(IoDesc, *ResourceList, &NewDesc, DeviceNode))
                         {
                             DPRINT1("Failed to find an available memory resource (0x%I64x to 0x%I64x length: 0x%x)\n",
                                     IoDesc->u.Memory.MinimumAddress.QuadPart, IoDesc->u.Memory.MaximumAddress.QuadPart,
@@ -768,7 +750,7 @@ IopFixupResourceListWithRequirements(
 
                     case CmResourceTypeBusNumber:
                         /* Find an available bus address range */
-                        if (!IopFindBusNumberResource(IoDesc, &NewDesc))
+                        if (!IopFindBusNumberResource(IoDesc, *ResourceList, &NewDesc, DeviceNode))
                         {
                             DPRINT1("Failed to find an available bus number resource (0x%x to 0x%x length: 0x%x)\n",
                                     IoDesc->u.BusNumber.MinBusNumber, IoDesc->u.BusNumber.MaxBusNumber,
@@ -780,7 +762,7 @@ IopFixupResourceListWithRequirements(
 
                     case CmResourceTypeDma:
                         /* Find an available DMA channel */
-                        if (!IopFindDmaResource(IoDesc, &NewDesc))
+                        if (!IopFindDmaResource(IoDesc, *ResourceList, &NewDesc, DeviceNode))
                         {
                             DPRINT1("Failed to find an available dma resource (0x%x to 0x%x)\n",
                                     IoDesc->u.Dma.MinimumChannel, IoDesc->u.Dma.MaximumChannel);
@@ -890,11 +872,7 @@ IopFixupResourceListWithRequirements(
 
 static
 BOOLEAN
-IopCheckResourceDescriptor(
-    IN PCM_PARTIAL_RESOURCE_DESCRIPTOR ResDesc,
-    IN PCM_RESOURCE_LIST ResourceList,
-    IN BOOLEAN Silent,
-    OUT OPTIONAL PCM_PARTIAL_RESOURCE_DESCRIPTOR ConflictingDescriptor)
+IopCheckResourceDescriptor(IN PCM_PARTIAL_RESOURCE_DESCRIPTOR ResDesc, IN PCM_RESOURCE_LIST ResourceList, IN BOOLEAN Silent, OUT OPTIONAL PCM_PARTIAL_RESOURCE_DESCRIPTOR ConflictingDescriptor)
 {
     ULONG i, ii;
     BOOLEAN Result = FALSE;
@@ -910,48 +888,11 @@ IopCheckResourceDescriptor(
         ResDesc2 = &ResList->PartialDescriptors[0];
         for (ii = 0; ii < ResList->Count; ii++, ResDesc2 = CmiGetNextPartialDescriptor(ResDesc2))
         {
-            /* Skip self-comparison. When IopDetectResourceConflict
-             * walks the registry RESOURCEMAP for already-granted
-             * resources, a device's own previously-recorded entries
-             * are in the list and comparing the candidate descriptor
-             * against its own copy reports a spurious conflict
-             * (e.g. "IRQ (0xa 0xa vs. 0xa 0xa)"). Compare by content
-             * (vector + level for interrupts, base + length for
-             * memory/port). Affinity is intentionally not part of the
-             * equality check because the registry-recorded copy and
-             * the in-memory candidate may differ in affinity but
-             * still describe the same physical resource. */
+            /* Only identical descriptor storage is a self-comparison. Two
+             * separately stored descriptors with the same range represent
+             * two claims and must conflict unless they are shareable. */
             if (ResDesc == ResDesc2)
                 continue;
-            if (ResDesc->Type == ResDesc2->Type)
-            {
-                BOOLEAN SameResource = FALSE;
-                switch (ResDesc->Type)
-                {
-                case CmResourceTypeInterrupt:
-                    SameResource =
-                        (ResDesc->u.Interrupt.Vector == ResDesc2->u.Interrupt.Vector) &&
-                        (ResDesc->u.Interrupt.Level  == ResDesc2->u.Interrupt.Level);
-                    break;
-                case CmResourceTypeMemory:
-                    SameResource =
-                        (ResDesc->u.Memory.Start.QuadPart == ResDesc2->u.Memory.Start.QuadPart) &&
-                        (ResDesc->u.Memory.Length == ResDesc2->u.Memory.Length);
-                    break;
-                case CmResourceTypePort:
-                    SameResource =
-                        (ResDesc->u.Port.Start.QuadPart == ResDesc2->u.Port.Start.QuadPart) &&
-                        (ResDesc->u.Port.Length == ResDesc2->u.Port.Length);
-                    break;
-                case CmResourceTypeDma:
-                    SameResource = (ResDesc->u.Dma.Channel == ResDesc2->u.Dma.Channel);
-                    break;
-                default:
-                    break;
-                }
-                if (SameResource)
-                    continue;
-            }
 
             /* We don't care about shared resources */
             if (ResDesc->ShareDisposition == CmResourceShareShared &&
@@ -1540,12 +1481,10 @@ IopAssignDeviceResources(
    NTSTATUS Status;
    ULONG ListSize;
 
-   /* DB path: drop any prior grant for this node, re-recorded on success below. */
-   if (PnpEnableParallelEnum)
-   {
-       IopResDbEnsureSeeded();
-       IopResDbRelease(DeviceNode);
-   }
+   /* Drop this node's boot or prior assignment claim while it is being
+    * replaced. Other devices' boot claims remain visible to the allocator. */
+   IopResDbEnsureSeeded();
+   IopResDbRelease(DeviceNode);
 
    Status = IopFilterResourceRequirements(DeviceNode);
    if (!NT_SUCCESS(Status))
@@ -1583,17 +1522,8 @@ IopAssignDeviceResources(
        IopConsolidateInterruptDescriptors(DeviceNode->ResourceList);
 #endif
 
-       /* The DB path checks conflicts in-memory; skip the registry re-scan */
-       if (!PnpEnableParallelEnum)
-       {
-           Status = IopDetectResourceConflict(DeviceNode->ResourceList, FALSE, NULL);
-           if (!NT_SUCCESS(Status))
-           {
-               DPRINT1("Boot resources for %wZ cause a resource conflict!\n", &DeviceNode->InstancePath);
-               ExFreePool(DeviceNode->ResourceList);
-               DeviceNode->ResourceList = NULL;
-           }
-       }
+       /* Conflicts with other owners are checked while missing requirements
+        * are allocated below. Existing boot descriptors remain preferred. */
    }
    else
    {
@@ -1609,8 +1539,7 @@ IopAssignDeviceResources(
    HalAdjustResourceList(&DeviceNode->ResourceRequirements);
 
    /* Add resource requirements that aren't in the list we already got */
-   Status = IopFixupResourceListWithRequirements(DeviceNode->ResourceRequirements,
-                                                 &DeviceNode->ResourceList);
+   Status = IopFixupResourceListWithRequirements(DeviceNode->ResourceRequirements, &DeviceNode->ResourceList, DeviceNode);
 
 #if defined(_M_IX86) || defined(_M_AMD64) || defined(_M_ARM64)
    /* Second consolidation pass: now that arbitration has finished
@@ -1629,9 +1558,6 @@ IopAssignDeviceResources(
        goto ByeBye;
    }
 
-   /* IopFixupResourceListWithRequirements should NEVER give us a conflicting list */
-   ASSERT(PnpEnableParallelEnum || IopDetectResourceConflict(DeviceNode->ResourceList, FALSE, NULL) != STATUS_CONFLICTING_ADDRESSES);
-
 Finish:
    Status = IopTranslateDeviceResources(DeviceNode);
    if (!NT_SUCCESS(Status))
@@ -1649,8 +1575,8 @@ Finish:
    if (!NT_SUCCESS(Status))
        goto ByeBye;
 
-   /* Record the grant in the in-memory resource DB */
-   if (PnpEnableParallelEnum && DeviceNode->ResourceList)
+   /* Replace the temporary gap above with the completed grant. */
+   if (DeviceNode->ResourceList)
        IopResDbReserve(DeviceNode, DeviceNode->ResourceList, NULL);
 
    PiSetDevNodeState(DeviceNode, DeviceNodeResourcesAssigned);
@@ -1665,6 +1591,11 @@ ByeBye:
    }
 
    DeviceNode->ResourceListTranslated = NULL;
+
+   /* Failed assignment must not forget firmware resources that the device
+    * can still decode while it remains present. */
+   if (DeviceNode->BootResources)
+       IopResDbReserve(DeviceNode, DeviceNode->BootResources, NULL);
 
    return Status;
 }
