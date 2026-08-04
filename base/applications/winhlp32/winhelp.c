@@ -28,8 +28,6 @@
 #include <stdarg.h>
 #include <stdlib.h>
 
-#define NONAMELESSUNION
-
 #include "windef.h"
 #include "winbase.h"
 #include "wingdi.h"
@@ -59,13 +57,13 @@ static void WINHELP_InitFonts(HWND hWnd)
 {
     WINHELP_WINDOW *win = (WINHELP_WINDOW*) GetWindowLongPtrW(hWnd, 0);
     LOGFONTW logfontlist[] = {
-        {-10, 0, 0, 0, 400, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 32, {'H','e','l','v',0}},
-        {-12, 0, 0, 0, 700, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 32, {'H','e','l','v',0}},
-        {-12, 0, 0, 0, 700, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 32, {'H','e','l','v',0}},
-        {-12, 0, 0, 0, 400, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 32, {'H','e','l','v',0}},
-        {-12, 0, 0, 0, 700, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 32, {'H','e','l','v',0}},
-        {-10, 0, 0, 0, 700, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 32, {'H','e','l','v',0}},
-        { -8, 0, 0, 0, 400, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 32, {'H','e','l','v',0}}};
+        {-10, 0, 0, 0, 400, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 32, L"Helv"},
+        {-12, 0, 0, 0, 700, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 32, L"Helv"},
+        {-12, 0, 0, 0, 700, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 32, L"Helv"},
+        {-12, 0, 0, 0, 400, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 32, L"Helv"},
+        {-12, 0, 0, 0, 700, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 32, L"Helv"},
+        {-10, 0, 0, 0, 700, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 32, L"Helv"},
+        { -8, 0, 0, 0, 400, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 32, L"Helv"}};
 
     static HFONT fonts[ARRAY_SIZE(logfontlist)];
     static BOOL init = FALSE;
@@ -129,7 +127,7 @@ static void WINHELP_SetupText(HWND hTextWnd, WINHELP_WINDOW* win, ULONG relative
             cp = rd.char_pos_rel;
         }
         /* FIXME: else leaking potentially the rd.first_link chain */
-        HeapFree(GetProcessHeap(), 0, rd.data);
+        free(rd.data);
         SendMessageW(hTextWnd, EM_POSFROMCHAR, (WPARAM)&ptl, cp ? cp - 1 : 0);
         pt.x = 0; pt.y = ptl.y;
         SendMessageW(hTextWnd, EM_SETSCROLLPOS, 0, (LPARAM)&pt);
@@ -178,7 +176,7 @@ BOOL WINHELP_GetOpenFileName(LPSTR lpszFile, int len)
     openfilename.nMaxFileTitle     = 0;
     openfilename.lpstrInitialDir   = szDir;
     openfilename.lpstrTitle        = 0;
-    openfilename.Flags             = OFN_EXPLORER | OFN_ENABLESIZING | OFN_HIDEREADONLY | OFN_READONLY;
+    openfilename.Flags             = OFN_ENABLESIZING | OFN_HIDEREADONLY | OFN_READONLY;
     openfilename.nFileOffset       = 0;
     openfilename.nFileExtension    = 0;
     openfilename.lpstrDefExt       = 0;
@@ -274,16 +272,12 @@ HLPFILE_WINDOWINFO*     WINHELP_GetWindowInfo(HLPFILE* hlpfile, LPCSTR name)
         strcpy(mwi.type, "primary");
         strcpy(mwi.name, "main");
         if (hlpfile && hlpfile->lpszTitle[0])
-#ifdef __REACTOS__
-            snprintf(mwi.caption, sizeof(mwi.caption), "%s", hlpfile->lpszTitle);
-#else
         {
-            char        tmp[128];
+            char tmp[40];
             LoadStringA(Globals.hInstance, STID_WINE_HELP, tmp, sizeof(tmp));
-            snprintf(mwi.caption, sizeof(mwi.caption), "%s %s - %s",
-                     hlpfile->lpszTitle, tmp, hlpfile->lpszPath);
+            _snprintf(mwi.caption, sizeof(mwi.caption), "%s %s - %s",
+                      hlpfile->lpszTitle, tmp, hlpfile->lpszPath);
         }
-#endif
         else
             LoadStringA(Globals.hInstance, STID_WINE_HELP, mwi.caption, sizeof(mwi.caption));
         mwi.origin.x = mwi.origin.y = mwi.size.cx = mwi.size.cy = CW_USEDEFAULT;
@@ -299,8 +293,7 @@ HLPFILE_WINDOWINFO*     WINHELP_GetWindowInfo(HLPFILE* hlpfile, LPCSTR name)
  *
  *
  */
-static HLPFILE_WINDOWINFO*     WINHELP_GetPopupWindowInfo(HLPFILE* hlpfile,
-                                                          WINHELP_WINDOW* parent, LPARAM mouse)
+HLPFILE_WINDOWINFO* WINHELP_GetPopupWindowInfo(HLPFILE* hlpfile, WINHELP_WINDOW* parent, LPARAM mouse)
 {
     static      HLPFILE_WINDOWINFO      wi;
 
@@ -322,7 +315,9 @@ static HLPFILE_WINDOWINFO*     WINHELP_GetPopupWindowInfo(HLPFILE* hlpfile,
 
     wi.style = SW_SHOW;
     wi.win_style = WS_POPUP | WS_BORDER;
-    if (parent->page->file->has_popup_color)
+    if (hlpfile->has_popup_color)
+        wi.sr_color = hlpfile->popup_color;
+    else if (parent->page && parent->page->file->has_popup_color)
         wi.sr_color = parent->page->file->popup_color;
     else
         wi.sr_color = parent->info->sr_color;
@@ -360,7 +355,7 @@ static LRESULT  WINHELP_HandleCommand(HWND hSrcWnd, LPARAM lParam)
 
     if (cds->dwData != 0xA1DE505)
     {
-        WINE_FIXME("Wrong magic number (%08lx)\n", cds->dwData);
+        WINE_FIXME("Wrong magic number (%08Ix)\n", cds->dwData);
         return 0;
     }
 
@@ -370,7 +365,7 @@ static LRESULT  WINHELP_HandleCommand(HWND hSrcWnd, LPARAM lParam)
     {
         char*   ptr = (wh->ofsFilename) ? (LPSTR)wh + wh->ofsFilename : NULL;
 
-        WINE_TRACE("Got[%u]: cmd=%u data=%08x fn=%s\n",
+        WINE_TRACE("Got[%u]: cmd=%u data=%08lx fn=%s\n",
                    wh->size, wh->command, wh->data, debugstr_a(ptr));
         switch (wh->command)
         {
@@ -472,7 +467,7 @@ static void WINHELP_DeleteButtons(WINHELP_WINDOW* win)
     {
         DestroyWindow(b->hWnd);
         bp = b->next;
-        HeapFree(GetProcessHeap(), 0, b);
+        free(b);
     }
     win->first_button = NULL;
 }
@@ -505,7 +500,7 @@ static void WINHELP_DeletePageLinks(HLPFILE_PAGE* page)
     for (curr = page->first_link; curr; curr = next)
     {
         next = curr->next;
-        HeapFree(GetProcessHeap(), 0, curr);
+        free(curr);
     }
 }
 
@@ -579,7 +574,7 @@ static void WINHELP_DeleteWindow(WINHELP_WINDOW* win)
     WINHELP_DeleteBackSet(win);
 
     if (win->page) HLPFILE_FreeHlpFile(win->page->file);
-    HeapFree(GetProcessHeap(), 0, win);
+    free(win);
 
     if (bExit) MACRO_Exit();
     if (!Globals.win_list)
@@ -766,7 +761,7 @@ BOOL WINHELP_CreateHelpWindow(WINHELP_WNDPAGE* wpage, int nCmdShow, BOOL remembe
     if (!win)
     {
         /* Initialize WINHELP_WINDOW struct */
-        win = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(WINHELP_WINDOW));
+        win = calloc(1, sizeof(WINHELP_WINDOW));
         if (!win) return FALSE;
         win->next = Globals.win_list;
         Globals.win_list = win;
@@ -1569,12 +1564,12 @@ BOOL WINHELP_CreateIndexWindow(BOOL is_search)
     psp.dwFlags = 0;
     psp.hInstance = Globals.hInstance;
 
-    psp.u.pszTemplate = MAKEINTRESOURCEA(IDD_INDEX);
+    psp.pszTemplate = MAKEINTRESOURCEA(IDD_INDEX);
     psp.lParam = (LPARAM)&id;
     psp.pfnDlgProc = WINHELP_IndexDlgProc;
     psPage[0] = CreatePropertySheetPageA(&psp);
 
-    psp.u.pszTemplate = MAKEINTRESOURCEA(IDD_SEARCH);
+    psp.pszTemplate = MAKEINTRESOURCEA(IDD_SEARCH);
     psp.lParam = (LPARAM)&id;
     psp.pfnDlgProc = WINHELP_SearchDlgProc;
     psPage[1] = CreatePropertySheetPageA(&psp);
@@ -1587,15 +1582,15 @@ BOOL WINHELP_CreateIndexWindow(BOOL is_search)
 
     psHead.pszCaption = buf;
     psHead.nPages = 2;
-    psHead.u2.nStartPage = is_search ? 1 : 0;
+    psHead.nStartPage = is_search ? 1 : 0;
     psHead.hwndParent = Globals.active_win->hMainWnd;
-    psHead.u3.phpage = psPage;
+    psHead.phpage = psPage;
     psHead.dwFlags = PSH_NOAPPLYNOW;
 
     PropertySheetA(&psHead);
     if (id.jump)
     {
-        WINE_TRACE("got %d as an offset\n", id.offset);
+        WINE_TRACE("got %ld as an offset\n", id.offset);
         WINHELP_OpenHelpWindow(HLPFILE_PageByOffset, id.hlpfile, id.offset,
                                Globals.active_win->info, SW_NORMAL);
     }

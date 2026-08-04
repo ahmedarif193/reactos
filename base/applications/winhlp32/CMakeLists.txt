@@ -15,16 +15,17 @@ list(APPEND PCH_SKIP_SOURCE
     ${FLEX_macro_scanner_OUTPUTS}
     string.c)
 
-add_rc_deps(rsrc.rc ${CMAKE_CURRENT_SOURCE_DIR}/res/winhelp.ico)
+add_rc_deps(winhlp32.rc ${CMAKE_CURRENT_SOURCE_DIR}/winhelp.ico)
 
 add_executable(winhlp32
     ${SOURCE}
     ${PCH_SKIP_SOURCE}
+    winhlp32.rc
     rsrc.rc)
 
 set_module_type(winhlp32 win32gui)
 target_link_libraries(winhlp32 wine oldnames)
-add_importlibs(winhlp32 user32 gdi32 shell32 comctl32 comdlg32 msvcrt kernel32 ntdll)
-add_pch(winhlp32 precomp.h "${PCH_SKIP_SOURCE}")
+add_delay_importlibs(winhlp32 shell32 comctl32 comdlg32)
+add_importlibs(winhlp32 user32 gdi32 msvcrt kernel32 ntdll)
 add_cd_file(TARGET winhlp32 DESTINATION reactos FOR all)
 set_wine_module_FIXME(winhlp32) # CORE-5743: No ARRAY_SIZE macro
