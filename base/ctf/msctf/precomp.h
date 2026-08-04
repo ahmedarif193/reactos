@@ -15,6 +15,7 @@
 #include <olectl.h>
 #include <cguid.h>
 #include <msctf.h>
+#include <ctffunc.h>
 #include <msctf_undoc.h>
 #include <tchar.h>
 #include <strsafe.h>
