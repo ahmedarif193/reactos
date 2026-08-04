@@ -795,3 +795,11 @@ pSetupStringTableStringFromIdEx(HSTRING_TABLE hStringTable,
 
     return bResult;
 }
+
+/**************************************************************************
+ * StringTableTrim [SETUPAPI.@]
+ */
+void WINAPI StringTableTrim(HSTRING_TABLE hTable)
+{
+    FIXME("%p\n", hTable);
+}
