@@ -25,6 +25,7 @@ _PVFV *__onexitend;
 
 extern _onexit_t __cdecl __dllonexit (_onexit_t, _PVFV**, _PVFV**);
 extern _onexit_t (__cdecl * __MINGW_IMP_SYMBOL(_onexit)) (_onexit_t func);
+extern intptr_t (__cdecl * __MINGW_IMP_SYMBOL(_get_heap_handle)) (void);
 
 /* INTERNAL: call atexit functions */
 void __call_atexit(void)
@@ -42,7 +43,7 @@ void __call_atexit(void)
         if (*last)
             (**last)();
 
-    free(first);
+    HeapFree((HANDLE)(intptr_t)(* __MINGW_IMP_SYMBOL(_get_heap_handle))(), 0, first);
 
     __onexitbegin = __onexitend = NULL;
 }
@@ -66,7 +67,7 @@ _onexit_t __cdecl _onexit(_onexit_t func)
     if (!__onexitbegin)
     {
         /* First time we are called. Initialize our array */
-        onexitbegin = calloc(1, sizeof(*onexitbegin));
+        onexitbegin = HeapAlloc((HANDLE)(intptr_t)(* __MINGW_IMP_SYMBOL(_get_heap_handle))(), HEAP_ZERO_MEMORY, sizeof(*onexitbegin));
         if (!onexitbegin)
         {
             _unlock(_EXIT_LOCK1);
