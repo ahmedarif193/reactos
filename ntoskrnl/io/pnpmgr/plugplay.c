@@ -942,7 +942,8 @@ IopDeviceStatus(PPLUGPLAY_CONTROL_STATUS_DATA StatusData)
     _SEH2_TRY
     {
         Operation = StatusData->Operation;
-        if (Operation == PNP_SET_DEVICE_STATUS)
+        if (Operation == PNP_SET_DEVICE_STATUS ||
+            Operation == PNP_CLEAR_DEVICE_STATUS)
         {
             DeviceStatus = StatusData->DeviceStatus;
             DeviceProblem = StatusData->DeviceProblem;
@@ -980,11 +981,43 @@ IopDeviceStatus(PPLUGPLAY_CONTROL_STATUS_DATA StatusData)
             break;
 
         case PNP_SET_DEVICE_STATUS:
-            DPRINT1("Set status data is NOT SUPPORTED\n");
+            DPRINT("Set status data: status 0x%08lx problem 0x%08lx\n",
+                   DeviceStatus, DeviceProblem);
+
+            if (DeviceStatus & DN_HAS_PROBLEM)
+            {
+                if (DeviceProblem == 0)
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                    break;
+                }
+
+                PiSetDevNodeProblem(DeviceNode, DeviceProblem);
+            }
+
+            if (DeviceStatus & DN_NO_SHOW_IN_DM)
+                DeviceNode->UserFlags |= DNUF_DONT_SHOW_IN_UI;
+
+            if (DeviceStatus & DN_WILL_BE_REMOVED)
+                DeviceNode->UserFlags |= DNUF_WILL_BE_REMOVED;
             break;
 
         case PNP_CLEAR_DEVICE_STATUS:
-            DPRINT1("FIXME: Clear status data!\n");
+            DPRINT("Clear status data: status 0x%08lx problem 0x%08lx\n",
+                   DeviceStatus, DeviceProblem);
+
+            if (DeviceStatus & DN_HAS_PROBLEM)
+                PiClearDevNodeProblem(DeviceNode);
+
+            if (DeviceStatus & DN_NO_SHOW_IN_DM)
+                DeviceNode->UserFlags &= ~DNUF_DONT_SHOW_IN_UI;
+
+            if (DeviceStatus & DN_WILL_BE_REMOVED)
+                DeviceNode->UserFlags &= ~DNUF_WILL_BE_REMOVED;
+            break;
+
+        default:
+            Status = STATUS_INVALID_PARAMETER;
             break;
     }
 
