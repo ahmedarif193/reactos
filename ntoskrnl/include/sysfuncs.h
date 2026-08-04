@@ -308,6 +308,7 @@
     SVC_(ConvertBetweenAuxiliaryCounterAndPerformanceCounter, 4)
     SVC_(QueueApcThreadEx, 6)
     SVC_(QueueApcThreadEx2, 7)
+    SVC_(RemoveIoCompletionEx, 6)
     SVC_(SetIoCompletionEx, 6)
 #if (NTDDI_VERSION >= NTDDI_WIN7)
     SVC_(QuerySystemInformationEx, 6)
