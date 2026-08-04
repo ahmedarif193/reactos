@@ -170,6 +170,7 @@ list(APPEND IDL_SOURCES
     pstore.idl
     richole.idl
     strmif.idl
+    taskschd.idl
     tom.idl
     tuner.idl
     vmr9.idl
