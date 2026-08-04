@@ -107,7 +107,7 @@
 #@ stdcall CancelIo(long)
 #@ stdcall CancelIoEx(long ptr)
 #@ stdcall CancelSynchronousIo(long)
-#@ stdcall CancelThreadpoolIo(ptr) ntdll.TpCancelAsyncIoOperation
+@ stdcall CancelThreadpoolIo(ptr) ntdll.TpCancelAsyncIoOperation
 #@ stdcall CancelWaitableTimer(long)
 # #@ stub CeipIsOptedIn
 #@ stdcall ChangeTimerQueueTimer(ptr ptr long long)
@@ -146,13 +146,13 @@
 # #@ stub CloseStateChangeNotification
 # #@ stub CloseStateContainer
 # #@ stub CloseStateLock
-#@ stdcall CloseThreadpool(ptr) ntdll.TpReleasePool
-#@ stdcall CloseThreadpoolCleanupGroup(ptr) ntdll.TpReleaseCleanupGroup
-#@ stdcall CloseThreadpoolCleanupGroupMembers(ptr long ptr) ntdll.TpReleaseCleanupGroupMembers
-#@ stdcall CloseThreadpoolIo(ptr) ntdll.TpReleaseIoCompletion
-#@ stdcall CloseThreadpoolTimer(ptr) ntdll.TpReleaseTimer
-#@ stdcall CloseThreadpoolWait(ptr) ntdll.TpReleaseWait
-#@ stdcall CloseThreadpoolWork(ptr) ntdll.TpReleaseWork
+@ stdcall CloseThreadpool(ptr) ntdll.TpReleasePool
+@ stdcall CloseThreadpoolCleanupGroup(ptr) ntdll.TpReleaseCleanupGroup
+@ stdcall CloseThreadpoolCleanupGroupMembers(ptr long ptr) ntdll.TpReleaseCleanupGroupMembers
+@ stdcall CloseThreadpoolIo(ptr) ntdll.TpReleaseIoCompletion
+@ stdcall CloseThreadpoolTimer(ptr) ntdll.TpReleaseTimer
+@ stdcall CloseThreadpoolWait(ptr) ntdll.TpReleaseWait
+@ stdcall CloseThreadpoolWork(ptr) ntdll.TpReleaseWork
 # #@ stub CommitStateAtom
 #@ stdcall CompareFileTime(ptr ptr)
 #@ stdcall CompareObjectHandles(ptr ptr)
@@ -227,12 +227,12 @@
 # #@ stub CreateStateSubcontainer
 #@ stdcall CreateSymbolicLinkW(wstr wstr long)
 #@ stdcall CreateThread(ptr long ptr long long ptr)
-#@ stdcall CreateThreadpool(ptr)
-#@ stdcall CreateThreadpoolCleanupGroup()
-#@ stdcall CreateThreadpoolIo(ptr ptr ptr ptr)
-#@ stdcall CreateThreadpoolTimer(ptr ptr ptr)
-#@ stdcall CreateThreadpoolWait(ptr ptr ptr)
-#@ stdcall CreateThreadpoolWork(ptr ptr ptr)
+@ stdcall CreateThreadpool(ptr)
+@ stdcall CreateThreadpoolCleanupGroup()
+@ stdcall CreateThreadpoolIo(ptr ptr ptr ptr)
+@ stdcall CreateThreadpoolTimer(ptr ptr ptr)
+@ stdcall CreateThreadpoolWait(ptr ptr ptr)
+@ stdcall CreateThreadpoolWork(ptr ptr ptr)
 #@ stdcall CreateTimerQueue()
 #@ stdcall CreateTimerQueueTimer(ptr long ptr ptr long long long)
 #@ stdcall CreateWaitableTimerExW(ptr wstr long long)
@@ -907,7 +907,7 @@
 # #@ stub IsSideloadingPolicyApplied
 # #@ stub IsSyncForegroundPolicyRefresh
 #@ stdcall IsThreadAFiber()
-#@ stdcall IsThreadpoolTimerSet(ptr) ntdll.TpIsTimerSet
+@ stdcall IsThreadpoolTimerSet(ptr) ntdll.TpIsTimerSet
 # #@ stub IsTimeZoneRedirectionEnabled
 @ stdcall IsTokenRestricted(long)
 @ stdcall IsValidAcl(ptr)
@@ -1252,7 +1252,7 @@
 # #@ stub QueryStateContainerCreatedNew
 # #@ stub QueryStateContainerItemInfo
 #@ stdcall QueryThreadCycleTime(long ptr)
-#@ stdcall QueryThreadpoolStackInformation(ptr ptr)
+@ stdcall QueryThreadpoolStackInformation(ptr ptr)
 #@ stdcall QueryUnbiasedInterruptTime(ptr) ntdll.RtlQueryUnbiasedInterruptTime
 #@ stdcall QueryUnbiasedInterruptTimePrecise(ptr)
 #@ stdcall QueryVirtualMemoryInformation(long ptr long ptr long ptr)
@@ -1536,12 +1536,12 @@
 #@ stdcall SetThreadStackGuarantee(ptr)
 @ stdcall SetThreadToken(ptr ptr)
 #@ stdcall SetThreadUILanguage(long)
-#@ stdcall SetThreadpoolStackInformation(ptr ptr)
-#@ stdcall SetThreadpoolThreadMaximum(ptr long) ntdll.TpSetPoolMaxThreads
-#@ stdcall SetThreadpoolThreadMinimum(ptr long) ntdll.TpSetPoolMinThreads
-#@ stdcall SetThreadpoolTimer(ptr ptr long long) ntdll.TpSetTimer
+@ stdcall SetThreadpoolStackInformation(ptr ptr)
+@ stdcall SetThreadpoolThreadMaximum(ptr long) ntdll.TpSetPoolMaxThreads
+@ stdcall SetThreadpoolThreadMinimum(ptr long) ntdll.TpSetPoolMinThreads
+@ stdcall SetThreadpoolTimer(ptr ptr long long) ntdll.TpSetTimer
 # #@ stub SetThreadpoolTimerEx
-#@ stdcall SetThreadpoolWait(ptr long ptr) ntdll.TpSetWait
+@ stdcall SetThreadpoolWait(ptr long ptr) ntdll.TpSetWait
 # #@ stub SetThreadpoolWaitEx
 #@ stdcall SetTimeZoneInformation(ptr)
 @ stdcall SetTokenInformation(long long ptr long)
@@ -1560,7 +1560,7 @@
 #@ stdcall SleepConditionVariableSRW(ptr ptr long long)
 #@ stdcall SleepEx(long long)
 #@ stub SpecialMBToWC
-#@ stdcall StartThreadpoolIo(ptr) ntdll.TpStartAsyncIoOperation
+@ stdcall StartThreadpoolIo(ptr) ntdll.TpStartAsyncIoOperation
 # #@ stub StmAlignSize
 # #@ stub StmAllocateFlat
 # #@ stub StmCoalesceChunks
@@ -1629,7 +1629,7 @@
 @ stdcall StrToIntW(wstr)
 @ stdcall StrTrimA(str str)
 @ stdcall StrTrimW(wstr wstr)
-#@ stdcall SubmitThreadpoolWork(ptr) ntdll.TpPostWork
+@ stdcall SubmitThreadpoolWork(ptr) ntdll.TpPostWork
 # #@ stub SubscribeEdpEnabledStateChange
 # #@ stub SubscribeStateChangeNotification
 #@ stdcall SuspendThread(long)
@@ -1653,7 +1653,7 @@
 #@ stdcall TryAcquireSRWLockExclusive(ptr) ntdll.RtlTryAcquireSRWLockExclusive
 #@ stdcall TryAcquireSRWLockShared(ptr) ntdll.RtlTryAcquireSRWLockShared
 #@ stdcall TryEnterCriticalSection(ptr) ntdll.RtlTryEnterCriticalSection
-#@ stdcall TrySubmitThreadpoolCallback(ptr ptr ptr)
+@ stdcall TrySubmitThreadpoolCallback(ptr ptr ptr)
 #@ stdcall TzSpecificLocalTimeToSystemTime(ptr ptr ptr)
 #@ stub TzSpecificLocalTimeToSystemTimeEx
 #@ stdcall UnhandledExceptionFilter(ptr)
@@ -1738,10 +1738,10 @@
 #@ stdcall WaitForMultipleObjectsEx(long ptr long long long)
 #@ stdcall WaitForSingleObject(long long)
 #@ stdcall WaitForSingleObjectEx(long long long)
-#@ stdcall WaitForThreadpoolIoCallbacks(ptr long) ntdll.TpWaitForIoCompletion
-#@ stdcall WaitForThreadpoolTimerCallbacks(ptr long) ntdll.TpWaitForTimer
-#@ stdcall WaitForThreadpoolWaitCallbacks(ptr long) ntdll.TpWaitForWait
-#@ stdcall WaitForThreadpoolWorkCallbacks(ptr long) ntdll.TpWaitForWork
+@ stdcall WaitForThreadpoolIoCallbacks(ptr long) ntdll.TpWaitForIoCompletion
+@ stdcall WaitForThreadpoolTimerCallbacks(ptr long) ntdll.TpWaitForTimer
+@ stdcall WaitForThreadpoolWaitCallbacks(ptr long) ntdll.TpWaitForWait
+@ stdcall WaitForThreadpoolWorkCallbacks(ptr long) ntdll.TpWaitForWork
 # #@ stub WaitForUserPolicyForegroundProcessingInternal
 #@ stdcall WaitNamedPipeW(wstr long)
 @ stdcall WaitOnAddress(ptr ptr long long) kernel32.WaitOnAddress
