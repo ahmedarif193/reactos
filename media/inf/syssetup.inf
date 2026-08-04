@@ -139,6 +139,7 @@ riched20.dll
 stdole2.tlb
 stdole32.tlb
 mshtml.tlb
+wintypes.dll
 
 [Strings]
 MciExtStr="Software\Microsoft\Windows NT\CurrentVersion\MCI Extensions"
