@@ -1,0 +1,11 @@
+/*
+ * PROJECT:     LiberNT GPIO consumer interface
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:     Windows-compatible GPIO connection IOCTL definitions
+ */
+
+#pragma once
+
+#define IOCTL_GPIO_READ_PINS CTL_CODE(FILE_DEVICE_GPIO, 0x0, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_GPIO_WRITE_PINS CTL_CODE(FILE_DEVICE_GPIO, 0x1, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_GPIO_CONTROLLER_SPECIFIC_FUNCTION CTL_CODE(FILE_DEVICE_GPIO, 0x2, METHOD_BUFFERED, FILE_ANY_ACCESS)
