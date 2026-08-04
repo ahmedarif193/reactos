@@ -3647,6 +3647,21 @@ PdoStartDevice(
             return STATUS_UNSUCCESSFUL;
         }
     }
+
+    PciPdoCacheMsiInfo(DeviceExtension);
+    if (PciGetPowerLevel(DeviceExtension->PciDevice) != PowerDeviceD0)
+    {
+        DEVICE_POWER_STATE PreviousPowerState = PciGetPowerLevel(DeviceExtension->PciDevice);
+        NTSTATUS AcpiPowerStatus;
+
+        DPRINT1("PCI PDO: waking %u:%02x:%02x.%u from D%u before BAR programming\n", Segment, (UCHAR)DeviceExtension->PciDevice->BusNumber, DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber, DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber, PreviousPowerState - PowerDeviceD0);
+        AcpiPowerStatus = PciAcpiSetPower(Segment, DeviceExtension->PciDevice->BusNumber, DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber, DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber, 0);
+        if (!NT_SUCCESS(AcpiPowerStatus) && AcpiPowerStatus != STATUS_NOT_FOUND && AcpiPowerStatus != STATUS_NOT_SUPPORTED)
+            DPRINT1("PCI PDO: ACPI D0 transition failed for %u:%02x:%02x.%u (0x%08lx)\n", Segment, (UCHAR)DeviceExtension->PciDevice->BusNumber, DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber, DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber, AcpiPowerStatus);
+        PciSetPowerLevel(DeviceExtension->PciDevice, PowerDeviceD0);
+        DeviceExtension->Common.DevicePowerState = PowerDeviceD0;
+        PciPdoGetBusData(DeviceExtension, &DeviceExtension->PciDevice->PciConfig, PCI_COMMON_HDR_LENGTH);
+    }
     Status = PciPdoProgramType0Bars(DeviceExtension, RawResList);
     if (!NT_SUCCESS(Status))
         return Status;
