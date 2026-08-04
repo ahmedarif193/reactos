@@ -747,6 +747,15 @@ KiSaveProcessorState(
 
     /* Save control registers */
     KiSaveProcessorControlState(&Prcb->ProcessorState);
+
+    /* KTRAP_FRAME debug slots are valid only for selected trap vectors. The
+     * control-state snapshot is authoritative for a frozen processor. */
+    Prcb->ProcessorState.ContextFrame.Dr0 = Prcb->ProcessorState.SpecialRegisters.KernelDr0;
+    Prcb->ProcessorState.ContextFrame.Dr1 = Prcb->ProcessorState.SpecialRegisters.KernelDr1;
+    Prcb->ProcessorState.ContextFrame.Dr2 = Prcb->ProcessorState.SpecialRegisters.KernelDr2;
+    Prcb->ProcessorState.ContextFrame.Dr3 = Prcb->ProcessorState.SpecialRegisters.KernelDr3;
+    Prcb->ProcessorState.ContextFrame.Dr6 = Prcb->ProcessorState.SpecialRegisters.KernelDr6;
+    Prcb->ProcessorState.ContextFrame.Dr7 = Prcb->ProcessorState.SpecialRegisters.KernelDr7;
 }
 
 VOID
@@ -763,6 +772,14 @@ KiRestoreProcessorState(
                          TrapFrame,
                          CONTEXT_ALL,
                          TrapFrame->PreviousMode);
+
+    /* Preserve debugger edits made to a frozen processor context. */
+    Prcb->ProcessorState.SpecialRegisters.KernelDr0 = Prcb->ProcessorState.ContextFrame.Dr0;
+    Prcb->ProcessorState.SpecialRegisters.KernelDr1 = Prcb->ProcessorState.ContextFrame.Dr1;
+    Prcb->ProcessorState.SpecialRegisters.KernelDr2 = Prcb->ProcessorState.ContextFrame.Dr2;
+    Prcb->ProcessorState.SpecialRegisters.KernelDr3 = Prcb->ProcessorState.ContextFrame.Dr3;
+    Prcb->ProcessorState.SpecialRegisters.KernelDr6 = Prcb->ProcessorState.ContextFrame.Dr6;
+    Prcb->ProcessorState.SpecialRegisters.KernelDr7 = Prcb->ProcessorState.ContextFrame.Dr7;
 
     /* Restore control registers */
     KiRestoreProcessorControlState(&Prcb->ProcessorState);
