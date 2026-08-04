@@ -48,7 +48,8 @@ IUnknown_AddOptions(CComPtr<IUnknown> punk, DWORD dwACLO)
     HRESULT hr = punk->QueryInterface(IID_IACList2, (LPVOID *)&pList);
     if (FAILED(hr))
     {
-        ERR("punk->QueryInterface failed: 0x%08lX\n", hr);
+        if (hr != E_NOINTERFACE)
+            ERR("punk->QueryInterface failed: 0x%08lX\n", hr);
         return hr;
     }
 
