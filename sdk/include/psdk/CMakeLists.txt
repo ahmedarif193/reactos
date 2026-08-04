@@ -194,6 +194,7 @@ list(APPEND SOURCE
     windows.storage.streams.idl
     windows.system.idl
     windows.system.power.idl
+    windows.system.threading.idl
     windowscontracts.idl
     wincodec.idl
     wincodecsdk.idl
