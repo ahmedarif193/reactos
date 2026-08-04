@@ -9,6 +9,7 @@
 
 #include <ntoskrnl.h>
 #include "../kdb.h"
+#include <Zydis/Zydis.h>
 
 /* ReactOS compatibility stuff. */
 #define PARAMS(X) X
@@ -35,7 +36,7 @@ typedef intptr_t bfd_signed_vma;
 #define _(X) X
 #define ATTRIBUTE_UNUSED
 extern int sprintf(char *str, const char *format, ...);
-#define sprintf_vma(BUF, VMA) sprintf(BUF, "0x%IX", VMA)
+#define sprintf_vma(BUF, VMA) sprintf(BUF, "%IX", VMA)
 struct disassemble_info;
 
 int
@@ -48,8 +49,13 @@ KdbpPrintDisasm(void* Ignored, const char* fmt, ...)
   static char buffer[256];
   int ret;
 
+  UNREFERENCED_PARAMETER(Ignored);
+
   va_start(ap, fmt);
-  ret = vsprintf(buffer, fmt, ap);
+  ret = _vsnprintf(buffer, sizeof(buffer) - 1, fmt, ap);
+  if (ret < 0 || ret >= sizeof(buffer))
+    ret = sizeof(buffer) - 1;
+  buffer[ret] = ANSI_NULL;
   KdbPuts(buffer);
   va_end(ap);
   return(ret);
@@ -58,6 +64,8 @@ KdbpPrintDisasm(void* Ignored, const char* fmt, ...)
 int
 KdbpNopPrintDisasm(void* Ignored, const char* fmt, ...)
 {
+  UNREFERENCED_PARAMETER(Ignored);
+  UNREFERENCED_PARAMETER(fmt);
   return(0);
 }
 
@@ -79,21 +87,59 @@ KdbpPrintAddressInCode(uintptr_t Addr, struct disassemble_info * Ignored)
 {
     if (!KdbSymPrintAddress((void*)Addr, NULL))
     {
-      KdbPrintf("<%08x>", Addr);
+      KdbPrintf("<%p>", (PVOID)Addr);
     }
 }
 
 static void
 KdbpNopPrintAddress(uintptr_t Addr, struct disassemble_info * Ignored)
 {
+  UNREFERENCED_PARAMETER(Addr);
+  UNREFERENCED_PARAMETER(Ignored);
 }
 
 #include "dis-asm.h"
 
+static ULONG
+KdbpZydisReadCode(IN ULONG_PTR Address, OUT PUCHAR buffer)
+{
+  ULONG length;
+
+  for (length = 0; length < ZYDIS_MAX_INSTRUCTION_LENGTH; length++)
+    {
+      if ((Address + length < Address) ||
+          !NT_SUCCESS(KdbpSafeReadMemory(&buffer[length], (PVOID)(Address + length), sizeof(buffer[length]))))
+        break;
+    }
+
+  return length;
+}
+
+static BOOLEAN
+KdbpZydisInitDecoder(OUT ZydisDecoder *decoder)
+{
+#ifdef _M_AMD64
+  return ZYAN_SUCCESS(ZydisDecoderInit(decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64));
+#else
+  return ZYAN_SUCCESS(ZydisDecoderInit(decoder, ZYDIS_MACHINE_MODE_LEGACY_32, ZYDIS_STACK_WIDTH_32));
+#endif
+}
+
 LONG
 KdbpGetInstLength(IN ULONG_PTR Address)
 {
+  UCHAR buffer[ZYDIS_MAX_INSTRUCTION_LENGTH];
+  ZydisDecoder decoder;
+  ZydisDecodedInstruction instruction;
+  ULONG length;
   disassemble_info info;
+
+  length = KdbpZydisReadCode(Address, buffer);
+  if (KdbpZydisInitDecoder(&decoder) &&
+      ZYAN_SUCCESS(ZydisDecoderDecodeInstruction(&decoder, NULL, buffer, length, &instruction)))
+    {
+      return instruction.length;
+    }
 
   info.fprintf_func = KdbpNopPrintDisasm;
   info.stream = NULL;
@@ -123,14 +169,35 @@ KdbpGetInstLength(IN ULONG_PTR Address)
 LONG
 KdbpDisassemble(IN ULONG_PTR Address, IN ULONG IntelSyntax)
 {
+  UCHAR buffer[ZYDIS_MAX_INSTRUCTION_LENGTH];
+  CHAR text[256];
+  ZydisDecoder decoder;
+  ZydisDecodedInstruction instruction;
+  ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
+  ZydisFormatter formatter;
+  ULONG length;
   disassemble_info info;
+
+  length = KdbpZydisReadCode(Address, buffer);
+  if (KdbpZydisInitDecoder(&decoder) &&
+      ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, buffer, length, &instruction, operands)) &&
+      ZYAN_SUCCESS(ZydisFormatterInit(&formatter, IntelSyntax ? ZYDIS_FORMATTER_STYLE_INTEL : ZYDIS_FORMATTER_STYLE_ATT)) &&
+      ZYAN_SUCCESS(ZydisFormatterFormatInstruction(&formatter, &instruction, operands, instruction.operand_count_visible, text, sizeof(text), Address, NULL)))
+    {
+      KdbPuts(text);
+      return instruction.length;
+    }
 
   info.fprintf_func = KdbpPrintDisasm;
   info.stream = NULL;
   info.application_data = NULL;
   info.flavour = bfd_target_unknown_flavour;
   info.arch = bfd_arch_i386;
+#ifdef _M_AMD64
+  info.mach = IntelSyntax ? bfd_mach_x86_64_intel_syntax : bfd_mach_x86_64;
+#else
   info.mach = IntelSyntax ? bfd_mach_i386_i386_intel_syntax : bfd_mach_i386_i386;
+#endif
   info.insn_sets = 0;
   info.flags = 0;
   info.read_memory_func = KdbpReadMemory;
@@ -144,6 +211,75 @@ KdbpDisassemble(IN ULONG_PTR Address, IN ULONG IntelSyntax)
   info.disassembler_options = NULL;
 
   return(print_insn_i386(Address, &info));
+}
+
+BOOLEAN
+KdbpDisassemblerSelfTest(VOID)
+{
+  typedef struct _KDB_X86_DISASM_TEST
+  {
+    UCHAR Bytes[8];
+    UCHAR Length;
+  } KDB_X86_DISASM_TEST;
+#ifdef _M_AMD64
+  static const KDB_X86_DISASM_TEST Tests[] =
+  {
+    { { 0x90 }, 1 },
+    { { 0xc3 }, 1 },
+    { { 0x48, 0x89, 0xe5 }, 3 },
+    { { 0x48, 0x83, 0xec, 0x20 }, 4 },
+    { { 0xe8, 0x00, 0x00, 0x00, 0x00 }, 5 },
+    { { 0x0f, 0x1f, 0x44, 0x00, 0x00 }, 5 },
+    { { 0xcd, 0x2d }, 2 },
+    { { 0xc5, 0xf8, 0x77 }, 3 },
+    { { 0x62, 0xf1, 0x6c, 0x48, 0x58, 0xc1 }, 6 },
+    { { 0xf3, 0x0f, 0x1e, 0xfa }, 4 }
+  };
+#else
+  static const KDB_X86_DISASM_TEST Tests[] =
+  {
+    { { 0x90 }, 1 },
+    { { 0xc3 }, 1 },
+    { { 0x89, 0xe5 }, 2 },
+    { { 0x83, 0xec, 0x20 }, 3 },
+    { { 0xe8, 0x00, 0x00, 0x00, 0x00 }, 5 },
+    { { 0x0f, 0x1f, 0x44, 0x00, 0x00 }, 5 },
+    { { 0xcd, 0x2d }, 2 }
+  };
+#endif
+  ULONG Index;
+  LONG Length;
+#ifdef _M_AMD64
+  CHAR Text[64];
+  ZydisDecoder Decoder;
+  ZydisDecodedInstruction Instruction;
+  ZydisDecodedOperand Operands[ZYDIS_MAX_OPERAND_COUNT];
+  ZydisFormatter Formatter;
+#endif
+
+  for (Index = 0; Index < RTL_NUMBER_OF(Tests); Index++)
+  {
+    Length = KdbpGetInstLength((ULONG_PTR)Tests[Index].Bytes);
+    if (Length != Tests[Index].Length)
+    {
+      KdbpPrint("selftest: x86 decoder case %lu returned %ld, expected %u.\n", Index, Length, Tests[Index].Length);
+      return FALSE;
+    }
+  }
+
+#ifdef _M_AMD64
+  /* Exercise the full AVX-512 formatter path, not merely prefix length. */
+  if (!ZYAN_SUCCESS(ZydisDecoderInit(&Decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64)) ||
+      !ZYAN_SUCCESS(ZydisDecoderDecodeFull(&Decoder, Tests[8].Bytes, Tests[8].Length, &Instruction, Operands)) ||
+      !ZYAN_SUCCESS(ZydisFormatterInit(&Formatter, ZYDIS_FORMATTER_STYLE_INTEL)) ||
+      !ZYAN_SUCCESS(ZydisFormatterFormatInstruction(&Formatter, &Instruction, Operands, Instruction.operand_count_visible, Text, sizeof(Text), 0, NULL)) ||
+      strncmp(Text, "vaddps ", sizeof("vaddps ") - 1) != 0)
+  {
+    KdbpPrint("selftest: x86 AVX-512 formatter failed.\n");
+    return FALSE;
+  }
+#endif
+  return TRUE;
 }
 
 /* Print i386 instructions for GDB, the GNU debugger.
@@ -954,7 +1090,7 @@ static const struct dis386 dis386_twobyte[] = {
   { "(bad)",		XX, XX, XX },
   { "(bad)",		XX, XX, XX },
   { "(bad)",		XX, XX, XX },
-  { "(bad)",		XX, XX, XX },
+  { "nopS",		Ev, XX, XX },
   /* 20 */
   { "movL",		Rm, Cm, XX },
   { "movL",		Rm, Dm, XX },
@@ -1236,7 +1372,7 @@ static const unsigned char twobyte_has_modrm[256] = {
   /*       0 1 2 3 4 5 6 7 8 9 a b c d e f        */
   /*       -------------------------------        */
   /* 00 */ 1,1,1,1,0,0,0,0,0,0,0,0,0,1,0,1, /* 0f */
-  /* 10 */ 1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0, /* 1f */
+  /* 10 */ 1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,1, /* 1f */
   /* 20 */ 1,1,1,1,1,0,1,0,1,1,1,1,1,1,1,1, /* 2f */
   /* 30 */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, /* 3f */
   /* 40 */ 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, /* 4f */
