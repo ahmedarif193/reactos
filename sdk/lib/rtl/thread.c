@@ -19,6 +19,51 @@
 /* PRIVATE FUNCTIONS *******************************************************/
 
 NTSTATUS
+WINAPI
+DECLSPEC_HOTPATCH
+RtlFlsGetValue(
+    _In_ ULONG Index,
+    _Out_ PVOID *Data)
+{
+    PRTL_FLS_DATA FlsData = NtCurrentTeb()->FlsData;
+
+    if (!Index || Index >= RTL_FLS_MAXIMUM_AVAILABLE || !FlsData)
+        return STATUS_INVALID_PARAMETER;
+
+    *Data = FlsData->Data[Index];
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+WINAPI
+DECLSPEC_HOTPATCH
+RtlFlsSetValue(
+    _In_ ULONG Index,
+    _In_opt_ PVOID Data)
+{
+    PRTL_FLS_DATA FlsData;
+
+    if (!Index || Index >= RTL_FLS_MAXIMUM_AVAILABLE)
+        return STATUS_INVALID_PARAMETER;
+
+    FlsData = NtCurrentTeb()->FlsData;
+    if (!FlsData)
+    {
+        FlsData = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*FlsData));
+        if (!FlsData)
+            return STATUS_NO_MEMORY;
+
+        NtCurrentTeb()->FlsData = FlsData;
+        RtlAcquirePebLock();
+        InsertTailList(&NtCurrentPeb()->FlsListHead, &FlsData->ListEntry);
+        RtlReleasePebLock();
+    }
+
+    FlsData->Data[Index] = Data;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
 NTAPI
 RtlpCreateUserStack(IN HANDLE ProcessHandle,
                     IN SIZE_T StackReserve OPTIONAL,
