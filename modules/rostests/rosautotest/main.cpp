@@ -14,6 +14,15 @@ WCHAR TestName[MAX_PATH];
 
 CConfiguration Configuration;
 
+static void
+AppendFixedTime(stringstream& Stream, DWORD Milliseconds, DWORD Unit)
+{
+    char Buffer[32];
+
+    snprintf(Buffer, sizeof(Buffer), "%lu.%02lu", Milliseconds / Unit, ((Milliseconds % Unit) * 100) / Unit);
+    Stream << Buffer;
+}
+
 /**
  * Prints the application usage.
  */
@@ -112,8 +121,9 @@ wmain(int argc, wchar_t* argv[])
         TestStartTime = GetTickCount();
         ss << endl
            << endl
-           << "[ROSAUTOTEST] System uptime " << setprecision(2) << fixed;
-        ss << (float)TestStartTime / 1000 << " seconds" << endl;
+           << "[ROSAUTOTEST] System uptime ";
+        AppendFixedTime(ss, TestStartTime, 1000);
+        ss << " seconds" << endl;
         StringOut(ss.str());
 
         /* Report tests startup */
@@ -155,15 +165,18 @@ wmain(int argc, wchar_t* argv[])
         ss.clear();
 
         /* Show the beginning time again */
-        ss << "[ROSAUTOTEST] System uptime at start was " << setprecision(2) << fixed;
-        ss << (float)TestStartTime / 1000 << " seconds" << endl;
+        ss << "[ROSAUTOTEST] System uptime at start was ";
+        AppendFixedTime(ss, TestStartTime, 1000);
+        ss << " seconds" << endl;
 
         /* Show the time now so that we can see how long the tests took */
         TestEndTime = GetTickCount();
         ss << endl
-           << "[ROSAUTOTEST] System uptime at end was " << setprecision(2) << fixed;
-        ss << ((float)TestEndTime / 1000) << " seconds" << endl;
-        ss << "[ROSAUTOTEST] Duration was " << (float)(TestEndTime - TestStartTime) / (60 * 1000);
+           << "[ROSAUTOTEST] System uptime at end was ";
+        AppendFixedTime(ss, TestEndTime, 1000);
+        ss << " seconds" << endl;
+        ss << "[ROSAUTOTEST] Duration was ";
+        AppendFixedTime(ss, TestEndTime - TestStartTime, 60 * 1000);
         ss << " minutes" << endl;
         StringOut(ss.str());
 
