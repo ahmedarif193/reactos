@@ -51,6 +51,11 @@
 
 #include "wine/nsi.h"
 #include "wine/debug.h"
+#ifdef __REACTOS__
+#include <tdiinfo.h>
+#include "ifenum.h"
+#include "route.h"
+#endif
 
 WINE_DEFAULT_DEBUG_CHANNEL(iphlpapi);
 
@@ -128,8 +133,12 @@ static void if_counted_string_copy( WCHAR *dst, unsigned int len, IF_COUNTED_STR
  */
 DWORD WINAPI AddIPAddress(IPAddr Address, IPMask IpMask, DWORD IfIndex, PULONG NTEContext, PULONG NTEInstance)
 {
+#ifdef __REACTOS__
+  return RtlNtStatusToDosError(addIPAddress(Address, IpMask, IfIndex, NTEContext, NTEInstance));
+#else
   FIXME(":stub\n");
   return ERROR_NOT_SUPPORTED;
+#endif
 }
 
 /******************************************************************
@@ -183,9 +192,13 @@ DWORD WINAPI CancelMibChangeNotify2(HANDLE handle)
  */
 DWORD WINAPI CreateIpForwardEntry(PMIB_IPFORWARDROW pRoute)
 {
+#ifdef __REACTOS__
+  return createIpForwardEntry(pRoute);
+#else
   FIXME("(pRoute %p): stub\n", pRoute);
   /* could use SIOCADDRT, not sure I want to */
   return 0;
+#endif
 }
 
 
@@ -390,8 +403,12 @@ DWORD WINAPI CreateSortedAddressPairs( const PSOCKADDR_IN6 src_list, DWORD src_c
  */
 DWORD WINAPI DeleteIPAddress(ULONG NTEContext)
 {
+#ifdef __REACTOS__
+  return RtlNtStatusToDosError(deleteIpAddress(NTEContext));
+#else
   FIXME("(NTEContext %ld): stub\n", NTEContext);
   return ERROR_NOT_SUPPORTED;
+#endif
 }
 
 
@@ -412,9 +429,13 @@ DWORD WINAPI DeleteIPAddress(ULONG NTEContext)
  */
 DWORD WINAPI DeleteIpForwardEntry(PMIB_IPFORWARDROW pRoute)
 {
+#ifdef __REACTOS__
+  return deleteIpForwardEntry(pRoute);
+#else
   FIXME("(pRoute %p): stub\n", pRoute);
   /* could use SIOCDELRT, not sure I want to */
   return 0;
+#endif
 }
 
 
@@ -4117,11 +4138,15 @@ DWORD WINAPI SetIfEntry(PMIB_IFROW pIfRow)
  */
 DWORD WINAPI SetIpForwardEntry(PMIB_IPFORWARDROW pRoute)
 {
+#ifdef __REACTOS__
+  return setIpForwardEntry(pRoute);
+#else
   FIXME("(pRoute %p): stub\n", pRoute);
   /* this is to add a route entry, how's it distinguishable from
      CreateIpForwardEntry?
      could use SIOCADDRT, not sure I want to */
   return 0;
+#endif
 }
 
 
