@@ -338,6 +338,7 @@ FsRtlNotifyCompleteIrp(IN PIRP Irp,
     Stack = IoGetCurrentIrpStackLocation(Irp);
     if (!DataLength || Stack->Parameters.NotifyDirectory.Length < DataLength)
     {
+        NotifyChange->Flags &= ~NOTIFY_IMMEDIATELY;
         Status = STATUS_NOTIFY_ENUM_DIR;
         goto Completion;
     }
