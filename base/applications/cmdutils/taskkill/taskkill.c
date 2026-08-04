@@ -3,8 +3,6 @@
  *
  * Copyright 2008 Andrew Riedi
  * Copyright 2010 Andrew Nguyen
- * Copyright 2020 He Yang
- * Copyright 2025 Hermès Bélusca-Maïto
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -20,6 +18,9 @@
  * License along with this library; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
+#ifdef __REACTOS__
+/* ReactOS extensions copyright 2020 He Yang and 2025 Hermès Bélusca-Maïto. */
+#endif
 
 #include <stdlib.h>
 #include <windows.h>
@@ -35,7 +36,7 @@
 WINE_DEFAULT_DEBUG_CHANNEL(taskkill);
 
 static BOOL force_termination = FALSE;
-static BOOL kill_child_processes = FALSE;
+static BOOL kill_child_processes;
 
 static WCHAR **task_list;
 static unsigned int task_count;
@@ -288,7 +289,7 @@ static void taskkill_message_print_process(int msg, unsigned int index)
     taskkill_message_printfW(msg, pid_str);
 }
 
-#ifndef __REACTOS__
+#ifdef __REACTOS__
 /*
  * Below is the Wine method of terminating child processes.
  * Its problem is that it doesn't terminate them in either a parent-to-children
@@ -306,7 +307,8 @@ static void taskkill_message_print_process(int msg, unsigned int index)
  * Note however that the Wine method (below) has been adapted for
  * ease of usage and comparison with that of ReactOS.
  */
-
+#endif
+#ifndef __REACTOS__
 static BOOL find_parent(unsigned int process_index, unsigned int *parent_index)
 {
     DWORD parent_id = process_list[process_index].p.th32ParentProcessID;
@@ -371,9 +373,7 @@ static void mark_child_processes(void)
  *
  * A PID of zero causes taskkill to warn about the inability to terminate
  * system processes. */
-
 #ifdef __REACTOS__
-
 static BOOL get_pid_creation_time(DWORD pid, FILETIME *time)
 {
     HANDLE process;
@@ -473,7 +473,6 @@ static void mark_child_processes(void)
 }
 
 #endif // __REACTOS__
-
 static int send_close_messages(void)
 {
     const WCHAR *process_name;
@@ -494,7 +493,6 @@ static int send_close_messages(void)
         if (!process_list[i].matched)
             continue;
 #endif
-
         info.pid = process_list[i].p.th32ProcessID;
         process_name = process_list[i].p.szExeFile;
         info.found = FALSE;
@@ -822,7 +820,7 @@ static BOOL process_arguments(int argc, WCHAR *argv[])
 
 #endif // __REACTOS__
 
-int wmain(int argc, WCHAR *argv[])
+int __cdecl wmain(int argc, WCHAR *argv[])
 {
     int search_status = 0, terminate_status;
     unsigned int i;
