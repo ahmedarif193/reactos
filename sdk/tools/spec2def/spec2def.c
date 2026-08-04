@@ -20,6 +20,7 @@ typedef struct _STRING
 typedef struct
 {
     STRING strName;
+    STRING strExportName;
     STRING strTarget;
     int nCallingConvention;
     int nOrdinal;
@@ -660,9 +661,42 @@ PrintName(FILE *fileDest, EXPORT *pexp, PSTRING pstr, int fDeco)
 }
 
 void
+PrintExportName(FILE *fileDest, EXPORT *pexp, int fDeco)
+{
+    if ((giArch != ARCH_X86) &&
+        !((pexp->strExportName.len == 1) && (pexp->strExportName.buf[0] == '@')))
+    {
+        fprintf(fileDest, "%.*s", pexp->strExportName.len, pexp->strExportName.buf);
+    }
+    else
+    {
+        PrintName(fileDest, pexp, &pexp->strName, fDeco);
+    }
+}
+
+int
+ExportNameNeedsRedirect(EXPORT *pexp)
+{
+    const char *pcAt;
+
+    if (giArch == ARCH_X86)
+        return 0;
+
+    if ((pexp->strExportName.len != pexp->strName.len) ||
+        memcmp(pexp->strExportName.buf, pexp->strName.buf, pexp->strName.len))
+    {
+        return 1;
+    }
+
+    pcAt = ScanToken(pexp->strName.buf, '@');
+    return (pexp->strName.buf[0] == '_') && pcAt &&
+           (pcAt < pexp->strName.buf + pexp->strName.len);
+}
+
+void
 OutputLine_def_MS(FILE *fileDest, EXPORT *pexp)
 {
-    PrintName(fileDest, pexp, &pexp->strName, 0);
+    PrintExportName(fileDest, pexp, 0);
 
     if (gbImportLib)
     {
@@ -696,6 +730,11 @@ OutputLine_def_MS(FILE *fileDest, EXPORT *pexp)
             }
         }
     }
+    else if (ExportNameNeedsRedirect(pexp))
+    {
+        fprintf(fileDest, "=");
+        PrintName(fileDest, pexp, &pexp->strName, 1);
+    }
     else if (((pexp->uFlags & FL_STUB) || (pexp->nCallingConvention == CC_STUB)) &&
              (pexp->strName.buf[0] == '?'))
     {
@@ -715,7 +754,7 @@ OutputLine_def_GCC(FILE *fileDest, EXPORT *pexp)
 {
     int bTracing = 0;
     /* Print the function name, with decoration for export libs */
-    PrintName(fileDest, pexp, &pexp->strName, gbImportLib);
+    PrintExportName(fileDest, pexp, gbImportLib);
     DbgPrint("Generating def line for '%.*s'\n", pexp->strName.len, pexp->strName.buf);
 
     /* Check if this is a forwarded export */
@@ -727,6 +766,11 @@ OutputLine_def_GCC(FILE *fileDest, EXPORT *pexp)
         /* print the target name, don't decorate if it is external */
         fprintf(fileDest, pexp->uFlags & FL_IMPSYM ? "==" : "=");
         PrintName(fileDest, pexp, &pexp->strTarget, !fIsExternal);
+    }
+    else if (ExportNameNeedsRedirect(pexp))
+    {
+        fprintf(fileDest, "=");
+        PrintName(fileDest, pexp, &pexp->strName, 1);
     }
     else if (((pexp->uFlags & FL_STUB) || (pexp->nCallingConvention == CC_STUB)) &&
              (pexp->strName.buf[0] == '?'))
@@ -993,6 +1037,8 @@ ParseFile(char* pcStart, FILE *fileDest, unsigned *cExports)
 
         exp.strName.buf = NULL;
         exp.strName.len = 0;
+        exp.strExportName.buf = NULL;
+        exp.strExportName.len = 0;
         exp.strTarget.buf = NULL;
         exp.strTarget.len = 0;
         exp.nArgCount = 0;
@@ -1265,6 +1311,7 @@ ParseFile(char* pcStart, FILE *fileDest, unsigned *cExports)
         /* Get name */
         exp.strName.buf = pc;
         exp.strName.len = TokenLength(pc);
+        exp.strExportName = exp.strName;
         //DbgPrint("Got name: '%.*s'\n", exp.strName.len, exp.strName.buf);
 
         /* Check for autoname */
