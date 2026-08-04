@@ -1621,6 +1621,7 @@
 @ stdcall ZwSetInformationObject(ptr long ptr long)
 @ stdcall ZwSetInformationProcess(ptr long ptr long)
 @ stdcall ZwSetInformationThread(ptr long ptr long)
+@ stdcall -version=0x600+ ZwRemoveIoCompletionEx(ptr ptr long ptr ptr long)
 @ stdcall -version=0x600+ ZwSetIoCompletionEx(ptr ptr long long long long)
 @ stdcall ZwSetSecurityObject(ptr long ptr)
 @ stdcall ZwSetSystemInformation(long ptr long)
@@ -3408,7 +3409,6 @@
 @ stub -arch=arm64 ZwRecoverEnlistment
 @ stub -arch=arm64 ZwRecoverResourceManager
 @ stub -arch=arm64 ZwRecoverTransactionManager
-@ stub -arch=arm64 ZwRemoveIoCompletionEx
 @ stub -arch=arm64 ZwRollbackComplete
 @ stub -arch=arm64 ZwRollbackEnlistment
 @ stub -arch=arm64 ZwRollbackRegistryTransaction
