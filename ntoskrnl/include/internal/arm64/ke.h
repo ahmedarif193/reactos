@@ -710,6 +710,12 @@ KiProcessorFreezeHandler(
     _In_ PKTRAP_FRAME TrapFrame,
     _In_ PKEXCEPTION_FRAME ExceptionFrame);
 
+VOID
+KiSaveVfpState(_Out_ PKARM64_VFP_STATE State);
+
+VOID
+KiRestoreVfpState(_In_ PKARM64_VFP_STATE State);
+
 /* Debug CPU features banner */
 #if DBG
 VOID KiReportCpuFeatures(IN PKPRCB Prcb);
