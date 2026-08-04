@@ -327,13 +327,23 @@ BuspUseAddressResource(
     if (ProducerConsumer == ACPI_PRODUCER && !IsPciRoot)
         return FALSE;
 
-    /* IO_RESOURCE_DESCRIPTOR and the ordinary CM memory descriptor carry a
-     * 32-bit length.  Keep oversized root windows out until MemoryLarge is
-     * available end-to-end; other representable windows remain usable. */
-    if (AddressLength == 0 || AddressLength > MAXULONG)
+    if (AddressLength == 0)
+        return FALSE;
+
+    /* A PCI root may publish an address window larger than the 32-bit Length
+     * field used by ordinary resource descriptors.  Publish a representable
+     * prefix for its children; non-root consumers must remain exact. */
+    if (AddressLength > MAXULONG && !IsPciRoot)
         return FALSE;
 
     return TRUE;
+}
+
+static
+ULONG
+BuspGetAddressResourceLength(_In_ ULONGLONG AddressLength)
+{
+    return (AddressLength > MAXULONG) ? MAXULONG : (ULONG)AddressLength;
 }
 
 static
@@ -1061,7 +1071,7 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->Flags = 0;
                     RequirementDescriptor->u.BusNumber.MinBusNumber = (ULONG)addr64->Address.Minimum;
                     RequirementDescriptor->u.BusNumber.MaxBusNumber = (ULONG)addr64->Address.Maximum;
-                    RequirementDescriptor->u.BusNumber.Length = addr64->Address.AddressLength;
+                    RequirementDescriptor->u.BusNumber.Length = BuspGetAddressResourceLength(addr64->Address.AddressLength);
                 }
                 else if (addr64->ResourceType == ACPI_IO_RANGE)
                 {
@@ -1080,7 +1090,7 @@ BuspCreateRequirementsListFromAcpiResources(
                     if (IsPciRoot)
                         RequirementDescriptor->Flags |= CM_RESOURCE_PORT_WINDOW_DECODE;
                     RequirementDescriptor->u.Port.Alignment = Alignment;
-                    RequirementDescriptor->u.Port.Length = addr64->Address.AddressLength;
+                    RequirementDescriptor->u.Port.Length = BuspGetAddressResourceLength(addr64->Address.AddressLength);
                     RequirementDescriptor->u.Port.MinimumAddress.QuadPart = Minimum;
                     RequirementDescriptor->u.Port.MaximumAddress.QuadPart = Maximum + addr64->Address.AddressLength - 1;
                 }
@@ -1110,7 +1120,7 @@ BuspCreateRequirementsListFromAcpiResources(
                         RequirementDescriptor->Flags |= CM_RESOURCE_MEMORY_WINDOW_DECODE;
 
                     RequirementDescriptor->u.Memory.Alignment = Alignment;
-                    RequirementDescriptor->u.Memory.Length = addr64->Address.AddressLength;
+                    RequirementDescriptor->u.Memory.Length = BuspGetAddressResourceLength(addr64->Address.AddressLength);
                     RequirementDescriptor->u.Memory.MinimumAddress.QuadPart = Minimum;
                     RequirementDescriptor->u.Memory.MaximumAddress.QuadPart = Maximum + addr64->Address.AddressLength - 1;
                 }
@@ -1135,7 +1145,7 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->Flags = 0;
                     RequirementDescriptor->u.BusNumber.MinBusNumber = (ULONG)addrx->Address.Minimum;
                     RequirementDescriptor->u.BusNumber.MaxBusNumber = (ULONG)addrx->Address.Maximum;
-                    RequirementDescriptor->u.BusNumber.Length = addrx->Address.AddressLength;
+                    RequirementDescriptor->u.BusNumber.Length = BuspGetAddressResourceLength(addrx->Address.AddressLength);
                 }
                 else if (addrx->ResourceType == ACPI_IO_RANGE)
                 {
@@ -1154,7 +1164,7 @@ BuspCreateRequirementsListFromAcpiResources(
                     if (IsPciRoot)
                         RequirementDescriptor->Flags |= CM_RESOURCE_PORT_WINDOW_DECODE;
                     RequirementDescriptor->u.Port.Alignment = Alignment;
-                    RequirementDescriptor->u.Port.Length = addrx->Address.AddressLength;
+                    RequirementDescriptor->u.Port.Length = BuspGetAddressResourceLength(addrx->Address.AddressLength);
                     RequirementDescriptor->u.Port.MinimumAddress.QuadPart = Minimum;
                     RequirementDescriptor->u.Port.MaximumAddress.QuadPart = Maximum + addrx->Address.AddressLength - 1;
                 }
@@ -1184,7 +1194,7 @@ BuspCreateRequirementsListFromAcpiResources(
                         RequirementDescriptor->Flags |= CM_RESOURCE_MEMORY_WINDOW_DECODE;
 
                     RequirementDescriptor->u.Memory.Alignment = Alignment;
-                    RequirementDescriptor->u.Memory.Length = addrx->Address.AddressLength;
+                    RequirementDescriptor->u.Memory.Length = BuspGetAddressResourceLength(addrx->Address.AddressLength);
                     RequirementDescriptor->u.Memory.MinimumAddress.QuadPart = Minimum;
                     RequirementDescriptor->u.Memory.MaximumAddress.QuadPart = Maximum + addrx->Address.AddressLength - 1;
                 }
@@ -1698,7 +1708,7 @@ BuspCreateResourceListFromAcpiResources(
                     ResourceDescriptor->ShareDisposition = CmResourceShareShared;
                     ResourceDescriptor->Flags = 0;
                     ResourceDescriptor->u.BusNumber.Start = (ULONG)addr64->Address.Minimum;
-                    ResourceDescriptor->u.BusNumber.Length = addr64->Address.AddressLength;
+                    ResourceDescriptor->u.BusNumber.Length = BuspGetAddressResourceLength(addr64->Address.AddressLength);
                 }
                 else if (addr64->ResourceType == ACPI_IO_RANGE)
                 {
@@ -1709,7 +1719,7 @@ BuspCreateResourceListFromAcpiResources(
                         (addr64->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0);
                     ResourceDescriptor->u.Port.Start.QuadPart =
                         addr64->Address.Minimum + addr64->Address.TranslationOffset;
-                    ResourceDescriptor->u.Port.Length = addr64->Address.AddressLength;
+                    ResourceDescriptor->u.Port.Length = BuspGetAddressResourceLength(addr64->Address.AddressLength);
                     if (IsPciRoot)
                     {
                         ResourceDescriptor->Flags |= CM_RESOURCE_PORT_WINDOW_DECODE;
@@ -1733,7 +1743,7 @@ BuspCreateResourceListFromAcpiResources(
                     }
                     ResourceDescriptor->u.Memory.Start.QuadPart =
                         addr64->Address.Minimum + addr64->Address.TranslationOffset;
-                    ResourceDescriptor->u.Memory.Length = addr64->Address.AddressLength;
+                    ResourceDescriptor->u.Memory.Length = BuspGetAddressResourceLength(addr64->Address.AddressLength);
                     if (IsPciRoot)
                     {
                         ResourceDescriptor->Flags |= CM_RESOURCE_MEMORY_WINDOW_DECODE;
@@ -1759,7 +1769,7 @@ BuspCreateResourceListFromAcpiResources(
                     ResourceDescriptor->ShareDisposition = CmResourceShareShared;
                     ResourceDescriptor->Flags = 0;
                     ResourceDescriptor->u.BusNumber.Start = (ULONG)addrx->Address.Minimum;
-                    ResourceDescriptor->u.BusNumber.Length = addrx->Address.AddressLength;
+                    ResourceDescriptor->u.BusNumber.Length = BuspGetAddressResourceLength(addrx->Address.AddressLength);
                 }
                 else if (addrx->ResourceType == ACPI_IO_RANGE)
                 {
@@ -1770,7 +1780,7 @@ BuspCreateResourceListFromAcpiResources(
                         (addrx->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0);
                     ResourceDescriptor->u.Port.Start.QuadPart =
                         addrx->Address.Minimum + addrx->Address.TranslationOffset;
-                    ResourceDescriptor->u.Port.Length = addrx->Address.AddressLength;
+                    ResourceDescriptor->u.Port.Length = BuspGetAddressResourceLength(addrx->Address.AddressLength);
                     if (IsPciRoot)
                     {
                         ResourceDescriptor->Flags |= CM_RESOURCE_PORT_WINDOW_DECODE;
@@ -1794,7 +1804,7 @@ BuspCreateResourceListFromAcpiResources(
                     }
                     ResourceDescriptor->u.Memory.Start.QuadPart =
                         addrx->Address.Minimum + addrx->Address.TranslationOffset;
-                    ResourceDescriptor->u.Memory.Length = addrx->Address.AddressLength;
+                    ResourceDescriptor->u.Memory.Length = BuspGetAddressResourceLength(addrx->Address.AddressLength);
                     if (IsPciRoot)
                     {
                         ResourceDescriptor->Flags |= CM_RESOURCE_MEMORY_WINDOW_DECODE;

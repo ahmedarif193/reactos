@@ -553,10 +553,7 @@ IopAssignDeviceResources(
 
 NTSTATUS
 NTAPI
-IopFixupResourceListWithRequirements(
-    IN PIO_RESOURCE_REQUIREMENTS_LIST RequirementsList,
-    OUT PCM_RESOURCE_LIST *ResourceList
-);
+IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST RequirementsList, OUT PCM_RESOURCE_LIST *ResourceList, _In_opt_ PDEVICE_NODE DeviceNode);
 
 NTSTATUS
 NTAPI
@@ -676,9 +673,7 @@ IopResDbRelease(
     _In_ PDEVICE_NODE DeviceNode);
 
 BOOLEAN
-IopResDbCheckDescriptor(
-    _In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR Candidate,
-    _Out_opt_ PCM_PARTIAL_RESOURCE_DESCRIPTOR Conflicting);
+IopResDbCheckDescriptor(_In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR Candidate, _In_opt_ PDEVICE_NODE CandidateOwner, _Out_opt_ PCM_PARTIAL_RESOURCE_DESCRIPTOR Conflicting);
 
 BOOLEAN
 IopResDbCheckList(

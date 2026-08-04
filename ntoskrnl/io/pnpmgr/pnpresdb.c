@@ -87,7 +87,20 @@ IopResClassFromType(_In_ UCHAR Type, _Out_ PI_RES_CLASS *Class)
 /* Pairwise overlap test, mirroring IopCheckResourceDescriptor (pnpres.c). */
 static
 BOOLEAN
-IopResDbConflict(_In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR a, _In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR b)
+IopResDbIsAncestorOrSelf(_In_ PDEVICE_NODE Ancestor, _In_ PDEVICE_NODE DeviceNode)
+{
+    while (DeviceNode)
+    {
+        if (DeviceNode == Ancestor)
+            return TRUE;
+        DeviceNode = DeviceNode->Parent;
+    }
+    return FALSE;
+}
+
+static
+BOOLEAN
+IopResDbConflict(_In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR a, _In_opt_ PDEVICE_NODE aOwner, _In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR b, _In_opt_ PDEVICE_NODE bOwner)
 {
     if (a->Type != b->Type)
         return FALSE;
@@ -102,12 +115,13 @@ IopResDbConflict(_In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR a, _In_ PCM_PARTIAL_RESOUR
             UINT64 bStart = (UINT64)b->u.Memory.Start.QuadPart, bEnd = bStart + b->u.Memory.Length;
             if (!(aStart < bEnd && bStart < aEnd))
                 return FALSE;
-            if (((a->Flags & CM_RESOURCE_MEMORY_WINDOW_DECODE) &&
-                 aStart <= bStart && aEnd >= bEnd) ||
-                ((b->Flags & CM_RESOURCE_MEMORY_WINDOW_DECODE) &&
-                 bStart <= aStart && bEnd >= aEnd))
+            if ((a->Flags & CM_RESOURCE_MEMORY_WINDOW_DECODE) && aStart <= bStart && aEnd >= bEnd)
             {
-                return FALSE;
+                return aOwner && bOwner ? !IopResDbIsAncestorOrSelf(aOwner, bOwner) : FALSE;
+            }
+            if ((b->Flags & CM_RESOURCE_MEMORY_WINDOW_DECODE) && bStart <= aStart && bEnd >= aEnd)
+            {
+                return aOwner && bOwner ? !IopResDbIsAncestorOrSelf(bOwner, aOwner) : FALSE;
             }
             return TRUE;
         }
@@ -117,12 +131,13 @@ IopResDbConflict(_In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR a, _In_ PCM_PARTIAL_RESOUR
             UINT64 bStart = (UINT64)b->u.Port.Start.QuadPart, bEnd = bStart + b->u.Port.Length;
             if (!(aStart < bEnd && bStart < aEnd))
                 return FALSE;
-            if (((a->Flags & CM_RESOURCE_PORT_WINDOW_DECODE) &&
-                 aStart <= bStart && aEnd >= bEnd) ||
-                ((b->Flags & CM_RESOURCE_PORT_WINDOW_DECODE) &&
-                 bStart <= aStart && bEnd >= aEnd))
+            if ((a->Flags & CM_RESOURCE_PORT_WINDOW_DECODE) && aStart <= bStart && aEnd >= bEnd)
             {
-                return FALSE;
+                return aOwner && bOwner ? !IopResDbIsAncestorOrSelf(aOwner, bOwner) : FALSE;
+            }
+            if ((b->Flags & CM_RESOURCE_PORT_WINDOW_DECODE) && bStart <= aStart && bEnd >= aEnd)
+            {
+                return aOwner && bOwner ? !IopResDbIsAncestorOrSelf(bOwner, aOwner) : FALSE;
             }
             return TRUE;
         }
@@ -190,7 +205,7 @@ IopResDbReserve(_In_ PDEVICE_NODE DeviceNode, _In_opt_ PCM_RESOURCE_LIST Resourc
                 existing = CONTAINING_RECORD(le, PI_RES_ENTRY, ListEntry);
                 if (existing->Owner == DeviceNode)
                     continue;
-                if (IopResDbConflict(desc, &existing->Desc))
+                if (IopResDbConflict(desc, DeviceNode, &existing->Desc, existing->Owner))
                 {
                     if (Conflict)
                         *Conflict = TRUE;
@@ -211,7 +226,7 @@ IopResDbReserve(_In_ PDEVICE_NODE DeviceNode, _In_opt_ PCM_RESOURCE_LIST Resourc
 
 /* Check one candidate descriptor against the database; returns the conflicting entry. */
 BOOLEAN
-IopResDbCheckDescriptor(_In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR Candidate, _Out_opt_ PCM_PARTIAL_RESOURCE_DESCRIPTOR Conflicting)
+IopResDbCheckDescriptor(_In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR Candidate, _In_opt_ PDEVICE_NODE CandidateOwner, _Out_opt_ PCM_PARTIAL_RESOURCE_DESCRIPTOR Conflicting)
 {
     PI_RES_CLASS cls;
     PLIST_ENTRY le;
@@ -225,7 +240,7 @@ IopResDbCheckDescriptor(_In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR Candidate, _Out_opt
     for (le = IopResBuckets[cls].List.Flink; le != &IopResBuckets[cls].List; le = le->Flink)
     {
         PPI_RES_ENTRY entry = CONTAINING_RECORD(le, PI_RES_ENTRY, ListEntry);
-        if (IopResDbConflict(Candidate, &entry->Desc))
+        if (IopResDbConflict(Candidate, CandidateOwner, &entry->Desc, entry->Owner))
         {
             if (Conflicting)
                 *Conflicting = entry->Desc;
@@ -255,7 +270,7 @@ IopResDbCheckList(_In_opt_ PCM_RESOURCE_LIST ResourceList)
 
         for (j = 0; j < partial->Count; j++, desc = CmiGetNextPartialDescriptor(desc))
         {
-            if (IopResDbCheckDescriptor(desc, NULL))
+            if (IopResDbCheckDescriptor(desc, NULL, NULL))
                 return TRUE;
         }
 

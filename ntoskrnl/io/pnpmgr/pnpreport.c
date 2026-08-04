@@ -339,6 +339,12 @@ IoReportDetectedDevice(
     DeviceNode->BootResources = ResourceList;
     DeviceNode->ResourceRequirements = ResourceRequirements;
 
+    if (DeviceNode->BootResources)
+    {
+        IopResDbEnsureSeeded();
+        IopResDbReserve(DeviceNode, DeviceNode->BootResources, NULL);
+    }
+
     /* Set appropriate flags */
     if (DeviceNode->BootResources)
         IopDeviceNodeSetFlag(DeviceNode, DNF_HAS_BOOT_CONFIG);
@@ -413,11 +419,9 @@ IoReportResourceForDetection(IN PDRIVER_OBJECT DriverObject,
     else
         ResourceList = DriverList;
 
-    /* Look for a resource conflict: DB on the flag path, registry otherwise */
-    if (PnpEnableParallelEnum)
-        Status = IopResDbCheckList(ResourceList) ? STATUS_CONFLICTING_ADDRESSES : STATUS_SUCCESS;
-    else
-        Status = IopDetectResourceConflict(ResourceList, TRUE, NULL);
+    /* The database includes both boot and assigned resources. */
+    IopResDbEnsureSeeded();
+    Status = IopResDbCheckList(ResourceList) ? STATUS_CONFLICTING_ADDRESSES : STATUS_SUCCESS;
 
     if (Status == STATUS_CONFLICTING_ADDRESSES)
     {
