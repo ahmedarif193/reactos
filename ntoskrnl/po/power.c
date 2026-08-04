@@ -101,12 +101,9 @@ PopQueryThermalInterface(
     Stack->Parameters.QueryInterface.Interface = (PINTERFACE)Interface;
     Stack->Parameters.QueryInterface.InterfaceSpecificData = NULL;
     IoSetCompletionRoutine(Irp, PopThermalQueryCompletion, &Event, TRUE, TRUE, TRUE);
-    Status = IoCallDriver(DeviceObject, Irp);
-    if (Status == STATUS_PENDING)
-    {
-        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
-        Status = Irp->IoStatus.Status;
-    }
+    IoCallDriver(DeviceObject, Irp);
+    KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+    Status = Irp->IoStatus.Status;
     IoFreeIrp(Irp);
     ObDereferenceObject(DeviceObject);
     return Status;
