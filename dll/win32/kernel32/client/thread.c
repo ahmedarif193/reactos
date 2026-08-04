@@ -136,7 +136,7 @@ HANDLE
 WINAPI
 DECLSPEC_HOTPATCH
 CreateThread(IN LPSECURITY_ATTRIBUTES lpThreadAttributes,
-             IN DWORD dwStackSize,
+             IN SIZE_T dwStackSize,
              IN LPTHREAD_START_ROUTINE lpStartAddress,
              IN LPVOID lpParameter,
              IN DWORD dwCreationFlags,
@@ -173,7 +173,7 @@ CreateRemoteThreadEx(IN HANDLE hProcess,
 
     return CreateRemoteThread(hProcess,
                               lpThreadAttributes,
-                              (DWORD)dwStackSize,
+                              dwStackSize,
                               lpStartAddress,
                               lpParameter,
                               dwCreationFlags,
@@ -187,7 +187,7 @@ HANDLE
 WINAPI
 CreateRemoteThread(IN HANDLE hProcess,
                    IN LPSECURITY_ATTRIBUTES lpThreadAttributes,
-                   IN DWORD dwStackSize,
+                   IN SIZE_T dwStackSize,
                    IN LPTHREAD_START_ROUTINE lpStartAddress,
                    IN LPVOID lpParameter,
                    IN DWORD dwCreationFlags,
@@ -209,7 +209,7 @@ CreateRemoteThread(IN HANDLE hProcess,
     ULONG ReturnLength;
     SIZE_T ReturnSize;
 
-    DPRINT("CreateRemoteThread: hProcess: %p dwStackSize: %lu lpStartAddress"
+    DPRINT("CreateRemoteThread: hProcess: %p dwStackSize: %Iu lpStartAddress"
            ": %p lpParameter: %p, dwCreationFlags: %lx\n", hProcess,
            dwStackSize, lpStartAddress, lpParameter, dwCreationFlags);
 
