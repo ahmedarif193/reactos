@@ -96,6 +96,7 @@ AddReg=Classes
 11,,mydocs.dll,1
 11,,netprofm.dll,1
 11,,windows.networking.connectivity.dll,1
+11,,windows.networking.hostname.dll,1
 11,,netshell.dll,1
 11,,ntobjshex.dll,1
 11,,objsel.dll,1

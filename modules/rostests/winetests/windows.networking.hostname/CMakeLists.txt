@@ -1,0 +1,8 @@
+add_definitions(-DUSE_WINE_TODOS -D__WINESRC__)
+
+add_executable(windows_networking_hostname_winetest hostname.c testlist.c)
+target_compile_definitions(windows_networking_hostname_winetest PRIVATE WINETEST_USE_DBGSTR_HSTRING)
+target_link_libraries(windows_networking_hostname_winetest uuid)
+set_module_type(windows_networking_hostname_winetest win32cui)
+add_importlibs(windows_networking_hostname_winetest combase msvcrt kernel32)
+add_rostests_file(TARGET windows_networking_hostname_winetest)
