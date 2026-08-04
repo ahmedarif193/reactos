@@ -401,6 +401,7 @@ static void register_browser_class(void)
     browser_class = RegisterClassExW(&wndclass);
 }
 
+#ifndef __REACTOS__
 static BOOL install_wine_gecko(void)
 {
     PROCESS_INFORMATION pi;
@@ -439,6 +440,7 @@ static BOOL install_wine_gecko(void)
 
     return ret;
 }
+#endif
 
 static void set_environment(LPCWSTR gre_path)
 {
@@ -810,7 +812,11 @@ BOOL load_gecko(void)
            && (!strcmp(INSTALL_DATADIR, "/usr/share") ||
                !(gecko_path = find_wine_gecko_unix(L"\\\\?\\unix/usr/share/wine/gecko/" GECKO_DIR_NAME)))
            && !(gecko_path = find_wine_gecko_unix(L"\\\\?\\unix/opt/wine/gecko/" GECKO_DIR_NAME))
+#ifndef __REACTOS__
            && install_wine_gecko())
+#else
+           )
+#endif
             gecko_path = find_wine_gecko_reg();
 
         if(gecko_path) {
