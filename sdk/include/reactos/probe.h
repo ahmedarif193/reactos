@@ -27,6 +27,9 @@ static const LARGE_STRING __emptyLargeString = {0, 0, 0, NULL};
 /*
  * NOTE: Alignment of the pointers is not verified!
  */
+#ifdef _M_ARM64
+#define ProbeForWriteGenericType(Ptr, Type) ProbeForWrite((PVOID)(Ptr), sizeof(Type), 1)
+#else
 #define ProbeForWriteGenericType(Ptr, Type)                                    \
     do {                                                                       \
         if ((ULONG_PTR)(Ptr) + sizeof(Type) - 1 < (ULONG_PTR)(Ptr) ||          \
@@ -35,6 +38,7 @@ static const LARGE_STRING __emptyLargeString = {0, 0, 0, NULL};
         }                                                                      \
         *(volatile Type *)(Ptr) = *(volatile Type *)(Ptr);                     \
     } while (0)
+#endif
 
 #define ProbeForWriteBoolean(Ptr) ProbeForWriteGenericType(Ptr, BOOLEAN)
 #define ProbeForWriteUchar(Ptr) ProbeForWriteGenericType(Ptr, UCHAR)
