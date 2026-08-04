@@ -466,8 +466,7 @@ acpi_thermal_check(
         return;
     }
     celsius_tenths = acpi_thermal_celsius_tenths(temperature);
-    if (reason != 0 || zone->LastTemperature == 0 || (temperature >= zone->LastTemperature && temperature - zone->LastTemperature >= 10) || (temperature < zone->LastTemperature && zone->LastTemperature - temperature >= 10))
-        DPRINT1("ACPI: Thermal [%s] temperature %ld.%luC reason=0x%02lx\n", acpi_device_bid(zone->Device), celsius_tenths / 10, acpi_thermal_fraction(celsius_tenths), reason);
+    DPRINT1("ACPI: Thermal [%s] temperature %ld.%luC reason=0x%02lx\n", acpi_device_bid(zone->Device), celsius_tenths / 10, acpi_thermal_fraction(celsius_tenths), reason);
     zone->LastTemperature = temperature;
 
     if (zone->Critical.Valid && temperature >= zone->Critical.Temperature)
