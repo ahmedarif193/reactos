@@ -88,7 +88,7 @@ Wait_thread_proc(LPVOID Arg)
             break;
     }
 
-    completion_event = Wait->CompletionEvent;
+    completion_event = InterlockedCompareExchangePointer( &Wait->CompletionEvent, NULL, NULL );
     if (completion_event) NtSetEvent( completion_event, NULL );
 
     if (InterlockedIncrement( &Wait->DeleteCount ) == 2 )
@@ -203,51 +203,44 @@ RtlDeregisterWaitEx(HANDLE WaitHandle,
                     HANDLE CompletionEvent)
 {
     PRTLP_WAIT Wait = (PRTLP_WAIT) WaitHandle;
+    HANDLE CompletionHandle = CompletionEvent;
+    BOOLEAN Synchronous = CompletionEvent == INVALID_HANDLE_VALUE;
+    LONG DeleteCount;
     NTSTATUS Status = STATUS_SUCCESS;
 
     //TRACE( "(%p)\n", WaitHandle );
 
-    NtSetEvent( Wait->CancelEvent, NULL );
-    if (Wait->CallbackInProgress)
+    if (Synchronous)
     {
-        if (CompletionEvent != NULL)
-        {
-            if (CompletionEvent == INVALID_HANDLE_VALUE)
-            {
-                Status = NtCreateEvent( &CompletionEvent,
-                                         EVENT_ALL_ACCESS,
-                                         NULL,
-                                         NotificationEvent,
-                                         FALSE );
-
-                if (Status != STATUS_SUCCESS)
-                    return Status;
-
-                (void)InterlockedExchangePointer( &Wait->CompletionEvent, CompletionEvent );
-
-                if (Wait->CallbackInProgress)
-                    NtWaitForSingleObject( CompletionEvent, FALSE, NULL );
-
-                NtClose( CompletionEvent );
-            }
-            else
-            {
-                (void)InterlockedExchangePointer( &Wait->CompletionEvent, CompletionEvent );
-
-                if (Wait->CallbackInProgress)
-                    Status = STATUS_PENDING;
-            }
-        }
-        else
-            Status = STATUS_PENDING;
+        Status = NtCreateEvent( &CompletionHandle, EVENT_ALL_ACCESS, NULL, NotificationEvent, FALSE );
+        if (!NT_SUCCESS(Status))
+            return Status;
     }
 
-    if (InterlockedIncrement( &Wait->DeleteCount ) == 2 )
+    if (CompletionHandle)
+        InterlockedExchangePointer( &Wait->CompletionEvent, CompletionHandle );
+
+    NtSetEvent( Wait->CancelEvent, NULL );
+
+    if (Wait->CallbackInProgress && !Synchronous)
+        Status = STATUS_PENDING;
+
+    DeleteCount = InterlockedIncrement( &Wait->DeleteCount );
+    if (DeleteCount == 2)
     {
         Status = STATUS_SUCCESS;
+        if (CompletionHandle)
+            NtSetEvent( CompletionHandle, NULL );
         NtClose( Wait->CancelEvent );
         RtlFreeHeap( RtlGetProcessHeap(), 0, Wait );
     }
+    else if (Synchronous)
+    {
+        NtWaitForSingleObject( CompletionHandle, FALSE, NULL );
+    }
+
+    if (Synchronous)
+        NtClose( CompletionHandle );
 
     return Status;
 }
