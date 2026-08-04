@@ -584,7 +584,7 @@ NpCreateExistingNamedPipe(IN PNP_FCB Fcb,
         return IoStatus;
     }
 
-    if (Fcb->CurrentInstances >= Fcb->MaximumInstances)
+    if (Fcb->ServerOpenCount >= Fcb->MaximumInstances)
     {
         IoStatus.Status = STATUS_INSTANCE_NOT_AVAILABLE;
         TRACE("Leaving, IoStatus.Status = %lx\n", IoStatus.Status);
