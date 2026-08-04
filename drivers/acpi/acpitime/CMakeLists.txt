@@ -1,0 +1,5 @@
+add_library(acpitime MODULE acpitime.c guid.c acpitime.rc)
+set_module_type(acpitime kernelmodedriver)
+add_importlibs(acpitime ntoskrnl hal)
+add_cd_file(TARGET acpitime DESTINATION reactos/system32/drivers FOR all)
+add_driver_inf(acpitime acpitime.inf)
