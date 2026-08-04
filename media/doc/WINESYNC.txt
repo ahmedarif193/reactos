@@ -317,7 +317,7 @@ gdi32 -
   dll/win32/gdi32/objects/linedda.c     # Synced at 20090410
 
 iphlpapi -
-  modules/rostests/winetests/iphlpapi # Synced to WineStaging-1.9.11
+  modules/rostests/winetests/iphlpapi # Synced to Wine-11.14
 
 kernel32 -
   dll/win32/kernel32/wine/actctx.c               # Synced to wine-3.3
