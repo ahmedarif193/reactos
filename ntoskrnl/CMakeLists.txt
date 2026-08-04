@@ -1,6 +1,24 @@
 
 PROJECT(NTOS)
 
+if(KDBG AND (ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64") AND NOT TARGET kdb_zydis)
+    # KDB must decode the instruction set emitted by current compilers. Build
+    # the pinned Zydis copy already carried by the ARM64EC submodule in its
+    # allocation-free kernel configuration. Define native ReactOS targets here
+    # because the upstream CMake aliases conflict with our clean-target wrapper.
+    set(KDB_ZYDIS_ROOT ${REACTOS_SOURCE_DIR}/submodules/fex-arm64ec/External/zydis)
+    set(KDB_ZYCORE_ROOT ${KDB_ZYDIS_ROOT}/dependencies/zycore)
+
+    add_library(kdb_zycore STATIC ${KDB_ZYCORE_ROOT}/src/API/Memory.c ${KDB_ZYCORE_ROOT}/src/API/Process.c ${KDB_ZYCORE_ROOT}/src/API/Synchronization.c ${KDB_ZYCORE_ROOT}/src/API/Terminal.c ${KDB_ZYCORE_ROOT}/src/API/Thread.c ${KDB_ZYCORE_ROOT}/src/Allocator.c ${KDB_ZYCORE_ROOT}/src/ArgParse.c ${KDB_ZYCORE_ROOT}/src/Bitset.c ${KDB_ZYCORE_ROOT}/src/Format.c ${KDB_ZYCORE_ROOT}/src/List.c ${KDB_ZYCORE_ROOT}/src/String.c ${KDB_ZYCORE_ROOT}/src/Vector.c ${KDB_ZYCORE_ROOT}/src/Zycore.c)
+    target_compile_definitions(kdb_zycore PUBLIC ZYAN_NO_LIBC ZYCORE_STATIC_BUILD)
+    target_include_directories(kdb_zycore PUBLIC ${KDB_ZYCORE_ROOT}/include)
+
+    add_library(kdb_zydis STATIC ${KDB_ZYDIS_ROOT}/src/MetaInfo.c ${KDB_ZYDIS_ROOT}/src/Mnemonic.c ${KDB_ZYDIS_ROOT}/src/Register.c ${KDB_ZYDIS_ROOT}/src/SharedData.c ${KDB_ZYDIS_ROOT}/src/String.c ${KDB_ZYDIS_ROOT}/src/Utils.c ${KDB_ZYDIS_ROOT}/src/Zydis.c ${KDB_ZYDIS_ROOT}/src/Decoder.c ${KDB_ZYDIS_ROOT}/src/DecoderData.c ${KDB_ZYDIS_ROOT}/src/Disassembler.c ${KDB_ZYDIS_ROOT}/src/Formatter.c ${KDB_ZYDIS_ROOT}/src/FormatterBuffer.c ${KDB_ZYDIS_ROOT}/src/FormatterATT.c ${KDB_ZYDIS_ROOT}/src/FormatterBase.c ${KDB_ZYDIS_ROOT}/src/FormatterIntel.c)
+    target_compile_definitions(kdb_zydis PUBLIC ZYAN_NO_LIBC ZYCORE_STATIC_BUILD ZYDIS_STATIC_BUILD ZYDIS_DISABLE_ENCODER ZYDIS_DISABLE_SEGMENT)
+    target_include_directories(kdb_zydis PUBLIC ${KDB_ZYDIS_ROOT}/include ${KDB_ZYCORE_ROOT}/include PRIVATE ${KDB_ZYDIS_ROOT}/src)
+    target_link_libraries(kdb_zydis kdb_zycore)
+endif()
+
 if (CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
     # Enable this again. CORE-17637
     add_compile_options(-Wunused-result)
@@ -58,6 +76,10 @@ set_module_type(ntoskrnl kernel)
 source_group(TREE ${REACTOS_SOURCE_DIR}/ntoskrnl PREFIX "Source Files" FILES ${NTOSKRNL_SOURCE})
 
 target_link_libraries(ntoskrnl ntoskrnl_vista cportlib csq ${PSEH_LIB} arbiter cmlib ntlsalib rtl ${ROSSYM_LIB} libcntpr setjmp wdmguid poguid ioevent)
+
+if(KDBG AND (ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64"))
+    target_link_libraries(ntoskrnl kdb_zydis)
+endif()
 
 if(ARCH STREQUAL "amd64")
     target_link_libraries(ntoskrnl rtl_vista)
