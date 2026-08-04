@@ -139,6 +139,7 @@ riched20.dll
 stdole2.tlb
 stdole32.tlb
 mshtml.tlb
+cryptowinrt.dll
 wintypes.dll
 
 [Strings]
