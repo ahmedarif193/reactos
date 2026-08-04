@@ -200,6 +200,7 @@ endforeach()
 
 list(APPEND SOURCE
     cguid_i.c
+    d2d.c
 #    bthguid.c
 #    cluscfgguids.c
     cmdtreeiid.c

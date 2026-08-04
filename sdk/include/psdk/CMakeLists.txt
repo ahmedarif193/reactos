@@ -50,6 +50,13 @@ list(APPEND SOURCE
     downloadmgr.idl
     drmexternals.idl
     d2d1.idl
+    d2d1_1.idl
+    d2d1_2.idl
+    d2d1_3.idl
+    d2d1effectauthor.idl
+    d2d1effects.idl
+    d2d1effects_1.idl
+    d2d1effects_2.idl
     dwrite.idl
     dwrite_1.idl
     dwrite_2.idl
