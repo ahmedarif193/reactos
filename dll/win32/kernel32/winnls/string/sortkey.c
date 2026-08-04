@@ -355,6 +355,62 @@ static inline int compare_case_weights(int flags, const WCHAR *str1, int len1,
     return len1 - len2;
 }
 
+static inline int compare_special_weights(int flags, const WCHAR *str1, int len1,
+                                          const WCHAR *str2, int len2)
+{
+    unsigned int ce1, ce2, weight1, weight2;
+    int pos1 = 0, pos2 = 0;
+    short key1, key2;
+
+    if ((flags & SORT_STRINGSORT) || (flags & NORM_IGNORESYMBOLS)) return 0;
+
+    for (;;)
+    {
+        while (len1 && *str1 != '-' && *str1 != '\'')
+        {
+            str1++;
+            len1--;
+            pos1++;
+        }
+        while (len2 && *str2 != '-' && *str2 != '\'')
+        {
+            str2++;
+            len2--;
+            pos2++;
+        }
+
+        if (!len1 || !len2) return !!len1 - !!len2;
+
+        key1 = -pos1 - 1;
+        key2 = -pos2 - 1;
+        if ((unsigned char)(key1 >> 8) != (unsigned char)(key2 >> 8))
+            return (unsigned char)(key1 >> 8) - (unsigned char)(key2 >> 8);
+        if ((unsigned char)key1 != (unsigned char)key2)
+            return (unsigned char)key1 - (unsigned char)key2;
+
+        ce1 = collation_table[collation_table[*str1 >> 8] + (*str1 & 0xff)];
+        ce2 = collation_table[collation_table[*str2 >> 8] + (*str2 & 0xff)];
+        if (ce1 != (unsigned int)-1 && ce2 != (unsigned int)-1)
+        {
+            if ((weight1 = ce1 >> 16) != (weight2 = ce2 >> 16)) return weight1 - weight2;
+            weight1 = ((ce1 >> 8) & 0xff) << 3;
+            weight2 = ((ce2 >> 8) & 0xff) << 3;
+            if (!(flags & NORM_IGNORECASE))
+            {
+                weight1 |= (ce1 >> 4) & 0x0f;
+                weight2 |= (ce2 >> 4) & 0x0f;
+            }
+            if (weight1 != weight2) return weight1 - weight2;
+        }
+        else if (*str1 != *str2) return *str1 - *str2;
+
+        str1++;
+        str2++;
+        len1--;
+        len2--;
+    }
+}
+
 int wine_compare_string(int flags, const WCHAR *str1, int len1,
                         const WCHAR *str2, int len2)
 {
@@ -367,6 +423,8 @@ int wine_compare_string(int flags, const WCHAR *str1, int len1,
             ret = compare_diacritic_weights(flags, str1, len1, str2, len2);
         if (!ret && !(flags & NORM_IGNORECASE))
             ret = compare_case_weights(flags, str1, len1, str2, len2);
+        if (!ret)
+            ret = compare_special_weights(flags, str1, len1, str2, len2);
     }
     return ret;
 }
