@@ -9,7 +9,7 @@ list(APPEND SOURCE
     url.c)
 
 add_executable(urlmon_winetest ${SOURCE})
-target_compile_definitions(urlmon_winetest PRIVATE USE_WINE_TODOS)
+target_compile_definitions(urlmon_winetest PRIVATE USE_WINE_TODOS WINETEST_WAIT_CHILD_PROCESS_INFO)
 target_link_libraries(urlmon_winetest uuid winetestlib)
 target_include_directories(urlmon_winetest BEFORE PRIVATE ${REACTOS_SOURCE_DIR}/sdk/include/wine)
 set_module_type(urlmon_winetest win32cui)
