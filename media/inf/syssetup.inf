@@ -143,6 +143,7 @@ stdole32.tlb
 mshtml.tlb
 cryptowinrt.dll
 threadpoolwinrt.dll
+windows.graphics.dll
 wintypes.dll
 
 [Strings]
