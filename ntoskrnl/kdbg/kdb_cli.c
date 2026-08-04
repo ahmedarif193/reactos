@@ -2132,12 +2132,16 @@ static KDB_TYPE_FIELD KdbFieldsKthread[] =
     KDB_FIELD(KTHREAD, WaitBlockList, "_KWAIT_BLOCK*", KdbFieldPointer),
     KDB_FIELD(KTHREAD, Teb, "_TEB*", KdbFieldPointer),
     KDB_FIELD(KTHREAD, State, "UCHAR", KdbFieldHex),
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
     KDB_FIELD(KTHREAD, QueuePriority, "LONG", KdbFieldSigned),
+#endif
     KDB_FIELD(KTHREAD, Process, "_KPROCESS*", KdbFieldPointer),
     KDB_FIELD(KTHREAD, UserAffinity, "KAFFINITY", KdbFieldHex),
     KDB_FIELD(KTHREAD, BasePriority, "CHAR", KdbFieldSigned),
     KDB_FIELD(KTHREAD, Affinity, "KAFFINITY", KdbFieldHex),
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
     KDB_FIELD(KTHREAD, WaitBlockCount, "UCHAR", KdbFieldHex),
+#endif
     KDB_FIELD(KTHREAD, WaitReason, "UCHAR", KdbFieldHex),
     KDB_FIELD(KTHREAD, SuspendCount, "CHAR", KdbFieldSigned),
     KDB_FIELD(KTHREAD, KernelTime, "ULONG", KdbFieldHex),
@@ -4438,6 +4442,7 @@ KdbpGetThreadLocation(IN PETHREAD Thread, IN PETHREAD Snapshot, OUT PULONG_PTR S
 static VOID
 KdbpPrintThreadWaitBlocks(IN PETHREAD Thread)
 {
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
     ULONG Count = min((ULONG)Thread->Tcb.WaitBlockCount, 64UL);
     ULONG Index;
     PKWAIT_BLOCK WaitBlock = Thread->Tcb.WaitBlockList;
@@ -4458,6 +4463,35 @@ KdbpPrintThreadWaitBlocks(IN PETHREAD Thread)
     }
     if (Thread->Tcb.WaitBlockCount > Count)
         KdbpPrint("  Wait blocks:     truncated at %lu entries\n", Count);
+#else
+    PKWAIT_BLOCK FirstWaitBlock = Thread->Tcb.WaitBlockList;
+    PKWAIT_BLOCK WaitBlock = FirstWaitBlock;
+    ULONG Index;
+
+    if (WaitBlock == NULL)
+        return;
+
+    for (Index = 0; Index < 64; Index++)
+    {
+        KWAIT_BLOCK Block;
+
+        if (!NT_SUCCESS(KdbpSafeReadMemory(&Block, WaitBlock, sizeof(Block))))
+        {
+            KdbpPrint("  Wait[%lu]:       unreadable at %p\n", Index, WaitBlock);
+            return;
+        }
+        KdbpPrint("  Wait[%lu]:       block %p object %p key 0x%x type %u state %u\n", Index, WaitBlock, Block.Object, Block.WaitKey, Block.WaitType, Block.BlockState);
+        WaitBlock = Block.NextWaitBlock;
+        if (WaitBlock == FirstWaitBlock)
+            return;
+        if (WaitBlock == NULL)
+        {
+            KdbpPrint("  Wait blocks:     null link after %lu entries\n", Index + 1);
+            return;
+        }
+    }
+    KdbpPrint("  Wait blocks:     truncated at %lu entries\n", Index);
+#endif
 }
 
 /*!\brief Lists threads or switches to another thread context.
@@ -4646,18 +4680,25 @@ KdbpCmdThread(ULONG Argc, PCHAR Argv[])
 #define KDB_THREAD_NPX_FORMAT
 #define KDB_THREAD_NPX_ARGUMENTS
 #endif
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
+#define KDB_THREAD_PRIORITY_FORMAT "  Priority:        current %d, base %d, queue %ld\n"
+#define KDB_THREAD_WAIT_FORMAT "  Wait:            %s (%u), status %p, blocks %u @ %p\n"
+#else
+#define KDB_THREAD_PRIORITY_FORMAT "  Priority:        current %d, base %d\n"
+#define KDB_THREAD_WAIT_FORMAT "  Wait:            %s (%u), status %p, blocks @ %p\n"
+#endif
         KdbpPrint("%s"
                   "  ETHREAD:         %p\n"
                   "  CID:             %p.%p\n"
                   "  State:           %s (0x%x), CPU %ld\n"
-                  "  Priority:        current %d, base %d, queue %ld\n"
+                  KDB_THREAD_PRIORITY_FORMAT
                   "  Affinity:        0x%Ix, user 0x%Ix\n"
                   "  TEB:             %p\n"
                   "  Start Address:   %p\n"
                   "  Win32 Start:     %p\n"
                   "  Create Time:     0x%I64x\n"
                   "  CPU Time:        kernel %I64u, user %I64u\n"
-                  "  Wait:            %s (%u), status %p, blocks %u @ %p\n"
+                  KDB_THREAD_WAIT_FORMAT
                   "  Suspend/Freeze:  %d / %d\n"
                   "  Initial Stack:   %p\n"
                   "  Stack Limit:     %p\n"
@@ -4675,7 +4716,9 @@ KdbpCmdThread(ULONG Argc, PCHAR Argv[])
                   KdbpFindThreadProcessor(Thread, NULL),
                   ThreadSnapshot.Tcb.Priority,
                   ThreadSnapshot.Tcb.BasePriority,
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
                   ThreadSnapshot.Tcb.QueuePriority,
+#endif
                   ThreadSnapshot.Tcb.Affinity,
                   ThreadSnapshot.Tcb.UserAffinity,
                   ThreadSnapshot.Tcb.Teb,
@@ -4687,7 +4730,9 @@ KdbpCmdThread(ULONG Argc, PCHAR Argv[])
                   KdbpWaitReasonName(ThreadSnapshot.Tcb.WaitReason),
                   ThreadSnapshot.Tcb.WaitReason,
                   (PVOID)ThreadSnapshot.Tcb.WaitStatus,
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
                   ThreadSnapshot.Tcb.WaitBlockCount,
+#endif
                   ThreadSnapshot.Tcb.WaitBlockList,
                   ThreadSnapshot.Tcb.SuspendCount,
                   ThreadSnapshot.Tcb.FreezeCount,
@@ -4702,6 +4747,8 @@ KdbpCmdThread(ULONG Argc, PCHAR Argv[])
                   KDB_THREAD_NPX_ARGUMENTS);
 #undef KDB_THREAD_NPX_FORMAT
 #undef KDB_THREAD_NPX_ARGUMENTS
+#undef KDB_THREAD_PRIORITY_FORMAT
+#undef KDB_THREAD_WAIT_FORMAT
 
         if (ThreadSnapshot.Terminated)
         {
