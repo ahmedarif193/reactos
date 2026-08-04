@@ -15,6 +15,10 @@ typedef struct _ACPITIME_WORK_CONTEXT
     PACPITIME_DEVICE_EXTENSION DeviceExtension;
 } ACPITIME_WORK_CONTEXT, *PACPITIME_WORK_CONTEXT;
 
+C_ASSERT(sizeof(ACPITIME_TIME_INFORMATION) == 16);
+
+static BOOLEAN AcpiTimeValidateClock(_In_ PACPITIME_TIME_INFORMATION Time, _In_ BOOLEAN RequireValid);
+
 static
 NTSTATUS
 NTAPI
@@ -134,7 +138,7 @@ AcpiTimeFirstArgumentValid(
     ULONG HeaderLength = FIELD_OFFSET(ACPI_EVAL_OUTPUT_BUFFER, Argument);
     ULONG ArgumentLength;
 
-    if (OutputBuffer->Count == 0 || OutputBuffer->Length < HeaderLength || OutputBuffer->Length > OutputLength)
+    if (OutputBuffer->Count == 0 || OutputBuffer->Length < HeaderLength + ACPI_METHOD_ARGUMENT_LENGTH(0) || OutputBuffer->Length > OutputLength)
         return FALSE;
     ArgumentLength = ACPI_METHOD_ARGUMENT_LENGTH_FROM_ARGUMENT(&OutputBuffer->Argument[0]);
     return ArgumentLength <= OutputBuffer->Length - HeaderLength;
@@ -172,6 +176,61 @@ AcpiTimeEvaluateIntegerArgument(
     InputBuffer.MethodNameAsUlong = MethodName;
     InputBuffer.IntegerArgument = Argument;
     return AcpiTimeEvaluate(DeviceExtension, &InputBuffer, sizeof(InputBuffer), OutputBuffer, OutputLength);
+}
+
+static
+NTSTATUS
+AcpiTimeEvaluateTwoIntegerArguments(
+    _In_ PACPITIME_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG MethodName,
+    _In_ ULONG FirstValue,
+    _In_ ULONG SecondValue,
+    _Outptr_result_bytebuffer_(*OutputLength) PACPI_EVAL_OUTPUT_BUFFER *OutputBuffer,
+    _Out_ PULONG OutputLength)
+{
+    ULONG InputStorage[(FIELD_OFFSET(ACPI_EVAL_INPUT_BUFFER_COMPLEX, Argument) + 2 * ACPI_METHOD_ARGUMENT_LENGTH(sizeof(ULONG)) + sizeof(ULONG) - 1) / sizeof(ULONG)];
+    PACPI_EVAL_INPUT_BUFFER_COMPLEX InputBuffer = (PVOID)InputStorage;
+    PACPI_METHOD_ARGUMENT Argument;
+    ULONG InputLength = sizeof(InputStorage);
+
+    RtlZeroMemory(InputStorage, sizeof(InputStorage));
+    InputBuffer->Signature = ACPI_EVAL_INPUT_BUFFER_COMPLEX_SIGNATURE;
+    InputBuffer->MethodNameAsUlong = MethodName;
+    InputBuffer->Size = InputLength - FIELD_OFFSET(ACPI_EVAL_INPUT_BUFFER_COMPLEX, Argument);
+    InputBuffer->ArgumentCount = 2;
+    Argument = InputBuffer->Argument;
+    ACPI_METHOD_SET_ARGUMENT_INTEGER(Argument, FirstValue);
+    Argument = ACPI_METHOD_NEXT_ARGUMENT(Argument);
+    ACPI_METHOD_SET_ARGUMENT_INTEGER(Argument, SecondValue);
+    return AcpiTimeEvaluate(DeviceExtension, InputBuffer, InputLength, OutputBuffer, OutputLength);
+}
+
+static
+NTSTATUS
+AcpiTimeEvaluateBufferArgument(
+    _In_ PACPITIME_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG MethodName,
+    _In_reads_bytes_(BufferLength) PVOID Buffer,
+    _In_ USHORT BufferLength,
+    _Outptr_result_bytebuffer_(*OutputLength) PACPI_EVAL_OUTPUT_BUFFER *OutputBuffer,
+    _Out_ PULONG OutputLength)
+{
+    ULONG InputStorage[(FIELD_OFFSET(ACPI_EVAL_INPUT_BUFFER_COMPLEX, Argument) + ACPI_METHOD_ARGUMENT_LENGTH(sizeof(ACPITIME_TIME_INFORMATION)) + sizeof(ULONG) - 1) / sizeof(ULONG)];
+    PACPI_EVAL_INPUT_BUFFER_COMPLEX InputBuffer = (PVOID)InputStorage;
+    PACPI_METHOD_ARGUMENT Argument;
+    ULONG InputLength;
+
+    if (BufferLength > sizeof(ACPITIME_TIME_INFORMATION))
+        return STATUS_INVALID_BUFFER_SIZE;
+    InputLength = FIELD_OFFSET(ACPI_EVAL_INPUT_BUFFER_COMPLEX, Argument) + ACPI_METHOD_ARGUMENT_LENGTH(BufferLength);
+    RtlZeroMemory(InputStorage, sizeof(InputStorage));
+    InputBuffer->Signature = ACPI_EVAL_INPUT_BUFFER_COMPLEX_SIGNATURE;
+    InputBuffer->MethodNameAsUlong = MethodName;
+    InputBuffer->Size = InputLength - FIELD_OFFSET(ACPI_EVAL_INPUT_BUFFER_COMPLEX, Argument);
+    InputBuffer->ArgumentCount = 1;
+    Argument = InputBuffer->Argument;
+    ACPI_METHOD_SET_ARGUMENT_BUFFER(Argument, Buffer, BufferLength);
+    return AcpiTimeEvaluate(DeviceExtension, InputBuffer, InputLength, OutputBuffer, OutputLength);
 }
 
 static
@@ -225,6 +284,58 @@ AcpiTimeQueryIntegerArgument(
 
 static
 BOOLEAN
+AcpiTimeQueryTwoIntegerArguments(
+    _In_ PACPITIME_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG MethodName,
+    _In_ ULONG FirstValue,
+    _In_ ULONG SecondValue,
+    _Out_ PULONG Value)
+{
+    PACPI_EVAL_OUTPUT_BUFFER OutputBuffer;
+    ULONG OutputLength;
+    BOOLEAN Valid = FALSE;
+    NTSTATUS Status;
+
+    Status = AcpiTimeEvaluateTwoIntegerArguments(DeviceExtension, MethodName, FirstValue, SecondValue, &OutputBuffer, &OutputLength);
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+    if (AcpiTimeFirstArgumentValid(OutputBuffer, OutputLength) && OutputBuffer->Argument[0].Type == ACPI_METHOD_ARGUMENT_INTEGER)
+    {
+        *Value = OutputBuffer->Argument[0].Argument;
+        Valid = TRUE;
+    }
+    ExFreePoolWithTag(OutputBuffer, ACPITIME_TAG);
+    return Valid;
+}
+
+static
+BOOLEAN
+AcpiTimeQueryBufferArgument(
+    _In_ PACPITIME_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG MethodName,
+    _In_reads_bytes_(BufferLength) PVOID Buffer,
+    _In_ USHORT BufferLength,
+    _Out_ PULONG Value)
+{
+    PACPI_EVAL_OUTPUT_BUFFER OutputBuffer;
+    ULONG OutputLength;
+    BOOLEAN Valid = FALSE;
+    NTSTATUS Status;
+
+    Status = AcpiTimeEvaluateBufferArgument(DeviceExtension, MethodName, Buffer, BufferLength, &OutputBuffer, &OutputLength);
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+    if (AcpiTimeFirstArgumentValid(OutputBuffer, OutputLength) && OutputBuffer->Argument[0].Type == ACPI_METHOD_ARGUMENT_INTEGER)
+    {
+        *Value = OutputBuffer->Argument[0].Argument;
+        Valid = TRUE;
+    }
+    ExFreePoolWithTag(OutputBuffer, ACPITIME_TAG);
+    return Valid;
+}
+
+static
+BOOLEAN
 AcpiTimeClearWakeStatus(
     _In_ PACPITIME_DEVICE_EXTENSION DeviceExtension,
     _In_ ULONG Timer)
@@ -236,9 +347,64 @@ AcpiTimeClearWakeStatus(
 
 static
 BOOLEAN
+AcpiTimeTimerSupported(
+    _In_ PACPITIME_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG Timer)
+{
+    if (Timer == ACPITIME_TIMER_AC)
+        return (DeviceExtension->Capabilities & ACPITIME_CAP_AC_WAKE) != 0;
+    if (Timer == ACPITIME_TIMER_DC)
+        return (DeviceExtension->Capabilities & ACPITIME_CAP_DC_WAKE) != 0;
+    return FALSE;
+}
+
+static
+BOOLEAN
+AcpiTimeReadTimer(
+    _In_ PACPITIME_DEVICE_EXTENSION DeviceExtension,
+    _Inout_ PACPITIME_TIMER_INFORMATION TimerInformation)
+{
+    ULONG Timer = TimerInformation->Timer;
+
+    if (!AcpiTimeTimerSupported(DeviceExtension, Timer))
+        return FALSE;
+    if (!AcpiTimeQueryIntegerArgument(DeviceExtension, ACPITIME_METHOD('_', 'G', 'W', 'S'), Timer, &TimerInformation->Status))
+        return FALSE;
+    if (!AcpiTimeQueryIntegerArgument(DeviceExtension, ACPITIME_METHOD('_', 'T', 'I', 'V'), Timer, &TimerInformation->Value))
+        return FALSE;
+    return AcpiTimeQueryIntegerArgument(DeviceExtension, ACPITIME_METHOD('_', 'T', 'I', 'P'), Timer, &TimerInformation->Policy);
+}
+
+static
+BOOLEAN
+AcpiTimeWriteTimer(
+    _In_ PACPITIME_DEVICE_EXTENSION DeviceExtension,
+    _In_ PACPITIME_TIMER_SET TimerSet)
+{
+    ACPITIME_TIMER_INFORMATION Previous;
+    ULONG Result;
+
+    Previous.Timer = TimerSet->Timer;
+    if (!AcpiTimeTimerSupported(DeviceExtension, TimerSet->Timer) || !AcpiTimeReadTimer(DeviceExtension, &Previous))
+        return FALSE;
+    if (!AcpiTimeQueryTwoIntegerArguments(DeviceExtension, ACPITIME_METHOD('_', 'S', 'T', 'P'), TimerSet->Timer, TimerSet->Policy, &Result) || Result != 0)
+        return FALSE;
+    if (AcpiTimeQueryTwoIntegerArguments(DeviceExtension, ACPITIME_METHOD('_', 'S', 'T', 'V'), TimerSet->Timer, TimerSet->Value, &Result) && Result == 0)
+    {
+        DPRINT1("ACPITIME: programmed %s timer value=%lu policy=%lu\n",
+                TimerSet->Timer == ACPITIME_TIMER_AC ? "AC" : "DC", TimerSet->Value, TimerSet->Policy);
+        return TRUE;
+    }
+    AcpiTimeQueryTwoIntegerArguments(DeviceExtension, ACPITIME_METHOD('_', 'S', 'T', 'P'), Previous.Timer, Previous.Policy, &Result);
+    AcpiTimeQueryTwoIntegerArguments(DeviceExtension, ACPITIME_METHOD('_', 'S', 'T', 'V'), Previous.Timer, Previous.Value, &Result);
+    return FALSE;
+}
+
+static
+BOOLEAN
 AcpiTimeReadClock(
     _In_ PACPITIME_DEVICE_EXTENSION DeviceExtension,
-    _Out_ PACPITIME_GRT_INFO Time)
+    _Out_ PACPITIME_TIME_INFORMATION Time)
 {
     PACPI_EVAL_OUTPUT_BUFFER OutputBuffer;
     PACPI_METHOD_ARGUMENT Argument;
@@ -255,10 +421,52 @@ AcpiTimeReadClock(
     if (Argument->Type != ACPI_METHOD_ARGUMENT_BUFFER || Argument->DataLength < sizeof(*Time))
         goto Exit;
     RtlCopyMemory(Time, Argument->Data, sizeof(*Time));
-    Valid = Time->Valid == 1 && Time->Year >= 1900 && Time->Year <= 9999 && Time->Month >= 1 && Time->Month <= 12 && Time->Day >= 1 && Time->Day <= 31 && Time->Hour <= 23 && Time->Minute <= 59 && Time->Second <= 59 && Time->Milliseconds <= 1000 && (Time->Timezone == 2047 || (Time->Timezone >= -1440 && Time->Timezone <= 1440));
+    Valid = AcpiTimeValidateClock(Time, TRUE);
 Exit:
     ExFreePoolWithTag(OutputBuffer, ACPITIME_TAG);
     return Valid;
+}
+
+static
+BOOLEAN
+AcpiTimeValidateClock(
+    _In_ PACPITIME_TIME_INFORMATION Time,
+    _In_ BOOLEAN RequireValid)
+{
+    static const UCHAR DaysPerMonth[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    ULONG MaximumDay;
+    BOOLEAN LeapYear;
+
+    if ((RequireValid && Time->Valid != 1) || Time->Year < 1900 || Time->Year > 9999 || Time->Month < 1 || Time->Month > 12)
+        return FALSE;
+    LeapYear = ((Time->Year % 4) == 0 && (Time->Year % 100) != 0) || (Time->Year % 400) == 0;
+    MaximumDay = DaysPerMonth[Time->Month - 1] + (Time->Month == 2 && LeapYear);
+    if (Time->Day < 1 || Time->Day > MaximumDay || Time->Hour > 23 || Time->Minute > 59 || Time->Second > 59 || Time->Milliseconds > 1000)
+        return FALSE;
+    if (Time->Timezone != 2047 && (Time->Timezone < -1440 || Time->Timezone > 1440))
+        return FALSE;
+    return (Time->Daylight & ~3) == 0 && Time->Reserved[0] == 0 && Time->Reserved[1] == 0 && Time->Reserved[2] == 0;
+}
+
+static
+BOOLEAN
+AcpiTimeWriteClock(
+    _In_ PACPITIME_DEVICE_EXTENSION DeviceExtension,
+    _In_ PACPITIME_TIME_INFORMATION Time)
+{
+    ACPITIME_TIME_INFORMATION FirmwareTime;
+    ULONG Result;
+
+    if (!(DeviceExtension->Capabilities & ACPITIME_CAP_REAL_TIME) || !AcpiTimeValidateClock(Time, TRUE))
+        return FALSE;
+    FirmwareTime = *Time;
+    FirmwareTime.Valid = 0;
+    RtlZeroMemory(FirmwareTime.Reserved, sizeof(FirmwareTime.Reserved));
+    if (!AcpiTimeQueryBufferArgument(DeviceExtension, ACPITIME_METHOD('_', 'S', 'R', 'T'), &FirmwareTime, sizeof(FirmwareTime), &Result) || Result != 0)
+        return FALSE;
+    DPRINT1("ACPITIME: firmware real time updated to %04u-%02u-%02u %02u:%02u:%02u\n",
+            Time->Year, Time->Month, Time->Day, Time->Hour, Time->Minute, Time->Second);
+    return TRUE;
 }
 
 static
@@ -275,11 +483,11 @@ AcpiTimeWriteDword(
 }
 
 static
-VOID
+BOOLEAN
 AcpiTimeRefresh(
     _Inout_ PACPITIME_DEVICE_EXTENSION DeviceExtension)
 {
-    ACPITIME_GRT_INFO Time;
+    ACPITIME_TIME_INFORMATION Time;
     BOOLEAN TimeValid = FALSE;
     ULONG WakeStatus[2] = {0, 0};
     ULONG TimerValue[2] = {MAXULONG, MAXULONG};
@@ -292,9 +500,9 @@ AcpiTimeRefresh(
     if (!AcpiTimeQueryInteger(DeviceExtension, ACPITIME_METHOD('_', 'G', 'C', 'P'), &DeviceExtension->Capabilities))
     {
         DPRINT1("ACPITIME: required _GCP method failed\n");
-        return;
+        return FALSE;
     }
-    DeviceExtension->Capabilities &= ACPITIME_CAP_MASK;
+    DeviceExtension->Capabilities &= ACPITIME_CAP_VALID_MASK;
     if (DeviceExtension->Capabilities & ACPITIME_CAP_REAL_TIME)
         TimeValid = AcpiTimeReadClock(DeviceExtension, &Time);
     TimerCount = (DeviceExtension->Capabilities & ACPITIME_CAP_DC_WAKE) ? 2 : ((DeviceExtension->Capabilities & ACPITIME_CAP_AC_WAKE) ? 1 : 0);
@@ -334,6 +542,7 @@ AcpiTimeRefresh(
     DPRINT1("ACPITIME: caps=0x%03lx time=%s AC(status=0x%lx value=%lu policy=%lu) DC(status=0x%lx value=%lu policy=%lu)\n",
             DeviceExtension->Capabilities, TimeValid ? "valid" : "unavailable",
             WakeStatus[0], TimerValue[0], TimerPolicy[0], WakeStatus[1], TimerValue[1], TimerPolicy[1]);
+    return TRUE;
 }
 
 static
@@ -344,8 +553,10 @@ AcpiTimeWorker(
     PACPITIME_WORK_CONTEXT WorkContext = Context;
     PACPITIME_DEVICE_EXTENSION DeviceExtension = WorkContext->DeviceExtension;
 
+    ExAcquireFastMutex(&DeviceExtension->MethodMutex);
     if (DeviceExtension->Started && !DeviceExtension->Removing)
         AcpiTimeRefresh(DeviceExtension);
+    ExReleaseFastMutex(&DeviceExtension->MethodMutex);
     if (InterlockedDecrement(&DeviceExtension->WorkCount) == 0)
         KeSetEvent(&DeviceExtension->WorkIdleEvent, IO_NO_INCREMENT, FALSE);
     IoReleaseRemoveLock(&DeviceExtension->RemoveLock, DeviceExtension);
@@ -438,27 +649,214 @@ AcpiTimeReleaseInterface(
 
 static
 NTSTATUS
+AcpiTimeSetDeviceInterface(
+    _Inout_ PACPITIME_DEVICE_EXTENSION DeviceExtension,
+    _In_ BOOLEAN Enable)
+{
+    NTSTATUS Status;
+
+    if (!DeviceExtension->InterfaceRegistered || DeviceExtension->InterfaceEnabled == Enable)
+        return STATUS_SUCCESS;
+    Status = IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, Enable);
+    if (NT_SUCCESS(Status))
+        DeviceExtension->InterfaceEnabled = Enable;
+    return Status;
+}
+
+static
+NTSTATUS
 AcpiTimeStart(
     _Inout_ PACPITIME_DEVICE_EXTENSION DeviceExtension)
 {
     NTSTATUS Status;
 
-    AcpiTimeRefresh(DeviceExtension);
-    Status = AcpiTimeQueryInterface(DeviceExtension);
-    if (NT_SUCCESS(Status))
+    ExAcquireFastMutex(&DeviceExtension->MethodMutex);
+    if (!AcpiTimeRefresh(DeviceExtension))
     {
-        Status = DeviceExtension->AcpiInterface.RegisterForDeviceNotifications(DeviceExtension->AcpiInterface.Context, AcpiTimeNotification, DeviceExtension);
-        if (NT_SUCCESS(Status))
-            DeviceExtension->NotificationsRegistered = TRUE;
-        else
-            DPRINT1("ACPITIME: notification registration failed, status 0x%08lx\n", Status);
+        ExReleaseFastMutex(&DeviceExtension->MethodMutex);
+        return STATUS_DEVICE_PROTOCOL_ERROR;
     }
-    else
+    ExReleaseFastMutex(&DeviceExtension->MethodMutex);
+    Status = AcpiTimeQueryInterface(DeviceExtension);
+    if (!NT_SUCCESS(Status))
     {
         DPRINT1("ACPITIME: ACPI interface query failed, status 0x%08lx\n", Status);
+        return Status;
     }
-    DeviceExtension->Started = TRUE;
-    return STATUS_SUCCESS;
+    Status = DeviceExtension->AcpiInterface.RegisterForDeviceNotifications(DeviceExtension->AcpiInterface.Context, AcpiTimeNotification, DeviceExtension);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("ACPITIME: notification registration failed, status 0x%08lx\n", Status);
+        AcpiTimeReleaseInterface(DeviceExtension);
+        return Status;
+    }
+    DeviceExtension->NotificationsRegistered = TRUE;
+    InterlockedExchange(&DeviceExtension->Started, TRUE);
+    Status = AcpiTimeSetDeviceInterface(DeviceExtension, TRUE);
+    if (!NT_SUCCESS(Status))
+    {
+        InterlockedExchange(&DeviceExtension->Started, FALSE);
+        AcpiTimeReleaseInterface(DeviceExtension);
+    }
+    return Status;
+}
+
+static
+NTSTATUS
+AcpiTimeCompleteRequest(
+    _Inout_ PIRP Irp,
+    _In_ NTSTATUS Status,
+    _In_ ULONG_PTR Information)
+{
+    Irp->IoStatus.Status = Status;
+    Irp->IoStatus.Information = Information;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    return Status;
+}
+
+static
+NTSTATUS
+NTAPI
+AcpiTimeCreateClose(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp)
+{
+    PACPITIME_DEVICE_EXTENSION DeviceExtension = DeviceObject->DeviceExtension;
+    PIO_STACK_LOCATION Stack = IoGetCurrentIrpStackLocation(Irp);
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (Stack->MajorFunction == IRP_MJ_CREATE && (!DeviceExtension->Started || DeviceExtension->Removing))
+        Status = STATUS_DEVICE_NOT_READY;
+    return AcpiTimeCompleteRequest(Irp, Status, 0);
+}
+
+static
+NTSTATUS
+NTAPI
+AcpiTimeDeviceControl(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp)
+{
+    PACPITIME_DEVICE_EXTENSION DeviceExtension = DeviceObject->DeviceExtension;
+    PIO_STACK_LOCATION Stack = IoGetCurrentIrpStackLocation(Irp);
+    PVOID Buffer = Irp->AssociatedIrp.SystemBuffer;
+    ULONG InputLength = Stack->Parameters.DeviceIoControl.InputBufferLength;
+    ULONG OutputLength = Stack->Parameters.DeviceIoControl.OutputBufferLength;
+    ULONG ControlCode = Stack->Parameters.DeviceIoControl.IoControlCode;
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+
+    Status = IoAcquireRemoveLock(&DeviceExtension->RemoveLock, Irp);
+    if (!NT_SUCCESS(Status))
+        return AcpiTimeCompleteRequest(Irp, Status, 0);
+    if (!DeviceExtension->Started || DeviceExtension->Removing)
+    {
+        Status = STATUS_DEVICE_NOT_READY;
+        goto Complete;
+    }
+    ExAcquireFastMutex(&DeviceExtension->MethodMutex);
+    switch (ControlCode)
+    {
+        case IOCTL_ACPITIME_QUERY_INFORMATION:
+        {
+            PACPITIME_DEVICE_INFORMATION DeviceInformation = Buffer;
+
+            if (OutputLength < sizeof(*DeviceInformation))
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+            RtlZeroMemory(DeviceInformation, sizeof(*DeviceInformation));
+            DeviceInformation->Version = ACPITIME_DRIVER_INTERFACE_VERSION;
+            DeviceInformation->Capabilities = DeviceExtension->Capabilities;
+            Information = sizeof(*DeviceInformation);
+            Status = STATUS_SUCCESS;
+            break;
+        }
+
+        case IOCTL_ACPITIME_GET_TIME:
+        {
+            PACPITIME_TIME_INFORMATION Time = Buffer;
+
+            if (OutputLength < sizeof(*Time))
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+            if (!(DeviceExtension->Capabilities & ACPITIME_CAP_REAL_TIME))
+            {
+                Status = STATUS_NOT_SUPPORTED;
+                break;
+            }
+            RtlZeroMemory(Time, sizeof(*Time));
+            Status = AcpiTimeReadClock(DeviceExtension, Time) ? STATUS_SUCCESS : STATUS_IO_DEVICE_ERROR;
+            if (NT_SUCCESS(Status))
+                Information = sizeof(*Time);
+            break;
+        }
+
+        case IOCTL_ACPITIME_SET_TIME:
+            if (InputLength < sizeof(ACPITIME_TIME_INFORMATION))
+                Status = STATUS_BUFFER_TOO_SMALL;
+            else if (!(DeviceExtension->Capabilities & ACPITIME_CAP_REAL_TIME))
+                Status = STATUS_NOT_SUPPORTED;
+            else if (!AcpiTimeValidateClock(Buffer, TRUE))
+                Status = STATUS_INVALID_PARAMETER;
+            else
+                Status = AcpiTimeWriteClock(DeviceExtension, Buffer) ? STATUS_SUCCESS : STATUS_IO_DEVICE_ERROR;
+            break;
+
+        case IOCTL_ACPITIME_GET_TIMER:
+        {
+            PACPITIME_TIMER_INFORMATION TimerInformation = Buffer;
+            ULONG Timer;
+
+            if (InputLength < sizeof(Timer) || OutputLength < sizeof(*TimerInformation))
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+            Timer = TimerInformation->Timer;
+            if (!AcpiTimeTimerSupported(DeviceExtension, Timer))
+            {
+                Status = STATUS_NOT_SUPPORTED;
+                break;
+            }
+            RtlZeroMemory(TimerInformation, sizeof(*TimerInformation));
+            TimerInformation->Timer = Timer;
+            Status = AcpiTimeReadTimer(DeviceExtension, TimerInformation) ? STATUS_SUCCESS : STATUS_IO_DEVICE_ERROR;
+            if (NT_SUCCESS(Status))
+                Information = sizeof(*TimerInformation);
+            break;
+        }
+
+        case IOCTL_ACPITIME_SET_TIMER:
+            if (InputLength < sizeof(ACPITIME_TIMER_SET))
+                Status = STATUS_BUFFER_TOO_SMALL;
+            else if (!AcpiTimeTimerSupported(DeviceExtension, ((PACPITIME_TIMER_SET)Buffer)->Timer))
+                Status = STATUS_NOT_SUPPORTED;
+            else
+                Status = AcpiTimeWriteTimer(DeviceExtension, Buffer) ? STATUS_SUCCESS : STATUS_IO_DEVICE_ERROR;
+            break;
+
+        case IOCTL_ACPITIME_CLEAR_STATUS:
+            if (InputLength < sizeof(ULONG))
+                Status = STATUS_BUFFER_TOO_SMALL;
+            else if (!AcpiTimeTimerSupported(DeviceExtension, *(PULONG)Buffer))
+                Status = STATUS_NOT_SUPPORTED;
+            else
+                Status = AcpiTimeClearWakeStatus(DeviceExtension, *(PULONG)Buffer) ? STATUS_SUCCESS : STATUS_IO_DEVICE_ERROR;
+            break;
+
+        default:
+            Status = STATUS_INVALID_DEVICE_REQUEST;
+            break;
+    }
+    ExReleaseFastMutex(&DeviceExtension->MethodMutex);
+
+Complete:
+    IoReleaseRemoveLock(&DeviceExtension->RemoveLock, Irp);
+    return AcpiTimeCompleteRequest(Irp, Status, Information);
 }
 
 static
@@ -483,14 +881,18 @@ AcpiTimePnp(
             return Status;
 
         case IRP_MN_STOP_DEVICE:
-            DeviceExtension->Started = FALSE;
+            InterlockedExchange(&DeviceExtension->Started, FALSE);
+            AcpiTimeSetDeviceInterface(DeviceExtension, FALSE);
             AcpiTimeReleaseInterface(DeviceExtension);
             KeWaitForSingleObject(&DeviceExtension->WorkIdleEvent, Executive, KernelMode, FALSE, NULL);
+            ExAcquireFastMutex(&DeviceExtension->MethodMutex);
+            ExReleaseFastMutex(&DeviceExtension->MethodMutex);
             break;
 
         case IRP_MN_SURPRISE_REMOVAL:
-            DeviceExtension->Started = FALSE;
-            DeviceExtension->Removing = TRUE;
+            InterlockedExchange(&DeviceExtension->Started, FALSE);
+            InterlockedExchange(&DeviceExtension->Removing, TRUE);
+            AcpiTimeSetDeviceInterface(DeviceExtension, FALSE);
             AcpiTimeReleaseInterface(DeviceExtension);
             break;
 
@@ -502,12 +904,15 @@ AcpiTimePnp(
                 IoCompleteRequest(Irp, IO_NO_INCREMENT);
                 return Status;
             }
-            DeviceExtension->Started = FALSE;
-            DeviceExtension->Removing = TRUE;
+            InterlockedExchange(&DeviceExtension->Started, FALSE);
+            InterlockedExchange(&DeviceExtension->Removing, TRUE);
+            AcpiTimeSetDeviceInterface(DeviceExtension, FALSE);
             AcpiTimeReleaseInterface(DeviceExtension);
             IoReleaseRemoveLockAndWait(&DeviceExtension->RemoveLock, Irp);
             Status = AcpiTimeForwardSynchronously(DeviceExtension, Irp);
             IoDetachDevice(DeviceExtension->LowerDevice);
+            if (DeviceExtension->InterfaceRegistered)
+                RtlFreeUnicodeString(&DeviceExtension->InterfaceName);
             Irp->IoStatus.Status = Status;
             IoCompleteRequest(Irp, IO_NO_INCREMENT);
             IoDeleteDevice(DeviceObject);
@@ -552,6 +957,7 @@ AcpiTimeAddDevice(
     RtlZeroMemory(DeviceExtension, sizeof(*DeviceExtension));
     DeviceExtension->PhysicalDevice = PhysicalDeviceObject;
     IoInitializeRemoveLock(&DeviceExtension->RemoveLock, ACPITIME_TAG, 0, 0);
+    ExInitializeFastMutex(&DeviceExtension->MethodMutex);
     KeInitializeEvent(&DeviceExtension->WorkIdleEvent, NotificationEvent, TRUE);
     Status = IoAttachDeviceToDeviceStackSafe(DeviceObject, PhysicalDeviceObject, &DeviceExtension->LowerDevice);
     if (!NT_SUCCESS(Status))
@@ -559,7 +965,15 @@ AcpiTimeAddDevice(
         IoDeleteDevice(DeviceObject);
         return Status;
     }
-    DeviceObject->Flags |= DO_POWER_PAGABLE;
+    Status = IoRegisterDeviceInterface(PhysicalDeviceObject, &GUID_DEVINTERFACE_REACTOS_ACPITIME, NULL, &DeviceExtension->InterfaceName);
+    if (!NT_SUCCESS(Status))
+    {
+        IoDetachDevice(DeviceExtension->LowerDevice);
+        IoDeleteDevice(DeviceObject);
+        return Status;
+    }
+    DeviceExtension->InterfaceRegistered = TRUE;
+    DeviceObject->Flags |= DO_POWER_PAGABLE | DO_BUFFERED_IO;
     DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
     return STATUS_SUCCESS;
 }
@@ -580,6 +994,10 @@ DriverEntry(
     _In_ PUNICODE_STRING RegistryPath)
 {
     UNREFERENCED_PARAMETER(RegistryPath);
+    DriverObject->MajorFunction[IRP_MJ_CREATE] = AcpiTimeCreateClose;
+    DriverObject->MajorFunction[IRP_MJ_CLOSE] = AcpiTimeCreateClose;
+    DriverObject->MajorFunction[IRP_MJ_CLEANUP] = AcpiTimeCreateClose;
+    DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = AcpiTimeDeviceControl;
     DriverObject->MajorFunction[IRP_MJ_PNP] = AcpiTimePnp;
     DriverObject->MajorFunction[IRP_MJ_POWER] = AcpiTimePower;
     DriverObject->DriverExtension->AddDevice = AcpiTimeAddDevice;
