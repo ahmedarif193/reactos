@@ -268,6 +268,7 @@ struct acpi_device_wakeup {
 struct acpi_device {
 	int device_type;
 	ACPI_HANDLE		handle;
+	PDEVICE_OBJECT		pdo;
 	FAST_MUTEX		power_lock;
 	struct acpi_device	*parent;
 	struct list_head 	children;

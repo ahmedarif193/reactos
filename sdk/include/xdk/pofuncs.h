@@ -195,6 +195,52 @@ PoCreatePowerRequest(
 
 #endif /* (NTDDI_VERSION >= NTDDI_WIN7) */
 
+#if (NTDDI_VERSION >= NTDDI_WINTHRESHOLD)
+
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PoCreateThermalRequest(
+  _Outptr_ PVOID *ThermalRequest,
+  _In_ PDEVICE_OBJECT TargetDeviceObject,
+  _In_ PDEVICE_OBJECT PolicyDeviceObject,
+  _In_ PCOUNTED_REASON_CONTEXT Context,
+  _In_ ULONG Flags);
+
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+BOOLEAN
+NTAPI
+PoGetThermalRequestSupport(
+  _In_ PVOID ThermalRequest,
+  _In_ PO_THERMAL_REQUEST_TYPE Type);
+
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PoSetThermalPassiveCooling(
+  _Inout_ PVOID ThermalRequest,
+  _In_ UCHAR Throttle);
+
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PoSetThermalActiveCooling(
+  _Inout_ PVOID ThermalRequest,
+  _In_ BOOLEAN Engaged);
+
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+VOID
+NTAPI
+PoDeleteThermalRequest(
+  _Inout_ PVOID ThermalRequest);
+
+#endif /* (NTDDI_VERSION >= NTDDI_WINTHRESHOLD) */
+
 /******************************************************************************
  *                               PoFx Functions                               *
  ******************************************************************************/

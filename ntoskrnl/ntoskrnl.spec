@@ -993,6 +993,8 @@
 @ stdcall PfxRemovePrefix(ptr ptr)
 @ stdcall PoCallDriver(ptr ptr)
 @ stdcall PoCancelDeviceNotify(ptr)
+@ stdcall -version=0xA00+ PoCreateThermalRequest(ptr ptr ptr ptr long)
+@ stdcall -version=0xA00+ PoDeleteThermalRequest(ptr)
 @ stdcall -version=0x602+ PoFxActivateComponent(ptr long long)
 @ stdcall -version=0x602+ PoFxCompleteDevicePowerNotRequired(ptr)
 @ stdcall -version=0x602+ PoFxCompleteIdleCondition(ptr long)
@@ -1004,6 +1006,7 @@
 @ stdcall -version=0x602+ PoFxStartDevicePowerManagement(ptr)
 @ stdcall -version=0x602+ PoFxUnregisterDevice(ptr)
 @ stdcall PoGetSystemWake(ptr)
+@ stdcall -version=0xA00+ PoGetThermalRequestSupport(ptr long)
 @ stdcall PoQueryWatchdogTime(ptr ptr)
 @ stdcall PoQueueShutdownWorkItem(ptr)
 @ stdcall PoRegisterDeviceForIdleDetection(ptr long long long)
@@ -1016,6 +1019,8 @@
 @ stdcall PoSetPowerState(ptr long long)
 @ stdcall PoSetSystemState(long)
 @ stdcall PoSetSystemWake(ptr)
+@ stdcall -version=0xA00+ PoSetThermalActiveCooling(ptr long)
+@ stdcall -version=0xA00+ PoSetThermalPassiveCooling(ptr long)
 @ stdcall PoShutdownBugCheck(long long ptr ptr ptr ptr)
 @ stdcall PoStartNextPowerIrp(ptr)
 @ stdcall PoUnregisterPowerSettingCallback(ptr)
@@ -2766,10 +2771,8 @@
 @ stub -arch=arm64 PoCpuIdledSinceLastCallImprecise
 @ stub -arch=arm64 PoCreatePowerLimitRequest
 @ stub -arch=arm64 PoCreatePowerRequest
-@ stub -arch=arm64 PoCreateThermalRequest
 @ stub -arch=arm64 PoDeletePowerLimitRequest
 @ stub -arch=arm64 PoDeletePowerRequest
-@ stub -arch=arm64 PoDeleteThermalRequest
 @ stub -arch=arm64 PoDirectedDripsClearDeviceFlags
 @ stub -arch=arm64 PoDirectedDripsSetDeviceFlags
 @ stub -arch=arm64 PoDisableSleepStates
@@ -2800,7 +2803,6 @@
 @ stub -arch=arm64 PoFxSetComponentWake
 @ stub -arch=arm64 PoFxSetTargetDripsDevicePowerState
 @ stub -arch=arm64 PoGetProcessorIdleAccounting
-@ stub -arch=arm64 PoGetThermalRequestSupport
 @ stub -arch=arm64 PoInitiateProcessorWake
 @ stub -arch=arm64 PoLatencySensitivityHint
 @ stub -arch=arm64 PoNotifyMediaBuffering
@@ -2816,8 +2818,6 @@
 @ stub -arch=arm64 PoSetPowerLimitValue
 @ stub -arch=arm64 PoSetPowerRequest
 @ stub -arch=arm64 PoSetSystemWakeDevice
-@ stub -arch=arm64 PoSetThermalActiveCooling
-@ stub -arch=arm64 PoSetThermalPassiveCooling
 @ stub -arch=arm64 PoSetUserPresent
 @ stub -arch=arm64 PoStartDeviceBusy
 @ stub -arch=arm64 PoUnregisterCoalescingCallback

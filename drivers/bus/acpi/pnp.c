@@ -484,7 +484,12 @@ Bus_DestroyPdo (
     PPDO_DEVICE_DATA    PdoData
     )
 {
+    struct acpi_device *AcpiDevice = NULL;
+
     PAGED_CODE();
+
+    if (PdoData->AcpiHandle && !acpi_bus_get_device(PdoData->AcpiHandle, &AcpiDevice) && AcpiDevice->pdo == Device)
+        AcpiDevice->pdo = NULL;
 
     if (PdoData->HardwareIDs)
     {

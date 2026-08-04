@@ -237,6 +237,11 @@ typedef enum _POWER_REQUEST_TYPE {
   PowerRequestAwayModeRequired
 } POWER_REQUEST_TYPE, *PPOWER_REQUEST_TYPE;
 
+typedef enum _PO_THERMAL_REQUEST_TYPE {
+  PoThermalRequestPassive,
+  PoThermalRequestActive
+} PO_THERMAL_REQUEST_TYPE, *PPO_THERMAL_REQUEST_TYPE;
+
 #if (NTDDI_VERSION >= NTDDI_WINXP)
 
 #define PDCAP_D0_SUPPORTED                       0x00000001
