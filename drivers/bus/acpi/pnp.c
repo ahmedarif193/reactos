@@ -1,7 +1,3 @@
-/* INITGUID must come before any GUID-defining header so storage for the
- * GUIDs (in particular GUID_ACPI_PCI_INTERFACE from acpipci.h, included via
- * precomp.h) gets emitted in this translation unit. */
-#define INITGUID
 #include "precomp.h"
 
 #define NDEBUG
@@ -128,6 +124,14 @@ Bus_FDO_PnP (
             DeviceData->PciInterfaceEnabled = FALSE;
         }
 
+        if (DeviceData->SystemInterfaceEnabled)
+        {
+            NTSTATUS InterfaceStatus = IoSetDeviceInterfaceState(&DeviceData->SystemInterfaceName, FALSE);
+            if (!NT_SUCCESS(InterfaceStatus))
+                DPRINT1("ACPI: Failed to disable system interface (0x%08lx)\n", InterfaceStatus);
+            DeviceData->SystemInterfaceEnabled = FALSE;
+        }
+
         SET_NEW_PNP_STATE(DeviceData->Common, Stopped);
         Irp->IoStatus.Status = STATUS_SUCCESS;
         break;
@@ -151,6 +155,21 @@ Bus_FDO_PnP (
             RtlFreeUnicodeString(&DeviceData->PciInterfaceName);
             DeviceData->PciInterfaceRegistered = FALSE;
             RtlInitUnicodeString(&DeviceData->PciInterfaceName, NULL);
+        }
+
+        if (DeviceData->SystemInterfaceEnabled)
+        {
+            NTSTATUS InterfaceStatus = IoSetDeviceInterfaceState(&DeviceData->SystemInterfaceName, FALSE);
+            if (!NT_SUCCESS(InterfaceStatus))
+                DPRINT1("ACPI: Failed to disable system interface on remove (0x%08lx)\n", InterfaceStatus);
+            DeviceData->SystemInterfaceEnabled = FALSE;
+        }
+
+        if (DeviceData->SystemInterfaceRegistered)
+        {
+            RtlFreeUnicodeString(&DeviceData->SystemInterfaceName);
+            DeviceData->SystemInterfaceRegistered = FALSE;
+            RtlInitUnicodeString(&DeviceData->SystemInterfaceName, NULL);
         }
 
         //
@@ -303,19 +322,17 @@ Bus_StartFdo (
     // Register device interface for PCI ACPI services.
     // This allows the PCI driver to send IOCTLs without importing acpi.sys.
     //
-    FdoData->PciInterfaceRegistered = FALSE;
-    FdoData->PciInterfaceEnabled = FALSE;
-    RtlInitUnicodeString(&FdoData->PciInterfaceName, NULL);
-
-    status = IoRegisterDeviceInterface(
-        FdoData->UnderlyingPDO,
-        &GUID_ACPI_PCI_INTERFACE,
-        NULL,
-        &FdoData->PciInterfaceName);
-    if (NT_SUCCESS(status))
+    if (!FdoData->PciInterfaceRegistered)
     {
-        FdoData->PciInterfaceRegistered = TRUE;
-
+        RtlInitUnicodeString(&FdoData->PciInterfaceName, NULL);
+        status = IoRegisterDeviceInterface(FdoData->UnderlyingPDO, &GUID_ACPI_PCI_INTERFACE, NULL, &FdoData->PciInterfaceName);
+        if (NT_SUCCESS(status))
+            FdoData->PciInterfaceRegistered = TRUE;
+        else
+            DPRINT1("ACPI: Failed to register PCI interface (0x%08lx)\n", status);
+    }
+    if (FdoData->PciInterfaceRegistered && !FdoData->PciInterfaceEnabled)
+    {
         status = IoSetDeviceInterfaceState(&FdoData->PciInterfaceName, TRUE);
         if (NT_SUCCESS(status))
         {
@@ -323,13 +340,28 @@ Bus_StartFdo (
             DPRINT1("ACPI: Registered PCI interface: %wZ\n", &FdoData->PciInterfaceName);
         }
         else
-        {
             DPRINT1("ACPI: Failed to enable PCI interface (0x%08lx)\n", status);
-        }
     }
-    else
+
+    if (!FdoData->SystemInterfaceRegistered)
     {
-        DPRINT1("ACPI: Failed to register PCI interface (0x%08lx)\n", status);
+        RtlInitUnicodeString(&FdoData->SystemInterfaceName, NULL);
+        status = IoRegisterDeviceInterface(FdoData->UnderlyingPDO, &GUID_ACPI_SYSTEM_INTERFACE, NULL, &FdoData->SystemInterfaceName);
+        if (NT_SUCCESS(status))
+            FdoData->SystemInterfaceRegistered = TRUE;
+        else
+            DPRINT1("ACPI: Failed to register system interface (0x%08lx)\n", status);
+    }
+    if (FdoData->SystemInterfaceRegistered && !FdoData->SystemInterfaceEnabled)
+    {
+        status = IoSetDeviceInterfaceState(&FdoData->SystemInterfaceName, TRUE);
+        if (NT_SUCCESS(status))
+        {
+            FdoData->SystemInterfaceEnabled = TRUE;
+            DPRINT1("ACPI: Registered system interface: %wZ\n", &FdoData->SystemInterfaceName);
+        }
+        else
+            DPRINT1("ACPI: Failed to enable system interface (0x%08lx)\n", status);
     }
 
     // Continue with ACPI initialization even if interface registration fails
