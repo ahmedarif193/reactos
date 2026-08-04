@@ -325,6 +325,17 @@ typedef struct _RTL_ACTIVATION_CONTEXT_STACK_FRAME
     ULONG                                       Flags;
 } RTL_ACTIVATION_CONTEXT_STACK_FRAME, *PRTL_ACTIVATION_CONTEXT_STACK_FRAME;
 
+typedef struct _RTL_CALLER_ALLOCATED_ACTIVATION_CONTEXT_STACK_FRAME_EXTENDED
+{
+    SIZE_T Size;
+    ULONG Format;
+    RTL_ACTIVATION_CONTEXT_STACK_FRAME Frame;
+    PVOID Extra1;
+    PVOID Extra2;
+    PVOID Extra3;
+    PVOID Extra4;
+} RTL_CALLER_ALLOCATED_ACTIVATION_CONTEXT_STACK_FRAME_EXTENDED, *PRTL_CALLER_ALLOCATED_ACTIVATION_CONTEXT_STACK_FRAME_EXTENDED;
+
 typedef struct _ACTIVATION_CONTEXT_STACK
 {
     RTL_ACTIVATION_CONTEXT_STACK_FRAME *ActiveFrame;
@@ -3966,6 +3977,7 @@ typedef union _LDR_DLL_NOTIFICATION_DATA
 typedef void (CALLBACK *PLDR_DLL_NOTIFICATION_FUNCTION)(ULONG, LDR_DLL_NOTIFICATION_DATA*, void*);
 
 /* those defines are (some of the) regular LDR_DATA_TABLE_ENTRY.Flags values */
+#define LDR_DONT_RESOLVE_REFS           0x00000002
 #define LDR_IMAGE_IS_DLL                0x00000004
 #define LDR_LOAD_IN_PROGRESS            0x00001000
 #define LDR_UNLOAD_IN_PROGRESS          0x00002000
@@ -3973,9 +3985,9 @@ typedef void (CALLBACK *PLDR_DLL_NOTIFICATION_FUNCTION)(ULONG, LDR_DLL_NOTIFICAT
 #define LDR_PROCESS_ATTACHED            0x00080000
 #define LDR_COR_IMAGE                   0x00400000
 #define LDR_COR_ILONLY                  0x01000000
+#define LDR_REDIRECTED                  0x10000000
 
-/* these ones is Wine specific */
-#define LDR_DONT_RESOLVE_REFS           0x40000000
+/* this one is Wine specific */
 #define LDR_WINE_INTERNAL               0x80000000
 
 /* flag for LdrAddRefDll */

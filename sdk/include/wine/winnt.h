@@ -8,6 +8,10 @@
 
 #include <psdk/winnt.h>
 
+#ifndef FASTCALL
+#define FASTCALL __fastcall
+#endif
+
 #ifdef __WINE_RESTORE_WIN32_NO_STATUS
 #undef __WINE_RESTORE_WIN32_NO_STATUS
 #undef WIN32_NO_STATUS
