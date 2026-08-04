@@ -4,6 +4,8 @@
 @ stdcall -private DllCanUnloadNow()
 @ stdcall -private DllGetActivationFactory(ptr ptr)
 @ stdcall -private DllGetClassObject(ptr ptr ptr)
+@ stdcall -private DllRegisterServer()
+@ stdcall -private DllUnregisterServer()
 @ stdcall PrivateCoInternetCombineIUri(ptr ptr long ptr long)
 @ stdcall PrivateCoInternetParseIUri(ptr long long ptr long ptr long)
 @ stdcall wine_get_canonicalized_uri(ptr)
