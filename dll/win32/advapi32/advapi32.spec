@@ -528,7 +528,7 @@
 @ stdcall RegLoadKeyA(long str str) kernelbase.RegLoadKeyA
 @ stdcall RegLoadKeyW(long wstr wstr) kernelbase.RegLoadKeyW
 @ stdcall RegNotifyChangeKeyValue(long long long long long) kernelbase.RegNotifyChangeKeyValue
-@ stdcall RegOpenCurrentUser(long ptr) kernelbase.RegOpenCurrentUser
+@ stdcall RegOpenCurrentUser(long ptr)
 @ stdcall RegOpenKeyA(long str ptr)
 @ stdcall RegOpenKeyExA(long str long long ptr) kernelbase.RegOpenKeyExA
 @ stdcall RegOpenKeyExW(long wstr long long ptr) kernelbase.RegOpenKeyExW
