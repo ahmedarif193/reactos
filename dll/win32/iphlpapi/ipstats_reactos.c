@@ -545,9 +545,7 @@ RouteTable *getRouteTable(void)
 
     TRACE("GETTING ROUTE TABLE\n");
 
-    out_route_table = HeapAlloc(GetProcessHeap(), 0,
-                                sizeof(RouteTable) +
-                                (sizeof(RouteEntry) * (numRoutes - 1)));
+    out_route_table = HeapAlloc(GetProcessHeap(), 0, FIELD_OFFSET(RouteTable, routes) + sizeof(RouteEntry) * numRoutes);
     if (!out_route_table) {
         closeTcpFile(tcpFile);
         return NULL;
