@@ -495,6 +495,8 @@ FdoStartDevice(
     DeviceExtension->BusSegment = 0;
     DeviceExtension->BusRangeStart = DeviceExtension->BusNumber;
     DeviceExtension->BusRangeEnd = DeviceExtension->BusNumber;
+    DeviceExtension->IoWindowCount = 0;
+    DeviceExtension->MemoryWindowCount = 0;
 
     for (i = 0; i < AllocatedResources->List[0].PartialResourceList.Count; i++)
     {
@@ -529,6 +531,49 @@ FdoStartDevice(
                        DeviceExtension->BusRangeEnd);
                FoundBusNumber = TRUE;
                break;
+
+            case CmResourceTypePort:
+                if ((ResourceDescriptor->Flags & CM_RESOURCE_PORT_WINDOW_DECODE) &&
+                    ResourceDescriptor->u.Port.Length != 0 &&
+                    DeviceExtension->IoWindowCount < PCI_MAX_ADDRESS_WINDOWS)
+                {
+                    PPCI_ADDRESS_WINDOW Window = &DeviceExtension->IoWindows[DeviceExtension->IoWindowCount];
+                    ULONGLONG Length = ResourceDescriptor->u.Port.Length;
+
+                    Window->Start = ResourceDescriptor->u.Port.Start.QuadPart;
+                    if (Window->Start > MAXULONGLONG - (Length - 1))
+                        break;
+                    Window->End = Window->Start + Length - 1;
+                    Window->Prefetchable = FALSE;
+                    DeviceExtension->IoWindowCount++;
+                    DPRINT1("PCI: Bus %lu I/O aperture [0x%I64x-0x%I64x]\n",
+                            DeviceExtension->BusNumber,
+                            Window->Start,
+                            Window->End);
+                }
+                break;
+
+            case CmResourceTypeMemory:
+                if ((ResourceDescriptor->Flags & CM_RESOURCE_MEMORY_WINDOW_DECODE) &&
+                    ResourceDescriptor->u.Memory.Length != 0 &&
+                    DeviceExtension->MemoryWindowCount < PCI_MAX_ADDRESS_WINDOWS)
+                {
+                    PPCI_ADDRESS_WINDOW Window = &DeviceExtension->MemoryWindows[DeviceExtension->MemoryWindowCount];
+                    ULONGLONG Length = ResourceDescriptor->u.Memory.Length;
+
+                    Window->Start = ResourceDescriptor->u.Memory.Start.QuadPart;
+                    if (Window->Start > MAXULONGLONG - (Length - 1))
+                        break;
+                    Window->End = Window->Start + Length - 1;
+                    Window->Prefetchable = !!(ResourceDescriptor->Flags & CM_RESOURCE_MEMORY_PREFETCHABLE);
+                    DeviceExtension->MemoryWindowCount++;
+                    DPRINT1("PCI: Bus %lu memory aperture [0x%I64x-0x%I64x] prefetch=%u\n",
+                            DeviceExtension->BusNumber,
+                            Window->Start,
+                            Window->End,
+                            Window->Prefetchable);
+                }
+                break;
 
             default:
                 DPRINT("Unknown resource descriptor type 0x%x\n",
