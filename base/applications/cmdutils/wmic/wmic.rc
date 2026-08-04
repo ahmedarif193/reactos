@@ -18,43 +18,16 @@
 
 #include "wmic.h"
 
-LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
+#pragma makedep po
 
-#define REACTOS_STR_FILE_DESCRIPTION  "ReactOS WMI command line"
-#define REACTOS_STR_INTERNAL_NAME     "wmic"
-#define REACTOS_STR_ORIGINAL_FILENAME "wmic.exe"
-#include <reactos/version.rc>
+LANGUAGE LANG_ENGLISH, SUBLANG_DEFAULT
 
-/* UTF-8 */
-#pragma code_page(65001)
-
-#ifdef LANGUAGE_DE_DE
-    #include "lang/de-DE.rc"
-#endif
-#ifdef LANGUAGE_EN_US
-    #include "lang/en-US.rc"
-#endif
-#ifdef LANGUAGE_IT_IT
-    #include "lang/it-IT.rc"
-#endif
-#ifdef LANGUAGE_PL_PL
-    #include "lang/pl-PL.rc"
-#endif
-#ifdef LANGUAGE_RO_RO
-    #include "lang/ro-RO.rc"
-#endif
-#ifdef LANGUAGE_RU_RU
-    #include "lang/ru-RU.rc"
-#endif
-#ifdef LANGUAGE_SQ_AL
-    #include "lang/sq-AL.rc"
-#endif
-#ifdef LANGUAGE_TR_TR
-    #include "lang/tr-TR.rc"
-#endif
-#ifdef LANGUAGE_ZH_CN
-    #include "lang/zh-CN.rc"
-#endif
-#ifdef LANGUAGE_ZH_TW
-    #include "lang/zh-TW.rc"
-#endif
+STRINGTABLE
+{
+    STRING_COMMAND_NOT_SUPPORTED, "Error: Command not supported\n"
+    STRING_ALIAS_NOT_FOUND, "Error: Alias not found\n"
+    STRING_INVALID_QUERY, "Error: Invalid query\n"
+    STRING_INVALID_PATH, "Error: Invalid syntax for PATH\n"
+    STRING_USAGE, "Supply a command\n"
+    STRING_HELP, "Example usage: wmic ALIAS get PROPERTY[,PROPERTY2,...]\n"
+}
