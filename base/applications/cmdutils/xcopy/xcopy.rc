@@ -1,5 +1,8 @@
+#ifndef __REACTOS__
 /*
- * Copyright 2007 Jason Edmeades
+ * XCOPY - Wine-compatible xcopy program
+ *
+ * Copyright (C) 2007 J. Edmeades
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -18,6 +21,70 @@
 
 #include "xcopy.h"
 
+#pragma makedep po
+
+LANGUAGE LANG_ENGLISH, SUBLANG_DEFAULT
+
+STRINGTABLE
+{
+    STRING_INVPARMS, "Invalid number of parameters - Use xcopy /? for help\n"
+    STRING_INVPARM,  "Invalid parameter '%1' - Use xcopy /? for help\n"
+    STRING_PAUSE,    "Press <Enter> to begin copying\n"
+    STRING_SIMCOPY,  "%1!d! file(s) would be copied\n"
+    STRING_COPY,     "%1!d! file(s) copied\n"
+    STRING_QISDIR,   "Is '%1' a filename or directory\n\
+                     on the target?\n\
+                     (F - File, D - Directory)\n"
+    STRING_SRCPROMPT,"%1? (Yes|No)\n"
+    STRING_OVERWRITE,"Overwrite %1? (Yes|No|All)\n"
+    STRING_COPYFAIL, "Copying of '%1' to '%2' failed with r/c %3!d!\n"
+    STRING_OPENFAIL, "Failed to open '%1'\n"
+    STRING_READFAIL, "Failed during reading of '%1'\n"
+    STRING_YES_CHAR, "#msgctxt#Yes key#Y"
+    STRING_NO_CHAR,  "#msgctxt#No key#N"
+    STRING_ALL_CHAR, "#msgctxt#All key#A"
+    STRING_FILE_CHAR,"#msgctxt#File key#F"
+    STRING_DIR_CHAR, "#msgctxt#Directory key#D"
+
+    STRING_HELP,
+"XCOPY - Copies source files or directory trees to a destination.\n\
+\n\
+Syntax:\n\
+XCOPY source [destination] [/I] [/S] [/Q] [/F] [/L] [/W] [/T] [/N] [/U]\n\
+\t     [/R] [/H] [/C] [/P] [/A] [/M] [/E] [/D] [/Y] [/-Y] [/K]\n\
+\n\
+Where:\n\
+\n\
+[/I]  Assume directory if destination does not exist and copying two or\n\
+\tmore files.\n\
+[/S]  Copy directories and subdirectories.\n\
+[/E]  Copy directories and subdirectories, including any empty ones.\n\
+[/Q]  Do not list names during copy; that is, be quiet.\n\
+[/F]  Show full source and destination names during copy.\n\
+[/L]  Simulate operation, showing names which would be copied.\n\
+[/W]  Prompts before beginning the copy operation.\n\
+[/T]  Creates empty directory structure but does not copy files.\n\
+[/Y]  Suppress prompting when overwriting files.\n\
+[/-Y] Enable prompting when overwriting files.\n\
+[/P]  Prompts on each source file before copying.\n\
+[/N]  Copy using short names.\n\
+[/U]  Copy only files which already exist in destination.\n\
+[/R]  Overwrite any read-only files.\n\
+[/H]  Include hidden and system files in the copy.\n\
+[/C]  Continue even if an error occurs during the copy.\n\
+[/A]  Only copy files with archive attribute set.\n\
+[/M]  Only copy files with archive attribute set, removes the\n\
+\tarchive attribute.\n\
+[/K]  Copy file attributes; without this, attributes are not preserved.\n\
+[/D | /D:m-d-y] Copy new files or those modified after the supplied date.\n\
+\t\tIf no date is supplied, only copy if destination is older\n\
+\t\tthan source.\n\n"
+
+    STRING_NOCOPYTOSELF, "File cannot be copied onto itself.\n"
+}
+#else
+#include "xcopy.h"
+
 LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 
 #define REACTOS_STR_FILE_DESCRIPTION  "xcopy command"
@@ -25,27 +92,20 @@ LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 #define REACTOS_STR_ORIGINAL_FILENAME "xcopy.exe"
 #include <reactos/version.rc>
 
+/* UTF-8 */
+#pragma code_page(65001)
+
 #ifdef LANGUAGE_DA_DK
     #include "lang/da-DK.rc"
+#endif
+#ifdef LANGUAGE_DE_DE
+    #include "lang/de-DE.rc"
 #endif
 #ifdef LANGUAGE_EN_US
     #include "lang/en-US.rc"
 #endif
-#ifdef LANGUAGE_NO_NO
-    #include "lang/no-NO.rc"
-#endif
-#ifdef LANGUAGE_PL_PL
-    #include "lang/pl-PL.rc"
-#endif
 #ifdef LANGUAGE_ES_ES
     #include "lang/es-ES.rc"
-#endif
-
-/* UTF-8 */
-#pragma code_page(65001)
-
-#ifdef LANGUAGE_DE_DE
-    #include "lang/de-DE.rc"
 #endif
 #ifdef LANGUAGE_FR_FR
     #include "lang/fr-FR.rc"
@@ -64,6 +124,12 @@ LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 #endif
 #ifdef LANGUAGE_NL_NL
     #include "lang/nl-NL.rc"
+#endif
+#ifdef LANGUAGE_NO_NO
+    #include "lang/no-NO.rc"
+#endif
+#ifdef LANGUAGE_PL_PL
+    #include "lang/pl-PL.rc"
 #endif
 #ifdef LANGUAGE_PT_BR
     #include "lang/pt-BR.rc"
@@ -101,3 +167,10 @@ LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 #ifdef LANGUAGE_ZH_TW
     #include "lang/zh-TW.rc"
 #endif
+
+LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
+STRINGTABLE
+{
+    STRING_NOCOPYTOSELF, "File cannot be copied onto itself.\n"
+}
+#endif /* __REACTOS__ */

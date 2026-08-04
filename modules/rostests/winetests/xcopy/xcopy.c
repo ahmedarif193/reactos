@@ -56,18 +56,18 @@ static void test_date_format(void)
     DWORD rc;
 
     rc = runcmd("xcopy /D:20-01-2000 xcopy1 xcopytest");
-    ok(rc == 4, "xcopy /D:d-m-y test returned rc=%u\n", rc);
+    ok(rc == 4, "xcopy /D:d-m-y test returned rc=%lu\n", rc);
     ok(GetFileAttributesA("xcopytest\\xcopy1") == INVALID_FILE_ATTRIBUTES,
        "xcopy should not have created xcopytest\\xcopy1\n");
 
     rc = runcmd("xcopy /D:01-20-2000 xcopy1 xcopytest");
-    ok(rc == 0, "xcopy /D:m-d-y test failed rc=%u\n", rc);
+    ok(rc == 0, "xcopy /D:m-d-y test failed rc=%lu\n", rc);
     ok(GetFileAttributesA("xcopytest\\xcopy1") != INVALID_FILE_ATTRIBUTES,
        "xcopy did not create xcopytest\\xcopy1\n");
     DeleteFileA("xcopytest\\xcopy1");
 
     rc = runcmd("xcopy /D:1-20-2000 xcopy1 xcopytest");
-    ok(rc == 0, "xcopy /D:m-d-y test failed rc=%u\n", rc);
+    ok(rc == 0, "xcopy /D:m-d-y test failed rc=%lu\n", rc);
     ok(GetFileAttributesA("xcopytest\\xcopy1") != INVALID_FILE_ATTRIBUTES,
        "xcopy did not create xcopytest\\xcopy1\n");
     DeleteFileA("xcopytest\\xcopy1");
@@ -78,12 +78,12 @@ static void test_parms_syntax(void)
     DWORD rc;
 
     rc = runcmd("xcopy /H/D:20-01-2000 xcopy1 xcopytest");
-    ok(rc == 4, "xcopy /H/D:d-m-y test returned rc=%u\n", rc);
+    ok(rc == 4, "xcopy /H/D:d-m-y test returned rc=%lu\n", rc);
     ok(GetFileAttributesA("xcopytest\\xcopy1") == INVALID_FILE_ATTRIBUTES,
        "xcopy should not have created xcopytest\\xcopy1\n");
 
     rc = runcmd("xcopy /D:01-20-2000/H xcopy1 xcopytest");
-    ok(rc == 0, "xcopy /H/D:m-d-y test failed rc=%u\n", rc);
+    ok(rc == 0, "xcopy /H/D:m-d-y test failed rc=%lu\n", rc);
     ok(GetFileAttributesA("xcopytest\\xcopy1") != INVALID_FILE_ATTRIBUTES,
        "xcopy did not create xcopytest\\xcopy1\n");
     DeleteFileA("xcopytest\\xcopy1");
@@ -97,15 +97,36 @@ static void test_parms_syntax(void)
     DeleteFileA("xcopytest\\xcopy1"); */
 
     rc = runcmd("xcopy /D/S xcopytest xcopytest2\\");
-    ok(rc == 0, "xcopy /D/S test failed rc=%u\n", rc);
+    ok(rc == 0, "xcopy /D/S test failed rc=%lu\n", rc);
     ok(GetFileAttributesA("xcopytest2") == INVALID_FILE_ATTRIBUTES,
        "xcopy copied empty directory incorrectly\n");
 
-    rc = runcmd("xcopy /D/S/E xcopytest xcopytest2\\");
-    ok(rc == 0, "xcopy /D/S/E test failed rc=%u\n", rc);
+    rc = runcmd("xcopy xcopytest xcopytest2\\/D/S/E");
+    ok(rc == 0, "xcopy /D/S/E test failed rc=%lu\n", rc);
     ok(GetFileAttributesA("xcopytest2") != INVALID_FILE_ATTRIBUTES,
        "xcopy failed to copy empty directory\n");
     RemoveDirectoryA("xcopytest2");
+
+    rc = runcmd("xcopy xcopytest xcopytest2\\ /D/S/\"E\"");
+    ok(rc == 4, "xcopy /D/S/\"E\" test failed rc=%lu\n", rc);
+    ok(GetFileAttributesA("xcopytest2") == INVALID_FILE_ATTRIBUTES,
+       "xcopy copied empty directory incorrectly\n");
+
+    rc = runcmd("xcopy xcopytest xcopytest2\\/DSE");
+    ok(rc == 0, "xcopy /DSE test failed rc=%lu\n", rc);
+    ok(GetFileAttributesA("xcopytest2") != INVALID_FILE_ATTRIBUTES,
+       "xcopy failed to copy empty directory\n");
+    RemoveDirectoryA("xcopytest2");
+
+    CreateDirectoryA("xcopy test2", NULL);
+    rc = runcmd("xcopy /S/R/Y/I \"xcopytest\" \"xcopy test2\"");
+    ok(rc == 0, "xcopy /S/R/Y/I test failed rc=%lu\n", rc);
+    ok(GetFileAttributesA("xcopy test2") != INVALID_FILE_ATTRIBUTES,
+       "xcopy failed to copy empty directory\n");
+    RemoveDirectoryA("xcopy test2");
+
+    rc = runcmd("xcopy xcopy1 xcopy1");
+    ok(rc == 4, "xcopy file to self failed rc=%lu\n", rc);
 }
 
 static void test_keep_attributes(void)
