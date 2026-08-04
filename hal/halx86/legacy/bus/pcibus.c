@@ -614,6 +614,16 @@ HalpGetPCIData(IN PBUS_HANDLER BusHandler,
     return Len;
 }
 
+#if defined(_M_AMD64) && !defined(_MINIHAL_)
+ULONG NTAPI HalpKdReadPciConfig(_In_ ULONG BusNumber, _In_ ULONG SlotNumber, _Out_writes_bytes_(Length) PVOID Buffer, _In_ ULONG Offset, _In_ ULONG Length)
+{
+    /* A frozen processor may own this lock. Never wait from KDB. */
+    if (!KeTestSpinLock(&HalpPCIConfigLock))
+        return MAXULONG;
+    return HalGetBusDataByOffset(PCIConfiguration, BusNumber, SlotNumber, Buffer, Offset, Length);
+}
+#endif
+
 ULONG
 NTAPI
 HalpSetPCIData(IN PBUS_HANDLER BusHandler,

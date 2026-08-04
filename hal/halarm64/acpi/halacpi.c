@@ -3392,6 +3392,73 @@ HalpAcpiFindMcfgAllocation(
     return NULL;
 }
 
+ULONG NTAPI HalpKdReadPciConfig(_In_ ULONG BusNumber, _In_ ULONG SlotNumber, _Out_writes_bytes_(Length) PVOID Buffer, _In_ ULONG Offset, _In_ ULONG Length)
+{
+    PHALP_ACPI_MCFG_ALLOCATION Allocation;
+    PCI_SLOT_NUMBER Slot;
+    ULONG AllocationIndex;
+    PVOID Mapping;
+    ULONGLONG BusCount;
+    ULONGLONG WindowLength;
+    ULONGLONG DeviceOffset;
+    ULONG CurrentOffset;
+    ULONG Remaining;
+    PUCHAR Output;
+
+    if (Buffer == NULL || Length == 0 || BusNumber > 0xFF || Offset >= 0x1000 || (ULONGLONG)Offset + Length > 0x1000)
+        return 0;
+
+    Slot.u.AsULONG = SlotNumber;
+    if (Slot.u.bits.DeviceNumber >= PCI_MAX_DEVICES || Slot.u.bits.FunctionNumber >= PCI_MAX_FUNCTION)
+        return 0;
+
+    if (HalpAcpiEcamDisabled)
+        return MAXULONG;
+    Allocation = HalpAcpiFindMcfgAllocation(HALP_ACPI_SEGMENT_ANY, (UCHAR)BusNumber);
+    if (Allocation == NULL || (HalpAcpiEcamForceLegacySegment != 0xFFFF && Allocation->PciSegment == HalpAcpiEcamForceLegacySegment))
+        return MAXULONG;
+
+    AllocationIndex = (ULONG)(Allocation - HalpAcpiMcfgAllocations);
+    if (HalpAcpiMcfgEcamMappings == NULL || AllocationIndex >= HalpAcpiMcfgEcamMappingCount)
+        return MAXULONG;
+    Mapping = HalpAcpiMcfgEcamMappings[AllocationIndex];
+    if (Mapping == NULL)
+        return MAXULONG;
+
+    if (Allocation->StartBusNumber == Allocation->EndBusNumber && (Slot.u.bits.DeviceNumber != 0 || Slot.u.bits.FunctionNumber != 0))
+    {
+        RtlFillMemory(Buffer, Length, 0xFF);
+        return Length;
+    }
+
+    BusCount = (ULONGLONG)(Allocation->EndBusNumber - Allocation->StartBusNumber + 1);
+    WindowLength = BusCount << 20;
+    DeviceOffset = HalpAcpiEcamOffsetInAllocation(Allocation, (UCHAR)BusNumber, Slot.u.bits.DeviceNumber, Slot.u.bits.FunctionNumber, 0);
+    if (BusCount == 0 || WindowLength == 0 || DeviceOffset > WindowLength || (ULONGLONG)Offset + Length > WindowLength - DeviceOffset)
+        return MAXULONG;
+
+    CurrentOffset = Offset;
+    Remaining = Length;
+    Output = Buffer;
+    while (Remaining != 0)
+    {
+        ULONG AlignedOffset;
+        ULONG ByteInDword;
+        ULONG TransferLength;
+        ULONG Dword;
+
+        AlignedOffset = CurrentOffset & ~3u;
+        ByteInDword = CurrentOffset & 3u;
+        TransferLength = min(4 - ByteInDword, Remaining);
+        Dword = READ_REGISTER_ULONG((PULONG)((PUCHAR)Mapping + DeviceOffset + AlignedOffset));
+        RtlCopyMemory(Output, ((PUCHAR)&Dword) + ByteInDword, TransferLength);
+        CurrentOffset += TransferLength;
+        Output += TransferLength;
+        Remaining -= TransferLength;
+    }
+    return Length;
+}
+
 PHALP_ACPI_MCFG_ALLOCATION
 NTAPI
 HalpAcpiGetMcfgAllocation(
