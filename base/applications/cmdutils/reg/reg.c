@@ -17,7 +17,6 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include <stdio.h>
 #include "reg.h"
 #include <wine/debug.h>
 
@@ -47,27 +46,26 @@ const struct reg_type_rels type_rels[] =
     {REG_DWORD,               L"REG_DWORD"},
     {REG_DWORD_LITTLE_ENDIAN, L"REG_DWORD_LITTLE_ENDIAN"},
     {REG_DWORD_BIG_ENDIAN,    L"REG_DWORD_BIG_ENDIAN"},
+    {REG_QWORD,               L"REG_QWORD"},
     {REG_MULTI_SZ,            L"REG_MULTI_SZ"},
 };
 
 void output_writeconsole(const WCHAR *str, DWORD wlen)
 {
-    DWORD count, ret;
+    DWORD count;
 
-    ret = WriteConsoleW(GetStdHandle(STD_OUTPUT_HANDLE), str, wlen, &count, NULL);
-    if (!ret)
+    if (!WriteConsoleW(GetStdHandle(STD_OUTPUT_HANDLE), str, wlen, &count, NULL))
     {
         DWORD len;
         char  *msgA;
 
         /* On Windows WriteConsoleW() fails if the output is redirected. So fall
-         * back to WriteFile(), assuming the console encoding is still the right
-         * one in that case.
+         * back to WriteFile() with OEM code page.
          */
-        len = WideCharToMultiByte(GetConsoleOutputCP(), 0, str, wlen, NULL, 0, NULL, NULL);
+        len = WideCharToMultiByte(GetOEMCP(), 0, str, wlen, NULL, 0, NULL, NULL);
         msgA = malloc(len);
 
-        WideCharToMultiByte(GetConsoleOutputCP(), 0, str, wlen, msgA, len, NULL, NULL);
+        WideCharToMultiByte(GetOEMCP(), 0, str, wlen, msgA, len, NULL, NULL);
         WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), msgA, len, &count, FALSE);
         free(msgA);
     }
@@ -80,9 +78,9 @@ static void output_formatstring(const WCHAR *fmt, va_list va_args)
 
     len = FormatMessageW(FORMAT_MESSAGE_FROM_STRING|FORMAT_MESSAGE_ALLOCATE_BUFFER,
                          fmt, 0, 0, (WCHAR *)&str, 0, &va_args);
-    if (len == 0 && GetLastError() != NO_ERROR)
+    if (len == 0 && GetLastError() != ERROR_NO_WORK_DONE)
     {
-        WINE_FIXME("Could not format string: le=%u, fmt=%s\n", GetLastError(), wine_dbgstr_w(fmt));
+        WINE_FIXME("Could not format string: le=%lu, fmt=%s\n", GetLastError(), wine_dbgstr_w(fmt));
         return;
     }
     output_writeconsole(str, len);
@@ -97,7 +95,7 @@ void WINAPIV output_message(unsigned int id, ...)
 
     if (!(len = LoadStringW(GetModuleHandleW(NULL), id, (WCHAR *)&fmt, 0)))
     {
-        WINE_FIXME("LoadString failed with %d\n", GetLastError());
+        WINE_FIXME("LoadString failed with %ld\n", GetLastError());
         return;
     }
 
@@ -158,7 +156,7 @@ static inline BOOL path_rootname_cmp(const WCHAR *input_path, const WCHAR *rootk
 {
     DWORD length = lstrlenW(rootkey_name);
 
-    return (!_wcsnicmp(input_path, rootkey_name, length) &&
+    return (!wcsnicmp(input_path, rootkey_name, length) &&
             (input_path[length] == 0 || input_path[length] == '\\'));
 }
 
@@ -200,7 +198,7 @@ WCHAR *build_subkey_path(WCHAR *path, DWORD path_len, WCHAR *subkey_name, DWORD 
     WCHAR *subkey_path;
 
     subkey_path = malloc((path_len + subkey_len + 2) * sizeof(WCHAR));
-    swprintf(subkey_path, L"%s\\%s", path, subkey_name);
+    swprintf(subkey_path, path_len + subkey_len + 2, L"%s\\%s", path, subkey_name);
 
     return subkey_path;
 }
@@ -227,7 +225,7 @@ WCHAR *get_long_key(HKEY root, WCHAR *path)
 
     len += lstrlenW(path) + 1; /* add one for the concatenating backslash */
     long_key = malloc((len + 1) * sizeof(WCHAR));
-    swprintf(long_key, L"%s\\%s", root_rels[i].long_name, path);
+    swprintf(long_key, len + 1, L"%s\\%s", root_rels[i].long_name, path);
     return long_key;
 }
 
@@ -377,6 +375,6 @@ int __cdecl wmain(int argc, WCHAR *argvW[])
 
 invalid:
     output_message(STRING_INVALID_SYNTAX);
-    output_message(STRING_FUNC_HELP, _wcsupr(argvW[1]));
+    output_message(STRING_FUNC_HELP, wcsupr(argvW[1]));
     return 1;
 }
