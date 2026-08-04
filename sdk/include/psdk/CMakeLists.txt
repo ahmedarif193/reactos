@@ -179,6 +179,7 @@ list(APPEND SOURCE
     windows.foundation.idl
     windows.foundation.metadata.idl
     windows.foundation.numerics.idl
+    windows.globalization.idl
     windows.graphics.display.idl
     windows.graphics.idl
     windows.gaming.input.custom.idl
@@ -197,6 +198,7 @@ list(APPEND SOURCE
     windows.system.idl
     windows.system.power.idl
     windows.system.threading.idl
+    windows.system.userprofile.idl
     windowscontracts.idl
     wincodec.idl
     wincodecsdk.idl

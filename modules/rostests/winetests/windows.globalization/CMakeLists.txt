@@ -1,0 +1,7 @@
+add_definitions(-DUSE_WINE_TODOS -DWINETEST_USE_DBGSTR_HSTRING -D__WINESRC__)
+
+add_executable(windows_globalization_winetest globalization.c testlist.c)
+target_link_libraries(windows_globalization_winetest uuid)
+set_module_type(windows_globalization_winetest win32cui)
+add_importlibs(windows_globalization_winetest combase msvcrt kernel32)
+add_rostests_file(TARGET windows_globalization_winetest)
