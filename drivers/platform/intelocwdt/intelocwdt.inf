@@ -1,0 +1,40 @@
+[Version]
+Signature = "$Windows NT$"
+Class = System
+ClassGUID = {4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider = %ReactOS%
+DriverVer = 08/04/2026,1.0.0.0
+
+[ControlFlags]
+ExcludeFromSelect = *
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[Manufacturer]
+%ReactOS% = ReactOS
+
+[ReactOS]
+%IntelWdt.DeviceDesc% = IntelWdt_Inst,ACPI\INTC1099
+
+[IntelWdt_Inst.NT]
+CopyFiles = IntelWdt_CopyFiles
+
+[IntelWdt_CopyFiles]
+intelocwdt.sys
+
+[IntelWdt_Inst.NT.Services]
+AddService = INTELOCWDT,0x00000002,IntelWdt_Service
+
+[IntelWdt_Service]
+DisplayName = %IntelWdt.ServiceDesc%
+ServiceType = 1
+StartType = 3
+ErrorControl = 1
+ServiceBinary = %12%\intelocwdt.sys
+LoadOrderGroup = Extended Base
+
+[Strings]
+ReactOS = "ReactOS Project"
+IntelWdt.DeviceDesc = "Intel Watchdog Timer"
+IntelWdt.ServiceDesc = "ReactOS Intel Watchdog Timer Driver"

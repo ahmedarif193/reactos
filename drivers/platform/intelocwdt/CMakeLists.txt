@@ -1,0 +1,5 @@
+add_library(intelocwdt MODULE intelocwdt.c intelocwdt.rc)
+set_module_type(intelocwdt kernelmodedriver)
+add_importlibs(intelocwdt ntoskrnl hal)
+add_cd_file(TARGET intelocwdt DESTINATION reactos/system32/drivers FOR all)
+add_driver_inf(intelocwdt intelocwdt.inf)
