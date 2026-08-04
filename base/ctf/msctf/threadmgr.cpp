@@ -3,6 +3,7 @@
  * LICENSE:     LGPL-2.0-or-later (https://spdx.org/licenses/LGPL-2.0-or-later)
  * PURPOSE:     ITfThreadMgr implementation
  * COPYRIGHT:   Copyright 2008 Aric Stewart, CodeWeavers
+ *              Copyright 2026 Paul Gofman, CodeWeavers
  *              Copyright 2025 Katayama Hirofumi MZ <katayama.hirofumi.mz@gmail.com>
  */
 
@@ -10,6 +11,8 @@
 
 #include <wine/debug.h>
 WINE_DEFAULT_DEBUG_CHANNEL(msctf);
+
+DEFINE_GUID(GUID_SYSTEM_FUNCTIONPROVIDER, 0x9a698bb0, 0x0f21, 0x11d3, 0x8d, 0xf1, 0x00, 0x10, 0x5a, 0x27, 0x99, 0xb5);
 
 ////////////////////////////////////////////////////////////////////////////
 
@@ -37,6 +40,23 @@ typedef struct tagAssociatedWindow
 
 ////////////////////////////////////////////////////////////////////////////
 
+class CReconversion final : public ITfFnReconversion
+{
+public:
+    CReconversion();
+
+    STDMETHODIMP QueryInterface(REFIID iid, LPVOID *ppvObject) override;
+    STDMETHODIMP_(ULONG) AddRef() override;
+    STDMETHODIMP_(ULONG) Release() override;
+    STDMETHODIMP GetDisplayName(_Out_ BSTR *name) override;
+    STDMETHODIMP QueryRange(_In_ ITfRange *range, _Out_ ITfRange **newRange, _Out_ BOOL *convertable) override;
+    STDMETHODIMP GetReconversion(_In_ ITfRange *range, _Out_ ITfCandidateList **candidateList) override;
+    STDMETHODIMP Reconvert(_In_ ITfRange *range) override;
+
+protected:
+    LONG m_cRefs;
+};
+
 class CThreadMgr
     : public ITfThreadMgrEx
     , public ITfSource
@@ -48,6 +68,7 @@ class CThreadMgr
     , public ITfUIElementMgr
     , public ITfSourceSingle
     , public ITfThreadMgrEventSink
+    , public ITfFunctionProvider
 {
 public:
     CThreadMgr();
@@ -78,6 +99,11 @@ public:
         _Out_ ITfFunctionProvider **ppFuncProv) override;
     STDMETHODIMP EnumFunctionProviders(_Out_ IEnumTfFunctionProviders **ppEnum) override;
     STDMETHODIMP GetGlobalCompartment(_Out_ ITfCompartmentMgr **ppCompMgr) override;
+
+    // ** ITfFunctionProvider methods **
+    STDMETHODIMP GetType(_Out_ GUID *guid) override;
+    STDMETHODIMP GetDescription(_Out_ BSTR *description) override;
+    STDMETHODIMP GetFunction(_In_ REFGUID guid, _In_ REFIID riid, _Out_ IUnknown **function) override;
 
     // ** ITfThreadMgrEx methods **
     STDMETHODIMP ActivateEx(
@@ -274,6 +300,68 @@ protected:
 
 ////////////////////////////////////////////////////////////////////////////
 
+CReconversion::CReconversion() : m_cRefs(1)
+{
+}
+
+STDMETHODIMP CReconversion::QueryInterface(REFIID iid, LPVOID *ppvObject)
+{
+    TRACE("(%p) %s, %p\n", this, debugstr_guid(&iid), ppvObject);
+
+    if (!ppvObject) return E_INVALIDARG;
+    *ppvObject = NULL;
+    if (iid != IID_IUnknown && iid != IID_ITfFunction && iid != IID_ITfFnReconversion) return E_NOINTERFACE;
+    *ppvObject = static_cast<ITfFnReconversion *>(this);
+    AddRef();
+    return S_OK;
+}
+
+STDMETHODIMP_(ULONG) CReconversion::AddRef()
+{
+    return ::InterlockedIncrement(&m_cRefs);
+}
+
+STDMETHODIMP_(ULONG) CReconversion::Release()
+{
+    ULONG refs = ::InterlockedDecrement(&m_cRefs);
+    if (!refs) delete this;
+    return refs;
+}
+
+STDMETHODIMP CReconversion::GetDisplayName(_Out_ BSTR *name)
+{
+    TRACE("(%p) %p\n", this, name);
+
+    if (!name) return E_INVALIDARG;
+    *name = SysAllocString(L"Reconversion");
+    return *name ? S_OK : E_OUTOFMEMORY;
+}
+
+STDMETHODIMP CReconversion::QueryRange(_In_ ITfRange *range, _Out_ ITfRange **newRange, _Out_ BOOL *convertable)
+{
+    FIXME("(%p) %p %p %p stub\n", this, range, newRange, convertable);
+
+    if (!newRange || !convertable) return E_INVALIDARG;
+    *newRange = NULL;
+    *convertable = FALSE;
+    return E_NOTIMPL;
+}
+
+STDMETHODIMP CReconversion::GetReconversion(_In_ ITfRange *range, _Out_ ITfCandidateList **candidateList)
+{
+    FIXME("(%p) %p %p stub\n", this, range, candidateList);
+
+    if (!candidateList) return E_INVALIDARG;
+    *candidateList = NULL;
+    return E_NOTIMPL;
+}
+
+STDMETHODIMP CReconversion::Reconvert(_In_ ITfRange *range)
+{
+    FIXME("(%p) %p stub\n", this, range);
+    return E_NOTIMPL;
+}
+
 CThreadMgr::CThreadMgr()
     : m_cRefs(1)
     , m_CompartmentMgr(NULL)
@@ -370,6 +458,8 @@ STDMETHODIMP CThreadMgr::QueryInterface(REFIID iid, LPVOID *ppvObject)
         pUnk = static_cast<ITfUIElementMgr *>(this);
     else if (iid == IID_ITfSourceSingle)
         pUnk = static_cast<ITfSourceSingle *>(this);
+    else if (iid == IID_ITfFunctionProvider)
+        pUnk = static_cast<ITfFunctionProvider *>(this);
 
     if (pUnk)
     {
@@ -609,8 +699,18 @@ STDMETHODIMP CThreadMgr::GetFunctionProvider(
     _In_ REFCLSID clsid,
     _Out_ ITfFunctionProvider **ppFuncProv)
 {
-    FIXME("STUB:(%p)\n", this);
-    return E_NOTIMPL;
+    TRACE("(%p) %s %p\n", this, debugstr_guid(&clsid), ppFuncProv);
+
+    if (!ppFuncProv) return E_INVALIDARG;
+    *ppFuncProv = NULL;
+    if (clsid != GUID_SYSTEM_FUNCTIONPROVIDER)
+    {
+        FIXME("clsid %s not supported\n", debugstr_guid(&clsid));
+        return E_NOTIMPL;
+    }
+    *ppFuncProv = static_cast<ITfFunctionProvider *>(this);
+    (*ppFuncProv)->AddRef();
+    return S_OK;
 }
 
 STDMETHODIMP CThreadMgr::EnumFunctionProviders(_Out_ IEnumTfFunctionProviders **ppEnum)
@@ -636,6 +736,35 @@ STDMETHODIMP CThreadMgr::GetGlobalCompartment(_Out_ ITfCompartmentMgr **ppCompMg
 
     g_globalCompartmentMgr->AddRef();
     *ppCompMgr = g_globalCompartmentMgr;
+    return S_OK;
+}
+
+STDMETHODIMP CThreadMgr::GetType(_Out_ GUID *guid)
+{
+    FIXME("(%p) %p stub\n", this, guid);
+    return E_NOTIMPL;
+}
+
+STDMETHODIMP CThreadMgr::GetDescription(_Out_ BSTR *description)
+{
+    FIXME("(%p) %p stub\n", this, description);
+    return E_NOTIMPL;
+}
+
+STDMETHODIMP CThreadMgr::GetFunction(_In_ REFGUID guid, _In_ REFIID riid, _Out_ IUnknown **function)
+{
+    TRACE("(%p) %s %s %p\n", this, debugstr_guid(&guid), debugstr_guid(&riid), function);
+
+    if (!function) return E_INVALIDARG;
+    *function = NULL;
+    if (riid != IID_ITfFnReconversion)
+    {
+        FIXME("function %s is not supported\n", debugstr_guid(&riid));
+        return E_NOTIMPL;
+    }
+    CReconversion *reconversion = new(cicNoThrow) CReconversion();
+    if (!reconversion) return E_OUTOFMEMORY;
+    *function = static_cast<ITfFnReconversion *>(reconversion);
     return S_OK;
 }
 

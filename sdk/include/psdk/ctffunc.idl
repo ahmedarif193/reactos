@@ -369,7 +369,7 @@ interface ITfFnPropertyUIStatus : IUnknown
   uuid(4cea93c0-0a58-11d3-8df0-00105a2799b5),
   pointer_default(unique)
 ]
-interface ITfFnReconversion : IUnknown
+interface ITfFnReconversion : ITfFunction
 {
     HRESULT QueryRange(
         [in]  ITfRange *pRange,
