@@ -100,13 +100,31 @@ IopResDbConflict(_In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR a, _In_ PCM_PARTIAL_RESOUR
         {
             UINT64 aStart = (UINT64)a->u.Memory.Start.QuadPart, aEnd = aStart + a->u.Memory.Length;
             UINT64 bStart = (UINT64)b->u.Memory.Start.QuadPart, bEnd = bStart + b->u.Memory.Length;
-            return (aStart < bEnd && bStart < aEnd);
+            if (!(aStart < bEnd && bStart < aEnd))
+                return FALSE;
+            if (((a->Flags & CM_RESOURCE_MEMORY_WINDOW_DECODE) &&
+                 aStart <= bStart && aEnd >= bEnd) ||
+                ((b->Flags & CM_RESOURCE_MEMORY_WINDOW_DECODE) &&
+                 bStart <= aStart && bEnd >= aEnd))
+            {
+                return FALSE;
+            }
+            return TRUE;
         }
         case CmResourceTypePort:
         {
             UINT64 aStart = (UINT64)a->u.Port.Start.QuadPart, aEnd = aStart + a->u.Port.Length;
             UINT64 bStart = (UINT64)b->u.Port.Start.QuadPart, bEnd = bStart + b->u.Port.Length;
-            return (aStart < bEnd && bStart < aEnd);
+            if (!(aStart < bEnd && bStart < aEnd))
+                return FALSE;
+            if (((a->Flags & CM_RESOURCE_PORT_WINDOW_DECODE) &&
+                 aStart <= bStart && aEnd >= bEnd) ||
+                ((b->Flags & CM_RESOURCE_PORT_WINDOW_DECODE) &&
+                 bStart <= aStart && bEnd >= aEnd))
+            {
+                return FALSE;
+            }
+            return TRUE;
         }
         case CmResourceTypeInterrupt:
             return (a->u.Interrupt.Vector == b->u.Interrupt.Vector);
@@ -114,7 +132,16 @@ IopResDbConflict(_In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR a, _In_ PCM_PARTIAL_RESOUR
         {
             UINT32 aStart = a->u.BusNumber.Start, aEnd = aStart + a->u.BusNumber.Length;
             UINT32 bStart = b->u.BusNumber.Start, bEnd = bStart + b->u.BusNumber.Length;
-            return (aStart < bEnd && bStart < aEnd);
+            if (!(aStart < bEnd && bStart < aEnd))
+                return FALSE;
+            if ((a->ShareDisposition == CmResourceShareShared &&
+                 aStart < bStart && aEnd >= bEnd) ||
+                (b->ShareDisposition == CmResourceShareShared &&
+                 bStart < aStart && bEnd >= aEnd))
+            {
+                return FALSE;
+            }
+            return TRUE;
         }
         case CmResourceTypeDma:
             return (a->u.Dma.Channel == b->u.Dma.Channel);
