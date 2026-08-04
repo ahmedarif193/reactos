@@ -184,6 +184,9 @@ list(APPEND SOURCE
     windows.media.idl
     windows.networking.connectivity.idl
     windows.networking.idl
+    windows.security.credentials.idl
+    windows.security.cryptography.core.idl
+    windows.security.cryptography.idl
     windows.storage.fileproperties.idl
     windows.storage.idl
     windows.storage.search.idl

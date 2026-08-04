@@ -82,6 +82,7 @@ dll/win32/cryptdll            # Synced to Wine-11.14
 dll/win32/cryptnet            # Synced to Wine-11.14
 dll/win32/cryptsp             # Synced to Wine-11.14
 dll/win32/cryptui             # Synced to Wine-11.14
+dll/win32/cryptowinrt         # Synced to Wine-11.14
 dll/win32/dbgeng              # Synced to Wine-11.14
 dll/win32/dbghelp             # Synced to Wine-11.14
 dll/win32/dciman32            # Synced to Wine-11.14
