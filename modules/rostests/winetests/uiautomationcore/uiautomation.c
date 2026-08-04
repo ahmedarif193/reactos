@@ -2402,12 +2402,7 @@ HRESULT WINAPI ProviderSimple_GetPropertyValue(IRawElementProviderSimple *iface,
 
     case UIA_ProviderDescriptionPropertyId:
     {
-#ifdef __REACTOS__
-        WCHAR buf[1024];
-#else
         WCHAR buf[1024] = {};
-        memset(&buf, 0, sizeof(buf));
-#endif
 
         mbstowcs(buf, This->prov_name, strlen(This->prov_name));
         V_VT(ret_val) = VT_BSTR;
