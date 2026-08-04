@@ -29,8 +29,6 @@ list(APPEND SOURCE
     iphlpapi_reactos.c
     iphlpapi_main.c
     media.c
-    netio_reactos.c
-    registry.c
     iphlpapi_private.h
     ${CMAKE_CURRENT_BINARY_DIR}/iphlpapi_stubs.c)
 
@@ -42,7 +40,6 @@ add_library(iphlpapi MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/iphlpapi.def)
 
 set_module_type(iphlpapi win32dll UNICODE)
-target_link_libraries(iphlpapi iphlpapi_native wine tdilib)
-add_importlibs(iphlpapi dhcpcsvc advapi32 psapi ws2_32 msvcrt kernel32 ntdll)
-add_pch(iphlpapi iphlpapi_private.h SOURCE)
+target_link_libraries(iphlpapi iphlpapi_native wine tdilib uuid)
+add_importlibs(iphlpapi dhcpcsvc dnsapi nsi advapi32 psapi ws2_32 msvcrt kernel32 ntdll)
 add_cd_file(TARGET iphlpapi DESTINATION reactos/system32 FOR all)
