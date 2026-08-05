@@ -38,6 +38,7 @@ typedef struct _ACPI_FAN_CONTEXT
     ACPI_FAN_REQUEST Requests[ACPI_FAN_MAX_REQUESTS];
     ULONG RequestCount;
     LONG AppliedLevel;
+    BOOLEAN Advanced;
 } ACPI_FAN_CONTEXT, *PACPI_FAN_CONTEXT;
 
 static int acpi_fan_add(struct acpi_device *device);
@@ -59,19 +60,25 @@ static ULONG acpi_fan_context_count;
 
 static BOOLEAN
 acpi_fan_has_advanced_control(
-    ACPI_HANDLE handle)
+    ACPI_HANDLE handle,
+    const char *bid)
 {
     static const char *methods[] = {"_FIF", "_FPS", "_FSL", "_FST"};
     ACPI_HANDLE method;
+    BOOLEAN present[4];
+    BOOLEAN all = TRUE;
     UINT32 i;
 
     for (i = 0; i < sizeof(methods) / sizeof(methods[0]); i++) {
-        if (ACPI_FAILURE(AcpiGetHandle(handle, (ACPI_STRING)methods[i], &method))) {
-            return FALSE;
-        }
+        present[i] = ACPI_SUCCESS(AcpiGetHandle(handle, (ACPI_STRING)methods[i], &method));
+        if (!present[i])
+            all = FALSE;
     }
 
-    return TRUE;
+    DPRINT1("ACPI: Fan [%s] control methods: _FIF=%u _FPS=%u _FSL=%u _FST=%u -> %s\n",
+            bid, present[0], present[1], present[2], present[3],
+            all ? "fine-grain" : "D-state only");
+    return all;
 }
 
 static ACPI_STATUS
@@ -287,7 +294,7 @@ acpi_fan_apply_level_locked(
     if (context->AppliedLevel == level)
         return_VALUE(0);
 
-    if (acpi_fan_has_advanced_control(device->handle)) {
+    if (context->Advanced) {
         if (level == ACPI_FAN_LEVEL_OFF) {
             status = acpi_fan_set_level(device->handle, 0);
         } else if (level == ACPI_FAN_LEVEL_MAXIMUM) {
@@ -518,6 +525,7 @@ acpi_fan_add(
 
     sprintf(acpi_device_name(device), "%s", ACPI_FAN_DEVICE_NAME);
     sprintf(acpi_device_class(device), "%s", ACPI_FAN_CLASS);
+    context->Advanced = acpi_fan_has_advanced_control(device->handle, acpi_device_bid(device));
     ExAcquireFastMutex(&context->PolicyLock);
     result = acpi_fan_force_device_maximum(context);
     ExReleaseFastMutex(&context->PolicyLock);
