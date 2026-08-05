@@ -54,12 +54,23 @@ KdpAcquireLock(
     _In_ PKSPIN_LOCK SpinLock)
 {
     KIRQL OldIrql;
+    ULONG64 SpinCount = 0;
 
     /* Acquire the spinlock without waiting at raised IRQL */
     while (TRUE)
     {
         /* Loop until the spinlock becomes available */
-        while (!KeTestSpinLock(SpinLock));
+        while (!KeTestSpinLock(SpinLock))
+        {
+            /* During a bugcheck the other processors are frozen and can never
+             * release a lock they hold. Break the lock after a bounded spin so
+             * the bugcheck path can keep printing and write the crash dump. */
+            if (KeBugCheckActive && (++SpinCount >= 100000000ULL))
+            {
+                KeInitializeSpinLock(SpinLock);
+                break;
+            }
+        }
 
         /* Spinlock is free, raise IRQL to high level */
         KeRaiseIrql(HIGH_LEVEL, &OldIrql);
