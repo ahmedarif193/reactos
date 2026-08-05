@@ -120,6 +120,9 @@ typedef struct _FDO_DEVICE_EXTENSION
     PHW_PASSIVE_INITIALIZE_ROUTINE HwPassiveInitRoutine;
     PKINTERRUPT Interrupt;
     ULONG InterruptIrql;
+    /* Non-NULL when the adapter is connected message-based; each entry owns
+     * the KINTERRUPT whose lock serializes that message. */
+    PIO_INTERRUPT_MESSAGE_INFO MessageInfo;
     ULONG PerfFlags;
     ULONG PerfConcurrentChannels;
     BOOLEAN PerfConfigured;
@@ -132,7 +135,6 @@ typedef struct _FDO_DEVICE_EXTENSION
     KDPC MiniportTimerDpc;
     KDPC MiniportTimerRequestDpc;
     KSPIN_LOCK MiniportTimerLock;
-    KSPIN_LOCK MsiSpinLock;
     PHW_TIMER MiniportTimerRoutine;
     PHW_TIMER MiniportTimerRequestedRoutine;
     ULONG MiniportTimerRequestedValue;
@@ -274,6 +276,11 @@ MiniportAdapterControlPreFind(
 NTSTATUS
 MiniportHwInitialize(
     _In_ PMINIPORT Miniport);
+
+BOOLEAN
+MiniportHwMSInterrupt(
+    _In_ PMINIPORT Miniport,
+    _In_ ULONG MessageId);
 
 BOOLEAN
 MiniportHwInterrupt(
