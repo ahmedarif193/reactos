@@ -351,6 +351,13 @@ acpi_fan_force_device_maximum(
     return_VALUE(acpi_fan_apply_level_locked(context, ACPI_FAN_LEVEL_MAXIMUM));
 }
 
+/*
+ * Fast mutexes restore the IRQL saved at acquire, so they must be released
+ * in LIFO order. Releasing the list lock while the policy lock is still
+ * held would drop IRQL back to PASSIVE inside the policy-locked region and
+ * trip the APC_LEVEL assert on the later release. Keep the list lock held
+ * until acpi_fan_release_context.
+ */
 static PACPI_FAN_CONTEXT
 acpi_fan_acquire_context(
     ACPI_HANDLE handle)
@@ -366,8 +373,17 @@ acpi_fan_acquire_context(
         ExAcquireFastMutex(&context->PolicyLock);
         break;
     }
-    ExReleaseFastMutex(&acpi_fan_list_lock);
+    if (!context)
+        ExReleaseFastMutex(&acpi_fan_list_lock);
     return context;
+}
+
+static VOID
+acpi_fan_release_context(
+    PACPI_FAN_CONTEXT context)
+{
+    ExReleaseFastMutex(&context->PolicyLock);
+    ExReleaseFastMutex(&acpi_fan_list_lock);
 }
 
 static LONG
@@ -431,7 +447,7 @@ acpi_fan_force_maximum(
     if (!context)
         return_VALUE(-1);
     result = acpi_fan_force_device_maximum(context);
-    ExReleaseFastMutex(&context->PolicyLock);
+    acpi_fan_release_context(context);
     return_VALUE(result);
 }
 
@@ -462,7 +478,7 @@ acpi_fan_set_thermal_level(
     if (!context)
         return_VALUE(-1);
     result = acpi_fan_update_request_locked(context, source, level);
-    ExReleaseFastMutex(&context->PolicyLock);
+    acpi_fan_release_context(context);
     return_VALUE(result);
 }
 
