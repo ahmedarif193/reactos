@@ -542,6 +542,7 @@ Directory::GetFileBothDirInfoDirect(
     PFILE_BOTH_DIR_INFORMATION PreviousBuffer = NULL;
     ULONG EntrySize = 0;
     ULONG TotalBufferLength = *BufferLength;
+    BOOLEAN SkipToResume = FALSE;
     NTSTATUS Status;
 
     if (RestartScan)
@@ -549,6 +550,22 @@ Directory::GetFileBothDirInfoDirect(
         Status = ResetDirectEnumeration();
         if (!NT_SUCCESS(Status))
             return Status;
+        HasResumeName = FALSE;
+    }
+    else if (HasResumeName)
+    {
+        /*
+         * Where the previous query stopped is recorded as a node and an offset
+         * inside it, and both stop describing that entry as soon as the
+         * directory is edited. Deleting what was just enumerated is ordinary
+         * ("del *.txt"), and it shifts every following entry, so continue from
+         * the last name handed out and let the index's own ordering say what
+         * comes next.
+         */
+        Status = ResetDirectEnumeration();
+        if (!NT_SUCCESS(Status))
+            return Status;
+        SkipToResume = TRUE;
     }
     else if (EnumerationDepth == 0)
     {
@@ -587,14 +604,36 @@ Directory::GetFileBothDirInfoDirect(
         if (!NT_SUCCESS(Status))
             break;
 
+        if (SkipToResume)
+        {
+            PFileNameEx EntryName = (PFileNameEx)IndexEntry->IndexStream;
+            UNICODE_STRING EntryString;
+            UNICODE_STRING ResumeString;
+            LONG CompareResult;
+
+            EntryString.Buffer = EntryName->Name;
+            EntryString.Length = (USHORT)(EntryName->NameLength * sizeof(WCHAR));
+            EntryString.MaximumLength = EntryString.Length;
+            ResumeString.Buffer = ResumeName;
+            ResumeString.Length = (USHORT)(ResumeNameLength * sizeof(WCHAR));
+            ResumeString.MaximumLength = ResumeString.Length;
+
+            Status = DiskVolume->CompareFileNames(&EntryString, &ResumeString, &CompareResult);
+            if (!NT_SUCCESS(Status))
+                break;
+            if (CompareResult <= 0)
+                continue;
+            SkipToResume = FALSE;
+        }
+
         if (IsEligibleForFileDir(
                 IndexEntry,
                 FileNameFilter))
         {
             BTreeKey Key = {};
+            PFileNameEx EmittedName = (PFileNameEx)IndexEntry->IndexStream;
             BOOLEAN FindShortName =
-                ((PFileNameEx)IndexEntry->IndexStream)->
-                    NameType == NAME_TYPE_WIN32;
+                EmittedName->NameType == NAME_TYPE_WIN32;
 
             Key.Entry = IndexEntry;
             Status = AddKeyToBothDirInfo(
@@ -640,6 +679,10 @@ Directory::GetFileBothDirInfoDirect(
                 Buffer->ShortNameLength =
                     ShortNameLength;
             }
+
+            ResumeNameLength = (UCHAR)min(EmittedName->NameLength, NTFS_MAX_FILE_NAME_LENGTH);
+            RtlCopyMemory(ResumeName, EmittedName->Name, ResumeNameLength * sizeof(WCHAR));
+            HasResumeName = TRUE;
 
             if (ReturnSingleEntry)
             {

@@ -1230,6 +1230,11 @@ private:
     PAttribute EnumerationAllocation = NULL;
     PAttribute EnumerationBitmap = NULL;
     DirectEnumerationFrame EnumerationStack[64] = {};
+    /* The name last handed to a caller: index offsets stop meaning anything
+     * once the directory is edited, so a continued query resumes from here. */
+    WCHAR ResumeName[NTFS_MAX_FILE_NAME_LENGTH + 1] = {};
+    UCHAR ResumeNameLength = 0;
+    BOOLEAN HasResumeName = FALSE;
     ULONG EnumerationDepth = 0;
     LONG EnumerationLoadedDepth = -1;
     ULONGLONG EnumerationLoadedVCN = ~(ULONGLONG)0;
