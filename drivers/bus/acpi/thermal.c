@@ -433,6 +433,17 @@ NTSTATUS AcpiThermalSetPower(ACPI_HANDLE Handle, BOOLEAN Engaged)
     BOOLEAN RestoreForce = FALSE;
     int Result;
 
+    /*
+     * Fine-grain fans change speed through _FSL, not through D-states: a fan
+     * already in D0 ignores a plain power-up. Route through the fan engine,
+     * which applies the _FPS-derived control and falls back to D-states
+     * itself; only non-fan cooling devices take the raw power path below.
+     */
+    if (acpi_fan_set_thermal_level(Handle, Handle,
+                                   Engaged ? ACPI_FAN_THERMAL_LEVEL_MAXIMUM
+                                           : ACPI_FAN_THERMAL_LEVEL_OFF) == 0)
+        return STATUS_SUCCESS;
+
     if (!acpi_bus_get_device(Handle, &Device) && Device)
     {
         ForcePowerState = Device->flags.force_power_state;
