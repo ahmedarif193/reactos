@@ -698,15 +698,13 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     /*
      * Parsing the path and the file record is by far the most expensive part
      * of an open, so reuse the record left behind by an earlier open of the
-     * same name when there is one.
+     * same name when there is one. Every disposition looks: the cached record
+     * is the one parsed instance of that name, so an open that goes on to
+     * modify the file has to be holding it rather than a private copy that
+     * later opens would never see. A hit on FILE_CREATE simply means the name
+     * exists, which the disposition handling below already rejects.
      */
-    if (Disposition == FILE_OPEN || Disposition == FILE_OPEN_IF)
-    {
-        CachedRecord = NtfsAcquireCachedRecord(
-            VolCB,
-            FileObject->FileName.Buffer,
-            (USHORT)(FileObject->FileName.Length / sizeof(WCHAR)));
-    }
+    CachedRecord = NtfsAcquireCachedRecord(VolCB, FileObject->FileName.Buffer, (USHORT)(FileObject->FileName.Length / sizeof(WCHAR)));
 
     if (CachedRecord)
     {

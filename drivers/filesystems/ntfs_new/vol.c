@@ -635,6 +635,27 @@ NtfsCachedRecordMatches(_In_ PNtfsCachedRecord Entry,
 
 /* Caller must hold RecordCacheMutex. */
 static
+PNtfsCachedRecord
+NtfsLookupCachedRecordLocked(_In_ PVolumeContextBlock VolCB,
+                             _In_ ULONG Hash,
+                             _In_reads_(Length) PCWSTR Name,
+                             _In_ USHORT Length)
+{
+    PLIST_ENTRY Bucket = &VolCB->RecordCacheHash[Hash & (NTFS_RECORD_CACHE_BUCKETS - 1)];
+    PLIST_ENTRY Entry;
+
+    for (Entry = Bucket->Flink; Entry != Bucket; Entry = Entry->Flink)
+    {
+        PNtfsCachedRecord Candidate = CONTAINING_RECORD(Entry, NtfsCachedRecord, HashLink);
+
+        if (NtfsCachedRecordMatches(Candidate, Hash, Name, Length))
+            return Candidate;
+    }
+    return NULL;
+}
+
+/* Caller must hold RecordCacheMutex. */
+static
 VOID
 NtfsTrimRecordCache(_In_ PVolumeContextBlock VolCB)
 {
@@ -664,31 +685,19 @@ NtfsAcquireCachedRecord(_In_ PVolumeContextBlock VolCB,
                         _In_ USHORT Length)
 {
     ULONG Hash;
-    PLIST_ENTRY Entry;
-    PNtfsCachedRecord Found = NULL;
+    PNtfsCachedRecord Found;
 
     if (!VolCB || !Name || !Length)
         return NULL;
 
     Hash = NtfsHashName(Name, Length);
     ExAcquireFastMutex(&VolCB->RecordCacheMutex);
-    for (Entry = VolCB->RecordCacheHash[
-             Hash & (NTFS_RECORD_CACHE_BUCKETS - 1)].Flink;
-         Entry != &VolCB->RecordCacheHash[
-             Hash & (NTFS_RECORD_CACHE_BUCKETS - 1)];
-         Entry = Entry->Flink)
+    Found = NtfsLookupCachedRecordLocked(VolCB, Hash, Name, Length);
+    if (Found)
     {
-        PNtfsCachedRecord Candidate =
-            CONTAINING_RECORD(Entry, NtfsCachedRecord, HashLink);
-
-        if (NtfsCachedRecordMatches(Candidate, Hash, Name, Length))
-        {
-            Candidate->InUse++;
-            RemoveEntryList(&Candidate->Link);
-            InsertHeadList(&VolCB->RecordCacheList, &Candidate->Link);
-            Found = Candidate;
-            break;
-        }
+        Found->InUse++;
+        RemoveEntryList(&Found->Link);
+        InsertHeadList(&VolCB->RecordCacheList, &Found->Link);
     }
     ExReleaseFastMutex(&VolCB->RecordCacheMutex);
     return Found;
@@ -731,6 +740,17 @@ NtfsCacheRecord(_In_ PVolumeContextBlock VolCB,
     RtlCopyMemory(New->Name, Name, Length * sizeof(WCHAR));
 
     ExAcquireFastMutex(&VolCB->RecordCacheMutex);
+    /*
+     * One entry per name. A second entry for a name already cached would
+     * outlive the eviction that a delete or a rename performs on the first,
+     * and would go on serving a name that no longer resolves.
+     */
+    if (NtfsLookupCachedRecordLocked(VolCB, Hash, Name, Length))
+    {
+        ExReleaseFastMutex(&VolCB->RecordCacheMutex);
+        ExFreePoolWithTag(New, TAG_NTFS);
+        return NULL;
+    }
     InsertHeadList(&VolCB->RecordCacheList, &New->Link);
     InsertHeadList(
         &VolCB->RecordCacheHash[
@@ -774,22 +794,30 @@ NtfsEvictCachedRecord(_In_ PVolumeContextBlock VolCB,
 {
     ULONG Hash;
     PLIST_ENTRY Entry;
-    PNtfsCachedRecord Doomed = NULL;
+    PLIST_ENTRY Next;
+    LIST_ENTRY DoomedList;
 
     if (!VolCB || !Name || !Length)
         return;
 
+    InitializeListHead(&DoomedList);
     Hash = NtfsHashName(Name, Length);
     ExAcquireFastMutex(&VolCB->RecordCacheMutex);
+    /*
+     * Every entry under this name goes, not just the first one found. The
+     * name is about to stop resolving, and one entry left behind would keep
+     * answering opens for a file that no longer exists.
+     */
     for (Entry = VolCB->RecordCacheHash[
              Hash & (NTFS_RECORD_CACHE_BUCKETS - 1)].Flink;
          Entry != &VolCB->RecordCacheHash[
              Hash & (NTFS_RECORD_CACHE_BUCKETS - 1)];
-         Entry = Entry->Flink)
+         Entry = Next)
     {
         PNtfsCachedRecord Candidate =
             CONTAINING_RECORD(Entry, NtfsCachedRecord, HashLink);
 
+        Next = Entry->Flink;
         if (NtfsCachedRecordMatches(Candidate, Hash, Name, Length))
         {
             RemoveEntryList(&Candidate->Link);
@@ -801,14 +829,15 @@ NtfsEvictCachedRecord(_In_ PVolumeContextBlock VolCB,
             if (RecordAlreadyFreed)
                 Candidate->Record = NULL;
             if (Candidate->InUse == 0)
-                Doomed = Candidate;
-            break;
+                InsertTailList(&DoomedList, &Candidate->Link);
         }
     }
     ExReleaseFastMutex(&VolCB->RecordCacheMutex);
 
-    if (Doomed)
+    while (!IsListEmpty(&DoomedList))
     {
+        PNtfsCachedRecord Doomed = CONTAINING_RECORD(RemoveHeadList(&DoomedList), NtfsCachedRecord, Link);
+
         if (Doomed->Record)
             NtfsFileRecordDestroy(Doomed->Record);
         ExFreePoolWithTag(Doomed, TAG_NTFS);
