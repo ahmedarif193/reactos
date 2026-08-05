@@ -778,6 +778,7 @@ Directory::GetFileBothDirInfo(_In_    BOOLEAN ReturnSingleEntry,
     NTSTATUS Status = STATUS_SUCCESS;
     ULONG EntrySize, TotalBufferLength;
     PFILE_BOTH_DIR_INFORMATION PreviousBuffer;
+    BOOLEAN SkipToResume = FALSE;
 
     if (DirectEnumeration)
     {
@@ -792,16 +793,27 @@ Directory::GetFileBothDirInfo(_In_    BOOLEAN ReturnSingleEntry,
     EntrySize = 0;
     PreviousBuffer = NULL;
 
+    /* Restart before testing for the end: a scan that ran to completion must
+     * still be restartable. */
+    if (RestartScan)
+    {
+        ResetCurrentKey();
+        HasResumeName = FALSE;
+    }
+    else if (HasResumeName)
+    {
+        /* Keys move as the directory is edited, so a continued query picks up
+         * from the last name handed out rather than from a stale position. */
+        ResetCurrentKey();
+        SkipToResume = TRUE;
+    }
+
     if (!CurrentKey ||
         IsEndOfNode(CurrentKey))
     {
         // We reached the end of the directory listing.
         return STATUS_NO_MORE_FILES;
     }
-
-    // Restart scan if requested.
-    if (RestartScan)
-        ResetCurrentKey();
 
     if (FileNameFilter)
     {
@@ -816,6 +828,31 @@ Directory::GetFileBothDirInfo(_In_    BOOLEAN ReturnSingleEntry,
 
     while (CurrentKey)
     {
+        if (SkipToResume && !IsLastEntry(CurrentKey))
+        {
+            PFileNameEx EntryName = (PFileNameEx)CurrentKey->Entry->IndexStream;
+            UNICODE_STRING EntryString;
+            UNICODE_STRING ResumeString;
+            LONG CompareResult;
+
+            EntryString.Buffer = EntryName->Name;
+            EntryString.Length = (USHORT)(EntryName->NameLength * sizeof(WCHAR));
+            EntryString.MaximumLength = EntryString.Length;
+            ResumeString.Buffer = ResumeName;
+            ResumeString.Length = (USHORT)(ResumeNameLength * sizeof(WCHAR));
+            ResumeString.MaximumLength = ResumeString.Length;
+
+            Status = DiskVolume->CompareFileNames(&EntryString, &ResumeString, &CompareResult);
+            if (!NT_SUCCESS(Status))
+                goto done;
+            if (CompareResult <= 0)
+            {
+                CurrentKey = GetNextKey(CurrentKey);
+                continue;
+            }
+            SkipToResume = FALSE;
+        }
+
         if (IsEligibleForFileDir(CurrentKey,
                                  FileNameFilter))
         {
@@ -842,6 +879,11 @@ Directory::GetFileBothDirInfo(_In_    BOOLEAN ReturnSingleEntry,
                 DPRINT1("Failed to add key to buffer!\n");
                 goto done;
             }
+
+            PFileNameEx EmittedName = (PFileNameEx)CurrentKey->Entry->IndexStream;
+            ResumeNameLength = (UCHAR)min(EmittedName->NameLength, NTFS_MAX_FILE_NAME_LENGTH);
+            RtlCopyMemory(ResumeName, EmittedName->Name, ResumeNameLength * sizeof(WCHAR));
+            HasResumeName = TRUE;
 
             if (ReturnSingleEntry)
             {
