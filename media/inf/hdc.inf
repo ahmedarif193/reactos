@@ -119,7 +119,7 @@ HKR, , Installer32,    0, "syssetup.dll,HdcClassInstaller"
 %PCI\VEN_8086&DEV_2921.DeviceDesc%=PciIde_Inst, PCI\VEN_8086&DEV_2921
 %PCI\VEN_8086&DEV_2926.DeviceDesc%=PciIde_Inst, PCI\VEN_8086&DEV_2926
 %PCI\VEN_8086&DEV_2923.DeviceDesc%=PciIde_Inst, PCI\VEN_8086&DEV_2923
-%PCI\VEN_8086&DEV_2922.DeviceDesc%=PciIde_Inst, PCI\VEN_8086&DEV_2922
+%PCI\VEN_8086&DEV_2922.DeviceDesc%=StorAhci_Inst, PCI\VEN_8086&DEV_2922
 %PCI\VEN_8086&DEV_2928.DeviceDesc%=PciIde_Inst, PCI\VEN_8086&DEV_2928
 %PCI\VEN_8086&DEV_2929.DeviceDesc%=PciIde_Inst, PCI\VEN_8086&DEV_2929
 %PCI\VEN_8086&DEV_292d.DeviceDesc%=PciIde_Inst, PCI\VEN_8086&DEV_292d
@@ -326,6 +326,7 @@ HKR, , Installer32,    0, "syssetup.dll,HdcClassInstaller"
 %PCI\CC_0101.DeviceDesc%=PciIde_Inst,PCI\CC_0101                       ; Device ID for generic Dual PCI IDE  (UNKNOWN_PCI_IDE)
 %PCI\CC_0104.DeviceDesc%=PciIde_Inst,PCI\CC_0104                       ; Device ID for generic Dual PCI IDE  (UNKNOWN_PCI_IDE)
 %PCI\CC_0105.DeviceDesc%=PciIde_Inst,PCI\CC_0105                       ; Device ID for generic Dual PCI IDE  (UNKNOWN_PCI_IDE)
+%PCI\CC_010601.DeviceDesc%=StorAhci_Inst,PCI\CC_010601                 ; AHCI 1.0 controller: keep the storahci binding the CDDB used on first boot
 %PCI\CC_0106.DeviceDesc%=PciIde_Inst,PCI\CC_0106                       ; Device ID for generic Dual PCI IDE  (UNKNOWN_PCI_IDE)
 %ataChan.DeviceDesc%=Atapi_Inst, Internal_IDE_Channel
 %*PNP0600.PriDeviceDesc%=Atapi_Inst, Primary_IDE_Channel
@@ -376,6 +377,22 @@ ServiceType    = 1
 StartType      = 0
 ErrorControl   = 1
 ServiceBinary  = %12%\atapi.sys
+LoadOrderGroup = SCSI Miniport
+
+;---------------------------- AHCI STORPORT DRIVER ----------------------
+
+; storahci.sys and storport.sys are boot-critical and already present in
+; %12% (the CDDB loaded them on first boot), so no CopyFiles here.
+[StorAhci_Inst.NT]
+
+[StorAhci_Inst.NT.Services]
+AddService = storahci, 0x00000002, storahci_Service_Inst
+
+[storahci_Service_Inst]
+ServiceType    = 1
+StartType      = 0
+ErrorControl   = 3
+ServiceBinary  = %12%\storahci.sys
 LoadOrderGroup = SCSI Miniport
 
 ;-------------------------------- STRINGS -------------------------------
@@ -694,6 +711,7 @@ ataChan.DeviceDesc="ATA Channel"
 PCI\CC_0101.DeviceDesc="Dual Channel PCI BusMaster IDE Controller"
 PCI\CC_0104.DeviceDesc="Generic RAID IDE Controller"
 PCI\CC_0105.DeviceDesc="Generic ATA Controller"
+PCI\CC_010601.DeviceDesc="Standard SATA AHCI Controller"
 PCI\CC_0106.DeviceDesc="Generic Serial ATA Controller"
 
 [Strings.0404]
