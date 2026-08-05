@@ -17,6 +17,10 @@
 
 ULONG PortNumber = 0;
 
+#ifdef _WIN64
+C_ASSERT(sizeof(HW_INITIALIZATION_DATA) == 208);
+#endif
+
 
 /* FUNCTIONS ******************************************************************/
 
@@ -27,6 +31,7 @@ PortAddDriverInitData(
     PHW_INITIALIZATION_DATA HwInitializationData)
 {
     PDRIVER_INIT_DATA InitData;
+    ULONG CopyLength;
 
     DPRINT1("PortAddDriverInitData()\n");
 
@@ -36,9 +41,9 @@ PortAddDriverInitData(
     if (InitData == NULL)
         return STATUS_NO_MEMORY;
 
-    RtlCopyMemory(&InitData->HwInitData,
-                  HwInitializationData,
-                  sizeof(HW_INITIALIZATION_DATA));
+    RtlZeroMemory(&InitData->HwInitData, sizeof(InitData->HwInitData));
+    CopyLength = min(HwInitializationData->HwInitializationDataSize, sizeof(InitData->HwInitData));
+    RtlCopyMemory(&InitData->HwInitData, HwInitializationData, CopyLength);
 
     InsertHeadList(&DriverExtension->InitDataListHead,
                    &InitData->Entry);
@@ -121,17 +126,14 @@ PortAcquireSpinLock(
     switch (SpinLock)
     {
         case DpcLock: /* 1, */
-            DPRINT("DpcLock\n");
-            break;
-
         case StartIoLock: /* 2 */
-            DPRINT("StartIoLock\n");
+            KeAcquireSpinLock(&DeviceExtension->MiniportExLock, &LockHandle->Context.OldIrql);
             break;
 
         case InterruptLock: /* 3 */
             DPRINT("InterruptLock\n");
             if (DeviceExtension->Interrupt == NULL)
-                LockHandle->Context.OldIrql = 0;
+                KeAcquireSpinLock(&DeviceExtension->MiniportExLock, &LockHandle->Context.OldIrql);
             else
                 LockHandle->Context.OldIrql = KeAcquireInterruptSpinLock(DeviceExtension->Interrupt);
             break;
@@ -154,16 +156,15 @@ PortReleaseSpinLock(
     switch (LockHandle->Lock)
     {
         case DpcLock: /* 1, */
-            DPRINT("DpcLock\n");
-            break;
-
         case StartIoLock: /* 2 */
-            DPRINT("StartIoLock\n");
+            KeReleaseSpinLock(&DeviceExtension->MiniportExLock, LockHandle->Context.OldIrql);
             break;
 
         case InterruptLock: /* 3 */
             DPRINT("InterruptLock\n");
-            if (DeviceExtension->Interrupt != NULL)
+            if (DeviceExtension->Interrupt == NULL)
+                KeReleaseSpinLock(&DeviceExtension->MiniportExLock, LockHandle->Context.OldIrql);
+            else
                 KeReleaseInterruptSpinLock(DeviceExtension->Interrupt,
                                            LockHandle->Context.OldIrql);
             break;
@@ -390,6 +391,8 @@ PortAddDevice(
                     PortMiniportTimerRequestDpc,
                     DeviceExtension);
     KeInitializeSpinLock(&DeviceExtension->MiniportTimerLock);
+    KeInitializeSpinLock(&DeviceExtension->MsiSpinLock);
+    KeInitializeSpinLock(&DeviceExtension->MiniportExLock);
 
     KeInitializeSpinLock(&DeviceExtension->PdoListLock);
     InitializeListHead(&DeviceExtension->PdoListHead);
@@ -1015,8 +1018,57 @@ StorPortDeviceReady(
 }
 
 
+typedef struct _STORPORT_MINIPORT_TIMER
+{
+    KTIMER Timer;
+    KDPC Dpc;
+    PHW_TIMER_EX Callback;
+    PVOID HwDeviceExtension;
+    PVOID CallbackContext;
+} STORPORT_MINIPORT_TIMER, *PSTORPORT_MINIPORT_TIMER;
+
+typedef struct _STORPORT_STARTIO_PERFORMANCE_PARAMETERS_V2
+{
+    STARTIO_PERFORMANCE_PARAMETERS Parameters;
+    PROCESSOR_NUMBER ProcessorNumber;
+} STORPORT_STARTIO_PERFORMANCE_PARAMETERS_V2, *PSTORPORT_STARTIO_PERFORMANCE_PARAMETERS_V2;
+
+#define STORPORT_PERF_SUPPORTED_FLAGS (STOR_PERF_DPC_REDIRECTION | \
+                                       STOR_PERF_CONCURRENT_CHANNELS | \
+                                       STOR_PERF_INTERRUPT_MESSAGE_RANGES | \
+                                       STOR_PERF_ADV_CONFIG_LOCALITY | \
+                                       STOR_PERF_OPTIMIZE_FOR_COMPLETION_DURING_STARTIO | \
+                                       STOR_PERF_DPC_REDIRECTION_CURRENT_CPU | \
+                                       STOR_PERF_NO_SGL | \
+                                       STOR_PERF_SOFT_NUMA | \
+                                       STOR_PERF_HETEROGENEOUS_CPU)
+
+C_ASSERT(sizeof(STORPORT_STARTIO_PERFORMANCE_PARAMETERS_V2) == 20);
+C_ASSERT(sizeof(STOR_EVENT) == sizeof(KEVENT));
+C_ASSERT(FIELD_OFFSET(STOR_EVENT, Header.SignalState) == FIELD_OFFSET(KEVENT, Header.SignalState));
+C_ASSERT(FIELD_OFFSET(STOR_EVENT, Header.WaitListHead) == FIELD_OFFSET(KEVENT, Header.WaitListHead));
+
+static
+VOID
+NTAPI
+PortMiniportTimerExDpc(
+    _In_ PKDPC Dpc,
+    _In_opt_ PVOID DeferredContext,
+    _In_opt_ PVOID SystemArgument1,
+    _In_opt_ PVOID SystemArgument2)
+{
+    PSTORPORT_MINIPORT_TIMER MiniportTimer = DeferredContext;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    if (MiniportTimer && MiniportTimer->Callback)
+        MiniportTimer->Callback(MiniportTimer->HwDeviceExtension, MiniportTimer->CallbackContext);
+}
+
 /*
- * @unimplemented
+ * @implemented
  */
 STORPORT_API
 ULONG
@@ -1025,10 +1077,765 @@ StorPortExtendedFunction(
     _In_ PVOID HwDeviceExtension,
     ...)
 {
-    DPRINT1("StorPortExtendedFunction(%d %p ...)\n",
-            FunctionCode, HwDeviceExtension);
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    ULONG Status;
+    va_list Args;
+
+    DPRINT("StorPortExtendedFunction(%d)\n", FunctionCode);
+    va_start(Args, HwDeviceExtension);
+    switch (FunctionCode)
+    {
+        case ExtFunctionAllocatePool:
+        {
+            ULONG NumberOfBytes = va_arg(Args, ULONG);
+            ULONG Tag = va_arg(Args, ULONG);
+            PVOID *BufferPointer = va_arg(Args, PVOID *);
+
+            if (!BufferPointer || !NumberOfBytes)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            *BufferPointer = ExAllocatePoolWithTag(NonPagedPool, NumberOfBytes, Tag);
+            Status = *BufferPointer ? STOR_STATUS_SUCCESS
+                                    : STOR_STATUS_INSUFFICIENT_RESOURCES;
+            break;
+        }
+
+        case ExtFunctionFreePool:
+        {
+            PVOID Buffer = va_arg(Args, PVOID);
+
+            if (!Buffer)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            ExFreePool(Buffer);
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionGetSystemAddress:
+        {
+            PVOID Srb = va_arg(Args, PVOID);
+            PVOID *SystemAddress = va_arg(Args, PVOID *);
+            PIRP Irp;
+
+            if (!Srb || !SystemAddress)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            Irp = PortGetOriginalRequestFromSrb(Srb);
+            if (Irp && Irp->MdlAddress)
+                *SystemAddress = MmGetSystemAddressForMdlSafe(Irp->MdlAddress, NormalPagePriority);
+            else if (PortIsExtendedSrb(Srb))
+                *SystemAddress = ((PSTORAGE_REQUEST_BLOCK)Srb)->DataBuffer;
+            else
+                *SystemAddress = ((PSCSI_REQUEST_BLOCK)Srb)->DataBuffer;
+            Status = *SystemAddress ? STOR_STATUS_SUCCESS : STOR_STATUS_INVALID_PARAMETER;
+            break;
+        }
+
+        case ExtFunctionGetOriginalMdl:
+        {
+            PVOID Srb = va_arg(Args, PVOID);
+            PMDL *Mdl = va_arg(Args, PMDL *);
+            PIRP Irp;
+
+            if (!Srb || !Mdl)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            Irp = PortGetOriginalRequestFromSrb(Srb);
+            *Mdl = Irp ? Irp->MdlAddress : NULL;
+            Status = *Mdl ? STOR_STATUS_SUCCESS : STOR_STATUS_INVALID_PARAMETER;
+            break;
+        }
+
+        case ExtFunctionQueryPerformanceCounter:
+        {
+            PLARGE_INTEGER PerformanceFrequency = va_arg(Args, PLARGE_INTEGER);
+            PLARGE_INTEGER PerformanceCounter = va_arg(Args, PLARGE_INTEGER);
+
+            if (!PerformanceCounter)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            *PerformanceCounter = KeQueryPerformanceCounter(PerformanceFrequency);
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionLogSystemEvent:
+        {
+            PSTOR_LOG_EVENT_DETAILS LogDetails = va_arg(Args, PSTOR_LOG_EVENT_DETAILS);
+
+            /* No storage event-log channel yet, so report on the debugger */
+            if (LogDetails)
+            {
+                DPRINT1("StorPort: miniport event 0x%08lx (unique 0x%08lx, dump %lu bytes)\n",
+                        LogDetails->ErrorCode, LogDetails->UniqueId, LogDetails->DumpDataSize);
+                if (LogDetails->DumpData && LogDetails->DumpDataSize >= sizeof(ULONG))
+                {
+                    PULONG Dump = LogDetails->DumpData;
+                    DPRINT1("StorPort: event data[0] %08lx\n", Dump[0]);
+                }
+            }
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionInitializePerformanceOptimizations:
+        {
+            BOOLEAN Query = (BOOLEAN)va_arg(Args, ULONG);
+            PPERF_CONFIGURATION_DATA PerfConfig = va_arg(Args, PPERF_CONFIGURATION_DATA);
+            PMINIPORT_DEVICE_EXTENSION MiniportExtension;
+            PFDO_DEVICE_EXTENSION DeviceExtension;
+
+            if (!HwDeviceExtension || !PerfConfig)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            if (PerfConfig->Version < STOR_PERF_VERSION_2 || PerfConfig->Version > STOR_PERF_VERSION || PerfConfig->Size < sizeof(*PerfConfig))
+            {
+                Status = STOR_STATUS_UNSUPPORTED_VERSION;
+                break;
+            }
+
+            MiniportExtension = CONTAINING_RECORD(HwDeviceExtension, MINIPORT_DEVICE_EXTENSION, HwDeviceExtension);
+            DeviceExtension = MiniportExtension->Miniport->DeviceExtension;
+            if (Query)
+            {
+                PerfConfig->Flags = STORPORT_PERF_SUPPORTED_FLAGS;
+                Status = STOR_STATUS_SUCCESS;
+                break;
+            }
+            if ((PerfConfig->Flags & ~STORPORT_PERF_SUPPORTED_FLAGS) != 0 ||
+                ((PerfConfig->Flags & STOR_PERF_INTERRUPT_MESSAGE_RANGES) && !(PerfConfig->Flags & STOR_PERF_DPC_REDIRECTION)) ||
+                ((PerfConfig->Flags & STOR_PERF_ADV_CONFIG_LOCALITY) && ((PerfConfig->Flags & (STOR_PERF_DPC_REDIRECTION | STOR_PERF_INTERRUPT_MESSAGE_RANGES)) != (STOR_PERF_DPC_REDIRECTION | STOR_PERF_INTERRUPT_MESSAGE_RANGES))) ||
+                ((PerfConfig->Flags & (STOR_PERF_OPTIMIZE_FOR_COMPLETION_DURING_STARTIO | STOR_PERF_DPC_REDIRECTION_CURRENT_CPU)) && !(PerfConfig->Flags & STOR_PERF_DPC_REDIRECTION)))
+            {
+                Status = STOR_STATUS_UNSUCCESSFUL;
+                break;
+            }
+
+            if (PerfConfig->Flags & STOR_PERF_ADV_CONFIG_LOCALITY)
+            {
+                PerfConfig->DeviceNode = 0;
+                if (PerfConfig->MessageTargets && PerfConfig->LastRedirectionMessageNumber >= PerfConfig->FirstRedirectionMessageNumber)
+                {
+                    ULONG MessageCount = PerfConfig->LastRedirectionMessageNumber - PerfConfig->FirstRedirectionMessageNumber + 1;
+                    ULONG MessageIndex;
+                    KAFFINITY ActiveAffinity = KeQueryGroupAffinity(0);
+
+                    for (MessageIndex = 0; MessageIndex < MessageCount; MessageIndex++)
+                    {
+                        PerfConfig->MessageTargets[MessageIndex].Mask = ActiveAffinity;
+                        PerfConfig->MessageTargets[MessageIndex].Group = 0;
+                        RtlZeroMemory(PerfConfig->MessageTargets[MessageIndex].Reserved, sizeof(PerfConfig->MessageTargets[MessageIndex].Reserved));
+                    }
+                }
+            }
+
+            DeviceExtension->PerfFlags = PerfConfig->Flags;
+            DeviceExtension->PerfConcurrentChannels = (PerfConfig->Flags & STOR_PERF_CONCURRENT_CHANNELS) ? PerfConfig->ConcurrentChannels : 0;
+            DeviceExtension->PerfConfigured = TRUE;
+            DPRINT1("StorPort: performance options 0x%08lx, %lu channels\n", DeviceExtension->PerfFlags, DeviceExtension->PerfConcurrentChannels);
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionGetStartIoPerformanceParameters:
+        {
+            PVOID Srb = va_arg(Args, PVOID);
+            PSTARTIO_PERFORMANCE_PARAMETERS Parameters = va_arg(Args, PSTARTIO_PERFORMANCE_PARAMETERS);
+            PSTORPORT_STARTIO_PERFORMANCE_PARAMETERS_V2 ParametersV2;
+            PMINIPORT_DEVICE_EXTENSION MiniportExtension;
+            PFDO_DEVICE_EXTENSION DeviceExtension;
+            PROCESSOR_NUMBER ProcessorNumber;
+            ULONG ProcessorIndex;
+
+            UNREFERENCED_PARAMETER(Srb);
+            if (!HwDeviceExtension || !Parameters || Parameters->Size < sizeof(*Parameters))
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            MiniportExtension = CONTAINING_RECORD(HwDeviceExtension, MINIPORT_DEVICE_EXTENSION, HwDeviceExtension);
+            DeviceExtension = MiniportExtension->Miniport->DeviceExtension;
+            ProcessorIndex = KeGetCurrentProcessorNumberEx(&ProcessorNumber);
+            Parameters->MessageNumber = 0;
+            Parameters->ChannelNumber = (DeviceExtension->PerfConfigured && DeviceExtension->PerfConcurrentChannels) ? ProcessorIndex % DeviceExtension->PerfConcurrentChannels : 0;
+            if (Parameters->Version >= 2 && Parameters->Size >= sizeof(*ParametersV2))
+            {
+                ParametersV2 = (PSTORPORT_STARTIO_PERFORMANCE_PARAMETERS_V2)Parameters;
+                ParametersV2->ProcessorNumber = ProcessorNumber;
+            }
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionInitializeEvent:
+        {
+            PSTOR_EVENT Event = va_arg(Args, PSTOR_EVENT);
+            STOR_EVENT_TYPE Type = va_arg(Args, STOR_EVENT_TYPE);
+            BOOLEAN State = (BOOLEAN)va_arg(Args, ULONG);
+
+            if (!HwDeviceExtension || !Event || (Type != StorNotificationEvent && Type != StorSynchronizationEvent))
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            KeInitializeEvent((PKEVENT)Event, (EVENT_TYPE)Type, State);
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionWaitForEvent:
+        {
+            PVOID Object = va_arg(Args, PVOID);
+            BOOLEAN Alertable = (BOOLEAN)va_arg(Args, ULONG);
+            PLARGE_INTEGER Timeout = va_arg(Args, PLARGE_INTEGER);
+            NTSTATUS WaitStatus;
+
+            if (!HwDeviceExtension || !Object)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            if (KeGetCurrentIrql() > DISPATCH_LEVEL || ((Timeout == NULL || Timeout->QuadPart != 0) && KeGetCurrentIrql() > APC_LEVEL))
+            {
+                Status = STOR_STATUS_INVALID_IRQL;
+                break;
+            }
+            WaitStatus = KeWaitForSingleObject(Object, Executive, KernelMode, Alertable, Timeout);
+            Status = NT_SUCCESS(WaitStatus) ? STOR_STATUS_SUCCESS : STOR_STATUS_UNSUCCESSFUL;
+            break;
+        }
+
+        case ExtFunctionSetEvent:
+        {
+            PSTOR_EVENT Event = va_arg(Args, PSTOR_EVENT);
+
+            if (!HwDeviceExtension || !Event)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            KeSetEvent((PKEVENT)Event, IO_NO_INCREMENT, FALSE);
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionGetCurrentProcessorNumber:
+        {
+            PPROCESSOR_NUMBER ProcessorNumber = va_arg(Args, PPROCESSOR_NUMBER);
+
+            if (!ProcessorNumber)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            KeGetCurrentProcessorNumberEx(ProcessorNumber);
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionGetActiveGroupCount:
+        {
+            PUSHORT GroupCount = va_arg(Args, PUSHORT);
+
+            if (!GroupCount)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            *GroupCount = KeQueryActiveGroupCount();
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionGetGroupAffinity:
+        {
+            ULONG GroupNumber = va_arg(Args, ULONG);
+            PKAFFINITY GroupAffinity = va_arg(Args, PKAFFINITY);
+
+            if (!GroupAffinity || GroupNumber >= KeQueryActiveGroupCount())
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            *GroupAffinity = KeQueryGroupAffinity((USHORT)GroupNumber);
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionGetActiveNodeCount:
+        {
+            PULONG NodeCount = va_arg(Args, PULONG);
+
+            if (!NodeCount)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            *NodeCount = 1;
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionGetNodeAffinity:
+        {
+            ULONG NodeNumber = va_arg(Args, ULONG);
+            PGROUP_AFFINITY NodeAffinity = va_arg(Args, PGROUP_AFFINITY);
+
+            if (!NodeAffinity || NodeNumber != 0)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            KeQueryNodeActiveAffinity((USHORT)NodeNumber, NodeAffinity, NULL);
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionGetHighestNodeNumber:
+        {
+            PULONG HighestNode = va_arg(Args, PULONG);
+
+            if (!HighestNode)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            *HighestNode = 0;
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionGetLogicalProcessorRelationship:
+        {
+            PPROCESSOR_NUMBER ProcessorNumber = va_arg(Args, PPROCESSOR_NUMBER);
+            LOGICAL_PROCESSOR_RELATIONSHIP RelationshipType = va_arg(Args, LOGICAL_PROCESSOR_RELATIONSHIP);
+            PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX Information = va_arg(Args, PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX);
+            PULONG Length = va_arg(Args, PULONG);
+            NTSTATUS QueryStatus;
+
+            if (!Length)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            QueryStatus = KeQueryLogicalProcessorRelationship(ProcessorNumber, RelationshipType, Information, Length);
+            if (NT_SUCCESS(QueryStatus))
+                Status = STOR_STATUS_SUCCESS;
+            else if (QueryStatus == STATUS_INFO_LENGTH_MISMATCH || QueryStatus == STATUS_BUFFER_TOO_SMALL)
+                Status = STOR_STATUS_BUFFER_TOO_SMALL;
+            else if (QueryStatus == STATUS_INVALID_PARAMETER)
+                Status = STOR_STATUS_INVALID_PARAMETER;
+            else
+                Status = STOR_STATUS_UNSUCCESSFUL;
+            break;
+        }
+
+        case ExtFunctionInitializeTimer:
+        {
+            PVOID *TimerHandle = va_arg(Args, PVOID *);
+            PSTORPORT_MINIPORT_TIMER MiniportTimer;
+
+            if (!TimerHandle)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            MiniportTimer = ExAllocatePoolWithTag(NonPagedPool, sizeof(*MiniportTimer), TAG_MINIPORT_DATA);
+            if (!MiniportTimer)
+            {
+                Status = STOR_STATUS_INSUFFICIENT_RESOURCES;
+                break;
+            }
+            RtlZeroMemory(MiniportTimer, sizeof(*MiniportTimer));
+            KeInitializeTimerEx(&MiniportTimer->Timer, NotificationTimer);
+            KeInitializeDpc(&MiniportTimer->Dpc, PortMiniportTimerExDpc, MiniportTimer);
+            *TimerHandle = MiniportTimer;
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionRequestTimer:
+        {
+            PSTORPORT_MINIPORT_TIMER MiniportTimer = va_arg(Args, PVOID);
+            PHW_TIMER_EX TimerCallback = va_arg(Args, PHW_TIMER_EX);
+            PVOID CallbackContext = va_arg(Args, PVOID);
+            ULONGLONG TimerValue = va_arg(Args, ULONGLONG);
+            ULONGLONG TolerableDelay = va_arg(Args, ULONGLONG);
+            LARGE_INTEGER DueTime;
+
+            UNREFERENCED_PARAMETER(TolerableDelay);
+            if (!MiniportTimer)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            if (TimerValue == 0)
+            {
+                KeCancelTimer(&MiniportTimer->Timer);
+                Status = STOR_STATUS_SUCCESS;
+                break;
+            }
+            MiniportTimer->Callback = TimerCallback;
+            MiniportTimer->HwDeviceExtension = HwDeviceExtension;
+            MiniportTimer->CallbackContext = CallbackContext;
+            /* TimerValue is in microseconds */
+            DueTime.QuadPart = -(LONGLONG)TimerValue * 10;
+            KeSetTimer(&MiniportTimer->Timer, DueTime, &MiniportTimer->Dpc);
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionFreeTimer:
+        {
+            PSTORPORT_MINIPORT_TIMER MiniportTimer = va_arg(Args, PVOID);
+
+            if (!MiniportTimer)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            KeCancelTimer(&MiniportTimer->Timer);
+            KeRemoveQueueDpc(&MiniportTimer->Dpc);
+            ExFreePoolWithTag(MiniportTimer, TAG_MINIPORT_DATA);
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionAllocateDmaMemory:
+        {
+            SIZE_T NumberOfBytes = va_arg(Args, SIZE_T);
+            PHYSICAL_ADDRESS LowestAcceptableAddress = va_arg(Args, PHYSICAL_ADDRESS);
+            PHYSICAL_ADDRESS HighestAcceptableAddress = va_arg(Args, PHYSICAL_ADDRESS);
+            PHYSICAL_ADDRESS BoundaryAddressMultiple = va_arg(Args, PHYSICAL_ADDRESS);
+            MEMORY_CACHING_TYPE CacheType = va_arg(Args, MEMORY_CACHING_TYPE);
+            ULONG PreferredNode = va_arg(Args, ULONG);
+            PVOID *BufferPointer = va_arg(Args, PVOID *);
+            PPHYSICAL_ADDRESS PhysicalAddress = va_arg(Args, PPHYSICAL_ADDRESS);
+
+            UNREFERENCED_PARAMETER(PreferredNode);
+            if (!BufferPointer || !PhysicalAddress || !NumberOfBytes)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            *BufferPointer = MmAllocateContiguousMemorySpecifyCache(NumberOfBytes, LowestAcceptableAddress, HighestAcceptableAddress, BoundaryAddressMultiple, CacheType);
+            if (*BufferPointer == NULL)
+            {
+                PhysicalAddress->QuadPart = 0;
+                Status = STOR_STATUS_INSUFFICIENT_RESOURCES;
+                break;
+            }
+            RtlZeroMemory(*BufferPointer, NumberOfBytes);
+            *PhysicalAddress = MmGetPhysicalAddress(*BufferPointer);
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionFreeDmaMemory:
+        {
+            PVOID BaseAddress = va_arg(Args, PVOID);
+            SIZE_T NumberOfBytes = va_arg(Args, SIZE_T);
+            MEMORY_CACHING_TYPE CacheType = va_arg(Args, MEMORY_CACHING_TYPE);
+
+            UNREFERENCED_PARAMETER(NumberOfBytes);
+            UNREFERENCED_PARAMETER(CacheType);
+            if (!BaseAddress)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            MmFreeContiguousMemory(BaseAddress);
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionDelayExecution:
+        {
+            ULONG DelayInMicroseconds = va_arg(Args, ULONG);
+
+            if (KeGetCurrentIrql() < DISPATCH_LEVEL)
+            {
+                LARGE_INTEGER Interval;
+                Interval.QuadPart = -(LONGLONG)DelayInMicroseconds * 10;
+                KeDelayExecutionThread(KernelMode, FALSE, &Interval);
+            }
+            else
+            {
+                KeStallExecutionProcessor(DelayInMicroseconds);
+            }
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionGetProcessorIndexFromNumber:
+        {
+            PPROCESSOR_NUMBER ProcessorNumber = va_arg(Args, PPROCESSOR_NUMBER);
+            PULONG ProcessorIndex = va_arg(Args, PULONG);
+            KAFFINITY GroupAffinity;
+
+            if (!ProcessorNumber || !ProcessorIndex || ProcessorNumber->Group != 0)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            GroupAffinity = KeQueryGroupAffinity(0);
+            if (ProcessorNumber->Number >= sizeof(KAFFINITY) * 8 || !(GroupAffinity & ((KAFFINITY)1 << ProcessorNumber->Number)))
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            *ProcessorIndex = ProcessorNumber->Number;
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        /*
+         * A DRAM-less controller keeps its mapping tables in host memory, so
+         * it asks the port for a physically contiguous buffer to hand back as
+         * its Host Memory Buffer. The preferred node is a hint and is ignored:
+         * these are single-node systems.
+         */
+        case ExtFunctionAllocateContiguousMemorySpecifyCacheNode:
+        {
+            SIZE_T NumberOfBytes = va_arg(Args, SIZE_T);
+            PHYSICAL_ADDRESS LowestAcceptableAddress = va_arg(Args, PHYSICAL_ADDRESS);
+            PHYSICAL_ADDRESS HighestAcceptableAddress = va_arg(Args, PHYSICAL_ADDRESS);
+            PHYSICAL_ADDRESS BoundaryAddressMultiple = va_arg(Args, PHYSICAL_ADDRESS);
+            MEMORY_CACHING_TYPE CacheType = va_arg(Args, MEMORY_CACHING_TYPE);
+            NODE_REQUIREMENT PreferredNode = va_arg(Args, NODE_REQUIREMENT);
+            PVOID *BufferPointer = va_arg(Args, PVOID *);
+
+            UNREFERENCED_PARAMETER(PreferredNode);
+            if (!BufferPointer || NumberOfBytes == 0)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            *BufferPointer = MmAllocateContiguousMemorySpecifyCache(NumberOfBytes, LowestAcceptableAddress, HighestAcceptableAddress, BoundaryAddressMultiple, CacheType);
+            Status = *BufferPointer ? STOR_STATUS_SUCCESS
+                                    : STOR_STATUS_INSUFFICIENT_RESOURCES;
+            break;
+        }
+
+        case ExtFunctionFreeContiguousMemorySpecifyCache:
+        {
+            PVOID BaseAddress = va_arg(Args, PVOID);
+            SIZE_T NumberOfBytes = va_arg(Args, SIZE_T);
+            MEMORY_CACHING_TYPE CacheType = va_arg(Args, MEMORY_CACHING_TYPE);
+
+            if (!BaseAddress || NumberOfBytes == 0)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            MmFreeContiguousMemorySpecifyCache(BaseAddress, NumberOfBytes, CacheType);
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionBuildMdlForNonPagedPool:
+        {
+            PMDL Mdl = va_arg(Args, PMDL);
+
+            if (!Mdl)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            MmBuildMdlForNonPagedPool(Mdl);
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        /*
+         * One lock covers every message. Message-signalled interrupts are not
+         * connected individually yet, so per-message locks would only pretend
+         * to a parallelism the port does not have.
+         */
+        case ExtFunctionAcquireMSISpinLock:
+        {
+            ULONG MessageId = va_arg(Args, ULONG);
+            PULONG OldIrql = va_arg(Args, PULONG);
+            PMINIPORT_DEVICE_EXTENSION MiniportExtension;
+            PFDO_DEVICE_EXTENSION DeviceExtension;
+            KIRQL SavedIrql;
+
+            UNREFERENCED_PARAMETER(MessageId);
+            MiniportExtension = CONTAINING_RECORD(HwDeviceExtension, MINIPORT_DEVICE_EXTENSION, HwDeviceExtension);
+            DeviceExtension = MiniportExtension->Miniport->DeviceExtension;
+            if (!OldIrql)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            KeAcquireSpinLock(&DeviceExtension->MsiSpinLock, &SavedIrql);
+            *OldIrql = SavedIrql;
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionReleaseMSISpinLock:
+        {
+            ULONG MessageId = va_arg(Args, ULONG);
+            ULONG OldIrql = va_arg(Args, ULONG);
+            PMINIPORT_DEVICE_EXTENSION MiniportExtension;
+            PFDO_DEVICE_EXTENSION DeviceExtension;
+
+            UNREFERENCED_PARAMETER(MessageId);
+            MiniportExtension = CONTAINING_RECORD(HwDeviceExtension, MINIPORT_DEVICE_EXTENSION, HwDeviceExtension);
+            DeviceExtension = MiniportExtension->Miniport->DeviceExtension;
+
+            KeReleaseSpinLock(&DeviceExtension->MsiSpinLock, (KIRQL)OldIrql);
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionGetPfns:
+        {
+            PVOID Srb = va_arg(Args, PVOID);
+            PMDL Mdl = va_arg(Args, PMDL);
+            PVOID *Pfns = va_arg(Args, PVOID *);
+            PULONG PfnCount = va_arg(Args, PULONG);
+            PULONG StartingOffset = va_arg(Args, PULONG);
+            PIRP Irp;
+
+            if (!Srb || !Mdl || !Pfns || !PfnCount || !StartingOffset)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            Irp = PortGetOriginalRequestFromSrb(Srb);
+            if (!Irp || Irp->MdlAddress != Mdl)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            *Pfns = MmGetMdlPfnArray(Mdl);
+            *PfnCount = ADDRESS_AND_SIZE_TO_SPAN_PAGES(MmGetMdlVirtualAddress(Mdl), MmGetMdlByteCount(Mdl));
+            *StartingOffset = MmGetMdlByteOffset(Mdl);
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionGetCurrentProcessorIndex:
+        {
+            PULONG ProcessorIndex = va_arg(Args, PULONG);
+
+            if (!ProcessorIndex)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            *ProcessorIndex = KeGetCurrentProcessorNumberEx(NULL);
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionAcquireSpinLock:
+        {
+            STOR_SPINLOCK SpinLock = va_arg(Args, STOR_SPINLOCK);
+            PVOID LockContext = va_arg(Args, PVOID);
+            PSTOR_LOCK_HANDLE LockHandle = va_arg(Args, PSTOR_LOCK_HANDLE);
+            PMINIPORT_DEVICE_EXTENSION MiniportExtension;
+
+            if (!HwDeviceExtension || !LockHandle)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            MiniportExtension = CONTAINING_RECORD(HwDeviceExtension, MINIPORT_DEVICE_EXTENSION, HwDeviceExtension);
+            /* Paired with the ReleaseSpinLock notification */
+            PortAcquireSpinLock(MiniportExtension->Miniport->DeviceExtension, SpinLock, LockContext, LockHandle);
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionGetProcessorCount:
+        {
+            PULONG ProcessorCount = va_arg(Args, PULONG);
+
+            if (!ProcessorCount)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            *ProcessorCount = KeQueryActiveProcessorCountEx(ALL_PROCESSOR_GROUPS);
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionQueryConfiguration:
+        {
+            ULONG Type = va_arg(Args, ULONG);
+            PBOOLEAN Enabled = va_arg(Args, PBOOLEAN);
+
+            UNREFERENCED_PARAMETER(Type);
+            if (!Enabled)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            /* No optional platform configuration is enabled */
+            *Enabled = FALSE;
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionSetFeatureList:
+        {
+            ULONG FeatureCount = va_arg(Args, ULONG);
+            PBOOLEAN FeatureList = va_arg(Args, PBOOLEAN);
+
+            if (!FeatureList || FeatureCount == 0)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            /* The miniport's feature choices are accepted as-is */
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionGetCurrentIrql:
+        {
+            PKIRQL Irql = va_arg(Args, PKIRQL);
+
+            if (!Irql)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            *Irql = KeGetCurrentIrql();
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        default:
+            DPRINT1("StorPortExtendedFunction(%d %p ...) not supported\n",
+                    FunctionCode, HwDeviceExtension);
+            Status = STOR_STATUS_NOT_IMPLEMENTED;
+            break;
+    }
+    va_end(Args);
+
+    return Status;
 }
 
 
@@ -1267,10 +2074,12 @@ StorPortGetScatterGatherList(
 
     /* The list was built for this request in PortPdoScsi and lives in the
      * per-request context anchored on the IRP. */
-    if ((Srb == NULL) || (Srb->OriginalRequest == NULL))
+    if (Srb == NULL)
         return NULL;
 
-    Irp = (PIRP)Srb->OriginalRequest;
+    Irp = PortGetOriginalRequestFromSrb(Srb);
+    if (Irp == NULL)
+        return NULL;
 
     SrbContext = PortGetSrbContext(Irp);
     if (SrbContext == NULL)
@@ -1335,6 +2144,8 @@ StorPortGetUncachedExtension(
     Alignment.QuadPart = 0;
     LowestAddress.QuadPart = 0;
     HighestAddress.QuadPart = 0x00000000FFFFFFFF;
+    /* Cached: the miniport treats this common buffer as normal memory, which
+     * a Device-memory mapping would forbid on ARM64 */
     DeviceExtension->UncachedExtensionVirtualBase = MmAllocateContiguousMemorySpecifyCache(NumberOfBytes,
                                                                                            LowestAddress,
                                                                                            HighestAddress,
@@ -1400,6 +2211,13 @@ StorPortInitialize(
     DPRINT1("SpecificLuExtensionSize: %lu\n", HwInitializationData->SpecificLuExtensionSize);
     DPRINT1("SrbExtensionSize: %lu\n", HwInitializationData->SrbExtensionSize);
     DPRINT1("NumberOfAccessRanges: %lu\n", HwInitializationData->NumberOfAccessRanges);
+    if (HwInitializationData->HwInitializationDataSize >= FIELD_OFFSET(HW_INITIALIZATION_DATA, Reserved1) + sizeof(ULONG))
+    {
+        DPRINT1("FeatureSupport: 0x%08lx SrbTypeFlags: 0x%08lx AddressTypeFlags: 0x%08lx\n",
+                HwInitializationData->FeatureSupport,
+                HwInitializationData->SrbTypeFlags,
+                HwInitializationData->AddressTypeFlags);
+    }
 
     /* Check parameters */
     if ((DriverObject == NULL) ||
@@ -1562,11 +2380,40 @@ StorPortNotification(
     switch (NotificationType)
     {
         case RequestComplete:
+        {
+            PSTORAGE_REQUEST_BLOCK ExtendedSrb;
+            PSRBEX_DATA_SCSI_CDB16 ScsiData;
+            PSTOR_SRB_CONTEXT SrbContext;
+            PIRP Irp;
+
             DPRINT("RequestComplete\n");
             Srb = (PSCSI_REQUEST_BLOCK)va_arg(ap, PSCSI_REQUEST_BLOCK);
-            if ((Srb != NULL) && (Srb->OriginalRequest != NULL))
+            if (Srb != NULL)
+                DPRINT("StorPort: RequestComplete %p function 0x%02x status 0x%02x\n", Srb, Srb->Function, Srb->SrbStatus);
+            Irp = Srb != NULL ? PortGetOriginalRequestFromSrb(Srb) : NULL;
+            if (Irp != NULL)
             {
-                PIRP Irp = (PIRP)Srb->OriginalRequest;
+                if (PortIsExtendedSrb(Srb))
+                {
+                    ExtendedSrb = (PSTORAGE_REQUEST_BLOCK)Srb;
+                    SrbContext = PortGetSrbContext(Irp);
+                    if (SrbContext == NULL || SrbContext->LegacySrb == NULL)
+                        break;
+
+                    Srb = SrbContext->LegacySrb;
+                    Srb->SrbStatus = ExtendedSrb->SrbStatus;
+                    Srb->DataTransferLength = ExtendedSrb->DataTransferLength;
+                    if (ExtendedSrb->SrbFunction == SRB_FUNCTION_EXECUTE_SCSI && ExtendedSrb->NumSrbExData != 0 && ExtendedSrb->SrbExDataOffset[0] >= sizeof(*ExtendedSrb) && ExtendedSrb->SrbExDataOffset[0] + sizeof(*ScsiData) <= ExtendedSrb->SrbLength)
+                    {
+                        ScsiData = (PSRBEX_DATA_SCSI_CDB16)((PUCHAR)ExtendedSrb + ExtendedSrb->SrbExDataOffset[0]);
+                        if (ScsiData->Type == SrbExDataTypeScsiCdb16)
+                        {
+                            Srb->ScsiStatus = ScsiData->ScsiStatus;
+                            Srb->SenseInfoBufferLength = ScsiData->SenseInfoBufferLength;
+                        }
+                    }
+                }
+
                 if (Irp->Tail.Overlay.DriverContext[3] == PORT_DUMP_IRP_MARKER)
                 {
                     PPORT_DUMP_CONTEXT DumpContext = Irp->Tail.Overlay.DriverContext[2];
@@ -1597,6 +2444,7 @@ StorPortNotification(
                 IoCompleteRequest(Irp, IO_NO_INCREMENT);
             }
             break;
+        }
 
         case IssueDpc:
             DPRINT("IssueDpc\n");
@@ -1719,6 +2567,30 @@ StorPortNotification(
                                 LockHandle);
             break;
 
+        case MarkDeviceFailedEx:
+        {
+            PSTOR_ADDRESS StorAddress = (PSTOR_ADDRESS)va_arg(ap, PSTOR_ADDRESS);
+            ULONG Flags = va_arg(ap, ULONG);
+            ULONG FaultCode = va_arg(ap, ULONG);
+            PWSTR FaultDescription = (PWSTR)va_arg(ap, PWSTR);
+            ULONG AdditionalDataSize = va_arg(ap, ULONG);
+            PUCHAR AdditionalData = (PUCHAR)va_arg(ap, PUCHAR);
+            ULONG CriticalDataSize = va_arg(ap, ULONG);
+            PUCHAR CriticalData = (PUCHAR)va_arg(ap, PUCHAR);
+            PULONG Status = (PULONG)va_arg(ap, PULONG);
+
+            UNREFERENCED_PARAMETER(StorAddress);
+            UNREFERENCED_PARAMETER(AdditionalData);
+            UNREFERENCED_PARAMETER(CriticalData);
+            DPRINT1("StorPort: MarkDeviceFailedEx flags 0x%08lx fault 0x%04lx additional %lu critical %lu\n",
+                    Flags, FaultCode, AdditionalDataSize, CriticalDataSize);
+            if (FaultDescription)
+                DPRINT1("StorPort: device failure: %S\n", FaultDescription);
+            if (Status)
+                *Status = STOR_STATUS_NOT_IMPLEMENTED;
+            break;
+        }
+
         default:
             DPRINT1("Unsupported Notification %lx\n", NotificationType);
             break;
@@ -1763,7 +2635,7 @@ StorPortPauseDevice(
 }
 
 
-#if defined(_M_AMD64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
 /*
  * @implemented
  */
@@ -1779,7 +2651,7 @@ StorPortQuerySystemTime(
 
     KeQuerySystemTime(CurrentTime);
 }
-#endif /* defined(_M_AMD64) */
+#endif /* defined(_M_AMD64) || defined(_M_ARM64) */
 
 
 /*

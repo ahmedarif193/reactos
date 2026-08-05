@@ -391,6 +391,79 @@ Failure:
     return STATUS_INSUFFICIENT_RESOURCES;
 }
 
+typedef struct _PORT_SRBEX_REQUEST
+{
+    STORAGE_REQUEST_BLOCK Srb;
+    STOR_ADDR_BTL8 Address;
+    SRBEX_DATA_SCSI_CDB16 Scsi;
+} PORT_SRBEX_REQUEST, *PPORT_SRBEX_REQUEST;
+
+C_ASSERT(FIELD_OFFSET(STORAGE_REQUEST_BLOCK, Signature) == 8);
+C_ASSERT(FIELD_OFFSET(STORAGE_REQUEST_BLOCK, SrbExDataOffset) == 120);
+C_ASSERT(sizeof(STORAGE_REQUEST_BLOCK) == 128);
+C_ASSERT(sizeof(STOR_ADDR_BTL8) == 16);
+C_ASSERT(sizeof(SRBEX_DATA_SCSI_CDB16) == 40);
+C_ASSERT(FIELD_OFFSET(PORT_SRBEX_REQUEST, Address) == 128);
+C_ASSERT(FIELD_OFFSET(PORT_SRBEX_REQUEST, Scsi) == 144);
+
+static NTSTATUS PortBuildExtendedSrb(_In_ PFDO_DEVICE_EXTENSION FdoExtension, _In_ PSCSI_REQUEST_BLOCK LegacySrb, _Inout_ PSTOR_SRB_CONTEXT SrbContext)
+{
+    PPORT_SRBEX_REQUEST Request;
+
+    if (LegacySrb->Function == SRB_FUNCTION_EXECUTE_SCSI && LegacySrb->CdbLength > sizeof(Request->Scsi.Cdb))
+        return STATUS_INVALID_PARAMETER;
+
+    Request = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Request), TAG_SRB_CONTEXT);
+    if (Request == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlZeroMemory(Request, sizeof(*Request));
+    Request->Srb.Length = FIELD_OFFSET(STORAGE_REQUEST_BLOCK, Signature);
+    Request->Srb.Function = SRB_FUNCTION_STORAGE_REQUEST_BLOCK;
+    Request->Srb.SrbStatus = LegacySrb->SrbStatus;
+    Request->Srb.Signature = SRB_SIGNATURE;
+    Request->Srb.Version = STORAGE_REQUEST_BLOCK_VERSION_1;
+    Request->Srb.SrbFunction = LegacySrb->Function;
+    Request->Srb.SrbFlags = LegacySrb->SrbFlags;
+    Request->Srb.RequestTag = LegacySrb->QueueTag;
+    Request->Srb.RequestAttribute = LegacySrb->QueueAction;
+    Request->Srb.TimeOutValue = LegacySrb->TimeOutValue;
+    Request->Srb.AddressOffset = FIELD_OFFSET(PORT_SRBEX_REQUEST, Address);
+    Request->Srb.DataTransferLength = LegacySrb->DataTransferLength;
+    Request->Srb.DataBuffer = LegacySrb->DataBuffer;
+    Request->Srb.OriginalRequest = LegacySrb->OriginalRequest;
+    Request->Srb.PortContext = SrbContext;
+    Request->Srb.MiniportContext = SrbContext->SrbExtensionAllocation;
+
+    Request->Address.Type = STOR_ADDRESS_TYPE_BTL8;
+    Request->Address.Port = (USHORT)FdoExtension->PortNumber;
+    Request->Address.AddressLength = STOR_ADDR_BTL8_ADDRESS_LENGTH;
+    Request->Address.Path = LegacySrb->PathId;
+    Request->Address.Target = LegacySrb->TargetId;
+    Request->Address.Lun = LegacySrb->Lun;
+
+    if (LegacySrb->Function == SRB_FUNCTION_EXECUTE_SCSI)
+    {
+        Request->Srb.NumSrbExData = 1;
+        Request->Srb.SrbExDataOffset[0] = FIELD_OFFSET(PORT_SRBEX_REQUEST, Scsi);
+        Request->Srb.SrbLength = sizeof(*Request);
+        Request->Scsi.Type = SrbExDataTypeScsiCdb16;
+        Request->Scsi.Length = SRBEX_DATA_SCSI_CDB16_LENGTH;
+        Request->Scsi.ScsiStatus = LegacySrb->ScsiStatus;
+        Request->Scsi.SenseInfoBufferLength = LegacySrb->SenseInfoBufferLength;
+        Request->Scsi.CdbLength = LegacySrb->CdbLength;
+        Request->Scsi.SenseInfoBuffer = LegacySrb->SenseInfoBuffer;
+        RtlCopyMemory(Request->Scsi.Cdb, LegacySrb->Cdb, LegacySrb->CdbLength);
+    }
+    else
+    {
+        Request->Srb.SrbLength = FIELD_OFFSET(PORT_SRBEX_REQUEST, Scsi);
+    }
+
+    SrbContext->MiniportSrb = &Request->Srb;
+    return STATUS_SUCCESS;
+}
+
 VOID PortFreeSrbContext(_In_ PIRP Irp)
 {
     PSTOR_SRB_CONTEXT SrbContext;
@@ -404,6 +477,9 @@ VOID PortFreeSrbContext(_In_ PIRP Irp)
 
     if (SrbContext->SrbExtensionAllocation != NULL)
         MmFreeContiguousMemory(SrbContext->SrbExtensionAllocation);
+
+    if (SrbContext->MiniportSrb != NULL)
+        ExFreePoolWithTag(SrbContext->MiniportSrb, TAG_SRB_CONTEXT);
 
     ExFreePoolWithTag(SrbContext, TAG_SRB_CONTEXT);
 
@@ -422,6 +498,7 @@ PortPdoScsi(
     PIO_STACK_LOCATION Stack;
     PSTOR_SRB_CONTEXT SrbContext;
     PSCSI_REQUEST_BLOCK Srb;
+    PVOID MiniportSrb;
     PHYSICAL_ADDRESS HighestAddress;
     ULONG SrbExtensionSize;
     NTSTATUS Status;
@@ -499,6 +576,7 @@ PortPdoScsi(
 
     RtlZeroMemory(SrbContext, sizeof(STOR_SRB_CONTEXT));
     Irp->Tail.Overlay.DriverContext[0] = SrbContext;
+    SrbContext->LegacySrb = Srb;
 
     /*
      * The miniport keeps its per-request hardware state (for AHCI, the command
@@ -539,6 +617,15 @@ PortPdoScsi(
         }
     }
 
+    MiniportSrb = Srb;
+    if (FdoExtension->Miniport.PortConfig.SrbType == SRB_TYPE_STORAGE_REQUEST_BLOCK)
+    {
+        Status = PortBuildExtendedSrb(FdoExtension, Srb, SrbContext);
+        if (!NT_SUCCESS(Status))
+            goto Fail;
+        MiniportSrb = SrbContext->MiniportSrb;
+    }
+
     /*
      * Hand the request to the miniport. HwStartIo is contractually called at
      * DISPATCH_LEVEL, and it completes the request asynchronously through
@@ -546,8 +633,11 @@ PortPdoScsi(
      */
     IoMarkIrpPending(Irp);
 
+    if (!MiniportBuildIo(&FdoExtension->Miniport, MiniportSrb))
+        return STATUS_PENDING;
+
     KeRaiseIrql(DISPATCH_LEVEL, &Irql);
-    MiniportStartIo(&FdoExtension->Miniport, Srb);
+    MiniportStartIo(&FdoExtension->Miniport, MiniportSrb);
     KeLowerIrql(Irql);
 
     return STATUS_PENDING;
