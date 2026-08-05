@@ -453,10 +453,13 @@ BOOL ParseAsn(PBYTE pRoot, PBYTE pData, DWORD dwSize, PWSTR wszPrefix, BOOL fPri
 }
 
 
-BOOL asn_dump(LPCWSTR Filename)
+BOOL asn_dump(LPCWSTR Filename, LPCWSTR AlgorithmName)
 {
-    HANDLE hFile = CreateFileW(Filename, GENERIC_READ, FILE_SHARE_READ, NULL,
-                               OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+    HANDLE hFile;
+
+    UNREFERENCED_PARAMETER(AlgorithmName);
+
+    hFile = CreateFileW(Filename, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
 
     if (hFile == INVALID_HANDLE_VALUE)
     {
