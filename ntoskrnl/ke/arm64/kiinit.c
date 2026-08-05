@@ -375,6 +375,9 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
     /* Initialize spin locks and DPC bookkeeping */
     KiInitSpinLocks(Prcb, Number);
 
+    /* Initialize the Power Management Support for this PRCB */
+    PoInitializePrcb(Prcb);
+
     /* Bind the idle stack */
     Prcb->SpBase = IdleStack;
 
