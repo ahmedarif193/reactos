@@ -157,6 +157,8 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     {
         NtfsRefreshFileSizes(FileCB,
                              FileObj);
+        if (!PagingIo && Length != 0 && RequestedType == TypeData)
+            NtfsPurgeStreamCache(FileCB, FileObj, &ByteOffset, Length);
         FileObj->Flags |=
             FO_FILE_MODIFIED |
             FO_FILE_SIZE_CHANGED;

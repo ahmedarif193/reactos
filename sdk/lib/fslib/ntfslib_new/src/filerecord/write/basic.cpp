@@ -354,13 +354,14 @@ FileRecord::SetBasicInformation(
         {
             return STATUS_INVALID_PARAMETER;
         }
-        if ((RequestedAttributes &
-                FILE_PERM_NORMAL) &&
-            RequestedAttributes !=
-                FILE_PERM_NORMAL)
-        {
-            return STATUS_INVALID_PARAMETER;
-        }
+        /*
+         * FILE_ATTRIBUTE_NORMAL says "no attributes" and only means that on
+         * its own. Callers still pass it alongside real bits - SetFileAttributes
+         * on a file that has ARCHIVE set arrives as NORMAL|ARCHIVE|READONLY -
+         * and the request is honoured with NORMAL dropped, not refused.
+         */
+        if (RequestedAttributes != FILE_PERM_NORMAL)
+            RequestedAttributes &= ~(ULONG)FILE_PERM_NORMAL;
 
         /*
          * Basic information may replace user-settable flags. Structural
@@ -419,7 +420,7 @@ FileRecord::SetBasicInformation(
         Standard->FilePermissions =
             (Standard->FilePermissions &
              ~NTFS_MUTABLE_BASIC_ATTRIBUTES) |
-            (Information->FileAttributes &
+            (RequestedAttributes &
              NTFS_MUTABLE_BASIC_ATTRIBUTES);
     }
 

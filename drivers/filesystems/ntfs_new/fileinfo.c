@@ -706,6 +706,214 @@ NtfsRefreshFileSizes(_In_ PFileContextBlock FileCB,
 
 }
 
+/*
+ * This driver writes data straight into the volume, never through the cache
+ * manager, so pages Mm already holds for a stream keep the old contents after
+ * any size change or overwrite. Every mutation that bypasses Cc drops the
+ * affected range here so a later mapped or cached reader faults in the new
+ * bytes. Purging synchronizes against paging I/O; callers hold MainResource
+ * at most, so acquiring PagingIoResource here preserves lock order.
+ */
+VOID
+NtfsPurgeStreamCache(_In_ PFileContextBlock FileCB,
+                     _In_ PFILE_OBJECT FileObject,
+                     _In_opt_ PLARGE_INTEGER Offset,
+                     _In_ ULONG Length)
+{
+    if (!FileObject->SectionObjectPointer)
+        return;
+
+    KeEnterCriticalRegion();
+    ExAcquireResourceExclusiveLite(&FileCB->PagingIoResource, TRUE);
+    CcPurgeCacheSection(FileObject->SectionObjectPointer, Offset, Length, FALSE);
+    ExReleaseResourceLite(&FileCB->PagingIoResource);
+    KeLeaveCriticalRegion();
+}
+
+static
+NTSTATUS
+NtfsSetRenameInformation(_In_ PVolumeContextBlock VolCB,
+                         _In_ PFileContextBlock FileCB,
+                         _In_ PFILE_OBJECT FileObject,
+                         _In_ PIO_STACK_LOCATION IrpSp,
+                         _In_ PFILE_RENAME_INFORMATION RenameInfo,
+                         _In_ ULONG BufferLength)
+{
+    PFILE_OBJECT TargetFileObject;
+    PFileContextBlock TargetFileCB;
+    PNtfsFileRecord RefreshedRecord = NULL;
+    PNtfsFileRecord ExistingRecord = NULL;
+    PNtfsFileRecord StaleRecord;
+    UNICODE_STRING ParentName;
+    UNICODE_STRING LeafName;
+    UNICODE_STRING NewName;
+    PWCHAR NameBuffer;
+    PWCHAR OldNameBuffer;
+    ULONGLONG ExistingRecordNumber;
+    ULONG RemainingNameLength = 0;
+    USHORT PrefixLength;
+    NTSTATUS Status;
+    BOOLEAN RootParent;
+    BOOLEAN ReplaceIfExists;
+    BOOLEAN ExistingIsDirectory;
+
+    if (BufferLength < FIELD_OFFSET(FILE_RENAME_INFORMATION, FileName) || RenameInfo->FileNameLength == 0 || (RenameInfo->FileNameLength & (sizeof(WCHAR) - 1)) != 0 || BufferLength - FIELD_OFFSET(FILE_RENAME_INFORMATION, FileName) < RenameInfo->FileNameLength)
+        return STATUS_INVALID_PARAMETER;
+    if (!(FileCB->DesiredAccess & DELETE))
+        return STATUS_ACCESS_DENIED;
+    if (FileCB->DeletePending)
+        return STATUS_DELETE_PENDING;
+    if (FileCB->IsVolumeOpen || FileCB->FileName.Length <= sizeof(WCHAR) || FileCB->RequestedStream)
+        return STATUS_INVALID_PARAMETER;
+    ReplaceIfExists = IrpSp->Parameters.SetFile.ReplaceIfExists || RenameInfo->ReplaceIfExists;
+
+    TargetFileObject = IrpSp->Parameters.SetFile.FileObject;
+    if (TargetFileObject)
+    {
+        TargetFileCB = (PFileContextBlock)TargetFileObject->FsContext;
+        if (!TargetFileCB || !TargetFileCB->FileRec || !(NtfsFileRecordGetHeader(TargetFileCB->FileRec)->Flags & FR_IS_DIRECTORY))
+            return STATUS_INVALID_PARAMETER;
+        ParentName = TargetFileCB->FileName;
+        LeafName = TargetFileObject->FileName;
+    }
+    else
+    {
+        PWCHAR OldLeafName;
+        USHORT OldLeafLength;
+        USHORT ParentLength;
+
+        if (!NtfsSplitParentName(&FileCB->FileName, &ParentLength, &OldLeafName, &OldLeafLength))
+            return STATUS_OBJECT_PATH_INVALID;
+        ParentName.Buffer = FileCB->FileName.Buffer;
+        ParentName.Length = ParentLength * sizeof(WCHAR);
+        ParentName.MaximumLength = ParentName.Length;
+        LeafName.Buffer = RenameInfo->FileName;
+        LeafName.Length = (USHORT)RenameInfo->FileNameLength;
+        LeafName.MaximumLength = LeafName.Length;
+    }
+
+    if (LeafName.Length == 0 || ParentName.Length == 0)
+        return STATUS_OBJECT_NAME_INVALID;
+    for (PrefixLength = 0; PrefixLength < LeafName.Length / sizeof(WCHAR); PrefixLength++)
+    {
+        if (LeafName.Buffer[PrefixLength] == L'\\' || LeafName.Buffer[PrefixLength] == L'/')
+            return STATUS_OBJECT_NAME_INVALID;
+    }
+
+    RootParent = ParentName.Length == sizeof(WCHAR) && ParentName.Buffer[0] == L'\\';
+    if ((ULONG)ParentName.Length + (RootParent ? 0 : sizeof(WCHAR)) + LeafName.Length > MAXUSHORT)
+        return STATUS_NAME_TOO_LONG;
+    NewName.Length = ParentName.Length + (RootParent ? 0 : sizeof(WCHAR)) + LeafName.Length;
+    NewName.MaximumLength = NewName.Length;
+    NameBuffer = ExAllocatePoolWithTag(PagedPool, NewName.Length, TAG_NTFS);
+    if (!NameBuffer)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    NewName.Buffer = NameBuffer;
+    PrefixLength = RootParent ? 0 : ParentName.Length;
+    if (PrefixLength)
+        RtlCopyMemory(NewName.Buffer, ParentName.Buffer, PrefixLength);
+    NewName.Buffer[PrefixLength / sizeof(WCHAR)] = L'\\';
+    RtlCopyMemory((PUCHAR)NewName.Buffer + PrefixLength + sizeof(WCHAR), LeafName.Buffer, LeafName.Length);
+
+    /*
+     * A destination that already exists is only overwritten when the caller
+     * asked for it, and never when it is a directory. Renaming a file onto
+     * its own name is a no-op, so it must not reach the delete below.
+     */
+    Status = NtfsMasterFileTableGetFileRecordFromQueryEx(NtfsVolumeGetMft(VolCB->DiskVolume), NewName.Buffer, NewName.Length / sizeof(WCHAR), TRUE, &RemainingNameLength, &ExistingRecord);
+    if (NT_SUCCESS(Status) && RemainingNameLength == 0 && ExistingRecord)
+    {
+        ExistingRecordNumber = NtfsFileRecordGetHeader(ExistingRecord)->MFTRecordNumber;
+        ExistingIsDirectory = !!(NtfsFileRecordGetHeader(ExistingRecord)->Flags & FR_IS_DIRECTORY);
+        NtfsFileRecordDestroy(ExistingRecord);
+        ExistingRecord = NULL;
+
+        if (ExistingRecordNumber == NtfsFileRecordGetHeader(FileCB->FileRec)->MFTRecordNumber)
+        {
+            ExFreePoolWithTag(NameBuffer, TAG_NTFS);
+            return STATUS_SUCCESS;
+        }
+        if (!ReplaceIfExists || ExistingIsDirectory)
+        {
+            ExFreePoolWithTag(NameBuffer, TAG_NTFS);
+            return STATUS_OBJECT_NAME_COLLISION;
+        }
+
+        Status = NtfsMasterFileTableDeleteFile(NtfsVolumeGetMft(VolCB->DiskVolume), NewName.Buffer, NewName.Length / sizeof(WCHAR), FALSE);
+        NtfsEvictCachedRecord(VolCB, NewName.Buffer, (USHORT)(NewName.Length / sizeof(WCHAR)), NT_SUCCESS(Status));
+        InterlockedIncrement(&VolCB->DirGeneration);
+        if (!NT_SUCCESS(Status))
+        {
+            ExFreePoolWithTag(NameBuffer, TAG_NTFS);
+            return Status;
+        }
+    }
+    else if (ExistingRecord)
+    {
+        NtfsFileRecordDestroy(ExistingRecord);
+        ExistingRecord = NULL;
+    }
+
+    RemainingNameLength = 0;
+    Status = NtfsMasterFileTableRenameFile(NtfsVolumeGetMft(VolCB->DiskVolume), FileCB->FileName.Buffer, FileCB->FileName.Length / sizeof(WCHAR), NewName.Buffer, NewName.Length / sizeof(WCHAR));
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(NameBuffer, TAG_NTFS);
+        return Status;
+    }
+
+    NtfsEvictCachedRecord(VolCB, FileCB->FileName.Buffer, FileCB->FileName.Length / sizeof(WCHAR), FALSE);
+    NtfsRecordNameMissing(VolCB, FileCB->FileName.Buffer, FileCB->FileName.Length / sizeof(WCHAR));
+    NtfsForgetMissingName(VolCB, NewName.Buffer, NewName.Length / sizeof(WCHAR));
+    InterlockedIncrement(&VolCB->DirGeneration);
+
+    Status = NtfsMasterFileTableGetFileRecordFromQueryEx(NtfsVolumeGetMft(VolCB->DiskVolume), NewName.Buffer, NewName.Length / sizeof(WCHAR), TRUE, &RemainingNameLength, &RefreshedRecord);
+    if (NT_SUCCESS(Status) && RemainingNameLength == 0)
+    {
+        StaleRecord = FileCB->FileRec;
+        FileCB->FileRec = RefreshedRecord;
+        /*
+         * The old name's cache entry has just been evicted, but other handles
+         * may still hold it, so the record behind it belongs to them until
+         * they let go. This handle keeps the freshly parsed one instead.
+         */
+        if (FileCB->CachedRecord)
+        {
+            NtfsReleaseCachedRecord(VolCB, FileCB->CachedRecord);
+            FileCB->CachedRecord = NULL;
+        }
+        else
+        {
+            NtfsFileRecordDestroy(StaleRecord);
+        }
+        NtfsRefreshFileSizes(FileCB, FileObject);
+    }
+    else
+    {
+        if (RefreshedRecord)
+            NtfsFileRecordDestroy(RefreshedRecord);
+        DPRINT1("NtfsSetRenameInformation: renamed file but failed to refresh its record (0x%08lx, remaining %lu)\n", Status, RemainingNameLength);
+    }
+
+    OldNameBuffer = FileCB->FileName.Buffer;
+    if (NewName.Length <= sizeof(FileCB->InlineFileName))
+    {
+        RtlCopyMemory(FileCB->InlineFileName, NewName.Buffer, NewName.Length);
+        FileCB->FileName.Buffer = FileCB->InlineFileName;
+        ExFreePoolWithTag(NameBuffer, TAG_NTFS);
+    }
+    else
+    {
+        FileCB->FileName.Buffer = NameBuffer;
+    }
+    FileCB->FileName.Length = NewName.Length;
+    FileCB->FileName.MaximumLength = NewName.Length;
+    if (OldNameBuffer != FileCB->InlineFileName)
+        ExFreePool(OldNameBuffer);
+    FileObject->Flags |= FO_FILE_MODIFIED;
+    return STATUS_SUCCESS;
+}
+
 /* GLOBALS *****************************************************************/
 
 #ifdef ALLOC_PRAGMA
@@ -1110,11 +1318,30 @@ NtfsFsdSetInformation(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 goto Complete;
             }
 
+            /* A read-only file is not deletable until the attribute goes. */
+            if (Disposition->DeleteFile)
+            {
+                NtfsFileBasicInformation DispositionBasic;
+
+                Status = NtfsFileRecordGetBasicInformation(FileCB->FileRec, &DispositionBasic);
+                if (!NT_SUCCESS(Status))
+                    goto Complete;
+                if (DispositionBasic.FileAttributes & FILE_ATTRIBUTE_READONLY)
+                {
+                    Status = STATUS_CANNOT_DELETE;
+                    goto Complete;
+                }
+            }
+
             /* The name is only removed once the last handle is gone. */
             FileCB->DeletePending = !!Disposition->DeleteFile;
             Status = STATUS_SUCCESS;
             goto Complete;
         }
+
+        case FileRenameInformation:
+            Status = NtfsSetRenameInformation(VolCB, FileCB, FileObject, IrpSp, (PFILE_RENAME_INFORMATION)SystemBuffer, BufferLength);
+            goto Complete;
 
         case FileEndOfFileInformation:
             if (BufferLength <
@@ -1221,6 +1448,7 @@ NtfsFsdSetInformation(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     {
         NtfsRefreshFileSizes(FileCB,
                              FileObject);
+        NtfsPurgeStreamCache(FileCB, FileObject, NULL, 0);
         FileObject->Flags |=
             FO_FILE_MODIFIED |
             FO_FILE_SIZE_CHANGED;

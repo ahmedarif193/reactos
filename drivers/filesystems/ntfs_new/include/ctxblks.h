@@ -255,6 +255,13 @@ typedef struct _FCB
 
 } FileContextBlock, *PFileContextBlock;
 
+BOOLEAN
+NtfsSplitParentName(
+    _In_ PUNICODE_STRING Name,
+    _Out_ PUSHORT ParentLength,
+    _Out_ PWCHAR* LeafName,
+    _Out_ PUSHORT LeafLength);
+
 NTSTATUS
 NtfsForwardVolumeIo(_In_ PVolumeContextBlock VolCB,
                     _In_ PFileContextBlock FileCB,
