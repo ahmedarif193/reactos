@@ -391,7 +391,6 @@ PortAddDevice(
                     PortMiniportTimerRequestDpc,
                     DeviceExtension);
     KeInitializeSpinLock(&DeviceExtension->MiniportTimerLock);
-    KeInitializeSpinLock(&DeviceExtension->MsiSpinLock);
     KeInitializeSpinLock(&DeviceExtension->MiniportExLock);
 
     KeInitializeSpinLock(&DeviceExtension->PdoListLock);
@@ -1663,10 +1662,43 @@ StorPortExtendedFunction(
             break;
         }
 
+        case ExtFunctionGetMessageInterruptInformation:
+        {
+            ULONG MessageId = va_arg(Args, ULONG);
+            PMESSAGE_INTERRUPT_INFORMATION InterruptInfo = va_arg(Args, PMESSAGE_INTERRUPT_INFORMATION);
+            PIO_INTERRUPT_MESSAGE_INFO_ENTRY Entry;
+            PMINIPORT_DEVICE_EXTENSION MiniportExtension;
+            PFDO_DEVICE_EXTENSION DeviceExtension;
+
+            MiniportExtension = CONTAINING_RECORD(HwDeviceExtension, MINIPORT_DEVICE_EXTENSION, HwDeviceExtension);
+            DeviceExtension = MiniportExtension->Miniport->DeviceExtension;
+            if (!InterruptInfo)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            if (!DeviceExtension->MessageInfo || MessageId >= DeviceExtension->MessageInfo->MessageCount)
+            {
+                Status = STOR_STATUS_UNSUCCESSFUL;
+                break;
+            }
+
+            Entry = &DeviceExtension->MessageInfo->MessageInfo[MessageId];
+            InterruptInfo->MessageId = MessageId;
+            InterruptInfo->MessageData = Entry->MessageData;
+            InterruptInfo->MessageAddress = Entry->MessageAddress;
+            InterruptInfo->InterruptVector = Entry->Vector;
+            InterruptInfo->InterruptLevel = Entry->Irql;
+            InterruptInfo->InterruptMode = Entry->Mode;
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
         /*
-         * One lock covers every message. Message-signalled interrupts are not
-         * connected individually yet, so per-message locks would only pretend
-         * to a parallelism the port does not have.
+         * The lock guarding a message is its interrupt object's own spin
+         * lock: acquiring it holds off that message's service routine, which
+         * is the entire point, and works at DIRQL where a plain spin lock
+         * cannot.
          */
         case ExtFunctionAcquireMSISpinLock:
         {
@@ -1674,9 +1706,7 @@ StorPortExtendedFunction(
             PULONG OldIrql = va_arg(Args, PULONG);
             PMINIPORT_DEVICE_EXTENSION MiniportExtension;
             PFDO_DEVICE_EXTENSION DeviceExtension;
-            KIRQL SavedIrql;
 
-            UNREFERENCED_PARAMETER(MessageId);
             MiniportExtension = CONTAINING_RECORD(HwDeviceExtension, MINIPORT_DEVICE_EXTENSION, HwDeviceExtension);
             DeviceExtension = MiniportExtension->Miniport->DeviceExtension;
             if (!OldIrql)
@@ -1684,9 +1714,13 @@ StorPortExtendedFunction(
                 Status = STOR_STATUS_INVALID_PARAMETER;
                 break;
             }
+            if (!DeviceExtension->MessageInfo || MessageId >= DeviceExtension->MessageInfo->MessageCount)
+            {
+                Status = STOR_STATUS_UNSUCCESSFUL;
+                break;
+            }
 
-            KeAcquireSpinLock(&DeviceExtension->MsiSpinLock, &SavedIrql);
-            *OldIrql = SavedIrql;
+            *OldIrql = KeAcquireInterruptSpinLock(DeviceExtension->MessageInfo->MessageInfo[MessageId].InterruptObject);
             Status = STOR_STATUS_SUCCESS;
             break;
         }
@@ -1698,11 +1732,15 @@ StorPortExtendedFunction(
             PMINIPORT_DEVICE_EXTENSION MiniportExtension;
             PFDO_DEVICE_EXTENSION DeviceExtension;
 
-            UNREFERENCED_PARAMETER(MessageId);
             MiniportExtension = CONTAINING_RECORD(HwDeviceExtension, MINIPORT_DEVICE_EXTENSION, HwDeviceExtension);
             DeviceExtension = MiniportExtension->Miniport->DeviceExtension;
+            if (!DeviceExtension->MessageInfo || MessageId >= DeviceExtension->MessageInfo->MessageCount)
+            {
+                Status = STOR_STATUS_UNSUCCESSFUL;
+                break;
+            }
 
-            KeReleaseSpinLock(&DeviceExtension->MsiSpinLock, (KIRQL)OldIrql);
+            KeReleaseInterruptSpinLock(DeviceExtension->MessageInfo->MessageInfo[MessageId].InterruptObject, (KIRQL)OldIrql);
             Status = STOR_STATUS_SUCCESS;
             break;
         }
