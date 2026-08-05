@@ -23,6 +23,8 @@
 #define DUMP_VALID_DUMP32 'PMUD'
 #define DUMP_SIGNATURE64 'EGAP'
 #define DUMP_VALID_DUMP64 '46UD'
+#define DUMP_SUMMARY_SIGNATURE 'PMDS'
+#define DUMP_SUMMARY_VALID 'PMUD'
 
 typedef enum _DUMP_TYPES
 {
@@ -176,3 +178,26 @@ C_ASSERT(sizeof(DUMP_HEADER32) == DUMP_HEADER32_SIZE);
 C_ASSERT(sizeof(DUMP_HEADER64) == DUMP_HEADER64_SIZE);
 C_ASSERT(FIELD_OFFSET(DUMP_HEADER64, KdDebuggerDataBlock) == 0x80);
 C_ASSERT(FIELD_OFFSET(DUMP_HEADER64, PhysicalMemoryBlock) == 0x88);
+
+/*
+ * Bitmap (kernel/filtered) dump metadata, stored right after DUMP_HEADER64.
+ * The bitmap has one bit per PFN from 0 to BitmapSize - 1; the pages whose
+ * bits are set follow at file offset HeaderSize in ascending PFN order.
+ * Layout verified byte-for-byte against a Windows 11 kernel MEMORY.DMP
+ * (DumpType 6, "SDMP"/"DUMP" block, 64-bit fields, bits at +0x38).
+ */
+typedef struct _SUMMARY_DUMP64
+{
+    ULONG Signature;
+    ULONG ValidDump;
+    ULONG DumpOptions;
+    ULONG Spare0;
+    ULONG64 Spare1;
+    ULONG64 Spare2;
+    ULONG64 HeaderSize;
+    ULONG64 Pages;
+    ULONG64 BitmapSize;
+    ULONG Buffer[ANYSIZE_ARRAY];
+} SUMMARY_DUMP64, *PSUMMARY_DUMP64;
+
+C_ASSERT(FIELD_OFFSET(SUMMARY_DUMP64, Buffer) == 0x38);
