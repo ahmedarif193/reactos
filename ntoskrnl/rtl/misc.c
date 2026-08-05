@@ -228,6 +228,114 @@ AVrfInternalHeapFreeNotification(PVOID AllocationBase, SIZE_T AllocationSize)
     /* Stub for linking against rtl */
 }
 
+/*
+ * Feature-staging API. No feature store exists, so queries report that no
+ * configuration is present (callers use their built-in defaults) and the
+ * usage-telemetry entry points succeed as no-ops. Win11 drivers such as
+ * stornvme.sys call these during load and must not hit raising stubs.
+ */
+NTSTATUS
+NTAPI
+RtlQueryFeatureConfiguration(
+    _In_ ULONG FeatureId,
+    _In_ ULONG ConfigurationType,
+    _Out_ PULONG64 ChangeStamp,
+    _Out_ PVOID Configuration)
+{
+    UNREFERENCED_PARAMETER(FeatureId);
+    UNREFERENCED_PARAMETER(ConfigurationType);
+    UNREFERENCED_PARAMETER(Configuration);
+    if (ChangeStamp)
+        *ChangeStamp = 0;
+    return STATUS_NOT_FOUND;
+}
 
+ULONG64
+NTAPI
+RtlQueryFeatureConfigurationChangeStamp(VOID)
+{
+    return 0;
+}
+
+NTSTATUS
+NTAPI
+RtlRegisterFeatureConfigurationChangeNotification(
+    _In_ PVOID Callback,
+    _In_opt_ PVOID Context,
+    _Inout_opt_ PULONG64 ChangeStamp,
+    _Out_ PHANDLE NotificationHandle)
+{
+    UNREFERENCED_PARAMETER(Callback);
+    UNREFERENCED_PARAMETER(Context);
+    if (ChangeStamp)
+        *ChangeStamp = 0;
+    if (!NotificationHandle)
+        return STATUS_INVALID_PARAMETER;
+    *NotificationHandle = (HANDLE)1;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+RtlUnregisterFeatureConfigurationChangeNotification(
+    _In_ HANDLE NotificationHandle)
+{
+    UNREFERENCED_PARAMETER(NotificationHandle);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+RtlNotifyFeatureUsage(
+    _In_ PVOID FeatureUsageReport)
+{
+    UNREFERENCED_PARAMETER(FeatureUsageReport);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+RtlRecordFeatureUsage(
+    _In_ ULONG FeatureId,
+    _In_ ULONG Kind,
+    _In_ ULONG Addend,
+    _In_opt_ PVOID Reserved)
+{
+    UNREFERENCED_PARAMETER(FeatureId);
+    UNREFERENCED_PARAMETER(Kind);
+    UNREFERENCED_PARAMETER(Addend);
+    UNREFERENCED_PARAMETER(Reserved);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+RtlRegisterFeatureUsageProvider(
+    _In_ PVOID Registration,
+    _Out_ PHANDLE ProviderHandle)
+{
+    UNREFERENCED_PARAMETER(Registration);
+    if (!ProviderHandle)
+        return STATUS_INVALID_PARAMETER;
+    *ProviderHandle = (HANDLE)1;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+RtlUnregisterFeatureUsageProvider(
+    _In_ HANDLE ProviderHandle)
+{
+    UNREFERENCED_PARAMETER(ProviderHandle);
+    return STATUS_SUCCESS;
+}
+
+VOID
+NTAPI
+RtlArmFeatureUsageProviderFlushNotification(
+    _In_opt_ PVOID Context)
+{
+    UNREFERENCED_PARAMETER(Context);
+}
 
 /* EOF */

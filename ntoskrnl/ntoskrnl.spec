@@ -2571,22 +2571,22 @@
 @ stub -arch=arm64 KeOrAffinityEx
 @ stub -arch=arm64 KeOrAffinityEx2
 @ stub -arch=arm64 KeProcessorGroupAffinity
-@ stdcall -arch=arm64 KeQueryActiveGroupCount()
+@ stdcall KeQueryActiveGroupCount()
 @ stdcall -arch=arm64 KeQueryActiveProcessorAffinity(ptr)
 @ stdcall -arch=arm64 KeQueryActiveProcessorAffinity2(ptr ptr)
 @ stdcall -arch=arm64 KeQueryAuxiliaryCounterFrequency(ptr)
 @ stdcall -arch=x86_64,arm64 KeQueryDpcWatchdogInformation(ptr)
 @ stdcall -arch=arm64 KeQueryEffectivePriorityThread(ptr)
-@ stdcall -arch=arm64 KeQueryGroupAffinity(long)
-@ stdcall -arch=arm64 KeQueryGroupAffinityEx(ptr long)
+@ stdcall KeQueryGroupAffinity(long)
+@ stdcall KeQueryGroupAffinityEx(ptr long)
 @ stdcall -arch=arm64 KeQueryHardwareCounterConfiguration(ptr long ptr)
 @ stdcall -arch=arm64 KeQueryHeteroCpuPolicyThread(ptr long)
 @ stub -arch=arm64 KeQueryInterruptPartitionCount
 @ stub -arch=arm64 KeQueryInterruptPartitionInformation
-@ stdcall -arch=x86_64,arm64 KeQueryLogicalProcessorRelationship(ptr long ptr ptr)
+@ stdcall KeQueryLogicalProcessorRelationship(ptr long ptr ptr)
 @ stdcall -arch=arm64 KeQueryMaximumGroupCount()
-@ stdcall -arch=arm64 KeQueryNodeActiveAffinity(long ptr ptr)
-@ stdcall -arch=arm64 KeQueryNodeActiveAffinity2(long ptr ptr)
+@ stdcall KeQueryNodeActiveAffinity(long ptr ptr)
+@ stdcall KeQueryNodeActiveAffinity2(long ptr ptr)
 @ stdcall -arch=arm64 KeQueryNodeActiveProcessorCount(long)
 @ stdcall -arch=arm64 KeQueryNodeMaximumProcessorCount(long)
 @ stdcall -arch=arm64 KeQueryPrcbAddress(long)
@@ -2945,7 +2945,7 @@
 @ stub -arch=arm64 RtlAddResourceAttributeAce
 @ stub -arch=arm64 RtlAreBitsClearEx
 @ stub -arch=arm64 RtlAreBitsSetEx
-@ stub -arch=arm64 RtlArmFeatureUsageProviderFlushNotification
+@ stdcall RtlArmFeatureUsageProviderFlushNotification(ptr)
 @ stub -arch=arm64 RtlAvlInsertNodeEx
 @ stub -arch=arm64 RtlAvlRemoveNode
 @ stub -arch=arm64 RtlCapabilityCheck
@@ -3082,7 +3082,7 @@
 @ stub -arch=arm64 RtlMergeBitMapsEx
 @ stub -arch=arm64 RtlNormalizeSecurityDescriptor
 @ stub -arch=arm64 RtlNormalizeString
-@ stub -arch=arm64 RtlNotifyFeatureUsage
+@ stdcall RtlNotifyFeatureUsage(ptr)
 @ stub -arch=arm64 RtlNumberOfClearBitsEx
 @ stub -arch=arm64 RtlNumberOfClearBitsInRange
 @ stub -arch=arm64 RtlNumberOfSetBitsEx
@@ -3098,8 +3098,8 @@
 @ stub -arch=arm64 RtlQueryAllInternalFeatureConfigurations
 @ stub -arch=arm64 RtlQueryDynamicTimeZoneInformation
 @ stub -arch=arm64 RtlQueryElevationFlags
-@ stub -arch=arm64 RtlQueryFeatureConfiguration
-@ stub -arch=arm64 RtlQueryFeatureConfigurationChangeStamp
+@ stdcall RtlQueryFeatureConfiguration(long long ptr ptr)
+@ stdcall RtlQueryFeatureConfigurationChangeStamp()
 @ stub -arch=arm64 RtlQueryImageFileKeyOption
 @ stdcall RtlQueryModuleInformation(ptr long ptr)
 @ stub -arch=arm64 RtlQueryPackageClaims
@@ -3116,9 +3116,9 @@
 @ stub -arch=arm64 RtlRbInsertNodeEx
 @ stub -arch=arm64 RtlRbRemoveNode
 @ stub -arch=arm64 RtlRbReplaceNode
-@ stub -arch=arm64 RtlRecordFeatureUsage
-@ stub -arch=arm64 RtlRegisterFeatureConfigurationChangeNotification
-@ stub -arch=arm64 RtlRegisterFeatureUsageProvider
+@ stdcall RtlRecordFeatureUsage(long long long ptr)
+@ stdcall RtlRegisterFeatureConfigurationChangeNotification(ptr ptr ptr ptr)
+@ stdcall RtlRegisterFeatureUsageProvider(ptr ptr)
 @ stub -arch=arm64 RtlRemovePointerMapping
 @ stub -arch=arm64 RtlRemovePropertyStore
 @ stub -arch=arm64 RtlReplaceSidInSd
@@ -3153,8 +3153,8 @@
 @ stub -arch=arm64 RtlUdiv128
 @ stub -arch=arm64 RtlUnicodeStringToInt64
 @ stub -arch=arm64 RtlUnicodeStringToUTF8String
-@ stub -arch=arm64 RtlUnregisterFeatureConfigurationChangeNotification
-@ stub -arch=arm64 RtlUnregisterFeatureUsageProvider
+@ stdcall RtlUnregisterFeatureConfigurationChangeNotification(ptr)
+@ stdcall RtlUnregisterFeatureUsageProvider(ptr)
 @ stub -arch=arm64 RtlUnsignedMultiplyHigh
 @ stub -arch=arm64 RtlValidateCorrelationVector
 @ stub -arch=arm64 RtlVirtualUnwind2
