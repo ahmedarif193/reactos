@@ -442,6 +442,39 @@ ContainsWildcard(PUNICODE_STRING String)
     return FALSE;
 }
 
+/*
+ * A directory search pattern is given once, on the query that starts the
+ * scan. Every later query leaves it out and means "the same pattern", so the
+ * handle has to remember it; forgetting it turns a single-name search into a
+ * full enumeration and hands the caller files it never asked for.
+ */
+static
+PUNICODE_STRING
+NtfsCaptureDirSearchPattern(_In_ PFileContextBlock FileCB,
+                            _In_opt_ PUNICODE_STRING FileNameFilter)
+{
+    PWCHAR PatternBuffer;
+
+    if (FileNameFilter && FileNameFilter->Length != 0)
+    {
+        PatternBuffer = (PWCHAR)ExAllocatePoolUninitialized(PagedPool, FileNameFilter->Length, TAG_NTFS);
+        if (!PatternBuffer)
+            return FileNameFilter;
+
+        RtlCopyMemory(PatternBuffer, FileNameFilter->Buffer, FileNameFilter->Length);
+        if (FileCB->DirSearchPattern.Buffer)
+            ExFreePoolWithTag(FileCB->DirSearchPattern.Buffer, TAG_NTFS);
+        FileCB->DirSearchPattern.Buffer = PatternBuffer;
+        FileCB->DirSearchPattern.Length = FileNameFilter->Length;
+        FileCB->DirSearchPattern.MaximumLength = FileNameFilter->Length;
+    }
+
+    if (!FileCB->DirSearchPattern.Buffer)
+        return NULL;
+
+    return &FileCB->DirSearchPattern;
+}
+
 static
 NTSTATUS
 GetFileBothDirectoryInformation(_In_    PFileContextBlock FileCB,
@@ -468,6 +501,8 @@ GetFileBothDirectoryInformation(_In_    PFileContextBlock FileCB,
 
     if (!FileDir)
         return STATUS_NOT_FOUND;
+
+    FileNameFilter = NtfsCaptureDirSearchPattern(FileCB, FileNameFilter);
 
     /* If there's no wild cards and a file name filter
      * is specified, we will only return one entry.
@@ -529,6 +564,7 @@ GetFileDirectoryInformation(_In_ PFileContextBlock FileCB,
         RestartScan = TRUE;
         FileCB->DirScanStarted = TRUE;
     }
+    FileNameFilter = NtfsCaptureDirSearchPattern(FileCB, FileNameFilter);
     if (FileNameFilter &&
         !ContainsWildcard(FileNameFilter))
     {

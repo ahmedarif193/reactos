@@ -243,6 +243,10 @@ typedef struct _FCB
     /* First QueryDirectory on this handle must start at the beginning. */
     BOOLEAN DirScanStarted;
 
+    /* The search pattern belongs to the handle: it is supplied once and
+     * every later query without a name reuses it. */
+    UNICODE_STRING DirSearchPattern;
+
     /* Non-NULL when FileRec is on loan from the volume's record cache. */
     struct _NtfsCachedRecord* CachedRecord;
 
