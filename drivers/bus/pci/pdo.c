@@ -391,8 +391,8 @@ PciPdoShouldUseDefaultMessageInterrupts(
     PciConfig = &DeviceExtension->PciDevice->PciConfig;
 
     /*
-     * xHCI and AHCI can be boot-critical before an INF policy is installed,
-     * and both controller classes are designed to use message interrupts.
+     * xHCI, AHCI, and NVMe can be boot-critical before an INF policy is
+     * installed, and these controller classes use message interrupts.
      */
     if ((PciConfig->BaseClass == PCI_CLASS_SERIAL_BUS_CTLR) &&
         (PciConfig->SubClass == PCI_SUBCLASS_SB_USB) &&
@@ -401,9 +401,13 @@ PciPdoShouldUseDefaultMessageInterrupts(
         return TRUE;
     }
 
-    return ((PciConfig->BaseClass == PCI_CLASS_MASS_STORAGE_CTLR) &&
-            (PciConfig->SubClass == PCI_SUBCLASS_MSC_AHCI_CTLR) &&
-            (PciConfig->ProgIf == 0x01));
+    if (PciConfig->BaseClass != PCI_CLASS_MASS_STORAGE_CTLR)
+        return FALSE;
+
+    return (((PciConfig->SubClass == PCI_SUBCLASS_MSC_AHCI_CTLR) &&
+             (PciConfig->ProgIf == 0x01)) ||
+            ((PciConfig->SubClass == PCI_SUBCLASS_MSC_NVM_CTLR) &&
+             (PciConfig->ProgIf == PCI_PROGRAMMING_INTERFACE_MSC_NVM_EXPRESS)));
 }
 
 #define PCI_ADDRESS_MEMORY_ADDRESS_MASK_64     0xfffffffffffffff0ull
