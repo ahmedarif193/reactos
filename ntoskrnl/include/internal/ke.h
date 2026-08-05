@@ -105,6 +105,7 @@ extern USHORT KeProcessorLevel;
 extern USHORT KeProcessorRevision;
 extern ULONG64 KeFeatureBits;
 extern KAFFINITY KeActiveProcessors;
+extern ULONG KeBugCheckActive;
 extern PKPRCB KiProcessorBlock[];
 #ifndef KI_MAX_NUMA_NODES
 #ifdef _M_ARM64
