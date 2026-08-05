@@ -114,6 +114,19 @@ NtfsSplitParentName(
 }
 
 static
+NTSTATUS
+NtfsCompleteCreate(
+    _Inout_ PIRP Irp,
+    _In_ NTSTATUS Status,
+    _In_ ULONG_PTR Information)
+{
+    Irp->IoStatus.Information = Information;
+    Irp->IoStatus.Status = Status;
+    IoCompleteRequest(Irp, IO_DISK_INCREMENT);
+    return Status;
+}
+
+static
 BOOLEAN
 NtfsTakeCachedLookupParent(
     _In_ PVolumeContextBlock VolCB,
@@ -688,12 +701,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         PWCHAR TargetLeafName;
 
         if (!NtfsSplitParentName(&FileObject->FileName, &TargetParentLength, &TargetLeafName, &TargetLeafLength))
-        {
-            Irp->IoStatus.Information = 0;
-            Irp->IoStatus.Status = STATUS_OBJECT_NAME_INVALID;
-            IoCompleteRequest(Irp, IO_DISK_INCREMENT);
-            return STATUS_OBJECT_NAME_INVALID;
-        }
+            return NtfsCompleteCreate(Irp, STATUS_OBJECT_NAME_INVALID, 0);
         TargetLeafOffset = (USHORT)(TargetLeafName - FileObject->FileName.Buffer);
     }
     /*
@@ -739,10 +747,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 NtfsFileRecordDestroy(TargetFile);
             ExReleaseResourceLite(&VolCB->MetadataResource);
             KeLeaveCriticalRegion();
-            Irp->IoStatus.Information = 0;
-            Irp->IoStatus.Status = Status;
-            IoCompleteRequest(Irp, IO_DISK_INCREMENT);
-            return Status;
+            return NtfsCompleteCreate(Irp, Status, 0);
         }
         FileObject->FileName.Length = TargetParentLength * sizeof(WCHAR);
     }
@@ -1311,12 +1316,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         if (NT_SUCCESS(Status) && (DeleteOnCloseBasic.FileAttributes & FILE_ATTRIBUTE_READONLY))
             Status = STATUS_CANNOT_DELETE;
         if (!NT_SUCCESS(Status))
-        {
-            Irp->IoStatus.Information = 0;
-            Irp->IoStatus.Status = Status;
-            IoCompleteRequest(Irp, IO_DISK_INCREMENT);
-            return Status;
-        }
+            return NtfsCompleteCreate(Irp, Status, 0);
     }
 
     /*
@@ -1338,12 +1338,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         ExReleaseResourceLite(&VolCB->MetadataResource);
         KeLeaveCriticalRegion();
         if (!NT_SUCCESS(Status))
-        {
-            Irp->IoStatus.Information = 0;
-            Irp->IoStatus.Status = Status;
-            IoCompleteRequest(Irp, IO_DISK_INCREMENT);
-            return Status;
-        }
+            return NtfsCompleteCreate(Irp, Status, 0);
 
         NtfsRefreshFileSizes(FileCB, FileObject);
         NtfsPurgeStreamCache(FileCB, FileObject, NULL, 0);

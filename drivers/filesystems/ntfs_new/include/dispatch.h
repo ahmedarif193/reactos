@@ -267,6 +267,12 @@ VOID
 NtfsRefreshFileSizes(_In_ struct _FCB* FileCB,
                      _In_opt_ PFILE_OBJECT FileObject);
 
+VOID
+NtfsPurgeStreamCache(_In_ struct _FCB* FileCB,
+                     _In_ PFILE_OBJECT FileObject,
+                     _In_opt_ PLARGE_INTEGER Offset,
+                     _In_ ULONG Length);
+
 _Function_class_(IRP_MJ_QUERY_INFORMATION)
 _Function_class_(DRIVER_DISPATCH)
 NTSTATUS
