@@ -11,5 +11,5 @@
 #include <conutils.h>
 
 
-BOOL hash_file(LPCWSTR Filename);
-BOOL asn_dump(LPCWSTR Filename);
+BOOL hash_file(LPCWSTR Filename, LPCWSTR AlgorithmName);
+BOOL asn_dump(LPCWSTR Filename, LPCWSTR AlgorithmName);
