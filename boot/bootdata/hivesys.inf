@@ -77,6 +77,10 @@ HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_010601","Cl
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0106","Service",0x00000000,"pciide"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0106","ClassGUID",0x00000000,"{4D36E96A-E325-11CE-BFC1-08002BE10318}"
 
+; NVMe controllers go to the StorPort NVMe miniport
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_010802","Service",0x00000000,"stornvme"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_010802","ClassGUID",0x00000000,"{4D36E97B-E325-11CE-BFC1-08002BE10318}"
+
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\*PNP0600","Service",0x00000000,"atapi"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\*PNP0600","ClassGUID",0x00000000,"{4D36E96A-E325-11CE-BFC1-08002BE10318}"
 
@@ -1938,6 +1942,14 @@ HKLM,"SYSTEM\CurrentControlSet\Services\storahci","ImagePath",0x00020000,"system
 HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Start",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Type",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Tag",0x00010001,0x00000005
+
+; stornvme driver (StorPort NVMe miniport)
+HKLM,"SYSTEM\CurrentControlSet\Services\stornvme","ErrorControl",0x00010001,0x00000003
+HKLM,"SYSTEM\CurrentControlSet\Services\stornvme","Group",0x00000000,"SCSI Miniport"
+HKLM,"SYSTEM\CurrentControlSet\Services\stornvme","ImagePath",0x00020000,"system32\drivers\stornvme.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\stornvme","Start",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\stornvme","Type",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\stornvme","Tag",0x00010001,0x00000006
 
 ; SD Bus driver (bus FDO on SD Host Controller, creates child PDOs for cards)
 HKLM,"SYSTEM\CurrentControlSet\Services\sdbus","ErrorControl",0x00010001,0x00000001
