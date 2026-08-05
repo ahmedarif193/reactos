@@ -9,6 +9,9 @@
 #include <internal/dump.h>
 #include <ntdddisk.h>
 #include <reactos/drivers/dumpstor.h>
+#if defined(_M_AMD64)
+#include <mm/ARM3/miarm.h>
+#endif
 
 #define NDEBUG
 #include <debug.h>
@@ -20,6 +23,16 @@
 #define TAG_LIVE_DUMP 'pDmK'
 #define TAG_CRASH_DUMP 'pDcK'
 #define KDP_DUMP_EXTENT_BUFFER_SIZE (64 * 1024)
+
+/* CrashControl!CrashDumpEnabled values, matching Windows */
+#define KDP_DUMP_DISABLED 0
+#define KDP_DUMP_COMPLETE 1
+#define KDP_DUMP_KERNEL 2
+#define KDP_DUMP_SMALL 3
+#define KDP_DUMP_AUTOMATIC 7
+
+/* Smallest pagefile a summary dump target will accept */
+#define KDP_SUMMARY_DUMP_MINIMUM_SPACE (64ULL * 1024 * 1024)
 
 static LONG KdpLiveDumpActive;
 static LONG KdpCrashDumpActive;
@@ -38,6 +51,13 @@ typedef struct _KDP_CRASH_DUMP_STATE
     /* Cursor into Extents, so a forward walk of the file never rescans. */
     ULONG ExtentIndex;
     ULONG64 ExtentStartVcn;
+    /* CrashControl policy: DUMP_TYPE_FULL or DUMP_TYPE_SUMMARY */
+    ULONG DumpType;
+    BOOLEAN IncludeUserPages;
+    RTL_BITMAP PageBitmap;
+    PULONG PageBitmapBuffer;
+    PSUMMARY_DUMP64 Summary;
+    ULONG SummarySize;
     BOOLEAN Initialized;
 } KDP_CRASH_DUMP_STATE, *PKDP_CRASH_DUMP_STATE;
 
@@ -200,6 +220,50 @@ static NTSTATUS KdpWriteDumpFileChunk(_In_ HANDLE FileHandle, _In_ HANDLE EventH
     return STATUS_SUCCESS;
 }
 
+static VOID KdpQueryCrashControlPolicy(_Out_ PULONG DumpType, _Out_ PBOOLEAN IncludeUserPages)
+{
+    RTL_QUERY_REGISTRY_TABLE QueryTable[3];
+    ULONG CrashDumpEnabled = KDP_DUMP_AUTOMATIC;
+    ULONG FilterPages = 0;
+    ULONG DefaultEnabled = KDP_DUMP_AUTOMATIC;
+    ULONG DefaultFilter = 0;
+
+    RtlZeroMemory(QueryTable, sizeof(QueryTable));
+    QueryTable[0].Flags = RTL_QUERY_REGISTRY_DIRECT;
+    QueryTable[0].Name = L"CrashDumpEnabled";
+    QueryTable[0].EntryContext = &CrashDumpEnabled;
+    QueryTable[0].DefaultType = REG_DWORD;
+    QueryTable[0].DefaultData = &DefaultEnabled;
+    QueryTable[0].DefaultLength = sizeof(DefaultEnabled);
+    QueryTable[1].Flags = RTL_QUERY_REGISTRY_DIRECT;
+    QueryTable[1].Name = L"FilterPages";
+    QueryTable[1].EntryContext = &FilterPages;
+    QueryTable[1].DefaultType = REG_DWORD;
+    QueryTable[1].DefaultData = &DefaultFilter;
+    QueryTable[1].DefaultLength = sizeof(DefaultFilter);
+
+    RtlQueryRegistryValues(RTL_REGISTRY_CONTROL, L"CrashControl", QueryTable, NULL, NULL);
+
+    switch (CrashDumpEnabled)
+    {
+        case KDP_DUMP_DISABLED:
+            *DumpType = DUMP_TYPE_INVALID;
+            *IncludeUserPages = FALSE;
+            break;
+        case KDP_DUMP_COMPLETE:
+            /* CrashDumpEnabled=1 + FilterPages=1 is the active memory dump */
+            *DumpType = FilterPages ? DUMP_TYPE_BITMAP_FULL : DUMP_TYPE_FULL;
+            *IncludeUserPages = FilterPages ? TRUE : FALSE;
+            break;
+        case KDP_DUMP_KERNEL:
+        case KDP_DUMP_AUTOMATIC:
+        default:
+            *DumpType = DUMP_TYPE_BITMAP_KERNEL;
+            *IncludeUserPages = FALSE;
+            break;
+    }
+}
+
 BOOLEAN NTAPI KdpInitializeCrashDump(_In_ HANDLE PageFileHandle)
 {
     OBJECT_ATTRIBUTES ObjectAttributes;
@@ -217,6 +281,13 @@ BOOLEAN NTAPI KdpInitializeCrashDump(_In_ HANDLE PageFileHandle)
 
     if (KdpCrashDumpState.Initialized)
         return TRUE;
+
+    KdpQueryCrashControlPolicy(&KdpCrashDumpState.DumpType, &KdpCrashDumpState.IncludeUserPages);
+    if (KdpCrashDumpState.DumpType == (ULONG)DUMP_TYPE_INVALID)
+    {
+        DPRINT1("KD: Crash dumps disabled by CrashControl!CrashDumpEnabled\n");
+        return FALSE;
+    }
 
     Status = ObDuplicateObject(PsGetCurrentProcess(), PageFileHandle, PsInitialSystemProcess, &KdpCrashDumpState.DumpHandle, 0, OBJ_KERNEL_HANDLE, DUPLICATE_SAME_ACCESS, KernelMode);
     if (!NT_SUCCESS(Status))
@@ -323,19 +394,70 @@ BOOLEAN NTAPI KdpInitializeCrashDump(_In_ HANDLE PageFileHandle)
     }
 
     KdpCrashDumpState.Capacity = StandardInfo.EndOfFile;
-    if (KdpCrashDumpState.Capacity.QuadPart < KdpCrashDumpState.Header->RequiredDumpSpace.QuadPart)
+    if (KdpCrashDumpState.DumpType == DUMP_TYPE_FULL)
     {
-        Status = STATUS_DISK_FULL;
-        goto Failure;
+        if (KdpCrashDumpState.Capacity.QuadPart < KdpCrashDumpState.Header->RequiredDumpSpace.QuadPart)
+        {
+            Status = STATUS_DISK_FULL;
+            goto Failure;
+        }
+    }
+    else
+    {
+        PPHYSICAL_MEMORY_RUN LastRun;
+        ULONG BitmapBits;
+        ULONG BitmapBytes;
+
+        LastRun = &MmPhysicalMemoryBlock->Run[MmPhysicalMemoryBlock->NumberOfRuns - 1];
+        BitmapBits = (ULONG)(LastRun->BasePage + LastRun->PageCount);
+        BitmapBytes = ALIGN_UP_BY(BitmapBits, 32) / 8;
+
+        Operation = "allocating the dump page bitmap";
+        KdpCrashDumpState.PageBitmapBuffer = ExAllocatePoolWithTag(NonPagedPool, BitmapBytes, TAG_CRASH_DUMP);
+        if (KdpCrashDumpState.PageBitmapBuffer == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Failure;
+        }
+        RtlInitializeBitMap(&KdpCrashDumpState.PageBitmap, KdpCrashDumpState.PageBitmapBuffer, BitmapBits);
+
+        KdpCrashDumpState.SummarySize = ALIGN_UP_BY(FIELD_OFFSET(SUMMARY_DUMP64, Buffer) + BitmapBytes, PAGE_SIZE);
+        Operation = "allocating the summary dump header";
+        KdpCrashDumpState.Summary = ExAllocatePoolWithTag(NonPagedPool, KdpCrashDumpState.SummarySize, TAG_CRASH_DUMP);
+        if (KdpCrashDumpState.Summary == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Failure;
+        }
+
+        if (KdpCrashDumpState.Capacity.QuadPart <
+            (LONGLONG)(DUMP_HEADER64_SIZE + KdpCrashDumpState.SummarySize + KDP_SUMMARY_DUMP_MINIMUM_SPACE))
+        {
+            Status = STATUS_DISK_FULL;
+            goto Failure;
+        }
     }
 
     KdpCrashDumpState.Initialized = TRUE;
-    DPRINT1("KD: Crash dump target initialized (%I64u bytes available, %I64u required)\n", KdpCrashDumpState.Capacity.QuadPart, KdpCrashDumpState.Header->RequiredDumpSpace.QuadPart);
+    DPRINT1("KD: Crash dump target initialized (%s%s dump, %I64u bytes available, %I64u required for full)\n",
+            KdpCrashDumpState.DumpType == DUMP_TYPE_FULL ? "full" : "summary",
+            KdpCrashDumpState.IncludeUserPages ? "+user" : "",
+            KdpCrashDumpState.Capacity.QuadPart, KdpCrashDumpState.Header->RequiredDumpSpace.QuadPart);
     return TRUE;
 
 Failure:
     DPRINT1("KD: Crash dump target initialization failed while %s (0x%08lx)\n", Operation, Status);
 
+    if (KdpCrashDumpState.Summary)
+    {
+        ExFreePoolWithTag(KdpCrashDumpState.Summary, TAG_CRASH_DUMP);
+        KdpCrashDumpState.Summary = NULL;
+    }
+    if (KdpCrashDumpState.PageBitmapBuffer)
+    {
+        ExFreePoolWithTag(KdpCrashDumpState.PageBitmapBuffer, TAG_CRASH_DUMP);
+        KdpCrashDumpState.PageBitmapBuffer = NULL;
+    }
     if (KdpCrashDumpState.Header)
     {
         ExFreePoolWithTag(KdpCrashDumpState.Header, TAG_CRASH_DUMP);
@@ -376,6 +498,7 @@ NTSTATUS NTAPI KdpWriteCrashDump(VOID)
     ULONG64 NextStepPage;
     ULONG64 PagesWritten = 0;
     ULONG64 Remaining;
+    ULONG64 TotalPages;
     NTSTATUS Status;
     ULONG ValidDump;
     CHAR ProgressText[64];
@@ -397,6 +520,49 @@ NTSTATUS NTAPI KdpWriteCrashDump(VOID)
 
     RtlCopyMemory(KdpCrashDumpState.Header->Comment, "ReactOS crash dump", sizeof("ReactOS crash dump"));
 
+    if (KdpCrashDumpState.DumpType != DUMP_TYPE_FULL)
+    {
+        PSUMMARY_DUMP64 Summary = KdpCrashDumpState.Summary;
+        ULONG64 MaxPages;
+        ULONG Bit;
+
+        TotalPages = MmBuildDumpPageBitmap(&KdpCrashDumpState.PageBitmap, KdpCrashDumpState.IncludeUserPages);
+
+        /* Drop the highest pages first if the pagefile cannot take them all */
+        MaxPages = (KdpCrashDumpState.Capacity.QuadPart - DUMP_HEADER64_SIZE - KdpCrashDumpState.SummarySize) >> PAGE_SHIFT;
+        if (TotalPages > MaxPages)
+        {
+            for (Bit = KdpCrashDumpState.PageBitmap.SizeOfBitMap; (Bit-- > 0) && (TotalPages > MaxPages);)
+            {
+                if (RtlCheckBit(&KdpCrashDumpState.PageBitmap, Bit))
+                {
+                    RtlClearBit(&KdpCrashDumpState.PageBitmap, Bit);
+                    TotalPages--;
+                }
+            }
+            KdpCrashDumpState.Header->Attributes.InsufficientDumpfileSize = TRUE;
+        }
+
+        RtlZeroMemory(Summary, KdpCrashDumpState.SummarySize);
+        Summary->Signature = DUMP_SUMMARY_SIGNATURE;
+        Summary->ValidDump = DUMP_SUMMARY_VALID;
+        Summary->HeaderSize = DUMP_HEADER64_SIZE + KdpCrashDumpState.SummarySize;
+        Summary->Pages = TotalPages;
+        Summary->BitmapSize = KdpCrashDumpState.PageBitmap.SizeOfBitMap;
+        RtlCopyMemory(Summary->Buffer,
+                      KdpCrashDumpState.PageBitmapBuffer,
+                      ALIGN_UP_BY(KdpCrashDumpState.PageBitmap.SizeOfBitMap, 32) / 8);
+
+        KdpCrashDumpState.Header->DumpType = KdpCrashDumpState.DumpType;
+        if (KdpCrashDumpState.IncludeUserPages)
+            KdpCrashDumpState.Header->Attributes.FilterDumpFile = TRUE;
+        KdpCrashDumpState.Header->RequiredDumpSpace.QuadPart = Summary->HeaderSize + (TotalPages << PAGE_SHIFT);
+    }
+    else
+    {
+        TotalPages = KdpCrashDumpState.Header->PhysicalMemoryBlock.NumberOfPages;
+    }
+
     /*
      * Keep the pagefile header invalid until every physical page has reached
      * storage. SMSS must never mistake a partial dump for a complete one.
@@ -413,6 +579,13 @@ NTSTATUS NTAPI KdpWriteCrashDump(VOID)
     if (!NT_SUCCESS(Status))
         goto Exit;
 
+    if (KdpCrashDumpState.DumpType != DUMP_TYPE_FULL)
+    {
+        Status = KdpWriteStorageVirtual(KdpCrashDumpState.Summary, KdpCrashDumpState.SummarySize, &FileOffset);
+        if (!NT_SUCCESS(Status))
+            goto Exit;
+    }
+
     Status = KdpCrashDumpState.Storage.Flush(KdpCrashDumpState.Storage.Context);
     if (!NT_SUCCESS(Status))
         goto Exit;
@@ -424,11 +597,39 @@ NTSTATUS NTAPI KdpWriteCrashDump(VOID)
      * Progress is reported in 5% steps. Precompute the page count per step so
      * the write loop never divides: this runs at HIGH_LEVEL, once per page.
      */
-    PagesPerStep = (KdpCrashDumpState.Header->PhysicalMemoryBlock.NumberOfPages + KDP_DUMP_PROGRESS_STEPS - 1) / KDP_DUMP_PROGRESS_STEPS;
+    PagesPerStep = (TotalPages + KDP_DUMP_PROGRESS_STEPS - 1) / KDP_DUMP_PROGRESS_STEPS;
     if (PagesPerStep == 0)
         PagesPerStep = 1;
     NextStepPage = PagesPerStep;
 
+    if (KdpCrashDumpState.DumpType != DUMP_TYPE_FULL)
+    {
+        ULONG Bit;
+
+        for (Bit = 0; Bit < KdpCrashDumpState.PageBitmap.SizeOfBitMap; Bit++)
+        {
+            if (!RtlCheckBit(&KdpCrashDumpState.PageBitmap, Bit))
+                continue;
+
+            PhysicalAddress.QuadPart = (ULONG64)Bit << PAGE_SHIFT;
+            Status = KdpWriteStoragePhysical(PhysicalAddress, PAGE_SIZE, &FileOffset);
+            if (!NT_SUCCESS(Status))
+                goto Exit;
+
+            PagesWritten++;
+            if ((PagesWritten >= NextStepPage) && (Step <= KDP_DUMP_PROGRESS_STEPS))
+            {
+                ULONG Percent = Step * (100 / KDP_DUMP_PROGRESS_STEPS);
+
+                DbgPrint("\b\b\b%3lu", Percent);
+                RtlStringCbPrintfA(ProgressText, sizeof(ProgressText), "\rDumping physical memory to disk: %3lu", Percent);
+                InbvDisplayString(ProgressText);
+                NextStepPage += PagesPerStep;
+                Step++;
+            }
+        }
+    }
+    else
     for (RunIndex = 0; RunIndex < KdpCrashDumpState.Header->PhysicalMemoryBlock.NumberOfRuns; RunIndex++)
     {
         PhysicalAddress.QuadPart = KdpCrashDumpState.Header->PhysicalMemoryBlock.Run[RunIndex].BasePage << PAGE_SHIFT;
@@ -513,7 +714,12 @@ NTSTATUS NTAPI KdpWriteLiveKernelDump(_In_ PSYSDBG_LIVEDUMP_CONTROL Control, _In
     OBJECT_ATTRIBUTES ObjectAttributes;
     FILE_END_OF_FILE_INFORMATION EndOfFile;
     IO_STATUS_BLOCK IoStatus;
+    SYSDBG_LIVEDUMP_CONTROL_FLAGS SupportedFlags;
     PDUMP_HEADER64 Header = NULL;
+    PSUMMARY_DUMP64 Summary = NULL;
+    PULONG BitmapBuffer = NULL;
+    RTL_BITMAP Bitmap;
+    PPHYSICAL_MEMORY_RUN LastRun;
     PFILE_OBJECT FileObject = NULL;
     PKEVENT CancelEvent = NULL;
     HANDLE DumpHandle = NULL;
@@ -522,9 +728,13 @@ NTSTATUS NTAPI KdpWriteLiveKernelDump(_In_ PSYSDBG_LIVEDUMP_CONTROL Control, _In
     PHYSICAL_ADDRESS PhysicalAddress;
     PVOID MappedAddress;
     ULONG HeaderSize;
-    ULONG RunIndex;
+    ULONG SummarySize;
+    ULONG BitmapBits;
+    ULONG BitmapBytes;
+    ULONG Bit;
+    ULONG BatchLimit;
     ULONG Length;
-    ULONG64 Remaining;
+    ULONG64 TotalPages;
     NTSTATUS Status;
     PCSTR Operation = "validating parameters";
 
@@ -540,7 +750,10 @@ NTSTATUS NTAPI KdpWriteLiveKernelDump(_In_ PSYSDBG_LIVEDUMP_CONTROL Control, _In
     if (!Control->DumpFileHandle)
         return STATUS_INVALID_HANDLE;
 
-    if (Control->Flags.AsUlong || Control->AddPagesControl.AsUlong)
+    /* Only the user-space page opt-in is honored so far */
+    SupportedFlags.AsUlong = 0;
+    SupportedFlags.IncludeUserSpaceMemoryPages = 1;
+    if ((Control->Flags.AsUlong & ~SupportedFlags.AsUlong) || Control->AddPagesControl.AsUlong)
         return STATUS_NOT_SUPPORTED;
 
     if (InterlockedCompareExchange(&KdpLiveDumpActive, 1, 0) != 0)
@@ -596,6 +809,44 @@ NTSTATUS NTAPI KdpWriteLiveKernelDump(_In_ PSYSDBG_LIVEDUMP_CONTROL Control, _In
     Header->Attributes.LiveDumpGeneratedDump = TRUE;
     RtlCopyMemory(Header->Comment, "ReactOS live kernel dump", sizeof("ReactOS live kernel dump"));
 
+    /* Live dumps carry only the in-use pages: kernel-space ones by default,
+     * user-space ones as well when the caller asked for them */
+    LastRun = &MmPhysicalMemoryBlock->Run[MmPhysicalMemoryBlock->NumberOfRuns - 1];
+    BitmapBits = (ULONG)(LastRun->BasePage + LastRun->PageCount);
+    BitmapBytes = ALIGN_UP_BY(BitmapBits, 32) / 8;
+    Operation = "allocating the dump page bitmap";
+    BitmapBuffer = ExAllocatePoolWithTag(NonPagedPool, BitmapBytes, TAG_LIVE_DUMP);
+    if (!BitmapBuffer)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Exit;
+    }
+    RtlInitializeBitMap(&Bitmap, BitmapBuffer, BitmapBits);
+
+    SummarySize = ALIGN_UP_BY(FIELD_OFFSET(SUMMARY_DUMP64, Buffer) + BitmapBytes, PAGE_SIZE);
+    Operation = "allocating the summary dump header";
+    Summary = ExAllocatePoolWithTag(NonPagedPool, SummarySize, TAG_LIVE_DUMP);
+    if (!Summary)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Exit;
+    }
+
+    TotalPages = MmBuildDumpPageBitmap(&Bitmap, Control->Flags.IncludeUserSpaceMemoryPages ? TRUE : FALSE);
+
+    RtlZeroMemory(Summary, SummarySize);
+    Summary->Signature = DUMP_SUMMARY_SIGNATURE;
+    Summary->ValidDump = DUMP_SUMMARY_VALID;
+    Summary->HeaderSize = DUMP_HEADER64_SIZE + SummarySize;
+    Summary->Pages = TotalPages;
+    Summary->BitmapSize = BitmapBits;
+    RtlCopyMemory(Summary->Buffer, BitmapBuffer, BitmapBytes);
+
+    Header->DumpType = Control->Flags.IncludeUserSpaceMemoryPages ? DUMP_TYPE_BITMAP_FULL : DUMP_TYPE_BITMAP_KERNEL;
+    if (Control->Flags.IncludeUserSpaceMemoryPages)
+        Header->Attributes.FilterDumpFile = TRUE;
+    Header->RequiredDumpSpace.QuadPart = Summary->HeaderSize + (TotalPages << PAGE_SHIFT);
+
     EndOfFile.EndOfFile = Header->RequiredDumpSpace;
     Operation = "setting the dump file size";
     Status = ZwSetInformationFile(DumpHandle, &IoStatus, &EndOfFile, sizeof(EndOfFile), FileEndOfFileInformation);
@@ -608,36 +859,54 @@ NTSTATUS NTAPI KdpWriteLiveKernelDump(_In_ PSYSDBG_LIVEDUMP_CONTROL Control, _In
     if (!NT_SUCCESS(Status))
         goto Exit;
 
-    for (RunIndex = 0; RunIndex < Header->PhysicalMemoryBlock.NumberOfRuns; RunIndex++)
+    Operation = "writing the summary dump header";
+    Status = KdpWriteDumpFileChunk(DumpHandle, IoEventHandle, Summary, SummarySize, &FileOffset);
+    if (!NT_SUCCESS(Status))
+        goto Exit;
+
+    BatchLimit = KDP_LIVE_DUMP_WRITE_SIZE >> PAGE_SHIFT;
+    Bit = 0;
+    while (Bit < BitmapBits)
     {
-        PhysicalAddress.QuadPart = Header->PhysicalMemoryBlock.Run[RunIndex].BasePage << PAGE_SHIFT;
-        Remaining = Header->PhysicalMemoryBlock.Run[RunIndex].PageCount << PAGE_SHIFT;
+        ULONG BatchPages;
 
-        while (Remaining)
+        if (!RtlCheckBit(&Bitmap, Bit))
         {
-            if (CancelEvent && KeReadStateEvent(CancelEvent))
-            {
-                Status = STATUS_CANCELLED;
-                goto Exit;
-            }
-
-            Length = (ULONG)min(Remaining, KDP_LIVE_DUMP_WRITE_SIZE);
-            MappedAddress = MmMapIoSpace(PhysicalAddress, Length, MmCached);
-            if (!MappedAddress)
-            {
-                Status = STATUS_INSUFFICIENT_RESOURCES;
-                goto Exit;
-            }
-
-            Operation = "writing physical memory";
-            Status = KdpWriteDumpFileChunk(DumpHandle, IoEventHandle, MappedAddress, Length, &FileOffset);
-            MmUnmapIoSpace(MappedAddress, Length);
-            if (!NT_SUCCESS(Status))
-                goto Exit;
-
-            PhysicalAddress.QuadPart += Length;
-            Remaining -= Length;
+            Bit++;
+            continue;
         }
+
+        /* Batch physically contiguous marked pages into one mapping/write */
+        BatchPages = 1;
+        while (((Bit + BatchPages) < BitmapBits) &&
+               (BatchPages < BatchLimit) &&
+               RtlCheckBit(&Bitmap, Bit + BatchPages))
+        {
+            BatchPages++;
+        }
+
+        if (CancelEvent && KeReadStateEvent(CancelEvent))
+        {
+            Status = STATUS_CANCELLED;
+            goto Exit;
+        }
+
+        PhysicalAddress.QuadPart = (ULONG64)Bit << PAGE_SHIFT;
+        Length = BatchPages << PAGE_SHIFT;
+        MappedAddress = MmMapIoSpace(PhysicalAddress, Length, MmCached);
+        if (!MappedAddress)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Exit;
+        }
+
+        Operation = "writing physical memory";
+        Status = KdpWriteDumpFileChunk(DumpHandle, IoEventHandle, MappedAddress, Length, &FileOffset);
+        MmUnmapIoSpace(MappedAddress, Length);
+        if (!NT_SUCCESS(Status))
+            goto Exit;
+
+        Bit += BatchPages;
     }
 
     Operation = "flushing the dump file";
@@ -647,6 +916,10 @@ Exit:
     if (!NT_SUCCESS(Status))
         DPRINT1("KD: Live dump failed while %s (0x%08lx)\n", Operation, Status);
 
+    if (Summary)
+        ExFreePoolWithTag(Summary, TAG_LIVE_DUMP);
+    if (BitmapBuffer)
+        ExFreePoolWithTag(BitmapBuffer, TAG_LIVE_DUMP);
     if (Header)
         ExFreePoolWithTag(Header, TAG_LIVE_DUMP);
     if (IoEventHandle)
