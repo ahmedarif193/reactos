@@ -4175,7 +4175,11 @@ typedef struct _PCI_EXPRESS_SRIOV_CAPABILITY {
 #define PCI_SUBCLASS_MSC_IPI_CTLR           0x03
 #define PCI_SUBCLASS_MSC_RAID_CTLR          0x04
 #define PCI_SUBCLASS_MSC_AHCI_CTLR          0x06
+#define PCI_SUBCLASS_MSC_NVM_CTLR           0x08
 #define PCI_SUBCLASS_MSC_OTHER              0x80
+
+/* PCI programming interfaces for mass storage subclass 8 (NVM) */
+#define PCI_PROGRAMMING_INTERFACE_MSC_NVM_EXPRESS 0x02
 
 /* PCI device subclasses for class 2 (network controllers)*/
 #define PCI_SUBCLASS_NET_ETHERNET_CTLR      0x00
