@@ -521,6 +521,12 @@ typedef struct _MMPFN
 
 extern PMMPFN MmPfnDatabase;
 
+PFN_NUMBER
+NTAPI
+MmBuildDumpPageBitmap(
+    _Inout_ PRTL_BITMAP Bitmap,
+    _In_ BOOLEAN IncludeUserPages);
+
 typedef struct _MMPFNLIST
 {
     PFN_NUMBER Total;

@@ -1397,4 +1397,68 @@ MiInitializePfnForOtherProcess(IN PFN_NUMBER PageFrameIndex,
     }
 }
 
+/*
+ * Mark every page worth dumping in the caller's per-PFN bitmap and return the
+ * number of set bits. In-use pages only: free, zeroed, standby and bad pages
+ * are always skipped. Without IncludeUserPages the page must also be mapped
+ * into system space, giving the kernel-dump page set.
+ *
+ * Runs lock-free over the PFN database so the crash path can call it with
+ * every other processor frozen; the live-dump path accepts the race with
+ * concurrent page-state changes.
+ */
+PFN_NUMBER
+NTAPI
+MmBuildDumpPageBitmap(
+    _Inout_ PRTL_BITMAP Bitmap,
+    _In_ BOOLEAN IncludeUserPages)
+{
+    PPHYSICAL_MEMORY_RUN Run;
+    PMMPFN Pfn1;
+    PFN_NUMBER Page, LastPage, Included = 0;
+    ULONG RunIndex;
+
+    RtlClearAllBits(Bitmap);
+
+    if (!MmPhysicalMemoryBlock)
+        return 0;
+
+    for (RunIndex = 0; RunIndex < MmPhysicalMemoryBlock->NumberOfRuns; RunIndex++)
+    {
+        Run = &MmPhysicalMemoryBlock->Run[RunIndex];
+        LastPage = Run->BasePage + Run->PageCount;
+        for (Page = Run->BasePage; Page < LastPage; Page++)
+        {
+            if (Page >= Bitmap->SizeOfBitMap)
+                break;
+
+            Pfn1 = MI_PFN_ELEMENT(Page);
+            switch (Pfn1->u3.e1.PageLocation)
+            {
+                case ActiveAndValid:
+                case ModifiedPageList:
+                case ModifiedNoWritePageList:
+                case TransitionPage:
+                    break;
+                default:
+                    continue;
+            }
+
+            if (!IncludeUserPages)
+            {
+                /* Shared section pages back user views and the file cache */
+                if (Pfn1->u3.e1.PrototypePte)
+                    continue;
+                if ((PVOID)MiPteToAddress(Pfn1->PteAddress) < MmSystemRangeStart)
+                    continue;
+            }
+
+            RtlSetBit(Bitmap, (ULONG)Page);
+            Included++;
+        }
+    }
+
+    return Included;
+}
+
 /* EOF */
