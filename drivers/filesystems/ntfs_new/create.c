@@ -79,7 +79,6 @@ NtfsReturnCreateReparse(
     return STATUS_REPARSE;
 }
 
-static
 BOOLEAN
 NtfsSplitParentName(
     _In_ PUNICODE_STRING Name,
@@ -613,8 +612,15 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     ULONG RemainingNameLength = 0;
     ULONG FileAttributes;
     USHORT FileNameLength;
+    USHORT TargetLeafOffset = 0;
+    USHORT TargetLeafLength = 0;
+    USHORT TargetParentLength = 0;
     BOOLEAN ExternalBackingDeleted = FALSE;
     BOOLEAN CachedParentLookup = FALSE;
+    BOOLEAN OpenTargetDirectory;
+    BOOLEAN TargetExists = FALSE;
+    BOOLEAN FileExisted = TRUE;
+    BOOLEAN Overwritten = FALSE;
 
     if (VolumeDeviceObject == NtfsDiskFileSystemDeviceObject)
     {
@@ -629,6 +635,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     IrpSp = IoGetCurrentIrpStackLocation(Irp);
     FileObject = IrpSp->FileObject;
     Disposition = GetDisposition(IrpSp->Parameters.Create.Options);
+    OpenTargetDirectory = BooleanFlagOn(IrpSp->Flags, SL_OPEN_TARGET_DIRECTORY);
     FileAttributes =
         IrpSp->Parameters.Create.FileAttributes &
         FILE_ATTRIBUTE_VALID_FLAGS;
@@ -676,11 +683,25 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                           IO_DISK_INCREMENT);
         return STATUS_OBJECT_NAME_INVALID;
     }
+    if (OpenTargetDirectory)
+    {
+        PWCHAR TargetLeafName;
+
+        if (!NtfsSplitParentName(&FileObject->FileName, &TargetParentLength, &TargetLeafName, &TargetLeafLength))
+        {
+            Irp->IoStatus.Information = 0;
+            Irp->IoStatus.Status = STATUS_OBJECT_NAME_INVALID;
+            IoCompleteRequest(Irp, IO_DISK_INCREMENT);
+            return STATUS_OBJECT_NAME_INVALID;
+        }
+        TargetLeafOffset = (USHORT)(TargetLeafName - FileObject->FileName.Buffer);
+    }
     /*
      * An open that only ever fails still costs a full index walk, so answer
      * from the missing-name cache when the path is already known absent.
      */
-    if (!(IrpSp->Parameters.Create.Options & FILE_OPEN_REPARSE_POINT) &&
+    if (!OpenTargetDirectory &&
+        !(IrpSp->Parameters.Create.Options & FILE_OPEN_REPARSE_POINT) &&
         Disposition == FILE_OPEN &&
         NtfsIsNameKnownMissing(VolCB,
                                FileObject->FileName.Buffer,
@@ -694,6 +715,37 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
     KeEnterCriticalRegion();
     ExAcquireResourceExclusiveLite(&VolCB->MetadataResource, TRUE);
+
+    if (OpenTargetDirectory)
+    {
+        PNtfsFileRecord TargetFile = NULL;
+        ULONG TargetRemainingNameLength = 0;
+
+        Status = NtfsMasterFileTableGetFileRecordFromQueryEx(Mft, FileObject->FileName.Buffer, FileObject->FileName.Length / sizeof(WCHAR), TRUE, &TargetRemainingNameLength, &TargetFile);
+        if (NT_SUCCESS(Status) && TargetRemainingNameLength == 0)
+        {
+            TargetExists = TRUE;
+            NtfsFileRecordDestroy(TargetFile);
+        }
+        else if (Status == STATUS_NOT_FOUND || Status == STATUS_OBJECT_NAME_NOT_FOUND || Status == STATUS_OBJECT_PATH_NOT_FOUND)
+        {
+            Status = STATUS_SUCCESS;
+            if (TargetFile)
+                NtfsFileRecordDestroy(TargetFile);
+        }
+        else
+        {
+            if (TargetFile)
+                NtfsFileRecordDestroy(TargetFile);
+            ExReleaseResourceLite(&VolCB->MetadataResource);
+            KeLeaveCriticalRegion();
+            Irp->IoStatus.Information = 0;
+            Irp->IoStatus.Status = Status;
+            IoCompleteRequest(Irp, IO_DISK_INCREMENT);
+            return Status;
+        }
+        FileObject->FileName.Length = TargetParentLength * sizeof(WCHAR);
+    }
 
     /*
      * Parsing the path and the file record is by far the most expensive part
@@ -817,6 +869,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     {
         // The file was not found.
 
+        FileExisted = FALSE;
         switch (Disposition)
         {
             case FILE_SUPERSEDE:
@@ -1052,7 +1105,8 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
      * data stream is opened for content writes.  Do this before cache sizes
      * are initialized so Cache Manager observes the materialized allocation.
      */
-    if (FileCB->RequestedType == TypeData &&
+    if (!(NtfsFileRecordGetHeader(CurrentFile)->Flags & FR_IS_DIRECTORY) &&
+        FileCB->RequestedType == TypeData &&
         !FileCB->RequestedStream &&
         (FileCB->DesiredAccess &
          (FILE_WRITE_DATA | FILE_APPEND_DATA)))
@@ -1245,6 +1299,58 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         FileObject->FsContext = FileCB;
     }
 
+    /* Asking to delete a read-only file on close is refused at the open, the
+     * same as asking for it through a disposition later. */
+    if (FileExisted &&
+        !OpenTargetDirectory &&
+        (IrpSp->Parameters.Create.Options & FILE_DELETE_ON_CLOSE))
+    {
+        NtfsFileBasicInformation DeleteOnCloseBasic;
+
+        Status = NtfsFileRecordGetBasicInformation(CurrentFile, &DeleteOnCloseBasic);
+        if (NT_SUCCESS(Status) && (DeleteOnCloseBasic.FileAttributes & FILE_ATTRIBUTE_READONLY))
+            Status = STATUS_CANNOT_DELETE;
+        if (!NT_SUCCESS(Status))
+        {
+            Irp->IoStatus.Information = 0;
+            Irp->IoStatus.Status = Status;
+            IoCompleteRequest(Irp, IO_DISK_INCREMENT);
+            return Status;
+        }
+    }
+
+    /*
+     * An overwriting disposition opens the existing file and then empties it:
+     * without this, writing something shorter over a file leaves the old tail
+     * behind, which is what "echo x > existing" does all day.
+     */
+    if (FileExisted &&
+        !OpenTargetDirectory &&
+        FileCB->RequestedType == TypeData &&
+        !(NtfsFileRecordGetHeader(CurrentFile)->Flags & FR_IS_DIRECTORY) &&
+        (Disposition == FILE_SUPERSEDE ||
+         Disposition == FILE_OVERWRITE ||
+         Disposition == FILE_OVERWRITE_IF))
+    {
+        KeEnterCriticalRegion();
+        ExAcquireResourceExclusiveLite(&VolCB->MetadataResource, TRUE);
+        Status = NtfsFileRecordSetFileDataSize(FileCB->FileRec, FileCB->RequestedType, FileCB->RequestedStream, 0);
+        ExReleaseResourceLite(&VolCB->MetadataResource);
+        KeLeaveCriticalRegion();
+        if (!NT_SUCCESS(Status))
+        {
+            Irp->IoStatus.Information = 0;
+            Irp->IoStatus.Status = Status;
+            IoCompleteRequest(Irp, IO_DISK_INCREMENT);
+            return Status;
+        }
+
+        NtfsRefreshFileSizes(FileCB, FileObject);
+        NtfsPurgeStreamCache(FileCB, FileObject, NULL, 0);
+        FileObject->Flags |= FO_FILE_MODIFIED | FO_FILE_SIZE_CHANGED;
+        Overwritten = TRUE;
+    }
+
     // Open file.
     if (ExternalBackingDeleted)
     {
@@ -1252,7 +1358,24 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             FO_FILE_MODIFIED |
             FO_FILE_SIZE_CHANGED;
     }
-    Irp->IoStatus.Information = FILE_OPENED;
+    if (OpenTargetDirectory)
+    {
+        RtlMoveMemory(FileObject->FileName.Buffer, FileObject->FileName.Buffer + TargetLeafOffset, TargetLeafLength * sizeof(WCHAR));
+        FileObject->FileName.Length = TargetLeafLength * sizeof(WCHAR);
+        Irp->IoStatus.Information = TargetExists ? FILE_EXISTS : FILE_DOES_NOT_EXIST;
+    }
+    else if (!FileExisted)
+    {
+        Irp->IoStatus.Information = FILE_CREATED;
+    }
+    else if (Overwritten)
+    {
+        Irp->IoStatus.Information = Disposition == FILE_SUPERSEDE ? FILE_SUPERSEDED : FILE_OVERWRITTEN;
+    }
+    else
+    {
+        Irp->IoStatus.Information = FILE_OPENED;
+    }
     Irp->IoStatus.Status = STATUS_SUCCESS;
     IoCompleteRequest(Irp, IO_DISK_INCREMENT);
     return STATUS_SUCCESS;
