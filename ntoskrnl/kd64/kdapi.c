@@ -2054,6 +2054,12 @@ KdExitDebugger(IN BOOLEAN Enable)
     KdRestore(FALSE);
     if (KdpPortLocked) KdpPortUnlock();
 
+#if DBG && defined(KDBG)
+    /* The log watchdog saw no prints while the machine was frozen in the
+     * debugger; restart its window or the first tick after the thaw fires. */
+    KdpLogWatchdogNotePrint();
+#endif
+
     /* Unfreeze the CPUs, restoring also the IRQL */
     KeThawExecution(Enable);
 

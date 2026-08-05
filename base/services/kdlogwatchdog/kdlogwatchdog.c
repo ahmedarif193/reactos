@@ -23,7 +23,7 @@ static VOID UpdateServiceStatus(_In_ DWORD State)
 {
     ServiceStatus.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
     ServiceStatus.dwCurrentState = State;
-    ServiceStatus.dwControlsAccepted = State == SERVICE_RUNNING ? SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN : 0;
+    ServiceStatus.dwControlsAccepted = State == SERVICE_RUNNING ? SERVICE_ACCEPT_STOP : 0;
     ServiceStatus.dwWin32ExitCode = NO_ERROR;
     ServiceStatus.dwServiceSpecificExitCode = 0;
     ServiceStatus.dwCheckPoint = 0;
@@ -37,7 +37,14 @@ static DWORD WINAPI ServiceControlHandler(_In_ DWORD Control, _In_ DWORD EventTy
     UNREFERENCED_PARAMETER(EventData);
     UNREFERENCED_PARAMETER(Context);
 
-    if (Control == SERVICE_CONTROL_STOP || Control == SERVICE_CONTROL_SHUTDOWN)
+    /*
+     * SERVICE_CONTROL_SHUTDOWN is deliberately not accepted: the kernel
+     * watchdog stays armed until PopGracefulShutdown, so the heartbeat must
+     * keep running while user-mode shutdown drains or a quiet shutdown longer
+     * than the timeout would bugcheck. An explicit stop is the supported way
+     * to starve the watchdog on purpose.
+     */
+    if (Control == SERVICE_CONTROL_STOP)
     {
         UpdateServiceStatus(SERVICE_STOP_PENDING);
         SetEvent(StopEvent);
