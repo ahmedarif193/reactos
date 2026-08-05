@@ -117,9 +117,14 @@ SmpCheckForCrashDump(IN PUNICODE_STRING FileName)
         goto Cleanup;
     }
 
-    if ((Header->Signature != DUMP_SIGNATURE64) || (Header->ValidDump != DUMP_VALID_DUMP64) || (Header->DumpType != DUMP_TYPE_FULL) || (Header->RequiredDumpSpace.QuadPart < DUMP_HEADER64_SIZE) || ((Header->RequiredDumpSpace.QuadPart & (PAGE_SIZE - 1)) != 0))
+    if ((Header->Signature != DUMP_SIGNATURE64) ||
+        (Header->ValidDump != DUMP_VALID_DUMP64) ||
+        ((Header->DumpType != DUMP_TYPE_FULL) &&
+         (Header->DumpType != DUMP_TYPE_BITMAP_FULL) &&
+         (Header->DumpType != DUMP_TYPE_BITMAP_KERNEL)) ||
+        (Header->RequiredDumpSpace.QuadPart < DUMP_HEADER64_SIZE))
     {
-        DPRINT1("SMSS: No valid full crash dump in `%wZ' (%08lx/%08lx, type %lu, size %I64d)\n", FileName, Header->Signature, Header->ValidDump, Header->DumpType, Header->RequiredDumpSpace.QuadPart);
+        DPRINT1("SMSS: No valid crash dump in `%wZ' (%08lx/%08lx, type %lu, size %I64d)\n", FileName, Header->Signature, Header->ValidDump, Header->DumpType, Header->RequiredDumpSpace.QuadPart);
         goto Cleanup;
     }
 
