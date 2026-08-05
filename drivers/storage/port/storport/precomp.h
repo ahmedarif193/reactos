@@ -120,6 +120,9 @@ typedef struct _FDO_DEVICE_EXTENSION
     PHW_PASSIVE_INITIALIZE_ROUTINE HwPassiveInitRoutine;
     PKINTERRUPT Interrupt;
     ULONG InterruptIrql;
+    ULONG PerfFlags;
+    ULONG PerfConcurrentChannels;
+    BOOLEAN PerfConfigured;
 
     /*
      * Legacy miniports get one port-owned timer through
@@ -129,12 +132,16 @@ typedef struct _FDO_DEVICE_EXTENSION
     KDPC MiniportTimerDpc;
     KDPC MiniportTimerRequestDpc;
     KSPIN_LOCK MiniportTimerLock;
+    KSPIN_LOCK MsiSpinLock;
     PHW_TIMER MiniportTimerRoutine;
     PHW_TIMER MiniportTimerRequestedRoutine;
     ULONG MiniportTimerRequestedValue;
     BOOLEAN MiniportTimerArmed;
     BOOLEAN MiniportTimerRequestPending;
     BOOLEAN MiniportTimerRequestDpcActive;
+
+    /* Shared backing lock for StorPortAcquireSpinLockEx miniport locks */
+    KSPIN_LOCK MiniportExLock;
 
     KSPIN_LOCK PdoListLock;
     LIST_ENTRY PdoListHead;
@@ -172,6 +179,8 @@ typedef struct _PDO_DEVICE_EXTENSION
 typedef struct _STOR_SRB_CONTEXT
 {
     PVOID SrbExtensionAllocation;
+    PSTORAGE_REQUEST_BLOCK MiniportSrb;
+    PSCSI_REQUEST_BLOCK LegacySrb;
     PSTOR_SCATTER_GATHER_LIST Sgl;
     ULONG SglAllocationSize;
     ULONG SrbExtensionSize;
@@ -179,6 +188,16 @@ typedef struct _STOR_SRB_CONTEXT
 
 #define PortGetSrbContext(Irp)  ((PSTOR_SRB_CONTEXT)((Irp)->Tail.Overlay.DriverContext[0]))
 #define PORT_DUMP_IRP_MARKER     ((PVOID)(ULONG_PTR)'pruD')
+
+FORCEINLINE BOOLEAN PortIsExtendedSrb(_In_opt_ PVOID Srb)
+{
+    return Srb != NULL && ((PSTORAGE_REQUEST_BLOCK_HEADER)Srb)->Function == SRB_FUNCTION_STORAGE_REQUEST_BLOCK;
+}
+
+FORCEINLINE PIRP PortGetOriginalRequestFromSrb(_In_ PVOID Srb)
+{
+    return (PIRP)(PortIsExtendedSrb(Srb) ? ((PSTORAGE_REQUEST_BLOCK)Srb)->OriginalRequest : ((PSCSI_REQUEST_BLOCK)Srb)->OriginalRequest);
+}
 
 /*
  * STOR_SCATTER_GATHER_LIST ends in a flexible array, so it cannot be embedded
@@ -248,12 +267,22 @@ MiniportFindAdapter(
     _In_ PMINIPORT Miniport);
 
 NTSTATUS
+MiniportAdapterControlPreFind(
+    _In_ PMINIPORT Miniport,
+    _Inout_ PIO_RESOURCE_REQUIREMENTS_LIST RequirementsList);
+
+NTSTATUS
 MiniportHwInitialize(
     _In_ PMINIPORT Miniport);
 
 BOOLEAN
 MiniportHwInterrupt(
     _In_ PMINIPORT Miniport);
+
+BOOLEAN
+MiniportBuildIo(
+    _In_ PMINIPORT Miniport,
+    _In_ PSCSI_REQUEST_BLOCK Srb);
 
 BOOLEAN
 MiniportStartIo(

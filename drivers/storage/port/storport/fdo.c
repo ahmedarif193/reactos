@@ -100,14 +100,11 @@ PortFdoConnectInterrupt(
 
 static
 NTSTATUS
-PortFdoStartMiniport(
+PortFdoInitializeMiniport(
     _In_ PFDO_DEVICE_EXTENSION DeviceExtension)
 {
     PHW_INITIALIZATION_DATA InitData;
     INTERFACE_TYPE InterfaceType;
-    NTSTATUS Status;
-
-    DPRINT1("PortFdoStartDevice(%p)\n", DeviceExtension);
 
     /* Get the interface type of the lower device */
     InterfaceType = GetBusInterface(DeviceExtension->LowerDevice);
@@ -121,9 +118,20 @@ PortFdoStartMiniport(
         return STATUS_NO_SUCH_DEVICE;
 
     /* Initialize the miniport */
-    Status = MiniportInitialize(&DeviceExtension->Miniport,
-                                DeviceExtension,
-                                InitData);
+    return MiniportInitialize(&DeviceExtension->Miniport, DeviceExtension, InitData);
+}
+
+
+static
+NTSTATUS
+PortFdoStartMiniport(
+    _In_ PFDO_DEVICE_EXTENSION DeviceExtension)
+{
+    NTSTATUS Status;
+
+    DPRINT1("PortFdoStartDevice(%p)\n", DeviceExtension);
+
+    Status = PortFdoInitializeMiniport(DeviceExtension);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("MiniportInitialize() failed (Status 0x%08lx)\n", Status);
@@ -286,6 +294,8 @@ PortSendInquiry(
 
     while (KeepTrying)
     {
+        RtlZeroMemory(SenseBuffer, SENSE_BUFFER_SIZE);
+
         /* Initialize event for waiting */
         KeInitializeEvent(&Event,
                           NotificationEvent,
@@ -356,6 +366,8 @@ PortSendInquiry(
         }
 
         DPRINT("PortSendInquiry(): Request processed by driver, status = 0x%08X\n", Status);
+        if (Srb.SrbStatus & SRB_STATUS_AUTOSENSE_VALID)
+            DPRINT1("StorPort: inquiry sense key 0x%02x ASC 0x%02x ASCQ 0x%02x\n", SenseBuffer->SenseKey, SenseBuffer->AdditionalSenseCode, SenseBuffer->AdditionalSenseCodeQualifier);
 
         if (SRB_STATUS(Srb.SrbStatus) == SRB_STATUS_SUCCESS)
         {
@@ -595,6 +607,7 @@ PortFdoFilterRequirements(
     PIRP Irp)
 {
     PIO_RESOURCE_REQUIREMENTS_LIST RequirementsList;
+    NTSTATUS Status;
 
     DPRINT1("PortFdoFilterRequirements(%p %p)\n", DeviceExtension, Irp);
 
@@ -604,6 +617,14 @@ PortFdoFilterRequirements(
     {
         DeviceExtension->BusNumber = RequirementsList->BusNumber;
         DeviceExtension->SlotNumber = RequirementsList->SlotNumber;
+
+        Status = PortFdoInitializeMiniport(DeviceExtension);
+        if (!NT_SUCCESS(Status))
+            return Status;
+
+        Status = MiniportAdapterControlPreFind(&DeviceExtension->Miniport, RequirementsList);
+        if (!NT_SUCCESS(Status))
+            return Status;
     }
 
     return STATUS_SUCCESS;
