@@ -39,6 +39,7 @@
 #include "winbase.h"
 #include "winnt.h"
 #include "wingdi.h"
+#include "winuser.h"
 #include "imm.h"
 #include "usp10.h"
 #include "commctrl.h"
