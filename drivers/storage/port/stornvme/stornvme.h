@@ -48,7 +48,7 @@
 #define NVME_IO_QUEUE_ENTRIES       256
 #define NVME_MAX_IO_QUEUES          8
 #define NVME_MAX_NAMESPACES         8
-#define NVME_MAX_TRANSFER           (128 * 1024)
+#define NVME_MAX_TRANSFER           (1024 * 1024)
 #define NVME_MAX_PRP_ENTRIES        (NVME_MAX_TRANSFER / PAGE_SIZE)
 #define NVME_MAX_DSM_RANGES         128
 #define NVME_MIN_BLOCK_SHIFT        9
