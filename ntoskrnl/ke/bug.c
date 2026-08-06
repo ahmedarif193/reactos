@@ -813,6 +813,7 @@ KeBugCheckWithTf(IN ULONG BugCheckCode,
     PVOID DriverBase;
     PLDR_DATA_TABLE_ENTRY LdrEntry;
     PULONG_PTR HardErrorParameters;
+    NTSTATUS DumpStatus;
     KIRQL OldIrql;
 
     /* Set active bugcheck */
@@ -1229,10 +1230,11 @@ KeBugCheckWithTf(IN ULONG BugCheckCode,
 
         /*
          * The crash target, physical file layout, and transport resources
-         * were prepared when the boot-volume pagefile was created. The other
-         * processors are frozen now, and this path does not depend on KD.
+         * were prepared before SMSS starts. The other processors are frozen
+         * now, and this path does not depend on filesystem or paging I/O.
          */
-        KdpWriteCrashDump();
+        DumpStatus = KdpWriteCrashDump();
+        if (!NT_SUCCESS(DumpStatus)) DbgPrint("KD: Crash dump writer returned 0x%08lx.\n", DumpStatus);
 
         // TODO: The crash-dump helper must set the Reboot variable.
         Reboot = !!IopAutoReboot;
@@ -1300,7 +1302,7 @@ NTSTATUS
 NTAPI
 KeInitializeCrashDumpHeader(IN ULONG Type, IN ULONG Flags, OUT PVOID Buffer, IN ULONG BufferSize, OUT PULONG BufferNeeded OPTIONAL)
 {
-#if defined(_M_AMD64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
     PDUMP_HEADER64 Header;
     ULONG Index;
     SIZE_T DescriptorSize;
@@ -1334,11 +1336,29 @@ KeInitializeCrashDumpHeader(IN ULONG Type, IN ULONG Flags, OUT PVOID Buffer, IN 
     Header->ValidDump = DUMP_VALID_DUMP64;
     Header->MajorVersion = KdVersionBlock.MajorVersion;
     Header->MinorVersion = KdVersionBlock.MinorVersion;
-    Header->DirectoryTableBase = PsInitialSystemProcess ? PsInitialSystemProcess->Pcb.DirectoryTableBase : __readcr3();
+    if (PsInitialSystemProcess != NULL)
+    {
+        Header->DirectoryTableBase = KPROCESS_DTB0(&PsInitialSystemProcess->Pcb);
+    }
+#if defined(_M_ARM64)
+    else
+    {
+        __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Header->DirectoryTableBase));
+    }
+#else
+    else
+    {
+        Header->DirectoryTableBase = __readcr3();
+    }
+#endif
     Header->PfnDataBase = (ULONG64)(ULONG_PTR)MmPfnDatabase;
     Header->PsLoadedModuleList = (ULONG64)(ULONG_PTR)&PsLoadedModuleList;
     Header->PsActiveProcessHead = (ULONG64)(ULONG_PTR)&PsActiveProcessHead;
+#if defined(_M_ARM64)
+    Header->MachineImageType = IMAGE_FILE_MACHINE_ARM64;
+#else
     Header->MachineImageType = IMAGE_FILE_MACHINE_AMD64;
+#endif
     Header->NumberProcessors = KeNumberProcessors;
     Header->BugCheckCode = (ULONG)KiBugCheckData[0];
     Header->BugCheckParameter1 = KiBugCheckData[1];

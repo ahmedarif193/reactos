@@ -12,7 +12,7 @@
 // Default size of the DbgPrint log buffer
 //
 #if DBG
-#define KD_DEFAULT_LOG_BUFFER_SIZE  0x8000
+#define KD_DEFAULT_LOG_BUFFER_SIZE  0x20000
 #else
 #define KD_DEFAULT_LOG_BUFFER_SIZE  0x1000
 #endif
@@ -88,7 +88,9 @@ KdUpdateDataBlock(
     VOID
 );
 
-BOOLEAN NTAPI KdpInitializeCrashDump(_In_ HANDLE PageFileHandle);
+BOOLEAN NTAPI KdpInitializeCrashDump(_In_ HANDLE DumpFileHandle);
+
+BOOLEAN NTAPI KdpInitializeDedicatedCrashDump(VOID);
 
 NTSTATUS NTAPI KdpWriteCrashDump(VOID);
 
@@ -515,6 +517,13 @@ VOID
 NTAPI
 KdLogDbgPrint(
     _In_ PSTRING String);
+
+ULONG
+NTAPI
+KdpCopyPrintBuffer(
+    _Out_writes_bytes_(BufferSize) PCHAR Buffer,
+    _In_ ULONG BufferSize,
+    _Out_ PULONG RolloverCount);
 
 //
 // Global KD Data

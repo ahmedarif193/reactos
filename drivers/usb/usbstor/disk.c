@@ -173,7 +173,7 @@ static NTSTATUS USBSTOR_GetDumpInterface(_In_ PPDO_DEVICE_EXTENSION PdoExtension
     Interface->BytesPerSector = DumpContext->BytesPerSector;
     Interface->MaximumTransferLength = PAGE_SIZE;
     Interface->Prepare = USBSTOR_DumpPrepare;
-    Interface->Write = USBSTOR_DumpWrite;
+    Interface->WriteRoutine = USBSTOR_DumpWrite;
     Interface->Flush = USBSTOR_DumpFlush;
     return STATUS_SUCCESS;
 }

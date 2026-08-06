@@ -8,21 +8,29 @@
 #include <ntoskrnl.h>
 #include <internal/dump.h>
 #include <ntdddisk.h>
+#include <ntddstor.h>
+#define NDEBUG
+#include <debug.h>
 #include <reactos/drivers/dumpstor.h>
-#if defined(_M_AMD64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
 #include <mm/ARM3/miarm.h>
 #endif
 
-#define NDEBUG
-#include <debug.h>
-
-#if defined(_M_AMD64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
 
 #define KDP_LIVE_DUMP_BUGCHECK 0x161
 #define KDP_LIVE_DUMP_WRITE_SIZE (1024 * 1024)
 #define TAG_LIVE_DUMP 'pDmK'
 #define TAG_CRASH_DUMP 'pDcK'
 #define KDP_DUMP_EXTENT_BUFFER_SIZE (64 * 1024)
+#define KDP_RAW_DUMP_DEFAULT_MBR_TYPE 0x7f
+#define KDP_RAW_DUMP_LAYOUT_PARTITIONS 16
+#define KDP_RAW_DUMP_COPY_SIZE (1024 * 1024)
+#define KDP_RAW_LOG_RESERVE_SIZE (256 * 1024)
+#define KDP_RAW_LOG_SIGNATURE 0x474f4c4bUL
+#define KDP_RAW_LOG_VERSION 1
+#define KDP_RAW_LOG_FLAG_ROLLED 0x00000001
+#define KDP_RAW_LOG_FLAG_TRUNCATED 0x00000002
 
 /* CrashControl!CrashDumpEnabled values, matching Windows */
 #define KDP_DUMP_DISABLED 0
@@ -31,11 +39,24 @@
 #define KDP_DUMP_SMALL 3
 #define KDP_DUMP_AUTOMATIC 7
 
-/* Smallest pagefile a summary dump target will accept */
-#define KDP_SUMMARY_DUMP_MINIMUM_SPACE (64ULL * 1024 * 1024)
-
 static LONG KdpLiveDumpActive;
 static LONG KdpCrashDumpActive;
+
+typedef struct _KDP_RAW_LOG_HEADER
+{
+    ULONG Signature;
+    USHORT Version;
+    USHORT HeaderSize;
+    ULONG DataLength;
+    ULONG DataCrc32;
+    ULONG Flags;
+    ULONG BugCheckCode;
+    ULONG64 BugCheckParameters[4];
+    ULONG RolloverCount;
+    ULONG Reserved;
+} KDP_RAW_LOG_HEADER, *PKDP_RAW_LOG_HEADER;
+
+C_ASSERT(sizeof(KDP_RAW_LOG_HEADER) == 64);
 
 typedef struct _KDP_CRASH_DUMP_STATE
 {
@@ -51,17 +72,38 @@ typedef struct _KDP_CRASH_DUMP_STATE
     /* Cursor into Extents, so a forward walk of the file never rescans. */
     ULONG ExtentIndex;
     ULONG64 ExtentStartVcn;
-    /* CrashControl policy: DUMP_TYPE_FULL or DUMP_TYPE_SUMMARY */
+    /* CrashControl policy: full or bitmap dump. */
     ULONG DumpType;
     BOOLEAN IncludeUserPages;
     RTL_BITMAP PageBitmap;
     PULONG PageBitmapBuffer;
     PSUMMARY_DUMP64 Summary;
     ULONG SummarySize;
+    PVOID CrashLogBuffer;
+    PVOID CrashLogIoBuffer;
+    ULONG CrashLogBufferSize;
+    ULONG64 CrashLogOffset;
+    BOOLEAN Dedicated;
     BOOLEAN Initialized;
 } KDP_CRASH_DUMP_STATE, *PKDP_CRASH_DUMP_STATE;
 
 static KDP_CRASH_DUMP_STATE KdpCrashDumpState;
+
+typedef struct _KDP_DRIVE_LAYOUT_BUFFER
+{
+    DRIVE_LAYOUT_INFORMATION_EX Layout;
+    PARTITION_INFORMATION_EX AdditionalPartitions[KDP_RAW_DUMP_LAYOUT_PARTITIONS - 1];
+} KDP_DRIVE_LAYOUT_BUFFER, *PKDP_DRIVE_LAYOUT_BUFFER;
+
+static VOID KdpSetDedicatedCrashDumpActive(_In_ BOOLEAN Active)
+{
+    ULONG Value = Active ? 1 : 0;
+    NTSTATUS Status;
+
+    Status = RtlWriteRegistryValue(RTL_REGISTRY_CONTROL, L"CrashControl", L"DedicatedDumpActive", REG_DWORD, &Value, sizeof(Value));
+    if (!NT_SUCCESS(Status))
+        DPRINT1("KD: Failed to publish dedicated crash-dump state (0x%08lx)\n", Status);
+}
 
 /* Progress is reported in 100 / KDP_DUMP_PROGRESS_STEPS percent increments. */
 #define KDP_DUMP_PROGRESS_STEPS 20
@@ -98,6 +140,12 @@ static NTSTATUS KdpTranslateDumpOffset(_In_ ULONG64 FileOffset, _In_ ULONG Lengt
     ULONG64 RemainingInRun;
     ULONG Index;
     LONGLONG Lcn;
+
+    if ((FileOffset >= (ULONG64)KdpCrashDumpState.Capacity.QuadPart) ||
+        ((ULONG64)Length > (ULONG64)KdpCrashDumpState.Capacity.QuadPart - FileOffset))
+    {
+        return STATUS_DISK_FULL;
+    }
 
     Retrieval = KdpCrashDumpState.RetrievalPointers;
     Vcn = FileOffset / KdpCrashDumpState.ClusterSize;
@@ -155,7 +203,7 @@ static NTSTATUS KdpWriteStoragePhysical(_In_ PHYSICAL_ADDRESS PhysicalAddress, _
             return Status;
 
         TransferLength = min(ContiguousLength, KdpCrashDumpState.Storage.MaximumTransferLength);
-        Status = KdpCrashDumpState.Storage.Write(KdpCrashDumpState.Storage.Context, DiskByteOffset, PhysicalAddress, TransferLength);
+        Status = KdpCrashDumpState.Storage.WriteRoutine(KdpCrashDumpState.Storage.Context, DiskByteOffset, PhysicalAddress, TransferLength);
         if (!NT_SUCCESS(Status))
             return Status;
 
@@ -188,6 +236,7 @@ static NTSTATUS KdpWriteStorageVirtual(_In_reads_bytes_(Length) PVOID Buffer, _I
     return STATUS_SUCCESS;
 }
 
+#if defined(_M_AMD64)
 static ULONG_PTR NTAPI KdpCaptureLiveDumpContext(_In_ ULONG_PTR Argument)
 {
     UNREFERENCED_PARAMETER(Argument);
@@ -195,6 +244,7 @@ static ULONG_PTR NTAPI KdpCaptureLiveDumpContext(_In_ ULONG_PTR Argument)
     RtlCaptureContext(KeGetCurrentPrcb()->CrashDumpContext);
     return 0;
 }
+#endif
 
 static NTSTATUS KdpWriteDumpFileChunk(_In_ HANDLE FileHandle, _In_ HANDLE EventHandle, _In_reads_bytes_(Length) PVOID Buffer, _In_ ULONG Length, _Inout_ PLARGE_INTEGER FileOffset)
 {
@@ -264,7 +314,112 @@ static VOID KdpQueryCrashControlPolicy(_Out_ PULONG DumpType, _Out_ PBOOLEAN Inc
     }
 }
 
-BOOLEAN NTAPI KdpInitializeCrashDump(_In_ HANDLE PageFileHandle)
+static VOID KdpCleanupCrashDumpState(VOID)
+{
+    if (KdpCrashDumpState.CrashLogIoBuffer != NULL)
+        MmFreeContiguousMemory(KdpCrashDumpState.CrashLogIoBuffer);
+    if (KdpCrashDumpState.CrashLogBuffer != NULL)
+        ExFreePoolWithTag(KdpCrashDumpState.CrashLogBuffer, TAG_CRASH_DUMP);
+    if (KdpCrashDumpState.Summary != NULL)
+        ExFreePoolWithTag(KdpCrashDumpState.Summary, TAG_CRASH_DUMP);
+    if (KdpCrashDumpState.PageBitmapBuffer != NULL)
+        ExFreePoolWithTag(KdpCrashDumpState.PageBitmapBuffer, TAG_CRASH_DUMP);
+    if (KdpCrashDumpState.Header != NULL)
+        ExFreePoolWithTag(KdpCrashDumpState.Header, TAG_CRASH_DUMP);
+    if (KdpCrashDumpState.RetrievalPointers != NULL)
+        ExFreePoolWithTag(KdpCrashDumpState.RetrievalPointers, TAG_CRASH_DUMP);
+    if (KdpCrashDumpState.IoEventHandle != NULL)
+        ZwClose(KdpCrashDumpState.IoEventHandle);
+    if (KdpCrashDumpState.FileObject != NULL)
+        ObDereferenceObject(KdpCrashDumpState.FileObject);
+    if (KdpCrashDumpState.DumpHandle != NULL)
+        ZwClose(KdpCrashDumpState.DumpHandle);
+
+    RtlZeroMemory(&KdpCrashDumpState, sizeof(KdpCrashDumpState));
+}
+
+static NTSTATUS KdpAllocateCrashDumpResources(_In_ PCSTR TargetKind)
+{
+    PHYSICAL_ADDRESS HighestAddress;
+    ULONG HeaderSize;
+    NTSTATUS Status;
+
+    KdpQueryCrashControlPolicy(&KdpCrashDumpState.DumpType, &KdpCrashDumpState.IncludeUserPages);
+    if (KdpCrashDumpState.DumpType == (ULONG)DUMP_TYPE_INVALID)
+    {
+        DPRINT1("KD: Crash dumps disabled by CrashControl!CrashDumpEnabled\n");
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    KdpCrashDumpState.Header = ExAllocatePoolWithTag(NonPagedPool, DUMP_HEADER64_SIZE, TAG_CRASH_DUMP);
+    if (KdpCrashDumpState.Header == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Status = KeInitializeCrashDumpHeader(DUMP_TYPE_FULL, 0, KdpCrashDumpState.Header, DUMP_HEADER64_SIZE, &HeaderSize);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (HeaderSize != DUMP_HEADER64_SIZE)
+        return STATUS_INTERNAL_ERROR;
+
+    if (KdpCrashDumpState.Dedicated)
+    {
+        KdpCrashDumpState.CrashLogBufferSize = min(KdPrintBufferSize, KDP_RAW_LOG_RESERVE_SIZE - KdpCrashDumpState.Storage.BytesPerSector);
+        if (KdpCrashDumpState.CrashLogBufferSize == 0)
+            return STATUS_INVALID_DEVICE_STATE;
+
+        KdpCrashDumpState.CrashLogBuffer = ExAllocatePoolWithTag(NonPagedPool, KdpCrashDumpState.CrashLogBufferSize, TAG_CRASH_DUMP);
+        if (KdpCrashDumpState.CrashLogBuffer == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        HighestAddress.QuadPart = MAXULONGLONG;
+        KdpCrashDumpState.CrashLogIoBuffer = MmAllocateContiguousMemory(PAGE_SIZE, HighestAddress);
+        if (KdpCrashDumpState.CrashLogIoBuffer == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    if (KdpCrashDumpState.DumpType == DUMP_TYPE_FULL)
+    {
+        if (KdpCrashDumpState.Capacity.QuadPart < KdpCrashDumpState.Header->RequiredDumpSpace.QuadPart)
+            return STATUS_DISK_FULL;
+    }
+    else
+    {
+        PPHYSICAL_MEMORY_RUN LastRun;
+        ULONG BitmapBits;
+        ULONG BitmapBytes;
+
+        if (MmPhysicalMemoryBlock->NumberOfRuns == 0)
+            return STATUS_INVALID_DEVICE_STATE;
+
+        LastRun = &MmPhysicalMemoryBlock->Run[MmPhysicalMemoryBlock->NumberOfRuns - 1];
+        BitmapBits = (ULONG)(LastRun->BasePage + LastRun->PageCount);
+        BitmapBytes = ALIGN_UP_BY(BitmapBits, 32) / 8;
+
+        KdpCrashDumpState.PageBitmapBuffer = ExAllocatePoolWithTag(NonPagedPool, BitmapBytes, TAG_CRASH_DUMP);
+        if (KdpCrashDumpState.PageBitmapBuffer == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+        RtlInitializeBitMap(&KdpCrashDumpState.PageBitmap, KdpCrashDumpState.PageBitmapBuffer, BitmapBits);
+
+        KdpCrashDumpState.SummarySize = ALIGN_UP_BY(FIELD_OFFSET(SUMMARY_DUMP64, Buffer) + BitmapBytes, PAGE_SIZE);
+        KdpCrashDumpState.Summary = ExAllocatePoolWithTag(NonPagedPool, KdpCrashDumpState.SummarySize, TAG_CRASH_DUMP);
+        if (KdpCrashDumpState.Summary == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        if (KdpCrashDumpState.Capacity.QuadPart < (LONGLONG)(DUMP_HEADER64_SIZE + KdpCrashDumpState.SummarySize + PAGE_SIZE))
+            return STATUS_DISK_FULL;
+    }
+
+    KdpCrashDumpState.Initialized = TRUE;
+    DPRINT1("KD: Crash dump target initialized (%s, %s%s dump, %I64u bytes available, %I64u required for full)\n",
+            TargetKind,
+            KdpCrashDumpState.DumpType == DUMP_TYPE_FULL ? "full" : "summary",
+            KdpCrashDumpState.IncludeUserPages ? "+user" : "",
+            KdpCrashDumpState.Capacity.QuadPart,
+            KdpCrashDumpState.Header->RequiredDumpSpace.QuadPart);
+    return STATUS_SUCCESS;
+}
+
+BOOLEAN NTAPI KdpInitializeCrashDump(_In_ HANDLE DumpFileHandle)
 {
     OBJECT_ATTRIBUTES ObjectAttributes;
     FILE_FS_SIZE_INFORMATION SizeInfo;
@@ -273,37 +428,31 @@ BOOLEAN NTAPI KdpInitializeCrashDump(_In_ HANDLE PageFileHandle)
     STARTING_VCN_INPUT_BUFFER StartingVcn;
     PDEVICE_OBJECT StorageDevice;
     PVPB Vpb;
-    PCSTR Operation = "duplicating the pagefile handle";
+    PCSTR Operation = "duplicating the dump target handle";
     IO_STATUS_BLOCK IoStatus;
-    ULONG HeaderSize;
     NTSTATUS Status;
     PAGED_CODE();
 
     if (KdpCrashDumpState.Initialized)
         return TRUE;
 
-    KdpQueryCrashControlPolicy(&KdpCrashDumpState.DumpType, &KdpCrashDumpState.IncludeUserPages);
-    if (KdpCrashDumpState.DumpType == (ULONG)DUMP_TYPE_INVALID)
-    {
-        DPRINT1("KD: Crash dumps disabled by CrashControl!CrashDumpEnabled\n");
-        return FALSE;
-    }
+    KdpSetDedicatedCrashDumpActive(FALSE);
 
-    Status = ObDuplicateObject(PsGetCurrentProcess(), PageFileHandle, PsInitialSystemProcess, &KdpCrashDumpState.DumpHandle, 0, OBJ_KERNEL_HANDLE, DUPLICATE_SAME_ACCESS, KernelMode);
+    Status = ObDuplicateObject(PsGetCurrentProcess(), DumpFileHandle, PsInitialSystemProcess, &KdpCrashDumpState.DumpHandle, 0, OBJ_KERNEL_HANDLE, DUPLICATE_SAME_ACCESS, KernelMode);
     if (!NT_SUCCESS(Status))
         goto Failure;
 
-    Operation = "referencing the pagefile";
+    Operation = "referencing the dump target";
     Status = ObReferenceObjectByHandle(KdpCrashDumpState.DumpHandle, FILE_WRITE_DATA, IoFileObjectType, KernelMode, (PVOID *)&KdpCrashDumpState.FileObject, NULL);
     if (!NT_SUCCESS(Status))
         goto Failure;
 
-    Operation = "querying the pagefile";
+    Operation = "querying the dump target";
     Status = ZwQueryInformationFile(KdpCrashDumpState.DumpHandle, &IoStatus, &StandardInfo, sizeof(StandardInfo), FileStandardInformation);
     if (!NT_SUCCESS(Status))
         goto Failure;
 
-    Operation = "querying the pagefile volume";
+    Operation = "querying the dump target volume";
     Status = ZwQueryVolumeInformationFile(KdpCrashDumpState.DumpHandle, &IoStatus, &SizeInfo, sizeof(SizeInfo), FileFsSizeInformation);
     if (!NT_SUCCESS(Status))
         goto Failure;
@@ -336,7 +485,7 @@ BOOLEAN NTAPI KdpInitializeCrashDump(_In_ HANDLE PageFileHandle)
     if (!NT_SUCCESS(Status))
         goto Failure;
 
-    if ((KdpCrashDumpState.Storage.Version != ROS_STORAGE_DUMP_INTERFACE_VERSION) || (KdpCrashDumpState.Storage.Size < sizeof(KdpCrashDumpState.Storage)) || (KdpCrashDumpState.Storage.Context == NULL) || (KdpCrashDumpState.Storage.BytesPerSector == 0) || (KdpCrashDumpState.Storage.MaximumTransferLength == 0) || (KdpCrashDumpState.Storage.Prepare == NULL) || (KdpCrashDumpState.Storage.Write == NULL) || (KdpCrashDumpState.Storage.Flush == NULL) || ((KdpCrashDumpState.ClusterSize % KdpCrashDumpState.Storage.BytesPerSector) != 0))
+    if ((KdpCrashDumpState.Storage.Version != ROS_STORAGE_DUMP_INTERFACE_VERSION) || (KdpCrashDumpState.Storage.Size < sizeof(KdpCrashDumpState.Storage)) || (KdpCrashDumpState.Storage.Context == NULL) || (KdpCrashDumpState.Storage.BytesPerSector == 0) || (KdpCrashDumpState.Storage.MaximumTransferLength == 0) || (KdpCrashDumpState.Storage.Prepare == NULL) || (KdpCrashDumpState.Storage.WriteRoutine == NULL) || (KdpCrashDumpState.Storage.Flush == NULL) || ((KdpCrashDumpState.ClusterSize % KdpCrashDumpState.Storage.BytesPerSector) != 0))
     {
         Status = STATUS_REVISION_MISMATCH;
         goto Failure;
@@ -357,7 +506,7 @@ BOOLEAN NTAPI KdpInitializeCrashDump(_In_ HANDLE PageFileHandle)
 
     StartingVcn.StartingVcn.QuadPart = 0;
     ZwClearEvent(KdpCrashDumpState.IoEventHandle);
-    Operation = "querying pagefile retrieval pointers";
+    Operation = "querying dump target retrieval pointers";
     Status = ZwFsControlFile(KdpCrashDumpState.DumpHandle, KdpCrashDumpState.IoEventHandle, NULL, NULL, &IoStatus, FSCTL_GET_RETRIEVAL_POINTERS, &StartingVcn, sizeof(StartingVcn), KdpCrashDumpState.RetrievalPointers, KDP_DUMP_EXTENT_BUFFER_SIZE);
     if (Status == STATUS_PENDING)
     {
@@ -377,113 +526,511 @@ BOOLEAN NTAPI KdpInitializeCrashDump(_In_ HANDLE PageFileHandle)
     DPRINT1("KD: Crash dump storage: partition %I64u, cluster %lu, sector %lu, extents %lu\n", KdpCrashDumpState.PartitionOffset.QuadPart, KdpCrashDumpState.ClusterSize, KdpCrashDumpState.Storage.BytesPerSector, KdpCrashDumpState.RetrievalPointers->ExtentCount);
     DPRINT1("KD: Crash dump first extent: VCN %I64d to %I64d, LCN %I64d, disk byte %I64u\n", KdpCrashDumpState.RetrievalPointers->StartingVcn.QuadPart, KdpCrashDumpState.RetrievalPointers->Extents[0].NextVcn.QuadPart, KdpCrashDumpState.RetrievalPointers->Extents[0].Lcn.QuadPart, KdpCrashDumpState.PartitionOffset.QuadPart + KdpCrashDumpState.RetrievalPointers->Extents[0].Lcn.QuadPart * KdpCrashDumpState.ClusterSize);
 
-    KdpCrashDumpState.Header = ExAllocatePoolWithTag(NonPagedPool, DUMP_HEADER64_SIZE, TAG_CRASH_DUMP);
-    if (!KdpCrashDumpState.Header)
-    {
-        Status = STATUS_INSUFFICIENT_RESOURCES;
-        goto Failure;
-    }
-
-    Status = KeInitializeCrashDumpHeader(DUMP_TYPE_FULL, 0, KdpCrashDumpState.Header, DUMP_HEADER64_SIZE, &HeaderSize);
+    KdpCrashDumpState.Capacity = StandardInfo.EndOfFile;
+    Operation = "allocating crash dump resources";
+    Status = KdpAllocateCrashDumpResources("file-backed fallback");
     if (!NT_SUCCESS(Status))
         goto Failure;
-    if (HeaderSize != DUMP_HEADER64_SIZE)
-    {
-        Status = STATUS_INTERNAL_ERROR;
-        goto Failure;
-    }
-
-    KdpCrashDumpState.Capacity = StandardInfo.EndOfFile;
-    if (KdpCrashDumpState.DumpType == DUMP_TYPE_FULL)
-    {
-        if (KdpCrashDumpState.Capacity.QuadPart < KdpCrashDumpState.Header->RequiredDumpSpace.QuadPart)
-        {
-            Status = STATUS_DISK_FULL;
-            goto Failure;
-        }
-    }
-    else
-    {
-        PPHYSICAL_MEMORY_RUN LastRun;
-        ULONG BitmapBits;
-        ULONG BitmapBytes;
-
-        LastRun = &MmPhysicalMemoryBlock->Run[MmPhysicalMemoryBlock->NumberOfRuns - 1];
-        BitmapBits = (ULONG)(LastRun->BasePage + LastRun->PageCount);
-        BitmapBytes = ALIGN_UP_BY(BitmapBits, 32) / 8;
-
-        Operation = "allocating the dump page bitmap";
-        KdpCrashDumpState.PageBitmapBuffer = ExAllocatePoolWithTag(NonPagedPool, BitmapBytes, TAG_CRASH_DUMP);
-        if (KdpCrashDumpState.PageBitmapBuffer == NULL)
-        {
-            Status = STATUS_INSUFFICIENT_RESOURCES;
-            goto Failure;
-        }
-        RtlInitializeBitMap(&KdpCrashDumpState.PageBitmap, KdpCrashDumpState.PageBitmapBuffer, BitmapBits);
-
-        KdpCrashDumpState.SummarySize = ALIGN_UP_BY(FIELD_OFFSET(SUMMARY_DUMP64, Buffer) + BitmapBytes, PAGE_SIZE);
-        Operation = "allocating the summary dump header";
-        KdpCrashDumpState.Summary = ExAllocatePoolWithTag(NonPagedPool, KdpCrashDumpState.SummarySize, TAG_CRASH_DUMP);
-        if (KdpCrashDumpState.Summary == NULL)
-        {
-            Status = STATUS_INSUFFICIENT_RESOURCES;
-            goto Failure;
-        }
-
-        if (KdpCrashDumpState.Capacity.QuadPart <
-            (LONGLONG)(DUMP_HEADER64_SIZE + KdpCrashDumpState.SummarySize + KDP_SUMMARY_DUMP_MINIMUM_SPACE))
-        {
-            Status = STATUS_DISK_FULL;
-            goto Failure;
-        }
-    }
-
-    KdpCrashDumpState.Initialized = TRUE;
-    DPRINT1("KD: Crash dump target initialized (%s%s dump, %I64u bytes available, %I64u required for full)\n",
-            KdpCrashDumpState.DumpType == DUMP_TYPE_FULL ? "full" : "summary",
-            KdpCrashDumpState.IncludeUserPages ? "+user" : "",
-            KdpCrashDumpState.Capacity.QuadPart, KdpCrashDumpState.Header->RequiredDumpSpace.QuadPart);
     return TRUE;
 
 Failure:
     DPRINT1("KD: Crash dump target initialization failed while %s (0x%08lx)\n", Operation, Status);
-
-    if (KdpCrashDumpState.Summary)
-    {
-        ExFreePoolWithTag(KdpCrashDumpState.Summary, TAG_CRASH_DUMP);
-        KdpCrashDumpState.Summary = NULL;
-    }
-    if (KdpCrashDumpState.PageBitmapBuffer)
-    {
-        ExFreePoolWithTag(KdpCrashDumpState.PageBitmapBuffer, TAG_CRASH_DUMP);
-        KdpCrashDumpState.PageBitmapBuffer = NULL;
-    }
-    if (KdpCrashDumpState.Header)
-    {
-        ExFreePoolWithTag(KdpCrashDumpState.Header, TAG_CRASH_DUMP);
-        KdpCrashDumpState.Header = NULL;
-    }
-    if (KdpCrashDumpState.RetrievalPointers)
-    {
-        ExFreePoolWithTag(KdpCrashDumpState.RetrievalPointers, TAG_CRASH_DUMP);
-        KdpCrashDumpState.RetrievalPointers = NULL;
-    }
-    if (KdpCrashDumpState.IoEventHandle)
-    {
-        ZwClose(KdpCrashDumpState.IoEventHandle);
-        KdpCrashDumpState.IoEventHandle = NULL;
-    }
-    if (KdpCrashDumpState.FileObject)
-    {
-        ObDereferenceObject(KdpCrashDumpState.FileObject);
-        KdpCrashDumpState.FileObject = NULL;
-    }
-    if (KdpCrashDumpState.DumpHandle)
-    {
-        ZwClose(KdpCrashDumpState.DumpHandle);
-        KdpCrashDumpState.DumpHandle = NULL;
-    }
+    KdpCleanupCrashDumpState();
     return FALSE;
+}
+
+static NTSTATUS KdpBuildCrashLogPath(_Out_writes_bytes_(PathSize) PWCHAR Path, _In_ SIZE_T PathSize)
+{
+    if ((NtSystemRoot.Buffer == NULL) || (NtSystemRoot.Length < (2 * sizeof(WCHAR))) || (NtSystemRoot.Buffer[1] != L':'))
+        return STATUS_OBJECT_PATH_SYNTAX_BAD;
+
+    return RtlStringCbPrintfW(Path, PathSize, L"\\??\\%wc:\\KDWATCHDOG.LOG", NtSystemRoot.Buffer[0]);
+}
+
+static NTSTATUS KdpCopyRawRangeToFile(_In_ HANDLE RawHandle, _Inout_updates_bytes_(BufferSize) PVOID Buffer, _In_ ULONG BufferSize, _In_ ULONG BytesPerSector, _In_ ULONG64 RawByteOffset, _In_ ULONG64 DataLength, _In_ PCWSTR FilePath, _In_ BOOLEAN VerifyCrc, _In_ ULONG ExpectedCrc)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    FILE_DISPOSITION_INFORMATION Disposition;
+    UNICODE_STRING ObjectName;
+    IO_STATUS_BLOCK IoStatus;
+    HANDLE FileHandle = NULL;
+    LARGE_INTEGER FileOffset;
+    LARGE_INTEGER RawOffset;
+    ULONG ActualCrc = 0;
+    ULONG ReadLength;
+    ULONG WriteLength;
+    ULONG64 Remaining;
+    NTSTATUS Status;
+
+    RtlInitUnicodeString(&ObjectName, FilePath);
+    InitializeObjectAttributes(&ObjectAttributes, &ObjectName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ZwCreateFile(&FileHandle, FILE_WRITE_DATA | DELETE | SYNCHRONIZE, &ObjectAttributes, &IoStatus, NULL, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_OVERWRITE_IF, FILE_NON_DIRECTORY_FILE | FILE_SEQUENTIAL_ONLY | FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RawOffset.QuadPart = RawByteOffset;
+    FileOffset.QuadPart = 0;
+    Remaining = DataLength;
+    while (Remaining != 0)
+    {
+        WriteLength = (ULONG)min(Remaining, (ULONG64)BufferSize);
+        ReadLength = ALIGN_UP_BY(WriteLength, BytesPerSector);
+        Status = ZwReadFile(RawHandle, NULL, NULL, NULL, &IoStatus, Buffer, ReadLength, &RawOffset, NULL);
+        if (!NT_SUCCESS(Status))
+            goto Exit;
+        if (IoStatus.Information != ReadLength)
+        {
+            Status = STATUS_DEVICE_DATA_ERROR;
+            goto Exit;
+        }
+        if (VerifyCrc)
+            ActualCrc = RtlComputeCrc32(ActualCrc, Buffer, WriteLength);
+        Status = ZwWriteFile(FileHandle, NULL, NULL, NULL, &IoStatus, Buffer, WriteLength, &FileOffset, NULL);
+        if (!NT_SUCCESS(Status))
+            goto Exit;
+        if (IoStatus.Information != WriteLength)
+        {
+            Status = STATUS_DEVICE_DATA_ERROR;
+            goto Exit;
+        }
+
+        RawOffset.QuadPart += ReadLength;
+        FileOffset.QuadPart += WriteLength;
+        Remaining -= WriteLength;
+    }
+
+    if (VerifyCrc && (ActualCrc != ExpectedCrc))
+    {
+        Status = STATUS_CRC_ERROR;
+        goto Exit;
+    }
+
+    Status = ZwFlushBuffersFile(FileHandle, &IoStatus);
+
+Exit:
+    if (!NT_SUCCESS(Status))
+    {
+        Disposition.DeleteFile = TRUE;
+        ZwSetInformationFile(FileHandle, &IoStatus, &Disposition, sizeof(Disposition), FileDispositionInformation);
+    }
+    ZwClose(FileHandle);
+    return Status;
+}
+
+static NTSTATUS KdpReadRawRange(_In_ HANDLE RawHandle, _Out_writes_bytes_(Length) PVOID Buffer, _In_ ULONG Length, _In_ ULONG64 RawByteOffset)
+{
+    IO_STATUS_BLOCK IoStatus;
+    LARGE_INTEGER RawOffset;
+    NTSTATUS Status;
+
+    RawOffset.QuadPart = RawByteOffset;
+    Status = ZwReadFile(RawHandle, NULL, NULL, NULL, &IoStatus, Buffer, Length, &RawOffset, NULL);
+    if (NT_SUCCESS(Status) && (IoStatus.Information != Length))
+        Status = STATUS_DEVICE_DATA_ERROR;
+    return Status;
+}
+
+static NTSTATUS KdpInvalidateRawHeader(_In_ HANDLE RawHandle, _Inout_updates_bytes_(BytesPerSector) PVOID Buffer, _In_ ULONG BytesPerSector, _In_ ULONG64 RawByteOffset)
+{
+    IO_STATUS_BLOCK IoStatus;
+    LARGE_INTEGER RawOffset;
+    NTSTATUS Status;
+
+    RtlZeroMemory(Buffer, BytesPerSector);
+    RawOffset.QuadPart = RawByteOffset;
+    Status = ZwWriteFile(RawHandle, NULL, NULL, NULL, &IoStatus, Buffer, BytesPerSector, &RawOffset, NULL);
+    if (NT_SUCCESS(Status) && (IoStatus.Information != BytesPerSector))
+        Status = STATUS_DEVICE_DATA_ERROR;
+    return Status;
+}
+
+static NTSTATUS KdpPublishPreviousCrashArtifacts(_In_ ULONG DiskNumber, _In_ LARGE_INTEGER PartitionOffset, _In_ ULONG BytesPerSector, _In_ ULONG64 Capacity)
+{
+    static const WCHAR DumpFilePath[] = L"\\SystemRoot\\MEMORY.DMP";
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    KDP_RAW_LOG_HEADER LogHeader;
+    UNICODE_STRING ObjectName;
+    IO_STATUS_BLOCK IoStatus;
+    PDUMP_HEADER64 DumpHeader;
+    HANDLE RawHandle = NULL;
+    WCHAR LogFilePath[64];
+    WCHAR RawPathBuffer[64];
+    ULONG64 DumpCapacity;
+    ULONG64 DumpSize = 0;
+    ULONG64 LogOffset;
+    PVOID Buffer = NULL;
+    NTSTATUS Status;
+    BOOLEAN DumpFound = FALSE;
+    BOOLEAN LogFound = FALSE;
+
+    if ((BytesPerSector == 0) || (BytesPerSector > KDP_RAW_DUMP_COPY_SIZE) || ((KDP_RAW_DUMP_COPY_SIZE % BytesPerSector) != 0) || (Capacity <= KDP_RAW_LOG_RESERVE_SIZE))
+        return STATUS_INVALID_PARAMETER;
+
+    DumpCapacity = Capacity - KDP_RAW_LOG_RESERVE_SIZE;
+    LogOffset = PartitionOffset.QuadPart + DumpCapacity;
+    Status = RtlStringCbPrintfW(RawPathBuffer, sizeof(RawPathBuffer), L"\\Device\\Harddisk%lu\\Partition0", DiskNumber);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    RtlInitUnicodeString(&ObjectName, RawPathBuffer);
+    InitializeObjectAttributes(&ObjectAttributes, &ObjectName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ZwOpenFile(&RawHandle, FILE_READ_DATA | FILE_WRITE_DATA | SYNCHRONIZE, &ObjectAttributes, &IoStatus, FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT | FILE_NO_INTERMEDIATE_BUFFERING);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Buffer = MmAllocateNonCachedMemory(KDP_RAW_DUMP_COPY_SIZE);
+    if (Buffer == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Exit;
+    }
+
+    Status = KdpReadRawRange(RawHandle, Buffer, DUMP_HEADER64_SIZE, PartitionOffset.QuadPart);
+    if (!NT_SUCCESS(Status))
+        goto Exit;
+    DumpHeader = Buffer;
+    if ((DumpHeader->Signature == DUMP_SIGNATURE64) && (DumpHeader->ValidDump == DUMP_VALID_DUMP64))
+    {
+        DumpSize = DumpHeader->RequiredDumpSpace.QuadPart;
+        if ((DumpSize < DUMP_HEADER64_SIZE) || (DumpSize > DumpCapacity) || ((DumpSize % BytesPerSector) != 0))
+        {
+            Status = STATUS_FILE_CORRUPT_ERROR;
+            goto Exit;
+        }
+        DumpFound = TRUE;
+    }
+
+    Status = KdpReadRawRange(RawHandle, Buffer, BytesPerSector, LogOffset);
+    if (!NT_SUCCESS(Status))
+        goto Exit;
+    RtlCopyMemory(&LogHeader, Buffer, sizeof(LogHeader));
+    if (LogHeader.Signature == KDP_RAW_LOG_SIGNATURE)
+    {
+        if ((LogHeader.Version != KDP_RAW_LOG_VERSION) || (LogHeader.HeaderSize != sizeof(LogHeader)) || (LogHeader.DataLength == 0) || (LogHeader.DataLength > (KDP_RAW_LOG_RESERVE_SIZE - BytesPerSector)))
+        {
+            Status = STATUS_FILE_CORRUPT_ERROR;
+            goto Exit;
+        }
+        LogFound = TRUE;
+    }
+
+    if (!DumpFound && !LogFound)
+    {
+        Status = STATUS_NOT_FOUND;
+        goto Exit;
+    }
+
+    if (LogFound)
+    {
+        Status = KdpBuildCrashLogPath(LogFilePath, sizeof(LogFilePath));
+        if (!NT_SUCCESS(Status))
+            goto Exit;
+        Status = KdpCopyRawRangeToFile(RawHandle, Buffer, KDP_RAW_DUMP_COPY_SIZE, BytesPerSector, LogOffset + BytesPerSector, LogHeader.DataLength, LogFilePath, TRUE, LogHeader.DataCrc32);
+        if (!NT_SUCCESS(Status))
+            goto Exit;
+    }
+
+    if (DumpFound)
+    {
+        Status = KdpCopyRawRangeToFile(RawHandle, Buffer, KDP_RAW_DUMP_COPY_SIZE, BytesPerSector, PartitionOffset.QuadPart, DumpSize, DumpFilePath, FALSE, 0);
+        if (!NT_SUCCESS(Status))
+            goto Exit;
+    }
+
+    if (LogFound)
+    {
+        Status = KdpInvalidateRawHeader(RawHandle, Buffer, BytesPerSector, LogOffset);
+        if (!NT_SUCCESS(Status))
+            goto Exit;
+    }
+    if (DumpFound)
+    {
+        Status = KdpInvalidateRawHeader(RawHandle, Buffer, BytesPerSector, PartitionOffset.QuadPart);
+        if (!NT_SUCCESS(Status))
+            goto Exit;
+    }
+
+    Status = ZwFlushBuffersFile(RawHandle, &IoStatus);
+    if (Status == STATUS_INVALID_DEVICE_REQUEST)
+        Status = STATUS_SUCCESS;
+    if (!NT_SUCCESS(Status))
+        goto Exit;
+
+    if (LogFound)
+        DPRINT1("KD: Published previous crash boot log to %ws (%lu bytes, bugcheck 0x%08lx)\n", LogFilePath, LogHeader.DataLength, LogHeader.BugCheckCode);
+    if (DumpFound)
+        DPRINT1("KD: Published previous crash dump to %ws (%I64u bytes)\n", DumpFilePath, DumpSize);
+
+Exit:
+    if (Buffer != NULL)
+        MmFreeNonCachedMemory(Buffer, KDP_RAW_DUMP_COPY_SIZE);
+    if (RawHandle != NULL)
+        ZwClose(RawHandle);
+    return Status;
+}
+
+BOOLEAN NTAPI KdpInitializeDedicatedCrashDump(VOID)
+{
+    static const WCHAR SystemHivePath[] = L"\\SystemRoot\\System32\\Config\\SYSTEM";
+    RTL_QUERY_REGISTRY_TABLE QueryTable[2];
+    KDP_DRIVE_LAYOUT_BUFFER LayoutBuffer;
+    FILE_FS_SIZE_INFORMATION SizeInfo;
+    STORAGE_DEVICE_NUMBER DeviceNumber;
+    PARTITION_INFORMATION_EX DumpPartition;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    UNICODE_STRING ObjectName;
+    IO_STATUS_BLOCK IoStatus;
+    PFILE_OBJECT DiskFileObject = NULL;
+    PFILE_OBJECT SystemFileObject = NULL;
+    PDEVICE_OBJECT DiskDevice;
+    PDEVICE_OBJECT SystemDevice;
+    HANDLE DiskHandle = NULL;
+    HANDLE SystemHandle = NULL;
+    PVPB Vpb;
+    WCHAR DiskPathBuffer[64];
+    ULONG DefaultPartitionType = KDP_RAW_DUMP_DEFAULT_MBR_TYPE;
+    ULONG PartitionType = KDP_RAW_DUMP_DEFAULT_MBR_TYPE;
+    ULONG Index;
+    PCSTR Operation = "opening the system volume";
+    NTSTATUS Status;
+    BOOLEAN Found = FALSE;
+    PAGED_CODE();
+
+    if (KdpCrashDumpState.Initialized)
+        return TRUE;
+
+    RtlZeroMemory(QueryTable, sizeof(QueryTable));
+    QueryTable[0].Flags = RTL_QUERY_REGISTRY_DIRECT;
+    QueryTable[0].Name = L"DedicatedDumpPartitionType";
+    QueryTable[0].EntryContext = &PartitionType;
+    QueryTable[0].DefaultType = REG_DWORD;
+    QueryTable[0].DefaultData = &DefaultPartitionType;
+    QueryTable[0].DefaultLength = sizeof(DefaultPartitionType);
+    RtlQueryRegistryValues(RTL_REGISTRY_CONTROL, L"CrashControl", QueryTable, NULL, NULL);
+    if ((PartitionType == 0) || (PartitionType > MAXUCHAR))
+    {
+        DPRINT1("KD: Raw crash dump partition disabled or invalid (type 0x%lx)\n", PartitionType);
+        return FALSE;
+    }
+
+    RtlInitUnicodeString(&ObjectName, SystemHivePath);
+    InitializeObjectAttributes(&ObjectAttributes, &ObjectName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ZwOpenFile(&SystemHandle, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &ObjectAttributes, &IoStatus, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT);
+    if (!NT_SUCCESS(Status))
+        goto Failure;
+
+    Operation = "referencing the system volume";
+    Status = ObReferenceObjectByHandle(SystemHandle, 0, IoFileObjectType, KernelMode, (PVOID *)&SystemFileObject, NULL);
+    if (!NT_SUCCESS(Status))
+        goto Failure;
+
+    Operation = "querying the system volume";
+    Status = ZwQueryVolumeInformationFile(SystemHandle, &IoStatus, &SizeInfo, sizeof(SizeInfo), FileFsSizeInformation);
+    if (!NT_SUCCESS(Status))
+        goto Failure;
+
+    Vpb = SystemFileObject->Vpb;
+    if ((Vpb == NULL) && (SystemFileObject->DeviceObject != NULL))
+        Vpb = SystemFileObject->DeviceObject->Vpb;
+    if ((Vpb == NULL) || (Vpb->RealDevice == NULL) || (SizeInfo.BytesPerSector == 0))
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+        goto Failure;
+    }
+    SystemDevice = Vpb->RealDevice;
+
+    RtlZeroMemory(&DeviceNumber, sizeof(DeviceNumber));
+    Operation = "locating the system disk";
+    Status = KdpSendDeviceIoControl(SystemDevice, IOCTL_STORAGE_GET_DEVICE_NUMBER, NULL, 0, &DeviceNumber, sizeof(DeviceNumber));
+    if (!NT_SUCCESS(Status))
+        goto Failure;
+
+    Status = RtlStringCbPrintfW(DiskPathBuffer, sizeof(DiskPathBuffer), L"\\Device\\Harddisk%lu\\Partition0", DeviceNumber.DeviceNumber);
+    if (!NT_SUCCESS(Status))
+        goto Failure;
+    RtlInitUnicodeString(&ObjectName, DiskPathBuffer);
+    InitializeObjectAttributes(&ObjectAttributes, &ObjectName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    Operation = "opening the system disk";
+    Status = ZwOpenFile(&DiskHandle, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &ObjectAttributes, &IoStatus, FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT);
+    if (!NT_SUCCESS(Status))
+        goto Failure;
+
+    Operation = "referencing the system disk";
+    Status = ObReferenceObjectByHandle(DiskHandle, 0, IoFileObjectType, KernelMode, (PVOID *)&DiskFileObject, NULL);
+    if (!NT_SUCCESS(Status))
+        goto Failure;
+    DiskDevice = IoGetRelatedDeviceObject(DiskFileObject);
+
+    RtlZeroMemory(&LayoutBuffer, sizeof(LayoutBuffer));
+    Operation = "querying the disk partition layout";
+    Status = KdpSendDeviceIoControl(DiskDevice, IOCTL_DISK_GET_DRIVE_LAYOUT_EX, NULL, 0, &LayoutBuffer, sizeof(LayoutBuffer));
+    if (!NT_SUCCESS(Status))
+        goto Failure;
+    if (LayoutBuffer.Layout.PartitionStyle != PARTITION_STYLE_MBR)
+    {
+        Status = STATUS_NOT_SUPPORTED;
+        goto Failure;
+    }
+
+    RtlZeroMemory(&DumpPartition, sizeof(DumpPartition));
+    for (Index = 0; (Index < LayoutBuffer.Layout.PartitionCount) && (Index < KDP_RAW_DUMP_LAYOUT_PARTITIONS); Index++)
+    {
+        PPARTITION_INFORMATION_EX Entry = &LayoutBuffer.Layout.PartitionEntry[Index];
+
+        if ((Entry->PartitionStyle == PARTITION_STYLE_MBR) && (Entry->Mbr.PartitionType == (UCHAR)PartitionType))
+        {
+            DumpPartition = *Entry;
+            Found = TRUE;
+            break;
+        }
+    }
+    if (!Found || (DumpPartition.PartitionLength.QuadPart <= 0))
+    {
+        Status = STATUS_NOT_FOUND;
+        goto Failure;
+    }
+
+    Operation = "publishing previous crash artifacts";
+    Status = KdpPublishPreviousCrashArtifacts(DeviceNumber.DeviceNumber, DumpPartition.StartingOffset, SizeInfo.BytesPerSector, DumpPartition.PartitionLength.QuadPart);
+    if ((Status != STATUS_NOT_FOUND) && !NT_SUCCESS(Status))
+        goto Failure;
+
+    RtlZeroMemory(&KdpCrashDumpState.Storage, sizeof(KdpCrashDumpState.Storage));
+    KdpCrashDumpState.Storage.BytesPerSector = SizeInfo.BytesPerSector;
+    Operation = "querying the storage dump interface";
+    Status = KdpSendDeviceIoControl(SystemDevice, IOCTL_REACTOS_STORAGE_GET_DUMP_INTERFACE, &KdpCrashDumpState.Storage, sizeof(KdpCrashDumpState.Storage), &KdpCrashDumpState.Storage, sizeof(KdpCrashDumpState.Storage));
+    if (!NT_SUCCESS(Status))
+        goto Failure;
+
+    if ((KdpCrashDumpState.Storage.Version != ROS_STORAGE_DUMP_INTERFACE_VERSION) || (KdpCrashDumpState.Storage.Size < sizeof(KdpCrashDumpState.Storage)) || (KdpCrashDumpState.Storage.Context == NULL) || (KdpCrashDumpState.Storage.BytesPerSector == 0) || (KdpCrashDumpState.Storage.BytesPerSector > PAGE_SIZE) || (KdpCrashDumpState.Storage.MaximumTransferLength < KdpCrashDumpState.Storage.BytesPerSector) || ((KdpCrashDumpState.Storage.MaximumTransferLength % KdpCrashDumpState.Storage.BytesPerSector) != 0) || (KdpCrashDumpState.Storage.Prepare == NULL) || (KdpCrashDumpState.Storage.WriteRoutine == NULL) || (KdpCrashDumpState.Storage.Flush == NULL) || ((DumpPartition.StartingOffset.QuadPart % KdpCrashDumpState.Storage.BytesPerSector) != 0) || ((DumpPartition.PartitionLength.QuadPart % KdpCrashDumpState.Storage.BytesPerSector) != 0) || (DumpPartition.PartitionLength.QuadPart <= KDP_RAW_LOG_RESERVE_SIZE))
+    {
+        Status = STATUS_REVISION_MISMATCH;
+        goto Failure;
+    }
+
+    KdpCrashDumpState.RetrievalPointers = ExAllocatePoolWithTag(NonPagedPool, sizeof(RETRIEVAL_POINTERS_BUFFER), TAG_CRASH_DUMP);
+    if (KdpCrashDumpState.RetrievalPointers == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Failure;
+    }
+    RtlZeroMemory(KdpCrashDumpState.RetrievalPointers, sizeof(RETRIEVAL_POINTERS_BUFFER));
+    KdpCrashDumpState.RetrievalPointers->ExtentCount = 1;
+    KdpCrashDumpState.RetrievalPointers->StartingVcn.QuadPart = 0;
+    KdpCrashDumpState.RetrievalPointers->Extents[0].NextVcn.QuadPart = DumpPartition.PartitionLength.QuadPart / KdpCrashDumpState.Storage.BytesPerSector;
+    KdpCrashDumpState.RetrievalPointers->Extents[0].Lcn.QuadPart = 0;
+    KdpCrashDumpState.PartitionOffset = DumpPartition.StartingOffset;
+    KdpCrashDumpState.CrashLogOffset = DumpPartition.PartitionLength.QuadPart - KDP_RAW_LOG_RESERVE_SIZE;
+    KdpCrashDumpState.Capacity.QuadPart = KdpCrashDumpState.CrashLogOffset;
+    KdpCrashDumpState.ClusterSize = KdpCrashDumpState.Storage.BytesPerSector;
+    KdpCrashDumpState.Dedicated = TRUE;
+    KdpCrashDumpState.DumpHandle = SystemHandle;
+    KdpCrashDumpState.FileObject = SystemFileObject;
+    SystemHandle = NULL;
+    SystemFileObject = NULL;
+
+    Operation = "allocating crash dump resources";
+    Status = KdpAllocateCrashDumpResources("private raw partition");
+    if (!NT_SUCCESS(Status))
+        goto Failure;
+
+    DPRINT1("KD: Raw crash partition: disk %lu, partition %lu, type 0x%02lx, byte %I64u, dump %I64u bytes, log %lu bytes\n", DeviceNumber.DeviceNumber, DumpPartition.PartitionNumber, PartitionType, DumpPartition.StartingOffset.QuadPart, KdpCrashDumpState.Capacity.QuadPart, KDP_RAW_LOG_RESERVE_SIZE);
+    KdpSetDedicatedCrashDumpActive(TRUE);
+    if (DiskFileObject != NULL)
+        ObDereferenceObject(DiskFileObject);
+    if (DiskHandle != NULL)
+        ZwClose(DiskHandle);
+    return TRUE;
+
+Failure:
+    DPRINT1("KD: Raw crash dump target initialization failed while %s (0x%08lx)\n", Operation, Status);
+    if (DiskFileObject != NULL)
+        ObDereferenceObject(DiskFileObject);
+    if (DiskHandle != NULL)
+        ZwClose(DiskHandle);
+    if (SystemFileObject != NULL)
+        ObDereferenceObject(SystemFileObject);
+    if (SystemHandle != NULL)
+        ZwClose(SystemHandle);
+    KdpCleanupCrashDumpState();
+    return FALSE;
+}
+
+static NTSTATUS KdpWriteCrashLog(VOID)
+{
+    PKDP_RAW_LOG_HEADER Header;
+    PHYSICAL_ADDRESS PhysicalAddress;
+    PUCHAR Source;
+    ULONG BufferOffset = 0;
+    ULONG CopyLength;
+    ULONG LogLength;
+    ULONG Remaining;
+    ULONG RolloverCount;
+    ULONG TransferLimit;
+    ULONG TransferLength;
+    ULONG64 DiskByteOffset;
+    NTSTATUS Status;
+
+    if (!KdpCrashDumpState.Dedicated)
+        return STATUS_SUCCESS;
+    if ((KdpCrashDumpState.CrashLogBuffer == NULL) || (KdpCrashDumpState.CrashLogIoBuffer == NULL))
+        return STATUS_INVALID_DEVICE_STATE;
+
+    LogLength = KdpCopyPrintBuffer(KdpCrashDumpState.CrashLogBuffer, KdpCrashDumpState.CrashLogBufferSize, &RolloverCount);
+    if (LogLength == 0)
+        return STATUS_NOT_FOUND;
+
+    TransferLimit = min(PAGE_SIZE, KdpCrashDumpState.Storage.MaximumTransferLength);
+    TransferLimit = ALIGN_DOWN_BY(TransferLimit, KdpCrashDumpState.Storage.BytesPerSector);
+    if (TransferLimit == 0)
+        return STATUS_INVALID_DEVICE_STATE;
+
+    Source = KdpCrashDumpState.CrashLogBuffer;
+    Remaining = LogLength;
+    DiskByteOffset = KdpCrashDumpState.PartitionOffset.QuadPart + KdpCrashDumpState.CrashLogOffset + KdpCrashDumpState.Storage.BytesPerSector;
+    while (Remaining != 0)
+    {
+        CopyLength = min(Remaining, TransferLimit);
+        TransferLength = ALIGN_UP_BY(CopyLength, KdpCrashDumpState.Storage.BytesPerSector);
+        RtlZeroMemory(KdpCrashDumpState.CrashLogIoBuffer, TransferLength);
+        RtlCopyMemory(KdpCrashDumpState.CrashLogIoBuffer, Source + BufferOffset, CopyLength);
+        PhysicalAddress = MmGetPhysicalAddress(KdpCrashDumpState.CrashLogIoBuffer);
+        Status = KdpCrashDumpState.Storage.WriteRoutine(KdpCrashDumpState.Storage.Context, DiskByteOffset, PhysicalAddress, TransferLength);
+        if (!NT_SUCCESS(Status))
+            return Status;
+
+        BufferOffset += CopyLength;
+        DiskByteOffset += TransferLength;
+        Remaining -= CopyLength;
+    }
+
+    Status = KdpCrashDumpState.Storage.Flush(KdpCrashDumpState.Storage.Context);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlZeroMemory(KdpCrashDumpState.CrashLogIoBuffer, KdpCrashDumpState.Storage.BytesPerSector);
+    Header = KdpCrashDumpState.CrashLogIoBuffer;
+    Header->Signature = KDP_RAW_LOG_SIGNATURE;
+    Header->Version = KDP_RAW_LOG_VERSION;
+    Header->HeaderSize = sizeof(*Header);
+    Header->DataLength = LogLength;
+    Header->DataCrc32 = RtlComputeCrc32(0, KdpCrashDumpState.CrashLogBuffer, LogLength);
+    Header->Flags = RolloverCount != 0 ? KDP_RAW_LOG_FLAG_ROLLED : 0;
+    if ((KdpCrashDumpState.CrashLogBufferSize < KdPrintBufferSize) && (LogLength == KdpCrashDumpState.CrashLogBufferSize))
+        Header->Flags |= KDP_RAW_LOG_FLAG_TRUNCATED;
+    Header->BugCheckCode = (ULONG)KiBugCheckData[0];
+    Header->BugCheckParameters[0] = KiBugCheckData[1];
+    Header->BugCheckParameters[1] = KiBugCheckData[2];
+    Header->BugCheckParameters[2] = KiBugCheckData[3];
+    Header->BugCheckParameters[3] = KiBugCheckData[4];
+    Header->RolloverCount = RolloverCount;
+
+    DiskByteOffset = KdpCrashDumpState.PartitionOffset.QuadPart + KdpCrashDumpState.CrashLogOffset;
+    PhysicalAddress = MmGetPhysicalAddress(KdpCrashDumpState.CrashLogIoBuffer);
+    Status = KdpCrashDumpState.Storage.WriteRoutine(KdpCrashDumpState.Storage.Context, DiskByteOffset, PhysicalAddress, KdpCrashDumpState.Storage.BytesPerSector);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return KdpCrashDumpState.Storage.Flush(KdpCrashDumpState.Storage.Context);
 }
 
 NTSTATUS NTAPI KdpWriteCrashDump(VOID)
@@ -498,13 +1045,18 @@ NTSTATUS NTAPI KdpWriteCrashDump(VOID)
     ULONG64 NextStepPage;
     ULONG64 PagesWritten = 0;
     ULONG64 Remaining;
+    ULONG64 RequestedPages;
     ULONG64 TotalPages;
+    NTSTATUS LogStatus = STATUS_SUCCESS;
     NTSTATUS Status;
     ULONG ValidDump;
     CHAR ProgressText[64];
 
     if (!KdpCrashDumpState.Initialized)
+    {
+        DbgPrint("KD: Crash dump skipped because no target was initialized.\n");
         return STATUS_DEVICE_NOT_READY;
+    }
 
     if (InterlockedCompareExchange(&KdpCrashDumpActive, 1, 0) != 0)
         return STATUS_DEVICE_BUSY;
@@ -527,8 +1079,9 @@ NTSTATUS NTAPI KdpWriteCrashDump(VOID)
         ULONG Bit;
 
         TotalPages = MmBuildDumpPageBitmap(&KdpCrashDumpState.PageBitmap, KdpCrashDumpState.IncludeUserPages);
+        RequestedPages = TotalPages;
 
-        /* Drop the highest pages first if the pagefile cannot take them all */
+        /* Drop the highest pages first if the dedicated target cannot take them all. */
         MaxPages = (KdpCrashDumpState.Capacity.QuadPart - DUMP_HEADER64_SIZE - KdpCrashDumpState.SummarySize) >> PAGE_SHIFT;
         if (TotalPages > MaxPages)
         {
@@ -549,9 +1102,7 @@ NTSTATUS NTAPI KdpWriteCrashDump(VOID)
         Summary->HeaderSize = DUMP_HEADER64_SIZE + KdpCrashDumpState.SummarySize;
         Summary->Pages = TotalPages;
         Summary->BitmapSize = KdpCrashDumpState.PageBitmap.SizeOfBitMap;
-        RtlCopyMemory(Summary->Buffer,
-                      KdpCrashDumpState.PageBitmapBuffer,
-                      ALIGN_UP_BY(KdpCrashDumpState.PageBitmap.SizeOfBitMap, 32) / 8);
+        RtlCopyMemory(Summary->Buffer, KdpCrashDumpState.PageBitmapBuffer, ALIGN_UP_BY(KdpCrashDumpState.PageBitmap.SizeOfBitMap, 32) / 8);
 
         KdpCrashDumpState.Header->DumpType = KdpCrashDumpState.DumpType;
         if (KdpCrashDumpState.IncludeUserPages)
@@ -561,11 +1112,14 @@ NTSTATUS NTAPI KdpWriteCrashDump(VOID)
     else
     {
         TotalPages = KdpCrashDumpState.Header->PhysicalMemoryBlock.NumberOfPages;
+        RequestedPages = TotalPages;
     }
 
+    DbgPrint("KD: Crash dump selected %I64u pages, writing %I64u pages (%I64u bytes) to a %I64u-byte target.\n", RequestedPages, TotalPages, KdpCrashDumpState.Header->RequiredDumpSpace.QuadPart, KdpCrashDumpState.Capacity.QuadPart);
+
     /*
-     * Keep the pagefile header invalid until every physical page has reached
-     * storage. SMSS must never mistake a partial dump for a complete one.
+     * Keep the header invalid until every selected physical page has reached
+     * storage. Readers must never mistake a partial dump for a complete one.
      */
     ValidDump = KdpCrashDumpState.Header->ValidDump;
     KdpCrashDumpState.Header->ValidDump = 0;
@@ -658,9 +1212,19 @@ NTSTATUS NTAPI KdpWriteCrashDump(VOID)
         }
     }
 
+    if ((PagesWritten != TotalPages) || (FileOffset != (ULONG64)KdpCrashDumpState.Header->RequiredDumpSpace.QuadPart))
+    {
+        Status = STATUS_INTERNAL_ERROR;
+        goto Exit;
+    }
+
     Status = KdpCrashDumpState.Storage.Flush(KdpCrashDumpState.Storage.Context);
     if (!NT_SUCCESS(Status))
         goto Exit;
+
+    DbgPrint("\nKD: Physical memory data written; saving crash boot log.\n");
+    LogStatus = KdpWriteCrashLog();
+    if (!NT_SUCCESS(LogStatus)) DbgPrint("KD: Crash boot log write failed with status 0x%08lx.\n", LogStatus);
 
     KdpCrashDumpState.Header->ValidDump = ValidDump;
     KdpCrashDumpState.Header->WriterStatus = STATUS_SUCCESS;
@@ -684,19 +1248,26 @@ Exit:
     }
 
     InterlockedExchange(&KdpCrashDumpActive, 0);
+    if (NT_SUCCESS(Status) && !NT_SUCCESS(LogStatus))
+        return LogStatus;
     return Status;
 }
 
 #else
 
 /*
- * Crash dump writing is only implemented for amd64 so far. The callers in
+ * Crash dump writing is only implemented for 64-bit targets so far. The callers in
  * Io/Ke are architecture independent, so provide the two entry points here
  * rather than making every call site test for the architecture.
  */
-BOOLEAN NTAPI KdpInitializeCrashDump(_In_ HANDLE PageFileHandle)
+BOOLEAN NTAPI KdpInitializeCrashDump(_In_ HANDLE DumpFileHandle)
 {
-    UNREFERENCED_PARAMETER(PageFileHandle);
+    UNREFERENCED_PARAMETER(DumpFileHandle);
+    return FALSE;
+}
+
+BOOLEAN NTAPI KdpInitializeDedicatedCrashDump(VOID)
+{
     return FALSE;
 }
 

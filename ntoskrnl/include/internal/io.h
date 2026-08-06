@@ -854,7 +854,13 @@ IopVerifyDiskSignature(
 BOOLEAN
 NTAPI
 IoInitializeCrashDump(
-    IN HANDLE PageFileHandle
+    IN HANDLE DumpFileHandle
+);
+
+BOOLEAN
+NTAPI
+IoInitializeDedicatedCrashDump(
+    VOID
 );
 
 CODE_SEG("INIT")
