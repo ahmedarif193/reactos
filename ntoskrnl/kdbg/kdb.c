@@ -32,6 +32,16 @@
 #define KDB_MAXIMUM_HW_BREAKPOINT_COUNT  4
 #define KDB_MAXIMUM_SW_BREAKPOINT_COUNT  256
 
+#if defined(_M_ARM64)
+#define KDB_ARM64_PSTATE_D               (1UL << 9)
+#define KDB_ARM64_WCR_ENABLE             (1UL << 0)
+#define KDB_ARM64_WCR_PAC_EL0_EL1        (3UL << 1)
+#define KDB_ARM64_WCR_LSC_LOAD           (1UL << 3)
+#define KDB_ARM64_WCR_LSC_STORE          (2UL << 3)
+#define KDB_ARM64_WCR_LSC_BOTH           (3UL << 3)
+#define KDB_ARM64_WCR_BAS_SHIFT          5
+#endif
+
 #define __STRING(x) #x
 #define _STRING(x) __STRING(x)
 
@@ -57,6 +67,8 @@ PEPROCESS KdbCurrentProcess = NULL;  /* The current process context in which KDB
 PEPROCESS KdbOriginalProcess = NULL; /* The process in whichs context KDB was intered */
 PETHREAD KdbCurrentThread = NULL;  /* The current thread context in which KDB runs */
 PETHREAD KdbOriginalThread = NULL; /* The thread in whichs context KDB was entered */
+EXCEPTION_RECORD64 KdbCurrentExceptionRecord = { 0 };
+BOOLEAN KdbCurrentExceptionRecordValid = FALSE;
 PKDB_KTRAP_FRAME KdbCurrentTrapFrame = NULL; /* Pointer to the current trapframe */
 static KDB_KTRAP_FRAME KdbTrapFrame = { 0 };  /* The trapframe which was passed to KdbEnterDebuggerException */
 static KDB_KTRAP_FRAME KdbThreadTrapFrame = { 0 }; /* The trapframe of the current thread (KdbCurrentThread) */
@@ -119,52 +131,129 @@ static const CHAR *ExceptionNrToString[] =
 
 /* FUNCTIONS *****************************************************************/
 
-static VOID
+BOOLEAN
 KdbpKdbTrapFrameFromKernelStack(
     PVOID KernelStack,
     PKDB_KTRAP_FRAME KdbTrapFrame)
 {
-    ULONG_PTR *StackPtr;
-
     RtlZeroMemory(KdbTrapFrame, sizeof(KDB_KTRAP_FRAME));
-    StackPtr = (ULONG_PTR *) KernelStack;
-    UNREFERENCED_PARAMETER(StackPtr);
+    if (KernelStack == NULL)
+        return FALSE;
 #ifdef _M_IX86
-    KdbTrapFrame->Ebp = StackPtr[3];
-    KdbTrapFrame->Edi = StackPtr[4];
-    KdbTrapFrame->Esi = StackPtr[5];
-    KdbTrapFrame->Ebx = StackPtr[6];
-    KdbTrapFrame->Eip = StackPtr[7];
-    KdbTrapFrame->Esp = (ULONG) (StackPtr + 8);
+    {
+        ULONG_PTR Stack[8];
+
+        if (!NT_SUCCESS(KdbpSafeReadMemory(Stack, KernelStack, sizeof(Stack))))
+            return FALSE;
+        KdbTrapFrame->Ebp = Stack[3];
+        KdbTrapFrame->Edi = Stack[4];
+        KdbTrapFrame->Esi = Stack[5];
+        KdbTrapFrame->Ebx = Stack[6];
+        KdbTrapFrame->Eip = Stack[7];
+        KdbTrapFrame->Esp = (ULONG)((PULONG_PTR)KernelStack + RTL_NUMBER_OF(Stack));
+    }
     KdbTrapFrame->SegSs = KGDT_R0_DATA;
     KdbTrapFrame->SegCs = KGDT_R0_CODE;
     KdbTrapFrame->SegDs = KGDT_R0_DATA;
     KdbTrapFrame->SegEs = KGDT_R0_DATA;
     KdbTrapFrame->SegGs = KGDT_R0_DATA;
+#elif defined(_M_AMD64)
+    {
+        KSWITCH_FRAME SwitchFrame;
+        KEXCEPTION_FRAME ExceptionFrame;
+
+        if (!NT_SUCCESS(KdbpSafeReadMemory(&SwitchFrame, KernelStack, sizeof(SwitchFrame))) ||
+            !NT_SUCCESS(KdbpSafeReadMemory(&ExceptionFrame, (PKSWITCH_FRAME)KernelStack + 1, sizeof(ExceptionFrame))))
+        {
+            return FALSE;
+        }
+
+        KdbTrapFrame->Rbx = ExceptionFrame.Rbx;
+        KdbTrapFrame->Rbp = ExceptionFrame.Rbp;
+        KdbTrapFrame->Rsi = ExceptionFrame.Rsi;
+        KdbTrapFrame->Rdi = ExceptionFrame.Rdi;
+        KdbTrapFrame->R12 = ExceptionFrame.R12;
+        KdbTrapFrame->R13 = ExceptionFrame.R13;
+        KdbTrapFrame->R14 = ExceptionFrame.R14;
+        KdbTrapFrame->R15 = ExceptionFrame.R15;
+        KdbTrapFrame->Rip = SwitchFrame.Return;
+        KdbTrapFrame->Rsp = (ULONG_PTR)((PKSWITCH_FRAME)KernelStack + 1);
+        KdbTrapFrame->SegCs = KGDT64_R0_CODE;
+        KdbTrapFrame->SegSs = KGDT64_R0_DATA;
+        KdbTrapFrame->SegDs = KGDT64_R0_DATA;
+        KdbTrapFrame->SegEs = KGDT64_R0_DATA;
+        KdbTrapFrame->SegFs = KGDT64_R0_DATA;
+        KdbTrapFrame->SegGs = KGDT64_R0_DATA;
+    }
 #elif defined(_M_ARM64)
     {
-        PKSWITCH_FRAME SwitchFrame = (PKSWITCH_FRAME)KernelStack;
+        KSWITCH_FRAME SwitchFrame;
 
-        KdbTrapFrame->X19 = SwitchFrame->X19;
-        KdbTrapFrame->X20 = SwitchFrame->X20;
-        KdbTrapFrame->X21 = SwitchFrame->X21;
-        KdbTrapFrame->X22 = SwitchFrame->X22;
-        KdbTrapFrame->X23 = SwitchFrame->X23;
-        KdbTrapFrame->X24 = SwitchFrame->X24;
-        KdbTrapFrame->X25 = SwitchFrame->X25;
-        KdbTrapFrame->X26 = SwitchFrame->X26;
-        KdbTrapFrame->X27 = SwitchFrame->X27;
-        KdbTrapFrame->X28 = SwitchFrame->X28;
-        KdbTrapFrame->Fp = SwitchFrame->Fp;
-        KdbTrapFrame->Lr = SwitchFrame->ReturnAddress;
-        KdbTrapFrame->Pc = SwitchFrame->ReturnAddress;
-        KdbTrapFrame->Sp = (ULONG_PTR)(SwitchFrame + 1);
+        if (!NT_SUCCESS(KdbpSafeReadMemory(&SwitchFrame, KernelStack, sizeof(SwitchFrame))))
+        {
+            return FALSE;
+        }
+
+        KdbTrapFrame->X19 = SwitchFrame.X19;
+        KdbTrapFrame->X20 = SwitchFrame.X20;
+        KdbTrapFrame->X21 = SwitchFrame.X21;
+        KdbTrapFrame->X22 = SwitchFrame.X22;
+        KdbTrapFrame->X23 = SwitchFrame.X23;
+        KdbTrapFrame->X24 = SwitchFrame.X24;
+        KdbTrapFrame->X25 = SwitchFrame.X25;
+        KdbTrapFrame->X26 = SwitchFrame.X26;
+        KdbTrapFrame->X27 = SwitchFrame.X27;
+        KdbTrapFrame->X28 = SwitchFrame.X28;
+        KdbTrapFrame->Fp = SwitchFrame.Fp;
+        KdbTrapFrame->Lr = SwitchFrame.ReturnAddress;
+        KdbTrapFrame->Pc = SwitchFrame.ReturnAddress;
+        KdbTrapFrame->Sp = (ULONG_PTR)((PKSWITCH_FRAME)KernelStack + 1);
         KdbTrapFrame->Cpsr = 0x5;
     }
 #endif
 
     /* FIXME: what about the other registers??? */
+    return KeGetContextPc((PCONTEXT)KdbTrapFrame) != 0;
 }
+
+#if defined(_M_ARM64)
+static VOID
+KdbpArm64ProgramWatchpoint(IN ULONG Slot, IN ULONG64 Address, IN ULONG Control)
+{
+    ULONG Processor;
+
+    KdbTrapFrame.Wvr[Slot] = Address;
+    KdbTrapFrame.Wcr[Slot] = Control;
+    for (Processor = 0; Processor < KeNumberProcessors; Processor++)
+    {
+        if (KiProcessorBlock[Processor] == NULL)
+            continue;
+
+        KiProcessorBlock[Processor]->ProcessorState.SpecialRegisters.KernelWvr[Slot] = Address;
+        KiProcessorBlock[Processor]->ProcessorState.SpecialRegisters.KernelWcr[Slot] = Control;
+    }
+}
+
+static BOOLEAN
+KdbpArm64WatchpointSlotInUse(IN ULONG Slot)
+{
+    ULONG Index;
+
+    if (KdbTrapFrame.Wcr[Slot] & KDB_ARM64_WCR_ENABLE)
+        return TRUE;
+
+    for (Index = 0; Index < KeNumberProcessors; Index++)
+    {
+        if (KiProcessorBlock[Index] != NULL &&
+            (KiProcessorBlock[Index]->ProcessorState.SpecialRegisters.KernelWcr[Slot] & KDB_ARM64_WCR_ENABLE))
+        {
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+#endif
 
 /*!\brief Overwrites the instruction at \a Address with \a NewInst and stores
  *        the old instruction in *OldInst.
@@ -536,9 +625,9 @@ KdbpInsertBreakPoint(
 
     if (Type == KdbBreakPointHardware)
     {
-        if ((Address % Size) != 0)
+        if (Size != 1 && Size != 2 && Size != 4 && Size != 8)
         {
-            KdbPrintf("Address (0x%p) must be aligned to a multiple of the size (%d)\n", Address, Size);
+            KdbPrintf("Unsupported hardware breakpoint size %u.\n", Size);
             return STATUS_UNSUCCESSFUL;
         }
 
@@ -547,6 +636,27 @@ KdbpInsertBreakPoint(
             KdbPuts("Size must be 1 for execution breakpoints.\n");
             return STATUS_UNSUCCESSFUL;
         }
+
+#if defined(_M_ARM64)
+        if (AccessType != KdbAccessExec && ((Address & 7) + Size > 8 || Address > MAXULONG_PTR - (Size - 1)))
+        {
+            KdbPuts("ARM64 watchpoints may not wrap or cross an eight-byte boundary.\n");
+            return STATUS_UNSUCCESSFUL;
+        }
+#else
+#if !defined(_M_AMD64)
+        if (Size == 8)
+        {
+            KdbPuts("Eight-byte hardware breakpoints require AMD64.\n");
+            return STATUS_UNSUCCESSFUL;
+        }
+#endif
+        if ((Address % Size) != 0)
+        {
+            KdbPrintf("Address (0x%p) must be aligned to a multiple of the size (%d)\n", (PVOID)Address, Size);
+            return STATUS_UNSUCCESSFUL;
+        }
+#endif
     }
 
     if (KdbBreakPointCount == KDB_MAXIMUM_BREAKPOINT_COUNT)
@@ -688,9 +798,7 @@ KdbpDeleteBreakPoint(
  * \returns Breakpoint number, -1 on error.
  */
 static LONG
-KdbpIsBreakPointOurs(
-    IN NTSTATUS ExceptionCode,
-    IN PCONTEXT Context)
+KdbpIsBreakPointOurs(IN NTSTATUS ExceptionCode, IN PCONTEXT Context, IN PEXCEPTION_RECORD64 ExceptionRecord)
 {
     ULONG i;
     ASSERT(ExceptionCode == STATUS_SINGLE_STEP || ExceptionCode == STATUS_BREAKPOINT);
@@ -717,7 +825,51 @@ KdbpIsBreakPointOurs(
     else if (ExceptionCode == STATUS_SINGLE_STEP) /* Hardware interrupt */
     {
 #if defined(_M_ARM64)
-        return -1;
+        ULONG Closest = MAXULONG;
+        ULONG64 MinimumDistance = MAXULONGLONG;
+        ULONG64 Reported;
+
+        if (ExceptionRecord == NULL || ExceptionRecord->NumberParameters == 0)
+            return -1;
+
+        Reported = ExceptionRecord->ExceptionInformation[0];
+        for (i = 0; i < KdbHwBreakPointCount; i++)
+        {
+            PKDB_BREAKPOINT BreakPoint = KdbHwBreakPoints[i];
+            ULONG64 LastByte;
+            ULONG64 Distance;
+
+            ASSERT(BreakPoint->Type == KdbBreakPointHardware && BreakPoint->Enabled);
+            if (BreakPoint->Data.Hw.AccessType == KdbAccessExec)
+                continue;
+
+            if (ExceptionRecord->NumberParameters > 1)
+            {
+                BOOLEAN IsWrite = ExceptionRecord->ExceptionInformation[1] != 0;
+
+                if ((IsWrite && BreakPoint->Data.Hw.AccessType == KdbAccessRead) ||
+                    (!IsWrite && BreakPoint->Data.Hw.AccessType == KdbAccessWrite))
+                {
+                    continue;
+                }
+            }
+
+            LastByte = BreakPoint->Address + BreakPoint->Data.Hw.Size - 1;
+            if (Reported < BreakPoint->Address)
+                Distance = BreakPoint->Address - Reported;
+            else if (Reported > LastByte)
+                Distance = Reported - LastByte;
+            else
+                Distance = 0;
+
+            if (Distance < MinimumDistance)
+            {
+                MinimumDistance = Distance;
+                Closest = i;
+            }
+        }
+
+        return Closest == MAXULONG ? -1 : KdbHwBreakPoints[Closest] - KdbBreakPoints;
 #else
         UCHAR DebugReg;
 
@@ -756,7 +908,7 @@ KdbpEnableBreakPoint(
     NTSTATUS Status;
 #if !defined(_M_ARM64)
     INT i;
-    ULONG ul;
+    ULONG ul, Length;
 #endif
 
     if (BreakPointNr < 0)
@@ -813,8 +965,52 @@ KdbpEnableBreakPoint(
     else
     {
 #if defined(_M_ARM64)
-        KdbPrintf("Hardware breakpoints are not supported on ARM64 yet.\n");
-        return FALSE;
+        ULONG Control;
+        ULONG Slot;
+
+        if (BreakPoint->Data.Hw.AccessType == KdbAccessExec)
+        {
+            KdbPuts("ARM64 KDB execution hardware breakpoints are not supported.\n");
+            return FALSE;
+        }
+
+        if (KdbHwBreakPointCount >= KiArm64NumWatchpoints)
+        {
+            KdbPrintf("Maximum number of ARM64 watchpoints (%lu) already used.\n", KiArm64NumWatchpoints);
+            return FALSE;
+        }
+
+        for (Slot = 0; Slot < KiArm64NumWatchpoints; Slot++)
+        {
+            ULONG Index;
+            BOOLEAN Used = KdbpArm64WatchpointSlotInUse(Slot);
+
+            for (Index = 0; !Used && Index < KdbHwBreakPointCount; Index++)
+                Used = KdbHwBreakPoints[Index]->Data.Hw.DebugReg == Slot;
+            if (!Used)
+                break;
+        }
+
+        if (Slot >= KiArm64NumWatchpoints)
+        {
+            KdbPuts("No free ARM64 watchpoint register is available.\n");
+            return FALSE;
+        }
+
+        Control = KDB_ARM64_WCR_ENABLE | KDB_ARM64_WCR_PAC_EL0_EL1;
+        switch (BreakPoint->Data.Hw.AccessType)
+        {
+            case KdbAccessRead: Control |= KDB_ARM64_WCR_LSC_LOAD; break;
+            case KdbAccessWrite: Control |= KDB_ARM64_WCR_LSC_STORE; break;
+            case KdbAccessReadWrite: Control |= KDB_ARM64_WCR_LSC_BOTH; break;
+            default: ASSERT(FALSE); return FALSE;
+        }
+
+        Control |= ((((1UL << BreakPoint->Data.Hw.Size) - 1) << (BreakPoint->Address & 7)) << KDB_ARM64_WCR_BAS_SHIFT);
+        KdbpArm64ProgramWatchpoint(Slot, BreakPoint->Address & ~7ULL, Control);
+        KdbTrapFrame.Cpsr &= ~KDB_ARM64_PSTATE_D;
+        BreakPoint->Data.Hw.DebugReg = Slot;
+        KdbHwBreakPoints[KdbHwBreakPointCount++] = BreakPoint;
 #else
         if (BreakPoint->Data.Hw.AccessType == KdbAccessExec)
             ASSERT(BreakPoint->Data.Hw.Size == 1);
@@ -886,8 +1082,16 @@ KdbpEnableBreakPoint(
 
         KdbTrapFrame.Dr7 |= (ul << (16 + (i * 4)));
 
-        /* Set the breakpoint length. */
-        KdbTrapFrame.Dr7 |= ((BreakPoint->Data.Hw.Size - 1) << (18 + (i * 4)));
+        /* Set the breakpoint length (00=1, 01=2, 11=4, 10=8 bytes). */
+        switch (BreakPoint->Data.Hw.Size)
+        {
+            case 1: Length = 0; break;
+            case 2: Length = 1; break;
+            case 4: Length = 3; break;
+            case 8: Length = 2; break;
+            default: ASSERT(FALSE); return FALSE;
+        }
+        KdbTrapFrame.Dr7 |= (Length << (18 + (i * 4)));
 
         /* Update KdbCurrentTrapFrame - values are taken from there by the CLI */
         if (&KdbTrapFrame != KdbCurrentTrapFrame)
@@ -990,7 +1194,20 @@ KdbpDisableBreakPoint(
         ASSERT(BreakPoint->Type == KdbBreakPointHardware);
 
 #if defined(_M_ARM64)
-        return FALSE;
+        KdbpArm64ProgramWatchpoint(BreakPoint->Data.Hw.DebugReg, 0, 0);
+
+        for (i = 0; i < KdbHwBreakPointCount; i++)
+        {
+            if (KdbHwBreakPoints[i] == BreakPoint)
+            {
+                KdbHwBreakPoints[i] = KdbHwBreakPoints[--KdbHwBreakPointCount];
+                i = MAXULONG;
+                break;
+            }
+        }
+
+        if (i != MAXULONG)
+            ASSERT(FALSE);
 #else
         /* Clear the breakpoint. */
         KdbTrapFrame.Dr7 &= ~(0x3 << (BreakPoint->Data.Hw.DebugReg * 2));
@@ -1095,24 +1312,147 @@ KdbpSetEnterCondition(
  * \retval FALSE  Failure (i.e. invalid thread id)
  */
 BOOLEAN
+KdbpFindProcessById(IN PVOID ProcessId, OUT PEPROCESS *Process)
+{
+    extern LIST_ENTRY PsActiveProcessHead;
+    LIST_ENTRY Head;
+    PLIST_ENTRY Entry;
+    ULONG Count = 0;
+
+    *Process = NULL;
+    if (!NT_SUCCESS(KdbpSafeReadMemory(&Head, &PsActiveProcessHead, sizeof(Head))))
+    {
+        return FALSE;
+    }
+    Entry = Head.Flink;
+    while (Entry != NULL &&
+           Entry != &PsActiveProcessHead &&
+           Count++ < 4096)
+    {
+        LIST_ENTRY Links;
+        HANDLE CandidateId;
+        PEPROCESS Candidate;
+
+        if (!NT_SUCCESS(KdbpSafeReadMemory(&Links, Entry, sizeof(Links))))
+            return FALSE;
+        Candidate = CONTAINING_RECORD(Entry, EPROCESS, ActiveProcessLinks);
+        if (!NT_SUCCESS(KdbpSafeReadMemory(&CandidateId, &Candidate->UniqueProcessId, sizeof(CandidateId))))
+        {
+            return FALSE;
+        }
+        if (CandidateId == ProcessId)
+        {
+            *Process = Candidate;
+            return TRUE;
+        }
+        if (Links.Flink == Entry)
+            return FALSE;
+        Entry = Links.Flink;
+    }
+    return FALSE;
+}
+
+BOOLEAN
+KdbpFindThreadById(IN PVOID ThreadId, OUT PETHREAD *Thread)
+{
+    extern LIST_ENTRY PsActiveProcessHead;
+    LIST_ENTRY Head;
+    PLIST_ENTRY ProcessEntry;
+    ULONG ProcessCount = 0;
+    ULONG ThreadCount = 0;
+
+    *Thread = NULL;
+    if (!NT_SUCCESS(KdbpSafeReadMemory(&Head, &PsActiveProcessHead, sizeof(Head))))
+    {
+        return FALSE;
+    }
+    ProcessEntry = Head.Flink;
+    while (ProcessEntry != NULL &&
+           ProcessEntry != &PsActiveProcessHead &&
+           ProcessCount++ < 4096 &&
+           ThreadCount < 65536)
+    {
+        LIST_ENTRY ProcessLinks;
+        LIST_ENTRY ProcessThreadListHead;
+        PEPROCESS Process;
+        PLIST_ENTRY ThreadEntry;
+        PLIST_ENTRY ThreadListHead;
+
+        if (!NT_SUCCESS(KdbpSafeReadMemory(&ProcessLinks, ProcessEntry, sizeof(ProcessLinks))))
+        {
+            return FALSE;
+        }
+        Process = CONTAINING_RECORD(ProcessEntry, EPROCESS, ActiveProcessLinks);
+        if (!NT_SUCCESS(KdbpSafeReadMemory(&ProcessThreadListHead, &Process->ThreadListHead, sizeof(ProcessThreadListHead))))
+        {
+            return FALSE;
+        }
+
+        ThreadEntry = ProcessThreadListHead.Flink;
+        ThreadListHead = &Process->ThreadListHead;
+        while (ThreadEntry != NULL &&
+               ThreadEntry != ThreadListHead &&
+               ThreadCount++ < 65536)
+        {
+            LIST_ENTRY ThreadLinks;
+            CLIENT_ID CandidateCid;
+            PETHREAD Candidate;
+
+            if (!NT_SUCCESS(KdbpSafeReadMemory(&ThreadLinks, ThreadEntry, sizeof(ThreadLinks))))
+            {
+                return FALSE;
+            }
+            Candidate = CONTAINING_RECORD(ThreadEntry, ETHREAD, ThreadListEntry);
+            if (!NT_SUCCESS(KdbpSafeReadMemory(&CandidateCid, &Candidate->Cid, sizeof(CandidateCid))))
+            {
+                return FALSE;
+            }
+            if (CandidateCid.UniqueThread == ThreadId)
+            {
+                *Thread = Candidate;
+                return TRUE;
+            }
+            if (ThreadLinks.Flink == ThreadEntry)
+                return FALSE;
+            ThreadEntry = ThreadLinks.Flink;
+        }
+
+        if (ProcessLinks.Flink == ProcessEntry)
+            return FALSE;
+        ProcessEntry = ProcessLinks.Flink;
+    }
+    return FALSE;
+}
+
+BOOLEAN
 KdbpAttachToThread(
     PVOID ThreadId)
 {
     PETHREAD Thread = NULL;
     PEPROCESS Process;
+    ETHREAD ThreadSnapshot;
 
-    /* Get a pointer to the thread */
-    if (!NT_SUCCESS(PsLookupThreadByThreadId(ThreadId, &Thread)))
+    /* The machine is frozen; avoid the CID-table locks used by PsLookup*. */
+    if (!KdbpFindThreadById(ThreadId, &Thread))
     {
-        KdbpPrint("Invalid thread id: 0x%08x\n", (ULONG_PTR)ThreadId);
+        KdbpPrint("Invalid thread id: %p\n", ThreadId);
         return FALSE;
     }
-    Process = (PEPROCESS)Thread->ThreadsProcess;
-
-    if (KeIsExecutingDpc() && Process != KdbCurrentProcess)
+    if (!NT_SUCCESS(KdbpSafeReadMemory(&ThreadSnapshot, Thread, sizeof(ThreadSnapshot))))
     {
-        KdbpPrint("Cannot attach to thread within another process while executing a DPC.\n");
-        ObDereferenceObject(Thread);
+        KdbpPrint("Cannot read thread %p.\n", Thread);
+        return FALSE;
+    }
+    Process = (PEPROCESS)ThreadSnapshot.ThreadsProcess;
+    if (Process == NULL)
+    {
+        KdbpPrint("Thread %p has no owning process.\n", ThreadId);
+        return FALSE;
+    }
+
+    if (KeGetCurrentIrql() >= DISPATCH_LEVEL && Process != KdbCurrentProcess)
+    {
+        KdbpPrint("Cannot attach to a thread in another process at IRQL %lu.\n", KeGetCurrentIrql());
         return FALSE;
     }
 
@@ -1130,13 +1470,72 @@ KdbpAttachToThread(
     /* Switch to the thread's context */
     if (Thread != KdbOriginalThread)
     {
+        ULONG Processor;
+        BOOLEAN Running = FALSE;
+        BOOLEAN Captured = FALSE;
+
         /* The thread we're attaching to isn't the thread on which we entered
-         * kdb and so the thread we're attaching to is not running. There
-         * is no guarantee that it actually has a trap frame. So we have to
-         * peek directly at the registers which were saved on the stack when the
-         * thread was preempted in the scheduler */
-        KdbpKdbTrapFrameFromKernelStack(Thread->Tcb.KernelStack,
-                                        &KdbThreadTrapFrame);
+         * kdb. It may be running on a frozen sibling processor, in which case
+         * the PRCB processor state is the only stable context. Otherwise use
+         * the scheduler switch frame from the saved kernel stack. */
+        for (Processor = 0; Processor < (ULONG)(UCHAR)KeNumberProcessors; Processor++)
+        {
+            PKPRCB Prcb = KiProcessorBlock[Processor];
+            PETHREAD ProcessorThread;
+            ULONG FrozenState;
+
+            if (Prcb == NULL ||
+                !NT_SUCCESS(KdbpSafeReadMemory(&ProcessorThread, &Prcb->CurrentThread, sizeof(ProcessorThread))) ||
+                ProcessorThread != Thread)
+            {
+                continue;
+            }
+
+            Running = TRUE;
+            if (NT_SUCCESS(KdbpSafeReadMemory(&FrozenState, (PVOID)&Prcb->IpiFrozen, sizeof(FrozenState))) &&
+                KdbpProcessorStateIsFrozen(FrozenState) &&
+                NT_SUCCESS(KdbpSafeReadMemory(&KdbThreadTrapFrame, &Prcb->ProcessorState.ContextFrame, sizeof(KdbThreadTrapFrame))))
+            {
+                Captured = TRUE;
+            }
+            break;
+        }
+
+        if (Running && !Captured)
+        {
+            KdbpPrint("Thread %p is running but has no stable frozen processor context.\n", ThreadId);
+            return FALSE;
+        }
+
+        if (!Running)
+        {
+            if (!KdbpKdbTrapFrameFromKernelStack(ThreadSnapshot.Tcb.KernelStack, &KdbThreadTrapFrame))
+            {
+                KdbpPrint("Thread %p has no readable switched-out context.\n", ThreadId);
+                return FALSE;
+            }
+        }
+#if defined(_M_AMD64)
+        if (!Running && ThreadSnapshot.Tcb.StateSaveArea != NULL &&
+            NT_SUCCESS(KdbpSafeReadMemory(&KdbThreadTrapFrame.FltSave, ThreadSnapshot.Tcb.StateSaveArea, sizeof(KdbThreadTrapFrame.FltSave))))
+        {
+            KdbThreadTrapFrame.MxCsr = KdbThreadTrapFrame.FltSave.MxCsr;
+            KdbThreadTrapFrame.ContextFlags |= CONTEXT_FLOATING_POINT;
+        }
+#elif defined(_M_ARM64)
+        if (!Running && ThreadSnapshot.Tcb.VfpState != NULL)
+        {
+            KARM64_VFP_STATE VfpState;
+
+            if (NT_SUCCESS(KdbpSafeReadMemory(&VfpState, ThreadSnapshot.Tcb.VfpState, sizeof(VfpState))))
+            {
+                RtlCopyMemory(KdbThreadTrapFrame.V, VfpState.V, sizeof(KdbThreadTrapFrame.V));
+                KdbThreadTrapFrame.Fpcr = VfpState.Fpcr;
+                KdbThreadTrapFrame.Fpsr = VfpState.Fpsr;
+                KdbThreadTrapFrame.ContextFlags |= CONTEXT_FLOATING_POINT;
+            }
+        }
+#endif
         KdbCurrentTrapFrame = &KdbThreadTrapFrame;
     }
     else /* Switching back to original thread */
@@ -1162,7 +1561,6 @@ KdbpAttachToThread(
         KdbCurrentProcess = Process;
     }
 
-    ObDereferenceObject(Thread);
     return TRUE;
 }
 
@@ -1181,26 +1579,39 @@ KdbpAttachToProcess(
 {
     PEPROCESS Process = NULL;
     PETHREAD Thread;
+    EPROCESS ProcessSnapshot;
+    ETHREAD ThreadSnapshot;
     PLIST_ENTRY Entry;
+    PVOID ThreadId;
 
-    /* Get a pointer to the process */
-    if (!NT_SUCCESS(PsLookupProcessByProcessId(ProcessId, &Process)))
+    /* The machine is frozen; avoid the CID-table locks used by PsLookup*. */
+    if (!KdbpFindProcessById(ProcessId, &Process))
     {
-        KdbpPrint("Invalid process id: 0x%08x\n", (ULONG_PTR)ProcessId);
+        KdbpPrint("Invalid process id: %p\n", ProcessId);
         return FALSE;
     }
 
-    Entry = Process->ThreadListHead.Flink;
-    ObDereferenceObject(Process);
-    if (Entry == &KdbCurrentProcess->ThreadListHead)
+    if (!NT_SUCCESS(KdbpSafeReadMemory(&ProcessSnapshot, Process, sizeof(ProcessSnapshot))))
+    {
+        KdbpPrint("Cannot read process %p.\n", Process);
+        return FALSE;
+    }
+
+    Entry = ProcessSnapshot.ThreadListHead.Flink;
+    if (Entry == &Process->ThreadListHead || Entry == NULL)
     {
         KdbpPrint("No threads in process 0x%p, cannot attach to process!\n", ProcessId);
         return FALSE;
     }
 
     Thread = CONTAINING_RECORD(Entry, ETHREAD, ThreadListEntry);
-
-    return KdbpAttachToThread(Thread->Cid.UniqueThread);
+    if (!NT_SUCCESS(KdbpSafeReadMemory(&ThreadSnapshot, Thread, sizeof(ThreadSnapshot))))
+    {
+        KdbpPrint("Cannot read first thread in process %p.\n", ProcessId);
+        return FALSE;
+    }
+    ThreadId = ThreadSnapshot.Cid.UniqueThread;
+    return KdbpAttachToThread(ThreadId);
 }
 
 /**
@@ -1247,9 +1658,6 @@ KdbpInternalEnter(
     Thread->Tcb.InitialStack = Thread->Tcb.StackBase = (char*)KdbStack + KDB_STACK_SIZE;
     Thread->Tcb.StackLimit = (ULONG_PTR)KdbStack;
     Thread->Tcb.KernelStack = (char*)KdbStack + KDB_STACK_SIZE;
-
-    // KdbPrintf("Switching to KDB stack 0x%08x-0x%08x (Current Stack is 0x%08x)\n",
-    //           Thread->Tcb.StackLimit, Thread->Tcb.StackBase, Esp);
 
     KdbpStackSwitchAndCall(KdbStack + KDB_STACK_SIZE - KDB_STACK_RESERVE, Procedure);
 
@@ -1362,6 +1770,10 @@ KdbEnterDebuggerException(
     KIRQL OldIrql;
     NTSTATUS ExceptionCode;
     VOID (*EntryPoint)(VOID) = KdbpCallMainLoop;
+#if defined(_M_ARM64)
+    KARM64_VFP_STATE LiveVfpState;
+    BOOLEAN LiveVfpStateValid = FALSE;
+#endif
 
     ExceptionCode = (ExceptionRecord ? ExceptionRecord->ExceptionCode : STATUS_BREAKPOINT);
 
@@ -1391,7 +1803,7 @@ KdbEnterDebuggerException(
     KdbEnteredOnSingleStep = FALSE;
 
     if (FirstChance && (ExceptionCode == STATUS_SINGLE_STEP || ExceptionCode == STATUS_BREAKPOINT) &&
-        (KdbLastBreakPointNr = KdbpIsBreakPointOurs(ExceptionCode, Context)) >= 0)
+        (KdbLastBreakPointNr = KdbpIsBreakPointOurs(ExceptionCode, Context, ExceptionRecord)) >= 0)
     {
         BreakPoint = KdbBreakPoints + KdbLastBreakPointNr;
 
@@ -1501,12 +1913,12 @@ KdbEnterDebuggerException(
         }
         else if (BreakPoint->Type == KdbBreakPointHardware)
         {
-            KdbPrintf("\nEntered debugger on breakpoint #%d: %s 0x%08x\n",
+            KdbPrintf("\nEntered debugger on breakpoint #%d: %s %p\n",
                       KdbLastBreakPointNr,
                       (BreakPoint->Data.Hw.AccessType == KdbAccessRead) ? "READ" :
                       ((BreakPoint->Data.Hw.AccessType == KdbAccessWrite) ? "WRITE" :
                       ((BreakPoint->Data.Hw.AccessType == KdbAccessReadWrite) ? "RDWR" : "EXEC")),
-                      BreakPoint->Address);
+                      (PVOID)BreakPoint->Address);
         }
     }
     else if (ExceptionCode == STATUS_SINGLE_STEP)
@@ -1663,6 +2075,50 @@ EnterKdbg:;
         return kdHandleException;
     }
 
+#if defined(_M_AMD64)
+    /*
+     * Most amd64 trap entries do not populate the debug-register slots in
+     * KTRAP_FRAME. CONTEXT_ALL nevertheless asks KeTrapFrameToContext to
+     * copy them, which exposes unrelated stack contents as DR0-DR7. KDB is
+     * executing on the interrupted processor here, so capture the canonical
+     * hardware state before any command reads or edits it.
+     */
+    KdbTrapFrame.Dr0 = __readdr(0);
+    KdbTrapFrame.Dr1 = __readdr(1);
+    KdbTrapFrame.Dr2 = __readdr(2);
+    KdbTrapFrame.Dr3 = __readdr(3);
+    KdbTrapFrame.Dr6 = __readdr(6);
+    KdbTrapFrame.Dr7 = __readdr(7);
+    KdbTrapFrame.ContextFlags |= CONTEXT_DEBUG_REGISTERS;
+#endif
+
+#if defined(_M_ARM64)
+    /*
+     * Most fatal ARM64 paths deliberately construct only an integer/control
+     * CONTEXT. Capture FP/SIMD state directly after recursive-entry rejection,
+     * so vregs never reports fabricated zeroes and edits can be restored to
+     * the live processor without weakening the fault path's trap conversion.
+     */
+    RtlZeroMemory(&LiveVfpState, sizeof(LiveVfpState));
+    KiSaveVfpState(&LiveVfpState);
+    RtlCopyMemory(KdbTrapFrame.V, LiveVfpState.V, sizeof(KdbTrapFrame.V));
+    KdbTrapFrame.Fpcr = LiveVfpState.Fpcr;
+    KdbTrapFrame.Fpsr = LiveVfpState.Fpsr;
+    KdbTrapFrame.ContextFlags |= CONTEXT_FLOATING_POINT;
+    LiveVfpStateValid = TRUE;
+#endif
+
+    if (ExceptionRecord != NULL)
+    {
+        KdbCurrentExceptionRecord = *ExceptionRecord;
+        KdbCurrentExceptionRecordValid = TRUE;
+    }
+    else
+    {
+        RtlZeroMemory(&KdbCurrentExceptionRecord, sizeof(KdbCurrentExceptionRecord));
+        KdbCurrentExceptionRecordValid = FALSE;
+    }
+
     /* Enter KDBG proper and run either the main loop or the KDBinit file */
     KdbpInternalEnter(EntryPoint);
 
@@ -1693,6 +2149,16 @@ EnterKdbg:;
     {
         KeUnstackDetachProcess(&KdbApcState);
     }
+
+#if defined(_M_ARM64)
+    if (LiveVfpStateValid)
+    {
+        RtlCopyMemory(LiveVfpState.V, KdbTrapFrame.V, sizeof(LiveVfpState.V));
+        LiveVfpState.Fpcr = KdbTrapFrame.Fpcr;
+        LiveVfpState.Fpsr = KdbTrapFrame.Fpsr;
+        KiRestoreVfpState(&LiveVfpState);
+    }
+#endif
 
     /* Update the exception Context */
     *Context = KdbTrapFrame;

@@ -26,20 +26,28 @@ KiProcessorFreezeHandler(
     PKPRCB CurrentPrcb;
 
     CurrentPrcb = KeGetCurrentPrcb();
+    /*
+     * The idle and pending-IPI paths may notice a freeze request before the
+     * SGI carrying the interrupted register state is dispatched.  They call
+     * this routine without frames and must not claim the request: publishing
+     * FROZEN in that case would expose a zero or stale ProcessorState to KD.
+     * Leave TARGET_FREEZE pending for the real IRQ path instead.
+     */
     if ((CurrentPrcb == NULL) ||
+        (TrapFrame == NULL) ||
         (CurrentPrcb->IpiFrozen != IPI_FROZEN_STATE_TARGET_FREEZE))
     {
         return FALSE;
     }
 
-    if (InterlockedCompareExchange((PLONG)&CurrentPrcb->IpiFrozen,
-                                   IPI_FROZEN_STATE_FROZEN,
-                                   IPI_FROZEN_STATE_TARGET_FREEZE) !=
+    if (InterlockedCompareExchange((PLONG)&CurrentPrcb->IpiFrozen, IPI_FROZEN_STATE_SAVING, IPI_FROZEN_STATE_TARGET_FREEZE) !=
         IPI_FROZEN_STATE_TARGET_FREEZE)
     {
         return FALSE;
     }
     KiSaveProcessorState(TrapFrame, ExceptionFrame);
+    KeMemoryBarrier();
+    InterlockedExchange((PLONG)&CurrentPrcb->IpiFrozen, IPI_FROZEN_STATE_FROZEN);
 
     {
         ULONG64 Spins = 0;
@@ -71,7 +79,10 @@ KiProcessorFreezeHandler(
 
             if (++Spins > 2000)
             {
-                __asm__ __volatile__("wfi" ::: "memory");
+                /* IRQs are masked while the interrupted state is frozen.
+                 * Wait on the architectural event register so the owner can
+                 * wake us without relying on interrupt delivery. */
+                __asm__ __volatile__("wfe" ::: "memory");
             }
             else
             {
@@ -110,7 +121,10 @@ KiArm64WaitForFrozenTargets(
         {
             PKPRCB TargetPrcb = KiProcessorBlock[i];
 
-            if (TargetPrcb != NULL && (Remaining & TargetPrcb->SetMember) && TargetPrcb->IpiFrozen == IPI_FROZEN_STATE_FROZEN)
+            if ((TargetPrcb != NULL) &&
+                (Remaining & TargetPrcb->SetMember) &&
+                ((TargetPrcb->IpiFrozen & ~IPI_FROZEN_FLAG_ACTIVE) ==
+                 IPI_FROZEN_STATE_FROZEN))
                 Remaining &= ~TargetPrcb->SetMember;
         }
 
@@ -122,18 +136,48 @@ KiArm64WaitForFrozenTargets(
 
         if (++Spins > 1000000ULL)
         {
+            KAFFINITY RetrySet = 0;
+
             for (ULONG i = 0; i < KeNumberProcessors; i++)
             {
                 PKPRCB TargetPrcb = KiProcessorBlock[i];
+                ULONG State;
 
-                if (TargetPrcb != NULL && (Remaining & TargetPrcb->SetMember))
+                if ((TargetPrcb == NULL) ||
+                    !(Remaining & TargetPrcb->SetMember))
                 {
-                    InterlockedCompareExchange((PLONG)&TargetPrcb->IpiFrozen,
-                                               IPI_FROZEN_STATE_RUNNING,
-                                               IPI_FROZEN_STATE_TARGET_FREEZE);
+                    continue;
                 }
+
+                State = TargetPrcb->IpiFrozen & ~IPI_FROZEN_FLAG_ACTIVE;
+                if (State == IPI_FROZEN_STATE_SAVING)
+                {
+                    /* State publication is in progress; it is not safe to
+                     * abandon or thaw this processor until saving completes. */
+                    continue;
+                }
+
+                if (State == IPI_FROZEN_STATE_FROZEN)
+                {
+                    Remaining &= ~TargetPrcb->SetMember;
+                    continue;
+                }
+
+                /* Never proceed with an active processor left running: KDB
+                 * commands assume a quiesced machine. Re-send both the debug
+                 * wake SGI and the generic IPI until the target publishes a
+                 * complete state. */
+                if (State == IPI_FROZEN_STATE_TARGET_FREEZE)
+                    RetrySet |= TargetPrcb->SetMember;
             }
-            break;
+
+            if (RetrySet != 0)
+            {
+                HalRequestDebugWakeIpi(RetrySet);
+                HalRequestIpi(RetrySet);
+            }
+
+            Spins = 0;
         }
     }
 }
@@ -157,6 +201,8 @@ KiArm64RequestThaw(
                                    IPI_FROZEN_STATE_FROZEN);
     }
 
+    KeMemoryBarrier();
+    __asm__ __volatile__("dsb sy; sev" ::: "memory");
     HalRequestDebugWakeIpi(KiFreezeTargetSet);
 
     for (ULONG i = 0; i < KeNumberProcessors; i++)
@@ -173,10 +219,12 @@ KiArm64RequestThaw(
                 KeMemoryBarrier();
                 if (++Spins > 4000000ULL)
                 {
-                    InterlockedCompareExchange((PLONG)&TargetPrcb->IpiFrozen,
-                                               IPI_FROZEN_STATE_RUNNING,
-                                               IPI_FROZEN_STATE_THAW);
-                    break;
+                    /* RUNNING is an acknowledgement from the target, never
+                     * an owner-side recovery value. Re-signal the event and
+                     * keep waiting until the saved frame has been restored. */
+                    __asm__ __volatile__("dsb sy; sev" ::: "memory");
+                    HalRequestDebugWakeIpi(TargetPrcb->SetMember);
+                    Spins = 0;
                 }
             }
         }
@@ -210,6 +258,8 @@ KxSwitchKdProcessor(
     ASSERT(CurrentPrcb->IpiFrozen & IPI_FROZEN_FLAG_ACTIVE);
     CurrentPrcb->IpiFrozen &= ~IPI_FROZEN_FLAG_ACTIVE;
     TargetPrcb->IpiFrozen |= IPI_FROZEN_FLAG_ACTIVE;
+    KeMemoryBarrier();
+    __asm__ __volatile__("dsb sy; sev" ::: "memory");
     HalRequestDebugWakeIpi(TargetPrcb->SetMember);
 
     if (KiFreezeOwner != CurrentPrcb)
@@ -258,11 +308,18 @@ KxFreezeExecution(
     {
         while (KiFreezeOwner != NULL)
         {
-            if (InterlockedCompareExchange((PLONG)&CurrentPrcb->IpiFrozen,
-                                           IPI_FROZEN_STATE_FROZEN,
-                                           IPI_FROZEN_STATE_TARGET_FREEZE) ==
+            if (InterlockedCompareExchange((PLONG)&CurrentPrcb->IpiFrozen, IPI_FROZEN_STATE_SAVING, IPI_FROZEN_STATE_TARGET_FREEZE) ==
                 IPI_FROZEN_STATE_TARGET_FREEZE)
             {
+                /* A simultaneous debugger entry can make this CPU both an
+                 * owner contender and another owner's freeze target. There
+                 * is no synthetic IRQ frame in this path, so capture a real
+                 * inspection context before publishing FROZEN. */
+                RtlCaptureContext(&CurrentPrcb->ProcessorState.ContextFrame);
+                KiSaveProcessorControlState(&CurrentPrcb->ProcessorState);
+                KeMemoryBarrier();
+                InterlockedExchange((PLONG)&CurrentPrcb->IpiFrozen, IPI_FROZEN_STATE_FROZEN);
+
                 for (;;)
                 {
                     ULONG State = CurrentPrcb->IpiFrozen & ~IPI_FROZEN_FLAG_ACTIVE;
@@ -270,9 +327,23 @@ KxFreezeExecution(
                     if (State == IPI_FROZEN_STATE_THAW || State == IPI_FROZEN_STATE_RUNNING)
                         break;
 
+                    if (CurrentPrcb->IpiFrozen & IPI_FROZEN_FLAG_ACTIVE)
+                    {
+                        KCONTINUE_STATUS ContinueStatus;
+
+                        ContinueStatus = KdReportProcessorChange();
+                        CurrentPrcb->IpiFrozen = IPI_FROZEN_STATE_FROZEN;
+                        if ((ContinueStatus == ContinueSuccess) &&
+                            (KiFreezeOwner != NULL))
+                        {
+                            KiFreezeOwner->IpiFrozen = IPI_FROZEN_STATE_THAW;
+                        }
+                    }
+
                     YieldProcessor();
                     KeMemoryBarrier();
                 }
+                KiRestoreProcessorControlState(&CurrentPrcb->ProcessorState);
                 InterlockedExchange((PLONG)&CurrentPrcb->IpiFrozen, IPI_FROZEN_STATE_RUNNING);
             }
             YieldProcessor();
@@ -287,6 +358,7 @@ KxFreezeExecution(
     {
         PKPRCB TargetPrcb = KiProcessorBlock[i];
         ULONG Spins = 0;
+        BOOLEAN Requested = FALSE;
 
         if ((TargetPrcb == NULL) ||
             (TargetPrcb == CurrentPrcb) ||
@@ -295,17 +367,29 @@ KxFreezeExecution(
             continue;
         }
 
-        while (InterlockedCompareExchange((PLONG)&TargetPrcb->IpiFrozen,
-                                          IPI_FROZEN_STATE_TARGET_FREEZE,
-                                          IPI_FROZEN_STATE_RUNNING) !=
-               IPI_FROZEN_STATE_RUNNING)
+        RtlZeroMemory(&TargetPrcb->ProcessorState.ContextFrame, sizeof(TargetPrcb->ProcessorState.ContextFrame));
+        KeMemoryBarrier();
+
+        for (;;)
         {
+            if (InterlockedCompareExchange((PLONG)&TargetPrcb->IpiFrozen, IPI_FROZEN_STATE_TARGET_FREEZE, IPI_FROZEN_STATE_RUNNING) ==
+                IPI_FROZEN_STATE_RUNNING)
+            {
+                Requested = TRUE;
+                break;
+            }
+
             YieldProcessor();
             KeMemoryBarrier();
             if (++Spins > 2000000UL)
             {
                 break;
             }
+        }
+
+        if (!Requested)
+        {
+            KiFreezeTargetSet &= ~TargetPrcb->SetMember;
         }
     }
 

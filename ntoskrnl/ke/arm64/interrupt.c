@@ -51,6 +51,45 @@ static __inline ULONG KiArm64ClockTimerIntId(void)
 static KTRAP_FRAME KiArm64InterruptTrapFrame[MAXIMUM_PROCESSORS];
 static PKTRAP_FRAME KiArm64CurrentInterruptTrapFrame[MAXIMUM_PROCESSORS];
 
+/*
+ * Private frame produced by the IRQ vector stubs. Keep this layout in exact
+ * lockstep with ARM64_IRQ_* in trapvec.S. The tail stores X22-X28 explicitly:
+ * unlike volatile registers, a C call preserves them and therefore cannot
+ * reconstruct their interrupted values after the fact.
+ */
+typedef struct _KI_ARM64_IRQ_FRAME
+{
+    ULONG64 X[22];
+    ULONG64 Fp;
+    ULONG64 Lr;
+    ULONG64 Elr;
+    ULONG64 Spsr;
+    ULONG64 SpEl0;
+    ULONG64 Reserved0;
+    ARM64_NT_NEON128 V[32];
+    ULONG Fpcr;
+    ULONG ReservedFpcr;
+    ULONG Fpsr;
+    UCHAR Reserved1[0x14];
+    ULONG64 X22;
+    ULONG64 X23;
+    ULONG64 X24;
+    ULONG64 X25;
+    ULONG64 X26;
+    ULONG64 X27;
+    ULONG64 X28;
+    ULONG64 Reserved2;
+} KI_ARM64_IRQ_FRAME, *PKI_ARM64_IRQ_FRAME;
+
+C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, Fp) == 0xB0);
+C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, Elr) == 0xC0);
+C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, SpEl0) == 0xD0);
+C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, V) == 0xE0);
+C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, Fpcr) == 0x2E0);
+C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, Fpsr) == 0x2E8);
+C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, X22) == 0x300);
+C_ASSERT(sizeof(KI_ARM64_IRQ_FRAME) == 0x340);
+
 typedef struct DECLSPEC_CACHEALIGN _KI_ARM64_TIMER_STATE
 {
     ULONG Increment;
@@ -95,6 +134,78 @@ KiArm64GetInterruptTrapFrame(
     return KiArm64CurrentInterruptTrapFrame[Cpu] ?
            KiArm64CurrentInterruptTrapFrame[Cpu] :
            &KiArm64InterruptTrapFrame[Cpu];
+}
+
+static
+VOID
+KiArm64BuildFreezeFrames(_In_ ULONG VectorId, _In_ KIRQL PreviousIrql, _In_ PKI_ARM64_IRQ_FRAME IrqFrame, _Out_ PKTRAP_FRAME TrapFrame, _Out_ PKEXCEPTION_FRAME ExceptionFrame, _Out_ PKARM64_VFP_STATE VfpState)
+{
+    ULONG Index;
+
+    RtlZeroMemory(TrapFrame, sizeof(*TrapFrame));
+    RtlZeroMemory(ExceptionFrame, sizeof(*ExceptionFrame));
+    RtlZeroMemory(VfpState, sizeof(*VfpState));
+
+    TrapFrame->PreviousMode = (VectorId >= 8) ? UserMode : KernelMode;
+    TrapFrame->PreviousIrql = PreviousIrql;
+    TrapFrame->VfpState = VfpState;
+    TrapFrame->Spsr = (ULONG)IrqFrame->Spsr;
+    TrapFrame->Sp = (VectorId >= 8) ?
+                    IrqFrame->SpEl0 :
+                    (ULONG_PTR)(IrqFrame + 1);
+    for (Index = 0; Index <= 18; Index++)
+        TrapFrame->X[Index] = IrqFrame->X[Index];
+    TrapFrame->Fp = IrqFrame->Fp;
+    TrapFrame->Lr = IrqFrame->Lr;
+    TrapFrame->Pc = IrqFrame->Elr;
+
+    ExceptionFrame->X19 = IrqFrame->X[19];
+    ExceptionFrame->X20 = IrqFrame->X[20];
+    ExceptionFrame->X21 = IrqFrame->X[21];
+    ExceptionFrame->X22 = IrqFrame->X22;
+    ExceptionFrame->X23 = IrqFrame->X23;
+    ExceptionFrame->X24 = IrqFrame->X24;
+    ExceptionFrame->X25 = IrqFrame->X25;
+    ExceptionFrame->X26 = IrqFrame->X26;
+    ExceptionFrame->X27 = IrqFrame->X27;
+    ExceptionFrame->X28 = IrqFrame->X28;
+    ExceptionFrame->Fp = IrqFrame->Fp;
+    ExceptionFrame->Lr = IrqFrame->Lr;
+    ExceptionFrame->Return = IrqFrame->Elr;
+
+    VfpState->Fpcr = IrqFrame->Fpcr;
+    VfpState->Fpsr = IrqFrame->Fpsr;
+    RtlCopyMemory(VfpState->V, IrqFrame->V, sizeof(VfpState->V));
+}
+
+static
+VOID
+KiArm64RestoreFreezeFrames(_In_ ULONG VectorId, _Inout_ PKI_ARM64_IRQ_FRAME IrqFrame, _In_ PKTRAP_FRAME TrapFrame, _In_ PKEXCEPTION_FRAME ExceptionFrame, _In_ PKARM64_VFP_STATE VfpState)
+{
+    ULONG Index;
+
+    for (Index = 0; Index <= 18; Index++)
+        IrqFrame->X[Index] = TrapFrame->X[Index];
+    IrqFrame->X[19] = ExceptionFrame->X19;
+    IrqFrame->X[20] = ExceptionFrame->X20;
+    IrqFrame->X[21] = ExceptionFrame->X21;
+    IrqFrame->X22 = ExceptionFrame->X22;
+    IrqFrame->X23 = ExceptionFrame->X23;
+    IrqFrame->X24 = ExceptionFrame->X24;
+    IrqFrame->X25 = ExceptionFrame->X25;
+    IrqFrame->X26 = ExceptionFrame->X26;
+    IrqFrame->X27 = ExceptionFrame->X27;
+    IrqFrame->X28 = ExceptionFrame->X28;
+    IrqFrame->Fp = TrapFrame->Fp;
+    IrqFrame->Lr = TrapFrame->Lr;
+    IrqFrame->Elr = TrapFrame->Pc;
+    IrqFrame->Spsr = TrapFrame->Spsr;
+    if (VectorId >= 8)
+        IrqFrame->SpEl0 = TrapFrame->Sp;
+
+    IrqFrame->Fpcr = VfpState->Fpcr;
+    IrqFrame->Fpsr = VfpState->Fpsr;
+    RtlCopyMemory(IrqFrame->V, VfpState->V, sizeof(IrqFrame->V));
 }
 
 static inline void KiRawDebugPuts(const char *str) {
@@ -662,7 +773,7 @@ KiArm64SoftwareInterrupt(_In_ ULONG IntId)
 }
 
 VOID
-KiArm64InterruptDispatchEntry(_In_ ULONG VectorId)
+KiArm64InterruptDispatchEntry(_In_ ULONG VectorId, _In_ PKI_ARM64_IRQ_FRAME IrqFrame)
 {
     ULONG IntId;
     ULONG Cpu;
@@ -690,11 +801,17 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId)
 
     if (IntId == ARM64_SGI_IPI)
     {
+        KTRAP_FRAME FreezeTrapFrame;
+        KEXCEPTION_FRAME FreezeExceptionFrame;
+        KARM64_VFP_STATE FreezeVfpState;
+
         /* Service the reschedule/generic-call IPI directly: KiIpiServiceRoutine is
          * lockless, and taking the shared chain lock here can deadlock KeIpiGenericCall. */
         if (HalBeginSystemInterrupt(IPI_LEVEL, IntId, &OldIrql))
         {
-            KiIpiServiceRoutine(NULL, NULL);
+            KiArm64BuildFreezeFrames(VectorId, OldIrql, IrqFrame, &FreezeTrapFrame, &FreezeExceptionFrame, &FreezeVfpState);
+            KiIpiServiceRoutine(&FreezeTrapFrame, &FreezeExceptionFrame);
+            KiArm64RestoreFreezeFrames(VectorId, IrqFrame, &FreezeTrapFrame, &FreezeExceptionFrame, &FreezeVfpState);
             HalEndSystemInterrupt(OldIrql, NULL);
         }
         return;

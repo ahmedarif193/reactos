@@ -37,7 +37,7 @@ typedef struct _KDB_BREAKPOINT
       /* KdbBreakPointHardware */
       struct {
          UCHAR            DebugReg : 2;
-         UCHAR            Size : 3;
+         UCHAR            Size : 4;
          KDB_ACCESS_TYPE  AccessType;
       } Hw;
    } Data;
@@ -58,6 +58,19 @@ typedef enum _KD_CONTINUE_TYPE
     kdHandleException
 } KD_CONTINUE_TYPE;
 
+FORCEINLINE
+BOOLEAN
+KdbpProcessorStateIsFrozen(
+    _In_ ULONG FrozenState)
+{
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    return (FrozenState & ~IPI_FROZEN_FLAG_ACTIVE) == IPI_FROZEN_STATE_FROZEN;
+#else
+    UNREFERENCED_PARAMETER(FrozenState);
+    return FALSE;
+#endif
+}
+
 
 /* GLOBALS *******************************************************************/
 
@@ -65,6 +78,9 @@ extern volatile PCHAR KdbInitFileBuffer;
 
 extern PEPROCESS KdbCurrentProcess;
 extern PETHREAD KdbCurrentThread;
+extern PETHREAD KdbOriginalThread;
+extern EXCEPTION_RECORD64 KdbCurrentExceptionRecord;
+extern BOOLEAN KdbCurrentExceptionRecordValid;
 extern LONG KdbLastBreakPointNr;
 extern ULONG KdbNumSingleSteps;
 extern BOOLEAN KdbSingleStepOver;
@@ -83,6 +99,9 @@ KdbpDisassemble(
 LONG
 KdbpGetInstLength(
    IN ULONG_PTR Address);
+
+BOOLEAN
+KdbpDisassemblerSelfTest(VOID);
 
 /* from i386/kdb_help.S */
 
@@ -115,6 +134,12 @@ KdbpCliMainLoop(
 VOID
 KdbpCliInterpretInitFile(VOID);
 
+BOOLEAN
+KdbpIsOutputAborted(VOID);
+
+VOID
+KdbpCaptureOutput(IN PCCH String, IN USHORT Length);
+
 VOID
 KdbpCommandHistoryAppend(
     _In_ PCSTR Command);
@@ -144,6 +169,10 @@ KdbpGetHexNumber(
     IN PCHAR pszNum,
     OUT ULONG_PTR *pulValue);
 
+BOOLEAN
+NTAPI
+KdbpGetAddressExpression(IN PCHAR Expression, OUT PULONG_PTR Address);
+
 /* from kdb_expr.c */
 
 BOOLEAN
@@ -168,6 +197,12 @@ KdbpRpnEvaluateParsedExpression(
    OUT PLONG ErrOffset  OPTIONAL,
    OUT PCHAR ErrMsg  OPTIONAL);
 
+NTSTATUS
+KdbpGetRegisterValue(IN PKDB_KTRAP_FRAME TrapFrame, IN PCSTR RegisterName, OUT PULONGLONG Value, OUT PULONG RegisterSize OPTIONAL);
+
+NTSTATUS
+KdbpSetRegisterValue(IN OUT PKDB_KTRAP_FRAME TrapFrame, IN PCSTR RegisterName, IN ULONGLONG Value);
+
 /* from kdb_symbols.c */
 
 BOOLEAN
@@ -180,6 +215,14 @@ BOOLEAN
 KdbSymPrintAddress(
     IN PVOID Address,
     IN PCONTEXT Context);
+
+typedef BOOLEAN (NTAPI *PKDB_SYMBOL_ENUM_CALLBACK)(_In_ ULONG_PTR Address, _In_ PCSTR ModuleName, _In_ PCSTR FunctionName, _In_ PCSTR FileName, _In_ ULONG SourceLine, _In_opt_ PVOID Context);
+
+NTSTATUS
+KdbSymEnumerate(_In_ PCSTR ModulePattern, _In_ PCSTR SymbolPattern, _In_ ULONG MaximumMatches, _In_ PKDB_SYMBOL_ENUM_CALLBACK Callback, _In_opt_ PVOID Context, _Out_ PULONG MatchCount, _Out_ PBOOLEAN Truncated);
+
+BOOLEAN
+KdbSymPrintNearest(_In_ PVOID Address, _In_ PCONTEXT Context);
 
 VOID
 KdbSymProcessSymbols(
@@ -261,8 +304,17 @@ KdbpAttachToThread(
    PVOID ThreadId);
 
 BOOLEAN
+KdbpFindThreadById(IN PVOID ThreadId, OUT PETHREAD *Thread);
+
+BOOLEAN
+KdbpFindProcessById(IN PVOID ProcessId, OUT PEPROCESS *Process);
+
+BOOLEAN
 KdbpAttachToProcess(
    PVOID ProcessId);
+
+BOOLEAN
+KdbpKdbTrapFrameFromKernelStack(PVOID KernelStack, PKDB_KTRAP_FRAME KdbTrapFrame);
 
 VOID
 KdbpGetCommandLineSettings(

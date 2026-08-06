@@ -488,21 +488,35 @@ ExpKdbgExtIrpFindPrint(
     PVOID Context)
 {
     PIRP Irp;
+    IRP IrpSnapshot;
+    POOL_HEADER HeaderSnapshot;
     BOOLEAN IsComplete = FALSE;
     PIRP_FIND_CTXT FindCtxt = Context;
-    PIO_STACK_LOCATION IoStack = NULL;
-    PUNICODE_STRING DriverName = NULL;
+    PIO_STACK_LOCATION IoStackAddress = NULL;
+    IO_STACK_LOCATION IoStackSnapshot;
+    DEVICE_OBJECT DeviceSnapshot;
+    DRIVER_OBJECT DriverSnapshot;
+    MDL MdlSnapshot;
+    UNICODE_STRING DriverNameSnapshot;
+    BOOLEAN HaveIoStack = FALSE;
+    BOOLEAN HaveDriverName = FALSE;
+    PVOID MdlProcess = NULL;
     ULONG_PTR SData = FindCtxt->SData;
     ULONG Criteria = FindCtxt->Criteria;
 
-    /* Free entry, ignore */
-    if (Entry->PoolType == 0)
+    if (!NT_SUCCESS(KdbpSafeReadMemory(&HeaderSnapshot, Entry, sizeof(HeaderSnapshot))) ||
+        HeaderSnapshot.PoolType == 0)
     {
         return;
     }
 
     /* Get the IRP */
     Irp = (PIRP)POOL_FREE_BLOCK(Entry);
+    if (!NT_SUCCESS(KdbpSafeReadMemory(&IrpSnapshot, Irp, sizeof(IrpSnapshot))))
+    {
+        KdbpPrint("%p <unreadable IRP candidate>\n", Irp);
+        return;
+    }
 
     /* Bail out if not matching restart address */
     if ((ULONG_PTR)Irp < FindCtxt->RestartAddress)
@@ -511,34 +525,61 @@ ExpKdbgExtIrpFindPrint(
     }
 
     /* Avoid bogus IRP stack locations */
-    if (Irp->CurrentLocation <= Irp->StackCount + 1)
+    if (IrpSnapshot.CurrentLocation <= IrpSnapshot.StackCount + 1)
     {
-        IoStack = IoGetCurrentIrpStackLocation(Irp);
+        IoStackAddress = IrpSnapshot.Tail.Overlay.CurrentStackLocation;
+        if (IoStackAddress != NULL &&
+            NT_SUCCESS(KdbpSafeReadMemory(&IoStackSnapshot, IoStackAddress, sizeof(IoStackSnapshot))))
+        {
+            HaveIoStack = TRUE;
+        }
 
         /* Get associated driver */
-        if (IoStack->DeviceObject && IoStack->DeviceObject->DriverObject)
-            DriverName = &IoStack->DeviceObject->DriverObject->DriverName;
+        if (HaveIoStack &&
+            IoStackSnapshot.DeviceObject != NULL &&
+            NT_SUCCESS(KdbpSafeReadMemory(&DeviceSnapshot, IoStackSnapshot.DeviceObject, sizeof(DeviceSnapshot))) &&
+            DeviceSnapshot.DriverObject != NULL &&
+            NT_SUCCESS(KdbpSafeReadMemory(&DriverSnapshot, DeviceSnapshot.DriverObject, sizeof(DriverSnapshot))))
+        {
+            DriverNameSnapshot = DriverSnapshot.DriverName;
+            HaveDriverName = TRUE;
+        }
     }
     else
     {
         IsComplete = TRUE;
     }
 
+    if (IrpSnapshot.MdlAddress != NULL &&
+        NT_SUCCESS(KdbpSafeReadMemory(&MdlSnapshot, IrpSnapshot.MdlAddress, sizeof(MdlSnapshot))))
+    {
+        MdlProcess = MdlSnapshot.Process;
+    }
+
     /* Display if: no data, no criteria or if criteria matches data */
     if (SData == 0 || Criteria == 0 ||
-        (Criteria & 0x1 && IoStack && SData == (ULONG_PTR)IoStack->DeviceObject) ||
-        (Criteria & 0x2 && SData == (ULONG_PTR)Irp->Tail.Overlay.OriginalFileObject) ||
-        (Criteria & 0x4 && Irp->MdlAddress && SData == (ULONG_PTR)Irp->MdlAddress->Process) ||
-        (Criteria & 0x8 && SData == (ULONG_PTR)Irp->Tail.Overlay.Thread) ||
-        (Criteria & 0x10 && SData == (ULONG_PTR)Irp->UserEvent))
+        (Criteria & 0x1 && HaveIoStack && SData == (ULONG_PTR)IoStackSnapshot.DeviceObject) ||
+        (Criteria & 0x2 && SData == (ULONG_PTR)IrpSnapshot.Tail.Overlay.OriginalFileObject) ||
+        (Criteria & 0x4 && MdlProcess != NULL && SData == (ULONG_PTR)MdlProcess) ||
+        (Criteria & 0x8 && SData == (ULONG_PTR)IrpSnapshot.Tail.Overlay.Thread) ||
+        (Criteria & 0x10 && SData == (ULONG_PTR)IrpSnapshot.UserEvent))
     {
-        if (!IsComplete)
+        if (!IsComplete && HaveIoStack)
         {
-            KdbpPrint("%p Thread %p current stack (%x, %x) belongs to %wZ\n", Irp, Irp->Tail.Overlay.Thread, IoStack->MajorFunction, IoStack->MinorFunction, DriverName);
+            KdbpPrint("%p Thread %p current stack (%x, %x) belongs to ", Irp, IrpSnapshot.Tail.Overlay.Thread, IoStackSnapshot.MajorFunction, IoStackSnapshot.MinorFunction);
+            if (HaveDriverName)
+                KdbpPrintUnicodeString(&DriverNameSnapshot);
+            else
+                KdbpPrint("<unknown driver>");
+            KdbpPrint("\n");
+        }
+        else if (!IsComplete)
+        {
+            KdbpPrint("%p Thread %p has an unreadable current stack %p\n", Irp, IrpSnapshot.Tail.Overlay.Thread, IoStackAddress);
         }
         else
         {
-            KdbpPrint("%p Thread %p is complete (CurrentLocation %d > StackCount %d)\n", Irp, Irp->Tail.Overlay.Thread, Irp->CurrentLocation, Irp->StackCount + 1);
+            KdbpPrint("%p Thread %p is complete (CurrentLocation %d > StackCount %d)\n", Irp, IrpSnapshot.Tail.Overlay.Thread, IrpSnapshot.CurrentLocation, IrpSnapshot.StackCount + 1);
         }
     }
 }
@@ -619,6 +660,401 @@ ExpKdbgExtIrpFind(
         ExpKdbgExtPoolFindPagedPool(TAG_IRP, 0xFFFFFFFF, ExpKdbgExtIrpFindPrint, &FindCtxt);
     }
 
+    return TRUE;
+}
+
+static BOOLEAN
+ExpKdbgReadPte(IN PCSTR Level, IN PMMPTE PointerPte, OUT PMMPTE Pte)
+{
+    NTSTATUS Status;
+    BOOLEAN Executable;
+
+    Status = KdbpSafeReadMemory(Pte, PointerPte, sizeof(*Pte));
+    if (!NT_SUCCESS(Status))
+    {
+        KdbpPrint("  %-3s %p <unreadable: 0x%08lx>\n", Level, PointerPte, Status);
+        return FALSE;
+    }
+
+    KdbpPrint("  %-3s %p %016I64x ", Level, PointerPte, (ULONGLONG)Pte->u.Long);
+    if (Pte->u.Hard.Valid)
+    {
+#if defined(_M_ARM64)
+        /*
+         * At upper levels, type 3 is a table descriptor.  Its leaf PXN/UXN,
+         * AP, AF and nG bit positions are ignored; ARM64 uses different
+         * *Table fields for hierarchical restrictions.  Do not present the
+         * NT-compatible ignored policy bits as effective page permissions.
+         */
+        if ((strcmp(Level, "PTE") != 0) && !MI_IS_PAGE_LARGE(Pte))
+        {
+            KdbpPrint("valid table pfn %I64x\n", (ULONGLONG)Pte->u.Hard.PageFrameNumber);
+            return TRUE;
+        }
+
+        /* UXN governs EL0 and PXN governs EL1. Report the permission that
+         * corresponds to the descriptor owner instead of treating UXN as a
+         * universal execute-disable bit. */
+        Executable = Pte->u.Hard.Owner ?
+                     MI_IS_PAGE_EXECUTABLE(Pte) :
+                     MI_IS_PAGE_KERNEL_EXECUTABLE(Pte);
+#elif defined(_M_AMD64)
+        Executable = MI_IS_PAGE_EXECUTABLE(Pte);
+        if ((strcmp(Level, "PTE") != 0) && !MI_IS_PAGE_LARGE(Pte))
+        {
+            /* AMD64 upper entries carry hierarchical access restrictions,
+             * not a leaf page's final permissions. Label them as tables and
+             * describe only the restrictions this level contributes. */
+            KdbpPrint("valid table pfn %I64x %s %s %s %s\n",
+                      (ULONGLONG)Pte->u.Hard.PageFrameNumber,
+                      Pte->u.Hard.Owner ? "user-accessible" : "kernel-only",
+                      MI_IS_PAGE_WRITEABLE(Pte) ? "writable" : "read-only",
+                      Executable ? "execute" : "no-execute",
+                      Pte->u.Hard.Accessed ? "accessed" : "not-accessed");
+            return TRUE;
+        }
+#else
+        Executable = MI_IS_PAGE_EXECUTABLE(Pte);
+#endif
+        KdbpPrint("valid pfn %I64x %s %s %s %s%s\n",
+                  (ULONGLONG)Pte->u.Hard.PageFrameNumber,
+                  Pte->u.Hard.Owner ? "user" : "kernel",
+                  MI_IS_PAGE_WRITEABLE(Pte) ? "write" : "read",
+                  Executable ? "execute" : "no-execute",
+                  Pte->u.Hard.Accessed ? "accessed" : "not-accessed",
+                  MI_IS_PAGE_DIRTY(Pte) ? " dirty" : "");
+    }
+    else if (Pte->u.Trans.Transition)
+    {
+        KdbpPrint("transition pfn %I64x protection 0x%lx\n", (ULONGLONG)Pte->u.Trans.PageFrameNumber, (ULONG)Pte->u.Trans.Protection);
+    }
+    else if (Pte->u.Soft.Prototype)
+    {
+#if defined(_M_IX86)
+        KdbpPrint("prototype address %p\n", MiProtoPteToPte(Pte));
+#else
+        KdbpPrint("prototype address %p protection 0x%lx\n", (PVOID)(ULONG_PTR)((ULONGLONG)Pte->u.Proto.ProtoAddress << 4), (ULONG)Pte->u.Proto.Protection);
+#endif
+    }
+    else if (Pte->u.Long != 0)
+    {
+        KdbpPrint("software pagefile %lx:%I64x protection 0x%lx\n", (ULONG)Pte->u.Soft.PageFileLow, (ULONGLONG)Pte->u.Soft.PageFileHigh, (ULONG)Pte->u.Soft.Protection);
+    }
+    else
+    {
+        KdbpPrint("not present\n");
+    }
+    return TRUE;
+}
+
+static VOID
+ExpKdbgPrintPte(IN PVOID Address)
+{
+    MMPTE Entry;
+
+    KdbpPrint("Virtual address %p\n", Address);
+#if defined(_WIN64)
+    if (!ExpKdbgReadPte("PXE", (PMMPTE)MiAddressToPxe(Address), &Entry) ||
+        !Entry.u.Hard.Valid || MI_IS_PAGE_LARGE(&Entry))
+    {
+        return;
+    }
+    if (!ExpKdbgReadPte("PPE", (PMMPTE)MiAddressToPpe(Address), &Entry) ||
+        !Entry.u.Hard.Valid || MI_IS_PAGE_LARGE(&Entry))
+    {
+        return;
+    }
+#endif
+    if (!ExpKdbgReadPte("PDE", (PMMPTE)MiAddressToPde(Address), &Entry) ||
+        !Entry.u.Hard.Valid || MI_IS_PAGE_LARGE(&Entry))
+    {
+        return;
+    }
+    (VOID)ExpKdbgReadPte("PTE", MiAddressToPte(Address), &Entry);
+}
+
+BOOLEAN
+ExpKdbgExtPte(ULONG Argc, PCHAR Argv[])
+{
+    ULONG_PTR Address;
+
+    if (Argc != 2)
+    {
+        KdbpPrint("Usage: !pte address\n");
+        return TRUE;
+    }
+    if (!KdbpGetAddressExpression(Argv[1], &Address))
+    {
+        KdbpPrint("!pte: Invalid address '%s'.\n", Argv[1]);
+        return TRUE;
+    }
+    ExpKdbgPrintPte((PVOID)Address);
+    return TRUE;
+}
+
+BOOLEAN
+ExpKdbgExtPfn(ULONG Argc, PCHAR Argv[])
+{
+    ULONG_PTR PfnValue;
+    PMMPFN PfnAddress;
+    MMPFN Pfn;
+    NTSTATUS Status;
+
+    if (Argc != 2)
+    {
+        KdbpPrint("Usage: !pfn page-frame-number\n");
+        return TRUE;
+    }
+    if (!KdbpGetHexNumber(Argv[1], &PfnValue) ||
+        PfnValue > MmHighestPhysicalPage ||
+        MmPfnDatabase == NULL ||
+        PfnValue > (MAXULONG_PTR - (ULONG_PTR)MmPfnDatabase) / sizeof(MMPFN))
+    {
+        KdbpPrint("!pfn: PFN '%s' is outside the database (highest %I64x).\n", Argv[1], (ULONGLONG)MmHighestPhysicalPage);
+        return TRUE;
+    }
+
+    PfnAddress = MmPfnDatabase + PfnValue;
+    Status = KdbpSafeReadMemory(&Pfn, PfnAddress, sizeof(Pfn));
+    if (!NT_SUCCESS(Status))
+    {
+        KdbpPrint("!pfn: PFN entry %p is unreadable (0x%08lx).\n", PfnAddress, Status);
+        return TRUE;
+    }
+
+    KdbpPrint("PFN %I64x at %p\n"
+              "  PTE address:       %p\n"
+              "  Original PTE:      %016I64x\n"
+              "  Flink/Blink:       %I64x / %I64x\n"
+              "  Reference/Share:   %u / %I64u\n"
+              "  Location/Color:    %u / %u\n"
+              "  Modified/RIP/WIP:  %u / %u / %u\n"
+              "  Prototype/Cache:   %u / %u\n"
+              "  PTE frame:         %I64x\n"
+              "  Priority/Flags:    %u / IPE=%u VA=%u AWE=%u\n",
+              (ULONGLONG)PfnValue,
+              PfnAddress,
+              Pfn.PteAddress,
+              (ULONGLONG)Pfn.OriginalPte.u.Long,
+              (ULONGLONG)Pfn.u1.Flink,
+              (ULONGLONG)Pfn.u2.Blink,
+              Pfn.u3.ReferenceCount,
+              (ULONGLONG)Pfn.u2.ShareCount,
+              Pfn.u3.e1.PageLocation,
+              Pfn.u3.e1.PageColor,
+              Pfn.u3.e1.Modified,
+              Pfn.u3.e1.ReadInProgress,
+              Pfn.u3.e1.WriteInProgress,
+              Pfn.u3.e1.PrototypePte,
+              Pfn.u3.e1.CacheAttribute,
+              (ULONGLONG)Pfn.u4.PteFrame,
+              (ULONG)Pfn.u4.Priority,
+              (ULONG)Pfn.u4.InPageError,
+              (ULONG)Pfn.u4.VerifierAllocation,
+              (ULONG)Pfn.u4.AweAllocation);
+    return TRUE;
+}
+
+static BOOLEAN
+ExpKdbgReadVad(IN PMMVAD VadAddress, OUT PMMVAD Vad)
+{
+    return VadAddress != NULL &&
+           NT_SUCCESS(KdbpSafeReadMemory(Vad, VadAddress, sizeof(*Vad)));
+}
+
+static VOID
+ExpKdbgPrintVad(IN PMMVAD VadAddress, IN PMMVAD Vad)
+{
+    ULONG_PTR Start;
+    ULONG_PTR End;
+
+    if (Vad->StartingVpn > (MAXULONG_PTR >> PAGE_SHIFT) ||
+        Vad->EndingVpn > (MAXULONG_PTR >> PAGE_SHIFT) ||
+        Vad->EndingVpn < Vad->StartingVpn)
+    {
+        KdbpPrint("  %p <invalid VPN range %Ix-%Ix>\n", VadAddress, Vad->StartingVpn, Vad->EndingVpn);
+        return;
+    }
+    Start = Vad->StartingVpn << PAGE_SHIFT;
+    End = (Vad->EndingVpn << PAGE_SHIFT) | (PAGE_SIZE - 1);
+    KdbpPrint("  %p %p-%p prot %02x type %u %s %s commit %Iu CA %p\n",
+              VadAddress,
+              (PVOID)Start,
+              (PVOID)End,
+              (ULONG)Vad->u.VadFlags.Protection,
+              (ULONG)Vad->u.VadFlags.VadType,
+              Vad->u.VadFlags.PrivateMemory ? "private" : "mapped",
+              Vad->u.VadFlags.MemCommit ? "committed" : "reserved",
+              (SIZE_T)Vad->u.VadFlags.CommitCharge,
+              Vad->ControlArea);
+}
+
+static PMMVAD
+ExpKdbgFindVad(IN PEPROCESS Process, IN PVOID Address, OUT PMMVAD Vad)
+{
+    EPROCESS ProcessSnapshot;
+    PMMVAD Node;
+    ULONG_PTR Vpn = (ULONG_PTR)Address >> PAGE_SHIFT;
+    ULONG Count = 0;
+
+    if (!NT_SUCCESS(KdbpSafeReadMemory(&ProcessSnapshot, Process, sizeof(ProcessSnapshot))))
+    {
+        return NULL;
+    }
+    Node = (PMMVAD)ProcessSnapshot.VadRoot.BalancedRoot.RightChild;
+    while (Node != NULL && Count++ < 128)
+    {
+        PMMVAD Next;
+
+        if (!ExpKdbgReadVad(Node, Vad))
+            return NULL;
+        if (Vpn < Vad->StartingVpn)
+            Next = Vad->LeftChild;
+        else if (Vpn > Vad->EndingVpn)
+            Next = Vad->RightChild;
+        else
+            return Node;
+        if (Next == Node)
+            return NULL;
+        Node = Next;
+    }
+    return NULL;
+}
+
+BOOLEAN
+ExpKdbgExtVad(ULONG Argc, PCHAR Argv[])
+{
+    EPROCESS ProcessSnapshot;
+    PMMVAD Stack[64];
+    PMMVAD Node;
+    MMVAD Vad;
+    ULONG Depth = 0;
+    ULONG Count = 0;
+    ULONG_PTR Address;
+
+    if (Argc > 2)
+    {
+        KdbpPrint("Usage: !vad [address]\n");
+        return TRUE;
+    }
+    if (Argc == 2)
+    {
+        if (!KdbpGetAddressExpression(Argv[1], &Address))
+        {
+            KdbpPrint("!vad: Invalid address '%s'.\n", Argv[1]);
+            return TRUE;
+        }
+        Node = ExpKdbgFindVad(KdbCurrentProcess, (PVOID)Address, &Vad);
+        if (Node == NULL)
+            KdbpPrint("!vad: No readable VAD contains %p.\n", (PVOID)Address);
+        else
+            ExpKdbgPrintVad(Node, &Vad);
+        return TRUE;
+    }
+
+    if (!NT_SUCCESS(KdbpSafeReadMemory(&ProcessSnapshot, KdbCurrentProcess, sizeof(ProcessSnapshot))))
+    {
+        KdbpPrint("!vad: Current EPROCESS %p is unreadable.\n", KdbCurrentProcess);
+        return TRUE;
+    }
+    KdbpPrint("VADs for process %p (maximum 65536, depth 64)\n", KdbCurrentProcess);
+    Node = (PMMVAD)ProcessSnapshot.VadRoot.BalancedRoot.RightChild;
+    while ((Node != NULL || Depth != 0) && Count < 65536)
+    {
+        while (Node != NULL)
+        {
+            if (Depth == RTL_NUMBER_OF(Stack) || !ExpKdbgReadVad(Node, &Vad))
+            {
+                KdbpPrint("!vad: Corrupt, too-deep, or unreadable tree at %p.\n", Node);
+                return TRUE;
+            }
+            Stack[Depth++] = Node;
+            if (Vad.LeftChild == Node)
+            {
+                KdbpPrint("!vad: Self-linked left child at %p.\n", Node);
+                return TRUE;
+            }
+            Node = Vad.LeftChild;
+        }
+        Node = Stack[--Depth];
+        if (!ExpKdbgReadVad(Node, &Vad))
+        {
+            KdbpPrint("!vad: VAD %p became unreadable.\n", Node);
+            return TRUE;
+        }
+        ExpKdbgPrintVad(Node, &Vad);
+        Count++;
+        if (Vad.RightChild == Node)
+        {
+            KdbpPrint("!vad: Self-linked right child at %p.\n", Node);
+            return TRUE;
+        }
+        Node = Vad.RightChild;
+        if (KdbpIsOutputAborted())
+            return TRUE;
+    }
+    if (Count == 65536)
+        KdbpPrint("!vad: Enumeration stopped at the safety limit.\n");
+    return TRUE;
+}
+
+BOOLEAN
+ExpKdbgExtAddress(ULONG Argc, PCHAR Argv[])
+{
+    ULONG_PTR Address;
+    MMVAD Vad;
+    PMMVAD VadAddress;
+
+    if (Argc != 2 || !KdbpGetAddressExpression(Argv[1], &Address))
+    {
+        KdbpPrint("Usage: !address address\n");
+        return TRUE;
+    }
+    KdbpPrint("Address %p is %s address space.\n", (PVOID)Address, Address >= (ULONG_PTR)MmSystemRangeStart ? "system" : "user");
+    VadAddress = ExpKdbgFindVad(KdbCurrentProcess, (PVOID)Address, &Vad);
+    if (VadAddress != NULL)
+        ExpKdbgPrintVad(VadAddress, &Vad);
+    else if (Address < (ULONG_PTR)MmSystemRangeStart)
+        KdbpPrint("  No readable VAD contains this user address.\n");
+    ExpKdbgPrintPte((PVOID)Address);
+    return TRUE;
+}
+
+BOOLEAN
+ExpKdbgExtVm(ULONG Argc, PCHAR Argv[])
+{
+    LONGLONG ResidentAvailable;
+
+    UNREFERENCED_PARAMETER(Argv);
+    if (Argc != 1)
+    {
+        KdbpPrint("Usage: !vm\n");
+        return TRUE;
+    }
+    ResidentAvailable = (LONGLONG)(LONG_PTR)MmResidentAvailablePages;
+    KdbpPrint("Physical pages:      %I64u (highest PFN %I64x)\n"
+              "Available/resident:  %I64u / %I64d pages\n"
+              "Commit/limit:        %Iu / %Iu pages\n"
+              "PFN database:        %p\n"
+              "Nonpaged pool:       %p - %p\n"
+              "Paged pool:          %p - %p\n"
+              "System range start:  %p\n",
+              (ULONGLONG)MmNumberOfPhysicalPages,
+              (ULONGLONG)MmHighestPhysicalPage,
+              (ULONGLONG)MmAvailablePages,
+              ResidentAvailable,
+              MmTotalCommittedPages,
+              MmTotalCommitLimit,
+              MmPfnDatabase,
+              MmNonPagedPoolStart,
+              MmNonPagedPoolEnd,
+              MmPagedPoolStart,
+              MmPagedPoolEnd,
+              MmSystemRangeStart);
+    if (ResidentAvailable < 0)
+    {
+        KdbpPrint("WARNING: Resident-available accounting is negative (raw 0x%I64x).\n", (ULONGLONG)MmResidentAvailablePages);
+    }
     return TRUE;
 }
 
