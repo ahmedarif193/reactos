@@ -42,7 +42,7 @@ add_library(uxtheme MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/uxtheme.def)
 
 set_module_type(uxtheme win32dll)
-target_link_libraries(uxtheme wine)
+target_link_libraries(uxtheme wine ${PSEH_LIB})
 add_delay_importlibs(uxtheme msimg32)
 if(DLL_EXPORT_VERSION GREATER_EQUAL 0x600)
     add_importlibs(uxtheme user32_vista user32 advapi32 gdiplus gdi32 shlwapi msvcrt kernel32 ntdll)
