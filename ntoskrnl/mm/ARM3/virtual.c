@@ -3508,12 +3508,18 @@ MmGetVirtualForPhysical(IN PHYSICAL_ADDRESS PhysicalAddress)
     Pfn1 = MiGetPfnEntry(PageFrameIndex);
     if (Pfn1 == NULL) return NULL;
 
+#ifdef _M_ARM64
+    /* Every RAM page has a permanent KSEG0 alias on ARM64. Unlike a PFN's
+     * recorded PTE, this alias is stable in every process and at every IRQL. */
+    return (PVOID)MI_ARM64_PHYS_TO_VA(PhysicalAddress.QuadPart);
+#else
     /*
      * The PFN entry records the PTE that maps this page; reverse that PTE back
      * to the virtual address it maps and add the byte offset within the page.
      */
     return (PVOID)((ULONG_PTR)MiPteToAddress(Pfn1->PteAddress) +
                    BYTE_OFFSET(PhysicalAddress.LowPart));
+#endif
 }
 
 /*
