@@ -2046,10 +2046,10 @@ NtGdiGetFontFileData(
     _In_ SIZE_T cjBuf);
 
 /*
- * NtGdiGetFontFileInfo Win7+ variant uses PFONT_FILE_INFO which is not
- * defined in ReactOS headers. Exclude until the type is available.
+ * NtGdiGetFontFileInfo uses PFONT_FILE_INFO, which is available to ReactOS
+ * internally but remains gated by target version for SDK consumers.
  */
-#if (_WIN32_WINNT >= _WIN32_WINNT_WIN7) && defined(_FONT_FILE_INFO_DEFINED)
+#if ((_WIN32_WINNT >= _WIN32_WINNT_WIN7) || defined(__REACTOS__)) && defined(_FONT_FILE_INFO_DEFINED)
 __kernel_entry
 W32KAPI
 DWORD
@@ -2060,7 +2060,7 @@ NtGdiGetFontFileInfo(
     _Out_writes_bytes_(cjSize) PFONT_FILE_INFO pffi,
     _In_ SIZE_T cjSize,
     _Out_opt_ PSIZE_T pcjActualSize);
-#endif /* (_WIN32_WINNT >= _WIN32_WINNT_WIN7) && _FONT_FILE_INFO_DEFINED */
+#endif /* ((_WIN32_WINNT >= _WIN32_WINNT_WIN7) || __REACTOS__) && _FONT_FILE_INFO_DEFINED */
 
 __kernel_entry
 W32KAPI
