@@ -50,7 +50,7 @@ NvmeCreateIoQueues(_In_ PNVME_DEVICE_EXTENSION Device)
         Command.CDW10 = ((Queue->Entries - 1) << 16) | Queue->QueueId;
         Command.CDW11 = (Queue->Vector << 16) | 0x3;
         if (!NvmeAdminCommandSync(Device, &Command, NULL))
-            return FALSE;
+            goto Failure;
 
         RtlZeroMemory(&Command, sizeof(Command));
         NVME_COMMAND_SET_OPCODE(&Command, NVME_ADMIN_CREATE_SQ, 0);
@@ -58,12 +58,18 @@ NvmeCreateIoQueues(_In_ PNVME_DEVICE_EXTENSION Device)
         Command.CDW10 = ((Queue->Entries - 1) << 16) | Queue->QueueId;
         Command.CDW11 = (Queue->QueueId << 16) | 0x1;
         if (!NvmeAdminCommandSync(Device, &Command, NULL))
-            return FALSE;
+            goto Failure;
 
         Queue->Created = TRUE;
     }
     DPRINT1("stornvme: %lu I/O queues on %lu message(s)\n", Device->IoQueueCount, Device->MessageCount);
     return TRUE;
+
+Failure:
+    NvmeDisableController(Device);
+    for (Index = 0; Index < Device->IoQueueCount; Index++)
+        Device->IoQueues[Index].Created = FALSE;
+    return FALSE;
 }
 
 PNVME_QUEUE

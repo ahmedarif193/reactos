@@ -274,7 +274,11 @@ NvmeHwInitialize(_In_ PVOID DeviceExtension)
     Device->InterruptsLive = TRUE;
 
     if (!NvmeCreateIoQueues(Device))
+    {
+        Device->InterruptsLive = FALSE;
+        NvmeMaskDeviceInterrupts(Device, TRUE);
         return FALSE;
+    }
 
     NvmeWriteRegister(Device, NVME_REG_INTMC, 0xFFFFFFFF);
     NvmeMaskDeviceInterrupts(Device, FALSE);
