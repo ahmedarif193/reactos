@@ -18,8 +18,8 @@
  26 stub LaunchWizard@20
 @ stdcall -private DllGetClassObject(ptr ptr ptr)
 @ stdcall -private DllCanUnloadNow()
- 29 stub MAPIOpenFormMgr
- 30 stub MAPIOpenFormMgr@8
+ 29 stdcall MAPIOpenFormMgr(ptr ptr)
+ 30 stdcall MAPIOpenFormMgr@8(ptr ptr) MAPIOpenFormMgr
  31 stdcall MAPIOpenLocalFormContainer(ptr)
  32 stdcall MAPIOpenLocalFormContainer@4(ptr) MAPIOpenLocalFormContainer
  33 stdcall ScInitMapiUtil@4(long) ScInitMapiUtil
@@ -178,14 +178,14 @@
 239 stdcall HrDispatchNotifications@4(long) HrDispatchNotifications
 241 stub HrValidateParameters@8
 244 stub ScCreateConversationIndex@16
-246 stub HrGetOmiProvidersFlags
-247 stub HrGetOmiProvidersFlags@8
-248 stub HrSetOmiProvidersFlagsInvalid
-249 stub HrSetOmiProvidersFlagsInvalid@4
-250 stub GetOutlookVersion
-251 stub GetOutlookVersion@0
-252 stub FixMAPI
-253 stub FixMAPI@0
+246 stdcall HrGetOmiProvidersFlags(ptr ptr)
+247 stdcall HrGetOmiProvidersFlags@8(ptr ptr) HrGetOmiProvidersFlags
+248 stdcall HrSetOmiProvidersFlagsInvalid(ptr)
+249 stdcall HrSetOmiProvidersFlagsInvalid@4(ptr) HrSetOmiProvidersFlagsInvalid
+250 stdcall GetOutlookVersion()
+251 stdcall GetOutlookVersion@0() GetOutlookVersion
+252 stdcall FixMAPI()
+253 stdcall FixMAPI@0() FixMAPI
 254 stdcall FGetComponentPath(str str ptr long long)
 255 stdcall FGetComponentPath@20(str str ptr long long) FGetComponentPath
 256 stdcall MAPISendMailW(ptr long ptr long long)
