@@ -50,6 +50,7 @@ list(APPEND SOURCE
     libldap/vlvctrl.c)
 
 add_library(ldap STATIC ${SOURCE})
+add_dependencies(ldap psdk)
 target_include_directories(ldap PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_definitions(ldap PRIVATE _DLL __USE_CRTIMP _CRT_DECLARE_NONSTDC_NAMES=1 strcasecmp=_stricmp strncasecmp=_strnicmp)
 target_link_libraries(ldap oldnames)
