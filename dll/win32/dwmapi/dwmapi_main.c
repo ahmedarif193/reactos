@@ -32,6 +32,9 @@
 #include "winbase.h"
 #include "wingdi.h"
 #include "winuser.h"
+#ifdef __REACTOS__
+#include <reactos/user32_vista.h>
+#endif
 #include "dwmapi.h"
 #include "wine/debug.h"
 

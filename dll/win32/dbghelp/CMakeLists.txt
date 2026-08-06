@@ -82,7 +82,7 @@ else()
     set_module_type(dbghelp win32dll)
     target_link_libraries(dbghelp wine ${PSEH_LIB} oldnames zlib)
     add_delay_importlibs(dbghelp version)
-    add_importlibs(dbghelp psapi msvcrt kernel32 ntdll)
+    add_importlibs(dbghelp psapi msvcrt kernel32_vista kernel32 ntdll)
     add_cd_file(TARGET dbghelp DESTINATION reactos/system32 FOR all)
     set_wine_module(dbghelp)
 

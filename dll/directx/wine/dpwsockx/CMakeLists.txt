@@ -9,6 +9,6 @@ add_library(dpwsockx MODULE
 
 set_module_type(dpwsockx win32dll)
 target_link_libraries(dpwsockx dxguid wine)
-add_importlibs(dpwsockx ws2_32 msvcrt kernel32 ntdll)
+add_importlibs(dpwsockx ws2_32 msvcrt kernel32_vista kernel32 ntdll)
 add_cd_file(TARGET dpwsockx DESTINATION reactos/system32 FOR all)
 set_wine_module(dpwsockx)

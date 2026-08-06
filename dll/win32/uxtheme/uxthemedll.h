@@ -23,6 +23,9 @@
 
 #include <wingdi.h>
 #include <winuser.h>
+#ifdef __REACTOS__
+#include <reactos/user32_vista.h>
+#endif
 #include <uxtheme.h>
 #include <msstyles.h>
 
