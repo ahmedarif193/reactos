@@ -548,9 +548,11 @@ NvmeCompleteLogSenseSrb(_In_ PNVME_DEVICE_EXTENSION Device, _In_ PSCSI_REQUEST_B
         return;
     }
 
-    Celsius = Smart->CompositeTemperature > 273
-                  ? (UCHAR)(Smart->CompositeTemperature - 273)
-                  : 0;
+    Celsius = Smart->CompositeTemperature > 528
+                  ? MAXUCHAR
+                  : Smart->CompositeTemperature > 273
+                        ? (UCHAR)(Smart->CompositeTemperature - 273)
+                        : 0;
     RtlZeroMemory(Buffer, sizeof(Buffer));
     if (SrbExtension->ScsiLogPage == LOG_PAGE_CODE_TEMPERATURE)
     {
@@ -810,8 +812,11 @@ NvmeHandleUnmap(_In_ PNVME_DEVICE_EXTENSION Device,
     }
 
     DescriptorLength = ((ULONG)Data[2] << 8) | Data[3];
-    if (DescriptorLength > DataLength - 8)
-        DescriptorLength = DataLength - 8;
+    if (DescriptorLength > DataLength - 8 || (DescriptorLength % 16) != 0)
+    {
+        NvmeSetSenseAndComplete(Device, Srb, SCSI_SENSE_ILLEGAL_REQUEST, 0x26);
+        return;
+    }
 
     for (Offset = 8; Offset + 16 <= 8 + DescriptorLength; Offset += 16)
     {

@@ -13,7 +13,7 @@ NvmeParsePowerCapabilities(_In_ PNVME_DEVICE_EXTENSION Device, _In_ PNVME_IDENTI
 {
     ULONG State;
 
-    Device->Npss = Identify->NPSS;
+    Device->Npss = min(Identify->NPSS, RTL_NUMBER_OF(Device->Psd) - 1);
     Device->Apsta = Identify->APSTA;
     Device->Wctemp = Identify->WCTEMP;
     Device->Cctemp = Identify->CCTEMP;
