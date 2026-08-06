@@ -1564,7 +1564,7 @@ TAB_DrawItemInterior(const TAB_INFO *infoPtr, HDC hdc, INT iItem, RECT *drawRect
   HPEN   holdPen;
   INT    oldBkMode;
   HFONT  hOldFont;
-#ifdef __REACTOS__
+#if defined(__REACTOS__) && __WINE_COMCTL32_VERSION == 6
 HTHEME    theme = GetWindowTheme (infoPtr->hwnd);
 #endif
   
@@ -1942,7 +1942,7 @@ HTHEME    theme = GetWindowTheme (infoPtr->hwnd);
       TRACE("for <%s>, c_o_h=%d, c_o_v=%d, draw=(%s), textlen=%ld\n",
 	  debugstr_w(item->pszText), center_offset_h, center_offset_v,
           wine_dbgstr_rect(drawRect), (rcText.right-rcText.left));
-#ifdef __REACTOS__
+#if defined(__REACTOS__) && __WINE_COMCTL32_VERSION == 6
       if (theme && item->pszText)
       {
           int partIndex = iItem == infoPtr->iSelected ? TABP_TABITEM : TABP_TOPTABITEM;
