@@ -74,6 +74,7 @@ typedef enum _OUTPUT_FORMAT
 typedef struct _PARTITION_INPUT
 {
     const char* Path;
+    int Blank;
     unsigned int StartSector;
     unsigned char Type;
     FILE* File;
@@ -96,11 +97,12 @@ typedef struct _PARTITION_ENTRY
 
 static void print_usage(const char* name)
 {
-    printf("Usage: %s -o <output> [-mbr <mbr.bin>] -partition <part.img> [-start <sector>] [-type <hex>] ... [-format <raw|vhd>] [-vhd]\n\n", name);
+    printf("Usage: %s -o <output> [-mbr <mbr.bin>] {-partition <part.img>|-blank <sectors>} [-start <sector>] [-type <hex>] ... [-format <raw|vhd>] [-vhd]\n\n", name);
     printf("  -o <output>         Output image file\n");
     printf("  -mbr <mbr.bin>      MBR boot code binary (first 440 bytes used).\n");
     printf("                      Optional; omit on UEFI-only platforms to leave the boot code area zeroed.\n");
     printf("  -partition <img>    Raw FAT, exFAT, or NTFS partition image (up to four)\n");
+    printf("  -blank <sectors>    Zero-filled partition with no filesystem (up to four)\n");
     printf("  -start <sector>     Start sector for the preceding partition (first defaults to %d)\n", DEFAULT_START_SECTOR);
     printf("  -type <hex>         Type ID for the preceding partition (first defaults to 0x%02X)\n", DEFAULT_PARTITION_TYPE);
     printf("  -format <raw|vhd>   Output container format (default: raw)\n");
@@ -137,6 +139,15 @@ static int write_zero_bytes(FILE* file, unsigned long long size)
             return -1;
         size -= chunk;
     }
+    return 0;
+}
+
+static int initialize_zeroed_file(FILE* file, long size)
+{
+    /* Extending a new file with one trailing zero preserves zero-filled byte
+     * semantics while allowing filesystems that support holes to keep it sparse. */
+    if (size <= 0 || fseek(file, size - 1, SEEK_SET) != 0 || fputc(0, file) == EOF)
+        return -1;
     return 0;
 }
 
@@ -868,8 +879,10 @@ int main(int argc, char* argv[])
         {
             mbr_path = argv[++i];
         }
-        else if (strcmp(argv[i], "-partition") == 0 && i + 1 < argc)
+        else if ((strcmp(argv[i], "-partition") == 0 || strcmp(argv[i], "-blank") == 0) && i + 1 < argc)
         {
+            const int blank = strcmp(argv[i], "-blank") == 0;
+            const char* value = argv[++i];
             PARTITION_INPUT* partition;
 
             if (partition_count == MAX_MBR_PARTITIONS)
@@ -880,9 +893,21 @@ int main(int argc, char* argv[])
 
             current_partition = (int)partition_count++;
             partition = &partitions[current_partition];
-            partition->Path = argv[++i];
+            partition->Blank = blank;
             partition->StartSector = current_partition == 0 ? DEFAULT_START_SECTOR : 0;
             partition->Type = current_partition == 0 ? DEFAULT_PARTITION_TYPE : 0x07;
+            if (blank)
+            {
+                if (parse_unsigned(value, 10, 0xFFFFFFFFU, &partition->SectorCount) != 0 || partition->SectorCount == 0)
+                {
+                    fprintf(stderr, "Error: Invalid blank partition size.\n");
+                    goto cleanup;
+                }
+            }
+            else
+            {
+                partition->Path = value;
+            }
         }
         else if (strcmp(argv[i], "-start") == 0 && i + 1 < argc)
         {
@@ -973,33 +998,38 @@ int main(int argc, char* argv[])
             goto cleanup;
         }
 
-        partition->File = fopen(partition->Path, "rb");
-        if (!partition->File)
+        if (partition->Blank)
         {
-            fprintf(stderr, "Error: Cannot open partition image '%s'.\n", partition->Path);
-            goto cleanup;
-        }
-        if (fseek(partition->File, 0, SEEK_END) != 0 ||
-            (partition->Size = ftell(partition->File)) <= 0 ||
-            partition->Size % SECTOR_SIZE != 0 ||
-            fseek(partition->File, 0, SEEK_SET) != 0)
-        {
-            fprintf(stderr, "Error: Partition image '%s' has an invalid size.\n",
-                    partition->Path);
-            goto cleanup;
-        }
-        if (fread(partition->BootSector,
-                  1,
-                  sizeof(partition->BootSector),
-                  partition->File) != sizeof(partition->BootSector) ||
-            fseek(partition->File, 0, SEEK_SET) != 0)
-        {
-            fprintf(stderr, "Error: Cannot read partition boot sector from '%s'.\n",
-                    partition->Path);
-            goto cleanup;
-        }
+            unsigned long long partition_size = (unsigned long long)partition->SectorCount * SECTOR_SIZE;
 
-        partition->SectorCount = (unsigned int)(partition->Size / SECTOR_SIZE);
+            if (partition_size > (unsigned long long)LONG_MAX)
+            {
+                fprintf(stderr, "Error: Blank partition %u is too large for this host.\n", index + 1);
+                goto cleanup;
+            }
+            partition->Size = (long)partition_size;
+        }
+        else
+        {
+            partition->File = fopen(partition->Path, "rb");
+            if (!partition->File)
+            {
+                fprintf(stderr, "Error: Cannot open partition image '%s'.\n", partition->Path);
+                goto cleanup;
+            }
+            if (fseek(partition->File, 0, SEEK_END) != 0 || (partition->Size = ftell(partition->File)) <= 0 || partition->Size % SECTOR_SIZE != 0 || fseek(partition->File, 0, SEEK_SET) != 0)
+            {
+                fprintf(stderr, "Error: Partition image '%s' has an invalid size.\n", partition->Path);
+                goto cleanup;
+            }
+            if (fread(partition->BootSector, 1, sizeof(partition->BootSector), partition->File) != sizeof(partition->BootSector) || fseek(partition->File, 0, SEEK_SET) != 0)
+            {
+                fprintf(stderr, "Error: Cannot read partition boot sector from '%s'.\n", partition->Path);
+                goto cleanup;
+            }
+
+            partition->SectorCount = (unsigned int)(partition->Size / SECTOR_SIZE);
+        }
         end_sector = (unsigned long long)partition->StartSector + partition->SectorCount;
         if (end_sector == 0 || end_sector - 1 > 0xFFFFFFFFULL)
         {
@@ -1064,7 +1094,7 @@ int main(int argc, char* argv[])
         }
     }
 
-    if (write_zero_bytes(f_output, (unsigned long long)total_size) != 0 ||
+    if (initialize_zeroed_file(f_output, total_size) != 0 ||
         fseek(f_output, 0, SEEK_SET) != 0 ||
         fwrite(mbr_sector, 1, sizeof(mbr_sector), f_output) != sizeof(mbr_sector))
     {
@@ -1076,6 +1106,9 @@ int main(int argc, char* argv[])
     {
         PARTITION_INPUT* partition = &partitions[index];
         long output_offset = (long)partition->StartSector * SECTOR_SIZE;
+
+        if (partition->Blank)
+            continue;
 
         if (fseek(f_output, output_offset, SEEK_SET) != 0 ||
             fseek(partition->File, 0, SEEK_SET) != 0 ||
