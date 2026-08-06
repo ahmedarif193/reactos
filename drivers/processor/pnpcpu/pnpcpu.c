@@ -1399,13 +1399,18 @@ PnpcpuRefreshCapabilities(
     ULONG CapabilityMask = 0;
     ULONG Index;
 
+    if (!DeviceExtension->ProcessorNumberValid)
+    {
+        DeviceExtension->CapabilityMask = 0;
+        RtlZeroMemory(DeviceExtension->CapabilityCounts, sizeof(DeviceExtension->CapabilityCounts));
+        return;
+    }
     for (Index = 0; Index < RTL_NUMBER_OF(Methods); Index++)
     {
         if (PnpcpuProbeMethod(DeviceExtension, Methods[Index], &DeviceExtension->CapabilityCounts[Index]))
             CapabilityMask |= 1u << Index;
     }
     DeviceExtension->CapabilityMask = CapabilityMask;
-    PnpcpuPublishProperties(DeviceExtension);
 
     DPRINT1("PNPCPU: uid=%s%lu apic=%s%lu pxm=%s%lu active=%lu caps=0x%02lx CPC=%lu CST=%lu PSS=%lu PCT=%lu PSD=%lu PPC=%lu TSS=%lu TSD=%lu\n",
             DeviceExtension->UidValid ? "" : "?", DeviceExtension->Uid,
@@ -1429,6 +1434,8 @@ PnpcpuWorker(
     KeWaitForSingleObject(&DeviceExtension->ConfigurationLock, Executive, KernelMode, FALSE, NULL);
     if (DeviceExtension->Started && !DeviceExtension->Removing)
     {
+        if (!DeviceExtension->ProcessorNumberValid)
+            PnpcpuFindProcessorNumber(DeviceExtension);
         PnpcpuRefreshCapabilities(DeviceExtension);
         PnpcpuRefreshPowerConfiguration(DeviceExtension);
         PnpcpuPublishProperties(DeviceExtension);
