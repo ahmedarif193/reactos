@@ -4,6 +4,7 @@
  * PURPOSE:     ReactOS emulation layer for crypt32 unixlib calls
  * COPYRIGHT:   Copyright 2026 Timo Kreuzer <timo.kreuzer@reactos.org>
  */
+#include <ntstatus.h>
 #include <assert.h>
 #include <windef.h>
 #include <winbase.h>
