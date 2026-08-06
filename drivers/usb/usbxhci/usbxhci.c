@@ -11679,7 +11679,10 @@ XHCI_SubmitSgTransfer(
         goto Failure;
     }
 
+    /* USBPORT crash-dump requests are already staged through one low,
+     * noncached page. Do not allocate and copy through a second bounce page. */
     if (Remaining &&
+        !(TransferParameters->TransferFlags & USBPORT_TRANSFER_FLAG_DUMP) &&
         ((Extension->Quirks & XHCI_QUIRK_NON_COHERENT_DMA) ||
          (XHCI_Requires32BitDma(Extension) &&
           XHCI_SgListHasHighAddress(SgList, &HighAddress))))
@@ -11702,6 +11705,8 @@ XHCI_SubmitSgTransfer(
                 DPRINT1("usbxhci: sg OUT bounce copy short (%lu/%lu)\n",
                         Copied,
                         Transfer->BounceLength);
+                Status = MP_STATUS_ERROR;
+                goto Failure;
             }
         }
     }
