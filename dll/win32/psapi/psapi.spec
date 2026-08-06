@@ -3,6 +3,7 @@
 @ stdcall EnumPageFilesA(ptr ptr)
 @ stdcall EnumPageFilesW(ptr ptr)
 @ stdcall EnumProcessModules(ptr ptr long ptr)
+@ stdcall EnumProcessModulesEx(ptr ptr long ptr long)
 @ stdcall EnumProcesses(ptr long ptr)
 @ stdcall GetDeviceDriverBaseNameA(ptr ptr long)
 @ stdcall GetDeviceDriverBaseNameW(ptr ptr long)

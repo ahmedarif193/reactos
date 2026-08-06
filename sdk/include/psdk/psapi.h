@@ -22,7 +22,11 @@
 #define __WINE_PSAPI_H
 
 #ifndef PSAPI_VERSION
+#if (NTDDI_VERSION >= NTDDI_WIN7)
 #define PSAPI_VERSION 2
+#else
+#define PSAPI_VERSION 1
+#endif
 #endif
 
 typedef struct _MODULEINFO {
