@@ -1,5 +1,6 @@
 add_executable(kdlogwatchdog kdlogwatchdog.c kdlogwatchdog.rc)
 set_module_type(kdlogwatchdog win32cui UNICODE)
+target_compile_definitions(kdlogwatchdog PRIVATE KD_LOG_WATCHDOG_DEFAULT_SECONDS=${_KD_LOG_WATCHDOG_DEFAULT_SECONDS})
 add_importlibs(kdlogwatchdog advapi32 msvcrt kernel32 ntdll)
 add_cd_file(TARGET kdlogwatchdog DESTINATION reactos/system32 FOR all)
 add_registry_inf(kdlogwatchdog_reg.inf)

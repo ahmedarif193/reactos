@@ -99,6 +99,28 @@ config FREELDR_HTTP_BOOT
       live image over HTTP and boots it as a ramdisk. Packages the
       board's UEFI network drivers onto the boot media.
 
+config ENABLE_KD_WATCHDOG
+    prompt "Enable KD log-stall watchdog"
+    type bool
+    default y
+    depends BUILD_TYPE=Debug
+    help
+      Enable the internal-debugger log-stall watchdog by default. Disabling
+      this uses a timeout of zero; /KDWATCHDOG=<seconds> can still enable it
+      for an individual boot.
+
+config KD_WATCHDOG_TIMEOUT
+    prompt "Default KD watchdog timeout (seconds)"
+    type string
+    default 6
+    depends BUILD_TYPE=Debug
+    depends ENABLE_KD_WATCHDOG=y
+    help
+      Default timeout for the internal-debugger log-stall watchdog when
+      the boot options do not contain /KDWATCHDOG. A boot entry can still
+      override it with /KDWATCHDOG=<seconds>; zero disables it. Valid values
+      for the enabled default range from 5 to 3600 seconds.
+
 endmenu
 
 menu "Modules"

@@ -73,6 +73,22 @@ set(KD_DEFAULT_TRANSPORT "KDCOM" CACHE STRING
  KDCOM KDGDB")
 set_property(CACHE KD_DEFAULT_TRANSPORT PROPERTY STRINGS KDCOM KDGDB)
 
+set(ENABLE_KD_WATCHDOG TRUE CACHE BOOL
+"Whether to enable the KD log-stall watchdog by default")
+
+set(KD_WATCHDOG_TIMEOUT "6" CACHE STRING
+"Default KD log-stall watchdog timeout in seconds when enabled")
+if(NOT KD_WATCHDOG_TIMEOUT MATCHES "^[0-9]+$" OR
+   KD_WATCHDOG_TIMEOUT LESS 5 OR KD_WATCHDOG_TIMEOUT GREATER 3600)
+    message(FATAL_ERROR
+        "KD_WATCHDOG_TIMEOUT must be an integer between 5 and 3600 seconds")
+endif()
+if(ENABLE_KD_WATCHDOG)
+    set(_KD_LOG_WATCHDOG_DEFAULT_SECONDS ${KD_WATCHDOG_TIMEOUT})
+else()
+    set(_KD_LOG_WATCHDOG_DEFAULT_SECONDS 0)
+endif()
+
 set(GDB FALSE CACHE BOOL
 "Whether to use by default KDGDB.DLL instead of KDCOM.DLL for debugging with GDB.
 Mainly used for cloud-based ReactOS development using Gitpod and Docker.
