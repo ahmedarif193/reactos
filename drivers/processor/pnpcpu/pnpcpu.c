@@ -19,6 +19,12 @@ static PPNPCPU_DEVICE_EXTENSION PnpcpuProcessors[MAXIMUM_PROCESSORS];
 
 #if defined(_M_IX86) || defined(_M_AMD64)
 #define PNPCPU_INTEL_PERF_CTL_MSR 0x199
+#define PNPCPU_INTEL_PM_ENABLE_MSR 0x770
+#define PNPCPU_INTEL_HWP_CAPABILITIES_MSR 0x771
+#define PNPCPU_INTEL_HWP_REQUEST_MSR 0x774
+#define PNPCPU_INTEL_HWP_ENABLE 0x1
+#define PNPCPU_INTEL_HWP_REQUEST_PERF_MASK 0xFFFFFFULL
+#define PNPCPU_INTEL_HWP_REQUEST_PACKAGE_CONTROL (1ULL << 42)
 
 #if defined(__clang__) || defined(__GNUC__)
 __attribute__((target("sse3")))
@@ -625,10 +631,14 @@ PnpcpuQueryProcessorFeatures(
     int Registers[4];
     ULONG MaximumLeaf;
     KAFFINITY PreviousAffinity = 0;
+    ULONGLONG Capabilities;
 
     DeviceExtension->MonitorMwaitSupported = FALSE;
     DeviceExtension->IntelEstSupported = FALSE;
+    DeviceExtension->IntelHwpSupported = FALSE;
     DeviceExtension->MwaitSubstates = 0;
+    DeviceExtension->HwpHighest = 0;
+    DeviceExtension->HwpLowest = 0;
     if (DeviceExtension->ProcessorNumberValid)
         PreviousAffinity = KeSetSystemAffinityThreadEx((KAFFINITY)1 << DeviceExtension->ProcessorNumber);
     __cpuid(Registers, 0);
@@ -645,6 +655,17 @@ PnpcpuQueryProcessorFeatures(
             __cpuid(Registers, 5);
             DeviceExtension->MonitorMwaitSupported = (Registers[2] & 3) == 3;
             DeviceExtension->MwaitSubstates = (ULONG)Registers[3];
+        }
+        if (Intel && DeviceExtension->ProcessorNumberValid && MaximumLeaf >= 6)
+        {
+            __cpuid(Registers, 6);
+            if ((Registers[0] & (1 << 7)) != 0)
+            {
+                Capabilities = __readmsr(PNPCPU_INTEL_HWP_CAPABILITIES_MSR);
+                DeviceExtension->HwpHighest = (UCHAR)Capabilities;
+                DeviceExtension->HwpLowest = (UCHAR)(Capabilities >> 24);
+                DeviceExtension->IntelHwpSupported = DeviceExtension->HwpHighest != 0 && DeviceExtension->HwpLowest <= DeviceExtension->HwpHighest;
+            }
         }
     }
     if (DeviceExtension->ProcessorNumberValid)
@@ -665,6 +686,22 @@ PnpcpuMwaitHintSupported(
     if (CState >= 8)
         return FALSE;
     return ((DeviceExtension->MwaitSubstates >> (CState * 4)) & 0xF) != 0;
+}
+
+static
+VOID
+PnpcpuInitializeHwpPerformance(
+    _Inout_ PPNPCPU_DEVICE_EXTENSION DeviceExtension)
+{
+    if (!DeviceExtension->IntelHwpSupported)
+        return;
+
+    DeviceExtension->PerfMode = PNPCPU_PERF_HWP;
+    DeviceExtension->PerfStateCount = 2;
+    DeviceExtension->PerfStates[0].Percentage = 100;
+    DeviceExtension->PerfStates[0].Frequency = DeviceExtension->HwpHighest;
+    DeviceExtension->PerfStates[1].Percentage = (UCHAR)max(1, ((ULONG)DeviceExtension->HwpLowest * 100) / DeviceExtension->HwpHighest);
+    DeviceExtension->PerfStates[1].Frequency = DeviceExtension->HwpLowest;
 }
 #endif
 
@@ -730,6 +767,8 @@ PnpcpuReleasePowerConfiguration(
     DeviceExtension->CppcLowestNonlinear = 0;
     DeviceExtension->CppcLowest = 0;
     DeviceExtension->CppcRestoreMask = 0;
+    DeviceExtension->HwpRequestCaptured = FALSE;
+    DeviceExtension->HwpOriginalRequest = 0;
 }
 
 static
@@ -1002,6 +1041,9 @@ PnpcpuSetPerfLevel(
     ULONG SelectedPercentage = 0;
     ULONG LowestPercentage = MAXULONG;
     ULONGLONG Value;
+#if defined(_M_IX86) || defined(_M_AMD64)
+    ULONGLONG Request;
+#endif
     BOOLEAN Found = FALSE;
     NTSTATUS Status;
 
@@ -1023,6 +1065,19 @@ PnpcpuSetPerfLevel(
         Value = min(Value, (ULONGLONG)DeviceExtension->CppcHighest);
         return PnpcpuWriteRegister(&DeviceExtension->CppcDesired, Value);
     }
+#if defined(_M_IX86) || defined(_M_AMD64)
+    if (DeviceExtension->PerfMode == PNPCPU_PERF_HWP)
+    {
+        Value = ((ULONGLONG)DeviceExtension->HwpHighest * Throttle) / 100;
+        Value = max(Value, (ULONGLONG)DeviceExtension->HwpLowest);
+        Value = min(Value, (ULONGLONG)DeviceExtension->HwpHighest);
+        Request = __readmsr(PNPCPU_INTEL_HWP_REQUEST_MSR);
+        Request &= ~(PNPCPU_INTEL_HWP_REQUEST_PERF_MASK | PNPCPU_INTEL_HWP_REQUEST_PACKAGE_CONTROL);
+        Request |= DeviceExtension->HwpLowest | (Value << 8) | (Value << 16);
+        __writemsr(PNPCPU_INTEL_HWP_REQUEST_MSR, Request);
+        return STATUS_SUCCESS;
+    }
+#endif
     if (DeviceExtension->PerfMode != PNPCPU_PERF_PSS || DeviceExtension->PerfStateCount == 0)
         return STATUS_NOT_SUPPORTED;
     for (Index = 0; Index < DeviceExtension->PerfStateCount; Index++)
@@ -1221,6 +1276,43 @@ PnpcpuEnableCppcConfiguration(
     return Status;
 }
 
+#if defined(_M_IX86) || defined(_M_AMD64)
+static
+NTSTATUS
+PnpcpuEnableHwpConfiguration(
+    _Inout_ PPNPCPU_DEVICE_EXTENSION DeviceExtension)
+{
+    ULONGLONG Enable;
+    ULONGLONG Request;
+
+    if (DeviceExtension->PerfMode != PNPCPU_PERF_HWP)
+        return STATUS_SUCCESS;
+    Enable = __readmsr(PNPCPU_INTEL_PM_ENABLE_MSR);
+    if ((Enable & PNPCPU_INTEL_HWP_ENABLE) == 0)
+        __writemsr(PNPCPU_INTEL_PM_ENABLE_MSR, Enable | PNPCPU_INTEL_HWP_ENABLE);
+    if ((__readmsr(PNPCPU_INTEL_PM_ENABLE_MSR) & PNPCPU_INTEL_HWP_ENABLE) == 0)
+        return STATUS_NOT_SUPPORTED;
+
+    DeviceExtension->HwpOriginalRequest = __readmsr(PNPCPU_INTEL_HWP_REQUEST_MSR);
+    DeviceExtension->HwpRequestCaptured = TRUE;
+    Request = DeviceExtension->HwpOriginalRequest & ~(PNPCPU_INTEL_HWP_REQUEST_PERF_MASK | PNPCPU_INTEL_HWP_REQUEST_PACKAGE_CONTROL);
+    Request |= DeviceExtension->HwpLowest | ((ULONGLONG)DeviceExtension->HwpHighest << 8) | ((ULONGLONG)DeviceExtension->HwpHighest << 16);
+    __writemsr(PNPCPU_INTEL_HWP_REQUEST_MSR, Request);
+    return STATUS_SUCCESS;
+}
+
+static
+VOID
+PnpcpuRestoreHwpConfiguration(
+    _Inout_ PPNPCPU_DEVICE_EXTENSION DeviceExtension)
+{
+    if (!DeviceExtension->HwpRequestCaptured)
+        return;
+    __writemsr(PNPCPU_INTEL_HWP_REQUEST_MSR, DeviceExtension->HwpOriginalRequest);
+    DeviceExtension->HwpRequestCaptured = FALSE;
+}
+#endif
+
 static
 NTSTATUS
 PnpcpuRegisterPowerConfiguration(
@@ -1255,12 +1347,21 @@ PnpcpuRegisterPowerConfiguration(
     }
     PreviousAffinity = KeSetSystemAffinityThreadEx((KAFFINITY)1 << DeviceExtension->ProcessorNumber);
     Status = PnpcpuEnableCppcConfiguration(DeviceExtension);
+#if defined(_M_IX86) || defined(_M_AMD64)
+    if (NT_SUCCESS(Status))
+        Status = PnpcpuEnableHwpConfiguration(DeviceExtension);
+#endif
     if (NT_SUCCESS(Status))
         Status = ZwPowerInformation(ProcessorStateHandler2, Handler, FIELD_OFFSET(PROCESSOR_STATE_HANDLER2, PerfLevel) + Handler->NumPerfStates * sizeof(Handler->PerfLevel[0]), NULL, 0);
     else
-        DPRINT1("PNPCPU: CPU %lu CPPC initialization failed, status 0x%08lx\n", DeviceExtension->ProcessorNumber, Status);
+        DPRINT1("PNPCPU: CPU %lu performance initialization failed, status 0x%08lx\n", DeviceExtension->ProcessorNumber, Status);
     if (!NT_SUCCESS(Status))
+    {
         PnpcpuRestoreCppcConfiguration(DeviceExtension);
+#if defined(_M_IX86) || defined(_M_AMD64)
+        PnpcpuRestoreHwpConfiguration(DeviceExtension);
+#endif
+    }
     KeRevertToUserAffinityThreadEx(PreviousAffinity);
     if (!NT_SUCCESS(Status))
     {
@@ -1268,7 +1369,7 @@ PnpcpuRegisterPowerConfiguration(
         return Status;
     }
     DeviceExtension->PowerRegistered = TRUE;
-    DPRINT1("PNPCPU: P0 CPU %lu uid=%lu apic=%lu idle=%lu perf=%s/%lu registered SMP\n", DeviceExtension->ProcessorNumber, DeviceExtension->Uid, DeviceExtension->ApicId, DeviceExtension->IdleStateCount, DeviceExtension->PerfMode == PNPCPU_PERF_CPPC ? "CPPC" : (DeviceExtension->PerfMode == PNPCPU_PERF_PSS ? "PSS" : "none"), DeviceExtension->PerfStateCount);
+    DPRINT1("PNPCPU: P0 CPU %lu uid=%lu apic=%lu idle=%lu perf=%s/%lu registered SMP\n", DeviceExtension->ProcessorNumber, DeviceExtension->Uid, DeviceExtension->ApicId, DeviceExtension->IdleStateCount, DeviceExtension->PerfMode == PNPCPU_PERF_CPPC ? "CPPC" : (DeviceExtension->PerfMode == PNPCPU_PERF_PSS ? "PSS" : (DeviceExtension->PerfMode == PNPCPU_PERF_HWP ? "HWP" : "none")), DeviceExtension->PerfStateCount);
     return STATUS_SUCCESS;
 }
 
@@ -1288,6 +1389,9 @@ PnpcpuUnregisterPowerConfiguration(
     PreviousAffinity = KeSetSystemAffinityThreadEx((KAFFINITY)1 << DeviceExtension->ProcessorNumber);
     Status = ZwPowerInformation(ProcessorStateHandler2, Handler, sizeof(HandlerStorage), NULL, 0);
     PnpcpuRestoreCppcConfiguration(DeviceExtension);
+#if defined(_M_IX86) || defined(_M_AMD64)
+    PnpcpuRestoreHwpConfiguration(DeviceExtension);
+#endif
     KeRevertToUserAffinityThreadEx(PreviousAffinity);
     if (!NT_SUCCESS(Status))
         DPRINT1("PNPCPU: CPU %lu power unregister failed, status 0x%08lx\n", DeviceExtension->ProcessorNumber, Status);
@@ -1300,25 +1404,29 @@ VOID
 PnpcpuRefreshPowerConfiguration(
     _Inout_ PPNPCPU_DEVICE_EXTENSION DeviceExtension)
 {
+    NTSTATUS Status;
+
+    PnpcpuUnregisterPowerConfiguration(DeviceExtension);
+    PnpcpuReleasePowerConfiguration(DeviceExtension);
+    if (!DeviceExtension->ProcessorNumberValid)
+    {
+        DPRINT("PNPCPU: inactive firmware processor uid=%s%lu apic=%s%lu left unregistered\n", DeviceExtension->UidValid ? "" : "?", DeviceExtension->Uid, DeviceExtension->ApicIdValid ? "" : "?", DeviceExtension->ApicId);
+        return;
+    }
 #if defined(_M_IX86) || defined(_M_AMD64)
     PnpcpuQueryProcessorFeatures(DeviceExtension);
 #endif
-    PnpcpuUnregisterPowerConfiguration(DeviceExtension);
-    PnpcpuReleasePowerConfiguration(DeviceExtension);
     PnpcpuParseCst(DeviceExtension);
-    if (!PnpcpuParseCppc(DeviceExtension))
-        PnpcpuParsePss(DeviceExtension);
-    if (DeviceExtension->ProcessorNumberValid)
+    if (!PnpcpuParseCppc(DeviceExtension) && !PnpcpuParsePss(DeviceExtension))
     {
-        NTSTATUS Status = PnpcpuRegisterPowerConfiguration(DeviceExtension);
+#if defined(_M_IX86) || defined(_M_AMD64)
+        PnpcpuInitializeHwpPerformance(DeviceExtension);
+#endif
+    }
 
-        if (!NT_SUCCESS(Status))
-            DPRINT1("PNPCPU: CPU mapping %lu power registration failed, status 0x%08lx\n", DeviceExtension->ProcessorNumber, Status);
-    }
-    else
-    {
-        DPRINT1("PNPCPU: inactive firmware processor uid=%s%lu apic=%s%lu left unregistered\n", DeviceExtension->UidValid ? "" : "?", DeviceExtension->Uid, DeviceExtension->ApicIdValid ? "" : "?", DeviceExtension->ApicId);
-    }
+    Status = PnpcpuRegisterPowerConfiguration(DeviceExtension);
+    if (!NT_SUCCESS(Status))
+        DPRINT1("PNPCPU: CPU mapping %lu power registration failed, status 0x%08lx\n", DeviceExtension->ProcessorNumber, Status);
 }
 
 static
