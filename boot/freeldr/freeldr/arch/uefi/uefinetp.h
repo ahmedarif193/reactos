@@ -10,6 +10,14 @@
 
 #define UEFI_NETWORK_RETRY_DELAY_US 1000000
 
+/*
+ * How long to wait for the firmware and the loaded drivers to produce a
+ * usable protocol stack. A machine with no NIC, or one whose UNDI never
+ * binds, must fall through to booting from local media instead of waiting
+ * for a stack that is never going to arrive.
+ */
+#define UEFI_NETWORK_MAX_ATTEMPTS 30
+
 typedef struct _UEFI_NET_CONTEXT
 {
     EFI_HANDLE ControllerHandle;

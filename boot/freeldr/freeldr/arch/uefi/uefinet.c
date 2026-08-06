@@ -817,6 +817,15 @@ UefiNetPrepare(
                   Snp ? "yes" : "no");
         }
 
+        if (Attempts >= UEFI_NETWORK_MAX_ATTEMPTS)
+        {
+            TRACE("UEFI Network: no usable stack after %lu attempts (mask %08lx snp=%s), continuing without network\n",
+                  (unsigned long)Attempts,
+                  (unsigned long)Mask,
+                  Snp ? "yes" : "no");
+            return FALSE;
+        }
+
         GlobalSystemTable->BootServices->Stall(UEFI_NETWORK_RETRY_DELAY_US);
     }
 }
