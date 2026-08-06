@@ -207,6 +207,9 @@ PortFdoStartMiniport(
         return Status;
     }
 
+    /* The request sizes are settled now; back them with lookasides. */
+    PortFdoInitializeRequestPools(DeviceExtension);
+
     /* Connect the configured interrupt */
     Status = PortFdoConnectInterrupt(DeviceExtension);
     if (!NT_SUCCESS(Status))
