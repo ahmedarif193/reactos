@@ -26,6 +26,7 @@ NTHALAPI VOID NTAPI HalProcessorIdle(VOID);
 #define PNPCPU_PERF_NONE 0
 #define PNPCPU_PERF_PSS 1
 #define PNPCPU_PERF_CPPC 2
+#define PNPCPU_PERF_HWP 3
 
 #define PNPCPU_CPPC_RESTORE_DESIRED 0x00000001
 #define PNPCPU_CPPC_RESTORE_MINIMUM 0x00000002
@@ -103,7 +104,12 @@ typedef struct _PNPCPU_DEVICE_EXTENSION
     BOOLEAN PowerRegistered;
     BOOLEAN MonitorMwaitSupported;
     BOOLEAN IntelEstSupported;
+    BOOLEAN IntelHwpSupported;
+    BOOLEAN HwpRequestCaptured;
     ULONG MwaitSubstates;
+    UCHAR HwpHighest;
+    UCHAR HwpLowest;
+    ULONGLONG HwpOriginalRequest;
     volatile LONG IdleMonitor;
     ULONG IdleStateCount;
     PNPCPU_IDLE_STATE IdleStates[PNPCPU_MAX_IDLE_STATES];
