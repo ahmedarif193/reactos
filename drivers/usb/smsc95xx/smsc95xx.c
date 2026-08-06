@@ -2018,6 +2018,7 @@ SmscQueueLinkWork(
 
 static
 VOID
+NTAPI
 SmscLinkWorkItem(
     _In_ PVOID WorkItemContext,
     _In_ NDIS_HANDLE NdisIoWorkItemHandle)
