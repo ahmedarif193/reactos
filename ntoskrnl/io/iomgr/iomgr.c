@@ -666,9 +666,16 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
 BOOLEAN
 NTAPI
-IoInitializeCrashDump(IN HANDLE PageFileHandle)
+IoInitializeCrashDump(IN HANDLE DumpFileHandle)
 {
-    return KdpInitializeCrashDump(PageFileHandle);
+    return KdpInitializeCrashDump(DumpFileHandle);
+}
+
+BOOLEAN
+NTAPI
+IoInitializeDedicatedCrashDump(VOID)
+{
+    return KdpInitializeDedicatedCrashDump();
 }
 
 /* EOF */
