@@ -232,7 +232,7 @@
 #@ stub NhGetInterfaceDescriptionFromGuid
 @ stdcall NhGetInterfaceNameFromDeviceGuid(ptr ptr ptr long long)
 @ stdcall NhGetInterfaceNameFromGuid(ptr ptr ptr long long)
-@ stub NhpAllocateAndGetInterfaceInfoFromStack
+@ stdcall NhpAllocateAndGetInterfaceInfoFromStack(ptr ptr long ptr long)
 @ stub NhpGetInterfaceIndexFromStack
 @ stdcall NotifyAddrChange( ptr ptr )
 @ stdcall NotifyIpInterfaceChange( long ptr ptr long ptr )
