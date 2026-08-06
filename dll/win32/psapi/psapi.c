@@ -563,6 +563,27 @@ EnumProcessModules(HANDLE hProcess,
 /*
  * @implemented
  */
+BOOL
+WINAPI
+EnumProcessModulesEx(HANDLE hProcess,
+                     HMODULE *lphModule,
+                     DWORD cb,
+                     LPDWORD lpcbNeeded,
+                     DWORD dwFilterFlag)
+{
+    if (dwFilterFlag & ~LIST_MODULES_ALL)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    return EnumProcessModules(hProcess, lphModule, cb, lpcbNeeded);
+}
+
+
+/*
+ * @implemented
+ */
 DWORD
 WINAPI
 GetDeviceDriverBaseNameA(LPVOID ImageBase,
