@@ -1593,6 +1593,21 @@ RtlMapGenericMask(
 NTSYSAPI
 NTSTATUS
 NTAPI
+RtlFlsAlloc(
+    _In_opt_ PFLS_CALLBACK_FUNCTION Callback,
+    _Out_ PULONG Index
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlFlsFree(
+    _In_ ULONG Index
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
 RtlQueryInformationAcl(
     PACL Acl,
     PVOID Information,

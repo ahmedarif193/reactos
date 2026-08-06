@@ -83,6 +83,7 @@ RtlWow64GetProcessMachines(HANDLE process, USHORT *current_ret, USHORT *native_r
     return status;
 }
 
+#ifdef _WIN64
 NTSTATUS
 WINAPI
 RtlWow64GetSharedInfoProcess(HANDLE process, BOOLEAN *is_wow64, WOW64INFO *info)
@@ -120,6 +121,7 @@ RtlWow64IsWowGuestMachineSupported(USHORT machine, BOOLEAN *supported)
     }
     return status;
 }
+#endif
 
 static BOOLEAN
 RtlpIsCurrentProcess(HANDLE process)
