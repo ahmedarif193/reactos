@@ -265,11 +265,7 @@ static HRESULT WINAPI GetDisplayNameOf(IShellFolder *This, PCUITEMID_CHILD pidl,
     {
         WCHAR szUrl[MAX_URL_LENGTH], *pszUrl = GetUrl(pUrl, szUrl);
         pSR->uType = STRRET_WSTR;
-#ifdef __REACTOS__
-        return SHStrDupW(pszUrl, &pSR->pOleStr);
-#else
         return SHStrDupW(pszUrl, &pSR->u.pOleStr);
-#endif
     }
     return E_FAIL;
 }
