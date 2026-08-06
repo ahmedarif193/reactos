@@ -20,11 +20,15 @@
 
 #include <assert.h>
 
+#if !defined(__REACTOS__) || !defined(DBGHELP_STATIC_LIB)
 #include "ntstatus.h"
 #include "dbghelp_private.h"
 #include "wine/winbase16.h"
 #include "winternl.h"
 #include "wine/debug.h"
+#else
+#include "dbghelp_private.h"
+#endif
 
 WINE_DEFAULT_DEBUG_CHANNEL(dbghelp);
 
@@ -32,7 +36,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(dbghelp);
 
 #define IS_VM86_MODE(ctx) (ctx->EFlags & V86_FLAG)
 
-#ifdef __i386__
+#if defined(__i386__) && (!defined(__REACTOS__) || !defined(DBGHELP_STATIC_LIB))
 static ADDRESS_MODE get_selector_type(HANDLE hThread, const CONTEXT* ctx, WORD sel)
 {
     LDT_ENTRY	le;
@@ -71,6 +75,7 @@ static BOOL i386_build_addr(HANDLE hThread, const CONTEXT* ctx, ADDRESS64* addr,
 }
 #endif
 
+#if !defined(__REACTOS__) || !defined(DBGHELP_STATIC_LIB)
 static BOOL i386_get_addr(HANDLE hThread, const CONTEXT* ctx,
                           enum cpu_addr ca, ADDRESS64* addr)
 {
@@ -509,6 +514,7 @@ done_err:
     set_curr_mode(stm_done);
     return FALSE;
 }
+#endif
 
 static unsigned i386_map_dwarf_register(unsigned regno, const struct module* module, BOOL eh_frame)
 {
@@ -675,6 +681,7 @@ static const char* i386_fetch_regname(unsigned regno)
     return NULL;
 }
 
+#if !defined(__REACTOS__) || !defined(DBGHELP_STATIC_LIB)
 static BOOL i386_fetch_minidump_thread(struct dump_context* dc, unsigned index, unsigned flags, const CONTEXT* ctx)
 {
     if (ctx->ContextFlags && (flags & ThreadWriteInstructionWindow))
@@ -696,17 +703,28 @@ static BOOL i386_fetch_minidump_module(struct dump_context* dc, unsigned index, 
      */
     return FALSE;
 }
+#endif
 
 struct cpu cpu_i386 = {
     IMAGE_FILE_MACHINE_I386,
     4,
     CV_REG_EBP,
+#if !defined(__REACTOS__) || !defined(DBGHELP_STATIC_LIB)
     i386_get_addr,
     i386_stack_walk,
+#else
+    NULL,
+    NULL,
+#endif
     NULL,
     i386_map_dwarf_register,
     i386_fetch_context_reg,
     i386_fetch_regname,
+#if !defined(__REACTOS__) || !defined(DBGHELP_STATIC_LIB)
     i386_fetch_minidump_thread,
     i386_fetch_minidump_module,
+#else
+    NULL,
+    NULL,
+#endif
 };
