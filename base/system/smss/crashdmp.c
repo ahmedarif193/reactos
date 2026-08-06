@@ -18,6 +18,33 @@
 
 /* FUNCTIONS ******************************************************************/
 
+static BOOLEAN SmpIsDedicatedCrashDumpActive(VOID)
+{
+    static const UNICODE_STRING KeyName = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\System\\CurrentControlSet\\Control\\CrashControl");
+    static const UNICODE_STRING ValueName = RTL_CONSTANT_STRING(L"DedicatedDumpActive");
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    HANDLE KeyHandle;
+    ULONG Length;
+    NTSTATUS Status;
+    struct
+    {
+        KEY_VALUE_PARTIAL_INFORMATION Information;
+        ULONG Value;
+    } ValueBuffer;
+
+    InitializeObjectAttributes(&ObjectAttributes, (PUNICODE_STRING)&KeyName, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    Status = NtOpenKey(&KeyHandle, KEY_QUERY_VALUE, &ObjectAttributes);
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+
+    Status = NtQueryValueKey(KeyHandle, (PUNICODE_STRING)&ValueName, KeyValuePartialInformation, &ValueBuffer, sizeof(ValueBuffer), &Length);
+    NtClose(KeyHandle);
+    if (!NT_SUCCESS(Status) || (ValueBuffer.Information.Type != REG_DWORD) || (ValueBuffer.Information.DataLength != sizeof(ULONG)))
+        return FALSE;
+
+    return *(PULONG)ValueBuffer.Information.Data != 0;
+}
+
 static NTSTATUS SmpQueryDumpFilePath(_Out_ PUNICODE_STRING NtPath)
 {
     static const UNICODE_STRING KeyName = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\System\\CurrentControlSet\\Control\\CrashControl");
@@ -90,6 +117,9 @@ SmpCheckForCrashDump(IN PUNICODE_STRING FileName)
     ULONG Length;
     NTSTATUS Status;
     BOOLEAN DumpSaved = FALSE;
+
+    if (SmpIsDedicatedCrashDumpActive())
+        return FALSE;
 
     DPRINT1("SMSS: Inspecting `%wZ' for a crash dump\n", FileName);
 

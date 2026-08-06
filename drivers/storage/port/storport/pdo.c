@@ -438,7 +438,7 @@ NTSTATUS PortGetDumpInterface(_In_ PPDO_DEVICE_EXTENSION PdoExtension, _Out_ PRO
     Interface->BytesPerSector = DumpContext->BytesPerSector;
     Interface->MaximumTransferLength = PAGE_SIZE;
     Interface->Prepare = PortDumpPrepare;
-    Interface->Write = PortDumpWrite;
+    Interface->WriteRoutine = PortDumpWrite;
     Interface->Flush = PortDumpFlush;
     return STATUS_SUCCESS;
 
