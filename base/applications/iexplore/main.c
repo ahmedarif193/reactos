@@ -19,6 +19,9 @@
  */
 
 #include <windows.h>
+#ifdef __REACTOS__
+#include <reactos/user32_vista.h>
+#endif
 #include <advpub.h>
 #include <ole2.h>
 #include <rpcproxy.h>
