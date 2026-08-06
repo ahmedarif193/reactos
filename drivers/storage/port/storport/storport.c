@@ -2825,6 +2825,10 @@ StorPortSetBusDataByOffset(
 
     Interface = &MiniportExtension->Miniport->DeviceExtension->BusInterface;
 
+    /* Miniports pass PCIConfiguration; the bus interface speaks WHICHSPACE. */
+    if (BusDataType == PCIConfiguration)
+        BusDataType = PCI_WHICHSPACE_CONFIG;
+
     ReturnLength = Interface->SetBusData(Interface->Context,
                                          BusDataType,
                                          Buffer,
