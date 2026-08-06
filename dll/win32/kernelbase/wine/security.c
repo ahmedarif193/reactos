@@ -1546,7 +1546,11 @@ BOOL WINAPI DeriveCapabilitySidsFromName( const WCHAR *cap_name, PSID **cap_grou
     if (!(**cap_group_sids = RtlAllocateHeap( GetProcessHeap(), 0, size ))) goto done;
     if (!(**cap_sids = RtlAllocateHeap( GetProcessHeap(), 0, size ))) goto done;
     RtlInitUnicodeString( &name_us, cap_name );
+#if defined(__REACTOS__) && (DLL_EXPORT_VERSION < 0x0a00)
+    status = STATUS_NOT_IMPLEMENTED;
+#else
     status = RtlDeriveCapabilitySidsFromName( &name_us, **cap_group_sids, **cap_sids );
+#endif
 
 done:
     if (!status) return TRUE;
