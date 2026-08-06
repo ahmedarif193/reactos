@@ -1,6 +1,8 @@
 
 spec2def(shdoclc.dll shdoclc.spec)
 
+set_source_files_properties(rsrc.rc PROPERTIES OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/ERROR.HTM")
+
 add_library(shdoclc MODULE
     rsrc.rc
     ${CMAKE_CURRENT_BINARY_DIR}/shdoclc.def)

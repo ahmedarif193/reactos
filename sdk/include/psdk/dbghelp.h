@@ -21,65 +21,7 @@
 #ifndef __WINE_DBGHELP_H
 #define __WINE_DBGHELP_H
 
-/* A set of documentation macros (see also imagehlp.h) */
-#ifndef __deref_out
-# define __deref_out
-#endif
-#ifndef __deref_out_opt
-# define __deref_out_opt
-#endif
-#ifndef __deref_opt_out
-# define __deref_opt_out
-#endif
-#ifndef __in
-# define __in
-#endif
-#ifndef __in_opt
-# define __in_opt
-#endif
-#ifndef __in_bcount
-# define __in_bcount(x)
-#endif
-#ifndef __in_bcount_opt
-# define __in_bcount_opt(x)
-#endif
-#ifndef __in_ecount
-# define __in_ecount(x)
-#endif
-#ifndef __inout
-# define __inout
-#endif
-#ifndef __inout_opt
-# define __inout_opt
-#endif
-#ifndef __inout_bcount
-# define __inout_bcount(x)
-#endif
-#ifndef __inout_ecount
-# define __inout_ecount(x)
-#endif
-#ifndef __out
-# define __out
-#endif
-#ifndef __out_opt
-# define __out_opt
-#endif
-#ifndef __out_bcount
-# define __out_bcount(x)
-#endif
-#ifndef __out_bcount_opt
-# define __out_bcount_opt(x)
-#endif
-#ifndef __out_ecount
-# define __out_ecount(x)
-#endif
-#ifndef __out_ecount_opt
-# define __out_ecount_opt(x)
-#endif
-#ifndef __out_xcount
-# define __out_xcount(x)
-#endif
-
+#include <minidumpapiset.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -91,7 +33,12 @@ extern "C" {
 #endif
 #endif
 
+#ifdef _IMAGEHLP_SOURCE_
 #define IMAGEAPI WINAPI
+#else
+#define IMAGEAPI DECLSPEC_IMPORT WINAPI
+#endif
+
 #define DBHLPAPI IMAGEAPI
 
 typedef struct _LOADED_IMAGE
@@ -99,11 +46,7 @@ typedef struct _LOADED_IMAGE
     PSTR                        ModuleName;
     HANDLE                      hFile;
     PUCHAR                      MappedAddress;
-#ifdef _IMAGEHLP64
-    PIMAGE_NT_HEADERS64         FileHeader;
-#else
-    PIMAGE_NT_HEADERS32         FileHeader;
-#endif
+    PIMAGE_NT_HEADERS           FileHeader;
     PIMAGE_SECTION_HEADER       LastRvaSection;
     ULONG                       NumberOfSections;
     PIMAGE_SECTION_HEADER       Sections;
@@ -115,6 +58,10 @@ typedef struct _LOADED_IMAGE
     LIST_ENTRY                  Links;
     ULONG                       SizeOfImage;
 } LOADED_IMAGE, *PLOADED_IMAGE;
+
+#define ERROR_IMAGE_NOT_STRIPPED    0x8800
+#define ERROR_NO_DBG_POINTER        0x8801
+#define ERROR_NO_PDB_POINTER        0x8802
 
 /*************************
  *    IMAGEHLP equiv     *
@@ -163,7 +110,7 @@ typedef struct _tagADDRESS64
 #define SYMF_THUNK            0x00002000
 #define SYMF_TLSREL           0x00004000
 
-typedef enum
+typedef enum 
 {
     SymNone = 0,
     SymCoff,
@@ -176,55 +123,6 @@ typedef enum
     SymVirtual,
     NumSymTypes
 } SYM_TYPE;
-
-#ifdef _NO_CVCONST_H
-enum SymTagEnum
-{
-    SymTagNull,
-    SymTagExe,
-    SymTagCompiland,
-    SymTagCompilandDetails,
-    SymTagCompilandEnv,
-    SymTagFunction,
-    SymTagBlock,
-    SymTagData,
-    SymTagAnnotation,
-    SymTagLabel,
-    SymTagPublicSymbol,
-    SymTagUDT,
-    SymTagEnum,
-    SymTagFunctionType,
-    SymTagPointerType,
-    SymTagArrayType,
-    SymTagBaseType,
-    SymTagTypedef,
-    SymTagBaseClass,
-    SymTagFriend,
-    SymTagFunctionArgType,
-    SymTagFuncDebugStart,
-    SymTagFuncDebugEnd,
-    SymTagUsingNamespace,
-    SymTagVTableShape,
-    SymTagVTable,
-    SymTagCustom,
-    SymTagThunk,
-    SymTagCustomType,
-    SymTagManagedType,
-    SymTagDimension,
-    SymTagCallSite,
-    SymTagInlineSite,
-    SymTagBaseInterface,
-    SymTagVectorType,
-    SymTagMatrixType,
-    SymTagHLSLType,
-    SymTagCaller,
-    SymTagCallee,
-    SymTagExport,
-    SymTagHeapAllocationSite,
-    SymTagCoffGroup,
-    SymTagMax
-};
-#endif // _NO_CVCONST_H
 
 #if !defined(_IMAGEHLP_SOURCE_) && defined(_IMAGEHLP64)
 #define IMAGEHLP_SYMBOL IMAGEHLP_SYMBOL64
@@ -333,6 +231,8 @@ typedef struct _IMAGEHLP_MODULE64
     BOOL                        TypeInfo;
     BOOL                        SourceIndexed;
     BOOL                        Publics;
+    DWORD                       MachineType;
+    DWORD                       Reserved;
 } IMAGEHLP_MODULE64, *PIMAGEHLP_MODULE64;
 
 typedef struct _IMAGEHLP_MODULEW64
@@ -360,6 +260,8 @@ typedef struct _IMAGEHLP_MODULEW64
     BOOL                        TypeInfo;
     BOOL                        SourceIndexed;
     BOOL                        Publics;
+    DWORD                       MachineType;
+    DWORD                       Reserved;
 } IMAGEHLP_MODULEW64, *PIMAGEHLP_MODULEW64;
 
 #if !defined(_IMAGEHLP_SOURCE_) && defined(_IMAGEHLP64)
@@ -417,17 +319,25 @@ typedef struct _SOURCEFILEW
     PWSTR                       FileName;
 } SOURCEFILEW, *PSOURCEFILEW;
 
-#define CBA_DEFERRED_SYMBOL_LOAD_START          0x00000001
-#define CBA_DEFERRED_SYMBOL_LOAD_COMPLETE       0x00000002
-#define CBA_DEFERRED_SYMBOL_LOAD_FAILURE        0x00000003
-#define CBA_SYMBOLS_UNLOADED                    0x00000004
-#define CBA_DUPLICATE_SYMBOL                    0x00000005
-#define CBA_READ_MEMORY                         0x00000006
-#define CBA_DEFERRED_SYMBOL_LOAD_CANCEL         0x00000007
-#define CBA_SET_OPTIONS                         0x00000008
-#define CBA_EVENT                               0x00000010
-#define CBA_DEFERRED_SYMBOL_LOAD_PARTIAL        0x00000020
-#define CBA_DEBUG_INFO                          0x10000000
+#define CBA_DEFERRED_SYMBOL_LOAD_START                  0x00000001
+#define CBA_DEFERRED_SYMBOL_LOAD_COMPLETE               0x00000002
+#define CBA_DEFERRED_SYMBOL_LOAD_FAILURE                0x00000003
+#define CBA_SYMBOLS_UNLOADED                            0x00000004
+#define CBA_DUPLICATE_SYMBOL                            0x00000005
+#define CBA_READ_MEMORY                                 0x00000006
+#define CBA_DEFERRED_SYMBOL_LOAD_CANCEL                 0x00000007
+#define CBA_SET_OPTIONS                                 0x00000008
+#define CBA_EVENT                                       0x00000010
+#define CBA_DEFERRED_SYMBOL_LOAD_PARTIAL                0x00000020
+#define CBA_DEBUG_INFO                                  0x10000000
+#define CBA_SRCSRV_INFO                                 0x20000000
+#define CBA_SRCSRV_EVENT                                0x40000000
+#define CBA_UPDATE_STATUS_BAR                           0x50000000
+#define CBA_ENGINE_PRESENT                              0x60000000
+#define CBA_CHECK_ENGOPT_DISALLOW_NETWORK_PATHS         0x70000000
+#define CBA_CHECK_ARM_MACHINE_THUMB_TYPE_OVERRIDE       0x80000000
+#define CBA_XML_LOG                                     0x90000000
+#define CBA_MAP_JIT_SYMBOL                              0xA0000000
 
 typedef struct _IMAGEHLP_CBA_READ_MEMORY
 {
@@ -540,8 +450,10 @@ typedef struct _IMAGEHLP_DUPLICATE_SYMBOL64
 #define SYMOPT_EXACT_SYMBOLS            0x00000400
 #define SYMOPT_WILD_UNDERSCORE          0x00000800
 #define SYMOPT_USE_DEFAULTS             0x00001000
+/* latest SDK defines:
 #define SYMOPT_ALLOW_ABSOLUTE_SYMBOLS   0x00000800
 #define SYMOPT_IGNORE_NT_SYMPATH        0x00001000
+*/
 #define SYMOPT_INCLUDE_32BIT_MODULES    0x00002000
 #define SYMOPT_PUBLICS_ONLY             0x00004000
 #define SYMOPT_NO_PUBLICS               0x00008000
@@ -589,541 +501,32 @@ typedef struct _DBGHELP_MODLOAD_DATA
 } MODLOAD_DATA, *PMODLOAD_DATA;
 
 /*************************
- *       MiniDUMP        *
- *************************/
-
-#include <pshpack4.h>
-/* DebugHelp */
-
-#define MINIDUMP_SIGNATURE 0x504D444D /* 'MDMP' */
-#define MINIDUMP_VERSION   (42899)
-
-typedef DWORD   RVA;
-typedef ULONG64 RVA64;
-
-typedef enum _MINIDUMP_TYPE
-{
-    MiniDumpNormal                              = 0x0000,
-    MiniDumpWithDataSegs                        = 0x0001,
-    MiniDumpWithFullMemory                      = 0x0002,
-    MiniDumpWithHandleData                      = 0x0004,
-    MiniDumpFilterMemory                        = 0x0008,
-    MiniDumpScanMemory                          = 0x0010,
-    MiniDumpWithUnloadedModules                 = 0x0020,
-    MiniDumpWithIndirectlyReferencedMemory      = 0x0040,
-    MiniDumpFilterModulePaths                   = 0x0080,
-    MiniDumpWithProcessThreadData               = 0x0100,
-    MiniDumpWithPrivateReadWriteMemory          = 0x0200,
-    MiniDumpWithoutOptionalData                 = 0x0400,
-    MiniDumpWithFullMemoryInfo                  = 0x0800,
-    MiniDumpWithThreadInfo                      = 0x1000,
-    MiniDumpWithCodeSegs                        = 0x2000
-} MINIDUMP_TYPE;
-
-typedef enum _MINIDUMP_CALLBACK_TYPE
-{
-    ModuleCallback,
-    ThreadCallback,
-    ThreadExCallback,
-    IncludeThreadCallback,
-    IncludeModuleCallback,
-    MemoryCallback,
-} MINIDUMP_CALLBACK_TYPE;
-
-/*
- * These callback structs are 4-byte packed as part of the public dbghelp ABI,
- * but CONTEXT still carries a stronger alignment requirement on some targets.
- * Keep the layout intact and silence the compiler's packed/alignment warning.
- */
-#if defined(__clang__)
-#if __has_warning("-Wpacked-not-aligned")
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wpacked-not-aligned"
-#define DBGHELP_RESTORE_PACKED_NOT_ALIGNED
-#endif
-#elif defined(__GNUC__) && (__GNUC__ >= 9)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wpacked-not-aligned"
-#define DBGHELP_RESTORE_PACKED_NOT_ALIGNED
-#endif
-
-typedef struct _MINIDUMP_THREAD_CALLBACK
-{
-    ULONG                       ThreadId;
-    HANDLE                      ThreadHandle;
-    CONTEXT                     Context;
-    ULONG                       SizeOfContext;
-    ULONG64                     StackBase;
-    ULONG64                     StackEnd;
-} MINIDUMP_THREAD_CALLBACK, *PMINIDUMP_THREAD_CALLBACK;
-
-typedef struct _MINIDUMP_THREAD_EX_CALLBACK
-{
-    ULONG                       ThreadId;
-    HANDLE                      ThreadHandle;
-    CONTEXT                     Context;
-    ULONG                       SizeOfContext;
-    ULONG64                     StackBase;
-    ULONG64                     StackEnd;
-    ULONG64                     BackingStoreBase;
-    ULONG64                     BackingStoreEnd;
-} MINIDUMP_THREAD_EX_CALLBACK, *PMINIDUMP_THREAD_EX_CALLBACK;
-
-#ifdef DBGHELP_RESTORE_PACKED_NOT_ALIGNED
-#if defined(__clang__)
-#pragma clang diagnostic pop
-#else
-#pragma GCC diagnostic pop
-#endif
-#undef DBGHELP_RESTORE_PACKED_NOT_ALIGNED
-#endif
-
-typedef struct _MINIDUMP_INCLUDE_THREAD_CALLBACK
-{
-    ULONG ThreadId;
-} MINIDUMP_INCLUDE_THREAD_CALLBACK, *PMINIDUMP_INCLUDE_THREAD_CALLBACK;
-
-typedef enum _THREAD_WRITE_FLAGS
-{
-    ThreadWriteThread            = 0x0001,
-    ThreadWriteStack             = 0x0002,
-    ThreadWriteContext           = 0x0004,
-    ThreadWriteBackingStore      = 0x0008,
-    ThreadWriteInstructionWindow = 0x0010,
-    ThreadWriteThreadData        = 0x0020,
-    ThreadWriteThreadInfo        = 0x0040
-} THREAD_WRITE_FLAGS;
-
-typedef struct _MINIDUMP_MODULE_CALLBACK
-{
-    PWCHAR                      FullPath;
-    ULONG64                     BaseOfImage;
-    ULONG                       SizeOfImage;
-    ULONG                       CheckSum;
-    ULONG                       TimeDateStamp;
-    VS_FIXEDFILEINFO            VersionInfo;
-    PVOID                       CvRecord;
-    ULONG                       SizeOfCvRecord;
-    PVOID                       MiscRecord;
-    ULONG                       SizeOfMiscRecord;
-} MINIDUMP_MODULE_CALLBACK, *PMINIDUMP_MODULE_CALLBACK;
-
-typedef struct _MINIDUMP_INCLUDE_MODULE_CALLBACK
-{
-    ULONG64 BaseOfImage;
-} MINIDUMP_INCLUDE_MODULE_CALLBACK, *PMINIDUMP_INCLUDE_MODULE_CALLBACK;
-
-typedef enum _MODULE_WRITE_FLAGS
-{
-    ModuleWriteModule        = 0x0001,
-    ModuleWriteDataSeg       = 0x0002,
-    ModuleWriteMiscRecord    = 0x0004,
-    ModuleWriteCvRecord      = 0x0008,
-    ModuleReferencedByMemory = 0x0010,
-    ModuleWriteTlsData       = 0x0020,
-    ModuleWriteCodeSegs      = 0x0040,
-} MODULE_WRITE_FLAGS;
-
-typedef struct _MINIDUMP_CALLBACK_INPUT
-{
-    ULONG                       ProcessId;
-    HANDLE                      ProcessHandle;
-    ULONG                       CallbackType;
-    union
-    {
-        MINIDUMP_THREAD_CALLBACK        Thread;
-        MINIDUMP_THREAD_EX_CALLBACK     ThreadEx;
-        MINIDUMP_MODULE_CALLBACK        Module;
-        MINIDUMP_INCLUDE_THREAD_CALLBACK IncludeThread;
-        MINIDUMP_INCLUDE_MODULE_CALLBACK IncludeModule;
-    } DUMMYUNIONNAME;
-} MINIDUMP_CALLBACK_INPUT, *PMINIDUMP_CALLBACK_INPUT;
-
-typedef struct _MINIDUMP_CALLBACK_OUTPUT
-{
-    union
-    {
-        ULONG                           ModuleWriteFlags;
-        ULONG                           ThreadWriteFlags;
-        struct
-        {
-            ULONG64                     MemoryBase;
-            ULONG                       MemorySize;
-        } DUMMYSTRUCTNAME;
-    } DUMMYUNIONNAME;
-} MINIDUMP_CALLBACK_OUTPUT, *PMINIDUMP_CALLBACK_OUTPUT;
-
-typedef BOOL
-(WINAPI* MINIDUMP_CALLBACK_ROUTINE)(
-  _Inout_ PVOID,
-  _In_ const PMINIDUMP_CALLBACK_INPUT,
-  _Inout_ PMINIDUMP_CALLBACK_OUTPUT);
-
-typedef struct _MINIDUMP_CALLBACK_INFORMATION
-{
-    MINIDUMP_CALLBACK_ROUTINE   CallbackRoutine;
-    void*                       CallbackParam;
-} MINIDUMP_CALLBACK_INFORMATION, *PMINIDUMP_CALLBACK_INFORMATION;
-
-typedef struct _MINIDUMP_LOCATION_DESCRIPTOR
-{
-    ULONG                       DataSize;
-    RVA                         Rva;
-} MINIDUMP_LOCATION_DESCRIPTOR;
-
-typedef struct _MINIDUMP_LOCATION_DESCRIPTOR64
-{
-    ULONG64                     DataSize;
-    RVA64                       Rva;
-} MINIDUMP_LOCATION_DESCRIPTOR64;
-
-typedef struct _MINIDUMP_DIRECTORY
-{
-    ULONG                       StreamType;
-    MINIDUMP_LOCATION_DESCRIPTOR Location;
-} MINIDUMP_DIRECTORY, *PMINIDUMP_DIRECTORY;
-
-typedef struct _MINIDUMP_EXCEPTION
-{
-    ULONG                       ExceptionCode;
-    ULONG                       ExceptionFlags;
-    ULONG64                     ExceptionRecord;
-    ULONG64                     ExceptionAddress;
-    ULONG                       NumberParameters;
-    ULONG                        __unusedAlignment;
-    ULONG64                     ExceptionInformation[EXCEPTION_MAXIMUM_PARAMETERS];
-} MINIDUMP_EXCEPTION, *PMINIDUMP_EXCEPTION;
-
-typedef struct _MINIDUMP_EXCEPTION_INFORMATION
-{
-    DWORD                       ThreadId;
-    PEXCEPTION_POINTERS         ExceptionPointers;
-    BOOL                        ClientPointers;
-} MINIDUMP_EXCEPTION_INFORMATION, *PMINIDUMP_EXCEPTION_INFORMATION;
-
-typedef struct MINIDUMP_EXCEPTION_STREAM
-{
-    ULONG                       ThreadId;
-    ULONG                       __alignment;
-    MINIDUMP_EXCEPTION          ExceptionRecord;
-    MINIDUMP_LOCATION_DESCRIPTOR ThreadContext;
-} MINIDUMP_EXCEPTION_STREAM, *PMINIDUMP_EXCEPTION_STREAM;
-
-typedef struct _MINIDUMP_HEADER
-{
-    DWORD                       Signature;
-    DWORD                       Version;
-    DWORD                       NumberOfStreams;
-    RVA                         StreamDirectoryRva;
-    DWORD                       CheckSum;
-    union
-    {
-        DWORD                           Reserved;
-        DWORD                           TimeDateStamp;
-    } DUMMYUNIONNAME;
-    ULONG64                     Flags;
-} MINIDUMP_HEADER, *PMINIDUMP_HEADER;
-
-typedef struct _MINIDUMP_MEMORY_DESCRIPTOR
-{
-    ULONG64                     StartOfMemoryRange;
-    MINIDUMP_LOCATION_DESCRIPTOR Memory;
-} MINIDUMP_MEMORY_DESCRIPTOR, *PMINIDUMP_MEMORY_DESCRIPTOR;
-
-typedef struct _MINIDUMP_MEMORY_LIST
-{
-    ULONG                       NumberOfMemoryRanges;
-    MINIDUMP_MEMORY_DESCRIPTOR  MemoryRanges[1]; /* FIXME: 0-sized array not supported */
-} MINIDUMP_MEMORY_LIST, *PMINIDUMP_MEMORY_LIST;
-
-typedef struct _MINIDUMP_MEMORY_DESCRIPTOR64
-{
-    ULONG64                     StartOfMemoryRange;
-    ULONG64                     DataSize;
-} MINIDUMP_MEMORY_DESCRIPTOR64, *PMINIDUMP_MEMORY_DESCRIPTOR64;
-
-typedef struct _MINIDUMP_MEMORY64_LIST
-{
-    ULONG64                     NumberOfMemoryRanges;
-    RVA64                       BaseRva;
-    MINIDUMP_MEMORY_DESCRIPTOR64 MemoryRanges[1]; /* FIXME: 0-sized array not supported */
-} MINIDUMP_MEMORY64_LIST, *PMINIDUMP_MEMORY64_LIST;
-
-#define MINIDUMP_MISC1_PROCESS_ID       0x00000001
-#define MINIDUMP_MISC1_PROCESS_TIMES    0x00000002
-
-typedef struct _MINIDUMP_MISC_INFO
-{
-    ULONG                       SizeOfInfo;
-    ULONG                       Flags1;
-    ULONG                       ProcessId;
-    ULONG                       ProcessCreateTime;
-    ULONG                       ProcessUserTime;
-    ULONG                       ProcessKernelTime;
-} MINIDUMP_MISC_INFO, *PMINIDUMP_MISC_INFO;
-
-typedef struct _MINIDUMP_MODULE
-{
-    ULONG64                     BaseOfImage;
-    ULONG                       SizeOfImage;
-    ULONG                       CheckSum;
-    ULONG                       TimeDateStamp;
-    RVA                         ModuleNameRva;
-    VS_FIXEDFILEINFO            VersionInfo;
-    MINIDUMP_LOCATION_DESCRIPTOR CvRecord;
-    MINIDUMP_LOCATION_DESCRIPTOR MiscRecord;
-    ULONG64                     Reserved0;
-    ULONG64                     Reserved1;
-} MINIDUMP_MODULE, *PMINIDUMP_MODULE;
-
-typedef struct _MINIDUMP_MODULE_LIST
-{
-    ULONG                       NumberOfModules;
-    MINIDUMP_MODULE             Modules[1]; /* FIXME: 0-sized array not supported */
-} MINIDUMP_MODULE_LIST, *PMINIDUMP_MODULE_LIST;
-
-typedef struct _MINIDUMP_STRING
-{
-    ULONG                       Length;
-    WCHAR                       Buffer[1]; /* FIXME: O-sized array not supported */
-} MINIDUMP_STRING, *PMINIDUMP_STRING;
-
-typedef struct _MINIDUMP_SYSTEM_INFO
-{
-    USHORT                      ProcessorArchitecture;
-    USHORT                      ProcessorLevel;
-    USHORT                      ProcessorRevision;
-    union
-    {
-        USHORT                          Reserved0;
-        struct
-        {
-            UCHAR                       NumberOfProcessors;
-            UCHAR                       ProductType;
-        } DUMMYSTRUCTNAME;
-    } DUMMYUNIONNAME;
-
-    ULONG                       MajorVersion;
-    ULONG                       MinorVersion;
-    ULONG                       BuildNumber;
-    ULONG                       PlatformId;
-
-    RVA                         CSDVersionRva;
-    union
-    {
-        ULONG                           Reserved1;
-        struct
-        {
-            USHORT                      SuiteMask;
-            USHORT                      Reserved2;
-        } DUMMYSTRUCTNAME;
-    } DUMMYUNIONNAME1;
-    union _CPU_INFORMATION
-    {
-        struct
-        {
-            ULONG                       VendorId[3];
-            ULONG                       VersionInformation;
-            ULONG                       FeatureInformation;
-            ULONG                       AMDExtendedCpuFeatures;
-        } X86CpuInfo;
-        struct
-        {
-            ULONG64                     ProcessorFeatures[2];
-        } OtherCpuInfo;
-    } Cpu;
-
-} MINIDUMP_SYSTEM_INFO, *PMINIDUMP_SYSTEM_INFO;
-
-typedef struct _MINIDUMP_THREAD
-{
-    ULONG                       ThreadId;
-    ULONG                       SuspendCount;
-    ULONG                       PriorityClass;
-    ULONG                       Priority;
-    ULONG64                     Teb;
-    MINIDUMP_MEMORY_DESCRIPTOR  Stack;
-    MINIDUMP_LOCATION_DESCRIPTOR ThreadContext;
-} MINIDUMP_THREAD, *PMINIDUMP_THREAD;
-
-typedef struct _MINIDUMP_THREAD_LIST
-{
-    ULONG                       NumberOfThreads;
-    MINIDUMP_THREAD             Threads[1]; /* FIXME: no support of 0 sized array */
-} MINIDUMP_THREAD_LIST, *PMINIDUMP_THREAD_LIST;
-
-typedef struct _MINIDUMP_USER_STREAM
-{
-    ULONG                       Type;
-    ULONG                       BufferSize;
-    void*                       Buffer;
-} MINIDUMP_USER_STREAM, *PMINIDUMP_USER_STREAM;
-
-typedef struct _MINIDUMP_USER_STREAM_INFORMATION
-{
-    ULONG                       UserStreamCount;
-    PMINIDUMP_USER_STREAM       UserStreamArray;
-} MINIDUMP_USER_STREAM_INFORMATION, *PMINIDUMP_USER_STREAM_INFORMATION;
-
-typedef enum _MINIDUMP_STREAM_TYPE
-{
-    UnusedStream                = 0,
-    ReservedStream0             = 1,
-    ReservedStream1             = 2,
-    ThreadListStream            = 3,
-    ModuleListStream            = 4,
-    MemoryListStream            = 5,
-    ExceptionStream             = 6,
-    SystemInfoStream            = 7,
-    ThreadExListStream          = 8,
-    Memory64ListStream          = 9,
-    CommentStreamA              = 10,
-    CommentStreamW              = 11,
-    HandleDataStream            = 12,
-    FunctionTableStream         = 13,
-    UnloadedModuleListStream    = 14,
-    MiscInfoStream              = 15,
-    MemoryInfoListStream        = 16,
-    ThreadInfoListStream        = 17,
-
-    LastReservedStream          = 0xffff
-} MINIDUMP_STREAM_TYPE;
-
-BOOL
-WINAPI
-MiniDumpWriteDump(
-  _In_ HANDLE,
-  _In_ DWORD,
-  _In_ HANDLE,
-  _In_ MINIDUMP_TYPE,
-  _In_opt_ PMINIDUMP_EXCEPTION_INFORMATION,
-  _In_opt_ PMINIDUMP_USER_STREAM_INFORMATION,
-  _In_opt_ PMINIDUMP_CALLBACK_INFORMATION);
-
-BOOL
-WINAPI
-MiniDumpReadDumpStream(
-  _In_ PVOID,
-  _In_ ULONG,
-  _Outptr_result_maybenull_ PMINIDUMP_DIRECTORY*,
-  _Outptr_result_maybenull_ PVOID*,
-  _Out_opt_ ULONG*);
-
-#include <poppack.h>
-
-/*************************
  *    MODULE handling    *
  *************************/
 
 /* flags for SymLoadModuleEx */
 #define SLMFLAG_VIRTUAL         0x1
+#define SLMFLAG_ALT_INDEX       0x2
 #define SLMFLAG_NO_SYMBOLS      0x4
 
-typedef BOOL
-(CALLBACK *PENUMLOADED_MODULES_CALLBACK64)(
-  _In_ PCSTR,
-  _In_ DWORD64,
-  _In_ ULONG,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-EnumerateLoadedModules64(
-  _In_ HANDLE,
-  _In_ PENUMLOADED_MODULES_CALLBACK64,
-  _In_opt_ PVOID);
-
-typedef BOOL
-(CALLBACK *PENUMLOADED_MODULES_CALLBACKW64)(
-  _In_ PCWSTR,
-  _In_ DWORD64,
-  _In_ ULONG,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-EnumerateLoadedModulesW64(
-  _In_ HANDLE,
-  _In_ PENUMLOADED_MODULES_CALLBACKW64,
-  _In_opt_ PVOID);
-
-typedef BOOL
-(CALLBACK *PSYM_ENUMMODULES_CALLBACK64)(
-  _In_ PCSTR,
-  _In_ DWORD64,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-SymEnumerateModules64(
-  _In_ HANDLE,
-  _In_ PSYM_ENUMMODULES_CALLBACK64,
-  _In_opt_ PVOID);
-
-typedef BOOL
-(CALLBACK *PSYM_ENUMMODULES_CALLBACKW64)(
-  _In_ PCWSTR,
-  _In_ DWORD64,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-SymEnumerateModulesW64(
-  _In_ HANDLE,
-  _In_ PSYM_ENUMMODULES_CALLBACKW64,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-SymGetModuleInfo64(
-  _In_ HANDLE,
-  _In_ DWORD64,
-  _Out_ PIMAGEHLP_MODULE64);
-
-BOOL
-WINAPI
-SymGetModuleInfoW64(
-  _In_ HANDLE,
-  _In_ DWORD64,
-  _Out_ PIMAGEHLP_MODULEW64);
-
-DWORD64 WINAPI SymGetModuleBase64(_In_ HANDLE, _In_ DWORD64);
-
-DWORD64
-WINAPI
-SymLoadModule64(
-  _In_ HANDLE,
-  _In_opt_ HANDLE,
-  _In_opt_ PCSTR,
-  _In_opt_ PCSTR,
-  _In_ DWORD64,
-  _In_ DWORD);
-
-DWORD64
-WINAPI
-SymLoadModuleEx(
-  _In_ HANDLE,
-  _In_opt_ HANDLE,
-  _In_opt_ PCSTR,
-  _In_opt_ PCSTR,
-  _In_ DWORD64,
-  _In_ DWORD,
-  _In_opt_ PMODLOAD_DATA,
-  _In_opt_ DWORD);
-
-DWORD64
-WINAPI
-SymLoadModuleExW(
-  _In_ HANDLE,
-  _In_opt_ HANDLE,
-  _In_opt_ PCWSTR,
-  _In_opt_ PCWSTR,
-  _In_ DWORD64,
-  _In_ DWORD,
-  _In_opt_ PMODLOAD_DATA,
-  _In_opt_ DWORD);
-
-BOOL WINAPI SymUnloadModule64(_In_ HANDLE, _In_ DWORD64);
+typedef BOOL (CALLBACK *PENUMLOADED_MODULES_CALLBACK64)(PCSTR, DWORD64, ULONG, PVOID);
+BOOL    IMAGEAPI EnumerateLoadedModules64(HANDLE, PENUMLOADED_MODULES_CALLBACK64, PVOID);
+typedef BOOL (CALLBACK *PENUMLOADED_MODULES_CALLBACKW64)(PCWSTR, DWORD64, ULONG, PVOID);
+BOOL    IMAGEAPI EnumerateLoadedModulesW64(HANDLE, PENUMLOADED_MODULES_CALLBACKW64, PVOID);
+BOOL    IMAGEAPI EnumerateLoadedModulesEx(HANDLE, PENUMLOADED_MODULES_CALLBACK64, PVOID);
+BOOL    IMAGEAPI EnumerateLoadedModulesExW(HANDLE, PENUMLOADED_MODULES_CALLBACKW64, PVOID);
+typedef BOOL (CALLBACK *PSYM_ENUMMODULES_CALLBACK64)(PCSTR, DWORD64, PVOID);
+BOOL    IMAGEAPI SymEnumerateModules64(HANDLE, PSYM_ENUMMODULES_CALLBACK64, PVOID);
+typedef BOOL (CALLBACK *PSYM_ENUMMODULES_CALLBACKW64)(PCWSTR, DWORD64, PVOID);
+BOOL    IMAGEAPI SymEnumerateModulesW64(HANDLE, PSYM_ENUMMODULES_CALLBACKW64, PVOID);
+BOOL    IMAGEAPI SymGetModuleInfo64(HANDLE, DWORD64, PIMAGEHLP_MODULE64);
+BOOL    IMAGEAPI SymGetModuleInfoW64(HANDLE, DWORD64, PIMAGEHLP_MODULEW64);
+DWORD64 IMAGEAPI SymGetModuleBase64(HANDLE, DWORD64);
+DWORD64 IMAGEAPI SymLoadModule64(HANDLE, HANDLE, PCSTR, PCSTR, DWORD64, DWORD);
+DWORD64 IMAGEAPI SymLoadModuleEx(HANDLE, HANDLE, PCSTR, PCSTR, DWORD64, DWORD, PMODLOAD_DATA, DWORD);
+DWORD64 IMAGEAPI SymLoadModuleExW(HANDLE, HANDLE, PCWSTR, PCWSTR, DWORD64, DWORD, PMODLOAD_DATA, DWORD);
+BOOL    IMAGEAPI SymUnloadModule64(HANDLE, DWORD64);
+BOOL    IMAGEAPI SymRefreshModuleList(HANDLE);
 
 /*************************
  *    Symbol Handling    *
@@ -1138,27 +541,32 @@ BOOL WINAPI SymUnloadModule64(_In_ HANDLE, _In_ DWORD64);
 #define IMAGEHLP_SYMBOL_INFO_CONSTANT              SYMF_CONSTANT        /* 0x100 */
 #define IMAGEHLP_SYMBOL_FUNCTION                   SYMF_FUNCTION        /* 0x800 */
 
-#define SYMFLAG_VALUEPRESENT     0x00000001
-#define SYMFLAG_REGISTER         0x00000008
-#define SYMFLAG_REGREL           0x00000010
-#define SYMFLAG_FRAMEREL         0x00000020
-#define SYMFLAG_PARAMETER        0x00000040
-#define SYMFLAG_LOCAL            0x00000080
-#define SYMFLAG_CONSTANT         0x00000100
-#define SYMFLAG_EXPORT           0x00000200
-#define SYMFLAG_FORWARDER        0x00000400
-#define SYMFLAG_FUNCTION         0x00000800
-#define SYMFLAG_VIRTUAL          0x00001000
-#define SYMFLAG_THUNK            0x00002000
-#define SYMFLAG_TLSREL           0x00004000
-#define SYMFLAG_SLOT             0x00008000
-#define SYMFLAG_ILREL            0x00010000
-#define SYMFLAG_METADATA         0x00020000
-#define SYMFLAG_CLR_TOKEN        0x00040000
-#define SYMFLAG_NULL             0x00080000
-#define SYMFLAG_FUNC_NO_RETURN   0x00100000
+#define SYMFLAG_VALUEPRESENT       0x00000001
+#define SYMFLAG_REGISTER           0x00000008
+#define SYMFLAG_REGREL             0x00000010
+#define SYMFLAG_FRAMEREL           0x00000020
+#define SYMFLAG_PARAMETER          0x00000040
+#define SYMFLAG_LOCAL              0x00000080
+#define SYMFLAG_CONSTANT           0x00000100
+#define SYMFLAG_EXPORT             0x00000200
+#define SYMFLAG_FORWARDER          0x00000400
+#define SYMFLAG_FUNCTION           0x00000800
+#define SYMFLAG_VIRTUAL            0x00001000
+#define SYMFLAG_THUNK              0x00002000
+#define SYMFLAG_TLSREL             0x00004000
+#define SYMFLAG_SLOT               0x00008000
+#define SYMFLAG_ILREL              0x00010000
+#define SYMFLAG_METADATA           0x00020000
+#define SYMFLAG_CLR_TOKEN          0x00040000
+#define SYMFLAG_NULL               0x00080000
+#define SYMFLAG_FUNC_NO_RETURN     0x00100000
 #define SYMFLAG_SYNTHETIC_ZEROBASE 0x00200000
-#define SYMFLAG_PUBLIC_CODE      0x00400000
+#define SYMFLAG_PUBLIC_CODE        0x00400000
+#define SYMFLAG_REGREL_ALIASINDIR  0x00800000
+#define SYMFLAG_FIXUP_ARM64X       0x01000000
+#define SYMFLAG_GLOBAL             0x02000000
+
+#define SYMFLAG_RESET              0x80000000
 
 #define MAX_SYM_NAME    2000
 
@@ -1212,7 +620,35 @@ typedef struct _SYMBOL_INFO_PACKAGEW
     WCHAR        name[MAX_SYM_NAME+1];
 } SYMBOL_INFO_PACKAGEW, *PSYMBOL_INFO_PACKAGEW;
 
-typedef enum _IMAGEHLP_SYMBOL_TYPE_INFO
+typedef struct _SYMSRV_INDEX_INFO
+{
+    DWORD sizeofstruct;
+    CHAR  file[MAX_PATH + 1];
+    BOOL  stripped;
+    DWORD timestamp;
+    DWORD size;
+    CHAR  dbgfile[MAX_PATH + 1];
+    CHAR  pdbfile[MAX_PATH + 1];
+    GUID  guid;
+    DWORD sig;
+    DWORD age;
+} SYMSRV_INDEX_INFO, *PSYMSRV_INDEX_INFO;
+
+typedef struct
+{
+    DWORD sizeofstruct;
+    WCHAR file[MAX_PATH + 1];
+    BOOL  stripped;
+    DWORD timestamp;
+    DWORD size;
+    WCHAR dbgfile[MAX_PATH + 1];
+    WCHAR pdbfile[MAX_PATH + 1];
+    GUID  guid;
+    DWORD sig;
+    DWORD age;
+} SYMSRV_INDEX_INFOW, *PSYMSRV_INDEX_INFOW;
+
+typedef enum _IMAGEHLP_SYMBOL_TYPE_INFO 
 {
     TI_GET_SYMTAG,
     TI_GET_SYMNAME,
@@ -1241,6 +677,15 @@ typedef enum _IMAGEHLP_SYMBOL_TYPE_INFO
     TI_GET_UDTKIND,
     TI_IS_EQUIV_TO,
     TI_GET_CALLING_CONVENTION,
+    TI_IS_CLOSE_EQUIV_TO,
+    TI_GTIEX_REQS_VALID,
+    TI_GET_VIRTUALBASEOFFSET,
+    TI_GET_VIRTUALBASEDISPINDEX,
+    TI_GET_IS_REFERENCE,
+    TI_GET_INDIRECTVIRTUALBASECLASS,
+    TI_GET_VIRTUALBASETABLETYPE,
+    TI_GET_OBJECTPOINTERTYPE,
+    IMAGEHLP_SYMBOL_TYPE_INFO_MAX
 } IMAGEHLP_SYMBOL_TYPE_INFO;
 
 #define IMAGEHLP_GET_TYPE_INFO_UNCACHED            0x00000001
@@ -1267,7 +712,7 @@ typedef struct _IMAGEHLP_GET_TYPE_INFO_PARAMS
     PULONG64    ReqsValid;
 } IMAGEHLP_GET_TYPE_INFO_PARAMS, *PIMAGEHLP_GET_TYPE_INFO_PARAMS;
 
-typedef struct _TI_FINDCHILDREN_PARAMS
+typedef struct _TI_FINDCHILDREN_PARAMS 
 {
     ULONG Count;
     ULONG Start;
@@ -1295,495 +740,104 @@ typedef struct _TI_FINDCHILDREN_PARAMS
 #define SYMSEARCH_MASKOBJS              0x01
 #define SYMSEARCH_RECURSE               0x02
 #define SYMSEARCH_GLOBALSONLY           0x04
+#define SYMSEARCH_ALLITEMS              0X08
 
-BOOL
-WINAPI
-SymGetTypeInfo(
-  _In_ HANDLE,
-  _In_ DWORD64,
-  _In_ ULONG,
-  _In_ IMAGEHLP_SYMBOL_TYPE_INFO,
-  _Out_ PVOID);
+BOOL    IMAGEAPI SymGetTypeInfo(HANDLE, DWORD64, ULONG, IMAGEHLP_SYMBOL_TYPE_INFO, PVOID);
+BOOL    IMAGEAPI SymGetTypeInfoEx(HANDLE, DWORD64, PIMAGEHLP_GET_TYPE_INFO_PARAMS);
+typedef BOOL (CALLBACK *PSYM_ENUMERATESYMBOLS_CALLBACK)(PSYMBOL_INFO, ULONG, PVOID);
+typedef BOOL (CALLBACK *PSYM_ENUMERATESYMBOLS_CALLBACKW)(PSYMBOL_INFOW, ULONG, PVOID);
+BOOL    IMAGEAPI SymEnumTypes(HANDLE, ULONG64, PSYM_ENUMERATESYMBOLS_CALLBACK, PVOID);
+BOOL    IMAGEAPI SymEnumTypesW(HANDLE, ULONG64, PSYM_ENUMERATESYMBOLS_CALLBACKW, PVOID);
+BOOL    IMAGEAPI SymEnumTypesByName(HANDLE, ULONG64, PCSTR, PSYM_ENUMERATESYMBOLS_CALLBACK, PVOID);
+BOOL    IMAGEAPI SymEnumTypesByNameW(HANDLE, ULONG64, PCWSTR, PSYM_ENUMERATESYMBOLS_CALLBACKW, PVOID);
+BOOL    IMAGEAPI SymFromAddr(HANDLE, DWORD64, DWORD64*, SYMBOL_INFO*);
+BOOL    IMAGEAPI SymFromAddrW(HANDLE, DWORD64, DWORD64*, SYMBOL_INFOW*);
+BOOL    IMAGEAPI SymFromInlineContext(HANDLE, DWORD64, ULONG, PDWORD64, PSYMBOL_INFO);
+BOOL    IMAGEAPI SymFromInlineContextW(HANDLE, DWORD64, ULONG, PDWORD64, PSYMBOL_INFOW);
+BOOL    IMAGEAPI SymFromToken(HANDLE, DWORD64, DWORD, PSYMBOL_INFO);
+BOOL    IMAGEAPI SymFromTokenW(HANDLE, DWORD64, DWORD, PSYMBOL_INFOW);
+BOOL    IMAGEAPI SymFromName(HANDLE, PCSTR, PSYMBOL_INFO);
+BOOL    IMAGEAPI SymFromNameW(HANDLE, PCWSTR, PSYMBOL_INFOW);
+BOOL    IMAGEAPI SymGetSymFromAddr64(HANDLE, DWORD64, PDWORD64, PIMAGEHLP_SYMBOL64);
+BOOL    IMAGEAPI SymGetSymFromName64(HANDLE, PCSTR, PIMAGEHLP_SYMBOL64);
+BOOL    IMAGEAPI SymGetTypeFromName(HANDLE, ULONG64, PCSTR, PSYMBOL_INFO);
+BOOL    IMAGEAPI SymGetTypeFromNameW(HANDLE, ULONG64, PCWSTR, PSYMBOL_INFOW);
+BOOL    IMAGEAPI SymGetSymNext64(HANDLE, PIMAGEHLP_SYMBOL64);
+BOOL    IMAGEAPI SymGetSymNextW64(HANDLE, PIMAGEHLP_SYMBOLW64);
+BOOL    IMAGEAPI SymGetSymPrev64(HANDLE, PIMAGEHLP_SYMBOL64);
+BOOL    IMAGEAPI SymGetSymPrevW64(HANDLE, PIMAGEHLP_SYMBOLW64);
+BOOL    IMAGEAPI SymEnumSym(HANDLE,ULONG64,PSYM_ENUMERATESYMBOLS_CALLBACK,PVOID);
+BOOL    IMAGEAPI SymEnumSymbols(HANDLE, ULONG64, PCSTR, PSYM_ENUMERATESYMBOLS_CALLBACK, PVOID);
+BOOL    IMAGEAPI SymEnumSymbolsW(HANDLE, ULONG64, PCWSTR, PSYM_ENUMERATESYMBOLS_CALLBACKW, PVOID);
+BOOL    IMAGEAPI SymEnumSymbolsEx(HANDLE, ULONG64, PCSTR, PSYM_ENUMERATESYMBOLS_CALLBACK, PVOID, DWORD);
+BOOL    IMAGEAPI SymEnumSymbolsExW(HANDLE, ULONG64, PCWSTR, PSYM_ENUMERATESYMBOLS_CALLBACKW, PVOID, DWORD);
+typedef BOOL (CALLBACK *PSYM_ENUMSYMBOLS_CALLBACK64)(PCSTR, DWORD64, ULONG, PVOID);
+typedef BOOL (CALLBACK *PSYM_ENUMSYMBOLS_CALLBACK64W)(PCWSTR, DWORD64, ULONG, PVOID);
+BOOL    IMAGEAPI SymEnumerateSymbols64(HANDLE, ULONG64, PSYM_ENUMSYMBOLS_CALLBACK64, PVOID);
+BOOL    IMAGEAPI SymEnumerateSymbolsW64(HANDLE, ULONG64, PSYM_ENUMSYMBOLS_CALLBACK64W, PVOID);
+BOOL    IMAGEAPI SymEnumSymbolsForAddr(HANDLE, DWORD64, PSYM_ENUMERATESYMBOLS_CALLBACK, PVOID);
+BOOL    IMAGEAPI SymEnumSymbolsForAddrW(HANDLE, DWORD64, PSYM_ENUMERATESYMBOLS_CALLBACKW, PVOID);
+typedef BOOL (CALLBACK *PSYMBOL_REGISTERED_CALLBACK64)(HANDLE, ULONG, ULONG64, ULONG64);
+BOOL    IMAGEAPI SymRegisterCallback64(HANDLE, PSYMBOL_REGISTERED_CALLBACK64, ULONG64);
+BOOL    IMAGEAPI SymRegisterCallbackW64(HANDLE, PSYMBOL_REGISTERED_CALLBACK64, ULONG64);
+BOOL    IMAGEAPI SymUnDName64(PIMAGEHLP_SYMBOL64, PSTR, DWORD);
+BOOL    IMAGEAPI SymMatchString(PCSTR, PCSTR, BOOL);
+BOOL    IMAGEAPI SymMatchStringA(PCSTR, PCSTR, BOOL);
+BOOL    IMAGEAPI SymMatchStringW(PCWSTR, PCWSTR, BOOL);
+BOOL    IMAGEAPI SymSearch(HANDLE, ULONG64, DWORD, DWORD, PCSTR, DWORD64, PSYM_ENUMERATESYMBOLS_CALLBACK, PVOID, DWORD);
+BOOL    IMAGEAPI SymSearchW(HANDLE, ULONG64, DWORD, DWORD, PCWSTR, DWORD64, PSYM_ENUMERATESYMBOLS_CALLBACKW, PVOID, DWORD);
+DWORD   IMAGEAPI UnDecorateSymbolName(PCSTR, PSTR, DWORD, DWORD);
+DWORD   IMAGEAPI UnDecorateSymbolNameW(PCWSTR, PWSTR, DWORD, DWORD);
+BOOL    IMAGEAPI SymGetScope(HANDLE, ULONG64, DWORD, PSYMBOL_INFO);
+BOOL    IMAGEAPI SymGetScopeW(HANDLE, ULONG64, DWORD, PSYMBOL_INFOW);
+BOOL    IMAGEAPI SymFromIndex(HANDLE, ULONG64, DWORD, PSYMBOL_INFO);
+BOOL    IMAGEAPI SymFromIndexW(HANDLE, ULONG64, DWORD, PSYMBOL_INFOW);
+BOOL    IMAGEAPI SymAddSymbol(HANDLE, ULONG64, PCSTR, DWORD64, DWORD, DWORD);
+BOOL    IMAGEAPI SymAddSymbolW(HANDLE, ULONG64, PCWSTR, DWORD64, DWORD, DWORD);
+BOOL    IMAGEAPI SymDeleteSymbol(HANDLE, ULONG64, PCSTR, DWORD64, DWORD);
+BOOL    IMAGEAPI SymDeleteSymbolW(HANDLE, ULONG64, PCWSTR, DWORD64, DWORD);
 
-BOOL
-WINAPI
-SymGetTypeInfoEx(
-  _In_ HANDLE,
-  _In_ DWORD64,
-  _Inout_ PIMAGEHLP_GET_TYPE_INFO_PARAMS);
+typedef struct _OMAP
+{
+    ULONG  rva;
+    ULONG  rvaTo;
+} OMAP, *POMAP;
 
-typedef BOOL
-(CALLBACK *PSYM_ENUMERATESYMBOLS_CALLBACK)(
-  _In_ PSYMBOL_INFO,
-  _In_ ULONG,
-  _In_opt_ PVOID);
-
-typedef BOOL
-(CALLBACK *PSYM_ENUMERATESYMBOLS_CALLBACKW)(
-  _In_ PSYMBOL_INFOW,
-  _In_ ULONG,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-SymEnumTypes(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_ PSYM_ENUMERATESYMBOLS_CALLBACK,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-SymEnumTypesW(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_ PSYM_ENUMERATESYMBOLS_CALLBACKW,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-SymFromAddr(
-  _In_ HANDLE,
-  _In_ DWORD64,
-  _Out_opt_ DWORD64*,
-  _Inout_ SYMBOL_INFO*);
-
-BOOL
-WINAPI
-SymFromAddrW(
-  _In_ HANDLE,
-  _In_ DWORD64,
-  _Out_opt_ DWORD64*,
-  _Inout_ SYMBOL_INFOW*);
-
-BOOL
-WINAPI
-SymFromToken(
-  _In_ HANDLE,
-  _In_ DWORD64,
-  _In_ DWORD,
-  _Inout_ PSYMBOL_INFO);
-
-BOOL
-WINAPI
-SymFromTokenW(
-  _In_ HANDLE,
-  _In_ DWORD64,
-  _In_ DWORD,
-  _Inout_ PSYMBOL_INFOW);
-
-BOOL WINAPI SymFromName(_In_ HANDLE, _In_ PCSTR, _Inout_ PSYMBOL_INFO);
-BOOL WINAPI SymFromNameW(_In_ HANDLE, _In_ PCWSTR, _Inout_ PSYMBOL_INFOW);
-
-BOOL
-WINAPI
-SymGetSymFromAddr64(
-  _In_ HANDLE,
-  _In_ DWORD64,
-  _Out_opt_ PDWORD64,
-  _Inout_ PIMAGEHLP_SYMBOL64);
-
-BOOL
-WINAPI
-SymGetSymFromName64(
-  _In_ HANDLE,
-  _In_ PCSTR,
-  _Inout_ PIMAGEHLP_SYMBOL64);
-
-BOOL
-WINAPI
-SymGetTypeFromName(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_ PCSTR,
-  _Inout_ PSYMBOL_INFO);
-
-BOOL
-WINAPI
-SymGetTypeFromNameW(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_ PCWSTR,
-  _Inout_ PSYMBOL_INFOW);
-
-BOOL WINAPI SymGetSymNext64(_In_ HANDLE, _Inout_ PIMAGEHLP_SYMBOL64);
-BOOL WINAPI SymGetSymNextW64(_In_ HANDLE, _Inout_ PIMAGEHLP_SYMBOLW64);
-BOOL WINAPI SymGetSymPrev64(_In_ HANDLE, _Inout_ PIMAGEHLP_SYMBOL64);
-BOOL WINAPI SymGetSymPrevW64(_In_ HANDLE, _Inout_ PIMAGEHLP_SYMBOLW64);
-
-BOOL
-WINAPI
-SymEnumSym(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_ PSYM_ENUMERATESYMBOLS_CALLBACK,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-SymEnumSymbols(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_opt_ PCSTR,
-  _In_ PSYM_ENUMERATESYMBOLS_CALLBACK,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-SymEnumSymbolsW(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_opt_ PCWSTR,
-  _In_ PSYM_ENUMERATESYMBOLS_CALLBACKW,
-  _In_opt_ PVOID);
-
-typedef BOOL
-(CALLBACK *PSYM_ENUMSYMBOLS_CALLBACK64)(
-  _In_ PCSTR,
-  _In_ DWORD64,
-  _In_ ULONG,
-  _In_opt_ PVOID);
-
-typedef BOOL
-(CALLBACK *PSYM_ENUMSYMBOLS_CALLBACK64W)(
-  _In_ PCWSTR,
-  _In_ DWORD64,
-  _In_ ULONG,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-SymEnumerateSymbols64(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_ PSYM_ENUMSYMBOLS_CALLBACK64,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-SymEnumerateSymbolsW64(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_ PSYM_ENUMSYMBOLS_CALLBACK64W,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-SymEnumSymbolsForAddr(
-  _In_ HANDLE,
-  _In_ DWORD64,
-  _In_ PSYM_ENUMERATESYMBOLS_CALLBACK,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-SymEnumSymbolsForAddrW(
-  _In_ HANDLE,
-  _In_ DWORD64,
-  _In_ PSYM_ENUMERATESYMBOLS_CALLBACKW,
-  _In_opt_ PVOID);
-
-typedef BOOL
-(CALLBACK *PSYMBOL_REGISTERED_CALLBACK64)(
-  _In_ HANDLE,
-  _In_ ULONG,
-  _In_opt_ ULONG64,
-  _In_opt_ ULONG64);
-
-BOOL
-WINAPI
-SymRegisterCallback64(
-  _In_ HANDLE,
-  _In_ PSYMBOL_REGISTERED_CALLBACK64,
-  _In_ ULONG64);
-
-BOOL
-WINAPI
-SymRegisterCallbackW64(
-  _In_ HANDLE,
-  _In_ PSYMBOL_REGISTERED_CALLBACK64,
-  _In_ ULONG64);
-
-BOOL
-WINAPI
-SymUnDName64(
-  _In_ PIMAGEHLP_SYMBOL64,
-  _Out_writes_(UnDecNameLength) PSTR,
-  _In_ DWORD UnDecNameLength);
-
-BOOL WINAPI SymMatchString(_In_ PCSTR, _In_ PCSTR, _In_ BOOL);
-BOOL WINAPI SymMatchStringA(_In_ PCSTR, _In_ PCSTR, _In_ BOOL);
-BOOL WINAPI SymMatchStringW(_In_ PCWSTR, _In_ PCWSTR, _In_ BOOL);
-
-BOOL
-WINAPI
-SymSearch(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_opt_ DWORD,
-  _In_opt_ DWORD,
-  _In_opt_ PCSTR,
-  _In_opt_ DWORD64,
-  _In_ PSYM_ENUMERATESYMBOLS_CALLBACK,
-  _In_opt_ PVOID,
-  _In_ DWORD);
-
-BOOL
-WINAPI
-SymSearchW(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_opt_ DWORD,
-  _In_opt_ DWORD,
-  _In_opt_ PCWSTR,
-  _In_opt_ DWORD64,
-  _In_ PSYM_ENUMERATESYMBOLS_CALLBACKW,
-  _In_opt_ PVOID,
-  _In_ DWORD);
-
-DWORD
-WINAPI
-UnDecorateSymbolName(
-  _In_ PCSTR,
-  _Out_writes_(maxStringLength) PSTR,
-  _In_ DWORD maxStringLength,
-  _In_ DWORD);
-
-DWORD
-WINAPI
-UnDecorateSymbolNameW(
-  _In_ PCWSTR,
-  _Out_writes_(maxStringLength) PWSTR,
-  _In_ DWORD maxStringLength,
-  _In_ DWORD);
-
-BOOL
-WINAPI
-SymGetScope(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_ DWORD,
-  _Inout_ PSYMBOL_INFO);
-
-BOOL
-WINAPI
-SymGetScopeW(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_ DWORD,
-  _Inout_ PSYMBOL_INFOW);
-
-BOOL
-WINAPI
-SymFromIndex(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_ DWORD,
-  _Inout_ PSYMBOL_INFO);
-
-BOOL
-WINAPI
-SymFromIndexW(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_ DWORD,
-  _Inout_ PSYMBOL_INFOW);
-
-BOOL
-WINAPI
-SymAddSymbol(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_ PCSTR,
-  _In_ DWORD64,
-  _In_ DWORD,
-  _In_ DWORD);
-
-BOOL
-WINAPI
-SymAddSymbolW(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_ PCWSTR,
-  _In_ DWORD64,
-  _In_ DWORD,
-  _In_ DWORD);
-
-BOOL
-WINAPI
-SymDeleteSymbol(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_opt_ PCSTR,
-  _In_ DWORD64,
-  _In_ DWORD);
-
-BOOL
-WINAPI
-SymDeleteSymbolW(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_opt_ PCWSTR,
-  _In_ DWORD64,
-  _In_ DWORD);
+BOOL IMAGEAPI SymGetOmaps(HANDLE, DWORD64, POMAP*, PDWORD64, POMAP*, PDWORD64);
 
 /*************************
  *      Source Files     *
  *************************/
+typedef BOOL (CALLBACK *PSYM_ENUMSOURCEFILES_CALLBACK)(PSOURCEFILE, PVOID);
+typedef BOOL (CALLBACK *PSYM_ENUMSOURCEFILES_CALLBACKW)(PSOURCEFILEW, PVOID);
 
-typedef BOOL
-(CALLBACK *PSYM_ENUMSOURCEFILES_CALLBACK)(
-  _In_ PSOURCEFILE,
-  _In_opt_ PVOID);
+#define ESLFLAG_FULLPATH        0x00000001
+#define ESLFLAG_NEAREST         0x00000002
+#define ESLFLAG_PREV            0x00000004
+#define ESLFLAG_NEXT            0x00000008
+#define ESLFLAG_INLINE_SITE     0x00000010
 
-typedef BOOL
-(CALLBACK *PSYM_ENUMSOURCEFILES_CALLBACKW)(
-  _In_ PSOURCEFILEW,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-SymEnumSourceFiles(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_opt_ PCSTR,
-  _In_ PSYM_ENUMSOURCEFILES_CALLBACK,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-SymEnumSourceFilesW(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_opt_ PCWSTR,
-  _In_ PSYM_ENUMSOURCEFILES_CALLBACKW,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-SymGetLineFromAddr64(
-  _In_ HANDLE,
-  _In_ DWORD64,
-  _Out_ PDWORD,
-  _Out_ PIMAGEHLP_LINE64);
-
-BOOL
-WINAPI
-SymGetLineFromAddrW64(
-  _In_ HANDLE,
-  _In_ DWORD64,
-  _Out_ PDWORD,
-  _Out_ PIMAGEHLP_LINEW64);
-
-BOOL WINAPI SymGetLinePrev64(_In_ HANDLE, _Inout_ PIMAGEHLP_LINE64);
-BOOL WINAPI SymGetLinePrevW64(_In_ HANDLE, _Inout_ PIMAGEHLP_LINEW64);
-BOOL WINAPI SymGetLineNext64(_In_ HANDLE, _Inout_ PIMAGEHLP_LINE64);
-BOOL WINAPI SymGetLineNextW64(_In_ HANDLE, _Inout_ PIMAGEHLP_LINEW64);
-
-BOOL
-WINAPI
-SymGetLineFromName64(
-  _In_ HANDLE,
-  _In_opt_ PCSTR,
-  _In_opt_ PCSTR,
-  _In_ DWORD,
-  _Out_ PLONG,
-  _Inout_ PIMAGEHLP_LINE64);
-
-BOOL
-WINAPI
-SymGetLineFromNameW64(
-  _In_ HANDLE,
-  _In_opt_ PCWSTR,
-  _In_opt_ PCWSTR,
-  _In_ DWORD,
-  _Out_ PLONG,
-  _Inout_ PIMAGEHLP_LINEW64);
-
-ULONG
-WINAPI
-SymGetFileLineOffsets64(
-  _In_ HANDLE,
-  _In_opt_ PCSTR,
-  _In_ PCSTR,
-  _Out_writes_(BufferLines) PDWORD64,
-  _In_ ULONG BufferLines);
-
-BOOL
-WINAPI
-SymGetSourceFile(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_opt_ PCSTR,
-  _In_ PCSTR,
-  _Out_writes_(Size) PSTR,
-  _In_ DWORD Size);
-
-BOOL
-WINAPI
-SymGetSourceFileW(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_opt_ PCWSTR,
-  _In_ PCWSTR,
-  _Out_writes_(Size) PWSTR,
-  _In_ DWORD Size);
-
-BOOL
-WINAPI
-SymGetSourceFileToken(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_ PCSTR,
-  _Outptr_ PVOID*,
-  _Out_ DWORD*);
-
-BOOL
-WINAPI
-SymGetSourceFileTokenW(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_ PCWSTR,
-  _Outptr_ PVOID*,
-  _Out_ DWORD*);
-
-BOOL
-WINAPI
-SymGetSourceFileFromToken(
-  _In_ HANDLE,
-  _In_ PVOID,
-  _In_opt_ PCSTR,
-  _Out_writes_(Size) PSTR,
-  _In_ DWORD Size);
-
-BOOL
-WINAPI
-SymGetSourceFileFromTokenW(
-  _In_ HANDLE,
-  _In_ PVOID,
-  _In_opt_ PCWSTR,
-  _Out_writes_(Size) PWSTR,
-  _In_ DWORD Size);
-
-BOOL
-WINAPI
-SymGetSourceVarFromToken(
-  _In_ HANDLE,
-  _In_ PVOID,
-  _In_opt_ PCSTR,
-  _In_ PCSTR,
-  _Out_writes_(Size) PSTR,
-  _In_ DWORD Size);
-
-BOOL
-WINAPI
-SymGetSourceVarFromTokenW(
-  _In_ HANDLE,
-  _In_ PVOID,
-  _In_opt_ PCWSTR,
-  _In_ PCWSTR,
-  _Out_writes_(Size) PWSTR,
-  _In_ DWORD Size);
+BOOL    IMAGEAPI SymEnumSourceFiles(HANDLE, ULONG64, PCSTR, PSYM_ENUMSOURCEFILES_CALLBACK, PVOID);
+BOOL    IMAGEAPI SymEnumSourceFilesW(HANDLE, ULONG64, PCWSTR, PSYM_ENUMSOURCEFILES_CALLBACKW, PVOID);
+BOOL    IMAGEAPI SymGetLineFromAddr64(HANDLE, DWORD64, PDWORD, PIMAGEHLP_LINE64);
+BOOL    IMAGEAPI SymGetLineFromAddrW64(HANDLE, DWORD64, PDWORD, PIMAGEHLP_LINEW64);
+BOOL    IMAGEAPI SymGetLineFromInlineContext(HANDLE, DWORD64, ULONG, DWORD64, PDWORD, PIMAGEHLP_LINE64);
+BOOL    IMAGEAPI SymGetLineFromInlineContextW(HANDLE, DWORD64, ULONG, DWORD64, PDWORD, PIMAGEHLP_LINEW64);
+BOOL    IMAGEAPI SymGetLinePrev64(HANDLE, PIMAGEHLP_LINE64);
+BOOL    IMAGEAPI SymGetLinePrevW64(HANDLE, PIMAGEHLP_LINEW64);
+BOOL    IMAGEAPI SymGetLineNext64(HANDLE, PIMAGEHLP_LINE64);
+BOOL    IMAGEAPI SymGetLineNextW64(HANDLE, PIMAGEHLP_LINEW64);
+BOOL    IMAGEAPI SymGetLineFromName64(HANDLE, PCSTR, PCSTR, DWORD, PLONG, PIMAGEHLP_LINE64);
+BOOL    IMAGEAPI SymGetLineFromNameW64(HANDLE, PCWSTR, PCWSTR, DWORD, PLONG, PIMAGEHLP_LINEW64);
+ULONG   IMAGEAPI SymGetFileLineOffsets64(HANDLE, PCSTR, PCSTR, PDWORD64, ULONG);
+BOOL    IMAGEAPI SymGetSourceFile(HANDLE, ULONG64, PCSTR, PCSTR, PSTR, DWORD);
+BOOL    IMAGEAPI SymGetSourceFileW(HANDLE, ULONG64, PCWSTR, PCWSTR, PWSTR, DWORD);
+BOOL    IMAGEAPI SymGetSourceFileToken(HANDLE, ULONG64, PCSTR, PVOID*, DWORD*);
+BOOL    IMAGEAPI SymGetSourceFileTokenW(HANDLE, ULONG64, PCWSTR, PVOID*, DWORD*);
+BOOL    IMAGEAPI SymGetSourceFileFromToken(HANDLE, PVOID, PCSTR, PSTR, DWORD);
+BOOL    IMAGEAPI SymGetSourceFileFromTokenW(HANDLE, PVOID, PCWSTR, PWSTR, DWORD);
+BOOL    IMAGEAPI SymGetSourceVarFromToken(HANDLE, PVOID, PCSTR, PCSTR, PSTR, DWORD);
+BOOL    IMAGEAPI SymGetSourceVarFromTokenW(HANDLE, PVOID, PCWSTR, PCWSTR, PWSTR, DWORD);
 
 typedef struct _SRCCODEINFO
 {
@@ -1807,349 +861,62 @@ typedef struct _SRCCODEINFOW
     DWORD64     Address;
 } SRCCODEINFOW, *PSRCCODEINFOW;
 
-typedef BOOL
-(CALLBACK* PSYM_ENUMLINES_CALLBACK)(
-  _In_ PSRCCODEINFO,
-  _In_opt_ PVOID);
-
-typedef BOOL
-(CALLBACK* PSYM_ENUMLINES_CALLBACKW)(
-  _In_ PSRCCODEINFOW,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-SymEnumLines(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_opt_ PCSTR,
-  _In_opt_ PCSTR,
-  _In_ PSYM_ENUMLINES_CALLBACK,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-SymEnumLinesW(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_opt_ PCWSTR,
-  _In_opt_ PCWSTR,
-  _In_ PSYM_ENUMLINES_CALLBACKW,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-SymEnumSourceLines(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_opt_ PCSTR,
-  _In_opt_ PCSTR,
-  _In_opt_ DWORD,
-  _In_ DWORD,
-  _In_ PSYM_ENUMLINES_CALLBACK,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-SymEnumSourceLinesW(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_opt_ PCWSTR,
-  _In_opt_ PCWSTR,
-  _In_opt_ DWORD,
-  _In_ DWORD,
-  _In_ PSYM_ENUMLINES_CALLBACKW,
-  _In_opt_ PVOID);
+typedef BOOL (CALLBACK* PSYM_ENUMLINES_CALLBACK)(PSRCCODEINFO, PVOID);
+typedef BOOL (CALLBACK* PSYM_ENUMLINES_CALLBACKW)(PSRCCODEINFOW, PVOID);
+BOOL IMAGEAPI SymEnumLines(HANDLE, ULONG64, PCSTR, PCSTR, PSYM_ENUMLINES_CALLBACK, PVOID);
+BOOL IMAGEAPI SymEnumLinesW(HANDLE, ULONG64, PCWSTR, PCWSTR, PSYM_ENUMLINES_CALLBACKW, PVOID);
+BOOL IMAGEAPI SymEnumSourceLines(HANDLE, ULONG64, PCSTR, PCSTR, DWORD, DWORD, PSYM_ENUMLINES_CALLBACK, PVOID);
+BOOL IMAGEAPI SymEnumSourceLinesW(HANDLE, ULONG64, PCWSTR, PCWSTR, DWORD, DWORD, PSYM_ENUMLINES_CALLBACKW, PVOID);
 
 /*************************
  * File & image handling *
  *************************/
+BOOL IMAGEAPI SymInitialize(HANDLE, PCSTR, BOOL);
+BOOL IMAGEAPI SymInitializeW(HANDLE, PCWSTR, BOOL);
+BOOL IMAGEAPI SymCleanup(HANDLE);
 
-BOOL WINAPI SymInitialize(_In_ HANDLE, _In_opt_ PCSTR, _In_ BOOL);
-BOOL WINAPI SymInitializeW(_In_ HANDLE, _In_opt_ PCWSTR, _In_ BOOL);
-BOOL WINAPI SymCleanup(_In_ HANDLE);
-
-HANDLE
-WINAPI
-FindDebugInfoFile(
-  _In_ PCSTR,
-  _In_ PCSTR,
-  _Out_writes_(MAX_PATH + 1) PSTR);
-
-typedef BOOL
-(CALLBACK *PFIND_DEBUG_FILE_CALLBACK)(
-  _In_ HANDLE,
-  _In_ PCSTR,
-  _In_ PVOID);
-
-typedef BOOL
-(CALLBACK *PFIND_DEBUG_FILE_CALLBACKW)(
-  _In_ HANDLE,
-  _In_ PCWSTR,
-  _In_ PVOID);
-
-HANDLE
-WINAPI
-FindDebugInfoFileEx(
-  _In_ PCSTR,
-  _In_ PCSTR,
-  _Out_writes_(MAX_PATH + 1) PSTR,
-  _In_opt_ PFIND_DEBUG_FILE_CALLBACK,
-  _In_opt_ PVOID);
-
-HANDLE
-WINAPI
-FindDebugInfoFileExW(
-  _In_ PCWSTR,
-  _In_ PCWSTR,
-  _Out_writes_(MAX_PATH + 1) PWSTR,
-  _In_opt_ PFIND_DEBUG_FILE_CALLBACKW,
-  _In_opt_ PVOID);
-
-HANDLE
-WINAPI
-SymFindDebugInfoFile(
-  _In_ HANDLE,
-  _In_ PCSTR,
-  _Out_writes_(MAX_PATH + 1) PSTR,
-  _In_opt_ PFIND_DEBUG_FILE_CALLBACK,
-  _In_opt_ PVOID);
-
-HANDLE
-WINAPI
-SymFindDebugInfoFileW(
-  _In_ HANDLE,
-  _In_ PCWSTR,
-  _Out_writes_(MAX_PATH + 1) PWSTR,
-  _In_opt_ PFIND_DEBUG_FILE_CALLBACKW,
-  _In_opt_ PVOID);
-
-typedef BOOL
-(CALLBACK *PFINDFILEINPATHCALLBACK)(
-  _In_ PCSTR,
-  _In_ PVOID);
-
-typedef BOOL
-(CALLBACK *PFINDFILEINPATHCALLBACKW)(
-  _In_ PCWSTR,
-  _In_ PVOID);
-
-BOOL WINAPI FindFileInPath(HANDLE, PCSTR, PCSTR, PVOID, DWORD, DWORD, DWORD,
-                           PSTR, PFINDFILEINPATHCALLBACK, PVOID);
-
-BOOL
-WINAPI
-SymFindFileInPath(
-  _In_ HANDLE,
-  _In_opt_ PCSTR,
-  _In_ PCSTR,
-  _In_opt_ PVOID,
-  _In_ DWORD,
-  _In_ DWORD,
-  _In_ DWORD,
-  _Out_writes_(MAX_PATH + 1) PSTR,
-  _In_opt_ PFINDFILEINPATHCALLBACK,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-SymFindFileInPathW(
-  _In_ HANDLE,
-  _In_opt_ PCWSTR,
-  _In_ PCWSTR,
-  _In_opt_ PVOID,
-  _In_ DWORD,
-  _In_ DWORD,
-  _In_ DWORD,
-  _Out_writes_(MAX_PATH + 1) PWSTR,
-  _In_opt_ PFINDFILEINPATHCALLBACKW,
-  _In_opt_ PVOID);
-
-HANDLE
-WINAPI
-FindExecutableImage(
-  _In_ PCSTR,
-  _In_ PCSTR,
-  _Out_writes_(MAX_PATH + 1) PSTR);
-
-typedef BOOL
-(CALLBACK *PFIND_EXE_FILE_CALLBACK)(
-  _In_ HANDLE,
-  _In_ PCSTR,
-  _In_opt_ PVOID);
-
-typedef BOOL
-(CALLBACK *PFIND_EXE_FILE_CALLBACKW)(
-  _In_ HANDLE,
-  _In_ PCWSTR,
-  _In_opt_ PVOID);
-
-HANDLE
-WINAPI
-FindExecutableImageEx(
-  _In_ PCSTR,
-  _In_ PCSTR,
-  _Out_writes_(MAX_PATH + 1) PSTR,
-  _In_opt_ PFIND_EXE_FILE_CALLBACK,
-  _In_opt_ PVOID);
-
-HANDLE
-WINAPI
-FindExecutableImageExW(
-  _In_ PCWSTR,
-  _In_ PCWSTR,
-  _Out_writes_(MAX_PATH + 1) PWSTR,
-  _In_opt_ PFIND_EXE_FILE_CALLBACKW,
-  _In_opt_ PVOID);
-
-HANDLE
-WINAPI
-SymFindExecutableImage(
-  _In_ HANDLE,
-  _In_ PCSTR,
-  _Out_writes_(MAX_PATH + 1) PSTR,
-  _In_ PFIND_EXE_FILE_CALLBACK,
-  _In_ PVOID);
-
-HANDLE
-WINAPI
-SymFindExecutableImageW(
-  _In_ HANDLE,
-  _In_ PCWSTR,
-  _Out_writes_(MAX_PATH + 1) PWSTR,
-  _In_ PFIND_EXE_FILE_CALLBACKW,
-  _In_ PVOID);
-
-PIMAGE_NT_HEADERS WINAPI ImageNtHeader(_In_ PVOID);
-
-PVOID
-WINAPI
-ImageDirectoryEntryToDataEx(
-  _In_ PVOID,
-  _In_ BOOLEAN,
-  _In_ USHORT,
-  _Out_ PULONG,
-  _Out_opt_ PIMAGE_SECTION_HEADER *);
-
-PVOID
-WINAPI
-ImageDirectoryEntryToData(
-  _In_ PVOID,
-  _In_ BOOLEAN,
-  _In_ USHORT,
-  _Out_ PULONG);
-
-PIMAGE_SECTION_HEADER
-WINAPI
-ImageRvaToSection(
-  _In_ PIMAGE_NT_HEADERS,
-  _In_ PVOID,
-  _In_ ULONG);
-
-PVOID
-WINAPI
-ImageRvaToVa(
-  _In_ PIMAGE_NT_HEADERS,
-  _In_ PVOID,
-  _In_ ULONG,
-  _In_opt_ PIMAGE_SECTION_HEADER*);
-
-BOOL
-WINAPI
-SymGetSearchPath(
-  _In_ HANDLE,
-  _Out_writes_(SearchPathLength) PSTR,
-  _In_ DWORD SearchPathLength);
-
-BOOL
-WINAPI
-SymGetSearchPathW(
-  _In_ HANDLE,
-  _Out_writes_(SearchPathLength) PWSTR,
-  _In_ DWORD SearchPathLength);
-
-BOOL WINAPI SymSetSearchPath(_In_ HANDLE, _In_opt_ PCSTR);
-BOOL WINAPI SymSetSearchPathW(_In_ HANDLE, _In_opt_ PCWSTR);
-DWORD WINAPI GetTimestampForLoadedLibrary(_In_ HMODULE);
-BOOL WINAPI MakeSureDirectoryPathExists(_In_ PCSTR);
-
-BOOL
-WINAPI
-SearchTreeForFile(
-  _In_ PCSTR,
-  _In_ PCSTR,
-  _Out_writes_(MAX_PATH + 1) PSTR);
-
-BOOL
-WINAPI
-SearchTreeForFileW(
-  _In_ PCWSTR,
-  _In_ PCWSTR,
-  _Out_writes_(MAX_PATH + 1) PWSTR);
-
-typedef BOOL
-(CALLBACK *PENUMDIRTREE_CALLBACK)(
-  _In_ PCSTR,
-  _In_opt_ PVOID);
-
-typedef BOOL
-(CALLBACK *PENUMDIRTREE_CALLBACKW)(
-  _In_ PCWSTR,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-EnumDirTree(
-  _In_opt_ HANDLE,
-  _In_ PCSTR,
-  _In_ PCSTR,
-  _Out_writes_opt_(MAX_PATH + 1) PSTR,
-  _In_opt_ PENUMDIRTREE_CALLBACK,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-EnumDirTreeW(
-  _In_opt_ HANDLE,
-  _In_ PCWSTR,
-  _In_ PCWSTR,
-  _Out_writes_opt_(MAX_PATH + 1) PWSTR,
-  _In_opt_ PENUMDIRTREE_CALLBACKW,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-SymMatchFileName(
-  _In_ PCSTR,
-  _In_ PCSTR,
-  _Outptr_opt_ PSTR*,
-  _Outptr_opt_ PSTR*);
-
-BOOL
-WINAPI
-SymMatchFileNameW(
-  _In_ PCWSTR,
-  _In_ PCWSTR,
-  _Outptr_opt_ PWSTR*,
-  _Outptr_opt_ PWSTR*);
-
-PCHAR WINAPI SymSetHomeDirectory(_In_opt_ HANDLE, _In_opt_ PCSTR);
-PWSTR WINAPI SymSetHomeDirectoryW(_In_opt_ HANDLE, _In_opt_ PCWSTR);
-
-PCHAR
-WINAPI
-SymGetHomeDirectory(
-  _In_ DWORD,
-  _Out_writes_(size) PSTR,
-  _In_ size_t size);
-
-PWSTR
-WINAPI
-SymGetHomeDirectoryW(
-  _In_ DWORD,
-  _Out_writes_(size) PWSTR,
-  _In_ size_t size);
-
+HANDLE  IMAGEAPI FindDebugInfoFile(PCSTR, PCSTR, PSTR);
+typedef BOOL (CALLBACK *PFIND_DEBUG_FILE_CALLBACK)(HANDLE, PCSTR, PVOID);
+typedef BOOL (CALLBACK *PFIND_DEBUG_FILE_CALLBACKW)(HANDLE, PCWSTR, PVOID);
+HANDLE  IMAGEAPI FindDebugInfoFileEx(PCSTR, PCSTR, PSTR, PFIND_DEBUG_FILE_CALLBACK, PVOID);
+HANDLE  IMAGEAPI FindDebugInfoFileExW(PCWSTR, PCWSTR, PWSTR, PFIND_DEBUG_FILE_CALLBACKW, PVOID);
+HANDLE  IMAGEAPI SymFindDebugInfoFile(HANDLE, PCSTR, PSTR, PFIND_DEBUG_FILE_CALLBACK, PVOID);
+HANDLE  IMAGEAPI SymFindDebugInfoFileW(HANDLE, PCWSTR, PWSTR, PFIND_DEBUG_FILE_CALLBACKW, PVOID);
+typedef BOOL (CALLBACK *PFINDFILEINPATHCALLBACK)(PCSTR, PVOID);
+typedef BOOL (CALLBACK *PFINDFILEINPATHCALLBACKW)(PCWSTR, PVOID);
+BOOL    IMAGEAPI FindFileInPath(HANDLE, PCSTR, PCSTR, PVOID, DWORD, DWORD, DWORD, PSTR, PFINDFILEINPATHCALLBACK, PVOID);
+BOOL    IMAGEAPI SymFindFileInPath(HANDLE, PCSTR, PCSTR, PVOID, DWORD, DWORD, DWORD, PSTR, PFINDFILEINPATHCALLBACK, PVOID);
+BOOL    IMAGEAPI SymFindFileInPathW(HANDLE, PCWSTR, PCWSTR, PVOID, DWORD, DWORD, DWORD, PWSTR, PFINDFILEINPATHCALLBACKW, PVOID);
+HANDLE  IMAGEAPI FindExecutableImage(PCSTR, PCSTR, PSTR);
+typedef BOOL (CALLBACK *PFIND_EXE_FILE_CALLBACK)(HANDLE, PCSTR, PVOID);
+typedef BOOL (CALLBACK *PFIND_EXE_FILE_CALLBACKW)(HANDLE, PCWSTR, PVOID);
+HANDLE  IMAGEAPI FindExecutableImageEx(PCSTR, PCSTR, PSTR, PFIND_EXE_FILE_CALLBACK, PVOID);
+HANDLE  IMAGEAPI FindExecutableImageExW(PCWSTR, PCWSTR, PWSTR, PFIND_EXE_FILE_CALLBACKW, PVOID);
+HANDLE  IMAGEAPI SymFindExecutableImage(HANDLE, PCSTR, PSTR, PFIND_EXE_FILE_CALLBACK, PVOID);
+HANDLE  IMAGEAPI SymFindExecutableImageW(HANDLE, PCWSTR, PWSTR, PFIND_EXE_FILE_CALLBACKW, PVOID);
+PIMAGE_NT_HEADERS IMAGEAPI ImageNtHeader(PVOID);
+PVOID   IMAGEAPI ImageDirectoryEntryToDataEx(PVOID, BOOLEAN, USHORT, PULONG, PIMAGE_SECTION_HEADER *);
+PVOID   IMAGEAPI ImageDirectoryEntryToData(PVOID, BOOLEAN, USHORT, PULONG);
+PIMAGE_SECTION_HEADER IMAGEAPI ImageRvaToSection(PIMAGE_NT_HEADERS, PVOID, ULONG);
+PVOID   IMAGEAPI ImageRvaToVa(PIMAGE_NT_HEADERS, PVOID, ULONG, PIMAGE_SECTION_HEADER*);
+BOOL    IMAGEAPI SymGetSearchPath(HANDLE, PSTR, DWORD);
+BOOL    IMAGEAPI SymGetSearchPathW(HANDLE, PWSTR, DWORD);
+BOOL    IMAGEAPI SymSetSearchPath(HANDLE, PCSTR);
+BOOL    IMAGEAPI SymSetSearchPathW(HANDLE, PCWSTR);
+DWORD   IMAGEAPI GetTimestampForLoadedLibrary(HMODULE);
+BOOL    IMAGEAPI MakeSureDirectoryPathExists(PCSTR);
+BOOL    IMAGEAPI SearchTreeForFile(PCSTR, PCSTR, PSTR);
+BOOL    IMAGEAPI SearchTreeForFileW(PCWSTR, PCWSTR, PWSTR);
+typedef BOOL (CALLBACK *PENUMDIRTREE_CALLBACK)(PCSTR, PVOID);
+typedef BOOL (CALLBACK *PENUMDIRTREE_CALLBACKW)(PCWSTR, PVOID);
+BOOL    IMAGEAPI EnumDirTree(HANDLE, PCSTR, PCSTR, PSTR, PENUMDIRTREE_CALLBACK, PVOID);
+BOOL    IMAGEAPI EnumDirTreeW(HANDLE, PCWSTR, PCWSTR, PWSTR, PENUMDIRTREE_CALLBACKW, PVOID);
+BOOL    IMAGEAPI SymMatchFileName(PCSTR, PCSTR, PSTR*, PSTR*);
+BOOL    IMAGEAPI SymMatchFileNameW(PCWSTR, PCWSTR, PWSTR*, PWSTR*);
+PCHAR   IMAGEAPI SymSetHomeDirectory(HANDLE, PCSTR);
+PWSTR   IMAGEAPI SymSetHomeDirectoryW(HANDLE, PCWSTR);
+PCHAR   IMAGEAPI SymGetHomeDirectory(DWORD, PSTR, size_t);
+PWSTR   IMAGEAPI SymGetHomeDirectoryW(DWORD, PWSTR, size_t);
 #define hdBase  0
 #define hdSym   1
 #define hdSrc   2
@@ -2158,14 +925,10 @@ SymGetHomeDirectoryW(
 /*************************
  *   Context management  *
  *************************/
-
-BOOL
-WINAPI
-SymSetContext(
-  _In_ HANDLE,
-  _In_ PIMAGEHLP_STACK_FRAME,
-  _In_opt_ PIMAGEHLP_CONTEXT);
-
+BOOL IMAGEAPI SymSetContext(HANDLE, PIMAGEHLP_STACK_FRAME, PIMAGEHLP_CONTEXT);
+BOOL IMAGEAPI SymSetScopeFromIndex(HANDLE, ULONG64, ULONG);
+BOOL IMAGEAPI SymSetScopeFromAddr(HANDLE, ULONG64);
+BOOL IMAGEAPI SymSetScopeFromInlineContext(HANDLE, ULONG64, ULONG);
 
 /*************************
  *    Stack management   *
@@ -2184,6 +947,11 @@ typedef struct _KDHELP
     DWORD       KiCallUserMode;
     DWORD       KeUserCallbackDispatcher;
     DWORD       SystemRangeStart;
+    DWORD       ThCallbackBStore;
+    DWORD       KiUserExceptionDispatcher;
+    DWORD       StackBase;
+    DWORD       StackLimit;
+    DWORD       Reserved[5];
 } KDHELP, *PKDHELP;
 #endif
 
@@ -2197,7 +965,15 @@ typedef struct _KDHELP64
     DWORD64     KiCallUserMode;
     DWORD64     KeUserCallbackDispatcher;
     DWORD64     SystemRangeStart;
-    DWORD64     Reserved[8];
+    DWORD64     KiUserExceptionDispatcher;
+    DWORD64     StackBase;
+    DWORD64     StackLimit;
+    DWORD       BuildVersion;
+    DWORD       RetpolineStubFunctionTableSize;
+    DWORD64     RetpolineStubFunctionTable;
+    DWORD       RetpolineStubOffset;
+    DWORD       RetpolineStubSize;
+    DWORD64     Reserved[2];
 } KDHELP64, *PKDHELP64;
 
 #if !defined(_IMAGEHLP_SOURCE_) && defined(_IMAGEHLP64)
@@ -2235,57 +1011,67 @@ typedef struct _STACKFRAME64
     KDHELP64    KdHelp;
 } STACKFRAME64, *LPSTACKFRAME64;
 
-typedef BOOL
-(CALLBACK *PREAD_PROCESS_MEMORY_ROUTINE64)(
-  _In_ HANDLE,
-  _In_ DWORD64,
-  _Out_writes_bytes_(nSize) PVOID,
-  _In_ DWORD nSize,
-  _Out_ PDWORD);
+#define INLINE_FRAME_CONTEXT_INIT   0
+#define INLINE_FRAME_CONTEXT_IGNORE 0xFFFFFFFF
 
-typedef PVOID
-(CALLBACK *PFUNCTION_TABLE_ACCESS_ROUTINE64)(
-  _In_ HANDLE,
-  _In_ DWORD64);
+typedef struct _tagSTACKFRAME_EX
+{
+    ADDRESS64   AddrPC;
+    ADDRESS64   AddrReturn;
+    ADDRESS64   AddrFrame;
+    ADDRESS64   AddrStack;
+    ADDRESS64   AddrBStore;
+    PVOID       FuncTableEntry;
+    DWORD64     Params[4];
+    BOOL        Far;
+    BOOL        Virtual;
+    DWORD64     Reserved[3];
+    KDHELP64    KdHelp;
 
-typedef DWORD64
-(CALLBACK *PGET_MODULE_BASE_ROUTINE64)(
-  _In_ HANDLE,
-  _In_ DWORD64);
+    DWORD       StackFrameSize;
+    DWORD       InlineFrameContext;
+} STACKFRAME_EX, *LPSTACKFRAME_EX;
 
-typedef DWORD64
-(CALLBACK *PTRANSLATE_ADDRESS_ROUTINE64)(
-  _In_ HANDLE,
-  _In_ HANDLE,
-  _In_ LPADDRESS64);
 
-BOOL
-WINAPI
-StackWalk64(
-  _In_ DWORD,
-  _In_ HANDLE,
-  _In_ HANDLE,
-  _Inout_ LPSTACKFRAME64,
-  _Inout_ PVOID,
-  _In_opt_ PREAD_PROCESS_MEMORY_ROUTINE64,
-  _In_opt_ PFUNCTION_TABLE_ACCESS_ROUTINE64,
-  _In_opt_ PGET_MODULE_BASE_ROUTINE64,
-  _In_opt_ PTRANSLATE_ADDRESS_ROUTINE64);
+typedef BOOL (CALLBACK *PREAD_PROCESS_MEMORY_ROUTINE64)
+    (HANDLE, DWORD64, PVOID, DWORD, PDWORD);
+typedef PVOID (CALLBACK *PFUNCTION_TABLE_ACCESS_ROUTINE64)(HANDLE, DWORD64);
+typedef DWORD64 (CALLBACK *PGET_MODULE_BASE_ROUTINE64)(HANDLE, DWORD64);
+typedef DWORD64 (CALLBACK *PTRANSLATE_ADDRESS_ROUTINE64)(HANDLE, HANDLE, LPADDRESS64);
+BOOL IMAGEAPI StackWalk64(DWORD, HANDLE, HANDLE, LPSTACKFRAME64, PVOID,
+                        PREAD_PROCESS_MEMORY_ROUTINE64,
+                        PFUNCTION_TABLE_ACCESS_ROUTINE64,
+                        PGET_MODULE_BASE_ROUTINE64,
+                        PTRANSLATE_ADDRESS_ROUTINE64);
+#define SYM_STKWALK_DEFAULT         0x00000000
+#define SYM_STKWALK_FORCE_FRAMEPTR  0x00000001
+#define SYM_STKWALK_ZEROEXTEND_PTRS 0x00000002
 
-PVOID WINAPI SymFunctionTableAccess64(_In_ HANDLE, _In_ DWORD64);
+BOOL IMAGEAPI StackWalkEx(DWORD, HANDLE, HANDLE, LPSTACKFRAME_EX, PVOID,
+                        PREAD_PROCESS_MEMORY_ROUTINE64,
+                        PFUNCTION_TABLE_ACCESS_ROUTINE64,
+                        PGET_MODULE_BASE_ROUTINE64,
+                        PTRANSLATE_ADDRESS_ROUTINE64,
+                        DWORD);
+PVOID IMAGEAPI SymFunctionTableAccess64(HANDLE, DWORD64);
 
-typedef PVOID
-(CALLBACK *PSYMBOL_FUNCENTRY_CALLBACK64)(
-  _In_ HANDLE,
-  _In_ ULONG64,
-  _In_ ULONG64);
+typedef PVOID (CALLBACK *PSYMBOL_FUNCENTRY_CALLBACK64)(HANDLE, ULONG64, ULONG64);
 
-BOOL
-WINAPI
-SymRegisterFunctionEntryCallback64(
-  _In_ HANDLE,
-  _In_ PSYMBOL_FUNCENTRY_CALLBACK64,
-  _In_ ULONG64);
+BOOL IMAGEAPI SymRegisterFunctionEntryCallback64(HANDLE, PSYMBOL_FUNCENTRY_CALLBACK64, ULONG64);
+BOOL IMAGEAPI SymGetUnwindInfo(HANDLE, DWORD64, PVOID, PULONG);
+
+/* Inline context related APIs */
+DWORD IMAGEAPI SymAddrIncludeInlineTrace(HANDLE, DWORD64);
+
+#define SYM_INLINE_COMP_ERROR     0
+#define SYM_INLINE_COMP_IDENTICAL 1
+#define SYM_INLINE_COMP_STEPIN    2
+#define SYM_INLINE_COMP_STEPOUT   3
+#define SYM_INLINE_COMP_STEPOVER  4
+#define SYM_INLINE_COMP_DIFFERENT 5
+
+DWORD IMAGEAPI SymCompareInlineTrace(HANDLE, DWORD64, DWORD, DWORD64, DWORD64, DWORD64);
+BOOL  IMAGEAPI SymQueryInlineTrace(HANDLE, DWORD64, DWORD, DWORD64, DWORD64, LPDWORD, LPDWORD);
 
 /*************************
  * Version, global stuff *
@@ -2301,9 +1087,10 @@ typedef struct API_VERSION
     USHORT  Reserved;
 } API_VERSION, *LPAPI_VERSION;
 
-LPAPI_VERSION WINAPI ImagehlpApiVersion(void);
-LPAPI_VERSION WINAPI ImagehlpApiVersionEx(_In_ LPAPI_VERSION);
+LPAPI_VERSION IMAGEAPI ImagehlpApiVersion(void);
+LPAPI_VERSION IMAGEAPI ImagehlpApiVersionEx(LPAPI_VERSION);
 
+#ifndef _WIN64
 typedef struct _IMAGE_DEBUG_INFORMATION
 {
     LIST_ENTRY                  List;
@@ -2339,49 +1126,43 @@ typedef struct _IMAGE_DEBUG_INFORMATION
     DWORD                       Reserved[ 2 ];
 } IMAGE_DEBUG_INFORMATION, *PIMAGE_DEBUG_INFORMATION;
 
+PIMAGE_DEBUG_INFORMATION IMAGEAPI MapDebugInformation(HANDLE, PCSTR, PCSTR, ULONG);
+BOOL IMAGEAPI UnmapDebugInformation(PIMAGE_DEBUG_INFORMATION);
+#endif
+
 typedef enum
 {
     SYMOPT_EX_DISABLEACCESSTIMEUPDATE,
+    SYMOPT_EX_LASTVALIDDEBUGDIRECTORY,
+    SYMOPT_EX_NOIMPLICITPATTERNSEARCH,
+    SYMOPT_EX_NEVERLOADSYMBOLS,
     SYMOPT_EX_MAX,
 
 #ifdef __WINESRC__
+    /* Include ELF/Mach-O modules in module operations */
     SYMOPT_EX_WINE_NATIVE_MODULES = 1000,
+    /* Enable Wine's extension APIs */
+    SYMOPT_EX_WINE_EXTENSION_API,
+    /* Return the Unix actual path of loaded module */
+    SYMOPT_EX_WINE_MODULE_REAL_PATH,
+    /* Return the raw source file path from debug info (not always mapped to DOS) */
+    SYMOPT_EX_WINE_SOURCE_ACTUAL_PATH,
 #endif
 } IMAGEHLP_EXTENDED_OPTIONS;
 
-PIMAGE_DEBUG_INFORMATION
-WINAPI
-MapDebugInformation(
-  _In_opt_ HANDLE,
-  _In_ PCSTR,
-  _In_opt_ PCSTR,
-  _In_ ULONG);
+DWORD   IMAGEAPI SymGetOptions(void);
+DWORD   IMAGEAPI SymSetOptions(DWORD);
+BOOL    IMAGEAPI SymGetExtendedOption(IMAGEHLP_EXTENDED_OPTIONS option);
+BOOL    IMAGEAPI SymSetExtendedOption(IMAGEHLP_EXTENDED_OPTIONS option, BOOL value);
+BOOL    IMAGEAPI SymSetParentWindow(HWND);
 
-BOOL WINAPI UnmapDebugInformation(_Out_ PIMAGE_DEBUG_INFORMATION);
-
-DWORD WINAPI SymGetOptions(void);
-DWORD WINAPI SymSetOptions(_In_ DWORD);
-
-BOOL WINAPI SymGetExtendedOption(_In_ IMAGEHLP_EXTENDED_OPTIONS option);
-BOOL WINAPI SymSetExtendedOption(_In_ IMAGEHLP_EXTENDED_OPTIONS option, _In_ BOOL value);
-
-BOOL WINAPI SymSetParentWindow(_In_ HWND);
-
-BOOL
-IMAGEAPI
-SymSrvIsStore(
-  _In_opt_ HANDLE hProcess,
-  _In_ PCSTR path);
-
-BOOL
-IMAGEAPI
-SymSrvIsStoreW(
-    _In_opt_ HANDLE hProcess,
-    _In_ PCWSTR path);
-
-/*************************
- * Version, global stuff *
- *************************/
+/***************************
+ * Symbol servers & stores *
+ ***************************/
+BOOL IMAGEAPI SymSrvGetFileIndexes(PCSTR, GUID *, PDWORD, PDWORD, DWORD);
+BOOL IMAGEAPI SymSrvGetFileIndexesW(PCWSTR, GUID *, PDWORD, PDWORD, DWORD);
+BOOL IMAGEAPI SymSrvGetFileIndexInfo(PCSTR, PSYMSRV_INDEX_INFO, DWORD);
+BOOL IMAGEAPI SymSrvGetFileIndexInfoW(PCWSTR, PSYMSRV_INDEX_INFOW, DWORD);
 
 typedef BOOL     (WINAPI* PSYMBOLSERVERPROC)(PCSTR, PCSTR, PVOID, DWORD, DWORD, PSTR);
 typedef BOOL     (WINAPI* PSYMBOLSERVERPROCA)(PCSTR, PCSTR, PVOID, DWORD, DWORD, PSTR);
@@ -2414,6 +1195,9 @@ typedef BOOL     (WINAPI* PSYMBOLSERVERPINGPROCW)(PCWSTR);
 #define SSRVACTION_TRACE        1
 #define SSRVACTION_QUERYCANCEL  2
 #define SSRVACTION_EVENT        3
+#define SSRVACTION_EVENTW       4
+#define SSRVACTION_SIZE         5
+#define SSRVACTION_HTTPSTATUS   6
 
 /* 32-bit functions */
 
@@ -2460,217 +1244,80 @@ typedef BOOL     (WINAPI* PSYMBOLSERVERPINGPROCW)(PCWSTR);
 
 #else
 
-typedef BOOL
-(CALLBACK *PENUMLOADED_MODULES_CALLBACK)(
-  _In_ PCSTR,
-  _In_ ULONG,
-  _In_ ULONG,
-  _In_opt_ PVOID);
+typedef BOOL  (CALLBACK *PENUMLOADED_MODULES_CALLBACK)(PCSTR, ULONG, ULONG, PVOID);
+typedef PVOID (CALLBACK *PFUNCTION_TABLE_ACCESS_ROUTINE)(HANDLE, DWORD);
+typedef DWORD (CALLBACK *PGET_MODULE_BASE_ROUTINE)(HANDLE, DWORD);
+typedef BOOL  (CALLBACK *PREAD_PROCESS_MEMORY_ROUTINE)(HANDLE, DWORD, PVOID, DWORD, PDWORD);
+typedef BOOL  (CALLBACK *PSYM_ENUMMODULES_CALLBACK)(PCSTR, ULONG, PVOID);
+typedef BOOL  (CALLBACK *PSYM_ENUMSYMBOLS_CALLBACK)(PCSTR, ULONG, ULONG, PVOID);
+typedef BOOL  (CALLBACK *PSYM_ENUMSYMBOLS_CALLBACKW)(PCWSTR, ULONG, ULONG, PVOID);
+typedef BOOL  (CALLBACK *PSYMBOL_REGISTERED_CALLBACK)(HANDLE, ULONG, PVOID, PVOID);
+typedef PVOID (CALLBACK *PSYMBOL_FUNCENTRY_CALLBACK)(HANDLE, DWORD, PVOID);
+typedef DWORD (CALLBACK *PTRANSLATE_ADDRESS_ROUTINE)(HANDLE, HANDLE, LPADDRESS);
 
-typedef PVOID
-(CALLBACK *PFUNCTION_TABLE_ACCESS_ROUTINE)(
-  _In_ HANDLE,
-  _In_ DWORD);
-
-typedef DWORD
-(CALLBACK *PGET_MODULE_BASE_ROUTINE)(
-  _In_ HANDLE,
-  _In_ DWORD);
-
-typedef BOOL
-(CALLBACK *PREAD_PROCESS_MEMORY_ROUTINE)(
-  _In_ HANDLE,
-  _In_ DWORD,
-  _Out_writes_bytes_(nSize) PVOID,
-  _In_ DWORD nSize,
-  _Out_ PDWORD);
-
-typedef BOOL
-(CALLBACK *PSYM_ENUMMODULES_CALLBACK)(
-  _In_ PCSTR,
-  _In_ ULONG,
-  _In_opt_ PVOID);
-
-typedef BOOL
-(CALLBACK *PSYM_ENUMSYMBOLS_CALLBACK)(
-  _In_ PCSTR,
-  _In_ ULONG,
-  _In_ ULONG,
-  _In_opt_ PVOID);
-
-typedef BOOL
-(CALLBACK *PSYM_ENUMSYMBOLS_CALLBACKW)(
-  _In_ PCWSTR,
-  _In_ ULONG,
-  _In_ ULONG,
-  _In_opt_ PVOID);
-
-typedef BOOL
-(CALLBACK *PSYMBOL_REGISTERED_CALLBACK)(
-  _In_ HANDLE,
-  _In_ ULONG,
-  _In_opt_ PVOID,
-  _In_opt_ PVOID);
-
-typedef PVOID
-(CALLBACK *PSYMBOL_FUNCENTRY_CALLBACK)(
-  _In_ HANDLE,
-  _In_ DWORD,
-  _In_opt_ PVOID);
-
-typedef DWORD
-(CALLBACK *PTRANSLATE_ADDRESS_ROUTINE)(
-  _In_ HANDLE,
-  _In_ HANDLE,
-  _Out_ LPADDRESS);
-
-BOOL
-WINAPI
-EnumerateLoadedModules(
-  _In_ HANDLE,
-  _In_ PENUMLOADED_MODULES_CALLBACK,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-StackWalk(
-  _In_ DWORD,
-  _In_ HANDLE,
-  _In_ HANDLE,
-  _Inout_ LPSTACKFRAME,
-  _Inout_ PVOID,
-  _In_opt_ PREAD_PROCESS_MEMORY_ROUTINE,
-  _In_opt_ PFUNCTION_TABLE_ACCESS_ROUTINE,
-  _In_opt_ PGET_MODULE_BASE_ROUTINE,
-  _In_opt_ PTRANSLATE_ADDRESS_ROUTINE);
-
-BOOL
-WINAPI
-SymEnumerateModules(
-  _In_ HANDLE,
-  _In_ PSYM_ENUMMODULES_CALLBACK,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-SymEnumerateSymbols(
-  _In_ HANDLE,
-  _In_ ULONG,
-  _In_ PSYM_ENUMSYMBOLS_CALLBACK,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-SymEnumerateSymbolsW(
-  _In_ HANDLE,
-  _In_ ULONG,
-  _In_ PSYM_ENUMSYMBOLS_CALLBACKW,
-  _In_opt_ PVOID);
-
-PVOID WINAPI SymFunctionTableAccess(_In_ HANDLE, _In_ DWORD);
-
-BOOL
-WINAPI
-SymGetLineFromAddr(
-  _In_ HANDLE,
-  _In_ DWORD,
-  _Out_ PDWORD,
-  _Out_ PIMAGEHLP_LINE);
-
-BOOL
-WINAPI
-SymGetLineFromAddrW(
-  _In_ HANDLE,
-  _In_ DWORD,
-  _Out_ PDWORD,
-  _Out_ PIMAGEHLP_LINEW);
-
-BOOL
-WINAPI
-SymGetLineFromName(
-  _In_ HANDLE,
-  _In_opt_ PCSTR,
-  _In_opt_ PCSTR,
-  _In_ DWORD,
-  _Out_ PLONG,
-  _Inout_ PIMAGEHLP_LINE);
-
-BOOL WINAPI SymGetLineNext(_In_ HANDLE, _Inout_ PIMAGEHLP_LINE);
-BOOL WINAPI SymGetLineNextW(_In_ HANDLE, _Inout_ PIMAGEHLP_LINEW);
-BOOL WINAPI SymGetLinePrev(_In_ HANDLE, _Inout_ PIMAGEHLP_LINE);
-BOOL WINAPI SymGetLinePrevW(_In_ HANDLE, _Inout_ PIMAGEHLP_LINEW);
-DWORD WINAPI SymGetModuleBase(_In_ HANDLE, _In_ DWORD);
-
-BOOL
-WINAPI
-SymGetModuleInfo(
-  _In_ HANDLE,
-  _In_ DWORD,
-  _Out_ PIMAGEHLP_MODULE);
-
-BOOL
-WINAPI
-SymGetModuleInfoW(
-  _In_ HANDLE,
-  _In_ DWORD,
-  _Out_ PIMAGEHLP_MODULEW);
-
-BOOL
-WINAPI
-SymGetSymFromAddr(
-  _In_ HANDLE,
-  _In_ DWORD,
-  _Out_opt_ PDWORD,
-  _Inout_ PIMAGEHLP_SYMBOL);
-
-BOOL
-WINAPI
-SymGetSymFromName(
-  _In_ HANDLE,
-  _In_ PCSTR,
-  _Inout_ PIMAGEHLP_SYMBOL);
-
-BOOL WINAPI SymGetSymNext(_In_ HANDLE, _Inout_ PIMAGEHLP_SYMBOL);
-BOOL WINAPI SymGetSymNextW(_In_ HANDLE, _Inout_ PIMAGEHLP_SYMBOLW);
-BOOL WINAPI SymGetSymPrev(_In_ HANDLE, _Inout_ PIMAGEHLP_SYMBOL);
-BOOL WINAPI SymGetSymPrevW(_In_ HANDLE, _Inout_ PIMAGEHLP_SYMBOLW);
-
-DWORD
-WINAPI
-SymLoadModule(
-  _In_ HANDLE,
-  _In_opt_ HANDLE,
-  _In_opt_ PCSTR,
-  _In_opt_ PCSTR,
-  _In_ DWORD,
-  _In_ DWORD);
-
-BOOL
-WINAPI
-SymRegisterCallback(
-  _In_ HANDLE,
-  _In_ PSYMBOL_REGISTERED_CALLBACK,
-  _In_opt_ PVOID);
-
-BOOL
-WINAPI
-SymRegisterFunctionEntryCallback(
-  _In_ HANDLE,
-  _In_ PSYMBOL_FUNCENTRY_CALLBACK,
-  _In_opt_ PVOID);
-
-BOOL WINAPI SymRefreshModuleList(_In_ HANDLE);
-
-BOOL
-WINAPI
-SymUnDName(
-  _In_ PIMAGEHLP_SYMBOL,
-  _Out_writes_(UnDecNameLength) PSTR,
-  _In_ DWORD UnDecNameLength);
-
-BOOL WINAPI SymUnloadModule(_In_ HANDLE, _In_ DWORD);
+BOOL    IMAGEAPI EnumerateLoadedModules(HANDLE, PENUMLOADED_MODULES_CALLBACK, PVOID);
+BOOL    IMAGEAPI StackWalk(DWORD, HANDLE, HANDLE, LPSTACKFRAME, PVOID, PREAD_PROCESS_MEMORY_ROUTINE, PFUNCTION_TABLE_ACCESS_ROUTINE, PGET_MODULE_BASE_ROUTINE, PTRANSLATE_ADDRESS_ROUTINE);
+BOOL    IMAGEAPI SymEnumerateModules(HANDLE, PSYM_ENUMMODULES_CALLBACK, PVOID);
+BOOL    IMAGEAPI SymEnumerateSymbols(HANDLE, ULONG, PSYM_ENUMSYMBOLS_CALLBACK, PVOID);
+BOOL    IMAGEAPI SymEnumerateSymbolsW(HANDLE, ULONG, PSYM_ENUMSYMBOLS_CALLBACKW, PVOID);
+PVOID   IMAGEAPI SymFunctionTableAccess(HANDLE, DWORD);
+BOOL    IMAGEAPI SymGetLineFromAddr(HANDLE, DWORD, PDWORD, PIMAGEHLP_LINE);
+BOOL    IMAGEAPI SymGetLineFromAddrW(HANDLE, DWORD, PDWORD, PIMAGEHLP_LINEW);
+BOOL    IMAGEAPI SymGetLineFromName(HANDLE, PCSTR, PCSTR, DWORD, PLONG, PIMAGEHLP_LINE);
+BOOL    IMAGEAPI SymGetLineNext(HANDLE, PIMAGEHLP_LINE);
+BOOL    IMAGEAPI SymGetLineNextW(HANDLE, PIMAGEHLP_LINEW);
+BOOL    IMAGEAPI SymGetLinePrev(HANDLE, PIMAGEHLP_LINE);
+BOOL    IMAGEAPI SymGetLinePrevW(HANDLE, PIMAGEHLP_LINEW);
+DWORD   IMAGEAPI SymGetModuleBase(HANDLE, DWORD);
+BOOL    IMAGEAPI SymGetModuleInfo(HANDLE, DWORD, PIMAGEHLP_MODULE);
+BOOL    IMAGEAPI SymGetModuleInfoW(HANDLE, DWORD, PIMAGEHLP_MODULEW);
+BOOL    IMAGEAPI SymGetSymFromAddr(HANDLE, DWORD, PDWORD, PIMAGEHLP_SYMBOL);
+BOOL    IMAGEAPI SymGetSymFromName(HANDLE, PCSTR, PIMAGEHLP_SYMBOL);
+BOOL    IMAGEAPI SymGetSymNext(HANDLE, PIMAGEHLP_SYMBOL);
+BOOL    IMAGEAPI SymGetSymNextW(HANDLE, PIMAGEHLP_SYMBOLW);
+BOOL    IMAGEAPI SymGetSymPrev(HANDLE, PIMAGEHLP_SYMBOL);
+BOOL    IMAGEAPI SymGetSymPrevW(HANDLE, PIMAGEHLP_SYMBOLW);
+DWORD   IMAGEAPI SymLoadModule(HANDLE, HANDLE, PCSTR, PCSTR, DWORD, DWORD);
+BOOL    IMAGEAPI SymRegisterCallback(HANDLE, PSYMBOL_REGISTERED_CALLBACK, PVOID);
+BOOL    IMAGEAPI SymRegisterFunctionEntryCallback(HANDLE, PSYMBOL_FUNCENTRY_CALLBACK, PVOID);
+BOOL    IMAGEAPI SymUnDName(PIMAGEHLP_SYMBOL, PSTR, DWORD);
+BOOL    IMAGEAPI SymUnloadModule(HANDLE, DWORD);
 
 #endif
+
+#ifdef __WINESRC__
+
+/* Wine extensions to dbghelp */
+enum dhext_module_type
+{
+    DMT_UNKNOWN,        /* for lookup, not actually used for a module */
+    DMT_ELF,            /* a real ELF shared module */
+    DMT_MACHO,          /* a real Mach-O shared module */
+    DMT_PE,             /* a native or builtin PE module */
+};
+
+/* only reporting the formats not exposed in regular IMAGHELP_MODULE_INFO */
+enum dhext_debug_format
+{
+    DHEXT_FORMAT_DWARF2     = 0x0001,
+    DHEXT_FORMAT_DWARF3     = 0x0002,
+    DHEXT_FORMAT_DWARF4     = 0x0004,
+    DHEXT_FORMAT_DWARF5     = 0x0008,
+    DHEXT_FORMAT_STABS      = 0x0010,
+};
+
+struct dhext_module_information
+{
+    enum dhext_module_type      type;
+    unsigned                    is_wine_builtin : 1,
+                                is_virtual : 1,
+                                has_file_image : 1;
+    unsigned                    debug_format_bitmask;
+};
+
+extern BOOL WINAPI wine_get_module_information(HANDLE, DWORD64 base, struct dhext_module_information*, unsigned len);
+
+#endif /*  __WINESRC__ */
 
 #ifdef __cplusplus
 } /* extern "C" */

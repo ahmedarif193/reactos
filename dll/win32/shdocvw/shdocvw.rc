@@ -19,10 +19,9 @@
 #include "windef.h"
 #include "resource.h"
 
-IDR_SHDOCVW WINE_REGISTRY "res/shdocvw_v1.rgs"
+IDR_SHDOCVW WINE_REGISTRY "res/shdocvw.rgs"
 IDR_FAVBAND REGISTRY "res/favband.rgs"
 IDR_EXPLORERBAND REGISTRY "res/explorerband.rgs"
-IDR_TYPELIB TYPELIB "shdocvw_v1.tlb"
 
 LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 
@@ -105,6 +104,6 @@ LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 #ifdef LANGUAGE_ZH_CN
     #include "lang/zh-CN.rc"
 #endif
-#ifdef LANGUAGE_PL_PL
+#ifdef LANGUAGE_ZH_TW
     #include "lang/zh-TW.rc"
 #endif

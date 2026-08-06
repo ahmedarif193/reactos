@@ -45,6 +45,12 @@ WINE_DEFAULT_DEBUG_CHANNEL(msvcrt);
 #endif
 #endif
 
+struct MSVCRT__LDOUBLE
+{
+    ULONGLONG m;
+    unsigned short exp;
+};
+
 /*********************************************************************
  *		_mbsdup (MSVCRT.@)
  *		_strdup (MSVCRT.@)
@@ -483,29 +489,23 @@ int fpnum_double(struct fpnum *fp, double *d)
 
 #define LDBL_EXP_BITS 15
 #define LDBL_MANT_BITS 64
-#ifdef __REACTOS__
-int fpnum_ldouble(struct fpnum *fp, WINE_BROKEN_LDOUBLE *d)
-#else
-int fpnum_ldouble(struct fpnum *fp, MSVCRT__LDOUBLE *d)
-#endif
+int fpnum_ldouble(struct fpnum *fp, struct MSVCRT__LDOUBLE *d)
 {
     if (fp->mod == FP_VAL_INFINITY)
     {
-        d->x80[0] = 0;
-        d->x80[1] = 0x80000000;
-        d->x80[2] = (1 << LDBL_EXP_BITS) - 1;
+        d->m = 0x8000000000000000ull;
+        d->exp = (1 << LDBL_EXP_BITS) - 1;
         if (fp->sign == -1)
-            d->x80[2] |= 1 << LDBL_EXP_BITS;
+            d->exp |= 1 << LDBL_EXP_BITS;
         return 0;
     }
 
     if (fp->mod == FP_VAL_NAN)
     {
-        d->x80[0] = ~0;
-        d->x80[1] = ~0;
-        d->x80[2] = (1 << LDBL_EXP_BITS) - 1;
+        d->m = ~0ull;
+        d->exp = (1 << LDBL_EXP_BITS) - 1;
         if (fp->sign == -1)
-            d->x80[2] |= 1 << LDBL_EXP_BITS;
+            d->exp |= 1 << LDBL_EXP_BITS;
         return 0;
     }
 
@@ -513,31 +513,28 @@ int fpnum_ldouble(struct fpnum *fp, MSVCRT__LDOUBLE *d)
             fp->m, fp->exp, fp->mod);
     if (!fp->m)
     {
-        d->x80[0] = 0;
-        d->x80[1] = 0;
-        d->x80[2] = 0;
+        d->m = 0;
+        d->exp = 0;
         if (fp->sign == -1)
-            d->x80[2] |= 1 << LDBL_EXP_BITS;
+            d->exp |= 1 << LDBL_EXP_BITS;
         return 0;
     }
 
     /* make sure that we don't overflow modifying exponent */
     if (fp->exp > 1<<LDBL_EXP_BITS)
     {
-        d->x80[0] = 0;
-        d->x80[1] = 0x80000000;
-        d->x80[2] = (1 << LDBL_EXP_BITS) - 1;
+        d->m = 0x8000000000000000ull;
+        d->exp = (1 << LDBL_EXP_BITS) - 1;
         if (fp->sign == -1)
-            d->x80[2] |= 1 << LDBL_EXP_BITS;
+            d->exp |= 1 << LDBL_EXP_BITS;
         return ERANGE;
     }
     if (fp->exp < -(1<<LDBL_EXP_BITS))
     {
-        d->x80[0] = 0;
-        d->x80[1] = 0;
-        d->x80[2] = 0;
+        d->m = 0;
+        d->exp = 0;
         if (fp->sign == -1)
-            d->x80[2] |= 1 << LDBL_EXP_BITS;
+            d->exp |= 1 << LDBL_EXP_BITS;
         return ERANGE;
     }
     fp->exp += LDBL_MANT_BITS - 1;
@@ -586,28 +583,25 @@ int fpnum_ldouble(struct fpnum *fp, MSVCRT__LDOUBLE *d)
 
     if (fp->exp >= (1<<LDBL_EXP_BITS)-1)
     {
-        d->x80[0] = 0;
-        d->x80[1] = 0x80000000;
-        d->x80[2] = (1 << LDBL_EXP_BITS) - 1;
+        d->m = 0x8000000000000000ull;
+        d->exp = (1 << LDBL_EXP_BITS) - 1;
         if (fp->sign == -1)
-            d->x80[2] |= 1 << LDBL_EXP_BITS;
+            d->exp |= 1 << LDBL_EXP_BITS;
         return ERANGE;
     }
     if (!fp->m || fp->exp < 0)
     {
-        d->x80[0] = 0;
-        d->x80[1] = 0;
-        d->x80[2] = 0;
+        d->m = 0;
+        d->exp = 0;
         if (fp->sign == -1)
-            d->x80[2] |= 1 << LDBL_EXP_BITS;
+            d->exp |= 1 << LDBL_EXP_BITS;
         return ERANGE;
     }
 
-    d->x80[0] = fp->m;
-    d->x80[1] = fp->m >> 32;
-    d->x80[2] = fp->exp;
+    d->m = fp->m;
+    d->exp = fp->exp;
     if (fp->sign == -1)
-        d->x80[2] |= 1 << LDBL_EXP_BITS;
+        d->exp |= 1 << LDBL_EXP_BITS;
     return 0;
 }
 
@@ -1524,19 +1518,16 @@ size_t CDECL strxfrm( char *dest, const char *src, size_t len )
 /********************************************************************
  *		__STRINGTOLD_L (MSVCR80.@)
  */
-#ifdef __REACTOS__
-int CDECL __STRINGTOLD_L( MSVCRT__LDOUBLE *value_, char **endptr,
-#else
-int CDECL __STRINGTOLD_L( MSVCRT__LDOUBLE *value, char **endptr,
-#endif
+int CDECL __STRINGTOLD_L( _LDOUBLE *value, char **endptr,
         const char *str, int flags, _locale_t locale )
 {
-#ifdef __REACTOS__
-    WINE_BROKEN_LDOUBLE value[1];
-#endif
+    struct MSVCRT__LDOUBLE *d = (struct MSVCRT__LDOUBLE *)value;
     pthreadlocinfo locinfo;
     const char *beg, *p;
     int err, ret = 0;
+#ifdef __REACTOS__
+    int parsed_exp;
+#endif
     struct fpnum fp;
 
     if (flags) FIXME("flags not supported: %x\n", flags);
@@ -1552,13 +1543,17 @@ int CDECL __STRINGTOLD_L( MSVCRT__LDOUBLE *value, char **endptr,
     beg = p;
 
     fp = fpnum_parse(strtod_str_get, strtod_str_unget, &p, locinfo, TRUE);
+#ifdef __REACTOS__
+    parsed_exp = fp.exp;
+#endif
     if (endptr) *endptr = (p == beg ? (char*)str : (char*)p);
     if (p == beg) ret = 4;
 
-    err = fpnum_ldouble(&fp, value);
-    if (err) ret = (value->x80[2] & 0x7fff ? 2 : 1);
+    err = fpnum_ldouble(&fp, d);
 #ifdef __REACTOS__
-    memcpy(value_, value, sizeof(*value_));
+    if (err) ret = (d->exp & 0x7fff ? 2 : parsed_exp == INT_MIN ? 1 : 0);
+#else
+    if (err) ret = (d->exp & 0x7fff ? 2 : 1);
 #endif
     return ret;
 }
@@ -1566,7 +1561,7 @@ int CDECL __STRINGTOLD_L( MSVCRT__LDOUBLE *value, char **endptr,
 /********************************************************************
  *              __STRINGTOLD (MSVCRT.@)
  */
-int CDECL __STRINGTOLD( MSVCRT__LDOUBLE *value, char **endptr, const char *str, int flags )
+int CDECL __STRINGTOLD( _LDOUBLE *value, char **endptr, const char *str, int flags )
 {
     return __STRINGTOLD_L( value, endptr, str, flags, NULL );
 }
@@ -1574,7 +1569,7 @@ int CDECL __STRINGTOLD( MSVCRT__LDOUBLE *value, char **endptr, const char *str, 
 /********************************************************************
  *              _atoldbl_l (MSVCRT.@)
  */
-int CDECL _atoldbl_l( MSVCRT__LDOUBLE *value, char *str, _locale_t locale )
+int CDECL _atoldbl_l( _LDOUBLE *value, char *str, _locale_t locale )
 {
     char *endptr;
     switch(__STRINGTOLD_L( value, &endptr, str, 0, locale ))
@@ -1590,7 +1585,7 @@ int CDECL _atoldbl_l( MSVCRT__LDOUBLE *value, char *str, _locale_t locale )
  */
 int CDECL _atoldbl(_LDOUBLE *value, char *str)
 {
-    return _atoldbl_l( (MSVCRT__LDOUBLE*)value, str, NULL );
+    return _atoldbl_l( value, str, NULL );
 }
 
 /*********************************************************************
@@ -2693,37 +2688,30 @@ struct _I10_OUTPUT_DATA {
  *      Native sets last byte of data->str to '0' or '9', I don't know what
  *      it means. Current implementation sets it always to '0'.
  */
-#ifdef __REACTOS__
-int CDECL I10_OUTPUT(MSVCRT__LDOUBLE ld80_, int prec, int flag, struct _I10_OUTPUT_DATA *data)
-#else
-int CDECL I10_OUTPUT(MSVCRT__LDOUBLE ld80, int prec, int flag, struct _I10_OUTPUT_DATA *data)
-#endif
+int CDECL I10_OUTPUT(_LDOUBLE ld80, int prec, int flag, struct _I10_OUTPUT_DATA *data)
 {
-#ifdef __REACTOS__
-    WINE_BROKEN_LDOUBLE ld80 = { 0 };
-    memcpy(&ld80, &ld80_, sizeof(ld80_));
-#endif
+    struct MSVCRT__LDOUBLE *ld = (struct MSVCRT__LDOUBLE *)&ld80;
     struct fpnum num;
     double d;
     char format[8];
     char buf[I10_OUTPUT_MAX_PREC+9]; /* 9 = strlen("0.e+0000") + '\0' */
     char *p;
 
-    if ((ld80.x80[2] & 0x7fff) == 0x7fff)
+    if ((ld->exp & 0x7fff) == 0x7fff)
     {
-        if (ld80.x80[0] == 0 && ld80.x80[1] == 0x80000000)
+        if (ld->m == 0x8000000000000000ull)
             strcpy( data->str, "1#INF" );
         else
-            strcpy( data->str, (ld80.x80[1] & 0x40000000) ? "1#QNAN" : "1#SNAN" );
+            strcpy( data->str, (ld->m & 0x4000000000000000ull) ? "1#QNAN" : "1#SNAN" );
         data->pos = 1;
-        data->sign = (ld80.x80[2] & 0x8000) ? '-' : ' ';
+        data->sign = (ld->exp & 0x8000) ? '-' : ' ';
         data->len = strlen(data->str);
         return 0;
     }
 
-    num.sign = (ld80.x80[2] & 0x8000) ? -1 : 1;
-    num.exp  = (ld80.x80[2] & 0x7fff) - 0x3fff - 63;
-    num.m    = ld80.x80[0] | ((ULONGLONG)ld80.x80[1] << 32);
+    num.sign = (ld->exp & 0x8000) ? -1 : 1;
+    num.exp  = (ld->exp & 0x7fff) - 0x3fff - 63;
+    num.m    = ld->m;
     num.mod  = FP_ROUND_EVEN;
     fpnum_double( &num, &d );
     TRACE("(%lf %d %x %p)\n", d, prec, flag, data);

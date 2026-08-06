@@ -1,0 +1,6 @@
+add_definitions(-DUSE_WINE_TODOS -D__WINESRC__)
+add_executable(netprofm_winetest list.c testlist.c)
+target_link_libraries(netprofm_winetest uuid)
+set_module_type(netprofm_winetest win32cui)
+add_importlibs(netprofm_winetest oleaut32 ole32 msvcrt kernel32)
+add_rostests_file(TARGET netprofm_winetest)

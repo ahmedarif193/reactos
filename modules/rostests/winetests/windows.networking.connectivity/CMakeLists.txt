@@ -1,0 +1,7 @@
+add_definitions(-DUSE_WINE_TODOS -D__WINESRC__)
+
+add_executable(windows_networking_connectivity_winetest connectivity.c testlist.c)
+target_link_libraries(windows_networking_connectivity_winetest uuid)
+set_module_type(windows_networking_connectivity_winetest win32cui)
+add_importlibs(windows_networking_connectivity_winetest combase msvcrt kernel32)
+add_rostests_file(TARGET windows_networking_connectivity_winetest)

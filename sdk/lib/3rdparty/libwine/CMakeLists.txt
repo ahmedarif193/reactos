@@ -14,7 +14,7 @@ list(APPEND SOURCE
 
 add_library(wine ${SOURCE})
 add_dependencies(wine psdk)
-target_compile_definitions(wine PRIVATE __WINESRC__ _WINE)
+target_compile_definitions(wine PRIVATE __WINESRC__ __WINE_PE_BUILD _WINE)
 target_include_directories(wine BEFORE PRIVATE ${REACTOS_SOURCE_DIR}/sdk/include/wine)
 
 add_library(wineldr loader.c)
@@ -24,10 +24,15 @@ target_include_directories(wineldr BEFORE PRIVATE ${REACTOS_SOURCE_DIR}/sdk/incl
 
 add_library(wine_dll_register dll_register.c ${SOURCE})
 add_dependencies(wine_dll_register psdk)
-target_compile_definitions(wine_dll_register PRIVATE __WINESRC__ _WINE)
+target_compile_definitions(wine_dll_register PRIVATE __WINESRC__ __WINE_PE_BUILD _WINE)
 target_include_directories(wine_dll_register BEFORE PRIVATE ${REACTOS_SOURCE_DIR}/sdk/include/wine)
 
 add_library(wine_dll_canunload dll_canunload.c ${SOURCE})
 add_dependencies(wine_dll_canunload psdk)
-target_compile_definitions(wine_dll_canunload PRIVATE __WINESRC__ _WINE)
+target_compile_definitions(wine_dll_canunload PRIVATE __WINESRC__ __WINE_PE_BUILD _WINE)
 target_include_directories(wine_dll_canunload BEFORE PRIVATE ${REACTOS_SOURCE_DIR}/sdk/include/wine)
+
+add_library(wine_dll_version dll_version.c)
+add_dependencies(wine_dll_version psdk)
+target_compile_definitions(wine_dll_version PRIVATE __WINESRC__ __WINE_PE_BUILD NO_SHLWAPI_REG)
+target_include_directories(wine_dll_version BEFORE PRIVATE ${REACTOS_SOURCE_DIR}/sdk/include/wine)

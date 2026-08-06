@@ -173,8 +173,8 @@
 179 stdcall SHGetNewLinkInfoA(str str ptr long long)
 180 stdcall SHGetNewLinkInfoW(wstr wstr ptr long long)
 181 stdcall -noname RegisterShellHook(long long)
-182 varargs ShellMessageBoxW() ShellMessageBoxWrapW ## This is the no-named 'shlwapi.ShellMessageBoxWrapW' (i.e. 'shlwapi.#388')
-183 varargs ShellMessageBoxA(ptr ptr str str long)
+182 varargs ShellMessageBoxW(long long wstr wstr long) shlwapi.ShellMessageBoxW
+183 varargs ShellMessageBoxA(long long str str long) shlwapi.ShellMessageBoxA
 184 stdcall -noname ArrangeWindows(long long long long long)
 185 stdcall -noname SHHandleDiskFull(ptr long)
 186 stdcall -noname ILGetDisplayNameEx(ptr ptr ptr long)
@@ -488,16 +488,16 @@
 @ stub -version=0x600+ SHCreateDefaultPropertiesOp # Vista:327
 @ stdcall SHCreateDirectoryExA(long str ptr) # 2k3:278, Vista:328
 @ stdcall SHCreateDirectoryExW(long wstr ptr) # 2k3:279, Vista:329
-@ stub -version=0x600+ SHCreateItemFromIDList # Vista:330
-@ stub -version=0x600+ SHCreateItemFromParsingName # Vista:331
-@ stub -version=0x600+ SHCreateItemFromRelativeName # Vista:332
+@ stdcall -version=0x600+ SHCreateItemFromIDList(ptr ptr ptr) # Vista:330
+@ stdcall -version=0x600+ SHCreateItemFromParsingName(wstr ptr ptr ptr) # Vista:331
+@ stdcall -version=0x600+ SHCreateItemFromRelativeName(ptr wstr ptr ptr ptr) # Vista:332
 @ stub -version=0x600+ SHCreateItemInKnownFolder # Vista:333
 @ stub -version=0x600+ SHCreateItemWithParent # Vista:334
 @ stub SHCreateLocalServerRunDll # 2k3:280, Vista:335
 @ stdcall SHCreateProcessAsUserW(ptr) # 2k3:281, Vista:336
 @ stdcall SHCreateQueryCancelAutoPlayMoniker(ptr) # 2k3:282, Vista:337
 @ stdcall SHCreateShellItem(ptr ptr ptr ptr) # 2k3:283, Vista:338
-@ stub -version=0x600+ SHCreateShellItemArray # Vista:339
+@ stdcall -version=0x600+ SHCreateShellItemArray(ptr ptr long ptr ptr) # Vista:339
 @ stdcall -version=0x600+ SHCreateShellItemArrayFromDataObject(ptr ptr ptr) # Vista:340
 @ stub -version=0x600+ SHCreateShellItemArrayFromIDLists # Vista:341
 @ stub -version=0x600+ SHCreateShellItemArrayFromShellItem # Vista:342
@@ -529,6 +529,7 @@
 @ stub -version=0x600+ SHGetFolderPathEx # Vista:368
 @ stdcall SHGetFolderPathW(long long long long ptr) # 2k3:307, Vista:369
 @ stdcall -version=0x600+ SHGetIDListFromObject(ptr ptr) # Vista:370
+@ stdcall -version=0x600+ SHGetItemFromObject(ptr ptr ptr)
 @ stdcall SHGetIconOverlayIndexA(str long) # 2k3:308, Vista:371
 @ stdcall SHGetIconOverlayIndexW(wstr long) # 2k3:309, Vista:372
 @ stdcall SHGetInstanceExplorer(long) shcore.GetProcessReference # 2k3:310, Vista:373

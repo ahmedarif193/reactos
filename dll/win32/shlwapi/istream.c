@@ -35,6 +35,7 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(shell);
 
+#ifdef __REACTOS__
 /*************************************************************************
  *
  * Call IStream_Read() on a stream.
@@ -62,6 +63,7 @@ HRESULT WINAPI SHIStream_Read(IStream *lpStream, LPVOID lpvDest, ULONG ulSize)
     hRet = E_FAIL;
   return hRet;
 }
+#endif
 
 /*************************************************************************
  * @       [SHLWAPI.166]
@@ -106,6 +108,7 @@ BOOL WINAPI SHIsEmptyStream(IStream *lpStream)
   return bRet;
 }
 
+#ifdef __REACTOS__
 /*************************************************************************
  *
  * Call IStream_Write() on a stream.
@@ -134,6 +137,7 @@ HRESULT WINAPI SHIStream_Write(IStream *lpStream, LPCVOID lpvSrc, ULONG ulSize)
 
   return hRet;
 }
+#endif
 
 #ifdef __REACTOS__
 /*************************************************************************

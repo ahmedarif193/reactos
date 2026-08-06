@@ -14,7 +14,6 @@ list(APPEND SOURCE
     session.c
     spatialaudio.c
     mmdevapi_private.h
-    mmdevdrv.h
     unixlib.h
     precomp.h
     ${CMAKE_CURRENT_BINARY_DIR}/mmdevapi_stubs.c)
@@ -33,9 +32,10 @@ add_library(mmdevapi MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/mmdevapi.def)
 
 set_module_type(mmdevapi win32dll)
-target_compile_definitions(mmdevapi PRIVATE _FORCENAMELESSUNION _FORCENAMELESSSTRUCT)
+target_compile_definitions(mmdevapi PRIVATE _FORCENAMELESSUNION _FORCENAMELESSSTRUCT CP_UNIXCP=CP_ACP)
 target_link_libraries(mmdevapi uuid wine)
-add_importlibs(mmdevapi ole32 oleaut32 user32 advapi32 version setupapi msvcrt kernel32 ntdll)
+add_importlibs(mmdevapi ole32 oleaut32 user32 advapi32 version setupapi msvcrt kernel32_vista kernel32 ntdll)
+add_delay_importlibs(mmdevapi winmm)
 add_dependencies(mmdevapi dxsdk)
 add_cd_file(TARGET mmdevapi DESTINATION reactos/system32 FOR all)
 set_wine_module(mmdevapi)

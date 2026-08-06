@@ -10,7 +10,9 @@ extern "C" {
 /* Built in class atoms */
 #define WC_MENU       (MAKEINTATOM(0x8000))
 #define WC_DESKTOP    (MAKEINTATOM(0x8001))
+#ifndef WC_DIALOG
 #define WC_DIALOG     (MAKEINTATOM(0x8002))
+#endif
 #define WC_SWITCH     (MAKEINTATOM(0x8003))
 #define WC_ICONTITLE  (MAKEINTATOM(0x8004))
 
@@ -405,7 +407,9 @@ BOOL WINAPI RegisterUserApiHook(HINSTANCE hInstance, USERAPIHOOKPROC CallbackFun
 BOOL WINAPI RegisterUserApiHook(PUSERAPIHOOKINFO puah);
 #endif
 
+#ifndef __WINESRC__
 BOOL WINAPI UnregisterUserApiHook(VOID);
+#endif
 
 /* dwType for NtUserQueryInputContext */
 typedef enum _QUERY_INPUT_CONTEXT

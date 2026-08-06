@@ -25,6 +25,8 @@ Author:
 #include <umtypes.h>
 #include <iotypes.h>
 
+struct _FILE_IO_COMPLETION_INFORMATION;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -566,6 +568,18 @@ NtRemoveIoCompletion(
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
+NtRemoveIoCompletionEx(
+    _In_ HANDLE IoCompletionHandle,
+    _Out_writes_to_(Count, *NumEntriesRemoved) struct _FILE_IO_COMPLETION_INFORMATION *IoCompletionInformation,
+    _In_ ULONG Count,
+    _Out_ PULONG NumEntriesRemoved,
+    _In_opt_ PLARGE_INTEGER Timeout,
+    _In_ BOOLEAN Alertable
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
 NtSetBootEntryOrder(
     _In_ PULONG Ids,
     _In_ PULONG Count
@@ -616,7 +630,7 @@ NtSetIoCompletion(
     _In_ PVOID CompletionKey,
     _In_ PVOID CompletionContext,
     _In_ NTSTATUS CompletionStatus,
-    _In_ ULONG CompletionInformation
+    _In_ SIZE_T CompletionInformation
 );
 
 NTSYSCALLAPI
@@ -1124,6 +1138,18 @@ ZwRemoveIoCompletion(
     _In_opt_ PLARGE_INTEGER Timeout
 );
 
+NTSYSAPI
+NTSTATUS
+NTAPI
+ZwRemoveIoCompletionEx(
+    _In_ HANDLE IoCompletionHandle,
+    _Out_writes_to_(Count, *NumEntriesRemoved) struct _FILE_IO_COMPLETION_INFORMATION *IoCompletionInformation,
+    _In_ ULONG Count,
+    _Out_ PULONG NumEntriesRemoved,
+    _In_opt_ PLARGE_INTEGER Timeout,
+    _In_ BOOLEAN Alertable
+);
+
 #ifdef NTOS_MODE_USER
 NTSYSAPI
 NTSTATUS
@@ -1156,7 +1182,7 @@ ZwSetIoCompletion(
     _In_ PVOID CompletionKey,
     _In_ PVOID CompletionContext,
     _In_ NTSTATUS CompletionStatus,
-    _In_ ULONG CompletionInformation
+    _In_ SIZE_T CompletionInformation
 );
 
 NTSYSAPI
@@ -1235,4 +1261,3 @@ ZwWriteFileGather(
 #endif
 
 #endif
-

@@ -29,6 +29,7 @@ list(APPEND IDL_SOURCES
     ctxtcall.idl
 #    cxq_cust.idl
 #    dbgprop.idl
+    d3d9on12.idl
     dimm.idl
     dispex.idl
 #    dlmgridl.idl
@@ -80,6 +81,7 @@ list(APPEND IDL_SOURCES
 #    netcfgp.idl
 #    netcfgx.idl
     netcon.idl
+    netlistmgr.idl
 #    netconp.idl
 #    netfwv6.idl
 #    netfwv6clsid
@@ -113,7 +115,7 @@ list(APPEND IDL_SOURCES
 #    shappmgr.idl
     shdeprecated.idl
 #    shgina.idl
-#    shimgdata.idl
+    shimgdata.idl
     shldisp.idl
     shobjidl.idl
 #    sifmt.idl
@@ -129,6 +131,7 @@ list(APPEND IDL_SOURCES
     textstor.idl
 #    tlog.idl
     tlogstg.idl
+    transact.idl
 #    trkadm.idl
 #    trkcom.idl
     unknwn.idl
@@ -168,11 +171,11 @@ list(APPEND IDL_SOURCES
     pstore.idl
     richole.idl
     strmif.idl
+    taskschd.idl
     tom.idl
     tuner.idl
     vmr9.idl
     wia_xp.idl
-    wincodec.idl
     xmldom.idl
     xmldso.idl
     ctfutb.idl
@@ -198,10 +201,12 @@ endforeach()
 
 list(APPEND SOURCE
     cguid_i.c
+    d2d.c
 #    bthguid.c
 #    cluscfgguids.c
     cmdtreeiid.c
     ctffunc_g.c
+    devpkey.c
 #    ctfspui_g.c
 #    hnclsid.c
     ieguids.c
@@ -210,17 +215,20 @@ list(APPEND SOURCE
 #    ncclsid.c
 #    ndisguid.c
     netfwv6clsid.c
+    npi_moduleid.c
 #    oledbdat.c
 #    oledbdepiid.c
 #    oledbiid.c
 #    oledbnewiid.c
 #    qosguid.c
+    propkey.c
     shguids.c
 #    tapi3iid.c
 #    vcguids.c
     wdmguids.c
     otherguids.c
     undoc.c
+    wincodec.c
 )
 
 add_library(uuid ${SOURCE})

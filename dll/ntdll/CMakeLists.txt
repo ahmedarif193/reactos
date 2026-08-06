@@ -15,7 +15,8 @@ add_definitions(
 
 include_directories(
     BEFORE include
-    ${REACTOS_SOURCE_DIR}/sdk/include/reactos/subsys)
+    ${REACTOS_SOURCE_DIR}/sdk/include/reactos/subsys
+    ${REACTOS_SOURCE_DIR}/sdk/lib/3rdparty/symcrypt/inc)
 
 add_library(rtl_um OBJECT
     rtl/libsupp.c
@@ -31,6 +32,7 @@ add_dependencies(etwtrace psdk)
 
 list(APPEND SOURCE
     alpc.c
+    rtl/capability.c
     dbg/dbgui.c
     ldr/ldrapi.c
     ldr/ldrinit.c
@@ -44,11 +46,14 @@ list(APPEND SOURCE
     rtl/wait.c
     rtl/xstate.c)
 
+set_source_files_properties(rtl/capability.c PROPERTIES
+    COMPILE_DEFINITIONS "__WINE_PE_BUILD;SYMCRYPT_PLATFORM_WINE=1")
+
 if(ARCH STREQUAL "amd64")
-    list(APPEND SOURCE
-        rtl/xstate_wow64.c
-        wow64.c)
+    list(APPEND SOURCE rtl/xstate_wow64.c)
 endif()
+
+list(APPEND SOURCE wow64.c)
 
 if(ARCH STREQUAL "i386")
     list(APPEND ASM_SOURCE dispatch/i386/dispatch.S)
@@ -91,7 +96,7 @@ set_module_type(ntdll win32dll ENTRYPOINT 0)
 set_subsystem(ntdll console)
 ################# END  HACK #################
 
-target_link_libraries(ntdll ntdll_vista_static etwtrace csrlib rtl rtl_um rtl_vista ntdllsys ntdllsys_nt6 libcntpr setjmp uuid ${PSEH_LIB})
+target_link_libraries(ntdll ntdll_vista_static etwtrace csrlib rtl rtl_um rtl_vista ntdllsys ntdllsys_nt6 libcntpr setjmp uuid symcrypt ${PSEH_LIB})
 if(DLL_EXPORT_VERSION GREATER_EQUAL 0x600)
     target_link_libraries(ntdll cryptlib)
 endif()

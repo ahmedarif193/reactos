@@ -1,6 +1,5 @@
 
 add_definitions(
-    -D__ROS_LONG64__
     -DUSE_WIN32_OPENGL)
 
 spec2def(ddraw.dll ddraw.spec ADD_IMPORTLIB)
@@ -29,8 +28,10 @@ endif()
 
 add_library(ddraw MODULE
     ${SOURCE}
-    ddraw.rc
+    version.rc
     ${CMAKE_CURRENT_BINARY_DIR}/ddraw.def)
+
+add_idl_reg_scripts(ddraw registry ddraw_classes.idl)
 
 if(MSVC)
     # Disable C5286: implicit conversion from enum type 'x' to enum type 'y';
@@ -40,7 +41,7 @@ else()
 endif()
 
 set_module_type(ddraw win32dll)
-target_link_libraries(ddraw wine uuid dxguid ${PSEH_LIB})
+target_link_libraries(ddraw wine uuid dxguid wine_dll_register wine_dll_canunload ${PSEH_LIB})
 add_importlibs(ddraw advapi32 gdi32 user32 d3dwine msvcrt kernel32 ntdll)
 add_dependencies(ddraw wineheaders)
 add_pch(ddraw precomp.h SOURCE)

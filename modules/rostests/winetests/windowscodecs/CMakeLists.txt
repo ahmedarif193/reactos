@@ -1,6 +1,5 @@
 
 add_definitions(
-    -DUSE_WINE_TODOS
     -DWINETEST_USE_DBGSTR_LONGLONG)
 
 list(APPEND SOURCE
@@ -22,11 +21,15 @@ list(APPEND SOURCE
 
 list(APPEND PCH_SKIP_SOURCE
     guid.c
+    ${REACTOS_SOURCE_DIR}/dll/win32/windowscodecs/uuid.c
     testlist.c)
 
 add_executable(windowscodecs_winetest
     ${SOURCE}
     ${PCH_SKIP_SOURCE})
+
+target_compile_definitions(windowscodecs_winetest PRIVATE _FORCENAMELESSUNION)
+target_include_directories(windowscodecs_winetest BEFORE PRIVATE ${REACTOS_SOURCE_DIR}/sdk/include/wine)
 
 set_module_type(windowscodecs_winetest win32cui)
 add_importlibs(windowscodecs_winetest windowscodecs oleaut32 ole32 propsys user32 gdi32 shlwapi msvcrt kernel32)

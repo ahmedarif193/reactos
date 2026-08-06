@@ -279,6 +279,25 @@ int wine_dbg_printf( const char *format, ... )
 #endif
 }
 
+/* va_list wrapper for funcs.dbg_vlog */
+int wine_dbg_vlog( enum __wine_debug_class cls, struct __wine_debug_channel *channel,
+                   const char *func, const char *format, va_list args )
+{
+    if (!(__wine_dbg_get_channel_flags( channel ) & (1 << cls))) return -1;
+
+    if (*format == '\1')
+    {
+        format++;
+        func = NULL;
+    }
+    return funcs.dbg_vlog( cls, channel, NULL, func, 0, format, args );
+}
+
+int __cdecl __wine_dbg_output( const char *str )
+{
+    return wine_dbg_printf( "%s", str );
+}
+
 /* printf with temp buffer allocation */
 const char *wine_dbg_sprintf( const char *format, ... )
 {

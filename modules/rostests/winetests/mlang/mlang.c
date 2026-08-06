@@ -241,7 +241,7 @@ struct cpinfo_test_data
     BOOL todo_wszProportionalFont;
 };
 
-static const struct cpinfo_test_data iml2_cpinfo_data[] =
+const static struct cpinfo_test_data iml2_cpinfo_data[] =
 {
     /* 0. Chinese Simplified (Auto-Select) */
     {
@@ -2772,7 +2772,9 @@ static void test_MapFont(IMLangFontLink *font_link, IMLangFontLink2 *font_link2)
     ok(ret == E_INVALIDARG, "IMLangFontLink2_MapFont: expected E_INVALIDARG, got %08lx\n", ret);
 
     ret = IMLangFontLink2_MapFont(font_link2, hdc, 0, ch, &new_font);
+#ifndef __REACTOS__
     todo_wine
+#endif
     ok(ret == S_OK || broken(ret == E_FAIL), /* got E_FAIL on winxp and win2k */
        "IMLangFontLink2_MapFont: expected S_OK || E_FAIL, got %08lx\n", ret);
     ret = IMLangFontLink2_MapFont(font_link2, hdc, codepages, 0, NULL);
@@ -2833,6 +2835,9 @@ static void test_MapFont(IMLangFontLink *font_link, IMLangFontLink2 *font_link2)
     ret = IMLangFontLink_GetFontCodePages(font_link, hdc, (void*)0x123456, &font_codepages);
     ok(ret == E_FAIL && !font_codepages, "expected E_FAIL, but got: %lx, font_codepages:%lx \n",
             ret, font_codepages);
+
+    ret = IMLangFontLink_GetFontCodePages(font_link, hdc, font1, NULL);
+    ok(ret == S_OK, "expected S_OK, but got: %lx\n", ret);
 
     IMLangFontLink_ResetFontMapping(font_link);
     IMLangFontLink2_ResetFontMapping(font_link2);

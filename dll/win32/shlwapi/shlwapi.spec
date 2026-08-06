@@ -385,7 +385,7 @@
 385 stub -noname SHLoadRawAccelerators
 386 stub -noname SHQueryRawAccelerator
 387 stub -noname SHQueryRawAcceleratorMsg
-388 varargs -noname ShellMessageBoxWrapW(ptr ptr wstr wstr long)
+388 varargs ShellMessageBoxW(long long wstr wstr long)
 389 stdcall -noname GetSaveFileNameWrapW(ptr)
 390 stdcall -noname WNetRestoreConnectionWrapW(long wstr)
 391 stdcall -noname WNetGetLastErrorWrapW(ptr ptr long ptr long)
@@ -772,6 +772,7 @@
 @ stdcall SHSkipJunction(ptr ptr)
 @ stdcall SHStrDupA(str ptr)
 @ stdcall SHStrDupW(wstr ptr)
+@ varargs ShellMessageBoxA(long long str str long)
 @ stdcall StrCSpnA(str str) kernelbase_ros.StrCSpnA
 @ stdcall StrCSpnIA(str str) kernelbase_ros.StrCSpnIA
 @ stdcall StrCSpnIW(wstr wstr) kernelbase_ros.StrCSpnIW
@@ -868,4 +869,3 @@
 @ varargs wnsprintfW(ptr long wstr)
 @ stdcall wvnsprintfA(ptr long str ptr)
 @ stdcall wvnsprintfW(ptr long wstr ptr)
-

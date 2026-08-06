@@ -24,7 +24,9 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#ifdef __REACTOS__
 #include <stdlib.h>
+#endif
 #include "windef.h"
 #include "winbase.h"
 #include "wintrust.h"
@@ -202,6 +204,22 @@ BOOL WINAPI CryptCATAdminAcquireContext2(HCATADMIN *catAdmin, const GUID *sys, c
     return TRUE;
 }
 
+#ifdef __REACTOS__
+static BOOL is_valid_catalog_file(const WCHAR *filename)
+{
+    struct cryptcat *catalog;
+    BOOL valid;
+
+    catalog = CryptCATOpen((WCHAR *)filename, CRYPTCAT_OPEN_EXISTING, 0, 0, 0);
+    if (catalog == INVALID_HANDLE_VALUE) return FALSE;
+
+    valid = catalog->inner != NULL;
+    CryptCATClose(catalog);
+    if (!valid) SetLastError(ERROR_BAD_FORMAT);
+    return valid;
+}
+#endif
+
 /***********************************************************************
  *             CryptCATAdminAddCatalog (WINTRUST.@)
  */
@@ -211,12 +229,31 @@ HCATINFO WINAPI CryptCATAdminAddCatalog(HCATADMIN catAdmin, PWSTR catalogFile,
     static const WCHAR slashW[] = {'\\',0};
     struct catadmin *ca = catAdmin;
     struct catinfo *ci;
+#ifdef __REACTOS__
+    WCHAR generated_name[MAX_PATH];
+#endif
     WCHAR *target;
     DWORD len;
 
     TRACE("%p %s %s %ld\n", catAdmin, debugstr_w(catalogFile),
           debugstr_w(selectBaseName), flags);
 
+#ifdef __REACTOS__
+    if (!ca || ca->magic != CATADMIN_MAGIC || !catalogFile || flags)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return NULL;
+    }
+    if (!is_valid_catalog_file(catalogFile)) return NULL;
+
+    if (!selectBaseName)
+    {
+        if (!GetTempFileNameW(ca->path, L"cat", 0, generated_name)) return NULL;
+        selectBaseName = wcsrchr(generated_name, '\\');
+        if (selectBaseName) selectBaseName++;
+        else selectBaseName = generated_name;
+    }
+#else
     if (!selectBaseName)
     {
         FIXME("NULL basename not handled\n");
@@ -228,6 +265,7 @@ HCATINFO WINAPI CryptCATAdminAddCatalog(HCATADMIN catAdmin, PWSTR catalogFile,
         SetLastError(ERROR_INVALID_PARAMETER);
         return NULL;
     }
+#endif
 
     len = lstrlenW(ca->path) + lstrlenW(selectBaseName) + 2;
     if (!(target = malloc(len * sizeof(WCHAR))))
@@ -1449,17 +1487,17 @@ static BOOL WINTRUST_GetSignedMsgFromCabFile(SIP_SUBJECTINFO *pSubjectInfo,
           pcbSignedDataMsg, pbSignedDataMsg);
 
     /* get basic offset & size info */
-    base_offset = SetFilePointer(pSubjectInfo->hFile, 0L, NULL, SEEK_CUR);
+    base_offset = SetFilePointer(pSubjectInfo->hFile, 0L, NULL, FILE_CURRENT);
 
-    if (SetFilePointer(pSubjectInfo->hFile, 0, NULL, SEEK_END) == INVALID_SET_FILE_POINTER)
+    if (SetFilePointer(pSubjectInfo->hFile, 0, NULL, FILE_END) == INVALID_SET_FILE_POINTER)
     {
         TRACE("seek error\n");
         return FALSE;
     }
 
-    cabsize = SetFilePointer(pSubjectInfo->hFile, 0L, NULL, SEEK_CUR);
+    cabsize = SetFilePointer(pSubjectInfo->hFile, 0L, NULL, FILE_CURRENT);
     if ((cabsize == -1) || (base_offset == -1) ||
-     (SetFilePointer(pSubjectInfo->hFile, 0, NULL, SEEK_SET) == INVALID_SET_FILE_POINTER))
+     (SetFilePointer(pSubjectInfo->hFile, 0, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER))
     {
         TRACE("seek error\n");
         return FALSE;
@@ -1543,7 +1581,7 @@ static BOOL WINTRUST_GetSignedMsgFromCabFile(SIP_SUBJECTINFO *pSubjectInfo,
         return FALSE;
     }
 
-    SetFilePointer(pSubjectInfo->hFile, base_offset, NULL, SEEK_SET);
+    SetFilePointer(pSubjectInfo->hFile, base_offset, NULL, FILE_BEGIN);
     if (!pbSignedDataMsg)
     {
         *pcbSignedDataMsg = cert_size;
@@ -1555,7 +1593,7 @@ static BOOL WINTRUST_GetSignedMsgFromCabFile(SIP_SUBJECTINFO *pSubjectInfo,
         SetLastError(ERROR_INSUFFICIENT_BUFFER);
         return FALSE;
     }
-    if (SetFilePointer(pSubjectInfo->hFile, cert_offset, NULL, SEEK_SET) == INVALID_SET_FILE_POINTER)
+    if (SetFilePointer(pSubjectInfo->hFile, cert_offset, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER)
     {
         ERR("couldn't seek to cert location\n");
         return FALSE;
@@ -1564,7 +1602,7 @@ static BOOL WINTRUST_GetSignedMsgFromCabFile(SIP_SUBJECTINFO *pSubjectInfo,
      NULL) || dwRead != cert_size)
     {
         ERR("couldn't read cert\n");
-        SetFilePointer(pSubjectInfo->hFile, base_offset, NULL, SEEK_SET);
+        SetFilePointer(pSubjectInfo->hFile, base_offset, NULL, FILE_BEGIN);
         return FALSE;
     }
     /* The encoding of the files I've seen appears to be in ASN.1
@@ -1573,7 +1611,7 @@ static BOOL WINTRUST_GetSignedMsgFromCabFile(SIP_SUBJECTINFO *pSubjectInfo,
      */
     *pdwEncodingType = X509_ASN_ENCODING | PKCS_7_ASN_ENCODING;
     /* Restore base offset */
-    SetFilePointer(pSubjectInfo->hFile, base_offset, NULL, SEEK_SET);
+    SetFilePointer(pSubjectInfo->hFile, base_offset, NULL, FILE_BEGIN);
     return TRUE;
 }
 

@@ -2838,6 +2838,99 @@ GetFontData(HDC hdc,
     return NtGdiGetFontData(hdc, dwTable, dwOffset, lpvBuffer, cbData);
 }
 
+#ifdef __REACTOS__
+BOOL WINAPI
+GetFontRealizationInfo(HDC hdc, PFONT_REALIZATION_INFO info)
+{
+    return NtGdiGetRealizationInfo(hdc, (PREALIZATION_INFO)info, (HFONT)(LONG_PTR)-1);
+}
+
+BOOL WINAPI
+GetFontFileInfo(DWORD instance_id, DWORD file_index, PFONT_FILE_INFO info,
+        SIZE_T size, SIZE_T *needed)
+{
+    WIN32_FILE_ATTRIBUTE_DATA attributes;
+    PFONT_FILE_INFO kernel_info;
+    SIZE_T kernel_size = 0, required_size;
+    WCHAR path[MAX_PATH * 3];
+    const WCHAR *source_path;
+    DWORD length;
+
+    NtGdiGetFontFileInfo(instance_id, file_index, NULL, 0, &kernel_size);
+    if (!kernel_size)
+        return FALSE;
+    if (!(kernel_info = HeapAlloc(GetProcessHeap(), 0, kernel_size)))
+    {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return FALSE;
+    }
+
+    if (!NtGdiGetFontFileInfo(instance_id, file_index, kernel_info, kernel_size, NULL))
+    {
+        HeapFree(GetProcessHeap(), 0, kernel_info);
+        return FALSE;
+    }
+
+    source_path = kernel_info->FileName;
+    if (!_wcsnicmp(source_path, L"\\??\\", 4))
+        source_path += 4;
+
+    if (!_wcsnicmp(source_path, L"\\SystemRoot", 11))
+    {
+        length = GetWindowsDirectoryW(path, _countof(path));
+        if (!length || length >= _countof(path) ||
+            length + wcslen(source_path + 11) >= _countof(path))
+        {
+            HeapFree(GetProcessHeap(), 0, kernel_info);
+            SetLastError(ERROR_INSUFFICIENT_BUFFER);
+            return FALSE;
+        }
+        wcscpy(path + length, source_path + 11);
+    }
+    else if (wcslen(source_path) < _countof(path))
+    {
+        wcscpy(path, source_path);
+    }
+    else
+    {
+        HeapFree(GetProcessHeap(), 0, kernel_info);
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+
+    required_size = FIELD_OFFSET(FONT_FILE_INFO, FileName) +
+                    (wcslen(path) + 1) * sizeof(WCHAR);
+    if (needed)
+        *needed = required_size;
+    if (!info || size < required_size)
+    {
+        HeapFree(GetProcessHeap(), 0, kernel_info);
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+
+    info->WriteTime = kernel_info->WriteTime;
+    info->FileSize = kernel_info->FileSize;
+    wcscpy(info->FileName, path);
+    HeapFree(GetProcessHeap(), 0, kernel_info);
+
+    if (*path && GetFileAttributesExW(path, GetFileExInfoStandard, &attributes))
+    {
+        info->WriteTime = attributes.ftLastWriteTime;
+        info->FileSize.HighPart = attributes.nFileSizeHigh;
+        info->FileSize.LowPart = attributes.nFileSizeLow;
+    }
+    return TRUE;
+}
+
+BOOL WINAPI
+GetFontFileData(DWORD instance_id, DWORD file_index, UINT64 offset,
+        void *buffer, SIZE_T buffer_size)
+{
+    return NtGdiGetFontFileData(instance_id, file_index, &offset, buffer, buffer_size);
+}
+#endif
+
 DWORD
 WINAPI
 cGetTTFFromFOT(DWORD x1 ,DWORD x2 ,DWORD x3, DWORD x4, DWORD x5, DWORD x6, DWORD x7)

@@ -21,50 +21,11 @@
 #ifndef __WINE_PARSE_H
 #define __WINE_PARSE_H
 
-#include "ntstatus.h"
-#define WIN32_NO_STATUS
 #include "windef.h"
 #include "winbase.h"
 #include "winternl.h"
 #include "hidusage.h"
-#ifdef __REACTOS__
-#include "hidpi.h"
-#else
 #include "ddk/hidpi.h"
-#endif
-
-#ifdef __REACTOS__
-#ifndef HID_USAGE_PAGE_PID
-#define HID_USAGE_PAGE_PID                                ((USAGE) 0x0F)
-#endif
-#ifndef HID_USAGE_PAGE_VENDOR_DEFINED_BEGIN
-#define HID_USAGE_PAGE_VENDOR_DEFINED_BEGIN               ((USAGE) 0xFF00)
-#endif
-#ifndef HID_USAGE_DIGITIZER_TIP_PRESSURE
-#define HID_USAGE_DIGITIZER_TIP_PRESSURE                  ((USAGE) 0x30)
-#endif
-#ifndef HID_USAGE_CONSUMER_VOLUME
-#define HID_USAGE_CONSUMER_VOLUME                         ((USAGE) 0xE0)
-#endif
-#ifndef HID_USAGE_SIMULATION_FLIGHT_SIMULATION_DEVICE
-#define HID_USAGE_SIMULATION_FLIGHT_SIMULATION_DEVICE      ((USAGE) 0x01)
-#endif
-#ifndef HID_USAGE_SIMULATION_AUTOMOBILE_SIMULATION_DEVICE
-#define HID_USAGE_SIMULATION_AUTOMOBILE_SIMULATION_DEVICE  ((USAGE) 0x02)
-#endif
-#ifndef HID_USAGE_SIMULATION_STEERING
-#define HID_USAGE_SIMULATION_STEERING                      ((USAGE) 0xC8)
-#endif
-#ifndef HID_USAGE_SIMULATION_ACCELERATOR
-#define HID_USAGE_SIMULATION_ACCELERATOR                   ((USAGE) 0xC4)
-#endif
-#ifndef HID_USAGE_SIMULATION_BRAKE
-#define HID_USAGE_SIMULATION_BRAKE                         ((USAGE) 0xC5)
-#endif
-#ifndef HID_USAGE_SIMULATION_CLUTCH
-#define HID_USAGE_SIMULATION_CLUTCH                        ((USAGE) 0xC6)
-#endif
-#endif
 
 #define HID_MAGIC 0x8491759
 
@@ -275,6 +236,8 @@ struct hid_preparsed_data
 #define PID_USAGE_SHARED_PARAMETER_BLOCKS          ((USAGE) 0xaa)
 #define PID_USAGE_CREATE_NEW_EFFECT_REPORT         ((USAGE) 0xab)
 #define PID_USAGE_RAM_POOL_AVAILABLE               ((USAGE) 0xac)
+
+#define MAX_PID_AXES                               6
 
 #define IOCTL_HID_GET_WINE_RAWINPUT_HANDLE         HID_BUFFER_CTL_CODE(300)
 

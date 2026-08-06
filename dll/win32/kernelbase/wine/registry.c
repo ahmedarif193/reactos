@@ -28,7 +28,6 @@
 #include <stdio.h>
 
 #include "ntstatus.h"
-#define WIN32_NO_STATUS
 #include "windef.h"
 #include "winbase.h"
 #include "winreg.h"
@@ -42,13 +41,19 @@
 #include "kernelbase.h"
 #include "wine/debug.h"
 #include "wine/exception.h"
-#include "wine/heap.h"
 #include "wine/list.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(reg);
 
 #define HKEY_SPECIAL_ROOT_FIRST   HKEY_CLASSES_ROOT
 #define HKEY_SPECIAL_ROOT_LAST    HKEY_DYN_DATA
+
+#ifdef __REACTOS__
+/* Native registry paths pass through the case-sensitive object namespace. */
+#define REG_KEY_ATTRIBUTES OBJ_CASE_INSENSITIVE
+#else
+#define REG_KEY_ATTRIBUTES 0
+#endif
 
 static const WCHAR * const root_key_names[] =
 {
@@ -128,8 +133,8 @@ static BOOL is_classes_wow6432node( HKEY key )
     /* Retry with a dynamically allocated buffer */
     while (status == STATUS_BUFFER_OVERFLOW)
     {
-        if (buf_ptr != buffer) heap_free( buf_ptr );
-        if (!(buf_ptr = heap_alloc( len ))) return FALSE;
+        if (buf_ptr != buffer) HeapFree( GetProcessHeap(), 0, buf_ptr );
+        if (!(buf_ptr = HeapAlloc( GetProcessHeap(), 0, len ))) return FALSE;
         info = (KEY_NAME_INFORMATION *)buf_ptr;
         status = NtQueryKey( key, KeyNameInformation, info, len, &len );
     }
@@ -147,7 +152,7 @@ static BOOL is_classes_wow6432node( HKEY key )
         }
     }
 
-    if (buf_ptr != buffer) heap_free( buf_ptr );
+    if (buf_ptr != buffer) HeapFree( GetProcessHeap(), 0, buf_ptr );
 
     return ret;
 }
@@ -159,12 +164,7 @@ static HANDLE open_wow6432node( HANDLE key )
     OBJECT_ATTRIBUTES attr;
     HANDLE ret;
 
-    attr.Length = sizeof(attr);
-    attr.RootDirectory = key;
-    attr.ObjectName = &nameW;
-    attr.Attributes = 0;
-    attr.SecurityDescriptor = NULL;
-    attr.SecurityQualityOfService = NULL;
+    InitializeObjectAttributes( &attr, &nameW, REG_KEY_ATTRIBUTES, key, NULL );
     if (NtOpenKeyEx( &ret, MAXIMUM_ALLOWED | KEY_WOW64_64KEY, &attr, 0 )) return key;
     return ret;
 }
@@ -176,12 +176,7 @@ static HANDLE open_classes_root( void )
     UNICODE_STRING nameW;
     HANDLE ret = 0;
 
-    attr.Length = sizeof(attr);
-    attr.RootDirectory = 0;
-    attr.ObjectName = &nameW;
-    attr.Attributes = 0;
-    attr.SecurityDescriptor = NULL;
-    attr.SecurityQualityOfService = NULL;
+    InitializeObjectAttributes( &attr, &nameW, REG_KEY_ATTRIBUTES, 0, NULL );
     RtlInitUnicodeString( &nameW, root_key_names[0] );
     NtOpenKeyEx( &ret, MAXIMUM_ALLOWED, &attr, 0 );
     return ret;
@@ -279,8 +274,8 @@ static NTSTATUS open_wow6432node_parent( HKEY *retkey, HKEY root, DWORD options,
     /* Retry with a dynamically allocated buffer */
     while (status == STATUS_BUFFER_OVERFLOW)
     {
-        if (buf_ptr != buffer) heap_free( buf_ptr );
-        if (!(buf_ptr = heap_alloc( len )))
+        if (buf_ptr != buffer) HeapFree( GetProcessHeap(), 0, buf_ptr );
+        if (!(buf_ptr = HeapAlloc( GetProcessHeap(), 0, len )))
             return STATUS_NO_MEMORY;
         info = (KEY_NAME_INFORMATION *)buf_ptr;
         status = NtQueryKey( root, KeyNameInformation, info, len, &len );
@@ -288,7 +283,7 @@ static NTSTATUS open_wow6432node_parent( HKEY *retkey, HKEY root, DWORD options,
 
     if (status)
     {
-        if (buf_ptr != buffer) heap_free( buf_ptr );
+        if (buf_ptr != buffer) HeapFree( GetProcessHeap(), 0, buf_ptr );
         return status;
     }
 
@@ -304,7 +299,7 @@ static NTSTATUS open_wow6432node_parent( HKEY *retkey, HKEY root, DWORD options,
         root = *retkey;
     }
 
-    if (buf_ptr != buffer) heap_free( buf_ptr );
+    if (buf_ptr != buffer) HeapFree( GetProcessHeap(), 0, buf_ptr );
 
     return status;
 }
@@ -323,13 +318,7 @@ static NTSTATUS open_key( HKEY *retkey, HKEY root, UNICODE_STRING *name, DWORD o
     {
         OBJECT_ATTRIBUTES attr;
 
-        attr.Length = sizeof(attr);
-        attr.RootDirectory = root;
-        attr.ObjectName = name;
-        attr.Attributes = 0;
-        attr.SecurityDescriptor = NULL;
-        attr.SecurityQualityOfService = NULL;
-
+        InitializeObjectAttributes( &attr, name, REG_KEY_ATTRIBUTES, root, NULL );
         if (options & REG_OPTION_OPEN_LINK) attr.Attributes |= OBJ_OPENLINK;
         status = NtOpenKeyEx( (HANDLE *)retkey, access, &attr, options );
         if (status == STATUS_PREDEFINED_HANDLE)
@@ -421,12 +410,7 @@ static NTSTATUS create_key( HKEY *retkey, HKEY root, UNICODE_STRING name, ULONG 
     {
         OBJECT_ATTRIBUTES attr;
 
-        attr.Length = sizeof(attr);
-        attr.RootDirectory = root;
-        attr.ObjectName = &name;
-        attr.Attributes = 0;
-        attr.SecurityDescriptor = NULL;
-        attr.SecurityQualityOfService = NULL;
+        InitializeObjectAttributes( &attr, &name, REG_KEY_ATTRIBUTES, root, NULL );
         if (options & REG_OPTION_OPEN_LINK) attr.Attributes |= OBJ_OPENLINK;
 
         status = NtCreateKey( (HANDLE *)retkey, access, &attr, 0, class, options, dispos );
@@ -483,7 +467,12 @@ static HKEY create_special_root_hkey( HKEY hkey, DWORD access )
         UNICODE_STRING name;
 
         RtlInitUnicodeString( &name, root_key_names[idx] );
+#ifdef __REACTOS__
+        /* The native registry roots already exist and must only be opened. */
+        if (open_key( &hkey, 0, &name, 0, access, FALSE )) return 0;
+#else
         if (create_key( &hkey, 0, name, 0, access, NULL, NULL )) return 0;
+#endif
         TRACE( "%s -> %p\n", debugstr_w(name.Buffer), hkey );
     }
 
@@ -841,8 +830,8 @@ LSTATUS WINAPI RegEnumKeyExW( HKEY hkey, DWORD index, LPWSTR name, LPDWORD name_
     while (status == STATUS_BUFFER_OVERFLOW)
     {
         /* retry with a dynamically allocated buffer */
-        if (buf_ptr != buffer) heap_free( buf_ptr );
-        if (!(buf_ptr = heap_alloc( total_size )))
+        if (buf_ptr != buffer) HeapFree( GetProcessHeap(), 0, buf_ptr );
+        if (!(buf_ptr = HeapAlloc( GetProcessHeap(), 0, total_size )))
             return ERROR_NOT_ENOUGH_MEMORY;
         info = (KEY_NODE_INFORMATION *)buf_ptr;
         status = NtEnumerateKey( hkey, index, KeyNodeInformation,
@@ -875,7 +864,7 @@ LSTATUS WINAPI RegEnumKeyExW( HKEY hkey, DWORD index, LPWSTR name, LPDWORD name_
         }
     }
 
-    if (buf_ptr != buffer) heap_free( buf_ptr );
+    if (buf_ptr != buffer) HeapFree( GetProcessHeap(), 0, buf_ptr );
     return RtlNtStatusToDosError( status );
 }
 
@@ -905,8 +894,8 @@ LSTATUS WINAPI RegEnumKeyExA( HKEY hkey, DWORD index, LPSTR name, LPDWORD name_l
     while (status == STATUS_BUFFER_OVERFLOW)
     {
         /* retry with a dynamically allocated buffer */
-        if (buf_ptr != buffer) heap_free( buf_ptr );
-        if (!(buf_ptr = heap_alloc( total_size )))
+        if (buf_ptr != buffer) HeapFree( GetProcessHeap(), 0, buf_ptr );
+        if (!(buf_ptr = HeapAlloc( GetProcessHeap(), 0, total_size )))
             return ERROR_NOT_ENOUGH_MEMORY;
         info = (KEY_NODE_INFORMATION *)buf_ptr;
         status = NtEnumerateKey( hkey, index, KeyNodeInformation,
@@ -943,7 +932,7 @@ LSTATUS WINAPI RegEnumKeyExA( HKEY hkey, DWORD index, LPSTR name, LPDWORD name_l
         }
     }
 
-    if (buf_ptr != buffer) heap_free( buf_ptr );
+    if (buf_ptr != buffer) HeapFree( GetProcessHeap(), 0, buf_ptr );
     return RtlNtStatusToDosError( status );
 }
 
@@ -1001,8 +990,8 @@ LSTATUS WINAPI RegQueryInfoKeyW( HKEY hkey, LPWSTR class, LPDWORD class_len, LPD
         /* retry with a dynamically allocated buffer */
         while (status == STATUS_BUFFER_OVERFLOW)
         {
-            if (buf_ptr != buffer) heap_free( buf_ptr );
-            if (!(buf_ptr = heap_alloc( total_size )))
+            if (buf_ptr != buffer) HeapFree( GetProcessHeap(), 0, buf_ptr );
+            if (!(buf_ptr = HeapAlloc( GetProcessHeap(), 0, total_size )))
                 return ERROR_NOT_ENOUGH_MEMORY;
             info = (KEY_FULL_INFORMATION *)buf_ptr;
             status = NtQueryKey( hkey, KeyFullInformation, buf_ptr, total_size, &total_size );
@@ -1038,7 +1027,7 @@ LSTATUS WINAPI RegQueryInfoKeyW( HKEY hkey, LPWSTR class, LPDWORD class_len, LPD
     }
 
  done:
-    if (buf_ptr != buffer) heap_free( buf_ptr );
+    if (buf_ptr != buffer) HeapFree( GetProcessHeap(), 0, buf_ptr );
     return RtlNtStatusToDosError( status );
 }
 
@@ -1091,8 +1080,8 @@ LSTATUS WINAPI RegQueryInfoKeyA( HKEY hkey, LPSTR class, LPDWORD class_len, LPDW
         /* retry with a dynamically allocated buffer */
         while (status == STATUS_BUFFER_OVERFLOW)
         {
-            if (buf_ptr != buffer) heap_free( buf_ptr );
-            if (!(buf_ptr = heap_alloc( total_size )))
+            if (buf_ptr != buffer) HeapFree( GetProcessHeap(), 0, buf_ptr );
+            if (!(buf_ptr = HeapAlloc( GetProcessHeap(), 0, total_size )))
                 return ERROR_NOT_ENOUGH_MEMORY;
             info = (KEY_FULL_INFORMATION *)buf_ptr;
             status = NtQueryKey( hkey, KeyFullInformation, buf_ptr, total_size, &total_size );
@@ -1133,7 +1122,7 @@ LSTATUS WINAPI RegQueryInfoKeyA( HKEY hkey, LPSTR class, LPDWORD class_len, LPDW
     }
 
  done:
-    if (buf_ptr != buffer) heap_free( buf_ptr );
+    if (buf_ptr != buffer) HeapFree( GetProcessHeap(), 0, buf_ptr );
     return RtlNtStatusToDosError( status );
 }
 
@@ -1289,7 +1278,7 @@ LSTATUS WINAPI DECLSPEC_HOTPATCH RegSetValueExA( HKEY hkey, LPCSTR name, DWORD r
     {
         DWORD lenW;
         RtlMultiByteToUnicodeSize( &lenW, (const char *)data, count );
-        if (!(dataW = heap_alloc( lenW ))) return ERROR_OUTOFMEMORY;
+        if (!(dataW = HeapAlloc( GetProcessHeap(), 0, lenW ))) return ERROR_OUTOFMEMORY;
         RtlMultiByteToUnicodeN( dataW, lenW, NULL, (const char *)data, count );
         count = lenW;
         data = (BYTE *)dataW;
@@ -1301,7 +1290,7 @@ LSTATUS WINAPI DECLSPEC_HOTPATCH RegSetValueExA( HKEY hkey, LPCSTR name, DWORD r
         status = NtSetValueKey( hkey, &nameW, 0, type, data, count );
         RtlFreeUnicodeString( &nameW );
     }
-    heap_free( dataW );
+    HeapFree( GetProcessHeap(), 0, dataW );
     return RtlNtStatusToDosError( status );
 }
 
@@ -1695,8 +1684,8 @@ LSTATUS WINAPI DECLSPEC_HOTPATCH RegQueryValueExW( HKEY hkey, LPCWSTR name, LPDW
         /* retry with a dynamically allocated buffer */
         while (status == STATUS_BUFFER_OVERFLOW && total_size - info_size <= *count)
         {
-            if (buf_ptr != buffer) heap_free( buf_ptr );
-            if (!(buf_ptr = heap_alloc( total_size )))
+            if (buf_ptr != buffer) HeapFree( GetProcessHeap(), 0, buf_ptr );
+            if (!(buf_ptr = HeapAlloc( GetProcessHeap(), 0, total_size )))
                 return ERROR_NOT_ENOUGH_MEMORY;
             info = (KEY_VALUE_PARTIAL_INFORMATION *)buf_ptr;
             status = NtQueryValueKey( hkey, &name_str, KeyValuePartialInformation,
@@ -1722,7 +1711,7 @@ LSTATUS WINAPI DECLSPEC_HOTPATCH RegQueryValueExW( HKEY hkey, LPCWSTR name, LPDW
     if (count) *count = total_size - info_size;
 
  done:
-    if (buf_ptr != buffer) heap_free( buf_ptr );
+    if (buf_ptr != buffer) HeapFree( GetProcessHeap(), 0, buf_ptr );
     return RtlNtStatusToDosError(status);
 }
 
@@ -1796,8 +1785,8 @@ LSTATUS WINAPI DECLSPEC_HOTPATCH RegQueryValueExA( HKEY hkey, LPCSTR name, LPDWO
         /* retry with a dynamically allocated buffer */
         while (status == STATUS_BUFFER_OVERFLOW)
         {
-            if (buf_ptr != buffer) heap_free( buf_ptr );
-            if (!(buf_ptr = heap_alloc( total_size )))
+            if (buf_ptr != buffer) HeapFree( GetProcessHeap(), 0, buf_ptr );
+            if (!(buf_ptr = HeapAlloc( GetProcessHeap(), 0, total_size )))
             {
                 status = STATUS_NO_MEMORY;
                 goto done;
@@ -1841,7 +1830,7 @@ LSTATUS WINAPI DECLSPEC_HOTPATCH RegQueryValueExA( HKEY hkey, LPCSTR name, LPDWO
     if (count) *count = total_size - info_size;
 
  done:
-    if (buf_ptr != buffer) heap_free( buf_ptr );
+    if (buf_ptr != buffer) HeapFree( GetProcessHeap(), 0, buf_ptr );
     RtlFreeUnicodeString( &nameW );
     return RtlNtStatusToDosError(status);
 }
@@ -1964,9 +1953,9 @@ LSTATUS WINAPI RegGetValueW( HKEY hKey, LPCWSTR pszSubKey, LPCWSTR pszValue,
          (ret == ERROR_SUCCESS && (cbData < sizeof(WCHAR) || (pvData && *((WCHAR *)pvData + cbData / sizeof(WCHAR) - 1))))))
     {
         do {
-            heap_free(pvBuf);
+            HeapFree(GetProcessHeap(), 0, pvBuf);
 
-            pvBuf = heap_alloc(cbData + sizeof(WCHAR));
+            pvBuf = HeapAlloc(GetProcessHeap(), 0, cbData + sizeof(WCHAR));
             if (!pvBuf)
             {
                 ret = ERROR_NOT_ENOUGH_MEMORY;
@@ -2012,7 +2001,7 @@ LSTATUS WINAPI RegGetValueW( HKEY hKey, LPCWSTR pszSubKey, LPCWSTR pszValue,
             }
         }
 
-        heap_free(pvBuf);
+        HeapFree(GetProcessHeap(), 0, pvBuf);
     }
 
     if (pszSubKey && pszSubKey[0])
@@ -2079,9 +2068,9 @@ LSTATUS WINAPI RegGetValueA( HKEY hKey, LPCSTR pszSubKey, LPCSTR pszValue,
          (ret == ERROR_SUCCESS && (!cbData || (pvData && *((char *)pvData + cbData - 1))))))
     {
         do {
-            heap_free(pvBuf);
+            HeapFree(GetProcessHeap(), 0, pvBuf);
 
-            pvBuf = heap_alloc(cbData + 1);
+            pvBuf = HeapAlloc(GetProcessHeap(), 0, cbData + 1);
             if (!pvBuf)
             {
                 ret = ERROR_NOT_ENOUGH_MEMORY;
@@ -2127,7 +2116,7 @@ LSTATUS WINAPI RegGetValueA( HKEY hKey, LPCSTR pszSubKey, LPCSTR pszValue,
             }
         }
 
-        heap_free(pvBuf);
+        HeapFree(GetProcessHeap(), 0, pvBuf);
     }
 
     if (pszSubKey && pszSubKey[0])
@@ -2190,8 +2179,8 @@ LSTATUS WINAPI RegEnumValueW( HKEY hkey, DWORD index, LPWSTR value, LPDWORD val_
     /* retry with a dynamically allocated buffer */
     while (status == STATUS_BUFFER_OVERFLOW)
     {
-        if (buf_ptr != buffer) heap_free( buf_ptr );
-        if (!(buf_ptr = heap_alloc( total_size )))
+        if (buf_ptr != buffer) HeapFree( GetProcessHeap(), 0, buf_ptr );
+        if (!(buf_ptr = HeapAlloc( GetProcessHeap(), 0, total_size )))
             return ERROR_NOT_ENOUGH_MEMORY;
         info = (KEY_VALUE_FULL_INFORMATION *)buf_ptr;
         status = NtEnumerateValueKey( hkey, index, KeyValueFullInformation,
@@ -2231,7 +2220,7 @@ LSTATUS WINAPI RegEnumValueW( HKEY hkey, DWORD index, LPWSTR value, LPDWORD val_
     if (count) *count = info->DataLength;
 
  done:
-    if (buf_ptr != buffer) heap_free( buf_ptr );
+    if (buf_ptr != buffer) HeapFree( GetProcessHeap(), 0, buf_ptr );
     return RtlNtStatusToDosError(status);
 }
 
@@ -2270,8 +2259,8 @@ LSTATUS WINAPI RegEnumValueA( HKEY hkey, DWORD index, LPSTR value, LPDWORD val_c
     /* retry with a dynamically allocated buffer */
     while (status == STATUS_BUFFER_OVERFLOW)
     {
-        if (buf_ptr != buffer) heap_free( buf_ptr );
-        if (!(buf_ptr = heap_alloc( total_size )))
+        if (buf_ptr != buffer) HeapFree( GetProcessHeap(), 0, buf_ptr );
+        if (!(buf_ptr = HeapAlloc( GetProcessHeap(), 0, total_size )))
             return ERROR_NOT_ENOUGH_MEMORY;
         info = (KEY_VALUE_FULL_INFORMATION *)buf_ptr;
         status = NtEnumerateValueKey( hkey, index, KeyValueFullInformation,
@@ -2332,7 +2321,7 @@ LSTATUS WINAPI RegEnumValueA( HKEY hkey, DWORD index, LPSTR value, LPDWORD val_c
     if (count) *count = info->DataLength;
 
  done:
-    if (buf_ptr != buffer) heap_free( buf_ptr );
+    if (buf_ptr != buffer) HeapFree( GetProcessHeap(), 0, buf_ptr );
     return RtlNtStatusToDosError(status);
 }
 
@@ -2442,20 +2431,10 @@ LSTATUS WINAPI RegLoadKeyW( HKEY hkey, LPCWSTR subkey, LPCWSTR filename )
 
     if (!(hkey = get_special_root_hkey( hkey ))) return ERROR_INVALID_HANDLE;
 
-    destkey.Length = sizeof(destkey);
-    destkey.RootDirectory = hkey;               /* root key: HKLM or HKU */
-    destkey.ObjectName = &subkeyW;              /* name of the key */
-    destkey.Attributes = 0;
-    destkey.SecurityDescriptor = NULL;
-    destkey.SecurityQualityOfService = NULL;
+    InitializeObjectAttributes( &destkey, &subkeyW, REG_KEY_ATTRIBUTES, hkey, NULL );
     RtlInitUnicodeString(&subkeyW, subkey);
 
-    file.Length = sizeof(file);
-    file.RootDirectory = NULL;
-    file.ObjectName = &filenameW;               /* file containing the hive */
-    file.Attributes = OBJ_CASE_INSENSITIVE;
-    file.SecurityDescriptor = NULL;
-    file.SecurityQualityOfService = NULL;
+    InitializeObjectAttributes( &file, &filenameW, OBJ_CASE_INSENSITIVE, 0, NULL );
     if (!RtlDosPathNameToNtPathName_U(filename, &filenameW, NULL, NULL))
         return ERROR_INVALID_PARAMETER;
 
@@ -2801,9 +2780,9 @@ static void dump_mui_cache(void)
 
 static inline void free_mui_cache_entry(struct mui_cache_entry *ent)
 {
-    heap_free(ent->file_name);
-    heap_free(ent->text);
-    heap_free(ent);
+    HeapFree(GetProcessHeap(), 0, ent->file_name);
+    HeapFree(GetProcessHeap(), 0, ent->text);
+    HeapFree(GetProcessHeap(), 0, ent);
 }
 
 /* critical section must be held */
@@ -2839,10 +2818,10 @@ static void reg_mui_cache_put(const WCHAR *file_name, UINT index, const WCHAR *b
     struct mui_cache_entry *ent;
     TRACE("(%s %u %s %d)\n", wine_dbgstr_w(file_name), index, wine_dbgstr_wn(buffer, size), size);
 
-    ent = heap_calloc(sizeof(*ent), 1);
+    ent = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*ent));
     if (!ent)
         return;
-    ent->file_name = heap_alloc((lstrlenW(file_name) + 1) * sizeof(WCHAR));
+    ent->file_name = HeapAlloc(GetProcessHeap(), 0, (lstrlenW(file_name) + 1) * sizeof(WCHAR));
     if (!ent->file_name) {
         free_mui_cache_entry(ent);
         return;
@@ -2850,7 +2829,7 @@ static void reg_mui_cache_put(const WCHAR *file_name, UINT index, const WCHAR *b
     lstrcpyW(ent->file_name, file_name);
     ent->index = index;
     ent->locale = GetThreadLocale();
-    ent->text = heap_alloc((size + 1) * sizeof(WCHAR));
+    ent->text = HeapAlloc(GetProcessHeap(), 0, (size + 1) * sizeof(WCHAR));
     if (!ent->text) {
         free_mui_cache_entry(ent);
         return;
@@ -2888,7 +2867,7 @@ static LONG load_mui_string(const WCHAR *file_name, UINT res_id, WCHAR *buffer, 
     size = GetFullPathNameW(file_name, 0, NULL, NULL);
     if (!size)
         return GetLastError();
-    full_name = heap_alloc(size * sizeof(WCHAR));
+    full_name = HeapAlloc(GetProcessHeap(), 0, size * sizeof(WCHAR));
     if (!full_name)
         return ERROR_NOT_ENOUGH_MEMORY;
     GetFullPathNameW(file_name, size, full_name, NULL);
@@ -2946,7 +2925,7 @@ cleanup:
         FreeLibrary(hModule);
     else
         RtlLeaveCriticalSection(&reg_mui_cs);
-    heap_free(full_name);
+    HeapFree(GetProcessHeap(), 0, full_name);
     return result;
 }
 
@@ -2994,7 +2973,7 @@ LSTATUS WINAPI RegLoadMUIStringW(HKEY hKey, LPCWSTR pwszValue, LPWSTR pwszBuffer
         result = ERROR_FILE_NOT_FOUND;
         goto cleanup;
     }
-    pwszTempBuffer = heap_alloc(cbData);
+    pwszTempBuffer = HeapAlloc(GetProcessHeap(), 0, cbData);
     if (!pwszTempBuffer) {
         result = ERROR_NOT_ENOUGH_MEMORY;
         goto cleanup;
@@ -3011,7 +2990,7 @@ LSTATUS WINAPI RegLoadMUIStringW(HKEY hKey, LPCWSTR pwszValue, LPWSTR pwszBuffer
     /* Expand environment variables regardless of the type. */
     cbData = ExpandEnvironmentStringsW(pwszTempBuffer, NULL, 0) * sizeof(WCHAR);
     if (!cbData) goto cleanup;
-    pwszExpandedBuffer = heap_alloc(cbData);
+    pwszExpandedBuffer = HeapAlloc(GetProcessHeap(), 0, cbData);
     if (!pwszExpandedBuffer) {
         result = ERROR_NOT_ENOUGH_MEMORY;
         goto cleanup;
@@ -3037,7 +3016,7 @@ LSTATUS WINAPI RegLoadMUIStringW(HKEY hKey, LPCWSTR pwszValue, LPWSTR pwszBuffer
         /* Build a resource dll path. */
         baseDirLen = pwszBaseDir ? lstrlenW(pwszBaseDir) : 0;
         cbData = (baseDirLen + 1 + lstrlenW(pwszExpandedBuffer + 1) + 1) * sizeof(WCHAR);
-        pNewBuffer = heap_realloc(pwszTempBuffer, cbData);
+        pNewBuffer = HeapReAlloc(GetProcessHeap(), 0, pwszTempBuffer, cbData);
         if (!pNewBuffer) {
             result = ERROR_NOT_ENOUGH_MEMORY;
             goto cleanup;
@@ -3059,8 +3038,8 @@ LSTATUS WINAPI RegLoadMUIStringW(HKEY hKey, LPCWSTR pwszValue, LPWSTR pwszBuffer
     }
 
 cleanup:
-    heap_free(pwszTempBuffer);
-    heap_free(pwszExpandedBuffer);
+    HeapFree(GetProcessHeap(), 0, pwszTempBuffer);
+    HeapFree(GetProcessHeap(), 0, pwszExpandedBuffer);
     return result;
 }
 
@@ -3100,7 +3079,7 @@ LSTATUS WINAPI RegDeleteTreeW( HKEY hkey, const WCHAR *subkey )
         goto cleanup;
 
     max_name = max( max_subkey, max_name ) + 1;
-    if (!(name_buf = heap_alloc( max_name * sizeof(WCHAR) )))
+    if (!(name_buf = HeapAlloc( GetProcessHeap(), 0, max_name * sizeof(WCHAR) )))
     {
         ret = ERROR_NOT_ENOUGH_MEMORY;
         goto cleanup;
@@ -3138,7 +3117,7 @@ LSTATUS WINAPI RegDeleteTreeW( HKEY hkey, const WCHAR *subkey )
     ret = ERROR_SUCCESS;
 
 cleanup:
-    heap_free( name_buf );
+    HeapFree( GetProcessHeap(), 0, name_buf );
     if (subkey && *subkey)
         RegCloseKey( hkey );
     return ret;
@@ -3190,13 +3169,13 @@ LSTATUS WINAPI RegCopyTreeW( HKEY hsrc, const WCHAR *subkey, HKEY hdst )
         goto cleanup;
 
     max_name = max( max_subkey, max_name ) + 1;
-    if (!(name_buf = heap_alloc( max_name * sizeof(WCHAR) )))
+    if (!(name_buf = HeapAlloc( GetProcessHeap(), 0, max_name * sizeof(WCHAR) )))
     {
         ret = ERROR_NOT_ENOUGH_MEMORY;
         goto cleanup;
     }
 
-    if (!(value_buf = heap_alloc( max_value )))
+    if (!(value_buf = HeapAlloc( GetProcessHeap(), 0, max_value )))
     {
         ret = ERROR_NOT_ENOUGH_MEMORY;
         goto cleanup;
@@ -3231,8 +3210,8 @@ LSTATUS WINAPI RegCopyTreeW( HKEY hsrc, const WCHAR *subkey, HKEY hdst )
     ret = ERROR_SUCCESS;
 
 cleanup:
-    heap_free( name_buf );
-    heap_free( value_buf );
+    HeapFree( GetProcessHeap(), 0, name_buf );
+    HeapFree( GetProcessHeap(), 0, value_buf );
     if (subkey)
         RegCloseKey( hsrc );
     return ret;
@@ -3535,7 +3514,7 @@ LONG WINAPI SHRegCreateUSKeyA(LPCSTR path, REGSAM samDesired, HUSKEY relative_ke
     if (path)
     {
         INT len = MultiByteToWideChar(CP_ACP, 0, path, -1, NULL, 0);
-        pathW = heap_alloc(len * sizeof(WCHAR));
+        pathW = HeapAlloc(GetProcessHeap(), 0, len * sizeof(WCHAR));
         if (!pathW)
             return ERROR_NOT_ENOUGH_MEMORY;
         MultiByteToWideChar(CP_ACP, 0, path, -1, pathW, len);
@@ -3597,7 +3576,7 @@ LONG WINAPI SHRegCreateUSKeyW(const WCHAR *path, REGSAM samDesired, HUSKEY relat
         return ERROR_SUCCESS;
     }
 
-    ret_key = heap_alloc_zero(sizeof(*ret_key));
+    ret_key = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*ret_key));
     lstrcpynW(ret_key->path, path, ARRAY_SIZE(ret_key->path));
 
     if (relative_key)
@@ -3617,7 +3596,7 @@ LONG WINAPI SHRegCreateUSKeyW(const WCHAR *path, REGSAM samDesired, HUSKEY relat
         if (ret == ERROR_SUCCESS)
             *new_uskey = ret_key;
         else
-            heap_free(ret_key);
+            HeapFree(GetProcessHeap(), 0, ret_key);
     }
 
     return ret;
@@ -3640,7 +3619,7 @@ LONG WINAPI SHRegCloseUSKey(HUSKEY hUSKey)
     if (key->HKLMstart && key->HKLMstart != HKEY_LOCAL_MACHINE)
         ret = RegCloseKey(key->HKLMstart);
 
-    heap_free(key);
+    HeapFree(GetProcessHeap(), 0, key);
     return ret;
 }
 
@@ -3755,7 +3734,7 @@ LONG WINAPI SHRegOpenUSKeyW(const WCHAR *path, REGSAM access_mask, HUSKEY relati
         *uskey = NULL;
 
     /* Create internal HUSKEY */
-    key = heap_alloc_zero(sizeof(*key));
+    key = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*key));
     lstrcpynW(key->path, path, ARRAY_SIZE(key->path));
 
     if (relative_key)

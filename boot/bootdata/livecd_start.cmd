@@ -37,6 +37,7 @@ goto :eof
 %SystemRoot%\system32\dbgprint.exe WIFISCAN_BEGIN
 %SystemRoot%\system32\wlanscan.exe
 %SystemRoot%\system32\dbgprint.exe WIFISCAN_END
+%SystemRoot%\system32\dbgprint.exe BOOT_TESTS_DONE
 
 goto :eof
 :after_cpubench

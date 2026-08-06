@@ -242,7 +242,13 @@ Used Version: git commit d9c6040
 License: MIT (https://spdx.org/licenses/MIT.html)
 URL: https://github.com/microsoft/Windows-Driver-Frameworks
 
-Title: libmpg123 (used by winemp3.acm)
+Title: Little CMS
+Path: sdk/lib/3rdparty/lcms2
+Used Version: 2.19 (Wine 11.14 bundled version)
+License: MIT (https://spdx.org/licenses/MIT.html)
+URL: https://www.littlecms.com/
+
+Title: libmpg123 (used by l3codeca.acm)
 Path: sdk/lib/3rdparty/libmpg123
 Used Version: 1.26.1
 License: LGPL-2.1 (https://spdx.org/licenses/LGPL-2.1.html)

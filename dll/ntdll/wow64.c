@@ -83,6 +83,7 @@ RtlWow64GetProcessMachines(HANDLE process, USHORT *current_ret, USHORT *native_r
     return status;
 }
 
+#ifdef _WIN64
 NTSTATUS
 WINAPI
 RtlWow64GetSharedInfoProcess(HANDLE process, BOOLEAN *is_wow64, WOW64INFO *info)
@@ -120,8 +121,22 @@ RtlWow64IsWowGuestMachineSupported(USHORT machine, BOOLEAN *supported)
     }
     return status;
 }
+#endif
 
-#ifdef _WIN64
+static BOOLEAN
+RtlpIsCurrentProcess(HANDLE process)
+{
+    return process == NtCurrentProcess() || !NtCompareObjects(process, NtCurrentProcess());
+}
+
+BOOLEAN
+WINAPI
+RtlIsCurrentProcess(HANDLE process)
+{
+    return RtlpIsCurrentProcess(process);
+}
+
+#if defined(_WIN64) && (!defined(__REACTOS__) || !defined(_M_ARM64))
 
 NTSTATUS
 WINAPI
@@ -272,19 +287,6 @@ done:
     if (retlen)
         *retlen = sizeof(entry);
     return STATUS_SUCCESS;
-}
-
-static BOOLEAN
-RtlpIsCurrentProcess(HANDLE process)
-{
-    return process == NtCurrentProcess() || !NtCompareObjects(process, NtCurrentProcess());
-}
-
-BOOLEAN
-WINAPI
-RtlIsCurrentProcess(HANDLE process)
-{
-    return RtlpIsCurrentProcess(process);
 }
 
 VOID

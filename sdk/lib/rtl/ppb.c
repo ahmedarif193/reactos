@@ -35,9 +35,10 @@ RtlpCopyParameterString(PWCHAR *Ptr,
       Destination->Buffer = (PWCHAR)(*Ptr);
       if (Source->Length)
          memmove (Destination->Buffer, Source->Buffer, Source->Length);
-      Destination->Buffer[Destination->Length / sizeof(WCHAR)] = 0;
+      if (Destination->MaximumLength >= Destination->Length + sizeof(WCHAR))
+         Destination->Buffer[Destination->Length / sizeof(WCHAR)] = 0;
    }
-   *Ptr += Destination->MaximumLength/sizeof(WCHAR);
+   *Ptr = (PWCHAR)((PUCHAR)*Ptr + Destination->MaximumLength);
    *Ptr = ALIGN_UP_POINTER_BY(*Ptr, sizeof(PVOID));
 }
 

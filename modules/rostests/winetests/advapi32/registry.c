@@ -33,20 +33,6 @@
 #include "winsvc.h"
 #include "winerror.h"
 #include "aclapi.h"
-#ifdef __REACTOS__
-/* FIXME: Removing this hack requires fixing our incompatible wine/test.h and wine/debug.h. */
-#ifndef wine_dbg_sprintf
-static inline const char* wine_dbg_sprintf(const char* format, ...)
-{
-    static char buffer[256];
-    va_list args;
-    va_start(args, format);
-    vsnprintf(buffer, sizeof(buffer), format, args);
-    va_end(args);
-    return buffer;
-}
-#endif
-#endif
 
 #define IS_HKCR(hk) ((UINT_PTR)hk > 0 && ((UINT_PTR)hk & 3) == 2)
 
@@ -1136,11 +1122,7 @@ static void test_reg_open_key(void)
     hkResult = hkPreserve;
     ret = RegOpenKeyExW(NULL, L"", 0, KEY_QUERY_VALUE, &hkResult);
     ok(ret == ERROR_INVALID_HANDLE, "expected ERROR_INVALID_HANDLE, got %ld\n", ret);
-#ifdef __REACTOS__
-    ok(hkResult == NULL || broken(GetNTVersion() <= _WIN32_WINNT_WS03), "expected hkResult == NULL\n");
-#else
     ok(hkResult == NULL, "expected hkResult == NULL\n");
-#endif
 
     hkResult = hkPreserve;
     ret = RegOpenKeyExA(NULL, "", 0, KEY_QUERY_VALUE, &hkResult);
@@ -1306,11 +1288,7 @@ static void test_reg_create_key(void)
     ok(ret == ERROR_INVALID_PARAMETER, "Got unexpected ret %ld.\n", ret);
 
     ret = RegCreateKeyW(hkey_main, L"Subkey1", NULL);
-#ifdef __REACTOS__
-    ok(ret == ERROR_INVALID_PARAMETER || broken(ERROR_BADKEY) /* WS03 */, "Got unexpected ret %ld.\n", ret);
-#else
     ok(ret == ERROR_INVALID_PARAMETER, "Got unexpected ret %ld.\n", ret);
-#endif
 
     ret = RegCreateKeyExA(hkey_main, "Subkey1", 0, NULL, 0, KEY_NOTIFY, NULL, NULL, NULL);
     ok(ret == ERROR_BADKEY, "Got unexpected ret %ld.\n", ret);
@@ -1670,11 +1648,7 @@ static void test_reg_load_key(void)
     pRtlInitUnicodeString(&key_name, L"\\REGISTRY\\User\\.Default");
     InitializeObjectAttributes(&attr, &key_name, OBJ_CASE_INSENSITIVE, NULL, NULL);
     status = pNtUnloadKey(&attr);
-#ifdef __REACTOS__
-    ok(status == STATUS_ACCESS_DENIED || broken(status == STATUS_CANNOT_DELETE) /* WS03 */, "expected STATUS_ACCESS_DENIED, got %08lx\n", status);
-#else
     ok(status == STATUS_ACCESS_DENIED, "expected STATUS_ACCESS_DENIED, got %08lx\n", status);
-#endif
 
     ret = RegUnLoadKeyA(HKEY_USERS, ".Default");
     ok(ret == ERROR_ACCESS_DENIED, "expected ERROR_ACCESS_DENIED, got %ld\n", ret);
@@ -1705,9 +1679,6 @@ static void wait_file_available(char *path)
 
 static void test_reg_load_app_key(void)
 {
-#if defined(__REACTOS__) && DLL_EXPORT_VERSION < 0x600
-    skip("test_reg_load_app_key() can't be built unless DLL_EXPORT_VERSION >= 0x600\n");
-#else
     DWORD ret, size;
     char hivefilepath[2 * MAX_PATH], *p;
     const BYTE test_data[] = "Hello World";
@@ -1761,7 +1732,6 @@ static void test_reg_load_app_key(void)
     p = strrchr(hivefilepath, '\\');
     *p = 0;
     delete_dir(hivefilepath);
-#endif
 }
 
 /* tests that show that RegConnectRegistry and
@@ -2810,12 +2780,6 @@ static void test_redirection(void)
         skip("not enough privileges to modify HKLM\n");
         return;
     }
-#if defined(__REACTOS__) && defined(_WIN64)
-    if (GetNTVersion() == _WIN32_WINNT_VISTA) {
-        skip("test_redirection() invalid for Vista x64 and hangs.\n");
-        return;
-    }
-#endif
 
     err = RegCreateKeyExA( HKEY_LOCAL_MACHINE, "Software\\Wine", 0, NULL, 0,
                            KEY_WOW64_64KEY | KEY_ALL_ACCESS, NULL, &root64, NULL );
@@ -4318,16 +4282,6 @@ static void test_performance_keys(void)
     HKEY key;
     LONG ret;
 
-#ifdef __REACTOS__
-#ifdef _WIN64
-    if (GetNTVersion() <= _WIN32_WINNT_VISTA) {
-#else
-    if (GetNTVersion() <= _WIN32_WINNT_WS03) {
-#endif
-        skip("test_performance_keys() is invalid for Vista x64 and WS03\n");
-        return;
-    }
-#endif
     buffer = malloc(buffer_size);
 
     sysname_len = ARRAY_SIZE(sysname);
@@ -4676,10 +4630,6 @@ static void test_perflib_key(void)
         winetest_push_context("%ld", l);
       todo_wine_if(l == 1) {
         ret = RegOpenKeyExA(perflib_key, knames[l], 0, KEY_READ, &key);
-#ifdef __REACTOS__
-        if (ret == ERROR_FILE_NOT_FOUND) /* WS03, Vista */
-            continue;
-#endif
         ok(!ret, "got %lu\n", ret);
         if (is_special_key(key))
         {
@@ -4785,11 +4735,7 @@ static void test_RegLoadMUIString(void)
         /*  8 */
         { "@%WineMuiExe%,a",   REG_SZ,        FALSE, ERROR_INVALID_DATA },
         { "@%WineMuiExe%,-4",  REG_SZ,        FALSE, ERROR_NOT_FOUND, ERROR_FILE_NOT_FOUND },
-#ifdef __REACTOS__
-        { "@%WineMuiExe%,-39", REG_SZ,        FALSE, ERROR_RESOURCE_NAME_NOT_FOUND, ERROR_RESOURCE_DATA_NOT_FOUND },
-#else
         { "@%WineMuiExe%,-39", REG_SZ,        FALSE, ERROR_RESOURCE_NAME_NOT_FOUND },
-#endif
         { "@%WineMuiDat%,-16", REG_EXPAND_SZ, FALSE, ERROR_BAD_EXE_FORMAT, ERROR_FILE_NOT_FOUND },
     };
 
@@ -4798,12 +4744,6 @@ static void test_RegLoadMUIString(void)
         win_skip("RegLoadMUIString is not available\n");
         return;
     }
-#if defined(__REACTOS__) && defined(_WIN64)
-    if (GetNTVersion() == _WIN32_WINNT_VISTA) {
-        skip("test_RegLoadMUIString() spams the console with garbage and crashes on Vista x64.\n");
-        return;
-    }
-#endif
 
     hUser32 = LoadLibraryA("user32.dll");
     ok(hUser32 != NULL, "cannot load user32.dll\n");
@@ -4850,11 +4790,7 @@ static void test_RegLoadMUIString(void)
     size = 0xdeadbeef;
     ret = pRegLoadMUIStringW(hkey, tz_valueW, NULL, 0, &size, 0, NULL);
     ok(ret == ERROR_MORE_DATA, "got %ld, expected ERROR_MORE_DATA\n", ret);
-#ifdef __REACTOS__
-    ok(size == text_size || broken(size == text_size + sizeof(WCHAR)) /* Vista */, "got %lu, expected %lu\n", size, text_size);
-#else
     ok(size == text_size, "got %lu, expected %lu\n", size, text_size);
-#endif
 
     memset(bufW, 0xff, sizeof(bufW));
     ret = pRegLoadMUIStringW(hkey, tz_valueW, bufW, sizeof(WCHAR)+1, &size, 0, NULL);
@@ -4944,9 +4880,6 @@ static void test_RegLoadMUIString(void)
                                  &size, 0,
                                  test_case[i].use_sysdir ? sysdirW : NULL);
         ok(ret == test_case[i].expected ||
-#ifdef __REACTOS__
-           broken(i == 9 && ret == ERROR_RESOURCE_DATA_NOT_FOUND /* Vista */) ||
-#endif
            broken(test_case[i].value[0] == '%' && ret == ERROR_SUCCESS /* vista */) ||
            broken(test_case[i].broken_ret && ret == test_case[i].broken_ret /* vista */),
            "[%2u] expected %ld, got %ld\n", i, test_case[i].expected, ret);
@@ -5136,9 +5069,6 @@ static void test_EnumDynamicTimeZoneInformation(void)
 
 static void test_RegRenameKey(void)
 {
-#if defined(__REACTOS__) && DLL_EXPORT_VERSION < 0x600
-    skip("test_RegRenameKey() can't be built unless DLL_EXPORT_VERSION >= 0x600\n");
-#else
     HKEY key, key2;
     LSTATUS ret;
 
@@ -5193,7 +5123,6 @@ static void test_RegRenameKey(void)
     ok(ret, "Unexpected return value %ld.\n", ret);
 
     RegCloseKey(key);
-#endif
 }
 
 static BOOL check_cs_number( const WCHAR *str )

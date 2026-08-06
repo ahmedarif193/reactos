@@ -23,8 +23,18 @@
 #include <windows.h>
 #include <vfw.h>
 
-#include "wine/heap.h"
 #include "wine/test.h"
+
+static void pump_messages(void)
+{
+    MSG msg;
+
+    while (PeekMessageA( &msg, 0, 0, 0, PM_REMOVE ))
+    {
+        TranslateMessage( &msg );
+        DispatchMessageA( &msg );
+    }
+}
 
 static const DWORD file_header[] = /* file_header */
 {
@@ -119,24 +129,22 @@ static BOOL create_avi_file(char *fname)
     ULONG buffer_length;
 
     ret = GetTempPathA(sizeof(temp_path), temp_path);
-    ok(ret, "Failed to get a temp path, err %d\n", GetLastError());
+    ok(ret, "Failed to get a temp path, err %ld\n", GetLastError());
     if (!ret)
         return FALSE;
 
     ret = GetTempFileNameA(temp_path, "mci", 0, fname);
-    ok(ret, "Failed to get a temp name, err %d\n", GetLastError());
+    ok(ret, "Failed to get a temp name, err %ld\n", GetLastError());
     if (!ret)
         return FALSE;
     DeleteFileA(fname);
 
-    lstrcatA(fname, ".avi");
-
     hFile = CreateFileA(fname, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    ok(hFile != INVALID_HANDLE_VALUE, "Failed to create a file, err %d\n", GetLastError());
+    ok(hFile != INVALID_HANDLE_VALUE, "Failed to create a file, err %ld\n", GetLastError());
     if (hFile == INVALID_HANDLE_VALUE) return FALSE;
 
     buffer_length = padding[1];
-    buffer = heap_alloc_zero(buffer_length);
+    buffer = calloc(1, buffer_length);
 
     WriteFile(hFile, file_header, sizeof(file_header), &written, NULL);
     WriteFile(hFile, &main_avi_header, sizeof(MainAVIHeader), &written, NULL);
@@ -147,57 +155,281 @@ static BOOL create_avi_file(char *fname)
     WriteFile(hFile, buffer, buffer_length, &written, NULL);
     WriteFile(hFile, data, sizeof(data), &written, NULL);
 
-    heap_free(buffer);
+    free(buffer);
 
     CloseHandle(hFile);
     return ret;
 }
 
+/* expected information for window creation */
+static struct {
+    /* input */
+    const char* expectedA;
+    const WCHAR* expectedW;
+    /* output */
+    unsigned open_msg;
+    enum {NO_MATCH, PTR_ANSI_MATCH, PTR_UNICODE_MATCH, ANSI_MATCH, UNICODE_MATCH } match;
+} wnd_creation;
+
+static WNDPROC old_MCIWndProc;
+static LRESULT WINAPI proxy_MCIWndProc(HWND hWnd, UINT wMsg, WPARAM wParam, LPARAM lParam)
+{
+    switch (wMsg)
+    {
+    case WM_CREATE:
+        {
+            CREATESTRUCTW* cs = (CREATESTRUCTW*)lParam;
+            if (cs->lpCreateParams)
+            {
+                if (cs->lpCreateParams == wnd_creation.expectedA)
+                    wnd_creation.match = PTR_ANSI_MATCH;
+                else if (cs->lpCreateParams == wnd_creation.expectedW)
+                    wnd_creation.match = PTR_UNICODE_MATCH;
+                else if (!strcmp(cs->lpCreateParams, wnd_creation.expectedA))
+                    wnd_creation.match = ANSI_MATCH;
+                else if (!wcscmp(cs->lpCreateParams, wnd_creation.expectedW))
+                    wnd_creation.match = UNICODE_MATCH;
+            }
+        }
+        break;
+    case MCIWNDM_OPENA:
+    case MCIWNDM_OPENW:
+        wnd_creation.open_msg = wMsg;
+        break;
+    default:
+        break;
+    }
+    return old_MCIWndProc(hWnd, wMsg, wParam, lParam);
+}
+
+static LRESULT CALLBACK hook_proc( int code, WPARAM wp, LPARAM lp )
+{
+    if (code == HCBT_CREATEWND && lp)
+    {
+        CREATESTRUCTW* cs = ((CBT_CREATEWNDW *)lp)->lpcs;
+        if (cs && ((ULONG_PTR)cs->lpszClass >> 16) && !wcsicmp(cs->lpszClass, L"MCIWndClass"))
+        {
+            old_MCIWndProc = (WNDPROC)SetWindowLongPtrW((HWND)wp, GWLP_WNDPROC, (LPARAM)proxy_MCIWndProc);
+            ok(old_MCIWndProc != NULL, "No wnd proc\n");
+        }
+    }
+
+    return CallNextHookEx( NULL, code, wp, lp );
+}
+
+static void test_window_create(unsigned line, const char* fname, HWND parent,
+                               BOOL with_mci, BOOL call_ansi, unsigned match)
+{
+    HMODULE hinst = GetModuleHandleA(NULL);
+    WCHAR fnameW[MAX_PATH];
+    HWND window;
+    char error[200];
+    LRESULT ret;
+    BOOL expect_ansi = match == PTR_ANSI_MATCH || match == ANSI_MATCH;
+
+    MultiByteToWideChar(CP_ACP, 0, fname, -1, fnameW, ARRAY_SIZE(fnameW));
+
+    wnd_creation.expectedA = fname;
+    wnd_creation.expectedW = fnameW;
+    wnd_creation.open_msg = 0;
+    wnd_creation.match = NO_MATCH;
+
+    if (call_ansi)
+    {
+        if (with_mci)
+            window = MCIWndCreateA(parent, hinst, MCIWNDF_NOERRORDLG, fname);
+        else
+            window = CreateWindowExA(0, "MCIWndClass", NULL,
+                                     WS_CLIPSIBLINGS | WS_CLIPCHILDREN | MCIWNDF_NOERRORDLG,
+                                     0, 0, 300, 0,
+                                     parent, 0, hinst, expect_ansi ? (LPVOID)fname : (LPVOID)fnameW);
+    }
+    else
+    {
+        if (with_mci)
+            window = MCIWndCreateW(parent, hinst, MCIWNDF_NOERRORDLG, fnameW);
+        else
+            window = CreateWindowExW(0, L"MCIWndClass", NULL,
+                                     WS_CLIPSIBLINGS | WS_CLIPCHILDREN | MCIWNDF_NOERRORDLG,
+                                     0, 0, 300, 0,
+                                     parent, 0, hinst, expect_ansi ? (LPVOID)fname : (LPVOID)fnameW);
+    }
+    ok_(__FILE__, line)(window != NULL, "Failed to create an MCIWnd window\n");
+    ok_(__FILE__, line)(wnd_creation.match == match, "unexpected match %u\n", wnd_creation.match);
+    ok_(__FILE__, line)((expect_ansi && wnd_creation.open_msg == MCIWNDM_OPENA) ||
+                        (!expect_ansi && wnd_creation.open_msg == MCIWNDM_OPENW),
+                        "bad open message %u %s%u\n", match,
+                        wnd_creation.open_msg >= WM_USER ? "WM_USER+" : "",
+                        wnd_creation.open_msg >= WM_USER ? wnd_creation.open_msg - WM_USER : wnd_creation.open_msg);
+    ret = SendMessageA(window, MCIWNDM_GETERRORA, sizeof(error), (LPARAM)error);
+    ok_(__FILE__, line)(!ret || broken(ret == ERROR_INVALID_HANDLE) /* w2003std, w2008s64 */,
+                        "Unexpected error %Id\n", ret);
+    DestroyWindow(window);
+}
+
 static void test_MCIWndCreate(void)
 {
+    static struct
+    {
+        DWORD mci_style;
+        BOOL parent;
+        DWORD expected_style;
+    }
+    tests[] =
+    {
+        { MCIWNDF_NOERRORDLG, FALSE, WS_VISIBLE | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX
+                                     | WS_MAXIMIZEBOX | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | MCIWNDF_NOERRORDLG},
+        { MCIWNDF_NOERRORDLG, TRUE, WS_VISIBLE | WS_CHILD | WS_BORDER | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | MCIWNDF_NOERRORDLG},
+        { WS_CHILD | MCIWNDF_NOERRORDLG, TRUE, WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | MCIWNDF_NOERRORDLG},
+        { WS_POPUP | MCIWNDF_NOERRORDLG, FALSE, WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | MCIWNDF_NOERRORDLG},
+        { WS_POPUP | MCIWNDF_NOERRORDLG, TRUE, WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | MCIWNDF_NOERRORDLG},
+        { WS_POPUP | WS_CHILD | MCIWNDF_NOERRORDLG, TRUE, WS_POPUP | WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | MCIWNDF_NOERRORDLG},
+    };
     HWND parent, window;
     HMODULE hinst = GetModuleHandleA(NULL);
     char fname[MAX_PATH];
     char invalid_fname[] = "invalid.avi";
     char error[200];
+    unsigned int i;
+    DWORD style;
+    HHOOK hook;
     LRESULT ret;
+    int id;
 
     create_avi_file(fname);
 
-    window = MCIWndCreateA(NULL, hinst, MCIWNDF_NOERRORDLG, fname);
-    ok(window != NULL, "Failed to create an MCIWnd window without parent\n");
+    hook = SetWindowsHookExW( WH_CBT, hook_proc, NULL, GetCurrentThreadId() );
 
-    ret = SendMessageA(window, MCIWNDM_GETERRORA, sizeof(error), (LPARAM)error);
-    ok(!ret || broken(ret == ERROR_INVALID_HANDLE) /* w2003std, w2008s64 */,
-       "Unexpected error %ld\n", ret);
-
-    DestroyWindow(window);
+    test_window_create( __LINE__, fname, NULL, TRUE,  TRUE,  UNICODE_MATCH );
+    test_window_create( __LINE__, fname, NULL, TRUE,  FALSE, PTR_UNICODE_MATCH );
+    test_window_create( __LINE__, fname, NULL, FALSE, TRUE,  PTR_ANSI_MATCH );
+    test_window_create( __LINE__, fname, NULL, FALSE, FALSE, PTR_ANSI_MATCH );
 
     parent = CreateWindowExA(0, "static", "msvfw32 test",
                              WS_POPUP, 0, 0, 100, 100,
                              0, 0, 0, NULL);
     ok(parent != NULL, "Failed to create a window\n");
-    window = MCIWndCreateA(parent, hinst, MCIWNDF_NOERRORDLG, fname);
-    ok(window != NULL, "Failed to create an MCIWnd window\n");
+    ok(!IsWindowUnicode(parent), "Expecting ansi parent window\n");
 
-    ret = SendMessageA(window, MCIWNDM_GETERRORA, sizeof(error), (LPARAM)error);
-    ok(!ret || broken(ret == ERROR_INVALID_HANDLE) /* w2003std, w2008s64 */,
-       "Unexpected error %ld\n", ret);
+    test_window_create( __LINE__, fname, parent, TRUE,  TRUE,  UNICODE_MATCH );
+    test_window_create( __LINE__, fname, parent, TRUE,  FALSE, PTR_UNICODE_MATCH );
+    test_window_create( __LINE__, fname, parent, FALSE, TRUE,  PTR_ANSI_MATCH );
+    test_window_create( __LINE__, fname, parent, FALSE, FALSE, PTR_ANSI_MATCH );
 
     DestroyWindow(parent);
+
+    parent = CreateWindowExW(0, L"static", L"msvfw32 test",
+                             WS_POPUP, 0, 0, 100, 100,
+                             0, 0, 0, NULL);
+    ok(parent != NULL, "Failed to create a window\n");
+    ok(IsWindowUnicode(parent), "Expecting unicode parent window\n");
+
+    test_window_create( __LINE__, fname, parent, TRUE,  TRUE,  UNICODE_MATCH );
+    test_window_create( __LINE__, fname, parent, TRUE,  FALSE, PTR_UNICODE_MATCH );
+    test_window_create( __LINE__, fname, parent, FALSE, TRUE,  PTR_UNICODE_MATCH );
+    test_window_create( __LINE__, fname, parent, FALSE, FALSE, PTR_UNICODE_MATCH );
+
+    DestroyWindow(parent);
+
+    UnhookWindowsHookEx( hook );
 
     window = MCIWndCreateA(NULL, hinst, MCIWNDF_NOERRORDLG, invalid_fname);
     ok(window != NULL, "Failed to create an MCIWnd window\n");
 
     ret = SendMessageA(window, MCIWNDM_GETERRORA, sizeof(error), (LPARAM)error);
-    todo_wine ok(ret == MCIERR_FILE_NOT_FOUND, "Unexpected error %ld\n", ret);
+    todo_wine ok(ret == MCIERR_FILE_NOT_FOUND, "Unexpected error %Id\n", ret);
 
     DestroyWindow(window);
 
+    parent = CreateWindowExA(0, "static", "msvfw32 test",
+                             WS_OVERLAPPEDWINDOW | WS_VISIBLE, 0, 0, 200, 200,
+                             0, 0, 0, NULL);
+    ok(parent != NULL, "got error %lu\n", GetLastError());
+    pump_messages();
+    for (i = 0; i < ARRAYSIZE(tests); ++i)
+    {
+        winetest_push_context("test %u", i);
+        SetLastError(0xdeadbeef);
+        window = MCIWndCreateA(tests[i].parent ? parent : NULL, hinst, tests[i].mci_style, invalid_fname);
+        if ((tests[i].mci_style & (WS_POPUP | WS_CHILD)) == (WS_POPUP | WS_CHILD))
+        {
+            ok(!window, "window creation succeeded.\n");
+            ok(GetLastError() == ERROR_INVALID_MENU_HANDLE, "got %lu.\n", GetLastError());
+        }
+        else
+        {
+            ok(window != NULL, "got error %lu\n", GetLastError());
+
+            id = GetDlgCtrlID(window);
+            if (tests[i].parent && !(tests[i].mci_style & WS_POPUP))
+                ok(id == 66, "got %d.\n", id);
+            else
+                ok(!id, "got %d.\n", id);
+            pump_messages();
+            style = GetWindowLongA(window, GWL_STYLE);
+            ok(style == tests[i].expected_style, "got %#lx, expected %#lx (extra %#lx, missing %#lx).\n",
+                    style, tests[i].expected_style, style & ~tests[i].expected_style, tests[i].expected_style & ~style);
+        }
+        if (window)
+            DestroyWindow(window);
+        pump_messages();
+        winetest_pop_context();
+    }
+    DestroyWindow(parent);
+
+
     DeleteFileA(fname);
+}
+
+static WCHAR *load_resource(const WCHAR *res_name)
+{
+    static WCHAR path[MAX_PATH];
+    DWORD written;
+    HANDLE file;
+    HRSRC res;
+    void *ptr;
+
+    GetTempPathW(ARRAY_SIZE(path), path);
+    wcscat_s(path, ARRAY_SIZE(path), res_name);
+
+    file = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, 0);
+    ok(file != INVALID_HANDLE_VALUE, "creation of file %s failed, error %ld\n", debugstr_w(path), GetLastError());
+
+    res = FindResourceW(NULL, res_name, (LPCWSTR)RT_RCDATA);
+    ok(!!res, "failed to load resource %s, error %ld\n", debugstr_w(res_name), GetLastError());
+
+    ptr = LockResource(LoadResource(GetModuleHandleA(NULL), res));
+    WriteFile(file, ptr, SizeofResource(GetModuleHandleA(NULL), res), &written, NULL);
+    ok(written == SizeofResource(GetModuleHandleA(NULL), res), "failed to write resource\n");
+    CloseHandle(file);
+
+    return path;
+}
+
+static void test_audio_playback(void)
+{
+    HINSTANCE hisnt = GetModuleHandleW(NULL);
+    WCHAR *test_file = load_resource(L"test.mp3");
+    HWND parent, mci_wnd;
+    DWORD error;
+
+    parent = CreateWindowExW(0, L"static", L"msvfw32 test", WS_POPUP, 0, 0, 100, 100, 0, 0, 0, NULL);
+    ok(!!parent, "failed to create parent window\n");
+
+    mci_wnd = MCIWndCreateW(parent, hisnt, MCIWNDF_SHOWMODE, NULL);
+    ok(!!parent, "failed to create mci window\n");
+
+    error = SendMessageW(mci_wnd, MCIWNDM_OPENW, 0, (DWORD_PTR)test_file);
+    ok(!error, "failed to set playback source, error %lu\n", error);
+
+    pump_messages();
+
+    DestroyWindow(mci_wnd);
+    DestroyWindow(parent);
 }
 
 START_TEST(mciwnd)
 {
     test_MCIWndCreate();
+    test_audio_playback();
 }

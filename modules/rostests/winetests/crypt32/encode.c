@@ -1660,9 +1660,6 @@ static void test_decodeAltName(DWORD dwEncoding)
     ret = CryptDecodeObjectEx(dwEncoding, X509_ALTERNATE_NAME,
      dns_embedded_null, sizeof(dns_embedded_null), CRYPT_DECODE_ALLOC_FLAG,
      NULL, &buf, &bufSize);
-#if defined(__REACTOS__) && defined(_M_AMD64)
-    if ((GetVersion() & 0xFFFF) != 0x0006) // Next test fails on Vista x64
-#endif
     ok(!ret, "expected failure\n");
     /* An embedded bell character is allowed, however. */
     ret = CryptDecodeObjectEx(dwEncoding, X509_ALTERNATE_NAME,
@@ -1683,9 +1680,6 @@ static void test_decodeAltName(DWORD dwEncoding)
     ret = CryptDecodeObjectEx(dwEncoding, X509_ALTERNATE_NAME,
      url_embedded_null, sizeof(dns_embedded_null), CRYPT_DECODE_ALLOC_FLAG,
      NULL, &buf, &bufSize);
-#if defined(__REACTOS__) && defined(_M_AMD64)
-    if ((GetVersion() & 0xFFFF) != 0x0006) // Next test fails on Vista x64
-#endif
     ok(!ret, "expected failure\n");
 }
 
@@ -8310,9 +8304,7 @@ static void testImportPublicKey(HCRYPTPROV csp, PCERT_PUBLIC_KEY_INFO info)
 {
     BOOL ret;
     HCRYPTKEY key;
-#ifndef __REACTOS__
     BCRYPT_KEY_HANDLE key2;
-#endif
     PCCERT_CONTEXT context;
     DWORD dwSize;
     ALG_ID ai;
@@ -8383,12 +8375,10 @@ static void testImportPublicKey(HCRYPTPROV csp, PCERT_PUBLIC_KEY_INFO info)
         ok(ret, "CryptImportPublicKeyInfoEx failed: %08lx\n", GetLastError());
         CryptDestroyKey(key);
 
-#ifndef __REACTOS__ // FIXME: ReactOS has no implementation for CryptImportPublicKeyInfoEx2
         ret = CryptImportPublicKeyInfoEx2(X509_ASN_ENCODING,
          &context->pCertInfo->SubjectPublicKeyInfo, 0, NULL, &key2);
         ok(ret, "CryptImportPublicKeyInfoEx2 failed: %08lx\n", GetLastError());
         BCryptDestroyKey(key2);
-#endif
 
         CertFreeCertificateContext(context);
     }
@@ -8857,6 +8847,7 @@ static const BYTE ocsp_basic_signed_response_with_cert[] =
 static void test_decodeOCSPBasicSignedResponseInfo(DWORD dwEncoding)
 {
     OCSP_BASIC_SIGNED_RESPONSE_INFO *info;
+    OCSP_BASIC_RESPONSE_INFO *b;
     DWORD size;
     BOOL ret;
 
@@ -8885,12 +8876,25 @@ static void test_decodeOCSPBasicSignedResponseInfo(DWORD dwEncoding)
 
     ok(!info->SignatureInfo.cCertEncoded, "got %lu\n", info->SignatureInfo.cCertEncoded);
     ok(!info->SignatureInfo.rgCertEncoded, "got %p\n", info->SignatureInfo.rgCertEncoded);
+
+
+    ret = CryptDecodeObjectEx(dwEncoding, OCSP_BASIC_RESPONSE, info->ToBeSigned.pbData, info->ToBeSigned.cbData,
+                             CRYPT_DECODE_ALLOC_FLAG, NULL, &b, &size);
+    ok(ret, "got %08lx\n", GetLastError());
+    ok(!b->cExtension, "got %lu.\n", b->cExtension);
+    LocalFree(b);
     LocalFree(info);
 
     size = 0;
     ret = CryptDecodeObjectEx(dwEncoding, OCSP_BASIC_SIGNED_RESPONSE, ocsp_basic_signed_response_with_cert,
                                sizeof(ocsp_basic_signed_response_with_cert), CRYPT_DECODE_ALLOC_FLAG, NULL, &info, &size);
     ok(ret, "got %08lx\n", GetLastError());
+
+    ret = CryptDecodeObjectEx(dwEncoding, OCSP_BASIC_RESPONSE, info->ToBeSigned.pbData, info->ToBeSigned.cbData,
+                             CRYPT_DECODE_ALLOC_FLAG, NULL, &b, &size);
+    ok(ret, "got %08lx\n", GetLastError());
+    ok(b->cExtension == 1, "got %lu.\n", b->cExtension);
+    LocalFree(b);
     LocalFree(info);
 }
 
@@ -9146,17 +9150,10 @@ START_TEST(encode)
         test_encodeCertPolicyConstraints(encodings[i]);
         test_decodeCertPolicyConstraints(encodings[i]);
         test_decodeRsaPrivateKey(encodings[i]);
-#ifdef __REACTOS__
-    if ((GetVersion() & 0xFF) > 5) // These tests crash on Server 2003
-    {
-#endif
         test_encodeOCSPRequestInfo(encodings[i]);
         test_decodeOCSPResponseInfo(encodings[i]);
         test_decodeOCSPBasicSignedResponseInfo(encodings[i]);
         test_decodeOCSPBasicResponseInfo(encodings[i]);
-#ifdef __REACTOS__
-    }
-#endif
     }
     testPortPublicKeyInfo();
 }

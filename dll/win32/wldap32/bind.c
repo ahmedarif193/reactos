@@ -18,681 +18,503 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include "config.h"
-#include "wine/port.h"
-
 #include <stdarg.h>
-#ifdef HAVE_LDAP_H
-#include <ldap.h>
-#endif
-
+#include <stdlib.h>
 #include "windef.h"
 #include "winbase.h"
 #include "winnls.h"
+#include "rpc.h"
 
-#include "winldap_private.h"
-#include "wldap32.h"
 #include "wine/debug.h"
+#include "winldap_private.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(wldap32);
 
 /***********************************************************************
  *      ldap_bindA     (WLDAP32.@)
- *
- * See ldap_bindW.
  */
-ULONG CDECL ldap_bindA( WLDAP32_LDAP *ld, PCHAR dn, PCHAR cred, ULONG method )
+ULONG CDECL ldap_bindA( LDAP *ld, char *dn, char *cred, ULONG method )
 {
-    ULONG ret = WLDAP32_LDAP_NOT_SUPPORTED;
-#ifdef HAVE_LDAP
+    ULONG ret = WLDAP32_LDAP_NO_MEMORY;
     WCHAR *dnW = NULL, *credW = NULL;
 
-    ret = WLDAP32_LDAP_NO_MEMORY;
-
-    TRACE( "(%p, %s, %p, 0x%08x)\n", ld, debugstr_a(dn), cred, method );
+    TRACE( "(%p, %s, %p, %#lx)\n", ld, debugstr_a(dn), cred, method );
 
     if (!ld) return ~0u;
 
-    if (dn) {
-        dnW = strAtoW( dn );
-        if (!dnW) goto exit;
-    }
-    if (cred) {
-        credW = strAtoW( cred );
-        if (!credW) goto exit;
-    }
+    if (dn && !(dnW = strAtoW( dn ))) goto exit;
+    if (cred && !(credW = strAtoW( cred ))) goto exit;
 
     ret = ldap_bindW( ld, dnW, credW, method );
 
 exit:
-    strfreeW( dnW );
-    strfreeW( credW );
-
-#endif
+    free( dnW );
+    free( credW );
     return ret;
 }
 
 /***********************************************************************
  *      ldap_bindW     (WLDAP32.@)
- *
- * Authenticate with an LDAP server (asynchronous operation).
- *
- * PARAMS
- *  ld      [I] Pointer to an LDAP context.
- *  dn      [I] DN of entry to bind as.
- *  cred    [I] Credentials (e.g. password string).
- *  method  [I] Authentication method.
- *
- * RETURNS
- *  Success: Message ID of the bind operation.
- *  Failure: An LDAP error code.
- *
- * NOTES
- *  Only LDAP_AUTH_SIMPLE is supported (just like native).
  */
-ULONG CDECL ldap_bindW( WLDAP32_LDAP *ld, PWCHAR dn, PWCHAR cred, ULONG method )
+ULONG CDECL ldap_bindW( LDAP *ld, WCHAR *dn, WCHAR *cred, ULONG method )
 {
-    ULONG ret = WLDAP32_LDAP_NOT_SUPPORTED;
-#ifdef HAVE_LDAP
+    ULONG ret;
     char *dnU = NULL, *credU = NULL;
     struct berval pwd = { 0, NULL };
     int msg;
 
-    ret = WLDAP32_LDAP_NO_MEMORY;
-
-    TRACE( "(%p, %s, %p, 0x%08x)\n", ld, debugstr_w(dn), cred, method );
+    TRACE( "(%p, %s, %p, %#lx)\n", ld, debugstr_w(dn), cred, method );
 
     if (!ld) return ~0u;
-    if (method != LDAP_AUTH_SIMPLE) return WLDAP32_LDAP_PARAM_ERROR;
+    if (method != WLDAP32_LDAP_AUTH_SIMPLE) return WLDAP32_LDAP_PARAM_ERROR;
+    if ((ret = WLDAP32_ldap_connect( ld, NULL ))) return ret;
 
-    if (dn) {
-        dnU = strWtoU( dn );
-        if (!dnU) goto exit;
-    }
-    if (cred) {
-        credU = strWtoU( cred );
-        if (!credU) goto exit;
-
+    ret = WLDAP32_LDAP_NO_MEMORY;
+    if (dn && !(dnU = strWtoU( dn ))) goto exit;
+    if (cred)
+    {
+        if (!(credU = strWtoU( cred ))) goto exit;
         pwd.bv_len = strlen( credU );
         pwd.bv_val = credU;
     }
 
-    ret = ldap_sasl_bind( ld, dnU, LDAP_SASL_SIMPLE, &pwd, NULL, NULL, &msg );
-
-    if (ret == LDAP_SUCCESS)
+    ret = map_error( ldap_sasl_bind( CTX(ld), dnU, 0, &pwd, NULL, NULL, &msg ) );
+    if (ret == WLDAP32_LDAP_SUCCESS)
         ret = msg;
     else
         ret = ~0u;
 
 exit:
-    strfreeU( dnU );
-    strfreeU( credU );
-
-#endif
+    free( dnU );
+    free( credU );
     return ret;
 }
 
 /***********************************************************************
  *      ldap_bind_sA     (WLDAP32.@)
- *
- * See ldap_bind_sW.
  */
-ULONG CDECL ldap_bind_sA( WLDAP32_LDAP *ld, PCHAR dn, PCHAR cred, ULONG method )
+ULONG CDECL ldap_bind_sA( LDAP *ld, char *dn, char *cred, ULONG method )
 {
-    ULONG ret = WLDAP32_LDAP_NOT_SUPPORTED;
-#ifdef HAVE_LDAP
+    ULONG ret = WLDAP32_LDAP_NO_MEMORY;
     WCHAR *dnW = NULL, *credW = NULL;
 
-    ret = WLDAP32_LDAP_NO_MEMORY;
-
-    TRACE( "(%p, %s, %p, 0x%08x)\n", ld, debugstr_a(dn), cred, method );
+    TRACE( "(%p, %s, %p, %#lx)\n", ld, debugstr_a(dn), cred, method );
 
     if (!ld) return WLDAP32_LDAP_PARAM_ERROR;
 
-    if (dn) {
-        dnW = strAtoW( dn );
-        if (!dnW) goto exit;
-    }
-    if (cred) {
-        credW = strAtoW( cred );
-        if (!credW) goto exit;
+    if (dn && !(dnW = strAtoW( dn ))) goto exit;
+    if (cred)
+    {
+        if (method == WLDAP32_LDAP_AUTH_SIMPLE)
+        {
+            if (!(credW = strAtoW( cred ))) goto exit;
+        }
+        else credW = (WCHAR *)cred /* SEC_WINNT_AUTH_IDENTITY_A */;
     }
 
     ret = ldap_bind_sW( ld, dnW, credW, method );
 
 exit:
-    strfreeW( dnW );
-    strfreeW( credW );
-
-#endif
+    free( dnW );
+    if (credW != (WCHAR *)cred) free( credW );
     return ret;
+}
+
+#define SASL_CB_LIST_END    0
+#define SASL_CB_AUTHNAME    0x4002
+#define SASL_CB_PASS        0x4004
+#define SASL_CB_GETREALM    0x4008
+
+struct sasl_interact
+{
+    unsigned long id;
+    const char *challenge;
+    const char *prompt;
+    const char *defresult;
+    const void *result;
+    unsigned int len;
+};
+
+static int interact_callback( LDAP *ld, unsigned flags, void *defaults, void *sasl_interact )
+{
+    SEC_WINNT_AUTH_IDENTITY_W *id = defaults;
+    struct sasl_interact *ptr = sasl_interact;
+
+    TRACE( "%p, %08x, %p, %p\n", ld, flags, defaults, sasl_interact );
+
+    if (!defaults) return 0;
+
+    while (ptr && ptr->id != SASL_CB_LIST_END)
+    {
+        switch (ptr->id)
+        {
+        case SASL_CB_AUTHNAME:
+            ptr->result = id->User;
+            ptr->len    = id->UserLength;
+            break;
+        case SASL_CB_GETREALM:
+            ptr->result = id->Domain;
+            ptr->len    = id->DomainLength;
+            break;
+        case SASL_CB_PASS:
+            ptr->result = id->Password;
+            ptr->len    = id->PasswordLength;
+            break;
+        default:
+            ERR( "unexpected callback %#lx\n", ptr->id );
+            return -1;
+        }
+        ptr++;
+    }
+
+    return 0;
 }
 
 /***********************************************************************
  *      ldap_bind_sW     (WLDAP32.@)
- *
- * Authenticate with an LDAP server (synchronous operation).
- *
- * PARAMS
- *  ld      [I] Pointer to an LDAP context.
- *  dn      [I] DN of entry to bind as.
- *  cred    [I] Credentials (e.g. password string).
- *  method  [I] Authentication method.
- *
- * RETURNS
- *  Success: LDAP_SUCCESS
- *  Failure: An LDAP error code.
  */
-ULONG CDECL ldap_bind_sW( WLDAP32_LDAP *ld, PWCHAR dn, PWCHAR cred, ULONG method )
+ULONG CDECL ldap_bind_sW( LDAP *ld, WCHAR *dn, WCHAR *cred, ULONG method )
 {
-    ULONG ret = WLDAP32_LDAP_NOT_SUPPORTED;
-#ifdef HAVE_LDAP
+    ULONG ret;
     char *dnU = NULL, *credU = NULL;
     struct berval pwd = { 0, NULL };
 
-    ret = WLDAP32_LDAP_NO_MEMORY;
-
-    TRACE( "(%p, %s, %p, 0x%08x)\n", ld, debugstr_w(dn), cred, method );
+    TRACE( "(%p, %s, %p, %#lx)\n", ld, debugstr_w(dn), cred, method );
 
     if (!ld) return WLDAP32_LDAP_PARAM_ERROR;
-    if (method != LDAP_AUTH_SIMPLE) return WLDAP32_LDAP_PARAM_ERROR;
+    if ((ret = WLDAP32_ldap_connect( ld, NULL ))) return ret;
 
-    if (dn) {
-        dnU = strWtoU( dn );
-        if (!dnU) goto exit;
+    ret = WLDAP32_LDAP_NO_MEMORY;
+    if (method == WLDAP32_LDAP_AUTH_SIMPLE)
+    {
+        if (dn && !(dnU = strWtoU( dn ))) goto exit;
+        if (cred)
+        {
+            if (!(credU = strWtoU( cred ))) goto exit;
+            pwd.bv_len = strlen( credU );
+            pwd.bv_val = credU;
+        }
+
+        ret = map_error( ldap_sasl_bind_s( CTX(ld), dnU, 0, &pwd, NULL, NULL, NULL ) );
     }
-    if (cred) {
-        credU = strWtoU( cred );
-        if (!credU) goto exit;
+    else if (method == WLDAP32_LDAP_AUTH_NEGOTIATE)
+    {
+        SEC_WINNT_AUTH_IDENTITY_W *id = (SEC_WINNT_AUTH_IDENTITY_W *)cred, idW;
 
-        pwd.bv_len = strlen( credU );
-        pwd.bv_val = credU;
+        if (id && (id->Flags & SEC_WINNT_AUTH_IDENTITY_ANSI))
+        {
+            idW.User = (unsigned short *)strnAtoW( (char *)id->User, id->UserLength, &idW.UserLength );
+            idW.Domain = (unsigned short *)strnAtoW( (char *)id->Domain, id->DomainLength, &idW.DomainLength );
+            idW.Password = (unsigned short *)strnAtoW( (char *)id->Password, id->PasswordLength, &idW.PasswordLength );
+            idW.Flags = SEC_WINNT_AUTH_IDENTITY_UNICODE;
+            id = &idW;
+        }
+
+        ret = map_error( ldap_sasl_interactive_bind_s( CTX(ld), NULL, NULL, NULL, NULL, LDAP_SASL_QUIET,
+                                                       interact_callback, id ) );
+        if (id && (id->Flags & SEC_WINNT_AUTH_IDENTITY_ANSI))
+        {
+            free( idW.User );
+            free( idW.Domain );
+            free( idW.Password );
+        }
     }
-
-    ret = map_error( ldap_sasl_bind_s( ld, dnU, LDAP_SASL_SIMPLE, &pwd, NULL, NULL, NULL ));
+    else
+    {
+        FIXME( "method %#lx not supported\n", method );
+        return WLDAP32_LDAP_PARAM_ERROR;
+    }
 
 exit:
-    strfreeU( dnU );
-    strfreeU( credU );
-
-#endif
+    free( dnU );
+    free( credU );
     return ret;
 }
 
 /***********************************************************************
  *      ldap_sasl_bindA     (WLDAP32.@)
- *
- * See ldap_sasl_bindW.
  */
-ULONG CDECL ldap_sasl_bindA( WLDAP32_LDAP *ld, const PCHAR dn,
-    const PCHAR mechanism, const BERVAL *cred, PLDAPControlA *serverctrls,
-    PLDAPControlA *clientctrls, int *message )
+ULONG CDECL ldap_sasl_bindA( LDAP *ld, const PCHAR dn, const PCHAR mechanism, const BERVAL *cred,
+                             LDAPControlA **serverctrls, LDAPControlA **clientctrls, int *message )
 {
-    ULONG ret = WLDAP32_LDAP_NOT_SUPPORTED;
-#ifdef HAVE_LDAP
+    ULONG ret = WLDAP32_LDAP_NO_MEMORY;
     WCHAR *dnW, *mechanismW = NULL;
     LDAPControlW **serverctrlsW = NULL, **clientctrlsW = NULL;
-
-    ret = WLDAP32_LDAP_NO_MEMORY;
 
     TRACE( "(%p, %s, %s, %p, %p, %p, %p)\n", ld, debugstr_a(dn),
            debugstr_a(mechanism), cred, serverctrls, clientctrls, message );
 
-    if (!ld || !dn || !mechanism || !cred || !message)
-        return WLDAP32_LDAP_PARAM_ERROR;
+    if (!ld || !dn || !mechanism || !cred || !message) return WLDAP32_LDAP_PARAM_ERROR;
 
-    dnW = strAtoW( dn );
-    if (!dnW) goto exit;
-
-    mechanismW = strAtoW( mechanism );
-    if (!mechanismW) goto exit;
-
-    if (serverctrls) {
-        serverctrlsW = controlarrayAtoW( serverctrls );
-        if (!serverctrlsW) goto exit;
-    }
-    if (clientctrls) {
-        clientctrlsW = controlarrayAtoW( clientctrls );
-        if (!clientctrlsW) goto exit;
-    }
+    if (!(dnW = strAtoW( dn ))) goto exit;
+    if (!(mechanismW = strAtoW( mechanism ))) goto exit;
+    if (serverctrls && !(serverctrlsW = controlarrayAtoW( serverctrls ))) goto exit;
+    if (clientctrls && !(clientctrlsW = controlarrayAtoW( clientctrls ))) goto exit;
 
     ret = ldap_sasl_bindW( ld, dnW, mechanismW, cred, serverctrlsW, clientctrlsW, message );
 
 exit:
-    strfreeW( dnW );
-    strfreeW( mechanismW );
+    free( dnW );
+    free( mechanismW );
     controlarrayfreeW( serverctrlsW );
     controlarrayfreeW( clientctrlsW );
-
-#endif
     return ret;
 }
 
 /***********************************************************************
  *      ldap_sasl_bindW     (WLDAP32.@)
- *
- * Authenticate with an LDAP server using SASL (asynchronous operation).
- *
- * PARAMS
- *  ld          [I] Pointer to an LDAP context.
- *  dn          [I] DN of entry to bind as.
- *  mechanism   [I] Authentication method.
- *  cred        [I] Credentials.
- *  serverctrls [I] Array of LDAP server controls.
- *  clientctrls [I] Array of LDAP client controls.
- *  message     [O] Message ID of the bind operation. 
- *
- * RETURNS
- *  Success: LDAP_SUCCESS
- *  Failure: An LDAP error code.
- *
- * NOTES
- *  The serverctrls and clientctrls parameters are optional and should
- *  be set to NULL if not used.
  */
-ULONG CDECL ldap_sasl_bindW( WLDAP32_LDAP *ld, const PWCHAR dn,
-    const PWCHAR mechanism, const BERVAL *cred, PLDAPControlW *serverctrls,
-    PLDAPControlW *clientctrls, int *message )
+ULONG CDECL ldap_sasl_bindW( LDAP *ld, const PWCHAR dn, const PWCHAR mechanism, const BERVAL *cred,
+                             LDAPControlW **serverctrls, LDAPControlW **clientctrls, int *message )
 {
-    ULONG ret = WLDAP32_LDAP_NOT_SUPPORTED;
-#ifdef HAVE_LDAP
+    ULONG ret;
     char *dnU, *mechanismU = NULL;
     LDAPControl **serverctrlsU = NULL, **clientctrlsU = NULL;
     struct berval credU;
 
-    ret = WLDAP32_LDAP_NO_MEMORY;
-
     TRACE( "(%p, %s, %s, %p, %p, %p, %p)\n", ld, debugstr_w(dn),
            debugstr_w(mechanism), cred, serverctrls, clientctrls, message );
 
-    if (!ld || !dn || !mechanism || !cred || !message)
-        return WLDAP32_LDAP_PARAM_ERROR;
+    if (!ld || !dn || !mechanism || !cred || !message) return WLDAP32_LDAP_PARAM_ERROR;
+    if ((ret = WLDAP32_ldap_connect( ld, NULL ))) return ret;
 
-    dnU = strWtoU( dn );
-    if (!dnU) goto exit;
-
-    mechanismU = strWtoU( mechanism );
-    if (!mechanismU) goto exit;
-
-    if (serverctrls) {
-        serverctrlsU = controlarrayWtoU( serverctrls );
-        if (!serverctrlsU) goto exit;
+    ret = WLDAP32_LDAP_NO_MEMORY;
+    if (!(dnU = strWtoU( dn ))) goto exit;
+    if (!(mechanismU = strWtoU( mechanism ))) goto exit;
+    if (serverctrls && !(serverctrlsU = controlarrayWtoU( serverctrls ))) goto exit;
+    if (clientctrls && !(clientctrlsU = controlarrayWtoU( clientctrls ))) goto exit;
+    else
+    {
+        credU.bv_len = cred->bv_len;
+        credU.bv_val = cred->bv_val;
+        ret = map_error( ldap_sasl_bind( CTX(ld), dnU, mechanismU, &credU, serverctrlsU, clientctrlsU, message) );
     }
-    if (clientctrls) {
-        clientctrlsU = controlarrayWtoU( clientctrls );
-        if (!clientctrlsU) goto exit;
-    }
-
-    credU.bv_len = cred->bv_len;
-    credU.bv_val = cred->bv_val;
-
-    ret = map_error( ldap_sasl_bind( ld, dnU, mechanismU, &credU,
-                                     serverctrlsU, clientctrlsU, message ));
 
 exit:
-    strfreeU( dnU );
-    strfreeU( mechanismU );
+    free( dnU );
+    free( mechanismU );
     controlarrayfreeU( serverctrlsU );
     controlarrayfreeU( clientctrlsU );
-
-#endif
     return ret;
 }
 
 /***********************************************************************
  *      ldap_sasl_bind_sA     (WLDAP32.@)
- *
- * See ldap_sasl_bind_sW.
  */
-ULONG CDECL ldap_sasl_bind_sA( WLDAP32_LDAP *ld, const PCHAR dn,
-    const PCHAR mechanism, const BERVAL *cred, PLDAPControlA *serverctrls,
-    PLDAPControlA *clientctrls, PBERVAL *serverdata )
+ULONG CDECL ldap_sasl_bind_sA( LDAP *ld, const PCHAR dn, const PCHAR mechanism, const BERVAL *cred,
+                               LDAPControlA **serverctrls, LDAPControlA **clientctrls, BERVAL **serverdata )
 {
-    ULONG ret = WLDAP32_LDAP_NOT_SUPPORTED;
-#ifdef HAVE_LDAP
+    ULONG ret = WLDAP32_LDAP_NO_MEMORY;
     WCHAR *dnW, *mechanismW = NULL;
     LDAPControlW **serverctrlsW = NULL, **clientctrlsW = NULL;
-
-    ret = WLDAP32_LDAP_NO_MEMORY;
 
     TRACE( "(%p, %s, %s, %p, %p, %p, %p)\n", ld, debugstr_a(dn),
            debugstr_a(mechanism), cred, serverctrls, clientctrls, serverdata );
 
-    if (!ld || !dn || !mechanism || !cred || !serverdata)
-        return WLDAP32_LDAP_PARAM_ERROR;
+    if (!ld || !dn || !mechanism || !cred || !serverdata) return WLDAP32_LDAP_PARAM_ERROR;
 
-    dnW = strAtoW( dn );
-    if (!dnW) goto exit;
-
-    mechanismW = strAtoW( mechanism );
-    if (!mechanismW) goto exit;
-
-    if (serverctrls) {
-        serverctrlsW = controlarrayAtoW( serverctrls );
-        if (!serverctrlsW) goto exit;
-    }
-    if (clientctrls) {
-        clientctrlsW = controlarrayAtoW( clientctrls );
-        if (!clientctrlsW) goto exit;
-    }
+    if (!(dnW = strAtoW( dn ))) goto exit;
+    if (!(mechanismW = strAtoW( mechanism ))) goto exit;
+    if (serverctrls && !(serverctrlsW = controlarrayAtoW( serverctrls ))) goto exit;
+    if (clientctrls && !(clientctrlsW = controlarrayAtoW( clientctrls ))) goto exit;
 
     ret = ldap_sasl_bind_sW( ld, dnW, mechanismW, cred, serverctrlsW, clientctrlsW, serverdata );
 
 exit:
-    strfreeW( dnW );
-    strfreeW( mechanismW );
+    free( dnW );
+    free( mechanismW );
     controlarrayfreeW( serverctrlsW );
     controlarrayfreeW( clientctrlsW );
-
-#endif
     return ret;
 }
 
 /***********************************************************************
  *      ldap_sasl_bind_sW     (WLDAP32.@)
- *
- * Authenticate with an LDAP server using SASL (synchronous operation).
- *
- * PARAMS
- *  ld          [I] Pointer to an LDAP context.
- *  dn          [I] DN of entry to bind as.
- *  mechanism   [I] Authentication method.
- *  cred        [I] Credentials.
- *  serverctrls [I] Array of LDAP server controls.
- *  clientctrls [I] Array of LDAP client controls.
- *  serverdata  [O] Authentication response from the server.
- *
- * RETURNS
- *  Success: LDAP_SUCCESS
- *  Failure: An LDAP error code.
- *
- * NOTES
- *  The serverctrls and clientctrls parameters are optional and should
- *  be set to NULL if not used.
  */
-ULONG CDECL ldap_sasl_bind_sW( WLDAP32_LDAP *ld, const PWCHAR dn,
-    const PWCHAR mechanism, const BERVAL *cred, PLDAPControlW *serverctrls,
-    PLDAPControlW *clientctrls, PBERVAL *serverdata )
+ULONG CDECL ldap_sasl_bind_sW( LDAP *ld, const PWCHAR dn, const PWCHAR mechanism, const BERVAL *cred,
+                               LDAPControlW **serverctrls, LDAPControlW **clientctrls, BERVAL **serverdata )
 {
-    ULONG ret = WLDAP32_LDAP_NOT_SUPPORTED;
-#ifdef HAVE_LDAP
+    ULONG ret;
     char *dnU, *mechanismU = NULL;
     LDAPControl **serverctrlsU = NULL, **clientctrlsU = NULL;
-    struct berval credU;
-
-    ret = WLDAP32_LDAP_NO_MEMORY;
+    struct berval *dataU, credU;
 
     TRACE( "(%p, %s, %s, %p, %p, %p, %p)\n", ld, debugstr_w(dn),
            debugstr_w(mechanism), cred, serverctrls, clientctrls, serverdata );
 
-    if (!ld || !dn || !mechanism || !cred || !serverdata)
-        return WLDAP32_LDAP_PARAM_ERROR;
+    if (!ld || !dn || !mechanism || !cred || !serverdata) return WLDAP32_LDAP_PARAM_ERROR;
+    if ((ret = WLDAP32_ldap_connect( ld, NULL ))) return ret;
 
-    dnU = strWtoU( dn );
-    if (!dnU) goto exit;
-
-    mechanismU = strWtoU( mechanism );
-    if (!mechanismU) goto exit;
-
-    if (serverctrls) {
-        serverctrlsU = controlarrayWtoU( serverctrls );
-        if (!serverctrlsU) goto exit;
-    }
-    if (clientctrls) {
-        clientctrlsU = controlarrayWtoU( clientctrls );
-        if (!clientctrlsU) goto exit;
-    }
+    ret = WLDAP32_LDAP_NO_MEMORY;
+    if (!(dnU = strWtoU( dn ))) goto exit;
+    if (!(mechanismU = strWtoU( mechanism ))) goto exit;
+    if (serverctrls && !(serverctrlsU = controlarrayWtoU( serverctrls ))) goto exit;
+    if (clientctrls && !(clientctrlsU = controlarrayWtoU( clientctrls ))) goto exit;
 
     credU.bv_len = cred->bv_len;
     credU.bv_val = cred->bv_val;
+    ret = map_error( ldap_sasl_bind_s( CTX(ld), dnU, mechanismU, &credU, serverctrlsU, clientctrlsU, &dataU ) );
 
-    ret = map_error( ldap_sasl_bind_s( ld, dnU, mechanismU, &credU,
-                                       serverctrlsU, clientctrlsU, (struct berval **)serverdata ));
+    if (ret == WLDAP32_LDAP_SUCCESS)
+    {
+        BERVAL *ptr;
+        if (!(ptr = bervalUtoW( dataU ))) ret = WLDAP32_LDAP_NO_MEMORY;
+        else *serverdata = ptr;
+        ber_bvfree( dataU );
+    }
 
 exit:
-    strfreeU( dnU );
-    strfreeU( mechanismU );
+    free( dnU );
+    free( mechanismU );
     controlarrayfreeU( serverctrlsU );
     controlarrayfreeU( clientctrlsU );
-
-#endif
     return ret;
 }
 
 /***********************************************************************
  *      ldap_simple_bindA     (WLDAP32.@)
- *
- * See ldap_simple_bindW.
  */
-ULONG CDECL ldap_simple_bindA( WLDAP32_LDAP *ld, PCHAR dn, PCHAR passwd )
+ULONG CDECL ldap_simple_bindA( LDAP *ld, char *dn, char *passwd )
 {
-    ULONG ret = WLDAP32_LDAP_NOT_SUPPORTED;
-#ifdef HAVE_LDAP
+    ULONG ret = WLDAP32_LDAP_NO_MEMORY;
     WCHAR *dnW = NULL, *passwdW = NULL;
-
-    ret = WLDAP32_LDAP_NO_MEMORY;
 
     TRACE( "(%p, %s, %p)\n", ld, debugstr_a(dn), passwd );
 
     if (!ld) return ~0u;
 
-    if (dn) {
-        dnW = strAtoW( dn );
-        if (!dnW) goto exit;
-    }
-    if (passwd) {
-        passwdW = strAtoW( passwd );
-        if (!passwdW) goto exit;
-    }
+    if (dn && !(dnW = strAtoW( dn ))) goto exit;
+    if (passwd && !(passwdW = strAtoW( passwd ))) goto exit;
 
     ret = ldap_simple_bindW( ld, dnW, passwdW );
 
 exit:
-    strfreeW( dnW );
-    strfreeW( passwdW );
-
-#endif
+    free( dnW );
+    free( passwdW );
     return ret;
 }
 
 /***********************************************************************
  *      ldap_simple_bindW     (WLDAP32.@)
- *
- * Authenticate with an LDAP server (asynchronous operation).
- *
- * PARAMS
- *  ld      [I] Pointer to an LDAP context.
- *  dn      [I] DN of entry to bind as.
- *  passwd  [I] Password string.
- *
- * RETURNS
- *  Success: Message ID of the bind operation.
- *  Failure: An LDAP error code.
- *
- * NOTES
- *  Set dn and passwd to NULL to bind as an anonymous user. 
  */
-ULONG CDECL ldap_simple_bindW( WLDAP32_LDAP *ld, PWCHAR dn, PWCHAR passwd )
+ULONG CDECL ldap_simple_bindW( LDAP *ld, WCHAR *dn, WCHAR *passwd )
 {
-    ULONG ret = WLDAP32_LDAP_NOT_SUPPORTED;
-#ifdef HAVE_LDAP
+    ULONG ret = WLDAP32_LDAP_NO_MEMORY;
     char *dnU = NULL, *passwdU = NULL;
     struct berval pwd = { 0, NULL };
     int msg;
 
-    ret = WLDAP32_LDAP_NO_MEMORY;
-
     TRACE( "(%p, %s, %p)\n", ld, debugstr_w(dn), passwd );
 
-    if (!ld) return ~0u;
+    if (!ld || WLDAP32_ldap_connect( ld, NULL ) != WLDAP32_LDAP_SUCCESS) return ~0u;
 
-    if (dn) {
-        dnU = strWtoU( dn );
-        if (!dnU) goto exit;
-    }
-    if (passwd) {
-        passwdU = strWtoU( passwd );
-        if (!passwdU) goto exit;
-
+    if (dn && !(dnU = strWtoU( dn ))) goto exit;
+    if (passwd)
+    {
+        if (!(passwdU = strWtoU( passwd ))) goto exit;
         pwd.bv_len = strlen( passwdU );
         pwd.bv_val = passwdU;
     }
 
-    ret = ldap_sasl_bind( ld, dnU, LDAP_SASL_SIMPLE, &pwd, NULL, NULL, &msg );
-
-    if (ret == LDAP_SUCCESS)
+    ret = map_error( ldap_sasl_bind( CTX(ld), dnU, 0, &pwd, NULL, NULL, &msg ) );
+    if (ret == WLDAP32_LDAP_SUCCESS)
         ret = msg;
     else
         ret = ~0u;
 
 exit:
-    strfreeU( dnU );
-    strfreeU( passwdU );
-
-#endif
+    free( dnU );
+    free( passwdU );
     return ret;
 }
 
 /***********************************************************************
  *      ldap_simple_bind_sA     (WLDAP32.@)
- *
- * See ldap_simple_bind_sW.
  */
-ULONG CDECL ldap_simple_bind_sA( WLDAP32_LDAP *ld, PCHAR dn, PCHAR passwd )
+ULONG CDECL ldap_simple_bind_sA( LDAP *ld, char *dn, char *passwd )
 {
-    ULONG ret = WLDAP32_LDAP_NOT_SUPPORTED;
-#ifdef HAVE_LDAP
+    ULONG ret = WLDAP32_LDAP_NO_MEMORY;
     WCHAR *dnW = NULL, *passwdW = NULL;
-
-    ret = WLDAP32_LDAP_NO_MEMORY;
 
     TRACE( "(%p, %s, %p)\n", ld, debugstr_a(dn), passwd );
 
     if (!ld) return WLDAP32_LDAP_PARAM_ERROR;
 
-    if (dn) {
-        dnW = strAtoW( dn );
-        if (!dnW) goto exit;
-    }
-    if (passwd) {
-        passwdW = strAtoW( passwd );
-        if (!passwdW) goto exit;
-    }
+    if (dn && !(dnW = strAtoW( dn ))) goto exit;
+    if (passwd && !(passwdW = strAtoW( passwd ))) goto exit;
 
     ret = ldap_simple_bind_sW( ld, dnW, passwdW );
 
 exit:
-    strfreeW( dnW );
-    strfreeW( passwdW );
-
-#endif
+    free( dnW );
+    free( passwdW );
     return ret;
 }
 
 /***********************************************************************
  *      ldap_simple_bind_sW     (WLDAP32.@)
- *
- * Authenticate with an LDAP server (synchronous operation).
- *
- * PARAMS
- *  ld      [I] Pointer to an LDAP context.
- *  dn      [I] DN of entry to bind as.
- *  passwd  [I] Password string.
- *
- * RETURNS
- *  Success: LDAP_SUCCESS
- *  Failure: An LDAP error code.
- *
- * NOTES
- *  Set dn and passwd to NULL to bind as an anonymous user. 
  */
-ULONG CDECL ldap_simple_bind_sW( WLDAP32_LDAP *ld, PWCHAR dn, PWCHAR passwd )
+ULONG CDECL ldap_simple_bind_sW( LDAP *ld, WCHAR *dn, WCHAR *passwd )
 {
-    ULONG ret = WLDAP32_LDAP_NOT_SUPPORTED;
-#ifdef HAVE_LDAP
+    ULONG ret;
     char *dnU = NULL, *passwdU = NULL;
     struct berval pwd = { 0, NULL };
-
-    ret = WLDAP32_LDAP_NO_MEMORY;
 
     TRACE( "(%p, %s, %p)\n", ld, debugstr_w(dn), passwd );
 
     if (!ld) return WLDAP32_LDAP_PARAM_ERROR;
+    if ((ret = WLDAP32_ldap_connect( ld, NULL ))) return ret;
 
-    if (dn) {
-        dnU = strWtoU( dn );
-        if (!dnU) goto exit;
-    }
-    if (passwd) {
-        passwdU = strWtoU( passwd );
-        if (!passwdU) goto exit;
-
+    ret = WLDAP32_LDAP_NO_MEMORY;
+    if (dn && !(dnU = strWtoU( dn ))) goto exit;
+    if (passwd)
+    {
+        if (!(passwdU = strWtoU( passwd ))) goto exit;
         pwd.bv_len = strlen( passwdU );
         pwd.bv_val = passwdU;
     }
 
-    ret = map_error( ldap_sasl_bind_s( ld, dnU, LDAP_SASL_SIMPLE, &pwd, NULL, NULL, NULL ));
+    ret = map_error( ldap_sasl_bind_s( CTX(ld), dnU, 0, &pwd, NULL, NULL, NULL ) );
 
 exit:
-    strfreeU( dnU );
-    strfreeU( passwdU );
-
-#endif
+    free( dnU );
+    free( passwdU );
     return ret;
 }
 
 /***********************************************************************
  *      ldap_unbind     (WLDAP32.@)
- *
- * Close LDAP connection and free resources (asynchronous operation).
- *
- * PARAMS
- *  ld  [I] Pointer to an LDAP context.
- *
- * RETURNS
- *  Success: LDAP_SUCCESS
- *  Failure: An LDAP error code.
  */
-ULONG CDECL WLDAP32_ldap_unbind( WLDAP32_LDAP *ld )
+ULONG CDECL WLDAP32_ldap_unbind( LDAP *ld )
 {
-    ULONG ret = WLDAP32_LDAP_NOT_SUPPORTED;
-#ifdef HAVE_LDAP
+    ULONG ret;
 
     TRACE( "(%p)\n", ld );
 
-    if (ld)
-        ret = map_error( ldap_unbind_ext( ld, NULL, NULL ));
-    else
-        ret = WLDAP32_LDAP_PARAM_ERROR;
+    if (ld) ret = map_error( ldap_unbind_ext( CTX(ld), NULL, NULL ) );
+    else return WLDAP32_LDAP_PARAM_ERROR;
 
-#endif
+    if (SERVER_CTRLS(ld)) ldap_value_free_len( SERVER_CTRLS(ld) );
+
+    free( ld->ld_host );
+    free( ld );
     return ret;
 }
 
 /***********************************************************************
  *      ldap_unbind_s     (WLDAP32.@)
- *
- * Close LDAP connection and free resources (synchronous operation).
- *
- * PARAMS
- *  ld  [I] Pointer to an LDAP context.
- *
- * RETURNS
- *  Success: LDAP_SUCCESS
- *  Failure: An LDAP error code.
  */
-ULONG CDECL WLDAP32_ldap_unbind_s( WLDAP32_LDAP *ld )
+ULONG CDECL WLDAP32_ldap_unbind_s( LDAP *ld )
 {
-    ULONG ret = WLDAP32_LDAP_NOT_SUPPORTED;
-#ifdef HAVE_LDAP
+    ULONG ret;
 
     TRACE( "(%p)\n", ld );
 
-    if (ld)
-        ret = map_error( ldap_unbind_ext_s( ld, NULL, NULL ));
-    else
-        ret = WLDAP32_LDAP_PARAM_ERROR;
+    if (ld) ret = map_error( ldap_unbind_ext_s( CTX(ld), NULL, NULL ) );
+    else return WLDAP32_LDAP_PARAM_ERROR;
 
-#endif
+    if (SERVER_CTRLS(ld)) ldap_value_free_len( SERVER_CTRLS(ld) );
+
+    free( ld );
     return ret;
 }

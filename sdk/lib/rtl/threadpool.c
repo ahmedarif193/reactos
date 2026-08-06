@@ -55,7 +55,6 @@ NTSYSAPI NTSTATUS  WINAPI TpSimpleTryPost(PTP_SIMPLE_CALLBACK,PVOID,TP_CALLBACK_
 #include <limits.h>
 
 #include "ntstatus.h"
-#define WIN32_NO_STATUS
 #include "winternl.h"
 
 #include "wine/debug.h"
@@ -200,6 +199,7 @@ struct threadpool_object
     LONG                    num_pending_callbacks;
     LONG                    num_running_callbacks;
     LONG                    num_associated_callbacks;
+    LONG                    update_serial;
     /* arguments for callback */
     union
     {
@@ -233,6 +233,7 @@ struct threadpool_object
             struct list     wait_entry;
             ULONGLONG       timeout;
             HANDLE          handle;
+            HANDLE          duped_handle;
             DWORD           flags;
             RTL_WAITORTIMERCALLBACKFUNC rtl_callback;
         } wait;
@@ -280,13 +281,20 @@ struct threadpool_group
 static RTL_CRITICAL_SECTION_DEBUG timerqueue_debug;
 #endif
 
+enum
+{
+    ABS_TIMER,
+    REL_TIMER
+};
+
 static struct
 {
     CRITICAL_SECTION        cs;
     LONG                    objcount;
     BOOL                    thread_running;
-    struct list             pending_timers;
-    RTL_CONDITION_VARIABLE  update_event;
+    HANDLE                  timers[2];
+    struct list             abs_timers;
+    struct list             rel_timers;
 }
 timerqueue =
 {
@@ -297,12 +305,9 @@ timerqueue =
 #endif
     0,                                          /* objcount */
     FALSE,                                      /* thread_running */
-    LIST_INIT( timerqueue.pending_timers ),     /* pending_timers */
-#if __REACTOS__
-    0,
-#else
-    RTL_CONDITION_VARIABLE_INIT                 /* update_event */
-#endif
+    { 0, 0 },                                   /* timers */
+    LIST_INIT( timerqueue.abs_timers ),         /* abs_timers */
+    LIST_INIT( timerqueue.rel_timers )          /* rel_timers */
 };
 
 #ifndef __REACTOS__
@@ -1136,6 +1141,161 @@ NTSTATUS WINAPI RtlDeleteTimer(HANDLE TimerQueue, HANDLE Timer,
 }
 #endif
 /***********************************************************************
+ *           submit_expired_timers     (internal)
+ *
+ * timerqueue.cs held by caller.
+ */
+#ifdef __REACTOS__
+#define TICKS_100NS_PER_SECOND 10000000ULL
+
+static ULONGLONG qpc_from_100ns( ULONGLONG value )
+{
+    LARGE_INTEGER counter, frequency;
+    ULONGLONG seconds, remainder;
+
+    NtQueryPerformanceCounter( &counter, &frequency );
+    seconds = value / TICKS_100NS_PER_SECOND;
+    remainder = value % TICKS_100NS_PER_SECOND;
+    if (seconds > MAXLONGLONG / frequency.QuadPart)
+        return MAXLONGLONG;
+    return seconds * frequency.QuadPart + remainder * frequency.QuadPart / TICKS_100NS_PER_SECOND;
+}
+
+static ULONGLONG qpc_to_100ns( ULONGLONG value )
+{
+    LARGE_INTEGER counter, frequency;
+    ULONGLONG seconds, remainder;
+
+    NtQueryPerformanceCounter( &counter, &frequency );
+    seconds = value / frequency.QuadPart;
+    remainder = value % frequency.QuadPart;
+    if (seconds > MAXLONGLONG / TICKS_100NS_PER_SECOND)
+        return MAXLONGLONG;
+    return seconds * TICKS_100NS_PER_SECOND + remainder * TICKS_100NS_PER_SECOND / frequency.QuadPart;
+}
+
+static ULONGLONG qpc_add_100ns( ULONGLONG base, ULONGLONG value )
+{
+    ULONGLONG delta = qpc_from_100ns( value );
+
+    if (delta >= MAXLONGLONG - base)
+        return MAXLONGLONG;
+    return base + delta;
+}
+#endif
+
+static void submit_expired_timers( struct list *queue, ULONGLONG queue_now, ULONGLONG rel_now )
+{
+    struct threadpool_object *other_timer;
+    struct list *ptr;
+
+    while ((ptr = list_head( queue )))
+    {
+        struct threadpool_object *timer = LIST_ENTRY( ptr, struct threadpool_object, u.timer.timer_entry );
+        assert( timer->type == TP_OBJECT_TYPE_TIMER );
+        assert( timer->u.timer.timer_pending );
+        if (timer->u.timer.timeout > queue_now)
+            return;
+
+        /* Queue a new callback in one of the worker threads. */
+        list_remove( &timer->u.timer.timer_entry );
+        timer->u.timer.timer_pending = FALSE;
+        tp_object_submit( timer, FALSE );
+
+        /* Insert the timer back into the queue, except it's marked for shutdown. */
+        if (timer->u.timer.period && !timer->shutdown)
+        {
+            /* Update timeout when moving timer to relative queue */
+            if (queue == &timerqueue.abs_timers)
+                timer->u.timer.timeout = rel_now;
+
+#ifdef __REACTOS__
+            timer->u.timer.timeout = qpc_add_100ns( timer->u.timer.timeout, (ULONGLONG)timer->u.timer.period * 10000 );
+#else
+            timer->u.timer.timeout += (ULONGLONG)timer->u.timer.period * 10000;
+#endif
+            if (timer->u.timer.timeout <= rel_now)
+                timer->u.timer.timeout = rel_now + 1;
+
+            LIST_FOR_EACH_ENTRY( other_timer, &timerqueue.rel_timers,
+                    struct threadpool_object, u.timer.timer_entry )
+            {
+                assert( other_timer->type == TP_OBJECT_TYPE_TIMER );
+                if (timer->u.timer.timeout < other_timer->u.timer.timeout)
+                    break;
+            }
+            list_add_before( &other_timer->u.timer.timer_entry, &timer->u.timer.timer_entry );
+            timer->u.timer.timer_pending = TRUE;
+        }
+    }
+}
+
+/***********************************************************************
+ *           get_next_timeout          (internal)
+ *
+ * timerqueue.cs held by caller.
+ */
+static ULONGLONG get_next_timeout( struct list *list )
+{
+    ULONGLONG timeout_lower, timeout_upper, new_timeout;
+    struct threadpool_object *other_timer;
+
+    timeout_lower = timeout_upper = MAXLONGLONG;
+
+    /* Determine next timeout and use the window length to optimize wakeup times. */
+    LIST_FOR_EACH_ENTRY( other_timer, list, struct threadpool_object, u.timer.timer_entry )
+    {
+        assert( other_timer->type == TP_OBJECT_TYPE_TIMER );
+        if (other_timer->u.timer.timeout >= timeout_upper)
+            break;
+
+        timeout_lower = other_timer->u.timer.timeout;
+#ifdef __REACTOS__
+        if (list == &timerqueue.rel_timers)
+            new_timeout = qpc_add_100ns( timeout_lower, (ULONGLONG)other_timer->u.timer.window_length * 10000 );
+        else
+#endif
+        new_timeout   = timeout_lower + (ULONGLONG)other_timer->u.timer.window_length * 10000;
+        if (new_timeout < timeout_upper)
+            timeout_upper = new_timeout;
+    }
+    return timeout_lower;
+}
+
+/***********************************************************************
+ *           update_timers             (internal)
+ *
+ * timerqueue.cs held by caller.
+ */
+static void update_timers( ULONGLONG rel_now )
+{
+    LARGE_INTEGER timeout;
+
+    timeout.QuadPart = get_next_timeout( &timerqueue.abs_timers );
+    NtSetTimer( timerqueue.timers[ABS_TIMER], &timeout, NULL, NULL, FALSE, 0, NULL );
+
+    if (timerqueue.objcount)
+    {
+        timeout.QuadPart = get_next_timeout( &timerqueue.rel_timers );
+        if (timeout.QuadPart > rel_now)
+#ifdef __REACTOS__
+            timeout.QuadPart = -(LONGLONG)qpc_to_100ns( timeout.QuadPart - rel_now );
+#else
+            timeout.QuadPart = rel_now - timeout.QuadPart;
+#endif
+        else
+            timeout.QuadPart = 0;
+    }
+    else
+    {
+        /* All timers have been destroyed, if no new timers are created
+         * within some amount of time, then we can shutdown this thread. */
+        timeout.QuadPart = (ULONGLONG)THREADPOOL_WORKER_TIMEOUT * -10000;
+    }
+    NtSetTimer( timerqueue.timers[REL_TIMER], &timeout, NULL, NULL, FALSE, 0, NULL );
+}
+
+/***********************************************************************
  *           timerqueue_thread_proc    (internal)
  */
 #ifdef __REACTOS__
@@ -1144,10 +1304,7 @@ ULONG NTAPI timerqueue_thread_proc(PVOID param )
 static void CALLBACK timerqueue_thread_proc( void *param )
 #endif
 {
-    ULONGLONG timeout_lower, timeout_upper, new_timeout;
-    struct threadpool_object *other_timer;
-    LARGE_INTEGER now, timeout;
-    struct list *ptr;
+    LARGE_INTEGER abs_now, rel_now;
 
     TRACE( "starting timer queue thread\n" );
     set_thread_name(L"wine_threadpool_timerqueue");
@@ -1155,74 +1312,24 @@ static void CALLBACK timerqueue_thread_proc( void *param )
     RtlEnterCriticalSection( &timerqueue.cs );
     for (;;)
     {
-        NtQuerySystemTime( &now );
+        NtQuerySystemTime( &abs_now );
+        NtQueryPerformanceCounter( &rel_now, NULL );
 
-        /* Check for expired timers. */
-        while ((ptr = list_head( &timerqueue.pending_timers )))
-        {
-            struct threadpool_object *timer = LIST_ENTRY( ptr, struct threadpool_object, u.timer.timer_entry );
-            assert( timer->type == TP_OBJECT_TYPE_TIMER );
-            assert( timer->u.timer.timer_pending );
-            if (timer->u.timer.timeout > now.QuadPart)
-                break;
+        submit_expired_timers( &timerqueue.abs_timers, abs_now.QuadPart, rel_now.QuadPart );
+        submit_expired_timers( &timerqueue.rel_timers, rel_now.QuadPart, rel_now.QuadPart );
+        update_timers( rel_now.QuadPart );
 
-            /* Queue a new callback in one of the worker threads. */
-            list_remove( &timer->u.timer.timer_entry );
-            timer->u.timer.timer_pending = FALSE;
-            tp_object_submit( timer, FALSE );
+        RtlLeaveCriticalSection( &timerqueue.cs );
+        NtWaitForMultipleObjects( ARRAY_SIZE(timerqueue.timers),
+                timerqueue.timers, WaitAny, FALSE, NULL );
+        RtlEnterCriticalSection( &timerqueue.cs );
 
-            /* Insert the timer back into the queue, except it's marked for shutdown. */
-            if (timer->u.timer.period && !timer->shutdown)
-            {
-                timer->u.timer.timeout += (ULONGLONG)timer->u.timer.period * 10000;
-                if (timer->u.timer.timeout <= now.QuadPart)
-                    timer->u.timer.timeout = now.QuadPart + 1;
-
-                LIST_FOR_EACH_ENTRY( other_timer, &timerqueue.pending_timers,
-                                     struct threadpool_object, u.timer.timer_entry )
-                {
-                    assert( other_timer->type == TP_OBJECT_TYPE_TIMER );
-                    if (timer->u.timer.timeout < other_timer->u.timer.timeout)
-                        break;
-                }
-                list_add_before( &other_timer->u.timer.timer_entry, &timer->u.timer.timer_entry );
-                timer->u.timer.timer_pending = TRUE;
-            }
-        }
-
-        timeout_lower = timeout_upper = MAXLONGLONG;
-
-        /* Determine next timeout and use the window length to optimize wakeup times. */
-        LIST_FOR_EACH_ENTRY( other_timer, &timerqueue.pending_timers,
-                             struct threadpool_object, u.timer.timer_entry )
-        {
-            assert( other_timer->type == TP_OBJECT_TYPE_TIMER );
-            if (other_timer->u.timer.timeout >= timeout_upper)
-                break;
-
-            timeout_lower = other_timer->u.timer.timeout;
-            new_timeout   = timeout_lower + (ULONGLONG)other_timer->u.timer.window_length * 10000;
-            if (new_timeout < timeout_upper)
-                timeout_upper = new_timeout;
-        }
-
-        /* Wait for timer update events or until the next timer expires. */
-        if (timerqueue.objcount)
-        {
-            timeout.QuadPart = timeout_lower;
-            RtlSleepConditionVariableCS( &timerqueue.update_event, &timerqueue.cs, &timeout );
-            continue;
-        }
-
-        /* All timers have been destroyed, if no new timers are created
-         * within some amount of time, then we can shutdown this thread. */
-        timeout.QuadPart = (ULONGLONG)THREADPOOL_WORKER_TIMEOUT * -10000;
-        if (RtlSleepConditionVariableCS( &timerqueue.update_event, &timerqueue.cs,
-            &timeout ) == STATUS_TIMEOUT && !timerqueue.objcount)
-        {
+        if (!timerqueue.objcount)
             break;
-        }
     }
+
+    NtClose( timerqueue.timers[ABS_TIMER] );
+    NtClose( timerqueue.timers[REL_TIMER] );
 
     timerqueue.thread_running = FALSE;
     RtlLeaveCriticalSection( &timerqueue.cs );
@@ -1264,7 +1371,6 @@ static NTSTATUS tp_new_worker_thread( struct threadpool *pool )
  */
 static NTSTATUS tp_timerqueue_lock( struct threadpool_object *timer )
 {
-    NTSTATUS status = STATUS_SUCCESS;
     assert( timer->type == TP_OBJECT_TYPE_TIMER );
 
     timer->u.timer.timer_initialized    = FALSE;
@@ -1279,24 +1385,44 @@ static NTSTATUS tp_timerqueue_lock( struct threadpool_object *timer )
     /* Make sure that the timerqueue thread is running. */
     if (!timerqueue.thread_running)
     {
+        NTSTATUS status;
         HANDLE thread;
+
+        status = NtCreateTimer( &timerqueue.timers[ABS_TIMER], TIMER_ALL_ACCESS,
+                                NULL, NotificationTimer );
+        if (status != STATUS_SUCCESS)
+        {
+            RtlLeaveCriticalSection( &timerqueue.cs );
+            return status;
+        }
+
+        status = NtCreateTimer( &timerqueue.timers[REL_TIMER], TIMER_ALL_ACCESS,
+                NULL, NotificationTimer );
+        if (status != STATUS_SUCCESS)
+        {
+            NtClose( timerqueue.timers[ABS_TIMER] );
+            RtlLeaveCriticalSection( &timerqueue.cs );
+            return status;
+        }
+
         status = RtlCreateUserThread( GetCurrentProcess(), NULL, FALSE, 0, 0, 0,
                                       timerqueue_thread_proc, NULL, &thread, NULL );
-        if (status == STATUS_SUCCESS)
+        if (status != STATUS_SUCCESS)
         {
-            timerqueue.thread_running = TRUE;
-            NtClose( thread );
+            NtClose( timerqueue.timers[ABS_TIMER] );
+            NtClose( timerqueue.timers[REL_TIMER] );
+            RtlLeaveCriticalSection( &timerqueue.cs );
+            return status;
         }
+        timerqueue.thread_running = TRUE;
+        NtClose( thread );
     }
 
-    if (status == STATUS_SUCCESS)
-    {
-        timer->u.timer.timer_initialized = TRUE;
-        timerqueue.objcount++;
-    }
+    timer->u.timer.timer_initialized = TRUE;
+    timerqueue.objcount++;
 
     RtlLeaveCriticalSection( &timerqueue.cs );
-    return status;
+    return STATUS_SUCCESS;
 }
 
 /***********************************************************************
@@ -1318,11 +1444,15 @@ static void tp_timerqueue_unlock( struct threadpool_object *timer )
             timer->u.timer.timer_pending = FALSE;
         }
 
-        /* If the last timer object was destroyed, then wake up the thread. */
+        /* If the last timer object was destroyed, then update timeout. */
         if (!--timerqueue.objcount)
         {
-            assert( list_empty( &timerqueue.pending_timers ) );
-            RtlWakeAllConditionVariable( &timerqueue.update_event );
+            LARGE_INTEGER rel_now;
+
+            assert( list_empty( &timerqueue.abs_timers ) );
+            assert( list_empty( &timerqueue.rel_timers ) );
+            NtQueryPerformanceCounter( &rel_now, NULL );
+            update_timers( rel_now.QuadPart );
         }
 
         timer->u.timer.timer_initialized = FALSE;
@@ -1340,12 +1470,17 @@ static void CALLBACK waitqueue_thread_proc( void *param )
 #endif
 {
     struct threadpool_object *objects[MAXIMUM_WAITQUEUE_OBJECTS];
+    LONG update_serials[MAXIMUM_WAITQUEUE_OBJECTS];
     HANDLE handles[MAXIMUM_WAITQUEUE_OBJECTS + 1];
     struct waitqueue_bucket *bucket = param;
     struct threadpool_object *wait, *next;
     LARGE_INTEGER now, timeout;
     DWORD num_handles;
     NTSTATUS status;
+#ifdef __REACTOS__
+    BOOLEAN duplicated_handles[MAXIMUM_WAITQUEUE_OBJECTS];
+    DWORD i;
+#endif
 
     TRACE( "starting wait queue thread\n" );
     set_thread_name(L"wine_threadpool_waitqueue");
@@ -1362,6 +1497,7 @@ static void CALLBACK waitqueue_thread_proc( void *param )
                                   u.wait.wait_entry )
         {
             assert( wait->type == TP_OBJECT_TYPE_WAIT );
+            assert( wait->u.wait.wait_pending );
             if (wait->u.wait.timeout <= now.QuadPart)
             {
                 /* Wait object timed out. */
@@ -1369,6 +1505,7 @@ static void CALLBACK waitqueue_thread_proc( void *param )
                 {
                     list_remove( &wait->u.wait.wait_entry );
                     list_add_tail( &bucket->reserved, &wait->u.wait.wait_entry );
+                    wait->u.wait.wait_pending = FALSE;
                 }
                 if ((wait->u.wait.flags & (WT_EXECUTEINWAITTHREAD | WT_EXECUTEINIOTHREAD)))
                 {
@@ -1389,7 +1526,17 @@ static void CALLBACK waitqueue_thread_proc( void *param )
                 assert( num_handles < MAXIMUM_WAITQUEUE_OBJECTS );
                 InterlockedIncrement( &wait->refcount );
                 objects[num_handles] = wait;
-                handles[num_handles] = wait->u.wait.handle;
+                /* NtWaitForMultipleObjects() fails if any invalid handles are passed, and one invalid handle
+                 * should not affect other waiting items. The calling app is allowed to close waitable timer
+                 * handles immediately after submission, so we need a duplicate for those in particular. */
+#ifdef __REACTOS__
+                HANDLE source_handle = wait->u.wait.duped_handle ? wait->u.wait.duped_handle : wait->u.wait.handle;
+                handles[num_handles] = source_handle;
+                duplicated_handles[num_handles] = source_handle && NT_SUCCESS(NtDuplicateObject(NtCurrentProcess(), source_handle, NtCurrentProcess(), &handles[num_handles], 0, 0, DUPLICATE_SAME_ACCESS));
+#else
+                handles[num_handles] = wait->u.wait.duped_handle ? wait->u.wait.duped_handle : wait->u.wait.handle;
+#endif
+                update_serials[num_handles] = wait->update_serial;
                 num_handles++;
             }
         }
@@ -1401,7 +1548,7 @@ static void CALLBACK waitqueue_thread_proc( void *param )
             assert( num_handles == 0 );
             RtlLeaveCriticalSection( &waitqueue.cs );
             timeout.QuadPart = (ULONGLONG)THREADPOOL_WORKER_TIMEOUT * -10000;
-            status = NtWaitForMultipleObjects( 1, &bucket->update_event, TRUE, bucket->alertable, &timeout );
+            status = NtWaitForMultipleObjects( 1, &bucket->update_event, WaitAny, bucket->alertable, &timeout );
             RtlEnterCriticalSection( &waitqueue.cs );
 
             if (status == STATUS_TIMEOUT && !bucket->objcount)
@@ -1411,14 +1558,18 @@ static void CALLBACK waitqueue_thread_proc( void *param )
         {
             handles[num_handles] = bucket->update_event;
             RtlLeaveCriticalSection( &waitqueue.cs );
-            status = NtWaitForMultipleObjects( num_handles + 1, handles, TRUE, bucket->alertable, &timeout );
+            status = NtWaitForMultipleObjects( num_handles + 1, handles, WaitAny, bucket->alertable, &timeout );
+#ifdef __REACTOS__
+            for (i = 0; i < num_handles; ++i)
+                if (duplicated_handles[i]) NtClose( handles[i] );
+#endif
             RtlEnterCriticalSection( &waitqueue.cs );
 
             if (status >= STATUS_WAIT_0 && status < STATUS_WAIT_0 + num_handles)
             {
                 wait = objects[status - STATUS_WAIT_0];
                 assert( wait->type == TP_OBJECT_TYPE_WAIT );
-                if (wait->u.wait.bucket)
+                if (wait->u.wait.bucket && wait->update_serial == update_serials[status - STATUS_WAIT_0])
                 {
                     /* Wait object signaled. */
                     assert( wait->u.wait.bucket == bucket );
@@ -1426,6 +1577,7 @@ static void CALLBACK waitqueue_thread_proc( void *param )
                     {
                         list_remove( &wait->u.wait.wait_entry );
                         list_add_tail( &bucket->reserved, &wait->u.wait.wait_entry );
+                        wait->u.wait.wait_pending = FALSE;
                     }
                     if ((wait->u.wait.flags & (WT_EXECUTEINWAITTHREAD | WT_EXECUTEINIOTHREAD)))
                     {
@@ -1438,7 +1590,10 @@ static void CALLBACK waitqueue_thread_proc( void *param )
                     else tp_object_submit( wait, TRUE );
                 }
                 else
-                    WARN("wait object %p triggered while object was destroyed\n", wait);
+                {
+                    WARN("wait object %p triggered while object was %s.\n",
+                            wait, wait->u.wait.bucket ? "updated" : "destroyed");
+                }
             }
 
             /* Release temporary references to wait objects. */
@@ -1524,7 +1679,8 @@ static NTSTATUS tp_waitqueue_lock( struct threadpool_object *wait )
     wait->u.wait.bucket         = NULL;
     wait->u.wait.wait_pending   = FALSE;
     wait->u.wait.timeout        = 0;
-    wait->u.wait.handle         = INVALID_HANDLE_VALUE;
+    wait->u.wait.handle         = NULL;
+    wait->u.wait.duped_handle   = NULL;
 
     RtlEnterCriticalSection( &waitqueue.cs );
 
@@ -2050,6 +2206,7 @@ static void tp_object_initialize( struct threadpool_object *object, struct threa
     object->num_pending_callbacks   = 0;
     object->num_running_callbacks   = 0;
     object->num_associated_callbacks = 0;
+    object->update_serial           = 0;
 
     if (environment)
     {
@@ -2205,7 +2362,7 @@ static void tp_object_wait( struct threadpool_object *object, BOOL group_wait )
     struct threadpool *pool = object->pool;
 
     RtlEnterCriticalSection( &pool->cs );
-    while (!object_is_finished( object, group_wait ))
+    while (!RtlDllShutdownInProgress() && !object_is_finished( object, group_wait ))
     {
         if (group_wait)
             RtlSleepConditionVariableCS( &object->group_finished_event, &pool->cs, NULL );
@@ -2244,6 +2401,15 @@ static void tp_object_prepare_shutdown( struct threadpool_object *object )
         tp_ioqueue_unlock( object );
 }
 
+static void tp_wait_close_duped_handle( struct threadpool_object *wait )
+{
+    if (wait->u.wait.duped_handle)
+    {
+        NtClose( wait->u.wait.duped_handle );
+        wait->u.wait.duped_handle = NULL;
+    }
+}
+
 /***********************************************************************
  *           tp_object_release    (internal)
  *
@@ -2276,6 +2442,9 @@ static BOOL tp_object_release( struct threadpool_object *object )
 
         tp_group_release( group );
     }
+
+    if (object->type == TP_OBJECT_TYPE_WAIT)
+        tp_wait_close_duped_handle( object );
 
     tp_threadpool_unlock( object->pool );
 
@@ -3114,6 +3283,7 @@ VOID WINAPI TpSetTimer( TP_TIMER *timer, LARGE_INTEGER *timeout, LONG period, LO
 {
     struct threadpool_object *this = impl_from_TP_TIMER( timer );
     struct threadpool_object *other_timer;
+    struct list *pending_timers;
     BOOL submit_timer = FALSE;
     ULONGLONG timestamp;
 
@@ -3128,23 +3298,37 @@ VOID WINAPI TpSetTimer( TP_TIMER *timer, LARGE_INTEGER *timeout, LONG period, LO
      * of zero, which means that the timer is submitted immediately. */
     if (timeout)
     {
-        timestamp = timeout->QuadPart;
-        if ((LONGLONG)timestamp < 0)
+        if (timeout->QuadPart > 0)
         {
-            LARGE_INTEGER now;
-            NtQuerySystemTime( &now );
-            timestamp = now.QuadPart - timestamp;
+            timestamp = timeout->QuadPart;
+            pending_timers = &timerqueue.abs_timers;
         }
-        else if (!timestamp)
+        else if (timeout->QuadPart < 0)
         {
-            if (!period)
-                timeout = NULL;
-            else
-            {
-                LARGE_INTEGER now;
-                NtQuerySystemTime( &now );
-                timestamp = now.QuadPart + (ULONGLONG)period * 10000;
-            }
+            LARGE_INTEGER rel_now;
+            NtQueryPerformanceCounter( &rel_now, NULL );
+#ifdef __REACTOS__
+            timestamp = qpc_add_100ns( rel_now.QuadPart, 0 - (ULONGLONG)timeout->QuadPart );
+#else
+            timestamp = rel_now.QuadPart - timeout->QuadPart;
+#endif
+            pending_timers = &timerqueue.rel_timers;
+        }
+        else if (!period)
+        {
+            timeout = NULL;
+            submit_timer = TRUE;
+        }
+        else
+        {
+            LARGE_INTEGER rel_now;
+            NtQueryPerformanceCounter( &rel_now, NULL );
+#ifdef __REACTOS__
+            timestamp = qpc_add_100ns( rel_now.QuadPart, (ULONGLONG)period * 10000 );
+#else
+            timestamp = rel_now.QuadPart + (ULONGLONG)period * 10000;
+#endif
+            pending_timers = &timerqueue.rel_timers;
             submit_timer = TRUE;
         }
     }
@@ -3163,8 +3347,8 @@ VOID WINAPI TpSetTimer( TP_TIMER *timer, LARGE_INTEGER *timeout, LONG period, LO
         this->u.timer.period        = period;
         this->u.timer.window_length = window_length;
 
-        LIST_FOR_EACH_ENTRY( other_timer, &timerqueue.pending_timers,
-                             struct threadpool_object, u.timer.timer_entry )
+        LIST_FOR_EACH_ENTRY( other_timer, pending_timers, struct threadpool_object,
+                             u.timer.timer_entry )
         {
             assert( other_timer->type == TP_OBJECT_TYPE_TIMER );
             if (this->u.timer.timeout < other_timer->u.timer.timeout)
@@ -3172,9 +3356,13 @@ VOID WINAPI TpSetTimer( TP_TIMER *timer, LARGE_INTEGER *timeout, LONG period, LO
         }
         list_add_before( &other_timer->u.timer.timer_entry, &this->u.timer.timer_entry );
 
-        /* Wake up the timer thread when the timeout has to be updated. */
-        if (list_head( &timerqueue.pending_timers ) == &this->u.timer.timer_entry )
-            RtlWakeAllConditionVariable( &timerqueue.update_event );
+        /* Update timeout if needed. */
+        if (list_head( pending_timers ) == &this->u.timer.timer_entry )
+        {
+            LARGE_INTEGER rel_now;
+            NtQueryPerformanceCounter( &rel_now, NULL );
+            update_timers( rel_now.QuadPart );
+        }
 
         this->u.timer.timer_pending = TRUE;
     }
@@ -3192,12 +3380,21 @@ VOID WINAPI TpSetWait( TP_WAIT *wait, HANDLE handle, LARGE_INTEGER *timeout )
 {
     struct threadpool_object *this = impl_from_TP_WAIT( wait );
     ULONGLONG timestamp = MAXLONGLONG;
+    BOOL same_handle;
 
     TRACE( "%p %p %p\n", wait, handle, timeout );
 
     RtlEnterCriticalSection( &waitqueue.cs );
 
     assert( this->u.wait.bucket );
+
+    same_handle = this->u.wait.handle == handle;
+    tp_wait_close_duped_handle( this );
+    if (handle && NtDuplicateObject( NtCurrentProcess(), handle, NtCurrentProcess(),
+        &this->u.wait.duped_handle, 0, 0, DUPLICATE_SAME_ACCESS ) != STATUS_SUCCESS)
+    {
+        WARN( "Failed to duplicate handle.\n" );
+    }
     this->u.wait.handle = handle;
 
     if (handle || this->u.wait.wait_pending)
@@ -3231,6 +3428,8 @@ VOID WINAPI TpSetWait( TP_WAIT *wait, HANDLE handle, LARGE_INTEGER *timeout )
         }
 
         /* Wake up the wait queue thread. */
+        if (!same_handle)
+            ++this->update_serial;
         NtSetEvent( bucket->update_event, NULL );
     }
 

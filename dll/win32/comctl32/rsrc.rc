@@ -26,8 +26,13 @@ LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 
 #define WINE_FILEDESCRIPTION_STR "Wine Common Controls"
 #define WINE_FILENAME_STR "comctl32.dll"
-#define WINE_FILEVERSION COMCTL32_VERSION, COMCTL32_VERSION_MINOR, 4704, 1100
+#if __WINE_COMCTL32_VERSION == 6
+#define WINE_FILEVERSION 6, 0, 2600, 2982
+#define WINE_FILEVERSION_STR "6.0"
+#else
+#define WINE_FILEVERSION 5, 82, 4704, 1100
 #define WINE_FILEVERSION_STR "5.82"
+#endif
 #define WINE_PRODUCTVERSION WINE_FILEVERSION
 #define WINE_PRODUCTVERSION_STR WINE_FILEVERSION_STR
 
@@ -86,6 +91,15 @@ IDI_TT_WARN_SM ICON idi_tt_warn_sm.ico
 
 /* @makedep: idi_tt_error_sm.ico */
 IDI_TT_ERROR_SM ICON idi_tt_error_sm.ico
+
+/* @makedep: idi_tt_info_md.ico */
+IDI_TT_INFO_MD ICON idi_tt_info_md.ico
+
+/* @makedep: idi_tt_warn_md.ico */
+IDI_TT_WARN_MD ICON idi_tt_warn_md.ico
+
+/* @makedep: idi_tt_error_md.ico */
+IDI_TT_ERROR_MD ICON idi_tt_error_md.ico
 
 
 /*

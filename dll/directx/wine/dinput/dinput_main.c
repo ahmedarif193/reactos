@@ -29,6 +29,9 @@
 #include "windef.h"
 #include "winbase.h"
 #include "winuser.h"
+#ifdef __REACTOS__
+#include <reactos/user32_vista.h>
+#endif
 #include "winerror.h"
 #include "objbase.h"
 #include "rpcproxy.h"
@@ -374,9 +377,8 @@ static DWORD WINAPI dinput_thread_proc( void *params )
     DWORD ret;
     MSG msg;
 
-#ifndef __REACTOS__
     SetThreadDescription( GetCurrentThread(), L"wine_dinput_worker" );
-#endif
+    SetThreadDpiAwarenessContext( DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE );
 
     di_em_win = CreateWindowW( L"DIEmWin", L"DIEmWin", 0, 0, 0, 0, 0, HWND_MESSAGE, 0, DINPUT_instance, NULL );
     input_thread_state = &state;
@@ -523,6 +525,7 @@ BOOL WINAPI DllMain( HINSTANCE inst, DWORD reason, void *reserved )
         break;
       case DLL_PROCESS_DETACH:
         if (reserved) break;
+        hid_joystick_cleanup_devices();
         unregister_di_em_win_class();
         break;
     }

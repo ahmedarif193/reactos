@@ -86,7 +86,7 @@ static size_t export_value_name(HANDLE hFile, WCHAR *name, size_t len)
     {
         WCHAR *str = escape_string(name, len, &line_len);
         WCHAR *buf = malloc((line_len + 4) * sizeof(WCHAR));
-        line_len = swprintf(buf, L"\"%s\"=", str);
+        line_len = swprintf(buf, line_len + 4, L"\"%s\"=", str);
         write_file(hFile, buf);
         free(buf);
         free(str);
@@ -109,14 +109,14 @@ static void export_string_data(WCHAR **buf, WCHAR *data, size_t size)
         len = size / sizeof(WCHAR) - 1;
     str = escape_string(data, len, &line_len);
     *buf = malloc((line_len + 3) * sizeof(WCHAR));
-    swprintf(*buf, L"\"%s\"", str);
+    swprintf(*buf, line_len + 3, L"\"%s\"", str);
     free(str);
 }
 
 static void export_dword_data(WCHAR **buf, DWORD *data)
 {
     *buf = malloc(15 * sizeof(WCHAR));
-    swprintf(*buf, L"dword:%08x", *data);
+    swprintf(*buf, 15, L"dword:%08x", *data);
 }
 
 static size_t export_hex_data_type(HANDLE hFile, DWORD type)
@@ -132,7 +132,7 @@ static size_t export_hex_data_type(HANDLE hFile, DWORD type)
     else
     {
         WCHAR *buf = malloc(15 * sizeof(WCHAR));
-        line_len = swprintf(buf, L"hex(%x):", type);
+        line_len = swprintf(buf, 15, L"hex(%x):", type);
         write_file(hFile, buf);
         free(buf);
     }
@@ -156,7 +156,7 @@ static void export_hex_data(HANDLE hFile, WCHAR **buf, DWORD type,
 
     for (i = 0, pos = 0; i < size; i++)
     {
-        pos += swprintf(*buf + pos, L"%02x", ((BYTE *)data)[i]);
+        pos += swprintf(*buf + pos, 3, L"%02x", ((BYTE *)data)[i]);
         if (i == num_commas) break;
         (*buf)[pos++] = ',';
         (*buf)[pos] = 0;
@@ -220,7 +220,7 @@ static void export_key_name(HANDLE hFile, WCHAR *name)
     WCHAR *buf;
 
     buf = malloc((lstrlenW(name) + 7) * sizeof(WCHAR));
-    swprintf(buf, L"\r\n[%s]\r\n", name);
+    swprintf(buf, lstrlenW(name) + 7, L"\r\n[%s]\r\n", name);
     write_file(hFile, buf);
     free(buf);
 }
@@ -408,6 +408,6 @@ int reg_export(int argc, WCHAR *argvW[])
 
 invalid:
     output_message(STRING_INVALID_SYNTAX);
-    output_message(STRING_FUNC_HELP, _wcsupr(argvW[1]));
+    output_message(STRING_FUNC_HELP, wcsupr(argvW[1]));
     return 1;
 }

@@ -30,11 +30,16 @@
 #include "objbase.h"
 #include "olectl.h"
 #include "initguid.h"
+#include "dxva.h"
 
-#if 0
 #include "d3d10_1.h"
-#include "d3d11.h"
+#include "d3d10effect.h"
+#include "d3d10sdklayers.h"
+#include "d3d11_4.h"
+#include "d3d11sdklayers.h"
+#include "d3d12.h"
+#include "d3d12sdklayers.h"
 #include "d3d10_1shader.h"
-#endif
-
 #include "d3d11shader.h"
+#include "dxgi1_6.h"
+#include "dxgidebug.h"

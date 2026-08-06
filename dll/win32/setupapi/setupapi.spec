@@ -108,6 +108,7 @@
 @ stdcall CM_Get_Device_Interface_List_SizeW(ptr ptr wstr long)
 @ stdcall CM_Get_Device_Interface_List_Size_ExA(ptr ptr str long ptr)
 @ stdcall CM_Get_Device_Interface_List_Size_ExW(ptr ptr wstr long ptr)
+@ stdcall CM_Get_Device_Interface_PropertyW(wstr ptr ptr ptr ptr long)
 @ stdcall CM_Get_First_Log_Conf(ptr long long)
 @ stdcall CM_Get_First_Log_Conf_Ex(ptr long long long)
 @ stdcall CM_Get_Global_State(ptr long)
@@ -317,7 +318,7 @@
 @ stdcall SetupDiDestroyClassImageList(ptr)
 @ stdcall SetupDiDestroyDeviceInfoList(long)
 @ stdcall SetupDiDestroyDriverInfoList(long ptr long)
-@ stub SetupDiDrawMiniIcon
+@ stdcall SetupDiDrawMiniIcon(ptr int128 long long)
 @ stdcall SetupDiEnumDeviceInfo(long long ptr)
 @ stdcall SetupDiEnumDeviceInterfaces(long ptr ptr long ptr)
 @ stdcall SetupDiEnumDriverInfoA(long ptr long long ptr)
@@ -328,7 +329,7 @@
 @ stdcall SetupDiGetActualSectionToInstallExA(long str ptr str long ptr ptr ptr)
 @ stdcall SetupDiGetActualSectionToInstallExW(long wstr ptr wstr long ptr ptr ptr)
 @ stdcall SetupDiGetActualSectionToInstallW(long wstr wstr long ptr ptr)
-@ stub SetupDiGetClassBitmapIndex
+@ stdcall SetupDiGetClassBitmapIndex(ptr ptr)
 @ stdcall SetupDiGetClassDescriptionA(ptr str long ptr)
 @ stdcall SetupDiGetClassDescriptionExA(ptr str long ptr str ptr)
 @ stdcall SetupDiGetClassDescriptionExW(ptr wstr long ptr wstr ptr)
@@ -363,10 +364,10 @@
 @ stdcall SetupDiGetDeviceInterfaceAlias(ptr ptr ptr ptr)
 @ stdcall SetupDiGetDeviceInterfaceDetailA(long ptr ptr long ptr ptr)
 @ stdcall SetupDiGetDeviceInterfaceDetailW(long ptr ptr long ptr ptr)
-@ stub -version=0x600+ SetupDiGetDeviceInterfacePropertyKeys
-@ stub -version=0x600+ SetupDiGetDeviceInterfacePropertyW
-@ stub -version=0x600+ SetupDiGetDevicePropertyKeys
-@ stdcall -stub -version=0x600+ SetupDiGetDevicePropertyW(ptr ptr ptr ptr ptr long ptr long)
+@ stdcall SetupDiGetDeviceInterfacePropertyKeys(ptr ptr ptr long ptr long)
+@ stdcall SetupDiGetDeviceInterfacePropertyW(ptr ptr ptr ptr ptr long ptr long)
+@ stdcall SetupDiGetDevicePropertyKeys(ptr ptr ptr long ptr long)
+@ stdcall SetupDiGetDevicePropertyW(ptr ptr ptr ptr ptr long ptr long)
 @ stdcall SetupDiGetDeviceRegistryPropertyA(long ptr long ptr ptr long ptr)
 @ stdcall SetupDiGetDeviceRegistryPropertyW(long ptr long ptr ptr long ptr)
 @ stdcall SetupDiGetDriverInfoDetailA(ptr ptr ptr ptr long ptr)
@@ -427,8 +428,8 @@
 @ stdcall SetupDiSetDeviceInstallParamsA(ptr ptr ptr)
 @ stdcall SetupDiSetDeviceInstallParamsW(ptr ptr ptr)
 @ stub SetupDiSetDeviceInterfaceDefault
-@ stub -version=0x600+ SetupDiSetDeviceInterfacePropertyW
-@ stub -version=0x600+ SetupDiSetDevicePropertyW
+@ stdcall SetupDiSetDeviceInterfacePropertyW(ptr ptr ptr long ptr long long)
+@ stdcall SetupDiSetDevicePropertyW(ptr ptr ptr long ptr long long)
 @ stdcall SetupDiSetDeviceRegistryPropertyA(ptr ptr long ptr long)
 @ stdcall SetupDiSetDeviceRegistryPropertyW(ptr ptr long ptr long)
 @ stdcall SetupDiSetDriverInstallParamsA(ptr ptr ptr ptr)
@@ -461,7 +462,7 @@
 @ stdcall SetupGetFileQueueCount(long long ptr)
 @ stdcall SetupGetFileQueueFlags(long ptr)
 @ stub -version=0x600+ SetupGetInfDriverStoreLocationA
-@ stub -version=0x600+ SetupGetInfDriverStoreLocationW
+@ stdcall SetupGetInfDriverStoreLocationW(wstr ptr wstr ptr long ptr)
 @ stdcall SetupGetInfFileListA(str long str long ptr)
 @ stdcall SetupGetInfFileListW(wstr long wstr long ptr)
 @ stdcall SetupGetInfInformationA(ptr long ptr long ptr)
@@ -495,8 +496,8 @@
 @ stdcall SetupInitializeFileLogA(str long)
 @ stdcall SetupInitializeFileLogW(wstr long)
 @ stdcall SetupInstallFileA(ptr ptr str str str long ptr ptr)
-@ stub SetupInstallFileExA
-@ stub SetupInstallFileExW
+@ stdcall SetupInstallFileExA(ptr ptr str str str long ptr ptr ptr)
+@ stdcall SetupInstallFileExW(ptr ptr wstr wstr wstr long ptr ptr ptr)
 @ stdcall SetupInstallFileW(ptr ptr wstr wstr wstr long ptr ptr)
 @ stdcall SetupInstallFilesFromInfSectionA(long long long str str long)
 @ stdcall SetupInstallFilesFromInfSectionW(long long long wstr wstr long)
@@ -512,8 +513,8 @@
 @ stdcall SetupIterateCabinetW(wstr long ptr ptr)
 @ stdcall SetupLogErrorA(str long)
 @ stdcall SetupLogErrorW(wstr long)
-@ stub SetupLogFileA
-@ stub SetupLogFileW
+@ stdcall SetupLogFileA(ptr str str str long str str str long)
+@ stdcall SetupLogFileW(ptr wstr wstr wstr long wstr wstr wstr long)
 @ stdcall SetupOpenAppendInfFileA(str long ptr)
 @ stdcall SetupOpenAppendInfFileW(wstr long ptr)
 @ stdcall SetupOpenFileQueue()
@@ -526,8 +527,8 @@
 @ stdcall SetupPromptForDiskA(ptr str str str str str long ptr long ptr)
 @ stdcall SetupPromptForDiskW(ptr wstr wstr wstr wstr wstr long ptr long ptr)
 @ stdcall SetupPromptReboot(ptr ptr long)
-@ stdcall -stub SetupQueryDrivesInDiskSpaceListA(ptr ptr long ptr)
-@ stub SetupQueryDrivesInDiskSpaceListW
+@ stdcall SetupQueryDrivesInDiskSpaceListA(ptr ptr long ptr)
+@ stdcall SetupQueryDrivesInDiskSpaceListW(ptr ptr long ptr)
 @ stub SetupQueryFileLogA
 @ stub SetupQueryFileLogW
 @ stdcall SetupQueryInfFileInformationA(ptr long str long ptr)
@@ -689,3 +690,72 @@
 @ stub pSetupWriteLogError
 @ stub -version=0x600 pSpAddInboxDriverPackage # Vista only
 @ stub -version=0x600 pSpDeleteInboxDriverPackage # Vista only
+@ stub AcquireSCMLock
+@ stub AddMiniIconToList
+@ stub AddTagToGroupOrderListEntry
+@ stub AppendStringToMultiSz
+@ stdcall AssertFail(str long str)
+@ stub CMP_WaitServices
+@ stdcall CM_Get_DevNode_PropertyW(long ptr ptr ptr ptr long) cfgmgr32.CM_Get_DevNode_PropertyW
+@ stdcall CM_Get_DevNode_Property_ExW(long ptr ptr ptr ptr long ptr) cfgmgr32.CM_Get_DevNode_Property_ExW
+@ stub CM_Remove_Unmarked_Children
+@ stub CM_Remove_Unmarked_Children_Ex
+@ stub CM_Reset_Children_Marks
+@ stub CM_Reset_Children_Marks_Ex
+@ stdcall CaptureAndConvertAnsiArg(str ptr) pSetupCaptureAndConvertAnsiArg
+@ stdcall CaptureStringArg(wstr ptr)
+@ stub CenterWindowRelativeToParent
+@ stub ConcatenatePaths
+@ stdcall DelayedMove(wstr wstr)
+@ stub DelimStringToMultiSz
+@ stub DestroyTextFileReadBuffer
+@ stdcall DuplicateString(wstr) pSetupDuplicateString
+@ stdcall EnablePrivilege(wstr long) pSetupEnablePrivilege
+@ stdcall FileExists(wstr ptr)
+@ stub FreeStringArray
+@ stub GetCurrentDriverSigningPolicy
+@ stub GetNewInfName
+@ stdcall GetSetFileTimestamp(wstr ptr ptr ptr long)
+@ stub GetVersionInfoFromImage
+@ stub InfIsFromOemLocation
+@ stub InstallStop
+@ stub InstallStopEx
+@ stub LookUpStringInTable
+@ stub MemoryInitialize
+@ stdcall MultiByteToUnicode(str long) pSetupMultiByteToUnicode
+@ stub MultiSzFromSearchControl
+@ stub MyGetFileTitle
+@ stdcall OpenAndMapFileForRead(wstr ptr ptr ptr ptr) pSetupOpenAndMapFileForRead
+@ stub OutOfMemory
+@ stub QueryMultiSzValueToArray
+@ stdcall QueryRegistryValue(long wstr ptr ptr ptr)
+@ stub ReadAsciiOrUnicodeTextFile
+@ stdcall RegistryDelnode(long long) pSetupRegistryDelnode
+@ stdcall RetreiveFileSecurity(wstr ptr)
+@ stub RetrieveServiceConfig
+@ stub SearchForInfFile
+@ stub SetArrayToMultiSzValue
+@ stub SetupDiDeleteDeviceRegKey
+@ stub ShouldDeviceBeExcluded
+@ stdcall StampFileSecurity(wstr ptr)
+@ stdcall StringTableAddString(ptr wstr long) pSetupStringTableAddString
+@ stdcall StringTableAddStringEx(ptr wstr long ptr long) pSetupStringTableAddStringEx
+@ stdcall StringTableDestroy(ptr) pSetupStringTableDestroy
+@ stdcall StringTableDuplicate(ptr) pSetupStringTableDuplicate
+@ stub StringTableEnum
+@ stdcall StringTableGetExtraData(ptr long ptr long) pSetupStringTableGetExtraData
+@ stdcall StringTableInitialize() pSetupStringTableInitialize
+@ stdcall StringTableInitializeEx(long long) pSetupStringTableInitializeEx
+@ stdcall StringTableLookUpString(ptr wstr long) pSetupStringTableLookUpString
+@ stdcall StringTableLookUpStringEx(ptr wstr long ptr long) pSetupStringTableLookUpStringEx
+@ stdcall StringTableSetExtraData(ptr long ptr long) pSetupStringTableSetExtraData
+@ stdcall StringTableStringFromId(ptr long) pSetupStringTableStringFromId
+@ stdcall StringTableStringFromIdEx(ptr long ptr ptr) pSetupStringTableStringFromIdEx
+@ stdcall StringTableTrim(ptr)
+@ stdcall TakeOwnershipOfFile(wstr)
+@ stdcall UnmapAndCloseFile(long long ptr) pSetupUnmapAndCloseFile
+@ stub VerifyFile
+@ stub pSetupDirectoryIdToPath
+@ stub pSetupGetOsLoaderDriveAndPath
+@ stub pSetupGetVersionDatum
+@ stub pSetupSetSystemSourceFlags

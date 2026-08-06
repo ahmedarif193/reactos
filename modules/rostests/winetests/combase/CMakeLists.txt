@@ -15,6 +15,7 @@ add_executable(combase_winetest
     ${SOURCE}
     ${PCH_SKIP_SOURCE}
     combase.rc)
+target_compile_definitions(combase_winetest PRIVATE WINETEST_USE_DBGSTR_HSTRING)
 
 target_link_libraries(combase_winetest uuid)
 set_module_type(combase_winetest win32cui)

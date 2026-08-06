@@ -51,6 +51,7 @@ enum AgileReferenceOptions
 };
 
 HRESULT WINAPI CoDecodeProxy(_In_ DWORD client_pid, _In_ UINT64 proxy_addr, _Out_ ServerInformation *server_info);
+HRESULT WINAPI CoRegisterActivationFilter(_In_opt_ IActivationFilter *filter);
 HRESULT WINAPI RoGetAgileReference(_In_ enum AgileReferenceOptions options, _In_ REFIID riid, _In_ IUnknown *obj, _Out_ IAgileReference **agile_reference);
 
 #ifdef __cplusplus

@@ -37,42 +37,11 @@ PfAddGlobalFilterToInterface(
 }
 
 PFAPIENTRY
-PfBindInterfaceToIPAddress(
-    INTERFACE_HANDLE pInterface,
-    PFADDRESSTYPE pfatType,
-    PBYTE IPAddress)
-{
-    UNIMPLEMENTED;
-    return ERROR_CALL_NOT_IMPLEMENTED;
-}
-
-PFAPIENTRY
 PfBindInterfaceToIndex(
     INTERFACE_HANDLE pInterface,
     DWORD dwIndex,
     PFADDRESSTYPE pfatLinkType,
     PBYTE LinkIPAddress)
-{
-    UNIMPLEMENTED;
-    return ERROR_CALL_NOT_IMPLEMENTED;
-}
-
-PFAPIENTRY
-PfCreateInterface(
-    DWORD dwName,
-    PFFORWARD_ACTION inAction,
-    PFFORWARD_ACTION outAction,
-    BOOL bUseLog,
-    BOOL bMustBeUnique,
-    INTERFACE_HANDLE* ppInterface)
-{
-    UNIMPLEMENTED;
-    return ERROR_CALL_NOT_IMPLEMENTED;
-}
-
-PFAPIENTRY
-PfDeleteInterface(
-    INTERFACE_HANDLE pInterface)
 {
     UNIMPLEMENTED;
     return ERROR_CALL_NOT_IMPLEMENTED;
@@ -166,14 +135,6 @@ PfTestPacket(
     DWORD cBytes,
     PBYTE pbPacket,
     PPFFORWARD_ACTION ppAction)
-{
-    UNIMPLEMENTED;
-    return ERROR_CALL_NOT_IMPLEMENTED;
-}
-
-PFAPIENTRY
-PfUnBindInterface(
-    INTERFACE_HANDLE pInterface)
 {
     UNIMPLEMENTED;
     return ERROR_CALL_NOT_IMPLEMENTED;

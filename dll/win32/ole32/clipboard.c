@@ -1899,11 +1899,8 @@ static HWND create_clipbrd_window(void);
  */
 static inline HRESULT get_clipbrd_window(ole_clipbrd *clipbrd, HWND *wnd)
 {
-#ifdef __REACTOS__
-    /* The clipboard window can get destroyed if the  thread that created it dies so we may need to create it again */
-    if (!IsWindow(clipbrd->window))
-        clipbrd->window = create_clipbrd_window();
-#endif
+    if ( clipbrd->window && !IsWindow(clipbrd->window) )
+        clipbrd->window = NULL;
 
     if ( !clipbrd->window )
         clipbrd->window = create_clipbrd_window();
@@ -2056,19 +2053,11 @@ static LRESULT CALLBACK clipbrd_wndproc(HWND hwnd, UINT message, WPARAM wparam, 
     ole_clipbrd *clipbrd;
 
     get_ole_clipbrd(&clipbrd);
-#ifdef __REACTOS__
-    if(clipbrd == NULL)
-        return DefWindowProcW(hwnd, message, wparam, lparam);
-#endif
 
     switch (message)
     {
     case WM_RENDERFORMAT:
     {
-#ifdef __REACTOS__
-    if (clipbrd->cached_enum)
-    {
-#endif
         UINT cf = wparam;
         ole_priv_data_entry *entry;
 
@@ -2079,9 +2068,7 @@ static LRESULT CALLBACK clipbrd_wndproc(HWND hwnd, UINT message, WPARAM wparam, 
 
         if(entry)
             render_format(clipbrd->src_data, &entry->fmtetc);
-#ifdef __REACTOS__
-    }
-#endif
+
         break;
     }
 

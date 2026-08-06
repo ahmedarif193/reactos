@@ -415,4 +415,10 @@ library BackgroundCopyManager
     interface IBackgroundCopyCallback;
 }
 
+#ifdef __REACTOS__
+#ifndef QMGRPRXY_EMBEDDED_BITS
 cpp_quote("#include \"bits1_5.h\"")
+#endif
+#else
+cpp_quote("#include \"bits1_5.h\"")
+#endif

@@ -20,6 +20,21 @@
 
 #include "precomp.h"
 
+extern "C"
+{
+BOOL WINAPI WineBrowseUI_DllMain(HINSTANCE hInstance, DWORD dwReason, LPVOID reserved);
+HRESULT WINAPI WineBrowseUI_DllCanUnloadNow(void);
+HRESULT WINAPI WineBrowseUI_DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv);
+HRESULT CDECL __wine_register_resources(void);
+HRESULT CDECL __wine_unregister_resources(void);
+}
+
+extern "C" HRESULT ReactOS_ACLShellSource_Constructor(IUnknown *outer, IUnknown **out)
+{
+    if (outer)
+        return CLASS_E_NOAGGREGATION;
+    return ShellObjectCreator<CACListISF>(IID_IUnknown, reinterpret_cast<void **>(out));
+}
 
 HRESULT CAddressBand_CreateInstance(REFIID riid, void **ppv)
 {
@@ -136,8 +151,6 @@ BEGIN_OBJECT_MAP(ObjectMap)
 OBJECT_ENTRY(CLSID_ACLCustomMRU, CACLCustomMRU)
 OBJECT_ENTRY(CLSID_AutoComplete, CAutoComplete)
 OBJECT_ENTRY(CLSID_ACLHistory, CACLHistory)
-OBJECT_ENTRY(CLSID_ACLMulti, CACLMulti)
-OBJECT_ENTRY(CLSID_ACListISF, CACListISF)
 OBJECT_ENTRY(CLSID_SH_AddressBand, CAddressBand)
 OBJECT_ENTRY(CLSID_AddressEditBox, CAddressEditBox)
 OBJECT_ENTRY(CLSID_BandProxy, CBandProxy)
@@ -152,7 +165,6 @@ OBJECT_ENTRY(CLSID_ShellTaskScheduler, CShellTaskScheduler)
 OBJECT_ENTRY(CLSID_TaskbarList, CTaskbarList)
 //OBJECT_ENTRY(CLSID_ExplorerBand, CExplorerBand) // Moved to shdocvw.dll
 OBJECT_ENTRY(CLSID_FileSearchBand, CSearchBar)
-OBJECT_ENTRY(CLSID_ProgressDialog, CProgressDialog)
 OBJECT_ENTRY(CLSID_ISFBand, CISFBand)
 OBJECT_ENTRY(CLSID_FindFolder, CFindFolder)
 OBJECT_ENTRY(CLSID_UserAssist, CUserAssist)
@@ -167,6 +179,9 @@ CAtlWinModule                               gWinModule;
 STDAPI_(BOOL) DllMain(HINSTANCE hInstance, DWORD dwReason, LPVOID fImpLoad)
 {
     TRACE("%p 0x%x %p\n", hInstance, dwReason, fImpLoad);
+
+    if (!WineBrowseUI_DllMain(hInstance, dwReason, fImpLoad))
+        return FALSE;
 
     if (dwReason == DLL_PROCESS_ATTACH)
     {
@@ -185,6 +200,8 @@ STDAPI_(BOOL) DllMain(HINSTANCE hInstance, DWORD dwReason, LPVOID fImpLoad)
  */
 STDAPI DllCanUnloadNow()
 {
+    if (WineBrowseUI_DllCanUnloadNow() != S_OK)
+        return S_FALSE;
     return gModule.DllCanUnloadNow();
 }
 
@@ -193,7 +210,10 @@ STDAPI DllCanUnloadNow()
  */
 STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv)
 {
-    return gModule.DllGetClassObject(rclsid, riid, ppv);
+    HRESULT hr = gModule.DllGetClassObject(rclsid, riid, ppv);
+    if (hr != CLASS_E_CLASSNOTAVAILABLE)
+        return hr;
+    return WineBrowseUI_DllGetClassObject(rclsid, riid, ppv);
 }
 
 /***********************************************************************
@@ -201,7 +221,8 @@ STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv)
  */
 STDAPI DllRegisterServer()
 {
-    return gModule.DllRegisterServer(FALSE);
+    HRESULT hr = gModule.DllRegisterServer(FALSE);
+    return FAILED(hr) ? hr : __wine_register_resources();
 }
 
 /***********************************************************************
@@ -209,7 +230,8 @@ STDAPI DllRegisterServer()
  */
 STDAPI DllUnregisterServer()
 {
-    return gModule.DllUnregisterServer(FALSE);
+    HRESULT hr = gModule.DllUnregisterServer(FALSE);
+    return FAILED(hr) ? hr : __wine_unregister_resources();
 }
 
 /***********************************************************************

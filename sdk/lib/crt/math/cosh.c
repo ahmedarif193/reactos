@@ -10,6 +10,8 @@
  */
 double cosh(double x)
 {
+    if (x != x) return x + x;
+
     const double ebig = exp(fabs(x));
     return (ebig + 1.0/ebig) / 2.0;
 }

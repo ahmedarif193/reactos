@@ -23,6 +23,15 @@ typedef struct _RTL_CONTEXT_EX
     RTL_CONTEXT_CHUNK XState;
 } RTL_CONTEXT_EX, *PRTL_CONTEXT_EX;
 
+#ifdef __REACTOS__
+ULONG64
+NTAPI
+RtlGetEnabledExtendedFeatures(ULONG64 FeatureMask)
+{
+    return SharedUserData->XState.EnabledFeatures & FeatureMask;
+}
+#endif
+
 static
 ULONG
 RtlpNextCompactedXStateOffset(ULONG Offset,

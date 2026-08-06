@@ -18,7 +18,7 @@ add_library(kernelbase_ros MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/kernelbase_ros.def)
 
 set_module_type(kernelbase_ros win32dll ENTRYPOINT DllMain 12)
-target_link_libraries(kernelbase_ros psapi_static kernelbase_static wine chkstk)
+target_link_libraries(kernelbase_ros psapi_static kernelbase_static wine chkstk uuid)
 add_importlibs(kernelbase_ros msvcrt advapi32 advapi32_vista kernel32 kernel32_vista ntdll ntdll_vista)
 add_dependencies(kernelbase_ros psdk errcodes)
 add_cd_file(TARGET kernelbase_ros DESTINATION reactos/system32 FOR all)

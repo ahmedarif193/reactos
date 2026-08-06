@@ -13,6 +13,9 @@
 #include <immintrin.h>
 //#include <ammintrin.h>
 #include <xmmintrin.h> // native headers: immintrin.h -> wmmintrin.h -> nmmintrin.h -> smmintrin.h -> tmmintrin.h -> pmmintrin.h -> emmintrin.h
+#if defined(__clang__)
+#include <x86intrin.h>
+#endif
 #endif /* _M_IX86 || _M_X64 */
 
 #if defined(_M_IX86)
@@ -90,13 +93,21 @@ void __cdecl _disable(void);
 void __cdecl _enable(void);
 unsigned char _interlockedbittestandreset(long volatile *, long);
 unsigned char _interlockedbittestandset(long volatile *, long);
+#ifndef _lrotl
 _Check_return_ unsigned long __cdecl _lrotl(_In_ unsigned long, _In_ int);
+#endif
+#ifndef _lrotr
 _Check_return_ unsigned long __cdecl _lrotr(_In_ unsigned long, _In_ int);
+#endif
+#ifndef _rotl
 _Check_return_ unsigned int __cdecl _rotl(_In_ unsigned int _Value, _In_ int _Shift);
+#endif
 _Check_return_ unsigned short __cdecl _rotl16(_In_ unsigned short _Value, _In_ unsigned char _Shift);
 _Check_return_ unsigned __int64 __cdecl _rotl64(_In_ unsigned __int64 _Value, _In_ int _Shift);
 _Check_return_ unsigned char __cdecl _rotl8(_In_ unsigned char _Value, _In_ unsigned char _Shift);
+#ifndef _rotr
 _Check_return_ unsigned int __cdecl _rotr(_In_ unsigned int _Value, _In_ int _Shift);
+#endif
 _Check_return_ unsigned short __cdecl _rotr16(_In_ unsigned short _Value, _In_ unsigned char _Shift);
 _Check_return_ unsigned __int64 __cdecl _rotr64(_In_ unsigned __int64 _Value, _In_ int _Shift);
 _Check_return_ unsigned char __cdecl _rotr8(_In_ unsigned char _Value, _In_ unsigned char _Shift);
@@ -136,7 +147,9 @@ void __outwordstring(unsigned short, unsigned short *, unsigned long);
 unsigned int __popcnt(unsigned int);
 unsigned short __popcnt16(unsigned short);
 unsigned __int64 __rdtsc(void);
+#ifndef __clang__
 unsigned __int64 __rdtscp(unsigned int *);
+#endif
 unsigned __int64 __readmsr(unsigned long);
 unsigned __int64 __readpmc(unsigned long);
 unsigned long __segmentlimit(unsigned long);
@@ -604,7 +617,9 @@ unsigned long __readcr3(void);
 unsigned long __readcr4(void);
 unsigned long __readcr8(void);
 unsigned int __readdr(unsigned int);
+#ifndef __clang__
 unsigned int __readeflags(void);
+#endif
 unsigned char __readfsbyte(unsigned long);
 unsigned long __readfsdword(unsigned long);
 unsigned short __readfsword(unsigned long);
@@ -613,7 +628,9 @@ void __writecr3(unsigned int);
 void __writecr4(unsigned int);
 void __writecr8(unsigned int);
 void __writedr(unsigned int, unsigned int);
+#ifndef __clang__
 void __writeeflags(unsigned int);
+#endif
 void __writefsbyte(unsigned long, unsigned char);
 void __writefsdword(unsigned long, unsigned long);
 void __writefsword(unsigned long, unsigned short);
@@ -747,7 +764,13 @@ unsigned char _BitScanForward64(unsigned long * _Index, unsigned __int64 _Mask);
 unsigned char _BitScanReverse64(unsigned long * _Index, unsigned __int64 _Mask);
 long _InterlockedAdd(_Interlocked_operand_ long volatile * _Addend, long _Value);
 __int64 _InterlockedAdd64(_Interlocked_operand_ __int64 volatile * _Addend, __int64 _Value);
+__int64 _InterlockedAdd64_nf(_Interlocked_operand_ __int64 volatile * _Addend, __int64 _Value);
 unsigned char _InterlockedCompareExchange128(_Interlocked_operand_ __int64 volatile * _Destination, __int64 _ExchangeHigh, __int64 _ExchangeLow, __int64 * _ComparandResult);
+unsigned char _InterlockedCompareExchange128_acq(_Interlocked_operand_ __int64 volatile * _Destination, __int64 _ExchangeHigh, __int64 _ExchangeLow, __int64 * _ComparandResult);
+unsigned char _InterlockedCompareExchange128_nf(_Interlocked_operand_ __int64 volatile * _Destination, __int64 _ExchangeHigh, __int64 _ExchangeLow, __int64 * _ComparandResult);
+unsigned char _InterlockedCompareExchange128_rel(_Interlocked_operand_ __int64 volatile * _Destination, __int64 _ExchangeHigh, __int64 _ExchangeLow, __int64 * _ComparandResult);
+long _InterlockedExchangeAdd_nf(_Interlocked_operand_ long volatile * _Addend, long _Value);
+long _InterlockedOr_nf(_Interlocked_operand_ long volatile * _Value, long _Mask);
 void __break(int);
 void __yield(void);
 
@@ -796,7 +819,9 @@ unsigned __int64 __readcr3(void);
 unsigned __int64 __readcr4(void);
 unsigned __int64 __readcr8(void);
 unsigned __int64 __readdr(unsigned int);
+#ifndef __clang__
 unsigned __int64 __readeflags(void);
+#endif
 unsigned char __readgsbyte(unsigned long);
 unsigned long __readgsdword(unsigned long);
 unsigned __int64 __readgsqword(unsigned long);
@@ -817,7 +842,9 @@ void __writecr3(unsigned __int64);
 void __writecr4(unsigned __int64);
 void __writecr8(unsigned __int64);
 void __writedr(unsigned int, unsigned __int64);
+#ifndef __clang__
 void __writeeflags(unsigned __int64);
+#endif
 void __writegsbyte(unsigned long, unsigned char);
 void __writegsdword(unsigned long, unsigned long);
 void __writegsqword(unsigned long, unsigned __int64);

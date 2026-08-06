@@ -10,6 +10,8 @@ include_directories(
 
 spec2def(msxml3.dll msxml3.spec ADD_IMPORTLIB NO_PRIVATE_WARNINGS)
 add_typelib(msxml3_v1.idl)
+add_message_headers(UNICODE RESOURCE_ONLY msxml.mc)
+add_idl_headers(saxreader_extensions_idlheader saxreader_extensions.idl)
 
 list(APPEND SOURCE
     attribute.c
@@ -22,6 +24,7 @@ list(APPEND SOURCE
     domdoc.c
     domimpl.c
     element.c
+    entity.c
     entityref.c
     httprequest.c
     main.c
@@ -30,9 +33,9 @@ list(APPEND SOURCE
     node.c
     nodelist.c
     nodemap.c
+    notation.c
     parseerror.c
     pi.c
-    reactos.c
     saxreader.c
     schema.c
     selection.c
@@ -40,19 +43,13 @@ list(APPEND SOURCE
     text.c
     xdr.c
     xmldoc.c
-    xmlelem.c
     xmlparser.c
-    xmlview.c)
-
-FLEX_TARGET(xslpattern_scanner xslpattern.l ${CMAKE_CURRENT_BINARY_DIR}/xslpattern.yy.c)
-BISON_TARGET(xslpattern_parser xslpattern.y ${CMAKE_CURRENT_BINARY_DIR}/xslpattern.tab.c COMPILE_FLAGS "-p xslpattern_")
-ADD_FLEX_BISON_DEPENDENCY(xslpattern_scanner xslpattern_parser)
+    xmlview.c
+    xpath.c)
 
 list(APPEND PCH_SKIP_SOURCE
     factory.c
-    uuid.c
-    ${FLEX_xslpattern_scanner_OUTPUTS}
-    ${BISON_xslpattern_parser_OUTPUTS})
+    uuid.c)
 
 list(APPEND msxml3_rc_deps
     ${CMAKE_CURRENT_SOURCE_DIR}/msxml3.manifest
@@ -60,18 +57,19 @@ list(APPEND msxml3_rc_deps
     ${CMAKE_CURRENT_SOURCE_DIR}/xmlparser.rgs
     ${CMAKE_CURRENT_BINARY_DIR}/msxml3_v1.tlb)
 
-set_source_files_properties(version.rc PROPERTIES OBJECT_DEPENDS "${msxml3_rc_deps}")
+set_source_files_properties(rsrc.rc PROPERTIES OBJECT_DEPENDS "${msxml3_rc_deps}")
 
 add_library(msxml3 MODULE
     ${SOURCE}
     ${PCH_SKIP_SOURCE}
-    version.rc
+    rsrc.rc
+    ${CMAKE_CURRENT_BINARY_DIR}/msxml.rc
     ${CMAKE_CURRENT_BINARY_DIR}/msxml3_stubs.c
     ${CMAKE_CURRENT_BINARY_DIR}/msxml3.def)
 
 add_idl_headers(xmlparser_idlheader xmlparser.idl)
 set_module_type(msxml3 win32dll)
-target_link_libraries(msxml3 libxml2 iconv-static uuid wine wine_dll_register zlib)
+target_link_libraries(msxml3 libxml2 iconv-static uuid wine wine_dll_register wine_dll_canunload zlib)
 
 if(MSVC)
     target_compile_options(msxml3 PRIVATE /FIwine/typeof.h /FImsvc.h)
@@ -89,8 +87,9 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     target_compile_options(msxml3 PRIVATE -Wno-incompatible-function-pointer-types)
 endif()
 
-add_importlibs(msxml3 libxslt urlmon ws2_32 shlwapi oleaut32 ole32 user32 msvcrt kernel32 ntdll)
-add_dependencies(msxml3 xmlparser_idlheader stdole2) # msxml3_v1.tlb needs stdole2.tlb
+add_importlibs(msxml3 libxslt urlmon ws2_32 shlwapi oleaut32 ole32 user32 advapi32 msvcrt kernel32 ntdll)
+# msxml3_v1.tlb needs stdole2.tlb.
+add_dependencies(msxml3 msxml_message_resources xmlparser_idlheader saxreader_extensions_idlheader stdole2)
 add_pch(msxml3 precomp.h "${PCH_SKIP_SOURCE}")
 add_cd_file(TARGET msxml3 DESTINATION reactos/system32 FOR all)
 set_wine_module_FIXME(msxml3) # CORE-5743: No ARRAY_SIZE and CONST_VTABLE

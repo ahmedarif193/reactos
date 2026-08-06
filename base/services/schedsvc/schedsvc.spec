@@ -1,1 +1,1 @@
-@ stdcall SchedServiceMain(long ptr)
+@ stdcall -private ServiceMain(long ptr)

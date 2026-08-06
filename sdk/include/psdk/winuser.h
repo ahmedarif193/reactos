@@ -251,6 +251,8 @@ extern "C" {
 #define WS_VISIBLE	0x10000000
 #define WS_VSCROLL	0x200000
 #define MDIS_ALLCHILDSTYLES	1
+
+#define WC_DIALOG MAKEINTATOM(0x8002)
 #define BS_3STATE	5
 #define BS_AUTO3STATE	6
 #define BS_AUTOCHECKBOX	3
@@ -269,6 +271,7 @@ extern "C" {
 #define BS_OWNERDRAW	0xb
 #define BS_TYPEMASK	0xFL
 #define BS_PUSHBUTTON	0
+#define BS_PUSHBOX	0xa
 #define BS_PUSHLIKE	4096
 #define BS_RADIOBUTTON 4
 #define BS_RIGHT	512
@@ -715,6 +718,7 @@ extern "C" {
 #define IDI_EXCLAMATION MAKEINTRESOURCE(32515)
 #define IDI_ASTERISK MAKEINTRESOURCE(32516)
 #define IDI_WINLOGO MAKEINTRESOURCE(32517)
+#define IDI_SHIELD MAKEINTRESOURCE(32518)
 #else
 #define IDI_APPLICATION 32512
 #define IDI_HAND 32513
@@ -3026,7 +3030,7 @@ typedef enum tagHANDEDNESS
 #define STATE_SYSTEM_ALERT_MEDIUM 0x08000000
 #define STATE_SYSTEM_ALERT_HIGH 0x10000000
 #define STATE_SYSTEM_PROTECTED 0x20000000
-#define STATE_SYSTEM_VALID 0x1fffffff
+#define STATE_SYSTEM_VALID 0x3fffffff
 
 #define USER_DEFAULT_SCREEN_DPI 96
 
@@ -4071,7 +4075,7 @@ typedef struct tagRAWKEYBOARD {
 typedef struct tagRAWHID {
 	DWORD dwSizeHid;
 	DWORD dwCount;
-	BYTE bRawData;
+	BYTE bRawData[1];
 } RAWHID,*PRAWHID,*LPRAWHID;
 
 typedef struct tagRAWINPUT {
@@ -4091,6 +4095,9 @@ typedef struct tagRAWINPUTDEVICE {
 } RAWINPUTDEVICE,*PRAWINPUTDEVICE,*LPRAWINPUTDEVICE;
 
 typedef const RAWINPUTDEVICE *PCRAWINPUTDEVICE;
+
+#define RAWINPUT_ALIGN(x) (((x) + sizeof(DWORD_PTR) - 1) & ~(sizeof(DWORD_PTR) - 1))
+#define NEXTRAWINPUTBLOCK(ptr) ((PRAWINPUT)RAWINPUT_ALIGN((ULONG_PTR)((PBYTE)(ptr) + (ptr)->header.dwSize)))
 
 typedef struct tagRAWINPUTDEVICELIST {
 	HANDLE hDevice;
@@ -4999,6 +5006,9 @@ HWND WINAPI GetNextDlgTabItem(_In_ HWND, _In_opt_ HWND, _In_ BOOL);
 #define GetNextWindow(h,c) GetWindow(h,c)
 HWND WINAPI GetOpenClipboardWindow(void);
 HWND WINAPI GetParent(_In_ HWND);
+#if (WINVER >= 0x0602)
+BOOL WINAPI GetPointerType(_In_ UINT32, _Out_ POINTER_INPUT_TYPE*);
+#endif
 
 int
 WINAPI
@@ -6164,6 +6174,53 @@ typedef MONITORINFOEXA MONITORINFOEX, *LPMONITORINFOEX;
 #endif /* _WINGDI_ && !NOGDI */
 #endif /* UNICODE */
 #endif /* RC_INVOKED */
+
+#ifdef __WINESRC__
+
+/* Uxtheme hook functions and struct. */
+enum SCROLL_HITTEST
+{
+    SCROLL_NOWHERE,
+    SCROLL_TOP_ARROW,
+    SCROLL_TOP_RECT,
+    SCROLL_THUMB,
+    SCROLL_BOTTOM_RECT,
+    SCROLL_BOTTOM_ARROW
+};
+
+struct SCROLL_TRACKING_INFO
+{
+    HWND win;
+    INT bar;
+    INT thumb_pos;
+    INT thumb_val;
+    BOOL vertical;
+    enum SCROLL_HITTEST hit_test;
+};
+
+enum NONCLIENT_BUTTON_TYPE
+{
+    MENU_CLOSE_BUTTON,
+    MENU_MIN_BUTTON,
+    MENU_MAX_BUTTON,
+    MENU_RESTORE_BUTTON,
+    MENU_HELP_BUTTON,
+};
+
+struct user_api_hook
+{
+    LRESULT (WINAPI *pDefDlgProc)(HWND, UINT, WPARAM, LPARAM, BOOL);
+    void (WINAPI *pNonClientButtonDraw)(HWND, HDC, enum NONCLIENT_BUTTON_TYPE, RECT, BOOL, BOOL);
+    void (WINAPI *pScrollBarDraw)(HWND, HDC, INT, enum SCROLL_HITTEST,
+                                  const struct SCROLL_TRACKING_INFO *, BOOL, BOOL, RECT *, UINT,
+                                  INT, INT, INT, BOOL);
+    LRESULT (WINAPI *pScrollBarWndProc)(HWND, UINT, WPARAM, LPARAM, BOOL);
+};
+
+WINUSERAPI BOOL WINAPI RegisterUserApiHook(const struct user_api_hook *new_hook,
+                                            struct user_api_hook *old_hook);
+WINUSERAPI void WINAPI UnregisterUserApiHook(void);
+#endif /* __WINESRC__ */
 
 #ifdef _WINE
 #include "reactos/undocuser.h"

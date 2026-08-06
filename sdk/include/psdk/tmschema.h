@@ -1,5 +1,24 @@
-#ifndef _TMSCHEMA_H
-#define _TMSCHEMA_H
+/*
+ * Copyright (C) 2003 Kevin Koltzau
+ * Copyright (C) 2004 Francois Gouget
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+ */
+
+#ifndef __WINE_TMSCHEMA_H
+#define __WINE_TMSCHEMA_H
 
 #include <schemadef.h>
 
@@ -169,8 +188,11 @@ BEGIN_TM_PROPS()
     TM_PROP(804, TMT, STATUSFONT,                 FONT)
     TM_PROP(805, TMT, MSGBOXFONT,                 FONT)
     TM_PROP(806, TMT, ICONTITLEFONT,              FONT)
+    TM_PROP(807, TMT, HEADING1FONT,               FONT)
+    TM_PROP(808, TMT, HEADING2FONT,               FONT)
+    TM_PROP(809, TMT, BODYFONT,                   FONT)
 #   define TMT_FIRSTFONT                          TMT_CAPTIONFONT
-#   define TMT_LASTFONT                           TMT_ICONTITLEFONT
+#   define TMT_LASTFONT                           TMT_BODYFONT
 
     /* Bool theme metric properties */
     TM_PROP(1001, TMT, FLATMENUS,                 BOOL)
@@ -300,6 +322,8 @@ BEGIN_TM_PROPS()
     TM_PROP(2422, TMT, MINDPI3,                   INT)
     TM_PROP(2423, TMT, MINDPI4,                   INT)
     TM_PROP(2424, TMT, MINDPI5,                   INT)
+    TM_PROP(2433, TMT, MINDPI6,                   INT)
+    TM_PROP(2434, TMT, MINDPI7,                   INT)
 
     /* Font rendering properties */
     TM_PROP(2601, TMT, GLYPHFONT,                 FONT)
@@ -313,6 +337,8 @@ BEGIN_TM_PROPS()
     TM_PROP(3006, TMT, IMAGEFILE5,                FILENAME)
     TM_PROP(3007, TMT, STOCKIMAGEFILE,            FILENAME)
     TM_PROP(3008, TMT, GLYPHIMAGEFILE,            FILENAME)
+    TM_PROP(3009, TMT, IMAGEFILE6,                FILENAME)
+    TM_PROP(3010, TMT, IMAGEFILE7,                FILENAME)
 
     /* String rendering properties */
     TM_PROP(3201, TMT, TEXT,                      STRING)
@@ -327,6 +353,8 @@ BEGIN_TM_PROPS()
     TM_PROP(3407, TMT, MINSIZE4,                  POSITION)
     TM_PROP(3408, TMT, MINSIZE5,                  POSITION)
     TM_PROP(3409, TMT, NORMALSIZE,                POSITION)
+    TM_PROP(3410, TMT, MINSIZE6,                  POSITION)
+    TM_PROP(3411, TMT, MINSIZE7,                  POSITION)
 
     /* Margin rendering properties */
     TM_PROP(3601, TMT, SIZINGMARGINS,             MARGINS)
@@ -392,6 +420,8 @@ BEGIN_TM_CLASS_PARTS(BUTTON)
     TM_PART(3, BP, CHECKBOX)
     TM_PART(4, BP, GROUPBOX)
     TM_PART(5, BP, USERBUTTON)
+    TM_PART(6, BP, COMMANDLINK)
+    TM_PART(7, BP, COMMANDLINKGLYPH)
 END_TM_CLASS_PARTS()
 
 /* BUTTON - PUSHBUTTON states */
@@ -435,6 +465,25 @@ END_TM_PART_STATES()
 BEGIN_TM_PART_STATES(GROUPBOX)
     TM_STATE(1, GBS, NORMAL)
     TM_STATE(2, GBS, DISABLED)
+END_TM_PART_STATES()
+
+/* BUTTON - COMMANDLINK states */
+BEGIN_TM_PART_STATES(COMMANDLINK)
+    TM_STATE(1, CMDLS, NORMAL)
+    TM_STATE(2, CMDLS, HOT)
+    TM_STATE(3, CMDLS, PRESSED)
+    TM_STATE(4, CMDLS, DISABLED)
+    TM_STATE(5, CMDLS, DEFAULTED)
+    TM_STATE(6, CMDLS, DEFAULTED_ANIMATING)
+END_TM_PART_STATES()
+
+/* BUTTON - COMMANDLINKGLYPH states */
+BEGIN_TM_PART_STATES(COMMANDLINKGLYPH)
+    TM_STATE(1, CMDLGS, NORMAL)
+    TM_STATE(2, CMDLGS, HOT)
+    TM_STATE(3, CMDLGS, PRESSED)
+    TM_STATE(4, CMDLGS, DISABLED)
+    TM_STATE(5, CMDLGS, DEFAULTED)
 END_TM_PART_STATES()
 
 /* CLOCK parts */
@@ -543,34 +592,6 @@ BEGIN_TM_PART_STATES(SPECIALGROUPEXPAND)
     TM_STATE(1, EBSGE, NORMAL)
     TM_STATE(2, EBSGE, HOT)
     TM_STATE(3, EBSGE, PRESSED)
-END_TM_PART_STATES()
-
-/* GLOBALS parts */
-BEGIN_TM_CLASS_PARTS(GLOBALS)
-    TM_PART(1, GP, BORDER)
-    TM_PART(2, GP, LINEHORZ)
-    TM_PART(3, GP, LINEVERT)
-END_TM_CLASS_PARTS()
-
-/* GLOBALS - BORDER states */
-BEGIN_TM_PART_STATES(BORDER)
-    TM_STATE(1, BSS, FLAT)
-    TM_STATE(2, BSS, RAISED)
-    TM_STATE(3, BSS, SUNKEN)
-END_TM_PART_STATES()
-
-/* GLOBALS - LINEHORZ states */
-BEGIN_TM_PART_STATES(LINEHORZ)
-    TM_STATE(1, LHS, FLAT)
-    TM_STATE(2, LHS, RAISED)
-    TM_STATE(3, LHS, SUNKEN)
-END_TM_PART_STATES()
-
-/* GLOBAL - LINEVERT states */
-BEGIN_TM_PART_STATES(LINEVERT)
-    TM_STATE(1, LVS, FLAT)
-    TM_STATE(2, LVS, RAISED)
-    TM_STATE(3, LVS, SUNKEN)
 END_TM_PART_STATES()
 
 /* HEADER parts */
@@ -1248,5 +1269,4 @@ BEGIN_TM_PART_STATES(VERTTHUMB)
 END_TM_PART_STATES()
 
 END_TM_SCHEMA(ThemeMgrSchema)
-
 #endif

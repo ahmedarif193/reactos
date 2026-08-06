@@ -41,9 +41,15 @@ endif()
 
 list(APPEND SOURCE_STATIC
     #console.c #looks like ReactOS console.c is nothing like wine.
+    debug.c
     locale.c
+    main.c
     path.c
+    registry.c
+    security.c
     string.c
+    thread.c
+    version.c
     )
 
 add_library(kernelbase_static ${SOURCE_STATIC})
@@ -60,4 +66,3 @@ else()
     target_compile_options(kernelbase_static PRIVATE -Wno-unused-variable)
     target_compile_options(kernelbase_static PRIVATE -Wno-unused-function)
 endif()
-

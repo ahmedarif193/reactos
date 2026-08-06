@@ -36,25 +36,6 @@
 
 #include "wine/test.h"
 
-#ifdef __REACTOS__
-/* FIXME: Removing these hacks requires fixing our incompatible wine/test.h and wine/debug.h. */
-#ifndef wine_dbg_sprintf
-static inline const char* wine_dbg_sprintf(const char* format, ...)
-{
-    static char buffer[256];
-    va_list args;
-    va_start(args, format);
-    vsnprintf(buffer, sizeof(buffer), format, args);
-    va_end(args);
-    return buffer;
-}
-#endif
-
-BOOL WINAPI GetWindowsAccountDomainSid(_In_ PSID  pSid, _Out_opt_ PSID  pDomainSid, _Inout_ DWORD *cbDomainSid);
-BOOL WINAPI AddAuditAccessAceEx(_Inout_ PACL pAcl, _In_ DWORD dwAceRevision, _In_ DWORD AceFlags, _In_ DWORD dwAccessMask, _In_ PSID pSid, _In_ BOOL bAuditSuccess, _In_ BOOL bAuditFailure);
-BOOL WINAPI EqualDomainSid(_In_ PSID pSid1, _In_ PSID pSid2, _Out_ BOOL* pfEqual);
-#endif
-
 #ifndef PROCESS_QUERY_LIMITED_INFORMATION
 #define PROCESS_QUERY_LIMITED_INFORMATION 0x1000
 #endif
@@ -181,10 +162,6 @@ static void test_owner_equal(HANDLE Handle, PSID expected, int line)
     res = GetSecurityDescriptorOwner(queriedSD, &owner, &owner_defaulted);
     ok_(__FILE__, line)(res, "GetSecurityDescriptorOwner failed with error %ld\n", GetLastError());
 
-#ifdef __REACTOS__
-    /* The call to EqualSid below crashes on WS03. */
-    if (GetNTVersion() > _WIN32_WINNT_WS03)
-#endif
     ok_(__FILE__, line)(EqualSid(owner, expected), "Owner SIDs are not equal %s != %s\n",
                         debugstr_sid(owner), debugstr_sid(expected));
     ok_(__FILE__, line)(!owner_defaulted, "Defaulted is true\n");
@@ -204,10 +181,6 @@ static void test_group_equal(HANDLE Handle, PSID expected, int line)
     res = GetSecurityDescriptorGroup(queriedSD, &group, &group_defaulted);
     ok_(__FILE__, line)(res, "GetSecurityDescriptorGroup failed with error %ld\n", GetLastError());
 
-#ifdef __REACTOS__
-    /* The call to EqualSid below crashes on WS03. */
-    if (GetNTVersion() > _WIN32_WINNT_WS03)
-#endif
     ok_(__FILE__, line)(EqualSid(group, expected), "Group SIDs are not equal %s != %s\n",
                         debugstr_sid(group), debugstr_sid(expected));
     ok_(__FILE__, line)(!group_defaulted, "Defaulted is true\n");
@@ -274,13 +247,8 @@ static void test_ConvertStringSidToSid(void)
         { "PA", "", 1 },
         { "RS", "", 1 },
         { "SA", "", 1 },
-#ifdef __REACTOS__
-        { "s-1-12-1", "S-1-12-1", 1 },         /* Crashes on ReactOS if not optional. ROSTESTS-418 */
-        { "S-0x1-0XC-0x1a", "S-1-12-26", 1 },  /* Crashes on ReactOS if not optional. ROSTESTS-418 */
-#else
         { "s-1-12-1", "S-1-12-1" },
         { "S-0x1-0XC-0x1a", "S-1-12-26" },
-#endif
     };
 
     const char noSubAuthStr[] = "S-1-5";
@@ -2534,10 +2502,8 @@ static void check_wellknown_name(const char* name, WELL_KNOWN_SID_TYPE result)
     ok(ret, "Failed to lookup account name %s\n",name);
     ok(sid_size != 0, "sid_size was zero\n");
 
-#ifndef __REACTOS__ // This crashes on WS03, Vista, Win7, Win8.1, and Win10 1607.
     ok(EqualSid(psid,wk_sid),"%s Sid %s fails to match well known sid %s!\n",
        name, debugstr_sid(psid), debugstr_sid(wk_sid));
-#endif
 
     ok(!lstrcmpA(account, wk_account), "Expected %s , got %s\n", account, wk_account);
     ok(!lstrcmpA(domain, wk_domain), "Expected %s, got %s\n", wk_domain, domain);
@@ -3010,10 +2976,6 @@ static void test_process_security(void)
     SecurityDescriptor->Control |= SE_DACL_PRESENT;
     CHECK_SET_SECURITY( event, DACL_SECURITY_INFORMATION, ERROR_SUCCESS );
 
-#ifdef __REACTOS__
-    /* This crashes on Vista, Win7, and Win8.1. */
-    if (GetNTVersion() < _WIN32_WINNT_VISTA || GetNTVersion() >= _WIN32_WINNT_WIN10) {
-#endif
     /* Set owner and group and dacl */
     res = SetSecurityDescriptorOwner(SecurityDescriptor, AdminSid, FALSE);
     ok(res, "SetSecurityDescriptorOwner failed with error %ld\n", GetLastError());
@@ -3043,9 +3005,6 @@ static void test_process_security(void)
     ok(res, "SetSecurityDescriptorDacl failed with error %ld\n", GetLastError());
     CHECK_SET_SECURITY( event, DACL_SECURITY_INFORMATION, ERROR_SUCCESS );
     test_group_equal( event, UsersSid, __LINE__ );
-#ifdef __REACTOS__
-    }
-#endif
 
     sprintf(buffer, "%s security test", myARGV[0]);
     memset(&startup, 0, sizeof(startup));
@@ -3087,11 +3046,9 @@ static void test_process_security(void)
                           STANDARD_RIGHTS_ALL | SPECIFIC_RIGHTS_ALL );
     TEST_GRANTED_ACCESS2( info.hThread, THREAD_ALL_ACCESS_NT4,
                           STANDARD_RIGHTS_ALL | SPECIFIC_RIGHTS_ALL );
-    wait_child_process( info.hProcess );
+    wait_child_process( &info );
 
     FreeSid(EveryoneSid);
-    CloseHandle( info.hProcess );
-    CloseHandle( info.hThread );
     CloseHandle( event );
     free(group);
     free(owner);
@@ -3123,22 +3080,16 @@ static void test_process_security_child(void)
     ret = DuplicateHandle( GetCurrentProcess(), handle, GetCurrentProcess(),
                            &handle1, PROCESS_ALL_ACCESS, TRUE, 0 );
     err = GetLastError();
-#ifdef __REACTOS__
-    ok((!ret && err == ERROR_ACCESS_DENIED) || broken(ret && err == 0xdeadbeef) /* Vista-Win10 1607 */, "duplicating handle should have failed "
-#else
     ok(!ret && err == ERROR_ACCESS_DENIED, "duplicating handle should have failed "
-#endif
        "with STATUS_ACCESS_DENIED, instead of err:%ld\n", err);
 
     CloseHandle( handle );
 
-#ifndef __REACTOS__ // Incorrect for WS03-Win10 1607
     /* These two should fail - they are denied by ACL */
     handle = OpenProcess( PROCESS_VM_READ, FALSE, GetCurrentProcessId() );
     ok(handle == NULL, "OpenProcess(PROCESS_VM_READ) should have failed\n");
     handle = OpenProcess( PROCESS_ALL_ACCESS, FALSE, GetCurrentProcessId() );
     ok(handle == NULL, "OpenProcess(PROCESS_ALL_ACCESS) should have failed\n");
-#endif
 
     /* Documented privilege elevation */
     ret = DuplicateHandle( GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(),
@@ -3168,10 +3119,8 @@ static void test_process_security_child(void)
     TEST_GRANTED_ACCESS( handle, THREAD_TERMINATE );
     CloseHandle( handle );
 
-#ifndef __REACTOS__ // Incorrect for WS03-Win10 1607
     handle = OpenThread( THREAD_SET_THREAD_TOKEN, FALSE, GetCurrentThreadId() );
     ok(handle == NULL, "OpenThread(THREAD_SET_THREAD_TOKEN) should have failed\n");
-#endif
 }
 
 static void test_impersonation_level(void)
@@ -3289,8 +3238,6 @@ static void test_SetEntriesInAclW(void)
     SID_IDENTIFIER_AUTHORITY SIDAuthWorld = { SECURITY_WORLD_SID_AUTHORITY };
     SID_IDENTIFIER_AUTHORITY SIDAuthNT = { SECURITY_NT_AUTHORITY };
     EXPLICIT_ACCESSW ExplicitAccess;
-    static const WCHAR wszEveryone[] = {'E','v','e','r','y','o','n','e',0};
-    static const WCHAR wszCurrentUser[] = { 'C','U','R','R','E','N','T','_','U','S','E','R','\0'};
 
     NewAcl = (PACL)0xdeadbeef;
     res = SetEntriesInAclW(0, NULL, NULL, &NewAcl);
@@ -3346,7 +3293,7 @@ static void test_SetEntriesInAclW(void)
     else
     {
         ExplicitAccess.Trustee.TrusteeForm = TRUSTEE_IS_NAME;
-        ExplicitAccess.Trustee.ptstrName = (LPWSTR)wszEveryone;
+        ExplicitAccess.Trustee.ptstrName = (WCHAR *)L"Everyone";
         res = SetEntriesInAclW(1, &ExplicitAccess, OldAcl, &NewAcl);
         ok(res == ERROR_SUCCESS, "SetEntriesInAclW failed: %lu\n", res);
         ok(NewAcl != NULL, "returned acl was NULL\n");
@@ -3376,7 +3323,7 @@ static void test_SetEntriesInAclW(void)
     }
 
     ExplicitAccess.Trustee.TrusteeForm = TRUSTEE_IS_NAME;
-    ExplicitAccess.Trustee.ptstrName = (LPWSTR)wszCurrentUser;
+    ExplicitAccess.Trustee.ptstrName = (WCHAR *)L"CURRENT_USER";
     res = SetEntriesInAclW(1, &ExplicitAccess, OldAcl, &NewAcl);
     ok(res == ERROR_SUCCESS, "SetEntriesInAclW failed: %lu\n", res);
     ok(NewAcl != NULL, "returned acl was NULL\n");
@@ -3403,8 +3350,6 @@ static void test_SetEntriesInAclA(void)
     SID_IDENTIFIER_AUTHORITY SIDAuthWorld = { SECURITY_WORLD_SID_AUTHORITY };
     SID_IDENTIFIER_AUTHORITY SIDAuthNT = { SECURITY_NT_AUTHORITY };
     EXPLICIT_ACCESSA ExplicitAccess;
-    static const CHAR szEveryone[] = {'E','v','e','r','y','o','n','e',0};
-    static const CHAR szCurrentUser[] = { 'C','U','R','R','E','N','T','_','U','S','E','R','\0'};
 
     NewAcl = (PACL)0xdeadbeef;
     res = SetEntriesInAclA(0, NULL, NULL, &NewAcl);
@@ -3466,7 +3411,7 @@ static void test_SetEntriesInAclA(void)
     else
     {
         ExplicitAccess.Trustee.TrusteeForm = TRUSTEE_IS_NAME;
-        ExplicitAccess.Trustee.ptstrName = (LPSTR)szEveryone;
+        ExplicitAccess.Trustee.ptstrName = (char*)"Everyone";
         res = SetEntriesInAclA(1, &ExplicitAccess, OldAcl, &NewAcl);
         ok(res == ERROR_SUCCESS, "SetEntriesInAclA failed: %lu\n", res);
         ok(NewAcl != NULL, "returned acl was NULL\n");
@@ -3496,7 +3441,7 @@ static void test_SetEntriesInAclA(void)
     }
 
     ExplicitAccess.Trustee.TrusteeForm = TRUSTEE_IS_NAME;
-    ExplicitAccess.Trustee.ptstrName = (LPSTR)szCurrentUser;
+    ExplicitAccess.Trustee.ptstrName = (char *)"CURRENT_USER";
     res = SetEntriesInAclA(1, &ExplicitAccess, OldAcl, &NewAcl);
     ok(res == ERROR_SUCCESS, "SetEntriesInAclA failed: %lu\n", res);
     ok(NewAcl != NULL, "returned acl was NULL\n");
@@ -3650,11 +3595,6 @@ static void test_CreateDirectoryA(void)
     ok(bret == TRUE, "CreateDirectoryA(%s) failed err=%ld\n", tmpdir, GetLastError());
     free(pDacl);
 
-#ifdef __REACTOS__
-    /* The rest of this test crashes on WS03, Vista, Win7, and Win8.1. */
-    if (GetNTVersion() < _WIN32_WINNT_WIN10)
-        goto done;
-#endif
     SetLastError(0xdeadbeef);
     error = GetNamedSecurityInfoA(tmpdir, SE_FILE_OBJECT,
                                   OWNER_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION, (PSID*)&owner,
@@ -3871,13 +3811,6 @@ static void test_GetNamedSecurityInfoA(void)
     bret = GetWindowsDirectoryA(windows_dir, MAX_PATH);
     ok(bret, "GetWindowsDirectory failed with error %ld\n", GetLastError());
 
-#ifdef __REACTOS__
-    /* The rest of this test crashes on WS03, Vista, Win7, and Win8.1 */
-    if (GetNTVersion() < _WIN32_WINNT_WIN10) {
-        free(user);
-        return;
-    }
-#endif
     SetLastError(0xdeadbeef);
     error = GetNamedSecurityInfoA(windows_dir, SE_FILE_OBJECT,
         OWNER_SECURITY_INFORMATION|GROUP_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION,
@@ -4336,6 +4269,16 @@ static void test_ConvertStringSecurityDescriptor(void)
         "D:P(A;;GRGW;;;BA)(A;;GRGW;;;S-1-5-21-0-0-0-1000)S:(ML;;NWNR;;;S-1-16-12288)", SDDL_REVISION_1, &pSD, NULL);
     ok(ret || broken(!ret && GetLastError() == ERROR_INVALID_DATATYPE) /* win2k */,
        "ConvertStringSecurityDescriptorToSecurityDescriptor failed with error %lu\n", GetLastError());
+    if (ret) LocalFree(pSD);
+
+    SetLastError(0xdeadbeef);
+    ret = ConvertStringSecurityDescriptorToSecurityDescriptorA(
+        "D: (D;OICI;GA;;;BG) (D;OICI;GA;;;AN) (A;OICI;GAGRGWGX;;;AU) (A;OICI;GA;;;BA)", SDDL_REVISION_1, &pSD, NULL);
+    ok(ret || broken(!ret && GetLastError() == ERROR_INVALID_DATATYPE) /* win2k */,
+       "ConvertStringSecurityDescriptorToSecurityDescriptor failed with error %lu\n", GetLastError());
+    acl = (ACL *)((char *)pSD + sizeof(SECURITY_DESCRIPTOR_RELATIVE));
+    ok(acl->AclSize == sizeof(*acl) * 12 /* 96 */, "got %u\n", acl->AclSize);
+    ok(acl->AceCount = 4, "got %u\n", acl->AceCount);
     if (ret) LocalFree(pSD);
 
     /* empty DACL */
@@ -4813,11 +4756,9 @@ static void test_GetSecurityInfo(void)
     {
         bret = GetAce(pDacl, 0, (VOID **)&ace);
         ok(bret, "Failed to get Current User ACE.\n");
-#ifndef __REACTOS__ // This crashes on WS03, Vista, Win7, and Win8.1.
         bret = EqualSid(&ace->SidStart, user_sid);
         todo_wine ok(bret, "Current User ACE (%s) != Current User SID (%s).\n",
                      debugstr_sid(&ace->SidStart), debugstr_sid(user_sid));
-#endif
         ok(((ACE_HEADER *)ace)->AceFlags == 0,
            "Current User ACE has unexpected flags (0x%x != 0x0)\n", ((ACE_HEADER *)ace)->AceFlags);
         ok(ace->Mask == 0x1f01ff, "Current User ACE has unexpected mask (0x%lx != 0x1f01ff)\n",
@@ -4827,10 +4768,8 @@ static void test_GetSecurityInfo(void)
     {
         bret = GetAce(pDacl, 1, (VOID **)&ace);
         ok(bret, "Failed to get Administators Group ACE.\n");
-#ifndef __REACTOS__ // This crashes on WS03, Vista, Win7, and Win8.1.
         bret = EqualSid(&ace->SidStart, admin_sid);
         todo_wine ok(bret, "Administators Group ACE (%s) != Administators Group SID (%s).\n", debugstr_sid(&ace->SidStart), debugstr_sid(admin_sid));
-#endif
         ok(((ACE_HEADER *)ace)->AceFlags == 0,
            "Administators Group ACE has unexpected flags (0x%x != 0x0)\n", ((ACE_HEADER *)ace)->AceFlags);
         ok(ace->Mask == 0x1f01ff, "Administators Group ACE has unexpected mask (0x%lx != 0x1f01ff)\n",
@@ -5118,7 +5057,6 @@ static void test_EqualSid(void)
         DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &sid2);
     ok(ret, "AllocateAndInitializeSid failed with error %ld\n", GetLastError());
 
-#ifndef __REACTOS__ // This crashes on WS03, Vista, Win7, and Win8.1.
     SetLastError(0xdeadbeef);
     ret = EqualSid(sid1, sid2);
     ok(ret, "Same sids should have been equal %s != %s\n",
@@ -5126,7 +5064,6 @@ static void test_EqualSid(void)
     ok(GetLastError() == ERROR_SUCCESS,
        "EqualSid should have set last error to ERROR_SUCCESS instead of %ld\n",
        GetLastError());
-#endif
 
     ((SID *)sid2)->Revision = 2;
     SetLastError(0xdeadbeef);
@@ -5609,9 +5546,7 @@ static void test_mutex_security(HANDLE token)
 
         SetLastError(0xdeadbeef);
         dup = OpenMutexA(0, FALSE, "WineTestMutex");
-        todo_wine
         ok(!dup, "OpenMutex should fail\n");
-        todo_wine
         ok(GetLastError() == ERROR_ACCESS_DENIED, "wrong error %lu\n", GetLastError());
     }
 
@@ -5666,9 +5601,7 @@ static void test_event_security(HANDLE token)
 
         SetLastError(0xdeadbeef);
         dup = OpenEventA(0, FALSE, "WineTestEvent");
-        todo_wine
         ok(!dup, "OpenEvent should fail\n");
-        todo_wine
         ok(GetLastError() == ERROR_ACCESS_DENIED, "wrong error %lu\n", GetLastError());
     }
 
@@ -6381,9 +6314,6 @@ static void test_TokenIntegrityLevel(void)
     ok(tml->Label.Attributes == (SE_GROUP_INTEGRITY | SE_GROUP_INTEGRITY_ENABLED),
         "got 0x%lx (expected 0x%x)\n", tml->Label.Attributes, (SE_GROUP_INTEGRITY | SE_GROUP_INTEGRITY_ENABLED));
 
-#ifdef __REACTOS__ // This crashes on Vista, Win7, and Win8.1.
-    if (GetNTVersion() < _WIN32_WINNT_VISTA || GetNTVersion() >= _WIN32_WINNT_WIN10)
-#endif
     ok(EqualSid(tml->Label.Sid, &medium_level) || EqualSid(tml->Label.Sid, &high_level),
        "got %s (expected %s or %s)\n", debugstr_sid(tml->Label.Sid),
        debugstr_sid(&medium_level), debugstr_sid(&high_level));
@@ -6827,8 +6757,7 @@ static void test_AddMandatoryAce(void)
 
 static void test_system_security_access(void)
 {
-    static const WCHAR testkeyW[] =
-        {'S','O','F','T','W','A','R','E','\\','W','i','n','e','\\','S','A','C','L','t','e','s','t',0};
+    static const WCHAR testkeyW[] = L"SOFTWARE\\Wine\\SACLtest";
     LONG res;
     HKEY hkey;
     PSECURITY_DESCRIPTOR sd;
@@ -6928,22 +6857,15 @@ static void test_system_security_access(void)
 
 static void test_GetWindowsAccountDomainSid(void)
 {
-#ifdef __REACTOS__
-    char *user, buffer1[SECURITY_MAX_SID_SIZE];
-    PSID domain_sid = (PSID *)&buffer1;
-#else
     char *user, buffer1[SECURITY_MAX_SID_SIZE], buffer2[SECURITY_MAX_SID_SIZE];
     SID_IDENTIFIER_AUTHORITY domain_ident = { SECURITY_NT_AUTHORITY };
     PSID domain_sid = (PSID *)&buffer1;
     PSID domain_sid2 = (PSID *)&buffer2;
-#endif
     DWORD sid_size;
     PSID user_sid;
     HANDLE token;
     BOOL bret = TRUE;
-#ifndef __REACTOS__
     int i;
-#endif
 
     if (!OpenThreadToken(GetCurrentThread(), TOKEN_READ, TRUE, &token))
     {
@@ -6998,13 +6920,11 @@ static void test_GetWindowsAccountDomainSid(void)
     bret = GetWindowsAccountDomainSid(user_sid, domain_sid, &sid_size);
     ok(bret, "GetWindowsAccountDomainSid failed with error %ld\n", GetLastError());
     ok(sid_size == GetSidLengthRequired(4), "expected size %ld, got %ld\n", GetSidLengthRequired(4), sid_size);
-#ifndef __REACTOS__ // This crashes on WS03, Vista, Win7, and Win8.1.
     InitializeSid(domain_sid2, &domain_ident, 4);
     for (i = 0; i < 4; i++)
         *GetSidSubAuthority(domain_sid2, i) = *GetSidSubAuthority(user_sid, i);
     ok(EqualSid(domain_sid, domain_sid2), "unexpected domain sid %s != %s\n",
        debugstr_sid(domain_sid), debugstr_sid(domain_sid2));
-#endif
 
     free(user);
 }
@@ -7247,11 +7167,7 @@ static void test_token_label(void)
     ok(ret, "GetKernelObjectSecurity failed with error %lu\n", GetLastError());
 
     InitializeAcl(sacl, sizeof(sacl_buffer), ACL_REVISION);
-#ifdef __REACTOS__
-    pAddMandatoryAce(sacl, ACL_REVISION, 0, SYSTEM_MANDATORY_LABEL_NO_WRITE_UP, &low_sid);
-#else
     AddMandatoryAce(sacl, ACL_REVISION, 0, SYSTEM_MANDATORY_LABEL_NO_WRITE_UP, &low_sid);
-#endif
     SetSecurityDescriptorSacl(sd, TRUE, sacl, FALSE);
 
     attr.lpSecurityDescriptor = sd;
@@ -7273,13 +7189,6 @@ static void test_token_label(void)
 
     /* Test the linked token. */
 
-#ifdef __REACTOS__
-    /* This test crashes on Vista and Win7 */
-    if (GetNTVersion() == _WIN32_WINNT_VISTA || GetNTVersion() == _WIN32_WINNT_WIN7) {
-        skip("Linked token tests crash on Vista and Win7.\n");
-    }
-    else {
-#endif
     ret = GetTokenInformation(token, TokenLinkedToken, &linked, sizeof(linked), &size);
     ok(ret, "Failed to get linked token, error %lu\n", GetLastError());
 
@@ -7287,9 +7196,6 @@ static void test_token_label(void)
     ok(level2 == level, "Expected level %#lx, got %#lx.\n", level, level2);
 
     CloseHandle(linked.LinkedToken);
-#ifdef __REACTOS__
-    }
-#endif
 
     CloseHandle(token);
 }
@@ -7472,9 +7378,7 @@ static void test_token_security_descriptor(void)
     sprintf(buffer, "%s security test_token_sd", myARGV[0]);
     ret = CreateProcessA(NULL, buffer, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &info);
     ok(ret, "CreateProcess failed with error %lu\n", GetLastError());
-    wait_child_process(info.hProcess);
-    CloseHandle(info.hProcess);
-    CloseHandle(info.hThread);
+    wait_child_process(&info);
 
     LocalFree(acl_child);
     free(sd2);
@@ -7568,7 +7472,6 @@ static void test_child_token_sd(void)
 
 static void test_GetExplicitEntriesFromAclW(void)
 {
-    static const WCHAR wszCurrentUser[] = { 'C','U','R','R','E','N','T','_','U','S','E','R','\0'};
     SID_IDENTIFIER_AUTHORITY SIDAuthWorld = { SECURITY_WORLD_SID_AUTHORITY };
     SID_IDENTIFIER_AUTHORITY SIDAuthNT = { SECURITY_NT_AUTHORITY };
     PSID everyone_sid = NULL, users_sid = NULL;
@@ -7650,7 +7553,7 @@ static void test_GetExplicitEntriesFromAclW(void)
     LocalFree(new_acl);
 
     access.Trustee.TrusteeForm = TRUSTEE_IS_NAME;
-    access.Trustee.ptstrName = (LPWSTR)wszCurrentUser;
+    access.Trustee.ptstrName = (WCHAR *)L"CURRENT_USER";
     res = SetEntriesInAclW(1, &access, old_acl, &new_acl);
     ok(res == ERROR_SUCCESS, "SetEntriesInAclW failed: %lu\n", res);
     ok(new_acl != NULL, "returned acl was NULL\n");
@@ -7700,11 +7603,6 @@ static void test_GetExplicitEntriesFromAclW(void)
     res = GetExplicitEntriesFromAclW(new_acl, &count, &access2);
     ok(res == ERROR_SUCCESS, "GetExplicitEntriesFromAclW failed with error %ld\n", GetLastError());
     ok(count == 2, "Expected count == 2, got %ld\n", count);
-#ifdef __REACTOS__
-    if (!access2) {
-        ok(FALSE, "FIXME: access2 should not be null!\n"); // Happens on ReactOS currently
-    } else {
-#endif
     ok(access2[0].grfAccessMode == GRANT_ACCESS, "Expected GRANT_ACCESS, got %d\n", access2[0].grfAccessMode);
     ok(access2[0].grfAccessPermissions == KEY_READ , "Expected KEY_READ, got %ld\n", access2[0].grfAccessPermissions);
     ok(EqualSid(access2[0].Trustee.ptstrName, users_sid), "Expected equal SIDs\n");
@@ -7712,9 +7610,6 @@ static void test_GetExplicitEntriesFromAclW(void)
     ok(access2[1].grfAccessPermissions == KEY_WRITE, "Expected KEY_WRITE, got %ld\n", access2[1].grfAccessPermissions);
     ok(EqualSid(access2[1].Trustee.ptstrName, everyone_sid), "Expected equal SIDs\n");
     LocalFree(access2);
-#ifdef __REACTOS__
-    }
-#endif
 
     FreeSid(users_sid);
     FreeSid(everyone_sid);
@@ -8049,16 +7944,9 @@ static void test_create_process_token(void)
 
     sprintf(cmdline, "%s security restricted 0", myARGV[0]);
 
-#ifdef __REACTOS__
-    /* This block creates test failures on WS03 */
-    if (GetNTVersion() > _WIN32_WINNT_WS03) {
-#endif
     ret = CreateProcessAsUserA(NULL, NULL, cmdline, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
     ok(ret, "got error %lu\n", GetLastError());
     join_process(&pi);
-#ifdef __REACTOS__
-    }
-#endif
 
     ret = CreateProcessAsUserA(GetCurrentProcessToken(), NULL, cmdline, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
     todo_wine ok(!ret, "expected failure\n");
@@ -8149,28 +8037,16 @@ static void test_pseudo_handle_security(void)
         HKEY_DYN_DATA,
     };
 
-#ifdef __REACTOS__
-    ret = GetKernelObjectSecurity(GetCurrentProcess(), OWNER_SECURITY_INFORMATION, sd, sizeof(buffer), &size);
-#else
     ret = GetKernelObjectSecurity(GetCurrentProcess(), OWNER_SECURITY_INFORMATION, &sd, sizeof(buffer), &size);
-#endif
     ok(ret, "got error %lu\n", GetLastError());
 
-#ifdef __REACTOS__
-    ret = GetKernelObjectSecurity(GetCurrentThread(), OWNER_SECURITY_INFORMATION, sd, sizeof(buffer), &size);
-#else
     ret = GetKernelObjectSecurity(GetCurrentThread(), OWNER_SECURITY_INFORMATION, &sd, sizeof(buffer), &size);
-#endif
     ok(ret, "got error %lu\n", GetLastError());
 
     for (i = 0; i < ARRAY_SIZE(keys); ++i)
     {
         SetLastError(0xdeadbeef);
-#ifdef __REACTOS__
-        ret = GetKernelObjectSecurity(keys[i], OWNER_SECURITY_INFORMATION, sd, sizeof(buffer), &size);
-#else
         ret = GetKernelObjectSecurity(keys[i], OWNER_SECURITY_INFORMATION, &sd, sizeof(buffer), &size);
-#endif
         ok(!ret, "key %p: expected failure\n", keys[i]);
         ok(GetLastError() == ERROR_INVALID_HANDLE, "key %p: got error %lu\n", keys[i], GetLastError());
 
@@ -8432,12 +8308,6 @@ static void test_elevation(void)
     HANDLE token, token2;
     BOOL ret;
 
-#ifdef __REACTOS__
-    if (GetNTVersion() <= _WIN32_WINNT_WS03) {
-        skip("test_elevation() is invalid for WS03\n");
-        return;
-    }
-#endif
     ret = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | READ_CONTROL | TOKEN_DUPLICATE
             | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_PRIVILEGES | TOKEN_ADJUST_DEFAULT, &token);
     ok(ret, "got error %lu\n", GetLastError());
@@ -8697,6 +8567,46 @@ static void test_elevation(void)
     CloseHandle(token);
 }
 
+static void test_admin_elevation(void)
+{
+    /* Tokens with elevation type TokenElevationTypeDefault should still come
+       back as elevated from a TokenElevation query if they belong to the admin
+       group. The owner of the desktop window should have such a token. */
+    DWORD tid, pid;
+    HANDLE hproc, htok;
+    TOKEN_ELEVATION_TYPE elevation_type;
+    TOKEN_ELEVATION elevation;
+    DWORD size;
+    BOOL ret;
+
+    tid = GetWindowThreadProcessId(GetDesktopWindow(), &pid);
+    ok(tid, "got error %lu\n", GetLastError());
+
+    hproc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!hproc)
+    {
+        skip("could not open process, error %lu\n", GetLastError());
+        return;
+    }
+
+    ret = OpenProcessToken(hproc, TOKEN_READ, &htok);
+    ok(ret, "got error %lu\n", GetLastError());
+
+    CloseHandle(hproc);
+
+    size = sizeof(elevation_type);
+    ret = GetTokenInformation(htok, TokenElevationType, &elevation_type, size, &size);
+    ok(ret, "got error %lu\n", GetLastError());
+    ok(elevation_type == TokenElevationTypeDefault, "unexpected elevation type %d\n", elevation_type);
+
+    size = sizeof(elevation);
+    ret = GetTokenInformation(htok, TokenElevation, &elevation, size, &size);
+    ok(ret, "got error %lu\n", GetLastError());
+    ok(elevation.TokenIsElevated, "expected token to be elevated\n");
+
+    CloseHandle(htok);
+}
+
 static void test_group_as_file_owner(void)
 {
     char sd_buffer[200], sid_buffer[100];
@@ -8883,6 +8793,7 @@ START_TEST(security)
     test_duplicate_token();
     test_GetKernelObjectSecurity();
     test_elevation();
+    test_admin_elevation();
     test_group_as_file_owner();
     test_IsValidSecurityDescriptor();
     test_window_security();

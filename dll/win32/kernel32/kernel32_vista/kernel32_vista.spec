@@ -38,6 +38,7 @@
 @ stdcall GetFileBandwidthReservation(ptr ptr ptr ptr ptr ptr)
 @ stdcall GetFileMUIInfo(long wstr ptr ptr)
 @ stdcall GetFileMUIPath(long wstr wstr ptr wstr ptr ptr)
+@ stdcall -ret64 -arch=i386,x86_64 GetEnabledXStateFeatures()
 @ stdcall GetFinalPathNameByHandleA(ptr str long long)
 @ stdcall GetFinalPathNameByHandleW(ptr wstr long long)
 @ stdcall GetLocaleInfoEx(wstr long ptr long)
@@ -66,4 +67,4 @@
 @ stdcall TrySubmitThreadpoolCallback(ptr ptr ptr)
 @ stdcall FreeLibraryWhenCallbackReturns(ptr ptr) ntdll_vista.TpCallbackUnloadDllOnCompletion
 @ stdcall GetProductInfo(long long long long ptr) ntdll_vista.RtlGetProductInfo
-@ stdcall -version=0x601+ GetLogicalProcessorInformationEx(long ptr ptr)
+@ stdcall GetLogicalProcessorInformationEx(long ptr ptr)

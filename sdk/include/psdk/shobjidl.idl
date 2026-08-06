@@ -369,8 +369,22 @@ interface IShellFolder2 : IShellFolder
 ]
 interface IParentAndItem : IUnknown
 {
-    HRESULT SetParentAndItem([in] PCIDLIST_ABSOLUTE pidlParent, [in] IShellFolder*psf, [in] PCUITEMID_CHILD pidlChild);
-    HRESULT GetParentAndItem([out, optional] PIDLIST_ABSOLUTE *ppidlParent, [out, optional] IShellFolder **ppsf, [out, optional] PITEMID_CHILD *ppidlChild);
+    HRESULT SetParentAndItem(
+        [in, unique] PCIDLIST_ABSOLUTE parent,
+        [in, unique] IShellFolder *folder,
+        [in] PCUITEMID_CHILD child);
+
+    [local]
+    HRESULT GetParentAndItem(
+        [out] PIDLIST_ABSOLUTE *parent,
+        [out] IShellFolder **folder,
+        [out] PITEMID_CHILD *child);
+
+    [call_as(GetParentAndItem)]
+    HRESULT RemoteGetParentAndItem(
+        [out] PIDLIST_ABSOLUTE *parent,
+        [out] IShellFolder **folder,
+        [out] PITEMID_CHILD *child);
 }
 
 /*****************************************************************************
@@ -493,6 +507,36 @@ interface IShellItem2 : IShellItem
     HRESULT GetBool(
         [in] REFPROPERTYKEY key,
         [out] BOOL *pf);
+}
+
+/*****************************************************************************
+ * IShellItemImageFactory interface
+ */
+[
+    object,
+    uuid(bcc18b79-ba16-442f-80c4-8a59c30c463b),
+    pointer_default(unique)
+]
+interface IShellItemImageFactory : IUnknown
+{
+    [v1_enum] enum _SIIGBF {
+        SIIGBF_RESIZETOFIT     = 0x00000000,
+        SIIGBF_BIGGERSIZEOK    = 0x00000001,
+        SIIGBF_MEMORYONLY      = 0x00000002,
+        SIIGBF_ICONONLY        = 0x00000004,
+        SIIGBF_THUMBNAILONLY   = 0x00000008,
+        SIIGBF_INCACHEONLY     = 0x00000010,
+        SIIGBF_CROPTOSQUARE    = 0x00000020,
+        SIIGBF_WIDETHUMBNAILS  = 0x00000040,
+        SIIGBF_ICONBACKGROUND  = 0x00000080,
+        SIIGBF_SCALEUP         = 0x00000100,
+    };
+    typedef int SIIGBF;
+
+    HRESULT GetImage(
+        [in] SIZE size,
+        [in] SIIGBF flags,
+        [out] HBITMAP *phbm);
 }
 
 /*****************************************************************************
@@ -637,6 +681,7 @@ cpp_quote("DEFINE_ENUM_FLAG_OPERATORS(DATAOBJ_GET_ITEM_FLAGS)")
 cpp_quote("HRESULT WINAPI SHGetNameFromIDList(PCIDLIST_ABSOLUTE pidl, SIGDN sigdnName, PWSTR *ppszName);")
 cpp_quote("HRESULT WINAPI SHCreateItemFromParsingName(PCWSTR pszPath, IBindCtx *pbc, REFIID riid, void **ppv);")
 cpp_quote("HRESULT WINAPI SHCreateItemFromIDList(PCIDLIST_ABSOLUTE pidl, REFIID riid, void **ppv);")
+cpp_quote("HRESULT WINAPI SHCreateItemFromRelativeName(IShellItem *parent, PCWSTR name, IBindCtx *pbc, REFIID riid, void **ppv);")
 cpp_quote("HRESULT WINAPI SHGetItemFromDataObject(IDataObject *pdtobj, DATAOBJ_GET_ITEM_FLAGS dwFlags, REFIID riid, void **ppv);")
 cpp_quote("HRESULT WINAPI SHGetIDListFromObject(IUnknown *punk, PIDLIST_ABSOLUTE *ppidl);")
 cpp_quote("HRESULT WINAPI SHGetItemFromObject(IUnknown *punk, REFIID riid, void **ppv);")
@@ -670,6 +715,7 @@ typedef char *LPVIEWSETTINGS;
 
 typedef enum
 {
+    FWF_NONE                = 0x00000000,
     FWF_AUTOARRANGE         = 0x00000001,
     FWF_ABBREVIATEDNAMES    = 0x00000002,
     FWF_SNAPTOGRID          = 0x00000004,
@@ -3667,7 +3713,8 @@ interface IFileDialog : IModalWindow
         FOS_DONTADDTORECENT     = 0x02000000,
         FOS_FORCESHOWHIDDEN     = 0x10000000,
         FOS_DEFAULTNOMINIMODE   = 0x20000000,
-        FOS_FORCEPREVIEWPANEON  = 0x40000000
+        FOS_FORCEPREVIEWPANEON  = 0x40000000,
+        FOS_SUPPORTSTREAMABLEITEMS = 0x80000000
     };
     typedef DWORD FILEOPENDIALOGOPTIONS;
 
@@ -4043,7 +4090,7 @@ interface IFileDialogControlEvents : IUnknown
 
     HRESULT OnCheckButtonToggled(
         [in] IFileDialogCustomize *pfdc,
-        [in] BOOL dwIDCtl,
+        [in] DWORD dwIDCtl,
         [in] BOOL bChecked);
 
     HRESULT OnControlActivating(
@@ -4269,6 +4316,45 @@ interface IApplicationAssociationRegistration : IUnknown
         [in, string] LPCWSTR pszAppRegistryName);
 
     HRESULT ClearUserAssociations();
+}
+
+[
+    object,
+    uuid(12337d35-94c6-48a0-bce7-6a9c69d4d600),
+    pointer_default(unique)
+]
+interface IApplicationDestinations : IUnknown
+{
+    HRESULT SetAppID(
+        [in] LPCWSTR pszAppID);
+
+    HRESULT RemoveDestination(
+        [in] IUnknown *punk);
+
+    HRESULT RemoveAllDestinations();
+}
+
+[
+    object,
+    uuid(3c594f9f-9f30-47a1-979a-c9e83d3d0a06),
+    pointer_default(unique)
+]
+interface IApplicationDocumentLists : IUnknown
+{
+    typedef [v1_enum] enum APPDOCLISTTYPE
+    {
+        ADLT_RECENT     = 0,
+        ADLT_FREQUENT   = 1,
+    } APPDOCLISTTYPE;
+
+    HRESULT SetAppID(
+        [in] LPCWSTR pszAppID);
+
+    HRESULT GetList(
+        [in] APPDOCLISTTYPE list_type,
+        [in] UINT item_count,
+        [in] REFIID riid,
+        [out, iid_is(riid)] void **ppv);
 }
 
 [
@@ -4572,6 +4658,22 @@ library ShellObjects
     }
 
     [
+        uuid(86c14003-4d6b-4ef3-a7b4-0506663b2e68)
+    ]
+    coclass ApplicationDestinations
+    {
+        interface IApplicationDestinations;
+    }
+
+    [
+        uuid(86bec222-30f2-47e0-9f25-60d11cd75c28)
+    ]
+    coclass ApplicationDocumentLists
+    {
+        interface IApplicationDocumentLists;
+    }
+
+    [
          uuid(00021401-0000-0000-c000-000000000046)
     ]
     coclass ShellLink
@@ -4623,6 +4725,14 @@ library ShellObjects
     coclass ApplicationActivationManager
     {
         interface IApplicationActivationManager;
+    }
+
+    [
+        uuid(3ad05575-8857-4850-9277-11b85bdb8e09)
+    ]
+    coclass FileOperation
+    {
+        interface IFileOperation;
     }
 
 #ifdef __REACTOS__
@@ -4787,6 +4897,20 @@ interface IFileOperation : IUnknown
      HRESULT GetAnyOperationsAborted(
          [out] BOOL *pfAnyOperationsAborted);
 };
+
+[
+    object,
+    uuid(2c1c7e2e-2d0e-4059-831e-1e6f82335c2e),
+    pointer_default(unique)
+]
+interface IEnumObjects : IUnknown
+{
+    [local] HRESULT Next([in] ULONG celt, [in] REFIID riid, [out, iid_is(riid)] void **rgelt, [out, optional] ULONG *pceltFetched);
+    [call_as(Next)] HRESULT RemoteNext([in] ULONG  celt, [in] REFIID riid, [out, size_is(celt), length_is(*pceltFetched), iid_is(riid)] void **rgelt, [out] ULONG *pceltFetched);
+    HRESULT Skip([in] ULONG celt);
+    HRESULT Reset();
+    HRESULT Clone([out] IEnumObjects **ppenum);
+}
 
 [
     uuid(6CCB7BE0-6807-11d0-B810-00C04FD706EC),

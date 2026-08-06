@@ -26,9 +26,9 @@
 #include <lzexpand.h>
 #include <setupapi.h>
 
-static int myprintf(const char* format, ...)
+static int WINAPIV myprintf(const char* format, ...)
 {
-    va_list     va;
+    va_list va;
     char        tmp[8192];
     DWORD       w = 0;
     int         len;
@@ -89,7 +89,7 @@ static BOOL option_equal(LPCSTR str1, LPCSTR str2)
     return !lstrcmpA( str1 + 1, str2 );
 }
 
-int main(int argc, char *argv[])
+int __cdecl main(int argc, char *argv[])
 {
     int ret = 0;
     char infile[MAX_PATH], outfile[MAX_PATH], actual_name[MAX_PATH];

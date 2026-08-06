@@ -1,6 +1,6 @@
 
 add_definitions(-D__WINESRC__)
-spec2def(dwmapi.dll dwmapi.spec)
+spec2def(dwmapi.dll dwmapi.spec ADD_IMPORTLIB)
 
 list(APPEND SOURCE
      dwmapi_main.c)
@@ -13,5 +13,5 @@ add_library(dwmapi MODULE
 
 set_module_type(dwmapi win32dll UNICODE ENTRYPOINT 0)
 target_link_libraries(dwmapi uuid wine)
-add_importlibs(dwmapi user32 kernel32 ntdll)
+add_importlibs(dwmapi user32_vista user32 kernel32 ntdll)
 add_cd_file(TARGET dwmapi DESTINATION reactos/system32 FOR all)

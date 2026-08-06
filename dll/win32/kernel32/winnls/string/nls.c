@@ -47,6 +47,17 @@ static CODEPAGE_ENTRY AnsiCodePage;
 static CODEPAGE_ENTRY OemCodePage;
 static RTL_CRITICAL_SECTION CodePageListLock;
 
+static VOID
+ApplyCodePageLeadByteMetadata(PCPTABLEINFO CodePageTable)
+{
+    static const UCHAR JohabLeadBytes[MAXIMUM_LEADBYTES] =
+        {0x81, 0xd3, 0xd8, 0xde, 0xe0, 0xf9};
+
+    /* The Johab NLS mappings start at 0x84, but its structural lead-byte range starts at 0x81. */
+    if (CodePageTable->CodePage == 1361)
+        RtlCopyMemory(CodePageTable->LeadByte, JohabLeadBytes, sizeof(JohabLeadBytes));
+}
+
 /* FORWARD DECLARATIONS *******************************************************/
 
 BOOL WINAPI
@@ -196,6 +207,7 @@ NlsInit(VOID)
 
     RtlInitCodePageTable((PUSHORT)AnsiCodePage.SectionMapping,
                          &AnsiCodePage.CodePageTable);
+    ApplyCodePageLeadByteMetadata(&AnsiCodePage.CodePageTable);
     AnsiCodePage.CodePage = AnsiCodePage.CodePageTable.CodePage;
 
     InsertTailList(&CodePageListHead, &AnsiCodePage.Entry);
@@ -206,6 +218,7 @@ NlsInit(VOID)
 
     RtlInitCodePageTable((PUSHORT)OemCodePage.SectionMapping,
                          &OemCodePage.CodePageTable);
+    ApplyCodePageLeadByteMetadata(&OemCodePage.CodePageTable);
     OemCodePage.CodePage = OemCodePage.CodePageTable.CodePage;
     InsertTailList(&CodePageListHead, &OemCodePage.Entry);
 
@@ -471,6 +484,7 @@ IntGetCodePageEntry(UINT CodePage)
     CodePageEntry->SectionMapping = SectionMapping;
 
     RtlInitCodePageTable((PUSHORT)SectionMapping, &CodePageEntry->CodePageTable);
+    ApplyCodePageLeadByteMetadata(&CodePageEntry->CodePageTable);
 
     /* Insert the new entry to list and unlock. Uff. */
     InsertTailList(&CodePageListHead, &CodePageEntry->Entry);

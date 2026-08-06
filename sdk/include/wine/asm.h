@@ -55,6 +55,25 @@
 # define __ASM_FUNC_TYPE(name) ".type " name ",@function"
 #endif
 
+#if defined(__WINE_PE_BUILD) || defined(_WIN32)
+# define __ASM_GLOBL(name) ".globl " name "\n" name ":"
+# define __ASM_FUNC_SIZE(name) ""
+#elif defined(__APPLE__)
+# define __ASM_GLOBL(name) ".globl " name "\n\t.private_extern " name "\n" name ":"
+# define __ASM_FUNC_SIZE(name) ""
+#else
+# define __ASM_GLOBL(name) ".globl " name "\n\t.hidden " name "\n" name ":"
+# define __ASM_FUNC_SIZE(name) ".size " name ",.-" name
+#endif
+
+#ifdef __arm64ec_x64__
+# define __ASM_FUNC_SECTION(name) ".section .text,\"xr\",discard," name
+# define __ASM_FUNC_ALIGN ".balign 16"
+#else
+# define __ASM_FUNC_SECTION(name) ".text"
+# define __ASM_FUNC_ALIGN ".align 4"
+#endif
+
 #if !defined(__GNUC__) && !defined(__clang__)
 # define __ASM_BLOCK_BEGIN(name) void __asm_dummy_##name(void) {
 # define __ASM_BLOCK_END         }
@@ -68,50 +87,52 @@
 # define __ASM_DEFINE_FUNC(name,code)
 #elif defined(__GNUC__)
 # define __ASM_DEFINE_FUNC(name,code) \
-    asm(".text\n\t.align 4\n\t.globl " name "\n\t" __ASM_FUNC_TYPE(name) __ASM_SEH("\n\t.seh_proc " name) "\n" name ":\n\t" \
-        __ASM_CFI(".cfi_startproc\n\t") code __ASM_CFI("\n\t.cfi_endproc") __ASM_SEH("\n\t.seh_endproc") );
+    asm(__ASM_FUNC_SECTION(name) "\n\t" __ASM_FUNC_ALIGN "\n\t" __ASM_FUNC_TYPE(name) \
+        __ASM_SEH("\n\t.seh_proc " name) "\n\t" __ASM_GLOBL(name) "\n\t" \
+        __ASM_CFI(".cfi_startproc\n\t") code __ASM_CFI("\n\t.cfi_endproc") \
+        __ASM_SEH("\n\t.seh_endproc") "\n\t" __ASM_FUNC_SIZE(name));
 #else
 # define __ASM_DEFINE_FUNC(name,code) void __asm_dummy_##__LINE__(void) { \
-    asm(".text\n\t.align 4\n\t.globl " name "\n\t" __ASM_FUNC_TYPE(name) __ASM_SEH("\n\t.seh_proc " name) "\n" name ":\n\t" \
-        __ASM_CFI(".cfi_startproc\n\t") code __ASM_CFI("\n\t.cfi_endproc") __ASM_SEH("\n\t.seh_endproc") ); }
+    asm(__ASM_FUNC_SECTION(name) "\n\t" __ASM_FUNC_ALIGN "\n\t" __ASM_FUNC_TYPE(name) \
+        __ASM_SEH("\n\t.seh_proc " name) "\n\t" __ASM_GLOBL(name) "\n\t" \
+        __ASM_CFI(".cfi_startproc\n\t") code __ASM_CFI("\n\t.cfi_endproc") \
+        __ASM_SEH("\n\t.seh_endproc") "\n\t" __ASM_FUNC_SIZE(name)); }
 #endif
 
 #define __ASM_GLOBAL_FUNC(name,code) __ASM_DEFINE_FUNC(__ASM_NAME(#name),code)
+
+#ifdef _WIN64
+#define __ASM_DEFINE_POINTER(sec,decl,value)  \
+    __ASM_BLOCK_BEGIN(__LINE__) \
+    asm( sec "\n\t" \
+         ".balign 8\n\t" \
+         decl \
+         ".quad " value "\n\t" \
+         ".text" ); \
+    __ASM_BLOCK_END
+#else
+#define __ASM_DEFINE_POINTER(sec,decl,value)  \
+    __ASM_BLOCK_BEGIN(__LINE__) \
+    asm( sec "\n\t" \
+         ".balign 4\n\t" \
+         decl \
+         ".long " value "\n\t" \
+         ".text" ); \
+    __ASM_BLOCK_END
+#endif
+
+#define __ASM_GLOBAL_POINTER(name,value) __ASM_DEFINE_POINTER(".data",__ASM_GLOBL(name) "\n\t",value)
+#define __ASM_SECTION_POINTER(sec,value) __ASM_DEFINE_POINTER(sec,"",__ASM_NAME(#value))
 
 /* import variables */
 
 #ifdef __WINE_PE_BUILD
 # ifdef __arm64ec__
 #  define __ASM_DEFINE_IMPORT(name) \
-    asm( ".data\n\t" \
-         ".balign 8\n\t" \
-         ".globl __imp_" name "\n" \
-         "__imp_" name ":\n\t" \
-         ".quad \"#" name "\"\n\t" \
-         ".globl __imp_aux_" name "\n" \
-         "__imp_aux_" name ":\n\t" \
-         ".quad " name "\n\t" \
-         ".text" );
-# elif defined(_WIN64)
-#  define __ASM_DEFINE_IMPORT(name) \
-    __ASM_BLOCK_BEGIN(__LINE__) \
-    asm( ".data\n\t" \
-         ".balign 8\n\t" \
-         ".globl __imp_" name "\n" \
-         "__imp_" name ":\n\t" \
-         ".quad " name "\n\t" \
-         ".text"); \
-    __ASM_BLOCK_END
+     __ASM_GLOBAL_POINTER("__imp_" name, "\"#" name "\"") \
+     __ASM_GLOBAL_POINTER("__imp_aux_" name, name)
 # else
-#  define __ASM_DEFINE_IMPORT(name) \
-    __ASM_BLOCK_BEGIN(__LINE__) \
-    asm( ".data\n\t" \
-         ".balign 4\n\t" \
-         ".globl __imp_" name "\n" \
-         "__imp_" name ":\n\t" \
-         ".long " name "\n\t" \
-         ".text"); \
-    __ASM_BLOCK_END
+#  define __ASM_DEFINE_IMPORT(name) __ASM_GLOBAL_POINTER("__imp_" name, name)
 # endif
 # define __ASM_GLOBAL_IMPORT(name) __ASM_DEFINE_IMPORT(__ASM_NAME(#name))
 #else

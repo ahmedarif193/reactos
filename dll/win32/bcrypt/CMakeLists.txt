@@ -1,6 +1,4 @@
 
-include_directories(
-    ${REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/mbedtls)
 spec2def(bcrypt.dll bcrypt.spec ADD_IMPORTLIB)
 
 list(APPEND SOURCE
@@ -11,7 +9,8 @@ list(APPEND SOURCE
 
 add_library(bcrypt MODULE ${SOURCE})
 set_module_type(bcrypt win32dll)
-target_link_libraries(bcrypt wine)
-add_importlibs(bcrypt mbedtls advapi32 msvcrt kernel32 ntdll)
+target_compile_definitions(bcrypt PRIVATE __WINESRC__ __WINE_PE_BUILD)
+target_link_libraries(bcrypt wine symcrypt)
+add_importlibs(bcrypt advapi32 msvcrt kernel32_vista kernel32 ntdll)
 add_cd_file(TARGET bcrypt DESTINATION reactos/system32 FOR all)
 set_wine_module(bcrypt)

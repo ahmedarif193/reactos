@@ -699,11 +699,9 @@ static void test_fputc( void )
 
 static void test_flsbuf( void )
 {
+  int bufmode, ret, c, pos;
   char* tempf;
   FILE *tempfh;
-  int  c;
-  int  ret;
-  int  bufmode;
   static const int bufmodes[] = {_IOFBF,_IONBF};
 
   tempf=_tempnam(".","wne");
@@ -758,6 +756,16 @@ static void test_flsbuf( void )
   ok(c == 'Q', "first byte should be 'Q'\n");
   c = fgetc(tempfh);
   ok(c == EOF, "there should only be one byte\n");
+  fclose(tempfh);
+
+  tempfh = fopen(tempf,"ab");
+  ok(tempfh != NULL, "fopen failed\n");
+  pos = _lseek(_fileno(tempfh), 0, SEEK_CUR);
+  ok(!pos, "incorrect stream position: %d\n", pos);
+  ret = _flsbuf(0, tempfh);
+  ok(!ret, "_flsbuf returned %x\n", ret);
+  pos = _lseek(_fileno(tempfh), 0, SEEK_CUR);
+  ok(pos == 1, "incorrect stream position: %d\n", pos);
   fclose(tempfh);
 
   unlink(tempf);
@@ -1718,7 +1726,7 @@ static void test_stdout_handle( STARTUPINFOA *startup, char *cmdline, HANDLE hst
 
     CreateProcessA( NULL, cmdline, NULL, NULL, TRUE,
                     CREATE_DEFAULT_ERROR_MODE | NORMAL_PRIORITY_CLASS, NULL, NULL, startup, &proc );
-    wait_child_process( proc.hProcess );
+    wait_child_process( &proc );
 
     data = read_file( hErrorFile );
     if (expect_stdout)
@@ -1802,14 +1810,6 @@ static void test_file_inherit( const char* selfname )
     arg_v[2] = "inherit";
     arg_v[3] = buffer; sprintf(buffer, "%d", fd);
     arg_v[4] = 0;
-#ifdef __REACTOS__
-    if (is_reactos())
-    {
-        skip("Skipping test_file_inherit pipe test, because it hangs on ReactOS\n");
-    }
-    else
-    {
-#endif
     ret = _spawnvp(_P_WAIT, selfname, arg_v);
     ok(ret == 0, "_spawnvp returned %Id, errno %d\n", ret, errno);
     ret = tell(fd);
@@ -1823,9 +1823,6 @@ static void test_file_inherit( const char* selfname )
     CloseHandle(thread_handle);
     close(pipefds[0]);
     close(pipefds[1]);
-#ifdef __REACTOS__
-    }
-#endif
     /* make file handle inheritable */
     sa.nLength = sizeof(sa);
     sa.lpSecurityDescriptor = NULL;
@@ -2008,7 +2005,7 @@ static void test_invalid_stdin( const char* selfname )
     sprintf(cmdline, "%s file stdin", selfname);
     CreateProcessA(NULL, cmdline, NULL, NULL, TRUE,
             CREATE_DEFAULT_ERROR_MODE|NORMAL_PRIORITY_CLASS, NULL, NULL, &startup, &proc);
-    wait_child_process(proc.hProcess);
+    wait_child_process(&proc);
 
     ret = RegCloseKey(key);
     ok(!ret, "RegCloseKey failed: %lx\n", ret);
@@ -2182,6 +2179,14 @@ static void test_fopen_s( void )
             ubuff[0], ubuff[1]);
     fclose(file);
 
+    ret = p_fopen_s(&file, name, "rb,ccs=unicode");
+    ok(ret == 0, "fopen_s failed with %d\n", ret);
+    len = fread(buff, 1, 2, file);
+    ok(len == 2, "len = %d\n", len);
+    ok(ubuff[0]==0xff && ubuff[1]==0xfe, "buff[0]=%02x, buff[1]=%02x\n",
+            ubuff[0], ubuff[1]);
+    fclose(file);
+
     ret = p_fopen_s(&file, name, "r,ccs=utf-16le");
     ok(ret == 0, "fopen_s failed with %d\n", ret);
     len = fread(buff, 1, 2, file);
@@ -2221,6 +2226,20 @@ static void test_fopen_s( void )
     ok(ubuff[0]==0xef && ubuff[1]==0xbb && ubuff[2]==0xbf,
             "buff[0]=%02x, buff[1]=%02x, buff[2]=%02x\n",
             ubuff[0], ubuff[1], ubuff[2]);
+    fclose(file);
+
+    ret = p_fopen_s(&file, name, "wb, ccs=utf-8");
+    ok(ret == 0, "fopen_s failed with %d\n", ret);
+    fwrite("test", 1, 4, file);
+    fputwc('a', file);
+    fputwc('b', file);
+    fclose(file);
+
+    ret = p_fopen_s(&file, name, "rb");
+    ok(ret == 0, "fopen_s failed with %d\n", ret);
+    len = fread(buff, 1, ARRAY_SIZE(buff) - 1, file);
+    ok(len == 8, "len = %d\n", len);
+    ok(!memcmp(buff, "testa\0b", 8), "got %s\n", wine_dbgstr_an(buff, len));
     fclose(file);
 
     /* test initial FILE values */
@@ -2523,13 +2542,6 @@ static void test_pipes(const char* selfname)
     char expected[4096];
     int r;
     int i;
-#ifdef __REACTOS__
-    if (is_reactos())
-    {
-        win_skip("Skipping test_pipes, because it hangs on ReactOS\n");
-        return;
-    }
-#endif
     /* Test reading from a pipe with read() */
     if (_pipe(pipes, 1024, O_BINARY) < 0)
     {

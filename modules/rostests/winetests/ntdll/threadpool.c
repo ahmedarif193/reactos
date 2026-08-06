@@ -587,9 +587,7 @@ static void test_tp_simple(void)
     IMAGE_NT_HEADERS *nt = RtlImageNtHeader( NtCurrentTeb()->Peb->ImageBaseAddress );
     TP_POOL_STACK_INFORMATION stack_info;
     TP_CALLBACK_ENVIRON environment;
-#if !defined(__REACTOS__) || _WIN32_WINNT >= _WIN32_WINNT_WIN7
     TP_CALLBACK_ENVIRON_V3 environment3;
-#endif
     TP_CLEANUP_GROUP *group;
     HANDLE semaphore;
     NTSTATUS status;
@@ -626,7 +624,6 @@ static void test_tp_simple(void)
     ok(result == WAIT_OBJECT_0, "WaitForSingleObject returned %lu\n", result);
 
     /* test with environment version 3 */
-#if !defined(__REACTOS__) || _WIN32_WINNT >= _WIN32_WINNT_WIN7
     memset(&environment3, 0, sizeof(environment3));
     environment3.Version = 3;
     environment3.Pool = pool;
@@ -645,7 +642,6 @@ static void test_tp_simple(void)
     status = pTpSimpleTryPost(simple_cb, semaphore, (TP_CALLBACK_ENVIRON *)&environment3);
     ok(status == STATUS_INVALID_PARAMETER || broken(!status) /* Vista does not support priorities */,
             "TpSimpleTryPost failed with status %lx\n", status);
-#endif
 
     /* test with invalid version number */
     memset(&environment, 0, sizeof(environment));
@@ -693,14 +689,6 @@ static void test_tp_simple(void)
     pTpReleaseCleanupGroupMembers(group, TRUE, NULL);
     ok(userdata < 100, "expected userdata < 100, got %lu\n", userdata);
 
-#ifdef __REACTOS__
-    if (!pTpQueryPoolStackInformation)
-    {
-        skip("TpQueryPoolStackInformation not available\n");
-    }
-    else
-    {
-#endif
     /* test querying and setting the stack size */
     status = pTpQueryPoolStackInformation(pool, &stack_info);
     ok(!status, "TpQueryPoolStackInformation failed: %lx\n", status);
@@ -716,9 +704,6 @@ static void test_tp_simple(void)
     ok(!status, "TpQueryPoolStackInformation failed: %lx\n", status);
     ok(stack_info.StackReserve == 1, "expected 1 byte StackReserve, got %ld\n", (ULONG)stack_info.StackReserve);
     ok(stack_info.StackCommit == 1, "expected 1 byte StackCommit, got %ld\n", (ULONG)stack_info.StackCommit);
-#ifdef __REACTOS__
-    }
-#endif
 
     /* cleanup */
     pTpReleaseCleanupGroup(group);
@@ -1930,14 +1915,6 @@ static void test_tp_multi_wait(void)
     DWORD result;
     int i;
 
-#ifdef __REACTOS__
-    if (pTpSetPoolStackInformation == NULL)
-    {
-        win_skip("TpSetPoolStackInformation not available\n");
-        return;
-    }
-#endif
-
     semaphore = CreateSemaphoreW(NULL, 0, 512, NULL);
     ok(semaphore != NULL, "failed to create semaphore\n");
     multi_wait_info.semaphore = semaphore;
@@ -2061,11 +2038,11 @@ static DWORD WINAPI io_wait_thread(void *arg)
 static void test_tp_io(void)
 {
     TP_CALLBACK_ENVIRON environment = {.Version = 1};
-    OVERLAPPED ovl = {0}, ovl2 = {0};
+    OVERLAPPED ovl = {}, ovl2 = {};
     HANDLE client, server, thread;
     struct io_cb_ctx userdata;
+    const char out[1] = "";
     char in[1], in2[1];
-    const char out[1];
     NTSTATUS status;
     DWORD ret_size;
     TP_POOL *pool;
@@ -2281,11 +2258,11 @@ static void CALLBACK kernel32_io_cb(TP_CALLBACK_INSTANCE *instance, void *userda
 static void test_kernel32_tp_io(void)
 {
     TP_CALLBACK_ENVIRON environment = {.Version = 1};
-    OVERLAPPED ovl = {0}, ovl2 = {0};
+    OVERLAPPED ovl = {}, ovl2 = {};
     HANDLE client, server, thread;
     struct io_cb_ctx userdata;
+    const char out[1] = "";
     char in[1], in2[1];
-    const char out[1];
     NTSTATUS status;
     DWORD ret_size;
     TP_POOL *pool;
@@ -2410,6 +2387,92 @@ static void test_kernel32_tp_io(void)
     pTpReleasePool(pool);
 }
 
+static void test_tp_wait_early_closure(void)
+{
+    TP_CALLBACK_ENVIRON environment;
+    TP_WAIT *wait1, *wait2;
+    struct wait_info info;
+    HANDLE semaphores[2];
+    LARGE_INTEGER when;
+    HANDLE semaphore;
+    NTSTATUS status;
+    TP_POOL *pool;
+    HANDLE timer;
+    DWORD result;
+
+    semaphores[0] = CreateSemaphoreW(NULL, 0, 2, NULL);
+    ok(semaphores[0] != NULL, "failed to create semaphore\n");
+    semaphores[1] = CreateSemaphoreW(NULL, 0, 1, NULL);
+    ok(semaphores[1] != NULL, "failed to create semaphore\n");
+    semaphore = CreateSemaphoreW(NULL, 0, 1, NULL);
+    ok(semaphore != NULL, "failed to create semaphore\n");
+    timer = CreateWaitableTimerW(NULL, TRUE, NULL);
+    ok(timer != NULL, "failed to create waitable timer\n");
+    info.semaphore = semaphore;
+
+    /* allocate new threadpool */
+    pool = NULL;
+    status = pTpAllocPool(&pool, NULL);
+    ok(!status, "TpAllocPool failed with status %lx\n", status);
+    ok(pool != NULL, "expected pool != NULL\n");
+
+    /* allocate new wait items */
+    memset(&environment, 0, sizeof(environment));
+    environment.Version = 1;
+    environment.Pool = pool;
+
+    wait1 = NULL;
+    status = pTpAllocWait(&wait1, wait_cb, &info, &environment);
+    ok(!status, "TpAllocWait failed with status %lx\n", status);
+    ok(wait1 != NULL, "expected wait1 != NULL\n");
+
+    wait2 = NULL;
+    status = pTpAllocWait(&wait2, wait_cb, &info, &environment);
+    ok(!status, "TpAllocWait failed with status %lx\n", status);
+    ok(wait2 != NULL, "expected wait2 != NULL\n");
+
+    /* waitable timer closed immediately, and a semaphore */
+    when.QuadPart = (ULONGLONG)100 * -10000;
+    status = NtSetTimer(timer, &when, NULL, NULL, FALSE, 0, NULL);
+    ok(!status, "NtSetTimer returned status %lx\n", status);
+    info.userdata = 0;
+    pTpSetWait(wait1, timer, NULL);
+    CloseHandle(timer);
+    pTpSetWait(wait2, semaphores[0], NULL);
+    result = WaitForSingleObject(semaphore, 200);
+    ok(result == WAIT_OBJECT_0, "WaitForSingleObject returned %#lx\n", result);
+    ok(info.userdata == 1, "expected info.userdata = 1, got %lu\n", info.userdata);
+    ReleaseSemaphore(semaphores[0], 1, NULL);
+    result = WaitForSingleObject(semaphore, 200);
+    ok(result == WAIT_OBJECT_0, "WaitForSingleObject returned %#lx\n", result);
+    ok(info.userdata == 2, "expected info.userdata = 2, got %lu\n", info.userdata);
+    result = WaitForSingleObject(semaphores[0], 0);
+    ok(result == WAIT_TIMEOUT, "WaitForSingleObject returned %#lx\n", result);
+
+    /* two semaphores, the first closed immediately */
+    info.userdata = 0;
+    when.QuadPart = (ULONGLONG)200 * -10000;
+    pTpSetWait(wait1, semaphores[0], &when);
+    CloseHandle(semaphores[0]);
+    pTpSetWait(wait2, semaphores[1], NULL);
+    ReleaseSemaphore(semaphores[1], 1, NULL);
+    result = WaitForSingleObject(semaphore, 100);
+    ok(result == WAIT_OBJECT_0, "WaitForSingleObject returned %#lx\n", result);
+    ok(info.userdata == 1, "expected info.userdata = 1, got %lu\n", info.userdata);
+    result = WaitForSingleObject(semaphores[1], 0);
+    ok(result == WAIT_TIMEOUT, "WaitForSingleObject returned %#lx\n", result);
+    result = WaitForSingleObject(semaphore, 300);
+    ok(result == WAIT_OBJECT_0, "WaitForSingleObject returned %#lx\n", result);
+    ok(info.userdata == 0x10001, "expected info.userdata = 0x10001, got %lu\n", info.userdata);
+
+    /* cleanup */
+    pTpReleaseWait(wait1);
+    pTpReleaseWait(wait2);
+    pTpReleasePool(pool);
+    CloseHandle(semaphores[1]);
+    CloseHandle(semaphore);
+}
+
 START_TEST(threadpool)
 {
     test_RtlQueueWorkItem();
@@ -2431,4 +2494,5 @@ START_TEST(threadpool)
     test_tp_multi_wait();
     test_tp_io();
     test_kernel32_tp_io();
+    test_tp_wait_early_closure();
 }

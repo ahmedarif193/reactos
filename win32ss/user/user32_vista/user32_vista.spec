@@ -1,4 +1,5 @@
 @ stdcall GetDpiForSystem()
 @ stdcall GetDpiForWindow(ptr)
 @ stdcall GetThreadDpiAwarenessContext()
+@ stdcall SetProcessDpiAwarenessContext(ptr)
 @ stdcall SetThreadDpiAwarenessContext(ptr)

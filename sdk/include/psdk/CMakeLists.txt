@@ -9,6 +9,7 @@ list(APPEND SOURCE
     activaut.idl
     activdbg.idl
     activscp.idl
+    asyncinfo.idl
     asptlb.idl
 #   asynot.idl
 #   asysta.idl
@@ -22,9 +23,11 @@ list(APPEND SOURCE
     bits2_0.idl
     bits2_5.idl
     bits3_0.idl
+    bits5_0.idl
 #   cmdbas.idl
 #   cmdtxt.idl
     comcat.idl
+    comsvcs.idl
     commoncontrols.idl
     control.idl
     cor.idl
@@ -46,12 +49,28 @@ list(APPEND SOURCE
     docobjectservice.idl
     downloadmgr.idl
     drmexternals.idl
+    d2d1.idl
+    d2d1_1.idl
+    d2d1_2.idl
+    d2d1_3.idl
+    d2d1effectauthor.idl
+    d2d1effects.idl
+    d2d1effects_1.idl
+    d2d1effects_2.idl
+    dwrite.idl
+    dwrite_1.idl
+    dwrite_2.idl
+    dwrite_3.idl
+    dvdif.idl
     dxgiformat.idl
 #   dyngraph.idl
     emptyvc.idl
     endpointvolume.idl
+    evr.idl
+    eventtoken.idl
     exdisp.idl
     fusion.idl
+    gameinput.idl
     hlink.idl
     hstring.idl
     htiface.idl
@@ -66,6 +85,7 @@ list(APPEND SOURCE
     inputscope.idl
     inseng.idl
     inspectable.idl
+    ivectorchangedeventargs.idl
     mediaobj.idl
     metahost.idl
     mfidl.idl
@@ -77,6 +97,7 @@ list(APPEND SOURCE
     mmdeviceapi.idl
     msaatext.idl
     mscoree.idl
+    msopc.idl
     msctf.idl
     msdadc.idl
     mshtmhst.idl
@@ -88,6 +109,7 @@ list(APPEND SOURCE
     msxml6.idl
     natupnp.idl
     netcon.idl
+    netlistmgr.idl
     netfw.idl
     oaidl.idl
     objectarray.idl
@@ -107,6 +129,7 @@ list(APPEND SOURCE
     pstore.idl
     restrictederrorinfo.idl
     richole.idl
+    robuffer.idl
     roparameterizediid.idl
 #   row.idl
 #   rowchg.idl
@@ -117,6 +140,7 @@ list(APPEND SOURCE
     servprov.idl
 #   sesprp.idl
     shdeprecated.idl
+    shimgdata.idl
     shldisp.idl
     shobjidl.idl
     shtypes.idl
@@ -145,8 +169,37 @@ list(APPEND SOURCE
     wbemcli.idl
     wbemdisp.idl
     wbemprov.idl
+    weakreference.idl
     wia_lh.idl
     wia_xp.idl
+    windows.devices.geolocation.idl
+    windows.devices.haptics.idl
+    windows.devices.power.idl
+    windows.foundation.collections.idl
+    windows.foundation.idl
+    windows.foundation.metadata.idl
+    windows.foundation.numerics.idl
+    windows.globalization.idl
+    windows.graphics.display.idl
+    windows.graphics.idl
+    windows.gaming.input.custom.idl
+    windows.gaming.input.forcefeedback.idl
+    windows.gaming.input.idl
+    windows.media.idl
+    windows.networking.connectivity.idl
+    windows.networking.idl
+    windows.security.credentials.idl
+    windows.security.cryptography.core.idl
+    windows.security.cryptography.idl
+    windows.storage.fileproperties.idl
+    windows.storage.idl
+    windows.storage.search.idl
+    windows.storage.streams.idl
+    windows.system.idl
+    windows.system.power.idl
+    windows.system.threading.idl
+    windows.system.userprofile.idl
+    windowscontracts.idl
     wincodec.idl
     wincodecsdk.idl
     winsxs.idl
@@ -154,6 +207,10 @@ list(APPEND SOURCE
     wmiutils.idl
     wmsbuffer.idl
     wmsdkidl.idl
+    wmsecure.idl
+    wsdbase.idl
+    wsddisco.idl
+    wsdxml.idl
     wtypes.idl
     wuapi.idl
     xmldom.idl
@@ -166,9 +223,37 @@ add_dependencies(psdk xdk)
 add_typelib(stdole2.idl)
 add_custom_target(stdole2 DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/stdole2.tlb)
 
-add_idl_headers(d3d_idl_headers d3dcommon.idl)
+add_idl_headers(d3d_idl_headers
+    dcommon.idl
+    d3dcommon.idl
+    d3d9on12.idl
+    d3d10.idl
+    d3d10_1.idl
+    d3d10effect.idl
+    d3d10sdklayers.idl
+    d3d10shader.idl
+    d3d11.idl
+    d3d11_1.idl
+    d3d11_2.idl
+    d3d11_3.idl
+    d3d11_4.idl
+    d3d11on12.idl
+    d3d11sdklayers.idl
+    d3d12.idl
+    d3d12sdklayers.idl
+    d3d12shader.idl
+    dxgi.idl
+    dxgi1_2.idl
+    dxgi1_3.idl
+    dxgi1_4.idl
+    dxgi1_5.idl
+    dxgi1_6.idl
+    dxgicommon.idl
+    dxgidebug.idl
+    dxgitype.idl)
+add_dependencies(psdk d3d_idl_headers)
 
-add_iid_library(adsiid iads.idl transact.idl)
+add_iid_library(adsiid iads.idl)
 add_iid_library(wuguid wuapi.idl)
 add_iid_library(xml_uuids msxml2.idl)
 

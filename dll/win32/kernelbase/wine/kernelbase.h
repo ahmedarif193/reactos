@@ -26,8 +26,7 @@
 
 #ifdef __REACTOS__
 #include "synchacks.h"
-#endif
-
+#endif /* __REACTOS__ */
 
 struct pseudo_console
 {
@@ -42,12 +41,18 @@ extern void init_global_data(void);
 extern void init_startup_info( RTL_USER_PROCESS_PARAMETERS *params );
 extern void init_locale( HMODULE module );
 extern void init_console(void);
+extern BOOL is_console_handle( HANDLE );
 
 extern const WCHAR windows_dir[];
 extern const WCHAR system_dir[];
 
 static const BOOL is_win64 = (sizeof(void *) > sizeof(int));
 extern BOOL is_wow64;
+
+#ifdef __REACTOS__
+BOOL WINAPI GetWindowsAccountDomainSid( PSID sid, PSID domain_sid, DWORD *size );
+NTSYSAPI void NTAPI RtlMapGenericMask( ACCESS_MASK *access, GENERIC_MAPPING *mapping );
+#endif
 
 static inline BOOL set_ntstatus( NTSTATUS status )
 {

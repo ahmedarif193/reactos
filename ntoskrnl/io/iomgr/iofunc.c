@@ -2688,10 +2688,13 @@ NtQueryEaFile(IN HANDLE FileHandle,
 
     Irp->Tail.Overlay.AuxiliaryBuffer =
         (PVOID)CapturedEaList;
-    Irp->Flags |= IRP_BUFFERED_IO |
-                  IRP_DEALLOCATE_BUFFER |
-                  IRP_INPUT_OPERATION |
-                  IRP_DEFER_IO_COMPLETION;
+    Irp->Flags |= IRP_DEFER_IO_COMPLETION;
+    if (Irp->AssociatedIrp.SystemBuffer)
+    {
+        Irp->Flags |= IRP_BUFFERED_IO |
+                      IRP_DEALLOCATE_BUFFER |
+                      IRP_INPUT_OPERATION;
+    }
 
     Status = IopPerformSynchronousRequest(DeviceObject,
                                           Irp,
@@ -3526,7 +3529,9 @@ NtReadFile(IN HANDLE FileHandle,
         /* Remember we are sync */
         Synchronous = TRUE;
     }
-    else if (!(ByteOffset) &&
+    else if ((!(ByteOffset) ||
+              ((CapturedByteOffset.u.LowPart == FILE_USE_FILE_POINTER_POSITION) &&
+               (CapturedByteOffset.u.HighPart == -1))) &&
              !(FileObject->Flags & (FO_NAMED_PIPE | FO_MAILSLOT)))
     {
         /* Otherwise, this was async I/O without a byte offset, so fail */
@@ -4719,7 +4724,9 @@ NtWriteFile(IN HANDLE FileHandle,
         /* Remember we are sync */
         Synchronous = TRUE;
     }
-    else if (!(ByteOffset) &&
+    else if ((!(ByteOffset) ||
+              ((CapturedByteOffset.u.LowPart == FILE_USE_FILE_POINTER_POSITION) &&
+               (CapturedByteOffset.u.HighPart == -1))) &&
              !(FileObject->Flags & (FO_NAMED_PIPE | FO_MAILSLOT)))
     {
         /* Otherwise, this was async I/O without a byte offset, so fail */
@@ -4932,18 +4939,6 @@ NtQueryVolumeInformationFile(IN HANDLE FileHandle,
         return STATUS_INVALID_DEVICE_REQUEST;
     }
 
-    /* Check if we should use Sync IO or not */
-    if (FileObject->Flags & FO_SYNCHRONOUS_IO)
-    {
-        /* Lock it */
-        Status = IopLockFileObject(FileObject, PreviousMode);
-        if (Status != STATUS_SUCCESS)
-        {
-            ObDereferenceObject(FileObject);
-            return Status;
-        }
-    }
-
     /*
      * Quick path for FileFsDeviceInformation - the kernel has enough
      * info to reply instead of the driver, excepted for network file systems
@@ -4970,13 +4965,6 @@ NtQueryVolumeInformationFile(IN HANDLE FileHandle,
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
-            /* Check if we had a file lock */
-            if (BooleanFlagOn(FileObject->Flags, FO_SYNCHRONOUS_IO))
-            {
-                /* Release it */
-                IopUnlockFileObject(FileObject);
-            }
-
             /* Dereference the FO */
             ObDereferenceObject(FileObject);
 
@@ -4984,20 +4972,26 @@ NtQueryVolumeInformationFile(IN HANDLE FileHandle,
         }
         _SEH2_END;
 
-        /* Check if we had a file lock */
-        if (BooleanFlagOn(FileObject->Flags, FO_SYNCHRONOUS_IO))
-        {
-            /* Release it */
-            IopUnlockFileObject(FileObject);
-        }
-
         /* Dereference the FO */
         ObDereferenceObject(FileObject);
 
         return STATUS_SUCCESS;
     }
+
+    /* Check if we should use Sync IO or not */
+    if (FileObject->Flags & FO_SYNCHRONOUS_IO)
+    {
+        /* Lock it */
+        Status = IopLockFileObject(FileObject, PreviousMode);
+        if (Status != STATUS_SUCCESS)
+        {
+            ObDereferenceObject(FileObject);
+            return Status;
+        }
+    }
+
     /* This is to be handled by the kernel, not by FSD */
-    else if (FsInformationClass == FileFsDriverPathInformation)
+    if (FsInformationClass == FileFsDriverPathInformation)
     {
         _SEH2_VOLATILE PFILE_FS_DRIVER_PATH_INFORMATION DriverPathInfo = NULL;
 

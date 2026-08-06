@@ -7,6 +7,7 @@
  */
 
 #define SECURITY_WIN32
+#include <windows.h>
 #include <security.h>
 #include <sddl.h>
 #include <strsafe.h>

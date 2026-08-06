@@ -18,25 +18,30 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include "uxthemep.h"
+#include <stdarg.h>
+
+#include "windef.h"
+#include "winbase.h"
+#include "uxthemedll.h"
+
+#include "wine/debug.h"
+
+WINE_DEFAULT_DEBUG_CHANNEL(uxtheme);
 
 /***********************************************************************/
 
-BOOL WINAPI DllMain(HINSTANCE hInstDLL, DWORD fdwReason, LPVOID lpv)
+/* For the moment, do nothing here. */
+BOOL WINAPI DllMain(HINSTANCE hInstDLL, DWORD fdwReason, void *reserved)
 {
-    TRACE("%p 0x%x %p: stub\n", hInstDLL, fdwReason, lpv);
+    TRACE("%p 0x%lx %p\n", hInstDLL, fdwReason, reserved);
     switch(fdwReason) {
         case DLL_PROCESS_ATTACH:
             DisableThreadLibraryCalls(hInstDLL);
             UXTHEME_InitSystem(hInstDLL);
             break;
         case DLL_PROCESS_DETACH:
-            UXTHEME_UnInitSystem(hInstDLL);
-            break;
-        case DLL_THREAD_ATTACH:
-            break;
-        case DLL_THREAD_DETACH:
-            UXTHEME_DeleteParseErrorInfo();
+            if (reserved) break;
+            UXTHEME_UninitSystem();
             break;
     }
     return TRUE;

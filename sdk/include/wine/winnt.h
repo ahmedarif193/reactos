@@ -1,7 +1,21 @@
 
 #pragma once
 
+#if defined(__REACTOS__) && defined(_NTSTATUS_) && !defined(WIN32_NO_STATUS)
+#define WIN32_NO_STATUS
+#define __WINE_RESTORE_WIN32_NO_STATUS
+#endif
+
 #include <psdk/winnt.h>
+
+#ifndef FASTCALL
+#define FASTCALL __fastcall
+#endif
+
+#ifdef __WINE_RESTORE_WIN32_NO_STATUS
+#undef __WINE_RESTORE_WIN32_NO_STATUS
+#undef WIN32_NO_STATUS
+#endif
 
 #define CONTEXT_i386 0x10000
 #define CONTEXT_i486 0x10000

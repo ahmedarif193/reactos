@@ -9,8 +9,6 @@
 #define COM_NO_WINDOWS_H
 
 #define COBJMACROS
-#define NONAMELESSUNION
-#define NONAMELESSSTRUCT
 
 #include <windef.h>
 #include <winbase.h>
@@ -27,7 +25,6 @@
 #define NO_SHLWAPI_STREAM
 #include <shlwapi.h>
 
-#include <wine/heap.h>
 #include <wine/debug.h>
 
 #include "cdlg.h"

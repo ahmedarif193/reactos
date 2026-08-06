@@ -212,6 +212,8 @@ HKLM,"SOFTWARE\Microsoft\Active Setup\Installed Components\{de5aed00-a4bf-11d1-9
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion","DevicePath",0x00020002,"%SystemRoot%\inf"
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion","MediaPathUnexpanded",0x00020000,"%SystemRoot%\Media"
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion","WallPaperDir",0x00020002,"%SystemRoot%\Web\Wallpaper"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\5.0\User Agent\Post Platform",".NET CLR 1.1.4322",0x00000000,""
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\5.0\User Agent\Post Platform",".NET CLR 2.0.50727",0x00000000,""
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths",,0x00000012
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\pbrush.exe",,0x00020000,"%SystemRoot%\system32\mspaint.exe"
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\pbrush.exe","Path",0x00020000,"%SystemRoot%\system32"
@@ -670,7 +672,7 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Drivers32","msacm.msadpcm",0x
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Drivers32","msacm.msg711",0x00000000,"msg711.acm"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Drivers32","msacm.msgsm610",0x00000000,"msgsm32.acm"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Drivers32","msacm.imaadpcm",0x00000000,"imaadp32.acm"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Drivers32","msacm.winemp3",0x00000000,"winemp3.acm"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Drivers32","msacm.l3acm",0x00000000,"l3codeca.acm"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Drivers32","vidc.cvid",0x00000000,"iccvid.dll"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Drivers32","vidc.mrle",0x00000000,"msrle32.dll"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Drivers32","vidc.msvc",0x00000000,"msvidc32.dll"
@@ -2058,7 +2060,8 @@ HKLM,"SOFTWARE\Microsoft\Ole","EnableRemoteConnect",0x00000000,"N"
 ; SvcHost services
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\SvcHost",,0x00000012
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\SvcHost","DcomLaunch",0x00010000,"DcomLaunch","PlugPlay"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\SvcHost","netsvcs",0x00010000,"BITS","Browser","DHCP","lanmanserver","lanmanworkstation","Schedule","seclogon","Themes","W32Time","winmgmt","wuauserv"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\SvcHost","netsvcs",0x00010000,"BITS","Browser","DHCP","lanmanserver","lanmanworkstation","seclogon","Themes","W32Time","winmgmt","wuauserv"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\SvcHost","Schedule",0x00010000,"Schedule"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Svchost","NetworkService",0x00010000,"DnsCache"
 
 ; Win32 config

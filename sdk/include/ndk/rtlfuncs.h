@@ -1536,6 +1536,15 @@ NTSTATUS
 NTAPI
 RtlImpersonateSelf(IN SECURITY_IMPERSONATION_LEVEL ImpersonationLevel);
 
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlDeriveCapabilitySidsFromName(
+    _In_ PUNICODE_STRING CapabilityName,
+    _Out_ PSID CapabilityGroupSid,
+    _Out_ PSID CapabilitySid
+);
+
 _IRQL_requires_max_(APC_LEVEL)
 NTSYSAPI
 NTSTATUS
@@ -1580,6 +1589,21 @@ RtlMapGenericMask(
 );
 
 #ifdef NTOS_MODE_USER
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlFlsAlloc(
+    _In_opt_ PFLS_CALLBACK_FUNCTION Callback,
+    _Out_ PULONG Index
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlFlsFree(
+    _In_ ULONG Index
+);
 
 NTSYSAPI
 NTSTATUS
@@ -2884,6 +2908,16 @@ RtlGetCurrentProcessorNumber(
     VOID
 );
 
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSYSAPI
+ULONG64
+NTAPI
+RtlGetEnabledExtendedFeatures(
+    _In_ ULONG64 FeatureMask
+);
+#endif
+
 
 //
 // Thread Pool Functions
@@ -4076,7 +4110,7 @@ RtlReleaseActivationContext(
 );
 
 NTSYSAPI
-NTSTATUS
+VOID
 NTAPI
 RtlDeactivateActivationContext(
     _In_ ULONG dwFlags,
@@ -4096,7 +4130,7 @@ NTAPI
 RtlFreeThreadActivationContextStack(VOID);
 
 NTSYSAPI
-PRTL_ACTIVATION_CONTEXT_STACK_FRAME
+VOID
 FASTCALL
 RtlDeactivateActivationContextUnsafeFast(
     _In_ PRTL_CALLER_ALLOCATED_ACTIVATION_CONTEXT_STACK_FRAME_EXTENDED Frame
@@ -4161,6 +4195,20 @@ RtlZombifyActivationContext(
 //
 // WOW64 Functions
 //
+NTSYSAPI
+USHORT
+NTAPI
+RtlWow64GetCurrentMachine(VOID);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlWow64GetProcessMachines(
+    _In_ HANDLE ProcessHandle,
+    _Out_opt_ PUSHORT ProcessMachine,
+    _Out_opt_ PUSHORT NativeMachine
+);
+
 NTSYSAPI
 NTSTATUS
 NTAPI
