@@ -31,6 +31,64 @@ PortFdoInterruptRoutine(
     return MiniportHwInterrupt(&DeviceExtension->Miniport);
 }
 
+static
+BOOLEAN
+NTAPI
+PortFdoMessageInterruptRoutine(
+    _In_ PKINTERRUPT Interrupt,
+    _In_ PVOID ServiceContext,
+    _In_ ULONG MessageId)
+{
+    PFDO_DEVICE_EXTENSION DeviceExtension = (PFDO_DEVICE_EXTENSION)ServiceContext;
+
+    UNREFERENCED_PARAMETER(Interrupt);
+    return MiniportHwMSInterrupt(&DeviceExtension->Miniport, MessageId);
+}
+
+/*
+ * A miniport that registered a message routine in its port configuration is
+ * asking for message-signalled interrupts. The kernel falls back to a plain
+ * line connection by itself when the device was not granted any messages, so
+ * a failure here still lands on the wired-interrupt path below.
+ */
+static
+NTSTATUS
+PortFdoConnectMessageInterrupts(
+    _In_ PFDO_DEVICE_EXTENSION DeviceExtension)
+{
+    IO_CONNECT_INTERRUPT_PARAMETERS Parameters;
+    NTSTATUS Status;
+
+    if (DeviceExtension->Miniport.PortConfig.HwMSInterruptRoutine == NULL)
+        return STATUS_NOT_SUPPORTED;
+
+    RtlZeroMemory(&Parameters, sizeof(Parameters));
+    Parameters.Version = CONNECT_MESSAGE_BASED;
+    Parameters.MessageBased.PhysicalDeviceObject = DeviceExtension->PhysicalDevice;
+    Parameters.MessageBased.ConnectionContext.InterruptMessageTable = &DeviceExtension->MessageInfo;
+    Parameters.MessageBased.MessageServiceRoutine = PortFdoMessageInterruptRoutine;
+    Parameters.MessageBased.ServiceContext = DeviceExtension;
+    Parameters.MessageBased.FallBackServiceRoutine = PortFdoInterruptRoutine;
+
+    Status = IoConnectInterruptEx(&Parameters);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (Parameters.Version == CONNECT_MESSAGE_BASED)
+    {
+        DeviceExtension->InterruptIrql = DeviceExtension->MessageInfo->UnifiedIrql;
+        DPRINT1("Storport: %lu message interrupts connected\n", DeviceExtension->MessageInfo->MessageCount);
+    }
+    else
+    {
+        /* The kernel connected the fallback line interrupt instead. */
+        DeviceExtension->Interrupt = (PKINTERRUPT)DeviceExtension->MessageInfo;
+        DeviceExtension->MessageInfo = NULL;
+        DPRINT1("Storport: message connect fell back to a line interrupt\n");
+    }
+    return STATUS_SUCCESS;
+}
+
 
 static
 NTSTATUS
@@ -46,6 +104,9 @@ PortFdoConnectInterrupt(
 
     DPRINT1("PortFdoConnectInterrupt(%p)\n",
             DeviceExtension);
+
+    if (NT_SUCCESS(PortFdoConnectMessageInterrupts(DeviceExtension)))
+        return STATUS_SUCCESS;
 
     /* No resources, no interrupt. Done! */
     if (DeviceExtension->AllocatedResources == NULL ||
