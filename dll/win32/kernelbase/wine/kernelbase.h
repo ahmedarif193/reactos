@@ -49,6 +49,11 @@ extern const WCHAR system_dir[];
 static const BOOL is_win64 = (sizeof(void *) > sizeof(int));
 extern BOOL is_wow64;
 
+#ifdef __REACTOS__
+BOOL WINAPI GetWindowsAccountDomainSid( PSID sid, PSID domain_sid, DWORD *size );
+NTSYSAPI void NTAPI RtlMapGenericMask( ACCESS_MASK *access, GENERIC_MAPPING *mapping );
+#endif
+
 static inline BOOL set_ntstatus( NTSTATUS status )
 {
     if (status) SetLastError( RtlNtStatusToDosError( status ));
