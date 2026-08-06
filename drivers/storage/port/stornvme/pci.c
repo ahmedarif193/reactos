@@ -37,8 +37,8 @@ NvmeMaskDeviceInterrupts(_In_ PNVME_DEVICE_EXTENSION Device, _In_ BOOLEAN Mask)
             ULONG MaskBits = Mask ? 0xFFFFFFFF : 0;
             ULONG MaskOffset = CapOffset + ((MessageControl & 0x0080) ? 0x10 : 0x0C);
 
-            StorPortSetBusDataByOffset(Device, PCIConfiguration, Device->SystemIoBusNumber,
-                                       Device->SlotNumber, &MaskBits, MaskOffset, sizeof(MaskBits));
+            if (MaskOffset <= sizeof(Config) - sizeof(MaskBits))
+                StorPortSetBusDataByOffset(Device, PCIConfiguration, Device->SystemIoBusNumber, Device->SlotNumber, &MaskBits, MaskOffset, sizeof(MaskBits));
         }
         else if (CapId == 0x11)
         {
@@ -71,7 +71,7 @@ NvmeReportPcieLink(_In_ PNVME_DEVICE_EXTENSION Device)
     CapOffset = Config[0x34] & 0xFC;
     for (Guard = 0; CapOffset >= 0x40 && CapOffset <= 0xFC - 4 && Guard < 48; Guard++)
     {
-        if (Config[CapOffset] == 0x10)
+        if (Config[CapOffset] == 0x10 && CapOffset <= sizeof(Config) - 0x14)
         {
             USHORT LinkStatus = (USHORT)(Config[CapOffset + 0x12] | (Config[CapOffset + 0x13] << 8));
 
@@ -315,13 +315,14 @@ NvmeHwAdapterControl(_In_ PVOID DeviceExtension,
         case ScsiQuerySupportedControlTypes:
         {
             PSCSI_SUPPORTED_CONTROL_TYPE_LIST List = (PSCSI_SUPPORTED_CONTROL_TYPE_LIST)Parameters;
+            PBOOLEAN SupportedTypes = (PBOOLEAN)((PUCHAR)List + FIELD_OFFSET(SCSI_SUPPORTED_CONTROL_TYPE_LIST, SupportedTypeList));
 
             if (ScsiQuerySupportedControlTypes < List->MaxControlType)
-                List->SupportedTypeList[ScsiQuerySupportedControlTypes] = TRUE;
+                SupportedTypes[ScsiQuerySupportedControlTypes] = TRUE;
             if (ScsiStopAdapter < List->MaxControlType)
-                List->SupportedTypeList[ScsiStopAdapter] = TRUE;
+                SupportedTypes[ScsiStopAdapter] = TRUE;
             if (ScsiRestartAdapter < List->MaxControlType)
-                List->SupportedTypeList[ScsiRestartAdapter] = TRUE;
+                SupportedTypes[ScsiRestartAdapter] = TRUE;
             return ScsiAdapterControlSuccess;
         }
 
