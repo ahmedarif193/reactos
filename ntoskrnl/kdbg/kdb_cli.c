@@ -239,7 +239,9 @@ KdbpCaptureOutput(IN PCCH String, IN USHORT Length)
 static CONTEXT KdbSavedContextRecord;
 static BOOLEAN KdbContextRecordActive;
 static PKDB_KTRAP_FRAME KdbSavedTrapFrame;
+#if defined(_M_AMD64) || defined(_M_ARM64)
 static CONTEXT KdbFrameBaseContext;
+#endif
 static BOOLEAN KdbFrameBaseValid;
 static ULONG KdbSelectedFrame;
 static LONG KdbSelectedProcessor = -1;
@@ -1601,8 +1603,10 @@ KdbpCmdSetRegister(ULONG Argc, PCHAR Argv[])
 static BOOLEAN
 KdbpGetFpRegisterStorage(IN PCONTEXT Context, IN PCSTR RegisterName, OUT PVOID *Storage, OUT PULONG Size)
 {
+#if defined(_M_AMD64) || defined(_M_ARM64)
     PCHAR End;
     ULONG Index;
+#endif
 
     if (*RegisterName == '$')
         RegisterName++;
@@ -1706,10 +1710,14 @@ static BOOLEAN
 KdbpCmdFpRegs(ULONG Argc, PCHAR Argv[])
 {
     PCONTEXT Context = KdbCurrentTrapFrame;
+#if defined(_M_AMD64) || defined(_M_ARM64)
     CHAR Name[8];
+#endif
     PVOID Storage;
     ULONG Size;
+#if defined(_M_AMD64) || defined(_M_ARM64)
     ULONG Index;
+#endif
 
     if (Argc > 2)
     {
@@ -2944,7 +2952,7 @@ KdbpCmdRegs(ULONG Argc, PCHAR Argv[])
             Prcb = KiProcessorBlock[KdbSelectedProcessor];
             if (Prcb == NULL ||
                 !NT_SUCCESS(KdbpSafeReadMemory(&FrozenState, (PVOID)&Prcb->IpiFrozen, sizeof(FrozenState))) ||
-                ((FrozenState & ~IPI_FROZEN_FLAG_ACTIVE) != IPI_FROZEN_STATE_FROZEN) ||
+                !KdbpProcessorStateIsFrozen(FrozenState) ||
                 !NT_SUCCESS(KdbpSafeReadMemory(&ProcessorState, &Prcb->ProcessorState, sizeof(ProcessorState))))
             {
                 KdbpPrint("cregs: CPU %ld no longer has a stable frozen control state.\n", KdbSelectedProcessor);
@@ -3424,6 +3432,12 @@ KdbpContextFromPrevTss(IN OUT PCONTEXT Context, OUT PUSHORT TssSelector, IN OUT 
 }
 #endif // _M_IX86
 
+static BOOLEAN
+KdbpContextIsUsable(IN PCONTEXT Context)
+{
+    return (KeGetContextPc(Context) != 0 && KeGetContextStackRegister(Context) != 0);
+}
+
 #if defined(_M_AMD64) || defined(_M_ARM64)
 
 static
@@ -3526,12 +3540,6 @@ KdbpPrintBackTraceContext(IN PCONTEXT InputContext, IN BOOLEAN Verbose)
 }
 
 static BOOLEAN
-KdbpContextIsUsable(IN PCONTEXT Context)
-{
-    return (KeGetContextPc(Context) != 0 && KeGetContextStackRegister(Context) != 0);
-}
-
-static BOOLEAN
 KdbpCaptureFrozenThreadContext(IN PETHREAD Thread, IN PCONTEXT OriginalContext, OUT PCONTEXT Context)
 {
     ULONG Processor;
@@ -3556,7 +3564,7 @@ KdbpCaptureFrozenThreadContext(IN PETHREAD Thread, IN PCONTEXT OriginalContext, 
         }
 
         if (!NT_SUCCESS(KdbpSafeReadMemory(&FrozenState, (PVOID)&Prcb->IpiFrozen, sizeof(FrozenState))) ||
-            ((FrozenState & ~IPI_FROZEN_FLAG_ACTIVE) != IPI_FROZEN_STATE_FROZEN))
+            !KdbpProcessorStateIsFrozen(FrozenState))
         {
             return FALSE;
         }
@@ -5252,7 +5260,8 @@ KdbpCmdPrcb(ULONG Argc, PCHAR Argv[])
     READ_OR_FAIL(DpcTime, DpcTime);
     READ_OR_FAIL(InterruptTime, InterruptTime);
     READ_OR_FAIL(KeSystemCalls, SystemCalls);
-    READ_OR_FAIL(KeContextSwitches, ContextSwitches);
+    Status = KdbpSafeReadMemory(&ContextSwitches, (PVOID)&KeGetContextSwitches(Prcb), sizeof(ContextSwitches));
+    if (!NT_SUCCESS(Status)) goto PrcbUnreadable;
     READ_OR_FAIL(IpiFrozen, IpiFrozen);
     READ_OR_FAIL(MHz, MHz);
     READ_OR_FAIL(MmPageFaultCount, PageFaults);
@@ -6909,7 +6918,7 @@ KdbpCmdCpu(ULONG Argc, PCHAR Argv[])
             if (NT_SUCCESS(Status) &&
                 KdbpContextIsUsable(&Context) &&
                 (Processor == CurrentProcessor ||
-                 ((FrozenState & ~IPI_FROZEN_FLAG_ACTIVE) == IPI_FROZEN_STATE_FROZEN)))
+                 KdbpProcessorStateIsFrozen(FrozenState)))
                 KdbpPrint("%p  %p\n", (PVOID)KeGetContextPc(&Context), (PVOID)KeGetContextStackRegister(&Context));
             else
                 KdbpPrint("<unavailable>\n");
@@ -6969,7 +6978,7 @@ KdbpCmdCpu(ULONG Argc, PCHAR Argv[])
     }
     Status = KdbpSafeReadMemory(&FrozenState, (PVOID)&Prcb->IpiFrozen, sizeof(FrozenState));
     if (!NT_SUCCESS(Status) ||
-        ((FrozenState & ~IPI_FROZEN_FLAG_ACTIVE) != IPI_FROZEN_STATE_FROZEN))
+        !KdbpProcessorStateIsFrozen(FrozenState))
     {
         KdbpPrint("cpu: Processor %lu is not in a stable frozen state (state 0x%08lx).\n", Processor, NT_SUCCESS(Status) ? FrozenState : MAXULONG);
         return TRUE;
