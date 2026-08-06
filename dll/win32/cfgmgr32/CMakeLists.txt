@@ -13,7 +13,7 @@ add_library(cfgmgr32 MODULE ${SOURCE})
 
 set_module_type(cfgmgr32 win32dll)
 target_compile_definitions(cfgmgr32 PRIVATE __WINESRC__ _CFGMGR32_)
-target_link_libraries(cfgmgr32 wine)
+target_link_libraries(cfgmgr32 wine ${PSEH_LIB})
 add_importlibs(cfgmgr32 advapi32 rpcrt4 sechost msvcrt kernel32 ntdll)
 add_dependencies(cfgmgr32 wineheaders)
 add_cd_file(TARGET cfgmgr32 DESTINATION reactos/system32 FOR all)
