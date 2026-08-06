@@ -579,39 +579,14 @@ NvmeDisableController(_In_ PNVME_DEVICE_EXTENSION Device)
     NvmeWaitReady(Device, 0);
 }
 
+static
 VOID
-NvmeShutdownController(_In_ PNVME_DEVICE_EXTENSION Device)
-{
-    ULONG Waited;
-    ULONG Index;
-
-    Device->ControllerStarted = FALSE;
-    Device->AdminReady = FALSE;
-    for (Index = 0; Index < Device->IoQueueCount; Index++)
-        NvmeRetireQueue(Device, &Device->IoQueues[Index], SRB_STATUS_NO_DEVICE);
-    NvmeWriteRegister(Device, NVME_REG_CC,
-                      (NvmeReadRegister(Device, NVME_REG_CC) & ~NVME_CC_SHN_MASK) | NVME_CC_SHN_NORMAL);
-    for (Waited = 0; Waited < 5000; Waited++)
-    {
-        if ((NvmeReadRegister(Device, NVME_REG_CSTS) & NVME_CSTS_SHST_MASK) == NVME_CSTS_SHST_DONE)
-            break;
-        StorPortStallExecution(1000);
-    }
-}
-
-BOOLEAN
-NvmeResetController(_In_ PNVME_DEVICE_EXTENSION Device)
+NvmeFailAdminSrbs(_In_ PNVME_DEVICE_EXTENSION Device, _In_ UCHAR SrbStatus)
 {
     PSCSI_REQUEST_BLOCK AdminSrbs[NVME_ADMIN_QUEUE_ENTRIES];
     NVME_LOCK Lock;
     ULONG AdminSrbCount = 0;
     ULONG Index;
-
-    DPRINT1("stornvme: controller reset\n");
-    NvmeDisableController(Device);
-
-    for (Index = 0; Index < Device->IoQueueCount; Index++)
-        NvmeRetireQueue(Device, &Device->IoQueues[Index], SRB_STATUS_BUS_RESET);
 
     NvmeAcquireLock(Device, 0, &Lock);
     for (Index = 0; Index < NVME_ADMIN_QUEUE_ENTRIES; Index++)
@@ -627,8 +602,45 @@ NvmeResetController(_In_ PNVME_DEVICE_EXTENSION Device)
         }
     }
     NvmeReleaseLock(Device, &Lock);
+
     for (Index = 0; Index < AdminSrbCount; Index++)
-        NvmeCompleteSrb(Device, AdminSrbs[Index], SRB_STATUS_BUS_RESET);
+        NvmeCompleteSrb(Device, AdminSrbs[Index], SrbStatus);
+}
+
+VOID
+NvmeShutdownController(_In_ PNVME_DEVICE_EXTENSION Device)
+{
+    ULONG Waited;
+    ULONG Index;
+
+    Device->ControllerStarted = FALSE;
+    Device->AdminReady = FALSE;
+    for (Index = 0; Index < Device->IoQueueCount; Index++)
+        NvmeRetireQueue(Device, &Device->IoQueues[Index], SRB_STATUS_NO_DEVICE);
+    NvmeFailAdminSrbs(Device, SRB_STATUS_NO_DEVICE);
+    NvmeWriteRegister(Device, NVME_REG_CC,
+                      (NvmeReadRegister(Device, NVME_REG_CC) & ~NVME_CC_SHN_MASK) | NVME_CC_SHN_NORMAL);
+    for (Waited = 0; Waited < 5000; Waited++)
+    {
+        if ((NvmeReadRegister(Device, NVME_REG_CSTS) & NVME_CSTS_SHST_MASK) == NVME_CSTS_SHST_DONE)
+            break;
+        StorPortStallExecution(1000);
+    }
+}
+
+BOOLEAN
+NvmeResetController(_In_ PNVME_DEVICE_EXTENSION Device)
+{
+    NVME_LOCK Lock;
+    ULONG Index;
+
+    DPRINT1("stornvme: controller reset\n");
+    NvmeDisableController(Device);
+
+    for (Index = 0; Index < Device->IoQueueCount; Index++)
+        NvmeRetireQueue(Device, &Device->IoQueues[Index], SRB_STATUS_BUS_RESET);
+
+    NvmeFailAdminSrbs(Device, SRB_STATUS_BUS_RESET);
 
     if (!NvmeStartController(Device, FALSE))
         return FALSE;
