@@ -275,3 +275,36 @@ ULONG WINAPI MAPISaveMail(LHANDLE session, ULONG_PTR uiparam, lpMapiMessage msg,
 
     return MAPI_E_NOT_SUPPORTED;
 }
+
+HRESULT WINAPI MAPIOpenFormMgr(LPMAPISESSION session, PVOID *formManager)
+{
+    FIXME("(%p, %p): stub\n", session, formManager);
+    if (formManager) *formManager = NULL;
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI HrGetOmiProvidersFlags(PVOID providerFlags, PVOID reserved)
+{
+    FIXME("(%p, %p): stub\n", providerFlags, reserved);
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI HrSetOmiProvidersFlagsInvalid(PVOID providerFlags)
+{
+    FIXME("(%p): stub\n", providerFlags);
+    return E_NOTIMPL;
+}
+
+DWORD WINAPI GetOutlookVersion(VOID)
+{
+    FIXME("stub\n");
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return 0;
+}
+
+DWORD WINAPI FixMAPI(VOID)
+{
+    FIXME("stub\n");
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return 0;
+}
