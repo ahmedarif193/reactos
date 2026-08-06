@@ -12,6 +12,6 @@ add_library(dssenh MODULE
 set_module_type(dssenh win32dll)
 target_compile_definitions(dssenh PRIVATE __WINESRC__ __WINE_PE_BUILD)
 target_link_libraries(dssenh wine wine_dll_register symcrypt)
-add_importlibs(dssenh crypt32 advapi32 msvcrt kernel32 ntdll)
+add_importlibs(dssenh crypt32 advapi32 msvcrt kernel32_vista kernel32 ntdll)
 add_cd_file(TARGET dssenh DESTINATION reactos/system32 FOR all)
 set_wine_module(dssenh)
