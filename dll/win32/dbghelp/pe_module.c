@@ -628,6 +628,7 @@ static BOOL pe_load_rsym(struct module* module)
 }
 #endif
 
+#if !defined(__REACTOS__) || !defined(DBGHELP_STATIC_LIB)
 /******************************************************************
  *		pe_load_dbg_file
  *
@@ -699,6 +700,7 @@ static BOOL pe_load_msc_debug_info(struct module* module)
     pe_unmap_full(fmap);
     return ret;
 }
+#endif
 
 /***********************************************************************
  *			pe_load_export_debug_info
