@@ -31,6 +31,13 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(wbemprox);
 
+#ifdef __REACTOS__
+#ifndef RRF_SUBKEY_WOW6464KEY
+#define RRF_SUBKEY_WOW6464KEY 0x00010000
+#define RRF_SUBKEY_WOW6432KEY 0x00020000
+#endif
+#endif
+
 static HRESULT to_bstr_array( BSTR *strings, DWORD count, VARIANT *var )
 {
     SAFEARRAY *sa;
