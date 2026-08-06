@@ -8,7 +8,9 @@
 #define NDEBUG
 #include <debug.h>
 
-#define KD_LOG_WATCHDOG_DEFAULT_SECONDS 5
+#ifndef KD_LOG_WATCHDOG_DEFAULT_SECONDS
+#define KD_LOG_WATCHDOG_DEFAULT_SECONDS 6
+#endif
 #define KD_LOG_WATCHDOG_MINIMUM_SECONDS 5
 #define KD_LOG_WATCHDOG_MAXIMUM_SECONDS 3600
 #define KD_LOG_WATCHDOG_100NS_PER_SECOND 10000000ULL
@@ -53,9 +55,6 @@ static ULONG KdpLogWatchdogReadOption(_In_opt_ PCSTR LoadOptions)
             continue;
         }
         Cursor++;
-        if (strncmp(Cursor, "OFF", 3) == 0 && (Cursor[3] == ANSI_NULL || KdpLogWatchdogIsSeparator(Cursor[3])))
-            return 0;
-
         Seconds = 0;
         if (*Cursor < '0' || *Cursor > '9')
             return KD_LOG_WATCHDOG_DEFAULT_SECONDS;
@@ -86,14 +85,14 @@ VOID NTAPI KdpLogWatchdogInitialize(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock
     if (Seconds == 0)
     {
         InterlockedExchange(&KdpLogWatchdogState, 0);
-        KdpDprintf("KDLOGWD: disabled by /KDWATCHDOG=OFF\n");
+        KdpDprintf("KDLOGWD: disabled, timeout 0 seconds\n");
         return;
     }
 
     KdpLogWatchdogTimeout = (ULONGLONG)Seconds * KD_LOG_WATCHDOG_100NS_PER_SECOND;
     InterlockedExchange64(&KdpLogWatchdogLastPrintTime, KeQueryInterruptTime());
     InterlockedExchange(&KdpLogWatchdogState, 1);
-    KdpDprintf("KDLOGWD: enabled, timeout %lu seconds; /KDWATCHDOG=OFF disables it\n", Seconds);
+    KdpDprintf("KDLOGWD: enabled, timeout %lu seconds; /KDWATCHDOG=0 disables it\n", Seconds);
 #else
     UNREFERENCED_PARAMETER(LoaderBlock);
 #endif
