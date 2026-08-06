@@ -25,8 +25,8 @@ extern "C"
 BOOL WINAPI WineBrowseUI_DllMain(HINSTANCE hInstance, DWORD dwReason, LPVOID reserved);
 HRESULT WINAPI WineBrowseUI_DllCanUnloadNow(void);
 HRESULT WINAPI WineBrowseUI_DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv);
-HRESULT WINAPI __wine_register_resources(void);
-HRESULT WINAPI __wine_unregister_resources(void);
+HRESULT CDECL __wine_register_resources(void);
+HRESULT CDECL __wine_unregister_resources(void);
 }
 
 extern "C" HRESULT ReactOS_ACLShellSource_Constructor(IUnknown *outer, IUnknown **out)
