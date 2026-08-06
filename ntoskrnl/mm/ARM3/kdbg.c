@@ -730,7 +730,11 @@ ExpKdbgReadPte(IN PCSTR Level, IN PMMPTE PointerPte, OUT PMMPTE Pte)
     }
     else if (Pte->u.Soft.Prototype)
     {
+#if defined(_M_IX86)
+        KdbpPrint("prototype address %p\n", MiProtoPteToPte(Pte));
+#else
         KdbpPrint("prototype address %p protection 0x%lx\n", (PVOID)(ULONG_PTR)((ULONGLONG)Pte->u.Proto.ProtoAddress << 4), (ULONG)Pte->u.Proto.Protection);
+#endif
     }
     else if (Pte->u.Long != 0)
     {
