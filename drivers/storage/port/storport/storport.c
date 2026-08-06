@@ -186,8 +186,7 @@ PortAcquireTimerLock(
      * timer DPC to the adapter interrupt IRQL before taking this lock so an
      * interrupt on the same CPU cannot preempt the lock owner and deadlock.
      */
-    if ((DeviceExtension->Interrupt != NULL) &&
-        (DeviceExtension->InterruptIrql > TargetIrql))
+    if (DeviceExtension->InterruptIrql > TargetIrql)
     {
         TargetIrql = (KIRQL)DeviceExtension->InterruptIrql;
     }
@@ -1313,7 +1312,10 @@ StorPortExtendedFunction(
                 break;
             }
             WaitStatus = KeWaitForSingleObject(Object, Executive, KernelMode, Alertable, Timeout);
-            Status = NT_SUCCESS(WaitStatus) ? STOR_STATUS_SUCCESS : STOR_STATUS_UNSUCCESSFUL;
+            if (WaitStatus == STATUS_TIMEOUT)
+                Status = STOR_STATUS_TIMEOUT;
+            else
+                Status = NT_SUCCESS(WaitStatus) ? STOR_STATUS_SUCCESS : STOR_STATUS_UNSUCCESSFUL;
             break;
         }
 
@@ -1890,6 +1892,7 @@ StorPortExtendedFunction(
                 break;
             }
             RtlZeroMemory(Watchdog, sizeof(*Watchdog));
+            Status = STOR_STATUS_UNSUCCESSFUL;
 #if defined(_M_AMD64) || defined(_M_ARM64)
             {
                 KDPC_WATCHDOG_INFORMATION KernelInfo;
@@ -1900,10 +1903,10 @@ StorPortExtendedFunction(
                     Watchdog->DpcTimeCount = KernelInfo.DpcTimeCount;
                     Watchdog->DpcWatchdogLimit = KernelInfo.DpcWatchdogLimit;
                     Watchdog->DpcWatchdogCount = KernelInfo.DpcWatchdogCount;
+                    Status = STOR_STATUS_SUCCESS;
                 }
             }
 #endif
-            Status = STOR_STATUS_SUCCESS;
             break;
         }
 
@@ -1925,14 +1928,22 @@ StorPortExtendedFunction(
             PPORT_HMB_BLOCK HmbBlock;
 
             UNREFERENCED_PARAMETER(UtilizationBytes);
-            UNREFERENCED_PARAMETER(AlignmentBytes);
-
-            MiniportExtension = CONTAINING_RECORD(HwDeviceExtension, MINIPORT_DEVICE_EXTENSION, HwDeviceExtension);
-            DeviceExtension = MiniportExtension->Miniport->DeviceExtension;
-            if (!Ranges || !RangeCount || *RangeCount == 0 ||
-                (MinimumBytes != 0 && (MinimumBytes & (PAGE_SIZE - 1)) != 0))
+            if (!HwDeviceExtension || !Ranges || !RangeCount || *RangeCount == 0 ||
+                Boundary.QuadPart != 0 ||
+                (MinimumBytes != 0 && (MinimumBytes & (PAGE_SIZE - 1)) != 0) ||
+                (PreferredBytes & (PAGE_SIZE - 1)) != 0 ||
+                (PreferredBytes != 0 && PreferredBytes < MinimumBytes) ||
+                (AlignmentBytes != 0 && (AlignmentBytes > PAGE_SIZE || (PAGE_SIZE % AlignmentBytes) != 0)))
             {
                 Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            MiniportExtension = CONTAINING_RECORD(HwDeviceExtension, MINIPORT_DEVICE_EXTENSION, HwDeviceExtension);
+            DeviceExtension = MiniportExtension->Miniport->DeviceExtension;
+            Bytes = PreferredBytes != 0 ? PreferredBytes : MinimumBytes;
+            if (Bytes == 0 || Bytes > MAXULONG)
+            {
+                Status = STOR_STATUS_INVALID_BUFFER_SIZE;
                 break;
             }
             if (DeviceExtension->HmbBlockCount >= PORT_HMB_MAX_BLOCKS)
@@ -1943,8 +1954,6 @@ StorPortExtendedFunction(
             if (HighestAddress.QuadPart == 0)
                 HighestAddress.QuadPart = MAXULONGLONG;
 
-            Bytes = PreferredBytes != 0 ? PreferredBytes : MinimumBytes;
-            Bytes &= ~((SIZE_T)PAGE_SIZE - 1);
             while (Bytes >= PAGE_SIZE)
             {
                 Block = MmAllocateContiguousMemorySpecifyCache(Bytes, LowestAddress, HighestAddress, Boundary, MmCached);
@@ -1987,13 +1996,13 @@ StorPortExtendedFunction(
             PMINIPORT_DEVICE_EXTENSION MiniportExtension;
             PFDO_DEVICE_EXTENSION DeviceExtension;
 
-            MiniportExtension = CONTAINING_RECORD(HwDeviceExtension, MINIPORT_DEVICE_EXTENSION, HwDeviceExtension);
-            DeviceExtension = MiniportExtension->Miniport->DeviceExtension;
-            if (!Ranges)
+            if (!HwDeviceExtension || !Ranges || RangeCount == 0)
             {
                 Status = STOR_STATUS_INVALID_PARAMETER;
                 break;
             }
+            MiniportExtension = CONTAINING_RECORD(HwDeviceExtension, MINIPORT_DEVICE_EXTENSION, HwDeviceExtension);
+            DeviceExtension = MiniportExtension->Miniport->DeviceExtension;
             for (RangeIndex = 0; RangeIndex < RangeCount; RangeIndex++)
             {
                 for (BlockIndex = 0; BlockIndex < DeviceExtension->HmbBlockCount; BlockIndex++)
@@ -2382,6 +2391,15 @@ StorPortInitialize(
     DPRINT1("StorPortInitialize(%p %p %p %p)\n",
             Argument1, Argument2, HwInitializationData, HwContext);
 
+    /* Check parameters before inspecting the caller-owned initialization data. */
+    if ((DriverObject == NULL) ||
+        (RegistryPath == NULL) ||
+        (HwInitializationData == NULL))
+    {
+        DPRINT1("Invalid parameter!\n");
+        return STATUS_INVALID_PARAMETER;
+    }
+
     DPRINT1("HwInitializationDataSize: %lu\n", HwInitializationData->HwInitializationDataSize);
     DPRINT1("AdapterInterfaceType: %u\n", HwInitializationData->AdapterInterfaceType);
     DPRINT1("HwInitialize: %p\n", HwInitializationData->HwInitialize);
@@ -2403,17 +2421,8 @@ StorPortInitialize(
                 HwInitializationData->AddressTypeFlags);
     }
 
-    /* Check parameters */
-    if ((DriverObject == NULL) ||
-        (RegistryPath == NULL) ||
-        (HwInitializationData == NULL))
-    {
-        DPRINT1("Invalid parameter!\n");
-        return STATUS_INVALID_PARAMETER;
-    }
-
     /* Check initialization data */
-    if ((HwInitializationData->HwInitializationDataSize < sizeof(HW_INITIALIZATION_DATA)) ||
+    if ((HwInitializationData->HwInitializationDataSize < HW_INIT_DATA_SIZE_PHYSICAL) ||
         (HwInitializationData->HwInitialize == NULL) ||
         (HwInitializationData->HwStartIo == NULL) ||
         (HwInitializationData->HwFindAdapter == NULL) ||
