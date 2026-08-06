@@ -1677,9 +1677,14 @@ StorPortExtendedFunction(
                 Status = STOR_STATUS_INVALID_PARAMETER;
                 break;
             }
-            if (!DeviceExtension->MessageInfo || MessageId >= DeviceExtension->MessageInfo->MessageCount)
+            if (!DeviceExtension->MessageInfo)
             {
-                Status = STOR_STATUS_UNSUCCESSFUL;
+                Status = STOR_STATUS_NOT_IMPLEMENTED;
+                break;
+            }
+            if (MessageId >= DeviceExtension->MessageInfo->MessageCount)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
                 break;
             }
 
@@ -1714,9 +1719,14 @@ StorPortExtendedFunction(
                 Status = STOR_STATUS_INVALID_PARAMETER;
                 break;
             }
-            if (!DeviceExtension->MessageInfo || MessageId >= DeviceExtension->MessageInfo->MessageCount)
+            if (!DeviceExtension->MessageInfo)
             {
-                Status = STOR_STATUS_UNSUCCESSFUL;
+                Status = STOR_STATUS_NOT_IMPLEMENTED;
+                break;
+            }
+            if (MessageId >= DeviceExtension->MessageInfo->MessageCount)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
                 break;
             }
 
@@ -1734,9 +1744,14 @@ StorPortExtendedFunction(
 
             MiniportExtension = CONTAINING_RECORD(HwDeviceExtension, MINIPORT_DEVICE_EXTENSION, HwDeviceExtension);
             DeviceExtension = MiniportExtension->Miniport->DeviceExtension;
-            if (!DeviceExtension->MessageInfo || MessageId >= DeviceExtension->MessageInfo->MessageCount)
+            if (!DeviceExtension->MessageInfo)
             {
-                Status = STOR_STATUS_UNSUCCESSFUL;
+                Status = STOR_STATUS_NOT_IMPLEMENTED;
+                break;
+            }
+            if (MessageId >= DeviceExtension->MessageInfo->MessageCount)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
                 break;
             }
 

@@ -395,6 +395,14 @@ MiniportHwInitialize(
 
 
 BOOLEAN
+MiniportHwMSInterrupt(
+    _In_ PMINIPORT Miniport,
+    _In_ ULONG MessageId)
+{
+    return Miniport->PortConfig.HwMSInterruptRoutine(&Miniport->MiniportExtension->HwDeviceExtension, MessageId);
+}
+
+BOOLEAN
 MiniportHwInterrupt(
     _In_ PMINIPORT Miniport)
 {
