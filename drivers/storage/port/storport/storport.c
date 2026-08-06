@@ -1880,6 +1880,137 @@ StorPortExtendedFunction(
             break;
         }
 
+        case ExtFunctionQueryDpcWatchdogInformation:
+        {
+            PSTOR_DPC_WATCHDOG_INFORMATION Watchdog = va_arg(Args, PSTOR_DPC_WATCHDOG_INFORMATION);
+
+            if (!Watchdog)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            RtlZeroMemory(Watchdog, sizeof(*Watchdog));
+#if defined(_M_AMD64) || defined(_M_ARM64)
+            {
+                KDPC_WATCHDOG_INFORMATION KernelInfo;
+
+                if (NT_SUCCESS(KeQueryDpcWatchdogInformation(&KernelInfo)))
+                {
+                    Watchdog->DpcTimeLimit = KernelInfo.DpcTimeLimit;
+                    Watchdog->DpcTimeCount = KernelInfo.DpcTimeCount;
+                    Watchdog->DpcWatchdogLimit = KernelInfo.DpcWatchdogLimit;
+                    Watchdog->DpcWatchdogCount = KernelInfo.DpcWatchdogCount;
+                }
+            }
+#endif
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionAllocateHmb:
+        {
+            SIZE_T MinimumBytes = va_arg(Args, SIZE_T);
+            SIZE_T PreferredBytes = va_arg(Args, SIZE_T);
+            ULONGLONG UtilizationBytes = va_arg(Args, ULONGLONG);
+            ULONG AlignmentBytes = va_arg(Args, ULONG);
+            PHYSICAL_ADDRESS LowestAddress = va_arg(Args, PHYSICAL_ADDRESS);
+            PHYSICAL_ADDRESS HighestAddress = va_arg(Args, PHYSICAL_ADDRESS);
+            PHYSICAL_ADDRESS Boundary = va_arg(Args, PHYSICAL_ADDRESS);
+            PACCESS_RANGE Ranges = va_arg(Args, PACCESS_RANGE);
+            PULONG RangeCount = va_arg(Args, PULONG);
+            SIZE_T Bytes;
+            PVOID Block = NULL;
+            PMINIPORT_DEVICE_EXTENSION MiniportExtension;
+            PFDO_DEVICE_EXTENSION DeviceExtension;
+            PPORT_HMB_BLOCK HmbBlock;
+
+            UNREFERENCED_PARAMETER(UtilizationBytes);
+            UNREFERENCED_PARAMETER(AlignmentBytes);
+
+            MiniportExtension = CONTAINING_RECORD(HwDeviceExtension, MINIPORT_DEVICE_EXTENSION, HwDeviceExtension);
+            DeviceExtension = MiniportExtension->Miniport->DeviceExtension;
+            if (!Ranges || !RangeCount || *RangeCount == 0 ||
+                (MinimumBytes != 0 && (MinimumBytes & (PAGE_SIZE - 1)) != 0))
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            if (DeviceExtension->HmbBlockCount >= PORT_HMB_MAX_BLOCKS)
+            {
+                Status = STOR_STATUS_UNSUCCESSFUL;
+                break;
+            }
+            if (HighestAddress.QuadPart == 0)
+                HighestAddress.QuadPart = MAXULONGLONG;
+
+            Bytes = PreferredBytes != 0 ? PreferredBytes : MinimumBytes;
+            Bytes &= ~((SIZE_T)PAGE_SIZE - 1);
+            while (Bytes >= PAGE_SIZE)
+            {
+                Block = MmAllocateContiguousMemorySpecifyCache(Bytes, LowestAddress, HighestAddress, Boundary, MmCached);
+                if (Block != NULL)
+                    break;
+                if (Bytes <= MinimumBytes || Bytes == PAGE_SIZE)
+                    break;
+                Bytes = (Bytes / 2) & ~((SIZE_T)PAGE_SIZE - 1);
+                if (MinimumBytes != 0 && Bytes < MinimumBytes)
+                    Bytes = MinimumBytes;
+            }
+            if (Block == NULL)
+            {
+                Status = STOR_STATUS_INSUFFICIENT_RESOURCES;
+                break;
+            }
+            RtlZeroMemory(Block, Bytes);
+
+            HmbBlock = &DeviceExtension->HmbBlocks[DeviceExtension->HmbBlockCount];
+            HmbBlock->VirtualAddress = Block;
+            HmbBlock->Physical = MmGetPhysicalAddress(Block);
+            HmbBlock->Bytes = Bytes;
+
+            Ranges[0].RangeStart = HmbBlock->Physical;
+            Ranges[0].RangeLength = (ULONG)Bytes;
+            Ranges[0].RangeInMemory = TRUE;
+            *RangeCount = 1;
+            DeviceExtension->HmbBlockCount++;
+            DPRINT1("Storport: HMB granted, %Iu bytes\n", Bytes);
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
+        case ExtFunctionFreeHmb:
+        {
+            PACCESS_RANGE Ranges = va_arg(Args, PACCESS_RANGE);
+            ULONG RangeCount = va_arg(Args, ULONG);
+            ULONG RangeIndex;
+            ULONG BlockIndex;
+            PMINIPORT_DEVICE_EXTENSION MiniportExtension;
+            PFDO_DEVICE_EXTENSION DeviceExtension;
+
+            MiniportExtension = CONTAINING_RECORD(HwDeviceExtension, MINIPORT_DEVICE_EXTENSION, HwDeviceExtension);
+            DeviceExtension = MiniportExtension->Miniport->DeviceExtension;
+            if (!Ranges)
+            {
+                Status = STOR_STATUS_INVALID_PARAMETER;
+                break;
+            }
+            for (RangeIndex = 0; RangeIndex < RangeCount; RangeIndex++)
+            {
+                for (BlockIndex = 0; BlockIndex < DeviceExtension->HmbBlockCount; BlockIndex++)
+                {
+                    if (DeviceExtension->HmbBlocks[BlockIndex].Physical.QuadPart == Ranges[RangeIndex].RangeStart.QuadPart)
+                    {
+                        MmFreeContiguousMemory(DeviceExtension->HmbBlocks[BlockIndex].VirtualAddress);
+                        DeviceExtension->HmbBlockCount--;
+                        DeviceExtension->HmbBlocks[BlockIndex] = DeviceExtension->HmbBlocks[DeviceExtension->HmbBlockCount];
+                        break;
+                    }
+                }
+            }
+            Status = STOR_STATUS_SUCCESS;
+            break;
+        }
+
         default:
             DPRINT1("StorPortExtendedFunction(%d %p ...) not supported\n",
                     FunctionCode, HwDeviceExtension);

@@ -95,6 +95,13 @@ typedef struct _UNIT_DATA
     INQUIRYDATA InquiryData;
 } UNIT_DATA, *PUNIT_DATA;
 
+typedef struct _PORT_HMB_BLOCK
+{
+    PVOID VirtualAddress;
+    PHYSICAL_ADDRESS Physical;
+    SIZE_T Bytes;
+} PORT_HMB_BLOCK, *PPORT_HMB_BLOCK;
+
 typedef struct _FDO_DEVICE_EXTENSION
 {
     EXTENSION_TYPE ExtensionType;
@@ -138,6 +145,11 @@ typedef struct _FDO_DEVICE_EXTENSION
     NPAGED_LOOKASIDE_LIST SglLookaside;
     ULONG SglLookasideSize;
     BOOLEAN RequestPoolsReady;
+
+    /* Host memory buffer blocks lent to the adapter (StorPortAllocateHostMemoryBuffer). */
+#define PORT_HMB_MAX_BLOCKS 8
+    PORT_HMB_BLOCK HmbBlocks[PORT_HMB_MAX_BLOCKS];
+    ULONG HmbBlockCount;
 
     /*
      * Legacy miniports get one port-owned timer through

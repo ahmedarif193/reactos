@@ -3550,6 +3550,66 @@ StorPortPutScatterGatherList(
                                     WriteToDevice);
 }
 
+typedef struct _STOR_DPC_WATCHDOG_INFORMATION
+{
+    ULONG DpcTimeLimit;
+    ULONG DpcTimeCount;
+    ULONG DpcWatchdogLimit;
+    ULONG DpcWatchdogCount;
+    ULONG Reserved;
+} STOR_DPC_WATCHDOG_INFORMATION, *PSTOR_DPC_WATCHDOG_INFORMATION;
+
+FORCEINLINE
+ULONG
+StorPortQueryDpcWatchdogInformation(
+    _In_ PVOID HwDeviceExtension,
+    _Out_ PSTOR_DPC_WATCHDOG_INFORMATION Watchdog)
+{
+    return StorPortExtendedFunction(ExtFunctionQueryDpcWatchdogInformation,
+                                    HwDeviceExtension,
+                                    Watchdog);
+}
+
+FORCEINLINE
+ULONG
+StorPortAllocateHostMemoryBuffer(
+    _In_ PVOID HwDeviceExtension,
+    _In_ SIZE_T MinimumBytes,
+    _In_ SIZE_T PreferredBytes,
+    _In_ ULONGLONG UtilizationBytes,
+    _In_ ULONG AlignmentBytes,
+    _In_ PHYSICAL_ADDRESS LowestAcceptableAddress,
+    _In_ PHYSICAL_ADDRESS HighestAcceptableAddress,
+    _In_opt_ PHYSICAL_ADDRESS BoundaryAddressMultiple,
+    _Out_ PACCESS_RANGE PhysicalAddressRanges,
+    _Inout_ PULONG PhysicalAddressRangeCount)
+{
+    return StorPortExtendedFunction(ExtFunctionAllocateHmb,
+                                    HwDeviceExtension,
+                                    MinimumBytes,
+                                    PreferredBytes,
+                                    UtilizationBytes,
+                                    AlignmentBytes,
+                                    LowestAcceptableAddress,
+                                    HighestAcceptableAddress,
+                                    BoundaryAddressMultiple,
+                                    PhysicalAddressRanges,
+                                    PhysicalAddressRangeCount);
+}
+
+FORCEINLINE
+ULONG
+StorPortFreeHostMemoryBuffer(
+    _In_ PVOID HwDeviceExtension,
+    _In_ PACCESS_RANGE PhysicalAddressRanges,
+    _In_ ULONG PhysicalAddressRangeCount)
+{
+    return StorPortExtendedFunction(ExtFunctionFreeHmb,
+                                    HwDeviceExtension,
+                                    PhysicalAddressRanges,
+                                    PhysicalAddressRangeCount);
+}
+
 FORCEINLINE
 ULONG
 StorPortAcquireMSISpinLock(
