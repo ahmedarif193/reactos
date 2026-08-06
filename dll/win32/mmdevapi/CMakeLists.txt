@@ -34,7 +34,7 @@ add_library(mmdevapi MODULE
 set_module_type(mmdevapi win32dll)
 target_compile_definitions(mmdevapi PRIVATE _FORCENAMELESSUNION _FORCENAMELESSSTRUCT CP_UNIXCP=CP_ACP)
 target_link_libraries(mmdevapi uuid wine)
-add_importlibs(mmdevapi ole32 oleaut32 user32 advapi32 version setupapi msvcrt kernel32 ntdll)
+add_importlibs(mmdevapi ole32 oleaut32 user32 advapi32 version setupapi msvcrt kernel32_vista kernel32 ntdll)
 add_delay_importlibs(mmdevapi winmm)
 add_dependencies(mmdevapi dxsdk)
 add_cd_file(TARGET mmdevapi DESTINATION reactos/system32 FOR all)
