@@ -715,7 +715,7 @@
 @ stub FreeStringArray
 @ stub GetCurrentDriverSigningPolicy
 @ stub GetNewInfName
-@ stdcall GetSetFileTimestamp(wstr ptr ptr long)
+@ stdcall GetSetFileTimestamp(wstr ptr ptr ptr long)
 @ stub GetVersionInfoFromImage
 @ stub InfIsFromOemLocation
 @ stub InstallStop
