@@ -21,6 +21,105 @@
 NTSTATUS
 WINAPI
 DECLSPEC_HOTPATCH
+RtlFlsAlloc(
+    _In_opt_ PFLS_CALLBACK_FUNCTION Callback,
+    _Out_ PULONG Index)
+{
+    PRTL_FLS_DATA FlsData;
+    PPEB Peb = NtCurrentPeb();
+    ULONG FlsIndex;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    RtlAcquirePebLock();
+    FlsData = NtCurrentTeb()->FlsData;
+
+    if (!Peb->FlsCallback && !(Peb->FlsCallback = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, RTL_FLS_MAXIMUM_AVAILABLE * sizeof(PVOID))))
+    {
+        Status = STATUS_NO_MEMORY;
+    }
+    else
+    {
+        FlsIndex = RtlFindClearBitsAndSet(Peb->FlsBitmap, 1, 1);
+        if (FlsIndex == ~0UL)
+        {
+            Status = STATUS_NO_MEMORY;
+        }
+        else if (!FlsData && !(FlsData = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*FlsData))))
+        {
+            RtlClearBits(Peb->FlsBitmap, FlsIndex, 1);
+            Status = STATUS_NO_MEMORY;
+        }
+        else
+        {
+            if (!NtCurrentTeb()->FlsData)
+            {
+                NtCurrentTeb()->FlsData = FlsData;
+                InsertTailList(&Peb->FlsListHead, &FlsData->ListEntry);
+            }
+
+            FlsData->Data[FlsIndex] = NULL;
+            Peb->FlsCallback[FlsIndex] = Callback;
+            if (FlsIndex > Peb->FlsHighIndex)
+                Peb->FlsHighIndex = FlsIndex;
+            *Index = FlsIndex;
+        }
+    }
+
+    RtlReleasePebLock();
+    return Status;
+}
+
+NTSTATUS
+WINAPI
+DECLSPEC_HOTPATCH
+RtlFlsFree(
+    _In_ ULONG Index)
+{
+    PPEB Peb = NtCurrentPeb();
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (!Index || Index >= RTL_FLS_MAXIMUM_AVAILABLE)
+        return STATUS_INVALID_PARAMETER;
+
+    RtlAcquirePebLock();
+    _SEH2_TRY
+    {
+        if (RtlAreBitsSet(Peb->FlsBitmap, Index, 1))
+        {
+            PFLS_CALLBACK_FUNCTION Callback = Peb->FlsCallback[Index];
+            PLIST_ENTRY Entry;
+
+            for (Entry = Peb->FlsListHead.Flink; Entry != &Peb->FlsListHead; Entry = Entry->Flink)
+            {
+                PRTL_FLS_DATA FlsData = CONTAINING_RECORD(Entry, RTL_FLS_DATA, ListEntry);
+
+                if (FlsData->Data[Index])
+                {
+                    if (Callback)
+                        Callback(FlsData->Data[Index]);
+                    FlsData->Data[Index] = NULL;
+                }
+            }
+            Peb->FlsCallback[Index] = NULL;
+            RtlClearBits(Peb->FlsBitmap, Index, 1);
+        }
+        else
+        {
+            Status = STATUS_INVALID_PARAMETER;
+        }
+    }
+    _SEH2_FINALLY
+    {
+        RtlReleasePebLock();
+    }
+    _SEH2_END;
+
+    return Status;
+}
+
+NTSTATUS
+WINAPI
+DECLSPEC_HOTPATCH
 RtlFlsGetValue(
     _In_ ULONG Index,
     _Out_ PVOID *Data)
