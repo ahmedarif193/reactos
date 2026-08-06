@@ -142,8 +142,13 @@ KdbPutsN(
     _In_ USHORT Length)
 {
     CSTRING Output;
+    STRING LogOutput;
 
     KdbpCaptureOutput(String, Length);
+
+    LogOutput.Buffer = (PCHAR)String;
+    LogOutput.Length = LogOutput.MaximumLength = Length;
+    KdLogDbgPrint(&LogOutput);
 
     Output.Buffer = String;
     Output.Length = Output.MaximumLength = Length;

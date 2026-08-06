@@ -146,6 +146,61 @@ KdLogDbgPrint(
     KdpReleaseLock(&KdpPrintSpinLock, OldIrql);
 }
 
+ULONG
+NTAPI
+KdpCopyPrintBuffer(
+    _Out_writes_bytes_(BufferSize) PCHAR Buffer,
+    _In_ ULONG BufferSize,
+    _Out_ PULONG RolloverCount)
+{
+    PCHAR BufferEnd;
+    PCHAR Source;
+    ULONG Available;
+    ULONG FirstLength;
+    KIRQL OldIrql;
+
+    *RolloverCount = 0;
+    if ((Buffer == NULL) || (BufferSize == 0) || (KdPrintCircularBuffer == NULL) || (KdPrintBufferSize == 0))
+        return 0;
+
+    OldIrql = KdpAcquireLock(&KdpPrintSpinLock);
+    BufferEnd = KdPrintCircularBuffer + KdPrintBufferSize;
+    if ((KdPrintWritePointer < KdPrintCircularBuffer) || (KdPrintWritePointer >= BufferEnd))
+    {
+        KdpReleaseLock(&KdpPrintSpinLock, OldIrql);
+        return 0;
+    }
+
+    *RolloverCount = KdPrintRolloverCount;
+    if (KdPrintRolloverCount == 0)
+    {
+        Source = KdPrintCircularBuffer;
+        Available = (ULONG)(KdPrintWritePointer - KdPrintCircularBuffer);
+    }
+    else
+    {
+        Source = KdPrintWritePointer;
+        Available = KdPrintBufferSize;
+    }
+
+    if (Available > BufferSize)
+    {
+        Source += Available - BufferSize;
+        if (Source >= BufferEnd)
+            Source -= KdPrintBufferSize;
+        Available = BufferSize;
+    }
+
+    FirstLength = min(Available, (ULONG)(BufferEnd - Source));
+    if (FirstLength != 0)
+        KdpMoveMemory(Buffer, Source, FirstLength);
+    if (Available > FirstLength)
+        KdpMoveMemory(Buffer + FirstLength, KdPrintCircularBuffer, Available - FirstLength);
+
+    KdpReleaseLock(&KdpPrintSpinLock, OldIrql);
+    return Available;
+}
+
 BOOLEAN
 NTAPI
 KdpPrintString(
@@ -642,6 +697,9 @@ KdpDprintf(
     /* Set it up */
     String.Buffer = Buffer;
     String.Length = String.MaximumLength = Length;
+
+    /* Preserve direct KD output in the same crash-boot log as DbgPrint. */
+    KdLogDbgPrint(&String);
 
     /* Send it to the debugger directly */
     KdpPrintString(&String);

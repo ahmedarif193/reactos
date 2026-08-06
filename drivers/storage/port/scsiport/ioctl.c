@@ -181,7 +181,7 @@ static NTSTATUS SpiGetDumpInterface(_In_ PSCSI_PORT_LUN_EXTENSION LunExtension, 
     Interface->BytesPerSector = DumpContext->BytesPerSector;
     Interface->MaximumTransferLength = MaximumTransferLength;
     Interface->Prepare = SpiDumpPrepare;
-    Interface->Write = SpiDumpWrite;
+    Interface->WriteRoutine = SpiDumpWrite;
     Interface->Flush = SpiDumpFlush;
     return STATUS_SUCCESS;
 }
