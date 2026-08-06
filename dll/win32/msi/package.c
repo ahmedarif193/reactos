@@ -21,7 +21,7 @@
 #define COBJMACROS
 
 #include <stdarg.h>
-#ifdef __REACTOS__
+#if defined(__REACTOS__) && (DLL_EXPORT_VERSION < 0x0a00)
 #define WIN32_NO_STATUS
 #endif
 #include "windef.h"
@@ -1176,8 +1176,33 @@ static UINT parse_suminfo( MSISUMMARYINFO *si, MSIPACKAGE *package )
 
 static BOOL validate_package_platform( enum platform platform )
 {
+#ifdef __REACTOS__
+    SYSTEM_INFO system_info;
+    USHORT native_machine;
+
+    GetNativeSystemInfo( &system_info );
+    switch (system_info.wProcessorArchitecture)
+    {
+    case PROCESSOR_ARCHITECTURE_INTEL:
+        native_machine = IMAGE_FILE_MACHINE_I386;
+        break;
+    case PROCESSOR_ARCHITECTURE_AMD64:
+        native_machine = IMAGE_FILE_MACHINE_AMD64;
+        break;
+    case PROCESSOR_ARCHITECTURE_ARM:
+        native_machine = IMAGE_FILE_MACHINE_ARMNT;
+        break;
+    case PROCESSOR_ARCHITECTURE_ARM64:
+        native_machine = IMAGE_FILE_MACHINE_ARM64;
+        break;
+    default:
+        native_machine = IMAGE_FILE_MACHINE_UNKNOWN;
+        break;
+    }
+#else
     USHORT proc_machine, native_machine;
     IsWow64Process2( GetCurrentProcess(), &proc_machine, &native_machine );
+#endif
     switch (platform)
     {
     case PLATFORM_INTEL:
