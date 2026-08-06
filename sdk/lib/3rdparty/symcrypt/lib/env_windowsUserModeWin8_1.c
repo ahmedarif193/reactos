@@ -11,6 +11,9 @@
 #pragma warning(disable: 5103) // Arm64's wdm.h included below currently generate a lot of 5103 warnings
 #include <windows.h>
 #pragma warning(pop)
+#ifdef __REACTOS__
+#include <reactos/kernel32_vista.h>
+#endif
 #include "symcrypt.h"
 #include "sc_lib.h"
 
