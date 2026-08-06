@@ -53,9 +53,7 @@ if(ARCH STREQUAL "amd64")
     list(APPEND SOURCE rtl/xstate_wow64.c)
 endif()
 
-if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64")
-    list(APPEND SOURCE wow64.c)
-endif()
+list(APPEND SOURCE wow64.c)
 
 if(ARCH STREQUAL "i386")
     list(APPEND ASM_SOURCE dispatch/i386/dispatch.S)
