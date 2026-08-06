@@ -128,6 +128,18 @@ typedef struct _FDO_DEVICE_EXTENSION
     BOOLEAN PerfConfigured;
 
     /*
+     * Per-request state comes from lookasides once the adapter is up: the
+     * SRB extension must stay physically contiguous, so its list allocates
+     * with MmAllocateContiguousMemory underneath.
+     */
+    NPAGED_LOOKASIDE_LIST SrbContextLookaside;
+    NPAGED_LOOKASIDE_LIST MiniportSrbLookaside;
+    NPAGED_LOOKASIDE_LIST SrbExtensionLookaside;
+    NPAGED_LOOKASIDE_LIST SglLookaside;
+    ULONG SglLookasideSize;
+    BOOLEAN RequestPoolsReady;
+
+    /*
      * Legacy miniports get one port-owned timer through
      * StorPortNotification(RequestTimerCall).
      */
@@ -186,6 +198,7 @@ typedef struct _STOR_SRB_CONTEXT
     PSTOR_SCATTER_GATHER_LIST Sgl;
     ULONG SglAllocationSize;
     ULONG SrbExtensionSize;
+    struct _FDO_DEVICE_EXTENSION* FdoExtension;
 } STOR_SRB_CONTEXT, *PSTOR_SRB_CONTEXT;
 
 #define PortGetSrbContext(Irp)  ((PSTOR_SRB_CONTEXT)((Irp)->Tail.Overlay.DriverContext[0]))
@@ -234,6 +247,8 @@ typedef struct _PORT_DUMP_CONTEXT
 /* pdo.c */
 
 VOID PortFreeSrbContext(_In_ PIRP Irp);
+
+VOID PortFdoInitializeRequestPools(_In_ PFDO_DEVICE_EXTENSION FdoExtension);
 
 NTSTATUS PortSrbStatusToNtStatus(_In_ UCHAR SrbStatus);
 

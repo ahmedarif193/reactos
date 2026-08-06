@@ -124,7 +124,55 @@ PortDeletePdo(
  * from the MDL the I/O manager built for the transfer. Physically adjacent
  * pages are coalesced so the list stays short.
  */
-static PSTOR_SCATTER_GATHER_LIST PortBuildScatterGatherList(_In_ PMDL Mdl, _In_ ULONG TransferLength, _Out_ PULONG AllocationSize)
+typedef struct _PORT_SRBEX_REQUEST
+{
+    STORAGE_REQUEST_BLOCK Srb;
+    STOR_ADDR_BTL8 Address;
+    SRBEX_DATA_SCSI_CDB16 Scsi;
+} PORT_SRBEX_REQUEST, *PPORT_SRBEX_REQUEST;
+
+static PVOID NTAPI PortAllocateContiguousBlock(_In_ POOL_TYPE PoolType, _In_ SIZE_T NumberOfBytes, _In_ ULONG Tag)
+{
+    PHYSICAL_ADDRESS HighestAddress;
+
+    UNREFERENCED_PARAMETER(PoolType);
+    UNREFERENCED_PARAMETER(Tag);
+    HighestAddress.QuadPart = MAXULONGLONG;
+    return MmAllocateContiguousMemory(NumberOfBytes, HighestAddress);
+}
+
+static VOID NTAPI PortFreeContiguousBlock(_In_ PVOID Buffer)
+{
+    MmFreeContiguousMemory(Buffer);
+}
+
+VOID PortFdoInitializeRequestPools(_In_ PFDO_DEVICE_EXTENSION FdoExtension)
+{
+    ULONG MaximumPages;
+
+    if (FdoExtension->RequestPoolsReady)
+        return;
+
+    MaximumPages = FdoExtension->Miniport.PortConfig.NumberOfPhysicalBreaks + 2;
+    FdoExtension->SglLookasideSize = FIELD_OFFSET(STOR_SCATTER_GATHER_LIST, List) + MaximumPages * sizeof(STOR_SCATTER_GATHER_ELEMENT);
+
+    ExInitializeNPagedLookasideList(&FdoExtension->SrbContextLookaside, NULL, NULL, 0, sizeof(STOR_SRB_CONTEXT), TAG_SRB_CONTEXT, 0);
+    ExInitializeNPagedLookasideList(&FdoExtension->MiniportSrbLookaside, NULL, NULL, 0, sizeof(PORT_SRBEX_REQUEST), TAG_SRB_CONTEXT, 0);
+    ExInitializeNPagedLookasideList(&FdoExtension->SglLookaside, NULL, NULL, 0, FdoExtension->SglLookasideSize, TAG_SGL, 0);
+    if (FdoExtension->Miniport.PortConfig.SrbExtensionSize != 0)
+    {
+        ExInitializeNPagedLookasideList(&FdoExtension->SrbExtensionLookaside,
+                                        PortAllocateContiguousBlock,
+                                        PortFreeContiguousBlock,
+                                        0,
+                                        FdoExtension->Miniport.PortConfig.SrbExtensionSize,
+                                        TAG_SRB_CONTEXT,
+                                        0);
+    }
+    FdoExtension->RequestPoolsReady = TRUE;
+}
+
+static PSTOR_SCATTER_GATHER_LIST PortBuildScatterGatherList(_In_ PFDO_DEVICE_EXTENSION FdoExtension, _In_ PMDL Mdl, _In_ ULONG TransferLength, _Out_ PULONG AllocationSize)
 {
     PSTOR_SCATTER_GATHER_LIST Sgl;
     STOR_PHYSICAL_ADDRESS Address;
@@ -143,7 +191,15 @@ static PSTOR_SCATTER_GATHER_LIST PortBuildScatterGatherList(_In_ PMDL Mdl, _In_ 
     /* Worst case is one element per page. */
     Size = FIELD_OFFSET(STOR_SCATTER_GATHER_LIST, List) + PageCount * sizeof(STOR_SCATTER_GATHER_ELEMENT);
 
-    Sgl = ExAllocatePoolWithTag(NonPagedPool, Size, TAG_SGL);
+    if (FdoExtension->RequestPoolsReady && Size <= FdoExtension->SglLookasideSize)
+    {
+        Size = FdoExtension->SglLookasideSize;
+        Sgl = ExAllocateFromNPagedLookasideList(&FdoExtension->SglLookaside);
+    }
+    else
+    {
+        Sgl = ExAllocatePoolWithTag(NonPagedPool, Size, TAG_SGL);
+    }
     if (Sgl == NULL)
         return NULL;
 
@@ -391,13 +447,6 @@ Failure:
     return STATUS_INSUFFICIENT_RESOURCES;
 }
 
-typedef struct _PORT_SRBEX_REQUEST
-{
-    STORAGE_REQUEST_BLOCK Srb;
-    STOR_ADDR_BTL8 Address;
-    SRBEX_DATA_SCSI_CDB16 Scsi;
-} PORT_SRBEX_REQUEST, *PPORT_SRBEX_REQUEST;
-
 C_ASSERT(FIELD_OFFSET(STORAGE_REQUEST_BLOCK, Signature) == 8);
 C_ASSERT(FIELD_OFFSET(STORAGE_REQUEST_BLOCK, SrbExDataOffset) == 120);
 C_ASSERT(sizeof(STORAGE_REQUEST_BLOCK) == 128);
@@ -413,7 +462,10 @@ static NTSTATUS PortBuildExtendedSrb(_In_ PFDO_DEVICE_EXTENSION FdoExtension, _I
     if (LegacySrb->Function == SRB_FUNCTION_EXECUTE_SCSI && LegacySrb->CdbLength > sizeof(Request->Scsi.Cdb))
         return STATUS_INVALID_PARAMETER;
 
-    Request = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Request), TAG_SRB_CONTEXT);
+    if (FdoExtension->RequestPoolsReady)
+        Request = ExAllocateFromNPagedLookasideList(&FdoExtension->MiniportSrbLookaside);
+    else
+        Request = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Request), TAG_SRB_CONTEXT);
     if (Request == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
 
@@ -467,21 +519,44 @@ static NTSTATUS PortBuildExtendedSrb(_In_ PFDO_DEVICE_EXTENSION FdoExtension, _I
 VOID PortFreeSrbContext(_In_ PIRP Irp)
 {
     PSTOR_SRB_CONTEXT SrbContext;
+    PFDO_DEVICE_EXTENSION FdoExtension;
+    BOOLEAN Pooled;
 
     SrbContext = PortGetSrbContext(Irp);
     if (SrbContext == NULL)
         return;
 
+    FdoExtension = SrbContext->FdoExtension;
+    Pooled = FdoExtension != NULL && FdoExtension->RequestPoolsReady;
+
     if (SrbContext->Sgl != NULL)
-        ExFreePoolWithTag(SrbContext->Sgl, TAG_SGL);
+    {
+        if (Pooled && SrbContext->SglAllocationSize == FdoExtension->SglLookasideSize)
+            ExFreeToNPagedLookasideList(&FdoExtension->SglLookaside, SrbContext->Sgl);
+        else
+            ExFreePoolWithTag(SrbContext->Sgl, TAG_SGL);
+    }
 
     if (SrbContext->SrbExtensionAllocation != NULL)
-        MmFreeContiguousMemory(SrbContext->SrbExtensionAllocation);
+    {
+        if (Pooled)
+            ExFreeToNPagedLookasideList(&FdoExtension->SrbExtensionLookaside, SrbContext->SrbExtensionAllocation);
+        else
+            MmFreeContiguousMemory(SrbContext->SrbExtensionAllocation);
+    }
 
     if (SrbContext->MiniportSrb != NULL)
-        ExFreePoolWithTag(SrbContext->MiniportSrb, TAG_SRB_CONTEXT);
+    {
+        if (Pooled)
+            ExFreeToNPagedLookasideList(&FdoExtension->MiniportSrbLookaside, CONTAINING_RECORD(SrbContext->MiniportSrb, PORT_SRBEX_REQUEST, Srb));
+        else
+            ExFreePoolWithTag(SrbContext->MiniportSrb, TAG_SRB_CONTEXT);
+    }
 
-    ExFreePoolWithTag(SrbContext, TAG_SRB_CONTEXT);
+    if (Pooled)
+        ExFreeToNPagedLookasideList(&FdoExtension->SrbContextLookaside, SrbContext);
+    else
+        ExFreePoolWithTag(SrbContext, TAG_SRB_CONTEXT);
 
     Irp->Tail.Overlay.DriverContext[0] = NULL;
 }
@@ -567,7 +642,10 @@ PortPdoScsi(
         return Status;
     }
 
-    SrbContext = ExAllocatePoolWithTag(NonPagedPool, sizeof(STOR_SRB_CONTEXT), TAG_SRB_CONTEXT);
+    if (FdoExtension->RequestPoolsReady)
+        SrbContext = ExAllocateFromNPagedLookasideList(&FdoExtension->SrbContextLookaside);
+    else
+        SrbContext = ExAllocatePoolWithTag(NonPagedPool, sizeof(STOR_SRB_CONTEXT), TAG_SRB_CONTEXT);
     if (SrbContext == NULL)
     {
         Status = STATUS_INSUFFICIENT_RESOURCES;
@@ -577,6 +655,7 @@ PortPdoScsi(
     RtlZeroMemory(SrbContext, sizeof(STOR_SRB_CONTEXT));
     Irp->Tail.Overlay.DriverContext[0] = SrbContext;
     SrbContext->LegacySrb = Srb;
+    SrbContext->FdoExtension = FdoExtension;
 
     /*
      * The miniport keeps its per-request hardware state (for AHCI, the command
@@ -588,7 +667,10 @@ PortPdoScsi(
     {
         HighestAddress.QuadPart = MAXULONGLONG;
 
-        SrbContext->SrbExtensionAllocation = MmAllocateContiguousMemory(SrbExtensionSize, HighestAddress);
+        if (FdoExtension->RequestPoolsReady)
+            SrbContext->SrbExtensionAllocation = ExAllocateFromNPagedLookasideList(&FdoExtension->SrbExtensionLookaside);
+        else
+            SrbContext->SrbExtensionAllocation = MmAllocateContiguousMemory(SrbExtensionSize, HighestAddress);
         if (SrbContext->SrbExtensionAllocation == NULL)
         {
             Status = STATUS_INSUFFICIENT_RESOURCES;
@@ -609,7 +691,7 @@ PortPdoScsi(
             goto Fail;
         }
 
-        SrbContext->Sgl = PortBuildScatterGatherList(Irp->MdlAddress, Srb->DataTransferLength, &SrbContext->SglAllocationSize);
+        SrbContext->Sgl = PortBuildScatterGatherList(FdoExtension, Irp->MdlAddress, Srb->DataTransferLength, &SrbContext->SglAllocationSize);
         if (SrbContext->Sgl == NULL)
         {
             Status = STATUS_INSUFFICIENT_RESOURCES;
