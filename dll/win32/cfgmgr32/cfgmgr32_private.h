@@ -28,6 +28,13 @@
 #include "winuser.h"
 
 #include "cfgmgr32.h"
+#if defined(__REACTOS__) && (WINVER < _WIN32_WINNT_WIN7)
+#define CM_GETIDLIST_FILTER_TRANSPORTRELATIONS 0x00000080
+#define CM_GETIDLIST_FILTER_PRESENT            0x00000100
+#define CM_GETIDLIST_FILTER_CLASS              0x00000200
+#undef CM_GETIDLIST_FILTER_BITS
+#define CM_GETIDLIST_FILTER_BITS               0x100003FF
+#endif
 #include "setupapi.h"
 #include "dbt.h"
 #include "devfiltertypes.h"
