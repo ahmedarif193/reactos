@@ -55,6 +55,34 @@ NvmeMaskDeviceInterrupts(_In_ PNVME_DEVICE_EXTENSION Device, _In_ BOOLEAN Mask)
 }
 
 static
+VOID
+NvmeReportPcieLink(_In_ PNVME_DEVICE_EXTENSION Device)
+{
+    UCHAR Config[256];
+    ULONG CapOffset;
+    ULONG Guard;
+
+    if (StorPortGetBusData(Device, PCIConfiguration, Device->SystemIoBusNumber,
+                           Device->SlotNumber, Config, sizeof(Config)) < 64 ||
+        (Config[0x06] & 0x10) == 0)
+    {
+        return;
+    }
+    CapOffset = Config[0x34] & 0xFC;
+    for (Guard = 0; CapOffset >= 0x40 && CapOffset <= 0xFC - 4 && Guard < 48; Guard++)
+    {
+        if (Config[CapOffset] == 0x10)
+        {
+            USHORT LinkStatus = (USHORT)(Config[CapOffset + 0x12] | (Config[CapOffset + 0x13] << 8));
+
+            DPRINT1("stornvme: PCIe link x%u Gen%u\n", (LinkStatus >> 4) & 0x3F, LinkStatus & 0xF);
+            return;
+        }
+        CapOffset = Config[CapOffset + 1] & 0xFC;
+    }
+}
+
+static
 ULONG
 NTAPI
 NvmeFindAdapter(_In_ PVOID DeviceExtension,
@@ -93,6 +121,7 @@ NvmeFindAdapter(_In_ PVOID DeviceExtension,
     Device->SystemIoBusNumber = ConfigInfo->SystemIoBusNumber;
     Device->SlotNumber = ConfigInfo->SlotNumber;
     NvmeMaskDeviceInterrupts(Device, TRUE);
+    NvmeReportPcieLink(Device);
 
     Device->Bar0 = (PUCHAR)StorPortGetDeviceBase(Device,
                                                  ConfigInfo->AdapterInterfaceType,
