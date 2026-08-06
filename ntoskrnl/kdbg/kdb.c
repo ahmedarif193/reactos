@@ -1493,7 +1493,7 @@ KdbpAttachToThread(
 
             Running = TRUE;
             if (NT_SUCCESS(KdbpSafeReadMemory(&FrozenState, (PVOID)&Prcb->IpiFrozen, sizeof(FrozenState))) &&
-                ((FrozenState & ~IPI_FROZEN_FLAG_ACTIVE) == IPI_FROZEN_STATE_FROZEN) &&
+                KdbpProcessorStateIsFrozen(FrozenState) &&
                 NT_SUCCESS(KdbpSafeReadMemory(&KdbThreadTrapFrame, &Prcb->ProcessorState.ContextFrame, sizeof(KdbThreadTrapFrame))))
             {
                 Captured = TRUE;

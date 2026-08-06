@@ -88,6 +88,13 @@ KeSetContextReturnRegister(PCONTEXT Context, ULONG_PTR ReturnValue)
 
 FORCEINLINE
 ULONG_PTR
+KeGetContextStackRegister(PCONTEXT Context)
+{
+    return Context->Esp;
+}
+
+FORCEINLINE
+ULONG_PTR
 KeGetContextFrameRegister(PCONTEXT Context)
 {
     return Context->Ebp;
