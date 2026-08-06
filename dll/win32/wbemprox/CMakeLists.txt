@@ -29,6 +29,6 @@ set_source_files_properties(wbemprox.rc PROPERTIES OBJECT_DEPENDS ${CMAKE_CURREN
 set_module_type(wbemprox win32dll)
 target_compile_definitions(wbemprox PRIVATE __WINESRC__)
 target_link_libraries(wbemprox uuid wine wine_dll_register wine_dll_canunload oldnames)
-add_importlibs(wbemprox winspool version iphlpapi setupapi oleaut32 ole32 advapi32 user32 gdi32 ws2_32 rpcrt4 msvcrt kernel32 ntdll)
+add_importlibs(wbemprox winspool version iphlpapi setupapi oleaut32 ole32 advapi32 user32 gdi32 ws2_32 rpcrt4 msvcrt kernel32_vista kernel32 ntdll)
 add_cd_file(TARGET wbemprox DESTINATION reactos/system32/wbem FOR all)
 set_wine_module(wbemprox)
