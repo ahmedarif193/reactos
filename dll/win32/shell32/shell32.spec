@@ -497,7 +497,7 @@
 @ stdcall SHCreateProcessAsUserW(ptr) # 2k3:281, Vista:336
 @ stdcall SHCreateQueryCancelAutoPlayMoniker(ptr) # 2k3:282, Vista:337
 @ stdcall SHCreateShellItem(ptr ptr ptr ptr) # 2k3:283, Vista:338
-@ stub -version=0x600+ SHCreateShellItemArray # Vista:339
+@ stdcall -version=0x600+ SHCreateShellItemArray(ptr ptr long ptr ptr) # Vista:339
 @ stdcall -version=0x600+ SHCreateShellItemArrayFromDataObject(ptr ptr ptr) # Vista:340
 @ stub -version=0x600+ SHCreateShellItemArrayFromIDLists # Vista:341
 @ stub -version=0x600+ SHCreateShellItemArrayFromShellItem # Vista:342

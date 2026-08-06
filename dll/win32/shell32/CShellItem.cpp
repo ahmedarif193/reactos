@@ -517,3 +517,31 @@ SHCreateShellItemArrayFromDataObject(_In_ IDataObject *pdo, _In_ REFIID riid, _O
 {
     return ShellObjectCreatorInit<CShellItemArray>(pdo, riid, ppv);
 }
+
+EXTERN_C HRESULT WINAPI
+SHCreateShellItemArray(_In_opt_ PCIDLIST_ABSOLUTE pidlParent, _In_opt_ IShellFolder *psf,
+                       _In_ UINT cidl, _In_reads_(cidl) PCUITEMID_CHILD_ARRAY ppidl,
+                       _Out_ IShellItemArray **ppsiItemArray)
+{
+    CComPtr<IDataObject> dataObject;
+    PIDLIST_ABSOLUTE allocatedParent = NULL;
+    HRESULT hr;
+
+    if (!ppsiItemArray || !ppidl || !cidl || (!pidlParent && !psf))
+        return E_INVALIDARG;
+    *ppsiItemArray = NULL;
+
+    if (!pidlParent)
+    {
+        hr = SHGetIDListFromObject(psf, &allocatedParent);
+        if (FAILED(hr))
+            return hr;
+        pidlParent = allocatedParent;
+    }
+
+    hr = SHCreateDataObject(pidlParent, cidl, ppidl, NULL, IID_PPV_ARG(IDataObject, &dataObject));
+    if (SUCCEEDED(hr))
+        hr = SHCreateShellItemArrayFromDataObject(dataObject, IID_PPV_ARG(IShellItemArray, ppsiItemArray));
+    ILFree(allocatedParent);
+    return hr;
+}
