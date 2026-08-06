@@ -25,6 +25,12 @@
 #endif
 #include "nb30.h"
 
+#ifdef __REACTOS__
+#ifndef ARRAY_SIZE
+#define ARRAY_SIZE(array) (sizeof(array) / sizeof((array)[0]))
+#endif
+#endif
+
 /* This file describes the interface WINE's NetBIOS implementation uses to
  * interact with a transport implementation (where a transport might be
  * NetBIOS-over-TCP/IP (aka NetBT, NBT), NetBIOS-over-IPX, etc.)

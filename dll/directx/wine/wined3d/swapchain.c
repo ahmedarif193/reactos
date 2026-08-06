@@ -24,6 +24,10 @@
 #include "wined3d_gl.h"
 #include "wined3d_vk.h"
 
+#ifdef __REACTOS__
+#include "reactos/undocuser.h"
+#endif
+
 WINE_DEFAULT_DEBUG_CHANNEL(d3d);
 WINE_DECLARE_DEBUG_CHANNEL(d3d_perf);
 

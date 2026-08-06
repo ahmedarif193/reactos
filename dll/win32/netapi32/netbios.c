@@ -16,6 +16,7 @@
  */
 
 #include "wine/debug.h"
+#include "lmerr.h"
 #include "nbcmdqueue.h"
 #include "netbios.h"
 

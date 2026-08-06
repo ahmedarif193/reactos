@@ -25,7 +25,13 @@
 
 #include "windef.h"
 #include "winbase.h"
-#ifndef __REACTOS__
+#ifdef __REACTOS__
+#define NTOS_MODE_USER
+#include "ndk/rtlfuncs.h"
+#ifndef ARRAY_SIZE
+#define ARRAY_SIZE ARRAYSIZE
+#endif
+#else
 #include "winternl.h"
 #endif
 #include "winreg.h"
