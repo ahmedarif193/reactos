@@ -46,7 +46,14 @@ static NTSTATUS USBPORT_DumpSubmit(_In_ PUSBPORT_DUMP_CONTEXT DumpContext, _In_ 
     Transfer = DumpContext->Transfer;
     RtlZeroMemory(Transfer, DumpContext->TransferAllocationSize);
 
-    if ((Length != 0) && !UsePhysicalAddress)
+    if ((Length != 0) && UsePhysicalAddress)
+    {
+        Buffer = MmGetVirtualForPhysical(PhysicalAddress);
+        if (Buffer == NULL)
+            return STATUS_INVALID_ADDRESS;
+    }
+
+    if (Length != 0)
     {
         if (DirectionIn)
             RtlZeroMemory(DumpContext->BounceBuffer, Length);
@@ -67,12 +74,12 @@ static NTSTATUS USBPORT_DumpSubmit(_In_ PUSBPORT_DUMP_CONTEXT DumpContext, _In_ 
         Transfer->TransferParameters.SetupPacket = *SetupPacket;
     }
 
-    Transfer->SgList.CurrentVa = UsePhysicalAddress ? 0 : (ULONG_PTR)DumpContext->BounceBuffer;
-    Transfer->SgList.MappedSystemVa = UsePhysicalAddress ? NULL : DumpContext->BounceBuffer;
+    Transfer->SgList.CurrentVa = (ULONG_PTR)DumpContext->BounceBuffer;
+    Transfer->SgList.MappedSystemVa = DumpContext->BounceBuffer;
     if (Length != 0)
     {
         Transfer->SgList.SgElementCount = 1;
-        Transfer->SgList.SgElement[0].SgPhysicalAddress = UsePhysicalAddress ? PhysicalAddress : DumpContext->BouncePhysicalAddress;
+        Transfer->SgList.SgElement[0].SgPhysicalAddress = DumpContext->BouncePhysicalAddress;
         Transfer->SgList.SgElement[0].SgTransferLength = Length;
         Transfer->SgList.SgElement[0].SgOffset = 0;
     }
