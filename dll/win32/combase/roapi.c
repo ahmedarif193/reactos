@@ -611,6 +611,41 @@ HRESULT WINAPI RoGetErrorReportingFlags(UINT32 *flags)
     return S_OK;
 }
 
+BOOL WINAPI IsErrorPropagationEnabled(void)
+{
+    FIXME("(): stub\n");
+    return FALSE;
+}
+
+HRESULT WINAPI RoGetMatchingRestrictedErrorInfo(HRESULT error, IRestrictedErrorInfo **info)
+{
+    FIXME("(%#lx, %p): stub\n", error, info);
+
+    if (!info)
+        return E_POINTER;
+
+    *info = NULL;
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI RoReportFailedDelegate(IUnknown *delegate, IRestrictedErrorInfo *info)
+{
+    FIXME("(%p, %p): stub\n", delegate, info);
+    return S_OK;
+}
+
+BOOL WINAPI RoTransformError(HRESULT old_error, HRESULT new_error, HSTRING message)
+{
+    FIXME("%#lx, %#lx, %s: stub\n", old_error, new_error, debugstr_hstring(message));
+    return FALSE;
+}
+
+BOOL WINAPI RoTransformErrorW(HRESULT old_error, HRESULT new_error, UINT max_len, const WCHAR *message)
+{
+    FIXME("%#lx, %#lx, %u, %p: stub\n", old_error, new_error, max_len, message);
+    return FALSE;
+}
+
 
 /***********************************************************************
  *      CleanupTlsOleState (combase.@)

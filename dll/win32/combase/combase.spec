@@ -279,7 +279,7 @@
 @ stub InternalStubInvoke
 @ stdcall InternalTlsAllocData(ptr)
 @ stub InternalUnmarshalObjRef
-@ stub IsErrorPropagationEnabled
+@ stdcall IsErrorPropagationEnabled()
 @ stub NdrExtStubInitialize
 @ stub NdrOleDllGetClassObject
 @ stub NdrpFindInterface
@@ -297,7 +297,7 @@
 @ stdcall RoGetAgileReference(long ptr ptr ptr)
 @ stdcall RoGetApartmentIdentifier(ptr)
 @ stdcall RoGetErrorReportingFlags(ptr)
-@ stub RoGetMatchingRestrictedErrorInfo
+@ stdcall RoGetMatchingRestrictedErrorInfo(long ptr)
 @ stdcall RoGetParameterizedTypeInstanceIID(long ptr ptr ptr ptr)
 @ stdcall RoGetServerActivatableClasses(ptr ptr ptr)
 @ stdcall RoInitialize(long)
@@ -310,13 +310,13 @@
 @ stdcall RoRegisterActivationFactories(ptr ptr long ptr)
 @ stdcall RoRegisterForApartmentShutdown(ptr ptr ptr)
 @ stub RoReportCapabilityCheckFailure
-@ stub RoReportFailedDelegate
+@ stdcall RoReportFailedDelegate(ptr ptr)
 @ stdcall RoReportUnhandledError(ptr)
 @ stub RoResolveRestrictedErrorInfoReference
 @ stub RoRevokeActivationFactories
 @ stdcall RoSetErrorReportingFlags(long)
-@ stub RoTransformError
-@ stub RoTransformErrorW
+@ stdcall RoTransformError(long long ptr)
+@ stdcall RoTransformErrorW(long long long ptr)
 @ stdcall RoUninitialize()
 @ stub RoUnregisterForApartmentShutdown
 @ stub SetCleanupFlag
