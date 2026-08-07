@@ -270,10 +270,10 @@ static BOOL rsa_encrypt( const SYMCRYPT_RSAKEY *key, const BYTE *in, SYMCRYPT_NU
         SYMCRYPT_MAX( SYMCRYPT_SCRATCH_BYTES_FOR_COMMON_MOD_OPERATIONS( key->nDigitsOfModulus ),
                       SYMCRYPT_SCRATCH_BYTES_FOR_MODEXP( key->nDigitsOfModulus ) );
 
-    if (!(scratch = malloc( scratch_size ))) return FALSE;
+    if (!(scratch = _aligned_malloc( scratch_size, SYMCRYPT_ASYM_ALIGN_VALUE ))) return FALSE;
     if (!verify_input( key, in, key_size, in_format, scratch, scratch_size ))
     {
-        free( scratch );
+        _aligned_free( scratch );
         return FALSE;
     }
 
@@ -290,7 +290,7 @@ static BOOL rsa_encrypt( const SYMCRYPT_RSAKEY *key, const BYTE *in, SYMCRYPT_NU
 
     SymCryptModElementGetValue( key->pmModulus, result, out, key_size, out_format, scratch + mod_size,
                                 scratch_size - mod_size );
-    free( scratch );
+    _aligned_free( scratch );
     return TRUE;
 }
 
@@ -349,7 +349,7 @@ static BOOL rsa_decrypt( const SYMCRYPT_RSAKEY *key, const BYTE *in, SYMCRYPT_NU
                 SYMCRYPT_MAX( SYMCRYPT_SCRATCH_BYTES_FOR_INT_DIVMOD( key->nDigitsOfModulus, key->nMaxDigitsOfPrimes ),
                     SYMCRYPT_SCRATCH_BYTES_FOR_CRT_SOLUTION( key->nMaxDigitsOfPrimes ) ) ) );
 
-    if (!(scratch = malloc( scratch_size ))) return FALSE;
+    if (!(scratch = _aligned_malloc( scratch_size, SYMCRYPT_ASYM_ALIGN_VALUE ))) return FALSE;
 
     ciphertext = SymCryptIntCreate( scratch, scratch_size, key->nDigitsOfModulus );
     offset += int_size;
@@ -384,7 +384,7 @@ static BOOL rsa_decrypt( const SYMCRYPT_RSAKEY *key, const BYTE *in, SYMCRYPT_NU
                       scratch_size - offset );
 
     SymCryptIntGetValue( plaintext, out, key_size, out_format );
-    free( scratch );
+    _aligned_free( scratch );
     return TRUE;
 }
 
