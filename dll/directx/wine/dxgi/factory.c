@@ -592,6 +592,11 @@ struct dxgi_factory *unsafe_impl_from_IDXGIFactory(IDXGIFactory *iface)
     return factory;
 }
 
+#ifdef __REACTOS__
+static struct wined3d *dxgi_cached_wined3d;
+static BOOL dxgi_wined3d_initialized;
+#endif
+
 static HRESULT dxgi_factory_init(struct dxgi_factory *factory, BOOL extended)
 {
     factory->IWineDXGIFactory_iface.lpVtbl = &dxgi_factory_vtbl;
@@ -599,7 +604,18 @@ static HRESULT dxgi_factory_init(struct dxgi_factory *factory, BOOL extended)
     wined3d_private_store_init(&factory->private_store);
 
     wined3d_mutex_lock();
+#ifdef __REACTOS__
+    if (!dxgi_wined3d_initialized)
+    {
+        dxgi_cached_wined3d = wined3d_create(0);
+        dxgi_wined3d_initialized = TRUE;
+    }
+    factory->wined3d = dxgi_cached_wined3d;
+    if (factory->wined3d)
+        wined3d_incref(factory->wined3d);
+#else
     factory->wined3d = wined3d_create(0);
+#endif
     wined3d_mutex_unlock();
     if (!factory->wined3d)
     {
