@@ -208,7 +208,7 @@
 @ stub CreateWriter
 @ stub CreateWriterEx
 @ stdcall -private DllCanUnloadNow()
-@ stub DllGetClassObject
+@ stub -private DllGetClassObject
 @ stub GetProviderMgmtInterface
 @ stub GetProviderMgmtInterfaceInternal
 @ stub IsVolumeSnapshottedInternal

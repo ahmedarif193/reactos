@@ -16,8 +16,8 @@
  24 stub PRProviderInit
  25 stub LAUNCHWIZARD
  26 stub LaunchWizard@20
- 27 stdcall -private DllGetClassObject(ptr ptr ptr)
- 28 stdcall -private DllCanUnloadNow()
+@ stdcall -private DllGetClassObject(ptr ptr ptr)
+@ stdcall -private DllCanUnloadNow()
  29 stub MAPIOpenFormMgr
  30 stub MAPIOpenFormMgr@8
  31 stdcall MAPIOpenLocalFormContainer(ptr)
