@@ -48,7 +48,7 @@ static BOOL init_sym_imp(BOOL fInvadeProcess, const char* file, int line)
     if (!SymInitialize(proc(), NULL, fInvadeProcess))
     {
         DWORD err = GetLastError();
-        ok_(file, line)(0, "Failed to init: 0x%x\n", err);
+        ok_(file, line)(0, "Failed to init: 0x%lx\n", err);
         return FALSE;
     }
     return TRUE;
@@ -267,7 +267,7 @@ static BOOL CALLBACK EnumSymProc(PSYMBOL_INFO pSymInfo, ULONG SymbolSize, PVOID 
     }
     else
     {
-        ok(0, "Out of bounds (%lu), max is: %i!\n", ctx->Index, ARRAYSIZE(test_data));
+        ok(0, "Out of bounds (%Iu), max is: %Iu!\n", ctx->Index, ARRAYSIZE(test_data));
     }
 
     return TRUE;
@@ -321,7 +321,7 @@ START_TEST(rsym)
         dwErr = GetLastError();
 
         ok_ulonglong(BaseAddress, 0x600000);
-        ok(dwErr == ERROR_SUCCESS || dwErr == ERROR_FILE_NOT_FOUND, "Got 0x%x\n", dwErr);
+        ok(dwErr == ERROR_SUCCESS || dwErr == ERROR_FILE_NOT_FOUND, "Got 0x%lx\n", dwErr);
 
         if (BaseAddress == 0x600000)
         {

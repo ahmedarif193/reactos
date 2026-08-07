@@ -181,7 +181,7 @@ void compare_file_(char* filename, const unsigned char* data, size_t len, const 
         return;
     }
     size = GetFileSize(hFile, NULL);
-    ok(size == len, "Filesize is %u instead of %u, %s\n", size, len, test_name);
+    ok(size == len, "Filesize is %Iu instead of %Iu, %s\n", size, len, test_name);
 
     buf = malloc(size);
     if (buf)
@@ -200,7 +200,7 @@ void compare_file_(char* filename, const unsigned char* data, size_t len, const 
     }
     else
     {
-        ok_(__FILE__, line)(0, "Unable to allocate %u, %s\n", size, test_name);
+        ok_(__FILE__, line)(0, "Unable to allocate %Iu, %s\n", size, test_name);
     }
 
     CloseHandle(hFile);

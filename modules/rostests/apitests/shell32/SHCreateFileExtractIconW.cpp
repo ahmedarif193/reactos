@@ -124,16 +124,16 @@ START_TEST(SHCreateFileExtractIconW)
         {
             CComPtr<IUnknown> spUnknown;
             HRESULT hr = pSHCreateFileExtractIconW(L"test.txt", FILE_ATTRIBUTE_NORMAL, *InterfaceTests[n].IID, (void**)&spUnknown);
-            ok(hr == InterfaceTests[n].ExpectedCreate, "Expected hr to be 0x%lx, was 0x%lx for %u\n", InterfaceTests[n].ExpectedCreate, hr, n);
+            ok(hr == InterfaceTests[n].ExpectedCreate, "Expected hr to be 0x%lx, was 0x%lx for %Iu\n", InterfaceTests[n].ExpectedCreate, hr, n);
         }
 
         {
             CComPtr<IUnknown> spUnknown, spUnknown2;
             HRESULT hr = pSHCreateFileExtractIconW(L"test.txt", FILE_ATTRIBUTE_NORMAL, IID_PPV_ARG(IUnknown, &spUnknown));
-            ok(hr == S_OK, "Expected hr to be S_OK, was 0x%lx for %u\n", hr, n);
+            ok(hr == S_OK, "Expected hr to be S_OK, was 0x%lx for %Iu\n", hr, n);
 
             hr = spUnknown->QueryInterface(*InterfaceTests[n].IID, (void**)&spUnknown2);
-            ok(hr == InterfaceTests[n].ExpectedQueryInterface, "Expected hr to be 0x%lx, was 0x%lx for %u\n", InterfaceTests[n].ExpectedQueryInterface, hr, n);
+            ok(hr == InterfaceTests[n].ExpectedQueryInterface, "Expected hr to be 0x%lx, was 0x%lx for %Iu\n", InterfaceTests[n].ExpectedQueryInterface, hr, n);
         }
     }
 

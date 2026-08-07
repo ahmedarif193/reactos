@@ -44,19 +44,19 @@ ReAllocBuffer(
                                   Size);
     if (!NewBuffer)
     {
-        skip("RtlReAllocateHeap failed for size %lu (%s)\n", Size, Action);
+        skip("RtlReAllocateHeap failed for size %llu (%s)\n", Size, Action);
         return FALSE;
     }
     *Buffer = NewBuffer;
     ok_hex(RtlSizeHeap(RtlGetProcessHeap(), 0, NewBuffer), Size);
     if (OldSize < Size)
     {
-        ok(CheckBuffer(NewBuffer, OldSize, 0x7a), "CheckBuffer failed at size 0x%lx -> 0x%lx\n", OldSize, Size);
-        ok(CheckBuffer(NewBuffer + OldSize, Size - OldSize, 0), "HEAP_ZERO_MEMORY not respected for 0x%lx -> 0x%lx\n", OldSize, Size);
+        ok(CheckBuffer(NewBuffer, OldSize, 0x7a), "CheckBuffer failed at size 0x%llx -> 0x%llx\n", OldSize, Size);
+        ok(CheckBuffer(NewBuffer + OldSize, Size - OldSize, 0), "HEAP_ZERO_MEMORY not respected for 0x%llx -> 0x%llx\n", OldSize, Size);
     }
     else
     {
-        ok(CheckBuffer(NewBuffer, Size, 0x7a), "CheckBuffer failed at size 0x%lx -> 0x%lx\n", OldSize, Size);
+        ok(CheckBuffer(NewBuffer, Size, 0x7a), "CheckBuffer failed at size 0x%llx -> 0x%llx\n", OldSize, Size);
     }
     *OldSizePtr = Size;
     return TRUE;
@@ -87,10 +87,10 @@ START_TEST(RtlReAllocateHeap)
                              OldSize);
     if (!Buffer)
     {
-        skip("RtlAllocateHeap failed for size %lu\n", OldSize);
+        skip("RtlAllocateHeap failed for size %llu\n", OldSize);
         return;
     }
-    ok(CheckBuffer(Buffer, OldSize, 0), "HEAP_ZERO_MEMORY not respected for 0x%lx\n", OldSize);
+    ok(CheckBuffer(Buffer, OldSize, 0), "HEAP_ZERO_MEMORY not respected for 0x%llx\n", OldSize);
 
     for (Size = 0x78000; Size < 0x90000 && Continue; Size += 0x100)
     {
@@ -111,7 +111,7 @@ START_TEST(RtlReAllocateHeap)
                              OldSize);
     if (!Buffer)
     {
-        skip("RtlAllocateHeap failed for size %lu\n", OldSize);
+        skip("RtlAllocateHeap failed for size %llu\n", OldSize);
         return;
     }
 

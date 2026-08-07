@@ -17,6 +17,7 @@ START_TEST(RtlRemovePrivileges)
         [sizeof(TOKEN_PRIVILEGES) +
          sizeof(LUID_AND_ATTRIBUTES) * (SE_MAX_WELL_KNOWN_PRIVILEGE - SE_MIN_WELL_KNOWN_PRIVILEGE)];
     PTOKEN_PRIVILEGES Privileges;
+    PLUID_AND_ATTRIBUTES PrivilegeList;
     ULONG PrivilegesToKeep[2];
 
     /* Duplicate current process token to run this test */
@@ -44,6 +45,7 @@ START_TEST(RtlRemovePrivileges)
         return;
     }
     Privileges = (PTOKEN_PRIVILEGES)Buffer;
+    PrivilegeList = Privileges->Privileges;
     if (Privileges->PrivilegeCount < 3)
     {
         NtClose(TestTokenHandle);
@@ -52,8 +54,8 @@ START_TEST(RtlRemovePrivileges)
     }
 
     /* Remove all privileges except 2nd and 3rd privileges, this should succeed */
-    PrivilegesToKeep[0] = Privileges->Privileges[1].Luid.LowPart;
-    PrivilegesToKeep[1] = Privileges->Privileges[2].Luid.LowPart;
+    PrivilegesToKeep[0] = PrivilegeList[1].Luid.LowPart;
+    PrivilegesToKeep[1] = PrivilegeList[2].Luid.LowPart;
     Status = RtlRemovePrivileges(TestTokenHandle, PrivilegesToKeep, ARRAYSIZE(PrivilegesToKeep));
 
     /* Do not use NT_SUCCESS, RtlRemovePrivileges may returns STATUS_NOT_ALL_ASSIGNED */
@@ -73,12 +75,12 @@ START_TEST(RtlRemovePrivileges)
         return;
     }
     ok(Privileges->PrivilegeCount == ARRAYSIZE(PrivilegesToKeep),
-       "Number of privileges after RtlRemovePrivileges is %lu, expected %u\n", Privileges->PrivilegeCount,
+       "Number of privileges after RtlRemovePrivileges is %lu, expected %Iu\n", Privileges->PrivilegeCount,
        ARRAYSIZE(PrivilegesToKeep));
     ok(PrivilegesToKeep[0] + PrivilegesToKeep[1] ==
-           Privileges->Privileges[0].Luid.LowPart + Privileges->Privileges[1].Luid.LowPart,
+           PrivilegeList[0].Luid.LowPart + PrivilegeList[1].Luid.LowPart,
        "Incorrect privileges kept by RtlRemovePrivileges: %lu and %lu, expected %lu and %lu",
-       Privileges->Privileges[0].Luid.LowPart, Privileges->Privileges[1].Luid.LowPart, PrivilegesToKeep[0],
+       PrivilegeList[0].Luid.LowPart, PrivilegeList[1].Luid.LowPart, PrivilegesToKeep[0],
        PrivilegesToKeep[1]);
 
     /* Remove all privileges, this should succeed */

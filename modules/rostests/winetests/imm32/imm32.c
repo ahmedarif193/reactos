@@ -398,7 +398,7 @@ static LRESULT WINAPI test_ime_wnd_proc(HWND hWnd, UINT msg, WPARAM wParam, LPAR
             imc = ImmGetContext(hWnd);
             size = ImmGetCompositionStringW(imc, GCS_RESULTSTR,
                                             wstring, sizeof(wstring));
-            ok(size > 0, "ImmGetCompositionString(GCS_RESULTSTR) is %d\n", size);
+            ok(size > 0, "ImmGetCompositionString(GCS_RESULTSTR) is %ld\n", size);
             ImmReleaseContext(hwnd, imc);
 
             ime_composition_test.catch_result_str = TRUE;
@@ -468,11 +468,11 @@ static void test_ImmGetCompositionString(void)
         memset(cstring, 0x1a, sizeof(cstring));
 
         len = ImmGetCompositionStringA(imc, GCS_COMPSTR, cstring, alen);
-        ok(len == alen, "Unexpected length %d.\n", len);
+        ok(len == alen, "Unexpected length %ld.\n", len);
         ok(cstring[alen] == 0x1a, "Unexpected buffer contents.\n");
 
         len = ImmGetCompositionStringW(imc, GCS_COMPSTR, wstring, wlen);
-        ok(len == wlen, "Unexpected length %d.\n", len);
+        ok(len == wlen, "Unexpected length %ld.\n", len);
         ok(wstring[wlen/sizeof(WCHAR)] == 0x1a1a, "Unexpected buffer contents.\n");
 
         /* Get strings with exactly smaller buffer sizes. */
@@ -481,11 +481,11 @@ static void test_ImmGetCompositionString(void)
 
         /* Returns 0 but still fills buffer. */
         len = ImmGetCompositionStringA(imc, GCS_COMPSTR, cstring, alen - 1);
-        ok(!len, "Unexpected length %d.\n", len);
+        ok(!len, "Unexpected length %ld.\n", len);
         ok(cstring[0] == 'w', "Unexpected buffer contents %s.\n", cstring);
 
         len = ImmGetCompositionStringW(imc, GCS_COMPSTR, wstring, wlen - 1);
-        ok(len == wlen - 1, "Unexpected length %d.\n", len);
+        ok(len == wlen - 1, "Unexpected length %ld.\n", len);
         ok(!memcmp(wstring, string, wlen - 1), "Unexpected buffer contents.\n");
 
         /* Get the size of the required output buffer. */
@@ -493,11 +493,11 @@ static void test_ImmGetCompositionString(void)
         memset(cstring, 0x1a, sizeof(cstring));
 
         len = ImmGetCompositionStringA(imc, GCS_COMPSTR, cstring, 0);
-        ok(len == alen, "Unexpected length %d.\n", len);
+        ok(len == alen, "Unexpected length %ld.\n", len);
         ok(cstring[0] == 0x1a, "Unexpected buffer contents %s.\n", cstring);
 
         len = ImmGetCompositionStringW(imc, GCS_COMPSTR, wstring, 0);
-        ok(len == wlen, "Unexpected length %d.\n", len);
+        ok(len == wlen, "Unexpected length %ld.\n", len);
         ok(wstring[0] == 0x1a1a, "Unexpected buffer contents.\n");
     }
     else
@@ -584,7 +584,7 @@ static void test_ImmSetCompositionString(void)
 
     SetLastError(0xdeadbeef);
     imc = ImmGetContext(hwnd);
-    ok(imc != 0, "ImmGetContext() failed. Last error: %u\n", GetLastError());
+    ok(imc != 0, "ImmGetContext() failed. Last error: %lu\n", GetLastError());
     if (!imc)
         return;
 
@@ -986,7 +986,7 @@ static void test_ImmGetContext(void)
     himc = ImmGetContext((HWND)0xffffffff);
     err = GetLastError();
     ok(himc == NULL, "ImmGetContext succeeded\n");
-    ok(err == ERROR_INVALID_WINDOW_HANDLE, "got %u\n", err);
+    ok(err == ERROR_INVALID_WINDOW_HANDLE, "got %lu\n", err);
 
     himc = ImmGetContext(hwnd);
     ok(himc != NULL, "ImmGetContext failed\n");
@@ -1093,9 +1093,9 @@ static void test_ImmDefaultHwnd(void)
     GetWindowTextA(def1, title, sizeof(title));
     ok(!strcmp(title, "Default IME"), "got %s\n", title);
     style = GetWindowLongA(def1, GWL_STYLE);
-    ok(style == (WS_DISABLED | WS_POPUP | WS_CLIPSIBLINGS), "got %08x\n", style);
+    ok(style == (WS_DISABLED | WS_POPUP | WS_CLIPSIBLINGS), "got %08lx\n", style);
     style = GetWindowLongA(def1, GWL_EXSTYLE);
-    ok(style == 0, "got %08x\n", style);
+    ok(style == 0, "got %08lx\n", style);
 
     imc2 = ImmCreateContext();
     ImmSetOpenStatus(imc2, TRUE);
@@ -1289,7 +1289,7 @@ static void test_default_ime_window_creation(void)
     for (i = 0; i < ARRAY_SIZE(testcases); i++)
     {
         thread = CreateThread(NULL, 0, test_default_ime_window_cb, &testcases[i], 0, NULL);
-        ok(thread != NULL, "CreateThread failed with error %u\n", GetLastError());
+        ok(thread != NULL, "CreateThread failed with error %lu\n", GetLastError());
         while (MsgWaitForMultipleObjects(1, &thread, FALSE, INFINITE, QS_ALLINPUT) == WAIT_OBJECT_0 + 1)
         {
             MSG msg;
@@ -1304,7 +1304,7 @@ static void test_default_ime_window_creation(void)
         if (testcases[i].top_level_window)
         {
             thread = CreateThread(NULL, 0, test_default_ime_window_cancel_cb, &testcases[i], 0, NULL);
-            ok(thread != NULL, "CreateThread failed with error %u\n", GetLastError());
+            ok(thread != NULL, "CreateThread failed with error %lu\n", GetLastError());
             WaitForSingleObject(thread, INFINITE);
             CloseHandle(thread);
         }
@@ -1333,32 +1333,32 @@ static void test_ImmGetIMCLockCount(void)
     count = ImmGetIMCLockCount((HIMC)0xdeadcafe);
     ok(count == 0, "Invalid IMC should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     count = ImmGetIMCLockCount(0x00000000);
     ok(count == 0, "NULL IMC should return 0\n");
     ret = GetLastError();
-    ok(ret == 0xdeadbeef, "Last Error should remain unchanged: %08x\n",ret);
+    ok(ret == 0xdeadbeef, "Last Error should remain unchanged: %08lx\n",ret);
     count = ImmGetIMCLockCount(imc);
     ok(count == 0, "Destroyed IMC should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
 
     imc = ImmCreateContext();
     count = ImmGetIMCLockCount(imc);
-    ok(count == 0, "expect 0, returned %d\n", count);
+    ok(count == 0, "expect 0, returned %lu\n", count);
     ic = ImmLockIMC(imc);
     ok(ic != NULL, "ImmLockIMC failed!\n");
     count = ImmGetIMCLockCount(imc);
-    ok(count == 1, "expect 1, returned %d\n", count);
+    ok(count == 1, "expect 1, returned %lu\n", count);
     ret = ImmUnlockIMC(imc);
-    ok(ret == TRUE, "expect TRUE, ret %d\n", ret);
+    ok(ret == TRUE, "expect TRUE, ret %lu\n", ret);
     count = ImmGetIMCLockCount(imc);
-    ok(count == 0, "expect 0, returned %d\n", count);
+    ok(count == 0, "expect 0, returned %lu\n", count);
     ret = ImmUnlockIMC(imc);
-    ok(ret == TRUE, "expect TRUE, ret %d\n", ret);
+    ok(ret == TRUE, "expect TRUE, ret %lu\n", ret);
     count = ImmGetIMCLockCount(imc);
-    ok(count == 0, "expect 0, returned %d\n", count);
+    ok(count == 0, "expect 0, returned %lu\n", count);
 
     for (i = 0; i < GMEM_LOCKCOUNT * 2; i++)
     {
@@ -1366,15 +1366,15 @@ static void test_ImmGetIMCLockCount(void)
         ok(ic != NULL, "ImmLockIMC failed!\n");
     }
     count = ImmGetIMCLockCount(imc);
-    todo_wine ok(count == GMEM_LOCKCOUNT, "expect GMEM_LOCKCOUNT, returned %d\n", count);
+    todo_wine ok(count == GMEM_LOCKCOUNT, "expect GMEM_LOCKCOUNT, returned %lu\n", count);
 
     for (i = 0; i < GMEM_LOCKCOUNT - 1; i++)
         ImmUnlockIMC(imc);
     count = ImmGetIMCLockCount(imc);
-    todo_wine ok(count == 1, "expect 1, returned %d\n", count);
+    todo_wine ok(count == 1, "expect 1, returned %lu\n", count);
     ImmUnlockIMC(imc);
     count = ImmGetIMCLockCount(imc);
-    todo_wine ok(count == 0, "expect 0, returned %d\n", count);
+    todo_wine ok(count == 0, "expect 0, returned %lu\n", count);
 
     ImmDestroyContext(imc);
 }
@@ -1388,18 +1388,18 @@ static void test_ImmGetIMCCLockCount(void)
 
     imcc = ImmCreateIMCC(sizeof(CANDIDATEINFO));
     count = ImmGetIMCCLockCount(imcc);
-    ok(count == 0, "expect 0, returned %d\n", count);
+    ok(count == 0, "expect 0, returned %lu\n", count);
     ImmLockIMCC(imcc);
     count = ImmGetIMCCLockCount(imcc);
-    ok(count == 1, "expect 1, returned %d\n", count);
+    ok(count == 1, "expect 1, returned %lu\n", count);
     ret = ImmUnlockIMCC(imcc);
     ok(ret == FALSE, "expect FALSE, ret %d\n", ret);
     count = ImmGetIMCCLockCount(imcc);
-    ok(count == 0, "expect 0, returned %d\n", count);
+    ok(count == 0, "expect 0, returned %lu\n", count);
     ret = ImmUnlockIMCC(imcc);
     ok(ret == FALSE, "expect FALSE, ret %d\n", ret);
     count = ImmGetIMCCLockCount(imcc);
-    ok(count == 0, "expect 0, returned %d\n", count);
+    ok(count == 0, "expect 0, returned %lu\n", count);
 
     p = ImmLockIMCC(imcc);
     ok(GlobalHandle(p) == imcc, "expect %p, returned %p\n", imcc, GlobalHandle(p));
@@ -1409,18 +1409,18 @@ static void test_ImmGetIMCCLockCount(void)
         ImmLockIMCC(imcc);
         count = ImmGetIMCCLockCount(imcc);
         g_count = GlobalFlags(imcc) & GMEM_LOCKCOUNT;
-        ok(count == g_count, "count %d, g_count %d\n", count, g_count);
+        ok(count == g_count, "count %lu, g_count %lu\n", count, g_count);
     }
     count = ImmGetIMCCLockCount(imcc);
-    ok(count == GMEM_LOCKCOUNT, "expect GMEM_LOCKCOUNT, returned %d\n", count);
+    ok(count == GMEM_LOCKCOUNT, "expect GMEM_LOCKCOUNT, returned %lu\n", count);
 
     for (i = 0; i < GMEM_LOCKCOUNT - 1; i++)
         GlobalUnlock(imcc);
     count = ImmGetIMCCLockCount(imcc);
-    ok(count == 1, "expect 1, returned %d\n", count);
+    ok(count == 1, "expect 1, returned %lu\n", count);
     GlobalUnlock(imcc);
     count = ImmGetIMCCLockCount(imcc);
-    ok(count == 0, "expect 0, returned %d\n", count);
+    ok(count == 0, "expect 0, returned %lu\n", count);
 
     ImmDestroyIMCC(imcc);
 }
@@ -1433,11 +1433,11 @@ static void test_ImmDestroyContext(void)
 
     imc = ImmCreateContext();
     count = ImmGetIMCLockCount(imc);
-    ok(count == 0, "expect 0, returned %d\n", count);
+    ok(count == 0, "expect 0, returned %lu\n", count);
     ic = ImmLockIMC(imc);
     ok(ic != NULL, "ImmLockIMC failed!\n");
     count = ImmGetIMCLockCount(imc);
-    ok(count == 1, "expect 1, returned %d\n", count);
+    ok(count == 1, "expect 1, returned %lu\n", count);
     ret = ImmDestroyContext(imc);
     ok(ret == TRUE, "Destroy a locked IMC should success!\n");
     ic = ImmLockIMC(imc);
@@ -1450,7 +1450,7 @@ static void test_ImmDestroyContext(void)
     ret = ImmDestroyContext(imc);
     ok(ret == FALSE, "Destroy a destroyed IMC should fail!\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
 }
 
 static void test_ImmDestroyIMCC(void)
@@ -1461,13 +1461,13 @@ static void test_ImmDestroyIMCC(void)
 
     imcc = ImmCreateIMCC(sizeof(CANDIDATEINFO));
     count = ImmGetIMCCLockCount(imcc);
-    ok(count == 0, "expect 0, returned %d\n", count);
+    ok(count == 0, "expect 0, returned %lu\n", count);
     p = ImmLockIMCC(imcc);
     ok(p != NULL, "ImmLockIMCC failed!\n");
     count = ImmGetIMCCLockCount(imcc);
-    ok(count == 1, "expect 1, returned %d\n", count);
+    ok(count == 1, "expect 1, returned %lu\n", count);
     size = ImmGetIMCCSize(imcc);
-    ok(size == sizeof(CANDIDATEINFO), "returned %d\n", size);
+    ok(size == sizeof(CANDIDATEINFO), "returned %lu\n", size);
     p = ImmDestroyIMCC(imcc);
     ok(p == NULL, "Destroy a locked IMCC should success!\n");
     p = ImmLockIMCC(imcc);
@@ -1482,7 +1482,7 @@ static void test_ImmDestroyIMCC(void)
     p = ImmDestroyIMCC(imcc);
     ok(p != NULL, "returned NULL\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
 }
 
 static void test_ImmMessages(void)
@@ -1717,7 +1717,7 @@ static void test_InvalidIMC(void)
     oldimc = ImmAssociateContext(hwnd, imc_destroy);
     ok(!oldimc, "Associating to a destroyed imc should fail!\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     imc2 = ImmGetContext(hwnd);
     ok(imc1 == imc2, "imc should not changed! imc1 %p, imc2 %p\n", imc1, imc2);
 
@@ -1737,7 +1737,7 @@ static void test_InvalidIMC(void)
     oldimc = ImmAssociateContext(hwnd, imc_bad);
     ok(!oldimc, "Associating to a destroyed imc should fail!\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     imc2 = ImmGetContext(hwnd);
     ok(imc1 == imc2, "imc should not changed! imc1 %p, imc2 %p\n", imc1, imc2);
 
@@ -1747,306 +1747,306 @@ static void test_InvalidIMC(void)
     ret = ImmGetCandidateListA(imc_bad, 0, NULL, 0);
     ok(ret == 0, "Bad IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmGetCandidateListA(imc_null, 0, NULL, 0);
     ok(ret == 0, "NULL IME should return 0\n");
     ret = GetLastError();
-    ok(ret == 0xdeadbeef, "last error should remain unchanged %08x!\n", ret);
+    ok(ret == 0xdeadbeef, "last error should remain unchanged %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmGetCandidateListA(imc_destroy, 0, NULL, 0);
     ok(ret == 0, "Destroyed IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
 
     /* Test ImmGetCandidateListCountA*/
     SetLastError(0xdeadbeef);
     ret = ImmGetCandidateListCountA(imc_bad,&count);
     ok(ret == 0, "Bad IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmGetCandidateListCountA(imc_null,&count);
     ok(ret == 0, "NULL IME should return 0\n");
     ret = GetLastError();
-    ok(ret == 0xdeadbeef, "last error should remain unchanged %08x!\n", ret);
+    ok(ret == 0xdeadbeef, "last error should remain unchanged %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmGetCandidateListCountA(imc_destroy,&count);
     ok(ret == 0, "Destroyed IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
 
     /* Test ImmGetCandidateWindow */
     SetLastError(0xdeadbeef);
     ret = ImmGetCandidateWindow(imc_bad, 0, (LPCANDIDATEFORM)buffer);
     ok(ret == 0, "Bad IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmGetCandidateWindow(imc_null, 0, (LPCANDIDATEFORM)buffer);
     ok(ret == 0, "NULL IME should return 0\n");
     ret = GetLastError();
-    ok(ret == 0xdeadbeef, "last error should remain unchanged %08x!\n", ret);
+    ok(ret == 0xdeadbeef, "last error should remain unchanged %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmGetCandidateWindow(imc_destroy, 0, (LPCANDIDATEFORM)buffer);
     ok(ret == 0, "Destroyed IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
 
     /* Test ImmGetCompositionFontA */
     SetLastError(0xdeadbeef);
     ret = ImmGetCompositionFontA(imc_bad, (LPLOGFONTA)buffer);
     ok(ret == 0, "Bad IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmGetCompositionFontA(imc_null, (LPLOGFONTA)buffer);
     ok(ret == 0, "NULL IME should return 0\n");
     ret = GetLastError();
-    ok(ret == 0xdeadbeef, "last error should remain unchanged %08x!\n", ret);
+    ok(ret == 0xdeadbeef, "last error should remain unchanged %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmGetCompositionFontA(imc_destroy, (LPLOGFONTA)buffer);
     ok(ret == 0, "Destroyed IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
 
     /* Test ImmGetCompositionWindow */
     SetLastError(0xdeadbeef);
     ret = ImmGetCompositionWindow(imc_bad, (LPCOMPOSITIONFORM)buffer);
     ok(ret == 0, "Bad IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmGetCompositionWindow(imc_null, (LPCOMPOSITIONFORM)buffer);
     ok(ret == 0, "NULL IME should return 0\n");
     ret = GetLastError();
-    ok(ret == 0xdeadbeef, "last error should remain unchanged %08x!\n", ret);
+    ok(ret == 0xdeadbeef, "last error should remain unchanged %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmGetCompositionWindow(imc_destroy, (LPCOMPOSITIONFORM)buffer);
     ok(ret == 0, "Destroyed IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
 
     /* Test ImmGetCompositionStringA */
     SetLastError(0xdeadbeef);
     ret = ImmGetCompositionStringA(imc_bad, GCS_COMPSTR, NULL, 0);
     ok(ret == 0, "Bad IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmGetCompositionStringA(imc_null, GCS_COMPSTR, NULL, 0);
     ok(ret == 0, "NULL IME should return 0\n");
     ret = GetLastError();
-    ok(ret == 0xdeadbeef, "last error should remain unchanged %08x!\n", ret);
+    ok(ret == 0xdeadbeef, "last error should remain unchanged %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmGetCompositionStringA(imc_destroy, GCS_COMPSTR, NULL, 0);
     ok(ret == 0, "Destroyed IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
 
     /* Test ImmSetOpenStatus */
     SetLastError(0xdeadbeef);
     ret = ImmSetOpenStatus(imc_bad, 1);
     ok(ret == 0, "Bad IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmSetOpenStatus(imc_null, 1);
     ok(ret == 0, "NULL IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmSetOpenStatus(imc_destroy, 1);
     ok(ret == 0, "Destroyed IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
 
     /* Test ImmGetOpenStatus */
     SetLastError(0xdeadbeef);
     ret = ImmGetOpenStatus(imc_bad);
     ok(ret == 0, "Bad IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmGetOpenStatus(imc_null);
     ok(ret == 0, "NULL IME should return 0\n");
     ret = GetLastError();
-    ok(ret == 0xdeadbeef, "last error should remain unchanged %08x!\n", ret);
+    ok(ret == 0xdeadbeef, "last error should remain unchanged %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmGetOpenStatus(imc_destroy);
     ok(ret == 0, "Destroyed IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
 
     /* Test ImmGetStatusWindowPos */
     SetLastError(0xdeadbeef);
     ret = ImmGetStatusWindowPos(imc_bad, NULL);
     ok(ret == 0, "Bad IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmGetStatusWindowPos(imc_null, NULL);
     ok(ret == 0, "NULL IME should return 0\n");
     ret = GetLastError();
-    ok(ret == 0xdeadbeef, "last error should remain unchanged %08x!\n", ret);
+    ok(ret == 0xdeadbeef, "last error should remain unchanged %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmGetStatusWindowPos(imc_destroy, NULL);
     ok(ret == 0, "Destroyed IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
 
     /* Test ImmRequestMessageA */
     SetLastError(0xdeadbeef);
     ret = ImmRequestMessageA(imc_bad, WM_CHAR, 0);
     ok(ret == 0, "Bad IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmRequestMessageA(imc_null, WM_CHAR, 0);
     ok(ret == 0, "NULL IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmRequestMessageA(imc_destroy, WM_CHAR, 0);
     ok(ret == 0, "Destroyed IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
 
     /* Test ImmSetCompositionFontA */
     SetLastError(0xdeadbeef);
     ret = ImmSetCompositionFontA(imc_bad, &lf);
     ok(ret == 0, "Bad IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmSetCompositionFontA(imc_null, &lf);
     ok(ret == 0, "NULL IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmSetCompositionFontA(imc_destroy, &lf);
     ok(ret == 0, "Destroyed IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
 
     /* Test ImmSetCompositionWindow */
     SetLastError(0xdeadbeef);
     ret = ImmSetCompositionWindow(imc_bad, NULL);
     ok(ret == 0, "Bad IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmSetCompositionWindow(imc_null, NULL);
     ok(ret == 0, "NULL IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmSetCompositionWindow(imc_destroy, NULL);
     ok(ret == 0, "Destroyed IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
 
     /* Test ImmSetConversionStatus */
     SetLastError(0xdeadbeef);
     ret = ImmSetConversionStatus(imc_bad, 0, 0);
     ok(ret == 0, "Bad IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmSetConversionStatus(imc_null, 0, 0);
     ok(ret == 0, "NULL IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmSetConversionStatus(imc_destroy, 0, 0);
     ok(ret == 0, "Destroyed IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
 
     /* Test ImmSetStatusWindowPos */
     SetLastError(0xdeadbeef);
     ret = ImmSetStatusWindowPos(imc_bad, 0);
     ok(ret == 0, "Bad IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmSetStatusWindowPos(imc_null, 0);
     ok(ret == 0, "NULL IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmSetStatusWindowPos(imc_destroy, 0);
     ok(ret == 0, "Destroyed IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
 
     /* Test ImmGetImeMenuItemsA */
     SetLastError(0xdeadbeef);
     ret = ImmGetImeMenuItemsA(imc_bad, 0, 0, NULL, NULL, 0);
     ok(ret == 0, "Bad IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmGetImeMenuItemsA(imc_null, 0, 0, NULL, NULL, 0);
     ok(ret == 0, "NULL IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmGetImeMenuItemsA(imc_destroy, 0, 0, NULL, NULL, 0);
     ok(ret == 0, "Destroyed IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
 
     /* Test ImmLockIMC */
     SetLastError(0xdeadbeef);
     ic = ImmLockIMC(imc_bad);
     ok(ic == 0, "Bad IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ic = ImmLockIMC(imc_null);
     ok(ic == 0, "NULL IME should return 0\n");
     ret = GetLastError();
-    ok(ret == 0xdeadbeef, "last error should remain unchanged %08x!\n", ret);
+    ok(ret == 0xdeadbeef, "last error should remain unchanged %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ic = ImmLockIMC(imc_destroy);
     ok(ic == 0, "Destroyed IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
 
     /* Test ImmUnlockIMC */
     SetLastError(0xdeadbeef);
     ret = ImmUnlockIMC(imc_bad);
     ok(ret == 0, "Bad IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmUnlockIMC(imc_null);
     ok(ret == 0, "NULL IME should return 0\n");
     ret = GetLastError();
-    ok(ret == 0xdeadbeef, "last error should remain unchanged %08x!\n", ret);
+    ok(ret == 0xdeadbeef, "last error should remain unchanged %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmUnlockIMC(imc_destroy);
     ok(ret == 0, "Destroyed IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
 
     /* Test ImmGenerateMessage */
     SetLastError(0xdeadbeef);
     ret = ImmGenerateMessage(imc_bad);
     ok(ret == 0, "Bad IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmGenerateMessage(imc_null);
     ok(ret == 0, "NULL IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
     SetLastError(0xdeadbeef);
     ret = ImmGenerateMessage(imc_destroy);
     ok(ret == 0, "Destroyed IME should return 0\n");
     ret = GetLastError();
-    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08x!\n", ret);
+    ok(ret == ERROR_INVALID_HANDLE, "wrong last error %08lx!\n", ret);
 }
 
 START_TEST(imm32) {

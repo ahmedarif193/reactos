@@ -228,8 +228,8 @@ Test_KeyNameInformation(void)
     InfoName.Buffer = NameInformation->Name;
     InfoName.Length = NameInformation->NameLength;
     InfoName.MaximumLength = NameInformation->NameLength;
-    ok(RtlCompareUnicodeString(&InfoName, &HKLM_Name, TRUE) == 0, "%.*S\n",
-        InfoName.Length, InfoName.Buffer);
+    ok(RtlCompareUnicodeString(&InfoName, &HKLM_Name, TRUE) == 0, "%.*ls\n",
+        (int)(InfoName.Length / sizeof(WCHAR)), InfoName.Buffer);
 
     RtlFreeHeap(RtlGetProcessHeap(), 0, NameInformation);
 
@@ -260,8 +260,8 @@ Test_KeyNameInformation(void)
     InfoName.Buffer = NameInformation->Name;
     InfoName.Length = NameInformation->NameLength;
     InfoName.MaximumLength = NameInformation->NameLength;
-    ok(RtlCompareUnicodeString(&InfoName, &HKLM_Software_Name, TRUE) == 0, "%.*S\n",
-        InfoName.Length, InfoName.Buffer);
+    ok(RtlCompareUnicodeString(&InfoName, &HKLM_Software_Name, TRUE) == 0, "%.*ls\n",
+        (int)(InfoName.Length / sizeof(WCHAR)), InfoName.Buffer);
 
     RtlFreeHeap(RtlGetProcessHeap(), 0, NameInformation);
 

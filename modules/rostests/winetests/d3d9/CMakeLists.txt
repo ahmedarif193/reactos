@@ -14,6 +14,7 @@ add_executable(d3d9_winetest
     visual.c
     testlist.c)
 
+target_compile_definitions(d3d9_winetest PRIVATE CONST_VTABLE)
 target_link_libraries(d3d9_winetest uuid)
 set_module_type(d3d9_winetest win32cui)
 add_importlibs(d3d9_winetest d3d9 user32 gdi32 msvcrt kernel32)

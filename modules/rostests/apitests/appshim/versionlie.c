@@ -73,11 +73,11 @@ static void verify_shima_imp(PHOOKAPI hook, const VersionLieInfo* info, PCSTR sh
         if (ok1 && ok2)
         {
             char szCSDVersion[128] = "";
-            winetest_ok(v1.dwOSVersionInfoSize == v2.dwOSVersionInfoSize, "Expected dwOSVersionInfoSize to be equal, was: %u, %u for %s\n", v1.dwOSVersionInfoSize, v2.dwOSVersionInfoSize, shim);
-            winetest_ok(info->dwMajorVersion == v2.dwMajorVersion, "Expected dwMajorVersion to be equal, was: %u, %u for %s\n", info->dwMajorVersion, v2.dwMajorVersion, shim);
-            winetest_ok(info->dwMinorVersion == v2.dwMinorVersion, "Expected dwMinorVersion to be equal, was: %u, %u for %s\n", info->dwMinorVersion, v2.dwMinorVersion, shim);
-            winetest_ok(info->dwBuildNumber == v2.dwBuildNumber, "Expected dwBuildNumber to be equal, was: %u, %u for %s\n", info->dwBuildNumber, v2.dwBuildNumber, shim);
-            winetest_ok(info->dwPlatformId == v2.dwPlatformId, "Expected dwPlatformId to be equal, was: %u, %u for %s\n", info->dwPlatformId, v2.dwPlatformId, shim);
+            winetest_ok(v1.dwOSVersionInfoSize == v2.dwOSVersionInfoSize, "Expected dwOSVersionInfoSize to be equal, was: %lu, %lu for %s\n", v1.dwOSVersionInfoSize, v2.dwOSVersionInfoSize, shim);
+            winetest_ok(info->dwMajorVersion == v2.dwMajorVersion, "Expected dwMajorVersion to be equal, was: %lu, %lu for %s\n", info->dwMajorVersion, v2.dwMajorVersion, shim);
+            winetest_ok(info->dwMinorVersion == v2.dwMinorVersion, "Expected dwMinorVersion to be equal, was: %lu, %lu for %s\n", info->dwMinorVersion, v2.dwMinorVersion, shim);
+            winetest_ok(info->dwBuildNumber == v2.dwBuildNumber, "Expected dwBuildNumber to be equal, was: %lu, %lu for %s\n", info->dwBuildNumber, v2.dwBuildNumber, shim);
+            winetest_ok(info->dwPlatformId == v2.dwPlatformId, "Expected dwPlatformId to be equal, was: %lu, %lu for %s\n", info->dwPlatformId, v2.dwPlatformId, shim);
 
             if (info->wServicePackMajor)
                 StringCchPrintfA(szCSDVersion, _countof(szCSDVersion), "Service Pack %u", info->wServicePackMajor);
@@ -136,7 +136,7 @@ static void verify_shimw_imp(PHOOKAPI hook, const VersionLieInfo* info, PCSTR sh
 
         if (first_might_be_broken && first && ok1 == TRUE && ok2 == FALSE)
         {
-            skip("Skipping first check because 0x%x is (falsely) not accepted by the shim %s\n", sizeof(v1), shim);
+            skip("Skipping first check because 0x%Ix is (falsely) not accepted by the shim %s\n", sizeof(v1), shim);
         }
         else
         {
@@ -145,11 +145,11 @@ static void verify_shimw_imp(PHOOKAPI hook, const VersionLieInfo* info, PCSTR sh
         if (ok1 && ok2)
         {
             WCHAR szCSDVersion[128] = { 0 };
-            winetest_ok(v1.dwOSVersionInfoSize == v2.dwOSVersionInfoSize, "Expected dwOSVersionInfoSize to be equal, was: %u, %u for %s\n", v1.dwOSVersionInfoSize, v2.dwOSVersionInfoSize, shim);
-            winetest_ok(info->dwMajorVersion == v2.dwMajorVersion, "Expected dwMajorVersion to be equal, was: %u, %u for %s\n", info->dwMajorVersion, v2.dwMajorVersion, shim);
-            winetest_ok(info->dwMinorVersion == v2.dwMinorVersion, "Expected dwMinorVersion to be equal, was: %u, %u for %s\n", info->dwMinorVersion, v2.dwMinorVersion, shim);
-            winetest_ok(info->dwBuildNumber == v2.dwBuildNumber, "Expected dwBuildNumber to be equal, was: %u, %u for %s\n", info->dwBuildNumber, v2.dwBuildNumber, shim);
-            winetest_ok(info->dwPlatformId == v2.dwPlatformId, "Expected dwPlatformId to be equal, was: %u, %u for %s\n", info->dwPlatformId, v2.dwPlatformId, shim);
+            winetest_ok(v1.dwOSVersionInfoSize == v2.dwOSVersionInfoSize, "Expected dwOSVersionInfoSize to be equal, was: %lu, %lu for %s\n", v1.dwOSVersionInfoSize, v2.dwOSVersionInfoSize, shim);
+            winetest_ok(info->dwMajorVersion == v2.dwMajorVersion, "Expected dwMajorVersion to be equal, was: %lu, %lu for %s\n", info->dwMajorVersion, v2.dwMajorVersion, shim);
+            winetest_ok(info->dwMinorVersion == v2.dwMinorVersion, "Expected dwMinorVersion to be equal, was: %lu, %lu for %s\n", info->dwMinorVersion, v2.dwMinorVersion, shim);
+            winetest_ok(info->dwBuildNumber == v2.dwBuildNumber, "Expected dwBuildNumber to be equal, was: %lu, %lu for %s\n", info->dwBuildNumber, v2.dwBuildNumber, shim);
+            winetest_ok(info->dwPlatformId == v2.dwPlatformId, "Expected dwPlatformId to be equal, was: %lu, %lu for %s\n", info->dwPlatformId, v2.dwPlatformId, shim);
 
             if (info->wServicePackMajor)
                 StringCchPrintfW(szCSDVersion, _countof(szCSDVersion), L"Service Pack %u", info->wServicePackMajor);
@@ -198,7 +198,7 @@ static void verify_shim_imp(PHOOKAPI hook, const VersionLieInfo* info, PCSTR shi
         return;
     }
     ver = ((GETVERSIONPROC)hook->ReplacementFunction)();
-    winetest_ok(info->FullVersion == ver, "Expected GetVersion to return 0x%x, was: 0x%x for %s\n", info->FullVersion, ver, shim);
+    winetest_ok(info->FullVersion == ver, "Expected GetVersion to return 0x%lx, was: 0x%lx for %s\n", info->FullVersion, ver, shim);
 }
 
 
@@ -220,13 +220,13 @@ static void run_test(LPCSTR shim, const VersionLieInfo* info)
     ver = (info->dwMajorVersion << 8) | info->dwMinorVersion;
     if (hook == NULL)
     {
-        skip("Skipping tests for layers (%s) not present in this os (0x%x)\n", shim, g_WinVersion);
+        skip("Skipping tests for layers (%s) not present in this os (0x%lx)\n", shim, g_WinVersion);
         return;
     }
     ok(hook != NULL, "Expected hook to be a valid pointer for %s\n", shim);
     if (info->wFlags & FLAG_AlternateHookOrder)
     {
-        ok(num_shims == 3, "Expected num_shims to be 3, was: %u for %s\n", num_shims, shim);
+        ok(num_shims == 3, "Expected num_shims to be 3, was: %lu for %s\n", num_shims, shim);
         if (hook && num_shims == 3)
         {
             int same = 0;
@@ -241,7 +241,7 @@ static void run_test(LPCSTR shim, const VersionLieInfo* info)
     else
     {
         int shimnum_ok = num_shims == 4 || ((ver < _WIN32_WINNT_WINXP) && (num_shims == 3));
-        ok(shimnum_ok, "Expected num_shims to be 4%s, was: %u for %s\n", ((ver < _WIN32_WINNT_WINXP) ? " or 3":""), num_shims, shim);
+        ok(shimnum_ok, "Expected num_shims to be 4%s, was: %lu for %s\n", ((ver < _WIN32_WINNT_WINXP) ? " or 3":""), num_shims, shim);
         if (hook && shimnum_ok)
         {
             int same = 0;

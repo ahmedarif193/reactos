@@ -206,7 +206,7 @@ static HRESULT WINAPI IExplorerPaneVisibility_fnGetPaneState(IExplorerPaneVisibi
 
     ok(ep != NULL, "ep is NULL.\n");
     ok(peps != NULL, "peps is NULL.\n");
-    ok(*peps == 0, "got %ld\n", *peps);
+    ok(*peps == 0, "got %u\n", *peps);
 
     *peps = EPS_FORCE;
     if(IsEqualGUID(&EP_NavPane, ep))                 This->np++;

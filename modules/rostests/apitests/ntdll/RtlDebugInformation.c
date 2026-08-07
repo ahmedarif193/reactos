@@ -23,7 +23,7 @@ static void Test_Buffersizes()
 
     ok_ptr(Buffer->ViewBaseClient, Buffer);
     ok_hex(Buffer->Flags, 0);
-    ok(Buffer->OffsetFree == sizeof(*Buffer) || Buffer->OffsetFree == 0x60, "Expected %u or %u, got %lu\n", sizeof(*Buffer), 0x60, Buffer->OffsetFree);
+    ok(Buffer->OffsetFree == sizeof(*Buffer) || Buffer->OffsetFree == 0x60, "Expected %llu or %u, got %llu\n", sizeof(*Buffer), 0x60, Buffer->OffsetFree);
     ok_hex(Buffer->CommitSize, 0x1000);
     ok_hex(Buffer->ViewSize, 0x400000);
 
@@ -37,7 +37,7 @@ static void Test_Buffersizes()
 
     ok_ptr(Buffer->ViewBaseClient, Buffer);
     ok_hex(Buffer->Flags, 0);
-    ok(Buffer->OffsetFree == sizeof(*Buffer) || Buffer->OffsetFree == 0x60, "Expected %u or %u, got %lu\n", sizeof(*Buffer), 0x60, Buffer->OffsetFree);
+    ok(Buffer->OffsetFree == sizeof(*Buffer) || Buffer->OffsetFree == 0x60, "Expected %llu or %u, got %llu\n", sizeof(*Buffer), 0x60, Buffer->OffsetFree);
     ok_hex(Buffer->CommitSize, 0x1000);
     ok_hex(Buffer->ViewSize, 0x1000);
 
@@ -51,7 +51,7 @@ static void Test_Buffersizes()
 
     ok_ptr(Buffer->ViewBaseClient, Buffer);
     ok_hex(Buffer->Flags, 0);
-    ok(Buffer->OffsetFree == sizeof(*Buffer) || Buffer->OffsetFree == 0x60, "Expected %u or %u, got %lu\n", sizeof(*Buffer), 0x60, Buffer->OffsetFree);
+    ok(Buffer->OffsetFree == sizeof(*Buffer) || Buffer->OffsetFree == 0x60, "Expected %llu or %u, got %llu\n", sizeof(*Buffer), 0x60, Buffer->OffsetFree);
     ok_hex(Buffer->CommitSize, 0x1000);
     ok_hex(Buffer->ViewSize, 0x1000);
 
@@ -65,7 +65,7 @@ static void Test_Buffersizes()
 
     ok_ptr(Buffer->ViewBaseClient, Buffer);
     ok_hex(Buffer->Flags, 0);
-    ok(Buffer->OffsetFree == sizeof(*Buffer) || Buffer->OffsetFree == 0x60, "Expected %u or %u, got %lu\n", sizeof(*Buffer), 0x60, Buffer->OffsetFree);
+    ok(Buffer->OffsetFree == sizeof(*Buffer) || Buffer->OffsetFree == 0x60, "Expected %llu or %u, got %llu\n", sizeof(*Buffer), 0x60, Buffer->OffsetFree);
     ok_hex(Buffer->CommitSize, 0x1000);
     ok_hex(Buffer->ViewSize, 0x2000);
 

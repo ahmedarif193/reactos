@@ -304,14 +304,14 @@ static void ok_sequence_(const struct message *expected_list, const char *contex
                         if (strcmp(winetest_platform, "wine"))
                             dump++;
                         ok_( file, line) (FALSE,
-                            "%s: %u: in msg 0x%04x expecting wParam 0x%x got 0x%x\n",
+                            "%s: %u: in msg 0x%04x expecting wParam 0x%llx got 0x%llx\n",
                             context, count, expected->message, expected->wParam, actual->wParam);
                     }
                 }
                 else
                 {
                     ok_( file, line)(((expected->wParam ^ actual->wParam) & ~expected->wp_mask) == 0,
-                                     "%s: %u: in msg 0x%04x expecting wParam 0x%x got 0x%x\n",
+                                     "%s: %u: in msg 0x%04x expecting wParam 0x%llx got 0x%llx\n",
                                      context, count, expected->message, expected->wParam, actual->wParam);
                     if ((expected->wParam ^ actual->wParam) & ~expected->wp_mask)
                         dump++;
@@ -328,14 +328,14 @@ static void ok_sequence_(const struct message *expected_list, const char *contex
                         if (strcmp(winetest_platform, "wine"))
                             dump++;
                         ok_( file, line) (FALSE,
-                            "%s: %u: in msg 0x%04x expecting lParam 0x%lx got 0x%lx\n",
+                            "%s: %u: in msg 0x%04x expecting lParam 0x%llx got 0x%llx\n",
                             context, count, expected->message, expected->lParam, actual->lParam);
                     }
                 }
                 else
                 {
                     ok_( file, line)(((expected->lParam ^ actual->lParam) & ~expected->lp_mask) == 0,
-                                     "%s: %u: in msg 0x%04x expecting lParam 0x%lx got 0x%lx\n",
+                                     "%s: %u: in msg 0x%04x expecting lParam 0x%llx got 0x%llx\n",
                                      context, count, expected->message, expected->lParam, actual->lParam);
                     if ((expected->lParam ^ actual->lParam) & ~expected->lp_mask)
                         dump++;

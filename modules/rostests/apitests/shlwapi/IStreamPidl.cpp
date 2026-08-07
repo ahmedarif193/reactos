@@ -219,7 +219,7 @@ static void Test_Read_TooSmallCbSize(void)
 
     RewindStream(pstm);
     hr = g_fnIStream_ReadPidl(pstm, &pidl);
-    ok(FAILED(hr), "hr was 0x%X\n", hr);
+    ok(FAILED(hr), "hr was 0x%lX\n", hr);
     ok(pidl == NULL, "pidl was not NULL\n");
 
     pstm->Release();
@@ -244,7 +244,7 @@ static void Test_Read_TruncatedData(void)
 
     RewindStream(pstm);
     hr = g_fnIStream_ReadPidl(pstm, &pidl);
-    ok(FAILED(hr), "hr was 0x%X\n", hr);
+    ok(FAILED(hr), "hr was 0x%lX\n", hr);
     ok(pidl == NULL, "pidl was not NULL\n");
 
     pstm->Release();
@@ -271,7 +271,7 @@ static void Test_Read_MissingTerminator(void)
 
     RewindStream(pstm);
     hr = g_fnIStream_ReadPidl(pstm, &pidl);
-    ok(FAILED(hr), "hr was 0x%X\n", hr);
+    ok(FAILED(hr), "hr was 0x%lX\n", hr);
     ok(pidl == NULL, "pidl was not NULL\n");
 
     pstm->Release();
@@ -329,7 +329,7 @@ static void Test_Read_OutputNullOnFailure(void)
     }
 
     hr = g_fnIStream_ReadPidl(pstm, &pidl);
-    ok(FAILED(hr), "hr was 0x%X\n", hr);
+    ok(FAILED(hr), "hr was 0x%lX\n", hr);
     ok(pidl == NULL, "pidl was not NULL\n");
 
     pstm->Release();

@@ -107,14 +107,14 @@ void Test_GetCurrentObject()
 	/* Default bitmap */
 	SetLastError(ERROR_SUCCESS);
 	hBmp = GetCurrentObject(hDC, OBJ_BITMAP);
-	ok(GDI_HANDLE_GET_TYPE(hBmp) == GDI_OBJECT_TYPE_BITMAP, "Expected GDI_OBJECT_TYPE_BITMAP, got %lu\n", GDI_HANDLE_GET_TYPE(hBmp));
+        ok(GDI_HANDLE_GET_TYPE(hBmp) == GDI_OBJECT_TYPE_BITMAP, "Expected GDI_OBJECT_TYPE_BITMAP, got %Iu\n", GDI_HANDLE_GET_TYPE(hBmp));
 	ok(GetLastError() == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %lu\n", GetLastError());
 
 	/* Other bitmap */
 	SetLastError(ERROR_SUCCESS);
 	SelectObject(hDC, GetStockObject(21));
 	ok(hBmp == GetCurrentObject(hDC, OBJ_BITMAP), "\n");
-	ok(GDI_HANDLE_GET_TYPE(hBmp) == GDI_OBJECT_TYPE_BITMAP, "Expected GDI_OBJECT_TYPE_BITMAP, got %lu\n", GDI_HANDLE_GET_TYPE(hBmp));
+        ok(GDI_HANDLE_GET_TYPE(hBmp) == GDI_OBJECT_TYPE_BITMAP, "Expected GDI_OBJECT_TYPE_BITMAP, got %Iu\n", GDI_HANDLE_GET_TYPE(hBmp));
 	ok(GetLastError() == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %lu\n", GetLastError());
 
 	/* Default brush */
@@ -183,4 +183,3 @@ START_TEST(GetCurrentObject)
 {
     Test_GetCurrentObject();
 }
-

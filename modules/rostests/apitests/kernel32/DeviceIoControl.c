@@ -164,7 +164,7 @@ QueryDeviceName(VOID)
             IsValid = (AllocatedMDN->Name[12] == Letter && AllocatedMDN->Name[13] == L':');
         }
 
-        ok_type(IsValid, "Invalid name: %.*S\n", AllocatedMDN->NameLength, AllocatedMDN->Name);
+        ok_type(IsValid, "Invalid name: %.*ls\n", (int)(AllocatedMDN->NameLength / sizeof(WCHAR)), AllocatedMDN->Name);
     }
     else
     {

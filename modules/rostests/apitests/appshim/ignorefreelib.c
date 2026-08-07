@@ -32,7 +32,7 @@ static void test_IgnoreFreeLibrary(VOID)
     hook = pGetHookAPIs("AvIFiL32.Dll;esent;esent*;ent.dll;msi.dll", L"IgnoreFreeLibrary", &num_shims);
 
     ok(hook != NULL, "Expected hook to be a valid pointer\n");
-    ok(num_shims == 1, "Expected num_shims to be 1, was: %u\n", num_shims);
+    ok(num_shims == 1, "Expected num_shims to be 1, was: %lu\n", num_shims);
 
     if (!hook || !num_shims)
         return;

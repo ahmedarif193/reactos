@@ -204,7 +204,7 @@ InitializeTestImage(
 
 #define ok_enumres(_Res, _Type, _Name, _Lang, _Data, _Size) \
     ok_dec((_Res)->Type, _Type); \
-    if ((ULONG_PTR)(_Name) > 0xFFFF) \
+    if ((ULONG_PTR)(_Name) >> 16) \
     { \
         ok_size_t(*(WORD*)((_Res)->Name), wcslen((PWCHAR)(_Name))); \
         ok_nwstr((PWCHAR)((_Res)->Name + 2), (PWCHAR)_Name, *(WORD*)((_Res)->Name)); \

@@ -115,7 +115,7 @@ START_TEST(layer_hooks)
         }
 
         ok(!!hook, "Expected a valid pointer, got nothing for %s\n", wine_dbgstr_w(current->ShimName));
-        ok(num_shims == expected_shims, "Expected %u shims, got %u for %s\n",
+        ok(num_shims == expected_shims, "Expected %lu shims, got %lu for %s\n",
            expected_shims, num_shims, wine_dbgstr_w(current->ShimName));
         for (h = 0; h < min(num_shims, expected_shims); ++h)
         {

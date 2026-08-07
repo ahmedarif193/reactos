@@ -207,8 +207,8 @@ static HBITMAP create_dib(int width, int height, int bpp, LOGPALETTE *pal, const
     ok(hdib != 0, "CreateDIBSection(%dx%d,%d bpp) failed\n", width, height, bpp);
 
     GetObjectW(hdib, sizeof(bm), &bm);
-    ok(bm.bmWidth == width, "expected %d, got %d\n", width, bm.bmWidth);
-    ok(bm.bmHeight == height, "expected %d, got %d\n", height, bm.bmHeight);
+    ok(bm.bmWidth == width, "expected %d, got %ld\n", width, bm.bmWidth);
+    ok(bm.bmHeight == height, "expected %d, got %ld\n", height, bm.bmHeight);
     ok(bm.bmPlanes == 1, "expected 1, got %d\n", bm.bmPlanes);
     ok(bm.bmBitsPixel == bpp, "expected %d, got %d\n", bpp, bm.bmBitsPixel);
 

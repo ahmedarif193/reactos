@@ -193,7 +193,7 @@ START_TEST(forcedxsetup)
     hook = pGetHookAPIs("", L"ForceDxSetupSuccess", &num_shims);
 
     ok(hook != NULL, "Expected hook to be a valid pointer\n");
-    ok(num_shims == 6, "Expected num_shims to be 6, was: %u\n", num_shims);
+    ok(num_shims == 6, "Expected num_shims to be 6, was: %lu\n", num_shims);
 
     if (!hook || !num_shims)
         return;

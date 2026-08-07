@@ -58,7 +58,7 @@ static LRESULT CALLBACK WndProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPar
 {
     if(msg == WM_SYSKEYDOWN)
 	{
-	    ok(wParam == VK_MENU, "Got wrong wParam in WM_SYSKEYDOWN (%d instead of %d)\n", wParam, VK_MENU );
+	    ok(wParam == VK_MENU, "Got wrong wParam in WM_SYSKEYDOWN (%Iu instead of %d)\n", wParam, VK_MENU );
 	}
     return DefWindowProcA( hWnd, msg, wParam, lParam );
 }

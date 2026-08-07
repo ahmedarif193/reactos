@@ -10,6 +10,7 @@ add_executable(d3d8_winetest
     visual.c
     testlist.c)
 
+target_compile_definitions(d3d8_winetest PRIVATE CONST_VTABLE)
 target_include_directories(d3d8_winetest BEFORE PRIVATE ${REACTOS_SOURCE_DIR}/sdk/include/wine)
 target_link_libraries(d3d8_winetest uuid dxguid)
 set_module_type(d3d8_winetest win32cui)

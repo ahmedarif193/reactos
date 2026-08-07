@@ -24,7 +24,7 @@ void Test_EngReleaseSemaphore()
     ok(lpcrit->RecursionCount == 0, "lpcrit->RecursionCount=%ld\n", lpcrit->RecursionCount);
     ok(lpcrit->OwningThread == 0, "lpcrit->OwningThread=%p\n", lpcrit->OwningThread);
     ok(lpcrit->LockSemaphore == 0, "lpcrit->LockSemaphore=%p\n", lpcrit->LockSemaphore);
-    ok(lpcrit->SpinCount == 0, "lpcrit->SpinCount=%ld\n", lpcrit->SpinCount);
+    ok(lpcrit->SpinCount == 0, "lpcrit->SpinCount=%Iu\n", lpcrit->SpinCount);
 
     ok(lpcrit->DebugInfo != NULL, "no DebugInfo\n");
     if (lpcrit->DebugInfo)
@@ -42,4 +42,3 @@ START_TEST(EngReleaseSemaphore)
 {
     Test_EngReleaseSemaphore();
 }
-

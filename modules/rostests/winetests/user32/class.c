@@ -24,7 +24,6 @@
 
 #ifdef __REACTOS__
 #define WIN32_NO_STATUS
-#include <ntndk.h>
 #endif
 #include "wine/test.h"
 #include "windef.h"
@@ -33,7 +32,10 @@
 #include "winreg.h"
 #include "wingdi.h"
 #include "winuser.h"
-#ifndef __REACTOS__
+#ifdef __REACTOS__
+#undef WIN32_NO_STATUS
+#include <ntndk.h>
+#else
 #include "winternl.h"
 #endif
 #include "commctrl.h"

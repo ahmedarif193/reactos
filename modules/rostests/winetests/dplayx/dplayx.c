@@ -1489,8 +1489,8 @@ static void sendSuperEnumPlayersReply_( int line, SOCKET sock, unsigned short tc
         struct
         {
             SuperPackedPlayer superPackedPlayer;
-            WCHAR shortName[ ARRAYSIZE( SHORT_NAME ) ];
-            WCHAR longName[ ARRAYSIZE( LONG_NAME ) ];
+            WCHAR shortName[ _ARRAYSIZE( SHORT_NAME ) ];
+            WCHAR longName[ _ARRAYSIZE( LONG_NAME ) ];
             BYTE playerDataLength;
             BYTE playerData[ 4 ];
             BYTE spDataLength;
@@ -1505,8 +1505,8 @@ static void sendSuperEnumPlayersReply_( int line, SOCKET sock, unsigned short tc
         struct
         {
             SuperPackedPlayer superPackedPlayer;
-            WCHAR shortName[ ARRAYSIZE( SHORT_NAME ) ];
-            WCHAR longName[ ARRAYSIZE( LONG_NAME ) ];
+            WCHAR shortName[ _ARRAYSIZE( SHORT_NAME ) ];
+            WCHAR longName[ _ARRAYSIZE( LONG_NAME ) ];
             BYTE playerDataLength;
             BYTE playerData[ 4 ];
             BYTE spDataLength;

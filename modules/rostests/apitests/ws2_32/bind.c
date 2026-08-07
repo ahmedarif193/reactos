@@ -73,7 +73,7 @@ TestBind(IN_ADDR Address)
             AddrSize = sizeof(Addr);
             Error = getsockname(Socket, (struct sockaddr *) &Addr, &AddrSize);
             ok(Error == 0, "Unexpected error %d %d on getsockname for test %d\n", Error, WSAGetLastError(), i);
-            ok(AddrSize == sizeof(Addr), "Returned size %d differs from expected %d for test %d\n", AddrSize, sizeof(Addr), i);
+            ok(AddrSize == sizeof(Addr), "Returned size %d differs from expected %Iu for test %d\n", AddrSize, sizeof(Addr), i);
             ok(Addr.sin_addr.s_addr == Tests[i].ExpectedAddr.sin_addr.s_addr, "Expected address %lx differs from returned address %lx for test %d\n", Tests[i].ExpectedAddr.sin_addr.s_addr, Addr.sin_addr.s_addr, i);
             if (Tests[i].ExpectedAddr.sin_port)
             {
@@ -101,7 +101,7 @@ TestBind(IN_ADDR Address)
         AddrSize = sizeof(Addr);
         Error = getsockname(Socket, (struct sockaddr *) &Addr, &AddrSize);
         ok(Error == 0, "Unexpected error %d %d on getsockname for double bind test\n", Error, WSAGetLastError());
-        ok(AddrSize == sizeof(Addr), "Returned size %d differs from expected %d for double bind test\n", AddrSize, sizeof(Addr));
+        ok(AddrSize == sizeof(Addr), "Returned size %d differs from expected %Iu for double bind test\n", AddrSize, sizeof(Addr));
         ok(Addr.sin_addr.s_addr == Tests[0].ExpectedAddr.sin_addr.s_addr, "Expected address %lx differs from returned address %lx for double bind test\n", Tests[0].ExpectedAddr.sin_addr.s_addr, Addr.sin_addr.s_addr);
         if (Tests[0].ExpectedAddr.sin_port)
         {

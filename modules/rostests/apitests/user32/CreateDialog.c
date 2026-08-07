@@ -132,7 +132,7 @@ INT_PTR CALLBACK Test_CreateDialogW_DLGPROC(HWND hWnd, UINT msg, WPARAM wParam, 
         msglist.msgList[msglist.msgCount].result  = 0;
         msglist.msgCount++;
     }
-    trace("DlgProc: msg 0x%x, wParam 0x%x, lParam 0x%Ix\n",
+    trace("DlgProc: msg 0x%x, wParam 0x%Ix, lParam 0x%Ix\n",
            msg, wParam, lParam);
     return FALSE;
 }
@@ -151,7 +151,7 @@ LRESULT CALLBACK Test_CreateDialogW_WNDPROC(HWND hWnd, UINT msg, WPARAM wParam, 
         msglist.msgList[msglist.msgCount].result  = res;
         msglist.msgCount++;
     }
-    trace("WndProc: msg 0x%x, wParam 0x%x, lParam 0x%Ix, result %Id\n",
+    trace("WndProc: msg 0x%x, wParam 0x%Ix, lParam 0x%Ix, result %Id\n",
           msg, wParam, lParam, res);
     return res;
 }

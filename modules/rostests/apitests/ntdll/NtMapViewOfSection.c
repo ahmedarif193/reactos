@@ -2007,7 +2007,7 @@ Test_Truncate(VOID)
     {
         // First we test data that was truncated even before the file mapping was opened
         Length = strlen((char*)BaseAddress);
-        ok(Length == 6, "Old data was not properly erased! (Length=%lu)\n", Length);
+        ok(Length == 6, "Old data was not properly erased! (Length=%Iu)\n", Length);
     }
 
     // Now we truncate the file on disk some more
@@ -2021,7 +2021,7 @@ Test_Truncate(VOID)
     if (BaseAddress)
     {
         Length = strlen((char*)BaseAddress);
-        ok(Length == 6, "Length should not have changed! (Length=%lu)\n", Length);
+        ok(Length == 6, "Length should not have changed! (Length=%Iu)\n", Length);
     }
 
     // Unmap and set the end shorter.

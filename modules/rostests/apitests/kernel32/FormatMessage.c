@@ -22,7 +22,7 @@ START_TEST(FormatMessage)
     ok(Written != 0, "Unexpected error: %lx\n", GetLastError());
     ok(Buffer != NULL, "No buffer allocated\n");
     ok(Written == (sizeof(First) - sizeof(UNICODE_NULL)) / sizeof(WCHAR),
-       "Invalid size: %ld (expected: %d)\n",
+       "Invalid size: %ld (expected: %Iu)\n",
        Written, (sizeof(First) - sizeof(UNICODE_NULL)) / sizeof(WCHAR));
     ok(RtlCompareMemory(Buffer, First, sizeof(First) - sizeof(UNICODE_NULL)) ==
                         sizeof(First) - sizeof(UNICODE_NULL),
@@ -35,7 +35,7 @@ START_TEST(FormatMessage)
     ok(Written != 0, "Unexpected error: %lx\n", GetLastError());
     ok(Buffer != NULL, "No buffer allocated\n");
     ok(Written == (sizeof(Second) - sizeof(UNICODE_NULL)) / sizeof(WCHAR),
-       "Invalid size: %ld (expected: %d)\n",
+       "Invalid size: %ld (expected: %Iu)\n",
        Written, (sizeof(Second) - sizeof(UNICODE_NULL)) / sizeof(WCHAR));
     ok(RtlCompareMemory(Buffer, Second, sizeof(Second) - sizeof(UNICODE_NULL)) ==
        sizeof(Second) - sizeof(UNICODE_NULL),

@@ -182,7 +182,7 @@ START_TEST(shellext)
     RtlGetVersion((PRTL_OSVERSIONINFOW)&rtlinfo);
     g_WinVersion = (rtlinfo.dwMajorVersion << 8) | rtlinfo.dwMinorVersion;
 
-    trace("g_WinVersion=0x%x\n", g_WinVersion);
+    trace("g_WinVersion=0x%lx\n", g_WinVersion);
 
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
 

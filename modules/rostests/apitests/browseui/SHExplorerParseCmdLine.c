@@ -222,7 +222,7 @@ _Out_opt_ PUINT PWriteEnd)
 #endif
                 break;
             default:
-                ok(InfoWords[i] == 0x55555555, "Line %lu: Word 0x%02lx has been set to 0x%08lx\n", TestLine, i * sizeof(DWORD), InfoWords[i]);
+                ok(InfoWords[i] == 0x55555555, "Line %lu: Word 0x%02Ix has been set to 0x%08lx\n", TestLine, i * sizeof(DWORD), InfoWords[i]);
         }
     }
 

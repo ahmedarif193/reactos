@@ -47,26 +47,26 @@ static void test_basetypes()
     for (size_t n = 0; n < _countof(g_Tests); ++n)
     {
         len = ChTraitsCRT<char>::GetBaseTypeLength(g_Tests[n].strA);
-        ok(len == g_Tests[n].exp_1, "Expected len to be %i, was %i for %u (A)\n", g_Tests[n].exp_1, len, n);
+        ok(len == g_Tests[n].exp_1, "Expected len to be %i, was %i for %Iu (A)\n", g_Tests[n].exp_1, len, n);
 
         len = ChTraitsCRT<char>::GetBaseTypeLength(g_Tests[n].strA, g_Tests[n].str_len);
-        ok(len == g_Tests[n].exp_2, "Expected len to be %i, was %i for %u (A,len)\n", g_Tests[n].exp_2, len, n);
+        ok(len == g_Tests[n].exp_2, "Expected len to be %i, was %i for %Iu (A,len)\n", g_Tests[n].exp_2, len, n);
 
         len = ChTraitsCRT<char>::GetBaseTypeLength(g_Tests[n].strW);
-        ok(len == g_Tests[n].exp_3, "Expected len to be %i, was %i for %u (W)\n", g_Tests[n].exp_3, len, n);
+        ok(len == g_Tests[n].exp_3, "Expected len to be %i, was %i for %Iu (W)\n", g_Tests[n].exp_3, len, n);
 
         len = ChTraitsCRT<char>::GetBaseTypeLength(g_Tests[n].strW, g_Tests[n].str_len);
-        ok(len == g_Tests[n].exp_4, "Expected len to be %i, was %i for %u (W,len)\n", g_Tests[n].exp_4, len, n);
+        ok(len == g_Tests[n].exp_4, "Expected len to be %i, was %i for %Iu (W,len)\n", g_Tests[n].exp_4, len, n);
 
         if (g_Tests[n].strA && g_Tests[n].strW)
         {
             memset(bufA, 'x', sizeof(bufA));
             ChTraitsCRT<char>::ConvertToBaseType(bufA, g_Tests[n].exp_1+1, g_Tests[n].strA);
             char ch = bufA[g_Tests[n].exp_1];
-            ok(ch == '\0', "Expected %i to be \\0, was: %c (%i) for %u\n", g_Tests[n].exp_1, ch, (int)ch, n);
-            ok(!strcmp(bufA, g_Tests[n].strA), "Expected bufA to be %s, was: %s for %u\n", g_Tests[n].strA, bufA, n);
+            ok(ch == '\0', "Expected %i to be \\0, was: %c (%i) for %Iu\n", g_Tests[n].exp_1, ch, (int)ch, n);
+            ok(!strcmp(bufA, g_Tests[n].strA), "Expected bufA to be %s, was: %s for %Iu\n", g_Tests[n].strA, bufA, n);
             ch = bufA[g_Tests[n].exp_1+1];
-            ok(ch == 'x', "Expected %i to be 'x', was: %c (%i) for %u\n", g_Tests[n].exp_1+1, ch, (int)ch, n);
+            ok(ch == 'x', "Expected %i to be 'x', was: %c (%i) for %Iu\n", g_Tests[n].exp_1+1, ch, (int)ch, n);
         }
 
         if (g_Tests[n].strA && g_Tests[n].strW)
@@ -74,34 +74,34 @@ static void test_basetypes()
             memset(bufA, 'x', sizeof(bufA));
             ChTraitsCRT<char>::ConvertToBaseType(bufA, g_Tests[n].exp_1+1, g_Tests[n].strW);
             char ch = bufA[g_Tests[n].exp_1];
-            ok(ch == '\0', "Expected %i to be \\0, was: %c (%i) for %u\n", g_Tests[n].exp_1, ch, (int)ch, n);
-            ok(!strcmp(bufA, g_Tests[n].strA), "Expected bufA to be %s, was: %s for %u\n", g_Tests[n].strA, bufA, n);
+            ok(ch == '\0', "Expected %i to be \\0, was: %c (%i) for %Iu\n", g_Tests[n].exp_1, ch, (int)ch, n);
+            ok(!strcmp(bufA, g_Tests[n].strA), "Expected bufA to be %s, was: %s for %Iu\n", g_Tests[n].strA, bufA, n);
             ch = bufA[g_Tests[n].exp_1+1];
-            ok(ch == 'x', "Expected %i to be 'x', was: %c (%i) for %u\n", g_Tests[n].exp_1+1, ch, (int)ch, n);
+            ok(ch == 'x', "Expected %i to be 'x', was: %c (%i) for %Iu\n", g_Tests[n].exp_1+1, ch, (int)ch, n);
         }
 
         // wchar_t --> please note, swapped the expectations from 2 and 4 !
         len = ChTraitsCRT<wchar_t>::GetBaseTypeLength(g_Tests[n].strA);
-        ok(len == g_Tests[n].exp_1, "Expected len to be %i, was %i for %u (A)\n", g_Tests[n].exp_1, len, n);
+        ok(len == g_Tests[n].exp_1, "Expected len to be %i, was %i for %Iu (A)\n", g_Tests[n].exp_1, len, n);
 
         len = ChTraitsCRT<wchar_t>::GetBaseTypeLength(g_Tests[n].strA, g_Tests[n].str_len);
-        ok(len == g_Tests[n].exp_4, "Expected len to be %i, was %i for %u (A,len)\n", g_Tests[n].exp_4, len, n);
+        ok(len == g_Tests[n].exp_4, "Expected len to be %i, was %i for %Iu (A,len)\n", g_Tests[n].exp_4, len, n);
 
         len = ChTraitsCRT<wchar_t>::GetBaseTypeLength(g_Tests[n].strW);
-        ok(len == g_Tests[n].exp_3, "Expected len to be %i, was %i for %u (W)\n", g_Tests[n].exp_3, len, n);
+        ok(len == g_Tests[n].exp_3, "Expected len to be %i, was %i for %Iu (W)\n", g_Tests[n].exp_3, len, n);
 
         len = ChTraitsCRT<wchar_t>::GetBaseTypeLength(g_Tests[n].strW, g_Tests[n].str_len);
-        ok(len == g_Tests[n].exp_2, "Expected len to be %i, was %i for %u (W,len)\n", g_Tests[n].exp_2, len, n);
+        ok(len == g_Tests[n].exp_2, "Expected len to be %i, was %i for %Iu (W,len)\n", g_Tests[n].exp_2, len, n);
 
         if (g_Tests[n].strA && g_Tests[n].strW)
         {
             memset(bufW, 'x', sizeof(bufW));
             ChTraitsCRT<wchar_t>::ConvertToBaseType(bufW, g_Tests[n].exp_1+1, g_Tests[n].strA);
             wchar_t ch = bufW[g_Tests[n].exp_1];
-            ok(ch == L'\0', "Expected %i to be \\0, was: %c (%i) for %u\n", g_Tests[n].exp_1, ch, (int)ch, n);
-            ok(!wcscmp(bufW, g_Tests[n].strW), "Expected bufW to be %s, was: %s for %u\n", wine_dbgstr_w(g_Tests[n].strW), wine_dbgstr_w(bufW), n);
+            ok(ch == L'\0', "Expected %i to be \\0, was: %c (%i) for %Iu\n", g_Tests[n].exp_1, ch, (int)ch, n);
+            ok(!wcscmp(bufW, g_Tests[n].strW), "Expected bufW to be %s, was: %s for %Iu\n", wine_dbgstr_w(g_Tests[n].strW), wine_dbgstr_w(bufW), n);
             ch = bufW[g_Tests[n].exp_1+1];
-            ok(ch == 30840, "Expected %i to be %i for %u\n", g_Tests[n].exp_1+1, (int)ch, n);
+            ok(ch == 30840, "Expected %i to be %i for %Iu\n", g_Tests[n].exp_1+1, (int)ch, n);
         }
 
         if (g_Tests[n].strA && g_Tests[n].strW)
@@ -109,10 +109,10 @@ static void test_basetypes()
             memset(bufW, 'x', sizeof(bufW));
             ChTraitsCRT<wchar_t>::ConvertToBaseType(bufW, g_Tests[n].exp_1+1, g_Tests[n].strW);
             wchar_t ch = bufW[g_Tests[n].exp_1];
-            ok(ch == '\0', "Expected %i to be \\0, was: %c (%i) for %u\n", g_Tests[n].exp_1, ch, (int)ch, n);
-            ok(!wcscmp(bufW, g_Tests[n].strW), "Expected bufW to be %s, was: %s for %u\n", wine_dbgstr_w(g_Tests[n].strW), wine_dbgstr_w(bufW), n);
+            ok(ch == '\0', "Expected %i to be \\0, was: %c (%i) for %Iu\n", g_Tests[n].exp_1, ch, (int)ch, n);
+            ok(!wcscmp(bufW, g_Tests[n].strW), "Expected bufW to be %s, was: %s for %Iu\n", wine_dbgstr_w(g_Tests[n].strW), wine_dbgstr_w(bufW), n);
             ch = bufW[g_Tests[n].exp_1+1];
-            ok(ch == 30840, "Expected %i to be %i for %u\n", g_Tests[n].exp_1+1, (int)ch, n);
+            ok(ch == 30840, "Expected %i to be %i for %Iu\n", g_Tests[n].exp_1+1, (int)ch, n);
         }
     }
 }

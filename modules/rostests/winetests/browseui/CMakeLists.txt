@@ -1,5 +1,4 @@
 
-add_definitions(-D__ROS_LONG64__)
 
 add_executable(browseui_winetest autocomplete.c progressdlg.c testlist.c)
 target_link_libraries(browseui_winetest uuid)

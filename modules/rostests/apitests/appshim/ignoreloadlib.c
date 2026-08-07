@@ -65,7 +65,7 @@ static HMODULE WINAPI my_LoadLibraryA(PCSTR Name)
 {
     DWORD dwErrorMode = GetErrorMode();
     ok(dwErrorMode == (SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX),
-       "Unexpected error mode: 0x%x\n", dwErrorMode);
+       "Unexpected error mode: 0x%lx\n", dwErrorMode);
     return g_hSentinelModule;
 }
 
@@ -73,7 +73,7 @@ static HMODULE WINAPI my_LoadLibraryExA(PCSTR Name, HANDLE hFile, DWORD dwFlags)
 {
     DWORD dwErrorMode = GetErrorMode();
     ok(dwErrorMode == (SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX),
-       "Unexpected error mode: 0x%x\n", dwErrorMode);
+       "Unexpected error mode: 0x%lx\n", dwErrorMode);
     return g_hSentinelModule;
 }
 
@@ -81,7 +81,7 @@ static HMODULE WINAPI my_LoadLibraryW(PCWSTR Name)
 {
     DWORD dwErrorMode = GetErrorMode();
     ok(dwErrorMode == (SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX),
-       "Unexpected error mode: 0x%x\n", dwErrorMode);
+       "Unexpected error mode: 0x%lx\n", dwErrorMode);
     return g_hSentinelModule;
 }
 
@@ -89,7 +89,7 @@ static HMODULE WINAPI my_LoadLibraryExW(PCWSTR Name, HANDLE hFile, DWORD dwFlags
 {
     DWORD dwErrorMode = GetErrorMode();
     ok(dwErrorMode == (SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX),
-       "Unexpected error mode: 0x%x\n", dwErrorMode);
+       "Unexpected error mode: 0x%lx\n", dwErrorMode);
     return g_hSentinelModule;
 }
 
@@ -127,7 +127,7 @@ static void test_LoadLibraryA(PHOOKAPI hook)
     ok_ptr(proc("test123.dll-"), g_hSentinelModule);
 
     dwErrorMode = GetErrorMode();
-    ok(dwErrorMode == dwOldErrorMode, "ErrorMode changed, was 0x%x, is 0x%x\n", dwOldErrorMode, dwErrorMode);
+    ok(dwErrorMode == dwOldErrorMode, "ErrorMode changed, was 0x%lx, is 0x%lx\n", dwOldErrorMode, dwErrorMode);
 }
 
 static void test_LoadLibraryW(PHOOKAPI hook)
@@ -163,7 +163,7 @@ static void test_LoadLibraryW(PHOOKAPI hook)
     ok_ptr(proc(L"test123.dll-"), g_hSentinelModule);
 
     dwErrorMode = GetErrorMode();
-    ok(dwErrorMode == dwOldErrorMode, "ErrorMode changed, was 0x%x, is 0x%x\n", dwOldErrorMode, dwErrorMode);
+    ok(dwErrorMode == dwOldErrorMode, "ErrorMode changed, was 0x%lx, is 0x%lx\n", dwOldErrorMode, dwErrorMode);
 }
 
 static void test_LoadLibraryExA(PHOOKAPI hook)
@@ -199,7 +199,7 @@ static void test_LoadLibraryExA(PHOOKAPI hook)
     ok_ptr(proc("test123.dll-", INVALID_HANDLE_VALUE, 0), g_hSentinelModule);
 
     dwErrorMode = GetErrorMode();
-    ok(dwErrorMode == dwOldErrorMode, "ErrorMode changed, was 0x%x, is 0x%x\n", dwOldErrorMode, dwErrorMode);
+    ok(dwErrorMode == dwOldErrorMode, "ErrorMode changed, was 0x%lx, is 0x%lx\n", dwOldErrorMode, dwErrorMode);
 }
 
 static void test_LoadLibraryExW(PHOOKAPI hook)
@@ -235,7 +235,7 @@ static void test_LoadLibraryExW(PHOOKAPI hook)
     ok_ptr(proc(L"test123.dll-", INVALID_HANDLE_VALUE, 0), g_hSentinelModule);
 
     dwErrorMode = GetErrorMode();
-    ok(dwErrorMode == dwOldErrorMode, "ErrorMode changed, was 0x%x, is 0x%x\n", dwOldErrorMode, dwErrorMode);
+    ok(dwErrorMode == dwOldErrorMode, "ErrorMode changed, was 0x%lx, is 0x%lx\n", dwOldErrorMode, dwErrorMode);
 }
 
 /* versionlie.c */
@@ -262,13 +262,13 @@ START_TEST(ignoreloadlib)
     hook = pGetHookAPIs("test123.dll:123;test111:111;Something.mark:0;empty", L"IgnoreLoadLibrary", &num_shims);
 
     ok(hook != NULL, "Expected hook to be a valid pointer\n");
-    ok(num_shims == 4, "Expected num_shims to be 0, was: %u\n", num_shims);
+    ok(num_shims == 4, "Expected num_shims to be 4, was: %lu\n", num_shims);
 
     if (!hook || num_shims != 4)
         return;
 
     dwErrorMode = GetErrorMode();
-    trace("Error mode: 0x%x\n", dwErrorMode);
+    trace("Error mode: 0x%lx\n", dwErrorMode);
 
 #ifdef _M_IX86
     if (g_WinVersion > _WIN32_WINNT_WS03 && g_WinVersion < _WIN32_WINNT_WIN8)

@@ -18,7 +18,7 @@ void Test_CreatePen()
 	ok(GetLastError() == ERROR_SUCCESS, "Expected ERROR_SUCCESS, got %lu\n", GetLastError());
 
 	/* Test if we have a PEN */
-	ok(GDI_HANDLE_GET_TYPE(hPen) == GDI_OBJECT_TYPE_PEN, "Expected GDI_OBJECT_TYPE_PEN, got %lu\n", GDI_HANDLE_GET_TYPE(hPen));
+	ok(GDI_HANDLE_GET_TYPE(hPen) == GDI_OBJECT_TYPE_PEN, "Expected GDI_OBJECT_TYPE_PEN, got %Iu\n", GDI_HANDLE_GET_TYPE(hPen));
 
 	ok(GetObject(hPen, sizeof(logpen), &logpen), "GetObject failed\n");
 	ok(logpen.lopnStyle == PS_DASHDOT, "Expected PS_DASHDOT, got %u\n", logpen.lopnStyle);
@@ -82,4 +82,3 @@ START_TEST(CreatePen)
 {
     Test_CreatePen();
 }
-

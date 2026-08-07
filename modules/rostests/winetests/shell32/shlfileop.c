@@ -357,13 +357,13 @@ static void check_icon_size( HICON icon, DWORD flags )
 
     if (flags & SHGFI_SHELLICONSIZE)
     {
-        ok( bm.bmWidth == list_cx, "got %d expected %d\n", bm.bmWidth, list_cx );
-        ok( bm.bmHeight == list_cy, "got %d expected %d\n", bm.bmHeight, list_cy );
+        ok( bm.bmWidth == list_cx, "got %ld expected %d\n", bm.bmWidth, list_cx );
+        ok( bm.bmHeight == list_cy, "got %ld expected %d\n", bm.bmHeight, list_cy );
     }
     else
     {
-        ok( bm.bmWidth == metrics_size.cx, "got %d expected %ld\n", bm.bmWidth, metrics_size.cx );
-        ok( bm.bmHeight == metrics_size.cy, "got %d expected %ld\n", bm.bmHeight, metrics_size.cy );
+        ok( bm.bmWidth == metrics_size.cx, "got %ld expected %ld\n", bm.bmWidth, metrics_size.cx );
+        ok( bm.bmHeight == metrics_size.cy, "got %ld expected %ld\n", bm.bmHeight, metrics_size.cy );
     }
 }
 

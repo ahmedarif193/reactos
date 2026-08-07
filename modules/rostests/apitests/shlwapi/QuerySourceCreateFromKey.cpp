@@ -57,7 +57,7 @@ static void Test_EnumValues(void)
     hr = 0xDEADFACE;
     if (pSrc)
         hr = pSrc->EnumValues(&pEnum);
-    ok(pSrc && hr == S_OK, "EnumValues failed: 0x%08X\n", hr);
+    ok(pSrc && hr == S_OK, "EnumValues failed: 0x%08lX\n", hr);
 
     LPWSTR psz = NULL;
     ULONG fetched = 0;

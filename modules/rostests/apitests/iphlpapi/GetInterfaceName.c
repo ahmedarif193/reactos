@@ -99,7 +99,7 @@ test_NhGetInterfaceNameFromGuid(GUID AdapterGUID, DWORD par1, DWORD par2)
        ulOutBufLen);
     Length = wcslen(Name);
     ok(Length > 0,
-       "wcslen(Name) is %ld, expected > 0\n",
+       "wcslen(Name) is %Iu, expected > 0\n",
        Length);
     if (Length > 0)
         trace("Adapter name: \"%S\"\n", Name);
@@ -221,7 +221,7 @@ test_NhGetInterfaceNameFromDeviceGuid(GUID AdapterGUID, DWORD par1, DWORD par2)
        ulOutBufLen);
     Length = wcslen(Name);
     ok(Length > 0,
-       "wcslen(Name) is %ld, expected > 0\n",
+       "wcslen(Name) is %Iu, expected > 0\n",
        Length);
     if (Length > 0)
         trace("Adapter name: \"%S\"\n", Name);

@@ -214,29 +214,29 @@ static void test_GetDatabaseInformationEmpty(PDB pdb)
         /* Struct is slightly bigger on some Win10, and the DB version nr is different on all */
         if (g_WinVersion >= WINVER_WIN10)
         {
-            ok(pInfo->dwMajor == 3, "Expected pInfo->dwMajor to be 3, was: %d\n", pInfo->dwMajor);
-            ok(pInfo->dwMinor == 0, "Expected pInfo->dwMinor to be 0, was: %d\n", pInfo->dwMinor);
+            ok(pInfo->dwMajor == 3, "Expected pInfo->dwMajor to be 3, was: %lu\n", pInfo->dwMajor);
+            ok(pInfo->dwMinor == 0, "Expected pInfo->dwMinor to be 0, was: %lu\n", pInfo->dwMinor);
 
-            ok(pInfo[1].dwFlags == 0 || pInfo[1].dwFlags == 0xdededede, "Something amiss: 0x%x\n", pInfo[1].dwFlags);
-            ok(pInfo[1].dwMajor == 0xdededede, "Cookie2 corrupt: 0x%x\n", pInfo[1].dwMajor);
+            ok(pInfo[1].dwFlags == 0 || pInfo[1].dwFlags == 0xdededede, "Something amiss: 0x%lx\n", pInfo[1].dwFlags);
+            ok(pInfo[1].dwMajor == 0xdededede, "Cookie2 corrupt: 0x%lx\n", pInfo[1].dwMajor);
         }
         else
         {
-            ok(pInfo->dwMajor == 2, "Expected pInfo->dwMajor to be 2, was: %d\n", pInfo->dwMajor);
+            ok(pInfo->dwMajor == 2, "Expected pInfo->dwMajor to be 2, was: %lu\n", pInfo->dwMajor);
             if (g_WinVersion >= _WIN32_WINNT_VISTA)
             {
-                ok(pInfo->dwMinor == 1, "Expected pInfo->dwMinor to be 1, was: %d\n", pInfo->dwMinor);
+                ok(pInfo->dwMinor == 1, "Expected pInfo->dwMinor to be 1, was: %lu\n", pInfo->dwMinor);
             }
             else
             {
                 SYSTEMTIME si = {0};
                 GetLocalTime(&si);
                 DWORD dwExpect = ((DWORD)si.wYear - 2000) * 10000 + si.wMonth * 100 + si.wDay;
-                ok(pInfo->dwMinor == dwExpect, "Expected pInfo->dwMinor to be %d, was: %d\n", dwExpect, pInfo->dwMinor);
+                ok(pInfo->dwMinor == dwExpect, "Expected pInfo->dwMinor to be %lu, was: %lu\n", dwExpect, pInfo->dwMinor);
             }
 
-            ok(pInfo[1].dwFlags == 0xdededede, "Cookie1 corrupt: 0x%x\n", pInfo[1].dwFlags);
-            ok(pInfo[1].dwMajor == 0xdededede, "Cookie2 corrupt: 0x%x\n", pInfo[1].dwMajor);
+            ok(pInfo[1].dwFlags == 0xdededede, "Cookie1 corrupt: 0x%lx\n", pInfo[1].dwFlags);
+            ok(pInfo[1].dwMajor == 0xdededede, "Cookie2 corrupt: 0x%lx\n", pInfo[1].dwMajor);
         }
 
     }
@@ -299,7 +299,7 @@ static void test_Sdb(void)
     if (pdb)
     {
         tagid = pSdbGetFirstChild(pdb, TAGID_ROOT);
-        ok(tagid == _TAGID_ROOT, "unexpected tagid %u, expected %u\n", tagid, _TAGID_ROOT);
+        ok(tagid == _TAGID_ROOT, "unexpected tagid %lu, expected %u\n", tagid, _TAGID_ROOT);
 
         tag = pSdbGetTagFromTagID(pdb, tagid);
         ok(tag == TAG_SIZE, "unexpected tag 0x%x, expected 0x%x\n", tag, TAG_SIZE);
@@ -309,10 +309,10 @@ static void test_Sdb(void)
             wine_dbgstr_w(string), wine_dbgstr_w(tag_size_string));
 
         dword = pSdbReadDWORDTag(pdb, tagid, 0);
-        ok(dword == 0xDEADBEEF, "unexpected value %u, expected 0xDEADBEEF\n", dword);
+        ok(dword == 0xDEADBEEF, "unexpected value %lu, expected 0xDEADBEEF\n", dword);
 
         tagid = pSdbGetNextChild(pdb, TAGID_ROOT, tagid);
-        ok(tagid == _TAGID_ROOT + sizeof(TAG) + sizeof(DWORD), "unexpected tagid %u, expected %u\n",
+        ok(tagid == _TAGID_ROOT + sizeof(TAG) + sizeof(DWORD), "unexpected tagid %lu, expected %Iu\n",
             tagid, _TAGID_ROOT + sizeof(TAG) + sizeof(DWORD));
 
         tag = pSdbGetTagFromTagID(pdb, tagid);
@@ -423,7 +423,7 @@ static void test_write_ex(void)
     if (!pdb)
         return;
     tagdb = pSdbBeginWriteListTag(pdb, TAG_DATABASE);
-    ok(tagdb == 12, "Expected tag to be 12, was %u\n", tagdb);
+    ok(tagdb == 12, "Expected tag to be 12, was %lu\n", tagdb);
     ret = pSdbWriteStringTag(pdb, TAG_NAME, test1);
     ret = pSdbWriteStringTag(pdb, TAG_NAME, test2);
     ok(ret, "Expected SdbWriteStringTag to succeed\n");
@@ -431,7 +431,7 @@ static void test_write_ex(void)
     ok(ret, "Expected SdbEndWriteListTag to succeed\n");
 
     tagdb = pSdbBeginWriteListTag(pdb, TAG_DATABASE);
-    ok(tagdb == 30, "Expected tag to be 24, was %u\n", tagdb);
+    ok(tagdb == 30, "Expected tag to be 24, was %lu\n", tagdb);
     ret = pSdbWriteStringTag(pdb, TAG_NAME, test1);
     ret = pSdbWriteStringTag(pdb, TAG_NAME, test2);
     ok(ret, "Expected SdbWriteStringTag to succeed\n");
@@ -447,65 +447,65 @@ static void test_write_ex(void)
         return;
 
     tagdb = pSdbFindFirstTag(pdb, TAGID_ROOT, TAG_DATABASE);
-    ok(tagdb == 12, "Expected tag to be 12, was %u\n", tagdb);
+    ok(tagdb == 12, "Expected tag to be 12, was %lu\n", tagdb);
     size = pSdbGetTagDataSize(pdb, tagdb);
-    ok(size == 12, "Expected size to be 12, was %u\n", size);
+    ok(size == 12, "Expected size to be 12, was %lu\n", size);
 
     tagstr = pSdbFindFirstTag(pdb, tagdb, TAG_NAME);
-    ok(tagstr == 18, "Expected string tag to be 18, was %u\n", tagstr);
+    ok(tagstr == 18, "Expected string tag to be 18, was %lu\n", tagstr);
     tag = pSdbGetTagFromTagID(pdb, tagstr);
-    ok(tag == TAG_NAME, "Expected tag to be TAG_NAME, was 0x%x\n", (DWORD)tag);
+    ok(tag == TAG_NAME, "Expected tag to be TAG_NAME, was 0x%lx\n", (DWORD)tag);
     size = pSdbGetTagDataSize(pdb, tagstr);
-    ok(size == 4, "Expected size to be 4, was 0x%x\n", size);
+    ok(size == 4, "Expected size to be 4, was 0x%lx\n", size);
 
     tagstr = pSdbFindNextTag(pdb, tagdb, tagstr);
-    ok(tagstr == 24, "Expected string tag to be 24, was %u\n", tagstr);
+    ok(tagstr == 24, "Expected string tag to be 24, was %lu\n", tagstr);
     tag = pSdbGetTagFromTagID(pdb, tagstr);
-    ok(tag == TAG_NAME, "Expected tag to be TAG_NAME, was 0x%x\n", (DWORD)tag);
+    ok(tag == TAG_NAME, "Expected tag to be TAG_NAME, was 0x%lx\n", (DWORD)tag);
     size = pSdbGetTagDataSize(pdb, tagstr);
-    ok(size == 4, "Expected size to be 4, was 0x%x\n", size);
+    ok(size == 4, "Expected size to be 4, was 0x%lx\n", size);
 
     tagdb = pSdbFindNextTag(pdb, TAGID_ROOT, tagdb);
-    ok(tagdb == 30, "Expected tag to be 30, was %u\n", tagdb);
+    ok(tagdb == 30, "Expected tag to be 30, was %lu\n", tagdb);
     size = pSdbGetTagDataSize(pdb, tagdb);
-    ok(size == 12, "Expected size to be 12, was %u\n", size);
+    ok(size == 12, "Expected size to be 12, was %lu\n", size);
 
     tagstr = pSdbFindFirstTag(pdb, tagdb, TAG_NAME);
-    ok(tagstr == 36, "Expected string tag to be 36, was %u\n", tagstr);
+    ok(tagstr == 36, "Expected string tag to be 36, was %lu\n", tagstr);
     tag = pSdbGetTagFromTagID(pdb, tagstr);
-    ok(tag == TAG_NAME, "Expected tag to be TAG_NAME, was 0x%x\n", (DWORD)tag);
+    ok(tag == TAG_NAME, "Expected tag to be TAG_NAME, was 0x%lx\n", (DWORD)tag);
     size = pSdbGetTagDataSize(pdb, tagstr);
-    ok(size == 4, "Expected size to be 4, was %u\n", size);
+    ok(size == 4, "Expected size to be 4, was %lu\n", size);
 
     tagstr = pSdbFindNextTag(pdb, tagdb, tagstr);
-    ok(tagstr == 42, "Expected string tag to be 42, was %u\n", tagstr);
+    ok(tagstr == 42, "Expected string tag to be 42, was %lu\n", tagstr);
     tag = pSdbGetTagFromTagID(pdb, tagstr);
-    ok(tag == TAG_NAME, "Expected tag to be TAG_NAME, was 0x%x\n", (DWORD)tag);
+    ok(tag == TAG_NAME, "Expected tag to be TAG_NAME, was 0x%lx\n", (DWORD)tag);
     size = pSdbGetTagDataSize(pdb, tagstr);
-    ok(size == 4, "Expected size to be 4, was 0x%x\n", size);
+    ok(size == 4, "Expected size to be 4, was 0x%lx\n", size);
 
     tagdb = pSdbFindFirstTag(pdb, TAGID_ROOT, TAG_STRINGTABLE);
-    ok(tagdb == 48, "Expected tag to be 48, was %u\n", tagdb);
+    ok(tagdb == 48, "Expected tag to be 48, was %lu\n", tagdb);
     size = pSdbGetTagDataSize(pdb, tagdb);
-    ok(size == 32, "Expected size to be 32, was %u\n", size);
+    ok(size == 32, "Expected size to be 32, was %lu\n", size);
 
     tagstr = pSdbGetFirstChild(pdb, tagdb);
-    ok(tagstr == 54, "Expected string tag to be 54, was %u\n", tagstr);
+    ok(tagstr == 54, "Expected string tag to be 54, was %lu\n", tagstr);
     tag = pSdbGetTagFromTagID(pdb, tagstr);
-    ok(tag == TAG_STRINGTABLE_ITEM, "Expected tag to be TAG_STRINGTABLE_ITEM, was 0x%x\n", (DWORD)tag);
+    ok(tag == TAG_STRINGTABLE_ITEM, "Expected tag to be TAG_STRINGTABLE_ITEM, was 0x%lx\n", (DWORD)tag);
     size = pSdbGetTagDataSize(pdb, tagstr);
-    ok(size == 10, "Expected size to be 10, was %u\n", size);
+    ok(size == 10, "Expected size to be 10, was %lu\n", size);
     ptr = pSdbGetStringTagPtr(pdb, tagstr);
     ok(ptr != NULL, "Expected a valid pointer\n");
     if (ptr)
         ok(wcscmp(ptr, test1) == 0, "Expected ptr to be %s, was %s\n", wine_dbgstr_w(test1), wine_dbgstr_w(ptr));
 
     tagstr = pSdbGetNextChild(pdb, tagdb, tagstr);
-    ok(tagstr == 70, "Expected string tag to be 70, was %u\n", tagstr);
+    ok(tagstr == 70, "Expected string tag to be 70, was %lu\n", tagstr);
     tag = pSdbGetTagFromTagID(pdb, tagstr);
-    ok(tag == TAG_STRINGTABLE_ITEM, "Expected tag to be TAG_STRINGTABLE_ITEM, was 0x%x\n", (DWORD)tag);
+    ok(tag == TAG_STRINGTABLE_ITEM, "Expected tag to be TAG_STRINGTABLE_ITEM, was 0x%lx\n", (DWORD)tag);
     size = pSdbGetTagDataSize(pdb, tagstr);
-    ok(size == 10, "Expected size to be 10, was %u\n", size);
+    ok(size == 10, "Expected size to be 10, was %lu\n", size);
     ptr = pSdbGetStringTagPtr(pdb, tagstr);
     ok(ptr != NULL, "Expected a valid pointer\n");
     if (ptr)
@@ -522,11 +522,11 @@ static void write_db_strings(const WCHAR* name, const WCHAR* data[], size_t coun
     BOOL ret;
 
     pdb = pSdbCreateDatabase(name, DOS_PATH);
-    ok(pdb != NULL, "Failed to create db for case %u\n", count);
+    ok(pdb != NULL, "Failed to create db for case %Iu\n", count);
     for (n = 0; n < count; ++n)
     {
         ret = pSdbWriteStringTag(pdb, TAG_NAME, data[n]);
-        ok(ret, "Failed to write string %u/%u\n", n, count);
+        ok(ret, "Failed to write string %Iu/%Iu\n", n, count);
     }
     pSdbCloseDatabaseWrite(pdb);
 }
@@ -565,47 +565,47 @@ static void test_stringtable()
         tagstr = pSdbFindFirstTag(pdb, TAGID_ROOT, TAG_NAME);
         for (j = 0; j <= n; ++j)
         {
-            ok(tagstr == expected_str[j], "Expected tagstr to be 0x%x, was 0x%x for %u/%u\n", expected_str[j], tagstr, j, n);
+            ok(tagstr == expected_str[j], "Expected tagstr to be 0x%lx, was 0x%lx for %lu/%lu\n", expected_str[j], tagstr, j, n);
             if (tagstr)
             {
                 LPWSTR data;
                 DWORD size;
                 TAG tag = pSdbGetTagFromTagID(pdb, tagstr);
-                ok(tag == TAG_NAME, "Expected tag to be TAG_NAME, was 0x%x for %u/%u\n", tag, j, n);
+                ok(tag == TAG_NAME, "Expected tag to be TAG_NAME, was 0x%x for %lu/%lu\n", tag, j, n);
                 size = pSdbGetTagDataSize(pdb, tagstr);
-                ok(size == 4, "Expected datasize to be 4, was %u for %u/%u\n", size, j, n);
+                ok(size == 4, "Expected datasize to be 4, was %lu for %lu/%lu\n", size, j, n);
                 data = pSdbGetStringTagPtr(pdb, tagstr);
-                ok(data && !_wcsicmp(data, all[j]), "Expected data to be %s was %s for %u/%u\n", wine_dbgstr_w(all[j]), wine_dbgstr_w(data), j, n);
+                ok(data && !_wcsicmp(data, all[j]), "Expected data to be %s was %s for %lu/%lu\n", wine_dbgstr_w(all[j]), wine_dbgstr_w(data), j, n);
             }
             tagstr = pSdbFindNextTag(pdb, TAGID_ROOT, tagstr);
         }
-        ok(tagstr == TAGID_NULL, "Expected to be at the end for %u\n", n);
+        ok(tagstr == TAGID_NULL, "Expected to be at the end for %lu\n", n);
 
 
         table = pSdbFindFirstTag(pdb, TAGID_ROOT, TAG_STRINGTABLE);
         expected_table = 0xc + (n+1)*6;
-        ok(table == expected_table, "Expected to find a stringtable at 0x%x instead of 0x%x for %u\n", expected_table, table, n);
+        ok(table == expected_table, "Expected to find a stringtable at 0x%lx instead of 0x%lx for %lu\n", expected_table, table, n);
         if (table)
         {
             tagstr = pSdbFindFirstTag(pdb, table, TAG_STRINGTABLE_ITEM);
             for (j = 0; j <= n; ++j)
             {
-                ok(tagstr == (expected_tab[j] + expected_table), "Expected tagstr to be 0x%x, was 0x%x for %u/%u\n", (expected_tab[j] + expected_table), tagstr, j, n);
+                ok(tagstr == (expected_tab[j] + expected_table), "Expected tagstr to be 0x%lx, was 0x%lx for %lu/%lu\n", (expected_tab[j] + expected_table), tagstr, j, n);
                 if (tagstr)
                 {
                     LPWSTR data;
                     DWORD size, expected_size;
                     TAG tag = pSdbGetTagFromTagID(pdb, tagstr);
-                    ok(tag == TAG_STRINGTABLE_ITEM, "Expected tag to be TAG_NAME, was 0x%x for %u/%u\n", tag, j, n);
+                    ok(tag == TAG_STRINGTABLE_ITEM, "Expected tag to be TAG_NAME, was 0x%x for %lu/%lu\n", tag, j, n);
                     size = pSdbGetTagDataSize(pdb, tagstr);
                     expected_size = (lstrlenW(all[j])+1) * 2;
-                    ok(size == expected_size, "Expected datasize to be %u, was %u for %u/%u\n", expected_size, size, j, n);
+                    ok(size == expected_size, "Expected datasize to be %lu, was %lu for %lu/%lu\n", expected_size, size, j, n);
                     data = pSdbGetStringTagPtr(pdb, tagstr);
-                    ok(data && !_wcsicmp(data, all[j]), "Expected data to be %s was %s for %u/%u\n", wine_dbgstr_w(all[j]), wine_dbgstr_w(data), j, n);
+                    ok(data && !_wcsicmp(data, all[j]), "Expected data to be %s was %s for %lu/%lu\n", wine_dbgstr_w(all[j]), wine_dbgstr_w(data), j, n);
                 }
                 tagstr = pSdbFindNextTag(pdb, TAGID_ROOT, tagstr);
             }
-            ok(tagstr == TAGID_NULL, "Expected to be at the end for %u\n", n);
+            ok(tagstr == TAGID_NULL, "Expected to be at the end for %lu\n", n);
         }
 
         pSdbCloseDatabase(pdb);
@@ -623,7 +623,7 @@ static void match_strw_attr_imp(PDB pdb, TAGID parent, TAG find, const WCHAR* co
         winetest_ok(name != NULL, "Could not convert attr to str.\n");
         if (name)
         {
-            winetest_ok(wcscmp(name, compare) == 0, "Expected tagid %x to be %s, was %s\n", attr, wine_dbgstr_w(compare), wine_dbgstr_w(name));
+            winetest_ok(wcscmp(name, compare) == 0, "Expected tagid %lx to be %s, was %s\n", attr, wine_dbgstr_w(compare), wine_dbgstr_w(name));
         }
     }
 }
@@ -635,7 +635,7 @@ static void match_dw_attr_imp(PDB pdb, TAGID parent, TAG find, DWORD compare)
     if (attr != TAG_NULL)
     {
         DWORD val = pSdbReadDWORDTag(pdb, attr, 0x1234567);
-        winetest_ok(val == compare, "Expected tagid %x to be 0x%x, was 0x%x\n", attr, compare, val);
+        winetest_ok(val == compare, "Expected tagid %lx to be 0x%lx, was 0x%lx\n", attr, compare, val);
     }
 }
 
@@ -646,7 +646,7 @@ static void match_qw_attr_imp(PDB pdb, TAGID parent, TAG find, QWORD compare)
     if (attr != TAG_NULL)
     {
         QWORD val = pSdbReadQWORDTag(pdb, attr, 0x123456789abcdef);
-        winetest_ok(val == compare, "Expected tagid %x to be 0x%I64x, was 0x%I64x\n", attr, compare, val);
+        winetest_ok(val == compare, "Expected tagid %lx to be 0x%I64x, was 0x%I64x\n", attr, compare, val);
     }
 }
 
@@ -861,7 +861,7 @@ static void check_matching_layer(PDB pdb, TAGID layer, int num)
     else
     {
         TAGID layer_tagid = pSdbFindFirstTag(pdb, layer, TAG_LAYER_TAGID);
-        ok(layer_tagid == TAGID_NULL, "expected not to find a layer tagid, got %x\n", layer_tagid);
+        ok(layer_tagid == TAGID_NULL, "expected not to find a layer tagid, got %lx\n", layer_tagid);
         match_strw_attr(pdb, layer, TAG_NAME, L"WinSrv03");
     }
 }
@@ -1076,20 +1076,20 @@ static void test_GetDatabaseInformation(PDB pdb)
         /* Struct is slightly bigger on some Win10, and the DB version nr is different on all */
         if (g_WinVersion >= WINVER_WIN10)
         {
-            ok(pInfo->dwMajor == 3, "Expected pInfo->dwMajor to be 3, was: %d\n", pInfo->dwMajor);
-            ok(pInfo->dwMinor == 0, "Expected pInfo->dwMinor to be 0, was: %d\n", pInfo->dwMinor);
+            ok(pInfo->dwMajor == 3, "Expected pInfo->dwMajor to be 3, was: %lu\n", pInfo->dwMajor);
+            ok(pInfo->dwMinor == 0, "Expected pInfo->dwMinor to be 0, was: %lu\n", pInfo->dwMinor);
 
-            ok(pInfo->dwRuntimePlatform == 4 || pInfo->dwRuntimePlatform == 0xdededede, "Something amiss: 0x%x\n",
+            ok(pInfo->dwRuntimePlatform == 4 || pInfo->dwRuntimePlatform == 0xdededede, "Something amiss: 0x%lx\n",
                pInfo->dwRuntimePlatform);
-            ok(pInfo[1].dwMajor == 0xdededede, "Cookie2 corrupt: 0x%x\n", pInfo[1].dwMajor);
+            ok(pInfo[1].dwMajor == 0xdededede, "Cookie2 corrupt: 0x%lx\n", pInfo[1].dwMajor);
         }
         else
         {
-            ok(pInfo->dwMajor == 2, "Expected pInfo->dwMajor to be 2, was: %d\n", pInfo->dwMajor);
-            ok(pInfo->dwMinor == 1, "Expected pInfo->dwMinor to be 1, was: %d\n", pInfo->dwMinor);
+            ok(pInfo->dwMajor == 2, "Expected pInfo->dwMajor to be 2, was: %lu\n", pInfo->dwMajor);
+            ok(pInfo->dwMinor == 1, "Expected pInfo->dwMinor to be 1, was: %lu\n", pInfo->dwMinor);
 
-            ok(pInfo->dwRuntimePlatform == 0xdededede, "Cookie1 corrupt: 0x%x\n", pInfo->dwRuntimePlatform);
-            ok(pInfo[1].dwMajor == 0xdededede, "Cookie2 corrupt: 0x%x\n", pInfo[1].dwMajor);
+            ok(pInfo->dwRuntimePlatform == 0xdededede, "Cookie1 corrupt: 0x%lx\n", pInfo->dwRuntimePlatform);
+            ok(pInfo[1].dwMajor == 0xdededede, "Cookie2 corrupt: 0x%lx\n", pInfo[1].dwMajor);
         }
 
     }
@@ -1112,13 +1112,13 @@ static void test_CheckDatabaseManually(void)
     ok(ret, "Expected SdbGetDatabaseVersion to succeed\n");
     if (g_WinVersion >= WINVER_WIN10)
     {
-        ok(ver_hi == 3, "Expected ver_hi to be 3, was: %d\n", ver_hi);
-        ok(ver_lo == 0, "Expected ver_lo to be 0, was: %d\n", ver_lo);
+        ok(ver_hi == 3, "Expected ver_hi to be 3, was: %lu\n", ver_hi);
+        ok(ver_lo == 0, "Expected ver_lo to be 0, was: %lu\n", ver_lo);
     }
     else
     {
-        ok(ver_hi == 2, "Expected ver_hi to be 2, was: %d\n", ver_hi);
-        ok(ver_lo == 1, "Expected ver_lo to be 1, was: %d\n", ver_lo);
+        ok(ver_hi == 2, "Expected ver_hi to be 2, was: %lu\n", ver_hi);
+        ok(ver_lo == 1, "Expected ver_lo to be 1, was: %lu\n", ver_lo);
     }
 
     ver_hi = ver_lo = 0x12345678;
@@ -1126,14 +1126,14 @@ static void test_CheckDatabaseManually(void)
     if (g_WinVersion >= WINVER_WIN10)
     {
         ok(ret == FALSE, "Expected SdbGetDatabaseVersion to fail\n");
-        ok(ver_hi == 0, "Expected ver_hi to be 0, was: 0x%x\n", ver_hi);
-        ok(ver_lo == 0, "Expected ver_lo to be 0, was: 0x%x\n", ver_lo);
+        ok(ver_hi == 0, "Expected ver_hi to be 0, was: 0x%lx\n", ver_hi);
+        ok(ver_lo == 0, "Expected ver_lo to be 0, was: 0x%lx\n", ver_lo);
     }
     else
     {
         ok(ret, "Expected SdbGetDatabaseVersion to succeed\n");
-        ok(ver_hi == 0x12345678, "Expected ver_hi to be 0x12345678, was: 0x%x\n", ver_hi);
-        ok(ver_lo == 0x12345678, "Expected ver_lo to be 0x12345678, was: 0x%x\n", ver_lo);
+        ok(ver_hi == 0x12345678, "Expected ver_hi to be 0x12345678, was: 0x%lx\n", ver_hi);
+        ok(ver_lo == 0x12345678, "Expected ver_lo to be 0x12345678, was: 0x%lx\n", ver_lo);
     }
 
     ver_hi = ver_lo = 0x12345678;
@@ -1141,14 +1141,14 @@ static void test_CheckDatabaseManually(void)
     if (g_WinVersion >= WINVER_WIN10)
     {
         ok(ret == FALSE, "Expected SdbGetDatabaseVersion to fail\n");
-        ok(ver_hi == 0, "Expected ver_hi to be 0, was: 0x%x\n", ver_hi);
-        ok(ver_lo == 0, "Expected ver_lo to be 0, was: 0x%x\n", ver_lo);
+        ok(ver_hi == 0, "Expected ver_hi to be 0, was: 0x%lx\n", ver_hi);
+        ok(ver_lo == 0, "Expected ver_lo to be 0, was: 0x%lx\n", ver_lo);
     }
     else
     {
         ok(ret, "Expected SdbGetDatabaseVersion to succeed\n");
-        ok(ver_hi == 0x12345678, "Expected ver_hi to be 0x12345678, was: 0x%x\n", ver_hi);
-        ok(ver_lo == 0x12345678, "Expected ver_lo to be 0x12345678, was: 0x%x\n", ver_lo);
+        ok(ver_hi == 0x12345678, "Expected ver_hi to be 0x12345678, was: 0x%lx\n", ver_hi);
+        ok(ver_lo == 0x12345678, "Expected ver_lo to be 0x12345678, was: 0x%lx\n", ver_lo);
     }
 
     pdb = pSdbOpenDatabase(path, DOS_PATH);
@@ -1440,12 +1440,12 @@ static BOOL write_raw_file(const WCHAR* FileName, const void* Data, DWORD Size)
 
     if (Handle == INVALID_HANDLE_VALUE)
     {
-        skip("Failed to create temp file %ls, error %u\n", FileName, GetLastError());
+        skip("Failed to create temp file %ls, error %lu\n", FileName, GetLastError());
         return FALSE;
     }
     Success = WriteFile(Handle, Data, Size, &dwWritten, NULL);
-    ok(Success == TRUE, "WriteFile failed with %u\n", GetLastError());
-    ok(dwWritten == Size, "WriteFile wrote %u bytes instead of %u\n", dwWritten, Size);
+    ok(Success == TRUE, "WriteFile failed with %lu\n", GetLastError());
+    ok(dwWritten == Size, "WriteFile wrote %lu bytes instead of %lu\n", dwWritten, Size);
     CloseHandle(Handle);
     return Success && (dwWritten == Size);
 }
@@ -1595,7 +1595,7 @@ static void test_TagRef(void)
     TAGREF tr;
 
     ret = GetTempPathW(_countof(tmpdir), tmpdir);
-    ok(ret, "GetTempPathA error: %d\n", GetLastError());
+    ok(ret, "GetTempPathA error: %lu\n", GetLastError());
 
     /* SdbInitDatabase needs an nt-path */
     _swprintf(dbpath, L"\\??\\%stest.sdb", tmpdir);
@@ -1615,61 +1615,61 @@ static void test_TagRef(void)
     ret = pSdbTagRefToTagID(hsdb, size - 1, &pdb, &db);
     ok(ret == TRUE, "Expected ret to be TRUE, was: %d\n", ret);
     ok(pdb != NULL, "Expected a result, got: %p\n", pdb);
-    ok(db == (size - 1), "Expected %u, got: %u\n", size - 1, db);
+    ok(db == (size - 1), "Expected %lu, got: %lu\n", size - 1, db);
 
     /* Convert it back. */
     tr = 0x12345678;
     ret = pSdbTagIDToTagRef(hsdb, pdb, db, &tr);
     ok(ret == TRUE, "Expected ret to be TRUE, was: %d\n", ret);
-    ok(tr == (size - 1), "Expected %u, got: %u\n", size - 1, tr);
+    ok(tr == (size - 1), "Expected %lu, got: %lu\n", size - 1, tr);
 
     pdb = (PDB)&db;
     db = 12345;
     ret = pSdbTagRefToTagID(hsdb, size, &pdb, &db);
     ok(ret == TRUE, "Expected ret to be TRUE, was: %d\n", ret);
     ok(pdb != NULL, "Expected a result, got: %p\n", pdb);
-    ok(db == size, "Expected %u, got: %u\n", size, db);
+    ok(db == size, "Expected %lu, got: %lu\n", size, db);
 
     tr = 0x12345678;
     ret = pSdbTagIDToTagRef(hsdb, pdb, db, &tr);
     ok(ret == TRUE, "Expected ret to be TRUE, was: %d\n", ret);
-    ok(tr == size, "Expected %u, got: %u\n", size, tr);
+    ok(tr == size, "Expected %lu, got: %lu\n", size, tr);
 
     pdb = (PDB)&db;
     db = 12345;
     ret = pSdbTagRefToTagID(hsdb, size + 1, &pdb, &db);
     ok(ret == TRUE, "Expected ret to be TRUE, was: %d\n", ret);
     ok(pdb != NULL, "Expected a result, got: %p\n", pdb);
-    ok(db == (size + 1), "Expected %u, got: %u\n", size + 1, db);
+    ok(db == (size + 1), "Expected %lu, got: %lu\n", size + 1, db);
 
     tr = 0x12345678;
     ret = pSdbTagIDToTagRef(hsdb, pdb, db, &tr);
     ok(ret == TRUE, "Expected ret to be TRUE, was: %d\n", ret);
-    ok(tr == (size + 1), "Expected %u, got: %u\n", (size + 1), tr);
+    ok(tr == (size + 1), "Expected %lu, got: %lu\n", (size + 1), tr);
 
     pdb = (PDB)&db;
     db = 12345;
     ret = pSdbTagRefToTagID(hsdb, 0x0fffffff, &pdb, &db);
     ok(ret == TRUE, "Expected ret to be TRUE, was: %d\n", ret);
     ok(pdb != NULL, "Expected a result, got: %p\n", pdb);
-    ok(db == 0x0fffffff, "Expected %u, got: %u\n", 0x0fffffff, db);
+    ok(db == 0x0fffffff, "Expected %u, got: %lu\n", 0x0fffffff, db);
 
     tr = 0x12345678;
     ret = pSdbTagIDToTagRef(hsdb, pdb, db, &tr);
     ok(ret == TRUE, "Expected ret to be TRUE, was: %d\n", ret);
-    ok(tr == 0x0fffffff, "Expected %u, got: %u\n", 0x0fffffff, tr);
+    ok(tr == 0x0fffffff, "Expected %u, got: %lu\n", 0x0fffffff, tr);
 
     pdb = (PDB)&db;
     db = 12345;
     ret = pSdbTagRefToTagID(hsdb, 0x10000000, &pdb, &db);
     ok(ret == FALSE, "Expected ret to be FALSE, was: %d\n", ret);
     ok(pdb == NULL, "Expected no result, got: %p\n", pdb);
-    ok(db == 0, "Expected no result, got: 0x%x\n", db);
+    ok(db == 0, "Expected no result, got: 0x%lx\n", db);
 
     tr = 0x12345678;
     ret = pSdbTagIDToTagRef(hsdb, pdb, 0x10000000, &tr);
     ok(ret == FALSE, "Expected ret to be TRUE, was: %d\n", ret);
-    ok(tr == 0, "Expected %u, got: %u\n", 0, tr);
+    ok(tr == 0, "Expected %u, got: %lu\n", 0, tr);
 
     pdb = NULL;
     db = TAGID_NULL;
@@ -1875,7 +1875,7 @@ static void test_DataTags(HSDB hsdb)
     ok_hex(dwDataType, 0x12345);
     ok_hex(dwBufferSize, sizeof(Buffer));
     ok_hex(*(DWORD*)Buffer, (int)0xaaaaaaaa);
-    ok(tiData == 0x111111, "Expected 0x111111, got 0x%x\n", tiData);
+    ok(tiData == 0x111111, "Expected 0x111111, got 0x%lx\n", tiData);
 
     /* Show that SdbQueryDataEx behaves the same */
     memset(Buffer, 0xaa, sizeof(Buffer));
@@ -1888,9 +1888,9 @@ static void test_DataTags(HSDB hsdb)
     ok_hex(dwBufferSize, sizeof(Buffer));
     ok_hex(*(DWORD*)Buffer, (int)0xaaaaaaaa);
     if (g_WinVersion < _WIN32_WINNT_WIN10)
-        ok(trData == 0, "Expected 0, got 0x%x\n", trData);
+        ok(trData == 0, "Expected 0, got 0x%lx\n", trData);
     else
-        ok(trData == 0x111111, "Expected 0x111111, got 0x%x\n", trData);
+        ok(trData == 0x111111, "Expected 0x111111, got 0x%lx\n", trData);
 
     /* And SdbQueryData as well */
     memset(Buffer, 0xaa, sizeof(Buffer));
@@ -1911,11 +1911,11 @@ static void test_Data(void)
     HSDB hsdb;
 
     ret = GetTempPathW(_countof(workdir), workdir);
-    ok(ret, "GetTempPathW error: %d\n", GetLastError());
+    ok(ret, "GetTempPathW error: %lu\n", GetLastError());
     lstrcatW(workdir, L"apphelp_test");
 
     ret = CreateDirectoryW(workdir, NULL);
-    ok(ret, "CreateDirectoryW error: %d\n", GetLastError());
+    ok(ret, "CreateDirectoryW error: %lu\n", GetLastError());
 
     /* SdbInitDatabase needs an nt-path */
     _swprintf(dbpath, L"\\??\\%s\\test.sdb", workdir);
@@ -1944,7 +1944,7 @@ static void test_Data(void)
     DeleteFileW(dbpath + 4);
 
     ret = RemoveDirectoryW(workdir);
-    ok(ret, "RemoveDirectoryW error: %d\n", GetLastError());
+    ok(ret, "RemoveDirectoryW error: %lu\n", GetLastError());
 }
 
 
@@ -2087,7 +2087,7 @@ START_TEST(db)
     /* We detect the apphelp version that is loaded, instead of the os we are running on.
        This allows for easier testing multiple versions of the dll */
     g_WinVersion = get_module_version(hdll);
-    trace("Apphelp version: 0x%x\n", g_WinVersion);
+    trace("Apphelp version: 0x%lx\n", g_WinVersion);
 
     *(void**)&pSdbTagToString = (void *)GetProcAddress(hdll, "SdbTagToString");
     *(void**)&pSdbOpenDatabase = (void *)GetProcAddress(hdll, "SdbOpenDatabase");

@@ -162,7 +162,7 @@ Thread2(
 
     wParam = (WPARAM)Parameter;
     ret = SendMessage(hWndThread1, WM_SENDTOOTHERTHREAD, wParam, dwThread2);
-    ok(ret == 0, "ret = %lu\n", ret);
+    ok(ret == 0, "ret = %Id\n", ret);
 
     while (PeekMessage(&msg, 0, 0, 0, PM_REMOVE))
     {

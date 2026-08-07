@@ -92,9 +92,9 @@ static void _test_key_name(HKEY hKey, PUNICODE_STRING Prefix, LPCWSTR Name, ULON
     GetKeyName(hKey, &KeyName);
 
     ok_(__FILE__, LineNumber)(RtlCompareUnicodeString(&KeyName, &ExpectedName, TRUE) == 0,
-            "Key name is %.*S, expected %.*S\n",
-            KeyName.Length, KeyName.Buffer,
-            ExpectedName.Length, ExpectedName.Buffer);
+            "Key name is %.*ls, expected %.*ls\n",
+            (int)(KeyName.Length / sizeof(WCHAR)), KeyName.Buffer,
+            (int)(ExpectedName.Length / sizeof(WCHAR)), ExpectedName.Buffer);
 
     RtlFreeUnicodeString(&KeyName);
 }

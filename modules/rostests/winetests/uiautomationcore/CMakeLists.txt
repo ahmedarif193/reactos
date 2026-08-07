@@ -2,7 +2,7 @@
 remove_definitions(-D_CRT_NON_CONFORMING_SWPRINTFS)
 
 add_executable(uiautomationcore_winetest uiautomation.c testlist.c)
-target_compile_definitions(uiautomationcore_winetest PRIVATE USE_WINE_TODOS)
+target_compile_definitions(uiautomationcore_winetest PRIVATE CONST_VTABLE USE_WINE_TODOS)
 add_dependencies(uiautomationcore_winetest wineheaders)
 set_module_type(uiautomationcore_winetest win32cui)
 target_link_libraries(uiautomationcore_winetest wine uuid)

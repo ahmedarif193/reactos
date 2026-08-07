@@ -146,16 +146,16 @@ void TestClassRedirection(HANDLE h, LPCWSTR ClassToTest, LPCWSTR ExpectedClassPa
     else
     {
         ok(header->magic == STRSECTION_MAGIC, "%lu\n", header->magic );
-        ok(header->size == sizeof(*header), "Got %lu instead of %d\n", header->size, sizeof(*header));
+        ok(header->size == sizeof(*header), "Got %lu instead of %llu\n", header->size, sizeof(*header));
         ok(header->count == ExpectedClassCount, "Expected %lu classes, got %lu\n", ExpectedClassCount, header->count );
 
         VersionedClass = (WCHAR*)((BYTE*)classData + classData->name_offset);
         ClassLib = (WCHAR*)((BYTE*)header + classData->module_offset);
         data_lenght = classData->size + classData->name_len + classData->module_len + 2*sizeof(WCHAR);
         ok(KeyedData.ulLength == data_lenght, "Got lenght %lu instead of %d\n", KeyedData.ulLength, data_lenght);
-        ok(classData->size == sizeof(*classData), "Got %lu instead of %d\n", classData->size, sizeof(*classData));
+        ok(classData->size == sizeof(*classData), "Got %lu instead of %llu\n", classData->size, sizeof(*classData));
         ok(classData->res == 0, "Got res %lu\n", classData->res);
-        ok(classData->module_len == wcslen(ExpectedModule) * 2, "Got name len %lu, expected %d\n", classData->module_len, wcslen(ExpectedModule) *2);
+        ok(classData->module_len == wcslen(ExpectedModule) * 2, "Got name len %lu, expected %llu\n", classData->module_len, wcslen(ExpectedModule) *2);
         ok(wcscmp(ClassLib, ExpectedModule) == 0, "Got %S, expected %S\n", ClassLib, ExpectedModule);
         /* compare only if VersionedClass starts with ExpectedClassPart */
         ok(memcmp(VersionedClass, ExpectedClassPart, sizeof(WCHAR) * wcslen(ExpectedClassPart)) == 0, "Expected %S to start with %S\n", VersionedClass, ExpectedClassPart);
@@ -194,9 +194,9 @@ VOID TestLibDependency(HANDLE h)
     else
     {
         ok(SectionHeader->magic == STRSECTION_MAGIC, "%lu\n", SectionHeader->magic );
-        ok(SectionHeader->size == sizeof(*SectionHeader), "Got %lu instead of %d\n", SectionHeader->size, sizeof(*SectionHeader));
+        ok(SectionHeader->size == sizeof(*SectionHeader), "Got %lu instead of %llu\n", SectionHeader->size, sizeof(*SectionHeader));
         ok(SectionHeader->count == 2, "%lu\n", SectionHeader->count ); /* 2 dlls? */
-        ok(redirData->size == sizeof(*redirData), "Got %lu instead of %d\n", redirData->size, sizeof(*redirData));
+        ok(redirData->size == sizeof(*redirData), "Got %lu instead of %llu\n", redirData->size, sizeof(*redirData));
     }
 
     SetLastError(0xdeaddead);
@@ -227,14 +227,14 @@ VOID TestLibDependency(HANDLE h)
         PACTIVATION_CONTEXT_ASSEMBLY_DETAILED_INFORMATION details = (PACTIVATION_CONTEXT_ASSEMBLY_DETAILED_INFORMATION)buffer;
 
         ok(SectionHeader->magic == STRSECTION_MAGIC, "%lu\n", SectionHeader->magic );
-        ok(SectionHeader->size == sizeof(*SectionHeader), "Got %lu instead of %d\n", SectionHeader->size, sizeof(*SectionHeader));
+        ok(SectionHeader->size == sizeof(*SectionHeader), "Got %lu instead of %llu\n", SectionHeader->size, sizeof(*SectionHeader));
         ok(SectionHeader->count == 2, "%lu\n", SectionHeader->count ); /* 2 dlls? */
 
         data_lenght = assemplyData->size +
                       assemplyData->ulEncodedAssemblyIdentityLength +
                       assemplyData->ulManifestPathLength +
                       assemplyData->ulAssemblyDirectoryNameLength + 2 * sizeof(WCHAR);
-        ok(assemplyData->size == sizeof(*assemplyData), "Got %lu instead of %d\n", assemplyData->size, sizeof(*assemplyData));
+        ok(assemplyData->size == sizeof(*assemplyData), "Got %lu instead of %llu\n", assemplyData->size, sizeof(*assemplyData));
         ok(KeyedData.ulLength == data_lenght, "Got lenght %lu instead of %d\n", KeyedData.ulLength, data_lenght);
 
         AssemblyIdentity = (WCHAR*)((BYTE*)SectionHeader + assemplyData->ulEncodedAssemblyIdentityOffset);

@@ -26,6 +26,10 @@
 
 #include "wine/test.h"
 
+#ifdef __REACTOS__
+BOOL WINAPI SxspGenerateManifestPathOnAssemblyIdentity(const WCHAR *, WCHAR *, DWORD *, void *);
+#endif
+
 static void test_CreateAssemblyNameObject( void )
 {
     static const WCHAR emptyW[] = {0};

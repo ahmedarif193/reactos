@@ -25,7 +25,7 @@ void Test_Product_(ULONG Line, ULONG OSMajorVersion, ULONG OSMinorVersion, ULONG
     BOOLEAN Result;
     Result = pRtlGetProductInfo(OSMajorVersion, OSMinorVersion, SpMajorVersion, SpMinorVersion, &ProductType);
     ok_(__FILE__, Line)(Result == ExpectedResult, "RtlGetProductInfo wrong return value. Got %u, expected %u\n", Result, ExpectedResult);
-    ok_(__FILE__, Line)(ProductType == ExpectedProductType, "RtlGetProductInfo wrong product type. Got 0x%x, expected 0x%x\n", ProductType, ExpectedProductType);
+    ok_(__FILE__, Line)(ProductType == ExpectedProductType, "RtlGetProductInfo wrong product type. Got 0x%lx, expected 0x%lx\n", ProductType, ExpectedProductType);
 }
 #define Test_Product(OSMajorVersion, OSMinorVersion, SpMajorVersion, SpMinorVersion, ExpectedResult, ExpectedProductType) \
     Test_Product_(__LINE__, OSMajorVersion, OSMinorVersion, SpMajorVersion, SpMinorVersion, ExpectedResult, ExpectedProductType)
@@ -81,7 +81,7 @@ START_TEST(RtlGetProductInfo)
                (CurrentProductType == PRODUCT_SERVER_FOUNDATION) ||
                (CurrentProductType == PRODUCT_STANDARD_SERVER) ||
                (CurrentProductType == PRODUCT_ENTERPRISE_SERVER),
-               "Unexpected product type for Vista: 0x%x\n", CurrentProductType);
+               "Unexpected product type for Vista: 0x%lx\n", CurrentProductType);
             break;
 
         case _WIN32_WINNT_WIN7: // Windows 7 or Server 2008 R2
@@ -94,7 +94,7 @@ START_TEST(RtlGetProductInfo)
                (CurrentProductType == PRODUCT_SERVER_FOUNDATION) ||
                (CurrentProductType == PRODUCT_STANDARD_SERVER) ||
                (CurrentProductType == PRODUCT_ENTERPRISE_SERVER),
-               "Unexpected product type for Windows 7: 0x%x\n", CurrentProductType);
+               "Unexpected product type for Windows 7: 0x%lx\n", CurrentProductType);
             break;
 
         case _WIN32_WINNT_WIN8: // Windows 8 or Server 2012
@@ -106,7 +106,7 @@ START_TEST(RtlGetProductInfo)
                (CurrentProductType == PRODUCT_HOME_SERVER) || // Essentials
                (CurrentProductType == PRODUCT_STANDARD_SERVER) ||
                (CurrentProductType == PRODUCT_DATACENTER_SERVER),
-               "Unexpected product type for Windows 8: 0x%x\n", CurrentProductType);
+               "Unexpected product type for Windows 8: 0x%lx\n", CurrentProductType);
             break;
 
         case _WIN32_WINNT_WINBLUE: // Windows 8.1 or Server 2012 R2
@@ -117,7 +117,7 @@ START_TEST(RtlGetProductInfo)
                (CurrentProductType == PRODUCT_HOME_SERVER) || // Essentials
                (CurrentProductType == PRODUCT_STANDARD_SERVER) ||
                (CurrentProductType == PRODUCT_DATACENTER_SERVER),
-               "Unexpected product type for Windows 8.1: 0x%x\n", CurrentProductType);
+               "Unexpected product type for Windows 8.1: 0x%lx\n", CurrentProductType);
             break;
 
         case _WIN32_WINNT_WIN10: // Windows 10 or Server 2016
@@ -131,7 +131,7 @@ START_TEST(RtlGetProductInfo)
                (CurrentProductType == PRODUCT_IOTENTERPRISES) ||
                (CurrentProductType == PRODUCT_ENTERPRISE_SERVER) ||
                (CurrentProductType == PRODUCT_DATACENTER_SERVER),
-               "Unexpected product type for Windows 10: 0x%x\n", CurrentProductType);
+               "Unexpected product type for Windows 10: 0x%lx\n", CurrentProductType);
             break;
     }
 

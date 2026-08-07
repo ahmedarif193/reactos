@@ -24,6 +24,7 @@ add_executable(mshtml_winetest
     ${PCH_SKIP_SOURCE}
     rsrc.rc)
 
+set_source_files_properties(protocol.c PROPERTIES COMPILE_DEFINITIONS CONST_VTABLE)
 list(APPEND mshtml_winetest_rc_deps
     ${CMAKE_CURRENT_BINARY_DIR}/test_tlb.tlb
     ${CMAKE_CURRENT_SOURCE_DIR}/asyncscriptload.js

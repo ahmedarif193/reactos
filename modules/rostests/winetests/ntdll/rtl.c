@@ -4099,7 +4099,7 @@ static void test_RtlDeriveCapabilitySidsFromName(void)
         ok( !memcmp( &sid->IdentifierAuthority, &app_authority, sizeof(app_authority) ), "mismatch.\n" );
         ok( sid->SubAuthorityCount == 10, "got %u.\n", sid->SubAuthorityCount );
         ok( sid->SubAuthority[0] == SECURITY_BATCH_RID, "got %lu.\n", sid->SubAuthority[0] );
-        ok( sid->SubAuthority[1] == SECURITY_CAPABILITY_APP_RID, "got %lu.\n", sid->SubAuthority[1] );
+        ok( *GetSidSubAuthority( sid, 1 ) == SECURITY_CAPABILITY_APP_RID, "got %lu.\n", *GetSidSubAuthority( sid, 1 ) );
         ok( !memcmp( sid->SubAuthority + 2, tests[i].hash, sizeof(tests[i].hash) ), "mismatch.\n" );
 
         ok( group_sid->Revision == SID_REVISION, "got %u.\n", group_sid->Revision );

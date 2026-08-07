@@ -12,7 +12,7 @@ int CreateSocket(SOCKET* psck)
 {
     /* Create the socket */
     *psck = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    ok(*psck != INVALID_SOCKET, "*psck = %d\n", *psck);
+    ok(*psck != INVALID_SOCKET, "*psck = %Iu\n", *psck);
 
     if(*psck == INVALID_SOCKET)
     {

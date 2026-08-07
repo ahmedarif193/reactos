@@ -10,6 +10,7 @@ add_executable(mmdevapi_winetest
     spatialaudio.c
     testlist.c)
 
+target_compile_definitions(mmdevapi_winetest PRIVATE CONST_VTABLE)
 set_module_type(mmdevapi_winetest win32cui)
 target_link_libraries(mmdevapi_winetest uuid)
 add_importlibs(mmdevapi_winetest ole32 version user32 advapi32 winmm msvcrt kernel32 ntdll)

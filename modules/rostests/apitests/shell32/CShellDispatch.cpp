@@ -165,7 +165,7 @@ static void TestFolderItem()
         ok(hr == S_OK && V_I4(&v) == GetFileSize(buf), "Size");
 
         hr = psdfi->QueryInterface(IID_PPV_ARG(FolderItem2, &psdfi2));
-        if ((ok(SUCCEEDED(hr), "QI FolderItem2\n", buf), SUCCEEDED(hr)))
+        if ((ok(SUCCEEDED(hr), "QI FolderItem2\n"), SUCCEEDED(hr)))
         {
             hr = psdfi2->ExtendedProperty((BSTR)L"Size", &v);
             if ((ok(SUCCEEDED(hr), "ExtendedProperty failed\n"), SUCCEEDED(hr)))

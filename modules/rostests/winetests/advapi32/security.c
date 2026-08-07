@@ -301,7 +301,7 @@ static void test_ConvertStringSidToSid(void)
     pisid = psid;
     ok(pisid->SubAuthorityCount == 4, "Invalid sub authority count - expected 4, got %d\n", pisid->SubAuthorityCount);
     ok(pisid->SubAuthority[0] == 21, "Invalid subauthority 0 - expected 21, got %ld\n", pisid->SubAuthority[0]);
-    ok(pisid->SubAuthority[3] == 4576, "Invalid subauthority 0 - expected 4576, got %ld\n", pisid->SubAuthority[3]);
+    ok(*GetSidSubAuthority(pisid, 3) == 4576, "Invalid subauthority 3 - expected 4576, got %ld\n", *GetSidSubAuthority(pisid, 3));
     LocalFree(str);
     LocalFree(psid);
 

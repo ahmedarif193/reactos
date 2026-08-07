@@ -39,7 +39,7 @@ static BOOL init_sym_imp(BOOL fInvadeProcess, const char* file, int line)
     if (!SymInitialize(proc(), NULL, fInvadeProcess))
     {
         DWORD err = GetLastError();
-        ok_(file, line)(0, "Failed to init: 0x%x\n", err);
+        ok_(file, line)(0, "Failed to init: 0x%lx\n", err);
         return FALSE;
     }
     return TRUE;
@@ -140,7 +140,7 @@ cleanup:
     if (errcode == 0)
         trace("get_module_version - %s.\n", errmsg);
     else
-        trace("get_module_version - %s (lasterror %d).\n", errmsg, errcode);
+        trace("get_module_version - %s (lasterror %lu).\n", errmsg, errcode);
     return FALSE;
 }
 
@@ -451,7 +451,7 @@ static BOOL CALLBACK EnumSymProc(PSYMBOL_INFO pSymInfo, ULONG SymbolSize, PVOID 
     }
     else
     {
-        ok(0, "Out of bounds (%lu), max is: %i!\n", ctx->Index, ARRAYSIZE(test_data));
+        ok(0, "Out of bounds (%Iu), max is: %Iu!\n", ctx->Index, ARRAYSIZE(test_data));
     }
 
     return TRUE;
@@ -509,7 +509,7 @@ static BOOL CALLBACK SymRegisterCallback64Proc(
     else
     {
         ok(ActionCode == symregcallback_test_data[ctx->idx].ActionCode,
-            "ActionCode (idx %u) expected %u, got %u\n",
+            "ActionCode (idx %u) expected %lu, got %lu\n",
             ctx->idx, symregcallback_test_data[ctx->idx].ActionCode, ActionCode);
     }
     ctx->idx++;

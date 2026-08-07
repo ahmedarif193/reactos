@@ -59,7 +59,7 @@ void Test__isnan(void)
 }
 
 #ifdef _M_AMD64
-static TESTENTRY_FLT s_isnanf_tests[] =
+static TESTENTRY_FLT_INT s_isnanf_tests[] =
 {
     /* Special values */
     { 0x00000000 /*  0.000000 */, 0 },

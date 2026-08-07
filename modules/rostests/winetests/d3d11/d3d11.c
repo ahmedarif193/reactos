@@ -17857,14 +17857,14 @@ static void test_getdc(void)
         ok(size == sizeof(dib) || broken(size == sizeof(dib.dsBm)),
                 "Got unexpected size %d for format %s.\n", size, testdata[i].name);
 
-        ok(!dib.dsBm.bmType, "Got unexpected type %#x for format %s.\n",
+        ok(!dib.dsBm.bmType, "Got unexpected type %#lx for format %s.\n",
                 dib.dsBm.bmType, testdata[i].name);
-        ok(dib.dsBm.bmWidth == 64, "Got unexpected width %d for format %s.\n",
+        ok(dib.dsBm.bmWidth == 64, "Got unexpected width %ld for format %s.\n",
                 dib.dsBm.bmWidth, testdata[i].name);
-        ok(dib.dsBm.bmHeight == 64, "Got unexpected height %d for format %s.\n",
+        ok(dib.dsBm.bmHeight == 64, "Got unexpected height %ld for format %s.\n",
                 dib.dsBm.bmHeight, testdata[i].name);
         width_bytes = ((dib.dsBm.bmWidth * bit_count + 31) >> 3) & ~3;
-        ok(dib.dsBm.bmWidthBytes == width_bytes, "Got unexpected width bytes %d for format %s.\n",
+        ok(dib.dsBm.bmWidthBytes == width_bytes, "Got unexpected width bytes %ld for format %s.\n",
                 dib.dsBm.bmWidthBytes, testdata[i].name);
         ok(dib.dsBm.bmPlanes == 1, "Got unexpected plane count %d for format %s.\n",
                 dib.dsBm.bmPlanes, testdata[i].name);

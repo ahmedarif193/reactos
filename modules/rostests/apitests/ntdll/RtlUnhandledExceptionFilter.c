@@ -105,6 +105,6 @@ START_TEST(RtlUnhandledExceptionFilter)
         else
             ok_long(r, EXCEPTION_CONTINUE_SEARCH);
         if (fail)
-            trace("SEH on %#x\n", er.ExceptionCode);
+            trace("SEH on %#lx\n", er.ExceptionCode);
     }
 }

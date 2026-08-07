@@ -30,10 +30,11 @@ static void test_SharedMem()
     ok(test3.GetData() == NULL, "Expected NULL, got %p\n", test3.GetData());
     ok(test1.GetHandle() == NULL, "Expected NULL, got %p\n", test1.GetHandle());
     ok(test3.GetHandle() == NULL, "Expected NULL, got %p\n", test3.GetHandle());
-    ok(test1.GetMappingSize() == 0, "Expected 0, got %lu\n", test1.GetMappingSize());
-    ok(test3.GetMappingSize() == 0, "Expected 0, got %lu\n", test3.GetMappingSize());
+    ok(test1.GetMappingSize() == 0, "Expected 0, got %Iu\n", test1.GetMappingSize());
+    ok(test3.GetMappingSize() == 0, "Expected 0, got %Iu\n", test3.GetMappingSize());
 
-    test1 = test1;
+    CAtlFileMapping<TestData> *self = &test1;
+    test1 = *self;
     //test1 = test2;  // Asserts on orig.m_pData != NULL, same with CopyFrom
     //test1 = test3;  // does not compile
     hr = test1.Unmap();
@@ -44,20 +45,20 @@ static void test_SharedMem()
     ok(hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND), "Expected HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND), got 0x%lx\n", hr);
     ok(test1.GetData() == NULL, "Expected NULL, got %p\n", test1.GetData());
     ok(test1.GetHandle() == NULL, "Expected NULL, got %p\n", test1.GetHandle());
-    ok(test1.GetMappingSize() == 123, "Expected 123, got %lu\n", test1.GetMappingSize());
+    ok(test1.GetMappingSize() == 123, "Expected 123, got %Iu\n", test1.GetMappingSize());
 
     hr = test1.Unmap();
     ok(hr == S_OK, "Expected S_OK, got 0x%lx\n", hr);
     ok(test1.GetData() == NULL, "Expected NULL, got %p\n", test1.GetData());
     ok(test1.GetHandle() == NULL, "Expected NULL, got %p\n", test1.GetHandle());
-    ok(test1.GetMappingSize() == 123, "Expected 123, got %lu\n", test1.GetMappingSize());
+    ok(test1.GetMappingSize() == 123, "Expected 123, got %Iu\n", test1.GetMappingSize());
 
     bAlreadyExisted = 123;
     hr = test1.MapSharedMem(sizeof(TestData), _T("TEST_MAPPING"), &bAlreadyExisted, (LPSECURITY_ATTRIBUTES)0, PAGE_READWRITE, FILE_MAP_ALL_ACCESS);
     ok(hr == S_OK, "Expected S_OK, got 0x%lx\n", hr);
     ok(test1.GetData() != NULL, "Expected ptr, got %p\n", test1.GetData());
     ok(test1.GetHandle() != NULL, "Expected handle, got %p\n", test1.GetHandle());
-    ok(test1.GetMappingSize() == sizeof(TestData), "Expected sizeof(TestData), got %lu\n", test1.GetMappingSize());
+    ok(test1.GetMappingSize() == sizeof(TestData), "Expected sizeof(TestData), got %Iu\n", test1.GetMappingSize());
     ok(bAlreadyExisted == FALSE, "Expected FALSE, got %u\n", bAlreadyExisted);
 
     if (test1.GetData())
@@ -69,12 +70,12 @@ static void test_SharedMem()
     ok(hr == S_OK, "Expected S_OK, got 0x%lx\n", hr);
     ok(test2.GetData() != NULL, "Expected ptr, got %p\n", test2.GetData());
     ok(test2.GetHandle() != NULL, "Expected handle, got %p\n", test2.GetHandle());
-    ok(test2.GetMappingSize() == sizeof(TestData), "Expected sizeof(TestData), got %lu\n", test2.GetMappingSize());
+    ok(test2.GetMappingSize() == sizeof(TestData), "Expected sizeof(TestData), got %Iu\n", test2.GetMappingSize());
 
     // test1 is not closed:
     ok(test1.GetData() != NULL, "Expected ptr, got %p\n", test1.GetData());
     ok(test1.GetHandle() != NULL, "Expected handle, got %p\n", test1.GetHandle());
-    ok(test1.GetMappingSize() == sizeof(TestData), "Expected sizeof(TestData), got %lu\n", test1.GetMappingSize());
+    ok(test1.GetMappingSize() == sizeof(TestData), "Expected sizeof(TestData), got %Iu\n", test1.GetMappingSize());
 
     // test2 does not equal test1
     ok(test1.GetData() != test2.GetData(), "Expected different ptrs\n");
@@ -96,13 +97,13 @@ static void test_SharedMem()
     ok(hr == HRESULT_FROM_WIN32(ERROR_MAPPED_ALIGNMENT), "Expected HRESULT_FROM_WIN32(ERROR_MAPPED_ALIGNMENT), got 0x%lx\n", hr);
     ok(test3.GetData() == NULL, "Expected NULL, got %p\n", test3.GetData());
     ok(test3.GetHandle() == NULL, "Expected NULL, got %p\n", test3.GetHandle());
-    ok(test3.GetMappingSize() == sizeof(TestData), "Expected sizeof(TestData), got %lu\n", test3.GetMappingSize());
+    ok(test3.GetMappingSize() == sizeof(TestData), "Expected sizeof(TestData), got %Iu\n", test3.GetMappingSize());
 
     hr = test2.Unmap();
     ok(hr == S_OK, "Expected S_OK, got 0x%lx\n", hr);
     ok(test2.GetData() == NULL, "Expected NULL, got %p\n", test2.GetData());
     ok(test2.GetHandle() == NULL, "Expected NULL, got %p\n", test2.GetHandle());
-    ok(test2.GetMappingSize() == sizeof(TestData), "Expected sizeof(TestData), got %lu\n", test2.GetMappingSize());
+    ok(test2.GetMappingSize() == sizeof(TestData), "Expected sizeof(TestData), got %Iu\n", test2.GetMappingSize());
 
     bAlreadyExisted = 123;
     // Wrong access flag
@@ -110,7 +111,7 @@ static void test_SharedMem()
     ok(hr == E_ACCESSDENIED, "Expected E_ACCESSDENIED, got 0x%lx\n", hr);
     ok(test2.GetData() == NULL, "Expected NULL, got %p\n", test2.GetData());
     ok(test2.GetHandle() == NULL, "Expected NULL, got %p\n", test2.GetHandle());
-    ok(test2.GetMappingSize() == sizeof(TestData), "Expected sizeof(TestData), got %lu\n", test2.GetMappingSize());
+    ok(test2.GetMappingSize() == sizeof(TestData), "Expected sizeof(TestData), got %Iu\n", test2.GetMappingSize());
     ok(bAlreadyExisted == TRUE, "Expected TRUE, got %u\n", bAlreadyExisted);
 
     bAlreadyExisted = 123;
@@ -118,7 +119,7 @@ static void test_SharedMem()
     ok(hr == S_OK, "Expected S_OK, got 0x%lx\n", hr);
     ok(test2.GetData() != NULL, "Expected ptr, got %p\n", test2.GetData());
     ok(test2.GetHandle() != NULL, "Expected handle, got %p\n", test2.GetHandle());
-    ok(test2.GetMappingSize() == sizeof(TestData), "Expected sizeof(TestData), got %lu\n", test2.GetMappingSize());
+    ok(test2.GetMappingSize() == sizeof(TestData), "Expected sizeof(TestData), got %Iu\n", test2.GetMappingSize());
     ok(bAlreadyExisted == TRUE, "Expected TRUE, got %u\n", bAlreadyExisted);
 
     // test2 does not equal test1
@@ -159,26 +160,26 @@ static void test_FileMapping()
         ok(hr == S_OK, "Expected S_OK, got 0x%lx\n", hr);
         ok(test1.GetData() != NULL, "Expected ptr, got %p\n", test1.GetData());
         ok(test1.GetHandle() != NULL, "Expected handle, got %p\n", test1.GetHandle());
-        ok(test1.GetMappingSize() == FileSize.LowPart, "Expected %lu, got %lu\n", FileSize.LowPart, test1.GetMappingSize());
+        ok(test1.GetMappingSize() == FileSize.LowPart, "Expected %lu, got %Iu\n", FileSize.LowPart, test1.GetMappingSize());
 
         hr = test2.MapFile(hFile, 0, 0x10000, PAGE_READONLY, FILE_MAP_READ);
         ok(hr == S_OK, "Expected S_OK, got 0x%lx\n", hr);
         ok(test2.GetData() != NULL, "Expected ptr, got %p\n", test2.GetData());
         ok(test2.GetHandle() != NULL, "Expected handle, got %p\n", test2.GetHandle());
         // Offset is subtracted
-        ok(test2.GetMappingSize() == FileSize.LowPart - 0x10000, "Expected %lu, got %lu\n", FileSize.LowPart-0x10000, test2.GetMappingSize());
+        ok(test2.GetMappingSize() == FileSize.LowPart - 0x10000, "Expected %lu, got %Iu\n", FileSize.LowPart-0x10000, test2.GetMappingSize());
 
         hr = test1.Unmap();
         ok(hr == S_OK, "Expected S_OK, got 0x%lx\n", hr);
         ok(test1.GetData() == NULL, "Expected NULL, got %p\n", test1.GetData());
         ok(test1.GetHandle() == NULL, "Expected NULL, got %p\n", test1.GetHandle());
-        ok(test1.GetMappingSize() == FileSize.LowPart, "Expected %lu, got %lu\n", FileSize.LowPart, test1.GetMappingSize());
+        ok(test1.GetMappingSize() == FileSize.LowPart, "Expected %lu, got %Iu\n", FileSize.LowPart, test1.GetMappingSize());
 
         hr = test1.MapFile(hFile, 0x1000);
         ok(hr == S_OK, "Expected S_OK, got 0x%lx\n", hr);
         ok(test1.GetData() != NULL, "Expected ptr, got %p\n", test1.GetData());
         ok(test1.GetHandle() != NULL, "Expected handle, got %p\n", test1.GetHandle());
-        ok(test1.GetMappingSize() == 0x1000, "Expected 0x1000, got %lu\n", test1.GetMappingSize());
+        ok(test1.GetMappingSize() == 0x1000, "Expected 0x1000, got %Iu\n", test1.GetMappingSize());
     }
 
     // We can still access it after the file is closed

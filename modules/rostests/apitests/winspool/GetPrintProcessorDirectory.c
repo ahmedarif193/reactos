@@ -67,7 +67,7 @@ START_TEST(GetPrintProcessorDirectoryA)
     ok(GetLastError() == ERROR_SUCCESS, "GetPrintProcessorDirectoryA returns error %lu!\n", GetLastError());
 
     // Note for GetPrintProcessorDirectoryA: cbNeeded is the same as for GetPrintProcessorDirectoryW!
-    ok(strlen(pszBuffer) == cbNeeded / sizeof(WCHAR) - 1, "GetPrintProcessorDirectoryA string is %Iu characters long, but %lu characters expected!\n", strlen(pszBuffer), cbNeeded / sizeof(WCHAR) - 1);
+    ok(strlen(pszBuffer) == cbNeeded / sizeof(WCHAR) - 1, "GetPrintProcessorDirectoryA string is %Iu characters long, but %Iu characters expected!\n", strlen(pszBuffer), cbNeeded / sizeof(WCHAR) - 1);
     HeapFree(GetProcessHeap(), 0, pszBuffer);
 }
 
@@ -122,6 +122,6 @@ START_TEST(GetPrintProcessorDirectoryW)
     SetLastError(0xDEADBEEF);
     ok(GetPrintProcessorDirectoryW(NULL, NULL, 1, (PBYTE)pwszBuffer, cbNeeded, &cbTemp), "GetPrintProcessorDirectoryW returns FALSE!\n");
     ok(GetLastError() == ERROR_SUCCESS, "GetPrintProcessorDirectoryW returns error %lu!\n", GetLastError());
-    ok(wcslen(pwszBuffer) == cbNeeded / sizeof(WCHAR) - 1, "GetPrintProcessorDirectoryW string is %Iu characters long, but %lu characters expected!\n", wcslen(pwszBuffer), cbNeeded / sizeof(WCHAR) - 1);
+    ok(wcslen(pwszBuffer) == cbNeeded / sizeof(WCHAR) - 1, "GetPrintProcessorDirectoryW string is %Iu characters long, but %Iu characters expected!\n", wcslen(pwszBuffer), cbNeeded / sizeof(WCHAR) - 1);
     HeapFree(GetProcessHeap(), 0, pwszBuffer);
 }

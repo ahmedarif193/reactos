@@ -7,7 +7,9 @@
  */
 
 /* NTDEF.H */
+#ifndef RTL_CONSTANT_STRING
 #define RTL_CONSTANT_STRING(s) { sizeof(s) - sizeof(s[0]), sizeof(s), (void*)s }
+#endif
 #define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
 
 /* WINBASE.H */

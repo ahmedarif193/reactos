@@ -69,7 +69,7 @@ static void ok_attributes_(IDataObject* pDataObject, HRESULT expect_hr, DWORD ex
         if (blob)
         {
             SIZE_T size = GlobalSize(medium.hGlobal);
-            winetest_ok(size == 0xc, "Unexpected size, got %lu, expected 12\n", size);
+            winetest_ok(size == 0xc, "Unexpected size, got %Iu, expected 12\n", size);
             if (size == 0xc)
             {
                 PDWORD data = (PDWORD)blob;

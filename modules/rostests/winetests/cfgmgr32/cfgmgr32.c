@@ -62,7 +62,7 @@ static const char *debugstr_ok( const char *cond )
         const WCHAR *v = (r);                                                                      \
         ok( !wcscmp( v, (e) ), "%s %s\n", debugstr_ok(#r), debugstr_w(v) );                        \
     } while (0)
-#define ok_str( e, r )                                                                             \
+#define check_str( e, r )                                                                             \
     do                                                                                             \
     {                                                                                              \
         const char *v = (r);                                                                       \
@@ -76,7 +76,7 @@ static const char *debugstr_ok( const char *cond )
     } while (0)
 #define ok_u4( r, op, e )   ok_ex( r, op, e, UINT, "%u" )
 #define ok_x4( r, op, e )   ok_ex( r, op, e, UINT, "%#x" )
-#define ok_ptr( r, op, e )   ok_ex( r, op, e, void *, "%p" )
+#define check_ptr( r, op, e )   ok_ex( r, op, e, void *, "%p" )
 
 static const WCHAR *guid_string( const GUID *guid, WCHAR *buffer, UINT length )
 {
@@ -637,7 +637,7 @@ static void test_CM_Get_Device_Interface_Property_Keys(void)
         return;
     }
     iface = malloc( size * sizeof(*iface) );
-    ok_ptr( iface, !=, NULL );
+    check_ptr( iface, !=, NULL );
     ret = CM_Get_Device_Interface_ListW( &guid, NULL, iface, size, CM_GET_DEVICE_INTERFACE_LIST_PRESENT );
     ok_x4( ret, ==, CR_SUCCESS );
 
@@ -719,7 +719,7 @@ static void test_CM_Get_Device_Interface_PropertyW(void)
         return;
     }
     iface = malloc( len * sizeof(*iface) );
-    ok_ptr( iface, !=, NULL );
+    check_ptr( iface, !=, NULL );
     ret = CM_Get_Device_Interface_ListW( &guid, NULL, iface, len, CM_GET_DEVICE_INTERFACE_LIST_PRESENT );
     ok_x4( ret, ==, CR_SUCCESS );
 
@@ -2423,7 +2423,7 @@ static void test_CM_Get_Class_Registry_Property(void)
     todo_wine ok_x4( ret, ==, CR_SUCCESS );
     todo_wine ok_x4( type, ==, REG_SZ );
     todo_wine ok_x4( len, ==, 0x10 );
-    todo_wine ok_str( "D:P(A;;GA;;;SY)", bufferA );
+    todo_wine check_str( "D:P(A;;GA;;;SY)", bufferA );
 
 
     type = 0xdeadbeef;
@@ -2731,7 +2731,7 @@ static void test_CM_Get_Device_Interface_List(void)
     ok_u4( size, >, 0 );
 
     buffer = malloc( size * sizeof(*buffer) );
-    ok_ptr( buffer, !=, NULL );
+    check_ptr( buffer, !=, NULL );
 
 
     ret = CM_Get_Device_Interface_ListW( &guid, NULL, NULL, 0, CM_GET_DEVICE_INTERFACE_LIST_PRESENT );
@@ -2786,12 +2786,12 @@ static void test_CM_Get_Device_Interface_List(void)
 
 
     bufferA = malloc( size * sizeof(*bufferA) );
-    ok_ptr( bufferA, !=, NULL );
+    check_ptr( bufferA, !=, NULL );
     ret = CM_Get_Device_Interface_ListA( &guid, NULL, bufferA, size, CM_GET_DEVICE_INTERFACE_LIST_PRESENT );
     ok_x4( ret, ==, CR_SUCCESS );
 
     bufferW = malloc( size * sizeof(*bufferW) );
-    ok_ptr( bufferW, !=, NULL );
+    check_ptr( bufferW, !=, NULL );
     memset( bufferW, 0xcc, size * sizeof(*bufferW) );
     MultiByteToWideChar( CP_ACP, 0, bufferA, size, bufferW, size );
     for (tmp = buffer, tmp2 = bufferW; *tmp && *tmp2; tmp = tmp + wcslen( tmp ) + 1, tmp2 = tmp2 + wcslen( tmp2 ) + 1)
@@ -2825,7 +2825,7 @@ skip_tests:
     ok_u4( size, >, 0 );
 
     buffer = malloc( size * sizeof(*buffer) );
-    ok_ptr( buffer, !=, NULL );
+    check_ptr( buffer, !=, NULL );
 
     ret = CM_Get_Device_Interface_ListW( &guid, NULL, buffer, size, CM_GET_DEVICE_INTERFACE_LIST_PRESENT );
     ok_x4( ret, ==, CR_SUCCESS );
@@ -3022,7 +3022,7 @@ static void test_CM_Locate_DevNode(void)
     memset( pathA, 0xcd, sizeof(pathA) );
     ret = CM_Get_Device_IDA( node, (char *)pathA, len + 1, 0 );
     ok_x4( ret, ==, CR_SUCCESS );
-    ok_str( instance_idA, pathA );
+    check_str( instance_idA, pathA );
 }
 
 static void test_CM_Open_DevNode_Key(void)
@@ -3882,7 +3882,7 @@ static void test_CM_Get_Device_ID_List_Size(void)
     ok_x4( ret, ==, CR_SUCCESS );
     ok_u4( size, >, 0 );
     buffer = malloc( size * sizeof(*buffer) );
-    ok_ptr( buffer, !=, NULL );
+    check_ptr( buffer, !=, NULL );
     ret = CM_Get_Device_Interface_ListW( &guid, NULL, buffer, size, CM_GET_DEVICE_INTERFACE_LIST_PRESENT );
     ok_x4( ret, ==, CR_SUCCESS );
 
@@ -3927,9 +3927,9 @@ static void test_CM_Get_Device_ID_List(void)
     ok_u4( size, >, 0 );
 
     buffer = malloc( size * sizeof(*buffer) );
-    ok_ptr( buffer, !=, NULL );
+    check_ptr( buffer, !=, NULL );
     bufferW = malloc( size * sizeof(*bufferW) );
-    ok_ptr( bufferW, !=, NULL );
+    check_ptr( bufferW, !=, NULL );
 
 
     ret = CM_Get_Device_ID_ListW( NULL, NULL, size, CM_GETIDLIST_FILTER_NONE );
@@ -3950,7 +3950,7 @@ static void test_CM_Get_Device_ID_List(void)
 
 
     bufferA = malloc( size * sizeof(*bufferA) );
-    ok_ptr( bufferA, !=, NULL );
+    check_ptr( bufferA, !=, NULL );
     ret = CM_Get_Device_ID_ListA( NULL, bufferA, size, CM_GETIDLIST_FILTER_NONE );
     ok_x4( ret, ==, CR_SUCCESS );
 

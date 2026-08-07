@@ -155,9 +155,9 @@ static SQLRETURN WINAPI driver_SQLSetEnvAttr( SQLHENV env,
 {
     CHECK_EXPECT( driver_SQLSetEnvAttr );
     ok( (ULONG_PTR)env == SQL_HANDLE_ENV, "env = %p\n", env );
-    ok( attr == SQL_ATTR_ODBC_VERSION, "attr = %d\n", attr );
+    ok( attr == SQL_ATTR_ODBC_VERSION, "attr = %ld\n", attr );
     ok( val == (SQLPOINTER)SQL_OV_ODBC2, "val = %p\n", val );
-    ok( !len, "len = %d\n", len );
+    ok( !len, "len = %ld\n", len );
     return SQL_SUCCESS;
 }
 
@@ -165,9 +165,9 @@ static SQLRETURN WINAPI driver_SQLGetConnectAttr( SQLHDBC con, SQLINTEGER attr,
         SQLPOINTER val, SQLINTEGER len, SQLINTEGER *out_len )
 {
     CHECK_EXPECT( driver_SQLGetConnectAttr );
-    ok( attr == SQL_ATTR_LOGIN_TIMEOUT || attr == SQL_ATTR_CONNECTION_TIMEOUT, "attr = %d\n", attr );
+    ok( attr == SQL_ATTR_LOGIN_TIMEOUT || attr == SQL_ATTR_CONNECTION_TIMEOUT, "attr = %ld\n", attr );
     ok( val != NULL, "val = %p\n", val );
-    ok( len == sizeof(SQLINTEGER), "len = %d\n", len );
+    ok( len == sizeof(SQLINTEGER), "len = %ld\n", len );
     todo_wine_if( attr == SQL_ATTR_LOGIN_TIMEOUT ) ok( out_len != NULL, "out_len = %p\n", out_len );
 
     *(SQLINTEGER*)val = 0;
@@ -178,10 +178,10 @@ static SQLRETURN WINAPI driver_SQLSetConnectAttr( SQLHDBC con, SQLINTEGER attr,
         SQLPOINTER val, SQLINTEGER len )
 {
     CHECK_EXPECT( driver_SQLSetConnectAttr );
-    ok( attr == 1000, "attr = %d\n", attr );
+    ok( attr == 1000, "attr = %ld\n", attr );
     ok( val != NULL, "val = %p\n", val );
-    ok( *(SQLUINTEGER *)val == 0xdeadbeef, "*val = %u\n", *(SQLUINTEGER *)val );
-    ok( len == sizeof(SQLUINTEGER), "len = %d\n", len );
+    ok( *(SQLUINTEGER *)val == 0xdeadbeef, "*val = %lu\n", *(SQLUINTEGER *)val );
+    ok( len == sizeof(SQLUINTEGER), "len = %ld\n", len );
     return SQL_SUCCESS;
 }
 
@@ -272,7 +272,7 @@ static SQLRETURN WINAPI driver_SQLGetStmtAttr( SQLHSTMT stmt, SQLINTEGER attr,
     CHECK_EXPECT2( driver_SQLGetStmtAttr );
     ok( (ULONG_PTR)stmt == SQL_HANDLE_STMT, "stmt = %p\n", stmt );
     ok( attr == SQL_ATTR_APP_ROW_DESC || attr == SQL_ATTR_APP_PARAM_DESC
-            || attr == SQL_ATTR_IMP_ROW_DESC || attr == SQL_ATTR_IMP_PARAM_DESC, "attr = %x\n", attr);
+            || attr == SQL_ATTR_IMP_ROW_DESC || attr == SQL_ATTR_IMP_PARAM_DESC, "attr = %lx\n", attr);
     ok( val != NULL, "val = %p\n", val );
 
     *(SQLHDESC *)val = (SQLHDESC)(ULONG_PTR)attr;
@@ -289,18 +289,18 @@ static SQLRETURN WINAPI driver_SQLSetStmtAttr( SQLHSTMT stmt, SQLINTEGER attr,
     {
     case SQL_ATTR_ROW_ARRAY_SIZE:
         ok( (ULONG_PTR)val == 2, "val = %p\n", val );
-        ok( !len, "len = %d\n", len );
+        ok( !len, "len = %ld\n", len );
 
         stmt_data.fetch_size = (ULONG_PTR)val;
         break;
     case SQL_ATTR_ROWS_FETCHED_PTR:
         ok( val != NULL, "val = %p\n", val );
-        ok( !len, "len = %d\n", len );
+        ok( !len, "len = %ld\n", len );
 
         stmt_data.rows_fetched = val;
         break;
     default:
-        todo_wine ok( 0, "unexpected attribute: %d\n", attr );
+        todo_wine ok( 0, "unexpected attribute: %ld\n", attr );
         return SQL_ERROR;
     }
 
@@ -473,7 +473,7 @@ static  SQLRETURN WINAPI driver_SQLPrepare( SQLHSTMT stmt, SQLCHAR *cmd, SQLINTE
     ok( (ULONG_PTR)stmt == SQL_HANDLE_STMT, "stmt = %p\n", stmt );
     ok( !strcmp((char *)cmd, "SELECT * FROM winetest WHERE Id = ? AND Name = ?"),
             "cmd = %s\n", wine_dbgstr_an((char *)cmd, len) );
-    ok( len == 48, "len = %d\n", len );
+    ok( len == 48, "len = %ld\n", len );
     return SQL_SUCCESS;
 }
 
@@ -522,7 +522,7 @@ static SQLRETURN WINAPI driver_SQLSetDescField( SQLHDESC desc, SQLSMALLINT rec,
     ok( rec == 1, "rec = %d\n", rec );
     ok( field == SQL_DESC_OCTET_LENGTH_PTR, "field = %d\n", field );
     ok( value != NULL, "value = %p\n", value );
-    ok( !len, "len = %d\n", len );
+    ok( !len, "len = %ld\n", len );
     return SQL_SUCCESS;
 }
 
@@ -702,7 +702,7 @@ static void diag( SQLHANDLE handle, SQLSMALLINT type )
     err = -1;
     len = 0;
     ret = SQLGetDiagRec( type, handle, 1, state, &err, msg, sizeof(msg), &len );
-    if (ret == SQL_SUCCESS) trace( "state '%s' err %d msg '%s' len %d\n", state, err, msg, len );
+    if (ret == SQL_SUCCESS) trace( "state '%s' err %ld msg '%s' len %d\n", state, err, msg, len );
 }
 
 static void test_SQLGetDiagRec( void )
@@ -746,13 +746,13 @@ static void test_SQLConnect( void )
     size = -1;
     ret = SQLGetEnvAttr( env, SQL_ATTR_ODBC_VERSION, &version, sizeof(version), &size );
     ok( ret == SQL_SUCCESS, "got %d\n", ret );
-    ok( version == SQL_OV_ODBC2, "version = %d\n", version );
+    ok( version == SQL_OV_ODBC2, "version = %ld\n", version );
     ok( size == -1, "size set\n" );
 
     pooling = -1;
     ret = SQLGetEnvAttr( env, SQL_ATTR_CONNECTION_POOLING, &pooling, sizeof(pooling), NULL );
     ok( ret == SQL_SUCCESS, "got %d\n", ret );
-    ok( !pooling, "got %d\n", pooling );
+    ok( !pooling, "got %ld\n", pooling );
 
     ret = SQLAllocConnect( env, &con );
     ok( ret == SQL_SUCCESS, "got %d\n", ret );
@@ -779,7 +779,7 @@ static void test_SQLConnect( void )
     timeout = 0xdeadbeef;
     ret = SQLGetConnectAttr( con, SQL_ATTR_LOGIN_TIMEOUT, &timeout, sizeof(timeout), NULL );
     ok( ret == SQL_SUCCESS, "got %d\n", ret );
-    ok( timeout == SQL_LOGIN_TIMEOUT_DEFAULT, "wrong timeout %d\n", timeout );
+    ok( timeout == SQL_LOGIN_TIMEOUT_DEFAULT, "wrong timeout %lu\n", timeout );
 
     driver_attr = 0xdeadbeef;
     ret = SQLSetConnectAttr( con, 1000, &driver_attr, sizeof(driver_attr) );
@@ -811,14 +811,14 @@ static void test_SQLConnect( void )
 
     ret = SQLGetEnvAttr( env, SQL_ATTR_ODBC_VERSION, &version, sizeof(version), NULL );
     ok( ret == SQL_SUCCESS, "got %d\n", ret );
-    ok( version == SQL_OV_ODBC2, "version = %d\n", version );
+    ok( version == SQL_OV_ODBC2, "version = %ld\n", version );
 
     timeout = 0xdeadbeef;
     SET_EXPECT( driver_SQLGetConnectAttr );
     ret = SQLGetConnectAttr( con, SQL_ATTR_LOGIN_TIMEOUT, &timeout, sizeof(timeout), NULL );
     CHECK_CALLED( driver_SQLGetConnectAttr );
     ok( ret == SQL_SUCCESS, "got %d\n", ret );
-    ok( !timeout, "wrong timeout %d\n", timeout );
+    ok( !timeout, "wrong timeout %lu\n", timeout );
 
     timeout = 0xdeadbeef;
     size = -1;
@@ -826,7 +826,7 @@ static void test_SQLConnect( void )
     ret = SQLGetConnectAttr( con, SQL_ATTR_CONNECTION_TIMEOUT, &timeout, sizeof(timeout), &size );
     CHECK_CALLED( driver_SQLGetConnectAttr );
     ok( ret == SQL_SUCCESS, "got %d\n", ret );
-    ok( timeout != 0xdeadbeef, "timeout = %d\n", timeout );
+    ok( timeout != 0xdeadbeef, "timeout = %lu\n", timeout );
     ok( size == -1, "size set\n" );
 
     ret = SQLTransact( NULL, NULL, SQL_COMMIT );
@@ -1248,8 +1248,8 @@ static void test_SQLExecDirect( void )
     CHECK_CALLED( driver_SQLFetch );
     ok( ret == SQL_SUCCESS, "got %d\n", ret );
     ok( rows_fetched == 2, "got %d\n", (int)rows_fetched );
-    ok( id[0] == 0, "got %d\n", id[0] );
-    ok( id[1] == 1, "got %d\n", id[1] );
+    ok( id[0] == 0, "got %ld\n", id[0] );
+    ok( id[1] == 1, "got %ld\n", id[1] );
     ok( len_id[0] == sizeof(id[0]), "got %d\n", (int)len_id[0] );
     ok( len_id[1] == sizeof(id[1]), "got %d\n", (int)len_id[1] );
     ok( !strcmp( (const char *)name, "John" ), "got %s\n", name );
@@ -1297,7 +1297,7 @@ static void test_SQLExecDirect( void )
     ret = SQLFetch( stmt );
     CHECK_CALLED( driver_SQLFetch );
     ok( ret == SQL_SUCCESS, "got %d\n", ret );
-    ok( id[0] == 1, "got %d\n", id[0] );
+    ok( id[0] == 1, "got %ld\n", id[0] );
     ok( len_id[0] == sizeof(id[0]), "got %d\n", (int)len_id[0] );
     ok( !strcmp( (const char *)name, "Mary" ), "got %s\n", name );
     ok( len_name[0] == sizeof("Mary") - 1, "got %d\n", (int)len_name[0] );
@@ -1329,7 +1329,7 @@ static void test_SQLExecDirect( void )
     todo_wine CHECK_NOT_CALLED( driver_SQLGetStmtAttr );
     ok( ret == SQL_SUCCESS, "got %d\n", ret );
     ok( desc != (SQLHDESC)0xdeadbeef, "desc not set\n" );
-    ok( size == 0xdeadbeef, "got %d\n", size );
+    ok( size == 0xdeadbeef, "got %ld\n", size );
 
     SET_EXPECT( driver_SQLSetDescField );
     ret = SQLSetDescField( desc, 1, SQL_DESC_OCTET_LENGTH_PTR, &len_octet, 0 );
@@ -1390,7 +1390,7 @@ static void test_SQLSetEnvAttr(void)
     version = -1;
     ret = SQLGetEnvAttr( env, SQL_ATTR_ODBC_VERSION, &version, sizeof(version), NULL );
     ok( ret == SQL_SUCCESS, "got %d\n", ret );
-    ok( version == SQL_OV_ODBC3, "wrong version %d\n", version );
+    ok( version == SQL_OV_ODBC3, "wrong version %ld\n", version );
 
     ret = SQLFreeEnv( env );
     ok( ret == SQL_SUCCESS, "got %d\n", ret );
@@ -1416,7 +1416,7 @@ static void test_SQLSetConnectAttr(void)
     timeout = 0;
     ret = SQLGetConnectAttr( con, SQL_ATTR_LOGIN_TIMEOUT, &timeout, sizeof(timeout), NULL );
     ok( ret == SQL_SUCCESS, "got %d\n", ret );
-    ok( timeout == 10, "wrong timeout %d\n", timeout );
+    ok( timeout == 10, "wrong timeout %lu\n", timeout );
 
     ret = SQLFreeConnect( con );
     ok( ret == SQL_SUCCESS, "got %d\n", ret );
