@@ -26,8 +26,13 @@
 #include "winternl.h"
 #include "wine/debug.h"
 
+#ifdef __REACTOS__
+#include <csprng.h>
+#endif
+
 WINE_DEFAULT_DEBUG_CHANNEL(crypt);
 
+#ifndef __REACTOS__
 static CRITICAL_SECTION random_cs;
 static CRITICAL_SECTION_DEBUG random_debug =
 {
@@ -57,10 +62,22 @@ static BOOL fill_random_buffer(void)
     random_pos = 0;
     return TRUE;
 }
+#endif
 
 /******************************************************************************
  *     SystemFunction036   (cryptbase.@)
  */
+#ifdef __REACTOS__
+BOOLEAN WINAPI SystemFunction036( void *buffer, ULONG len )
+{
+    if (!RosCsprngFill( buffer, len ))
+    {
+        SetLastError( NTE_FAIL );
+        return FALSE;
+    }
+    return TRUE;
+}
+#else
 BOOLEAN WINAPI SystemFunction036( void *buffer, ULONG len )
 {
     char *ptr = buffer;
@@ -84,6 +101,7 @@ BOOLEAN WINAPI SystemFunction036( void *buffer, ULONG len )
     LeaveCriticalSection( &random_cs );
     return TRUE;
 }
+#endif
 
 /******************************************************************************
  *     SystemFunction040   (cryptbase.@)
