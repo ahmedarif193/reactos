@@ -453,19 +453,7 @@ collist:
     ;
 
 from:
-    TK_FROM table
-        {
-            SQL_input* sql = (SQL_input*) info;
-            MSIVIEW* table = NULL;
-            UINT r;
-
-            r = TABLE_CreateView( sql->db, $2, &table );
-            if( r != ERROR_SUCCESS || !$$ )
-                YYABORT;
-
-            PARSER_BUBBLE_UP_VIEW( sql, $$, table );
-        }
-  | unorderdfrom TK_ORDER TK_BY collist
+    unorderdfrom TK_ORDER TK_BY collist
         {
             UINT r;
 
@@ -482,13 +470,30 @@ from:
   ;
 
 unorderdfrom:
-    TK_FROM tablelist
+    TK_FROM table
+        {
+            SQL_input* sql = (SQL_input*) info;
+            MSIVIEW* table = NULL;
+            UINT r;
+
+            r = TABLE_CreateView( sql->db, $2, &table );
+            if( r != ERROR_SUCCESS || !table )
+                YYABORT;
+
+            PARSER_BUBBLE_UP_VIEW( sql, $$, table );
+        }
+  | TK_FROM table TK_COMMA tablelist
         {
             SQL_input* sql = (SQL_input*) info;
             MSIVIEW* where = NULL;
+            LPWSTR tables;
             UINT r;
 
-            r = WHERE_CreateView( sql->db, &where, $2, NULL );
+            tables = parser_add_table( info, $4, $2 );
+            if( !tables )
+                YYABORT;
+
+            r = WHERE_CreateView( sql->db, &where, tables, NULL );
             if( r != ERROR_SUCCESS )
                 YYABORT;
 
