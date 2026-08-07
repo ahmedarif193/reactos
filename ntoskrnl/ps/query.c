@@ -3511,9 +3511,7 @@ NtQueryInformationThread(
             {
                 /* Return whether or not we are the last thread */
                 *(PULONG)ThreadInformation = ((((PEPROCESS)Thread->ThreadsProcess)->
-                                               ThreadListHead.Flink->Flink ==
-                                               &((PEPROCESS)Thread->ThreadsProcess)->
-                                               ThreadListHead) ?
+                                               ActiveThreads == 1) ?
                                               TRUE : FALSE);
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
