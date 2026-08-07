@@ -2015,7 +2015,8 @@ TRACKBAR_WindowProc (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         return TRACKBAR_Enable (infoPtr, (BOOL)wParam);
 
     case WM_ERASEBKGND:
-	return 0;
+	/* Painting refreshes the complete background. */
+	return 1;
 
     case WM_GETDLGCODE:
         return DLGC_WANTARROWS;
