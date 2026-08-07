@@ -39,6 +39,8 @@ WINE_DEFAULT_DEBUG_CHANNEL(shcore);
 
 static DWORD shcore_tls;
 static IUnknown *process_ref;
+static SRWLOCK explicit_appid_lock = SRWLOCK_INIT;
+static WCHAR *explicit_appid;
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
 {
@@ -250,15 +252,58 @@ HRESULT WINAPI IUnknown_SetSite(IUnknown *obj, IUnknown *site)
 
 HRESULT WINAPI SetCurrentProcessExplicitAppUserModelID(const WCHAR *appid)
 {
-    FIXME("%s: stub\n", debugstr_w(appid));
+    WCHAR *copy;
+    WCHAR *previous;
+    SIZE_T size;
+
+    TRACE("%s\n", debugstr_w(appid));
+
+    if (!appid) return E_INVALIDARG;
+
+    size = (lstrlenW(appid) + 1) * sizeof(*appid);
+    if (!(copy = CoTaskMemAlloc(size))) return E_OUTOFMEMORY;
+    memcpy(copy, appid, size);
+
+    AcquireSRWLockExclusive(&explicit_appid_lock);
+    previous = explicit_appid;
+    explicit_appid = copy;
+    ReleaseSRWLockExclusive(&explicit_appid_lock);
+
+    CoTaskMemFree(previous);
     return S_OK;
 }
 
-HRESULT WINAPI GetCurrentProcessExplicitAppUserModelID(const WCHAR **appid)
+HRESULT WINAPI GetCurrentProcessExplicitAppUserModelID(WCHAR **appid)
 {
-    FIXME("%p: stub\n", appid);
+    SIZE_T size;
+    HRESULT hr;
+
+    TRACE("%p\n", appid);
+
+    if (!appid) return E_INVALIDARG;
     *appid = NULL;
-    return E_NOTIMPL;
+
+    AcquireSRWLockShared(&explicit_appid_lock);
+    if (explicit_appid)
+    {
+        size = (lstrlenW(explicit_appid) + 1) * sizeof(*explicit_appid);
+        if ((*appid = CoTaskMemAlloc(size)))
+        {
+            memcpy(*appid, explicit_appid, size);
+            hr = S_OK;
+        }
+        else
+        {
+            hr = E_OUTOFMEMORY;
+        }
+    }
+    else
+    {
+        hr = E_FAIL;
+    }
+    ReleaseSRWLockShared(&explicit_appid_lock);
+
+    return hr;
 }
 
 /*************************************************************************
