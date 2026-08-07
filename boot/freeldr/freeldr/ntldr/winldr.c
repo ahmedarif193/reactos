@@ -1416,19 +1416,35 @@ LoadAndBootWindows(
     {
         if (!UefiHttpBootDownload(ArgValue))
         {
-            UiMessageBox("Failed to download ISO from network.");
-            return ENOEXEC;
-        }
+            PCSTR RamDiskPathEnd = strrchr(BootPath, ')');
 
-        Status = RamDiskInitialize(TRUE, NULL, NULL);
-        if (Status != ESUCCESS)
+            if (_strnicmp(BootPath, "ramdisk(", 8) == 0 && RamDiskPathEnd)
+            {
+                ERR("HTTP boot unavailable, falling back to local boot from '%s'\n", SystemPartition);
+                UiDrawStatusText("HTTP boot unavailable - booting from local media");
+                RtlStringCbCopyA(FilePath, sizeof(FilePath), RamDiskPathEnd + 1);
+                RtlStringCbCopyA(BootPath, sizeof(BootPath), SystemPartition);
+                RtlStringCbCatA(BootPath, sizeof(BootPath), FilePath);
+                TRACE("BootPath after HTTP boot fallback: '%s'\n", BootPath);
+            }
+            else
+            {
+                UiMessageBox("Failed to download ISO from network.");
+                return ENOEXEC;
+            }
+        }
+        else
         {
-            UiMessageBox("Failed to initialize ramdisk from downloaded ISO.");
-            return Status;
-        }
+            Status = RamDiskInitialize(TRUE, NULL, NULL);
+            if (Status != ESUCCESS)
+            {
+                UiMessageBox("Failed to initialize ramdisk from downloaded ISO.");
+                return Status;
+            }
 
-        RamDiskInitialized = TRUE;
-        UiDrawProgressBarCenter("Loading NT...");
+            RamDiskInitialized = TRUE;
+            UiDrawProgressBarCenter("Loading NT...");
+        }
     }
 #endif
 

@@ -9,6 +9,7 @@
 #include <SimpleNetwork.h>
 
 #define UEFI_NETWORK_RETRY_DELAY_US 1000000
+#define UEFI_NETWORK_MAX_WAIT_ATTEMPTS 45
 
 /*
  * How long to wait for the firmware and the loaded drivers to produce a

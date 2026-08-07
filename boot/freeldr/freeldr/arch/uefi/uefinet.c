@@ -68,6 +68,10 @@ static EFI_GUID EfiSimpleFileSystemGuid = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
 static EFI_GUID EfiSimpleNetworkGuid = EFI_SIMPLE_NETWORK_PROTOCOL_GUID;
 static EFI_GUID EfiFileInfoGuid = EFI_FILE_INFO_ID;
 
+static EFI_GUID EfiRngGuid =
+    {0x3152bca5, 0xeade, 0x433d,
+     {0x86, 0x2e, 0xc0, 0x1c, 0xdc, 0x29, 0x1f, 0x44}};
+
 static EFI_GUID EfiManagedNetworkServiceBindingGuid =
     {0xf36ff770, 0xa7e1, 0x42cf,
      {0x9e, 0xd2, 0x56, 0xf0, 0xf2, 0x71, 0xf4, 0x4c}};
@@ -476,6 +480,42 @@ Cleanup:
 }
 
 static BOOLEAN
+UefiNetAnyDriverLoaded(VOID)
+{
+    UINTN Index;
+
+    for (Index = 0; Index < RTL_NUMBER_OF(NetworkDrivers); Index++)
+    {
+        if (NetworkDriverImages[Index])
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+static BOOLEAN
+UefiNetUpperDriversBlockedByRng(VOID)
+{
+    UINTN Index;
+
+    if (UefiCountProtocol(&EfiRngGuid, NULL))
+        return FALSE;
+
+    for (Index = 0; Index < RTL_NUMBER_OF(NetworkDrivers); Index++)
+    {
+        if (NetworkDrivers[Index].Phase == UefiNetworkDriverUpper &&
+            !NetworkDrivers[Index].HttpDriver &&
+            NetworkDriverImages[Index] &&
+            !NetworkDriversStarted[Index])
+        {
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+static BOOLEAN
 UefiGetSimpleNetwork(
     _Out_ EFI_SIMPLE_NETWORK_PROTOCOL **Snp)
 {
@@ -754,7 +794,14 @@ UefiNetPrepare(
           (unsigned long)Mask,
           (unsigned long)NET_REQUIRED_STAGES);
     if ((Mask & NET_REQUIRED_STAGES) != NET_REQUIRED_STAGES)
+    {
         UefiLoadNetworkDrivers((Mask & NET_STAGE_SNP) == 0);
+        if (!UefiNetAnyDriverLoaded())
+        {
+            TRACE("UEFI Network: required protocols missing and no boot volume drivers available, giving up\n");
+            return FALSE;
+        }
+    }
     TRACE("UEFI Network: waiting for the protocol stack\n");
 
     for (;;)
@@ -801,6 +848,11 @@ UefiNetPrepare(
         }
         else if (Snp && !UpperNetworkDriversReleased)
         {
+            if (UefiNetUpperDriversBlockedByRng())
+            {
+                TRACE("UEFI Network: EFI_RNG_PROTOCOL missing, the bundled IP stack cannot start\n");
+                return FALSE;
+            }
             UefiLattePandaFixMac(Snp);
             UpperNetworkDriversReleased = TRUE;
             UefiStartNetworkDrivers(UefiNetworkDriverUpper);
@@ -810,7 +862,13 @@ UefiNetPrepare(
             UefiConnectHttpPriority();
         UefiConnectAllControllers(Snp != NULL);
 
-        if (++Attempts % 10 == 0)
+        if (++Attempts >= UEFI_NETWORK_MAX_WAIT_ATTEMPTS)
+        {
+            TRACE("UEFI Network: stack incomplete after %lu attempts (mask %08lx snp=%s), giving up\n", (unsigned long)Attempts, (unsigned long)Mask, Snp ? "yes" : "no");
+            return FALSE;
+        }
+
+        if (Attempts % 10 == 0)
         {
             TRACE("UEFI Network: still waiting, mask %08lx snp=%s\n",
                   (unsigned long)Mask,
