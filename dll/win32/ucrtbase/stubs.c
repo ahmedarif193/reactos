@@ -1,6 +1,8 @@
 
 #include <stdint.h>
 #include <intrin.h>
+#include <errno.h>
+#include <limits.h>
 #include <malloc.h>
 #define _USE_MATH_DEFINES
 #include <math.h>
@@ -43,6 +45,10 @@ int __cdecl __acrt_initialize_sse2(void)
 #pragma function(log2f)
 #pragma function(lrint)
 #pragma function(lrintf)
+#pragma function(llround)
+#pragma function(llroundf)
+#pragma function(lround)
+#pragma function(lroundf)
 #endif
 
 double log2(double x)
@@ -66,4 +72,56 @@ long int lrintf(float x)
 {
     __debugbreak();
     return 0;
+}
+
+long long int llround(double x)
+{
+    double rounded = round(x);
+
+    if (isnan(rounded) || rounded < (double)LLONG_MIN || rounded >= -(double)LLONG_MIN)
+    {
+        *_errno() = EDOM;
+        return 0;
+    }
+
+    return (long long int)rounded;
+}
+
+long long int llroundf(float x)
+{
+    float rounded = roundf(x);
+
+    if (isnan(rounded) || rounded < (float)LLONG_MIN || rounded >= -(float)LLONG_MIN)
+    {
+        *_errno() = EDOM;
+        return 0;
+    }
+
+    return (long long int)rounded;
+}
+
+long int lround(double x)
+{
+    double rounded = round(x);
+
+    if (isnan(rounded) || rounded < (double)LONG_MIN || rounded > (double)LONG_MAX)
+    {
+        *_errno() = EDOM;
+        return 0;
+    }
+
+    return (long int)rounded;
+}
+
+long int lroundf(float x)
+{
+    float rounded = roundf(x);
+
+    if (isnan(rounded) || rounded < (float)LONG_MIN || rounded >= -(float)LONG_MIN)
+    {
+        *_errno() = EDOM;
+        return 0;
+    }
+
+    return (long int)rounded;
 }
