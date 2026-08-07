@@ -3,6 +3,7 @@ spec2def(winusb.dll winusb.spec)
 
 list(APPEND SOURCE
     main.c
+    unsupported.c
     ${CMAKE_CURRENT_BINARY_DIR}/winusb_stubs.c
     ${CMAKE_CURRENT_BINARY_DIR}/winusb.def)
 
