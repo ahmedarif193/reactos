@@ -2043,21 +2043,6 @@ PWND FASTCALL IntCreateWindow(CREATESTRUCTW* Cs,
    InitializeListHead(&pWnd->PropListHead);
    pWnd->PropListItems = 0;
 
-   if ( WindowName->Buffer != NULL && WindowName->Length > 0 )
-   {
-      pWnd->strName.Buffer = DesktopHeapAlloc(pWnd->head.rpdesk,
-                                             WindowName->Length + sizeof(UNICODE_NULL));
-      if (pWnd->strName.Buffer == NULL)
-      {
-          goto AllocError;
-      }
-
-      RtlCopyMemory(pWnd->strName.Buffer, WindowName->Buffer, WindowName->Length);
-      pWnd->strName.Buffer[WindowName->Length / sizeof(WCHAR)] = L'\0';
-      pWnd->strName.Length = WindowName->Length;
-      pWnd->strName.MaximumLength = WindowName->Length + sizeof(UNICODE_NULL);
-   }
-
    /* Correct the window style. */
    if ((pWnd->style & (WS_CHILD | WS_POPUP)) != WS_CHILD)
    {
@@ -2178,7 +2163,7 @@ co_UserCreateWindowEx(CREATESTRUCTW* Cs,
    PWINSTATION_OBJECT WinSta;
    PCLS Class = NULL;
    SIZE Size;
-   POINT MaxSize, MaxPos, MinTrack, MaxTrack;
+   POINT MaxSize, MaxPos, MinTrack, MaxTrack, Position;
    CBT_CREATEWNDW * pCbtCreate;
    LRESULT Result;
    USER_REFERENCE_ENTRY ParentRef, Ref;
@@ -2342,12 +2327,15 @@ co_UserCreateWindowEx(CREATESTRUCTW* Cs,
       hwndInsertAfter = pCbtCreate->hwndInsertAfter;
    }
 
+   Position.x = Cs->x;
+   Position.y = Cs->y;
+
    if ((Cs->style & (WS_CHILD|WS_POPUP)) == WS_CHILD)
    {
       if (ParentWindow != co_GetDesktopWindow(Window))
       {
-         Cs->x += ParentWindow->rcClient.left;
-         Cs->y += ParentWindow->rcClient.top;
+         Position.x += ParentWindow->rcClient.left;
+         Position.y += ParentWindow->rcClient.top;
       }
    }
 
@@ -2364,10 +2352,10 @@ co_UserCreateWindowEx(CREATESTRUCTW* Cs,
       if (Size.cy < MinTrack.y) Size.cy = MinTrack.y;
    }
 
-   Window->rcWindow.left = Cs->x;
-   Window->rcWindow.top = Cs->y;
-   Window->rcWindow.right = Cs->x + Size.cx;
-   Window->rcWindow.bottom = Cs->y + Size.cy;
+   Window->rcWindow.left = Position.x;
+   Window->rcWindow.top = Position.y;
+   Window->rcWindow.right = Position.x + Size.cx;
+   Window->rcWindow.bottom = Position.y + Size.cy;
  /*
    if (0 != (Window->style & WS_CHILD) && ParentWindow)
    {
@@ -4481,7 +4469,7 @@ NtUserDefSetText(HWND hWnd, PLARGE_STRING WindowText)
          return FALSE;
    }
    else
-      return TRUE;
+      RtlZeroMemory(&SafeText, sizeof(SafeText));
 
    UserEnterExclusive();
 

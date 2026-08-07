@@ -616,6 +616,7 @@ MsgiAnsiToUnicodeMessage(HWND hwnd, LPMSG UnicodeMsg, LPMSG AnsiMsg)
     case WM_NCCREATE:
     case WM_CREATE:
       {
+        const BYTE *name;
         struct s
         {
            CREATESTRUCTW cs;          /* new structure */
@@ -630,7 +631,21 @@ MsgiAnsiToUnicodeMessage(HWND hwnd, LPMSG UnicodeMsg, LPMSG AnsiMsg)
             return FALSE;
           }
         xs->cs = *(CREATESTRUCTW *)AnsiMsg->lParam;
-        if (!IS_INTRESOURCE(xs->cs.lpszName))
+        name = (const BYTE *)xs->cs.lpszName;
+        if (name && !IS_INTRESOURCE(name) && name[0] == 0xff)
+          {
+            WCHAR *resource = RtlAllocateHeap(GetProcessHeap(), 0, 3 * sizeof(*resource));
+            if (!resource)
+              {
+                HeapFree(GetProcessHeap(), 0, xs);
+                return FALSE;
+              }
+            resource[0] = 0xffff;
+            resource[1] = MAKEWORD(name[1], name[2]);
+            resource[2] = 0;
+            xs->lpszName = xs->cs.lpszName = resource;
+          }
+        else if (!IS_INTRESOURCE(xs->cs.lpszName))
           {
             RtlCreateUnicodeStringFromAsciiz(&UnicodeString, (LPSTR)xs->cs.lpszName);
             xs->lpszName = xs->cs.lpszName = UnicodeString.Buffer;
@@ -697,8 +712,18 @@ MsgiAnsiToUnicodeMessage(HWND hwnd, LPMSG UnicodeMsg, LPMSG AnsiMsg)
       UnicodeMsg->wParam = map_wparam_AtoW( AnsiMsg->message, AnsiMsg->wParam );
       break;
     case EM_GETLINE:
-      ERR("FIXME EM_GETLINE A2U\n");
-      break;
+      {
+        WORD Length;
+        SIZE_T Size;
+
+        if (!AnsiMsg->lParam) break;
+        Length = *(WORD *)AnsiMsg->lParam;
+        Size = Length ? (SIZE_T)Length * sizeof(WCHAR) : sizeof(WCHAR);
+        UnicodeMsg->lParam = (LPARAM)RtlAllocateHeap(GetProcessHeap(), HEAP_ZERO_MEMORY, Size);
+        if (!UnicodeMsg->lParam) return FALSE;
+        *(WORD *)UnicodeMsg->lParam = Length;
+        break;
+      }
 
     }
 
@@ -712,6 +737,12 @@ MsgiAnsiToUnicodeCleanup(LPMSG UnicodeMsg, LPMSG AnsiMsg)
 
   switch (AnsiMsg->message)
     {
+    case EM_GETLINE:
+      {
+        if (UnicodeMsg->lParam) RtlFreeHeap(GetProcessHeap(), 0, (PVOID)UnicodeMsg->lParam);
+        break;
+      }
+
     case LB_GETTEXT:
         if (!listbox_has_strings( UnicodeMsg->hwnd )) break;
     case CB_GETLBTEXT:
@@ -825,6 +856,23 @@ MsgiAnsiToUnicodeReply(LPMSG UnicodeMsg, LPMSG AnsiMsg, LRESULT *Result)
 
   switch (AnsiMsg->message)
     {
+    case WM_NCCREATE:
+    case WM_CREATE:
+      {
+        CREATESTRUCTA *dst = (CREATESTRUCTA *)AnsiMsg->lParam;
+        const CREATESTRUCTW *src = (const CREATESTRUCTW *)UnicodeMsg->lParam;
+
+        dst->hInstance = src->hInstance;
+        dst->hMenu = src->hMenu;
+        dst->hwndParent = src->hwndParent;
+        dst->cy = src->cy;
+        dst->cx = src->cx;
+        dst->y = src->y;
+        dst->x = src->x;
+        dst->style = src->style;
+        dst->dwExStyle = src->dwExStyle;
+        break;
+      }
     case WM_GETTEXT:
     case WM_ASKCBFORMATNAME:
       {
@@ -860,6 +908,21 @@ MsgiAnsiToUnicodeReply(LPMSG UnicodeMsg, LPMSG AnsiMsg, LRESULT *Result)
         }
         break;
       }
+    case EM_GETLINE:
+      {
+        DWORD Length;
+        WORD BufferLength;
+
+        if (!AnsiBuffer) break;
+        BufferLength = *(WORD *)AnsiBuffer;
+        if (*Result)
+        {
+           RtlUnicodeToMultiByteN(AnsiBuffer, BufferLength, &Length, Buffer, (ULONG)*Result * sizeof(WCHAR));
+           if (Length < BufferLength) AnsiBuffer[Length] = 0;
+           *Result = Length;
+        }
+        break;
+      }
     }
 
   MsgiAnsiToUnicodeCleanup(UnicodeMsg, AnsiMsg);
@@ -883,6 +946,7 @@ MsgiUnicodeToAnsiMessage(HWND hwnd, LPMSG AnsiMsg, LPMSG UnicodeMsg)
       case WM_CREATE:
       case WM_NCCREATE:
         {
+          BOOL name_resource;
           MDICREATESTRUCTA *pmdi_cs;
           CREATESTRUCTA* CsA;
           CREATESTRUCTW* CsW;
@@ -890,8 +954,14 @@ MsgiUnicodeToAnsiMessage(HWND hwnd, LPMSG AnsiMsg, LPMSG UnicodeMsg)
           NTSTATUS Status;
 
           CsW = (CREATESTRUCTW*)(UnicodeMsg->lParam);
-          RtlInitUnicodeString(&UnicodeString, CsW->lpszName);
-          NameSize = RtlUnicodeStringToAnsiSize(&UnicodeString);
+          name_resource = CsW->lpszName && !IS_INTRESOURCE(CsW->lpszName) && CsW->lpszName[0] == 0xffff;
+          if (name_resource)
+            NameSize = 4;
+          else
+            {
+              RtlInitUnicodeString(&UnicodeString, CsW->lpszName);
+              NameSize = RtlUnicodeStringToAnsiSize(&UnicodeString);
+            }
           if (NameSize == 0)
             {
               return FALSE;
@@ -917,15 +987,27 @@ MsgiUnicodeToAnsiMessage(HWND hwnd, LPMSG AnsiMsg, LPMSG UnicodeMsg)
           /* pmdi_cs starts right after CsA */
           pmdi_cs = (MDICREATESTRUCTA*)(CsA + 1);
 
-          RtlInitUnicodeString(&UnicodeString, CsW->lpszName);
-          RtlInitEmptyAnsiString(&AnsiString, (PCHAR)(pmdi_cs + 1), NameSize);
-          Status = RtlUnicodeStringToAnsiString(&AnsiString, &UnicodeString, FALSE);
-          if (! NT_SUCCESS(Status))
+          if (name_resource)
             {
-              RtlFreeHeap(GetProcessHeap(), 0, CsA);
-              return FALSE;
+              PCHAR name = (PCHAR)(pmdi_cs + 1);
+              name[0] = 0xff;
+              name[1] = LOBYTE(CsW->lpszName[1]);
+              name[2] = HIBYTE(CsW->lpszName[1]);
+              name[3] = 0;
+              CsA->lpszName = name;
             }
-          CsA->lpszName = AnsiString.Buffer;
+          else
+            {
+              RtlInitUnicodeString(&UnicodeString, CsW->lpszName);
+              RtlInitEmptyAnsiString(&AnsiString, (PCHAR)(pmdi_cs + 1), NameSize);
+              Status = RtlUnicodeStringToAnsiString(&AnsiString, &UnicodeString, FALSE);
+              if (! NT_SUCCESS(Status))
+                {
+                  RtlFreeHeap(GetProcessHeap(), 0, CsA);
+                  return FALSE;
+                }
+              CsA->lpszName = AnsiString.Buffer;
+            }
           if (!IS_ATOM(CsW->lpszClass))
             {
               RtlInitUnicodeString(&UnicodeString, CsW->lpszClass);
@@ -1146,8 +1228,19 @@ MsgiUnicodeToAnsiMessage(HWND hwnd, LPMSG AnsiMsg, LPMSG UnicodeMsg)
           AnsiMsg->wParam = map_wparam_char_WtoA(UnicodeMsg->wParam,2);
           break;
       case EM_GETLINE:
-          ERR("FIXME EM_GETLINE U2A\n");
+        {
+          WORD AnsiLength, Length;
+          SIZE_T Size;
+
+          if (!UnicodeMsg->lParam) break;
+          Length = *(WORD *)UnicodeMsg->lParam;
+          AnsiLength = Length > 0x7fff ? 0xffff : Length * 2;
+          Size = AnsiLength ? AnsiLength : sizeof(WORD);
+          AnsiMsg->lParam = (LPARAM)RtlAllocateHeap(GetProcessHeap(), HEAP_ZERO_MEMORY, Size);
+          if (!AnsiMsg->lParam) return FALSE;
+          *(WORD *)AnsiMsg->lParam = AnsiLength;
           break;
+        }
     }
   return TRUE;
 }
@@ -1159,6 +1252,12 @@ MsgiUnicodeToAnsiCleanup(LPMSG AnsiMsg, LPMSG UnicodeMsg)
 
   switch(UnicodeMsg->message)
     {
+      case EM_GETLINE:
+        {
+          if (AnsiMsg->lParam) RtlFreeHeap(GetProcessHeap(), 0, (PVOID)AnsiMsg->lParam);
+          break;
+        }
+
       case LB_GETTEXT:
         if (!listbox_has_strings( AnsiMsg->hwnd )) break;
       case CB_GETLBTEXT:
@@ -1256,6 +1355,23 @@ MsgiUnicodeToAnsiReply(LPMSG AnsiMsg, LPMSG UnicodeMsg, LRESULT *Result)
 
   switch (UnicodeMsg->message)
     {
+    case WM_NCCREATE:
+    case WM_CREATE:
+      {
+        const CREATESTRUCTA *src = (const CREATESTRUCTA *)AnsiMsg->lParam;
+        CREATESTRUCTW *dst = (CREATESTRUCTW *)UnicodeMsg->lParam;
+
+        dst->hInstance = src->hInstance;
+        dst->hMenu = src->hMenu;
+        dst->hwndParent = src->hwndParent;
+        dst->cy = src->cy;
+        dst->cx = src->cx;
+        dst->y = src->y;
+        dst->x = src->x;
+        dst->style = src->style;
+        dst->dwExStyle = src->dwExStyle;
+        break;
+      }
     case WM_GETTEXT:
     case WM_ASKCBFORMATNAME:
       {
@@ -1291,6 +1407,21 @@ MsgiUnicodeToAnsiReply(LPMSG AnsiMsg, LPMSG UnicodeMsg, LRESULT *Result)
            DWORD len;
            RtlMultiByteToUnicodeN( UBuffer, ~0u, &len, Buffer, strlen(Buffer) + 1 );
            *Result = len / sizeof(WCHAR) - 1;
+        }
+        break;
+      }
+    case EM_GETLINE:
+      {
+        DWORD Length;
+        WORD BufferLength;
+
+        if (!UBuffer) break;
+        BufferLength = *(WORD *)UBuffer;
+        if (*Result)
+        {
+           RtlMultiByteToUnicodeN(UBuffer, BufferLength * sizeof(WCHAR), &Length, Buffer, (ULONG)*Result);
+           *Result = Length / sizeof(WCHAR);
+           if (*Result < BufferLength) UBuffer[*Result] = 0;
         }
         break;
       }
