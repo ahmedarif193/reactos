@@ -50,3 +50,38 @@ DWORD WINAPI GetActiveProcessorCount(WORD group)
     HeapFree(GetProcessHeap(), 0, info);
     return cpus;
 }
+
+DWORD WINAPI GetMaximumProcessorCount(WORD group)
+{
+    DWORD cpus = 0;
+    SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *info;
+
+    if (!(info = get_logical_processor_info())) return 0;
+
+    if (group == ALL_PROCESSOR_GROUPS)
+    {
+        for (group = 0; group < info->Group.MaximumGroupCount; group++)
+            cpus += info->Group.GroupInfo[group].MaximumProcessorCount;
+    }
+    else
+    {
+        if (group < info->Group.MaximumGroupCount)
+            cpus = info->Group.GroupInfo[group].MaximumProcessorCount;
+    }
+
+    HeapFree(GetProcessHeap(), 0, info);
+    return cpus;
+}
+
+WORD WINAPI GetMaximumProcessorGroupCount(void)
+{
+    WORD groups;
+    SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *info;
+
+    if (!(info = get_logical_processor_info())) return 0;
+
+    groups = info->Group.MaximumGroupCount;
+
+    HeapFree(GetProcessHeap(), 0, info);
+    return groups;
+}
