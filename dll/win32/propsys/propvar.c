@@ -1293,6 +1293,28 @@ HRESULT WINAPI VariantToPropVariant(const VARIANT *var, PROPVARIANT *propvar)
     return S_OK;
 }
 
+INT WINAPI VariantCompare(REFVARIANT var1, REFVARIANT var2)
+{
+    PROPVARIANT propvar1, propvar2;
+    INT res = 0;
+
+    TRACE("%s, %s.\n", debugstr_variant(var1), debugstr_variant(var2));
+
+    PropVariantInit(&propvar1);
+    PropVariantInit(&propvar2);
+
+    if (SUCCEEDED(VariantToPropVariant(var1, &propvar1)) &&
+        SUCCEEDED(VariantToPropVariant(var2, &propvar2)))
+    {
+        res = PropVariantCompareEx(&propvar1, &propvar2, PVCU_DEFAULT, 0);
+    }
+
+    PropVariantClear(&propvar1);
+    PropVariantClear(&propvar2);
+
+    return res;
+}
+
 HRESULT WINAPI PropVariantGetStringElem(const PROPVARIANT *propvar, ULONG idx, WCHAR **ret)
 {
     const WCHAR *wstr;
