@@ -1662,6 +1662,8 @@ CURSORICON_LoadFromFileW(
     /* Fix dimensions */
     if(!cxDesired) cxDesired = entry->bWidth;
     if(!cyDesired) cyDesired = entry->bHeight;
+    cursorData.cx = cxDesired;
+    cursorData.cy = cyDesired;
     /* A bit of preparation */
     if(!bIcon)
     {
@@ -1685,6 +1687,8 @@ CURSORICON_LoadFromFileW(
 
         /* A bit of preparation */
         ZeroMemory(&cursorData, sizeof(cursorData));
+        cursorData.cx = cxDesired;
+        cursorData.cy = cyDesired;
         cursorData.rt = LOWORD(bIcon ? RT_ICON : RT_CURSOR);
 
         /* Can we load this BMP icon? */
