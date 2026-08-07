@@ -1,4 +1,5 @@
 #include "precomp.h"
+#include <winreg.h>
 
 #include <debug.h>
 
@@ -490,6 +491,198 @@ DnsNameCopyAllocate()
     return ERROR_OUTOFMEMORY;
 }
 
+static DNS_STATUS
+AppendDnsServersFromKey(HKEY InterfaceKey,
+                        PIN_ADDR *Addresses,
+                        PDWORD AddressCount,
+                        PDWORD AddressCapacity)
+{
+    static const PCWSTR ValueNames[] = {L"NameServer", L"DhcpNameServer"};
+    DWORD ValueIndex;
+
+    for (ValueIndex = 0; ValueIndex < ARRAYSIZE(ValueNames); ++ValueIndex)
+    {
+        DWORD Size = 0, Type, InitialCount = *AddressCount;
+        PWSTR Buffer, Current;
+        LSTATUS Status;
+
+        Status = RegQueryValueExW(InterfaceKey, ValueNames[ValueIndex], NULL, &Type, NULL, &Size);
+        if (Status != ERROR_SUCCESS || Type != REG_SZ || !Size)
+            continue;
+
+        Buffer = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, Size + sizeof(WCHAR));
+        if (!Buffer)
+            return ERROR_NOT_ENOUGH_MEMORY;
+
+        Status = RegQueryValueExW(InterfaceKey, ValueNames[ValueIndex], NULL, &Type, (PBYTE)Buffer, &Size);
+        if (Status == ERROR_SUCCESS && Type == REG_SZ)
+        {
+            Current = Buffer;
+            while (*Current)
+            {
+                PWSTR End;
+                PCWSTR Terminator;
+                IN_ADDR Address;
+                WCHAR Saved;
+                DWORD Index;
+                BOOLEAN ValidAddress;
+
+                while (*Current == L' ' || *Current == L'\t' ||
+                       *Current == L',' || *Current == L';')
+                    ++Current;
+                if (!*Current)
+                    break;
+
+                End = Current;
+                while (*End && *End != L' ' && *End != L'\t' &&
+                       *End != L',' && *End != L';')
+                    ++End;
+
+                Saved = *End;
+                *End = UNICODE_NULL;
+                Status = RtlIpv4StringToAddressW(Current, TRUE, &Terminator, &Address);
+                ValidAddress = NT_SUCCESS(Status) && !*Terminator;
+                *End = Saved;
+
+                if (ValidAddress)
+                {
+                    for (Index = 0; Index < *AddressCount; ++Index)
+                    {
+                        if ((*Addresses)[Index].S_un.S_addr == Address.S_un.S_addr)
+                            break;
+                    }
+
+                    if (Index == *AddressCount)
+                    {
+                        if (*AddressCount == *AddressCapacity)
+                        {
+                            DWORD NewCapacity = *AddressCapacity ? *AddressCapacity * 2 : 4;
+                            PIN_ADDR NewAddresses;
+
+                            if (*Addresses)
+                                NewAddresses = HeapReAlloc(GetProcessHeap(), 0, *Addresses, NewCapacity * sizeof(**Addresses));
+                            else
+                                NewAddresses = HeapAlloc(GetProcessHeap(), 0, NewCapacity * sizeof(**Addresses));
+                            if (!NewAddresses)
+                            {
+                                HeapFree(GetProcessHeap(), 0, Buffer);
+                                return ERROR_NOT_ENOUGH_MEMORY;
+                            }
+
+                            *Addresses = NewAddresses;
+                            *AddressCapacity = NewCapacity;
+                        }
+
+                        (*Addresses)[(*AddressCount)++] = Address;
+                    }
+                }
+
+                Current = End;
+            }
+        }
+
+        HeapFree(GetProcessHeap(), 0, Buffer);
+        if (*AddressCount != InitialCount)
+            break;
+    }
+
+    return ERROR_SUCCESS;
+}
+
+static DNS_STATUS
+QueryDnsServerList(PCWSTR AdapterName, PIP4_ARRAY Output, PDWORD OutputLength)
+{
+    static const WCHAR InterfacesPath[] =
+        L"SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces";
+    PIN_ADDR Addresses = NULL;
+    DWORD AddressCount = 0, AddressCapacity = 0;
+    DWORD Required, Index;
+    HKEY InterfacesKey;
+    LSTATUS Status;
+
+    if (!OutputLength)
+        return ERROR_INVALID_PARAMETER;
+
+    Status = RegOpenKeyExW(HKEY_LOCAL_MACHINE, InterfacesPath, 0, KEY_READ, &InterfacesKey);
+    if (Status != ERROR_SUCCESS)
+        return Status;
+
+    if (AdapterName && *AdapterName)
+    {
+        HKEY InterfaceKey;
+
+        Status = RegOpenKeyExW(InterfacesKey, AdapterName, 0, KEY_READ, &InterfaceKey);
+        if (Status == ERROR_SUCCESS)
+        {
+            Status = AppendDnsServersFromKey(InterfaceKey, &Addresses, &AddressCount, &AddressCapacity);
+            RegCloseKey(InterfaceKey);
+        }
+    }
+    else
+    {
+        DWORD SubKeyCount = 0, MaxSubKeyLength = 0;
+        PWSTR SubKeyName;
+
+        Status = RegQueryInfoKeyW(InterfacesKey, NULL, NULL, NULL, &SubKeyCount, &MaxSubKeyLength, NULL, NULL, NULL, NULL, NULL, NULL);
+        if (Status == ERROR_SUCCESS)
+        {
+            SubKeyName = HeapAlloc(GetProcessHeap(), 0, (MaxSubKeyLength + 1) * sizeof(WCHAR));
+            if (!SubKeyName)
+                Status = ERROR_NOT_ENOUGH_MEMORY;
+            else
+            {
+                for (Index = 0; Index < SubKeyCount; ++Index)
+                {
+                    DWORD NameLength = MaxSubKeyLength + 1;
+                    HKEY InterfaceKey;
+
+                    Status = RegEnumKeyExW(InterfacesKey, Index, SubKeyName, &NameLength, NULL, NULL, NULL, NULL);
+                    if (Status != ERROR_SUCCESS)
+                        continue;
+
+                    Status = RegOpenKeyExW(InterfacesKey, SubKeyName, 0, KEY_READ, &InterfaceKey);
+                    if (Status != ERROR_SUCCESS)
+                        continue;
+
+                    Status = AppendDnsServersFromKey(InterfaceKey, &Addresses, &AddressCount, &AddressCapacity);
+                    RegCloseKey(InterfaceKey);
+                    if (Status != ERROR_SUCCESS)
+                        break;
+                }
+
+                HeapFree(GetProcessHeap(), 0, SubKeyName);
+            }
+        }
+    }
+
+    RegCloseKey(InterfacesKey);
+    if (Status != ERROR_SUCCESS)
+    {
+        HeapFree(GetProcessHeap(), 0, Addresses);
+        return Status;
+    }
+    if (!AddressCount)
+    {
+        HeapFree(GetProcessHeap(), 0, Addresses);
+        return DNS_ERROR_NO_DNS_SERVERS;
+    }
+
+    Required = FIELD_OFFSET(IP4_ARRAY, AddrArray[AddressCount]);
+    if (!Output || *OutputLength < Required)
+    {
+        *OutputLength = Required;
+        HeapFree(GetProcessHeap(), 0, Addresses);
+        return Output ? ERROR_MORE_DATA : ERROR_SUCCESS;
+    }
+
+    Output->AddrCount = AddressCount;
+    for (Index = 0; Index < AddressCount; ++Index)
+        Output->AddrArray[Index] = Addresses[Index].S_un.S_addr;
+    *OutputLength = Required;
+    HeapFree(GetProcessHeap(), 0, Addresses);
+    return ERROR_SUCCESS;
+}
+
 DNS_STATUS WINAPI
 DnsQueryConfig(DNS_CONFIG_TYPE Config,
                DWORD Flag,
@@ -498,8 +691,14 @@ DnsQueryConfig(DNS_CONFIG_TYPE Config,
                PVOID pBuffer,
                PDWORD pBufferLength)
 {
+    UNREFERENCED_PARAMETER(Flag);
+    UNREFERENCED_PARAMETER(pReserved);
+
+    if (Config == DnsConfigDnsServerList)
+        return QueryDnsServerList(pwsAdapterName, pBuffer, pBufferLength);
+
     UNIMPLEMENTED;
-    return ERROR_OUTOFMEMORY;
+    return ERROR_INVALID_PARAMETER;
 }
 
 DNS_STATUS WINAPI
