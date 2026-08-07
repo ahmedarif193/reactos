@@ -2,6 +2,7 @@
 spec2def(userenv.dll userenv.spec ADD_IMPORTLIB)
 
 list(APPEND SOURCE
+    appcontainer.c
     desktop.c
     directory.c
     environment.c
