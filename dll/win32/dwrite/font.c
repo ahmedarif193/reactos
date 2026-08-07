@@ -3336,6 +3336,38 @@ static UINT32 collection_find_family(struct dwrite_fontcollection *collection, c
     return ~0u;
 }
 
+#ifdef __REACTOS__
+static const WCHAR *reactos_family_substitute(const WCHAR *name)
+{
+    static const struct { const WCHAR *from; const WCHAR *to; } map[] =
+    {
+        { L"Segoe UI", L"Selawik" },
+        { L"Segoe UI Light", L"Selawik Light" },
+        { L"Segoe UI Semilight", L"Selawik Semilight" },
+        { L"Segoe UI Semibold", L"Selawik Semibold" },
+        { L"Segoe UI Variable", L"Selawik" },
+        { L"Segoe UI Variable Text", L"Selawik" },
+        { L"Segoe UI Variable Display", L"Selawik" },
+        { L"Segoe UI Variable Small", L"Selawik" },
+        { L"Segoe Fluent Icons", L"Segoe MDL2 Assets" },
+        { L"Segoe UI Symbol", L"Segoe MDL2 Assets" },
+        { L"Segoe UI Emoji", L"Selawik" },
+        { L"Calibri", L"Selawik" },
+        { L"Cambria", L"Georgia" },
+        { L"Consolas", L"Lucida Console" },
+        { L"Cascadia Code", L"Lucida Console" },
+        { L"Cascadia Mono", L"Lucida Console" },
+    };
+    ULONG i;
+
+    for (i = 0; i < ARRAY_SIZE(map); i++)
+    {
+        if (!wcsicmp(name, map[i].from)) return map[i].to;
+    }
+    return NULL;
+}
+#endif
+
 static HRESULT WINAPI dwritefontcollection_FindFamilyName(IDWriteFontCollection3 *iface, const WCHAR *name,
         UINT32 *index, BOOL *exists)
 {
@@ -3344,6 +3376,13 @@ static HRESULT WINAPI dwritefontcollection_FindFamilyName(IDWriteFontCollection3
     TRACE("%p, %s, %p, %p.\n", iface, debugstr_w(name), index, exists);
 
     *index = collection_find_family(collection, name);
+#ifdef __REACTOS__
+    if (*index == ~0u)
+    {
+        const WCHAR *substitute = reactos_family_substitute(name);
+        if (substitute) *index = collection_find_family(collection, substitute);
+    }
+#endif
     *exists = *index != ~0u;
     return S_OK;
 }
