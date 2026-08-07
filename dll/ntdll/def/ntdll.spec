@@ -357,7 +357,7 @@
 @ stdcall -stub -version=0x600+ NtGetMUIRegistryInfo(long ptr ptr)
 @ stdcall -stub -version=0x600+ NtGetNextProcess(long long long long ptr)
 @ stdcall -stub -version=0x600+ NtGetNextThread(ptr ptr long long long ptr)
-@ stdcall -stub -version=0x600+ NtGetNlsSectionPtr(long long long ptr ptr)
+@ stdcall -version=0x600+ NtGetNlsSectionPtr(long long ptr ptr ptr)
 @ stdcall -stub -version=0x600+ NtGetNotificationResourceManager(ptr ptr long ptr ptr long long)
 @ stdcall NtGetPlugPlayEvent(long long ptr long)
 @ stdcall NtGetTickCount() RtlGetTickCount
@@ -365,7 +365,7 @@
 @ stdcall NtImpersonateAnonymousToken(ptr)
 @ stdcall NtImpersonateClientOfPort(ptr ptr)
 @ stdcall NtImpersonateThread(ptr ptr ptr)
-@ stdcall -stub -version=0x600+ NtInitializeNlsFiles(ptr ptr)
+@ stdcall -version=0x600+ NtInitializeNlsFiles(ptr ptr ptr)
 @ stdcall NtInitializeRegistry(long)
 @ stdcall NtInitiatePowerAction (long long long long)
 @ stdcall NtIsProcessInJob(long long)
@@ -956,6 +956,7 @@
 @ stub -version=0x600+ RtlGetIntegerAtom
 @ stdcall RtlGetLastNtStatus()
 @ stdcall RtlGetLastWin32Error()
+@ stdcall -version=0x600+ RtlGetLocaleFileMappingAddress(ptr ptr ptr)
 @ stdcall RtlGetLengthWithoutLastFullDosOrNtPathElement(long ptr ptr)
 ; Yes, Microsoft really misspelled this one!
 @ stdcall RtlGetLengthWithoutTrailingPathSeperators(long ptr ptr) RtlGetLengthWithoutTrailingPathSeparators
@@ -1610,7 +1611,7 @@
 @ stdcall -stub -version=0x600+ ZwGetMUIRegistryInfo(long ptr ptr)
 @ stdcall -stub -version=0x600+ ZwGetNextProcess(ptr long long long ptr)
 @ stdcall -stub -version=0x600+ ZwGetNextThread(ptr ptr long long long ptr)
-@ stdcall -stub -version=0x600+ ZwGetNlsSectionPtr(long long ptr ptr ptr)
+@ stdcall -version=0x600+ ZwGetNlsSectionPtr(long long ptr ptr ptr) NtGetNlsSectionPtr
 @ stdcall -stub -version=0x600+ ZwGetNotificationResourceManager(ptr ptr long ptr ptr long ptr)
 @ stdcall ZwGetPlugPlayEvent(long long ptr long)
 @ stdcall ZwGetWriteWatch(long long ptr long ptr ptr ptr)

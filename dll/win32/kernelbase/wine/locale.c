@@ -40,8 +40,6 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(nls);
 
-#ifndef __REACTOS__
-
 #define CALINFO_MAX_YEAR 2029
 
 static HMODULE kernelbase_handle;
@@ -1915,11 +1913,13 @@ void init_locale( HMODULE module )
     USHORT utf8[2] = { 0, CP_UTF8 };
     USHORT *ansi_ptr, *oem_ptr;
     WCHAR bufferW[LOCALE_NAME_MAX_LENGTH];
+#ifndef __REACTOS__
     DYNAMIC_TIME_ZONE_INFORMATION timezone;
     const WCHAR *user_locale_name;
     DWORD count;
-    SIZE_T size;
     HKEY hkey;
+#endif
+    SIZE_T size;
 
     kernelbase_handle = module;
     load_locale_nls();
@@ -1938,8 +1938,9 @@ void init_locale( HMODULE module )
     user_lcid = user_locale->ilanguage;
     if (user_lcid == LOCALE_CUSTOM_UNSPECIFIED) user_lcid = LOCALE_CUSTOM_DEFAULT;
 
-    if (GetEnvironmentVariableW( L"WINEUNIXCP", bufferW, ARRAY_SIZE(bufferW) ))
-        unix_cp = wcstoul( bufferW, NULL, 10 );
+#ifndef __REACTOS__
+    if (GetEnvironmentVariableW( L"WINEUNIXCP", bufferW, ARRAY_SIZE(bufferW) )) unix_cp = wcstoul( bufferW, NULL, 10 );
+#endif
 
     NtGetNlsSectionPtr( 12, NormalizationC, NULL, (void **)&norm_info, &size );
 
@@ -1948,6 +1949,14 @@ void init_locale( HMODULE module )
     RtlInitCodePageTable( ansi_ptr, &ansi_cpinfo );
     RtlInitCodePageTable( oem_ptr, &oem_cpinfo );
 
+#ifdef __REACTOS__
+    RegOpenKeyExW( HKEY_LOCAL_MACHINE, L"System\\CurrentControlSet\\Control\\Nls", 0, KEY_READ, &nls_key );
+    RegOpenKeyExW( HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Time Zones", 0, KEY_READ, &tz_key );
+    RegOpenKeyExW( HKEY_CURRENT_USER, L"Control Panel\\International", 0, KEY_ALL_ACCESS, &intl_key );
+
+    current_locale_sort = get_language_sort( LOCALE_NAME_USER_DEFAULT );
+    return;
+#else
     RegCreateKeyExW( HKEY_LOCAL_MACHINE, L"System\\CurrentControlSet\\Control\\Nls",
                      0, NULL, REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, &nls_key, NULL );
     RegCreateKeyExW( HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Time Zones",
@@ -1994,6 +2003,7 @@ void init_locale( HMODULE module )
         RegSetValueExW( hkey, L"MACCP", 0, REG_SZ, (BYTE *)bufferW, (count + 1) * sizeof(WCHAR) );
         RegCloseKey( hkey );
     }
+#endif
 }
 
 
@@ -5248,8 +5258,6 @@ INT WINAPI DECLSPEC_HOTPATCH FindNLSStringEx( const WCHAR *locale, DWORD flags, 
 
     return find_substring( sortid, flags, src, srclen, value, valuelen, found );
 }
-
-#endif /* __REACTOS__ */
 
 /******************************************************************************
  *	FindStringOrdinal   (kernelbase.@)

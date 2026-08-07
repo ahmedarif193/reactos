@@ -148,6 +148,12 @@ list(APPEND NLS_FILES
     geo.nls
     l_except.nls
     locale.nls
+    normidna.nls
+    normnfc.nls
+    normnfd.nls
+    normnfkc.nls
+    normnfkd.nls
+    sortdefault.nls
     sortkey.nls
     sorttbls.nls
     unicode.nls)
