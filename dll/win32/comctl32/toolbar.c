@@ -136,6 +136,10 @@ typedef struct
     INT      nOldHit;
     INT      nHotItem;        /* index of the "hot" item */
     SIZE     szPadding;       /* padding values around button */
+#ifdef __REACTOS__
+    SIZE     szBarPadding;    /* padding values around the toolbar */
+    SIZE     szSpacing;       /* spacing values between buttons */
+#endif
     INT      iTopMargin;      /* the top margin */
     INT      iListGap;        /* default gap between text and image for toolbar with list style */
     HFONT    hDefaultFont;
@@ -252,6 +256,11 @@ static LRESULT TOOLBAR_SetButtonInfo(TOOLBAR_INFO *infoPtr, INT Id,
 
 static inline int default_top_margin(const TOOLBAR_INFO *infoPtr)
 {
+#ifdef __REACTOS__
+    /* Native v6 toolbars use the TBMETRICS bar padding as their top margin. */
+    if (infoPtr->iVersion == 6)
+        return infoPtr->szBarPadding.cy;
+#endif
     return (infoPtr->dwStyle & TBSTYLE_FLAT ? 0 : TOP_BORDER);
 }
 
@@ -1828,14 +1837,22 @@ TOOLBAR_LayoutToolbar(TOOLBAR_INFO *infoPtr)
 	if( bWrap )
 	{
 	    if ( !(btnPtr->fsStyle & BTNS_SEP) )
+#ifdef __REACTOS__
+	        y += cy + infoPtr->szSpacing.cy;
+#else
 	        y += cy;
+#endif
 	    else
 	    {
                if ( !(infoPtr->dwStyle & CCS_VERT))
                     y += cy + ( (btnPtr->cx > 0 ) ?
                                 btnPtr->cx : SEPARATOR_WIDTH) * 2 /3;
 		else
+#ifdef __REACTOS__
+		    y += cy + infoPtr->szSpacing.cy;
+#else
 		    y += cy;
+#endif
 
 		/* nSepRows is used to calculate the extra height following  */
 		/* the last row.					     */
@@ -1849,7 +1866,11 @@ TOOLBAR_LayoutToolbar(TOOLBAR_INFO *infoPtr)
 		nRows++;
 	}
 	else
+#ifdef __REACTOS__
+	    x += cx + infoPtr->szSpacing.cx;
+#else
 	    x += cx;
+#endif
     }
 
     /* infoPtr->nRows is the number of rows on the toolbar */
@@ -3623,6 +3644,34 @@ TOOLBAR_GetMaxSize (const TOOLBAR_INFO *infoPtr, LPSIZE lpSize)
     return TRUE;
 }
 
+#ifdef __REACTOS__
+static LRESULT TOOLBAR_GetMetrics(const TOOLBAR_INFO *infoPtr, TBMETRICS *metrics)
+{
+    if (!metrics || metrics->cbSize != sizeof(*metrics))
+        return 0;
+
+    if (metrics->dwMask & TBMF_PAD)
+    {
+        metrics->cxPad = infoPtr->szPadding.cx;
+        metrics->cyPad = infoPtr->szPadding.cy;
+    }
+
+    if (metrics->dwMask & TBMF_BARPAD)
+    {
+        metrics->cxBarPad = infoPtr->szBarPadding.cx;
+        metrics->cyBarPad = infoPtr->szBarPadding.cy;
+    }
+
+    if (metrics->dwMask & TBMF_BUTTONSPACING)
+    {
+        metrics->cxButtonSpacing = infoPtr->szSpacing.cx;
+        metrics->cyButtonSpacing = infoPtr->szSpacing.cy;
+    }
+
+    return 0;
+}
+#endif
+
 
 /* << TOOLBAR_GetObject >> */
 
@@ -4876,6 +4925,42 @@ TOOLBAR_SetMaxTextRows (TOOLBAR_INFO *infoPtr, INT nMaxRows)
     return TRUE;
 }
 
+#ifdef __REACTOS__
+static LRESULT TOOLBAR_SetMetrics(TOOLBAR_INFO *infoPtr, const TBMETRICS *metrics)
+{
+    BOOL changed = FALSE;
+
+    if (!metrics || metrics->cbSize != sizeof(*metrics))
+        return 0;
+
+    if (metrics->dwMask & TBMF_PAD)
+    {
+        infoPtr->szPadding.cx = metrics->cxPad;
+        infoPtr->szPadding.cy = metrics->cyPad;
+        changed = TRUE;
+    }
+
+    if (metrics->dwMask & TBMF_BARPAD)
+    {
+        infoPtr->szBarPadding.cx = metrics->cxBarPad;
+        infoPtr->szBarPadding.cy = metrics->cyBarPad;
+        changed = TRUE;
+    }
+
+    if (metrics->dwMask & TBMF_BUTTONSPACING)
+    {
+        infoPtr->szSpacing.cx = metrics->cxButtonSpacing;
+        infoPtr->szSpacing.cy = metrics->cyButtonSpacing;
+        changed = TRUE;
+    }
+
+    if (changed)
+        TOOLBAR_CalcToolbar(infoPtr);
+
+    return 0;
+}
+#endif
+
 
 /* MSDN gives slightly wrong info on padding.
  * 1. It is not only used on buttons with the BTNS_AUTOSIZE style
@@ -6126,6 +6211,12 @@ TOOLBAR_NCCreate (HWND hwnd, WPARAM wParam, const CREATESTRUCTW *lpcs)
     infoPtr->clrBtnShadow = CLR_DEFAULT;
     infoPtr->szPadding.cx = DEFPAD_CX;
     infoPtr->szPadding.cy = DEFPAD_CY;
+#ifdef __REACTOS__
+    infoPtr->szBarPadding.cx = 0;
+    infoPtr->szBarPadding.cy = 0;
+    infoPtr->szSpacing.cx = 0;
+    infoPtr->szSpacing.cy = 0;
+#endif
     infoPtr->iListGap = DEFLISTGAP;
     infoPtr->iTopMargin = default_top_margin(infoPtr);
     infoPtr->dwStyle = lpcs->style;
@@ -6718,6 +6809,10 @@ ToolbarWindowProc (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 	case TB_GETMAXSIZE:
 	    return TOOLBAR_GetMaxSize (infoPtr, (LPSIZE)lParam);
+#ifdef __REACTOS__
+	case TB_GETMETRICS:
+	    return TOOLBAR_GetMetrics (infoPtr, (TBMETRICS*)lParam);
+#endif
 
 /*	case TB_GETOBJECT:			*/ /* 4.71 */
 
@@ -6858,6 +6953,11 @@ ToolbarWindowProc (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 	case TB_SETMAXTEXTROWS:
 	    return TOOLBAR_SetMaxTextRows (infoPtr, wParam);
+
+#ifdef __REACTOS__
+	case TB_SETMETRICS:
+	    return TOOLBAR_SetMetrics (infoPtr, (const TBMETRICS*)lParam);
+#endif
 
 	case TB_SETPADDING:
 	    return TOOLBAR_SetPadding (infoPtr, lParam);
