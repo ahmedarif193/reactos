@@ -6601,7 +6601,7 @@ void wined3d_gl_limits_get_texture_unit_range(const struct wined3d_gl_limits *gl
 
 BOOL wined3d_array_reserve(void **elements, SIZE_T *capacity, SIZE_T count, SIZE_T size)
 {
-    SIZE_T max_capacity, new_capacity;
+    SIZE_T max_capacity, new_capacity, old_size, new_size;
     void *new_elements;
 
     if (count <= *capacity)
@@ -6617,10 +6617,19 @@ BOOL wined3d_array_reserve(void **elements, SIZE_T *capacity, SIZE_T count, SIZE
     if (new_capacity < count)
         new_capacity = count;
 
+#ifdef __REACTOS__
+    old_size = *capacity * size;
+    new_size = new_capacity * size;
+    new_elements = realloc(*elements, new_size);
+#else
     new_elements = _recalloc(*elements, new_capacity, size);
+#endif
     if (!new_elements)
         return FALSE;
 
+#ifdef __REACTOS__
+    memset((BYTE *)new_elements + old_size, 0, new_size - old_size);
+#endif
     *elements = new_elements;
     *capacity = new_capacity;
     return TRUE;
