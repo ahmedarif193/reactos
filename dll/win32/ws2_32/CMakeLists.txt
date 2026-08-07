@@ -11,6 +11,7 @@ add_library(ws2_32_inaddr STATIC src/inaddr.c)
 list(APPEND SOURCE
     src/addrconv.c
     src/addrinfo.c
+    src/addrinfoex.c
     src/async.c
     src/bhook.c
     src/dcatalog.c
