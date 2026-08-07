@@ -226,6 +226,71 @@ HRESULT WINAPI DwmGetWindowAttribute(HWND hwnd, DWORD attribute, PVOID pv_attrib
         SetThreadDpiAwarenessContext(context);
         break;
     }
+    case DWMWA_CAPTION_BUTTON_BOUNDS:
+    {
+        RECT *rect = (RECT *)pv_attribute;
+        RECT win;
+        DWORD style, ex_style;
+        LONG border_x, border_y, button_w, button_h, count;
+
+        if (!rect)
+            return E_INVALIDARG;
+        if (size < sizeof(*rect))
+            return E_NOT_SUFFICIENT_BUFFER;
+
+        style = GetWindowLongW(hwnd, GWL_STYLE);
+        ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+        if (!GetWindowRect(hwnd, &win))
+            return HRESULT_FROM_WIN32(GetLastError());
+
+        if (style & WS_THICKFRAME)
+        {
+            border_x = GetSystemMetrics(SM_CXSIZEFRAME);
+            border_y = GetSystemMetrics(SM_CYSIZEFRAME);
+        }
+        else if ((style & (WS_DLGFRAME | WS_BORDER)) == WS_DLGFRAME || (ex_style & WS_EX_DLGMODALFRAME))
+        {
+            border_x = GetSystemMetrics(SM_CXFIXEDFRAME);
+            border_y = GetSystemMetrics(SM_CYFIXEDFRAME);
+        }
+        else
+        {
+            border_x = GetSystemMetrics(SM_CXBORDER);
+            border_y = GetSystemMetrics(SM_CYBORDER);
+        }
+
+        if (ex_style & WS_EX_TOOLWINDOW)
+        {
+            button_w = GetSystemMetrics(SM_CXSMSIZE);
+            button_h = GetSystemMetrics(SM_CYSMSIZE) - 2;
+            count = 1;
+        }
+        else
+        {
+            button_w = GetSystemMetrics(SM_CXSIZE);
+            button_h = GetSystemMetrics(SM_CYSIZE) - 2;
+            count = (style & (WS_MINIMIZEBOX | WS_MAXIMIZEBOX)) ? 3 : 1;
+        }
+
+        rect->top = border_y + 2;
+        rect->bottom = rect->top + button_h;
+        rect->right = (win.right - win.left) - border_x - 2;
+        rect->left = rect->right - count * button_w - (count - 1);
+        hr = S_OK;
+        break;
+    }
+    case DWMWA_CLOAKED:
+    {
+        DWORD *cloaked = (DWORD *)pv_attribute;
+
+        if (!cloaked)
+            return E_INVALIDARG;
+        if (size < sizeof(*cloaked))
+            return E_NOT_SUFFICIENT_BUFFER;
+        *cloaked = 0;
+        hr = S_OK;
+        break;
+    }
     default:
         FIXME("attribute %ld not implemented.\n", attribute);
         hr = E_NOTIMPL;
