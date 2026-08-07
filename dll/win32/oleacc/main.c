@@ -144,14 +144,19 @@ HRESULT WINAPI ObjectFromLresult( LRESULT result, REFIID riid, WPARAM wParam, vo
     if(*p != 0)
         return E_FAIL;
 
-    server_proc = OpenProcess(PROCESS_DUP_HANDLE, FALSE, proc_id);
-    if(!server_proc)
-        return E_FAIL;
+    if (proc_id == GetCurrentProcessId())
+        mapping = server_mapping;
+    else
+    {
+        server_proc = OpenProcess(PROCESS_DUP_HANDLE, FALSE, proc_id);
+        if(!server_proc)
+            return E_FAIL;
 
-    if(!DuplicateHandle(server_proc, server_mapping, GetCurrentProcess(), &mapping,
-                0, FALSE, DUPLICATE_CLOSE_SOURCE|DUPLICATE_SAME_ACCESS))
-        return E_FAIL;
-    CloseHandle(server_proc);
+        if(!DuplicateHandle(server_proc, server_mapping, GetCurrentProcess(), &mapping,
+                    0, FALSE, DUPLICATE_CLOSE_SOURCE|DUPLICATE_SAME_ACCESS))
+            return E_FAIL;
+        CloseHandle(server_proc);
+    }
     GlobalDeleteAtom(result);
 
     view = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
