@@ -175,7 +175,7 @@ void Test_ExtCreatePen_Params()
     ok(pelp->elpWidth == 0, "Wrong elpWidth, expected 0, got %lu\n", pelp->elpWidth);
     ok(pelp->elpBrushStyle == BS_SOLID, "Wrong elpBrushStyle, expected BS_SOLID, got 0x%x\n", pelp->elpBrushStyle);
     ok(pelp->elpColor == 0, "Wrong elpColor, expected 0, got 0x%lx\n", pelp->elpColor);
-    ok(pelp->elpHatch == 0, "Wrong elpHatch, expected 0, got 0x%lx\n", pelp->elpHatch);
+    ok(pelp->elpHatch == 0, "Wrong elpHatch, expected 0, got 0x%Ix\n", pelp->elpHatch);
     ok(pelp->elpNumEntries == 0, "Wrong elpNumEntries, expected %u got %lu\n", 0, pelp->elpNumEntries);
 
     /* Test PS_NULL with styles */
@@ -462,7 +462,7 @@ Test_ExtCreatePen_Helper(
             ok2(pelp->elpWidth == elpExpect.elpWidth, "elpWidth, expected 0x%lx, got 0x%lx\n", elpExpect.elpWidth, pelp->elpWidth);
             ok2(pelp->elpBrushStyle == elpExpect.elpBrushStyle, "elpBrushStyle, expected 0x%x, got 0x%x\n", elpExpect.elpBrushStyle, pelp->elpBrushStyle);
             ok2(pelp->elpColor == elpExpect.elpColor, "elpColor, expected 0x%lx, got 0x%lx\n", elpExpect.elpColor, pelp->elpColor);
-            ok2(pelp->elpHatch == elpExpect.elpHatch, "elpHatch, expected 0x%lx, got 0x%lx\n", elpExpect.elpHatch, pelp->elpHatch);
+            ok2(pelp->elpHatch == elpExpect.elpHatch, "elpHatch, expected 0x%Ix, got 0x%Ix\n", elpExpect.elpHatch, pelp->elpHatch);
             ok2(pelp->elpNumEntries == elpExpect.elpNumEntries, "elpNumEntries, expected 0x%lx, got 0x%lx\n", elpExpect.elpNumEntries, pelp->elpNumEntries);
             //for (i = 0; i < pelp->elpNumEntries; i++)
             //{
@@ -536,4 +536,3 @@ START_TEST(ExtCreatePen)
     Test_ExtCreatePen_Params();
     //Test_ExtCreatePen_Params2();
 }
-

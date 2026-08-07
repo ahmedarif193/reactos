@@ -141,7 +141,7 @@ void test_InProcess()
     ok(stream.End == buffer2 + sizeof(buffer2), "stream.End was changed unexpectedly\n");
 
     ok(stat.cbSize.QuadPart == ((PUCHAR)stream.End - (PUCHAR)stream.Start),
-       "stat.cbSize has the wrong value %I64u (expected %d)\n",
+       "stat.cbSize has the wrong value %I64u (expected %Id)\n",
        stat.cbSize.QuadPart, (PUCHAR)stream.End - (PUCHAR)stream.Start);
 
     CompareStructsAndSaveForLater(&previous, &stream, "After Stat");
@@ -430,7 +430,7 @@ void test_OutOfProcess()
        stream.ProcessHandle, process);
 
     ok(stat.cbSize.QuadPart == ((PUCHAR)stream.End - (PUCHAR)stream.Start),
-       "stat.cbSize has the wrong value %I64u (expected %d)\n",
+       "stat.cbSize has the wrong value %I64u (expected %Id)\n",
        stat.cbSize.QuadPart, (PUCHAR)stream.End - (PUCHAR)stream.Start);
 
     CompareStructsAndSaveForLater(&previous, &stream, "After Stat");

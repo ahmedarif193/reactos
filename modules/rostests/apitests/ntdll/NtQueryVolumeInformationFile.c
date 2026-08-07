@@ -109,7 +109,7 @@ TestFileFsVolumeInformation(HANDLE handle)
     if (status == STATUS_SUCCESS)
     {
         ok(VolumeInfo->VolumeLabelLength <= sizeof(FILE_FS_VOLUME_INFORMATION) - FIELD_OFFSET(FILE_FS_VOLUME_INFORMATION, VolumeLabel),
-           "VolumeInfo->VolumeLabelLength = %Iu\n", VolumeInfo->VolumeLabelLength);
+           "VolumeInfo->VolumeLabelLength = %lu\n", VolumeInfo->VolumeLabelLength);
         ok(IoStatusBlock.Information >= FIELD_OFFSET(FILE_FS_VOLUME_INFORMATION, VolumeLabel),
            "IoStatusBlock.Information = %Iu, expected >=%lu\n", IoStatusBlock.Information, (ULONG)FIELD_OFFSET(FILE_FS_VOLUME_INFORMATION, VolumeLabel));
         ok(IoStatusBlock.Information <= sizeof(FILE_FS_VOLUME_INFORMATION),
@@ -118,7 +118,7 @@ TestFileFsVolumeInformation(HANDLE handle)
     else
     {
         ok(VolumeInfo->VolumeLabelLength > sizeof(FILE_FS_VOLUME_INFORMATION) - FIELD_OFFSET(FILE_FS_VOLUME_INFORMATION, VolumeLabel),
-           "VolumeInfo->VolumeLabelLength = %Iu\n", VolumeInfo->VolumeLabelLength);
+           "VolumeInfo->VolumeLabelLength = %lu\n", VolumeInfo->VolumeLabelLength);
         ok(IoStatusBlock.Information == sizeof(FILE_FS_VOLUME_INFORMATION),
            "IoStatusBlock.Information = %Iu, expected %lu\n", IoStatusBlock.Information, (ULONG)sizeof(FILE_FS_VOLUME_INFORMATION));
     }
@@ -135,10 +135,10 @@ TestFileFsVolumeInformation(HANDLE handle)
     ok(VolumeInfo->VolumeCreationTime.QuadPart != 0x5555555555555555, "VolumeInfo->VolumeCreationTime = %I64d\n", VolumeInfo->VolumeCreationTime.QuadPart);
     ok(VolumeInfo->VolumeSerialNumber != 0x55555555, "VolumeInfo->VolumeSerialNumber = %lu\n", VolumeInfo->VolumeSerialNumber);
     ok(VolumeInfo->SupportsObjects == FALSE || VolumeInfo->SupportsObjects == TRUE, "VolumeInfo->SupportsObjects = %u\n", VolumeInfo->SupportsObjects);
-    ok(VolumeInfo->VolumeLabelLength % sizeof(WCHAR) == 0, "VolumeInfo->VolumeLabelLength = %Iu\n", VolumeInfo->VolumeLabelLength);
+    ok(VolumeInfo->VolumeLabelLength % sizeof(WCHAR) == 0, "VolumeInfo->VolumeLabelLength = %lu\n", VolumeInfo->VolumeLabelLength);
     if (VolumeInfo->VolumeLabelLength >= sizeof(WCHAR))
         ok(VolumeInfo->VolumeLabel[VolumeInfo->VolumeLabelLength / sizeof(WCHAR) - 1] != 0x5555, "Incorrect VolumeLabel or Length\n");
-    trace("VolumeLabel = %.*ls\n", (int)VolumeInfo->VolumeLabelLength / sizeof(WCHAR), VolumeInfo->VolumeLabel);
+    trace("VolumeLabel = %.*ls\n", (int)(VolumeInfo->VolumeLabelLength / sizeof(WCHAR)), VolumeInfo->VolumeLabel);
     ok(VolumeInfo->VolumeLabel[VolumeInfo->VolumeLabelLength / sizeof(WCHAR)] == 0x5555,
        "Got %x\n", VolumeInfo->VolumeLabel[VolumeInfo->VolumeLabelLength / sizeof(WCHAR)]);
 }
@@ -194,7 +194,7 @@ TestFileFsAttributeInformation(HANDLE handle)
     ok(status == STATUS_BUFFER_OVERFLOW, "Got status 0x%lx\n", status);
     ok(IoStatusBlock.Status == STATUS_BUFFER_OVERFLOW, "IoStatusBlock.Status = 0x%lx\n", IoStatusBlock.Status);
     ok(AttributeInfo->FileSystemNameLength == sizeof(FILE_FS_ATTRIBUTE_INFORMATION) - FIELD_OFFSET(FILE_FS_ATTRIBUTE_INFORMATION, FileSystemName),
-       "AttributeInfo->FileSystemNameLength = %Iu\n", AttributeInfo->FileSystemNameLength);
+       "AttributeInfo->FileSystemNameLength = %lu\n", AttributeInfo->FileSystemNameLength);
     ok(IoStatusBlock.Information == sizeof(FILE_FS_ATTRIBUTE_INFORMATION),
        "IoStatusBlock.Information = %Iu, expected %lu\n", IoStatusBlock.Information, (ULONG)sizeof(FILE_FS_ATTRIBUTE_INFORMATION));
     ok(AttributeInfo->FileSystemName[AttributeInfo->FileSystemNameLength / sizeof(WCHAR)] == 0x5555,
@@ -206,7 +206,7 @@ TestFileFsAttributeInformation(HANDLE handle)
     ok(status == STATUS_BUFFER_OVERFLOW, "Got status 0x%lx\n", status);
     ok(IoStatusBlock.Status == STATUS_BUFFER_OVERFLOW, "IoStatusBlock.Status = 0x%lx\n", IoStatusBlock.Status);
     ok(AttributeInfo->FileSystemNameLength == sizeof(FILE_FS_ATTRIBUTE_INFORMATION) + 1 - FIELD_OFFSET(FILE_FS_ATTRIBUTE_INFORMATION, FileSystemName),
-       "AttributeInfo->FileSystemNameLength = %Iu\n", AttributeInfo->FileSystemNameLength);
+       "AttributeInfo->FileSystemNameLength = %lu\n", AttributeInfo->FileSystemNameLength);
     ok(IoStatusBlock.Information == sizeof(FILE_FS_ATTRIBUTE_INFORMATION) + 1,
        "IoStatusBlock.Information = %Iu, expected %lu\n", IoStatusBlock.Information, (ULONG)sizeof(FILE_FS_ATTRIBUTE_INFORMATION));
     ok((AttributeInfo->FileSystemName[AttributeInfo->FileSystemNameLength / sizeof(WCHAR)] & 0xff00) == 0x5500,
@@ -222,7 +222,7 @@ TestFileFsAttributeInformation(HANDLE handle)
         ok(status == STATUS_BUFFER_OVERFLOW, "Got status 0x%lx\n", status);
         ok(IoStatusBlock.Status == STATUS_BUFFER_OVERFLOW, "IoStatusBlock.Status = 0x%lx\n", IoStatusBlock.Status);
         ok(AttributeInfo->FileSystemNameLength == sizeof(FILE_FS_ATTRIBUTE_INFORMATION) + sizeof(WCHAR) - FIELD_OFFSET(FILE_FS_ATTRIBUTE_INFORMATION, FileSystemName),
-           "AttributeInfo->FileSystemNameLength = %Iu\n", AttributeInfo->FileSystemNameLength);
+           "AttributeInfo->FileSystemNameLength = %lu\n", AttributeInfo->FileSystemNameLength);
         ok(IoStatusBlock.Information == sizeof(FILE_FS_ATTRIBUTE_INFORMATION) + sizeof(WCHAR),
            "IoStatusBlock.Information = %Iu, expected %lu\n", IoStatusBlock.Information, (ULONG)sizeof(FILE_FS_ATTRIBUTE_INFORMATION));
         ok(AttributeInfo->FileSystemName[AttributeInfo->FileSystemNameLength / sizeof(WCHAR)] == 0x5555,
@@ -238,12 +238,12 @@ TestFileFsAttributeInformation(HANDLE handle)
        "IoStatusBlock.Information = %Iu, expected %lu+%lu\n", IoStatusBlock.Information, (ULONG)FIELD_OFFSET(FILE_FS_ATTRIBUTE_INFORMATION, FileSystemName), AttributeInfo->FileSystemNameLength);
     ok(AttributeInfo->FileSystemAttributes != 0x55555555, "AttributeInfo->FileSystemAttributes = 0x%lx\n", AttributeInfo->FileSystemAttributes);
     ok(AttributeInfo->MaximumComponentNameLength != 0x55555555, "AttributeInfo->MaximumComponentNameLength = 0x%lx\n", AttributeInfo->MaximumComponentNameLength);
-    ok(AttributeInfo->FileSystemNameLength % sizeof(WCHAR) == 0, "AttributeInfo->FileSystemNameLength = %Iu\n", AttributeInfo->FileSystemNameLength);
+    ok(AttributeInfo->FileSystemNameLength % sizeof(WCHAR) == 0, "AttributeInfo->FileSystemNameLength = %lu\n", AttributeInfo->FileSystemNameLength);
     ok(!wcsncmp(AttributeInfo->FileSystemName, L"NTFS", 4) ||
        !wcsncmp(AttributeInfo->FileSystemName, L"FAT", 3) ||
        !wcsncmp(AttributeInfo->FileSystemName, L"FAT32", 5),
-       "FileSystemName = %.*ls\n", (int)AttributeInfo->FileSystemNameLength / sizeof(WCHAR), AttributeInfo->FileSystemName);
-    trace("FileSystemName = %.*ls\n", (int)AttributeInfo->FileSystemNameLength / sizeof(WCHAR), AttributeInfo->FileSystemName);
+       "FileSystemName = %.*ls\n", (int)(AttributeInfo->FileSystemNameLength / sizeof(WCHAR)), AttributeInfo->FileSystemName);
+    trace("FileSystemName = %.*ls\n", (int)(AttributeInfo->FileSystemNameLength / sizeof(WCHAR)), AttributeInfo->FileSystemName);
     ok(AttributeInfo->FileSystemName[AttributeInfo->FileSystemNameLength / sizeof(WCHAR)] == 0x5555,
        "Got %x\n", AttributeInfo->FileSystemName[AttributeInfo->FileSystemNameLength / sizeof(WCHAR)]);
 }

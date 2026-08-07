@@ -71,27 +71,27 @@ void TestSetButtonSize()
     ok(hwnd != NULL, "CreateWindowEx failed\n");
 
     bsize = SendMessageW(hwnd, TB_GETBUTTONSIZE, 0, 0);
-    ok(bsize == 0x160017, "Expected 0x160017 got %lx\n", bsize);
+    ok(bsize == 0x160017, "Expected 0x160017 got %Ix\n", bsize);
 
     SendMessageW(hwnd, TB_SETBUTTONSIZE, 0, MAKELONG(0, 0));
     bsize = SendMessageW(hwnd, TB_GETBUTTONSIZE, 0, 0);
-    ok(bsize == 0x160018, "Expected 0x160018 got %lx\n", bsize);
+    ok(bsize == 0x160018, "Expected 0x160018 got %Ix\n", bsize);
 
     SendMessageW(hwnd, TB_SETBUTTONSIZE, 0, 0x10001);
     bsize = SendMessageW(hwnd, TB_GETBUTTONSIZE, 0, 0);
-    ok(bsize == 0x160017, "Expected 0x160017 got %lx\n", bsize);
+    ok(bsize == 0x160017, "Expected 0x160017 got %Ix\n", bsize);
 
     SendMessageW(hwnd, TB_SETBUTTONSIZE, 0, 0x100001);
     bsize = SendMessageW(hwnd, TB_GETBUTTONSIZE, 0, 0);
-    ok(bsize == 0x160017, "Expected 0x160017 got %lx\n", bsize);
+    ok(bsize == 0x160017, "Expected 0x160017 got %Ix\n", bsize);
 
     SendMessageW(hwnd, TB_SETBUTTONSIZE, 0, 0x160017);
     bsize = SendMessageW(hwnd, TB_GETBUTTONSIZE, 0, 0);
-    ok(bsize == 0x160017, "Expected 0x160017 got %lx\n", bsize);
+    ok(bsize == 0x160017, "Expected 0x160017 got %Ix\n", bsize);
 
     SendMessageW(hwnd, TB_SETBUTTONSIZE, 0, 0x170017);
     bsize = SendMessageW(hwnd, TB_GETBUTTONSIZE, 0, 0);
-    ok(bsize == 0x170017, "Expected 0x170017 got %lx\n", bsize);
+    ok(bsize == 0x170017, "Expected 0x170017 got %Ix\n", bsize);
 
     DestroyWindow(hwnd);
 }
@@ -105,17 +105,17 @@ void TestPadding()
     ok(hwnd != NULL, "CreateWindowEx failed\n");
 
     bsize = SendMessageW(hwnd, TB_GETPADDING, 0, 0);
-    ok(bsize == 0x60007, "Expected 0x60007 got %lx\n", bsize);
+    ok(bsize == 0x60007, "Expected 0x60007 got %Ix\n", bsize);
 
     SendMessageW(hwnd, TB_SETPADDING, 0, 0x10001);
     SendMessageW(hwnd, TB_SETBITMAPSIZE, 0, 0x10001);
     SendMessageW(hwnd, TB_SETBUTTONSIZE, 0, 0x10001);
 
     bsize = SendMessageW(hwnd, TB_GETPADDING, 0, 0);
-    ok(bsize == 0x10001, "Expected 0x10001 got %lx\n", bsize);
+    ok(bsize == 0x10001, "Expected 0x10001 got %Ix\n", bsize);
 
     bsize = SendMessageW(hwnd, TB_GETBUTTONSIZE, 0, 0);
-    ok(bsize == 0x20002 || bsize == 0xe0002, "Expected 0x20002 got %lx\n", bsize);
+    ok(bsize == 0x20002 || bsize == 0xe0002, "Expected 0x20002 got %Ix\n", bsize);
 
 #if 0 /* Luna specific */
     SetWindowTheme(hwnd, L"TaskBand", NULL);
@@ -189,7 +189,7 @@ void TestButtonSpacing()
     metrics.cbSize = sizeof(metrics);
     metrics.dwMask = TBMF_PAD|TBMF_BARPAD|TBMF_BUTTONSPACING;
     lres = SendMessageW(hwnd, TB_GETMETRICS, 0, (LPARAM)&metrics);
-    ok (lres == 0, "Got %lu result\n", lres);
+    ok (lres == 0, "Got %Id result\n", lres);
     ok (metrics.dwMask == (TBMF_PAD|TBMF_BARPAD|TBMF_BUTTONSPACING), "Got %lu\n", metrics.dwMask);
     ok (metrics.cxPad == 7, "Got %d\n", metrics.cxPad);
     ok (metrics.cyPad == 6, "Got %d\n", metrics.cyPad);

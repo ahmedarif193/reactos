@@ -37,7 +37,7 @@
 #define ok_eq_hex_ex(entry, value, expected)       ok_eq_print_ex(entry, value, expected, "0x%08lx")
 #define ok_eq_pointer_ex(entry, value, expected)   ok_eq_print_ex(entry, value, expected, "%p")
 #define ok_eq_int_ex(entry, value, expected)       ok_eq_print_ex(entry, value, expected, "%d")
-#define ok_eq_uint_ex(entry, value, expected)      ok_eq_print_ex(entry, value, expected, "%u")
+#define ok_eq_uint_ex(entry, value, expected)      ok_eq_print_ex(entry, (UINT)(value), (UINT)(expected), "%u")
 #define ok_eq_ulong_ex(entry, value, expected)     ok_eq_print_ex(entry, value, expected, "%lu")
 #define ok_eq_ulonglong_ex(entry, value, expected) ok_eq_print_ex(entry, value, expected, "%I64u")
 
@@ -142,7 +142,7 @@ ExFreePoolWithTag(PVOID MemPtr, ULONG Tag)
     PULONG_PTR Mem = MemPtr;
 
     Mem -= 2;
-    ok(Mem[1] == Tag, "Tag is %lx, expected %lx\n", Tag, Mem[1]);
+    ok(Mem[1] == Tag, "Tag is %Ix, expected %lx\n", Mem[1], Tag);
     HeapFree(GetProcessHeap(), 0, Mem);
 
     --DrvpBlocksAllocated;

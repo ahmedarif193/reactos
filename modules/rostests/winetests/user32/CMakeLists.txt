@@ -29,6 +29,7 @@ list(APPEND SOURCE
 
 list(APPEND PCH_SKIP_SOURCE
     testlist.c
+    class.c
     monitor.c
     win.c
     winstation.c)

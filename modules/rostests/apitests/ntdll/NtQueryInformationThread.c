@@ -13,7 +13,7 @@
 
 #define ok_nwstr(str1, str2, count) \
     ok(wcsncmp((PWCHAR)(str1), (PWCHAR)(str2), (count)) == 0, \
-       "Wrong string. Expected '%.*S', got '%.*S'\n", (count), (str1), (count), (str2))
+       "Wrong string. Expected '%.*ls', got '%.*ls'\n", (int)(count), (str1), (int)(count), (str2))
 
 static
 void
@@ -101,7 +101,7 @@ Test_ThreadBasicInformationClass(void)
     trace("ThreadInfoBasic->TebBaseAddress = %p\n", ThreadInfoBasic->TebBaseAddress);
     trace("ThreadInfoBasic->ClientId.UniqueProcess = %p\n", ThreadInfoBasic->ClientId.UniqueProcess);
     trace("ThreadInfoBasic->ClientId.UniqueThread = %p\n", ThreadInfoBasic->ClientId.UniqueThread);
-    trace("ThreadInfoBasic->AffinityMask = %lu\n", ThreadInfoBasic->AffinityMask);
+    trace("ThreadInfoBasic->AffinityMask = %llu\n", ThreadInfoBasic->AffinityMask);
     trace("ThreadInfoBasic->Priority = %li\n", ThreadInfoBasic->Priority);
     trace("ThreadInfoBasic->BasePriority = %li\n", ThreadInfoBasic->BasePriority);
 
@@ -387,7 +387,7 @@ DoThreadNameTest(
 
     ASSERT(sizeof(NameInfo.Buffer) >= ExpectedNameLength);
 
-    winetest_push_context("Test %lu", i);
+    winetest_push_context("Test %u", i);
 
     /* Set a new thread name only if it's not '-1'; otherwise we
      * just query the existing name without setting it before. */
@@ -550,7 +550,7 @@ Test_ThreadNameInformation(void)
     trace("NTDDIVersion: 0x%08lx\n", NTDDIVersion);
     if (NTDDIVersion < NTDDI_WIN10_RS1)
     {
-        trace("Running %s on NT %hu.%hu(.%hu), it may not work!\n",
+        trace("Running %s on NT %lu.%lu(.%lu), it may not work!\n",
               __FUNCTION__,
               (NTDDIVersion & 0xFF000000) >> 24,
               (NTDDIVersion & 0x00FF0000) >> 16,

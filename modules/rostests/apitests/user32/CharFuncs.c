@@ -415,7 +415,7 @@ static LPSTR AllocStringA(LPWSTR lpszStr, SIZE_T len)
     {
         HeapFree(GetProcessHeap(), 0, str);
         str = NULL;
-        trace("WideCharToMultiByte returned %lu (error %ld)\n", mbs, GetLastError());
+        trace("WideCharToMultiByte returned %Iu (error %ld)\n", mbs, GetLastError());
         goto Skip;
     }
 
@@ -462,7 +462,7 @@ static void testCharPrevW(const TESTS_CHARPREV *pEntry, SIZE_T len, UINT i)
             ok(b, "[%u] CharPrevW: pchW (0x%p) is expected to be within wszStart (0x%p)\n", i, pchW, wszStart);
         else
             ok(!b, "[%u] CharPrevW: pchW (0x%p) is expected to be outside wszStart (0x%p)\n", i, pchW, wszStart);
-        ok(pchW == wszStart + iRealOffset, "[%u] CharPrevW: pchW is 0x%p (offset %d)\n", i, pchW, pchW - wszStart);
+        ok(pchW == wszStart + iRealOffset, "[%u] CharPrevW: pchW is 0x%p (offset %Id)\n", i, pchW, pchW - wszStart);
     }
     else
     {
@@ -471,7 +471,7 @@ static void testCharPrevW(const TESTS_CHARPREV *pEntry, SIZE_T len, UINT i)
             ok(b, "[%u] CharPrevW: pchW (0x%p) is expected to be within wszCurrent (0x%p)\n", i, pchW, wszCurrent);
         else
             ok(!b, "[%u] CharPrevW: pchW (0x%p) is expected to be outside wszCurrent (0x%p)\n", i, pchW, wszCurrent);
-        ok(pchW == wszCurrent + iRealOffset, "[%u] CharPrevW: pchW is 0x%p (offset %d)\n", i, pchW, pchW - wszCurrent);
+        ok(pchW == wszCurrent + iRealOffset, "[%u] CharPrevW: pchW is 0x%p (offset %Id)\n", i, pchW, pchW - wszCurrent);
     }
 
 Cleanup:
@@ -520,7 +520,7 @@ static void testCharPrevA(const TESTS_CHARPREV *pEntry, SIZE_T len, UINT i)
             ok(b, "[%u] CharPrevA: pchA (0x%p) is expected to be within szStart (0x%p)\n", i, pchA, szStart);
         else
             ok(!b, "[%u] CharPrevA: pchA (0x%p) is expected to be outside szStart (0x%p)\n", i, pchA, szStart);
-        ok(pchA == szStart + iRealOffset, "[%u] CharPrevA: pchA is 0x%p (offset %d)\n", i, pchA, pchA - szStart);
+        ok(pchA == szStart + iRealOffset, "[%u] CharPrevA: pchA is 0x%p (offset %Id)\n", i, pchA, pchA - szStart);
     }
     else
     {
@@ -529,7 +529,7 @@ static void testCharPrevA(const TESTS_CHARPREV *pEntry, SIZE_T len, UINT i)
             ok(b, "[%u] CharPrevA: pchA (0x%p) is expected to be within szCurrent (0x%p)\n", i, pchA, szCurrent);
         else
             ok(!b, "[%u] CharPrevA: pchA (0x%p) is expected to be outside szCurrent (0x%p)\n", i, pchA, szCurrent);
-        ok(pchA == szCurrent + iRealOffset, "[%u] CharPrevA: pchA is 0x%p (offset %d)\n", i, pchA, pchA - szCurrent);
+        ok(pchA == szCurrent + iRealOffset, "[%u] CharPrevA: pchA is 0x%p (offset %Id)\n", i, pchA, pchA - szCurrent);
     }
     ok(pchA == pchEx, "[%u] CharPrevExA: pchA (0x%p) is not equal to pchEx (0x%p)\n", i, pchA, pchEx);
 

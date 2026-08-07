@@ -14,12 +14,12 @@ TraceMountPoint(
 {
     trace("MountPoint: %p\n", MountPoint);
     trace("\tSymbolicOffset: %ld\n", MountPoint->SymbolicLinkNameOffset);
-    trace("\tSymbolicLinkName: %.*S\n",
-          MountPoint->SymbolicLinkNameLength / sizeof(WCHAR),
+    trace("\tSymbolicLinkName: %.*ls\n",
+          (int)(MountPoint->SymbolicLinkNameLength / sizeof(WCHAR)),
           (PWCHAR)((ULONG_PTR)MountPoints + MountPoint->SymbolicLinkNameOffset));
     trace("\tDeviceOffset: %ld\n", MountPoint->DeviceNameOffset);
-    trace("\tDeviceName: %.*S\n",
-          MountPoint->DeviceNameLength / sizeof(WCHAR),
+    trace("\tDeviceName: %.*ls\n",
+          (int)(MountPoint->DeviceNameLength / sizeof(WCHAR)),
           (PWCHAR)((ULONG_PTR)MountPoints + MountPoint->DeviceNameOffset));
 }
 

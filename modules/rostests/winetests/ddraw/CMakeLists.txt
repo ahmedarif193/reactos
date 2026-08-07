@@ -16,6 +16,7 @@ add_executable(ddraw_winetest
     visual.c
     testlist.c)
 
+target_compile_definitions(ddraw_winetest PRIVATE CONST_VTABLE)
 target_link_libraries(ddraw_winetest uuid dxguid)
 set_module_type(ddraw_winetest win32cui)
 add_importlibs(ddraw_winetest ddraw user32 gdi32 ole32 msvcrt kernel32)

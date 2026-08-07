@@ -105,7 +105,7 @@ START_TEST(SHShouldShowWizards)
     hr = SHShouldShowWizards(dummy.GetUnknown());
     ok_hex(hr, (GetNTVersion() >= _WIN32_WINNT_WIN8) ? S_FALSE : S_OK);
 
-    state.fWebView = TRUE;
+    state.fWebView = -1;
     SHGetSetSettings(&state, SSF_WEBVIEW, TRUE);
     SetShowWizardsTEST(FALSE);
     hr = SHShouldShowWizards(dummy.GetUnknown());

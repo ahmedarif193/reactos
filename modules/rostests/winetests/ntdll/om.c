@@ -47,7 +47,6 @@
 #define SEMAPHORE_QUERY_STATE           0x0001
 
 /* These are here because Wine's headers aren't compatible */
-#define RTL_CONSTANT_STRING(s) { sizeof(s) - sizeof(s[0]), sizeof(s), (void*)s }
 #define NT_SUCCESS(Status)              (((NTSTATUS)(Status)) >= 0)
 #define NT_ERROR(Status)                ((((ULONG)(Status)) >> 30) == 3)
 #endif

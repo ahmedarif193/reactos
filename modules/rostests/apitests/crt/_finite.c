@@ -59,7 +59,7 @@ void Test__finite(void)
 }
 
 #ifndef _M_IX86
-static TESTENTRY_FLT s_finitef_tests[] =
+static TESTENTRY_FLT_INT s_finitef_tests[] =
 {
     /* Special values */
     { 0x00000000 /*  0.000000 */, 1 },

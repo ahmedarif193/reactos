@@ -20,18 +20,18 @@ START_TEST(mbstowcs)
     wchar_t out[ARRAYSIZE(LStrROS)];
 
     len = mbstowcs(NULL, StrROS, 0);
-    ok(len == 7, "Got len = %u, excepting 7\n", len);
+    ok_eq_size(len, 7);
     len = mbstowcs(NULL, StrROS, 0);
-    ok(len == 7, "Got len = %u, excepting 7\n", len);
+    ok_eq_size(len, 7);
     len = mbstowcs(NULL, StrROS, ARRAYSIZE(out));
-    ok(len == 7, "Got len = %u, excepting 7\n", len);
+    ok_eq_size(len, 7);
     len = mbstowcs(NULL, StrROS, ARRAYSIZE(out));
-    ok(len == 7, "Got len = %u, excepting 7\n", len);
+    ok_eq_size(len, 7);
     len = mbstowcs(out, StrROS, ARRAYSIZE(out));
-    ok(len == 7, "Got len = %u, excepting 7\n", len);
+    ok_eq_size(len, 7);
     ok_wstr(out, LStrROS);
     memset(out, 0, sizeof(out));
     len = mbstowcs(out, StrROS, ARRAYSIZE(out));
-    ok(len == 7, "Got len = %u, excepting 7\n", len);
+    ok_eq_size(len, 7);
     ok_wstr(out, LStrROS);
 }

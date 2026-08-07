@@ -328,11 +328,11 @@ static void test_one(LPCSTR shim, DWORD dwReason, void(*pre)(), void(*post)(), v
     hook = pGetHookAPIs("", wide_shim, &num_shims);
     if (hook == NULL)
     {
-        skip("Skipping tests for layers (%s) not present in this os (0x%x)\n", shim, g_Version);
+        skip("Skipping tests for layers (%s) not present in this os (0x%lx)\n", shim, g_Version);
         return;
     }
     ok(hook != NULL, "Expected hook to be a valid pointer for %s\n", shim);
-    ok(num_shims == 0, "Expected not to find any apihooks, got: %u for %s\n", num_shims, shim);
+    ok(num_shims == 0, "Expected not to find any apihooks, got: %lu for %s\n", num_shims, shim);
 
     ret = pNotifyShims(dwReason, NULL);
 
@@ -474,7 +474,7 @@ START_TEST(dispmode)
                 }
             }
 
-            ok(failures == winetest_get_failures(), "Last %u failures are from %d (%s)\n",
+            ok(failures == winetest_get_failures(), "Last %ld failures are from %Iu (%s)\n",
                 winetest_get_failures() - failures, n, tests[n].name);
         }
     }
@@ -487,7 +487,7 @@ START_TEST(dispmode)
         }
         else
         {
-            ok(0, "Test out of range: %u\n", n);
+            ok(0, "Test out of range: %Iu\n", n);
         }
     }
 }

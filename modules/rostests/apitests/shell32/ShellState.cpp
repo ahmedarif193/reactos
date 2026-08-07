@@ -318,6 +318,6 @@ START_TEST(ShellState)
     ok(*(UNALIGNED DWORD *)(pb + 20) == 0xDEADBEEF || dump_pss(pss), "Unexpected pss ^\n");
 
     DO_IT(memset(pss, 0, sizeof(*pss)));
-    DO_IT(pss->fSepProcess = TRUE);
+    DO_IT(pss->fSepProcess = -1);
     ok(pb[28] == 0x01 || dump_pss(pss), "Unexpected pss ^\n");
 }

@@ -178,7 +178,7 @@ START_TEST(UEFIFirmware)
         {
             ok(dwLength == sizeof(EfiVariableValue) && dwValue == EfiVariableValue,
                "Retrieved variable different from what we set, "
-               "dwLength = %lu, dwValue = %lu, expected dwLength = %u, dwValue = %lu",
+               "dwLength = %lu, dwValue = %lu, expected dwLength = %Iu, dwValue = %lu",
                dwLength,
                dwValue,
                sizeof(EfiVariableValue),
@@ -209,7 +209,7 @@ START_TEST(UEFIFirmware)
         {
             ok(dwLength == sizeof(EfiVariableValue) && dwValue == EfiVariableValue,
                "Retrieved variable different from what we set, "
-               "dwLength = %lu, dwValue = %lu, expected dwLength = %u, dwValue = %lu",
+               "dwLength = %lu, dwValue = %lu, expected dwLength = %Iu, dwValue = %lu",
                dwLength,
                dwValue,
                sizeof(EfiVariableValue),

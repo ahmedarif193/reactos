@@ -57,7 +57,7 @@ static BOOL WriteSdbFile(const WCHAR* FileName, const unsigned char* Data, DWORD
         DWORD dwGuidSize;
         SetFilePointer(Handle, 30, NULL, FILE_BEGIN);
         Success = WriteFile(Handle, CustomID, sizeof(*CustomID), &dwGuidSize, NULL);
-        ok(dwGuidSize == sizeof(GUID), "WriteFile wrote %lu bytes instead of 0l%u\n", dwGuidSize, sizeof(GUID));
+        ok(dwGuidSize == sizeof(GUID), "WriteFile wrote %lu bytes instead of 0l%Iu\n", dwGuidSize, sizeof(GUID));
     }
     CloseHandle(Handle);
     return Success && (dwWritten == Size);

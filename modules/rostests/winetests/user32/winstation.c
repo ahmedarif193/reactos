@@ -20,14 +20,16 @@
 
 #ifdef __REACTOS__
 #define WIN32_NO_STATUS
-#include <ntndk.h>
 #endif
 #include "wine/test.h"
 #include "winbase.h"
 #include "wingdi.h"
 #include "winuser.h"
 #include "winnls.h"
-#ifndef __REACTOS__
+#ifdef __REACTOS__
+#undef WIN32_NO_STATUS
+#include <ntndk.h>
+#else
 #include "winternl.h"
 #endif
 

@@ -118,7 +118,7 @@ void expect_Sdb_imp(PCSTR path, DWORD type, BOOL result, DWORD lenResult, PCSTR 
 
     winetest_ok(pSdbGetPermLayerKeys(pathW, buffer, &dwBufSize, type) == result, "Expected pSdbGetPermLayerKeys to %s\n", (result ? "succeed" : "fail"));
     if (!result && lenResult == 0xffffffff)
-        winetest_ok(dwBufSize == 0 || dwBufSize == sizeof(buffer), "Expected dwBufSize to be 0 or %u, was %lu\n", sizeof(buffer), dwBufSize);
+        winetest_ok(dwBufSize == 0 || dwBufSize == sizeof(buffer), "Expected dwBufSize to be 0 or %Iu, was %lu\n", sizeof(buffer), dwBufSize);
     else
         winetest_ok(dwBufSize == lenResult ||
             /* W2k3 is off by 2 when concatenating user / machine */
@@ -126,7 +126,7 @@ void expect_Sdb_imp(PCSTR path, DWORD type, BOOL result, DWORD lenResult, PCSTR 
                 "Expected dwBufSize to be %lu, was %lu\n", lenResult, dwBufSize);
     if (result)
     {
-        winetest_ok(lstrlenW(buffer) * sizeof(WCHAR) + sizeof(WCHAR) == lenResult, "Expected lstrlenW(buffer)*2+2 to be %lu, was %u\n",
+        winetest_ok(lstrlenW(buffer) * sizeof(WCHAR) + sizeof(WCHAR) == lenResult, "Expected lstrlenW(buffer)*2+2 to be %lu, was %Iu\n",
             lenResult, lstrlenW(buffer) * sizeof(WCHAR) + sizeof(WCHAR));
     }
     WideCharToMultiByte(CP_ACP, 0, buffer, -1, resultBuffer, sizeof(resultBuffer), NULL, NULL);

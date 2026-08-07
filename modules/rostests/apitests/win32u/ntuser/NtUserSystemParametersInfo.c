@@ -938,7 +938,7 @@ Test_SPI_SETSTICKYKEYS(void)
         return;
     }
 
-    printf("sticky keys original dwFlags: 0x%08x\n", skOrig.dwFlags);
+    printf("sticky keys original dwFlags: 0x%08lx\n", skOrig.dwFlags);
 
     sk.cbSize = sizeof(STICKYKEYS)+1;
     ok_eq_bool(NtUserSystemParametersInfo(SPI_GETSTICKYKEYS, sizeof(sk), &sk, 0), 0);

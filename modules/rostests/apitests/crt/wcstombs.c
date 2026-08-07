@@ -20,18 +20,18 @@ START_TEST(wcstombs)
     char out[ARRAYSIZE(StrROS)];
 
     len = wcstombs(NULL, LStrROS, 0);
-    ok(len == 7, "Got len = %u, excepting 7\n", len);
+    ok_eq_size(len, 7);
     len = wcstombs(NULL, LStrROS, 0);
-    ok(len == 7, "Got len = %u, excepting 7\n", len);
+    ok_eq_size(len, 7);
     len = wcstombs(NULL, LStrROS, ARRAYSIZE(out));
-    ok(len == 7, "Got len = %u, excepting 7\n", len);
+    ok_eq_size(len, 7);
     len = wcstombs(NULL, LStrROS, ARRAYSIZE(out));
-    ok(len == 7, "Got len = %u, excepting 7\n", len);
+    ok_eq_size(len, 7);
     len = wcstombs(out, LStrROS, ARRAYSIZE(out));
-    ok(len == 7, "Got len = %u, excepting 7\n", len);
+    ok_eq_size(len, 7);
     ok_str(out, StrROS);
     memset(out, 0, sizeof(out));
     len = wcstombs(out, LStrROS, ARRAYSIZE(out));
-    ok(len == 7, "Got len = %u, excepting 7\n", len);
+    ok_eq_size(len, 7);
     ok_str(out, StrROS);
 }

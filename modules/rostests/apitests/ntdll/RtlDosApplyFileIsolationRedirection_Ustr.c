@@ -242,7 +242,7 @@ void TestBuffers()
     ok(DynamicString.Length >0 , "\n");
     ok(DynamicString.MaximumLength == DynamicString.Length + sizeof(WCHAR) , "\n");
     if (DynamicString.Buffer && DynamicString.Length)
-        ok(wcslen(DynamicString.Buffer) * sizeof(WCHAR) == DynamicString.Length, "got %d and %d\n", wcslen(DynamicString.Buffer)  * sizeof(WCHAR) , DynamicString.Length);
+        ok(wcslen(DynamicString.Buffer) * sizeof(WCHAR) == DynamicString.Length, "got %Iu and %d\n", wcslen(DynamicString.Buffer)  * sizeof(WCHAR) , DynamicString.Length);
     else
         ok(DynamicString.Buffer != NULL, "Expected non NULL buffer\n");
     ok(StringUsed == &DynamicString, "\n");
@@ -294,7 +294,7 @@ void TestBuffers()
     ok(StaticString.Length >0 , "\n");
     ok(StaticString.MaximumLength == sizeof(buffer) , "\n");
     if (StaticString.Buffer && StaticString.Length)
-        ok(wcslen(StaticString.Buffer) * sizeof(WCHAR) == StaticString.Length, "got %d and %d\n", wcslen(StaticString.Buffer)  * sizeof(WCHAR) , StaticString.Length);
+        ok(wcslen(StaticString.Buffer) * sizeof(WCHAR) == StaticString.Length, "got %Iu and %d\n", wcslen(StaticString.Buffer)  * sizeof(WCHAR) , StaticString.Length);
     else
         ok(StaticString.Length != 0, "Expected non 0 lenght\n");
     ok(StringUsed == &StaticString, "\n");
@@ -327,7 +327,7 @@ void TestBuffers()
     ok(StaticString.Length >0 , "\n");
     ok(StaticString.MaximumLength == sizeof(buffer) , "\n");
     if (StaticString.Buffer && StaticString.Length)
-        ok(wcslen(StaticString.Buffer) * sizeof(WCHAR) == StaticString.Length, "got %d and %d\n", wcslen(StaticString.Buffer)  * sizeof(WCHAR) , StaticString.Length);
+        ok(wcslen(StaticString.Buffer) * sizeof(WCHAR) == StaticString.Length, "got %Iu and %d\n", wcslen(StaticString.Buffer)  * sizeof(WCHAR) , StaticString.Length);
     else
         ok(StaticString.Length != 0, "Expected non 0 lenght\n");
     ok(DynamicString.Buffer == NULL, "\n");
@@ -357,7 +357,7 @@ void TestBuffers()
     ok(DynamicString.Length >0 , "\n");
     ok(DynamicString.MaximumLength == DynamicString.Length + sizeof(WCHAR) , "\n");
     if (DynamicString.Buffer && DynamicString.Length)
-        ok(wcslen(DynamicString.Buffer) * sizeof(WCHAR) == DynamicString.Length, "got %d and %d\n", wcslen(DynamicString.Buffer)  * sizeof(WCHAR) , DynamicString.Length);
+        ok(wcslen(DynamicString.Buffer) * sizeof(WCHAR) == DynamicString.Length, "got %Iu and %d\n", wcslen(DynamicString.Buffer)  * sizeof(WCHAR) , DynamicString.Length);
     else
         ok(DynamicString.Length != 0, "Expected non 0 lenght\n");
 
