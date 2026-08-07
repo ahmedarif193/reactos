@@ -29,7 +29,7 @@ co_IntCallHookProc(INT HookId,
                 WPARAM wParam,
                 LPARAM lParam,
                 HOOKPROC Proc,
-                INT Mod,
+                INT_PTR Mod,
                 ULONG_PTR offPfn,
                 BOOLEAN Ansi,
                 PUNICODE_STRING ModuleName);
@@ -43,7 +43,7 @@ co_IntCallEventProc(HWINEVENTHOOK hook,
                    DWORD dwEventThread,
                    DWORD dwmsEventTime,
                      WINEVENTPROC Proc,
-                               INT Mod,
+                           INT_PTR Mod,
                      ULONG_PTR offPfn);
 
 VOID FASTCALL
