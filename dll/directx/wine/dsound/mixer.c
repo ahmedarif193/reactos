@@ -23,6 +23,7 @@
  */
 
 #include <assert.h>
+#include <float.h>
 #include <stdarg.h>
 #include <math.h>	/* Insomnia - pow() function */
 #ifdef __SSE__

@@ -517,7 +517,9 @@ nextresp3:
 		/* FALLTHRU */
 
 	case LBER_DEFAULT:
+#ifdef LDAP_CONNECTIONLESS
 fail:
+#endif
 		err = sock_errno();
 #ifdef LDAP_DEBUG
 		Debug1( LDAP_DEBUG_CONNS,

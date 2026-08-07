@@ -21,6 +21,7 @@
  */
 
 #include <stdarg.h>
+#include <stdlib.h>
 #include <winternl.h>
 #include <windef.h>
 #include <winbase.h>

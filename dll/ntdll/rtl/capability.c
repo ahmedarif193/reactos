@@ -66,15 +66,15 @@ RtlDeriveCapabilitySidsFromName(
     Sid->Revision = SID_REVISION;
     Sid->IdentifierAuthority = AppAuthority;
     Sid->SubAuthorityCount = 2 + RTL_NUMBER_OF(Hash);
-    Sid->SubAuthority[0] = SECURITY_BATCH_RID;
-    Sid->SubAuthority[1] = SECURITY_CAPABILITY_APP_RID;
+    *RtlSubAuthoritySid(Sid, 0) = SECURITY_BATCH_RID;
+    *RtlSubAuthoritySid(Sid, 1) = SECURITY_CAPABILITY_APP_RID;
     RtlCopyMemory(Sid->SubAuthority + 2, Hash, sizeof(Hash));
 
     Sid = CapabilityGroupSid;
     Sid->Revision = SID_REVISION;
     Sid->IdentifierAuthority = NtAuthority;
     Sid->SubAuthorityCount = 1 + RTL_NUMBER_OF(Hash);
-    Sid->SubAuthority[0] = SECURITY_BUILTIN_DOMAIN_RID;
+    *RtlSubAuthoritySid(Sid, 0) = SECURITY_BUILTIN_DOMAIN_RID;
     RtlCopyMemory(Sid->SubAuthority + 1, Hash, sizeof(Hash));
 
     return STATUS_SUCCESS;

@@ -51,6 +51,10 @@ if(MSVC)
     endif()
 endif()
 
+if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
+    set_source_files_properties(math.c PROPERTIES COMPILE_OPTIONS "-Wno-incompatible-library-redeclaration")
+endif()
+
 ###############################################################################
 # A static library shared with ucrtbase
 ###############################################################################

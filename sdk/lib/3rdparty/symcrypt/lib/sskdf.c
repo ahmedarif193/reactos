@@ -238,7 +238,7 @@ SymCryptSskdfHash(
     BYTE ctrBuf[4];
 
     if ( cbHashOutputSize > 64 ||
-         cbHashOutputSize > 0 && cbHashOutputSize != hashAlgorithm->resultSize )
+         (cbHashOutputSize > 0 && cbHashOutputSize != hashAlgorithm->resultSize) )
     {
         return SYMCRYPT_INVALID_ARGUMENT;
     }

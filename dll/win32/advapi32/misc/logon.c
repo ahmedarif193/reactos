@@ -1032,9 +1032,9 @@ CreateProcessAsUserW(
 BOOL
 WINAPI
 LogonUserA(
-    _In_ LPSTR lpszUsername,
-    _In_opt_ LPSTR lpszDomain,
-    _In_opt_ LPSTR lpszPassword,
+    _In_ LPCSTR lpszUsername,
+    _In_opt_ LPCSTR lpszDomain,
+    _In_opt_ LPCSTR lpszPassword,
     _In_ DWORD dwLogonType,
     _In_ DWORD dwLogonProvider,
     _Out_opt_ PHANDLE phToken)
@@ -1058,9 +1058,9 @@ LogonUserA(
 BOOL
 WINAPI
 LogonUserExA(
-    _In_ LPSTR lpszUsername,
-    _In_opt_ LPSTR lpszDomain,
-    _In_opt_ LPSTR lpszPassword,
+    _In_ LPCSTR lpszUsername,
+    _In_opt_ LPCSTR lpszDomain,
+    _In_opt_ LPCSTR lpszPassword,
     _In_ DWORD dwLogonType,
     _In_ DWORD dwLogonProvider,
     _Out_opt_ PHANDLE phToken,
@@ -1129,9 +1129,9 @@ UsernameDone:
 BOOL
 WINAPI
 LogonUserW(
-    _In_ LPWSTR lpszUsername,
-    _In_opt_ LPWSTR lpszDomain,
-    _In_opt_ LPWSTR lpszPassword,
+    _In_ LPCWSTR lpszUsername,
+    _In_opt_ LPCWSTR lpszDomain,
+    _In_opt_ LPCWSTR lpszPassword,
     _In_ DWORD dwLogonType,
     _In_ DWORD dwLogonProvider,
     _Out_opt_ PHANDLE phToken)
@@ -1155,9 +1155,9 @@ LogonUserW(
 BOOL
 WINAPI
 LogonUserExW(
-    _In_ LPWSTR lpszUsername,
-    _In_opt_ LPWSTR lpszDomain,
-    _In_opt_ LPWSTR lpszPassword,
+    _In_ LPCWSTR lpszUsername,
+    _In_opt_ LPCWSTR lpszDomain,
+    _In_opt_ LPCWSTR lpszPassword,
     _In_ DWORD dwLogonType,
     _In_ DWORD dwLogonProvider,
     _Out_opt_ PHANDLE phToken,

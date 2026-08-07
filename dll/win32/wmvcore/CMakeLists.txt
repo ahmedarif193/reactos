@@ -10,6 +10,7 @@ list(APPEND SOURCE
 
 add_library(wmvcore MODULE ${SOURCE} version.rc)
 set_module_type(wmvcore win32dll)
+target_compile_definitions(wmvcore PRIVATE CONST_VTABLE)
 target_link_libraries(wmvcore wine wine_dll_register)
 add_importlibs(wmvcore combase msvcrt kernel32 ntdll)
 add_cd_file(TARGET wmvcore DESTINATION reactos/system32 FOR all)
