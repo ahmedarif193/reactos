@@ -988,22 +988,6 @@ NtGdiFullscreenControl(
     return FALSE;
 }
 
-/*
- * @unimplemented
- */
-BOOL
-APIENTRY
-NtGdiGetCharWidthInfo(
-    IN HDC hdc,
-    OUT PCHWIDTHINFO pChWidthInfo)
-{
-    UNIMPLEMENTED;
-    return FALSE;
-}
-
-/*
- * @unimplemented
- */
 ULONG_PTR
 APIENTRY
 NtGdiGetColorSpaceforBitmap(

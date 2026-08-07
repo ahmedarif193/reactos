@@ -728,6 +728,95 @@ NtGdiGetFontData(
   return Result;
 }
 
+BOOL
+APIENTRY
+NtGdiGetCharWidthInfo(
+    _In_ HDC hdc,
+    _Out_ PCHWIDTHINFO pChWidthInfo)
+{
+    CHWIDTHINFO Info;
+    LOGFONTW LogFont;
+    PTEXTOBJ TextObj;
+    PFONTGDI FontGDI;
+    PDC Dc;
+    POINT Points[3];
+    NTSTATUS Status;
+    BOOL Result = FALSE;
+
+    if (!pChWidthInfo)
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    Dc = DC_LockDc(hdc);
+    if (!Dc)
+    {
+        EngSetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+
+    TextObj = RealizeFontInit(Dc->pdcattr->hlfntNew);
+    if (!TextObj)
+    {
+        EngSetLastError(ERROR_INVALID_HANDLE);
+        goto Cleanup;
+    }
+
+    LogFont = TextObj->logfont.elfEnumLogfontEx.elfLogFont;
+
+    /* GM_COMPATIBLE scales both requested font dimensions by the Y axis. */
+    if (Dc->pdcattr->iGraphicsMode == GM_COMPATIBLE)
+    {
+        Points[0].x = Points[0].y = 0;
+        Points[1].x = 0;
+        Points[1].y = abs(LogFont.lfHeight);
+        Points[2].x = 0;
+        Points[2].y = abs(LogFont.lfWidth);
+        if (IntLPtoDP(Dc, Points, ARRAYSIZE(Points)))
+        {
+            if (LogFont.lfHeight)
+                LogFont.lfHeight = (LogFont.lfHeight < 0 ? -1 : 1) * abs(Points[1].y - Points[0].y);
+            if (LogFont.lfWidth)
+                LogFont.lfWidth = abs(Points[2].y - Points[0].y);
+        }
+    }
+
+    FontGDI = ObjToGDI(TextObj->Font, FONT);
+    Result = ftGdiGetCharWidthInfo(FontGDI, &LogFont, &Info);
+    TEXTOBJ_UnlockText(TextObj);
+    if (!Result)
+        goto Cleanup;
+
+    Points[0].x = Points[0].y = 0;
+    Points[1].x = Info.lMinA;
+    Points[1].y = 0;
+    Points[2].x = Info.lMinC;
+    Points[2].y = 0;
+    if (!IntDPtoLP(Dc, Points, ARRAYSIZE(Points)))
+    {
+        Result = FALSE;
+        goto Cleanup;
+    }
+
+    Info.lMinA = (Info.lMinA < 0 ? -1 : 1) * abs(Points[1].x - Points[0].x);
+    Info.lMinC = (Info.lMinC < 0 ? -1 : 1) * abs(Points[2].x - Points[0].x);
+
+Cleanup:
+    DC_UnlockDc(Dc);
+    if (!Result)
+        return FALSE;
+
+    Status = MmCopyToCaller(pChWidthInfo, &Info, sizeof(Info));
+    if (!NT_SUCCESS(Status))
+    {
+        SetLastNtError(Status);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 /* @implemented */
 DWORD
 APIENTRY
