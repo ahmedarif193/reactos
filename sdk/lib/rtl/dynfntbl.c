@@ -51,6 +51,7 @@ typedef struct _DYNAMIC_FUNCTION_TABLE
     PWCHAR OutOfProcessCallbackDll;
     FUNCTION_TABLE_TYPE Type;
     ULONG EntryCount;
+    ULONG MaximumEntryCount;
 #if (NTDDI_VERSION <= NTDDI_WIN10)
     // FIXME: RTL_BALANCED_NODE is defined in ntdef.h, it's impossible to get included here due to precompiled header
     //RTL_BALANCED_NODE TreeNode;
@@ -59,6 +60,27 @@ typedef struct _DYNAMIC_FUNCTION_TABLE
     //RTL_BALANCED_NODE TreeNodeMax;
 #endif
 } DYNAMIC_FUNCTION_TABLE, *PDYNAMIC_FUNCTION_TABLE;
+
+#ifdef _M_ARM64
+ULONG
+RtlpArm64FunctionLength(
+    _In_ ULONG_PTR ImageBase,
+    _In_ PRUNTIME_FUNCTION FunctionEntry);
+#endif
+
+static
+ULONG64
+RtlpGetFunctionEndAddress(
+    _In_ ULONG64 BaseAddress,
+    _In_ PRUNTIME_FUNCTION FunctionEntry)
+{
+#ifdef _M_ARM64
+    return FunctionEntry->BeginAddress + RtlpArm64FunctionLength(BaseAddress, FunctionEntry);
+#else
+    UNREFERENCED_PARAMETER(BaseAddress);
+    return FunctionEntry->EndAddress;
+#endif
+}
 
 RTL_SRWLOCK RtlpDynamicFunctionTableLock = { 0 };
 LIST_ENTRY RtlpDynamicFunctionTableList = { &RtlpDynamicFunctionTableList, &RtlpDynamicFunctionTableList };
@@ -92,7 +114,7 @@ ReleaseDynamicFunctionTableLockShared()
 }
 
 /*
- * https://docs.microsoft.com/en-us/windows/win32/devnotes/rtlgetfunctiontablelisthead 
+ * https://docs.microsoft.com/en-us/windows/win32/devnotes/rtlgetfunctiontablelisthead
  */
 PLIST_ENTRY
 NTAPI
@@ -138,6 +160,7 @@ RtlAddFunctionTable(
     /* Initialize fields */
     dynamicTable->FunctionTable = FunctionTable;
     dynamicTable->EntryCount = EntryCount;
+    dynamicTable->MaximumEntryCount = EntryCount;
     dynamicTable->BaseAddress = BaseAddress;
     dynamicTable->Callback = NULL;
     dynamicTable->Context = NULL;
@@ -150,8 +173,7 @@ RtlAddFunctionTable(
     {
         dynamicTable->MinimumAddress = min(dynamicTable->MinimumAddress,
                                            FunctionTable[i].BeginAddress);
-        dynamicTable->MaximumAddress = max(dynamicTable->MaximumAddress,
-                                           FunctionTable[i].EndAddress);
+        dynamicTable->MaximumAddress = max(dynamicTable->MaximumAddress, RtlpGetFunctionEndAddress(BaseAddress, &FunctionTable[i]));
     }
 
     /* Adjust the margins to be absolute addresses */
@@ -207,6 +229,7 @@ RtlInstallFunctionTableCallback(
     /* Initialize fields */
     dynamicTable->FunctionTable = (PRUNTIME_FUNCTION)TableIdentifier;
     dynamicTable->EntryCount = 0;
+    dynamicTable->MaximumEntryCount = 0;
     dynamicTable->BaseAddress = BaseAddress;
     dynamicTable->Callback = Callback;
     dynamicTable->Context = Context;
@@ -231,6 +254,121 @@ RtlInstallFunctionTableCallback(
     RtlpInsertDynamicFunctionTable(dynamicTable);
 
     return TRUE;
+}
+
+DWORD
+NTAPI
+RtlAddGrowableFunctionTable(
+    _Out_ PVOID *DynamicTable,
+    _In_ PRUNTIME_FUNCTION FunctionTable,
+    _In_ DWORD EntryCount,
+    _In_ DWORD MaximumEntryCount,
+    _In_ ULONG_PTR RangeBase,
+    _In_ ULONG_PTR RangeEnd)
+{
+    PDYNAMIC_FUNCTION_TABLE dynamicTable;
+
+    *DynamicTable = NULL;
+
+    if (EntryCount > MaximumEntryCount)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    dynamicTable = RtlpAllocateMemory(sizeof(*dynamicTable), TAG_RTLDYNFNTBL);
+    if (dynamicTable == NULL)
+    {
+        DPRINT1("Failed to allocate growable function table\n");
+        return STATUS_NO_MEMORY;
+    }
+
+    dynamicTable->FunctionTable = FunctionTable;
+    dynamicTable->EntryCount = EntryCount;
+    dynamicTable->MaximumEntryCount = MaximumEntryCount;
+    dynamicTable->BaseAddress = RangeBase;
+    dynamicTable->Callback = NULL;
+    dynamicTable->Context = NULL;
+    dynamicTable->OutOfProcessCallbackDll = NULL;
+    dynamicTable->Type = RF_SORTED;
+    dynamicTable->MinimumAddress = RangeBase;
+    dynamicTable->MaximumAddress = RangeEnd;
+
+    RtlpInsertDynamicFunctionTable(dynamicTable);
+
+    *DynamicTable = dynamicTable;
+    return STATUS_SUCCESS;
+}
+
+VOID
+NTAPI
+RtlGrowFunctionTable(
+    _Inout_ PVOID DynamicTable,
+    _In_ DWORD NewEntryCount)
+{
+    PDYNAMIC_FUNCTION_TABLE dynamicTable = DynamicTable;
+    PDYNAMIC_FUNCTION_TABLE currentTable;
+    PLIST_ENTRY listLink;
+
+    if (dynamicTable == NULL)
+    {
+        return;
+    }
+
+    AcquireDynamicFunctionTableLockExclusive();
+
+    for (listLink = RtlpDynamicFunctionTableList.Flink;
+         listLink != &RtlpDynamicFunctionTableList;
+         listLink = listLink->Flink)
+    {
+        currentTable = CONTAINING_RECORD(listLink, DYNAMIC_FUNCTION_TABLE, ListEntry);
+        if (currentTable == dynamicTable)
+        {
+            if ((NewEntryCount > currentTable->EntryCount) &&
+                (NewEntryCount <= currentTable->MaximumEntryCount))
+            {
+                currentTable->EntryCount = NewEntryCount;
+            }
+            break;
+        }
+    }
+
+    ReleaseDynamicFunctionTableLockExclusive();
+}
+
+VOID
+NTAPI
+RtlDeleteGrowableFunctionTable(
+    _In_ PVOID DynamicTable)
+{
+    PDYNAMIC_FUNCTION_TABLE dynamicTable = DynamicTable;
+    PLIST_ENTRY listLink;
+    BOOLEAN removed = FALSE;
+
+    if (dynamicTable == NULL)
+    {
+        return;
+    }
+
+    AcquireDynamicFunctionTableLockExclusive();
+
+    for (listLink = RtlpDynamicFunctionTableList.Flink;
+         listLink != &RtlpDynamicFunctionTableList;
+         listLink = listLink->Flink)
+    {
+        if (listLink == &dynamicTable->ListEntry)
+        {
+            RemoveEntryList(&dynamicTable->ListEntry);
+            removed = TRUE;
+            break;
+        }
+    }
+
+    ReleaseDynamicFunctionTableLockExclusive();
+
+    if (removed)
+    {
+        RtlpFreeMemory(dynamicTable, TAG_RTLDYNFNTBL);
+    }
 }
 
 BOOLEAN
@@ -314,7 +452,7 @@ RtlpLookupDynamicFunctionEntry(
             {
                 /* Check if this entry contains the address */
                 if ((ipOffset >= functionTable[i].BeginAddress) &&
-                    (ipOffset < functionTable[i].EndAddress))
+                    (ipOffset < RtlpGetFunctionEndAddress(dynamicTable->BaseAddress, &functionTable[i])))
                 {
                     foundEntry = &functionTable[i];
                     *ImageBase = dynamicTable->BaseAddress;
