@@ -27,6 +27,13 @@
 
 VOID NTAPI RtlRestoreContext(_In_ PCONTEXT ContextRecord, _In_opt_ PEXCEPTION_RECORD ExceptionRecord);
 
+PRUNTIME_FUNCTION
+NTAPI
+RtlpLookupDynamicFunctionEntry(
+    _In_ DWORD64 ControlPc,
+    _Out_ PDWORD64 ImageBase,
+    _In_opt_ PUNWIND_HISTORY_TABLE HistoryTable);
+
 static VOID RtlpArm64CaptureNonVolatileRegisters(_Out_ DISPATCHER_CONTEXT_NONVOLREG_ARM64 *NonVolatileRegisters, _In_ PCONTEXT Context)
 {
     ULONG Index;
@@ -82,7 +89,7 @@ typedef struct _ARM64_XDATA_EPILOG
     DWORD index : 10;
 } ARM64_XDATA_EPILOG;
 
-static ULONG
+ULONG
 RtlpArm64FunctionLength(
     _In_ ULONG_PTR ImageBase,
     _In_ PRUNTIME_FUNCTION FunctionEntry)
@@ -119,12 +126,9 @@ RtlLookupFunctionEntry(
     PLIST_ENTRY ListHead, Entry;
     PLDR_DATA_TABLE_ENTRY LdrEntry;
 
-    (VOID)HistoryTable;
-
     if (!NT_SUCCESS(LdrLockLoaderLock(0, NULL, &Cookie)))
     {
-        *ImageBase = 0;
-        return NULL;
+        goto LookupDynamic;
     }
 
     ListHead = &NtCurrentPeb()->Ldr->InLoadOrderModuleList;
@@ -143,21 +147,19 @@ RtlLookupFunctionEntry(
 
     if (DosHeader == NULL || DosHeader->e_magic != IMAGE_DOS_SIGNATURE)
     {
-        *ImageBase = 0;
-        return NULL;
+        goto LookupDynamic;
     }
 
     *ImageBase = (DWORD64)(ULONG_PTR)DosHeader;
     NtHeaders = (PIMAGE_NT_HEADERS)((ULONG_PTR)DosHeader + DosHeader->e_lfanew);
     if (NtHeaders->Signature != IMAGE_NT_SIGNATURE)
     {
-        *ImageBase = 0;
-        return NULL;
+        goto LookupDynamic;
     }
 
     ExceptionDir = &NtHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
     if (ExceptionDir->VirtualAddress == 0 || ExceptionDir->Size == 0)
-        return NULL;
+        goto LookupDynamic;
 
     FunctionTable = (PRUNTIME_FUNCTION)((ULONG_PTR)DosHeader + ExceptionDir->VirtualAddress);
     TableLength = ExceptionDir->Size / sizeof(RUNTIME_FUNCTION);
@@ -186,7 +188,9 @@ RtlLookupFunctionEntry(
         return FunctionEntry;
     }
 
-    return NULL;
+LookupDynamic:
+    *ImageBase = 0;
+    return RtlpLookupDynamicFunctionEntry(ControlPc, ImageBase, HistoryTable);
 }
 
 static const BYTE Arm64UnwindCodeLen[256] =
@@ -892,28 +896,6 @@ RtlUnwind(
 
 /* RtlRestoreContext is implemented in arm64/context_asm.S (it must load the
  * register file and branch, which cannot be expressed in C). */
-
-BOOLEAN
-NTAPI
-RtlAddFunctionTable(
-    _In_ PRUNTIME_FUNCTION FunctionTable,
-    _In_ ULONG EntryCount,
-    _In_ ULONG_PTR BaseAddress)
-{
-    (VOID)FunctionTable;
-    (VOID)EntryCount;
-    (VOID)BaseAddress;
-    return FALSE;
-}
-
-BOOLEAN
-NTAPI
-RtlDeleteFunctionTable(
-    _In_ PRUNTIME_FUNCTION FunctionTable)
-{
-    (VOID)FunctionTable;
-    return FALSE;
-}
 
 PRUNTIME_FUNCTION
 NTAPI

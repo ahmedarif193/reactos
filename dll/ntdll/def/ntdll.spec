@@ -662,6 +662,7 @@
 @ stdcall RtlAddAuditAccessObjectAce(ptr long long long ptr ptr ptr long long)
 @ stdcall -stub RtlAddCompoundAce(ptr long long long ptr ptr)
 @ stdcall -arch=x86_64,arm64 RtlAddFunctionTable(ptr long long)
+@ stdcall -arch=x86_64,arm64 RtlAddGrowableFunctionTable(ptr ptr long long long long)
 @ stdcall -stub -version=0x600+ RtlAddMandatoryAce(ptr long long long long ptr) ; not present in Win11
 @ stdcall RtlAddRefActivationContext(ptr)
 @ stdcall RtlAddRefMemoryStream(ptr)
@@ -799,6 +800,7 @@
 @ stdcall RtlDeleteElementGenericTable(ptr ptr)
 @ stdcall RtlDeleteElementGenericTableAvl(ptr ptr)
 @ cdecl -arch=x86_64,arm64 RtlDeleteFunctionTable(ptr)
+@ stdcall -arch=x86_64,arm64 RtlDeleteGrowableFunctionTable(ptr)
 @ stdcall RtlDeleteNoSplay(ptr ptr)
 @ stdcall RtlDeleteRegistryValue(long ptr ptr)
 @ stdcall RtlDeleteResource(ptr)
@@ -1029,6 +1031,7 @@
 @ stdcall RtlInsertElementGenericTableFull(ptr ptr long ptr ptr long)
 @ stdcall RtlInsertElementGenericTableFullAvl(ptr ptr long ptr ptr long)
 @ stdcall -arch=x86_64,arm64 RtlInstallFunctionTableCallback(double double long ptr ptr ptr)
+@ stdcall -arch=x86_64,arm64 RtlGrowFunctionTable(ptr long)
 @ stdcall RtlInt64ToUnicodeString(double long ptr)
 @ stdcall RtlIntegerToChar(long long long ptr)
 @ stdcall RtlIntegerToUnicodeString(long long ptr)
