@@ -17,6 +17,9 @@
  */
 
 #include <assert.h>
+#ifdef __REACTOS__
+#include <malloc.h>
+#endif
 
 #include "extrachunk.h"
 #include "winbase.h"
@@ -27,6 +30,31 @@
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(avifile);
+
+#ifdef __REACTOS__
+/* msvcrt.dll has no _recalloc; importing only that routine from ucrtbase.dll
+ * would allocate and free these buffers from different CRT heaps. */
+void *avifile_recalloc(void *mem, SIZE_T count, SIZE_T size)
+{
+  SIZE_T bytes = count * size;
+  SIZE_T old_size;
+  void *ret;
+
+  if (size && bytes / size != count)
+    return NULL;
+  if (!mem)
+    return calloc(count, size);
+
+  old_size = _msize(mem);
+  if (old_size == (SIZE_T)-1)
+    return NULL;
+
+  ret = realloc(mem, bytes);
+  if (ret && bytes > old_size)
+    memset((BYTE *)ret + old_size, 0, bytes - old_size);
+  return ret;
+}
+#endif
 
 /* reads a chunk out of the extrachunk-structure */
 HRESULT ReadExtraChunk(const EXTRACHUNKS *extra,FOURCC ckid,LPVOID lpData,LPLONG size)
