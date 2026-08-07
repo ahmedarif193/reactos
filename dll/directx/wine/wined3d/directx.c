@@ -76,22 +76,29 @@ const GLenum magLookup[] =
 
 void CDECL wined3d_output_release_ownership(const struct wined3d_output *output)
 {
+#if !defined(__REACTOS__) || defined(REACTOS_WINE_WDDM)
     D3DKMT_SETVIDPNSOURCEOWNER set_owner_desc = {0};
+#endif
 
     TRACE("output %p.\n", output);
 
+#if !defined(__REACTOS__) || defined(REACTOS_WINE_WDDM)
     set_owner_desc.hDevice = output->kmt_device;
     D3DKMTSetVidPnSourceOwner(&set_owner_desc);
+#endif
 }
 
 HRESULT CDECL wined3d_output_take_ownership(const struct wined3d_output *output, BOOL exclusive)
 {
+#if !defined(__REACTOS__) || defined(REACTOS_WINE_WDDM)
     D3DKMT_SETVIDPNSOURCEOWNER set_owner_desc;
     D3DKMT_VIDPNSOURCEOWNER_TYPE owner_type;
     NTSTATUS status;
+#endif
 
     TRACE("output %p, exclusive %#x.\n", output, exclusive);
 
+#if !defined(__REACTOS__) || defined(REACTOS_WINE_WDDM)
     owner_type = exclusive ? D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE : D3DKMT_VIDPNSOURCEOWNER_SHARED;
     set_owner_desc.pType = &owner_type;
     set_owner_desc.pVidPnSourceId = &output->vidpn_source_id;
@@ -113,27 +120,37 @@ HRESULT CDECL wined3d_output_take_ownership(const struct wined3d_output *output,
             FIXME("Unhandled error %#lx.\n", status);
             return E_FAIL;
     }
+#else
+    return WINED3D_OK;
+#endif
 }
 
 static void wined3d_output_cleanup(const struct wined3d_output *output)
 {
+#if !defined(__REACTOS__) || defined(REACTOS_WINE_WDDM)
     D3DKMT_DESTROYDEVICE destroy_device_desc;
+#endif
 
     TRACE("output %p.\n", output);
 
+#if !defined(__REACTOS__) || defined(REACTOS_WINE_WDDM)
     destroy_device_desc.hDevice = output->kmt_device;
     D3DKMTDestroyDevice(&destroy_device_desc);
+#endif
 }
 
 static HRESULT wined3d_output_init(struct wined3d_output *output, unsigned int ordinal,
         struct wined3d_adapter *adapter, const WCHAR *device_name)
 {
+#if !defined(__REACTOS__) || defined(REACTOS_WINE_WDDM)
     D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME open_adapter_desc;
     D3DKMT_CREATEDEVICE create_device_desc = {{0}};
     D3DKMT_CLOSEADAPTER close_adapter_desc;
+#endif
 
     TRACE("output %p, device_name %s.\n", output, wine_dbgstr_w(device_name));
 
+#if !defined(__REACTOS__) || defined(REACTOS_WINE_WDDM)
     lstrcpyW(open_adapter_desc.DeviceName, device_name);
     if (D3DKMTOpenAdapterFromGdiDisplayName(&open_adapter_desc))
         return E_INVALIDARG;
@@ -143,13 +160,16 @@ static HRESULT wined3d_output_init(struct wined3d_output *output, unsigned int o
     create_device_desc.hAdapter = adapter->kmt_adapter;
     if (D3DKMTCreateDevice(&create_device_desc))
         return E_FAIL;
+#endif
 
     output->ordinal = ordinal;
     lstrcpyW(output->device_name, device_name);
     output->adapter = adapter;
     output->screen_format = WINED3DFMT_UNKNOWN;
+#if !defined(__REACTOS__) || defined(REACTOS_WINE_WDDM)
     output->kmt_device = create_device_desc.hDevice;
     output->vidpn_source_id = open_adapter_desc.VidPnSourceId;
+#endif
 
     return WINED3D_OK;
 }
