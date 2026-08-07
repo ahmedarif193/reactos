@@ -1,7 +1,6 @@
 
 add_definitions(
     -D_WINE
-    -D__ROS_LONG64__
     -D_COMCTL32_
     -D__WINE_COMCTL32_VERSION=5)
 
