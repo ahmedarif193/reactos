@@ -17,17 +17,17 @@
 @ stdcall PropStgNameToFmtId(wstr ptr)
 @ stdcall ReadClassStg(ptr ptr)
 @ stdcall ReadClassStm(ptr ptr)
-@ stub StgCreateDocfile
-@ stub StgCreateDocfileOnILockBytes
+@ stdcall StgCreateDocfile(wstr long long ptr) ole32.StgCreateDocfile
+@ stdcall StgCreateDocfileOnILockBytes(ptr long long ptr) ole32.StgCreateDocfileOnILockBytes
 @ stdcall StgCreatePropSetStg(ptr long ptr)
-@ stub StgCreatePropStg
-@ stub StgCreateStorageEx
+@ stdcall StgCreatePropStg(ptr ptr ptr long long ptr) ole32.StgCreatePropStg
+@ stdcall StgCreateStorageEx(wstr long long long ptr ptr ptr ptr) ole32.StgCreateStorageEx
 @ stdcall StgIsStorageFile(wstr)
 @ stdcall StgIsStorageILockBytes(ptr)
-@ stub StgOpenPropStg
-@ stub StgOpenStorage
-@ stub StgOpenStorageEx
-@ stub StgOpenStorageOnILockBytes
-@ stub StgSetTimes
+@ stdcall StgOpenPropStg(ptr ptr long long ptr) ole32.StgOpenPropStg
+@ stdcall StgOpenStorage(wstr ptr long ptr long ptr) ole32.StgOpenStorage
+@ stdcall StgOpenStorageEx(wstr long long long ptr ptr ptr ptr) ole32.StgOpenStorageEx
+@ stdcall StgOpenStorageOnILockBytes(ptr ptr long ptr long ptr) ole32.StgOpenStorageOnILockBytes
+@ stdcall StgSetTimes(wstr ptr ptr ptr) ole32.StgSetTimes
 @ stdcall WriteClassStg(ptr ptr)
 @ stdcall WriteClassStm(ptr ptr)
