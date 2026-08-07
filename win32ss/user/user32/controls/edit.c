@@ -50,7 +50,6 @@
 #define ImmGetCompositionStringW    IMM_FN(ImmGetCompositionStringW)
 #define ImmGetCompositionWindow     IMM_FN(ImmGetCompositionWindow)
 #define ImmGetContext               IMM_FN(ImmGetContext)
-#define ImmIsIME                    IMM_FN(ImmIsIME)
 #define ImmLockIMC                  IMM_FN(ImmLockIMC)
 #define ImmNotifyIME                IMM_FN(ImmNotifyIME)
 #define ImmReleaseContext           IMM_FN(ImmReleaseContext)
@@ -1914,7 +1913,8 @@ static void EDIT_SetCaretPos(EDITSTATE *es, INT pos,
 
     SetCaretPos(pt.x, pt.y);
 
-    if (ImmIsIME(hKL))
+    /* Cicero/TSF layouts manage their UI through the text service. */
+    if (IS_IME_HKL(hKL))
         EDIT_ImmSetCompositionWindow(es, pt);
 #else
 	TRACE("%d - %dx%d\n", pos, (short)LOWORD(res), (short)HIWORD(res));
@@ -4036,7 +4036,7 @@ static void EDIT_WM_SetFont(EDITSTATE *es, HFONT font, BOOL redraw)
 		ShowCaret(es->hwndSelf);
 	}
 #ifdef __REACTOS__
-    if (ImmIsIME(GetKeyboardLayout(0)))
+    if (IS_IME_HKL(GetKeyboardLayout(0)))
     {
         LOGFONTW lf;
         HIMC hIMC = ImmGetContext(es->hwndSelf);

@@ -320,7 +320,7 @@ ImeDestroy(
     TRACE("(%u)\n", uReserved);
 
     TLS *pTLS = TLS::PeekTLS();
-    if (pTLS)
+    if (!pTLS)
         return FALSE;
 
     if (!pTLS->m_pBridge || !pTLS->m_pThreadMgr)
@@ -480,6 +480,171 @@ ImeToAsciiEx(
  * @implemented
  * @see https://katahiromz.web.fc2.com/colony3rd/imehackerz/en/NotifyIME.html
  */
+static BOOL
+SetImmCompositionString(
+    _In_ HIMC hIMC,
+    _In_opt_ LPCVOID lpComp,
+    _In_ DWORD dwCompLen,
+    _In_opt_ LPCVOID lpRead,
+    _In_ DWORD dwReadLen)
+{
+    DWORD cchComp, cchRead, dwOffset;
+    SIZE_T cbNeeded;
+    HIMCC hCompStr;
+
+    if (!lpComp)
+        dwCompLen = 0;
+    if (!lpRead)
+        dwReadLen = 0;
+    if ((dwCompLen % sizeof(WCHAR)) || (dwReadLen % sizeof(WCHAR)))
+        return FALSE;
+
+    cchComp = dwCompLen / sizeof(WCHAR);
+    cchRead = dwReadLen / sizeof(WCHAR);
+    cbNeeded = sizeof(COMPOSITIONSTRING);
+    if (cchComp)
+        cbNeeded += (2 * sizeof(DWORD)) + dwCompLen + cchComp;
+    if (cchRead)
+        cbNeeded += (2 * sizeof(DWORD)) + dwReadLen + cchRead;
+    if (cbNeeded > MAXDWORD)
+        return FALSE;
+
+    CicIMCLock imcLock(hIMC);
+    if (FAILED(imcLock.m_hr))
+        return FALSE;
+
+    hCompStr = ImmReSizeIMCC(imcLock.get().hCompStr, (DWORD)cbNeeded);
+    if (!hCompStr)
+        return FALSE;
+    imcLock.get().hCompStr = hCompStr;
+
+    CicIMCCLock<COMPOSITIONSTRING> compLock(hCompStr);
+    if (FAILED(compLock.m_hr))
+        return FALSE;
+
+    COMPOSITIONSTRING *pCS = &compLock.get();
+    ZeroMemory(pCS, cbNeeded);
+    pCS->dwSize = (DWORD)cbNeeded;
+    dwOffset = sizeof(*pCS);
+
+    if (cchComp)
+    {
+        DWORD *pClause;
+
+        pCS->dwCompClauseLen = 2 * sizeof(DWORD);
+        pCS->dwCompClauseOffset = dwOffset;
+        pClause = (DWORD *)((BYTE *)pCS + dwOffset);
+        pClause[0] = 0;
+        pClause[1] = cchComp;
+        dwOffset += pCS->dwCompClauseLen;
+
+        pCS->dwCompStrLen = cchComp;
+        pCS->dwCompStrOffset = dwOffset;
+        CopyMemory((BYTE *)pCS + dwOffset, lpComp, dwCompLen);
+        dwOffset += dwCompLen;
+
+        pCS->dwCompAttrLen = cchComp;
+        pCS->dwCompAttrOffset = dwOffset;
+        FillMemory((BYTE *)pCS + dwOffset, cchComp, ATTR_INPUT);
+        dwOffset += cchComp;
+        pCS->dwCursorPos = cchComp;
+    }
+
+    if (cchRead)
+    {
+        DWORD *pClause;
+
+        pCS->dwCompReadClauseLen = 2 * sizeof(DWORD);
+        pCS->dwCompReadClauseOffset = dwOffset;
+        pClause = (DWORD *)((BYTE *)pCS + dwOffset);
+        pClause[0] = 0;
+        pClause[1] = cchRead;
+        dwOffset += pCS->dwCompReadClauseLen;
+
+        pCS->dwCompReadStrLen = cchRead;
+        pCS->dwCompReadStrOffset = dwOffset;
+        CopyMemory((BYTE *)pCS + dwOffset, lpRead, dwReadLen);
+        dwOffset += dwReadLen;
+
+        pCS->dwCompReadAttrLen = cchRead;
+        pCS->dwCompReadAttrOffset = dwOffset;
+        FillMemory((BYTE *)pCS + dwOffset, cchRead, ATTR_INPUT);
+    }
+
+    return TRUE;
+}
+
+static BOOL
+FinishImmCompositionString(
+    _In_ HIMC hIMC,
+    _In_ BOOL bCancel)
+{
+    HWND hWnd;
+    WCHAR wchResult = 0;
+    LPARAM lParam = 0;
+
+    CicIMCLock imcLock(hIMC);
+    if (FAILED(imcLock.m_hr))
+        return FALSE;
+
+    CicIMCCLock<COMPOSITIONSTRING> compLock(imcLock.get().hCompStr);
+    if (FAILED(compLock.m_hr))
+        return FALSE;
+
+    COMPOSITIONSTRING *pCS = &compLock.get();
+    hWnd = imcLock.get().hWnd;
+
+    if (!bCancel && pCS->dwCompStrLen)
+    {
+        wchResult = *(WCHAR *)((BYTE *)pCS + pCS->dwCompStrOffset);
+        pCS->dwResultStrLen = pCS->dwCompStrLen;
+        pCS->dwResultStrOffset = pCS->dwCompStrOffset;
+        pCS->dwResultClauseLen = pCS->dwCompClauseLen;
+        pCS->dwResultClauseOffset = pCS->dwCompClauseOffset;
+        lParam |= GCS_RESULTSTR | GCS_RESULTCLAUSE;
+    }
+
+    if (!bCancel && pCS->dwCompReadStrLen)
+    {
+        pCS->dwResultReadStrLen = pCS->dwCompReadStrLen;
+        pCS->dwResultReadStrOffset = pCS->dwCompReadStrOffset;
+        pCS->dwResultReadClauseLen = pCS->dwCompReadClauseLen;
+        pCS->dwResultReadClauseOffset = pCS->dwCompReadClauseOffset;
+        lParam |= GCS_RESULTREADSTR | GCS_RESULTREADCLAUSE;
+    }
+
+    pCS->dwCompReadAttrLen = 0;
+    pCS->dwCompReadAttrOffset = 0;
+    pCS->dwCompReadClauseLen = 0;
+    pCS->dwCompReadClauseOffset = 0;
+    pCS->dwCompReadStrLen = 0;
+    pCS->dwCompReadStrOffset = 0;
+    pCS->dwCompAttrLen = 0;
+    pCS->dwCompAttrOffset = 0;
+    pCS->dwCompClauseLen = 0;
+    pCS->dwCompClauseOffset = 0;
+    pCS->dwCompStrLen = 0;
+    pCS->dwCompStrOffset = 0;
+    pCS->dwCursorPos = 0;
+    pCS->dwDeltaStart = 0;
+
+    compLock.unlock();
+    imcLock.unlock();
+
+    if (hWnd && lParam)
+    {
+        SendMessageW(hWnd, WM_IME_STARTCOMPOSITION, 0, 0);
+        SendMessageW(hWnd, WM_IME_COMPOSITION, wchResult, lParam);
+        SendMessageW(hWnd, WM_IME_ENDCOMPOSITION, 0, 0);
+    }
+    else if (hWnd && bCancel)
+    {
+        SendMessageW(hWnd, WM_IME_ENDCOMPOSITION, 0, 0);
+    }
+
+    return TRUE;
+}
+
 EXTERN_C BOOL WINAPI
 NotifyIME(
     _In_ HIMC hIMC,
@@ -490,16 +655,20 @@ NotifyIME(
     TRACE("(%p, 0x%lX, 0x%lX, %p)\n", hIMC, dwAction, dwIndex, dwValue);
 
     TLS *pTLS = TLS::GetTLS();
-    if (!pTLS)
-        return FALSE;
+    if (pTLS && pTLS->m_pBridge && pTLS->m_pThreadMgr)
+    {
+        HRESULT hr = pTLS->m_pBridge->Notify(pTLS, pTLS->m_pThreadMgr, hIMC, dwAction, dwIndex, dwValue);
+        if (hr == S_OK)
+            return TRUE;
+    }
 
-    auto pBridge = pTLS->m_pBridge;
-    auto pThreadMgr = pTLS->m_pThreadMgr;
-    if (!pBridge || !pThreadMgr)
+    if (dwAction != NI_COMPOSITIONSTR)
         return FALSE;
-
-    HRESULT hr = pBridge->Notify(pTLS, pThreadMgr, hIMC, dwAction, dwIndex, dwValue);
-    return (hr == S_OK);
+    if (dwIndex == CPS_COMPLETE)
+        return FinishImmCompositionString(hIMC, FALSE);
+    if (dwIndex == CPS_CANCEL)
+        return FinishImmCompositionString(hIMC, TRUE);
+    return FALSE;
 }
 
 /***********************************************************************
@@ -521,16 +690,12 @@ ImeSetCompositionString(
           lpRead, dwReadLen);
 
     TLS *pTLS = TLS::GetTLS();
-    if (!pTLS)
-        return FALSE;
+    if (pTLS && pTLS->m_pBridge && pTLS->m_pThreadMgr && pTLS->m_pBridge->SetCompositionString(pTLS, pTLS->m_pThreadMgr, hIMC, dwIndex, lpComp, dwCompLen, lpRead, dwReadLen))
+        return TRUE;
 
-    auto pBridge = pTLS->m_pBridge;
-    auto pThreadMgr = pTLS->m_pThreadMgr;
-    if (!pBridge || !pThreadMgr)
+    if (dwIndex != SCS_SETSTR)
         return FALSE;
-
-    return pBridge->SetCompositionString(pTLS, pThreadMgr, hIMC, dwIndex,
-                                         lpComp, dwCompLen, lpRead, dwReadLen);
+    return SetImmCompositionString(hIMC, lpComp, dwCompLen, lpRead, dwReadLen);
 }
 
 /***********************************************************************

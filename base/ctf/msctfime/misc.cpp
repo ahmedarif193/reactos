@@ -61,8 +61,11 @@ BOOLEAN DllShutdownInProgress(VOID)
 BOOL IsInteractiveUserLogon(VOID)
 {
     BOOL bOK, IsMember = FALSE;
+    DWORD dwLength;
+    HWINSTA hWinSta;
     PSID pSid;
     SID_IDENTIFIER_AUTHORITY IdentAuth = { SECURITY_NT_AUTHORITY };
+    USEROBJECTFLAGS UserObjectFlags;
 
     if (!AllocateAndInitializeSid(&IdentAuth, 1, SECURITY_INTERACTIVE_RID,
                                   0, 0, 0, 0, 0, 0, 0, &pSid))
@@ -76,7 +79,11 @@ BOOL IsInteractiveUserLogon(VOID)
     if (pSid)
         FreeSid(pSid);
 
-    return bOK && IsMember;
+    if (bOK && IsMember)
+        return TRUE;
+
+    hWinSta = GetProcessWindowStation();
+    return hWinSta && GetUserObjectInformationW(hWinSta, UOI_FLAGS, &UserObjectFlags, sizeof(UserObjectFlags), &dwLength) && (UserObjectFlags.dwFlags & WSF_VISIBLE);
 }
 
 /// Gets the charset from a language ID.
