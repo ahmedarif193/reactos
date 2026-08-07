@@ -571,8 +571,8 @@ static LPSTR convert_file_list(LPCSTR FileList, DWORD *dwNumFiles)
 
 static void free_file_node(struct FILELIST *pNode)
 {
-    free(pNode->FileName);
-    free(pNode);
+    HeapFree(GetProcessHeap(), 0, pNode->FileName);
+    HeapFree(GetProcessHeap(), 0, pNode);
 }
 
 /* determines whether szFile is in the NULL-separated szFileList */
