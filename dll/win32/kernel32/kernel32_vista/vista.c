@@ -633,8 +633,75 @@ GetProcessPreferredUILanguages(
 #endif
 
 /*
-* @unimplemented
-*/
+ * The preferred-UI-language APIs all return the same shape: a double-null
+ * terminated list plus its element count, queried first with a NULL buffer to
+ * learn the required size. Callers treat a failure here as fatal (Chromium
+ * aborts outright), so report the one language this system actually has rather
+ * than failing the call.
+ */
+static
+BOOL
+K32GetPreferredUILanguages(
+    _In_ DWORD dwFlags,
+    _In_ DWORD AllowedFlags,
+    _In_ LCID Locale,
+    _Out_ PULONG pulNumLanguages,
+    _Out_writes_opt_(*pcchLanguagesBuffer) PZZWSTR pwszLanguagesBuffer,
+    _Inout_ PULONG pcchLanguagesBuffer)
+{
+    WCHAR Language[LOCALE_NAME_MAX_LENGTH];
+    LCTYPE LocaleType;
+    ULONG Length;
+
+    if (!pulNumLanguages || !pcchLanguagesBuffer)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if ((dwFlags & ~AllowedFlags) || ((dwFlags & MUI_LANGUAGE_ID) && (dwFlags & MUI_LANGUAGE_NAME)))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    LocaleType = (dwFlags & MUI_LANGUAGE_ID) ? LOCALE_ILANGUAGE : LOCALE_SNAME;
+
+    if (!GetLocaleInfoW(Locale, LocaleType, Language, RTL_NUMBER_OF(Language)))
+        return FALSE;
+
+    Length = (ULONG)wcslen(Language) + 2;
+
+    *pulNumLanguages = 1;
+
+    if (!pwszLanguagesBuffer)
+    {
+        if (*pcchLanguagesBuffer != 0)
+        {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+
+        *pcchLanguagesBuffer = Length;
+        return TRUE;
+    }
+
+    if (*pcchLanguagesBuffer < Length)
+    {
+        *pcchLanguagesBuffer = Length;
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+
+    RtlCopyMemory(pwszLanguagesBuffer, Language, (Length - 1) * sizeof(WCHAR));
+    pwszLanguagesBuffer[Length - 1] = UNICODE_NULL;
+    *pcchLanguagesBuffer = Length;
+    return TRUE;
+}
+
+/*
+ * @implemented
+ */
 BOOL
 WINAPI
 GetSystemPreferredUILanguages(
@@ -643,13 +710,11 @@ GetSystemPreferredUILanguages(
     PZZWSTR pwszLanguagesBuffer,
     PULONG pcchLanguagesBuffer)
 {
-    DPRINT1("%x %p %p %p\n", dwFlags, pulNumLanguages, pwszLanguagesBuffer, pcchLanguagesBuffer);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
+    return K32GetPreferredUILanguages(dwFlags, MUI_LANGUAGE_ID | MUI_LANGUAGE_NAME | MUI_MACHINE_LANGUAGE_SETTINGS, LOCALE_SYSTEM_DEFAULT, pulNumLanguages, pwszLanguagesBuffer, pcchLanguagesBuffer);
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 BOOL
 WINAPI
@@ -659,21 +724,17 @@ GetThreadPreferredUILanguages(
     PZZWSTR pwszLanguagesBuffer,
     PULONG pcchLanguagesBuffer)
 {
-    DPRINT1("%x %p %p %p\n", dwFlags, pulNumLanguages, pwszLanguagesBuffer, pcchLanguagesBuffer);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
+    return K32GetPreferredUILanguages(dwFlags, MUI_LANGUAGE_ID | MUI_LANGUAGE_NAME | MUI_UI_FALLBACK, LOCALE_USER_DEFAULT, pulNumLanguages, pwszLanguagesBuffer, pcchLanguagesBuffer);
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 LANGID
 WINAPI
 GetThreadUILanguage(VOID)
 {
-    UNIMPLEMENTED;
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return 0;
+    return GetUserDefaultUILanguage();
 }
 
 /*
