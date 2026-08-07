@@ -19,6 +19,7 @@ DBG_DEFAULT_CHANNEL(WARNING);
 #define HTTP_BODY_CHUNK_SIZE    (4 * 1024 * 1024)
 #define HTTP_LOG_INTERVAL_SECONDS 5
 #define HTTP_OPERATION_TIMEOUT  (30ULL * 10000000ULL)
+#define HTTP_BOOT_MAX_FAILURES  3
 #define HTTP_SECONDS_PER_DAY    (24 * 60 * 60)
 typedef struct _UEFI_HTTP_SESSION
 {
@@ -748,6 +749,7 @@ UefiHttpBootDownload(
     CHAR8 Host[HTTP_HOST_MAX_CHARS];
     UINTN IgnoredBodyLength;
     UINTN ContentLength;
+    UINTN FailedAttempts = 0;
     PVOID RamDisk;
     BOOLEAN LeaseAcquired = FALSE;
     BOOLEAN ForcedRebind = FALSE;
@@ -781,6 +783,11 @@ UefiHttpBootDownload(
              */
             if (!UefiDhcpAcquire(&Context))
             {
+                if (++FailedAttempts >= HTTP_BOOT_MAX_FAILURES)
+                {
+                    TRACE("UEFI HttpBoot: no DHCP lease after %lu attempts, giving up\n", (unsigned long)FailedAttempts);
+                    return FALSE;
+                }
                 GlobalSystemTable->BootServices->Stall(
                     UEFI_NETWORK_RETRY_DELAY_US);
                 continue;
@@ -790,6 +797,11 @@ UefiHttpBootDownload(
 
         if (!UefiHttpOpen(&Context, &Session))
         {
+            if (++FailedAttempts >= HTTP_BOOT_MAX_FAILURES)
+            {
+                TRACE("UEFI HttpBoot: cannot open an HTTP session after %lu attempts, giving up\n", (unsigned long)FailedAttempts);
+                return FALSE;
+            }
             GlobalSystemTable->BootServices->Stall(
                 UEFI_NETWORK_RETRY_DELAY_US);
             continue;
@@ -814,6 +826,11 @@ UefiHttpBootDownload(
                     UefiHttpEnsureOwnProvider(&Context);
                     LeaseAcquired = FALSE;
                 }
+            }
+            if (++FailedAttempts >= HTTP_BOOT_MAX_FAILURES)
+            {
+                TRACE("UEFI HttpBoot: request failed after %lu attempts (Status %llx), giving up\n", (unsigned long)FailedAttempts, (unsigned long long)Status);
+                return FALSE;
             }
             MediaPresent = UefiNetMediaPresent(&Context);
             if (!MediaPresent)
@@ -841,6 +858,11 @@ UefiHttpBootDownload(
                   (unsigned long long)Status,
                   (unsigned)Response.StatusCode);
             UefiHttpClose(&Session);
+            if (++FailedAttempts >= HTTP_BOOT_MAX_FAILURES)
+            {
+                TRACE("UEFI HttpBoot: ISO unavailable after %lu attempts, giving up\n", (unsigned long)FailedAttempts);
+                return FALSE;
+            }
             MediaPresent = UefiNetMediaPresent(&Context);
             if (!MediaPresent)
                 LeaseAcquired = FALSE;
