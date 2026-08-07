@@ -626,9 +626,7 @@ GetProcessPreferredUILanguages(
     PZZWSTR pwszLanguagesBuffer,
     PULONG pcchLanguagesBuffer)
 {
-    DPRINT1("%x %p %p %p\n", dwFlags, pulNumLanguages, pwszLanguagesBuffer, pcchLanguagesBuffer);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
+    return K32GetPreferredUILanguages(dwFlags, MUI_LANGUAGE_ID | MUI_LANGUAGE_NAME, LOCALE_USER_DEFAULT, pulNumLanguages, pwszLanguagesBuffer, pcchLanguagesBuffer);
 }
 #endif
 

@@ -8,10 +8,9 @@
  *              Copyright 2002 Alexandre Julliard for CodeWeavers
  */
 
+#define NDEBUG
 #include "k32_vista.h"
 #include <winnls.h>
-
-#define NDEBUG
 #include <debug.h>
 
 /******************************************************************************
