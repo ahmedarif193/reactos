@@ -16,6 +16,7 @@
 #include <md4.h>
 #include <md5.h>
 #include <rc4.h>
+#include <csprng.h>
 
 static const unsigned char CRYPT_LMhash_Magic[8] =
     { 'K', 'G', 'S', '!', '@', '#', '$', '%' };
@@ -601,44 +602,13 @@ BOOLEAN
 WINAPI
 SystemFunction036(PVOID pbBuffer, ULONG dwLen)
 {
-    ////////////////////////////////////////////////////////////////
-    //////////////////// B I G   W A R N I N G  !!! ////////////////
-    // This function will output numbers based on the tick count. //
-    // It will NOT OUTPUT CRYPTOGRAPHIC-SAFE RANDOM NUMBERS !!!    //
-    ////////////////////////////////////////////////////////////////
-
-    DWORD dwSeed;
-    PBYTE pBuffer;
-    ULONG uPseudoRandom;
-    LARGE_INTEGER time;
-    static ULONG uCounter = 17;
-
     if(!pbBuffer || !dwLen)
     {
         /* This function always returns TRUE, even if invalid parameters were passed. (verified under WinXP SP2) */
         return TRUE;
     }
 
-    /* Get the first seed from the performance counter */
-    QueryPerformanceCounter(&time);
-    dwSeed = time.LowPart ^ time.HighPart ^ RtlUlongByteSwap(uCounter++);
-
-    /* We will access the buffer bytewise */
-    pBuffer = (PBYTE)pbBuffer;
-
-    do
-    {
-        /* Use the pseudo random number generator RtlRandom, which outputs a 4-byte value and a new seed */
-        uPseudoRandom = RtlRandom(&dwSeed);
-
-        do
-        {
-            /* Get each byte from the pseudo random number and store it in the buffer */
-            *pBuffer = (BYTE)(uPseudoRandom >> 8 * (dwLen % 3) & 0xFF);
-            ++pBuffer;
-        } while(--dwLen % 3);
-    } while(dwLen);
-
+    RosCsprngFill(pbBuffer, dwLen);
     return TRUE;
 }
 

@@ -15,10 +15,135 @@
 
 /* GLOBALS ********************************************************************/
 
-static ULONG KsecRandomSeed = 0x62b409a1;
+static FAST_MUTEX KsecRandomLock;
+static ULONG KsecRandomKey[8];
+static ULONG64 KsecRandomBlockCounter;
+
+static const ULONG KsecRandomSigma[4] = { 0x61707865, 0x3320646E, 0x79622D32, 0x6B206574 };
+
+#define KSEC_ROTL(Value, Count) (((Value) << (Count)) | ((Value) >> (32 - (Count))))
+
+#define KSEC_QUARTER_ROUND(State, A, B, C, D) \
+do { \
+    State[A] += State[B]; State[D] = KSEC_ROTL(State[D] ^ State[A], 16); \
+    State[C] += State[D]; State[B] = KSEC_ROTL(State[B] ^ State[C], 12); \
+    State[A] += State[B]; State[D] = KSEC_ROTL(State[D] ^ State[A], 8); \
+    State[C] += State[D]; State[B] = KSEC_ROTL(State[B] ^ State[C], 7); \
+} while (0)
 
 
 /* FUNCTIONS ******************************************************************/
+
+static
+VOID
+KsecRandomCore(
+    _In_reads_(16) const ULONG Input[16],
+    _Out_writes_(16) ULONG Output[16])
+{
+    ULONG State[16];
+    ULONG i;
+
+    RtlCopyMemory(State, Input, sizeof(State));
+
+    for (i = 0; i < 10; i++)
+    {
+        KSEC_QUARTER_ROUND(State, 0, 4, 8, 12);
+        KSEC_QUARTER_ROUND(State, 1, 5, 9, 13);
+        KSEC_QUARTER_ROUND(State, 2, 6, 10, 14);
+        KSEC_QUARTER_ROUND(State, 3, 7, 11, 15);
+        KSEC_QUARTER_ROUND(State, 0, 5, 10, 15);
+        KSEC_QUARTER_ROUND(State, 1, 6, 11, 12);
+        KSEC_QUARTER_ROUND(State, 2, 7, 8, 13);
+        KSEC_QUARTER_ROUND(State, 3, 4, 9, 14);
+    }
+
+    for (i = 0; i < RTL_NUMBER_OF(State); i++)
+    {
+        Output[i] = State[i] + Input[i];
+    }
+
+    RtlSecureZeroMemory(State, sizeof(State));
+}
+
+static
+VOID
+KsecRandomPermutePool(
+    _Inout_updates_(16) ULONG Pool[16])
+{
+    ULONG Mixed[16];
+
+    KsecRandomCore(Pool, Mixed);
+    RtlCopyMemory(Pool, Mixed, sizeof(Mixed));
+    RtlSecureZeroMemory(Mixed, sizeof(Mixed));
+}
+
+static
+VOID
+KsecRandomAbsorb(
+    _Inout_updates_(16) ULONG Pool[16],
+    _In_reads_bytes_(Length) const VOID *Data,
+    _In_ SIZE_T Length)
+{
+    const UCHAR *Bytes = Data;
+    PUCHAR Rate = (PUCHAR)&Pool[4];
+    SIZE_T Offset = 0;
+    SIZE_T i;
+
+    for (i = 0; i < Length; i++)
+    {
+        Rate[Offset] ^= Bytes[i];
+        if (++Offset == 32)
+        {
+            KsecRandomPermutePool(Pool);
+            Offset = 0;
+        }
+    }
+
+    Rate[Offset] ^= 1;
+    Rate[31] ^= 0x80;
+    KsecRandomPermutePool(Pool);
+}
+
+VOID
+NTAPI
+KsecInitializeRandomSupport(VOID)
+{
+    KSEC_ENTROPY_DATA EntropyData;
+    LARGE_INTEGER PerformanceCounter;
+    LARGE_INTEGER PerformanceFrequency;
+    LARGE_INTEGER SystemTime;
+    LARGE_INTEGER TickCount;
+    ULONG_PTR PoolAddress;
+    ULONG Pool[16];
+
+    ExInitializeFastMutex(&KsecRandomLock);
+    RtlCopyMemory(Pool, KsecRandomSigma, sizeof(KsecRandomSigma));
+    RtlZeroMemory(&Pool[4], sizeof(Pool) - sizeof(KsecRandomSigma));
+
+    RtlZeroMemory(&EntropyData, sizeof(EntropyData));
+    KsecGatherEntropyData(&EntropyData);
+    KsecRandomAbsorb(Pool, &EntropyData, sizeof(EntropyData));
+
+    RtlZeroMemory(&EntropyData, sizeof(EntropyData));
+    KsecGatherEntropyData(&EntropyData);
+    KsecRandomAbsorb(Pool, &EntropyData, sizeof(EntropyData));
+
+    KeQuerySystemTime(&SystemTime);
+    KeQueryTickCount(&TickCount);
+    PerformanceCounter = KeQueryPerformanceCounter(&PerformanceFrequency);
+    KsecRandomAbsorb(Pool, &SystemTime, sizeof(SystemTime));
+    KsecRandomAbsorb(Pool, &TickCount, sizeof(TickCount));
+    KsecRandomAbsorb(Pool, &PerformanceCounter, sizeof(PerformanceCounter));
+    KsecRandomAbsorb(Pool, &PerformanceFrequency, sizeof(PerformanceFrequency));
+    PoolAddress = (ULONG_PTR)Pool;
+    KsecRandomAbsorb(Pool, &PoolAddress, sizeof(PoolAddress));
+
+    RtlCopyMemory(KsecRandomKey, &Pool[4], sizeof(KsecRandomKey));
+    KsecRandomBlockCounter = (ULONG64)PerformanceCounter.QuadPart ^ (ULONG64)SystemTime.QuadPart;
+
+    RtlSecureZeroMemory(&EntropyData, sizeof(EntropyData));
+    RtlSecureZeroMemory(Pool, sizeof(Pool));
+}
 
 NTSTATUS
 NTAPI
@@ -26,27 +151,56 @@ KsecGenRandom(
     PVOID Buffer,
     SIZE_T Length)
 {
-    LARGE_INTEGER TickCount;
-    ULONG i, RandomValue;
-    PULONG P;
+    LARGE_INTEGER PerformanceCounter;
+    ULONG Input[16];
+    ULONG Output[16];
+    PUCHAR Destination = Buffer;
+    SIZE_T Chunk;
 
-    /* Try to generate a more random seed */
-    KeQueryTickCount(&TickCount);
-    KsecRandomSeed ^= _rotl(TickCount.LowPart, (KsecRandomSeed % 23));
-
-    P = Buffer;
-    for (i = 0; i < Length / sizeof(ULONG); i++)
+    if (Length == 0)
     {
-        P[i] = RtlRandomEx(&KsecRandomSeed);
+        return STATUS_SUCCESS;
     }
 
-    Length &= (sizeof(ULONG) - 1);
-    if (Length > 0)
+    if (Buffer == NULL)
     {
-        RandomValue = RtlRandomEx(&KsecRandomSeed);
-        RtlCopyMemory(&P[i], &RandomValue, Length);
+        return STATUS_INVALID_PARAMETER;
     }
 
+    ExAcquireFastMutex(&KsecRandomLock);
+
+    RtlCopyMemory(Input, KsecRandomSigma, sizeof(KsecRandomSigma));
+    RtlCopyMemory(&Input[4], KsecRandomKey, sizeof(KsecRandomKey));
+
+    while (Length > 0)
+    {
+        PerformanceCounter = KeQueryPerformanceCounter(NULL);
+        Input[12] = (ULONG)KsecRandomBlockCounter;
+        Input[13] = (ULONG)(KsecRandomBlockCounter >> 32);
+        Input[14] = PerformanceCounter.LowPart;
+        Input[15] = PerformanceCounter.HighPart;
+        KsecRandomBlockCounter++;
+
+        KsecRandomCore(Input, Output);
+        Chunk = min(Length, sizeof(Output));
+        RtlCopyMemory(Destination, Output, Chunk);
+        Destination += Chunk;
+        Length -= Chunk;
+    }
+
+    PerformanceCounter = KeQueryPerformanceCounter(NULL);
+    Input[12] = (ULONG)KsecRandomBlockCounter;
+    Input[13] = (ULONG)(KsecRandomBlockCounter >> 32);
+    Input[14] = PerformanceCounter.LowPart;
+    Input[15] = PerformanceCounter.HighPart;
+    KsecRandomBlockCounter++;
+    KsecRandomCore(Input, Output);
+    RtlCopyMemory(KsecRandomKey, Output, sizeof(KsecRandomKey));
+
+    ExReleaseFastMutex(&KsecRandomLock);
+
+    RtlSecureZeroMemory(Input, sizeof(Input));
+    RtlSecureZeroMemory(Output, sizeof(Output));
     return STATUS_SUCCESS;
 }
 
@@ -103,6 +257,8 @@ KsecGatherEntropyData(
     PWSTR String;
     ULONG ReturnLength;
     NTSTATUS Status;
+
+    RtlZeroMemory(EntropyData, sizeof(*EntropyData));
 
     /* Query some generic values */
     EntropyData->CurrentProcessId = PsGetCurrentProcessId();
