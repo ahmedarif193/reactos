@@ -168,7 +168,7 @@ MiCalculatePageCommitment(IN ULONG_PTR StartingAddress,
             if (PointerPxe->u.Long == 0)
             {
                 PointerPxe++;
-                PointerPte = MiPxeToPte(PointerPde);
+                PointerPte = MiPxeToPte(PointerPxe);
                 continue;
             }
 
@@ -2541,7 +2541,7 @@ MiIsEntireRangeCommitted(IN ULONG_PTR StartingAddress,
                 if (!Vad->u.VadFlags.MemCommit) return FALSE;
 
                 PointerPxe++;
-                PointerPte = MiPxeToPte(PointerPte);
+                PointerPte = MiPxeToPte(PointerPxe);
                 continue;
             }
         }

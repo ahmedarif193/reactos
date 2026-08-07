@@ -1906,7 +1906,7 @@ ExReturnPoolQuota(IN PVOID P)
     USHORT BlockSize;
     PEPROCESS Process;
 
-    if ((ExpPoolFlags & POOL_FLAG_SPECIAL_POOL) &&
+    if ((ExpPoolFlags & EXP_POOL_FLAG_SPECIAL_POOL) &&
         (MmIsSpecialPoolAddress(P)))
     {
         return;
@@ -1980,7 +1980,7 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
     //
     // Check if verifier or special pool is enabled
     //
-    if (ExpPoolFlags & (POOL_FLAG_VERIFIER | POOL_FLAG_SPECIAL_POOL))
+    if (ExpPoolFlags & (POOL_FLAG_VERIFIER | EXP_POOL_FLAG_SPECIAL_POOL))
     {
         //
         // For verifier, we should call the verification routine
@@ -1994,7 +1994,7 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
         // For special pool, we check if this is a suitable allocation and do
         // the special allocation if needed
         //
-        if (ExpPoolFlags & POOL_FLAG_SPECIAL_POOL)
+        if (ExpPoolFlags & EXP_POOL_FLAG_SPECIAL_POOL)
         {
             //
             // Check if this is a special pool allocation
@@ -2596,12 +2596,12 @@ ExFreePoolWithTag(IN PVOID P,
                         POOL_FLAG_CHECK_RESOURCES |
                         POOL_FLAG_VERIFIER |
                         POOL_FLAG_CHECK_DEADLOCK |
-                        POOL_FLAG_SPECIAL_POOL))
+                        EXP_POOL_FLAG_SPECIAL_POOL))
     {
         //
         // Check if special pool is enabled
         //
-        if (ExpPoolFlags & POOL_FLAG_SPECIAL_POOL)
+        if (ExpPoolFlags & EXP_POOL_FLAG_SPECIAL_POOL)
         {
             //
             // Check if it was allocated from a special pool
@@ -3194,7 +3194,7 @@ ExAllocatePoolWithQuotaTag(IN POOL_TYPE PoolType,
         // Also if special pool is enabled, and this was allocated from there,
         // we won't touch it either
         //
-        if ((ExpPoolFlags & POOL_FLAG_SPECIAL_POOL) &&
+        if ((ExpPoolFlags & EXP_POOL_FLAG_SPECIAL_POOL) &&
             (MmIsSpecialPoolAddress(Buffer)))
         {
             return Buffer;
@@ -3242,7 +3242,7 @@ ExAllocatePoolWithQuotaTag(IN POOL_TYPE PoolType,
         // header to hold the owner, it is recorded in the big pool table.
         //
         if ((Process != PsInitialSystemProcess) &&
-            !((ExpPoolFlags & POOL_FLAG_SPECIAL_POOL) &&
+            !((ExpPoolFlags & EXP_POOL_FLAG_SPECIAL_POOL) &&
               (MmIsSpecialPoolAddress(Buffer))))
         {
             /*
