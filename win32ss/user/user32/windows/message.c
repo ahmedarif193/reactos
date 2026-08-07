@@ -91,7 +91,9 @@ static const unsigned int message_pointer_flags[] =
     /* 0x2e0 - 0x2ff */
     0,
     /* 0x300 - 0x31f */
-    SET(WM_ASKCBFORMATNAME)
+    SET(WM_ASKCBFORMATNAME),
+    /* 0x320 - 0x33f */
+    SET(WM_GETTITLEBARINFOEX)
 };
 
 /* check whether a given message type includes pointers */
