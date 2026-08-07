@@ -1413,6 +1413,9 @@ static BOOL CB_GetIdealSize(BUTTON_INFO *infoPtr, SIZE *size)
 static BOOL PB_GetIdealSize(BUTTON_INFO *infoPtr, SIZE *size)
 {
     SIZE labelSize;
+#ifdef __REACTOS__
+    LONG requestedWidth = size->cx;
+#endif
 
     if (SendMessageW(infoPtr->hwnd, WM_GETTEXTLENGTH, 0, 0) == 0)
         BUTTON_GetClientRectSize(infoPtr, size);
@@ -1424,6 +1427,43 @@ static BOOL PB_GetIdealSize(BUTTON_INFO *infoPtr, SIZE *size)
         size->cx = labelSize.cx;
         size->cy = labelSize.cy;
     }
+
+#ifdef __REACTOS__
+    /* BCM_GETIDEALSIZE returns the desired button size, not only its label rectangle. */
+    if (!requestedWidth && SendMessageW(infoPtr->hwnd, WM_GETTEXTLENGTH, 0, 0) != 0)
+    {
+        HTHEME theme = GetWindowTheme(infoPtr->hwnd);
+        BOOL haveExtent = FALSE;
+        HDC hdc;
+
+        if (theme && (hdc = GetDC(infoPtr->hwnd)))
+        {
+            RECT contentRect = {0, 0, size->cx, size->cy};
+            RECT extentRect;
+
+            if (SUCCEEDED(GetThemeBackgroundExtent(theme, hdc, BP_PUSHBUTTON, PBS_NORMAL, &contentRect, &extentRect)))
+            {
+                size->cx = extentRect.right - extentRect.left;
+                size->cy = extentRect.bottom - extentRect.top;
+                haveExtent = TRUE;
+            }
+            ReleaseDC(infoPtr->hwnd, hdc);
+        }
+
+        if (!haveExtent)
+        {
+            SIZE imageSize = BUTTON_GetImageSize(infoPtr);
+
+            if (infoPtr->imagelist.himl && (infoPtr->imagelist.uAlign == BUTTON_IMAGELIST_ALIGN_LEFT || infoPtr->imagelist.uAlign == BUTTON_IMAGELIST_ALIGN_RIGHT))
+            {
+                imageSize.cy += infoPtr->imagelist.margin.top + infoPtr->imagelist.margin.bottom;
+                size->cx += 2 * GetSystemMetrics(SM_CXEDGE);
+                size->cy = max(size->cy, imageSize.cy);
+            }
+        }
+    }
+#endif
+
     return TRUE;
 }
 
