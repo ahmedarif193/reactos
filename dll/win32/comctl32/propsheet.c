@@ -1000,6 +1000,12 @@ static INT_PTR PROPSHEET_CreateDialog(PropSheetInfo* psInfo)
 
   memcpy(temp, template, resSize);
 
+  /* DS_FIXEDSYS selects a font but is not retained in the native property sheet window style. */
+  if (((MyDLGTEMPLATEEX*)temp)->signature == 0xFFFF)
+    ((MyDLGTEMPLATEEX*)temp)->style &= ~DS_FIXEDSYS;
+  else
+    ((DLGTEMPLATE*)temp)->style &= ~DS_FIXEDSYS;
+
   if (psInfo->ppshheader.dwFlags & PSH_NOCONTEXTHELP)
   {
     if (((MyDLGTEMPLATEEX*)temp)->signature == 0xFFFF)
