@@ -506,6 +506,136 @@ User32DefWindowProc(HWND hWnd,
            return DefWndGetIcon(pWnd, wParam, lParam);
         }
 
+        case WM_GETTITLEBARINFOEX:
+        {
+            PTITLEBARINFOEX Info = (PTITLEBARINFOEX)lParam;
+            DWORD Style, ExStyle;
+            RECT WindowRect, ButtonRect;
+            LONG BorderX, BorderY, ButtonWidth, ButtonHeight;
+            INT Index;
+
+            if (!Info) return FALSE;
+            if (Info->cbSize != sizeof(TITLEBARINFOEX))
+            {
+                SetLastError(ERROR_INVALID_PARAMETER);
+                return FALSE;
+            }
+
+            Style = GetWindowLongPtrW(hWnd, GWL_STYLE);
+            ExStyle = GetWindowLongPtrW(hWnd, GWL_EXSTYLE);
+            GetWindowRect(hWnd, &WindowRect);
+
+            if (Style & WS_THICKFRAME)
+            {
+                BorderX = GetSystemMetrics(SM_CXSIZEFRAME);
+                BorderY = GetSystemMetrics(SM_CYSIZEFRAME);
+            }
+            else if ((Style & (WS_DLGFRAME | WS_BORDER)) == WS_DLGFRAME || (ExStyle & WS_EX_DLGMODALFRAME))
+            {
+                BorderX = GetSystemMetrics(SM_CXFIXEDFRAME);
+                BorderY = GetSystemMetrics(SM_CYFIXEDFRAME);
+            }
+            else if (Style & WS_BORDER)
+            {
+                BorderX = GetSystemMetrics(SM_CXBORDER);
+                BorderY = GetSystemMetrics(SM_CYBORDER);
+            }
+            else
+            {
+                BorderX = 0;
+                BorderY = 0;
+            }
+
+            Info->rcTitleBar.left = WindowRect.left + BorderX;
+            Info->rcTitleBar.right = WindowRect.right - BorderX;
+            Info->rcTitleBar.top = WindowRect.top + BorderY;
+            if (ExStyle & WS_EX_TOOLWINDOW)
+                Info->rcTitleBar.bottom = Info->rcTitleBar.top + GetSystemMetrics(SM_CYSMCAPTION);
+            else
+                Info->rcTitleBar.bottom = Info->rcTitleBar.top + GetSystemMetrics(SM_CYCAPTION);
+
+            for (Index = 0; Index <= CCHILDREN_TITLEBAR; Index++)
+            {
+                Info->rgstate[Index] = 0;
+                SetRectEmpty(&Info->rgrect[Index]);
+            }
+            Info->rgstate[0] = STATE_SYSTEM_FOCUSABLE;
+
+            if ((Style & WS_CAPTION) == WS_CAPTION)
+            {
+                Info->rgstate[1] = STATE_SYSTEM_INVISIBLE;
+                if (Style & WS_SYSMENU)
+                {
+                    if (ExStyle & WS_EX_TOOLWINDOW)
+                    {
+                        ButtonWidth = GetSystemMetrics(SM_CXSMSIZE);
+                        ButtonHeight = GetSystemMetrics(SM_CYSMSIZE) - 2;
+                    }
+                    else
+                    {
+                        ButtonWidth = GetSystemMetrics(SM_CXSIZE);
+                        ButtonHeight = GetSystemMetrics(SM_CYSIZE) - 2;
+                    }
+
+                    ButtonRect = Info->rcTitleBar;
+                    ButtonRect.top += 2;
+                    ButtonRect.bottom = ButtonRect.top + ButtonHeight;
+                    ButtonRect.right -= 2;
+                    ButtonRect.left = ButtonRect.right - ButtonWidth;
+                    Info->rgrect[5] = ButtonRect;
+
+                    if (!(Style & (WS_MINIMIZEBOX | WS_MAXIMIZEBOX)))
+                    {
+                        Info->rgstate[2] = STATE_SYSTEM_INVISIBLE;
+                        Info->rgstate[3] = STATE_SYSTEM_INVISIBLE;
+                    }
+                    else if (ExStyle & WS_EX_TOOLWINDOW)
+                    {
+                        Info->rgstate[2] = STATE_SYSTEM_INVISIBLE;
+                        Info->rgstate[3] = STATE_SYSTEM_INVISIBLE;
+                    }
+                    else
+                    {
+                        ButtonRect.right = ButtonRect.left - 1;
+                        ButtonRect.left = ButtonRect.right - ButtonWidth;
+                        Info->rgrect[3] = ButtonRect;
+
+                        ButtonRect.right = ButtonRect.left - 1;
+                        ButtonRect.left = ButtonRect.right - ButtonWidth;
+                        Info->rgrect[2] = ButtonRect;
+
+                        if (!(Style & WS_MINIMIZEBOX)) Info->rgstate[2] = STATE_SYSTEM_UNAVAILABLE;
+                        if (!(Style & WS_MAXIMIZEBOX)) Info->rgstate[3] = STATE_SYSTEM_UNAVAILABLE;
+                    }
+
+                    if (ExStyle & WS_EX_CONTEXTHELP)
+                    {
+                        ButtonRect = Info->rgrect[5];
+                        ButtonRect.right = ButtonRect.left - 1;
+                        ButtonRect.left = ButtonRect.right - ButtonWidth;
+                        Info->rgrect[4] = ButtonRect;
+                    }
+                    else
+                    {
+                        Info->rgstate[4] = STATE_SYSTEM_INVISIBLE;
+                    }
+                    if (GetClassLongPtrW(hWnd, GCL_STYLE) & CS_NOCLOSE) Info->rgstate[5] = STATE_SYSTEM_UNAVAILABLE;
+                }
+                else
+                {
+                    Info->rgstate[2] = STATE_SYSTEM_INVISIBLE;
+                    Info->rgstate[3] = STATE_SYSTEM_INVISIBLE;
+                    Info->rgstate[4] = STATE_SYSTEM_INVISIBLE;
+                    Info->rgstate[5] = STATE_SYSTEM_INVISIBLE;
+                }
+            }
+            else
+            {
+                Info->rgstate[0] |= STATE_SYSTEM_INVISIBLE;
+            }
+            return TRUE;
+        }
+
         case WM_HELP:
         {
             if (bUnicode)

@@ -395,6 +395,7 @@ co_IntCallWindowProc(WNDPROC Proc,
           case WM_SIZING:
           case WM_MOVING:
           case WM_MEASUREITEM:
+          case WM_GETTITLEBARINFOEX:
           case WM_NEXTMENU:
             TRACE("Copy lParam, Message %u Size %d lParam %d!\n", Message, lParamBufferSize, lParam);
             if (InSendMessage)

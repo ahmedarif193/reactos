@@ -113,7 +113,9 @@ static const unsigned int message_pointer_flags[] =
     /* 0x2e0 - 0x2ff */
     0,
     /* 0x300 - 0x31f */
-    SET(WM_ASKCBFORMATNAME)
+    SET(WM_ASKCBFORMATNAME),
+    /* 0x320 - 0x33f */
+    SET(WM_GETTITLEBARINFOEX)
 };
 
 /* check whether a given message type includes pointers */
@@ -160,6 +162,7 @@ static MSGMEMORY g_MsgMemory[] =
     { WM_MEASUREITEM, sizeof(MEASUREITEMSTRUCT), MMS_FLAG_READWRITE },
     { WM_DRAWITEM, sizeof(DRAWITEMSTRUCT), MMS_FLAG_READWRITE },
     { WM_HELP, sizeof(HELPINFO), MMS_FLAG_READWRITE },
+    { WM_GETTITLEBARINFOEX, sizeof(TITLEBARINFOEX), MMS_FLAG_READWRITE },
     { WM_NEXTMENU, sizeof(MDINEXTMENU), MMS_FLAG_READWRITE },
     { WM_DEVICECHANGE, MMS_SIZE_SPECIAL, MMS_FLAG_READ },
 };
