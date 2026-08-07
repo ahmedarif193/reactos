@@ -2592,6 +2592,7 @@
 @ stdcall -arch=arm64 KeQueryNodeMaximumProcessorCount(long)
 @ stdcall -arch=arm64 KeQueryPrcbAddress(long)
 @ stub -arch=arm64 KeQuerySystemCpuPartitionAffinity
+@ stdcall -arch=arm64 KeQueryTotalCycleTimeProcess(ptr ptr)
 @ stdcall -arch=arm64 KeQueryTotalCycleTimeThread(ptr ptr)
 @ stdcall -arch=arm64 KeQueryTypeEvent(ptr)
 @ stdcall -arch=arm64 KeQueryUnbiasedInterruptTime()

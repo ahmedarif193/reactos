@@ -19,6 +19,7 @@ list(APPEND SOURCE
     client/atom.c
     client/atomansi.c
     client/compname.c
+    client/cputime.c
     client/debugger.c
     client/dosdev.c
     client/dllmain.c

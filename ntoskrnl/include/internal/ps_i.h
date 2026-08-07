@@ -324,7 +324,12 @@ static const INFORMATION_CLASS_INFO PsProcessInfoClass[] =
     ),
 
     /* ProcessCycleTime */
-    IQS_NONE,
+    IQS_SAME
+    (
+        PROCESS_CYCLE_TIME_INFORMATION,
+        ULONG,
+        ICIF_QUERY
+    ),
 
     /* ProcessPagePriority */
     IQS_NONE,

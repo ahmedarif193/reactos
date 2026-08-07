@@ -832,9 +832,23 @@ KeQueryRuntimeProcess(IN PKPROCESS Process,
 
 ULONG64
 NTAPI
+KeQueryTotalCycleTimeProcess(
+    IN OUT PKPROCESS Process,
+    OUT PULONG64 CycleTimeStamp);
+
+ULONG64
+NTAPI
 KeQueryTotalCycleTimeThread(
     IN OUT PKTHREAD Thread,
     OUT PULONG64 CycleTimeStamp);
+
+#if (defined(_M_AMD64) || defined(_M_ARM64)) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+VOID
+NTAPI
+KiChargeThreadCycleTime(
+    IN OUT PKPRCB Prcb,
+    IN OUT PKTHREAD Thread);
+#endif
 
 VOID
 NTAPI
