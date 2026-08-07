@@ -632,6 +632,9 @@ static BOOL match_fbo_tex_update(const struct wined3d_gl_info *gl_info, struct w
     GLuint tex, fbo;
     GLenum status;
 
+    if (!gl_info->supported[ARB_FRAMEBUFFER_OBJECT] && !gl_info->supported[EXT_FRAMEBUFFER_OBJECT])
+        return FALSE;
+
     memset(data, 0xcc, sizeof(data));
 
     gl_info->gl_ops.gl.p_glGenTextures(1, &tex);
