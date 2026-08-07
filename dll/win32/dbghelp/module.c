@@ -24,10 +24,13 @@
 #include <string.h>
 #include <assert.h>
 
+#if !defined(__REACTOS__) || !defined(DBGHELP_STATIC_LIB)
+#include "ntstatus.h"
+#define WIN32_NO_STATUS
+#endif
 #include "dbghelp_private.h"
 #include "image_private.h"
 #if !defined(__REACTOS__) || !defined(DBGHELP_STATIC_LIB)
-#include "ntstatus.h"
 #include "psapi.h"
 #include "tlhelp32.h"
 #include "winternl.h"

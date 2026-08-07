@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <assert.h>
 #include <wchar.h>
 
@@ -390,11 +391,13 @@ ConvertCoffs(ULONG *SymbolsCount, PROSSYM_ENTRY *SymbolsBase,
     CoffEntry = (PCOFF_SYMENT) CoffSymbolsBase;
     Count = CoffSymbolsLength / sizeof(COFF_SYMENT);
 
-    if (Count > (size_t)-1 / sizeof(ROSSYM_ENTRY) - 1)
+#if SIZE_MAX == UINT32_MAX
+    if (Count > SIZE_MAX / sizeof(ROSSYM_ENTRY) - 1)
     {
         fprintf(stderr, "Too many COFF symbols\n");
         return 1;
     }
+#endif
 
     /* ConvertCoffs appends a zero sentinel after every emitted symbol. */
     *SymbolsBase = calloc(Count + 1, sizeof(ROSSYM_ENTRY));

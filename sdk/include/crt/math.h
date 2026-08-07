@@ -103,6 +103,12 @@ _Check_return_ double __cdecl cos(_In_ double x);
 _Check_return_ double __cdecl cosh(_In_ double x);
 _Check_return_ double __cdecl exp(_In_ double x);
 _Check_return_ _CRT_JIT_INTRINSIC double __cdecl fabs(_In_ double x);
+#ifndef fmax
+_Check_return_ double __cdecl fmax(_In_ double x, _In_ double y);
+#endif
+#ifndef fmin
+_Check_return_ double __cdecl fmin(_In_ double x, _In_ double y);
+#endif
 _Check_return_ double __cdecl fmod(_In_ double x, _In_ double y);
 _Check_return_ double __cdecl log(_In_ double x);
 _Check_return_ double __cdecl log10(_In_ double x);
@@ -145,6 +151,7 @@ _Check_return_ _CRTIMP double __cdecl _j0(_In_ double x);
 _Check_return_ _CRTIMP double __cdecl _j1(_In_ double x);
 _Check_return_ _CRTIMP double __cdecl _jn(_In_ int x, _In_ double y);
 _Check_return_ _CRTIMP double __cdecl _nextafter(_In_ double x, _In_ double y);
+_Check_return_ _CRTIMP int __cdecl _isnan(_In_ double x);
 _Check_return_ _CRTIMP double __cdecl _y0(_In_ double x);
 _Check_return_ _CRTIMP double __cdecl _y1(_In_ double x);
 _Check_return_ _CRTIMP double __cdecl _yn(_In_ int x, _In_ double y);
@@ -153,6 +160,10 @@ _Check_return_ _CRTIMP double __cdecl floor(_In_ double x);
 _Check_return_ _CRTIMP double __cdecl frexp(_In_ double x, _Out_ int *y);
 _Check_return_ _CRTIMP double __cdecl ldexp(_In_ double x, _In_ int y);
 _Check_return_ _CRTIMP double __cdecl modf(_In_ double x, _Out_ double *y);
+
+#ifndef __cplusplus
+#define isnan _isnan
+#endif
 
 #if defined(__i386__) || defined(_M_IX86)
 _Check_return_ _CRTIMP int __cdecl _set_SSE2_enable(_In_ int flag);

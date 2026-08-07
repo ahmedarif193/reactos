@@ -1,5 +1,4 @@
 
-add_definitions(-D__ROS_LONG64__)
 spec2def(itss.dll itss.spec)
 
 list(APPEND SOURCE

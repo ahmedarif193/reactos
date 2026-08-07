@@ -3,7 +3,6 @@ remove_definitions(-D_CRT_NON_CONFORMING_SWPRINTFS)
 
 add_definitions(
     -D_OLE32_
-    -D__ROS_LONG64__
     -DCOM_NO_WINDOWS_H
     -DENTRY_PREFIX=OLE32_
     -DPROXY_CLSID=CLSID_PSFactoryBuffer

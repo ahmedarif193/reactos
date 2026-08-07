@@ -68,7 +68,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(d3dxof_parsing);
 #define TOKEN_CSTRING     51
 #define TOKEN_ARRAY       52
 
-#define CLSIDFMT "<%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X>"
+#define CLSIDFMT "<%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X>"
 
 static const char* get_primitive_string(DWORD token)
 {
@@ -113,7 +113,7 @@ static void dump_template(xtemplate* templates_array, xtemplate* ptemplate)
 
   wine_dbg_printf("template %s\n", ptemplate->name);
   wine_dbg_printf("{\n");
-  wine_dbg_printf(CLSIDFMT "\n", clsid->Data1, clsid->Data2, clsid->Data3, clsid->Data4[0],
+  wine_dbg_printf(CLSIDFMT "\n", (unsigned int)clsid->Data1, clsid->Data2, clsid->Data3, clsid->Data4[0],
   clsid->Data4[1], clsid->Data4[2], clsid->Data4[3], clsid->Data4[4], clsid->Data4[5], clsid->Data4[6], clsid->Data4[7]);
   for (j = 0; j < ptemplate->nb_members; j++)
   {
@@ -440,7 +440,7 @@ static BOOL is_guid(parse_buffer* buf)
   char tmp[50];
   DWORD pos = 1;
   GUID class_id;
-  DWORD tab[10];
+  unsigned int tab[11];
   int ret;
 
   if (buf->rem_bytes < 38 || *buf->buffer != '<')
@@ -461,8 +461,8 @@ static BOOL is_guid(parse_buffer* buf)
   buf->buffer += pos;
   buf->rem_bytes -= pos;
 
-  ret = sscanf(tmp, "<%08lx-%04lx-%04lx-%02lx%02lx-%02lx%02lx%02lx%02lx%02lx%02lx>",
-          &class_id.Data1, tab, tab+1, tab+2, tab+3, tab+4, tab+5, tab+6, tab+7, tab+8, tab+9);
+  ret = sscanf(tmp, "<%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x>",
+          tab, tab+1, tab+2, tab+3, tab+4, tab+5, tab+6, tab+7, tab+8, tab+9, tab+10);
   if (ret != 11)
   {
       TRACE("Wrong guid %s (%lu).\n", tmp, pos);
@@ -470,16 +470,17 @@ static BOOL is_guid(parse_buffer* buf)
   }
   TRACE("Found guid %s (%lu).\n", tmp, pos);
 
-  class_id.Data2 = tab[0];
-  class_id.Data3 = tab[1];
-  class_id.Data4[0] = tab[2];
-  class_id.Data4[1] = tab[3];
-  class_id.Data4[2] = tab[4];
-  class_id.Data4[3] = tab[5];
-  class_id.Data4[4] = tab[6];
-  class_id.Data4[5] = tab[7];
-  class_id.Data4[6] = tab[8];
-  class_id.Data4[7] = tab[9];
+  class_id.Data1 = tab[0];
+  class_id.Data2 = tab[1];
+  class_id.Data3 = tab[2];
+  class_id.Data4[0] = tab[3];
+  class_id.Data4[1] = tab[4];
+  class_id.Data4[2] = tab[5];
+  class_id.Data4[3] = tab[6];
+  class_id.Data4[4] = tab[7];
+  class_id.Data4[5] = tab[8];
+  class_id.Data4[6] = tab[9];
+  class_id.Data4[7] = tab[10];
 
   *(GUID*)buf->value = class_id;
 
@@ -781,7 +782,7 @@ static WORD parse_TOKEN(parse_buffer * buf)
 
           if (!read_bytes(buf, &class_id, 16))
             return TOKEN_ERROR;
-          sprintf(strguid, CLSIDFMT, class_id.Data1, class_id.Data2, class_id.Data3, class_id.Data4[0],
+          sprintf(strguid, CLSIDFMT, (unsigned int)class_id.Data1, class_id.Data2, class_id.Data3, class_id.Data4[0],
             class_id.Data4[1], class_id.Data4[2], class_id.Data4[3], class_id.Data4[4], class_id.Data4[5],
             class_id.Data4[6], class_id.Data4[7]);
           TRACE("guid = %s\n", strguid);
