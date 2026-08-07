@@ -140,6 +140,7 @@ HKLM,"SOFTWARE\Clients\StartMenuInternet\IEXPLORE.EXE\shell\open\command","",0x0
 
 ; CTF
 HKLM,"SOFTWARE\Microsoft\CTF\SystemShared",,0x00000012
+HKLM,"SOFTWARE\Microsoft\CTF\SystemShared","CUAS",0x00010001,1
 HKLM,"SOFTWARE\Microsoft\CTF\TIP",,0x00000012
 
 ; DirectX
@@ -628,7 +629,7 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\IME Compatibility",,0x0000001
 
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\IMM","IME File",2,"msctfime.ime"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\IMM","LoadIMM",0x00010003,1
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\IMM","DontLoadCTFIME",0x00010003,1 ; Disable CTF IME
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\IMM","DontLoadCTFIME",0x00010003,0
 
 ; DOS Device ports
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Ports","COM1:",2,"9600,n,8,1"
