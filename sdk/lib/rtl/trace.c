@@ -11,6 +11,7 @@
 #include <debug.h>
 
 static RTL_UNLOAD_EVENT_TRACE RtlpUnloadEventTrace[RTL_UNLOAD_EVENT_TRACE_NUMBER];
+static PRTL_UNLOAD_EVENT_TRACE RtlpUnloadEventTracePointer;
 static UINT RtlpUnloadEventTraceIndex = 0;
 
 /* FUNCTIONS ******************************************************************/
@@ -21,6 +22,21 @@ RtlGetUnloadEventTrace(VOID)
 {
     /* Just return a pointer to an array, according to MSDN */
     return RtlpUnloadEventTrace;
+}
+
+VOID
+NTAPI
+RtlGetUnloadEventTraceEx(
+    _Out_ PULONG *ElementSize,
+    _Out_ PULONG *ElementCount,
+    _Out_ PVOID *EventTrace)
+{
+    static ULONG UnloadEventTraceElementSize = sizeof(RTL_UNLOAD_EVENT_TRACE);
+    static ULONG UnloadEventTraceElementCount = RTL_UNLOAD_EVENT_TRACE_NUMBER;
+
+    *ElementSize = &UnloadEventTraceElementSize;
+    *ElementCount = &UnloadEventTraceElementCount;
+    *EventTrace = &RtlpUnloadEventTracePointer;
 }
 
 VOID
@@ -56,6 +72,8 @@ LdrpRecordUnloadEvent(_In_ PLDR_DATA_TABLE_ENTRY LdrEntry)
     RtlCopyMemory(RtlpUnloadEventTrace[Index].ImageName, LdrEntry->BaseDllName.Buffer, StringLen * sizeof(WCHAR));
     if (StringLen < RTL_NUMBER_OF(RtlpUnloadEventTrace[Index].ImageName))
         RtlpUnloadEventTrace[Index].ImageName[StringLen] = 0;
+
+    RtlpUnloadEventTracePointer = RtlpUnloadEventTrace;
 }
 
 BOOLEAN

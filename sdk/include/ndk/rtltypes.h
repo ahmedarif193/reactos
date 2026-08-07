@@ -1263,12 +1263,12 @@ typedef struct _RTL_FLS_DATA
 //
 // Unload Event Trace Structure for RtlGetUnloadEventTrace
 //
-#define RTL_UNLOAD_EVENT_TRACE_NUMBER 16
+#define RTL_UNLOAD_EVENT_TRACE_NUMBER 64
 
 typedef struct _RTL_UNLOAD_EVENT_TRACE
 {
     PVOID BaseAddress;
-    ULONG SizeOfImage;
+    SIZE_T SizeOfImage;
     ULONG Sequence;
     ULONG TimeDateStamp;
     ULONG CheckSum;
