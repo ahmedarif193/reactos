@@ -421,7 +421,8 @@ ExitThread(IN DWORD uExitCode)
 #if (NTDDI_VERSION < NTDDI_LONGHORN)
     NtCurrentTeb()->FreeStackOnTermination = TRUE;
 #endif
-    NtTerminateThread(NULL, uExitCode);
+    Status = NtTerminateThread(NULL, uExitCode);
+    if (Status == STATUS_CANT_TERMINATE_SELF) ExitProcess(uExitCode);
 
     /* We should never reach this place */
     ERROR_FATAL("It should not happen\n");
