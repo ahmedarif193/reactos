@@ -86,6 +86,7 @@ list(APPEND SOURCE
 
 list(APPEND WINE_SOURCE
     appbar.c
+    appmodel.c
     wine/classes.c
     wine/clipboard.c
     wine/control.c
