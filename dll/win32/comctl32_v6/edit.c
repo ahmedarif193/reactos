@@ -4260,11 +4260,24 @@ static LRESULT EDIT_EM_GetThumb(EDITSTATE *es)
  */
 static BOOL EDIT_EM_SetCueBanner(EDITSTATE *es, BOOL draw_focused, const WCHAR *cue_text)
 {
+#ifdef __REACTOS__
+    WCHAR *new_text;
+    DWORD size;
+#endif
+
     if (es->style & ES_MULTILINE || !cue_text)
         return FALSE;
 
+#ifdef __REACTOS__
+    size = (lstrlenW(cue_text) + 1) * sizeof(*cue_text);
+    if (!(new_text = Alloc(size))) return FALSE;
+    memcpy(new_text, cue_text, size);
+    Free(es->cue_banner_text);
+    es->cue_banner_text = new_text;
+#else
     Free(es->cue_banner_text);
     es->cue_banner_text = wcsdup(cue_text);
+#endif
     es->cue_banner_draw_focused = draw_focused;
 
     return TRUE;
