@@ -21,32 +21,42 @@ BOOLEAN KiTimeAdjustmentEnabled = FALSE;
 
 /* FUNCTIONS ******************************************************************/
 
-#if defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
-FORCEINLINE
+#if (defined(_M_AMD64) || defined(_M_ARM64)) && (NTDDI_VERSION >= NTDDI_LONGHORN)
 VOID
+NTAPI
 KiChargeThreadCycleTime(
     _Inout_ PKPRCB Prcb,
     _Inout_ PKTHREAD Thread)
 {
     ULONGLONG CurrentCycles, StartCycles, Delta;
 
+#if defined(_M_ARM64)
+    __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(CurrentCycles));
+#else
     CurrentCycles = __rdtsc();
+#endif
     StartCycles = Prcb->StartCycles;
     Prcb->StartCycles = CurrentCycles;
 
     /* Reset the baseline after an uninitialized or backwards sample. */
     if ((StartCycles == 0) || (CurrentCycles < StartCycles))
     {
+#if defined(_M_AMD64)
         if (SmpDbgEnabled)
             SmpDbgCycleCharge(Prcb->Number, 0, TRUE);
+#endif
         return;
     }
 
     Delta = CurrentCycles - StartCycles;
     Thread->CycleTime += Delta;
+    if (Thread->Process != NULL)
+        InterlockedExchangeAdd64((PLONG64)&Thread->Process->CycleTime, (LONG64)Delta);
     Prcb->CycleTime += Delta;
+#if defined(_M_AMD64)
     if (SmpDbgEnabled)
         SmpDbgCycleCharge(Prcb->Number, Delta, FALSE);
+#endif
 }
 #endif
 
@@ -179,7 +189,7 @@ KeUpdateRunTime(IN PKTRAP_FRAME TrapFrame,
         return;
     }
 
-#if defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+#if (defined(_M_AMD64) || defined(_M_ARM64)) && (NTDDI_VERSION >= NTDDI_LONGHORN)
     /* Charge measured execution against the absolute quantum target. */
     KiChargeThreadCycleTime(Prcb, Thread);
 #endif

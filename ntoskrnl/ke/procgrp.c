@@ -526,6 +526,21 @@ KeSetTimer2(
  */
 ULONG64
 NTAPI
+KeQueryTotalCycleTimeProcess(
+    _Inout_ PKPROCESS Process,
+    _Out_ PULONG64 CycleTimeStamp)
+{
+    if (CycleTimeStamp != NULL)
+        *CycleTimeStamp = (ULONG64)KeQueryPerformanceCounter(NULL).QuadPart;
+
+    return (ULONG64)InterlockedCompareExchange64((PLONG64)&Process->CycleTime, 0, 0);
+}
+
+/*
+ * @implemented
+ */
+ULONG64
+NTAPI
 KeQueryTotalCycleTimeThread(
     _Inout_ PKTHREAD Thread,
     _Out_ PULONG64 CycleTimeStamp)
