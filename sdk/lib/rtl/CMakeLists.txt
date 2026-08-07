@@ -120,7 +120,7 @@ elseif(ARCH STREQUAL "amd64")
     list(APPEND SOURCE
         bitmap64.c
         byteswap.c
-        amd64/dynfntbl.c
+        dynfntbl.c
         amd64/except.c
         amd64/unwind.c
         amd64/stubs.c
@@ -137,9 +137,9 @@ elseif(ARCH STREQUAL "arm64")
         arm64/debug_asm.S)
     list(APPEND SOURCE
         arm64/except.c
-        arm64/stubs.c
         arm64/unwind.c
         byteswap.c
+        dynfntbl.c
         mem.c)
 endif()
 
