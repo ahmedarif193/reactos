@@ -376,6 +376,14 @@ typedef struct _IO_RESOURCE_DESCRIPTOR {
       ULONG Reserved1;
       ULONG Reserved2;
     } ConfigData;
+    struct {
+      UCHAR Class;
+      UCHAR Type;
+      UCHAR Reserved1;
+      UCHAR Reserved2;
+      ULONG IdLowPart;
+      ULONG IdHighPart;
+    } Connection;
   } u;
 } IO_RESOURCE_DESCRIPTOR, *PIO_RESOURCE_DESCRIPTOR;
 
