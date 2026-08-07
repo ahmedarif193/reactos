@@ -1127,6 +1127,34 @@ Done:
     return Status;
 }
 
+static
+NTSTATUS
+NtfsCheckDirectoryEmpty(_In_ PVolumeContextBlock VolCB,
+                        _In_ PFileContextBlock FileCB)
+{
+    NtfsDirectoryEntry Entry;
+    PNtfsDirectory Directory;
+    NTSTATUS Status;
+
+    if (!(NtfsFileRecordGetHeader(FileCB->FileRec)->Flags & FR_IS_DIRECTORY))
+        return STATUS_SUCCESS;
+
+    Directory = NtfsDirectoryCreate(VolCB->DiskVolume);
+    if (!Directory)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Status = NtfsDirectoryLoadDirectory(Directory, FileCB->FileRec);
+    if (NT_SUCCESS(Status))
+        Status = NtfsDirectoryReadNext(Directory, TRUE, &Entry);
+    NtfsDirectoryDestroy(Directory);
+
+    if (NT_SUCCESS(Status))
+        return STATUS_DIRECTORY_NOT_EMPTY;
+    if (Status == STATUS_NO_MORE_FILES)
+        return STATUS_SUCCESS;
+    return Status;
+}
+
 _Function_class_(IRP_MJ_SET_INFORMATION)
 _Function_class_(DRIVER_DISPATCH)
 NTSTATUS
@@ -1331,10 +1359,15 @@ NtfsFsdSetInformation(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                     Status = STATUS_CANNOT_DELETE;
                     goto Complete;
                 }
+
+                Status = NtfsCheckDirectoryEmpty(VolCB, FileCB);
+                if (!NT_SUCCESS(Status))
+                    goto Complete;
             }
 
             /* The name is only removed once the last handle is gone. */
             FileCB->DeletePending = !!Disposition->DeleteFile;
+            FileObject->DeletePending = FileCB->DeletePending;
             Status = STATUS_SUCCESS;
             goto Complete;
         }

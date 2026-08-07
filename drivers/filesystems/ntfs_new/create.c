@@ -1105,6 +1105,25 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         NtfsFileRecordGetAutomaticTimestampMask(
             CurrentFile);
 
+    /* A read-only file may still be opened to change its attributes, but it
+     * cannot be opened for data writes or an overwriting disposition. */
+    if (FileExisted &&
+        !OpenTargetDirectory &&
+        !(NtfsFileRecordGetHeader(CurrentFile)->Flags & FR_IS_DIRECTORY) &&
+        ((FileCB->DesiredAccess & (FILE_WRITE_DATA | FILE_APPEND_DATA)) ||
+         Disposition == FILE_SUPERSEDE ||
+         Disposition == FILE_OVERWRITE ||
+         Disposition == FILE_OVERWRITE_IF))
+    {
+        NtfsFileBasicInformation BasicInformation;
+
+        Status = NtfsFileRecordGetBasicInformation(CurrentFile, &BasicInformation);
+        if (NT_SUCCESS(Status) && (BasicInformation.FileAttributes & FILE_ATTRIBUTE_READONLY))
+            Status = STATUS_ACCESS_DENIED;
+        if (!NT_SUCCESS(Status))
+            return NtfsCompleteFailedCreate(VolumeDeviceObject, Irp, FileCB, CurrentFile, CachedRecord, Status);
+    }
+
     /*
      * WOF FILE-provider files become ordinary files as soon as their unnamed
      * data stream is opened for content writes.  Do this before cache sizes
