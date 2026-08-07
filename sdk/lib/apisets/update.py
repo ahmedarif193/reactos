@@ -21,6 +21,29 @@ REDIRECT_HOSTS = {
     'gdi32full.dll': 'gdi32.dll'
 }
 
+# These contracts are implemented by a more specific ReactOS host than the
+# module-wide fallback above. Contract overrides always take precedence.
+CONTRACT_HOST_OVERRIDES = {
+    'api-ms-win-core-registry-l1-1-0.dll': 'advapi32.dll',
+    'api-ms-win-core-registry-l1-1-2.dll': 'advapi32.dll',
+    'api-ms-win-core-version-l1-1-0.dll': 'version.dll',
+    'api-ms-win-core-version-l1-1-1.dll': 'version.dll',
+    'api-ms-win-core-version-private-l1-1-0.dll': 'version.dll',
+    'api-ms-win-core-versionansi-l1-1-0.dll': 'version.dll',
+    'api-ms-win-core-versionansi-l1-1-1.dll': 'version.dll',
+    'api-ms-win-core-winrt-error-l1-1-0.dll': 'combase.dll',
+    'api-ms-win-core-winrt-error-l1-1-1.dll': 'combase.dll',
+    'api-ms-win-core-winrt-l1-1-0.dll': 'combase.dll',
+    'api-ms-win-core-winrt-registration-l1-1-0.dll': 'combase.dll',
+    'api-ms-win-core-winrt-roparameterizediid-l1-1-0.dll': 'combase.dll',
+    'api-ms-win-core-winrt-string-l1-1-0.dll': 'combase.dll',
+    'api-ms-win-security-base-l1-1-0.dll': 'advapi32.dll',
+    'api-ms-win-security-base-l1-2-0.dll': 'advapi32.dll',
+    'api-ms-win-shcore-scaling-l1-1-0.dll': 'shcore.dll',
+    'api-ms-win-shcore-scaling-l1-1-1.dll': 'shcore.dll',
+    'api-ms-win-shcore-scaling-l1-1-2.dll': 'shcore.dll',
+}
+
 OUTPUT_HEADER = """/*
  * PROJECT:     ReactOS apisets
  * LICENSE:     LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
@@ -68,6 +91,7 @@ class Apiset:
         version_str = ' | '.join(self.versions)
         name = self.name
         assert name[-4:].lower() == '.dll'
+        contract_name = name.lower()
         name = name[:-4]
         prefix, postfix = '', ''
         host = self.host
@@ -75,8 +99,10 @@ class Apiset:
             # Disable forwarders that have an empty host
             prefix = '// '
         else:
-            # Check to see if there is any dll we want to swap (kernelbase -> kernel32)
-            replace = REDIRECT_HOSTS.get(host.lower(), None)
+            replace = CONTRACT_HOST_OVERRIDES.get(contract_name, None)
+            if replace is None:
+                # Check to see if there is any dll we want to swap (kernelbase -> kernel32)
+                replace = REDIRECT_HOSTS.get(host.lower(), None)
             if replace:
                 postfix = ' // ' + host
                 host = replace
