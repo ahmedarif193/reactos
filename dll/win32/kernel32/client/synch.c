@@ -21,6 +21,10 @@ DEBUG_CHANNEL(kernel32sync);
 #undef InterlockedExchangeAdd
 #undef InterlockedCompareExchange
 
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+
 /* FUNCTIONS *****************************************************************/
 
 /*
@@ -339,6 +343,45 @@ CreateWaitableTimerW(IN LPSECURITY_ATTRIBUTES lpTimerAttributes OPTIONAL,
                                lpTimerAttributes,
                                lpTimerName,
                                bManualReset ? NotificationTimer : SynchronizationTimer);
+}
+
+HANDLE
+WINAPI
+CreateWaitableTimerExW(IN LPSECURITY_ATTRIBUTES lpTimerAttributes OPTIONAL,
+                       IN LPCWSTR lpTimerName OPTIONAL,
+                       IN DWORD dwFlags,
+                       IN DWORD dwDesiredAccess)
+{
+    NTSTATUS Status;
+    HANDLE Handle;
+    UNICODE_STRING ObjectName;
+    OBJECT_ATTRIBUTES LocalAttributes;
+    POBJECT_ATTRIBUTES ObjectAttributes;
+    TIMER_TYPE TimerType;
+
+    if (dwFlags & ~(CREATE_WAITABLE_TIMER_MANUAL_RESET |
+                    CREATE_WAITABLE_TIMER_HIGH_RESOLUTION))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return NULL;
+    }
+
+    TimerType = (dwFlags & CREATE_WAITABLE_TIMER_MANUAL_RESET) ? NotificationTimer
+                                                               : SynchronizationTimer;
+
+    if (lpTimerName) RtlInitUnicodeString(&ObjectName, lpTimerName);
+    ObjectAttributes = BaseFormatObjectAttributes(&LocalAttributes, lpTimerAttributes, lpTimerName ? &ObjectName : NULL);
+
+    Status = NtCreateTimer(&Handle, dwDesiredAccess, ObjectAttributes, TimerType);
+    if (!NT_SUCCESS(Status))
+    {
+        BaseSetLastNTError(Status);
+        return NULL;
+    }
+
+    SetLastError((Status == STATUS_OBJECT_NAME_EXISTS) ? ERROR_ALREADY_EXISTS
+                                                       : ERROR_SUCCESS);
+    return Handle;
 }
 
 /*
