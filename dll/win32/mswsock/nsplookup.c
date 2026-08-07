@@ -221,7 +221,11 @@ mwsNSPLookupServiceBegin(_In_ LPGUID lpProviderId,
 #else /* NSP_REDIRECT */
 
     wsaErr = ERROR_CALL_NOT_IMPLEMENTED;
-    if (IsEqualGUID(lpqsRestrictions->lpServiceClassId, &guid_NULL))
+    if (lpqsRestrictions->lpServiceClassId == NULL)
+    {
+        wsaErr = ERROR_CALL_NOT_IMPLEMENTED;
+    }
+    else if (IsEqualGUID(lpqsRestrictions->lpServiceClassId, &guid_NULL))
     {
         wsaErr = ERROR_CALL_NOT_IMPLEMENTED;
     }
