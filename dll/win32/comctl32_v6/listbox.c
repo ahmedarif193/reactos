@@ -1916,7 +1916,8 @@ static LRESULT LISTBOX_Directory( LB_DESCR *descr, UINT attrib,
                  FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_ARCHIVE)
 
                     if ((attrib & DDL_EXCLUSIVE) &&
-                        ((attrib & ATTRIBS) != (entry.dwFileAttributes & ATTRIBS)))
+                        (!(attrib & ATTRIBS) ||
+                         (attrib & ATTRIBS) != (entry.dwFileAttributes & ATTRIBS)))
                         continue;
 #undef ATTRIBS
                     if (!long_names && entry.cAlternateFileName[0])
