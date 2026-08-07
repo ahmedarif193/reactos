@@ -4770,6 +4770,16 @@ RtlGetVersion(
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSYSAPI
+VOID
+NTAPI
+RtlGetDeviceFamilyInfoEnum(
+    _Out_opt_ PULONGLONG pullUAPInfo,
+    _Out_opt_ PULONG pulDeviceFamily,
+    _Out_opt_ PULONG pulDeviceForm
+);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSYSAPI
 BOOLEAN
 NTAPI
 RtlGetNtProductType(_Out_ PNT_PRODUCT_TYPE ProductType);

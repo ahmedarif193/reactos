@@ -228,4 +228,83 @@ RtlGetVersion(IN OUT PRTL_OSVERSIONINFOW lpVersionInformation)
     return STATUS_SUCCESS;
 }
 
+static ULONG
+RtlpQueryDeviceFamilyValue(
+    _In_ PCWSTR KeyPath,
+    _In_ PCWSTR ValueName,
+    _In_ ULONG DefaultValue)
+{
+    union
+    {
+        KEY_VALUE_PARTIAL_INFORMATION Info;
+        ULONG_PTR Alignment;
+        UCHAR Bytes[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + sizeof(ULONG)];
+    } Buffer;
+    PKEY_VALUE_PARTIAL_INFORMATION kvpInfo = (PVOID)Buffer.Bytes;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    UNICODE_STRING KeyName;
+    UNICODE_STRING ValName;
+    HANDLE hKey;
+    ULONG Length;
+    ULONG Value = DefaultValue;
+    NTSTATUS Status;
+
+    RtlInitUnicodeString(&KeyName, KeyPath);
+    RtlInitUnicodeString(&ValName, ValueName);
+
+    InitializeObjectAttributes(&ObjectAttributes, &KeyName, OBJ_CASE_INSENSITIVE, NULL, NULL);
+
+    Status = NtOpenKey(&hKey, KEY_READ, &ObjectAttributes);
+    if (!NT_SUCCESS(Status))
+        return Value;
+
+    Status = NtQueryValueKey(hKey, &ValName, KeyValuePartialInformation, kvpInfo, sizeof(Buffer), &Length);
+    if (NT_SUCCESS(Status) &&
+        (kvpInfo->Type == REG_DWORD) &&
+        (kvpInfo->DataLength == sizeof(ULONG)))
+    {
+        Value = *(PULONG)kvpInfo->Data;
+    }
+
+    NtClose(hKey);
+    return Value;
+}
+
+VOID
+NTAPI
+RtlGetDeviceFamilyInfoEnum(
+    _Out_opt_ PULONGLONG pullUAPInfo,
+    _Out_opt_ PULONG pulDeviceFamily,
+    _Out_opt_ PULONG pulDeviceForm)
+{
+    PPEB Peb = NtCurrentPeb();
+
+    if (pullUAPInfo != NULL)
+    {
+        ULONG Ubr = RtlpQueryDeviceFamilyValue(UNIFIEDBUILDREVISION_KEY, UNIFIEDBUILDREVISION_VALUE, UNIFIEDBUILDREVISION_MIN);
+
+        *pullUAPInfo = ((ULONGLONG)(Peb->OSMajorVersion & 0xFFFF) << 48) |
+                       ((ULONGLONG)(Peb->OSMinorVersion & 0xFFFF) << 32) |
+                       ((ULONGLONG)(Peb->OSBuildNumber & 0xFFFF) << 16) |
+                       ((ULONGLONG)(Ubr & 0xFFFF));
+    }
+
+    if (pulDeviceFamily != NULL)
+    {
+        *pulDeviceFamily = (SharedUserData->NtProductType == NtProductWinNt) ?
+                           DEVICEFAMILYINFOENUM_DESKTOP :
+                           DEVICEFAMILYINFOENUM_SERVER;
+    }
+
+    if (pulDeviceForm != NULL)
+    {
+        ULONG DeviceForm = RtlpQueryDeviceFamilyValue(DEVICEFAMILYDEVICEFORM_KEY, DEVICEFAMILYDEVICEFORM_VALUE, DEVICEFAMILYDEVICEFORM_UNKNOWN);
+
+        if (DeviceForm > DEVICEFAMILYDEVICEFORM_MAX)
+            DeviceForm = DEVICEFAMILYDEVICEFORM_UNKNOWN;
+
+        *pulDeviceForm = DeviceForm;
+    }
+}
+
 /* EOF */

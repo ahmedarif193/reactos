@@ -940,6 +940,7 @@
 @ stdcall -version=0x601+ RtlGetCurrentProcessorNumberEx(ptr)
 @ stdcall -stub -version=0x600+ RtlGetCurrentTransaction()
 @ stdcall RtlGetDaclSecurityDescriptor(ptr ptr ptr ptr)
+@ stdcall -version=0xA00+ RtlGetDeviceFamilyInfoEnum(ptr ptr ptr)
 @ stdcall -version=0x600+ -arch=i386,x86_64 RtlGetEnabledExtendedFeatures(int64)
 @ stdcall RtlGetElementGenericTable(ptr long)
 @ stdcall RtlGetElementGenericTableAvl(ptr long)
