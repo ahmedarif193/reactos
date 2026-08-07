@@ -1195,6 +1195,7 @@ ExpQuerySystemProcessInformation(
                 SpiCurrent->BasePriority = Process->Pcb.BasePriority;
                 SpiCurrent->UniqueProcessId = Process->UniqueProcessId;
                 SpiCurrent->InheritedFromUniqueProcessId = Process->InheritedFromUniqueProcessId;
+                SpiCurrent->CycleTime = KeQueryTotalCycleTimeProcess(&Process->Pcb, NULL);
 
                 /* PsIdleProcess shares its handle table with PsInitialSystemProcess,
                  * so return the handle count for System only, not Idle one. */

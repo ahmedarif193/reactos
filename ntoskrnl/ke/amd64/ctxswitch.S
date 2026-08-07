@@ -200,6 +200,11 @@ PUBLIC KiUserThreadStartupExit
     jb .CycleTimeSeeded
     sub rax, r10
     add [r9 + ThCycleTime], rax
+    mov r11, [r9 + ThProcess]
+    test r11, r11
+    jz .ProcessCycleTimeCharged
+    lock add [r11 + PrCycleTime], rax
+.ProcessCycleTimeCharged:
     add gs:[PcCycleTime], rax
 .CycleTimeSeeded:
     mov rdx, r9

@@ -363,6 +363,11 @@ KiSwapContextResume(
 
     Prcb = KeGetCurrentPrcb();
 
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    if (Prcb != NULL)
+        KiChargeThreadCycleTime(Prcb, OldThread);
+#endif
+
     NewThread->ContextSwitches++;
 
     /*

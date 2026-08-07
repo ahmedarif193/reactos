@@ -1275,6 +1275,39 @@ NtQueryInformationProcess(
             _SEH2_END;
             break;
 
+        case ProcessCycleTime:
+        {
+            PPROCESS_CYCLE_TIME_INFORMATION CycleTimeInfo = (PPROCESS_CYCLE_TIME_INFORMATION)ProcessInformation;
+            ULONG64 AccumulatedCycles, CycleTimeStamp;
+
+            Length = sizeof(PROCESS_CYCLE_TIME_INFORMATION);
+            if (ProcessInformationLength != Length)
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            Status = ObReferenceObjectByHandle(ProcessHandle, PROCESS_QUERY_INFORMATION, PsProcessType, PreviousMode, (PVOID*)&Process, NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            AccumulatedCycles = KeQueryTotalCycleTimeProcess(&Process->Pcb, &CycleTimeStamp);
+
+            _SEH2_TRY
+            {
+                CycleTimeInfo->AccumulatedCycles = AccumulatedCycles;
+                CycleTimeInfo->CurrentCycleCount = CycleTimeStamp;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+
+            ObDereferenceObject(Process);
+            break;
+        }
+
         case ProcessDebugObjectHandle:
         {
             HANDLE DebugPort = NULL;
