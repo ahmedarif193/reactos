@@ -212,6 +212,7 @@
 @ stdcall DeviceIoControl(long long ptr long ptr long ptr ptr)
 @ stdcall DisableThreadLibraryCalls(ptr)
 @ stub -version=0x600+ DisassociateCurrentThreadFromCallback
+@ stdcall -version=0x603+ DiscardVirtualMemory(ptr long)
 @ stdcall DisconnectNamedPipe(long)
 @ stdcall DnsHostnameToComputerNameA(str ptr ptr)
 @ stdcall DnsHostnameToComputerNameW(wstr ptr ptr)
