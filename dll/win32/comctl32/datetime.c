@@ -1675,7 +1675,7 @@ DATETIME_WindowProc (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         return DATETIME_SetFormatW (infoPtr, (LPCWSTR)lParam);
 
     case DTM_GETMONTHCAL:
-	return (LRESULT)infoPtr->hMonthCal;
+	return IsWindowVisible(infoPtr->hMonthCal) ? (LRESULT)infoPtr->hMonthCal : 0;
 
     case DTM_SETMCCOLOR:
 	return SendMessageW (infoPtr->hMonthCal, MCM_SETCOLOR, wParam, lParam);
