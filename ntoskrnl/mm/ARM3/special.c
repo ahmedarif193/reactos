@@ -193,7 +193,7 @@ MiInitializeSpecialPool(VOID)
         MiSpecialPagesNonPagedMaximum = MmResidentAvailablePages >> 3;
 
     DPRINT1("Special pool start %p - end %p\n", MmSpecialPoolStart, MmSpecialPoolEnd);
-    ExpPoolFlags |= POOL_FLAG_SPECIAL_POOL;
+    ExpPoolFlags |= EXP_POOL_FLAG_SPECIAL_POOL;
 
     //MiTestSpecialPool();
 }
