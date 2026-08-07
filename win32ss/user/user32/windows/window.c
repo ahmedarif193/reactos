@@ -238,7 +238,7 @@ User32CreateWindowEx(DWORD dwExStyle,
         ULONG AnsiLength = WindowName.Length;
 
         WindowName.Length = 0;
-        WindowName.MaximumLength = AnsiLength * sizeof(WCHAR);
+        WindowName.MaximumLength = (AnsiLength + 1) * sizeof(WCHAR);
         WindowName.Buffer = RtlAllocateHeap(RtlGetProcessHeap(),
                                             0,
                                             WindowName.MaximumLength);
@@ -248,11 +248,20 @@ User32CreateWindowEx(DWORD dwExStyle,
             goto cleanup;
         }
 
-        Status = RtlMultiByteToUnicodeN(WindowName.Buffer,
-                                        WindowName.MaximumLength,
-                                        &WindowName.Length,
-                                        AnsiBuffer,
-                                        AnsiLength);
+        if (AnsiBuffer && AnsiLength >= 3 && (BYTE)AnsiBuffer[0] == 0xff)
+        {
+            PWSTR ResourceName = WindowName.Buffer;
+
+            ResourceName[0] = 0xffff;
+            ResourceName[1] = MAKEWORD((BYTE)AnsiBuffer[1], (BYTE)AnsiBuffer[2]);
+            ResourceName[2] = UNICODE_NULL;
+            WindowName.Length = 2 * sizeof(WCHAR);
+            Status = STATUS_SUCCESS;
+        }
+        else
+        {
+            Status = RtlMultiByteToUnicodeN(WindowName.Buffer, WindowName.MaximumLength, &WindowName.Length, AnsiBuffer, AnsiLength);
+        }
         if (!NT_SUCCESS(Status))
         {
             goto cleanup;

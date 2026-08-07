@@ -919,10 +919,8 @@ RealDefWindowProcA(HWND hWnd,
             DefSetText(hWnd, (PCWSTR)lParam, TRUE);
 
             if ((GetWindowLongPtrW(hWnd, GWL_STYLE) & WS_CAPTION) == WS_CAPTION)
-            {
                 UserPaintCaption(Wnd, DC_TEXT);
-                IntNotifyWinEvent(EVENT_OBJECT_NAMECHANGE, hWnd, OBJID_WINDOW, CHILDID_SELF, 0);
-            }
+            IntNotifyWinEvent(EVENT_OBJECT_NAMECHANGE, hWnd, OBJID_WINDOW, CHILDID_SELF, 0);
             Result = 1;
             break;
         }
@@ -1155,6 +1153,7 @@ RealDefWindowProcW(HWND hWnd,
 
             if ((GetWindowLongPtrW(hWnd, GWL_STYLE) & WS_CAPTION) == WS_CAPTION)
                 UserPaintCaption(Wnd, DC_TEXT);
+            IntNotifyWinEvent(EVENT_OBJECT_NAMECHANGE, hWnd, OBJID_WINDOW, CHILDID_SELF, 0);
             Result = 1;
             break;
         }
