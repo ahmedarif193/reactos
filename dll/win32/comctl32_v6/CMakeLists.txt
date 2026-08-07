@@ -51,6 +51,13 @@ set_source_files_properties(
     ${COMCTL32_COMMON_DIR}/stubs.c
     PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
+if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND (ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64"))
+    # These sources catch access faults with native SEH. Without asynchronous
+    # exception semantics Clang can omit the corresponding unwind handlers.
+    set_property(SOURCE ${COMCTL32_COMMON_DIR}/imagelist.c ${COMCTL32_COMMON_DIR}/treeview.c listbox.c PROPERTY SKIP_PRECOMPILE_HEADERS ON)
+    set_property(SOURCE ${COMCTL32_COMMON_DIR}/imagelist.c ${COMCTL32_COMMON_DIR}/treeview.c listbox.c APPEND PROPERTY COMPILE_OPTIONS -Xclang -fasync-exceptions)
+endif()
+
 add_library(comctl32_v6 MODULE
     ${SOURCE}
     ${COMCTL32_COMMON_DIR}/rsrc.rc
