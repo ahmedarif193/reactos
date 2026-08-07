@@ -34,6 +34,11 @@ typedef struct _EXTRACHUNKS {
   DWORD  cb;
 } EXTRACHUNKS, *LPEXTRACHUNKS;
 
+#ifdef __REACTOS__
+void *avifile_recalloc(void *mem, SIZE_T count, SIZE_T size);
+#define _recalloc avifile_recalloc
+#endif
+
 /* reads a chunk outof the extrachunk-structure */
 HRESULT ReadExtraChunk(const EXTRACHUNKS *extra,FOURCC ckid,LPVOID lp,LPLONG size);
 
