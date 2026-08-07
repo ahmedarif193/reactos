@@ -575,6 +575,8 @@
 @ stub -version=0x600+ SHSetTemporaryPropertyForItem # Vista:410
 @ stdcall SHSetUnreadMailCountW (wstr long wstr) # 2k3:336, Vista:411
 @ stdcall SHUpdateRecycleBinIcon() # 2k3:337, Vista:412
+@ stdcall -version=0x601+ SetCurrentProcessExplicitAppUserModelID(wstr) shcore.SetCurrentProcessExplicitAppUserModelID
+@ stdcall -version=0x601+ GetCurrentProcessExplicitAppUserModelID(ptr) shcore.GetCurrentProcessExplicitAppUserModelID
 @ stdcall SheChangeDirA(str) # 2k3:338, Vista:413
 @ stdcall -version=0x502 SheChangeDirExA(str) # 2k3:339
 @ stdcall SheChangeDirExW(wstr) # 2k3:340, Vista:414
