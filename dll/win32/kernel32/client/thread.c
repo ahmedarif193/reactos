@@ -1036,6 +1036,8 @@ SetThreadStackGuarantee(IN OUT PULONG StackSizeInBytes)
     PTEB Teb = NtCurrentTeb();
     ULONG GuaranteedStackBytes;
     ULONG AllocationSize;
+    ULONG RoundedSize;
+    SIZE_T StackReserve;
 
     if (!StackSizeInBytes)
     {
@@ -1051,20 +1053,32 @@ SetThreadStackGuarantee(IN OUT PULONG StackSizeInBytes)
     /* Return the size of the previous stack */
     *StackSizeInBytes = GuaranteedStackBytes;
 
-    /*
-     * If the new stack size is either zero or is less than the current size,
-     * the previous stack size is returned and we return success.
-     */
-    if ((AllocationSize == 0) || (AllocationSize < GuaranteedStackBytes))
-    {
+    if (AllocationSize == 0)
         return TRUE;
+
+    if (AllocationSize > MAXULONG - (PAGE_SIZE - 1))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
     }
 
-    // FIXME: Unimplemented!
-    UNIMPLEMENTED_ONCE;
+    RoundedSize = (AllocationSize + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+#ifdef _WIN64
+    if (RoundedSize < 2 * PAGE_SIZE)
+        RoundedSize = 2 * PAGE_SIZE;
+#endif
 
-    // Temporary HACK for supporting applications!
-    return TRUE; // FALSE;
+    StackReserve = (ULONG_PTR)Teb->NtTib.StackBase - (ULONG_PTR)Teb->DeallocationStack;
+    if (RoundedSize >= StackReserve)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (RoundedSize > GuaranteedStackBytes)
+        Teb->GuaranteedStackBytes = RoundedSize;
+
+    return TRUE;
 }
 
 /*
