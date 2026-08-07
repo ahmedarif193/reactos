@@ -290,15 +290,15 @@ co_IntGetScrollInfo(PWND Window, INT nBar, PSBDATA pSBData, LPSCROLLINFO lpsi)
       Mask = lpsi->fMask;
 
    if (0 != (Mask & SIF_PAGE))
-      lpsi->nPage = psi->nPage;
+      lpsi->nPage = pSBData->page;
 
    if (0 != (Mask & SIF_POS))
-      lpsi->nPos = psi->nPos;
+      lpsi->nPos = pSBData->pos;
 
    if (0 != (Mask & SIF_RANGE))
    {
-      lpsi->nMin = psi->nMin;
-      lpsi->nMax = psi->nMax;
+      lpsi->nMin = pSBData->posMin;
+      lpsi->nMax = pSBData->posMax;
    }
 
    if (0 != (Mask & SIF_TRACKPOS))
