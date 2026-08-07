@@ -722,6 +722,12 @@ BOOL WINAPI CPGenKey( HCRYPTPROV hprov, ALG_ID algid, DWORD flags, HCRYPTKEY *re
         return FALSE;
     }
 
+    if (container->type == PROV_DSS && algid != AT_SIGNATURE && algid != CALG_DSS_SIGN)
+    {
+        SetLastError( NTE_BAD_ALGID );
+        return FALSE;
+    }
+
     for (i = 0; i < ARRAY_SIZE(supported_key_lengths); i++)
     {
         if (bitlen == supported_key_lengths[i]) break;
