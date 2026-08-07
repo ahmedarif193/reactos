@@ -481,7 +481,7 @@
 @ stdcall SHChangeNotify(long long ptr ptr) # 2k3:276, Vista:320
 @ stub -version=0x600+ SHChangeNotifyRegisterThread # Vista:321
 @ stdcall SHChangeNotifySuspendResume(long ptr long long) # 2k3:277, Vista:322
-@ stub -version=0x600+ SHCreateAssociationRegistration # Vista:323
+@ stdcall -version=0x600+ SHCreateAssociationRegistration(ptr ptr) # Vista:323
 @ stdcall -version=0x600+ SHCreateDataObject(ptr long ptr ptr ptr ptr) # Vista:324
 @ stdcall -version=0x600+ SHCreateDefaultContextMenu(ptr ptr ptr) # Vista:325
 @ stdcall -version=0x600+ SHCreateDefaultExtractIcon(ptr ptr) # Vista:326
@@ -543,13 +543,14 @@
 @ stdcall SHGetPathFromIDListA(ptr ptr) # 2k3:314, Vista:381
 @ stub -version=0x600+ SHGetPathFromIDListEx # Vista:382
 @ stdcall SHGetPathFromIDListW(ptr ptr) # 2k3:315, Vista:383
+@ stdcall -version=0x601+ SHGetPropertyStoreForWindow(long ptr ptr)
 @ stub -version=0x600+ SHGetPropertyStoreFromIDList # Vista:384
 @ stub -version=0x600+ SHGetPropertyStoreFromParsingName # Vista:385
 @ stdcall SHGetSettings(ptr long) # 2k3:316, Vista:386
 @ stdcall SHGetSpecialFolderLocation(long long ptr) # 2k3:317, Vista:387
 @ stdcall SHGetSpecialFolderPathA(long ptr long long) # 2k3:318, Vista:388
 @ stdcall SHGetSpecialFolderPathW(long ptr long long) # 2k3:319, Vista:389
-@ stub -version=0x600+ SHGetStockIconInfo # Vista:390
+@ stdcall -version=0x600+ SHGetStockIconInfo(long long ptr) # Vista:390
 @ stub -version=0x600+ SHGetTemporaryPropertyForItem # Vista:391
 @ stdcall SHGetUnreadMailCountW(ptr wstr ptr ptr ptr long) # 2k3:320, Vista:392
 @ stdcall -version=0x502 SHHelpShortcuts_RunDLL(long long long long) SHHelpShortcuts_RunDLLA # 2k3:321
@@ -567,7 +568,7 @@
 @ stdcall SHPathPrepareForWriteW(long ptr wstr long) # 2k3:332, Vista:402
 @ stdcall SHQueryRecycleBinA(str ptr) # 2k3:333, Vista:403
 @ stdcall SHQueryRecycleBinW(wstr ptr) # 2k3:334, Vista:404
-@ stub -version=0x600+ SHQueryUserNotificationState # Vista:405
+@ stdcall -version=0x600+ SHQueryUserNotificationState(ptr) # Vista:405
 @ stub -version=0x600+ SHRemoveLocalizedName # Vista:406
 @ stub -version=0x600+ SHSetDefaultProperties # Vista:407
 @ stub -version=0x600+ SHSetKnownFolderPath # Vista:408
