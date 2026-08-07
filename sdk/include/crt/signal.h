@@ -25,7 +25,7 @@ extern "C" {
 #define SIGILL 4
 #define	SIGTRAP	5	/* trace trap (not reset when caught) */
 #define	SIGIOT	6	/* IOT instruction */
-#define	SIGABRT 6	/* used by abort, replace SIGIOT in the future */
+#define	SIGABRT 22	/* abnormal termination triggered by abort */
 #define	SIGEMT	7	/* EMT instruction */
 #define SIGFPE 8
 #define	SIGKILL	9	/* kill (cannot be caught or ignored) */
@@ -38,7 +38,7 @@ extern "C" {
 #endif
 #define SIGTERM 15
 #define SIGBREAK 21
-#define SIGABRT2 22
+#define SIGABRT2 SIGABRT
 
 #define SIGABRT_COMPAT 6
 
