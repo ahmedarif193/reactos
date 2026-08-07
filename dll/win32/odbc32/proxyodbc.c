@@ -54,6 +54,8 @@ WINE_DEFAULT_DEBUG_CHANNEL(odbc);
 
 #define SQL_OJ_CAPABILITIES_OLD 65003
 
+C_ASSERT(sizeof(SQLINTEGER) == sizeof(INT32));
+
 static BOOL is_wow64, is_old_wow64;
 
 struct win32_funcs
@@ -2064,7 +2066,7 @@ static SQLRETURN error_unix_a( struct env_handle *env, struct connection *con, s
                                SQLINTEGER *native_err, SQLCHAR *msg, SQLSMALLINT buflen, SQLSMALLINT *retlen )
 {
     struct SQLError_params params = { env ? env->unix_handle : 0, con ? con->hdr.unix_handle : 0,
-                                      stmt ? stmt->hdr.unix_handle : 0, state, native_err, msg, buflen, retlen };
+                                      stmt ? stmt->hdr.unix_handle : 0, state, (INT32 *)native_err, msg, buflen, retlen };
     return ODBC_CALL( SQLError, &params );
 }
 
@@ -2615,7 +2617,7 @@ SQLRETURN WINAPI SQLFreeStmt(SQLHSTMT StatementHandle, SQLUSMALLINT Option)
 static SQLRETURN get_connect_attr_unix_a( struct connection *con, SQLINTEGER attr, SQLPOINTER value,
                                           SQLINTEGER buflen, SQLINTEGER *retlen )
 {
-    struct SQLGetConnectAttr_params params = { con->hdr.unix_handle, attr, value, buflen, retlen };
+    struct SQLGetConnectAttr_params params = { con->hdr.unix_handle, attr, value, buflen, (INT32 *)retlen };
     return ODBC_CALL( SQLGetConnectAttr, &params );
 }
 
@@ -2888,7 +2890,7 @@ SQLRETURN WINAPI SQLGetData(SQLHSTMT StatementHandle, SQLUSMALLINT ColumnNumber,
 static SQLRETURN get_desc_field_unix_a( struct descriptor *desc, SQLSMALLINT record, SQLSMALLINT field_id,
                                         SQLPOINTER value, SQLINTEGER buflen, SQLINTEGER *retlen )
 {
-    struct SQLGetDescField_params params = { desc->hdr.unix_handle, record, field_id, value, buflen, retlen };
+    struct SQLGetDescField_params params = { desc->hdr.unix_handle, record, field_id, value, buflen, (INT32 *)retlen };
     return ODBC_CALL( SQLGetDescField, &params );
 }
 
@@ -3136,7 +3138,7 @@ static SQLRETURN get_diag_rec_unix_a( SQLSMALLINT type, struct object *obj, SQLS
                                       SQLCHAR *state, SQLINTEGER *native_err, SQLCHAR *msg, SQLSMALLINT buflen,
                                       SQLSMALLINT *retlen )
 {
-    struct SQLGetDiagRec_params params = { type, obj->unix_handle, rec_num, state, native_err, msg, buflen, retlen };
+    struct SQLGetDiagRec_params params = { type, obj->unix_handle, rec_num, state, (INT32 *)native_err, msg, buflen, retlen };
     return ODBC_CALL( SQLGetDiagRec, &params );
 }
 
@@ -3479,7 +3481,7 @@ done:
 static SQLRETURN get_stmt_attr_unix_a( struct statement *stmt, SQLINTEGER attr, SQLPOINTER value, SQLINTEGER buflen,
                                        SQLINTEGER *retlen )
 {
-    struct SQLGetStmtAttr_params params = { stmt->hdr.unix_handle, attr, value, buflen, retlen };
+    struct SQLGetStmtAttr_params params = { stmt->hdr.unix_handle, attr, value, buflen, (INT32 *)retlen };
     return ODBC_CALL( SQLGetStmtAttr, &params );
 }
 
@@ -5464,7 +5466,7 @@ SQLRETURN WINAPI SQLMoreResults(SQLHSTMT StatementHandle)
 static SQLRETURN native_sql_unix_a( struct connection *con, SQLCHAR *in_statement, SQLINTEGER len,
                                     SQLCHAR *out_statement, SQLINTEGER buflen, SQLINTEGER *retlen )
 {
-    struct SQLNativeSql_params params = { con->hdr.unix_handle, in_statement, len, out_statement, buflen, retlen };
+    struct SQLNativeSql_params params = { con->hdr.unix_handle, in_statement, len, out_statement, buflen, (INT32 *)retlen };
     return ODBC_CALL( SQLNativeSql, &params );
 }
 
@@ -6441,7 +6443,7 @@ static SQLRETURN error_unix_w( struct env_handle *env, struct connection *con, s
                                SQLINTEGER *native_err, SQLWCHAR *msg, SQLSMALLINT buflen, SQLSMALLINT *retlen )
 {
     struct SQLErrorW_params params = { env ? env->unix_handle : 0, con ? con->hdr.unix_handle : 0,
-                                       stmt ? stmt->hdr.unix_handle : 0, state, native_err, msg, buflen, retlen };
+                                       stmt ? stmt->hdr.unix_handle : 0, state, (INT32 *)native_err, msg, buflen, retlen };
     return ODBC_CALL( SQLErrorW, &params );
 }
 
@@ -6850,7 +6852,7 @@ SQLRETURN WINAPI SQLColAttributeW(SQLHSTMT StatementHandle, SQLUSMALLINT ColumnN
 static SQLRETURN get_connect_attr_unix_w( struct connection *con, SQLINTEGER attr, SQLPOINTER value,
                                           SQLINTEGER buflen, SQLINTEGER *retlen )
 {
-    struct SQLGetConnectAttrW_params params = { con->hdr.unix_handle, attr, value, buflen, retlen };
+    struct SQLGetConnectAttrW_params params = { con->hdr.unix_handle, attr, value, buflen, (INT32 *)retlen };
     return ODBC_CALL( SQLGetConnectAttrW, &params );
 }
 
@@ -6912,7 +6914,7 @@ SQLRETURN WINAPI SQLGetConnectAttrW(SQLHDBC ConnectionHandle, SQLINTEGER Attribu
 static SQLRETURN get_desc_field_unix_w( struct descriptor *desc, SQLSMALLINT record, SQLSMALLINT field_id,
                                         SQLPOINTER value, SQLINTEGER buflen, SQLINTEGER *retlen )
 {
-    struct SQLGetDescFieldW_params params = { desc->hdr.unix_handle, record, field_id, value, buflen, retlen };
+    struct SQLGetDescFieldW_params params = { desc->hdr.unix_handle, record, field_id, value, buflen, (INT32 *)retlen };
     return ODBC_CALL( SQLGetDescFieldW, &params );
 }
 
@@ -7091,7 +7093,7 @@ static SQLRETURN get_diag_rec_unix_w( SQLSMALLINT type, struct object *obj, SQLS
                                       SQLWCHAR *state, SQLINTEGER *native_err, SQLWCHAR *msg, SQLSMALLINT buflen,
                                       SQLSMALLINT *retlen )
 {
-    struct SQLGetDiagRecW_params params = { type, obj->unix_handle, rec_num, state, native_err, msg, buflen, retlen };
+    struct SQLGetDiagRecW_params params = { type, obj->unix_handle, rec_num, state, (INT32 *)native_err, msg, buflen, retlen };
     return ODBC_CALL( SQLGetDiagRecW, &params );
 }
 
@@ -7202,7 +7204,7 @@ SQLRETURN WINAPI SQLGetDiagRecW(SQLSMALLINT HandleType, SQLHANDLE Handle, SQLSMA
 static SQLRETURN get_stmt_attr_unix_w( struct statement *stmt, SQLINTEGER attr, SQLPOINTER value, SQLINTEGER buflen,
                                        SQLINTEGER *retlen )
 {
-    struct SQLGetStmtAttrW_params params = { stmt->hdr.unix_handle, attr, value, buflen, retlen };
+    struct SQLGetStmtAttrW_params params = { stmt->hdr.unix_handle, attr, value, buflen, (INT32 *)retlen };
     return ODBC_CALL( SQLGetStmtAttrW, &params );
 }
 
@@ -8142,7 +8144,7 @@ SQLRETURN WINAPI SQLForeignKeysW(SQLHSTMT StatementHandle, SQLWCHAR *PkCatalogNa
 static SQLRETURN native_sql_unix_w( struct connection *con, SQLWCHAR *in_statement, SQLINTEGER len,
                                     SQLWCHAR *out_statement, SQLINTEGER buflen, SQLINTEGER *retlen )
 {
-    struct SQLNativeSqlW_params params = { con->hdr.unix_handle, in_statement, len, out_statement, buflen, retlen };
+    struct SQLNativeSqlW_params params = { con->hdr.unix_handle, in_statement, len, out_statement, buflen, (INT32 *)retlen };
     return ODBC_CALL( SQLNativeSqlW, &params );
 }
 

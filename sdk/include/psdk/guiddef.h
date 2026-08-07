@@ -21,7 +21,7 @@
 
 typedef struct _GUID
 {
-#ifdef _MSC_VER
+#ifndef __LP64__
     unsigned long  Data1;
 #else
     unsigned int   Data1;

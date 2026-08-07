@@ -3782,7 +3782,7 @@ WINAPI
 LsarQueryTrustedDomainInfoByName(
     LSAPR_HANDLE PolicyHandle,
     PRPC_UNICODE_STRING TrustedDomainName,
-    POLICY_INFORMATION_CLASS InformationClass,
+    TRUSTED_INFORMATION_CLASS InformationClass,
     PLSAPR_TRUSTED_DOMAIN_INFO *PolicyInformation)
 {
     /* Fail, if we are not a domain controller */
@@ -3800,7 +3800,7 @@ WINAPI
 LsarSetTrustedDomainInfoByName(
     LSAPR_HANDLE PolicyHandle,
     PRPC_UNICODE_STRING TrustedDomainName,
-    POLICY_INFORMATION_CLASS InformationClass,
+    TRUSTED_INFORMATION_CLASS InformationClass,
     PLSAPR_TRUSTED_DOMAIN_INFO PolicyInformation)
 {
     /* Fail, if we are not a domain controller */
@@ -3867,7 +3867,7 @@ NTSTATUS
 WINAPI
 LsarQueryDomainInformationPolicy(
     LSAPR_HANDLE PolicyHandle,
-    POLICY_INFORMATION_CLASS InformationClass,
+    POLICY_DOMAIN_INFORMATION_CLASS InformationClass,
     PLSAPR_POLICY_DOMAIN_INFORMATION *PolicyInformation)
 {
     UNIMPLEMENTED;
@@ -3880,7 +3880,7 @@ NTSTATUS
 WINAPI
 LsarSetDomainInformationPolicy(
     LSAPR_HANDLE PolicyHandle,
-    POLICY_INFORMATION_CLASS InformationClass,
+    POLICY_DOMAIN_INFORMATION_CLASS InformationClass,
     PLSAPR_POLICY_DOMAIN_INFORMATION PolicyInformation)
 {
     UNIMPLEMENTED;

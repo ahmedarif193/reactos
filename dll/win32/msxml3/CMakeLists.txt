@@ -1,6 +1,5 @@
 
 add_definitions(
-    -D__ROS_LONG64__
     -D_WINE
     -DLIBXML_STATIC
     -DCOM_NO_WINDOWS_H)

@@ -1534,7 +1534,7 @@ SymCryptRsakeyGetCrtValue(
     UNREFERENCED_PARAMETER( flags );
 
     // Check if the arguments are correct
-    if ( (ppCrtExponents==NULL) && (nCrtExponents!=0) ||
+    if ( ((ppCrtExponents==NULL) && (nCrtExponents!=0)) ||
          (nCrtExponents != 0 && nCrtExponents != 2 ))
     {
         scError = SYMCRYPT_INVALID_ARGUMENT;

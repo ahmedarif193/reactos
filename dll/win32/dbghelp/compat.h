@@ -263,7 +263,7 @@ typedef struct _WOW64_FLOATING_SAVE_AREA
     DWORD   Cr0NpxState;
 } WOW64_FLOATING_SAVE_AREA, *PWOW64_FLOATING_SAVE_AREA;
 
-#include "pshpack4.h"
+#pragma pack(push, 4)
 typedef struct _WOW64_CONTEXT
 {
     DWORD ContextFlags;
@@ -292,7 +292,7 @@ typedef struct _WOW64_CONTEXT
     DWORD SegSs;
     BYTE ExtendedRegisters[WOW64_MAXIMUM_SUPPORTED_EXTENSION];
 } WOW64_CONTEXT, *PWOW64_CONTEXT;
-#include "poppack.h"
+#pragma pack(pop)
 
 #if defined(TARGET_i386)
 #define SIZE_OF_80387_REGISTERS	80

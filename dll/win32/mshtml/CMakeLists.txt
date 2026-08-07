@@ -1,6 +1,5 @@
 
 add_definitions(
-    -D__ROS_LONG64__
     -DCOM_NO_WINDOWS_H
     -Dstrcasecmp=_stricmp
     -Dstrncasecmp=_strnicmp

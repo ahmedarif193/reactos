@@ -268,7 +268,7 @@ format_main(
                             FormatCallback,
                             bQuickFormat,
                             bBackwardCompatible,
-                            FMIFS_HARDDISK, //MediaType,
+                            FixedMedia,
                             &LabelString,
                             ulClusterSize);
     }

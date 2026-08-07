@@ -158,48 +158,45 @@ static const char *debugstr_sid( PSID sid )
 {
     int auth;
     SID * psid = sid;
+    DWORD *subauth;
 
     if (psid == NULL) return "(null)";
-
     auth = psid->IdentifierAuthority.Value[5] +
         (psid->IdentifierAuthority.Value[4] << 8) +
         (psid->IdentifierAuthority.Value[3] << 16) +
         (psid->IdentifierAuthority.Value[2] << 24);
 
-    switch (psid->SubAuthorityCount) {
-    case 0:
+    if (!psid->SubAuthorityCount)
         return wine_dbg_sprintf("S-%d-%d", psid->Revision, auth);
+    subauth = GetSidSubAuthority( sid, 0 );
+
+    switch (psid->SubAuthorityCount) {
     case 1:
         return wine_dbg_sprintf("S-%d-%d-%lu", psid->Revision, auth,
-                                psid->SubAuthority[0]);
+                                subauth[0]);
     case 2:
         return wine_dbg_sprintf("S-%d-%d-%lu-%lu", psid->Revision, auth,
-                                psid->SubAuthority[0], psid->SubAuthority[1]);
+                                subauth[0], subauth[1]);
     case 3:
         return wine_dbg_sprintf("S-%d-%d-%lu-%lu-%lu", psid->Revision, auth,
-                                psid->SubAuthority[0], psid->SubAuthority[1], psid->SubAuthority[2]);
+                                subauth[0], subauth[1], subauth[2]);
     case 4:
         return wine_dbg_sprintf("S-%d-%d-%lu-%lu-%lu-%lu", psid->Revision, auth,
-                                psid->SubAuthority[0], psid->SubAuthority[1], psid->SubAuthority[2],
-                                psid->SubAuthority[3]);
+                                subauth[0], subauth[1], subauth[2], subauth[3]);
     case 5:
         return wine_dbg_sprintf("S-%d-%d-%lu-%lu-%lu-%lu-%lu", psid->Revision, auth,
-                                psid->SubAuthority[0], psid->SubAuthority[1], psid->SubAuthority[2],
-                                psid->SubAuthority[3], psid->SubAuthority[4]);
+                                subauth[0], subauth[1], subauth[2], subauth[3], subauth[4]);
     case 6:
         return wine_dbg_sprintf("S-%d-%d-%lu-%lu-%lu-%lu-%lu-%lu", psid->Revision, auth,
-                                psid->SubAuthority[3], psid->SubAuthority[1], psid->SubAuthority[2],
-                                psid->SubAuthority[0], psid->SubAuthority[4], psid->SubAuthority[5]);
+                                subauth[0], subauth[1], subauth[2], subauth[3], subauth[4], subauth[5]);
     case 7:
         return wine_dbg_sprintf("S-%d-%d-%lu-%lu-%lu-%lu-%lu-%lu-%lu", psid->Revision, auth,
-                                psid->SubAuthority[0], psid->SubAuthority[1], psid->SubAuthority[2],
-                                psid->SubAuthority[3], psid->SubAuthority[4], psid->SubAuthority[5],
-                                psid->SubAuthority[6]);
+                                subauth[0], subauth[1], subauth[2], subauth[3], subauth[4], subauth[5],
+                                subauth[6]);
     case 8:
         return wine_dbg_sprintf("S-%d-%d-%lu-%lu-%lu-%lu-%lu-%lu-%lu-%lu", psid->Revision, auth,
-                                psid->SubAuthority[0], psid->SubAuthority[1], psid->SubAuthority[2],
-                                psid->SubAuthority[3], psid->SubAuthority[4], psid->SubAuthority[5],
-                                psid->SubAuthority[6], psid->SubAuthority[7]);
+                                subauth[0], subauth[1], subauth[2], subauth[3], subauth[4], subauth[5],
+                                subauth[6], subauth[7]);
     }
     return "(too-big)";
 }

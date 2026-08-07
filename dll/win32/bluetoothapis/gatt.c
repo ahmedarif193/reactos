@@ -21,6 +21,7 @@
 
 #include <stdarg.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #include <windef.h>
 #include <winbase.h>

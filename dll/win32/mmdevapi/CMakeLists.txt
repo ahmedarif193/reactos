@@ -32,7 +32,7 @@ add_library(mmdevapi MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/mmdevapi.def)
 
 set_module_type(mmdevapi win32dll)
-target_compile_definitions(mmdevapi PRIVATE _FORCENAMELESSUNION _FORCENAMELESSSTRUCT CP_UNIXCP=CP_ACP)
+target_compile_definitions(mmdevapi PRIVATE _FORCENAMELESSUNION _FORCENAMELESSSTRUCT CONST_VTABLE CP_UNIXCP=CP_ACP)
 target_link_libraries(mmdevapi uuid wine)
 add_importlibs(mmdevapi ole32 oleaut32 user32 advapi32 version setupapi msvcrt kernel32 ntdll)
 add_delay_importlibs(mmdevapi winmm)

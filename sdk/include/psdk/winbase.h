@@ -5,16 +5,20 @@
 extern "C" {
 #endif
 
+#ifndef WINADVAPI
 #if !defined(_ADVAPI32_)
 #define WINADVAPI DECLSPEC_IMPORT
 #else
 #define WINADVAPI
 #endif
+#endif
 
+#ifndef WINBASEAPI
 #if !defined(_KERNEL32_)
 #define WINBASEAPI DECLSPEC_IMPORT
 #else
 #define WINBASEAPI
+#endif
 #endif
 
 #include <minwinbase.h>
@@ -2471,16 +2475,16 @@ BOOL WINAPI LockFile(HANDLE,DWORD,DWORD,DWORD,DWORD);
 BOOL WINAPI LockFileEx(HANDLE,DWORD,DWORD,DWORD,DWORD,LPOVERLAPPED);
 PVOID WINAPI LockResource(HGLOBAL);
 #define LockSegment(w) GlobalFix((HANDLE)(w)) /* Obsolete: Has no effect. */
-BOOL WINAPI LogonUserA(_In_ LPSTR, _In_opt_ LPSTR, _In_opt_ LPSTR, _In_ DWORD, _In_ DWORD, _Outptr_ PHANDLE);
-BOOL WINAPI LogonUserW(_In_ LPWSTR, _In_opt_ LPWSTR, _In_opt_ LPWSTR, _In_ DWORD, _In_ DWORD, _Outptr_ PHANDLE);
+BOOL WINAPI LogonUserA(_In_ LPCSTR, _In_opt_ LPCSTR, _In_opt_ LPCSTR, _In_ DWORD, _In_ DWORD, _Outptr_ PHANDLE);
+BOOL WINAPI LogonUserW(_In_ LPCWSTR, _In_opt_ LPCWSTR, _In_opt_ LPCWSTR, _In_ DWORD, _In_ DWORD, _Outptr_ PHANDLE);
 
 _Success_(return != FALSE)
 BOOL
 WINAPI
 LogonUserExA(
-  _In_ LPSTR lpszUsername,
-  _In_opt_ LPSTR lpszDomain,
-  _In_opt_ LPSTR lpszPassword,
+  _In_ LPCSTR lpszUsername,
+  _In_opt_ LPCSTR lpszDomain,
+  _In_opt_ LPCSTR lpszPassword,
   _In_ DWORD dwLogonType,
   _In_ DWORD dwLogonProvider,
   _Out_opt_ PHANDLE phToken,
@@ -2493,9 +2497,9 @@ _Success_(return != FALSE)
 BOOL
 WINAPI
 LogonUserExW(
-  _In_ LPWSTR lpszUsername,
-  _In_opt_ LPWSTR lpszDomain,
-  _In_opt_ LPWSTR lpszPassword,
+  _In_ LPCWSTR lpszUsername,
+  _In_opt_ LPCWSTR lpszDomain,
+  _In_opt_ LPCWSTR lpszPassword,
   _In_ DWORD dwLogonType,
   _In_ DWORD dwLogonProvider,
   _Out_opt_ PHANDLE phToken,

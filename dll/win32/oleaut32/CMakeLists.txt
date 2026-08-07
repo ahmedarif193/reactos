@@ -1,6 +1,5 @@
 
 add_definitions(
-    -D__ROS_LONG64__
     -DCOM_NO_WINDOWS_H
     -D_OLEAUT32_
     -DPROXY_DELEGATION

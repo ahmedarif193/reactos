@@ -1,7 +1,6 @@
 add_definitions(
     -D_USE_MATH_DEFINES
     -DUSE_WIN32_OPENGL
-    -D__ROS_LONG64__
     -DI64_MAX=_I64_MAX
     -Dcopysignf=_copysignf)
 

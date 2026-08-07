@@ -26,10 +26,13 @@
 #include <string.h>
 #include <assert.h>
 
+#if !defined(__REACTOS__) || !defined(DBGHELP_STATIC_LIB)
+#include "ntstatus.h"
+#define WIN32_NO_STATUS
+#endif
 #include "dbghelp_private.h"
 #include "image_private.h"
 #if !defined(__REACTOS__) || !defined(DBGHELP_STATIC_LIB)
-#include "ntstatus.h"
 #include "winternl.h"
 #include "wine/debug.h"
 #elif defined(_MSC_VER)
@@ -769,7 +772,7 @@ static BOOL pe_load_export_debug_info(struct module* module)
                 for (j = 0; j < exports->NumberOfNames; j++)
                     if ((ordinals[j] == i) && names[j]) break;
                 if (j < exports->NumberOfNames) continue;
-                snprintf(buffer, sizeof(buffer), "%ld", i + exports->Base);
+                snprintf(buffer, sizeof(buffer), "%u", (unsigned int)(i + exports->Base));
                 symt_new_public(module, NULL, buffer, FALSE, base + functions[i], 1);
             }
         }

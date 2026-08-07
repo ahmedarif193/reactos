@@ -107,7 +107,7 @@ public:
     #pragma GCC diagnostic push
     #pragma GCC diagnostic ignored "-Wclass-memaccess"
 #endif
-        memmove(Dest, Source, NumElements * sizeof(T));
+        memmove(static_cast<void *>(Dest), static_cast<const void *>(Source), NumElements * sizeof(T));
 #if defined(__GNUC__) && __GNUC__ >= 8
     #pragma GCC diagnostic pop
 #endif

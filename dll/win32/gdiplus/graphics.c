@@ -2509,8 +2509,8 @@ static GpStatus antialias_fill_path(GpGraphics *graphics, GpBrush *brush, GpPath
         REAL scaled_x = (points[i].X - fill_area.X) * ANTIALIAS_SCALE_X;
         REAL scaled_y = (points[i].Y - fill_area.Y) * ANTIALIAS_SCALE_Y;
 
-        if (scaled_x < INT_MIN || scaled_x > INT_MAX ||
-            scaled_y < INT_MIN || scaled_y > INT_MAX)
+        if (scaled_x < INT_MIN || scaled_x >= -(REAL)INT_MIN ||
+            scaled_y < INT_MIN || scaled_y >= -(REAL)INT_MIN)
         {
             status = NotImplemented;
             goto done;

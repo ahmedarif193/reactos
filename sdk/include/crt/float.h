@@ -128,6 +128,15 @@ _controlfp(
 
 __MINGW_NOTHROW
 _CRTIMP
+errno_t
+__cdecl
+_controlfp_s(
+  _Out_opt_ unsigned int *currentControl,
+  _In_ unsigned int newControl,
+  _In_ unsigned int mask);
+
+__MINGW_NOTHROW
+_CRTIMP
 unsigned int
 __cdecl
 _control87(
