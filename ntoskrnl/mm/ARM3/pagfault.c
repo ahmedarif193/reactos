@@ -191,7 +191,7 @@ MiCheckForUserStackOverflow(IN PVOID Address,
     PTEB32 Wow64Teb = NULL;
 #endif
     PVOID StackBase, DeallocationStack, NextStackAddress;
-    SIZE_T GuaranteedSize;
+    SIZE_T GuaranteedSize, GuardSize = PAGE_SIZE;
     NTSTATUS Status;
 
     /* Do we own the address space lock? */
@@ -234,11 +234,9 @@ MiCheckForUserStackOverflow(IN PVOID Address,
     DPRINT("Handling guard page fault with Stacks Addresses 0x%p and 0x%p, guarantee: %lx\n",
             StackBase, DeallocationStack, GuaranteedSize);
 
-    /* Guarantees make this code harder, for now, assume there aren't any */
-    ASSERT(GuaranteedSize == 0);
-
-    /* So allocate only the minimum guard page size */
-    GuaranteedSize = PAGE_SIZE;
+    /* Round the stack guarantee, retaining one page as the minimum */
+    GuaranteedSize = ROUND_TO_PAGES(GuaranteedSize);
+    if ((GuaranteedSize == 0) || (GuaranteedSize >= ((ULONG_PTR)StackBase - (ULONG_PTR)DeallocationStack))) GuaranteedSize = PAGE_SIZE;
 
     /* Does this faulting stack address actually exist in the stack? */
     if ((Address >= StackBase) || (Address < DeallocationStack))
@@ -250,10 +248,10 @@ MiCheckForUserStackOverflow(IN PVOID Address,
     }
 
     /* This is where the stack will start now */
-    NextStackAddress = (PVOID)((ULONG_PTR)PAGE_ALIGN(Address) - GuaranteedSize);
+    NextStackAddress = (PVOID)((ULONG_PTR)PAGE_ALIGN(Address) - GuardSize);
 
-    /* Do we have at least one page between here and the end of the stack? */
-    if (((ULONG_PTR)NextStackAddress - PAGE_SIZE) <= (ULONG_PTR)DeallocationStack)
+    /* Is there enough reserved stack below the next guard for the guarantee? */
+    if (((ULONG_PTR)NextStackAddress - GuaranteedSize) <= (ULONG_PTR)DeallocationStack)
     {
         /* We don't -- Trying to make this guard page valid now */
         DPRINT1("Close to our death...\n");
@@ -278,7 +276,7 @@ MiCheckForUserStackOverflow(IN PVOID Address,
 #endif
 
         /* Calculate the next memory address */
-        NextStackAddress = (PVOID)((ULONG_PTR)PAGE_ALIGN(DeallocationStack) + GuaranteedSize);
+        NextStackAddress = (PVOID)((ULONG_PTR)PAGE_ALIGN(DeallocationStack) + GuardSize);
 
         /* Allocate the memory */
         Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
@@ -309,16 +307,16 @@ MiCheckForUserStackOverflow(IN PVOID Address,
 
     /* Update the stack limit */
 #ifdef _WIN64
-    if (Wow64Teb) Wow64Teb->NtTib.StackLimit = PtrToUlong((PVOID)((ULONG_PTR)NextStackAddress + GuaranteedSize));
+    if (Wow64Teb) Wow64Teb->NtTib.StackLimit = PtrToUlong((PVOID)((ULONG_PTR)NextStackAddress + GuardSize));
     else
 #endif
-    Teb->NtTib.StackLimit = (PVOID)((ULONG_PTR)NextStackAddress + GuaranteedSize);
+    Teb->NtTib.StackLimit = (PVOID)((ULONG_PTR)NextStackAddress + GuardSize);
 
     /* Now move the guard page to the next page */
     Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
                                      &NextStackAddress,
                                      0,
-                                     &GuaranteedSize,
+                                     &GuardSize,
                                      MEM_COMMIT,
                                      PAGE_READWRITE | PAGE_GUARD);
     if ((NT_SUCCESS(Status) || (Status == STATUS_ALREADY_COMMITTED)))
