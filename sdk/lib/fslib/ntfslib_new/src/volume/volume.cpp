@@ -69,13 +69,8 @@ NtfsProbePartition(
     // Check if OEM_ID is "NTFS    ".
     if (RtlCompareMemory(PartitionBootSector->OEM_ID, "NTFS    ", 8) != 8)
     {
-        char OemId[9];
-
-        /* Raw boot-sector bytes are not printable text (mkfs.fat volumes,
-         * x86 jump opcodes, even newlines); sanitize before logging. */
-        for (i = 0; i < 8; i++) OemId[i] = ((PartitionBootSector->OEM_ID[i] >= 0x20) && (PartitionBootSector->OEM_ID[i] < 0x7F)) ? (char)PartitionBootSector->OEM_ID[i] : '.';
-        OemId[8] = '\0';
-        DPRINT1("Failed with NTFS identifier: [%s]\n", OemId);
+        /* Mount requests are sent to every registered file system. Rejecting
+         * a non-NTFS volume here is expected and must not pollute the log. */
         return STATUS_UNRECOGNIZED_VOLUME;
     }
 
