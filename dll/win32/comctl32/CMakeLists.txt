@@ -43,6 +43,13 @@ list(APPEND SOURCE
 
 set_source_files_properties(stubs.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
+if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND (ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64"))
+    # These sources catch access faults with native SEH. Without asynchronous
+    # exception semantics Clang can omit the corresponding unwind handlers.
+    set_property(SOURCE imagelist.c treeview.c PROPERTY SKIP_PRECOMPILE_HEADERS ON)
+    set_property(SOURCE imagelist.c treeview.c APPEND PROPERTY COMPILE_OPTIONS -Xclang -fasync-exceptions)
+endif()
+
 add_library(comctl32 MODULE
     ${SOURCE}
     rsrc.rc
