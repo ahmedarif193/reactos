@@ -1678,6 +1678,8 @@ int WINAPI DrawShadowText(HDC hdc, LPCWSTR text, UINT length, RECT *rect, DWORD 
  */
 HRESULT WINAPI LoadIconWithScaleDown(HINSTANCE hinst, const WCHAR *name, int cx, int cy, HICON *icon)
 {
+    DWORD error;
+
     TRACE("(%p, %s, %d, %d, %p)\n", hinst, debugstr_w(name), cx, cy, icon);
 
     *icon = NULL;
@@ -1688,7 +1690,14 @@ HRESULT WINAPI LoadIconWithScaleDown(HINSTANCE hinst, const WCHAR *name, int cx,
     *icon = LoadImageW(hinst, name, IMAGE_ICON, cx, cy,
                        (hinst || IS_INTRESOURCE(name)) ? 0 : LR_LOADFROMFILE);
     if (!*icon)
-        return HRESULT_FROM_WIN32(GetLastError());
+    {
+        error = GetLastError();
+#ifdef __REACTOS__
+        if (hinst && error == ERROR_RESOURCE_NAME_NOT_FOUND)
+            error = ERROR_RESOURCE_TYPE_NOT_FOUND;
+#endif
+        return HRESULT_FROM_WIN32(error);
+    }
 
     return S_OK;
 }
