@@ -78,6 +78,7 @@ add_subdirectory(initpki)
 add_subdirectory(inseng)
 add_subdirectory(iologmsg)
 add_subdirectory(iphlpapi)
+add_subdirectory(iyuv_32)
 #add_subdirectory(iprtprio) # not built in trunk
 add_subdirectory(itircl)
 add_subdirectory(itss)
