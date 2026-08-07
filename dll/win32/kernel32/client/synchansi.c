@@ -23,6 +23,34 @@ CreateWaitableTimerA(IN LPSECURITY_ATTRIBUTES lpTimerAttributes OPTIONAL,
     ConvertWin32AnsiObjectApiToUnicodeApi(WaitableTimer, lpTimerName, lpTimerAttributes, bManualReset);
 }
 
+HANDLE
+WINAPI
+CreateWaitableTimerExA(IN LPSECURITY_ATTRIBUTES lpTimerAttributes OPTIONAL,
+                       IN LPCSTR lpTimerName OPTIONAL,
+                       IN DWORD dwFlags,
+                       IN DWORD dwDesiredAccess)
+{
+    NTSTATUS Status;
+    PUNICODE_STRING UnicodeCache;
+    ANSI_STRING AnsiName;
+
+    if (!lpTimerName)
+        return CreateWaitableTimerExW(lpTimerAttributes, NULL, dwFlags, dwDesiredAccess);
+
+    UnicodeCache = &NtCurrentTeb()->StaticUnicodeString;
+    RtlInitAnsiString(&AnsiName, lpTimerName);
+    Status = RtlAnsiStringToUnicodeString(UnicodeCache, &AnsiName, FALSE);
+    if (NT_SUCCESS(Status))
+        return CreateWaitableTimerExW(lpTimerAttributes, UnicodeCache->Buffer, dwFlags, dwDesiredAccess);
+
+    if (Status == STATUS_BUFFER_OVERFLOW)
+        SetLastError(ERROR_FILENAME_EXCED_RANGE);
+    else
+        BaseSetLastNTError(Status);
+
+    return NULL;
+}
+
 /*
  * @implemented
  */

@@ -13,6 +13,12 @@
 #define NDEBUG
 #include <debug.h>
 
+C_ASSERT(sizeof(OVERLAPPED_ENTRY) == sizeof(FILE_IO_COMPLETION_INFORMATION));
+C_ASSERT(FIELD_OFFSET(OVERLAPPED_ENTRY, lpCompletionKey) == FIELD_OFFSET(FILE_IO_COMPLETION_INFORMATION, KeyContext));
+C_ASSERT(FIELD_OFFSET(OVERLAPPED_ENTRY, lpOverlapped) == FIELD_OFFSET(FILE_IO_COMPLETION_INFORMATION, ApcContext));
+C_ASSERT(FIELD_OFFSET(OVERLAPPED_ENTRY, Internal) == FIELD_OFFSET(FILE_IO_COMPLETION_INFORMATION, IoStatusBlock));
+C_ASSERT(FIELD_OFFSET(OVERLAPPED_ENTRY, dwNumberOfBytesTransferred) == FIELD_OFFSET(FILE_IO_COMPLETION_INFORMATION, IoStatusBlock) + FIELD_OFFSET(IO_STATUS_BLOCK, Information));
+
 /*
  * SetFileCompletionNotificationModes is not entirely Vista-exclusive,
  * it was actually added to Windows 2003 in SP2. Headers restrict it from
@@ -182,6 +188,39 @@ GetQueuedCompletionStatus(IN HANDLE CompletionHandle,
 
     /* Return success */
     return TRUE;
+}
+
+/*
+ * @implemented
+ */
+BOOL
+WINAPI
+GetQueuedCompletionStatusEx(IN HANDLE CompletionHandle,
+                            OUT LPOVERLAPPED_ENTRY lpCompletionPortEntries,
+                            IN ULONG ulCount,
+                            OUT PULONG ulNumEntriesRemoved,
+                            IN DWORD dwMilliseconds,
+                            IN BOOL fAlertable)
+{
+    NTSTATUS Status;
+    LARGE_INTEGER Time;
+    PLARGE_INTEGER TimePtr;
+
+    TimePtr = BaseFormatTimeOut(&Time, dwMilliseconds);
+    Status = NtRemoveIoCompletionEx(CompletionHandle, (PFILE_IO_COMPLETION_INFORMATION)lpCompletionPortEntries, ulCount, ulNumEntriesRemoved, TimePtr, fAlertable);
+    if (Status == STATUS_SUCCESS)
+        return TRUE;
+
+    if (Status == STATUS_TIMEOUT)
+        SetLastError(WAIT_TIMEOUT);
+    else if (Status == STATUS_USER_APC)
+        SetLastError(WAIT_IO_COMPLETION);
+    else if (Status == STATUS_ABANDONED)
+        SetLastError(ERROR_ABANDONED_WAIT_0);
+    else
+        BaseSetLastNTError(Status);
+
+    return FALSE;
 }
 
 /*
