@@ -11,7 +11,8 @@ endif()
 add_definitions(
     -D__NTDLL__
     -D_NTOSKRNL_
-    -DCRTDLL)
+    -DCRTDLL
+    -DNTDDI_VERSION=${REACTOS_TARGET_NTDDI})
 
 include_directories(
     BEFORE include
@@ -40,6 +41,7 @@ list(APPEND SOURCE
     ldr/ldrutils.c
     ldr/verifier.c
     rtl/exit.c
+    rtl/nls.c
     rtl/registry.c
     rtl/time.c
     rtl/virtual.c
