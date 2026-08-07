@@ -4343,6 +4343,9 @@ typedef struct tagPOINTER_PEN_INFO {
 HKL WINAPI ActivateKeyboardLayout(_In_ HKL, _In_ UINT);
 BOOL WINAPI AdjustWindowRect(_Inout_ LPRECT, _In_ DWORD, _In_ BOOL);
 BOOL WINAPI AdjustWindowRectEx(_Inout_ LPRECT, _In_ DWORD, _In_ BOOL, _In_ DWORD);
+#if (WINVER >= 0x0605)
+BOOL WINAPI AdjustWindowRectExForDpi(_Inout_ LPRECT, _In_ DWORD, _In_ BOOL, _In_ DWORD, _In_ UINT);
+#endif
 #if (_WIN32_WINNT >= 0x0500)
 BOOL WINAPI AnimateWindow(_In_ HWND, _In_ DWORD, _In_ DWORD);
 #endif /* (_WIN32_WINNT >= 0x0500) */
@@ -4788,6 +4791,9 @@ BOOL WINAPI EmptyClipboard(void);
 BOOL WINAPI EnableMenuItem(_In_ HMENU, _In_ UINT, _In_ UINT);
 BOOL WINAPI EnableScrollBar(_In_ HWND, _In_ UINT, _In_ UINT);
 BOOL WINAPI EnableWindow(_In_ HWND, _In_ BOOL);
+#if (WINVER >= 0x0605)
+BOOL WINAPI EnableNonClientDpiScaling(_In_ HWND);
+#endif
 BOOL WINAPI EndDeferWindowPos(_In_ HDWP);
 BOOL WINAPI EndDialog(_In_ HWND, _In_ INT_PTR);
 BOOL WINAPI EndMenu(void);
@@ -5091,6 +5097,9 @@ HBRUSH WINAPI GetSysColorBrush(_In_ int);
 #define GetSysModalWindow() (NULL)
 HMENU WINAPI GetSystemMenu(_In_ HWND, _In_ BOOL);
 int WINAPI GetSystemMetrics(_In_ int);
+#if (WINVER >= 0x0605)
+int WINAPI GetSystemMetricsForDpi(_In_ int, _In_ UINT);
+#endif
 
 DWORD
 WINAPI
@@ -5222,10 +5231,19 @@ BOOL WINAPI GetMonitorInfoW(_In_ HMONITOR, _Inout_ LPMONITORINFO);
 #define USER_DEFAULT_SCREEN_DPI 96
 #endif /* _WIN32_WINNT >= _WIN32_WINNT_VISTA */
 
-#if (_WIN32_WINNT >= 0x0605) /* Windows 10 pre-Threshold */
+#if (WINVER >= 0x0601)
+BOOL WINAPI GetDpiForMonitorInternal(_In_ HMONITOR, _In_ UINT, _Out_ UINT*, _Out_ UINT*);
+#endif
+
+#if (WINVER >= 0x0603)
+BOOL WINAPI GetProcessDpiAwarenessInternal(_In_opt_ HANDLE, _Out_ DPI_AWARENESS*);
+#endif
+
+#if (WINVER >= 0x0605) /* Windows 10 pre-Threshold */
 UINT WINAPI GetDpiForSystem(VOID);
 UINT WINAPI GetDpiForWindow(_In_ HWND hwnd);
-#endif /* _WIN32_WINNT >= 0x0605 */
+BOOL WINAPI IsValidDpiAwarenessContext(_In_ DPI_AWARENESS_CONTEXT);
+#endif /* WINVER >= 0x0605 */
 
 UINT
 WINAPI
@@ -5596,6 +5614,9 @@ BOOL WINAPI SetProcessDefaultLayout(_In_ DWORD);
 #endif /* (_WIN32_WINNT >= 0x0500) */
 #if (WINVER >= 0x0605)
 BOOL WINAPI SetProcessDpiAwarenessContext(_In_ DPI_AWARENESS_CONTEXT);
+#endif
+#if (WINVER >= 0x0603)
+BOOL WINAPI SetProcessDpiAwarenessInternal(_In_ DPI_AWARENESS);
 #endif
 BOOL WINAPI SetProcessWindowStation(_In_ HWINSTA);
 BOOL WINAPI SetPropA(_In_ HWND, _In_ LPCSTR, _In_opt_ HANDLE);

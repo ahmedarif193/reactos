@@ -1216,11 +1216,19 @@ NtUserSetProcessDpiAwarenessContext(
     else
     {
         ppi = PsGetCurrentProcessWin32Process();
-        if (!ppi->DpiContext)
+        if (!ppi)
+        {
+            EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        }
+        else if (!ppi->DpiContext)
         {
             /* Process-lifetime one-shot, like on Windows */
             ppi->DpiContext = DpiContext;
             Ret = 1;
+        }
+        else
+        {
+            EngSetLastError(ERROR_ACCESS_DENIED);
         }
     }
 

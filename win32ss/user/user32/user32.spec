@@ -295,6 +295,7 @@
 @ stdcall GetDoubleClickTime() NtUserGetDoubleClickTime
 @ stdcall -version=0x601+ GetDpiForMonitorInternal(ptr long ptr ptr)
 @ stdcall -version=0xA00+ GetDpiForSystem()
+@ stdcall -version=0xA00+ GetSystemMetricsForDpi(long long)
 @ stdcall -version=0xA00+ GetDpiForWindow(ptr)
 @ stdcall GetFocus()
 @ stdcall GetForegroundWindow() NtUserGetForegroundWindow
@@ -382,6 +383,8 @@
 @ stdcall GetTabbedTextExtentW(long wstr long long ptr)
 @ stdcall GetTaskmanWindow ()
 @ stdcall GetThreadDesktop(long)
+@ stdcall -version=0xA00+ EnableNonClientDpiScaling(ptr)
+@ stdcall -version=0xA00+ AdjustWindowRectExForDpi(ptr long long long long)
 @ stdcall -version=0xA00+ GetThreadDpiAwarenessContext()
 @ stdcall GetTitleBarInfo(long ptr) NtUserGetTitleBarInfo
 @ stdcall GetTopWindow(long)
@@ -464,7 +467,7 @@
 @ stdcall IsSETEnabled()
 @ stdcall IsServerSideWindow(long)
 @ stdcall -version=0x601+ IsTouchWindow(long ptr)
-@ stdcall -stub -version=0xA00+ IsValidDpiAwarenessContext(long)
+@ stdcall -version=0xA00+ IsValidDpiAwarenessContext(long)
 @ stdcall IsWinEventHookInstalled(long)
 @ stdcall IsWindow(long)
 @ stdcall IsWindowEnabled(long)
