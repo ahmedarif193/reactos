@@ -54,7 +54,7 @@ typedef struct _HOOKPROC_CALLBACK_ARGUMENTS
   WPARAM wParam;
   LPARAM lParam;
   HOOKPROC Proc;
-  INT Mod;
+  INT_PTR Mod;
   ULONG_PTR offPfn;
   BOOLEAN Ansi;
   LRESULT Result;
