@@ -23,8 +23,11 @@ static BOOL
 Imm32IsInteractiveUserLogon(VOID)
 {
     BOOL bOK, IsMember = FALSE;
+    DWORD dwLength;
+    HWINSTA hWinSta;
     PSID pSid;
     SID_IDENTIFIER_AUTHORITY IdentAuth = { SECURITY_NT_AUTHORITY };
+    USEROBJECTFLAGS UserObjectFlags;
 
     if (!AllocateAndInitializeSid(&IdentAuth, 1, SECURITY_INTERACTIVE_RID,
                                   0, 0, 0, 0, 0, 0, 0, &pSid))
@@ -38,7 +41,14 @@ Imm32IsInteractiveUserLogon(VOID)
     if (pSid)
         FreeSid(pSid);
 
-    return bOK && IsMember;
+    if (bOK && IsMember)
+        return TRUE;
+
+    if (NtUserGetThreadState(THREADSTATE_ISWINLOGON))
+        return FALSE;
+
+    hWinSta = GetProcessWindowStation();
+    return hWinSta && GetUserObjectInformationW(hWinSta, UOI_FLAGS, &UserObjectFlags, sizeof(UserObjectFlags), &dwLength) && (UserObjectFlags.dwFlags & WSF_VISIBLE);
 }
 
 static BOOL
@@ -125,7 +135,7 @@ FN_CoRegisterInitializeSpy  OLE32_FN(CoRegisterInitializeSpy)   = NULL;
 FN_CoRevokeInitializeSpy    OLE32_FN(CoRevokeInitializeSpy)     = NULL;
 
 #define Imm32GetOle32Fn(func_name) \
-    IMM32_GET_FN(&OLE32_FN(func_name), &g_hOle32, L"ole32.dll", #func_name)
+    IMM32_GET_FN(&OLE32_FN(func_name), &g_hOle32, L"ole32.dll", func_name)
 
 HRESULT Imm32CoInitializeEx(VOID)
 {
@@ -174,7 +184,7 @@ FN_TF_CreateLangBarMgr                MSCTF_FN(TF_CreateLangBarMgr)             
 FN_TF_InvalidAssemblyListCacheIfExist MSCTF_FN(TF_InvalidAssemblyListCacheIfExist) = NULL;
 
 #define Imm32GetMsctfFn(func_name) \
-    IMM32_GET_FN(&MSCTF_FN(func_name), &g_hMsctf, L"msctf.dll", #func_name)
+    IMM32_GET_FN(&MSCTF_FN(func_name), &g_hMsctf, L"msctf.dll", func_name)
 
 HRESULT Imm32TF_CreateLangBarMgr(_Inout_ ITfLangBarMgr **ppBarMgr)
 {
