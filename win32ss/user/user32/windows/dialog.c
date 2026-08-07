@@ -1581,18 +1581,19 @@ static BOOL DIALOG_DlgDirSelect( HWND hwnd, LPWSTR str, INT len,
     WCHAR *buffer, *ptr;
     INT item, size;
     BOOL ret;
+    DWORD error = GetLastError();
     HWND listbox = GetDlgItem( hwnd, id );
 
     TRACE("%p %s %d\n", hwnd, unicode ? debugstr_w(str) : debugstr_a((LPSTR)str), id );
-    if (!listbox) return FALSE;
+    if (!listbox) goto failed;
 
     item = SendMessageW(listbox, combo ? CB_GETCURSEL : LB_GETCURSEL, 0, 0 );
-    if (item == LB_ERR) return FALSE;
+    if (item == LB_ERR) goto failed;
 
     size = SendMessageW(listbox, combo ? CB_GETLBTEXTLEN : LB_GETTEXTLEN, item, 0 );
-    if (size == LB_ERR) return FALSE;
+    if (size == LB_ERR) goto failed;
 
-    if (!(buffer = HeapAlloc( GetProcessHeap(), 0, (size+2) * sizeof(WCHAR) ))) return FALSE;
+    if (!(buffer = HeapAlloc( GetProcessHeap(), 0, (size+2) * sizeof(WCHAR) ))) goto failed;
 
     SendMessageW( listbox, combo ? CB_GETLBTEXT : LB_GETTEXT, item, (LPARAM)buffer );
 
@@ -1629,7 +1630,12 @@ static BOOL DIALOG_DlgDirSelect( HWND hwnd, LPWSTR str, INT len,
     else lstrcpynW( str, ptr, len );
     HeapFree( GetProcessHeap(), 0, buffer );
     TRACE("Returning %d %s\n", ret, unicode ? debugstr_w(str) : debugstr_a((LPSTR)str) );
+    SetLastError( error );
     return ret;
+
+failed:
+    SetLastError( error );
+    return FALSE;
 }
 
 
