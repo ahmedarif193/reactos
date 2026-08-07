@@ -332,10 +332,12 @@ WSALookupServiceBeginW(IN LPWSAQUERYSETW lpqsRestrictions,
         return SOCKET_ERROR;
     }
 
-    /* Verify pointers */
+    /* Verify pointers. The service class id is optional: callers that query a
+     * namespace rather than a specific service leave it NULL. */
     if (IsBadWritePtr(lphLookup, sizeof(*lphLookup)) ||
         IsBadReadPtr(lpqsRestrictions, sizeof(*lpqsRestrictions)) ||
-        IsBadReadPtr(lpqsRestrictions->lpServiceClassId, sizeof(*lpqsRestrictions->lpServiceClassId)))
+        ((lpqsRestrictions->lpServiceClassId != NULL) &&
+         IsBadReadPtr(lpqsRestrictions->lpServiceClassId, sizeof(*lpqsRestrictions->lpServiceClassId))))
     {
         /* They are invalid; fail */
         SetLastError(WSAEFAULT);
