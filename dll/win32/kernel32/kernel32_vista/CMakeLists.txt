@@ -18,6 +18,7 @@ list(APPEND SOURCE
     GetLogicalProcessorInformationEx.c
     GetNamedPipeClientProcessId.c
     GetProcessGroupAffinity.c
+    GetSystemDefaultLocaleName.c
     GetTickCount64.c
     GetUserDefaultLocaleName.c
     InitOnce.c
