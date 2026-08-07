@@ -2013,7 +2013,7 @@ static struct device_notify *device_notify_copy( struct device_notify *notify, D
         DEV_BROADCAST_HANDLE *notify_handle = (DEV_BROADCAST_HANDLE *)notify->header;
         DEV_BROADCAST_HANDLE *event_handle = (DEV_BROADCAST_HANDLE *)event->header;
         event_handle->dbch_handle = notify_handle->dbch_handle;
-        event_handle->dbch_hdevnotify = notify;
+        event_handle->dbch_hdevnotify = (HDEVNOTIFY)notify;
     }
 
     return event;
@@ -2184,7 +2184,7 @@ HDEVNOTIFY WINAPI I_ScRegisterDeviceNotification( HANDLE handle, DEV_BROADCAST_H
 
     LeaveCriticalSection( &service_cs );
 
-    return notify;
+    return (HDEVNOTIFY)notify;
 }
 
 /******************************************************************************
@@ -2192,7 +2192,7 @@ HDEVNOTIFY WINAPI I_ScRegisterDeviceNotification( HANDLE handle, DEV_BROADCAST_H
  */
 BOOL WINAPI I_ScUnregisterDeviceNotification( HDEVNOTIFY handle )
 {
-    struct device_notify *notify = handle;
+    struct device_notify *notify = (struct device_notify *)handle;
     BOOL ret = TRUE;
 
     TRACE("%p\n", handle);
