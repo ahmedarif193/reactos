@@ -5452,6 +5452,35 @@ ftGdiGetFontData(
     return Result;
 }
 
+BOOL
+FASTCALL
+ftGdiGetCharWidthInfo(
+    _In_ PFONTGDI FontGDI,
+    _In_ const LOGFONTW *LogFont,
+    _Out_ PCHWIDTHINFO Info)
+{
+    FT_Face Face = FontGDI->SharedFace->Face;
+    TT_HoriHeader *Hori;
+    FT_Error Error;
+
+    RtlZeroMemory(Info, sizeof(*Info));
+
+    IntLockFreeType();
+    Error = IntRequestFontSize(FontGDI, LogFont->lfWidth, LogFont->lfHeight);
+    if (!Error && FT_IS_SCALABLE(Face))
+    {
+        Hori = FT_Get_Sfnt_Table(Face, FT_SFNT_HHEA);
+        if (Hori)
+        {
+            Info->lMinA = (SHORT)((FT_MulFix(Hori->min_Left_Side_Bearing, Face->size->metrics.x_scale) + 32) >> 6);
+            Info->lMinC = (SHORT)((FT_MulFix(Hori->min_Right_Side_Bearing, Face->size->metrics.x_scale) + 32) >> 6);
+        }
+    }
+    IntUnLockFreeType();
+
+    return !Error;
+}
+
 #define GOT_PENALTY(name, value) Penalty += (value)
 
 // NOTE: See Table 1. of https://learn.microsoft.com/en-us/previous-versions/ms969909(v=msdn.10)
