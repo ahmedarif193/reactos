@@ -14,6 +14,11 @@
 #include <debug.h>
 DEBUG_CHANNEL(kernel32file);
 
+#ifndef FSCTL_PIPE_GET_CONNECTION_ATTRIBUTE
+#define FSCTL_PIPE_GET_CONNECTION_ATTRIBUTE \
+    CTL_CODE(FILE_DEVICE_NAMED_PIPE, 12, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#endif
+
 /* GLOBALS ********************************************************************/
 
 LONG ProcessPipeId;
@@ -1393,6 +1398,56 @@ TransactNamedPipe(IN HANDLE hNamedPipe,
     }
 
     return TRUE;
+}
+
+static
+BOOL
+NpGetPipeAttribute(IN HANDLE hNamedPipe,
+                   IN PCSTR AttributeName,
+                   IN ULONG AttributeNameSize,
+                   OUT PULONG AttributeValue)
+{
+    IO_STATUS_BLOCK Iosb;
+    NTSTATUS Status;
+
+    Status = NtFsControlFile(hNamedPipe, NULL, NULL, NULL, &Iosb, FSCTL_PIPE_GET_CONNECTION_ATTRIBUTE, (PVOID)AttributeName, AttributeNameSize, AttributeValue, sizeof(*AttributeValue));
+    if (Status == STATUS_PENDING)
+    {
+        Status = NtWaitForSingleObject(hNamedPipe, FALSE, NULL);
+        if (NT_SUCCESS(Status)) Status = Iosb.Status;
+    }
+
+    if (!NT_SUCCESS(Status))
+    {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+BOOL
+WINAPI
+GetNamedPipeServerProcessId(IN HANDLE hNamedPipe,
+                            OUT PULONG ServerProcessId)
+{
+    return NpGetPipeAttribute(hNamedPipe, "ServerProcessId", sizeof("ServerProcessId"), ServerProcessId);
+}
+
+BOOL
+WINAPI
+GetNamedPipeServerSessionId(IN HANDLE hNamedPipe,
+                            OUT PULONG ServerSessionId)
+{
+    return NpGetPipeAttribute(hNamedPipe, "ServerSessionId", sizeof("ServerSessionId"), ServerSessionId);
+}
+
+BOOL
+WINAPI
+GetNamedPipeClientSessionId(IN HANDLE hNamedPipe,
+                            OUT PULONG ClientSessionId)
+{
+    return NpGetPipeAttribute(hNamedPipe, "ClientSessionId", sizeof("ClientSessionId"), ClientSessionId);
 }
 
 /* EOF */
