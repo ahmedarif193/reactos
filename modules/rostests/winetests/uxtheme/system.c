@@ -2159,8 +2159,8 @@ static void test_EnableThemeDialogTexture(void)
         memset(&bmp, 0, sizeof(bmp));
         count = GetObjectA((HBITMAP)log_brush.lbHatch, sizeof(bmp), &bmp);
         ok(count == sizeof(bmp), "GetObjectA failed, error %lu.\n", GetLastError());
-        ok(bmp.bmWidth == size.cx, "Expected width %ld, got %d.\n", size.cx, bmp.bmWidth);
-        ok(bmp.bmHeight == size.cy, "Expected height %ld, got %d.\n", size.cy, bmp.bmHeight);
+        ok(bmp.bmWidth == size.cx, "Expected width %ld, got %ld.\n", size.cx, bmp.bmWidth);
+        ok(bmp.bmHeight == size.cy, "Expected height %ld, got %ld.\n", size.cy, bmp.bmHeight);
 
         /* Test that DefDlgProcA/W() are hooked for some WM_CTLCOLOR* messages */
         brush = (HBRUSH)SendMessageW(dialog, msg, (WPARAM)child_hdc, (LPARAM)child);

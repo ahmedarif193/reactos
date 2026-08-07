@@ -27,10 +27,10 @@ static void verify_str_imp2(const CComBSTR& comstr, PCWSTR expected, size_t Expe
                 winetest_ok(!wcscmp(str, expected), "Expected the string to be '%s', was '%s'\n", wine_dbgstr_w(expected), wine_dbgstr_w(str));
             }
             size_t Length = comstr.Length();
-            winetest_ok(Length == ExpectedLength, "Expected Length to be %u, was: %u\n", ExpectedLength, Length);
+            winetest_ok(Length == ExpectedLength, "Expected Length to be %Iu, was: %Iu\n", ExpectedLength, Length);
             Length = comstr.ByteLength();
             ExpectedLength *= sizeof(WCHAR);
-            winetest_ok(Length == ExpectedLength, "Expected ByteLength to be %u, was: %u\n", ExpectedLength, Length);
+            winetest_ok(Length == ExpectedLength, "Expected ByteLength to be %Iu, was: %Iu\n", ExpectedLength, Length);
         }
     }
     else

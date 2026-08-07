@@ -56,7 +56,7 @@ GetDefaultPrinterFromRegistry(VOID)
     dwErrorCode = (DWORD)RegOpenKeyExW(HKEY_CURRENT_USER, wszWindowsKey, 0, KEY_READ, &hWindowsKey);
     if (dwErrorCode != ERROR_SUCCESS)
     {
-        skip("RegOpenKeyExW failed with status %u!\n", dwErrorCode);
+        skip("RegOpenKeyExW failed with status %lu!\n", dwErrorCode);
         goto Cleanup;
     }
 
@@ -64,7 +64,7 @@ GetDefaultPrinterFromRegistry(VOID)
     dwErrorCode = (DWORD)RegQueryValueExW(hWindowsKey, wszDeviceValue, NULL, NULL, NULL, &cbNeeded);
     if (dwErrorCode != ERROR_SUCCESS)
     {
-        skip("RegQueryValueExW failed with status %u!\n", dwErrorCode);
+        skip("RegQueryValueExW failed with status %lu!\n", dwErrorCode);
         goto Cleanup;
     }
 
@@ -80,7 +80,7 @@ GetDefaultPrinterFromRegistry(VOID)
     dwErrorCode = RegQueryValueExW(hWindowsKey, wszDeviceValue, NULL, NULL, (PBYTE)pwszDevice, &cbNeeded);
     if (dwErrorCode != ERROR_SUCCESS)
     {
-        skip("RegQueryValueExW failed with status %u!\n", dwErrorCode);
+        skip("RegQueryValueExW failed with status %lu!\n", dwErrorCode);
         goto Cleanup;
     }
 
@@ -114,7 +114,7 @@ GetLocalsplFuncs(LPPRINTPROVIDOR pp)
     hLocalspl = GetModuleHandleW(L"localspl");
     if (!hLocalspl)
     {
-        skip("GetModuleHandleW failed with error %u!\n", GetLastError());
+        skip("GetModuleHandleW failed with error %lu!\n", GetLastError());
         return FALSE;
     }
 
@@ -122,14 +122,14 @@ GetLocalsplFuncs(LPPRINTPROVIDOR pp)
     pfnInitializePrintProvidor = (PInitializePrintProvidor)GetProcAddress(hLocalspl, "InitializePrintProvidor");
     if (!pfnInitializePrintProvidor)
     {
-        skip("GetProcAddress failed with error %u!\n", GetLastError());
+        skip("GetProcAddress failed with error %lu!\n", GetLastError());
         return FALSE;
     }
 
     // Get localspl's function pointers.
     if (!pfnInitializePrintProvidor(pp, sizeof(PRINTPROVIDOR), NULL))
     {
-        skip("pfnInitializePrintProvidor failed with error %u!\n", GetLastError());
+        skip("pfnInitializePrintProvidor failed with error %lu!\n", GetLastError());
         return FALSE;
     }
 
@@ -145,7 +145,7 @@ GetSpoolssFunc(const char* FunctionName)
     hSpoolss = GetModuleHandleW(L"spoolss");
     if (!hSpoolss)
     {
-        skip("GetModuleHandleW failed with error %u!\n", GetLastError());
+        skip("GetModuleHandleW failed with error %lu!\n", GetLastError());
         return FALSE;
     }
 

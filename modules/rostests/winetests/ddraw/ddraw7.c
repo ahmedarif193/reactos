@@ -14175,14 +14175,14 @@ static void test_getdc(void)
 
             size = GetObjectA(bitmap, sizeof(dib), &dib);
             ok(size == sizeof(dib), "Got unexpected size %d for format %s.\n", size, test_data[i].name);
-            ok(!dib.dsBm.bmType, "Got unexpected type %#x for format %s.\n",
+            ok(!dib.dsBm.bmType, "Got unexpected type %#lx for format %s.\n",
                     dib.dsBm.bmType, test_data[i].name);
-            ok(dib.dsBm.bmWidth == surface_desc.dwWidth, "Got unexpected width %d for format %s.\n",
+            ok(dib.dsBm.bmWidth == surface_desc.dwWidth, "Got unexpected width %ld for format %s.\n",
                     dib.dsBm.bmWidth, test_data[i].name);
-            ok(dib.dsBm.bmHeight == surface_desc.dwHeight, "Got unexpected height %d for format %s.\n",
+            ok(dib.dsBm.bmHeight == surface_desc.dwHeight, "Got unexpected height %ld for format %s.\n",
                     dib.dsBm.bmHeight, test_data[i].name);
             width_bytes = ((dib.dsBm.bmWidth * test_data[i].format.dwRGBBitCount + 31) >> 3) & ~3;
-            ok(dib.dsBm.bmWidthBytes == width_bytes, "Got unexpected width bytes %d for format %s.\n",
+            ok(dib.dsBm.bmWidthBytes == width_bytes, "Got unexpected width bytes %ld for format %s.\n",
                     dib.dsBm.bmWidthBytes, test_data[i].name);
             ok(dib.dsBm.bmPlanes == 1, "Got unexpected plane count %d for format %s.\n",
                     dib.dsBm.bmPlanes, test_data[i].name);

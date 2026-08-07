@@ -64,7 +64,7 @@ static int extract_one(const char* filename, const char* resid)
     dwErr = GetLastError();
     CloseHandle(file);
     free(decompressed);
-    ok(ret, "WriteFile failed (%d)\n", dwErr);
+    ok(ret, "WriteFile failed (%lu)\n", dwErr);
     return ret && dstsize == gccSize;
 }
 
@@ -73,7 +73,7 @@ int extract_msvc_dll(char szFile[MAX_PATH], char szPath[MAX_PATH])
 {
     const char* dir = tmpdir();
     BOOL ret = CreateDirectoryA(dir, NULL);
-    ok(ret, "CreateDirectoryA failed(%d)\n", GetLastError());
+    ok(ret, "CreateDirectoryA failed(%lu)\n", GetLastError());
 
     sprintf(szFile, "%s\\uffs.pdb", dir);
     if (!extract_one(szFile, "msvc_uffs.pdb"))
@@ -95,20 +95,20 @@ void cleanup_msvc_dll()
 
     sprintf(szFile, "%s\\uffs.pdb", dir);
     ret = DeleteFileA(szFile);
-    ok(ret, "DeleteFileA failed(%d)\n", GetLastError());
+    ok(ret, "DeleteFileA failed(%lu)\n", GetLastError());
 
     sprintf(szFile, "%s\\uffs.dll", dir);
     ret = DeleteFileA(szFile);
-    ok(ret, "DeleteFileA failed(%d)\n", GetLastError());
+    ok(ret, "DeleteFileA failed(%lu)\n", GetLastError());
     ret = RemoveDirectoryA(dir);
-    ok(ret, "RemoveDirectoryA failed(%d)\n", GetLastError());
+    ok(ret, "RemoveDirectoryA failed(%lu)\n", GetLastError());
 }
 
 int extract_gcc_dll(char szFile[MAX_PATH])
 {
     const char* dir = tmpdir();
     BOOL ret = CreateDirectoryA(dir, NULL);
-    ok(ret, "CreateDirectoryA failed(%d)\n", GetLastError());
+    ok(ret, "CreateDirectoryA failed(%lu)\n", GetLastError());
 
     sprintf(szFile, "%s\\uffs.dll", dir);
     if (!extract_one(szFile, "gcc_uffs.dll"))
@@ -125,9 +125,9 @@ void cleanup_gcc_dll()
 
     sprintf(szFile, "%s\\uffs.dll", dir);
     ret = DeleteFileA(szFile);
-    ok(ret, "DeleteFileA failed(%d)\n", GetLastError());
+    ok(ret, "DeleteFileA failed(%lu)\n", GetLastError());
     ret = RemoveDirectoryA(dir);
-    ok(ret, "RemoveDirectoryA failed(%d)\n", GetLastError());
+    ok(ret, "RemoveDirectoryA failed(%lu)\n", GetLastError());
 }
 
 

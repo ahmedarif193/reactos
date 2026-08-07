@@ -41,8 +41,8 @@ static void Test_GetEnvironmentVariableA(void)
     memset(Buffer, 0xAB, sizeof(Buffer));
     Length = GetEnvironmentVariableA("COMSPEC", Buffer, ActualLength + 1);
     ok_eq_ulong(Length, ActualLength);
-    ok_eq_wchar(Buffer[ActualLength], '\0');
-    ok_eq_wchar(Buffer[ActualLength + 1], '\xAB');
+    ok_eq_char(Buffer[ActualLength], '\0');
+    ok_eq_char(Buffer[ActualLength + 1], '\xAB');
 
     /* Test non-existant variable name */
     memset(Buffer, 0xAB, sizeof(Buffer));

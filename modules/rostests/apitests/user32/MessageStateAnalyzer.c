@@ -163,7 +163,7 @@ static VOID DoAnalyzeAllMessages(VOID)
 
     for (i = 0; i < _countof(entries4); ++i)
     {
-        ok(entries4[i].iFound != -1, "entries4[%d].iFound was -1\n", i);
+        ok(entries4[i].iFound != -1, "entries4[%Iu].iFound was -1\n", i);
     }
 }
 

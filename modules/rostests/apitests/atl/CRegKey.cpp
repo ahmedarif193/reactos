@@ -68,7 +68,7 @@ START_TEST(CRegKey)
     lret = key.QueryValue(_T("APITEST_VALUE_NAME"), &type, buffer, &buffer_size);
     ok(lret == ERROR_SUCCESS, "Expected lret to be ERROR_SUCCESS, was: %lu\n", lret);
     ok(type == REG_SZ, "Expected type to be REG_SZ, was: %lu\n", type);
-    ok(buffer_size == sizeof(testdata), "Expected buffer_size to be %u, was: %lu\n", sizeof(testdata), buffer_size);
+    ok(buffer_size == sizeof(testdata), "Expected buffer_size to be %Iu, was: %lu\n", sizeof(testdata), buffer_size);
     ok(!memcmp(buffer, testdata, sizeof(testdata)), "Expected to get the same input as what was written!\n");
 
 
@@ -78,7 +78,7 @@ START_TEST(CRegKey)
     lret = key2.QueryValue(_T("APITEST_VALUE_NAME"), &type, buffer, &buffer_size);
     ok(lret == ERROR_SUCCESS, "Expected lret to be ERROR_SUCCESS, was: %lu\n", lret);
     ok(type == REG_SZ, "Expected type to be REG_SZ, was: %lu\n", type);
-    ok(buffer_size == sizeof(testdata), "Expected buffer_size to be %u, was: %lu\n", sizeof(testdata), buffer_size);
+    ok(buffer_size == sizeof(testdata), "Expected buffer_size to be %Iu, was: %lu\n", sizeof(testdata), buffer_size);
     ok(!memcmp(buffer, testdata, sizeof(testdata)), "Expected to get the same input as what was written!\n");
 
     buffer_size = sizeof(buffer);
@@ -87,7 +87,7 @@ START_TEST(CRegKey)
     lret = key3.QueryValue(_T("APITEST_VALUE_NAME"), &type, buffer, &buffer_size);
     ok(lret == ERROR_ACCESS_DENIED, "Expected lret to be ERROR_ACCESS_DENIED, was: %lu\n", lret);
     ok(type == 0 || ((sizeof(void*) == 8) && broken(type == 1)) || broken(type > 200), "Expected type to be 0, was: %lu\n", type);
-    ok(buffer_size == sizeof(buffer), "Expected buffer_size to be %u, was: %lu\n", sizeof(buffer), buffer_size);
+    ok(buffer_size == sizeof(buffer), "Expected buffer_size to be %Iu, was: %lu\n", sizeof(buffer), buffer_size);
 
 
     lret = key2.SetValue(_T("APITEST_VALUE_NAME"), REG_SZ, testdata, sizeof(testdata));
@@ -133,7 +133,7 @@ START_TEST(CRegKey)
     memset(buffer, 0, sizeof(buffer));
     lret = qv.QueryStringValue(NULL, buffer, &buffer_size);
     ok(lret == ERROR_SUCCESS, "Expected lret to be ERROR_SUCCESS, was: %lu\n", lret);
-    ok(buffer_size == _countof("APITEST_VALUE"), "Expected buffer_size to be %u, was: %lu\n", _countof("APITEST_VALUE"), buffer_size);
+    ok(buffer_size == _countof("APITEST_VALUE"), "Expected buffer_size to be %Iu, was: %lu\n", _countof("APITEST_VALUE"), buffer_size);
     ok(!_tcscmp(buffer, _T("APITEST_VALUE")), "Expected to get the same input as what was written!\n");
 
     lret = key.SetKeyValue(_T("APITEST_KEY_NAME"), _T("APITEST_VALUE2"), _T("APITEST_VALUE_NAME"));
@@ -143,7 +143,7 @@ START_TEST(CRegKey)
     memset(buffer, 0, sizeof(buffer));
     lret = qv.QueryStringValue(_T("APITEST_VALUE_NAME"), buffer, &buffer_size);
     ok(lret == ERROR_SUCCESS, "Expected lret to be ERROR_SUCCESS, was: %lu\n", lret);
-    ok(buffer_size == _countof("APITEST_VALUE2"), "Expected buffer_size to be %u, was: %lu\n", _countof("APITEST_VALUE2"), buffer_size);
+    ok(buffer_size == _countof("APITEST_VALUE2"), "Expected buffer_size to be %Iu, was: %lu\n", _countof("APITEST_VALUE2"), buffer_size);
     ok(!_tcscmp(buffer, _T("APITEST_VALUE2")), "Expected to get the same input as what was written!\n");
 
     lret = key.DeleteSubKey(_T("APITEST_KEY_NAME"));
@@ -164,7 +164,7 @@ START_TEST(CRegKey)
     lret = key2.QueryStringValue(_T("GUID_NAME"), buffer, &buffer_size);
     ok(lret == ERROR_SUCCESS, "Expected lret to be ERROR_SUCCESS, was: %lu\n", lret);
     ok(buffer_size == _countof("{38383838-3838-3838-3838-383838383838}"),
-        "Expected buffer_size to be %u, was: %lu\n", _countof("{38383838-3838-3838-3838-383838383838}"), buffer_size);
+        "Expected buffer_size to be %Iu, was: %lu\n", _countof("{38383838-3838-3838-3838-383838383838}"), buffer_size);
     ok(!_tcscmp(buffer, _T("{38383838-3838-3838-3838-383838383838}")), "Expected to get the same input as what was written!\n");
 
     memset(&guid, 33, 5);
@@ -176,7 +176,7 @@ START_TEST(CRegKey)
     lret = key.QueryBinaryValue(_T("GUID_NAME"), buffer, &buffer_size);
     ok(lret == ERROR_INVALID_DATA, "Expected lret to be ERROR_SUCCESS, was: %lu\n", lret);
     ok(buffer_size == sizeof(_T("{38383838-3838-3838-3838-383838383838}")),
-        "Expected buffer_size to be %u, was: %lu\n", sizeof(_T("{38383838-3838-3838-3838-383838383838}")), buffer_size);
+        "Expected buffer_size to be %Iu, was: %lu\n", sizeof(_T("{38383838-3838-3838-3838-383838383838}")), buffer_size);
     ok(buffer[0] == '{', "Expected buffer[0] to be 123, was: %i\n", (int)buffer[0]);
 
     buffer_size = sizeof(buffer);

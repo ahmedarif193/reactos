@@ -86,7 +86,7 @@ START_TEST(NtQueryValueKey)
         ok(StringData[2] == '\\', "Data[2] = %x\n", StringData[2]);
         ok(iswalnum(StringData[3]), "Data[3] = %x\n", StringData[3]);
         ok(StringData[Info->DataLength / sizeof(WCHAR) - 1] == UNICODE_NULL,
-           "Data[%lu] = %x\n", Info->DataLength / sizeof(WCHAR) - 1, StringData[Info->DataLength / sizeof(WCHAR) - 1]);
+           "Data[%Iu] = %x\n", Info->DataLength / sizeof(WCHAR) - 1, StringData[Info->DataLength / sizeof(WCHAR) - 1]);
     }
 
     /* If the buffer isn't 64 bit aligned, the data won't be, either */

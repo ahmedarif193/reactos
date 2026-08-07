@@ -33,8 +33,8 @@ static void test_LoadImage_1bpp(void)
     GetObject(hBmp1, sizeof(BITMAP), &bitmap1);
 
     ok(bitmap1.bmBitsPixel == 1, "Should have been '1', but got '%d'\n", bitmap1.bmBitsPixel);
-    ok(bitmap1.bmWidth == 4, "Should have been '4', but got '%d'\n", bitmap1.bmWidth);
-    ok(bitmap1.bmHeight == 4, "Should have been '4', but got '%d'\n", bitmap1.bmHeight);
+    ok(bitmap1.bmWidth == 4, "Should have been '4', but got '%ld'\n", bitmap1.bmWidth);
+    ok(bitmap1.bmHeight == 4, "Should have been '4', but got '%ld'\n", bitmap1.bmHeight);
 
     memset(&bmi, 0, sizeof(bmi));
     bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
@@ -92,8 +92,8 @@ static void test_LoadImage_1bpp(void)
     }
     GetObject(hBmp2, sizeof(BITMAP), &bitmap2);
     ok(bitmap2.bmBitsPixel == 1, "Should have been '1', but got %d\n", bitmap2.bmBitsPixel);
-    ok(bitmap2.bmWidth == 4, "Should have been '4', but got '%d'\n", bitmap2.bmWidth);
-    ok(bitmap2.bmHeight == 4, "Should have been '4', but got '%d'\n", bitmap2.bmHeight);
+    ok(bitmap2.bmWidth == 4, "Should have been '4', but got '%ld'\n", bitmap2.bmWidth);
+    ok(bitmap2.bmHeight == 4, "Should have been '4', but got '%ld'\n", bitmap2.bmHeight);
 
     memset(&bmi, 0, sizeof(bmi));
     bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);

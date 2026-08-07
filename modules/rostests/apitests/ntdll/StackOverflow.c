@@ -11,6 +11,8 @@
 
 #ifdef _MSC_VER
 #pragma warning(disable : 4717) // disable warning about recursive function
+#elif defined(__clang__)
+#pragma clang diagnostic ignored "-Winfinite-recursion"
 #elif defined(__GNUC__) && (__GNUC__ >= 12)
 #pragma GCC diagnostic ignored "-Winfinite-recursion"
 #endif
@@ -55,7 +57,7 @@ infinite_recursive(void)
     /* Of course this is private memory. */
     ok_long(MemoryBasicInfo.Type, MEM_PRIVATE);
 
-    LastStackAllocation = &Buffer[-0x500];
+    LastStackAllocation = (PVOID)((ULONG_PTR)Buffer - sizeof(Buffer));
 
     infinite_recursive();
 }

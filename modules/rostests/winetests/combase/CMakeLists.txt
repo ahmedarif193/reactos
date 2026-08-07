@@ -1,5 +1,4 @@
 
-add_definitions(-D__ROS_LONG64__)
 add_definitions(-DUSE_WINE_TODOS)
 
 include_directories(BEFORE ${REACTOS_SOURCE_DIR}/sdk/include/wine)
@@ -15,7 +14,7 @@ add_executable(combase_winetest
     ${SOURCE}
     ${PCH_SKIP_SOURCE}
     combase.rc)
-target_compile_definitions(combase_winetest PRIVATE WINETEST_USE_DBGSTR_HSTRING)
+target_compile_definitions(combase_winetest PRIVATE CONST_VTABLE WINETEST_USE_DBGSTR_HSTRING)
 
 target_link_libraries(combase_winetest uuid)
 set_module_type(combase_winetest win32cui)
@@ -33,6 +32,7 @@ endif()
 #add_pch(combase_winetest precomp.h "${PCH_SKIP_SOURCE}")
 add_rostests_file(TARGET combase_winetest)
 add_library(wine.combase.test MODULE wine.combase.test.c ${CMAKE_CURRENT_BINARY_DIR}/wine.combase.test.def)
+target_compile_definitions(wine.combase.test PRIVATE CONST_VTABLE)
 target_link_libraries(wine.combase.test wine)
 set_module_type(wine.combase.test win32dll)
 add_importlibs(wine.combase.test combase msvcrt kernel32 ntdll)

@@ -907,7 +907,7 @@ static void InternetSetFilePointer_test(const char *host, const char *path)
     pos = InternetSetFilePointer(hor, 0, NULL, FILE_BEGIN, 0);
     err = pos == INVALID_SET_FILE_POINTER ? GetLastError() : NO_ERROR;
     expected = pos == INVALID_SET_FILE_POINTER && err == ERROR_INTERNET_INVALID_OPERATION;
-    ok(expected, "Expected position %#x. Got %#lx. GetLastError() %lu\n", INVALID_SET_FILE_POINTER, pos, err);
+    ok(expected, "Expected position %#lx. Got %#lx. GetLastError() %lu\n", INVALID_SET_FILE_POINTER, pos, err);
 
     count = 0;
     SetLastError(0xdeadbeef);

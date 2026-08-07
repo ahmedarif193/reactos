@@ -115,7 +115,7 @@ PrintAvailableDisplayModes(void)
     printf("Available display modes:\n");
     while (EnumDisplaySettingsW(NULL, iMode++, &dm))
     {
-        printf("  %ux%u @ %u bpp, freq: %u Hz\n",
+        printf("  %lux%lu @ %lu bpp, freq: %lu Hz\n",
                dm.dmPelsWidth, dm.dmPelsHeight, dm.dmBitsPerPel, dm.dmDisplayFrequency);
     }
 }
@@ -133,7 +133,7 @@ ChangeScreenBpp(
         return FALSE;
     }
 
-    printf("ChangeScreenBpp(%lu): Old display settings: %ux%u @ %u bpp\n",
+    printf("ChangeScreenBpp(%lu): Old display settings: %lux%lu @ %lu bpp\n",
            cBitsPixel, dm.dmPelsWidth, dm.dmPelsHeight, dm.dmBitsPerPel);
 
     *pdmOld = dm;
@@ -150,7 +150,7 @@ ChangeScreenBpp(
     }
 
     EnumDisplaySettingsW(NULL, ENUM_CURRENT_SETTINGS, &dm);
-    printf("ChangeScreenBpp(%lu): New display settings: %ux%u @ %u bpp\n",
+    printf("ChangeScreenBpp(%lu): New display settings: %lux%lu @ %lu bpp\n",
            cBitsPixel, dm.dmPelsWidth, dm.dmPelsHeight, dm.dmBitsPerPel);
 
     return TRUE;

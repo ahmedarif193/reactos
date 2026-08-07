@@ -75,14 +75,14 @@ static void testGetComputerObjectNameA(void)
         switch (formats[i])
         {
         case NameUnknown:
-            ok(GetLastError() == ERROR_INVALID_PARAMETER, "%u: got %u\n", formats[i], GetLastError());
+            ok(GetLastError() == ERROR_INVALID_PARAMETER, "%u: got %lu\n", formats[i], GetLastError());
             break;
         default:
             ok(GetLastError() == ERROR_NONE_MAPPED ||
                GetLastError() == ERROR_NO_SUCH_USER ||
                GetLastError() == ERROR_CANT_ACCESS_DOMAIN_INFO ||
                GetLastError() == ERROR_INSUFFICIENT_BUFFER,
-               "%u: got %u\n", formats[i], GetLastError());
+               "%u: got %lu\n", formats[i], GetLastError());
             break;
         }
 
@@ -95,10 +95,10 @@ static void testGetComputerObjectNameA(void)
         {
         case NameUnknown:
             ok(!rc, "GetComputerObjectName(%u) should fail\n", formats[i]);
-            ok(GetLastError() == ERROR_INVALID_PARAMETER, "%u: got %u\n", formats[i], GetLastError());
+            ok(GetLastError() == ERROR_INVALID_PARAMETER, "%u: got %lu\n", formats[i], GetLastError());
             break;
         default:
-            ok(rc, "GetComputerObjectName(%u) error %u\n", formats[i], GetLastError());
+            ok(rc, "GetComputerObjectName(%u) error %lu\n", formats[i], GetLastError());
             trace("GetComputerObjectName(%u) returned %s\n", formats[i], name);
             break;
         }
@@ -120,7 +120,7 @@ static void testGetComputerObjectNameW(void)
         switch (formats[i])
         {
         case NameUnknown:
-            ok(GetLastError() == ERROR_INVALID_PARAMETER, "%u: got %u\n", formats[i], GetLastError());
+            ok(GetLastError() == ERROR_INVALID_PARAMETER, "%u: got %lu\n", formats[i], GetLastError());
             break;
         default:
             ok(GetLastError() == ERROR_NONE_MAPPED ||
@@ -128,7 +128,7 @@ static void testGetComputerObjectNameW(void)
                GetLastError() == ERROR_CANT_ACCESS_DOMAIN_INFO ||
                GetLastError() == WSAHOST_NOT_FOUND ||
                GetLastError() == ERROR_INSUFFICIENT_BUFFER,
-               "%u: got %u\n", formats[i], GetLastError());
+               "%u: got %lu\n", formats[i], GetLastError());
             break;
         }
 
@@ -141,10 +141,10 @@ static void testGetComputerObjectNameW(void)
         {
         case NameUnknown:
             ok(!rc, "GetComputerObjectName(%u) should fail\n", formats[i]);
-            ok(GetLastError() == ERROR_INVALID_PARAMETER, "%u: got %u\n", formats[i], GetLastError());
+            ok(GetLastError() == ERROR_INVALID_PARAMETER, "%u: got %lu\n", formats[i], GetLastError());
             break;
         default:
-            ok(rc, "GetComputerObjectName(%u) error %u\n", formats[i], GetLastError());
+            ok(rc, "GetComputerObjectName(%u) error %lu\n", formats[i], GetLastError());
             trace("GetComputerObjectName(%u) returned %s\n", formats[i], wine_dbgstr_w(nameW));
             break;
         }
@@ -168,7 +168,7 @@ static void testGetUserNameExA(void)
            GetLastError() == ERROR_NONE_MAPPED ||
            broken(formats[i] == NameDnsDomain &&
                   GetLastError() == ERROR_INVALID_PARAMETER),
-           "GetUserNameExW(%d) failed: %d\n",
+           "GetUserNameExW(%d) failed: %lu\n",
            formats[i], GetLastError());
     }
 
@@ -177,7 +177,7 @@ static void testGetUserNameExA(void)
 
     size = 0;
     rc = pGetUserNameExA(NameSamCompatible, NULL, &size);
-    ok(! rc && GetLastError() == ERROR_MORE_DATA, "Expected fail with ERROR_MORE_DATA, got %d with %u\n", rc, GetLastError());
+    ok(! rc && GetLastError() == ERROR_MORE_DATA, "Expected fail with ERROR_MORE_DATA, got %d with %lu\n", rc, GetLastError());
     ok(size != 0, "Expected size to be set to required size\n");
 
     if (0) /* Crashes on Windows with big enough size */
@@ -188,12 +188,12 @@ static void testGetUserNameExA(void)
 
     size = 0;
     rc = pGetUserNameExA(NameSamCompatible, name, &size);
-    ok(! rc && GetLastError() == ERROR_MORE_DATA, "Expected fail with ERROR_MORE_DATA, got %d with %u\n", rc, GetLastError());
+    ok(! rc && GetLastError() == ERROR_MORE_DATA, "Expected fail with ERROR_MORE_DATA, got %d with %lu\n", rc, GetLastError());
     ok(size != 0, "Expected size to be set to required size\n");
     size = 1;
     name[0] = 0xff;
     rc = pGetUserNameExA(NameSamCompatible, name, &size);
-    ok(! rc && GetLastError() == ERROR_MORE_DATA, "Expected fail with ERROR_MORE_DATA, got %d with %u\n", rc, GetLastError());
+    ok(! rc && GetLastError() == ERROR_MORE_DATA, "Expected fail with ERROR_MORE_DATA, got %d with %lu\n", rc, GetLastError());
     ok(1 < size, "Expected size to be set to required size\n");
     ok(name[0] == (char) 0xff, "Expected unchanged buffer\n");
 }
@@ -215,7 +215,7 @@ static void testGetUserNameExW(void)
            GetLastError() == ERROR_NONE_MAPPED ||
            broken(formats[i] == NameDnsDomain &&
                   GetLastError() == ERROR_INVALID_PARAMETER),
-           "GetUserNameExW(%d) failed: %d\n",
+           "GetUserNameExW(%d) failed: %lu\n",
            formats[i], GetLastError());
     }
 
@@ -224,7 +224,7 @@ static void testGetUserNameExW(void)
 
     size = 0;
     rc = pGetUserNameExW(NameSamCompatible, NULL, &size);
-    ok(! rc && GetLastError() == ERROR_MORE_DATA, "Expected fail with ERROR_MORE_DATA, got %d with %u\n", rc, GetLastError());
+    ok(! rc && GetLastError() == ERROR_MORE_DATA, "Expected fail with ERROR_MORE_DATA, got %d with %lu\n", rc, GetLastError());
     ok(size != 0, "Expected size to be set to required size\n");
 
     if (0) /* Crashes on Windows with big enough size */
@@ -235,12 +235,12 @@ static void testGetUserNameExW(void)
 
     size = 0;
     rc = pGetUserNameExW(NameSamCompatible, nameW, &size);
-    ok(! rc && GetLastError() == ERROR_MORE_DATA, "Expected fail with ERROR_MORE_DATA, got %d with %u\n", rc, GetLastError());
+    ok(! rc && GetLastError() == ERROR_MORE_DATA, "Expected fail with ERROR_MORE_DATA, got %d with %lu\n", rc, GetLastError());
     ok(size != 0, "Expected size to be set to required size\n");
     size = 1;
     nameW[0] = 0xff;
     rc = pGetUserNameExW(NameSamCompatible, nameW, &size);
-    ok(! rc && GetLastError() == ERROR_MORE_DATA, "Expected fail with ERROR_MORE_DATA, got %d with %u\n", rc, GetLastError());
+    ok(! rc && GetLastError() == ERROR_MORE_DATA, "Expected fail with ERROR_MORE_DATA, got %d with %lu\n", rc, GetLastError());
     ok(1 < size, "Expected size to be set to required size\n");
     ok(nameW[0] == (WCHAR) 0xff, "Expected unchanged buffer\n");
 }
@@ -252,7 +252,7 @@ static void test_InitSecurityInterface(void)
 
     sftA = pInitSecurityInterfaceA();
     ok(sftA != NULL, "pInitSecurityInterfaceA failed\n");
-    ok(sftA->dwVersion == SECURITY_SUPPORT_PROVIDER_INTERFACE_VERSION, "wrong dwVersion %d in security function table\n", sftA->dwVersion);
+    ok(sftA->dwVersion == SECURITY_SUPPORT_PROVIDER_INTERFACE_VERSION, "wrong dwVersion %lu in security function table\n", sftA->dwVersion);
     ok(!sftA->Reserved2,
        "Reserved2 should be NULL instead of %p in security function table\n",
        sftA->Reserved2);
@@ -269,7 +269,7 @@ static void test_InitSecurityInterface(void)
 
     sftW = pInitSecurityInterfaceW();
     ok(sftW != NULL, "pInitSecurityInterfaceW failed\n");
-    ok(sftW->dwVersion == SECURITY_SUPPORT_PROVIDER_INTERFACE_VERSION, "wrong dwVersion %d in security function table\n", sftW->dwVersion);
+    ok(sftW->dwVersion == SECURITY_SUPPORT_PROVIDER_INTERFACE_VERSION, "wrong dwVersion %lu in security function table\n", sftW->dwVersion);
     ok(!sftW->Reserved2, "Reserved2 should be NULL instead of %p in security function table\n", sftW->Reserved2);
     ok(sftW->Reserved3 == sftW->EncryptMessage, "Reserved3 should be equal to EncryptMessage in the security function table\n");
     ok(sftW->Reserved4 == sftW->DecryptMessage, "Reserved4 should be equal to DecryptMessage in the security function table\n");
@@ -291,45 +291,45 @@ static void test_SspiEncodeStringsAsAuthIdentity(void)
     }
 
     status = pSspiEncodeStringsAsAuthIdentity( NULL, NULL, NULL, NULL );
-    ok( status == SEC_E_INVALID_TOKEN, "got %08x\n", status );
+    ok( status == SEC_E_INVALID_TOKEN, "got %08lx\n", status );
 
     id = (PSEC_WINNT_AUTH_IDENTITY_OPAQUE)0xdeadbeef;
     status = pSspiEncodeStringsAsAuthIdentity( NULL, NULL, NULL, &id );
-    ok( status == SEC_E_INVALID_TOKEN, "got %08x\n", status );
+    ok( status == SEC_E_INVALID_TOKEN, "got %08lx\n", status );
     ok( id == (PSEC_WINNT_AUTH_IDENTITY_OPAQUE)0xdeadbeef, "id set\n" );
 
     id = NULL;
     status = pSspiEncodeStringsAsAuthIdentity( NULL, NULL, password, &id );
-    ok( status == SEC_E_OK, "got %08x\n", status );
+    ok( status == SEC_E_OK, "got %08lx\n", status );
     ok( id != NULL, "id not set\n" );
     pSspiFreeAuthIdentity( id );
 
     id = NULL;
     status = pSspiEncodeStringsAsAuthIdentity( NULL, domainname, password, &id );
-    ok( status == SEC_E_OK, "got %08x\n", status );
+    ok( status == SEC_E_OK, "got %08lx\n", status );
     ok( id != NULL, "id not set\n" );
     pSspiFreeAuthIdentity( id );
 
     id = NULL;
     status = pSspiEncodeStringsAsAuthIdentity( username, NULL, password, &id );
-    ok( status == SEC_E_OK, "got %08x\n", status );
+    ok( status == SEC_E_OK, "got %08lx\n", status );
     ok( id != NULL, "id not set\n" );
     pSspiFreeAuthIdentity( id );
 
     id = NULL;
     status = pSspiEncodeStringsAsAuthIdentity( username, NULL, NULL, &id );
-    ok( status == SEC_E_OK, "got %08x\n", status );
+    ok( status == SEC_E_OK, "got %08lx\n", status );
     ok( id != NULL, "id not set\n" );
     pSspiFreeAuthIdentity( id );
 
     id = NULL;
     status = pSspiEncodeStringsAsAuthIdentity( username, domainname, password, &id );
-    ok( status == SEC_E_OK, "got %08x\n", status );
+    ok( status == SEC_E_OK, "got %08lx\n", status );
     ok( id != NULL, "id not set\n" );
 
     username_ptr = domainname_ptr = password_ptr = NULL;
     status = pSspiEncodeAuthIdentityAsStrings( id, &username_ptr, &domainname_ptr, &password_ptr );
-    ok( status == SEC_E_OK, "got %08x\n", status );
+    ok( status == SEC_E_OK, "got %08lx\n", status );
     ok( !lstrcmpW( username, username_ptr ), "wrong username\n" );
     ok( !lstrcmpW( domainname, domainname_ptr ), "wrong domainname\n" );
     ok( !lstrcmpW( password, password_ptr ), "wrong password\n" );
@@ -343,13 +343,13 @@ static void test_SspiEncodeStringsAsAuthIdentity(void)
 
     id = NULL;
     status = pSspiEncodeStringsAsAuthIdentity( username, NULL, password, &id );
-    ok( status == SEC_E_OK, "got %08x\n", status );
+    ok( status == SEC_E_OK, "got %08lx\n", status );
     ok( id != NULL, "id not set\n" );
 
     username_ptr = password_ptr = NULL;
     domainname_ptr = (const WCHAR *)0xdeadbeef;
     status = pSspiEncodeAuthIdentityAsStrings( id, &username_ptr, &domainname_ptr, &password_ptr );
-    ok( status == SEC_E_OK, "got %08x\n", status );
+    ok( status == SEC_E_OK, "got %08lx\n", status );
     ok( !lstrcmpW( username, username_ptr ), "wrong username\n" );
     ok( domainname_ptr == NULL, "domainname_ptr not cleared\n" );
     ok( !lstrcmpW( password, password_ptr ), "wrong password\n" );
@@ -384,28 +384,28 @@ static void test_SspiPrepareForCredWrite(void)
     }
 
     status = pSspiEncodeStringsAsAuthIdentity( usernameW, domainnameW, passwordW, &id );
-    ok( status == SEC_E_OK, "got %08x\n", status );
+    ok( status == SEC_E_OK, "got %08lx\n", status );
 
     type = size = 0;
     status = pSspiPrepareForCredWrite( id, NULL, &type, &target, &username, &blob, &size );
-    ok( status == SEC_E_OK, "got %08x\n", status );
-    ok( type == CRED_TYPE_DOMAIN_PASSWORD, "got %u\n", type );
+    ok( status == SEC_E_OK, "got %08lx\n", status );
+    ok( type == CRED_TYPE_DOMAIN_PASSWORD, "got %lu\n", type );
     ok( !lstrcmpW( target, targetW ), "got %s\n", wine_dbgstr_w(target) );
     ok( !lstrcmpW( username, targetW ), "got %s\n", wine_dbgstr_w(username) );
     ok( !memcmp( blob, passwordW, sizeof(passwordW) - sizeof(WCHAR) ), "wrong data\n" );
-    ok( size == sizeof(passwordW) - sizeof(WCHAR), "got %u\n", size );
+    ok( size == sizeof(passwordW) - sizeof(WCHAR), "got %lu\n", size );
     pSspiLocalFree( (void *)target );
     pSspiLocalFree( (void *)username );
     pSspiLocalFree( blob );
 
     type = size = 0;
     status = pSspiPrepareForCredWrite( id, target2W, &type, &target, &username, &blob, &size );
-    ok( status == SEC_E_OK, "got %08x\n", status );
-    ok( type == CRED_TYPE_DOMAIN_PASSWORD, "got %u\n", type );
+    ok( status == SEC_E_OK, "got %08lx\n", status );
+    ok( type == CRED_TYPE_DOMAIN_PASSWORD, "got %lu\n", type );
     ok( !lstrcmpW( target, target2W ), "got %s\n", wine_dbgstr_w(target) );
     ok( !lstrcmpW( username, targetW ), "got %s\n", wine_dbgstr_w(username) );
     ok( !memcmp( blob, passwordW, sizeof(passwordW) - sizeof(WCHAR) ), "wrong data\n" );
-    ok( size == sizeof(passwordW) - sizeof(WCHAR), "got %u\n", size );
+    ok( size == sizeof(passwordW) - sizeof(WCHAR), "got %lu\n", size );
     pSspiLocalFree( (void *)target );
     pSspiLocalFree( (void *)username );
     pSspiLocalFree( blob );
@@ -449,17 +449,17 @@ static void test_kerberos(void)
     if(status != SEC_E_OK)
         return;
 
-    ok( (info->fCapabilities & ~optional_mask) == expected_flags, "got %08x, expected %08x\n", info->fCapabilities, expected_flags );
+    ok( (info->fCapabilities & ~optional_mask) == expected_flags, "got %08lx, expected %08lx\n", info->fCapabilities, expected_flags );
     ok( info->wVersion == 1, "got %u\n", info->wVersion );
     ok( info->wRPCID == RPC_C_AUTHN_GSS_KERBEROS, "got %u\n", info->wRPCID );
-    ok( info->cbMaxToken >= 12000, "got %u\n", info->cbMaxToken );
+    ok( info->cbMaxToken >= 12000, "got %lu\n", info->cbMaxToken );
     ok( !lstrcmpA( info->Name, "Kerberos" ), "got %s\n", info->Name );
     ok( !lstrcmpA( info->Comment, "Microsoft Kerberos V1.0" ), "got %s\n", info->Comment );
     FreeContextBuffer( info );
 
     status = AcquireCredentialsHandleA( NULL, provider, SECPKG_CRED_OUTBOUND, NULL,
                                         NULL, NULL, NULL, &cred, &ttl );
-    todo_wine ok( status == SEC_E_OK, "AcquireCredentialsHandleA returned %08x\n", status );
+    todo_wine ok( status == SEC_E_OK, "AcquireCredentialsHandleA returned %08lx\n", status );
     if(status == SEC_E_OK)
         FreeCredentialHandle( &cred );
 }

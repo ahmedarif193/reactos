@@ -106,6 +106,6 @@ START_TEST(fpGetPrintProcessorDirectory)
     pwszBuffer = DllAllocSplMem(cbNeeded);
     SetLastError(0xDEADBEEF);
     ok(pp.fpGetPrintProcessorDirectory(NULL, L"wIndows nt x86", 1, (PBYTE)pwszBuffer, cbNeeded, &cbTemp), "fpGetPrintProcessorDirectory returns FALSE!\n");
-    ok(wcslen(pwszBuffer) == cbNeeded / sizeof(WCHAR) - 1, "fpGetPrintProcessorDirectory string is %Iu characters long, but %lu characters expected!\n", wcslen(pwszBuffer), cbNeeded / sizeof(WCHAR) - 1);
+    ok(wcslen(pwszBuffer) == cbNeeded / sizeof(WCHAR) - 1, "fpGetPrintProcessorDirectory string is %Iu characters long, but %Iu characters expected!\n", wcslen(pwszBuffer), cbNeeded / sizeof(WCHAR) - 1);
     DllFreeSplMem(pwszBuffer);
 }

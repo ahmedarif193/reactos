@@ -45,7 +45,7 @@ ServerThread(
     ok_hex(Status, STATUS_SUCCESS);
 
     ok(Message.Header.u1.s1.TotalLength == RTL_SIZEOF_THROUGH_FIELD(TEST_MESSAGE, Message),
-       "TotalLength = %u, expected %lu\n",
+       "TotalLength = %u, expected %Iu\n",
        Message.Header.u1.s1.TotalLength, RTL_SIZEOF_THROUGH_FIELD(TEST_MESSAGE, Message));
     ok(Message.Header.u1.s1.DataLength == sizeof(TEST_CONNECTION_INFO),
        "DataLength = %u\n", Message.Header.u1.s1.DataLength);
@@ -76,7 +76,7 @@ ServerThread(
     ok_hex(Status, STATUS_SUCCESS);
 
     ok(Message.Header.u1.s1.TotalLength == RTL_SIZEOF_THROUGH_FIELD(TEST_MESSAGE, Message),
-       "TotalLength = %u, expected %lu\n",
+       "TotalLength = %u, expected %Iu\n",
        Message.Header.u1.s1.TotalLength, RTL_SIZEOF_THROUGH_FIELD(TEST_MESSAGE, Message));
     ok(Message.Header.u1.s1.DataLength == sizeof(TEST_CONNECTION_INFO),
        "DataLength = %u\n", Message.Header.u1.s1.DataLength);

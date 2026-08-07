@@ -2086,8 +2086,8 @@ static void check_bitmap_size( HBITMAP h, int cx, int cy )
     BITMAP bm;
 
     GetObjectW( h, sizeof(bm), &bm );
-    ok( bm.bmWidth == cx, "got %d expect %d\n", bm.bmWidth, cx );
-    ok( bm.bmHeight == cy, "got %d expect %d\n", bm.bmHeight, cy );
+    ok( bm.bmWidth == cx, "got %ld expect %d\n", bm.bmWidth, cx );
+    ok( bm.bmHeight == cy, "got %ld expect %d\n", bm.bmHeight, cy );
 }
 
 static void check_dib_size( HGLOBAL h, int cx, int cy )

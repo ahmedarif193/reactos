@@ -78,9 +78,9 @@ RunEnumTests(
         ret = Ansi
             ? EnumSystemCodePagesA(EnumCodePagesProcA, Tests[i].dwFlags)
             : EnumSystemCodePagesW(EnumCodePagesProcW, Tests[i].dwFlags);
-        if (ret) trace("%s enumerated %u entries\n", func, cntLast);
+        if (ret) trace("%s enumerated %lu entries\n", func, cntLast);
         ok(Tests[i].bReturn == ret, "%s unexpected return: %u, expected %u\n", func, ret, Tests[i].bReturn);
-        ok(Tests[i].dwError == GetLastError(), "%s unexpected error: %u, expected %u\n", func, GetLastError(), Tests[i].dwError);
+        ok(Tests[i].dwError == GetLastError(), "%s unexpected error: %lu, expected %lu\n", func, GetLastError(), Tests[i].dwError);
 
         if (Tests[i].dwFlags == CP_INSTALLED)
         {
@@ -93,7 +93,7 @@ RunEnumTests(
             ok(cntSupported > 0, "No supported codepages enumerated\n");
         }
         else if (Tests[i].dwFlags == 0)
-            ok(cntLast == cntSupported, "Number of codepages expected: %u, got %u\n", cntSupported, cntLast);
+            ok(cntLast == cntSupported, "Number of codepages expected: %lu, got %lu\n", cntSupported, cntLast);
     }
 }
 

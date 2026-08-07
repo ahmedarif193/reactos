@@ -7,6 +7,7 @@ list(APPEND SOURCE
     testlist.c)
 
 add_executable(scrrun_winetest ${SOURCE})
+target_compile_definitions(scrrun_winetest PRIVATE CONST_VTABLE)
 add_idl_headers(scrrun_idlheader_test scrrun.idl)
 add_dependencies(scrrun_winetest scrrun_idlheader_test)
 target_link_libraries(scrrun_winetest uuid)

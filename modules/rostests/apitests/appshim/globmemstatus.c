@@ -80,7 +80,7 @@ START_TEST(globalmemorystatus)
     hook = pGetHookAPIs("", L"GlobalMemoryStatus2GB", &num_shims);
 
     ok(hook != NULL, "Expected hook to be a valid pointer\n");
-    ok(num_shims == 1, "Expected num_shims to be 1, was: %u\n", num_shims);
+    ok(num_shims == 1, "Expected num_shims to be 1, was: %lu\n", num_shims);
 
     if (!hook || !num_shims)
         return;

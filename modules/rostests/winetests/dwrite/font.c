@@ -1266,8 +1266,8 @@ static void test_CreateBitmapRenderTarget(void)
     /* check DIB properties */
     ret = GetObjectW(hbm, sizeof(ds), &ds);
     ok(ret == sizeof(BITMAP), "got %d\n", ret);
-    ok(ds.dsBm.bmWidth == 1, "got %d\n", ds.dsBm.bmWidth);
-    ok(ds.dsBm.bmHeight == 1, "got %d\n", ds.dsBm.bmHeight);
+    ok(ds.dsBm.bmWidth == 1, "got %ld\n", ds.dsBm.bmWidth);
+    ok(ds.dsBm.bmHeight == 1, "got %ld\n", ds.dsBm.bmHeight);
     ok(ds.dsBm.bmPlanes == 1, "got %d\n", ds.dsBm.bmPlanes);
     ok(ds.dsBm.bmBitsPixel == 1, "got %d\n", ds.dsBm.bmBitsPixel);
     ok(!ds.dsBm.bmBits, "got %p\n", ds.dsBm.bmBits);
@@ -1298,8 +1298,8 @@ static void test_CreateBitmapRenderTarget(void)
     /* check DIB properties */
     ret = GetObjectW(hbm, sizeof(ds), &ds);
     ok(ret == sizeof(ds), "got %d\n", ret);
-    ok(ds.dsBm.bmWidth == 10, "got %d\n", ds.dsBm.bmWidth);
-    ok(ds.dsBm.bmHeight == 5, "got %d\n", ds.dsBm.bmHeight);
+    ok(ds.dsBm.bmWidth == 10, "got %ld\n", ds.dsBm.bmWidth);
+    ok(ds.dsBm.bmHeight == 5, "got %ld\n", ds.dsBm.bmHeight);
     ok(ds.dsBm.bmPlanes == 1, "got %d\n", ds.dsBm.bmPlanes);
     ok(ds.dsBm.bmBitsPixel == 32, "got %d\n", ds.dsBm.bmBitsPixel);
     ok(ds.dsBm.bmBits != NULL, "got %p\n", ds.dsBm.bmBits);
@@ -1356,8 +1356,8 @@ static void test_CreateBitmapRenderTarget(void)
 
     ret = GetObjectW(hbm2, sizeof(ds), &ds);
     ok(ret == sizeof(ds), "got %d\n", ret);
-    ok(ds.dsBm.bmWidth == 1, "got %d\n", ds.dsBm.bmWidth);
-    ok(ds.dsBm.bmHeight == 5, "got %d\n", ds.dsBm.bmHeight);
+    ok(ds.dsBm.bmWidth == 1, "got %ld\n", ds.dsBm.bmWidth);
+    ok(ds.dsBm.bmHeight == 5, "got %ld\n", ds.dsBm.bmHeight);
     ok(ds.dsBm.bmPlanes == 1, "got %d\n", ds.dsBm.bmPlanes);
     ok(ds.dsBm.bmBitsPixel == 32, "got %d\n", ds.dsBm.bmBitsPixel);
     ok(ds.dsBm.bmBits != NULL, "got %p\n", ds.dsBm.bmBits);
@@ -1377,8 +1377,8 @@ static void test_CreateBitmapRenderTarget(void)
 
     ret = GetObjectW(hbm2, sizeof(ds), &ds);
     ok(ret == sizeof(BITMAP), "got %d\n", ret);
-    ok(ds.dsBm.bmWidth == 1, "got %d\n", ds.dsBm.bmWidth);
-    ok(ds.dsBm.bmHeight == 1, "got %d\n", ds.dsBm.bmHeight);
+    ok(ds.dsBm.bmWidth == 1, "got %ld\n", ds.dsBm.bmWidth);
+    ok(ds.dsBm.bmHeight == 1, "got %ld\n", ds.dsBm.bmHeight);
     ok(ds.dsBm.bmPlanes == 1, "got %d\n", ds.dsBm.bmPlanes);
     ok(ds.dsBm.bmBitsPixel == 1, "got %d\n", ds.dsBm.bmBitsPixel);
     ok(!ds.dsBm.bmBits, "got %p\n", ds.dsBm.bmBits);

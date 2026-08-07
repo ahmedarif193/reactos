@@ -1279,8 +1279,8 @@ if (0)
     ok(hicon != NULL && HandleToLong(hicon) != -1, "Got icon %p\n", hicon);
     GetIconInfo(hicon, &info);
     GetObjectW(info.hbmColor, sizeof(bm), &bm);
-    ok(bm.bmWidth == GetSystemMetrics(SM_CXICON), "got %d\n", bm.bmWidth);
-    ok(bm.bmHeight == GetSystemMetrics(SM_CYICON), "got %d\n", bm.bmHeight);
+    ok(bm.bmWidth == GetSystemMetrics(SM_CXICON), "got %ld\n", bm.bmWidth);
+    ok(bm.bmHeight == GetSystemMetrics(SM_CYICON), "got %ld\n", bm.bmHeight);
     DestroyIcon(hicon);
 
     /* returns number of resources */

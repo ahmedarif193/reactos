@@ -70,11 +70,11 @@ static void test_bitmap_info(HBITMAP hbm, INT expected_depth, const BITMAPINFOHE
     ret = GetObjectW(hbm, sizeof(bm), &bm);
     ok(ret == sizeof(bm), "GetObject returned %d\n", ret);
 
-    ok(bm.bmType == 0, "wrong bm.bmType %d\n", bm.bmType);
-    ok(bm.bmWidth == bmih->biWidth, "wrong bm.bmWidth %d\n", bm.bmWidth);
-    ok(bm.bmHeight == bmih->biHeight, "wrong bm.bmHeight %d\n", bm.bmHeight);
+    ok(bm.bmType == 0, "wrong bm.bmType %ld\n", bm.bmType);
+    ok(bm.bmWidth == bmih->biWidth, "wrong bm.bmWidth %ld\n", bm.bmWidth);
+    ok(bm.bmHeight == bmih->biHeight, "wrong bm.bmHeight %ld\n", bm.bmHeight);
     width_bytes = get_bitmap_stride(bm.bmWidth, bm.bmBitsPixel);
-    ok(bm.bmWidthBytes == width_bytes, "wrong bm.bmWidthBytes %d != %d\n", bm.bmWidthBytes, width_bytes);
+    ok(bm.bmWidthBytes == width_bytes, "wrong bm.bmWidthBytes %ld != %d\n", bm.bmWidthBytes, width_bytes);
     ok(bm.bmPlanes == bmih->biPlanes, "wrong bm.bmPlanes %d\n", bm.bmPlanes);
     ok(bm.bmBitsPixel == expected_depth, "wrong bm.bmBitsPixel %d != %d\n", bm.bmBitsPixel, expected_depth);
     ok(bm.bmBits == NULL, "wrong bm.bmBits %p\n", bm.bmBits);
@@ -88,7 +88,7 @@ static void test_bitmap_info(HBITMAP hbm, INT expected_depth, const BITMAPINFOHE
     for (i = 0; i < ARRAY_SIZE(test_size); i++)
     {
         ret = GetBitmapBits(hbm, test_size[i], NULL);
-        ok(ret == bm.bmWidthBytes * bm.bmHeight, "%d != %d\n", ret, bm.bmWidthBytes * bm.bmHeight);
+        ok(ret == bm.bmWidthBytes * bm.bmHeight, "%d != %ld\n", ret, bm.bmWidthBytes * bm.bmHeight);
     }
 
     memset(buf_cmp, 0xAA, sizeof(buf_cmp));
@@ -270,15 +270,15 @@ static void test_dib_info(HBITMAP hbm, const void *bits, const BITMAPINFOHEADER 
     ret = GetObjectW(hbm, sizeof(bm), &bm);
     ok(ret == sizeof(bm), "GetObject returned %d\n", ret);
 
-    ok(bm.bmType == 0, "wrong bm.bmType %d\n", bm.bmType);
-    ok(bm.bmWidth == bmih->biWidth, "wrong bm.bmWidth %d\n", bm.bmWidth);
-    ok(bm.bmHeight == abs(bmih->biHeight), "wrong bm.bmHeight %d\n", bm.bmHeight);
+    ok(bm.bmType == 0, "wrong bm.bmType %ld\n", bm.bmType);
+    ok(bm.bmWidth == bmih->biWidth, "wrong bm.bmWidth %ld\n", bm.bmWidth);
+    ok(bm.bmHeight == abs(bmih->biHeight), "wrong bm.bmHeight %ld\n", bm.bmHeight);
     dib_width_bytes = get_dib_stride(bm.bmWidth, bm.bmBitsPixel);
     bm_width_bytes = get_bitmap_stride(bm.bmWidth, bm.bmBitsPixel);
     if (bm.bmWidthBytes != dib_width_bytes) /* Win2k bug */
-        ok(bm.bmWidthBytes == bm_width_bytes, "wrong bm.bmWidthBytes %d != %d\n", bm.bmWidthBytes, bm_width_bytes);
+        ok(bm.bmWidthBytes == bm_width_bytes, "wrong bm.bmWidthBytes %ld != %d\n", bm.bmWidthBytes, bm_width_bytes);
     else
-        ok(bm.bmWidthBytes == dib_width_bytes, "wrong bm.bmWidthBytes %d != %d\n", bm.bmWidthBytes, dib_width_bytes);
+        ok(bm.bmWidthBytes == dib_width_bytes, "wrong bm.bmWidthBytes %ld != %d\n", bm.bmWidthBytes, dib_width_bytes);
     ok(bm.bmPlanes == bmih->biPlanes, "wrong bm.bmPlanes %d\n", bm.bmPlanes);
     ok(bm.bmBitsPixel == bmih->biBitCount, "bm.bmBitsPixel %d != %d\n", bm.bmBitsPixel, bmih->biBitCount);
     ok(bm.bmBits == bits, "wrong bm.bmBits %p != %p\n", bm.bmBits, bits);
@@ -289,11 +289,11 @@ static void test_dib_info(HBITMAP hbm, const void *bits, const BITMAPINFOHEADER 
     SetLastError(0xdeadbeef);
     ret = GetBitmapBits(hbm, 0, NULL);
     ok(ret == bm_width_bytes * bm.bmHeight,
-        "%d != %d\n", ret, bm_width_bytes * bm.bmHeight);
+        "%d != %ld\n", ret, bm_width_bytes * bm.bmHeight);
 
     memset(buf, 0xAA, bm.bmWidthBytes * bm.bmHeight + 4096);
     ret = GetBitmapBits(hbm, bm.bmWidthBytes * bm.bmHeight + 4096, buf);
-    ok(ret == bm_width_bytes * bm.bmHeight, "%d != %d\n", ret, bm_width_bytes * bm.bmHeight);
+    ok(ret == bm_width_bytes * bm.bmHeight, "%d != %ld\n", ret, bm_width_bytes * bm.bmHeight);
 
     free(buf);
 
@@ -301,8 +301,8 @@ static void test_dib_info(HBITMAP hbm, const void *bits, const BITMAPINFOHEADER 
     memset(&ds, 0xAA, sizeof(ds));
     ret = GetObjectW(hbm, sizeof(*bma) * 2, bma);
     ok(ret == sizeof(*bma), "wrong size %d\n", ret);
-    ok(bm.bmWidth == bmih->biWidth, "wrong bm.bmWidth %d\n", bm.bmWidth);
-    ok(bm.bmHeight == abs(bmih->biHeight), "wrong bm.bmHeight %d\n", bm.bmHeight);
+    ok(bm.bmWidth == bmih->biWidth, "wrong bm.bmWidth %ld\n", bm.bmWidth);
+    ok(bm.bmHeight == abs(bmih->biHeight), "wrong bm.bmHeight %ld\n", bm.bmHeight);
     ok(bm.bmBits == bits, "wrong bm.bmBits %p != %p\n", bm.bmBits, bits);
 
     ret = GetObjectW(hbm, sizeof(bm) / 2, &bm);
@@ -327,7 +327,7 @@ static void test_dib_info(HBITMAP hbm, const void *bits, const BITMAPINFOHEADER 
 
     ok(ds.dsBm.bmBits == bits, "wrong bm.bmBits %p != %p\n", ds.dsBm.bmBits, bits);
     if (ds.dsBm.bmWidthBytes != bm_width_bytes) /* Win2k bug */
-        ok(ds.dsBmih.biSizeImage == ds.dsBm.bmWidthBytes * ds.dsBm.bmHeight, "%lu != %u\n",
+        ok(ds.dsBmih.biSizeImage == ds.dsBm.bmWidthBytes * ds.dsBm.bmHeight, "%lu != %ld\n",
            ds.dsBmih.biSizeImage, ds.dsBm.bmWidthBytes * ds.dsBm.bmHeight);
     ok(bmih->biSizeImage == 0, "%lu != 0\n", bmih->biSizeImage);
     ds.dsBmih.biSizeImage = 0;
@@ -1543,10 +1543,10 @@ static void test_bitmap(void)
     ret = GetObjectW(hbmp, sizeof(bm), &bm);
     ok(ret == sizeof(bm), "wrong size %d\n", ret);
 
-    ok(bm.bmType == 0, "wrong bm.bmType %d\n", bm.bmType);
-    ok(bm.bmWidth == 15, "wrong bm.bmWidth %d\n", bm.bmWidth);
-    ok(bm.bmHeight == 15, "wrong bm.bmHeight %d\n", bm.bmHeight);
-    ok(bm.bmWidthBytes == 2, "wrong bm.bmWidthBytes %d\n", bm.bmWidthBytes);
+    ok(bm.bmType == 0, "wrong bm.bmType %ld\n", bm.bmType);
+    ok(bm.bmWidth == 15, "wrong bm.bmWidth %ld\n", bm.bmWidth);
+    ok(bm.bmHeight == 15, "wrong bm.bmHeight %ld\n", bm.bmHeight);
+    ok(bm.bmWidthBytes == 2, "wrong bm.bmWidthBytes %ld\n", bm.bmWidthBytes);
     ok(bm.bmPlanes == 1, "wrong bm.bmPlanes %d\n", bm.bmPlanes);
     ok(bm.bmBitsPixel == 1, "wrong bm.bmBitsPixel %d\n", bm.bmBitsPixel);
     ok(bm.bmBits == NULL, "wrong bm.bmBits %p\n", bm.bmBits);
@@ -1555,14 +1555,14 @@ static void test_bitmap(void)
     assert(sizeof(buf) == sizeof(buf_cmp));
 
     ret = GetBitmapBits(hbmp, 0, NULL);
-    ok(ret == bm.bmWidthBytes * bm.bmHeight, "%d != %d\n", ret, bm.bmWidthBytes * bm.bmHeight);
+    ok(ret == bm.bmWidthBytes * bm.bmHeight, "%d != %ld\n", ret, bm.bmWidthBytes * bm.bmHeight);
 
     memset(buf_cmp, 0xAA, sizeof(buf_cmp));
     memset(buf_cmp, 0, bm.bmWidthBytes * bm.bmHeight);
 
     memset(buf, 0xAA, sizeof(buf));
     ret = GetBitmapBits(hbmp, sizeof(buf), buf);
-    ok(ret == bm.bmWidthBytes * bm.bmHeight, "%d != %d\n", ret, bm.bmWidthBytes * bm.bmHeight);
+    ok(ret == bm.bmWidthBytes * bm.bmHeight, "%d != %ld\n", ret, bm.bmWidthBytes * bm.bmHeight);
     ok(!memcmp(buf, buf_cmp, sizeof(buf)), "buffers do not match\n");
 
     hbmp_old = SelectObject(hdc, hbmp);
@@ -1570,17 +1570,17 @@ static void test_bitmap(void)
     ret = GetObjectW(hbmp, sizeof(bm), &bm);
     ok(ret == sizeof(bm), "wrong size %d\n", ret);
 
-    ok(bm.bmType == 0, "wrong bm.bmType %d\n", bm.bmType);
-    ok(bm.bmWidth == 15, "wrong bm.bmWidth %d\n", bm.bmWidth);
-    ok(bm.bmHeight == 15, "wrong bm.bmHeight %d\n", bm.bmHeight);
-    ok(bm.bmWidthBytes == 2, "wrong bm.bmWidthBytes %d\n", bm.bmWidthBytes);
+    ok(bm.bmType == 0, "wrong bm.bmType %ld\n", bm.bmType);
+    ok(bm.bmWidth == 15, "wrong bm.bmWidth %ld\n", bm.bmWidth);
+    ok(bm.bmHeight == 15, "wrong bm.bmHeight %ld\n", bm.bmHeight);
+    ok(bm.bmWidthBytes == 2, "wrong bm.bmWidthBytes %ld\n", bm.bmWidthBytes);
     ok(bm.bmPlanes == 1, "wrong bm.bmPlanes %d\n", bm.bmPlanes);
     ok(bm.bmBitsPixel == 1, "wrong bm.bmBitsPixel %d\n", bm.bmBitsPixel);
     ok(bm.bmBits == NULL, "wrong bm.bmBits %p\n", bm.bmBits);
 
     memset(buf, 0xAA, sizeof(buf));
     ret = GetBitmapBits(hbmp, sizeof(buf), buf);
-    ok(ret == bm.bmWidthBytes * bm.bmHeight, "%d != %d\n", ret, bm.bmWidthBytes * bm.bmHeight);
+    ok(ret == bm.bmWidthBytes * bm.bmHeight, "%d != %ld\n", ret, bm.bmWidthBytes * bm.bmHeight);
     ok(!memcmp(buf, buf_cmp, sizeof(buf)), "buffers do not match\n");
 
     hbmp_old = SelectObject(hdc, hbmp_old);
@@ -2135,10 +2135,10 @@ static void test_GetDIBits(void)
     memset(&bm, 0xAA, sizeof(bm));
     bytes = GetObjectW(hbmp, sizeof(bm), &bm);
     ok(bytes == sizeof(bm), "GetObject returned %d\n", bytes);
-    ok(bm.bmType == 0, "wrong bmType %d\n", bm.bmType);
-    ok(bm.bmWidth == 16, "wrong bmWidth %d\n", bm.bmWidth);
-    ok(bm.bmHeight == 16, "wrong bmHeight %d\n", bm.bmHeight);
-    ok(bm.bmWidthBytes == 2, "wrong bmWidthBytes %d\n", bm.bmWidthBytes);
+    ok(bm.bmType == 0, "wrong bmType %ld\n", bm.bmType);
+    ok(bm.bmWidth == 16, "wrong bmWidth %ld\n", bm.bmWidth);
+    ok(bm.bmHeight == 16, "wrong bmHeight %ld\n", bm.bmHeight);
+    ok(bm.bmWidthBytes == 2, "wrong bmWidthBytes %ld\n", bm.bmWidthBytes);
     ok(bm.bmPlanes == 1, "wrong bmPlanes %u\n", bm.bmPlanes);
     ok(bm.bmBitsPixel == 1, "wrong bmBitsPixel %d\n", bm.bmBitsPixel);
     ok(!bm.bmBits, "wrong bmBits %p\n", bm.bmBits);
@@ -2173,7 +2173,7 @@ static void test_GetDIBits(void)
     memset(buf, 0xAA, sizeof(buf));
     SetLastError(0xdeadbeef);
     lines = GetDIBits(hdc, hbmp, 0, bm.bmHeight, buf, bi, DIB_RGB_COLORS);
-    ok(lines == bm.bmHeight, "GetDIBits copied %d lines of %d, error %lu\n",
+    ok(lines == bm.bmHeight, "GetDIBits copied %d lines of %ld, error %lu\n",
        lines, bm.bmHeight, GetLastError());
     ok(bi->bmiHeader.biSizeImage == sizeof(dib_bits_1), "expected 16*4, got %lu\n", bi->bmiHeader.biSizeImage);
     ok(bi->bmiHeader.biClrUsed == 0, "wrong biClrUsed %lu\n", bi->bmiHeader.biClrUsed);
@@ -2221,7 +2221,7 @@ static void test_GetDIBits(void)
     memset(buf, 0xAA, sizeof(buf));
     SetLastError(0xdeadbeef);
     lines = GetDIBits(hdc, hbmp, 0, bm.bmHeight, buf, bi, DIB_RGB_COLORS);
-    ok(lines == bm.bmHeight, "GetDIBits copied %d lines of %d, error %lu\n",
+    ok(lines == bm.bmHeight, "GetDIBits copied %d lines of %ld, error %lu\n",
        lines, bm.bmHeight, GetLastError());
     ok(bi->bmiHeader.biSizeImage == sizeof(dib_bits_24), "expected 16*16*3, got %lu\n", bi->bmiHeader.biSizeImage);
     ok(bi->bmiHeader.biClrUsed == 0, "wrong biClrUsed %lu\n", bi->bmiHeader.biClrUsed);
@@ -2245,24 +2245,24 @@ static void test_GetDIBits(void)
     SetLastError(0xdeadbeef);
     bi->bmiHeader.biHeight = -bm.bmHeight; /* indicate bottom-up data */
     lines = SetDIBits(hdc, hbmp, 0, bm.bmHeight, bmp_bits_24, bi, DIB_RGB_COLORS);
-    ok(lines == bm.bmHeight, "SetDIBits copied %d lines of %d, error %lu\n",
+    ok(lines == bm.bmHeight, "SetDIBits copied %d lines of %ld, error %lu\n",
        lines, bm.bmHeight, GetLastError());
 
     memset(&bm, 0xAA, sizeof(bm));
     bytes = GetObjectW(hbmp, sizeof(bm), &bm);
     ok(bytes == sizeof(bm), "GetObject returned %d\n", bytes);
-    ok(bm.bmType == 0, "wrong bmType %d\n", bm.bmType);
-    ok(bm.bmWidth == 16, "wrong bmWidth %d\n", bm.bmWidth);
-    ok(bm.bmHeight == 16, "wrong bmHeight %d\n", bm.bmHeight);
-    ok(bm.bmWidthBytes == get_bitmap_stride(bm.bmWidth, bm.bmBitsPixel), "wrong bmWidthBytes %d\n", bm.bmWidthBytes);
+    ok(bm.bmType == 0, "wrong bmType %ld\n", bm.bmType);
+    ok(bm.bmWidth == 16, "wrong bmWidth %ld\n", bm.bmWidth);
+    ok(bm.bmHeight == 16, "wrong bmHeight %ld\n", bm.bmHeight);
+    ok(bm.bmWidthBytes == get_bitmap_stride(bm.bmWidth, bm.bmBitsPixel), "wrong bmWidthBytes %ld\n", bm.bmWidthBytes);
     ok(bm.bmPlanes == GetDeviceCaps(hdc, PLANES), "wrong bmPlanes %u\n", bm.bmPlanes);
     ok(bm.bmBitsPixel == GetDeviceCaps(hdc, BITSPIXEL), "wrong bmBitsPixel %d\n", bm.bmBitsPixel);
     ok(!bm.bmBits, "wrong bmBits %p\n", bm.bmBits);
 
     bytes = GetBitmapBits(hbmp, 0, NULL);
-    ok(bytes == bm.bmWidthBytes * bm.bmHeight, "expected %d got %d bytes\n", bm.bmWidthBytes * bm.bmHeight, bytes);
+    ok(bytes == bm.bmWidthBytes * bm.bmHeight, "expected %ld got %d bytes\n", bm.bmWidthBytes * bm.bmHeight, bytes);
     bytes = GetBitmapBits(hbmp, sizeof(buf), buf);
-    ok(bytes == bm.bmWidthBytes * bm.bmHeight, "expected %d got %d bytes\n",
+    ok(bytes == bm.bmWidthBytes * bm.bmHeight, "expected %ld got %d bytes\n",
        bm.bmWidthBytes * bm.bmHeight, bytes);
 
     /* retrieve 1-bit DIB data */
@@ -2279,7 +2279,7 @@ static void test_GetDIBits(void)
     memset(buf, 0xAA, sizeof(buf));
     SetLastError(0xdeadbeef);
     lines = GetDIBits(hdc, hbmp, 0, bm.bmHeight, buf, bi, DIB_RGB_COLORS);
-    ok(lines == bm.bmHeight, "GetDIBits copied %d lines of %d, error %lu\n",
+    ok(lines == bm.bmHeight, "GetDIBits copied %d lines of %ld, error %lu\n",
        lines, bm.bmHeight, GetLastError());
     ok(bi->bmiHeader.biSizeImage == sizeof(dib_bits_1), "expected 16*4, got %lu\n", bi->bmiHeader.biSizeImage);
     ok(bi->bmiHeader.biClrUsed == 0, "wrong biClrUsed %lu\n", bi->bmiHeader.biClrUsed);
@@ -2327,7 +2327,7 @@ static void test_GetDIBits(void)
     memset(buf, 0xAA, sizeof(buf));
     SetLastError(0xdeadbeef);
     lines = GetDIBits(hdc, hbmp, 0, bm.bmHeight, buf, bi, DIB_RGB_COLORS);
-    ok(lines == bm.bmHeight, "GetDIBits copied %d lines of %d, error %lu\n",
+    ok(lines == bm.bmHeight, "GetDIBits copied %d lines of %ld, error %lu\n",
        lines, bm.bmHeight, GetLastError());
     ok(bi->bmiHeader.biClrUsed == 0, "wrong biClrUsed %lu\n", bi->bmiHeader.biClrUsed);
 
@@ -2366,7 +2366,7 @@ static void test_GetDIBits(void)
     memset(buf, 0xAA, sizeof(buf));
     SetLastError(0xdeadbeef);
     lines = GetDIBits(hdc, hbmp, 0, bm.bmHeight, buf, bi, DIB_RGB_COLORS);
-    ok(lines == bm.bmHeight, "GetDIBits copied %d lines of %d, error %lu\n",
+    ok(lines == bm.bmHeight, "GetDIBits copied %d lines of %ld, error %lu\n",
        lines, bm.bmHeight, GetLastError());
     ok(bi->bmiHeader.biClrUsed == 0, "wrong biClrUsed %lu\n", bi->bmiHeader.biClrUsed);
 
@@ -2411,7 +2411,7 @@ static void test_GetDIBits(void)
     memset(buf, 0xAA, sizeof(buf));
     SetLastError(0xdeadbeef);
     lines = GetDIBits(hdc, hbmp, 0, bm.bmHeight, buf, bi, DIB_RGB_COLORS);
-    ok(lines == bm.bmHeight, "GetDIBits copied %d lines of %d, error %lu\n",
+    ok(lines == bm.bmHeight, "GetDIBits copied %d lines of %ld, error %lu\n",
        lines, bm.bmHeight, GetLastError());
     ok(bi->bmiHeader.biSizeImage == sizeof(dib_bits_24), "expected 16*16*3, got %lu\n", bi->bmiHeader.biSizeImage);
     ok(bi->bmiHeader.biClrUsed == 0, "wrong biClrUsed %lu\n", bi->bmiHeader.biClrUsed);
@@ -2733,10 +2733,10 @@ static void test_select_object(void)
         memset(&bm, 0xAA, sizeof(bm));
         bytes = GetObjectW(hbm, sizeof(bm), &bm);
         ok(bytes == sizeof(bm), "GetObject returned %ld\n", bytes);
-        ok(bm.bmType == 0, "wrong bmType %d\n", bm.bmType);
-        ok(bm.bmWidth == 10, "wrong bmWidth %d\n", bm.bmWidth);
-        ok(bm.bmHeight == 10, "wrong bmHeight %d\n", bm.bmHeight);
-        ok(bm.bmWidthBytes == get_bitmap_stride(bm.bmWidth, bm.bmBitsPixel), "wrong bmWidthBytes %d\n", bm.bmWidthBytes);
+        ok(bm.bmType == 0, "wrong bmType %ld\n", bm.bmType);
+        ok(bm.bmWidth == 10, "wrong bmWidth %ld\n", bm.bmWidth);
+        ok(bm.bmHeight == 10, "wrong bmHeight %ld\n", bm.bmHeight);
+        ok(bm.bmWidthBytes == get_bitmap_stride(bm.bmWidth, bm.bmBitsPixel), "wrong bmWidthBytes %ld\n", bm.bmWidthBytes);
         ok(bm.bmPlanes == planes, "wrong bmPlanes %u\n", bm.bmPlanes);
         if(depths[i] == 15) {
             ok(bm.bmBitsPixel == 16, "wrong bmBitsPixel %d(15 bpp special)\n", bm.bmBitsPixel);
@@ -2767,10 +2767,10 @@ static void test_mono_1x1_bmp_dbg(HBITMAP hbmp, int line)
     ret = GetObjectW(hbmp, sizeof(bm), &bm);
     if (!ret) /* XP, only for curObj2 */ return;
     ok_(__FILE__, line)(ret == sizeof(BITMAP), "GetObject returned %d, error %lu\n", ret, GetLastError());
-    ok_(__FILE__, line)(bm.bmType == 0, "wrong bmType, expected 0 got %d\n", bm.bmType);
-    ok_(__FILE__, line)(bm.bmWidth == 1, "wrong bmWidth, expected 1 got %d\n", bm.bmWidth);
-    ok_(__FILE__, line)(bm.bmHeight == 1, "wrong bmHeight, expected 1 got %d\n", bm.bmHeight);
-    ok_(__FILE__, line)(bm.bmWidthBytes == 2, "wrong bmWidthBytes, expected 2 got %d\n", bm.bmWidthBytes);
+    ok_(__FILE__, line)(bm.bmType == 0, "wrong bmType, expected 0 got %ld\n", bm.bmType);
+    ok_(__FILE__, line)(bm.bmWidth == 1, "wrong bmWidth, expected 1 got %ld\n", bm.bmWidth);
+    ok_(__FILE__, line)(bm.bmHeight == 1, "wrong bmHeight, expected 1 got %ld\n", bm.bmHeight);
+    ok_(__FILE__, line)(bm.bmWidthBytes == 2, "wrong bmWidthBytes, expected 2 got %ld\n", bm.bmWidthBytes);
     ok_(__FILE__, line)(bm.bmPlanes == 1, "wrong bmPlanes, expected 1 got %u\n", bm.bmPlanes);
     ok_(__FILE__, line)(bm.bmBitsPixel == 1, "wrong bmBitsPixel, expected 1 got %d\n", bm.bmBitsPixel);
     ok_(__FILE__, line)(!bm.bmBits, "wrong bmBits %p\n", bm.bmBits);

@@ -63,7 +63,7 @@ BOOL check_loadconfig()
         ok(!(LoadConfig->GlobalFlagsClear & FLG_USER_STACK_TRACE_DB),
            "Invalid GlobalFlagsClear: %lx\n", LoadConfig->GlobalFlagsClear);
         ok(LoadConfig->Size == sizeof(IMAGE_LOAD_CONFIG_DIRECTORY),
-           "Unexpected size difference: %lu vs %u\n", LoadConfig->Size, sizeof(IMAGE_LOAD_CONFIG_DIRECTORY));
+           "Unexpected size difference: %lu vs %Iu\n", LoadConfig->Size, sizeof(IMAGE_LOAD_CONFIG_DIRECTORY));
     }
 
     return Result;
