@@ -6391,8 +6391,6 @@ static const CSIDL_DATA CSIDL_Data[] =
         NULL,
         NULL
     },
-/* Cannot use #if _WIN32_WINNT >= 0x0600 because _WIN32_WINNT == 0x0600 here. */
-#ifndef __REACTOS__
     { /* 0x3f */
         &FOLDERID_AddNewPrograms,
         CSIDL_Type_Disallowed,
@@ -6709,7 +6707,6 @@ static const CSIDL_DATA CSIDL_Data[] =
         NULL,
         NULL
     }
-#endif
 };
 
 INT SHGetSpecialFolderID(_In_ LPCWSTR pszName)
@@ -7468,6 +7465,110 @@ HRESULT WINAPI SHGetFolderPathW(
         hr = HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
     return hr;
 }
+
+static int SHELL_CsidlFromKnownFolderId(REFKNOWNFOLDERID rfid)
+{
+    UINT i;
+
+    if (rfid == NULL || IsEqualGUID(rfid, &GUID_NULL))
+        return -1;
+
+#ifdef _WIN64
+    if (IsEqualGUID(rfid, &FOLDERID_ProgramFilesX64))
+        return CSIDL_PROGRAM_FILES;
+    if (IsEqualGUID(rfid, &FOLDERID_ProgramFilesCommonX64))
+        return CSIDL_PROGRAM_FILES_COMMON;
+#endif
+
+    for (i = 0; i < sizeof(CSIDL_Data) / sizeof(CSIDL_Data[0]); i++)
+    {
+        if (CSIDL_Data[i].id != NULL && IsEqualGUID(CSIDL_Data[i].id, rfid))
+            return (int)i;
+    }
+
+    return -1;
+}
+
+/*************************************************************************
+ * SHGetKnownFolderPath			[SHELL32.@]
+ */
+HRESULT WINAPI SHGetKnownFolderPath(
+	REFKNOWNFOLDERID rfid,
+	DWORD dwFlags,
+	HANDLE hToken,
+	PWSTR *ppszPath)
+{
+    WCHAR szPath[MAX_PATH];
+    SIZE_T cbSize;
+    HRESULT hr;
+    int csidl;
+
+    TRACE("(%s, 0x%08x, %p, %p)\n", debugstr_guid(rfid), dwFlags, hToken, ppszPath);
+
+    if (ppszPath == NULL)
+        return E_INVALIDARG;
+
+    *ppszPath = NULL;
+
+    csidl = SHELL_CsidlFromKnownFolderId(rfid);
+    if (csidl < 0)
+        return E_INVALIDARG;
+
+    if (dwFlags & KF_FLAG_CREATE)
+        csidl |= CSIDL_FLAG_CREATE;
+    if (dwFlags & KF_FLAG_DONT_VERIFY)
+        csidl |= CSIDL_FLAG_DONT_VERIFY;
+    if (dwFlags & KF_FLAG_NO_ALIAS)
+        csidl |= CSIDL_FLAG_NO_ALIAS;
+    if (dwFlags & KF_FLAG_INIT)
+        csidl |= CSIDL_FLAG_PER_USER_INIT;
+
+    szPath[0] = UNICODE_NULL;
+    hr = SHGetFolderPathW(NULL, csidl, hToken, (dwFlags & KF_FLAG_DEFAULT_PATH) ? SHGFP_TYPE_DEFAULT : SHGFP_TYPE_CURRENT, szPath);
+    if (FAILED(hr))
+        return hr;
+    if (hr != S_OK)
+        return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+
+    cbSize = (lstrlenW(szPath) + 1) * sizeof(WCHAR);
+    *ppszPath = CoTaskMemAlloc(cbSize);
+    if (*ppszPath == NULL)
+        return E_OUTOFMEMORY;
+
+    memcpy(*ppszPath, szPath, cbSize);
+    return S_OK;
+}
+
+/*************************************************************************
+ * SHGetKnownFolderIDList		[SHELL32.@]
+ */
+HRESULT WINAPI SHGetKnownFolderIDList(
+	REFKNOWNFOLDERID rfid,
+	DWORD dwFlags,
+	HANDLE hToken,
+	LPITEMIDLIST *ppidl)
+{
+    int csidl;
+
+    TRACE("(%s, 0x%08x, %p, %p)\n", debugstr_guid(rfid), dwFlags, hToken, ppidl);
+
+    if (ppidl == NULL)
+        return E_INVALIDARG;
+
+    *ppidl = NULL;
+
+    csidl = SHELL_CsidlFromKnownFolderId(rfid);
+    if (csidl < 0)
+        return E_INVALIDARG;
+
+    if (dwFlags & KF_FLAG_CREATE)
+        csidl |= CSIDL_FLAG_CREATE;
+    if (dwFlags & KF_FLAG_NO_ALIAS)
+        csidl |= CSIDL_FLAG_NO_ALIAS;
+
+    return SHGetFolderLocation(NULL, csidl, hToken, 0, ppidl);
+}
+
 
 HRESULT WINAPI SHGetFolderPathAndSubDirA(
 	HWND hwndOwner,    /* [I] owner window */
