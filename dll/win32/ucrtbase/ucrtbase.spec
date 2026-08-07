@@ -2462,8 +2462,8 @@
 @ cdecl -stub -ret64 llrint(double)
 @ cdecl -stub -ret64 llrintf(float)
 @ cdecl -ret64 llrintl(double) llrint
-@ cdecl -stub -ret64 llround(double)
-@ cdecl -stub -ret64 llroundf(float)
+@ cdecl -ret64 llround(double)
+@ cdecl -ret64 llroundf(float)
 @ cdecl -ret64 llroundl(double) llround
 @ cdecl localeconv()
 @ cdecl log(double)
@@ -2483,8 +2483,8 @@
 @ cdecl lrint(double)
 @ cdecl lrintf(float)
 @ cdecl lrintl(double) lrint
-@ cdecl -stub lround(double)
-@ cdecl -stub lroundf(float)
+@ cdecl lround(double)
+@ cdecl lroundf(float)
 @ cdecl lroundl(double) lround
 @ cdecl malloc(long)
 @ cdecl mblen(ptr long)
