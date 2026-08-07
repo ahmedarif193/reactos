@@ -2071,6 +2071,7 @@ LdrpInitializeProcessCompat(PVOID pProcessActctx, PVOID* pOldShimData)
     };
 
     ULONG Buffer[(sizeof(COMPATIBILITY_CONTEXT_ELEMENT) * 10 + sizeof(ACTIVATION_CONTEXT_COMPATIBILITY_INFORMATION)) / sizeof(ULONG)];
+    DWORD OsVersion;
     ACTIVATION_CONTEXT_COMPATIBILITY_INFORMATION* ContextCompatInfo;
     SIZE_T SizeRequired;
     NTSTATUS Status;
@@ -2122,14 +2123,18 @@ LdrpInitializeProcessCompat(PVOID pProcessActctx, PVOID* pOldShimData)
     if (ContextCompatInfo->ElementCount == 0)
         return;
 
-    /* Search for known GUIDs, starting from oldest to newest.
-       Note that on Windows it is somewhat reversed, starting from the latest known
-       version, going down. But we are not Windows, trying to allow a lower version,
-       we are ReactOS trying to fake a higher version. So we interpret what Windows
-       does as "try the closest version to the actual version", so we start with the
-       lowest version, which is closest to Windows 2003, which we mostly are. */
-    for (cur = RTL_NUMBER_OF(KnownCompatGuids) - 1; cur != -1; --cur)
+    /* Search for known GUIDs from newest to oldest, like Windows does, but never
+       claim to be newer than the version this build actually reports. An
+       application that declares support up to Windows 10 must be told it runs on
+       Windows 10 here, otherwise its own version checks see a downlevel system and
+       it refuses to run; a build that still reports an older version keeps picking
+       the closest version it can honestly provide. */
+    OsVersion = (VER_PRODUCTMAJORVERSION << 8) | VER_PRODUCTMINORVERSION;
+    for (cur = 0; cur < RTL_NUMBER_OF(KnownCompatGuids); ++cur)
     {
+        if (KnownCompatGuids[cur].Version > OsVersion)
+            continue;
+
         for (n = 0; n < ContextCompatInfo->ElementCount; ++n)
         {
             if (ContextCompatInfo->Elements[n].Type == ACTCTX_COMPATIBILITY_ELEMENT_TYPE_OS &&
