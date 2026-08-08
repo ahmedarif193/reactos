@@ -8,8 +8,11 @@ include_directories(${REACTOS_SOURCE_DIR}/sdk/include/reactos/subsys ..)
 spec2def(kernel32_vista.dll kernel32_vista.spec ADD_IMPORTLIB)
 
 list(APPEND SOURCE
+    ApplicationRestart.c
     CompareObjectHandles.c
+    DepPolicy.c
     DiscardVirtualMemory.c
+    DynamicTimeZone.c
     EnumSystemLocalesEx.c
     FirefoxCompat.c
     firmware.c
@@ -30,7 +33,11 @@ list(APPEND SOURCE
     LCIDToLocaleName.c
     LocaleNameToLCID.c
     Packages.c
+    ProcThreadAttributeList.c
+    PrefetchVirtualMemory.c
+    ProcessMitigationPolicy.c
     ResolveLocaleName.c
+    SetDefaultDllDirectories.c
     SetFileInformationByHandle.c
     sync.c
     ThreadDescription.c

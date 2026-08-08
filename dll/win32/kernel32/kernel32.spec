@@ -206,7 +206,7 @@
 @ stub -version=0x600+ DeleteFileTransactedA
 @ stub -version=0x600+ DeleteFileTransactedW
 @ stdcall DeleteFileW(wstr)
-@ stdcall -stub -version=0x600+ DeleteProcThreadAttributeList(ptr)
+@ stdcall -version=0x600+ DeleteProcThreadAttributeList(ptr)
 @ stdcall DeleteTimerQueue(long)
 @ stdcall DeleteTimerQueueEx(long long)
 @ stdcall DeleteTimerQueueTimer(long long long)
@@ -334,7 +334,7 @@
 @ stdcall FlushConsoleInputBuffer(long)
 @ stdcall FlushFileBuffers(long)
 @ stdcall FlushInstructionCache(long long long)
-@ stub -version=0x600+ FlushProcessWriteBuffers
+@ stdcall -version=0x600+ FlushProcessWriteBuffers()
 @ stdcall FlushViewOfFile(ptr long)
 @ stdcall FoldStringA(long str long ptr long)
 @ stdcall FoldStringW(long wstr long ptr long)
@@ -345,14 +345,14 @@
 @ stdcall FreeEnvironmentStringsW(ptr)
 @ stdcall FreeLibrary(long)
 @ stdcall FreeLibraryAndExitThread(long long)
-@ stub -version=0x600+ FreeLibraryWhenCallbackReturns
+@ stdcall -version=0x600+ FreeLibraryWhenCallbackReturns(ptr ptr)
 @ stdcall FreeResource(long)
 @ stdcall FreeUserPhysicalPages(long long long)
 @ stdcall GenerateConsoleCtrlEvent(long long)
 @ stdcall GetACP()
 @ stdcall -version=0x601+ GetActiveProcessorCount(long)
 @ stdcall -version=0x600+ GetApplicationRecoveryCallback(ptr ptr ptr ptr ptr)
-@ stub -version=0x600+ GetApplicationRestartSettings
+@ stdcall -version=0x600+ GetApplicationRestartSettings(ptr ptr ptr ptr)
 @ stdcall GetAtomNameA(long ptr long)
 @ stdcall GetAtomNameW(long ptr long)
 @ stdcall GetBinaryType(str ptr) GetBinaryTypeA
@@ -463,7 +463,7 @@
 @ stdcall -version=0x601+ -ret64 -arch=i386,x86_64 GetEnabledXStateFeatures()
 @ stub -version=0x600+ GetDurationFormat
 @ stub -version=0x600+ GetDurationFormatEx
-@ stub -version=0x600+ GetDynamicTimeZoneInformation
+@ stdcall -version=0x600+ GetDynamicTimeZoneInformation(ptr)
 @ stdcall GetEnvironmentStrings()
 @ stdcall GetEnvironmentStringsA() GetEnvironmentStrings
 @ stdcall GetEnvironmentStringsW()
@@ -577,13 +577,14 @@
 @ stdcall GetProcAddress(long str)
 @ stdcall GetProcessAffinityMask(long ptr ptr)
 @ stdcall -version=0x601+ GetProcessGroupAffinity(long ptr ptr)
-@ stub -version=0x600+ GetProcessDEPPolicy
+@ stdcall -version=0x600+ GetProcessDEPPolicy(ptr ptr ptr)
 @ stdcall GetProcessHandleCount(long ptr)
 @ stdcall -norelay GetProcessHeap()
 @ stdcall GetProcessHeaps(long ptr)
 @ stdcall GetProcessId(long)
 @ stdcall GetProcessIdOfThread(ptr)
 @ stdcall GetProcessIoCounters(long ptr)
+@ stdcall -version=0x602+ GetProcessMitigationPolicy(long long ptr long)
 @ stdcall GetProcessPriorityBoost(long ptr)
 @ stdcall GetProcessShutdownParameters(ptr ptr)
 @ stdcall GetProcessTimes(long ptr ptr ptr ptr)
@@ -657,7 +658,7 @@
 @ stdcall -version=0x600+ GetTimeFormatEx(wstr long ptr wstr wstr long)
 @ stdcall GetTimeFormatW(long long ptr wstr ptr long)
 @ stdcall GetTimeZoneInformation(ptr)
-@ stdcall -stub -version=0x600+ GetTimeZoneInformationForYear(long ptr ptr)
+@ stdcall -version=0x600+ GetTimeZoneInformationForYear(long ptr ptr)
 @ stdcall -version=0x600+ GetUILanguageInfo(long wstr wstr ptr ptr)
 @ stdcall GetUserDefaultGeoName(ptr long) kernelbase.GetUserDefaultGeoName
 @ stdcall GetUserDefaultLCID()
@@ -738,7 +739,7 @@
 @ stdcall InitializeCriticalSection(ptr)
 @ stdcall InitializeCriticalSectionAndSpinCount(ptr long)
 @ stdcall -version=0x600+ InitializeCriticalSectionEx(ptr long long)
-@ stdcall -stub -version=0x600+ InitializeProcThreadAttributeList(ptr long long ptr)
+@ stdcall -version=0x600+ InitializeProcThreadAttributeList(ptr long long ptr)
 @ stdcall InitializeSListHead(ptr) ntdll.RtlInitializeSListHead
 @ stdcall -version=0x600+ InitializeSRWLock(ptr) ntdll.RtlInitializeSRWLock
 @ stdcall -arch=i386 -ret64 InterlockedCompareExchange64(ptr double double) ntdll.RtlInterlockedCompareExchange64
@@ -905,6 +906,7 @@
 @ stdcall PeekConsoleInputW(ptr ptr long ptr)
 @ stdcall PeekNamedPipe(long ptr long ptr ptr ptr)
 @ stdcall PostQueuedCompletionStatus(long long ptr ptr)
+@ stdcall -version=0x602+ PrefetchVirtualMemory(ptr ptr ptr long)
 @ stdcall PrepareTape(ptr long long)
 @ stdcall PrivCopyFileExW(wstr wstr ptr ptr long long)
 @ stdcall PrivMoveFileIdentityW(long long long)
@@ -1065,9 +1067,10 @@
 @ stdcall SetCurrentDirectoryW(wstr)
 @ stdcall SetDefaultCommConfigA(str ptr long)
 @ stdcall SetDefaultCommConfigW(wstr ptr long)
+@ stdcall -version=0x602+ SetDefaultDllDirectories(long)
 @ stdcall SetDllDirectoryA(str)
 @ stdcall SetDllDirectoryW(wstr)
-@ stub -version=0x600+ SetDynamicTimeZoneInformation
+@ stdcall -version=0x600+ SetDynamicTimeZoneInformation(ptr)
 @ stdcall SetEndOfFile(long)
 @ stdcall SetEnvironmentStringsA(ptr)
 @ stdcall SetEnvironmentStringsW(ptr)
@@ -1114,7 +1117,8 @@
 @ stdcall SetPriorityClass(long long)
 @ stdcall SetProcessAffinityMask(long long)
 @ stub -version=0x600+ SetProcessAffinityUpdateMode
-@ stub -version=0x600+ SetProcessDEPPolicy
+@ stdcall -version=0x600+ SetProcessDEPPolicy(long)
+@ stdcall -version=0x602+ SetProcessMitigationPolicy(long ptr long)
 @ stdcall SetProcessPriorityBoost(long long)
 @ stdcall SetProcessShutdownParameters(long long)
 @ stdcall SetProcessWorkingSetSize(long long long)
@@ -1198,12 +1202,12 @@
 @ stdcall UnlockFileEx(long long long long ptr)
 @ stdcall UnmapViewOfFile(ptr)
 @ stub -version=0x600+ UnregisterApplicationRecoveryCallback
-@ stub -version=0x600+ UnregisterApplicationRestart
+@ stdcall -version=0x600+ UnregisterApplicationRestart()
 @ stdcall UnregisterConsoleIME()
 @ stdcall UnregisterWait(long)
 @ stdcall UnregisterWaitEx(long long)
 @ stub -version=0x600+ UpdateCalendarDayOfWeek
-@ stdcall -stub -version=0x600+ UpdateProcThreadAttribute(ptr long ptr ptr ptr ptr ptr)
+@ stdcall -version=0x600+ UpdateProcThreadAttribute(ptr long ptr ptr ptr ptr ptr)
 @ stdcall UpdateResourceA(long str str long ptr long)
 @ stdcall UpdateResourceW(long wstr wstr long ptr long)
 @ stdcall VDMConsoleOperation(long long)

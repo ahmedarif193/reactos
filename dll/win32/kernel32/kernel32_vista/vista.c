@@ -199,19 +199,6 @@ RegisterApplicationRecoveryCallback(IN APPLICATION_RECOVERY_CALLBACK pRecoveryCa
 
 
 /*
- * @unimplemented
- */
-HRESULT
-WINAPI
-RegisterApplicationRestart(IN PCWSTR pwzCommandline  OPTIONAL,
-                           IN DWORD dwFlags)
-{
-    UNIMPLEMENTED;
-    return E_FAIL;
-}
-
-
-/*
  * @implemented
  */
 BOOLEAN

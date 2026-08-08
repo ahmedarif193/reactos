@@ -2109,6 +2109,180 @@ ProcessIdToSessionId(IN DWORD dwProcessId,
 #define RemoveFromHandle(x,y)  ((x) = (HANDLE)((ULONG_PTR)(x) & ~(y)))
 C_ASSERT(PROCESS_PRIORITY_CLASS_REALTIME == (PROCESS_PRIORITY_CLASS_HIGH + 1));
 
+static
+BOOL
+BasepKeepInheritedHandle(
+    _In_ HANDLE Handle,
+    _In_reads_(HandleCount) const HANDLE *HandleList,
+    _In_ SIZE_T HandleCount,
+    _In_ const STARTUPINFOW *StartupInfo,
+    _In_opt_ HANDLE CurrentDirectoryHandle)
+{
+    SIZE_T Index;
+
+    for (Index = 0; Index < HandleCount; Index++)
+    {
+        if (HandleList[Index] == Handle)
+            return TRUE;
+    }
+
+    if (Handle == CurrentDirectoryHandle)
+        return TRUE;
+
+    if (StartupInfo->dwFlags & STARTF_USESTDHANDLES)
+    {
+        if (Handle == StartupInfo->hStdInput || Handle == StartupInfo->hStdOutput || Handle == StartupInfo->hStdError)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+static
+NTSTATUS
+BasepRestrictInheritedHandles(
+    _In_ HANDLE ProcessHandle,
+    _In_reads_(HandleCount) const HANDLE *HandleList,
+    _In_ SIZE_T HandleCount,
+    _In_ const STARTUPINFOW *StartupInfo,
+    _In_opt_ HANDLE CurrentDirectoryHandle)
+{
+    PSYSTEM_HANDLE_INFORMATION_EX HandleInfo;
+    PROCESS_BASIC_INFORMATION BasicInfo;
+    ULONG Length = 64 * 1024;
+    ULONG ReturnLength = 0;
+    ULONG_PTR Index;
+    NTSTATUS Status;
+
+    Status = NtQueryInformationProcess(ProcessHandle, ProcessBasicInformation, &BasicInfo, sizeof(BasicInfo), NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    for (;;)
+    {
+        HandleInfo = RtlAllocateHeap(RtlGetProcessHeap(), 0, Length);
+        if (!HandleInfo)
+            return STATUS_NO_MEMORY;
+
+        Status = NtQuerySystemInformation(SystemExtendedHandleInformation, HandleInfo, Length, &ReturnLength);
+        if (Status != STATUS_INFO_LENGTH_MISMATCH && Status != STATUS_BUFFER_TOO_SMALL)
+            break;
+
+        RtlFreeHeap(RtlGetProcessHeap(), 0, HandleInfo);
+        if (ReturnLength > Length)
+            Length = ReturnLength;
+        else if (Length <= MAXULONG / 2)
+            Length *= 2;
+        else
+            return STATUS_NO_MEMORY;
+    }
+
+    if (!NT_SUCCESS(Status))
+    {
+        RtlFreeHeap(RtlGetProcessHeap(), 0, HandleInfo);
+        return Status;
+    }
+
+    for (Index = 0; Index < HandleInfo->NumberOfHandles; Index++)
+    {
+        HANDLE Handle;
+        HANDLE Duplicate;
+
+        if (HandleInfo->Handles[Index].UniqueProcessId != BasicInfo.UniqueProcessId)
+            continue;
+
+        Handle = (HANDLE)HandleInfo->Handles[Index].HandleValue;
+        if (BasepKeepInheritedHandle(Handle, HandleList, HandleCount, StartupInfo, CurrentDirectoryHandle))
+            continue;
+
+        Duplicate = NULL;
+        Status = NtDuplicateObject(ProcessHandle, Handle, NtCurrentProcess(), &Duplicate, 0, 0, DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE);
+        if (NT_SUCCESS(Status) && Duplicate)
+            NtClose(Duplicate);
+        else if (!NT_SUCCESS(Status))
+            break;
+    }
+
+    RtlFreeHeap(RtlGetProcessHeap(), 0, HandleInfo);
+    return Status;
+}
+
+static
+BOOL
+BasepCaptureExtendedAttributes(
+    _In_ LPSTARTUPINFOW StartupInfo,
+    _In_ BOOL InheritHandles,
+    _Outptr_result_buffer_maybenull_(*HandleCount) PHANDLE *HandleList,
+    _Out_ PSIZE_T HandleCount,
+    _Out_ PHANDLE ParentProcess)
+{
+    PBASE_PROC_THREAD_ATTRIBUTE_LIST List;
+    ULONG Index;
+
+    *HandleList = NULL;
+    *HandleCount = 0;
+    *ParentProcess = NtCurrentProcess();
+
+    if (StartupInfo->cb < sizeof(STARTUPINFOEXW))
+        return TRUE;
+
+    List = (PBASE_PROC_THREAD_ATTRIBUTE_LIST)((LPSTARTUPINFOEXW)StartupInfo)->lpAttributeList;
+    if (!List)
+        return TRUE;
+    if (List->Count > List->Size)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    for (Index = 0; Index < List->Count; Index++)
+    {
+        PBASE_PROC_THREAD_ATTRIBUTE Attribute = &List->Attributes[Index];
+
+        if (Attribute->Attribute == PROC_THREAD_ATTRIBUTE_PARENT_PROCESS)
+        {
+            *ParentProcess = *(PHANDLE)Attribute->Value;
+        }
+        else if (Attribute->Attribute == PROC_THREAD_ATTRIBUTE_HANDLE_LIST)
+        {
+            SIZE_T ListSize;
+            SIZE_T HandleIndex;
+
+            if (!InheritHandles)
+            {
+                SetLastError(ERROR_INVALID_PARAMETER);
+                return FALSE;
+            }
+
+            ListSize = Attribute->Size;
+            *HandleList = RtlAllocateHeap(RtlGetProcessHeap(), 0, ListSize);
+            if (!*HandleList)
+            {
+                SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+                return FALSE;
+            }
+
+            RtlCopyMemory(*HandleList, Attribute->Value, ListSize);
+            *HandleCount = ListSize / sizeof(HANDLE);
+            for (HandleIndex = 0; HandleIndex < *HandleCount; HandleIndex++)
+            {
+                DWORD HandleFlags;
+
+                if (!GetHandleInformation((*HandleList)[HandleIndex], &HandleFlags) || !(HandleFlags & HANDLE_FLAG_INHERIT))
+                {
+                    RtlFreeHeap(RtlGetProcessHeap(), 0, *HandleList);
+                    *HandleList = NULL;
+                    *HandleCount = 0;
+                    SetLastError(ERROR_INVALID_PARAMETER);
+                    return FALSE;
+                }
+            }
+        }
+    }
+
+    return TRUE;
+}
+
 #ifdef _WIN64
 static BOOL
 BasepCreateWow64Process(IN HANDLE UserToken,
@@ -2126,13 +2300,16 @@ BasepCreateWow64Process(IN HANDLE UserToken,
                         IN LPSECURITY_ATTRIBUTES ThreadAttributes,
                         IN ULONG ParameterFlags,
                         IN ULONG InitialProcessFlags,
+                        IN HANDLE ParentProcess,
+                        IN const HANDLE *HandleList,
+                        IN SIZE_T HandleCount,
                         IN PPROCESS_PRIORITY_CLASS PriorityClass,
                         OUT LPPROCESS_INFORMATION ProcessInformation)
 {
     struct
     {
         SIZE_T TotalLength;
-        PS_ATTRIBUTE Attributes[5];
+        PS_ATTRIBUTE Attributes[7];
     } AttributeBuffer;
     BASE_API_MESSAGE CsrMessage;
     PBASE_CREATE_PROCESS CreateProcessMessage;
@@ -2255,6 +2432,13 @@ BasepCreateWow64Process(IN HANDLE UserToken,
         AttributeList->Attributes[AttributeCount].Value = (ULONG_PTR)EffectiveToken;
         AttributeCount++;
     }
+    if (ParentProcess != NtCurrentProcess())
+    {
+        AttributeList->Attributes[AttributeCount].Attribute = PS_ATTRIBUTE_PARENT_PROCESS;
+        AttributeList->Attributes[AttributeCount].Size = sizeof(ParentProcess);
+        AttributeList->Attributes[AttributeCount].Value = (ULONG_PTR)ParentProcess;
+        AttributeCount++;
+    }
     AttributeList->TotalLength = FIELD_OFFSET(PS_ATTRIBUTE_LIST, Attributes) + AttributeCount * sizeof(PS_ATTRIBUTE);
 
     ProcessObjectAttributesPtr = BaseFormatObjectAttributes(&ProcessObjectAttributes, ProcessAttributes, NULL);
@@ -2263,6 +2447,8 @@ BasepCreateWow64Process(IN HANDLE UserToken,
     CreateInfo.Size = sizeof(CreateInfo);
     CreateInfo.State = PsCreateInitialState;
     Status = NtCreateUserProcess(&ProcessHandle, &ThreadHandle, PROCESS_ALL_ACCESS, THREAD_ALL_ACCESS, ProcessObjectAttributesPtr, ThreadObjectAttributesPtr, ProcessFlags, THREAD_CREATE_FLAGS_CREATE_SUSPENDED, ProcessParameters, &CreateInfo, AttributeList);
+    if (NT_SUCCESS(Status) && HandleList)
+        Status = BasepRestrictInheritedHandles(ProcessHandle, HandleList, HandleCount, StartupInfo, ProcessParameters->CurrentDirectory.Handle);
     RtlDestroyProcessParameters(ProcessParameters);
     ProcessParameters = NULL;
 
@@ -2382,6 +2568,8 @@ CreateProcessInternalW(IN HANDLE hUserToken,
     PVOID BaseAddress, PrivilegeState, RealTimePrivilegeState;
     HANDLE DebugHandle, TokenHandle, JobHandle, KeyHandle, ThreadHandle;
     HANDLE FileHandle, SectionHandle, ProcessHandle;
+    HANDLE ParentProcess, *InheritHandleList;
+    SIZE_T InheritHandleCount;
     ULONG ResumeCount;
     PROCESS_PRIORITY_CLASS PriorityClass;
     NTSTATUS Status, AppCompatStatus, SaferStatus, IFEOStatus, ImageDbgStatus;
@@ -2467,6 +2655,9 @@ CreateProcessInternalW(IN HANDLE hUserToken,
     SectionHandle = NULL;
     ProcessHandle = NULL;
     ThreadHandle = NULL;
+    ParentProcess = NtCurrentProcess();
+    InheritHandleList = NULL;
+    InheritHandleCount = 0;
     ClientId.UniqueProcess = ClientId.UniqueThread = 0;
     BaseAddress = (PVOID)1;
 
@@ -2691,6 +2882,12 @@ CreateProcessInternalW(IN HANDLE hUserToken,
 
     /* Make a copy of the caller's startup info since we'll modify it */
     StartupInfo = *lpStartupInfo;
+    if ((dwCreationFlags & EXTENDED_STARTUPINFO_PRESENT) &&
+        !BasepCaptureExtendedAttributes(lpStartupInfo, bInheritHandles, &InheritHandleList, &InheritHandleCount, &ParentProcess))
+    {
+        Result = FALSE;
+        goto Quickie;
+    }
 
     /* Check if private data is being sent on the same channel as std handles */
     if ((StartupInfo.dwFlags & STARTF_USESTDHANDLES) &&
@@ -3925,7 +4122,7 @@ StartScan:
 #ifdef _WIN64
     if (ImageInformation.Machine == IMAGE_FILE_MACHINE_I386)
     {
-        Result = BasepCreateWow64Process(hUserToken, TokenHandle, JobHandle, &PathName, lpApplicationName, lpCommandLine, lpEnvironment, lpCurrentDirectory, &StartupInfo, dwCreationFlags | NoWindow, bInheritHandles, lpProcessAttributes, lpThreadAttributes, ParameterFlags, Flags, &PriorityClass, lpProcessInformation);
+        Result = BasepCreateWow64Process(hUserToken, TokenHandle, JobHandle, &PathName, lpApplicationName, lpCommandLine, lpEnvironment, lpCurrentDirectory, &StartupInfo, dwCreationFlags | NoWindow, bInheritHandles, lpProcessAttributes, lpThreadAttributes, ParameterFlags, Flags, ParentProcess, InheritHandleList, InheritHandleCount, &PriorityClass, lpProcessInformation);
         goto Quickie;
     }
 #endif
@@ -4001,7 +4198,7 @@ StartScan:
     Status = NtCreateProcessEx(&ProcessHandle,
                                PROCESS_ALL_ACCESS,
                                ObjectAttributes,
-                               NtCurrentProcess(),
+                               ParentProcess,
                                Flags,
                                SectionHandle,
                                DebugHandle,
@@ -4299,6 +4496,17 @@ StartScan:
                                Peb->ProcessParameters->StandardError,
                                &ProcessParameters->StandardError);
             }
+        }
+    }
+
+    if (InheritHandleList)
+    {
+        Status = BasepRestrictInheritedHandles(ProcessHandle, InheritHandleList, InheritHandleCount, &StartupInfo, Peb->ProcessParameters->CurrentDirectory.Handle);
+        if (!NT_SUCCESS(Status))
+        {
+            BaseSetLastNTError(Status);
+            Result = FALSE;
+            goto Quickie;
         }
     }
 
@@ -4647,6 +4855,12 @@ Quickie:
         /* If this was the VDM environment too, clear that as well */
         if (VdmUnicodeEnv.Buffer == lpEnvironment) VdmUnicodeEnv.Buffer = NULL;
         lpEnvironment = NULL;
+    }
+
+    if (InheritHandleList)
+    {
+        RtlFreeHeap(RtlGetProcessHeap(), 0, InheritHandleList);
+        InheritHandleList = NULL;
     }
 
     /* Unconditionally free all the name parsing buffers we always allocate */

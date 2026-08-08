@@ -14,6 +14,23 @@
 #define kernel32sync            208
 
 
+typedef struct _BASE_PROC_THREAD_ATTRIBUTE
+{
+    DWORD_PTR Attribute;
+    SIZE_T Size;
+    PVOID Value;
+} BASE_PROC_THREAD_ATTRIBUTE, *PBASE_PROC_THREAD_ATTRIBUTE;
+
+typedef struct _BASE_PROC_THREAD_ATTRIBUTE_LIST
+{
+    DWORD Mask;
+    DWORD Size;
+    DWORD Count;
+    DWORD Reserved;
+    PBASE_PROC_THREAD_ATTRIBUTE ExtendedFlagsAttribute;
+    BASE_PROC_THREAD_ATTRIBUTE Attributes[1];
+} BASE_PROC_THREAD_ATTRIBUTE_LIST, *PBASE_PROC_THREAD_ATTRIBUTE_LIST;
+
 #if DBG
 #define DEBUG_CHANNEL(ch) static ULONG gDebugChannel = ch;
 #else
@@ -81,6 +98,7 @@ typedef enum _BASE_SEARCH_PATH_TYPE
     BaseSearchPathDll,
     BaseSearchPathApp,
     BaseSearchPathDefault,
+    BaseSearchPathSystem,
     BaseSearchPathEnv,
     BaseSearchPathCurrent,
     BaseSearchPathMax
@@ -141,6 +159,7 @@ extern RTL_CRITICAL_SECTION BaseDllDirectoryLock;
 extern UNICODE_STRING BaseDllDirectory;
 extern UNICODE_STRING BaseDefaultPath;
 extern UNICODE_STRING BaseDefaultPathAppend;
+extern DWORD BaseDefaultDllDirectoriesFlags;
 extern PLDR_DATA_TABLE_ENTRY BasepExeLdrEntry;
 
 extern LPTOP_LEVEL_EXCEPTION_FILTER GlobalTopLevelExceptionFilter;
@@ -329,6 +348,10 @@ BaseComputeProcessDllPath(
     IN LPWSTR FullPath,
     IN PVOID Environment
 );
+
+LPWSTR
+WINAPI
+BaseComputeSecureDllPath(VOID);
 
 LPWSTR
 WINAPI

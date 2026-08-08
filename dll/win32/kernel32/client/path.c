@@ -19,6 +19,7 @@ UNICODE_STRING NoDefaultCurrentDirectoryInExePath = RTL_CONSTANT_STRING(L"NoDefa
 
 UNICODE_STRING BaseWindowsSystemDirectory, BaseWindowsDirectory;
 UNICODE_STRING BaseDefaultPathAppend, BaseDefaultPath, BaseDllDirectory;
+DWORD BaseDefaultDllDirectoriesFlags;
 
 PVOID gpTermsrvGetWindowsDirectoryA;
 PVOID gpTermsrvGetWindowsDirectoryW;
@@ -228,6 +229,10 @@ BasepComputeProcessPath(IN PBASE_SEARCH_PATH_TYPE PathOrder,
             PathLengthInBytes += BaseDefaultPath.Length;
             break;
 
+        case BaseSearchPathSystem:
+            PathLengthInBytes += BaseWindowsSystemDirectory.Length + sizeof(L';');
+            break;
+
         /* Compute the size of the current app directory */
         case BaseSearchPathApp:
             /* Find out where the app name ends, to get only the directory */
@@ -334,6 +339,13 @@ BasepComputeProcessPath(IN PBASE_SEARCH_PATH_TYPE PathOrder,
 
             /* Update the current pointer. The default path already has a ";" */
             PathCurrent += (BaseDefaultPath.Length / sizeof(WCHAR));
+            break;
+
+        case BaseSearchPathSystem:
+            ASSERT((((PathCurrent - PathBuffer + 1) * sizeof(WCHAR)) + BaseWindowsSystemDirectory.Length) <= PathLengthInBytes);
+            RtlCopyMemory(PathCurrent, BaseWindowsSystemDirectory.Buffer, BaseWindowsSystemDirectory.Length);
+            PathCurrent += BaseWindowsSystemDirectory.Length / sizeof(WCHAR);
+            *PathCurrent++ = L';';
             break;
 
         /* Add the path in the PATH environment variable */
@@ -511,6 +523,44 @@ BaseComputeProcessDllPath(IN LPWSTR FullPath,
                                       Environment);
 
     /* Return dll path */
+    return DllPath;
+}
+
+LPWSTR
+WINAPI
+BaseComputeSecureDllPath(VOID)
+{
+    BASE_SEARCH_PATH_TYPE PathOrder[BaseSearchPathMax];
+    DWORD Flags;
+    ULONG Index = 0;
+    LPWSTR DllPath;
+
+    RtlEnterCriticalSection(&BaseDllDirectoryLock);
+    Flags = BaseDefaultDllDirectoriesFlags;
+
+    if (Flags & LOAD_LIBRARY_SEARCH_DEFAULT_DIRS)
+    {
+        Flags |= LOAD_LIBRARY_SEARCH_APPLICATION_DIR |
+                 LOAD_LIBRARY_SEARCH_USER_DIRS |
+                 LOAD_LIBRARY_SEARCH_SYSTEM32;
+    }
+
+    if (Flags & LOAD_LIBRARY_SEARCH_APPLICATION_DIR)
+        PathOrder[Index++] = BaseSearchPathApp;
+    if ((Flags & LOAD_LIBRARY_SEARCH_USER_DIRS) && BaseDllDirectory.Buffer && BaseDllDirectory.Length)
+        PathOrder[Index++] = BaseSearchPathDll;
+    if (Flags & LOAD_LIBRARY_SEARCH_SYSTEM32)
+        PathOrder[Index++] = BaseSearchPathSystem;
+    PathOrder[Index] = BaseSearchPathInvalid;
+
+    if (Index == 0)
+    {
+        RtlLeaveCriticalSection(&BaseDllDirectoryLock);
+        return NULL;
+    }
+
+    DllPath = BasepComputeProcessPath(PathOrder, NULL, NULL);
+    RtlLeaveCriticalSection(&BaseDllDirectoryLock);
     return DllPath;
 }
 
