@@ -70,7 +70,7 @@ void Test_WSAIoctl_GetInterfaceList()
 {
     WSADATA wdata;
     INT iResult;
-    SOCKET sck;
+    SOCKET sck = INVALID_SOCKET;
     ULONG buflen, BytesReturned, BCastAddr;
     ULONG infoCount, i1, j1, iiFlagsExpected;
     BYTE* buf = NULL;
@@ -215,7 +215,7 @@ void Test_WSAIoctl_GetInterfaceList()
     }
 
 cleanup:
-    if (sck != 0)
+    if (sck != INVALID_SOCKET)
         closesocket(sck);
     if (pTable != NULL)
        free(pTable);

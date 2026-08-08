@@ -6,7 +6,7 @@
 
 static void test_LoadImage_1bpp(void)
 {
-    HDC hdc1, hdc2;
+    HDC hdc1, hdc2 = NULL;
     HBITMAP hBmp1, hBmp2;
     BITMAP bitmap1, bitmap2;
     struct
@@ -15,7 +15,7 @@ static void test_LoadImage_1bpp(void)
 	    RGBQUAD bmiColors[256];
     } bmi;
     UINT size;
-    HGLOBAL hMem;
+    HGLOBAL hMem = NULL;
     LPVOID lpBits;
     BYTE img[4 * 4] = { 0 };
     INT result;

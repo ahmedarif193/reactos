@@ -164,7 +164,7 @@ void Test_acos_approx(void)
         double x = s_acos_approx_tests[i].x;
         double expected = s_acos_approx_tests[i].expected.rounded;
         double z = acos(x);
-        int64_t error = abs(ulp_error_precise(&s_acos_approx_tests[i].expected, z));
+        int64_t error = llabs(ulp_error_precise(&s_acos_approx_tests[i].expected, z));
         ok(error <= s_acos_approx_tests[i].max_error,
             "acos(%.17e) = %.17e, expected %.17e, error %I64d ULPs, max %u ULPs\n",
             x, z, expected, error, s_acos_approx_tests[i].max_error);
