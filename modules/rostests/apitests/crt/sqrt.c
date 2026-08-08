@@ -168,7 +168,7 @@ void Test_sqrt_approx(void)
         double x = s_sqrt_approx_tests[i].x;
         double expected = s_sqrt_approx_tests[i].expected.rounded;
         double z = sqrt(x);
-        int64_t error = abs(ulp_error_precise(&s_sqrt_approx_tests[i].expected, z));
+        int64_t error = llabs(ulp_error_precise(&s_sqrt_approx_tests[i].expected, z));
         ok(error <= s_sqrt_approx_tests[i].max_error,
             "sqrt(%.17e) = %.17e, expected %.17e, error %I64d ULPs, max %u ULPs\n",
             x, z, expected, error, s_sqrt_approx_tests[i].max_error);
