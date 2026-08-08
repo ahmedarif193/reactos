@@ -41,6 +41,7 @@
 
 static LONG KdpLiveDumpActive;
 static LONG KdpCrashDumpActive;
+static volatile NTSTATUS KdpCrashDumpInitializationStatus = STATUS_DEVICE_NOT_READY;
 
 typedef struct _KDP_RAW_LOG_HEADER
 {
@@ -107,6 +108,116 @@ static VOID KdpSetDedicatedCrashDumpActive(_In_ BOOLEAN Active)
 
 /* Progress is reported in 100 / KDP_DUMP_PROGRESS_STEPS percent increments. */
 #define KDP_DUMP_PROGRESS_STEPS 20
+#define KDP_DUMP_DATA_PROGRESS_STEPS (KDP_DUMP_PROGRESS_STEPS - 1)
+
+static PCSTR KdpGetCrashDumpFailureReason(_In_ NTSTATUS Status)
+{
+    switch (Status)
+    {
+        case STATUS_INSUFFICIENT_RESOURCES:
+        case STATUS_NO_MEMORY:
+        case STATUS_COMMITMENT_LIMIT:
+            return "insufficient memory";
+
+        case STATUS_DISK_FULL:
+            return "insufficient storage space";
+
+        case STATUS_DEVICE_NOT_READY:
+        case STATUS_INVALID_DEVICE_STATE:
+            return "storage target is not ready";
+
+        case STATUS_DEVICE_BUSY:
+        case STATUS_SHARING_VIOLATION:
+            return "storage target is busy";
+
+        case STATUS_NOT_SUPPORTED:
+            return "dump storage is disabled or unsupported";
+
+        case STATUS_NOT_FOUND:
+        case STATUS_OBJECT_NAME_NOT_FOUND:
+        case STATUS_OBJECT_PATH_NOT_FOUND:
+        case STATUS_NO_SUCH_DEVICE:
+        case STATUS_DEVICE_DOES_NOT_EXIST:
+            return "dump storage was not found";
+
+        case STATUS_DEVICE_NOT_CONNECTED:
+        case STATUS_NO_MEDIA_IN_DEVICE:
+            return "storage device is disconnected";
+
+        case STATUS_MEDIA_WRITE_PROTECTED:
+        case STATUS_ACCESS_DENIED:
+            return "storage target is not writable";
+
+        case STATUS_IO_DEVICE_ERROR:
+        case STATUS_DEVICE_POWER_FAILURE:
+        case STATUS_DRIVER_INTERNAL_ERROR:
+            return "storage I/O error";
+
+        case STATUS_DEVICE_DATA_ERROR:
+        case STATUS_CRC_ERROR:
+        case STATUS_VERIFY_REQUIRED:
+        case STATUS_UNRECOGNIZED_MEDIA:
+            return "storage data error";
+
+        case STATUS_IO_TIMEOUT:
+            return "storage I/O timed out";
+
+        case STATUS_FILE_CORRUPT_ERROR:
+        case STATUS_DISK_CORRUPT_ERROR:
+            return "dump target layout is corrupt";
+
+        case STATUS_END_OF_FILE:
+            return "dump target ended unexpectedly";
+
+        case STATUS_REVISION_MISMATCH:
+            return "storage dump interface is incompatible";
+
+        case STATUS_INVALID_PARAMETER:
+        case STATUS_INVALID_HANDLE:
+            return "dump target is invalid";
+
+        case STATUS_INTERNAL_ERROR:
+            return "dump writer consistency check failed";
+
+        case STATUS_CANCELLED:
+            return "dump operation was canceled";
+
+        default:
+            return "unknown error";
+    }
+}
+
+static VOID KdpDisplayCrashDumpProgress(_In_ ULONG Percent)
+{
+    CHAR ProgressText[64];
+
+    Percent = min(Percent, 100);
+    RtlStringCbPrintfA(ProgressText, sizeof(ProgressText), "\rDumping memory to storage: %3lu%% complete", Percent);
+    DbgPrint("%s", ProgressText);
+    InbvDisplayString(ProgressText);
+}
+
+static VOID KdpDisplayCrashDumpFailure(_In_ NTSTATUS Status)
+{
+    CHAR FailureText[128];
+    PCSTR Reason = KdpGetCrashDumpFailureReason(Status);
+
+    RtlStringCbPrintfA(FailureText, sizeof(FailureText), "\nMemory dump failed: %s (0x%08lx).\n", Reason, Status);
+    DbgPrint("%s", FailureText);
+    RtlStringCbPrintfA(FailureText, sizeof(FailureText), "\r\nMemory dump failed: %s (0x%08lx).\r\n", Reason, Status);
+    InbvDisplayString(FailureText);
+}
+
+static VOID KdpDisplayCrashLogFailure(_In_ NTSTATUS Status)
+{
+    CHAR FailureText[128];
+    PCSTR Reason = (Status == STATUS_NOT_FOUND) ? "no crash log data was available" : KdpGetCrashDumpFailureReason(Status);
+
+    RtlStringCbPrintfA(FailureText, sizeof(FailureText), "\nCrash log failed: %s (0x%08lx); memory dump saved.\n", Reason, Status);
+    DbgPrint("%s", FailureText);
+    RtlStringCbPrintfA(FailureText, sizeof(FailureText), "\r\nCrash log failed: %s (0x%08lx).\r\nMemory dump was saved.\r\n", Reason, Status);
+    InbvDisplayString(FailureText);
+}
 
 static NTSTATUS KdpSendDeviceIoControl(_In_ PDEVICE_OBJECT DeviceObject, _In_ ULONG ControlCode, _In_reads_bytes_opt_(InputLength) PVOID InputBuffer, _In_ ULONG InputLength, _Out_writes_bytes_(OutputLength) PVOID OutputBuffer, _In_ ULONG OutputLength)
 {
@@ -434,7 +545,12 @@ BOOLEAN NTAPI KdpInitializeCrashDump(_In_ HANDLE DumpFileHandle)
     PAGED_CODE();
 
     if (KdpCrashDumpState.Initialized)
+    {
+        KdpCrashDumpInitializationStatus = STATUS_SUCCESS;
         return TRUE;
+    }
+
+    KdpCrashDumpInitializationStatus = STATUS_DEVICE_NOT_READY;
 
     KdpSetDedicatedCrashDumpActive(FALSE);
 
@@ -531,10 +647,12 @@ BOOLEAN NTAPI KdpInitializeCrashDump(_In_ HANDLE DumpFileHandle)
     Status = KdpAllocateCrashDumpResources("file-backed fallback");
     if (!NT_SUCCESS(Status))
         goto Failure;
+    KdpCrashDumpInitializationStatus = STATUS_SUCCESS;
     return TRUE;
 
 Failure:
     DPRINT1("KD: Crash dump target initialization failed while %s (0x%08lx)\n", Operation, Status);
+    KdpCrashDumpInitializationStatus = Status;
     KdpCleanupCrashDumpState();
     return FALSE;
 }
@@ -796,7 +914,12 @@ BOOLEAN NTAPI KdpInitializeDedicatedCrashDump(VOID)
     PAGED_CODE();
 
     if (KdpCrashDumpState.Initialized)
+    {
+        KdpCrashDumpInitializationStatus = STATUS_SUCCESS;
         return TRUE;
+    }
+
+    KdpCrashDumpInitializationStatus = STATUS_DEVICE_NOT_READY;
 
     RtlZeroMemory(QueryTable, sizeof(QueryTable));
     QueryTable[0].Flags = RTL_QUERY_REGISTRY_DIRECT;
@@ -809,6 +932,7 @@ BOOLEAN NTAPI KdpInitializeDedicatedCrashDump(VOID)
     if ((PartitionType == 0) || (PartitionType > MAXUCHAR))
     {
         DPRINT1("KD: Raw crash dump partition disabled or invalid (type 0x%lx)\n", PartitionType);
+        KdpCrashDumpInitializationStatus = STATUS_NOT_SUPPORTED;
         return FALSE;
     }
 
@@ -935,6 +1059,7 @@ BOOLEAN NTAPI KdpInitializeDedicatedCrashDump(VOID)
 
     DPRINT1("KD: Raw crash partition: disk %lu, partition %lu, type 0x%02lx, byte %I64u, dump %I64u bytes, log %lu bytes\n", DeviceNumber.DeviceNumber, DumpPartition.PartitionNumber, PartitionType, DumpPartition.StartingOffset.QuadPart, KdpCrashDumpState.Capacity.QuadPart, KDP_RAW_LOG_RESERVE_SIZE);
     KdpSetDedicatedCrashDumpActive(TRUE);
+    KdpCrashDumpInitializationStatus = STATUS_SUCCESS;
     if (DiskFileObject != NULL)
         ObDereferenceObject(DiskFileObject);
     if (DiskHandle != NULL)
@@ -943,6 +1068,7 @@ BOOLEAN NTAPI KdpInitializeDedicatedCrashDump(VOID)
 
 Failure:
     DPRINT1("KD: Raw crash dump target initialization failed while %s (0x%08lx)\n", Operation, Status);
+    KdpCrashDumpInitializationStatus = Status;
     if (DiskFileObject != NULL)
         ObDereferenceObject(DiskFileObject);
     if (DiskHandle != NULL)
@@ -1041,8 +1167,8 @@ NTSTATUS NTAPI KdpWriteCrashDump(VOID)
     ULONG RunIndex;
     ULONG Length;
     ULONG Step = 1;
-    ULONG64 PagesPerStep;
-    ULONG64 NextStepPage;
+    ULONG ProgressIndex;
+    ULONG64 ProgressPages[KDP_DUMP_DATA_PROGRESS_STEPS];
     ULONG64 PagesWritten = 0;
     ULONG64 Remaining;
     ULONG64 RequestedPages;
@@ -1050,16 +1176,23 @@ NTSTATUS NTAPI KdpWriteCrashDump(VOID)
     NTSTATUS LogStatus = STATUS_SUCCESS;
     NTSTATUS Status;
     ULONG ValidDump;
-    CHAR ProgressText[64];
 
     if (!KdpCrashDumpState.Initialized)
     {
-        DbgPrint("KD: Crash dump skipped because no target was initialized.\n");
-        return STATUS_DEVICE_NOT_READY;
+        Status = KdpCrashDumpInitializationStatus;
+        if (NT_SUCCESS(Status))
+            Status = STATUS_DEVICE_NOT_READY;
+        KdpDisplayCrashDumpFailure(Status);
+        return Status;
     }
 
     if (InterlockedCompareExchange(&KdpCrashDumpActive, 1, 0) != 0)
+    {
+        KdpDisplayCrashDumpFailure(STATUS_DEVICE_BUSY);
         return STATUS_DEVICE_BUSY;
+    }
+
+    KdpDisplayCrashDumpProgress(0);
 
     Status = KeInitializeCrashDumpHeader(DUMP_TYPE_FULL, 0, KdpCrashDumpState.Header, DUMP_HEADER64_SIZE, &HeaderSize);
     if (!NT_SUCCESS(Status))
@@ -1144,17 +1277,9 @@ NTSTATUS NTAPI KdpWriteCrashDump(VOID)
     if (!NT_SUCCESS(Status))
         goto Exit;
 
-    DbgPrint("Dumping physical memory to disk:   0");
-    InbvDisplayString("\r\nDumping physical memory to disk:   0");
-
-    /*
-     * Progress is reported in 5% steps. Precompute the page count per step so
-     * the write loop never divides: this runs at HIGH_LEVEL, once per page.
-     */
-    PagesPerStep = (TotalPages + KDP_DUMP_PROGRESS_STEPS - 1) / KDP_DUMP_PROGRESS_STEPS;
-    if (PagesPerStep == 0)
-        PagesPerStep = 1;
-    NextStepPage = PagesPerStep;
+    /* Precompute the 5%-through-95% page thresholds before writing pages. */
+    for (ProgressIndex = 0; ProgressIndex < RTL_NUMBER_OF(ProgressPages); ProgressIndex++)
+        ProgressPages[ProgressIndex] = (TotalPages * (ProgressIndex + 1) + KDP_DUMP_DATA_PROGRESS_STEPS - 1) / KDP_DUMP_DATA_PROGRESS_STEPS;
 
     if (KdpCrashDumpState.DumpType != DUMP_TYPE_FULL)
     {
@@ -1171,14 +1296,11 @@ NTSTATUS NTAPI KdpWriteCrashDump(VOID)
                 goto Exit;
 
             PagesWritten++;
-            if ((PagesWritten >= NextStepPage) && (Step <= KDP_DUMP_PROGRESS_STEPS))
+            while ((Step <= KDP_DUMP_DATA_PROGRESS_STEPS) && (PagesWritten >= ProgressPages[Step - 1]))
             {
                 ULONG Percent = Step * (100 / KDP_DUMP_PROGRESS_STEPS);
 
-                DbgPrint("\b\b\b%3lu", Percent);
-                RtlStringCbPrintfA(ProgressText, sizeof(ProgressText), "\rDumping physical memory to disk: %3lu", Percent);
-                InbvDisplayString(ProgressText);
-                NextStepPage += PagesPerStep;
+                KdpDisplayCrashDumpProgress(Percent);
                 Step++;
             }
         }
@@ -1199,14 +1321,11 @@ NTSTATUS NTAPI KdpWriteCrashDump(VOID)
             PhysicalAddress.QuadPart += Length;
             Remaining -= Length;
             PagesWritten += Length >> PAGE_SHIFT;
-            if ((PagesWritten >= NextStepPage) && (Step <= KDP_DUMP_PROGRESS_STEPS))
+            while ((Step <= KDP_DUMP_DATA_PROGRESS_STEPS) && (PagesWritten >= ProgressPages[Step - 1]))
             {
                 ULONG Percent = Step * (100 / KDP_DUMP_PROGRESS_STEPS);
 
-                DbgPrint("\b\b\b%3lu", Percent);
-                RtlStringCbPrintfA(ProgressText, sizeof(ProgressText), "\rDumping physical memory to disk: %3lu", Percent);
-                InbvDisplayString(ProgressText);
-                NextStepPage += PagesPerStep;
+                KdpDisplayCrashDumpProgress(Percent);
                 Step++;
             }
         }
@@ -1222,6 +1341,9 @@ NTSTATUS NTAPI KdpWriteCrashDump(VOID)
     if (!NT_SUCCESS(Status))
         goto Exit;
 
+    /* Reserve the final 5% for the crash log and valid-header commit. */
+    if (Step <= KDP_DUMP_DATA_PROGRESS_STEPS)
+        KdpDisplayCrashDumpProgress(95);
     DbgPrint("\nKD: Physical memory data written; saving crash boot log.\n");
     LogStatus = KdpWriteCrashLog();
     if (!NT_SUCCESS(LogStatus)) DbgPrint("KD: Crash boot log write failed with status 0x%08lx.\n", LogStatus);
@@ -1236,16 +1358,21 @@ NTSTATUS NTAPI KdpWriteCrashDump(VOID)
     Status = KdpCrashDumpState.Storage.Flush(KdpCrashDumpState.Storage.Context);
     if (NT_SUCCESS(Status))
     {
-        DbgPrint("\nPhysical memory dump complete.\n");
-        InbvDisplayString("\r\nPhysical memory dump complete.\r\n");
+        DbgPrint("\nKD: Memory dump complete.\n");
+        if (NT_SUCCESS(LogStatus))
+        {
+            KdpDisplayCrashDumpProgress(100);
+            InbvDisplayString("\r\n");
+        }
+        else
+        {
+            KdpDisplayCrashLogFailure(LogStatus);
+        }
     }
 
 Exit:
     if (!NT_SUCCESS(Status))
-    {
-        DbgPrint("\nPhysical memory dump failed with status 0x%08lx.\n", Status);
-        InbvDisplayString("\r\nPhysical memory dump failed.\r\n");
-    }
+        KdpDisplayCrashDumpFailure(Status);
 
     InterlockedExchange(&KdpCrashDumpActive, 0);
     if (NT_SUCCESS(Status) && !NT_SUCCESS(LogStatus))
