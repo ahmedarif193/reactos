@@ -596,6 +596,212 @@ KeBugCheckUnicodeToAnsi(IN PUNICODE_STRING Unicode,
     return Ansi;
 }
 
+#if defined(_M_AMD64) || defined(_M_ARM64)
+/*
+ * RtlLookupFunctionEntry takes the loaded-module spin lock. The other CPUs
+ * are frozen during a bugcheck, so use the bounded lock-free module walk and
+ * inspect the static image exception directory directly instead.
+ */
+static
+PRUNTIME_FUNCTION
+KiLookupBugCheckFunctionEntry(
+    _In_ ULONG_PTR ControlPc,
+    _Out_ PULONG64 ImageBase)
+{
+    BOOLEAN InKernel;
+    PVOID BaseAddress;
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+    PIMAGE_DOS_HEADER DosHeader;
+    PIMAGE_NT_HEADERS NtHeaders;
+    IMAGE_DATA_DIRECTORY ExceptionDirectory;
+    PRUNTIME_FUNCTION FunctionTable;
+    PRUNTIME_FUNCTION FunctionEntry;
+    PRUNTIME_FUNCTION Result = NULL;
+    ULONG SizeOfImage;
+    ULONG TableLength;
+    ULONG IndexLow;
+    ULONG IndexHigh;
+    ULONG IndexMiddle;
+    ULONG_PTR ControlRva;
+#ifdef _M_ARM64
+    ULONG FunctionLength;
+    ULONG UnwindData;
+    PULONG Xdata;
+#endif
+
+    *ImageBase = 0;
+    if (ControlPc <= (ULONG_PTR)MmHighestUserAddress)
+        return NULL;
+
+    _SEH2_TRY
+    {
+        do
+        {
+            BaseAddress = KiPcToFileHeader((PVOID)ControlPc, &LdrEntry, FALSE, &InKernel);
+            if ((BaseAddress == NULL) || (LdrEntry == NULL))
+                break;
+
+            SizeOfImage = LdrEntry->SizeOfImage;
+            if (SizeOfImage < sizeof(IMAGE_NT_HEADERS))
+                break;
+
+            DosHeader = BaseAddress;
+            if (!MmIsAddressValid(DosHeader) || !MmIsAddressValid((PUCHAR)DosHeader + sizeof(*DosHeader) - 1) || (DosHeader->e_magic != IMAGE_DOS_SIGNATURE) || (DosHeader->e_lfanew < 0) || ((ULONG)DosHeader->e_lfanew > SizeOfImage - sizeof(IMAGE_NT_HEADERS)))
+                break;
+
+            NtHeaders = (PIMAGE_NT_HEADERS)((PUCHAR)BaseAddress + DosHeader->e_lfanew);
+            if (!MmIsAddressValid(NtHeaders) || !MmIsAddressValid((PUCHAR)NtHeaders + sizeof(*NtHeaders) - 1) || (NtHeaders->Signature != IMAGE_NT_SIGNATURE) || (NtHeaders->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) || (NtHeaders->OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_EXCEPTION))
+                break;
+
+            ExceptionDirectory = NtHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
+            if ((ExceptionDirectory.VirtualAddress == 0) || (ExceptionDirectory.Size < sizeof(RUNTIME_FUNCTION)) || ((ExceptionDirectory.Size % sizeof(RUNTIME_FUNCTION)) != 0) || (ExceptionDirectory.VirtualAddress >= SizeOfImage) || (ExceptionDirectory.Size > SizeOfImage - ExceptionDirectory.VirtualAddress))
+                break;
+
+            FunctionTable = (PRUNTIME_FUNCTION)((PUCHAR)BaseAddress + ExceptionDirectory.VirtualAddress);
+            if (!MmIsAddressValid(FunctionTable) || !MmIsAddressValid((PUCHAR)FunctionTable + ExceptionDirectory.Size - 1))
+                break;
+
+            ControlRva = ControlPc - (ULONG_PTR)BaseAddress;
+            TableLength = ExceptionDirectory.Size / sizeof(RUNTIME_FUNCTION);
+            IndexLow = 0;
+            IndexHigh = TableLength;
+            while (IndexHigh > IndexLow)
+            {
+                IndexMiddle = IndexLow + ((IndexHigh - IndexLow) / 2);
+                FunctionEntry = &FunctionTable[IndexMiddle];
+                if (ControlRva < FunctionEntry->BeginAddress)
+                {
+                    IndexHigh = IndexMiddle;
+                    continue;
+                }
+
+#ifdef _M_AMD64
+                if ((FunctionEntry->BeginAddress >= FunctionEntry->EndAddress) || (FunctionEntry->EndAddress > SizeOfImage))
+                    break;
+                if (ControlRva >= FunctionEntry->EndAddress)
+                {
+                    IndexLow = IndexMiddle + 1;
+                    continue;
+                }
+                if ((FunctionEntry->UnwindData == 0) || ((FunctionEntry->UnwindData & 0x3) != 0) || (FunctionEntry->UnwindData >= SizeOfImage) || !MmIsAddressValid((PUCHAR)BaseAddress + FunctionEntry->UnwindData))
+                    break;
+#else
+                UnwindData = FunctionEntry->UnwindData;
+                if ((UnwindData == 0) || ((UnwindData & 0x3) == 0x3))
+                    break;
+                if ((UnwindData & 0x3) != 0)
+                {
+                    FunctionLength = ((UnwindData >> 2) & 0x7ff) * sizeof(ULONG);
+                }
+                else
+                {
+                    if ((UnwindData >= SizeOfImage) || ((SizeOfImage - UnwindData) < sizeof(ULONG)))
+                        break;
+                    Xdata = (PULONG)((PUCHAR)BaseAddress + UnwindData);
+                    if (!MmIsAddressValid(Xdata))
+                        break;
+                    FunctionLength = (*Xdata & 0x3ffff) * sizeof(ULONG);
+                }
+
+                if ((FunctionLength == 0) || (FunctionEntry->BeginAddress >= SizeOfImage) || (FunctionLength > SizeOfImage - FunctionEntry->BeginAddress) || (ControlRva >= FunctionEntry->BeginAddress + FunctionLength))
+                {
+                    IndexLow = IndexMiddle + 1;
+                    continue;
+                }
+#endif
+
+                *ImageBase = (ULONG64)(ULONG_PTR)BaseAddress;
+                Result = FunctionEntry;
+                break;
+            }
+        } while (FALSE);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Result = NULL;
+    }
+    _SEH2_END;
+
+    return Result;
+}
+
+static
+BOOLEAN
+KiUnwindBugCheckFrame(
+    _Inout_ PCONTEXT Context,
+    _In_ ULONG_PTR StackLow,
+    _In_ ULONG_PTR StackHigh,
+    _In_ BOOLEAN FirstFrame)
+{
+    PRUNTIME_FUNCTION FunctionEntry;
+    ULONG64 ImageBase;
+    ULONG64 EstablisherFrame;
+    PVOID HandlerData;
+    ULONG_PTR OldPc;
+    ULONG_PTR OldSp;
+    ULONG_PTR LookupPc;
+    ULONG_PTR NewPc;
+    ULONG_PTR NewSp;
+    BOOLEAN Unwound = FALSE;
+
+    OldPc = KeGetContextPc(Context);
+    OldSp = KeGetContextStackRegister(Context);
+    if ((OldPc == 0) || (OldPc <= (ULONG_PTR)MmHighestUserAddress) || (OldSp < StackLow) || (OldSp >= StackHigh) || ((OldSp & (sizeof(ULONG_PTR) - 1)) != 0) || !MmIsAddressValid((PVOID)OldPc))
+        return FALSE;
+
+    LookupPc = OldPc;
+    if (!FirstFrame)
+    {
+#ifdef _M_ARM64
+        if (LookupPc < sizeof(ULONG))
+            return FALSE;
+        LookupPc -= sizeof(ULONG);
+#else
+        LookupPc--;
+#endif
+    }
+
+    _SEH2_TRY
+    {
+        FunctionEntry = KiLookupBugCheckFunctionEntry(LookupPc, &ImageBase);
+        if (FunctionEntry != NULL)
+        {
+            RtlVirtualUnwind(UNW_FLAG_NHANDLER, ImageBase, LookupPc, FunctionEntry, Context, &HandlerData, &EstablisherFrame, NULL);
+            Unwound = TRUE;
+        }
+#ifdef _M_AMD64
+        else if (((StackHigh - OldSp) >= sizeof(ULONG64)) && MmIsAddressValid((PVOID)OldSp) && MmIsAddressValid((PVOID)(OldSp + sizeof(ULONG64) - 1)))
+        {
+            Context->Rip = *(volatile ULONG64 *)OldSp;
+            Context->Rsp = OldSp + sizeof(ULONG64);
+            Unwound = TRUE;
+        }
+#else
+        else if ((Context->Lr != 0) && (Context->Lr != Context->Pc))
+        {
+            Context->Pc = Context->Lr;
+            Unwound = TRUE;
+        }
+#endif
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Unwound = FALSE;
+    }
+    _SEH2_END;
+
+    if (!Unwound)
+        return FALSE;
+
+    NewPc = KeGetContextPc(Context);
+    NewSp = KeGetContextStackRegister(Context);
+    if ((NewPc <= (ULONG_PTR)MmHighestUserAddress) || !MmIsAddressValid((PVOID)NewPc) || ((NewPc == OldPc) && (NewSp == OldSp)) || (NewSp < OldSp) || (NewSp < StackLow) || (NewSp > StackHigh))
+        return FALSE;
+
+    return TRUE;
+}
+#endif
+
 static
 ULONG
 KiCaptureBugCheckBackTrace(
@@ -612,20 +818,44 @@ KiCaptureBugCheckBackTrace(
     ULONG_PTR ReturnAddress;
     ULONG_PTR ProgramCounter;
     ULONG FrameCount = 0;
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    CONTEXT UnwindContext;
+    BOOLEAN FirstFrame;
+#endif
 
     if (MaximumFrames == 0)
         return 0;
 
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    UnwindContext = *Context;
+    if (TrapFrame != NULL)
+    {
+#ifdef _M_AMD64
+        UnwindContext.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_AMD64;
+#else
+        UnwindContext.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_ARM64;
+#endif
+        KeTrapFrameToContext(TrapFrame, NULL, &UnwindContext);
+    }
+    ProgramCounter = KeGetContextPc(&UnwindContext);
+    Frame = KeGetContextFrameRegister(&UnwindContext);
+#else
     ProgramCounter = TrapFrame ? KeGetTrapFramePc(TrapFrame) : KeGetContextPc(Context);
-#if defined(_M_ARM64) || defined(_M_AMD64) || defined(_M_IX86)
+#if defined(_M_IX86)
     Frame = TrapFrame ? KeGetTrapFrameFrameRegister(TrapFrame) : KeGetContextFrameRegister(Context);
 #else
     Frame = 0;
 #endif
-    if (ProgramCounter != 0)
-        Frames[FrameCount++] = ProgramCounter;
-    if ((FrameCount == MaximumFrames) || (Frame == 0))
+#endif
+    if (ProgramCounter == 0)
+        return 0;
+    Frames[FrameCount++] = ProgramCounter;
+    if (FrameCount == MaximumFrames)
         return FrameCount;
+#if !defined(_M_AMD64) && !defined(_M_ARM64)
+    if (Frame == 0)
+        return FrameCount;
+#endif
 
     Thread = KeGetCurrentThread();
     StackLow = (ULONG_PTR)Thread->StackLimit;
@@ -633,6 +863,24 @@ KiCaptureBugCheckBackTrace(
     if ((StackLow == 0) || (StackHigh <= StackLow))
         return FrameCount;
 
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    FirstFrame = TRUE;
+    while (FrameCount < MaximumFrames)
+    {
+        if (!KiUnwindBugCheckFrame(&UnwindContext, StackLow, StackHigh, FirstFrame))
+            break;
+
+        FirstFrame = FALSE;
+        ReturnAddress = KeGetContextPc(&UnwindContext);
+        if (Frames[FrameCount - 1] != ReturnAddress)
+            Frames[FrameCount++] = ReturnAddress;
+    }
+
+    if (FrameCount > 1)
+        return FrameCount;
+#endif
+
+    /* Metadata may be unavailable for leaf or damaged images; retain the bounded frame-pointer fallback. */
     while (FrameCount < MaximumFrames)
     {
         if ((Frame < StackLow) || (Frame >= StackHigh) || ((StackHigh - Frame) < (2 * sizeof(ULONG_PTR))) || ((Frame & (sizeof(ULONG_PTR) - 1)) != 0))
@@ -760,11 +1008,9 @@ KiDisplayBugCheckBackTrace(
     ULONG_PTR Frames[KI_BUGCHECK_BACKTRACE_FRAMES];
     ULONG FrameCount;
     ULONG Index;
-#ifndef KDBG
     BOOLEAN InKernel;
     PVOID ImageBase;
     PLDR_DATA_TABLE_ENTRY LdrEntry;
-#endif
     CHAR ModuleName[64];
 #ifdef KDBG
     CHAR FunctionName[64];
@@ -784,12 +1030,10 @@ KiDisplayBugCheckBackTrace(
                 RtlStringCbPrintfA(Line, sizeof(Line), "#%02lu %s!%s+0x%Ix\r\n", Index, ModuleName, FunctionName, Displacement);
             else
                 RtlStringCbPrintfA(Line, sizeof(Line), "#%02lu %s+0x%Ix\r\n", Index, ModuleName, Displacement);
+            InbvDisplayString(Line);
+            continue;
         }
-        else
-        {
-            RtlStringCbPrintfA(Line, sizeof(Line), "#%02lu %p\r\n", Index, (PVOID)Frames[Index]);
-        }
-#else
+#endif
         ImageBase = NULL;
         LdrEntry = NULL;
         if (Frames[Index] > (ULONG_PTR)MmHighestUserAddress)
@@ -804,7 +1048,6 @@ KiDisplayBugCheckBackTrace(
         {
             RtlStringCbPrintfA(Line, sizeof(Line), "#%02lu %p\r\n", Index, (PVOID)Frames[Index]);
         }
-#endif
         InbvDisplayString(Line);
     }
 
@@ -1411,8 +1654,8 @@ KeBugCheckWithTf(IN ULONG BugCheckCode,
         }
 #endif
 
-        /* Check if the debugger is disabled but we can enable it */
-        if (!(KdDebuggerEnabled) && !(KdPitchDebugger))
+        /* Re-enable an initialized debugger, but never probe a new transport after drawing the crash report. */
+        if (!(KdDebuggerEnabled) && !(KdPitchDebugger) && KdPreviouslyEnabled)
         {
             /* Enable it */
             KdEnableDebuggerWithLock(FALSE);
