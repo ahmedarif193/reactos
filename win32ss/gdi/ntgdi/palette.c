@@ -526,12 +526,10 @@ HPALETTE
 APIENTRY
 NtGdiCreateHalftonePalette(HDC  hDC)
 {
-    int i, r, g, b;
+    int i;
     PALETTEENTRY PalEntries[256];
     PPALETTE ppal;
-    PDC pdc;
     HPALETTE hpal = NULL;
-    BOOL UseDefaultPalette = TRUE;
 
     RtlZeroMemory(PalEntries, sizeof(PalEntries));
 
@@ -549,53 +547,22 @@ NtGdiCreateHalftonePalette(HDC  hDC)
 
     if (hDC)
     {
-        pdc = DC_LockDc(hDC);
-        if (!pdc)
+        PDC pdc = DC_LockDc(hDC);
+        if (pdc == NULL)
         {
             EngSetLastError(ERROR_INVALID_HANDLE);
             return NULL;
         }
-
-        ppal = PALETTE_ShareLockPalette(pdc->dclevel.hpal);
-        if (ppal)
-        {
-            if (ppal->flFlags & PAL_INDEXED)
-            {
-                UseDefaultPalette = FALSE;
-
-                /* FIXME: optimize the palette for the current palette */
-                UNIMPLEMENTED;
-            }
-
-            PALETTE_ShareUnlockPalette(ppal);
-        }
-
         DC_UnlockDc(pdc);
     }
 
-    if (UseDefaultPalette)
+    /* This is the default 8-bpp color table used by Windows on high-color
+       displays and by GreGetDIBitsInternal for an 8-bpp DIB. */
+    for (i = 10; i < 246; i++)
     {
-        for (r = 0; r < 6; r++)
-        {
-            for (g = 0; g < 6; g++)
-            {
-                for (b = 0; b < 6; b++)
-                {
-                    i = r + g*6 + b*36 + 10;
-                    PalEntries[i].peRed = r * 51;
-                    PalEntries[i].peGreen = g * 51;
-                    PalEntries[i].peBlue = b * 51;
-                }
-            }
-        }
-
-        for (i = 216; i < 246; i++)
-        {
-            int v = (i - 216) << 3;
-            PalEntries[i].peRed = v;
-            PalEntries[i].peGreen = v;
-            PalEntries[i].peBlue = v;
-        }
+        PalEntries[i].peRed = (i & 0x07) << 5;
+        PalEntries[i].peGreen = (i & 0x38) << 2;
+        PalEntries[i].peBlue = i & 0xc0;
     }
 
     ppal = PALETTE_AllocPalWithHandle(PAL_INDEXED, 256, PalEntries, 0, 0, 0);
