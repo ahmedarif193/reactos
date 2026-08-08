@@ -15,7 +15,7 @@
 #include <debug.h>
 
 #ifndef KD_LOG_WATCHDOG_DEFAULT_SECONDS
-#define KD_LOG_WATCHDOG_DEFAULT_SECONDS 6
+#define KD_LOG_WATCHDOG_DEFAULT_SECONDS 0
 #endif
 #define KD_LOG_WATCHDOG_MINIMUM_SECONDS 5
 #define KD_LOG_WATCHDOG_MAXIMUM_SECONDS 3600
@@ -35,6 +35,27 @@ static BOOL KdLogWatchdogIsSeparator(_In_ WCHAR Character)
     return Character == L' ' || Character == L'\t' || Character == L',' || Character == L'/';
 }
 
+static BOOL KdLogWatchdogHasDebugOption(_In_opt_ PCWSTR LoadOptions)
+{
+    static const WCHAR OptionName[] = L"DEBUG";
+    PCWSTR Option;
+    PCWSTR Cursor;
+
+    if (LoadOptions == NULL)
+        return FALSE;
+
+    Option = LoadOptions;
+    while ((Option = wcsstr(Option, OptionName)) != NULL)
+    {
+        Cursor = Option + ARRAYSIZE(OptionName) - 1;
+        if ((Option == LoadOptions || KdLogWatchdogIsSeparator(Option[-1])) && (*Cursor == UNICODE_NULL || *Cursor == L'=' || KdLogWatchdogIsSeparator(*Cursor)))
+            return TRUE;
+        Option = Cursor;
+    }
+
+    return FALSE;
+}
+
 static DWORD KdLogWatchdogParseTimeout(_In_opt_ PCWSTR LoadOptions)
 {
     static const WCHAR OptionName[] = L"KDWATCHDOG";
@@ -42,8 +63,8 @@ static DWORD KdLogWatchdogParseTimeout(_In_opt_ PCWSTR LoadOptions)
     PCWSTR Cursor;
     DWORD Seconds;
 
-    if (LoadOptions == NULL)
-        return KD_LOG_WATCHDOG_DEFAULT_SECONDS;
+    if (!KdLogWatchdogHasDebugOption(LoadOptions))
+        return 0;
 
     Option = LoadOptions;
     while ((Option = wcsstr(Option, OptionName)) != NULL)
@@ -174,9 +195,7 @@ static VOID WINAPI ServiceMain(_In_ DWORD ArgumentCount, _In_reads_(ArgumentCoun
     if (TimeoutSeconds == 0)
     {
         HeartbeatMilliseconds = 0;
-        UpdateServiceStatus(SERVICE_RUNNING);
-        DPRINT1("KDLOGWD: heartbeat service online, watchdog disabled\n");
-        WaitForSingleObject(StopEvent, INFINITE);
+        DPRINT1("KDLOGWD: heartbeat service disabled for this boot\n");
         goto Stop;
     }
 
