@@ -1356,6 +1356,15 @@ ScrollBarWndProc_common(WNDPROC DefWindowProc, HWND Wnd, UINT Msg, WPARAM wParam
       case WM_GETDLGCODE:
          return DLGC_WANTARROWS; /* Windows returns this value */
 
+      case WM_GETOBJECT:
+        if ((LONG)lParam == OBJID_QUERYCLASSNAMEIDX)
+          return 0x1000a;
+        break;
+
+      case WM_THEMECHANGED:
+        InvalidateRect(Wnd, NULL, TRUE);
+        break;
+
       case WM_PAINT:
         {
           PAINTSTRUCT Ps;
