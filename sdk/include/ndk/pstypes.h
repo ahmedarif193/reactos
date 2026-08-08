@@ -1161,6 +1161,11 @@ typedef enum _APPCOMPAT_USERFLAGS_HIGHPART
 //
 // Process Information Structures for NtQueryProcessInformation
 //
+typedef struct _PAGE_PRIORITY_INFORMATION
+{
+    ULONG PagePriority;
+} PAGE_PRIORITY_INFORMATION, *PPAGE_PRIORITY_INFORMATION;
+
 typedef struct _PROCESS_BASIC_INFORMATION
 {
     NTSTATUS ExitStatus;
