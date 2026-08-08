@@ -136,6 +136,9 @@ GuiConsoleInputThread(PVOID Param)
     /* Assign the desktop to this thread */
     if (!SetThreadDesktop(DesktopConsoleThreadInfo.DesktopHandle)) goto Quit;
 
+    /* Create the message queue before publishing the thread ID to senders. */
+    PeekMessageW(&msg, NULL, 0, 0, PM_NOREMOVE);
+
     /* The thread has been initialized, set the event */
     NtSetEvent(GuiInitInfo->GuiThreadStartupEvent, NULL);
     Status = STATUS_SUCCESS;
@@ -238,11 +241,8 @@ GuiConsoleInputThread(PVOID Param)
 
                 NtSetEvent(GuiData->hGuiTermEvent, NULL);
 
-                if (_InterlockedDecrement(&WindowCount) == 0)
-                {
-                    DPRINT("CONSRV: Going to quit the Input Thread 0x%p\n", InputThreadId);
-                    goto Quit;
-                }
+                /* Keep this per-desktop dispatcher available to concurrent console creators. */
+                _InterlockedDecrement(&WindowCount);
 
                 continue;
             }
