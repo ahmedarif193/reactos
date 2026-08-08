@@ -22,8 +22,15 @@
 
 #include "newdev_private.h"
 
+#include <cfgmgr32.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <winnls.h>
+
+#define NEWDEV_BATCH_MAX_DEVICES 65536
+#define NEWDEV_BATCH_MAX_WORKERS 4
+#define NEWDEV_BATCH_MAX_DEPTH   64
+#define NEWDEV_BATCH_DEPTH_UNKNOWN ((ULONG)-1)
 
 /* Global variables */
 HINSTANCE hDllInstance;
@@ -50,11 +57,170 @@ static CRITICAL_SECTION NoDriverIdCacheLock;
 static BOOL NoDriverIdCacheReady;
 static LONG NoDriverIdCacheBatchDepth;
 
+typedef struct _DEVICE_INSTALL_PHASE_LOCK
+{
+    CRITICAL_SECTION StateLock;
+    CONDITION_VARIABLE StateChanged;
+    DWORD ActiveReaders;
+    DWORD WaitingWriters;
+    BOOL WriterActive;
+} DEVICE_INSTALL_PHASE_LOCK;
+
+/* Keep discovery parallel, but block waiters while a long commit is active. */
+static DEVICE_INSTALL_PHASE_LOCK DeviceInstallPhaseLock;
+
+typedef struct _BATCH_DEVICE
+{
+    PWSTR InstanceId;
+    ULONG Depth;
+} BATCH_DEVICE, *PBATCH_DEVICE;
+
+typedef struct _BATCH_WORK_CONTEXT
+{
+    PBATCH_DEVICE Devices;
+    volatile LONG NextIndex;
+    LONG EndIndex;
+} BATCH_WORK_CONTEXT, *PBATCH_WORK_CONTEXT;
+
 static BOOL
 SearchDriver(
     IN PDEVINSTDATA DevInstData,
     IN LPCWSTR Directory OPTIONAL,
     IN LPCWSTR InfFile OPTIONAL);
+
+static BOOL
+InstallNullDriver(
+    IN PDEVINSTDATA DevInstData);
+
+static VOID
+InitializeDeviceInstallPhaseLock(VOID)
+{
+    InitializeCriticalSection(&DeviceInstallPhaseLock.StateLock);
+    InitializeConditionVariable(&DeviceInstallPhaseLock.StateChanged);
+    DeviceInstallPhaseLock.ActiveReaders = 0;
+    DeviceInstallPhaseLock.WaitingWriters = 0;
+    DeviceInstallPhaseLock.WriterActive = FALSE;
+}
+
+static VOID
+DeleteDeviceInstallPhaseLock(VOID)
+{
+    DeleteCriticalSection(&DeviceInstallPhaseLock.StateLock);
+}
+
+static VOID
+AcquireDeviceInstallPhaseShared(VOID)
+{
+    EnterCriticalSection(&DeviceInstallPhaseLock.StateLock);
+    while (DeviceInstallPhaseLock.WriterActive || DeviceInstallPhaseLock.WaitingWriters != 0)
+        SleepConditionVariableCS(&DeviceInstallPhaseLock.StateChanged, &DeviceInstallPhaseLock.StateLock, INFINITE);
+    DeviceInstallPhaseLock.ActiveReaders++;
+    LeaveCriticalSection(&DeviceInstallPhaseLock.StateLock);
+}
+
+static VOID
+ReleaseDeviceInstallPhaseShared(VOID)
+{
+    EnterCriticalSection(&DeviceInstallPhaseLock.StateLock);
+    if (DeviceInstallPhaseLock.ActiveReaders == 0)
+    {
+        ERR("Device install phase reader count underflow\n");
+        LeaveCriticalSection(&DeviceInstallPhaseLock.StateLock);
+        return;
+    }
+    DeviceInstallPhaseLock.ActiveReaders--;
+    if (DeviceInstallPhaseLock.ActiveReaders == 0)
+        WakeAllConditionVariable(&DeviceInstallPhaseLock.StateChanged);
+    LeaveCriticalSection(&DeviceInstallPhaseLock.StateLock);
+}
+
+static VOID
+AcquireDeviceInstallPhaseExclusive(VOID)
+{
+    EnterCriticalSection(&DeviceInstallPhaseLock.StateLock);
+    DeviceInstallPhaseLock.WaitingWriters++;
+    while (DeviceInstallPhaseLock.WriterActive || DeviceInstallPhaseLock.ActiveReaders != 0)
+        SleepConditionVariableCS(&DeviceInstallPhaseLock.StateChanged, &DeviceInstallPhaseLock.StateLock, INFINITE);
+    DeviceInstallPhaseLock.WaitingWriters--;
+    DeviceInstallPhaseLock.WriterActive = TRUE;
+    LeaveCriticalSection(&DeviceInstallPhaseLock.StateLock);
+}
+
+static VOID
+ReleaseDeviceInstallPhaseExclusive(VOID)
+{
+    EnterCriticalSection(&DeviceInstallPhaseLock.StateLock);
+    if (!DeviceInstallPhaseLock.WriterActive)
+    {
+        ERR("Device install phase writer released while inactive\n");
+        LeaveCriticalSection(&DeviceInstallPhaseLock.StateLock);
+        return;
+    }
+    DeviceInstallPhaseLock.WriterActive = FALSE;
+    WakeAllConditionVariable(&DeviceInstallPhaseLock.StateChanged);
+    LeaveCriticalSection(&DeviceInstallPhaseLock.StateLock);
+}
+
+static BOOL
+DeviceInstallPhasePromote(
+    IN OUT PBOOL SharedPhaseLockHeld)
+{
+    BOOL WasShared = *SharedPhaseLockHeld;
+
+    if (WasShared)
+    {
+        ReleaseDeviceInstallPhaseShared();
+        *SharedPhaseLockHeld = FALSE;
+    }
+
+    AcquireDeviceInstallPhaseExclusive();
+    return WasShared;
+}
+
+static VOID
+DeviceInstallPhaseDemote(
+    IN BOOL WasShared,
+    IN OUT PBOOL SharedPhaseLockHeld)
+{
+    ReleaseDeviceInstallPhaseExclusive();
+
+    if (WasShared)
+    {
+        AcquireDeviceInstallPhaseShared();
+        *SharedPhaseLockHeld = TRUE;
+    }
+}
+
+static BOOL
+InstallSelectedDriver(
+    IN PDEVINSTDATA DevInstData,
+    IN BOOL NullDriver,
+    IN OUT PBOOL SharedPhaseLockHeld)
+{
+    BOOL WasShared = DeviceInstallPhasePromote(SharedPhaseLockHeld);
+    BOOL Ret;
+
+    Ret = NullDriver ? InstallNullDriver(DevInstData) : InstallCurrentDriver(DevInstData);
+
+    DeviceInstallPhaseDemote(WasShared, SharedPhaseLockHeld);
+    return Ret;
+}
+
+static BOOL
+SetFailedInstallSerialized(
+    IN HDEVINFO DeviceInfoSet,
+    IN PSP_DEVINFO_DATA DeviceInfoData,
+    IN BOOLEAN Set,
+    IN OUT PBOOL SharedPhaseLockHeld)
+{
+    BOOL WasShared = DeviceInstallPhasePromote(SharedPhaseLockHeld);
+    BOOL Ret;
+
+    Ret = NewDevSetFailedInstall(DeviceInfoSet, DeviceInfoData, Set);
+
+    DeviceInstallPhaseDemote(WasShared, SharedPhaseLockHeld);
+    return Ret;
+}
 
 static BOOL
 NoDriverCacheContainsLocked(
@@ -1293,15 +1459,13 @@ InstallCurrentDriver(
     return TRUE;
 }
 
-/*
-* @implemented
-*/
-BOOL WINAPI
-DevInstallW(
+static BOOL
+DevInstallInternal(
     IN HWND hWndParent,
     IN HINSTANCE hInstance,
     IN LPCWSTR InstanceId,
-    IN INT Show)
+    IN INT Show,
+    IN BOOL InBatch)
 {
     PDEVINSTDATA DevInstData = NULL;
     PWSTR HardwareIds = NULL;
@@ -1312,6 +1476,7 @@ DevInstallW(
     DWORD config_flags;
     BOOL CachedNullDriver = FALSE;
     BOOL UseDriverMatchCache = FALSE;
+    BOOL SharedPhaseLockHeld = FALSE;
     BOOL retval = FALSE;
 
     TRACE("(%p, %p, %s, %d)\n", hWndParent, hInstance, debugstr_w(InstanceId), Show);
@@ -1320,6 +1485,12 @@ DevInstallW(
     {
         /* XP kills the process... */
         ExitProcess(ERROR_ACCESS_DENIED);
+    }
+
+    if (InBatch)
+    {
+        AcquireDeviceInstallPhaseShared();
+        SharedPhaseLockHeld = TRUE;
     }
 
     DevInstData = HeapAlloc(GetProcessHeap(), 0, sizeof(DEVINSTDATA));
@@ -1421,7 +1592,7 @@ DevInstallW(
         if (NoDriverCacheAllIdsKnown(HardwareIds, CompatibleIds))
         {
             TRACE("No driver cached for %s\n", debugstr_w(InstanceId));
-            NewDevSetFailedInstall(DevInstData->hDevInfo, &DevInstData->devInfoData, TRUE);
+            SetFailedInstallSerialized(DevInstData->hDevInfo, &DevInstData->devInfoData, TRUE, &SharedPhaseLockHeld);
             SetLastError(ERROR_FILE_NOT_FOUND);
             goto cleanup;
         }
@@ -1434,10 +1605,7 @@ DevInstallW(
         {
             if (SearchDriver(DevInstData, NULL, CachedInfFile))
             {
-                if (CachedNullDriver)
-                    retval = InstallNullDriver(DevInstData);
-                else
-                    retval = InstallCurrentDriver(DevInstData);
+                retval = InstallSelectedDriver(DevInstData, CachedNullDriver, &SharedPhaseLockHeld);
                 TRACE("Cached driver install returned %d\n", retval);
                 goto cleanup;
             }
@@ -1456,7 +1624,7 @@ DevInstallW(
     if (ScanFoldersForDriver(DevInstData))
     {
         /* Driver found ; install it */
-        retval = InstallCurrentDriver(DevInstData);
+        retval = InstallSelectedDriver(DevInstData, FALSE, &SharedPhaseLockHeld);
         TRACE("InstallCurrentDriver() returned %d\n", retval);
         if (retval && UseDriverMatchCache &&
             GetCurrentDriverInfFileName(DevInstData,
@@ -1494,7 +1662,7 @@ DevInstallW(
         TRACE("No wizard\n");
         if (!DevInstData->bUpdate)
         {
-            if (!NewDevSetFailedInstall(DevInstData->hDevInfo, &DevInstData->devInfoData, TRUE))
+            if (!SetFailedInstallSerialized(DevInstData->hDevInfo, &DevInstData->devInfoData, TRUE, &SharedPhaseLockHeld))
             {
                 TRACE("NewDevSetFailedInstall() failed with error 0x%lx\n", GetLastError());
             }
@@ -1527,7 +1695,23 @@ cleanup:
         HeapFree(GetProcessHeap(), 0, DevInstData);
     }
 
+    if (SharedPhaseLockHeld)
+        ReleaseDeviceInstallPhaseShared();
+
     return retval;
+}
+
+/*
+* @implemented
+*/
+BOOL WINAPI
+DevInstallW(
+    IN HWND hWndParent,
+    IN HINSTANCE hInstance,
+    IN LPCWSTR InstanceId,
+    IN INT Show)
+{
+    return DevInstallInternal(hWndParent, hInstance, InstanceId, Show, FALSE);
 }
 
 
@@ -1757,15 +1941,162 @@ cleanup:
 }
 
 
+static ULONG
+GetBatchDeviceDepth(
+    IN PCWSTR DeviceInstance)
+{
+    CONFIGRET ConfigRet;
+    DEVINST DeviceNode;
+    DEVINST ParentNode;
+    ULONG Depth = 0;
+
+    ConfigRet = CM_Locate_DevNodeW(&DeviceNode, (DEVINSTID_W)DeviceInstance, CM_LOCATE_DEVNODE_NORMAL);
+    if (ConfigRet != CR_SUCCESS)
+        return NEWDEV_BATCH_DEPTH_UNKNOWN;
+
+    while (Depth < NEWDEV_BATCH_MAX_DEPTH)
+    {
+        ConfigRet = CM_Get_Parent(&ParentNode, DeviceNode, 0);
+        if (ConfigRet == CR_NO_SUCH_DEVNODE)
+            return Depth;
+        if (ConfigRet != CR_SUCCESS)
+            return NEWDEV_BATCH_DEPTH_UNKNOWN;
+
+        DeviceNode = ParentNode;
+        Depth++;
+    }
+
+    return NEWDEV_BATCH_DEPTH_UNKNOWN;
+}
+
+
+static DWORD
+RemoveDuplicateBatchDevices(
+    IN OUT PBATCH_DEVICE Devices,
+    IN DWORD DeviceCount)
+{
+    DWORD UniqueCount = 0;
+    DWORD i;
+    DWORD j;
+
+    for (i = 0; i < DeviceCount; i++)
+    {
+        for (j = 0; j < UniqueCount; j++)
+        {
+            if (!lstrcmpiW(Devices[j].InstanceId, Devices[i].InstanceId))
+                break;
+        }
+
+        if (j != UniqueCount)
+        {
+            HeapFree(GetProcessHeap(), 0, Devices[i].InstanceId);
+            continue;
+        }
+
+        if (UniqueCount != i)
+            Devices[UniqueCount] = Devices[i];
+        UniqueCount++;
+    }
+
+    return UniqueCount;
+}
+
+
+static int __cdecl
+CompareBatchDeviceDepths(
+    const void *First,
+    const void *Second)
+{
+    ULONG DepthA = ((const BATCH_DEVICE *)First)->Depth;
+    ULONG DepthB = ((const BATCH_DEVICE *)Second)->Depth;
+
+    return (DepthA > DepthB) - (DepthA < DepthB);
+}
+
+static VOID
+SortBatchDevicesByDepth(
+    IN OUT PBATCH_DEVICE Devices,
+    IN DWORD DeviceCount)
+{
+    qsort(Devices, DeviceCount, sizeof(*Devices), CompareBatchDeviceDepths);
+}
+
+
+static DWORD
+WINAPI
+BatchInstallWorker(
+    IN PVOID Parameter)
+{
+    PBATCH_WORK_CONTEXT Context = Parameter;
+    LONG Index;
+
+    for (;;)
+    {
+        Index = InterlockedIncrement(&Context->NextIndex);
+        if (Index >= Context->EndIndex)
+            break;
+
+        TRACE("ClientSideInstallBatchW: installing %ls at depth %lu\n", Context->Devices[Index].InstanceId, Context->Devices[Index].Depth);
+        if (!DevInstallInternal(NULL, NULL, Context->Devices[Index].InstanceId, SW_HIDE, TRUE))
+            TRACE("DevInstallW failed for %ls (error %lu)\n", Context->Devices[Index].InstanceId, GetLastError());
+    }
+
+    return ERROR_SUCCESS;
+}
+
+
+static VOID
+InstallBatchDepthRange(
+    IN PBATCH_DEVICE Devices,
+    IN DWORD FirstIndex,
+    IN DWORD EndIndex)
+{
+    BATCH_WORK_CONTEXT Context;
+    SYSTEM_INFO SystemInfo;
+    HANDLE Threads[NEWDEV_BATCH_MAX_WORKERS - 1];
+    DWORD DeviceCount = EndIndex - FirstIndex;
+    DWORD ThreadCount = 0;
+    DWORD WorkerCount;
+    DWORD i;
+
+    GetSystemInfo(&SystemInfo);
+    WorkerCount = min(SystemInfo.dwNumberOfProcessors, NEWDEV_BATCH_MAX_WORKERS);
+    WorkerCount = min(WorkerCount, DeviceCount);
+
+    Context.Devices = Devices;
+    Context.NextIndex = (LONG)FirstIndex - 1;
+    Context.EndIndex = (LONG)EndIndex;
+
+    TRACE("ClientSideInstallBatchW: depth %lu, %lu device(s), %lu worker(s)\n", Devices[FirstIndex].Depth, DeviceCount, WorkerCount);
+
+    for (i = 1; i < WorkerCount; i++)
+    {
+        Threads[ThreadCount] = CreateThread(NULL, 0, BatchInstallWorker, &Context, 0, NULL);
+        if (Threads[ThreadCount] != NULL)
+            ThreadCount++;
+    }
+
+    BatchInstallWorker(&Context);
+
+    for (i = 0; i < ThreadCount; i++)
+    {
+        WaitForSingleObject(Threads[i], INFINITE);
+        CloseHandle(Threads[i]);
+    }
+}
+
+
 /*
  * @implemented
  *
  * Batch variant of ClientSideInstallW. Reads the same prologue (event name
  * and ShowWizard) but then a DeviceCount followed by Count (size, instance)
- * pairs, installing each device in a loop inside a single rundll32.exe
- * process. The install event is signalled exactly once after the whole
- * batch completes so umpnpmgr's handshake behaves the same as for a
- * single-device install.
+ * pairs. Devices are grouped by devnode depth so parents finish before their
+ * children. Driver discovery within one depth is parallel, while the final
+ * class-installer/registry/file commit is serialized. If any hierarchy lookup
+ * fails, the original input order is retained and the whole batch is serial.
+ * The install event is signalled exactly once after the whole batch completes
+ * so umpnpmgr's handshake behaves the same as for a single-device install.
  *
  * Used by umpnpmgr's DeviceInstallThread Step 1 (boot device list) to
  * avoid launching rundll32 once per device.
@@ -1782,12 +2113,16 @@ ClientSideInstallBatchW(
     DWORD BytesRead;
     DWORD Value;
     DWORD DeviceCount;
+    DWORD FirstIndex;
+    DWORD EndIndex;
     DWORD i;
     HANDLE hPipe = INVALID_HANDLE_VALUE;
     PWSTR DeviceInstance = NULL;
     PWSTR InstallEventName = NULL;
     HANDLE hInstallEvent;
     BOOL CacheBatchActive = FALSE;
+    BOOL BatchDepthsKnown = TRUE;
+    PBATCH_DEVICE Devices = NULL;
 
     /* Open the pipe */
     hPipe = CreateFileW(lpNamedPipeName, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -1834,14 +2169,33 @@ ClientSideInstallBatchW(
 
     TRACE("ClientSideInstallBatchW: processing %lu device(s)\n", DeviceCount);
 
-    NoDriverCacheBeginBatch();
-    CacheBatchActive = TRUE;
+    if (DeviceCount > NEWDEV_BATCH_MAX_DEVICES)
+    {
+        ERR("ClientSideInstallBatchW: invalid device count %lu\n", DeviceCount);
+        goto cleanup;
+    }
+
+    if (DeviceCount != 0)
+    {
+        Devices = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, DeviceCount * sizeof(*Devices));
+        if (Devices == NULL)
+        {
+            ERR("HeapAlloc(Devices[%lu]) failed\n", DeviceCount);
+            goto cleanup;
+        }
+    }
 
     for (i = 0; i < DeviceCount; i++)
     {
         if (!ReadFile(hPipe, &Value, sizeof(Value), &BytesRead, NULL))
         {
             ERR("ReadFile(cbDeviceInstance[%lu]) failed with error %u\n", i, GetLastError());
+            goto cleanup;
+        }
+
+        if (Value < sizeof(WCHAR) || Value > (MAX_DEVICE_ID_LEN + 1) * sizeof(WCHAR) || (Value % sizeof(WCHAR)) != 0)
+        {
+            ERR("Invalid DeviceInstance[%lu] size %lu\n", i, Value);
             goto cleanup;
         }
 
@@ -1858,21 +2212,46 @@ ClientSideInstallBatchW(
             goto cleanup;
         }
 
-        TRACE("ClientSideInstallBatchW: installing [%lu/%lu] %ls\n",
-              i + 1, DeviceCount, DeviceInstance);
-
-        /* Best-effort install: individual failures are logged but don't
-         * abort the batch, matching the pre-existing boot loop behaviour.
-         * Per-device progress for the serial log is emitted by umpnpmgr's
-         * batch caller before we ever run — see InstallDevicesBatch. */
-        if (!DevInstallW(NULL, NULL, DeviceInstance, SW_HIDE))
+        if (DeviceInstance[Value / sizeof(WCHAR) - 1] != UNICODE_NULL)
         {
-            TRACE("DevInstallW failed for %ls (error %lu)\n",
-                  DeviceInstance, GetLastError());
+            ERR("DeviceInstance[%lu] is not terminated\n", i);
+            goto cleanup;
         }
 
-        HeapFree(GetProcessHeap(), 0, DeviceInstance);
+        Devices[i].InstanceId = DeviceInstance;
         DeviceInstance = NULL;
+    }
+
+    DeviceCount = RemoveDuplicateBatchDevices(Devices, DeviceCount);
+
+    for (i = 0; i < DeviceCount; i++)
+    {
+        Devices[i].Depth = GetBatchDeviceDepth(Devices[i].InstanceId);
+        if (Devices[i].Depth == NEWDEV_BATCH_DEPTH_UNKNOWN)
+            BatchDepthsKnown = FALSE;
+    }
+
+    if (BatchDepthsKnown)
+        SortBatchDevicesByDepth(Devices, DeviceCount);
+
+    NoDriverCacheBeginBatch();
+    CacheBatchActive = TRUE;
+
+    /* Best-effort install: individual failures are logged but don't abort
+     * the batch, matching the pre-existing boot loop behaviour. Per-device
+    * progress for the serial log is emitted by umpnpmgr's batch caller. */
+    FirstIndex = 0;
+    while (FirstIndex < DeviceCount)
+    {
+        EndIndex = FirstIndex + 1;
+        if (BatchDepthsKnown)
+        {
+            while (EndIndex < DeviceCount && Devices[EndIndex].Depth == Devices[FirstIndex].Depth)
+                EndIndex++;
+        }
+
+        InstallBatchDepthRange(Devices, FirstIndex, EndIndex);
+        FirstIndex = EndIndex;
     }
 
     /* Signal completion of the whole batch exactly once. */
@@ -1898,6 +2277,13 @@ cleanup:
     if (DeviceInstance)
         HeapFree(GetProcessHeap(), 0, DeviceInstance);
 
+    if (Devices)
+    {
+        for (i = 0; i < DeviceCount; i++)
+            HeapFree(GetProcessHeap(), 0, Devices[i].InstanceId);
+        HeapFree(GetProcessHeap(), 0, Devices);
+    }
+
     if (CacheBatchActive)
         NoDriverCacheEndBatch();
 
@@ -1917,6 +2303,7 @@ DllMain(
 
         DisableThreadLibraryCalls(hInstance);
         InitializeCriticalSection(&NoDriverIdCacheLock);
+        InitializeDeviceInstallPhaseLock();
         NoDriverIdCacheReady = TRUE;
 
         InitControls.dwSize = sizeof(INITCOMMONCONTROLSEX);
@@ -1927,6 +2314,7 @@ DllMain(
     else if (dwReason == DLL_PROCESS_DETACH)
     {
         FreeNoDriverCache();
+        DeleteDeviceInstallPhaseLock();
     }
 
     return TRUE;
