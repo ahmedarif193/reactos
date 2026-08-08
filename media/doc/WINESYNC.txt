@@ -52,6 +52,7 @@ dll/directx/wine/qcap           # Synced to Wine-11.14
 dll/directx/wine/qedit          # Synced to Wine-11.14
 dll/directx/wine/quartz         # Synced to Wine-11.14
 dll/directx/wine/wined3d        # Synced to Wine-11.14
+dll/directx/wine/winegstreamer  # Synced to Wine-11.14 (ReactOS native parser backend)
 
 dll/win32/activeds            # Synced to Wine-11.14
 dll/win32/activeds.tlb        # Synced to Wine-11.14
@@ -62,6 +63,7 @@ dll/win32/atl80               # Synced to Wine-11.14
 dll/win32/atl100              # Synced to Wine-11.14
 dll/win32/avifil32            # Synced to Wine-11.14
 dll/win32/avrt                # Synced to Wine-11.14
+dll/win32/iyuv_32             # Synced to Wine-11.14 (ReactOS native colorspace backend)
 dll/win32/bcrypt              # Synced to Wine-11.14
 dll/win32/bcryptprimitives    # Synced to Wine-11.14
 dll/win32/bluetoothapis       # Synced to Wine-11.14
