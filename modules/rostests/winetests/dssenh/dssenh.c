@@ -202,12 +202,18 @@ struct keylength_test {
     int todo_error;
 };
 
+#ifdef __REACTOS__
+#define BASE_DSS_UNSUPPORTED_TODO 0
+#else
+#define BASE_DSS_UNSUPPORTED_TODO 1
+#endif
+
 static const struct keylength_test baseDSS_keylength[] = {
     /* AT_KEYEXCHANGE is not supported by the base DSS provider */
-    {AT_KEYEXCHANGE, 448 << 16, FALSE, NTE_BAD_ALGID, 0, 0, 1},
-    {AT_KEYEXCHANGE, 512 << 16, FALSE, NTE_BAD_ALGID, 0, 1, 1},
-    {AT_KEYEXCHANGE, 1024 << 16, FALSE, NTE_BAD_ALGID, 0, 1, 1},
-    {AT_KEYEXCHANGE, 1088 << 16, FALSE, NTE_BAD_ALGID, 0, 0, 1},
+    {AT_KEYEXCHANGE, 448 << 16, FALSE, NTE_BAD_ALGID, 0, 0, BASE_DSS_UNSUPPORTED_TODO},
+    {AT_KEYEXCHANGE, 512 << 16, FALSE, NTE_BAD_ALGID, 0, BASE_DSS_UNSUPPORTED_TODO, BASE_DSS_UNSUPPORTED_TODO},
+    {AT_KEYEXCHANGE, 1024 << 16, FALSE, NTE_BAD_ALGID, 0, BASE_DSS_UNSUPPORTED_TODO, BASE_DSS_UNSUPPORTED_TODO},
+    {AT_KEYEXCHANGE, 1088 << 16, FALSE, NTE_BAD_ALGID, 0, 0, BASE_DSS_UNSUPPORTED_TODO},
     /* min 512 max 1024 increment by 64 */
     {AT_SIGNATURE, 448 << 16, FALSE, NTE_BAD_FLAGS},
     {AT_SIGNATURE, 512 << 16, TRUE},
@@ -216,15 +222,15 @@ static const struct keylength_test baseDSS_keylength[] = {
     {AT_SIGNATURE, 1024 << 16, TRUE},
     {AT_SIGNATURE, 1088 << 16, FALSE, NTE_BAD_FLAGS},
     /* CALG_DH_EPHEM is not supported by the base DSS provider */
-    {CALG_DH_EPHEM, 448 << 16, FALSE, NTE_BAD_ALGID, 0, 0, 1},
+    {CALG_DH_EPHEM, 448 << 16, FALSE, NTE_BAD_ALGID, 0, 0, BASE_DSS_UNSUPPORTED_TODO},
     {CALG_DH_EPHEM, 512 << 16, FALSE, NTE_BAD_ALGID},
     {CALG_DH_EPHEM, 1024 << 16, FALSE, NTE_BAD_ALGID},
-    {CALG_DH_EPHEM, 1088 << 16, FALSE, NTE_BAD_ALGID, 0, 0, 1},
+    {CALG_DH_EPHEM, 1088 << 16, FALSE, NTE_BAD_ALGID, 0, 0, BASE_DSS_UNSUPPORTED_TODO},
     /* CALG_DH_SF is not supported by the base DSS provider */
-    {CALG_DH_SF, 448 << 16, FALSE, NTE_BAD_ALGID, 0, 0, 1},
-    {CALG_DH_SF, 512 << 16, FALSE, NTE_BAD_ALGID, 0, 1, 1},
-    {CALG_DH_SF, 1024 << 16, FALSE, NTE_BAD_ALGID, 0, 1, 1},
-    {CALG_DH_SF, 1088 << 16, FALSE, NTE_BAD_ALGID, 0, 0, 1},
+    {CALG_DH_SF, 448 << 16, FALSE, NTE_BAD_ALGID, 0, 0, BASE_DSS_UNSUPPORTED_TODO},
+    {CALG_DH_SF, 512 << 16, FALSE, NTE_BAD_ALGID, 0, BASE_DSS_UNSUPPORTED_TODO, BASE_DSS_UNSUPPORTED_TODO},
+    {CALG_DH_SF, 1024 << 16, FALSE, NTE_BAD_ALGID, 0, BASE_DSS_UNSUPPORTED_TODO, BASE_DSS_UNSUPPORTED_TODO},
+    {CALG_DH_SF, 1088 << 16, FALSE, NTE_BAD_ALGID, 0, 0, BASE_DSS_UNSUPPORTED_TODO},
     /* min 512 max 1024, increment by 64 */
     {CALG_DSS_SIGN, 448 << 16, FALSE, NTE_BAD_FLAGS},
     {CALG_DSS_SIGN, 512 << 16, TRUE},
@@ -1246,11 +1252,11 @@ static void test_keyExchange_baseDSS(HCRYPTPROV hProv, const struct keyExchange_
 
         /* Generate key exchange keys for user1 and user2 */
         result = CryptGenKey(hProv, tests[i].algid, 512 << 16 | CRYPT_PREGEN, &privKey1);
-        todo_wine ok(!result && GetLastError() == NTE_BAD_ALGID,
+        todo_wine_if(BASE_DSS_UNSUPPORTED_TODO) ok(!result && GetLastError() == NTE_BAD_ALGID,
            "Expected NTE_BAD_ALGID, got %lx\n", GetLastError());
 
         result = CryptGenKey(hProv, tests[i].algid, 512 << 16 | CRYPT_PREGEN, &privKey2);
-        todo_wine ok(!result && GetLastError() == NTE_BAD_ALGID,
+        todo_wine_if(BASE_DSS_UNSUPPORTED_TODO) ok(!result && GetLastError() == NTE_BAD_ALGID,
            "Expected NTE_BAD_ALGID, got %lx\n", GetLastError());
 
         /* Set the prime and generator values, which are agreed upon */

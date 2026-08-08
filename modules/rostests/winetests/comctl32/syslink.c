@@ -256,6 +256,11 @@ static void test_create_syslink(void)
     LONG oldstyle;
     LRESULT ret;
     LITEM item;
+    BOOL visible_todo = TRUE;
+
+#ifdef __REACTOS__
+    visible_todo = FALSE;
+#endif
 
     /* Create an invisible SysLink control */
     flush_sequences(sequences, NUM_MSG_SEQUENCE);
@@ -278,7 +283,7 @@ static void test_create_syslink(void)
     SetWindowLongA(hWndSysLink, GWL_STYLE, oldstyle | WS_VISIBLE);
     RedrawWindow(hWndSysLink, NULL, NULL, RDW_INVALIDATE);
     flush_events();
-    ok_sequence(sequences, SYSLINK_SEQ_INDEX, visible_syslink_wnd_seq, "visible SysLink", TRUE);
+    ok_sequence(sequences, SYSLINK_SEQ_INDEX, visible_syslink_wnd_seq, "visible SysLink", visible_todo);
     ok_sequence(sequences, PARENT_SEQ_INDEX, parent_visible_syslink_wnd_seq, "visible SysLink (parent)", TRUE);
 
     /* Change contents */

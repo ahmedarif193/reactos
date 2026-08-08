@@ -480,7 +480,11 @@ static void test_create_persisted_key(void)
     {
     key = 0;
     ret = NCryptCreatePersistedKey(prov, &key, BCRYPT_AES_ALGORITHM, NULL, 0, 0);
+#ifdef __REACTOS__
+    ok(ret == ERROR_SUCCESS, "got %#lx\n", ret);
+#else
     ok(ret == ERROR_SUCCESS || broken(ret == NTE_NOT_SUPPORTED) /* win 7 */, "got %#lx\n", ret);
+#endif
     if (ret == NTE_NOT_SUPPORTED) win_skip("broken, symmetric keys not supported.\n");
     else ok(key, "got null handle\n");
     }

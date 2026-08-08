@@ -586,10 +586,15 @@ static void test_mbcp(void)
 
     _setmbcp(1361);
     expect_eq(_ismbblead(0x80), 0, int, "%d");
+#ifdef __REACTOS__
+    expect_eq(_ismbblead(0x81), 1, int, "%d");
+    expect_eq(_ismbblead(0x83), 1, int, "%d");
+#else
     todo_wine {
       expect_eq(_ismbblead(0x81), 1, int, "%d");
       expect_eq(_ismbblead(0x83), 1, int, "%d");
     }
+#endif
     expect_eq(_ismbblead(0x84), 1, int, "%d");
     expect_eq(_ismbblead(0xd3), 1, int, "%d");
     expect_eq(_ismbblead(0xd7), 0, int, "%d");
@@ -1766,7 +1771,11 @@ static void test_ismbclegal(void) {
             break;
         }
     }
+#ifdef __REACTOS__
+    ok(!err, "_ismbclegal (1361) : Expected 0x%x, got 0x%x (0x%x)\n", exp, ret, i);
+#else
     todo_wine ok(!err, "_ismbclegal (1361) : Expected 0x%x, got 0x%x (0x%x)\n", exp, ret, i);
+#endif
 
     _setmbcp(prev_cp);
 }
@@ -4708,8 +4717,12 @@ static void test___STRINGTOLD(void)
     {
         errno = 0xdeadbeef;
         r = __STRINGTOLD(&v, &endptr, tests[i].str, 0);
+#ifdef __REACTOS__
+        ok(r == tests[i].r, "%d) r = %d\n", i, r);
+#else
         todo_wine_if(tests[i].todo)
             ok(r == tests[i].r, "%d) r = %d\n", i, r);
+#endif
         ok(endptr == tests[i].str + tests[i].endptr, "%d) endptr = %p, expected %p\n",
                 i, endptr, tests[i].str+tests[i].endptr);
         ok(!memcmp(&v, &tests[i].v, sizeof(v)), "%d) v = %s\n", i, debugstr_ldouble(&v));

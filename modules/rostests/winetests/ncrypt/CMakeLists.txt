@@ -1,4 +1,5 @@
 add_executable(ncrypt_winetest ncrypt.c testlist.c)
+target_compile_definitions(ncrypt_winetest PRIVATE USE_WINE_TODOS)
 set_module_type(ncrypt_winetest win32cui)
 add_importlibs(ncrypt_winetest ncrypt msvcrt kernel32)
 add_rostests_file(TARGET ncrypt_winetest)

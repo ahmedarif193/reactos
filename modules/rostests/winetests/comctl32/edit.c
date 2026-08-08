@@ -867,7 +867,10 @@ static void test_edit_control_2(void)
 
     /* try setting the caret before it's visible */
     r = SetCaretPos(0, 0);
-    todo_wine ok(0 == r, "SetCaretPos succeeded unexpectedly, expected: 0, got: %ld\n", r);
+#ifndef __REACTOS__
+    todo_wine
+#endif
+    ok(0 == r, "SetCaretPos succeeded unexpectedly, expected: 0, got: %ld\n", r);
     phwnd = SetFocus(hwndET2);
     ok(phwnd != NULL, "SetFocus failed unexpectedly, expected non-zero, got NULL\n");
     r = SetCaretPos(0, 0);
@@ -3723,8 +3726,13 @@ static void test_ime(void)
     HIMC himc;
     HWND hwnd;
     BOOL ret;
+    BOOL composition_todo = TRUE;
     HKL hkl;
     MSG msg;
+
+#ifdef __REACTOS__
+    composition_todo = FALSE;
+#endif
 
     hkl = GetKeyboardLayout(0);
 
@@ -3808,7 +3816,7 @@ static void test_ime(void)
         ok_sequence(sequences, COMBINED_SEQ_INDEX, wm_ime_composition_korean_seq,
                     "korean WM_IME_COMPOSITION", TRUE);
     else
-        ok_sequence(sequences, COMBINED_SEQ_INDEX, wm_ime_composition_seq, "WM_IME_COMPOSITION", TRUE);
+        ok_sequence(sequences, COMBINED_SEQ_INDEX, wm_ime_composition_seq, "WM_IME_COMPOSITION", composition_todo);
 
     /* Test that WM_IME_CHAR is passed to DefWindowProc() to get WM_CHAR */
     flush_sequences(sequences, NUM_MSG_SEQUENCES);
