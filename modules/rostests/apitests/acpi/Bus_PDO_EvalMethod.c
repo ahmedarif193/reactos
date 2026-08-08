@@ -188,6 +188,15 @@ typedef struct _FDO_DEVICE_DATA
     ULONG Dummy;
 } FDO_DEVICE_DATA, *PFDO_DEVICE_DATA;
 
+struct acpi_device
+{
+    struct
+    {
+        unsigned int power_manageable:1;
+        unsigned int force_power_state:1;
+    } flags;
+};
+
 typedef struct _GTM_OBJECT_BUFFER
 {
     ACPI_OBJECT Obj;
@@ -232,6 +241,24 @@ static const ULONG DrvpMyDsmIntegerFields[3] =
 
 static const EVAL_TEST_ENTRY* DrvpEvalTestEntry;
 static ACPI_HANDLE CorrectHandle = (ACPI_HANDLE)(ULONG_PTR)FAKE_SB_NAMESPACE_ACPI_HANDLE;
+
+int
+acpi_bus_get_device(ACPI_HANDLE Handle, struct acpi_device **Device)
+{
+    UNREFERENCED_PARAMETER(Handle);
+    UNREFERENCED_PARAMETER(Device);
+    ok(0, "Unexpected call to acpi_bus_get_device\n");
+    return -1;
+}
+
+int
+acpi_bus_set_power(ACPI_HANDLE Handle, int State)
+{
+    UNREFERENCED_PARAMETER(Handle);
+    UNREFERENCED_PARAMETER(State);
+    ok(0, "Unexpected call to acpi_bus_set_power\n");
+    return -1;
+}
 
 BOOLEAN
 NTAPI

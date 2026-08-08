@@ -58,7 +58,7 @@ test_adpcm_ima_wav.wav WAVE "test_adpcm_ima_wav.wav"
 /* @makedep: test_gsm_ms.wav */
 test_gsm_ms.wav WAVE "test_gsm_ms.wav"
 
-/* ffmpeg -f lavfi -i "sine=frequency=1000" -t 0.1 -c:a mp2 test_mp2.wav
+/* ffmpeg -f lavfi -i "sine=frequency=1000" -t 0.1 -c:a mp2 test_mp2.wav */
 /* @makedep: test_mp2.wav */
 test_mp2.wav WAVE "test_mp2.wav"
 
