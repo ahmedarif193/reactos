@@ -992,6 +992,7 @@ Step2:
          * after the Step 1 batch optimization.
          */
         LIST_ENTRY LocalBurst;
+        BOOL BurstEmpty;
         InitializeListHead(&LocalBurst);
 
         WaitForSingleObject(hDeviceInstallListMutex, INFINITE);
@@ -1000,16 +1001,18 @@ Step2:
             PLIST_ENTRY entry = RemoveHeadList(&DeviceInstallListHead);
             InsertTailList(&LocalBurst, entry);
         }
+        BurstEmpty = IsListEmpty(&LocalBurst);
+        if (BurstEmpty)
+            SetEvent(hNoPendingInstalls);
+        else
+            ResetEvent(hNoPendingInstalls);
         ReleaseMutex(hDeviceInstallListMutex);
 
-        if (IsListEmpty(&LocalBurst))
+        if (BurstEmpty)
         {
-            SetEvent(hNoPendingInstalls);
             WaitForSingleObject(hDeviceInstallListNotEmpty, INFINITE);
             continue;
         }
-
-        ResetEvent(hNoPendingInstalls);
 
         /*
          * If the burst contains more than one device AND we don't need the
