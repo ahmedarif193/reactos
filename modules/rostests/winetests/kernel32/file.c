@@ -5759,12 +5759,7 @@ static void test_post_completion(void)
     ok(!ret, "GetQueuedCompletionStatus succeeded\n");
     ok(GetLastError() == WAIT_TIMEOUT, "wrong error %lu\n", GetLastError());
 
-#if defined(__REACTOS__) && DLL_EXPORT_VERSION >= 0x600
-    /* FIXME: GetQueuedCompletionStatusEx is a STUB on ReactOS. */
-    if (is_reactos() || !pGetQueuedCompletionStatusEx)
-#else
     if (!pGetQueuedCompletionStatusEx)
-#endif
     {
         win_skip("GetQueuedCompletionStatusEx not available\n");
         CloseHandle( port );

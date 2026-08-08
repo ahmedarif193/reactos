@@ -2957,8 +2957,17 @@ static void test_imagelist_interop(void)
     HRESULT hr;
     INT cx, cy;
     BOOL ret;
+#ifdef __REACTOS__
+    WCHAR comctl32_path[MAX_PATH];
+#endif
 
+#ifdef __REACTOS__
+    GetSystemDirectoryW(comctl32_path, ARRAY_SIZE(comctl32_path));
+    lstrcatW(comctl32_path, L"\\comctl32.dll");
+    comctl32_v5 = LoadLibraryW(comctl32_path);
+#else
     comctl32_v5 = LoadLibraryW(L"C:\\windows\\system32\\comctl32.dll");
+#endif
     ok(!!comctl32_v5, "Failed to load comctl32 v5.\n");
 
     pDllGetVersion_v5 = (void *)GetProcAddress(comctl32_v5, "DllGetVersion");
