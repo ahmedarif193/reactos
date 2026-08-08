@@ -64,7 +64,7 @@ IsWindowArranged(
 {
     if (!IsWindow(hwnd))
     {
-        SetLastError(ERROR_INVALID_WINDOW_HANDLE);
+        SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
 

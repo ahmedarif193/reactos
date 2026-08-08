@@ -6,12 +6,14 @@ extern void func_AttachThreadInput(void);
 extern void func_CharFuncs(void);
 extern void func_CloseWindow(void);
 extern void func_CopyImage(void);
+extern void func_CursorPresentation(void);
 extern void func_CreateDialog(void);
 extern void func_CreateIconFromResourceEx(void);
 extern void func_CreateWindowEx(void);
 extern void func_DeferWindowPos(void);
 extern void func_DestroyCursorIcon(void);
 extern void func_DM_REPOSITION(void);
+extern void func_Dpi(void);
 extern void func_DrawIconEx(void);
 extern void func_DrawText(void);
 extern void func_desktop(void);
@@ -25,6 +27,7 @@ extern void func_GetMessageTime(void);
 extern void func_GetPeekMessage(void);
 extern void func_GetSetWindowInt(void);
 extern void func_GetSystemMetrics(void);
+extern void func_GetTitleBarInfoEx(void);
 extern void func_GetUserObjectInformation(void);
 extern void func_GetWindowPlacement(void);
 extern void func_GW_ENABLEDPOPUP(void);
@@ -37,7 +40,9 @@ extern void func_LoadImageGCC(void);
 extern void func_LookupIconIdFromDirectoryEx(void);
 extern void func_MenuUI(void);
 extern void func_MessageStateAnalyzer(void);
+extern void func_ModernUser32(void);
 extern void func_NextDlgItem(void);
+extern void func_NonClientPaint(void);
 extern void func_PrivateExtractIcons(void);
 extern void func_RealGetWindowClass(void);
 extern void func_RedrawWindow(void);
@@ -72,12 +77,14 @@ const struct test winetest_testlist[] =
     { "CharFuncs", func_CharFuncs },
     { "CloseWindow", func_CloseWindow },
     { "CopyImage", func_CopyImage },
+    { "CursorPresentation", func_CursorPresentation },
     { "CreateDialog", func_CreateDialog },
     { "CreateIconFromResourceEx", func_CreateIconFromResourceEx },
     { "CreateWindowEx", func_CreateWindowEx },
     { "DeferWindowPos", func_DeferWindowPos },
     { "DestroyCursorIcon", func_DestroyCursorIcon },
     { "DM_REPOSITION", func_DM_REPOSITION },
+    { "Dpi", func_Dpi },
     { "DrawIconEx", func_DrawIconEx },
     { "DrawText", func_DrawText },
     { "desktop", func_desktop },
@@ -91,6 +98,7 @@ const struct test winetest_testlist[] =
     { "GetPeekMessage", func_GetPeekMessage },
     { "GetSetWindowInt", func_GetSetWindowInt },
     { "GetSystemMetrics", func_GetSystemMetrics },
+    { "GetTitleBarInfoEx", func_GetTitleBarInfoEx },
     { "GetUserObjectInformation", func_GetUserObjectInformation },
     { "GetWindowPlacement", func_GetWindowPlacement },
     { "GW_ENABLEDPOPUP", func_GW_ENABLEDPOPUP },
@@ -103,7 +111,9 @@ const struct test winetest_testlist[] =
     { "LookupIconIdFromDirectoryEx", func_LookupIconIdFromDirectoryEx },
     { "MenuUI", func_MenuUI },
     { "MessageStateAnalyzer", func_MessageStateAnalyzer },
+    { "ModernUser32", func_ModernUser32 },
     { "NextDlgItem", func_NextDlgItem },
+    { "NonClientPaint", func_NonClientPaint },
     { "PrivateExtractIcons", func_PrivateExtractIcons },
     { "RealGetWindowClass", func_RealGetWindowClass },
     { "RedrawWindow", func_RedrawWindow },
@@ -133,4 +143,3 @@ const struct test winetest_testlist[] =
     { "wsprintfApi", func_wsprintfApi },
     { 0, 0 }
 };
-

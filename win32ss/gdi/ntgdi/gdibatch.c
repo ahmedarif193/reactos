@@ -19,47 +19,55 @@ BOOL APIENTRY IntExtTextOutW(IN PDC,IN INT,IN INT,IN UINT,IN OPTIONAL PRECTL,IN 
 //
 VOID
 FASTCALL
-DoDeviceSync( SURFOBJ *Surface, PRECTL Rect, FLONG fl)
+DoDeviceSync(
+    _Inout_ SURFOBJ *Surface,
+    _In_opt_ PRECTL Rect,
+    _In_ FLONG Flags)
 {
-  PPDEVOBJ Device = (PDEVOBJ*)Surface->hdev;
-// No punting and "Handle to a surface, provided that the surface is device-managed.
-// Otherwise, dhsurf is zero".
-  if (!(Device->flFlags & PDEV_DRIVER_PUNTED_CALL) && (Surface->dhsurf))
-  {
-     if (Device->DriverFunctions.SynchronizeSurface)
-     {
-       Device->DriverFunctions.SynchronizeSurface(Surface, Rect, fl);
-     }
-     else
-     {
-       if (Device->DriverFunctions.Synchronize)
-       {
-         Device->DriverFunctions.Synchronize(Surface->dhpdev, Rect);
-       }
-     }
-  }
+    PPDEVOBJ Device = (PDEVOBJ*)Surface->hdev;
+    PSURFACE SurfaceObject = CONTAINING_RECORD(Surface, SURFACE, SurfObj);
+
+    if (Device == NULL || (Device->flFlags & PDEV_DRIVER_PUNTED_CALL) || !(SurfaceObject->flags & HOOK_SYNCHRONIZE))
+        return;
+
+    if (Device->DriverFunctions.SynchronizeSurface)
+        Device->DriverFunctions.SynchronizeSurface(Surface, Rect, Flags);
+    else if (Device->DriverFunctions.Synchronize)
+        Device->DriverFunctions.Synchronize(Surface->dhpdev, Rect);
 }
 
 VOID
 FASTCALL
 SynchronizeDriver(FLONG Flags)
 {
-  SURFOBJ *SurfObj;
-  //PPDEVOBJ Device;
+    PPDEVOBJ Device;
+    FLONG Event;
 
-  if (Flags & GCAPS2_SYNCFLUSH)
-      Flags = DSS_FLUSH_EVENT;
-  if (Flags & GCAPS2_SYNCTIMER)
-      Flags = DSS_TIMER_EVENT;
+    if (Flags & GCAPS2_SYNCFLUSH)
+        Event = DSS_FLUSH_EVENT;
+    else if (Flags & GCAPS2_SYNCTIMER)
+        Event = DSS_TIMER_EVENT;
+    else
+        return;
 
-  //Device = IntEnumHDev();
-//  UNIMPLEMENTED;
-//ASSERT(FALSE);
-  SurfObj = 0;// EngLockSurface( Device->pSurface );
-  if(!SurfObj) return;
-  DoDeviceSync( SurfObj, NULL, Flags);
-  EngUnlockSurface(SurfObj);
-  return;
+    /* Native GDI gives one device the periodic callback. The global PDEV is
+     * the primary device and EngpGetPDEV keeps it alive across the call. */
+    Device = EngpGetPDEV(NULL);
+    if (Device == NULL)
+        return;
+
+    if (!(Device->devinfo.flGraphicsCaps2 & Flags))
+    {
+        PDEVOBJ_vRelease(Device);
+        return;
+    }
+
+    EngAcquireSemaphore(Device->hsemDevLock);
+    if (!(Device->flFlags & PDEV_DISABLED) && Device->pSurface != NULL)
+        DoDeviceSync(&Device->pSurface->SurfObj, NULL, Event);
+    EngReleaseSemaphore(Device->hsemDevLock);
+
+    PDEVOBJ_vRelease(Device);
 }
 
 //

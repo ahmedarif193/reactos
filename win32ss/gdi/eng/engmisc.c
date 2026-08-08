@@ -138,7 +138,9 @@ IntEngEnter(PINTENG_ENTER_LEAVE EnterLeave,
   if (NULL != *ppsoOutput)
   {
     SURFACE* psurfOutput = CONTAINING_RECORD(*ppsoOutput, SURFACE, SurfObj);
-    if (0 != (psurfOutput->flags & HOOK_SYNCHRONIZE))
+    PDEVOBJ* ppdev = GDIDEV(*ppsoOutput);
+    /* The cursor batch synchronized its complete dirty area before entering. */
+    if (0 != (psurfOutput->flags & HOOK_SYNCHRONIZE) && (ppdev == NULL || ppdev->Pointer.psoCursorBatch != *ppsoOutput))
     {
       if (NULL != GDIDEVFUNCS(*ppsoOutput).SynchronizeSurface)
         {
@@ -219,7 +221,9 @@ IntEngLeave(PINTENG_ENTER_LEAVE EnterLeave)
     if (!EnterLeave->ReadOnly && NULL != EnterLeave->DestObj)
       {
       SURFACE* psurfDest = CONTAINING_RECORD(EnterLeave->DestObj, SURFACE, SurfObj);
-      if ((psurfDest->flags & HOOK_SYNCHRONIZE) && NULL != GDIDEVFUNCS(EnterLeave->DestObj).SynchronizeSurface)
+      PDEVOBJ* ppdev = GDIDEV(EnterLeave->DestObj);
+      /* EngMovePointer publishes its completed software sprite explicitly. */
+      if ((psurfDest->flags & HOOK_SYNCHRONIZE) && NULL != GDIDEVFUNCS(EnterLeave->DestObj).SynchronizeSurface && (ppdev == NULL || ppdev->Pointer.psoCursorBatch != EnterLeave->DestObj))
         GDIDEVFUNCS(EnterLeave->DestObj).SynchronizeSurface(EnterLeave->DestObj, &EnterLeave->DestRect, DSS_FLUSH_EVENT);
       }
     }

@@ -93,6 +93,11 @@ IntGetSysColor(INT nIndex);
 
 /* Other Stuff */
 
+VOID
+FASTCALL
+SynchronizeDriver(
+    _In_ FLONG Flags);
+
 NTSTATUS
 APIENTRY
 NtGdiFlushUserBatch(

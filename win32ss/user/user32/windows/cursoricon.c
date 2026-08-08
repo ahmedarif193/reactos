@@ -3026,18 +3026,42 @@ HCURSOR WINAPI CreateCursor(
 {
     ICONINFO info;
     HCURSOR hCursor;
+    SIZE_T ScanlineBytes, PlaneBytes;
+    PBYTE BitmapBits;
 
     TRACE_(cursor)("%dx%d spot=%d,%d xor=%p and=%p\n",
                     nWidth, nHeight, xHotSpot, yHotSpot, pvXORPlane, pvANDPlane);
 
+    if (nWidth <= 0 || nHeight <= 0 || nHeight > 0x3fffffff)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return NULL;
+    }
+
+    ScanlineBytes = (((SIZE_T)nWidth + 15) / 16) * 2;
+    if ((SIZE_T)nHeight > ~(SIZE_T)0 / ScanlineBytes || (PlaneBytes = ScanlineBytes * nHeight) > ~(SIZE_T)0 / 2)
+    {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return NULL;
+    }
+
+    BitmapBits = HeapAlloc(GetProcessHeap(), 0, PlaneBytes * 2);
+    if (BitmapBits == NULL)
+    {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return NULL;
+    }
+    memcpy(BitmapBits, pvANDPlane, PlaneBytes);
+    memcpy(BitmapBits + PlaneBytes, pvXORPlane, PlaneBytes);
+
     info.fIcon = FALSE;
     info.xHotspot = xHotSpot;
     info.yHotspot = yHotSpot;
-    info.hbmMask = CreateBitmap( nWidth, nHeight, 1, 1, pvANDPlane );
-    info.hbmColor = CreateBitmap( nWidth, nHeight, 1, 1, pvXORPlane );
-    hCursor = CreateIconIndirect( &info );
-    DeleteObject( info.hbmMask );
-    DeleteObject( info.hbmColor );
+    info.hbmMask = CreateBitmap(nWidth, nHeight * 2, 1, 1, BitmapBits);
+    info.hbmColor = NULL;
+    hCursor = info.hbmMask ? CreateIconIndirect(&info) : NULL;
+    if (info.hbmMask) DeleteObject(info.hbmMask);
+    HeapFree(GetProcessHeap(), 0, BitmapBits);
     return hCursor;
 }
 

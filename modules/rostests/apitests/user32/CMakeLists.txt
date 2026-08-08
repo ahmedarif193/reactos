@@ -6,12 +6,14 @@ list(APPEND SOURCE
     CharFuncs.c
     CloseWindow.c
     CopyImage.c
+    CursorPresentation.c
     CreateDialog.c
     CreateIconFromResourceEx.c
     CreateWindowEx.c
     DeferWindowPos.c
     DestroyCursorIcon.c
     DM_REPOSITION.c
+    Dpi.c
     DrawIconEx.c
     DrawText.c
     desktop.c
@@ -25,6 +27,7 @@ list(APPEND SOURCE
     GetPeekMessage.c
     GetSetWindowInt.c
     GetSystemMetrics.c
+    GetTitleBarInfoEx.c
     GetUserObjectInformation.c
     GetWindowPlacement.c
     GW_ENABLEDPOPUP.c
@@ -37,7 +40,9 @@ list(APPEND SOURCE
     LookupIconIdFromDirectoryEx.c
     MenuUI.c
     MessageStateAnalyzer.c
+    ModernUser32.c
     NextDlgItem.c
+    NonClientPaint.c
     PrivateExtractIcons.c
     RealGetWindowClass.c
     RedrawWindow.c
