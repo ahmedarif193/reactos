@@ -2519,7 +2519,7 @@ DECL_WINELIB_TYPE_AW(LPMCI_OVLY_LOAD_PARMS)
 #define DIBINDEX(n) MAKELONG((n),0x10FF)
 
 #ifndef SC_SCREENSAVE
-#define SC_SCREENSAVE 0xf140
+#define SC_SCREENSAVE 0xF140
 #endif
 
 #pragma pack(pop)

@@ -62,7 +62,7 @@ LoadOrderGroup = Video Save
 ReactOS = "ReactOS Project"
 
 ; Localizable
-DisplayClassName = "Display Adapters"
+DisplayClassName = "Display adapters"
 
 StdMfg = "(Standard display adapters)"
 VGA.DeviceDesc = "VGA-compatible graphics card"
