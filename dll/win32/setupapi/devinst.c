@@ -77,6 +77,11 @@ struct GetSectionCallbackInfo
     DWORD BestScore1, BestScore2, BestScore3, BestScore4, BestScore5;
 };
 
+static INIT_ONCE CurrentPlatformInitOnce = INIT_ONCE_STATIC_INIT;
+static SP_ALTPLATFORM_INFO CurrentPlatform;
+static BYTE CurrentProductType;
+static WORD CurrentSuiteMask;
+
 #ifdef __REACTOS__
 bool array_reserve(void **elements, size_t *capacity, size_t count, size_t size)
 {
@@ -446,6 +451,30 @@ done:
     return TRUE;
 }
 
+static BOOL CALLBACK
+InitCurrentPlatform(
+    IN PINIT_ONCE InitOnce,
+    IN PVOID Parameter,
+    OUT PVOID *Context)
+{
+    SYSTEM_INFO SystemInfo;
+
+    UNREFERENCED_PARAMETER(InitOnce);
+    UNREFERENCED_PARAMETER(Parameter);
+    UNREFERENCED_PARAMETER(Context);
+
+    GetSystemInfo(&SystemInfo);
+    CurrentPlatform.Platform = OsVersionInfo.dwPlatformId;
+    CurrentPlatform.MajorVersion = OsVersionInfo.dwMajorVersion;
+    CurrentPlatform.MinorVersion = OsVersionInfo.dwMinorVersion;
+    CurrentPlatform.ProcessorArchitecture = SystemInfo.wProcessorArchitecture;
+    CurrentPlatform.Reserved = 0;
+    CurrentProductType = OsVersionInfo.wProductType;
+    CurrentSuiteMask = OsVersionInfo.wSuiteMask;
+    CurrentPlatform.cbSize = sizeof(CurrentPlatform);
+    return TRUE;
+}
+
 /***********************************************************************
  *		SetupDiGetActualSectionToInstallExW (SETUPAPI.@)
  */
@@ -476,9 +505,6 @@ SetupDiGetActualSectionToInstallExW(
         SetLastError(ERROR_INVALID_PARAMETER);
     else
     {
-        static SP_ALTPLATFORM_INFO CurrentPlatform = { 0, };
-        static BYTE CurrentProductType = 0;
-        static WORD CurrentSuiteMask = 0;
         PSP_ALTPLATFORM_INFO pPlatformInfo = &CurrentPlatform;
         struct GetSectionCallbackInfo CallbackInfo;
         DWORD dwFullLength;
@@ -494,19 +520,10 @@ SetupDiGetActualSectionToInstallExW(
         }
         else
         {
-            if (CurrentPlatform.cbSize != sizeof(SP_ALTPLATFORM_INFO))
+            if (!InitOnceExecuteOnce(&CurrentPlatformInitOnce, InitCurrentPlatform, NULL, NULL))
             {
-                /* That's the first time we go here. We need to fill in the structure */
-                SYSTEM_INFO SystemInfo;
-                GetSystemInfo(&SystemInfo);
-                CurrentPlatform.cbSize = sizeof(SP_ALTPLATFORM_INFO);
-                CurrentPlatform.Platform = OsVersionInfo.dwPlatformId;
-                CurrentPlatform.MajorVersion = OsVersionInfo.dwMajorVersion;
-                CurrentPlatform.MinorVersion = OsVersionInfo.dwMinorVersion;
-                CurrentPlatform.ProcessorArchitecture = SystemInfo.wProcessorArchitecture;
-                CurrentPlatform.Reserved = 0;
-                CurrentProductType = OsVersionInfo.wProductType;
-                CurrentSuiteMask = OsVersionInfo.wSuiteMask;
+                SetLastError(ERROR_GEN_FAILURE);
+                goto done;
             }
             ProductType = CurrentProductType;
             SuiteMask = CurrentSuiteMask;

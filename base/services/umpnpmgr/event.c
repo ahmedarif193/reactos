@@ -216,6 +216,7 @@ ProcessDeviceInstallEvent(
 
             /* Queue the event (will be dequeued by DeviceInstallThread) */
             WaitForSingleObject(hDeviceInstallListMutex, INFINITE);
+            ResetEvent(hNoPendingInstalls);
             InsertTailList(&DeviceInstallListHead, &Params->ListEntry);
             ReleaseMutex(hDeviceInstallListMutex);
 
