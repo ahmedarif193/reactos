@@ -8,29 +8,6 @@
 #include <ntdef.h>
 #include <ntifs.h>
 
-NTKRNLVISTAAPI
-NTSTATUS
-NTAPI
-PoRegisterPowerSettingCallback(
-    _In_opt_ PDEVICE_OBJECT DeviceObject,
-    _In_ LPCGUID SettingGuid,
-    _In_ PPOWER_SETTING_CALLBACK Callback,
-    _In_opt_ PVOID Context,
-    _Outptr_opt_ PVOID *Handle)
-{
-    return STATUS_NOT_IMPLEMENTED;
-}
-
-_IRQL_requires_max_(APC_LEVEL)
-NTKRNLVISTAAPI
-NTSTATUS
-NTAPI
-PoUnregisterPowerSettingCallback(
-    _Inout_ PVOID Handle)
-{
-    return STATUS_NOT_IMPLEMENTED;
-}
-
 _IRQL_requires_max_(DISPATCH_LEVEL)
 NTKRNLVISTAAPI
 BOOLEAN
