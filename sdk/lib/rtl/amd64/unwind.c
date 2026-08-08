@@ -505,6 +505,13 @@ RtlVirtualUnwind(
 
     *EstablisherFrame = GetEstablisherFrame(Context, UnwindInfo, CodeOffset);
 
+    /* A no-handler stack walk may feed us the terminal frame produced by the
+       previous unwind. Do not let it dereference the null stack pointer. */
+    if ((HandlerType == UNW_FLAG_NHANDLER) && (Context->Rsp == 0))
+    {
+        return NULL;
+    }
+
     /* Check if we are in the function epilog and try to finish it */
     if ((CodeOffset > UnwindInfo->SizeOfProlog) && (UnwindInfo->CountOfCodes > 0))
     {
@@ -528,6 +535,12 @@ RepeatChainedInfo:
     /* Process the remaining unwind ops */
     while (i < UnwindInfo->CountOfCodes)
     {
+        /* A frame-register unwind can also produce a terminal stack pointer. */
+        if ((HandlerType == UNW_FLAG_NHANDLER) && (Context->Rsp == 0))
+        {
+            return NULL;
+        }
+
         UnwindCode = UnwindInfo->UnwindCode[i];
         switch (UnwindCode.UnwindOp)
         {
