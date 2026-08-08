@@ -954,6 +954,14 @@ RtlDosApplyFileIsolationRedirection_Ustr(IN ULONG Flags,
         }
     }
 
+    /* Activation-context DLL redirection applies only to bare module names.
+     * Dot-local redirection above still applies when the caller supplies a path. */
+    for (p = OriginalName->Buffer; p < OriginalName->Buffer + OriginalName->Length / sizeof(WCHAR); p++)
+    {
+        if (*p == L'\\' || *p == L'/' || *p == L':')
+            return STATUS_SXS_KEY_NOT_FOUND;
+    }
+
     pstrParam = OriginalName;
 
     /* Get the file name with an extension */
