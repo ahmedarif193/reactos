@@ -661,7 +661,7 @@
 #@ stdcall GetProcessIdOfThread(long)
 #@ stdcall GetProcessImageFileNameA(long ptr long)
 #@ stdcall GetProcessImageFileNameW(long ptr long)
-#@ stdcall GetProcessInformation(long long ptr long)
+@ stdcall GetProcessInformation(long long ptr long) kernel32.GetProcessInformation
 #@ stdcall GetProcessMemoryInfo(long ptr long)
 #@ stdcall GetProcessMitigationPolicy(long long ptr long)
 #@ stdcall GetProcessPreferredUILanguages(long ptr ptr ptr)
@@ -751,7 +751,7 @@
 #@ stdcall GetThreadIOPendingFlag(long ptr)
 #@ stdcall GetThreadId(ptr)
 #@ stdcall GetThreadIdealProcessorEx(long ptr)
-# #@ stub GetThreadInformation
+@ stdcall GetThreadInformation(long long ptr long)
 #@ stdcall GetThreadLocale()
 #@ stdcall GetThreadPreferredUILanguages(long ptr ptr ptr)
 #@ stdcall GetThreadPriority(long)
@@ -1499,7 +1499,7 @@
 #@ stdcall SetProcessAffinityUpdateMode(long long)
 #@ stdcall SetProcessDefaultCpuSets(ptr ptr long)
 #@ stdcall SetProcessGroupAffinity(long ptr ptr)
-#@ stdcall SetProcessInformation(long long ptr long)
+@ stdcall SetProcessInformation(long long ptr long) kernel32.SetProcessInformation
 #@ stdcall SetProcessMitigationPolicy(long ptr long)
 #@ stdcall SetProcessPreferredUILanguages(long ptr ptr)
 #@ stdcall SetProcessPriorityBoost(long long)
@@ -1527,7 +1527,7 @@
 #@ stdcall SetThreadGroupAffinity(long ptr ptr)
 #@ stdcall SetThreadIdealProcessor(long long)
 #@ stdcall SetThreadIdealProcessorEx(long ptr ptr)
-#@ stdcall SetThreadInformation(long long ptr long)
+@ stdcall SetThreadInformation(long long ptr long)
 #@ stdcall SetThreadLocale(long)
 #@ stdcall SetThreadPreferredUILanguages(long ptr ptr)
 #@ stdcall SetThreadPriority(long long)

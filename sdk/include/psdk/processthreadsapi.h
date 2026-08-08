@@ -212,6 +212,58 @@ typedef enum _THREAD_INFORMATION_CLASS
     ThreadInformationClassMax
 } THREAD_INFORMATION_CLASS;
 
+#if (_WIN32_WINNT >= 0x0602) || defined(__REACTOS__)
+
+#define MEMORY_PRIORITY_LOWEST       0
+#define MEMORY_PRIORITY_VERY_LOW     1
+#define MEMORY_PRIORITY_LOW          2
+#define MEMORY_PRIORITY_MEDIUM       3
+#define MEMORY_PRIORITY_BELOW_NORMAL 4
+#define MEMORY_PRIORITY_NORMAL       5
+
+typedef struct _MEMORY_PRIORITY_INFORMATION
+{
+    ULONG MemoryPriority;
+} MEMORY_PRIORITY_INFORMATION, *PMEMORY_PRIORITY_INFORMATION;
+
+WINBASEAPI
+BOOL
+WINAPI
+GetProcessInformation(
+    _In_ HANDLE hProcess,
+    _In_ PROCESS_INFORMATION_CLASS ProcessInformationClass,
+    _Out_writes_bytes_(ProcessInformationSize) PVOID ProcessInformation,
+    _In_ DWORD ProcessInformationSize);
+
+WINBASEAPI
+BOOL
+WINAPI
+SetProcessInformation(
+    _In_ HANDLE hProcess,
+    _In_ PROCESS_INFORMATION_CLASS ProcessInformationClass,
+    _In_reads_bytes_(ProcessInformationSize) PVOID ProcessInformation,
+    _In_ DWORD ProcessInformationSize);
+
+WINBASEAPI
+BOOL
+WINAPI
+GetThreadInformation(
+    _In_ HANDLE hThread,
+    _In_ THREAD_INFORMATION_CLASS ThreadInformationClass,
+    _Out_writes_bytes_(ThreadInformationSize) PVOID ThreadInformation,
+    _In_ DWORD ThreadInformationSize);
+
+WINBASEAPI
+BOOL
+WINAPI
+SetThreadInformation(
+    _In_ HANDLE hThread,
+    _In_ THREAD_INFORMATION_CLASS ThreadInformationClass,
+    _In_reads_bytes_(ThreadInformationSize) PVOID ThreadInformation,
+    _In_ DWORD ThreadInformationSize);
+
+#endif // (_WIN32_WINNT >= 0x0602) || defined(__REACTOS__)
+
 #ifdef __cplusplus
 } // extern "C"
 #endif

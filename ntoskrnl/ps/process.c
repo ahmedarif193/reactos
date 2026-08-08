@@ -451,6 +451,10 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
     /* Clean up the Object */
     RtlZeroMemory(Process, sizeof(EPROCESS));
 
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    Process->DefaultPagePriority = Parent ? Parent->DefaultPagePriority : PSP_PAGE_PRIORITY_NORMAL;
+#endif
+
     /* Initialize pushlock and rundown protection */
     ExInitializeRundownProtection(&Process->RundownProtect);
     Process->ProcessLock.Value = 0;
