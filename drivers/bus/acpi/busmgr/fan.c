@@ -1,7 +1,7 @@
 /*
  * PROJECT:     ReactOS ACPI bus driver
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
- * PURPOSE:     Minimal fail-safe ACPI fan driver
+ * PURPOSE:     ACPI fan policy driver
  * COPYRIGHT:   Copyright 2026 ReactOS Project
  */
 
@@ -22,6 +22,7 @@ ACPI_MODULE_NAME               ("acpi_fan")
 #define ACPI_FAN_FPS_SPEED      2
 #define ACPI_FAN_MAX_DEVICES    32
 #define ACPI_FAN_MAX_REQUESTS   32
+#define ACPI_FAN_LEVEL_UNKNOWN  (-2)
 #define ACPI_FAN_LEVEL_OFF      (-1)
 #define ACPI_FAN_LEVEL_MAXIMUM  10
 
@@ -510,7 +511,6 @@ acpi_fan_add(
     struct acpi_device *device)
 {
     PACPI_FAN_CONTEXT context;
-    int result;
 
     if (!device)
         return_VALUE(-1);
@@ -520,19 +520,12 @@ acpi_fan_add(
         return_VALUE(-12);
     RtlZeroMemory(context, sizeof(*context));
     context->Device = device;
-    context->AppliedLevel = ACPI_FAN_LEVEL_OFF;
+    context->AppliedLevel = ACPI_FAN_LEVEL_UNKNOWN;
     ExInitializeFastMutex(&context->PolicyLock);
 
     sprintf(acpi_device_name(device), "%s", ACPI_FAN_DEVICE_NAME);
     sprintf(acpi_device_class(device), "%s", ACPI_FAN_CLASS);
     context->Advanced = acpi_fan_has_advanced_control(device->handle, acpi_device_bid(device));
-    ExAcquireFastMutex(&context->PolicyLock);
-    result = acpi_fan_force_device_maximum(context);
-    ExReleaseFastMutex(&context->PolicyLock);
-    if (result) {
-        ExFreePoolWithTag(context, 'naFA');
-        return_VALUE(result);
-    }
 
     ExAcquireFastMutex(&acpi_fan_list_lock);
     if (acpi_fan_context_count >= ACPI_FAN_MAX_DEVICES) {
@@ -543,6 +536,7 @@ acpi_fan_add(
     acpi_fan_contexts[acpi_fan_context_count++] = context;
     device->driver_data = context;
     ExReleaseFastMutex(&acpi_fan_list_lock);
+    DPRINT1("ACPI: Fan [%s] registered; retaining firmware state until thermal policy requests a level\n", acpi_device_bid(device));
     return_VALUE(0);
 }
 
@@ -579,11 +573,7 @@ acpi_fan_remove(
         return_VALUE(-1);
     }
 
-    /*
-     * This is a fail-safe driver. Do not lower or disable cooling when the
-     * driver is detached.
-     */
-    acpi_fan_force_device_maximum(context);
+    /* Preserve the current cooling state while the driver detaches. */
     ExReleaseFastMutex(&context->PolicyLock);
     device->driver_data = NULL;
     ExFreePoolWithTag(context, 'naFA');

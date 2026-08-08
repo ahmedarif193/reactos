@@ -461,8 +461,7 @@ acpi_thermal_check(
 
     if (!acpi_thermal_evaluate_integer(zone->Handle, "_TMP", &temperature))
     {
-        DPRINT1("ACPI: Thermal [%s] _TMP evaluation failed\n", acpi_device_bid(zone->Device));
-        acpi_fan_set_all_thermal_levels(&zone->CriticalEngaged, ACPI_FAN_THERMAL_LEVEL_MAXIMUM);
+        DPRINT1("ACPI: Thermal [%s] _TMP evaluation failed; retaining previous cooling state\n", acpi_device_bid(zone->Device));
         return;
     }
     celsius_tenths = acpi_thermal_celsius_tenths(temperature);
