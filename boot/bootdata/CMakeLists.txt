@@ -18,8 +18,10 @@ add_registry_inf(
 
 if(ARCH STREQUAL "arm64")
     add_registry_inf(hivesys_arm64.inf)
-elseif(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
-    add_registry_inf(hivesys_x86.inf)
+elseif(ARCH STREQUAL "amd64")
+    add_registry_inf(hivesys_x86.inf hivesys_amd64.inf)
+elseif(ARCH STREQUAL "i386")
+    add_registry_inf(hivesys_x86.inf hivesys_i386.inf)
 endif()
 
 if(_NT_VALUE GREATER_EQUAL 2560)

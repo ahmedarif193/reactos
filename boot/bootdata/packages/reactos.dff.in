@@ -103,6 +103,7 @@ Signature = "$Windows NT$"
 81 = winsxs\arm64_microsoft.windows.gdiplus_6595b64144ccf1df_1.0.14393.0_none_deadbeef
 82 = SysWOW64
 83 = "\\Program Files\\Windows NT\\Accessories"
+84 = system32\spool\prtprocs\arm64
 
 .InfEnd
 

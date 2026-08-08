@@ -6,6 +6,11 @@
 
 [AddReg]
 
+; Native print environment. Keep this synchronized with winprint packaging.
+HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows ARM64","Directory",,"ARM64"
+HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows ARM64\Print Processors",,0x00000010
+HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows ARM64\Print Processors\winprint","Driver",,"winprint.dll"
+
 ; Raspberry Pi 5 RP1 southbridge: no OS bus driver. The UEFI firmware exposes
 ; the RP1 functions (USB XHC0/XHC1, Ethernet ETH0) as standard ACPI devices
 ; under the RP1B ACPI0004 container and hides the RP1 PCIe endpoint, so acpi.sys

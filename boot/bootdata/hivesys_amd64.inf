@@ -1,0 +1,10 @@
+; PROJECT:     ReactOS AMD64 system hive
+; LICENSE:     GPL-2.0+
+; PURPOSE:     AMD64-specific registry entries
+
+[AddReg]
+
+; Native print environment. Keep this synchronized with winprint packaging.
+HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows x64","Directory",,"x64"
+HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows x64\Print Processors",,0x00000010
+HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows x64\Print Processors\winprint","Driver",,"winprint.dll"
