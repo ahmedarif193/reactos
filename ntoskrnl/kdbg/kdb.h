@@ -216,6 +216,15 @@ KdbSymPrintAddress(
     IN PVOID Address,
     IN PCONTEXT Context);
 
+BOOLEAN
+KdbSymDescribeAddress(
+    _In_ PVOID Address,
+    _Out_writes_z_(ModuleNameLength) PCHAR ModuleName,
+    _In_ ULONG ModuleNameLength,
+    _Out_writes_z_(FunctionNameLength) PCHAR FunctionName,
+    _In_ ULONG FunctionNameLength,
+    _Out_ PULONG_PTR Displacement);
+
 typedef BOOLEAN (NTAPI *PKDB_SYMBOL_ENUM_CALLBACK)(_In_ ULONG_PTR Address, _In_ PCSTR ModuleName, _In_ PCSTR FunctionName, _In_ PCSTR FileName, _In_ ULONG SourceLine, _In_opt_ PVOID Context);
 
 NTSTATUS

@@ -20,6 +20,9 @@
 /* miarm.h uses DPRINT, so it must follow debug.h. */
 #include <mm/ARM3/miarm.h>
 
+#define KI_BUGCHECK_BACKTRACE_FRAMES 8
+#define KI_BUGCHECK_MAX_MODULES 4096
+
 /* GLOBALS *******************************************************************/
 
 LIST_ENTRY KeBugcheckCallbackListHead;
@@ -115,8 +118,9 @@ KiPcToFileHeader(IN PVOID Pc,
         i = 0;
         while (NextEntry != ListHead)
         {
-            /* Increase entry */
-            i++;
+            /* Keep a torn loader list from hanging the bugcheck path. */
+            if (++i > KI_BUGCHECK_MAX_MODULES)
+                break;
 
             /* Check if this is a kernel entry and we only want drivers */
             if ((i <= 2) && (DriversOnly != FALSE))
@@ -592,6 +596,222 @@ KeBugCheckUnicodeToAnsi(IN PUNICODE_STRING Unicode,
     return Ansi;
 }
 
+static
+ULONG
+KiCaptureBugCheckBackTrace(
+    _In_opt_ PKTRAP_FRAME TrapFrame,
+    _In_ PCONTEXT Context,
+    _Out_writes_(MaximumFrames) PULONG_PTR Frames,
+    _In_ ULONG MaximumFrames)
+{
+    PKTHREAD Thread;
+    ULONG_PTR StackLow;
+    ULONG_PTR StackHigh;
+    ULONG_PTR Frame;
+    ULONG_PTR NextFrame;
+    ULONG_PTR ReturnAddress;
+    ULONG_PTR ProgramCounter;
+    ULONG FrameCount = 0;
+
+    if (MaximumFrames == 0)
+        return 0;
+
+    ProgramCounter = TrapFrame ? KeGetTrapFramePc(TrapFrame) : KeGetContextPc(Context);
+#if defined(_M_ARM64) || defined(_M_AMD64) || defined(_M_IX86)
+    Frame = TrapFrame ? KeGetTrapFrameFrameRegister(TrapFrame) : KeGetContextFrameRegister(Context);
+#else
+    Frame = 0;
+#endif
+    if (ProgramCounter != 0)
+        Frames[FrameCount++] = ProgramCounter;
+    if ((FrameCount == MaximumFrames) || (Frame == 0))
+        return FrameCount;
+
+    Thread = KeGetCurrentThread();
+    StackLow = (ULONG_PTR)Thread->StackLimit;
+    StackHigh = (ULONG_PTR)Thread->StackBase;
+    if ((StackLow == 0) || (StackHigh <= StackLow))
+        return FrameCount;
+
+    while (FrameCount < MaximumFrames)
+    {
+        if ((Frame < StackLow) || (Frame >= StackHigh) || ((StackHigh - Frame) < (2 * sizeof(ULONG_PTR))) || ((Frame & (sizeof(ULONG_PTR) - 1)) != 0))
+            break;
+        if (!MmIsAddressValid((PVOID)Frame) || !MmIsAddressValid((PVOID)(Frame + sizeof(ULONG_PTR))))
+            break;
+
+        NextFrame = *(volatile ULONG_PTR *)Frame;
+        ReturnAddress = *(volatile ULONG_PTR *)(Frame + sizeof(ULONG_PTR));
+        if (ReturnAddress == 0)
+            break;
+        if (Frames[FrameCount - 1] != ReturnAddress)
+            Frames[FrameCount++] = ReturnAddress;
+        if ((NextFrame <= Frame) || (NextFrame < StackLow) || (NextFrame >= StackHigh))
+            break;
+
+        Frame = NextFrame;
+    }
+
+    return FrameCount;
+}
+
+static
+VOID
+KiDisplayBugCheckRegisters(
+    _In_opt_ PKTRAP_FRAME TrapFrame,
+    _In_ PCONTEXT Context)
+{
+    CHAR Line[128];
+
+    InbvDisplayString("Registers:\r\n");
+
+#if defined(_M_ARM64)
+    {
+        const ULONG64 *Registers;
+        ULONG RegisterCount;
+        ULONG Base;
+        ULONG64 Pc;
+        ULONG64 Lr;
+        ULONG64 Sp;
+        ULONG64 Fp;
+        ULONG Cpsr;
+
+        if (TrapFrame != NULL)
+        {
+            Registers = TrapFrame->X;
+            RegisterCount = RTL_NUMBER_OF(TrapFrame->X);
+            Pc = TrapFrame->Pc;
+            Lr = TrapFrame->Lr;
+            Sp = TrapFrame->Sp;
+            Fp = TrapFrame->Fp;
+            Cpsr = TrapFrame->Spsr;
+        }
+        else
+        {
+            Registers = Context->X;
+            RegisterCount = 29;
+            Pc = Context->Pc;
+            Lr = Context->Lr;
+            Sp = Context->Sp;
+            Fp = Context->Fp;
+            Cpsr = Context->Cpsr;
+        }
+
+        RtlStringCbPrintfA(Line, sizeof(Line), "PC=%016I64x LR=%016I64x SP=%016I64x\r\n", Pc, Lr, Sp);
+        InbvDisplayString(Line);
+        if (TrapFrame != NULL)
+            RtlStringCbPrintfA(Line, sizeof(Line), "FP=%016I64x PSR=%08lx ESR=%08lx\r\n", Fp, Cpsr, TrapFrame->Esr);
+        else
+            RtlStringCbPrintfA(Line, sizeof(Line), "FP=%016I64x PSR=%08lx\r\n", Fp, Cpsr);
+        InbvDisplayString(Line);
+
+        for (Base = 0; Base < RegisterCount; Base += 3)
+        {
+            if ((RegisterCount - Base) >= 3)
+                RtlStringCbPrintfA(Line, sizeof(Line), "X%02lu=%016I64x X%02lu=%016I64x X%02lu=%016I64x\r\n", Base, Registers[Base], Base + 1, Registers[Base + 1], Base + 2, Registers[Base + 2]);
+            else if ((RegisterCount - Base) == 2)
+                RtlStringCbPrintfA(Line, sizeof(Line), "X%02lu=%016I64x X%02lu=%016I64x\r\n", Base, Registers[Base], Base + 1, Registers[Base + 1]);
+            else
+                RtlStringCbPrintfA(Line, sizeof(Line), "X%02lu=%016I64x\r\n", Base, Registers[Base]);
+            InbvDisplayString(Line);
+        }
+    }
+#elif defined(_M_AMD64)
+    if (TrapFrame != NULL)
+    {
+        RtlStringCbPrintfA(Line, sizeof(Line), "RIP=%016I64x RSP=%016I64x RBP=%016I64x EFL=%08lx\r\n", TrapFrame->Rip, TrapFrame->Rsp, TrapFrame->Rbp, TrapFrame->EFlags);
+        InbvDisplayString(Line);
+        RtlStringCbPrintfA(Line, sizeof(Line), "RAX=%016I64x RBX=%016I64x RCX=%016I64x\r\n", TrapFrame->Rax, TrapFrame->Rbx, TrapFrame->Rcx);
+        InbvDisplayString(Line);
+        RtlStringCbPrintfA(Line, sizeof(Line), "RDX=%016I64x RSI=%016I64x RDI=%016I64x\r\n", TrapFrame->Rdx, TrapFrame->Rsi, TrapFrame->Rdi);
+        InbvDisplayString(Line);
+        RtlStringCbPrintfA(Line, sizeof(Line), "R8 =%016I64x R9 =%016I64x R10=%016I64x\r\n", TrapFrame->R8, TrapFrame->R9, TrapFrame->R10);
+        InbvDisplayString(Line);
+        RtlStringCbPrintfA(Line, sizeof(Line), "R11=%016I64x FAR=%016I64x ERR=%016I64x\r\n", TrapFrame->R11, TrapFrame->FaultAddress, TrapFrame->ErrorCode);
+        InbvDisplayString(Line);
+    }
+    else
+    {
+        RtlStringCbPrintfA(Line, sizeof(Line), "RIP=%016I64x RSP=%016I64x RBP=%016I64x EFL=%08lx\r\n", Context->Rip, Context->Rsp, Context->Rbp, Context->EFlags);
+        InbvDisplayString(Line);
+        RtlStringCbPrintfA(Line, sizeof(Line), "RAX=%016I64x RBX=%016I64x RCX=%016I64x\r\n", Context->Rax, Context->Rbx, Context->Rcx);
+        InbvDisplayString(Line);
+        RtlStringCbPrintfA(Line, sizeof(Line), "RDX=%016I64x RSI=%016I64x RDI=%016I64x\r\n", Context->Rdx, Context->Rsi, Context->Rdi);
+        InbvDisplayString(Line);
+        RtlStringCbPrintfA(Line, sizeof(Line), "R8 =%016I64x R9 =%016I64x R10=%016I64x\r\n", Context->R8, Context->R9, Context->R10);
+        InbvDisplayString(Line);
+        RtlStringCbPrintfA(Line, sizeof(Line), "R11=%016I64x R12=%016I64x R13=%016I64x\r\n", Context->R11, Context->R12, Context->R13);
+        InbvDisplayString(Line);
+        RtlStringCbPrintfA(Line, sizeof(Line), "R14=%016I64x R15=%016I64x\r\n", Context->R14, Context->R15);
+        InbvDisplayString(Line);
+    }
+#else
+    RtlStringCbPrintfA(Line, sizeof(Line), "PC=%p\r\n", (PVOID)KeGetContextPc(Context));
+    InbvDisplayString(Line);
+#endif
+}
+
+static
+VOID
+KiDisplayBugCheckBackTrace(
+    _In_opt_ PKTRAP_FRAME TrapFrame,
+    _In_ PCONTEXT Context)
+{
+    ULONG_PTR Frames[KI_BUGCHECK_BACKTRACE_FRAMES];
+    ULONG FrameCount;
+    ULONG Index;
+#ifndef KDBG
+    BOOLEAN InKernel;
+    PVOID ImageBase;
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+#endif
+    CHAR ModuleName[64];
+#ifdef KDBG
+    CHAR FunctionName[64];
+    ULONG_PTR Displacement;
+#endif
+    CHAR Line[128];
+
+    FrameCount = KiCaptureBugCheckBackTrace(TrapFrame, Context, Frames, RTL_NUMBER_OF(Frames));
+    InbvDisplayString("Backtrace:\r\n");
+
+    for (Index = 0; Index < FrameCount; Index++)
+    {
+#ifdef KDBG
+        if (KdbSymDescribeAddress((PVOID)Frames[Index], ModuleName, sizeof(ModuleName), FunctionName, sizeof(FunctionName), &Displacement))
+        {
+            if (FunctionName[0] != ANSI_NULL)
+                RtlStringCbPrintfA(Line, sizeof(Line), "#%02lu %s!%s+0x%Ix\r\n", Index, ModuleName, FunctionName, Displacement);
+            else
+                RtlStringCbPrintfA(Line, sizeof(Line), "#%02lu %s+0x%Ix\r\n", Index, ModuleName, Displacement);
+        }
+        else
+        {
+            RtlStringCbPrintfA(Line, sizeof(Line), "#%02lu %p\r\n", Index, (PVOID)Frames[Index]);
+        }
+#else
+        ImageBase = NULL;
+        LdrEntry = NULL;
+        if (Frames[Index] > (ULONG_PTR)MmHighestUserAddress)
+            ImageBase = KiPcToFileHeader((PVOID)Frames[Index], &LdrEntry, FALSE, &InKernel);
+
+        if ((ImageBase != NULL) && (LdrEntry != NULL))
+        {
+            KeBugCheckUnicodeToAnsi(&LdrEntry->BaseDllName, ModuleName, sizeof(ModuleName));
+            RtlStringCbPrintfA(Line, sizeof(Line), "#%02lu %s+0x%Ix\r\n", Index, ModuleName, Frames[Index] - (ULONG_PTR)ImageBase);
+        }
+        else
+        {
+            RtlStringCbPrintfA(Line, sizeof(Line), "#%02lu %p\r\n", Index, (PVOID)Frames[Index]);
+        }
+#endif
+        InbvDisplayString(Line);
+    }
+
+    if (FrameCount == 0)
+        InbvDisplayString("<unavailable>\r\n");
+}
+
 VOID
 NTAPI
 KiDumpParameterImages(IN PCHAR Message,
@@ -674,7 +894,8 @@ KiDisplayBlueScreen(IN ULONG MessageId,
                     IN BOOLEAN IsHardError,
                     IN PCHAR HardErrCaption OPTIONAL,
                     IN PCHAR HardErrMessage OPTIONAL,
-                    IN PCHAR Message)
+                    IN PKTRAP_FRAME TrapFrame OPTIONAL,
+                    IN PCONTEXT Context)
 {
     ULONG BugCheckCode = (ULONG)KiBugCheckData[0];
     BOOLEAN Enable = TRUE;
@@ -755,13 +976,8 @@ KiDisplayBlueScreen(IN ULONG MessageId,
         InbvDisplayString("\r\n\r\n");
     }
 
-    /* Print second introduction message */
-    KeGetBugMessageText(PSS_MESSAGE_INTRO, NULL);
-    InbvDisplayString("\r\n\r\n");
-
-    /* Get the bug code string */
-    KeGetBugMessageText(MessageId, NULL);
-    InbvDisplayString("\r\n\r\n");
+    /* The legacy restart, BIOS, and Safe Mode advice wastes the crash screen. */
+    InbvDisplayString("\r\n");
 
     /* Print message for technical information */
     KeGetBugMessageText(BUGCHECK_TECH_INFO, NULL);
@@ -777,20 +993,8 @@ KiDisplayBlueScreen(IN ULONG MessageId,
                        (PVOID)KiBugCheckData[4]);
     InbvDisplayString(AnsiName);
 
-    /* Check if we have a driver*/
-    if (KiBugCheckDriver)
-    {
-        /* Display technical driver data */
-        InbvDisplayString(Message);
-    }
-    else
-    {
-        /* Dump parameter information */
-        KiDumpParameterImages(Message,
-                              (PVOID)&KiBugCheckData[1],
-                              4,
-                              KeBugCheckUnicodeToAnsi);
-    }
+    KiDisplayBugCheckRegisters(TrapFrame, Context);
+    KiDisplayBugCheckBackTrace(TrapFrame, Context);
 }
 
 DECLSPEC_NORETURN
@@ -1172,11 +1376,7 @@ KeBugCheckWithTf(IN ULONG BugCheckCode,
 #endif
 
         /* Display the BSOD */
-        KiDisplayBlueScreen(MessageId,
-                            IsHardError,
-                            HardErrCaption,
-                            HardErrMessage,
-                            AnsiName);
+        KiDisplayBlueScreen(MessageId, IsHardError, HardErrCaption, HardErrMessage, TrapFrame, &Context);
 
         // TODO/FIXME: Run the registered reason-callbacks from
         // the KeBugcheckReasonCallbackListHead list with the
