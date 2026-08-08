@@ -14,6 +14,7 @@
 #define NTOS_MODE_USER
 #include <ndk/iofuncs.h>
 #include <ndk/kefuncs.h>
+#include <ndk/mmfuncs.h>
 #include <ndk/obfuncs.h>
 #include <ndk/psfuncs.h>
 #include <ndk/rtlfuncs.h>
