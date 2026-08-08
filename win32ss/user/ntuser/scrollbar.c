@@ -787,8 +787,6 @@ co_IntCreateScrollBars(PWND Window)
    Window->pSBInfo->Vert.posMax = 100;
    Window->pSBInfo->Horz.posMax = 100;
 
-   co_WinPosGetNonClientSize(Window, &Window->rcWindow, &Window->rcClient);
-
    for(s = SB_HORZ; s <= SB_VERT; s++)
    {
       psbi = IntGetScrollbarInfoFromWindow(Window, s);
