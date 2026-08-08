@@ -105,7 +105,9 @@ typedef struct _PNPCPU_DEVICE_EXTENSION
     BOOLEAN MonitorMwaitSupported;
     BOOLEAN IntelEstSupported;
     BOOLEAN IntelHwpSupported;
+    BOOLEAN IntelHwpEppSupported;
     BOOLEAN HwpRequestCaptured;
+    PVOID EnergyPreferenceHandle;
     ULONG MwaitSubstates;
     UCHAR HwpHighest;
     UCHAR HwpLowest;
