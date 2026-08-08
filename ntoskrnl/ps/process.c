@@ -206,7 +206,10 @@ PspComputeQuantumAndPriority(IN PEPROCESS Process,
     if (Process->PriorityClass != PROCESS_PRIORITY_CLASS_IDLE)
     {
         /* Does the process have a job? */
-        if ((Process->Job) && (PspUseJobSchedulingClasses))
+        if ((Process->Job) &&
+            (Process->Job->LimitFlags & JOB_OBJECT_LIMIT_SCHEDULING_CLASS) &&
+            (Process->Job->SchedulingClass < PSP_JOB_SCHEDULING_CLASSES) &&
+            (PspUseJobSchedulingClasses))
         {
             /* Use job quantum */
             LocalQuantum = PspJobSchedulingClasses[Process->Job->
@@ -317,7 +320,10 @@ PsChangeQuantumTable(IN BOOLEAN Immediate,
             if (Process->PriorityClass != PROCESS_PRIORITY_CLASS_IDLE)
             {
                 /* Does the process have a job? */
-                if ((Process->Job) && (PspUseJobSchedulingClasses))
+                if ((Process->Job) &&
+                    (Process->Job->LimitFlags & JOB_OBJECT_LIMIT_SCHEDULING_CLASS) &&
+                    (Process->Job->SchedulingClass < PSP_JOB_SCHEDULING_CLASSES) &&
+                    (PspUseJobSchedulingClasses))
                 {
                     /* Use job quantum */
                     Quantum = PspJobSchedulingClasses[Process->Job->SchedulingClass];

@@ -14,6 +14,17 @@
 #define NDEBUG
 #include <debug.h>
 
+#ifndef JOB_OBJECT_BASIC_LIMIT_VALID_FLAGS
+#define JOB_OBJECT_BASIC_LIMIT_VALID_FLAGS 0x000000FF
+#endif
+#ifndef JOB_OBJECT_EXTENDED_LIMIT_VALID_FLAGS
+#define JOB_OBJECT_EXTENDED_LIMIT_VALID_FLAGS 0x00007FFF
+#endif
+#define JOB_OBJECT_BASIC_LIMIT_SUPPORTED_FLAGS \
+    (JOB_OBJECT_LIMIT_ACTIVE_PROCESS | JOB_OBJECT_LIMIT_AFFINITY | \
+     JOB_OBJECT_LIMIT_SCHEDULING_CLASS)
+#define JOB_OBJECT_EXTENDED_LIMIT_SUPPORTED_FLAGS \
+    (JOB_OBJECT_BASIC_LIMIT_SUPPORTED_FLAGS | JOB_OBJECT_LIMIT_SUBSET_AFFINITY)
 
 /* GLOBALS *******************************************************************/
 
@@ -124,20 +135,30 @@ PspAssignProcessToJob(PEPROCESS Process,
     PEJOB Job)
 {
     NTSTATUS Status = STATUS_SUCCESS;
+    UCHAR Quantum;
 
     KeEnterGuardedRegion();
     ExAcquireResourceExclusiveLite(&Job->JobLock, TRUE);
 
-    if (Job->ActiveProcessLimit && Job->ActiveProcesses >= Job->ActiveProcessLimit)
+    if ((Job->LimitFlags & JOB_OBJECT_LIMIT_ACTIVE_PROCESS) &&
+        (Job->ActiveProcesses >= Job->ActiveProcessLimit))
     {
         Status = STATUS_QUOTA_EXCEEDED;
     }
     else
     {
+        if (Job->LimitFlags & JOB_OBJECT_LIMIT_AFFINITY) KeSetAffinityProcess(&Process->Pcb, Job->Affinity);
+
         InsertTailList(&Job->ProcessListHead, &Process->JobLinks);
         Job->TotalProcesses++;
         Job->ActiveProcesses++;
         InterlockedAnd((PLONG)&Process->JobStatus, ~(PS_JOB_STATUS_ACCOUNTING_FOLDED | PS_JOB_STATUS_NEW_PROCESS_REPORTED | PS_JOB_STATUS_EXIT_PROCESS_REPORTED));
+
+        if (Job->LimitFlags & JOB_OBJECT_LIMIT_SCHEDULING_CLASS)
+        {
+            (VOID)PspComputeQuantumAndPriority(Process, (Process->Vm.Flags.MemoryPriority == MEMORY_PRIORITY_BACKGROUND) ? PsProcessPriorityBackground : PsProcessPriorityForeground, &Quantum);
+            KeSetQuantumProcess(&Process->Pcb, Quantum);
+        }
 
         if (Job->CompletionPort)
         {
@@ -229,6 +250,7 @@ NtAssignProcessToJobObject (
     PEPROCESS Process;
     KPROCESSOR_MODE PreviousMode;
     NTSTATUS Status;
+    BOOLEAN TerminateOnFailure = FALSE;
 
     PAGED_CODE();
 
@@ -294,9 +316,12 @@ NtAssignProcessToJobObject (
                             {
                                 Process->Job = NULL;
                                 ObDereferenceObject(Job);
+                                TerminateOnFailure = (Status == STATUS_QUOTA_EXCEEDED);
                             }
                             ExReleaseRundownProtection(&Process->RundownProtect);
                         }
+
+                        if (TerminateOnFailure) PsTerminateProcess(Process, STATUS_QUOTA_EXCEEDED);
                     }
                 }
                 else
@@ -984,10 +1009,105 @@ NtSetInformationJobObject (
             break;
         }
 
+        case JobObjectBasicLimitInformation:
         case JobObjectExtendedLimitInformation:
-            DPRINT1("Class JobObjectExtendedLimitInformation not implemented\n");
+        {
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION ExtendedLimitInfo;
+            ULONG LimitFlags, SupportedFlags, ValidFlags;
+            ULONG OldLimitFlags, OldSchedulingClass;
+            KAFFINITY OldAffinity;
+            BOOLEAN ApplyAffinity, UpdateScheduling;
+            PLIST_ENTRY NextEntry;
+            PEPROCESS Process;
+            UCHAR Quantum;
+
+            RtlZeroMemory(&ExtendedLimitInfo, sizeof(ExtendedLimitInfo));
+            _SEH2_TRY
+            {
+                RtlCopyMemory(&ExtendedLimitInfo, JobInformation, JobInformationLength);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            if (!NT_SUCCESS(Status)) break;
+
+            LimitFlags = ExtendedLimitInfo.BasicLimitInformation.LimitFlags;
+            ValidFlags = (JobInformationClass == JobObjectExtendedLimitInformation) ? JOB_OBJECT_EXTENDED_LIMIT_VALID_FLAGS : JOB_OBJECT_BASIC_LIMIT_VALID_FLAGS;
+            SupportedFlags = (JobInformationClass == JobObjectExtendedLimitInformation) ? JOB_OBJECT_EXTENDED_LIMIT_SUPPORTED_FLAGS : JOB_OBJECT_BASIC_LIMIT_SUPPORTED_FLAGS;
+            if ((LimitFlags & ~ValidFlags) || (LimitFlags & ~SupportedFlags))
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            if ((LimitFlags & JOB_OBJECT_LIMIT_SUBSET_AFFINITY) && !(LimitFlags & JOB_OBJECT_LIMIT_AFFINITY))
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            if ((LimitFlags & JOB_OBJECT_LIMIT_AFFINITY) &&
+                ((!ExtendedLimitInfo.BasicLimitInformation.Affinity) ||
+                 ((ExtendedLimitInfo.BasicLimitInformation.Affinity & KeActiveProcessors) != ExtendedLimitInfo.BasicLimitInformation.Affinity)))
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            if ((LimitFlags & JOB_OBJECT_LIMIT_SCHEDULING_CLASS) &&
+                (ExtendedLimitInfo.BasicLimitInformation.SchedulingClass >= PSP_JOB_SCHEDULING_CLASSES))
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            if ((LimitFlags & JOB_OBJECT_LIMIT_SCHEDULING_CLASS) &&
+                (ExtendedLimitInfo.BasicLimitInformation.SchedulingClass > 5) &&
+                !SeSinglePrivilegeCheck(SeIncreaseBasePriorityPrivilege, PreviousMode))
+            {
+                Status = STATUS_PRIVILEGE_NOT_HELD;
+                break;
+            }
+
+            ExAcquireResourceExclusiveLite(&Job->JobLock, TRUE);
+
+            OldLimitFlags = Job->LimitFlags;
+            OldAffinity = Job->Affinity;
+            OldSchedulingClass = Job->SchedulingClass;
+            ApplyAffinity = ((LimitFlags & JOB_OBJECT_LIMIT_AFFINITY) &&
+                             (!(OldLimitFlags & JOB_OBJECT_LIMIT_AFFINITY) ||
+                              (OldAffinity != ExtendedLimitInfo.BasicLimitInformation.Affinity) ||
+                              ((OldLimitFlags & JOB_OBJECT_LIMIT_SUBSET_AFFINITY) &&
+                               !(LimitFlags & JOB_OBJECT_LIMIT_SUBSET_AFFINITY))));
+            UpdateScheduling = (((OldLimitFlags ^ LimitFlags) & JOB_OBJECT_LIMIT_SCHEDULING_CLASS) ||
+                                ((LimitFlags & JOB_OBJECT_LIMIT_SCHEDULING_CLASS) &&
+                                 (OldSchedulingClass != ExtendedLimitInfo.BasicLimitInformation.SchedulingClass)));
+
+            Job->ActiveProcessLimit = (LimitFlags & JOB_OBJECT_LIMIT_ACTIVE_PROCESS) ? ExtendedLimitInfo.BasicLimitInformation.ActiveProcessLimit : 0;
+            Job->Affinity = (LimitFlags & JOB_OBJECT_LIMIT_AFFINITY) ? ExtendedLimitInfo.BasicLimitInformation.Affinity : 0;
+            Job->SchedulingClass = (LimitFlags & JOB_OBJECT_LIMIT_SCHEDULING_CLASS) ? ExtendedLimitInfo.BasicLimitInformation.SchedulingClass : 0;
+            Job->LimitFlags = LimitFlags;
+
+            if (ApplyAffinity || UpdateScheduling)
+            {
+                for (NextEntry = Job->ProcessListHead.Flink; NextEntry != &Job->ProcessListHead; NextEntry = NextEntry->Flink)
+                {
+                    Process = CONTAINING_RECORD(NextEntry, EPROCESS, JobLinks);
+                    if (ApplyAffinity) KeSetAffinityProcess(&Process->Pcb, Job->Affinity);
+                    if (UpdateScheduling)
+                    {
+                        (VOID)PspComputeQuantumAndPriority(Process, (Process->Vm.Flags.MemoryPriority == MEMORY_PRIORITY_BACKGROUND) ? PsProcessPriorityBackground : PsProcessPriorityForeground, &Quantum);
+                        KeSetQuantumProcess(&Process->Pcb, Quantum);
+                    }
+                }
+            }
+
+            ExReleaseResourceLite(&Job->JobLock);
             Status = STATUS_SUCCESS;
             break;
+        }
 
         default:
             DPRINT1("Class %d not implemented\n", JobInformationClass);

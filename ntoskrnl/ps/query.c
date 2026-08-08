@@ -2102,6 +2102,10 @@ NtSetInformationProcess(
             break;
 
         case ProcessAffinityMask:
+        {
+            PEJOB Job;
+            KAFFINITY JobAffinity;
+            ULONG JobLimitFlags;
 
             /* Check buffer length */
             if (ProcessInformationLength != sizeof(KAFFINITY))
@@ -2133,12 +2137,34 @@ NtSetInformationProcess(
             }
 
             /* Check if it's within job affinity limits */
-            if (Process->Job)
+            Job = Process->Job;
+            if (Job)
             {
-                /* Not yet implemented */
-                UNIMPLEMENTED;
-                Status = STATUS_NOT_IMPLEMENTED;
-                break;
+                KeEnterGuardedRegion();
+                ExAcquireResourceSharedLite(&Job->JobLock, TRUE);
+                JobLimitFlags = Job->LimitFlags;
+                JobAffinity = Job->Affinity;
+
+                if (JobLimitFlags & JOB_OBJECT_LIMIT_AFFINITY)
+                {
+                    if (JobLimitFlags & JOB_OBJECT_LIMIT_SUBSET_AFFINITY)
+                    {
+                        if ((Affinity & JobAffinity) != Affinity)
+                        {
+                            ExReleaseResourceLite(&Job->JobLock);
+                            KeLeaveGuardedRegion();
+                            Status = STATUS_INVALID_PARAMETER;
+                            break;
+                        }
+                    }
+                    else if (Affinity != JobAffinity)
+                    {
+                        ExReleaseResourceLite(&Job->JobLock);
+                        KeLeaveGuardedRegion();
+                        Status = STATUS_INVALID_PARAMETER;
+                        break;
+                    }
+                }
             }
 
             /* Make sure the process isn't dying */
@@ -2164,7 +2190,14 @@ NtSetInformationProcess(
                 /* Avoid race conditions */
                 Status = STATUS_PROCESS_IS_TERMINATING;
             }
+
+            if (Job)
+            {
+                ExReleaseResourceLite(&Job->JobLock);
+                KeLeaveGuardedRegion();
+            }
             break;
+        }
 
         /* Priority Boosting status */
         case ProcessPriorityBoost:

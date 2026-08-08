@@ -302,6 +302,14 @@ PsTerminateProcess(
     IN NTSTATUS ExitStatus
 );
 
+KPRIORITY
+NTAPI
+PspComputeQuantumAndPriority(
+    IN PEPROCESS Process,
+    IN PSPROCESSPRIORITYMODE Mode,
+    OUT PUCHAR Quantum
+);
+
 VOID
 NTAPI
 PspDeleteProcess(
