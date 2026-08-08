@@ -476,6 +476,58 @@ NtfsCaptureDirSearchPattern(_In_ PFileContextBlock FileCB,
 }
 
 static
+BOOLEAN
+NtfsDirectoryNameMatches(_In_opt_ PUNICODE_STRING FileNameFilter,
+                         _In_reads_(NameLength) PCWSTR Name,
+                         _In_ USHORT NameLength)
+{
+    UNICODE_STRING NameString;
+
+    if (!FileNameFilter)
+        return TRUE;
+
+    NameString.Buffer = (PWSTR)Name;
+    NameString.Length = NameLength * sizeof(WCHAR);
+    NameString.MaximumLength = NameString.Length;
+    return FsRtlIsNameInExpression(FileNameFilter, &NameString, TRUE, NULL);
+}
+
+static
+NTSTATUS
+NtfsAppendDotDirectoryEntry(_In_ PFileContextBlock FileCB,
+                            _In_reads_(NameLength) PCWSTR Name,
+                            _In_ USHORT NameLength,
+                            _Out_ PFILE_BOTH_DIR_INFORMATION Buffer,
+                            _Inout_ PULONG Length,
+                            _Out_ PULONG EntrySize)
+{
+    NtfsFileBasicInformation Information;
+    NTSTATUS Status;
+
+    *EntrySize = ALIGN_UP_BY(FIELD_OFFSET(FILE_BOTH_DIR_INFORMATION, FileName) + NameLength * sizeof(WCHAR), sizeof(ULONGLONG));
+    if (*Length < *EntrySize)
+        return STATUS_BUFFER_OVERFLOW;
+
+    Status = NtfsFileRecordGetBasicInformation(FileCB->FileRec, &Information);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlZeroMemory(Buffer, *EntrySize);
+    Buffer->NextEntryOffset = *EntrySize;
+    Buffer->CreationTime.QuadPart = Information.CreationTime;
+    Buffer->LastAccessTime.QuadPart = Information.LastAccessTime;
+    Buffer->LastWriteTime.QuadPart = Information.LastWriteTime;
+    Buffer->ChangeTime.QuadPart = Information.ChangeTime;
+    Buffer->EndOfFile = FileCB->CommonFCBHeader.FileSize;
+    Buffer->AllocationSize = FileCB->CommonFCBHeader.AllocationSize;
+    Buffer->FileAttributes = Information.FileAttributes | FILE_ATTRIBUTE_DIRECTORY;
+    Buffer->FileNameLength = NameLength * sizeof(WCHAR);
+    RtlCopyMemory(Buffer->FileName, Name, Buffer->FileNameLength);
+    *Length -= *EntrySize;
+    return STATUS_SUCCESS;
+}
+
+static
 NTSTATUS
 GetFileBothDirectoryInformation(_In_    PFileContextBlock FileCB,
                                 _In_    UCHAR IrpFlags,
@@ -483,7 +535,13 @@ GetFileBothDirectoryInformation(_In_    PFileContextBlock FileCB,
                                 _Out_   PFILE_BOTH_DIR_INFORMATION Buffer,
                                 _Inout_ PULONG Length)
 {
+    static const WCHAR DotNames[2][3] = { L".", L".." };
+    PFILE_BOTH_DIR_INFORMATION Current;
+    PFILE_BOTH_DIR_INFORMATION Previous = NULL;
     PNtfsDirectory FileDir;
+    ULONG EntrySize;
+    ULONG RealLength;
+    NTSTATUS Status;
     BOOLEAN ReturnSingleEntry, RestartScan;
 
     if (!FileCB)
@@ -504,6 +562,12 @@ GetFileBothDirectoryInformation(_In_    PFileContextBlock FileCB,
 
     FileNameFilter = NtfsCaptureDirSearchPattern(FileCB, FileNameFilter);
 
+    if (RestartScan)
+    {
+        FileCB->DirDotIndex = NtfsFileRecordGetHeader(FileCB->FileRec)->MFTRecordNumber == _Root ? 2 : 0;
+        FileCB->DirRealScanStarted = FALSE;
+    }
+
     /* If there's no wild cards and a file name filter
      * is specified, we will only return one entry.
      */
@@ -513,12 +577,47 @@ GetFileBothDirectoryInformation(_In_    PFileContextBlock FileCB,
     else
         ReturnSingleEntry = !!(IrpFlags & SL_RETURN_SINGLE_ENTRY);
 
-    return NtfsDirectoryGetFileBothDirInfo(FileDir,
-                                           ReturnSingleEntry,
-                                           RestartScan,
-                                           FileNameFilter,
-                                           Buffer,
-                                           Length);
+    Current = Buffer;
+    while (FileCB->DirDotIndex < RTL_NUMBER_OF(DotNames))
+    {
+        UCHAR DotIndex = FileCB->DirDotIndex;
+        USHORT NameLength = DotIndex + 1;
+
+        if (!NtfsDirectoryNameMatches(FileNameFilter, DotNames[DotIndex], NameLength))
+        {
+            FileCB->DirDotIndex++;
+            continue;
+        }
+
+        Status = NtfsAppendDotDirectoryEntry(FileCB, DotNames[DotIndex], NameLength, Current, Length, &EntrySize);
+        if (!NT_SUCCESS(Status))
+        {
+            if (!Previous)
+                return Status;
+            Previous->NextEntryOffset = 0;
+            return STATUS_SUCCESS;
+        }
+
+        FileCB->DirDotIndex++;
+        Previous = Current;
+        Current = (PFILE_BOTH_DIR_INFORMATION)((PUCHAR)Current + EntrySize);
+        if (ReturnSingleEntry)
+        {
+            Previous->NextEntryOffset = 0;
+            return STATUS_SUCCESS;
+        }
+    }
+
+    RealLength = *Length;
+    RestartScan = !FileCB->DirRealScanStarted;
+    FileCB->DirRealScanStarted = TRUE;
+    Status = NtfsDirectoryGetFileBothDirInfo(FileDir, ReturnSingleEntry, RestartScan, FileNameFilter, Current, Length);
+    if (Previous && (Status == STATUS_NO_MORE_FILES || Status == STATUS_BUFFER_OVERFLOW || RealLength == *Length))
+    {
+        Previous->NextEntryOffset = 0;
+        return STATUS_SUCCESS;
+    }
+    return Status;
  }
 
 static
@@ -539,8 +638,6 @@ GetFileDirectoryInformation(_In_ PFileContextBlock FileCB,
     ULONG SourceOffset = 0;
     ULONG BytesWritten = 0;
     ULONG EntrySize;
-    BOOLEAN ReturnSingleEntry;
-    BOOLEAN RestartScan;
     NTSTATUS Status;
 
     if (!FileCB || !FileCB->FileDir)
@@ -556,34 +653,8 @@ GetFileDirectoryInformation(_In_ PFileContextBlock FileCB,
     if (!TemporaryBuffer)
         return STATUS_INSUFFICIENT_RESOURCES;
 
-    RestartScan = !!(IrpFlags & SL_RESTART_SCAN);
-    /* A fresh handle starts at the beginning even without the flag; the
-     * shared directory tree may hold another handle's cursor. */
-    if (!FileCB->DirScanStarted)
-    {
-        RestartScan = TRUE;
-        FileCB->DirScanStarted = TRUE;
-    }
-    FileNameFilter = NtfsCaptureDirSearchPattern(FileCB, FileNameFilter);
-    if (FileNameFilter &&
-        !ContainsWildcard(FileNameFilter))
-    {
-        ReturnSingleEntry = TRUE;
-    }
-    else
-    {
-        ReturnSingleEntry =
-            !!(IrpFlags & SL_RETURN_SINGLE_ENTRY);
-    }
-
     Remaining = Available;
-    Status = NtfsDirectoryGetFileBothDirInfo(
-        FileCB->FileDir,
-        ReturnSingleEntry,
-        RestartScan,
-        FileNameFilter,
-        (PFILE_BOTH_DIR_INFORMATION)TemporaryBuffer,
-        &Remaining);
+    Status = GetFileBothDirectoryInformation(FileCB, IrpFlags, FileNameFilter, (PFILE_BOTH_DIR_INFORMATION)TemporaryBuffer, &Remaining);
     SourceBytes = Available - Remaining;
     if (!NT_SUCCESS(Status) || SourceBytes == 0)
     {

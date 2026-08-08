@@ -242,6 +242,9 @@ typedef struct _FCB
     BOOLEAN FileDirDirect;
     /* First QueryDirectory on this handle must start at the beginning. */
     BOOLEAN DirScanStarted;
+    /* NTFS does not store dot entries; expose them before the real index. */
+    UCHAR DirDotIndex;
+    BOOLEAN DirRealScanStarted;
 
     /* The search pattern belongs to the handle: it is supplied once and
      * every later query without a name reuses it. */
