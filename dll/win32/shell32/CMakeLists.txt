@@ -115,6 +115,8 @@ add_library(shell32 MODULE
     shell32.rc
     ${CMAKE_CURRENT_BINARY_DIR}/shell32.def)
 
+target_compile_definitions(shell32 PRIVATE CONST_VTABLE)
+
 if(MSVC)
     # error C4311: 'type cast': pointer truncation from 'HANDLE' to 'INT'
     remove_target_compile_option(shell32 "/we4311")

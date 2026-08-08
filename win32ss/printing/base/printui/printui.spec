@@ -2,7 +2,7 @@
 @ stub ConnectToPrinterPropertyPage
 @ stub ConstructPrinterFriendlyName
 @ stdcall -private DllCanUnloadNow()
-@ stub DllGetClassObject
+@ stub -private DllGetClassObject
 @ stub DocumentPropertiesWrap
 @ stub PnPInterface
 @ stub PrintNotifyTray_Exit
