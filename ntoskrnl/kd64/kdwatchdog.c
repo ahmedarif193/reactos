@@ -9,7 +9,7 @@
 #include <debug.h>
 
 #ifndef KD_LOG_WATCHDOG_DEFAULT_SECONDS
-#define KD_LOG_WATCHDOG_DEFAULT_SECONDS 6
+#define KD_LOG_WATCHDOG_DEFAULT_SECONDS 0
 #endif
 #define KD_LOG_WATCHDOG_MINIMUM_SECONDS 5
 #define KD_LOG_WATCHDOG_MAXIMUM_SECONDS 3600
@@ -27,6 +27,27 @@ static BOOLEAN KdpLogWatchdogIsSeparator(_In_ CHAR Character)
     return Character == ' ' || Character == '\t' || Character == ',' || Character == '/';
 }
 
+static BOOLEAN KdpLogWatchdogHasDebugOption(_In_opt_ PCSTR LoadOptions)
+{
+    static const CHAR OptionName[] = "DEBUG";
+    PCSTR Option;
+    PCSTR Cursor;
+
+    if (LoadOptions == NULL)
+        return FALSE;
+
+    Option = LoadOptions;
+    while ((Option = strstr(Option, OptionName)) != NULL)
+    {
+        Cursor = Option + RTL_NUMBER_OF(OptionName) - 1;
+        if ((Option == LoadOptions || KdpLogWatchdogIsSeparator(Option[-1])) && (*Cursor == ANSI_NULL || *Cursor == '=' || KdpLogWatchdogIsSeparator(*Cursor)))
+            return TRUE;
+        Option = Cursor;
+    }
+
+    return FALSE;
+}
+
 static ULONG KdpLogWatchdogReadOption(_In_opt_ PCSTR LoadOptions)
 {
     static const CHAR OptionName[] = "KDWATCHDOG";
@@ -34,8 +55,8 @@ static ULONG KdpLogWatchdogReadOption(_In_opt_ PCSTR LoadOptions)
     PCSTR Cursor;
     ULONG Seconds;
 
-    if (LoadOptions == NULL)
-        return KD_LOG_WATCHDOG_DEFAULT_SECONDS;
+    if (!KdpLogWatchdogHasDebugOption(LoadOptions))
+        return 0;
 
     Option = LoadOptions;
     while ((Option = strstr(Option, OptionName)) != NULL)
