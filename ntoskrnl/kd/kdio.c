@@ -27,12 +27,13 @@
 /* GLOBALS *******************************************************************/
 
 #define KdpBufferSize  (1024 * 512)
-static BOOLEAN KdpLoggingEnabled = FALSE;
+static volatile BOOLEAN KdpLoggingEnabled = FALSE;
 static PCHAR KdpDebugBuffer = NULL;
 static volatile ULONG KdpCurrentPosition = 0;
 static volatile ULONG KdpFreeBytes = 0;
 static KSPIN_LOCK KdpDebugLogSpinLock;
 static KEVENT KdpLoggerThreadEvent;
+static KDPC KdpLoggerWakeDpc;
 static HANDLE KdpLogFileHandle;
 ANSI_STRING KdpLogFileName = RTL_CONSTANT_STRING("\\SystemRoot\\debug.log");
 
@@ -113,6 +114,22 @@ KdbpReleaseLock(
 }
 
 /* FILE DEBUG LOG FUNCTIONS **************************************************/
+
+static VOID
+NTAPI
+KdpLoggerWakeDpcRoutine(
+    _In_ PKDPC Dpc,
+    _In_opt_ PVOID DeferredContext,
+    _In_opt_ PVOID SystemArgument1,
+    _In_opt_ PVOID SystemArgument2)
+{
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(DeferredContext);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    KeSetEvent(&KdpLoggerThreadEvent, IO_NO_INCREMENT, FALSE);
+}
 
 static VOID
 NTAPI
@@ -205,9 +222,14 @@ KdpPrintToLogFile(
     /* Release the spinlock */
     KdbpReleaseLock(&KdpDebugLogSpinLock, OldIrql, LockAcquired);
 
-    /* Signal the logger thread */
-    if (OldIrql <= DISPATCH_LEVEL && KdpLoggingEnabled)
-        KeSetEvent(&KdpLoggerThreadEvent, IO_NO_INCREMENT, FALSE);
+    /* Signal the logger thread, deferring the wake-up when KD runs at HIGH_LEVEL. */
+    if (KdpLoggingEnabled)
+    {
+        if (OldIrql <= DISPATCH_LEVEL)
+            KeSetEvent(&KdpLoggerThreadEvent, IO_NO_INCREMENT, FALSE);
+        else
+            KeInsertQueueDpc(&KdpLoggerWakeDpc, NULL, NULL);
+    }
 }
 
 NTSTATUS
@@ -340,6 +362,7 @@ KdpDebugLogInit(
         /** END OF HACK **/
 
         KeInitializeEvent(&KdpLoggerThreadEvent, SynchronizationEvent, TRUE);
+        KeInitializeDpc(&KdpLoggerWakeDpc, KdpLoggerWakeDpcRoutine, NULL);
 
         /* Create the logger thread */
         Status = PsCreateSystemThread(&ThreadHandle,
