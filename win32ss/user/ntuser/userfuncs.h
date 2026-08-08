@@ -151,6 +151,7 @@ LRESULT NC_HandleNCActivate( PWND Wnd, WPARAM wParam, LPARAM lParam );
 LRESULT NC_HandleNCCalcSize( PWND wnd, WPARAM wparam, RECTL *winRect, BOOL Suspended );
 VOID NC_DrawFrame( HDC hDC, RECT *CurrentRect, BOOL Active, DWORD Style, DWORD ExStyle);
 VOID UserDrawCaptionBar( PWND pWnd, HDC hDC, INT Flags);
+VOID UserExcludeClientRect(PWND pWnd, HDC hDC);
 void FASTCALL NC_GetInsideRect(PWND Wnd, RECT *rect);
 LRESULT NC_HandleNCLButtonDown(PWND Wnd, WPARAM wParam, LPARAM lParam);
 LRESULT NC_HandleNCLButtonDblClk(PWND Wnd, WPARAM wParam, LPARAM lParam);

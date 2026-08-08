@@ -904,10 +904,18 @@ UserDrawCaptionButton(PWND pWnd, LPRECT Rect, DWORD Style, DWORD ExStyle, HDC hD
 }
 
 VOID
+UserExcludeClientRect(PWND pWnd, HDC hDC)
+{
+   NtGdiExcludeClipRect(hDC, pWnd->rcClient.left - pWnd->rcWindow.left, pWnd->rcClient.top - pWnd->rcWindow.top, pWnd->rcClient.right - pWnd->rcWindow.left, pWnd->rcClient.bottom - pWnd->rcWindow.top);
+}
+
+VOID
 UserDrawCaptionButtonWnd(PWND pWnd, HDC hDC, BOOL bDown, ULONG Type)
 {
    RECT WindowRect;
    SIZE WindowBorder;
+
+   UserExcludeClientRect(pWnd, hDC);
 
    IntGetWindowRect(pWnd, &WindowRect);
 
@@ -1122,6 +1130,8 @@ NC_DoNCPaint(PWND pWnd, HDC hDC, INT Flags)
        (pWnd->state & WNDS_NONCPAINT && !(pWnd->state & WNDS_FORCEMENUDRAW)) ||
         IntEqualRect(&pWnd->rcWindow, &pWnd->rcClient) )
       return 0;
+
+   UserExcludeClientRect(pWnd, hDC);
 
    Style = pWnd->style;
 

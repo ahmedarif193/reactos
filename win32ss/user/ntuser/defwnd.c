@@ -419,6 +419,7 @@ UserPaintCaption(PWND pWnd, INT Flags)
       else
       {
          HDC hDC = UserGetDCEx(pWnd, NULL, DCX_WINDOW|DCX_USESTYLE);
+         UserExcludeClientRect(pWnd, hDC);
          UserDrawCaptionBar(pWnd, hDC, Flags | DC_FRAME); // DCFRAME added as fix for CORE-10855.
          UserReleaseDC(pWnd, hDC, FALSE);
       }
