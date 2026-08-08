@@ -102,12 +102,12 @@ config FREELDR_HTTP_BOOT
 config ENABLE_KD_WATCHDOG
     prompt "Enable KD log-stall watchdog"
     type bool
-    default y
+    default n
     depends BUILD_TYPE=Debug
     help
-      Enable the internal-debugger log-stall watchdog by default. Disabling
-      this uses a timeout of zero; /KDWATCHDOG=<seconds> can still enable it
-      for an individual boot.
+      Enable the internal-debugger log-stall watchdog by default. It remains
+      disabled unless selected here or enabled for an individual boot with
+      /KDWATCHDOG=<seconds>. Only /DEBUG boots can arm it.
 
 config KD_WATCHDOG_TIMEOUT
     prompt "Default KD watchdog timeout (seconds)"
