@@ -126,6 +126,7 @@ list(APPEND SOURCE
     perhist.idl
     propidl.idl
     propsys.idl
+    portabledevicetypes.idl
     pstore.idl
     restrictederrorinfo.idl
     richole.idl
@@ -137,6 +138,7 @@ list(APPEND SOURCE
 #   rstinf.idl
 #   rstloc.idl
     sensevts.idl
+    sensorsapi.idl
     servprov.idl
 #   sesprp.idl
     shdeprecated.idl
