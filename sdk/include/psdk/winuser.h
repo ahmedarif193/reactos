@@ -4338,6 +4338,14 @@ typedef struct tagPOINTER_PEN_INFO {
     INT32           tiltY;
 } POINTER_PEN_INFO;
 
+typedef struct tagPOINTER_TYPE_INFO {
+    POINTER_INPUT_TYPE type;
+    union {
+        POINTER_TOUCH_INFO touchInfo;
+        POINTER_PEN_INFO penInfo;
+    } DUMMYUNIONNAME;
+} POINTER_TYPE_INFO, *PPOINTER_TYPE_INFO;
+
 #endif /* WINVER >= 0x0602 */
 
 HKL WINAPI ActivateKeyboardLayout(_In_ HKL, _In_ UINT);
@@ -4841,6 +4849,9 @@ int WINAPI FrameRect(_In_ HDC, _In_ LPCRECT, _In_ HBRUSH);
 HWND WINAPI GetActiveWindow(void);
 HWND WINAPI GetAncestor(_In_ HWND, _In_ UINT);
 SHORT WINAPI GetAsyncKeyState(_In_ int);
+#if (WINVER >= 0x0602)
+BOOL WINAPI GetAutoRotationState(_Out_ PAR_STATE);
+#endif
 HWND WINAPI GetCapture(void);
 UINT WINAPI GetCaretBlinkTime(void);
 BOOL WINAPI GetCaretPos(_Out_ LPPOINT);
@@ -5022,7 +5033,15 @@ HWND WINAPI GetNextDlgTabItem(_In_ HWND, _In_opt_ HWND, _In_ BOOL);
 HWND WINAPI GetOpenClipboardWindow(void);
 HWND WINAPI GetParent(_In_ HWND);
 #if (WINVER >= 0x0602)
+BOOL WINAPI GetPointerDevice(_In_ HANDLE, _Out_ POINTER_DEVICE_INFO*);
+BOOL WINAPI GetPointerFrameTouchInfo(_In_ UINT32 pointerId, _Inout_ UINT32 *pointerCount, _Out_writes_opt_(*pointerCount) POINTER_TOUCH_INFO *touchInfo);
+BOOL WINAPI GetPointerPenInfo(_In_ UINT32, _Out_ POINTER_PEN_INFO*);
 BOOL WINAPI GetPointerType(_In_ UINT32, _Out_ POINTER_INPUT_TYPE*);
+#endif
+
+#if (WINVER >= 0x0602) && (NTDDI_VERSION >= NTDDI_WIN10_RS5)
+DECLARE_HANDLE(HSYNTHETICPOINTERDEVICE);
+BOOL WINAPI InjectSyntheticPointerInput(_In_ HSYNTHETICPOINTERDEVICE, _In_reads_(count) CONST POINTER_TYPE_INFO*, _In_ UINT32 count);
 #endif
 
 int
@@ -5307,6 +5326,9 @@ BOOL WINAPI IsIconic(_In_ HWND);
 BOOL WINAPI IsMenu(_In_ HMENU);
 BOOL WINAPI IsRectEmpty(_In_ LPCRECT);
 BOOL WINAPI IsWindow(_In_opt_ HWND);
+#if (WINVER >= 0x0604)
+BOOL WINAPI IsWindowArranged(_In_ HWND);
+#endif
 BOOL WINAPI IsWindowEnabled(_In_ HWND);
 BOOL WINAPI IsWindowUnicode(_In_ HWND);
 BOOL WINAPI IsWindowVisible(_In_ HWND);

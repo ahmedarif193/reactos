@@ -13,7 +13,8 @@ list(APPEND VISTA_SOURCE
      
 
 list(APPEND SOURCE
-    dpi.c)
+    dpi.c
+    pointer.c)
 
 # These are just for Vista+ support
 add_library(user32_optional_vista
