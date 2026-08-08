@@ -575,6 +575,51 @@ KdbpSymFindEntryByAddress(IN PROSSYM_INFO Information, IN ULONG_PTR RelativeAddr
 }
 
 BOOLEAN
+KdbSymDescribeAddress(
+    _In_ PVOID Address,
+    _Out_writes_z_(ModuleNameLength) PCHAR ModuleName,
+    _In_ ULONG ModuleNameLength,
+    _Out_writes_z_(FunctionNameLength) PCHAR FunctionName,
+    _In_ ULONG FunctionNameLength,
+    _Out_ PULONG_PTR Displacement)
+{
+    PLDR_DATA_TABLE_ENTRY LdrEntryAddress;
+    LDR_DATA_TABLE_ENTRY LdrEntry;
+    ROSSYM_INFO Information;
+    ROSSYM_ENTRY Entry;
+    ROSSYM_ENTRY Candidate;
+    ULONG EntryIndex;
+    ULONG ScanCount;
+    ULONG_PTR RelativeAddress;
+
+    if ((ModuleName == NULL) || (ModuleNameLength == 0) || (FunctionName == NULL) || (FunctionNameLength == 0) || (Displacement == NULL))
+        return FALSE;
+
+    ModuleName[0] = ANSI_NULL;
+    FunctionName[0] = ANSI_NULL;
+    *Displacement = 0;
+    if (!KdbpSymFindModule(Address, -1, &LdrEntryAddress) || !NT_SUCCESS(KdbpSafeReadMemory(&LdrEntry, LdrEntryAddress, sizeof(LdrEntry))))
+        return FALSE;
+
+    KdbpSymUnicodeToAnsi(&LdrEntry.BaseDllName, ModuleName, ModuleNameLength);
+    RelativeAddress = (ULONG_PTR)Address - (ULONG_PTR)LdrEntry.DllBase;
+    *Displacement = RelativeAddress;
+    if (!KdbpSymReadInfo(LdrEntry.PatchInformation, &Information) || !KdbpSymFindEntryByAddress(&Information, RelativeAddress, &Entry, &EntryIndex) || (Entry.FunctionOffset == 0) || (Entry.FunctionOffset >= Information.StringsLength) || !NT_SUCCESS(KdbpSymReadAnsiString(Information.Strings + Entry.FunctionOffset, Information.StringsLength - Entry.FunctionOffset, FunctionName, FunctionNameLength)))
+        return TRUE;
+
+    for (ScanCount = 0; (EntryIndex != 0) && (ScanCount < 4096); ScanCount++)
+    {
+        if (!KdbpSymReadEntry(&Information, EntryIndex - 1, &Candidate) || (Candidate.FunctionOffset != Entry.FunctionOffset))
+            break;
+        Entry = Candidate;
+        EntryIndex--;
+    }
+
+    *Displacement = RelativeAddress - Entry.Address;
+    return TRUE;
+}
+
+BOOLEAN
 KdbSymPrintNearest(IN PVOID Address, IN PCONTEXT Context)
 {
     PLDR_DATA_TABLE_ENTRY LdrEntryAddress;
