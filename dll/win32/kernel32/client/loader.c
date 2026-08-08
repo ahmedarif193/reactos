@@ -335,10 +335,12 @@ LoadLibraryExW(LPCWSTR lpLibFileName,
         FreeString = TRUE;
     }
 
-    /* Compute the load path */
-    SearchPath = BaseComputeProcessDllPath((dwFlags & LOAD_WITH_ALTERED_SEARCH_PATH) ?
-                                           DllName.Buffer : NULL,
-                                           NULL);
+    /* Compute the load path. An altered path overrides the process-wide
+     * secure default selected by SetDefaultDllDirectories. */
+    if (!(dwFlags & LOAD_WITH_ALTERED_SEARCH_PATH) && BaseDefaultDllDirectoriesFlags)
+        SearchPath = BaseComputeSecureDllPath();
+    else
+        SearchPath = BaseComputeProcessDllPath((dwFlags & LOAD_WITH_ALTERED_SEARCH_PATH) ? DllName.Buffer : NULL, NULL);
     if (!SearchPath)
     {
         /* Getting DLL path failed, so set last error, free mem and return */
