@@ -346,6 +346,26 @@ PopInitializeEventSupport(
     VOID
 );
 
+NTSTATUS
+NTAPI
+PopSetPowerSettingValue(
+    _In_ LPCGUID SettingGuid,
+    _In_ SYSTEM_POWER_CONDITION PowerCondition,
+    _In_reads_bytes_(ValueLength) PVOID Value,
+    _In_ ULONG ValueLength
+);
+
+#define POP_MAX_CACHED_POWER_SETTINGS 64
+#define POP_MAX_POWER_SETTING_VALUE_LENGTH 1024
+
+NTSTATUS
+NTAPI
+PopApplyProcessorPowerSetting(
+    _In_ LPCGUID SettingGuid,
+    _In_reads_bytes_(ValueLength) PVOID Value,
+    _In_ ULONG ValueLength
+);
+
 VOID NTAPI PopInitializeThermalRequests(VOID);
 
 //

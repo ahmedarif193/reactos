@@ -33,7 +33,25 @@ SYSTEM_POWER_CAPABILITIES PopCapabilities;
 #define POP_PROCESSOR_PERF_PERIOD_MS 100
 #define POP_MAXIMUM_PERF_STATES 32
 
+static volatile LONG PopProcessorPolicyMinimum = 5;
+static volatile LONG PopProcessorPolicyMaximum = 100;
+
 /* PRIVATE FUNCTIONS *********************************************************/
+
+static VOID
+PopApplyProcessorThrottlePolicy(
+    _Inout_ PPROCESSOR_POWER_STATE PowerState,
+    _In_ ULONG HardwareMinimum,
+    _In_ ULONG HardwareMaximum)
+{
+    ULONG PolicyMinimum = (ULONG)PopProcessorPolicyMinimum;
+    ULONG PolicyMaximum = (ULONG)PopProcessorPolicyMaximum;
+
+    PowerState->ProcessorMaxThrottle = (UCHAR)min(HardwareMaximum, PolicyMaximum);
+    PowerState->ProcessorMinThrottle = (UCHAR)max(HardwareMinimum, PolicyMinimum);
+    if (PowerState->ProcessorMinThrottle > PowerState->ProcessorMaxThrottle)
+        PowerState->ProcessorMinThrottle = PowerState->ProcessorMaxThrottle;
+}
 
 static WORKER_THREAD_ROUTINE PopPassivePowerCall;
 
@@ -500,6 +518,13 @@ PopPerfIdle(PPROCESSOR_POWER_STATE PowerState)
     ULONG Target;
     NTSTATUS Status;
 
+    if (PowerState->PerfStatesCount != 0)
+    {
+        PopApplyProcessorThrottlePolicy(PowerState,
+                                        PowerState->PerfStates[PowerState->PerfStatesCount - 1].PercentFrequency,
+                                        PowerState->PerfStates[0].PercentFrequency);
+    }
+
     if (!SetPerfLevel || PowerState->PerfStatesCount == 0)
         return;
 
@@ -685,8 +710,17 @@ PopRegisterProcessorStateHandler2(
     PowerState->PerfStates = PerfStates;
     PowerState->PerfStatesCount = Handler->NumPerfStates;
     PowerState->PerfSetThrottle = Handler->SetPerfLevel;
-    PowerState->ProcessorMaxThrottle = Handler->NumPerfStates ? Handler->PerfLevel[0].PercentFrequency : 100;
-    PowerState->ProcessorMinThrottle = Handler->NumPerfStates ? Handler->PerfLevel[Handler->NumPerfStates - 1].PercentFrequency : 100;
+    if (Handler->NumPerfStates)
+    {
+        PopApplyProcessorThrottlePolicy(PowerState,
+                                        Handler->PerfLevel[Handler->NumPerfStates - 1].PercentFrequency,
+                                        Handler->PerfLevel[0].PercentFrequency);
+    }
+    else
+    {
+        PowerState->ProcessorMaxThrottle = 100;
+        PowerState->ProcessorMinThrottle = 100;
+    }
     PowerState->ThermalThrottleLimit = 100;
     PowerState->CurrentThrottle = PowerState->ProcessorMaxThrottle;
     PowerState->CurrentThrottleIndex = 0;
@@ -731,6 +765,46 @@ PoInitializePrcb(IN PKPRCB Prcb)
     KeInitializeDpc(&Prcb->PowerState.PerfDpc, PopPerfIdleDpc, Prcb);
     KeSetTargetProcessorDpc(&Prcb->PowerState.PerfDpc, Prcb->Number);
     KeInitializeTimerEx(&Prcb->PowerState.PerfTimer, SynchronizationTimer);
+}
+
+NTSTATUS
+NTAPI
+PopApplyProcessorPowerSetting(
+    _In_ LPCGUID SettingGuid,
+    _In_reads_bytes_(ValueLength) PVOID Value,
+    _In_ ULONG ValueLength)
+{
+    ULONG Processor;
+    ULONG SettingValue;
+
+    PAGED_CODE();
+
+    if (!IsEqualGUID(SettingGuid, &GUID_PROCESSOR_THROTTLE_MINIMUM) &&
+        !IsEqualGUID(SettingGuid, &GUID_PROCESSOR_THROTTLE_MAXIMUM))
+    {
+        return STATUS_SUCCESS;
+    }
+    if (ValueLength != sizeof(ULONG) || !Value)
+        return STATUS_INVALID_PARAMETER;
+
+    SettingValue = *(PULONG)Value;
+    if (SettingValue > 100)
+        return STATUS_INVALID_PARAMETER;
+
+    if (IsEqualGUID(SettingGuid, &GUID_PROCESSOR_THROTTLE_MINIMUM))
+        InterlockedExchange(&PopProcessorPolicyMinimum, (LONG)SettingValue);
+    else
+        InterlockedExchange(&PopProcessorPolicyMaximum, (LONG)SettingValue);
+
+    for (Processor = 0; Processor < KeNumberProcessors; Processor++)
+    {
+        PKPRCB Prcb = KiProcessorBlock[Processor];
+
+        if (Prcb && Prcb->PowerState.PerfSetThrottle)
+            KeInsertQueueDpc(&Prcb->PowerState.PerfDpc, NULL, NULL);
+    }
+
+    return STATUS_SUCCESS;
 }
 
 /* PUBLIC FUNCTIONS **********************************************************/
@@ -1166,9 +1240,64 @@ NtPowerInformation(IN POWER_INFORMATION_LEVEL PowerInformationLevel,
             break;
         }
 
+        case SetPowerSettingValue:
+        {
+            PSET_POWER_SETTING_VALUE CapturedSetting;
+            ULONG HeaderLength = FIELD_OFFSET(SET_POWER_SETTING_VALUE, Data);
+
+            if (!InputBuffer || OutputBuffer || OutputBufferLength != 0)
+                return STATUS_INVALID_PARAMETER;
+            if (InputBufferLength < HeaderLength)
+                return STATUS_INFO_LENGTH_MISMATCH;
+            if (InputBufferLength > HeaderLength + POP_MAX_POWER_SETTING_VALUE_LENGTH)
+                return STATUS_INVALID_BUFFER_SIZE;
+
+            CapturedSetting = ExAllocatePoolWithTag(PagedPool, InputBufferLength, POP_PROCESSOR_POWER_TAG);
+            if (!CapturedSetting)
+                return STATUS_INSUFFICIENT_RESOURCES;
+
+            _SEH2_TRY
+            {
+                RtlCopyMemory(CapturedSetting, InputBuffer, InputBufferLength);
+                Status = STATUS_SUCCESS;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+
+            if (NT_SUCCESS(Status))
+            {
+                if (CapturedSetting->Version != POWER_SETTING_VALUE_VERSION ||
+                    CapturedSetting->PowerCondition < PoAc ||
+                    CapturedSetting->PowerCondition >= PoConditionMaximum)
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                }
+                else if (CapturedSetting->DataLength > InputBufferLength - HeaderLength)
+                {
+                    Status = STATUS_INFO_LENGTH_MISMATCH;
+                }
+                else if (PreviousMode != KernelMode &&
+                         IsEqualGUID(&CapturedSetting->Guid, &GUID_ACDC_POWER_SOURCE))
+                {
+                    Status = STATUS_ACCESS_DENIED;
+                }
+                else
+                {
+                    Status = PopSetPowerSettingValue(&CapturedSetting->Guid, CapturedSetting->PowerCondition, CapturedSetting->Data, CapturedSetting->DataLength);
+                }
+            }
+
+            ExFreePoolWithTag(CapturedSetting, POP_PROCESSOR_POWER_TAG);
+            break;
+        }
+
         case SystemBatteryState:
         {
             SYSTEM_BATTERY_STATE BatteryState;
+            SYSTEM_POWER_CONDITION PowerCondition;
 
             if (InputBuffer != NULL)
                 return STATUS_INVALID_PARAMETER;
@@ -1191,6 +1320,9 @@ NtPowerInformation(IN POWER_INFORMATION_LEVEL PowerInformationLevel,
                 RtlZeroMemory(&BatteryState, sizeof(BatteryState));
                 BatteryState.AcOnLine = TRUE;
             }
+
+            PowerCondition = BatteryState.AcOnLine ? PoAc : PoDc;
+            (VOID)PopSetPowerSettingValue(&GUID_ACDC_POWER_SOURCE, PowerCondition, &PowerCondition, sizeof(PowerCondition));
 
             _SEH2_TRY
             {
