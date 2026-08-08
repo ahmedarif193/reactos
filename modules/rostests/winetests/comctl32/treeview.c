@@ -2645,7 +2645,11 @@ static void _check_item(HWND hwnd, HTREEITEM item, BOOL is_version_6, int line)
         }
         else
             width = data->width;
+#ifdef __REACTOS__
+        todo_wine_if(!is_version_6)
+#else
     todo_wine
+#endif
         ok_(__FILE__, line)(width == (rect.right - rect.left) || broken(is_version_6 && width == 0) /* XP */,
                 "Width %d, rect width %ld.\n", width, rect.right - rect.left);
     }

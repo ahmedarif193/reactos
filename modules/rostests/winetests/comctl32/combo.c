@@ -355,7 +355,10 @@ static void test_comboex_WM_LBUTTONDOWN(void)
     result = SendMessageA(hList, WM_LBUTTONUP, 0, MAKELPARAM(x, y));
     ok(!result, "WM_LBUTTONUP was not processed. LastError=%ld\n",
        GetLastError());
-    todo_wine ok(GetFocus() == hEdit ||
+#ifndef __REACTOS__
+    todo_wine
+#endif
+    ok(GetFocus() == hEdit ||
        broken(GetFocus() == hCombo), /* win98 */
        "Focus not on ComboBoxEx's Edit Control, instead on %p\n",
        GetFocus());

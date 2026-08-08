@@ -2910,8 +2910,12 @@ static void test_rsa_encrypt(void)
             encrypted_null = malloc(encrypted_null_size);
             ret = BCryptEncrypt(key, input, sizeof(input), NULL, NULL, 0, encrypted_null, encrypted_null_size,
                                 &encrypted_null_size, BCRYPT_PAD_OAEP);
+#ifdef __REACTOS__
+            ok(ret == STATUS_INVALID_PARAMETER || broken(ret == STATUS_SUCCESS), "unexpected OAEP(NULL) encrypt status %lx\n", ret);
+#else
             todo_wine ok(ret == STATUS_INVALID_PARAMETER || broken(ret == STATUS_SUCCESS),
                "unexpected OAEP(NULL) encrypt status %lx\n", ret);
+#endif
 
             free(encrypted_null);
         }
