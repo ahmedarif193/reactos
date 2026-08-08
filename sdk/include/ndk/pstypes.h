@@ -428,6 +428,7 @@ typedef struct _PS_CREATE_INFO
 #define JOB_OBJECT_LIMIT_BREAKAWAY_OK           0x800
 #define JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK    0x1000
 #define JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE      0x2000
+#define JOB_OBJECT_LIMIT_SUBSET_AFFINITY         0x4000
 
 //
 // Job Security Limit Flags
@@ -1817,7 +1818,7 @@ typedef struct _EJOB
     ULONG MinimumWorkingSetSize;
     ULONG MaximumWorkingSetSize;
     ULONG ActiveProcessLimit;
-    ULONG Affinity;
+    KAFFINITY Affinity;
     UCHAR PriorityClass;
     ULONG UIRestrictionsClass;
     ULONG SecurityLimitFlags;
