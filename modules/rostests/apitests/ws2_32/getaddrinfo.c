@@ -201,7 +201,7 @@ START_TEST(getaddrinfo)
     PADDRINFOA AddrInfo;
     PADDRINFOW AddrInfoW;
     ADDRINFOA Hints;
-    ADDRINFOW HintsW;
+    ADDRINFOW HintsW = {0};
     CHAR LocalHostName[128];
     struct hostent *Hostent;
 

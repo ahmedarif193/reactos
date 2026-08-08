@@ -162,7 +162,7 @@ void Test_atan_approx(void)
         double x = s_atan_approx_tests[i].x;
         double expected = s_atan_approx_tests[i].expected.rounded;
         double z = atan(x);
-        int64_t error = abs(ulp_error_precise(&s_atan_approx_tests[i].expected, z));
+        int64_t error = llabs(ulp_error_precise(&s_atan_approx_tests[i].expected, z));
         ok(error <= s_atan_approx_tests[i].max_error,
             "atan(%.17e) = %.17e, expected %.17e, error %I64d ULPs, max %u ULPs\n",
             x, z, expected, error, s_atan_approx_tests[i].max_error);

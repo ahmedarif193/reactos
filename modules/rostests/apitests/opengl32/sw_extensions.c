@@ -16,8 +16,8 @@ START_TEST(sw_extensions)
     BITMAPINFO biDst;
     HDC hdcDst = CreateCompatibleDC(0);
     HBITMAP bmpDst, bmpOld;
-    INT nFormats, iPixelFormat, res, i;
-    PIXELFORMATDESCRIPTOR pfd;
+    INT nFormats, iPixelFormat = 0, res, i;
+    PIXELFORMATDESCRIPTOR pfd = {0};
     const char* output;
     HGLRC Context;
     UINT *dstBuffer = NULL;
