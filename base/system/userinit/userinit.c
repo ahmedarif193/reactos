@@ -477,6 +477,25 @@ SetUserSettings(VOID)
     SetUserWallpaper();
 }
 
+static VOID
+ApplyUserPowerScheme(VOID)
+{
+    GUID *Scheme = NULL;
+    DWORD Error;
+
+    Error = PowerGetActiveScheme(NULL, &Scheme);
+    if (Error != ERROR_SUCCESS)
+    {
+        WARN("PowerGetActiveScheme() failed with error %lu\n", Error);
+        return;
+    }
+
+    Error = PowerSetActiveScheme(NULL, Scheme);
+    if (Error != ERROR_SUCCESS)
+        WARN("PowerSetActiveScheme() failed with error %lu\n", Error);
+    LocalFree(Scheme);
+}
+
 typedef DWORD (WINAPI *PCMP_REPORT_LOGON)(DWORD, DWORD);
 
 static VOID
@@ -686,6 +705,7 @@ wWinMain(IN HINSTANCE hInst,
     hInstance = hInst;
 
     bIsLiveCD = IsLiveCD();
+    ApplyUserPowerScheme();
 
 Restart:
     SetUserSettings();
