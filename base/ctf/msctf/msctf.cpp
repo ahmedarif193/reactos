@@ -355,6 +355,8 @@ static void deactivate_remove_conflicting_ts(REFCLSID catid)
     {
         if (catid == ats->ats->LanguageProfile.catid)
         {
+            if (ats->ats->pITfThreadMgrEx)
+                ThreadMgr_CleanupContextSinks(ats->ats->pITfThreadMgrEx, ats->ats->tid);
             deactivate_given_ts(ats->ats);
             list_remove(&ats->entry);
             cicMemFree(ats->ats);

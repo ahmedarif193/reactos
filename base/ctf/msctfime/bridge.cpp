@@ -11,16 +11,18 @@ WINE_DEFAULT_DEBUG_CHANNEL(msctfime);
 
 /// @implemented
 CicBridge::CicBridge()
+    : m_cRefs(1)
+    , m_bImmxInited(FALSE)
+    , m_bUnknown1(FALSE)
+    , m_bDeactivating(FALSE)
+    , m_cActivateLocks(0)
+    , m_pKeystrokeMgr(NULL)
+    , m_pDocMgr(NULL)
+    , m_pThreadMgrEventSink(NULL)
+    , m_cliendId(0)
+    , m_LibThread()
+    , m_bUnknown2(FALSE)
 {
-    m_bImmxInited = FALSE;
-    m_bUnknown1 = FALSE;
-    m_bDeactivating = FALSE;
-    m_bUnknown2 = FALSE;
-    m_pKeystrokeMgr = NULL;
-    m_pDocMgr = NULL;
-    m_pThreadMgrEventSink = NULL;
-    m_cliendId = 0;
-    m_cRefs = 1;
 }
 
 /// @implemented
@@ -80,6 +82,7 @@ CicBridge::CreateInputContext(
     _Inout_ TLS *pTLS,
     _In_ HIMC hIMC)
 {
+    BOOL bCreatedContext = FALSE;
     CicIMCLock imcLock(hIMC);
     if (FAILED(imcLock.m_hr))
         return imcLock.m_hr;
@@ -90,9 +93,20 @@ CicBridge::CreateInputContext(
         if (!hCtfImeContext)
             return E_OUTOFMEMORY;
         imcLock.get().hCtfImeContext = hCtfImeContext;
+        bCreatedContext = TRUE;
     }
 
     CicIMCCLock<CTFIMECONTEXT> imeContext(imcLock.get().hCtfImeContext);
+    if (FAILED(imeContext.m_hr))
+    {
+        if (bCreatedContext)
+        {
+            ImmDestroyIMCC(imcLock.get().hCtfImeContext);
+            imcLock.get().hCtfImeContext = NULL;
+        }
+        return imeContext.m_hr;
+    }
+
     CicInputContext *pCicIC = imeContext.get().m_pCicIC;
     if (pCicIC)
         return S_OK;
@@ -183,6 +197,7 @@ CicBridge::GetInputContext(CicIMCCLock<CTFIMECONTEXT>& imeContext)
     CicInputContext *pCicIC = imeContext.get().m_pCicIC;
     if (!pCicIC)
         return NULL;
+    pCicIC->m_pContext->AddRef();
     return pCicIC->m_pContext;
 }
 
