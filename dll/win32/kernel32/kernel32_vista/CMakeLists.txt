@@ -11,6 +11,7 @@ list(APPEND SOURCE
     CompareObjectHandles.c
     DiscardVirtualMemory.c
     EnumSystemLocalesEx.c
+    FirefoxCompat.c
     firmware.c
     GetActiveProcessorCount.c
     GetEnabledXStateFeatures.c
@@ -28,6 +29,7 @@ list(APPEND SOURCE
     IsValidLocaleName.c
     LCIDToLocaleName.c
     LocaleNameToLCID.c
+    Packages.c
     ResolveLocaleName.c
     SetFileInformationByHandle.c
     sync.c
