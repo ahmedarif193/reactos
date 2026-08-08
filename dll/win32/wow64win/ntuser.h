@@ -25,9 +25,6 @@
 #include <immdev.h>
 #include <shellapi.h>
 #include <winternl.h>
-#ifdef __REACTOS__
-#include "winuser_compat.h"
-#endif
 
 #ifndef W32KAPI
 # if defined(_WIN32U_) || defined(WINE_UNIX_LIB)
