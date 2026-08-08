@@ -1,3 +1,6 @@
+# Copyright 2026 Ahmed Arif
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 add_library(it8613sensor MODULE it8613sensor.c it8613sensor.rc)
 set_module_type(it8613sensor kernelmodedriver)
 target_link_libraries(it8613sensor wdmguid)

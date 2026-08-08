@@ -1,5 +1,6 @@
 ; PROJECT:     ReactOS LattePanda Mu system hive
-; LICENSE:     GPL-2.0-or-later
+; COPYRIGHT:   Copyright 2026 Ahmed Arif
+; LICENSE:     GPL-3.0-or-later
 ; PURPOSE:     LattePanda Mu platform drivers
 
 [AddReg]
