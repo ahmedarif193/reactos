@@ -22,10 +22,14 @@ HKCU,"Keyboard Layout\Toggle","Layout Hotkey",0x00000000,"2"
 HKLM,"SYSTEM\CurrentControlSet\Services\Cdrom","Start",0x00010001,0x00000000
 
 ; NOTE: Unlike livecd.inf, we do NOT clear BootExecute (allow autochk on real disk)
-; Use mini setup to go straight to desktop without reboot (like livecd)
+; Use mini setup to go straight to desktop without reboot
 HKLM,"SYSTEM\Setup","CmdLine",0x00020000,"setup -mini"
 ; NOTE: Unlike livecd.inf, we do NOT clear PagingFiles (allow paging on disk)
 ; NOTE: Unlike livecd.inf, we do NOT disable lock/logoff policies
+
+; Installed-system directories normally initialized by second-stage setup
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion","ProgramFilesDir",0x00000000,"C:\Program Files"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion","CommonFilesDir",0x00000000,"C:\Program Files\Common Files"
 
 ; User Profile List
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList",,0x00000012
