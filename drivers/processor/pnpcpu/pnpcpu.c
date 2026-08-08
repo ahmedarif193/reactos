@@ -24,6 +24,7 @@ static PPNPCPU_DEVICE_EXTENSION PnpcpuProcessors[MAXIMUM_PROCESSORS];
 #define PNPCPU_INTEL_HWP_REQUEST_MSR 0x774
 #define PNPCPU_INTEL_HWP_ENABLE 0x1
 #define PNPCPU_INTEL_HWP_REQUEST_PERF_MASK 0xFFFFFFULL
+#define PNPCPU_INTEL_HWP_REQUEST_EPP_MASK (0xFFULL << 24)
 #define PNPCPU_INTEL_HWP_REQUEST_PACKAGE_CONTROL (1ULL << 42)
 
 #if defined(__clang__) || defined(__GNUC__)
@@ -635,6 +636,7 @@ PnpcpuQueryProcessorFeatures(
     DeviceExtension->MonitorMwaitSupported = FALSE;
     DeviceExtension->IntelEstSupported = FALSE;
     DeviceExtension->IntelHwpSupported = FALSE;
+    DeviceExtension->IntelHwpEppSupported = FALSE;
     DeviceExtension->MwaitSubstates = 0;
     DeviceExtension->HwpHighest = 0;
     DeviceExtension->HwpLowest = 0;
@@ -659,6 +661,7 @@ PnpcpuQueryProcessorFeatures(
         {
             __cpuid(Registers, 6);
             DeviceExtension->IntelHwpSupported = (Registers[0] & (1 << 7)) != 0;
+            DeviceExtension->IntelHwpEppSupported = (Registers[0] & (1 << 10)) != 0;
         }
     }
     if (DeviceExtension->ProcessorNumberValid)
@@ -673,7 +676,7 @@ PnpcpuEnableHwpOnCurrentProcessor(VOID)
 
     Enable = __readmsr(PNPCPU_INTEL_PM_ENABLE_MSR);
     if ((Enable & PNPCPU_INTEL_HWP_ENABLE) == 0)
-        __writemsr(PNPCPU_INTEL_PM_ENABLE_MSR, PNPCPU_INTEL_HWP_ENABLE);
+        __writemsr(PNPCPU_INTEL_PM_ENABLE_MSR, Enable | PNPCPU_INTEL_HWP_ENABLE);
     return (__readmsr(PNPCPU_INTEL_PM_ENABLE_MSR) & PNPCPU_INTEL_HWP_ENABLE) != 0;
 }
 
@@ -716,6 +719,7 @@ PnpcpuInitializeHwpPerformance(
     if (DeviceExtension->HwpHighest == 0 || DeviceExtension->HwpLowest > DeviceExtension->HwpHighest)
     {
         DeviceExtension->IntelHwpSupported = FALSE;
+        DeviceExtension->IntelHwpEppSupported = FALSE;
         DeviceExtension->HwpHighest = 0;
         DeviceExtension->HwpLowest = 0;
         return;
@@ -1128,6 +1132,44 @@ PnpcpuSetPerfLevel(
 }
 
 static
+NTSTATUS
+NTAPI
+PnpcpuPowerSettingCallback(
+    _In_ LPCGUID SettingGuid,
+    _In_reads_bytes_(ValueLength) PVOID Value,
+    _In_ ULONG ValueLength,
+    _Inout_opt_ PVOID Context)
+{
+    PPNPCPU_DEVICE_EXTENSION DeviceExtension = Context;
+
+    if (!DeviceExtension || !IsEqualGUIDAligned(SettingGuid, &GUID_PROCESSOR_PERF_ENERGY_PERFORMANCE_PREFERENCE))
+        return STATUS_INVALID_PARAMETER;
+    if (ValueLength != sizeof(ULONG) || !Value || *(PULONG)Value > 100)
+        return STATUS_INVALID_PARAMETER;
+
+#if defined(_M_IX86) || defined(_M_AMD64)
+    if (DeviceExtension->PerfMode == PNPCPU_PERF_HWP && DeviceExtension->IntelHwpEppSupported && DeviceExtension->ProcessorNumberValid && DeviceExtension->ProcessorNumber < sizeof(KAFFINITY) * 8 && !DeviceExtension->Removing)
+    {
+        ULONG EnergyPreference = *(PULONG)Value;
+        ULONG HardwarePreference = (EnergyPreference * 255) / 100;
+        KAFFINITY PreviousAffinity;
+        ULONGLONG Request;
+
+        PreviousAffinity = KeSetSystemAffinityThreadEx((KAFFINITY)1 << DeviceExtension->ProcessorNumber);
+        Request = __readmsr(PNPCPU_INTEL_HWP_REQUEST_MSR);
+        Request &= ~(PNPCPU_INTEL_HWP_REQUEST_EPP_MASK | PNPCPU_INTEL_HWP_REQUEST_PACKAGE_CONTROL);
+        Request |= (ULONGLONG)HardwarePreference << 24;
+        __writemsr(PNPCPU_INTEL_HWP_REQUEST_MSR, Request);
+        KeRevertToUserAffinityThreadEx(PreviousAffinity);
+        DPRINT1("PNPCPU: CPU %lu HWP EPP policy=%lu hardware=%lu\n", DeviceExtension->ProcessorNumber, EnergyPreference, HardwarePreference);
+        return STATUS_SUCCESS;
+    }
+#endif
+
+    return STATUS_NOT_SUPPORTED;
+}
+
+static
 VOID
 NTAPI
 PnpcpuThermalInterfaceReference(
@@ -1390,6 +1432,12 @@ PnpcpuRegisterPowerConfiguration(
         return Status;
     }
     DeviceExtension->PowerRegistered = TRUE;
+    if (DeviceExtension->PerfMode == PNPCPU_PERF_HWP && DeviceExtension->IntelHwpEppSupported)
+    {
+        Status = PoRegisterPowerSettingCallback(DeviceExtension->Self, &GUID_PROCESSOR_PERF_ENERGY_PERFORMANCE_PREFERENCE, PnpcpuPowerSettingCallback, DeviceExtension, &DeviceExtension->EnergyPreferenceHandle);
+        if (!NT_SUCCESS(Status))
+            DPRINT1("PNPCPU: CPU %lu HWP EPP registration failed, status 0x%08lx\n", DeviceExtension->ProcessorNumber, Status);
+    }
     DPRINT1("PNPCPU: P0 CPU %lu uid=%lu apic=%lu idle=%lu perf=%s/%lu registered SMP\n", DeviceExtension->ProcessorNumber, DeviceExtension->Uid, DeviceExtension->ApicId, DeviceExtension->IdleStateCount, DeviceExtension->PerfMode == PNPCPU_PERF_CPPC ? "CPPC" : (DeviceExtension->PerfMode == PNPCPU_PERF_PSS ? "PSS" : (DeviceExtension->PerfMode == PNPCPU_PERF_HWP ? "HWP" : "none")), DeviceExtension->PerfStateCount);
     return STATUS_SUCCESS;
 }
@@ -1404,6 +1452,13 @@ PnpcpuUnregisterPowerConfiguration(
     KAFFINITY PreviousAffinity;
     NTSTATUS Status;
 
+    if (DeviceExtension->EnergyPreferenceHandle)
+    {
+        Status = PoUnregisterPowerSettingCallback(DeviceExtension->EnergyPreferenceHandle);
+        if (!NT_SUCCESS(Status))
+            DPRINT1("PNPCPU: CPU %lu HWP EPP unregister failed, status 0x%08lx\n", DeviceExtension->ProcessorNumber, Status);
+        DeviceExtension->EnergyPreferenceHandle = NULL;
+    }
     if (!DeviceExtension->PowerRegistered || !DeviceExtension->ProcessorNumberValid)
         return;
     RtlZeroMemory(HandlerStorage, sizeof(HandlerStorage));
