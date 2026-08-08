@@ -13,6 +13,7 @@ add_library(compbatt MODULE
     compbatt.rc)
 
 set_module_type(compbatt kernelmodedriver)
+target_link_libraries(compbatt poguid)
 add_importlibs(compbatt ntoskrnl hal battc)
 add_pch(compbatt compbatt.h "${PCH_SKIP_SOURCE}")
 add_cd_file(TARGET compbatt DESTINATION reactos/system32/drivers FOR all)

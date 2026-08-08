@@ -13,6 +13,7 @@
 
 #include <wdm.h>
 #include <batclass.h>
+#include <ndk/pofuncs.h>
 
 /* DEFINES ********************************************************************/
 
