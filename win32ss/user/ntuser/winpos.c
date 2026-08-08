@@ -2182,7 +2182,6 @@ co_WinPosSetWindowPos(
                 if ( (Window->style & WS_CHILD) && (Parent) && !(Parent->style & WS_CLIPCHILDREN))
                 {
                    IntInvalidateWindows( Parent, DirtyRgn, RDW_ERASE | RDW_INVALIDATE);
-                   co_IntPaintWindows(Parent, RDW_NOCHILDREN, FALSE);
                 }
                 IntInvalidateWindows(Window, DirtyRgn, RDW_ERASE | RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN);
              }

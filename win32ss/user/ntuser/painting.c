@@ -263,6 +263,7 @@ IntGetNCUpdateRgn(PWND Window, BOOL Validate)
    HRGN hRgnWindow;
    UINT RgnType, NcType;
    RECT update;
+   BOOL FullWindowUpdate = FALSE;
 
    if (Window->hrgnUpdate != NULL &&
        Window->hrgnUpdate != HRGN_WINDOW)
@@ -286,6 +287,13 @@ IntGetNCUpdateRgn(PWND Window, BOOL Validate)
       }
 
       NcType = IntGdiGetRgnBox(Window->hrgnUpdate, &update);
+      if (NcType == SIMPLEREGION)
+      {
+         RECT window;
+
+         IntGetWindowRect(Window, &window);
+         FullWindowUpdate = IntEqualRect(&window, &update);
+      }
 
       RgnType = NtGdiCombineRgn(hRgnNonClient, hRgnNonClient, hRgnWindow, RGN_DIFF);
       if ((RgnType != ERROR) && (RgnType != NULLREGION))
@@ -301,6 +309,8 @@ IntGetNCUpdateRgn(PWND Window, BOOL Validate)
       {
          GreDeleteObject(hRgnWindow);
          GreDeleteObject(hRgnNonClient);
+         if (FullWindowUpdate)
+            return HRGN_WINDOW;
          Window->state &= ~WNDS_UPDATEDIRTY;
          return NULL;
       }
@@ -324,16 +334,10 @@ IntGetNCUpdateRgn(PWND Window, BOOL Validate)
       }
 
       /* check if update rgn contains complete nonclient area */
-      if (NcType == SIMPLEREGION)
+      if (FullWindowUpdate)
       {
-         RECT window;
-         IntGetWindowRect( Window, &window );
-
-         if (IntEqualRect( &window, &update ))
-         {
-            GreDeleteObject(hRgnNonClient);
-            hRgnNonClient = HRGN_WINDOW;
-         }
+         GreDeleteObject(hRgnNonClient);
+         hRgnNonClient = HRGN_WINDOW;
       }
 
       GreDeleteObject(hRgnWindow);
