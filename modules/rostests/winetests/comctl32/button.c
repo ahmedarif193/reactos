@@ -892,6 +892,9 @@ static void test_button_messages(void)
         SendMessageA(hwnd, WM_APP, 0, 0); /* place a separator mark here */
         while (PeekMessageA(&msg, 0, 0, 0, PM_REMOVE)) DispatchMessageA(&msg);
         todo = button[i].style == BS_OWNERDRAW;
+#ifdef __REACTOS__
+        todo = FALSE;
+#endif
         ok_sequence(sequences, COMBINED_SEQ_INDEX, button[i].setstyle, "BM_SETSTYLE on a button", todo);
         check_cd_seq(cd_setstyle_type, "BM_SETSTYLE");
 

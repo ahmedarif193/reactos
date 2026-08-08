@@ -7763,10 +7763,15 @@ static LRESULT WINAPI listview_subclass_wmpaint_proc(HWND hwnd, UINT message, WP
 
 static void test_WM_PAINT(void)
 {
+    BOOL todo = TRUE;
     HWND hwnd, header;
     LVCOLUMNA column;
     WNDPROC oldproc;
     LRESULT lr;
+
+#ifdef __REACTOS__
+    todo = FALSE;
+#endif
 
     /* Test WM_PAINT with a subclassed header that paints without validating update regions */
     hwnd = create_listview_control(LVS_REPORT);
@@ -7786,7 +7791,7 @@ static void test_WM_PAINT(void)
     lr = SendMessageA(hwnd, WM_PAINT, 0, 0);
     ok(!lr, "WM_PAINT failed.\n");
     ok_sequence(sequences, LISTVIEW_SEQ_INDEX, subclassed_header_no_validate_wmpaint,
-                "Subclassed header WM_PAINT without validating update regions", TRUE);
+                "Subclassed header WM_PAINT without validating update regions", todo);
 
     DestroyWindow(hwnd);
 }

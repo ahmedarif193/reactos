@@ -68,7 +68,9 @@ static void test_create_tooltip(BOOL is_v6)
     exp_style = WS_POPUP | WS_CLIPSIBLINGS;
     if (!is_v6)
         exp_style |= WS_BORDER;
+#ifndef __REACTOS__
     todo_wine_if(is_v6)
+#endif
     ok(style == exp_style || broken(style == (exp_style | WS_BORDER)) /* XP */,
         "Unexpected window style %#lx.\n", style);
 

@@ -334,7 +334,10 @@ static void test_dtm_get_monthcal(void)
 
     flush_sequences(sequences, NUM_MSG_SEQUENCES);
 
-    todo_wine {
+#ifndef __REACTOS__
+    todo_wine
+#endif
+    {
         r = SendMessageA(hWnd, DTM_GETMONTHCAL, 0, 0);
         ok(r == 0, "Expected NULL(no child month calendar control), got %Id\n", r);
     }
@@ -502,7 +505,10 @@ static void test_dtm_set_range_swap_min_max(void)
     expect(1, r);
     r = SendMessageA(hWnd, DTM_GETRANGE, 0, (LPARAM)getSt);
     ok(r == (GDTR_MIN | GDTR_MAX), "Expected %x, not %x(GDTR_MIN) or %x(GDTR_MAX), got %Ix\n", (GDTR_MIN | GDTR_MAX), GDTR_MIN, GDTR_MAX, r);
-    todo_wine {
+#ifndef __REACTOS__
+    todo_wine
+#endif
+    {
         ok(compare_systime(&st[0], &getSt[0]) == 1 ||
            broken(compare_systime(&st[0], &getSt[1]) == 1), /* comctl32 version  <= 5.80 */
            "ST1 != ST2\n");
@@ -521,7 +527,10 @@ static void test_dtm_set_range_swap_min_max(void)
     /* the time part seems to not change after swapping the min and max values
     and doing DTM_SETSYSTEMTIME */
     expect_systime_date(&st[0], &getSt[0]);
-    todo_wine {
+#ifndef __REACTOS__
+    todo_wine
+#endif
+    {
         ok(compare_systime_time(&origSt, &getSt[0]) == 1 ||
            broken(compare_systime_time(&st[0], &getSt[0]) == 1), /* comctl32 version  <= 5.80 */
            "ST1.time != ST2.time\n");
@@ -539,7 +548,10 @@ static void test_dtm_set_range_swap_min_max(void)
     swapped*/
     r = SendMessageA(hWnd, DTM_GETRANGE, 0, (LPARAM)getSt);
     ok(r == (GDTR_MIN | GDTR_MAX), "Expected %x, not %x(GDTR_MIN) or %x(GDTR_MAX), got %Ix\n", (GDTR_MIN | GDTR_MAX), GDTR_MIN, GDTR_MAX, r);
-    todo_wine {
+#ifndef __REACTOS__
+    todo_wine
+#endif
+    {
         ok(compare_systime(&st[0], &getSt[1]) == 1 ||
            broken(compare_systime(&st[0], &getSt[0]) == 1), /* comctl32 version  <= 5.80 */
            "ST1 != ST2\n");
