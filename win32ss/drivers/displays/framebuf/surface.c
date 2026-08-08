@@ -111,6 +111,8 @@ DrvEnableSurface(
       /* Seed the shadow with the live framebuffer contents (one-time read). */
       memcpy(ppdev->ShadowPtr, ppdev->ScreenPtr, ShadowSize);
       ppdev->ShadowActive = TRUE;
+      ppdev->ShadowFlushValid = FALSE;
+      ppdev->ShadowPendingValid = FALSE;
       SurfaceBits = ppdev->ShadowPtr;
       flHooks = HOOK_BITBLT | HOOK_COPYBITS | HOOK_SYNCHRONIZE;
    }
@@ -124,6 +126,12 @@ DrvEnableSurface(
                                      SurfaceBits);
    if (hSurface == NULL)
    {
+      ppdev->ShadowActive = FALSE;
+      if (ppdev->ShadowPtr != NULL)
+      {
+         EngFreeMem(ppdev->ShadowPtr);
+         ppdev->ShadowPtr = NULL;
+      }
       return NULL;
    }
 
@@ -134,6 +142,12 @@ DrvEnableSurface(
    if (!EngAssociateSurface(hSurface, ppdev->hDevEng, flHooks))
    {
       EngDeleteSurface(hSurface);
+      ppdev->ShadowActive = FALSE;
+      if (ppdev->ShadowPtr != NULL)
+      {
+         EngFreeMem(ppdev->ShadowPtr);
+         ppdev->ShadowPtr = NULL;
+      }
       return NULL;
    }
 
@@ -164,6 +178,8 @@ DrvDisableSurface(
    ppdev->hSurfEng = NULL;
 
    ppdev->ShadowActive = FALSE;
+   ppdev->ShadowFlushValid = FALSE;
+   ppdev->ShadowPendingValid = FALSE;
    if (ppdev->ShadowPtr != NULL)
    {
       EngFreeMem(ppdev->ShadowPtr);

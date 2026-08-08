@@ -320,7 +320,7 @@ GetDpiForMonitorInternal(
     MonitorInfo.cbSize = sizeof(MonitorInfo);
     if (!GetMonitorInfoW(monitor, (LPMONITORINFO)&MonitorInfo))
     {
-        SetLastError(ERROR_INVALID_MONITOR_HANDLE);
+        SetLastError(ERROR_INVALID_HANDLE);
         return FALSE;
     }
 
@@ -373,7 +373,7 @@ IsValidDpiAwarenessContext(
     _In_ DPI_AWARENESS_CONTEXT context)
 {
     UINT SystemDpi = GetDpiForSystem();
-    return IsValidNtUserDpiContext(GetNtUserDpiContext(context, SystemDpi), 0);
+    return IsValidNtUserDpiContext(GetNtUserDpiContext(context, SystemDpi), SystemDpi);
 }
 
 static INT
