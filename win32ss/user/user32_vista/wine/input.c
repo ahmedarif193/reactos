@@ -32,7 +32,6 @@
 #include <wingdi.h>
 #include <winuser.h>
 #include <winbase.h>
-DECLARE_HANDLE(HSYNTHETICPOINTERDEVICE);
 typedef enum
 {
     POINTER_FEEDBACK_DEFAULT = 1,
