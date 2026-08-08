@@ -23,9 +23,6 @@
 #include <winternl.h>
 #include <winspool.h>
 #include <ddk/d3dkmthk.h>
-#ifdef __REACTOS__
-#include "d3dkmthk_compat.h"
-#endif
 
 #ifndef W32KAPI
 # if defined(_WIN32U_) || defined(WINE_UNIX_LIB)
