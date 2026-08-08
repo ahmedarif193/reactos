@@ -1,0 +1,27 @@
+HKCR
+{
+    NoRemove CLSID
+    {
+        ForceRemove '{272BFBFB-50D0-4078-B600-1E959C301337}' = s 'Wine GStreamer AVI Splitter'
+        {
+            InprocServer32 = s '%MODULE%'
+            {
+                val ThreadingModel = s 'Both'
+            }
+        }
+        ForceRemove '{A8EDBF98-2442-42C5-85A1-AB05A580DF53}' = s 'Wine GStreamer MPEG-I Stream Splitter'
+        {
+            InprocServer32 = s '%MODULE%'
+            {
+                val ThreadingModel = s 'Both'
+            }
+        }
+        ForceRemove '{3F839EC7-5EA6-49E1-80C2-1EA300F8B0E0}' = s 'Wine GStreamer Wave Parser'
+        {
+            InprocServer32 = s '%MODULE%'
+            {
+                val ThreadingModel = s 'Both'
+            }
+        }
+    }
+}
