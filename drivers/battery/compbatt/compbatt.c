@@ -18,6 +18,25 @@ ULONG CompBattDebug;
 
 /* FUNCTIONS ******************************************************************/
 
+static VOID
+CompBattNotifyPowerSourceChange(
+    _In_ ULONG PowerState)
+{
+    UCHAR Buffer[FIELD_OFFSET(SET_POWER_SETTING_VALUE, Data) + sizeof(ULONG)];
+    PSET_POWER_SETTING_VALUE Setting = (PSET_POWER_SETTING_VALUE)Buffer;
+    ULONG PowerSource = (PowerState & BATTERY_POWER_ON_LINE) ? PoAc : PoDc;
+    NTSTATUS Status;
+
+    Setting->Version = POWER_SETTING_VALUE_VERSION;
+    Setting->Guid = GUID_ACDC_POWER_SOURCE;
+    Setting->PowerCondition = (SYSTEM_POWER_CONDITION)PowerSource;
+    Setting->DataLength = sizeof(PowerSource);
+    RtlCopyMemory(Setting->Data, &PowerSource, sizeof(PowerSource));
+    Status = ZwPowerInformation(SetPowerSettingValue, Setting, sizeof(Buffer), NULL, 0);
+    if (!NT_SUCCESS(Status))
+        DPRINT1("CompBatt: Failed to notify power-source change, status 0x%08lx\n", Status);
+}
+
 NTSTATUS
 NTAPI
 CompBattOpenClose(
@@ -289,6 +308,11 @@ CompBattMonitorIrpCompleteWorker(
                 Status = CompBattQueryStatus(DeviceExtension,
                                              DeviceExtension->Tag,
                                              &BatteryStatus);
+                if (NT_SUCCESS(Status) &&
+                    ((PrevPowerState ^ BatteryStatus.PowerState) & BATTERY_POWER_ON_LINE))
+                {
+                    CompBattNotifyPowerSourceChange(BatteryStatus.PowerState);
+                }
 
                 /* Print out the current battery status of the composite to the debugger */
                 if ((CompBattDebug & COMPBATT_DEBUG_INFO) && NT_SUCCESS(Status))
