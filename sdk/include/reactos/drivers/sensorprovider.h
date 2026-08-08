@@ -1,6 +1,7 @@
 /*
  * PROJECT:         ReactOS sensor provider interface
- * LICENSE:         GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * COPYRIGHT:       Copyright 2026 Ahmed Arif
+ * LICENSE:         GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  */
 
 #pragma once
