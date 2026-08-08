@@ -137,6 +137,129 @@ MouseSafetyOnDrawEnd(
 
 /* SOFTWARE MOUSE POINTER IMPLEMENTATION **************************************/
 
+/* A bitmap-backed primary can receive the complete software sprite before its
+ * synchronization hook publishes the dirty pixels. */
+static BOOL
+IntCanBatchMousePointer(
+    _In_ PDEVOBJ *ppdev,
+    _In_ SURFOBJ *pso)
+{
+    SURFACE *psurf;
+
+    psurf = CONTAINING_RECORD(pso, SURFACE, SurfObj);
+
+    return ppdev->pSurface != NULL &&
+           pso == &ppdev->pSurface->SurfObj &&
+           pso->hdev == (HDEV)ppdev &&
+           pso->iType == STYPE_BITMAP &&
+           pso->pvScan0 != NULL &&
+           (psurf->flags & (HOOK_BITBLT | HOOK_SYNCHRONIZE)) == (HOOK_BITBLT | HOOK_SYNCHRONIZE) &&
+           GDIDEVFUNCS(pso).SynchronizeSurface != NULL;
+}
+
+static BOOL
+IntGetMousePointerRect(
+    _In_ SURFOBJ *pso,
+    _In_ LONG x,
+    _In_ LONG y,
+    _In_ const POINTL *HotSpot,
+    _In_ const SIZEL *Size,
+    _Out_ RECTL *prcl)
+{
+    prcl->left = max(x - HotSpot->x, 0);
+    prcl->top = max(y - HotSpot->y, 0);
+    prcl->right = min(x - HotSpot->x + Size->cx, pso->sizlBitmap.cx);
+    prcl->bottom = min(y - HotSpot->y + Size->cy, pso->sizlBitmap.cy);
+
+    return prcl->left < prcl->right && prcl->top < prcl->bottom;
+}
+
+static VOID
+IntSynchronizeMousePointerRects(
+    _In_ SURFOBJ *pso,
+    _In_ const RECTL *prclOld,
+    _In_ BOOL bOld,
+    _In_ const RECTL *prclNew,
+    _In_ BOOL bNew,
+    _In_ FLONG fl)
+{
+    RECTL rcl;
+    ULONGLONG UnionArea, SeparateArea;
+
+    if (bOld && bNew)
+    {
+        RECTL_bUnionRect(&rcl, prclOld, prclNew);
+        UnionArea = (ULONGLONG)(rcl.right - rcl.left) * (rcl.bottom - rcl.top);
+        SeparateArea = (ULONGLONG)(prclOld->right - prclOld->left) * (prclOld->bottom - prclOld->top) + (ULONGLONG)(prclNew->right - prclNew->left) * (prclNew->bottom - prclNew->top);
+
+        /* Keep ordinary motion atomic without turning a teleport into a
+         * near-full-screen framebuffer copy. */
+        if (UnionArea <= SeparateArea * 3)
+        {
+            GDIDEVFUNCS(pso).SynchronizeSurface(pso, &rcl, fl);
+            return;
+        }
+    }
+
+    if (bOld)
+    {
+        rcl = *prclOld;
+        GDIDEVFUNCS(pso).SynchronizeSurface(pso, &rcl, fl);
+    }
+    if (bNew)
+    {
+        rcl = *prclNew;
+        GDIDEVFUNCS(pso).SynchronizeSurface(pso, &rcl, fl);
+    }
+}
+
+static VOID
+IntBeginMousePointerBatch(
+    _Inout_ PDEVOBJ *ppdev,
+    _Inout_ SURFOBJ *pso,
+    _In_ const RECTL *prclOld,
+    _In_ BOOL bOld,
+    _In_ const RECTL *prclNew,
+    _In_ BOOL bNew)
+{
+    IntSynchronizeMousePointerRects(pso, prclOld, bOld, prclNew, bNew, 0);
+    ppdev->Pointer.psoCursorBatch = pso;
+}
+
+static VOID
+IntEndMousePointerBatch(
+    _Inout_ PDEVOBJ *ppdev,
+    _Inout_ SURFOBJ *pso,
+    _In_ const RECTL *prclOld,
+    _In_ BOOL bOld,
+    _In_ const RECTL *prclNew,
+    _In_ BOOL bNew)
+{
+    ppdev->Pointer.psoCursorBatch = NULL;
+    IntSynchronizeMousePointerRects(pso, prclOld, bOld, prclNew, bNew, DSS_FLUSH_EVENT);
+}
+
+static BOOL
+IntMousePointerBitBlt(
+    _In_ PDEVOBJ *ppdev,
+    _Inout_ SURFOBJ *psoTrg,
+    _In_opt_ SURFOBJ *psoSrc,
+    _In_opt_ SURFOBJ *psoMask,
+    _In_opt_ CLIPOBJ *pco,
+    _In_opt_ XLATEOBJ *pxlo,
+    _In_ RECTL *prclTrg,
+    _In_opt_ POINTL *pptlSrc,
+    _In_opt_ POINTL *pptlMask,
+    _In_opt_ BRUSHOBJ *pbo,
+    _In_opt_ POINTL *pptlBrush,
+    _In_ ROP4 rop4)
+{
+    if (ppdev->Pointer.psoCursorBatch == psoTrg || ppdev->Pointer.psoCursorBatch == psoSrc)
+        return EngBitBlt(psoTrg, psoSrc, psoMask, pco, pxlo, prclTrg, pptlSrc, pptlMask, pbo, pptlBrush, rop4);
+
+    return IntEngBitBlt(psoTrg, psoSrc, psoMask, pco, pxlo, prclTrg, pptlSrc, pptlMask, pbo, pptlBrush, rop4);
+}
+
 VOID
 NTAPI
 IntHideMousePointer(
@@ -178,17 +301,7 @@ IntHideMousePointer(
     ptlSave.x = rclDest.left - pt.x;
     ptlSave.y = rclDest.top - pt.y;
 
-    IntEngBitBlt(psoDest,
-                 &pgp->psurfSave->SurfObj,
-                 NULL,
-                 NULL,
-                 NULL,
-                 &rclDest,
-                 &ptlSave,
-                 &ptlSave,
-                 NULL,
-                 NULL,
-                 ROP4_FROM_INDEX(R3_OPINDEX_SRCCOPY));
+    IntMousePointerBitBlt(ppdev, psoDest, &pgp->psurfSave->SurfObj, NULL, NULL, NULL, &rclDest, &ptlSave, &ptlSave, NULL, NULL, ROP4_FROM_INDEX(R3_OPINDEX_SRCCOPY));
 }
 
 VOID
@@ -233,46 +346,15 @@ IntShowMousePointer(
     rclPointer.bottom = min(pgp->Size.cy, psoDest->sizlBitmap.cy - pt.y);
 
     /* Copy the pixels under the cursor to temporary surface. */
-    IntEngBitBlt(&pgp->psurfSave->SurfObj,
-                 psoDest,
-                 NULL,
-                 NULL,
-                 NULL,
-                 &rclPointer,
-                 (POINTL*)&rclSurf,
-                 NULL,
-                 NULL,
-                 NULL,
-                 ROP4_FROM_INDEX(R3_OPINDEX_SRCCOPY));
+    IntMousePointerBitBlt(ppdev, &pgp->psurfSave->SurfObj, psoDest, NULL, NULL, NULL, &rclPointer, (POINTL*)&rclSurf, NULL, NULL, NULL, ROP4_FROM_INDEX(R3_OPINDEX_SRCCOPY));
 
     /* Blt the pointer on the screen. */
     if (pgp->psurfColor)
     {
         if(!(pgp->flags & SPS_ALPHA))
         {
-            IntEngBitBlt(psoDest,
-                         &pgp->psurfMask->SurfObj,
-                         NULL,
-                         NULL,
-                         NULL,
-                         &rclSurf,
-                         (POINTL*)&rclPointer,
-                         NULL,
-                         NULL,
-                         NULL,
-                         ROP4_SRCAND);
-
-            IntEngBitBlt(psoDest,
-                         &pgp->psurfColor->SurfObj,
-                         NULL,
-                         NULL,
-                         NULL,
-                         &rclSurf,
-                         (POINTL*)&rclPointer,
-                         NULL,
-                         NULL,
-                         NULL,
-                         ROP4_SRCINVERT);
+            IntMousePointerBitBlt(ppdev, psoDest, &pgp->psurfMask->SurfObj, NULL, NULL, NULL, &rclSurf, (POINTL*)&rclPointer, NULL, NULL, NULL, ROP4_SRCAND);
+            IntMousePointerBitBlt(ppdev, psoDest, &pgp->psurfColor->SurfObj, NULL, NULL, NULL, &rclSurf, (POINTL*)&rclPointer, NULL, NULL, NULL, ROP4_SRCINVERT);
          }
          else
          {
@@ -282,43 +364,20 @@ IntShowMousePointer(
                 &gpalRGB,
                 ppdev->ppalSurf,
                 0, 0, 0);
-            IntEngAlphaBlend(psoDest,
-                             &pgp->psurfColor->SurfObj,
-                             NULL,
-                             &exlo.xlo,
-                             &rclSurf,
-                             &rclPointer,
-                             &blendobj);
+            if (pgp->psoCursorBatch == psoDest)
+                EngAlphaBlend(psoDest, &pgp->psurfColor->SurfObj, NULL, &exlo.xlo, &rclSurf, &rclPointer, &blendobj);
+            else
+                IntEngAlphaBlend(psoDest, &pgp->psurfColor->SurfObj, NULL, &exlo.xlo, &rclSurf, &rclPointer, &blendobj);
             EXLATEOBJ_vCleanup(&exlo);
         }
     }
     else
     {
-        IntEngBitBlt(psoDest,
-                     &pgp->psurfMask->SurfObj,
-                     NULL,
-                     NULL,
-                     NULL,
-                     &rclSurf,
-                     (POINTL*)&rclPointer,
-                     NULL,
-                     NULL,
-                     NULL,
-                     ROP4_FROM_INDEX(R3_OPINDEX_SRCAND));
+        IntMousePointerBitBlt(ppdev, psoDest, &pgp->psurfMask->SurfObj, NULL, NULL, NULL, &rclSurf, (POINTL*)&rclPointer, NULL, NULL, NULL, ROP4_FROM_INDEX(R3_OPINDEX_SRCAND));
 
         rclPointer.top += pgp->Size.cy;
 
-        IntEngBitBlt(psoDest,
-                     &pgp->psurfMask->SurfObj,
-                     NULL,
-                     NULL,
-                     NULL,
-                     &rclSurf,
-                     (POINTL*)&rclPointer,
-                     NULL,
-                     NULL,
-                     NULL,
-                     ROP4_FROM_INDEX(R3_OPINDEX_SRCINVERT));
+        IntMousePointerBitBlt(ppdev, psoDest, &pgp->psurfMask->SurfObj, NULL, NULL, NULL, &rclSurf, (POINTL*)&rclPointer, NULL, NULL, NULL, ROP4_FROM_INDEX(R3_OPINDEX_SRCINVERT));
     }
 }
 
@@ -345,7 +404,10 @@ EngSetPointerShape(
     HBITMAP hbmSave = NULL, hbmColor = NULL, hbmMask = NULL;
     PSURFACE psurfSave = NULL, psurfColor = NULL, psurfMask = NULL;
     RECTL rectl;
+    RECTL rclOld = {0}, rclNew = {0};
+    POINTL NewHotSpot = {xHot, yHot};
     SIZEL sizel = {0, 0};
+    BOOL bOld, bNew, bBatch;
 
     ASSERT(pso);
 
@@ -490,6 +552,12 @@ EngSetPointerShape(
         if (ppal) PALETTE_ShareUnlockPalette(ppal);
     }
 
+    bOld = pgp->Enabled && pgp->psurfSave != NULL && IntGetMousePointerRect(pso, ppdev->ptlPointer.x, ppdev->ptlPointer.y, &pgp->HotSpot, &pgp->Size, &rclOld);
+    bNew = x != -1 && (psoColor != NULL || psoMask != NULL) && IntGetMousePointerRect(pso, x, y, &NewHotSpot, &sizel, &rclNew);
+    bBatch = (bOld || bNew) && IntCanBatchMousePointer(ppdev, pso);
+    if (bBatch)
+        IntBeginMousePointerBatch(ppdev, pso, &rclOld, bOld, &rclNew, bNew);
+
     /* Hide mouse pointer */
     IntHideMousePointer(ppdev, pso);
 
@@ -520,6 +588,9 @@ EngSetPointerShape(
     /* See if we are being asked to hide the pointer. */
     if (psoMask == NULL && psoColor == NULL)
     {
+        if (bBatch)
+            IntEndMousePointerBatch(ppdev, pso, &rclOld, bOld, &rclNew, bNew);
+
         /* We're done */
         return SPS_ACCEPT_NOEXCLUDE;
     }
@@ -553,6 +624,9 @@ EngSetPointerShape(
         prcl->left = prcl->top = prcl->right = prcl->bottom = -1;
     }
 
+    if (bBatch)
+        IntEndMousePointerBatch(ppdev, pso, &rclOld, bOld, &rclNew, bNew);
+
     return SPS_ACCEPT_NOEXCLUDE;
 
 failure:
@@ -580,6 +654,8 @@ EngMovePointer(
 {
     PDEVOBJ *ppdev;
     GDIPOINTER *pgp;
+    RECTL rclOld = {0}, rclNew = {0};
+    BOOL bOld, bNew, bBatch;
 
     ASSERT(pso);
 
@@ -587,6 +663,13 @@ EngMovePointer(
     ASSERT(ppdev);
 
     pgp = &ppdev->Pointer;
+
+    bOld = pgp->Enabled && pgp->psurfSave != NULL && IntGetMousePointerRect(pso, ppdev->ptlPointer.x, ppdev->ptlPointer.y, &pgp->HotSpot, &pgp->Size, &rclOld);
+    bNew = x != -1 && pgp->psurfSave != NULL && IntGetMousePointerRect(pso, x, y, &pgp->HotSpot, &pgp->Size, &rclNew);
+    bBatch = (bOld || bNew) && IntCanBatchMousePointer(ppdev, pso);
+
+    if (bBatch)
+        IntBeginMousePointerBatch(ppdev, pso, &rclOld, bOld, &rclNew, bNew);
 
     IntHideMousePointer(ppdev, pso);
 
@@ -608,6 +691,9 @@ EngMovePointer(
     {
         prcl->left = prcl->top = prcl->right = prcl->bottom = -1;
     }
+
+    if (bBatch)
+        IntEndMousePointerBatch(ppdev, pso, &rclOld, bOld, &rclNew, bNew);
 }
 
 ULONG

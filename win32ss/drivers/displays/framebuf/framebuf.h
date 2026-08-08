@@ -47,6 +47,11 @@ typedef struct _PDEV
    PVOID ScreenPtr;
    PUCHAR ShadowPtr;
    BOOL ShadowActive;
+   RECTL ShadowFlushRect;
+   RECTL ShadowPendingRect;
+   BOOL ShadowFlushValid;
+   BOOL ShadowPendingValid;
+   BOOL ShadowFlushStarted;
    HPALETTE DefaultPalette;
    PALETTEENTRY *PaletteEntries;
 

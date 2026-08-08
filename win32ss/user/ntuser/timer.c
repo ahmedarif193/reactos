@@ -521,6 +521,10 @@ ProcessTimers(VOID)
   TimeLast = Time;
 
   TimerLeave();
+
+  /* Service display drivers that requested GDI's periodic synchronization
+   * callback. Keep this outside the timer and USER locks. */
+  SynchronizeDriver(GCAPS2_SYNCTIMER);
   TRACE("TimerCount = %d\n", TimerCount);
 }
 

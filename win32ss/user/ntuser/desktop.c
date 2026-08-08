@@ -3442,6 +3442,7 @@ IntSetThreadDesktop(IN HDESK hDesktop,
         else
         {
             RtlZeroMemory(pctiNew, sizeof(CLIENTTHREADINFO));
+            pctiNew->timeLastRead = EngGetTickCount32();
             pci->fsHooks = pti->fsHooks;
             pci->dwTIFlags = pti->TIF_flags;
         }
