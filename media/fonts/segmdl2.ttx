@@ -1,0 +1,427 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SPDX-License-Identifier: GPL-3.0-or-later
+  Copyright (C) 2026 Ahmed ARIF
+
+  This TTX file is the preferred source form for the ReactOS caption-symbol
+  replacement font. Compile it with fontTools ttx to produce segmdl2.ttf.
+-->
+<ttFont sfntVersion="\x00\x01\x00\x00" ttLibVersion="4.63">
+
+  <GlyphOrder>
+    <!-- The 'id' attribute is only for humans; it is ignored when parsed. -->
+    <GlyphID id="0" name=".notdef"/>
+    <GlyphID id="1" name="space"/>
+    <GlyphID id="2" name="minimize"/>
+    <GlyphID id="3" name="maximize"/>
+    <GlyphID id="4" name="restore"/>
+    <GlyphID id="5" name="close"/>
+    <GlyphID id="6" name="minimizeHC"/>
+    <GlyphID id="7" name="maximizeHC"/>
+    <GlyphID id="8" name="restoreHC"/>
+    <GlyphID id="9" name="closeHC"/>
+  </GlyphOrder>
+
+  <head>
+    <!-- Most of this table will be recalculated by the compiler -->
+    <tableVersion value="1.0"/>
+    <fontRevision value="1.0"/>
+    <checkSumAdjustment value="0x4f8c81a1"/>
+    <magicNumber value="0x5f0f3cf5"/>
+    <flags value="00000000 00000011"/>
+    <unitsPerEm value="1000"/>
+    <created value="Wed Aug  5 16:13:47 2026"/>
+    <modified value="Wed Aug  5 16:13:47 2026"/>
+    <xMin value="100"/>
+    <yMin value="80"/>
+    <xMax value="900"/>
+    <yMax value="892"/>
+    <macStyle value="00000000 00000000"/>
+    <lowestRecPPEM value="3"/>
+    <fontDirectionHint value="2"/>
+    <indexToLocFormat value="0"/>
+    <glyphDataFormat value="0"/>
+  </head>
+
+  <hhea>
+    <tableVersion value="0x00010000"/>
+    <ascent value="1000"/>
+    <descent value="-100"/>
+    <lineGap value="0"/>
+    <advanceWidthMax value="1000"/>
+    <minLeftSideBearing value="100"/>
+    <minRightSideBearing value="100"/>
+    <xMaxExtent value="900"/>
+    <caretSlopeRise value="1"/>
+    <caretSlopeRun value="0"/>
+    <caretOffset value="0"/>
+    <reserved0 value="0"/>
+    <reserved1 value="0"/>
+    <reserved2 value="0"/>
+    <reserved3 value="0"/>
+    <metricDataFormat value="0"/>
+    <numberOfHMetrics value="1"/>
+  </hhea>
+
+  <maxp>
+    <!-- Most of this table will be recalculated by the compiler -->
+    <tableVersion value="0x10000"/>
+    <numGlyphs value="10"/>
+    <maxPoints value="15"/>
+    <maxContours value="3"/>
+    <maxCompositePoints value="0"/>
+    <maxCompositeContours value="0"/>
+    <maxZones value="2"/>
+    <maxTwilightPoints value="0"/>
+    <maxStorage value="0"/>
+    <maxFunctionDefs value="0"/>
+    <maxInstructionDefs value="0"/>
+    <maxStackElements value="0"/>
+    <maxSizeOfInstructions value="0"/>
+    <maxComponentElements value="0"/>
+    <maxComponentDepth value="0"/>
+  </maxp>
+
+  <OS_2>
+    <!-- The fields 'usFirstCharIndex' and 'usLastCharIndex'
+         will be recalculated by the compiler -->
+    <version value="3"/>
+    <xAvgCharWidth value="1000"/>
+    <usWeightClass value="400"/>
+    <usWidthClass value="5"/>
+    <fsType value="00000000 00000000"/>
+    <ySubscriptXSize value="0"/>
+    <ySubscriptYSize value="0"/>
+    <ySubscriptXOffset value="0"/>
+    <ySubscriptYOffset value="0"/>
+    <ySuperscriptXSize value="0"/>
+    <ySuperscriptYSize value="0"/>
+    <ySuperscriptXOffset value="0"/>
+    <ySuperscriptYOffset value="0"/>
+    <yStrikeoutSize value="0"/>
+    <yStrikeoutPosition value="0"/>
+    <sFamilyClass value="0"/>
+    <panose>
+      <bFamilyType value="0"/>
+      <bSerifStyle value="0"/>
+      <bWeight value="0"/>
+      <bProportion value="0"/>
+      <bContrast value="0"/>
+      <bStrokeVariation value="0"/>
+      <bArmStyle value="0"/>
+      <bLetterForm value="0"/>
+      <bMidline value="0"/>
+      <bXHeight value="0"/>
+    </panose>
+    <ulUnicodeRange1 value="00000000 00000000 00000000 00000001"/>
+    <ulUnicodeRange2 value="00010000 00000000 00000000 00000000"/>
+    <ulUnicodeRange3 value="00000000 00000000 00000000 00000000"/>
+    <ulUnicodeRange4 value="00000000 00000000 00000000 00000000"/>
+    <achVendID value="ROS "/>
+    <fsSelection value="00000000 00000000"/>
+    <usFirstCharIndex value="32"/>
+    <usLastCharIndex value="61231"/>
+    <sTypoAscender value="1000"/>
+    <sTypoDescender value="-100"/>
+    <sTypoLineGap value="0"/>
+    <usWinAscent value="1000"/>
+    <usWinDescent value="100"/>
+    <ulCodePageRange1 value="00000000 00000000 00000000 00000000"/>
+    <ulCodePageRange2 value="00000000 00000000 00000000 00000000"/>
+    <sxHeight value="0"/>
+    <sCapHeight value="0"/>
+    <usDefaultChar value="0"/>
+    <usBreakChar value="32"/>
+    <usMaxContext value="0"/>
+  </OS_2>
+
+  <hmtx>
+    <mtx name=".notdef" width="1000" lsb="0"/>
+    <mtx name="close" width="1000" lsb="108"/>
+    <mtx name="closeHC" width="1000" lsb="108"/>
+    <mtx name="maximize" width="1000" lsb="130"/>
+    <mtx name="maximizeHC" width="1000" lsb="130"/>
+    <mtx name="minimize" width="1000" lsb="100"/>
+    <mtx name="minimizeHC" width="1000" lsb="100"/>
+    <mtx name="restore" width="1000" lsb="100"/>
+    <mtx name="restoreHC" width="1000" lsb="100"/>
+    <mtx name="space" width="1000" lsb="0"/>
+  </hmtx>
+
+  <cmap>
+    <tableVersion version="0"/>
+    <cmap_format_4 platformID="0" platEncID="3" language="0">
+      <map code="0x20" name="space"/><!-- SPACE -->
+      <map code="0xe8bb" name="close"/><!-- ???? -->
+      <map code="0xe921" name="minimize"/><!-- ???? -->
+      <map code="0xe922" name="maximize"/><!-- ???? -->
+      <map code="0xe923" name="restore"/><!-- ???? -->
+      <map code="0xef2c" name="closeHC"/><!-- ???? -->
+      <map code="0xef2d" name="minimizeHC"/><!-- ???? -->
+      <map code="0xef2e" name="maximizeHC"/><!-- ???? -->
+      <map code="0xef2f" name="restoreHC"/><!-- ???? -->
+    </cmap_format_4>
+    <cmap_format_4 platformID="3" platEncID="1" language="0">
+      <map code="0x20" name="space"/><!-- SPACE -->
+      <map code="0xe8bb" name="close"/><!-- ???? -->
+      <map code="0xe921" name="minimize"/><!-- ???? -->
+      <map code="0xe922" name="maximize"/><!-- ???? -->
+      <map code="0xe923" name="restore"/><!-- ???? -->
+      <map code="0xef2c" name="closeHC"/><!-- ???? -->
+      <map code="0xef2d" name="minimizeHC"/><!-- ???? -->
+      <map code="0xef2e" name="maximizeHC"/><!-- ???? -->
+      <map code="0xef2f" name="restoreHC"/><!-- ???? -->
+    </cmap_format_4>
+  </cmap>
+
+  <loca>
+    <!-- The 'loca' table will be calculated by the compiler -->
+  </loca>
+
+  <glyf>
+
+    <!-- The xMin, yMin, xMax and yMax values
+         will be recalculated by the compiler. -->
+
+    <TTGlyph name=".notdef"/><!-- contains no outline data -->
+
+    <TTGlyph name="close" xMin="108" yMin="108" xMax="892" yMax="892">
+      <contour>
+        <pt x="108" y="172" on="1"/>
+        <pt x="828" y="892" on="1"/>
+        <pt x="892" y="828" on="1"/>
+        <pt x="172" y="108" on="1"/>
+      </contour>
+      <contour>
+        <pt x="172" y="892" on="1"/>
+        <pt x="892" y="172" on="1"/>
+        <pt x="828" y="108" on="1"/>
+        <pt x="108" y="828" on="1"/>
+      </contour>
+      <instructions/>
+    </TTGlyph>
+
+    <TTGlyph name="closeHC" xMin="108" yMin="108" xMax="892" yMax="892">
+      <contour>
+        <pt x="108" y="172" on="1"/>
+        <pt x="828" y="892" on="1"/>
+        <pt x="892" y="828" on="1"/>
+        <pt x="172" y="108" on="1"/>
+      </contour>
+      <contour>
+        <pt x="172" y="892" on="1"/>
+        <pt x="892" y="172" on="1"/>
+        <pt x="828" y="108" on="1"/>
+        <pt x="108" y="828" on="1"/>
+      </contour>
+      <instructions/>
+    </TTGlyph>
+
+    <TTGlyph name="maximize" xMin="130" yMin="110" xMax="870" yMax="850">
+      <contour>
+        <pt x="130" y="110" on="1"/>
+        <pt x="870" y="110" on="1"/>
+        <pt x="870" y="850" on="1"/>
+        <pt x="130" y="850" on="1"/>
+      </contour>
+      <contour>
+        <pt x="220" y="200" on="1"/>
+        <pt x="220" y="760" on="1"/>
+        <pt x="780" y="760" on="1"/>
+        <pt x="780" y="200" on="1"/>
+      </contour>
+      <instructions/>
+    </TTGlyph>
+
+    <TTGlyph name="maximizeHC" xMin="130" yMin="110" xMax="870" yMax="850">
+      <contour>
+        <pt x="130" y="110" on="1"/>
+        <pt x="870" y="110" on="1"/>
+        <pt x="870" y="850" on="1"/>
+        <pt x="130" y="850" on="1"/>
+      </contour>
+      <contour>
+        <pt x="220" y="200" on="1"/>
+        <pt x="220" y="760" on="1"/>
+        <pt x="780" y="760" on="1"/>
+        <pt x="780" y="200" on="1"/>
+      </contour>
+      <instructions/>
+    </TTGlyph>
+
+    <TTGlyph name="minimize" xMin="100" yMin="415" xMax="900" yMax="505">
+      <contour>
+        <pt x="100" y="415" on="1"/>
+        <pt x="900" y="415" on="1"/>
+        <pt x="900" y="505" on="1"/>
+        <pt x="100" y="505" on="1"/>
+      </contour>
+      <instructions/>
+    </TTGlyph>
+
+    <TTGlyph name="minimizeHC" xMin="100" yMin="415" xMax="900" yMax="505">
+      <contour>
+        <pt x="100" y="415" on="1"/>
+        <pt x="900" y="415" on="1"/>
+        <pt x="900" y="505" on="1"/>
+        <pt x="100" y="505" on="1"/>
+      </contour>
+      <instructions/>
+    </TTGlyph>
+
+    <TTGlyph name="restore" xMin="100" yMin="80" xMax="900" yMax="880">
+      <contour>
+        <pt x="100" y="80" on="1"/>
+        <pt x="700" y="80" on="1"/>
+        <pt x="700" y="680" on="1"/>
+        <pt x="100" y="680" on="1"/>
+      </contour>
+      <contour>
+        <pt x="190" y="170" on="1"/>
+        <pt x="190" y="590" on="1"/>
+        <pt x="610" y="590" on="1"/>
+        <pt x="610" y="170" on="1"/>
+      </contour>
+      <contour>
+        <pt x="300" y="770" on="1"/>
+        <pt x="300" y="880" on="1"/>
+        <pt x="900" y="880" on="1"/>
+        <pt x="900" y="260" on="1"/>
+        <pt x="790" y="260" on="1"/>
+        <pt x="790" y="790" on="1"/>
+        <pt x="300" y="790" on="1"/>
+      </contour>
+      <instructions/>
+    </TTGlyph>
+
+    <TTGlyph name="restoreHC" xMin="100" yMin="80" xMax="900" yMax="880">
+      <contour>
+        <pt x="100" y="80" on="1"/>
+        <pt x="700" y="80" on="1"/>
+        <pt x="700" y="680" on="1"/>
+        <pt x="100" y="680" on="1"/>
+      </contour>
+      <contour>
+        <pt x="190" y="170" on="1"/>
+        <pt x="190" y="590" on="1"/>
+        <pt x="610" y="590" on="1"/>
+        <pt x="610" y="170" on="1"/>
+      </contour>
+      <contour>
+        <pt x="300" y="770" on="1"/>
+        <pt x="300" y="880" on="1"/>
+        <pt x="900" y="880" on="1"/>
+        <pt x="900" y="260" on="1"/>
+        <pt x="790" y="260" on="1"/>
+        <pt x="790" y="790" on="1"/>
+        <pt x="300" y="790" on="1"/>
+      </contour>
+      <instructions/>
+    </TTGlyph>
+
+    <TTGlyph name="space"/><!-- contains no outline data -->
+
+  </glyf>
+
+  <name>
+    <namerecord nameID="0" platformID="1" platEncID="0" langID="0x0" unicode="True">
+      Copyright (C) 2026 Ahmed ARIF
+    </namerecord>
+    <namerecord nameID="1" platformID="1" platEncID="0" langID="0x0" unicode="True">
+      Segoe MDL2 Assets
+    </namerecord>
+    <namerecord nameID="2" platformID="1" platEncID="0" langID="0x0" unicode="True">
+      Regular
+    </namerecord>
+    <namerecord nameID="3" platformID="1" platEncID="0" langID="0x0" unicode="True">
+      ReactOS Segoe MDL2 Assets Replacement 1.0
+    </namerecord>
+    <namerecord nameID="4" platformID="1" platEncID="0" langID="0x0" unicode="True">
+      Segoe MDL2 Assets
+    </namerecord>
+    <namerecord nameID="5" platformID="1" platEncID="0" langID="0x0" unicode="True">
+      Version 1.0
+    </namerecord>
+    <namerecord nameID="6" platformID="1" platEncID="0" langID="0x0" unicode="True">
+      SegoeMDL2Assets
+    </namerecord>
+    <namerecord nameID="8" platformID="1" platEncID="0" langID="0x0" unicode="True">
+      ReactOS Project
+    </namerecord>
+    <namerecord nameID="9" platformID="1" platEncID="0" langID="0x0" unicode="True">
+      Ahmed ARIF
+    </namerecord>
+    <namerecord nameID="13" platformID="1" platEncID="0" langID="0x0" unicode="True">
+      GNU General Public License version 3 or later
+    </namerecord>
+    <namerecord nameID="14" platformID="1" platEncID="0" langID="0x0" unicode="True">
+      https://www.gnu.org/licenses/gpl-3.0.html
+    </namerecord>
+    <namerecord nameID="0" platformID="3" platEncID="1" langID="0x409">
+      Copyright (C) 2026 Ahmed ARIF
+    </namerecord>
+    <namerecord nameID="1" platformID="3" platEncID="1" langID="0x409">
+      Segoe MDL2 Assets
+    </namerecord>
+    <namerecord nameID="2" platformID="3" platEncID="1" langID="0x409">
+      Regular
+    </namerecord>
+    <namerecord nameID="3" platformID="3" platEncID="1" langID="0x409">
+      ReactOS Segoe MDL2 Assets Replacement 1.0
+    </namerecord>
+    <namerecord nameID="4" platformID="3" platEncID="1" langID="0x409">
+      Segoe MDL2 Assets
+    </namerecord>
+    <namerecord nameID="5" platformID="3" platEncID="1" langID="0x409">
+      Version 1.0
+    </namerecord>
+    <namerecord nameID="6" platformID="3" platEncID="1" langID="0x409">
+      SegoeMDL2Assets
+    </namerecord>
+    <namerecord nameID="8" platformID="3" platEncID="1" langID="0x409">
+      ReactOS Project
+    </namerecord>
+    <namerecord nameID="9" platformID="3" platEncID="1" langID="0x409">
+      Ahmed ARIF
+    </namerecord>
+    <namerecord nameID="13" platformID="3" platEncID="1" langID="0x409">
+      GNU General Public License version 3 or later
+    </namerecord>
+    <namerecord nameID="14" platformID="3" platEncID="1" langID="0x409">
+      https://www.gnu.org/licenses/gpl-3.0.html
+    </namerecord>
+  </name>
+
+  <post>
+    <formatType value="2.0"/>
+    <italicAngle value="0.0"/>
+    <underlinePosition value="0"/>
+    <underlineThickness value="0"/>
+    <isFixedPitch value="0"/>
+    <minMemType42 value="0"/>
+    <maxMemType42 value="0"/>
+    <minMemType1 value="0"/>
+    <maxMemType1 value="0"/>
+    <psNames>
+      <!-- This file uses unique glyph names based on the information
+           found in the 'post' table. Since these names might not be unique,
+           we have to invent artificial names in case of clashes. In order to
+           be able to retain the original information, we need a name to
+           ps name mapping for those cases where they differ. That's what
+           you see below.
+            -->
+    </psNames>
+    <extraNames>
+      <!-- following are the name that are not taken from the standard Mac glyph order -->
+      <psName name="minimize"/>
+      <psName name="maximize"/>
+      <psName name="restore"/>
+      <psName name="close"/>
+      <psName name="minimizeHC"/>
+      <psName name="maximizeHC"/>
+      <psName name="restoreHC"/>
+      <psName name="closeHC"/>
+    </extraNames>
+  </post>
+
+</ttFont>
