@@ -894,6 +894,7 @@
 @ stub -version=0x600+ OpenPrivateNamespaceA
 @ stub -version=0x600+ OpenPrivateNamespaceW
 @ stdcall OpenProcess(long long long)
+@ stdcall -version=0x602+ OpenProcessToken(long long ptr) kernelbase.OpenProcessToken
 @ stdcall OpenProfileUserMapping()
 @ stdcall OpenSemaphoreA(long long str)
 @ stdcall OpenSemaphoreW(long long wstr)
@@ -1266,9 +1267,9 @@
 @ stdcall WinExec(str long)
 @ stdcall Wow64DisableWow64FsRedirection(ptr)
 @ stdcall Wow64EnableWow64FsRedirection(long)
-@ stub -version=0x600+ Wow64GetThreadContext
+@ stdcall -version=0x600+ Wow64GetThreadContext(ptr ptr) kernelbase.Wow64GetThreadContext
 @ stdcall Wow64RevertWow64FsRedirection(ptr)
-@ stub -version=0x600+ Wow64SetThreadContext
+@ stdcall -version=0x600+ Wow64SetThreadContext(ptr ptr) kernelbase.Wow64SetThreadContext
 @ stub -version=0x600+ Wow64SuspendThread
 @ stdcall WriteConsoleA(long ptr long ptr ptr)
 @ stdcall WriteConsoleInputA(long ptr long ptr)
