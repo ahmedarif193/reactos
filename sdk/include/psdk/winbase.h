@@ -2119,6 +2119,9 @@ GetPrivateProfileStructW(
 
 FARPROC WINAPI GetProcAddress(HINSTANCE,LPCSTR);
 BOOL WINAPI GetProcessAffinityMask(_In_ HANDLE, _Out_ PDWORD_PTR, _Out_ PDWORD_PTR);
+#if (_WIN32_WINNT >= 0x0600)
+WINBASEAPI BOOL WINAPI GetProcessDEPPolicy(_In_ HANDLE hProcess, _Out_ LPDWORD lpFlags, _Out_ PBOOL lpPermanent);
+#endif
 #if (_WIN32_WINNT >= 0x0502)
 BOOL WINAPI GetProcessHandleCount(_In_ HANDLE, _Out_ PDWORD);
 #endif
@@ -3088,6 +3091,9 @@ BOOL WINAPI SetNamedPipeHandleState(HANDLE,PDWORD,PDWORD,PDWORD);
 BOOL WINAPI SetPriorityClass(HANDLE,DWORD);
 BOOL WINAPI SetPrivateObjectSecurity(SECURITY_INFORMATION,PSECURITY_DESCRIPTOR,PSECURITY_DESCRIPTOR *,PGENERIC_MAPPING,HANDLE);
 BOOL WINAPI SetProcessAffinityMask(_In_ HANDLE, _In_ DWORD_PTR);
+#if (_WIN32_WINNT >= 0x0600)
+WINBASEAPI BOOL WINAPI SetProcessDEPPolicy(_In_ DWORD dwFlags);
+#endif
 BOOL WINAPI SetProcessPriorityBoost(_In_ HANDLE, _In_ BOOL);
 BOOL WINAPI SetProcessShutdownParameters(DWORD,DWORD);
 BOOL WINAPI SetProcessWorkingSetSize(_In_ HANDLE, _In_ SIZE_T, _In_ SIZE_T);
