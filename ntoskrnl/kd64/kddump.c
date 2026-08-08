@@ -1358,11 +1358,11 @@ NTSTATUS NTAPI KdpWriteCrashDump(VOID)
     Status = KdpCrashDumpState.Storage.Flush(KdpCrashDumpState.Storage.Context);
     if (NT_SUCCESS(Status))
     {
-        DbgPrint("\nKD: Memory dump complete.\n");
         if (NT_SUCCESS(LogStatus))
         {
             KdpDisplayCrashDumpProgress(100);
-            InbvDisplayString("\r\n");
+            DbgPrint("\nKD: Memory dump and crash boot log saved successfully.\n");
+            InbvDisplayString("\r\nCrash dump status: memory dump and boot log saved successfully.\r\n");
         }
         else
         {
