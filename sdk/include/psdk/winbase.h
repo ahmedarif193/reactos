@@ -3208,6 +3208,10 @@ VOID WINAPI WakeConditionVariable(PCONDITION_VARIABLE);
 VOID WINAPI WakeAllConditionVariable(PCONDITION_VARIABLE);
 #endif
 BOOL WINAPI WinLoadTrustProvider(GUID*);
+#if (_WIN32_WINNT >= 0x0600)
+BOOL WINAPI Wow64GetThreadContext(_In_ HANDLE, _Inout_ PWOW64_CONTEXT);
+BOOL WINAPI Wow64SetThreadContext(_In_ HANDLE, _In_ CONST WOW64_CONTEXT *);
+#endif
 BOOL WINAPI Wow64DisableWow64FsRedirection(PVOID*);
 BOOLEAN WINAPI Wow64EnableWow64FsRedirection(_In_ BOOLEAN);
 BOOL WINAPI Wow64RevertWow64FsRedirection(PVOID);
