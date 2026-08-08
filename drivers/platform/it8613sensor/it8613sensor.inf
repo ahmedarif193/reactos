@@ -1,0 +1,40 @@
+[Version]
+Signature = "$Windows NT$"
+Class = System
+ClassGuid = {4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider = %ReactOS%
+DriverVer = 08/08/2026,1.0.0.0
+
+[ControlFlags]
+ExcludeFromSelect = *
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[Manufacturer]
+%ReactOS% = ReactOS,NTamd64
+
+[ReactOS.NTamd64]
+%It8613Sensor.DeviceDesc% = It8613Sensor_Inst,DETECTED\it8613sensor
+
+[It8613Sensor_Inst.NT]
+CopyFiles = It8613Sensor_CopyFiles
+
+[It8613Sensor_CopyFiles]
+it8613sensor.sys
+
+[It8613Sensor_Inst.NT.Services]
+AddService = it8613sensor,0x00000002,It8613Sensor_Service
+
+[It8613Sensor_Service]
+DisplayName = %It8613Sensor.ServiceDesc%
+ServiceType = 1
+StartType = 1
+ErrorControl = 0
+ServiceBinary = %12%\it8613sensor.sys
+LoadOrderGroup = Extended Base
+
+[Strings]
+ReactOS = "ReactOS Project"
+It8613Sensor.DeviceDesc = "ITE IT8613E Hardware Monitor"
+It8613Sensor.ServiceDesc = "ReactOS ITE IT8613E Sensor Provider"
