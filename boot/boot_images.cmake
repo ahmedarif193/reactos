@@ -322,8 +322,7 @@ endif()
 ## ReactOSImg
 # Create the file list
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "")
-# Unlike the ISO path lists, the preinstall image importers treat bare entries as
-# in-image directories, so do not prepend the host-side empty path here.
+# The NTFS image importer requires every entry to map an image path to a host path.
 
 set(_preinstall_boot_partition_file ${CMAKE_CURRENT_BINARY_DIR}/partition.boot.fat)
 set(_preinstall_system_partition_file ${CMAKE_CURRENT_BINARY_DIR}/partition.ntfs)
@@ -335,6 +334,10 @@ set(_preinstall_boot_partition_type ef)
 
 # Create TEMP dir
 file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "reactos/TEMP=${CMAKE_CURRENT_BINARY_DIR}/empty\n")
+
+# Create installed-system directories that second-stage setup normally creates.
+file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "Program Files=${CMAKE_CURRENT_BINARY_DIR}/empty\n")
+file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "Program Files/Common Files=${CMAKE_CURRENT_BINARY_DIR}/empty\n")
 
 # Create user profile directories
 add_allusers_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "Profiles")
