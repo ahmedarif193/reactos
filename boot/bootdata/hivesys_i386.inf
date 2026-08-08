@@ -1,0 +1,10 @@
+; PROJECT:     ReactOS i386 system hive
+; LICENSE:     GPL-2.0+
+; PURPOSE:     i386-specific registry entries
+
+[AddReg]
+
+; Native print environment. Keep this synchronized with winprint packaging.
+HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows NT x86","Directory",,"W32X86"
+HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows NT x86\Print Processors",,0x00000010
+HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows NT x86\Print Processors\winprint","Driver",,"winprint.dll"
