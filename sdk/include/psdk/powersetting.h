@@ -23,6 +23,13 @@
 extern "C" {
 #endif
 
+#ifndef _HPOWERNOTIFY_DEF_
+#define _HPOWERNOTIFY_DEF_
+
+typedef PVOID HPOWERNOTIFY, *PHPOWERNOTIFY;
+
+#endif
+
 typedef enum EFFECTIVE_POWER_MODE
 {
     EffectivePowerModeBatterySaver,
@@ -35,6 +42,13 @@ typedef enum EFFECTIVE_POWER_MODE
 } EFFECTIVE_POWER_MODE;
 
 typedef void WINAPI EFFECTIVE_POWER_MODE_CALLBACK(EFFECTIVE_POWER_MODE mode, void *context);
+
+#if (NTDDI_VERSION >= NTDDI_VISTA)
+DWORD WINAPI PowerWriteACValueIndex(_In_opt_ HKEY, _In_ const GUID *, _In_opt_ const GUID *, _In_opt_ const GUID *, _In_ DWORD);
+DWORD WINAPI PowerWriteDCValueIndex(_In_opt_ HKEY, _In_ const GUID *, _In_opt_ const GUID *, _In_opt_ const GUID *, _In_ DWORD);
+DWORD WINAPI PowerGetActiveScheme(_In_opt_ HKEY, _Outptr_ GUID **);
+DWORD WINAPI PowerSetActiveScheme(_In_opt_ HKEY, _In_opt_ const GUID *);
+#endif
 
 HRESULT WINAPI PowerRegisterForEffectivePowerModeNotifications(ULONG, EFFECTIVE_POWER_MODE_CALLBACK*, void*, void**);
 

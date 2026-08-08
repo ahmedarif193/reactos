@@ -8,6 +8,8 @@
 #include <ntsecapi.h>
 #endif
 
+#include <powersetting.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -151,7 +153,11 @@ typedef enum _POWER_DATA_ACCESSOR {
 } POWER_DATA_ACCESSOR, *PPOWER_DATA_ACCESSOR;
 
 typedef BOOLEAN (CALLBACK* PWRSCHEMESENUMPROC)(UINT, DWORD, LPWSTR, DWORD, LPWSTR, PPOWER_POLICY, LPARAM);
+
+#ifndef _HPOWERNOTIFY_DEF_
+#define _HPOWERNOTIFY_DEF_
 typedef PVOID HPOWERNOTIFY, *PHPOWERNOTIFY;
+#endif
 
 NTSTATUS WINAPI CallNtPowerInformation(POWER_INFORMATION_LEVEL, PVOID, ULONG, PVOID, ULONG);
 BOOLEAN WINAPI CanUserWritePwrScheme(VOID);
@@ -166,11 +172,14 @@ BOOLEAN WINAPI IsPwrHibernateAllowed(VOID);
 BOOLEAN WINAPI IsPwrShutdownAllowed(VOID);
 BOOLEAN WINAPI IsPwrSuspendAllowed(VOID);
 DWORD   WINAPI PowerEnumerate(HKEY, const GUID *, const GUID *, POWER_DATA_ACCESSOR, ULONG, UCHAR *, DWORD *);
+#if (NTDDI_VERSION >= NTDDI_VISTA)
+DWORD   WINAPI PowerReadACValueIndex(_In_opt_ HKEY, _In_opt_ const GUID *, _In_opt_ const GUID *, _In_opt_ const GUID *, _Out_ LPDWORD);
+DWORD   WINAPI PowerReadDCValueIndex(_In_opt_ HKEY, _In_opt_ const GUID *, _In_opt_ const GUID *, _In_opt_ const GUID *, _Out_ LPDWORD);
+#endif
 DWORD   WINAPI PowerRegisterSuspendResumeNotification(DWORD, HANDLE, PHPOWERNOTIFY);
 DWORD   WINAPI PowerUnregisterSuspendResumeNotification(HPOWERNOTIFY);
 DWORD   WINAPI PowerSettingRegisterNotification(const GUID *, DWORD, HANDLE, PHPOWERNOTIFY);
 DWORD   WINAPI PowerSettingUnregisterNotification(HPOWERNOTIFY);
-DWORD   WINAPI PowerWriteACValueIndex(HKEY, const GUID *, const GUID *, const GUID *, DWORD);
 BOOLEAN WINAPI ReadGlobalPwrPolicy(PGLOBAL_POWER_POLICY);
 BOOLEAN WINAPI ReadProcessorPwrScheme(UINT, PMACHINE_PROCESSOR_POWER_POLICY);
 BOOLEAN WINAPI ReadPwrScheme(UINT, PPOWER_POLICY);
