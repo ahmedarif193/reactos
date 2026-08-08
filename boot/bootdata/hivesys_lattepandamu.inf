@@ -1,0 +1,13 @@
+; PROJECT:     ReactOS LattePanda Mu system hive
+; LICENSE:     GPL-2.0-or-later
+; PURPOSE:     LattePanda Mu platform drivers
+
+[AddReg]
+
+; ITE IT8613E hardware monitor sensor provider
+HKLM,"SYSTEM\CurrentControlSet\Services\it8613sensor","DisplayName",0x00000000,"ITE IT8613E Sensor Provider"
+HKLM,"SYSTEM\CurrentControlSet\Services\it8613sensor","ErrorControl",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\it8613sensor","Group",0x00000000,"Extended Base"
+HKLM,"SYSTEM\CurrentControlSet\Services\it8613sensor","ImagePath",0x00020000,"system32\drivers\it8613sensor.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\it8613sensor","Start",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\it8613sensor","Type",0x00010001,0x00000001

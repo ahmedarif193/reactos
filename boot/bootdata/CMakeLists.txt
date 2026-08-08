@@ -24,6 +24,10 @@ elseif(ARCH STREQUAL "i386")
     add_registry_inf(hivesys_x86.inf hivesys_i386.inf)
 endif()
 
+if(LATTEPANDAMU_SUPPORT)
+    add_registry_inf(hivesys_lattepandamu.inf)
+endif()
+
 if(_NT_VALUE GREATER_EQUAL 2560)
     add_registry_inf(hivent10.inf)
 endif()
