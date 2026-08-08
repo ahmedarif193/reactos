@@ -19,6 +19,7 @@
 #include <winnls.h>
 #include <winuser.h>
 #include <undocuser.h>
+#include <powrprof.h>
 
 #include <strsafe.h>
 
