@@ -9,6 +9,9 @@
 
 #include "icif.h"
 
+#define PSP_PAGE_PRIORITY_MINIMUM 1
+#define PSP_PAGE_PRIORITY_NORMAL  5
+
 //
 // Process Information Classes
 //
@@ -332,7 +335,12 @@ static const INFORMATION_CLASS_INFO PsProcessInfoClass[] =
     ),
 
     /* ProcessPagePriority */
-    IQS_NONE,
+    IQS_SAME
+    (
+        PAGE_PRIORITY_INFORMATION,
+        ULONG,
+        ICIF_QUERY | ICIF_SET
+    ),
 
     /* ProcessInstrumentationCallback */
     IQS_NONE,
@@ -562,7 +570,12 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
     ),
 
     /* ThreadPagePriority */
-    IQS_NONE,
+    IQS_SAME
+    (
+        PAGE_PRIORITY_INFORMATION,
+        ULONG,
+        ICIF_QUERY | ICIF_SET
+    ),
 
     /* ThreadActualBasePriority */
     IQS_NONE,

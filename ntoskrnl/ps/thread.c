@@ -291,6 +291,7 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
     /* At Vista+, ThreadsProcess -> Tcb.Process (KPROCESS*) */
     Thread->Tcb.Process = &Process->Pcb;
+    Thread->ThreadPagePriority = Process->DefaultPagePriority;
 #else
     Thread->ThreadsProcess = Process;
 #endif

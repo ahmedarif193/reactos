@@ -584,6 +584,7 @@
 @ stdcall GetProcessId(long)
 @ stdcall GetProcessIdOfThread(ptr)
 @ stdcall GetProcessIoCounters(long ptr)
+@ stdcall -version=0x602+ GetProcessInformation(long long ptr long)
 @ stdcall -version=0x602+ GetProcessMitigationPolicy(long long ptr long)
 @ stdcall GetProcessPriorityBoost(long ptr)
 @ stdcall GetProcessShutdownParameters(ptr ptr)
@@ -641,6 +642,7 @@
 @ stdcall GetTempPathW(long ptr)
 @ stdcall GetThreadContext(long ptr)
 @ stdcall -version=0xA00+ GetThreadDescription(ptr ptr)
+@ stdcall -version=0x602+ GetThreadInformation(long long ptr long) kernelbase.GetThreadInformation
 @ stdcall -stub -version=0x600+ GetThreadErrorMode()
 @ stdcall -version=0x601+ GetThreadGroupAffinity(long ptr)
 @ stdcall GetThreadIOPendingFlag(long ptr)
@@ -1119,6 +1121,7 @@
 @ stdcall SetProcessAffinityMask(long long)
 @ stub -version=0x600+ SetProcessAffinityUpdateMode
 @ stdcall -version=0x600+ SetProcessDEPPolicy(long)
+@ stdcall -version=0x602+ SetProcessInformation(long long ptr long)
 @ stdcall -version=0x602+ SetProcessMitigationPolicy(long ptr long)
 @ stdcall SetProcessPriorityBoost(long long)
 @ stdcall SetProcessShutdownParameters(long long)
@@ -1140,6 +1143,7 @@
 @ stdcall -stub -version=0x600+ SetThreadErrorMode(long ptr)
 @ stdcall SetThreadExecutionState(long)
 @ stdcall SetThreadIdealProcessor(long long)
+@ stdcall -version=0x602+ SetThreadInformation(long long ptr long) kernelbase.SetThreadInformation
 @ stdcall SetThreadLocale(long)
 @ stdcall -version=0x600+ SetThreadPreferredUILanguages(long wstr ptr)
 @ stdcall SetThreadPriority(long long)

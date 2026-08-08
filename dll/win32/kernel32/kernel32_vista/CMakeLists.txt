@@ -35,6 +35,7 @@ list(APPEND SOURCE
     Packages.c
     ProcThreadAttributeList.c
     PrefetchVirtualMemory.c
+    ProcessInformation.c
     ProcessMitigationPolicy.c
     ResolveLocaleName.c
     SetDefaultDllDirectories.c
