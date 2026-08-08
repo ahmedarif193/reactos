@@ -1028,7 +1028,7 @@ QueueUserAPC(IN PAPCFUNC pfnAPC,
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 BOOL
 WINAPI
