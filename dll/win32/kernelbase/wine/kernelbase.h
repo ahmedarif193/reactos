@@ -51,7 +51,7 @@ extern BOOL is_wow64;
 
 #ifdef __REACTOS__
 BOOL WINAPI GetWindowsAccountDomainSid( PSID sid, PSID domain_sid, DWORD *size );
-NTSYSAPI void NTAPI RtlMapGenericMask( ACCESS_MASK *access, GENERIC_MAPPING *mapping );
+void WINAPI RtlMapGenericMask( ACCESS_MASK *access, const GENERIC_MAPPING *mapping );
 #endif
 
 static inline BOOL set_ntstatus( NTSTATUS status )
