@@ -15,22 +15,27 @@ set(WOW64_I386_MODULES
     advpack
     bcrypt
     browseui
+    cabinet
+    cfgmgr32
     combase
     comctl32
     comdlg32
     coml2
     crypt32
     cryptnet
+    cryptsp
     cryptui
     dbghelp
     devmgr
     dhcpcsvc
     dinput8
+    dnsapi
     fmifs
     gdi32
     gdiplus
     hid
     ieframe
+    iertutil
     imagehlp
     imm32
     iphlpapi
@@ -47,18 +52,22 @@ set(WOW64_I386_MODULES
     msacm32
     msimg32
     msvcrt
+    ncrypt
     netapi32
     newdev
     normaliz
+    nsi
     ntdll
     ntdll_vista
     ole32
+    oleacc
     oleaut32
     powrprof
     propsys
     psapi
     rpcrt4
     samlib
+    sechost
     secur32
     setupapi
     shcore
@@ -67,6 +76,7 @@ set(WOW64_I386_MODULES
     shlwapi
     urlmon
     user32
+    user32_vista
     userenv
     usp10
     uxtheme

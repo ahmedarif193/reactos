@@ -12,8 +12,9 @@ SET(CMAKE_MODULE_PATH "${REACTOS_HOME_DIR}/sdk/cmake" CACHE INTERNAL "")
 # menuconfig.sh / "configure menuconfig", generated from the untracked
 # .rosconfig/config.cache. The regular cache sets in that file are not
 # FORCEd, so explicit -D arguments on the CMake command line win; the
-# selected profile separately enforces the settings it owns.
-if(EXISTS "${REACTOS_HOME_DIR}/.rosconfig/overrides.cmake")
+# selected profile separately enforces the settings it owns. Managed nested
+# builds for another architecture can opt out of the outer tree's selections.
+if(NOT ROSCONFIG_SKIP_OVERRIDES AND EXISTS "${REACTOS_HOME_DIR}/.rosconfig/overrides.cmake")
     include("${REACTOS_HOME_DIR}/.rosconfig/overrides.cmake")
 endif()
 
