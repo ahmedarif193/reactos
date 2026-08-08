@@ -836,6 +836,9 @@ CtfImeCreateThreadMgr(VOID)
     if (!pTLS)
         return E_OUTOFMEMORY;
 
+    if (g_bWinLogon || (pTLS->m_dwSystemInfoFlags & IME_SYSINFO_WINLOGON))
+        return S_FALSE;
+
     if (!pTLS->m_pBridge)
     {
         pTLS->m_pBridge = new(cicNoThrow) CicBridge();
@@ -843,19 +846,15 @@ CtfImeCreateThreadMgr(VOID)
             return E_OUTOFMEMORY;
     }
 
-    HRESULT hr = S_OK;
-    if (!g_bWinLogon && !(pTLS->m_dwSystemInfoFlags & IME_SYSINFO_WINLOGON))
+    HRESULT hr = pTLS->m_pBridge->InitIMMX(pTLS);
+    if (SUCCEEDED(hr))
     {
-        hr = pTLS->m_pBridge->InitIMMX(pTLS);
-        if (SUCCEEDED(hr))
-        {
-            if (!pTLS->m_pThreadMgr)
-                return E_OUTOFMEMORY;
+        if (!pTLS->m_pThreadMgr)
+            return E_OUTOFMEMORY;
 
-            hr = pTLS->m_pBridge->ActivateIMMX(pTLS, pTLS->m_pThreadMgr);
-            if (FAILED(hr))
-                pTLS->m_pBridge->UnInitIMMX(pTLS);
-        }
+        hr = pTLS->m_pBridge->ActivateIMMX(pTLS, pTLS->m_pThreadMgr);
+        if (FAILED(hr))
+            pTLS->m_pBridge->UnInitIMMX(pTLS);
     }
 
     return hr;
@@ -873,20 +872,13 @@ CtfImeDestroyThreadMgr(VOID)
 
     TLS *pTLS = TLS::PeekTLS();
     if (!pTLS)
-        return E_OUTOFMEMORY;
-
-    if (pTLS->m_pBridge)
-    {
-        pTLS->m_pBridge = new(cicNoThrow) CicBridge();
-        if (!pTLS->m_pBridge)
-            return E_OUTOFMEMORY;
-    }
-
-    if (!pTLS->m_pThreadMgr)
-        return E_OUTOFMEMORY;
+        return S_FALSE;
 
     if (pTLS->m_dwSystemInfoFlags & IME_SYSINFO_WINLOGON)
-        return S_OK;
+        return S_FALSE;
+
+    if (!pTLS->m_pBridge || !pTLS->m_pThreadMgr)
+        return S_FALSE;
 
     HRESULT hr = pTLS->m_pBridge->DeactivateIMMX(pTLS, pTLS->m_pThreadMgr);
     if (hr == S_OK)
@@ -907,8 +899,10 @@ CtfImeCreateInputContext(
     TRACE("(%p)\n", hIMC);
 
     TLS *pTLS = TLS::GetTLS();
-    if (!pTLS || !pTLS->m_pBridge)
+    if (!pTLS)
         return E_OUTOFMEMORY;
+    if ((pTLS->m_dwSystemInfoFlags & IME_SYSINFO_WINLOGON) || !pTLS->m_pBridge || !pTLS->m_pThreadMgr)
+        return S_FALSE;
 
     return pTLS->m_pBridge->CreateInputContext(pTLS, hIMC);
 }
@@ -925,8 +919,8 @@ CtfImeDestroyInputContext(
     TRACE("(%p)\n", hIMC);
 
     TLS *pTLS = TLS::PeekTLS();
-    if (!pTLS || !pTLS->m_pBridge)
-        return E_OUTOFMEMORY;
+    if (!pTLS || (pTLS->m_dwSystemInfoFlags & IME_SYSINFO_WINLOGON) || !pTLS->m_pBridge)
+        return S_FALSE;
 
     return pTLS->m_pBridge->DestroyInputContext(pTLS, hIMC);
 }

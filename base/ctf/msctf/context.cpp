@@ -18,7 +18,7 @@ class CContext
     , public ITfSource
     // , public ITfContextComposition
     , public ITfContextOwnerCompositionServices
-    // , public ITfContextOwnerServices
+    , public ITfContextOwnerServices
     , public ITfInsertAtSelection
     // , public ITfMouseTracker
     // , public ITfQueryEmbedded
@@ -38,6 +38,7 @@ public:
         TfEditCookie *pecTextStore);
     HRESULT Initialize(ITfDocumentMgr *manager);
     HRESULT Uninitialize();
+    HRESULT Cleanup(TfClientId tid);
 
     // ** IUnknown methods **
     STDMETHODIMP QueryInterface(REFIID riid, void **ppvObj) override;
@@ -116,6 +117,10 @@ public:
         _Out_ ITfComposition **ppComposition) override;
     STDMETHODIMP TerminateComposition(_In_ ITfCompositionView *pComposition) override;
 
+    // ** ITfContextOwnerServices methods **
+    STDMETHODIMP OnLayoutChange() override;
+    STDMETHODIMP OnAttributeChange(_In_ REFGUID rguidAttribute) override;
+
     // ** ITfInsertAtSelection methods **
     STDMETHODIMP InsertTextAtSelection(
         _In_ TfEditCookie ec,
@@ -187,6 +192,8 @@ protected:
 
     ITextStoreACP *m_pITextStoreACP;
     ITfContextOwnerCompositionSink *m_pITfContextOwnerCompositionSink;
+    ITfCleanupContextSink *m_pCleanupContextSink;
+    TfClientId m_cleanupSinkClientId;
     ITfEditSession *m_currentEditSession;
 
     // kept as separate lists to reduce unnecessary iterations
@@ -214,8 +221,11 @@ CContext::CContext()
     , m_manager(NULL)
     , m_pITextStoreACP(NULL)
     , m_pITfContextOwnerCompositionSink(NULL)
+    , m_pCleanupContextSink(NULL)
+    , m_cleanupSinkClientId(0)
     , m_currentEditSession(NULL)
 {
+    ZeroMemory(&m_documentStatus, sizeof(m_documentStatus));
     list_init(&m_pContextKeyEventSink);
     list_init(&m_pEditTransactionSink);
     list_init(&m_pStatusSink);
@@ -233,6 +243,9 @@ CContext::~CContext()
 
     if (m_pITfContextOwnerCompositionSink)
         m_pITfContextOwnerCompositionSink->Release();
+
+    if (m_pCleanupContextSink)
+        m_pCleanupContextSink->Release();
 
     if (m_defaultCookie)
     {
@@ -262,6 +275,8 @@ STDMETHODIMP CContext::QueryInterface(REFIID riid, void **ppvObj)
         pUnk = static_cast<ITfSource *>(this);
     else if (riid == IID_ITfContextOwnerCompositionServices)
         pUnk = static_cast<ITfContextOwnerCompositionServices *>(this);
+    else if (riid == IID_ITfContextOwnerServices)
+        pUnk = static_cast<ITfContextOwnerServices *>(this);
     else if (riid == IID_ITfInsertAtSelection)
         pUnk = static_cast<ITfInsertAtSelection *>(this);
     else if (riid == IID_ITfCompartmentMgr)
@@ -662,6 +677,18 @@ STDMETHODIMP CContext::TerminateComposition(_In_ ITfCompositionView *pCompositio
     return E_NOTIMPL;
 }
 
+STDMETHODIMP CContext::OnLayoutChange()
+{
+    TRACE("(%p)\n", this);
+    return S_OK;
+}
+
+STDMETHODIMP CContext::OnAttributeChange(_In_ REFGUID rguidAttribute)
+{
+    TRACE("(%p) %s\n", this, debugstr_guid(&rguidAttribute));
+    return S_OK;
+}
+
 STDMETHODIMP CContext::InsertTextAtSelection(
     _In_ TfEditCookie ec,
     _In_ DWORD dwFlags,
@@ -715,16 +742,34 @@ STDMETHODIMP CContext::AdviseSingleSink(
     _In_ REFIID riid,
     _In_ IUnknown *punk)
 {
-    FIXME("STUB:(%p) %i %s %p\n", this, tid, debugstr_guid(&riid), punk);
-    return E_NOTIMPL;
+    TRACE("(%p) %i %s %p\n", this, tid, debugstr_guid(&riid), punk);
+
+    if (!punk || riid != IID_ITfCleanupContextSink)
+        return E_INVALIDARG;
+    if (m_pCleanupContextSink)
+        return CONNECT_E_ADVISELIMIT;
+
+    HRESULT hr = punk->QueryInterface(IID_ITfCleanupContextSink, (void **)&m_pCleanupContextSink);
+    if (SUCCEEDED(hr))
+        m_cleanupSinkClientId = tid;
+    return hr;
 }
 
 STDMETHODIMP CContext::UnadviseSingleSink(
     _In_ TfClientId tid,
     _In_ REFIID riid)
 {
-    FIXME("STUB:(%p) %i %s\n", this, tid, debugstr_guid(&riid));
-    return E_NOTIMPL;
+    TRACE("(%p) %i %s\n", this, tid, debugstr_guid(&riid));
+
+    if (riid != IID_ITfCleanupContextSink)
+        return E_INVALIDARG;
+    if (!m_pCleanupContextSink || m_cleanupSinkClientId != tid)
+        return CONNECT_E_NOCONNECTION;
+
+    m_pCleanupContextSink->Release();
+    m_pCleanupContextSink = NULL;
+    m_cleanupSinkClientId = 0;
+    return S_OK;
 }
 
 STDMETHODIMP CContext::OnTextChange(
@@ -757,8 +802,8 @@ STDMETHODIMP CContext::OnStatusChange(_In_ DWORD dwFlags)
 
     if (!m_pITextStoreACP)
     {
-        FIXME("Context does not have a ITextStoreACP\n");
-        return E_NOTIMPL;
+        m_documentStatus.dwDynamicFlags = dwFlags;
+        return S_OK;
     }
 
     hr = m_pITextStoreACP->RequestLock(TS_LF_READ, &hrSession);
@@ -882,8 +927,20 @@ STDMETHODIMP CContext::CreateRange(
     _In_ LONG end,
     _Out_ ITfRangeACP **range)
 {
-    FIXME("stub: %p %d %d %p\n", this, start, end, range);
-    return S_OK;
+    TRACE("(%p) %d %d %p\n", this, start, end, range);
+
+    if (!range || start < 0 || end < start)
+        return E_INVALIDARG;
+
+    *range = NULL;
+    ITfRange *pRange = NULL;
+    HRESULT hr = Range_Constructor(this, start, end, &pRange);
+    if (SUCCEEDED(hr))
+    {
+        hr = pRange->QueryInterface(IID_ITfRangeACP, (void **)range);
+        pRange->Release();
+    }
+    return hr;
 }
 
 HRESULT CContext::CreateInstance(
@@ -960,6 +1017,38 @@ HRESULT CContext::Uninitialize()
     return S_OK;
 }
 
+HRESULT CContext::Cleanup(TfClientId tid)
+{
+    ITfCleanupContextSink *CleanupSink;
+    EditCookie *Cookie;
+    TfEditCookie EditCookieId;
+    HRESULT hr;
+
+    if (!m_connected || !m_pCleanupContextSink || (tid && tid != m_cleanupSinkClientId))
+        return S_FALSE;
+
+    Cookie = (EditCookie *)cicMemAlloc(sizeof(*Cookie));
+    if (!Cookie)
+        return E_OUTOFMEMORY;
+    Cookie->lockType = TS_LF_READWRITE;
+    Cookie->pOwningContext = this;
+    EditCookieId = generate_Cookie(COOKIE_MAGIC_EDITCOOKIE, Cookie);
+    if (!EditCookieId)
+    {
+        cicMemFree(Cookie);
+        return E_OUTOFMEMORY;
+    }
+
+    CleanupSink = m_pCleanupContextSink;
+    CleanupSink->AddRef();
+    hr = CleanupSink->OnCleanupContext(EditCookieId, static_cast<ITfContext *>(this));
+    CleanupSink->Release();
+
+    Cookie = (EditCookie *)remove_Cookie(EditCookieId);
+    cicMemFree(Cookie);
+    return hr;
+}
+
 ////////////////////////////////////////////////////////////////////////////
 
 EXTERN_C
@@ -979,6 +1068,13 @@ HRESULT Context_Initialize(ITfContext *iface, ITfDocumentMgr *manager)
 {
     CContext *This = static_cast<CContext *>(iface);
     return This->Initialize(manager);
+}
+
+EXTERN_C
+HRESULT Context_Cleanup(ITfContext *iface, TfClientId tid)
+{
+    CContext *This = static_cast<CContext *>(iface);
+    return This->Cleanup(tid);
 }
 
 EXTERN_C

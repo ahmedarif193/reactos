@@ -60,8 +60,10 @@ HRESULT LangBarMgr_Constructor(IUnknown *pUnkOuter, IUnknown **ppOut);
 HRESULT DisplayAttributeMgr_Constructor(IUnknown *pUnkOuter, IUnknown **ppOut);
 
 HRESULT Context_Initialize(ITfContext *cxt, ITfDocumentMgr *manager);
+HRESULT Context_Cleanup(ITfContext *cxt, TfClientId tid);
 HRESULT Context_Uninitialize(ITfContext *cxt);
 void ThreadMgr_OnDocumentMgrDestruction(ITfThreadMgr *tm, ITfDocumentMgr *mgr);
+void ThreadMgr_CleanupContextSinks(ITfThreadMgrEx *tm, TfClientId tid);
 HRESULT TF_SELECTION_to_TS_SELECTION_ACP(const TF_SELECTION *tf, TS_SELECTION_ACP *tsAcp);
 
 /* cookie function */

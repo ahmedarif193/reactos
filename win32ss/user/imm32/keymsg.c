@@ -342,11 +342,23 @@ Imm32SendNotificationProc(
 {
     HWND hWnd;
     LPINPUTCONTEXTDX pIC;
+    PCLIENTIMC pClientImc;
 
     UNREFERENCED_PARAMETER(lParam);
 
+    /* Notifications must not instantiate input contexts that have never been used. */
+    pClientImc = ImmLockClientImc(hIMC);
+    if (!pClientImc)
+        return TRUE;
+    if (!pClientImc->hInputContext)
+    {
+        ImmUnlockClientImc(pClientImc);
+        return TRUE;
+    }
+
     pIC = (LPINPUTCONTEXTDX)ImmLockIMC(hIMC);
-    if (IS_NULL_UNEXPECTEDLY(pIC))
+    ImmUnlockClientImc(pClientImc);
+    if (!pIC)
         return TRUE;
 
     hWnd = pIC->hWnd;

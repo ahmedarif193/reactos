@@ -918,7 +918,7 @@ Imm32ActivateOrDeactivateTIM(
         if (!(GetWin32ClientInfo()->CI_flags & CI_CTFTIM))
         {
             hr = CtfImeCreateThreadMgr();
-            if (SUCCEEDED(hr))
+            if (hr == S_OK)
                 GetWin32ClientInfo()->CI_flags |= CI_CTFTIM;
         }
     }
@@ -969,7 +969,7 @@ CtfImmTIMCreateInputContext(
             {
                 pClientImc->bCtfIme = TRUE;
                 hr = CtfImeCreateInputContext(hIMC);
-                if (FAILED_UNEXPECTEDLY(hr))
+                if (FAILED_UNEXPECTEDLY(hr) || hr != S_OK)
                     pClientImc->bCtfIme = FALSE;
             }
         }
@@ -977,7 +977,10 @@ CtfImmTIMCreateInputContext(
     else
     {
         if (!(GetWin32ClientInfo()->CI_flags & CI_CTFTIM))
-            return S_OK;
+        {
+            hr = S_OK;
+            goto Quit;
+        }
 
         if (!pClientImc->bCtfIme)
         {
@@ -987,12 +990,13 @@ CtfImmTIMCreateInputContext(
             {
                 pClientImc->bCtfIme = TRUE;
                 hr = CtfImeCreateInputContext(hIMC);
-                if (FAILED_UNEXPECTEDLY(hr))
+                if (FAILED_UNEXPECTEDLY(hr) || hr != S_OK)
                     pClientImc->bCtfIme = FALSE;
             }
         }
     }
 
+Quit:
     ImmUnlockClientImc(pClientImc);
     return hr;
 }
@@ -1200,7 +1204,7 @@ CtfImmTIMActivate(_In_ HKL hKL)
         !(GetWin32ClientInfo()->CI_flags & CI_CTFTIM))
     {
         hr = CtfImeCreateThreadMgr();
-        if (SUCCEEDED(hr))
+        if (hr == S_OK)
             GetWin32ClientInfo()->CI_flags |= CI_CTFTIM;
     }
 

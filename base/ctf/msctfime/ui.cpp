@@ -993,7 +993,7 @@ HRESULT CALLBACK CIMEUIWindowHandler::ImeUIOnLayoutChange(LPARAM lParam)
         return S_OK;
 
     CicInputContext *pCicIC = imeContext.get().m_pCicIC;
-    if (pCicIC)
+    if (pCicIC && pCicIC->m_pContextOwnerServices)
     {
         auto pContextOwnerServices = pCicIC->m_pContextOwnerServices;
         pContextOwnerServices->AddRef();
@@ -1039,7 +1039,7 @@ CIMEUIWindowHandler::ImeUIMsImeModeBiasHandler(HWND hWnd, WPARAM wParam, LPARAM 
         return FALSE;
 
     CicInputContext *pCicIC = imeContext.get().m_pCicIC;
-    if (!pCicIC)
+    if (!pCicIC || !pCicIC->m_pContextOwnerServices)
         return FALSE;
 
     if (wParam == 1)
@@ -1234,11 +1234,7 @@ CIMEUIWindowHandler::ImeUIWndProcWorker(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
 {
     TLS *pTLS = TLS::GetTLS();
     if (pTLS && (pTLS->m_dwSystemInfoFlags & IME_SYSINFO_WINLOGON))
-    {
-        if (uMsg == WM_CREATE)
-            return -1;
         return ::DefWindowProcW(hWnd, uMsg, wParam, lParam);
-    }
 
     switch (uMsg)
     {

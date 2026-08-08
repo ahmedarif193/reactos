@@ -76,6 +76,7 @@ public:
 
     static HRESULT CreateInstance(IUnknown *pUnkOuter, CThreadMgr **ppOut);
     void OnDocumentMgrDestruction(ITfDocumentMgr *mgr);
+    void CleanupContextSinks(TfClientId tid);
 
     // ** IUnknown methods **
     STDMETHODIMP QueryInterface(REFIID iid, LPVOID *ppvObject) override;
@@ -508,6 +509,7 @@ STDMETHODIMP CThreadMgr::Deactivate()
             m_focus->Release();
             m_focus = NULL;
         }
+        CleanupContextSinks(0);
     }
 
     deactivate_textservices();
@@ -1383,6 +1385,49 @@ void CThreadMgr::OnDocumentMgrDestruction(ITfDocumentMgr *mgr)
     FIXME("ITfDocumentMgr %p not found in this thread\n", mgr);
 }
 
+void CThreadMgr::CleanupContextSinks(TfClientId tid)
+{
+    ITfDocumentMgr **DocumentManagers;
+    struct list *Cursor;
+    SIZE_T DocumentCount = 0;
+    SIZE_T Index = 0;
+
+    LIST_FOR_EACH(Cursor, &m_CreatedDocumentMgrs)
+        DocumentCount++;
+    if (!DocumentCount || DocumentCount > MAXULONG_PTR / sizeof(*DocumentManagers))
+        return;
+
+    DocumentManagers = (ITfDocumentMgr **)cicMemAlloc(DocumentCount * sizeof(*DocumentManagers));
+    if (!DocumentManagers)
+        return;
+
+    LIST_FOR_EACH(Cursor, &m_CreatedDocumentMgrs)
+    {
+        DocumentMgrEntry *Entry = LIST_ENTRY(Cursor, DocumentMgrEntry, entry);
+        DocumentManagers[Index] = Entry->docmgr;
+        DocumentManagers[Index]->AddRef();
+        Index++;
+    }
+
+    for (Index = 0; Index < DocumentCount; Index++)
+    {
+        IEnumTfContexts *EnumContexts = NULL;
+        ITfContext *Context;
+
+        if (SUCCEEDED(DocumentManagers[Index]->EnumContexts(&EnumContexts)))
+        {
+            while (EnumContexts->Next(1, &Context, NULL) == S_OK)
+            {
+                Context_Cleanup(Context, tid);
+                Context->Release();
+            }
+            EnumContexts->Release();
+        }
+        DocumentManagers[Index]->Release();
+    }
+    cicMemFree(DocumentManagers);
+}
+
 ////////////////////////////////////////////////////////////////////////////
 
 CEnumTfDocumentMgr::CEnumTfDocumentMgr()
@@ -1524,4 +1569,11 @@ void ThreadMgr_OnDocumentMgrDestruction(ITfThreadMgr *iface, ITfDocumentMgr *mgr
 {
     CThreadMgr *This = static_cast<CThreadMgr *>(iface);
     This->OnDocumentMgrDestruction(mgr);
+}
+
+EXTERN_C
+void ThreadMgr_CleanupContextSinks(ITfThreadMgrEx *iface, TfClientId tid)
+{
+    CThreadMgr *This = static_cast<CThreadMgr *>(iface);
+    This->CleanupContextSinks(tid);
 }
