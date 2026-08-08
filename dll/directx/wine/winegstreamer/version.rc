@@ -1,0 +1,11 @@
+/* ReactOS version resource for Wine GStreamer. */
+
+#define WINE_FILEDESCRIPTION_STR "Wine GStreamer"
+#define WINE_FILENAME_STR "winegstreamer.dll"
+#define WINE_FILEVERSION 11,14,0,0
+#define WINE_FILEVERSION_STR "11.14"
+#define WINE_PRODUCTVERSION 11,14,0,0
+#define WINE_PRODUCTVERSION_STR "11.14"
+#define WINE_EXTRAVALUES VALUE "OLESelfRegister",""
+
+#include "wine/wine_common_ver.rc"

@@ -24,7 +24,7 @@ CopyFiles=Filters.Files,VfWWDM32.Files,ColorspaceCodecs.CopyCodec
 UpdateInis=ColorspaceCodecs.UpdateIni
 
 [ColorspaceCodecs.UpdateIni]
-system.ini,drivers32,,"VIDC.I420=msh263.drv"
+system.ini,drivers32,,"VIDC.I420=iyuv_32.dll"
 system.ini,drivers32,,"VIDC.IYUV=iyuv_32.dll"
 system.ini,drivers32,,"VIDC.UYVY=msyuv.dll"
 system.ini,drivers32,,"VIDC.YUY2=msyuv.dll"
@@ -33,7 +33,6 @@ system.ini,drivers32,,"VIDC.YVYU=msyuv.dll"
 
 [ColorspaceCodecs.CopyCodec]
 iyuv_32.dll
-msh263.drv
 msyuv.dll
 tsbyuv.dll
 
