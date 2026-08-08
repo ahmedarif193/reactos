@@ -631,7 +631,6 @@ PnpcpuQueryProcessorFeatures(
     int Registers[4];
     ULONG MaximumLeaf;
     KAFFINITY PreviousAffinity = 0;
-    ULONGLONG Capabilities;
 
     DeviceExtension->MonitorMwaitSupported = FALSE;
     DeviceExtension->IntelEstSupported = FALSE;
@@ -659,17 +658,23 @@ PnpcpuQueryProcessorFeatures(
         if (Intel && DeviceExtension->ProcessorNumberValid && MaximumLeaf >= 6)
         {
             __cpuid(Registers, 6);
-            if ((Registers[0] & (1 << 7)) != 0)
-            {
-                Capabilities = __readmsr(PNPCPU_INTEL_HWP_CAPABILITIES_MSR);
-                DeviceExtension->HwpHighest = (UCHAR)Capabilities;
-                DeviceExtension->HwpLowest = (UCHAR)(Capabilities >> 24);
-                DeviceExtension->IntelHwpSupported = DeviceExtension->HwpHighest != 0 && DeviceExtension->HwpLowest <= DeviceExtension->HwpHighest;
-            }
+            DeviceExtension->IntelHwpSupported = (Registers[0] & (1 << 7)) != 0;
         }
     }
     if (DeviceExtension->ProcessorNumberValid)
         KeRevertToUserAffinityThreadEx(PreviousAffinity);
+}
+
+static
+BOOLEAN
+PnpcpuEnableHwpOnCurrentProcessor(VOID)
+{
+    ULONGLONG Enable;
+
+    Enable = __readmsr(PNPCPU_INTEL_PM_ENABLE_MSR);
+    if ((Enable & PNPCPU_INTEL_HWP_ENABLE) == 0)
+        __writemsr(PNPCPU_INTEL_PM_ENABLE_MSR, PNPCPU_INTEL_HWP_ENABLE);
+    return (__readmsr(PNPCPU_INTEL_PM_ENABLE_MSR) & PNPCPU_INTEL_HWP_ENABLE) != 0;
 }
 
 static
@@ -693,8 +698,28 @@ VOID
 PnpcpuInitializeHwpPerformance(
     _Inout_ PPNPCPU_DEVICE_EXTENSION DeviceExtension)
 {
-    if (!DeviceExtension->IntelHwpSupported)
+    KAFFINITY PreviousAffinity;
+    ULONGLONG Capabilities;
+
+    if (!DeviceExtension->IntelHwpSupported || !DeviceExtension->ProcessorNumberValid)
         return;
+
+    PreviousAffinity = KeSetSystemAffinityThreadEx((KAFFINITY)1 << DeviceExtension->ProcessorNumber);
+    if (PnpcpuEnableHwpOnCurrentProcessor())
+        Capabilities = __readmsr(PNPCPU_INTEL_HWP_CAPABILITIES_MSR);
+    else
+        Capabilities = 0;
+    KeRevertToUserAffinityThreadEx(PreviousAffinity);
+
+    DeviceExtension->HwpHighest = (UCHAR)Capabilities;
+    DeviceExtension->HwpLowest = (UCHAR)(Capabilities >> 24);
+    if (DeviceExtension->HwpHighest == 0 || DeviceExtension->HwpLowest > DeviceExtension->HwpHighest)
+    {
+        DeviceExtension->IntelHwpSupported = FALSE;
+        DeviceExtension->HwpHighest = 0;
+        DeviceExtension->HwpLowest = 0;
+        return;
+    }
 
     DeviceExtension->PerfMode = PNPCPU_PERF_HWP;
     DeviceExtension->PerfStateCount = 2;
@@ -1282,15 +1307,11 @@ NTSTATUS
 PnpcpuEnableHwpConfiguration(
     _Inout_ PPNPCPU_DEVICE_EXTENSION DeviceExtension)
 {
-    ULONGLONG Enable;
     ULONGLONG Request;
 
     if (DeviceExtension->PerfMode != PNPCPU_PERF_HWP)
         return STATUS_SUCCESS;
-    Enable = __readmsr(PNPCPU_INTEL_PM_ENABLE_MSR);
-    if ((Enable & PNPCPU_INTEL_HWP_ENABLE) == 0)
-        __writemsr(PNPCPU_INTEL_PM_ENABLE_MSR, Enable | PNPCPU_INTEL_HWP_ENABLE);
-    if ((__readmsr(PNPCPU_INTEL_PM_ENABLE_MSR) & PNPCPU_INTEL_HWP_ENABLE) == 0)
+    if (!PnpcpuEnableHwpOnCurrentProcessor())
         return STATUS_NOT_SUPPORTED;
 
     DeviceExtension->HwpOriginalRequest = __readmsr(PNPCPU_INTEL_HWP_REQUEST_MSR);
