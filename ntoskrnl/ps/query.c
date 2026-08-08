@@ -1308,6 +1308,40 @@ NtQueryInformationProcess(
             break;
         }
 
+        case ProcessPagePriority:
+        {
+            PPAGE_PRIORITY_INFORMATION PagePriority = (PPAGE_PRIORITY_INFORMATION)ProcessInformation;
+            ULONG PagePriorityValue;
+
+            Length = sizeof(*PagePriority);
+            if (ProcessInformationLength != Length)
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            Status = PspReferenceProcessForLimitedQuery(ProcessHandle, PreviousMode, &Process);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            PspLockProcessSecurityShared(Process);
+            PagePriorityValue = Process->DefaultPagePriority;
+            PspUnlockProcessSecurityShared(Process);
+
+            _SEH2_TRY
+            {
+                PagePriority->PagePriority = PagePriorityValue;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+
+            ObDereferenceObject(Process);
+            break;
+        }
+
         case ProcessDebugObjectHandle:
         {
             HANDLE DebugPort = NULL;
@@ -2258,6 +2292,41 @@ NtSetInformationProcess(
             }
             break;
 
+        case ProcessPagePriority:
+        {
+            PAGE_PRIORITY_INFORMATION PagePriority;
+
+            if (ProcessInformationLength != sizeof(PagePriority))
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            _SEH2_TRY
+            {
+                PagePriority = *(PPAGE_PRIORITY_INFORMATION)ProcessInformation;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(break);
+            }
+            _SEH2_END;
+
+            if ((PagePriority.PagePriority < PSP_PAGE_PRIORITY_MINIMUM) ||
+                (PagePriority.PagePriority > PSP_PAGE_PRIORITY_NORMAL))
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            PspLockProcessSecurityExclusive(Process);
+            Process->DefaultPagePriority = PagePriority.PagePriority;
+            PspUnlockProcessSecurityExclusive(Process);
+            Status = STATUS_SUCCESS;
+            break;
+        }
+
         case ProcessDebugFlags:
 
             /* Check buffer length */
@@ -2903,6 +2972,46 @@ NtSetInformationThread(
 
             /* Dereference the thread */
             ObDereferenceObject(Thread);
+            break;
+        }
+
+        case ThreadPagePriority:
+        {
+            PAGE_PRIORITY_INFORMATION PagePriority;
+
+            if (ThreadInformationLength != sizeof(PagePriority))
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            _SEH2_TRY
+            {
+                PagePriority = *(PPAGE_PRIORITY_INFORMATION)ThreadInformation;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(break);
+            }
+            _SEH2_END;
+
+            if ((PagePriority.PagePriority < PSP_PAGE_PRIORITY_MINIMUM) ||
+                (PagePriority.PagePriority > PSP_PAGE_PRIORITY_NORMAL))
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            Status = ObReferenceObjectByHandle(ThreadHandle, THREAD_SET_INFORMATION, PsThreadType, PreviousMode, (PVOID*)&Thread, NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            PspLockThreadSecurityExclusive(Thread);
+            Thread->ThreadPagePriority = PagePriority.PagePriority;
+            PspUnlockThreadSecurityExclusive(Thread);
+            ObDereferenceObject(Thread);
+            Status = STATUS_SUCCESS;
             break;
         }
 
@@ -3898,6 +4007,40 @@ NtQueryInformationThread(
             _SEH2_END;
 
             /* Dereference the thread */
+            ObDereferenceObject(Thread);
+            break;
+        }
+
+        case ThreadPagePriority:
+        {
+            PPAGE_PRIORITY_INFORMATION PagePriority = (PPAGE_PRIORITY_INFORMATION)ThreadInformation;
+            ULONG PagePriorityValue;
+
+            Length = sizeof(*PagePriority);
+            if (ThreadInformationLength != Length)
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            Status = ObReferenceObjectByHandle(ThreadHandle, Access, PsThreadType, PreviousMode, (PVOID*)&Thread, NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            PspLockThreadSecurityShared(Thread);
+            PagePriorityValue = Thread->ThreadPagePriority;
+            PspUnlockThreadSecurityShared(Thread);
+
+            _SEH2_TRY
+            {
+                PagePriority->PagePriority = PagePriorityValue;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+
             ObDereferenceObject(Thread);
             break;
         }

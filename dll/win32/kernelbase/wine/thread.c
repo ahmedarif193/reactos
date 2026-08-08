@@ -603,6 +603,26 @@ LANGID WINAPI DECLSPEC_HOTPATCH SetThreadUILanguage( LANGID langid )
 
 
 /**********************************************************************
+ *            GetThreadInformation   (kernelbase.@)
+ */
+#ifdef __REACTOS__
+BOOL WINAPI DECLSPEC_HOTPATCH GetThreadInformation( HANDLE thread, THREAD_INFORMATION_CLASS info_class,
+        VOID *info, DWORD size )
+{
+    switch (info_class)
+    {
+        case ThreadMemoryPriority:
+            return set_ntstatus( NtQueryInformationThread( thread, ThreadPagePriority, info, size, NULL ));
+        default:
+            FIXME("Unsupported class %u.\n", info_class);
+            SetLastError( ERROR_INVALID_PARAMETER );
+            return FALSE;
+    }
+}
+#endif
+
+
+/**********************************************************************
  *            SetThreadInformation   (kernelbase.@)
  */
 BOOL WINAPI DECLSPEC_HOTPATCH SetThreadInformation( HANDLE thread, THREAD_INFORMATION_CLASS info_class,
@@ -616,6 +636,9 @@ BOOL WINAPI DECLSPEC_HOTPATCH SetThreadInformation( HANDLE thread, THREAD_INFORM
             return set_ntstatus( NtSetInformationThread( thread, ThreadPowerThrottlingState, info, size ));
         default:
             FIXME("Unsupported class %u.\n", info_class);
+#ifdef __REACTOS__
+            SetLastError( ERROR_INVALID_PARAMETER );
+#endif
             return FALSE;
     }
 }
