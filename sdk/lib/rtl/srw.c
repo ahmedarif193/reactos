@@ -194,12 +194,30 @@ RtlpReleaseWaitBlockLock(IN OUT PRTL_SRWLOCK SRWLock)
 }
 
 
+#define RTLP_SRWLOCK_SPIN_COUNT 64
+
+static VOID
+NTAPI
+RtlpSrwSpin(IN OUT PULONG SpinCount)
+{
+    if (++(*SpinCount) < RTLP_SRWLOCK_SPIN_COUNT)
+    {
+        YieldProcessor();
+    }
+    else
+    {
+        *SpinCount = 0;
+        (VOID)NtYieldExecution();
+    }
+}
+
 static PRTLP_SRWLOCK_WAITBLOCK
 NTAPI
 RtlpAcquireWaitBlockLock(IN OUT PRTL_SRWLOCK SRWLock)
 {
     LONG_PTR PrevValue;
     PRTLP_SRWLOCK_WAITBLOCK WaitBlock;
+    ULONG SpinCount = 0;
 
     while (1)
     {
@@ -209,7 +227,7 @@ RtlpAcquireWaitBlockLock(IN OUT PRTL_SRWLOCK SRWLock)
         if (!(PrevValue & RTL_SRWLOCK_CONTENTION_LOCK))
             break;
 
-        YieldProcessor();
+        RtlpSrwSpin(&SpinCount);
     }
 
     if (!(PrevValue & RTL_SRWLOCK_CONTENDED) ||
@@ -233,6 +251,7 @@ RtlpAcquireSRWLockExclusiveWait(IN OUT PRTL_SRWLOCK SRWLock,
                                 IN PRTLP_SRWLOCK_WAITBLOCK WaitBlock)
 {
     LONG_PTR CurrentValue;
+    ULONG SpinCount = 0;
 
     while (1)
     {
@@ -257,7 +276,7 @@ RtlpAcquireSRWLockExclusiveWait(IN OUT PRTL_SRWLOCK SRWLock,
             }
         }
 
-        YieldProcessor();
+        RtlpSrwSpin(&SpinCount);
     }
 }
 
@@ -268,11 +287,12 @@ RtlpAcquireSRWLockSharedWait(IN OUT PRTL_SRWLOCK SRWLock,
                              IN OUT PRTLP_SRWLOCK_WAITBLOCK FirstWait  OPTIONAL,
                              IN OUT PRTLP_SRWLOCK_SHARED_WAKE WakeChain)
 {
+    ULONG SpinCount = 0;
     if (FirstWait != NULL)
     {
         while (WakeChain->Wake == 0)
         {
-            YieldProcessor();
+            RtlpSrwSpin(&SpinCount);
         }
     }
     else
@@ -306,7 +326,7 @@ RtlpAcquireSRWLockSharedWait(IN OUT PRTL_SRWLOCK SRWLock,
                 }
             }
 
-            YieldProcessor();
+            RtlpSrwSpin(&SpinCount);
         }
     }
 }
@@ -324,6 +344,7 @@ VOID
 NTAPI
 RtlAcquireSRWLockShared(IN OUT PRTL_SRWLOCK SRWLock)
 {
+    ULONG SpinCount = 0;
     __ALIGNED(16) RTLP_SRWLOCK_WAITBLOCK StackWaitBlock;
     RTLP_SRWLOCK_SHARED_WAKE SharedWake;
     LONG_PTR CurrentValue, NewValue;
@@ -516,7 +537,7 @@ RtlAcquireSRWLockShared(IN OUT PRTL_SRWLOCK SRWLock)
             }
         }
 
-        YieldProcessor();
+        RtlpSrwSpin(&SpinCount);
     }
 }
 
@@ -525,6 +546,7 @@ VOID
 NTAPI
 RtlReleaseSRWLockShared(IN OUT PRTL_SRWLOCK SRWLock)
 {
+    ULONG SpinCount = 0;
     LONG_PTR CurrentValue, NewValue;
     PRTLP_SRWLOCK_WAITBLOCK WaitBlock;
     BOOLEAN LastShared;
@@ -581,7 +603,7 @@ RtlReleaseSRWLockShared(IN OUT PRTL_SRWLOCK SRWLock)
             RtlRaiseStatus(STATUS_RESOURCE_NOT_OWNED);
         }
 
-        YieldProcessor();
+        RtlpSrwSpin(&SpinCount);
     }
 }
 
@@ -590,6 +612,7 @@ VOID
 NTAPI
 RtlAcquireSRWLockExclusive(IN OUT PRTL_SRWLOCK SRWLock)
 {
+    ULONG SpinCount = 0;
     __ALIGNED(16) RTLP_SRWLOCK_WAITBLOCK StackWaitBlock;
     PRTLP_SRWLOCK_WAITBLOCK First, Last;
 
@@ -699,7 +722,7 @@ AddWaitBlock:
                 }
             }
 
-            YieldProcessor();
+            RtlpSrwSpin(&SpinCount);
         }
     }
 }
@@ -709,6 +732,7 @@ VOID
 NTAPI
 RtlReleaseSRWLockExclusive(IN OUT PRTL_SRWLOCK SRWLock)
 {
+    ULONG SpinCount = 0;
     LONG_PTR CurrentValue, NewValue;
     PRTLP_SRWLOCK_WAITBLOCK WaitBlock;
 
@@ -762,7 +786,7 @@ RtlReleaseSRWLockExclusive(IN OUT PRTL_SRWLOCK SRWLock)
             RtlRaiseStatus(STATUS_RESOURCE_NOT_OWNED);
         }
 
-        YieldProcessor();
+        RtlpSrwSpin(&SpinCount);
     }
 }
 
