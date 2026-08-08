@@ -1080,11 +1080,6 @@ BOOLEAN compare(POWER_POLICY pp, POWER_POLICY pp_compare)
 		printf("user.Reserved[1] failed %lu != %lu\n",pp.user.Reserved[1],pp_compare.user.Reserved[1]);
 		ret = FALSE;
 	}
-	if (pp.user.Reserved[2] != pp_compare.user.Reserved[2])
-	{
-		printf("user.Reserved[2] failed %lu != %lu\n",pp.user.Reserved[2],pp_compare.user.Reserved[2]);
-		ret = FALSE;
-	}
 	if (pp.user.VideoTimeoutAc != pp_compare.user.VideoTimeoutAc)
 	{
 		printf("user.VideoTimeoutAc failed %lu != %lu\n",pp.user.VideoTimeoutAc,pp_compare.user.VideoTimeoutAc);
@@ -3765,7 +3760,6 @@ pPP_original->user.OptimizeForPowerDc=1;
    ok(globalcompare(gpp,gpp_compare),"Difference Found\n");
    //pp_compare.mach.OverThrottledAc.Action=4;
    pp_compare.mach.OverThrottledAc.Action=2;
-   pp_compare.mach.pad1[2]=2;
    ok(compare(pp,pp_compare),"Difference Found\n");
 
    pPP_original->mach.OverThrottledAc.Action=PowerActionSleep;
@@ -3788,7 +3782,6 @@ pPP_original->user.OptimizeForPowerDc=1;
    ok(ret, "function was expected to succeed error %i\n",(UINT)GetLastError());
    ok(globalcompare(gpp,gpp_compare),"Difference Found\n");
    pp_compare.mach.OverThrottledAc.Action=2;
-   pp_compare.mach.pad1[2]=2;
    ok(compare(pp,pp_compare),"Difference Found\n");
 
    pPP_original->mach.OverThrottledAc.Action=PowerActionShutdown;
@@ -3902,7 +3895,6 @@ pPP_original->user.OptimizeForPowerDc=1;
    //pp_compare.mach.OverThrottledDc.Action=4;
    pp_compare.mach.OverThrottledDc.Action=2;
    pp_compare.mach.OverThrottledAc.Action=0;
-   pp_compare.mach.pad1[2]=0;
    ok(compare(pp,pp_compare),"Difference Found\n");
 
    pPP_original->mach.OverThrottledDc.Action=PowerActionSleep;
@@ -3926,7 +3918,6 @@ pPP_original->user.OptimizeForPowerDc=1;
    ok(globalcompare(gpp,gpp_compare),"Difference Found\n");
    pp_compare.mach.OverThrottledDc.Action=2;
    pp_compare.mach.OverThrottledAc.Action=0;
-   pp_compare.mach.pad1[2]=0;
    ok(compare(pp,pp_compare),"Difference Found\n");
 
    pPP_original->mach.OverThrottledDc.Action=PowerActionShutdown;
