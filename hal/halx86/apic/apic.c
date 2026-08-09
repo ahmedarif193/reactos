@@ -126,7 +126,7 @@ IOApicWriteRaw(UCHAR Register, ULONG Value)
     WRITE_REGISTER_ULONG((PULONG)(IOAPIC_BASE + IOAPIC_IOWIN), Value);
 }
 
-FORCEINLINE
+static __inline
 ULONG
 IOApicRead(UCHAR Register)
 {
@@ -138,7 +138,7 @@ IOApicRead(UCHAR Register)
     return Value;
 }
 
-FORCEINLINE
+static __inline
 VOID
 IOApicWrite(UCHAR Register, ULONG Value)
 {
@@ -148,7 +148,7 @@ IOApicWrite(UCHAR Register, ULONG Value)
 }
 
 /* One lock hold covers both dwords, keeping the 64-bit entry access atomic */
-FORCEINLINE
+static __inline
 VOID
 ApicWriteIORedirectionEntry(
     UCHAR Index,
@@ -161,7 +161,7 @@ ApicWriteIORedirectionEntry(
     HalpReleaseIoApicPairLock();
 }
 
-FORCEINLINE
+static __inline
 IOAPIC_REDIRECTION_REGISTER
 ApicReadIORedirectionEntry(
     UCHAR Index)
