@@ -532,6 +532,15 @@ NvmeHandleLogSense(_In_ PNVME_DEVICE_EXTENSION Device, _In_ PSCSI_REQUEST_BLOCK 
         NvmeCompleteSrb(Device, Srb, SRB_STATUS_BUSY);
 }
 
+static
+UCHAR
+NvmeKelvinToCelsius(_In_ USHORT Kelvin)
+{
+    if (Kelvin == 0 || Kelvin >= 528)
+        return MAXUCHAR;
+    return Kelvin > 273 ? (UCHAR)(Kelvin - 273) : 0;
+}
+
 VOID
 NvmeCompleteLogSenseSrb(_In_ PNVME_DEVICE_EXTENSION Device, _In_ PSCSI_REQUEST_BLOCK Srb, _In_ USHORT NvmeStatus)
 {
@@ -548,11 +557,7 @@ NvmeCompleteLogSenseSrb(_In_ PNVME_DEVICE_EXTENSION Device, _In_ PSCSI_REQUEST_B
         return;
     }
 
-    Celsius = Smart->CompositeTemperature > 528
-                  ? MAXUCHAR
-                  : Smart->CompositeTemperature > 273
-                        ? (UCHAR)(Smart->CompositeTemperature - 273)
-                        : 0;
+    Celsius = NvmeKelvinToCelsius(Smart->CompositeTemperature);
     RtlZeroMemory(Buffer, sizeof(Buffer));
     if (SrbExtension->ScsiLogPage == LOG_PAGE_CODE_TEMPERATURE)
     {
@@ -565,7 +570,7 @@ NvmeCompleteLogSenseSrb(_In_ PNVME_DEVICE_EXTENSION Device, _In_ PSCSI_REQUEST_B
         Buffer[11] = 0x01;
         Buffer[12] = 0x03;
         Buffer[13] = 2;
-        Buffer[15] = Device->Wctemp > 273 ? (UCHAR)(Device->Wctemp - 273) : 0;
+        Buffer[15] = NvmeKelvinToCelsius(Device->Wctemp);
         Length = 16;
     }
     else

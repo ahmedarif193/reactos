@@ -277,6 +277,33 @@ typedef struct _STORAGE_DESCRIPTOR_HEADER {
     ULONG                       Size;
 } STORAGE_DESCRIPTOR_HEADER, *PSTORAGE_DESCRIPTOR_HEADER;
 
+#ifdef __REACTOS__
+#define STORAGE_TEMPERATURE_VALUE_NOT_REPORTED 0x8000
+
+typedef struct _STORAGE_TEMPERATURE_INFO {
+    USHORT                      Index;
+    SHORT                       Temperature;
+    SHORT                       OverThreshold;
+    SHORT                       UnderThreshold;
+    BOOLEAN                     OverThresholdChangable;
+    BOOLEAN                     UnderThresholdChangable;
+    BOOLEAN                     EventGenerated;
+    UCHAR                       Reserved0;
+    ULONG                       Reserved1;
+} STORAGE_TEMPERATURE_INFO, *PSTORAGE_TEMPERATURE_INFO;
+
+typedef struct _STORAGE_TEMPERATURE_DATA_DESCRIPTOR {
+    ULONG                       Version;
+    ULONG                       Size;
+    SHORT                       CriticalTemperature;
+    SHORT                       WarningTemperature;
+    USHORT                      InfoCount;
+    UCHAR                       Reserved0[2];
+    ULONG                       Reserved1[2];
+    STORAGE_TEMPERATURE_INFO    TemperatureInfo[ANYSIZE_ARRAY];
+} STORAGE_TEMPERATURE_DATA_DESCRIPTOR, *PSTORAGE_TEMPERATURE_DATA_DESCRIPTOR;
+#endif
+
 typedef enum _STORAGE_BUS_TYPE {
     BusTypeUnknown = 0x00,
     BusTypeScsi,

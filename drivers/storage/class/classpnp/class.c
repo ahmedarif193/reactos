@@ -8516,6 +8516,12 @@ ClassDeviceControl(
                     break;
                 }
 
+                case StorageDeviceTemperatureProperty: {
+
+                    status = ClasspDeviceTemperatureProperty(DeviceObject, Irp, srb);
+                    break;
+                }
+
                 case StorageDeviceTrimProperty: {
 
                     status = ClasspDeviceTrimProperty(DeviceObject, Irp, srb);
