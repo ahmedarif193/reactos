@@ -71,7 +71,9 @@ static DWORD register_iexplore(BOOL doregister)
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE prev, WCHAR *cmdline, int show)
 {
+#ifndef __REACTOS__
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
+#endif
 
     if(*cmdline == '-' || *cmdline == '/') {
         if(!wcsicmp(cmdline+1, L"regserver"))
@@ -80,5 +82,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE prev, WCHAR *cmdline, int sho
             return register_iexplore(FALSE);
     }
 
+#ifdef __REACTOS__
+    /* Registration must not initialize USER before setup is complete. */
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
+#endif
     return IEWinMain(cmdline, show);
 }
