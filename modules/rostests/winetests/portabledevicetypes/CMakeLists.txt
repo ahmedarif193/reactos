@@ -1,4 +1,4 @@
-# Copyright 2026 Ahmed Arif
+# Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 add_executable(portabledevicetypes_winetest portabledevicetypes.c testlist.c)
