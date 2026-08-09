@@ -7,6 +7,8 @@ add_executable(win32u_winetest
     win32u.c
     testlist.c)
 
+target_compile_definitions(win32u_winetest PRIVATE __WINESRC__)
+
 if(MSVC)
     target_compile_options(win32u_winetest PRIVATE /wd4477)
 else()
