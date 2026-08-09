@@ -1,6 +1,10 @@
 #ifndef IPPRIVATE_H
 #define IPPRIVATE_H
 
+#ifndef IPHLPAPI_DLL_LINKAGE
+#define IPHLPAPI_DLL_LINKAGE
+#endif
+
 #define NtCurrentTeb NtXCurrentTeb
 
 #include <stdio.h>
