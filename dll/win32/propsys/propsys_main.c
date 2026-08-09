@@ -791,7 +791,7 @@ static HRESULT WINAPI propdesc_IsValueCanonical( IPropertyDescription *iface, RE
     return E_NOTIMPL;
 }
 
-const static IPropertyDescriptionVtbl property_description_vtbl =
+static const IPropertyDescriptionVtbl property_description_vtbl =
 {
     /* IUnknown */
     propdesc_QueryInterface,

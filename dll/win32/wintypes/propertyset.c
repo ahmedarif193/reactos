@@ -140,7 +140,7 @@ static HRESULT STDMETHODCALLTYPE propertyset_IObservableMap_remove_MapChanged( I
     return E_NOTIMPL;
 }
 
-const static IObservableMap_HSTRING_IInspectableVtbl propertyset_IObservableMap_vtbl =
+static const IObservableMap_HSTRING_IInspectableVtbl propertyset_IObservableMap_vtbl =
 {
     /* IUnknown */
     propertyset_IObservableMap_QueryInterface,

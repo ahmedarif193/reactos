@@ -77,11 +77,6 @@ static DWORD WINAPI reactos_timer_thread(void *param);
 
 static const GUID wdmaud_category = {STATIC_KSCATEGORY_WDMAUD};
 
-static const GUID reactos_mmdevapi_guid_seed =
-{
-    0x524f5357, 0x444d, 0x4155, {0x44, 0x2d, 0x4d, 0x4d, 0x44, 0x45, 0x56, 0x00}
-};
-
 static struct reactos_stream *stream_from_handle(stream_handle handle)
 {
     struct reactos_stream *stream = (struct reactos_stream *)(ULONG_PTR)handle;
@@ -219,52 +214,6 @@ static void format_device_name(EDataFlow flow, DWORD index, char *buffer, size_t
     const char *kind = flow == eCapture ? REACTOS_DEVICE_CAPTURE : REACTOS_DEVICE_RENDER;
 
     snprintf(buffer, size, REACTOS_DEVICE_PREFIX "%s:%lu", kind, index);
-}
-
-static void WINAPI reactos_get_device_guid(EDataFlow flow, const char *name, GUID *guid)
-{
-    DWORD index = 0;
-    EDataFlow parsed_flow = flow;
-
-    *guid = reactos_mmdevapi_guid_seed;
-
-    if (!parse_device_name(name, &parsed_flow, &index))
-        parsed_flow = flow;
-
-    guid->Data3 = parsed_flow == eCapture ? 0x4341 : 0x5245;
-    guid->Data4[5] = (BYTE)((index >> 8) & 0xff);
-    guid->Data4[6] = (BYTE)(index & 0xff);
-    guid->Data4[7] = parsed_flow == eCapture ? 1 : 0;
-}
-
-static BOOL WINAPI reactos_get_device_name_from_guid(GUID *guid, char **name, EDataFlow *flow)
-{
-    DWORD index;
-
-    if (guid->Data1 != reactos_mmdevapi_guid_seed.Data1 ||
-        guid->Data2 != reactos_mmdevapi_guid_seed.Data2 ||
-        guid->Data4[0] != reactos_mmdevapi_guid_seed.Data4[0] ||
-        guid->Data4[1] != reactos_mmdevapi_guid_seed.Data4[1] ||
-        guid->Data4[2] != reactos_mmdevapi_guid_seed.Data4[2] ||
-        guid->Data4[3] != reactos_mmdevapi_guid_seed.Data4[3] ||
-        guid->Data4[4] != reactos_mmdevapi_guid_seed.Data4[4])
-        return FALSE;
-
-    if (guid->Data3 == 0x4341 || guid->Data4[7] == 1)
-        *flow = eCapture;
-    else if (guid->Data3 == 0x5245 || guid->Data4[7] == 0)
-        *flow = eRender;
-    else
-        return FALSE;
-
-    index = ((DWORD)guid->Data4[5] << 8) | guid->Data4[6];
-
-    *name = malloc(32);
-    if (!*name)
-        return FALSE;
-
-    format_device_name(*flow, index, *name, 32);
-    return TRUE;
 }
 
 static UINT query_device_count(EDataFlow flow)
