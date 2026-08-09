@@ -1468,6 +1468,32 @@ ParseFile(char* pcStart, FILE *fileDest, unsigned *cExports)
             exp.strTarget.len = 0;
         }
 
+        /* GNU ld 2.45 no longer resolves an undecorated stub export to an
+         * earlier stdcall stub with the same base name. Preserve the plain
+         * export name, but redirect it to the decorated implementation. */
+        if ((giArch == ARCH_X86) && !gbMSComp && !gbImportLib &&
+            (exp.nCallingConvention == CC_STUB) && !exp.strTarget.buf)
+        {
+            for (i = 0; i < *cExports; i++)
+            {
+                EXPORT *previous = &pexports[i];
+
+                if (!(previous->uFlags & FL_STUB) ||
+                    ((previous->nCallingConvention != CC_STDCALL) &&
+                     (previous->nCallingConvention != CC_FASTCALL)))
+                    continue;
+
+                if ((previous->strName.len == exp.strName.len) &&
+                    !memcmp(previous->strName.buf, exp.strName.buf, exp.strName.len))
+                {
+                    exp.nCallingConvention = previous->nCallingConvention;
+                    exp.nStackBytes = previous->nStackBytes;
+                    exp.uFlags |= FL_STUB;
+                    break;
+                }
+            }
+        }
+
         /* Check for no-name without ordinal */
         if ((exp.uFlags & FL_ORDINAL) && (exp.nOrdinal == -1))
         {
