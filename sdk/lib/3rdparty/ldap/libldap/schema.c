@@ -2997,7 +2997,9 @@ ldap_str2structurerule( LDAP_CONST char * s,
 	int seen_nameform = 0;
 	LDAPStructureRule * sr;
 	char ** ext_vals;
+#ifndef __REACTOS__
 	const char * savepos;
+#endif
 
 	if ( !s ) {
 		*code = LDAP_SCHERR_EMPTY;
@@ -3025,7 +3027,9 @@ ldap_str2structurerule( LDAP_CONST char * s,
 	 * Definitions MUST begin with a ruleid.
 	 */
 	parse_whsp(&ss);
+#ifndef __REACTOS__
 	savepos = ss;
+#endif
 	ret = ldap_int_parse_ruleid(&ss,code,0,&sr->sr_ruleid);
 	if ( ret ) {
 		*errp = ss;
@@ -3183,7 +3187,9 @@ ldap_str2nameform( LDAP_CONST char * s,
 	int seen_may = 0;
 	LDAPNameForm * nf;
 	char ** ext_vals;
+#ifndef __REACTOS__
 	const char * savepos;
+#endif
 
 	if ( !s ) {
 		*code = LDAP_SCHERR_EMPTY;
@@ -3215,7 +3221,9 @@ ldap_str2nameform( LDAP_CONST char * s,
 	 * extract info from those servers.
 	 */
 	parse_whsp(&ss);
+#ifndef __REACTOS__
 	savepos = ss;
+#endif
 	nf->nf_oid = ldap_int_parse_numericoid(&ss,code,0);
 	if ( !nf->nf_oid ) {
 		*errp = ss;

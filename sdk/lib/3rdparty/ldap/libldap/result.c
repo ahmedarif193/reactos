@@ -598,6 +598,9 @@ retry_ber:
 			Debug3( LDAP_DEBUG_ANY,
 				"no request for response on ld %p msgid %d message type %s (tossing)\n",
 				(void *)ld, id, msg );
+#ifdef __REACTOS__
+			(void)msg;
+#endif
 
 			goto retry_ber;
 		}
