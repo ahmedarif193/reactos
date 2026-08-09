@@ -34,7 +34,9 @@ ber_get_option(
 	void	*outvalue)
 {
 	const BerElement *ber;
+#ifndef __REACTOS__
 	const Sockbuf *sb;
+#endif
 
 	if(outvalue == NULL) {
 		/* no place to get to */
@@ -77,7 +79,9 @@ ber_get_option(
 	}
 
 	ber = item;
+#ifndef __REACTOS__
 	sb = item;
+#endif
 
 	switch(option) {
 	case LBER_OPT_BER_OPTIONS:
@@ -126,7 +130,9 @@ ber_set_option(
 	LDAP_CONST void	*invalue)
 {
 	BerElement *ber;
+#ifndef __REACTOS__
 	Sockbuf *sb;
+#endif
 
 	if(invalue == NULL) {
 		/* no place to set from */
@@ -194,7 +200,9 @@ ber_set_option(
 	}
 
 	ber = item;
+#ifndef __REACTOS__
 	sb = item;
+#endif
 
 	switch(option) {
 	case LBER_OPT_BER_OPTIONS:

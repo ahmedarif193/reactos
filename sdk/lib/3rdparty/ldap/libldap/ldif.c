@@ -162,8 +162,9 @@ ldif_parse_line2(
 	*d = '\0';
 
 	if ( b64 ) {
+#ifndef __REACTOS__
 		char *byte = s;
-
+#endif
 		if ( *s == '\0' ) {
 			/* no value is present, error out */
 			ber_pvt_log_printf( LDAP_DEBUG_PARSE, ldif_debug,
