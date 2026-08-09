@@ -74,6 +74,7 @@ set(WOW64_I386_MODULES
     shdocvw
     shell32
     shlwapi
+    ucrtbase
     urlmon
     user32
     user32_vista
@@ -92,6 +93,11 @@ set(WOW64_I386_MODULES
 set(WOW64_I386_EXECUTABLES
     notepad
     winver)
+
+# Additional names under which a built module must be shipped. Keep the
+# implementation name too because existing ReactOS forwarders use it.
+set(WOW64_I386_ALIASES
+    "kernelbase_ros=kernelbase.dll")
 
 if(ENABLE_ROSTESTS)
     # The win32u tests import win32u.dll directly; the regular guest runtime
