@@ -24,7 +24,7 @@ function(_wow64_collect_linked_modules _target)
     set_property(GLOBAL APPEND PROPERTY WOW64_I386_VISITED_TARGETS "${_target}")
 
     get_target_property(_type "${_target}" TYPE)
-    if(_type STREQUAL "MODULE_LIBRARY")
+    if(_type STREQUAL "MODULE_LIBRARY" OR _type STREQUAL "SHARED_LIBRARY")
         set_property(GLOBAL APPEND PROPERTY WOW64_I386_LINKED_MODULES "${_target}")
     endif()
 
@@ -44,7 +44,7 @@ function(_wow64_collect_linked_modules _target)
                 set(_module "${CMAKE_MATCH_1}")
                 if(TARGET "${_module}")
                     get_target_property(_dependency_type "${_module}" TYPE)
-                    if(_dependency_type STREQUAL "MODULE_LIBRARY")
+                    if(_dependency_type STREQUAL "MODULE_LIBRARY" OR _dependency_type STREQUAL "SHARED_LIBRARY")
                         _wow64_collect_linked_modules("${_module}")
                     endif()
                 endif()
@@ -115,6 +115,22 @@ foreach(_target IN LISTS WOW64_I386_TARGETS)
     list(APPEND WOW64_I386_FILES "${_file}")
 endforeach()
 
+set(WOW64_I386_ALIAS_FILES)
+set(WOW64_I386_ALIAS_SOURCES)
+foreach(_alias IN LISTS WOW64_I386_ALIASES)
+    if(NOT _alias MATCHES "^([^=]+)=(.+)$")
+        message(FATAL_ERROR "Invalid WoW64 alias '${_alias}'; expected target=filename")
+    endif()
+    set(_alias_target "${CMAKE_MATCH_1}")
+    set(_alias_name "${CMAKE_MATCH_2}")
+    if(NOT _alias_target IN_LIST WOW64_I386_TARGETS)
+        message(FATAL_ERROR "WoW64 alias target '${_alias_target}' is not in the i386 target list")
+    endif()
+    _wow64_get_target_file("${_alias_target}" _alias_source)
+    list(APPEND WOW64_I386_ALIAS_SOURCES "${_alias_source}")
+    list(APPEND WOW64_I386_ALIAS_FILES "${REACTOS_BINARY_DIR}/CMakeFiles/wow64-i386-aliases/${_alias_name}")
+endforeach()
+
 get_filename_component(_wow64_toolchain "${CMAKE_TOOLCHAIN_FILE}" ABSOLUTE BASE_DIR "${REACTOS_SOURCE_DIR}")
 set(_wow64_i386_cmake_args
     -DARCH:STRING=i386
@@ -169,5 +185,23 @@ add_custom_target(wow64_i386 ALL
 add_dependencies(wow64_i386 wow64_i386_configure)
 
 add_cd_file(TARGET wow64_i386 FILE ${WOW64_I386_FILES} DESTINATION reactos/SysWOW64 FOR all)
+
+if(WOW64_I386_ALIAS_FILES)
+    list(LENGTH WOW64_I386_ALIAS_FILES _wow64_alias_count)
+    math(EXPR _wow64_alias_last "${_wow64_alias_count} - 1")
+    foreach(_alias_index RANGE 0 ${_wow64_alias_last})
+        list(GET WOW64_I386_ALIAS_SOURCES ${_alias_index} _alias_source)
+        list(GET WOW64_I386_ALIAS_FILES ${_alias_index} _alias_file)
+        add_custom_command(
+            OUTPUT "${_alias_file}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${REACTOS_BINARY_DIR}/CMakeFiles/wow64-i386-aliases"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_alias_source}" "${_alias_file}"
+            DEPENDS wow64_i386 "${_alias_source}"
+            COMMENT "Creating WoW64 alias ${_alias_file}"
+            VERBATIM)
+    endforeach()
+    add_custom_target(wow64_i386_aliases DEPENDS ${WOW64_I386_ALIAS_FILES})
+    add_cd_file(TARGET wow64_i386_aliases FILE ${WOW64_I386_ALIAS_FILES} DESTINATION reactos/SysWOW64 FOR all)
+endif()
 
 message(STATUS "WoW64: double-building ${_wow64_i386_target_count} i386 targets into SysWOW64")
