@@ -39,7 +39,8 @@ typedef struct _IT8613_CHANNEL_TEMPLATE
 {
     UCHAR Vin;
     ULONG Flags;
-    ULONG MicrovoltsPerCount;
+    LONGLONG MicrovoltsPerCount;
+    LONGLONG MicrovoltOffset;
     GUID SensorId;
     PCWSTR Name;
 } IT8613_CHANNEL_TEMPLATE, *PIT8613_CHANNEL_TEMPLATE;
@@ -67,18 +68,18 @@ static const GUID It8613ProviderId =
 
 static const IT8613_CHANNEL_TEMPLATE It8613ChannelTemplates[] =
 {
-    {0, REACTOS_SENSOR_CHANNEL_FLAG_READ_ONLY | REACTOS_SENSOR_CHANNEL_FLAG_UNCALIBRATED, 11000,
-     {0x00F01C21, 0xF5E6, 0x40FC, {0xA5, 0x9B, 0xE8, 0xF3, 0xF0, 0x09, 0x7E, 0x66}}, L"IT8613E VIN0"},
-    {1, REACTOS_SENSOR_CHANNEL_FLAG_READ_ONLY | REACTOS_SENSOR_CHANNEL_FLAG_UNCALIBRATED, 11000,
-     {0xD0240722, 0xE0AF, 0x467E, {0x85, 0x41, 0x7A, 0x52, 0x98, 0x67, 0xC5, 0xC7}}, L"IT8613E VIN1"},
-    {2, REACTOS_SENSOR_CHANNEL_FLAG_READ_ONLY | REACTOS_SENSOR_CHANNEL_FLAG_UNCALIBRATED, 11000,
-     {0xE936D182, 0x0E34, 0x491D, {0x9B, 0xA1, 0x26, 0x52, 0xB5, 0x6E, 0x54, 0x04}}, L"IT8613E VIN2"},
-    {4, REACTOS_SENSOR_CHANNEL_FLAG_READ_ONLY | REACTOS_SENSOR_CHANNEL_FLAG_UNCALIBRATED, 11000,
-     {0x1E59E8E8, 0x4D20, 0x4E03, {0x97, 0x22, 0x6C, 0xB1, 0x33, 0xDB, 0xB4, 0x86}}, L"IT8613E VIN4"},
-    {5, REACTOS_SENSOR_CHANNEL_FLAG_READ_ONLY | REACTOS_SENSOR_CHANNEL_FLAG_UNCALIBRATED, 11000,
-     {0x4B2211B5, 0xAF5A, 0x473A, {0x90, 0xD7, 0xA6, 0x34, 0x45, 0x86, 0x1F, 0x74}}, L"IT8613E VIN5"},
-    {7, REACTOS_SENSOR_CHANNEL_FLAG_READ_ONLY | REACTOS_SENSOR_CHANNEL_FLAG_INTERNAL, 22000,
-     {0xABBFD503, 0xCC00, 0x4781, {0x90, 0xDD, 0x7B, 0xC6, 0x41, 0x3F, 0x24, 0xA2}}, L"IT8613E VIN7"}
+    {0, REACTOS_SENSOR_CHANNEL_FLAG_READ_ONLY, 11000, 0,
+     {0x00F01C21, 0xF5E6, 0x40FC, {0xA5, 0x9B, 0xE8, 0xF3, 0xF0, 0x09, 0x7E, 0x66}}, L"VCCCORE"},
+    {1, REACTOS_SENSOR_CHANNEL_FLAG_READ_ONLY, 11000, 0,
+     {0xD0240722, 0xE0AF, 0x467E, {0x85, 0x41, 0x7A, 0x52, 0x98, 0x67, 0xC5, 0xC7}}, L"VCCMEM"},
+    {2, REACTOS_SENSOR_CHANNEL_FLAG_READ_ONLY, 17500, 100000,
+     {0xE936D182, 0x0E34, 0x491D, {0x9B, 0xA1, 0x26, 0x52, 0xB5, 0x6E, 0x54, 0x04}}, L"3.3V"},
+    {4, REACTOS_SENSOR_CHANNEL_FLAG_READ_ONLY, 92500, 0,
+     {0x1E59E8E8, 0x4D20, 0x4E03, {0x97, 0x22, 0x6C, 0xB1, 0x33, 0xDB, 0xB4, 0x86}}, L"VDC"},
+    {5, REACTOS_SENSOR_CHANNEL_FLAG_READ_ONLY, 17600, 0,
+     {0x4B2211B5, 0xAF5A, 0x473A, {0x90, 0xD7, 0xA6, 0x34, 0x45, 0x86, 0x1F, 0x74}}, L"VCCGT"},
+    {7, REACTOS_SENSOR_CHANNEL_FLAG_READ_ONLY | REACTOS_SENSOR_CHANNEL_FLAG_INTERNAL, 22000, 0,
+     {0xABBFD503, 0xCC00, 0x4781, {0x90, 0xDD, 0x7B, 0xC6, 0x41, 0x3F, 0x24, 0xA2}}, L"VSB3V"}
 };
 
 static
@@ -282,6 +283,8 @@ It8613StartHardware(
     UCHAR VinMask;
     UCHAR Vin;
 
+    if (DeviceExtension->Started)
+        return STATUS_SUCCESS;
     Status = It8613ParseResources(Resources, &DeviceExtension->SuperIoPort, &DeviceExtension->HwmIndexPort);
     if (!NT_SUCCESS(Status))
         return Status;
@@ -407,7 +410,7 @@ It8613ReadChannel(
     Reading->Unit = REACTOS_SENSOR_UNIT_MICROVOLTS;
     Reading->Flags = Template->Flags;
     Reading->RawValue = RawValue;
-    Reading->Value = (LONGLONG)RawValue * Template->MicrovoltsPerCount;
+    Reading->Value = (LONGLONG)RawValue * Template->MicrovoltsPerCount + Template->MicrovoltOffset;
     Reading->Timestamp = Timestamp.QuadPart;
     return STATUS_SUCCESS;
 }
@@ -652,6 +655,7 @@ DriverEntry(
     _In_ PUNICODE_STRING RegistryPath)
 {
     PCM_RESOURCE_LIST Resources;
+    PDEVICE_OBJECT DeviceObject;
     PDEVICE_OBJECT PhysicalDeviceObject = NULL;
     NTSTATUS Status;
     UCHAR VinMask;
@@ -684,5 +688,15 @@ DriverEntry(
     if (!NT_SUCCESS(Status))
         return Status;
     PhysicalDeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
-    return STATUS_SUCCESS;
+    DeviceObject = IoGetAttachedDeviceReference(PhysicalDeviceObject);
+    if (DeviceObject == PhysicalDeviceObject)
+    {
+        ObDereferenceObject(DeviceObject);
+        return STATUS_DEVICE_NOT_CONNECTED;
+    }
+    Status = It8613StartHardware(DeviceObject->DeviceExtension, Resources);
+    ObDereferenceObject(DeviceObject);
+    if (!NT_SUCCESS(Status))
+        DPRINT1("IT8613SENSOR: failed to start reported device (status 0x%08lx)\n", Status);
+    return Status;
 }
