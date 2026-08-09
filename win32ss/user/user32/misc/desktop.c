@@ -129,7 +129,11 @@ RealGetSystemMetrics(int nIndex)
 {
   //FIXME("Global Server Data -> %x\n",gpsi);
   if (nIndex < 0 || nIndex >= SM_CMETRICS) return 0;
+#ifdef WOW64_I386_RUNTIME
+  return (int)NtUserCallOneParam(nIndex, ONEPARAM_ROUTINE_ROS_GETSYSTEMMETRICS);
+#else
   return gpsi->aiSysMet[nIndex];
+#endif
 }
 
 /*

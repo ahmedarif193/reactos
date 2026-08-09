@@ -174,6 +174,10 @@ NtUserCallOneParam(
     switch (Routine)
     {
         case ONEPARAM_ROUTINE_GETDESKTOPMAPPING:
+        case ONEPARAM_ROUTINE_ROS_GETGRAYBRUSH:
+        case ONEPARAM_ROUTINE_ROS_GETSYSCOLOR:
+        case ONEPARAM_ROUTINE_ROS_GETSYSCOLORBRUSH:
+        case ONEPARAM_ROUTINE_ROS_GETSYSTEMMETRICS:
         case ONEPARAM_ROUTINE_WINDOWFROMDC:
         case ONEPARAM_ROUTINE_GETKEYBOARDTYPE:
         case ONEPARAM_ROUTINE_GETKEYBOARDLAYOUT:
@@ -265,6 +269,22 @@ NtUserCallOneParam(
 
         case ONEPARAM_ROUTINE_WINDOWFROMDC:
             Result = (DWORD_PTR)IntWindowFromDC((HDC)Param);
+            break;
+
+        case ONEPARAM_ROUTINE_ROS_GETSYSTEMMETRICS:
+            Result = UserGetSystemMetrics((ULONG)Param);
+            break;
+
+        case ONEPARAM_ROUTINE_ROS_GETSYSCOLOR:
+            Result = IntGetSysColor((INT)Param);
+            break;
+
+        case ONEPARAM_ROUTINE_ROS_GETSYSCOLORBRUSH:
+            Result = (DWORD_PTR)IntGetSysColorBrush((INT)Param);
+            break;
+
+        case ONEPARAM_ROUTINE_ROS_GETGRAYBRUSH:
+            Result = (DWORD_PTR)gpsi->hbrGray;
             break;
 
         case ONEPARAM_ROUTINE_SWAPMOUSEBUTTON:
@@ -843,6 +863,26 @@ NtUserCallHwndParam(
 
     switch (Routine)
     {
+        case HWNDPARAM_ROUTINE_ROS_GETWINDOW:
+        {
+            HWND Ret;
+
+            UserEnterShared();
+            if (Param == GW_ENABLEDPOPUP)
+            {
+                PWND Window = UserGetWindowObject(hWnd);
+
+                Window = Window ? DWP_GetEnabledPopup(Window) : NULL;
+                Ret = Window ? UserHMGetHandle(Window) : NULL;
+            }
+            else
+            {
+                Ret = IntGetWindow(hWnd, (UINT)Param);
+            }
+            UserLeave();
+            return HandleToUlong(Ret);
+        }
+
         case HWNDPARAM_ROUTINE_ROS_GETDLGITEM:
         {
             PWND Window;
