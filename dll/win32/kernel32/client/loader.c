@@ -185,7 +185,7 @@ LoadLibraryW(LPCWSTR lpLibFileName)
 
 static
 NTSTATUS
-BasepLoadLibraryAsDatafile(PWSTR Path, LPCWSTR Name, HMODULE *hModule)
+BasepLoadLibraryAsDatafile(PWSTR Path, LPCWSTR Name, DWORD Flags, HMODULE *hModule)
 {
     WCHAR FilenameW[MAX_PATH];
     HANDLE hFile = INVALID_HANDLE_VALUE;
@@ -193,6 +193,7 @@ BasepLoadLibraryAsDatafile(PWSTR Path, LPCWSTR Name, HMODULE *hModule)
     NTSTATUS Status;
     PVOID lpBaseAddress = NULL;
     SIZE_T ViewSize = 0;
+    DWORD Protect = PAGE_READONLY;
     //PUNICODE_STRING OriginalName;
     //UNICODE_STRING dotDLL = RTL_CONSTANT_STRING(L".DLL");
 
@@ -235,8 +236,11 @@ BasepLoadLibraryAsDatafile(PWSTR Path, LPCWSTR Name, HMODULE *hModule)
     /* If opening failed - return last status value */
     if (hFile == INVALID_HANDLE_VALUE) return NtCurrentTeb()->LastStatusValue;
 
+    if (Flags & LOAD_LIBRARY_AS_IMAGE_RESOURCE)
+        Protect |= SEC_IMAGE;
+
     /* Create file mapping */
-    hMapping = CreateFileMappingW(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
+    hMapping = CreateFileMappingW(hFile, NULL, Protect, 0, 0, NULL);
 
     /* Close the file handle */
     CloseHandle(hFile);
@@ -270,8 +274,11 @@ BasepLoadLibraryAsDatafile(PWSTR Path, LPCWSTR Name, HMODULE *hModule)
         return STATUS_INVALID_IMAGE_FORMAT;
     }
 
-    /* Set low bit of handle to indicate datafile module */
-    *hModule = (HMODULE)((ULONG_PTR)lpBaseAddress | 1);
+    /* Tag the handle according to the resource mapping type. */
+    if (Flags & LOAD_LIBRARY_AS_IMAGE_RESOURCE)
+        *hModule = (HMODULE)((ULONG_PTR)lpBaseAddress | 2);
+    else
+        *hModule = (HMODULE)((ULONG_PTR)lpBaseAddress | 1);
 
     /* Load alternate resource module */
     //LdrLoadAlternateResourceModule(*hModule, FilenameW);
@@ -311,7 +318,7 @@ LoadLibraryExW(LPCWSTR lpLibFileName,
         LdrEnumerateLoadedModules(0, BasepLocateExeLdrEntry, NtCurrentPeb()->ImageBaseAddress);
 
     /* Check if that module is our exe*/
-    if (BasepExeLdrEntry && !(dwFlags & LOAD_LIBRARY_AS_DATAFILE) &&
+    if (BasepExeLdrEntry && !(dwFlags & (LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE)) &&
         DllName.Length == BasepExeLdrEntry->FullDllName.Length)
     {
         /* Lengths match and it's not a datafile, so perform name comparison */
@@ -351,14 +358,14 @@ LoadLibraryExW(LPCWSTR lpLibFileName,
 
     _SEH2_TRY
     {
-        if (dwFlags & LOAD_LIBRARY_AS_DATAFILE)
+        if (dwFlags & (LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE))
         {
             /* If the image is loaded as a datafile, try to get its handle */
             Status = LdrGetDllHandleEx(0, SearchPath, NULL, &DllName, (PVOID*)&hInst);
             if (!NT_SUCCESS(Status))
             {
                 /* It's not loaded yet - so load it up */
-                Status = BasepLoadLibraryAsDatafile(SearchPath, DllName.Buffer, &hInst);
+                Status = BasepLoadLibraryAsDatafile(SearchPath, DllName.Buffer, dwFlags, &hInst);
             }
             _SEH2_YIELD(goto done;)
         }
@@ -486,15 +493,15 @@ FreeLibrary(HINSTANCE hLibModule)
     NTSTATUS Status;
     PIMAGE_NT_HEADERS NtHeaders;
 
-    if (LDR_IS_DATAFILE(hLibModule))
+    if (LDR_IS_RESOURCE(hLibModule))
     {
-        /* This is a LOAD_LIBRARY_AS_DATAFILE module, check if it's a valid one */
-        NtHeaders = RtlImageNtHeader((PVOID)((ULONG_PTR)hLibModule & ~1));
+        /* This is a datafile or image-resource module, check if it's valid. */
+        NtHeaders = RtlImageNtHeader((PVOID)((ULONG_PTR)hLibModule & ~(ULONG_PTR)3));
 
         if (NtHeaders)
         {
             /* Unmap view */
-            Status = NtUnmapViewOfSection(NtCurrentProcess(), (PVOID)((ULONG_PTR)hLibModule & ~1));
+            Status = NtUnmapViewOfSection(NtCurrentProcess(), (PVOID)((ULONG_PTR)hLibModule & ~(ULONG_PTR)3));
 
             /* Unload alternate resource module */
             LdrUnloadAlternateResourceModule(hLibModule);
@@ -532,13 +539,13 @@ FreeLibraryAndExitThread(HMODULE hLibModule,
                          DWORD dwExitCode)
 {
 
-    if (LDR_IS_DATAFILE(hLibModule))
+    if (LDR_IS_RESOURCE(hLibModule))
     {
-        /* This is a LOAD_LIBRARY_AS_DATAFILE module */
-        if (RtlImageNtHeader((PVOID)((ULONG_PTR)hLibModule & ~1)))
+        /* This is a datafile or image-resource module. */
+        if (RtlImageNtHeader((PVOID)((ULONG_PTR)hLibModule & ~(ULONG_PTR)3)))
         {
             /* Unmap view */
-            NtUnmapViewOfSection(NtCurrentProcess(), (PVOID)((ULONG_PTR)hLibModule & ~1));
+            NtUnmapViewOfSection(NtCurrentProcess(), (PVOID)((ULONG_PTR)hLibModule & ~(ULONG_PTR)3));
 
             /* Unload alternate resource module */
             LdrUnloadAlternateResourceModule(hLibModule);
