@@ -1774,13 +1774,13 @@ USBPORT_InterruptService(IN PKINTERRUPT Interrupt,
         {
             /*
              * Level-triggered controllers can keep the interrupt line asserted
-             * until the miniport DPC drains the hardware source. Mask the
-             * miniport interrupt source before queuing the DPC; USBPORT_IsrDpc
-             * passes InterruptEnable=TRUE while USBPORT_FLAG_INTERRUPT_ENABLED
-             * remains set, so the miniport re-enables interrupts after the DPC
-             * has serviced the controller.
+             * until the miniport DPC drains the hardware source, so mask their
+             * interrupt source before queuing the DPC. Keep MSI/MSI-X enabled:
+             * masking an edge-triggered source can consume a later event during
+             * the ISR-to-DPC window without generating a replacement edge.
              */
-            Packet->DisableInterrupts(FdoExtension->MiniPortExt);
+            if (!FdoExtension->MessageInterruptsEnabled)
+                Packet->DisableInterrupts(FdoExtension->MiniPortExt);
             USBPORT_QueueIsrDpc(FdoExtension, NULL, NULL);
         }
     }
