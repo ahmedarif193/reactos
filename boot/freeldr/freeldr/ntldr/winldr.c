@@ -1435,7 +1435,7 @@ LoadAndBootWindows(
         }
         else
         {
-            Status = RamDiskInitialize(TRUE, NULL, NULL);
+            Status = RamDiskInitialize(FALSE, BootOptions, NULL);
             if (Status != ESUCCESS)
             {
                 UiMessageBox("Failed to initialize ramdisk from downloaded ISO.");
