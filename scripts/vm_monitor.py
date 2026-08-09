@@ -24,6 +24,9 @@ Usage:
 
 	  # Boot an existing ISO
 	  python3 ../vm_monitor.py --iso path/to/livecd.iso
+
+	  # Boot AMD64 LiveCD, launch the 32-bit winver.exe, and capture the screen
+	  python3 ../scripts/vm_monitor.py --run-winver
   
   # Or if script is in the build dir:
   python3 vm_monitor.py
@@ -93,6 +96,11 @@ BUILD_DIR = get_build_dir()
 FAT32_IMG = os.path.join(BUILD_DIR, "fat32.img")
 REACTOS_IMG = os.path.realpath(os.path.join(BUILD_DIR, "ReactOS.img"))
 LIVECD_ISO = os.path.realpath(os.path.join(BUILD_DIR, "livecd.iso"))
+POST_BOOT_PROGRAM = None
+POST_BOOT_DELAY = float(os.environ.get("ROS_VM_POST_BOOT_DELAY", "8"))
+POST_BOOT_CAPTURE_DELAY = float(os.environ.get("ROS_VM_POST_BOOT_CAPTURE_DELAY", "5"))
+POST_BOOT_SCREENSHOT = os.path.join(BUILD_DIR, "vm_monitor_post_boot.ppm")
+QEMU_MONITOR_SOCKET = f"/tmp/reactos_vm_monitor_{os.getpid()}.sock"
 
 # UEFI firmware paths - architecture dependent
 OVMF_ENV_CODE_VARS = ["REACTOS_OVMF_CODE", "OVMF_CODE"]
@@ -436,6 +444,88 @@ def add_qemu_gdb_server(qemu_cmd):
     qemu_cmd.extend(["-gdb", f"tcp::{QEMU_GDB_PORT}"])
 
 
+def remove_file_if_exists(path):
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+
+
+def add_qemu_control_monitor(qemu_cmd):
+    """Add a private HMP socket for post-boot keyboard and screenshot control."""
+    if not POST_BOOT_PROGRAM:
+        return
+
+    remove_file_if_exists(QEMU_MONITOR_SOCKET)
+    qemu_cmd.extend([
+        "-monitor",
+        f"unix:{QEMU_MONITOR_SOCKET},server=on,wait=off",
+    ])
+
+
+def connect_qemu_control_monitor(timeout=5):
+    deadline = time.time() + timeout
+    last_error = None
+
+    while time.time() < deadline:
+        monitor = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            monitor.connect(QEMU_MONITOR_SOCKET)
+            monitor.settimeout(0.2)
+            try:
+                monitor.recv(4096)
+            except socket.timeout:
+                pass
+            return monitor
+        except OSError as error:
+            last_error = error
+            monitor.close()
+            time.sleep(0.1)
+
+    raise RuntimeError(f"could not connect to QEMU monitor: {last_error}")
+
+
+def send_hmp_command(monitor, command, delay=0.05):
+    monitor.sendall((command + "\n").encode("ascii"))
+    time.sleep(delay)
+
+
+def qemu_key_for_character(character):
+    special_keys = {
+        ":": "shift-semicolon",
+        "\\": "backslash",
+        "/": "slash",
+        ".": "dot",
+        "-": "minus",
+        "_": "shift-minus",
+        " ": "spc",
+    }
+
+    if character in special_keys:
+        return special_keys[character]
+    if character.isascii() and character.isalnum():
+        return character.lower()
+    raise ValueError(f"no QEMU key mapping for {character!r}")
+
+
+def launch_post_boot_program():
+    """Open the ReactOS Run dialog and type the configured program path."""
+    with connect_qemu_control_monitor() as monitor:
+        send_hmp_command(monitor, "sendkey meta_l-r 100", delay=1)
+        for character in POST_BOOT_PROGRAM:
+            key = qemu_key_for_character(character)
+            send_hmp_command(monitor, f"sendkey {key} 20")
+        send_hmp_command(monitor, "sendkey ret 100", delay=0.5)
+
+
+def capture_post_boot_screenshot():
+    """Capture the primary QEMU display through HMP."""
+    remove_file_if_exists(POST_BOOT_SCREENSHOT)
+    with connect_qemu_control_monitor() as monitor:
+        send_hmp_command(monitor, f"screendump {POST_BOOT_SCREENSHOT}", delay=1)
+    return os.path.isfile(POST_BOOT_SCREENSHOT) and os.path.getsize(POST_BOOT_SCREENSHOT) > 0
+
+
 def force_kill_vm():
     """Forcefully kill VM - called on exit."""
     global qemu_process, use_qemu, boot_image_path, vm_cleanup_done
@@ -466,6 +556,8 @@ def force_kill_vm():
             )
         except Exception:
             pass
+
+    remove_file_if_exists(QEMU_MONITOR_SOCKET)
 
 
 def build_ninja_target(target):
@@ -682,6 +774,7 @@ def start_qemu(rpi_mode=False, smp=4):
                     "-serial", f"file:{LOG_FILE}"
                 ]
 
+        add_qemu_control_monitor(qemu_cmd)
         add_qemu_gdb_server(qemu_cmd)
         print(f"  Command: {' '.join(qemu_cmd)}")
 
@@ -821,6 +914,7 @@ def start_qemu(rpi_mode=False, smp=4):
         else:
             qemu_cmd.insert(1, "-enable-kvm")
 
+        add_qemu_control_monitor(qemu_cmd)
         add_qemu_gdb_server(qemu_cmd)
         print(f"  Command: {' '.join(qemu_cmd)}")
 
@@ -2335,7 +2429,12 @@ def monitor_log():
     last_size = get_file_size(LOG_FILE)
     last_change_time = time.time()
     crash_dumped = False
-    kernel_started = any(marker in read_log_tail(LOG_FILE) for marker in KERNEL_LOG_MARKERS)
+    initial_log_tail = read_log_tail(LOG_FILE)
+    kernel_started = any(marker in initial_log_tail for marker in KERNEL_LOG_MARKERS)
+    post_boot_marker_seen = SUCCESS_LOG_MARKER in initial_log_tail
+    post_boot_launch_at = None
+    post_boot_capture_at = None
+    post_boot_finish_at = None
     smp_tables = SmpStatTablePrinter()
     taskmgr_cadence = TaskMgrCadencePrinter()
 
@@ -2348,6 +2447,14 @@ def monitor_log():
     log_follower.read_available()
 
     try:
+        if post_boot_marker_seen:
+            print(f"Runtime matrix completed: {SUCCESS_LOG_MARKER}")
+            if not POST_BOOT_PROGRAM:
+                force_kill_vm()
+                return
+            post_boot_launch_at = time.time() + POST_BOOT_DELAY
+            print(f"Post-boot launch scheduled in {POST_BOOT_DELAY:g} seconds.")
+
         while True:
             time.sleep(0.5)
 
@@ -2371,18 +2478,23 @@ def monitor_log():
             # 3. Check Log Stall
             current_size = get_file_size(LOG_FILE)
             current_time = time.time()
+            log_changed = current_size != last_size
 
-            if current_size != last_size:
+            if log_changed:
                 last_size = current_size
                 last_change_time = current_time
                 log_follower.read_available()
                 log_tail = read_log_tail(LOG_FILE)
                 if not kernel_started:
                     kernel_started = any(marker in log_tail for marker in KERNEL_LOG_MARKERS)
-                if SUCCESS_LOG_MARKER in log_tail:
+                if not post_boot_marker_seen and SUCCESS_LOG_MARKER in log_tail:
+                    post_boot_marker_seen = True
                     print(f"Runtime matrix completed: {SUCCESS_LOG_MARKER}")
-                    force_kill_vm()
-                    return
+                    if not POST_BOOT_PROGRAM:
+                        force_kill_vm()
+                        return
+                    post_boot_launch_at = current_time + POST_BOOT_DELAY
+                    print(f"Post-boot launch scheduled in {POST_BOOT_DELAY:g} seconds.")
                 if not crash_dumped and log_has_crash_marker(log_tail):
                     crash_dumped = True
                     print("Crash/debugger marker detected in serial log.")
@@ -2390,7 +2502,44 @@ def monitor_log():
                     check_and_translate_backtrace(LOG_FILE)
                     force_kill_vm()
                     return
-            else:
+
+            if post_boot_launch_at is not None and current_time >= post_boot_launch_at:
+                print(f"Launching post-boot program: {POST_BOOT_PROGRAM}")
+                try:
+                    launch_post_boot_program()
+                except (OSError, RuntimeError, ValueError) as error:
+                    print(f"Post-boot launch failed: {error}")
+                    force_kill_vm()
+                    return
+                post_boot_launch_at = None
+                post_boot_capture_at = time.time() + POST_BOOT_CAPTURE_DELAY
+                last_change_time = time.time()
+                print(f"Screenshot scheduled in {POST_BOOT_CAPTURE_DELAY:g} seconds.")
+
+            if post_boot_capture_at is not None and current_time >= post_boot_capture_at:
+                try:
+                    captured = capture_post_boot_screenshot()
+                except (OSError, RuntimeError) as error:
+                    print(f"Post-boot screenshot failed: {error}")
+                    force_kill_vm()
+                    return
+                if not captured:
+                    print(f"Post-boot screenshot was not created: {POST_BOOT_SCREENSHOT}")
+                    force_kill_vm()
+                    return
+                print(f"Post-boot screenshot: {POST_BOOT_SCREENSHOT}")
+                post_boot_capture_at = None
+                post_boot_finish_at = time.time() + 2
+                last_change_time = time.time()
+
+            if post_boot_finish_at is not None and current_time >= post_boot_finish_at:
+                log_follower.read_available()
+                print("Post-boot program capture completed.")
+                force_kill_vm()
+                return
+
+            post_boot_pending = POST_BOOT_PROGRAM and post_boot_marker_seen
+            if not log_changed and not post_boot_pending:
                 stall_duration = current_time - last_change_time
 
                 if kernel_started and stall_duration >= STALL_TIMEOUT:
@@ -2423,7 +2572,7 @@ def signal_handler(sig, frame):
 
 
 def main():
-    global use_qemu, target_arch, boot_media, boot_image_path, QEMU_ARM64_GIC_VERSION
+    global use_qemu, target_arch, boot_media, boot_image_path, QEMU_ARM64_GIC_VERSION, POST_BOOT_PROGRAM
 
     parser = argparse.ArgumentParser(description='VM Monitor Script')
     parser.add_argument('--qemu', action='store_true',
@@ -2435,20 +2584,31 @@ def main():
     parser.add_argument('--livecd', action='store_true', help='Build and boot livecd.iso instead of ReactOS.img')
     parser.add_argument('--iso', nargs='?', const=LIVECD_ISO, default=None,
                         help='Boot an ISO path with QEMU; no path means build/livecd.iso')
+    parser.add_argument('--run-winver', action='store_true',
+                        help='On AMD64, launch the SysWOW64 winver.exe after BOOT_TESTS_DONE and capture the screen')
     parser.add_argument('--gic-version', '--gic', choices=('auto', '2', '3', '4', 'host', 'max'),
                         default=QEMU_ARM64_GIC_VERSION,
                         help='ARM64 QEMU virt GIC version (default: auto; env: ROS_QEMU_GIC_VERSION)')
     args = parser.parse_args()
     QEMU_ARM64_GIC_VERSION = args.gic_version
 
+    if args.run_winver and args.vbox:
+        parser.error("--run-winver requires QEMU")
+    if args.run_winver and args.img:
+        parser.error("--run-winver boots the LiveCD and cannot be combined with --img")
+
     # --vbox is explicit but same as default (no --qemu)
-    use_qemu = args.qemu and not args.vbox
+    use_qemu = (args.qemu or args.run_winver) and not args.vbox
 
     if args.img and (args.livecd or args.iso is not None):
         parser.error("--img cannot be combined with --livecd or --iso")
 
     # Detect target architecture from CWD
     target_arch = detect_target_arch()
+    if args.run_winver:
+        if target_arch != "amd64":
+            parser.error("--run-winver currently requires an AMD64 build with WoW64 enabled")
+        POST_BOOT_PROGRAM = r"X:\reactos\SysWOW64\winver.exe"
 
     build_target = "reactosimg"
     boot_media = "disk"
@@ -2487,6 +2647,9 @@ def main():
     print(f"Build directory: {BUILD_DIR}")
     print(f"Boot media: {boot_media}")
     print(f"Boot image: {boot_image_path}")
+    if POST_BOOT_PROGRAM:
+        print(f"Post-boot program: {POST_BOOT_PROGRAM}")
+        print(f"Post-boot screenshot: {POST_BOOT_SCREENSHOT}")
     print("="*60 + "\n")
 
     if build_target:
