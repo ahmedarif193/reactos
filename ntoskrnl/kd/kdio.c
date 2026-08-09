@@ -286,15 +286,15 @@ KdpDebugLogInit(
                                    NULL,
                                    NULL);
 
-        /* Create the log file */
+        /* Start a fresh log so this boot's phase-0 output begins at byte zero. */
         Status = ZwCreateFile(&KdpLogFileHandle,
-                              FILE_APPEND_DATA | SYNCHRONIZE,
+                              FILE_WRITE_DATA | SYNCHRONIZE,
                               &ObjectAttributes,
                               &Iosb,
                               NULL,
                               FILE_ATTRIBUTE_NORMAL,
                               FILE_SHARE_READ,
-                              FILE_OPEN_IF,
+                              FILE_OVERWRITE_IF,
                               FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT |
                                 FILE_SEQUENTIAL_ONLY | FILE_WRITE_THROUGH,
                               NULL,
@@ -315,39 +315,6 @@ KdpDebugLogInit(
             }
             goto Failure;
         }
-
-        /**    HACK for FILE_APPEND_DATA     **
-         ** Remove once CORE-18789 is fixed. **
-         ** Enforce to go to the end of file **/
-        {
-            FILE_STANDARD_INFORMATION FileInfo;
-            FILE_POSITION_INFORMATION FilePosInfo;
-
-            Status = ZwQueryInformationFile(KdpLogFileHandle,
-                                            &Iosb,
-                                            &FileInfo,
-                                            sizeof(FileInfo),
-                                            FileStandardInformation);
-            DPRINT("Status: 0x%08lx - EOF offset: %I64d\n",
-                    Status, FileInfo.EndOfFile.QuadPart);
-
-            Status = ZwQueryInformationFile(KdpLogFileHandle,
-                                            &Iosb,
-                                            &FilePosInfo,
-                                            sizeof(FilePosInfo),
-                                            FilePositionInformation);
-            DPRINT("Status: 0x%08lx - Position: %I64d\n",
-                    Status, FilePosInfo.CurrentByteOffset.QuadPart);
-
-            FilePosInfo.CurrentByteOffset.QuadPart = FileInfo.EndOfFile.QuadPart;
-            Status = ZwSetInformationFile(KdpLogFileHandle,
-                                          &Iosb,
-                                          &FilePosInfo,
-                                          sizeof(FilePosInfo),
-                                          FilePositionInformation);
-            DPRINT("ZwSetInformationFile(FilePositionInfo) returned: 0x%08lx\n", Status);
-        }
-        /** END OF HACK **/
 
         KeInitializeEvent(&KdpLoggerThreadEvent, SynchronizationEvent, TRUE);
         KeInitializeDpc(&KdpLoggerWakeDpc, KdpLoggerWakeDpcRoutine, NULL);
