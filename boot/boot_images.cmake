@@ -36,7 +36,7 @@ function(freeldr_ini_add_http_boot SOURCE OUTPUT URL DEFAULT_OS)
                    "HttpBoot=\"ReactOS HTTP Boot - Debug\""
                    _contents "${_contents}")
     string(REPLACE "${_boot_marker}"
-                   "[HttpBoot]\nBootType=Windows2003\nSystemPath=ramdisk(0)\\reactos\nOptions=/KERNEL=ntkrnlmp.exe /DEBUG /DEBUGPORT=COM1 /BAUDRATE=115200 /SOS /FASTDETECT /MININT /LOADSYMBOLS\nHttpBootUrl=${URL}"
+                   "[HttpBoot]\nBootType=Windows2003\nSystemPath=ramdisk(0)\\reactos\nOptions=/KERNEL=ntkrnlmp.exe /DEBUG /DEBUGPORT=COM1 /BAUDRATE=115200 /SOS /FASTDETECT /MININT /RDPATH= /RDRAMSIZE=64M /LOADSYMBOLS\nHttpBootUrl=${URL}"
                    _contents "${_contents}")
     file(WRITE "${OUTPUT}" "${_contents}")
 endfunction()
