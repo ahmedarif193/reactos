@@ -3508,7 +3508,7 @@ GetNextFrame(_Inout_ PCONTEXT Context)
 #define KDB_MAX_BACKTRACE_THREADS 65536
 
 static VOID
-KdbpPrintBackTraceContext(IN PCONTEXT InputContext, IN BOOLEAN Verbose)
+KdbpPrintBackTraceContext(IN PCONTEXT InputContext, IN BOOLEAN Verbose, IN BOOLEAN KernelOnly)
 {
     CONTEXT Context = *InputContext;
     ULONG FrameNumber;
@@ -3523,6 +3523,13 @@ KdbpPrintBackTraceContext(IN PCONTEXT InputContext, IN BOOLEAN Verbose)
 
         if (Pc == 0 || Sp == 0)
             break;
+        if (KernelOnly &&
+            (Pc < (ULONG_PTR)MM_SYSTEM_RANGE_START ||
+             Sp < (ULONG_PTR)MM_SYSTEM_RANGE_START))
+        {
+            KdbpPrint("Kernel-only backtrace stopped before user address-space access.\n");
+            return;
+        }
 
         if (Verbose)
             KdbpPrint("#%-3lu SP=%p FP=%p PC=%p ", FrameNumber, (PVOID)Sp, (PVOID)Fp, (PVOID)Pc);
@@ -3548,7 +3555,7 @@ KdbpPrintBackTraceContext(IN PCONTEXT InputContext, IN BOOLEAN Verbose)
 }
 
 static BOOLEAN
-KdbpCaptureFrozenThreadContext(IN PETHREAD Thread, IN PCONTEXT OriginalContext, OUT PCONTEXT Context)
+KdbpCaptureFrozenThreadContext(IN PETHREAD Thread, IN PETHREAD Snapshot, IN PCONTEXT OriginalContext, OUT PCONTEXT Context)
 {
     ULONG Processor;
 
@@ -3580,8 +3587,7 @@ KdbpCaptureFrozenThreadContext(IN PETHREAD Thread, IN PCONTEXT OriginalContext, 
         return (NT_SUCCESS(KdbpSafeReadMemory(Context, &Prcb->ProcessorState.ContextFrame, sizeof(*Context))) && KdbpContextIsUsable(Context));
     }
 
-    *Context = *KdbCurrentTrapFrame;
-    return TRUE;
+    return KdbpKdbTrapFrameFromKernelStack(Snapshot->Tcb.KernelStack, (PKDB_KTRAP_FRAME)Context);
 }
 
 static VOID
@@ -3595,6 +3601,8 @@ KdbpPrintAllThreadBackTraces(IN BOOLEAN Verbose)
     CONTEXT OriginalContext;
     ETHREAD OriginalThread;
     PVOID OriginalThreadId;
+    PEPROCESS OriginalProcess;
+    KIRQL CurrentIrql;
 
     KdbpResetContextRecord(FALSE);
     if (!NT_SUCCESS(KdbpSafeReadMemory(&OriginalThread, KdbOriginalThread, sizeof(OriginalThread))) ||
@@ -3611,6 +3619,8 @@ KdbpPrintAllThreadBackTraces(IN BOOLEAN Verbose)
         return;
     }
     OriginalContext = *KdbCurrentTrapFrame;
+    OriginalProcess = KdbCurrentProcess;
+    CurrentIrql = KeGetCurrentIrql();
 
     ProcessEntry = ProcessHead.Flink;
     while (ProcessEntry != &PsActiveProcessHead &&
@@ -3648,6 +3658,7 @@ KdbpPrintAllThreadBackTraces(IN BOOLEAN Verbose)
             LIST_ENTRY ThreadLinks;
             PVOID ThreadId;
             CONTEXT Context;
+            BOOLEAN KernelOnly;
 
             if (!NT_SUCCESS(KdbpSafeReadMemory(&ThreadLinks, ThreadEntry, sizeof(ThreadLinks))))
             {
@@ -3661,19 +3672,22 @@ KdbpPrintAllThreadBackTraces(IN BOOLEAN Verbose)
                 goto Cleanup;
             }
             ThreadId = ThreadSnapshot.Cid.UniqueThread;
+            KernelOnly = (CurrentIrql >= DISPATCH_LEVEL && Process != OriginalProcess);
             KdbpPrint("\nProcess %p %.15s  thread %p  ETHREAD %p\n", ProcessSnapshot.UniqueProcessId, ProcessSnapshot.ImageFileName, ThreadId, Thread);
 
-            if (!KdbpAttachToThread(ThreadId))
+            if (!KernelOnly && !KdbpAttachToThread(ThreadId))
             {
                 KdbpPrint("bt all: Could not attach to thread %p.\n", ThreadId);
             }
-            else if (!KdbpCaptureFrozenThreadContext(Thread, &OriginalContext, &Context))
+            else if (!KdbpCaptureFrozenThreadContext(Thread, &ThreadSnapshot, &OriginalContext, &Context))
             {
                 KdbpPrint("bt all: Stable context is unavailable for running thread %p.\n", ThreadId);
             }
             else
             {
-                KdbpPrintBackTraceContext(&Context, Verbose);
+                if (KernelOnly)
+                    KdbpPrint("bt all: IRQL %lu prevents process attach; showing kernel frames only.\n", CurrentIrql);
+                KdbpPrintBackTraceContext(&Context, Verbose, KernelOnly);
             }
 
             if (KdbOutputAborted)
@@ -3860,7 +3874,7 @@ KdbpCmdBackTrace(ULONG Argc, PCHAR Argv[])
         Context = *KdbCurrentTrapFrame;
     }
 
-    KdbpPrintBackTraceContext(&Context, Verbose);
+    KdbpPrintBackTraceContext(&Context, Verbose, FALSE);
 
     return TRUE;
 }
