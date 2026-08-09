@@ -2681,7 +2681,19 @@ QSI_DEF(SystemNumaAvailableMemory)
 /* Class 62 - Emulation Basic Information */
 QSI_DEF(SystemEmulationBasicInformation)
 {
-    return QSISystemBasicInformation(Buffer, Size, ReqSize);
+    NTSTATUS Status;
+
+    Status = QSISystemBasicInformation(Buffer, Size, ReqSize);
+#if defined(_M_AMD64)
+    if (NT_SUCCESS(Status))
+    {
+        PSYSTEM_BASIC_INFORMATION Sbi = (PSYSTEM_BASIC_INFORMATION)Buffer;
+
+        Sbi->MaximumUserModeAddress = MM_HIGHEST_USER_ADDRESS_WOW64;
+    }
+#endif
+
+    return Status;
 }
 
 /* Class 63 - Emulation Processor Information */
