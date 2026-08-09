@@ -230,10 +230,10 @@ static NTSTATUS LdrpAccessResource( PVOID BaseAddress, IMAGE_RESOURCE_DATA_ENTRY
             {
                 if (is_data_file_module(BaseAddress))
                 {
-                    PVOID mod = (PVOID)((ULONG_PTR)BaseAddress & ~1);
+                    PVOID mod = (PVOID)((ULONG_PTR)BaseAddress & ~(ULONG_PTR)3);
                     *ptr = RtlImageRvaToVa( RtlImageNtHeader(mod), mod, entry->OffsetToData, NULL );
                 }
-                else *ptr = (char *)BaseAddress + entry->OffsetToData;
+                else *ptr = (char *)((ULONG_PTR)BaseAddress & ~(ULONG_PTR)3) + entry->OffsetToData;
             }
             if (size) *size = entry->Size;
         }

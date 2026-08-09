@@ -278,12 +278,10 @@ RtlImageDirectoryEntryToData(
     PIMAGE_NT_HEADERS NtHeader;
     ULONG Va;
 
-    /* Magic flag for non-mapped images. */
+    /* Resource module handles use bit 0 for data files and bit 1 for images. */
     if ((ULONG_PTR)BaseAddress & 1)
-    {
-        BaseAddress = (PVOID)((ULONG_PTR)BaseAddress & ~1);
         MappedAsImage = FALSE;
-    }
+    BaseAddress = (PVOID)((ULONG_PTR)BaseAddress & ~(ULONG_PTR)3);
 
     NtHeader = RtlImageNtHeader(BaseAddress);
     if (NtHeader == NULL)
