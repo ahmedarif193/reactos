@@ -75,7 +75,11 @@ Failure:
 PNVME_QUEUE
 NvmeSelectQueue(_In_ PNVME_DEVICE_EXTENSION Device)
 {
+#if (NTDDI_VERSION >= NTDDI_WIN7)
     ULONG Processor = KeGetCurrentProcessorNumberEx(NULL);
+#else
+    ULONG Processor = KeGetCurrentProcessorNumber();
+#endif
 
     return &Device->IoQueues[Processor % Device->IoQueueCount];
 }
@@ -246,7 +250,6 @@ NvmeRetireQueue(_In_ PNVME_DEVICE_EXTENSION Device, _In_ PNVME_QUEUE Queue, _In_
 }
 
 VOID
-NTAPI
 NvmeAdminDpc(_In_ PSTOR_DPC Dpc,
              _In_ PVOID HwDeviceExtension,
              _In_opt_ PVOID SystemArgument1,
@@ -264,7 +267,6 @@ NvmeAdminDpc(_In_ PSTOR_DPC Dpc,
 }
 
 VOID
-NTAPI
 NvmeIoQueueDpc(_In_ PSTOR_DPC Dpc,
                _In_ PVOID HwDeviceExtension,
                _In_opt_ PVOID SystemArgument1,
@@ -286,7 +288,6 @@ NvmeIoQueueDpc(_In_ PSTOR_DPC Dpc,
  * releases Storport bookkeeping that cannot happen at device IRQL.
  */
 BOOLEAN
-NTAPI
 NvmeHwMSInterrupt(_In_ PVOID DeviceExtension, _In_ ULONG MessageId)
 {
     PNVME_DEVICE_EXTENSION Device = (PNVME_DEVICE_EXTENSION)DeviceExtension;

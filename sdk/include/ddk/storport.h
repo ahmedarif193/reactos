@@ -697,7 +697,6 @@ typedef enum _STORPORT_FUNCTION_CODE
     ExtFunctionInitializePerformanceOptimizations,
     ExtFunctionGetStartIoPerformanceParameters,
     ExtFunctionLogSystemEvent,
-#if (NTDDI_VERSION >= NTDDI_WIN7)
     ExtFunctionGetCurrentProcessorNumber,
     ExtFunctionGetActiveGroupCount,
     ExtFunctionGetGroupAffinity,
@@ -707,8 +706,6 @@ typedef enum _STORPORT_FUNCTION_CODE
     ExtFunctionGetLogicalProcessorRelationship,
     ExtFunctionAllocateContiguousMemorySpecifyCacheNode,
     ExtFunctionFreeContiguousMemorySpecifyCache,
-#endif
-#if (NTDDI_VERSION >= NTDDI_WIN8)
     ExtFunctionSetPowerSettingNotificationGuids,
     ExtFunctionInvokeAcpiMethod,
     ExtFunctionGetRequestInfo,
@@ -820,7 +817,6 @@ typedef enum _STORPORT_FUNCTION_CODE
     ExtFunctionNvmeIceIoStartEx,
     ExtFunctionQueryNvmeIceSupport,
     ExtFunctionQueueWorkItemToNode,
-#endif
 } STORPORT_FUNCTION_CODE, *PSTORPORT_FUNCTION_CODE;
 
 #define STOR_STATUS_SUCCESS                     (0x00000000L)
