@@ -30,8 +30,8 @@
 155 stdcall -noname FindMRUStringA(long str ptr)
 156 stdcall -noname DelMRUString(long long)
 157 stdcall -noname CreateMRUListLazyA(ptr long long long)
-163 stub -noname CreatePage
-164 stub -noname CreateProxyPage
+163 stdcall -noname CreatePage(long ptr)
+164 stdcall -noname CreateProxyPage(long long)
 167 stdcall -noname AddMRUData(long ptr long)
 169 stdcall -noname FindMRUData(long ptr long ptr)
 233 stdcall -noname Str_GetPtrA(str str long)
@@ -92,13 +92,13 @@
 380 stdcall -ordinal LoadIconMetric(ptr wstr long ptr)
 381 stdcall -ordinal LoadIconWithScaleDown(ptr wstr long long ptr)
 382 stdcall -noname SmoothScrollWindow(ptr)
-383 stub -noname DoReaderMode
+383 stdcall -noname DoReaderMode(ptr)
 384 stdcall -noname SetPathWordBreakProc(ptr long)
 385 stdcall -ordinal DPA_EnumCallback(ptr ptr ptr)
 386 stdcall -ordinal DPA_DestroyCallback(ptr ptr ptr)
 387 stdcall -ordinal DSA_EnumCallback(ptr ptr ptr)
 388 stdcall -ordinal DSA_DestroyCallback(ptr ptr ptr)
-389 stub -noname SHGetProcessDword
+389 stdcall -noname SHGetProcessDword(long long)
 390 stdcall -noname ImageList_SetColorTable(ptr long long ptr)
 400 stdcall -ordinal CreateMRUListW(ptr)
 401 stdcall -ordinal AddMRUStringW(long wstr)
