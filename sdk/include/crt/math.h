@@ -160,9 +160,22 @@ _Check_return_ _CRTIMP double __cdecl floor(_In_ double x);
 _Check_return_ _CRTIMP double __cdecl frexp(_In_ double x, _Out_ int *y);
 _Check_return_ _CRTIMP double __cdecl ldexp(_In_ double x, _In_ int y);
 _Check_return_ _CRTIMP double __cdecl modf(_In_ double x, _Out_ double *y);
+_Check_return_ _CRTIMP double __cdecl trunc(_In_ double x);
 
 #ifndef __cplusplus
+#if defined(__GNUC__) && !defined(_MSC_VER)
+#ifndef isfinite
+#define isfinite(x) __builtin_isfinite(x)
+#endif
+#ifndef isinf
+#define isinf(x) __builtin_isinf(x)
+#endif
+#ifndef isnan
+#define isnan(x) __builtin_isnan(x)
+#endif
+#else
 #define isnan _isnan
+#endif
 #endif
 
 #if defined(__i386__) || defined(_M_IX86)

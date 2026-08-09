@@ -70,10 +70,9 @@ extern "C" {
 #endif
 
 /*** memcopy must be memmove ***/
-void* __cdecl memmove(void* dest, const void* source, size_t num);
 __INTRIN_INLINE void* __cdecl memcpy(void* dest, const void* source, size_t num)
 {
-    return memmove(dest, source, num);
+    return __builtin_memmove(dest, source, num);
 }
 
 
