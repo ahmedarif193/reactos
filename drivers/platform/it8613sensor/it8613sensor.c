@@ -1,6 +1,6 @@
 /*
  * PROJECT:     ReactOS ITE IT8613E Sensor Provider
- * COPYRIGHT:   Copyright 2026 Ahmed Arif
+ * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  * LICENSE:     GPL-3.0-or-later
  * PURPOSE:     Read-only voltage monitoring for the LattePanda Mu
  */
