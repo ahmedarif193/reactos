@@ -5302,6 +5302,27 @@ XHCI_CalculateAverageTrbLength(
 
 static
 VOID
+XHCI_AcknowledgeInterrupter(
+    _Inout_ PXHCI_EXTENSION Extension)
+{
+    PXHCI_INTERRUPTER_REGISTER_SET Interrupter;
+    ULONG Iman;
+
+    if (!Extension || !Extension->RuntimeRegisters)
+        return;
+
+    Interrupter = &Extension->RuntimeRegisters->Interrupter[0];
+    Iman = XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
+    if ((Iman & XHCI_IMAN_IP) == 0)
+        return;
+
+    /* IMAN.IP is RW1C. Preserve IE and flush the posted acknowledgement. */
+    XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman, XHCI_IMAN_IP | (Iman & XHCI_IMAN_IE));
+    (VOID)XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
+}
+
+static
+VOID
 XHCI_ServiceEventRing(
     _In_ PXHCI_EXTENSION Extension,
     _In_ BOOLEAN AcknowledgeInterrupt,
@@ -5319,6 +5340,14 @@ XHCI_ServiceEventRing(
         return;
 
     KeAcquireSpinLock(&Extension->EventRingLock, &OldIrql);
+
+    /*
+     * Clear IMAN.IP before consuming events. If it is cleared after ERDP.EHB,
+     * an event arriving between the final ring check and the late IP clear can
+     * lose its interrupt edge and remain queued until unrelated activity.
+     */
+    if (AcknowledgeInterrupt)
+        XHCI_AcknowledgeInterrupter(Extension);
 
     while (TRUE)
     {
@@ -5474,15 +5503,6 @@ XHCI_ServiceEventRing(
             ErdpLow |= XHCI_ERDP_BUSY;
 
         XHCI_WRITE_REGISTER_ULONG(&Interrupter->ErdpLow, ErdpLow);
-
-        if (AcknowledgeInterrupt)
-        {
-            ULONG Iman = XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
-            /* Write IP=1 (RW1C to clear) while preserving IE, mask reserved bits */
-            XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman,
-                                      XHCI_IMAN_IP | (Iman & XHCI_IMAN_IE));
-        }
-
     }
     KeReleaseSpinLock(&Extension->EventRingLock, OldIrql);
 
@@ -13217,7 +13237,7 @@ XHCI_InterruptService(PVOID MiniPortExtension)
      * triggered interrupts (or emulators like QEMU that assert INTx alongside
      * MSI), the interrupt will fire again immediately.
      *
-     * Clear IMAN.IP and USBSTS write-to-clear bits, then return TRUE to
+     * Clear USBSTS write-to-clear bits and then IMAN.IP, then return TRUE to
      * claim the interrupt without queuing a DPC.
      */
     if (Extension->FatalError || Extension->StoppingOrRemoved)
@@ -13227,19 +13247,6 @@ XHCI_InterruptService(PVOID MiniPortExtension)
         if (XHCI_MmioUnavailable(Extension))
             return TRUE;
 
-        /* Clear IMAN.IP on interrupter 0 */
-        if (Extension->RuntimeRegisters)
-        {
-            PXHCI_INTERRUPTER_REGISTER_SET Intr = &Extension->RuntimeRegisters->Interrupter[0];
-            ULONG ImanVal = XHCI_READ_REGISTER_ULONG(&Intr->Iman);
-            if (ImanVal & XHCI_IMAN_IP)
-            {
-                /* Write IP=1 (RW1C) to clear, keep IE as-is */
-                XHCI_WRITE_REGISTER_ULONG(&Intr->Iman,
-                                          XHCI_IMAN_IP | (ImanVal & XHCI_IMAN_IE));
-            }
-        }
-
         /* Clear all write-to-clear status bits */
         StsAck = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts);
         StsAck &= (XHCI_USBSTS_EINT | XHCI_USBSTS_PCD |
@@ -13248,6 +13255,8 @@ XHCI_InterruptService(PVOID MiniPortExtension)
         {
             XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts, StsAck);
         }
+
+        XHCI_AcknowledgeInterrupter(Extension);
 
         return TRUE; /* Claim the interrupt, but do not queue DPC */
     }
@@ -13283,21 +13292,11 @@ XHCI_InterruptService(PVOID MiniPortExtension)
     XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbSts, AckMask);
 
     /*
-     * Note on IMAN.IP clearing:
-     *
-     * For XHCI, IMAN.IP (Interrupt Pending) needs to be cleared for level-triggered
-     * legacy INTx interrupts. However, we must NOT clear it here in the ISR because:
-     *
-     * 1. The controller will re-assert IMAN.IP if there are pending events
-     * 2. The DPC processes events and updates ERDP which naturally clears IP
-     * 3. Prematurely clearing IP can cause lost interrupts
-     *
-     * For MSI/MSI-X (edge-triggered), IP auto-clears after the interrupt message
-     * is sent, so we don't need to touch it.
-     *
-     * Avoid clearing IMAN.IP here; the DPC path updates ERDP and naturally
-     * clears pending interrupts.
+     * USBSTS.EINT must be acknowledged before IMAN.IP. Clear IP now, before
+     * the DPC consumes events and clears ERDP.EHB, so a newly queued event can
+     * produce another interrupt instead of being erased by a late IP clear.
      */
+    XHCI_AcknowledgeInterrupter(Extension);
 
     InterlockedOr((volatile LONG *)&Extension->PendingUsbSts, AckMask);
 
@@ -13387,21 +13386,13 @@ XHCI_EnableInterrupts(PVOID MiniPortExtension)
     if (!Extension || !Extension->OperationalRegisters)
         return;
 
-    Command = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd);
-    Command |= XHCI_USBCMD_INTE;
-    XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd, Command);
-    Extension->InterruptsEnabled = TRUE;
-
-    CommandAfter = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd);
-    DPRINT("usbxhci: EnableInterrupts USBCMD before=%08lx after=%08lx (INTE=%u)\n",
-            Command & ~XHCI_USBCMD_INTE, CommandAfter, (CommandAfter & XHCI_USBCMD_INTE) ? 1 : 0);
-
     if (Extension->RuntimeRegisters)
     {
         Interrupter = &Extension->RuntimeRegisters->Interrupter[0];
         Iman = XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
-        /* Enable interrupter: set IE and clear any pending IP (RW1C) */
-        XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman, XHCI_IMAN_IE | XHCI_IMAN_IP);
+
+        /* Enable IE without clearing an event that arrived while masked. */
+        XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman, XHCI_IMAN_IE);
 
         ImanAfter = XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
         DPRINT("usbxhci: EnableInterrupts IMAN before=%08lx after=%08lx (IE=%u IP=%u)\n",
@@ -13409,6 +13400,16 @@ XHCI_EnableInterrupts(PVOID MiniPortExtension)
                 (ImanAfter & XHCI_IMAN_IE) ? 1 : 0,
                 (ImanAfter & XHCI_IMAN_IP) ? 1 : 0);
     }
+
+    /* Enable the global interrupt gate after the interrupter is armed. */
+    Command = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd);
+    Command |= XHCI_USBCMD_INTE;
+    XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd, Command);
+    CommandAfter = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd);
+    Extension->InterruptsEnabled = TRUE;
+
+    DPRINT("usbxhci: EnableInterrupts USBCMD before=%08lx after=%08lx (INTE=%u)\n",
+            Command & ~XHCI_USBCMD_INTE, CommandAfter, (CommandAfter & XHCI_USBCMD_INTE) ? 1 : 0);
 }
 
 /* ========================= Safe stub implementations ========================= */
@@ -14479,6 +14480,7 @@ XHCI_DisableInterrupts(PVOID MiniPortExtension)
          * any pending interrupt. Only write the defined bits, IE=0 disables.
          */
         XHCI_WRITE_REGISTER_ULONG(&Interrupter->Iman, XHCI_IMAN_IP);
+        (VOID)XHCI_READ_REGISTER_ULONG(&Interrupter->Iman);
     }
 }
 
