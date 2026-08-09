@@ -251,6 +251,7 @@ BEGIN
     IDS_OPTION_NO "לא"
     IDS_D3DTEST_DESCRIPTION "פעולה זו תבדוק Direct3D בהתקן זה. האם להמשיך?"
     IDS_D3DTEST_D3Dx "בדיקה זו תשתמש בממשקי Direct3D %u המואצים באמצעות חומרה."
+    IDS_D3DTEST_RESULT "Did you see the rotating Direct3D %u cube?"
     IDS_OS_VERSION "%s %s (%d.%d, Build %d)"
     IDS_DMUSIC_DESC "Description"
     IDS_DMUSIC_TYPE "Type"

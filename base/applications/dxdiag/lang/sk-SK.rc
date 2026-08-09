@@ -247,6 +247,7 @@ BEGIN
     IDS_OPTION_NO "Nie"
     IDS_D3DTEST_DESCRIPTION "This will start Direct3D interface test. Continue?"
     IDS_D3DTEST_D3Dx "This test will use hardware-accelerated Direct3D %u interface."
+    IDS_D3DTEST_RESULT "Did you see the rotating Direct3D %u cube?"
     IDS_OS_VERSION "%s %s (%d.%d, Build %d)"
     IDS_DMUSIC_DESC "Description"
     IDS_DMUSIC_TYPE "Type"

@@ -245,6 +245,7 @@ BEGIN
     IDS_OPTION_NO "Hayır"
     IDS_D3DTEST_DESCRIPTION "Bu, React3D arayüz sınamasını başlatılacak. Devam etmek ister misiniz?"
     IDS_D3DTEST_D3Dx "Bu sınama, donanım hızlandırmalı React3D %u arayüzünü kullanacak."
+    IDS_D3DTEST_RESULT "Did you see the rotating Direct3D %u cube?"
     IDS_OS_VERSION "%s %s (%d.%d, Yapı %d)"
     IDS_DMUSIC_DESC "Tanım"
     IDS_DMUSIC_TYPE "Tür"

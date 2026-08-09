@@ -161,6 +161,8 @@
 #define IDS_DMUSIC_EXT               10136
 #define IDS_DMUSIC_PORT              10137
 #define IDS_DDDISABLE_MSG            10138
+#define IDS_D3DTEST_RESULT           10139
 
 /* icon resource constants */
 #define IDI_APPICON 20000
+#define IDR_D3DTEST_TEXTURE 20001
