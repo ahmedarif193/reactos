@@ -8,7 +8,9 @@
 
 /* INCLUDES *****************************************************************/
 #include <k32.h>
+#define _WINMM_
 #include <mmsystem.h>
+#undef _WINMM_
 
 #define NDEBUG
 #include <debug.h>
