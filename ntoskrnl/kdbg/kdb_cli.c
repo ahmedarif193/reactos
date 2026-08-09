@@ -5577,6 +5577,7 @@ KdbpCmdInterrupt(ULONG Argc, PCHAR Argv[])
     return TRUE;
 }
 
+#if defined(_M_AMD64) || defined(_M_ARM64)
 static VOID KdbpPrintInterruptLine(_In_ PKINTERRUPT Address, _In_ const KINTERRUPT *Interrupt)
 {
     KdbpPrint("  %p vec %03lu cpu %d irql %u/%u %s %s count %lu/%lu ISR ", Address, Interrupt->Vector, Interrupt->Number, Interrupt->Irql, Interrupt->SynchronizeIrql, Interrupt->Mode == LevelSensitive ? "level" : "edge", Interrupt->ShareVector ? "shared" : "exclusive", Interrupt->ServiceCount, Interrupt->DispatchCount);
@@ -5667,6 +5668,7 @@ static BOOLEAN KdbpPrintInterruptChain(_In_ ULONG Vector, _In_ PKINTERRUPT Head,
         KdbpPrint("  <interrupt chain truncated at %lu objects>\n", (ULONG)RTL_NUMBER_OF(Visited));
     return TRUE;
 }
+#endif
 
 #ifdef _M_AMD64
 static BOOLEAN KdbpPrintInterruptVector(_In_ ULONG Vector, _In_ BOOLEAN ShowUnused)
@@ -5839,6 +5841,7 @@ static BOOLEAN KdbpParsePciLocation(_In_ PCHAR Text, _Out_ PULONG Bus, _Out_ PUL
     return TRUE;
 }
 
+#if defined(_M_AMD64) || defined(_M_ARM64)
 static USHORT KdbpReadPciUshort(_In_reads_bytes_(sizeof(PCI_COMMON_CONFIG)) const UCHAR *Config, _In_ ULONG Offset)
 {
     USHORT Value;
@@ -5916,6 +5919,7 @@ static VOID KdbpPrintPciCapabilities(_In_ const PCI_COMMON_CONFIG *Config, _In_ 
         Offset = Next;
     }
 }
+#endif
 
 static BOOLEAN KdbpCmdPci(ULONG Argc, PCHAR Argv[])
 {
