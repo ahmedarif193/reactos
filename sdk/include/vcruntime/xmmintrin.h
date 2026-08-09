@@ -936,6 +936,31 @@ __INTRIN_INLINE_SSE float _mm_cvtss_f32(__m128 __a)
     return __a[0];
 }
 
+__INTRIN_INLINE_SSE __m128 _mm_shuffle_ps(__m128 __a, __m128 __b, unsigned int __imm8)
+{
+    return (__m128)__builtin_ia32_shufps((__v4sf)__a, (__v4sf)__b, (int)__imm8);
+}
+
+__INTRIN_INLINE_SSE __m128 _mm_unpackhi_ps(__m128 __a, __m128 __b)
+{
+    return (__m128)__builtin_ia32_unpckhps((__v4sf)__a, (__v4sf)__b);
+}
+
+__INTRIN_INLINE_SSE __m128 _mm_unpacklo_ps(__m128 __a, __m128 __b)
+{
+    return (__m128)__builtin_ia32_unpcklps((__v4sf)__a, (__v4sf)__b);
+}
+
+__INTRIN_INLINE_SSE __m128 _mm_movehl_ps(__m128 __a, __m128 __b)
+{
+    return (__m128)__builtin_ia32_movhlps((__v4sf)__a, (__v4sf)__b);
+}
+
+__INTRIN_INLINE_SSE __m128 _mm_movelh_ps(__m128 __a, __m128 __b)
+{
+    return (__m128)__builtin_ia32_movlhps((__v4sf)__a, (__v4sf)__b);
+}
+
 __INTRIN_INLINE_SSE __m128 _mm_loadh_pi(__m128 __a, const __m64 *__p)
 {
 #ifdef  __clang__

@@ -16,7 +16,9 @@
 /* ARM64: no x86 intrinsics */
 #else
 
-//#include <wmmintrin.h>
+#include <wmmintrin.h>
+#include <tmmintrin.h>
+#include <shaintrin.h>
 #include <emmintrin.h>
 
 #if defined(_MSC_VER) && !defined(__clang__)
@@ -33,13 +35,19 @@ typedef union _DECLSPEC_INTRIN_TYPE  _CRT_ALIGN(32) __m256i
     unsigned __int64    m256i_u64[4];
 } __m256i;
 
+typedef __declspec(align(1)) __m256i __m256i_u;
+
 #else /* _MSC_VER */
 
 typedef char __v32qi __attribute__ ((__vector_size__ (32)));
 typedef short __v16hi __attribute__ ((__vector_size__ (32)));
+typedef int __v8si __attribute__ ((__vector_size__ (32)));
 typedef long long __v4di __attribute__ ((__vector_size__ (32)));
+typedef unsigned int __v8su __attribute__ ((__vector_size__ (32)));
+typedef unsigned long long __v4du __attribute__ ((__vector_size__ (32)));
 
 typedef long long __m256i __attribute__((__vector_size__(32), __may_alias__));
+typedef long long __m256i_u __attribute__((__vector_size__(32), __may_alias__, __aligned__(1)));
 
 #endif /* _MSC_VER */
 
@@ -49,8 +57,25 @@ extern "C" {
 
 extern __m256i __cdecl _mm256_cmpeq_epi8(__m256i, __m256i);
 extern __m256i __cdecl _mm256_cmpeq_epi16(__m256i, __m256i);
+extern __m256i __cdecl _mm256_add_epi32(__m256i, __m256i);
+extern __m256i __cdecl _mm256_xor_si256(__m256i, __m256i);
+extern __m256i __cdecl _mm256_shuffle_epi8(__m256i, __m256i);
 extern int __cdecl _mm256_movemask_epi8(__m256i);
 extern __m256i __cdecl _mm256_setzero_si256(void);
+extern __m256i __cdecl _mm256_set_epi64x(long long, long long, long long, long long);
+extern __m256i __cdecl _mm256_castsi128_si256(__m128i);
+extern __m256i __cdecl _mm256_insertf128_si256(__m256i, __m128i, const int);
+extern __m128i __cdecl _mm256_extracti128_si256(__m256i, const int);
+extern __m256i __cdecl _mm256_broadcastsi128_si256(__m128i);
+extern __m256i __cdecl _mm256_loadu_si256(__m256i const *);
+extern void __cdecl _mm256_storeu_si256(__m256i *, __m256i);
+extern __m256i __cdecl _mm256_slli_si256(__m256i, const int);
+extern __m256i __cdecl _mm256_srli_si256(__m256i, const int);
+extern __m256i __cdecl _mm256_aesdec_epi128(__m256i, __m256i);
+extern __m256i __cdecl _mm256_aesdeclast_epi128(__m256i, __m256i);
+extern __m256i __cdecl _mm256_aesenc_epi128(__m256i, __m256i);
+extern __m256i __cdecl _mm256_aesenclast_epi128(__m256i, __m256i);
+extern __m256i __cdecl _mm256_clmulepi64_epi128(__m256i, __m256i, const int);
 extern void __cdecl _mm256_zeroupper(void);
 
 extern int __cdecl _rdrand16_step(unsigned short *random_val);
@@ -92,8 +117,25 @@ void __cdecl _xsetbv(unsigned int, unsigned __int64);
 
 #pragma intrinsic(_mm256_cmpeq_epi8)
 #pragma intrinsic(_mm256_cmpeq_epi16)
+#pragma intrinsic(_mm256_add_epi32)
+#pragma intrinsic(_mm256_xor_si256)
+#pragma intrinsic(_mm256_shuffle_epi8)
 #pragma intrinsic(_mm256_movemask_epi8)
 #pragma intrinsic(_mm256_setzero_si256)
+#pragma intrinsic(_mm256_set_epi64x)
+#pragma intrinsic(_mm256_castsi128_si256)
+#pragma intrinsic(_mm256_insertf128_si256)
+#pragma intrinsic(_mm256_extracti128_si256)
+#pragma intrinsic(_mm256_broadcastsi128_si256)
+#pragma intrinsic(_mm256_loadu_si256)
+#pragma intrinsic(_mm256_storeu_si256)
+#pragma intrinsic(_mm256_slli_si256)
+#pragma intrinsic(_mm256_srli_si256)
+#pragma intrinsic(_mm256_aesdec_epi128)
+#pragma intrinsic(_mm256_aesdeclast_epi128)
+#pragma intrinsic(_mm256_aesenc_epi128)
+#pragma intrinsic(_mm256_aesenclast_epi128)
+#pragma intrinsic(_mm256_clmulepi64_epi128)
 #pragma intrinsic(_mm256_zeroupper)
 
 #pragma intrinsic(_rdrand16_step)
@@ -135,23 +177,43 @@ void __cdecl _xsetbv(unsigned int, unsigned __int64);
 #define __ATTRIBUTE_SSE2__ __attribute__((__target__("sse2"),__min_vector_width__(128)))
 #define __ATTRIBUTE_AVX__ __attribute__((__target__("avx"),__min_vector_width__(256)))
 #define __ATTRIBUTE_AVX2__ __attribute__((__target__("avx2"),__min_vector_width__(256)))
+#define __ATTRIBUTE_VAES__ __attribute__((__target__("avx2,vaes"),__min_vector_width__(256)))
+#define __ATTRIBUTE_VPCLMUL__ __attribute__((__target__("avx2,vpclmulqdq"),__min_vector_width__(256)))
 #else
 #define __ATTRIBUTE_SSE2__ __attribute__((__target__("sse2")))
 #define __ATTRIBUTE_AVX__ __attribute__((__target__("avx")))
 #define __ATTRIBUTE_AVX2__ __attribute__((__target__("avx2")))
+#define __ATTRIBUTE_VAES__ __attribute__((__target__("avx2,vaes")))
+#define __ATTRIBUTE_VPCLMUL__ __attribute__((__target__("avx2,vpclmulqdq")))
 #endif
 #define __INTRIN_INLINE_SSE2 __INTRIN_INLINE __ATTRIBUTE_SSE2__
 #define __INTRIN_INLINE_AVX __INTRIN_INLINE __ATTRIBUTE_AVX__
 #define __INTRIN_INLINE_AVX2 __INTRIN_INLINE __ATTRIBUTE_AVX2__
+#define __INTRIN_INLINE_VAES __INTRIN_INLINE __ATTRIBUTE_VAES__
 
-__INTRIN_INLINE_AVX __m256i __cdecl _mm256_cmpeq_epi8(__m256i __A, __m256i __B)
+__INTRIN_INLINE_AVX2 __m256i __cdecl _mm256_cmpeq_epi8(__m256i __A, __m256i __B)
 {
     return (__m256i)((__v32qi)__A == (__v32qi)__B);
 }
 
-__INTRIN_INLINE_AVX __m256i __cdecl _mm256_cmpeq_epi16(__m256i __A, __m256i __B)
+__INTRIN_INLINE_AVX2 __m256i __cdecl _mm256_cmpeq_epi16(__m256i __A, __m256i __B)
 {
     return (__m256i)((__v16hi)__A == (__v16hi)__B);
+}
+
+__INTRIN_INLINE_AVX2 __m256i __cdecl _mm256_add_epi32(__m256i __A, __m256i __B)
+{
+    return (__m256i)((__v8su)__A + (__v8su)__B);
+}
+
+__INTRIN_INLINE_AVX2 __m256i __cdecl _mm256_xor_si256(__m256i __A, __m256i __B)
+{
+    return (__m256i)((__v4du)__A ^ (__v4du)__B);
+}
+
+__INTRIN_INLINE_AVX2 __m256i __cdecl _mm256_shuffle_epi8(__m256i __A, __m256i __B)
+{
+    return (__m256i)__builtin_ia32_pshufb256((__v32qi)__A, (__v32qi)__B);
 }
 
 __INTRIN_INLINE_AVX2 int __cdecl _mm256_movemask_epi8(__m256i __A)
@@ -163,6 +225,66 @@ __INTRIN_INLINE_AVX __m256i __cdecl _mm256_setzero_si256(void)
 {
     return __extension__ (__m256i)(__v4di){ 0, 0, 0, 0 };
 }
+
+__INTRIN_INLINE_AVX __m256i __cdecl _mm256_set_epi64x(long long __A, long long __B, long long __C, long long __D)
+{
+    return __extension__ (__m256i)(__v4di){ __D, __C, __B, __A };
+}
+
+__INTRIN_INLINE_AVX __m256i __cdecl _mm256_castsi128_si256(__m128i __A)
+{
+    return (__m256i)__builtin_ia32_si256_si((__v4si)__A);
+}
+
+#define _mm256_insertf128_si256(A, B, I) \
+    ((__m256i)__builtin_ia32_vinsertf128_si256((__v8si)(__m256i)(A), (__v4si)(__m128i)(B), (int)(I)))
+
+#define _mm256_extracti128_si256(A, I) \
+    ((__m128i)__builtin_ia32_extract128i256((__v4di)(__m256i)(A), (int)(I)))
+
+__INTRIN_INLINE_AVX2 __m256i __cdecl _mm256_broadcastsi128_si256(__m128i __A)
+{
+    return (__m256i)__builtin_ia32_vbroadcastsi256((__v2di)__A);
+}
+
+__INTRIN_INLINE_AVX __m256i __cdecl _mm256_loadu_si256(__m256i const *__P)
+{
+    return *(const __m256i_u *)__P;
+}
+
+__INTRIN_INLINE_AVX void __cdecl _mm256_storeu_si256(__m256i *__P, __m256i __A)
+{
+    *(__m256i_u *)__P = __A;
+}
+
+#define _mm256_slli_si256(A, I) \
+    ((__m256i)__builtin_ia32_pslldqi256((__m256i)(A), (int)(I) * 8))
+
+#define _mm256_srli_si256(A, I) \
+    ((__m256i)__builtin_ia32_psrldqi256((__m256i)(A), (int)(I) * 8))
+
+__INTRIN_INLINE_VAES __m256i __cdecl _mm256_aesdec_epi128(__m256i __A, __m256i __B)
+{
+    return (__m256i)__builtin_ia32_vaesdec_v32qi((__v32qi)__A, (__v32qi)__B);
+}
+
+__INTRIN_INLINE_VAES __m256i __cdecl _mm256_aesdeclast_epi128(__m256i __A, __m256i __B)
+{
+    return (__m256i)__builtin_ia32_vaesdeclast_v32qi((__v32qi)__A, (__v32qi)__B);
+}
+
+__INTRIN_INLINE_VAES __m256i __cdecl _mm256_aesenc_epi128(__m256i __A, __m256i __B)
+{
+    return (__m256i)__builtin_ia32_vaesenc_v32qi((__v32qi)__A, (__v32qi)__B);
+}
+
+__INTRIN_INLINE_VAES __m256i __cdecl _mm256_aesenclast_epi128(__m256i __A, __m256i __B)
+{
+    return (__m256i)__builtin_ia32_vaesenclast_v32qi((__v32qi)__A, (__v32qi)__B);
+}
+
+#define _mm256_clmulepi64_epi128(A, B, I) \
+    ((__m256i)__builtin_ia32_vpclmulqdq_v4di((__v4di)(__m256i)(A), (__v4di)(__m256i)(B), (int)(I)))
 
 __INTRIN_INLINE void __cdecl _mm256_zeroupper(void)
 {

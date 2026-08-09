@@ -27,6 +27,7 @@ _STATIC_ASSERT(sizeof(long double) == 8);
 
 _Check_return_ int __cdecl _isnanf(_In_ float _X);
 double __cdecl scalbn(double, int);
+#undef isnan
 #define isnan _isnan
 #define isnanf _isnanf
 
