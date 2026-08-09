@@ -65,6 +65,13 @@ struct Vec
 
     void Clear() { n = 0; }
 
+    void Swap(Vec& other)
+    {
+        T* tp = p; int tn = n; int tc = cap;
+        p = other.p; n = other.n; cap = other.cap;
+        other.p = tp; other.n = tn; other.cap = tc;
+    }
+
     BOOL Reserve(int want)
     {
         if (want <= cap) return TRUE;
@@ -196,6 +203,7 @@ enum PageId
     PG_USERS,
     PG_DETAILS,
     PG_SERVICES,
+    PG_SENSORS,
     PG_SETTINGS,
     PG_COUNT
 };
@@ -352,6 +360,7 @@ enum IconId
     IC_USERS,         /* users           */
     IC_DETAILS,       /* list            */
     IC_SERVICES,      /* wrench          */
+    IC_SENSORS,       /* thermometer     */
     IC_SETTINGS,      /* gear            */
     IC_SEARCH,        /* magnifier       */
     IC_RUNTASK,       /* terminal window */
@@ -416,6 +425,85 @@ struct DiskSnapshot
     BOOL      pageFile;
     HistRing  hTransfer;       /* bytes/s (read + write) */
     HistRing  hActive;         /* 0..100 or empty        */
+};
+
+enum TelemetryKind
+{
+    TEL_TEMPERATURE = 0,
+    TEL_VOLTAGE,
+    TEL_CURRENT,
+    TEL_POWER,
+    TEL_ELECTRICAL_CUSTOM,
+    TEL_PERCENTAGE,
+    TEL_CAPACITY,
+    TEL_DURATION,
+    TEL_CYCLE_COUNT,
+    TEL_FAN,
+    TEL_HUMIDITY,
+    TEL_PRESSURE,
+    TEL_LIGHT,
+    TEL_LOCATION,
+    TEL_OTHER
+};
+
+enum TelemetrySource
+{
+    TEL_SOURCE_SENSOR_API = 0,
+    TEL_SOURCE_STORAGE,
+    TEL_SOURCE_THERMAL_ZONE,
+    TEL_SOURCE_ACPI_FAN,
+    TEL_SOURCE_BATTERY,
+    TEL_SOURCE_SYSTEM_POWER
+};
+
+enum BatteryTelemetryField
+{
+    BATTERY_FIELD_STATE = 1,
+    BATTERY_FIELD_CHARGE_PERCENT,
+    BATTERY_FIELD_REMAINING_CAPACITY,
+    BATTERY_FIELD_FULL_CAPACITY,
+    BATTERY_FIELD_DESIGN_CAPACITY,
+    BATTERY_FIELD_HEALTH,
+    BATTERY_FIELD_VOLTAGE,
+    BATTERY_FIELD_POWER,
+    BATTERY_FIELD_CURRENT,
+    BATTERY_FIELD_ESTIMATED_TIME,
+    BATTERY_FIELD_CYCLE_COUNT,
+    BATTERY_FIELD_TEMPERATURE
+};
+
+enum SystemPowerTelemetryField
+{
+    SYSTEM_POWER_FIELD_SOURCE = 1,
+    SYSTEM_POWER_FIELD_CHARGE_PERCENT,
+    SYSTEM_POWER_FIELD_ESTIMATED_TIME
+};
+
+struct TelemetryRow
+{
+    GUID      sensorId;
+    GUID      fieldFormat;
+    ULONG     fieldId;
+    ULONG     instance;
+    ULONG     sourceKind;
+    ULONG     kind;
+    WCHAR     name[160];
+    WCHAR     type[64];
+    WCHAR     source[192];
+    WCHAR     unit[32];
+    WCHAR     valueText[256];
+    WCHAR     limitsText[384];
+    WCHAR     status[48];
+    double    value;
+    double    lower;
+    double    warning;
+    double    critical;
+    BOOL      numeric;
+    BOOL      available;
+    BOOL      hasLower;
+    BOOL      hasWarning;
+    BOOL      hasCritical;
+    HistRing  history;
 };
 
 struct ProcExtra
@@ -584,6 +672,9 @@ namespace Data
     BOOL AppHistoryNetworkAvailable(void);
     BOOL AppHistoryNotificationsAvailable(void);
     BOOL OpenAppHistory(const AppHistRow& app);
+
+    Vec<TelemetryRow>& Telemetry(void);
+    void RefreshTelemetry(void);
 
     ProcRow* FindProc(ULONG pid);
 
@@ -811,9 +902,11 @@ Page* CreateStartupPage(void);
 Page* CreateUsersPage(void);
 Page* CreateDetailsPage(void);
 Page* CreateServicesPage(void);
+Page* CreateSensorsPage(void);
 Page* CreateSettingsPage(void);
 
 /* main.cpp helpers used by pages */
+const WCHAR* PageTitle(int id);         /* rail label for a PageId     */
 void Frame_UpdateCommandStates(void);   /* call when selection changes */
 void Frame_SwitchToDetails(ULONG pid);  /* "Go to details"             */
 void Frame_SwitchToServices(void);
