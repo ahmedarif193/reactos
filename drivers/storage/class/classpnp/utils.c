@@ -2347,6 +2347,256 @@ Exit:
     return status;
 }
 
+static NTSTATUS
+ClasspGetLogPage(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PSCSI_REQUEST_BLOCK Srb,
+    _In_ UCHAR PageCode,
+    _In_ UCHAR PCBit,
+    _Out_writes_bytes_(LogPageSize) PVOID LogPage,
+    _In_ ULONG LogPageSize
+    )
+{
+    PFUNCTIONAL_DEVICE_EXTENSION fdoExtension = (PFUNCTIONAL_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
+    NTSTATUS status;
+    PCDB cdb = NULL;
+    USHORT allocationLength;
+
+    if (LogPage == NULL || LogPageSize > MAXUSHORT)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if ((fdoExtension->AdapterDescriptor != NULL) &&
+        (fdoExtension->AdapterDescriptor->SrbType == SRB_TYPE_STORAGE_REQUEST_BLOCK)) {
+        status = InitializeStorageRequestBlock((PSTORAGE_REQUEST_BLOCK)Srb,
+                                                STORAGE_ADDRESS_TYPE_BTL8,
+                                                CLASS_SRBEX_SCSI_CDB16_BUFFER_SIZE,
+                                                1,
+                                                SrbExDataTypeScsiCdb16);
+        if (NT_SUCCESS(status)) {
+            ((PSTORAGE_REQUEST_BLOCK)Srb)->SrbFunction = SRB_FUNCTION_EXECUTE_SCSI;
+        } else {
+            //
+            // Should not occur.
+            //
+            NT_ASSERT(FALSE);
+            return status;
+        }
+    } else {
+        RtlZeroMemory(Srb, sizeof(SCSI_REQUEST_BLOCK));
+        Srb->Length = sizeof(SCSI_REQUEST_BLOCK);
+        Srb->Function = SRB_FUNCTION_EXECUTE_SCSI;
+    }
+
+    SrbSetTimeOutValue(Srb, fdoExtension->TimeOutValue);
+    SrbSetRequestTag(Srb, SP_UNTAGGED);
+    SrbSetRequestAttribute(Srb, SRB_SIMPLE_TAG_REQUEST);
+    SrbAssignSrbFlags(Srb, fdoExtension->SrbFlags);
+    SrbSetCdbLength(Srb, sizeof(cdb->LOGSENSE));
+
+    cdb = SrbGetCdb(Srb);
+    cdb->LOGSENSE.OperationCode = SCSIOP_LOG_SENSE;
+    cdb->LOGSENSE.PageCode = PageCode;
+    cdb->LOGSENSE.PCBit = PCBit;
+    cdb->LOGSENSE.ParameterPointer[0] = 0;
+    cdb->LOGSENSE.ParameterPointer[1] = 0;
+    allocationLength = (USHORT)LogPageSize;
+    REVERSE_BYTES_SHORT(&(cdb->LOGSENSE.AllocationLength), &allocationLength);
+
+    status = ClassSendSrbSynchronous(fdoExtension->DeviceObject,
+                                        Srb,
+                                        LogPage,
+                                        LogPageSize,
+                                        FALSE);
+
+    //
+    // Handle the case where we get back STATUS_DATA_OVERRUN b/c the input
+    // buffer was larger than necessary.
+    //
+    if (status == STATUS_DATA_OVERRUN &&
+        SrbGetDataTransferLength(Srb) < LogPageSize)
+    {
+        status = STATUS_SUCCESS;
+    }
+
+    return status;
+}
+
+static BOOLEAN
+ClasspParseTemperatureLogPage(
+    _In_reads_bytes_(LogPageLength) const UCHAR *LogPage,
+    _In_ ULONG LogPageLength,
+    _Out_ PUCHAR Temperature,
+    _Out_ PUCHAR ReferenceTemperature,
+    _Out_ PBOOLEAN ReferenceReported
+    )
+{
+    const LOG_PAGE *page = (const LOG_PAGE *)LogPage;
+    ULONG end;
+    ULONG offset;
+    BOOLEAN temperatureReported = FALSE;
+
+    if (LogPageLength < FIELD_OFFSET(LOG_PAGE, Parameters) || page->PageCode != LOG_PAGE_CODE_TEMPERATURE)
+        return FALSE;
+
+    end = ((ULONG)page->PageLength[0] << 8) | page->PageLength[1];
+    if (end > LogPageLength - FIELD_OFFSET(LOG_PAGE, Parameters))
+        return FALSE;
+    end += FIELD_OFFSET(LOG_PAGE, Parameters);
+    *ReferenceReported = FALSE;
+
+    for (offset = FIELD_OFFSET(LOG_PAGE, Parameters); offset + sizeof(LOG_PARAMETER_HEADER) <= end; )
+    {
+        const LOG_PARAMETER *parameter = (const LOG_PARAMETER *)(LogPage + offset);
+        USHORT parameterCode = ((USHORT)parameter->Header.ParameterCode[0] << 8) | parameter->Header.ParameterCode[1];
+        ULONG parameterEnd = offset + sizeof(LOG_PARAMETER_HEADER) + parameter->Header.ParameterLength;
+
+        if (parameterEnd > end)
+            return FALSE;
+        if (parameter->Header.ParameterLength >= sizeof(parameter->TEMPERATURE) &&
+            parameter->TEMPERATURE.Temperature != MAXUCHAR)
+        {
+            if (parameterCode == 0)
+            {
+                *Temperature = parameter->TEMPERATURE.Temperature;
+                temperatureReported = TRUE;
+            }
+            else if (parameterCode == 1)
+            {
+                *ReferenceTemperature = parameter->TEMPERATURE.Temperature;
+                *ReferenceReported = TRUE;
+            }
+        }
+        offset = parameterEnd;
+    }
+
+    return temperatureReported && offset == end;
+}
+
+NTSTATUS
+ClasspDeviceTemperatureProperty(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PIRP Irp,
+    _Inout_ PSCSI_REQUEST_BLOCK Srb
+    )
+{
+    PCOMMON_DEVICE_EXTENSION commonExtension = (PCOMMON_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
+    PFUNCTIONAL_DEVICE_EXTENSION fdoExtension = (PFUNCTIONAL_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
+    PCLASS_PRIVATE_FDO_DATA fdoData = fdoExtension->PrivateFdoData;
+    PSTORAGE_PROPERTY_QUERY query = (PSTORAGE_PROPERTY_QUERY)Irp->AssociatedIrp.SystemBuffer;
+    PIO_STACK_LOCATION irpStack = IoGetCurrentIrpStackLocation(Irp);
+    PSTORAGE_TEMPERATURE_DATA_DESCRIPTOR descriptor = (PSTORAGE_TEMPERATURE_DATA_DESCRIPTOR)Irp->AssociatedIrp.SystemBuffer;
+    const ULONG descriptorSize = sizeof(STORAGE_TEMPERATURE_DATA_DESCRIPTOR);
+    const ULONG logPageSize = 512;
+    ULONG outputLength = irpStack->Parameters.DeviceIoControl.OutputBufferLength;
+    ULONG information = 0;
+    ULONG transferLength;
+    PUCHAR logPage = NULL;
+    UCHAR temperature = 0;
+    UCHAR referenceTemperature = 0;
+    BOOLEAN referenceReported = FALSE;
+    NTSTATUS status;
+
+    if ((DeviceObject->DeviceType != FILE_DEVICE_DISK) ||
+        (TEST_FLAG(DeviceObject->Characteristics, FILE_FLOPPY_DISKETTE)) ||
+        (fdoData->TemperatureProperty == Supported))
+    {
+        IoCopyCurrentIrpStackLocationToNext(Irp);
+        ClassReleaseRemoveLock(DeviceObject, Irp);
+        return IoCallDriver(commonExtension->LowerDeviceObject, Irp);
+    }
+
+    if (query->QueryType == PropertyExistsQuery)
+    {
+        status = STATUS_SUCCESS;
+        goto Exit;
+    }
+    if (query->QueryType != PropertyStandardQuery)
+    {
+        status = STATUS_NOT_SUPPORTED;
+        goto Exit;
+    }
+    if (KeGetCurrentIrql() >= DISPATCH_LEVEL)
+    {
+        NT_ASSERT(KeGetCurrentIrql() < DISPATCH_LEVEL);
+        status = STATUS_INVALID_LEVEL;
+        goto Exit;
+    }
+    if (outputLength < sizeof(STORAGE_DESCRIPTOR_HEADER))
+    {
+        status = STATUS_BUFFER_TOO_SMALL;
+        goto Exit;
+    }
+    if (outputLength < descriptorSize)
+    {
+        PSTORAGE_DESCRIPTOR_HEADER header = (PSTORAGE_DESCRIPTOR_HEADER)descriptor;
+        header->Version = descriptorSize;
+        header->Size = descriptorSize;
+        information = sizeof(*header);
+        status = STATUS_SUCCESS;
+        goto Exit;
+    }
+
+    if (fdoData->TemperatureProperty == SupportUnknown)
+    {
+        status = ClassForwardIrpSynchronous(commonExtension, Irp);
+        if (!ClasspLowerLayerNotSupport(status))
+        {
+            fdoData->TemperatureProperty = Supported;
+            information = (ULONG)Irp->IoStatus.Information;
+            goto Exit;
+        }
+        fdoData->TemperatureProperty = NotSupported;
+    }
+
+#if defined(_ARM_) || defined(_ARM64_)
+    logPage = ExAllocatePoolWithTag(NonPagedPoolNxCacheAligned, logPageSize, 'pTcS');
+#else
+    logPage = ExAllocatePoolWithTag(NonPagedPoolNx, logPageSize, 'pTcS');
+#endif
+    if (!logPage)
+    {
+        status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Exit;
+    }
+    RtlZeroMemory(logPage, logPageSize);
+
+    status = ClasspGetLogPage(DeviceObject, Srb, LOG_PAGE_CODE_TEMPERATURE, 1, logPage, logPageSize);
+    if (!NT_SUCCESS(status))
+        goto Exit;
+    transferLength = SrbGetDataTransferLength(Srb);
+    if (transferLength > logPageSize)
+        transferLength = logPageSize;
+    if (!ClasspParseTemperatureLogPage(logPage, transferLength, &temperature, &referenceTemperature, &referenceReported))
+    {
+        status = STATUS_NOT_SUPPORTED;
+        goto Exit;
+    }
+
+    RtlZeroMemory(descriptor, descriptorSize);
+    descriptor->Version = descriptorSize;
+    descriptor->Size = descriptorSize;
+    descriptor->CriticalTemperature = (SHORT)STORAGE_TEMPERATURE_VALUE_NOT_REPORTED;
+    descriptor->WarningTemperature = referenceReported ? (SHORT)referenceTemperature : (SHORT)STORAGE_TEMPERATURE_VALUE_NOT_REPORTED;
+    descriptor->InfoCount = 1;
+    descriptor->TemperatureInfo[0].Index = 0;
+    descriptor->TemperatureInfo[0].Temperature = (SHORT)temperature;
+    descriptor->TemperatureInfo[0].OverThreshold = referenceReported ? (SHORT)referenceTemperature : (SHORT)STORAGE_TEMPERATURE_VALUE_NOT_REPORTED;
+    descriptor->TemperatureInfo[0].UnderThreshold = (SHORT)STORAGE_TEMPERATURE_VALUE_NOT_REPORTED;
+    information = descriptorSize;
+    status = STATUS_SUCCESS;
+
+Exit:
+    if (logPage)
+        ExFreePool(logPage);
+    Irp->IoStatus.Information = information;
+    Irp->IoStatus.Status = status;
+    ClassReleaseRemoveLock(DeviceObject, Irp);
+    ClassCompleteRequest(DeviceObject, Irp, IO_NO_INCREMENT);
+    return status;
+}
+
 NTSTATUS ClasspDeviceGetLBProvisioningVPDPage(
     _In_ PDEVICE_OBJECT DeviceObject,
     _Inout_opt_ PSCSI_REQUEST_BLOCK Srb
@@ -4705,9 +4955,7 @@ Return Value:
     This function may return other NTSTATUS codes from internal function calls.
 --*/
 {
-    PFUNCTIONAL_DEVICE_EXTENSION fdoExtension = (PFUNCTIONAL_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
-    NTSTATUS status = STATUS_SUCCESS;
-    PCDB cdb = NULL;
+    NTSTATUS status;
 
     //
     // Make sure the caller passed in an adequate output buffer.  The Allocation
@@ -4728,61 +4976,12 @@ Return Value:
         return STATUS_INVALID_PARAMETER;
     }
 
-    //
-    // Initialize the SRB.
-    //
-    if (fdoExtension->AdapterDescriptor->SrbType == SRB_TYPE_STORAGE_REQUEST_BLOCK) {
-        status = InitializeStorageRequestBlock((PSTORAGE_REQUEST_BLOCK)Srb,
-                                                STORAGE_ADDRESS_TYPE_BTL8,
-                                                CLASS_SRBEX_SCSI_CDB16_BUFFER_SIZE,
-                                                1,
-                                                SrbExDataTypeScsiCdb16);
-        if (NT_SUCCESS(status)) {
-            ((PSTORAGE_REQUEST_BLOCK)Srb)->SrbFunction = SRB_FUNCTION_EXECUTE_SCSI;
-        } else {
-            //
-            // Should not occur.
-            //
-            NT_ASSERT(FALSE);
-        }
-    } else {
-        RtlZeroMemory(Srb, sizeof(SCSI_REQUEST_BLOCK));
-        Srb->Length = sizeof(SCSI_REQUEST_BLOCK);
-        Srb->Function = SRB_FUNCTION_EXECUTE_SCSI;
-    }
-
-    //
-    // Build and send down the Log Sense command.
-    //
-    SrbSetTimeOutValue(Srb, fdoExtension->TimeOutValue);
-    SrbSetRequestTag(Srb, SP_UNTAGGED);
-    SrbSetRequestAttribute(Srb, SRB_SIMPLE_TAG_REQUEST);
-    SrbAssignSrbFlags(Srb, fdoExtension->SrbFlags);
-    SrbSetCdbLength(Srb, sizeof(cdb->LOGSENSE));
-
-    cdb = SrbGetCdb(Srb);
-    cdb->LOGSENSE.OperationCode = SCSIOP_LOG_SENSE;
-    cdb->LOGSENSE.PageCode = LOG_PAGE_CODE_LOGICAL_BLOCK_PROVISIONING;
-    cdb->LOGSENSE.PCBit = 0;
-    cdb->LOGSENSE.ParameterPointer[0] = 0;
-    cdb->LOGSENSE.ParameterPointer[1] = 0;
-    REVERSE_BYTES_SHORT(&(cdb->LOGSENSE.AllocationLength), &LogPageSize);
-
-    status = ClassSendSrbSynchronous(fdoExtension->DeviceObject,
-                                        Srb,
-                                        LogPage,
-                                        LogPageSize,
-                                        FALSE);
-
-    //
-    // Handle the case where we get back STATUS_DATA_OVERRUN b/c the input
-    // buffer was larger than necessary.
-    //
-    if (status == STATUS_DATA_OVERRUN &&
-        SrbGetDataTransferLength(Srb) < LogPageSize)
-    {
-        status = STATUS_SUCCESS;
-    }
+    status = ClasspGetLogPage(DeviceObject,
+                              Srb,
+                              LOG_PAGE_CODE_LOGICAL_BLOCK_PROVISIONING,
+                              0,
+                              LogPage,
+                              LogPageSize);
 
     //
     // Log the command.

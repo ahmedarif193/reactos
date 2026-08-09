@@ -697,6 +697,8 @@ struct _CLASS_PRIVATE_FDO_DATA {
 
     ULONG TrackingFlags;
 
+    CLASS_FUNCTION_SUPPORT TemperatureProperty;
+
     /*
      * Flag to detect recursion caused by devices
      * reporting different capacity per each request
@@ -1826,6 +1828,12 @@ NTSTATUS ClasspAccessAlignmentProperty(
     );
 
 NTSTATUS ClasspDeviceSeekPenaltyProperty(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PIRP Irp,
+    _Inout_ PSCSI_REQUEST_BLOCK Srb
+    );
+
+NTSTATUS ClasspDeviceTemperatureProperty(
     _In_ PDEVICE_OBJECT DeviceObject,
     _In_ PIRP Irp,
     _Inout_ PSCSI_REQUEST_BLOCK Srb
