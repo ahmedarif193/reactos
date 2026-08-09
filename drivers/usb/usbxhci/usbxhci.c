@@ -6506,6 +6506,9 @@ XHCI_ArmTransferPoll(
     if (!Extension || !Transfer)
         return;
 
+    if (!(Extension->Quirks & XHCI_QUIRK_POLL_XFERS_MASK))
+        return;
+
     if (InterlockedBitTestAndSet((volatile LONG *)&Transfer->Flags, XHCI_TRANSFER_FLAG_NEEDS_POLL_BIT))
         return;
 
