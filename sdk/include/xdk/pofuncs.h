@@ -139,7 +139,7 @@ PoSetDeviceBusyEx(
   _Inout_ PULONG IdlePointer);
 #endif /* (NTDDI_VERSION >= NTDDI_VISTASP1) */
 
-#if (NTDDI_VERSION >= NTDDI_WIN7)
+#if (NTDDI_VERSION >= NTDDI_WIN7) || defined(_NTOSKRNL_)
 
 NTKERNELAPI
 VOID
@@ -193,9 +193,9 @@ PoCreatePowerRequest(
   _In_ PDEVICE_OBJECT DeviceObject,
   _In_opt_ PCOUNTED_REASON_CONTEXT Context);
 
-#endif /* (NTDDI_VERSION >= NTDDI_WIN7) */
+#endif /* (NTDDI_VERSION >= NTDDI_WIN7) || defined(_NTOSKRNL_) */
 
-#if (NTDDI_VERSION >= NTDDI_WINTHRESHOLD)
+#if (NTDDI_VERSION >= NTDDI_WINTHRESHOLD) || defined(_NTOSKRNL_)
 
 _IRQL_requires_max_(APC_LEVEL)
 NTKERNELAPI
@@ -239,7 +239,7 @@ NTAPI
 PoDeleteThermalRequest(
   _Inout_ PVOID ThermalRequest);
 
-#endif /* (NTDDI_VERSION >= NTDDI_WINTHRESHOLD) */
+#endif /* (NTDDI_VERSION >= NTDDI_WINTHRESHOLD) || defined(_NTOSKRNL_) */
 
 /******************************************************************************
  *                               PoFx Functions                               *

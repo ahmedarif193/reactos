@@ -574,7 +574,7 @@ ExAllocatePoolWithTagPriority(
   _In_ ULONG Tag,
   _In_ __drv_strictTypeMatch(__drv_typeExpr) EX_POOL_PRIORITY Priority);
 
-#if (NTDDI_VERSION >= NTDDI_WIN10_VB)
+#if (NTDDI_VERSION >= NTDDI_WIN10_VB) || defined(_NTOSKRNL_)
 
 __drv_allocatesMem(Mem)
 _Check_return_
@@ -616,7 +616,7 @@ ExFreePool2(
   _In_reads_opt_(ExtendedParametersCount) PCPOOL_EXTENDED_PARAMETER ExtendedParameters,
   _In_ ULONG ExtendedParametersCount);
 
-#endif /* NTDDI_VERSION >= NTDDI_WIN10_VB */
+#endif /* (NTDDI_VERSION >= NTDDI_WIN10_VB) || defined(_NTOSKRNL_) */
 
 FORCEINLINE
 __drv_allocatesMem(Mem)
