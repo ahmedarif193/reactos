@@ -146,6 +146,9 @@ endif()
 
 add_library(symcrypt STATIC ${SOURCE})
 add_dependencies(symcrypt psdk)
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    set_source_files_properties(lib/AesTables.c lib/DesTables.c PROPERTIES COMPILE_OPTIONS "-Wno-missing-braces")
+endif()
 target_compile_definitions(symcrypt PRIVATE
     __WINE_PE_BUILD
     SYMCRYPT_PLATFORM_WINE=1)

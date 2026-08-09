@@ -7,6 +7,14 @@
 // Always intended to be included as part of sc_lib.h
 //
 
+#if defined(__REACTOS__) && SYMCRYPT_GNUC
+#define SYMCRYPT_MLDSA_FORCEINLINE_DECL
+#define SYMCRYPT_MLDSA_FORCEINLINE_DEF inline __attribute__((always_inline))
+#else
+#define SYMCRYPT_MLDSA_FORCEINLINE_DECL FORCEINLINE
+#define SYMCRYPT_MLDSA_FORCEINLINE_DEF FORCEINLINE
+#endif
+
 //
 // Modulus for ML-DSA
 //
@@ -637,7 +645,7 @@ SymCryptMlDsaExpandA(
 // \hat{A}[i, j] = RejNttPoly(seed || j || i) for each index (i, j) in A
 //
 
-FORCEINLINE
+SYMCRYPT_MLDSA_FORCEINLINE_DECL
 INT8
 SYMCRYPT_CALL
 SymCryptMlDsaCoeffFromHalfByte(
@@ -949,7 +957,7 @@ SymCryptHashMlDsaValidateHashAlgAndGetOid(
 // See comments on the definition of SymCryptHashMlDsaSign
 //
 
-FORCEINLINE
+SYMCRYPT_MLDSA_FORCEINLINE_DECL
 INT32
 SYMCRYPT_CALL
 SymCryptMlDsaModPlusMinus( UINT32 r, UINT32 modulus );
@@ -964,7 +972,7 @@ SymCryptMlDsaModPlusMinus( UINT32 r, UINT32 modulus );
 // Requirements: r < modulus
 //
 
-FORCEINLINE
+SYMCRYPT_MLDSA_FORCEINLINE_DECL
 UINT32
 SYMCRYPT_CALL
 SymCryptMlDsaPolyElementInfinityNorm( _In_ PCSYMCRYPT_MLDSA_POLYELEMENT peSrc );
@@ -982,7 +990,7 @@ SymCryptMlDsaVectorInfinityNorm( _In_ PCSYMCRYPT_MLDSA_VECTOR pvSrc );
 // = max(InfinityNorm(pvSrc[i])) for each polynomial in pvSrc
 //
 
-FORCEINLINE
+SYMCRYPT_MLDSA_FORCEINLINE_DECL
 VOID
 SYMCRYPT_CALL
 SymCryptMlDsaDecompose(
@@ -1054,7 +1062,7 @@ SymCryptMlDsaVectorPower2Round(
 // (pvDst1[i], pvDst0[i]) = Power2Round(pvSrc[i]) for each polynomial in pvSrc
 //
 
-FORCEINLINE
+SYMCRYPT_MLDSA_FORCEINLINE_DECL
 UINT32
 SYMCRYPT_CALL
 SymCryptMlDsaSignedCoefficientModQ( INT32 coefficient );

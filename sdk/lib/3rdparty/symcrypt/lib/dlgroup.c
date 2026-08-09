@@ -868,7 +868,9 @@ SymCryptDlgroupGenerate(
     UINT32 ndDivTwoQ = 0;
 
     UINT32 nBitsOfP = 0;
+#ifndef __REACTOS__
     UINT32 nDigitsOfP = 0;
+#endif
     UINT32 nBitsOfQ = 0;
     UINT32 nDigitsOfQ = 0;
 
@@ -933,7 +935,9 @@ SymCryptDlgroupGenerate(
 
     // Helper variables
     nBitsOfP = pDlgroup->nBitsOfP;
+#ifndef __REACTOS__
     nDigitsOfP = pDlgroup->nDigitsOfP;
+#endif
     nBitsOfQ = pDlgroup->nBitsOfQ;
     nDigitsOfQ = pDlgroup->nDigitsOfQ;
 

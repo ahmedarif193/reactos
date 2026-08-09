@@ -74,7 +74,9 @@ SymCryptPaddingPkcs7Remove(
     UINT32  mBufferSizeError    = 0;    // Indicates whether pbDst is large enough to contain the entire message.
     UINT32  mask                = 0;    // Mask for message bytes at the final block.
     UINT32  cbPadVal;                   // PadVal is the number of padded bytes.
+#ifndef __REACTOS__
     UINT32  cbSrc32;
+#endif
     UINT32  cbDst32;
     UINT32  cbMsg32;
 
@@ -121,7 +123,9 @@ SymCryptPaddingPkcs7Remove(
     pbSrc += cbBulk; cbSrc -= cbBulk;
     pbDst += cbBulk; cbDst -= cbBulk;
 
+#ifndef __REACTOS__
     cbSrc32 = (UINT32)cbSrc;
+#endif
     cbDst32 = (UINT32)cbDst;
 
     //
