@@ -282,6 +282,8 @@ static VOID AcpiThermalQueueQueryWork(PPDO_DEVICE_DATA DeviceData)
     ExQueueWorkItem(&WorkContext->WorkItem, DelayedWorkQueue);
 }
 
+#if (NTDDI_VERSION >= NTDDI_WINTHRESHOLD)
+
 static PDEVICE_OBJECT AcpiThermalFindPdo(PPDO_DEVICE_DATA ThermalData, ACPI_HANDLE Handle)
 {
     PFDO_DEVICE_DATA FdoData;
@@ -426,6 +428,8 @@ static NTSTATUS AcpiThermalGetRequest(PPDO_DEVICE_DATA ThermalData, ACPI_HANDLE 
     return Status;
 }
 
+#endif /* NTDDI_VERSION >= NTDDI_WINTHRESHOLD */
+
 NTSTATUS AcpiThermalSetPower(ACPI_HANDLE Handle, BOOLEAN Engaged)
 {
     struct acpi_device *Device = NULL;
@@ -459,6 +463,7 @@ NTSTATUS AcpiThermalSetPower(ACPI_HANDLE Handle, BOOLEAN Engaged)
 
 static NTSTATUS AcpiThermalApplyActive(PPDO_DEVICE_DATA ThermalData, ACPI_HANDLE Handle, BOOLEAN Engaged)
 {
+#if (NTDDI_VERSION >= NTDDI_WINTHRESHOLD)
     PACPI_THERMAL_REQUEST_ENTRY Entry;
     BOOLEAN Supported;
     NTSTATUS Status;
@@ -475,12 +480,16 @@ static NTSTATUS AcpiThermalApplyActive(PPDO_DEVICE_DATA ThermalData, ACPI_HANDLE
 
     if (!NT_SUCCESS(Status) && Status != STATUS_NOT_SUPPORTED)
         return Status;
+#else
+    UNREFERENCED_PARAMETER(ThermalData);
+#endif
 
     return AcpiThermalSetPower(Handle, Engaged);
 }
 
 static NTSTATUS AcpiThermalApplyPassive(PPDO_DEVICE_DATA ThermalData, ACPI_HANDLE Handle, UCHAR Percentage)
 {
+#if (NTDDI_VERSION >= NTDDI_WINTHRESHOLD)
     PACPI_THERMAL_REQUEST_ENTRY Entry;
     BOOLEAN Supported;
     NTSTATUS Status;
@@ -495,6 +504,12 @@ static NTSTATUS AcpiThermalApplyPassive(PPDO_DEVICE_DATA ThermalData, ACPI_HANDL
             return Status;
     }
     return NT_SUCCESS(Status) ? STATUS_NOT_SUPPORTED : Status;
+#else
+    UNREFERENCED_PARAMETER(ThermalData);
+    UNREFERENCED_PARAMETER(Handle);
+    UNREFERENCED_PARAMETER(Percentage);
+    return STATUS_NOT_SUPPORTED;
+#endif
 }
 
 static NTSTATUS AcpiThermalSetActiveLevel(PPDO_DEVICE_DATA DeviceData, UCHAR Level)
@@ -645,8 +660,10 @@ NTSTATUS AcpiThermalStart(PPDO_DEVICE_DATA DeviceData)
 
 VOID AcpiThermalStop(PPDO_DEVICE_DATA DeviceData)
 {
+#if (NTDDI_VERSION >= NTDDI_WINTHRESHOLD)
     LIST_ENTRY RequestList;
     PACPI_THERMAL_REQUEST_ENTRY Entry;
+#endif
     PIRP Irp;
 
     if (!DeviceData)
@@ -667,6 +684,7 @@ VOID AcpiThermalStop(PPDO_DEVICE_DATA DeviceData)
         IoCompleteRequest(Irp, IO_NO_INCREMENT);
     }
 
+#if (NTDDI_VERSION >= NTDDI_WINTHRESHOLD)
     InitializeListHead(&RequestList);
     ExAcquireFastMutex(&DeviceData->ThermalRequestMutex);
     while (!IsListEmpty(&DeviceData->ThermalRequestList))
@@ -679,6 +697,7 @@ VOID AcpiThermalStop(PPDO_DEVICE_DATA DeviceData)
         ExWaitForRundownProtectionRelease(&Entry->Rundown);
         AcpiThermalDestroyRequest(Entry);
     }
+#endif
 }
 
 NTSTATUS AcpiThermalDeviceControl(PPDO_DEVICE_DATA DeviceData, PIRP Irp)
