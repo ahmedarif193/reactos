@@ -106,6 +106,7 @@ AddReg=Classes
 11,,opcservices.dll,1
 11,,oleaut32.dll,1
 11,,olepro32.dll,1
+11,,portabledevicetypes.dll,1
 11,,propsys.dll,1
 11,,pstorec.dll,1
 11,,qedit.dll,1
@@ -116,6 +117,7 @@ AddReg=Classes
 11,,rsaenh.dll,1
 11,,scrrun.dll,1
 11,,sendmail.dll,1
+11,,sensorsapi.dll,1
 11,,shdocvw.dll,3
 11,,shell32.dll,3
 11,,softpub.dll,1

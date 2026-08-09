@@ -171,6 +171,7 @@ list(APPEND IDL_SOURCES
     propsys.idl
     pstore.idl
     richole.idl
+    sensorsapi.idl
     strmif.idl
     taskschd.idl
     tom.idl

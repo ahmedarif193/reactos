@@ -1,0 +1,22 @@
+/*
+ * COM classes for sensorsapi.dll
+ *
+ * Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+#pragma makedep register
+
+[
+    helpstring("Sensor Manager"),
+    threading(both),
+    uuid(77a1c827-fcd2-4689-8915-9d613cc5fa3e)
+]
+coclass SensorManager { }
+
+[
+    helpstring("Sensor Collection"),
+    threading(both),
+    uuid(79c43adb-a429-469f-aa39-2f2b74b75937)
+]
+coclass SensorCollection { }
