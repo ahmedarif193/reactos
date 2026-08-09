@@ -1,6 +1,7 @@
 
 include_directories(
-    ${REACTOS_SOURCE_DIR}/sdk/lib/udmihelp)
+    ${REACTOS_SOURCE_DIR}/sdk/lib/udmihelp
+    ${REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/libpng)
 
 list(APPEND SOURCE
     system.c
@@ -18,10 +19,11 @@ list(APPEND SOURCE
     d3dtest9.c
     precomp.h)
 
-add_rc_deps(dxdiag.rc ${CMAKE_CURRENT_SOURCE_DIR}/res/dxdiag.ico)
+file(GLOB dxdiag_rc_deps ${CMAKE_CURRENT_SOURCE_DIR}/lang/*.rc)
+add_rc_deps(dxdiag.rc ${dxdiag_rc_deps} ${CMAKE_CURRENT_SOURCE_DIR}/res/dxdiag.ico ${CMAKE_CURRENT_SOURCE_DIR}/res/d3dtest.png)
 add_executable(dxdiag ${SOURCE} dxdiag.rc)
 set_module_type(dxdiag win32gui UNICODE)
 target_link_libraries(dxdiag dxguid udmihelp)
-add_importlibs(dxdiag user32 advapi32 comctl32 dinput8 setupapi dsound ddraw version gdi32 winmm d3d9 msvcrt kernel32 ntdll)
+add_importlibs(dxdiag user32 advapi32 comctl32 dinput8 setupapi dsound ddraw version gdi32 winmm d3d8 d3d9 libpng msvcrt kernel32 ntdll)
 add_pch(dxdiag precomp.h SOURCE)
 add_cd_file(TARGET dxdiag DESTINATION reactos/system32 FOR all)

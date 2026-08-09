@@ -12,6 +12,7 @@ LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 #include <reactos/version.rc>
 
 IDI_APPICON ICON "res/dxdiag.ico"
+IDR_D3DTEST_TEXTURE RCDATA "res/d3dtest.png"
 
 #include <reactos/manifest_exe.rc>
 
