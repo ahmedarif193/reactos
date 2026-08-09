@@ -13,7 +13,13 @@ extern "C" {
 #include <pshpack1.h>
 #endif
 
+#ifndef WINSHELLAPI
+#ifdef _SHELL32_
+#define WINSHELLAPI
+#else
 #define WINSHELLAPI DECLSPEC_IMPORT
+#endif
+#endif
 #define ABE_LEFT	0
 #define ABE_TOP	1
 #define ABE_RIGHT	2
