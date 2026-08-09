@@ -310,8 +310,10 @@ SymCryptMontgomeryPointScalarMul(
     PSYMCRYPT_MODULUS     pmMod;
     PSYMCRYPT_MODELEMENT  peX1, peZ1, peA24, peX2, peZ2, peX3, peZ3, peTemp1, peTemp2, peResult;
     UINT32                i, nBytes, nDigits, cond, newcond, nCommon;
+#ifndef __REACTOS__
     PBYTE                 pBegin;
     SIZE_T                cbAllScratch;
+#endif
 
     SYMCRYPT_ASSERT( SYMCRYPT_CURVE_IS_MONTGOMERY_TYPE(pCurve) );
     SYMCRYPT_ASSERT( (poSrc == NULL || SymCryptEcurveIsSame(pCurve, poSrc->pCurve)) && SymCryptEcurveIsSame(pCurve, poDst->pCurve) );
@@ -339,8 +341,10 @@ SymCryptMontgomeryPointScalarMul(
 
     SYMCRYPT_ASSERT( cbScratch >= 6 * nBytes + nCommon );
 
+#ifndef __REACTOS__
     cbAllScratch = cbScratch;
     pBegin = pbScratch;
+#endif
 
     //
     // Create mod elements

@@ -897,7 +897,11 @@ SymCryptMlDsaExpandA(
 }
 
 _Use_decl_annotations_
+#ifdef __REACTOS__
+SYMCRYPT_MLDSA_FORCEINLINE_DEF
+#else
 FORCEINLINE
+#endif
 INT8
 SYMCRYPT_CALL
 SymCryptMlDsaCoeffFromHalfByte(
@@ -1844,7 +1848,11 @@ cleanup:
     return scError;
 }
 
+#ifdef __REACTOS__
+SYMCRYPT_MLDSA_FORCEINLINE_DEF
+#else
 FORCEINLINE
+#endif
 INT32
 SYMCRYPT_CALL
 SymCryptMlDsaModPlusMinus( UINT32 r, UINT32 modulus )
@@ -1868,7 +1876,11 @@ SymCryptMlDsaModPlusMinus( UINT32 r, UINT32 modulus )
 }
 
 _Use_decl_annotations_
+#ifdef __REACTOS__
+SYMCRYPT_MLDSA_FORCEINLINE_DEF
+#else
 FORCEINLINE
+#endif
 UINT32
 SYMCRYPT_CALL
 SymCryptMlDsaPolyElementInfinityNorm( PCSYMCRYPT_MLDSA_POLYELEMENT peSrc )
@@ -1912,7 +1924,11 @@ SymCryptMlDsaVectorInfinityNorm( PCSYMCRYPT_MLDSA_VECTOR pvSrc )
 }
 
 _Use_decl_annotations_
+#ifdef __REACTOS__
+SYMCRYPT_MLDSA_FORCEINLINE_DEF
+#else
 FORCEINLINE
+#endif
 VOID
 SYMCRYPT_CALL
 SymCryptMlDsaDecompose(
@@ -2074,7 +2090,11 @@ SymCryptMlDsaVectorPower2Round(
     }
 }
 
+#ifdef __REACTOS__
+SYMCRYPT_MLDSA_FORCEINLINE_DEF
+#else
 FORCEINLINE
+#endif
 UINT32
 SYMCRYPT_CALL
 SymCryptMlDsaSignedCoefficientModQ( INT32 coefficient )

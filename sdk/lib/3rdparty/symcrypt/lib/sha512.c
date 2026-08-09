@@ -1349,10 +1349,11 @@ SymCryptSha512AppendBlocks_ull3(
 
 //
 // Working version of XMMIROUND:
-//    Wt = XMMFROM_MSBF( &pbData[ 8*r ] );\
-//    W[r] = Wt;\
-//    Wt = XMMADD( XMMFROM_UINT64(SymCryptSha512K[r]), Wt );\
-//    XMMCROUND(r,r);\
+// __REACTOS__: Avoid backslash-newline splicing in C++-style comments under GCC.
+//    Wt = XMMFROM_MSBF( &pbData[ 8*r ] );
+//    W[r] = Wt;
+//    Wt = XMMADD( XMMFROM_UINT64(SymCryptSha512K[r]), Wt );
+//    XMMCROUND(r,r);
 
 #define XMMFROUND(r16, rb) { \
     if( (r16 & 1) == 0 ) \
