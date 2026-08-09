@@ -226,10 +226,10 @@ PNVME_QUEUE NvmeSelectQueue(_In_ PNVME_DEVICE_EXTENSION Device);
 BOOLEAN NvmeSubmitIoCommand(_In_ PNVME_DEVICE_EXTENSION Device, _In_ PNVME_QUEUE Queue, _In_ PSCSI_REQUEST_BLOCK Srb, _Inout_ PNVME_COMMAND Command);
 VOID NvmeDrainIoQueue(_In_ PNVME_DEVICE_EXTENSION Device, _In_ PNVME_QUEUE Queue);
 VOID NvmeRetireQueue(_In_ PNVME_DEVICE_EXTENSION Device, _In_ PNVME_QUEUE Queue, _In_ UCHAR SrbStatus);
-VOID NTAPI NvmeAdminDpc(_In_ PSTOR_DPC Dpc, _In_ PVOID HwDeviceExtension, _In_opt_ PVOID SystemArgument1, _In_opt_ PVOID SystemArgument2);
-VOID NTAPI NvmeIoQueueDpc(_In_ PSTOR_DPC Dpc, _In_ PVOID HwDeviceExtension, _In_opt_ PVOID SystemArgument1, _In_opt_ PVOID SystemArgument2);
+VOID NvmeAdminDpc(_In_ PSTOR_DPC Dpc, _In_ PVOID HwDeviceExtension, _In_opt_ PVOID SystemArgument1, _In_opt_ PVOID SystemArgument2);
+VOID NvmeIoQueueDpc(_In_ PSTOR_DPC Dpc, _In_ PVOID HwDeviceExtension, _In_opt_ PVOID SystemArgument1, _In_opt_ PVOID SystemArgument2);
 BOOLEAN NTAPI NvmeHwInterrupt(_In_ PVOID DeviceExtension);
-BOOLEAN NTAPI NvmeHwMSInterrupt(_In_ PVOID DeviceExtension, _In_ ULONG MessageId);
+BOOLEAN NvmeHwMSInterrupt(_In_ PVOID DeviceExtension, _In_ ULONG MessageId);
 
 /* scsi.c */
 BOOLEAN NTAPI NvmeHwStartIo(_In_ PVOID DeviceExtension, _In_ PSCSI_REQUEST_BLOCK Srb);

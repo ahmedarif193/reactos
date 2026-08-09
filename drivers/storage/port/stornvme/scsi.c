@@ -254,7 +254,6 @@ NvmeHandleReadCapacity(_In_ PNVME_DEVICE_EXTENSION Device,
                        _In_ PSCSI_REQUEST_BLOCK Srb,
                        _In_ BOOLEAN Extended)
 {
-    PCDB Cdb = (PCDB)Srb->Cdb;
     UCHAR Buffer[32];
     ULONGLONG LastBlock = Namespace->Blocks - 1;
     ULONG AllocationLength;
