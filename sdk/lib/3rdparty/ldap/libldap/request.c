@@ -399,6 +399,9 @@ ldap_send_server_request(
 		case LDAP_REQ_ABANDON:
 			break;
 		}
+#ifdef __REACTOS__
+		(void)rtag;
+#endif
 		if ( tag != LDAP_REQ_ABANDON ) {
 			ber_skip_tag( &tmpber, &lr->lr_dn.bv_len );
 			lr->lr_dn.bv_val = tmpber.ber_ptr;
@@ -1009,6 +1012,9 @@ ldap_free_request_int( LDAP *ld, LDAPRequest *lr )
 	Debug3( LDAP_DEBUG_TRACE, "ldap_free_request_int: "
 			"lr %p msgid %d%s removed\n",
 			(void *) lr, lr->lr_msgid, removed ? "" : " not" );
+#ifdef __REACTOS__
+	(void)removed;
+#endif
 
 	ldap_do_free_request( lr );
 }

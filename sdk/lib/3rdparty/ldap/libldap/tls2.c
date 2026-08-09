@@ -488,6 +488,9 @@ ldap_pvt_tls_accept( Sockbuf *sb, void *ctx_arg )
 			msg = tls_imp->ti_session_errmsg( ssl, err, buf, sizeof(buf) );
 			Debug1( LDAP_DEBUG_ANY,"TLS: can't accept: %s.\n",
 				msg ? msg : "(unknown)" );
+#ifdef __REACTOS__
+			(void)msg;
+#endif
 		}
 
 		ber_sockbuf_remove_io( sb, tls_imp->ti_sbio,
@@ -1093,7 +1096,9 @@ ldap_int_tls_start ( LDAP *ld, LDAPConn *conn, LDAPURLDesc *srv )
 {
 	Sockbuf *sb;
 	char *host;
+#ifndef __REACTOS__
 	void *ssl;
+#endif
 	int ret, async;
 	struct timeval start_time_tv, tv, tv0;
 	ber_socket_t	sd = AC_SOCKET_ERROR;
