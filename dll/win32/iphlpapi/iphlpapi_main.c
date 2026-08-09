@@ -768,6 +768,8 @@ err:
     return err;
 }
 
+#ifndef __REACTOS__
+
 static void address_entry_free( void *ptr, ULONG offset, void *ctxt )
 {
     HeapFree( GetProcessHeap(), 0, ptr );
@@ -1394,6 +1396,7 @@ ULONG WINAPI DECLSPEC_HOTPATCH GetAdaptersAddresses( ULONG family, ULONG flags, 
     adapters_addresses_free( info );
     return err;
 }
+#endif
 
 /******************************************************************
  *    GetBestInterface (IPHLPAPI.@)
