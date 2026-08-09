@@ -47,7 +47,7 @@ AddService = virtgpu, 0x00000002, VirtGpu_Service
 
 [VirtGpu_Service]
 ServiceType   = 1
-StartType     = 1
+StartType     = 3
 ErrorControl  = 0
 ServiceBinary = %12%\virtgpu.sys
 LoadOrderGroup = Video
