@@ -1,4 +1,4 @@
-# Copyright 2026 Ahmed Arif
+# Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 add_library(it8613sensor MODULE it8613sensor.c it8613sensor.rc)
