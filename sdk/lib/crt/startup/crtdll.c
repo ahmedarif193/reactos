@@ -47,7 +47,6 @@ static int __proc_attached = 0;
 
 extern _PVFV *__onexitbegin;
 extern _PVFV *__onexitend;
-extern intptr_t (__cdecl * __MINGW_IMP_SYMBOL(_get_heap_handle)) (void);
 
 extern int mingw_app_type;
 
@@ -139,7 +138,7 @@ WINBOOL WINAPI _CRT_INIT (HANDLE hDllHandle, DWORD dwReason, LPVOID lpreserved)
                     if (*onexitend != NULL)
                         (**onexitend) ();
                 if (!lpreserved)
-                    HeapFree((HANDLE)(intptr_t)(* __MINGW_IMP_SYMBOL(_get_heap_handle))(), 0, onexitbegin);
+                    free(onexitbegin);
                 __onexitbegin = __onexitend = (_PVFV *) NULL;
             }
             __native_startup_state = __uninitialized;

@@ -23,9 +23,30 @@
 _PVFV *__onexitbegin;
 _PVFV *__onexitend;
 
-extern _onexit_t __cdecl __dllonexit (_onexit_t, _PVFV**, _PVFV**);
 extern _onexit_t (__cdecl * __MINGW_IMP_SYMBOL(_onexit)) (_onexit_t func);
-extern intptr_t (__cdecl * __MINGW_IMP_SYMBOL(_get_heap_handle)) (void);
+
+static _onexit_t __cdecl
+module_onexit(_onexit_t func, _PVFV **start, _PVFV **end)
+{
+    _PVFV *table;
+    int count;
+
+    if (!start || !*start || !end || !*end)
+        return NULL;
+
+    count = *end - *start;
+    if (++count <= 0)
+        return NULL;
+
+    table = realloc(*start, count * sizeof(*table));
+    if (!table)
+        return NULL;
+
+    *start = table;
+    *end = table + count;
+    table[count - 1] = (_PVFV)func;
+    return func;
+}
 
 /* INTERNAL: call atexit functions */
 void __call_atexit(void)
@@ -43,7 +64,7 @@ void __call_atexit(void)
         if (*last)
             (**last)();
 
-    HeapFree((HANDLE)(intptr_t)(* __MINGW_IMP_SYMBOL(_get_heap_handle))(), 0, first);
+    free(first);
 
     __onexitbegin = __onexitend = NULL;
 }
@@ -67,7 +88,7 @@ _onexit_t __cdecl _onexit(_onexit_t func)
     if (!__onexitbegin)
     {
         /* First time we are called. Initialize our array */
-        onexitbegin = HeapAlloc((HANDLE)(intptr_t)(* __MINGW_IMP_SYMBOL(_get_heap_handle))(), HEAP_ZERO_MEMORY, sizeof(*onexitbegin));
+        onexitbegin = calloc(1, sizeof(*onexitbegin));
         if (!onexitbegin)
         {
             _unlock(_EXIT_LOCK1);
@@ -81,7 +102,7 @@ _onexit_t __cdecl _onexit(_onexit_t func)
         onexitend = (_PVFV *) _decode_pointer (__onexitend);
     }
 
-    retval = __dllonexit (func, &onexitbegin, &onexitend);
+    retval = module_onexit(func, &onexitbegin, &onexitend);
 
     if (retval != NULL)
     {
