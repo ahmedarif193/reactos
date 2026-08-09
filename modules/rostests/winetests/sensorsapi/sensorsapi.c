@@ -35,6 +35,10 @@ static const GUID it8613_sensor_ids[] =
     {0x4b2211b5, 0xaf5a, 0x473a, {0x90, 0xd7, 0xa6, 0x34, 0x45, 0x86, 0x1f, 0x74}},
     {0xabbfd503, 0xcc00, 0x4781, {0x90, 0xdd, 0x7b, 0xc6, 0x41, 0x3f, 0x24, 0xa2}},
 };
+static const ULONG it8613_vin_numbers[] = {0, 1, 2, 4, 5, 7};
+static const WCHAR *it8613_sensor_names[] = {L"VCCCORE", L"VCCMEM", L"3.3V", L"VDC", L"VCCGT", L"VSB3V"};
+static const double it8613_voltage_minimums[] = {0.3, 0.8, 3.0, 9.0, 0.3, 3.0};
+static const double it8613_voltage_maximums[] = {1.6, 1.5, 3.6, 20.0, 1.6, 3.6};
 
 static inline struct mock_sensor *mock_from_ISensor(ISensor *iface)
 {
@@ -162,85 +166,83 @@ static void check_manager_collection(ISensorManager *manager, const GUID *filter
     ISensorCollection_Release(collection);
 }
 
-static ISensor *find_it8613_sensor(ISensorManager *manager)
+static void test_it8613_sensor(ISensorManager *manager)
 {
-    ISensor *sensor;
-    HRESULT hr;
+    BOOL required = GetEnvironmentVariableA("ROS_REQUIRE_IT8613", NULL, 0) != 0;
+    ULONG found = 0;
     ULONG index;
 
     for (index = 0; index < ARRAY_SIZE(it8613_sensor_ids); index++)
     {
-        sensor = NULL;
+        IPortableDeviceKeyCollection *fields = NULL;
+        ISensorDataReport *report = NULL;
+        VARIANT_BOOL supported = VARIANT_FALSE;
+        ISensor *sensor = NULL;
+        SYSTEMTIME timestamp;
+        PROPVARIANT value;
+        GUID category;
+        GUID type;
+        GUID id;
+        BSTR name = NULL;
+        DWORD count;
+        HRESULT hr;
+
         hr = ISensorManager_GetSensorByID(manager, &it8613_sensor_ids[index], &sensor);
-        if (hr == S_OK)
-            return sensor;
-        ok(hr == HRESULT_FROM_WIN32(ERROR_NOT_FOUND), "GetSensorByID returned %#x.\n", (unsigned int)hr);
-        ok(!sensor, "Failed GetSensorByID returned sensor %p.\n", sensor);
+        if (hr != S_OK)
+        {
+            if (required)
+                ok(0, "Required IT8613E VIN%lu sensor is missing, hr %#x.\n", it8613_vin_numbers[index], (unsigned int)hr);
+            else
+                ok(hr == HRESULT_FROM_WIN32(ERROR_NOT_FOUND) && !sensor, "GetSensorByID returned %#x, sensor %p.\n", (unsigned int)hr, sensor);
+            continue;
+        }
+        found++;
+        hr = ISensor_GetID(sensor, &id);
+        ok(hr == S_OK && IsEqualGUID(&id, &it8613_sensor_ids[index]), "VIN%lu GetID returned %#x.\n", it8613_vin_numbers[index], (unsigned int)hr);
+        hr = ISensor_GetCategory(sensor, &category);
+        ok(hr == S_OK && IsEqualGUID(&category, &SENSOR_CATEGORY_ELECTRICAL), "VIN%lu GetCategory returned %#x.\n", it8613_vin_numbers[index], (unsigned int)hr);
+        hr = ISensor_GetType(sensor, &type);
+        ok(hr == S_OK && IsEqualGUID(&type, &SENSOR_TYPE_VOLTAGE), "VIN%lu GetType returned %#x.\n", it8613_vin_numbers[index], (unsigned int)hr);
+        hr = ISensor_GetFriendlyName(sensor, &name);
+        ok(hr == S_OK && name && name[0], "VIN%lu GetFriendlyName returned %#x, name %ls.\n", it8613_vin_numbers[index], (unsigned int)hr, name ? name : L"(null)");
+        if (hr == S_OK && name)
+            ok(!lstrcmpW(name, it8613_sensor_names[index]), "VIN%lu name is %ls, expected %ls.\n", it8613_vin_numbers[index], name, it8613_sensor_names[index]);
+        hr = ISensor_GetSupportedDataFields(sensor, &fields);
+        ok(hr == S_OK && fields, "VIN%lu GetSupportedDataFields returned %#x, fields %p.\n", it8613_vin_numbers[index], (unsigned int)hr, fields);
+        if (fields)
+        {
+            count = 0;
+            hr = IPortableDeviceKeyCollection_GetCount(fields, &count);
+            ok(hr == S_OK && count == 2, "VIN%lu data field count returned %#x, count %lu.\n", it8613_vin_numbers[index], (unsigned int)hr, count);
+            IPortableDeviceKeyCollection_Release(fields);
+        }
+        hr = ISensor_SupportsDataField(sensor, &SENSOR_DATA_TYPE_VOLTAGE_VOLTS, &supported);
+        ok(hr == S_OK && supported == VARIANT_TRUE, "VIN%lu SupportsDataField returned %#x, supported %d.\n", it8613_vin_numbers[index], (unsigned int)hr, supported);
+        hr = ISensor_GetData(sensor, &report);
+        ok(hr == S_OK && report, "VIN%lu GetData returned %#x, report %p.\n", it8613_vin_numbers[index], (unsigned int)hr, report);
+        if (report)
+        {
+            memset(&timestamp, 0, sizeof(timestamp));
+            hr = ISensorDataReport_GetTimestamp(report, &timestamp);
+            ok(hr == S_OK && timestamp.wYear >= 2026, "VIN%lu GetTimestamp returned %#x, year %u.\n", it8613_vin_numbers[index], (unsigned int)hr, timestamp.wYear);
+            PropVariantInit(&value);
+            hr = ISensorDataReport_GetSensorValue(report, &SENSOR_DATA_TYPE_VOLTAGE_VOLTS, &value);
+            ok(hr == S_OK && value.vt == VT_R8, "VIN%lu GetSensorValue returned %#x, type %#x.\n", it8613_vin_numbers[index], (unsigned int)hr, value.vt);
+            if (hr == S_OK && value.vt == VT_R8)
+            {
+                ok(value.dblVal >= it8613_voltage_minimums[index] && value.dblVal <= it8613_voltage_maximums[index], "VIN%lu voltage %.6f is outside the expected %.3f-%.3f V range.\n", it8613_vin_numbers[index], value.dblVal, it8613_voltage_minimums[index], it8613_voltage_maximums[index]);
+                trace("IT8613_ADC VIN%lu name %ls voltage %.6f V\n", it8613_vin_numbers[index], name ? name : L"(null)", value.dblVal);
+            }
+            PropVariantClear(&value);
+            ISensorDataReport_Release(report);
+        }
+        SysFreeString(name);
+        ISensor_Release(sensor);
     }
-    return NULL;
-}
-
-static void test_it8613_sensor(ISensorManager *manager)
-{
-    IPortableDeviceKeyCollection *fields;
-    ISensorDataReport *report;
-    PROPVARIANT value;
-    SYSTEMTIME timestamp;
-    VARIANT_BOOL supported;
-    ISensor *sensor;
-    BSTR name;
-    GUID id;
-    GUID category;
-    GUID type;
-    DWORD count;
-    HRESULT hr;
-
-    sensor = find_it8613_sensor(manager);
-    if (!sensor)
-    {
+    if (!found && !required)
         win_skip("The ITE IT8613E provider is not present.\n");
-        return;
-    }
-    hr = ISensor_GetID(sensor, &id);
-    ok(hr == S_OK, "GetID returned %#x.\n", (unsigned int)hr);
-    hr = ISensor_GetCategory(sensor, &category);
-    ok(hr == S_OK && IsEqualGUID(&category, &SENSOR_CATEGORY_ELECTRICAL), "GetCategory returned %#x.\n", (unsigned int)hr);
-    hr = ISensor_GetType(sensor, &type);
-    ok(hr == S_OK && IsEqualGUID(&type, &SENSOR_TYPE_VOLTAGE), "GetType returned %#x.\n", (unsigned int)hr);
-    name = NULL;
-    hr = ISensor_GetFriendlyName(sensor, &name);
-    ok(hr == S_OK && name && name[0], "GetFriendlyName returned %#x, name %ls.\n", (unsigned int)hr, name ? name : L"(null)");
-    SysFreeString(name);
-    fields = NULL;
-    hr = ISensor_GetSupportedDataFields(sensor, &fields);
-    ok(hr == S_OK && fields, "GetSupportedDataFields returned %#x, fields %p.\n", (unsigned int)hr, fields);
-    if (fields)
-    {
-        count = 0;
-        hr = IPortableDeviceKeyCollection_GetCount(fields, &count);
-        ok(hr == S_OK && count == 2, "Data field count returned %#x, count %lu.\n", (unsigned int)hr, count);
-        IPortableDeviceKeyCollection_Release(fields);
-    }
-    supported = VARIANT_FALSE;
-    hr = ISensor_SupportsDataField(sensor, &SENSOR_DATA_TYPE_VOLTAGE_VOLTS, &supported);
-    ok(hr == S_OK && supported == VARIANT_TRUE, "SupportsDataField returned %#x, supported %d.\n", (unsigned int)hr, supported);
-    report = NULL;
-    hr = ISensor_GetData(sensor, &report);
-    ok(hr == S_OK && report, "GetData returned %#x, report %p.\n", (unsigned int)hr, report);
-    if (report)
-    {
-        memset(&timestamp, 0, sizeof(timestamp));
-        hr = ISensorDataReport_GetTimestamp(report, &timestamp);
-        ok(hr == S_OK && timestamp.wYear >= 2026, "GetTimestamp returned %#x, year %u.\n", (unsigned int)hr, timestamp.wYear);
-        PropVariantInit(&value);
-        hr = ISensorDataReport_GetSensorValue(report, &SENSOR_DATA_TYPE_VOLTAGE_VOLTS, &value);
-        ok(hr == S_OK && value.vt == VT_R8, "GetSensorValue returned %#x, type %#x.\n", (unsigned int)hr, value.vt);
-        if (hr == S_OK && value.vt == VT_R8)
-            ok(value.dblVal >= 0.0 && value.dblVal <= 20.0, "Voltage %.6f is outside the provider range.\n", value.dblVal);
-        PropVariantClear(&value);
-        ISensorDataReport_Release(report);
-    }
-    ISensor_Release(sensor);
+    if (required)
+        ok(found == ARRAY_SIZE(it8613_sensor_ids), "Found %lu of %Iu required IT8613E sensors.\n", found, ARRAY_SIZE(it8613_sensor_ids));
 }
 
 static void test_manager(void)
