@@ -17,6 +17,24 @@ typedef struct _PNPCPU_WORK_CONTEXT
 
 static PPNPCPU_DEVICE_EXTENSION PnpcpuProcessors[MAXIMUM_PROCESSORS];
 
+static ULONG PnpcpuGetCurrentProcessorNumber(VOID)
+{
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    return KeGetCurrentProcessorNumberEx(NULL);
+#else
+    return KeGetCurrentProcessorNumber();
+#endif
+}
+
+static ULONG PnpcpuQueryActiveProcessorCount(VOID)
+{
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    return KeQueryActiveProcessorCountEx(ALL_PROCESSOR_GROUPS);
+#else
+    return KeQueryActiveProcessorCount(NULL);
+#endif
+}
+
 #if defined(_M_IX86) || defined(_M_AMD64)
 #define PNPCPU_INTEL_PERF_CTL_MSR 0x199
 #define PNPCPU_INTEL_PM_ENABLE_MSR 0x770
@@ -27,8 +45,10 @@ static PPNPCPU_DEVICE_EXTENSION PnpcpuProcessors[MAXIMUM_PROCESSORS];
 #define PNPCPU_INTEL_HWP_REQUEST_EPP_MASK (0xFFULL << 24)
 #define PNPCPU_INTEL_HWP_REQUEST_PACKAGE_CONTROL (1ULL << 42)
 
-#if defined(__clang__) || defined(__GNUC__)
+#if defined(__clang__)
 __attribute__((target("sse3")))
+#elif defined(__GNUC__)
+__attribute__((target("mwait")))
 #endif
 static
 VOID
@@ -36,8 +56,13 @@ PnpcpuMonitorMwait(
     _In_ volatile LONG *Address,
     _In_ ULONG Hint)
 {
+#if defined(__clang__) || defined(__GNUC__)
+    __builtin_ia32_monitor((PVOID)Address, 0, 0);
+    __builtin_ia32_mwait(1, Hint);
+#else
     _mm_monitor((PVOID)Address, 0, 0);
-    _mm_mwait(Hint, 1);
+    _mm_mwait(1, Hint);
+#endif
 }
 #endif
 
@@ -739,7 +764,7 @@ VOID
 PnpcpuFindProcessorNumber(
     _Inout_ PPNPCPU_DEVICE_EXTENSION DeviceExtension)
 {
-    ULONG ActiveProcessors = KeQueryActiveProcessorCountEx(ALL_PROCESSOR_GROUPS);
+    ULONG ActiveProcessors = PnpcpuQueryActiveProcessorCount();
     ULONG Index;
 
     DeviceExtension->ProcessorNumberValid = FALSE;
@@ -1002,7 +1027,7 @@ PnpcpuIdleHandler(
     _In_ ULONG_PTR Context,
     _Inout_ PPROCESSOR_IDLE_TIMES IdleTimes)
 {
-    ULONG ProcessorNumber = KeGetCurrentProcessorNumberEx(NULL);
+    ULONG ProcessorNumber = PnpcpuGetCurrentProcessorNumber();
     PPNPCPU_DEVICE_EXTENSION DeviceExtension;
     PPNPCPU_IDLE_STATE IdleState;
     ULONG Bytes;
@@ -1062,7 +1087,7 @@ FASTCALL
 PnpcpuSetPerfLevel(
     _In_ UCHAR Throttle)
 {
-    ULONG ProcessorNumber = KeGetCurrentProcessorNumberEx(NULL);
+    ULONG ProcessorNumber = PnpcpuGetCurrentProcessorNumber();
     PPNPCPU_DEVICE_EXTENSION DeviceExtension;
     LONG ThermalLimit;
     ULONG Index;
@@ -1600,7 +1625,7 @@ PnpcpuRefreshCapabilities(
             DeviceExtension->UidValid ? "" : "?", DeviceExtension->Uid,
             DeviceExtension->ApicIdValid ? "" : "?", DeviceExtension->ApicId,
             DeviceExtension->ProximityValid ? "" : "?", DeviceExtension->ProximityDomain,
-            KeQueryActiveProcessorCountEx(ALL_PROCESSOR_GROUPS), DeviceExtension->CapabilityMask,
+            PnpcpuQueryActiveProcessorCount(), DeviceExtension->CapabilityMask,
             DeviceExtension->CapabilityCounts[0], DeviceExtension->CapabilityCounts[1],
             DeviceExtension->CapabilityCounts[2], DeviceExtension->CapabilityCounts[3],
             DeviceExtension->CapabilityCounts[4], DeviceExtension->CapabilityCounts[5],
@@ -1609,6 +1634,7 @@ PnpcpuRefreshCapabilities(
 
 static
 VOID
+NTAPI
 PnpcpuWorker(
     _In_ PVOID Context)
 {

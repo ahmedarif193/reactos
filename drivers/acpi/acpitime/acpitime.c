@@ -565,6 +565,7 @@ AcpiTimeRefresh(
 
 static
 VOID
+NTAPI
 AcpiTimeWorker(
     _In_ PVOID Context)
 {
