@@ -4051,6 +4051,15 @@ BOOL wined3d_adapter_no3d_init_format_info(struct wined3d_adapter *adapter)
         WINED3DFMT_P8_UINT,
     };
 
+#ifdef __REACTOS__
+    static const enum wined3d_format_id vertex_formats[] =
+    {
+        WINED3DFMT_R32G32B32A32_FLOAT,
+        WINED3DFMT_R32G32_FLOAT,
+        WINED3DFMT_B8G8R8A8_UNORM,
+    };
+#endif
+
     if (!wined3d_adapter_init_format_info(adapter, sizeof(struct wined3d_format)))
         return FALSE;
 
@@ -4061,7 +4070,28 @@ BOOL wined3d_adapter_no3d_init_format_info(struct wined3d_adapter *adapter)
 
         format->caps[WINED3D_GL_RES_TYPE_TEX_2D] |= WINED3D_FORMAT_CAP_BLIT;
         format->caps[WINED3D_GL_RES_TYPE_RB] |= WINED3D_FORMAT_CAP_BLIT;
+#ifdef __REACTOS__
+        if (format->byte_count <= sizeof(DWORD) && format->red_size && format->green_size && format->blue_size)
+        {
+            format->caps[WINED3D_GL_RES_TYPE_TEX_2D] |= WINED3D_FORMAT_CAP_TEXTURE | WINED3D_FORMAT_CAP_FILTERING;
+            if (format->byte_count >= 2)
+            {
+                format->caps[WINED3D_GL_RES_TYPE_TEX_2D] |= WINED3D_FORMAT_CAP_RENDERTARGET;
+                format->caps[WINED3D_GL_RES_TYPE_RB] |= WINED3D_FORMAT_CAP_RENDERTARGET;
+            }
+        }
+#endif
     }
+
+#ifdef __REACTOS__
+    for (i = 0; i < ARRAY_SIZE(vertex_formats); ++i)
+    {
+        if (!(format = get_format_internal(adapter, vertex_formats[i])))
+            return FALSE;
+
+        format->caps[WINED3D_GL_RES_TYPE_BUFFER] |= WINED3D_FORMAT_CAP_VERTEX_ATTRIBUTE;
+    }
+#endif
 
     return TRUE;
 }
@@ -5632,6 +5662,11 @@ static void compute_texture_matrix(const struct wined3d_matrix *matrix, uint32_t
 
 static unsigned int get_texcoord_attrib_count(const struct wined3d_vertex_declaration *decl, unsigned int index)
 {
+#ifdef __REACTOS__
+    if (!decl)
+        return 0;
+#endif
+
     for (unsigned int i = 0; i < decl->element_count; ++i)
     {
         if (decl->elements[i].usage == WINED3D_DECL_USAGE_TEXCOORD

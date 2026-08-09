@@ -2216,13 +2216,37 @@ HRESULT wined3d_texture_no3d_init(struct wined3d_texture *texture_no3d, struct w
         const struct wined3d_resource_desc *desc, unsigned int layer_count, unsigned int level_count,
         uint32_t flags, void *parent, const struct wined3d_parent_ops *parent_ops)
 {
+#ifdef __REACTOS__
+    unsigned int sub_resource_count, i;
+    HRESULT hr;
+#endif
+
     TRACE("texture_no3d %p, device %p, desc %p, layer_count %u, "
             "level_count %u, flags %#x, parent %p, parent_ops %p.\n",
             texture_no3d, device, desc, layer_count,
             level_count, flags, parent, parent_ops);
 
+#ifdef __REACTOS__
+    if (FAILED(hr = wined3d_texture_init(texture_no3d, desc, layer_count, level_count, flags, device, parent, parent_ops, &texture_no3d[1], &wined3d_texture_no3d_ops)))
+        return hr;
+
+    if (!wined3d_resource_prepare_sysmem(&texture_no3d->resource))
+    {
+        wined3d_texture_cleanup_sync(texture_no3d);
+        return E_OUTOFMEMORY;
+    }
+
+    sub_resource_count = layer_count * level_count;
+    for (i = 0; i < sub_resource_count; ++i)
+        texture_no3d->sub_resources[i].locations = WINED3D_LOCATION_SYSMEM;
+    texture_no3d->sysmem_count = sub_resource_count;
+    texture_no3d->resource.pin_sysmem = 1;
+
+    return WINED3D_OK;
+#else
     return wined3d_texture_init(texture_no3d, desc, layer_count, level_count,
             flags, device, parent, parent_ops, &texture_no3d[1], &wined3d_texture_no3d_ops);
+#endif
 }
 
 bool wined3d_rendertarget_view_use_cpu_clear(struct wined3d_rendertarget_view *view)

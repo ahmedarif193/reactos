@@ -2158,11 +2158,13 @@ HRESULT CDECL wined3d_check_device_format(const struct wined3d *wined3d,
     if (usage & WINED3DUSAGE_QUERY_LEGACYBUMPMAP)
         format_attrs |= WINED3D_FORMAT_ATTR_BUMPMAP;
 
+#ifndef __REACTOS__
     if ((format_caps & WINED3D_FORMAT_CAP_TEXTURE) && (wined3d->flags & WINED3D_NO3D))
     {
         TRACE("Requested texturing support, but wined3d was created with WINED3D_NO3D.\n");
         return WINED3DERR_NOTAVAILABLE;
     }
+#endif
 
     if ((format->attrs & format_attrs) != format_attrs)
     {
@@ -2930,6 +2932,21 @@ static void adapter_no3d_release_context(struct wined3d_context *context)
 
 static void adapter_no3d_get_wined3d_caps(const struct wined3d_adapter *adapter, struct wined3d_caps *caps)
 {
+#ifdef __REACTOS__
+    caps->ddraw_caps.dds_caps |= WINEDDSCAPS_BACKBUFFER
+            | WINEDDSCAPS_COMPLEX
+            | WINEDDSCAPS_FRONTBUFFER
+            | WINEDDSCAPS_3DDEVICE
+            | WINEDDSCAPS_OWNDC;
+    caps->ddraw_caps.caps |= WINEDDCAPS_3D;
+
+    caps->DevCaps &= ~(WINED3DDEVCAPS_EXECUTEVIDEOMEMORY
+            | WINED3DDEVCAPS_TLVERTEXVIDEOMEMORY
+            | WINED3DDEVCAPS_TEXTUREVIDEOMEMORY
+            | WINED3DDEVCAPS_HWTRANSFORMANDLIGHT
+            | WINED3DDEVCAPS_PUREDEVICE
+            | WINED3DDEVCAPS_HWRASTERIZATION);
+#endif
 }
 
 static BOOL adapter_no3d_check_format(const struct wined3d_adapter *adapter,
@@ -3216,15 +3233,39 @@ static HRESULT adapter_no3d_create_shader_resource_view(const struct wined3d_vie
         struct wined3d_resource *resource, void *parent, const struct wined3d_parent_ops *parent_ops,
         struct wined3d_shader_resource_view **view)
 {
+#ifdef __REACTOS__
+    struct wined3d_shader_resource_view *view_no3d;
+    HRESULT hr;
+#endif
+
     TRACE("desc %s, resource %p, parent %p, parent_ops %p, view %p.\n",
             wined3d_debug_view_desc(desc, resource), resource, parent, parent_ops, view);
 
+#ifdef __REACTOS__
+    if (!(view_no3d = calloc(1, sizeof(*view_no3d))))
+        return E_OUTOFMEMORY;
+
+    if (FAILED(hr = wined3d_shader_resource_view_init(view_no3d, desc, resource, parent, parent_ops)))
+    {
+        free(view_no3d);
+        return hr;
+    }
+
+    *view = view_no3d;
+    return WINED3D_OK;
+#else
     return E_NOTIMPL;
+#endif
 }
 
 static void adapter_no3d_destroy_shader_resource_view(struct wined3d_shader_resource_view *view)
 {
     TRACE("view %p.\n", view);
+
+#ifdef __REACTOS__
+    wined3d_shader_resource_view_cleanup(view);
+    free(view);
+#endif
 }
 
 static HRESULT adapter_no3d_create_unordered_access_view(const struct wined3d_view_desc *desc,
@@ -3290,10 +3331,519 @@ static void adapter_no3d_flush_context(struct wined3d_context *context)
     TRACE("context %p.\n", context);
 }
 
+#ifdef __REACTOS__
+struct no3d_raster_vertex
+{
+    float x, y;
+    float rhw, u, v;
+    float r, g, b, a;
+};
+
+struct no3d_raster_source
+{
+    const struct wined3d_vertex_declaration_element *element;
+    const BYTE *data;
+    size_t size;
+    unsigned int offset;
+    unsigned int stride;
+};
+
+struct no3d_raster_target
+{
+    const struct wined3d_format *format;
+    BYTE *data;
+    unsigned int row_pitch;
+    unsigned int width;
+    unsigned int height;
+};
+
+struct no3d_raster_texture
+{
+    const struct wined3d_format *format;
+    const BYTE *data;
+    unsigned int row_pitch;
+    unsigned int width;
+    unsigned int height;
+    bool linear_filter;
+};
+
+static bool no3d_raster_prepare_source(const struct wined3d_state *state,
+        const struct wined3d_vertex_declaration_element *element, struct wined3d_context *context,
+        struct no3d_raster_source *source)
+{
+    const struct wined3d_stream_state *stream;
+
+    if (element->input_slot >= WINED3D_MAX_STREAMS)
+        return false;
+
+    stream = &state->streams[element->input_slot];
+    if (!stream->buffer || !stream->stride || stream->offset > stream->buffer->resource.size
+            || element->offset > stream->buffer->resource.size - stream->offset)
+        return false;
+
+    source->element = element;
+    source->data = wined3d_buffer_load_sysmem(stream->buffer, context);
+    source->size = stream->buffer->resource.size;
+    source->offset = stream->offset + element->offset;
+    source->stride = stream->stride;
+    return !!source->data;
+}
+
+static bool no3d_raster_load_element(const struct no3d_raster_source *source, size_t vertex_idx, void *data)
+{
+    size_t offset;
+
+    if (vertex_idx > (SIZE_MAX - source->offset) / source->stride)
+        return false;
+    offset = source->offset + vertex_idx * source->stride;
+    if (offset > source->size || source->element->format->byte_count > source->size - offset)
+        return false;
+
+    memcpy(data, source->data + offset, source->element->format->byte_count);
+    return true;
+}
+
+static bool no3d_raster_load_vertex(const struct no3d_raster_source *position,
+        const struct no3d_raster_source *diffuse, const struct no3d_raster_source *texcoord,
+        size_t vertex_idx, struct no3d_raster_vertex *vertex)
+{
+    float p[4];
+    float t[2] = {0.0f, 0.0f};
+    DWORD color = 0xffffffff;
+
+    if (!no3d_raster_load_element(position, vertex_idx, p))
+        return false;
+    if (diffuse && !no3d_raster_load_element(diffuse, vertex_idx, &color))
+        return false;
+    if (texcoord && !no3d_raster_load_element(texcoord, vertex_idx, t))
+        return false;
+
+    vertex->x = p[0];
+    vertex->y = p[1];
+    vertex->rhw = p[3];
+    vertex->u = t[0];
+    vertex->v = t[1];
+    vertex->r = ((color >> 16) & 0xff) / 255.0f;
+    vertex->g = ((color >> 8) & 0xff) / 255.0f;
+    vertex->b = (color & 0xff) / 255.0f;
+    vertex->a = ((color >> 24) & 0xff) / 255.0f;
+    return isfinite(vertex->x) && isfinite(vertex->y) && isfinite(vertex->rhw)
+            && isfinite(vertex->u) && isfinite(vertex->v) && vertex->rhw > 0.0f;
+}
+
+static float no3d_raster_edge(const struct no3d_raster_vertex *a,
+        const struct no3d_raster_vertex *b, float x, float y)
+{
+    return (b->x - a->x) * (y - a->y) - (b->y - a->y) * (x - a->x);
+}
+
+static DWORD no3d_raster_pack_channel(float value, unsigned int size, unsigned int offset)
+{
+    DWORD max_value;
+
+    if (!size || size >= 32 || offset >= 32 || size > 32 - offset)
+        return 0;
+    if (value < 0.0f)
+        value = 0.0f;
+    else if (value > 1.0f)
+        value = 1.0f;
+
+    max_value = (1u << size) - 1;
+    return ((DWORD)(value * max_value + 0.5f) & max_value) << offset;
+}
+
+static void no3d_raster_store_pixel(const struct no3d_raster_target *target,
+        unsigned int x, unsigned int y, float r, float g, float b, float a)
+{
+    const struct wined3d_format *format = target->format;
+    DWORD pixel;
+
+    pixel = no3d_raster_pack_channel(r, format->red_size, format->red_offset)
+            | no3d_raster_pack_channel(g, format->green_size, format->green_offset)
+            | no3d_raster_pack_channel(b, format->blue_size, format->blue_offset)
+            | no3d_raster_pack_channel(a, format->alpha_size, format->alpha_offset);
+    memcpy(target->data + y * target->row_pitch + x * format->byte_count, &pixel, format->byte_count);
+}
+
+static float no3d_raster_unpack_channel(DWORD pixel, unsigned int size, unsigned int offset, float default_value)
+{
+    DWORD max_value;
+
+    if (!size)
+        return default_value;
+    if (size >= 32 || offset >= 32 || size > 32 - offset)
+        return 0.0f;
+
+    max_value = (1u << size) - 1;
+    return ((pixel >> offset) & max_value) / (float)max_value;
+}
+
+static void no3d_raster_fetch_texture(const struct no3d_raster_texture *texture,
+        unsigned int x, unsigned int y, float *r, float *g, float *b, float *a)
+{
+    const struct wined3d_format *format = texture->format;
+    DWORD pixel = 0;
+
+    memcpy(&pixel, texture->data + y * texture->row_pitch + x * format->byte_count, format->byte_count);
+    *r = no3d_raster_unpack_channel(pixel, format->red_size, format->red_offset, 0.0f);
+    *g = no3d_raster_unpack_channel(pixel, format->green_size, format->green_offset, 0.0f);
+    *b = no3d_raster_unpack_channel(pixel, format->blue_size, format->blue_offset, 0.0f);
+    *a = no3d_raster_unpack_channel(pixel, format->alpha_size, format->alpha_offset, 1.0f);
+}
+
+static float no3d_raster_lerp(float a, float b, float t)
+{
+    return a + (b - a) * t;
+}
+
+static void no3d_raster_sample_texture(const struct no3d_raster_texture *texture,
+        float u, float v, float *r, float *g, float *b, float *a)
+{
+    float x, y, tx, ty;
+    float r00, g00, b00, a00, r10, g10, b10, a10;
+    float r01, g01, b01, a01, r11, g11, b11, a11;
+    unsigned int x0, y0, x1, y1;
+
+    u = min(max(u, 0.0f), 1.0f);
+    v = min(max(v, 0.0f), 1.0f);
+    x = u * (texture->width - 1);
+    y = v * (texture->height - 1);
+
+    if (!texture->linear_filter)
+    {
+        no3d_raster_fetch_texture(texture, (unsigned int)(x + 0.5f), (unsigned int)(y + 0.5f), r, g, b, a);
+        return;
+    }
+
+    x0 = (unsigned int)x;
+    y0 = (unsigned int)y;
+    x1 = min(x0 + 1, texture->width - 1);
+    y1 = min(y0 + 1, texture->height - 1);
+    tx = x - x0;
+    ty = y - y0;
+    no3d_raster_fetch_texture(texture, x0, y0, &r00, &g00, &b00, &a00);
+    no3d_raster_fetch_texture(texture, x1, y0, &r10, &g10, &b10, &a10);
+    no3d_raster_fetch_texture(texture, x0, y1, &r01, &g01, &b01, &a01);
+    no3d_raster_fetch_texture(texture, x1, y1, &r11, &g11, &b11, &a11);
+    *r = no3d_raster_lerp(no3d_raster_lerp(r00, r10, tx), no3d_raster_lerp(r01, r11, tx), ty);
+    *g = no3d_raster_lerp(no3d_raster_lerp(g00, g10, tx), no3d_raster_lerp(g01, g11, tx), ty);
+    *b = no3d_raster_lerp(no3d_raster_lerp(b00, b10, tx), no3d_raster_lerp(b01, b11, tx), ty);
+    *a = no3d_raster_lerp(no3d_raster_lerp(a00, a10, tx), no3d_raster_lerp(a01, a11, tx), ty);
+}
+
+static void no3d_raster_triangle(const struct no3d_raster_target *target,
+        const struct no3d_raster_texture *texture,
+        const struct no3d_raster_vertex *v0, const struct no3d_raster_vertex *v1,
+        const struct no3d_raster_vertex *v2)
+{
+    float min_x, min_y, max_x, max_y, area;
+    int left, top, right, bottom, x, y;
+
+    area = no3d_raster_edge(v0, v1, v2->x, v2->y);
+    if (area > -1.0e-6f && area < 1.0e-6f)
+        return;
+
+    min_x = min(v0->x, min(v1->x, v2->x));
+    min_y = min(v0->y, min(v1->y, v2->y));
+    max_x = max(v0->x, max(v1->x, v2->x));
+    max_y = max(v0->y, max(v1->y, v2->y));
+    left = max((int)min_x, 0);
+    top = max((int)min_y, 0);
+    right = min((int)max_x + 1, (int)target->width);
+    bottom = min((int)max_y + 1, (int)target->height);
+
+    for (y = top; y < bottom; ++y)
+    {
+        for (x = left; x < right; ++x)
+        {
+            float px = x + 0.5f;
+            float py = y + 0.5f;
+            float e0 = no3d_raster_edge(v1, v2, px, py);
+            float e1 = no3d_raster_edge(v2, v0, px, py);
+            float e2 = no3d_raster_edge(v0, v1, px, py);
+            float w0, w1, w2;
+            float r, g, b, a;
+
+            if ((area > 0.0f && (e0 < 0.0f || e1 < 0.0f || e2 < 0.0f))
+                    || (area < 0.0f && (e0 > 0.0f || e1 > 0.0f || e2 > 0.0f)))
+                continue;
+
+            w0 = e0 / area;
+            w1 = e1 / area;
+            w2 = e2 / area;
+            r = v0->r * w0 + v1->r * w1 + v2->r * w2;
+            g = v0->g * w0 + v1->g * w1 + v2->g * w2;
+            b = v0->b * w0 + v1->b * w1 + v2->b * w2;
+            a = v0->a * w0 + v1->a * w1 + v2->a * w2;
+            if (texture)
+            {
+                float rhw = v0->rhw * w0 + v1->rhw * w1 + v2->rhw * w2;
+                float tr, tg, tb, ta;
+                float u, v;
+
+                if (rhw <= 0.0f)
+                    continue;
+                u = (v0->u * v0->rhw * w0 + v1->u * v1->rhw * w1 + v2->u * v2->rhw * w2) / rhw;
+                v = (v0->v * v0->rhw * w0 + v1->v * v1->rhw * w1 + v2->v * v2->rhw * w2) / rhw;
+                no3d_raster_sample_texture(texture, u, v, &tr, &tg, &tb, &ta);
+                r *= tr;
+                g *= tg;
+                b *= tb;
+                a *= ta;
+            }
+            no3d_raster_store_pixel(target, x, y, r, g, b, a);
+        }
+    }
+}
+
+static bool no3d_raster_get_vertex_idx(const struct wined3d_state *state,
+        const struct wined3d_draw_parameters *parameters, const BYTE *indices,
+        unsigned int index_stride, unsigned int sequence, size_t *vertex_idx)
+{
+    size_t index_offset;
+    uint32_t index;
+    int64_t signed_idx;
+
+    if (!parameters->indexed)
+    {
+        if (sequence > SIZE_MAX - parameters->u.direct.start_idx)
+            return false;
+        *vertex_idx = parameters->u.direct.start_idx + sequence;
+        return true;
+    }
+
+    if (parameters->u.direct.start_idx > (SIZE_MAX - state->index_offset) / index_stride
+            || sequence > (SIZE_MAX - state->index_offset) / index_stride - parameters->u.direct.start_idx)
+        return false;
+    index_offset = state->index_offset + (parameters->u.direct.start_idx + sequence) * index_stride;
+    if (index_offset > state->index_buffer->resource.size
+            || index_stride > state->index_buffer->resource.size - index_offset)
+        return false;
+
+    if (index_stride == sizeof(uint16_t))
+    {
+        uint16_t index16;
+
+        memcpy(&index16, indices + index_offset, sizeof(index16));
+        index = index16;
+    }
+    else
+    {
+        memcpy(&index, indices + index_offset, sizeof(index));
+    }
+
+    signed_idx = (int64_t)parameters->u.direct.base_vertex_idx + index;
+    if (signed_idx < 0 || (uint64_t)signed_idx > SIZE_MAX)
+        return false;
+    *vertex_idx = signed_idx;
+    return true;
+}
+#endif
+
 static void adapter_no3d_draw_primitive(struct wined3d_device *device,
         const struct wined3d_state *state, const struct wined3d_draw_parameters *parameters)
 {
+#ifdef __REACTOS__
+    const struct wined3d_vertex_declaration_element *position_element = NULL, *diffuse_element = NULL;
+    const struct wined3d_vertex_declaration_element *texcoord_element = NULL;
+    struct no3d_raster_source position, diffuse, texcoord;
+    struct wined3d_shader_resource_view *srv = NULL;
+    struct wined3d_rendertarget_view *view;
+    struct no3d_raster_target target;
+    struct no3d_raster_texture sampled;
+    struct wined3d_texture *target_texture;
+    struct wined3d_texture *sample_texture = NULL;
+    struct wined3d_context *context;
+    struct wined3d_bo_address target_address, sample_address;
+    struct wined3d_range target_range, sample_range;
+    const BYTE *indices = NULL;
+    unsigned int index_stride = 0;
+    unsigned int sample_sub_resource = 0;
+    unsigned int sample_level = 0;
+    unsigned int triangle_count;
+    unsigned int i, j, level, slice_pitch;
+    bool target_mapped = false;
+    bool sample_mapped = false;
+    static unsigned int once;
+
+    TRACE("device %p, state %p, parameters %p.\n", device, state, parameters);
+
+    if (parameters->indirect || !state->vertex_declaration || !state->vertex_declaration->position_transformed
+            || !(view = state->fb.render_targets[0]) || view->resource->type != WINED3D_RTYPE_TEXTURE_2D)
+        goto unsupported;
+
+    for (i = 0; i < WINED3D_SHADER_TYPE_COUNT; ++i)
+    {
+        if (state->shader[i])
+            goto unsupported;
+    }
+
+    for (i = 0; i < state->vertex_declaration->element_count; ++i)
+    {
+        const struct wined3d_vertex_declaration_element *element = &state->vertex_declaration->elements[i];
+
+        if (element->usage == WINED3D_DECL_USAGE_POSITIONT && !element->usage_idx)
+            position_element = element;
+        else if (element->usage == WINED3D_DECL_USAGE_COLOR && !element->usage_idx)
+            diffuse_element = element;
+        else if (element->usage == WINED3D_DECL_USAGE_TEXCOORD && !element->usage_idx)
+            texcoord_element = element;
+    }
+
+    if (!position_element || position_element->format->id != WINED3DFMT_R32G32B32A32_FLOAT
+            || (diffuse_element && diffuse_element->format->id != WINED3DFMT_B8G8R8A8_UNORM)
+            || (texcoord_element && texcoord_element->format->id != WINED3DFMT_R32G32_FLOAT))
+        goto unsupported;
+
+    if (state->texture_states[0][WINED3D_TSS_COLOR_OP] != WINED3D_TOP_DISABLE)
+        srv = state->shader_resource_view[WINED3D_SHADER_TYPE_PIXEL][0];
+    if (srv)
+    {
+        if (!texcoord_element || srv->resource->type != WINED3D_RTYPE_TEXTURE_2D)
+            goto unsupported;
+        sample_texture = texture_from_resource(srv->resource);
+        sample_level = srv->desc.u.texture.level_idx;
+        if (sample_level >= sample_texture->level_count
+                || srv->desc.u.texture.layer_idx >= sample_texture->layer_count)
+            goto unsupported;
+        sample_sub_resource = srv->desc.u.texture.layer_idx * sample_texture->level_count + sample_level;
+    }
+
+    switch (state->primitive_type)
+    {
+        case WINED3D_PT_TRIANGLELIST:
+            triangle_count = parameters->u.direct.index_count / 3;
+            break;
+
+        case WINED3D_PT_TRIANGLESTRIP:
+        case WINED3D_PT_TRIANGLEFAN:
+            triangle_count = parameters->u.direct.index_count >= 3 ? parameters->u.direct.index_count - 2 : 0;
+            break;
+
+        default:
+            goto unsupported;
+    }
+
+    target_texture = texture_from_resource(view->resource);
+    context = context_acquire(device, target_texture, view->sub_resource_idx);
+    if (!context)
+        return;
+
+    if (!no3d_raster_prepare_source(state, position_element, context, &position)
+            || (diffuse_element && !no3d_raster_prepare_source(state, diffuse_element, context, &diffuse))
+            || (sample_texture && !no3d_raster_prepare_source(state, texcoord_element, context, &texcoord)))
+        goto done;
+
+    if (parameters->indexed)
+    {
+        if (!state->index_buffer)
+            goto done;
+        if (state->index_format == WINED3DFMT_R16_UINT)
+            index_stride = sizeof(uint16_t);
+        else if (state->index_format == WINED3DFMT_R32_UINT)
+            index_stride = sizeof(uint32_t);
+        else
+            goto done;
+        if (!(indices = wined3d_buffer_load_sysmem(state->index_buffer, context)))
+            goto done;
+    }
+
+    if (view->format->byte_count < 2 || view->format->byte_count > sizeof(DWORD)
+            || !wined3d_texture_load_location(target_texture, view->sub_resource_idx, context, WINED3D_LOCATION_SYSMEM))
+        goto done;
+
+    level = view->sub_resource_idx % target_texture->level_count;
+    target.format = view->format;
+    target.width = view->width;
+    target.height = view->height;
+    wined3d_texture_get_pitch(target_texture, level, &target.row_pitch, &slice_pitch);
+    wined3d_texture_get_bo_address(target_texture, view->sub_resource_idx, &target_address, WINED3D_LOCATION_SYSMEM);
+    target.data = wined3d_context_map_bo_address(context, &target_address, target_texture->sub_resources[view->sub_resource_idx].size, WINED3D_MAP_WRITE);
+    if (!target.data)
+        goto done;
+    target_mapped = true;
+
+    if (sample_texture)
+    {
+        const struct wined3d_sampler *sampler = state->sampler[WINED3D_SHADER_TYPE_PIXEL][0];
+
+        if (srv->format->byte_count > sizeof(DWORD)
+                || !srv->format->red_size || !srv->format->green_size || !srv->format->blue_size
+                || !wined3d_texture_load_location(sample_texture, sample_sub_resource, context, WINED3D_LOCATION_SYSMEM))
+            goto done;
+        sampled.format = srv->format;
+        sampled.width = wined3d_texture_get_level_width(sample_texture, sample_level);
+        sampled.height = wined3d_texture_get_level_height(sample_texture, sample_level);
+        sampled.linear_filter = sampler && (sampler->desc.mag_filter == WINED3D_TEXF_LINEAR
+                || sampler->desc.min_filter == WINED3D_TEXF_LINEAR);
+        wined3d_texture_get_pitch(sample_texture, sample_level, &sampled.row_pitch, &slice_pitch);
+        wined3d_texture_get_bo_address(sample_texture, sample_sub_resource, &sample_address, WINED3D_LOCATION_SYSMEM);
+        sampled.data = wined3d_context_map_bo_address(context, &sample_address, sample_texture->sub_resources[sample_sub_resource].size, WINED3D_MAP_READ);
+        if (!sampled.data)
+            goto done;
+        sample_mapped = true;
+    }
+
+    for (i = 0; i < triangle_count; ++i)
+    {
+        struct no3d_raster_vertex vertices[3];
+        unsigned int sequence[3];
+
+        if (state->primitive_type == WINED3D_PT_TRIANGLELIST)
+        {
+            sequence[0] = i * 3;
+            sequence[1] = i * 3 + 1;
+            sequence[2] = i * 3 + 2;
+        }
+        else if (state->primitive_type == WINED3D_PT_TRIANGLESTRIP)
+        {
+            sequence[0] = i;
+            sequence[1] = i + 1;
+            sequence[2] = i + 2;
+        }
+        else
+        {
+            sequence[0] = 0;
+            sequence[1] = i + 1;
+            sequence[2] = i + 2;
+        }
+
+        for (j = 0; j < 3; ++j)
+        {
+            size_t vertex_idx;
+
+            if (!no3d_raster_get_vertex_idx(state, parameters, indices, index_stride, sequence[j], &vertex_idx)
+                    || !no3d_raster_load_vertex(&position, diffuse_element ? &diffuse : NULL, sample_texture ? &texcoord : NULL, vertex_idx, &vertices[j]))
+                break;
+        }
+        if (j == 3)
+            no3d_raster_triangle(&target, sample_texture ? &sampled : NULL, &vertices[0], &vertices[1], &vertices[2]);
+    }
+
+done:
+    if (sample_mapped)
+    {
+        sample_range.offset = 0;
+        sample_range.size = sample_texture->sub_resources[sample_sub_resource].size;
+        wined3d_context_unmap_bo_address(context, &sample_address, 1, &sample_range);
+    }
+    if (target_mapped)
+    {
+        target_range.offset = 0;
+        target_range.size = target_texture->sub_resources[view->sub_resource_idx].size;
+        wined3d_context_unmap_bo_address(context, &target_address, 1, &target_range);
+        wined3d_texture_validate_location(target_texture, view->sub_resource_idx, WINED3D_LOCATION_SYSMEM);
+        wined3d_texture_invalidate_location(target_texture, view->sub_resource_idx, ~WINED3D_LOCATION_SYSMEM);
+    }
+    context_release(context);
+    return;
+
+unsupported:
+    if (!once++)
+        WARN("The software rasterizer only supports pre-transformed diffuse-colour triangles with one optional 2D texture.\n");
+#else
     ERR("device %p, state %p, parameters %p.\n", device, state, parameters);
+#endif
 }
 
 static void adapter_no3d_dispatch_compute(struct wined3d_device *device,
@@ -3355,6 +3905,11 @@ static void wined3d_adapter_no3d_init_d3d_info(struct wined3d_adapter *adapter, 
 
     d3d_info->wined3d_creation_flags = wined3d_creation_flags;
     d3d_info->unconditional_npot = true;
+#ifdef __REACTOS__
+    d3d_info->limits.max_rt_count = 1;
+    d3d_info->limits.texture_size = 4096;
+    d3d_info->limits.pointsize_max = 1.0f;
+#endif
     d3d_info->feature_level = WINED3D_FEATURE_LEVEL_5;
 }
 
@@ -3365,7 +3920,11 @@ static struct wined3d_adapter *wined3d_adapter_no3d_create(unsigned int ordinal,
 
     static const struct wined3d_gpu_description gpu_description =
     {
+#ifdef __REACTOS__
+        HW_VENDOR_SOFTWARE, CARD_WINE, "ReactOS Software Rasterizer", DRIVER_WINE, 128,
+#else
         HW_VENDOR_SOFTWARE, CARD_WINE, "WineD3D DirectDraw Emulation", DRIVER_WINE, 128,
+#endif
     };
 
     TRACE("ordinal %u, wined3d_creation_flags %#x.\n", ordinal, wined3d_creation_flags);
@@ -3541,6 +4100,19 @@ HRESULT wined3d_init(struct wined3d *wined3d, uint32_t flags)
     TRACE("Initialising adapters.\n");
 
     if (!(wined3d->adapters[0] = wined3d_adapter_create(0, flags)))
+    {
+#ifdef __REACTOS__
+        if (!(flags & WINED3D_NO3D) && wined3d_settings.renderer == WINED3D_RENDERER_AUTO)
+        {
+            WARN("The configured 3D renderer is unavailable; using the ReactOS software rasterizer.\n");
+            flags |= WINED3D_NO3D;
+            wined3d->flags = flags;
+            wined3d->adapters[0] = wined3d_adapter_create(0, flags);
+        }
+#endif
+    }
+
+    if (!wined3d->adapters[0])
     {
         WARN("Failed to create adapter.\n");
         return E_FAIL;
