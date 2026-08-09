@@ -711,9 +711,22 @@ NTSTATUS WINAPI wow64_NtRaiseHardError( UINT *args )
     ULONG *params = get_ptr( &args );
     HARDERROR_RESPONSE_OPTION option = get_ulong( &args );
     HARDERROR_RESPONSE *response = get_ptr( &args );
+    UNICODE_STRING strings[5];
+    void *params64[5];
+    ULONG i;
 
-    FIXME( "%08lx %lu %lx %p %u %p: stub\n", status, count, params_mask, params, option, response );
-    return STATUS_NOT_IMPLEMENTED;
+    if (count > ARRAY_SIZE(params64)) return STATUS_INVALID_PARAMETER_2;
+
+    if (params)
+    {
+        for (i = 0; i < count; i++)
+        {
+            if (params_mask & (1u << i)) params64[i] = unicode_str_32to64( &strings[i], ULongToPtr(params[i]) );
+            else params64[i] = ULongToPtr( params[i] );
+        }
+    }
+
+    return NtRaiseHardError( status, count, params_mask, params ? params64 : NULL, option, response );
 }
 
 
