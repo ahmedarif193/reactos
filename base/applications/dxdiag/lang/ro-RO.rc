@@ -250,6 +250,7 @@ BEGIN
     IDS_OPTION_NO "Nu"
     IDS_D3DTEST_DESCRIPTION "Acesta va porni testarea interfeței Direct3D. Doriți să continuați?"
     IDS_D3DTEST_D3Dx "Acest test va folosi interfața Direct3D %u accelerată hardware."
+    IDS_D3DTEST_RESULT "Did you see the rotating Direct3D %u cube?"
     IDS_OS_VERSION "%s %s (%d.%d, Subversiunea %d)"
     IDS_DMUSIC_DESC "Descriere"
     IDS_DMUSIC_TYPE "Tip"
