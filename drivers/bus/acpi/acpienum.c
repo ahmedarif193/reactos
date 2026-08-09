@@ -23,6 +23,175 @@
 
 extern struct acpi_device		*acpi_root;
 
+#define BUSP_MADT_GICC_ONLINE_CAPABLE (1UL << 3)
+
+typedef struct _BUSP_PROCESSOR_UID_SET
+{
+    BOOLEAN Valid;
+    ULONG Count;
+    ULONG Uids[MAXIMUM_PROCESSORS];
+} BUSP_PROCESSOR_UID_SET, *PBUSP_PROCESSOR_UID_SET;
+
+static
+BOOLEAN
+BuspAddProcessorUid(
+    _Inout_ PBUSP_PROCESSOR_UID_SET ProcessorUids,
+    _In_ ULONG Uid)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < ProcessorUids->Count; Index++)
+    {
+        if (ProcessorUids->Uids[Index] == Uid)
+            return TRUE;
+    }
+
+    if (ProcessorUids->Count == RTL_NUMBER_OF(ProcessorUids->Uids))
+        return FALSE;
+
+    ProcessorUids->Uids[ProcessorUids->Count++] = Uid;
+    return TRUE;
+}
+
+static
+VOID
+BuspBuildProcessorUidSet(
+    _Out_ PBUSP_PROCESSOR_UID_SET ProcessorUids)
+{
+    ACPI_TABLE_HEADER *Table;
+    ACPI_TABLE_MADT *Madt;
+    ACPI_SUBTABLE_HEADER *Entry;
+    PUCHAR TableEnd;
+    ACPI_STATUS Status;
+    BOOLEAN FoundProcessorEntry = FALSE;
+    BOOLEAN ValidTable = TRUE;
+
+    RtlZeroMemory(ProcessorUids, sizeof(*ProcessorUids));
+    Status = AcpiGetTable(ACPI_SIG_MADT, 0, &Table);
+    if (ACPI_FAILURE(Status) || !Table)
+        return;
+
+    Madt = (ACPI_TABLE_MADT *)Table;
+    if (Table->Length < sizeof(*Madt))
+    {
+        ValidTable = FALSE;
+        goto Exit;
+    }
+
+    Entry = (ACPI_SUBTABLE_HEADER *)((PUCHAR)Madt + sizeof(*Madt));
+    TableEnd = (PUCHAR)Madt + Table->Length;
+    while ((PUCHAR)Entry + sizeof(*Entry) <= TableEnd)
+    {
+        ULONG Uid = 0;
+        BOOLEAN ProcessorEntry = FALSE;
+        BOOLEAN Usable = FALSE;
+
+        if (Entry->Length < sizeof(*Entry) || (PUCHAR)Entry + Entry->Length > TableEnd)
+        {
+            ValidTable = FALSE;
+            break;
+        }
+
+        switch (Entry->Type)
+        {
+            case ACPI_MADT_TYPE_LOCAL_APIC:
+                FoundProcessorEntry = TRUE;
+                if (Entry->Length >= sizeof(ACPI_MADT_LOCAL_APIC))
+                {
+                    ACPI_MADT_LOCAL_APIC *LocalApic = (ACPI_MADT_LOCAL_APIC *)Entry;
+
+                    ProcessorEntry = TRUE;
+                    Uid = LocalApic->ProcessorId;
+                    Usable = (LocalApic->LapicFlags & (ACPI_MADT_ENABLED | ACPI_MADT_ONLINE_CAPABLE)) != 0;
+                }
+                else
+                    ValidTable = FALSE;
+                break;
+
+            case ACPI_MADT_TYPE_LOCAL_X2APIC:
+                FoundProcessorEntry = TRUE;
+                if (Entry->Length >= sizeof(ACPI_MADT_LOCAL_X2APIC))
+                {
+                    ACPI_MADT_LOCAL_X2APIC *LocalX2Apic = (ACPI_MADT_LOCAL_X2APIC *)Entry;
+
+                    ProcessorEntry = TRUE;
+                    Uid = LocalX2Apic->Uid;
+                    Usable = (LocalX2Apic->LapicFlags & (ACPI_MADT_ENABLED | ACPI_MADT_ONLINE_CAPABLE)) != 0;
+                }
+                else
+                    ValidTable = FALSE;
+                break;
+
+            case ACPI_MADT_TYPE_GENERIC_INTERRUPT:
+                FoundProcessorEntry = TRUE;
+                if (Entry->Length >= FIELD_OFFSET(ACPI_MADT_GENERIC_INTERRUPT, Flags) + sizeof(ULONG))
+                {
+                    ACPI_MADT_GENERIC_INTERRUPT *Gicc = (ACPI_MADT_GENERIC_INTERRUPT *)Entry;
+
+                    ProcessorEntry = TRUE;
+                    Uid = Gicc->Uid;
+                    Usable = (Gicc->Flags & (ACPI_MADT_ENABLED | BUSP_MADT_GICC_ONLINE_CAPABLE)) != 0;
+                }
+                else
+                    ValidTable = FALSE;
+                break;
+
+            default:
+                break;
+        }
+
+        if (!ValidTable)
+            break;
+
+        if (ProcessorEntry && Usable)
+        {
+            if (!BuspAddProcessorUid(ProcessorUids, Uid))
+            {
+                ValidTable = FALSE;
+                break;
+            }
+        }
+
+        Entry = (ACPI_SUBTABLE_HEADER *)((PUCHAR)Entry + Entry->Length);
+    }
+
+    if ((PUCHAR)Entry != TableEnd)
+        ValidTable = FALSE;
+
+    ProcessorUids->Valid = ValidTable && FoundProcessorEntry && ProcessorUids->Count != 0;
+
+Exit:
+    AcpiPutTable(Table);
+    if (!ProcessorUids->Valid)
+        ProcessorUids->Count = 0;
+}
+
+static
+BOOLEAN
+BuspShouldEnumerateDevice(
+    _In_ struct acpi_device *Device,
+    _In_ PBUSP_PROCESSOR_UID_SET ProcessorUids)
+{
+    unsigned long long Uid;
+    ACPI_STATUS Status;
+    ULONG Index;
+
+    if (!ProcessorUids->Valid || !Device->pnp.hardware_id || strcmp(Device->pnp.hardware_id, "ACPI0007") != 0)
+        return TRUE;
+
+    Status = acpi_evaluate_integer(Device->handle, "_UID", NULL, &Uid);
+    if (ACPI_FAILURE(Status) || Uid > MAXULONG)
+        return TRUE;
+
+    for (Index = 0; Index < ProcessorUids->Count; Index++)
+    {
+        if (ProcessorUids->Uids[Index] == (ULONG)Uid)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
 static
 BOOLEAN
 BuspAppendHardwareId(
@@ -351,15 +520,29 @@ NTSTATUS
 ACPIEnumerateDevices(PFDO_DEVICE_DATA DeviceExtension)
 {
     ULONG Count = 0;
+    ULONG ProcessorCount = 0;
+    ULONG SkippedProcessorCount = 0;
+    BUSP_PROCESSOR_UID_SET ProcessorUids;
     struct acpi_device *Device = acpi_root;
+
+    BuspBuildProcessorUidSet(&ProcessorUids);
 
     while(Device)
     {
         if (Device->status.present && Device->status.enabled &&
             Device->flags.hardware_id)
         {
-            Bus_PlugInDevice(Device, DeviceExtension);
-            Count++;
+            if (BuspShouldEnumerateDevice(Device, &ProcessorUids))
+            {
+                Bus_PlugInDevice(Device, DeviceExtension);
+                Count++;
+                if (!strcmp(Device->pnp.hardware_id, "ACPI0007"))
+                    ProcessorCount++;
+            }
+            else
+            {
+                SkippedProcessorCount++;
+            }
         }
 
         if (HAS_CHILDREN(Device)) {
@@ -377,6 +560,8 @@ ACPIEnumerateDevices(PFDO_DEVICE_DATA DeviceExtension)
             }
         }
     }
+    if (ProcessorUids.Valid)
+        DPRINT1("ACPI: processor MADT filter exposed %lu ACPI0007 device(s), skipped %lu inactive firmware slot(s)\n", ProcessorCount, SkippedProcessorCount);
     DPRINT("acpi device count: %d\n", Count);
     return STATUS_SUCCESS;
 }
