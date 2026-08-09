@@ -3022,8 +3022,7 @@ RamDiskInitialize(
                     goto WritableReady;
                 }
 
-                if ((OriginalBase != gInitRamDiskBase) &&
-                    (OriginalBase != WritableBase))
+                if (OriginalBase != WritableBase)
                 {
                     /*
                      * MmFreeMemory() is a no-op in freeldr, so the original
@@ -3057,6 +3056,12 @@ RamDiskInitialize(
                                                  LoaderFirmwareTemporary);
                     }
                     MmFreeMemory(OriginalBase);
+
+                    if (OriginalBase == gInitRamDiskBase)
+                    {
+                        gInitRamDiskBase = WritableBase;
+                        gInitRamDiskSize = (ULONG)WritableSize;
+                    }
                 }
 
                 RamDiskBase = WritableBase;
