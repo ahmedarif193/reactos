@@ -1218,7 +1218,7 @@ KeDeregisterProcessorChangeCallback(
 #endif /* (NTDDI_VERSION >= NTDDI_WS08) */
 $endif (_WDMDDK_)
 $if (_WDMDDK_ || _NTDDK_)
-#if (NTDDI_VERSION >= NTDDI_WIN7)
+#if (NTDDI_VERSION >= NTDDI_WIN7) || defined(_STORPORT_)
 
 NTKERNELAPI
 ULONG

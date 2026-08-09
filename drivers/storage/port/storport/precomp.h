@@ -8,13 +8,14 @@
 #ifndef _STORPORT_PCH_
 #define _STORPORT_PCH_
 
+/* Declare StorPort and its internal kernel dependencies before the DDK headers. */
+#define _STORPORT_
+
 #include <wdm.h>
 #include <ntddk.h>
 #include <stdio.h>
 #include <memory.h>
 
-/* Declare STORPORT_API functions as exports rather than imports */
-#define _STORPORT_
 #include <storport.h>
 
 #include <ntddscsi.h>
