@@ -314,7 +314,7 @@ MouHid_DispatchInputData(
     IN PMOUSE_INPUT_DATA InputData)
 {
     KIRQL OldIrql;
-    ULONG InputDataConsumed;
+    ULONG InputDataConsumed = 0;
 
     if (!DeviceExtension->ClassService)
         return;
@@ -418,8 +418,13 @@ MouHid_ReadCompletion(
 
     DPRINT("[MOUHID] LastX %ld LastY %ld Flags %x ButtonFlags %x ButtonData %x\n", MouseInputData.LastX, MouseInputData.LastY, MouseInputData.Flags, MouseInputData.ButtonFlags, MouseInputData.ButtonData);
 
-    /* dispatch mouse action */
-    MouHid_DispatchInputData(DeviceExtension, &MouseInputData);
+    /* Do not burden mouclass and the raw-input thread with empty reports. */
+    if (MouseInputData.Flags ||
+        MouseInputData.ButtonFlags ||
+        MouseInputData.ButtonData ||
+        MouseInputData.LastX ||
+        MouseInputData.LastY)
+        MouHid_DispatchInputData(DeviceExtension, &MouseInputData);
 
     /* re-init read */
     MouHid_InitiateRead(DeviceExtension);

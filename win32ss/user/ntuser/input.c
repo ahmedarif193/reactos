@@ -17,6 +17,8 @@ DBG_DEFAULT_CHANNEL(UserInput);
 #define LAST_RIT_EVENT_UPDATE_INTERVAL 1000UL
 #endif
 
+#define MOUSE_INPUT_BUFFER_SIZE 64
+
 /* GLOBALS *******************************************************************/
 
 PTHREADINFO ptiRawInput;
@@ -146,11 +148,12 @@ RawInputThreadMain(VOID)
     //LARGE_INTEGER WaitTimeout;
     PVOID WaitObjects[4], pSignaledObject = NULL;
     KWAIT_BLOCK WaitBlockArray[RTL_NUMBER_OF(WaitObjects)];
-    ULONG cWaitObjects = 0, cMaxWaitObjects = 2;
-    MOUSE_INPUT_DATA MouseInput;
+    ULONG cWaitObjects = 0, cMaxWaitObjects = 2, MouseInputCount, i;
+    MOUSE_INPUT_DATA MouseInput[MOUSE_INPUT_BUFFER_SIZE];
     KEYBOARD_INPUT_DATA KeyInput;
     PVOID ShutdownEvent;
     HWINSTA hWinSta;
+    BOOL MouseInputProcessed;
 
     ByteOffset.QuadPart = (LONGLONG)0;
     //WaitTimeout.QuadPart = (LONGLONG)(-10000000);
@@ -240,8 +243,8 @@ RawInputThreadMain(VOID)
                                        NULL,
                                        NULL,
                                        &MouIosb,
-                                       &MouseInput,
-                                       sizeof(MOUSE_INPUT_DATA),
+                                       MouseInput,
+                                       sizeof(MouseInput),
                                        &ByteOffset,
                                        NULL);
             }
@@ -316,13 +319,37 @@ RawInputThreadMain(VOID)
         {
             TRACE("MouseEvent\n");
 
-            /* Set LastInputTick */
-            IntLastInputTick(TRUE);
+            if ((MouIosb.Information > sizeof(MouseInput)) || (MouIosb.Information % sizeof(MOUSE_INPUT_DATA)))
+            {
+                ERR("Mouse returned an invalid byte count: %Iu.\n", MouIosb.Information);
+            }
+            else
+            {
+                MouseInputCount = (ULONG)(MouIosb.Information / sizeof(MOUSE_INPUT_DATA));
+                MouseInputProcessed = FALSE;
 
-            /* Process data */
-            UserEnterExclusive();
-            UserProcessMouseInput(&MouseInput);
-            UserLeave();
+                for (i = 0; i < MouseInputCount; ++i)
+                {
+                    if (!MouseInput[i].Flags &&
+                        !MouseInput[i].ButtonFlags &&
+                        !MouseInput[i].ButtonData &&
+                        !MouseInput[i].LastX &&
+                        !MouseInput[i].LastY)
+                        continue;
+
+                    if (!MouseInputProcessed)
+                    {
+                        IntLastInputTick(TRUE);
+                        UserEnterExclusive();
+                        MouseInputProcessed = TRUE;
+                    }
+
+                    UserProcessMouseInput(&MouseInput[i]);
+                }
+
+                if (MouseInputProcessed)
+                    UserLeave();
+            }
         }
         else if (MouStatus != STATUS_PENDING)
             ERR("Failed to read from mouse: %x.\n", MouStatus);
