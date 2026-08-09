@@ -1,0 +1,36 @@
+/*
+ * COM classes for portabledevicetypes.dll
+ *
+ * Copyright 2026 Ahmed Arif
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+#pragma makedep register
+
+[
+    helpstring("Portable Device Values"),
+    threading(both),
+    uuid(0c15d503-d017-47ce-9016-7b3f978721cc)
+]
+coclass PortableDeviceValues { }
+
+[
+    helpstring("Portable Device Key Collection"),
+    threading(both),
+    uuid(de2d022d-2480-43be-97f0-d1fa2cf98f4f)
+]
+coclass PortableDeviceKeyCollection { }
+
+[
+    helpstring("Portable Device PROPVARIANT Collection"),
+    threading(both),
+    uuid(08a99e2f-6d6d-4b80-af5a-baf2bcbe4cb9)
+]
+coclass PortableDevicePropVariantCollection { }
+
+[
+    helpstring("Portable Device Values Collection"),
+    threading(both),
+    uuid(3882134d-14cf-4220-9cb4-435f86d83f60)
+]
+coclass PortableDeviceValuesCollection { }
