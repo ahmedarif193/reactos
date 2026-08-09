@@ -8,6 +8,15 @@
 
 #include "app.h"
 
+#include <initguid.h>
+#include <acpiioct.h>
+#include <poclass.h>
+#include <sensors.h>
+#include <sensorsapi.h>
+#include <setupapi.h>
+
+#include "battery_telemetry.h"
+
 namespace Data {
 
 SysSnapshot g;
@@ -76,6 +85,10 @@ static Vec<SvcGroupCache> s_svcGroups;
 static Vec<UserRow> s_users;
 static Vec<StartupRow> s_startup;
 static Vec<AppHistRow> s_appHist;
+static Vec<TelemetryRow> s_telemetry;
+static ISensorManager* s_sensorManager;
+static DWORD s_lastTelemetryRefresh;
+static DWORD s_lastTelemetryDeviceScan;
 static FILETIME s_appHistSince;
 static BOOL s_appHistDirty;
 static DWORD s_appHistLastSave;
@@ -117,6 +130,49 @@ struct DiskSampler
 };
 static DiskSampler s_diskSamplers[TM_MAX_DISKS];
 
+struct StorageTelemetryDevice
+{
+    HANDLE handle;
+    DWORD number;
+    BYTE* temperatureBuffer;
+    ULONG temperatureBufferSize;
+    WCHAR model[160];
+    WCHAR interfaceName[48];
+};
+static Vec<StorageTelemetryDevice> s_storageTelemetryDevices;
+
+struct AcpiTelemetryDevice
+{
+    HANDLE handle;
+    DWORD openError;
+    ULONG instance;
+    WCHAR name[160];
+};
+static Vec<AcpiTelemetryDevice> s_thermalTelemetryDevices;
+static Vec<AcpiTelemetryDevice> s_fanTelemetryDevices;
+
+struct BatteryTelemetryDevice
+{
+    HANDLE handle;
+    DWORD openError;
+    ULONG instance;
+    WCHAR name[160];
+};
+static Vec<BatteryTelemetryDevice> s_batteryTelemetryDevices;
+
+struct SensorTelemetryDevice
+{
+    ISensor* sensor;
+    GUID id;
+    GUID category;
+    GUID type;
+    PROPERTYKEY* fieldKeys;
+    ULONG fieldCount;
+    WCHAR name[160];
+    WCHAR source[192];
+};
+static Vec<SensorTelemetryDevice> s_sensorTelemetryDevices;
+
 /* network deltas */
 static DWORD s_netIfIndex = (DWORD)-1;
 static DWORD s_prevNetIn, s_prevNetOut;
@@ -126,6 +182,1734 @@ static ULONG s_netTableSize;
 static BOOL  s_wsaStarted;
 
 static WCHAR s_winDir[MAX_PATH];
+
+static void CopyDescriptorText(const BYTE* buffer, DWORD size, DWORD offset, WCHAR* output, int outputCount);
+static const WCHAR* StorageBusName(STORAGE_BUS_TYPE bus);
+
+static const GUID s_storageTelemetryFormat = { 0xd174a22d, 0x836f, 0x4654, { 0xb2, 0x58, 0x2f, 0x5f, 0x75, 0xe4, 0x73, 0x23 } };
+static const GUID s_thermalTelemetryFormat = { 0x934ec8a1, 0xb8cb, 0x4a3d, { 0x9a, 0x78, 0x28, 0xc7, 0x84, 0x1e, 0xc0, 0xc7 } };
+static const GUID s_fanTelemetryFormat = { 0x0a1409c4, 0x57df, 0x4c20, { 0x9d, 0x60, 0x7f, 0xa6, 0x18, 0x9b, 0x36, 0x44 } };
+static const GUID s_batteryTelemetryFormat = { 0x421c6529, 0x0a9d, 0x4f49, { 0x88, 0xc2, 0x6d, 0xca, 0xb3, 0x77, 0x59, 0x3c } };
+static const GUID s_systemPowerTelemetryFormat = { 0x3f8f82b9, 0x3f33, 0x4636, { 0xa5, 0xad, 0x1c, 0xe7, 0xef, 0xe7, 0x21, 0xcf } };
+
+struct SensorFieldInfo
+{
+    ULONG pid;
+    ULONG kind;
+    const WCHAR* name;
+    const WCHAR* unit;
+};
+
+struct SensorFieldSet
+{
+    const GUID* format;
+    const SensorFieldInfo* fields;
+    ULONG count;
+};
+
+static const SensorFieldInfo s_commonFields[] =
+{
+    { 2, TEL_OTHER, L"Timestamp", L"UTC" },
+};
+
+static const SensorFieldInfo s_biometricFields[] =
+{
+    { 2, TEL_OTHER, L"Human presence", L"" },
+    { 3, TEL_OTHER, L"Human proximity", L"m" },
+    { 4, TEL_OTHER, L"Touch state", L"" },
+};
+
+static const SensorFieldInfo s_electricalFields[] =
+{
+    { 2, TEL_VOLTAGE, L"Voltage", L"V" },
+    { 3, TEL_CURRENT, L"Current", L"A" },
+    { 4, TEL_OTHER, L"Capacitance", L"F" },
+    { 5, TEL_OTHER, L"Resistance", L"ohm" },
+    { 6, TEL_OTHER, L"Inductance", L"H" },
+    { 7, TEL_POWER, L"Power", L"W" },
+    { 8, TEL_OTHER, L"Range", L"%" },
+    { 9, TEL_OTHER, L"Frequency", L"Hz" },
+};
+
+static const SensorFieldInfo s_environmentalFields[] =
+{
+    { 2, TEL_TEMPERATURE, L"Temperature", L"°C" },
+    { 3, TEL_HUMIDITY, L"Humidity", L"%" },
+    { 4, TEL_PRESSURE, L"Atmospheric pressure", L"bar" },
+    { 5, TEL_OTHER, L"Wind direction", L"°" },
+    { 6, TEL_OTHER, L"Wind speed", L"m/s" },
+};
+
+static const SensorFieldInfo s_lightFields[] =
+{
+    { 2, TEL_LIGHT, L"Light level", L"lux" },
+    { 3, TEL_LIGHT, L"Light temperature", L"K" },
+    { 4, TEL_LIGHT, L"Chromaticity", L"" },
+};
+
+static const SensorFieldInfo s_locationFields[] =
+{
+    { 2, TEL_LOCATION, L"Latitude", L"°" },
+    { 3, TEL_LOCATION, L"Longitude", L"°" },
+    { 4, TEL_LOCATION, L"Altitude above sea level", L"m" },
+    { 5, TEL_LOCATION, L"Altitude above ellipsoid", L"m" },
+    { 6, TEL_LOCATION, L"Speed", L"kn" },
+    { 7, TEL_LOCATION, L"True heading", L"°" },
+    { 8, TEL_LOCATION, L"Magnetic heading", L"°" },
+    { 9, TEL_LOCATION, L"Magnetic variation", L"°" },
+    { 10, TEL_LOCATION, L"Fix quality", L"" },
+    { 11, TEL_LOCATION, L"Fix type", L"" },
+    { 12, TEL_LOCATION, L"Position dilution of precision", L"" },
+    { 13, TEL_LOCATION, L"Horizontal dilution of precision", L"" },
+    { 14, TEL_LOCATION, L"Vertical dilution of precision", L"" },
+    { 15, TEL_LOCATION, L"Satellites used", L"" },
+    { 16, TEL_LOCATION, L"Used satellite PRNs", L"" },
+    { 17, TEL_LOCATION, L"Satellites in view", L"" },
+    { 18, TEL_LOCATION, L"Visible satellite PRNs", L"" },
+    { 19, TEL_LOCATION, L"Satellite elevations", L"°" },
+    { 20, TEL_LOCATION, L"Satellite azimuths", L"°" },
+    { 21, TEL_LOCATION, L"Satellite signal-to-noise ratios", L"dB" },
+    { 22, TEL_LOCATION, L"Error radius", L"m" },
+    { 23, TEL_LOCATION, L"Address line 1", L"" },
+    { 24, TEL_LOCATION, L"Address line 2", L"" },
+    { 25, TEL_LOCATION, L"City", L"" },
+    { 26, TEL_LOCATION, L"State or province", L"" },
+    { 27, TEL_LOCATION, L"Postal code", L"" },
+    { 28, TEL_LOCATION, L"Country or region", L"" },
+    { 29, TEL_LOCATION, L"Ellipsoid altitude error", L"m" },
+    { 30, TEL_LOCATION, L"Sea-level altitude error", L"m" },
+    { 31, TEL_LOCATION, L"GPS selection mode", L"" },
+    { 32, TEL_LOCATION, L"GPS operation mode", L"" },
+    { 33, TEL_LOCATION, L"GPS status", L"" },
+    { 34, TEL_LOCATION, L"Geoidal separation", L"m" },
+    { 35, TEL_LOCATION, L"DGPS data age", L"s" },
+    { 36, TEL_LOCATION, L"Antenna altitude", L"m" },
+    { 37, TEL_LOCATION, L"Differential reference station", L"" },
+    { 38, TEL_LOCATION, L"NMEA sentence", L"" },
+    { 39, TEL_LOCATION, L"Visible satellite IDs", L"" },
+    { 40, TEL_LOCATION, L"Location source", L"" },
+    { 41, TEL_LOCATION, L"Used satellite PRNs and constellations", L"" },
+};
+
+static const SensorFieldInfo s_mechanicalFields[] =
+{
+    { 2, TEL_OTHER, L"Boolean switch", L"" },
+    { 3, TEL_OTHER, L"Multivalue switch", L"" },
+    { 4, TEL_OTHER, L"Force", L"N" },
+    { 5, TEL_PRESSURE, L"Absolute pressure", L"Pa" },
+    { 6, TEL_PRESSURE, L"Gauge pressure", L"Pa" },
+    { 7, TEL_OTHER, L"Strain", L"" },
+    { 8, TEL_OTHER, L"Weight", L"kg" },
+    { 10, TEL_OTHER, L"Boolean switch array", L"" },
+};
+
+static const SensorFieldInfo s_motionFields[] =
+{
+    { 2, TEL_OTHER, L"Acceleration X", L"g" },
+    { 3, TEL_OTHER, L"Acceleration Y", L"g" },
+    { 4, TEL_OTHER, L"Acceleration Z", L"g" },
+    { 5, TEL_OTHER, L"Angular acceleration X", L"°/s²" },
+    { 6, TEL_OTHER, L"Angular acceleration Y", L"°/s²" },
+    { 7, TEL_OTHER, L"Angular acceleration Z", L"°/s²" },
+    { 8, TEL_OTHER, L"Speed", L"m/s" },
+    { 9, TEL_OTHER, L"Motion state", L"" },
+    { 10, TEL_OTHER, L"Angular velocity X", L"°/s" },
+    { 11, TEL_OTHER, L"Angular velocity Y", L"°/s" },
+    { 12, TEL_OTHER, L"Angular velocity Z", L"°/s" },
+};
+
+static const SensorFieldInfo s_orientationFields[] =
+{
+    { 2, TEL_OTHER, L"Tilt X", L"°" },
+    { 3, TEL_OTHER, L"Tilt Y", L"°" },
+    { 4, TEL_OTHER, L"Tilt Z", L"°" },
+    { 5, TEL_OTHER, L"Magnetic heading X", L"°" },
+    { 6, TEL_OTHER, L"Magnetic heading Y", L"°" },
+    { 7, TEL_OTHER, L"Magnetic heading Z", L"°" },
+    { 8, TEL_OTHER, L"Distance X", L"m" },
+    { 9, TEL_OTHER, L"Distance Y", L"m" },
+    { 10, TEL_OTHER, L"Distance Z", L"m" },
+    { 11, TEL_OTHER, L"Compensated magnetic-north heading", L"°" },
+    { 12, TEL_OTHER, L"Compensated true-north heading", L"°" },
+    { 13, TEL_OTHER, L"Magnetic-north heading", L"°" },
+    { 14, TEL_OTHER, L"True-north heading", L"°" },
+    { 15, TEL_OTHER, L"Quadrant angle", L"°" },
+    { 16, TEL_OTHER, L"Rotation matrix", L"" },
+    { 17, TEL_OTHER, L"Quaternion", L"" },
+    { 18, TEL_OTHER, L"Simple device orientation", L"" },
+    { 19, TEL_OTHER, L"Magnetic field X", L"mG" },
+    { 20, TEL_OTHER, L"Magnetic field Y", L"mG" },
+    { 21, TEL_OTHER, L"Magnetic field Z", L"mG" },
+    { 22, TEL_OTHER, L"Magnetometer accuracy", L"" },
+};
+
+static const SensorFieldInfo s_scannerFields[] =
+{
+    { 2, TEL_OTHER, L"RFID tag", L"" },
+};
+
+static const SensorFieldSet s_sensorFieldSets[] =
+{
+    { &SENSOR_DATA_TYPE_COMMON_GUID, s_commonFields, _countof(s_commonFields) },
+    { &SENSOR_DATA_TYPE_BIOMETRIC_GUID, s_biometricFields, _countof(s_biometricFields) },
+    { &SENSOR_DATA_TYPE_ELECTRICAL_GUID, s_electricalFields, _countof(s_electricalFields) },
+    { &SENSOR_DATA_TYPE_ENVIRONMENTAL_GUID, s_environmentalFields, _countof(s_environmentalFields) },
+    { &SENSOR_DATA_TYPE_LIGHT_GUID, s_lightFields, _countof(s_lightFields) },
+    { &SENSOR_DATA_TYPE_LOCATION_GUID, s_locationFields, _countof(s_locationFields) },
+    { &SENSOR_DATA_TYPE_GUID_MECHANICAL_GUID, s_mechanicalFields, _countof(s_mechanicalFields) },
+    { &SENSOR_DATA_TYPE_MOTION_GUID, s_motionFields, _countof(s_motionFields) },
+    { &SENSOR_DATA_TYPE_ORIENTATION_GUID, s_orientationFields, _countof(s_orientationFields) },
+    { &SENSOR_DATA_TYPE_SCANNER_GUID, s_scannerFields, _countof(s_scannerFields) },
+};
+
+static const WCHAR*
+SensorStateName(SensorState state)
+{
+    switch (state)
+    {
+    case SENSOR_STATE_READY: return L"Ready";
+    case SENSOR_STATE_NOT_AVAILABLE: return L"Unavailable";
+    case SENSOR_STATE_NO_DATA: return L"No data";
+    case SENSOR_STATE_INITIALIZING: return L"Initializing";
+    case SENSOR_STATE_ACCESS_DENIED: return L"Access denied";
+    case SENSOR_STATE_ERROR: return L"Error";
+    default: return L"Unknown";
+    }
+}
+
+static BOOL
+CopySensorStringProperty(ISensor* sensor, const PROPERTYKEY& key, WCHAR* value, int cch)
+{
+    PROPVARIANT property;
+    HRESULT hr;
+
+    value[0] = 0;
+    PropVariantInit(&property);
+    hr = sensor->GetProperty(key, &property);
+    if (SUCCEEDED(hr))
+    {
+        if (property.vt == VT_LPWSTR && property.pwszVal)
+            StringCchCopyW(value, cch, property.pwszVal);
+        else if (property.vt == VT_BSTR && property.bstrVal)
+            StringCchCopyW(value, cch, property.bstrVal);
+    }
+    PropVariantClear(&property);
+    return value[0] != 0;
+}
+
+static BOOL
+AppendTelemetryText(WCHAR* text, int cch, const WCHAR* value)
+{
+    int used;
+    int needed;
+
+    if (!value)
+        return TRUE;
+    used = lstrlenW(text);
+    needed = lstrlenW(value) + (used ? 2 : 0);
+    if (used + needed >= cch)
+    {
+        if (used + 4 < cch) StringCchCatW(text, cch, L"...");
+        return FALSE;
+    }
+    if (used) StringCchCatW(text, cch, L", ");
+    StringCchCatW(text, cch, value);
+    return TRUE;
+}
+
+static void
+FormatTelemetryFileTime(const FILETIME& fileTime, WCHAR* text, int cch)
+{
+    SYSTEMTIME time;
+
+    if (FileTimeToSystemTime(&fileTime, &time)) StringCchPrintfW(text, cch, L"%04u-%02u-%02u %02u:%02u:%02u", time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond);
+}
+
+static BOOL TelemetryVariantValue(const PROPVARIANT& property, double* number, WCHAR* text, int cch);
+
+template <typename T>
+static void
+FormatTelemetryList(const T* values, ULONG count, WCHAR* text, int cch, void (*format)(const T& value, WCHAR* output, int outputCount))
+{
+    WCHAR value[128];
+
+    if (!values || !count)
+    {
+        StringCchCopyW(text, cch, L"Empty");
+        return;
+    }
+    for (ULONG index = 0; index < count; index++)
+    {
+        value[0] = 0;
+        format(values[index], value, _countof(value));
+        if (!AppendTelemetryText(text, cch, value)) break;
+    }
+}
+
+template <typename T>
+static void
+FormatTelemetryNumberElement(const T& value, WCHAR* output, int outputCount)
+{
+    StringCchPrintfW(output, outputCount, L"%.6g", (double)value);
+}
+
+static void
+FormatTelemetrySigned64Element(const LARGE_INTEGER& value, WCHAR* output, int outputCount)
+{
+    StringCchPrintfW(output, outputCount, L"%I64d", value.QuadPart);
+}
+
+static void
+FormatTelemetryUnsigned64Element(const ULARGE_INTEGER& value, WCHAR* output, int outputCount)
+{
+    StringCchPrintfW(output, outputCount, L"%I64u", value.QuadPart);
+}
+
+static void
+FormatTelemetryBooleanElement(const VARIANT_BOOL& value, WCHAR* output, int outputCount)
+{
+    StringCchCopyW(output, outputCount, value != VARIANT_FALSE ? L"On" : L"Off");
+}
+
+static void
+FormatTelemetryStringElement(LPWSTR const& value, WCHAR* output, int outputCount)
+{
+    if (value) StringCchCopyW(output, outputCount, value);
+}
+
+static void
+FormatTelemetryAnsiStringElement(LPSTR const& value, WCHAR* output, int outputCount)
+{
+    if (value) MultiByteToWideChar(CP_ACP, 0, value, -1, output, outputCount);
+}
+
+static void
+FormatTelemetryCurrencyElement(const CY& value, WCHAR* output, int outputCount)
+{
+    StringCchPrintfW(output, outputCount, L"%.6g", value.int64 / 10000.0);
+}
+
+static void
+FormatTelemetryScodeElement(const SCODE& value, WCHAR* output, int outputCount)
+{
+    StringCchPrintfW(output, outputCount, L"0x%08lx", value);
+}
+
+static void
+FormatTelemetryFileTimeElement(const FILETIME& value, WCHAR* output, int outputCount)
+{
+    FormatTelemetryFileTime(value, output, outputCount);
+}
+
+static void
+FormatTelemetryClsidElement(const CLSID& value, WCHAR* output, int outputCount)
+{
+    StringFromGUID2(value, output, outputCount);
+}
+
+static void
+FormatTelemetryVariantElement(const PROPVARIANT& value, WCHAR* output, int outputCount)
+{
+    double ignored = 0;
+
+    TelemetryVariantValue(value, &ignored, output, outputCount);
+}
+
+static void
+FormatTelemetryBytes(const BYTE* bytes, ULONG count, WCHAR* text, int cch)
+{
+    WCHAR value[8];
+
+    StringCchCopyW(text, cch, L"0x");
+    for (ULONG index = 0; bytes && index < count; index++)
+    {
+        StringCchPrintfW(value, _countof(value), L"%02X", bytes[index]);
+        if (lstrlenW(text) + 2 >= cch)
+        {
+            if (lstrlenW(text) + 4 < cch) StringCchCatW(text, cch, L"...");
+            break;
+        }
+        StringCchCatW(text, cch, value);
+    }
+}
+
+static BOOL
+TelemetryVariantValue(const PROPVARIANT& property, double* number, WCHAR* text, int cch)
+{
+    switch (property.vt)
+    {
+    case VT_I1: *number = property.cVal; break;
+    case VT_UI1: *number = property.bVal; break;
+    case VT_I2: *number = property.iVal; break;
+    case VT_UI2: *number = property.uiVal; break;
+    case VT_I4: *number = property.lVal; break;
+    case VT_UI4: *number = property.ulVal; break;
+    case VT_I8: *number = (double)property.hVal.QuadPart; StringCchPrintfW(text, cch, L"%I64d", property.hVal.QuadPart); break;
+    case VT_UI8: *number = (double)property.uhVal.QuadPart; StringCchPrintfW(text, cch, L"%I64u", property.uhVal.QuadPart); break;
+    case VT_INT: *number = property.lVal; break;
+    case VT_UINT: *number = property.ulVal; break;
+    case VT_R4: *number = property.fltVal; break;
+    case VT_R8: *number = property.dblVal; break;
+    case VT_CY: *number = property.cyVal.int64 / 10000.0; break;
+    case VT_DATE: *number = property.date; break;
+    case VT_BOOL: *number = property.boolVal != VARIANT_FALSE; StringCchCopyW(text, cch, property.boolVal != VARIANT_FALSE ? L"On" : L"Off"); return TRUE;
+    case VT_LPSTR:
+        if (property.pszVal) MultiByteToWideChar(CP_ACP, 0, property.pszVal, -1, text, cch);
+        return FALSE;
+    case VT_LPWSTR:
+        if (property.pwszVal) StringCchCopyW(text, cch, property.pwszVal);
+        return FALSE;
+    case VT_BSTR:
+        if (property.bstrVal) StringCchCopyW(text, cch, property.bstrVal);
+        return FALSE;
+    case VT_ERROR:
+        StringCchPrintfW(text, cch, L"Error 0x%08lx", property.scode);
+        return FALSE;
+    case VT_FILETIME:
+        FormatTelemetryFileTime(property.filetime, text, cch);
+        return FALSE;
+    case VT_CLSID:
+        if (property.puuid) StringFromGUID2(*property.puuid, text, cch);
+        return FALSE;
+    case VT_BLOB:
+    case VT_BLOB_OBJECT:
+        FormatTelemetryBytes(property.blob.pBlobData, property.blob.cbSize, text, cch);
+        return FALSE;
+    case VT_BSTR_BLOB:
+        FormatTelemetryBytes((const BYTE*)property.bstrblobVal.pData, property.bstrblobVal.cbSize, text, cch);
+        return FALSE;
+    case VT_I1 | VT_VECTOR: FormatTelemetryList(property.cac.pElems, property.cac.cElems, text, cch, FormatTelemetryNumberElement<CHAR>); return FALSE;
+    case VT_UI1 | VT_VECTOR: FormatTelemetryList(property.caub.pElems, property.caub.cElems, text, cch, FormatTelemetryNumberElement<UCHAR>); return FALSE;
+    case VT_I2 | VT_VECTOR: FormatTelemetryList(property.cai.pElems, property.cai.cElems, text, cch, FormatTelemetryNumberElement<SHORT>); return FALSE;
+    case VT_UI2 | VT_VECTOR: FormatTelemetryList(property.caui.pElems, property.caui.cElems, text, cch, FormatTelemetryNumberElement<USHORT>); return FALSE;
+    case VT_I4 | VT_VECTOR: FormatTelemetryList(property.cal.pElems, property.cal.cElems, text, cch, FormatTelemetryNumberElement<LONG>); return FALSE;
+    case VT_UI4 | VT_VECTOR: FormatTelemetryList(property.caul.pElems, property.caul.cElems, text, cch, FormatTelemetryNumberElement<ULONG>); return FALSE;
+    case VT_R4 | VT_VECTOR: FormatTelemetryList(property.caflt.pElems, property.caflt.cElems, text, cch, FormatTelemetryNumberElement<FLOAT>); return FALSE;
+    case VT_R8 | VT_VECTOR: FormatTelemetryList(property.cadbl.pElems, property.cadbl.cElems, text, cch, FormatTelemetryNumberElement<DOUBLE>); return FALSE;
+    case VT_I8 | VT_VECTOR: FormatTelemetryList(property.cah.pElems, property.cah.cElems, text, cch, FormatTelemetrySigned64Element); return FALSE;
+    case VT_UI8 | VT_VECTOR: FormatTelemetryList(property.cauh.pElems, property.cauh.cElems, text, cch, FormatTelemetryUnsigned64Element); return FALSE;
+    case VT_BOOL | VT_VECTOR: FormatTelemetryList(property.cabool.pElems, property.cabool.cElems, text, cch, FormatTelemetryBooleanElement); return FALSE;
+    case VT_CY | VT_VECTOR: FormatTelemetryList(property.cacy.pElems, property.cacy.cElems, text, cch, FormatTelemetryCurrencyElement); return FALSE;
+    case VT_DATE | VT_VECTOR: FormatTelemetryList(property.cadate.pElems, property.cadate.cElems, text, cch, FormatTelemetryNumberElement<DATE>); return FALSE;
+    case VT_ERROR | VT_VECTOR: FormatTelemetryList(property.cascode.pElems, property.cascode.cElems, text, cch, FormatTelemetryScodeElement); return FALSE;
+    case VT_FILETIME | VT_VECTOR: FormatTelemetryList(property.cafiletime.pElems, property.cafiletime.cElems, text, cch, FormatTelemetryFileTimeElement); return FALSE;
+    case VT_LPWSTR | VT_VECTOR: FormatTelemetryList(property.calpwstr.pElems, property.calpwstr.cElems, text, cch, FormatTelemetryStringElement); return FALSE;
+    case VT_BSTR | VT_VECTOR: FormatTelemetryList((LPWSTR const*)property.cabstr.pElems, property.cabstr.cElems, text, cch, FormatTelemetryStringElement); return FALSE;
+    case VT_LPSTR | VT_VECTOR: FormatTelemetryList(property.calpstr.pElems, property.calpstr.cElems, text, cch, FormatTelemetryAnsiStringElement); return FALSE;
+    case VT_CLSID | VT_VECTOR: FormatTelemetryList(property.cauuid.pElems, property.cauuid.cElems, text, cch, FormatTelemetryClsidElement); return FALSE;
+    case VT_VARIANT | VT_VECTOR: FormatTelemetryList(property.capropvar.pElems, property.capropvar.cElems, text, cch, FormatTelemetryVariantElement); return FALSE;
+    default:
+        if ((property.vt & VT_ARRAY) && property.parray) StringCchPrintfW(text, cch, L"Array (%u dimensions)", SafeArrayGetDim(property.parray));
+        else StringCchPrintfW(text, cch, L"Unsupported value type 0x%04x", property.vt);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static const SensorFieldInfo*
+FindSensorFieldInfo(const PROPERTYKEY& key)
+{
+    for (ULONG setIndex = 0; setIndex < _countof(s_sensorFieldSets); setIndex++)
+    {
+        const SensorFieldSet* set = &s_sensorFieldSets[setIndex];
+
+        if (!IsEqualGUID(key.fmtid, *set->format))
+            continue;
+        for (ULONG fieldIndex = 0; fieldIndex < set->count; fieldIndex++)
+            if (set->fields[fieldIndex].pid == key.pid) return &set->fields[fieldIndex];
+        break;
+    }
+    return NULL;
+}
+
+static const WCHAR*
+SensorCategoryName(const GUID& category)
+{
+    if (IsEqualGUID(category, SENSOR_CATEGORY_BIOMETRIC)) return L"Biometric";
+    if (IsEqualGUID(category, SENSOR_CATEGORY_ELECTRICAL)) return L"Electrical";
+    if (IsEqualGUID(category, SENSOR_CATEGORY_ENVIRONMENTAL)) return L"Environmental";
+    if (IsEqualGUID(category, SENSOR_CATEGORY_LIGHT)) return L"Light";
+    if (IsEqualGUID(category, SENSOR_CATEGORY_LOCATION)) return L"Location";
+    if (IsEqualGUID(category, SENSOR_CATEGORY_MECHANICAL)) return L"Mechanical";
+    if (IsEqualGUID(category, SENSOR_CATEGORY_MOTION)) return L"Motion";
+    if (IsEqualGUID(category, SENSOR_CATEGORY_ORIENTATION)) return L"Orientation";
+    if (IsEqualGUID(category, SENSOR_CATEGORY_SCANNER)) return L"Scanner";
+    return L"Sensor";
+}
+
+static void
+DescribeSensorField(const PROPERTYKEY& key, const GUID& category, TelemetryRow* row)
+{
+    const SensorFieldInfo* info;
+
+    row->kind = TEL_OTHER;
+    row->unit[0] = 0;
+
+    if (IsEqualGUID(key.fmtid, SENSOR_DATA_TYPE_CUSTOM_GUID))
+    {
+        if (IsEqualGUID(category, SENSOR_CATEGORY_ELECTRICAL) && key.pid >= 7) row->kind = TEL_ELECTRICAL_CUSTOM;
+        if (key.pid == 5) StringCchCopyW(row->type, _countof(row->type), L"Custom usage");
+        else if (key.pid == 6) StringCchCopyW(row->type, _countof(row->type), L"Custom boolean array");
+        else if (row->kind == TEL_ELECTRICAL_CUSTOM) StringCchPrintfW(row->type, _countof(row->type), L"Custom electrical value %lu", key.pid >= 7 ? key.pid - 6 : key.pid);
+        else StringCchPrintfW(row->type, _countof(row->type), L"Custom value %lu", key.pid >= 7 ? key.pid - 6 : key.pid);
+        return;
+    }
+
+    info = FindSensorFieldInfo(key);
+    if (info)
+    {
+        row->kind = info->kind;
+        StringCchCopyW(row->type, _countof(row->type), info->name);
+        StringCchCopyW(row->unit, _countof(row->unit), info->unit);
+        return;
+    }
+
+    StringCchPrintfW(row->type, _countof(row->type), L"%s value %lu", SensorCategoryName(category), key.pid);
+}
+
+static void
+FormatTelemetryNumber(TelemetryRow* row)
+{
+    switch (row->kind)
+    {
+    case TEL_TEMPERATURE:
+    case TEL_HUMIDITY:
+    case TEL_PRESSURE:
+        StringCchPrintfW(row->valueText, _countof(row->valueText), L"%.1f", row->value);
+        break;
+    case TEL_LOCATION:
+        StringCchPrintfW(row->valueText, _countof(row->valueText), L"%.6f", row->value);
+        break;
+    case TEL_VOLTAGE:
+    case TEL_CURRENT:
+    case TEL_POWER:
+        StringCchPrintfW(row->valueText, _countof(row->valueText), L"%.3f", row->value);
+        break;
+    case TEL_PERCENTAGE:
+        StringCchPrintfW(row->valueText, _countof(row->valueText), L"%.1f", row->value);
+        break;
+    case TEL_CAPACITY:
+        StringCchPrintfW(row->valueText, _countof(row->valueText), L"%.2f", row->value);
+        break;
+    case TEL_CYCLE_COUNT:
+        StringCchPrintfW(row->valueText, _countof(row->valueText), L"%.0f", row->value);
+        break;
+    case TEL_FAN:
+        StringCchPrintfW(row->valueText, _countof(row->valueText), L"%.0f", row->value);
+        break;
+    default:
+        StringCchPrintfW(row->valueText, _countof(row->valueText), L"%.4g", row->value);
+        break;
+    }
+}
+
+static void
+SetTelemetryThresholdStatus(TelemetryRow* row)
+{
+    if (!row->available)
+        return;
+    if (row->hasCritical && row->value >= row->critical)
+        StringCchCopyW(row->status, _countof(row->status), L"Critical");
+    else if ((row->hasWarning && row->value >= row->warning) || (row->hasLower && row->value <= row->lower))
+        StringCchCopyW(row->status, _countof(row->status), L"Warning");
+    else
+        StringCchCopyW(row->status, _countof(row->status), L"Normal");
+}
+
+static BOOL
+SameTelemetryIdentity(const TelemetryRow& first, const TelemetryRow& second)
+{
+    return first.sourceKind == second.sourceKind && first.instance == second.instance && first.fieldId == second.fieldId && IsEqualGUID(first.sensorId, second.sensorId) && IsEqualGUID(first.fieldFormat, second.fieldFormat);
+}
+
+static void
+CollectSensorTelemetry(Vec<TelemetryRow>& rows)
+{
+    for (int deviceIndex = 0; deviceIndex < s_sensorTelemetryDevices.n; deviceIndex++)
+    {
+        SensorTelemetryDevice* device = &s_sensorTelemetryDevices[deviceIndex];
+        ISensorDataReport* report = NULL;
+        SensorState state = SENSOR_STATE_ERROR;
+
+        device->sensor->GetState(&state);
+        device->sensor->GetData(&report);
+
+        if (!device->fieldCount)
+        {
+            TelemetryRow* row = rows.Add();
+            if (!row)
+            {
+                if (report) report->Release();
+                return;
+            }
+            row->sensorId = device->id;
+            row->sourceKind = TEL_SOURCE_SENSOR_API;
+            StringCchCopyW(row->name, _countof(row->name), device->name);
+            StringCchCopyW(row->type, _countof(row->type), L"Sensor");
+            StringCchCopyW(row->source, _countof(row->source), device->source);
+            StringCchCopyW(row->valueText, _countof(row->valueText), SensorStateName(state));
+            StringCchCopyW(row->status, _countof(row->status), SensorStateName(state));
+        }
+
+        for (ULONG fieldIndex = 0; fieldIndex < device->fieldCount; fieldIndex++)
+        {
+            const PROPERTYKEY& key = device->fieldKeys[fieldIndex];
+            PROPVARIANT property;
+            TelemetryRow* row;
+            BOOL converted;
+
+            row = rows.Add();
+            if (!row)
+            {
+                if (report) report->Release();
+                return;
+            }
+            row->sensorId = device->id;
+            row->fieldFormat = key.fmtid;
+            row->fieldId = key.pid;
+            row->sourceKind = TEL_SOURCE_SENSOR_API;
+            StringCchCopyW(row->name, _countof(row->name), device->name);
+            StringCchCopyW(row->source, _countof(row->source), device->source);
+            StringCchCopyW(row->status, _countof(row->status), SensorStateName(state));
+            DescribeSensorField(key, device->category, row);
+            if (IsEqualGUID(device->category, SENSOR_CATEGORY_MECHANICAL) && IsEqualGUID(device->type, SENSOR_TYPE_CUSTOM) && IsEqualPropertyKey(key, SENSOR_DATA_TYPE_CUSTOM_VALUE1))
+            {
+                row->kind = TEL_FAN;
+                StringCchCopyW(row->type, _countof(row->type), L"Fan speed");
+                StringCchCopyW(row->unit, _countof(row->unit), L"RPM");
+            }
+            PropVariantInit(&property);
+            if (report && SUCCEEDED(report->GetSensorValue(key, &property)))
+            {
+                converted = TelemetryVariantValue(property, &row->value, row->valueText, _countof(row->valueText));
+                row->numeric = converted && property.vt != VT_BOOL;
+                row->available = property.vt != VT_EMPTY && property.vt != VT_NULL && (converted || row->valueText[0] != 0);
+                if (row->numeric && !row->valueText[0]) FormatTelemetryNumber(row);
+                if (property.vt == VT_ERROR)
+                {
+                    row->available = FALSE;
+                    StringCchCopyW(row->status, _countof(row->status), L"Error");
+                }
+                else if (row->available) StringCchCopyW(row->status, _countof(row->status), L"Normal");
+            }
+            if (!row->available && !row->valueText[0]) StringCchCopyW(row->valueText, _countof(row->valueText), report ? SensorStateName(state) : L"No data");
+            PropVariantClear(&property);
+        }
+
+        if (report) report->Release();
+    }
+}
+
+static void
+FillStorageTelemetryDeviceIdentity(StorageTelemetryDevice* device)
+{
+    BYTE buffer[1024];
+    STORAGE_PROPERTY_QUERY query;
+    DWORD returned = 0;
+
+    for (int index = 0; index < g.diskCount; index++)
+    {
+        if (g.disks[index].number != device->number || !g.disks[index].model[0])
+            continue;
+        StringCchCopyW(device->model, _countof(device->model), g.disks[index].model);
+        StringCchCopyW(device->interfaceName, _countof(device->interfaceName), g.disks[index].interfaceName);
+        return;
+    }
+
+    ZeroMemory(&query, sizeof(query));
+    query.PropertyId = StorageDeviceProperty;
+    query.QueryType = PropertyStandardQuery;
+    if (DeviceIoControl(device->handle, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query), buffer, sizeof(buffer), &returned, NULL) && returned >= sizeof(STORAGE_DEVICE_DESCRIPTOR))
+    {
+        PSTORAGE_DEVICE_DESCRIPTOR descriptor = (PSTORAGE_DEVICE_DESCRIPTOR)buffer;
+        DWORD validSize = descriptor->Size && descriptor->Size < returned ? descriptor->Size : returned;
+        WCHAR vendor[64];
+        WCHAR product[96];
+
+        CopyDescriptorText(buffer, validSize, descriptor->VendorIdOffset, vendor, _countof(vendor));
+        CopyDescriptorText(buffer, validSize, descriptor->ProductIdOffset, product, _countof(product));
+        if (vendor[0]) StringCchCopyW(device->model, _countof(device->model), vendor);
+        if (product[0])
+        {
+            if (device->model[0]) StringCchCatW(device->model, _countof(device->model), L" ");
+            StringCchCatW(device->model, _countof(device->model), product);
+        }
+        StringCchCopyW(device->interfaceName, _countof(device->interfaceName), StorageBusName(descriptor->BusType));
+    }
+    if (!device->model[0]) StringCchPrintfW(device->model, _countof(device->model), L"Disk %lu", device->number);
+    if (!device->interfaceName[0]) StringCchCopyW(device->interfaceName, _countof(device->interfaceName), L"Unknown");
+}
+
+static void
+ProbeStorageTelemetryTemperature(StorageTelemetryDevice* device)
+{
+    STORAGE_DESCRIPTOR_HEADER header;
+    STORAGE_PROPERTY_QUERY query;
+    DWORD returned = 0;
+
+    ZeroMemory(&query, sizeof(query));
+    ZeroMemory(&header, sizeof(header));
+    query.PropertyId = StorageDeviceTemperatureProperty;
+    query.QueryType = PropertyStandardQuery;
+    if (!DeviceIoControl(device->handle, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query), &header, sizeof(header), &returned, NULL) || returned < sizeof(header))
+        return;
+    if (header.Version < sizeof(STORAGE_TEMPERATURE_DATA_DESCRIPTOR) || header.Size < FIELD_OFFSET(STORAGE_TEMPERATURE_DATA_DESCRIPTOR, TemperatureInfo) || header.Size > 1024 * 1024)
+        return;
+    device->temperatureBuffer = (BYTE*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, header.Size);
+    if (device->temperatureBuffer) device->temperatureBufferSize = header.Size;
+}
+
+static BOOL
+AddStorageTelemetryDevice(Vec<StorageTelemetryDevice>& devices, HANDLE handle, DWORD number)
+{
+    StorageTelemetryDevice* device;
+
+    for (int index = 0; index < devices.n; index++)
+    {
+        if (devices[index].number != number)
+            continue;
+        CloseHandle(handle);
+        return TRUE;
+    }
+    device = devices.Add();
+    if (!device)
+    {
+        CloseHandle(handle);
+        return FALSE;
+    }
+    device->handle = handle;
+    device->number = number;
+    FillStorageTelemetryDeviceIdentity(device);
+    ProbeStorageTelemetryTemperature(device);
+    return TRUE;
+}
+
+static void
+FreeTelemetryDevice(StorageTelemetryDevice& device)
+{
+    if (device.handle != INVALID_HANDLE_VALUE) CloseHandle(device.handle);
+    if (device.temperatureBuffer) HeapFree(GetProcessHeap(), 0, device.temperatureBuffer);
+}
+
+static void
+FreeTelemetryDevice(AcpiTelemetryDevice& device)
+{
+    if (device.handle != INVALID_HANDLE_VALUE) CloseHandle(device.handle);
+}
+
+static void
+FreeTelemetryDevice(BatteryTelemetryDevice& device)
+{
+    if (device.handle != INVALID_HANDLE_VALUE) CloseHandle(device.handle);
+}
+
+static void
+FreeTelemetryDevice(SensorTelemetryDevice& device)
+{
+    if (device.sensor) device.sensor->Release();
+    if (device.fieldKeys) HeapFree(GetProcessHeap(), 0, device.fieldKeys);
+}
+
+template <typename T>
+static void
+DiscardTelemetryDeviceList(Vec<T>& devices)
+{
+    for (int index = 0; index < devices.n; index++)
+        FreeTelemetryDevice(devices[index]);
+    devices.Free();
+}
+
+template <typename T>
+static void
+ReplaceTelemetryDeviceList(Vec<T>& current, Vec<T>& replacement)
+{
+    DiscardTelemetryDeviceList(current);
+    current.Swap(replacement);
+}
+
+static BOOL
+DetectSensorTelemetryDevices(void)
+{
+    Vec<SensorTelemetryDevice> found;
+    ISensorCollection* collection = NULL;
+    ULONG count = 0;
+
+    if (!s_sensorManager)
+        CoCreateInstance(CLSID_SensorManager, NULL, CLSCTX_INPROC_SERVER, IID_ISensorManager, (void**)&s_sensorManager);
+    if (!s_sensorManager)
+        return FALSE;
+    if (FAILED(s_sensorManager->GetSensorsByCategory(SENSOR_CATEGORY_ALL, &collection)) || !collection)
+        return FALSE;
+    if (FAILED(collection->GetCount(&count)))
+    {
+        collection->Release();
+        return FALSE;
+    }
+
+    for (ULONG sensorIndex = 0; sensorIndex < count; sensorIndex++)
+    {
+        IPortableDeviceKeyCollection* fields = NULL;
+        ISensor* sensor = NULL;
+        SensorTelemetryDevice* device;
+        BSTR friendlyName = NULL;
+        WCHAR manufacturer[96] = L"";
+        WCHAR model[96] = L"";
+        DWORD fieldCount = 0;
+
+        if (FAILED(collection->GetAt(sensorIndex, &sensor)) || !sensor)
+            continue;
+        device = found.Add();
+        if (!device)
+        {
+            sensor->Release();
+            break;
+        }
+        device->sensor = sensor;
+        sensor->GetID(&device->id);
+        sensor->GetCategory(&device->category);
+        sensor->GetType(&device->type);
+        sensor->GetFriendlyName(&friendlyName);
+        StringCchCopyW(device->name, _countof(device->name), friendlyName && friendlyName[0] ? friendlyName : L"Sensor");
+        if (friendlyName) SysFreeString(friendlyName);
+        CopySensorStringProperty(sensor, SENSOR_PROPERTY_MANUFACTURER, manufacturer, _countof(manufacturer));
+        CopySensorStringProperty(sensor, SENSOR_PROPERTY_MODEL, model, _countof(model));
+        if (manufacturer[0] && model[0]) StringCchPrintfW(device->source, _countof(device->source), L"%s %s", manufacturer, model);
+        else if (manufacturer[0]) StringCchCopyW(device->source, _countof(device->source), manufacturer);
+        else if (model[0]) StringCchCopyW(device->source, _countof(device->source), model);
+        else StringCchCopyW(device->source, _countof(device->source), L"Sensor API");
+
+        sensor->GetSupportedDataFields(&fields);
+        if (fields)
+        {
+            if (SUCCEEDED(fields->GetCount(&fieldCount)) && fieldCount)
+            {
+                device->fieldKeys = (PROPERTYKEY*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, fieldCount * sizeof(PROPERTYKEY));
+                if (device->fieldKeys)
+                    for (DWORD fieldIndex = 0; fieldIndex < fieldCount; fieldIndex++)
+                        if (SUCCEEDED(fields->GetAt(fieldIndex, &device->fieldKeys[device->fieldCount])))
+                            device->fieldCount++;
+            }
+            fields->Release();
+        }
+    }
+    collection->Release();
+    ReplaceTelemetryDeviceList(s_sensorTelemetryDevices, found);
+    return TRUE;
+}
+
+static BOOL
+DetectStorageTelemetryDevices(void)
+{
+    Vec<StorageTelemetryDevice> found;
+    HDEVINFO devices;
+    BOOL enumerated;
+    BOOL scanSucceeded = TRUE;
+
+    devices = SetupDiGetClassDevsW(&GUID_DEVINTERFACE_DISK, NULL, NULL, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
+    enumerated = devices != INVALID_HANDLE_VALUE;
+    if (enumerated)
+    {
+        for (DWORD index = 0; ; index++)
+        {
+            PSP_DEVICE_INTERFACE_DETAIL_DATA_W detail = NULL;
+            SP_DEVICE_INTERFACE_DATA interfaceData;
+            STORAGE_DEVICE_NUMBER deviceNumber;
+            DWORD required = 0;
+            DWORD returned = 0;
+            HANDLE handle;
+
+            ZeroMemory(&interfaceData, sizeof(interfaceData));
+            interfaceData.cbSize = sizeof(interfaceData);
+            if (!SetupDiEnumDeviceInterfaces(devices, NULL, &GUID_DEVINTERFACE_DISK, index, &interfaceData))
+            {
+                if (GetLastError() == ERROR_NO_MORE_ITEMS) break;
+                scanSucceeded = FALSE;
+                break;
+            }
+            SetupDiGetDeviceInterfaceDetailW(devices, &interfaceData, NULL, 0, &required, NULL);
+            if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || required < sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W))
+                continue;
+            detail = (PSP_DEVICE_INTERFACE_DETAIL_DATA_W)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, required);
+            if (!detail)
+            {
+                scanSucceeded = FALSE;
+                break;
+            }
+            detail->cbSize = sizeof(*detail);
+            if (!SetupDiGetDeviceInterfaceDetailW(devices, &interfaceData, detail, required, NULL, NULL))
+            {
+                HeapFree(GetProcessHeap(), 0, detail);
+                continue;
+            }
+            handle = CreateFileW(detail->DevicePath, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+            HeapFree(GetProcessHeap(), 0, detail);
+            if (handle == INVALID_HANDLE_VALUE)
+                continue;
+            ZeroMemory(&deviceNumber, sizeof(deviceNumber));
+            if (!DeviceIoControl(handle, IOCTL_STORAGE_GET_DEVICE_NUMBER, NULL, 0, &deviceNumber, sizeof(deviceNumber), &returned, NULL) || deviceNumber.DeviceType != FILE_DEVICE_DISK)
+            {
+                CloseHandle(handle);
+                continue;
+            }
+            if (!AddStorageTelemetryDevice(found, handle, deviceNumber.DeviceNumber))
+            {
+                scanSucceeded = FALSE;
+                break;
+            }
+        }
+        SetupDiDestroyDeviceInfoList(devices);
+    }
+
+    if (!scanSucceeded)
+    {
+        DiscardTelemetryDeviceList(found);
+        return FALSE;
+    }
+
+    if (!found.n)
+    {
+        for (int index = 0; index < g.diskCount; index++)
+        {
+            WCHAR path[64];
+            HANDLE handle;
+
+            StringCchPrintfW(path, _countof(path), L"\\\\.\\PhysicalDrive%lu", g.disks[index].number);
+            handle = CreateFileW(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+            if (handle != INVALID_HANDLE_VALUE && !AddStorageTelemetryDevice(found, handle, g.disks[index].number))
+            {
+                scanSucceeded = FALSE;
+                break;
+            }
+        }
+    }
+    if (!scanSucceeded)
+    {
+        DiscardTelemetryDeviceList(found);
+        return FALSE;
+    }
+    if (!enumerated && !found.n)
+        return FALSE;
+    ReplaceTelemetryDeviceList(s_storageTelemetryDevices, found);
+    return TRUE;
+}
+
+static ULONG
+HashTelemetryDevicePath(PCWSTR path)
+{
+    ULONG hash = 2166136261u;
+
+    while (*path)
+    {
+        WCHAR character = *path++;
+        if (character >= L'A' && character <= L'Z') character += L'a' - L'A';
+        hash = (hash ^ character) * 16777619u;
+    }
+    return hash ? hash : 1;
+}
+
+static void
+CopyTelemetryDeviceName(HDEVINFO devices, PSP_DEVINFO_DATA deviceData, WCHAR* name, int nameCount, PCWSTR fallback, DWORD index)
+{
+    DWORD propertyType = 0;
+
+    if (!SetupDiGetDeviceRegistryPropertyW(devices, deviceData, SPDRP_FRIENDLYNAME, &propertyType, (PBYTE)name, nameCount * sizeof(WCHAR), NULL)) SetupDiGetDeviceRegistryPropertyW(devices, deviceData, SPDRP_DEVICEDESC, &propertyType, (PBYTE)name, nameCount * sizeof(WCHAR), NULL);
+    if (!name[0]) StringCchPrintfW(name, nameCount, L"%s %lu", fallback, index);
+}
+
+template <typename T>
+static BOOL
+DetectInterfaceTelemetryDevices(const GUID* interfaceGuid, DWORD access, PCWSTR fallbackName, Vec<T>& current)
+{
+    Vec<T> found;
+    HDEVINFO devices;
+    BOOL scanSucceeded = TRUE;
+
+    devices = SetupDiGetClassDevsW(interfaceGuid, NULL, NULL, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
+    if (devices == INVALID_HANDLE_VALUE)
+        return FALSE;
+
+    for (DWORD index = 0; ; index++)
+    {
+        PSP_DEVICE_INTERFACE_DETAIL_DATA_W detail;
+        SP_DEVICE_INTERFACE_DATA interfaceData;
+        SP_DEVINFO_DATA deviceData;
+        T* device;
+        DWORD required = 0;
+        DWORD openError;
+        HANDLE handle;
+
+        ZeroMemory(&interfaceData, sizeof(interfaceData));
+        interfaceData.cbSize = sizeof(interfaceData);
+        if (!SetupDiEnumDeviceInterfaces(devices, NULL, interfaceGuid, index, &interfaceData))
+        {
+            if (GetLastError() == ERROR_NO_MORE_ITEMS) break;
+            scanSucceeded = FALSE;
+            break;
+        }
+        SetupDiGetDeviceInterfaceDetailW(devices, &interfaceData, NULL, 0, &required, NULL);
+        if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || required < sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W))
+            continue;
+        detail = (PSP_DEVICE_INTERFACE_DETAIL_DATA_W)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, required);
+        if (!detail)
+        {
+            scanSucceeded = FALSE;
+            break;
+        }
+        detail->cbSize = sizeof(*detail);
+        ZeroMemory(&deviceData, sizeof(deviceData));
+        deviceData.cbSize = sizeof(deviceData);
+        if (!SetupDiGetDeviceInterfaceDetailW(devices, &interfaceData, detail, required, NULL, &deviceData))
+        {
+            HeapFree(GetProcessHeap(), 0, detail);
+            continue;
+        }
+        handle = CreateFileW(detail->DevicePath, access, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        openError = handle == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+        device = found.Add();
+        if (!device)
+        {
+            if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+            HeapFree(GetProcessHeap(), 0, detail);
+            scanSucceeded = FALSE;
+            break;
+        }
+        device->handle = handle;
+        device->openError = openError;
+        device->instance = HashTelemetryDevicePath(detail->DevicePath);
+        CopyTelemetryDeviceName(devices, &deviceData, device->name, _countof(device->name), fallbackName, index);
+        HeapFree(GetProcessHeap(), 0, detail);
+    }
+    SetupDiDestroyDeviceInfoList(devices);
+    if (!scanSucceeded)
+    {
+        DiscardTelemetryDeviceList(found);
+        return FALSE;
+    }
+    ReplaceTelemetryDeviceList(current, found);
+    return TRUE;
+}
+
+static void
+DetectTelemetryDevices(void)
+{
+    DetectSensorTelemetryDevices();
+    DetectStorageTelemetryDevices();
+    DetectInterfaceTelemetryDevices(&GUID_DEVICE_THERMAL_ZONE, GENERIC_READ, L"ACPI thermal zone", s_thermalTelemetryDevices);
+    DetectInterfaceTelemetryDevices(&GUID_DEVICE_FAN, GENERIC_READ | GENERIC_WRITE, L"ACPI fan", s_fanTelemetryDevices);
+    DetectInterfaceTelemetryDevices(&GUID_DEVICE_BATTERY, GENERIC_READ, L"Battery", s_batteryTelemetryDevices);
+    s_lastTelemetryDeviceScan = GetTickCount();
+}
+
+static double
+ThermalTemperatureToCelsius(ULONG temperature)
+{
+    return temperature / 10.0 - 273.15;
+}
+
+static void
+SetTelemetryDeviceError(TelemetryRow* row, DWORD error, BOOL openFailure)
+{
+    if (error == ERROR_ACCESS_DENIED)
+    {
+        StringCchCopyW(row->valueText, _countof(row->valueText), L"Access denied");
+        StringCchCopyW(row->status, _countof(row->status), L"Access denied");
+    }
+    else if (error == ERROR_NOT_SUPPORTED || error == ERROR_INVALID_FUNCTION)
+    {
+        StringCchCopyW(row->valueText, _countof(row->valueText), L"Not supported");
+        StringCchCopyW(row->status, _countof(row->status), L"Unavailable");
+    }
+    else
+    {
+        StringCchCopyW(row->valueText, _countof(row->valueText), openFailure ? L"Open failed" : L"Query failed");
+        StringCchCopyW(row->status, _countof(row->status), L"Unavailable");
+    }
+    StringCchPrintfW(row->limitsText, _countof(row->limitsText), L"Win32 error %lu", error);
+}
+
+static BOOL
+QueryBatteryInformation(HANDLE handle, ULONG tag, BATTERY_QUERY_INFORMATION_LEVEL level, LONG atRate, PVOID output, DWORD outputSize, PDWORD returned)
+{
+    BATTERY_QUERY_INFORMATION query;
+
+    ZeroMemory(&query, sizeof(query));
+    query.BatteryTag = tag;
+    query.InformationLevel = level;
+    query.AtRate = atRate;
+    return DeviceIoControl(handle, IOCTL_BATTERY_QUERY_INFORMATION, &query, sizeof(query), output, outputSize, returned, NULL);
+}
+
+static BOOL
+QueryBatteryString(HANDLE handle, ULONG tag, BATTERY_QUERY_INFORMATION_LEVEL level, WCHAR* output, DWORD outputCount)
+{
+    DWORD returned = 0;
+    DWORD lastCharacter;
+
+    output[0] = 0;
+    if (!QueryBatteryInformation(handle, tag, level, 0, output, outputCount * sizeof(WCHAR), &returned)) return FALSE;
+    lastCharacter = returned / sizeof(WCHAR);
+    if (lastCharacter >= outputCount) lastCharacter = outputCount - 1;
+    output[lastCharacter] = 0;
+    return TRUE;
+}
+
+static TelemetryRow*
+AddBatteryTelemetryRow(Vec<TelemetryRow>& rows, const BatteryTelemetryDevice* device, PCWSTR displayName, PCWSTR source, ULONG fieldId, PCWSTR suffix, PCWSTR type, ULONG kind, PCWSTR unit)
+{
+    TelemetryRow* row = rows.Add();
+
+    if (!row) return NULL;
+    row->sensorId = GUID_DEVICE_BATTERY;
+    row->sensorId.Data1 ^= device->instance;
+    row->fieldFormat = s_batteryTelemetryFormat;
+    row->fieldId = fieldId;
+    row->instance = device->instance;
+    row->sourceKind = TEL_SOURCE_BATTERY;
+    row->kind = kind;
+    if (suffix && suffix[0]) StringCchPrintfW(row->name, _countof(row->name), L"%s %s", displayName, suffix);
+    else StringCchCopyW(row->name, _countof(row->name), displayName);
+    StringCchCopyW(row->type, _countof(row->type), type);
+    StringCchCopyW(row->source, _countof(row->source), source);
+    StringCchCopyW(row->unit, _countof(row->unit), unit);
+    return row;
+}
+
+static void
+SetTelemetryNumericValue(TelemetryRow* row, double value)
+{
+    row->value = value;
+    row->numeric = TRUE;
+    row->available = TRUE;
+    FormatTelemetryNumber(row);
+    StringCchCopyW(row->status, _countof(row->status), L"Normal");
+}
+
+static void
+FormatTelemetryDuration(TelemetryRow* row, ULONG seconds)
+{
+    ULONG days = seconds / 86400;
+    ULONG hours = (seconds / 3600) % 24;
+    ULONG minutes = (seconds / 60) % 60;
+
+    row->value = seconds;
+    row->numeric = TRUE;
+    row->available = TRUE;
+    if (days) StringCchPrintfW(row->valueText, _countof(row->valueText), L"%lu d %lu h", days, hours);
+    else if (hours) StringCchPrintfW(row->valueText, _countof(row->valueText), L"%lu h %lu min", hours, minutes);
+    else if (minutes) StringCchPrintfW(row->valueText, _countof(row->valueText), L"%lu min", minutes);
+    else StringCchPrintfW(row->valueText, _countof(row->valueText), L"%lu s", seconds);
+    StringCchCopyW(row->status, _countof(row->status), L"Normal");
+}
+
+static BOOL
+IsKnownBatteryCapacity(ULONG capacity)
+{
+    return capacity != BATTERY_UNKNOWN_CAPACITY;
+}
+
+static void
+FormatBatteryState(ULONG powerState, WCHAR* text, int textCount)
+{
+    text[0] = 0;
+    if (powerState & BATTERY_POWER_ON_LINE) StringCchCopyW(text, textCount, L"AC power");
+    else StringCchCopyW(text, textCount, L"Battery power");
+    if (powerState & BATTERY_CHARGING) StringCchCatW(text, textCount, L", charging");
+    if (powerState & BATTERY_DISCHARGING) StringCchCatW(text, textCount, L", discharging");
+    if (powerState & BATTERY_CRITICAL) StringCchCatW(text, textCount, L", critical");
+}
+
+static void
+AppendBatteryCapacityLimit(TelemetryRow* row, PCWSTR label, ULONG capacity, BOOL relative)
+{
+    WCHAR text[80];
+
+    if (!IsKnownBatteryCapacity(capacity)) return;
+    if (row->limitsText[0]) StringCchCatW(row->limitsText, _countof(row->limitsText), L" / ");
+    if (relative) StringCchPrintfW(text, _countof(text), L"%s %lu units", label, capacity);
+    else StringCchPrintfW(text, _countof(text), L"%s %.2f Wh", label, capacity / 1000.0);
+    StringCchCatW(row->limitsText, _countof(row->limitsText), text);
+}
+
+static void
+CollectBatteryTelemetry(Vec<TelemetryRow>& rows)
+{
+    for (int deviceIndex = 0; deviceIndex < s_batteryTelemetryDevices.n; deviceIndex++)
+    {
+        BatteryTelemetryDevice* device = &s_batteryTelemetryDevices[deviceIndex];
+        BATTERY_INFORMATION information;
+        BATTERY_STATUS batteryStatus;
+        BATTERY_WAIT_STATUS waitStatus;
+        WCHAR displayName[160];
+        WCHAR manufacturer[128];
+        WCHAR source[192];
+        ULONG tag = BATTERY_TAG_INVALID;
+        ULONG wait = 0;
+        DWORD returned = 0;
+        DWORD statusError;
+        BOOL haveInformation;
+        BOOL haveStatus;
+        BOOL statusResult;
+        BOOL tagResult;
+        BOOL relative;
+        BOOL absoluteUnits;
+
+        StringCchCopyW(displayName, _countof(displayName), device->name);
+        StringCchCopyW(source, _countof(source), L"Battery class");
+        if (device->handle == INVALID_HANDLE_VALUE)
+        {
+            TelemetryRow* row = AddBatteryTelemetryRow(rows, device, displayName, source, BATTERY_FIELD_STATE, L"", L"Battery", TEL_OTHER, L"");
+            if (!row) return;
+            SetTelemetryDeviceError(row, device->openError, TRUE);
+            continue;
+        }
+        tagResult = DeviceIoControl(device->handle, IOCTL_BATTERY_QUERY_TAG, &wait, sizeof(wait), &tag, sizeof(tag), &returned, NULL);
+        if (!tagResult || returned < sizeof(tag) || tag == BATTERY_TAG_INVALID)
+        {
+            DWORD error = tagResult ? ERROR_DEVICE_NOT_CONNECTED : GetLastError();
+            TelemetryRow* row = AddBatteryTelemetryRow(rows, device, displayName, source, BATTERY_FIELD_STATE, L"", L"Battery", TEL_OTHER, L"");
+            if (!row) return;
+            SetTelemetryDeviceError(row, error, FALSE);
+            continue;
+        }
+
+        QueryBatteryString(device->handle, tag, BatteryDeviceName, displayName, _countof(displayName));
+        if (!displayName[0]) StringCchCopyW(displayName, _countof(displayName), device->name);
+        if (QueryBatteryString(device->handle, tag, BatteryManufactureName, manufacturer, _countof(manufacturer)) && manufacturer[0]) StringCchPrintfW(source, _countof(source), L"Battery class (%s)", manufacturer);
+
+        ZeroMemory(&information, sizeof(information));
+        ZeroMemory(&batteryStatus, sizeof(batteryStatus));
+        ZeroMemory(&waitStatus, sizeof(waitStatus));
+        haveInformation = QueryBatteryInformation(device->handle, tag, BatteryInformation, 0, &information, sizeof(information), &returned) && returned >= sizeof(information);
+        waitStatus.BatteryTag = tag;
+        statusResult = DeviceIoControl(device->handle, IOCTL_BATTERY_QUERY_STATUS, &waitStatus, sizeof(waitStatus), &batteryStatus, sizeof(batteryStatus), &returned, NULL);
+        statusError = statusResult ? (returned >= sizeof(batteryStatus) ? ERROR_SUCCESS : ERROR_INVALID_DATA) : GetLastError();
+        haveStatus = statusError == ERROR_SUCCESS;
+        relative = haveInformation && !!(information.Capabilities & BATTERY_CAPACITY_RELATIVE);
+        absoluteUnits = haveInformation && !relative;
+
+        {
+            TelemetryRow* row = AddBatteryTelemetryRow(rows, device, displayName, source, BATTERY_FIELD_STATE, L"", L"Power state", TEL_OTHER, L"");
+            if (!row) return;
+            if (haveStatus)
+            {
+                FormatBatteryState(batteryStatus.PowerState, row->valueText, _countof(row->valueText));
+                row->available = TRUE;
+                StringCchCopyW(row->status, _countof(row->status), (batteryStatus.PowerState & BATTERY_CRITICAL) ? L"Critical" : L"Normal");
+            }
+            else SetTelemetryDeviceError(row, statusError, FALSE);
+        }
+
+        if (haveStatus && haveInformation)
+        {
+            double percent;
+            if (TmBatteryChargePercent(batteryStatus.Capacity, information.FullChargedCapacity, &percent))
+            {
+                TelemetryRow* row = AddBatteryTelemetryRow(rows, device, displayName, source, BATTERY_FIELD_CHARGE_PERCENT, L"charge", L"Charge level", TEL_PERCENTAGE, L"%");
+                if (!row) return;
+                SetTelemetryNumericValue(row, percent);
+                if (batteryStatus.PowerState & BATTERY_CRITICAL) StringCchCopyW(row->status, _countof(row->status), L"Critical");
+            }
+        }
+
+        if (haveStatus && IsKnownBatteryCapacity(batteryStatus.Capacity))
+        {
+            TelemetryRow* row = AddBatteryTelemetryRow(rows, device, displayName, source, BATTERY_FIELD_REMAINING_CAPACITY, L"remaining capacity", L"Remaining capacity", TEL_CAPACITY, absoluteUnits ? L"Wh" : L"units");
+            if (!row) return;
+            SetTelemetryNumericValue(row, absoluteUnits ? batteryStatus.Capacity / 1000.0 : batteryStatus.Capacity);
+            if (haveInformation)
+            {
+                AppendBatteryCapacityLimit(row, L"Full", information.FullChargedCapacity, relative);
+                AppendBatteryCapacityLimit(row, L"Design", information.DesignedCapacity, relative);
+                AppendBatteryCapacityLimit(row, L"Alert 1", information.DefaultAlert1, relative);
+                AppendBatteryCapacityLimit(row, L"Alert 2", information.DefaultAlert2, relative);
+            }
+        }
+
+        if (haveInformation && IsKnownBatteryCapacity(information.FullChargedCapacity))
+        {
+            TelemetryRow* row = AddBatteryTelemetryRow(rows, device, displayName, source, BATTERY_FIELD_FULL_CAPACITY, L"full-charge capacity", L"Full-charge capacity", TEL_CAPACITY, relative ? L"units" : L"Wh");
+            if (!row) return;
+            SetTelemetryNumericValue(row, relative ? information.FullChargedCapacity : information.FullChargedCapacity / 1000.0);
+        }
+        if (haveInformation && IsKnownBatteryCapacity(information.DesignedCapacity))
+        {
+            TelemetryRow* row = AddBatteryTelemetryRow(rows, device, displayName, source, BATTERY_FIELD_DESIGN_CAPACITY, L"design capacity", L"Design capacity", TEL_CAPACITY, relative ? L"units" : L"Wh");
+            if (!row) return;
+            SetTelemetryNumericValue(row, relative ? information.DesignedCapacity : information.DesignedCapacity / 1000.0);
+        }
+        if (haveInformation)
+        {
+            double percent;
+            if (TmBatteryHealthPercent(&information, &percent))
+            {
+                TelemetryRow* row = AddBatteryTelemetryRow(rows, device, displayName, source, BATTERY_FIELD_HEALTH, L"health", L"Full/design capacity", TEL_PERCENTAGE, L"%");
+                if (!row) return;
+                SetTelemetryNumericValue(row, percent);
+            }
+        }
+        if (haveInformation)
+        {
+            TelemetryRow* row = AddBatteryTelemetryRow(rows, device, displayName, source, BATTERY_FIELD_CYCLE_COUNT, L"cycle count", L"Cycle count", TEL_CYCLE_COUNT, L"");
+            if (!row) return;
+            SetTelemetryNumericValue(row, information.CycleCount);
+        }
+        if (haveStatus && batteryStatus.Voltage != BATTERY_UNKNOWN_VOLTAGE)
+        {
+            TelemetryRow* row = AddBatteryTelemetryRow(rows, device, displayName, source, BATTERY_FIELD_VOLTAGE, L"voltage", L"Battery voltage", TEL_VOLTAGE, L"V");
+            if (!row) return;
+            SetTelemetryNumericValue(row, batteryStatus.Voltage / 1000.0);
+        }
+        if (haveStatus && batteryStatus.Rate != (LONG)BATTERY_UNKNOWN_RATE)
+        {
+            double watts;
+            double amperes;
+            TelemetryRow* row = AddBatteryTelemetryRow(rows, device, displayName, source, BATTERY_FIELD_POWER, L"rate", absoluteUnits ? L"Charge/discharge power" : L"Relative charge rate", absoluteUnits ? TEL_POWER : TEL_ELECTRICAL_CUSTOM, absoluteUnits ? L"W" : L"units/h");
+            if (!row) return;
+            if (absoluteUnits && TmBatteryPowerWatts(&information, &batteryStatus, &watts)) SetTelemetryNumericValue(row, watts);
+            else SetTelemetryNumericValue(row, batteryStatus.Rate);
+            if (absoluteUnits && TmBatteryCurrentAmps(&information, &batteryStatus, &amperes))
+            {
+                row = AddBatteryTelemetryRow(rows, device, displayName, source, BATTERY_FIELD_CURRENT, L"current", L"Derived battery current", TEL_CURRENT, L"A");
+                if (!row) return;
+                SetTelemetryNumericValue(row, amperes);
+                StringCchCopyW(row->limitsText, _countof(row->limitsText), L"Derived from battery power / voltage");
+            }
+        }
+
+        {
+            ULONG estimatedTime = BATTERY_UNKNOWN_TIME;
+            if (QueryBatteryInformation(device->handle, tag, BatteryEstimatedTime, 0, &estimatedTime, sizeof(estimatedTime), &returned) && returned >= sizeof(estimatedTime) && estimatedTime != BATTERY_UNKNOWN_TIME)
+            {
+                TelemetryRow* row = AddBatteryTelemetryRow(rows, device, displayName, source, BATTERY_FIELD_ESTIMATED_TIME, L"time remaining", L"Estimated time", TEL_DURATION, L"");
+                if (!row) return;
+                FormatTelemetryDuration(row, estimatedTime);
+            }
+        }
+        {
+            ULONG temperature = 0;
+            if (QueryBatteryInformation(device->handle, tag, BatteryTemperature, 0, &temperature, sizeof(temperature), &returned) && returned >= sizeof(temperature))
+            {
+                TelemetryRow* row = AddBatteryTelemetryRow(rows, device, displayName, source, BATTERY_FIELD_TEMPERATURE, L"temperature", L"Battery temperature", TEL_TEMPERATURE, L"°C");
+                if (!row) return;
+                SetTelemetryNumericValue(row, ThermalTemperatureToCelsius(temperature));
+            }
+        }
+    }
+}
+
+static TelemetryRow*
+AddSystemPowerTelemetryRow(Vec<TelemetryRow>& rows, ULONG fieldId, PCWSTR name, PCWSTR type, ULONG kind, PCWSTR unit)
+{
+    TelemetryRow* row = rows.Add();
+
+    if (!row) return NULL;
+    row->sensorId = s_systemPowerTelemetryFormat;
+    row->fieldFormat = s_systemPowerTelemetryFormat;
+    row->fieldId = fieldId;
+    row->sourceKind = TEL_SOURCE_SYSTEM_POWER;
+    row->kind = kind;
+    StringCchCopyW(row->name, _countof(row->name), name);
+    StringCchCopyW(row->type, _countof(row->type), type);
+    StringCchCopyW(row->source, _countof(row->source), L"System power status");
+    StringCchCopyW(row->unit, _countof(row->unit), unit);
+    return row;
+}
+
+static void
+CollectSystemPowerTelemetry(Vec<TelemetryRow>& rows)
+{
+    SYSTEM_POWER_STATUS status;
+    TelemetryRow* row;
+
+    if (!GetSystemPowerStatus(&status)) return;
+    row = AddSystemPowerTelemetryRow(rows, SYSTEM_POWER_FIELD_SOURCE, L"System power source", L"Power source", TEL_OTHER, L"");
+    if (!row) return;
+    if (status.ACLineStatus == 1) StringCchCopyW(row->valueText, _countof(row->valueText), L"AC power");
+    else if (status.ACLineStatus == 0) StringCchCopyW(row->valueText, _countof(row->valueText), L"Battery power");
+    else StringCchCopyW(row->valueText, _countof(row->valueText), L"Unknown");
+    row->available = status.ACLineStatus != 255;
+    if (status.BatteryFlag & BATTERY_FLAG_CRITICAL) StringCchCopyW(row->status, _countof(row->status), L"Critical");
+    else if (status.BatteryFlag & BATTERY_FLAG_CHARGING) StringCchCopyW(row->status, _countof(row->status), L"Charging");
+    else StringCchCopyW(row->status, _countof(row->status), row->available ? L"Normal" : L"Unavailable");
+
+    if (!(status.BatteryFlag & BATTERY_FLAG_NO_BATTERY) && status.BatteryLifePercent != 255)
+    {
+        row = AddSystemPowerTelemetryRow(rows, SYSTEM_POWER_FIELD_CHARGE_PERCENT, L"Aggregate battery charge", L"Charge level", TEL_PERCENTAGE, L"%");
+        if (!row) return;
+        SetTelemetryNumericValue(row, status.BatteryLifePercent);
+        if (status.BatteryFlag & BATTERY_FLAG_CRITICAL) StringCchCopyW(row->status, _countof(row->status), L"Critical");
+    }
+    if (!(status.BatteryFlag & BATTERY_FLAG_NO_BATTERY) && status.BatteryLifeTime != BATTERY_LIFE_UNKNOWN)
+    {
+        row = AddSystemPowerTelemetryRow(rows, SYSTEM_POWER_FIELD_ESTIMATED_TIME, L"Aggregate time remaining", L"Estimated time", TEL_DURATION, L"");
+        if (!row) return;
+        FormatTelemetryDuration(row, status.BatteryLifeTime);
+    }
+}
+
+static void
+AppendThermalLimit(TelemetryRow* row, PCWSTR name, ULONG temperature)
+{
+    WCHAR text[64];
+
+    if (temperature == MAXULONG)
+        return;
+    if (row->limitsText[0]) StringCchCatW(row->limitsText, _countof(row->limitsText), L" / ");
+    StringCchPrintfW(text, _countof(text), L"%s %.1f °C", name, ThermalTemperatureToCelsius(temperature));
+    StringCchCatW(row->limitsText, _countof(row->limitsText), text);
+}
+
+static void
+AddThermalWarningTrip(TelemetryRow* row, ULONG temperature)
+{
+    double value;
+
+    if (temperature == MAXULONG)
+        return;
+    value = ThermalTemperatureToCelsius(temperature);
+    if (!row->hasWarning || value < row->warning)
+    {
+        row->warning = value;
+        row->hasWarning = TRUE;
+    }
+}
+
+static BOOL
+ReadAcpiIntegerArgument(PACPI_METHOD_ARGUMENT argument, const BYTE* end, PULONG value, PACPI_METHOD_ARGUMENT* next)
+{
+    const BYTE* start = (const BYTE*)argument;
+    ULONG length;
+
+    if (start > end || (SIZE_T)(end - start) < FIELD_OFFSET(ACPI_METHOD_ARGUMENT, Data))
+        return FALSE;
+    length = ACPI_METHOD_ARGUMENT_LENGTH(argument->DataLength);
+    if (length > (SIZE_T)(end - start) || argument->Type != ACPI_METHOD_ARGUMENT_INTEGER || argument->DataLength < sizeof(ULONG))
+        return FALSE;
+    *value = argument->Argument;
+    *next = (PACPI_METHOD_ARGUMENT)(start + length);
+    return TRUE;
+}
+
+static BOOL
+QueryFanStatus(HANDLE handle, PULONG revision, PULONG control, PULONG speed)
+{
+    ACPI_EVAL_INPUT_BUFFER input;
+    BYTE outputBytes[256];
+    PACPI_EVAL_OUTPUT_BUFFER output = (PACPI_EVAL_OUTPUT_BUFFER)outputBytes;
+    PACPI_METHOD_ARGUMENT argument;
+    PACPI_METHOD_ARGUMENT next;
+    const BYTE* end;
+    DWORD returned = 0;
+
+    ZeroMemory(&input, sizeof(input));
+    ZeroMemory(outputBytes, sizeof(outputBytes));
+    input.Signature = ACPI_EVAL_INPUT_BUFFER_SIGNATURE;
+    CopyMemory(input.MethodName, "_FST", sizeof(input.MethodName));
+    if (!DeviceIoControl(handle, IOCTL_ACPI_EVAL_METHOD, &input, sizeof(input), output, sizeof(outputBytes), &returned, NULL))
+        return FALSE;
+    if (returned < FIELD_OFFSET(ACPI_EVAL_OUTPUT_BUFFER, Argument) || output->Signature != ACPI_EVAL_OUTPUT_BUFFER_SIGNATURE || output->Count < 3 || output->Length < FIELD_OFFSET(ACPI_EVAL_OUTPUT_BUFFER, Argument) || output->Length > returned)
+    {
+        SetLastError(ERROR_INVALID_DATA);
+        return FALSE;
+    }
+    end = outputBytes + output->Length;
+    argument = output->Argument;
+    PULONG values[] = { revision, control, speed };
+    for (ULONG index = 0; index < _countof(values); index++)
+    {
+        if (!ReadAcpiIntegerArgument(argument, end, values[index], &next))
+        {
+            SetLastError(ERROR_INVALID_DATA);
+            return FALSE;
+        }
+        argument = next;
+    }
+    return TRUE;
+}
+
+static void
+CollectThermalTelemetry(Vec<TelemetryRow>& rows)
+{
+    for (int deviceIndex = 0; deviceIndex < s_thermalTelemetryDevices.n; deviceIndex++)
+    {
+        AcpiTelemetryDevice* device = &s_thermalTelemetryDevices[deviceIndex];
+        THERMAL_INFORMATION information;
+        TelemetryRow* row;
+        DWORD returned = 0;
+        ULONG stamp = MAXULONG;
+        ULONG tripCount;
+
+        row = rows.Add();
+        if (!row)
+            return;
+        row->sensorId = GUID_DEVICE_THERMAL_ZONE;
+        row->sensorId.Data1 ^= device->instance;
+        row->fieldFormat = s_thermalTelemetryFormat;
+        row->fieldId = 0;
+        row->instance = device->instance;
+        row->sourceKind = TEL_SOURCE_THERMAL_ZONE;
+        row->kind = TEL_TEMPERATURE;
+        StringCchCopyW(row->name, _countof(row->name), device->name);
+        StringCchCopyW(row->type, _countof(row->type), L"Thermal zone temperature");
+        StringCchCopyW(row->source, _countof(row->source), L"ACPI thermal zone");
+        StringCchCopyW(row->unit, _countof(row->unit), L"°C");
+
+        if (device->handle == INVALID_HANDLE_VALUE)
+        {
+            SetTelemetryDeviceError(row, device->openError, TRUE);
+            continue;
+        }
+        ZeroMemory(&information, sizeof(information));
+        if (!DeviceIoControl(device->handle, IOCTL_THERMAL_QUERY_INFORMATION, &stamp, sizeof(stamp), &information, sizeof(information), &returned, NULL))
+        {
+            SetTelemetryDeviceError(row, GetLastError(), FALSE);
+            continue;
+        }
+        if (returned < FIELD_OFFSET(THERMAL_INFORMATION, ActiveTripPoint))
+        {
+            StringCchCopyW(row->valueText, _countof(row->valueText), L"Invalid response");
+            StringCchCopyW(row->status, _countof(row->status), L"Error");
+            continue;
+        }
+        tripCount = (returned - FIELD_OFFSET(THERMAL_INFORMATION, ActiveTripPoint)) / sizeof(information.ActiveTripPoint[0]);
+        if (tripCount > information.ActiveTripPointCount) tripCount = information.ActiveTripPointCount;
+        if (tripCount > MAX_ACTIVE_COOLING_LEVELS) tripCount = MAX_ACTIVE_COOLING_LEVELS;
+        if (information.CurrentTemperature != MAXULONG)
+        {
+            row->value = ThermalTemperatureToCelsius(information.CurrentTemperature);
+            row->numeric = TRUE;
+            row->available = TRUE;
+            FormatTelemetryNumber(row);
+        }
+        else
+        {
+            StringCchCopyW(row->valueText, _countof(row->valueText), L"Not reported");
+            StringCchCopyW(row->status, _countof(row->status), L"Unavailable");
+        }
+
+        AppendThermalLimit(row, L"Passive", information.PassiveTripPoint);
+        AddThermalWarningTrip(row, information.PassiveTripPoint);
+        for (ULONG tripIndex = 0; tripIndex < tripCount; tripIndex++)
+        {
+            WCHAR name[24];
+            StringCchPrintfW(name, _countof(name), L"Active %lu", tripIndex);
+            AppendThermalLimit(row, name, information.ActiveTripPoint[tripIndex]);
+            AddThermalWarningTrip(row, information.ActiveTripPoint[tripIndex]);
+        }
+        AppendThermalLimit(row, L"Critical", information.CriticalTripPoint);
+        if (information.CriticalTripPoint != MAXULONG)
+        {
+            row->critical = ThermalTemperatureToCelsius(information.CriticalTripPoint);
+            row->hasCritical = TRUE;
+        }
+        SetTelemetryThresholdStatus(row);
+    }
+}
+
+static void
+CollectFanTelemetry(Vec<TelemetryRow>& rows)
+{
+    for (int deviceIndex = 0; deviceIndex < s_fanTelemetryDevices.n; deviceIndex++)
+    {
+        AcpiTelemetryDevice* device = &s_fanTelemetryDevices[deviceIndex];
+        TelemetryRow* row = rows.Add();
+        ULONG revision = MAXULONG;
+        ULONG control = MAXULONG;
+        ULONG speed = MAXULONG;
+
+        if (!row)
+            return;
+        row->sensorId = GUID_DEVICE_FAN;
+        row->sensorId.Data1 ^= device->instance;
+        row->fieldFormat = s_fanTelemetryFormat;
+        row->fieldId = 0;
+        row->instance = device->instance;
+        row->sourceKind = TEL_SOURCE_ACPI_FAN;
+        row->kind = TEL_FAN;
+        StringCchPrintfW(row->name, _countof(row->name), L"%s speed", device->name);
+        StringCchCopyW(row->type, _countof(row->type), L"Fan speed");
+        StringCchCopyW(row->source, _countof(row->source), L"ACPI fan");
+        StringCchCopyW(row->unit, _countof(row->unit), L"RPM");
+
+        if (device->handle == INVALID_HANDLE_VALUE)
+        {
+            SetTelemetryDeviceError(row, device->openError, TRUE);
+            continue;
+        }
+        if (!QueryFanStatus(device->handle, &revision, &control, &speed))
+        {
+            SetTelemetryDeviceError(row, GetLastError(), FALSE);
+            continue;
+        }
+        if (control != MAXULONG) StringCchPrintfW(row->limitsText, _countof(row->limitsText), L"Control %lu; revision %lu", control, revision);
+        else if (revision != MAXULONG) StringCchPrintfW(row->limitsText, _countof(row->limitsText), L"Revision %lu", revision);
+        if (speed == MAXULONG)
+        {
+            StringCchCopyW(row->valueText, _countof(row->valueText), L"Not reported");
+            StringCchCopyW(row->status, _countof(row->status), L"Unavailable");
+            continue;
+        }
+        row->value = speed;
+        row->numeric = TRUE;
+        row->available = TRUE;
+        FormatTelemetryNumber(row);
+        StringCchCopyW(row->status, _countof(row->status), L"Normal");
+    }
+}
+
+static void
+AppendStorageTelemetryLimit(TelemetryRow* row, PCWSTR label, double value)
+{
+    WCHAR text[64];
+
+    if (row->limitsText[0]) StringCchCatW(row->limitsText, _countof(row->limitsText), L" / ");
+    StringCchPrintfW(text, _countof(text), L"%s %.0f%s%s", label, value, row->unit[0] ? L" " : L"", row->unit);
+    StringCchCatW(row->limitsText, _countof(row->limitsText), text);
+}
+
+static void
+CollectStorageTelemetry(Vec<TelemetryRow>& rows)
+{
+    for (int deviceIndex = 0; deviceIndex < s_storageTelemetryDevices.n; deviceIndex++)
+    {
+        StorageTelemetryDevice* device = &s_storageTelemetryDevices[deviceIndex];
+        STORAGE_PROPERTY_QUERY query;
+        PSTORAGE_TEMPERATURE_DATA_DESCRIPTOR descriptor;
+        DWORD returned = 0;
+        ULONG validSize;
+        ULONG count;
+
+        if (!device->temperatureBuffer)
+            continue;
+        ZeroMemory(&query, sizeof(query));
+        query.PropertyId = StorageDeviceTemperatureProperty;
+        query.QueryType = PropertyStandardQuery;
+        if (!DeviceIoControl(device->handle, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query), device->temperatureBuffer, device->temperatureBufferSize, &returned, NULL) || returned < FIELD_OFFSET(STORAGE_TEMPERATURE_DATA_DESCRIPTOR, TemperatureInfo))
+            continue;
+        descriptor = (PSTORAGE_TEMPERATURE_DATA_DESCRIPTOR)device->temperatureBuffer;
+        if (descriptor->Version < sizeof(STORAGE_TEMPERATURE_DATA_DESCRIPTOR) || descriptor->Size < FIELD_OFFSET(STORAGE_TEMPERATURE_DATA_DESCRIPTOR, TemperatureInfo) || descriptor->Size > returned)
+            continue;
+        validSize = descriptor->Size;
+        count = (validSize - FIELD_OFFSET(STORAGE_TEMPERATURE_DATA_DESCRIPTOR, TemperatureInfo)) / sizeof(STORAGE_TEMPERATURE_INFO);
+        if (count > descriptor->InfoCount) count = descriptor->InfoCount;
+
+        for (ULONG infoIndex = 0; infoIndex < count; infoIndex++)
+        {
+            PSTORAGE_TEMPERATURE_INFO info = &descriptor->TemperatureInfo[infoIndex];
+            TelemetryRow* row;
+
+            if (info->Temperature == (SHORT)STORAGE_TEMPERATURE_VALUE_NOT_REPORTED)
+                continue;
+            row = rows.Add();
+            if (!row)
+                return;
+            row->sensorId.Data1 = 0x54534d54;
+            row->sensorId.Data2 = (USHORT)device->number;
+            row->sensorId.Data3 = info->Index;
+            row->fieldFormat = s_storageTelemetryFormat;
+            row->fieldId = info->Index;
+            row->instance = device->number;
+            row->sourceKind = TEL_SOURCE_STORAGE;
+            row->kind = TEL_TEMPERATURE;
+            if (count > 1) StringCchPrintfW(row->name, _countof(row->name), L"%s sensor %u", device->model, info->Index);
+            else StringCchPrintfW(row->name, _countof(row->name), L"%s temperature", device->model);
+            StringCchCopyW(row->type, _countof(row->type), L"Storage temperature");
+            StringCchPrintfW(row->source, _countof(row->source), L"Disk %lu (%s)", device->number, device->interfaceName);
+            StringCchCopyW(row->unit, _countof(row->unit), L"°C");
+            row->value = info->Temperature;
+            row->numeric = TRUE;
+            row->available = TRUE;
+            if (info->UnderThreshold != (SHORT)STORAGE_TEMPERATURE_VALUE_NOT_REPORTED)
+            {
+                row->lower = info->UnderThreshold;
+                row->hasLower = TRUE;
+            }
+            if (info->OverThreshold != (SHORT)STORAGE_TEMPERATURE_VALUE_NOT_REPORTED)
+            {
+                row->warning = info->OverThreshold;
+                row->hasWarning = TRUE;
+            }
+            else if (descriptor->WarningTemperature != (SHORT)STORAGE_TEMPERATURE_VALUE_NOT_REPORTED)
+            {
+                row->warning = descriptor->WarningTemperature;
+                row->hasWarning = TRUE;
+            }
+            if (descriptor->CriticalTemperature != (SHORT)STORAGE_TEMPERATURE_VALUE_NOT_REPORTED)
+            {
+                row->critical = descriptor->CriticalTemperature;
+                row->hasCritical = TRUE;
+            }
+            if (row->hasLower) AppendStorageTelemetryLimit(row, L"Low", row->lower);
+            if (row->hasWarning) AppendStorageTelemetryLimit(row, L"High", row->warning);
+            if (row->hasCritical) AppendStorageTelemetryLimit(row, L"Critical", row->critical);
+            if (info->UnderThresholdChangable || info->OverThresholdChangable || info->EventGenerated)
+            {
+                if (row->limitsText[0]) StringCchCatW(row->limitsText, _countof(row->limitsText), L"; ");
+                if (info->UnderThresholdChangable || info->OverThresholdChangable) StringCchCatW(row->limitsText, _countof(row->limitsText), L"adjustable");
+                if (info->EventGenerated)
+                {
+                    if (info->UnderThresholdChangable || info->OverThresholdChangable) StringCchCatW(row->limitsText, _countof(row->limitsText), L", ");
+                    StringCchCatW(row->limitsText, _countof(row->limitsText), L"notifications");
+                }
+            }
+            FormatTelemetryNumber(row);
+            SetTelemetryThresholdStatus(row);
+        }
+    }
+}
+
+Vec<TelemetryRow>& Telemetry(void)
+{
+    return s_telemetry;
+}
+
+void RefreshTelemetry(void)
+{
+    DWORD now = GetTickCount();
+    Vec<TelemetryRow> next;
+
+    if (s_lastTelemetryRefresh && now - s_lastTelemetryRefresh < 900)
+        return;
+    s_lastTelemetryRefresh = now;
+    if (!s_lastTelemetryDeviceScan || now - s_lastTelemetryDeviceScan >= 30000) DetectTelemetryDevices();
+    CollectSystemPowerTelemetry(next);
+    CollectBatteryTelemetry(next);
+    CollectSensorTelemetry(next);
+    CollectThermalTelemetry(next);
+    CollectFanTelemetry(next);
+    CollectStorageTelemetry(next);
+
+    for (int i = 0; i < next.n; i++)
+    {
+        for (int j = 0; j < s_telemetry.n; j++)
+        {
+            if (SameTelemetryIdentity(next[i], s_telemetry[j]))
+            {
+                next[i].history = s_telemetry[j].history;
+                break;
+            }
+        }
+        if (next[i].numeric && next[i].available)
+            next[i].history.Push((float)next[i].value);
+    }
+
+    s_telemetry.Swap(next);
+}
+
+static void ShutdownTelemetry(void)
+{
+    s_telemetry.Free();
+    DiscardTelemetryDeviceList(s_storageTelemetryDevices);
+    DiscardTelemetryDeviceList(s_thermalTelemetryDevices);
+    DiscardTelemetryDeviceList(s_fanTelemetryDevices);
+    DiscardTelemetryDeviceList(s_batteryTelemetryDevices);
+    DiscardTelemetryDeviceList(s_sensorTelemetryDevices);
+    if (s_sensorManager)
+    {
+        s_sensorManager->Release();
+        s_sensorManager = NULL;
+    }
+}
 
 /* names that belong to the "Windows processes" section */
 static const WCHAR* s_windowsProcs[] =
@@ -975,6 +2759,7 @@ void Shutdown(void)
 {
     SaveAppHistory();
     DestroyAppHistory();
+    ShutdownTelemetry();
     for (int i = 0; i < s_extras.n; i++)
     {
         if (s_extras[i]->icon) DestroyIcon(s_extras[i]->icon);
