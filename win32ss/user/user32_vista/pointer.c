@@ -13,6 +13,11 @@
 #include <wingdi.h>
 #include <winuser.h>
 
+#if (WINVER < 0x0602)
+typedef struct tagPOINTER_DEVICE_INFO POINTER_DEVICE_INFO;
+typedef struct tagPOINTER_PEN_INFO POINTER_PEN_INFO;
+#endif
+
 #define NDEBUG
 #include <debug.h>
 

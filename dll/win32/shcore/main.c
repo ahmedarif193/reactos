@@ -42,6 +42,13 @@ static IUnknown *process_ref;
 static SRWLOCK explicit_appid_lock = SRWLOCK_INIT;
 static WCHAR *explicit_appid;
 
+static FARPROC get_user32_proc(const char *name)
+{
+    HMODULE module = GetModuleHandleW(L"user32.dll");
+
+    return module ? GetProcAddress(module, name) : NULL;
+}
+
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
 {
     TRACE("%p, %lu, %p.\n", instance, reason, reserved);
@@ -64,19 +71,31 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
 
 HRESULT WINAPI GetProcessDpiAwareness(HANDLE process, PROCESS_DPI_AWARENESS *value)
 {
-    if (GetProcessDpiAwarenessInternal( process, (DPI_AWARENESS *)value )) return S_OK;
+    BOOL (WINAPI *get_process_dpi_awareness)(HANDLE, DPI_AWARENESS *);
+
+    get_process_dpi_awareness = (void *)get_user32_proc("GetProcessDpiAwarenessInternal");
+    if (!get_process_dpi_awareness) return HRESULT_FROM_WIN32(ERROR_CALL_NOT_IMPLEMENTED);
+    if (get_process_dpi_awareness( process, (DPI_AWARENESS *)value )) return S_OK;
     return HRESULT_FROM_WIN32( GetLastError() );
 }
 
 HRESULT WINAPI SetProcessDpiAwareness(PROCESS_DPI_AWARENESS value)
 {
-    if (SetProcessDpiAwarenessInternal( (DPI_AWARENESS)value )) return S_OK;
+    BOOL (WINAPI *set_process_dpi_awareness)(DPI_AWARENESS);
+
+    set_process_dpi_awareness = (void *)get_user32_proc("SetProcessDpiAwarenessInternal");
+    if (!set_process_dpi_awareness) return HRESULT_FROM_WIN32(ERROR_CALL_NOT_IMPLEMENTED);
+    if (set_process_dpi_awareness( (DPI_AWARENESS)value )) return S_OK;
     return HRESULT_FROM_WIN32( GetLastError() );
 }
 
 HRESULT WINAPI GetDpiForMonitor(HMONITOR monitor, MONITOR_DPI_TYPE type, UINT *x, UINT *y)
 {
-    if (GetDpiForMonitorInternal( monitor, type, x, y )) return S_OK;
+    BOOL (WINAPI *get_dpi_for_monitor)(HMONITOR, UINT, UINT *, UINT *);
+
+    get_dpi_for_monitor = (void *)get_user32_proc("GetDpiForMonitorInternal");
+    if (!get_dpi_for_monitor) return HRESULT_FROM_WIN32(ERROR_CALL_NOT_IMPLEMENTED);
+    if (get_dpi_for_monitor( monitor, type, x, y )) return S_OK;
     return HRESULT_FROM_WIN32( GetLastError() );
 }
 HRESULT WINAPI GetScaleFactorForMonitor(HMONITOR monitor, DEVICE_SCALE_FACTOR *scale)
