@@ -28,7 +28,7 @@
 
 #define KdpBufferSize  (1024 * 512)
 static volatile BOOLEAN KdpLoggingEnabled = FALSE;
-static PCHAR KdpDebugBuffer = NULL;
+static CHAR KdpDebugBuffer[KdpBufferSize];
 static volatile ULONG KdpCurrentPosition = 0;
 static volatile ULONG KdpFreeBytes = 0;
 static KSPIN_LOCK KdpDebugLogSpinLock;
@@ -190,8 +190,6 @@ KdpPrintToLogFile(
     KIRQL OldIrql;
     ULONG beg, end, num;
 
-    if (KdpDebugBuffer == NULL) return;
-
     /* Acquire the printing spinlock without waiting at raised IRQL */
     LockAcquired = KdbpAcquireLock(&KdpDebugLogSpinLock, &OldIrql);
     if (!LockAcquired)
@@ -245,6 +243,11 @@ KdpDebugLogInit(
 
     if (BootPhase == 0)
     {
+        /* The kernel cannot allocate pool this early, but file logging must
+         * retain the banner and hardware inventory printed before Phase 1. */
+        KeInitializeSpinLock(&KdpDebugLogSpinLock);
+        KdpFreeBytes = KdpBufferSize;
+
         /* Write out the functions that we support for now */
         DispatchTable->KdpPrintRoutine = KdpPrintToLogFile;
 
@@ -254,21 +257,6 @@ KdpDebugLogInit(
     }
     else if (BootPhase == 1)
     {
-        /* Allocate a buffer for debug log */
-        KdpDebugBuffer = ExAllocatePoolZero(NonPagedPool,
-                                            KdpBufferSize,
-                                            TAG_KDBG);
-        if (!KdpDebugBuffer)
-        {
-            KdpDebugMode.File = FALSE;
-            RemoveEntryList(&DispatchTable->KdProvidersList);
-            return STATUS_NO_MEMORY;
-        }
-        KdpFreeBytes = KdpBufferSize;
-
-        /* Initialize spinlock */
-        KeInitializeSpinLock(&KdpDebugLogSpinLock);
-
         /* Register for later BootPhase 2 reinitialization */
         DispatchTable->KdpInitRoutine = KdpDebugLogInit;
 
@@ -390,8 +378,6 @@ KdpDebugLogInit(
 
 Failure:
         KdpFreeBytes = 0;
-        ExFreePoolWithTag(KdpDebugBuffer, TAG_KDBG);
-        KdpDebugBuffer = NULL;
         KdpDebugMode.File = FALSE;
         RemoveEntryList(&DispatchTable->KdProvidersList);
     }
