@@ -1017,6 +1017,7 @@ UINT WINAPI Shell_MergeMenus (HMENU hmDst, HMENU hmSrc, UINT uInsert, UINT uIDAd
 	return(uIDMax);
 }
 
+#ifndef __REACTOS__
 typedef struct
 {
     IContextMenu3 IContextMenu3_iface;
@@ -1278,7 +1279,6 @@ static HRESULT SHELL_CreateContextMenu(HWND hwnd, IContextMenu* system_menu,
     return ret;
 }
 
-#ifndef __REACTOS__
 HRESULT WINAPI CDefFolderMenu_Create2(LPCITEMIDLIST pidlFolder, HWND hwnd, UINT cidl,
                                       LPCITEMIDLIST *apidl, IShellFolder *psf,
                                       LPFNDFMCALLBACK lpfn, UINT nKeys, const HKEY *ahkeys,

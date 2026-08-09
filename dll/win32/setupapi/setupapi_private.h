@@ -23,7 +23,9 @@
 #include <stdbool.h>
 #include <wchar.h>
 
+#ifndef WIN32_NO_STATUS
 #define WIN32_NO_STATUS
+#endif
 #define _INC_WINDOWS
 #define COM_NO_WINDOWS_H
 
