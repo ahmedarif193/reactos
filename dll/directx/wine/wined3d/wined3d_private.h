@@ -4017,6 +4017,11 @@ struct wined3d_shader_resource_view
 
 void wined3d_shader_resource_view_cleanup(struct wined3d_shader_resource_view *view);
 void wined3d_shader_resource_view_destroy(struct wined3d_shader_resource_view *view);
+#ifdef __REACTOS__
+HRESULT wined3d_shader_resource_view_init(struct wined3d_shader_resource_view *view,
+        const struct wined3d_view_desc *desc, struct wined3d_resource *resource,
+        void *parent, const struct wined3d_parent_ops *parent_ops);
+#endif
 
 static inline struct wined3d_texture *wined3d_state_get_ffp_texture(const struct wined3d_state *state, unsigned int idx)
 {

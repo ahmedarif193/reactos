@@ -89,7 +89,19 @@ HRESULT resource_init(struct wined3d_resource *resource, struct wined3d_device *
 
     if (bind_flags & (WINED3D_BIND_RENDER_TARGET | WINED3D_BIND_DEPTH_STENCIL))
     {
+#ifdef __REACTOS__
+        BOOL access_is_valid = (access & (WINED3D_RESOURCE_ACCESS_CPU | WINED3D_RESOURCE_ACCESS_GPU))
+                == WINED3D_RESOURCE_ACCESS_GPU;
+
+        if ((device->wined3d->flags & WINED3D_NO3D)
+                && (access & (WINED3D_RESOURCE_ACCESS_CPU | WINED3D_RESOURCE_ACCESS_GPU))
+                == WINED3D_RESOURCE_ACCESS_CPU)
+            access_is_valid = TRUE;
+
+        if (!access_is_valid)
+#else
         if ((access & (WINED3D_RESOURCE_ACCESS_CPU | WINED3D_RESOURCE_ACCESS_GPU)) != WINED3D_RESOURCE_ACCESS_GPU)
+#endif
         {
             WARN("Bind flags %s are incompatible with resource access %s.\n",
                     wined3d_debug_bind_flags(bind_flags), wined3d_debug_resource_access(access));
@@ -441,6 +453,13 @@ void wined3d_resource_update_draw_binding(struct wined3d_resource *resource)
 {
     const struct wined3d_d3d_info *d3d_info = &resource->device->adapter->d3d_info;
 
+#ifdef __REACTOS__
+    if (d3d_info->wined3d_creation_flags & WINED3D_NO3D)
+    {
+        resource->draw_binding = resource->map_binding;
+    }
+    else
+#endif
     if (!wined3d_resource_is_offscreen(resource))
     {
         resource->draw_binding = WINED3D_LOCATION_DRAWABLE;
