@@ -47,7 +47,7 @@
 WINE_DEFAULT_DEBUG_CHANNEL(odbc);
 
 #ifdef __REACTOS__
-#define ODBC_CALL( func, params ) SQL_ERROR
+#define ODBC_CALL( func, params ) ((void)(params), SQL_ERROR)
 #else
 #define ODBC_CALL( func, params ) WINE_UNIX_CALL( unix_ ## func, params )
 #endif

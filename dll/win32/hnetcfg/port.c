@@ -2296,7 +2296,7 @@ static HRESULT WINAPI upnpnat_get_NATEventManager(IUPnPNAT *iface, INATEventMana
     return E_NOTIMPL;
 }
 
-const static IUPnPNATVtbl upnpnat_vtbl =
+static const IUPnPNATVtbl upnpnat_vtbl =
 {
     upnpnat_QueryInterface,
     upnpnat_AddRef,

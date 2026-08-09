@@ -412,7 +412,7 @@ DWORD WINAPI BluetoothGetRadioInfo( HANDLE radio, PBLUETOOTH_RADIO_INFO info )
  */
 DWORD WINAPI BluetoothGetDeviceInfo( HANDLE radio, BLUETOOTH_DEVICE_INFO *info )
 {
-    const static BYTE addr_zero[6];
+    static const BYTE addr_zero[6];
     BTH_DEVICE_INFO_LIST *devices;
     DWORD i, ret = ERROR_NOT_FOUND;
 
@@ -1168,7 +1168,7 @@ DWORD WINAPI BluetoothRemoveDevice( BLUETOOTH_ADDRESS *addr )
 {
     BLUETOOTH_FIND_RADIO_PARAMS find_params = {0};
     HBLUETOOTH_RADIO_FIND radio_find;
-    const static BYTE addr_zero[6];
+    static const BYTE addr_zero[6];
     BOOL success = FALSE;
     HANDLE radio;
     DWORD ret;

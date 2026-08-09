@@ -23,6 +23,9 @@
 #include <stdlib.h>
 #include <errno.h>
 
+#ifdef __REACTOS__
+#define WIN32_NO_STATUS
+#endif
 #include "windef.h"
 #include "winbase.h"
 #ifdef __REACTOS__

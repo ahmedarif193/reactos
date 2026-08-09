@@ -82,7 +82,7 @@ static BOOL sdp_elem_read_var_size( BYTE *stream, ULONG stream_size, SIZE_T *rea
     }
 }
 
-const static SDP_SPECIFICTYPE SDP_BASIC_TYPES[4][5] = {
+static const SDP_SPECIFICTYPE SDP_BASIC_TYPES[4][5] = {
     [SDP_TYPE_UINT] =
         {
             [SDP_SIZE_DESC_1_BYTE] = SDP_ST_UINT8,

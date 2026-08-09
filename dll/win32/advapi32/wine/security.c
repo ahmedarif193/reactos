@@ -56,7 +56,9 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(advapi);
 
+#ifndef __REACTOS__
 static DWORD trustee_to_sid(DWORD nDestinationSidLength, PSID pDestinationSid, PTRUSTEEW pTrustee);
+#endif
 
 typedef struct _MAX_SID
 {
@@ -172,6 +174,7 @@ const char * debugstr_sid(PSID sid)
     return "(too-big)";
 }
 
+#ifndef __REACTOS__
 /* helper function for SE_FILE_OBJECT objects in [Get|Set]NamedSecurityInfo */
 static inline DWORD get_security_file( LPCWSTR full_file_name, DWORD access, HANDLE *file )
 {
@@ -228,6 +231,7 @@ static DWORD get_security_regkey( const WCHAR *full_key_name, DWORD access, HAND
         return ERROR_INVALID_PARAMETER;
     return RegOpenKeyExW( hParent, p+1, 0, access, (HKEY *)key );
 }
+#endif
 
 
 /************************************************************
@@ -2020,6 +2024,7 @@ TRUSTEE_TYPE WINAPI GetTrusteeTypeW(PTRUSTEEW pTrustee)
     return pTrustee->TrusteeType; 
 } 
  
+#ifndef __REACTOS__
 static DWORD trustee_name_A_to_W(TRUSTEE_FORM form, char *trustee_nameA, WCHAR **ptrustee_nameW)
 {
     switch (form)
@@ -2135,6 +2140,8 @@ static DWORD trustee_to_sid( DWORD nDestinationSidLength, PSID pDestinationSid, 
 
     return ERROR_SUCCESS;
 }
+
+#endif /* !__REACTOS__ */
 
 /******************************************************************************
  * SetEntriesInAclA [ADVAPI32.@]
@@ -2947,6 +2954,7 @@ BOOL WINAPI FileEncryptionStatusA(LPCSTR lpFileName, LPDWORD lpStatus)
 }
 #endif
 
+#ifndef __REACTOS__
 static NTSTATUS combine_dacls(ACL *parent, ACL *child, ACL **result)
 {
     NTSTATUS status;
@@ -3008,7 +3016,6 @@ static NTSTATUS combine_dacls(ACL *parent, ACL *child, ACL **result)
 /******************************************************************************
  * SetSecurityInfo [ADVAPI32.@]
  */
-#ifndef __REACTOS__
 DWORD WINAPI SetSecurityInfo(HANDLE handle, SE_OBJECT_TYPE ObjectType, 
                       SECURITY_INFORMATION SecurityInfo, PSID psidOwner,
                       PSID psidGroup, PACL pDacl, PACL pSacl)
