@@ -460,7 +460,8 @@ static HRESULT async_reader_open(struct async_reader *reader, IWMReaderCallback 
 {
     HRESULT hr = E_OUTOFMEMORY;
 
-    IWMReaderCallback_AddRef((reader->callback = callback));
+    reader->callback = callback;
+    IWMReaderCallback_AddRef(reader->callback);
     reader->context = context;
 
     if (FAILED(hr = allocator_create(reader->callback, &reader->allocator)))
