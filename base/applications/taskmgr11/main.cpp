@@ -48,7 +48,15 @@ static const RailItem s_rail[] =
     { PG_USERS,       IC_USERS,     L"Users" },
     { PG_DETAILS,     IC_DETAILS,   L"Details" },
     { PG_SERVICES,    IC_SERVICES,  L"Services" },
+    { PG_SENSORS,     IC_SENSORS,   L"Sensors" },
 };
+
+const WCHAR* PageTitle(int id)
+{
+    for (int i = 0; i < (int)_countof(s_rail); i++)
+        if (s_rail[i].page == id) return s_rail[i].label;
+    return L"";
+}
 
 /* ------------------------------------------------------------------ */
 /*  Metrics                                                            */
@@ -420,6 +428,7 @@ static Page* GetPage(int id)
         case PG_USERS:       s_pages[id] = CreateUsersPage(); break;
         case PG_DETAILS:     s_pages[id] = CreateDetailsPage(); break;
         case PG_SERVICES:    s_pages[id] = CreateServicesPage(); break;
+        case PG_SENSORS:     s_pages[id] = CreateSensorsPage(); break;
         case PG_SETTINGS:    s_pages[id] = CreateSettingsPage(); break;
         }
         if (s_pages[id])

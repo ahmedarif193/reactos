@@ -47,12 +47,6 @@ static SetRow s_rows[] =
     { RW_RADIO,    L"Dark", SID_TH_DARK },
 };
 
-static const WCHAR* s_pageNames[] =
-{
-    L"Processes", L"Performance", L"App history", L"Startup apps",
-    L"Users", L"Details", L"Services"
-};
-
 static const WCHAR* s_speedNames[] = { L"High", L"Normal", L"Low", L"Paused" };
 
 struct SettingsPage : Page
@@ -172,8 +166,8 @@ struct SettingsPage : Page
                 if (row.id == SID_STARTPAGE)
                 {
                     DWORD pg = g_app.st.startPage;
-                    if (pg >= _countof(s_pageNames)) pg = 0;
-                    val = s_pageNames[pg];
+                    if (pg >= PG_SETTINGS) pg = 0;
+                    val = PageTitle(pg);
                 }
                 else
                 {
@@ -222,11 +216,11 @@ struct SettingsPage : Page
         {
             if (row.id == SID_STARTPAGE)
             {
-                MItem items[_countof(s_pageNames)];
-                for (int k = 0; k < (int)_countof(s_pageNames); k++)
+                MItem items[PG_SETTINGS];
+                for (int k = 0; k < PG_SETTINGS; k++)
                 {
                     items[k].id = 100 + k;
-                    items[k].text = s_pageNames[k];
+                    items[k].text = PageTitle(k);
                     items[k].flags = (g_app.st.startPage == (DWORD)k) ? MIF_RADIO : 0;
                     items[k].sub = NULL;
                     items[k].nSub = 0;
