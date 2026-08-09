@@ -130,9 +130,11 @@ SymCryptEcpointScalarMulFixedWindow(
     PUINT32                 sigofKIs = NULL;
     // ===================================================
 
+#ifndef __REACTOS__
     PSYMCRYPT_MODELEMENT    peQX = NULL;
     PSYMCRYPT_MODELEMENT    peQY = NULL;
     PSYMCRYPT_MODELEMENT    peQZ = NULL;
+#endif
 
     SIZE_T cbEcpoint = SymCryptSizeofEcpointFromCurve( pCurve );
     SIZE_T cbScalar = SymCryptSizeofIntFromDigits( pCurve->GOrdDigits );
@@ -248,9 +250,11 @@ SymCryptEcpointScalarMulFixedWindow(
 
 
     // Get the pointers to Q
+#ifndef __REACTOS__
     peQX = SYMCRYPT_INTERNAL_ECPOINT_COORDINATE( 0, pCurve, poQ );
     peQY = SYMCRYPT_INTERNAL_ECPOINT_COORDINATE( 1, pCurve, poQ );
     peQZ = SYMCRYPT_INTERNAL_ECPOINT_COORDINATE( 2, pCurve, poQ );
+#endif
 
     // Q = P[ (|k_t|-1)/2 ] in memory access side-channel safe way
     // That is, we touch all the precomputed points. The access pattern of KIs is fixed.

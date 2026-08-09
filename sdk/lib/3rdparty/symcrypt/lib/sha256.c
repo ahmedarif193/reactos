@@ -1194,8 +1194,9 @@ SymCryptSha256AppendBlocks_xmm2(
 // Initial round that reads the message.
 // r is the round number 0..15
 //
-//    Wt = LOAD_MSBFIRST32( &pbData[ 4*r ] );\
-//    W.ul[r] = Wt; \
+// __REACTOS__: Avoid backslash-newline splicing in C++-style comments under GCC.
+//    Wt = LOAD_MSBFIRST32( &pbData[ 4*r ] );
+//    W.ul[r] = Wt;
 
 #define IROUND( r ) {\
     Wt = W.ul[r];\
