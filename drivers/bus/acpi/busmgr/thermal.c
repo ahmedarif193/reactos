@@ -201,6 +201,8 @@ acpi_thermal_refresh_trips(
             zone->PollMilliseconds);
 }
 
+#if (NTDDI_VERSION >= NTDDI_WINTHRESHOLD)
+
 static LONG
 acpi_thermal_find_processor_request(
     PACPI_THERMAL_PROCESSOR_REQUEST requests,
@@ -311,6 +313,180 @@ Exit:
         AcpiOsFree(buffer.Pointer);
     return applied;
 }
+
+#else
+
+static ACPI_STATUS
+acpi_processor_get_throttle_control(
+    ACPI_HANDLE handle,
+    BOOLEAN minimum,
+    UINT64 *control,
+    ULONG *percentage)
+{
+    ACPI_BUFFER buffer = {ACPI_ALLOCATE_BUFFER, NULL};
+    ACPI_OBJECT *package;
+    ACPI_OBJECT *state;
+    ACPI_STATUS status;
+    UINT64 selected_control = 0;
+    UINT64 selected_percentage = minimum ? ACPI_UINT64_MAX : 0;
+    BOOLEAN found = FALSE;
+    ULONG i;
+
+    status = AcpiEvaluateObject(handle, "_TSS", NULL, &buffer);
+    if (ACPI_FAILURE(status))
+        goto Exit;
+    package = buffer.Pointer;
+    if (!package || package->Type != ACPI_TYPE_PACKAGE)
+    {
+        status = AE_BAD_DATA;
+        goto Exit;
+    }
+
+    for (i = 0; i < package->Package.Count; i++)
+    {
+        state = &package->Package.Elements[i];
+        if (state->Type != ACPI_TYPE_PACKAGE || state->Package.Count < 5 || state->Package.Elements[0].Type != ACPI_TYPE_INTEGER || state->Package.Elements[3].Type != ACPI_TYPE_INTEGER)
+            continue;
+        if (!found || (minimum ? state->Package.Elements[0].Integer.Value < selected_percentage : state->Package.Elements[0].Integer.Value > selected_percentage))
+        {
+            selected_percentage = state->Package.Elements[0].Integer.Value;
+            selected_control = state->Package.Elements[3].Integer.Value;
+            found = TRUE;
+        }
+    }
+    if (!found || selected_percentage > 100)
+    {
+        status = AE_BAD_DATA;
+        goto Exit;
+    }
+    *control = selected_control;
+    *percentage = (ULONG)selected_percentage;
+    status = AE_OK;
+
+Exit:
+    if (buffer.Pointer)
+        AcpiOsFree(buffer.Pointer);
+    return status;
+}
+
+static ACPI_STATUS
+acpi_processor_get_ptc_register(
+    ACPI_HANDLE handle,
+    ACPI_GENERIC_ADDRESS *control_register)
+{
+    ACPI_BUFFER buffer = {ACPI_ALLOCATE_BUFFER, NULL};
+    ACPI_RESOURCE *resource = NULL;
+    ACPI_OBJECT *package;
+    ACPI_OBJECT *object;
+    ACPI_STATUS status;
+
+    status = AcpiEvaluateObject(handle, "_PTC", NULL, &buffer);
+    if (ACPI_FAILURE(status))
+        goto Exit;
+    package = buffer.Pointer;
+    if (!package || package->Type != ACPI_TYPE_PACKAGE || package->Package.Count < 2)
+    {
+        status = AE_BAD_DATA;
+        goto Exit;
+    }
+    object = &package->Package.Elements[0];
+    if (object->Type != ACPI_TYPE_BUFFER || object->Buffer.Length > MAXUSHORT)
+    {
+        status = AE_BAD_DATA;
+        goto Exit;
+    }
+    status = AcpiBufferToResource(object->Buffer.Pointer, (UINT16)object->Buffer.Length, &resource);
+    if (ACPI_FAILURE(status))
+        goto Exit;
+    if (!resource || resource->Type != ACPI_RESOURCE_TYPE_GENERIC_REGISTER)
+    {
+        status = AE_BAD_DATA;
+        goto Exit;
+    }
+
+    control_register->SpaceId = resource->Data.GenericReg.SpaceId;
+    control_register->BitWidth = resource->Data.GenericReg.BitWidth;
+    control_register->BitOffset = resource->Data.GenericReg.BitOffset;
+    control_register->AccessWidth = resource->Data.GenericReg.AccessSize;
+    control_register->Address = resource->Data.GenericReg.Address;
+    status = AE_OK;
+
+Exit:
+    if (resource)
+        AcpiOsFree(resource);
+    if (buffer.Pointer)
+        AcpiOsFree(buffer.Pointer);
+    return status;
+}
+
+static int
+acpi_processor_set_thermal_limit(
+    ACPI_HANDLE handle,
+    int type)
+{
+    ACPI_GENERIC_ADDRESS control_register;
+    ACPI_STATUS status;
+    UINT64 control;
+    ULONG percentage;
+    BOOLEAN minimum = type != ACPI_PROCESSOR_LIMIT_NONE;
+
+    RtlZeroMemory(&control_register, sizeof(control_register));
+    status = acpi_processor_get_throttle_control(handle, minimum, &control, &percentage);
+    if (ACPI_FAILURE(status))
+        return -1;
+    status = acpi_processor_get_ptc_register(handle, &control_register);
+    if (ACPI_FAILURE(status))
+        return -1;
+    status = AcpiWrite(control, &control_register);
+    if (ACPI_FAILURE(status))
+    {
+        DPRINT1("ACPI: Processor thermal throttle write failed: %s space=%u address=0x%I64x\n", AcpiFormatException(status), control_register.SpaceId, control_register.Address);
+        return -1;
+    }
+    DPRINT1("ACPI: Processor thermal limit set to %lu%% control=0x%I64x\n", percentage, control);
+    return 0;
+}
+
+static ULONG
+acpi_thermal_apply_processor_list(
+    PACPI_THERMAL_ZONE zone,
+    int limit,
+    PULONG targets)
+{
+    ACPI_BUFFER buffer = {ACPI_ALLOCATE_BUFFER, NULL};
+    ACPI_OBJECT *package;
+    ACPI_OBJECT *object;
+    ACPI_STATUS status;
+    ULONG applied = 0;
+    ULONG i;
+
+    if (targets)
+        *targets = 0;
+
+    status = AcpiEvaluateObject(zone->Handle, "_PSL", NULL, &buffer);
+    if (ACPI_FAILURE(status))
+        goto Exit;
+    package = buffer.Pointer;
+    if (!package || package->Type != ACPI_TYPE_PACKAGE)
+        goto Exit;
+    for (i = 0; i < package->Package.Count; i++)
+    {
+        object = &package->Package.Elements[i];
+        if (object->Type != ACPI_TYPE_LOCAL_REFERENCE || !object->Reference.Handle)
+            continue;
+        if (targets)
+            (*targets)++;
+        if (acpi_processor_set_thermal_limit(object->Reference.Handle, limit) == 0)
+            applied++;
+    }
+
+Exit:
+    if (buffer.Pointer)
+        AcpiOsFree(buffer.Pointer);
+    return applied;
+}
+
+#endif /* NTDDI_VERSION >= NTDDI_WINTHRESHOLD */
 
 static LONG
 acpi_thermal_find_cooling_device(
@@ -525,7 +701,7 @@ acpi_thermal_check(
     acpi_fan_set_all_thermal_levels(&zone->CriticalEngaged, emergency ? ACPI_FAN_THERMAL_LEVEL_MAXIMUM : ACPI_FAN_THERMAL_LEVEL_OFF);
 }
 
-static VOID
+static VOID NTAPI
 acpi_thermal_worker(
     PVOID context)
 {
@@ -685,7 +861,12 @@ acpi_thermal_remove(
     KeWaitForSingleObject(&zone->WorkIdleEvent, Executive, KernelMode, FALSE, NULL);
     ExAcquireFastMutex(&zone->PolicyLock);
     acpi_thermal_release_cooling_policy(zone);
+#if (NTDDI_VERSION >= NTDDI_WINTHRESHOLD)
     acpi_thermal_release_processor_requests(zone);
+#else
+    if (zone->PassiveEngaged)
+        acpi_thermal_apply_processor_list(zone, ACPI_PROCESSOR_LIMIT_NONE, NULL);
+#endif
     ExReleaseFastMutex(&zone->PolicyLock);
     device->driver_data = NULL;
     ExFreePoolWithTag(zone, ACPI_THERMAL_TAG);
