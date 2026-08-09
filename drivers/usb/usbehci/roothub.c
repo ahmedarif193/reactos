@@ -774,8 +774,6 @@ EHCI_RH_DisableIrq(IN PVOID ehciExtension)
     PULONG IntrStsReg;
     EHCI_INTERRUPT_ENABLE IntrSts;
 
-    DPRINT_RH("EHCI_RH_DisableIrq: ... \n");
-
     IntrStsReg = &EhciExtension->OperationalRegs->HcInterruptEnable.AsULONG;
     IntrSts.AsULONG = READ_REGISTER_ULONG(IntrStsReg);
 
@@ -793,8 +791,6 @@ EHCI_RH_EnableIrq(IN PVOID ehciExtension)
     PEHCI_EXTENSION EhciExtension = ehciExtension;
     PULONG IntrStsReg;
     EHCI_INTERRUPT_ENABLE IntrSts;
-
-    DPRINT_RH("EHCI_RH_EnableIrq: ... \n");
 
     IntrStsReg = &EhciExtension->OperationalRegs->HcInterruptEnable.AsULONG;
     IntrSts.AsULONG = READ_REGISTER_ULONG(IntrStsReg);
