@@ -31,6 +31,10 @@ typedef struct _RTL_CONTEXT_EX
     RTL_CONTEXT_CHUNK XState;
 } RTL_CONTEXT_EX;
 
+#if defined(__REACTOS__) && (NTDDI_VERSION < NTDDI_WIN7)
+ULONG64 NTAPI RtlGetEnabledExtendedFeatures(ULONG64 FeatureMask);
+#endif
+
 struct context_copy_range
 {
     ULONG start;

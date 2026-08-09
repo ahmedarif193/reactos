@@ -5,7 +5,7 @@ add_rc_deps(iexplore.rc
 add_executable(iexplore main.c iexplore.rc version.rc)
 if(MSVC)
     target_link_options(iexplore PRIVATE /LARGEADDRESSAWARE)
-else()
+elseif(ARCH STREQUAL "i386")
     target_link_options(iexplore PRIVATE "-Wl,--large-address-aware")
 endif()
 target_link_libraries(iexplore wine)
