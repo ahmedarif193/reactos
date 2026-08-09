@@ -121,18 +121,25 @@ list(APPEND GEN_NLS
     c_949
     c_950)
 
+set(NLS_DESTINATIONS reactos/system32)
+if(ARCH STREQUAL "amd64" AND ENABLE_WOW64)
+    list(APPEND NLS_DESTINATIONS reactos/SysWOW64)
+endif()
+
 foreach(NLS ${GEN_NLS})
     add_custom_command(
         OUTPUT ${NLS}.nls
         COMMAND native-txt2nls ${CMAKE_CURRENT_SOURCE_DIR}/src/${NLS}.txt ${NLS}.nls
         DEPENDS native-txt2nls ${CMAKE_CURRENT_SOURCE_DIR}/src/${NLS}.txt)
 
-    # Special case for system ones
-    if ((NLS STREQUAL "c_437") OR (NLS STREQUAL "c_1252"))
-        add_cd_file(TARGET gen_nls FILE ${CMAKE_CURRENT_BINARY_DIR}/${NLS}.nls DESTINATION reactos/system32 NO_CAB FOR all)
-    else()
-        add_cd_file(TARGET gen_nls FILE ${CMAKE_CURRENT_BINARY_DIR}/${NLS}.nls DESTINATION reactos/system32 FOR all)
-    endif()
+    foreach(NLS_DESTINATION ${NLS_DESTINATIONS})
+        # Special case for system ones
+        if ((NLS STREQUAL "c_437") OR (NLS STREQUAL "c_1252"))
+            add_cd_file(TARGET gen_nls FILE ${CMAKE_CURRENT_BINARY_DIR}/${NLS}.nls DESTINATION ${NLS_DESTINATION} NO_CAB FOR all)
+        else()
+            add_cd_file(TARGET gen_nls FILE ${CMAKE_CURRENT_BINARY_DIR}/${NLS}.nls DESTINATION ${NLS_DESTINATION} FOR all)
+        endif()
+    endforeach()
 endforeach()
 
 list(TRANSFORM GEN_NLS APPEND ".nls")
@@ -140,7 +147,9 @@ list(TRANSFORM GEN_NLS PREPEND "${CMAKE_CURRENT_BINARY_DIR}/")
 add_custom_target(gen_nls DEPENDS ${GEN_NLS})
 
 # those ones were manually generated
-add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/l_intl.nls DESTINATION reactos/system32 NO_CAB FOR all)
+foreach(NLS_DESTINATION ${NLS_DESTINATIONS})
+    add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/l_intl.nls DESTINATION ${NLS_DESTINATION} NO_CAB FOR all)
+endforeach()
 list(APPEND NLS_FILES
     c_856.nls
     c_878.nls
@@ -159,5 +168,7 @@ list(APPEND NLS_FILES
     unicode.nls)
 
 foreach(item ${NLS_FILES})
-    add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/${item}" DESTINATION reactos/system32 FOR all)
+    foreach(NLS_DESTINATION ${NLS_DESTINATIONS})
+        add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/${item}" DESTINATION ${NLS_DESTINATION} FOR all)
+    endforeach()
 endforeach(item)
