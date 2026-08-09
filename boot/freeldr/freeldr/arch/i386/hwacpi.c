@@ -19,6 +19,7 @@
  */
 
 #include <freeldr.h>
+#include <reactos/drivers/acpi/acpi.h>
 
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(HWDETECT);
@@ -62,8 +63,8 @@ DetectAcpiBios(PCONFIGURATION_COMPONENT_DATA SystemKey, ULONG *BusNumber)
     PCM_PARTIAL_RESOURCE_LIST PartialResourceList;
     PCM_PARTIAL_RESOURCE_DESCRIPTOR PartialDescriptor;
     PRSDP_DESCRIPTOR Rsdp;
-    PACPI_BIOS_DATA AcpiBiosData;
-    ULONG TableSize, Size;
+    PACPI_BIOS_MULTI_NODE AcpiBiosData;
+    ULONG TableSize, Size, Index;
 
     Rsdp = FindAcpiBios();
 
@@ -73,8 +74,8 @@ DetectAcpiBios(PCONFIGURATION_COMPONENT_DATA SystemKey, ULONG *BusNumber)
         AcpiPresent = TRUE;
 
         /* Calculate the table size */
-        TableSize = PcBiosMapCount * sizeof(BIOS_MEMORY_MAP) +
-            sizeof(ACPI_BIOS_DATA) - sizeof(BIOS_MEMORY_MAP);
+        TableSize = FIELD_OFFSET(ACPI_BIOS_MULTI_NODE, E820Entry) +
+                    PcBiosMapCount * sizeof(ACPI_E820_ENTRY);
 
         /* Set 'Configuration Data' value */
         Size = FIELD_OFFSET(CM_PARTIAL_RESOURCE_LIST, PartialDescriptors[1]) + TableSize;
@@ -96,22 +97,27 @@ DetectAcpiBios(PCONFIGURATION_COMPONENT_DATA SystemKey, ULONG *BusNumber)
         PartialDescriptor->u.DeviceSpecificData.DataSize = TableSize;
 
         /* Fill the table */
-        AcpiBiosData = (PACPI_BIOS_DATA)(PartialDescriptor + 1);
+        AcpiBiosData = (PACPI_BIOS_MULTI_NODE)(PartialDescriptor + 1);
+        AcpiBiosData->RsdpAddress.QuadPart = (ULONG_PTR)Rsdp;
 
         if (Rsdp->revision > 0)
         {
             TRACE("ACPI >1.0, using XSDT address\n");
-            AcpiBiosData->RSDTAddress.QuadPart = Rsdp->xsdt_physical_address;
+            AcpiBiosData->RsdtAddress.QuadPart = Rsdp->xsdt_physical_address;
         }
         else
         {
             TRACE("ACPI 1.0, using RSDT address\n");
-            AcpiBiosData->RSDTAddress.LowPart = Rsdp->rsdt_physical_address;
+            AcpiBiosData->RsdtAddress.LowPart = Rsdp->rsdt_physical_address;
         }
 
         AcpiBiosData->Count = PcBiosMapCount;
-        RtlCopyMemory(AcpiBiosData->MemoryMap, PcBiosMemoryMap,
-                      PcBiosMapCount * sizeof(BIOS_MEMORY_MAP));
+        for (Index = 0; Index < PcBiosMapCount; ++Index)
+        {
+            AcpiBiosData->E820Entry[Index].Base.QuadPart = PcBiosMemoryMap[Index].BaseAddress;
+            AcpiBiosData->E820Entry[Index].Length.QuadPart = PcBiosMemoryMap[Index].Length;
+            AcpiBiosData->E820Entry[Index].Type = PcBiosMemoryMap[Index].Type;
+        }
 
         TRACE("RSDT %p, data size %x\n", Rsdp->rsdt_physical_address,
             TableSize);
