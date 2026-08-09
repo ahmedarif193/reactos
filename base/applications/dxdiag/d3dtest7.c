@@ -123,7 +123,7 @@ BOOL D3D7Test(GUID *lpDevice, HWND hWnd)
     do
     {
         D3DTestBuildCube(Vertices, GetTickCount() - Start, Width, Height);
-        if (FAILED(IDirect3DDevice7_Clear(Device, 0, NULL, D3DCLEAR_TARGET, 0xff000020, 1.0f, 0)))
+        if (FAILED(IDirect3DDevice7_Clear(Device, 0, NULL, D3DCLEAR_TARGET, 0xff000000, 1.0f, 0)))
             goto cleanup;
         if (FAILED(IDirect3DDevice7_BeginScene(Device)))
             goto cleanup;
