@@ -89,7 +89,7 @@ DWORD             symt_symref_to_index(struct module* module, symref_t symref)
     }
     else
     {
-#ifdef _WIN64
+#if defined(_WIN64) || (defined(__REACTOS__) && defined(DBGHELP_STATIC_LIB) && defined(DBGHELP_HOST_64BIT))
         vector = &module->vsymt;
         offset = 1;
 #else
@@ -119,7 +119,7 @@ symref_t      symt_index_to_symref(struct module* module, DWORD id)
     }
     else
     {
-#ifdef _WIN64
+#if defined(_WIN64) || (defined(__REACTOS__) && defined(DBGHELP_STATIC_LIB) && defined(DBGHELP_HOST_64BIT))
         if (!id--) return 0;
         vector = &module->vsymt;
 #else
