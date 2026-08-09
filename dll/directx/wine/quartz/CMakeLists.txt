@@ -28,7 +28,8 @@ list(APPEND SOURCE
 
 list(APPEND PCH_SKIP_SOURCE
     ${CMAKE_CURRENT_BINARY_DIR}/proxy.dlldata.c
-    ${CMAKE_CURRENT_BINARY_DIR}/quartz_strmif_p.c)
+    ${CMAKE_CURRENT_BINARY_DIR}/quartz_strmif_p.c
+    ${CMAKE_CURRENT_BINARY_DIR}/quartz_stubs.c)
 
 add_library(quartz MODULE
     ${SOURCE}
