@@ -1013,6 +1013,10 @@ HWND WINAPI GetTaskmanWindow(void)
 }
 #endif
 
+#if (WINVER < 0x0602) || (NTDDI_VERSION < NTDDI_WIN10_RS5)
+DECLARE_HANDLE(HSYNTHETICPOINTERDEVICE);
+#endif
+
 HSYNTHETICPOINTERDEVICE WINAPI CreateSyntheticPointerDevice(POINTER_INPUT_TYPE type, ULONG max_count, POINTER_FEEDBACK_MODE mode)
 {
     FIXME( "type %ld, max_count %ld, mode %d stub!\n", type, max_count, mode);
