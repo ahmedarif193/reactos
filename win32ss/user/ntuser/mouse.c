@@ -13,6 +13,30 @@ DBG_DEFAULT_CHANNEL(UserInput);
 MOUSEMOVEPOINT gMouseHistoryOfMoves[64];
 INT gcMouseHistoryOfMoves = 0;
 
+static LONG FASTCALL
+IntApplyMouseAcceleration(LONG Delta)
+{
+    LONGLONG AcceleratedDelta;
+    LONGLONG Magnitude;
+    ULONG Multiplier = 1;
+
+    if (!gspv.caiMouse.Acceleration)
+        return Delta;
+
+    Magnitude = (Delta < 0) ? -(LONGLONG)Delta : Delta;
+    if (Magnitude > gspv.caiMouse.FirstThreshold)
+        Multiplier = 2;
+    if ((gspv.caiMouse.Acceleration == 2) && (Magnitude > gspv.caiMouse.SecondThreshold))
+        Multiplier *= 2;
+
+    AcceleratedDelta = (LONGLONG)Delta * Multiplier;
+    if (AcceleratedDelta > MAXLONG)
+        return MAXLONG;
+    if (AcceleratedDelta < -(LONGLONG)MAXLONG - 1)
+        return (LONG)MINLONG;
+    return (LONG)AcceleratedDelta;
+}
+
 /*
  * UserGetMouseButtonsState
  *
@@ -186,8 +210,8 @@ UserSendMouseInput(MOUSEINPUT *pmi, BOOL bInjected)
         if (!(pmi->dwFlags & MOUSEEVENTF_ABSOLUTE))
         {
             /* Relative move */
-            ptCursor.x += pmi->dx;
-            ptCursor.y += pmi->dy;
+            ptCursor.x += IntApplyMouseAcceleration(pmi->dx);
+            ptCursor.y += IntApplyMouseAcceleration(pmi->dy);
         }
         else if (pmi->dwFlags & MOUSEEVENTF_VIRTUALDESK)
         {
