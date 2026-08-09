@@ -594,7 +594,7 @@ static void UITOOLS_DrawCheckedRect( HDC dc, LPRECT rect )
 
         FillRect(dc, rect, GetSysColorBrush(COLOR_BTNFACE));
         bg = SetBkColor(dc, RGB(255, 255, 255));
-        hbsave = (HBRUSH)SelectObject(dc, gpsi->hbrGray);
+        hbsave = (HBRUSH)SelectObject(dc, UserGetGrayBrush());
         PatBlt(dc, rect->left, rect->top, rect->right-rect->left, rect->bottom-rect->top, 0x00FA0089);
         SelectObject(dc, hbsave);
         SetBkColor(dc, bg);
@@ -1148,7 +1148,7 @@ IntGrayString(
 
         if (! success) goto cleanup;
 
-        hbsave = (HBRUSH)SelectObject(MemDC, gpsi->hbrGray);
+        hbsave = (HBRUSH)SelectObject(MemDC, UserGetGrayBrush());
         PatBlt(MemDC, 0, 0, nWidth, nHeight, 0x000A0329);
         SelectObject(MemDC, hbsave);
     }
@@ -1366,7 +1366,7 @@ IntDrawState(HDC hdc, HBRUSH hbr, DRAWSTATEPROC func, LPARAM lp, WPARAM wp,
     /* This state cause the image to be dithered */
     if(flags & DSS_UNION)
     {
-        hbsave = (HBRUSH)SelectObject(memdc, gpsi->hbrGray);
+        hbsave = (HBRUSH)SelectObject(memdc, UserGetGrayBrush());
         if(!hbsave) goto cleanup;
         tmp = PatBlt(memdc, 0, 0, cx, cy, 0x00FA0089);
         SelectObject(memdc, hbsave);
@@ -1615,7 +1615,7 @@ DrawFocusRect(HDC hdc, CONST RECT *rect)
     NtUserSystemParametersInfo(SPI_GETFOCUSBORDERWIDTH, 0, &cx, 0);
     NtUserSystemParametersInfo(SPI_GETFOCUSBORDERHEIGHT, 0, &cy, 0);
 
-    OldObj = SelectObject(hdc, gpsi->hbrGray);
+    OldObj = SelectObject(hdc, UserGetGrayBrush());
 
     /* top */
     PatBlt(hdc, rect->left, rect->top, rect->right - rect->left, cy, PATINVERT);
