@@ -74,7 +74,7 @@ BOOL D3D9Test(GUID *lpDevice, HWND hWnd)
     do
     {
         D3DTestBuildCube(Vertices, GetTickCount() - Start, PresentParameters.BackBufferWidth, PresentParameters.BackBufferHeight);
-        if (FAILED(IDirect3DDevice9_Clear(Device, 0, NULL, D3DCLEAR_TARGET, D3DCOLOR_XRGB(0, 0, 32), 1.0f, 0)))
+        if (FAILED(IDirect3DDevice9_Clear(Device, 0, NULL, D3DCLEAR_TARGET, D3DCOLOR_XRGB(0, 0, 0), 1.0f, 0)))
             goto cleanup;
         if (FAILED(IDirect3DDevice9_BeginScene(Device)))
             goto cleanup;
