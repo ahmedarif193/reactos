@@ -15,6 +15,19 @@
 #define NDEBUG
 #include <debug.h>
 
+/* RtlGetDeviceFamilyInfoEnum is implemented independently of the SDK target. */
+#ifndef UNIFIEDBUILDREVISION_KEY
+#define UNIFIEDBUILDREVISION_KEY L"\\Registry\\Machine\\Software\\Microsoft\\Windows NT\\CurrentVersion"
+#define UNIFIEDBUILDREVISION_VALUE L"UBR"
+#define UNIFIEDBUILDREVISION_MIN 0x00000000
+#define DEVICEFAMILYDEVICEFORM_KEY L"\\Registry\\Machine\\Software\\Microsoft\\Windows NT\\CurrentVersion\\OEM"
+#define DEVICEFAMILYDEVICEFORM_VALUE L"DeviceForm"
+#define DEVICEFAMILYINFOENUM_DESKTOP 0x00000003
+#define DEVICEFAMILYINFOENUM_SERVER 0x00000009
+#define DEVICEFAMILYDEVICEFORM_UNKNOWN 0x00000000
+#define DEVICEFAMILYDEVICEFORM_MAX 0x0000002F
+#endif
+
 /* FUNCTIONS ******************************************************************/
 
 static signed char g_ReportProductType = 0;
