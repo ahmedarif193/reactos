@@ -48,7 +48,7 @@ typedef enum _EX_POOL_PRIORITY {
   HighPoolPrioritySpecialPoolUnderrun = 41
 } EX_POOL_PRIORITY;
 
-#if (NTDDI_VERSION >= NTDDI_WIN10_VB)
+#if (NTDDI_VERSION >= NTDDI_WIN10_VB) || defined(_NTOSKRNL_)
 
 typedef enum POOL_EXTENDED_PARAMETER_TYPE {
   PoolExtendedParameterInvalidType = 0,
@@ -113,7 +113,7 @@ typedef ULONG64 POOL_FLAGS;
 #define POOL_FLAG_OPTIONAL_END        0x8000000000000000ULL
 #define POOL_FLAG_REQUIRED_MASK       0x00000000FFFFFFFFULL
 
-#endif /* NTDDI_VERSION >= NTDDI_WIN10_VB */
+#endif /* (NTDDI_VERSION >= NTDDI_WIN10_VB) || defined(_NTOSKRNL_) */
 
 #if !defined(_WIN64) && (defined(_NTDDK_) || defined(_NTIFS_) || defined(_NDIS_))
 #define LOOKASIDE_ALIGN

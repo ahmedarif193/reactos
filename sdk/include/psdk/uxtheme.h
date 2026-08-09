@@ -28,8 +28,8 @@
 #define THEMEAPI          STDAPI
 #define THEMEAPI_(type)   STDAPI_(type)
 #else
-#define THEMEAPI          DECLSPEC_IMPORT STDAPI
-#define THEMEAPI_(type)   DECLSPEC_IMPORT STDAPI_(type)
+#define THEMEAPI          EXTERN_C DECLSPEC_IMPORT HRESULT STDAPICALLTYPE
+#define THEMEAPI_(type)   EXTERN_C DECLSPEC_IMPORT type STDAPICALLTYPE
 #endif
 #endif
 
