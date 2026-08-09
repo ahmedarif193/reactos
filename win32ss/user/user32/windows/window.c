@@ -953,6 +953,9 @@ GetAltTabInfoW(HWND hwnd,
 HWND WINAPI
 GetAncestor(_In_ HWND hwnd, _In_ UINT uType)
 {
+#ifdef WOW64_I386_RUNTIME
+    return NtUserGetAncestor(hwnd, uType);
+#else
     PWND pWnd = ValidateHwnd(hwnd);
     if (!pWnd || pWnd == GetThreadDesktopWnd())
         return NULL;
@@ -981,6 +984,7 @@ GetAncestor(_In_ HWND hwnd, _In_ UINT uType)
     }
 
     return NtUserGetAncestor(hwnd, uType);
+#endif
 }
 
 /*
@@ -1061,6 +1065,15 @@ GetLastActivePopup(HWND hWnd)
 HWND WINAPI
 GetParent(HWND hWnd)
 {
+#ifdef WOW64_I386_RUNTIME
+    LONG_PTR Style;
+
+    if (!IsWindow(hWnd)) return NULL;
+    Style = GetWindowLongPtrW(hWnd, GWL_STYLE);
+    if (Style & WS_POPUP) return GetWindow(hWnd, GW_OWNER);
+    if (Style & WS_CHILD) return NtUserGetAncestor(hWnd, GA_PARENT);
+    return NULL;
+#else
     PWND Wnd, WndParent;
     HWND Ret = NULL;
 
@@ -1092,6 +1105,7 @@ GetParent(HWND hWnd)
     }
 
     return Ret;
+#endif
 }
 
 
@@ -1112,6 +1126,9 @@ HWND WINAPI
 GetWindow(HWND hWnd,
           UINT uCmd)
 {
+#ifdef WOW64_I386_RUNTIME
+    return ULongToHandle(NtUserCallHwndParam(hWnd, uCmd, HWNDPARAM_ROUTINE_ROS_GETWINDOW));
+#else
     PWND Wnd, FoundWnd;
     HWND Ret = NULL;
 
@@ -1183,6 +1200,7 @@ GetWindow(HWND hWnd,
     _SEH2_END;
 
     return Ret;
+#endif
 }
 
 
@@ -1524,6 +1542,17 @@ BOOL WINAPI
 IsChild(HWND hWndParent,
     HWND hWnd)
 {
+#ifdef WOW64_I386_RUNTIME
+    if (!IsWindow(hWndParent) || !IsWindow(hWnd)) return FALSE;
+
+    while ((GetWindowLongPtrW(hWnd, GWL_STYLE) & (WS_POPUP | WS_CHILD)) == WS_CHILD)
+    {
+        hWnd = NtUserGetAncestor(hWnd, GA_PARENT);
+        if (!hWnd) return FALSE;
+        if (hWnd == hWndParent) return TRUE;
+    }
+    return FALSE;
+#else
     PWND WndParent, DesktopWnd,  Wnd;
     BOOL Ret = FALSE;
 
@@ -1563,6 +1592,7 @@ IsChild(HWND hWndParent,
     _SEH2_END;
 
     return Ret;
+#endif
 }
 
 

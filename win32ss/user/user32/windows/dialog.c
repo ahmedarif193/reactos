@@ -2431,8 +2431,9 @@ GetNextDlgTabItem(
   HWND hCtl,
   BOOL bPrevious)
 {
+#ifndef WOW64_I386_RUNTIME
     PWND pWindow;
-      
+
     pWindow = ValidateHwnd( hDlg );
     if (!pWindow) return NULL;
     if (hCtl)
@@ -2440,6 +2441,10 @@ GetNextDlgTabItem(
        pWindow = ValidateHwnd( hCtl );
        if (!pWindow) return NULL;
     }
+#else
+    if (!IsWindow(hDlg)) return NULL;
+    if (hCtl && !IsWindow(hCtl)) return NULL;
+#endif
 
     /* Undocumented but tested under Win2000 and WinME */
     if (hDlg == hCtl) hCtl = NULL;

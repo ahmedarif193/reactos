@@ -429,12 +429,21 @@ typedef struct _MATRIX_S
 
 typedef struct _MATRIX
 {
+#ifdef WOW64_I386_RUNTIME
+    FLOAT efM11;
+    FLOAT efM12;
+    FLOAT efM21;
+    FLOAT efM22;
+    FLOAT efDx;
+    FLOAT efDy;
+#else
     FLOATOBJ efM11;
     FLOATOBJ efM12;
     FLOATOBJ efM21;
     FLOATOBJ efM22;
     FLOATOBJ efDx;
     FLOATOBJ efDy;
+#endif
     FIX fxDx;
     FIX fxDy;
     FLONG flAccel;

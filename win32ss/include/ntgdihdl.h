@@ -303,10 +303,31 @@ typedef struct _LDC
  */
 typedef struct _DC_ATTR
 {
+#ifdef WOW64_I386_RUNTIME
+    union
+    {
+        PVOID pvLDC;
+        ULONG64 pvLDCNative;
+    };
+#else
     PVOID pvLDC;
+#endif
     ULONG ulDirty_;
+#ifdef WOW64_I386_RUNTIME
+    union
+    {
+        HANDLE hbrush;
+        ULONG64 hbrushNative;
+    };
+    union
+    {
+        HANDLE hpen;
+        ULONG64 hpenNative;
+    };
+#else
     HANDLE hbrush;
     HANDLE hpen;
+#endif
     COLORREF crBackgroundClr;
     ULONG ulBackgroundClr;
     COLORREF crForegroundClr;
@@ -328,26 +349,62 @@ typedef struct _DC_ATTR
     LONG lStretchBltMode;
     FLONG flFontMapper;
     LONG lIcmMode;
+#ifdef WOW64_I386_RUNTIME
+    union
+    {
+        HANDLE hcmXform;
+        ULONG64 hcmXformNative;
+    };
+    union
+    {
+        HCOLORSPACE hColorSpace;
+        ULONG64 hColorSpaceNative;
+    };
+#else
     HANDLE hcmXform;
     HCOLORSPACE hColorSpace;
+#endif
     FLONG flIcmFlags;
     INT IcmBrushColor;
     INT IcmPenColor;
+#ifdef WOW64_I386_RUNTIME
+    union
+    {
+        PVOID pvLIcm;
+        ULONG64 pvLIcmNative;
+    };
+#else
     PVOID pvLIcm;
+#endif
     FLONG flTextAlign;
     LONG lTextAlign;
     LONG lTextExtra;
     LONG lRelAbs;
     LONG lBreakExtra;
     LONG cBreak;
+#ifdef WOW64_I386_RUNTIME
+    union
+    {
+        HANDLE hlfntNew;
+        ULONG64 hlfntNewNative;
+    };
+#else
     HANDLE hlfntNew;
+#endif
     MATRIX mxWorldToDevice;
     MATRIX mxDeviceToWorld;
     MATRIX mxWorldToPage;
+#ifdef WOW64_I386_RUNTIME
+    FLOAT efM11PtoD;
+    FLOAT efM22PtoD;
+    FLOAT efDxPtoD;
+    FLOAT efDyPtoD;
+#else
     FLOATOBJ efM11PtoD;
     FLOATOBJ efM22PtoD;
     FLOATOBJ efDxPtoD;
     FLOATOBJ efDyPtoD;
+#endif
     INT iMapMode;
     DWORD dwLayout;
     LONG lWindowOrgx;
@@ -362,6 +419,14 @@ typedef struct _DC_ATTR
     POINTL ptlBrushOrigin;
     RGN_ATTR VisRectRegion;
 } DC_ATTR, *PDC_ATTR;
+
+#ifdef WOW64_I386_RUNTIME
+C_ASSERT(sizeof(DC_ATTR) == 0x1a0);
+C_ASSERT(FIELD_OFFSET(DC_ATTR, ulDirty_) == 0x08);
+C_ASSERT(FIELD_OFFSET(DC_ATTR, hbrush) == 0x10);
+C_ASSERT(FIELD_OFFSET(DC_ATTR, iMapMode) == 0x134);
+C_ASSERT(FIELD_OFFSET(DC_ATTR, VisRectRegion) == 0x184);
+#endif
 
 typedef struct _BRUSH_ATTR /* Used with pen too. */
 {

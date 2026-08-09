@@ -517,7 +517,7 @@ GdiGetRgnAttr(HRGN hrgn)
     return prgnattr;
 }
 
-#ifdef _M_IX86
+#if defined(_M_IX86) && !defined(WOW64_I386_RUNTIME)
 FLOATL FASTCALL EFtoF(EFLOAT_S * efp);
 #define FOtoF(pfo) EFtoF((EFLOAT_S*)pfo)
 #else

@@ -20,7 +20,11 @@ GetSysColor(int nIndex)
 {
   if(nIndex >= 0 && nIndex < NUM_SYSCOLORS)
   {
+#ifdef WOW64_I386_RUNTIME
+    return (DWORD)NtUserCallOneParam(nIndex, ONEPARAM_ROUTINE_ROS_GETSYSCOLOR);
+#else
     return gpsi->argbSystem[nIndex];
+#endif
   }
 
   SetLastError(ERROR_INVALID_PARAMETER);
@@ -37,7 +41,11 @@ GetSysColorBrush(int nIndex)
 {
   if(nIndex >= 0 && nIndex < NUM_SYSCOLORS)
   {
+#ifdef WOW64_I386_RUNTIME
+    return (HBRUSH)NtUserCallOneParam(nIndex, ONEPARAM_ROUTINE_ROS_GETSYSCOLORBRUSH);
+#else
     return gpsi->ahbrSystem[nIndex];
+#endif
   }
 
   return NULL;
@@ -219,7 +227,7 @@ DefWndControlColor(HDC hDC, UINT ctlType)
        * look different from the window background.
        */
       if ( bk == GetSysColor(COLOR_WINDOW))
-          return gpsi->hbrGray;
+          return UserGetGrayBrush();
 
       UnrealizeObject( hb );
       return hb;

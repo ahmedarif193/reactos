@@ -53,6 +53,12 @@ extern HINSTANCE ghmodUserApiHook;
 extern HICON hIconSmWindows, hIconWindows;
 extern Imm32ApiTable gImmApiEntries;
 
+#ifdef WOW64_I386_RUNTIME
+#define UserGetGrayBrush() ((HBRUSH)NtUserCallOneParam(0, ONEPARAM_ROUTINE_ROS_GETGRAYBRUSH))
+#else
+#define UserGetGrayBrush() (gpsi->hbrGray)
+#endif
+
 #define IMM_FN(name) gImmApiEntries.p##name
 
 #define IS_ATOM(x) \
