@@ -49,6 +49,11 @@ struct COMPLETE_DVD_MANUFACTURER_DESCRIPTOR
 };
 #include <poppack.h>
 C_ASSERT(sizeof(struct COMPLETE_DVD_MANUFACTURER_DESCRIPTOR) == 2053);
+#ifdef __REACTOS__
+C_ASSERT(sizeof(STORAGE_TEMPERATURE_INFO) == 16);
+C_ASSERT(FIELD_OFFSET(STORAGE_TEMPERATURE_DATA_DESCRIPTOR, TemperatureInfo) == 24);
+C_ASSERT(sizeof(STORAGE_TEMPERATURE_DATA_DESCRIPTOR) == 40);
+#endif
 
 static HINSTANCE hdll;
 static HANDLE (WINAPI *pFindFirstVolumeA)(LPSTR,DWORD);
@@ -726,6 +731,69 @@ static void test_disk_query_property(void)
         }
 #endif
     }
+
+#ifdef __REACTOS__
+    query.PropertyId = StorageDeviceTemperatureProperty;
+    query.QueryType = PropertyStandardQuery;
+    memset(&header, 0xcc, sizeof(header));
+    SetLastError(0xdeadbeef);
+    ret = DeviceIoControl(handle, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query), &header, sizeof(header), &size, NULL);
+    error = GetLastError();
+    if (!ret && (error == ERROR_INVALID_FUNCTION || error == ERROR_NOT_SUPPORTED || error == ERROR_GEN_FAILURE))
+    {
+        win_skip("StorageDeviceTemperatureProperty is not supported, error %#lx.\n", error);
+    }
+    else
+    {
+        BOOL header_valid;
+
+        ok(ret, "temperature header query failed, error %#lx.\n", error);
+        if (ret)
+        {
+            ok(size == sizeof(header), "temperature header returned %lu bytes.\n", size);
+            ok(header.Version >= sizeof(STORAGE_TEMPERATURE_DATA_DESCRIPTOR), "temperature header version %lu.\n", header.Version);
+            ok(header.Size >= FIELD_OFFSET(STORAGE_TEMPERATURE_DATA_DESCRIPTOR, TemperatureInfo), "temperature descriptor size %lu.\n", header.Size);
+            ok(header.Size <= 1024 * 1024, "temperature descriptor size is excessive: %lu.\n", header.Size);
+        }
+        header_valid = ret && header.Version >= sizeof(STORAGE_TEMPERATURE_DATA_DESCRIPTOR) &&
+                       header.Size >= FIELD_OFFSET(STORAGE_TEMPERATURE_DATA_DESCRIPTOR, TemperatureInfo) && header.Size <= 1024 * 1024;
+        if (header_valid)
+        {
+            STORAGE_TEMPERATURE_DATA_DESCRIPTOR *temperature;
+            DWORD valid_size;
+            ULONG count;
+            ULONG i;
+
+            temperature = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, header.Size);
+            ok(temperature != NULL, "failed to allocate %lu bytes.\n", header.Size);
+            SetLastError(0xdeadbeef);
+            ret = temperature && DeviceIoControl(handle, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query), temperature, header.Size, &size, NULL);
+            error = GetLastError();
+            ok(ret, "temperature descriptor query failed, error %#lx.\n", error);
+            if (ret)
+            {
+                ok(size >= FIELD_OFFSET(STORAGE_TEMPERATURE_DATA_DESCRIPTOR, TemperatureInfo), "temperature descriptor returned %lu bytes.\n", size);
+                ok(temperature->Version >= sizeof(STORAGE_TEMPERATURE_DATA_DESCRIPTOR), "temperature descriptor version %lu.\n", temperature->Version);
+                ok(temperature->Size >= FIELD_OFFSET(STORAGE_TEMPERATURE_DATA_DESCRIPTOR, TemperatureInfo), "temperature descriptor size %lu.\n", temperature->Size);
+                ok(temperature->Size <= size, "temperature descriptor size %lu exceeds returned size %lu.\n", temperature->Size, size);
+                valid_size = min(temperature->Size, size);
+                count = valid_size >= FIELD_OFFSET(STORAGE_TEMPERATURE_DATA_DESCRIPTOR, TemperatureInfo) ?
+                        (valid_size - FIELD_OFFSET(STORAGE_TEMPERATURE_DATA_DESCRIPTOR, TemperatureInfo)) / sizeof(STORAGE_TEMPERATURE_INFO) : 0;
+                ok(temperature->InfoCount <= count, "temperature info count %u exceeds capacity %lu.\n", (unsigned int)temperature->InfoCount, count);
+                count = min(count, temperature->InfoCount);
+                if (count) ok(temperature->TemperatureInfo[0].Index == 0, "first temperature index is %u.\n", (unsigned int)temperature->TemperatureInfo[0].Index);
+                for (i = 0; i < count; i++)
+                {
+                    const STORAGE_TEMPERATURE_INFO *info = &temperature->TemperatureInfo[i];
+                    ok(info->OverThresholdChangable <= TRUE, "temperature %lu over-threshold changeable is %u.\n", i, (unsigned int)info->OverThresholdChangable);
+                    ok(info->UnderThresholdChangable <= TRUE, "temperature %lu under-threshold changeable is %u.\n", i, (unsigned int)info->UnderThresholdChangable);
+                    ok(info->EventGenerated <= TRUE, "temperature %lu event-generated is %u.\n", i, (unsigned int)info->EventGenerated);
+                }
+            }
+            if (temperature) HeapFree(GetProcessHeap(), 0, temperature);
+        }
+    }
+#endif
 
     CloseHandle(handle);
 }
