@@ -679,6 +679,10 @@ BOOLEAN
 IopResDbCheckList(
     _In_opt_ PCM_RESOURCE_LIST ResourceList);
 
+VOID
+PiUnlinkDevNode(
+    _In_ PDEVICE_NODE DeviceNode);
+
 NTSTATUS
 IopFreeDeviceNode(
     IN PDEVICE_NODE DeviceNode
