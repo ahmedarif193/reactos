@@ -366,22 +366,50 @@ USBH_PdoUrbFilter(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
     return USBH_PassIrp(HubExtension->RootHubPdo2, Irp);
 }
 
+static
+BOOLEAN
+USBH_IsHubChainRemoved(IN PUSBHUB_FDO_EXTENSION HubExtension)
+{
+    while (HubExtension)
+    {
+        if (HubExtension->HubFlags & USBHUB_FDO_FLAG_DEVICE_REMOVED)
+            return TRUE;
+
+        if (!HubExtension->LowerPDO)
+            return TRUE;
+
+        if (HubExtension->LowerPDO == HubExtension->RootHubPdo)
+            return FALSE;
+
+        HubExtension = PdoExt(HubExtension->LowerPDO)->HubExtension;
+    }
+
+    return TRUE;
+}
+
 NTSTATUS
 NTAPI
 USBH_PdoIoctlSubmitUrb(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
                        IN PIRP Irp)
 {
+    PUSBHUB_FDO_EXTENSION HubExtension;
     PURB Urb;
     NTSTATUS Status;
 
     DPRINT_IOCTL("USBH_PdoIoctlSubmitUrb ... \n");
 
     Urb = URB_FROM_IRP(Irp);
+    HubExtension = PortExtension->HubExtension;
 
-    if (PortExtension->DeviceHandle == NULL)
+    if (PortExtension->DeviceHandle == NULL ||
+        HubExtension == NULL ||
+        USBH_IsHubChainRemoved(HubExtension))
     {
-        /* USBPORT maps a NULL handle to the root hub itself; never forward for a removed device */
-        DPRINT1("USBH_PdoIoctlSubmitUrb: failing URB 0x%02X for removed device\n", Urb->UrbHeader.Function);
+        /* USBPORT maps a NULL handle to the root hub itself. Likewise, once
+         * an external hub or any ancestor has disappeared, forwarding a
+         * child teardown URB can wait forever because no device can complete
+         * it. */
+        DPRINT1("USBH_PdoIoctlSubmitUrb: failing URB 0x%02X for removed device or hub chain\n", Urb->UrbHeader.Function);
         Urb->UrbHeader.Status = USBD_STATUS_DEVICE_GONE;
         USBH_CompleteIrp(Irp, STATUS_DEVICE_NOT_CONNECTED);
         Status = STATUS_DEVICE_NOT_CONNECTED;
