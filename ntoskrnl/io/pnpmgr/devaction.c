@@ -1820,6 +1820,8 @@ IopSendRemoveChildDevices(PDEVICE_NODE ParentDeviceNode)
         NextDeviceNode = ChildDeviceNode->Sibling;
         KeReleaseSpinLock(&IopDeviceTreeLock, OldIrql);
 
+        /* The PDO may outlive its removed parent while references drain. */
+        PiUnlinkDevNode(ChildDeviceNode);
         IopSendRemoveDevice(ChildDeviceNode->PhysicalDeviceObject);
 
         ChildDeviceNode = NextDeviceNode;

@@ -340,13 +340,53 @@ IopCreateDeviceNode(
 }
 #endif
 
-NTSTATUS
-IopFreeDeviceNode(
+VOID
+PiUnlinkDevNode(
     _In_ PDEVICE_NODE DeviceNode)
 {
     KIRQL OldIrql;
     PDEVICE_NODE PrevSibling = NULL;
 
+    KeAcquireSpinLock(&IopDeviceTreeLock, &OldIrql);
+
+    if (!DeviceNode->Parent)
+    {
+        KeReleaseSpinLock(&IopDeviceTreeLock, OldIrql);
+        return;
+    }
+
+    /* Get previous sibling */
+    if (DeviceNode->Parent->Child != DeviceNode)
+    {
+        PrevSibling = DeviceNode->Parent->Child;
+        while (PrevSibling->Sibling != DeviceNode)
+            PrevSibling = PrevSibling->Sibling;
+    }
+
+    /* Unlink from parent */
+    if (DeviceNode->Parent->LastChild == DeviceNode)
+    {
+        DeviceNode->Parent->LastChild = PrevSibling;
+        if (PrevSibling)
+            PrevSibling->Sibling = NULL;
+    }
+    if (DeviceNode->Parent->Child == DeviceNode)
+        DeviceNode->Parent->Child = DeviceNode->Sibling;
+
+    /* Unlink from sibling list */
+    if (PrevSibling)
+        PrevSibling->Sibling = DeviceNode->Sibling;
+
+    DeviceNode->Parent = NULL;
+    DeviceNode->Sibling = NULL;
+
+    KeReleaseSpinLock(&IopDeviceTreeLock, OldIrql);
+}
+
+NTSTATUS
+IopFreeDeviceNode(
+    _In_ PDEVICE_NODE DeviceNode)
+{
     ASSERT(DeviceNode->PhysicalDeviceObject);
     /* All children must be deleted before a parent is deleted */
     ASSERT(DeviceNode->Child == NULL);
@@ -358,34 +398,7 @@ IopFreeDeviceNode(
     /* Release the node's resource-DB grant before it goes away */
     IopResDbRelease(DeviceNode);
 
-    KeAcquireSpinLock(&IopDeviceTreeLock, &OldIrql);
-
-    /* Get previous sibling */
-    if (DeviceNode->Parent && DeviceNode->Parent->Child != DeviceNode)
-    {
-        PrevSibling = DeviceNode->Parent->Child;
-        while (PrevSibling->Sibling != DeviceNode)
-            PrevSibling = PrevSibling->Sibling;
-    }
-
-    /* Unlink from parent if it exists */
-    if (DeviceNode->Parent)
-    {
-        if (DeviceNode->Parent->LastChild == DeviceNode)
-        {
-            DeviceNode->Parent->LastChild = PrevSibling;
-            if (PrevSibling)
-                PrevSibling->Sibling = NULL;
-        }
-        if (DeviceNode->Parent->Child == DeviceNode)
-            DeviceNode->Parent->Child = DeviceNode->Sibling;
-    }
-
-    /* Unlink from sibling list */
-    if (PrevSibling)
-        PrevSibling->Sibling = DeviceNode->Sibling;
-
-    KeReleaseSpinLock(&IopDeviceTreeLock, OldIrql);
+    PiUnlinkDevNode(DeviceNode);
 
     RtlFreeUnicodeString(&DeviceNode->InstancePath);
 
