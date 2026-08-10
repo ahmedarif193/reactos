@@ -2010,30 +2010,54 @@ PciPdoRoutedInterruptLine(
     _In_ UCHAR InterruptLine)
 {
 #if defined(_M_IX86) || defined(_M_AMD64)
+    PPDO_DEVICE_EXTENSION CurrentExtension = DeviceExtension;
+    PFDO_DEVICE_EXTENSION CurrentFdoExtension;
+    UCHAR CurrentPin = InterruptPin;
     ULONG Gsi = 0;
+    ULONG Depth = 0;
 
-    if (InterruptPin != 0 &&
-        HalQueryPciRoutedInterrupt(PciPdoGetSegment(DeviceExtension),
-                                   DeviceExtension->PciDevice->BusNumber,
-                                   DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
-                                   DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber,
-                                   InterruptPin,
-                                   &Gsi) &&
-        Gsi != 0 &&
-        Gsi < 0xFF)
+    while (CurrentExtension && CurrentPin != 0 && Depth < PCI_MAX_BRIDGE_NUMBER)
     {
-        if ((UCHAR)Gsi != InterruptLine)
+        if (HalQueryPciRoutedInterrupt(PciPdoGetSegment(CurrentExtension), CurrentExtension->PciDevice->BusNumber, CurrentExtension->PciDevice->SlotNumber.u.bits.DeviceNumber, CurrentExtension->PciDevice->SlotNumber.u.bits.FunctionNumber, CurrentPin, &Gsi) && Gsi != 0 && Gsi < 0xFF)
         {
-            DPRINT1("PCI PDO: _PRT routes %02x:%02x.%u INT%c# to GSI %lu (line was %u)\n",
-                    (UCHAR)DeviceExtension->PciDevice->BusNumber,
-                    DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
-                    DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber,
-                    'A' + InterruptPin - 1,
-                    Gsi,
-                    InterruptLine);
+            if (Depth != 0)
+            {
+                DPRINT1("PCI PDO: _PRT routes %02x:%02x.%u INT%c# through %02x:%02x.%u INT%c# to GSI %lu (line was %u)\n",
+                        (UCHAR)DeviceExtension->PciDevice->BusNumber,
+                        DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
+                        DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber,
+                        'A' + InterruptPin - 1,
+                        (UCHAR)CurrentExtension->PciDevice->BusNumber,
+                        CurrentExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
+                        CurrentExtension->PciDevice->SlotNumber.u.bits.FunctionNumber,
+                        'A' + CurrentPin - 1,
+                        Gsi,
+                        InterruptLine);
+            }
+            else if ((UCHAR)Gsi != InterruptLine)
+            {
+                DPRINT1("PCI PDO: _PRT routes %02x:%02x.%u INT%c# to GSI %lu (line was %u)\n",
+                        (UCHAR)DeviceExtension->PciDevice->BusNumber,
+                        DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
+                        DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber,
+                        'A' + InterruptPin - 1,
+                        Gsi,
+                        InterruptLine);
+            }
+
+            return (UCHAR)Gsi;
         }
 
-        return (UCHAR)Gsi;
+        if (!CurrentExtension->Fdo)
+            break;
+
+        CurrentFdoExtension = (PFDO_DEVICE_EXTENSION)CurrentExtension->Fdo->DeviceExtension;
+        if (!CurrentFdoExtension || !CurrentFdoExtension->ParentPdo)
+            break;
+
+        CurrentPin = (UCHAR)(((CurrentPin - 1 + CurrentExtension->PciDevice->SlotNumber.u.bits.DeviceNumber) & 3) + 1);
+        CurrentExtension = CurrentFdoExtension->ParentPdo;
+        Depth++;
     }
 #endif
 
