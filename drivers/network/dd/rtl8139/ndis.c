@@ -26,6 +26,49 @@
 
 ULONG DebugTraceLevel = MIN_TRACE;
 
+static
+NDIS_STATUS
+CopyPacketToTransmitBuffer(
+    IN PNDIS_PACKET Packet,
+    OUT PUCHAR Destination,
+    OUT PULONG TransmitLength)
+{
+    PNDIS_BUFFER CurrentBuffer;
+    PVOID Source;
+    UINT CurrentLength;
+    UINT PacketLength;
+    ULONG BytesCopied = 0;
+
+    NdisGetFirstBufferFromPacketSafe(Packet, &CurrentBuffer, &Source, &CurrentLength, &PacketLength, NormalPagePriority);
+    if (CurrentBuffer == NULL || PacketLength > MAXIMUM_FRAME_SIZE)
+        return NDIS_STATUS_INVALID_LENGTH;
+
+    while (CurrentBuffer != NULL)
+    {
+        if (Source == NULL && CurrentLength != 0)
+            return NDIS_STATUS_RESOURCES;
+        if (BytesCopied > PacketLength || CurrentLength > PacketLength - BytesCopied)
+            return NDIS_STATUS_INVALID_LENGTH;
+
+        if (CurrentLength != 0)
+            RtlCopyMemory(Destination + BytesCopied, Source, CurrentLength);
+        BytesCopied += CurrentLength;
+
+        NdisGetNextBuffer(CurrentBuffer, &CurrentBuffer);
+        if (CurrentBuffer != NULL)
+            NdisQueryBufferSafe(CurrentBuffer, &Source, &CurrentLength, NormalPagePriority);
+    }
+
+    if (BytesCopied != PacketLength)
+        return NDIS_STATUS_INVALID_LENGTH;
+
+    *TransmitLength = max(PacketLength, MINIMUM_FRAME_SIZE);
+    if (PacketLength < *TransmitLength)
+        RtlFillMemory(Destination + PacketLength, *TransmitLength - PacketLength, 0x00);
+
+    return NDIS_STATUS_SUCCESS;
+}
+
 NDIS_STATUS
 NTAPI
 MiniportReset (
@@ -47,23 +90,9 @@ MiniportSend (
 {
     PRTL_ADAPTER adapter = (PRTL_ADAPTER)MiniportAdapterContext;
     NDIS_STATUS status;
-    PSCATTER_GATHER_LIST sgList = NDIS_PER_PACKET_INFO_FROM_PACKET(Packet,
-                                    ScatterGatherListPacketInfo);
     ULONG transmitLength;
     ULONG transmitBuffer;
-    PNDIS_BUFFER firstBuffer;
-    PVOID firstBufferVa;
-    UINT firstBufferLength, totalBufferLength;
-    PUCHAR runtBuffer;
-
-    ASSERT(sgList != NULL);
-
-    ASSERT(sgList->NumberOfElements == 1);
-    ASSERT(sgList->Elements[0].Address.HighPart == 0);
-    ASSERT((sgList->Elements[0].Address.LowPart & 3) == 0);
-    ASSERT(sgList->Elements[0].Length <= MAXIMUM_FRAME_SIZE);
-
-    NDIS_DbgPrint(MAX_TRACE, ("Sending %d byte packet\n", sgList->Elements[0].Length));
+    PUCHAR transmitBufferVa;
 
     NdisAcquireSpinLock(&adapter->Lock);
 
@@ -77,38 +106,21 @@ MiniportSend (
     NDIS_DbgPrint(MAX_TRACE, ("Sending packet on TX desc %d\n", adapter->CurrentTxDesc));
 
     //
-    // If this is a runt, we need to pad it manually for the RTL8139
+    // Keep the packet in descriptor-owned DMA memory until the NIC is done.
+    // Protocol buffers may be fragmented, above 4 GB, or reused as soon as
+    // this serialized send handler returns success.
     //
-    if (sgList->Elements[0].Length < MINIMUM_FRAME_SIZE)
+    transmitBufferVa = adapter->TransmitBuffers + (TRANSMIT_BUFFER_STRIDE * adapter->CurrentTxDesc);
+    status = CopyPacketToTransmitBuffer(Packet, transmitBufferVa, &transmitLength);
+    if (status != NDIS_STATUS_SUCCESS)
     {
-        transmitLength = MINIMUM_FRAME_SIZE;
-        transmitBuffer = adapter->RuntTxBuffersPa.LowPart +
-                  (MINIMUM_FRAME_SIZE * adapter->CurrentTxDesc);
-
-        NdisGetFirstBufferFromPacketSafe(Packet,
-                                         &firstBuffer,
-                                         &firstBufferVa,
-                                         &firstBufferLength,
-                                         &totalBufferLength,
-                                         NormalPagePriority);
-        if (firstBufferVa == NULL)
-        {
-            NDIS_DbgPrint(MIN_TRACE, ("Unable to get buffer from packet\n"));
-            NdisReleaseSpinLock(&adapter->Lock);
-            return NDIS_STATUS_RESOURCES;
-        }
-
-        ASSERT(firstBufferLength == totalBufferLength);
-
-        runtBuffer = adapter->RuntTxBuffers + (MINIMUM_FRAME_SIZE * adapter->CurrentTxDesc);
-        RtlCopyMemory(runtBuffer, firstBufferVa, firstBufferLength);
-        RtlFillMemory(runtBuffer + firstBufferLength, MINIMUM_FRAME_SIZE - firstBufferLength, 0x00);
+        NDIS_DbgPrint(MIN_TRACE, ("Unable to copy packet into transmit buffer (0x%x)\n", status));
+        NdisReleaseSpinLock(&adapter->Lock);
+        return status;
     }
-    else
-    {
-        transmitLength = sgList->Elements[0].Length;
-        transmitBuffer = sgList->Elements[0].Address.LowPart;
-    }
+    transmitBuffer = adapter->TransmitBuffersPa.LowPart + (TRANSMIT_BUFFER_STRIDE * adapter->CurrentTxDesc);
+
+    NDIS_DbgPrint(MAX_TRACE, ("Sending %lu byte packet\n", transmitLength));
 
     status = NICTransmitPacket(adapter, adapter->CurrentTxDesc, transmitBuffer, transmitLength);
     if (status != NDIS_STATUS_SUCCESS)
@@ -139,46 +151,56 @@ MiniportHalt (
     )
 {
     PRTL_ADAPTER adapter = (PRTL_ADAPTER)MiniportAdapterContext;
+    NDIS_STATUS stopStatus;
+    BOOLEAN freeDmaBuffers = TRUE;
 
     ASSERT(adapter != NULL);
 
     //
-    // Interrupts need to stop first
+    // Prevent new interrupt work and drain queued DPCs before resetting the
+    // bus-master engine. A successful reset is the hardware quiescence point.
     //
+    if (adapter->IoBase != NULL)
+        NICDisableInterrupts(adapter);
+
     if (adapter->InterruptRegistered != FALSE)
     {
         NdisMDeregisterInterrupt(&adapter->Interrupt);
+        adapter->InterruptRegistered = FALSE;
+        KeFlushQueuedDpcs();
     }
 
-    //
-    // If we have a mapped IO port range, we can talk to the NIC
-    //
-    if (adapter->IoBase != NULL)
+    if (adapter->IoBase != NULL && adapter->DmaActive)
     {
-        if (adapter->ReceiveBuffer != NULL)
-        {
-            //
-            // Disassociate our shared buffer before freeing it to avoid
-            // NIC-induced memory corruption
-            //
+        stopStatus = NICSoftReset(adapter);
+        if (stopStatus == NDIS_STATUS_SUCCESS)
+            adapter->DmaActive = FALSE;
+        else
+            freeDmaBuffers = FALSE;
+    }
+
+    if (!freeDmaBuffers)
+        NDIS_DbgPrint(MIN_TRACE, ("Unable to stop DMA; preserving common buffers\n"));
+
+    if (adapter->ReceiveBuffer != NULL && freeDmaBuffers)
+    {
+        //
+        // Disassociate our shared buffer before freeing it to avoid
+        // NIC-induced memory corruption
+        //
+        if (adapter->IoBase != NULL)
             NICRemoveReceiveBuffer(adapter);
 
-            NdisMFreeSharedMemory(adapter->MiniportAdapterHandle,
-                                  adapter->ReceiveBufferLength,
-                                  FALSE,
-                                  adapter->ReceiveBuffer,
-                                  adapter->ReceiveBufferPa);
-        }
+        NdisMFreeSharedMemory(adapter->MiniportAdapterHandle, adapter->ReceiveBufferLength, FALSE, adapter->ReceiveBuffer, adapter->ReceiveBufferPa);
+    }
 
-        if (adapter->RuntTxBuffers != NULL)
-        {
-            NdisMFreeSharedMemory(adapter->MiniportAdapterHandle,
-                                  MINIMUM_FRAME_SIZE * TX_DESC_COUNT,
-                                  FALSE,
-                                  adapter->RuntTxBuffers,
-                                  adapter->RuntTxBuffersPa);
-        }
+    if (adapter->TransmitBuffers != NULL && freeDmaBuffers)
+    {
+        NdisMFreeSharedMemory(adapter->MiniportAdapterHandle, TRANSMIT_BUFFER_LENGTH, FALSE, adapter->TransmitBuffers, adapter->TransmitBuffersPa);
+    }
 
+    if (adapter->IoBase != NULL)
+    {
         //
         // Unregister the IO range
         //
@@ -332,6 +354,7 @@ MiniportInitialize (
     if (adapter->IoRangeStart == 0 || adapter->InterruptVector == 0)
     {
         NDIS_DbgPrint(MIN_TRACE, ("Adapter didn't receive enough resources\n"));
+        status = NDIS_STATUS_RESOURCES;
         goto Cleanup;
     }
 
@@ -359,15 +382,26 @@ MiniportInitialize (
         status = NDIS_STATUS_RESOURCES;
         goto Cleanup;
     }
-
-    NdisMAllocateSharedMemory(MiniportAdapterHandle,
-                              MINIMUM_FRAME_SIZE * TX_DESC_COUNT,
-                              FALSE,
-                              (PVOID*)&adapter->RuntTxBuffers,
-                              &adapter->RuntTxBuffersPa);
-    if (adapter->RuntTxBuffers == NULL)
+    if (adapter->ReceiveBufferPa.HighPart != 0 ||
+        adapter->ReceiveBufferPa.LowPart > MAXULONG - (adapter->ReceiveBufferLength - 1))
     {
-        NDIS_DbgPrint(MIN_TRACE, ("Unable to allocate runt TX buffer\n"));
+        NDIS_DbgPrint(MIN_TRACE, ("Receive buffer is outside the RTL8139 DMA range: 0x%I64x\n", adapter->ReceiveBufferPa.QuadPart));
+        status = NDIS_STATUS_RESOURCES;
+        goto Cleanup;
+    }
+
+    NdisMAllocateSharedMemory(MiniportAdapterHandle, TRANSMIT_BUFFER_LENGTH, FALSE, (PVOID*)&adapter->TransmitBuffers, &adapter->TransmitBuffersPa);
+    if (adapter->TransmitBuffers == NULL)
+    {
+        NDIS_DbgPrint(MIN_TRACE, ("Unable to allocate transmit buffers\n"));
+        status = NDIS_STATUS_RESOURCES;
+        goto Cleanup;
+    }
+    if (adapter->TransmitBuffersPa.HighPart != 0 ||
+        adapter->TransmitBuffersPa.LowPart > MAXULONG - (TRANSMIT_BUFFER_LENGTH - 1) ||
+        (adapter->TransmitBuffersPa.LowPart & (sizeof(ULONG) - 1)) != 0)
+    {
+        NDIS_DbgPrint(MIN_TRACE, ("Transmit buffers are outside the RTL8139 DMA range: 0x%I64x\n", adapter->TransmitBuffersPa.QuadPart));
         status = NDIS_STATUS_RESOURCES;
         goto Cleanup;
     }
@@ -456,6 +490,7 @@ MiniportInitialize (
     //
     // Turn on TX and RX now
     //
+    adapter->DmaActive = TRUE;
     status = NICEnableTxRx(adapter);
     if (status != NDIS_STATUS_SUCCESS)
     {
