@@ -146,6 +146,8 @@ typedef struct _FDO_DEVICE_EXTENSION
     COMMON_DEVICE_EXTENSION Common;
     // Entry on device list
     LIST_ENTRY ListEntry;
+    // Owning bridge PDO for a subordinate PCI bus, or NULL for a root bus
+    PPDO_DEVICE_EXTENSION ParentPdo;
     // PCI bus number serviced by this FDO (legacy single-bus view)
     ULONG BusNumber;
     // PCI segment of this root
