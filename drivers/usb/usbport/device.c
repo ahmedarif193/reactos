@@ -2023,7 +2023,7 @@ USBPORT_AllocateUsbAddress(IN PDEVICE_OBJECT FdoDevice)
                 return 32 * ix + BitNumber;
             }
 
-            BitMapIdx <<= 2;
+            BitMapIdx <<= 1;
         }
     }
 
@@ -2058,7 +2058,7 @@ USBPORT_FreeUsbAddress(IN PDEVICE_OBJECT FdoDevice,
                 return;
             }
 
-            BitMapIdx <<= 2;
+            BitMapIdx <<= 1;
             CurrentAddress++;
         }
     }
