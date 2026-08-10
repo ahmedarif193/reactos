@@ -682,6 +682,15 @@ PciAddDevice(
     DeviceExtension->Common.DevicePowerState = PowerDeviceD0;
     DeviceExtension->MsiSupported = TRUE;
 
+    /* A PCI-owned physical device is the bridge PDO for a subordinate bus. */
+    if (PhysicalDeviceObject->DriverObject == DriverObject)
+    {
+        PCOMMON_DEVICE_EXTENSION ParentExtension = (PCOMMON_DEVICE_EXTENSION)PhysicalDeviceObject->DeviceExtension;
+
+        if (ParentExtension && !ParentExtension->IsFDO)
+            DeviceExtension->ParentPdo = (PPDO_DEVICE_EXTENSION)ParentExtension;
+    }
+
     DeviceExtension->Ldo = IoAttachDeviceToDeviceStack(Fdo,
                                                        PhysicalDeviceObject);
 
