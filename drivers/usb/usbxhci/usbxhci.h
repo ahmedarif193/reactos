@@ -116,12 +116,14 @@ typedef struct _XHCI_DEVICE_SLOT {
     ULONG Ep0ContextErrorCount;
     ULONG Ep0TransactionErrorCount;
     UCHAR UsbDeviceAddress;
-    UCHAR PortNumber;
+    UCHAR PortNumber;       /* Downstream port on the parent hub (hub-relative) */
+    UCHAR RootPortNumber;   /* Root-hub port the device chain hangs on */
     ULONG RouteString;
     UCHAR HighestEndpointId;
     PXHCI_ENDPOINT EndpointTable[XHCI_MAX_ENDPOINTS + 1];
     PXHCI_ENDPOINT DeferredEndpointTable[XHCI_MAX_ENDPOINTS + 1];
-    USHORT HubAddress;
+    USHORT HubAddress;      /* USB address of the TT hub for this LS/FS device */
+    USHORT TtPortNumber;    /* Downstream port on the TT hub for split traffic */
     USB_DEVICE_SPEED DeviceSpeed;
     UCHAR HubPortCount;
     USHORT MaxExitLatency;
@@ -129,6 +131,7 @@ typedef struct _XHCI_DEVICE_SLOT {
     BOOLEAN MultiTt;
     BOOLEAN HasTtInfo;
     BOOLEAN IsHub;
+    BOOLEAN HubFieldsConfigured; /* Hub/MTT/MaxPorts/TTT applied via Configure Endpoint */
     volatile LONG Ep0NeedsDequeueReset;
     volatile LONG Ep0NeedsStallReset;    /* Set on stall, cleared by next submit at PASSIVE */
     volatile LONG Ep0StallResetQueued;   /* Prevent duplicate stall-reset workers */
