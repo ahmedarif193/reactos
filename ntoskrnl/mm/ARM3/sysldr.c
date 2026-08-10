@@ -3578,6 +3578,62 @@ MiLookupDataTableEntry(IN PVOID Address)
     return FoundEntry;
 }
 
+BOOLEAN
+NTAPI
+MmIsSystemImageImportingModule(
+    _In_ PVOID ImageBase,
+    _In_ PCUNICODE_STRING ModuleName)
+{
+    PLOAD_IMPORTS LoadedImports;
+    PLDR_DATA_TABLE_ENTRY ImportEntry;
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+    BOOLEAN Found = FALSE;
+    SIZE_T Index;
+
+    PAGED_CODE();
+
+    if (!ImageBase || !ModuleName || !ModuleName->Buffer)
+        return FALSE;
+
+    /* The resource is initialized before the loaded module list becomes usable. */
+    if (!PsLoadedModuleList.Flink || !PsLoadedModuleList.Blink)
+        return FALSE;
+
+    KeEnterCriticalRegion();
+    ExAcquireResourceSharedLite(&PsLoadedModuleResource, TRUE);
+
+    LdrEntry = MiLookupDataTableEntry(ImageBase);
+    if (!LdrEntry)
+        goto Exit;
+
+    /* Unlike PE import-name sections, this loader-owned dependency list survives DriverEntry. */
+    LoadedImports = LdrEntry->LoadedImports;
+    if (!LoadedImports || (LoadedImports == MM_SYSLDR_NO_IMPORTS) || (LoadedImports == MM_SYSLDR_BOOT_LOADED))
+        goto Exit;
+
+    if ((ULONG_PTR)LoadedImports & MM_SYSLDR_SINGLE_ENTRY)
+    {
+        ImportEntry = (PVOID)((ULONG_PTR)LoadedImports & ~MM_SYSLDR_SINGLE_ENTRY);
+        Found = RtlEqualUnicodeString(&ImportEntry->BaseDllName, ModuleName, TRUE);
+        goto Exit;
+    }
+
+    for (Index = 0; Index < LoadedImports->Count; Index++)
+    {
+        ImportEntry = LoadedImports->Entry[Index];
+        if (ImportEntry && RtlEqualUnicodeString(&ImportEntry->BaseDllName, ModuleName, TRUE))
+        {
+            Found = TRUE;
+            break;
+        }
+    }
+
+Exit:
+    ExReleaseResourceLite(&PsLoadedModuleResource);
+    KeLeaveCriticalRegion();
+    return Found;
+}
+
 /* PUBLIC FUNCTIONS ***********************************************************/
 
 /*
