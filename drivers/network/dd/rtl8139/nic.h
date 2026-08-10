@@ -24,6 +24,9 @@
 
 #define MINIMUM_FRAME_SIZE 60
 #define MAXIMUM_FRAME_SIZE 1514
+// RTL8139 transmit start-address registers and buffers are DWORD-aligned.
+#define TRANSMIT_BUFFER_STRIDE ((MAXIMUM_FRAME_SIZE + sizeof(ULONG) - 1) & ~(sizeof(ULONG) - 1))
+#define TRANSMIT_BUFFER_LENGTH (TRANSMIT_BUFFER_STRIDE * TX_DESC_COUNT)
 
 #define DRIVER_VERSION 1
 
@@ -48,6 +51,7 @@ typedef struct _RTL_ADAPTER {
     PUCHAR IoBase;
     NDIS_MINIPORT_INTERRUPT Interrupt;
     BOOLEAN InterruptRegistered;
+    BOOLEAN DmaActive;
 
     UCHAR PermanentMacAddress[IEEE_802_ADDR_LENGTH];
     UCHAR CurrentMacAddress[IEEE_802_ADDR_LENGTH];
@@ -72,8 +76,8 @@ typedef struct _RTL_ADAPTER {
     UCHAR DirtyTxDesc;
     UCHAR CurrentTxDesc;
     BOOLEAN TxFull;
-    PUCHAR RuntTxBuffers;
-    NDIS_PHYSICAL_ADDRESS RuntTxBuffersPa;
+    PUCHAR TransmitBuffers;
+    NDIS_PHYSICAL_ADDRESS TransmitBuffersPa;
 
     ULONG ReceiveOk;
     ULONG TransmitOk;
