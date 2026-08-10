@@ -2,9 +2,11 @@
 spec2def(newdev.dll newdev.spec ADD_IMPORTLIB)
 
 list(APPEND SOURCE
+    driver_cache.c
     newdev.c
     stubs.c
     wizard.c
+    driver_cache.h
     newdev_private.h
     ${CMAKE_CURRENT_BINARY_DIR}/newdev_stubs.c)
 
