@@ -22,6 +22,13 @@ RtlInitializeRangeListPackage(
     VOID
 );
 
+PVOID
+NTAPI
+RtlPcToFileHeader(
+    _In_ PVOID PcValue,
+    _Out_ PVOID *BaseOfImage
+);
+
 #define RTL_FIND_CHAR_IN_UNICODE_STRING_START_AT_END        1
 #define RTL_FIND_CHAR_IN_UNICODE_STRING_COMPLEMENT_CHAR_SET 2
 #define RTL_FIND_CHAR_IN_UNICODE_STRING_CASE_INSENSITIVE    4
