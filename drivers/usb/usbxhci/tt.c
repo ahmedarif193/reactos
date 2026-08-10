@@ -28,8 +28,12 @@ XHCI_EndpointNeedsTt(
     if (!EndpointProperties)
         return FALSE;
 
-    if (EndpointProperties->HubAddr == 0 ||
-        EndpointProperties->HubAddr == USBPORT_NO_HUB_ADDRESS)
+    /* USBPORT resolves the TT hub (nearest high-speed ancestor hub) while
+     * walking the device topology; without one the root port talks to the
+     * device directly and no split transactions are involved. */
+    if (EndpointProperties->TtHubAddr == 0 ||
+        EndpointProperties->TtHubAddr == USBPORT_NO_HUB_ADDRESS ||
+        EndpointProperties->TtPortNumber == 0)
     {
         return FALSE;
     }
@@ -62,7 +66,7 @@ XHCI_ApplyTtInfo(
     }
 
     TtInfo = (ULONG)(HubSlot->SlotId & XHCI_SLOT_TT_SLOT_MASK);
-    TtInfo |= (((ULONG)EndpointProperties->PortNumber << XHCI_SLOT_TT_PORT_SHIFT) &
+    TtInfo |= (((ULONG)EndpointProperties->TtPortNumber << XHCI_SLOT_TT_PORT_SHIFT) &
                XHCI_SLOT_TT_PORT_MASK);
     TtInfo |= (XHCI_GetHubThinkTime(HubSlot) << XHCI_SLOT_TT_THINK_TIME_SHIFT) &
               XHCI_SLOT_TT_THINK_TIME_MASK;
