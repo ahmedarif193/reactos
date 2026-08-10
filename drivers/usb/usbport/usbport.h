@@ -1112,6 +1112,25 @@ USBPORT_RemoveDeviceHandle(
   IN PDEVICE_OBJECT FdoDevice,
   IN PUSBPORT_DEVICE_HANDLE DeviceHandle);
 
+VOID
+NTAPI
+USBPORT_DetachChildDeviceHandles(
+  IN PDEVICE_OBJECT FdoDevice,
+  IN PUSBPORT_DEVICE_HANDLE HubDeviceHandle,
+  IN PUSBPORT_DEVICE_HANDLE NewHubDeviceHandle);
+
+VOID
+NTAPI
+USBPORT_ComputeTopologyProperties(
+  IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
+  IN PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties);
+
+VOID
+NTAPI
+USBPORT_NotifyMiniportRemoveDevice(
+  IN PDEVICE_OBJECT FdoDevice,
+  IN PUSBPORT_DEVICE_HANDLE DeviceHandle);
+
 BOOLEAN
 NTAPI
 USBPORT_ValidateDeviceHandle(

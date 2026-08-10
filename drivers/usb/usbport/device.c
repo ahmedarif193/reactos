@@ -1187,6 +1187,67 @@ USBPORT_RemoveDeviceHandle(IN PDEVICE_OBJECT FdoDevice,
     KeReleaseSpinLock(&FdoExtension->DeviceHandleSpinLock, OldIrql);
 }
 
+VOID
+NTAPI
+USBPORT_DetachChildDeviceHandles(IN PDEVICE_OBJECT FdoDevice,
+                                 IN PUSBPORT_DEVICE_HANDLE HubDeviceHandle,
+                                 IN PUSBPORT_DEVICE_HANDLE NewHubDeviceHandle)
+{
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+
+    /* Children keep a HubDeviceHandle pointer to their parent for the
+     * topology walk; when a hub handle is freed while its descendants are
+     * still alive (their PnP removal happens later), those pointers would
+     * dangle. Repoint them at the replacement handle, or detach them when
+     * the parent simply goes away. Callers hold the DeviceSemaphore, which
+     * also serializes this against the topology walk in USBPORT_OpenPipe. */
+    FdoExtension = FdoDevice->DeviceExtension;
+
+    KeAcquireSpinLock(&FdoExtension->DeviceHandleSpinLock, &OldIrql);
+
+    for (Entry = FdoExtension->DeviceHandleList.Flink; Entry != &FdoExtension->DeviceHandleList; Entry = Entry->Flink)
+    {
+        PUSBPORT_DEVICE_HANDLE Handle = CONTAINING_RECORD(Entry, USBPORT_DEVICE_HANDLE, DeviceHandleLink);
+
+        if (Handle != HubDeviceHandle && Handle->HubDeviceHandle == HubDeviceHandle)
+        {
+            DPRINT1("USBPORT_DetachChildDeviceHandles: repointing child %p (addr %u) from hub %p to %p\n", Handle, Handle->DeviceAddress, HubDeviceHandle, NewHubDeviceHandle);
+            Handle->HubDeviceHandle = NewHubDeviceHandle;
+        }
+    }
+
+    KeReleaseSpinLock(&FdoExtension->DeviceHandleSpinLock, OldIrql);
+}
+
+VOID
+NTAPI
+USBPORT_NotifyMiniportRemoveDevice(IN PDEVICE_OBJECT FdoDevice,
+                                   IN PUSBPORT_DEVICE_HANDLE DeviceHandle)
+{
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    PUSBPORT_REGISTRATION_PACKET Packet;
+    USBPORT_ENDPOINT_PROPERTIES Topology;
+
+    /* Tell the miniport the device at this bus position is gone so it can
+     * release per-device controller state (the xHCI slot). This must come
+     * from the device-lifetime paths, not from endpoint closes: the default
+     * pipe is also closed and rebuilt transiently by USBPORT_ReopenPipe.
+     * Callers hold the DeviceSemaphore, keeping the parent chain walkable. */
+    FdoExtension = FdoDevice->DeviceExtension;
+    Packet = &FdoExtension->MiniPortInterface->Packet;
+
+    if (!Packet->RemoveUsbDevice || DeviceHandle->IsRootHub)
+        return;
+
+    RtlZeroMemory(&Topology, sizeof(Topology));
+    Topology.PortNumber = DeviceHandle->PortNumber;
+    USBPORT_ComputeTopologyProperties(DeviceHandle, &Topology);
+
+    Packet->RemoveUsbDevice(FdoExtension->MiniPortExt, DeviceHandle->DeviceAddress, Topology.RootPortNumber, Topology.RouteString);
+}
+
 BOOLEAN
 NTAPI
 USBPORT_ValidateDeviceHandle(IN PDEVICE_OBJECT FdoDevice,
@@ -1923,6 +1984,7 @@ ErrorExit:
 
     if (IsOpenedPipe)
     {
+        USBPORT_NotifyMiniportRemoveDevice(FdoDevice, DeviceHandle);
         USBPORT_ClosePipe(DeviceHandle, FdoDevice, PipeHandle);
     }
 
@@ -2031,7 +2093,12 @@ USBPORT_InitializeDevice(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
                           FALSE,
                           NULL);
 
-    if (Packet->ResetDevice)
+    /* The miniport ResetDevice callback takes a ROOT port number. For a
+     * device behind an external hub, PortNumber is hub-relative and would
+     * alias an unrelated root-attached slot; those devices get a fresh slot
+     * per enumeration and the hub-port reset was already done by usbhub, so
+     * no controller-side device reset is needed. */
+    if (Packet->ResetDevice && DeviceHandle->HubDeviceHandle && DeviceHandle->HubDeviceHandle->IsRootHub)
     {
         MpStatus = Packet->ResetDevice(FdoExtension->MiniPortExt,
                                        DeviceHandle->PortNumber);
@@ -2647,6 +2714,8 @@ USBPORT_RemoveDevice(IN PDEVICE_OBJECT FdoDevice,
         USBPORT_CloseConfiguration(DeviceHandle, FdoDevice);
     }
 
+    USBPORT_NotifyMiniportRemoveDevice(FdoDevice, DeviceHandle);
+
     USBPORT_ClosePipe(DeviceHandle, FdoDevice, &DeviceHandle->PipeHandle);
 
     if (DeviceHandle->DeviceAddress)
@@ -2688,6 +2757,8 @@ USBPORT_RemoveDevice(IN PDEVICE_OBJECT FdoDevice,
 
         KeReleaseSpinLock(&FdoExtension->TtSpinLock, OldIrql);
     }
+
+    USBPORT_DetachChildDeviceHandles(FdoDevice, DeviceHandle, NULL);
 
     KeReleaseSemaphore(&FdoExtension->DeviceSemaphore,
                        LOW_REALTIME_PRIORITY,
@@ -2926,10 +2997,14 @@ USBPORT_RestoreDevice(IN PDEVICE_OBJECT FdoDevice,
         Status = STATUS_UNSUCCESSFUL;
     }
 
+    USBPORT_NotifyMiniportRemoveDevice(FdoDevice, OldDeviceHandle);
+
     USBPORT_ClosePipe(OldDeviceHandle, FdoDevice, &OldDeviceHandle->PipeHandle);
 
     if (OldDeviceHandle->DeviceAddress != 0)
         USBPORT_FreeUsbAddress(FdoDevice, OldDeviceHandle->DeviceAddress);
+
+    USBPORT_DetachChildDeviceHandles(FdoDevice, OldDeviceHandle, NT_SUCCESS(Status) ? NewDeviceHandle : NULL);
 
     KeReleaseSemaphore(&FdoExtension->DeviceSemaphore,
                        LOW_REALTIME_PRIORITY,
