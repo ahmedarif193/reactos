@@ -168,24 +168,65 @@ Exit:
 
 static
 BOOLEAN
+BuspIsProcessorDevice(
+    _In_ struct acpi_device *Device)
+{
+    if (!Device->pnp.hardware_id)
+        return FALSE;
+
+    return strcmp(Device->pnp.hardware_id, ACPI_PROCESSOR_HID) == 0 ||
+           strcmp(Device->pnp.hardware_id, "ACPI0007") == 0;
+}
+
+static
+BOOLEAN
+BuspGetProcessorUid(
+    _In_ struct acpi_device *Device,
+    _Out_ PULONG Uid)
+{
+    unsigned long long DeviceUid;
+    ACPI_OBJECT ProcessorObject;
+    ACPI_BUFFER Buffer;
+    ACPI_STATUS Status;
+
+    if (Device->pnp.hardware_id && strcmp(Device->pnp.hardware_id, ACPI_PROCESSOR_HID) == 0)
+    {
+        Buffer.Length = sizeof(ProcessorObject);
+        Buffer.Pointer = &ProcessorObject;
+        Status = AcpiEvaluateObject(Device->handle, NULL, NULL, &Buffer);
+        if (ACPI_FAILURE(Status) || ProcessorObject.Type != ACPI_TYPE_PROCESSOR)
+            return FALSE;
+
+        *Uid = ProcessorObject.Processor.ProcId;
+        return TRUE;
+    }
+
+    Status = acpi_evaluate_integer(Device->handle, "_UID", NULL, &DeviceUid);
+    if (ACPI_FAILURE(Status) || DeviceUid > MAXULONG)
+        return FALSE;
+
+    *Uid = (ULONG)DeviceUid;
+    return TRUE;
+}
+
+static
+BOOLEAN
 BuspShouldEnumerateDevice(
     _In_ struct acpi_device *Device,
     _In_ PBUSP_PROCESSOR_UID_SET ProcessorUids)
 {
-    unsigned long long Uid;
-    ACPI_STATUS Status;
+    ULONG Uid;
     ULONG Index;
 
-    if (!ProcessorUids->Valid || !Device->pnp.hardware_id || strcmp(Device->pnp.hardware_id, "ACPI0007") != 0)
+    if (!ProcessorUids->Valid || !BuspIsProcessorDevice(Device))
         return TRUE;
 
-    Status = acpi_evaluate_integer(Device->handle, "_UID", NULL, &Uid);
-    if (ACPI_FAILURE(Status) || Uid > MAXULONG)
+    if (!BuspGetProcessorUid(Device, &Uid))
         return TRUE;
 
     for (Index = 0; Index < ProcessorUids->Count; Index++)
     {
-        if (ProcessorUids->Uids[Index] == (ULONG)Uid)
+        if (ProcessorUids->Uids[Index] == Uid)
             return TRUE;
     }
 
@@ -536,7 +577,7 @@ ACPIEnumerateDevices(PFDO_DEVICE_DATA DeviceExtension)
             {
                 Bus_PlugInDevice(Device, DeviceExtension);
                 Count++;
-                if (!strcmp(Device->pnp.hardware_id, "ACPI0007"))
+                if (BuspIsProcessorDevice(Device))
                     ProcessorCount++;
             }
             else
@@ -561,7 +602,7 @@ ACPIEnumerateDevices(PFDO_DEVICE_DATA DeviceExtension)
         }
     }
     if (ProcessorUids.Valid)
-        DPRINT1("ACPI: processor MADT filter exposed %lu ACPI0007 device(s), skipped %lu inactive firmware slot(s)\n", ProcessorCount, SkippedProcessorCount);
+        DPRINT1("ACPI: processor MADT filter exposed %lu processor device(s), skipped %lu inactive firmware slot(s)\n", ProcessorCount, SkippedProcessorCount);
     DPRINT("acpi device count: %d\n", Count);
     return STATUS_SUCCESS;
 }
