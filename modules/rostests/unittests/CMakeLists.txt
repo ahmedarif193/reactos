@@ -1,5 +1,6 @@
 
 add_subdirectory(interop)
+add_subdirectory(newdev)
 if(ISAPNP_ENABLE)
     add_subdirectory(isapnp)
 endif()
