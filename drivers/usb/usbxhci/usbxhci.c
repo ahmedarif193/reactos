@@ -548,7 +548,6 @@ typedef struct _XHCI_TT_UPDATE_WORK {
     WORK_QUEUE_ITEM Item;
     PXHCI_EXTENSION Extension;
     PXHCI_DEVICE_SLOT Slot;
-    BOOLEAN UpdateChildren;
 } XHCI_TT_UPDATE_WORK, *PXHCI_TT_UPDATE_WORK;
 typedef struct _XHCI_SWENUM_WORK {
     WORK_QUEUE_ITEM Item;
@@ -711,8 +710,6 @@ static VOID XHCI_InitDeviceSlots(PXHCI_EXTENSION Extension);
 static PXHCI_DEVICE_SLOT XHCI_GetSlot(PXHCI_EXTENSION Extension, UCHAR SlotId);
 static MPSTATUS XHCI_AssignSlot(PXHCI_EXTENSION Extension, UCHAR SlotId);
 static ULONG XHCI_MapDeviceSpeed(USB_DEVICE_SPEED Speed);
-static ULONG XHCI_BuildRouteString(PXHCI_EXTENSION Extension,
-                                   PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties);
 static VOID XHCI_BuildErstTable(PXHCI_EXTENSION Extension);
 static VOID XHCI_PrepareDefaultControlContext(PXHCI_EXTENSION Extension,
                                               PXHCI_DEVICE_SLOT Slot,
@@ -761,6 +758,7 @@ static ULONG XHCI_CalculateAverageTrbLength(PUSBPORT_ENDPOINT_PROPERTIES Endpoin
 static MEMORY_CACHING_TYPE XHCI_GetDmaCacheType(PXHCI_EXTENSION Extension);
 static PXHCI_DEVICE_SLOT XHCI_FindSlotByAddress(PXHCI_EXTENSION Extension, USHORT DeviceAddress);
 static PXHCI_DEVICE_SLOT XHCI_FindSlotByPort(PXHCI_EXTENSION Extension, USHORT PortNumber);
+static PXHCI_DEVICE_SLOT XHCI_FindSlotByTopology(PXHCI_EXTENSION Extension, PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties);
 static MPSTATUS XHCI_ConfigureSlotEndpoint(PXHCI_EXTENSION Extension,
                                            PXHCI_DEVICE_SLOT Slot,
                                            PXHCI_ENDPOINT Endpoint,
@@ -793,6 +791,7 @@ static VOID XHCI_HandleEnumerationTransfer(PXHCI_EXTENSION Extension,
                                            PXHCI_ENDPOINT Endpoint,
                                            PXHCI_TRANSFER Transfer);
 static MPSTATUS NTAPI XHCI_MpResetDevice(PVOID MiniPortExtension, USHORT PortNumber);
+static VOID NTAPI XHCI_RemoveUsbDevice(PVOID MiniPortExtension, USHORT DeviceAddress, USHORT RootPortNumber, ULONG RouteString);
 static MPSTATUS XHCI_ResetDeviceOnPort(PXHCI_EXTENSION Extension, USHORT PortNumber);
 static VOID XHCI_DetectHardwareQuirks(PXHCI_EXTENSION Extension);
 static ULONG XHCI_FindExtendedCapability(PXHCI_EXTENSION Extension, UCHAR CapabilityId);
@@ -844,8 +843,6 @@ XHCI_SubmitIsochronousTransfer(
 static MPSTATUS XHCI_UpdateSlotTtInfo(_In_ PXHCI_EXTENSION Extension,
                                       _Inout_ PXHCI_DEVICE_SLOT Slot);
 static VOID NTAPI XHCI_TtUpdateWorker(_In_ PVOID Context);
-static VOID XHCI_UpdateChildrenTtInfo(_Inout_ PXHCI_EXTENSION Extension,
-                                      _In_ PXHCI_DEVICE_SLOT HubSlot);
 
 static
 VOID
@@ -936,6 +933,7 @@ DriverEntry(
     XhciRegPacket.SetEndpointStatus = XHCI_SetEndpointStatus;
     XhciRegPacket.ResetController = XHCI_MpResetController;
     XhciRegPacket.ResetDevice = XHCI_MpResetDevice;
+    XhciRegPacket.RemoveUsbDevice = XHCI_RemoveUsbDevice;
     XhciRegPacket.StartSendOnePacket = XHCI_StartSendOnePacket;
     XhciRegPacket.EndSendOnePacket = XHCI_EndSendOnePacket;
     XhciRegPacket.PassThru = XHCI_PassThru;
@@ -2980,6 +2978,9 @@ XHCI_FindSlotByAddress(
     return XHCI_GetSlot(Extension, (UCHAR)SlotIndex);
 }
 
+/* Finds the device attached DIRECTLY to a root port. Devices behind external
+ * hubs share the root port but have a non-zero route string; matching them
+ * here would let hub-relative port numbers alias root port numbers. */
 static PXHCI_DEVICE_SLOT
 XHCI_FindSlotByPort(
     _In_ PXHCI_EXTENSION Extension,
@@ -2996,7 +2997,39 @@ XHCI_FindSlotByPort(
         if (!Slot->InUse)
             continue;
 
-        if (Slot->PortNumber == (UCHAR)PortNumber)
+        if (Slot->RouteString == 0 && Slot->RootPortNumber == (UCHAR)PortNumber)
+            return Slot;
+    }
+
+    return NULL;
+}
+
+/* Finds a slot by its exact bus position (root port + route string), which
+ * uniquely identifies a device that has no USB address yet. */
+static PXHCI_DEVICE_SLOT
+XHCI_FindSlotByTopology(
+    _In_ PXHCI_EXTENSION Extension,
+    _In_ PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties)
+{
+    ULONG SlotIndex;
+    ULONG RouteString;
+    UCHAR RootPort;
+
+    if (!Extension || !EndpointProperties)
+        return NULL;
+
+    RouteString = EndpointProperties->RouteString & XHCI_SLOT_ROUTE_MASK;
+    RootPort = (UCHAR)(EndpointProperties->RootPortNumber != 0 ? EndpointProperties->RootPortNumber : EndpointProperties->PortNumber);
+    if (RootPort == 0)
+        return NULL;
+
+    for (SlotIndex = 1; SlotIndex <= Extension->MaxSlots && SlotIndex <= XHCI_MAX_SLOTS; SlotIndex++)
+    {
+        PXHCI_DEVICE_SLOT Slot = &Extension->DeviceSlots[SlotIndex];
+        if (!Slot->InUse)
+            continue;
+
+        if (Slot->RouteString == RouteString && Slot->RootPortNumber == RootPort)
             return Slot;
     }
 
@@ -3099,24 +3132,39 @@ XHCI_ConfigureSlotEndpoint(
     if (XhciSlotContextGetLastCtx(SlotCtx) < EndpointId)
         XhciSlotContextSetLastCtx(SlotCtx, EndpointId);
 
-    if (Slot->MultiTt)
-        XhciSlotContextSetMtt(SlotCtx, TRUE);
+    if (Slot->IsHub)
+    {
+        /* Hub-specific slot fields (Hub, MTT, Number of Ports, TTT) are only
+         * evaluated by Configure Endpoint (xHCI 1.2 §6.2.2.2), so fold them
+         * into this command; usbhub fetches the hub descriptor before it
+         * selects a configuration, which opens the status-change pipe here
+         * before any downstream device is addressed. */
+        ULONG HubTtInfo;
+
+        XhciSlotContextSetHub(SlotCtx, TRUE);
+        XhciSlotContextSetMtt(SlotCtx, Slot->MultiTt);
+        if (Slot->HubPortCount != 0)
+            XhciSlotContextSetMaxPorts(SlotCtx, Slot->HubPortCount);
+        if (Slot->MaxExitLatency)
+            XhciSlotContextSetMaxExitLatency(SlotCtx, Slot->MaxExitLatency);
+
+        HubTtInfo = SlotCtx->TtInfo & ~(XHCI_SLOT_TT_SLOT_MASK | XHCI_SLOT_TT_PORT_MASK | XHCI_SLOT_TT_THINK_TIME_MASK);
+        if (Slot->HasTtInfo)
+            HubTtInfo |= ((ULONG)(Slot->TtThinkTime & 0x3) << XHCI_SLOT_TT_THINK_TIME_SHIFT) & XHCI_SLOT_TT_THINK_TIME_MASK;
+        SlotCtx->TtInfo = HubTtInfo;
+    }
     else
+    {
         XhciSlotContextSetMtt(SlotCtx, FALSE);
+    }
 
     if (XHCI_EndpointNeedsTt(&Endpoint->EndpointProperties))
     {
-        PXHCI_DEVICE_SLOT HubSlot = NULL;
+        PXHCI_DEVICE_SLOT HubSlot;
 
-        if (Extension &&
-            Endpoint->EndpointProperties.HubAddr != USBPORT_NO_HUB_ADDRESS &&
-            Endpoint->EndpointProperties.HubAddr != 0)
-        {
-            HubSlot = XHCI_FindSlotByAddress(Extension,
-                                             Endpoint->EndpointProperties.HubAddr);
-            if (HubSlot && !HubSlot->InUse)
-                HubSlot = NULL;
-        }
+        HubSlot = XHCI_FindSlotByAddress(Extension, Endpoint->EndpointProperties.TtHubAddr);
+        if (HubSlot && !HubSlot->InUse)
+            HubSlot = NULL;
 
         XHCI_ApplyTtInfo(&Endpoint->EndpointProperties, HubSlot, SlotCtx);
     }
@@ -3256,6 +3304,8 @@ XHCI_ConfigureSlotEndpoint(
     }
 
     Slot->Configured = TRUE;
+    if (Slot->IsHub)
+        Slot->HubFieldsConfigured = TRUE;
     if (Slot->HighestEndpointId < EndpointId)
         Slot->HighestEndpointId = EndpointId;
 
@@ -4291,13 +4341,19 @@ XHCI_UpdateSlotTtInfo(
     PXHCI_SLOT_CONTEXT SlotCtx;
     PXHCI_SLOT_CONTEXT ActiveSlotCtx;
     ULONG NewTtInfo;
-    BOOLEAN IsLsFsDevice;
+    MPSTATUS Status;
 
     if (!Extension || !Slot || !Slot->InUse)
         return MP_STATUS_ERROR;
 
     if (Extension->FatalError || Extension->StoppingOrRemoved)
         return MP_STATUS_HW_ERROR;
+
+    /* TT and route fields of non-hub slots are Address Device-time state the
+     * xHC never re-evaluates; only the hub-specific slot fields may change
+     * later, and only through Configure Endpoint (xHCI 1.2 §6.2.2.2). */
+    if (!Slot->IsHub)
+        return MP_STATUS_SUCCESS;
 
     InputCtxBase = Slot->InputContext.VirtualAddress;
     DeviceCtxBase = Slot->DeviceContext.VirtualAddress;
@@ -4313,75 +4369,25 @@ XHCI_UpdateSlotTtInfo(
     SlotCtx = XHCI_GetInputSlotContextVa(Extension, InputCtxBase);
     RtlCopyMemory(SlotCtx, ActiveSlotCtx, Extension->ContextSize);
 
-    IsLsFsDevice = (Slot->DeviceSpeed == UsbLowSpeed ||
-                    Slot->DeviceSpeed == UsbFullSpeed);
+    XhciSlotContextSetHub(SlotCtx, TRUE);
+    XhciSlotContextSetMtt(SlotCtx, Slot->MultiTt);
+    if (Slot->HubPortCount != 0)
+        XhciSlotContextSetMaxPorts(SlotCtx, Slot->HubPortCount);
+    if (Slot->MaxExitLatency)
+        XhciSlotContextSetMaxExitLatency(SlotCtx, Slot->MaxExitLatency);
 
-    if (Slot->IsHub)
-    {
-        XhciSlotContextSetHub(SlotCtx, TRUE);
-        XhciSlotContextSetMtt(SlotCtx, Slot->MultiTt);
-        if (Slot->HubPortCount != 0)
-            XhciSlotContextSetMaxPorts(SlotCtx, Slot->HubPortCount);
-        if (Slot->MaxExitLatency)
-            XhciSlotContextSetMaxExitLatency(SlotCtx, Slot->MaxExitLatency);
+    NewTtInfo = SlotCtx->TtInfo & ~(XHCI_SLOT_TT_SLOT_MASK | XHCI_SLOT_TT_PORT_MASK | XHCI_SLOT_TT_THINK_TIME_MASK);
+    if (Slot->HasTtInfo)
+        NewTtInfo |= ((ULONG)(Slot->TtThinkTime & 0x3) << XHCI_SLOT_TT_THINK_TIME_SHIFT) & XHCI_SLOT_TT_THINK_TIME_MASK;
+    SlotCtx->TtInfo = NewTtInfo;
 
-        NewTtInfo = SlotCtx->TtInfo;
-        NewTtInfo &= ~(XHCI_SLOT_TT_SLOT_MASK |
-                       XHCI_SLOT_TT_PORT_MASK |
-                       XHCI_SLOT_TT_THINK_TIME_MASK);
-        if (Slot->HasTtInfo)
-        {
-            NewTtInfo |= ((ULONG)(Slot->TtThinkTime & 0x3) << XHCI_SLOT_TT_THINK_TIME_SHIFT);
-        }
-        SlotCtx->TtInfo = NewTtInfo;
-    }
-    else if (IsLsFsDevice)
-    {
-        PXHCI_DEVICE_SLOT HubSlot = NULL;
-        USBPORT_ENDPOINT_PROPERTIES Props;
+    DPRINT1("usbxhci: ConfigEp hub slot %u mtt=%u ports=%u ttt=%u maxlat=%u\n", Slot->SlotId, Slot->MultiTt ? 1 : 0, Slot->HubPortCount, Slot->TtThinkTime, Slot->MaxExitLatency);
 
-        if (Slot->HubAddress != USBPORT_NO_HUB_ADDRESS && Slot->HubAddress != 0)
-            HubSlot = XHCI_FindSlotByAddress(Extension, Slot->HubAddress);
+    Status = XHCI_SendCommand(Extension, XHCI_TRB_TYPE_CONFIG_EP, Slot->InputContext.PhysicalAddress.QuadPart, 0, XHCI_COMMAND_SLOT_FIELD(Slot->SlotId), XHCI_COMMAND_TIMEOUT_MS, FALSE, NULL, NULL);
+    if (Status == MP_STATUS_SUCCESS)
+        Slot->HubFieldsConfigured = TRUE;
 
-        if (!HubSlot || !HubSlot->InUse)
-            return MP_STATUS_ERROR;
-
-        RtlZeroMemory(&Props, sizeof(Props));
-        Props.DeviceSpeed = Slot->DeviceSpeed;
-        Props.HubAddr = Slot->HubAddress;
-        Props.PortNumber = Slot->PortNumber;
-
-        XhciSlotContextSetMtt(SlotCtx, FALSE);
-
-        NewTtInfo = SlotCtx->TtInfo;
-        NewTtInfo &= ~(XHCI_SLOT_TT_SLOT_MASK |
-                       XHCI_SLOT_TT_PORT_MASK |
-                       XHCI_SLOT_TT_THINK_TIME_MASK);
-        SlotCtx->TtInfo = NewTtInfo;
-        XHCI_ApplyTtInfo(&Props, HubSlot, SlotCtx);
-    }
-    else
-    {
-        return MP_STATUS_SUCCESS;
-    }
-
-    DPRINT1("usbxhci: EvalCtx slot %u hub=%u mtt=%u ports=%u ttl=%u maxlat=%u\n",
-            Slot->SlotId,
-            Slot->IsHub ? 1 : 0,
-            Slot->MultiTt ? 1 : 0,
-            Slot->HubPortCount,
-            Slot->TtThinkTime,
-            Slot->MaxExitLatency);
-
-    return XHCI_SendCommand(Extension,
-                            XHCI_TRB_TYPE_EVAL_CTX,
-                            Slot->InputContext.PhysicalAddress.QuadPart,
-                            0,
-                            XHCI_COMMAND_SLOT_FIELD(Slot->SlotId),
-                            XHCI_COMMAND_TIMEOUT_MS,
-                            FALSE,
-                            NULL,
-                            NULL);
+    return Status;
 }
 
 static VOID NTAPI
@@ -4396,8 +4402,6 @@ XHCI_TtUpdateWorker(
 
     Extension = Work->Extension;
     XHCI_UpdateSlotTtInfo(Work->Extension, Work->Slot);
-    if (Work->UpdateChildren && Work->Slot && Work->Slot->IsHub)
-        XHCI_UpdateChildrenTtInfo(Work->Extension, Work->Slot);
     XHCI_DereferenceControllerWorker(Extension);
     ExFreePoolWithTag(Work, XHCI_TAG);
 }
@@ -4611,31 +4615,6 @@ Done:
     if (Extension)
         InterlockedDecrement(&Extension->SwEnumWorkerCount);
     ExFreePoolWithTag(Work, XHCI_TAG);
-}
-
-static VOID
-XHCI_UpdateChildrenTtInfo(
-    _Inout_ PXHCI_EXTENSION Extension,
-    _In_ PXHCI_DEVICE_SLOT HubSlot)
-{
-    ULONG SlotIndex;
-
-    if (!Extension || !HubSlot || !HubSlot->InUse)
-        return;
-
-    for (SlotIndex = 1; SlotIndex <= Extension->MaxSlots && SlotIndex <= XHCI_MAX_SLOTS; SlotIndex++)
-    {
-        PXHCI_DEVICE_SLOT Slot = &Extension->DeviceSlots[SlotIndex];
-
-        if (!Slot->InUse || Slot->IsHub)
-            continue;
-
-        if (Slot->HubAddress == HubSlot->UsbDeviceAddress &&
-            (Slot->DeviceSpeed == UsbLowSpeed || Slot->DeviceSpeed == UsbFullSpeed))
-        {
-            XHCI_UpdateSlotTtInfo(Extension, Slot);
-        }
-    }
 }
 
 typedef struct _XHCI_EP0_UPDATE_WORK {
@@ -4865,45 +4844,16 @@ XHCI_HandleEnumerationTransfer(
                 {
                     Endpoint->Slot->IsHub = TRUE;
 
-                    BOOLEAN NewMultiTt =
-                        (Endpoint->EndpointProperties.DeviceSpeed == UsbHighSpeed &&
-                         DevDesc->bDeviceProtocol == 2);
-                    BOOLEAN NeedsUpdate = (Endpoint->Slot->MultiTt != NewMultiTt);
-
-                    Endpoint->Slot->MultiTt = NewMultiTt;
-                    if (NeedsUpdate)
-                    {
-                        if (KeGetCurrentIrql() <= PASSIVE_LEVEL)
-                        {
-                            XHCI_UpdateSlotTtInfo(Extension, Endpoint->Slot);
-                        }
-                        else
-                        {
-                            PXHCI_TT_UPDATE_WORK Work =
-                                ExAllocatePoolWithTag(NonPagedPool,
-                                                      sizeof(*Work),
-                                                      XHCI_TAG);
-                            if (Work)
-                            {
-                                if (!XHCI_ReferenceControllerWorker(Extension))
-                                {
-                                    ExFreePoolWithTag(Work, XHCI_TAG);
-                                }
-                                else
-                                {
-                                    Work->Extension = Extension;
-                                    Work->Slot = Endpoint->Slot;
-                                    Work->UpdateChildren = FALSE;
-                                    ExInitializeWorkItem(&Work->Item, XHCI_TtUpdateWorker, Work);
-                                    ExQueueWorkItem(&Work->Item, DelayedWorkQueue);
-                                }
-                            }
-                        }
-                    }
+                    /* Multi-TT hubs (bDeviceProtocol == 2) power up in the
+                     * single-TT alternate setting 0 and usbhub never selects
+                     * the multi-TT interface, so the MTT flag must stay clear
+                     * to match the hub's operating mode. The Hub flag itself
+                     * is applied by the next Configure Endpoint command. */
+                    Endpoint->Slot->MultiTt = FALSE;
                 }
             }
             else if (DescriptorType == USB_20_HUB_DESCRIPTOR_TYPE &&
-                     Endpoint->EndpointProperties.DeviceSpeed == UsbHighSpeed &&
+                     (Endpoint->EndpointProperties.DeviceSpeed == UsbHighSpeed || Endpoint->EndpointProperties.DeviceSpeed == UsbFullSpeed) &&
                      BufferLength >= 5)
             {
                 USHORT HubChars;
@@ -4914,8 +4864,10 @@ XHCI_HandleEnumerationTransfer(
                 RtlCopyMemory(&HubChars, Buffer + 3, sizeof(HubChars));
                 ThinkTime = (UCHAR)((HubChars >> 5) & 0x3);
 
-                if (Endpoint->Slot->HasTtInfo == FALSE ||
-                    Endpoint->Slot->TtThinkTime != ThinkTime)
+                /* Only high-speed hubs contain Transaction Translators; a
+                 * full-speed hub still needs Number of Ports in its context. */
+                if (Endpoint->EndpointProperties.DeviceSpeed == UsbHighSpeed &&
+                    (Endpoint->Slot->HasTtInfo == FALSE || Endpoint->Slot->TtThinkTime != ThinkTime))
                 {
                     Endpoint->Slot->TtThinkTime = ThinkTime;
                     Endpoint->Slot->HasTtInfo = TRUE;
@@ -4928,22 +4880,20 @@ XHCI_HandleEnumerationTransfer(
                     NeedsUpdate = TRUE;
                 }
 
-                if (NeedsUpdate)
+                /* The recorded values ride the next Configure Endpoint (the
+                 * status-change pipe open during SelectConfiguration); a
+                 * dedicated command is only needed when the hub descriptor
+                 * shows up after the hub slot was already configured. */
+                if (NeedsUpdate && Endpoint->Slot->HubFieldsConfigured)
                 {
-                    DPRINT1("usbxhci: HS hub descriptor portcnt=%u think=%u\n",
-                            Endpoint->Slot->HubPortCount,
-                            Endpoint->Slot->TtThinkTime);
+                    DPRINT1("usbxhci: late HS hub descriptor portcnt=%u think=%u\n", Endpoint->Slot->HubPortCount, Endpoint->Slot->TtThinkTime);
                     if (KeGetCurrentIrql() <= PASSIVE_LEVEL)
                     {
                         XHCI_UpdateSlotTtInfo(Extension, Endpoint->Slot);
-                        XHCI_UpdateChildrenTtInfo(Extension, Endpoint->Slot);
                     }
                     else
                     {
-                        PXHCI_TT_UPDATE_WORK Work =
-                            ExAllocatePoolWithTag(NonPagedPool,
-                                                  sizeof(*Work),
-                                                  XHCI_TAG);
+                        PXHCI_TT_UPDATE_WORK Work = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Work), XHCI_TAG);
                         if (Work)
                         {
                             if (!XHCI_ReferenceControllerWorker(Extension))
@@ -4954,7 +4904,6 @@ XHCI_HandleEnumerationTransfer(
                             {
                                 Work->Extension = Extension;
                                 Work->Slot = Endpoint->Slot;
-                                Work->UpdateChildren = TRUE;
                                 ExInitializeWorkItem(&Work->Item, XHCI_TtUpdateWorker, Work);
                                 ExQueueWorkItem(&Work->Item, DelayedWorkQueue);
                             }
@@ -4986,7 +4935,7 @@ XHCI_HandleEnumerationTransfer(
                     NeedsUpdate = TRUE;
                 }
 
-                if (NeedsUpdate)
+                if (NeedsUpdate && Endpoint->Slot->HubFieldsConfigured)
                 {
                     if (KeGetCurrentIrql() <= PASSIVE_LEVEL)
                     {
@@ -4994,10 +4943,7 @@ XHCI_HandleEnumerationTransfer(
                     }
                     else
                     {
-                        PXHCI_TT_UPDATE_WORK Work =
-                            ExAllocatePoolWithTag(NonPagedPool,
-                                                  sizeof(*Work),
-                                                  XHCI_TAG);
+                        PXHCI_TT_UPDATE_WORK Work = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Work), XHCI_TAG);
                         if (Work)
                         {
                             if (!XHCI_ReferenceControllerWorker(Extension))
@@ -5008,7 +4954,6 @@ XHCI_HandleEnumerationTransfer(
                             {
                                 Work->Extension = Extension;
                                 Work->Slot = Endpoint->Slot;
-                                Work->UpdateChildren = FALSE;
                                 ExInitializeWorkItem(&Work->Item, XHCI_TtUpdateWorker, Work);
                                 ExQueueWorkItem(&Work->Item, DelayedWorkQueue);
                             }
@@ -5131,6 +5076,65 @@ XHCI_MpResetDevice(
     }
 
     return XHCI_ResetDeviceOnPort(Extension, PortNumber);
+}
+
+static VOID NTAPI
+XHCI_RemoveUsbDevice(
+    _In_ PVOID MiniPortExtension,
+    _In_ USHORT DeviceAddress,
+    _In_ USHORT RootPortNumber,
+    _In_ ULONG RouteString)
+{
+    PXHCI_EXTENSION Extension = MiniPortExtension;
+    PXHCI_DEVICE_SLOT Slot = NULL;
+    MPSTATUS Status;
+
+    if (!Extension || Extension->FatalError || Extension->StoppingOrRemoved)
+        return;
+
+    /*
+     * USBPORT reports that the device at this bus position is gone (removed,
+     * restored, or its enumeration failed). Release the xHC slot so the
+     * position can be re-enumerated with a fresh slot; only root-port
+     * disconnects are swept by the PORTSC change handler, so without this a
+     * device unplugged from an EXTERNAL hub port would leak its slot and
+     * poison topology lookups for the next device on that hub port.
+     */
+    if (DeviceAddress != 0)
+        Slot = XHCI_FindSlotByAddress(Extension, DeviceAddress);
+
+    if (!Slot && RootPortNumber != 0)
+    {
+        ULONG SlotIndex;
+        ULONG Route = RouteString & XHCI_SLOT_ROUTE_MASK;
+
+        /* Never-addressed device (failed enumeration): identify the slot by
+         * bus position, and only take one that also never got an address so
+         * a replacement device's live slot at the same position is spared. */
+        for (SlotIndex = 1; SlotIndex <= Extension->MaxSlots && SlotIndex <= XHCI_MAX_SLOTS; SlotIndex++)
+        {
+            PXHCI_DEVICE_SLOT Candidate = &Extension->DeviceSlots[SlotIndex];
+
+            if (Candidate->InUse && Candidate->UsbDeviceAddress == 0 && Candidate->RouteString == Route && Candidate->RootPortNumber == (UCHAR)RootPortNumber)
+            {
+                Slot = Candidate;
+                break;
+            }
+        }
+    }
+
+    if (!Slot || !Slot->InUse || Slot->DisablePending)
+        return;
+
+    Slot->DisablePending = TRUE;
+    DPRINT1("usbxhci: device removal, disabling slot %u (addr %u route %05lx root port %u)\n", Slot->SlotId, DeviceAddress, Slot->RouteString, Slot->RootPortNumber);
+
+    Status = XHCI_SendCommand(Extension, XHCI_TRB_TYPE_DISABLE_SLOT, 0, 0, XHCI_COMMAND_SLOT_FIELD(Slot->SlotId), XHCI_COMMAND_TIMEOUT_MS, FALSE, NULL, NULL);
+    if (Status != MP_STATUS_SUCCESS)
+    {
+        DPRINT1("usbxhci: removal disable slot %u failed status=%lu\n", Slot->SlotId, Status);
+        Slot->DisablePending = FALSE;
+    }
 }
 
 static UCHAR
@@ -6160,6 +6164,9 @@ XHCI_FinalizeDisableSlot(
     Slot->DisablePending = FALSE;
     InterlockedExchange(&Slot->DetachPending, 0);
     Slot->PortNumber = 0;
+    Slot->RootPortNumber = 0;
+    Slot->RouteString = 0;
+    Slot->HubFieldsConfigured = FALSE;
     Slot->HighestEndpointId = 1;
     XHCI_UpdateDeviceAddressMap(Extension, Slot, 0);
     RtlZeroMemory(Slot->EndpointTable, sizeof(Slot->EndpointTable));
@@ -6430,13 +6437,19 @@ XHCI_HandlePortChange(
      */
     if ((PortSc & XHCI_PORTSC_CCS) == 0)
     {
-        Slot = XHCI_FindSlotByPort(Extension, PortId);
-        if (Slot && Slot->InUse)
+        ULONG SlotIndex;
+
+        for (SlotIndex = 1; SlotIndex <= Extension->MaxSlots && SlotIndex <= XHCI_MAX_SLOTS; SlotIndex++)
         {
+            Slot = &Extension->DeviceSlots[SlotIndex];
+            if (!Slot->InUse || Slot->RootPortNumber != (UCHAR)PortId)
+                continue;
+
             InterlockedExchange(&Slot->DetachPending, 1);
-            DPRINT1("usbxhci: port %u disconnect, deferring disable of slot %u\n",
+            DPRINT1("usbxhci: root port %u disconnect, deferring disable of slot %u (route %05lx)\n",
                     PortId,
-                    Slot->SlotId);
+                    Slot->SlotId,
+                    Slot->RouteString);
         }
     }
 
@@ -7596,9 +7609,12 @@ XHCI_AssignSlot(
     Slot->Ep0RingDequeueIndex = 0;
     Slot->UsbDeviceAddress = 0;
     Slot->PortNumber = 0;
+    Slot->RootPortNumber = 0;
+    Slot->RouteString = 0;
     Slot->HighestEndpointId = 1;
     RtlZeroMemory(Slot->EndpointTable, sizeof(Slot->EndpointTable));
     Slot->HubAddress = 0;
+    Slot->TtPortNumber = 0;
     Slot->DeviceSpeed = UsbLowSpeed;
     Slot->HubPortCount = 0;
     Slot->MaxExitLatency = 0;
@@ -7606,6 +7622,7 @@ XHCI_AssignSlot(
     Slot->MultiTt = FALSE;
     Slot->HasTtInfo = FALSE;
     Slot->IsHub = FALSE;
+    Slot->HubFieldsConfigured = FALSE;
     KeInitializeEvent(&Slot->Ep0StallResetEvent, NotificationEvent, TRUE);
     InterlockedExchange(&Slot->Ep0NeedsStallReset, 0);
     InterlockedExchange(&Slot->Ep0StallResetQueued, 0);
@@ -7843,52 +7860,6 @@ XHCI_GetEndpointState(
     }
 }
 
-static ULONG
-XHCI_BuildRouteString(
-    _In_ PXHCI_EXTENSION Extension,
-    _In_ PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties)
-{
-    ULONG Route;
-
-    if (!EndpointProperties)
-        return 0;
-
-    /*
-     * Root-port devices have a Route String of 0.
-     * Devices behind hubs inherit their parent's route string and append the
-     * downstream port number (one nibble per tier, up to five tiers).
-     */
-    if (EndpointProperties->HubAddr == USBPORT_NO_HUB_ADDRESS ||
-        EndpointProperties->HubAddr == 0)
-    {
-        return 0;
-    }
-
-    if (!Extension)
-        return 0;
-
-    PXHCI_DEVICE_SLOT HubSlot =
-        XHCI_FindSlotByAddress(Extension, EndpointProperties->HubAddr);
-    if (!HubSlot || !HubSlot->InUse)
-    {
-        DPRINT1("usbxhci: missing hub slot for address %u\n",
-                EndpointProperties->HubAddr);
-        return (ULONG)(EndpointProperties->PortNumber & 0xF);
-    }
-
-    Route = HubSlot->RouteString & 0xFFFFF;
-    if ((Route & 0xF0000) != 0)
-    {
-        DPRINT1("usbxhci: route depth overflow for hub addr %u\n",
-                EndpointProperties->HubAddr);
-        return Route;
-    }
-
-    Route <<= 4;
-    Route |= (EndpointProperties->PortNumber & 0xF);
-    return Route & 0xFFFFF;
-}
-
 static VOID
 XHCI_BuildErstTable(
     _Inout_ PXHCI_EXTENSION Extension)
@@ -7932,6 +7903,7 @@ XHCI_PrepareDefaultControlContext(
     ULONG SpeedCode;
     ULONG MaxPacketSize;
     ULONG RouteString;
+    USHORT RootPort;
 
     if (!Slot)
         return;
@@ -7996,16 +7968,30 @@ XHCI_PrepareDefaultControlContext(
     SlotCtx = XHCI_GetInputSlotContextVa(Extension, InputCtxBase);
 
     /*
+     * The route string and the root-hub port come from USBPORT's topology
+     * walk. Devices attached directly to a root port have a route of 0; a
+     * device behind external hubs is addressed by one 4-bit port nibble per
+     * hub tier, all hanging off RootPortNumber.
+     */
+    RouteString = EndpointProperties->RouteString & XHCI_SLOT_ROUTE_MASK;
+    RootPort = EndpointProperties->RootPortNumber != 0 ?
+               EndpointProperties->RootPortNumber :
+               EndpointProperties->PortNumber;
+
+    /*
      * Prefer the actual negotiated link speed from the xHCI port status
      * register over the logical USB_DEVICE_SPEED reported by USBPORT.
      * This lets us correctly distinguish SuperSpeed vs High-Speed even
      * when the hub/port stack only reports "high speed" for USB 3.x.
+     * Only root-attached devices can be sniffed this way; for devices
+     * behind external hubs PORTSC describes the hub's upstream link, so
+     * their speed must come from the parent hub's port status instead.
      */
     SpeedCode = 0;
-    if (Extension && EndpointProperties->PortNumber > 0)
+    if (Extension && RouteString == 0 && RootPort > 0)
     {
         volatile ULONG *PortStatusReg =
-            XHCI_GetPortStatusRegister(Extension, EndpointProperties->PortNumber);
+            XHCI_GetPortStatusRegister(Extension, RootPort);
         if (PortStatusReg)
         {
             ULONG PortValue = XHCI_READ_REGISTER_ULONG(PortStatusReg);
@@ -8019,44 +8005,45 @@ XHCI_PrepareDefaultControlContext(
 
     if (SpeedCode == 0)
         SpeedCode = XHCI_MapDeviceSpeed(EndpointProperties->DeviceSpeed);
-    RouteString = XHCI_BuildRouteString(Extension, EndpointProperties);
     XhciSlotContextSetRoute(SlotCtx, RouteString);
     XhciSlotContextSetSpeed(SlotCtx, SpeedCode);
-    XhciSlotContextSetHub(SlotCtx,
-                          (EndpointProperties->HubAddr != USBPORT_NO_HUB_ADDRESS &&
-                           EndpointProperties->HubAddr != 0));
-    XhciSlotContextSetMtt(SlotCtx, Slot->MultiTt);
+    /* The Hub flag means "this device is a hub" and is normally applied
+     * later via Configure Endpoint once the hub descriptor is seen; keep it
+     * on re-addressing when the slot is already known to be a hub. */
+    XhciSlotContextSetHub(SlotCtx, Slot->IsHub);
+    XhciSlotContextSetMtt(SlotCtx, Slot->IsHub && Slot->MultiTt);
     XhciSlotContextSetLastCtx(SlotCtx, 1);
-    XhciSlotContextSetRootPort(SlotCtx, EndpointProperties->PortNumber & 0xFF);
+    XhciSlotContextSetRootPort(SlotCtx, RootPort & 0xFF);
     if (Slot->IsHub && Slot->HubPortCount)
         XhciSlotContextSetMaxPorts(SlotCtx, Slot->HubPortCount);
     if (Slot->MaxExitLatency)
         XhciSlotContextSetMaxExitLatency(SlotCtx, Slot->MaxExitLatency);
     Slot->PortNumber = (UCHAR)EndpointProperties->PortNumber;
+    Slot->RootPortNumber = (UCHAR)RootPort;
     Slot->RouteString = RouteString;
-    Slot->HubAddress = EndpointProperties->HubAddr;
+    Slot->HubAddress = EndpointProperties->TtHubAddr;
+    Slot->TtPortNumber = EndpointProperties->TtPortNumber;
     Slot->DeviceSpeed = EndpointProperties->DeviceSpeed;
 
     if (XHCI_EndpointNeedsTt(EndpointProperties))
     {
         PXHCI_DEVICE_SLOT HubSlot = NULL;
 
-        if (Extension &&
-            EndpointProperties->HubAddr != USBPORT_NO_HUB_ADDRESS &&
-            EndpointProperties->HubAddr != 0)
+        HubSlot = XHCI_FindSlotByAddress(Extension, EndpointProperties->TtHubAddr);
+        if (!HubSlot || !HubSlot->InUse)
         {
-            HubSlot = XHCI_FindSlotByAddress(Extension,
-                                             EndpointProperties->HubAddr);
-            if (!HubSlot || !HubSlot->InUse)
-            {
-                DPRINT1("usbxhci: no TT hub slot for addr %u (port %u)\n",
-                        EndpointProperties->HubAddr,
-                        EndpointProperties->PortNumber);
-                HubSlot = NULL;
-            }
+            DPRINT1("usbxhci: no TT hub slot for addr %u (tt port %u)\n", EndpointProperties->TtHubAddr, EndpointProperties->TtPortNumber);
+            HubSlot = NULL;
         }
 
         XHCI_ApplyTtInfo(EndpointProperties, HubSlot, SlotCtx);
+    }
+    else if (Slot->IsHub && Slot->HasTtInfo)
+    {
+        /* Re-addressed high-speed hub: keep its TT Think Time */
+        SlotCtx->TtInfo = ((ULONG)(Slot->TtThinkTime & 0x3) <<
+                           XHCI_SLOT_TT_THINK_TIME_SHIFT) &
+                          XHCI_SLOT_TT_THINK_TIME_MASK;
     }
     else
     {
@@ -8173,6 +8160,7 @@ XHCI_AddressDeviceSlot(
     UCHAR SlotId;
     ULONG Attempt;
     ULONG DelayMs;
+    USHORT CheckPort;
     LARGE_INTEGER Interval;
 
     /*
@@ -8194,27 +8182,47 @@ XHCI_AddressDeviceSlot(
     if (KeGetCurrentIrql() != PASSIVE_LEVEL)
         return MP_STATUS_FAILURE;
 
+    /* A low-/full-speed device below an external hub is addressed with TT
+     * fields referencing the translating hub's slot; the xHC requires that
+     * slot to carry the Hub flag or ADDRESS_DEVICE fails with a parameter
+     * error. The flag normally lands when the hub's status-change pipe is
+     * configured; this covers a child racing ahead of that command. */
+    if (XHCI_EndpointNeedsTt(EndpointProperties))
+    {
+        PXHCI_DEVICE_SLOT TtHubSlot = XHCI_FindSlotByAddress(Extension, EndpointProperties->TtHubAddr);
+
+        if (TtHubSlot && TtHubSlot->InUse && TtHubSlot->IsHub && !TtHubSlot->HubFieldsConfigured)
+        {
+            DPRINT1("usbxhci: configuring hub slot %u before addressing its TT child\n", TtHubSlot->SlotId);
+            XHCI_UpdateSlotTtInfo(Extension, TtHubSlot);
+        }
+    }
+
     SlotId = Slot->SlotId;
     DelayMs = ADDR_DEV_INITIAL_DELAY_MS;
 
     /*
-     * Verify the port is enabled before issuing ADDRESS_DEVICE.
+     * Verify the root port is enabled before issuing ADDRESS_DEVICE.
      * The hub layer waits for reset completion before USBPORT asks the
      * miniport to address the device, so PED should already be set when we
      * get here. This check is a safety net.
+     *
+     * For a device behind an external hub only the chain's root port is
+     * visible in PORTSC (the hub's upstream link); the downstream port state
+     * lives in the hub and was already validated by usbhub.
      *
      * If PED=0, the device failed to enumerate at the negotiated speed and
      * ADDRESS_DEVICE will fail with USB_TRANSACTION_ERROR. Fail early with
      * a clear error message rather than attempting the command.
      */
-    if (EndpointProperties->PortNumber > 0 &&
-        EndpointProperties->PortNumber <= Extension->NumberOfPorts)
+    CheckPort = EndpointProperties->RootPortNumber != 0 ? EndpointProperties->RootPortNumber : EndpointProperties->PortNumber;
+    if (CheckPort > 0 && CheckPort <= Extension->NumberOfPorts)
     {
         volatile ULONG *PortScReg;
         ULONG PortSc;
         ULONG WaitMs = 0;
 
-        PortScReg = XHCI_GetPortStatusRegister(Extension, EndpointProperties->PortNumber);
+        PortScReg = XHCI_GetPortStatusRegister(Extension, CheckPort);
         if (PortScReg)
         {
             PortSc = XHCI_READ_REGISTER_ULONG(PortScReg);
@@ -8226,8 +8234,7 @@ XHCI_AddressDeviceSlot(
             {
                 if (WaitMs == 0)
                 {
-                    DPRINT1("usbxhci: ADDRESS_DEVICE waiting for port %u enable (PortSC=0x%08lx)\n",
-                            EndpointProperties->PortNumber, PortSc);
+                    DPRINT1("usbxhci: ADDRESS_DEVICE waiting for root port %u enable (PortSC=0x%08lx)\n", CheckPort, PortSc);
                 }
 
                 Interval.QuadPart = -(LONGLONG)ADDR_DEV_PORT_ENABLE_POLL_MS * 10000LL;
@@ -8239,16 +8246,13 @@ XHCI_AddressDeviceSlot(
 
             if (WaitMs > 0)
             {
-                DPRINT1("usbxhci: ADDRESS_DEVICE port %u after %lu ms wait: PortSC=0x%08lx (PED=%u)\n",
-                        EndpointProperties->PortNumber, WaitMs, PortSc,
-                        (PortSc & XHCI_PORTSC_PED) ? 1 : 0);
+                DPRINT1("usbxhci: ADDRESS_DEVICE root port %u after %lu ms wait: PortSC=0x%08lx (PED=%u)\n", CheckPort, WaitMs, PortSc, (PortSc & XHCI_PORTSC_PED) ? 1 : 0);
             }
 
             /* If port disconnected during wait, fail immediately */
             if (!(PortSc & XHCI_PORTSC_CCS))
             {
-                DPRINT1("usbxhci: ADDRESS_DEVICE port %u device disconnected\n",
-                        EndpointProperties->PortNumber);
+                DPRINT1("usbxhci: ADDRESS_DEVICE root port %u device disconnected\n", CheckPort);
                 return MP_STATUS_FAILURE;
             }
 
@@ -8260,10 +8264,8 @@ XHCI_AddressDeviceSlot(
             if (!(PortSc & XHCI_PORTSC_PED))
             {
                 ULONG LinkState = (PortSc & XHCI_PORTSC_PLS_MASK) >> XHCI_PORTSC_PLS_SHIFT;
-                DPRINT1("usbxhci: ADDRESS_DEVICE port %u not enabled (PED=0 PLS=%lu), cannot address device\n",
-                        EndpointProperties->PortNumber, LinkState);
-                DPRINT1("usbxhci: Port %u PORTSC=0x%08lx - device may have failed speed negotiation\n",
-                        EndpointProperties->PortNumber, PortSc);
+                DPRINT1("usbxhci: ADDRESS_DEVICE root port %u not enabled (PED=0 PLS=%lu), cannot address device\n", CheckPort, LinkState);
+                DPRINT1("usbxhci: Root port %u PORTSC=0x%08lx - device may have failed speed negotiation\n", CheckPort, PortSc);
 
                 if (DisableOnFailure)
                 {
@@ -8358,11 +8360,7 @@ XHCI_AddressDeviceSlot(
             DPRINT1("usbxhci: USB_TRANSACTION_ERROR on ADDRESS_DEVICE for slot %u, "
                     "device may have stalled during enumeration\n", SlotId);
             XHCI_DumpInputContextForAddress(Extension, Slot);
-            XHCI_DumpAddressDeviceContext(Extension,
-                                          Slot,
-                                          0,
-                                          EndpointProperties->PortNumber,
-                                          Cc);
+            XHCI_DumpAddressDeviceContext(Extension, Slot, 0, CheckPort, Cc);
 
             Slot->Ep0TransactionErrorCount++;
             DPRINT1("usbxhci: EP0 USB_TRANSACTION_ERROR count for slot %u is now %lu\n",
@@ -8378,11 +8376,7 @@ XHCI_AddressDeviceSlot(
         else if (Cc == XHCI_COMPLETION_CONTEXT_ERROR)
         {
             XHCI_DumpInputContextForAddress(Extension, Slot);
-            XHCI_DumpAddressDeviceContext(Extension,
-                                          Slot,
-                                          0,
-                                          EndpointProperties->PortNumber,
-                                          Cc);
+            XHCI_DumpAddressDeviceContext(Extension, Slot, 0, CheckPort, Cc);
             XHCI_DumpControllerState(Extension,
                                      "EP0 AddressDevice CONTEXT_ERROR");
 
@@ -12099,17 +12093,18 @@ XHCI_PerformEndpointOpen(PXHCI_EXTENSION Extension,
     if (IsDefaultPipe)
     {
         Slot = XHCI_FindSlotByAddress(Extension, EndpointProperties->DeviceAddress);
-        if (!Slot && EndpointProperties->PortNumber != 0)
+        if (!Slot)
         {
             /*
-             * Fallback to port-based lookup. This is needed in two scenarios:
+             * Fallback to topology-based lookup (root port + route string).
+             * This is needed in two scenarios:
              * 1. DeviceAddress == 0: Initial enumeration when no address is assigned yet
              * 2. After RESET_DEVICE: The slot's USB address was cleared to 0 by
              *    XHCI_UpdateDeviceAddressMap(), but USBPORT still uses the old address.
              *    The address lookup fails, but the slot is still valid and mapped to
-             *    its port number.
+             *    its bus position.
              */
-            Slot = XHCI_FindSlotByPort(Extension, EndpointProperties->PortNumber);
+            Slot = XHCI_FindSlotByTopology(Extension, EndpointProperties);
         }
 
         if (Slot)

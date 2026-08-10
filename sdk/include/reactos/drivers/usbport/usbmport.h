@@ -124,9 +124,20 @@ typedef struct _USBPORT_ENDPOINT_PROPERTIES {
   UCHAR Reserved4; /* Raw endpoint descriptor bInterval */
   ULONG MaxPacketSize;
   ULONG Reserved6;
+  /* Bus topology of the endpoint's device, derived from the device-handle
+   * chain. HubAddr/PortNumber above keep their historical TT-split semantics
+   * for the USB2 (EHCI) schedulers; the fields below carry the full topology
+   * needed by xHCI-class controllers for devices behind external hubs. */
+  ULONG RouteString;     /* xHCI route string (20 bits), 0 = attached to a root port */
+  USHORT RootPortNumber; /* 1-based root-hub port the device chain hangs on */
+  USHORT TtHubAddr;      /* USB address of the hub whose TT translates for this
+                          * LS/FS device (nearest high-speed ancestor hub), -1 = none */
+  USHORT TtPortNumber;   /* 1-based downstream port on the TT hub for this device */
+  USHORT TopologyReserved;
+  ULONG Reserved7;
 } USBPORT_ENDPOINT_PROPERTIES, *PUSBPORT_ENDPOINT_PROPERTIES;
 
-C_ASSERT(sizeof(USBPORT_ENDPOINT_PROPERTIES) == 56 + 2 * sizeof(PVOID));
+C_ASSERT(sizeof(USBPORT_ENDPOINT_PROPERTIES) == 72 + 2 * sizeof(PVOID));
 
 /* USBPORT_ENDPOINT_PROPERTIES::Reserved3 flags for SS LPM policy */
 #define USBPORT_EP_LPM_VALID       0x80000000u
@@ -357,6 +368,17 @@ typedef MPSTATUS
 (NTAPI *PHCI_RESET_DEVICE)(
   PVOID,
   USHORT);
+
+/* The device at this bus position is gone (removed, restored, or its
+ * enumeration failed); the controller releases any per-device state such as
+ * the xHCI device slot. DeviceAddress is 0 for never-addressed devices, in
+ * which case the position is identified by root port + route string. */
+typedef VOID
+(NTAPI *PHCI_REMOVE_USB_DEVICE)(
+  PVOID,
+  USHORT,   /* DeviceAddress */
+  USHORT,   /* RootPortNumber */
+  ULONG);   /* RouteString */
 
 /* Roothub functions */
 typedef VOID
@@ -735,6 +757,7 @@ typedef struct _USBPORT_REGISTRATION_PACKET {
     };
     PHCI_RESET_DEVICE ResetDevice;
   };
+  PHCI_REMOVE_USB_DEVICE RemoveUsbDevice;
 } USBPORT_REGISTRATION_PACKET, *PUSBPORT_REGISTRATION_PACKET;
 
 #define USB10_MINIPORT_INTERFACE_VERSION  100
@@ -748,7 +771,7 @@ typedef struct _USBPORT_MINIPORT_INTERFACE {
   USBPORT_REGISTRATION_PACKET Packet;
 } USBPORT_MINIPORT_INTERFACE, *PUSBPORT_MINIPORT_INTERFACE;
 
-C_ASSERT(sizeof(USBPORT_MINIPORT_INTERFACE) == 32 + 78 * sizeof(PVOID));
+C_ASSERT(sizeof(USBPORT_MINIPORT_INTERFACE) == 32 + 79 * sizeof(PVOID));
 
 #define USBPORT_TRANSFER_DIRECTION_OUT  1 // From host to device
 #define USBPORT_MAX_DEVICE_ADDRESS      127

@@ -1083,6 +1083,93 @@ MiniportOpenEndpoint(IN PDEVICE_OBJECT FdoDevice,
     return MpStatus;
 }
 
+/* xHCI route strings address at most five external hub tiers (4 bits each) */
+#define USBPORT_XHCI_MAX_ROUTE_DEPTH 5
+
+VOID
+NTAPI
+USBPORT_ComputeTopologyProperties(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
+                                  IN PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties)
+{
+    PUSBPORT_DEVICE_HANDLE Node;
+    PUSBPORT_DEVICE_HANDLE Parent;
+    USHORT Ports[USBPORT_XHCI_MAX_ROUTE_DEPTH];
+    ULONG Depth = 0;
+    ULONG Route = 0;
+    ULONG ix;
+
+    EndpointProperties->RouteString = 0;
+    EndpointProperties->RootPortNumber = DeviceHandle->PortNumber;
+    EndpointProperties->TtHubAddr = -1;
+    EndpointProperties->TtPortNumber = 0;
+
+    if (DeviceHandle->IsRootHub)
+    {
+        EndpointProperties->RootPortNumber = 0;
+        return;
+    }
+
+    /* Collect the downstream port of every external hub above the device,
+     * deepest tier first. Walking without locks is safe: a live child keeps
+     * its ancestor chain alive, and parents are fully addressed before their
+     * children are created. */
+    Node = DeviceHandle;
+    Parent = Node->HubDeviceHandle;
+
+    while (Parent && !Parent->IsRootHub)
+    {
+        if (Depth < USBPORT_XHCI_MAX_ROUTE_DEPTH)
+        {
+            /* Ports above 15 cannot be encoded in a route string nibble */
+            Ports[Depth++] = (Node->PortNumber > 15) ? 15 : Node->PortNumber;
+        }
+        else
+        {
+            /* Out-of-spec nesting (usbhub caps the cascade first); keep
+             * walking so RootPortNumber still names the true tier-1 port. */
+            DPRINT1("USBPORT_ComputeTopologyProperties: hub chain deeper than %u tiers, route truncated\n", USBPORT_XHCI_MAX_ROUTE_DEPTH);
+        }
+
+        Node = Parent;
+        Parent = Node->HubDeviceHandle;
+    }
+
+    /* Node is now the tier-1 device attached directly to the root hub */
+    EndpointProperties->RootPortNumber = Node->PortNumber;
+
+    /* Nibble k of the route string is the downstream port on the tier-(k+1)
+     * hub; the deepest collected port lands in the highest used nibble. */
+    for (ix = 0; ix < Depth; ix++)
+    {
+        Route |= (ULONG)Ports[ix] << (4 * (Depth - 1 - ix));
+    }
+
+    EndpointProperties->RouteString = Route;
+
+    /* A low-/full-speed device below an external high-speed hub transacts
+     * through the TT of the nearest high-speed ancestor hub; the TT port is
+     * that hub's downstream port leading towards the device. */
+    if (DeviceHandle->DeviceSpeed == UsbLowSpeed ||
+        DeviceHandle->DeviceSpeed == UsbFullSpeed)
+    {
+        USHORT ChildPort = DeviceHandle->PortNumber;
+
+        for (Node = DeviceHandle->HubDeviceHandle;
+             Node && !Node->IsRootHub;
+             Node = Node->HubDeviceHandle)
+        {
+            if (Node->DeviceSpeed == UsbHighSpeed)
+            {
+                EndpointProperties->TtHubAddr = Node->DeviceAddress;
+                EndpointProperties->TtPortNumber = ChildPort;
+                break;
+            }
+
+            ChildPort = Node->PortNumber;
+        }
+    }
+}
+
 NTSTATUS
 NTAPI
 USBPORT_OpenPipe(IN PDEVICE_OBJECT FdoDevice,
@@ -1238,6 +1325,8 @@ USBPORT_OpenPipe(IN PDEVICE_OBJECT FdoDevice,
     }
 
     EndpointProperties->PortNumber = DeviceHandle->PortNumber;
+
+    USBPORT_ComputeTopologyProperties(DeviceHandle, EndpointProperties);
 
     PipeHandle->StreamId = 0;
     PipeHandle->StreamCount = 0;
