@@ -21,6 +21,7 @@
  */
 
 #include "newdev_private.h"
+#include "driver_cache.h"
 
 #include <cfgmgr32.h>
 #include <stdio.h>
@@ -28,34 +29,19 @@
 #include <winnls.h>
 
 #define NEWDEV_BATCH_MAX_DEVICES 65536
-#define NEWDEV_BATCH_MAX_WORKERS 1
+#define NEWDEV_BATCH_MAX_WORKERS 4
 #define NEWDEV_BATCH_MAX_DEPTH   64
 #define NEWDEV_BATCH_DEPTH_UNKNOWN ((ULONG)-1)
 
 /* Global variables */
 HINSTANCE hDllInstance;
 
-typedef struct _NO_DRIVER_ID_ENTRY
+typedef enum _DRIVER_SEARCH_RESULT
 {
-    struct _NO_DRIVER_ID_ENTRY *Next;
-    WCHAR Id[1];
-} NO_DRIVER_ID_ENTRY, *PNO_DRIVER_ID_ENTRY;
-
-typedef struct _DRIVER_MATCH_CACHE_ENTRY
-{
-    struct _DRIVER_MATCH_CACHE_ENTRY *Next;
-    SIZE_T HardwareIdsSize;
-    SIZE_T CompatibleIdsSize;
-    BOOL NullDriver;
-    WCHAR InfFileName[MAX_PATH];
-    BYTE Ids[1];
-} DRIVER_MATCH_CACHE_ENTRY, *PDRIVER_MATCH_CACHE_ENTRY;
-
-static PNO_DRIVER_ID_ENTRY NoDriverIdCache;
-static PDRIVER_MATCH_CACHE_ENTRY DriverMatchCache;
-static CRITICAL_SECTION NoDriverIdCacheLock;
-static BOOL NoDriverIdCacheReady;
-static LONG NoDriverIdCacheBatchDepth;
+    DriverSearchError,
+    DriverSearchNotFound,
+    DriverSearchFound
+} DRIVER_SEARCH_RESULT;
 
 typedef struct _DEVICE_INSTALL_PHASE_LOCK
 {
@@ -73,6 +59,7 @@ typedef struct _BATCH_DEVICE
 {
     PWSTR InstanceId;
     ULONG Depth;
+    BOOL RetryDiscovery;
 } BATCH_DEVICE, *PBATCH_DEVICE;
 
 typedef struct _BATCH_WORK_CONTEXT
@@ -84,6 +71,12 @@ typedef struct _BATCH_WORK_CONTEXT
 
 static BOOL
 SearchDriver(
+    IN PDEVINSTDATA DevInstData,
+    IN LPCWSTR Directory OPTIONAL,
+    IN LPCWSTR InfFile OPTIONAL);
+
+static DRIVER_SEARCH_RESULT
+SearchDriverResult(
     IN PDEVINSTDATA DevInstData,
     IN LPCWSTR Directory OPTIONAL,
     IN LPCWSTR InfFile OPTIONAL);
@@ -199,10 +192,13 @@ InstallSelectedDriver(
 {
     BOOL WasShared = DeviceInstallPhasePromote(SharedPhaseLockHeld);
     BOOL Ret;
+    DWORD Error;
 
     Ret = NullDriver ? InstallNullDriver(DevInstData) : InstallCurrentDriver(DevInstData);
+    Error = GetLastError();
 
     DeviceInstallPhaseDemote(WasShared, SharedPhaseLockHeld);
+    SetLastError(Error);
     return Ret;
 }
 
@@ -215,378 +211,122 @@ SetFailedInstallSerialized(
 {
     BOOL WasShared = DeviceInstallPhasePromote(SharedPhaseLockHeld);
     BOOL Ret;
+    DWORD Error;
 
     Ret = NewDevSetFailedInstall(DeviceInfoSet, DeviceInfoData, Set);
+    Error = GetLastError();
 
     DeviceInstallPhaseDemote(WasShared, SharedPhaseLockHeld);
+    SetLastError(Error);
     return Ret;
 }
 
 static BOOL
-NoDriverCacheContainsLocked(
-    IN LPCWSTR Id)
-{
-    PNO_DRIVER_ID_ENTRY Entry;
-
-    for (Entry = NoDriverIdCache; Entry; Entry = Entry->Next)
-    {
-        if (!lstrcmpiW(Entry->Id, Id))
-            return TRUE;
-    }
-
-    return FALSE;
-}
-
-static SIZE_T
-MultiSzSize(
-    IN LPCWSTR IdList OPTIONAL)
-{
-    LPCWSTR Id;
-
-    if (!IdList)
-        return 0;
-
-    for (Id = IdList; *Id; Id += lstrlenW(Id) + 1)
-    {
-    }
-
-    return (Id - IdList + 1) * sizeof(WCHAR);
-}
-
-static BOOL
-DriverMatchCacheEntryMatches(
-    IN PDRIVER_MATCH_CACHE_ENTRY Entry,
-    IN LPCWSTR HardwareIds OPTIONAL,
-    IN SIZE_T HardwareIdsSize,
-    IN LPCWSTR CompatibleIds OPTIONAL,
-    IN SIZE_T CompatibleIdsSize)
-{
-    if (Entry->HardwareIdsSize != HardwareIdsSize ||
-        Entry->CompatibleIdsSize != CompatibleIdsSize)
-    {
-        return FALSE;
-    }
-
-    if (HardwareIdsSize &&
-        memcmp(Entry->Ids, HardwareIds, HardwareIdsSize))
-    {
-        return FALSE;
-    }
-
-    if (CompatibleIdsSize &&
-        memcmp(Entry->Ids + HardwareIdsSize, CompatibleIds, CompatibleIdsSize))
-    {
-        return FALSE;
-    }
-
-    return TRUE;
-}
-
-static BOOL
-DriverMatchCacheLookup(
+AcquireBatchDriverCacheEntry(
+    IN PDEVINSTDATA DevInstData,
     IN LPCWSTR HardwareIds OPTIONAL,
     IN LPCWSTR CompatibleIds OPTIONAL,
-    OUT LPWSTR InfFileName,
-    IN DWORD InfFileNameCch,
-    OUT BOOL *NullDriver)
+    IN OUT PBOOL SharedPhaseLockHeld,
+    OUT PNEWDEV_DRIVER_CACHE_ENTRY *CacheEntry)
 {
-    PDRIVER_MATCH_CACHE_ENTRY Entry;
-    SIZE_T HardwareIdsSize, CompatibleIdsSize;
-    BOOL Found = FALSE;
+    NEWDEV_DRIVER_CACHE_ACQUIRE AcquireResult;
+    BOOL WasShared = *SharedPhaseLockHeld;
+    DWORD Error = ERROR_SUCCESS;
 
-    if (!NoDriverIdCacheReady || NoDriverIdCacheBatchDepth == 0)
-        return FALSE;
-
-    HardwareIdsSize = MultiSzSize(HardwareIds);
-    CompatibleIdsSize = MultiSzSize(CompatibleIds);
-    if (HardwareIdsSize == 0 && CompatibleIdsSize == 0)
-        return FALSE;
-
-    EnterCriticalSection(&NoDriverIdCacheLock);
-
-    for (Entry = DriverMatchCache; Entry; Entry = Entry->Next)
+    if (WasShared)
     {
-        if (DriverMatchCacheEntryMatches(Entry,
-                                         HardwareIds,
-                                         HardwareIdsSize,
-                                         CompatibleIds,
-                                         CompatibleIdsSize))
+        ReleaseDeviceInstallPhaseShared();
+        *SharedPhaseLockHeld = FALSE;
+    }
+
+    for (;;)
+    {
+        AcquireResult = NewDevDriverCacheTryAcquire(&DevInstData->devInfoData.ClassGuid, HardwareIds, CompatibleIds, CacheEntry);
+        if (AcquireResult != NewDevDriverCacheBusy)
+            break;
+
+        if (!NewDevDriverCacheWait(*CacheEntry))
         {
-            lstrcpynW(InfFileName, Entry->InfFileName, InfFileNameCch);
-            *NullDriver = Entry->NullDriver;
-            Found = TRUE;
+            Error = GetLastError();
+            AcquireResult = NewDevDriverCacheError;
             break;
         }
     }
 
-    LeaveCriticalSection(&NoDriverIdCacheLock);
-    return Found;
+    if (AcquireResult == NewDevDriverCacheError && Error == ERROR_SUCCESS)
+        Error = GetLastError();
+
+    if (WasShared)
+    {
+        AcquireDeviceInstallPhaseShared();
+        *SharedPhaseLockHeld = TRUE;
+    }
+
+    if (AcquireResult == NewDevDriverCacheError)
+    {
+        *CacheEntry = NULL;
+        SetLastError(Error);
+    }
+
+    return AcquireResult != NewDevDriverCacheError;
 }
 
 static BOOL
-DriverMatchCacheRemember(
-    IN LPCWSTR HardwareIds OPTIONAL,
-    IN LPCWSTR CompatibleIds OPTIONAL,
-    IN LPCWSTR InfFileName,
-    IN BOOL NullDriver)
-{
-    PDRIVER_MATCH_CACHE_ENTRY Entry;
-    SIZE_T HardwareIdsSize, CompatibleIdsSize, Size;
-    BOOL Ret = TRUE;
-
-    if (!NoDriverIdCacheReady || NoDriverIdCacheBatchDepth == 0 ||
-        !InfFileName || !*InfFileName)
-    {
-        return TRUE;
-    }
-
-    HardwareIdsSize = MultiSzSize(HardwareIds);
-    CompatibleIdsSize = MultiSzSize(CompatibleIds);
-    if (HardwareIdsSize == 0 && CompatibleIdsSize == 0)
-        return TRUE;
-
-    EnterCriticalSection(&NoDriverIdCacheLock);
-
-    for (Entry = DriverMatchCache; Entry; Entry = Entry->Next)
-    {
-        if (DriverMatchCacheEntryMatches(Entry,
-                                         HardwareIds,
-                                         HardwareIdsSize,
-                                         CompatibleIds,
-                                         CompatibleIdsSize))
-        {
-            LeaveCriticalSection(&NoDriverIdCacheLock);
-            return TRUE;
-        }
-    }
-
-    Size = FIELD_OFFSET(DRIVER_MATCH_CACHE_ENTRY, Ids) +
-           HardwareIdsSize + CompatibleIdsSize;
-    Entry = HeapAlloc(GetProcessHeap(), 0, Size);
-    if (!Entry)
-    {
-        Ret = FALSE;
-    }
-    else
-    {
-        Entry->HardwareIdsSize = HardwareIdsSize;
-        Entry->CompatibleIdsSize = CompatibleIdsSize;
-        Entry->NullDriver = NullDriver;
-        lstrcpynW(Entry->InfFileName,
-                  InfFileName,
-                  sizeof(Entry->InfFileName) / sizeof(Entry->InfFileName[0]));
-        if (HardwareIdsSize)
-            memcpy(Entry->Ids, HardwareIds, HardwareIdsSize);
-        if (CompatibleIdsSize)
-            memcpy(Entry->Ids + HardwareIdsSize, CompatibleIds, CompatibleIdsSize);
-        Entry->Next = DriverMatchCache;
-        DriverMatchCache = Entry;
-    }
-
-    LeaveCriticalSection(&NoDriverIdCacheLock);
-    return Ret;
-}
-
-static BOOL
-NoDriverCacheAdd(
-    IN LPCWSTR Id)
-{
-    PNO_DRIVER_ID_ENTRY Entry;
-    SIZE_T Size;
-    BOOL Ret = TRUE;
-
-    if (!NoDriverIdCacheReady || !Id || !*Id)
-        return TRUE;
-
-    EnterCriticalSection(&NoDriverIdCacheLock);
-
-    if (!NoDriverCacheContainsLocked(Id))
-    {
-        Size = FIELD_OFFSET(NO_DRIVER_ID_ENTRY, Id) + (lstrlenW(Id) + 1) * sizeof(WCHAR);
-        Entry = HeapAlloc(GetProcessHeap(), 0, Size);
-        if (!Entry)
-        {
-            Ret = FALSE;
-        }
-        else
-        {
-            Entry->Next = NoDriverIdCache;
-            lstrcpyW(Entry->Id, Id);
-            NoDriverIdCache = Entry;
-        }
-    }
-
-    LeaveCriticalSection(&NoDriverIdCacheLock);
-    return Ret;
-}
-
-static VOID
-NoDriverCacheAddList(
-    IN LPCWSTR IdList OPTIONAL)
-{
-    LPCWSTR Id;
-
-    if (!IdList)
-        return;
-
-    for (Id = IdList; *Id; Id += lstrlenW(Id) + 1)
-        NoDriverCacheAdd(Id);
-}
-
-static VOID
-NoDriverCacheRemember(
-    IN LPCWSTR HardwareIds OPTIONAL,
-    IN LPCWSTR CompatibleIds OPTIONAL)
-{
-    if (NoDriverIdCacheBatchDepth == 0)
-        return;
-
-    NoDriverCacheAddList(HardwareIds);
-    NoDriverCacheAddList(CompatibleIds);
-}
-
-static VOID
-NoDriverCacheCheckListLocked(
-    IN LPCWSTR IdList OPTIONAL,
-    IN OUT BOOL *SawId,
-    IN OUT BOOL *AllKnown)
-{
-    LPCWSTR Id;
-
-    if (!IdList)
-        return;
-
-    for (Id = IdList; *Id && *AllKnown; Id += lstrlenW(Id) + 1)
-    {
-        *SawId = TRUE;
-        if (!NoDriverCacheContainsLocked(Id))
-            *AllKnown = FALSE;
-    }
-}
-
-static BOOL
-NoDriverCacheAllIdsKnown(
-    IN LPCWSTR HardwareIds OPTIONAL,
-    IN LPCWSTR CompatibleIds OPTIONAL)
-{
-    BOOL SawId = FALSE;
-    BOOL AllKnown = TRUE;
-
-    if (!NoDriverIdCacheReady || NoDriverIdCacheBatchDepth == 0)
-        return FALSE;
-
-    EnterCriticalSection(&NoDriverIdCacheLock);
-    NoDriverCacheCheckListLocked(HardwareIds, &SawId, &AllKnown);
-    NoDriverCacheCheckListLocked(CompatibleIds, &SawId, &AllKnown);
-    LeaveCriticalSection(&NoDriverIdCacheLock);
-
-    return SawId && AllKnown;
-}
-
-static PWSTR
 GetDeviceMultiSzProperty(
     IN PDEVINSTDATA DevInstData,
-    IN DWORD Property)
+    IN DWORD Property,
+    OUT PWSTR *PropertyValue)
 {
-    PWSTR Buffer;
+    PWSTR Buffer = NULL;
     DWORD DataType;
     DWORD RequiredSize = 0;
+    DWORD Error;
+    BOOL Result;
 
-    if (SetupDiGetDeviceRegistryPropertyW(DevInstData->hDevInfo,
-                                          &DevInstData->devInfoData,
-                                          Property,
-                                          &DataType,
-                                          NULL,
-                                          0,
-                                          &RequiredSize))
+    *PropertyValue = NULL;
+    Result = SetupDiGetDeviceRegistryPropertyW(DevInstData->hDevInfo, &DevInstData->devInfoData, Property, &DataType, NULL, 0, &RequiredSize);
+    if (Result)
     {
-        return NULL;
+        if (DataType == REG_MULTI_SZ)
+            return TRUE;
+
+        SetLastError(ERROR_INVALID_DATA);
+        return FALSE;
     }
 
-    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || RequiredSize == 0)
-        return NULL;
+    Error = GetLastError();
+    if (Error == ERROR_FILE_NOT_FOUND)
+        return TRUE;
+    if (Error != ERROR_INSUFFICIENT_BUFFER || RequiredSize == 0)
+    {
+        SetLastError(Error != ERROR_INSUFFICIENT_BUFFER ? Error : ERROR_INVALID_DATA);
+        return FALSE;
+    }
 
     Buffer = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, RequiredSize + sizeof(WCHAR));
     if (!Buffer)
     {
         SetLastError(ERROR_NOT_ENOUGH_MEMORY);
-        return NULL;
+        return FALSE;
     }
 
-    if (!SetupDiGetDeviceRegistryPropertyW(DevInstData->hDevInfo,
-                                           &DevInstData->devInfoData,
-                                           Property,
-                                           &DataType,
-                                           (PBYTE)Buffer,
-                                           RequiredSize,
-                                           &RequiredSize) ||
-        DataType != REG_MULTI_SZ)
+    Result = SetupDiGetDeviceRegistryPropertyW(DevInstData->hDevInfo, &DevInstData->devInfoData, Property, &DataType, (PBYTE)Buffer, RequiredSize, &RequiredSize);
+    if (!Result)
+    {
+        Error = GetLastError();
+        HeapFree(GetProcessHeap(), 0, Buffer);
+        SetLastError(Error);
+        return FALSE;
+    }
+    if (DataType != REG_MULTI_SZ)
     {
         HeapFree(GetProcessHeap(), 0, Buffer);
-        return NULL;
+        SetLastError(ERROR_INVALID_DATA);
+        return FALSE;
     }
 
-    return Buffer;
-}
-
-static VOID
-NoDriverCacheClear(VOID)
-{
-    PNO_DRIVER_ID_ENTRY Entry, Next;
-    PDRIVER_MATCH_CACHE_ENTRY MatchEntry, MatchNext;
-
-    if (!NoDriverIdCacheReady)
-        return;
-
-    EnterCriticalSection(&NoDriverIdCacheLock);
-    Entry = NoDriverIdCache;
-    NoDriverIdCache = NULL;
-    MatchEntry = DriverMatchCache;
-    DriverMatchCache = NULL;
-    LeaveCriticalSection(&NoDriverIdCacheLock);
-
-    while (Entry)
-    {
-        Next = Entry->Next;
-        HeapFree(GetProcessHeap(), 0, Entry);
-        Entry = Next;
-    }
-
-    while (MatchEntry)
-    {
-        MatchNext = MatchEntry->Next;
-        HeapFree(GetProcessHeap(), 0, MatchEntry);
-        MatchEntry = MatchNext;
-    }
-}
-
-static VOID
-NoDriverCacheBeginBatch(VOID)
-{
-    if (NoDriverIdCacheReady)
-        InterlockedIncrement(&NoDriverIdCacheBatchDepth);
-}
-
-static VOID
-NoDriverCacheEndBatch(VOID)
-{
-    if (!NoDriverIdCacheReady)
-        return;
-
-    if (InterlockedDecrement(&NoDriverIdCacheBatchDepth) == 0)
-        NoDriverCacheClear();
-}
-
-static VOID
-FreeNoDriverCache(VOID)
-{
-    if (!NoDriverIdCacheReady)
-        return;
-
-    NoDriverCacheClear();
-
-    DeleteCriticalSection(&NoDriverIdCacheLock);
-    NoDriverIdCacheReady = FALSE;
+    *PropertyValue = Buffer;
+    return TRUE;
 }
 
 /*
@@ -811,20 +551,23 @@ UpdateDriverForPlugAndPlayDevicesA(
 }
 
 /* Directory and InfFile MUST NOT be specified simultaneously */
-static BOOL
-SearchDriver(
+static DRIVER_SEARCH_RESULT
+SearchDriverResult(
     IN PDEVINSTDATA DevInstData,
     IN LPCWSTR Directory OPTIONAL,
     IN LPCWSTR InfFile OPTIONAL)
 {
     SP_DEVINSTALL_PARAMS_W DevInstallParams = {0,};
     BOOL ret;
+    DWORD Error;
 
     DevInstallParams.cbSize = sizeof(SP_DEVINSTALL_PARAMS_W);
     if (!SetupDiGetDeviceInstallParamsW(DevInstData->hDevInfo, &DevInstData->devInfoData, &DevInstallParams))
     {
-        TRACE("SetupDiGetDeviceInstallParams() failed with error 0x%x\n", GetLastError());
-        return FALSE;
+        Error = GetLastError();
+        TRACE("SetupDiGetDeviceInstallParams() failed with error 0x%x\n", Error);
+        SetLastError(Error);
+        return DriverSearchError;
     }
     DevInstallParams.FlagsEx |= DI_FLAGSEX_ALLOWEXCLUDEDDRVS;
 
@@ -850,8 +593,10 @@ SearchDriver(
         &DevInstallParams);
     if (!ret)
     {
-        TRACE("SetupDiSetDeviceInstallParams() failed with error 0x%x\n", GetLastError());
-        return FALSE;
+        Error = GetLastError();
+        TRACE("SetupDiSetDeviceInstallParams() failed with error 0x%x\n", Error);
+        SetLastError(Error);
+        return DriverSearchError;
     }
 
     ret = SetupDiBuildDriverInfoList(
@@ -860,8 +605,16 @@ SearchDriver(
         SPDIT_COMPATDRIVER);
     if (!ret)
     {
-        TRACE("SetupDiBuildDriverInfoList() failed with error 0x%x\n", GetLastError());
-        return FALSE;
+        Error = GetLastError();
+
+        TRACE("SetupDiBuildDriverInfoList() failed with error 0x%x\n", Error);
+        if (Error == ERROR_FILE_NOT_FOUND)
+        {
+            SetLastError(Error);
+            return DriverSearchNotFound;
+        }
+        SetLastError(Error);
+        return DriverSearchError;
     }
 
     DevInstData->drvInfoData.cbSize = sizeof(SP_DRVINFO_DATA);
@@ -873,13 +626,27 @@ SearchDriver(
         &DevInstData->drvInfoData);
     if (!ret)
     {
-        if (GetLastError() == ERROR_NO_MORE_ITEMS)
-            return FALSE;
-        TRACE("SetupDiEnumDriverInfo() failed with error 0x%x\n", GetLastError());
-        return FALSE;
+        Error = GetLastError();
+        if (Error == ERROR_NO_MORE_ITEMS)
+        {
+            SetLastError(Error);
+            return DriverSearchNotFound;
+        }
+        TRACE("SetupDiEnumDriverInfo() failed with error 0x%x\n", Error);
+        SetLastError(Error);
+        return DriverSearchError;
     }
 
-    return TRUE;
+    return DriverSearchFound;
+}
+
+static BOOL
+SearchDriver(
+    IN PDEVINSTDATA DevInstData,
+    IN LPCWSTR Directory OPTIONAL,
+    IN LPCWSTR InfFile OPTIONAL)
+{
+    return SearchDriverResult(DevInstData, Directory, InfFile) == DriverSearchFound;
 }
 
 static BOOL
@@ -1233,14 +1000,18 @@ CheckBestDriver(
     return SearchDriverRecursive(DevInstData, pszDir);
 }
 
-BOOL
-ScanFoldersForDriver(
+static DRIVER_SEARCH_RESULT
+ScanFoldersForDriverResult(
     IN PDEVINSTDATA DevInstData)
 {
-    BOOL result;
+    DRIVER_SEARCH_RESULT Result;
+    DRIVER_SEARCH_RESULT PathResult;
+    DWORD SearchError = ERROR_SUCCESS;
 
     /* Search in default location */
-    result = SearchDriver(DevInstData, NULL, NULL);
+    Result = SearchDriverResult(DevInstData, NULL, NULL);
+    if (Result == DriverSearchError)
+        SearchError = GetLastError();
 
     if (DevInstData->CustomSearchPath)
     {
@@ -1255,17 +1026,33 @@ ScanFoldersForDriver(
             if (wcslen(Path) == 2 && Path[1] == ':')
             {
                 if (SearchDriverRecursive(DevInstData, Path))
-                    result = TRUE;
+                    Result = DriverSearchFound;
             }
             else
             {
-                if (SearchDriver(DevInstData, Path, NULL))
-                    result = TRUE;
+                PathResult = SearchDriverResult(DevInstData, Path, NULL);
+                if (PathResult == DriverSearchFound)
+                    Result = DriverSearchFound;
+                else if (PathResult == DriverSearchError && Result != DriverSearchFound && SearchError == ERROR_SUCCESS)
+                    SearchError = GetLastError();
             }
         }
     }
 
-    return result;
+    if (Result != DriverSearchFound && SearchError != ERROR_SUCCESS)
+    {
+        SetLastError(SearchError);
+        return DriverSearchError;
+    }
+
+    return Result;
+}
+
+BOOL
+ScanFoldersForDriver(
+    IN PDEVINSTDATA DevInstData)
+{
+    return ScanFoldersForDriverResult(DevInstData) == DriverSearchFound;
 }
 
 BOOL
@@ -1465,21 +1252,31 @@ DevInstallInternal(
     IN HINSTANCE hInstance,
     IN LPCWSTR InstanceId,
     IN INT Show,
-    IN BOOL InBatch)
+    IN BOOL InBatch,
+    IN BOOL FinalDiscoveryAttempt,
+    OUT PBOOL RetryDiscovery OPTIONAL)
 {
     PDEVINSTDATA DevInstData = NULL;
     PWSTR HardwareIds = NULL;
     PWSTR CompatibleIds = NULL;
     WCHAR CachedInfFile[MAX_PATH];
     WCHAR InstalledInfFile[MAX_PATH];
+    PNEWDEV_DRIVER_CACHE_ENTRY DriverCacheEntry = NULL;
+    NEWDEV_DRIVER_CACHE_RESULT DriverCacheResult;
+    DRIVER_SEARCH_RESULT SearchResult;
     BOOL ret;
+    DWORD LastError;
     DWORD config_flags;
     BOOL CachedNullDriver = FALSE;
-    BOOL UseDriverMatchCache = FALSE;
+    BOOL UseDriverCache = FALSE;
+    BOOL ConfirmedNotFound = FALSE;
     BOOL SharedPhaseLockHeld = FALSE;
     BOOL retval = FALSE;
 
     TRACE("(%p, %p, %s, %d)\n", hWndParent, hInstance, debugstr_w(InstanceId), Show);
+
+    if (RetryDiscovery)
+        *RetryDiscovery = FALSE;
 
     if (!IsUserAdmin())
     {
@@ -1585,57 +1382,87 @@ DevInstallInternal(
 
     if (Show == SW_HIDE && !DevInstData->bUpdate)
     {
-        UseDriverMatchCache = TRUE;
-        HardwareIds = GetDeviceMultiSzProperty(DevInstData, SPDRP_HARDWAREID);
-        CompatibleIds = GetDeviceMultiSzProperty(DevInstData, SPDRP_COMPATIBLEIDS);
-
-        if (NoDriverCacheAllIdsKnown(HardwareIds, CompatibleIds))
+        if (!GetDeviceMultiSzProperty(DevInstData, SPDRP_HARDWAREID, &HardwareIds) || !GetDeviceMultiSzProperty(DevInstData, SPDRP_COMPATIBLEIDS, &CompatibleIds))
         {
-            TRACE("No driver cached for %s\n", debugstr_w(InstanceId));
-            SetFailedInstallSerialized(DevInstData->hDevInfo, &DevInstData->devInfoData, TRUE, &SharedPhaseLockHeld);
-            SetLastError(ERROR_FILE_NOT_FOUND);
+            LastError = GetLastError();
+            if (RetryDiscovery)
+                *RetryDiscovery = TRUE;
+            SetLastError(LastError);
+            goto cleanup;
+        }
+        UseDriverCache = InBatch;
+
+        if (UseDriverCache && !AcquireBatchDriverCacheEntry(DevInstData, HardwareIds, CompatibleIds, &SharedPhaseLockHeld, &DriverCacheEntry))
+        {
+            if (RetryDiscovery)
+                *RetryDiscovery = TRUE;
             goto cleanup;
         }
 
-        if (DriverMatchCacheLookup(HardwareIds,
-                                   CompatibleIds,
-                                   CachedInfFile,
-                                   sizeof(CachedInfFile) / sizeof(CachedInfFile[0]),
-                                   &CachedNullDriver))
+        if (DriverCacheEntry)
         {
-            if (SearchDriver(DevInstData, NULL, CachedInfFile))
+            DriverCacheResult = NewDevDriverCacheGetResult(DriverCacheEntry, CachedInfFile, sizeof(CachedInfFile) / sizeof(CachedInfFile[0]), &CachedNullDriver);
+            if (DriverCacheResult == NewDevDriverCacheFound)
             {
-                retval = InstallSelectedDriver(DevInstData, CachedNullDriver, &SharedPhaseLockHeld);
-                TRACE("Cached driver install returned %d\n", retval);
-                goto cleanup;
-            }
+                SearchResult = SearchDriverResult(DevInstData, NULL, CachedInfFile);
+                if (SearchResult == DriverSearchFound)
+                {
+                    retval = InstallSelectedDriver(DevInstData, CachedNullDriver, &SharedPhaseLockHeld);
+                    TRACE("Cached driver install returned %d\n", retval);
+                    goto cleanup;
+                }
 
-            TRACE("Cached driver INF %ls no longer matches %s\n",
-                  CachedInfFile, debugstr_w(InstanceId));
+                LastError = GetLastError();
+                TRACE("Cached driver INF %ls could not be selected for %s (result %u, error %lu)\n", CachedInfFile, debugstr_w(InstanceId), SearchResult, LastError);
+                if (SearchResult == DriverSearchError)
+                {
+                    if (RetryDiscovery)
+                        *RetryDiscovery = TRUE;
+                    SetLastError(LastError);
+                    goto cleanup;
+                }
+                NewDevDriverCacheInvalidate(DriverCacheEntry);
+            }
+            else if (DriverCacheResult == NewDevDriverCacheNotFoundPending)
+            {
+                if (!FinalDiscoveryAttempt)
+                {
+                    if (RetryDiscovery)
+                        *RetryDiscovery = TRUE;
+                    SetLastError(ERROR_FILE_NOT_FOUND);
+                    goto cleanup;
+                }
+                NewDevDriverCacheInvalidate(DriverCacheEntry);
+            }
+            else if (DriverCacheResult == NewDevDriverCacheNotFound)
+            {
+                ConfirmedNotFound = TRUE;
+                SearchResult = DriverSearchNotFound;
+                goto handle_search_result;
+            }
         }
     }
 
     /* Search driver in default location and removable devices */
     if (!PrepareFoldersToScan(DevInstData, FALSE, FALSE, NULL))
     {
-        TRACE("PrepareFoldersToScan() failed with error 0x%lx\n", GetLastError());
+        LastError = GetLastError();
+        TRACE("PrepareFoldersToScan() failed with error 0x%lx\n", LastError);
+        if (RetryDiscovery)
+            *RetryDiscovery = TRUE;
+        SetLastError(LastError);
         goto cleanup;
     }
-    if (ScanFoldersForDriver(DevInstData))
+    SearchResult = ScanFoldersForDriverResult(DevInstData);
+handle_search_result:
+    if (SearchResult == DriverSearchFound)
     {
-        /* Driver found ; install it */
+        if (DriverCacheEntry && GetCurrentDriverInfFileName(DevInstData, InstalledInfFile, sizeof(InstalledInfFile) / sizeof(InstalledInfFile[0])))
+            NewDevDriverCacheRememberFound(DriverCacheEntry, InstalledInfFile, IsCurrentDriverNullInstall(DevInstData));
+
+        /* Driver found; install it. */
         retval = InstallSelectedDriver(DevInstData, FALSE, &SharedPhaseLockHeld);
         TRACE("InstallCurrentDriver() returned %d\n", retval);
-        if (retval && UseDriverMatchCache &&
-            GetCurrentDriverInfFileName(DevInstData,
-                                        InstalledInfFile,
-                                        sizeof(InstalledInfFile) / sizeof(InstalledInfFile[0])))
-        {
-            DriverMatchCacheRemember(HardwareIds,
-                                     CompatibleIds,
-                                     InstalledInfFile,
-                                     IsCurrentDriverNullInstall(DevInstData));
-        }
 
         if (retval && Show != SW_HIDE)
         {
@@ -1658,6 +1485,28 @@ DevInstallInternal(
     }
     else if (Show == SW_HIDE)
     {
+        if (SearchResult == DriverSearchError)
+        {
+            LastError = GetLastError();
+            TRACE("Driver discovery failed for %s with error %lu\n", debugstr_w(InstanceId), LastError);
+            if (RetryDiscovery)
+                *RetryDiscovery = TRUE;
+            SetLastError(LastError);
+            goto cleanup;
+        }
+
+        if (!ConfirmedNotFound && DriverCacheEntry && InBatch && !FinalDiscoveryAttempt)
+        {
+            NewDevDriverCacheRememberNotFoundPending(DriverCacheEntry);
+            if (RetryDiscovery)
+                *RetryDiscovery = TRUE;
+            SetLastError(ERROR_FILE_NOT_FOUND);
+            goto cleanup;
+        }
+
+        if (DriverCacheEntry)
+            NewDevDriverCacheRememberNotFound(DriverCacheEntry);
+
         /* We can't show the wizard. Fail the install */
         TRACE("No wizard\n");
         if (!DevInstData->bUpdate)
@@ -1666,7 +1515,6 @@ DevInstallInternal(
             {
                 TRACE("NewDevSetFailedInstall() failed with error 0x%lx\n", GetLastError());
             }
-            NoDriverCacheRemember(HardwareIds, CompatibleIds);
         }
         SetLastError(ERROR_FILE_NOT_FOUND);
         goto cleanup;
@@ -1677,6 +1525,8 @@ DevInstallInternal(
     retval = DisplayWizard(DevInstData, hWndParent, IDD_WELCOMEPAGE);
 
 cleanup:
+    LastError = GetLastError();
+
     if (DevInstData)
     {
         if (DevInstData->devInfoData.cbSize != 0)
@@ -1696,8 +1546,15 @@ cleanup:
     }
 
     if (SharedPhaseLockHeld)
+    {
         ReleaseDeviceInstallPhaseShared();
+        SharedPhaseLockHeld = FALSE;
+    }
 
+    if (DriverCacheEntry)
+        NewDevDriverCacheRelease(DriverCacheEntry);
+
+    SetLastError(LastError);
     return retval;
 }
 
@@ -1711,7 +1568,7 @@ DevInstallW(
     IN LPCWSTR InstanceId,
     IN INT Show)
 {
-    return DevInstallInternal(hWndParent, hInstance, InstanceId, Show, FALSE);
+    return DevInstallInternal(hWndParent, hInstance, InstanceId, Show, FALSE, FALSE, NULL);
 }
 
 
@@ -2028,6 +1885,7 @@ BatchInstallWorker(
     IN PVOID Parameter)
 {
     PBATCH_WORK_CONTEXT Context = Parameter;
+    BOOL RetryDiscovery;
     LONG Index;
 
     for (;;)
@@ -2037,8 +1895,10 @@ BatchInstallWorker(
             break;
 
         TRACE("ClientSideInstallBatchW: installing %ls at depth %lu\n", Context->Devices[Index].InstanceId, Context->Devices[Index].Depth);
-        if (!DevInstallInternal(NULL, NULL, Context->Devices[Index].InstanceId, SW_HIDE, TRUE))
+        RetryDiscovery = FALSE;
+        if (!DevInstallInternal(NULL, NULL, Context->Devices[Index].InstanceId, SW_HIDE, TRUE, FALSE, &RetryDiscovery))
             TRACE("DevInstallW failed for %ls (error %lu)\n", Context->Devices[Index].InstanceId, GetLastError());
+        Context->Devices[Index].RetryDiscovery = RetryDiscovery;
     }
 
     return ERROR_SUCCESS;
@@ -2054,6 +1914,7 @@ InstallBatchDepthRange(
     BATCH_WORK_CONTEXT Context;
     SYSTEM_INFO SystemInfo;
     HANDLE Threads[NEWDEV_BATCH_MAX_WORKERS - 1];
+    BOOL RetryDiscovery;
     DWORD DeviceCount = EndIndex - FirstIndex;
     DWORD ThreadCount = 0;
     DWORD WorkerCount;
@@ -2082,6 +1943,31 @@ InstallBatchDepthRange(
     {
         WaitForSingleObject(Threads[i], INFINITE);
         CloseHandle(Threads[i]);
+    }
+
+    for (i = FirstIndex; i < EndIndex; i++)
+    {
+        if (!Devices[i].RetryDiscovery)
+            continue;
+
+        TRACE("ClientSideInstallBatchW: retrying driver discovery for %ls\n", Devices[i].InstanceId);
+        RetryDiscovery = FALSE;
+        if (!DevInstallInternal(NULL, NULL, Devices[i].InstanceId, SW_HIDE, TRUE, TRUE, &RetryDiscovery))
+            TRACE("Driver discovery retry failed for %ls (error %lu, retryable %u)\n", Devices[i].InstanceId, GetLastError(), RetryDiscovery);
+        Devices[i].RetryDiscovery = RetryDiscovery;
+    }
+
+    /* A later same-key retry may have produced a positive cache result. Give
+     * earlier operational failures one final chance to consume it. */
+    for (i = FirstIndex; i < EndIndex; i++)
+    {
+        if (!Devices[i].RetryDiscovery)
+            continue;
+
+        TRACE("ClientSideInstallBatchW: replaying driver discovery for %ls\n", Devices[i].InstanceId);
+        RetryDiscovery = FALSE;
+        if (!DevInstallInternal(NULL, NULL, Devices[i].InstanceId, SW_HIDE, TRUE, TRUE, &RetryDiscovery))
+            TRACE("Driver discovery replay failed for %ls (error %lu, retryable %u)\n", Devices[i].InstanceId, GetLastError(), RetryDiscovery);
     }
 }
 
@@ -2234,7 +2120,7 @@ ClientSideInstallBatchW(
     if (BatchDepthsKnown)
         SortBatchDevicesByDepth(Devices, DeviceCount);
 
-    NoDriverCacheBeginBatch();
+    NewDevDriverCacheBeginBatch();
     CacheBatchActive = TRUE;
 
     /* Best-effort install: individual failures are logged but don't abort
@@ -2285,7 +2171,7 @@ cleanup:
     }
 
     if (CacheBatchActive)
-        NoDriverCacheEndBatch();
+        NewDevDriverCacheEndBatch();
 
     return ReturnValue;
 }
@@ -2302,9 +2188,8 @@ DllMain(
         INITCOMMONCONTROLSEX InitControls;
 
         DisableThreadLibraryCalls(hInstance);
-        InitializeCriticalSection(&NoDriverIdCacheLock);
+        NewDevDriverCacheInitialize();
         InitializeDeviceInstallPhaseLock();
-        NoDriverIdCacheReady = TRUE;
 
         InitControls.dwSize = sizeof(INITCOMMONCONTROLSEX);
         InitControls.dwICC = ICC_PROGRESS_CLASS;
@@ -2313,7 +2198,7 @@ DllMain(
     }
     else if (dwReason == DLL_PROCESS_DETACH)
     {
-        FreeNoDriverCache();
+        NewDevDriverCacheUninitialize();
         DeleteDeviceInstallPhaseLock();
     }
 
