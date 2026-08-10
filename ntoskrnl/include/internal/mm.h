@@ -1743,6 +1743,13 @@ MmUnloadSystemImage(
     IN PVOID ImageHandle
 );
 
+BOOLEAN
+NTAPI
+MmIsSystemImageImportingModule(
+    _In_ PVOID ImageBase,
+    _In_ PCUNICODE_STRING ModuleName
+);
+
 #ifdef CONFIG_SMP
 BOOLEAN
 NTAPI

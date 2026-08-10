@@ -608,6 +608,69 @@ PsInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 }
 
+BOOLEAN
+NTAPI
+PspGetLegacyXpdmVersion(
+    _In_ PVOID CallerAddress,
+    _Out_ PULONG MajorVersion,
+    _Out_ PULONG MinorVersion,
+    _Out_ PULONG BuildNumber)
+{
+    PIMAGE_NT_HEADERS NtHeaders;
+    UNICODE_STRING VideoPortName = RTL_CONSTANT_STRING(L"VIDEOPRT.SYS");
+    PVOID ImageBase = NULL;
+    ULONG TargetBuild;
+    ULONG TargetMajor;
+    ULONG TargetMinor;
+
+    PAGED_CODE();
+
+    if (!CallerAddress || !RtlPcToFileHeader(CallerAddress, &ImageBase))
+        return FALSE;
+
+    NtHeaders = RtlImageNtHeader(ImageBase);
+    if (!NtHeaders || NtHeaders->OptionalHeader.Subsystem != IMAGE_SUBSYSTEM_NATIVE)
+        return FALSE;
+
+    /* The native subsystem can remain 5.2 in current XPDM drivers, so use the image's OS target. */
+    TargetMajor = NtHeaders->OptionalHeader.MajorOperatingSystemVersion;
+    TargetMinor = NtHeaders->OptionalHeader.MinorOperatingSystemVersion;
+
+    /* Restrict version emulation to the supported NT4/NT5 XPDM targets. */
+    if (TargetMajor == 4 && TargetMinor == 0)
+        TargetBuild = 1381;
+    else if (TargetMajor == 5 && TargetMinor == 0)
+        TargetBuild = 2195;
+    else if (TargetMajor == 5 && TargetMinor == 1)
+        TargetBuild = 2600;
+    else if (TargetMajor == 5 && TargetMinor == 2)
+        TargetBuild = 3790;
+    else
+        return FALSE;
+
+    if ((TargetMajor > NtMajorVersion) || (TargetMajor == NtMajorVersion && TargetMinor >= NtMinorVersion))
+        return FALSE;
+
+    /* XPDM miniports may discard their PE import names after DriverEntry. */
+    if (!MmIsSystemImageImportingModule(ImageBase, &VideoPortName))
+        return FALSE;
+
+    *MajorVersion = TargetMajor;
+    *MinorVersion = TargetMinor;
+    *BuildNumber = TargetBuild;
+
+    DPRINT1("XPDM version compatibility: caller %p in image %p targets NT %lu.%lu build %lu (system NT %lu.%lu)\n",
+            CallerAddress,
+            ImageBase,
+            TargetMajor,
+            TargetMinor,
+            TargetBuild,
+            NtMajorVersion,
+            NtMinorVersion);
+
+    return TRUE;
+}
+
 /* PUBLIC FUNCTIONS **********************************************************/
 
 /*
@@ -620,9 +683,15 @@ PsGetVersion(OUT PULONG MajorVersion OPTIONAL,
              OUT PULONG BuildNumber  OPTIONAL,
              OUT PUNICODE_STRING CSDVersion OPTIONAL)
 {
-    if (MajorVersion) *MajorVersion = NtMajorVersion;
-    if (MinorVersion) *MinorVersion = NtMinorVersion;
-    if (BuildNumber ) *BuildNumber  = NtBuildNumber & 0xFFFF;
+    ULONG ReportedMajor = NtMajorVersion;
+    ULONG ReportedMinor = NtMinorVersion;
+    ULONG ReportedBuild = NtBuildNumber & 0xFFFF;
+
+    PspGetLegacyXpdmVersion(_ReturnAddress(), &ReportedMajor, &ReportedMinor, &ReportedBuild);
+
+    if (MajorVersion) *MajorVersion = ReportedMajor;
+    if (MinorVersion) *MinorVersion = ReportedMinor;
+    if (BuildNumber ) *BuildNumber  = ReportedBuild;
 
     if (CSDVersion)
     {

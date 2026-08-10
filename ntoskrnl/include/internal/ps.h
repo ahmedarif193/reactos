@@ -130,6 +130,15 @@ PsInitSystem(
 //
 // Utility Routines
 //
+BOOLEAN
+NTAPI
+PspGetLegacyXpdmVersion(
+    _In_ PVOID CallerAddress,
+    _Out_ PULONG MajorVersion,
+    _Out_ PULONG MinorVersion,
+    _Out_ PULONG BuildNumber
+);
+
 PETHREAD
 NTAPI
 PsGetNextProcessThread(

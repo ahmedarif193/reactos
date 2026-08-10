@@ -40,12 +40,18 @@ NTSTATUS
 NTAPI
 RtlGetVersion(IN OUT PRTL_OSVERSIONINFOW lpVersionInformation)
 {
+    ULONG ReportedMajor = NtMajorVersion;
+    ULONG ReportedMinor = NtMinorVersion;
+    ULONG ReportedBuild = NtBuildNumber & 0xFFFF;
+
     PAGED_CODE();
 
+    PspGetLegacyXpdmVersion(_ReturnAddress(), &ReportedMajor, &ReportedMinor, &ReportedBuild);
+
     /* Return the basics */
-    lpVersionInformation->dwMajorVersion = NtMajorVersion;
-    lpVersionInformation->dwMinorVersion = NtMinorVersion;
-    lpVersionInformation->dwBuildNumber = NtBuildNumber & 0xFFFF;
+    lpVersionInformation->dwMajorVersion = ReportedMajor;
+    lpVersionInformation->dwMinorVersion = ReportedMinor;
+    lpVersionInformation->dwBuildNumber = ReportedBuild;
     lpVersionInformation->dwPlatformId = VER_PLATFORM_WIN32_NT;
 
     /* Check if this is the extended version */
