@@ -172,6 +172,34 @@ IntVideoPortAddDeviceMapLink(
     return STATUS_SUCCESS;
 }
 
+static
+VOID
+IntVideoPortRemoveDeviceMapLink(
+    _In_ PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension)
+{
+    WCHAR DeviceBuffer[20];
+    WCHAR SymlinkBuffer[20];
+    UNICODE_STRING SymlinkName;
+    ULONG DeviceNumber;
+
+    DeviceNumber = DeviceExtension->DeviceNumber;
+    _swprintf(DeviceBuffer, L"\\Device\\Video%lu", DeviceNumber);
+    RtlDeleteRegistryValue(RTL_REGISTRY_DEVICEMAP, L"VIDEO", DeviceBuffer);
+
+    _swprintf(SymlinkBuffer, L"\\??\\DISPLAY%lu", DeviceNumber + 1);
+    RtlInitUnicodeString(&SymlinkName, SymlinkBuffer);
+    IoDeleteSymbolicLink(&SymlinkName);
+
+    if (VideoPortMaxObjectNumber == DeviceNumber)
+    {
+        VideoPortMaxObjectNumber = DeviceNumber - 1;
+        if (DeviceNumber != 0)
+            RtlWriteRegistryValue(RTL_REGISTRY_DEVICEMAP, L"VIDEO", L"MaxObjectNumber", REG_DWORD, &VideoPortMaxObjectNumber, sizeof(VideoPortMaxObjectNumber));
+        else
+            RtlDeleteRegistryValue(RTL_REGISTRY_DEVICEMAP, L"VIDEO", L"MaxObjectNumber");
+    }
+}
+
 PVOID
 NTAPI
 IntVideoPortImageDirectoryEntryToData(
@@ -556,7 +584,9 @@ IntVideoPortFindAdapter(
             IntVideoPortHasEarlierVideoDevice(DeviceExtension->DeviceNumber))
         {
             INFO_(VIDEOPRT,
-                  "Allowing uefifb behind an earlier video device as firmware framebuffer fallback\n");
+                  "uefifb deferring to an existing video device\n");
+            Status = STATUS_UNSUCCESSFUL;
+            goto Failure;
         }
 
         /* Suppose first we may not find any suitable device */
@@ -744,6 +774,7 @@ IntVideoPortFindAdapter(
     return STATUS_SUCCESS;
 
 Failure:
+    IntVideoPortRemoveDeviceMapLink(DeviceExtension);
     RtlFreeUnicodeString(&DeviceExtension->RegistryPath);
     if (DeviceExtension->NextDeviceObject)
         IoDetachDevice(DeviceExtension->NextDeviceObject);
