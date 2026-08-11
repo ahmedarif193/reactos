@@ -2621,7 +2621,7 @@
 @ stdcall -arch=x86_64,arm64 KeSetTargetProcessorDpcEx(ptr ptr)
 @ stdcall -version=0x603+ -arch=arm64 KeSetTimer2(ptr int64 int64 ptr)
 @ stdcall -arch=x86_64,arm64 KeShouldYieldProcessor()
-@ stub -arch=arm64 KeSizeOfAffinityEx
+@ stdcall -arch=arm64 KeSizeOfAffinityEx(long)
 @ stub -arch=arm64 KeSrcuAllocate
 @ stub -arch=arm64 KeSrcuFree
 @ stub -arch=arm64 KeSrcuReadLock

@@ -72,6 +72,17 @@ KeQueryMaximumGroupCount(VOID)
 /*
  * @implemented
  */
+SIZE_T
+NTAPI
+KeSizeOfAffinityEx(
+    _In_ USHORT Count)
+{
+    return FIELD_OFFSET(KAFFINITY_EX, Bitmap) + ((SIZE_T)Count * sizeof(KAFFINITY));
+}
+
+/*
+ * @implemented
+ */
 VOID
 NTAPI
 KeInitializeAffinityEx(

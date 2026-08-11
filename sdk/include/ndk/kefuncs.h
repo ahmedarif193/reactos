@@ -88,6 +88,12 @@ KeQueryGroupAffinityEx(
     _In_ USHORT GroupNumber);
 
 NTKERNELAPI
+SIZE_T
+NTAPI
+KeSizeOfAffinityEx(
+    _In_ USHORT Count);
+
+NTKERNELAPI
 VOID
 NTAPI
 KeInitializeAffinityEx(
