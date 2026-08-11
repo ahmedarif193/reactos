@@ -47,6 +47,116 @@ Ndis6DriverInit(VOID)
         YieldProcessor();
 }
 
+static BOOLEAN
+Ndis6IsSupportedMinorVersion(
+    _In_ UCHAR MinorVersion)
+{
+    switch (MinorVersion)
+    {
+        case 0:
+        case 1:
+#if NDIS_SUPPORT_NDIS620
+        case 20:
+#endif
+#if NDIS_SUPPORT_NDIS630
+        case 30:
+#endif
+#if NDIS_SUPPORT_NDIS640
+        case 40:
+#endif
+#if NDIS_SUPPORT_NDIS650
+        case 50:
+#endif
+#if NDIS_SUPPORT_NDIS651
+        case 51:
+#endif
+#if NDIS_SUPPORT_NDIS660
+        case 60:
+#endif
+#if NDIS_SUPPORT_NDIS670
+        case 70:
+#endif
+#if NDIS_SUPPORT_NDIS680
+        case 80:
+        case 81:
+        case 82:
+        case 83:
+        case 84:
+        case 85:
+        case 86:
+        case 87:
+        case 88:
+        case 89:
+#endif
+            return TRUE;
+
+        default:
+            return FALSE;
+    }
+}
+
+static NDIS_STATUS
+Ndis6ValidateMiniportDriverCharacteristics(
+    _In_ PNDIS_MINIPORT_DRIVER_CHARACTERISTICS Characteristics,
+    _Out_ PULONG CopySize)
+{
+    ULONG RequiredSize;
+    UCHAR RequiredRevision;
+
+    if (Characteristics->Header.Type !=
+        NDIS_OBJECT_TYPE_MINIPORT_DRIVER_CHARACTERISTICS)
+    {
+        return NDIS_STATUS_BAD_CHARACTERISTICS;
+    }
+
+    switch (Characteristics->Header.Revision)
+    {
+        case NDIS_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_1:
+            RequiredSize = NDIS_SIZEOF_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_1;
+            break;
+
+        case NDIS_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_2:
+            RequiredSize = NDIS_SIZEOF_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_2;
+            break;
+
+#if NDIS_SUPPORT_NDIS680
+        case NDIS_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_3:
+            RequiredSize = NDIS_SIZEOF_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_3;
+            break;
+#endif
+
+        default:
+            return NDIS_STATUS_BAD_VERSION;
+    }
+
+    if (Characteristics->Header.Size < RequiredSize ||
+        Characteristics->Header.Size > sizeof(*Characteristics))
+    {
+        return NDIS_STATUS_BAD_CHARACTERISTICS;
+    }
+
+    if (Characteristics->MajorNdisVersion != 6 ||
+        !Ndis6IsSupportedMinorVersion(Characteristics->MinorNdisVersion))
+    {
+        return NDIS_STATUS_BAD_VERSION;
+    }
+
+#if NDIS_SUPPORT_NDIS680
+    if (Characteristics->MinorNdisVersion >= 80)
+        RequiredRevision = NDIS_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_3;
+    else
+#endif
+    if (Characteristics->MinorNdisVersion >= 1)
+        RequiredRevision = NDIS_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_2;
+    else
+        RequiredRevision = NDIS_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_1;
+    if (Characteristics->Header.Revision != RequiredRevision)
+        return NDIS_STATUS_BAD_CHARACTERISTICS;
+
+    *CopySize = Characteristics->Header.Size;
+    return NDIS_STATUS_SUCCESS;
+}
+
 /* Windows 11 zero-normalizes these descriptors into fixed NDIS-owned
  * storage before publishing them to the rest of the stack. */
 #define NDIS6_OFFLOAD_MINIMUM_SIZE       0x70
@@ -142,6 +252,7 @@ Ndis6RegisterMiniportDriverInternal(
     PNDIS6_DRIVER_BLOCK Block;
     NDIS_STATUS Status;
     KIRQL OldIrql;
+    ULONG CharacteristicsSize;
     ULONG i;
 
     if (DriverObject == NULL || MiniportDriverCharacteristics == NULL ||
@@ -150,23 +261,24 @@ Ndis6RegisterMiniportDriverInternal(
         return NDIS_STATUS_INVALID_PARAMETER;
     }
 
+    *NdisMiniportDriverHandle = NULL;
+
     if (RegistryPath == NULL ||
         RegistryPath->Length > RegistryPath->MaximumLength ||
         (RegistryPath->Length & (sizeof(WCHAR) - 1)) != 0 ||
         RegistryPath->Length > MAXUSHORT - sizeof(WCHAR) ||
-        (RegistryPath->Length != 0 && RegistryPath->Buffer == NULL))
+        (RegistryPath->Length != 0 && RegistryPath->Buffer == NULL) ||
+        (!WdfCxDriver && DriverObject->DriverExtension == NULL))
     {
         return NDIS_STATUS_INVALID_PARAMETER;
     }
 
-    /* Validate the characteristics minimally — we don't enforce every
-     * required handler because the bridge can tolerate some being NULL. */
-    if (MiniportDriverCharacteristics->Header.Type !=
-        NDIS_OBJECT_TYPE_MINIPORT_DRIVER_CHARACTERISTICS)
-    {
-        return NDIS_STATUS_INVALID_PARAMETER;
-    }
+    Status = Ndis6ValidateMiniportDriverCharacteristics(MiniportDriverCharacteristics, &CharacteristicsSize);
+    if (Status != NDIS_STATUS_SUCCESS)
+        return Status;
 
+    /* These two callbacks are required for every NDIS 6 miniport. Other
+     * handlers remain optional or depend on the miniport type. */
     if (MiniportDriverCharacteristics->InitializeHandlerEx == NULL ||
         MiniportDriverCharacteristics->HaltHandlerEx == NULL)
     {
@@ -181,19 +293,12 @@ Ndis6RegisterMiniportDriverInternal(
         return NDIS_STATUS_RESOURCES;
 
     RtlZeroMemory(Block, sizeof(*Block));
+    Block->Signature             = NDIS6_DRIVER_BLOCK_SIGNATURE;
     Block->DriverObject          = DriverObject;
     Block->MiniportDriverContext = MiniportDriverContext;
     Block->IsWdfManaged          = (WdfCxDriver != NULL);
     Block->WdfCxDriver           = WdfCxDriver;
-    /* Copy only the bytes the driver actually supplied (REV_1 is 16 bytes
-     * shorter than REV_2). The block was zeroed above so the REV_2 direct-OID
-     * handlers stay NULL for a REV_1 driver. */
-    {
-        ULONG CharSize = MiniportDriverCharacteristics->Header.Size;
-        if (CharSize == 0 || CharSize > sizeof(Block->Characteristics))
-            CharSize = sizeof(Block->Characteristics);
-        RtlCopyMemory(&Block->Characteristics, MiniportDriverCharacteristics, CharSize);
-    }
+    RtlCopyMemory(&Block->Characteristics, MiniportDriverCharacteristics, CharacteristicsSize);
 
     /* Copy the registry path so the driver can free its own copy if it
      * wants. We allocate fresh PagedPool storage for the buffer. */
@@ -310,7 +415,7 @@ NdisMDeregisterMiniportDriver(
     PNDIS6_DRIVER_BLOCK Block = (PNDIS6_DRIVER_BLOCK)NdisMiniportDriverHandle;
     KIRQL OldIrql;
 
-    if (Block == NULL)
+    if (Block == NULL || Block->Signature != NDIS6_DRIVER_BLOCK_SIGNATURE)
         return;
 
     KeAcquireSpinLock(&g_Ndis6DriverListLock, &OldIrql);
@@ -323,7 +428,85 @@ NdisMDeregisterMiniportDriver(
     if (Block->WdfCxDriver)
         InterlockedDecrement(&Block->WdfCxDriver->ClientCount);
 
+    Block->Signature = 0;
     ExFreePoolWithTag(Block, NDIS6_DRIVER_TAG);
+}
+
+NDIS_STATUS
+Ndis6CallMiniportAddDevice(
+    _In_ PLOGICAL_ADAPTER Adapter)
+{
+    PNDIS6_ADAPTER_EXT Ext;
+    PNDIS6_DRIVER_BLOCK Block;
+    NDIS_STATUS Status;
+
+    if (Adapter == NULL || !Adapter->IsNdis6)
+        return NDIS_STATUS_INVALID_PARAMETER;
+
+    Ext = NDIS6_EXT(Adapter);
+    if (Ext == NULL || Ext->DriverBlock == NULL)
+        return NDIS_STATUS_INVALID_PARAMETER;
+
+    Block = Ext->DriverBlock;
+    if (!Block->PnpCharacteristicsValid ||
+        Block->PnpCharacteristics.MiniportAddDeviceHandler == NULL)
+    {
+        return NDIS_STATUS_SUCCESS;
+    }
+
+    if (InterlockedCompareExchange(&Ext->MiniportAddDeviceState, NDIS6_ADD_DEVICE_CALLING, NDIS6_ADD_DEVICE_NOT_CALLED) !=
+        NDIS6_ADD_DEVICE_NOT_CALLED)
+    {
+        return NDIS_STATUS_INVALID_STATE;
+    }
+
+    ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+    Status = Block->PnpCharacteristics.MiniportAddDeviceHandler((NDIS_HANDLE)Adapter, Block->MiniportDriverContext);
+    if (Status == NDIS_STATUS_SUCCESS)
+    {
+        InterlockedExchange(&Ext->MiniportAddDeviceState, NDIS6_ADD_DEVICE_SUCCEEDED);
+    }
+    else
+    {
+        Ext->MiniportAddDeviceContext = NULL;
+        Ext->MiniportAddDeviceAttributesValid = FALSE;
+        InterlockedExchange(&Ext->MiniportAddDeviceState, NDIS6_ADD_DEVICE_FAILED);
+    }
+
+    return Status;
+}
+
+VOID
+Ndis6CallMiniportRemoveDevice(
+    _In_ PLOGICAL_ADAPTER Adapter)
+{
+    PNDIS6_ADAPTER_EXT Ext;
+    PNDIS6_DRIVER_BLOCK Block;
+
+    if (Adapter == NULL || !Adapter->IsNdis6)
+        return;
+
+    Ext = NDIS6_EXT(Adapter);
+    if (Ext == NULL || Ext->DriverBlock == NULL)
+        return;
+
+    if (InterlockedCompareExchange(&Ext->MiniportAddDeviceState, NDIS6_ADD_DEVICE_REMOVING, NDIS6_ADD_DEVICE_SUCCEEDED) !=
+        NDIS6_ADD_DEVICE_SUCCEEDED)
+    {
+        return;
+    }
+
+    ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+    Block = Ext->DriverBlock;
+    if (Block->PnpCharacteristicsValid &&
+        Block->PnpCharacteristics.MiniportRemoveDeviceHandler != NULL)
+    {
+        Block->PnpCharacteristics.MiniportRemoveDeviceHandler(Ext->MiniportAddDeviceContext);
+    }
+
+    Ext->MiniportAddDeviceContext = NULL;
+    Ext->MiniportAddDeviceAttributesValid = FALSE;
+    InterlockedExchange(&Ext->MiniportAddDeviceState, NDIS6_ADD_DEVICE_REMOVED);
 }
 
 /* ============================================================================
@@ -355,13 +538,71 @@ NdisMSetMiniportAttributes(
 
     switch (MiniportAttributes->Header.Type)
     {
+        case NDIS_OBJECT_TYPE_MINIPORT_ADD_DEVICE_REGISTRATION_ATTRIBUTES:
+        {
+            PNDIS_MINIPORT_ADD_DEVICE_REGISTRATION_ATTRIBUTES AddDevice =
+                &MiniportAttributes->AddDeviceRegistrationAttributes;
+
+            if (InterlockedCompareExchange(&Ext->MiniportAddDeviceState, NDIS6_ADD_DEVICE_CALLING, NDIS6_ADD_DEVICE_CALLING) !=
+                    NDIS6_ADD_DEVICE_CALLING ||
+                Ext->MiniportAddDeviceAttributesValid)
+            {
+                return NDIS_STATUS_INVALID_STATE;
+            }
+
+            if (AddDevice->Header.Revision !=
+                    NDIS_MINIPORT_ADD_DEVICE_REGISTRATION_ATTRIBUTES_REVISION_1)
+            {
+                return NDIS_STATUS_BAD_VERSION;
+            }
+
+            if (AddDevice->Header.Size !=
+                    NDIS_SIZEOF_MINIPORT_ADD_DEVICE_REGISTRATION_ATTRIBUTES_REVISION_1)
+            {
+                return NDIS_STATUS_INVALID_LENGTH;
+            }
+
+            if (AddDevice->Flags != 0)
+                return NDIS_STATUS_INVALID_PARAMETER;
+
+            Ext->MiniportAddDeviceContext =
+                AddDevice->MiniportAddDeviceContext;
+            Ext->MiniportAddDeviceAttributesValid = TRUE;
+            return NDIS_STATUS_SUCCESS;
+        }
+
         case NDIS_OBJECT_TYPE_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES:
         {
             PNDIS_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES Reg =
                 &MiniportAttributes->RegistrationAttributes;
+            ULONG RequiredSize;
 
-            Ext->RegistrationAttrs       = *Reg;
-            Ext->RegistrationAttrsValid  = TRUE;
+            if (Ext->RegistrationAttrsValid || Ext->GeneralAttrsValid)
+                return NDIS_STATUS_INVALID_STATE;
+
+            switch (Reg->Header.Revision)
+            {
+                case NDIS_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES_REVISION_1:
+                    RequiredSize = NDIS_SIZEOF_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES_REVISION_1;
+                    break;
+
+                case NDIS_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES_REVISION_2:
+                    RequiredSize = NDIS_SIZEOF_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES_REVISION_2;
+                    break;
+
+                default:
+                    return NDIS_STATUS_BAD_VERSION;
+            }
+
+            if (Reg->Header.Size < RequiredSize ||
+                Reg->Header.Size > sizeof(*Reg))
+            {
+                return NDIS_STATUS_INVALID_LENGTH;
+            }
+
+            RtlZeroMemory(&Ext->RegistrationAttrs, sizeof(Ext->RegistrationAttrs));
+            RtlCopyMemory(&Ext->RegistrationAttrs, Reg, Reg->Header.Size);
+            Ext->RegistrationAttrsValid = TRUE;
 
             /* The MiniportAdapterContext field is the driver's per-instance
              * cookie. Every subsequent call into the driver passes this. */
@@ -374,8 +615,37 @@ NdisMSetMiniportAttributes(
         {
             PNDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES Gen =
                 &MiniportAttributes->GeneralAttributes;
+            NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES NewGen;
             PNDIS_OID NewOidList = NULL;
             PNDIS_OID OldOidList;
+            ULONG RequiredSize;
+
+            if (!Ext->RegistrationAttrsValid)
+                return NDIS_STATUS_INVALID_STATE;
+
+            switch (Gen->Header.Revision)
+            {
+                case NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES_REVISION_1:
+                    RequiredSize = NDIS_SIZEOF_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES_REVISION_1;
+                    break;
+
+                case NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES_REVISION_2:
+                    RequiredSize = NDIS_SIZEOF_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES_REVISION_2;
+                    break;
+
+                default:
+                    return NDIS_STATUS_BAD_VERSION;
+            }
+
+            if (Gen->Header.Size < RequiredSize ||
+                Gen->Header.Size > sizeof(*Gen) ||
+                Gen->MacAddressLength > sizeof(Gen->CurrentMacAddress) ||
+                Gen->MacAddressLength > sizeof(Gen->PermanentMacAddress) ||
+                Gen->MacAddressLength > sizeof(Adapter->Address) ||
+                (Gen->SupportedOidListLength % sizeof(NDIS_OID)) != 0)
+            {
+                return NDIS_STATUS_INVALID_LENGTH;
+            }
 
             if (Gen->SupportedOidListLength != 0)
             {
@@ -394,23 +664,35 @@ NdisMSetMiniportAttributes(
                               Gen->SupportedOidListLength);
             }
 
+            RtlZeroMemory(&NewGen, sizeof(NewGen));
+            RtlCopyMemory(&NewGen, Gen, Gen->Header.Size);
+            NewGen.SupportedOidList = NewOidList;
+
+            /* These are nested, caller-owned descriptors. They are not yet
+             * consumed by the bridge, so do not retain transient pointers. */
+            NewGen.PowerManagementCapabilities = NULL;
+            NewGen.RecvScaleCapabilities = NULL;
+            NewGen.PowerManagementCapabilitiesEx = NULL;
+
             OldOidList = Ext->GeneralAttrs.SupportedOidList;
-            Ext->GeneralAttrs       = *Gen;
-            Ext->GeneralAttrs.SupportedOidList = NewOidList;
-            Ext->GeneralAttrsValid  = TRUE;
+            Ext->GeneralAttrs = NewGen;
+            Ext->GeneralAttrsValid = TRUE;
             if (OldOidList != NULL)
                 ExFreePoolWithTag(OldOidList, NDIS6_ATTR_TAG);
 
             /* Mirror the MAC address into the legacy LOGICAL_ADAPTER
              * fields so existing 5.x consumers see it. */
-            if (Gen->MacAddressLength <= sizeof(Adapter->Address))
+            if (Gen->MacAddressLength != 0)
             {
                 RtlCopyMemory(&Adapter->Address,
                               Gen->CurrentMacAddress,
                               Gen->MacAddressLength);
                 Adapter->AddressLength = Gen->MacAddressLength;
             }
-            DbgPrint("NDIS6: adapter %p MAC %02x:%02x:%02x:%02x:%02x:%02x connect=%d\n", Adapter, Gen->CurrentMacAddress[0], Gen->CurrentMacAddress[1], Gen->CurrentMacAddress[2], Gen->CurrentMacAddress[3], Gen->CurrentMacAddress[4], Gen->CurrentMacAddress[5], Gen->MediaConnectState);
+            if (Gen->MacAddressLength >= 6)
+            {
+                DbgPrint("NDIS6: adapter %p MAC %02x:%02x:%02x:%02x:%02x:%02x connect=%d\n", Adapter, Gen->CurrentMacAddress[0], Gen->CurrentMacAddress[1], Gen->CurrentMacAddress[2], Gen->CurrentMacAddress[3], Gen->CurrentMacAddress[4], Gen->CurrentMacAddress[5], Gen->MediaConnectState);
+            }
             return NDIS_STATUS_SUCCESS;
         }
 
@@ -427,6 +709,15 @@ NdisMSetMiniportAttributes(
             PVOID NewTcpDefault = NULL;
             PVOID NewTcpHardware = NULL;
             NDIS_STATUS Status;
+
+            if (!Ext->GeneralAttrsValid)
+                return NDIS_STATUS_INVALID_STATE;
+
+            if (Offload->Header.Revision !=
+                NDIS_MINIPORT_ADAPTER_OFFLOAD_ATTRIBUTES_REVISION_1)
+            {
+                return NDIS_STATUS_BAD_VERSION;
+            }
 
             /* Windows treats a short outer descriptor as an empty offload
              * declaration and does not read beyond Header.Size. */
@@ -537,6 +828,16 @@ Ndis6CompleteIrp(_In_ PIRP Irp, _In_ NTSTATUS Status)
 {
     Irp->IoStatus.Status = Status;
     Irp->IoStatus.Information = 0;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    return Status;
+}
+
+static NTSTATUS
+Ndis6CompleteIrpPreserveInformation(
+    _In_ PIRP Irp,
+    _In_ NTSTATUS Status)
+{
+    Irp->IoStatus.Status = Status;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
     return Status;
 }
@@ -852,6 +1153,13 @@ Ndis6AddDevice(
     if (!NT_SUCCESS(NdisStatus))
         return NdisStatus;
 
+    NdisStatus = Ndis6CallMiniportAddDevice(Adapter);
+    if (NdisStatus != NDIS_STATUS_SUCCESS)
+    {
+        Ndis6DestroyLogicalAdapter(Adapter);
+        return (NTSTATUS)NdisStatus;
+    }
+
     return STATUS_SUCCESS;
 }
 
@@ -890,6 +1198,19 @@ Ndis6DispatchPnp(
     {
         case IRP_MN_START_DEVICE:
         {
+            /* MiniportStartDevice removes any private resources that the
+             * optional post-bus FilterResourceRequirements callback added.
+             * Windows invokes it before the START reaches lower drivers. */
+            if (Ext != NULL &&
+                Ext->DriverBlock->PnpCharacteristicsValid &&
+                Ext->DriverBlock->PnpCharacteristics.MiniportStartDeviceHandler != NULL)
+            {
+                ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+                NdisStatus = Ext->DriverBlock->PnpCharacteristics.MiniportStartDeviceHandler(Ext->MiniportAddDeviceContext, Irp);
+                if (NdisStatus != NDIS_STATUS_SUCCESS)
+                    return Ndis6CompleteIrp(Irp, (NTSTATUS)NdisStatus);
+            }
+
             /* ---------------------------------------------------------
              *  Forward START down first so PCI (the PDO's driver)
              *  finishes its own device setup — DMA adapter registration,
@@ -939,19 +1260,35 @@ Ndis6DispatchPnp(
             if (NdisStatus == NDIS_STATUS_SUCCESS)
             {
                 if (Ext)
+                {
                     Ext->Initialized = TRUE;
+                    InterlockedExchange(&Ext->ProtocolBindingsClosing, 0);
+                }
                 Status = STATUS_SUCCESS;
 
-                /* Phase 7A: now that the adapter is up and GeneralAttrs
-                 * is populated, fan out a bind notification to every
-                 * native NDIS 6 protocol driver that has registered. */
+                /* Build the paused stack first: filter modules attach below
+                 * protocol bindings. Then restart bottom-up and only expose a
+                 * Running binding after the miniport restart succeeds. */
                 {
                     extern VOID Ndis6BindAllProtocolsToAdapter(PLOGICAL_ADAPTER);
-                    extern VOID Ndis6AttachFiltersToAdapter(PLOGICAL_ADAPTER);
-                    Ndis6BindAllProtocolsToAdapter(Adapter);
-                    /* Phase 7B: attach any registered NDIS 6 filter
-                     * drivers to this adapter. */
-                    Ndis6AttachFiltersToAdapter(Adapter);
+                    NdisStatus = Ndis6AttachFiltersToAdapter(Adapter);
+                    if (NdisStatus == NDIS_STATUS_SUCCESS)
+                        Ndis6BindAllProtocolsToAdapter(Adapter);
+                }
+
+                if (NdisStatus == NDIS_STATUS_SUCCESS)
+                    NdisStatus = Ndis6RestartDriverStack(Adapter);
+                if (NdisStatus == NDIS_STATUS_SUCCESS)
+                {
+                    Status = STATUS_SUCCESS;
+                }
+                else
+                {
+                    DbgPrint("NDIS6: initial stack activation failed 0x%08lx\n", (ULONG)NdisStatus);
+                    Ndis6CallMiniportHaltEx(Adapter, NdisHaltDeviceInitializationFailed);
+                    if (Ext)
+                        Ext->Initialized = FALSE;
+                    Status = STATUS_UNSUCCESSFUL;
                 }
             }
             else
@@ -964,35 +1301,76 @@ Ndis6DispatchPnp(
             return Ndis6CompleteIrp(Irp, Status);
         }
 
-        case IRP_MN_REMOVE_DEVICE:
         case IRP_MN_SURPRISE_REMOVAL:
         {
-            /* ---------------------------------------------------------
-             *  Symmetric teardown:
-             *    1. Halt the miniport (only if init succeeded)
-             *    2. Forward REMOVE down so PCI can clean up its side
-             *    3. Destroy our own state (detach + free ext + delete FDO)
-             * --------------------------------------------------------- */
-            if (Ext && Ext->Initialized)
+            /* Surprise removal tears down the running miniport but is not the
+             * final PnP lifetime boundary. Keep the FDO and AddDevice context
+             * until the matching IRP_MN_REMOVE_DEVICE arrives. */
+            if (Ext != NULL)
             {
-                NDIS_HALT_ACTION action =
-                    (Stack->MinorFunction == IRP_MN_SURPRISE_REMOVAL)
-                        ? NdisHaltDeviceSurpriseRemoved
-                        : NdisHaltDeviceRemoved;
-                Ndis6CallMiniportHaltEx(Adapter, action);
+                Ext->SurpriseRemoved = TRUE;
+                if (Ext->Initialized)
+                {
+                    Ndis6NotifyMiniportDevicePnPEvent(Ext, NdisDevicePnPEventSurpriseRemoved);
+                    Ndis6CallMiniportHaltEx(Adapter, NdisHaltDeviceSurpriseRemoved);
+                    Ext->Initialized = FALSE;
+                }
+            }
+
+            return Ndis6PassThroughIrp(LowerDevice, Irp);
+        }
+
+        case IRP_MN_REMOVE_DEVICE:
+        {
+            if (Ext != NULL && Ext->Initialized)
+            {
+                Ndis6CallMiniportHaltEx(Adapter, Ext->SurpriseRemoved ? NdisHaltDeviceSurpriseRemoved : NdisHaltDeviceDisabled);
                 Ext->Initialized = FALSE;
             }
 
+            /* The AddDevice context outlives all halt/reinitialize cycles but
+             * not the final remove. Call the optional release callback before
+             * the lower stack and PDO begin their own final destruction. */
+            Ndis6CallMiniportRemoveDevice(Adapter);
             Status = Ndis6PassThroughIrp(LowerDevice, Irp);
             Ndis6DestroyLogicalAdapter(Adapter);
             return Status;
+        }
+
+        case IRP_MN_FILTER_RESOURCE_REQUIREMENTS:
+        {
+            ULONG_PTR LowerInformation;
+
+            /* The bus stack owns the first pass. The miniport may then adjust
+             * message-interrupt requirements while the adapter is halted. */
+            Status = Ndis6ForwardPnpIrpAndWait(LowerDevice, Irp);
+            if (!NT_SUCCESS(Status))
+                return Ndis6CompleteIrpPreserveInformation(Irp, Status);
+
+            LowerInformation = Irp->IoStatus.Information;
+            if (Ext != NULL && !Ext->Initialized &&
+                Ext->DriverBlock->PnpCharacteristicsValid &&
+                Ext->DriverBlock->PnpCharacteristics.MiniportFilterResourceRequirementsHandler != NULL)
+            {
+                ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+                NdisStatus = Ext->DriverBlock->PnpCharacteristics.MiniportFilterResourceRequirementsHandler(Ext->MiniportAddDeviceContext, Irp);
+                if (NdisStatus != NDIS_STATUS_SUCCESS)
+                {
+                    /* Windows falls back to the lower driver's requirements
+                     * when the optional miniport filter declines the request. */
+                    Irp->IoStatus.Information = LowerInformation;
+                    DbgPrint("NDIS6: FilterResourceRequirements declined 0x%08lx\n", (ULONG)NdisStatus);
+                }
+            }
+
+            return Ndis6CompleteIrpPreserveInformation(Irp, Status);
         }
 
         case IRP_MN_QUERY_REMOVE_DEVICE:
         case IRP_MN_QUERY_STOP_DEVICE:
         case IRP_MN_CANCEL_REMOVE_DEVICE:
         case IRP_MN_CANCEL_STOP_DEVICE:
-            /* Forward down; no local handling needed at Phase 1. */
+            /* These queries do not require a local state transition. */
             return Ndis6PassThroughIrp(LowerDevice, Irp);
 
         case IRP_MN_STOP_DEVICE:
@@ -1009,41 +1387,176 @@ Ndis6DispatchPnp(
         default:
             /* Every other PnP IRP — IRP_MN_QUERY_INTERFACE (critical:
              * BUS_INTERFACE_STANDARD), IRP_MN_QUERY_CAPABILITIES,
-             * IRP_MN_QUERY_PNP_DEVICE_STATE, IRP_MN_FILTER_RESOURCE_REQUIREMENTS,
+             * IRP_MN_QUERY_PNP_DEVICE_STATE,
              * IRP_MN_QUERY_DEVICE_RELATIONS, IRP_MN_QUERY_ID,
              * IRP_MN_QUERY_BUS_INFORMATION, etc. — pass through to PCI. */
             return Ndis6PassThroughIrp(LowerDevice, Irp);
     }
 }
 
-/* Completion routine for the D0 power-up path. Called by the IO manager
- * after PCI finishes powering the device back up. We can't safely call
- * the miniport's RestartHandler from inside this routine (it expects
- * IRQL <= PASSIVE), so we queue a work item if the IRQL is too high. */
-typedef struct _NDIS6_POWER_COMPLETION_CONTEXT
+/* Power transitions must invoke MiniportPause/MiniportRestart at
+ * PASSIVE_LEVEL. DispatchPower and lower-driver completion routines can run
+ * at DISPATCH_LEVEL, so defer those callbacks to a system worker and retain
+ * ownership of the power IRP until the required transition is complete. */
+typedef enum _NDIS6_POWER_WORK_OPERATION
 {
-    PNDIS6_ADAPTER_EXT  Ext;
-    DEVICE_POWER_STATE  TargetState;
-} NDIS6_POWER_COMPLETION_CONTEXT, *PNDIS6_POWER_COMPLETION_CONTEXT;
+    Ndis6PowerPauseAndForward,
+    Ndis6PowerResumeAndComplete
+} NDIS6_POWER_WORK_OPERATION;
 
 static VOID
-Ndis6DoMiniportRestart(
-    _In_ PNDIS6_ADAPTER_EXT Ext)
+Ndis6ApplyMiniportPowerState(
+    _In_ PLOGICAL_ADAPTER Adapter,
+    _In_ NDIS6_POWER_WORK_OPERATION Operation,
+    _In_ DEVICE_POWER_STATE NewState)
 {
-    NDIS_MINIPORT_RESTART_PARAMETERS RestartParams;
+    PNDIS6_ADAPTER_EXT Ext;
+    NDIS_STATUS Status;
+    BOOLEAN WasRunning;
 
-    if (Ext == NULL || !Ext->Initialized || Ext->DriverBlock == NULL ||
-        Ext->DriverBlock->Characteristics.RestartHandler == NULL)
-    {
+    if (Adapter == NULL || !Adapter->IsNdis6)
         return;
+
+    Ext = NDIS6_EXT(Adapter);
+    if (Ext == NULL || !Ext->Initialized)
+        return;
+
+    if (Operation == Ndis6PowerPauseAndForward &&
+        Ext->DevicePowerState == PowerDeviceD0)
+    {
+        Status = Ndis6NotifyProtocolBindingsPower(Adapter, NewState);
+        if (Status != NDIS_STATUS_SUCCESS)
+        {
+            DbgPrint("NDIS6: protocol NetEventSetPower D%u failed 0x%08lx\n", (ULONG)NewState - (ULONG)PowerDeviceD0, (ULONG)Status);
+        }
+
+        WasRunning = (Ext->PauseState == NDIS6_PAUSE_STATE_RUNNING);
+        Status = Ndis6PauseDriverStack(Adapter);
+        if (WasRunning && Ext->PauseState == NDIS6_PAUSE_STATE_PAUSED)
+            Ext->PowerPaused = TRUE;
+        if (Status != NDIS_STATUS_SUCCESS)
+            DbgPrint("NDIS6: device power-down stack pause failed 0x%08lx\n", (ULONG)Status);
     }
 
-    RtlZeroMemory(&RestartParams, sizeof(RestartParams));
-    RestartParams.Header.Type     = NDIS_OBJECT_TYPE_DEFAULT;
-    RestartParams.Header.Revision = NDIS_MINIPORT_RESTART_PARAMETERS_REVISION_1;
-    RestartParams.Header.Size     = sizeof(RestartParams);
-    Ext->DriverBlock->Characteristics.RestartHandler(
-        Ext->MiniportAdapterContext, &RestartParams);
+    Status = Ndis6SetMiniportDevicePowerState(Ext, NewState);
+    if (Status != NDIS_STATUS_SUCCESS)
+    {
+        DbgPrint("NDIS6: OID_PNP_SET_POWER D%u failed 0x%08lx\n", (ULONG)NewState - (ULONG)PowerDeviceD0, (ULONG)Status);
+    }
+
+    Ext->DevicePowerState = NewState;
+    if (Ext->FunctionalDeviceObject != NULL)
+    {
+        POWER_STATE PowerState;
+        PowerState.DeviceState = NewState;
+        (VOID)PoSetPowerState(Ext->FunctionalDeviceObject, DevicePowerState, PowerState);
+    }
+
+    if (Operation == Ndis6PowerResumeAndComplete &&
+        NewState == PowerDeviceD0 &&
+        Ext->PowerPaused)
+    {
+        if (Status == NDIS_STATUS_SUCCESS)
+        {
+            Status = Ndis6RestartDriverStack(Adapter);
+            if (Status == NDIS_STATUS_SUCCESS)
+            {
+                Status = Ndis6NotifyProtocolBindingsPower(Adapter, NewState);
+                if (Status != NDIS_STATUS_SUCCESS)
+                {
+                    DbgPrint("NDIS6: protocol NetEventSetPower D0 failed 0x%08lx\n", (ULONG)Status);
+                }
+                Ext->PowerPaused = FALSE;
+            }
+            else
+                DbgPrint("NDIS6: device power-up restart failed 0x%08lx\n", (ULONG)Status);
+        }
+    }
+}
+
+static BOOLEAN
+Ndis6ReservePowerWork(
+    _In_ PNDIS6_ADAPTER_EXT Ext)
+{
+    PLOGICAL_ADAPTER Adapter;
+
+    if (Ext == NULL ||
+        (Adapter = Ext->Adapter) == NULL ||
+        !Ndis6ReferenceAdapterLifecycle(Adapter))
+    {
+        return FALSE;
+    }
+
+    for (;;)
+    {
+        if (InterlockedCompareExchange(&Ext->PowerWorkBusy, 1, 0) == 0)
+        {
+            KeClearEvent(&Ext->PowerWorkIdleEvent);
+            return TRUE;
+        }
+
+        if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+        {
+            Ndis6DereferenceAdapterLifecycle(Adapter);
+            return FALSE;
+        }
+
+        (VOID)KeWaitForSingleObject(&Ext->PowerWorkIdleEvent, Executive, KernelMode, FALSE, NULL);
+    }
+}
+
+static VOID
+Ndis6ReleasePowerWork(
+    _In_ PNDIS6_ADAPTER_EXT Ext)
+{
+    PLOGICAL_ADAPTER Adapter = Ext->Adapter;
+
+    KeSetEvent(&Ext->PowerWorkIdleEvent, IO_NO_INCREMENT, FALSE);
+    InterlockedExchange(&Ext->PowerWorkBusy, 0);
+    Ndis6DereferenceAdapterLifecycle(Adapter);
+}
+
+static VOID
+NTAPI
+Ndis6PowerWorker(
+    _In_ PVOID Parameter)
+{
+    PLOGICAL_ADAPTER Adapter = Parameter;
+    PNDIS6_ADAPTER_EXT Ext;
+    PDEVICE_OBJECT LowerDevice;
+    PIRP Irp;
+    NDIS6_POWER_WORK_OPERATION Operation;
+    DEVICE_POWER_STATE NewState;
+
+    if (Adapter == NULL || !Adapter->IsNdis6)
+        return;
+
+    Ext = NDIS6_EXT(Adapter);
+    if (Ext == NULL)
+        return;
+
+    LowerDevice = Ext->PowerLowerDevice;
+    Irp = Ext->PowerIrp;
+    Operation = (NDIS6_POWER_WORK_OPERATION)Ext->PowerWorkOperation;
+    NewState = Ext->PowerTargetState;
+
+    Ndis6ApplyMiniportPowerState(Adapter, Operation, NewState);
+
+    Ext->PowerIrp = NULL;
+    Ext->PowerLowerDevice = NULL;
+
+    if (Operation == Ndis6PowerPauseAndForward)
+    {
+        PoStartNextPowerIrp(Irp);
+        IoSkipCurrentIrpStackLocation(Irp);
+        (VOID)PoCallDriver(LowerDevice, Irp);
+    }
+    else
+    {
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    }
+
+    Ndis6ReleasePowerWork(Ext);
 }
 
 static NTSTATUS NTAPI
@@ -1052,22 +1565,27 @@ Ndis6PowerCompletionRoutine(
     _In_ PIRP           Irp,
     _In_ PVOID          Context)
 {
-    PNDIS6_POWER_COMPLETION_CONTEXT ctx = (PNDIS6_POWER_COMPLETION_CONTEXT)Context;
+    PLOGICAL_ADAPTER Adapter = Context;
+    PNDIS6_ADAPTER_EXT Ext;
 
     UNREFERENCED_PARAMETER(DeviceObject);
 
-    if (ctx != NULL)
+    Ext = (Adapter != NULL && Adapter->IsNdis6) ? NDIS6_EXT(Adapter) : NULL;
+    if (Ext != NULL &&
+        NT_SUCCESS(Irp->IoStatus.Status) &&
+        InterlockedCompareExchange(&Ext->PowerWorkBusy, 1, 1) == 1)
     {
-        if (ctx->TargetState == PowerDeviceD0)
-        {
-            /* Best-effort: call Restart now. The driver's restart handler
-             * needs to tolerate being called from a completion routine
-             * which may run at DISPATCH_LEVEL. e1000e and most NDIS 6
-             * drivers do tolerate this. */
-            Ndis6DoMiniportRestart(ctx->Ext);
-        }
-        ExFreePoolWithTag(ctx, 'wPNn');
+        Ext->PowerIrp = Irp;
+        ExInitializeWorkItem(&Ext->PowerWorkItem, Ndis6PowerWorker, Adapter);
+        ExQueueWorkItem(&Ext->PowerWorkItem, DelayedWorkQueue);
+
+        if (Irp->PendingReturned)
+            IoMarkIrpPending(Irp);
+        return STATUS_MORE_PROCESSING_REQUIRED;
     }
+
+    if (Ext != NULL)
+        Ndis6ReleasePowerWork(Ext);
 
     if (Irp->PendingReturned)
         IoMarkIrpPending(Irp);
@@ -1078,16 +1596,14 @@ Ndis6PowerCompletionRoutine(
 /* D3: call the miniport's DevicePnPEventNotifyHandler for a given
  * event. The handler was installed via the driver's characteristics
  * struct; most drivers tolerate NULL data. */
-static VOID
+VOID
 Ndis6NotifyMiniportDevicePnPEvent(
     _In_ PNDIS6_ADAPTER_EXT     Ext,
     _In_ NDIS_DEVICE_PNP_EVENT  Event)
 {
     NET_DEVICE_PNP_EVENT NetEvent;
 
-    if (Ext == NULL || !Ext->Initialized || Ext->DriverBlock == NULL ||
-        Ext->DriverBlock->Characteristics.DevicePnPEventNotifyHandler == NULL ||
-        Ext->MiniportAdapterContext == NULL)
+    if (Ext == NULL || !Ext->Initialized || Ext->Adapter == NULL)
     {
         return;
     }
@@ -1101,9 +1617,28 @@ Ndis6NotifyMiniportDevicePnPEvent(
     NetEvent.InformationBuffer       = NULL;
     NetEvent.InformationBufferLength = 0;
 
-    Ext->DriverBlock->Characteristics.DevicePnPEventNotifyHandler(
-        Ext->MiniportAdapterContext,
-        &NetEvent);
+    Ndis6FilterDispatchDevicePnPEvent(Ext->Adapter, &NetEvent);
+}
+
+VOID
+Ndis6FilterTerminalDevicePnPEvent(
+    _In_ PLOGICAL_ADAPTER Adapter,
+    _In_ PNET_DEVICE_PNP_EVENT NetDevicePnPEvent)
+{
+    PNDIS6_ADAPTER_EXT Ext;
+
+    if (Adapter == NULL || NetDevicePnPEvent == NULL)
+        return;
+
+    Ext = NDIS6_EXT(Adapter);
+    if (Ext == NULL || !Ext->Initialized || Ext->DriverBlock == NULL ||
+        Ext->DriverBlock->Characteristics.DevicePnPEventNotifyHandler == NULL ||
+        Ext->MiniportAdapterContext == NULL)
+    {
+        return;
+    }
+
+    Ext->DriverBlock->Characteristics.DevicePnPEventNotifyHandler(Ext->MiniportAdapterContext, NetDevicePnPEvent);
 }
 
 /* D3: Ndis6IndicateNetPnPEvent — fan a NET_PNP_EVENT out to every
@@ -1185,30 +1720,13 @@ Ndis6DispatchPower(
 
     Stack = IoGetCurrentIrpStackLocation(Irp);
 
-    /* D3: system power state transitions (S0→S3/S4/S5 etc.). Notify the
-     * miniport via DevicePnPEventNotifyHandler with
-     * NdisDevicePnPEventPowerProfileChanged so drivers can adjust their
-     * WoL / WOL / suspend state. */
-    if (Ext != NULL && Stack->MajorFunction == IRP_MJ_POWER &&
-        Stack->MinorFunction == IRP_MN_SET_POWER &&
-        Stack->Parameters.Power.Type == SystemPowerState)
-    {
-        Ndis6NotifyMiniportDevicePnPEvent(
-            Ext, NdisDevicePnPEventPowerProfileChanged);
-    }
-
-    /* Phase 6: route SET_POWER state transitions through the NDIS 6
-     * miniport's PauseHandler / RestartHandler. NDIS 6 conceptually
-     * pauses the data path on the way to D3 and restarts on the way
-     * back to D0. We do the simplest valid mapping:
-     *   - On D3 (or any non-D0 state): call PauseHandler before
-     *     forwarding the IRP down so the miniport stops queueing.
-     *   - On D0 entry: forward down first so PCI restores power, then
-     *     call RestartHandler so the miniport resumes.
-     *
-     * The miniport's pause/restart handlers may be NULL — most NDIS 6
-     * drivers register them but a few don't. We treat NULL as "nothing
-     * to do" and just pass the IRP through. */
+    /* NDIS power sequencing has two separate contracts: Pause/Restart gates
+     * network traffic, while OID_PNP_SET_POWER makes the miniport save or
+     * restore device state. For a numerically lower-power D-state, perform
+     * both before the bus loses power. For a higher-power state, let the bus
+     * restore power first and perform the miniport transition in completion.
+     * The embedded adapter work item keeps this correct even under pool
+     * pressure and guarantees every miniport callback runs at PASSIVE_LEVEL. */
     if (Ext != NULL &&
         Stack->MajorFunction == IRP_MJ_POWER &&
         Stack->MinorFunction == IRP_MN_SET_POWER &&
@@ -1216,43 +1734,50 @@ Ndis6DispatchPower(
     {
         DEVICE_POWER_STATE NewState = Stack->Parameters.Power.State.DeviceState;
 
-        if (NewState != PowerDeviceD0 && Ext->Initialized)
+        if (Ext->Initialized &&
+            NewState >= PowerDeviceD0 &&
+            NewState <= PowerDeviceD3 &&
+            NewState > Ext->DevicePowerState)
         {
-            /* Going to a low-power state — pause the miniport now,
-             * then forward down. */
-            if (Ext->DriverBlock != NULL &&
-                Ext->DriverBlock->Characteristics.PauseHandler != NULL)
+            if (KeGetCurrentIrql() != PASSIVE_LEVEL)
             {
-                NDIS_MINIPORT_PAUSE_PARAMETERS PauseParams;
-                RtlZeroMemory(&PauseParams, sizeof(PauseParams));
-                PauseParams.Header.Type     = NDIS_OBJECT_TYPE_DEFAULT;
-                PauseParams.Header.Revision = 1;
-                PauseParams.Header.Size     = sizeof(PauseParams);
-                Ext->DriverBlock->Characteristics.PauseHandler(
-                    Ext->MiniportAdapterContext, &PauseParams);
+                if (Ndis6ReservePowerWork(Ext))
+                {
+                    Ext->PowerWorkOperation = Ndis6PowerPauseAndForward;
+                    Ext->PowerTargetState = NewState;
+                    Ext->PowerLowerDevice = LowerDevice;
+                    Ext->PowerIrp = Irp;
+                    ExInitializeWorkItem(&Ext->PowerWorkItem, Ndis6PowerWorker, Adapter);
+                    IoMarkIrpPending(Irp);
+                    ExQueueWorkItem(&Ext->PowerWorkItem, DelayedWorkQueue);
+                    return STATUS_PENDING;
+                }
+
+                DbgPrint("NDIS6: serialized power work unexpectedly busy at IRQL %lu\n", (ULONG)KeGetCurrentIrql());
+            }
+            else
+            {
+                Ndis6ApplyMiniportPowerState(Adapter, Ndis6PowerPauseAndForward, NewState);
             }
         }
-        else if (NewState == PowerDeviceD0 && Ext->Initialized)
+        else if (Ext->Initialized &&
+                 NewState >= PowerDeviceD0 &&
+                 NewState <= PowerDeviceD3 &&
+                 NewState < Ext->DevicePowerState)
         {
-            /* Going to D0 — forward down first so PCI restores power,
-             * then call RestartHandler from the completion routine
-             * (Ndis6PowerCompletionRoutine). The completion routine
-             * runs after PCI has finished its async resume work. */
-            PNDIS6_POWER_COMPLETION_CONTEXT ctx;
-
-            ctx = (PNDIS6_POWER_COMPLETION_CONTEXT)ExAllocatePoolWithTag(
-                NonPagedPool, sizeof(*ctx), 'wPNn');
-            if (ctx != NULL)
+            if (Ndis6ReservePowerWork(Ext))
             {
-                ctx->Ext         = Ext;
-                ctx->TargetState = PowerDeviceD0;
+                Ext->PowerWorkOperation = Ndis6PowerResumeAndComplete;
+                Ext->PowerTargetState = NewState;
+                Ext->PowerLowerDevice = LowerDevice;
+                Ext->PowerIrp = NULL;
                 IoCopyCurrentIrpStackLocationToNext(Irp);
-                IoSetCompletionRoutine(Irp, Ndis6PowerCompletionRoutine,
-                                       ctx, TRUE, TRUE, TRUE);
+                IoSetCompletionRoutine(Irp, Ndis6PowerCompletionRoutine, Adapter, TRUE, TRUE, TRUE);
                 PoStartNextPowerIrp(Irp);
                 return PoCallDriver(LowerDevice, Irp);
             }
-            /* Allocation failed — fall through to the simple path. */
+
+            DbgPrint("NDIS6: serialized power-up work unexpectedly busy at IRQL %lu\n", (ULONG)KeGetCurrentIrql());
         }
     }
 

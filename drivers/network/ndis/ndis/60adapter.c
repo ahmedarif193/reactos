@@ -25,6 +25,44 @@
 
 #define NDIS6_ADAPTER_TAG  'aDNn'  /* "nNDa" */
 
+static volatile LONG Ndis6NextInterfaceIndex;
+
+static NET_IFTYPE
+Ndis6ReadInterfaceType(
+    _In_opt_ PDEVICE_OBJECT Pdo)
+{
+    union
+    {
+        KEY_VALUE_PARTIAL_INFORMATION Information;
+        UCHAR Buffer[FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + sizeof(ULONG)];
+    } Query;
+    static const WCHAR ValueNameBuffer[] = L"*IfType";
+    UNICODE_STRING ValueName;
+    HANDLE DriverKey;
+    ULONG ResultLength;
+    ULONG Value;
+    NTSTATUS Status;
+
+    if (Pdo == NULL || KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return 6; /* IF_TYPE_ETHERNET_CSMACD */
+
+    Status = IoOpenDeviceRegistryKey(Pdo, PLUGPLAY_REGKEY_DRIVER, KEY_QUERY_VALUE, &DriverKey);
+    if (!NT_SUCCESS(Status))
+        return 6;
+
+    RtlInitUnicodeString(&ValueName, ValueNameBuffer);
+    Status = ZwQueryValueKey(DriverKey, &ValueName, KeyValuePartialInformation, &Query, sizeof(Query), &ResultLength);
+    ZwClose(DriverKey);
+    if (!NT_SUCCESS(Status) || Query.Information.Type != REG_DWORD || Query.Information.DataLength != sizeof(Value))
+        return 6;
+
+    RtlCopyMemory(&Value, Query.Information.Data, sizeof(Value));
+    if (Value == 0 || Value > 0xffff)
+        return 6;
+
+    return (NET_IFTYPE)Value;
+}
+
 static VOID
 Ndis6ResetMiniportAttributes(
     _In_ PLOGICAL_ADAPTER Adapter)
@@ -62,6 +100,29 @@ Ndis6ResetMiniportAttributes(
 
     RtlZeroMemory(&Adapter->Address, sizeof(Adapter->Address));
     Adapter->AddressLength = 0;
+}
+
+static VOID
+Ndis6AllocateInterfaceIdentity(
+    _In_opt_ PDEVICE_OBJECT Pdo,
+    _Out_ PNDIS6_ADAPTER_EXT Ext)
+{
+    LONG Current;
+    LONG Next;
+
+    /* NET_LUID reserves 24 bits for NetLuidIndex and zero is invalid. Keep
+     * IfIndex and NetLuidIndex identical so NdisIfGetInterfaceIndexFromNetLuid
+     * preserves the adapter identity. */
+    do
+    {
+        Current = InterlockedCompareExchange(&Ndis6NextInterfaceIndex, 0, 0);
+        Next = (Current <= 0 || Current >= 0x00ffffff) ? 1 : Current + 1;
+    } while (InterlockedCompareExchange(&Ndis6NextInterfaceIndex, Next, Current) != Current);
+
+    Ext->IfIndex = (NET_IFINDEX)Next;
+    Ext->NetLuid.Value = 0;
+    Ext->NetLuid.Info.IfType = Ndis6ReadInterfaceType(Pdo);
+    Ext->NetLuid.Info.NetLuidIndex = (ULONG64)(ULONG)Next;
 }
 
 /* ============================================================================
@@ -328,6 +389,8 @@ Ndis6InitializeLogicalAdapter(
 
     RtlZeroMemory(Ext, sizeof(*Ext));
     Ext->Adapter                = Adapter;
+    Ndis6AllocateInterfaceIdentity(Pdo, Ext);
+    ExInitializeRundownProtection(&Ext->LifecycleRundown);
     Ext->DriverBlock            = DriverBlock;
     Ext->IsWdfManaged           = IsWdfManaged;
     Ext->PhysicalDeviceObject   = Pdo;
@@ -354,8 +417,13 @@ Ndis6InitializeLogicalAdapter(
     Ext->PauseState    = NDIS6_PAUSE_STATE_PAUSED;
     Ext->PauseStatus   = NDIS_STATUS_SUCCESS;
     Ext->RestartStatus = NDIS_STATUS_SUCCESS;
+    KeInitializeMutex(&Ext->PauseRestartMutex, 0);
+    KeInitializeMutex(&Ext->StackTransitionMutex, 0);
     KeInitializeEvent(&Ext->PauseEvent, SynchronizationEvent, FALSE);
     KeInitializeEvent(&Ext->RestartEvent, SynchronizationEvent, FALSE);
+    KeInitializeEvent(&Ext->PowerWorkIdleEvent, NotificationEvent, TRUE);
+    Ext->DevicePowerState = PowerDeviceD0;
+    Ext->PowerTargetState = PowerDeviceD0;
 
     /* Phase 3 OID thunk: legacy-NDIS5-request waiter list. */
     KeInitializeSpinLock(&Ext->OidWaiterLock);
@@ -364,6 +432,8 @@ Ndis6InitializeLogicalAdapter(
     /* Phase 7B: per-adapter NDIS 6 filter module list. */
     KeInitializeSpinLock(&Ext->FilterModuleListLock);
     InitializeListHead(&Ext->FilterModuleList);
+    KeInitializeSpinLock(&Ext->FilterOidContextListLock);
+    InitializeListHead(&Ext->FilterOidContextList);
 
     /* Per-adapter native NDIS 6 protocol binding list. Populated by
      * NdisOpenAdapterEx, walked by the native send/receive datapath. */
@@ -689,9 +759,9 @@ Ndis6CallMiniportInitializeEx(
             &Ext->AllocatedResourcesTranslated->List[0].PartialResourceList;
     }
     Params.IMDeviceInstanceContext   = NULL;
-    Params.MiniportAddDeviceContext  = NULL;
-    Params.IfIndex                   = 0;
-    Params.NetLuid.Value             = 0;
+    Params.MiniportAddDeviceContext  = Ext->MiniportAddDeviceContext;
+    Params.IfIndex                   = Ext->IfIndex;
+    Params.NetLuid                   = Ext->NetLuid;
     Params.DefaultPortAuthStates     = NULL;
     Params.PciDeviceCustomProperties = NULL;
 
@@ -708,8 +778,8 @@ Ndis6CallMiniportInitializeEx(
     if (Status != NDIS_STATUS_SUCCESS)
     {
         /* A failed InitializeEx owns its driver-side unwind and must not be
-         * followed by HaltEx. Discard attributes published before failure so
-         * a later START begins with an empty NDIS instance. */
+         * followed by HaltEx. Discard any attributes it published before
+         * returning so a later START begins with an empty NDIS instance. */
         Ndis6ResetMiniportAttributes(Adapter);
     }
     else if (!Ext->GeneralAttrsValid)
@@ -751,10 +821,18 @@ Ndis6CallMiniportHaltEx(
     if (Ext == NULL || Ext->DriverBlock == NULL)
         return;
 
-    /* A4: Pause the driver first so it stops accepting new sends. This
+    /* Close registration-time bind/attach admission before pausing. A late
+     * filter registration can otherwise observe Initialized while final halt
+     * is between its pause and detach phases and restart the dying stack. */
+    InterlockedExchange(&Ext->ProtocolBindingsClosing, 1);
+
+    /* Pause the complete stack top-down so no new native sends enter while
+     * the lower stack is being stopped. */
+    (VOID)Ndis6PauseDriverStack(Adapter);
+
+    /* With the stack paused, the driver no longer accepts new sends. This
      * gives the TX DPC a chance to drain what's already in flight and
      * prevents new NBLs from landing on InFlightNblsTx while we wait. */
-    (VOID)Ndis6CallMiniportPauseEx(Adapter);
 
     /* A1: drain in-flight TX wrapper NBLs before the driver tears down.
      * NdisMSendNetBufferListsComplete (60thunk_tx.c) decrements
@@ -806,6 +884,11 @@ Ndis6CallMiniportHaltEx(
         }
     }
 
+    /* Native protocols and filters sit above the miniport and must release
+     * their per-adapter state while OID/close entry points are still valid. */
+    Ndis6UnbindAllProtocolsFromAdapter(Adapter);
+    Ndis6DetachFiltersFromAdapter(Adapter);
+
     if (Ext->DriverBlock->Characteristics.HaltHandlerEx != NULL &&
         Ext->MiniportAdapterContext != NULL)
     {
@@ -814,8 +897,9 @@ Ndis6CallMiniportHaltEx(
     }
 
     /* Registration, general, and offload attributes belong to one
-     * InitializeEx/HaltEx cycle. AddDevice state and interface identity stay
-     * with the devnode so STOP followed by START can initialize it again. */
+     * InitializeEx/HaltEx cycle. MiniportAddDevice state and interface
+     * identity intentionally survive so STOP followed by START can create a
+     * fresh miniport instance on the same devnode. */
     Ndis6ResetMiniportAttributes(Adapter);
 }
 
@@ -850,6 +934,7 @@ Ndis6CallMiniportPauseEx(
     PNDIS6_ADAPTER_EXT           Ext;
     NDIS_MINIPORT_PAUSE_PARAMETERS PauseParams;
     NDIS_STATUS                  Status;
+    NTSTATUS                     WaitStatus;
 
     if (Adapter == NULL || !Adapter->IsNdis6)
         return NDIS_STATUS_INVALID_PARAMETER;
@@ -857,6 +942,13 @@ Ndis6CallMiniportPauseEx(
     Ext = NDIS6_EXT(Adapter);
     if (Ext == NULL)
         return NDIS_STATUS_INVALID_PARAMETER;
+
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return NDIS_STATUS_INVALID_STATE;
+
+    WaitStatus = KeWaitForSingleObject(&Ext->PauseRestartMutex, Executive, KernelMode, FALSE, NULL);
+    if (!NT_SUCCESS(WaitStatus))
+        return (NDIS_STATUS)WaitStatus;
 
     if (Ext->DriverBlock == NULL ||
         Ext->DriverBlock->Characteristics.PauseHandler == NULL ||
@@ -866,13 +958,20 @@ Ndis6CallMiniportPauseEx(
          * simple miniports don't need pause semantics and fall through. */
         Ndis6SetTransmitAccepting(Ext, FALSE);
         Ext->PauseState = NDIS6_PAUSE_STATE_PAUSED;
-        return NDIS_STATUS_SUCCESS;
+        Status = NDIS_STATUS_SUCCESS;
+        goto Exit;
     }
 
-    if (Ext->PauseState == NDIS6_PAUSE_STATE_PAUSED ||
-        Ext->PauseState == NDIS6_PAUSE_STATE_PAUSING)
+    if (Ext->PauseState == NDIS6_PAUSE_STATE_PAUSED)
     {
-        return NDIS_STATUS_SUCCESS;
+        Status = NDIS_STATUS_SUCCESS;
+        goto Exit;
+    }
+
+    if (Ext->PauseState != NDIS6_PAUSE_STATE_RUNNING)
+    {
+        Status = NDIS_STATUS_INVALID_STATE;
+        goto Exit;
     }
 
     RtlZeroMemory(&PauseParams, sizeof(PauseParams));
@@ -894,14 +993,13 @@ Ndis6CallMiniportPauseEx(
 
     if (Status == NDIS_STATUS_PENDING)
     {
-        LARGE_INTEGER Timeout;
-        Timeout.QuadPart = -50000000LL;  /* 5 seconds */
-        KeWaitForSingleObject(&Ext->PauseEvent, Executive, KernelMode,
-                              FALSE, &Timeout);
-        Status = Ext->PauseStatus;
+        WaitStatus = KeWaitForSingleObject(&Ext->PauseEvent, Executive, KernelMode, FALSE, NULL);
+        Status = NT_SUCCESS(WaitStatus)
+            ? Ext->PauseStatus
+            : (NDIS_STATUS)WaitStatus;
     }
 
-    if (NT_SUCCESS(Status))
+    if (Status == NDIS_STATUS_SUCCESS)
         Ext->PauseState = NDIS6_PAUSE_STATE_PAUSED;
     else
     {
@@ -909,6 +1007,8 @@ Ndis6CallMiniportPauseEx(
         Ndis6SetTransmitAccepting(Ext, TRUE);
     }
 
+Exit:
+    KeReleaseMutex(&Ext->PauseRestartMutex, FALSE);
     return Status;
 }
 
@@ -919,6 +1019,7 @@ Ndis6CallMiniportRestartEx(
     PNDIS6_ADAPTER_EXT                 Ext;
     NDIS_MINIPORT_RESTART_PARAMETERS   RestartParams;
     NDIS_STATUS                        Status;
+    NTSTATUS                           WaitStatus;
 
     if (Adapter == NULL || !Adapter->IsNdis6)
         return NDIS_STATUS_INVALID_PARAMETER;
@@ -927,24 +1028,34 @@ Ndis6CallMiniportRestartEx(
     if (Ext == NULL)
         return NDIS_STATUS_INVALID_PARAMETER;
 
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return NDIS_STATUS_INVALID_STATE;
+
+    WaitStatus = KeWaitForSingleObject(&Ext->PauseRestartMutex, Executive, KernelMode, FALSE, NULL);
+    if (!NT_SUCCESS(WaitStatus))
+        return (NDIS_STATUS)WaitStatus;
+
     if (Ext->DriverBlock == NULL ||
         Ext->DriverBlock->Characteristics.RestartHandler == NULL ||
         Ext->MiniportAdapterContext == NULL)
     {
         Ext->PauseState = NDIS6_PAUSE_STATE_RUNNING;
         Ndis6SetTransmitAccepting(Ext, TRUE);
-        return NDIS_STATUS_SUCCESS;
+        Status = NDIS_STATUS_SUCCESS;
+        goto Exit;
     }
 
     if (Ext->PauseState == NDIS6_PAUSE_STATE_RUNNING)
     {
         Ndis6SetTransmitAccepting(Ext, TRUE);
-        return NDIS_STATUS_SUCCESS;
+        Status = NDIS_STATUS_SUCCESS;
+        goto Exit;
     }
 
-    if (Ext->PauseState == NDIS6_PAUSE_STATE_RESTARTING)
+    if (Ext->PauseState != NDIS6_PAUSE_STATE_PAUSED)
     {
-        return NDIS_STATUS_SUCCESS;
+        Status = NDIS_STATUS_INVALID_STATE;
+        goto Exit;
     }
 
     RtlZeroMemory(&RestartParams, sizeof(RestartParams));
@@ -965,14 +1076,13 @@ Ndis6CallMiniportRestartEx(
 
     if (Status == NDIS_STATUS_PENDING)
     {
-        LARGE_INTEGER Timeout;
-        Timeout.QuadPart = -50000000LL;  /* 5 seconds */
-        KeWaitForSingleObject(&Ext->RestartEvent, Executive, KernelMode,
-                              FALSE, &Timeout);
-        Status = Ext->RestartStatus;
+        WaitStatus = KeWaitForSingleObject(&Ext->RestartEvent, Executive, KernelMode, FALSE, NULL);
+        Status = NT_SUCCESS(WaitStatus)
+            ? Ext->RestartStatus
+            : (NDIS_STATUS)WaitStatus;
     }
 
-    if (NT_SUCCESS(Status))
+    if (Status == NDIS_STATUS_SUCCESS)
     {
         Ext->PauseState = NDIS6_PAUSE_STATE_RUNNING;
         Ndis6SetTransmitAccepting(Ext, TRUE);
@@ -983,6 +1093,135 @@ Ndis6CallMiniportRestartEx(
         Ndis6SetTransmitAccepting(Ext, FALSE);
     }
 
+Exit:
+    KeReleaseMutex(&Ext->PauseRestartMutex, FALSE);
+    return Status;
+}
+
+NDIS_STATUS
+Ndis6PauseDriverStackLocked(
+    _In_ PLOGICAL_ADAPTER Adapter)
+{
+    NDIS_STATUS ProtocolStatus;
+    NDIS_STATUS FilterStatus;
+    NDIS_STATUS MiniportStatus;
+    NDIS_STATUS Status;
+
+    if (Adapter == NULL || !Adapter->IsNdis6 || NDIS6_EXT(Adapter) == NULL)
+    {
+        return NDIS_STATUS_INVALID_PARAMETER;
+    }
+
+    if (KeGetCurrentIrql() > APC_LEVEL)
+        return NDIS_STATUS_INVALID_STATE;
+
+    ProtocolStatus = Ndis6PauseProtocolBindings(Adapter);
+    if (ProtocolStatus != NDIS_STATUS_SUCCESS)
+    {
+        Ndis6RestartProtocolBindings(Adapter);
+        Status = ProtocolStatus;
+        goto Exit;
+    }
+
+    FilterStatus = Ndis6PauseFilterModules(Adapter);
+    if (FilterStatus != NDIS_STATUS_SUCCESS)
+    {
+        (VOID)Ndis6RestartFilterModules(Adapter);
+        Ndis6RestartProtocolBindings(Adapter);
+        Status = FilterStatus;
+        goto Exit;
+    }
+
+    MiniportStatus = Ndis6CallMiniportPauseEx(Adapter);
+    if (MiniportStatus != NDIS_STATUS_SUCCESS)
+    {
+        (VOID)Ndis6RestartFilterModules(Adapter);
+        Ndis6RestartProtocolBindings(Adapter);
+        Status = MiniportStatus;
+        goto Exit;
+    }
+
+    Status = NDIS_STATUS_SUCCESS;
+
+Exit:
+    return Status;
+}
+
+NDIS_STATUS
+Ndis6PauseDriverStack(
+    _In_ PLOGICAL_ADAPTER Adapter)
+{
+    PNDIS6_ADAPTER_EXT Ext;
+    NDIS_STATUS Status;
+
+    if (Adapter == NULL || !Adapter->IsNdis6 ||
+        (Ext = NDIS6_EXT(Adapter)) == NULL)
+    {
+        return NDIS_STATUS_INVALID_PARAMETER;
+    }
+
+    if (KeGetCurrentIrql() > APC_LEVEL)
+        return NDIS_STATUS_INVALID_STATE;
+
+    (VOID)KeWaitForSingleObject(&Ext->StackTransitionMutex, Executive, KernelMode, FALSE, NULL);
+
+    Status = Ndis6PauseDriverStackLocked(Adapter);
+
+    KeReleaseMutex(&Ext->StackTransitionMutex, FALSE);
+    return Status;
+}
+
+NDIS_STATUS
+Ndis6RestartDriverStackLocked(
+    _In_ PLOGICAL_ADAPTER Adapter)
+{
+    NDIS_STATUS Status;
+
+    if (Adapter == NULL || !Adapter->IsNdis6 || NDIS6_EXT(Adapter) == NULL)
+        return NDIS_STATUS_INVALID_PARAMETER;
+
+    if (KeGetCurrentIrql() > APC_LEVEL)
+        return NDIS_STATUS_INVALID_STATE;
+
+    Status = Ndis6CallMiniportRestartEx(Adapter);
+    if (Status != NDIS_STATUS_SUCCESS)
+        return Status;
+
+    Status = Ndis6RestartFilterModules(Adapter);
+    if (Status != NDIS_STATUS_SUCCESS)
+    {
+        /* Roll back the lower layers that already restarted. Protocol
+         * bindings are still paused because restart proceeds bottom-up. */
+        (VOID)Ndis6PauseFilterModules(Adapter);
+        (VOID)Ndis6CallMiniportPauseEx(Adapter);
+        return Status;
+    }
+
+    Ndis6RestartProtocolBindings(Adapter);
+    return NDIS_STATUS_SUCCESS;
+}
+
+NDIS_STATUS
+Ndis6RestartDriverStack(
+    _In_ PLOGICAL_ADAPTER Adapter)
+{
+    PNDIS6_ADAPTER_EXT Ext;
+    NDIS_STATUS Status;
+
+    if (Adapter == NULL || !Adapter->IsNdis6 ||
+        (Ext = NDIS6_EXT(Adapter)) == NULL)
+    {
+        return NDIS_STATUS_INVALID_PARAMETER;
+    }
+
+    if (KeGetCurrentIrql() > APC_LEVEL)
+        return NDIS_STATUS_INVALID_STATE;
+
+    (VOID)KeWaitForSingleObject(&Ext->StackTransitionMutex, Executive, KernelMode, FALSE, NULL);
+
+    Status = Ndis6RestartDriverStackLocked(Adapter);
+
+    KeReleaseMutex(&Ext->StackTransitionMutex, FALSE);
     return Status;
 }
 
@@ -1055,13 +1294,36 @@ Ndis6DestroyLogicalAdapter(
     Fdo = Ext ? Ext->FunctionalDeviceObject : NULL;
     IsWdfManaged = Ext ? Ext->IsWdfManaged : FALSE;
 
+    /* Stop registration-time snapshots from acquiring this adapter, then
+     * wait for snapshots already using it. This has to precede protocol and
+     * filter callbacks: both registration paths drop AdapterListLock before
+     * calling drivers and therefore need a real lifetime reference. */
+    KeAcquireSpinLock(&AdapterListLock, &OldIrql);
+    if (Adapter->ListEntry.Flink && Adapter->ListEntry.Blink &&
+        Adapter->ListEntry.Flink != &Adapter->ListEntry)
+    {
+        RemoveEntryList(&Adapter->ListEntry);
+        Adapter->ListEntry.Flink = NULL;
+        Adapter->ListEntry.Blink = NULL;
+    }
+    KeReleaseSpinLock(&AdapterListLock, OldIrql);
+
+    if (Ext)
+        ExWaitForRundownProtectionRelease(&Ext->LifecycleRundown);
+
+    /* The normal halt path already emptied these lists. Keep destruction
+     * symmetric for partial initialization and failed-start paths too. */
+    Ndis6UnbindAllProtocolsFromAdapter(Adapter);
+
     /* Phase 7B: detach any NDIS 6 filter modules attached to this adapter
      * BEFORE we tear anything else down — filters may try to issue OID
      * requests during DetachHandler and need the adapter still wired. */
-    {
-        extern VOID Ndis6DetachFiltersFromAdapter(PLOGICAL_ADAPTER);
-        Ndis6DetachFiltersFromAdapter(Adapter);
-    }
+    Ndis6DetachFiltersFromAdapter(Adapter);
+
+    /* MiniportAddDevice state spans every halt/reinitialize cycle. Release it
+     * exactly once at final device removal, while the adapter handle and PDO
+     * are still valid. */
+    Ndis6CallMiniportRemoveDevice(Adapter);
 
     /* Detach from the device stack BEFORE we free anything. */
     if (!IsWdfManaged && Adapter->NdisMiniportBlock.NextDeviceObject)
@@ -1073,18 +1335,6 @@ Ndis6DestroyLogicalAdapter(
     {
         Adapter->NdisMiniportBlock.NextDeviceObject = NULL;
     }
-
-    /* Remove from the global adapter list so no new bind requests
-     * can find this adapter. */
-    KeAcquireSpinLock(&AdapterListLock, &OldIrql);
-    if (Adapter->ListEntry.Flink && Adapter->ListEntry.Blink &&
-        Adapter->ListEntry.Flink != &Adapter->ListEntry)
-    {
-        RemoveEntryList(&Adapter->ListEntry);
-        Adapter->ListEntry.Flink = NULL;
-        Adapter->ListEntry.Blink = NULL;
-    }
-    KeReleaseSpinLock(&AdapterListLock, OldIrql);
 
     /* Free DMA, interrupt, and other resources we may have set up
      * during MiniportInitializeEx. */
@@ -1192,6 +1442,8 @@ Ndis6CreateImInstance(
 
     RtlZeroMemory(Ext, sizeof(*Ext));
     Ext->Adapter                = Adapter;
+    Ndis6AllocateInterfaceIdentity(Fdo, Ext);
+    ExInitializeRundownProtection(&Ext->LifecycleRundown);
     Ext->DriverBlock            = DriverBlock;
     Ext->PhysicalDeviceObject   = Fdo;   /* self-PDO: no bus underneath */
     Ext->FunctionalDeviceObject = Fdo;
@@ -1206,12 +1458,19 @@ Ndis6CreateImInstance(
     Ext->PauseState    = NDIS6_PAUSE_STATE_PAUSED;
     Ext->PauseStatus   = NDIS_STATUS_SUCCESS;
     Ext->RestartStatus = NDIS_STATUS_SUCCESS;
+    KeInitializeMutex(&Ext->PauseRestartMutex, 0);
+    KeInitializeMutex(&Ext->StackTransitionMutex, 0);
     KeInitializeEvent(&Ext->PauseEvent, SynchronizationEvent, FALSE);
     KeInitializeEvent(&Ext->RestartEvent, SynchronizationEvent, FALSE);
+    KeInitializeEvent(&Ext->PowerWorkIdleEvent, NotificationEvent, TRUE);
+    Ext->DevicePowerState = PowerDeviceD0;
+    Ext->PowerTargetState = PowerDeviceD0;
     KeInitializeSpinLock(&Ext->OidWaiterLock);
     InitializeListHead(&Ext->OidWaiters);
     KeInitializeSpinLock(&Ext->FilterModuleListLock);
     InitializeListHead(&Ext->FilterModuleList);
+    KeInitializeSpinLock(&Ext->FilterOidContextListLock);
+    InitializeListHead(&Ext->FilterOidContextList);
     KeInitializeSpinLock(&Ext->ProtocolBindingListLock);
     InitializeListHead(&Ext->ProtocolBindingList);
 
@@ -1298,14 +1557,29 @@ Ndis6InitializeImDeviceInstance(
 
     Ext = NDIS6_EXT(Adapter);
     if (Ext != NULL)
+    {
         Ext->Initialized = TRUE;
+        InterlockedExchange(&Ext->ProtocolBindingsClosing, 0);
+    }
 
-    Ndis6CallMiniportRestartEx(Adapter);
-
-    /* Bind every registered native NDIS 6 protocol; legacy NDIS 5 protocols
-     * bind separately via their own Linkage\Bind list. */
+    Status = Ndis6AttachFiltersToAdapter(Adapter);
+    if (Status != NDIS_STATUS_SUCCESS)
+    {
+        Ndis6CallMiniportHaltEx(Adapter, NdisHaltDeviceInitializationFailed);
+        Ext->Initialized = FALSE;
+        Ndis6DestroyLogicalAdapter(Adapter);
+        return Status;
+    }
     Ndis6BindAllProtocolsToAdapter(Adapter);
 
+    Status = Ndis6RestartDriverStack(Adapter);
+    if (Status != NDIS_STATUS_SUCCESS)
+    {
+        Ndis6CallMiniportHaltEx(Adapter, NdisHaltDeviceInitializationFailed);
+        Ext->Initialized = FALSE;
+        Ndis6DestroyLogicalAdapter(Adapter);
+        return Status;
+    }
     {
         extern VOID ndisRebindAllProtocols(VOID);
         ndisRebindAllProtocols();
