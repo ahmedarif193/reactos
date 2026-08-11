@@ -2551,7 +2551,7 @@
 @ stub -arch=arm64 KeGetEffectiveIrql
 @ stub -arch=arm64 KeGetNextClockTickDuration
 @ stdcall -arch=arm64 KeGetProcessorIndexFromNumber(ptr)
-@ stub -arch=arm64 KeGetProcessorNumberFromIndex
+@ stdcall -arch=arm64 KeGetProcessorNumberFromIndex(long ptr)
 @ stub -arch=arm64 KeHwPolicyLocateResource
 @ stdcall -arch=arm64 KeInitializeAffinityEx(ptr)
 @ stub -arch=arm64 KeInitializeAffinityEx2
