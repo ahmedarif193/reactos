@@ -14,6 +14,7 @@ typedef VOID (NTAPI *PKMT_KE_COPY_AFFINITY_EX)(_Out_ PKAFFINITY_EX Destination, 
 typedef ULONG (NTAPI *PKMT_KE_FIND_FIRST_SET_LEFT_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity);
 typedef ULONG (NTAPI *PKMT_KE_FIND_FIRST_SET_LEFT_GROUP_AFFINITY)(_In_ PGROUP_AFFINITY GroupAffinity);
 typedef ULONG (NTAPI *PKMT_KE_FIND_FIRST_SET_RIGHT_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity);
+typedef ULONG (NTAPI *PKMT_KE_FIND_FIRST_SET_RIGHT_GROUP_AFFINITY)(_In_ PGROUP_AFFINITY GroupAffinity);
 typedef SIZE_T (NTAPI *PKMT_KE_SIZE_OF_AFFINITY_EX)(_In_ USHORT Count);
 typedef ULONG (NTAPI *PKMT_KE_GET_PROCESSOR_INDEX_FROM_NUMBER)(_In_ PPROCESSOR_NUMBER ProcessorNumber);
 typedef NTSTATUS (NTAPI *PKMT_KE_GET_PROCESSOR_NUMBER_FROM_INDEX)(_In_ ULONG ProcessorIndex, _Out_ PPROCESSOR_NUMBER ProcessorNumber);
@@ -47,6 +48,7 @@ START_TEST(KeArm64AffinityEx)
     PKMT_KE_FIND_FIRST_SET_LEFT_AFFINITY_EX FindFirstSetLeftAffinityEx;
     PKMT_KE_FIND_FIRST_SET_LEFT_GROUP_AFFINITY FindFirstSetLeftGroupAffinity;
     PKMT_KE_FIND_FIRST_SET_RIGHT_AFFINITY_EX FindFirstSetRightAffinityEx;
+    PKMT_KE_FIND_FIRST_SET_RIGHT_GROUP_AFFINITY FindFirstSetRightGroupAffinity;
     PKMT_KE_GET_PROCESSOR_INDEX_FROM_NUMBER GetProcessorIndexFromNumber;
     PKMT_KE_GET_PROCESSOR_NUMBER_FROM_INDEX GetProcessorNumberFromIndex;
     PKMT_KE_IS_EQUAL_AFFINITY_EX IsEqualAffinityEx;
@@ -705,6 +707,94 @@ START_TEST(KeArm64AffinityEx)
     GroupAffinity.Group = ProcessorNumber.Group;
     GroupSource = GroupAffinity;
     ok_eq_ulong(FindFirstSetLeftGroupAffinity(&GroupAffinity), 0);
+    ok_eq_size(RtlCompareMemory(&GroupAffinity, &GroupSource, sizeof(GroupAffinity)), sizeof(GroupAffinity));
+
+    RtlInitUnicodeString(&Name, L"KeFindFirstSetRightGroupAffinity");
+    FindFirstSetRightGroupAffinity = (PKMT_KE_FIND_FIRST_SET_RIGHT_GROUP_AFFINITY)MmGetSystemRoutineAddress(&Name);
+    if (FindFirstSetRightGroupAffinity == NULL)
+    {
+        skip(FALSE, "KeFindFirstSetRightGroupAffinity is not exported\n");
+        return;
+    }
+
+    RtlFillMemory(&GroupAffinity, sizeof(GroupAffinity), 0xA5);
+    GroupAffinity.Mask = 0;
+    GroupSource = GroupAffinity;
+    ok_eq_ulong(FindFirstSetRightGroupAffinity(&GroupAffinity), INVALID_PROCESSOR_INDEX);
+    ok_eq_size(RtlCompareMemory(&GroupAffinity, &GroupSource, sizeof(GroupAffinity)), sizeof(GroupAffinity));
+
+    for (ProcessorIndex = 0; ProcessorIndex < ActiveCount; ProcessorIndex++)
+    {
+        ok_eq_hex(GetProcessorNumberFromIndex(ProcessorIndex, &ProcessorNumber), STATUS_SUCCESS);
+        RtlFillMemory(&GroupAffinity, sizeof(GroupAffinity), 0xA5);
+        GroupAffinity.Mask = (KAFFINITY)1 << ProcessorNumber.Number;
+        GroupAffinity.Group = ProcessorNumber.Group;
+        ok_eq_ulong(FindFirstSetRightGroupAffinity(&GroupAffinity), ProcessorIndex);
+    }
+
+    for (ProcessorIndex = 0; ProcessorIndex < ActiveCount; ProcessorIndex++)
+    {
+        for (OtherIndex = ProcessorIndex; OtherIndex < ActiveCount; OtherIndex++)
+        {
+            ok_eq_hex(GetProcessorNumberFromIndex(ProcessorIndex, &ProcessorNumber), STATUS_SUCCESS);
+            RtlFillMemory(&GroupAffinity, sizeof(GroupAffinity), 0xA5);
+            GroupAffinity.Mask = (KAFFINITY)1 << ProcessorNumber.Number;
+            GroupAffinity.Group = ProcessorNumber.Group;
+            LowestIndex = ProcessorIndex;
+            LowestProcessorNumber = ProcessorNumber;
+            ok_eq_hex(GetProcessorNumberFromIndex(OtherIndex, &ProcessorNumber), STATUS_SUCCESS);
+            if (ProcessorNumber.Group != GroupAffinity.Group)
+                continue;
+            GroupAffinity.Mask |= (KAFFINITY)1 << ProcessorNumber.Number;
+            if (ProcessorNumber.Number < LowestProcessorNumber.Number)
+                LowestIndex = OtherIndex;
+            ok_eq_ulong(FindFirstSetRightGroupAffinity(&GroupAffinity), LowestIndex);
+        }
+    }
+
+    if (ActiveCount <= 16)
+    {
+        CombinationLimit = (KAFFINITY)1 << ActiveCount;
+        for (Combination = 1; Combination < CombinationLimit; Combination++)
+        {
+            RtlFillMemory(&GroupAffinity, sizeof(GroupAffinity), 0xA5);
+            GroupAffinity.Mask = 0;
+            LowestIndex = INVALID_PROCESSOR_INDEX;
+            for (ProcessorIndex = 0; ProcessorIndex < ActiveCount; ProcessorIndex++)
+            {
+                if ((Combination & ((KAFFINITY)1 << ProcessorIndex)) == 0)
+                    continue;
+
+                ok_eq_hex(GetProcessorNumberFromIndex(ProcessorIndex, &ProcessorNumber), STATUS_SUCCESS);
+                if (LowestIndex == INVALID_PROCESSOR_INDEX)
+                {
+                    GroupAffinity.Group = ProcessorNumber.Group;
+                    LowestIndex = ProcessorIndex;
+                    LowestProcessorNumber = ProcessorNumber;
+                }
+                else if (ProcessorNumber.Group != GroupAffinity.Group)
+                {
+                    LowestIndex = INVALID_PROCESSOR_INDEX;
+                    break;
+                }
+                GroupAffinity.Mask |= (KAFFINITY)1 << ProcessorNumber.Number;
+                if (ProcessorNumber.Number < LowestProcessorNumber.Number)
+                {
+                    LowestIndex = ProcessorIndex;
+                    LowestProcessorNumber = ProcessorNumber;
+                }
+            }
+            if (LowestIndex != INVALID_PROCESSOR_INDEX)
+                ok_eq_ulong(FindFirstSetRightGroupAffinity(&GroupAffinity), LowestIndex);
+        }
+    }
+
+    ok_eq_hex(GetProcessorNumberFromIndex(0, &ProcessorNumber), STATUS_SUCCESS);
+    RtlFillMemory(&GroupAffinity, sizeof(GroupAffinity), 0xA5);
+    GroupAffinity.Mask = (KAFFINITY)1 << ProcessorNumber.Number;
+    GroupAffinity.Group = ProcessorNumber.Group;
+    GroupSource = GroupAffinity;
+    ok_eq_ulong(FindFirstSetRightGroupAffinity(&GroupAffinity), 0);
     ok_eq_size(RtlCompareMemory(&GroupAffinity, &GroupSource, sizeof(GroupAffinity)), sizeof(GroupAffinity));
 #endif
 }
