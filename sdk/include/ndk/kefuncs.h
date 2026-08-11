@@ -171,6 +171,13 @@ KeIsEqualAffinityEx(
 NTKERNELAPI
 LOGICAL
 NTAPI
+KeIsSingleGroupAffinityEx(
+    _In_ PKAFFINITY_EX Affinity,
+    _Out_opt_ PUSHORT Group);
+
+NTKERNELAPI
+LOGICAL
+NTAPI
 KeIsSubsetAffinityEx(
     _In_ PKAFFINITY_EX Affinity1,
     _In_ PKAFFINITY_EX Affinity2);
