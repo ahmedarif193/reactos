@@ -75,6 +75,11 @@ VOID
 NTAPI
 KiArm64FinalizeSmtTopology(VOID);
 
+VOID
+NTAPI
+KiArm64RequestIpiMask(
+    _In_ KAFFINITY TargetSet);
+
 /* Reads CCSIDR_EL1 geometry for the CSSELR-selected cache (LevelIndex is
    0-based). The CSSELR/CCSIDR pair is per-PE state: the caller must keep
    the walk on one processor. */
