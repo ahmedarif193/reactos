@@ -2515,8 +2515,8 @@
 @ stub -arch=arm64 KdRegisterPowerHandler
 @ stub -arch=arm64 KdReleaseDebuggerLock
 @ stub -arch=arm64 KdSetEventLoggingPresent
-@ stub -arch=arm64 KeAddGroupAffinityEx
-@ stub -arch=arm64 KeAddProcessorAffinityEx
+@ stdcall -arch=arm64 KeAddGroupAffinityEx(ptr long int64)
+@ stdcall -arch=arm64 KeAddProcessorAffinityEx(ptr long)
 @ stub -arch=arm64 KeAddProcessorGroupAffinity
 @ stub -arch=arm64 KeAddTriageDumpDataBlock
 @ stub -arch=arm64 KeAllocateCalloutStack
@@ -2526,7 +2526,7 @@
 @ stub -arch=arm64 KeAndAffinityEx2
 @ stub -arch=arm64 KeAndGroupAffinityEx
 @ stub -arch=arm64 KeCancelTimer2
-@ stub -arch=arm64 KeCheckProcessorAffinityEx
+@ stdcall -arch=arm64 KeCheckProcessorAffinityEx(ptr long)
 @ stub -arch=arm64 KeCheckProcessorGroupAffinity
 @ stub -arch=arm64 KeClockInterruptNotify
 @ stub -arch=arm64 KeComplementAffinityEx
@@ -2553,7 +2553,7 @@
 @ stub -arch=arm64 KeGetProcessorIndexFromNumber
 @ stub -arch=arm64 KeGetProcessorNumberFromIndex
 @ stub -arch=arm64 KeHwPolicyLocateResource
-@ stub -arch=arm64 KeInitializeAffinityEx
+@ stdcall -arch=arm64 KeInitializeAffinityEx(ptr)
 @ stub -arch=arm64 KeInitializeAffinityEx2
 @ stub -arch=arm64 KeInitializeEnumerationContext
 @ stub -arch=arm64 KeInitializeEnumerationContextFromAffinity
@@ -2565,7 +2565,7 @@
 @ stub -arch=arm64 KeInterlockedSetProcessorAffinityEx
 @ stub -arch=arm64 KeInvalidateRangeAllCaches
 @ stub -arch=arm64 KeInvalidateRangeAllCachesNoIpi
-@ stub -arch=arm64 KeIsEmptyAffinityEx
+@ stdcall -arch=arm64 KeIsEmptyAffinityEx(ptr)
 @ stub -arch=arm64 KeIsEqualAffinityEx
 @ stub -arch=arm64 KeIsSingleGroupAffinityEx
 @ stub -arch=arm64 KeIsSubsetAffinityEx
@@ -2602,9 +2602,9 @@
 @ stub -arch=arm64 KeRcuReadUnlock
 @ stub -arch=arm64 KeRcuSynchronize
 @ stub -arch=arm64 KeRegisterProcessorChangeCallback
-@ stub -arch=arm64 KeReinitializeAffinityEx
-@ stub -arch=arm64 KeRemoveGroupAffinityEx
-@ stub -arch=arm64 KeRemoveProcessorAffinityEx
+@ stdcall -arch=arm64 KeReinitializeAffinityEx(ptr)
+@ stdcall -arch=arm64 KeRemoveGroupAffinityEx(ptr long int64)
+@ stdcall -arch=arm64 KeRemoveProcessorAffinityEx(ptr long)
 @ stub -arch=arm64 KeRemoveProcessorGroupAffinity
 @ stub -arch=arm64 KeRemoveQueueDpcEx
 @ stub -arch=arm64 KeRemoveQueueEx

@@ -74,6 +74,7 @@ KMT_TESTFUNC Test_HalArm64Stage4;
 KMT_TESTFUNC Test_HalArm64Stage5;
 KMT_TESTFUNC Test_KdArm64Layout;
 KMT_TESTFUNC Test_KeArm64;
+KMT_TESTFUNC Test_KeArm64AffinityEx;
 KMT_TESTFUNC Test_KeArm64Dispatcher;
 KMT_TESTFUNC Test_KeArm64DpcIpi;
 KMT_TESTFUNC Test_KeArm64Frames;
@@ -248,6 +249,7 @@ const KMT_TEST TestList[] =
     { "HalArm64Stage5",                     Test_HalArm64Stage5 },
     { "KdArm64Layout",                      Test_KdArm64Layout },
     { "KeArm64",                            Test_KeArm64 },
+    { "KeArm64AffinityEx",                  Test_KeArm64AffinityEx },
     { "KeArm64Dispatcher",                  Test_KeArm64Dispatcher },
     { "KeArm64DpcIpi",                      Test_KeArm64DpcIpi },
     { "KeArm64Frames",                      Test_KeArm64Frames },

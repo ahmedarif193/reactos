@@ -87,6 +87,61 @@ KeQueryGroupAffinityEx(
     _In_ PKAFFINITY_EX Affinity,
     _In_ USHORT GroupNumber);
 
+NTKERNELAPI
+VOID
+NTAPI
+KeInitializeAffinityEx(
+    _Out_ PKAFFINITY_EX Affinity);
+
+NTKERNELAPI
+VOID
+NTAPI
+KeReinitializeAffinityEx(
+    _Inout_ PKAFFINITY_EX Affinity);
+
+NTKERNELAPI
+VOID
+NTAPI
+KeAddGroupAffinityEx(
+    _Inout_ PKAFFINITY_EX Affinity,
+    _In_ USHORT GroupNumber,
+    _In_ KAFFINITY ProcessorMask);
+
+NTKERNELAPI
+VOID
+NTAPI
+KeRemoveGroupAffinityEx(
+    _Inout_ PKAFFINITY_EX Affinity,
+    _In_ USHORT GroupNumber,
+    _In_ KAFFINITY ProcessorMask);
+
+NTKERNELAPI
+VOID
+NTAPI
+KeAddProcessorAffinityEx(
+    _Inout_ PKAFFINITY_EX Affinity,
+    _In_ ULONG ProcessorIndex);
+
+NTKERNELAPI
+VOID
+NTAPI
+KeRemoveProcessorAffinityEx(
+    _Inout_ PKAFFINITY_EX Affinity,
+    _In_ ULONG ProcessorIndex);
+
+NTKERNELAPI
+LOGICAL
+NTAPI
+KeCheckProcessorAffinityEx(
+    _In_ PKAFFINITY_EX Affinity,
+    _In_ ULONG ProcessorIndex);
+
+NTKERNELAPI
+LOGICAL
+NTAPI
+KeIsEmptyAffinityEx(
+    _In_ PKAFFINITY_EX Affinity);
+
 //
 // APC Functions
 //

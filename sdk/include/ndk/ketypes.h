@@ -173,6 +173,26 @@ typedef struct _FIBER                                    /* Field offsets:    */
 #define USER_SHARED_DATA                0x7FFE0000
 
 #ifndef NTOS_MODE_USER
+
+//
+// Extended processor affinity. The fixed backing array matches the native
+// kernel ABI while Bitmap preserves the variable-length view used by helpers.
+//
+#define KAFFINITY_EX_INITIALIZED_GROUPS 20
+#define KAFFINITY_EX_STATIC_GROUPS 32
+
+typedef struct _KAFFINITY_EX
+{
+    USHORT Count;
+    USHORT Size;
+    ULONG Reserved;
+    union
+    {
+        KAFFINITY Bitmap[ANYSIZE_ARRAY];
+        KAFFINITY StaticBitmap[KAFFINITY_EX_STATIC_GROUPS];
+    };
+} KAFFINITY_EX;
+
 //
 // Number of dispatch codes supported by KINTERRUPT
 //

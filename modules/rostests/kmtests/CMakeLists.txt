@@ -203,6 +203,7 @@ if(ARCH STREQUAL "arm64")
         kmArm64/HalArm64Layout.c
         kmArm64/KdArm64Layout.c
         kmArm64/KeArm64.c
+        kmArm64/KeArm64AffinityEx.c
         kmArm64/KeArm64Dispatcher.c
         kmArm64/KeArm64DpcIpi.c
         kmArm64/KeArm64Frames.c
