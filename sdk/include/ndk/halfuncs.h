@@ -384,12 +384,20 @@ HalSendSoftwareInterrupt(
 
 #endif // _M_AMD64
 
+#if defined(_M_ARM64) || defined(__aarch64__)
 NTHALAPI
 VOID
 NTAPI
 HalRequestIpi(
-    _In_ KAFFINITY TargetSet
-);
+    _In_ IPI_TYPE IpiType,
+    _In_opt_ PKAFFINITY_EX Affinity);
+#else
+NTHALAPI
+VOID
+NTAPI
+HalRequestIpi(
+    _In_ KAFFINITY TargetSet);
+#endif
 
 NTHALAPI
 VOID

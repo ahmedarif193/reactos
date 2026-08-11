@@ -5726,16 +5726,21 @@ HalReadDmaCounter(
     return 0;
 }
 
+#define HALP_ARM64_SCHEDULER_IPI_VECTOR 0xE01
+#define HALP_ARM64_MAXIMUM_GROUPS       32
+
 VOID
 NTAPI
 HalRequestIpi(
-    _In_ KAFFINITY TargetSet)
+    _In_ IPI_TYPE IpiType,
+    _In_opt_ PKAFFINITY_EX Affinity)
 {
-    HalpArm64SendSgi(TargetSet, HAL_ARM64_SGI_IPI);
-}
+    NTSTATUS Status;
 
-#define HALP_ARM64_SCHEDULER_IPI_VECTOR 0xE01
-#define HALP_ARM64_MAXIMUM_GROUPS       32
+    Status = HalRequestIpiSpecifyVector(IpiType, Affinity, HALP_ARM64_SCHEDULER_IPI_VECTOR);
+    if (!NT_SUCCESS(Status))
+        KeBugCheckEx(HAL_INITIALIZATION_FAILED, 0x201, (ULONG_PTR)HalpArm64InterruptController, (ULONG_PTR)(LONG)Status, (ULONG_PTR)(LONG)IpiType);
+}
 
 NTSTATUS
 NTAPI

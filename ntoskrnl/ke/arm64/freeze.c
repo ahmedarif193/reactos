@@ -174,7 +174,7 @@ KiArm64WaitForFrozenTargets(
             if (RetrySet != 0)
             {
                 HalRequestDebugWakeIpi(RetrySet);
-                HalRequestIpi(RetrySet);
+                KiArm64RequestIpiMask(RetrySet);
             }
 
             Spins = 0;
@@ -394,7 +394,7 @@ KxFreezeExecution(
     }
 
     /*
-     * Send IPI directly via HalRequestIpi, NOT through KiIpiSend.
+     * Send IPI through the mask adapter, NOT through KiIpiSend.
      *
      * KiIpiSend uses InterlockedBitTestAndSet on IpiFrozen to signal the
      * IPI type, but the freeze code uses IpiFrozen as a STATE value
@@ -402,9 +402,9 @@ KxFreezeExecution(
      * state by setting bit IPI_FREEZE (bit 4), changing 5 → 21.
      *
      * The freeze state is already communicated via IpiFrozen assignment above.
-     * We just need the SGI to interrupt the target CPUs.
+     * We just need the native HalRequestIpi wrapper to interrupt the targets.
      */
-    HalRequestIpi(KiFreezeTargetSet);
+    KiArm64RequestIpiMask(KiFreezeTargetSet);
     HalRequestDebugWakeIpi(KiFreezeTargetSet);
     KiArm64WaitForFrozenTargets(CurrentPrcb);
 }
