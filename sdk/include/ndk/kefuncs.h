@@ -155,6 +155,12 @@ KeCountSetBitsAffinityEx(
     _In_ PKAFFINITY_EX Affinity);
 
 NTKERNELAPI
+ULONG
+NTAPI
+KeFindFirstSetLeftAffinityEx(
+    _In_ PKAFFINITY_EX Affinity);
+
+NTKERNELAPI
 LOGICAL
 NTAPI
 KeAndAffinityEx(
