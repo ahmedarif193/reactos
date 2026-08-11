@@ -161,6 +161,12 @@ KeFindFirstSetLeftAffinityEx(
     _In_ PKAFFINITY_EX Affinity);
 
 NTKERNELAPI
+ULONG
+NTAPI
+KeFindFirstSetRightAffinityEx(
+    _In_ PKAFFINITY_EX Affinity);
+
+NTKERNELAPI
 LOGICAL
 NTAPI
 KeAndAffinityEx(
