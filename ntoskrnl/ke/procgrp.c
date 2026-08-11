@@ -299,6 +299,35 @@ KeIsEqualAffinityEx(
 /*
  * @implemented
  */
+LOGICAL
+NTAPI
+KeIsSubsetAffinityEx(
+    _In_ PKAFFINITY_EX Affinity1,
+    _In_ PKAFFINITY_EX Affinity2)
+{
+    USHORT CommonCount;
+    USHORT GroupNumber;
+
+    CommonCount = min(Affinity1->Count, Affinity2->Count);
+
+    for (GroupNumber = 0; GroupNumber < CommonCount; GroupNumber++)
+    {
+        if ((Affinity1->Bitmap[GroupNumber] & ~Affinity2->Bitmap[GroupNumber]) != 0)
+            return FALSE;
+    }
+
+    for (; GroupNumber < Affinity1->Count; GroupNumber++)
+    {
+        if (Affinity1->Bitmap[GroupNumber] != 0)
+            return FALSE;
+    }
+
+    return TRUE;
+}
+
+/*
+ * @implemented
+ */
 KAFFINITY
 NTAPI
 KeQueryGroupAffinity(

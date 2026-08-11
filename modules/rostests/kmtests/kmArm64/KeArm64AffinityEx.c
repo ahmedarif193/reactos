@@ -13,6 +13,7 @@ typedef VOID (NTAPI *PKMT_KE_COPY_AFFINITY_EX)(_Out_ PKAFFINITY_EX Destination, 
 typedef SIZE_T (NTAPI *PKMT_KE_SIZE_OF_AFFINITY_EX)(_In_ USHORT Count);
 typedef ULONG (NTAPI *PKMT_KE_COUNT_SET_BITS_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity);
 typedef LOGICAL (NTAPI *PKMT_KE_IS_EQUAL_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2);
+typedef LOGICAL (NTAPI *PKMT_KE_IS_SUBSET_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2);
 #endif
 
 START_TEST(KeArm64AffinityEx)
@@ -25,6 +26,7 @@ START_TEST(KeArm64AffinityEx)
     PKMT_KE_COPY_AFFINITY_EX CopyAffinityEx;
     PKMT_KE_COUNT_SET_BITS_AFFINITY_EX CountSetBitsAffinityEx;
     PKMT_KE_IS_EQUAL_AFFINITY_EX IsEqualAffinityEx;
+    PKMT_KE_IS_SUBSET_AFFINITY_EX IsSubsetAffinityEx;
     PKMT_KE_SIZE_OF_AFFINITY_EX SizeOfAffinityEx;
     UNICODE_STRING Name;
 
@@ -160,5 +162,38 @@ START_TEST(KeArm64AffinityEx)
     Source.Bitmap[2] = 0;
     Source.Bitmap[0] = 2;
     ok(!IsEqualAffinityEx(&Affinity, &Source), "different common group compared equal\n");
+
+    RtlInitUnicodeString(&Name, L"KeIsSubsetAffinityEx");
+    IsSubsetAffinityEx = (PKMT_KE_IS_SUBSET_AFFINITY_EX)MmGetSystemRoutineAddress(&Name);
+    if (IsSubsetAffinityEx == NULL)
+    {
+        skip(FALSE, "KeIsSubsetAffinityEx is not exported\n");
+        return;
+    }
+
+    RtlZeroMemory(&Affinity, sizeof(Affinity));
+    RtlZeroMemory(&Source, sizeof(Source));
+    Affinity.Size = MAXUSHORT;
+    Affinity.Reserved = MAXULONG;
+    Source.Count = 1;
+    Source.Size = 1;
+    Source.Bitmap[0] = 1;
+    ok(IsSubsetAffinityEx(&Affinity, &Source), "empty affinity was not a subset\n");
+    ok(!IsSubsetAffinityEx(&Source, &Affinity), "nonempty trailing group was accepted as a subset\n");
+    Affinity.Count = 1;
+    Affinity.Bitmap[0] = 5;
+    Source.Bitmap[0] = 7;
+    ok(IsSubsetAffinityEx(&Affinity, &Source), "common-group subset was rejected\n");
+    ok(!IsSubsetAffinityEx(&Source, &Affinity), "common-group non-subset was accepted\n");
+    Source.Count = 3;
+    Source.Bitmap[2] = (KAFFINITY)1 << 63;
+    ok(IsSubsetAffinityEx(&Affinity, &Source), "superset-only trailing groups changed the result\n");
+    Affinity.Count = 3;
+    ok(IsSubsetAffinityEx(&Affinity, &Source), "zero subset trailing groups changed the result\n");
+    Affinity.Bitmap[1] = 1;
+    ok(!IsSubsetAffinityEx(&Affinity, &Source), "nonzero subset trailing group was accepted\n");
+    Affinity.Bitmap[1] = 0;
+    Affinity.Bitmap[0] = 8;
+    ok(!IsSubsetAffinityEx(&Affinity, &Source), "bit outside the common-group superset was accepted\n");
 #endif
 }
