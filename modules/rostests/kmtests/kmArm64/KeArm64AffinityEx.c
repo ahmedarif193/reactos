@@ -12,6 +12,7 @@ VOID Test_KeArm64AffinityEx(VOID);
 typedef LOGICAL (NTAPI *PKMT_KE_AND_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2, _Out_opt_ PKAFFINITY_EX Result);
 typedef VOID (NTAPI *PKMT_KE_COPY_AFFINITY_EX)(_Out_ PKAFFINITY_EX Destination, _In_ PKAFFINITY_EX Source);
 typedef ULONG (NTAPI *PKMT_KE_FIND_FIRST_SET_LEFT_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity);
+typedef ULONG (NTAPI *PKMT_KE_FIND_FIRST_SET_RIGHT_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity);
 typedef SIZE_T (NTAPI *PKMT_KE_SIZE_OF_AFFINITY_EX)(_In_ USHORT Count);
 typedef ULONG (NTAPI *PKMT_KE_GET_PROCESSOR_INDEX_FROM_NUMBER)(_In_ PPROCESSOR_NUMBER ProcessorNumber);
 typedef NTSTATUS (NTAPI *PKMT_KE_GET_PROCESSOR_NUMBER_FROM_INDEX)(_In_ ULONG ProcessorIndex, _Out_ PPROCESSOR_NUMBER ProcessorNumber);
@@ -34,12 +35,14 @@ START_TEST(KeArm64AffinityEx)
     KAFFINITY Combination;
     KAFFINITY CombinationLimit;
     ULONG HighestIndex;
+    ULONG LowestIndex;
     ULONG OtherIndex;
     ULONG ProcessorIndex;
     PKMT_KE_AND_AFFINITY_EX AndAffinityEx;
     PKMT_KE_COPY_AFFINITY_EX CopyAffinityEx;
     PKMT_KE_COUNT_SET_BITS_AFFINITY_EX CountSetBitsAffinityEx;
     PKMT_KE_FIND_FIRST_SET_LEFT_AFFINITY_EX FindFirstSetLeftAffinityEx;
+    PKMT_KE_FIND_FIRST_SET_RIGHT_AFFINITY_EX FindFirstSetRightAffinityEx;
     PKMT_KE_GET_PROCESSOR_INDEX_FROM_NUMBER GetProcessorIndexFromNumber;
     PKMT_KE_GET_PROCESSOR_NUMBER_FROM_INDEX GetProcessorNumberFromIndex;
     PKMT_KE_IS_EQUAL_AFFINITY_EX IsEqualAffinityEx;
@@ -48,6 +51,7 @@ START_TEST(KeArm64AffinityEx)
     PKMT_KE_OR_AFFINITY_EX OrAffinityEx;
     PKMT_KE_SIZE_OF_AFFINITY_EX SizeOfAffinityEx;
     PROCESSOR_NUMBER HighestProcessorNumber;
+    PROCESSOR_NUMBER LowestProcessorNumber;
     PROCESSOR_NUMBER ProcessorNumber;
     UNICODE_STRING Name;
     USHORT GroupNumber;
@@ -515,6 +519,100 @@ START_TEST(KeArm64AffinityEx)
     Affinity.Bitmap[1] = 1;
     Source = Affinity;
     ok_eq_ulong(FindFirstSetLeftAffinityEx(&Affinity), 1);
+    ok_eq_size(RtlCompareMemory(&Affinity, &Source, sizeof(Affinity)), sizeof(Affinity));
+
+    RtlInitUnicodeString(&Name, L"KeFindFirstSetRightAffinityEx");
+    FindFirstSetRightAffinityEx = (PKMT_KE_FIND_FIRST_SET_RIGHT_AFFINITY_EX)MmGetSystemRoutineAddress(&Name);
+    if (FindFirstSetRightAffinityEx == NULL)
+    {
+        skip(FALSE, "KeFindFirstSetRightAffinityEx is not exported\n");
+        return;
+    }
+
+    RtlZeroMemory(&Affinity, sizeof(Affinity));
+    Affinity.Bitmap[0] = (KAFFINITY)1 << (ActiveCount - 1);
+    ok_eq_ulong(FindFirstSetRightAffinityEx(&Affinity), INVALID_PROCESSOR_INDEX);
+    for (GroupNumber = 0; GroupNumber <= KAFFINITY_EX_INITIALIZED_GROUPS; GroupNumber++)
+    {
+        RtlZeroMemory(&Affinity, sizeof(Affinity));
+        Affinity.Count = GroupNumber;
+        ok_eq_ulong(FindFirstSetRightAffinityEx(&Affinity), INVALID_PROCESSOR_INDEX);
+    }
+
+    for (ProcessorIndex = 0; ProcessorIndex < ActiveCount; ProcessorIndex++)
+    {
+        ok_eq_hex(GetProcessorNumberFromIndex(ProcessorIndex, &ProcessorNumber), STATUS_SUCCESS);
+        RtlZeroMemory(&Affinity, sizeof(Affinity));
+        Affinity.Count = ProcessorNumber.Group + 1;
+        Affinity.Bitmap[ProcessorNumber.Group] = (KAFFINITY)1 << ProcessorNumber.Number;
+        ok_eq_ulong(FindFirstSetRightAffinityEx(&Affinity), ProcessorIndex);
+    }
+
+    for (ProcessorIndex = 0; ProcessorIndex < ActiveCount; ProcessorIndex++)
+    {
+        for (OtherIndex = ProcessorIndex; OtherIndex < ActiveCount; OtherIndex++)
+        {
+            RtlZeroMemory(&Affinity, sizeof(Affinity));
+            Affinity.Size = 0xA5A5;
+            Affinity.Reserved = 0xA5A5A5A5;
+            ok_eq_hex(GetProcessorNumberFromIndex(ProcessorIndex, &ProcessorNumber), STATUS_SUCCESS);
+            Affinity.Count = ProcessorNumber.Group + 1;
+            Affinity.Bitmap[ProcessorNumber.Group] |= (KAFFINITY)1 << ProcessorNumber.Number;
+            LowestIndex = ProcessorIndex;
+            LowestProcessorNumber = ProcessorNumber;
+            ok_eq_hex(GetProcessorNumberFromIndex(OtherIndex, &ProcessorNumber), STATUS_SUCCESS);
+            if (Affinity.Count <= ProcessorNumber.Group)
+                Affinity.Count = ProcessorNumber.Group + 1;
+            Affinity.Bitmap[ProcessorNumber.Group] |= (KAFFINITY)1 << ProcessorNumber.Number;
+            if ((ProcessorNumber.Group < LowestProcessorNumber.Group) ||
+                ((ProcessorNumber.Group == LowestProcessorNumber.Group) &&
+                 (ProcessorNumber.Number < LowestProcessorNumber.Number)))
+            {
+                LowestIndex = OtherIndex;
+            }
+            ok_eq_ulong(FindFirstSetRightAffinityEx(&Affinity), LowestIndex);
+        }
+    }
+
+    if (ActiveCount <= 16)
+    {
+        CombinationLimit = (KAFFINITY)1 << ActiveCount;
+        for (Combination = 1; Combination < CombinationLimit; Combination++)
+        {
+            RtlZeroMemory(&Affinity, sizeof(Affinity));
+            Affinity.Size = 0xA5A5;
+            Affinity.Reserved = 0xA5A5A5A5;
+            LowestIndex = INVALID_PROCESSOR_INDEX;
+            for (ProcessorIndex = 0; ProcessorIndex < ActiveCount; ProcessorIndex++)
+            {
+                if ((Combination & ((KAFFINITY)1 << ProcessorIndex)) == 0)
+                    continue;
+
+                ok_eq_hex(GetProcessorNumberFromIndex(ProcessorIndex, &ProcessorNumber), STATUS_SUCCESS);
+                if (Affinity.Count <= ProcessorNumber.Group)
+                    Affinity.Count = ProcessorNumber.Group + 1;
+                Affinity.Bitmap[ProcessorNumber.Group] |= (KAFFINITY)1 << ProcessorNumber.Number;
+                if ((LowestIndex == INVALID_PROCESSOR_INDEX) ||
+                    (ProcessorNumber.Group < LowestProcessorNumber.Group) ||
+                    ((ProcessorNumber.Group == LowestProcessorNumber.Group) &&
+                     (ProcessorNumber.Number < LowestProcessorNumber.Number)))
+                {
+                    LowestIndex = ProcessorIndex;
+                    LowestProcessorNumber = ProcessorNumber;
+                }
+            }
+            ok_eq_ulong(FindFirstSetRightAffinityEx(&Affinity), LowestIndex);
+        }
+    }
+
+    RtlZeroMemory(&Affinity, sizeof(Affinity));
+    Affinity.Count = 1;
+    Affinity.Size = 0xA5A5;
+    Affinity.Reserved = 0xA5A5A5A5;
+    Affinity.Bitmap[0] = 2;
+    Affinity.Bitmap[1] = 1;
+    Source = Affinity;
+    ok_eq_ulong(FindFirstSetRightAffinityEx(&Affinity), 1);
     ok_eq_size(RtlCompareMemory(&Affinity, &Source, sizeof(Affinity)), sizeof(Affinity));
 #endif
 }
