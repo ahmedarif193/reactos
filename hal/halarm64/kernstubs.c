@@ -176,13 +176,6 @@ VOID NTAPI HalRequestDeferredRecoveryServiceInterrupt(VOID)
     DPRINT1("%s: UNIMPLEMENTED\n", __FUNCTION__);
 }
 
-VOID NTAPI HalRequestIpiSpecifyVector(KAFFINITY TargetSet, ULONG Vector)
-{
-    DPRINT1("%s: UNIMPLEMENTED\n", __FUNCTION__);
-    UNREFERENCED_PARAMETER(TargetSet);
-    UNREFERENCED_PARAMETER(Vector);
-}
-
 VOID NTAPI HalSendSoftwareInterrupt(KAFFINITY TargetSet, KIRQL Irql)
 {
     DPRINT1("%s: UNIMPLEMENTED\n", __FUNCTION__);

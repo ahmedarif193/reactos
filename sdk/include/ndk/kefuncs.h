@@ -80,6 +80,13 @@ FORCEINLINE BOOLEAN InterlockedBitTestAndResetAffinity(volatile KAFFINITY *Affin
 #endif
 }
 
+NTKERNELAPI
+KAFFINITY
+NTAPI
+KeQueryGroupAffinityEx(
+    _In_ PKAFFINITY_EX Affinity,
+    _In_ USHORT GroupNumber);
+
 //
 // APC Functions
 //

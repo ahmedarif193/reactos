@@ -22,6 +22,7 @@ call :run HalArm64Stage3
 call :run HalArm64Stage4
 call :run HalArm64Stage5
 call :run HalArm64Layout
+call :run HalArm64Ipi
 call :run KdArm64Layout
 call :run KeArm64Frames
 call :run RtlArm64UnwindLayout
