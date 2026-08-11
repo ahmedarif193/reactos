@@ -23,6 +23,21 @@ static struct
 
 VOID
 NTAPI
+KiArm64RequestIpiMask(
+    _In_ KAFFINITY TargetSet)
+{
+    KAFFINITY_EX Affinity;
+
+    if (TargetSet == 0)
+        return;
+
+    KeInitializeAffinityEx(&Affinity);
+    Affinity.Bitmap[0] = TargetSet;
+    HalRequestIpi(IpiAffinity, &Affinity);
+}
+
+VOID
+NTAPI
 KiIpiGenericCallTarget(
     _In_ PKIPI_CONTEXT PacketContext,
     _In_ PVOID BroadcastFunction,
@@ -68,7 +83,7 @@ KiIpiSend(
         }
     }
 
-    HalRequestIpi(TargetSet);
+    KiArm64RequestIpiMask(TargetSet);
 #else
     UNREFERENCED_PARAMETER(TargetSet);
     UNREFERENCED_PARAMETER(IpiRequest);
@@ -147,7 +162,7 @@ KiIpiServiceRoutine(
          *
          * The freeze mechanism uses IpiFrozen as a STATE value (not bit flags).
          * KxFreezeExecution sets IpiFrozen = IPI_FROZEN_STATE_TARGET_FREEZE
-         * on target CPUs, then sends a raw SGI via HalRequestIpi.
+         * on target CPUs, then sends an SGI through HalRequestIpi.
          *
          * If IpiFrozen indicates a freeze request, enter the freeze handler
          * which saves state and spins until the debugger releases us.
