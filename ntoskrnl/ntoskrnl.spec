@@ -2566,7 +2566,7 @@
 @ stub -arch=arm64 KeInvalidateRangeAllCaches
 @ stub -arch=arm64 KeInvalidateRangeAllCachesNoIpi
 @ stdcall -arch=arm64 KeIsEmptyAffinityEx(ptr)
-@ stub -arch=arm64 KeIsEqualAffinityEx
+@ stdcall -arch=arm64 KeIsEqualAffinityEx(ptr ptr)
 @ stub -arch=arm64 KeIsSingleGroupAffinityEx
 @ stub -arch=arm64 KeIsSubsetAffinityEx
 @ stub -arch=arm64 KeNotifyProcessorFreezeSupported
