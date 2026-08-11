@@ -25,6 +25,7 @@ call :run HalArm64Layout
 call :run HalArm64Ipi
 call :run KdArm64Layout
 call :run KeArm64Frames
+call :run KeArm64AffinityEx
 call :run RtlArm64UnwindLayout
 call :run KeArm64PcrPrcb
 call :run KeArm64ThreadProcess

@@ -31,20 +31,6 @@ typedef enum _KHETERO_CPU_POLICY
     KHeteroCpuPolicyMax
 } KHETERO_CPU_POLICY;
 
-/* Completes the opaque PKAFFINITY_EX declared by the DDK. A single processor
- * group only ever needs one bitmap entry, but the array is sized for the
- * Win11 group maximum so the layout matches the reference ABI (the ARM64
- * KPRCB carries the embedded copy as PackageProcessorSet[33]: an 8-byte
- * header plus 32 group bitmaps, see sdk/include/ndk/arm64/ketypes.h). */
-#define KI_MAXIMUM_GROUPS 32
-struct _KAFFINITY_EX
-{
-    USHORT Count;
-    USHORT Size;
-    ULONG Reserved;
-    KAFFINITY Bitmap[KI_MAXIMUM_GROUPS];
-};
-
 /* KeSetTimer2 and friends are internal exports not declared by the DDK. */
 NTKERNELAPI USHORT NTAPI KeQueryNodeActiveProcessorCount(_In_ USHORT NodeNumber);
 NTKERNELAPI PKPRCB NTAPI KeQueryPrcbAddress(_In_ ULONG Number);
@@ -86,6 +72,132 @@ KeQueryMaximumGroupCount(VOID)
 /*
  * @implemented
  */
+VOID
+NTAPI
+KeInitializeAffinityEx(
+    _Out_ PKAFFINITY_EX Affinity)
+{
+    Affinity->Count = 1;
+    Affinity->Size = KAFFINITY_EX_INITIALIZED_GROUPS;
+    Affinity->Reserved = 0;
+    RtlZeroMemory(Affinity->Bitmap, Affinity->Size * sizeof(Affinity->Bitmap[0]));
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+KeReinitializeAffinityEx(
+    _Inout_ PKAFFINITY_EX Affinity)
+{
+    RtlZeroMemory(Affinity->Bitmap, Affinity->Count * sizeof(Affinity->Bitmap[0]));
+    Affinity->Count = 1;
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+KeAddGroupAffinityEx(
+    _Inout_ PKAFFINITY_EX Affinity,
+    _In_ USHORT GroupNumber,
+    _In_ KAFFINITY ProcessorMask)
+{
+    if (GroupNumber >= Affinity->Size)
+        return;
+
+    if (GroupNumber >= Affinity->Count)
+        Affinity->Count = GroupNumber + 1;
+
+    Affinity->Bitmap[GroupNumber] |= ProcessorMask;
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+KeRemoveGroupAffinityEx(
+    _Inout_ PKAFFINITY_EX Affinity,
+    _In_ USHORT GroupNumber,
+    _In_ KAFFINITY ProcessorMask)
+{
+    if (GroupNumber < Affinity->Count)
+        Affinity->Bitmap[GroupNumber] &= ~ProcessorMask;
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+KeAddProcessorAffinityEx(
+    _Inout_ PKAFFINITY_EX Affinity,
+    _In_ ULONG ProcessorIndex)
+{
+    ULONG GroupNumber = ProcessorIndex / (sizeof(KAFFINITY) * 8);
+    ULONG Number = ProcessorIndex % (sizeof(KAFFINITY) * 8);
+
+    KeAddGroupAffinityEx(Affinity, (USHORT)GroupNumber, (KAFFINITY)1 << Number);
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+KeRemoveProcessorAffinityEx(
+    _Inout_ PKAFFINITY_EX Affinity,
+    _In_ ULONG ProcessorIndex)
+{
+    ULONG GroupNumber = ProcessorIndex / (sizeof(KAFFINITY) * 8);
+    ULONG Number = ProcessorIndex % (sizeof(KAFFINITY) * 8);
+
+    KeRemoveGroupAffinityEx(Affinity, (USHORT)GroupNumber, (KAFFINITY)1 << Number);
+}
+
+/*
+ * @implemented
+ */
+LOGICAL
+NTAPI
+KeCheckProcessorAffinityEx(
+    _In_ PKAFFINITY_EX Affinity,
+    _In_ ULONG ProcessorIndex)
+{
+    ULONG GroupNumber = ProcessorIndex / (sizeof(KAFFINITY) * 8);
+    ULONG Number = ProcessorIndex % (sizeof(KAFFINITY) * 8);
+
+    if (GroupNumber >= Affinity->Count)
+        return FALSE;
+
+    return (Affinity->Bitmap[GroupNumber] & ((KAFFINITY)1 << Number)) != 0;
+}
+
+/*
+ * @implemented
+ */
+LOGICAL
+NTAPI
+KeIsEmptyAffinityEx(
+    _In_ PKAFFINITY_EX Affinity)
+{
+    USHORT GroupNumber;
+
+    for (GroupNumber = 0; GroupNumber < Affinity->Count; GroupNumber++)
+    {
+        if (Affinity->Bitmap[GroupNumber] != 0)
+            return FALSE;
+    }
+
+    return TRUE;
+}
+
+/*
+ * @implemented
+ */
 KAFFINITY
 NTAPI
 KeQueryGroupAffinity(
@@ -105,10 +217,7 @@ NTAPI
 KeQueryActiveProcessorAffinity(
     _Out_ PKAFFINITY_EX Affinity)
 {
-    Affinity->Count = 1;
-    Affinity->Size = KI_MAXIMUM_GROUPS;
-    Affinity->Reserved = 0;
-    RtlZeroMemory(Affinity->Bitmap, sizeof(Affinity->Bitmap));
+    KeInitializeAffinityEx(Affinity);
     Affinity->Bitmap[0] = KeActiveProcessors;
 
     return KeQueryActiveProcessorCount(NULL);
