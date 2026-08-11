@@ -13,6 +13,7 @@ typedef LOGICAL (NTAPI *PKMT_KE_AND_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _
 typedef VOID (NTAPI *PKMT_KE_COPY_AFFINITY_EX)(_Out_ PKAFFINITY_EX Destination, _In_ PKAFFINITY_EX Source);
 typedef SIZE_T (NTAPI *PKMT_KE_SIZE_OF_AFFINITY_EX)(_In_ USHORT Count);
 typedef ULONG (NTAPI *PKMT_KE_GET_PROCESSOR_INDEX_FROM_NUMBER)(_In_ PPROCESSOR_NUMBER ProcessorNumber);
+typedef NTSTATUS (NTAPI *PKMT_KE_GET_PROCESSOR_NUMBER_FROM_INDEX)(_In_ ULONG ProcessorIndex, _Out_ PPROCESSOR_NUMBER ProcessorNumber);
 typedef ULONG (NTAPI *PKMT_KE_COUNT_SET_BITS_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity);
 typedef LOGICAL (NTAPI *PKMT_KE_IS_EQUAL_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2);
 typedef LOGICAL (NTAPI *PKMT_KE_IS_SINGLE_GROUP_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity, _Out_opt_ PUSHORT Group);
@@ -33,6 +34,7 @@ START_TEST(KeArm64AffinityEx)
     PKMT_KE_COPY_AFFINITY_EX CopyAffinityEx;
     PKMT_KE_COUNT_SET_BITS_AFFINITY_EX CountSetBitsAffinityEx;
     PKMT_KE_GET_PROCESSOR_INDEX_FROM_NUMBER GetProcessorIndexFromNumber;
+    PKMT_KE_GET_PROCESSOR_NUMBER_FROM_INDEX GetProcessorNumberFromIndex;
     PKMT_KE_IS_EQUAL_AFFINITY_EX IsEqualAffinityEx;
     PKMT_KE_IS_SINGLE_GROUP_AFFINITY_EX IsSingleGroupAffinityEx;
     PKMT_KE_IS_SUBSET_AFFINITY_EX IsSubsetAffinityEx;
@@ -383,5 +385,34 @@ START_TEST(KeArm64AffinityEx)
     ok_eq_ulong(GetProcessorIndexFromNumber(&ProcessorNumber), ActiveCount - 1);
     ProcessorNumber.Number = (UCHAR)ActiveCount;
     ok_eq_ulong(GetProcessorIndexFromNumber(&ProcessorNumber), INVALID_PROCESSOR_INDEX);
+
+    RtlInitUnicodeString(&Name, L"KeGetProcessorNumberFromIndex");
+    GetProcessorNumberFromIndex = (PKMT_KE_GET_PROCESSOR_NUMBER_FROM_INDEX)MmGetSystemRoutineAddress(&Name);
+    if (GetProcessorNumberFromIndex == NULL)
+    {
+        skip(FALSE, "KeGetProcessorNumberFromIndex is not exported\n");
+        return;
+    }
+
+    RtlFillMemory(&ProcessorNumber, sizeof(ProcessorNumber), 0xA5);
+    ok_eq_hex(GetProcessorNumberFromIndex(0, &ProcessorNumber), STATUS_SUCCESS);
+    ok_eq_uint(ProcessorNumber.Group, 0);
+    ok_eq_uint(ProcessorNumber.Number, 0);
+    ok_eq_uint(ProcessorNumber.Reserved, 0);
+    RtlFillMemory(&ProcessorNumber, sizeof(ProcessorNumber), 0xA5);
+    ok_eq_hex(GetProcessorNumberFromIndex(1, &ProcessorNumber), STATUS_SUCCESS);
+    ok_eq_uint(ProcessorNumber.Group, 0);
+    ok_eq_uint(ProcessorNumber.Number, 1);
+    ok_eq_uint(ProcessorNumber.Reserved, 0);
+    RtlFillMemory(&ProcessorNumber, sizeof(ProcessorNumber), 0xA5);
+    ok_eq_hex(GetProcessorNumberFromIndex(ActiveCount - 1, &ProcessorNumber), STATUS_SUCCESS);
+    ok_eq_uint(ProcessorNumber.Number, ActiveCount - 1);
+    RtlFillMemory(&ProcessorNumber, sizeof(ProcessorNumber), 0xA5);
+    ok_eq_hex(GetProcessorNumberFromIndex(ActiveCount, &ProcessorNumber), STATUS_INVALID_PARAMETER);
+    ok_eq_uint(ProcessorNumber.Group, 0xA5A5);
+    ok_eq_uint(ProcessorNumber.Number, 0xA5);
+    ok_eq_uint(ProcessorNumber.Reserved, 0xA5);
+    ok_eq_hex(GetProcessorNumberFromIndex(MAXULONG, &ProcessorNumber), STATUS_INVALID_PARAMETER);
+    ok_eq_uint(ProcessorNumber.Group, 0xA5A5);
 #endif
 }

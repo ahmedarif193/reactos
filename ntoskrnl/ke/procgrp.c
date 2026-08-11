@@ -91,6 +91,24 @@ KeGetProcessorIndexFromNumber(
 /*
  * @implemented
  */
+NTSTATUS
+NTAPI
+KeGetProcessorNumberFromIndex(
+    _In_ ULONG ProcessorIndex,
+    _Out_ PPROCESSOR_NUMBER ProcessorNumber)
+{
+    if (ProcessorIndex >= (ULONG)KeNumberProcessors)
+        return STATUS_INVALID_PARAMETER;
+
+    ProcessorNumber->Group = 0;
+    ProcessorNumber->Number = (UCHAR)ProcessorIndex;
+    ProcessorNumber->Reserved = 0;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * @implemented
+ */
 SIZE_T
 NTAPI
 KeSizeOfAffinityEx(
