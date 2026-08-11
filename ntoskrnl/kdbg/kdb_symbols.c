@@ -33,6 +33,7 @@ static KSPIN_LOCK SymbolsToLoadLock;
 static KEVENT SymbolsToLoadEvent;
 
 #define KDB_MAX_MODULES             4096
+#define KDB_MAX_IMAGE_SECTIONS      96
 #define KDB_MAX_SYMBOLS_PER_MODULE  (4 * 1024 * 1024)
 #define KDB_MAX_SYMBOL_SCAN         (8 * 1024 * 1024)
 #define KDB_MAX_SYMBOL_NAME         512
@@ -199,6 +200,10 @@ KdbpSymUnicodeToAnsi(IN PUNICODE_STRING Unicode,
     return Ansi;
 }
 
+static
+BOOLEAN
+KdbpSymGetInfo(IN PLDR_DATA_TABLE_ENTRY LdrEntry, OUT PROSSYM_INFO Information);
+
 /*! \brief Print address...
  *
  * Tries to lookup line number, file name and function name for the given
@@ -217,6 +222,7 @@ KdbSymPrintAddress(
 {
     PLDR_DATA_TABLE_ENTRY LdrEntryAddress;
     LDR_DATA_TABLE_ENTRY LdrEntry;
+    ROSSYM_INFO Information;
     ULONG_PTR RelativeAddress;
     BOOLEAN Printed = FALSE;
     CHAR ModuleNameAnsi[64];
@@ -235,13 +241,13 @@ KdbSymPrintAddress(
      * symbol data lookup below faults or stalls inside the frozen debugger */
     KdbPrintf("<%s:%Ix", ModuleNameAnsi, RelativeAddress);
 
-    if (LdrEntry.PatchInformation && MmIsAddressValid(LdrEntry.PatchInformation))
+    if (KdbpSymGetInfo(&LdrEntry, &Information))
     {
         ULONG LineNumber;
         CHAR FileName[256];
         CHAR FunctionName[256];
 
-        if (RosSymGetAddressInformationEx(LdrEntry.PatchInformation, RelativeAddress, NULL, &LineNumber, FileName, sizeof(FileName), FunctionName, sizeof(FunctionName)))
+        if (RosSymGetAddressInformationEx(&Information, RelativeAddress, NULL, &LineNumber, FileName, sizeof(FileName), FunctionName, sizeof(FunctionName)))
         {
             KdbPrintf(" (%s:%d (%s))", FileName, LineNumber, FunctionName);
             Printed = TRUE;
@@ -339,6 +345,112 @@ KdbpSymReadInfo(IN PVOID InformationAddress, OUT PROSSYM_INFO Information)
     }
 
     return TRUE;
+}
+
+static
+BOOLEAN
+KdbpSymReadEmbeddedInfo(IN PLDR_DATA_TABLE_ENTRY LdrEntry, OUT PROSSYM_INFO Information)
+{
+    static const UCHAR RosSymSectionName[IMAGE_SIZEOF_SHORT_NAME] = ROSSYM_SECTION_NAME;
+    IMAGE_DOS_HEADER DosHeader;
+    IMAGE_NT_HEADERS NtHeaders;
+    IMAGE_SECTION_HEADER SectionHeader;
+    ROSSYM_HEADER RosSymHeader;
+    ULONG_PTR SectionTableOffset;
+    ULONG SectionIndex;
+    ULONG SectionSize;
+    ULONG_PTR SymbolsEnd;
+    ULONG_PTR StringsEnd;
+    PUCHAR ImageBase;
+    PUCHAR SectionBase;
+
+    if ((LdrEntry == NULL) || (Information == NULL) || (LdrEntry->DllBase == NULL) || (LdrEntry->SizeOfImage < sizeof(DosHeader)))
+        return FALSE;
+
+    ImageBase = LdrEntry->DllBase;
+    if (!NT_SUCCESS(KdbpSafeReadMemory(&DosHeader, ImageBase, sizeof(DosHeader))) ||
+        (DosHeader.e_magic != IMAGE_DOS_SIGNATURE) ||
+        (DosHeader.e_lfanew < 0) ||
+        ((ULONG)DosHeader.e_lfanew > LdrEntry->SizeOfImage - sizeof(NtHeaders)))
+    {
+        return FALSE;
+    }
+
+    if (!NT_SUCCESS(KdbpSafeReadMemory(&NtHeaders, ImageBase + DosHeader.e_lfanew, sizeof(NtHeaders))) ||
+        (NtHeaders.Signature != IMAGE_NT_SIGNATURE) ||
+        (NtHeaders.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR_MAGIC) ||
+        (NtHeaders.FileHeader.NumberOfSections == 0) ||
+        (NtHeaders.FileHeader.NumberOfSections > KDB_MAX_IMAGE_SECTIONS) ||
+        (NtHeaders.FileHeader.SizeOfOptionalHeader < sizeof(NtHeaders.OptionalHeader)))
+    {
+        return FALSE;
+    }
+
+    SectionTableOffset = (ULONG_PTR)(ULONG)DosHeader.e_lfanew + FIELD_OFFSET(IMAGE_NT_HEADERS, OptionalHeader) + NtHeaders.FileHeader.SizeOfOptionalHeader;
+    if ((SectionTableOffset > LdrEntry->SizeOfImage) ||
+        (NtHeaders.FileHeader.NumberOfSections > (LdrEntry->SizeOfImage - SectionTableOffset) / sizeof(SectionHeader)))
+    {
+        return FALSE;
+    }
+
+    for (SectionIndex = 0; SectionIndex < NtHeaders.FileHeader.NumberOfSections; SectionIndex++)
+    {
+        if (!NT_SUCCESS(KdbpSafeReadMemory(&SectionHeader, ImageBase + SectionTableOffset + SectionIndex * sizeof(SectionHeader), sizeof(SectionHeader))))
+            return FALSE;
+        if (RtlCompareMemory(SectionHeader.Name, RosSymSectionName, sizeof(RosSymSectionName)) != sizeof(RosSymSectionName))
+            continue;
+
+        SectionSize = SectionHeader.Misc.VirtualSize;
+        if (SectionSize == 0)
+            SectionSize = SectionHeader.SizeOfRawData;
+        else if ((SectionHeader.SizeOfRawData != 0) && (SectionHeader.SizeOfRawData < SectionSize))
+            SectionSize = SectionHeader.SizeOfRawData;
+
+        if ((SectionHeader.PointerToRawData == 0) ||
+            (SectionSize < sizeof(RosSymHeader)) ||
+            (SectionHeader.VirtualAddress > LdrEntry->SizeOfImage) ||
+            (SectionSize > LdrEntry->SizeOfImage - SectionHeader.VirtualAddress))
+        {
+            return FALSE;
+        }
+
+        SectionBase = ImageBase + SectionHeader.VirtualAddress;
+        if (!NT_SUCCESS(KdbpSafeReadMemory(&RosSymHeader, SectionBase, sizeof(RosSymHeader))))
+            return FALSE;
+
+        SymbolsEnd = (ULONG_PTR)RosSymHeader.SymbolsOffset + RosSymHeader.SymbolsLength;
+        StringsEnd = (ULONG_PTR)RosSymHeader.StringsOffset + RosSymHeader.StringsLength;
+        if ((RosSymHeader.SymbolsOffset < sizeof(RosSymHeader)) ||
+            (SymbolsEnd > SectionSize) ||
+            (RosSymHeader.StringsOffset < SymbolsEnd) ||
+            (StringsEnd > SectionSize) ||
+            ((RosSymHeader.SymbolsLength % sizeof(ROSSYM_ENTRY)) != 0) ||
+            (RosSymHeader.SymbolsLength == 0) ||
+            (RosSymHeader.StringsLength == 0) ||
+            ((RosSymHeader.SymbolsLength / sizeof(ROSSYM_ENTRY)) > KDB_MAX_SYMBOLS_PER_MODULE))
+        {
+            return FALSE;
+        }
+
+        Information->Symbols = (PROSSYM_ENTRY)(SectionBase + RosSymHeader.SymbolsOffset);
+        Information->SymbolsCount = RosSymHeader.SymbolsLength / sizeof(ROSSYM_ENTRY);
+        Information->Strings = (PCHAR)(SectionBase + RosSymHeader.StringsOffset);
+        Information->StringsLength = RosSymHeader.StringsLength;
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+static
+BOOLEAN
+KdbpSymGetInfo(IN PLDR_DATA_TABLE_ENTRY LdrEntry, OUT PROSSYM_INFO Information)
+{
+    if (KdbpSymReadInfo(LdrEntry->PatchInformation, Information))
+        return TRUE;
+
+    /* Boot-phase zero has no symbol-loader thread or allocations yet. */
+    return KdbpSymReadEmbeddedInfo(LdrEntry, Information);
 }
 
 static
@@ -604,8 +716,14 @@ KdbSymDescribeAddress(
     KdbpSymUnicodeToAnsi(&LdrEntry.BaseDllName, ModuleName, ModuleNameLength);
     RelativeAddress = (ULONG_PTR)Address - (ULONG_PTR)LdrEntry.DllBase;
     *Displacement = RelativeAddress;
-    if (!KdbpSymReadInfo(LdrEntry.PatchInformation, &Information) || !KdbpSymFindEntryByAddress(&Information, RelativeAddress, &Entry, &EntryIndex) || (Entry.FunctionOffset == 0) || (Entry.FunctionOffset >= Information.StringsLength) || !NT_SUCCESS(KdbpSymReadAnsiString(Information.Strings + Entry.FunctionOffset, Information.StringsLength - Entry.FunctionOffset, FunctionName, FunctionNameLength)))
+    if (!KdbpSymGetInfo(&LdrEntry, &Information) ||
+        !KdbpSymFindEntryByAddress(&Information, RelativeAddress, &Entry, &EntryIndex) ||
+        (Entry.FunctionOffset == 0) ||
+        (Entry.FunctionOffset >= Information.StringsLength) ||
+        !NT_SUCCESS(KdbpSymReadAnsiString(Information.Strings + Entry.FunctionOffset, Information.StringsLength - Entry.FunctionOffset, FunctionName, FunctionNameLength)))
+    {
         return TRUE;
+    }
 
     for (ScanCount = 0; (EntryIndex != 0) && (ScanCount < 4096); ScanCount++)
     {
