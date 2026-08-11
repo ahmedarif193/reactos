@@ -148,6 +148,12 @@ NTAPI
 KeIsEmptyAffinityEx(
     _In_ PKAFFINITY_EX Affinity);
 
+NTKERNELAPI
+ULONG
+NTAPI
+KeCountSetBitsAffinityEx(
+    _In_ PKAFFINITY_EX Affinity);
+
 //
 // APC Functions
 //

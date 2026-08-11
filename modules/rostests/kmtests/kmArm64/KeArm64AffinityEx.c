@@ -10,6 +10,7 @@ VOID Test_KeArm64AffinityEx(VOID);
 
 #ifdef _M_ARM64
 typedef SIZE_T (NTAPI *PKMT_KE_SIZE_OF_AFFINITY_EX)(_In_ USHORT Count);
+typedef ULONG (NTAPI *PKMT_KE_COUNT_SET_BITS_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity);
 #endif
 
 START_TEST(KeArm64AffinityEx)
@@ -18,6 +19,7 @@ START_TEST(KeArm64AffinityEx)
     skip(FALSE, "KeArm64AffinityEx is ARM64-only\n");
 #else
     KAFFINITY_EX Affinity;
+    PKMT_KE_COUNT_SET_BITS_AFFINITY_EX CountSetBitsAffinityEx;
     PKMT_KE_SIZE_OF_AFFINITY_EX SizeOfAffinityEx;
     UNICODE_STRING Name;
 
@@ -68,5 +70,24 @@ START_TEST(KeArm64AffinityEx)
     ok_eq_size(SizeOfAffinityEx(1), (SIZE_T)16);
     ok_eq_size(SizeOfAffinityEx(32), (SIZE_T)264);
     ok_eq_size(SizeOfAffinityEx(MAXUSHORT), (SIZE_T)524288);
+
+    RtlInitUnicodeString(&Name, L"KeCountSetBitsAffinityEx");
+    CountSetBitsAffinityEx = (PKMT_KE_COUNT_SET_BITS_AFFINITY_EX)MmGetSystemRoutineAddress(&Name);
+    if (CountSetBitsAffinityEx == NULL)
+    {
+        skip(FALSE, "KeCountSetBitsAffinityEx is not exported\n");
+        return;
+    }
+
+    RtlZeroMemory(&Affinity, sizeof(Affinity));
+    Affinity.Bitmap[0] = ~(KAFFINITY)0;
+    ok_eq_ulong(CountSetBitsAffinityEx(&Affinity), 0);
+    Affinity.Count = 1;
+    Affinity.Bitmap[0] = ((KAFFINITY)1 << 63) | 1;
+    ok_eq_ulong(CountSetBitsAffinityEx(&Affinity), 2);
+    Affinity.Count = 3;
+    Affinity.Bitmap[1] = ~(KAFFINITY)0;
+    Affinity.Bitmap[2] = 0xE0;
+    ok_eq_ulong(CountSetBitsAffinityEx(&Affinity), 69);
 #endif
 }

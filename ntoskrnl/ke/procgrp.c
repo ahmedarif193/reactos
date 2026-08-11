@@ -209,6 +209,31 @@ KeIsEmptyAffinityEx(
 /*
  * @implemented
  */
+ULONG
+NTAPI
+KeCountSetBitsAffinityEx(
+    _In_ PKAFFINITY_EX Affinity)
+{
+    KAFFINITY ProcessorMask;
+    ULONG BitCount = 0;
+    USHORT GroupNumber;
+
+    for (GroupNumber = 0; GroupNumber < Affinity->Count; GroupNumber++)
+    {
+        ProcessorMask = Affinity->Bitmap[GroupNumber];
+        while (ProcessorMask != 0)
+        {
+            ProcessorMask &= ProcessorMask - 1;
+            BitCount++;
+        }
+    }
+
+    return BitCount;
+}
+
+/*
+ * @implemented
+ */
 KAFFINITY
 NTAPI
 KeQueryGroupAffinity(
