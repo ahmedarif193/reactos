@@ -9,6 +9,7 @@
 VOID Test_KeArm64AffinityEx(VOID);
 
 #ifdef _M_ARM64
+typedef LOGICAL (NTAPI *PKMT_KE_AND_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2, _Out_opt_ PKAFFINITY_EX Result);
 typedef VOID (NTAPI *PKMT_KE_COPY_AFFINITY_EX)(_Out_ PKAFFINITY_EX Destination, _In_ PKAFFINITY_EX Source);
 typedef SIZE_T (NTAPI *PKMT_KE_SIZE_OF_AFFINITY_EX)(_In_ USHORT Count);
 typedef ULONG (NTAPI *PKMT_KE_COUNT_SET_BITS_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity);
@@ -23,7 +24,9 @@ START_TEST(KeArm64AffinityEx)
     skip(FALSE, "KeArm64AffinityEx is ARM64-only\n");
 #else
     KAFFINITY_EX Affinity;
+    KAFFINITY_EX Result;
     KAFFINITY_EX Source;
+    PKMT_KE_AND_AFFINITY_EX AndAffinityEx;
     PKMT_KE_COPY_AFFINITY_EX CopyAffinityEx;
     PKMT_KE_COUNT_SET_BITS_AFFINITY_EX CountSetBitsAffinityEx;
     PKMT_KE_IS_EQUAL_AFFINITY_EX IsEqualAffinityEx;
@@ -228,5 +231,65 @@ START_TEST(KeArm64AffinityEx)
     Affinity.Bitmap[KAFFINITY_EX_STATIC_GROUPS - 1] = 1;
     ok(IsSingleGroupAffinityEx(&Affinity, &GroupNumber), "last supported group was rejected\n");
     ok_eq_uint(GroupNumber, KAFFINITY_EX_STATIC_GROUPS - 1);
+
+    RtlInitUnicodeString(&Name, L"KeAndAffinityEx");
+    AndAffinityEx = (PKMT_KE_AND_AFFINITY_EX)MmGetSystemRoutineAddress(&Name);
+    if (AndAffinityEx == NULL)
+    {
+        skip(FALSE, "KeAndAffinityEx is not exported\n");
+        return;
+    }
+
+    RtlZeroMemory(&Affinity, sizeof(Affinity));
+    RtlZeroMemory(&Source, sizeof(Source));
+    Affinity.Count = 3;
+    Affinity.Size = MAXUSHORT;
+    Affinity.Reserved = MAXULONG;
+    Affinity.Bitmap[0] = 5;
+    Affinity.Bitmap[1] = 8;
+    Affinity.Bitmap[2] = 0x80;
+    Source.Count = 2;
+    Source.Size = 1;
+    Source.Bitmap[0] = 2;
+    Source.Bitmap[1] = 4;
+    ok(!AndAffinityEx(&Affinity, &Source, NULL), "disjoint affinities intersected\n");
+    Source.Bitmap[0] = 7;
+    RtlFillMemory(&Result, sizeof(Result), 0xA5);
+    ok(AndAffinityEx(&Affinity, &Source, &Result), "nonempty intersection was rejected\n");
+    ok_eq_uint(Result.Count, 2);
+    ok_eq_uint(Result.Size, KAFFINITY_EX_INITIALIZED_GROUPS);
+    ok_eq_ulong(Result.Reserved, 0);
+    ok_eq_ulonglong(Result.Bitmap[0], 5);
+    ok_eq_ulonglong(Result.Bitmap[1], 0);
+    ok_eq_ulonglong(Result.Bitmap[2], 0);
+    ok_eq_ulonglong(Result.Bitmap[KAFFINITY_EX_INITIALIZED_GROUPS - 1], 0);
+    ok_eq_ulonglong(Result.Bitmap[KAFFINITY_EX_INITIALIZED_GROUPS], (KAFFINITY)0xA5A5A5A5A5A5A5A5ULL);
+
+    RtlZeroMemory(&Affinity, sizeof(Affinity));
+    RtlZeroMemory(&Source, sizeof(Source));
+    Affinity.Count = 2;
+    Affinity.Bitmap[0] = 5;
+    Affinity.Bitmap[1] = 8;
+    Source.Count = 1;
+    Source.Bitmap[0] = 3;
+    ok(AndAffinityEx(&Affinity, &Source, &Affinity), "in-place intersection was rejected\n");
+    ok_eq_uint(Affinity.Count, 1);
+    ok_eq_uint(Affinity.Size, KAFFINITY_EX_INITIALIZED_GROUPS);
+    ok_eq_ulonglong(Affinity.Bitmap[0], 1);
+    ok_eq_ulonglong(Affinity.Bitmap[1], 0);
+
+    RtlZeroMemory(&Affinity, sizeof(Affinity));
+    RtlZeroMemory(&Source, sizeof(Source));
+    Affinity.Count = KAFFINITY_EX_INITIALIZED_GROUPS + 1;
+    Source.Count = KAFFINITY_EX_INITIALIZED_GROUPS + 1;
+    Affinity.Bitmap[KAFFINITY_EX_INITIALIZED_GROUPS] = 1;
+    Source.Bitmap[KAFFINITY_EX_INITIALIZED_GROUPS] = 1;
+    ok(AndAffinityEx(&Affinity, &Source, NULL), "unbuffered intersection ignored an extended group\n");
+    RtlFillMemory(&Result, sizeof(Result), 0xA5);
+    ok(!AndAffinityEx(&Affinity, &Source, &Result), "buffered intersection scanned past its fixed capacity\n");
+    ok_eq_uint(Result.Count, KAFFINITY_EX_INITIALIZED_GROUPS);
+    ok_eq_uint(Result.Size, KAFFINITY_EX_INITIALIZED_GROUPS);
+    ok_eq_ulonglong(Result.Bitmap[KAFFINITY_EX_INITIALIZED_GROUPS - 1], 0);
+    ok_eq_ulonglong(Result.Bitmap[KAFFINITY_EX_INITIALIZED_GROUPS], (KAFFINITY)0xA5A5A5A5A5A5A5A5ULL);
 #endif
 }

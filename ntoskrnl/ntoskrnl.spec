@@ -2522,7 +2522,7 @@
 @ stub -arch=arm64 KeAllocateCalloutStack
 @ stub -arch=arm64 KeAllocateCalloutStackEx
 @ stub -arch=arm64 KeAllocateProcessorProfileStructures
-@ stub -arch=arm64 KeAndAffinityEx
+@ stdcall -arch=arm64 KeAndAffinityEx(ptr ptr ptr)
 @ stub -arch=arm64 KeAndAffinityEx2
 @ stub -arch=arm64 KeAndGroupAffinityEx
 @ stub -arch=arm64 KeCancelTimer2

@@ -155,6 +155,14 @@ KeCountSetBitsAffinityEx(
     _In_ PKAFFINITY_EX Affinity);
 
 NTKERNELAPI
+LOGICAL
+NTAPI
+KeAndAffinityEx(
+    _In_ PKAFFINITY_EX Affinity1,
+    _In_ PKAFFINITY_EX Affinity2,
+    _Out_opt_ PKAFFINITY_EX Result);
+
+NTKERNELAPI
 VOID
 NTAPI
 KeCopyAffinityEx(
