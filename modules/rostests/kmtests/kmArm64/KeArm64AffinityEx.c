@@ -12,6 +12,7 @@ VOID Test_KeArm64AffinityEx(VOID);
 typedef LOGICAL (NTAPI *PKMT_KE_AND_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2, _Out_opt_ PKAFFINITY_EX Result);
 typedef VOID (NTAPI *PKMT_KE_COPY_AFFINITY_EX)(_Out_ PKAFFINITY_EX Destination, _In_ PKAFFINITY_EX Source);
 typedef ULONG (NTAPI *PKMT_KE_FIND_FIRST_SET_LEFT_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity);
+typedef ULONG (NTAPI *PKMT_KE_FIND_FIRST_SET_LEFT_GROUP_AFFINITY)(_In_ PGROUP_AFFINITY GroupAffinity);
 typedef ULONG (NTAPI *PKMT_KE_FIND_FIRST_SET_RIGHT_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity);
 typedef SIZE_T (NTAPI *PKMT_KE_SIZE_OF_AFFINITY_EX)(_In_ USHORT Count);
 typedef ULONG (NTAPI *PKMT_KE_GET_PROCESSOR_INDEX_FROM_NUMBER)(_In_ PPROCESSOR_NUMBER ProcessorNumber);
@@ -34,6 +35,8 @@ START_TEST(KeArm64AffinityEx)
     ULONG ActiveCount;
     KAFFINITY Combination;
     KAFFINITY CombinationLimit;
+    GROUP_AFFINITY GroupAffinity;
+    GROUP_AFFINITY GroupSource;
     ULONG HighestIndex;
     ULONG LowestIndex;
     ULONG OtherIndex;
@@ -42,6 +45,7 @@ START_TEST(KeArm64AffinityEx)
     PKMT_KE_COPY_AFFINITY_EX CopyAffinityEx;
     PKMT_KE_COUNT_SET_BITS_AFFINITY_EX CountSetBitsAffinityEx;
     PKMT_KE_FIND_FIRST_SET_LEFT_AFFINITY_EX FindFirstSetLeftAffinityEx;
+    PKMT_KE_FIND_FIRST_SET_LEFT_GROUP_AFFINITY FindFirstSetLeftGroupAffinity;
     PKMT_KE_FIND_FIRST_SET_RIGHT_AFFINITY_EX FindFirstSetRightAffinityEx;
     PKMT_KE_GET_PROCESSOR_INDEX_FROM_NUMBER GetProcessorIndexFromNumber;
     PKMT_KE_GET_PROCESSOR_NUMBER_FROM_INDEX GetProcessorNumberFromIndex;
@@ -614,5 +618,93 @@ START_TEST(KeArm64AffinityEx)
     Source = Affinity;
     ok_eq_ulong(FindFirstSetRightAffinityEx(&Affinity), 1);
     ok_eq_size(RtlCompareMemory(&Affinity, &Source, sizeof(Affinity)), sizeof(Affinity));
+
+    RtlInitUnicodeString(&Name, L"KeFindFirstSetLeftGroupAffinity");
+    FindFirstSetLeftGroupAffinity = (PKMT_KE_FIND_FIRST_SET_LEFT_GROUP_AFFINITY)MmGetSystemRoutineAddress(&Name);
+    if (FindFirstSetLeftGroupAffinity == NULL)
+    {
+        skip(FALSE, "KeFindFirstSetLeftGroupAffinity is not exported\n");
+        return;
+    }
+
+    RtlFillMemory(&GroupAffinity, sizeof(GroupAffinity), 0xA5);
+    GroupAffinity.Mask = 0;
+    GroupSource = GroupAffinity;
+    ok_eq_ulong(FindFirstSetLeftGroupAffinity(&GroupAffinity), INVALID_PROCESSOR_INDEX);
+    ok_eq_size(RtlCompareMemory(&GroupAffinity, &GroupSource, sizeof(GroupAffinity)), sizeof(GroupAffinity));
+
+    for (ProcessorIndex = 0; ProcessorIndex < ActiveCount; ProcessorIndex++)
+    {
+        ok_eq_hex(GetProcessorNumberFromIndex(ProcessorIndex, &ProcessorNumber), STATUS_SUCCESS);
+        RtlFillMemory(&GroupAffinity, sizeof(GroupAffinity), 0xA5);
+        GroupAffinity.Mask = (KAFFINITY)1 << ProcessorNumber.Number;
+        GroupAffinity.Group = ProcessorNumber.Group;
+        ok_eq_ulong(FindFirstSetLeftGroupAffinity(&GroupAffinity), ProcessorIndex);
+    }
+
+    for (ProcessorIndex = 0; ProcessorIndex < ActiveCount; ProcessorIndex++)
+    {
+        for (OtherIndex = ProcessorIndex; OtherIndex < ActiveCount; OtherIndex++)
+        {
+            ok_eq_hex(GetProcessorNumberFromIndex(ProcessorIndex, &ProcessorNumber), STATUS_SUCCESS);
+            RtlFillMemory(&GroupAffinity, sizeof(GroupAffinity), 0xA5);
+            GroupAffinity.Mask = (KAFFINITY)1 << ProcessorNumber.Number;
+            GroupAffinity.Group = ProcessorNumber.Group;
+            HighestIndex = ProcessorIndex;
+            HighestProcessorNumber = ProcessorNumber;
+            ok_eq_hex(GetProcessorNumberFromIndex(OtherIndex, &ProcessorNumber), STATUS_SUCCESS);
+            if (ProcessorNumber.Group != GroupAffinity.Group)
+                continue;
+            GroupAffinity.Mask |= (KAFFINITY)1 << ProcessorNumber.Number;
+            if (ProcessorNumber.Number > HighestProcessorNumber.Number)
+                HighestIndex = OtherIndex;
+            ok_eq_ulong(FindFirstSetLeftGroupAffinity(&GroupAffinity), HighestIndex);
+        }
+    }
+
+    if (ActiveCount <= 16)
+    {
+        CombinationLimit = (KAFFINITY)1 << ActiveCount;
+        for (Combination = 1; Combination < CombinationLimit; Combination++)
+        {
+            RtlFillMemory(&GroupAffinity, sizeof(GroupAffinity), 0xA5);
+            GroupAffinity.Mask = 0;
+            HighestIndex = INVALID_PROCESSOR_INDEX;
+            for (ProcessorIndex = 0; ProcessorIndex < ActiveCount; ProcessorIndex++)
+            {
+                if ((Combination & ((KAFFINITY)1 << ProcessorIndex)) == 0)
+                    continue;
+
+                ok_eq_hex(GetProcessorNumberFromIndex(ProcessorIndex, &ProcessorNumber), STATUS_SUCCESS);
+                if (HighestIndex == INVALID_PROCESSOR_INDEX)
+                {
+                    GroupAffinity.Group = ProcessorNumber.Group;
+                    HighestIndex = ProcessorIndex;
+                    HighestProcessorNumber = ProcessorNumber;
+                }
+                else if (ProcessorNumber.Group != GroupAffinity.Group)
+                {
+                    HighestIndex = INVALID_PROCESSOR_INDEX;
+                    break;
+                }
+                GroupAffinity.Mask |= (KAFFINITY)1 << ProcessorNumber.Number;
+                if (ProcessorNumber.Number > HighestProcessorNumber.Number)
+                {
+                    HighestIndex = ProcessorIndex;
+                    HighestProcessorNumber = ProcessorNumber;
+                }
+            }
+            if (HighestIndex != INVALID_PROCESSOR_INDEX)
+                ok_eq_ulong(FindFirstSetLeftGroupAffinity(&GroupAffinity), HighestIndex);
+        }
+    }
+
+    ok_eq_hex(GetProcessorNumberFromIndex(0, &ProcessorNumber), STATUS_SUCCESS);
+    RtlFillMemory(&GroupAffinity, sizeof(GroupAffinity), 0xA5);
+    GroupAffinity.Mask = (KAFFINITY)1 << ProcessorNumber.Number;
+    GroupAffinity.Group = ProcessorNumber.Group;
+    GroupSource = GroupAffinity;
+    ok_eq_ulong(FindFirstSetLeftGroupAffinity(&GroupAffinity), 0);
+    ok_eq_size(RtlCompareMemory(&GroupAffinity, &GroupSource, sizeof(GroupAffinity)), sizeof(GroupAffinity));
 #endif
 }
