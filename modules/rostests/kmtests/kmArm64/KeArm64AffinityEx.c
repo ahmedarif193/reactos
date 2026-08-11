@@ -13,6 +13,7 @@ typedef VOID (NTAPI *PKMT_KE_COPY_AFFINITY_EX)(_Out_ PKAFFINITY_EX Destination, 
 typedef SIZE_T (NTAPI *PKMT_KE_SIZE_OF_AFFINITY_EX)(_In_ USHORT Count);
 typedef ULONG (NTAPI *PKMT_KE_COUNT_SET_BITS_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity);
 typedef LOGICAL (NTAPI *PKMT_KE_IS_EQUAL_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2);
+typedef LOGICAL (NTAPI *PKMT_KE_IS_SINGLE_GROUP_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity, _Out_opt_ PUSHORT Group);
 typedef LOGICAL (NTAPI *PKMT_KE_IS_SUBSET_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2);
 #endif
 
@@ -26,9 +27,11 @@ START_TEST(KeArm64AffinityEx)
     PKMT_KE_COPY_AFFINITY_EX CopyAffinityEx;
     PKMT_KE_COUNT_SET_BITS_AFFINITY_EX CountSetBitsAffinityEx;
     PKMT_KE_IS_EQUAL_AFFINITY_EX IsEqualAffinityEx;
+    PKMT_KE_IS_SINGLE_GROUP_AFFINITY_EX IsSingleGroupAffinityEx;
     PKMT_KE_IS_SUBSET_AFFINITY_EX IsSubsetAffinityEx;
     PKMT_KE_SIZE_OF_AFFINITY_EX SizeOfAffinityEx;
     UNICODE_STRING Name;
+    USHORT GroupNumber;
 
     ok_eq_size(sizeof(Affinity), (SIZE_T)264);
     ok_eq_size(FIELD_OFFSET(KAFFINITY_EX, Count), (SIZE_T)0);
@@ -195,5 +198,35 @@ START_TEST(KeArm64AffinityEx)
     Affinity.Bitmap[1] = 0;
     Affinity.Bitmap[0] = 8;
     ok(!IsSubsetAffinityEx(&Affinity, &Source), "bit outside the common-group superset was accepted\n");
+
+    RtlInitUnicodeString(&Name, L"KeIsSingleGroupAffinityEx");
+    IsSingleGroupAffinityEx = (PKMT_KE_IS_SINGLE_GROUP_AFFINITY_EX)MmGetSystemRoutineAddress(&Name);
+    if (IsSingleGroupAffinityEx == NULL)
+    {
+        skip(FALSE, "KeIsSingleGroupAffinityEx is not exported\n");
+        return;
+    }
+
+    RtlZeroMemory(&Affinity, sizeof(Affinity));
+    Affinity.Size = MAXUSHORT;
+    Affinity.Reserved = MAXULONG;
+    GroupNumber = MAXUSHORT;
+    ok(!IsSingleGroupAffinityEx(&Affinity, &GroupNumber), "empty affinity reported one group\n");
+    ok_eq_uint(GroupNumber, KAFFINITY_EX_STATIC_GROUPS);
+    ok(!IsSingleGroupAffinityEx(&Affinity, NULL), "empty affinity with no output reported one group\n");
+    Affinity.Count = 3;
+    Affinity.Bitmap[2] = 0x80;
+    ok(IsSingleGroupAffinityEx(&Affinity, &GroupNumber), "single nonzero group was rejected\n");
+    ok_eq_uint(GroupNumber, 2);
+    ok(IsSingleGroupAffinityEx(&Affinity, NULL), "optional output changed the single-group result\n");
+    Affinity.Bitmap[0] = 1;
+    GroupNumber = MAXUSHORT;
+    ok(!IsSingleGroupAffinityEx(&Affinity, &GroupNumber), "multiple nonzero groups were accepted\n");
+    ok_eq_uint(GroupNumber, 0);
+    RtlZeroMemory(Affinity.Bitmap, sizeof(Affinity.StaticBitmap));
+    Affinity.Count = KAFFINITY_EX_STATIC_GROUPS;
+    Affinity.Bitmap[KAFFINITY_EX_STATIC_GROUPS - 1] = 1;
+    ok(IsSingleGroupAffinityEx(&Affinity, &GroupNumber), "last supported group was rejected\n");
+    ok_eq_uint(GroupNumber, KAFFINITY_EX_STATIC_GROUPS - 1);
 #endif
 }
