@@ -6887,6 +6887,12 @@ struct _NET_BUFFER_LIST {
 /* Pool parameter structures (passed to NdisAllocate{NetBuffer,NetBufferList}Pool) */
 #define NET_BUFFER_LIST_POOL_PARAMETERS_REVISION_1  1
 #define NET_BUFFER_POOL_PARAMETERS_REVISION_1       1
+#if NDIS_SUPPORT_NDIS687
+#define NET_BUFFER_LIST_POOL_PARAMETERS_REVISION_2  2
+#define NET_BUFFER_LIST_POOL_FLAG_VERIFY             0x00000001
+#define NET_BUFFER_POOL_PARAMETERS_REVISION_2       2
+#define NET_BUFFER_POOL_FLAG_VERIFY                  0x00000001
+#endif
 
 typedef struct _NET_BUFFER_LIST_POOL_PARAMETERS {
   NDIS_OBJECT_HEADER Header;
@@ -6895,18 +6901,32 @@ typedef struct _NET_BUFFER_LIST_POOL_PARAMETERS {
   USHORT             ContextSize;
   ULONG              PoolTag;
   ULONG              DataSize;
+#if NDIS_SUPPORT_NDIS687
+  ULONG              Flags;
+#endif
 } NET_BUFFER_LIST_POOL_PARAMETERS, *PNET_BUFFER_LIST_POOL_PARAMETERS;
 #define NDIS_SIZEOF_NET_BUFFER_LIST_POOL_PARAMETERS_REVISION_1 \
   RTL_SIZEOF_THROUGH_FIELD(NET_BUFFER_LIST_POOL_PARAMETERS, DataSize)
+#if NDIS_SUPPORT_NDIS687
+#define NDIS_SIZEOF_NET_BUFFER_LIST_POOL_PARAMETERS_REVISION_2 \
+  RTL_SIZEOF_THROUGH_FIELD(NET_BUFFER_LIST_POOL_PARAMETERS, Flags)
+#endif
 #define NET_BUFFER_LIST_POOL_PARAMETERS_DEFINED 1
 
 typedef struct _NET_BUFFER_POOL_PARAMETERS {
   NDIS_OBJECT_HEADER Header;
   ULONG              PoolTag;
   ULONG              DataSize;
+#if NDIS_SUPPORT_NDIS687
+  ULONG              Flags;
+#endif
 } NET_BUFFER_POOL_PARAMETERS, *PNET_BUFFER_POOL_PARAMETERS;
 #define NDIS_SIZEOF_NET_BUFFER_POOL_PARAMETERS_REVISION_1 \
   RTL_SIZEOF_THROUGH_FIELD(NET_BUFFER_POOL_PARAMETERS, DataSize)
+#if NDIS_SUPPORT_NDIS687
+#define NDIS_SIZEOF_NET_BUFFER_POOL_PARAMETERS_REVISION_2 \
+  RTL_SIZEOF_THROUGH_FIELD(NET_BUFFER_POOL_PARAMETERS, Flags)
+#endif
 
 /* Dispatch-level send flags (Vista+). Used by NDIS 6 SendNetBufferLists. */
 #define NDIS_SEND_FLAGS_DISPATCH_LEVEL                   0x00000001
@@ -7059,6 +7079,68 @@ NDISAPI
 NdisFreeNetBuffer(
   _In_ PNET_BUFFER NetBuffer);
 
+PNET_BUFFER_LIST
+NDISAPI
+NdisAllocateCloneNetBufferList(
+  _In_     PNET_BUFFER_LIST OriginalNetBufferList,
+  _In_opt_ NDIS_HANDLE      NetBufferListPoolHandle,
+  _In_opt_ NDIS_HANDLE      NetBufferPoolHandle,
+  _In_     ULONG            AllocateCloneFlags);
+
+VOID
+NDISAPI
+NdisFreeCloneNetBufferList(
+  _In_ PNET_BUFFER_LIST CloneNetBufferList,
+  _In_ ULONG            FreeCloneFlags);
+
+VOID
+NDISAPI
+NdisCopySendNetBufferListInfo(
+  _In_ PNET_BUFFER_LIST Destination,
+  _In_ const NET_BUFFER_LIST *Source);
+
+VOID
+NDISAPI
+NdisCopyReceiveNetBufferListInfo(
+  _In_ PNET_BUFFER_LIST Destination,
+  _In_ const NET_BUFFER_LIST *Source);
+
+PNET_BUFFER_LIST
+NDISAPI
+NdisAllocateFragmentNetBufferList(
+  _In_     PNET_BUFFER_LIST OriginalNetBufferList,
+  _In_opt_ NDIS_HANDLE      NetBufferListPool,
+  _In_opt_ NDIS_HANDLE      NetBufferPool,
+  _In_     ULONG            StartOffset,
+  _In_     ULONG            MaximumLength,
+  _In_     ULONG            DataOffsetDelta,
+  _In_     ULONG            DataBackFill,
+  _In_     ULONG            AllocateFragmentFlags);
+
+VOID
+NDISAPI
+NdisFreeFragmentNetBufferList(
+  _In_ PNET_BUFFER_LIST FragmentNetBufferList,
+  _In_ ULONG            DataOffsetDelta,
+  _In_ ULONG            FreeFragmentFlags);
+
+PNET_BUFFER_LIST
+NDISAPI
+NdisAllocateReassembledNetBufferList(
+  _In_     PNET_BUFFER_LIST FragmentNetBufferList,
+  _In_opt_ NDIS_HANDLE      NetBufferAndNetBufferListPoolHandle,
+  _In_     ULONG            StartOffset,
+  _In_     ULONG            DataOffsetDelta,
+  _In_     ULONG            DataBackFill,
+  _In_     ULONG            AllocateReassembleFlags);
+
+VOID
+NDISAPI
+NdisFreeReassembledNetBufferList(
+  _In_ PNET_BUFFER_LIST ReassembledNetBufferList,
+  _In_ ULONG            DataOffsetDelta,
+  _In_ ULONG            FreeReassembleFlags);
+
 PNET_BUFFER
 NDISAPI
 NdisAllocateNetBufferMdlAndData(
@@ -7142,7 +7224,7 @@ NdisCopyFromNetBufferToNetBuffer(
   _In_  PNET_BUFFER Destination,
   _In_  ULONG       DestinationOffset,
   _In_  ULONG       BytesToCopy,
-  _In_  PNET_BUFFER Source,
+  _In_  const NET_BUFFER *Source,
   _In_  ULONG       SourceOffset,
   _Out_ PULONG      BytesCopied);
 
@@ -8175,30 +8257,106 @@ NdisMOidRequestComplete(
  * ============================================================================ */
 #if NDIS_SUPPORT_NDIS6
 
+#ifndef NDIS_MAX_PHYS_ADDRESS_LENGTH
+#define NDIS_MAX_PHYS_ADDRESS_LENGTH 32
+#endif
+
+typedef struct _NDIS_HD_SPLIT_CURRENT_CONFIG NDIS_HD_SPLIT_CURRENT_CONFIG, *PNDIS_HD_SPLIT_CURRENT_CONFIG;
+typedef struct _NDIS_RECEIVE_SCALE_CAPABILITIES NDIS_RECEIVE_SCALE_CAPABILITIES, *PNDIS_RECEIVE_SCALE_CAPABILITIES;
+typedef struct _NDIS_RECEIVE_FILTER_CAPABILITIES NDIS_RECEIVE_FILTER_CAPABILITIES, *PNDIS_RECEIVE_FILTER_CAPABILITIES;
+typedef struct _NDIS_NIC_SWITCH_CAPABILITIES NDIS_NIC_SWITCH_CAPABILITIES, *PNDIS_NIC_SWITCH_CAPABILITIES;
+typedef struct _NDIS_TCP_CONNECTION_OFFLOAD NDIS_TCP_CONNECTION_OFFLOAD, *PNDIS_TCP_CONNECTION_OFFLOAD;
+typedef struct _NDIS_NDK_CAPABILITIES NDIS_NDK_CAPABILITIES, *PNDIS_NDK_CAPABILITIES;
+typedef struct _NDIS_SRIOV_CAPABILITIES NDIS_SRIOV_CAPABILITIES, *PNDIS_SRIOV_CAPABILITIES;
+typedef struct _NDIS_NIC_SWITCH_INFO_ARRAY NDIS_NIC_SWITCH_INFO_ARRAY, *PNDIS_NIC_SWITCH_INFO_ARRAY;
+
+#define NDIS_FILTER_ATTACH_FLAGS_IGNORE_MANDATORY 0x00000001
+#define NDIS_FILTER_ATTACH_PARAMETERS_REVISION_1 1
+#if NDIS_SUPPORT_NDIS61
+#define NDIS_FILTER_ATTACH_PARAMETERS_REVISION_2 2
+#endif
+#if NDIS_SUPPORT_NDIS620
+#define NDIS_FILTER_ATTACH_PARAMETERS_REVISION_3 3
+#endif
+#if NDIS_SUPPORT_NDIS630
+#define NDIS_FILTER_ATTACH_PARAMETERS_REVISION_4 4
+#endif
+
 typedef struct _NDIS_FILTER_ATTACH_PARAMETERS {
-  NDIS_OBJECT_HEADER Header;
-  UINT               MtuSize;
-  NDIS_MEDIUM        MiniportMediaType;
-  NDIS_PHYSICAL_MEDIUM PhysicalMediumType;
-  PNDIS_STRING       BaseMiniportName;
-  PNDIS_STRING       BaseMiniportInstanceName;
-  PNDIS_STRING       FilterModuleGuidName;
-  PNDIS_STRING       FilterInstanceName;
-  NDIS_HANDLE        BindingContext;
-  ULONG              Flags;
-  ULONG              SupportedOidListLength;
-  PNDIS_OID          SupportedOidList;
+  NDIS_OBJECT_HEADER                Header;
+  NET_IFINDEX                       IfIndex;
+  NET_LUID                          NetLuid;
+  PNDIS_STRING                      FilterModuleGuidName;
+  NET_IFINDEX                       BaseMiniportIfIndex;
+  PNDIS_STRING                      BaseMiniportInstanceName;
+  PNDIS_STRING                      BaseMiniportName;
+  NDIS_MEDIA_CONNECT_STATE          MediaConnectState;
+  NET_IF_MEDIA_DUPLEX_STATE         MediaDuplexState;
+  ULONG64                           XmitLinkSpeed;
+  ULONG64                           RcvLinkSpeed;
+  NDIS_MEDIUM                       MiniportMediaType;
+  NDIS_PHYSICAL_MEDIUM              MiniportPhysicalMediaType;
+  NDIS_HANDLE                       MiniportMediaSpecificAttributes;
+  PNDIS_OFFLOAD                     DefaultOffloadConfiguration;
+  USHORT                            MacAddressLength;
+  UCHAR                             CurrentMacAddress[NDIS_MAX_PHYS_ADDRESS_LENGTH];
+  NET_LUID                          BaseMiniportNetLuid;
+  NET_IFINDEX                       LowerIfIndex;
+  NET_LUID                          LowerIfNetLuid;
+  ULONG                             Flags;
+#if NDIS_SUPPORT_NDIS61
+  PNDIS_HD_SPLIT_CURRENT_CONFIG     HDSplitCurrentConfig;
+#endif
+#if NDIS_SUPPORT_NDIS620
+  PNDIS_RECEIVE_FILTER_CAPABILITIES ReceiveFilterCapabilities;
+  PDEVICE_OBJECT                    MiniportPhysicalDeviceObject;
+  PNDIS_NIC_SWITCH_CAPABILITIES     NicSwitchCapabilities;
+#endif
+#if NDIS_SUPPORT_NDIS630
+  BOOLEAN                           BaseMiniportIfConnectorPresent;
+  PNDIS_SRIOV_CAPABILITIES          SriovCapabilities;
+  PNDIS_NIC_SWITCH_INFO_ARRAY       NicSwitchArray;
+#endif
 } NDIS_FILTER_ATTACH_PARAMETERS, *PNDIS_FILTER_ATTACH_PARAMETERS;
 
+#define NDIS_SIZEOF_FILTER_ATTACH_PARAMETERS_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_FILTER_ATTACH_PARAMETERS, Flags)
+#if NDIS_SUPPORT_NDIS61
+#define NDIS_SIZEOF_FILTER_ATTACH_PARAMETERS_REVISION_2 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_FILTER_ATTACH_PARAMETERS, HDSplitCurrentConfig)
+#endif
+#if NDIS_SUPPORT_NDIS620
+#define NDIS_SIZEOF_FILTER_ATTACH_PARAMETERS_REVISION_3 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_FILTER_ATTACH_PARAMETERS, NicSwitchCapabilities)
+#endif
+#if NDIS_SUPPORT_NDIS630
+#define NDIS_SIZEOF_FILTER_ATTACH_PARAMETERS_REVISION_4 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_FILTER_ATTACH_PARAMETERS, NicSwitchArray)
+#endif
+
+#define NDIS_FILTER_PAUSE_PARAMETERS_REVISION_1 1
 typedef struct _NDIS_FILTER_PAUSE_PARAMETERS {
   NDIS_OBJECT_HEADER Header;
+  ULONG              Flags;
   ULONG              PauseReason;
 } NDIS_FILTER_PAUSE_PARAMETERS, *PNDIS_FILTER_PAUSE_PARAMETERS;
+#define NDIS_SIZEOF_FILTER_PAUSE_PARAMETERS_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_FILTER_PAUSE_PARAMETERS, PauseReason)
 
+#define NDIS_FILTER_RESTART_PARAMETERS_REVISION_1 1
 typedef struct _NDIS_FILTER_RESTART_PARAMETERS {
-  NDIS_OBJECT_HEADER Header;
-  NDIS_HANDLE        FilterRestartContext;
+  NDIS_OBJECT_HEADER       Header;
+  NDIS_MEDIUM              MiniportMediaType;
+  NDIS_PHYSICAL_MEDIUM     MiniportPhysicalMediaType;
+  PNDIS_RESTART_ATTRIBUTES RestartAttributes;
+  NET_IFINDEX              LowerIfIndex;
+  NET_LUID                 LowerIfNetLuid;
+  ULONG                    Flags;
 } NDIS_FILTER_RESTART_PARAMETERS, *PNDIS_FILTER_RESTART_PARAMETERS;
+#define NDIS_SIZEOF__FILTER_RESTART_PARAMETERS_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_FILTER_RESTART_PARAMETERS, Flags)
+#define NDIS_SIZEOF_FILTER_RESTART_PARAMETERS_REVISION_1 \
+  NDIS_SIZEOF__FILTER_RESTART_PARAMETERS_REVISION_1
 
 typedef NDIS_STATUS
 (FILTER_ATTACH)(
@@ -8262,7 +8420,8 @@ typedef VOID
 (FILTER_CANCEL_SEND_NET_BUFFER_LISTS)(
   _In_ NDIS_HANDLE FilterModuleContext,
   _In_ PVOID CancelId);
-typedef FILTER_CANCEL_SEND_NET_BUFFER_LISTS (*FILTER_CANCEL_SEND_NET_BUFFER_LISTS_HANDLER);
+typedef FILTER_CANCEL_SEND_NET_BUFFER_LISTS (*FILTER_CANCEL_SEND_HANDLER);
+typedef FILTER_CANCEL_SEND_HANDLER FILTER_CANCEL_SEND_NET_BUFFER_LISTS_HANDLER;
 
 typedef VOID
 (FILTER_RECEIVE_NET_BUFFER_LISTS)(
@@ -8289,13 +8448,14 @@ typedef FILTER_STATUS (*FILTER_STATUS_HANDLER);
 typedef VOID
 (FILTER_DEVICE_PNP_EVENT_NOTIFY)(
   _In_ NDIS_HANDLE FilterModuleContext,
-  _In_ PVOID NetDevicePnPEvent);
+  _In_ PNET_DEVICE_PNP_EVENT NetDevicePnPEvent);
 typedef FILTER_DEVICE_PNP_EVENT_NOTIFY (*FILTER_DEVICE_PNP_EVENT_NOTIFY_HANDLER);
 
+struct _NET_PNP_EVENT_NOTIFICATION;
 typedef NDIS_STATUS
 (FILTER_NET_PNP_EVENT)(
   _In_ NDIS_HANDLE FilterModuleContext,
-  _In_ PVOID NetPnPEventNotification);
+  _In_ struct _NET_PNP_EVENT_NOTIFICATION *NetPnPEventNotification);
 typedef FILTER_NET_PNP_EVENT (*FILTER_NET_PNP_EVENT_HANDLER);
 
 typedef NDIS_STATUS
@@ -8303,11 +8463,69 @@ typedef NDIS_STATUS
   _In_ NDIS_HANDLE NdisFilterDriverHandle,
   _In_ NDIS_HANDLE FilterDriverContext);
 typedef FILTER_SET_OPTIONS (*FILTER_SET_OPTIONS_HANDLER);
+typedef FILTER_SET_OPTIONS SET_OPTIONS;
+typedef SET_OPTIONS (*SET_OPTIONS_HANDLER);
 
 typedef NDIS_STATUS
 (FILTER_SET_MODULE_OPTIONS)(
   _In_ NDIS_HANDLE FilterModuleContext);
 typedef FILTER_SET_MODULE_OPTIONS (*FILTER_SET_MODULE_OPTIONS_HANDLER);
+typedef FILTER_SET_MODULE_OPTIONS_HANDLER FILTER_SET_FILTER_MODULE_OPTIONS_HANDLER;
+
+#if NDIS_SUPPORT_NDIS61
+typedef NDIS_STATUS
+(FILTER_DIRECT_OID_REQUEST)(
+  _In_ NDIS_HANDLE FilterModuleContext,
+  _In_ PNDIS_OID_REQUEST OidRequest);
+typedef FILTER_DIRECT_OID_REQUEST (*FILTER_DIRECT_OID_REQUEST_HANDLER);
+
+typedef VOID
+(FILTER_DIRECT_OID_REQUEST_COMPLETE)(
+  _In_ NDIS_HANDLE FilterModuleContext,
+  _In_ PNDIS_OID_REQUEST OidRequest,
+  _In_ NDIS_STATUS Status);
+typedef FILTER_DIRECT_OID_REQUEST_COMPLETE (*FILTER_DIRECT_OID_REQUEST_COMPLETE_HANDLER);
+
+typedef VOID
+(FILTER_CANCEL_DIRECT_OID_REQUEST)(
+  _In_ NDIS_HANDLE FilterModuleContext,
+  _In_ PVOID RequestId);
+typedef FILTER_CANCEL_DIRECT_OID_REQUEST (*FILTER_CANCEL_DIRECT_OID_REQUEST_HANDLER);
+#endif
+
+#if NDIS_SUPPORT_NDIS680
+typedef NDIS_STATUS
+(FILTER_SYNCHRONOUS_OID_REQUEST)(
+  _In_ NDIS_HANDLE FilterModuleContext,
+  _Inout_ PNDIS_OID_REQUEST OidRequest,
+  _Outptr_result_maybenull_ PVOID *CallContext);
+typedef FILTER_SYNCHRONOUS_OID_REQUEST (*FILTER_SYNCHRONOUS_OID_REQUEST_HANDLER);
+
+typedef VOID
+(FILTER_SYNCHRONOUS_OID_REQUEST_COMPLETE)(
+  _In_ NDIS_HANDLE FilterModuleContext,
+  _Inout_ PNDIS_OID_REQUEST OidRequest,
+  _Inout_ PNDIS_STATUS Status,
+  _In_ PVOID CallContext);
+typedef FILTER_SYNCHRONOUS_OID_REQUEST_COMPLETE (*FILTER_SYNCHRONOUS_OID_REQUEST_COMPLETE_HANDLER);
+#endif
+
+#define NDIS_FILTER_PARTIAL_CHARACTERISTICS_REVISION_1 1
+typedef struct _NDIS_FILTER_PARTIAL_CHARACTERISTICS {
+  NDIS_OBJECT_HEADER                            Header;
+  ULONG                                         Flags;
+  FILTER_SEND_NET_BUFFER_LISTS_HANDLER          SendNetBufferListsHandler;
+  FILTER_SEND_NET_BUFFER_LISTS_COMPLETE_HANDLER SendNetBufferListsCompleteHandler;
+  FILTER_CANCEL_SEND_HANDLER                    CancelSendNetBufferListsHandler;
+  FILTER_RECEIVE_NET_BUFFER_LISTS_HANDLER       ReceiveNetBufferListsHandler;
+  FILTER_RETURN_NET_BUFFER_LISTS_HANDLER        ReturnNetBufferListsHandler;
+} NDIS_FILTER_PARTIAL_CHARACTERISTICS, *PNDIS_FILTER_PARTIAL_CHARACTERISTICS;
+#define NDIS_SIZEOF_FILTER_PARTIAL_CHARACTERISTICS_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_FILTER_PARTIAL_CHARACTERISTICS, ReturnNetBufferListsHandler)
+
+typedef struct _NDIS_DRIVER_OPTIONAL_HANDLERS {
+  NDIS_OBJECT_HEADER Header;
+} NDIS_DRIVER_OPTIONAL_HANDLERS, *PNDIS_DRIVER_OPTIONAL_HANDLERS;
 
 typedef struct _NDIS_FILTER_DRIVER_CHARACTERISTICS {
   NDIS_OBJECT_HEADER                           Header;
@@ -8327,7 +8545,7 @@ typedef struct _NDIS_FILTER_DRIVER_CHARACTERISTICS {
   FILTER_PAUSE_HANDLER                         PauseHandler;
   FILTER_SEND_NET_BUFFER_LISTS_HANDLER         SendNetBufferListsHandler;
   FILTER_SEND_NET_BUFFER_LISTS_COMPLETE_HANDLER SendNetBufferListsCompleteHandler;
-  FILTER_CANCEL_SEND_NET_BUFFER_LISTS_HANDLER  CancelSendNetBufferListsHandler;
+  FILTER_CANCEL_SEND_HANDLER                   CancelSendNetBufferListsHandler;
   FILTER_RECEIVE_NET_BUFFER_LISTS_HANDLER      ReceiveNetBufferListsHandler;
   FILTER_RETURN_NET_BUFFER_LISTS_HANDLER       ReturnNetBufferListsHandler;
   FILTER_OID_REQUEST_HANDLER                   OidRequestHandler;
@@ -8336,19 +8554,58 @@ typedef struct _NDIS_FILTER_DRIVER_CHARACTERISTICS {
   FILTER_DEVICE_PNP_EVENT_NOTIFY_HANDLER       DevicePnPEventNotifyHandler;
   FILTER_NET_PNP_EVENT_HANDLER                 NetPnPEventHandler;
   FILTER_STATUS_HANDLER                        StatusHandler;
-  /* NDIS 6.1 REV_2 tail — direct OID path through the filter chain.
-   * Same signatures as the serialized OID handlers. */
-  FILTER_OID_REQUEST_HANDLER                   DirectOidRequestHandler;
-  FILTER_OID_REQUEST_COMPLETE_HANDLER          DirectOidRequestCompleteHandler;
-  FILTER_CANCEL_OID_REQUEST_HANDLER            CancelDirectOidRequestHandler;
+#if NDIS_SUPPORT_NDIS61
+  FILTER_DIRECT_OID_REQUEST_HANDLER            DirectOidRequestHandler;
+  FILTER_DIRECT_OID_REQUEST_COMPLETE_HANDLER   DirectOidRequestCompleteHandler;
+  FILTER_CANCEL_DIRECT_OID_REQUEST_HANDLER     CancelDirectOidRequestHandler;
+#endif
+#if NDIS_SUPPORT_NDIS680
+  FILTER_SYNCHRONOUS_OID_REQUEST_HANDLER        SynchronousOidRequestHandler;
+  FILTER_SYNCHRONOUS_OID_REQUEST_COMPLETE_HANDLER SynchronousOidRequestCompleteHandler;
+#endif
 } NDIS_FILTER_DRIVER_CHARACTERISTICS, *PNDIS_FILTER_DRIVER_CHARACTERISTICS;
 
-#define NDIS_FILTER_DRIVER_CHARACTERISTICS_REVISION_1  1
-#define NDIS_FILTER_DRIVER_CHARACTERISTICS_REVISION_2  2
+#define NDIS_FILTER_CHARACTERISTICS_REVISION_1  1
+#if NDIS_SUPPORT_NDIS61
+#define NDIS_FILTER_CHARACTERISTICS_REVISION_2  2
+#endif
+#if NDIS_SUPPORT_NDIS680
+#define NDIS_FILTER_CHARACTERISTICS_REVISION_3  3
+#endif
+#define NDIS_FILTER_DRIVER_CHARACTERISTICS_REVISION_1 NDIS_FILTER_CHARACTERISTICS_REVISION_1
+#if NDIS_SUPPORT_NDIS61
+#define NDIS_FILTER_DRIVER_CHARACTERISTICS_REVISION_2 NDIS_FILTER_CHARACTERISTICS_REVISION_2
+#endif
+#if NDIS_SUPPORT_NDIS680
+#define NDIS_FILTER_DRIVER_CHARACTERISTICS_REVISION_3 NDIS_FILTER_CHARACTERISTICS_REVISION_3
+#endif
 #define NDIS_SIZEOF_FILTER_DRIVER_CHARACTERISTICS_REVISION_1 \
   RTL_SIZEOF_THROUGH_FIELD(NDIS_FILTER_DRIVER_CHARACTERISTICS, StatusHandler)
+#if NDIS_SUPPORT_NDIS61
 #define NDIS_SIZEOF_FILTER_DRIVER_CHARACTERISTICS_REVISION_2 \
   RTL_SIZEOF_THROUGH_FIELD(NDIS_FILTER_DRIVER_CHARACTERISTICS, CancelDirectOidRequestHandler)
+#endif
+#if NDIS_SUPPORT_NDIS680
+#define NDIS_SIZEOF_FILTER_DRIVER_CHARACTERISTICS_REVISION_3 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_FILTER_DRIVER_CHARACTERISTICS, SynchronousOidRequestCompleteHandler)
+#endif
+
+#define NDIS_FILTER_DRIVER_MANDATORY                            0x00000001
+#if NDIS_SUPPORT_NDIS650
+#define NDIS_FILTER_DRIVER_SUPPORTS_CURRENT_MAC_ADDRESS_CHANGE 0x00000002
+#define NDIS_FILTER_DRIVER_SUPPORTS_L2_MTU_SIZE_CHANGE         0x00000004
+#endif
+#if NDIS_SUPPORT_NDIS689
+#define NDIS_FILTER_DRIVER_UDP_RSC_NOT_SUPPORTED               0x00000008
+#endif
+
+#define NDIS_FILTER_ATTRIBUTES_REVISION_1 1
+typedef struct _NDIS_FILTER_ATTRIBUTES {
+  NDIS_OBJECT_HEADER Header;
+  ULONG              Flags;
+} NDIS_FILTER_ATTRIBUTES, *PNDIS_FILTER_ATTRIBUTES;
+#define NDIS_SIZEOF_FILTER_ATTRIBUTES_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_FILTER_ATTRIBUTES, Flags)
 
 NDIS_STATUS
 NDISAPI
@@ -8363,6 +8620,138 @@ NDISAPI
 NdisFDeregisterFilterDriver(
   _In_ NDIS_HANDLE NdisFilterDriverHandle);
 
+NDIS_STATUS
+NDISAPI
+NdisSetOptionalHandlers(
+  _In_ NDIS_HANDLE NdisHandle,
+  _In_ PNDIS_DRIVER_OPTIONAL_HANDLERS OptionalHandlers);
+
+NDIS_STATUS
+NDISAPI
+NdisFSetAttributes(
+  _In_ NDIS_HANDLE NdisFilterHandle,
+  _In_ NDIS_HANDLE FilterModuleContext,
+  _In_ PNDIS_FILTER_ATTRIBUTES FilterAttributes);
+
+NDIS_STATUS
+NDISAPI
+NdisFRestartFilter(
+  _In_ NDIS_HANDLE NdisFilterHandle);
+
+VOID
+NDISAPI
+NdisFRestartComplete(
+  _In_ NDIS_HANDLE NdisFilterHandle,
+  _In_ NDIS_STATUS Status);
+
+VOID
+NDISAPI
+NdisFPauseComplete(
+  _In_ NDIS_HANDLE NdisFilterHandle);
+
+VOID
+NDISAPI
+NdisFSendNetBufferLists(
+  _In_ NDIS_HANDLE NdisFilterHandle,
+  _In_ PNET_BUFFER_LIST NetBufferList,
+  _In_ NDIS_PORT_NUMBER PortNumber,
+  _In_ ULONG SendFlags);
+
+VOID
+NDISAPI
+NdisFReturnNetBufferLists(
+  _In_ NDIS_HANDLE NdisFilterHandle,
+  _In_ PNET_BUFFER_LIST NetBufferLists,
+  _In_ ULONG ReturnFlags);
+
+VOID
+NDISAPI
+NdisFSendNetBufferListsComplete(
+  _In_ NDIS_HANDLE NdisFilterHandle,
+  _In_ PNET_BUFFER_LIST NetBufferList,
+  _In_ ULONG SendCompleteFlags);
+
+VOID
+NDISAPI
+NdisFIndicateReceiveNetBufferLists(
+  _In_ NDIS_HANDLE NdisFilterHandle,
+  _In_ PNET_BUFFER_LIST NetBufferLists,
+  _In_ NDIS_PORT_NUMBER PortNumber,
+  _In_ ULONG NumberOfNetBufferLists,
+  _In_ ULONG ReceiveFlags);
+
+VOID
+NDISAPI
+NdisFCancelSendNetBufferLists(
+  _In_ NDIS_HANDLE NdisFilterHandle,
+  _In_ PVOID CancelId);
+
+NDIS_STATUS
+NDISAPI
+NdisFOidRequest(
+  _In_ NDIS_HANDLE NdisFilterHandle,
+  _In_ PNDIS_OID_REQUEST OidRequest);
+
+VOID
+NDISAPI
+NdisFOidRequestComplete(
+  _In_ NDIS_HANDLE NdisFilterHandle,
+  _In_ PNDIS_OID_REQUEST OidRequest,
+  _In_ NDIS_STATUS Status);
+
+VOID
+NDISAPI
+NdisFCancelOidRequest(
+  _In_ NDIS_HANDLE NdisFilterHandle,
+  _In_ PVOID RequestId);
+
+VOID
+NDISAPI
+NdisFIndicateStatus(
+  _In_ NDIS_HANDLE NdisFilterHandle,
+  _In_ PNDIS_STATUS_INDICATION StatusIndication);
+
+VOID
+NDISAPI
+NdisFDevicePnPEventNotify(
+  _In_ NDIS_HANDLE NdisFilterHandle,
+  _In_ PNET_DEVICE_PNP_EVENT NetDevicePnPEvent);
+
+NDIS_STATUS
+NDISAPI
+NdisFNetPnPEvent(
+  _In_ NDIS_HANDLE NdisFilterHandle,
+  _In_ struct _NET_PNP_EVENT_NOTIFICATION *NetPnPEventNotification);
+
+#if NDIS_SUPPORT_NDIS61
+NDIS_STATUS
+NDISAPI
+NdisFDirectOidRequest(
+  _In_ NDIS_HANDLE NdisFilterHandle,
+  _In_ PNDIS_OID_REQUEST OidRequest);
+
+VOID
+NDISAPI
+NdisFDirectOidRequestComplete(
+  _In_ NDIS_HANDLE NdisFilterHandle,
+  _In_ PNDIS_OID_REQUEST OidRequest,
+  _In_ NDIS_STATUS Status);
+
+VOID
+NDISAPI
+NdisFCancelDirectOidRequest(
+  _In_ NDIS_HANDLE NdisFilterHandle,
+  _In_ PVOID RequestId);
+#endif
+
+#if NDIS_SUPPORT_NDIS680
+NDIS_STATUS
+NDISAPI
+NdisFSynchronousOidRequest(
+  _In_ NDIS_HANDLE NdisFilterModuleHandle,
+  _In_ PNDIS_OID_REQUEST OidRequest);
+#endif
+
 #endif /* NDIS_SUPPORT_NDIS6 */
 /* ============================================================================
  *  End NDIS 6 filter driver characteristics.
@@ -8374,31 +8763,91 @@ NdisFDeregisterFilterDriver(
  * ============================================================================ */
 #if NDIS_SUPPORT_NDIS6
 
+#ifndef NDIS_MAX_PHYS_ADDRESS_LENGTH
+#define NDIS_MAX_PHYS_ADDRESS_LENGTH 32
+#endif
+
+typedef struct _NDIS_PORT NDIS_PORT, *PNDIS_PORT;
+
+#define NDIS_BIND_PARAMETERS_REVISION_1 1
+#if NDIS_SUPPORT_NDIS61
+#define NDIS_BIND_PARAMETERS_REVISION_2 2
+#endif
+#if NDIS_SUPPORT_NDIS620
+#define NDIS_BIND_PARAMETERS_REVISION_3 3
+#endif
+#if NDIS_SUPPORT_NDIS630
+#define NDIS_BIND_PARAMETERS_REVISION_4 4
+#endif
+
 typedef struct _NDIS_BIND_PARAMETERS {
-  NDIS_OBJECT_HEADER Header;
-  ULONG              Flags;
-  PNDIS_STRING       AdapterName;
-  NDIS_HANDLE        MiniportHandle;
-  NDIS_HANDLE        PhysicalDeviceObject;
-  UINT               BoundIfIndex;
-  ULONG64            BoundIfNetluid; /* NET_LUID — declared as ULONG64 to avoid pulling in ifdef.h */
-  NDIS_MEDIUM        MediaType;
-  NDIS_PHYSICAL_MEDIUM PhysicalMediumType;
-  ULONG              MtuSize;
-  ULONG              MaxXmitLinkSpeed;
-  ULONG              MaxRcvLinkSpeed;
-  ULONG              LookaheadSize;
-  ULONG              MacOptions;
-  ULONG              SupportedPacketFilters;
-  ULONG              MaxMulticastListSize;
-  USHORT             MacAddressLength;
-  UCHAR              CurrentMacAddress[32];
-  PVOID              AccessType;
-  PVOID              PhysicalMediumInfo;
-  ULONG              SupportedOidListLength;
-  PNDIS_OID          SupportedOidList;
-  ULONG              ReceiveFlags;
+  NDIS_OBJECT_HEADER               Header;
+  PNDIS_STRING                     ProtocolSection;
+  PNDIS_STRING                     AdapterName;
+  PDEVICE_OBJECT                   PhysicalDeviceObject;
+  NDIS_MEDIUM                      MediaType;
+  ULONG                            MtuSize;
+  ULONG64                          MaxXmitLinkSpeed;
+  ULONG64                          XmitLinkSpeed;
+  ULONG64                          MaxRcvLinkSpeed;
+  ULONG64                          RcvLinkSpeed;
+  NDIS_MEDIA_CONNECT_STATE         MediaConnectState;
+  NDIS_MEDIA_DUPLEX_STATE          MediaDuplexState;
+  ULONG                            LookaheadSize;
+  PNDIS_PNP_CAPABILITIES           PowerManagementCapabilities;
+  ULONG                            SupportedPacketFilters;
+  ULONG                            MaxMulticastListSize;
+  USHORT                           MacAddressLength;
+  UCHAR                            CurrentMacAddress[NDIS_MAX_PHYS_ADDRESS_LENGTH];
+  NDIS_PHYSICAL_MEDIUM             PhysicalMediumType;
+  PNDIS_RECEIVE_SCALE_CAPABILITIES RcvScaleCapabilities;
+  NET_LUID                         BoundIfNetluid;
+  NET_IFINDEX                      BoundIfIndex;
+  NET_LUID                         LowestIfNetluid;
+  NET_IFINDEX                      LowestIfIndex;
+  NET_IF_ACCESS_TYPE               AccessType;
+  NET_IF_DIRECTION_TYPE            DirectionType;
+  NET_IF_CONNECTION_TYPE           ConnectionType;
+  NET_IFTYPE                       IfType;
+  BOOLEAN                          IfConnectorPresent;
+  PNDIS_PORT                       ActivePorts;
+  ULONG                            DataBackFillSize;
+  ULONG                            ContextBackFillSize;
+  ULONG                            MacOptions;
+  NET_IF_COMPARTMENT_ID            CompartmentId;
+  PNDIS_OFFLOAD                    DefaultOffloadConfiguration;
+  PNDIS_TCP_CONNECTION_OFFLOAD     TcpConnectionOffloadCapabilities;
+  PNDIS_STRING                     BoundAdapterName;
+#if NDIS_SUPPORT_NDIS61
+  PNDIS_HD_SPLIT_CURRENT_CONFIG    HDSplitCurrentConfig;
+#endif
+#if NDIS_SUPPORT_NDIS620
+  PNDIS_RECEIVE_FILTER_CAPABILITIES ReceiveFilterCapabilities;
+  PNDIS_PM_CAPABILITIES            PowerManagementCapabilitiesEx;
+  PNDIS_NIC_SWITCH_CAPABILITIES    NicSwitchCapabilities;
+#endif
+#if NDIS_SUPPORT_NDIS630
+  BOOLEAN                          NDKEnabled;
+  PNDIS_NDK_CAPABILITIES           NDKCapabilities;
+  PNDIS_SRIOV_CAPABILITIES         SriovCapabilities;
+  PNDIS_NIC_SWITCH_INFO_ARRAY      NicSwitchArray;
+#endif
 } NDIS_BIND_PARAMETERS, *PNDIS_BIND_PARAMETERS;
+
+#define NDIS_SIZEOF_BIND_PARAMETERS_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_BIND_PARAMETERS, BoundAdapterName)
+#if NDIS_SUPPORT_NDIS61
+#define NDIS_SIZEOF_BIND_PARAMETERS_REVISION_2 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_BIND_PARAMETERS, HDSplitCurrentConfig)
+#endif
+#if NDIS_SUPPORT_NDIS620
+#define NDIS_SIZEOF_BIND_PARAMETERS_REVISION_3 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_BIND_PARAMETERS, NicSwitchCapabilities)
+#endif
+#if NDIS_SUPPORT_NDIS630
+#define NDIS_SIZEOF_BIND_PARAMETERS_REVISION_4 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_BIND_PARAMETERS, NicSwitchArray)
+#endif
 
 typedef struct _NDIS_OPEN_PARAMETERS {
   NDIS_OBJECT_HEADER Header;
@@ -8409,6 +8858,58 @@ typedef struct _NDIS_OPEN_PARAMETERS {
   PNET_FRAME_TYPE    FrameTypeArray;
   UINT               FrameTypeArraySize;
 } NDIS_OPEN_PARAMETERS, *PNDIS_OPEN_PARAMETERS;
+
+#define NDIS_OPEN_PARAMETERS_REVISION_1 1
+#define NDIS_SIZEOF_OPEN_PARAMETERS_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_OPEN_PARAMETERS, FrameTypeArraySize)
+/* Preserve the misspelled WDK compatibility macro. */
+#define NDIS_SIZEOF_OPEN_PARAMETERS_REVSION_1 \
+  NDIS_SIZEOF_OPEN_PARAMETERS_REVISION_1
+
+#define NET_EVENT_HALT_MINIPORT_ON_LOW_POWER 0x00000001
+#define NET_EVENT_FLAGS_VPORT_ID_VALID       0x00000002
+#define NET_PNP_EVENT_NOTIFICATION_REVISION_1 1
+#if NDIS_SUPPORT_NDIS650
+#define NET_PNP_EVENT_NOTIFICATION_REVISION_2 2
+#endif
+typedef struct _NET_PNP_EVENT_NOTIFICATION {
+  NDIS_OBJECT_HEADER Header;
+  NDIS_PORT_NUMBER   PortNumber;
+  NET_PNP_EVENT      NetPnPEvent;
+  ULONG              Flags;
+#if NDIS_SUPPORT_NDIS650
+  NDIS_NIC_SWITCH_ID         SwitchId;
+  NDIS_NIC_SWITCH_VPORT_ID   VPortId;
+#endif
+} NET_PNP_EVENT_NOTIFICATION, *PNET_PNP_EVENT_NOTIFICATION;
+#define NDIS_SIZEOF_NET_PNP_EVENT_NOTIFICATION_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NET_PNP_EVENT_NOTIFICATION, Flags)
+#if NDIS_SUPPORT_NDIS650
+#define NDIS_SIZEOF_NET_PNP_EVENT_NOTIFICATION_REVISION_2 \
+  RTL_SIZEOF_THROUGH_FIELD(NET_PNP_EVENT_NOTIFICATION, VPortId)
+#endif
+
+#define NDIS_PROTOCOL_PAUSE_PARAMETERS_REVISION_1 1
+typedef struct _NDIS_PROTOCOL_PAUSE_PARAMETERS {
+  NDIS_OBJECT_HEADER Header;
+  ULONG              Flags;
+  ULONG              PauseReason;
+} NDIS_PROTOCOL_PAUSE_PARAMETERS, *PNDIS_PROTOCOL_PAUSE_PARAMETERS;
+#define NDIS_SIZEOF_PROTOCOL_PAUSE_PARAMETERS_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_PROTOCOL_PAUSE_PARAMETERS, PauseReason)
+
+#define NDIS_PROTOCOL_RESTART_PARAMETERS_REVISION_1 1
+typedef struct _NDIS_PROTOCOL_RESTART_PARAMETERS {
+  NDIS_OBJECT_HEADER       Header;
+  PUCHAR                   FilterModuleNameBuffer;
+  ULONG                    FilterModuleNameBufferLength;
+  PNDIS_RESTART_ATTRIBUTES RestartAttributes;
+  NET_IFINDEX              BoundIfIndex;
+  NET_LUID                 BoundIfNetluid;
+  ULONG                    Flags;
+} NDIS_PROTOCOL_RESTART_PARAMETERS, *PNDIS_PROTOCOL_RESTART_PARAMETERS;
+#define NDIS_SIZEOF_PROTOCOL_RESTART_PARAMETERS_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_PROTOCOL_RESTART_PARAMETERS, Flags)
 
 typedef NDIS_STATUS
 (NTAPI PROTOCOL_BIND_ADAPTER_EX)(
@@ -8466,7 +8967,7 @@ typedef PROTOCOL_STATUS_EX (*PROTOCOL_STATUS_EX_HANDLER);
 typedef NDIS_STATUS
 (NTAPI PROTOCOL_NET_PNP_EVENT)(
   _In_ NDIS_HANDLE ProtocolBindingContext,
-  _In_ PVOID NetPnPEventNotification);
+  _In_ PNET_PNP_EVENT_NOTIFICATION NetPnPEventNotification);
 typedef PROTOCOL_NET_PNP_EVENT (*PROTOCOL_NET_PNP_EVENT_HANDLER);
 
 typedef VOID
@@ -8479,6 +8980,7 @@ typedef NDIS_STATUS
   _In_ NDIS_HANDLE DriverContext);
 typedef PROTOCOL_SET_OPTIONS (*PROTOCOL_SET_OPTIONS_HANDLER);
 
+#if NDIS_SUPPORT_NDIS61
 /* NDIS 6.1+: direct (unserialized) OID completion to the protocol. */
 typedef VOID
 (NTAPI PROTOCOL_DIRECT_OID_REQUEST_COMPLETE)(
@@ -8486,6 +8988,23 @@ typedef VOID
   _In_ PNDIS_OID_REQUEST OidRequest,
   _In_ NDIS_STATUS Status);
 typedef PROTOCOL_DIRECT_OID_REQUEST_COMPLETE (*PROTOCOL_DIRECT_OID_REQUEST_COMPLETE_HANDLER);
+#endif
+
+/* Canonical WDK callback pointer names. Keep the PROTOCOL_*_HANDLER names
+ * above as source-compatible aliases for existing ReactOS consumers. */
+typedef PROTOCOL_BIND_ADAPTER_EX (*BIND_HANDLER_EX);
+typedef PROTOCOL_UNBIND_ADAPTER_EX (*UNBIND_HANDLER_EX);
+typedef PROTOCOL_OPEN_ADAPTER_COMPLETE_EX (*OPEN_ADAPTER_COMPLETE_HANDLER_EX);
+typedef PROTOCOL_CLOSE_ADAPTER_COMPLETE_EX (*CLOSE_ADAPTER_COMPLETE_HANDLER_EX);
+typedef PROTOCOL_STATUS_EX (*STATUS_HANDLER_EX);
+typedef PROTOCOL_NET_PNP_EVENT (*NET_PNP_EVENT_HANDLER);
+typedef PROTOCOL_UNINSTALL (*UNINSTALL_PROTOCOL_HANDLER);
+typedef PROTOCOL_OID_REQUEST_COMPLETE (*OID_REQUEST_COMPLETE_HANDLER);
+typedef PROTOCOL_RECEIVE_NET_BUFFER_LISTS (*RECEIVE_NET_BUFFER_LISTS_HANDLER);
+typedef PROTOCOL_SEND_NET_BUFFER_LISTS_COMPLETE (*SEND_NET_BUFFER_LISTS_COMPLETE_HANDLER);
+#if NDIS_SUPPORT_NDIS61
+typedef PROTOCOL_DIRECT_OID_REQUEST_COMPLETE (*DIRECT_OID_REQUEST_COMPLETE_HANDLER);
+#endif
 
 /* WDK layout — stock Win7 protocol binaries fill this exact field order;
  * the NDIS 6.1 REV_2 tail adds DirectOidRequestCompleteHandler. */
@@ -8508,15 +9027,29 @@ typedef struct _NDIS_PROTOCOL_DRIVER_CHARACTERISTICS {
   PROTOCOL_STATUS_EX_HANDLER                      StatusHandlerEx;
   PROTOCOL_RECEIVE_NET_BUFFER_LISTS_HANDLER       ReceiveNetBufferListsHandler;
   PROTOCOL_SEND_NET_BUFFER_LISTS_COMPLETE_HANDLER SendNetBufferListsCompleteHandler;
+#if NDIS_SUPPORT_NDIS61
   PROTOCOL_DIRECT_OID_REQUEST_COMPLETE_HANDLER    DirectOidRequestCompleteHandler;
+#endif
 } NDIS_PROTOCOL_DRIVER_CHARACTERISTICS, *PNDIS_PROTOCOL_DRIVER_CHARACTERISTICS;
 
+#if NDIS_SUPPORT_NDIS650
+#define NDIS_PROTOCOL_DRIVER_SUPPORTS_CURRENT_MAC_ADDRESS_CHANGE 0x00000002
+#define NDIS_PROTOCOL_DRIVER_SUPPORTS_L2_MTU_SIZE_CHANGE         0x00000004
+#endif
+#if NDIS_SUPPORT_NDIS689
+#define NDIS_PROTOCOL_DRIVER_UDP_RSC_NOT_SUPPORTED               0x00000008
+#endif
+
 #define NDIS_PROTOCOL_DRIVER_CHARACTERISTICS_REVISION_1  1
+#if NDIS_SUPPORT_NDIS61
 #define NDIS_PROTOCOL_DRIVER_CHARACTERISTICS_REVISION_2  2
+#endif
 #define NDIS_SIZEOF_PROTOCOL_DRIVER_CHARACTERISTICS_REVISION_1 \
   RTL_SIZEOF_THROUGH_FIELD(NDIS_PROTOCOL_DRIVER_CHARACTERISTICS, SendNetBufferListsCompleteHandler)
+#if NDIS_SUPPORT_NDIS61
 #define NDIS_SIZEOF_PROTOCOL_DRIVER_CHARACTERISTICS_REVISION_2 \
   RTL_SIZEOF_THROUGH_FIELD(NDIS_PROTOCOL_DRIVER_CHARACTERISTICS, DirectOidRequestCompleteHandler)
+#endif
 
 NDIS_STATUS
 NDISAPI
@@ -8529,6 +9062,38 @@ VOID
 NDISAPI
 NdisDeregisterProtocolDriver(
   _In_ NDIS_HANDLE NdisProtocolHandle);
+
+NDIS_STATUS
+NDISAPI
+NdisOpenAdapterEx(
+  _In_ NDIS_HANDLE NdisProtocolHandle,
+  _In_ NDIS_HANDLE ProtocolBindingContext,
+  _In_ PNDIS_OPEN_PARAMETERS OpenParameters,
+  _In_ NDIS_HANDLE BindContext,
+  _Out_ PNDIS_HANDLE NdisBindingHandle);
+
+VOID
+NDISAPI
+NdisCompleteBindAdapterEx(
+  _In_ NDIS_HANDLE BindAdapterContext,
+  _In_ NDIS_STATUS Status);
+
+NDIS_STATUS
+NDISAPI
+NdisCloseAdapterEx(
+  _In_ NDIS_HANDLE NdisBindingHandle);
+
+VOID
+NDISAPI
+NdisCompleteUnbindAdapterEx(
+  _In_ NDIS_HANDLE UnbindContext);
+
+VOID
+NDISAPI
+NdisCompleteNetPnPEvent(
+  _In_ NDIS_HANDLE NdisBindingHandle,
+  _In_ PNET_PNP_EVENT_NOTIFICATION NetPnPEventNotification,
+  _In_ NDIS_STATUS Status);
 
 VOID
 NDISAPI
@@ -8551,6 +9116,29 @@ NdisOidRequest(
   _In_ NDIS_HANDLE NdisBindingHandle,
   _In_ PNDIS_OID_REQUEST OidRequest);
 
+#if NDIS_SUPPORT_NDIS680
+NDIS_STATUS
+NDISAPI
+NdisSynchronousOidRequest(
+  _In_ NDIS_HANDLE NdisBindingHandle,
+  _In_ PNDIS_OID_REQUEST OidRequest);
+#endif
+
+NDIS_STATUS
+NDISAPI
+NdisAllocateCloneOidRequest(
+  _In_ NDIS_HANDLE SourceHandle,
+  _In_ PNDIS_OID_REQUEST OidRequest,
+  _In_ UINT PoolTag,
+  _Out_ PNDIS_OID_REQUEST *ClonedOidRequest);
+
+VOID
+NDISAPI
+NdisFreeCloneOidRequest(
+  _In_ NDIS_HANDLE SourceHandle,
+  _In_ PNDIS_OID_REQUEST Request);
+
+#if NDIS_SUPPORT_NDIS61
 /* NDIS 6.1+ direct (unserialized) OID request path. */
 NDIS_STATUS
 NDISAPI
@@ -8570,6 +9158,7 @@ NdisMDirectOidRequestComplete(
   _In_ NDIS_HANDLE NdisMiniportHandle,
   _In_ PNDIS_OID_REQUEST OidRequest,
   _In_ NDIS_STATUS Status);
+#endif
 
 #endif /* NDIS_SUPPORT_NDIS6 */
 /* ============================================================================
