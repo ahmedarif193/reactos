@@ -17,3 +17,9 @@ add_library(hal MODULE
     ${SOURCES})
 
 set_module_type(hal kerneldll ENTRYPOINT 0)
+
+add_library(halup MODULE
+    ${SOURCES})
+
+set_module_type(halup kerneldll ENTRYPOINT 0)
+add_cd_file(TARGET halup DESTINATION reactos/system32 NO_CAB FOR all)
