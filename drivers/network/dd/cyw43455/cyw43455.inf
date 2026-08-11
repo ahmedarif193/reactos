@@ -30,6 +30,9 @@ DefaultDestDir = 12
 
 [cyw.ndi]
 Characteristics = 0x84
+*IfType          = 71
+*MediaType       = 16
+*PhysicalMediaType = 9
 AddReg          = cyw.reg
 CopyFiles       = cyw.CopyFiles
 
@@ -37,6 +40,9 @@ CopyFiles       = cyw.CopyFiles
 AddService = cyw43455, 2, cyw.Service, cyw.EventLog
 
 [cyw.reg]
+HKR, ,                   *IfType,    0x00010001, 71
+HKR, ,                   *MediaType, 0x00010001, 16
+HKR, ,                   *PhysicalMediaType, 0x00010001, 9
 HKR, Ndi,               Service,    0, "cyw43455"
 HKR, Ndi\Interfaces,    UpperRange, 0, "ndis5"
 HKR, Ndi\Interfaces,    LowerRange, 0, "nativewifi"
