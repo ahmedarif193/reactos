@@ -72,6 +72,25 @@ KeQueryMaximumGroupCount(VOID)
 /*
  * @implemented
  */
+ULONG
+NTAPI
+KeGetProcessorIndexFromNumber(
+    _In_ PPROCESSOR_NUMBER ProcessorNumber)
+{
+    if ((ProcessorNumber->Reserved != 0) ||
+        (ProcessorNumber->Group != 0) ||
+        (ProcessorNumber->Number >= (UCHAR)(sizeof(KAFFINITY) * 8)) ||
+        (ProcessorNumber->Number >= (UCHAR)KeNumberProcessors))
+    {
+        return INVALID_PROCESSOR_INDEX;
+    }
+
+    return ProcessorNumber->Number;
+}
+
+/*
+ * @implemented
+ */
 SIZE_T
 NTAPI
 KeSizeOfAffinityEx(

@@ -12,6 +12,7 @@ VOID Test_KeArm64AffinityEx(VOID);
 typedef LOGICAL (NTAPI *PKMT_KE_AND_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2, _Out_opt_ PKAFFINITY_EX Result);
 typedef VOID (NTAPI *PKMT_KE_COPY_AFFINITY_EX)(_Out_ PKAFFINITY_EX Destination, _In_ PKAFFINITY_EX Source);
 typedef SIZE_T (NTAPI *PKMT_KE_SIZE_OF_AFFINITY_EX)(_In_ USHORT Count);
+typedef ULONG (NTAPI *PKMT_KE_GET_PROCESSOR_INDEX_FROM_NUMBER)(_In_ PPROCESSOR_NUMBER ProcessorNumber);
 typedef ULONG (NTAPI *PKMT_KE_COUNT_SET_BITS_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity);
 typedef LOGICAL (NTAPI *PKMT_KE_IS_EQUAL_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2);
 typedef LOGICAL (NTAPI *PKMT_KE_IS_SINGLE_GROUP_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity, _Out_opt_ PUSHORT Group);
@@ -27,14 +28,17 @@ START_TEST(KeArm64AffinityEx)
     KAFFINITY_EX Affinity;
     KAFFINITY_EX Result;
     KAFFINITY_EX Source;
+    ULONG ActiveCount;
     PKMT_KE_AND_AFFINITY_EX AndAffinityEx;
     PKMT_KE_COPY_AFFINITY_EX CopyAffinityEx;
     PKMT_KE_COUNT_SET_BITS_AFFINITY_EX CountSetBitsAffinityEx;
+    PKMT_KE_GET_PROCESSOR_INDEX_FROM_NUMBER GetProcessorIndexFromNumber;
     PKMT_KE_IS_EQUAL_AFFINITY_EX IsEqualAffinityEx;
     PKMT_KE_IS_SINGLE_GROUP_AFFINITY_EX IsSingleGroupAffinityEx;
     PKMT_KE_IS_SUBSET_AFFINITY_EX IsSubsetAffinityEx;
     PKMT_KE_OR_AFFINITY_EX OrAffinityEx;
     PKMT_KE_SIZE_OF_AFFINITY_EX SizeOfAffinityEx;
+    PROCESSOR_NUMBER ProcessorNumber;
     UNICODE_STRING Name;
     USHORT GroupNumber;
 
@@ -352,5 +356,32 @@ START_TEST(KeArm64AffinityEx)
     ok_eq_uint(Result.Size, KAFFINITY_EX_INITIALIZED_GROUPS);
     ok_eq_ulonglong(Result.Bitmap[KAFFINITY_EX_INITIALIZED_GROUPS - 1], 0);
     ok_eq_ulonglong(Result.Bitmap[KAFFINITY_EX_INITIALIZED_GROUPS], (KAFFINITY)0xA5A5A5A5A5A5A5A5ULL);
+
+    RtlInitUnicodeString(&Name, L"KeGetProcessorIndexFromNumber");
+    GetProcessorIndexFromNumber = (PKMT_KE_GET_PROCESSOR_INDEX_FROM_NUMBER)MmGetSystemRoutineAddress(&Name);
+    if (GetProcessorIndexFromNumber == NULL)
+    {
+        skip(FALSE, "KeGetProcessorIndexFromNumber is not exported\n");
+        return;
+    }
+
+    ActiveCount = KeQueryActiveProcessorCount(NULL);
+    ok((ActiveCount > 1) && (ActiveCount < 64), "unexpected active processor count %lu\n", ActiveCount);
+    RtlZeroMemory(&ProcessorNumber, sizeof(ProcessorNumber));
+    ok_eq_ulong(GetProcessorIndexFromNumber(&ProcessorNumber), 0);
+    ProcessorNumber.Reserved = 1;
+    ok_eq_ulong(GetProcessorIndexFromNumber(&ProcessorNumber), INVALID_PROCESSOR_INDEX);
+    ProcessorNumber.Reserved = 0;
+    ProcessorNumber.Group = 1;
+    ok_eq_ulong(GetProcessorIndexFromNumber(&ProcessorNumber), INVALID_PROCESSOR_INDEX);
+    ProcessorNumber.Group = 0;
+    ProcessorNumber.Number = 64;
+    ok_eq_ulong(GetProcessorIndexFromNumber(&ProcessorNumber), INVALID_PROCESSOR_INDEX);
+    ProcessorNumber.Number = 1;
+    ok_eq_ulong(GetProcessorIndexFromNumber(&ProcessorNumber), 1);
+    ProcessorNumber.Number = (UCHAR)(ActiveCount - 1);
+    ok_eq_ulong(GetProcessorIndexFromNumber(&ProcessorNumber), ActiveCount - 1);
+    ProcessorNumber.Number = (UCHAR)ActiveCount;
+    ok_eq_ulong(GetProcessorIndexFromNumber(&ProcessorNumber), INVALID_PROCESSOR_INDEX);
 #endif
 }
