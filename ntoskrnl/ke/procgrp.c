@@ -344,6 +344,26 @@ KeFindFirstSetRightAffinityEx(
 /*
  * @implemented
  */
+ULONG
+NTAPI
+KeFindFirstSetRightGroupAffinity(
+    _In_ PGROUP_AFFINITY GroupAffinity)
+{
+    PROCESSOR_NUMBER ProcessorNumber;
+    ULONG BitNumber;
+
+    if (!BitScanForwardAffinity(&BitNumber, GroupAffinity->Mask))
+        return INVALID_PROCESSOR_INDEX;
+
+    ProcessorNumber.Group = GroupAffinity->Group;
+    ProcessorNumber.Number = (UCHAR)BitNumber;
+    ProcessorNumber.Reserved = 0;
+    return KeGetProcessorIndexFromNumber(&ProcessorNumber);
+}
+
+/*
+ * @implemented
+ */
 LOGICAL
 NTAPI
 KeAndAffinityEx(
