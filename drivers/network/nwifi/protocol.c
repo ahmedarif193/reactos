@@ -287,11 +287,7 @@ NwifiBindAdapterEx(
     NdisInitializeEvent(&Adapter->OpenEvent);
     NdisInitializeEvent(&Adapter->CloseEvent);
     Adapter->State = NwifiStateInitializing;
-    Adapter->ProtocolBindContext = BindContext;
     Adapter->InterfaceIndex = (ULONG)InterlockedIncrement(&gNwifi.NextInterfaceIndex) - 1;
-
-    /* Snapshot bind parameters; the pointer is only valid during this call. */
-    Adapter->LowerBindParameters = *BindParameters;
 
     /* Copy the lower adapter device name so we keep it past this callback. */
     if (BindParameters->AdapterName != NULL &&
@@ -538,22 +534,44 @@ NDIS_STATUS
 NTAPI
 NwifiProtocolNetPnPEvent(
     _In_ NDIS_HANDLE ProtocolBindingContext,
-    _In_ PVOID NetPnPEventNotification)
+    _In_ PNET_PNP_EVENT_NOTIFICATION NetPnPEventNotification)
 {
-    PNET_PNP_EVENT_NOTIFICATION Notification =
-        (PNET_PNP_EVENT_NOTIFICATION)NetPnPEventNotification;
+    PNWIFI_ADAPTER Adapter = (PNWIFI_ADAPTER)ProtocolBindingContext;
+    PNET_PNP_EVENT_NOTIFICATION Notification = NetPnPEventNotification;
 
-    UNREFERENCED_PARAMETER(ProtocolBindingContext);
-
-    if (Notification == NULL)
+    if (Adapter == NULL || Notification == NULL)
     {
-        return NDIS_STATUS_SUCCESS;
+        return NDIS_STATUS_INVALID_PARAMETER;
     }
 
-    /* TODO: pause/restart the data path on power transitions. */
     switch (Notification->NetPnPEvent.NetEvent)
     {
+        case NetEventPause:
+            NdisAcquireSpinLock(&Adapter->DataLock);
+            if (Adapter->State != NwifiStateHalting)
+                Adapter->State = NwifiStatePaused;
+            NdisReleaseSpinLock(&Adapter->DataLock);
+            return NDIS_STATUS_SUCCESS;
+
+        case NetEventRestart:
+            NdisAcquireSpinLock(&Adapter->DataLock);
+            if (Adapter->State != NwifiStateHalting &&
+                Adapter->MiniportInitialized)
+            {
+                Adapter->State = NwifiStateRunning;
+            }
+            NdisReleaseSpinLock(&Adapter->DataLock);
+            return NDIS_STATUS_SUCCESS;
+
         case NetEventSetPower:
+            if (Notification->NetPnPEvent.Buffer == NULL ||
+                Notification->NetPnPEvent.BufferLength <
+                    sizeof(NDIS_DEVICE_POWER_STATE))
+            {
+                return NDIS_STATUS_INVALID_PARAMETER;
+            }
+            return NDIS_STATUS_SUCCESS;
+
         case NetEventQueryPower:
         case NetEventQueryRemoveDevice:
         case NetEventCancelRemoveDevice:

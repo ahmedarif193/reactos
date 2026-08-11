@@ -91,13 +91,12 @@ NwifiMsmQueueWorkItem(
     BOOLEAN Queue = FALSE;
 
     if (Routine == NULL ||
-        Msm->Adapter->LowerBindParameters.MiniportHandle == NULL)
+        gNwifi.MiniportDriverHandle == NULL)
     {
         return FALSE;
     }
 
-    WorkItem = NdisAllocateIoWorkItem(
-        Msm->Adapter->LowerBindParameters.MiniportHandle);
+    WorkItem = NdisAllocateIoWorkItem(gNwifi.MiniportDriverHandle);
     if (WorkItem == NULL)
     {
         return FALSE;
