@@ -42,6 +42,21 @@ BOOLEAN
 NTAPI
 HalQueryArm64TimerConfig(
     _Out_ PHAL_ARM64_TIMER_CONFIG Config);
+
+typedef enum _IPI_TYPE
+{
+    IpiAffinity = 0,
+    IpiAllButSelf,
+    IpiAll
+} IPI_TYPE;
+
+NTHALAPI
+NTSTATUS
+NTAPI
+HalRequestIpiSpecifyVector(
+    _In_ IPI_TYPE IpiType,
+    _In_opt_ PKAFFINITY_EX Affinity,
+    _In_ ULONG Vector);
 #endif
 
 //
