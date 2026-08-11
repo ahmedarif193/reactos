@@ -18,54 +18,6 @@
 
 #define NWIFI_TAG  'FIWN'   /* 'NWIF' */
 
-/* NDIS 6 protocol-side definitions (NdisOpenAdapterEx and friends,
- * NDIS_OPEN_PARAMETERS_REVISION_1, NET_PNP_EVENT_NOTIFICATION) not yet in
- * the ReactOS ndis.h; declared locally until the shared headers gain them. */
-#ifndef NDIS_OPEN_PARAMETERS_REVISION_1
-#define NDIS_OPEN_PARAMETERS_REVISION_1     1
-#endif
-
-#ifndef NET_PNP_EVENT_NOTIFICATION_REVISION_1
-#define NET_PNP_EVENT_NOTIFICATION_REVISION_1   1
-typedef struct _NET_PNP_EVENT_NOTIFICATION
-{
-    NDIS_OBJECT_HEADER Header;
-    NDIS_PORT_NUMBER   PortNumber;
-    NET_PNP_EVENT      NetPnPEvent;
-    ULONG              Flags;
-} NET_PNP_EVENT_NOTIFICATION, *PNET_PNP_EVENT_NOTIFICATION;
-#endif
-
-#ifndef NWIFI_HAVE_NDIS6_OPEN_ADAPTER_EX
-
-NDIS_STATUS
-NTAPI
-NdisOpenAdapterEx(
-    _In_  NDIS_HANDLE NdisProtocolHandle,
-    _In_  NDIS_HANDLE ProtocolBindingContext,
-    _In_  PNDIS_OPEN_PARAMETERS OpenParameters,
-    _In_  NDIS_HANDLE BindContext,
-    _Out_ PNDIS_HANDLE NdisBindingHandle);
-
-VOID
-NTAPI
-NdisCompleteBindAdapterEx(
-    _In_ NDIS_HANDLE BindAdapterContext,
-    _In_ NDIS_STATUS Status);
-
-NDIS_STATUS
-NTAPI
-NdisCloseAdapterEx(
-    _In_ NDIS_HANDLE NdisBindingHandle);
-
-VOID
-NTAPI
-NdisCompleteUnbindAdapterEx(
-    _In_ NDIS_HANDLE UnbindAdapterContext,
-    _In_ NDIS_STATUS Status);
-
-#endif /* NWIFI_HAVE_NDIS6_OPEN_ADAPTER_EX */
-
 /* Link speed reported to TCP/IP for the virtual Ethernet adapter until the MSM
  * learns the real PHY rate.  54 Mbit/s (classic 802.11g) is a safe stand-in. */
 #define NWIFI_DEFAULT_LINK_SPEED    (54ULL * 1000000ULL)
@@ -188,10 +140,8 @@ typedef struct _NWIFI_ADAPTER
 
     /* ---- Lower (protocol) edge ---- */
     NDIS_HANDLE   BindingHandle;            /* NdisOpenAdapterEx result */
-    NDIS_HANDLE   ProtocolBindContext;      /* passed to NdisCompleteBindAdapterEx */
     PNDIS_STRING  LowerDeviceName;          /* copied from bind parameters */
     NDIS_STRING   LowerDeviceNameStore;
-    NDIS_BIND_PARAMETERS LowerBindParameters;   /* snapshot (copied) */
 
     /* ---- Upper (virtual miniport) edge ---- */
     NDIS_HANDLE   MiniportAdapterHandle;    /* set in MiniportInitializeEx */
