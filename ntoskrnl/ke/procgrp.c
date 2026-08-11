@@ -301,6 +301,37 @@ KeIsEqualAffinityEx(
  */
 LOGICAL
 NTAPI
+KeIsSingleGroupAffinityEx(
+    _In_ PKAFFINITY_EX Affinity,
+    _Out_opt_ PUSHORT Group)
+{
+    USHORT LocalGroup;
+    USHORT GroupNumber;
+
+    if (Group == NULL)
+        Group = &LocalGroup;
+
+    *Group = KAFFINITY_EX_STATIC_GROUPS;
+
+    for (GroupNumber = 0; GroupNumber < Affinity->Count; GroupNumber++)
+    {
+        if (Affinity->Bitmap[GroupNumber] == 0)
+            continue;
+
+        if (*Group != KAFFINITY_EX_STATIC_GROUPS)
+            return FALSE;
+
+        *Group = GroupNumber;
+    }
+
+    return *Group != KAFFINITY_EX_STATIC_GROUPS;
+}
+
+/*
+ * @implemented
+ */
+LOGICAL
+NTAPI
 KeIsSubsetAffinityEx(
     _In_ PKAFFINITY_EX Affinity1,
     _In_ PKAFFINITY_EX Affinity2)
