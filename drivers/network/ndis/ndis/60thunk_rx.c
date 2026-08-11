@@ -40,16 +40,16 @@ MiniIndicateReceivePacket(
     IN PPNDIS_PACKET PacketArray,
     IN UINT          NumberOfPackets);
 
-#define NDIS6_RX_LEGACY_CONTEXT_TAG   'cRxN'
-#define NDIS6_RX_LEGACY_CONTEXT_MAGIC 0x4E785243
+#define NDIS6_RX_PARENT_CONTEXT_TAG   'pRxN'
+#define NDIS6_RX_PARENT_CONTEXT_MAGIC 0x4E785250
 
-typedef struct _NDIS6_RX_LEGACY_CONTEXT
+typedef struct _NDIS6_RX_PARENT_CONTEXT
 {
     ULONG Magic;
-    volatile LONG WrapperReferences;
+    volatile LONG References;
     PNET_BUFFER_LIST NetBufferList;
     PLOGICAL_ADAPTER Adapter;
-} NDIS6_RX_LEGACY_CONTEXT, *PNDIS6_RX_LEGACY_CONTEXT;
+} NDIS6_RX_PARENT_CONTEXT, *PNDIS6_RX_PARENT_CONTEXT;
 
 #define NDIS6_RX_NATIVE_CONTEXT_TAG   'nRxN'
 #define NDIS6_RX_NATIVE_CONTEXT_MAGIC 0x4E78524E
@@ -57,57 +57,104 @@ typedef struct _NDIS6_RX_LEGACY_CONTEXT
 typedef struct _NDIS6_RX_NATIVE_CONTEXT
 {
     ULONG Magic;
-    volatile LONG NetBufferListReferences;
     PNDIS6_PROTOCOL_BINDING Binding;
-    PLOGICAL_ADAPTER Adapter;
+    PNDIS6_RX_PARENT_CONTEXT Parent;
 } NDIS6_RX_NATIVE_CONTEXT, *PNDIS6_RX_NATIVE_CONTEXT;
 
-static BOOLEAN
-Ndis6RxPrepareNativeIndication(
-    _In_ PNDIS6_PROTOCOL_BINDING Binding,
+static PNDIS6_RX_PARENT_CONTEXT
+Ndis6RxAllocateParentContext(
     _In_ PLOGICAL_ADAPTER Adapter,
-    _In_ PNET_BUFFER_LIST NetBufferLists)
+    _In_ PNET_BUFFER_LIST NetBufferList)
+{
+    PNDIS6_RX_PARENT_CONTEXT Context;
+
+    Context = (PNDIS6_RX_PARENT_CONTEXT)ExAllocatePoolWithTag(NonPagedPool, sizeof(*Context), NDIS6_RX_PARENT_CONTEXT_TAG);
+    if (Context == NULL)
+        return NULL;
+
+    if (!Ndis6ReferenceAdapterLifecycle(Adapter))
+    {
+        ExFreePoolWithTag(Context, NDIS6_RX_PARENT_CONTEXT_TAG);
+        return NULL;
+    }
+
+    Context->Magic = NDIS6_RX_PARENT_CONTEXT_MAGIC;
+    Context->References = 1; /* construction/indication guard */
+    Context->NetBufferList = NetBufferList;
+    Context->Adapter = Adapter;
+    return Context;
+}
+
+static VOID
+Ndis6RxReleaseParentContext(
+    _In_ PNDIS6_RX_PARENT_CONTEXT Context,
+    _In_ ULONG ReturnFlags)
+{
+    PNET_BUFFER_LIST NetBufferList;
+    PLOGICAL_ADAPTER Adapter;
+    LONG RemainingReferences;
+
+    if (Context == NULL || Context->Magic != NDIS6_RX_PARENT_CONTEXT_MAGIC)
+        return;
+
+    RemainingReferences = InterlockedDecrement(&Context->References);
+    ASSERT(RemainingReferences >= 0);
+    if (RemainingReferences != 0)
+        return;
+
+    NetBufferList = Context->NetBufferList;
+    Adapter = Context->Adapter;
+    Context->Magic = 0;
+    ExFreePoolWithTag(Context, NDIS6_RX_PARENT_CONTEXT_TAG);
+
+    Ndis6FilterDispatchReturn(Adapter, NetBufferList, ReturnFlags);
+    Ndis6DereferenceAdapterLifecycle(Adapter);
+}
+
+static PNET_BUFFER_LIST
+Ndis6RxAllocateNativeClone(
+    _In_ PNDIS6_PROTOCOL_BINDING Binding,
+    _In_ PNDIS6_RX_PARENT_CONTEXT Parent)
 {
     PNDIS6_RX_NATIVE_CONTEXT Context;
-    PNET_BUFFER_LIST NetBufferList;
-    LONG ReferenceCount = 0;
+    PNET_BUFFER_LIST Clone;
 
-    for (NetBufferList = NetBufferLists;
-         NetBufferList != NULL && ReferenceCount != MAXLONG;
-         NetBufferList = NET_BUFFER_LIST_NEXT_NBL(NetBufferList))
-    {
-        ReferenceCount++;
-    }
-    if (NetBufferList != NULL || ReferenceCount == 0)
-        return FALSE;
+    Clone = NdisAllocateCloneNetBufferList(Parent->NetBufferList, NULL, NULL, 0);
+    if (Clone == NULL)
+        return NULL;
 
     Context = (PNDIS6_RX_NATIVE_CONTEXT)ExAllocatePoolWithTag(
         NonPagedPool, sizeof(*Context), NDIS6_RX_NATIVE_CONTEXT_TAG);
     if (Context == NULL)
-        return FALSE;
-
-    /* The snapshot reference protects the callback itself. This additional
-     * rundown reference protects a protocol that retains one or more NBLs
-     * after the callback returns. */
-    if (!Ndis6ReferenceProtocolBinding(Binding))
     {
-        ExFreePoolWithTag(Context, NDIS6_RX_NATIVE_CONTEXT_TAG);
-        return FALSE;
+        NdisFreeCloneNetBufferList(Clone, 0);
+        return NULL;
     }
 
     Context->Magic = NDIS6_RX_NATIVE_CONTEXT_MAGIC;
-    Context->NetBufferListReferences = ReferenceCount;
     Context->Binding = Binding;
-    Context->Adapter = Adapter;
+    Context->Parent = Parent;
+    Clone->NdisReserved[0] = Context;
+    NET_BUFFER_LIST_NEXT_NBL(Clone) = NULL;
+    NdisCopyReceiveNetBufferListInfo(Clone, Parent->NetBufferList);
+    InterlockedIncrement(&Parent->References);
+    return Clone;
+}
 
-    for (NetBufferList = NetBufferLists;
-         NetBufferList != NULL;
-         NetBufferList = NET_BUFFER_LIST_NEXT_NBL(NetBufferList))
+static PNET_BUFFER_LIST
+Ndis6RxAllocateResourcesClone(
+    _In_ PNET_BUFFER_LIST Original)
+{
+    PNET_BUFFER_LIST Clone;
+
+    Clone = NdisAllocateCloneNetBufferList(Original, NULL, NULL, 0);
+    if (Clone != NULL)
     {
-        NetBufferList->NdisReserved[0] = Context;
+        NET_BUFFER_LIST_NEXT_NBL(Clone) = NULL;
+        NdisCopyReceiveNetBufferListInfo(Clone, Original);
     }
 
-    return TRUE;
+    return Clone;
 }
 
 BOOLEAN
@@ -117,7 +164,7 @@ Ndis6RxReturnNativeNetBufferList(
     _In_ ULONG ReturnFlags)
 {
     PNDIS6_RX_NATIVE_CONTEXT Context;
-    LONG RemainingRefs;
+    PNDIS6_RX_PARENT_CONTEXT Parent;
 
     if (Binding == NULL || NetBufferList == NULL)
         return FALSE;
@@ -126,24 +173,19 @@ Ndis6RxReturnNativeNetBufferList(
     if (Context == NULL ||
         Context->Magic != NDIS6_RX_NATIVE_CONTEXT_MAGIC ||
         Context->Binding != Binding ||
-        Context->Adapter != Binding->Adapter)
+        Context->Parent == NULL ||
+        Context->Parent->Adapter != Binding->Adapter)
     {
         return FALSE;
     }
 
-    /* Clear the ownership marker before returning the miniport-owned NBL;
-     * the miniport may recycle it synchronously. */
+    Parent = Context->Parent;
     NetBufferList->NdisReserved[0] = NULL;
-    Ndis6FilterDispatchReturn(Context->Adapter, NetBufferList, ReturnFlags);
-
-    RemainingRefs = InterlockedDecrement(&Context->NetBufferListReferences);
-    ASSERT(RemainingRefs >= 0);
-    if (RemainingRefs == 0)
-    {
-        Context->Magic = 0;
-        ExFreePoolWithTag(Context, NDIS6_RX_NATIVE_CONTEXT_TAG);
-        Ndis6DereferenceProtocolBinding(Binding);
-    }
+    Context->Magic = 0;
+    ExFreePoolWithTag(Context, NDIS6_RX_NATIVE_CONTEXT_TAG);
+    NdisFreeCloneNetBufferList(NetBufferList, 0);
+    Ndis6DereferenceProtocolBinding(Binding);
+    Ndis6RxReleaseParentContext(Parent, ReturnFlags);
 
     return TRUE;
 }
@@ -166,7 +208,7 @@ Ndis6RxBuildLegacyPacket(
     _In_ PNET_BUFFER_LIST   Nbl,
     _In_ PNET_BUFFER        Nb,
     _In_ BOOLEAN            ResourcesFlag,
-    _In_opt_ PNDIS6_RX_LEGACY_CONTEXT ReturnContext)
+    _In_opt_ PNDIS6_RX_PARENT_CONTEXT ReturnContext)
 {
     PNDIS_PACKET Packet     = NULL;
     PNDIS_BUFFER FirstBuffer = NULL;
@@ -356,36 +398,6 @@ Ndis6RxFreeLegacyPacket(
     NdisFreePacket(Packet);
 }
 
-static VOID
-Ndis6RxReleaseLegacyContext(
-    _In_ PNDIS6_RX_LEGACY_CONTEXT Context)
-{
-    PNET_BUFFER_LIST NetBufferList;
-    PLOGICAL_ADAPTER Adapter;
-    LONG RemainingRefs;
-    ULONG ReturnFlags;
-
-    if (Context == NULL || Context->Magic != NDIS6_RX_LEGACY_CONTEXT_MAGIC)
-        return;
-
-    RemainingRefs = InterlockedDecrement(&Context->WrapperReferences);
-    ASSERT(RemainingRefs >= 0);
-    if (RemainingRefs != 0)
-        return;
-
-    NetBufferList = Context->NetBufferList;
-    Adapter = Context->Adapter;
-    Context->Magic = 0;
-    ExFreePoolWithTag(Context, NDIS6_RX_LEGACY_CONTEXT_TAG);
-
-    /* All wrappers are gone. Hand the NBL back through the filter chain so
-     * attached filters see the return before the miniport does. */
-    ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
-    ReturnFlags = KeGetCurrentIrql() == DISPATCH_LEVEL ?
-        NDIS_RETURN_FLAGS_DISPATCH_LEVEL : 0;
-    Ndis6FilterDispatchReturn(Adapter, NetBufferList, ReturnFlags);
-}
-
 /* ============================================================================
  *  Ndis6RxReturnLegacyPacket — called from miniport.c:NdisReturnPackets via
  *  the IsNdis6 gate when a legacy protocol releases a held wrapper packet.
@@ -398,19 +410,20 @@ VOID
 Ndis6RxReturnLegacyPacket(
     _In_ PNDIS_PACKET Packet)
 {
-    PNDIS6_RX_LEGACY_CONTEXT ReturnContext;
+    PNDIS6_RX_PARENT_CONTEXT ReturnContext;
     PLOGICAL_ADAPTER Adapter;
+    ULONG ReturnFlags;
 
     if (Packet == NULL)
         return;
 
-    ReturnContext = (PNDIS6_RX_LEGACY_CONTEXT)Packet->Reserved[0];
+    ReturnContext = (PNDIS6_RX_PARENT_CONTEXT)Packet->Reserved[0];
     Adapter = (PLOGICAL_ADAPTER)Packet->Reserved[1];
 
     Ndis6RxFreeLegacyPacket(Packet);
 
     if (ReturnContext == NULL ||
-        ReturnContext->Magic != NDIS6_RX_LEGACY_CONTEXT_MAGIC ||
+        ReturnContext->Magic != NDIS6_RX_PARENT_CONTEXT_MAGIC ||
         Adapter == NULL ||
         !Adapter->IsNdis6 ||
         ReturnContext->Adapter != Adapter)
@@ -418,7 +431,10 @@ Ndis6RxReturnLegacyPacket(
         return;
     }
 
-    Ndis6RxReleaseLegacyContext(ReturnContext);
+    ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
+    ReturnFlags = KeGetCurrentIrql() == DISPATCH_LEVEL ?
+        NDIS_RETURN_FLAGS_DISPATCH_LEVEL : 0;
+    Ndis6RxReleaseParentContext(ReturnContext, ReturnFlags);
 }
 
 static VOID
@@ -474,6 +490,84 @@ NdisMIndicateReceiveNetBufferLists(
     Ndis6FilterDispatchReceive(Adapter, NetBufferLists, PortNumber, NumberOfNetBufferLists, ReceiveFlags);
 }
 
+typedef struct _NDIS6_RX_BINDING_SNAPSHOT_ENTRY
+{
+    PNDIS6_PROTOCOL_BINDING Binding;
+    PROTOCOL_RECEIVE_NET_BUFFER_LISTS_HANDLER ReceiveHandler;
+    NDIS_HANDLE Context;
+} NDIS6_RX_BINDING_SNAPSHOT_ENTRY, *PNDIS6_RX_BINDING_SNAPSHOT_ENTRY;
+
+static PNDIS6_RX_BINDING_SNAPSHOT_ENTRY
+Ndis6RxSnapshotNativeBindings(
+    _In_ PNDIS6_ADAPTER_EXT Ext,
+    _Out_ PSIZE_T SnapshotCount)
+{
+    PNDIS6_RX_BINDING_SNAPSHOT_ENTRY Snapshot = NULL;
+    SIZE_T Capacity = 0;
+    SIZE_T Count = 0;
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+
+    *SnapshotCount = 0;
+    KeAcquireSpinLock(&Ext->ProtocolBindingListLock, &OldIrql);
+    for (Entry = Ext->ProtocolBindingList.Flink;
+         Entry != &Ext->ProtocolBindingList;
+         Entry = Entry->Flink)
+    {
+        PNDIS6_PROTOCOL_BINDING Binding =
+            CONTAINING_RECORD(Entry, NDIS6_PROTOCOL_BINDING, AdapterLink);
+        if (Binding->DriverBlock != NULL &&
+            InterlockedCompareExchange(&Binding->State, NDIS6_PROTOCOL_STATE_RUNNING, NDIS6_PROTOCOL_STATE_RUNNING) ==
+                NDIS6_PROTOCOL_STATE_RUNNING &&
+            Binding->DriverBlock->Characteristics.ReceiveNetBufferListsHandler != NULL)
+        {
+            Capacity++;
+        }
+    }
+    KeReleaseSpinLock(&Ext->ProtocolBindingListLock, OldIrql);
+
+    if (Capacity == 0 ||
+        Capacity > MAXULONG_PTR / sizeof(*Snapshot))
+    {
+        return NULL;
+    }
+
+    Snapshot = ExAllocatePoolWithTag(NonPagedPool, Capacity * sizeof(*Snapshot), 'bRxN');
+    if (Snapshot == NULL)
+        return NULL;
+
+    KeAcquireSpinLock(&Ext->ProtocolBindingListLock, &OldIrql);
+    for (Entry = Ext->ProtocolBindingList.Flink;
+         Entry != &Ext->ProtocolBindingList && Count < Capacity;
+         Entry = Entry->Flink)
+    {
+        PNDIS6_PROTOCOL_BINDING Binding =
+            CONTAINING_RECORD(Entry, NDIS6_PROTOCOL_BINDING, AdapterLink);
+        if (Binding->DriverBlock != NULL &&
+            InterlockedCompareExchange(&Binding->State, NDIS6_PROTOCOL_STATE_RUNNING, NDIS6_PROTOCOL_STATE_RUNNING) ==
+                NDIS6_PROTOCOL_STATE_RUNNING &&
+            Binding->DriverBlock->Characteristics.ReceiveNetBufferListsHandler != NULL &&
+            Ndis6ReferenceProtocolBinding(Binding))
+        {
+            Snapshot[Count].Binding = Binding;
+            Snapshot[Count].ReceiveHandler =
+                Binding->DriverBlock->Characteristics.ReceiveNetBufferListsHandler;
+            Snapshot[Count].Context = Binding->ProtocolBindingContext;
+            Count++;
+        }
+    }
+    KeReleaseSpinLock(&Ext->ProtocolBindingListLock, OldIrql);
+
+    if (Count == 0)
+    {
+        ExFreePoolWithTag(Snapshot, 'bRxN');
+        return NULL;
+    }
+
+    *SnapshotCount = Count;
+    return Snapshot;
+}
+
 /* ============================================================================
  *  Ndis6FilterTerminalReceive — top-of-chain RX handler. Called by
  *  Ndis6FilterDispatchReceive when no filters are attached, and by
@@ -490,11 +584,14 @@ Ndis6FilterTerminalReceive(
     _In_ ULONG            NumberOfNetBufferLists,
     _In_ ULONG            ReceiveFlags)
 {
-    PNDIS6_ADAPTER_EXT  Ext;
-    PNET_BUFFER_LIST    CurrentNbl;
-    PNET_BUFFER_LIST    NextNbl;
-    BOOLEAN             ResourcesFlag;
-    ULONG               ImmediateReturnFlags;
+    PNDIS6_ADAPTER_EXT Ext;
+    PNDIS6_RX_BINDING_SNAPSHOT_ENTRY Snapshot;
+    PNET_BUFFER_LIST CurrentNbl;
+    PNET_BUFFER_LIST NextNbl;
+    SIZE_T SnapshotCount;
+    SIZE_T i;
+    BOOLEAN ResourcesFlag;
+    ULONG ImmediateReturnFlags;
 
     if (Adapter == NULL || !Adapter->IsNdis6 || NetBufferLists == NULL)
         return;
@@ -507,92 +604,28 @@ Ndis6FilterTerminalReceive(
     ImmediateReturnFlags =
         (ReceiveFlags & NDIS_RECEIVE_FLAGS_DISPATCH_LEVEL) != 0 ?
         NDIS_RETURN_FLAGS_DISPATCH_LEVEL : 0;
-
-    /* If a native NDIS 6 protocol is bound, deliver the NBLs (still
-     * miniport-owned) straight to its ReceiveNetBufferListsHandler instead of
-     * the legacy NDIS_PACKET wrap. Indicate outside the lock since the handler
-     * may re-enter NDIS (e.g. NdisReturnNetBufferLists); only a single native
-     * binding is supported — multi-binding fan-out would need NBL clones. */
-    {
-#define NDIS6_RX_BINDING_SNAPSHOT_MAX 1
-        struct
-        {
-            PNDIS6_PROTOCOL_BINDING                   Binding;
-            PROTOCOL_RECEIVE_NET_BUFFER_LISTS_HANDLER ReceiveHandler;
-            NDIS_HANDLE                               Context;
-        } Snapshot[NDIS6_RX_BINDING_SNAPSHOT_MAX];
-        UINT  SnapCount = 0;
-        UINT  i;
-        KIRQL OldIrql;
-
-        KeAcquireSpinLock(&Ext->ProtocolBindingListLock, &OldIrql);
-        {
-            PLIST_ENTRY entry;
-            for (entry = Ext->ProtocolBindingList.Flink;
-                 entry != &Ext->ProtocolBindingList &&
-                     SnapCount < NDIS6_RX_BINDING_SNAPSHOT_MAX;
-                 entry = entry->Flink)
-            {
-                PNDIS6_PROTOCOL_BINDING Binding =
-                    CONTAINING_RECORD(entry, NDIS6_PROTOCOL_BINDING, AdapterLink);
-                if (Binding->DriverBlock != NULL &&
-                    Binding->DriverBlock->Characteristics.ReceiveNetBufferListsHandler != NULL &&
-                    Ndis6ReferenceProtocolBinding(Binding))
-                {
-                    Snapshot[SnapCount].Binding        = Binding;
-                    Snapshot[SnapCount].ReceiveHandler =
-                        Binding->DriverBlock->Characteristics.ReceiveNetBufferListsHandler;
-                    Snapshot[SnapCount].Context        = Binding->ProtocolBindingContext;
-                    SnapCount++;
-                }
-            }
-        }
-        KeReleaseSpinLock(&Ext->ProtocolBindingListLock, OldIrql);
-
-        if (SnapCount > 0)
-        {
-            for (i = 0; i < SnapCount; i++)
-            {
-                if (!ResourcesFlag &&
-                    !Ndis6RxPrepareNativeIndication(Snapshot[i].Binding,
-                                                    Adapter,
-                                                    NetBufferLists))
-                {
-                    for (CurrentNbl = NetBufferLists;
-                         CurrentNbl != NULL;
-                         CurrentNbl = NextNbl)
-                    {
-                        NextNbl = NET_BUFFER_LIST_NEXT_NBL(CurrentNbl);
-                        NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = NULL;
-                        Ndis6FilterDispatchReturn(Adapter,
-                                                  CurrentNbl,
-                                                  ImmediateReturnFlags);
-                    }
-                    Ndis6DereferenceProtocolBinding(Snapshot[i].Binding);
-                    return;
-                }
-
-                Snapshot[i].ReceiveHandler(
-                    Snapshot[i].Context,
-                    NetBufferLists,
-                    PortNumber,
-                    NumberOfNetBufferLists,
-                    ReceiveFlags);
-                Ndis6DereferenceProtocolBinding(Snapshot[i].Binding);
-            }
-            return;
-        }
-    }
+    Snapshot = Ndis6RxSnapshotNativeBindings(Ext, &SnapshotCount);
 
     if (ResourcesFlag)
     {
         PNDIS_PACKET BatchArray[16];
-        UINT         BatchCount = 0;
-        UINT         j;
+        UINT BatchCount = 0;
+        UINT j;
 
         for (CurrentNbl = NetBufferLists; CurrentNbl != NULL; CurrentNbl = NET_BUFFER_LIST_NEXT_NBL(CurrentNbl))
         {
             PNET_BUFFER Nb;
+
+            for (i = 0; i < SnapshotCount; i++)
+            {
+                PNET_BUFFER_LIST Clone =
+                    Ndis6RxAllocateResourcesClone(CurrentNbl);
+                if (Clone == NULL)
+                    continue;
+
+                Snapshot[i].ReceiveHandler(Snapshot[i].Context, Clone, PortNumber, 1, ReceiveFlags);
+                NdisFreeCloneNetBufferList(Clone, 0);
+            }
 
             for (Nb = NET_BUFFER_LIST_FIRST_NB(CurrentNbl); Nb != NULL; Nb = NET_BUFFER_NEXT_NB(Nb))
             {
@@ -620,51 +653,46 @@ Ndis6FilterTerminalReceive(
         /* The miniport retains ownership when RESOURCES is set and reclaims
          * the original NBL chain as soon as its indication call returns.
          * NDIS must never invoke MiniportReturnNetBufferLists for this path. */
-        return;
+        goto CleanupSnapshot;
     }
 
     for (CurrentNbl = NetBufferLists; CurrentNbl != NULL; CurrentNbl = NextNbl)
     {
-        PNET_BUFFER  Nb;
-        PNET_BUFFER  NextNb;
-        PNDIS6_RX_LEGACY_CONTEXT ReturnContext;
+        PNET_BUFFER Nb;
+        PNET_BUFFER NextNb;
+        PNDIS6_RX_PARENT_CONTEXT ReturnContext;
         PNDIS_PACKET PacketArray[16];
-        UINT         PacketCount = 0;
-        LONG         ReferenceCount = 0;
+        UINT PacketCount = 0;
 
         NextNbl = NET_BUFFER_LIST_NEXT_NBL(CurrentNbl);
         NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = NULL;
 
-        /* Account for every NB before the first indication. A protocol can
-         * return a wrapper synchronously after indication, so counting only a
-         * 16-entry batch could return the NBL while later NBs still use it. */
-        for (Nb = NET_BUFFER_LIST_FIRST_NB(CurrentNbl);
-             Nb != NULL && ReferenceCount != MAXLONG;
-             Nb = NET_BUFFER_NEXT_NB(Nb))
-        {
-            ReferenceCount++;
-        }
-
-        if (Nb != NULL || ReferenceCount == 0)
-        {
-            /* An empty or impossibly large NBL cannot be represented by the
-             * signed private reference count. Return it without indication. */
-            Ndis6FilterDispatchReturn(Adapter, CurrentNbl, ImmediateReturnFlags);
-            continue;
-        }
-
-        ReturnContext = (PNDIS6_RX_LEGACY_CONTEXT)ExAllocatePoolWithTag(
-            NonPagedPool, sizeof(*ReturnContext), NDIS6_RX_LEGACY_CONTEXT_TAG);
+        ReturnContext = Ndis6RxAllocateParentContext(Adapter, CurrentNbl);
         if (ReturnContext == NULL)
         {
             Ndis6FilterDispatchReturn(Adapter, CurrentNbl, ImmediateReturnFlags);
             continue;
         }
 
-        ReturnContext->Magic = NDIS6_RX_LEGACY_CONTEXT_MAGIC;
-        ReturnContext->WrapperReferences = ReferenceCount;
-        ReturnContext->NetBufferList = CurrentNbl;
-        ReturnContext->Adapter = Adapter;
+        /* Every native binding gets an independent clone so protocol-reserved
+         * fields and return ownership cannot collide. The binding snapshot
+         * reference covers the callback; a second reference is transferred
+         * to each clone that can be retained after the callback returns. */
+        for (i = 0; i < SnapshotCount; i++)
+        {
+            PNET_BUFFER_LIST Clone;
+
+            if (!Ndis6ReferenceProtocolBinding(Snapshot[i].Binding))
+                continue;
+            Clone = Ndis6RxAllocateNativeClone(Snapshot[i].Binding, ReturnContext);
+            if (Clone == NULL)
+            {
+                Ndis6DereferenceProtocolBinding(Snapshot[i].Binding);
+                continue;
+            }
+
+            Snapshot[i].ReceiveHandler(Snapshot[i].Context, Clone, PortNumber, 1, ReceiveFlags);
+        }
 
         for (Nb = NET_BUFFER_LIST_FIRST_NB(CurrentNbl);
              Nb != NULL;
@@ -675,13 +703,9 @@ Ndis6FilterTerminalReceive(
 
             NextNb = NET_BUFFER_NEXT_NB(Nb);
             if (LegacyPacket == NULL)
-            {
-                /* This NB has no wrapper to release later. Its pre-counted
-                 * reference must be dropped here. */
-                Ndis6RxReleaseLegacyContext(ReturnContext);
                 continue;
-            }
 
+            InterlockedIncrement(&ReturnContext->References);
             PacketArray[PacketCount++] = LegacyPacket;
             if (PacketCount == ARRAYSIZE(PacketArray))
             {
@@ -692,7 +716,18 @@ Ndis6FilterTerminalReceive(
 
         if (PacketCount != 0)
             Ndis6RxIndicateLegacyBatch(Adapter, PacketArray, PacketCount);
+
+        /* Drop the construction guard after every callback has acquired its
+         * own child/wrapper reference. The final protocol return releases the
+         * original miniport NBL through the filter return path. */
+        Ndis6RxReleaseParentContext(ReturnContext, ImmediateReturnFlags);
     }
+
+CleanupSnapshot:
+    for (i = 0; i < SnapshotCount; i++)
+        Ndis6DereferenceProtocolBinding(Snapshot[i].Binding);
+    if (Snapshot != NULL)
+        ExFreePoolWithTag(Snapshot, 'bRxN');
 }
 
 /* ============================================================================
@@ -745,7 +780,19 @@ NdisMIndicateStatusEx(
     _In_ NDIS_HANDLE             NdisMiniportHandle,
     _In_ PNDIS_STATUS_INDICATION StatusIndication)
 {
-    PLOGICAL_ADAPTER   Adapter = (PLOGICAL_ADAPTER)NdisMiniportHandle;
+    PLOGICAL_ADAPTER Adapter = (PLOGICAL_ADAPTER)NdisMiniportHandle;
+
+    if (Adapter == NULL || !Adapter->IsNdis6 || StatusIndication == NULL)
+        return;
+
+    Ndis6FilterDispatchStatus(Adapter, StatusIndication);
+}
+
+VOID
+Ndis6FilterTerminalStatus(
+    _In_ PLOGICAL_ADAPTER Adapter,
+    _In_ PNDIS_STATUS_INDICATION StatusIndication)
+{
     PNDIS6_ADAPTER_EXT Ext;
     NDIS_STATUS        LegacyStatus = 0;
     PVOID              LegacyBuffer = NULL;
@@ -765,23 +812,53 @@ NdisMIndicateStatusEx(
      * several codes (all NDIS_STATUS_DOT11_*) and returns early. Call the
      * handlers outside the lock so they can re-enter NDIS. */
     {
-#define NDIS6_STATUSEX_SNAPSHOT_MAX 8
-        struct
+        typedef struct _NDIS6_STATUSEX_SNAPSHOT_ENTRY
         {
             PNDIS6_PROTOCOL_BINDING Binding;
             NDIS_HANDLE                Context;
             PROTOCOL_STATUS_EX_HANDLER StatusHandlerEx;
-        } Snapshot[NDIS6_STATUSEX_SNAPSHOT_MAX];
-        UINT  SnapCount = 0;
-        UINT  i;
+        } NDIS6_STATUSEX_SNAPSHOT_ENTRY, *PNDIS6_STATUSEX_SNAPSHOT_ENTRY;
+        PNDIS6_STATUSEX_SNAPSHOT_ENTRY Snapshot = NULL;
+        SIZE_T SnapshotCapacity = 0;
+        SIZE_T SnapCount = 0;
+        SIZE_T i;
         KIRQL NativeIrql;
 
         KeAcquireSpinLock(&Ext->ProtocolBindingListLock, &NativeIrql);
         {
             PLIST_ENTRY entry;
             for (entry = Ext->ProtocolBindingList.Flink;
-                 entry != &Ext->ProtocolBindingList &&
-                     SnapCount < NDIS6_STATUSEX_SNAPSHOT_MAX;
+                 entry != &Ext->ProtocolBindingList;
+                 entry = entry->Flink)
+            {
+                PNDIS6_PROTOCOL_BINDING Binding =
+                    CONTAINING_RECORD(entry, NDIS6_PROTOCOL_BINDING, AdapterLink);
+                if (Binding->DriverBlock != NULL &&
+                    Binding->DriverBlock->Characteristics.StatusHandlerEx != NULL)
+                {
+                    SnapshotCapacity++;
+                }
+            }
+        }
+        KeReleaseSpinLock(&Ext->ProtocolBindingListLock, NativeIrql);
+
+        if (SnapshotCapacity != 0 &&
+            SnapshotCapacity <= MAXULONG_PTR / sizeof(*Snapshot))
+        {
+            Snapshot = ExAllocatePoolWithTag(NonPagedPool, SnapshotCapacity * sizeof(*Snapshot), 'xSNn');
+        }
+
+        if (SnapshotCapacity != 0 && Snapshot == NULL)
+        {
+            DbgPrint("NDIS6: unable to allocate native status binding snapshot\n");
+        }
+        else if (Snapshot != NULL)
+        {
+            PLIST_ENTRY entry;
+
+            KeAcquireSpinLock(&Ext->ProtocolBindingListLock, &NativeIrql);
+            for (entry = Ext->ProtocolBindingList.Flink;
+                 entry != &Ext->ProtocolBindingList && SnapCount < SnapshotCapacity;
                  entry = entry->Flink)
             {
                 PNDIS6_PROTOCOL_BINDING Binding =
@@ -798,8 +875,8 @@ NdisMIndicateStatusEx(
                     SnapCount++;
                 }
             }
+            KeReleaseSpinLock(&Ext->ProtocolBindingListLock, NativeIrql);
         }
-        KeReleaseSpinLock(&Ext->ProtocolBindingListLock, NativeIrql);
 
         for (i = 0; i < SnapCount; i++)
         {
@@ -808,6 +885,9 @@ NdisMIndicateStatusEx(
                 StatusIndication);
             Ndis6DereferenceProtocolBinding(Snapshot[i].Binding);
         }
+
+        if (Snapshot != NULL)
+            ExFreePoolWithTag(Snapshot, 'xSNn');
     }
 
     /* Translate the NDIS 6 status code to a legacy NDIS 5 code and update
@@ -922,26 +1002,52 @@ NdisMIndicateStatusEx(
      * across protocol callbacks is a recipe for deadlock — protocols
      * commonly call back into NDIS from their status handlers (e.g.
      * tcpip queries OIDs from inside ProtocolStatus when the link
-     * comes up), and the OID forward path takes its own waiter lock.
-     *
-     * The snapshot is bounded to 16 bindings — adapters with more than
-     * that bound at once are extremely rare, and we silently truncate
-     * (each binding still gets the indication on the next change). */
+     * comes up), and the OID forward path takes its own waiter lock. */
     {
-#define NDIS6_STATUS_SNAPSHOT_MAX  16
-        struct
+        typedef struct _NDIS6_STATUS_SNAPSHOT_ENTRY
         {
             PADAPTER_BINDING     Binding;
             PVOID                Context;
             STATUS_HANDLER       StatusHandler;
             STATUS_COMPLETE_HANDLER StatusCompleteHandler;
-        } Snapshot[NDIS6_STATUS_SNAPSHOT_MAX];
-        UINT SnapCount = 0;
-        UINT i;
+        } NDIS6_STATUS_SNAPSHOT_ENTRY, *PNDIS6_STATUS_SNAPSHOT_ENTRY;
+        PNDIS6_STATUS_SNAPSHOT_ENTRY Snapshot = NULL;
+        SIZE_T SnapshotCapacity = 0;
+        SIZE_T SnapCount = 0;
+        SIZE_T i;
 
         KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
         for (Entry = Adapter->ProtocolListHead.Flink;
-             Entry != &Adapter->ProtocolListHead && SnapCount < NDIS6_STATUS_SNAPSHOT_MAX;
+             Entry != &Adapter->ProtocolListHead;
+             Entry = Entry->Flink)
+        {
+            PADAPTER_BINDING Binding =
+                CONTAINING_RECORD(Entry, ADAPTER_BINDING, AdapterListEntry);
+
+            if (Binding->ProtocolBinding != NULL)
+                SnapshotCapacity++;
+        }
+        KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+
+        if (SnapshotCapacity == 0)
+            return;
+
+        if (SnapshotCapacity > MAXULONG_PTR / sizeof(*Snapshot))
+        {
+            DbgPrint("NDIS6: status binding snapshot size overflow\n");
+            return;
+        }
+
+        Snapshot = ExAllocatePoolWithTag(NonPagedPool, SnapshotCapacity * sizeof(*Snapshot), 'sSNn');
+        if (Snapshot == NULL)
+        {
+            DbgPrint("NDIS6: unable to allocate status binding snapshot\n");
+            return;
+        }
+
+        KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
+        for (Entry = Adapter->ProtocolListHead.Flink;
+             Entry != &Adapter->ProtocolListHead && SnapCount < SnapshotCapacity;
              Entry = Entry->Flink)
         {
             PADAPTER_BINDING Binding =
@@ -980,6 +1086,8 @@ NdisMIndicateStatusEx(
             }
             NdisDereferenceAdapterBinding(Snapshot[i].Binding);
         }
+
+        ExFreePoolWithTag(Snapshot, 'sSNn');
     }
 }
 
