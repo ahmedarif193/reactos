@@ -24,7 +24,7 @@
 
 static const GUID InterfaceGuid = {0x439b20af, 0x8955, 0x405b, {0x99, 0xf0, 0xa6, 0x2a, 0xf0, 0xc6, 0x8d, 0x43}};
 
-static void WlanOpenHandle_test(void)
+static BOOL WlanOpenHandle_test(void)
 {
     DWORD ret;
     DWORD dwNegotiatedVersion;
@@ -32,12 +32,14 @@ static void WlanOpenHandle_test(void)
 
     /* correct call to determine if WlanSvc is running */
     ret = WlanOpenHandle(1, NULL, &dwNegotiatedVersion, &hClientHandle);
-    if (ret == ERROR_SERVICE_EXISTS)
+    if (ret == ERROR_SERVICE_NOT_ACTIVE)
     {
         skip("Skipping wlanapi tests, WlanSvc is not running\n");
-        return;
+        return FALSE;
     }
     ok(ret == ERROR_SUCCESS, "WlanOpenHandle failed, error %ld\n", ret);
+    if (ret != ERROR_SUCCESS)
+        return FALSE;
     WlanCloseHandle(hClientHandle, NULL);
 
     /* invalid pdwNegotiatedVersion */
@@ -51,6 +53,7 @@ static void WlanOpenHandle_test(void)
     /* invalid pReserved */
     ret = WlanOpenHandle(1, (PVOID) 1, &dwNegotiatedVersion, &hClientHandle);
     ok(ret == ERROR_INVALID_PARAMETER, "expected ERROR_INVALID_PARAMETER, got %ld\n", GetLastError());
+    return TRUE;
 }
 
 static void WlanCloseHandle_test(void)
@@ -220,7 +223,8 @@ static void WlanGetInterfaceCapability_test(void)
 
 START_TEST(wlanapi)
 {
-    WlanOpenHandle_test();
+    if (!WlanOpenHandle_test())
+        return;
     WlanCloseHandle_test();
     WlanConnect_test();
     WlanDisconnect_test();
