@@ -1727,8 +1727,6 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     MI_ARM64_SET_TEMPLATE_NORMAL_WB(ValidKernelPte);
     MI_ARM64_SET_TEMPLATE_NORMAL_WB(ValidKernelPteLocal);
-    MI_ARM64_SET_TEMPLATE_NORMAL_WB(ValidKernelPde);
-    MI_ARM64_SET_TEMPLATE_NORMAL_WB(ValidKernelPdeLocal);
 #undef MI_ARM64_SET_TEMPLATE_NORMAL_WB
 
     /* Hyperspace and session-local leaf mappings vary with the process root.
