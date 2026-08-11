@@ -260,6 +260,45 @@ KeCopyAffinityEx(
 /*
  * @implemented
  */
+LOGICAL
+NTAPI
+KeIsEqualAffinityEx(
+    _In_ PKAFFINITY_EX Affinity1,
+    _In_ PKAFFINITY_EX Affinity2)
+{
+    PKAFFINITY_EX LargerAffinity;
+    USHORT CommonCount;
+    USHORT GroupNumber;
+
+    if (Affinity1->Count >= Affinity2->Count)
+    {
+        CommonCount = Affinity2->Count;
+        LargerAffinity = Affinity1;
+    }
+    else
+    {
+        CommonCount = Affinity1->Count;
+        LargerAffinity = Affinity2;
+    }
+
+    for (GroupNumber = 0; GroupNumber < CommonCount; GroupNumber++)
+    {
+        if (Affinity1->Bitmap[GroupNumber] != Affinity2->Bitmap[GroupNumber])
+            return FALSE;
+    }
+
+    for (; GroupNumber < LargerAffinity->Count; GroupNumber++)
+    {
+        if (LargerAffinity->Bitmap[GroupNumber] != 0)
+            return FALSE;
+    }
+
+    return TRUE;
+}
+
+/*
+ * @implemented
+ */
 KAFFINITY
 NTAPI
 KeQueryGroupAffinity(

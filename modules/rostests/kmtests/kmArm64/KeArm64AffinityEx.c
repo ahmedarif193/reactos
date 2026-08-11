@@ -12,6 +12,7 @@ VOID Test_KeArm64AffinityEx(VOID);
 typedef VOID (NTAPI *PKMT_KE_COPY_AFFINITY_EX)(_Out_ PKAFFINITY_EX Destination, _In_ PKAFFINITY_EX Source);
 typedef SIZE_T (NTAPI *PKMT_KE_SIZE_OF_AFFINITY_EX)(_In_ USHORT Count);
 typedef ULONG (NTAPI *PKMT_KE_COUNT_SET_BITS_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity);
+typedef LOGICAL (NTAPI *PKMT_KE_IS_EQUAL_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2);
 #endif
 
 START_TEST(KeArm64AffinityEx)
@@ -23,6 +24,7 @@ START_TEST(KeArm64AffinityEx)
     KAFFINITY_EX Source;
     PKMT_KE_COPY_AFFINITY_EX CopyAffinityEx;
     PKMT_KE_COUNT_SET_BITS_AFFINITY_EX CountSetBitsAffinityEx;
+    PKMT_KE_IS_EQUAL_AFFINITY_EX IsEqualAffinityEx;
     PKMT_KE_SIZE_OF_AFFINITY_EX SizeOfAffinityEx;
     UNICODE_STRING Name;
 
@@ -129,5 +131,34 @@ START_TEST(KeArm64AffinityEx)
     ok_eq_uint(Affinity.Count, KAFFINITY_EX_INITIALIZED_GROUPS);
     ok_eq_ulonglong(Affinity.Bitmap[KAFFINITY_EX_INITIALIZED_GROUPS - 1], 0x19);
     ok_eq_ulonglong(Affinity.Bitmap[KAFFINITY_EX_INITIALIZED_GROUPS], (KAFFINITY)0xA5A5A5A5A5A5A5A5ULL);
+
+    RtlInitUnicodeString(&Name, L"KeIsEqualAffinityEx");
+    IsEqualAffinityEx = (PKMT_KE_IS_EQUAL_AFFINITY_EX)MmGetSystemRoutineAddress(&Name);
+    if (IsEqualAffinityEx == NULL)
+    {
+        skip(FALSE, "KeIsEqualAffinityEx is not exported\n");
+        return;
+    }
+
+    RtlZeroMemory(&Affinity, sizeof(Affinity));
+    RtlZeroMemory(&Source, sizeof(Source));
+    Affinity.Size = 1;
+    Affinity.Reserved = MAXULONG;
+    Source.Count = 1;
+    Source.Size = KAFFINITY_EX_STATIC_GROUPS;
+    ok(IsEqualAffinityEx(&Affinity, &Source), "zero trailing group changed equality\n");
+    Source.Bitmap[0] = 1;
+    ok(!IsEqualAffinityEx(&Affinity, &Source), "nonzero trailing group compared equal\n");
+    Affinity.Count = 1;
+    Affinity.Bitmap[0] = 1;
+    ok(IsEqualAffinityEx(&Affinity, &Source), "equal one-group affinities differed\n");
+    Source.Count = 3;
+    ok(IsEqualAffinityEx(&Affinity, &Source), "zero extended groups changed equality\n");
+    ok(IsEqualAffinityEx(&Source, &Affinity), "equality depended on operand order\n");
+    Source.Bitmap[2] = (KAFFINITY)1 << 63;
+    ok(!IsEqualAffinityEx(&Affinity, &Source), "nonzero extended group compared equal\n");
+    Source.Bitmap[2] = 0;
+    Source.Bitmap[0] = 2;
+    ok(!IsEqualAffinityEx(&Affinity, &Source), "different common group compared equal\n");
 #endif
 }

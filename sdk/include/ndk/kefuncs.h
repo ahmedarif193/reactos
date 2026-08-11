@@ -161,6 +161,13 @@ KeCopyAffinityEx(
     _Out_ PKAFFINITY_EX Destination,
     _In_ PKAFFINITY_EX Source);
 
+NTKERNELAPI
+LOGICAL
+NTAPI
+KeIsEqualAffinityEx(
+    _In_ PKAFFINITY_EX Affinity1,
+    _In_ PKAFFINITY_EX Affinity2);
+
 //
 // APC Functions
 //
