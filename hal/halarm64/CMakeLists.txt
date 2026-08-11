@@ -85,6 +85,12 @@ add_library(hal MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/hal.def)
 reactos_hal_setup(hal 0)
 
+# Ship the explicit HAL name used by the UP-kernel boot entries.
+add_library(halup MODULE
+    ${SOURCES}
+    ${CMAKE_CURRENT_BINARY_DIR}/hal.def)
+reactos_hal_setup(halup 0)
+
 # Ship halmacpi.dll on ARM64 to match the livecd_wim.ini LiveCD_Wim_Macpi boot option
 add_library(halmacpi MODULE
     ${SOURCES}

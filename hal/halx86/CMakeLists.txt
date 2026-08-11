@@ -59,6 +59,7 @@ if(ARCH STREQUAL "i386")
 
     # hal
     add_hal(hal SOURCES pic/halpic.rc COMPONENTS generic legacy up pic)
+    add_hal(halup COMPONENTS generic legacy up pic)
     add_hal(halacpi SOURCES acpi/halacpi.rc COMPONENTS generic acpi up pic)
     add_hal(halaacpi SOURCES apic/halaacpi.rc COMPONENTS generic acpi up apic)
     add_hal(halapic SOURCES apic/halapic.rc COMPONENTS generic legacy up apic)
@@ -74,5 +75,8 @@ elseif(ARCH STREQUAL "amd64")
     # The amd64 hal.dll is already an SMP APIC HAL, so there is no separate
     # halmp.dll -- it was a byte-for-byte duplicate of this target.
     add_hal(hal SOURCES ${HAL_SOURCE} COMPONENTS generic acpi smp apic)
+
+    # Keep a matching UP APIC HAL for the ntoskrnl.exe boot entries.
+    add_hal(halup SOURCES ${HAL_SOURCE} COMPONENTS generic acpi up apic)
 
 endif()
