@@ -2568,7 +2568,7 @@
 @ stdcall -arch=arm64 KeIsEmptyAffinityEx(ptr)
 @ stdcall -arch=arm64 KeIsEqualAffinityEx(ptr ptr)
 @ stub -arch=arm64 KeIsSingleGroupAffinityEx
-@ stub -arch=arm64 KeIsSubsetAffinityEx
+@ stdcall -arch=arm64 KeIsSubsetAffinityEx(ptr ptr)
 @ stub -arch=arm64 KeNotifyProcessorFreezeSupported
 @ stub -arch=arm64 KeOrAffinityEx
 @ stub -arch=arm64 KeOrAffinityEx2
