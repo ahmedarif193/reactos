@@ -154,6 +154,13 @@ NTAPI
 KeCountSetBitsAffinityEx(
     _In_ PKAFFINITY_EX Affinity);
 
+NTKERNELAPI
+VOID
+NTAPI
+KeCopyAffinityEx(
+    _Out_ PKAFFINITY_EX Destination,
+    _In_ PKAFFINITY_EX Source);
+
 //
 // APC Functions
 //

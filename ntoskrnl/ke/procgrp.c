@@ -234,6 +234,32 @@ KeCountSetBitsAffinityEx(
 /*
  * @implemented
  */
+VOID
+NTAPI
+KeCopyAffinityEx(
+    _Out_ PKAFFINITY_EX Destination,
+    _In_ PKAFFINITY_EX Source)
+{
+    USHORT Count = Source->Count;
+    USHORT GroupNumber;
+
+    if (Count > KAFFINITY_EX_INITIALIZED_GROUPS)
+        Count = KAFFINITY_EX_INITIALIZED_GROUPS;
+
+    Destination->Reserved = 0;
+    Destination->Size = KAFFINITY_EX_INITIALIZED_GROUPS;
+    Destination->Count = Count;
+
+    for (GroupNumber = 0; GroupNumber < Count; GroupNumber++)
+        Destination->Bitmap[GroupNumber] = Source->Bitmap[GroupNumber];
+
+    for (; GroupNumber < KAFFINITY_EX_INITIALIZED_GROUPS; GroupNumber++)
+        Destination->Bitmap[GroupNumber] = 0;
+}
+
+/*
+ * @implemented
+ */
 KAFFINITY
 NTAPI
 KeQueryGroupAffinity(

@@ -9,6 +9,7 @@
 VOID Test_KeArm64AffinityEx(VOID);
 
 #ifdef _M_ARM64
+typedef VOID (NTAPI *PKMT_KE_COPY_AFFINITY_EX)(_Out_ PKAFFINITY_EX Destination, _In_ PKAFFINITY_EX Source);
 typedef SIZE_T (NTAPI *PKMT_KE_SIZE_OF_AFFINITY_EX)(_In_ USHORT Count);
 typedef ULONG (NTAPI *PKMT_KE_COUNT_SET_BITS_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity);
 #endif
@@ -19,6 +20,8 @@ START_TEST(KeArm64AffinityEx)
     skip(FALSE, "KeArm64AffinityEx is ARM64-only\n");
 #else
     KAFFINITY_EX Affinity;
+    KAFFINITY_EX Source;
+    PKMT_KE_COPY_AFFINITY_EX CopyAffinityEx;
     PKMT_KE_COUNT_SET_BITS_AFFINITY_EX CountSetBitsAffinityEx;
     PKMT_KE_SIZE_OF_AFFINITY_EX SizeOfAffinityEx;
     UNICODE_STRING Name;
@@ -89,5 +92,42 @@ START_TEST(KeArm64AffinityEx)
     Affinity.Bitmap[1] = ~(KAFFINITY)0;
     Affinity.Bitmap[2] = 0xE0;
     ok_eq_ulong(CountSetBitsAffinityEx(&Affinity), 69);
+
+    RtlInitUnicodeString(&Name, L"KeCopyAffinityEx");
+    CopyAffinityEx = (PKMT_KE_COPY_AFFINITY_EX)MmGetSystemRoutineAddress(&Name);
+    if (CopyAffinityEx == NULL)
+    {
+        skip(FALSE, "KeCopyAffinityEx is not exported\n");
+        return;
+    }
+
+    RtlFillMemory(&Affinity, sizeof(Affinity), 0xA5);
+    RtlZeroMemory(&Source, sizeof(Source));
+    Source.Count = 3;
+    Source.Size = 1;
+    Source.Reserved = MAXULONG;
+    Source.Bitmap[0] = 1;
+    Source.Bitmap[1] = 2;
+    Source.Bitmap[2] = 4;
+    CopyAffinityEx(&Affinity, &Source);
+    ok_eq_uint(Affinity.Count, 3);
+    ok_eq_uint(Affinity.Size, KAFFINITY_EX_INITIALIZED_GROUPS);
+    ok_eq_ulong(Affinity.Reserved, 0);
+    ok_eq_ulonglong(Affinity.Bitmap[0], 1);
+    ok_eq_ulonglong(Affinity.Bitmap[2], 4);
+    ok_eq_ulonglong(Affinity.Bitmap[3], 0);
+    ok_eq_ulonglong(Affinity.Bitmap[KAFFINITY_EX_INITIALIZED_GROUPS - 1], 0);
+    ok_eq_ulonglong(Affinity.Bitmap[KAFFINITY_EX_INITIALIZED_GROUPS], (KAFFINITY)0xA5A5A5A5A5A5A5A5ULL);
+
+    RtlFillMemory(&Affinity, sizeof(Affinity), 0xA5);
+    RtlZeroMemory(&Source, sizeof(Source));
+    Source.Count = KAFFINITY_EX_INITIALIZED_GROUPS + 1;
+    Source.Size = KAFFINITY_EX_STATIC_GROUPS;
+    Source.Bitmap[KAFFINITY_EX_INITIALIZED_GROUPS - 1] = 0x19;
+    Source.Bitmap[KAFFINITY_EX_INITIALIZED_GROUPS] = 0x20;
+    CopyAffinityEx(&Affinity, &Source);
+    ok_eq_uint(Affinity.Count, KAFFINITY_EX_INITIALIZED_GROUPS);
+    ok_eq_ulonglong(Affinity.Bitmap[KAFFINITY_EX_INITIALIZED_GROUPS - 1], 0x19);
+    ok_eq_ulonglong(Affinity.Bitmap[KAFFINITY_EX_INITIALIZED_GROUPS], (KAFFINITY)0xA5A5A5A5A5A5A5A5ULL);
 #endif
 }
