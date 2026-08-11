@@ -8,12 +8,18 @@
 
 VOID Test_KeArm64AffinityEx(VOID);
 
+#ifdef _M_ARM64
+typedef SIZE_T (NTAPI *PKMT_KE_SIZE_OF_AFFINITY_EX)(_In_ USHORT Count);
+#endif
+
 START_TEST(KeArm64AffinityEx)
 {
 #ifndef _M_ARM64
     skip(FALSE, "KeArm64AffinityEx is ARM64-only\n");
 #else
     KAFFINITY_EX Affinity;
+    PKMT_KE_SIZE_OF_AFFINITY_EX SizeOfAffinityEx;
+    UNICODE_STRING Name;
 
     ok_eq_size(sizeof(Affinity), (SIZE_T)264);
     ok_eq_size(FIELD_OFFSET(KAFFINITY_EX, Count), (SIZE_T)0);
@@ -49,5 +55,18 @@ START_TEST(KeArm64AffinityEx)
     ok_eq_uint(Affinity.Count, 1);
     ok_eq_ulonglong(KeQueryGroupAffinityEx(&Affinity, 0), 0);
     ok(KeIsEmptyAffinityEx(&Affinity), "reinitialized affinity is not empty\n");
+
+    RtlInitUnicodeString(&Name, L"KeSizeOfAffinityEx");
+    SizeOfAffinityEx = (PKMT_KE_SIZE_OF_AFFINITY_EX)MmGetSystemRoutineAddress(&Name);
+    if (SizeOfAffinityEx == NULL)
+    {
+        skip(FALSE, "KeSizeOfAffinityEx is not exported\n");
+        return;
+    }
+
+    ok_eq_size(SizeOfAffinityEx(0), (SIZE_T)8);
+    ok_eq_size(SizeOfAffinityEx(1), (SIZE_T)16);
+    ok_eq_size(SizeOfAffinityEx(32), (SIZE_T)264);
+    ok_eq_size(SizeOfAffinityEx(MAXUSHORT), (SIZE_T)524288);
 #endif
 }
