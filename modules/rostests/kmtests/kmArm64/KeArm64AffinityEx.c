@@ -16,6 +16,7 @@ typedef ULONG (NTAPI *PKMT_KE_COUNT_SET_BITS_AFFINITY_EX)(_In_ PKAFFINITY_EX Aff
 typedef LOGICAL (NTAPI *PKMT_KE_IS_EQUAL_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2);
 typedef LOGICAL (NTAPI *PKMT_KE_IS_SINGLE_GROUP_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity, _Out_opt_ PUSHORT Group);
 typedef LOGICAL (NTAPI *PKMT_KE_IS_SUBSET_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2);
+typedef LOGICAL (NTAPI *PKMT_KE_OR_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2, _Out_opt_ PKAFFINITY_EX Result);
 #endif
 
 START_TEST(KeArm64AffinityEx)
@@ -32,6 +33,7 @@ START_TEST(KeArm64AffinityEx)
     PKMT_KE_IS_EQUAL_AFFINITY_EX IsEqualAffinityEx;
     PKMT_KE_IS_SINGLE_GROUP_AFFINITY_EX IsSingleGroupAffinityEx;
     PKMT_KE_IS_SUBSET_AFFINITY_EX IsSubsetAffinityEx;
+    PKMT_KE_OR_AFFINITY_EX OrAffinityEx;
     PKMT_KE_SIZE_OF_AFFINITY_EX SizeOfAffinityEx;
     UNICODE_STRING Name;
     USHORT GroupNumber;
@@ -287,6 +289,65 @@ START_TEST(KeArm64AffinityEx)
     ok(AndAffinityEx(&Affinity, &Source, NULL), "unbuffered intersection ignored an extended group\n");
     RtlFillMemory(&Result, sizeof(Result), 0xA5);
     ok(!AndAffinityEx(&Affinity, &Source, &Result), "buffered intersection scanned past its fixed capacity\n");
+    ok_eq_uint(Result.Count, KAFFINITY_EX_INITIALIZED_GROUPS);
+    ok_eq_uint(Result.Size, KAFFINITY_EX_INITIALIZED_GROUPS);
+    ok_eq_ulonglong(Result.Bitmap[KAFFINITY_EX_INITIALIZED_GROUPS - 1], 0);
+    ok_eq_ulonglong(Result.Bitmap[KAFFINITY_EX_INITIALIZED_GROUPS], (KAFFINITY)0xA5A5A5A5A5A5A5A5ULL);
+
+    RtlInitUnicodeString(&Name, L"KeOrAffinityEx");
+    OrAffinityEx = (PKMT_KE_OR_AFFINITY_EX)MmGetSystemRoutineAddress(&Name);
+    if (OrAffinityEx == NULL)
+    {
+        skip(FALSE, "KeOrAffinityEx is not exported\n");
+        return;
+    }
+
+    RtlZeroMemory(&Affinity, sizeof(Affinity));
+    RtlZeroMemory(&Source, sizeof(Source));
+    Affinity.Count = 3;
+    Affinity.Size = MAXUSHORT;
+    Affinity.Reserved = MAXULONG;
+    Affinity.Bitmap[0] = 1;
+    Affinity.Bitmap[2] = 8;
+    Source.Count = 2;
+    Source.Size = 1;
+    Source.Bitmap[0] = 2;
+    Source.Bitmap[1] = 4;
+    RtlFillMemory(&Result, sizeof(Result), 0xA5);
+    ok(OrAffinityEx(&Affinity, &Source, &Result), "nonempty union was rejected\n");
+    ok_eq_uint(Result.Count, 3);
+    ok_eq_uint(Result.Size, KAFFINITY_EX_INITIALIZED_GROUPS);
+    ok_eq_ulong(Result.Reserved, 0);
+    ok_eq_ulonglong(Result.Bitmap[0], 3);
+    ok_eq_ulonglong(Result.Bitmap[1], 4);
+    ok_eq_ulonglong(Result.Bitmap[2], 8);
+    ok_eq_ulonglong(Result.Bitmap[3], 0);
+    ok_eq_ulonglong(Result.Bitmap[KAFFINITY_EX_INITIALIZED_GROUPS - 1], 0);
+    ok_eq_ulonglong(Result.Bitmap[KAFFINITY_EX_INITIALIZED_GROUPS], (KAFFINITY)0xA5A5A5A5A5A5A5A5ULL);
+
+    RtlZeroMemory(&Affinity, sizeof(Affinity));
+    RtlZeroMemory(&Source, sizeof(Source));
+    Affinity.Count = 1;
+    Affinity.Bitmap[0] = 1;
+    Source.Count = 2;
+    Source.Bitmap[0] = 2;
+    Source.Bitmap[1] = 4;
+    ok(OrAffinityEx(&Affinity, &Source, &Affinity), "in-place union was rejected\n");
+    ok_eq_uint(Affinity.Count, 2);
+    ok_eq_uint(Affinity.Size, KAFFINITY_EX_INITIALIZED_GROUPS);
+    ok_eq_ulonglong(Affinity.Bitmap[0], 3);
+    ok_eq_ulonglong(Affinity.Bitmap[1], 4);
+    ok_eq_ulonglong(Affinity.Bitmap[2], 0);
+
+    RtlZeroMemory(&Affinity, sizeof(Affinity));
+    RtlZeroMemory(&Source, sizeof(Source));
+    Affinity.Count = KAFFINITY_EX_INITIALIZED_GROUPS + 1;
+    Source.Count = KAFFINITY_EX_INITIALIZED_GROUPS + 1;
+    ok(!OrAffinityEx(&Affinity, &Source, NULL), "empty unbuffered union was nonempty\n");
+    Affinity.Bitmap[KAFFINITY_EX_INITIALIZED_GROUPS] = 1;
+    ok(OrAffinityEx(&Affinity, &Source, NULL), "unbuffered union ignored an extended group\n");
+    RtlFillMemory(&Result, sizeof(Result), 0xA5);
+    ok(!OrAffinityEx(&Affinity, &Source, &Result), "buffered union scanned past its fixed capacity\n");
     ok_eq_uint(Result.Count, KAFFINITY_EX_INITIALIZED_GROUPS);
     ok_eq_uint(Result.Size, KAFFINITY_EX_INITIALIZED_GROUPS);
     ok_eq_ulonglong(Result.Bitmap[KAFFINITY_EX_INITIALIZED_GROUPS - 1], 0);

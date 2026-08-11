@@ -408,6 +408,84 @@ KeIsSubsetAffinityEx(
 /*
  * @implemented
  */
+LOGICAL
+NTAPI
+KeOrAffinityEx(
+    _In_ PKAFFINITY_EX Affinity1,
+    _In_ PKAFFINITY_EX Affinity2,
+    _Out_opt_ PKAFFINITY_EX Result)
+{
+    PKAFFINITY_EX LargerAffinity;
+    KAFFINITY ProcessorMask;
+    LOGICAL NonEmpty = FALSE;
+    USHORT CommonCount;
+    USHORT Count;
+    USHORT GroupNumber;
+
+    if (Result == NULL)
+    {
+        for (GroupNumber = 0; GroupNumber < Affinity1->Count; GroupNumber++)
+        {
+            if (Affinity1->Bitmap[GroupNumber] != 0)
+                return TRUE;
+        }
+
+        for (GroupNumber = 0; GroupNumber < Affinity2->Count; GroupNumber++)
+        {
+            if (Affinity2->Bitmap[GroupNumber] != 0)
+                return TRUE;
+        }
+
+        return FALSE;
+    }
+
+    if (Affinity1->Count >= Affinity2->Count)
+    {
+        Count = Affinity1->Count;
+        CommonCount = Affinity2->Count;
+        LargerAffinity = Affinity1;
+    }
+    else
+    {
+        Count = Affinity2->Count;
+        CommonCount = Affinity1->Count;
+        LargerAffinity = Affinity2;
+    }
+
+    if (Count > KAFFINITY_EX_INITIALIZED_GROUPS)
+        Count = KAFFINITY_EX_INITIALIZED_GROUPS;
+    if (CommonCount > Count)
+        CommonCount = Count;
+
+    Result->Count = Count;
+    Result->Size = KAFFINITY_EX_INITIALIZED_GROUPS;
+    Result->Reserved = 0;
+
+    for (GroupNumber = 0; GroupNumber < CommonCount; GroupNumber++)
+    {
+        ProcessorMask = Affinity1->Bitmap[GroupNumber] | Affinity2->Bitmap[GroupNumber];
+        Result->Bitmap[GroupNumber] = ProcessorMask;
+        if (ProcessorMask != 0)
+            NonEmpty = TRUE;
+    }
+
+    for (; GroupNumber < Count; GroupNumber++)
+    {
+        ProcessorMask = LargerAffinity->Bitmap[GroupNumber];
+        Result->Bitmap[GroupNumber] = ProcessorMask;
+        if (ProcessorMask != 0)
+            NonEmpty = TRUE;
+    }
+
+    for (; GroupNumber < KAFFINITY_EX_INITIALIZED_GROUPS; GroupNumber++)
+        Result->Bitmap[GroupNumber] = 0;
+
+    return NonEmpty;
+}
+
+/*
+ * @implemented
+ */
 KAFFINITY
 NTAPI
 KeQueryGroupAffinity(

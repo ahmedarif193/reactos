@@ -190,6 +190,14 @@ KeIsSubsetAffinityEx(
     _In_ PKAFFINITY_EX Affinity1,
     _In_ PKAFFINITY_EX Affinity2);
 
+NTKERNELAPI
+LOGICAL
+NTAPI
+KeOrAffinityEx(
+    _In_ PKAFFINITY_EX Affinity1,
+    _In_ PKAFFINITY_EX Affinity2,
+    _Out_opt_ PKAFFINITY_EX Result);
+
 //
 // APC Functions
 //
