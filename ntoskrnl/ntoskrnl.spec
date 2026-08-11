@@ -2533,7 +2533,7 @@
 @ stub -arch=arm64 KeComplementAffinityEx2
 @ stub -arch=arm64 KeConvertAuxiliaryCounterToPerformanceCounter
 @ stub -arch=arm64 KeConvertPerformanceCounterToAuxiliaryCounter
-@ stub -arch=arm64 KeCopyAffinityEx
+@ stdcall -arch=arm64 KeCopyAffinityEx(ptr ptr)
 @ stub -arch=arm64 KeCopyAffinityEx2
 @ stdcall -arch=arm64 KeCountSetBitsAffinityEx(ptr)
 @ stub -arch=arm64 KeCountSetBitsGroupAffinity
