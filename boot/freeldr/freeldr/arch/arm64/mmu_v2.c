@@ -1889,7 +1889,6 @@ Arm64MemoryAttributesForDescriptor(
     switch (Descriptor->MemoryType)
     {
         case LoaderFirmwarePermanent:
-        case LoaderFirmwareTemporary:
             attrs = PTE_BLOCK_MEMTYPE(ARM64_MEM_ATTR_DEVICE_nGnRnE) |
                     PTE_BLOCK_OUTER_SHARE |
                     PTE_BLOCK_AF |
@@ -1899,6 +1898,8 @@ Arm64MemoryAttributesForDescriptor(
 
         case LoaderFree:
         case LoaderLoadedProgram:
+        /* UEFI Boot Services code/data becomes reclaimable RAM after EBS. */
+        case LoaderFirmwareTemporary:
         case LoaderOsloaderHeap:
         case LoaderOsloaderStack:
         case LoaderMemoryData:
