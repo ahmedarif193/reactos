@@ -17,10 +17,9 @@
  *              NDIS 6 miniport's OidRequestHandler is needed for these
  *              informational OIDs — the values are fixed at init time.
  *
- *              Set-OIDs (OID_GEN_CURRENT_LOOKAHEAD, OID_GEN_CURRENT_PACKET_FILTER)
- *              are accepted silently for now; Phase 3 will forward them
- *              to the real OidRequestHandler so filter changes take effect
- *              on the hardware.
+ *              Set-OIDs and uncached queries are forwarded through the filter
+ *              stack to the miniport OidRequestHandler so changes reach the
+ *              hardware and installed filters observe the request.
  *
  *              Created on the dev-nt6-1 branch by the NDIS 5↔6 bridge
  *              work that lets e1000e answer tcpip's bootstrap OIDs.
@@ -29,6 +28,8 @@
  */
 
 #include "ndis6_internal.h"
+
+const UCHAR Ndis6ProtocolOidContextMarker;
 
 /* ETH_HEADER_SIZE — fixed Ethernet II header length. Used to derive
  * OID_GEN_MAXIMUM_TOTAL_SIZE from the MTU the driver reported. */
@@ -156,6 +157,50 @@ Ndis6OidForward(
     return Status;
 }
 
+/* Notify an NDIS 6 miniport of the device D-state selected by the power
+ * manager. Pause/Restart only gates network traffic; OID_PNP_SET_POWER is
+ * the operation that tells the driver to save or restore hardware state. */
+NDIS_STATUS
+Ndis6SetMiniportDevicePowerState(
+    _In_ PNDIS6_ADAPTER_EXT Ext,
+    _In_ DEVICE_POWER_STATE DevicePowerState)
+{
+    NDIS_DEVICE_POWER_STATE NdisPowerState;
+    NDIS_REQUEST Request;
+
+    if (Ext == NULL || Ext->MiniportAdapterContext == NULL)
+        return NDIS_STATUS_INVALID_PARAMETER;
+
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return NDIS_STATUS_INVALID_STATE;
+
+    switch (DevicePowerState)
+    {
+        case PowerDeviceD0:
+            NdisPowerState = NdisDeviceStateD0;
+            break;
+        case PowerDeviceD1:
+            NdisPowerState = NdisDeviceStateD1;
+            break;
+        case PowerDeviceD2:
+            NdisPowerState = NdisDeviceStateD2;
+            break;
+        case PowerDeviceD3:
+            NdisPowerState = NdisDeviceStateD3;
+            break;
+        default:
+            return NDIS_STATUS_INVALID_PARAMETER;
+    }
+
+    RtlZeroMemory(&Request, sizeof(Request));
+    Request.RequestType = NdisRequestSetInformation;
+    Request.DATA.SET_INFORMATION.Oid = OID_PNP_SET_POWER;
+    Request.DATA.SET_INFORMATION.InformationBuffer = &NdisPowerState;
+    Request.DATA.SET_INFORMATION.InformationBufferLength = sizeof(NdisPowerState);
+
+    return Ndis6OidForward(Ext, &Request);
+}
+
 /* ============================================================================
  *  NdisMOidRequestComplete — driver-side OID-completion callback.
  *
@@ -220,13 +265,11 @@ Ndis6CallCheckForHangHandlerEx(
 }
 
 VOID
-NTAPI
-NdisMOidRequestComplete(
-    _In_ NDIS_HANDLE       NdisMiniportHandle,
+Ndis6CompleteOidRequestToOrigin(
+    _In_ PLOGICAL_ADAPTER  Adapter,
     _In_ PNDIS_OID_REQUEST OidRequest,
     _In_ NDIS_STATUS       Status)
 {
-    PLOGICAL_ADAPTER    Adapter = (PLOGICAL_ADAPTER)NdisMiniportHandle;
     PNDIS6_ADAPTER_EXT  Ext;
     PVOID               RequestId;
     PNDIS6_OID_WAITER   Waiter;
@@ -282,31 +325,61 @@ NdisMOidRequestComplete(
 
     /* D4: native protocol async completion. */
     {
-        PNDIS6_PROTOCOL_PENDING_OID Pending = (PNDIS6_PROTOCOL_PENDING_OID)RequestId;
+        PNDIS6_PROTOCOL_PENDING_OID Pending = Ndis6GetPendingOidContext(OidRequest);
         PNDIS6_PROTOCOL_BINDING     Binding;
         KIRQL                       BIrql;
 
-        if (Pending == NULL)
+        if (Pending == NULL ||
+            Pending->Signature != NDIS6_PROTOCOL_PENDING_OID_SIGNATURE)
             return;
+        if (Pending->DirectRequest)
+        {
+            DbgPrint("NDIS6: direct OID completed through NdisMOidRequestComplete\n");
+            return;
+        }
         Binding = Pending->Binding;
         if (Binding == NULL || Binding->DriverBlock == NULL)
             return;
 
         /* Remove the pending entry from the binding's list. */
         KeAcquireSpinLock(&Binding->PendingOidRequestsLock, &BIrql);
+        if (!Pending->Listed)
+        {
+            KeReleaseSpinLock(&Binding->PendingOidRequestsLock, BIrql);
+            return;
+        }
         RemoveEntryList(&Pending->ListEntry);
+        Pending->Listed = FALSE;
         KeReleaseSpinLock(&Binding->PendingOidRequestsLock, BIrql);
 
         /* Restore the protocol's original RequestId and call its
          * completion handler. */
-        OidRequest->RequestId = Pending->OriginalRequestId;
+        Ndis6ClearPendingOidContext(OidRequest);
         if (Binding->DriverBlock->Characteristics.OidRequestCompleteHandler != NULL)
         {
             Binding->DriverBlock->Characteristics.OidRequestCompleteHandler(
                 Binding->ProtocolBindingContext, OidRequest, Status);
         }
-        ExFreePoolWithTag(Pending, 'dOPn');
+        Ndis6DereferencePendingOid(Pending);
     }
+}
+
+VOID
+NTAPI
+NdisMOidRequestComplete(
+    _In_ NDIS_HANDLE       NdisMiniportHandle,
+    _In_ PNDIS_OID_REQUEST OidRequest,
+    _In_ NDIS_STATUS       Status)
+{
+    PLOGICAL_ADAPTER Adapter = (PLOGICAL_ADAPTER)NdisMiniportHandle;
+
+    if (Adapter == NULL || !Adapter->IsNdis6 || OidRequest == NULL)
+        return;
+
+    if (Ndis6FilterCompleteOidFromMiniport(Adapter, OidRequest, Status))
+        return;
+
+    Ndis6CompleteOidRequestToOrigin(Adapter, OidRequest, Status);
 }
 
 /* ============================================================================
@@ -634,9 +707,17 @@ NdisCancelOidRequest(
     _In_ NDIS_HANDLE NdisBindingHandle,
     _In_ PVOID       RequestId)
 {
-    /* Native NDIS 6 protocol path. The binding handle doubles as the
-     * adapter pointer in our scheme; forward to the miniport path. */
-    NdisMCancelOidRequest(NdisBindingHandle, RequestId);
+    PNDIS6_PROTOCOL_BINDING Binding = NdisBindingHandle;
+
+    if (Binding == NULL || !Ndis6ReferenceProtocolBinding(Binding))
+        return;
+
+    if (Binding->Adapter != NULL)
+    {
+        Ndis6FilterCancelOidRequestFromProtocol(Binding->Adapter, Binding, RequestId, FALSE);
+    }
+
+    Ndis6DereferenceProtocolBinding(Binding);
 }
 
 /* EOF */

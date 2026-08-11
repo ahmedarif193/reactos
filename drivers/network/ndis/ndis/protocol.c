@@ -549,11 +549,9 @@ ProSend(
         return NdisStatus;
 #endif
     } else {
-        /* dev-nt6-1: NDIS 6 adapters do their own DMA via the bridge.
-         * The legacy SystemAdapterObject is NULL, so the SG-DMA path
-         * below would crash. Skip directly to proSendPacketToMiniport
-         * (which has its own NDIS 6 placeholder until the Phase 3 thunk
-         * lands). */
+        /* NDIS 6 adapters do their own DMA via the bridge. The legacy
+         * SystemAdapterObject is NULL, so skip the legacy SG-DMA path and let
+         * the NDIS 6 thunk wrap and forward the packet. */
         if (Adapter->IsNdis6)
         {
             NdisStatus = proSendPacketToMiniport(Adapter, Packet);
@@ -985,10 +983,10 @@ NdisOpenAdapter(
 
   if (Adapter->IsNdis6)
     {
-      extern NDIS_STATUS Ndis6CallMiniportRestartEx(PLOGICAL_ADAPTER Adapter);
+      extern NDIS_STATUS Ndis6RestartDriverStack(PLOGICAL_ADAPTER Adapter);
       NDIS_STATUS RestartStatus;
 
-      RestartStatus = Ndis6CallMiniportRestartEx(Adapter);
+      RestartStatus = Ndis6RestartDriverStack(Adapter);
       if (!NT_SUCCESS(RestartStatus))
         {
           ExInterlockedRemoveEntryList(&AdapterBinding->AdapterListEntry, &Adapter->NdisMiniportBlock.Lock);

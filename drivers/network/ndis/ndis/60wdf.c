@@ -41,7 +41,6 @@ enum
     NdisWdfActionDeviceObjectCleanup = 20
 };
 
-static volatile LONG Ndis6WdfLuidIndex;
 
 static NTSTATUS
 Ndis6WdfCompleteIrp(
@@ -169,9 +168,7 @@ Ndis6WdfBuildCompleteAddParameters(
         }
     }
 
-    Parameters->NetLuid.Info.IfType = 6; /* IF_TYPE_ETHERNET_CSMACD */
-    Parameters->NetLuid.Info.NetLuidIndex =
-        (ULONG64)(ULONG)InterlockedIncrement(&Ndis6WdfLuidIndex);
+    Parameters->NetLuid = Ext->NetLuid;
     Parameters->MediaType = NdisMedium802_3;
     Parameters->BaseName = *Name;
     Parameters->AdapterInstanceName = *Name;
@@ -307,6 +304,13 @@ NdisWdfPnPAddDevice(
     if (!NT_SUCCESS(Status))
         return (NTSTATUS)Status;
 
+    Status = Ndis6CallMiniportAddDevice(Adapter);
+    if (Status != NDIS_STATUS_SUCCESS)
+    {
+        Ndis6DestroyLogicalAdapter(Adapter);
+        return (NTSTATUS)Status;
+    }
+
     CxDriver = DriverBlock->WdfCxDriver;
     Ndis6WdfBuildCompleteAddParameters(Adapter, &CompleteAdd);
     if (CxDriver->Characteristics.EvtCxMiniportCompleteAdd)
@@ -374,10 +378,11 @@ NdisWdfPnpPowerEventHandler(
             if (!Ext->Initialized)
             {
                 Status = Ndis6CallMiniportInitializeEx(Adapter);
-                if (!NT_SUCCESS(Status))
+                if (Status != NDIS_STATUS_SUCCESS)
                     return (NTSTATUS)Status;
 
                 Ext->Initialized = TRUE;
+                InterlockedExchange(&Ext->ProtocolBindingsClosing, 0);
                 if (Ext->DriverBlock->WdfCxDriver->Characteristics.EvtCxDeviceStartComplete)
                 {
                     Ext->DriverBlock->WdfCxDriver->Characteristics.EvtCxDeviceStartComplete(
@@ -391,21 +396,25 @@ NdisWdfPnpPowerEventHandler(
         case NdisWdfActionPowerDxFinal:
         case NdisWdfActionPowerDxOnSystemSx:
         case NdisWdfActionPowerDxOnSystemShutdown:
-            return (NTSTATUS)Ndis6CallMiniportPauseEx(Adapter);
+            return (NTSTATUS)Ndis6PauseDriverStack(Adapter);
 
         case NdisWdfActionPowerD0:
         case NdisWdfActionPowerD0Implicit:
-            return (NTSTATUS)Ndis6CallMiniportRestartEx(Adapter);
+        {
+            return (NTSTATUS)Ndis6RestartDriverStack(Adapter);
+        }
 
         case NdisWdfActionPnpSurpriseRemove:
-            (VOID)Ndis6CallMiniportPauseEx(Adapter);
+            Ext->WdfSurpriseRemoved = TRUE;
+            Ndis6NotifyMiniportDevicePnPEvent(Ext, NdisDevicePnPEventSurpriseRemoved);
+            (VOID)Ndis6PauseDriverStack(Adapter);
             return STATUS_SUCCESS;
 
         case NdisWdfActionPnpRemove:
             Ndis6WdfWaitForReferences(Ext);
             if (Ext->Initialized)
             {
-                Ndis6CallMiniportHaltEx(Adapter, NdisHaltDeviceRemoved);
+                Ndis6CallMiniportHaltEx(Adapter, Ext->WdfSurpriseRemoved ? NdisHaltDeviceSurpriseRemoved : NdisHaltDeviceDisabled);
                 Ext->Initialized = FALSE;
             }
             Ndis6DestroyLogicalAdapter(Adapter);
@@ -444,15 +453,20 @@ NdisWdfMiniportStarted(
 
     if (!Ext->WdfBindingsStarted)
     {
+        NDIS_STATUS Status;
         extern VOID Ndis6BindAllProtocolsToAdapter(PLOGICAL_ADAPTER);
-        extern VOID Ndis6AttachFiltersToAdapter(PLOGICAL_ADAPTER);
 
+        Status = Ndis6AttachFiltersToAdapter(Adapter);
+        if (Status != NDIS_STATUS_SUCCESS)
+        {
+            DbgPrint("NDIS6-WDF: mandatory filter attach failed 0x%08lx\n", (ULONG)Status);
+            return;
+        }
         Ndis6BindAllProtocolsToAdapter(Adapter);
-        Ndis6AttachFiltersToAdapter(Adapter);
         Ext->WdfBindingsStarted = TRUE;
     }
 
-    (VOID)Ndis6CallMiniportRestartEx(Adapter);
+    (VOID)Ndis6RestartDriverStack(Adapter);
 }
 
 VOID
@@ -463,7 +477,9 @@ NdisWdfMiniportDataPathStart(
     PLOGICAL_ADAPTER Adapter = NdisMiniportAdapterHandle;
 
     if (Adapter && Adapter->IsNdis6)
-        (VOID)Ndis6CallMiniportRestartEx(Adapter);
+    {
+        (VOID)Ndis6RestartDriverStack(Adapter);
+    }
 }
 
 VOID
@@ -474,16 +490,26 @@ NdisWdfMiniportSetPower(
     _In_ DEVICE_POWER_STATE DevicePowerState)
 {
     PLOGICAL_ADAPTER Adapter = NdisMiniportAdapterHandle;
+    PNDIS6_ADAPTER_EXT Ext;
+    NDIS_STATUS Status;
 
     UNREFERENCED_PARAMETER(SystemPowerAction);
 
     if (Adapter == NULL || !Adapter->IsNdis6)
         return;
 
-    if (DevicePowerState == PowerDeviceD0)
-        (VOID)Ndis6CallMiniportRestartEx(Adapter);
+    Ext = NDIS6_EXT(Adapter);
+    if (Ext == NULL || !Ext->IsWdfManaged || !Ext->Initialized)
+        return;
+
+    /* NetAdapterCx stops/starts its packet queues around this callback. This
+     * NDIS entry point supplies the separate device-power notification; it
+     * must not manufacture another Pause/Restart transition. */
+    Status = Ndis6SetMiniportDevicePowerState(Ext, DevicePowerState);
+    if (Status == NDIS_STATUS_SUCCESS)
+        Ext->DevicePowerState = DevicePowerState;
     else
-        (VOID)Ndis6CallMiniportPauseEx(Adapter);
+        DbgPrint("NDIS6/WDF: OID_PNP_SET_POWER D%u failed 0x%08lx\n", (ULONG)DevicePowerState - (ULONG)PowerDeviceD0, (ULONG)Status);
 }
 
 BOOLEAN

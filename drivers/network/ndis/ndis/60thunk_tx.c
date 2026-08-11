@@ -243,7 +243,7 @@ Ndis6TxSendPacket(
      * Ndis6FilterTerminalSend, which calls the miniport's
      * SendNetBufferListsHandler. With filters attached, each filter's
      * SendNetBufferListsHandler runs in turn before the miniport. */
-    Ndis6FilterDispatchSend(Adapter, Nbl);
+    Ndis6FilterDispatchSend(Adapter, Nbl, 0, 0);
 
     /* Either way the call is asynchronous from the legacy protocol's
      * perspective — the SendCompleteHandler will eventually fire via
@@ -261,7 +261,9 @@ Ndis6TxSendPacket(
 VOID
 Ndis6FilterTerminalSend(
     _In_ PLOGICAL_ADAPTER Adapter,
-    _In_ PNET_BUFFER_LIST NetBufferList)
+    _In_ PNET_BUFFER_LIST NetBufferList,
+    _In_ NDIS_PORT_NUMBER PortNumber,
+    _In_ ULONG SendFlags)
 {
     PNDIS6_ADAPTER_EXT Ext;
 
@@ -275,11 +277,7 @@ Ndis6FilterTerminalSend(
         return;
     }
 
-    Ext->DriverBlock->Characteristics.SendNetBufferListsHandler(
-        Ext->MiniportAdapterContext,
-        NetBufferList,
-        0,                      /* PortNumber */
-        0);                     /* SendFlags */
+    Ext->DriverBlock->Characteristics.SendNetBufferListsHandler(Ext->MiniportAdapterContext, NetBufferList, PortNumber, SendFlags);
 }
 
 /* ============================================================================
@@ -540,7 +538,7 @@ Ndis6TxSendPackets(
         /* Route through the filter chain. With no filters attached, this
          * goes straight to Ndis6FilterTerminalSend which hands the chain
          * to SendNetBufferListsHandler in one call. */
-        Ndis6FilterDispatchSend(Adapter, HeadNbl);
+        Ndis6FilterDispatchSend(Adapter, HeadNbl, 0, 0);
     }
 
     return Wrapped;
@@ -559,12 +557,10 @@ Ndis6TxSendPackets(
  * ============================================================================ */
 
 VOID
-NTAPI
-NdisMCancelSendNetBufferLists(
-    _In_ NDIS_HANDLE NdisMiniportHandle,
+Ndis6FilterTerminalCancelSend(
+    _In_ PLOGICAL_ADAPTER Adapter,
     _In_ PVOID       CancelId)
 {
-    PLOGICAL_ADAPTER    Adapter = (PLOGICAL_ADAPTER)NdisMiniportHandle;
     PNDIS6_ADAPTER_EXT  Ext;
     PLIST_ENTRY         entry;
     KIRQL               OldIrql;
@@ -611,14 +607,30 @@ NdisMCancelSendNetBufferLists(
 
 VOID
 NTAPI
+NdisMCancelSendNetBufferLists(
+    _In_ NDIS_HANDLE NdisMiniportHandle,
+    _In_ PVOID CancelId)
+{
+    Ndis6FilterTerminalCancelSend((PLOGICAL_ADAPTER)NdisMiniportHandle, CancelId);
+}
+
+VOID
+NTAPI
 NdisCancelSendNetBufferLists(
     _In_ NDIS_HANDLE NdisBindingHandle,
     _In_ PVOID       CancelId)
 {
-    /* The binding handle the bridge hands to native NDIS 6 protocols
-     * doubles as the adapter pointer (see NdisOpenAdapterEx). Forward
-     * to the miniport-cancellation path. */
-    NdisMCancelSendNetBufferLists(NdisBindingHandle, CancelId);
+    PNDIS6_PROTOCOL_BINDING Binding = NdisBindingHandle;
+    PLOGICAL_ADAPTER Adapter;
+
+    if (!Ndis6ReferenceProtocolBinding(Binding))
+        return;
+
+    Adapter = Binding->Adapter;
+    if (Adapter != NULL && Adapter->IsNdis6 && NDIS6_EXT(Adapter) != NULL)
+        Ndis6FilterDispatchCancelSend(Adapter, CancelId);
+
+    Ndis6DereferenceProtocolBinding(Binding);
 }
 
 /* EOF */
