@@ -195,7 +195,7 @@
 @ stdcall -arch=arm64 HalBeginSystemInterruptUnspecified(long ptr)
 @ stdcall -arch=arm64 HalRequestClockInterrupt(long)
 @ stdcall -arch=arm64 HalRequestDeferredRecoveryServiceInterrupt()
-@ stdcall -arch=arm64 HalRequestIpiSpecifyVector(int64 long)
+@ stdcall -arch=arm64 HalRequestIpiSpecifyVector(long ptr long)
 @ stdcall -arch=arm64 HalSendSoftwareInterrupt(int64 long)
 @ stdcall -arch=arm64 HalSetMpam0(int64)
 @ stdcall -arch=arm64 HalAcpiGetTableEx(ptr long)

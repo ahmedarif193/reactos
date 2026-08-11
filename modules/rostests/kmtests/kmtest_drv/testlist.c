@@ -65,6 +65,7 @@ KMT_TESTFUNC Test_KdSystemDebugControl;
 KMT_TESTFUNC Test_KeApc;
 KMT_TESTFUNC Test_KeApcInject;
 #ifdef _M_ARM64
+KMT_TESTFUNC Test_HalArm64Ipi;
 KMT_TESTFUNC Test_HalArm64Layout;
 KMT_TESTFUNC Test_HalArm64Stage1;
 KMT_TESTFUNC Test_HalArm64Stage2;
@@ -238,6 +239,7 @@ const KMT_TEST TestList[] =
     { "KeApc",                              Test_KeApc },
     { "KeApcInject",                        Test_KeApcInject },
 #ifdef _M_ARM64
+    { "HalArm64Ipi",                        Test_HalArm64Ipi },
     { "HalArm64Layout",                     Test_HalArm64Layout },
     { "HalArm64Stage1",                     Test_HalArm64Stage1 },
     { "HalArm64Stage2",                     Test_HalArm64Stage2 },

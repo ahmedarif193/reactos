@@ -1811,7 +1811,7 @@
 @ stdcall -arch=arm64 HalRequestClockInterrupt(long) hal.HalRequestClockInterrupt
 @ stdcall -arch=arm64 HalRequestDeferredRecoveryServiceInterrupt() hal.HalRequestDeferredRecoveryServiceInterrupt
 @ stdcall -arch=arm64 HalRequestIpi(long) hal.HalRequestIpi
-@ stdcall -arch=arm64 HalRequestIpiSpecifyVector() hal.HalRequestIpiSpecifyVector
+@ stdcall -arch=arm64 HalRequestIpiSpecifyVector(long ptr long) hal.HalRequestIpiSpecifyVector
 @ fastcall -arch=arm64 HalRequestSoftwareInterrupt(long) hal.HalRequestSoftwareInterrupt
 @ stdcall -arch=arm64 HalReturnToFirmware(long) hal.HalReturnToFirmware
 @ stdcall -arch=arm64 HalSendSoftwareInterrupt() hal.HalSendSoftwareInterrupt

@@ -199,6 +199,7 @@ endif()
 
 if(ARCH STREQUAL "arm64")
     list(APPEND KMTEST_DRV_SOURCE
+        kmArm64/HalArm64Ipi.c
         kmArm64/HalArm64Layout.c
         kmArm64/KdArm64Layout.c
         kmArm64/KeArm64.c

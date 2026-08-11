@@ -50,7 +50,6 @@ NTKERNELAPI USHORT NTAPI KeQueryNodeActiveProcessorCount(_In_ USHORT NodeNumber)
 NTKERNELAPI PKPRCB NTAPI KeQueryPrcbAddress(_In_ ULONG Number);
 NTKERNELAPI ULONG NTAPI KeQueryActiveProcessorAffinity(_Out_ PKAFFINITY_EX Affinity);
 NTKERNELAPI NTSTATUS NTAPI KeQueryActiveProcessorAffinity2(_Out_ PGROUP_AFFINITY GroupAffinities, _Inout_ PUSHORT Count);
-NTKERNELAPI KAFFINITY NTAPI KeQueryGroupAffinityEx(_In_ PKAFFINITY_EX Affinity, _In_ USHORT GroupNumber);
 NTKERNELAPI NTSTATUS NTAPI KeQueryNodeActiveAffinity2(_In_ USHORT NodeNumber, _Out_opt_ PGROUP_AFFINITY GroupAffinities, _Inout_ PUSHORT Count);
 NTKERNELAPI NTSTATUS NTAPI KeSetSelectedCpuSetsThread(_Inout_ PKTHREAD Thread, _In_ ULONG CpuSetCount, _In_reads_(CpuSetCount) PULONG64 CpuSetMasks);
 NTKERNELAPI KHETERO_CPU_POLICY NTAPI KeQueryHeteroCpuPolicyThread(_In_ PKTHREAD Thread, _In_ LOGICAL UserPolicy);

@@ -5734,6 +5734,56 @@ HalRequestIpi(
     HalpArm64SendSgi(TargetSet, HAL_ARM64_SGI_IPI);
 }
 
+#define HALP_ARM64_SCHEDULER_IPI_VECTOR 0xE01
+#define HALP_ARM64_MAXIMUM_GROUPS       32
+
+NTSTATUS
+NTAPI
+HalRequestIpiSpecifyVector(
+    _In_ IPI_TYPE IpiType,
+    _In_opt_ PKAFFINITY_EX Affinity,
+    _In_ ULONG Vector)
+{
+    KAFFINITY ActiveSet;
+    KAFFINITY NonEmptySet;
+    KAFFINITY TargetSet;
+    ULONG Group;
+
+    ActiveSet = KeQueryActiveProcessors();
+    switch (IpiType)
+    {
+        case IpiAffinity:
+            if (Affinity == NULL)
+                return STATUS_INVALID_PARAMETER;
+
+            TargetSet = KeQueryGroupAffinityEx(Affinity, 0);
+            NonEmptySet = TargetSet;
+            for (Group = 1; Group < HALP_ARM64_MAXIMUM_GROUPS; Group++)
+                NonEmptySet |= KeQueryGroupAffinityEx(Affinity, (USHORT)Group);
+
+            if (NonEmptySet == 0)
+                return STATUS_INVALID_PARAMETER;
+            break;
+
+        case IpiAllButSelf:
+            TargetSet = ActiveSet & ~((KAFFINITY)1 << KeGetCurrentProcessorNumber());
+            break;
+
+        case IpiAll:
+            TargetSet = ActiveSet;
+            break;
+
+        default:
+            return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Vector != HALP_ARM64_SCHEDULER_IPI_VECTOR)
+        return STATUS_NOT_SUPPORTED;
+
+    HalpArm64SendSgi(TargetSet & ActiveSet, HAL_ARM64_SGI_IPI);
+    return STATUS_SUCCESS;
+}
+
 VOID
 NTAPI
 HalRequestDebugWakeIpi(
