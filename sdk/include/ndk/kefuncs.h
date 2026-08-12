@@ -279,6 +279,13 @@ KeComplementAffinityEx(
     _In_ PKAFFINITY_EX Affinity);
 
 NTKERNELAPI
+VOID
+NTAPI
+KeComplementAffinityEx2(
+    _Inout_ PKAFFINITY_EX Result,
+    _In_ PKAFFINITY_EX Affinity);
+
+NTKERNELAPI
 LOGICAL
 NTAPI
 KeSubtractAffinityEx(
