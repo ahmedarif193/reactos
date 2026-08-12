@@ -116,6 +116,14 @@ KeInitializeEnumerationContext(
 NTKERNELAPI
 VOID
 NTAPI
+KeInitializeEnumerationContextFromAffinity(
+    _Out_ PKAFFINITY_ENUMERATION_CONTEXT Context,
+    _In_ USHORT Group,
+    _In_ KAFFINITY Affinity);
+
+NTKERNELAPI
+VOID
+NTAPI
 KeReinitializeAffinityEx(
     _Inout_ PKAFFINITY_EX Affinity);
 
