@@ -157,6 +157,13 @@ KeRemoveProcessorGroupAffinity(
     _In_ ULONG ProcessorIndex);
 
 NTKERNELAPI
+LOGICAL
+NTAPI
+KeCheckProcessorGroupAffinity(
+    _In_ PGROUP_AFFINITY GroupAffinity,
+    _In_ ULONG ProcessorIndex);
+
+NTKERNELAPI
 VOID
 NTAPI
 KeReinitializeAffinityEx(

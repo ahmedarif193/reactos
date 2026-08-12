@@ -2527,7 +2527,7 @@
 @ stub -arch=arm64 KeAndGroupAffinityEx
 @ stub -arch=arm64 KeCancelTimer2
 @ stdcall -arch=arm64 KeCheckProcessorAffinityEx(ptr long)
-@ stub -arch=arm64 KeCheckProcessorGroupAffinity
+@ stdcall -arch=x86_64,arm64 KeCheckProcessorGroupAffinity(ptr long)
 @ stub -arch=arm64 KeClockInterruptNotify
 @ stub -arch=arm64 KeComplementAffinityEx
 @ stub -arch=arm64 KeComplementAffinityEx2
