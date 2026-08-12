@@ -39,6 +39,38 @@ static VOID NTAPI Arm64DpcRoutine(
     InterlockedIncrement(&g_DpcRan);
 }
 
+static VOID Arm64DpcInitializationCheck(VOID)
+{
+    KDPC Dpc;
+    PVOID PoisonPointer = (PVOID)(ULONG_PTR)0x5555555555555555ULL;
+
+    RtlFillMemory(&Dpc, sizeof(Dpc), 0x55);
+    KeInitializeDpc(&Dpc, Arm64DpcRoutine, &Dpc);
+    ok_eq_uint(Dpc.Type, DpcObject);
+    ok_eq_uint(Dpc.Importance, MediumImportance);
+    ok_eq_uint(Dpc.Number, 0);
+    ok_eq_pointer(Dpc.DpcListEntry.Next, PoisonPointer);
+    ok_eq_ulonglong(Dpc.ProcessorHistory, 0);
+    ok_eq_pointer(Dpc.DeferredRoutine, Arm64DpcRoutine);
+    ok_eq_pointer(Dpc.DeferredContext, &Dpc);
+    ok_eq_pointer(Dpc.SystemArgument1, PoisonPointer);
+    ok_eq_pointer(Dpc.SystemArgument2, PoisonPointer);
+    ok_eq_pointer(Dpc.DpcData, NULL);
+
+    RtlFillMemory(&Dpc, sizeof(Dpc), 0x55);
+    KeInitializeThreadedDpc(&Dpc, Arm64DpcRoutine, &Dpc);
+    ok_eq_uint(Dpc.Type, ThreadedDpcObject);
+    ok_eq_uint(Dpc.Importance, MediumImportance);
+    ok_eq_uint(Dpc.Number, 0);
+    ok_eq_pointer(Dpc.DpcListEntry.Next, PoisonPointer);
+    ok_eq_ulonglong(Dpc.ProcessorHistory, 0);
+    ok_eq_pointer(Dpc.DeferredRoutine, Arm64DpcRoutine);
+    ok_eq_pointer(Dpc.DeferredContext, &Dpc);
+    ok_eq_pointer(Dpc.SystemArgument1, PoisonPointer);
+    ok_eq_pointer(Dpc.SystemArgument2, PoisonPointer);
+    ok_eq_pointer(Dpc.DpcData, NULL);
+}
+
 static VOID Arm64DpcIpiCheck(VOID)
 {
     PKPRCB Prcb = KeGetCurrentPrcb();
@@ -137,6 +169,7 @@ START_TEST(KeArm64DpcIpi)
     skip(FALSE, "KeArm64DpcIpi is ARM64-only\n");
 #else
     dump_trace("[arm64][KeArm64DpcIpi] enter\n");
+    Arm64DpcInitializationCheck();
     Arm64DpcIpiCheck();
 #endif
 }
