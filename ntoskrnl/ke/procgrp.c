@@ -364,6 +364,31 @@ KeFindFirstSetRightGroupAffinity(
 /*
  * @implemented
  */
+NTSTATUS
+NTAPI
+KeFirstGroupAffinityEx(
+    _Out_ PGROUP_AFFINITY GroupAffinity,
+    _In_ PKAFFINITY_EX Affinity)
+{
+    USHORT GroupNumber;
+
+    for (GroupNumber = 0; GroupNumber < Affinity->Count; GroupNumber++)
+    {
+        if (Affinity->Bitmap[GroupNumber] != 0)
+        {
+            RtlZeroMemory(GroupAffinity, sizeof(*GroupAffinity));
+            GroupAffinity->Mask = Affinity->Bitmap[GroupNumber];
+            GroupAffinity->Group = GroupNumber;
+            return STATUS_SUCCESS;
+        }
+    }
+
+    return STATUS_NOT_FOUND;
+}
+
+/*
+ * @implemented
+ */
 LOGICAL
 NTAPI
 KeAndAffinityEx(

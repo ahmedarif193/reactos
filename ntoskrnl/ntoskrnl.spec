@@ -2544,7 +2544,7 @@
 @ stdcall -arch=x86_64,arm64 KeFindFirstSetLeftGroupAffinity(ptr)
 @ stdcall -arch=x86_64,arm64 KeFindFirstSetRightAffinityEx(ptr)
 @ stdcall -arch=x86_64,arm64 KeFindFirstSetRightGroupAffinity(ptr)
-@ stub -arch=arm64 KeFirstGroupAffinityEx
+@ stdcall -arch=x86_64,arm64 KeFirstGroupAffinityEx(ptr ptr)
 @ stub -arch=arm64 KeFreeCalloutStack
 @ stub -arch=arm64 KeGetClockOwner
 @ stub -arch=arm64 KeGetClockTimerResolution
