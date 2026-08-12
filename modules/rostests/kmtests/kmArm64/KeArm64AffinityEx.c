@@ -15,6 +15,7 @@ typedef ULONG (NTAPI *PKMT_KE_FIND_FIRST_SET_LEFT_AFFINITY_EX)(_In_ PKAFFINITY_E
 typedef ULONG (NTAPI *PKMT_KE_FIND_FIRST_SET_LEFT_GROUP_AFFINITY)(_In_ PGROUP_AFFINITY GroupAffinity);
 typedef ULONG (NTAPI *PKMT_KE_FIND_FIRST_SET_RIGHT_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity);
 typedef ULONG (NTAPI *PKMT_KE_FIND_FIRST_SET_RIGHT_GROUP_AFFINITY)(_In_ PGROUP_AFFINITY GroupAffinity);
+typedef NTSTATUS (NTAPI *PKMT_KE_FIRST_GROUP_AFFINITY_EX)(_Out_ PGROUP_AFFINITY GroupAffinity, _In_ PKAFFINITY_EX Affinity);
 typedef SIZE_T (NTAPI *PKMT_KE_SIZE_OF_AFFINITY_EX)(_In_ USHORT Count);
 typedef ULONG (NTAPI *PKMT_KE_GET_PROCESSOR_INDEX_FROM_NUMBER)(_In_ PPROCESSOR_NUMBER ProcessorNumber);
 typedef NTSTATUS (NTAPI *PKMT_KE_GET_PROCESSOR_NUMBER_FROM_INDEX)(_In_ ULONG ProcessorIndex, _Out_ PPROCESSOR_NUMBER ProcessorNumber);
@@ -49,6 +50,7 @@ START_TEST(KeArm64AffinityEx)
     PKMT_KE_FIND_FIRST_SET_LEFT_GROUP_AFFINITY FindFirstSetLeftGroupAffinity;
     PKMT_KE_FIND_FIRST_SET_RIGHT_AFFINITY_EX FindFirstSetRightAffinityEx;
     PKMT_KE_FIND_FIRST_SET_RIGHT_GROUP_AFFINITY FindFirstSetRightGroupAffinity;
+    PKMT_KE_FIRST_GROUP_AFFINITY_EX FirstGroupAffinityEx;
     PKMT_KE_GET_PROCESSOR_INDEX_FROM_NUMBER GetProcessorIndexFromNumber;
     PKMT_KE_GET_PROCESSOR_NUMBER_FROM_INDEX GetProcessorNumberFromIndex;
     PKMT_KE_IS_EQUAL_AFFINITY_EX IsEqualAffinityEx;
@@ -61,6 +63,7 @@ START_TEST(KeArm64AffinityEx)
     PROCESSOR_NUMBER ProcessorNumber;
     UNICODE_STRING Name;
     USHORT GroupNumber;
+    USHORT OtherGroup;
 
     ok_eq_size(sizeof(Affinity), (SIZE_T)264);
     ok_eq_size(FIELD_OFFSET(KAFFINITY_EX, Count), (SIZE_T)0);
@@ -796,5 +799,80 @@ START_TEST(KeArm64AffinityEx)
     GroupSource = GroupAffinity;
     ok_eq_ulong(FindFirstSetRightGroupAffinity(&GroupAffinity), 0);
     ok_eq_size(RtlCompareMemory(&GroupAffinity, &GroupSource, sizeof(GroupAffinity)), sizeof(GroupAffinity));
+
+    RtlInitUnicodeString(&Name, L"KeFirstGroupAffinityEx");
+    FirstGroupAffinityEx = (PKMT_KE_FIRST_GROUP_AFFINITY_EX)MmGetSystemRoutineAddress(&Name);
+    if (FirstGroupAffinityEx == NULL)
+    {
+        skip(FALSE, "KeFirstGroupAffinityEx is not exported\n");
+        return;
+    }
+
+    for (GroupNumber = 0; GroupNumber <= KAFFINITY_EX_INITIALIZED_GROUPS; GroupNumber++)
+    {
+        RtlZeroMemory(&Affinity, sizeof(Affinity));
+        Affinity.Count = GroupNumber;
+        Affinity.Size = 0xA5A5;
+        Affinity.Reserved = 0xA5A5A5A5;
+        RtlFillMemory(&GroupAffinity, sizeof(GroupAffinity), 0xA5);
+        Source = Affinity;
+        GroupSource = GroupAffinity;
+        ok_eq_hex(FirstGroupAffinityEx(&GroupAffinity, &Affinity), STATUS_NOT_FOUND);
+        ok_eq_size(RtlCompareMemory(&GroupAffinity, &GroupSource, sizeof(GroupAffinity)), sizeof(GroupAffinity));
+        ok_eq_size(RtlCompareMemory(&Affinity, &Source, sizeof(Affinity)), sizeof(Affinity));
+    }
+
+    for (GroupNumber = 0; GroupNumber < KAFFINITY_EX_INITIALIZED_GROUPS; GroupNumber++)
+    {
+        RtlZeroMemory(&Affinity, sizeof(Affinity));
+        Affinity.Count = GroupNumber + 1;
+        Affinity.Size = 0xA5A5;
+        Affinity.Reserved = 0xA5A5A5A5;
+        Affinity.Bitmap[GroupNumber] = (KAFFINITY)0xA5A5A5A5A5A5A5A5ULL ^ GroupNumber;
+        RtlFillMemory(&GroupAffinity, sizeof(GroupAffinity), 0xA5);
+        RtlZeroMemory(&GroupSource, sizeof(GroupSource));
+        GroupSource.Mask = Affinity.Bitmap[GroupNumber];
+        GroupSource.Group = GroupNumber;
+        Source = Affinity;
+        ok_eq_hex(FirstGroupAffinityEx(&GroupAffinity, &Affinity), STATUS_SUCCESS);
+        ok_eq_size(RtlCompareMemory(&GroupAffinity, &GroupSource, sizeof(GroupAffinity)), sizeof(GroupAffinity));
+        ok_eq_size(RtlCompareMemory(&Affinity, &Source, sizeof(Affinity)), sizeof(Affinity));
+    }
+
+    for (GroupNumber = 0; GroupNumber < KAFFINITY_EX_INITIALIZED_GROUPS; GroupNumber++)
+    {
+        for (OtherGroup = GroupNumber + 1; OtherGroup < KAFFINITY_EX_INITIALIZED_GROUPS; OtherGroup++)
+        {
+            RtlZeroMemory(&Affinity, sizeof(Affinity));
+            Affinity.Count = OtherGroup + 1;
+            Affinity.Size = 0xA5A5;
+            Affinity.Reserved = 0xA5A5A5A5;
+            Affinity.Bitmap[GroupNumber] = (KAFFINITY)1 << GroupNumber;
+            Affinity.Bitmap[OtherGroup] = ~(KAFFINITY)1 << OtherGroup;
+            RtlFillMemory(&GroupAffinity, sizeof(GroupAffinity), 0xA5);
+            RtlZeroMemory(&GroupSource, sizeof(GroupSource));
+            GroupSource.Mask = Affinity.Bitmap[GroupNumber];
+            GroupSource.Group = GroupNumber;
+            Source = Affinity;
+            ok_eq_hex(FirstGroupAffinityEx(&GroupAffinity, &Affinity), STATUS_SUCCESS);
+            ok_eq_size(RtlCompareMemory(&GroupAffinity, &GroupSource, sizeof(GroupAffinity)), sizeof(GroupAffinity));
+            ok_eq_size(RtlCompareMemory(&Affinity, &Source, sizeof(Affinity)), sizeof(Affinity));
+        }
+    }
+
+    for (GroupNumber = 0; GroupNumber < KAFFINITY_EX_INITIALIZED_GROUPS; GroupNumber++)
+    {
+        RtlZeroMemory(&Affinity, sizeof(Affinity));
+        Affinity.Count = GroupNumber;
+        Affinity.Size = 0xA5A5;
+        Affinity.Reserved = 0xA5A5A5A5;
+        Affinity.Bitmap[GroupNumber] = (KAFFINITY)1 << GroupNumber;
+        RtlFillMemory(&GroupAffinity, sizeof(GroupAffinity), 0xA5);
+        Source = Affinity;
+        GroupSource = GroupAffinity;
+        ok_eq_hex(FirstGroupAffinityEx(&GroupAffinity, &Affinity), STATUS_NOT_FOUND);
+        ok_eq_size(RtlCompareMemory(&GroupAffinity, &GroupSource, sizeof(GroupAffinity)), sizeof(GroupAffinity));
+        ok_eq_size(RtlCompareMemory(&Affinity, &Source, sizeof(Affinity)), sizeof(Affinity));
+    }
 #endif
 }
