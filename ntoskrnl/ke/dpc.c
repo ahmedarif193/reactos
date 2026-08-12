@@ -44,6 +44,23 @@ ULONG KiDPCTimeout = 110;
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
+#if defined(_M_ARM64)
+
+static PVOID volatile KiActiveDpc[MAXIMUM_PROCESSORS];
+
+static __inline__ VOID KiBeginDpcExecution(_In_ PKPRCB Prcb, _In_ PKDPC Dpc)
+{
+    InterlockedOr64((volatile LONG64 *)&Dpc->ProcessorHistory, (LONG64)AFFINITY_MASK(Prcb->Number));
+    InterlockedExchangePointer(&KiActiveDpc[Prcb->Number], Dpc);
+}
+
+static __inline__ VOID KiEndDpcExecution(_In_ PKPRCB Prcb, _In_ PKDPC Dpc)
+{
+    InterlockedCompareExchangePointer(&KiActiveDpc[Prcb->Number], NULL, Dpc);
+}
+
+#endif
+
 VOID
 NTAPI
 KiCheckTimerTable(IN ULARGE_INTEGER CurrentTime)
@@ -259,10 +276,13 @@ KiTimerExpiration(IN PKDPC Dpc,
 #endif
 
                         /* Call the DPC */
-                        DpcEntry[i].Routine(DpcEntry[i].Dpc,
-                                            DpcEntry[i].Context,
-                                            UlongToPtr(SystemTime.LowPart),
-                                            UlongToPtr(SystemTime.HighPart));
+#if defined(_M_ARM64)
+                        KiBeginDpcExecution(Prcb, DpcEntry[i].Dpc);
+#endif
+                        DpcEntry[i].Routine(DpcEntry[i].Dpc, DpcEntry[i].Context, UlongToPtr(SystemTime.LowPart), UlongToPtr(SystemTime.HighPart));
+#if defined(_M_ARM64)
+                        KiEndDpcExecution(Prcb, DpcEntry[i].Dpc);
+#endif
                     }
 
                     /* Reset accounting */
@@ -307,10 +327,13 @@ KiTimerExpiration(IN PKDPC Dpc,
 #endif
 
                         /* Call the DPC */
-                        DpcEntry[i].Routine(DpcEntry[i].Dpc,
-                                            DpcEntry[i].Context,
-                                            UlongToPtr(SystemTime.LowPart),
-                                            UlongToPtr(SystemTime.HighPart));
+#if defined(_M_ARM64)
+                        KiBeginDpcExecution(Prcb, DpcEntry[i].Dpc);
+#endif
+                        DpcEntry[i].Routine(DpcEntry[i].Dpc, DpcEntry[i].Context, UlongToPtr(SystemTime.LowPart), UlongToPtr(SystemTime.HighPart));
+#if defined(_M_ARM64)
+                        KiEndDpcExecution(Prcb, DpcEntry[i].Dpc);
+#endif
                     }
 
                     /* Reset accounting */
@@ -345,10 +368,13 @@ KiTimerExpiration(IN PKDPC Dpc,
 #endif
 
             /* Call the DPC */
-            DpcEntry[i].Routine(DpcEntry[i].Dpc,
-                                DpcEntry[i].Context,
-                                UlongToPtr(SystemTime.LowPart),
-                                UlongToPtr(SystemTime.HighPart));
+#if defined(_M_ARM64)
+            KiBeginDpcExecution(Prcb, DpcEntry[i].Dpc);
+#endif
+            DpcEntry[i].Routine(DpcEntry[i].Dpc, DpcEntry[i].Context, UlongToPtr(SystemTime.LowPart), UlongToPtr(SystemTime.HighPart));
+#if defined(_M_ARM64)
+            KiEndDpcExecution(Prcb, DpcEntry[i].Dpc);
+#endif
         }
 
         /* Lower IRQL if we need to */
@@ -462,10 +488,13 @@ KiTimerListExpire(IN PLIST_ENTRY ExpiredListHead,
 #endif
 
             /* Call the DPC */
-            DpcEntry[i].Routine(DpcEntry[i].Dpc,
-                                DpcEntry[i].Context,
-                                UlongToPtr(SystemTime.LowPart),
-                                UlongToPtr(SystemTime.HighPart));
+#if defined(_M_ARM64)
+            KiBeginDpcExecution(Prcb, DpcEntry[i].Dpc);
+#endif
+            DpcEntry[i].Routine(DpcEntry[i].Dpc, DpcEntry[i].Context, UlongToPtr(SystemTime.LowPart), UlongToPtr(SystemTime.HighPart));
+#if defined(_M_ARM64)
+            KiEndDpcExecution(Prcb, DpcEntry[i].Dpc);
+#endif
         }
 
         /* Lower IRQL */
@@ -680,6 +709,9 @@ KiRetireDpcList(IN PKPRCB Prcb)
 #endif
 
                 /* Clear its DPC data and save its parameters */
+#if defined(_M_ARM64)
+                KiBeginDpcExecution(Prcb, Dpc);
+#endif
                 Dpc->DpcData = NULL;
                 DeferredRoutine = Dpc->DeferredRoutine;
                 DeferredContext = Dpc->DeferredContext;
@@ -701,10 +733,10 @@ KiRetireDpcList(IN PKPRCB Prcb)
                 _enable();
 
                 /* Call the DPC */
-                DeferredRoutine(Dpc,
-                                DeferredContext,
-                                SystemArgument1,
-                                SystemArgument2);
+                DeferredRoutine(Dpc, DeferredContext, SystemArgument1, SystemArgument2);
+#if defined(_M_ARM64)
+                KiEndDpcExecution(Prcb, Dpc);
+#endif
                 ASSERT(KeGetCurrentIrql() == DISPATCH_LEVEL);
 
                 /* Disable interrupts and keep looping */
@@ -870,6 +902,9 @@ KeInsertQueueDpc(IN PKDPC Dpc,
     if (!InterlockedCompareExchangePointer(&Dpc->DpcData, DpcData, NULL))
     {
         /* Now we can play with the DPC safely */
+#if defined(_M_ARM64)
+        InterlockedOr64((volatile LONG64 *)&Dpc->ProcessorHistory, (LONG64)AFFINITY_MASK(Cpu));
+#endif
         Dpc->SystemArgument1 = SystemArgument1;
         Dpc->SystemArgument2 = SystemArgument2;
         DpcData->DpcQueueDepth++;
@@ -992,12 +1027,12 @@ KeInsertQueueDpc(IN PKDPC Dpc,
 /*
  * @implemented
  */
-BOOLEAN
-NTAPI
-KeRemoveQueueDpc(IN PKDPC Dpc)
+static BOOLEAN
+KiRemoveQueueDpc(IN PKDPC Dpc)
 {
     PKDPC_DATA DpcData;
     BOOLEAN Enable;
+    BOOLEAN Removed = FALSE;
     ASSERT_DPC(Dpc);
 
     /* Disable interrupts */
@@ -1032,6 +1067,7 @@ KeRemoveQueueDpc(IN PKDPC Dpc)
             RemoveEntryList(&Dpc->DpcListEntry);
 #endif
             Dpc->DpcData = NULL;
+            Removed = TRUE;
         }
 
         /* Release the lock */
@@ -1041,9 +1077,59 @@ KeRemoveQueueDpc(IN PKDPC Dpc)
     /* Re-enable interrupts */
     KeRestoreInterrupts(Enable);
 
-    /* Return if the DPC was in the queue or not */
-    return DpcData ? TRUE : FALSE;
+    /* Return if the DPC was removed from the queue */
+    return Removed;
 }
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+KeRemoveQueueDpc(IN PKDPC Dpc)
+{
+#if defined(_M_ARM64)
+    return KeRemoveQueueDpcEx(Dpc, FALSE);
+#else
+    return KiRemoveQueueDpc(Dpc);
+#endif
+}
+
+#if defined(_M_ARM64)
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+KeRemoveQueueDpcEx(
+    _Inout_ PKDPC Dpc,
+    _In_ BOOLEAN WaitIfActive)
+{
+    BOOLEAN Removed;
+    ULONG Processor;
+    ULONG CurrentProcessor;
+    ULONG_PTR ProcessorHistory;
+
+    Removed = KiRemoveQueueDpc(Dpc);
+    if (!WaitIfActive || (KeGetCurrentIrql() >= DISPATCH_LEVEL))
+        return Removed;
+
+    ProcessorHistory = (ULONG_PTR)InterlockedCompareExchange64((volatile LONG64 *)&Dpc->ProcessorHistory, 0, 0);
+    CurrentProcessor = KeGetCurrentProcessorNumber();
+    for (Processor = 0; Processor < KeNumberProcessors; Processor++)
+    {
+        if (!(ProcessorHistory & AFFINITY_MASK(Processor)) || (Processor == CurrentProcessor))
+            continue;
+
+        while (InterlockedCompareExchangePointer(&KiActiveDpc[Processor], NULL, NULL) == Dpc)
+            YieldProcessor();
+    }
+
+    return Removed;
+}
+
+#endif
 
 /*
  * @implemented

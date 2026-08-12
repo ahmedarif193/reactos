@@ -473,6 +473,16 @@ NTAPI
 KeRemoveQueueDpc(
   _Inout_ PRKDPC Dpc);
 
+#if defined(_M_ARM64) && (NTDDI_VERSION >= NTDDI_WINBLUE)
+_IRQL_requires_max_(HIGH_LEVEL)
+NTKERNELAPI
+BOOLEAN
+NTAPI
+KeRemoveQueueDpcEx(
+  _Inout_ PRKDPC Dpc,
+  _In_ BOOLEAN WaitIfActive);
+#endif
+
 _IRQL_requires_max_(DISPATCH_LEVEL)
 NTKERNELAPI
 LONG
