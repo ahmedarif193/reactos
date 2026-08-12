@@ -78,6 +78,7 @@ typedef LOGICAL (NTAPI *PKMT_KE_IS_EQUAL_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinit
 typedef LOGICAL (NTAPI *PKMT_KE_IS_SINGLE_GROUP_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity, _Out_opt_ PUSHORT Group);
 typedef LOGICAL (NTAPI *PKMT_KE_IS_SUBSET_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2);
 typedef LOGICAL (NTAPI *PKMT_KE_OR_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2, _Out_opt_ PKAFFINITY_EX Result);
+typedef VOID (NTAPI *PKMT_KE_PROCESSOR_GROUP_AFFINITY)(_Out_ PGROUP_AFFINITY GroupAffinity, _In_ ULONG ProcessorIndex);
 #endif
 
 START_TEST(KeArm64AffinityEx)
@@ -127,6 +128,7 @@ START_TEST(KeArm64AffinityEx)
     PKMT_KE_IS_SINGLE_GROUP_AFFINITY_EX IsSingleGroupAffinityEx;
     PKMT_KE_IS_SUBSET_AFFINITY_EX IsSubsetAffinityEx;
     PKMT_KE_OR_AFFINITY_EX OrAffinityEx;
+    PKMT_KE_PROCESSOR_GROUP_AFFINITY ProcessorGroupAffinity;
     PKMT_KE_SIZE_OF_AFFINITY_EX SizeOfAffinityEx;
     PROCESSOR_NUMBER HighestProcessorNumber;
     PROCESSOR_NUMBER LowestProcessorNumber;
@@ -636,6 +638,28 @@ START_TEST(KeArm64AffinityEx)
     ok_eq_uint(ProcessorNumber.Reserved, 0xA5);
     ok_eq_hex(GetProcessorNumberFromIndex(MAXULONG, &ProcessorNumber), STATUS_INVALID_PARAMETER);
     ok_eq_uint(ProcessorNumber.Group, 0xA5A5);
+
+    RtlInitUnicodeString(&Name, L"KeProcessorGroupAffinity");
+    ProcessorGroupAffinity = (PKMT_KE_PROCESSOR_GROUP_AFFINITY)MmGetSystemRoutineAddress(&Name);
+    if (ProcessorGroupAffinity == NULL)
+    {
+        skip(FALSE, "KeProcessorGroupAffinity is not exported\n");
+        return;
+    }
+
+    for (ProcessorIndex = 0; ProcessorIndex < ActiveCount; ProcessorIndex++)
+    {
+        ok_eq_hex(GetProcessorNumberFromIndex(ProcessorIndex, &ProcessorNumber), STATUS_SUCCESS);
+        RtlFillMemory(&GroupBuffer, sizeof(GroupBuffer), (UCHAR)(0xA5 ^ ProcessorIndex));
+        GroupBufferSource = GroupBuffer;
+        ProcessorGroupAffinity(&GroupBuffer.Affinity, ProcessorIndex);
+        RtlZeroMemory(&GroupAffinity, sizeof(GroupAffinity));
+        GroupAffinity.Mask = (KAFFINITY)1 << ProcessorNumber.Number;
+        GroupAffinity.Group = ProcessorNumber.Group;
+        ok_eq_size(RtlCompareMemory(GroupBuffer.GuardBefore, GroupBufferSource.GuardBefore, sizeof(GroupBuffer.GuardBefore)), sizeof(GroupBuffer.GuardBefore));
+        ok_eq_size(RtlCompareMemory(&GroupBuffer.Affinity, &GroupAffinity, sizeof(GroupAffinity)), sizeof(GroupAffinity));
+        ok_eq_size(RtlCompareMemory(GroupBuffer.GuardAfter, GroupBufferSource.GuardAfter, sizeof(GroupBuffer.GuardAfter)), sizeof(GroupBuffer.GuardAfter));
+    }
 
     RtlInitUnicodeString(&Name, L"KeEnumerateNextProcessor");
     EnumerateNextProcessor = (PKMT_KE_ENUMERATE_NEXT_PROCESSOR)MmGetSystemRoutineAddress(&Name);
