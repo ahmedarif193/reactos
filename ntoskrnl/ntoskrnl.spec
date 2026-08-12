@@ -2548,7 +2548,7 @@
 @ stub -arch=arm64 KeFreeCalloutStack
 @ stub -arch=arm64 KeGetClockOwner
 @ stub -arch=arm64 KeGetClockTimerResolution
-@ stub -arch=arm64 KeGetEffectiveIrql
+@ stdcall -arch=x86_64,arm64 KeGetEffectiveIrql()
 @ stub -arch=arm64 KeGetNextClockTickDuration
 @ stdcall -arch=arm64 KeGetProcessorIndexFromNumber(ptr)
 @ stdcall -arch=arm64 KeGetProcessorNumberFromIndex(long ptr)
