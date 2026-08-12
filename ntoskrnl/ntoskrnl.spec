@@ -2529,7 +2529,7 @@
 @ stdcall -arch=arm64 KeCheckProcessorAffinityEx(ptr long)
 @ stdcall -arch=x86_64,arm64 KeCheckProcessorGroupAffinity(ptr long)
 @ stub -arch=arm64 KeClockInterruptNotify
-@ stub -arch=arm64 KeComplementAffinityEx
+@ stdcall -arch=x86_64,arm64 KeComplementAffinityEx(ptr ptr)
 @ stub -arch=arm64 KeComplementAffinityEx2
 @ stub -arch=arm64 KeConvertAuxiliaryCounterToPerformanceCounter
 @ stub -arch=arm64 KeConvertPerformanceCounterToAuxiliaryCounter
