@@ -40,6 +40,13 @@ typedef struct _KMT_GROUP_AFFINITY_BUFFER
     UCHAR GuardAfter[32];
 } KMT_GROUP_AFFINITY_BUFFER;
 
+typedef struct _KMT_PROCESSOR_INDEX_BUFFER
+{
+    UCHAR GuardBefore[32];
+    ULONG ProcessorIndex;
+    UCHAR GuardAfter[32];
+} KMT_PROCESSOR_INDEX_BUFFER;
+
 C_ASSERT(FIELD_OFFSET(KMT_AFFINITY_EX2, Bitmap) == FIELD_OFFSET(KAFFINITY_EX, Bitmap));
 C_ASSERT(sizeof(KAFFINITY_ENUMERATION_CONTEXT) == 24);
 C_ASSERT(FIELD_OFFSET(KAFFINITY_ENUMERATION_CONTEXT, Affinity) == 0);
@@ -49,9 +56,11 @@ C_ASSERT(sizeof(GROUP_AFFINITY) == 16);
 C_ASSERT(FIELD_OFFSET(GROUP_AFFINITY, Mask) == 0);
 C_ASSERT(FIELD_OFFSET(GROUP_AFFINITY, Group) == 8);
 C_ASSERT(FIELD_OFFSET(GROUP_AFFINITY, Reserved) == 10);
+C_ASSERT(FIELD_OFFSET(KMT_PROCESSOR_INDEX_BUFFER, ProcessorIndex) == 32);
 
 typedef LOGICAL (NTAPI *PKMT_KE_AND_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2, _Out_opt_ PKAFFINITY_EX Result);
 typedef VOID (NTAPI *PKMT_KE_COPY_AFFINITY_EX)(_Out_ PKAFFINITY_EX Destination, _In_ PKAFFINITY_EX Source);
+typedef NTSTATUS (NTAPI *PKMT_KE_ENUMERATE_NEXT_PROCESSOR)(_Out_ PULONG ProcessorIndex, _Inout_ PKAFFINITY_ENUMERATION_CONTEXT Context);
 typedef ULONG (NTAPI *PKMT_KE_FIND_FIRST_SET_LEFT_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity);
 typedef ULONG (NTAPI *PKMT_KE_FIND_FIRST_SET_LEFT_GROUP_AFFINITY)(_In_ PGROUP_AFFINITY GroupAffinity);
 typedef ULONG (NTAPI *PKMT_KE_FIND_FIRST_SET_RIGHT_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity);
@@ -85,18 +94,24 @@ START_TEST(KeArm64AffinityEx)
     KMT_AFFINITY_ENUMERATION_CONTEXT_BUFFER EnumerationSource;
     KMT_GROUP_AFFINITY_BUFFER GroupBuffer;
     KMT_GROUP_AFFINITY_BUFFER GroupBufferSource;
+    KMT_PROCESSOR_INDEX_BUFFER ProcessorIndexBuffer;
+    KMT_PROCESSOR_INDEX_BUFFER ProcessorIndexSource;
     ULONG ActiveCount;
+    ULONG BitNumber;
     KAFFINITY Combination;
     KAFFINITY CombinationLimit;
+    KAFFINITY RemainingAffinity;
     GROUP_AFFINITY GroupAffinity;
     GROUP_AFFINITY GroupSource;
     ULONG HighestIndex;
     ULONG LowestIndex;
     ULONG OtherIndex;
     ULONG ProcessorIndex;
+    ULONG ExpectedProcessorIndex;
     PKMT_KE_AND_AFFINITY_EX AndAffinityEx;
     PKMT_KE_COPY_AFFINITY_EX CopyAffinityEx;
     PKMT_KE_COUNT_SET_BITS_AFFINITY_EX CountSetBitsAffinityEx;
+    PKMT_KE_ENUMERATE_NEXT_PROCESSOR EnumerateNextProcessor;
     PKMT_KE_FIND_FIRST_SET_LEFT_AFFINITY_EX FindFirstSetLeftAffinityEx;
     PKMT_KE_FIND_FIRST_SET_LEFT_GROUP_AFFINITY FindFirstSetLeftGroupAffinity;
     PKMT_KE_FIND_FIRST_SET_RIGHT_AFFINITY_EX FindFirstSetRightAffinityEx;
@@ -116,7 +131,9 @@ START_TEST(KeArm64AffinityEx)
     PROCESSOR_NUMBER HighestProcessorNumber;
     PROCESSOR_NUMBER LowestProcessorNumber;
     PROCESSOR_NUMBER ProcessorNumber;
+    NTSTATUS EnumerationStatus;
     UNICODE_STRING Name;
+    USHORT ExpectedGroup;
     USHORT GroupNumber;
     USHORT OtherGroup;
     USHORT Size;
@@ -131,6 +148,15 @@ START_TEST(KeArm64AffinityEx)
         (KAFFINITY)0x0123456789ABCDEFULL,
         (KAFFINITY)0xFEDCBA9876543210ULL
     };
+    static const USHORT EnumerationCounts[] =
+    {
+        0,
+        1,
+        2,
+        3,
+        KAFFINITY_EX_INITIALIZED_GROUPS
+    };
+    ULONG CountIndex;
     ULONG MaskIndex;
     ULONG GroupValue;
 
@@ -610,6 +636,140 @@ START_TEST(KeArm64AffinityEx)
     ok_eq_uint(ProcessorNumber.Reserved, 0xA5);
     ok_eq_hex(GetProcessorNumberFromIndex(MAXULONG, &ProcessorNumber), STATUS_INVALID_PARAMETER);
     ok_eq_uint(ProcessorNumber.Group, 0xA5A5);
+
+    RtlInitUnicodeString(&Name, L"KeEnumerateNextProcessor");
+    EnumerateNextProcessor = (PKMT_KE_ENUMERATE_NEXT_PROCESSOR)MmGetSystemRoutineAddress(&Name);
+    if (EnumerateNextProcessor == NULL)
+    {
+        skip(FALSE, "KeEnumerateNextProcessor is not exported\n");
+        return;
+    }
+
+    for (MaskIndex = 0; MaskIndex < RTL_NUMBER_OF(EnumerationMasks); MaskIndex++)
+    {
+        RtlFillMemory(&EnumerationBuffer, sizeof(EnumerationBuffer), 0xA5);
+        InitializeEnumerationContextFromAffinity(&EnumerationBuffer.Context, 0, EnumerationMasks[MaskIndex]);
+        EnumerationSource = EnumerationBuffer;
+        RemainingAffinity = EnumerationMasks[MaskIndex];
+
+        while (BitScanForwardAffinity(&BitNumber, RemainingAffinity))
+        {
+            RemainingAffinity &= ~((KAFFINITY)1 << BitNumber);
+            ProcessorNumber.Group = 0;
+            ProcessorNumber.Number = (UCHAR)BitNumber;
+            ProcessorNumber.Reserved = 0;
+            RtlFillMemory(&ProcessorIndexBuffer, sizeof(ProcessorIndexBuffer), 0x3C);
+            ProcessorIndexSource = ProcessorIndexBuffer;
+            EnumerationStatus = EnumerateNextProcessor(&ProcessorIndexBuffer.ProcessorIndex, &EnumerationBuffer.Context);
+            ok_eq_hex(EnumerationStatus, STATUS_SUCCESS);
+            ExpectedProcessorIndex = GetProcessorIndexFromNumber(&ProcessorNumber);
+            if (ExpectedProcessorIndex == INVALID_PROCESSOR_INDEX)
+                ExpectedProcessorIndex = 0;
+            ok_eq_ulong(ProcessorIndexBuffer.ProcessorIndex, ExpectedProcessorIndex);
+            ok_eq_size(RtlCompareMemory(ProcessorIndexBuffer.GuardBefore, ProcessorIndexSource.GuardBefore, sizeof(ProcessorIndexBuffer.GuardBefore)), sizeof(ProcessorIndexBuffer.GuardBefore));
+            ok_eq_size(RtlCompareMemory(ProcessorIndexBuffer.GuardAfter, ProcessorIndexSource.GuardAfter, sizeof(ProcessorIndexBuffer.GuardAfter)), sizeof(ProcessorIndexBuffer.GuardAfter));
+            ok(EnumerationBuffer.Context.Affinity == NULL, "context affinity %p, expected NULL\n", EnumerationBuffer.Context.Affinity);
+            ok_eq_ulonglong(EnumerationBuffer.Context.CurrentAffinity, RemainingAffinity);
+            ok_eq_uint(EnumerationBuffer.Context.CurrentGroup, 0);
+            ok_eq_size(RtlCompareMemory((PUCHAR)&EnumerationBuffer.Context + FIELD_OFFSET(KAFFINITY_ENUMERATION_CONTEXT, CurrentGroup) + sizeof(EnumerationBuffer.Context.CurrentGroup), (PUCHAR)&EnumerationSource.Context + FIELD_OFFSET(KAFFINITY_ENUMERATION_CONTEXT, CurrentGroup) + sizeof(EnumerationSource.Context.CurrentGroup), sizeof(EnumerationBuffer.Context) - FIELD_OFFSET(KAFFINITY_ENUMERATION_CONTEXT, CurrentGroup) - sizeof(EnumerationBuffer.Context.CurrentGroup)), sizeof(EnumerationBuffer.Context) - FIELD_OFFSET(KAFFINITY_ENUMERATION_CONTEXT, CurrentGroup) - sizeof(EnumerationBuffer.Context.CurrentGroup));
+            ok_eq_size(RtlCompareMemory(EnumerationBuffer.GuardBefore, EnumerationSource.GuardBefore, sizeof(EnumerationBuffer.GuardBefore)), sizeof(EnumerationBuffer.GuardBefore));
+            ok_eq_size(RtlCompareMemory(EnumerationBuffer.GuardAfter, EnumerationSource.GuardAfter, sizeof(EnumerationBuffer.GuardAfter)), sizeof(EnumerationBuffer.GuardAfter));
+        }
+
+        RtlFillMemory(&ProcessorIndexBuffer, sizeof(ProcessorIndexBuffer), 0x3C);
+        ProcessorIndexSource = ProcessorIndexBuffer;
+        EnumerationStatus = EnumerateNextProcessor(&ProcessorIndexBuffer.ProcessorIndex, &EnumerationBuffer.Context);
+        ok_eq_hex(EnumerationStatus, STATUS_NOT_FOUND);
+        ok_eq_size(RtlCompareMemory(&ProcessorIndexBuffer, &ProcessorIndexSource, sizeof(ProcessorIndexBuffer)), sizeof(ProcessorIndexBuffer));
+        ok(EnumerationBuffer.Context.Affinity == NULL, "context affinity %p, expected NULL\n", EnumerationBuffer.Context.Affinity);
+        ok_eq_ulonglong(EnumerationBuffer.Context.CurrentAffinity, 0);
+        ok_eq_uint(EnumerationBuffer.Context.CurrentGroup, 1);
+        ok_eq_size(RtlCompareMemory((PUCHAR)&EnumerationBuffer.Context + FIELD_OFFSET(KAFFINITY_ENUMERATION_CONTEXT, CurrentGroup) + sizeof(EnumerationBuffer.Context.CurrentGroup), (PUCHAR)&EnumerationSource.Context + FIELD_OFFSET(KAFFINITY_ENUMERATION_CONTEXT, CurrentGroup) + sizeof(EnumerationSource.Context.CurrentGroup), sizeof(EnumerationBuffer.Context) - FIELD_OFFSET(KAFFINITY_ENUMERATION_CONTEXT, CurrentGroup) - sizeof(EnumerationBuffer.Context.CurrentGroup)), sizeof(EnumerationBuffer.Context) - FIELD_OFFSET(KAFFINITY_ENUMERATION_CONTEXT, CurrentGroup) - sizeof(EnumerationBuffer.Context.CurrentGroup));
+        ok_eq_size(RtlCompareMemory(EnumerationBuffer.GuardBefore, EnumerationSource.GuardBefore, sizeof(EnumerationBuffer.GuardBefore)), sizeof(EnumerationBuffer.GuardBefore));
+        ok_eq_size(RtlCompareMemory(EnumerationBuffer.GuardAfter, EnumerationSource.GuardAfter, sizeof(EnumerationBuffer.GuardAfter)), sizeof(EnumerationBuffer.GuardAfter));
+
+        RtlFillMemory(&ProcessorIndexBuffer, sizeof(ProcessorIndexBuffer), 0xC3);
+        ProcessorIndexSource = ProcessorIndexBuffer;
+        EnumerationStatus = EnumerateNextProcessor(&ProcessorIndexBuffer.ProcessorIndex, &EnumerationBuffer.Context);
+        ok_eq_hex(EnumerationStatus, STATUS_NOT_FOUND);
+        ok_eq_size(RtlCompareMemory(&ProcessorIndexBuffer, &ProcessorIndexSource, sizeof(ProcessorIndexBuffer)), sizeof(ProcessorIndexBuffer));
+        ok_eq_uint(EnumerationBuffer.Context.CurrentGroup, 2);
+    }
+
+    for (CountIndex = 0; CountIndex < RTL_NUMBER_OF(EnumerationCounts); CountIndex++)
+    {
+        for (MaskIndex = 0; MaskIndex < RTL_NUMBER_OF(EnumerationMasks); MaskIndex++)
+        {
+            RtlFillMemory(&AffinityEx2Buffer, sizeof(AffinityEx2Buffer), 0x3C);
+            AffinityEx2Buffer.Affinity.Count = EnumerationCounts[CountIndex];
+            AffinityEx2Buffer.Affinity.Size = (USHORT)(0xA5A5 ^ MaskIndex);
+            AffinityEx2Buffer.Affinity.Reserved = 0x5AA55AA5;
+            for (GroupNumber = 0; GroupNumber < KMT_AFFINITY_EX2_GROUPS; GroupNumber++)
+                AffinityEx2Buffer.Affinity.Bitmap[GroupNumber] = 0;
+            AffinityEx2Buffer.Affinity.Bitmap[0] = EnumerationMasks[MaskIndex];
+            AffinityEx2Source = AffinityEx2Buffer;
+            RtlFillMemory(&EnumerationBuffer, sizeof(EnumerationBuffer), 0xA5);
+            InitializeEnumerationContext(&EnumerationBuffer.Context, (PKAFFINITY_EX)&AffinityEx2Buffer.Affinity);
+            EnumerationSource = EnumerationBuffer;
+            ExpectedGroup = 0;
+            RemainingAffinity = AffinityEx2Buffer.Affinity.Bitmap[0];
+
+            for (;;)
+            {
+                if (BitScanForwardAffinity(&BitNumber, RemainingAffinity))
+                {
+                    RemainingAffinity &= ~((KAFFINITY)1 << BitNumber);
+                    ProcessorNumber.Group = ExpectedGroup;
+                    ProcessorNumber.Number = (UCHAR)BitNumber;
+                    ProcessorNumber.Reserved = 0;
+                    RtlFillMemory(&ProcessorIndexBuffer, sizeof(ProcessorIndexBuffer), 0x3C);
+                    ProcessorIndexSource = ProcessorIndexBuffer;
+                    EnumerationStatus = EnumerateNextProcessor(&ProcessorIndexBuffer.ProcessorIndex, &EnumerationBuffer.Context);
+                    ok_eq_hex(EnumerationStatus, STATUS_SUCCESS);
+                    ExpectedProcessorIndex = GetProcessorIndexFromNumber(&ProcessorNumber);
+                    if (ExpectedProcessorIndex == INVALID_PROCESSOR_INDEX)
+                        ExpectedProcessorIndex = 0;
+                    ok_eq_ulong(ProcessorIndexBuffer.ProcessorIndex, ExpectedProcessorIndex);
+                    ok_eq_size(RtlCompareMemory(ProcessorIndexBuffer.GuardBefore, ProcessorIndexSource.GuardBefore, sizeof(ProcessorIndexBuffer.GuardBefore)), sizeof(ProcessorIndexBuffer.GuardBefore));
+                    ok_eq_size(RtlCompareMemory(ProcessorIndexBuffer.GuardAfter, ProcessorIndexSource.GuardAfter, sizeof(ProcessorIndexBuffer.GuardAfter)), sizeof(ProcessorIndexBuffer.GuardAfter));
+                    ok(EnumerationBuffer.Context.Affinity == (PKAFFINITY_EX)&AffinityEx2Buffer.Affinity, "context affinity %p, expected %p\n", EnumerationBuffer.Context.Affinity, &AffinityEx2Buffer.Affinity);
+                    ok_eq_ulonglong(EnumerationBuffer.Context.CurrentAffinity, RemainingAffinity);
+                    ok_eq_uint(EnumerationBuffer.Context.CurrentGroup, ExpectedGroup);
+                    ok_eq_size(RtlCompareMemory((PUCHAR)&EnumerationBuffer.Context + FIELD_OFFSET(KAFFINITY_ENUMERATION_CONTEXT, CurrentGroup) + sizeof(EnumerationBuffer.Context.CurrentGroup), (PUCHAR)&EnumerationSource.Context + FIELD_OFFSET(KAFFINITY_ENUMERATION_CONTEXT, CurrentGroup) + sizeof(EnumerationSource.Context.CurrentGroup), sizeof(EnumerationBuffer.Context) - FIELD_OFFSET(KAFFINITY_ENUMERATION_CONTEXT, CurrentGroup) - sizeof(EnumerationBuffer.Context.CurrentGroup)), sizeof(EnumerationBuffer.Context) - FIELD_OFFSET(KAFFINITY_ENUMERATION_CONTEXT, CurrentGroup) - sizeof(EnumerationBuffer.Context.CurrentGroup));
+                    ok_eq_size(RtlCompareMemory(EnumerationBuffer.GuardBefore, EnumerationSource.GuardBefore, sizeof(EnumerationBuffer.GuardBefore)), sizeof(EnumerationBuffer.GuardBefore));
+                    ok_eq_size(RtlCompareMemory(EnumerationBuffer.GuardAfter, EnumerationSource.GuardAfter, sizeof(EnumerationBuffer.GuardAfter)), sizeof(EnumerationBuffer.GuardAfter));
+                    ok_eq_size(RtlCompareMemory(&AffinityEx2Buffer, &AffinityEx2Source, sizeof(AffinityEx2Buffer)), sizeof(AffinityEx2Buffer));
+                    continue;
+                }
+
+                ExpectedGroup++;
+                if (ExpectedGroup >= AffinityEx2Buffer.Affinity.Count)
+                    break;
+                RemainingAffinity = AffinityEx2Buffer.Affinity.Bitmap[ExpectedGroup];
+            }
+
+            RtlFillMemory(&ProcessorIndexBuffer, sizeof(ProcessorIndexBuffer), 0x3C);
+            ProcessorIndexSource = ProcessorIndexBuffer;
+            EnumerationStatus = EnumerateNextProcessor(&ProcessorIndexBuffer.ProcessorIndex, &EnumerationBuffer.Context);
+            ok_eq_hex(EnumerationStatus, STATUS_NOT_FOUND);
+            ok_eq_size(RtlCompareMemory(&ProcessorIndexBuffer, &ProcessorIndexSource, sizeof(ProcessorIndexBuffer)), sizeof(ProcessorIndexBuffer));
+            ok(EnumerationBuffer.Context.Affinity == (PKAFFINITY_EX)&AffinityEx2Buffer.Affinity, "context affinity %p, expected %p\n", EnumerationBuffer.Context.Affinity, &AffinityEx2Buffer.Affinity);
+            ok_eq_ulonglong(EnumerationBuffer.Context.CurrentAffinity, 0);
+            ok_eq_uint(EnumerationBuffer.Context.CurrentGroup, ExpectedGroup);
+            ok_eq_size(RtlCompareMemory((PUCHAR)&EnumerationBuffer.Context + FIELD_OFFSET(KAFFINITY_ENUMERATION_CONTEXT, CurrentGroup) + sizeof(EnumerationBuffer.Context.CurrentGroup), (PUCHAR)&EnumerationSource.Context + FIELD_OFFSET(KAFFINITY_ENUMERATION_CONTEXT, CurrentGroup) + sizeof(EnumerationSource.Context.CurrentGroup), sizeof(EnumerationBuffer.Context) - FIELD_OFFSET(KAFFINITY_ENUMERATION_CONTEXT, CurrentGroup) - sizeof(EnumerationBuffer.Context.CurrentGroup)), sizeof(EnumerationBuffer.Context) - FIELD_OFFSET(KAFFINITY_ENUMERATION_CONTEXT, CurrentGroup) - sizeof(EnumerationBuffer.Context.CurrentGroup));
+            ok_eq_size(RtlCompareMemory(EnumerationBuffer.GuardBefore, EnumerationSource.GuardBefore, sizeof(EnumerationBuffer.GuardBefore)), sizeof(EnumerationBuffer.GuardBefore));
+            ok_eq_size(RtlCompareMemory(EnumerationBuffer.GuardAfter, EnumerationSource.GuardAfter, sizeof(EnumerationBuffer.GuardAfter)), sizeof(EnumerationBuffer.GuardAfter));
+            ok_eq_size(RtlCompareMemory(&AffinityEx2Buffer, &AffinityEx2Source, sizeof(AffinityEx2Buffer)), sizeof(AffinityEx2Buffer));
+
+            RtlFillMemory(&ProcessorIndexBuffer, sizeof(ProcessorIndexBuffer), 0xC3);
+            ProcessorIndexSource = ProcessorIndexBuffer;
+            EnumerationStatus = EnumerateNextProcessor(&ProcessorIndexBuffer.ProcessorIndex, &EnumerationBuffer.Context);
+            ok_eq_hex(EnumerationStatus, STATUS_NOT_FOUND);
+            ok_eq_size(RtlCompareMemory(&ProcessorIndexBuffer, &ProcessorIndexSource, sizeof(ProcessorIndexBuffer)), sizeof(ProcessorIndexBuffer));
+            ok_eq_uint(EnumerationBuffer.Context.CurrentGroup, ExpectedGroup + 1);
+            ok_eq_size(RtlCompareMemory(&AffinityEx2Buffer, &AffinityEx2Source, sizeof(AffinityEx2Buffer)), sizeof(AffinityEx2Buffer));
+        }
+    }
 
     RtlInitUnicodeString(&Name, L"KeFindFirstSetLeftAffinityEx");
     FindFirstSetLeftAffinityEx = (PKMT_KE_FIND_FIRST_SET_LEFT_AFFINITY_EX)MmGetSystemRoutineAddress(&Name);
