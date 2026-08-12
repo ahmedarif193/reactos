@@ -235,12 +235,49 @@ KeReadStateQueue(IN PKQUEUE Queue)
 /*
  * @implemented
  */
-PLIST_ENTRY
+static ULONG
+KiDrainQueueEntries(
+    _Inout_ PKQUEUE Queue,
+    _Out_writes_to_(Count, return) PLIST_ENTRY *EntryArray,
+    _In_ ULONG EntriesRemoved,
+    _In_ ULONG Count)
+{
+    PLIST_ENTRY QueueEntry;
+
+    do
+    {
+        QueueEntry = Queue->EntryListHead.Flink;
+        Queue->Header.SignalState--;
+
+        if (!(QueueEntry->Flink) || !(QueueEntry->Blink))
+            KeBugCheckEx(INVALID_WORK_QUEUE_ITEM, (ULONG_PTR)QueueEntry, (ULONG_PTR)Queue, (ULONG_PTR)NULL, (ULONG_PTR)((PWORK_QUEUE_ITEM)QueueEntry)->WorkerRoutine);
+
+        RemoveEntryList(QueueEntry);
+        QueueEntry->Flink = NULL;
+        EntryArray[EntriesRemoved++] = QueueEntry;
+    } while ((EntriesRemoved < Count) && !IsListEmpty(&Queue->EntryListHead));
+
+    return EntriesRemoved;
+}
+
+static BOOLEAN
+KiIsQueueWaitStatus(_In_ LONG_PTR Status)
+{
+    return ((Status == STATUS_ABANDONED) ||
+            (Status == STATUS_USER_APC) ||
+            (Status == STATUS_ALERTED) ||
+            (Status == STATUS_TIMEOUT));
+}
+
+static ULONG
 NTAPI
-KiRemoveQueue(IN PKQUEUE Queue,
-              IN KPROCESSOR_MODE WaitMode,
-              IN BOOLEAN Alertable,
-              IN PLARGE_INTEGER Timeout OPTIONAL)
+KiRemoveQueueExInternal(
+    _Inout_ PKQUEUE Queue,
+    _In_ KPROCESSOR_MODE WaitMode,
+    _In_ BOOLEAN Alertable,
+    _In_opt_ PLARGE_INTEGER Timeout,
+    _Out_writes_to_(Count, return) PLIST_ENTRY *EntryArray,
+    _In_ ULONG Count)
 {
     PLIST_ENTRY QueueEntry;
     LONG_PTR Status;
@@ -253,6 +290,7 @@ KiRemoveQueue(IN PKQUEUE Queue,
     PLARGE_INTEGER OriginalDueTime = Timeout;
     LARGE_INTEGER DueTime = {{0}}, NewDueTime, InterruptTime;
     ULONG Hand = 0;
+    ULONG EntriesRemoved = 0;
     ASSERT_QUEUE(Queue);
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
 
@@ -306,27 +344,9 @@ KiRemoveQueue(IN PKQUEUE Queue,
         if ((Queue->CurrentCount < Queue->MaximumCount) &&
             (QueueEntry != &Queue->EntryListHead))
         {
-            /* Decrease the number of entries */
-            Queue->Header.SignalState--;
-
-            /* Increase numbef of running threads */
+            /* Increase number of running threads */
             KiIncrementQueueCurrentCount(Queue);
-
-            /* Check if the entry is valid. If not, bugcheck */
-            if (!(QueueEntry->Flink) || !(QueueEntry->Blink))
-            {
-                /* Invalid item */
-                KeBugCheckEx(INVALID_WORK_QUEUE_ITEM,
-                             (ULONG_PTR)QueueEntry,
-                             (ULONG_PTR)Queue,
-                             (ULONG_PTR)NULL,
-                             (ULONG_PTR)((PWORK_QUEUE_ITEM)QueueEntry)->
-                                         WorkerRoutine);
-            }
-
-            /* Remove the Entry */
-            RemoveEntryList(QueueEntry);
-            QueueEntry->Flink = NULL;
+            EntriesRemoved = KiDrainQueueEntries(Queue, EntryArray, EntriesRemoved, Count);
 
             /* Nothing to wait on */
             break;
@@ -346,7 +366,8 @@ KiRemoveQueue(IN PKQUEUE Queue,
                 Status = KiCheckAlertability(Thread, Alertable, WaitMode);
                 if ((NTSTATUS)Status != STATUS_WAIT_0)
                 {
-                    QueueEntry = (PLIST_ENTRY)Status;
+                    EntryArray[0] = (PLIST_ENTRY)Status;
+                    EntriesRemoved = 1;
                     KiIncrementQueueCurrentCount(Queue);
                     break;
                 }
@@ -359,7 +380,8 @@ KiRemoveQueue(IN PKQUEUE Queue,
                     if ((ULONG64)InterruptTime.QuadPart >= Timer->DueTime.QuadPart)
                     {
                         /* It did, so we don't need to wait */
-                        QueueEntry = (PLIST_ENTRY)STATUS_TIMEOUT;
+                        EntryArray[0] = (PLIST_ENTRY)(ULONG_PTR)STATUS_TIMEOUT;
+                        EntriesRemoved = 1;
                         KiIncrementQueueCurrentCount(Queue);
                         break;
                     }
@@ -424,7 +446,19 @@ KiRemoveQueue(IN PKQUEUE Queue,
                         KiReleaseDispatcherObject(&Queue->Header);
                         KeLowerIrql(CleanupIrql);
                     }
-                    return (PLIST_ENTRY)Status;
+
+                    EntryArray[0] = (PLIST_ENTRY)Status;
+                    EntriesRemoved = 1;
+                    if ((Count > 1) && !KiIsQueueWaitStatus(Status))
+                    {
+                        KIRQL DrainIrql = KeRaiseIrqlToSynchLevel();
+                        KiAcquireDispatcherObject(&Queue->Header);
+                        if (!IsListEmpty(&Queue->EntryListHead))
+                            EntriesRemoved = KiDrainQueueEntries(Queue, EntryArray, EntriesRemoved, Count);
+                        KiReleaseDispatcherObject(&Queue->Header);
+                        KeLowerIrql(DrainIrql);
+                    }
+                    return EntriesRemoved;
                 }
 
                 /* Check if we had a timeout */
@@ -450,7 +484,20 @@ WaitStart:
     /* Unlock the queue and return */
     KiReleaseDispatcherObject(&Queue->Header);
     KiExitDispatcher(Thread->WaitIrql);
-    return QueueEntry;
+    return EntriesRemoved;
+}
+
+static PLIST_ENTRY
+KiRemoveQueue(
+    _Inout_ PKQUEUE Queue,
+    _In_ KPROCESSOR_MODE WaitMode,
+    _In_ BOOLEAN Alertable,
+    _In_opt_ PLARGE_INTEGER Timeout)
+{
+    PLIST_ENTRY Entry;
+
+    KiRemoveQueueExInternal(Queue, WaitMode, Alertable, Timeout, &Entry, 1);
+    return Entry;
 }
 
 PLIST_ENTRY
@@ -460,6 +507,22 @@ KeRemoveQueue(IN PKQUEUE Queue,
               IN PLARGE_INTEGER Timeout OPTIONAL)
 {
     return KiRemoveQueue(Queue, WaitMode, FALSE, Timeout);
+}
+
+/*
+ * @implemented
+ */
+ULONG
+NTAPI
+KeRemoveQueueEx(
+    _Inout_ PKQUEUE Queue,
+    _In_ KPROCESSOR_MODE WaitMode,
+    _In_ BOOLEAN Alertable,
+    _In_opt_ PLARGE_INTEGER Timeout,
+    _Out_writes_to_(Count, return) PLIST_ENTRY *EntryArray,
+    _In_ ULONG Count)
+{
+    return KiRemoveQueueExInternal(Queue, WaitMode, Alertable, Timeout, EntryArray, Count);
 }
 
 /*
