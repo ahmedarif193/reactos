@@ -282,6 +282,24 @@ KeRemoveProcessorGroupAffinity(
 /*
  * @implemented
  */
+LOGICAL
+NTAPI
+KeCheckProcessorGroupAffinity(
+    _In_ PGROUP_AFFINITY GroupAffinity,
+    _In_ ULONG ProcessorIndex)
+{
+    PROCESSOR_NUMBER ProcessorNumber;
+
+    if (!NT_SUCCESS(KeGetProcessorNumberFromIndex(ProcessorIndex, &ProcessorNumber)))
+        return FALSE;
+
+    return (GroupAffinity->Group == ProcessorNumber.Group) &&
+           ((GroupAffinity->Mask & ((KAFFINITY)1 << ProcessorNumber.Number)) != 0);
+}
+
+/*
+ * @implemented
+ */
 VOID
 NTAPI
 KeReinitializeAffinityEx(

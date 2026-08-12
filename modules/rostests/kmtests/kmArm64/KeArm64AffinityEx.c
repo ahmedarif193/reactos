@@ -60,6 +60,7 @@ C_ASSERT(FIELD_OFFSET(KMT_PROCESSOR_INDEX_BUFFER, ProcessorIndex) == 32);
 
 typedef LOGICAL (NTAPI *PKMT_KE_AND_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2, _Out_opt_ PKAFFINITY_EX Result);
 typedef VOID (NTAPI *PKMT_KE_ADD_PROCESSOR_GROUP_AFFINITY)(_Inout_ PGROUP_AFFINITY GroupAffinity, _In_ ULONG ProcessorIndex);
+typedef LOGICAL (NTAPI *PKMT_KE_CHECK_PROCESSOR_GROUP_AFFINITY)(_In_ PGROUP_AFFINITY GroupAffinity, _In_ ULONG ProcessorIndex);
 typedef VOID (NTAPI *PKMT_KE_COPY_AFFINITY_EX)(_Out_ PKAFFINITY_EX Destination, _In_ PKAFFINITY_EX Source);
 typedef NTSTATUS (NTAPI *PKMT_KE_ENUMERATE_NEXT_PROCESSOR)(_Out_ PULONG ProcessorIndex, _Inout_ PKAFFINITY_ENUMERATION_CONTEXT Context);
 typedef ULONG (NTAPI *PKMT_KE_FIND_FIRST_SET_LEFT_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity);
@@ -113,6 +114,7 @@ START_TEST(KeArm64AffinityEx)
     ULONG ExpectedProcessorIndex;
     PKMT_KE_AND_AFFINITY_EX AndAffinityEx;
     PKMT_KE_ADD_PROCESSOR_GROUP_AFFINITY AddProcessorGroupAffinity;
+    PKMT_KE_CHECK_PROCESSOR_GROUP_AFFINITY CheckProcessorGroupAffinity;
     PKMT_KE_COPY_AFFINITY_EX CopyAffinityEx;
     PKMT_KE_COUNT_SET_BITS_AFFINITY_EX CountSetBitsAffinityEx;
     PKMT_KE_ENUMERATE_NEXT_PROCESSOR EnumerateNextProcessor;
@@ -165,6 +167,8 @@ START_TEST(KeArm64AffinityEx)
     ULONG CountIndex;
     ULONG MaskIndex;
     ULONG GroupValue;
+    LOGICAL ExpectedLogical;
+    LOGICAL LogicalResult;
 
     ok_eq_size(sizeof(Affinity), (SIZE_T)264);
     ok_eq_size(FIELD_OFFSET(KAFFINITY_EX, Count), (SIZE_T)0);
@@ -687,6 +691,33 @@ START_TEST(KeArm64AffinityEx)
             ok_eq_size(RtlCompareMemory(GroupBuffer.GuardBefore, GroupBufferSource.GuardBefore, sizeof(GroupBuffer.GuardBefore)), sizeof(GroupBuffer.GuardBefore));
             ok_eq_size(RtlCompareMemory(&GroupBuffer.Affinity, &GroupAffinity, sizeof(GroupAffinity)), sizeof(GroupAffinity));
             ok_eq_size(RtlCompareMemory(GroupBuffer.GuardAfter, GroupBufferSource.GuardAfter, sizeof(GroupBuffer.GuardAfter)), sizeof(GroupBuffer.GuardAfter));
+        }
+    }
+
+    RtlInitUnicodeString(&Name, L"KeCheckProcessorGroupAffinity");
+    CheckProcessorGroupAffinity = (PKMT_KE_CHECK_PROCESSOR_GROUP_AFFINITY)MmGetSystemRoutineAddress(&Name);
+    if (CheckProcessorGroupAffinity == NULL)
+    {
+        skip(FALSE, "KeCheckProcessorGroupAffinity is not exported\n");
+        return;
+    }
+
+    for (ProcessorIndex = 0; ProcessorIndex < ActiveCount; ProcessorIndex++)
+    {
+        ok_eq_hex(GetProcessorNumberFromIndex(ProcessorIndex, &ProcessorNumber), STATUS_SUCCESS);
+        for (GroupValue = 0; GroupValue <= MAXUSHORT; GroupValue++)
+        {
+            for (MaskIndex = 0; MaskIndex < RTL_NUMBER_OF(EnumerationMasks); MaskIndex++)
+            {
+                RtlFillMemory(&GroupBuffer, sizeof(GroupBuffer), (UCHAR)(ProcessorIndex ^ GroupValue ^ MaskIndex));
+                GroupBuffer.Affinity.Mask = EnumerationMasks[MaskIndex];
+                GroupBuffer.Affinity.Group = (USHORT)GroupValue;
+                GroupBufferSource = GroupBuffer;
+                ExpectedLogical = ((USHORT)GroupValue == ProcessorNumber.Group) && ((EnumerationMasks[MaskIndex] & ((KAFFINITY)1 << ProcessorNumber.Number)) != 0);
+                LogicalResult = CheckProcessorGroupAffinity(&GroupBuffer.Affinity, ProcessorIndex);
+                ok_eq_ulong(LogicalResult, ExpectedLogical);
+                ok_eq_size(RtlCompareMemory(&GroupBuffer, &GroupBufferSource, sizeof(GroupBuffer)), sizeof(GroupBuffer));
+            }
         }
     }
 
