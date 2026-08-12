@@ -1039,6 +1039,87 @@ KeOrAffinityEx(
 /*
  * @implemented
  */
+LOGICAL
+NTAPI
+KeOrAffinityEx2(
+    _In_ PKAFFINITY_EX Affinity1,
+    _In_ PKAFFINITY_EX Affinity2,
+    _Inout_opt_ PKAFFINITY_EX Result)
+{
+    PKAFFINITY_EX LargerAffinity;
+    KAFFINITY ProcessorMask;
+    LOGICAL NonEmpty = FALSE;
+    USHORT CommonCount;
+    USHORT Count;
+    USHORT Size;
+    USHORT GroupNumber;
+
+    if (Affinity1->Count >= Affinity2->Count)
+    {
+        Count = Affinity1->Count;
+        CommonCount = Affinity2->Count;
+        LargerAffinity = Affinity1;
+    }
+    else
+    {
+        Count = Affinity2->Count;
+        CommonCount = Affinity1->Count;
+        LargerAffinity = Affinity2;
+    }
+
+    if (Result == NULL)
+    {
+        for (GroupNumber = 0; GroupNumber < CommonCount; GroupNumber++)
+        {
+            if ((Affinity1->Bitmap[GroupNumber] | Affinity2->Bitmap[GroupNumber]) != 0)
+                return TRUE;
+        }
+
+        for (; GroupNumber < Count; GroupNumber++)
+        {
+            if (LargerAffinity->Bitmap[GroupNumber] != 0)
+                return TRUE;
+        }
+
+        return FALSE;
+    }
+
+    Size = Result->Size;
+    if (Count > Size)
+        Count = Size;
+    if (CommonCount > Size)
+        CommonCount = Size;
+
+    Result->Count = Count;
+    Result->Size = Size;
+
+    for (GroupNumber = 0; GroupNumber < CommonCount; GroupNumber++)
+    {
+        ProcessorMask = Affinity1->Bitmap[GroupNumber] | Affinity2->Bitmap[GroupNumber];
+        Result->Bitmap[GroupNumber] = ProcessorMask;
+        if (ProcessorMask != 0)
+            NonEmpty = TRUE;
+    }
+
+    for (; GroupNumber < Count; GroupNumber++)
+    {
+        ProcessorMask = LargerAffinity->Bitmap[GroupNumber];
+        Result->Bitmap[GroupNumber] = ProcessorMask;
+        if (ProcessorMask != 0)
+            NonEmpty = TRUE;
+    }
+
+    Result->Reserved = 0;
+
+    for (; GroupNumber < Size; GroupNumber++)
+        Result->Bitmap[GroupNumber] = 0;
+
+    return NonEmpty;
+}
+
+/*
+ * @implemented
+ */
 KAFFINITY
 NTAPI
 KeQueryGroupAffinity(
