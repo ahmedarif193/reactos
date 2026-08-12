@@ -617,6 +617,57 @@ KeAndAffinityEx(
  */
 LOGICAL
 NTAPI
+KeAndAffinityEx2(
+    _In_ PKAFFINITY_EX Affinity1,
+    _In_ PKAFFINITY_EX Affinity2,
+    _Inout_opt_ PKAFFINITY_EX Result)
+{
+    KAFFINITY ProcessorMask;
+    LOGICAL NonEmpty = FALSE;
+    USHORT Count;
+    USHORT Size;
+    USHORT GroupNumber;
+
+    Count = min(Affinity1->Count, Affinity2->Count);
+
+    if (Result == NULL)
+    {
+        for (GroupNumber = 0; GroupNumber < Count; GroupNumber++)
+        {
+            if ((Affinity1->Bitmap[GroupNumber] & Affinity2->Bitmap[GroupNumber]) != 0)
+                return TRUE;
+        }
+
+        return FALSE;
+    }
+
+    Size = Result->Size;
+    if (Count > Size)
+        Count = Size;
+
+    for (GroupNumber = 0; GroupNumber < Count; GroupNumber++)
+    {
+        ProcessorMask = Affinity1->Bitmap[GroupNumber] & Affinity2->Bitmap[GroupNumber];
+        Result->Bitmap[GroupNumber] = ProcessorMask;
+        if (ProcessorMask != 0)
+            NonEmpty = TRUE;
+    }
+
+    for (; GroupNumber < Size; GroupNumber++)
+        Result->Bitmap[GroupNumber] = 0;
+
+    Result->Reserved = 0;
+    Result->Count = Count;
+    Result->Size = Size;
+
+    return NonEmpty;
+}
+
+/*
+ * @implemented
+ */
+LOGICAL
+NTAPI
 KeAndGroupAffinityEx(
     _In_ PKAFFINITY_EX Affinity,
     _In_ PGROUP_AFFINITY GroupAffinity,
