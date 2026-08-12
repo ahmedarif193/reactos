@@ -19,6 +19,7 @@ KMT_TESTFUNC Test_ExCallbackExtra;
 KMT_TESTFUNC Test_ExFastMutexExtra;
 KMT_TESTFUNC Test_ExLookaside;
 KMT_TESTFUNC Test_ExPoolExtra;
+KMT_TESTFUNC Test_ExPushLock;
 KMT_TESTFUNC Test_ExResourceExtra;
 KMT_TESTFUNC Test_ExTimerExtra;
 KMT_TESTFUNC Test_ExTimeZone;
@@ -199,6 +200,7 @@ const KMT_TEST TestList[] =
     { "ExCallbackExtra",                    Test_ExCallbackExtra },
     { "ExFastMutexExtra",                   Test_ExFastMutexExtra },
     { "ExPoolExtra",                        Test_ExPoolExtra },
+    { "ExPushLock",                         Test_ExPushLock },
     { "ExResourceExtra",                    Test_ExResourceExtra },
     { "ExTimerExtra",                       Test_ExTimerExtra },
     { "ExTimeZone",                         Test_ExTimeZone },
