@@ -27,17 +27,20 @@ GENERIC_MAPPING ExpCallbackMapping =
 PCALLBACK_OBJECT SetSystemTimeCallback;
 PCALLBACK_OBJECT SetSystemStateCallback;
 PCALLBACK_OBJECT PowerStateCallback;
+PCALLBACK_OBJECT ProcessorAddCallback;
 SYSTEM_CALLBACKS ExpInitializeCallback[] =
 {
    {&SetSystemTimeCallback, L"\\Callback\\SetSystemTime"},
    {&SetSystemStateCallback, L"\\Callback\\SetSystemState"},
    {&PowerStateCallback, L"\\Callback\\PowerState"},
+   {&ProcessorAddCallback, L"\\Callback\\ProcessorAdd"},
    {NULL, NULL}
 };
 
 POBJECT_TYPE ExCallbackObjectType;
 KEVENT ExpCallbackEvent;
 EX_PUSH_LOCK ExpCallBackFlush;
+FAST_MUTEX ExpProcessorAddLock;
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
@@ -300,6 +303,7 @@ ExpInitializeCallbacks(VOID)
 
     /* Initialize Event used when unregistering */
     KeInitializeEvent(&ExpCallbackEvent, NotificationEvent, 0);
+    ExInitializeFastMutex(&ExpProcessorAddLock);
 
     /* Default NT Kernel Callbacks. */
     for (i = 0; ExpInitializeCallback[i].CallbackObject; i++)
@@ -683,6 +687,93 @@ ExUnregisterCallback(IN PVOID CallbackRegistrationHandle)
 
     /* Remove the reference */
     ObDereferenceObject(CallbackObject);
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+KeDeregisterProcessorChangeCallback(IN PVOID CallbackHandle)
+{
+    ExUnregisterCallback(CallbackHandle);
+}
+
+/*
+ * @implemented
+ */
+PVOID
+NTAPI
+KeRegisterProcessorChangeCallback(IN PPROCESSOR_CALLBACK_FUNCTION CallbackFunction,
+                                  IN PVOID CallbackContext,
+                                  IN ULONG Flags)
+{
+    UNICODE_STRING CallbackName;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    PCALLBACK_OBJECT CallbackObject;
+    KE_PROCESSOR_CHANGE_NOTIFY_CONTEXT ChangeContext;
+    PVOID CallbackHandle;
+    NTSTATUS OperationStatus;
+    NTSTATUS Status;
+    ULONG ActiveProcessors;
+    ULONG ProcessorIndex;
+    ULONG NotifyIndex;
+
+    PAGED_CODE();
+
+    RtlInitUnicodeString(&CallbackName, L"\\Callback\\ProcessorAdd");
+    InitializeObjectAttributes(&ObjectAttributes, &CallbackName, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
+    Status = ExCreateCallback(&CallbackObject, &ObjectAttributes, FALSE, FALSE);
+    if (!NT_SUCCESS(Status))
+        return NULL;
+
+    ExAcquireFastMutex(&ExpProcessorAddLock);
+    CallbackHandle = ExRegisterCallback(CallbackObject, (PCALLBACK_FUNCTION)CallbackFunction, CallbackContext);
+    ObDereferenceObject(CallbackObject);
+
+    if (!CallbackHandle || !(Flags & KE_PROCESSOR_CHANGE_ADD_EXISTING))
+        goto Exit;
+
+    ActiveProcessors = (ULONG)KeNumberProcessors;
+    RtlZeroMemory(&ChangeContext, sizeof(ChangeContext));
+    OperationStatus = STATUS_SUCCESS;
+
+    for (ProcessorIndex = 0; ProcessorIndex < ActiveProcessors; ProcessorIndex++)
+    {
+        ChangeContext.State = KeProcessorAddStartNotify;
+        ChangeContext.NtNumber = ProcessorIndex;
+        ChangeContext.Status = STATUS_SUCCESS;
+        Status = KeGetProcessorNumberFromIndex(ProcessorIndex, &ChangeContext.ProcNumber);
+        ASSERT(NT_SUCCESS(Status));
+        OperationStatus = STATUS_SUCCESS;
+        CallbackFunction(CallbackContext, &ChangeContext, &OperationStatus);
+        if (!NT_SUCCESS(OperationStatus))
+            break;
+    }
+
+    if (NT_SUCCESS(OperationStatus))
+    {
+        ChangeContext.State = KeProcessorAddCompleteNotify;
+    }
+    else
+    {
+        ChangeContext.State = KeProcessorAddFailureNotify;
+        ExUnregisterCallback(CallbackHandle);
+        CallbackHandle = NULL;
+    }
+
+    ChangeContext.Status = OperationStatus;
+    for (NotifyIndex = 0; NotifyIndex < ProcessorIndex; NotifyIndex++)
+    {
+        ChangeContext.NtNumber = NotifyIndex;
+        Status = KeGetProcessorNumberFromIndex(NotifyIndex, &ChangeContext.ProcNumber);
+        ASSERT(NT_SUCCESS(Status));
+        CallbackFunction(CallbackContext, &ChangeContext, &OperationStatus);
+    }
+
+Exit:
+    ExReleaseFastMutex(&ExpProcessorAddLock);
+    return CallbackHandle;
 }
 
 /* EOF */
