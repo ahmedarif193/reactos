@@ -102,6 +102,13 @@ KeInitializeAffinityEx(
 NTKERNELAPI
 VOID
 NTAPI
+KeInitializeAffinityEx2(
+    _Out_ PKAFFINITY_EX Affinity,
+    _In_ USHORT Size);
+
+NTKERNELAPI
+VOID
+NTAPI
 KeReinitializeAffinityEx(
     _Inout_ PKAFFINITY_EX Affinity);
 
