@@ -59,6 +59,7 @@ C_ASSERT(FIELD_OFFSET(GROUP_AFFINITY, Reserved) == 10);
 C_ASSERT(FIELD_OFFSET(KMT_PROCESSOR_INDEX_BUFFER, ProcessorIndex) == 32);
 
 typedef LOGICAL (NTAPI *PKMT_KE_AND_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2, _Out_opt_ PKAFFINITY_EX Result);
+typedef VOID (NTAPI *PKMT_KE_ADD_PROCESSOR_GROUP_AFFINITY)(_Inout_ PGROUP_AFFINITY GroupAffinity, _In_ ULONG ProcessorIndex);
 typedef VOID (NTAPI *PKMT_KE_COPY_AFFINITY_EX)(_Out_ PKAFFINITY_EX Destination, _In_ PKAFFINITY_EX Source);
 typedef NTSTATUS (NTAPI *PKMT_KE_ENUMERATE_NEXT_PROCESSOR)(_Out_ PULONG ProcessorIndex, _Inout_ PKAFFINITY_ENUMERATION_CONTEXT Context);
 typedef ULONG (NTAPI *PKMT_KE_FIND_FIRST_SET_LEFT_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity);
@@ -110,6 +111,7 @@ START_TEST(KeArm64AffinityEx)
     ULONG ProcessorIndex;
     ULONG ExpectedProcessorIndex;
     PKMT_KE_AND_AFFINITY_EX AndAffinityEx;
+    PKMT_KE_ADD_PROCESSOR_GROUP_AFFINITY AddProcessorGroupAffinity;
     PKMT_KE_COPY_AFFINITY_EX CopyAffinityEx;
     PKMT_KE_COUNT_SET_BITS_AFFINITY_EX CountSetBitsAffinityEx;
     PKMT_KE_ENUMERATE_NEXT_PROCESSOR EnumerateNextProcessor;
@@ -659,6 +661,31 @@ START_TEST(KeArm64AffinityEx)
         ok_eq_size(RtlCompareMemory(GroupBuffer.GuardBefore, GroupBufferSource.GuardBefore, sizeof(GroupBuffer.GuardBefore)), sizeof(GroupBuffer.GuardBefore));
         ok_eq_size(RtlCompareMemory(&GroupBuffer.Affinity, &GroupAffinity, sizeof(GroupAffinity)), sizeof(GroupAffinity));
         ok_eq_size(RtlCompareMemory(GroupBuffer.GuardAfter, GroupBufferSource.GuardAfter, sizeof(GroupBuffer.GuardAfter)), sizeof(GroupBuffer.GuardAfter));
+    }
+
+    RtlInitUnicodeString(&Name, L"KeAddProcessorGroupAffinity");
+    AddProcessorGroupAffinity = (PKMT_KE_ADD_PROCESSOR_GROUP_AFFINITY)MmGetSystemRoutineAddress(&Name);
+    if (AddProcessorGroupAffinity == NULL)
+    {
+        skip(FALSE, "KeAddProcessorGroupAffinity is not exported\n");
+        return;
+    }
+
+    for (ProcessorIndex = 0; ProcessorIndex < ActiveCount; ProcessorIndex++)
+    {
+        ok_eq_hex(GetProcessorNumberFromIndex(ProcessorIndex, &ProcessorNumber), STATUS_SUCCESS);
+        for (MaskIndex = 0; MaskIndex < RTL_NUMBER_OF(EnumerationMasks); MaskIndex++)
+        {
+            RtlFillMemory(&GroupBuffer, sizeof(GroupBuffer), (UCHAR)(ProcessorIndex ^ MaskIndex));
+            GroupBuffer.Affinity.Mask = EnumerationMasks[MaskIndex];
+            GroupBufferSource = GroupBuffer;
+            GroupAffinity = GroupBuffer.Affinity;
+            GroupAffinity.Mask |= (KAFFINITY)1 << ProcessorNumber.Number;
+            AddProcessorGroupAffinity(&GroupBuffer.Affinity, ProcessorIndex);
+            ok_eq_size(RtlCompareMemory(GroupBuffer.GuardBefore, GroupBufferSource.GuardBefore, sizeof(GroupBuffer.GuardBefore)), sizeof(GroupBuffer.GuardBefore));
+            ok_eq_size(RtlCompareMemory(&GroupBuffer.Affinity, &GroupAffinity, sizeof(GroupAffinity)), sizeof(GroupAffinity));
+            ok_eq_size(RtlCompareMemory(GroupBuffer.GuardAfter, GroupBufferSource.GuardAfter, sizeof(GroupBuffer.GuardAfter)), sizeof(GroupBuffer.GuardAfter));
+        }
     }
 
     RtlInitUnicodeString(&Name, L"KeEnumerateNextProcessor");

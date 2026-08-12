@@ -2517,7 +2517,7 @@
 @ stub -arch=arm64 KdSetEventLoggingPresent
 @ stdcall -arch=arm64 KeAddGroupAffinityEx(ptr long int64)
 @ stdcall -arch=arm64 KeAddProcessorAffinityEx(ptr long)
-@ stub -arch=arm64 KeAddProcessorGroupAffinity
+@ stdcall -arch=x86_64,arm64 KeAddProcessorGroupAffinity(ptr long)
 @ stub -arch=arm64 KeAddTriageDumpDataBlock
 @ stub -arch=arm64 KeAllocateCalloutStack
 @ stub -arch=arm64 KeAllocateCalloutStackEx
