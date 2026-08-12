@@ -138,6 +138,13 @@ KeEnumerateNextProcessor(
 NTKERNELAPI
 VOID
 NTAPI
+KeProcessorGroupAffinity(
+    _Out_ PGROUP_AFFINITY GroupAffinity,
+    _In_ ULONG ProcessorIndex);
+
+NTKERNELAPI
+VOID
+NTAPI
 KeReinitializeAffinityEx(
     _Inout_ PKAFFINITY_EX Affinity);
 

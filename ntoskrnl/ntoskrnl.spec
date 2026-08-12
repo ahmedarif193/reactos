@@ -2572,7 +2572,7 @@
 @ stub -arch=arm64 KeNotifyProcessorFreezeSupported
 @ stdcall -arch=arm64 KeOrAffinityEx(ptr ptr ptr)
 @ stub -arch=arm64 KeOrAffinityEx2
-@ stub -arch=arm64 KeProcessorGroupAffinity
+@ stdcall -arch=x86_64,arm64 KeProcessorGroupAffinity(ptr long)
 @ stdcall KeQueryActiveGroupCount()
 @ stdcall -arch=arm64 KeQueryActiveProcessorAffinity(ptr)
 @ stdcall -arch=arm64 KeQueryActiveProcessorAffinity2(ptr ptr)
