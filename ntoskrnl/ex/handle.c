@@ -891,27 +891,10 @@ ExCreateHandle(IN PHANDLE_TABLE HandleTable,
 VOID
 NTAPI
 ExpBlockOnLockedHandleEntry(IN PHANDLE_TABLE HandleTable,
-                            IN PHANDLE_TABLE_ENTRY HandleTableEntry)
+                            IN PHANDLE_TABLE_ENTRY HandleTableEntry,
+                            IN LONG_PTR LockedValue)
 {
-    LONG_PTR OldValue;
-    EX_PUSH_LOCK_WAIT_BLOCK WaitBlock;
-
-    /* Block on the pushlock */
-    ExBlockPushLock(&HandleTable->HandleContentionEvent, &WaitBlock);
-
-    /* Get the current value and check if it's been unlocked */
-    OldValue = HandleTableEntry->Value;
-    if (!(OldValue) || (OldValue & EXHANDLE_TABLE_ENTRY_LOCK_BIT))
-    {
-        /* Unblock the pushlock and return */
-        ExfUnblockPushLock(&HandleTable->HandleContentionEvent, &WaitBlock);
-    }
-    else
-    {
-        /* Wait for it to be unblocked */
-        ExWaitForUnblockPushLock(&HandleTable->HandleContentionEvent,
-                                 &WaitBlock);
-    }
+    (VOID)ExBlockOnAddressPushLock(&HandleTable->HandleContentionEvent, &HandleTableEntry->Object, &LockedValue, sizeof(LockedValue), NULL);
 }
 
 BOOLEAN
@@ -941,6 +924,9 @@ ExpLockHandleTableEntry(IN PHANDLE_TABLE HandleTable,
                 /* We locked it, get out */
                 return TRUE;
             }
+
+            /* The entry changed before the exchange, so retry the load */
+            continue;
         }
         else
         {
@@ -949,7 +935,7 @@ ExpLockHandleTableEntry(IN PHANDLE_TABLE HandleTable,
         }
 
         /* It's locked, wait for it to be unlocked */
-        ExpBlockOnLockedHandleEntry(HandleTable, HandleTableEntry);
+        ExpBlockOnLockedHandleEntry(HandleTable, HandleTableEntry, OldValue);
     }
 }
 
@@ -966,12 +952,16 @@ ExUnlockHandleTableEntry(IN PHANDLE_TABLE HandleTable,
            (KeGetCurrentIrql() == APC_LEVEL));
 
     /* Set the lock bit and make sure it wasn't earlier */
-    OldValue = InterlockedOr((PLONG) &HandleTableEntry->Value,
-                             EXHANDLE_TABLE_ENTRY_LOCK_BIT);
+#ifdef _WIN64
+    OldValue = InterlockedExchangeAdd64((volatile LONG64 *)&HandleTableEntry->Value, EXHANDLE_TABLE_ENTRY_LOCK_BIT);
+#else
+    OldValue = InterlockedExchangeAdd((PLONG)&HandleTableEntry->Value, EXHANDLE_TABLE_ENTRY_LOCK_BIT);
+#endif
     ASSERT((OldValue & EXHANDLE_TABLE_ENTRY_LOCK_BIT) == 0);
 
-    /* Unblock any waiters */
-    ExfUnblockPushLock(&HandleTable->HandleContentionEvent, NULL);
+    /* Publish the unlock before waking any recorded waiters */
+    KeMemoryBarrier();
+    if (HandleTable->HandleContentionEvent.Value) ExfUnblockPushLock(&HandleTable->HandleContentionEvent, NULL);
 }
 
 VOID

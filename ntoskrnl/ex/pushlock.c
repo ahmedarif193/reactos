@@ -16,6 +16,13 @@
 
 ULONG ExPushLockSpinCount = 0;
 
+#ifdef _M_ARM64
+#define EXP_NOMINAL_SPIN_FREQUENCY 3000000000ULL
+#define EXP_MP_SPIN_CYCLE_COUNT 10240
+#else
+#define EXP_MP_SPIN_CYCLE_COUNT 1024
+#endif
+
 #undef EX_PUSH_LOCK
 #undef PEX_PUSH_LOCK
 
@@ -45,9 +52,60 @@ NTAPI
 ExpInitializePushLocks(VOID)
 {
 #ifdef CONFIG_SMP
-    /* Initialize an internal 1024-iteration spin for MP CPUs */
+    /* Match the native MP spin budget in nominal 3-GHz cycles. */
     if (KeNumberProcessors > 1)
-        ExPushLockSpinCount = 1024;
+        ExPushLockSpinCount = EXP_MP_SPIN_CYCLE_COUNT;
+#endif
+}
+
+FORCEINLINE
+VOID
+ExpSpinOnPushLockWaitBlock(
+    _In_ PEX_PUSH_LOCK_WAIT_BLOCK WaitBlock)
+{
+#ifdef CONFIG_SMP
+    if (ExPushLockSpinCount)
+    {
+#ifdef _M_ARM64
+        ULONGLONG Counter, Current, Deadline, Divisor, Frequency, SpinTicks;
+
+        if (!(*(volatile LONG *)&WaitBlock->Flags & EX_PUSH_LOCK_WAITING)) return;
+        __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(Counter));
+        __asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(Frequency));
+        if (!Frequency) return;
+
+        if (EXP_NOMINAL_SPIN_FREQUENCY > Frequency)
+        {
+            Divisor = EXP_NOMINAL_SPIN_FREQUENCY / Frequency;
+            SpinTicks = Divisor ? ExPushLockSpinCount / Divisor : 0;
+        }
+        else
+        {
+            Divisor = Frequency / EXP_NOMINAL_SPIN_FREQUENCY;
+            SpinTicks = Divisor * ExPushLockSpinCount;
+        }
+
+        if (!SpinTicks) return;
+        Deadline = Counter + SpinTicks;
+        do
+        {
+            __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(Current));
+            if (Current < Counter || Current >= Deadline) break;
+            __dmb(_ARM64_BARRIER_ISHST);
+            YieldProcessor();
+        } while (*(volatile LONG *)&WaitBlock->Flags & EX_PUSH_LOCK_WAITING);
+#else
+        ULONG i = ExPushLockSpinCount;
+
+        do
+        {
+            if (!(*(volatile LONG *)&WaitBlock->Flags & EX_PUSH_LOCK_WAITING)) break;
+            YieldProcessor();
+        } while (--i);
+#endif
+    }
+#else
+    UNREFERENCED_PARAMETER(WaitBlock);
 #endif
 }
 
@@ -327,22 +385,11 @@ ExTimedWaitForUnblockPushLock(IN PEX_PUSH_LOCK PushLock,
                       SynchronizationEvent,
                       FALSE);
 
-#ifdef CONFIG_SMP
-    /* Spin on the push lock if necessary */
-    if (ExPushLockSpinCount)
-    {
-        ULONG i = ExPushLockSpinCount;
+    /* Spin on the push lock if necessary. */
+    ExpSpinOnPushLockWaitBlock(WaitBlock);
 
-        do
-        {
-            /* Check if we got lucky and can leave early */
-            if (!(*(volatile LONG *)&((PEX_PUSH_LOCK_WAIT_BLOCK)WaitBlock)->Flags & EX_PUSH_LOCK_WAITING))
-                return STATUS_SUCCESS;
-
-            YieldProcessor();
-        } while (--i);
-    }
-#endif
+    /* Check if we got lucky and can leave early. */
+    if (!(*(volatile LONG *)&((PEX_PUSH_LOCK_WAIT_BLOCK)WaitBlock)->Flags & EX_PUSH_LOCK_WAITING)) return STATUS_SUCCESS;
 
     /* Now try to remove the wait bit */
     if (InterlockedBitTestAndReset(&((PEX_PUSH_LOCK_WAIT_BLOCK)WaitBlock)->Flags,
@@ -447,6 +494,53 @@ ExBlockPushLock(PEX_PUSH_LOCK PushLock,
         /* Try again with the new value */
         OldValue = NewValue;
     }
+}
+
+NTSTATUS
+FASTCALL
+ExBlockOnAddressPushLock(
+    _Inout_ PEX_PUSH_LOCK PushLock,
+    _In_reads_bytes_(AddressSize) volatile VOID *Address,
+    _In_reads_bytes_(AddressSize) PVOID CompareAddress,
+    _In_ SIZE_T AddressSize,
+    _In_opt_ PLARGE_INTEGER Timeout)
+{
+    EX_PUSH_LOCK_WAIT_BLOCK WaitBlock;
+    BOOLEAN Equal;
+
+    RtlZeroMemory(&WaitBlock, sizeof(WaitBlock));
+    ExBlockPushLock(PushLock, &WaitBlock);
+
+    switch (AddressSize)
+    {
+        case sizeof(UCHAR):
+            Equal = *(volatile UCHAR *)Address == *(PUCHAR)CompareAddress;
+            break;
+
+        case sizeof(USHORT):
+            Equal = *(volatile USHORT *)Address == *(PUSHORT)CompareAddress;
+            break;
+
+        case sizeof(ULONG):
+            Equal = *(volatile ULONG *)Address == *(PULONG)CompareAddress;
+            break;
+
+        case sizeof(ULONGLONG):
+            Equal = *(volatile ULONGLONG *)Address == *(PULONGLONG)CompareAddress;
+            break;
+
+        default:
+            Equal = FALSE;
+            break;
+    }
+
+    if (!Equal)
+    {
+        ExfUnblockPushLock(PushLock, &WaitBlock);
+        return STATUS_SUCCESS;
+    }
+
+    return ExTimedWaitForUnblockPushLock(PushLock, &WaitBlock, Timeout);
 }
 
 /* PUBLIC FUNCTIONS **********************************************************/
@@ -593,21 +687,8 @@ ExfAcquirePushLockExclusive(PEX_PUSH_LOCK PushLock)
                               SynchronizationEvent,
                               FALSE);
 
-#ifdef CONFIG_SMP
-            /* Now spin on the push lock if necessary */
-            if (ExPushLockSpinCount)
-            {
-                ULONG i = ExPushLockSpinCount;
-
-                do
-                {
-                    if (!(*(volatile LONG *)&WaitBlock->Flags & EX_PUSH_LOCK_WAITING))
-                        break;
-
-                    YieldProcessor();
-                } while (--i);
-            }
-#endif
+            /* Now spin on the push lock if necessary. */
+            ExpSpinOnPushLockWaitBlock(WaitBlock);
 
             /* Now try to remove the wait bit */
             if (InterlockedBitTestAndReset(&WaitBlock->Flags, 1))
@@ -765,21 +846,8 @@ ExfAcquirePushLockShared(PEX_PUSH_LOCK PushLock)
                               SynchronizationEvent,
                               FALSE);
 
-#ifdef CONFIG_SMP
-            /* Now spin on the push lock if necessary */
-            if (ExPushLockSpinCount)
-            {
-                ULONG i = ExPushLockSpinCount;
-
-                do
-                {
-                    if (!(*(volatile LONG *)&WaitBlock->Flags & EX_PUSH_LOCK_WAITING))
-                        break;
-
-                    YieldProcessor();
-                } while (--i);
-            }
-#endif
+            /* Now spin on the push lock if necessary. */
+            ExpSpinOnPushLockWaitBlock(WaitBlock);
 
             /* Now try to remove the wait bit */
             if (InterlockedBitTestAndReset(&WaitBlock->Flags, 1))
