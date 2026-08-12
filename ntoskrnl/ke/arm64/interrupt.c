@@ -31,11 +31,11 @@ extern BOOLEAN NTAPI HalArm64ProfileSample(ULONG Increment);
 #define ARM64_SGI_FREEZE 3
 #define ARM64_INTERRUPT_EXIT_APC 0x1
 #define ARM64_INTERRUPT_EXIT_DPC 0x2
+#define KI_ARM64_INTERRUPT_LOCK_NONE ((PKSPIN_LOCK)(LONG_PTR)-3)
 static PKINTERRUPT KiArm64IntTable[ARM64_MAX_INTID] = {0};
 static KSPIN_LOCK KiArm64IntTableLock;
 /* Simple timer wiring for bring-up */
 static KINTERRUPT KiArm64TimerInterrupt;
-static KSPIN_LOCK KiArm64TimerLock;
 static ULONGLONG KiArm64TimerPeriodTicks;
 static ULONGLONG KiArm64TimerFrequency;
 static KINTERRUPT KiArm64IpiInterrupt;
@@ -304,12 +304,9 @@ KiDeliverApc(
  *   Bit 1 (IMASK):   1 = interrupt masked (disabled)
  *   Bit 2 (ISTATUS): read-only, 1 = timer condition met
  *
- * TVAL is a signed countdown value; when it reaches zero, ISTATUS is set.
- * Writing TVAL also updates CVAL (compare value) = CNTPCT + TVAL.
- *
- * ISB is required after writing CTL to ensure the enable/disable takes effect
- * before subsequent code executes. For TVAL writes during ISR reload, ISB
- * is optional but recommended for deterministic timing.
+ * CVAL is an absolute counter deadline. Once the counter reaches CVAL,
+ * ISTATUS remains asserted until CVAL is moved into the future or the timer
+ * is masked or disabled.
  */
 
 static __inline ULONG KiArm64ReadCntpCtl(void)
@@ -326,15 +323,34 @@ static __inline ULONG KiArm64ReadCntvCtl(void)
     return (ULONG)v;
 }
 
-static __inline VOID KiArm64WriteCntpTval(ULONGLONG v)
+static __inline ULONGLONG KiArm64ReadCounter(VOID)
 {
-    /*
-     * ISB is required after writing TVAL to ensure the timer reload takes
-     * effect immediately. The ARM Architecture Reference Manual states that
-     * changes to timer registers may not be visible until an ISB is executed.
-     * Without ISB, the timer interrupt may not fire at the expected time.
-     */
-    __asm__ __volatile__("msr cntp_tval_el0, %0; isb" :: "r"(v) : "memory");
+    ULONGLONG Value;
+
+    if (KiArm64UseVirtualTimer)
+        __asm__ __volatile__("isb; mrs %0, cntvct_el0" : "=r"(Value));
+    else
+        __asm__ __volatile__("isb; mrs %0, cntpct_el0" : "=r"(Value));
+    return Value;
+}
+
+static __inline ULONGLONG KiArm64ReadTimerCompare(VOID)
+{
+    ULONGLONG Value;
+
+    if (KiArm64UseVirtualTimer)
+        __asm__ __volatile__("mrs %0, cntv_cval_el0" : "=r"(Value));
+    else
+        __asm__ __volatile__("mrs %0, cntp_cval_el0" : "=r"(Value));
+    return Value;
+}
+
+static __inline VOID KiArm64WriteTimerCompare(ULONGLONG Value)
+{
+    if (KiArm64UseVirtualTimer)
+        __asm__ __volatile__("msr cntv_cval_el0, %0" :: "r"(Value) : "memory");
+    else
+        __asm__ __volatile__("msr cntp_cval_el0, %0" :: "r"(Value) : "memory");
 }
 
 static __inline VOID KiArm64WriteCntpCtl(ULONG v)
@@ -347,15 +363,37 @@ static __inline VOID KiArm64WriteCntpCtl(ULONG v)
     __asm__ __volatile__("msr cntp_ctl_el0, %0; isb" :: "r"((ULONGLONG)v) : "memory");
 }
 
-static __inline VOID KiArm64WriteCntvTval(ULONGLONG v)
+static __inline VOID KiArm64AcknowledgeTimer(ULONGLONG Counter, ULONGLONG Period)
 {
-    /*
-     * ISB is required after writing TVAL to ensure the timer reload takes
-     * effect immediately. The ARM Architecture Reference Manual states that
-     * changes to timer registers may not be visible until an ISB is executed.
-     * Without ISB, the timer interrupt may not fire at the expected time.
-     */
-    __asm__ __volatile__("msr cntv_tval_el0, %0; isb" :: "r"(v) : "memory");
+    ULONGLONG Deadline = KiArm64ReadTimerCompare();
+
+    /* Preserve cadence unless the deadline is more than ten periods late. */
+    if (Deadline + (Period * 10) < Counter) Deadline = Counter;
+    KiArm64WriteTimerCompare(Deadline + Period);
+}
+
+static
+VOID
+KiArm64AcknowledgeClockInterrupt(
+    _In_ ULONG Cpu)
+{
+    ULONG Increment;
+    PKI_ARM64_TIMER_STATE TimerState;
+
+    Increment = KiArm64CurrentTimerIncrement();
+    if (Cpu != 0 && KeMaximumIncrement > Increment)
+    {
+        Increment = KeMaximumIncrement;
+    }
+
+    TimerState = &KiArm64TimerState[Cpu];
+    if (TimerState->Increment != Increment || TimerState->PeriodTicks == 0)
+    {
+        TimerState->Increment = Increment;
+        TimerState->PeriodTicks = KiArm64ComputeTimerPeriodTicks(Increment);
+    }
+
+    KiArm64AcknowledgeTimer(KiArm64ReadCounter(), TimerState->PeriodTicks);
 }
 
 static __inline VOID KiArm64WriteCntvCtl(ULONG v)
@@ -382,9 +420,8 @@ KeUpdateSystemTime(
 /*
  * ARM64 Timer ISR - Called at CLOCK_LEVEL/DISPATCH_LEVEL on each tick.
  *
- * This is the heart of the scheduler tick. We must:
- * 1. Reload the timer for the next tick
- * 2. Call KeUpdateSystemTime to update time and schedule
+ * The interrupt dispatcher rearms the timer before enabling nested IRQs.
+ * This routine updates system time and runs the scheduler tick.
  *
  * The timer runs at ~100 Hz (10ms per tick = 100,000 100ns units).
  *
@@ -397,7 +434,6 @@ KiArm64TimerIsr(
     _In_ PKINTERRUPT Interrupt,
     _In_opt_ PVOID ServiceContext)
 {
-    ULONGLONG period;
     ULONG Increment;
     ULONG RuntimeIncrement;
     PKTRAP_FRAME TrapFrame;
@@ -424,13 +460,6 @@ KiArm64TimerIsr(
         TimerState->Increment = Increment;
         TimerState->PeriodTicks = KiArm64ComputeTimerPeriodTicks(Increment);
     }
-    period = TimerState->PeriodTicks;
-
-    /* Reload next tick first to minimize jitter. */
-    if (KiArm64UseVirtualTimer)
-        KiArm64WriteCntvTval(period);
-    else
-        KiArm64WriteCntpTval(period);
 
     /*
      * Call KeUpdateSystemTime to:
@@ -523,16 +552,17 @@ KiArm64IpiIsr(
  *
  * Timer configuration:
  *   CNTFRQ_EL0: Counter frequency in Hz (typically 1-100 MHz)
- *   CNTV_TVAL_EL0: Countdown value (fires when reaches 0)
+ *   CNTV_CVAL_EL0: Absolute counter deadline
  *   CNTV_CTL_EL0: Control (bit 0=ENABLE, bit 1=IMASK)
  *
- * For 100 Hz timer with 24.576 MHz counter: TVAL = 24576000 / 100 = 245760 ticks
- * For 100 Hz timer with 100 MHz counter:    TVAL = 100000000 / 100 = 1000000 ticks
+ * For 100 Hz with a 24.576 MHz counter, the CVAL interval is 245760 ticks.
+ * For 100 Hz with a 100 MHz counter, the CVAL interval is 1000000 ticks.
  */
 static
 VOID
 KiArm64StartLocalTimer(VOID)
 {
+    ULONGLONG Counter;
     ULONGLONG frq;
     PKI_ARM64_TIMER_STATE TimerState;
     ULONG Increment;
@@ -555,15 +585,17 @@ KiArm64StartLocalTimer(VOID)
     TimerState->TickOffset = 0;
     TimerState->PeriodTicks = KiArm64ComputeTimerPeriodTicks(Increment);
     KiArm64TimerPeriodTicks = TimerState->PeriodTicks;
+    Counter = KiArm64ReadCounter();
+    KiArm64WriteTimerCompare(Counter + TimerState->PeriodTicks);
+    __asm__ __volatile__("isb" ::: "memory");
 
     if (KiArm64UseVirtualTimer)
     {
         /*
          * Configure virtual timer (CNTV):
-         * 1. Set countdown value in CNTV_TVAL_EL0
+         * 1. Set an absolute deadline in CNTV_CVAL_EL0
          * 2. Enable timer with ENABLE=1, IMASK=0 in CNTV_CTL_EL0
          */
-        KiArm64WriteCntvTval(TimerState->PeriodTicks);
         KiArm64WriteCntvCtl(1); /* ENABLE=1, IMASK=0 */
 
         ctl = KiArm64ReadCntvCtl();
@@ -572,10 +604,9 @@ KiArm64StartLocalTimer(VOID)
     {
         /*
          * Configure physical timer (CNTP):
-         * 1. Set countdown value in CNTP_TVAL_EL0
+         * 1. Set an absolute deadline in CNTP_CVAL_EL0
          * 2. Enable timer with ENABLE=1, IMASK=0 in CNTP_CTL_EL0
          */
-        KiArm64WriteCntpTval(TimerState->PeriodTicks);
         KiArm64WriteCntpCtl(1); /* ENABLE=1, IMASK=0 */
 
         ctl = KiArm64ReadCntpCtl();
@@ -640,8 +671,8 @@ KeInitInterrupts(VOID)
      *   INTID 27 = Virtual Timer (CNTV)
      *   INTID 26 = Hypervisor Timer (CNTHP)
      *
-     * We use the physical timer (30) by default to match Windows behavior.
-     * The virtual timer (27) can be enabled in virtualization scenarios.
+     * We use the virtual timer (27) by default because it remains accessible
+     * from EL1 under hypervisors such as HVF.
      *
      * The clock ISR runs at CLOCK_LEVEL (13) which is higher than device
      * interrupts but lower than IPI_LEVEL. This allows the scheduler
@@ -650,13 +681,11 @@ KeInitInterrupts(VOID)
     {
         ULONG TimerIntId = KiArm64ClockTimerIntId();
 
-        KiRawDebugPuts("[KeInitInterrupts] Timer spinlock\n");
-        KeInitializeSpinLock(&KiArm64TimerLock);
         KiRawDebugPuts("[KeInitInterrupts] Timer KeInitializeInterrupt\n");
         KeInitializeInterrupt(&KiArm64TimerInterrupt,
                               KiArm64TimerIsr,
                               &KiArm64TimerPeriodTicks,
-                              &KiArm64TimerLock,
+                              KI_ARM64_INTERRUPT_LOCK_NONE,
                               TimerIntId,
                               CLOCK_LEVEL,
                               CLOCK_LEVEL,
@@ -716,6 +745,20 @@ KeReenableTimerInterrupt(VOID)
 }
 
 static
+BOOLEAN
+KiArm64CallInterruptServiceRoutine(
+    _In_ PKINTERRUPT Interrupt)
+{
+    BOOLEAN AcquireLock = (Interrupt->ActualLock != KI_ARM64_INTERRUPT_LOCK_NONE);
+    BOOLEAN Handled;
+
+    if (AcquireLock) KxAcquireSpinLock(Interrupt->ActualLock);
+    Handled = Interrupt->ServiceRoutine(Interrupt, Interrupt->ServiceContext);
+    if (AcquireLock) KxReleaseSpinLock(Interrupt->ActualLock);
+    return Handled;
+}
+
+static
 VOID
 KiArm64DispatchChain(_In_ ULONG IntId)
 {
@@ -733,9 +776,7 @@ KiArm64DispatchChain(_In_ ULONG IntId)
     if (IsListEmpty(ListHead))
     {
         /* Single ISR */
-        KxAcquireSpinLock(Head->ActualLock);
-        (VOID)Head->ServiceRoutine(Head, Head->ServiceContext);
-        KxReleaseSpinLock(Head->ActualLock);
+        (VOID)KiArm64CallInterruptServiceRoutine(Head);
         return;
     }
 
@@ -752,9 +793,7 @@ KiArm64DispatchChain(_In_ ULONG IntId)
             RaiseIrql = KfRaiseIrql(Interrupt->SynchronizeIrql);
         }
 
-        KxAcquireSpinLock(Interrupt->ActualLock);
-        Handled = Interrupt->ServiceRoutine(Interrupt, Interrupt->ServiceContext);
-        KxReleaseSpinLock(Interrupt->ActualLock);
+        Handled = KiArm64CallInterruptServiceRoutine(Interrupt);
 
         if (Interrupt->SynchronizeIrql > Interrupt->Irql)
         {
@@ -954,6 +993,8 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId, _In_ PKI_ARM64_IRQ_FRAME IrqF
     if (Head != NULL)
     {
         InterlockedIncrement(&KiArm64DispatchEpoch[Cpu].Value);
+        /* Deassert the level-sensitive timer before nested IRQs are enabled. */
+        if (Head == &KiArm64TimerInterrupt) KiArm64AcknowledgeClockInterrupt(Cpu);
         _enable();
         KiArm64DispatchChain(IntId);
         _disable();
