@@ -100,6 +100,7 @@ typedef LOGICAL (NTAPI *PKMT_KE_IS_SUBSET_AFFINITY_EX)(_In_ PKAFFINITY_EX Affini
 typedef LOGICAL (NTAPI *PKMT_KE_OR_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2, _Out_opt_ PKAFFINITY_EX Result);
 typedef VOID (NTAPI *PKMT_KE_PROCESSOR_GROUP_AFFINITY)(_Out_ PGROUP_AFFINITY GroupAffinity, _In_ ULONG ProcessorIndex);
 typedef VOID (NTAPI *PKMT_KE_REMOVE_PROCESSOR_GROUP_AFFINITY)(_Inout_ PGROUP_AFFINITY GroupAffinity, _In_ ULONG ProcessorIndex);
+typedef LOGICAL (NTAPI *PKMT_KE_SUBTRACT_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2, _Out_opt_ PKAFFINITY_EX Result);
 #endif
 
 START_TEST(KeArm64AffinityEx)
@@ -112,6 +113,8 @@ START_TEST(KeArm64AffinityEx)
     KAFFINITY_EX Source;
     KMT_AFFINITY_EX2_BUFFER AffinityEx2Buffer;
     KMT_AFFINITY_EX2_BUFFER AffinityEx2Source;
+    KMT_AFFINITY_EX2_BUFFER AffinityEx2Buffer2;
+    KMT_AFFINITY_EX2_BUFFER AffinityEx2Source2;
     KMT_AFFINITY_EX2_BUFFER AffinityEx2Result;
     KMT_AFFINITY_EX2_BUFFER AffinityEx2ResultExpected;
     KMT_AFFINITY_EX2_BUFFER AffinityEx2AliasExpected;
@@ -162,6 +165,7 @@ START_TEST(KeArm64AffinityEx)
     PKMT_KE_PROCESSOR_GROUP_AFFINITY ProcessorGroupAffinity;
     PKMT_KE_REMOVE_PROCESSOR_GROUP_AFFINITY RemoveProcessorGroupAffinity;
     PKMT_KE_SIZE_OF_AFFINITY_EX SizeOfAffinityEx;
+    PKMT_KE_SUBTRACT_AFFINITY_EX SubtractAffinityEx;
     PROCESSOR_NUMBER HighestProcessorNumber;
     PROCESSOR_NUMBER LowestProcessorNumber;
     PROCESSOR_NUMBER ProcessorNumber;
@@ -216,13 +220,35 @@ START_TEST(KeArm64AffinityEx)
         KMT_AFFINITY_EX2_GROUPS,
         MAXUSHORT
     };
+    static const USHORT SubtractAffinityExhaustivePairs[][2] =
+    {
+        {1, 0},
+        {1, 1},
+        {KAFFINITY_EX_INITIALIZED_GROUPS - 1, KAFFINITY_EX_INITIALIZED_GROUPS},
+        {KAFFINITY_EX_INITIALIZED_GROUPS, KAFFINITY_EX_INITIALIZED_GROUPS - 1},
+        {KAFFINITY_EX_INITIALIZED_GROUPS, KAFFINITY_EX_INITIALIZED_GROUPS},
+        {KAFFINITY_EX_INITIALIZED_GROUPS + 1, KAFFINITY_EX_INITIALIZED_GROUPS - 1},
+        {KAFFINITY_EX_INITIALIZED_GROUPS - 1, KAFFINITY_EX_INITIALIZED_GROUPS + 1},
+        {KAFFINITY_EX_INITIALIZED_GROUPS + 1, KAFFINITY_EX_INITIALIZED_GROUPS + 1},
+        {MAXUSHORT, 0},
+        {0, MAXUSHORT},
+        {MAXUSHORT, KAFFINITY_EX_INITIALIZED_GROUPS},
+        {KAFFINITY_EX_INITIALIZED_GROUPS, MAXUSHORT},
+        {MAXUSHORT, MAXUSHORT}
+    };
     ULONG CountIndex;
+    ULONG CountIndex2;
     ULONG CountResult;
     ULONG ExpectedCount;
     ULONG MaskIndex;
     ULONG PatternIndex;
+    ULONG ProbeGroup;
     ULONG GroupValue;
+    KAFFINITY ExpectedMask;
     USHORT Pattern;
+    USHORT AffinityCount1;
+    USHORT AffinityCount2;
+    USHORT ResultCount;
     LOGICAL ExpectedLogical;
     LOGICAL LogicalResult;
 
@@ -966,6 +992,217 @@ START_TEST(KeArm64AffinityEx)
 
             ComplementAffinityEx((PKAFFINITY_EX)&AffinityEx2Buffer.Affinity, (PKAFFINITY_EX)&AffinityEx2Buffer.Affinity);
             ok_eq_size(RtlCompareMemory(&AffinityEx2Buffer, &AffinityEx2AliasExpected, sizeof(AffinityEx2Buffer)), sizeof(AffinityEx2Buffer));
+        }
+    }
+
+    RtlInitUnicodeString(&Name, L"KeSubtractAffinityEx");
+    SubtractAffinityEx = (PKMT_KE_SUBTRACT_AFFINITY_EX)MmGetSystemRoutineAddress(&Name);
+    if (SubtractAffinityEx == NULL)
+    {
+        skip(FALSE, "KeSubtractAffinityEx is not exported\n");
+        return;
+    }
+
+    for (CountIndex = 0; CountIndex < RTL_NUMBER_OF(ComplementAffinityCounts); CountIndex++)
+    {
+        AffinityCount1 = ComplementAffinityCounts[CountIndex];
+        for (CountIndex2 = 0; CountIndex2 < RTL_NUMBER_OF(ComplementAffinityCounts); CountIndex2++)
+        {
+            AffinityCount2 = ComplementAffinityCounts[CountIndex2];
+            for (PatternIndex = 0; PatternIndex < 0x100; PatternIndex++)
+            {
+                RtlFillMemory(&AffinityEx2Buffer, sizeof(AffinityEx2Buffer), (UCHAR)(CountIndex ^ PatternIndex));
+                AffinityEx2Buffer.Affinity.Count = AffinityCount1;
+                AffinityEx2Buffer.Affinity.Size = (USHORT)(0xA55A ^ PatternIndex);
+                AffinityEx2Buffer.Affinity.Reserved = 0xC3D2E1F0UL ^ PatternIndex;
+                RtlFillMemory(&AffinityEx2Buffer2, sizeof(AffinityEx2Buffer2), (UCHAR)(CountIndex2 ^ PatternIndex ^ 0x5A));
+                AffinityEx2Buffer2.Affinity.Count = AffinityCount2;
+                AffinityEx2Buffer2.Affinity.Size = (USHORT)(0x5AA5 ^ PatternIndex);
+                AffinityEx2Buffer2.Affinity.Reserved = 0x0F1E2D3CUL ^ PatternIndex;
+                for (GroupValue = 0; GroupValue < KMT_AFFINITY_EX2_GROUPS; GroupValue++)
+                {
+                    Pattern = (USHORT)(PatternIndex + GroupValue * 0x9E37U + CountIndex * 0x31U);
+                    Combination = (KAFFINITY)Pattern;
+                    Combination |= (KAFFINITY)(USHORT)(Pattern ^ MAXUSHORT) << 16;
+                    Combination |= (KAFFINITY)(USHORT)(Pattern * 0x9E37U) << 32;
+                    Combination |= (KAFFINITY)(USHORT)((Pattern << 1) | (Pattern >> 15)) << 48;
+                    AffinityEx2Buffer.Affinity.Bitmap[GroupValue] = Combination;
+                    Pattern = (USHORT)(PatternIndex * 0xB529U + GroupValue * 0x68E3U + CountIndex2 * 0x55U);
+                    RemainingAffinity = (KAFFINITY)(USHORT)(Pattern ^ 0xA5A5U);
+                    RemainingAffinity |= (KAFFINITY)(USHORT)(Pattern * 0x7F4BU) << 16;
+                    RemainingAffinity |= (KAFFINITY)(USHORT)((Pattern << 3) | (Pattern >> 13)) << 32;
+                    RemainingAffinity |= (KAFFINITY)(USHORT)(Pattern ^ MAXUSHORT) << 48;
+                    AffinityEx2Buffer2.Affinity.Bitmap[GroupValue] = RemainingAffinity;
+                }
+                AffinityEx2Source = AffinityEx2Buffer;
+                AffinityEx2Source2 = AffinityEx2Buffer2;
+
+                RtlFillMemory(&AffinityEx2Result, sizeof(AffinityEx2Result), (UCHAR)(0xA5 ^ CountIndex ^ CountIndex2 ^ PatternIndex));
+                AffinityEx2ResultExpected = AffinityEx2Result;
+                ResultCount = min(AffinityCount1, KAFFINITY_EX_INITIALIZED_GROUPS);
+                AffinityEx2ResultExpected.Affinity.Count = ResultCount;
+                AffinityEx2ResultExpected.Affinity.Size = KAFFINITY_EX_INITIALIZED_GROUPS;
+                AffinityEx2ResultExpected.Affinity.Reserved = 0;
+                ExpectedLogical = FALSE;
+                for (GroupValue = 0; GroupValue < KAFFINITY_EX_INITIALIZED_GROUPS; GroupValue++)
+                {
+                    ExpectedMask = 0;
+                    if (GroupValue < ResultCount)
+                    {
+                        ExpectedMask = AffinityEx2Buffer.Affinity.Bitmap[GroupValue];
+                        if (GroupValue < AffinityCount2)
+                            ExpectedMask &= ~AffinityEx2Buffer2.Affinity.Bitmap[GroupValue];
+                    }
+                    AffinityEx2ResultExpected.Affinity.Bitmap[GroupValue] = ExpectedMask;
+                    if (ExpectedMask != 0)
+                        ExpectedLogical = TRUE;
+                }
+
+                LogicalResult = SubtractAffinityEx((PKAFFINITY_EX)&AffinityEx2Buffer.Affinity, (PKAFFINITY_EX)&AffinityEx2Buffer2.Affinity, (PKAFFINITY_EX)&AffinityEx2Result.Affinity);
+                ok_eq_ulong(LogicalResult, ExpectedLogical);
+                ok_eq_size(RtlCompareMemory(&AffinityEx2Buffer, &AffinityEx2Source, sizeof(AffinityEx2Buffer)), sizeof(AffinityEx2Buffer));
+                ok_eq_size(RtlCompareMemory(&AffinityEx2Buffer2, &AffinityEx2Source2, sizeof(AffinityEx2Buffer2)), sizeof(AffinityEx2Buffer2));
+                ok_eq_size(RtlCompareMemory(&AffinityEx2Result, &AffinityEx2ResultExpected, sizeof(AffinityEx2Result)), sizeof(AffinityEx2Result));
+
+                AffinityEx2AliasExpected = AffinityEx2Source;
+                AffinityEx2AliasExpected.Affinity.Count = ResultCount;
+                AffinityEx2AliasExpected.Affinity.Size = KAFFINITY_EX_INITIALIZED_GROUPS;
+                AffinityEx2AliasExpected.Affinity.Reserved = 0;
+                for (GroupValue = 0; GroupValue < KAFFINITY_EX_INITIALIZED_GROUPS; GroupValue++)
+                    AffinityEx2AliasExpected.Affinity.Bitmap[GroupValue] = AffinityEx2ResultExpected.Affinity.Bitmap[GroupValue];
+                LogicalResult = SubtractAffinityEx((PKAFFINITY_EX)&AffinityEx2Buffer.Affinity, (PKAFFINITY_EX)&AffinityEx2Buffer2.Affinity, (PKAFFINITY_EX)&AffinityEx2Buffer.Affinity);
+                ok_eq_ulong(LogicalResult, ExpectedLogical);
+                ok_eq_size(RtlCompareMemory(&AffinityEx2Buffer, &AffinityEx2AliasExpected, sizeof(AffinityEx2Buffer)), sizeof(AffinityEx2Buffer));
+                ok_eq_size(RtlCompareMemory(&AffinityEx2Buffer2, &AffinityEx2Source2, sizeof(AffinityEx2Buffer2)), sizeof(AffinityEx2Buffer2));
+
+                AffinityEx2Buffer = AffinityEx2Source;
+                AffinityEx2Buffer2 = AffinityEx2Source2;
+                AffinityEx2AliasExpected = AffinityEx2Source2;
+                AffinityEx2AliasExpected.Affinity.Count = ResultCount;
+                AffinityEx2AliasExpected.Affinity.Size = KAFFINITY_EX_INITIALIZED_GROUPS;
+                AffinityEx2AliasExpected.Affinity.Reserved = 0;
+                for (GroupValue = 0; GroupValue < KAFFINITY_EX_INITIALIZED_GROUPS; GroupValue++)
+                    AffinityEx2AliasExpected.Affinity.Bitmap[GroupValue] = AffinityEx2ResultExpected.Affinity.Bitmap[GroupValue];
+                LogicalResult = SubtractAffinityEx((PKAFFINITY_EX)&AffinityEx2Buffer.Affinity, (PKAFFINITY_EX)&AffinityEx2Buffer2.Affinity, (PKAFFINITY_EX)&AffinityEx2Buffer2.Affinity);
+                ok_eq_ulong(LogicalResult, ExpectedLogical);
+                ok_eq_size(RtlCompareMemory(&AffinityEx2Buffer, &AffinityEx2Source, sizeof(AffinityEx2Buffer)), sizeof(AffinityEx2Buffer));
+                ok_eq_size(RtlCompareMemory(&AffinityEx2Buffer2, &AffinityEx2AliasExpected, sizeof(AffinityEx2Buffer2)), sizeof(AffinityEx2Buffer2));
+
+                if (CountIndex == CountIndex2)
+                {
+                    AffinityEx2Buffer = AffinityEx2Source;
+                    AffinityEx2AliasExpected = AffinityEx2Source;
+                    AffinityEx2AliasExpected.Affinity.Count = ResultCount;
+                    AffinityEx2AliasExpected.Affinity.Size = KAFFINITY_EX_INITIALIZED_GROUPS;
+                    AffinityEx2AliasExpected.Affinity.Reserved = 0;
+                    for (GroupValue = 0; GroupValue < KAFFINITY_EX_INITIALIZED_GROUPS; GroupValue++)
+                        AffinityEx2AliasExpected.Affinity.Bitmap[GroupValue] = 0;
+                    LogicalResult = SubtractAffinityEx((PKAFFINITY_EX)&AffinityEx2Buffer.Affinity, (PKAFFINITY_EX)&AffinityEx2Buffer.Affinity, (PKAFFINITY_EX)&AffinityEx2Buffer.Affinity);
+                    ok_eq_ulong(LogicalResult, FALSE);
+                    ok_eq_size(RtlCompareMemory(&AffinityEx2Buffer, &AffinityEx2AliasExpected, sizeof(AffinityEx2Buffer)), sizeof(AffinityEx2Buffer));
+                }
+            }
+        }
+    }
+
+    for (CountIndex = 0; CountIndex < RTL_NUMBER_OF(SubtractAffinityExhaustivePairs); CountIndex++)
+    {
+        AffinityCount1 = SubtractAffinityExhaustivePairs[CountIndex][0];
+        AffinityCount2 = SubtractAffinityExhaustivePairs[CountIndex][1];
+        for (PatternIndex = 0; PatternIndex <= MAXUSHORT; PatternIndex++)
+        {
+            RtlFillMemory(&AffinityEx2Buffer, sizeof(AffinityEx2Buffer), (UCHAR)(CountIndex ^ PatternIndex));
+            AffinityEx2Buffer.Affinity.Count = AffinityCount1;
+            AffinityEx2Buffer.Affinity.Size = (USHORT)(0xA55A ^ PatternIndex);
+            AffinityEx2Buffer.Affinity.Reserved = 0xC3D2E1F0UL ^ PatternIndex;
+            RtlFillMemory(&AffinityEx2Buffer2, sizeof(AffinityEx2Buffer2), (UCHAR)(CountIndex ^ PatternIndex ^ 0x5A));
+            AffinityEx2Buffer2.Affinity.Count = AffinityCount2;
+            AffinityEx2Buffer2.Affinity.Size = (USHORT)(0x5AA5 ^ PatternIndex);
+            AffinityEx2Buffer2.Affinity.Reserved = 0x0F1E2D3CUL ^ PatternIndex;
+            for (GroupValue = 0; GroupValue < KMT_AFFINITY_EX2_GROUPS; GroupValue++)
+            {
+                Pattern = (USHORT)(PatternIndex + GroupValue * 0x9E37U + CountIndex * 0x31U);
+                Combination = (KAFFINITY)Pattern;
+                Combination |= (KAFFINITY)(USHORT)(Pattern ^ MAXUSHORT) << 16;
+                Combination |= (KAFFINITY)(USHORT)(Pattern * 0x9E37U) << 32;
+                Combination |= (KAFFINITY)(USHORT)((Pattern << 1) | (Pattern >> 15)) << 48;
+                AffinityEx2Buffer.Affinity.Bitmap[GroupValue] = Combination;
+                Pattern = (USHORT)(PatternIndex * 0xB529U + GroupValue * 0x68E3U + CountIndex * 0x55U);
+                RemainingAffinity = (KAFFINITY)(USHORT)(Pattern ^ 0xA5A5U);
+                RemainingAffinity |= (KAFFINITY)(USHORT)(Pattern * 0x7F4BU) << 16;
+                RemainingAffinity |= (KAFFINITY)(USHORT)((Pattern << 3) | (Pattern >> 13)) << 32;
+                RemainingAffinity |= (KAFFINITY)(USHORT)(Pattern ^ MAXUSHORT) << 48;
+                AffinityEx2Buffer2.Affinity.Bitmap[GroupValue] = RemainingAffinity;
+            }
+            AffinityEx2Source = AffinityEx2Buffer;
+            AffinityEx2Source2 = AffinityEx2Buffer2;
+            RtlFillMemory(&AffinityEx2Result, sizeof(AffinityEx2Result), (UCHAR)(0xA5 ^ CountIndex ^ PatternIndex));
+            AffinityEx2ResultExpected = AffinityEx2Result;
+            ResultCount = min(AffinityCount1, KAFFINITY_EX_INITIALIZED_GROUPS);
+            AffinityEx2ResultExpected.Affinity.Count = ResultCount;
+            AffinityEx2ResultExpected.Affinity.Size = KAFFINITY_EX_INITIALIZED_GROUPS;
+            AffinityEx2ResultExpected.Affinity.Reserved = 0;
+            ExpectedLogical = FALSE;
+            for (GroupValue = 0; GroupValue < KAFFINITY_EX_INITIALIZED_GROUPS; GroupValue++)
+            {
+                ExpectedMask = 0;
+                if (GroupValue < ResultCount)
+                {
+                    ExpectedMask = AffinityEx2Buffer.Affinity.Bitmap[GroupValue];
+                    if (GroupValue < AffinityCount2)
+                        ExpectedMask &= ~AffinityEx2Buffer2.Affinity.Bitmap[GroupValue];
+                }
+                AffinityEx2ResultExpected.Affinity.Bitmap[GroupValue] = ExpectedMask;
+                if (ExpectedMask != 0)
+                    ExpectedLogical = TRUE;
+            }
+            LogicalResult = SubtractAffinityEx((PKAFFINITY_EX)&AffinityEx2Buffer.Affinity, (PKAFFINITY_EX)&AffinityEx2Buffer2.Affinity, (PKAFFINITY_EX)&AffinityEx2Result.Affinity);
+            ok_eq_ulong(LogicalResult, ExpectedLogical);
+            ok_eq_size(RtlCompareMemory(&AffinityEx2Buffer, &AffinityEx2Source, sizeof(AffinityEx2Buffer)), sizeof(AffinityEx2Buffer));
+            ok_eq_size(RtlCompareMemory(&AffinityEx2Buffer2, &AffinityEx2Source2, sizeof(AffinityEx2Buffer2)), sizeof(AffinityEx2Buffer2));
+            ok_eq_size(RtlCompareMemory(&AffinityEx2Result, &AffinityEx2ResultExpected, sizeof(AffinityEx2Result)), sizeof(AffinityEx2Result));
+        }
+    }
+
+    for (CountIndex = 0; CountIndex <= KMT_AFFINITY_EX2_GROUPS; CountIndex++)
+    {
+        for (CountIndex2 = 0; CountIndex2 <= KMT_AFFINITY_EX2_GROUPS; CountIndex2++)
+        {
+            for (ProbeGroup = 0; ProbeGroup < KMT_AFFINITY_EX2_GROUPS; ProbeGroup++)
+            {
+                RtlFillMemory(&AffinityEx2Buffer, sizeof(AffinityEx2Buffer), (UCHAR)(CountIndex ^ ProbeGroup));
+                AffinityEx2Buffer.Affinity.Count = (USHORT)CountIndex;
+                AffinityEx2Buffer.Affinity.Size = (USHORT)(0xA55A ^ ProbeGroup);
+                AffinityEx2Buffer.Affinity.Reserved = 0xC3D2E1F0UL ^ ProbeGroup;
+                RtlZeroMemory(AffinityEx2Buffer.Affinity.Bitmap, sizeof(AffinityEx2Buffer.Affinity.Bitmap));
+                RtlFillMemory(&AffinityEx2Buffer2, sizeof(AffinityEx2Buffer2), (UCHAR)(CountIndex2 ^ ProbeGroup ^ 0x5A));
+                AffinityEx2Buffer2.Affinity.Count = (USHORT)CountIndex2;
+                AffinityEx2Buffer2.Affinity.Size = (USHORT)(0x5AA5 ^ ProbeGroup);
+                AffinityEx2Buffer2.Affinity.Reserved = 0x0F1E2D3CUL ^ ProbeGroup;
+                RtlZeroMemory(AffinityEx2Buffer2.Affinity.Bitmap, sizeof(AffinityEx2Buffer2.Affinity.Bitmap));
+                ExpectedMask = EnumerationMasks[1 + ((CountIndex + CountIndex2 + ProbeGroup) % (RTL_NUMBER_OF(EnumerationMasks) - 1))];
+                AffinityEx2Buffer.Affinity.Bitmap[ProbeGroup] = ExpectedMask;
+                if ((CountIndex ^ CountIndex2 ^ ProbeGroup) & 1)
+                    AffinityEx2Buffer2.Affinity.Bitmap[ProbeGroup] = ExpectedMask;
+                else
+                    AffinityEx2Buffer2.Affinity.Bitmap[ProbeGroup] = ~ExpectedMask;
+                AffinityEx2Source = AffinityEx2Buffer;
+                AffinityEx2Source2 = AffinityEx2Buffer2;
+                if (ProbeGroup < CountIndex)
+                {
+                    if (ProbeGroup < CountIndex2)
+                        ExpectedMask &= ~AffinityEx2Buffer2.Affinity.Bitmap[ProbeGroup];
+                    ExpectedLogical = ExpectedMask != 0;
+                }
+                else
+                {
+                    ExpectedLogical = FALSE;
+                }
+                LogicalResult = SubtractAffinityEx((PKAFFINITY_EX)&AffinityEx2Buffer.Affinity, (PKAFFINITY_EX)&AffinityEx2Buffer2.Affinity, NULL);
+                ok_eq_ulong(LogicalResult, ExpectedLogical);
+                ok_eq_size(RtlCompareMemory(&AffinityEx2Buffer, &AffinityEx2Source, sizeof(AffinityEx2Buffer)), sizeof(AffinityEx2Buffer));
+                ok_eq_size(RtlCompareMemory(&AffinityEx2Buffer2, &AffinityEx2Source2, sizeof(AffinityEx2Buffer2)), sizeof(AffinityEx2Buffer2));
+            }
         }
     }
 
