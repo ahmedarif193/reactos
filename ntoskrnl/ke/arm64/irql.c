@@ -203,3 +203,18 @@ KeRaiseIrql(
 {
     *OldIrql = KfRaiseIrql(NewIrql);
 }
+
+KIRQL
+NTAPI
+KeGetEffectiveIrql(VOID)
+{
+    ULONG64 Daif;
+
+    __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
+    if (Daif & ARM64_PSTATE_IRQ_MASK)
+    {
+        return HIGH_LEVEL;
+    }
+
+    return KeGetPcr()->CurrentIrql;
+}

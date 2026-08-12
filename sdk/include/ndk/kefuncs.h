@@ -33,6 +33,11 @@ extern "C"
 
 #ifndef NTOS_MODE_USER
 
+NTKERNELAPI
+KIRQL
+NTAPI
+KeGetEffectiveIrql(VOID);
+
 //
 // Affinity helpers
 //
