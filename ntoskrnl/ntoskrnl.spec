@@ -2555,7 +2555,7 @@
 @ stub -arch=arm64 KeHwPolicyLocateResource
 @ stdcall -arch=arm64 KeInitializeAffinityEx(ptr)
 @ stdcall -arch=x86_64,arm64 KeInitializeAffinityEx2(ptr long)
-@ stub -arch=arm64 KeInitializeEnumerationContext
+@ stdcall -arch=x86_64,arm64 KeInitializeEnumerationContext(ptr ptr)
 @ stub -arch=arm64 KeInitializeEnumerationContextFromAffinity
 @ stub -arch=arm64 KeInitializeEnumerationContextFromGroup
 @ stub -arch=arm64 KeInitializeSecondaryInterruptServices

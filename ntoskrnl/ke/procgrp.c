@@ -151,6 +151,20 @@ KeInitializeAffinityEx2(
  */
 VOID
 NTAPI
+KeInitializeEnumerationContext(
+    _Out_ PKAFFINITY_ENUMERATION_CONTEXT Context,
+    _In_ PKAFFINITY_EX Affinity)
+{
+    Context->Affinity = Affinity;
+    Context->CurrentAffinity = Affinity->Bitmap[0];
+    Context->CurrentGroup = 0;
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
 KeReinitializeAffinityEx(
     _Inout_ PKAFFINITY_EX Affinity)
 {
