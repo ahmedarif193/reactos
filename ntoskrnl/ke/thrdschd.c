@@ -602,6 +602,21 @@ KiSelectNextProcessor(
     ASSERT(PreferredSet != 0);
     *IdleRequest = 0;
 
+#ifdef _M_ARM64
+    /* Favor an unloaded local processor without self-placing a running waiter. */
+    Processor = KeGetCurrentProcessorNumber();
+    Prcb = KeGetCurrentPrcb();
+    if ((Thread != Prcb->CurrentThread) &&
+        (PreferredSet & AFFINITY_MASK(Processor)) &&
+        (Prcb->NextThread == NULL) &&
+        (Prcb->ReadySummary == 0) &&
+        (Prcb->CurrentThread != NULL) &&
+        (Thread->Priority >= Prcb->CurrentThread->Priority))
+    {
+        return Processor;
+    }
+#endif
+
     /* Claim an allowed idle processor atomically. */
     for (;;)
     {
