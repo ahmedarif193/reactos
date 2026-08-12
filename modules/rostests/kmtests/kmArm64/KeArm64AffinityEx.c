@@ -93,6 +93,7 @@ typedef VOID (NTAPI *PKMT_KE_INITIALIZE_AFFINITY_EX2)(_Out_ PKAFFINITY_EX Affini
 typedef VOID (NTAPI *PKMT_KE_INITIALIZE_ENUMERATION_CONTEXT)(_Out_ PKAFFINITY_ENUMERATION_CONTEXT Context, _In_ PKAFFINITY_EX Affinity);
 typedef VOID (NTAPI *PKMT_KE_INITIALIZE_ENUMERATION_CONTEXT_FROM_AFFINITY)(_Out_ PKAFFINITY_ENUMERATION_CONTEXT Context, _In_ USHORT Group, _In_ KAFFINITY Affinity);
 typedef VOID (NTAPI *PKMT_KE_INITIALIZE_ENUMERATION_CONTEXT_FROM_GROUP)(_Out_ PKAFFINITY_ENUMERATION_CONTEXT Context, _In_ PGROUP_AFFINITY GroupAffinity);
+typedef LOGICAL (NTAPI *PKMT_KE_INTERLOCKED_SET_PROCESSOR_AFFINITY_EX)(_Inout_ PKAFFINITY_EX Affinity, _In_ ULONG ProcessorIndex);
 typedef SIZE_T (NTAPI *PKMT_KE_SIZE_OF_AFFINITY_EX)(_In_ USHORT Count);
 typedef ULONG (NTAPI *PKMT_KE_GET_PROCESSOR_INDEX_FROM_NUMBER)(_In_ PPROCESSOR_NUMBER ProcessorNumber);
 typedef NTSTATUS (NTAPI *PKMT_KE_GET_PROCESSOR_NUMBER_FROM_INDEX)(_In_ ULONG ProcessorIndex, _Out_ PPROCESSOR_NUMBER ProcessorNumber);
@@ -106,6 +107,13 @@ typedef VOID (NTAPI *PKMT_KE_PROCESSOR_GROUP_AFFINITY)(_Out_ PGROUP_AFFINITY Gro
 typedef VOID (NTAPI *PKMT_KE_REMOVE_PROCESSOR_GROUP_AFFINITY)(_Inout_ PGROUP_AFFINITY GroupAffinity, _In_ ULONG ProcessorIndex);
 typedef LOGICAL (NTAPI *PKMT_KE_SUBTRACT_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2, _Out_opt_ PKAFFINITY_EX Result);
 typedef LOGICAL (NTAPI *PKMT_KE_SUBTRACT_AFFINITY_EX2)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2, _Inout_opt_ PKAFFINITY_EX Result);
+
+typedef struct _KMT_INTERLOCKED_SET_AFFINITY_CONTEXT
+{
+    PKMT_KE_INTERLOCKED_SET_PROCESSOR_AFFINITY_EX SetProcessorAffinityEx;
+    PKAFFINITY_EX Affinity;
+    volatile LONG TrueCount;
+} KMT_INTERLOCKED_SET_AFFINITY_CONTEXT, *PKMT_INTERLOCKED_SET_AFFINITY_CONTEXT;
 
 static VOID
 KmtInitializeOrAffinityEx2Inputs(
@@ -750,6 +758,146 @@ KmtTestSubtractAffinityEx2(
     ok_eq_size(RtlCompareMemory(&Buffer1, &Source1, sizeof(Buffer1)), sizeof(Buffer1));
     ok_eq_size(RtlCompareMemory(&Buffer2, &Source2, sizeof(Buffer2)), sizeof(Buffer2));
 }
+
+static ULONG_PTR
+NTAPI
+KmtInterlockedSetProcessorAffinityExIpiWorker(
+    _In_ ULONG_PTR Argument)
+{
+    PKMT_INTERLOCKED_SET_AFFINITY_CONTEXT Context = (PKMT_INTERLOCKED_SET_AFFINITY_CONTEXT)Argument;
+
+    if (Context->SetProcessorAffinityEx(Context->Affinity, KeGetCurrentProcessorNumberEx(NULL)))
+        InterlockedIncrement(&Context->TrueCount);
+
+    return 0;
+}
+
+static VOID
+KmtTestInterlockedSetProcessorAffinityEx(
+    _In_ PKMT_KE_INTERLOCKED_SET_PROCESSOR_AFFINITY_EX SetProcessorAffinityEx,
+    _In_ PKMT_KE_GET_PROCESSOR_NUMBER_FROM_INDEX GetProcessorNumberFromIndex)
+{
+    KMT_AFFINITY_EX2_BUFFER Buffer;
+    KMT_AFFINITY_EX2_BUFFER Expected;
+    KMT_INTERLOCKED_SET_AFFINITY_CONTEXT Context;
+    PROCESSOR_NUMBER ProcessorNumber;
+    KAFFINITY ProcessorMask;
+    LOGICAL ExpectedLogical;
+    LOGICAL LogicalResult;
+    NTSTATUS Status;
+    ULONG ActiveCount;
+    ULONG CountIndex;
+    ULONG GroupNumber;
+    ULONG PatternIndex;
+    ULONG ProcessorIndex;
+    ULONG Round;
+    ULONG Seed;
+    ULONG SizeIndex;
+    ULONG_PTR IpiResult;
+    static const USHORT Counts[] =
+    {
+        0,
+        1,
+        2,
+        KAFFINITY_EX_INITIALIZED_GROUPS - 1,
+        KAFFINITY_EX_INITIALIZED_GROUPS,
+        KAFFINITY_EX_INITIALIZED_GROUPS + 1,
+        KMT_AFFINITY_EX2_GROUPS,
+        MAXUSHORT
+    };
+    static const USHORT Sizes[] =
+    {
+        0,
+        1,
+        2,
+        3,
+        KAFFINITY_EX_INITIALIZED_GROUPS - 1,
+        KAFFINITY_EX_INITIALIZED_GROUPS,
+        KAFFINITY_EX_INITIALIZED_GROUPS + 1,
+        KAFFINITY_EX_STATIC_GROUPS - 1,
+        KAFFINITY_EX_STATIC_GROUPS,
+        KMT_AFFINITY_EX2_GROUPS - 1,
+        KMT_AFFINITY_EX2_GROUPS,
+        MAXUSHORT
+    };
+
+    ActiveCount = KeQueryActiveProcessorCount(NULL);
+    ok(ActiveCount != 0, "No active processors reported\n");
+
+    for (ProcessorIndex = 0; ProcessorIndex < ActiveCount; ProcessorIndex++)
+    {
+        Status = GetProcessorNumberFromIndex(ProcessorIndex, &ProcessorNumber);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        if (!NT_SUCCESS(Status) || ProcessorNumber.Group >= KMT_AFFINITY_EX2_GROUPS)
+            continue;
+
+        ProcessorMask = (KAFFINITY)1 << ProcessorNumber.Number;
+        for (SizeIndex = 0; SizeIndex < RTL_NUMBER_OF(Sizes); SizeIndex++)
+        {
+            for (CountIndex = 0; CountIndex < RTL_NUMBER_OF(Counts); CountIndex++)
+            {
+                for (PatternIndex = 0; PatternIndex < 0x100; PatternIndex++)
+                {
+                    Seed = (ProcessorIndex << 24) ^ (SizeIndex << 16) ^ (CountIndex << 8) ^ PatternIndex;
+                    RtlFillMemory(&Buffer, sizeof(Buffer), (UCHAR)(0xA5 ^ Seed));
+                    Buffer.Affinity.Count = Counts[CountIndex];
+                    Buffer.Affinity.Size = Sizes[SizeIndex];
+                    Buffer.Affinity.Reserved = 0xC3D2E1F0UL ^ Seed;
+                    for (GroupNumber = 0; GroupNumber < KMT_AFFINITY_EX2_GROUPS; GroupNumber++)
+                        Buffer.Affinity.Bitmap[GroupNumber] = ((KAFFINITY)(Seed + GroupNumber * 0x9E3779B9UL) << 32) | (ULONG)(~Seed + GroupNumber * 0x7F4A7C15UL);
+
+                    Expected = Buffer;
+                    ExpectedLogical = FALSE;
+                    if (ProcessorNumber.Group < Buffer.Affinity.Size)
+                    {
+                        ExpectedLogical = (Expected.Affinity.Bitmap[ProcessorNumber.Group] & ProcessorMask) != 0;
+                        Expected.Affinity.Bitmap[ProcessorNumber.Group] |= ProcessorMask;
+                    }
+
+                    LogicalResult = SetProcessorAffinityEx((PKAFFINITY_EX)&Buffer.Affinity, ProcessorIndex);
+                    ok_eq_ulong(LogicalResult, ExpectedLogical);
+                    ok_eq_size(RtlCompareMemory(&Buffer, &Expected, sizeof(Buffer)), sizeof(Buffer));
+
+                    LogicalResult = SetProcessorAffinityEx((PKAFFINITY_EX)&Buffer.Affinity, ProcessorIndex);
+                    ok_eq_ulong(LogicalResult, ProcessorNumber.Group < Buffer.Affinity.Size);
+                    ok_eq_size(RtlCompareMemory(&Buffer, &Expected, sizeof(Buffer)), sizeof(Buffer));
+                }
+            }
+        }
+    }
+
+    RtlFillMemory(&Buffer, sizeof(Buffer), 0xA5);
+    Buffer.Affinity.Count = MAXUSHORT;
+    Buffer.Affinity.Size = KMT_AFFINITY_EX2_GROUPS;
+    Buffer.Affinity.Reserved = 0xC3D2E1F0UL;
+    RtlZeroMemory(Buffer.Affinity.Bitmap, sizeof(Buffer.Affinity.Bitmap));
+    Expected = Buffer;
+    for (ProcessorIndex = 0; ProcessorIndex < ActiveCount; ProcessorIndex++)
+    {
+        Status = GetProcessorNumberFromIndex(ProcessorIndex, &ProcessorNumber);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        if (NT_SUCCESS(Status) && ProcessorNumber.Group < KMT_AFFINITY_EX2_GROUPS)
+            Expected.Affinity.Bitmap[ProcessorNumber.Group] |= (KAFFINITY)1 << ProcessorNumber.Number;
+    }
+
+    Context.SetProcessorAffinityEx = SetProcessorAffinityEx;
+    Context.Affinity = (PKAFFINITY_EX)&Buffer.Affinity;
+    for (Round = 0; Round < 1024; Round++)
+    {
+        RtlZeroMemory(Buffer.Affinity.Bitmap, sizeof(Buffer.Affinity.Bitmap));
+        InterlockedExchange(&Context.TrueCount, 0);
+        IpiResult = KeIpiGenericCall(KmtInterlockedSetProcessorAffinityExIpiWorker, (ULONG_PTR)&Context);
+        ok_eq_ulongptr(IpiResult, 0);
+        ok_eq_long(Context.TrueCount, 0);
+        ok_eq_size(RtlCompareMemory(&Buffer, &Expected, sizeof(Buffer)), sizeof(Buffer));
+
+        InterlockedExchange(&Context.TrueCount, 0);
+        IpiResult = KeIpiGenericCall(KmtInterlockedSetProcessorAffinityExIpiWorker, (ULONG_PTR)&Context);
+        ok_eq_ulongptr(IpiResult, 0);
+        ok_eq_long(Context.TrueCount, (LONG)ActiveCount);
+        ok_eq_size(RtlCompareMemory(&Buffer, &Expected, sizeof(Buffer)), sizeof(Buffer));
+    }
+}
 #endif
 
 START_TEST(KeArm64AffinityEx)
@@ -808,6 +956,7 @@ START_TEST(KeArm64AffinityEx)
     PKMT_KE_INITIALIZE_ENUMERATION_CONTEXT InitializeEnumerationContext;
     PKMT_KE_INITIALIZE_ENUMERATION_CONTEXT_FROM_AFFINITY InitializeEnumerationContextFromAffinity;
     PKMT_KE_INITIALIZE_ENUMERATION_CONTEXT_FROM_GROUP InitializeEnumerationContextFromGroup;
+    PKMT_KE_INTERLOCKED_SET_PROCESSOR_AFFINITY_EX InterlockedSetProcessorAffinityEx;
     PKMT_KE_GET_PROCESSOR_INDEX_FROM_NUMBER GetProcessorIndexFromNumber;
     PKMT_KE_GET_PROCESSOR_NUMBER_FROM_INDEX GetProcessorNumberFromIndex;
     PKMT_KE_IS_EQUAL_AFFINITY_EX IsEqualAffinityEx;
@@ -2473,6 +2622,15 @@ START_TEST(KeArm64AffinityEx)
         return;
     }
     KmtTestSubtractAffinityEx2(SubtractAffinityEx2);
+
+    RtlInitUnicodeString(&Name, L"KeInterlockedSetProcessorAffinityEx");
+    InterlockedSetProcessorAffinityEx = (PKMT_KE_INTERLOCKED_SET_PROCESSOR_AFFINITY_EX)MmGetSystemRoutineAddress(&Name);
+    if (InterlockedSetProcessorAffinityEx == NULL)
+    {
+        skip(FALSE, "KeInterlockedSetProcessorAffinityEx is not exported\n");
+        return;
+    }
+    KmtTestInterlockedSetProcessorAffinityEx(InterlockedSetProcessorAffinityEx, GetProcessorNumberFromIndex);
 
     RtlInitUnicodeString(&Name, L"KeRemoveProcessorGroupAffinity");
     RemoveProcessorGroupAffinity = (PKMT_KE_REMOVE_PROCESSOR_GROUP_AFFINITY)MmGetSystemRoutineAddress(&Name);
