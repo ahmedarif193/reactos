@@ -93,6 +93,81 @@ static VOID Arm64TargetedDpcCheck(VOID)
     }
 }
 
+static VOID Arm64DpcTargetEncodingCheck(VOID)
+{
+    KDPC Dpc;
+    PROCESSOR_NUMBER ProcessorNumber;
+    NTSTATUS Status;
+    KIRQL OldIrql;
+    ULONG Cpu;
+    BOOLEAN Inserted;
+    BOOLEAN Removed;
+    USHORT NumberAfterSet;
+    USHORT NumberAfterSetEx;
+
+    KeInitializeDpc(&Dpc, Arm64TargetDpcRoutine, NULL);
+    for (Cpu = 0; Cpu < KeNumberProcessors; Cpu++)
+    {
+        KeSetTargetProcessorDpc(&Dpc, (CCHAR)Cpu);
+        ok_eq_uint(Dpc.Number, 0x800 + Cpu);
+
+        KeInitializeDpc(&Dpc, Arm64TargetDpcRoutine, NULL);
+        ProcessorNumber.Group = 0;
+        ProcessorNumber.Number = (UCHAR)Cpu;
+        ProcessorNumber.Reserved = 0;
+        Status = KeSetTargetProcessorDpcEx(&Dpc, &ProcessorNumber);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        ok_eq_uint(Dpc.Number, 0x800 + Cpu);
+        KeInitializeDpc(&Dpc, Arm64TargetDpcRoutine, NULL);
+    }
+
+    KeSetTargetProcessorDpc(&Dpc, (CCHAR)-1);
+    ok_eq_uint(Dpc.Number, 0);
+    KeSetTargetProcessorDpc(&Dpc, (CCHAR)KeNumberProcessors);
+    ok_eq_uint(Dpc.Number, 0);
+
+    ProcessorNumber.Group = 1;
+    ProcessorNumber.Number = 0;
+    ProcessorNumber.Reserved = 0;
+    Status = KeSetTargetProcessorDpcEx(&Dpc, &ProcessorNumber);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    ok_eq_uint(Dpc.Number, 0);
+
+    ProcessorNumber.Group = 0;
+    ProcessorNumber.Number = (UCHAR)KeNumberProcessors;
+    Status = KeSetTargetProcessorDpcEx(&Dpc, &ProcessorNumber);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    ok_eq_uint(Dpc.Number, 0);
+
+    if (KeNumberProcessors < 2)
+    {
+        skip(FALSE, "Single CPU -- skipping queued target preservation checks\n");
+        return;
+    }
+
+    KeSetSystemAffinityThread((KAFFINITY)1);
+    InterlockedExchange(&TargetDpcCpu, -1);
+    KeInitializeDpc(&Dpc, Arm64TargetDpcRoutine, NULL);
+    KeRaiseIrql(HIGH_LEVEL, &OldIrql);
+    Inserted = KeInsertQueueDpc(&Dpc, NULL, NULL);
+    KeSetTargetProcessorDpc(&Dpc, 1);
+    NumberAfterSet = Dpc.Number;
+    ProcessorNumber.Group = 0;
+    ProcessorNumber.Number = 1;
+    Status = KeSetTargetProcessorDpcEx(&Dpc, &ProcessorNumber);
+    NumberAfterSetEx = Dpc.Number;
+    Removed = KeRemoveQueueDpc(&Dpc);
+    KeLowerIrql(OldIrql);
+    KeRevertToUserAffinityThread();
+
+    ok_bool_true(Inserted, "queue DPC before target change");
+    ok_eq_uint(NumberAfterSet, 0);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_uint(NumberAfterSetEx, 0);
+    ok_bool_true(Removed, "remove queued DPC after target change");
+    ok_eq_long(TargetDpcCpu, -1);
+}
+
 static VOID Arm64RemoteSenderCheck(VOID)
 {
     ULONG LastCpu = KeNumberProcessors - 1;
@@ -130,6 +205,7 @@ START_TEST(KeArm64IpiBroadcast)
     dump_trace("[arm64][KeArm64IpiBroadcast] enter cpus=%lu\n", KeNumberProcessors);
     Arm64IpiBroadcastCheck();
     Arm64TargetedDpcCheck();
+    Arm64DpcTargetEncodingCheck();
     Arm64RemoteSenderCheck();
     dump_trace("[arm64][KeArm64IpiBroadcast] done\n");
 #endif
