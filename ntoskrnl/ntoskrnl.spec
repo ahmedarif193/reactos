@@ -2557,7 +2557,7 @@
 @ stdcall -arch=x86_64,arm64 KeInitializeAffinityEx2(ptr long)
 @ stdcall -arch=x86_64,arm64 KeInitializeEnumerationContext(ptr ptr)
 @ stdcall -arch=x86_64,arm64 KeInitializeEnumerationContextFromAffinity(ptr long int64)
-@ stub -arch=arm64 KeInitializeEnumerationContextFromGroup
+@ stdcall -arch=x86_64,arm64 KeInitializeEnumerationContextFromGroup(ptr ptr)
 @ stub -arch=arm64 KeInitializeSecondaryInterruptServices
 @ stub -arch=arm64 KeInitializeTimer2
 @ stub -arch=arm64 KeInitializeTriageDumpDataArray
