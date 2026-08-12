@@ -222,6 +222,13 @@ KeInterlockedSetProcessorAffinityEx(
 NTKERNELAPI
 LOGICAL
 NTAPI
+KeInterlockedClearProcessorAffinityEx(
+    _Inout_ PKAFFINITY_EX Affinity,
+    _In_ ULONG ProcessorIndex);
+
+NTKERNELAPI
+LOGICAL
+NTAPI
 KeIsEmptyAffinityEx(
     _In_ PKAFFINITY_EX Affinity);
 
