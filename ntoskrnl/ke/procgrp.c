@@ -667,6 +667,33 @@ KeComplementAffinityEx(
 /*
  * @implemented
  */
+VOID
+NTAPI
+KeComplementAffinityEx2(
+    _Inout_ PKAFFINITY_EX Result,
+    _In_ PKAFFINITY_EX Affinity)
+{
+    USHORT Size = Result->Size;
+    USHORT Count = Affinity->Count;
+    USHORT GroupNumber;
+
+    if (Count > Size)
+        Count = Size;
+
+    for (GroupNumber = 0; GroupNumber < Count; GroupNumber++)
+        Result->Bitmap[GroupNumber] = ~Affinity->Bitmap[GroupNumber];
+
+    for (; GroupNumber < Size; GroupNumber++)
+        Result->Bitmap[GroupNumber] = ~(KAFFINITY)0;
+
+    Result->Reserved = 0;
+    Result->Count = Size;
+    Result->Size = Size;
+}
+
+/*
+ * @implemented
+ */
 LOGICAL
 NTAPI
 KeSubtractAffinityEx(
