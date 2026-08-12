@@ -193,6 +193,13 @@ typedef struct _KAFFINITY_EX
     };
 } KAFFINITY_EX;
 
+typedef struct _KAFFINITY_ENUMERATION_CONTEXT
+{
+    PKAFFINITY_EX Affinity;
+    KAFFINITY CurrentAffinity;
+    USHORT CurrentGroup;
+} KAFFINITY_ENUMERATION_CONTEXT, *PKAFFINITY_ENUMERATION_CONTEXT;
+
 //
 // Number of dispatch codes supported by KINTERRUPT
 //
