@@ -26,6 +26,7 @@ list(APPEND SOURCE
     GetVolumeInformation.c
     InitOnce.c
     interlck.c
+    IoCompletion.c
     IsDBCSLeadByteEx.c
     JapaneseCalendar.c
     JobObject.c
