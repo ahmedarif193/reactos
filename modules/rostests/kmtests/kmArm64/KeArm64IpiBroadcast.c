@@ -14,12 +14,19 @@ VOID Test_KeArm64IpiBroadcast(VOID);
 
 static volatile LONG64 BroadcastMask;
 static volatile LONG BroadcastCount;
+static volatile LONG BroadcastIrqlMask;
+static volatile LONG64 BroadcastInterruptsEnabledMask;
 static KDPC TargetDpc;
 static volatile LONG TargetDpcCpu;
 
 static ULONG_PTR NTAPI Arm64BroadcastWorker(_In_ ULONG_PTR Argument)
 {
-    InterlockedOr64(&BroadcastMask, (LONG64)((KAFFINITY)1 << KeGetCurrentProcessorNumberEx(NULL)));
+    ULONG Processor = KeGetCurrentProcessorNumberEx(NULL);
+
+    InterlockedOr64(&BroadcastMask, (LONG64)((KAFFINITY)1 << Processor));
+    InterlockedOr(&BroadcastIrqlMask, 1L << KeGetCurrentIrql());
+    if (KmtAreInterruptsEnabled())
+        InterlockedOr64(&BroadcastInterruptsEnabledMask, (LONG64)((KAFFINITY)1 << Processor));
     InterlockedIncrement(&BroadcastCount);
     return Argument;
 }
@@ -43,18 +50,22 @@ static VOID Arm64IpiBroadcastCheck(VOID)
     KAFFINITY Active = KeQueryActiveProcessors();
     ULONG Round;
 
-    for (Round = 0; Round < 4; Round++)
+    for (Round = 0; Round < 256; Round++)
     {
         ULONG_PTR Result;
 
         InterlockedExchange64(&BroadcastMask, 0);
         InterlockedExchange(&BroadcastCount, 0);
+        InterlockedExchange(&BroadcastIrqlMask, 0);
+        InterlockedExchange64(&BroadcastInterruptsEnabledMask, 0);
 
         Result = KeIpiGenericCall(Arm64BroadcastWorker, 0x4242 + Round);
 
         ok_eq_ulongptr(Result, 0x4242 + Round);
         ok_eq_longlong((LONG64)BroadcastMask, (LONG64)Active);
         ok_eq_long(BroadcastCount, (LONG)KeNumberProcessors);
+        ok_eq_long(BroadcastIrqlMask, 1L << IPI_LEVEL);
+        ok_eq_longlong(BroadcastInterruptsEnabledMask, (LONG64)Active);
     }
 
     dump_trace("[arm64][KeArm64IpiBroadcast] mask=0x%I64x cpus=%lu\n",
@@ -97,10 +108,14 @@ static VOID Arm64RemoteSenderCheck(VOID)
 
     InterlockedExchange64(&BroadcastMask, 0);
     InterlockedExchange(&BroadcastCount, 0);
+    InterlockedExchange(&BroadcastIrqlMask, 0);
+    InterlockedExchange64(&BroadcastInterruptsEnabledMask, 0);
     KeIpiGenericCall(Arm64BroadcastWorker, 0);
 
     ok_eq_longlong((LONG64)BroadcastMask, (LONG64)KeQueryActiveProcessors());
     ok_eq_long(BroadcastCount, (LONG)KeNumberProcessors);
+    ok_eq_long(BroadcastIrqlMask, 1L << IPI_LEVEL);
+    ok_eq_longlong(BroadcastInterruptsEnabledMask, (LONG64)KeQueryActiveProcessors());
 
     KeRevertToUserAffinityThread();
 }
