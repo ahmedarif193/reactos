@@ -643,6 +643,32 @@ KeAndGroupAffinityEx(
  */
 VOID
 NTAPI
+KeComplementAffinityEx(
+    _Out_ PKAFFINITY_EX Result,
+    _In_ PKAFFINITY_EX Affinity)
+{
+    USHORT Count = Affinity->Count;
+    USHORT GroupNumber;
+
+    if (Count > KAFFINITY_EX_INITIALIZED_GROUPS)
+        Count = KAFFINITY_EX_INITIALIZED_GROUPS;
+
+    for (GroupNumber = 0; GroupNumber < Count; GroupNumber++)
+        Result->Bitmap[GroupNumber] = ~Affinity->Bitmap[GroupNumber];
+
+    for (; GroupNumber < KAFFINITY_EX_INITIALIZED_GROUPS; GroupNumber++)
+        Result->Bitmap[GroupNumber] = ~(KAFFINITY)0;
+
+    Result->Reserved = 0;
+    Result->Count = KAFFINITY_EX_INITIALIZED_GROUPS;
+    Result->Size = KAFFINITY_EX_INITIALIZED_GROUPS;
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
 KeCopyAffinityEx(
     _Out_ PKAFFINITY_EX Destination,
     _In_ PKAFFINITY_EX Source)
