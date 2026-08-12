@@ -615,6 +615,32 @@ KeAndAffinityEx(
 /*
  * @implemented
  */
+LOGICAL
+NTAPI
+KeAndGroupAffinityEx(
+    _In_ PKAFFINITY_EX Affinity,
+    _In_ PGROUP_AFFINITY GroupAffinity,
+    _Out_opt_ PGROUP_AFFINITY Result)
+{
+    KAFFINITY ProcessorMask = 0;
+    USHORT GroupNumber = GroupAffinity->Group;
+
+    if (GroupNumber < Affinity->Count)
+        ProcessorMask = Affinity->Bitmap[GroupNumber] & GroupAffinity->Mask;
+
+    if (Result != NULL)
+    {
+        RtlZeroMemory(Result, sizeof(*Result));
+        Result->Mask = ProcessorMask;
+        Result->Group = GroupNumber;
+    }
+
+    return ProcessorMask != 0;
+}
+
+/*
+ * @implemented
+ */
 VOID
 NTAPI
 KeCopyAffinityEx(

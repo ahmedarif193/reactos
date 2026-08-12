@@ -2524,7 +2524,7 @@
 @ stub -arch=arm64 KeAllocateProcessorProfileStructures
 @ stdcall -arch=arm64 KeAndAffinityEx(ptr ptr ptr)
 @ stub -arch=arm64 KeAndAffinityEx2
-@ stub -arch=arm64 KeAndGroupAffinityEx
+@ stdcall -arch=x86_64,arm64 KeAndGroupAffinityEx(ptr ptr ptr)
 @ stub -arch=arm64 KeCancelTimer2
 @ stdcall -arch=arm64 KeCheckProcessorAffinityEx(ptr long)
 @ stdcall -arch=x86_64,arm64 KeCheckProcessorGroupAffinity(ptr long)
