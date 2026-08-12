@@ -129,6 +129,13 @@ KeInitializeEnumerationContextFromGroup(
     _In_ PGROUP_AFFINITY GroupAffinity);
 
 NTKERNELAPI
+NTSTATUS
+NTAPI
+KeEnumerateNextProcessor(
+    _Out_ PULONG ProcessorIndex,
+    _Inout_ PKAFFINITY_ENUMERATION_CONTEXT Context);
+
+NTKERNELAPI
 VOID
 NTAPI
 KeReinitializeAffinityEx(

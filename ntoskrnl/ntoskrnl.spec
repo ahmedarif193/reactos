@@ -2539,7 +2539,7 @@
 @ stub -arch=arm64 KeCountSetBitsGroupAffinity
 @ stub -arch=arm64 KeDeregisterProcessorChangeCallback
 @ stub -arch=arm64 KeDispatchSecondaryInterrupt
-@ stub -arch=arm64 KeEnumerateNextProcessor
+@ stdcall -arch=x86_64,arm64 KeEnumerateNextProcessor(ptr ptr)
 @ stdcall -arch=x86_64,arm64 KeFindFirstSetLeftAffinityEx(ptr)
 @ stdcall -arch=x86_64,arm64 KeFindFirstSetLeftGroupAffinity(ptr)
 @ stdcall -arch=x86_64,arm64 KeFindFirstSetRightAffinityEx(ptr)
