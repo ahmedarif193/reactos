@@ -26,6 +26,12 @@
 
 #define KI_MAXIMUM_DPCS_PER_BATCH 32
 
+#if defined(_M_ARM64)
+#define KI_DPC_TARGET_PROCESSOR_OFFSET 0x800
+#else
+#define KI_DPC_TARGET_PROCESSOR_OFFSET MAXIMUM_PROCESSORS
+#endif
+
 ULONG KiMaximumDpcQueueDepth = 4;
 ULONG KiMinimumDpcRate = 3;
 ULONG KiAdjustDpcThreshold = 20;
@@ -217,8 +223,8 @@ KiTimerExpiration(IN PKDPC Dpc,
                      * then also insert it into the DPC queue for threaded delivery,
                      * instead of doing it here.
                      */
-                    if (((TimerDpc->Number >= MAXIMUM_PROCESSORS) &&
-                        ((TimerDpc->Number - MAXIMUM_PROCESSORS) != Prcb->Number)) ||
+                    if (((TimerDpc->Number >= KI_DPC_TARGET_PROCESSOR_OFFSET) &&
+                        ((TimerDpc->Number - KI_DPC_TARGET_PROCESSOR_OFFSET) != Prcb->Number)) ||
                         ((TimerDpc->Type == ThreadedDpcObject) && (Prcb->ThreadDpcEnable)))
                     {
                         /* Queue it */
@@ -419,8 +425,8 @@ KiTimerListExpire(IN PLIST_ENTRY ExpiredListHead,
              * then also insert it into the DPC queue for threaded delivery,
              * instead of doing it here.
              */
-            if (((TimerDpc->Number >= MAXIMUM_PROCESSORS) &&
-                ((TimerDpc->Number - MAXIMUM_PROCESSORS) != Prcb->Number)) ||
+            if (((TimerDpc->Number >= KI_DPC_TARGET_PROCESSOR_OFFSET) &&
+                ((TimerDpc->Number - KI_DPC_TARGET_PROCESSOR_OFFSET) != Prcb->Number)) ||
                 ((TimerDpc->Type == ThreadedDpcObject) && (Prcb->ThreadDpcEnable)))
             {
                 /* Queue it */
@@ -831,11 +837,11 @@ KeInsertQueueDpc(IN PKDPC Dpc,
     KeRaiseIrql(HIGH_LEVEL, &OldIrql);
     CurrentPrcb = KeGetCurrentPrcb();
 
-    /* Check if the DPC has more then the maximum number of CPUs */
-    if (Dpc->Number >= MAXIMUM_PROCESSORS)
+    /* Check if the DPC has an explicit processor target */
+    if (Dpc->Number >= KI_DPC_TARGET_PROCESSOR_OFFSET)
     {
-        /* Then substract the maximum and get that PRCB. */
-        Cpu = Dpc->Number - MAXIMUM_PROCESSORS;
+        /* Decode the explicit target and get that PRCB. */
+        Cpu = Dpc->Number - KI_DPC_TARGET_PROCESSOR_OFFSET;
         Prcb = KiProcessorBlock[Cpu];
     }
     else
@@ -1123,7 +1129,11 @@ KeSetTargetProcessorDpc(IN PKDPC Dpc,
 {
     /* Set a target CPU */
     ASSERT_DPC(Dpc);
-    Dpc->Number = Number + MAXIMUM_PROCESSORS;
+#if defined(_M_ARM64)
+    if ((Number < 0) || ((UCHAR)Number >= (UCHAR)KeNumberProcessors) || (Dpc->DpcData != NULL))
+        return;
+#endif
+    Dpc->Number = Number + KI_DPC_TARGET_PROCESSOR_OFFSET;
 }
 
 typedef struct _KI_GENERIC_DPC_BARRIER
