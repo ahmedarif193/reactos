@@ -2536,7 +2536,7 @@
 @ stdcall -arch=arm64 KeCopyAffinityEx(ptr ptr)
 @ stub -arch=arm64 KeCopyAffinityEx2
 @ stdcall -arch=arm64 KeCountSetBitsAffinityEx(ptr)
-@ stub -arch=arm64 KeCountSetBitsGroupAffinity
+@ stdcall -arch=x86_64,arm64 KeCountSetBitsGroupAffinity(ptr)
 @ stub -arch=arm64 KeDeregisterProcessorChangeCallback
 @ stub -arch=arm64 KeDispatchSecondaryInterrupt
 @ stdcall -arch=x86_64,arm64 KeEnumerateNextProcessor(ptr ptr)
