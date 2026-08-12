@@ -26,7 +26,18 @@ typedef struct _KMT_AFFINITY_EX2_BUFFER
     UCHAR GuardAfter[32];
 } KMT_AFFINITY_EX2_BUFFER;
 
+typedef struct _KMT_AFFINITY_ENUMERATION_CONTEXT_BUFFER
+{
+    UCHAR GuardBefore[32];
+    KAFFINITY_ENUMERATION_CONTEXT Context;
+    UCHAR GuardAfter[32];
+} KMT_AFFINITY_ENUMERATION_CONTEXT_BUFFER;
+
 C_ASSERT(FIELD_OFFSET(KMT_AFFINITY_EX2, Bitmap) == FIELD_OFFSET(KAFFINITY_EX, Bitmap));
+C_ASSERT(sizeof(KAFFINITY_ENUMERATION_CONTEXT) == 24);
+C_ASSERT(FIELD_OFFSET(KAFFINITY_ENUMERATION_CONTEXT, Affinity) == 0);
+C_ASSERT(FIELD_OFFSET(KAFFINITY_ENUMERATION_CONTEXT, CurrentAffinity) == 8);
+C_ASSERT(FIELD_OFFSET(KAFFINITY_ENUMERATION_CONTEXT, CurrentGroup) == 16);
 
 typedef LOGICAL (NTAPI *PKMT_KE_AND_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2, _Out_opt_ PKAFFINITY_EX Result);
 typedef VOID (NTAPI *PKMT_KE_COPY_AFFINITY_EX)(_Out_ PKAFFINITY_EX Destination, _In_ PKAFFINITY_EX Source);
@@ -36,6 +47,7 @@ typedef ULONG (NTAPI *PKMT_KE_FIND_FIRST_SET_RIGHT_AFFINITY_EX)(_In_ PKAFFINITY_
 typedef ULONG (NTAPI *PKMT_KE_FIND_FIRST_SET_RIGHT_GROUP_AFFINITY)(_In_ PGROUP_AFFINITY GroupAffinity);
 typedef NTSTATUS (NTAPI *PKMT_KE_FIRST_GROUP_AFFINITY_EX)(_Out_ PGROUP_AFFINITY GroupAffinity, _In_ PKAFFINITY_EX Affinity);
 typedef VOID (NTAPI *PKMT_KE_INITIALIZE_AFFINITY_EX2)(_Out_ PKAFFINITY_EX Affinity, _In_ USHORT Size);
+typedef VOID (NTAPI *PKMT_KE_INITIALIZE_ENUMERATION_CONTEXT)(_Out_ PKAFFINITY_ENUMERATION_CONTEXT Context, _In_ PKAFFINITY_EX Affinity);
 typedef SIZE_T (NTAPI *PKMT_KE_SIZE_OF_AFFINITY_EX)(_In_ USHORT Count);
 typedef ULONG (NTAPI *PKMT_KE_GET_PROCESSOR_INDEX_FROM_NUMBER)(_In_ PPROCESSOR_NUMBER ProcessorNumber);
 typedef NTSTATUS (NTAPI *PKMT_KE_GET_PROCESSOR_NUMBER_FROM_INDEX)(_In_ ULONG ProcessorIndex, _Out_ PPROCESSOR_NUMBER ProcessorNumber);
@@ -56,6 +68,8 @@ START_TEST(KeArm64AffinityEx)
     KAFFINITY_EX Source;
     KMT_AFFINITY_EX2_BUFFER AffinityEx2Buffer;
     KMT_AFFINITY_EX2_BUFFER AffinityEx2Source;
+    KMT_AFFINITY_ENUMERATION_CONTEXT_BUFFER EnumerationBuffer;
+    KMT_AFFINITY_ENUMERATION_CONTEXT_BUFFER EnumerationSource;
     ULONG ActiveCount;
     KAFFINITY Combination;
     KAFFINITY CombinationLimit;
@@ -74,6 +88,7 @@ START_TEST(KeArm64AffinityEx)
     PKMT_KE_FIND_FIRST_SET_RIGHT_GROUP_AFFINITY FindFirstSetRightGroupAffinity;
     PKMT_KE_FIRST_GROUP_AFFINITY_EX FirstGroupAffinityEx;
     PKMT_KE_INITIALIZE_AFFINITY_EX2 InitializeAffinityEx2;
+    PKMT_KE_INITIALIZE_ENUMERATION_CONTEXT InitializeEnumerationContext;
     PKMT_KE_GET_PROCESSOR_INDEX_FROM_NUMBER GetProcessorIndexFromNumber;
     PKMT_KE_GET_PROCESSOR_NUMBER_FROM_INDEX GetProcessorNumberFromIndex;
     PKMT_KE_IS_EQUAL_AFFINITY_EX IsEqualAffinityEx;
@@ -88,6 +103,18 @@ START_TEST(KeArm64AffinityEx)
     USHORT GroupNumber;
     USHORT OtherGroup;
     USHORT Size;
+    static const KAFFINITY EnumerationMasks[] =
+    {
+        0,
+        1,
+        (KAFFINITY)1 << 63,
+        ~(KAFFINITY)0,
+        (KAFFINITY)0x5555555555555555ULL,
+        (KAFFINITY)0xAAAAAAAAAAAAAAAAULL,
+        (KAFFINITY)0x0123456789ABCDEFULL,
+        (KAFFINITY)0xFEDCBA9876543210ULL
+    };
+    ULONG MaskIndex;
 
     ok_eq_size(sizeof(Affinity), (SIZE_T)264);
     ok_eq_size(FIELD_OFFSET(KAFFINITY_EX, Count), (SIZE_T)0);
@@ -126,6 +153,37 @@ START_TEST(KeArm64AffinityEx)
         for (GroupNumber = 0; GroupNumber < KMT_AFFINITY_EX2_GROUPS; GroupNumber++)
             ok_eq_ulonglong(AffinityEx2Buffer.Affinity.Bitmap[GroupNumber], GroupNumber < Size ? 0 : AffinityEx2Source.Affinity.Bitmap[GroupNumber]);
         ok_eq_size(RtlCompareMemory(AffinityEx2Buffer.GuardAfter, AffinityEx2Source.GuardAfter, sizeof(AffinityEx2Buffer.GuardAfter)), sizeof(AffinityEx2Buffer.GuardAfter));
+    }
+
+    RtlInitUnicodeString(&Name, L"KeInitializeEnumerationContext");
+    InitializeEnumerationContext = (PKMT_KE_INITIALIZE_ENUMERATION_CONTEXT)MmGetSystemRoutineAddress(&Name);
+    if (InitializeEnumerationContext == NULL)
+    {
+        skip(FALSE, "KeInitializeEnumerationContext is not exported\n");
+        return;
+    }
+
+    for (Size = 0; Size <= KMT_AFFINITY_EX2_GROUPS; Size++)
+    {
+        for (MaskIndex = 0; MaskIndex < RTL_NUMBER_OF(EnumerationMasks); MaskIndex++)
+        {
+            RtlFillMemory(&AffinityEx2Buffer, sizeof(AffinityEx2Buffer), 0x3C);
+            AffinityEx2Buffer.Affinity.Count = Size;
+            AffinityEx2Buffer.Affinity.Size = KMT_AFFINITY_EX2_GROUPS - Size;
+            AffinityEx2Buffer.Affinity.Reserved = 0x5AA55AA5;
+            AffinityEx2Buffer.Affinity.Bitmap[0] = EnumerationMasks[MaskIndex];
+            AffinityEx2Source = AffinityEx2Buffer;
+            RtlFillMemory(&EnumerationBuffer, sizeof(EnumerationBuffer), 0xA5);
+            EnumerationSource = EnumerationBuffer;
+            InitializeEnumerationContext(&EnumerationBuffer.Context, (PKAFFINITY_EX)&AffinityEx2Buffer.Affinity);
+            ok_eq_size(RtlCompareMemory(EnumerationBuffer.GuardBefore, EnumerationSource.GuardBefore, sizeof(EnumerationBuffer.GuardBefore)), sizeof(EnumerationBuffer.GuardBefore));
+            ok(EnumerationBuffer.Context.Affinity == (PKAFFINITY_EX)&AffinityEx2Buffer.Affinity, "context affinity %p, expected %p\n", EnumerationBuffer.Context.Affinity, &AffinityEx2Buffer.Affinity);
+            ok_eq_ulonglong(EnumerationBuffer.Context.CurrentAffinity, EnumerationMasks[MaskIndex]);
+            ok_eq_uint(EnumerationBuffer.Context.CurrentGroup, 0);
+            ok_eq_size(RtlCompareMemory((PUCHAR)&EnumerationBuffer.Context + FIELD_OFFSET(KAFFINITY_ENUMERATION_CONTEXT, CurrentGroup) + sizeof(EnumerationBuffer.Context.CurrentGroup), (PUCHAR)&EnumerationSource.Context + FIELD_OFFSET(KAFFINITY_ENUMERATION_CONTEXT, CurrentGroup) + sizeof(EnumerationSource.Context.CurrentGroup), sizeof(EnumerationBuffer.Context) - FIELD_OFFSET(KAFFINITY_ENUMERATION_CONTEXT, CurrentGroup) - sizeof(EnumerationBuffer.Context.CurrentGroup)), sizeof(EnumerationBuffer.Context) - FIELD_OFFSET(KAFFINITY_ENUMERATION_CONTEXT, CurrentGroup) - sizeof(EnumerationBuffer.Context.CurrentGroup));
+            ok_eq_size(RtlCompareMemory(EnumerationBuffer.GuardAfter, EnumerationSource.GuardAfter, sizeof(EnumerationBuffer.GuardAfter)), sizeof(EnumerationBuffer.GuardAfter));
+            ok_eq_size(RtlCompareMemory(&AffinityEx2Buffer, &AffinityEx2Source, sizeof(AffinityEx2Buffer)), sizeof(AffinityEx2Buffer));
+        }
     }
 
     KeAddGroupAffinityEx(&Affinity, 0, 3);
