@@ -83,6 +83,7 @@ KMT_TESTFUNC Test_KeArm64IpiBroadcast;
 KMT_TESTFUNC Test_KeArm64Irql;
 KMT_TESTFUNC Test_KeArm64LoaderCache;
 KMT_TESTFUNC Test_KeArm64PcrPrcb;
+KMT_TESTFUNC Test_KeArm64ProcessorChange;
 KMT_TESTFUNC Test_KeArm64Smp;
 KMT_TESTFUNC Test_KeArm64SmpChurn;
 KMT_TESTFUNC Test_KeArm64SpinLock;
@@ -257,6 +258,7 @@ const KMT_TEST TestList[] =
     { "KeArm64Irql",                        Test_KeArm64Irql },
     { "KeArm64LoaderCache",                 Test_KeArm64LoaderCache },
     { "KeArm64PcrPrcb",                     Test_KeArm64PcrPrcb },
+    { "KeArm64ProcessorChange",              Test_KeArm64ProcessorChange },
     { "KeArm64IpiBroadcast",                Test_KeArm64IpiBroadcast },
     { "KeArm64Smp",                         Test_KeArm64Smp },
     { "KeArm64SmpChurn",                    Test_KeArm64SmpChurn },

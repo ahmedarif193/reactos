@@ -2537,7 +2537,7 @@
 @ stdcall -arch=x86_64,arm64 KeCopyAffinityEx2(ptr ptr)
 @ stdcall -arch=arm64 KeCountSetBitsAffinityEx(ptr)
 @ stdcall -arch=x86_64,arm64 KeCountSetBitsGroupAffinity(ptr)
-@ stub -arch=arm64 KeDeregisterProcessorChangeCallback
+@ stdcall -arch=x86_64,arm64 KeDeregisterProcessorChangeCallback(ptr)
 @ stub -arch=arm64 KeDispatchSecondaryInterrupt
 @ stdcall -arch=x86_64,arm64 KeEnumerateNextProcessor(ptr ptr)
 @ stdcall -arch=x86_64,arm64 KeFindFirstSetLeftAffinityEx(ptr)
@@ -2601,7 +2601,7 @@
 @ stub -arch=arm64 KeRcuReadLock
 @ stub -arch=arm64 KeRcuReadUnlock
 @ stub -arch=arm64 KeRcuSynchronize
-@ stub -arch=arm64 KeRegisterProcessorChangeCallback
+@ stdcall -arch=x86_64,arm64 KeRegisterProcessorChangeCallback(ptr ptr long)
 @ stdcall -arch=arm64 KeReinitializeAffinityEx(ptr)
 @ stdcall -arch=arm64 KeRemoveGroupAffinityEx(ptr long int64)
 @ stdcall -arch=arm64 KeRemoveProcessorAffinityEx(ptr long)
