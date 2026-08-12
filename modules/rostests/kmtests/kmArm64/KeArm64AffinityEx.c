@@ -105,6 +105,7 @@ typedef LOGICAL (NTAPI *PKMT_KE_OR_AFFINITY_EX2)(_In_ PKAFFINITY_EX Affinity1, _
 typedef VOID (NTAPI *PKMT_KE_PROCESSOR_GROUP_AFFINITY)(_Out_ PGROUP_AFFINITY GroupAffinity, _In_ ULONG ProcessorIndex);
 typedef VOID (NTAPI *PKMT_KE_REMOVE_PROCESSOR_GROUP_AFFINITY)(_Inout_ PGROUP_AFFINITY GroupAffinity, _In_ ULONG ProcessorIndex);
 typedef LOGICAL (NTAPI *PKMT_KE_SUBTRACT_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2, _Out_opt_ PKAFFINITY_EX Result);
+typedef LOGICAL (NTAPI *PKMT_KE_SUBTRACT_AFFINITY_EX2)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2, _Inout_opt_ PKAFFINITY_EX Result);
 
 static VOID
 KmtInitializeOrAffinityEx2Inputs(
@@ -422,6 +423,333 @@ KmtTestOrAffinityEx2(
     ok_eq_size(RtlCompareMemory(&Buffer1, &Source1, sizeof(Buffer1)), sizeof(Buffer1));
     ok_eq_size(RtlCompareMemory(&Buffer2, &Source2, sizeof(Buffer2)), sizeof(Buffer2));
 }
+
+static VOID
+KmtInitializeSubtractAffinityEx2Inputs(
+    _Out_ PKMT_AFFINITY_EX2_BUFFER Buffer1,
+    _Out_ PKMT_AFFINITY_EX2_BUFFER Buffer2,
+    _In_ USHORT Count1,
+    _In_ USHORT Count2,
+    _In_ USHORT Size1,
+    _In_ USHORT Size2,
+    _In_ ULONG Seed)
+{
+    KAFFINITY Combination;
+    KAFFINITY Mask1;
+    KAFFINITY Mask2;
+    ULONG GroupNumber;
+    USHORT Pattern;
+
+    RtlFillMemory(Buffer1, sizeof(*Buffer1), (UCHAR)Seed);
+    RtlFillMemory(Buffer2, sizeof(*Buffer2), (UCHAR)(0x5A ^ Seed));
+    Buffer1->Affinity.Count = Count1;
+    Buffer1->Affinity.Size = Size1;
+    Buffer1->Affinity.Reserved = 0xC3D2E1F0UL ^ Seed;
+    Buffer2->Affinity.Count = Count2;
+    Buffer2->Affinity.Size = Size2;
+    Buffer2->Affinity.Reserved = 0x0F1E2D3CUL ^ Seed;
+
+    for (GroupNumber = 0; GroupNumber < KMT_AFFINITY_EX2_GROUPS; GroupNumber++)
+    {
+        Pattern = (USHORT)(Seed + GroupNumber * 0x9E37U);
+        Combination = (KAFFINITY)Pattern;
+        Combination |= (KAFFINITY)(USHORT)(Pattern ^ MAXUSHORT) << 16;
+        Combination |= (KAFFINITY)(USHORT)(Pattern * 0x9E37U) << 32;
+        Combination |= (KAFFINITY)(USHORT)((Pattern << 1) | (Pattern >> 15)) << 48;
+
+        if ((Seed & 3) == 0)
+        {
+            Mask1 = 0;
+            Mask2 = 0;
+        }
+        else if ((Seed & 3) == 1)
+        {
+            Mask1 = Combination;
+            Mask2 = Combination;
+        }
+        else if ((Seed & 3) == 2)
+        {
+            Mask1 = Combination;
+            Mask2 = ~Combination;
+        }
+        else
+        {
+            Mask1 = (KAFFINITY)1 << ((Seed + GroupNumber) % (sizeof(KAFFINITY) * 8));
+            Mask2 = (GroupNumber & 1) ? Mask1 : (KAFFINITY)1 << ((Seed * 7 + GroupNumber * 13) % (sizeof(KAFFINITY) * 8));
+        }
+
+        Buffer1->Affinity.Bitmap[GroupNumber] = Mask1;
+        Buffer2->Affinity.Bitmap[GroupNumber] = Mask2;
+    }
+}
+
+static LOGICAL
+KmtBuildSubtractAffinityEx2Expected(
+    _Inout_ PKMT_AFFINITY_EX2_BUFFER Expected,
+    _In_ PKMT_AFFINITY_EX2_BUFFER Source1,
+    _In_ PKMT_AFFINITY_EX2_BUFFER Source2,
+    _In_ USHORT ResultSize)
+{
+    KAFFINITY ProcessorMask;
+    LOGICAL NonEmpty = FALSE;
+    ULONG GroupNumber;
+    USHORT ResultCount;
+
+    ResultCount = Source1->Affinity.Count;
+    if (ResultCount > ResultSize)
+        ResultCount = ResultSize;
+
+    Expected->Affinity.Count = ResultCount;
+    Expected->Affinity.Size = ResultSize;
+    Expected->Affinity.Reserved = 0;
+
+    for (GroupNumber = 0; GroupNumber < ResultSize; GroupNumber++)
+    {
+        ProcessorMask = 0;
+        if (GroupNumber < ResultCount)
+        {
+            ProcessorMask = Source1->Affinity.Bitmap[GroupNumber];
+            if (GroupNumber < Source2->Affinity.Count)
+                ProcessorMask &= ~Source2->Affinity.Bitmap[GroupNumber];
+        }
+        Expected->Affinity.Bitmap[GroupNumber] = ProcessorMask;
+        if (ProcessorMask != 0)
+            NonEmpty = TRUE;
+    }
+
+    return NonEmpty;
+}
+
+static VOID
+KmtTestSubtractAffinityEx2(
+    _In_ PKMT_KE_SUBTRACT_AFFINITY_EX2 SubtractAffinityEx2)
+{
+    KMT_AFFINITY_EX2_BUFFER Buffer1;
+    KMT_AFFINITY_EX2_BUFFER Buffer2;
+    KMT_AFFINITY_EX2_BUFFER Expected;
+    KMT_AFFINITY_EX2_BUFFER Result;
+    KMT_AFFINITY_EX2_BUFFER Source1;
+    KMT_AFFINITY_EX2_BUFFER Source2;
+    KAFFINITY ProcessorMask;
+    LOGICAL ExpectedLogical;
+    LOGICAL LogicalResult;
+    ULONG Count1;
+    ULONG Count2;
+    ULONG CountIndex;
+    ULONG GroupNumber;
+    ULONG PatternIndex;
+    ULONG Seed;
+    ULONG SizeIndex;
+    USHORT ResultSize;
+    static const USHORT Sizes[] =
+    {
+        0,
+        1,
+        2,
+        3,
+        KAFFINITY_EX_INITIALIZED_GROUPS - 1,
+        KAFFINITY_EX_INITIALIZED_GROUPS,
+        KAFFINITY_EX_INITIALIZED_GROUPS + 1,
+        KAFFINITY_EX_STATIC_GROUPS - 1,
+        KAFFINITY_EX_STATIC_GROUPS,
+        KMT_AFFINITY_EX2_GROUPS - 1,
+        KMT_AFFINITY_EX2_GROUPS
+    };
+    static const USHORT CountPairs[][2] =
+    {
+        {0, 0},
+        {0, KMT_AFFINITY_EX2_GROUPS},
+        {KMT_AFFINITY_EX2_GROUPS, 0},
+        {1, 1},
+        {1, 2},
+        {2, 1},
+        {KAFFINITY_EX_INITIALIZED_GROUPS - 1, KAFFINITY_EX_INITIALIZED_GROUPS},
+        {KAFFINITY_EX_INITIALIZED_GROUPS, KAFFINITY_EX_INITIALIZED_GROUPS - 1},
+        {KAFFINITY_EX_INITIALIZED_GROUPS, KAFFINITY_EX_INITIALIZED_GROUPS},
+        {KAFFINITY_EX_INITIALIZED_GROUPS, KAFFINITY_EX_INITIALIZED_GROUPS + 1},
+        {KAFFINITY_EX_INITIALIZED_GROUPS + 1, KAFFINITY_EX_INITIALIZED_GROUPS},
+        {KAFFINITY_EX_INITIALIZED_GROUPS + 1, KAFFINITY_EX_INITIALIZED_GROUPS + 1},
+        {KMT_AFFINITY_EX2_GROUPS - 1, KMT_AFFINITY_EX2_GROUPS},
+        {KMT_AFFINITY_EX2_GROUPS, KMT_AFFINITY_EX2_GROUPS - 1},
+        {KMT_AFFINITY_EX2_GROUPS, KMT_AFFINITY_EX2_GROUPS},
+        {MAXUSHORT, MAXUSHORT},
+        {MAXUSHORT, 1},
+        {1, MAXUSHORT}
+    };
+    static const USHORT ExhaustiveTriples[][3] =
+    {
+        {0, 0, 0},
+        {0, KMT_AFFINITY_EX2_GROUPS, KMT_AFFINITY_EX2_GROUPS},
+        {KMT_AFFINITY_EX2_GROUPS, 0, KMT_AFFINITY_EX2_GROUPS},
+        {1, 1, 0},
+        {1, 1, 1},
+        {1, 1, 2},
+        {KAFFINITY_EX_INITIALIZED_GROUPS - 1, KAFFINITY_EX_INITIALIZED_GROUPS, KAFFINITY_EX_INITIALIZED_GROUPS},
+        {KAFFINITY_EX_INITIALIZED_GROUPS, KAFFINITY_EX_INITIALIZED_GROUPS - 1, KAFFINITY_EX_INITIALIZED_GROUPS},
+        {KAFFINITY_EX_INITIALIZED_GROUPS, KAFFINITY_EX_INITIALIZED_GROUPS, KAFFINITY_EX_INITIALIZED_GROUPS - 1},
+        {KAFFINITY_EX_INITIALIZED_GROUPS, KAFFINITY_EX_INITIALIZED_GROUPS, KAFFINITY_EX_INITIALIZED_GROUPS},
+        {KAFFINITY_EX_INITIALIZED_GROUPS, KAFFINITY_EX_INITIALIZED_GROUPS, KAFFINITY_EX_INITIALIZED_GROUPS + 1},
+        {KAFFINITY_EX_INITIALIZED_GROUPS + 1, KAFFINITY_EX_INITIALIZED_GROUPS + 1, KAFFINITY_EX_INITIALIZED_GROUPS},
+        {KAFFINITY_EX_INITIALIZED_GROUPS + 1, KAFFINITY_EX_INITIALIZED_GROUPS + 1, KAFFINITY_EX_INITIALIZED_GROUPS + 1},
+        {MAXUSHORT, MAXUSHORT, 0},
+        {MAXUSHORT, MAXUSHORT, KAFFINITY_EX_INITIALIZED_GROUPS},
+        {MAXUSHORT, MAXUSHORT, KMT_AFFINITY_EX2_GROUPS},
+        {MAXUSHORT, 1, KMT_AFFINITY_EX2_GROUPS},
+        {1, MAXUSHORT, KMT_AFFINITY_EX2_GROUPS}
+    };
+
+    for (CountIndex = 0; CountIndex < RTL_NUMBER_OF(CountPairs); CountIndex++)
+    {
+        for (SizeIndex = 0; SizeIndex < RTL_NUMBER_OF(Sizes); SizeIndex++)
+        {
+            ResultSize = Sizes[SizeIndex];
+            for (PatternIndex = 0; PatternIndex < 0x100; PatternIndex++)
+            {
+                Seed = (CountIndex << 16) ^ (SizeIndex << 8) ^ PatternIndex;
+                KmtInitializeSubtractAffinityEx2Inputs(&Buffer1, &Buffer2, CountPairs[CountIndex][0], CountPairs[CountIndex][1], Sizes[(CountIndex + SizeIndex) % RTL_NUMBER_OF(Sizes)], Sizes[(CountIndex + SizeIndex + 1) % RTL_NUMBER_OF(Sizes)], Seed);
+                Source1 = Buffer1;
+                Source2 = Buffer2;
+
+                RtlFillMemory(&Result, sizeof(Result), (UCHAR)(0xA5 ^ Seed));
+                Result.Affinity.Size = ResultSize;
+                Expected = Result;
+                ExpectedLogical = KmtBuildSubtractAffinityEx2Expected(&Expected, &Source1, &Source2, ResultSize);
+                LogicalResult = SubtractAffinityEx2((PKAFFINITY_EX)&Buffer1.Affinity, (PKAFFINITY_EX)&Buffer2.Affinity, (PKAFFINITY_EX)&Result.Affinity);
+                ok_eq_ulong(LogicalResult, ExpectedLogical);
+                ok_eq_size(RtlCompareMemory(&Buffer1, &Source1, sizeof(Buffer1)), sizeof(Buffer1));
+                ok_eq_size(RtlCompareMemory(&Buffer2, &Source2, sizeof(Buffer2)), sizeof(Buffer2));
+                ok_eq_size(RtlCompareMemory(&Result, &Expected, sizeof(Result)), sizeof(Result));
+
+                Buffer1 = Source1;
+                Buffer2 = Source2;
+                Expected = Source1;
+                ExpectedLogical = KmtBuildSubtractAffinityEx2Expected(&Expected, &Source1, &Source2, Source1.Affinity.Size);
+                LogicalResult = SubtractAffinityEx2((PKAFFINITY_EX)&Buffer1.Affinity, (PKAFFINITY_EX)&Buffer2.Affinity, (PKAFFINITY_EX)&Buffer1.Affinity);
+                ok_eq_ulong(LogicalResult, ExpectedLogical);
+                ok_eq_size(RtlCompareMemory(&Buffer1, &Expected, sizeof(Buffer1)), sizeof(Buffer1));
+                ok_eq_size(RtlCompareMemory(&Buffer2, &Source2, sizeof(Buffer2)), sizeof(Buffer2));
+
+                Buffer1 = Source1;
+                Buffer2 = Source2;
+                Expected = Source2;
+                ExpectedLogical = KmtBuildSubtractAffinityEx2Expected(&Expected, &Source1, &Source2, Source2.Affinity.Size);
+                LogicalResult = SubtractAffinityEx2((PKAFFINITY_EX)&Buffer1.Affinity, (PKAFFINITY_EX)&Buffer2.Affinity, (PKAFFINITY_EX)&Buffer2.Affinity);
+                ok_eq_ulong(LogicalResult, ExpectedLogical);
+                ok_eq_size(RtlCompareMemory(&Buffer1, &Source1, sizeof(Buffer1)), sizeof(Buffer1));
+                ok_eq_size(RtlCompareMemory(&Buffer2, &Expected, sizeof(Buffer2)), sizeof(Buffer2));
+
+                Buffer1 = Source1;
+                Expected = Source1;
+                ExpectedLogical = KmtBuildSubtractAffinityEx2Expected(&Expected, &Source1, &Source1, Source1.Affinity.Size);
+                LogicalResult = SubtractAffinityEx2((PKAFFINITY_EX)&Buffer1.Affinity, (PKAFFINITY_EX)&Buffer1.Affinity, (PKAFFINITY_EX)&Buffer1.Affinity);
+                ok_eq_ulong(LogicalResult, ExpectedLogical);
+                ok_eq_size(RtlCompareMemory(&Buffer1, &Expected, sizeof(Buffer1)), sizeof(Buffer1));
+            }
+        }
+    }
+
+    for (CountIndex = 0; CountIndex < RTL_NUMBER_OF(ExhaustiveTriples); CountIndex++)
+    {
+        for (PatternIndex = 0; PatternIndex <= MAXUSHORT; PatternIndex++)
+        {
+            Seed = (CountIndex << 16) ^ PatternIndex;
+            KmtInitializeSubtractAffinityEx2Inputs(&Buffer1, &Buffer2, ExhaustiveTriples[CountIndex][0], ExhaustiveTriples[CountIndex][1], (USHORT)((PatternIndex + CountIndex) % (KMT_AFFINITY_EX2_GROUPS + 1)), (USHORT)((PatternIndex + CountIndex + 1) % (KMT_AFFINITY_EX2_GROUPS + 1)), Seed);
+            Source1 = Buffer1;
+            Source2 = Buffer2;
+            RtlFillMemory(&Result, sizeof(Result), (UCHAR)(0xA5 ^ Seed));
+            Result.Affinity.Size = ExhaustiveTriples[CountIndex][2];
+            Expected = Result;
+            ExpectedLogical = KmtBuildSubtractAffinityEx2Expected(&Expected, &Source1, &Source2, Result.Affinity.Size);
+            LogicalResult = SubtractAffinityEx2((PKAFFINITY_EX)&Buffer1.Affinity, (PKAFFINITY_EX)&Buffer2.Affinity, (PKAFFINITY_EX)&Result.Affinity);
+            ok_eq_ulong(LogicalResult, ExpectedLogical);
+            ok_eq_size(RtlCompareMemory(&Buffer1, &Source1, sizeof(Buffer1)), sizeof(Buffer1));
+            ok_eq_size(RtlCompareMemory(&Buffer2, &Source2, sizeof(Buffer2)), sizeof(Buffer2));
+            ok_eq_size(RtlCompareMemory(&Result, &Expected, sizeof(Result)), sizeof(Result));
+        }
+    }
+
+    for (Count1 = 0; Count1 <= KMT_AFFINITY_EX2_GROUPS; Count1++)
+    {
+        for (Count2 = 0; Count2 <= KMT_AFFINITY_EX2_GROUPS; Count2++)
+        {
+            for (PatternIndex = 0; PatternIndex < 0x100; PatternIndex++)
+            {
+                Seed = (Count1 << 16) ^ (Count2 << 8) ^ PatternIndex;
+                KmtInitializeSubtractAffinityEx2Inputs(&Buffer1, &Buffer2, (USHORT)Count1, (USHORT)Count2, (USHORT)((Count2 + 1) % (KMT_AFFINITY_EX2_GROUPS + 1)), (USHORT)((Count1 + 1) % (KMT_AFFINITY_EX2_GROUPS + 1)), Seed);
+                Source1 = Buffer1;
+                Source2 = Buffer2;
+                ExpectedLogical = FALSE;
+                for (GroupNumber = 0; GroupNumber < Count1; GroupNumber++)
+                {
+                    ProcessorMask = Source1.Affinity.Bitmap[GroupNumber];
+                    if (GroupNumber < Count2)
+                        ProcessorMask &= ~Source2.Affinity.Bitmap[GroupNumber];
+                    if (ProcessorMask != 0)
+                        ExpectedLogical = TRUE;
+                }
+                LogicalResult = SubtractAffinityEx2((PKAFFINITY_EX)&Buffer1.Affinity, (PKAFFINITY_EX)&Buffer2.Affinity, NULL);
+                ok_eq_ulong(LogicalResult, ExpectedLogical);
+                ok_eq_size(RtlCompareMemory(&Buffer1, &Source1, sizeof(Buffer1)), sizeof(Buffer1));
+                ok_eq_size(RtlCompareMemory(&Buffer2, &Source2, sizeof(Buffer2)), sizeof(Buffer2));
+            }
+        }
+    }
+
+    RtlZeroMemory(&Buffer1, sizeof(Buffer1));
+    RtlZeroMemory(&Buffer2, sizeof(Buffer2));
+    Buffer1.Affinity.Count = KMT_AFFINITY_EX2_GROUPS;
+    Buffer1.Affinity.Size = 1;
+    Buffer1.Affinity.Reserved = MAXULONG;
+    Buffer2.Affinity.Count = KMT_AFFINITY_EX2_GROUPS - 1;
+    Buffer2.Affinity.Size = MAXUSHORT;
+    Buffer2.Affinity.Reserved = MAXULONG;
+    Buffer1.Affinity.Bitmap[KMT_AFFINITY_EX2_GROUPS - 1] = (KAFFINITY)0x8000000000000001ULL;
+    Source1 = Buffer1;
+    Source2 = Buffer2;
+    LogicalResult = SubtractAffinityEx2((PKAFFINITY_EX)&Buffer1.Affinity, (PKAFFINITY_EX)&Buffer2.Affinity, NULL);
+    ok_eq_ulong(LogicalResult, TRUE);
+    ok_eq_size(RtlCompareMemory(&Buffer1, &Source1, sizeof(Buffer1)), sizeof(Buffer1));
+    ok_eq_size(RtlCompareMemory(&Buffer2, &Source2, sizeof(Buffer2)), sizeof(Buffer2));
+
+    RtlFillMemory(&Result, sizeof(Result), 0xA5);
+    Result.Affinity.Size = KAFFINITY_EX_INITIALIZED_GROUPS;
+    Expected = Result;
+    ExpectedLogical = KmtBuildSubtractAffinityEx2Expected(&Expected, &Source1, &Source2, Result.Affinity.Size);
+    LogicalResult = SubtractAffinityEx2((PKAFFINITY_EX)&Buffer1.Affinity, (PKAFFINITY_EX)&Buffer2.Affinity, (PKAFFINITY_EX)&Result.Affinity);
+    ok_eq_ulong(LogicalResult, ExpectedLogical);
+    ok_eq_ulong(LogicalResult, FALSE);
+    ok_eq_size(RtlCompareMemory(&Buffer1, &Source1, sizeof(Buffer1)), sizeof(Buffer1));
+    ok_eq_size(RtlCompareMemory(&Buffer2, &Source2, sizeof(Buffer2)), sizeof(Buffer2));
+    ok_eq_size(RtlCompareMemory(&Result, &Expected, sizeof(Result)), sizeof(Result));
+
+    RtlFillMemory(&Result, sizeof(Result), 0xA5);
+    Result.Affinity.Size = KMT_AFFINITY_EX2_GROUPS;
+    Expected = Result;
+    ExpectedLogical = KmtBuildSubtractAffinityEx2Expected(&Expected, &Source1, &Source2, Result.Affinity.Size);
+    LogicalResult = SubtractAffinityEx2((PKAFFINITY_EX)&Buffer1.Affinity, (PKAFFINITY_EX)&Buffer2.Affinity, (PKAFFINITY_EX)&Result.Affinity);
+    ok_eq_ulong(LogicalResult, ExpectedLogical);
+    ok_eq_ulong(LogicalResult, TRUE);
+    ok_eq_size(RtlCompareMemory(&Buffer1, &Source1, sizeof(Buffer1)), sizeof(Buffer1));
+    ok_eq_size(RtlCompareMemory(&Buffer2, &Source2, sizeof(Buffer2)), sizeof(Buffer2));
+    ok_eq_size(RtlCompareMemory(&Result, &Expected, sizeof(Result)), sizeof(Result));
+
+    Buffer2.Affinity.Count = KMT_AFFINITY_EX2_GROUPS;
+    Buffer2.Affinity.Bitmap[KMT_AFFINITY_EX2_GROUPS - 1] = Buffer1.Affinity.Bitmap[KMT_AFFINITY_EX2_GROUPS - 1];
+    Source2 = Buffer2;
+    LogicalResult = SubtractAffinityEx2((PKAFFINITY_EX)&Buffer1.Affinity, (PKAFFINITY_EX)&Buffer2.Affinity, NULL);
+    ok_eq_ulong(LogicalResult, FALSE);
+    ok_eq_size(RtlCompareMemory(&Buffer1, &Source1, sizeof(Buffer1)), sizeof(Buffer1));
+    ok_eq_size(RtlCompareMemory(&Buffer2, &Source2, sizeof(Buffer2)), sizeof(Buffer2));
+
+    Buffer1.Affinity.Count = KMT_AFFINITY_EX2_GROUPS - 1;
+    Buffer2.Affinity.Count = KMT_AFFINITY_EX2_GROUPS - 1;
+    Source1 = Buffer1;
+    Source2 = Buffer2;
+    LogicalResult = SubtractAffinityEx2((PKAFFINITY_EX)&Buffer1.Affinity, (PKAFFINITY_EX)&Buffer2.Affinity, NULL);
+    ok_eq_ulong(LogicalResult, FALSE);
+    ok_eq_size(RtlCompareMemory(&Buffer1, &Source1, sizeof(Buffer1)), sizeof(Buffer1));
+    ok_eq_size(RtlCompareMemory(&Buffer2, &Source2, sizeof(Buffer2)), sizeof(Buffer2));
+}
 #endif
 
 START_TEST(KeArm64AffinityEx)
@@ -491,6 +819,7 @@ START_TEST(KeArm64AffinityEx)
     PKMT_KE_REMOVE_PROCESSOR_GROUP_AFFINITY RemoveProcessorGroupAffinity;
     PKMT_KE_SIZE_OF_AFFINITY_EX SizeOfAffinityEx;
     PKMT_KE_SUBTRACT_AFFINITY_EX SubtractAffinityEx;
+    PKMT_KE_SUBTRACT_AFFINITY_EX2 SubtractAffinityEx2;
     PROCESSOR_NUMBER HighestProcessorNumber;
     PROCESSOR_NUMBER LowestProcessorNumber;
     PROCESSOR_NUMBER ProcessorNumber;
@@ -2135,6 +2464,15 @@ START_TEST(KeArm64AffinityEx)
             }
         }
     }
+
+    RtlInitUnicodeString(&Name, L"KeSubtractAffinityEx2");
+    SubtractAffinityEx2 = (PKMT_KE_SUBTRACT_AFFINITY_EX2)MmGetSystemRoutineAddress(&Name);
+    if (SubtractAffinityEx2 == NULL)
+    {
+        skip(FALSE, "KeSubtractAffinityEx2 is not exported\n");
+        return;
+    }
+    KmtTestSubtractAffinityEx2(SubtractAffinityEx2);
 
     RtlInitUnicodeString(&Name, L"KeRemoveProcessorGroupAffinity");
     RemoveProcessorGroupAffinity = (PKMT_KE_REMOVE_PROCESSOR_GROUP_AFFINITY)MmGetSystemRoutineAddress(&Name);

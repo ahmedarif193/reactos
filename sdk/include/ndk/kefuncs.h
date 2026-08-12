@@ -302,6 +302,14 @@ KeSubtractAffinityEx(
     _Out_opt_ PKAFFINITY_EX Result);
 
 NTKERNELAPI
+LOGICAL
+NTAPI
+KeSubtractAffinityEx2(
+    _In_ PKAFFINITY_EX Affinity1,
+    _In_ PKAFFINITY_EX Affinity2,
+    _Inout_opt_ PKAFFINITY_EX Result);
+
+NTKERNELAPI
 VOID
 NTAPI
 KeCopyAffinityEx(

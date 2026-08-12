@@ -809,6 +809,73 @@ KeSubtractAffinityEx(
 /*
  * @implemented
  */
+LOGICAL
+NTAPI
+KeSubtractAffinityEx2(
+    _In_ PKAFFINITY_EX Affinity1,
+    _In_ PKAFFINITY_EX Affinity2,
+    _Inout_opt_ PKAFFINITY_EX Result)
+{
+    KAFFINITY ProcessorMask;
+    LOGICAL NonEmpty = FALSE;
+    USHORT CommonCount = min(Affinity1->Count, Affinity2->Count);
+    USHORT Count = Affinity1->Count;
+    USHORT Size;
+    USHORT GroupNumber;
+
+    if (Result == NULL)
+    {
+        for (GroupNumber = 0; GroupNumber < CommonCount; GroupNumber++)
+        {
+            if ((Affinity1->Bitmap[GroupNumber] & ~Affinity2->Bitmap[GroupNumber]) != 0)
+                return TRUE;
+        }
+
+        for (; GroupNumber < Count; GroupNumber++)
+        {
+            if (Affinity1->Bitmap[GroupNumber] != 0)
+                return TRUE;
+        }
+
+        return FALSE;
+    }
+
+    Size = Result->Size;
+    if (Count > Size)
+        Count = Size;
+    if (CommonCount > Size)
+        CommonCount = Size;
+
+    Result->Count = Count;
+    Result->Size = Size;
+
+    for (GroupNumber = 0; GroupNumber < CommonCount; GroupNumber++)
+    {
+        ProcessorMask = Affinity1->Bitmap[GroupNumber] & ~Affinity2->Bitmap[GroupNumber];
+        Result->Bitmap[GroupNumber] = ProcessorMask;
+        if (ProcessorMask != 0)
+            NonEmpty = TRUE;
+    }
+
+    for (; GroupNumber < Count; GroupNumber++)
+    {
+        ProcessorMask = Affinity1->Bitmap[GroupNumber];
+        Result->Bitmap[GroupNumber] = ProcessorMask;
+        if (ProcessorMask != 0)
+            NonEmpty = TRUE;
+    }
+
+    Result->Reserved = 0;
+
+    for (; GroupNumber < Size; GroupNumber++)
+        Result->Bitmap[GroupNumber] = 0;
+
+    return NonEmpty;
+}
+
+/*
+ * @implemented
+ */
 VOID
 NTAPI
 KeCopyAffinityEx(

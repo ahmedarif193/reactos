@@ -2630,7 +2630,7 @@
 @ stub -arch=arm64 KeStallWhileFrozen
 @ stub -arch=arm64 KeStartDynamicProcessor
 @ stdcall -arch=x86_64,arm64 KeSubtractAffinityEx(ptr ptr ptr)
-@ stub -arch=arm64 KeSubtractAffinityEx2
+@ stdcall -arch=x86_64,arm64 KeSubtractAffinityEx2(ptr ptr ptr)
 @ stub -arch=arm64 KeSweepIcacheRange
 @ stub -arch=arm64 KeSweepLocalCaches
 @ stub -arch=arm64 KeSynchronizeTimeToQpc
