@@ -778,6 +778,9 @@ KiInitializeDpc(IN PKDPC Dpc,
     Dpc->DeferredRoutine = DeferredRoutine;
     Dpc->DeferredContext = DeferredContext;
     Dpc->DpcData = NULL;
+#if defined(_M_ARM64)
+    Dpc->ProcessorHistory = 0;
+#endif
 }
 
 /* PUBLIC FUNCTIONS **********************************************************/
