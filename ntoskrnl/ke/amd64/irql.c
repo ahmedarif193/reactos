@@ -41,5 +41,16 @@ KxRaiseIrqlToDpcLevel(VOID)
     return KeRaiseIrqlToDpcLevel();
 }
 
+KIRQL
+NTAPI
+KeGetEffectiveIrql(VOID)
+{
+    if ((__readeflags() & EFLAGS_INTERRUPT_MASK) == 0)
+    {
+        return HIGH_LEVEL;
+    }
+
+    return KeGetCurrentIrql();
+}
 
 /* EOF */
