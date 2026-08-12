@@ -1158,7 +1158,6 @@ KeWaitForMultipleObjects(IN ULONG Count,
                 {
                     /* Get the Current Object */
                     CurrentObject = (PKMUTANT)Object[Index];
-
                     /* Check if the Object is a mutant */
                     if ((CurrentObject->Header.Type & KOBJECT_TYPE_MASK) == MutantObject)
                     {
@@ -1203,7 +1202,6 @@ KeWaitForMultipleObjects(IN ULONG Count,
                 {
                     /* Get the Current Object */
                     CurrentObject = (PKMUTANT)Object[Index];
-
                     /* Check if we're dealing with a mutant again */
                     if ((CurrentObject->Header.Type & KOBJECT_TYPE_MASK) == MutantObject)
                     {
