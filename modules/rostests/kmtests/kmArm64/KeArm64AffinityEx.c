@@ -80,6 +80,7 @@ typedef LOGICAL (NTAPI *PKMT_KE_IS_SINGLE_GROUP_AFFINITY_EX)(_In_ PKAFFINITY_EX 
 typedef LOGICAL (NTAPI *PKMT_KE_IS_SUBSET_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2);
 typedef LOGICAL (NTAPI *PKMT_KE_OR_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2, _Out_opt_ PKAFFINITY_EX Result);
 typedef VOID (NTAPI *PKMT_KE_PROCESSOR_GROUP_AFFINITY)(_Out_ PGROUP_AFFINITY GroupAffinity, _In_ ULONG ProcessorIndex);
+typedef VOID (NTAPI *PKMT_KE_REMOVE_PROCESSOR_GROUP_AFFINITY)(_Inout_ PGROUP_AFFINITY GroupAffinity, _In_ ULONG ProcessorIndex);
 #endif
 
 START_TEST(KeArm64AffinityEx)
@@ -131,6 +132,7 @@ START_TEST(KeArm64AffinityEx)
     PKMT_KE_IS_SUBSET_AFFINITY_EX IsSubsetAffinityEx;
     PKMT_KE_OR_AFFINITY_EX OrAffinityEx;
     PKMT_KE_PROCESSOR_GROUP_AFFINITY ProcessorGroupAffinity;
+    PKMT_KE_REMOVE_PROCESSOR_GROUP_AFFINITY RemoveProcessorGroupAffinity;
     PKMT_KE_SIZE_OF_AFFINITY_EX SizeOfAffinityEx;
     PROCESSOR_NUMBER HighestProcessorNumber;
     PROCESSOR_NUMBER LowestProcessorNumber;
@@ -682,6 +684,31 @@ START_TEST(KeArm64AffinityEx)
             GroupAffinity = GroupBuffer.Affinity;
             GroupAffinity.Mask |= (KAFFINITY)1 << ProcessorNumber.Number;
             AddProcessorGroupAffinity(&GroupBuffer.Affinity, ProcessorIndex);
+            ok_eq_size(RtlCompareMemory(GroupBuffer.GuardBefore, GroupBufferSource.GuardBefore, sizeof(GroupBuffer.GuardBefore)), sizeof(GroupBuffer.GuardBefore));
+            ok_eq_size(RtlCompareMemory(&GroupBuffer.Affinity, &GroupAffinity, sizeof(GroupAffinity)), sizeof(GroupAffinity));
+            ok_eq_size(RtlCompareMemory(GroupBuffer.GuardAfter, GroupBufferSource.GuardAfter, sizeof(GroupBuffer.GuardAfter)), sizeof(GroupBuffer.GuardAfter));
+        }
+    }
+
+    RtlInitUnicodeString(&Name, L"KeRemoveProcessorGroupAffinity");
+    RemoveProcessorGroupAffinity = (PKMT_KE_REMOVE_PROCESSOR_GROUP_AFFINITY)MmGetSystemRoutineAddress(&Name);
+    if (RemoveProcessorGroupAffinity == NULL)
+    {
+        skip(FALSE, "KeRemoveProcessorGroupAffinity is not exported\n");
+        return;
+    }
+
+    for (ProcessorIndex = 0; ProcessorIndex < ActiveCount; ProcessorIndex++)
+    {
+        ok_eq_hex(GetProcessorNumberFromIndex(ProcessorIndex, &ProcessorNumber), STATUS_SUCCESS);
+        for (MaskIndex = 0; MaskIndex < RTL_NUMBER_OF(EnumerationMasks); MaskIndex++)
+        {
+            RtlFillMemory(&GroupBuffer, sizeof(GroupBuffer), (UCHAR)(ProcessorIndex ^ MaskIndex));
+            GroupBuffer.Affinity.Mask = EnumerationMasks[MaskIndex];
+            GroupBufferSource = GroupBuffer;
+            GroupAffinity = GroupBuffer.Affinity;
+            GroupAffinity.Mask &= ~((KAFFINITY)1 << ProcessorNumber.Number);
+            RemoveProcessorGroupAffinity(&GroupBuffer.Affinity, ProcessorIndex);
             ok_eq_size(RtlCompareMemory(GroupBuffer.GuardBefore, GroupBufferSource.GuardBefore, sizeof(GroupBuffer.GuardBefore)), sizeof(GroupBuffer.GuardBefore));
             ok_eq_size(RtlCompareMemory(&GroupBuffer.Affinity, &GroupAffinity, sizeof(GroupAffinity)), sizeof(GroupAffinity));
             ok_eq_size(RtlCompareMemory(GroupBuffer.GuardAfter, GroupBufferSource.GuardAfter, sizeof(GroupBuffer.GuardAfter)), sizeof(GroupBuffer.GuardAfter));

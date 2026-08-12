@@ -2605,7 +2605,7 @@
 @ stdcall -arch=arm64 KeReinitializeAffinityEx(ptr)
 @ stdcall -arch=arm64 KeRemoveGroupAffinityEx(ptr long int64)
 @ stdcall -arch=arm64 KeRemoveProcessorAffinityEx(ptr long)
-@ stub -arch=arm64 KeRemoveProcessorGroupAffinity
+@ stdcall -arch=x86_64,arm64 KeRemoveProcessorGroupAffinity(ptr long)
 @ stub -arch=arm64 KeRemoveQueueDpcEx
 @ stub -arch=arm64 KeRemoveQueueEx
 @ stub -arch=arm64 KeReportCacheIncoherentDevice
