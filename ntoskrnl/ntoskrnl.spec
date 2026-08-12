@@ -2123,7 +2123,7 @@
 @ stdcall -arch=x86_64,arm64 ExAllocatePool2(int64 int64 long)
 @ stdcall -arch=arm64 ExAllocatePool3(int64 long long ptr long)
 @ stdcall -version=0x603+ -arch=arm64 ExAllocateTimer(ptr ptr long)
-@ stub -arch=arm64 ExBlockOnAddressPushLock
+@ fastcall -arch=arm64 ExBlockOnAddressPushLock(ptr ptr ptr int64 ptr)
 @ stub -arch=arm64 ExCancelDpcEventWait
 @ stdcall -version=0x603+ -arch=arm64 ExCancelTimer(ptr ptr)
 @ stub -arch=arm64 ExCleanupAutoExpandPushLock
