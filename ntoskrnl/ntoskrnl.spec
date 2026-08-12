@@ -2534,7 +2534,7 @@
 @ stub -arch=arm64 KeConvertAuxiliaryCounterToPerformanceCounter
 @ stub -arch=arm64 KeConvertPerformanceCounterToAuxiliaryCounter
 @ stdcall -arch=arm64 KeCopyAffinityEx(ptr ptr)
-@ stub -arch=arm64 KeCopyAffinityEx2
+@ stdcall -arch=x86_64,arm64 KeCopyAffinityEx2(ptr ptr)
 @ stdcall -arch=arm64 KeCountSetBitsAffinityEx(ptr)
 @ stdcall -arch=x86_64,arm64 KeCountSetBitsGroupAffinity(ptr)
 @ stub -arch=arm64 KeDeregisterProcessorChangeCallback
