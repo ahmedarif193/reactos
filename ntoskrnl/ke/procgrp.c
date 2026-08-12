@@ -136,6 +136,21 @@ KeInitializeAffinityEx(
  */
 VOID
 NTAPI
+KeInitializeAffinityEx2(
+    _Out_ PKAFFINITY_EX Affinity,
+    _In_ USHORT Size)
+{
+    Affinity->Count = 1;
+    Affinity->Size = Size;
+    Affinity->Reserved = 0;
+    RtlZeroMemory(Affinity->Bitmap, Size * sizeof(Affinity->Bitmap[0]));
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
 KeReinitializeAffinityEx(
     _Inout_ PKAFFINITY_EX Affinity)
 {
