@@ -74,6 +74,7 @@ KmtCountSetBits(
 }
 
 typedef LOGICAL (NTAPI *PKMT_KE_AND_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity1, _In_ PKAFFINITY_EX Affinity2, _Out_opt_ PKAFFINITY_EX Result);
+typedef LOGICAL (NTAPI *PKMT_KE_AND_GROUP_AFFINITY_EX)(_In_ PKAFFINITY_EX Affinity, _In_ PGROUP_AFFINITY GroupAffinity, _Out_opt_ PGROUP_AFFINITY Result);
 typedef VOID (NTAPI *PKMT_KE_ADD_PROCESSOR_GROUP_AFFINITY)(_Inout_ PGROUP_AFFINITY GroupAffinity, _In_ ULONG ProcessorIndex);
 typedef LOGICAL (NTAPI *PKMT_KE_CHECK_PROCESSOR_GROUP_AFFINITY)(_In_ PGROUP_AFFINITY GroupAffinity, _In_ ULONG ProcessorIndex);
 typedef VOID (NTAPI *PKMT_KE_COPY_AFFINITY_EX)(_Out_ PKAFFINITY_EX Destination, _In_ PKAFFINITY_EX Source);
@@ -114,6 +115,8 @@ START_TEST(KeArm64AffinityEx)
     KMT_AFFINITY_ENUMERATION_CONTEXT_BUFFER EnumerationSource;
     KMT_GROUP_AFFINITY_BUFFER GroupBuffer;
     KMT_GROUP_AFFINITY_BUFFER GroupBufferSource;
+    KMT_GROUP_AFFINITY_BUFFER GroupResultBuffer;
+    KMT_GROUP_AFFINITY_BUFFER GroupResultExpected;
     KMT_PROCESSOR_INDEX_BUFFER ProcessorIndexBuffer;
     KMT_PROCESSOR_INDEX_BUFFER ProcessorIndexSource;
     ULONG ActiveCount;
@@ -129,6 +132,7 @@ START_TEST(KeArm64AffinityEx)
     ULONG ProcessorIndex;
     ULONG ExpectedProcessorIndex;
     PKMT_KE_AND_AFFINITY_EX AndAffinityEx;
+    PKMT_KE_AND_GROUP_AFFINITY_EX AndGroupAffinityEx;
     PKMT_KE_ADD_PROCESSOR_GROUP_AFFINITY AddProcessorGroupAffinity;
     PKMT_KE_CHECK_PROCESSOR_GROUP_AFFINITY CheckProcessorGroupAffinity;
     PKMT_KE_COPY_AFFINITY_EX CopyAffinityEx;
@@ -180,6 +184,17 @@ START_TEST(KeArm64AffinityEx)
         2,
         3,
         KAFFINITY_EX_INITIALIZED_GROUPS
+    };
+    static const USHORT GroupAffinityCounts[] =
+    {
+        0,
+        1,
+        2,
+        3,
+        KMT_AFFINITY_EX2_GROUPS / 2 - 1,
+        KMT_AFFINITY_EX2_GROUPS / 2,
+        KMT_AFFINITY_EX2_GROUPS - 1,
+        KMT_AFFINITY_EX2_GROUPS
     };
     ULONG CountIndex;
     ULONG CountResult;
@@ -797,6 +812,78 @@ START_TEST(KeArm64AffinityEx)
         CountResult = CountSetBitsGroupAffinity(&GroupBuffer.Affinity);
         ok_eq_ulong(CountResult, ExpectedCount);
         ok_eq_size(RtlCompareMemory(&GroupBuffer, &GroupBufferSource, sizeof(GroupBuffer)), sizeof(GroupBuffer));
+    }
+
+    RtlInitUnicodeString(&Name, L"KeAndGroupAffinityEx");
+    AndGroupAffinityEx = (PKMT_KE_AND_GROUP_AFFINITY_EX)MmGetSystemRoutineAddress(&Name);
+    if (AndGroupAffinityEx == NULL)
+    {
+        skip(FALSE, "KeAndGroupAffinityEx is not exported\n");
+        return;
+    }
+
+    for (CountIndex = 0; CountIndex < RTL_NUMBER_OF(GroupAffinityCounts); CountIndex++)
+    {
+        RtlFillMemory(&AffinityEx2Buffer, sizeof(AffinityEx2Buffer), (UCHAR)(0x3C ^ CountIndex));
+        AffinityEx2Buffer.Affinity.Count = GroupAffinityCounts[CountIndex];
+        AffinityEx2Buffer.Affinity.Size = KMT_AFFINITY_EX2_GROUPS;
+        RemainingAffinity = (KAFFINITY)0xD1B54A32D192ED03ULL ^ CountIndex;
+        for (MaskIndex = 0; MaskIndex < KMT_AFFINITY_EX2_GROUPS; MaskIndex++)
+        {
+            RemainingAffinity ^= RemainingAffinity << 13;
+            RemainingAffinity ^= RemainingAffinity >> 7;
+            RemainingAffinity ^= RemainingAffinity << 17;
+            AffinityEx2Buffer.Affinity.Bitmap[MaskIndex] = RemainingAffinity;
+        }
+        AffinityEx2Source = AffinityEx2Buffer;
+        Combination = (KAFFINITY)0x9E3779B97F4A7C15ULL ^ CountIndex;
+
+        for (GroupValue = 0; GroupValue <= MAXUSHORT; GroupValue++)
+        {
+            Combination ^= Combination << 13;
+            Combination ^= Combination >> 7;
+            Combination ^= Combination << 17;
+            RtlFillMemory(&GroupBuffer, sizeof(GroupBuffer), (UCHAR)(CountIndex ^ GroupValue));
+            GroupBuffer.Affinity.Mask = Combination;
+            GroupBuffer.Affinity.Group = (USHORT)GroupValue;
+            GroupBufferSource = GroupBuffer;
+            RtlFillMemory(&GroupResultBuffer, sizeof(GroupResultBuffer), (UCHAR)(0xA5 ^ GroupValue));
+            GroupResultExpected = GroupResultBuffer;
+            RtlZeroMemory(&GroupResultExpected.Affinity, sizeof(GroupResultExpected.Affinity));
+            GroupResultExpected.Affinity.Group = (USHORT)GroupValue;
+            if (GroupValue < GroupAffinityCounts[CountIndex])
+                GroupResultExpected.Affinity.Mask = AffinityEx2Buffer.Affinity.Bitmap[GroupValue] & Combination;
+            ExpectedLogical = GroupResultExpected.Affinity.Mask != 0;
+            LogicalResult = AndGroupAffinityEx((PKAFFINITY_EX)&AffinityEx2Buffer.Affinity, &GroupBuffer.Affinity, &GroupResultBuffer.Affinity);
+            ok_eq_ulong(LogicalResult, ExpectedLogical);
+            ok_eq_size(RtlCompareMemory(&GroupBuffer, &GroupBufferSource, sizeof(GroupBuffer)), sizeof(GroupBuffer));
+            ok_eq_size(RtlCompareMemory(&GroupResultBuffer, &GroupResultExpected, sizeof(GroupResultBuffer)), sizeof(GroupResultBuffer));
+            LogicalResult = AndGroupAffinityEx((PKAFFINITY_EX)&AffinityEx2Buffer.Affinity, &GroupBuffer.Affinity, NULL);
+            ok_eq_ulong(LogicalResult, ExpectedLogical);
+        }
+
+        ok_eq_size(RtlCompareMemory(&AffinityEx2Buffer, &AffinityEx2Source, sizeof(AffinityEx2Buffer)), sizeof(AffinityEx2Buffer));
+
+        for (GroupValue = 0; GroupValue < KMT_AFFINITY_EX2_GROUPS; GroupValue++)
+        {
+            for (MaskIndex = 0; MaskIndex < RTL_NUMBER_OF(EnumerationMasks); MaskIndex++)
+            {
+                RtlFillMemory(&GroupBuffer, sizeof(GroupBuffer), (UCHAR)(CountIndex ^ GroupValue ^ MaskIndex));
+                GroupBuffer.Affinity.Mask = EnumerationMasks[MaskIndex];
+                GroupBuffer.Affinity.Group = (USHORT)GroupValue;
+                GroupBufferSource = GroupBuffer;
+                RtlZeroMemory(&GroupBufferSource.Affinity, sizeof(GroupBufferSource.Affinity));
+                GroupBufferSource.Affinity.Group = (USHORT)GroupValue;
+                if (GroupValue < GroupAffinityCounts[CountIndex])
+                    GroupBufferSource.Affinity.Mask = AffinityEx2Buffer.Affinity.Bitmap[GroupValue] & EnumerationMasks[MaskIndex];
+                ExpectedLogical = GroupBufferSource.Affinity.Mask != 0;
+                LogicalResult = AndGroupAffinityEx((PKAFFINITY_EX)&AffinityEx2Buffer.Affinity, &GroupBuffer.Affinity, &GroupBuffer.Affinity);
+                ok_eq_ulong(LogicalResult, ExpectedLogical);
+                ok_eq_size(RtlCompareMemory(&GroupBuffer, &GroupBufferSource, sizeof(GroupBuffer)), sizeof(GroupBuffer));
+            }
+        }
+
+        ok_eq_size(RtlCompareMemory(&AffinityEx2Buffer, &AffinityEx2Source, sizeof(AffinityEx2Buffer)), sizeof(AffinityEx2Buffer));
     }
 
     RtlInitUnicodeString(&Name, L"KeRemoveProcessorGroupAffinity");

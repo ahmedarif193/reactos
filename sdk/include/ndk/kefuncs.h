@@ -264,6 +264,14 @@ KeAndAffinityEx(
     _Out_opt_ PKAFFINITY_EX Result);
 
 NTKERNELAPI
+LOGICAL
+NTAPI
+KeAndGroupAffinityEx(
+    _In_ PKAFFINITY_EX Affinity,
+    _In_ PGROUP_AFFINITY GroupAffinity,
+    _Out_opt_ PGROUP_AFFINITY Result);
+
+NTKERNELAPI
 VOID
 NTAPI
 KeCopyAffinityEx(
