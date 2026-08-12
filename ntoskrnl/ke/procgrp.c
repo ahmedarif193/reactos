@@ -165,6 +165,21 @@ KeInitializeEnumerationContext(
  */
 VOID
 NTAPI
+KeInitializeEnumerationContextFromAffinity(
+    _Out_ PKAFFINITY_ENUMERATION_CONTEXT Context,
+    _In_ USHORT Group,
+    _In_ KAFFINITY Affinity)
+{
+    Context->Affinity = NULL;
+    Context->CurrentAffinity = Affinity;
+    Context->CurrentGroup = Group;
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
 KeReinitializeAffinityEx(
     _Inout_ PKAFFINITY_EX Affinity)
 {
