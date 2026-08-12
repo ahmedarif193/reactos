@@ -300,6 +300,17 @@ KeCheckProcessorGroupAffinity(
 /*
  * @implemented
  */
+ULONG
+NTAPI
+KeCountSetBitsGroupAffinity(
+    _In_ PGROUP_AFFINITY GroupAffinity)
+{
+    return RtlNumberOfSetBitsUlongPtr(GroupAffinity->Mask);
+}
+
+/*
+ * @implemented
+ */
 VOID
 NTAPI
 KeReinitializeAffinityEx(

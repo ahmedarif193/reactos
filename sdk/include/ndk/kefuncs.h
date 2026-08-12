@@ -164,6 +164,12 @@ KeCheckProcessorGroupAffinity(
     _In_ ULONG ProcessorIndex);
 
 NTKERNELAPI
+ULONG
+NTAPI
+KeCountSetBitsGroupAffinity(
+    _In_ PGROUP_AFFINITY GroupAffinity);
+
+NTKERNELAPI
 VOID
 NTAPI
 KeReinitializeAffinityEx(
