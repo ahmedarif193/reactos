@@ -179,6 +179,13 @@ KeFindFirstSetRightGroupAffinity(
     _In_ PGROUP_AFFINITY GroupAffinity);
 
 NTKERNELAPI
+NTSTATUS
+NTAPI
+KeFirstGroupAffinityEx(
+    _Out_ PGROUP_AFFINITY GroupAffinity,
+    _In_ PKAFFINITY_EX Affinity);
+
+NTKERNELAPI
 LOGICAL
 NTAPI
 KeAndAffinityEx(
