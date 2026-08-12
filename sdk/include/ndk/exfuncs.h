@@ -57,6 +57,17 @@ ExReleaseFastMutexUnsafeAndLeaveCriticalRegion(
 //
 // Pushlock functions
 //
+NTKERNELAPI
+NTSTATUS
+FASTCALL
+ExBlockOnAddressPushLock(
+    _Inout_ PEX_PUSH_LOCK PushLock,
+    _In_reads_bytes_(AddressSize) volatile VOID *Address,
+    _In_reads_bytes_(AddressSize) PVOID CompareAddress,
+    _In_ SIZE_T AddressSize,
+    _In_opt_ PLARGE_INTEGER Timeout
+);
+
 VOID
 FASTCALL
 ExfAcquirePushLockExclusive(
