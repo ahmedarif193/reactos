@@ -430,6 +430,30 @@ KeInterlockedSetProcessorAffinityEx(
  */
 LOGICAL
 NTAPI
+KeInterlockedClearProcessorAffinityEx(
+    _Inout_ PKAFFINITY_EX Affinity,
+    _In_ ULONG ProcessorIndex)
+{
+    PROCESSOR_NUMBER ProcessorNumber;
+    KAFFINITY ProcessorMask;
+    LONG64 PreviousMask;
+
+    if (!NT_SUCCESS(KeGetProcessorNumberFromIndex(ProcessorIndex, &ProcessorNumber)))
+        return FALSE;
+
+    if (ProcessorNumber.Group >= Affinity->Size)
+        return FALSE;
+
+    ProcessorMask = (KAFFINITY)1 << ProcessorNumber.Number;
+    PreviousMask = InterlockedAnd64((PLONG64)&Affinity->Bitmap[ProcessorNumber.Group], (LONG64)~ProcessorMask);
+    return (((KAFFINITY)PreviousMask & ProcessorMask) != 0);
+}
+
+/*
+ * @implemented
+ */
+LOGICAL
+NTAPI
 KeIsEmptyAffinityEx(
     _In_ PKAFFINITY_EX Affinity)
 {

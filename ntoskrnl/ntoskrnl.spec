@@ -2561,7 +2561,7 @@
 @ stub -arch=arm64 KeInitializeSecondaryInterruptServices
 @ stub -arch=arm64 KeInitializeTimer2
 @ stub -arch=arm64 KeInitializeTriageDumpDataArray
-@ stub -arch=arm64 KeInterlockedClearProcessorAffinityEx
+@ stdcall -arch=x86_64,arm64 KeInterlockedClearProcessorAffinityEx(ptr long)
 @ stdcall -arch=x86_64,arm64 KeInterlockedSetProcessorAffinityEx(ptr long)
 @ stub -arch=arm64 KeInvalidateRangeAllCaches
 @ stub -arch=arm64 KeInvalidateRangeAllCachesNoIpi
