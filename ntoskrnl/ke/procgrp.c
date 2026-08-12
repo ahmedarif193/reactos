@@ -192,6 +192,43 @@ KeInitializeEnumerationContextFromGroup(
 /*
  * @implemented
  */
+NTSTATUS
+NTAPI
+KeEnumerateNextProcessor(
+    _Out_ PULONG ProcessorIndex,
+    _Inout_ PKAFFINITY_ENUMERATION_CONTEXT Context)
+{
+    PROCESSOR_NUMBER ProcessorNumber;
+    ULONG BitNumber;
+    ULONG GroupLimit;
+
+    GroupLimit = Context->Affinity != NULL ? Context->Affinity->Count : (ULONG)Context->CurrentGroup + 1;
+
+    for (;;)
+    {
+        if (BitScanForwardAffinity(&BitNumber, Context->CurrentAffinity))
+        {
+            Context->CurrentAffinity &= ~((KAFFINITY)1 << BitNumber);
+            ProcessorNumber.Group = Context->CurrentGroup;
+            ProcessorNumber.Number = (UCHAR)BitNumber;
+            ProcessorNumber.Reserved = 0;
+            *ProcessorIndex = KeGetProcessorIndexFromNumber(&ProcessorNumber);
+            if (*ProcessorIndex == INVALID_PROCESSOR_INDEX)
+                *ProcessorIndex = 0;
+            return STATUS_SUCCESS;
+        }
+
+        Context->CurrentGroup++;
+        if (Context->CurrentGroup >= GroupLimit)
+            return STATUS_NOT_FOUND;
+
+        Context->CurrentAffinity = Context->Affinity->Bitmap[Context->CurrentGroup];
+    }
+}
+
+/*
+ * @implemented
+ */
 VOID
 NTAPI
 KeReinitializeAffinityEx(
