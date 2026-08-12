@@ -207,7 +207,14 @@ KiIpiServiceRoutine(
                     KeMemoryBarrier();
                 }
 
+                /* Hardware IPI entry masks IRQs; generic-call workers execute
+                 * at IPI_LEVEL with IRQ delivery enabled. The software-service
+                 * path preserves its caller's masked state. */
+                if (TrapFrame != NULL)
+                    _enable();
                 Function(Argument);
+                if (TrapFrame != NULL)
+                    _disable();
                 InterlockedDecrement(&KiArm64IpiPacket.TargetCount);
             }
         }
