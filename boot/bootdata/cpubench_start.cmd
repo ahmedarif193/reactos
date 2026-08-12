@@ -35,6 +35,7 @@ call :run KeArm64
 call :run KeArm64Dispatcher
 call :run KeQueue
 call :run KeArm64Intrinsics
+call :run KeArm64ProcessorChange
 call :run KeArm64Irql
 call :run KeArm64SpinLock
 call :run KeArm64Smp
