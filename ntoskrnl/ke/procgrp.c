@@ -757,6 +757,33 @@ KeCopyAffinityEx(
 /*
  * @implemented
  */
+VOID
+NTAPI
+KeCopyAffinityEx2(
+    _Inout_ PKAFFINITY_EX Destination,
+    _In_ PKAFFINITY_EX Source)
+{
+    USHORT Count = Source->Count;
+    USHORT Size = Destination->Size;
+    USHORT GroupNumber;
+
+    if (Count > Size)
+        Count = Size;
+
+    for (GroupNumber = 0; GroupNumber < Count; GroupNumber++)
+        Destination->Bitmap[GroupNumber] = Source->Bitmap[GroupNumber];
+
+    for (; GroupNumber < Size; GroupNumber++)
+        Destination->Bitmap[GroupNumber] = 0;
+
+    Destination->Reserved = 0;
+    Destination->Count = Count;
+    Destination->Size = Size;
+}
+
+/*
+ * @implemented
+ */
 LOGICAL
 NTAPI
 KeIsEqualAffinityEx(

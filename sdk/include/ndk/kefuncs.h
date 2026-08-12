@@ -294,6 +294,13 @@ KeCopyAffinityEx(
     _In_ PKAFFINITY_EX Source);
 
 NTKERNELAPI
+VOID
+NTAPI
+KeCopyAffinityEx2(
+    _Inout_ PKAFFINITY_EX Destination,
+    _In_ PKAFFINITY_EX Source);
+
+NTKERNELAPI
 LOGICAL
 NTAPI
 KeIsEqualAffinityEx(
