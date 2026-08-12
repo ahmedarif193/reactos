@@ -344,6 +344,14 @@ KeOrAffinityEx(
     _In_ PKAFFINITY_EX Affinity2,
     _Out_opt_ PKAFFINITY_EX Result);
 
+NTKERNELAPI
+LOGICAL
+NTAPI
+KeOrAffinityEx2(
+    _In_ PKAFFINITY_EX Affinity1,
+    _In_ PKAFFINITY_EX Affinity2,
+    _Inout_opt_ PKAFFINITY_EX Result);
+
 //
 // APC Functions
 //

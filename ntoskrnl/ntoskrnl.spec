@@ -2571,7 +2571,7 @@
 @ stdcall -arch=arm64 KeIsSubsetAffinityEx(ptr ptr)
 @ stub -arch=arm64 KeNotifyProcessorFreezeSupported
 @ stdcall -arch=arm64 KeOrAffinityEx(ptr ptr ptr)
-@ stub -arch=arm64 KeOrAffinityEx2
+@ stdcall -arch=x86_64,arm64 KeOrAffinityEx2(ptr ptr ptr)
 @ stdcall -arch=x86_64,arm64 KeProcessorGroupAffinity(ptr long)
 @ stdcall KeQueryActiveGroupCount()
 @ stdcall -arch=arm64 KeQueryActiveProcessorAffinity(ptr)
