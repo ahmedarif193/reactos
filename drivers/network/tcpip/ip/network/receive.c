@@ -626,7 +626,14 @@ VOID IPv4Receive(PIP_INTERFACE IF, PIP_PACKET IPPacket)
  */
 {
     UCHAR FirstByte;
+    PCHAR PacketData;
+    UINT AvailableSize;
+    UINT ContiguousSize;
     ULONG BytesCopied;
+    USHORT FragmentOffset;
+
+    AvailableSize = IPPacket->TotalSize >= IPPacket->Position ?
+                    IPPacket->TotalSize - IPPacket->Position : 0;
     /* Read in the first IP header byte for size information */
     BytesCopied = CopyPacketToBuffer((PCHAR)&FirstByte,
                                      IPPacket->NdisPacket,
@@ -642,7 +649,8 @@ VOID IPv4Receive(PIP_INTERFACE IF, PIP_PACKET IPPacket)
     IPPacket->HeaderSize = (FirstByte & 0x0F) << 2;
     TI_DbgPrint(DEBUG_IP, ("IPPacket->HeaderSize = %d\n", IPPacket->HeaderSize));
 
-    if (IPPacket->HeaderSize > IPv4_MAX_HEADER_SIZE) {
+    if (IPPacket->HeaderSize < sizeof(IPv4_HEADER) ||
+        IPPacket->HeaderSize > IPv4_MAX_HEADER_SIZE) {
         TI_DbgPrint(MIN_TRACE, ("Datagram received with incorrect header size (%d).\n",
 	      IPPacket->HeaderSize));
         /* Discard packet */
@@ -681,6 +689,12 @@ VOID IPv4Receive(PIP_INTERFACE IF, PIP_PACKET IPPacket)
 
     IPPacket->TotalSize = WN2H(((PIPv4_HEADER)IPPacket->Header)->TotalLength);
 
+    if (IPPacket->TotalSize < IPPacket->HeaderSize ||
+        IPPacket->TotalSize > AvailableSize)
+    {
+        return;
+    }
+
     AddrInitIPv4(&IPPacket->SrcAddr, ((PIPv4_HEADER)IPPacket->Header)->SrcAddr);
     AddrInitIPv4(&IPPacket->DstAddr, ((PIPv4_HEADER)IPPacket->Header)->DstAddr);
 
@@ -688,6 +702,26 @@ VOID IPv4Receive(PIP_INTERFACE IF, PIP_PACKET IPPacket)
 
     /* FIXME: Should we allow packets to be received on the wrong interface? */
     /* XXX Find out if this packet is destined for us */
+    FragmentOffset = WN2H(((PIPv4_HEADER)IPPacket->Header)->FlagsFragOfs);
+    if ((FragmentOffset & (IPv4_FRAGOFS_MASK | IPv4_MF_MASK)) == 0)
+    {
+        PacketData = NULL;
+        ContiguousSize = 0;
+        GetDataPtr(IPPacket->NdisPacket,
+                   IPPacket->Position,
+                   &PacketData,
+                   &ContiguousSize);
+        if (PacketData != NULL && ContiguousSize >= IPPacket->TotalSize)
+        {
+            ExFreePoolWithTag(IPPacket->Header, PACKET_BUFFER_TAG);
+            IPPacket->Header = PacketData;
+            IPPacket->MappedHeader = TRUE;
+            IPPacket->Data = PacketData + IPPacket->HeaderSize;
+            IPDispatchProtocol(IF, IPPacket);
+            return;
+        }
+    }
+
     ProcessFragment(IF, IPPacket);
 }
 
