@@ -9,6 +9,7 @@ set KMTEST_LIST=%TEMP%\kmtests-all.txt
 set KMTEST_LOG=%TEMP%\kmtest-current.log
 set RUN_ROSAUTOTEST=0
 set RUN_CPUBENCH=0
+set RUN_ETHBENCH=0
 set RUN_KMTEST=0
 set BOOT_TEST_SELECTED=0
 set BOOT_TEST_FAILURES=0
@@ -20,14 +21,17 @@ if errorlevel 1 goto disabled
 if not errorlevel 1 set RUN_ROSAUTOTEST=1
 "%S%\findstr.exe" /i /c:"CPUBENCH" "%OPTIONS%" >nul 2>nul
 if not errorlevel 1 set RUN_CPUBENCH=1
+"%S%\findstr.exe" /i /c:"ETHBENCH" "%OPTIONS%" >nul 2>nul
+if not errorlevel 1 set RUN_ETHBENCH=1
 "%S%\findstr.exe" /i /c:"KMTEST" "%OPTIONS%" >nul 2>nul
 if not errorlevel 1 set RUN_KMTEST=1
 
-if "!RUN_ROSAUTOTEST!!RUN_CPUBENCH!!RUN_KMTEST!" == "000" goto disabled
+if "!RUN_ROSAUTOTEST!!RUN_CPUBENCH!!RUN_ETHBENCH!!RUN_KMTEST!" == "0000" goto disabled
 
 del /q "%OPTIONS%" 2>nul
 "%S%\dbgprint.exe" BOOT_TESTS_BEGIN
 
+if "!RUN_ETHBENCH!" == "1" call :run_ethbench
 if "!RUN_CPUBENCH!" == "1" call :run_cpubench
 if "!RUN_KMTEST!" == "1" call :run_kmtests
 if "!RUN_ROSAUTOTEST!" == "1" call :run_rosautotest
@@ -47,6 +51,21 @@ exit /b 1
 :disabled
 del /q "%OPTIONS%" 2>nul
 endlocal
+exit /b 0
+
+:run_ethbench
+set /a BOOT_TEST_SELECTED+=1
+if not exist "%~dp0rp1gem_benchmark_start.cmd" goto ethbench_missing
+set ETHBENCH_STATUS=failed
+call "%~dp0rp1gem_benchmark_start.cmd"
+if /i not "!ETHBENCH_STATUS!" == "passed" goto ethbench_failed
+exit /b 0
+
+:ethbench_missing
+"%S%\dbgprint.exe" ETHBENCH_RUNNER_MISSING
+
+:ethbench_failed
+set /a BOOT_TEST_FAILURES+=1
 exit /b 0
 
 :run_cpubench
