@@ -23,9 +23,9 @@ GENERIC_MAPPING PspProcessMapping =
     STANDARD_RIGHTS_READ    | PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
     STANDARD_RIGHTS_WRITE   | PROCESS_CREATE_PROCESS    | PROCESS_CREATE_THREAD   |
     PROCESS_VM_OPERATION    | PROCESS_VM_WRITE          | PROCESS_DUP_HANDLE      |
-    PROCESS_TERMINATE       | PROCESS_SET_QUOTA         | PROCESS_SET_INFORMATION |
+    PROCESS_SET_QUOTA       | PROCESS_SET_INFORMATION   |
     PROCESS_SUSPEND_RESUME,
-    STANDARD_RIGHTS_EXECUTE | SYNCHRONIZE,
+    STANDARD_RIGHTS_EXECUTE | SYNCHRONIZE | PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
     PROCESS_ALL_ACCESS
 };
 
@@ -33,10 +33,72 @@ GENERIC_MAPPING PspThreadMapping =
 {
     STANDARD_RIGHTS_READ    | THREAD_GET_CONTEXT      | THREAD_QUERY_INFORMATION,
     STANDARD_RIGHTS_WRITE   | THREAD_TERMINATE        | THREAD_SUSPEND_RESUME    |
-    THREAD_ALERT            | THREAD_SET_INFORMATION  | THREAD_SET_CONTEXT,
-    STANDARD_RIGHTS_EXECUTE | SYNCHRONIZE,
+    THREAD_ALERT            | THREAD_SET_INFORMATION  | THREAD_SET_CONTEXT       |
+    THREAD_SET_LIMITED_INFORMATION,
+    STANDARD_RIGHTS_EXECUTE | SYNCHRONIZE | THREAD_QUERY_LIMITED_INFORMATION | THREAD_RESUME,
     THREAD_ALL_ACCESS
 };
+
+NTSTATUS
+NTAPI
+PspProcessOpen(IN OB_OPEN_REASON Reason,
+               IN KPROCESSOR_MODE AccessMode,
+               IN PEPROCESS Process OPTIONAL,
+               IN PVOID Object,
+               IN OUT PACCESS_MASK GrantedAccess,
+               IN ULONG HandleCount)
+{
+    UNREFERENCED_PARAMETER(Reason);
+    UNREFERENCED_PARAMETER(AccessMode);
+    UNREFERENCED_PARAMETER(Process);
+    UNREFERENCED_PARAMETER(Object);
+    UNREFERENCED_PARAMETER(HandleCount);
+
+    if ((*GrantedAccess & PROCESS_QUERY_INFORMATION) ||
+        ((*GrantedAccess & (PROCESS_VM_OPERATION | PROCESS_VM_WRITE)) ==
+         (PROCESS_VM_OPERATION | PROCESS_VM_WRITE)))
+    {
+        *GrantedAccess |= PROCESS_QUERY_LIMITED_INFORMATION;
+    }
+    if (*GrantedAccess & PROCESS_SET_INFORMATION) *GrantedAccess |= PROCESS_SET_LIMITED_INFORMATION;
+
+    return STATUS_SUCCESS;
+}
+
+VOID
+NTAPI
+PspProcessClose(IN PEPROCESS Process OPTIONAL,
+                IN PVOID Object,
+                IN ULONG_PTR ProcessHandleCount,
+                IN ULONG_PTR SystemHandleCount)
+{
+    UNREFERENCED_PARAMETER(Process);
+    UNREFERENCED_PARAMETER(Object);
+    UNREFERENCED_PARAMETER(ProcessHandleCount);
+    UNREFERENCED_PARAMETER(SystemHandleCount);
+}
+
+NTSTATUS
+NTAPI
+PspThreadOpen(IN OB_OPEN_REASON Reason,
+              IN KPROCESSOR_MODE AccessMode,
+              IN PEPROCESS Process OPTIONAL,
+              IN PVOID Object,
+              IN OUT PACCESS_MASK GrantedAccess,
+              IN ULONG HandleCount)
+{
+    UNREFERENCED_PARAMETER(Reason);
+    UNREFERENCED_PARAMETER(AccessMode);
+    UNREFERENCED_PARAMETER(Process);
+    UNREFERENCED_PARAMETER(Object);
+    UNREFERENCED_PARAMETER(HandleCount);
+
+    if (*GrantedAccess & THREAD_QUERY_INFORMATION) *GrantedAccess |= THREAD_QUERY_LIMITED_INFORMATION;
+    if (*GrantedAccess & THREAD_SET_INFORMATION) *GrantedAccess |= THREAD_SET_LIMITED_INFORMATION;
+    if (*GrantedAccess & THREAD_SUSPEND_RESUME) *GrantedAccess |= THREAD_RESUME;
+
+    return STATUS_SUCCESS;
+}
 
 PVOID PspSystemDllBase;
 PVOID PspSystemDllSection;
@@ -319,7 +381,8 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     PETHREAD SysThread;
     MM_SYSTEMSIZE SystemSize;
     UNICODE_STRING Name;
-    OBJECT_TYPE_INITIALIZER ObjectTypeInitializer;
+    OBP_EXTENDED_OBJECT_TYPE_INITIALIZER ObjectTypeInitializerEx;
+    POBJECT_TYPE_INITIALIZER ObjectTypeInitializer = &ObjectTypeInitializerEx.TypeInfo;
     ULONG i;
 
 #if defined(_M_ARM64)
@@ -412,47 +475,66 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     PsIdleProcess->Pcb.KernelTime = 0;
 
     /* Initialize Object Initializer */
-    RtlZeroMemory(&ObjectTypeInitializer, sizeof(ObjectTypeInitializer));
-    ObjectTypeInitializer.Length = sizeof(ObjectTypeInitializer);
-    ObjectTypeInitializer.InvalidAttributes = OBJ_PERMANENT |
-                                              OBJ_EXCLUSIVE |
-                                              OBJ_OPENIF;
-    ObjectTypeInitializer.PoolType = NonPagedPool;
-    ObjectTypeInitializer.SecurityRequired = TRUE;
+    RtlZeroMemory(&ObjectTypeInitializerEx, sizeof(ObjectTypeInitializerEx));
+    ObjectTypeInitializer->Length = sizeof(ObjectTypeInitializerEx);
+    ObjectTypeInitializer->InvalidAttributes = OBJ_PERMANENT |
+                                               OBJ_EXCLUSIVE |
+                                               OBJ_OPENIF;
+    ObjectTypeInitializer->PoolType = NonPagedPoolNx;
+    ObjectTypeInitializer->SecurityRequired = TRUE;
+    ObjectTypeInitializer->UnnamedObjectsOnly = TRUE;
+    ObjectTypeInitializer->SupportsObjectCallbacks = TRUE;
+    ObjectTypeInitializer->CacheAligned = TRUE;
 
     /* Initialize the Process type */
     RtlInitUnicodeString(&Name, L"Process");
-    ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(EPROCESS);
-    ObjectTypeInitializer.GenericMapping = PspProcessMapping;
-    ObjectTypeInitializer.ValidAccessMask = PROCESS_ALL_ACCESS;
-    ObjectTypeInitializer.DeleteProcedure = PspDeleteProcess;
-    ObCreateObjectType(&Name, &ObjectTypeInitializer, NULL, &PsProcessType);
+    ObjectTypeInitializer->ObjectTypeCode = 0x20;
+    ObjectTypeInitializer->RetainAccess = 0x101000;
+    ObjectTypeInitializer->DefaultPagedPoolCharge = 0x1000;
+    ObjectTypeInitializer->DefaultNonPagedPoolCharge = 0x900;
+    ObjectTypeInitializer->GenericMapping = PspProcessMapping;
+    ObjectTypeInitializer->ValidAccessMask = PROCESS_ALL_ACCESS;
+    ObjectTypeInitializer->OpenProcedure = PspProcessOpen;
+    ObjectTypeInitializer->CloseProcedure = PspProcessClose;
+    ObjectTypeInitializer->DeleteProcedure = PspDeleteProcess;
+    ObjectTypeInitializerEx.SeMandatoryLabelMask = 3;
+    ObCreateObjectType(&Name, ObjectTypeInitializer, NULL, &PsProcessType);
 #if defined(_M_ARM64)
     DPRINT("[arm64][ps] PspInitPhase0: process type=%p\n", PsProcessType);
 #endif
 
     /*  Initialize the Thread type  */
     RtlInitUnicodeString(&Name, L"Thread");
-    ObjectTypeInitializer.Length = sizeof(ObjectTypeInitializer);
-    ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(ETHREAD);
-    ObjectTypeInitializer.GenericMapping = PspThreadMapping;
-    ObjectTypeInitializer.ValidAccessMask = THREAD_ALL_ACCESS;
-    ObjectTypeInitializer.DeleteProcedure = PspDeleteThread;
-    ObCreateObjectType(&Name, &ObjectTypeInitializer, NULL, &PsThreadType);
+    ObjectTypeInitializer->ObjectTypeCode = 4;
+    ObjectTypeInitializer->RetainAccess = 0x101800;
+    ObjectTypeInitializer->DefaultPagedPoolCharge = 0;
+    ObjectTypeInitializer->DefaultNonPagedPoolCharge = 0x768;
+    ObjectTypeInitializer->GenericMapping = PspThreadMapping;
+    ObjectTypeInitializer->ValidAccessMask = THREAD_ALL_ACCESS;
+    ObjectTypeInitializer->OpenProcedure = PspThreadOpen;
+    ObjectTypeInitializer->CloseProcedure = NULL;
+    ObjectTypeInitializer->DeleteProcedure = PspDeleteThread;
+    ObCreateObjectType(&Name, ObjectTypeInitializer, NULL, &PsThreadType);
 #if defined(_M_ARM64)
     DPRINT("[arm64][ps] PspInitPhase0: thread type=%p\n", PsThreadType);
 #endif
 
     /*  Initialize the Job type  */
     RtlInitUnicodeString(&Name, L"Job");
-    ObjectTypeInitializer.Length = sizeof(ObjectTypeInitializer);
-    ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(EJOB);
-    ObjectTypeInitializer.GenericMapping = PspJobMapping;
-    ObjectTypeInitializer.InvalidAttributes = 0;
-    ObjectTypeInitializer.ValidAccessMask = JOB_OBJECT_ALL_ACCESS;
-    ObjectTypeInitializer.CloseProcedure = PspJobClose;
-    ObjectTypeInitializer.DeleteProcedure = PspDeleteJob;
-    ObCreateObjectType(&Name, &ObjectTypeInitializer, NULL, &PsJobType);
+    ObjectTypeInitializer->UnnamedObjectsOnly = FALSE;
+    ObjectTypeInitializer->SupportsObjectCallbacks = FALSE;
+    ObjectTypeInitializer->CacheAligned = FALSE;
+    ObjectTypeInitializer->ObjectTypeCode = 0x800;
+    ObjectTypeInitializer->RetainAccess = 0;
+    ObjectTypeInitializer->DefaultNonPagedPoolCharge = 0x728;
+    ObjectTypeInitializer->GenericMapping = PspJobMapping;
+    ObjectTypeInitializer->InvalidAttributes = 0;
+    ObjectTypeInitializer->ValidAccessMask = JOB_OBJECT_ALL_ACCESS;
+    ObjectTypeInitializer->OpenProcedure = NULL;
+    ObjectTypeInitializer->CloseProcedure = PspJobClose;
+    ObjectTypeInitializer->DeleteProcedure = PspDeleteJob;
+    ObjectTypeInitializerEx.SeMandatoryLabelMask = 1;
+    ObCreateObjectType(&Name, ObjectTypeInitializer, NULL, &PsJobType);
 #if defined(_M_ARM64)
     DPRINT("[arm64][ps] PspInitPhase0: job type=%p\n", PsJobType);
 #endif

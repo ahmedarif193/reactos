@@ -371,6 +371,7 @@ typedef struct _PS_CREATE_INFO
 #define PROCESS_QUERY_INFORMATION               0x0400
 #define PROCESS_SUSPEND_RESUME                  0x0800
 #define PROCESS_QUERY_LIMITED_INFORMATION       0x1000
+#define PROCESS_SET_LIMITED_INFORMATION         0x2000
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
 #define PROCESS_ALL_ACCESS                      (STANDARD_RIGHTS_REQUIRED | \
                                                  SYNCHRONIZE | \
@@ -407,9 +408,10 @@ typedef struct _PS_CREATE_INFO
 #define JOB_OBJECT_QUERY                        0x4
 #define JOB_OBJECT_TERMINATE                    0x8
 #define JOB_OBJECT_SET_SECURITY_ATTRIBUTES      0x10
+#define JOB_OBJECT_IMPERSONATE                  0x20
 #define JOB_OBJECT_ALL_ACCESS                   (STANDARD_RIGHTS_REQUIRED | \
                                                  SYNCHRONIZE | \
-                                                 31)
+                                                 0x3F)
 
 //
 // Job Limit Flags
