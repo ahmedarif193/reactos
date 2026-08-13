@@ -12,42 +12,64 @@
 
 static VOID RefillSocketBuffer( PAFD_FCB FCB )
 {
-    /* Make sure nothing's in flight first */
-    if (FCB->ReceiveIrp.InFlightRequest) return;
-
-    /* Now ensure that receive is still allowed */
-    if (FCB->TdiReceiveClosed) return;
-
-    /* Check if the buffer is full */
-    if (FCB->Recv.Content == FCB->Recv.Size)
+    /* A lower transport may complete the receive before TdiReceive returns.
+     * Turn a nested repost into another iteration on the outer stack. */
+    if (FCB->ReceiveRepostActive)
     {
-        /* If there are bytes used, we can solve this problem */
-        if (FCB->Recv.BytesUsed != 0)
-        {
-            /* Reposition the unused portion to the beginning of the receive window */
-            RtlMoveMemory(FCB->Recv.Window,
-                          FCB->Recv.Window + FCB->Recv.BytesUsed,
-                          FCB->Recv.Content - FCB->Recv.BytesUsed);
-
-            FCB->Recv.Content -= FCB->Recv.BytesUsed;
-            FCB->Recv.BytesUsed = 0;
-        }
-        else
-        {
-            /* No space in the buffer to receive */
-            return;
-        }
+        FCB->ReceiveRepostPending = TRUE;
+        return;
     }
 
-    AFD_DbgPrint(MID_TRACE,("Replenishing buffer\n"));
+    FCB->ReceiveRepostActive = TRUE;
 
-    TdiReceive( &FCB->ReceiveIrp.InFlightRequest,
-                FCB->Connection.Object,
-                TDI_RECEIVE_NORMAL,
-                FCB->Recv.Window + FCB->Recv.Content,
-                FCB->Recv.Size - FCB->Recv.Content,
-                ReceiveComplete,
-                FCB );
+    do
+    {
+        FCB->ReceiveRepostPending = FALSE;
+
+        /* Make sure nothing's in flight first */
+        if (FCB->ReceiveIrp.InFlightRequest) break;
+
+        /* A receive IRP owns its window until completion. Apply a queued
+         * resize only after that ownership ends and buffered data fits. */
+        if (!AfdTryApplyPendingReceiveWindow(FCB)) break;
+
+        /* Now ensure that receive is still allowed */
+        if (FCB->TdiReceiveClosed) break;
+
+        /* Check if the buffer is full */
+        if (FCB->Recv.Content == FCB->Recv.Size)
+        {
+            /* If there are bytes used, we can solve this problem */
+            if (FCB->Recv.BytesUsed != 0)
+            {
+                /* Reposition the unused portion to the beginning of the receive window */
+                RtlMoveMemory(FCB->Recv.Window,
+                              FCB->Recv.Window + FCB->Recv.BytesUsed,
+                              FCB->Recv.Content - FCB->Recv.BytesUsed);
+
+                FCB->Recv.Content -= FCB->Recv.BytesUsed;
+                FCB->Recv.BytesUsed = 0;
+            }
+            else
+            {
+                /* No space in the buffer to receive */
+                break;
+            }
+        }
+
+        AFD_DbgPrint(MID_TRACE,("Replenishing buffer\n"));
+
+        TdiReceive( &FCB->ReceiveIrp.InFlightRequest,
+                    FCB->Connection.Object,
+                    TDI_RECEIVE_NORMAL,
+                    FCB->Recv.Window + FCB->Recv.Content,
+                    FCB->Recv.Size - FCB->Recv.Content,
+                    ReceiveComplete,
+                    FCB );
+
+    } while (FCB->ReceiveRepostPending);
+
+    FCB->ReceiveRepostActive = FALSE;
 }
 
 static VOID HandleReceiveComplete( PAFD_FCB FCB, NTSTATUS Status, ULONG_PTR Information )
@@ -685,6 +707,8 @@ PacketSocketRecvComplete(
         PollReeval( FCB->DeviceExt, FCB->FileObject );
     } else
         FCB->PollState &= ~AFD_EVENT_RECEIVE;
+
+    AfdTryApplyPendingReceiveWindow(FCB);
 
     if( NT_SUCCESS(Irp->IoStatus.Status) && FCB->Recv.Content < FCB->Recv.Size ) {
         /* Now relaunch the datagram request */

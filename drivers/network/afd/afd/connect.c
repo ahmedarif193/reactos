@@ -286,6 +286,7 @@ MakeSocketIntoConnection(PAFD_FCB FCB) {
                                                  TAG_AFD_DATA_BUFFER);
 
         if( !FCB->Recv.Window ) return STATUS_NO_MEMORY;
+        FCB->ReceiveWindowAllocationSize = FCB->Recv.Size;
     }
 
     if (!FCB->Send.Window)
