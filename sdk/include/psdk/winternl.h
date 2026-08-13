@@ -230,7 +230,9 @@ typedef struct _OBJECT_ATTRIBUTES
 #define OBJ_OPENLINK           0x00000100L
 #define OBJ_KERNEL_HANDLE      0x00000200L
 #define OBJ_FORCE_ACCESS_CHECK 0x00000400L
-#define OBJ_VALID_ATTRIBUTES   0x000007F2L
+#define OBJ_IGNORE_IMPERSONATED_DEVICEMAP 0x00000800L
+#define OBJ_DONT_REPARSE       0x00001000L
+#define OBJ_VALID_ATTRIBUTES   0x00001FF2L
 
 #ifndef InitializeObjectAttributes
 #define InitializeObjectAttributes(p, n, a, r, s) \
