@@ -711,7 +711,7 @@ ExpAllocateHandleTableEntry(IN PHANDLE_TABLE HandleTable,
     PHANDLE_TABLE_ENTRY Entry, NextEntry, PageHeader;
     PHANDLE_TABLE_FREE_LIST FreeList;
     LONG Count;
-    ULONG BaseHandle, EntryIndex, i, NextHandle, Processor, SelectedProcessor;
+    ULONG BaseHandle, CurrentNextHandle, EntryIndex, i, NextHandle, Processor, SelectedProcessor;
     ULONG_PTR PageBase;
     BOOLEAN Result;
 
@@ -754,7 +754,14 @@ ExpAllocateHandleTableEntry(IN PHANDLE_TABLE HandleTable,
                     BaseHandle = (ULONG)(ULONG_PTR)PageHeader->NextFreeHandleEntry;
                     EntryIndex = (ULONG)(((ULONG_PTR)Entry - PageBase) / sizeof(*Entry));
                     NewHandle->Value = BaseHandle + INDEX_TO_HANDLE_VALUE(EntryIndex);
-                    ASSERT(NewHandle->Value < HandleTable->NextHandleNeedingPool);
+                    /* Observe the growth frontier after consuming the published entry */
+                    CurrentNextHandle = ReadULongAcquire(&HandleTable->NextHandleNeedingPool);
+                    if (NewHandle->Value >= CurrentNextHandle)
+                    {
+                        DPRINT1("EX: invalid free-list entry: table=%p list=%p cpu=%lu entry=%p next=%p page=%p base=%lx index=%lu handle=%Ix frontier=%lx\n",
+                                HandleTable, FreeList, Processor, Entry, NextEntry, (PVOID)PageBase, BaseHandle, EntryIndex, NewHandle->Value, CurrentNextHandle);
+                    }
+                    ASSERT(NewHandle->Value < CurrentNextHandle);
                     return Entry;
                 }
             }
