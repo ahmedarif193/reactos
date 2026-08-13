@@ -172,6 +172,8 @@ TestQueueRundown(VOID)
         ok_eq_pointer(First->Flink, &Entries[1]);
         ok_eq_pointer(Entries[1].Flink, First);
     }
+    ok_eq_long(KeReadStateQueue(&Queue), 0L);
+    ok_bool_true(IsListEmpty(&Queue.EntryListHead), "Rundown queue head should be empty");
 
     KeInitializeQueue(&Queue, 0);
     First = KeRundownQueue(&Queue);
