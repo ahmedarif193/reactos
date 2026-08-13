@@ -349,7 +349,7 @@ WaitForBatchClientConnect(
 
 /*
  * Batch-install every device in a multi-sz list via a single
- * rundll32.exe invocation of newdev.dll,ClientSideInstallBatchW.
+ * rundll32.exe invocation of newdev.dll,ClientSideInstallW.
  *
  * Used at boot to amortize the rundll32 process-spawn cost (previously
  * ~1 spawn per device, e.g. 53 spawns on the livecd first boot). The
@@ -440,14 +440,9 @@ InstallDevicesBatch(PCWSTR MultiSzDeviceList, DWORD DeviceCount)
         goto cleanup;
     }
 
-    /* Launch rundll32 to call ClientSideInstallBatchW.
-     *
-     * rundll32 appends a 'W' suffix to the function name at Unicode lookup
-     * time (see base/system/rundll32/rundll32.c), so we pass
-     * "ClientSideInstallBatch" here and rundll32 resolves the real export
-     * "ClientSideInstallBatchW". Mirrors how "ClientSideInstall" resolves
-     * to ClientSideInstallW for the single-device path. */
-    wcscpy(CommandLine, L"rundll32.exe newdev.dll,ClientSideInstallBatch ");
+    /* Reuse the existing ClientSideInstallW entry point. The private marker
+     * selects batch mode without adding another newdev.dll export. */
+    wcscpy(CommandLine, L"rundll32.exe newdev.dll,ClientSideInstall ");
     wcscat(CommandLine, PipeName);
 
     ZeroMemory(&StartupInfo, sizeof(StartupInfo));
@@ -507,7 +502,14 @@ InstallDevicesBatch(PCWSTR MultiSzDeviceList, DWORD DeviceCount)
         }
     }
 
-    /* Batch-specific payload: DeviceCount then N (size, instance) pairs. */
+    /* Batch-specific payload: marker, DeviceCount, then N pairs. */
+    Value = NEWDEV_INSTALL_BATCH_MARKER;
+    if (!WriteFile(hPipe, &Value, sizeof(Value), &BytesWritten, NULL))
+    {
+        DPRINT1("WriteFile(BatchMarker) failed with error %u\n", GetLastError());
+        goto cleanup;
+    }
+
     if (!WriteFile(hPipe, &DeviceCount, sizeof(DeviceCount), &BytesWritten, NULL))
     {
         DPRINT1("WriteFile(DeviceCount) failed with error %u\n", GetLastError());
@@ -935,7 +937,7 @@ DeviceInstallThread(LPVOID lpParameter)
         /* Try the batch path first — one rundll32 spawn for the whole
          * filtered boot device list. Falls back to the legacy per-device
          * loop if the batch child fails to signal completion (e.g. an
-         * older newdev.dll without ClientSideInstallBatchW, or an
+         * older newdev.dll without the private batch protocol, or an
          * infrastructure failure). */
         if (!InstallDevicesBatch(filteredList, filteredCount))
         {
@@ -1016,7 +1018,7 @@ Step2:
 
         /*
          * If the burst contains more than one device AND we don't need the
-         * UI wizard, batch them through a single ClientSideInstallBatchW
+         * UI wizard, batch them through a single ClientSideInstallW
          * rundll32 spawn. Otherwise fall back to the legacy per-device
          * path (which still respects ShowWizard and drives the wizard UI
          * for interactive installs).
