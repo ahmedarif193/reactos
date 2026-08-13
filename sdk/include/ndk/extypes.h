@@ -600,7 +600,11 @@ typedef struct _EX_FAST_REF
     union
     {
         PVOID Object;
+#ifdef _WIN64
+        ULONG_PTR RefCnt:4;
+#else
         ULONG_PTR RefCnt:3;
+#endif
         ULONG_PTR Value;
     };
 } EX_FAST_REF, *PEX_FAST_REF;

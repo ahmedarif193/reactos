@@ -157,7 +157,13 @@ typedef struct _HARDERROR_USER_PARAMETERS
     WCHAR Buffer[ANYSIZE_ARRAY];
 } HARDERROR_USER_PARAMETERS, *PHARDERROR_USER_PARAMETERS;
 
+#ifdef _WIN64
+#define MAX_FAST_REFS           15
+#else
 #define MAX_FAST_REFS           7
+#endif
+
+C_ASSERT(MAX_FAST_REFS + 1 == MEMORY_ALLOCATION_ALIGNMENT);
 
 #define ExAcquireRundownProtection          _ExAcquireRundownProtection
 #define ExReleaseRundownProtection          _ExReleaseRundownProtection
