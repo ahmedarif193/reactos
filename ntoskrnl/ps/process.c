@@ -751,7 +751,7 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
     }
 
     /* Set the handle table PID */
-    Process->ObjectTable->UniqueProcessId = Process->UniqueProcessId;
+    Process->ObjectTable->UniqueProcessId = PtrToUlong(Process->UniqueProcessId);
 
     /* Check if we need to audit */
     if (SeDetailedAuditingWithToken(NULL)) SeAuditProcessCreate(Process);
