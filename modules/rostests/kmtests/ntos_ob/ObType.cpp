@@ -20,6 +20,7 @@
     Status = ZwQueryObject(Handle, ObjectBasicInformation,          \
                             &ObjectInfo, sizeof ObjectInfo, NULL);  \
     ok_eq_hex(Status, STATUS_SUCCESS);                              \
+    trace("CheckObject(%p): pointers %lu (logical %lu), handles %lu (expected %lu)\n", Handle, ObjectInfo.PointerCount, (ULONG)(Pointers), ObjectInfo.HandleCount, (ULONG)(Handles)); \
     if (GetNTVersion() < _WIN32_WINNT_WIN8)                         \
         ok_eq_ulong(ObjectInfo.PointerCount, Pointers);            \
     ok_eq_ulong(ObjectInfo.HandleCount, Handles);                   \
@@ -59,6 +60,9 @@ typedef struct _COUNTS
     USHORT QueryName;
 } COUNTS, *PCOUNTS;
 static COUNTS Counts;
+static BOOLEAN ExtendedParseCalled;
+static OB_EXTENDED_PARSE_PARAMETERS ExtendedParseParameters;
+static ULONG ExtendedObjectSecurityMode;
 
 static
 VOID
@@ -122,6 +126,19 @@ CloseProc(
 static
 VOID
 NTAPI
+CloseProc_NT10(
+    _In_opt_ PEPROCESS Process,
+    _In_ PVOID Object,
+    _In_ ULONG_PTR ProcessHandleCount,
+    _In_ ULONG_PTR SystemHandleCount)
+{
+    DPRINT("CloseProc_NT10() 0x%p, ProcessHandleCount %Iu, SystemHandleCount %Iu\n", Object, ProcessHandleCount, SystemHandleCount);
+    ++Counts.Close;
+}
+
+static
+VOID
+NTAPI
 DeleteProc(
     IN PVOID Object)
 {
@@ -149,6 +166,30 @@ ParseProc(
 
     ++Counts.Parse;
     return STATUS_OBJECT_NAME_NOT_FOUND;//STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+NTAPI
+ParseProcEx(
+    _In_ PVOID ParseObject,
+    _In_ PVOID ObjectType,
+    _Inout_ PACCESS_STATE AccessState,
+    _In_ KPROCESSOR_MODE AccessMode,
+    _In_ ULONG Attributes,
+    _Inout_ PUNICODE_STRING CompleteName,
+    _Inout_ PUNICODE_STRING RemainingName,
+    _Inout_opt_ PVOID Context,
+    _In_opt_ PSECURITY_QUALITY_OF_SERVICE SecurityQos,
+    _In_ POB_EXTENDED_PARSE_PARAMETERS ExtendedParameters,
+    _Out_ PVOID *Object)
+{
+    DPRINT("ParseProcEx() called\n");
+    *Object = NULL;
+    ExtendedParseCalled = TRUE;
+    if (ExtendedParameters != NULL) ExtendedParseParameters = *ExtendedParameters;
+    ++Counts.Parse;
+    return STATUS_OBJECT_NAME_NOT_FOUND;
 }
 
 static
@@ -186,6 +227,276 @@ QueryNameProc(
     return STATUS_OBJECT_NAME_NOT_FOUND;
 }
 
+template<typename Initializer>
+static
+VOID
+SetCommonCallbacks(
+    Initializer& TypeInitializer)
+{
+    TypeInitializer.DeleteProcedure = DeleteProc;
+    TypeInitializer.DumpProcedure = DumpProc;
+    TypeInitializer.OkayToCloseProcedure = OkayToCloseProc;
+    TypeInitializer.QueryNameProcedure = QueryNameProc;
+}
+
+template<unsigned NtDdiVersion>
+struct TObCallbackSetter
+{
+    template<typename Initializer>
+    static
+    VOID
+    Set(
+        Initializer& TypeInitializer)
+    {
+        using OPEN_PROCEDURE = decltype(TypeInitializer.OpenProcedure);
+        SetCommonCallbacks(TypeInitializer);
+        TypeInitializer.OpenProcedure = (OPEN_PROCEDURE)OpenProc_NT6;
+        TypeInitializer.CloseProcedure = CloseProc;
+        TypeInitializer.ParseProcedure = ParseProc;
+    }
+};
+
+template<>
+struct TObCallbackSetter<NTDDI_WS03>
+{
+    template<typename Initializer>
+    static
+    VOID
+    Set(
+        Initializer& TypeInitializer)
+    {
+        SetCommonCallbacks(TypeInitializer);
+        TypeInitializer.OpenProcedure = OpenProc;
+        TypeInitializer.CloseProcedure = CloseProc;
+        TypeInitializer.ParseProcedure = ParseProc;
+    }
+};
+
+template<>
+struct TObCallbackSetter<NTDDI_WIN11_GE>
+{
+    template<typename Initializer>
+    static
+    VOID
+    Set(
+        Initializer& TypeInitializer)
+    {
+        SetCommonCallbacks(TypeInitializer);
+        TypeInitializer.OpenProcedure = OpenProc_NT6;
+        TypeInitializer.CloseProcedure = CloseProc_NT10;
+        TypeInitializer.UseExtendedParameters = TRUE;
+        TypeInitializer.ParseProcedureEx = ParseProcEx;
+    }
+};
+
+typedef NTSTATUS
+(NTAPI *POB_CREATE_OBJECT_TYPE_EX)(
+    _In_ PUNICODE_STRING TypeName,
+    _In_ POBJECT_TYPE_INITIALIZER ObjectTypeInitializer,
+    _In_opt_ PSECURITY_DESCRIPTOR SecurityDescriptor,
+    _In_opt_ LONG_PTR WaitObjectInfo,
+    _Out_ POBJECT_TYPE *ObjectType);
+
+template<unsigned NtDdiVersion>
+static
+NTSTATUS
+ObtCreateObjectTypeForVersion(
+    ULONG Index,
+    PUNICODE_STRING TypeName,
+    TOBJECT_TYPE_INITIALIZER<NtDdiVersion>& TypeInitializer,
+    TOBJECT_TYPE<NtDdiVersion>** ObjectType)
+{
+    UNREFERENCED_PARAMETER(Index);
+    return ObCreateObjectType(TypeName, (POBJECT_TYPE_INITIALIZER)&TypeInitializer, NULL, (POBJECT_TYPE*)ObjectType);
+}
+
+template<>
+NTSTATUS
+ObtCreateObjectTypeForVersion<NTDDI_WIN11_GE>(
+    ULONG Index,
+    PUNICODE_STRING TypeName,
+    TOBJECT_TYPE_INITIALIZER<NTDDI_WIN11_GE>& TypeInitializer,
+    TOBJECT_TYPE<NTDDI_WIN11_GE>** ObjectType)
+{
+    struct EXTENDED_INITIALIZER
+    {
+        TOBJECT_TYPE_INITIALIZER<NTDDI_WIN11_GE> TypeInitializer;
+        ULONG SeMandatoryLabelMask;
+        ULONG SeTrustConstraintMask;
+    };
+    static EXTENDED_INITIALIZER ExtendedInitializer;
+    POB_CREATE_OBJECT_TYPE_EX CreateObjectTypeEx;
+    SECURITY_DESCRIPTOR_RELATIVE TypeSecurityDescriptor;
+    ULONG ReturnLength;
+    NTSTATUS Status;
+
+    if (Index != NUM_OBTYPES - 1) return ObCreateObjectType(TypeName, (POBJECT_TYPE_INITIALIZER)&TypeInitializer, NULL, (POBJECT_TYPE*)ObjectType);
+
+    static_assert(sizeof(ExtendedInitializer) == 128, "Unexpected extended object type initializer size");
+    RtlZeroMemory(&ExtendedInitializer, sizeof(ExtendedInitializer));
+    ExtendedInitializer.TypeInitializer = TypeInitializer;
+    ExtendedInitializer.TypeInitializer.Length = sizeof(ExtendedInitializer);
+    ExtendedInitializer.TypeInitializer.SeTrustConstraintMaskPresent = TRUE;
+    ExtendedInitializer.TypeInitializer.PoolType = NonPagedPoolNx;
+    ExtendedInitializer.TypeInitializer.DefaultPagedPoolCharge = 0x456;
+    ExtendedInitializer.TypeInitializer.DefaultNonPagedPoolCharge = 0x123;
+    ExtendedInitializer.TypeInitializer.WaitObjectFlagMask = 0x80000000;
+    ExtendedInitializer.TypeInitializer.WaitObjectFlagOffset = 0x12;
+    ExtendedInitializer.TypeInitializer.WaitObjectPointerOffset = 0x34;
+    ExtendedInitializer.SeMandatoryLabelMask = 0x13579bdf;
+    ExtendedInitializer.SeTrustConstraintMask = 0x2468ace0;
+    ExtendedObjectSecurityMode = MAXULONG;
+    ReturnLength = MAXULONG;
+    Status = ZwQuerySystemInformation(SystemObjectSecurityMode, &ExtendedObjectSecurityMode, 0, &ReturnLength);
+    trace("SystemObjectSecurityMode size 0: status 0x%08lx, mode 0x%08lx, return %lu\n", Status, ExtendedObjectSecurityMode, ReturnLength);
+    ok_eq_hex(Status, STATUS_INFO_LENGTH_MISMATCH);
+    ok_eq_ulong(ExtendedObjectSecurityMode, MAXULONG);
+    ok_eq_ulong(ReturnLength, sizeof(ExtendedObjectSecurityMode));
+    ExtendedObjectSecurityMode = MAXULONG;
+    ReturnLength = MAXULONG;
+    Status = ZwQuerySystemInformation(SystemObjectSecurityMode, &ExtendedObjectSecurityMode, sizeof(ExtendedObjectSecurityMode) - 1, &ReturnLength);
+    trace("SystemObjectSecurityMode size 3: status 0x%08lx, mode 0x%08lx, return %lu\n", Status, ExtendedObjectSecurityMode, ReturnLength);
+    ok_eq_hex(Status, STATUS_INFO_LENGTH_MISMATCH);
+    ok_eq_ulong(ExtendedObjectSecurityMode, MAXULONG);
+    ok_eq_ulong(ReturnLength, sizeof(ExtendedObjectSecurityMode));
+    ExtendedObjectSecurityMode = MAXULONG;
+    ReturnLength = MAXULONG;
+    Status = ZwQuerySystemInformation(SystemObjectSecurityMode, &ExtendedObjectSecurityMode, sizeof(ExtendedObjectSecurityMode) + 1, &ReturnLength);
+    trace("SystemObjectSecurityMode size 5: status 0x%08lx, mode 0x%08lx, return %lu\n", Status, ExtendedObjectSecurityMode, ReturnLength);
+    ok_eq_hex(Status, STATUS_INFO_LENGTH_MISMATCH);
+    ok_eq_ulong(ExtendedObjectSecurityMode, MAXULONG);
+    ok_eq_ulong(ReturnLength, sizeof(ExtendedObjectSecurityMode));
+    ExtendedObjectSecurityMode = 0;
+    ReturnLength = 0;
+    Status = ZwQuerySystemInformation(SystemObjectSecurityMode, &ExtendedObjectSecurityMode, sizeof(ExtendedObjectSecurityMode), &ReturnLength);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_ulong(ReturnLength, sizeof(ExtendedObjectSecurityMode));
+    if (!NT_SUCCESS(Status)) return Status;
+    trace("SystemObjectSecurityMode = %lu\n", ExtendedObjectSecurityMode);
+    RtlZeroMemory(&TypeSecurityDescriptor, sizeof(TypeSecurityDescriptor));
+    TypeSecurityDescriptor.Revision = SECURITY_DESCRIPTOR_REVISION;
+    TypeSecurityDescriptor.Control = SE_SELF_RELATIVE | SE_DACL_PRESENT;
+    CreateObjectTypeEx = (POB_CREATE_OBJECT_TYPE_EX)KmtGetSystemRoutineAddress(L"ObCreateObjectTypeEx");
+    ok(CreateObjectTypeEx != NULL, "ObCreateObjectTypeEx is not exported\n");
+    if (CreateObjectTypeEx == NULL) return STATUS_PROCEDURE_NOT_FOUND;
+    return CreateObjectTypeEx(TypeName, (POBJECT_TYPE_INITIALIZER)&ExtendedInitializer, (PSECURITY_DESCRIPTOR)&TypeSecurityDescriptor, 0x9b, (POBJECT_TYPE*)ObjectType);
+}
+
+template<unsigned NtDdiVersion>
+static
+VOID
+ObtCheckExtendedObjectType(
+    TOBJECT_TYPE<NtDdiVersion>*)
+{
+}
+
+template<>
+VOID
+ObtCheckExtendedObjectType<NTDDI_WIN11_GE>(
+    TOBJECT_TYPE<NTDDI_WIN11_GE>* ObjectType)
+{
+    ULONG HeaderCharge = sizeof(OBJECT_HEADER) + sizeof(OBJECT_HEADER_NAME_INFO) + sizeof(OBJECT_HEADER_HANDLE_INFO);
+    PSECURITY_DESCRIPTOR SecurityDescriptor = NULL;
+    BOOLEAN SecurityDescriptorAllocated = TRUE;
+    BOOLEAN DaclPresent = FALSE;
+    BOOLEAN DaclDefaulted = TRUE;
+    PACL Dacl = (PACL)(ULONG_PTR)-1;
+    NTSTATUS Status;
+
+    ok_eq_uint(ObjectType->TypeInfo.Length, 128);
+    ok_eq_ulong(ObjectType->TypeInfo.PoolType, NonPagedPoolNx);
+    ok_eq_ulong(ObjectType->TypeInfo.DefaultPagedPoolCharge, 0x456);
+    ok_eq_ulong(ObjectType->TypeInfo.DefaultNonPagedPoolCharge, 0x123 + HeaderCharge);
+    ok_eq_hex(ObjectType->TypeInfo.WaitObjectFlagMask, 0x80000000);
+    ok_eq_uint(ObjectType->TypeInfo.WaitObjectFlagOffset, 0x12);
+    ok_eq_uint(ObjectType->TypeInfo.WaitObjectPointerOffset, 0x34);
+    ok_eq_pointer(ObjectType->DefaultObject, UlongToPtr(0x9b));
+    ok_eq_hex(ObjectType->SeMandatoryLabelMask, 0x13579bdf);
+    ok_eq_hex(ObjectType->SeTrustConstraintMask, 0x2468ace0);
+
+    Status = ObGetObjectSecurity(ObjectType, &SecurityDescriptor, &SecurityDescriptorAllocated);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_bool(SecurityDescriptorAllocated, FALSE);
+    if (ExtendedObjectSecurityMode)
+    {
+        ok(SecurityDescriptor != NULL, "Object type security descriptor was not installed\n");
+        if (SecurityDescriptor != NULL)
+        {
+            Status = RtlGetDaclSecurityDescriptor(SecurityDescriptor, &DaclPresent, &Dacl, &DaclDefaulted);
+            ok_eq_hex(Status, STATUS_SUCCESS);
+            ok_eq_bool(DaclPresent, TRUE);
+            ok_eq_pointer(Dacl, NULL);
+            ok_eq_bool(DaclDefaulted, FALSE);
+        }
+    }
+    else
+    {
+        ok_eq_pointer(SecurityDescriptor, NULL);
+    }
+    if (SecurityDescriptor != NULL) ObReleaseObjectSecurity(SecurityDescriptor, SecurityDescriptorAllocated);
+}
+
+template<unsigned NtDdiVersion>
+static
+VOID
+ObtCheckDefaultObjectTypeSecurity(
+    TOBJECT_TYPE<NtDdiVersion>*)
+{
+}
+
+template<>
+VOID
+ObtCheckDefaultObjectTypeSecurity<NTDDI_WIN11_GE>(
+    TOBJECT_TYPE<NTDDI_WIN11_GE>* ObjectType)
+{
+    PSID ExpectedSids[] = {SeExports->SeWorldSid, SeExports->SeAliasAdminsSid, SeExports->SeLocalSystemSid};
+    PSECURITY_DESCRIPTOR SecurityDescriptor = NULL;
+    BOOLEAN SecurityDescriptorAllocated = TRUE;
+    BOOLEAN DaclPresent = FALSE;
+    BOOLEAN DaclDefaulted = TRUE;
+    PACCESS_ALLOWED_ACE Ace;
+    PVOID AcePointer;
+    PACL Dacl = NULL;
+    NTSTATUS Status;
+    ULONG Index;
+
+    Status = ObGetObjectSecurity(ObjectType, &SecurityDescriptor, &SecurityDescriptorAllocated);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_bool(SecurityDescriptorAllocated, FALSE);
+    if (ExtendedObjectSecurityMode)
+    {
+        ok(SecurityDescriptor != NULL, "Default object type security descriptor was not installed\n");
+        if (SecurityDescriptor != NULL)
+        {
+            Status = RtlGetDaclSecurityDescriptor(SecurityDescriptor, &DaclPresent, &Dacl, &DaclDefaulted);
+            ok_eq_hex(Status, STATUS_SUCCESS);
+            ok_eq_bool(DaclPresent, TRUE);
+            ok(Dacl != NULL, "Default object type DACL is missing\n");
+            ok_eq_bool(DaclDefaulted, FALSE);
+            if (Dacl != NULL)
+            {
+                ok_eq_uint(Dacl->AceCount, RTL_NUMBER_OF(ExpectedSids));
+                for (Index = 0; Index < min(Dacl->AceCount, RTL_NUMBER_OF(ExpectedSids)); Index++)
+                {
+                    AcePointer = NULL;
+                    Status = RtlGetAce(Dacl, Index, &AcePointer);
+                    ok_eq_hex(Status, STATUS_SUCCESS);
+                    if (!NT_SUCCESS(Status)) continue;
+                    Ace = (PACCESS_ALLOWED_ACE)AcePointer;
+                    ok_eq_uint(Ace->Header.AceType, ACCESS_ALLOWED_ACE_TYPE);
+                    ok_eq_hex(Ace->Mask, OBJECT_TYPE_ALL_ACCESS);
+                    ok(RtlEqualSid(&Ace->SidStart, ExpectedSids[Index]), "ACE %lu SID does not match\n", Index);
+                }
+            }
+        }
+    }
+    else
+    {
+        ok_eq_pointer(SecurityDescriptor, NULL);
+    }
+    if (SecurityDescriptor != NULL) ObReleaseObjectSecurity(SecurityDescriptor, SecurityDescriptorAllocated);
+}
+
 template<unsigned NtDdiVersion>
 static
 NTSTATUS
@@ -204,8 +515,6 @@ ObtCreateObjectTypes(VOID)
     OBJECT_ATTRIBUTES ObjectAttributes;
     HANDLE ObjectTypeHandle;
     UNICODE_STRING ObjectPath;
-    BOOLEAN UseNT6Callbacks = (GetNTVersion() >= _WIN32_WINNT_VISTA);
-
     RtlCopyMemory(&Name.DirectoryName, L"\\ObjectTypes\\", sizeof Name.DirectoryName);
 
     for (i = 0; i < NUM_OBTYPES; ++i)
@@ -230,17 +539,10 @@ ObtCreateObjectTypes(VOID)
             ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
         }
 
-        using OPEN_PROCEDURE = decltype(ObTypeInitializer[i].OpenProcedure);
-        ObTypeInitializer[i].CloseProcedure = CloseProc;
-        ObTypeInitializer[i].DeleteProcedure = DeleteProc;
-        ObTypeInitializer[i].DumpProcedure = DumpProc;
-        ObTypeInitializer[i].OpenProcedure = UseNT6Callbacks ? (OPEN_PROCEDURE)OpenProc_NT6 : (OPEN_PROCEDURE)OpenProc;
-        ObTypeInitializer[i].ParseProcedure = ParseProc;
-        ObTypeInitializer[i].OkayToCloseProcedure = OkayToCloseProc;
-        ObTypeInitializer[i].QueryNameProcedure = QueryNameProc;
+        TObCallbackSetter<NtDdiVersion>::Set(ObTypeInitializer[i]);
         //ObTypeInitializer[i].SecurityProcedure = SecurityProc;
 
-        Status = ObCreateObjectType(&ObTypeName[i], (POBJECT_TYPE_INITIALIZER)&ObTypeInitializer[i], NULL, (POBJECT_TYPE*)&ObTypes[i]);
+        Status = ObtCreateObjectTypeForVersion<NtDdiVersion>(i, &ObTypeName[i], ObTypeInitializer[i], &ObTypes[i]);
         if (Status == STATUS_OBJECT_NAME_COLLISION)
         {
             /* as we cannot delete the object types, get a pointer if they
@@ -256,14 +558,7 @@ ObtCreateObjectTypes(VOID)
                 ok_eq_hex(Status, STATUS_SUCCESS);
                 if (!skip(Status == STATUS_SUCCESS && ObTypes[i], "blah\n"))
                 {
-                    using OPEN_PROCEDURE = decltype(ObTypes[i]->TypeInfo.OpenProcedure);
-                    ObTypes[i]->TypeInfo.CloseProcedure = CloseProc;
-                    ObTypes[i]->TypeInfo.DeleteProcedure = DeleteProc;
-                    ObTypes[i]->TypeInfo.DumpProcedure = DumpProc;
-                    ObTypes[i]->TypeInfo.OpenProcedure = UseNT6Callbacks ? (OPEN_PROCEDURE)OpenProc_NT6 : (OPEN_PROCEDURE)OpenProc;
-                    ObTypes[i]->TypeInfo.ParseProcedure = ParseProc;
-                    ObTypes[i]->TypeInfo.OkayToCloseProcedure = OkayToCloseProc;
-                    ObTypes[i]->TypeInfo.QueryNameProcedure = QueryNameProc;
+                    TObCallbackSetter<NtDdiVersion>::Set(ObTypes[i]->TypeInfo);
                 }
                 Status = ZwClose(ObjectTypeHandle);
             }
@@ -272,6 +567,9 @@ ObtCreateObjectTypes(VOID)
         ok_eq_hex(Status, STATUS_SUCCESS);
         ok(ObTypes[i] != NULL, "ObType = NULL\n");
     }
+
+    if (!skip(ObTypes[0] != NULL, "No default object type\n")) ObtCheckDefaultObjectTypeSecurity<NtDdiVersion>(ObTypes[0]);
+    if (!skip(ObTypes[NUM_OBTYPES - 1] != NULL, "No extended object type\n")) ObtCheckExtendedObjectType<NtDdiVersion>(ObTypes[NUM_OBTYPES - 1]);
 
     return STATUS_SUCCESS;
 }
@@ -305,6 +603,34 @@ ObtCreateDirectory(VOID)
 
 /* TODO: make this the same as NUM_OBTYPES */
 #define NUM_OBTYPES2 2
+
+template<unsigned NtDdiVersion>
+static
+VOID
+ObtTestExtendedParse(VOID)
+{
+}
+
+template<>
+VOID
+ObtTestExtendedParse<NTDDI_WIN11_GE>(VOID)
+{
+    NTSTATUS Status;
+    PVOID Object = NULL;
+    USHORT PreviousParseCount = Counts.Parse;
+    UNICODE_STRING ParseName = RTL_CONSTANT_STRING(L"\\ObtDirectory\\MyObject1\\Child");
+
+    ExtendedParseCalled = FALSE;
+    RtlZeroMemory(&ExtendedParseParameters, sizeof(ExtendedParseParameters));
+    Status = ObReferenceObjectByName(&ParseName, OBJ_CASE_INSENSITIVE, NULL, 0, (POBJECT_TYPE)ObTypes_[0], KernelMode, NULL, &Object);
+    ok_eq_hex(Status, STATUS_OBJECT_NAME_NOT_FOUND);
+    ok_eq_pointer(Object, NULL);
+    ok_eq_uint(Counts.Parse, PreviousParseCount + 1);
+    ok(ExtendedParseCalled, "Extended parse callback was not called\n");
+    ok_eq_uint(ExtendedParseParameters.Length, sizeof(ExtendedParseParameters));
+    ok_eq_hex(ExtendedParseParameters.RestrictedAccessMask, MAXULONG);
+    ok_eq_pointer(ExtendedParseParameters.Silo, NULL);
+}
 
 template<unsigned NtDdiVersion>
 static
@@ -353,6 +679,7 @@ ObtCreateObjects(VOID)
 
     //DPRINT1("%d %d %d %d %d %d %d\n", DumpCount, OpenCount, CloseCount, DeleteCount, ParseCount, OkayToCloseCount, QueryNameCount);
     CheckCounts(SaveCounts.Open, SaveCounts.Close, SaveCounts.Delete, SaveCounts.Parse, SaveCounts.OkayToClose, SaveCounts.QueryName);
+    ObtTestExtendedParse<NtDdiVersion>();
 }
 
 static
@@ -369,6 +696,28 @@ ObtClose(
     UNICODE_STRING ObPathName[NUM_OBTYPES];
     WCHAR Name[MAX_PATH];
 
+    if ((GetNTVersion() >= _WIN32_WINNT_WIN8) && ObBody[0] && ObHandle1[0])
+    {
+        COUNTS ProbeCounts = Counts;
+        HANDLE ProbeHandle = NULL;
+
+        CheckObject(ObHandle1[0], 3LU, 1LU);
+        Status = ObOpenObjectByPointer(ObBody[0], OBJ_KERNEL_HANDLE, NULL, 0, (POBJECT_TYPE)ObTypes_[0], KernelMode, &ProbeHandle);
+        trace("Second-handle open returned 0x%08lx, handle %p\n", Status, ProbeHandle);
+        if (NT_SUCCESS(Status))
+        {
+            CheckObject(ObHandle1[0], 4LU, 2LU);
+            Ret = ObReferenceObject(ObBody[0]);
+            trace("Second-handle ObReferenceObject returned %Id\n", Ret);
+            Ret = ObDereferenceObject(ObBody[0]);
+            trace("Second-handle ObDereferenceObject returned %Id\n", Ret);
+            Status = ZwClose(ProbeHandle);
+            trace("Second-handle close returned 0x%08lx\n", Status);
+            CheckObject(ObHandle1[0], 3LU, 1LU);
+        }
+        Counts = ProbeCounts;
+    }
+
     // Close what we have opened and free what we allocated
     for (i = 0; i < NUM_OBTYPES2; ++i)
     {
@@ -376,9 +725,11 @@ ObtClose(
         {
             if (ObHandle1[i]) CheckObject(ObHandle1[i], 3LU, 1LU);
             Ret = ObReferenceObject(ObBody[i]);
+            trace("ObReferenceObject[%lu] returned %Id\n", i, Ret);
             if (ObHandle1[i]) CheckObject(ObHandle1[i], 4LU, 1LU);
             Ret = ObDereferenceObject(ObBody[i]);
-            ok_eq_longptr(Ret, (LONG_PTR)2);
+            trace("ObDereferenceObject[%lu] returned %Id\n", i, Ret);
+            if (GetNTVersion() < _WIN32_WINNT_WIN8) ok_eq_longptr(Ret, (LONG_PTR)2);
             if (ObHandle1[i]) CheckObject(ObHandle1[i], 3LU, 1LU);
             ObBody[i] = NULL;
         }
@@ -492,6 +843,9 @@ TestObjectType(
             return;
         case NTDDI_WIN7:
             TestObjectType_<NTDDI_WIN7>(Clean);
+            return;
+        case NTDDI_WIN11_GE:
+            TestObjectType_<NTDDI_WIN11_GE>(Clean);
             return;
         default:
             skip(FALSE, "Unsupported NTDDI version: 0x%lx\n", NtDdiVersion);
