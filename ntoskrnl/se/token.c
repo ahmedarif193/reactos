@@ -21,9 +21,9 @@ LUID SeSystemAuthenticationId = SYSTEM_LUID;
 LUID SeAnonymousAuthenticationId = ANONYMOUS_LOGON_LUID;
 
 static GENERIC_MAPPING SepTokenMapping = {
-    TOKEN_READ,
-    TOKEN_WRITE,
-    TOKEN_EXECUTE,
+    STANDARD_RIGHTS_READ | TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_QUERY_SOURCE,
+    STANDARD_RIGHTS_WRITE | TOKEN_ADJUST_PRIVILEGES | TOKEN_ADJUST_GROUPS | TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_SESSIONID,
+    STANDARD_RIGHTS_EXECUTE | TOKEN_ASSIGN_PRIMARY | TOKEN_IMPERSONATE,
     TOKEN_ALL_ACCESS
 };
 
@@ -1650,23 +1650,26 @@ NTAPI
 SepInitializeTokenImplementation(VOID)
 {
     UNICODE_STRING Name;
-    OBJECT_TYPE_INITIALIZER ObjectTypeInitializer;
+    OBP_EXTENDED_OBJECT_TYPE_INITIALIZER ObjectTypeInitializerEx;
+    POBJECT_TYPE_INITIALIZER ObjectTypeInitializer = &ObjectTypeInitializerEx.TypeInfo;
 
     DPRINT("Creating Token Object Type\n");
 
     /* Initialize the Token type */
-    RtlZeroMemory(&ObjectTypeInitializer, sizeof(ObjectTypeInitializer));
+    RtlZeroMemory(&ObjectTypeInitializerEx, sizeof(ObjectTypeInitializerEx));
     RtlInitUnicodeString(&Name, L"Token");
-    ObjectTypeInitializer.Length = sizeof(ObjectTypeInitializer);
-    ObjectTypeInitializer.InvalidAttributes = OBJ_OPENLINK;
-    ObjectTypeInitializer.SecurityRequired = TRUE;
-    ObjectTypeInitializer.DefaultPagedPoolCharge = sizeof(TOKEN);
-    ObjectTypeInitializer.GenericMapping = SepTokenMapping;
-    ObjectTypeInitializer.PoolType = PagedPool;
-    ObjectTypeInitializer.ValidAccessMask = TOKEN_ALL_ACCESS;
-    ObjectTypeInitializer.UseDefaultObject = TRUE;
-    ObjectTypeInitializer.DeleteProcedure = SepDeleteToken;
-    ObCreateObjectType(&Name, &ObjectTypeInitializer, NULL, &SeTokenObjectType);
+    ObjectTypeInitializer->Length = sizeof(ObjectTypeInitializerEx);
+    ObjectTypeInitializer->InvalidAttributes = OBJ_OPENLINK;
+    ObjectTypeInitializer->SecurityRequired = TRUE;
+    ObjectTypeInitializer->UnnamedObjectsOnly = TRUE;
+    ObjectTypeInitializer->ObjectTypeCode = 0x200;
+    ObjectTypeInitializer->GenericMapping = SepTokenMapping;
+    ObjectTypeInitializer->PoolType = PagedPool;
+    ObjectTypeInitializer->ValidAccessMask = TOKEN_ALL_ACCESS;
+    ObjectTypeInitializer->UseDefaultObject = TRUE;
+    ObjectTypeInitializer->DeleteProcedure = SepDeleteToken;
+    ObjectTypeInitializerEx.SeMandatoryLabelMask = 1;
+    ObCreateObjectType(&Name, ObjectTypeInitializer, NULL, &SeTokenObjectType);
 }
 
 /**
