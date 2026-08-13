@@ -578,6 +578,7 @@ static inline ULONG GetNTDDIVersion(VOID)
         case 7600: return NTDDI_WIN7;
         case 7601: return NTDDI_WIN7SP1;
         case 9200: return NTDDI_WIN8;
+        case 26100: return NTDDI_WIN11_GE;
 
         default:
             trace("Unknown build number: %lu\n", OSVersion.dwBuildNumber);

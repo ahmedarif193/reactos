@@ -58,6 +58,14 @@ typedef VOID
     _In_ ULONG SystemHandleCount
 );
 
+typedef VOID
+(NTAPI *OB_CLOSE_METHOD_WIN11)(
+    _In_opt_ PEPROCESS Process,
+    _In_ PVOID Object,
+    _In_ ULONG_PTR ProcessHandleCount,
+    _In_ ULONG_PTR SystemHandleCount
+);
+
 struct OBJECT_TYPE_INITIALIZER_WS03
 {
     USHORT Length;                                      // 0x00
@@ -149,11 +157,68 @@ struct OBJECT_TYPE_INITIALIZER_VISTASP1
     OB_OKAYTOCLOSE_METHOD OkayToCloseProcedure;         // 0x68
 };
 
+struct OBJECT_TYPE_INITIALIZER_WIN11
+{
+    USHORT Length;                                      // 0x00
+    union
+    {
+        USHORT ObjectTypeFlags;                         // 0x02
+        struct
+        {
+            UCHAR CaseInsensitive:1;                    // 0x02
+            UCHAR UnnamedObjectsOnly:1;                 // 0x02
+            UCHAR UseDefaultObject:1;                   // 0x02
+            UCHAR SecurityRequired:1;                   // 0x02
+            UCHAR MaintainHandleCount:1;                // 0x02
+            UCHAR MaintainTypeList:1;                   // 0x02
+            UCHAR SupportsObjectCallbacks:1;            // 0x02
+            UCHAR CacheAligned:1;                       // 0x02
+            UCHAR UseExtendedParameters:1;              // 0x03
+            UCHAR SeTrustConstraintMaskPresent:1;       // 0x03
+            UCHAR Reserved:6;                           // 0x03
+        };
+    };
+    ULONG ObjectTypeCode;                               // 0x04
+    ULONG InvalidAttributes;                            // 0x08
+    GENERIC_MAPPING GenericMapping;                     // 0x0c
+    ULONG ValidAccessMask;                              // 0x1c
+    ULONG RetainAccess;                                 // 0x20
+    POOL_TYPE PoolType;                                 // 0x24
+    ULONG DefaultPagedPoolCharge;                       // 0x28
+    ULONG DefaultNonPagedPoolCharge;                    // 0x2c
+    OB_DUMP_METHOD DumpProcedure;                       // 0x30
+    OB_OPEN_METHOD_VISTA OpenProcedure;                 // 0x38
+    OB_CLOSE_METHOD_WIN11 CloseProcedure;               // 0x40
+    OB_DELETE_METHOD DeleteProcedure;                   // 0x48
+    union
+    {
+        OB_PARSE_METHOD ParseProcedure;                 // 0x50
+        OB_EXTENDED_PARSE_METHOD ParseProcedureEx;      // 0x50
+    };
+    OB_SECURITY_METHOD_VISTA SecurityProcedure;         // 0x58
+    OB_QUERYNAME_METHOD QueryNameProcedure;             // 0x60
+    OB_OKAYTOCLOSE_METHOD OkayToCloseProcedure;         // 0x68
+    ULONG WaitObjectFlagMask;                           // 0x70
+    USHORT WaitObjectFlagOffset;                        // 0x74
+    USHORT WaitObjectPointerOffset;                     // 0x76
+};
+
+#ifdef _WIN64
+static_assert(sizeof(OB_EXTENDED_PARSE_PARAMETERS) == 0x10, "Unexpected Win11 extended parse parameter size");
+static_assert(FIELD_OFFSET(OB_EXTENDED_PARSE_PARAMETERS, RestrictedAccessMask) == 0x04, "Unexpected Win11 restricted access mask offset");
+static_assert(FIELD_OFFSET(OB_EXTENDED_PARSE_PARAMETERS, Silo) == 0x08, "Unexpected Win11 silo offset");
+static_assert(sizeof(OBJECT_TYPE_INITIALIZER_WIN11) == 0x78, "Unexpected Win11 OBJECT_TYPE_INITIALIZER size");
+static_assert(FIELD_OFFSET(OBJECT_TYPE_INITIALIZER_WIN11, OpenProcedure) == 0x38, "Unexpected Win11 open callback offset");
+static_assert(FIELD_OFFSET(OBJECT_TYPE_INITIALIZER_WIN11, CloseProcedure) == 0x40, "Unexpected Win11 close callback offset");
+static_assert(FIELD_OFFSET(OBJECT_TYPE_INITIALIZER_WIN11, ParseProcedureEx) == 0x50, "Unexpected Win11 parse callback offset");
+#endif
+
 template<unsigned NtDdiVersion> struct TOBJECT_TYPE_INITIALIZER;
 template<> struct TOBJECT_TYPE_INITIALIZER<NTDDI_WS03> : public OBJECT_TYPE_INITIALIZER_WS03 {};
 template<> struct TOBJECT_TYPE_INITIALIZER<NTDDI_VISTA> : public OBJECT_TYPE_INITIALIZER_VISTA {};
 template<> struct TOBJECT_TYPE_INITIALIZER<NTDDI_VISTASP1> : public OBJECT_TYPE_INITIALIZER_VISTASP1 {};
 template<> struct TOBJECT_TYPE_INITIALIZER<NTDDI_WIN7> : public OBJECT_TYPE_INITIALIZER_VISTASP1 {};
+template<> struct TOBJECT_TYPE_INITIALIZER<NTDDI_WIN11_GE> : public OBJECT_TYPE_INITIALIZER_WIN11 {};
 
 struct OBJECT_TYPE_WS03
 {
@@ -205,8 +270,33 @@ struct OBJECT_TYPE_WIN7
     LIST_ENTRY CallbackList;                            // 0xc0
 };
 
+struct OBJECT_TYPE_WIN11
+{
+    LIST_ENTRY TypeList;                                // 0x00
+    UNICODE_STRING Name;                                // 0x10
+    PVOID DefaultObject;                                // 0x20
+    UCHAR Index;                                        // 0x28
+    ULONG TotalNumberOfObjects;                         // 0x2c
+    ULONG TotalNumberOfHandles;                         // 0x30
+    ULONG HighWaterNumberOfObjects;                     // 0x34
+    ULONG HighWaterNumberOfHandles;                     // 0x38
+    OBJECT_TYPE_INITIALIZER_WIN11 TypeInfo;             // 0x40
+    EX_PUSH_LOCK TypeLock;                              // 0xb8
+    ULONG Key;                                          // 0xc0
+    LIST_ENTRY CallbackList;                            // 0xc8
+    ULONG SeMandatoryLabelMask;                         // 0xd8
+    ULONG SeTrustConstraintMask;                        // 0xdc
+};
+
+#ifdef _WIN64
+static_assert(sizeof(OBJECT_TYPE_WIN11) == 0xe0, "Unexpected Win11 OBJECT_TYPE size");
+static_assert(FIELD_OFFSET(OBJECT_TYPE_WIN11, TypeInfo) == 0x40, "Unexpected Win11 type initializer offset");
+static_assert(FIELD_OFFSET(OBJECT_TYPE_WIN11, TypeLock) == 0xb8, "Unexpected Win11 type lock offset");
+#endif
+
 template<unsigned NtDdiVersion> struct TOBJECT_TYPE;
 template<> struct TOBJECT_TYPE<NTDDI_WS03> : public OBJECT_TYPE_WS03 {};
 template<> struct TOBJECT_TYPE<NTDDI_VISTA> : public OBJECT_TYPE_WS03 {};
 template<> struct TOBJECT_TYPE<NTDDI_VISTASP1> : public OBJECT_TYPE_VISTASP1 {};
 template<> struct TOBJECT_TYPE<NTDDI_WIN7> : public OBJECT_TYPE_WIN7 {};
+template<> struct TOBJECT_TYPE<NTDDI_WIN11_GE> : public OBJECT_TYPE_WIN11 {};
