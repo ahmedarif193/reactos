@@ -33,6 +33,24 @@ typedef struct _QUEUE_DIRECT_HANDOFF_CONTEXT
     ULONG ActiveCounts[2];
 } QUEUE_DIRECT_HANDOFF_CONTEXT, *PQUEUE_DIRECT_HANDOFF_CONTEXT;
 
+typedef struct _QUEUE_RUNDOWN_WAIT_CONTEXT
+{
+    KQUEUE Queue;
+    KEVENT Completed;
+    PLIST_ENTRY Result;
+    ULONG CurrentCount;
+} QUEUE_RUNDOWN_WAIT_CONTEXT, *PQUEUE_RUNDOWN_WAIT_CONTEXT;
+
+typedef struct _QUEUE_RUNDOWN_OBJECT_WAIT_CONTEXT
+{
+    KQUEUE Queue;
+    KEVENT Gate;
+    KEVENT Completed;
+    WAIT_TYPE WaitType;
+    BOOLEAN Multiple;
+    NTSTATUS Status;
+} QUEUE_RUNDOWN_OBJECT_WAIT_CONTEXT, *PQUEUE_RUNDOWN_OBJECT_WAIT_CONTEXT;
+
 static
 BOOLEAN
 WaitForQueueWaiter(
@@ -68,6 +86,43 @@ static VOID NTAPI QueueExWaitThread(_In_ PVOID Parameter)
 }
 
 #endif
+
+static
+VOID
+NTAPI
+QueueRundownWaitThread(
+    _In_ PVOID Parameter)
+{
+    PQUEUE_RUNDOWN_WAIT_CONTEXT Context = Parameter;
+    LARGE_INTEGER Timeout;
+
+    Timeout.QuadPart = -5LL * 10 * 1000 * 1000;
+    Context->Result = KeRemoveQueue(&Context->Queue, KernelMode, &Timeout);
+    Context->CurrentCount = Context->Queue.CurrentCount;
+    KeSetEvent(&Context->Completed, IO_NO_INCREMENT, FALSE);
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+static
+VOID
+NTAPI
+QueueRundownObjectWaitThread(
+    _In_ PVOID Parameter)
+{
+    PQUEUE_RUNDOWN_OBJECT_WAIT_CONTEXT Context = Parameter;
+    LARGE_INTEGER Timeout;
+    PVOID Objects[2];
+
+    Timeout.QuadPart = -5LL * 10 * 1000 * 1000;
+    Objects[0] = &Context->Queue;
+    Objects[1] = &Context->Gate;
+    if (Context->Multiple)
+        Context->Status = KeWaitForMultipleObjects(RTL_NUMBER_OF(Objects), Objects, Context->WaitType, Executive, KernelMode, FALSE, &Timeout, NULL);
+    else
+        Context->Status = KeWaitForSingleObject(&Context->Queue, Executive, KernelMode, FALSE, &Timeout);
+    KeSetEvent(&Context->Completed, IO_NO_INCREMENT, FALSE);
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
 
 static
 VOID
@@ -172,12 +227,26 @@ TestQueueRundown(VOID)
         ok_eq_pointer(First->Flink, &Entries[1]);
         ok_eq_pointer(Entries[1].Flink, First);
     }
+    ok_bool_true(Queue.Header.Abandoned, "Rundown queue should be abandoned");
     ok_eq_long(KeReadStateQueue(&Queue), 0L);
     ok_bool_true(IsListEmpty(&Queue.EntryListHead), "Rundown queue head should be empty");
 
     KeInitializeQueue(&Queue, 0);
     First = KeRundownQueue(&Queue);
     ok_eq_pointer(First, NULL);
+
+    KeInitializeQueue(&Queue, 1);
+    KeInsertQueue(&Queue, &Entries[0]);
+    First = KeRemoveQueue(&Queue, KernelMode, NULL);
+    ok_eq_pointer(First, &Entries[0]);
+    ok_eq_ulong(Queue.CurrentCount, 1UL);
+    ok_bool_false(IsListEmpty(&Queue.ThreadListHead), "Active queue thread should be linked");
+    First = KeRundownQueue(&Queue);
+    ok_eq_pointer(First, NULL);
+    trace("[KeQueue][RundownActive] current=%lu thread-empty=%u thread-queue=%p\n", Queue.CurrentCount, IsListEmpty(&Queue.ThreadListHead), KeGetCurrentThread()->Queue);
+    ok_eq_ulong(Queue.CurrentCount, 0UL);
+    ok_bool_true(IsListEmpty(&Queue.ThreadListHead), "Rundown thread list should be empty");
+    ok_eq_pointer(KeGetCurrentThread()->Queue, NULL);
 }
 
 static
@@ -230,6 +299,178 @@ TestQueueDirectHandoffAccounting(VOID)
     }
 
     KeRundownQueue(&Context.Queue);
+}
+
+static
+VOID
+TestQueueRundownWaiter(VOID)
+{
+    QUEUE_RUNDOWN_WAIT_CONTEXT Context;
+    LARGE_INTEGER Timeout;
+    HANDLE ThreadHandle;
+    PVOID ThreadObject = NULL;
+    PLIST_ENTRY First;
+    NTSTATUS Status;
+    BOOLEAN WaiterVisible;
+
+    RtlZeroMemory(&Context, sizeof(Context));
+    KeInitializeQueue(&Context.Queue, 1);
+    KeInitializeEvent(&Context.Completed, NotificationEvent, FALSE);
+
+    Status = PsCreateSystemThread(&ThreadHandle, THREAD_ALL_ACCESS, NULL, NULL, NULL, QueueRundownWaitThread, &Context);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status)) return;
+
+    Status = ObReferenceObjectByHandle(ThreadHandle, SYNCHRONIZE, *PsThreadType, KernelMode, &ThreadObject, NULL);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ObCloseHandle(ThreadHandle, KernelMode);
+
+    WaiterVisible = WaitForQueueWaiter(&Context.Queue);
+    ok_bool_true(WaiterVisible, "Rundown queue waiter should be published");
+    if (WaiterVisible)
+    {
+        First = KeRundownQueue(&Context.Queue);
+        ok_eq_pointer(First, NULL);
+    }
+
+    Timeout.QuadPart = -10LL * 10 * 1000 * 1000;
+    Status = KeWaitForSingleObject(&Context.Completed, Executive, KernelMode, FALSE, &Timeout);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    trace("[KeQueue][Rundown] result=%p abandoned=%u current=%lu wait-empty=%u thread-empty=%u\n", Context.Result, Context.Queue.Header.Abandoned, Context.CurrentCount, IsListEmpty(&Context.Queue.Header.WaitListHead), IsListEmpty(&Context.Queue.ThreadListHead));
+    ok_eq_pointer(Context.Result, (PLIST_ENTRY)(ULONG_PTR)STATUS_ABANDONED);
+    ok_bool_true(Context.Queue.Header.Abandoned, "Rundown queue should be abandoned");
+    ok_bool_true(IsListEmpty(&Context.Queue.Header.WaitListHead), "Rundown wait list should be empty");
+    ok_bool_true(IsListEmpty(&Context.Queue.ThreadListHead), "Rundown thread list should be empty");
+
+    if (ThreadObject != NULL)
+    {
+        Status = KeWaitForSingleObject(ThreadObject, Executive, KernelMode, FALSE, &Timeout);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        ObDereferenceObject(ThreadObject);
+    }
+}
+
+static
+VOID
+TestQueueRundownObjectWaiter(VOID)
+{
+    QUEUE_RUNDOWN_OBJECT_WAIT_CONTEXT Context;
+    LARGE_INTEGER Timeout;
+    HANDLE ThreadHandle;
+    PVOID ThreadObject = NULL;
+    PLIST_ENTRY First;
+    NTSTATUS Status;
+    BOOLEAN WaiterVisible;
+
+    RtlZeroMemory(&Context, sizeof(Context));
+    KeInitializeQueue(&Context.Queue, 1);
+    KeInitializeEvent(&Context.Gate, NotificationEvent, FALSE);
+    KeInitializeEvent(&Context.Completed, NotificationEvent, FALSE);
+    Context.Status = STATUS_PENDING;
+
+    Status = PsCreateSystemThread(&ThreadHandle, THREAD_ALL_ACCESS, NULL, NULL, NULL, QueueRundownObjectWaitThread, &Context);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status)) return;
+
+    Status = ObReferenceObjectByHandle(ThreadHandle, SYNCHRONIZE, *PsThreadType, KernelMode, &ThreadObject, NULL);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ObCloseHandle(ThreadHandle, KernelMode);
+
+    WaiterVisible = WaitForQueueWaiter(&Context.Queue);
+    ok_bool_true(WaiterVisible, "Rundown object waiter should be published");
+    if (WaiterVisible)
+    {
+        First = KeRundownQueue(&Context.Queue);
+        ok_eq_pointer(First, NULL);
+    }
+
+    Timeout.QuadPart = -10LL * 10 * 1000 * 1000;
+    Status = KeWaitForSingleObject(&Context.Completed, Executive, KernelMode, FALSE, &Timeout);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    trace("[KeQueue][RundownObject] status=%08lx abandoned=%u current=%lu wait-empty=%u thread-empty=%u\n", Context.Status, Context.Queue.Header.Abandoned, Context.Queue.CurrentCount, IsListEmpty(&Context.Queue.Header.WaitListHead), IsListEmpty(&Context.Queue.ThreadListHead));
+    ok_eq_hex(Context.Status, STATUS_SUCCESS);
+    ok_bool_true(Context.Queue.Header.Abandoned, "Rundown queue should be abandoned");
+    ok_bool_true(IsListEmpty(&Context.Queue.Header.WaitListHead), "Rundown wait list should be empty");
+    ok_bool_true(IsListEmpty(&Context.Queue.ThreadListHead), "Rundown thread list should be empty");
+
+    if (ThreadObject != NULL)
+    {
+        Status = KeWaitForSingleObject(ThreadObject, Executive, KernelMode, FALSE, &Timeout);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        ObDereferenceObject(ThreadObject);
+    }
+
+    Timeout.QuadPart = 0;
+    Status = KeWaitForSingleObject(&Context.Queue, Executive, KernelMode, FALSE, &Timeout);
+    trace("[KeQueue][RundownObjectPost] status=%08lx\n", Status);
+    ok_eq_hex(Status, STATUS_TIMEOUT);
+}
+
+static
+VOID
+TestQueueRundownMultipleWaiter(
+    _In_ WAIT_TYPE WaitType)
+{
+    QUEUE_RUNDOWN_OBJECT_WAIT_CONTEXT Context;
+    LARGE_INTEGER Timeout;
+    HANDLE ThreadHandle;
+    PVOID ThreadObject = NULL;
+    PLIST_ENTRY First;
+    NTSTATUS Status;
+    BOOLEAN WaiterVisible;
+    LONG CompletedBeforeGate;
+
+    RtlZeroMemory(&Context, sizeof(Context));
+    KeInitializeQueue(&Context.Queue, 1);
+    KeInitializeEvent(&Context.Gate, NotificationEvent, FALSE);
+    KeInitializeEvent(&Context.Completed, NotificationEvent, FALSE);
+    Context.WaitType = WaitType;
+    Context.Multiple = TRUE;
+    Context.Status = STATUS_PENDING;
+
+    Status = PsCreateSystemThread(&ThreadHandle, THREAD_ALL_ACCESS, NULL, NULL, NULL, QueueRundownObjectWaitThread, &Context);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status)) return;
+
+    Status = ObReferenceObjectByHandle(ThreadHandle, SYNCHRONIZE, *PsThreadType, KernelMode, &ThreadObject, NULL);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ObCloseHandle(ThreadHandle, KernelMode);
+
+    WaiterVisible = WaitForQueueWaiter(&Context.Queue);
+    ok_bool_true(WaiterVisible, "Rundown multiple waiter should be published");
+    if (WaiterVisible)
+    {
+        First = KeRundownQueue(&Context.Queue);
+        ok_eq_pointer(First, NULL);
+    }
+
+    Timeout.QuadPart = -100LL * 10 * 1000;
+    KeDelayExecutionThread(KernelMode, FALSE, &Timeout);
+    CompletedBeforeGate = KeReadStateEvent(&Context.Completed);
+    KeSetEvent(&Context.Gate, IO_NO_INCREMENT, FALSE);
+
+    Timeout.QuadPart = -10LL * 10 * 1000 * 1000;
+    Status = KeWaitForSingleObject(&Context.Completed, Executive, KernelMode, FALSE, &Timeout);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    trace("[KeQueue][RundownMultiple] type=%u status=%08lx before-gate=%ld abandoned=%u wait-empty=%u\n", WaitType, Context.Status, CompletedBeforeGate, Context.Queue.Header.Abandoned, IsListEmpty(&Context.Queue.Header.WaitListHead));
+    if (WaitType == WaitAny)
+    {
+        ok_eq_hex(Context.Status, STATUS_WAIT_0);
+        ok_eq_long(CompletedBeforeGate, 1L);
+    }
+    else
+    {
+        ok_eq_hex(Context.Status, STATUS_TIMEOUT);
+        ok_eq_long(CompletedBeforeGate, 0L);
+    }
+    ok_bool_true(IsListEmpty(&Context.Queue.Header.WaitListHead), "Rundown wait list should be empty");
+
+    if (ThreadObject != NULL)
+    {
+        Status = KeWaitForSingleObject(ThreadObject, Executive, KernelMode, FALSE, &Timeout);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        ObDereferenceObject(ThreadObject);
+    }
 }
 
 #ifdef _M_ARM64
@@ -411,6 +652,10 @@ START_TEST(KeQueue)
     TestQueueOrder();
     TestQueueHeadInsert();
     TestQueueRundown();
+    TestQueueRundownWaiter();
+    TestQueueRundownObjectWaiter();
+    TestQueueRundownMultipleWaiter(WaitAny);
+    TestQueueRundownMultipleWaiter(WaitAll);
     TestQueueDirectHandoffAccounting();
 #ifdef _M_ARM64
     TestQueueRemoveEx();
