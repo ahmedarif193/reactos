@@ -51,16 +51,32 @@ typedef struct
 
 /* usermode call-back mechanism */
 
+typedef struct _KMT_EVENT_PAIR_RESPONSE
+{
+    NTSTATUS CreateStatus;
+    HANDLE CreateHandle;
+    NTSTATUS OpenStatus;
+    HANDLE OpenHandle;
+    NTSTATUS SetHighStatus;
+    NTSTATUS SetHighWaitLowStatus;
+    NTSTATUS SetLowStatus;
+    NTSTATUS SetLowWaitHighStatus;
+    NTSTATUS WaitHighStatus;
+    NTSTATUS WaitLowStatus;
+} KMT_EVENT_PAIR_RESPONSE, *PKMT_EVENT_PAIR_RESPONSE;
+
 /* list of supported operations */
 typedef enum _KMT_CALLBACK_INFORMATION_CLASS
 {
-    QueryVirtualMemory
+    QueryVirtualMemory,
+    QueryEventPairBehavior
 } KMT_CALLBACK_INFORMATION_CLASS, *PKMT_CALLBACK_INFORMATION_CLASS;
 
 /* TODO: "response" is a little generic */
 typedef union _KMT_RESPONSE
 {
     MEMORY_BASIC_INFORMATION MemInfo;
+    KMT_EVENT_PAIR_RESPONSE EventPair;
 } KMT_RESPONSE, *PKMT_RESPONSE;
 
 /* this struct is sent from driver to usermode */

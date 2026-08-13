@@ -11,6 +11,7 @@
 
 #include "kmtest.h"
 #include <kmt_public.h>
+#include <ndk/exfuncs.h>
 
 #include <assert.h>
 #include <debug.h>
@@ -76,6 +77,25 @@ KmtUserCallbackThread(
                     error_goto(Error, cleanup);
                 ASSERT(BytesReturned == 0);
 
+                break;
+            }
+            case QueryEventPairBehavior:
+            {
+                HANDLE EventPairHandle = UlongToHandle(0x55555555);
+
+                Response.EventPair.CreateStatus = NtCreateEventPair(&EventPairHandle, EVENT_PAIR_ALL_ACCESS, NULL);
+                Response.EventPair.CreateHandle = EventPairHandle;
+                EventPairHandle = UlongToHandle(0x55555555);
+                Response.EventPair.OpenStatus = NtOpenEventPair(&EventPairHandle, EVENT_PAIR_ALL_ACCESS, NULL);
+                Response.EventPair.OpenHandle = EventPairHandle;
+                Response.EventPair.SetHighStatus = NtSetHighEventPair(EventPairHandle);
+                Response.EventPair.SetHighWaitLowStatus = NtSetHighWaitLowEventPair(EventPairHandle);
+                Response.EventPair.SetLowStatus = NtSetLowEventPair(EventPairHandle);
+                Response.EventPair.SetLowWaitHighStatus = NtSetLowWaitHighEventPair(EventPairHandle);
+                Response.EventPair.WaitHighStatus = NtWaitHighEventPair(EventPairHandle);
+                Response.EventPair.WaitLowStatus = NtWaitLowEventPair(EventPairHandle);
+                if (!DeviceIoControl(LocalKmtHandle, IOCTL_KMTEST_USERMODE_SEND_RESPONSE, &RequestPacket.RequestId, sizeof(RequestPacket.RequestId), &Response, sizeof(Response), &BytesReturned, NULL)) error_goto(Error, cleanup);
+                ASSERT(BytesReturned == 0);
                 break;
             }
             default:
