@@ -37,6 +37,10 @@ ExpInitializeEventPairImplementation(VOID)
     NTSTATUS Status;
     DPRINT("Creating Event Pair Object Type\n");
 
+#if (NTDDI_VERSION >= NTDDI_WIN11_GE)
+    return TRUE;
+#endif
+
     /* Create the Event Pair Object Type */
     RtlZeroMemory(&ObjectTypeInitializer, sizeof(ObjectTypeInitializer));
     RtlInitUnicodeString(&Name, L"EventPair");
@@ -58,6 +62,12 @@ NtCreateEventPair(OUT PHANDLE EventPairHandle,
                   IN ACCESS_MASK DesiredAccess,
                   IN POBJECT_ATTRIBUTES ObjectAttributes)
 {
+#if (NTDDI_VERSION >= NTDDI_WIN11_GE)
+    UNREFERENCED_PARAMETER(EventPairHandle);
+    UNREFERENCED_PARAMETER(DesiredAccess);
+    UNREFERENCED_PARAMETER(ObjectAttributes);
+    return STATUS_NOT_IMPLEMENTED;
+#else
     PKEVENT_PAIR EventPair;
     HANDLE hEventPair;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
@@ -129,6 +139,7 @@ NtCreateEventPair(OUT PHANDLE EventPairHandle,
 
     /* Return Status */
     return Status;
+#endif
 }
 
 NTSTATUS
@@ -137,6 +148,12 @@ NtOpenEventPair(OUT PHANDLE EventPairHandle,
                 IN ACCESS_MASK DesiredAccess,
                 IN POBJECT_ATTRIBUTES ObjectAttributes)
 {
+#if (NTDDI_VERSION >= NTDDI_WIN11_GE)
+    UNREFERENCED_PARAMETER(EventPairHandle);
+    UNREFERENCED_PARAMETER(DesiredAccess);
+    UNREFERENCED_PARAMETER(ObjectAttributes);
+    return STATUS_NOT_IMPLEMENTED;
+#else
     HANDLE hEventPair;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     NTSTATUS Status;
@@ -187,12 +204,17 @@ NtOpenEventPair(OUT PHANDLE EventPairHandle,
 
     /* Return status */
     return Status;
+#endif
 }
 
 NTSTATUS
 NTAPI
 NtSetHighEventPair(IN HANDLE EventPairHandle)
 {
+#if (NTDDI_VERSION >= NTDDI_WIN11_GE)
+    UNREFERENCED_PARAMETER(EventPairHandle);
+    return STATUS_NOT_IMPLEMENTED;
+#else
     PKEVENT_PAIR EventPair;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     NTSTATUS Status;
@@ -219,12 +241,17 @@ NtSetHighEventPair(IN HANDLE EventPairHandle)
 
     /* Return status */
     return Status;
+#endif
 }
 
 NTSTATUS
 NTAPI
 NtSetHighWaitLowEventPair(IN HANDLE EventPairHandle)
 {
+#if (NTDDI_VERSION >= NTDDI_WIN11_GE)
+    UNREFERENCED_PARAMETER(EventPairHandle);
+    return STATUS_NOT_IMPLEMENTED;
+#else
     PKEVENT_PAIR EventPair;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     NTSTATUS Status;
@@ -258,12 +285,17 @@ NtSetHighWaitLowEventPair(IN HANDLE EventPairHandle)
 
     /* Return status */
     return Status;
+#endif
 }
 
 NTSTATUS
 NTAPI
 NtSetLowEventPair(IN HANDLE EventPairHandle)
 {
+#if (NTDDI_VERSION >= NTDDI_WIN11_GE)
+    UNREFERENCED_PARAMETER(EventPairHandle);
+    return STATUS_NOT_IMPLEMENTED;
+#else
     PKEVENT_PAIR EventPair;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     NTSTATUS Status;
@@ -290,12 +322,17 @@ NtSetLowEventPair(IN HANDLE EventPairHandle)
 
     /* Return status */
     return Status;
+#endif
 }
 
 NTSTATUS
 NTAPI
 NtSetLowWaitHighEventPair(IN HANDLE EventPairHandle)
 {
+#if (NTDDI_VERSION >= NTDDI_WIN11_GE)
+    UNREFERENCED_PARAMETER(EventPairHandle);
+    return STATUS_NOT_IMPLEMENTED;
+#else
     PKEVENT_PAIR EventPair;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     NTSTATUS Status;
@@ -329,6 +366,7 @@ NtSetLowWaitHighEventPair(IN HANDLE EventPairHandle)
 
     /* Return status */
     return Status;
+#endif
 }
 
 
@@ -336,6 +374,10 @@ NTSTATUS
 NTAPI
 NtWaitLowEventPair(IN HANDLE EventPairHandle)
 {
+#if (NTDDI_VERSION >= NTDDI_WIN11_GE)
+    UNREFERENCED_PARAMETER(EventPairHandle);
+    return STATUS_NOT_IMPLEMENTED;
+#else
     PKEVENT_PAIR EventPair;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     NTSTATUS Status;
@@ -366,12 +408,17 @@ NtWaitLowEventPair(IN HANDLE EventPairHandle)
 
     /* Return status */
     return Status;
+#endif
 }
 
 NTSTATUS
 NTAPI
 NtWaitHighEventPair(IN HANDLE EventPairHandle)
 {
+#if (NTDDI_VERSION >= NTDDI_WIN11_GE)
+    UNREFERENCED_PARAMETER(EventPairHandle);
+    return STATUS_NOT_IMPLEMENTED;
+#else
     PKEVENT_PAIR EventPair;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     NTSTATUS Status;
@@ -403,6 +450,7 @@ NtWaitHighEventPair(IN HANDLE EventPairHandle)
 
     /* Return status */
     return Status;
+#endif
 }
 
 /* EOF */
