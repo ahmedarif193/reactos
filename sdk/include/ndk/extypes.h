@@ -776,13 +776,20 @@ typedef struct _HANDLE_TABLE_ENTRY
 {
     union
     {
+#ifdef _WIN64
+        volatile LONGLONG VolatileLowValue;
+        LONGLONG LowValue;
+#endif
         PVOID Object;
         ULONG_PTR ObAttributes;
-        PHANDLE_TABLE_ENTRY_INFO InfoTable;
+        volatile PHANDLE_TABLE_ENTRY_INFO InfoTable;
         ULONG_PTR Value;
     };
     union
     {
+        ULONG_PTR HighValue;
+        struct _HANDLE_TABLE_ENTRY *NextFreeHandleEntry;
+        ULONG_PTR LeafHandleValue;
         ULONG GrantedAccess;
         struct
         {
@@ -793,45 +800,76 @@ typedef struct _HANDLE_TABLE_ENTRY
     };
 } HANDLE_TABLE_ENTRY, *PHANDLE_TABLE_ENTRY;
 
+typedef struct DECLSPEC_ALIGN(128) _HANDLE_TABLE_FREE_LIST
+{
+    EX_PUSH_LOCK FreeListLock;
+    PHANDLE_TABLE_ENTRY FirstFreeHandleEntry;
+    PHANDLE_TABLE_ENTRY LastFreeHandleEntry;
+    LONG HandleCount;
+    ULONG HighWaterMark;
+    UCHAR Reserved[128 - sizeof(EX_PUSH_LOCK) - (2 * sizeof(PHANDLE_TABLE_ENTRY)) - sizeof(LONG) - sizeof(ULONG)];
+} HANDLE_TABLE_FREE_LIST, *PHANDLE_TABLE_FREE_LIST;
+
 typedef struct _HANDLE_TABLE
 {
-#if (NTDDI_VERSION >= NTDDI_WINXP)
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    ULONG NextHandleNeedingPool;
+    LONG ExtraInfoPages;
+    volatile ULONG_PTR TableCode;
+    PEPROCESS QuotaProcess;
+    LIST_ENTRY HandleTableList;
+    ULONG UniqueProcessId;
+    union
+    {
+        ULONG Flags;
+        struct
+        {
+            UCHAR StrictFIFO:1;
+            UCHAR EnableHandleExceptions:1;
+            UCHAR Rundown:1;
+            UCHAR Duplicated:1;
+            UCHAR RaiseUMExceptionOnInvalidHandleClose:1;
+        };
+    };
+    EX_PUSH_LOCK HandleContentionEvent;
+    EX_PUSH_LOCK HandleTableLock;
+    UCHAR Reserved[128 - (2 * sizeof(ULONG)) - (2 * sizeof(PVOID)) - sizeof(LIST_ENTRY) - (2 * sizeof(ULONG)) - (2 * sizeof(EX_PUSH_LOCK))];
+    union
+    {
+        HANDLE_TABLE_FREE_LIST FreeLists[1];
+        struct
+        {
+            UCHAR ActualEntry[32];
+            PHANDLE_TRACE_DEBUG_INFO DebugInfo;
+        };
+    };
+#elif (NTDDI_VERSION >= NTDDI_WINXP)
     ULONG_PTR TableCode;
-#else
-    PHANDLE_TABLE_ENTRY **Table;
-#endif
     PEPROCESS QuotaProcess;
     PVOID UniqueProcessId;
-#if (NTDDI_VERSION >= NTDDI_WINXP)
     EX_PUSH_LOCK HandleTableLock[4];
     LIST_ENTRY HandleTableList;
     EX_PUSH_LOCK HandleContentionEvent;
-#else
-    ERESOURCE HandleLock;
-    LIST_ENTRY HandleTableList;
-    KEVENT HandleContentionEvent;
-#endif
     PHANDLE_TRACE_DEBUG_INFO DebugInfo;
     LONG ExtraInfoPages;
-#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    ULONG FirstFree;
+    ULONG LastFree;
+    ULONG NextHandleNeedingPool;
+    LONG HandleCount;
     union
     {
         ULONG Flags;
         UCHAR StrictFIFO:1;
     };
-    union
-    {
-        LONG FirstFreeHandle;
-        ULONG FirstFree;        /* ReactOS compat: same offset, same size */
-    };
-    union
-    {
-        PHANDLE_TABLE_ENTRY LastFreeHandleEntry;
-        ULONG LastFree;         /* ReactOS compat: uses low 32 bits of pointer slot */
-    };
-    LONG HandleCount;
-    ULONG NextHandleNeedingPool;
 #else
+    PHANDLE_TABLE_ENTRY **Table;
+    PEPROCESS QuotaProcess;
+    PVOID UniqueProcessId;
+    ERESOURCE HandleLock;
+    LIST_ENTRY HandleTableList;
+    KEVENT HandleContentionEvent;
+    PHANDLE_TRACE_DEBUG_INFO DebugInfo;
+    LONG ExtraInfoPages;
     ULONG FirstFree;
     ULONG LastFree;
     ULONG NextHandleNeedingPool;
