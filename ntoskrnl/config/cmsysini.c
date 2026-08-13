@@ -1005,7 +1005,7 @@ CmpCreateObjectTypes(VOID)
     UNICODE_STRING Name;
     GENERIC_MAPPING CmpKeyMapping = {KEY_READ,
                                      KEY_WRITE,
-                                     KEY_EXECUTE,
+                                     KEY_EXECUTE | KEY_CREATE_LINK,
                                      KEY_ALL_ACCESS};
     PAGED_CODE();
 
@@ -1013,17 +1013,20 @@ CmpCreateObjectTypes(VOID)
     RtlZeroMemory(&ObjectTypeInitializer, sizeof(ObjectTypeInitializer));
     RtlInitUnicodeString(&Name, L"Key");
     ObjectTypeInitializer.Length = sizeof(ObjectTypeInitializer);
-    ObjectTypeInitializer.DefaultPagedPoolCharge = sizeof(CM_KEY_BODY);
+    ObjectTypeInitializer.DefaultPagedPoolCharge = 112;
     ObjectTypeInitializer.GenericMapping = CmpKeyMapping;
     ObjectTypeInitializer.PoolType = PagedPool;
     ObjectTypeInitializer.ValidAccessMask = KEY_ALL_ACCESS;
     ObjectTypeInitializer.UseDefaultObject = TRUE;
     ObjectTypeInitializer.DeleteProcedure = CmpDeleteKeyObject;
-    ObjectTypeInitializer.ParseProcedure = CmpParseKey;
+    ObjectTypeInitializer.UseExtendedParameters = TRUE;
+    ObjectTypeInitializer.ParseProcedureEx = CmpParseKeyEx;
     ObjectTypeInitializer.SecurityProcedure = CmpSecurityMethod;
     ObjectTypeInitializer.QueryNameProcedure = CmpQueryKeyName;
     ObjectTypeInitializer.CloseProcedure = CmpCloseKeyObject;
     ObjectTypeInitializer.SecurityRequired = TRUE;
+    ObjectTypeInitializer.CaseInsensitive = TRUE;
+    ObjectTypeInitializer.ObjectTypeCode = 0x100;
     ObjectTypeInitializer.InvalidAttributes = OBJ_EXCLUSIVE | OBJ_PERMANENT;
 
     /* Create it */

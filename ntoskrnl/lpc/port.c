@@ -66,10 +66,7 @@ LpcInitSystem(VOID)
     ObjectTypeInitializer.DefaultNonPagedPoolCharge += sizeof(LPCP_PORT_OBJECT);
     ObjectTypeInitializer.DefaultPagedPoolCharge = 0;
     ObjectTypeInitializer.UseDefaultObject = FALSE;
-    ObCreateObjectType(&Name,
-                       &ObjectTypeInitializer,
-                       NULL,
-                       &LpcWaitablePortObjectType);
+    ObCreateObjectTypeEx(&Name, &ObjectTypeInitializer, NULL, FIELD_OFFSET(LPCP_PORT_OBJECT, WaitEvent), &LpcWaitablePortObjectType);
 
     /* Allocate the LPC lookaside list */
     LpcpMaxMessageSize = LPCP_MAX_MESSAGE_SIZE;

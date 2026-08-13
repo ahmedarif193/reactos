@@ -978,7 +978,10 @@ ReparseObject:
             ParseObjectType = ObpGetObjectTypeFromHeader(ObjectHeader);
             ParseRoutine = ParseObjectType->TypeInfo.ParseProcedure;
             if ((ParseRoutine) &&
-                (!(InsertObject) || (ParseRoutine == ObpParseSymbolicLink)))
+                (!(InsertObject) ||
+                 (ParseRoutine == ObpParseSymbolicLink) ||
+                 (ParseObjectType->TypeInfo.UseExtendedParameters &&
+                  (ParseObjectType->TypeInfo.ParseProcedureEx == ObpParseSymbolicLinkEx))))
             {
                 /* Use the Root Directory next time */
                 Directory = NULL;

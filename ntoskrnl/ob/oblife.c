@@ -45,6 +45,93 @@ POBJECT_TYPE ObTypeIndexTable[256];
 UCHAR ObHeaderCookie;
 UCHAR ObpInfoMaskToOffset[256];
 
+static
+NTSTATUS
+ObpCreateDefaultObjectTypeSecurityDescriptor(
+    _Out_ PSECURITY_DESCRIPTOR *SecurityDescriptor)
+{
+    ULONG WorldSidBuffer[SECURITY_MAX_SID_SIZE / sizeof(ULONG)];
+    ULONG AdminSidBuffer[SECURITY_MAX_SID_SIZE / sizeof(ULONG)];
+    ULONG SystemSidBuffer[SECURITY_MAX_SID_SIZE / sizeof(ULONG)];
+    SID_IDENTIFIER_AUTHORITY WorldAuthority = SECURITY_WORLD_SID_AUTHORITY;
+    SID_IDENTIFIER_AUTHORITY NtAuthority = SECURITY_NT_AUTHORITY;
+    PSID WorldSid = (PSID)WorldSidBuffer;
+    PSID AdminSid = (PSID)AdminSidBuffer;
+    PSID SystemSid = (PSID)SystemSidBuffer;
+    PISECURITY_DESCRIPTOR_RELATIVE RelativeDescriptor;
+    ULONG AclSize;
+    ULONG DescriptorSize;
+    PACL Dacl;
+    NTSTATUS Status;
+
+    Status = RtlInitializeSid(WorldSid, &WorldAuthority, 1);
+    if (!NT_SUCCESS(Status)) return Status;
+    *RtlSubAuthoritySid(WorldSid, 0) = SECURITY_WORLD_RID;
+    Status = RtlInitializeSid(AdminSid, &NtAuthority, 2);
+    if (!NT_SUCCESS(Status)) return Status;
+    *RtlSubAuthoritySid(AdminSid, 0) = SECURITY_BUILTIN_DOMAIN_RID;
+    *RtlSubAuthoritySid(AdminSid, 1) = DOMAIN_ALIAS_RID_ADMINS;
+    Status = RtlInitializeSid(SystemSid, &NtAuthority, 1);
+    if (!NT_SUCCESS(Status)) return Status;
+    *RtlSubAuthoritySid(SystemSid, 0) = SECURITY_LOCAL_SYSTEM_RID;
+
+    AclSize = sizeof(ACL) +
+              sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid(WorldSid) +
+              sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid(AdminSid) +
+              sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid(SystemSid);
+    DescriptorSize = sizeof(*RelativeDescriptor) + AclSize;
+    RelativeDescriptor = ExAllocatePoolWithTag(PagedPool, DescriptorSize, TAG_DACL);
+    if (!RelativeDescriptor) return STATUS_INSUFFICIENT_RESOURCES;
+
+    Status = RtlCreateSecurityDescriptorRelative(RelativeDescriptor, SECURITY_DESCRIPTOR_REVISION);
+    if (!NT_SUCCESS(Status)) goto Failure;
+
+    Dacl = (PACL)(RelativeDescriptor + 1);
+    Status = RtlCreateAcl(Dacl, AclSize, ACL_REVISION);
+    if (!NT_SUCCESS(Status)) goto Failure;
+
+    Status = RtlAddAccessAllowedAce(Dacl, ACL_REVISION, OBJECT_TYPE_ALL_ACCESS, WorldSid);
+    if (!NT_SUCCESS(Status)) goto Failure;
+    Status = RtlAddAccessAllowedAce(Dacl, ACL_REVISION, OBJECT_TYPE_ALL_ACCESS, AdminSid);
+    if (!NT_SUCCESS(Status)) goto Failure;
+    Status = RtlAddAccessAllowedAce(Dacl, ACL_REVISION, OBJECT_TYPE_ALL_ACCESS, SystemSid);
+    if (!NT_SUCCESS(Status)) goto Failure;
+
+    RelativeDescriptor->Control |= SE_DACL_PRESENT;
+    RelativeDescriptor->Dacl = sizeof(*RelativeDescriptor);
+    *SecurityDescriptor = (PSECURITY_DESCRIPTOR)RelativeDescriptor;
+    return STATUS_SUCCESS;
+
+Failure:
+    ExFreePoolWithTag(RelativeDescriptor, TAG_DACL);
+    return Status;
+}
+
+static
+NTSTATUS
+ObpInitializeObjectTypeSecurity(
+    _In_ PVOID Object,
+    _In_opt_ PSECURITY_DESCRIPTOR SecurityDescriptor)
+{
+    POBJECT_HEADER Header = OBJECT_TO_OBJECT_HEADER(Object);
+    PSECURITY_DESCRIPTOR LocalDescriptor = SecurityDescriptor;
+    PSECURITY_DESCRIPTOR CachedDescriptor;
+    BOOLEAN FreeDescriptor = FALSE;
+    NTSTATUS Status;
+
+    if (!LocalDescriptor)
+    {
+        Status = ObpCreateDefaultObjectTypeSecurityDescriptor(&LocalDescriptor);
+        if (!NT_SUCCESS(Status)) return Status;
+        FreeDescriptor = TRUE;
+    }
+
+    Status = ObLogSecurityDescriptor(LocalDescriptor, &CachedDescriptor, MAX_FAST_REFS + 1);
+    if (NT_SUCCESS(Status)) ExInitializeFastReference((PEX_FAST_REF)&Header->SecurityDescriptor, CachedDescriptor);
+    if (FreeDescriptor) ExFreePoolWithTag(LocalDescriptor, TAG_DACL);
+    return Status;
+}
+
 POBJECT_TYPE
 NTAPI
 ObGetObjectType(IN PVOID Object)
@@ -1362,8 +1449,19 @@ NTSTATUS
 NTAPI
 ObCreateObjectType(IN PUNICODE_STRING TypeName,
                    IN POBJECT_TYPE_INITIALIZER ObjectTypeInitializer,
-                   IN PVOID Reserved,
+                   IN PSECURITY_DESCRIPTOR SecurityDescriptor OPTIONAL,
                    OUT POBJECT_TYPE *ObjectType)
+{
+    return ObCreateObjectTypeEx(TypeName, ObjectTypeInitializer, SecurityDescriptor, 0, ObjectType);
+}
+
+NTSTATUS
+NTAPI
+ObCreateObjectTypeEx(IN PUNICODE_STRING TypeName,
+                     IN POBJECT_TYPE_INITIALIZER ObjectTypeInitializer,
+                     IN PSECURITY_DESCRIPTOR SecurityDescriptor OPTIONAL,
+                     IN LONG_PTR WaitObjectInfo OPTIONAL,
+                     OUT POBJECT_TYPE *ObjectType)
 {
     POBJECT_HEADER Header;
     POBJECT_TYPE LocalObjectType;
@@ -1388,7 +1486,9 @@ ObCreateObjectType(IN PUNICODE_STRING TypeName,
          (!(ObjectTypeInitializer->OpenProcedure) &&
           !ObjectTypeInitializer->CloseProcedure)) ||
         ((!ObjectTypeInitializer->UseDefaultObject) &&
-         (ObjectTypeInitializer->PoolType != NonPagedPool)))
+         ((ObjectTypeInitializer->PoolType != NonPagedPool) &&
+          (ObjectTypeInitializer->PoolType != NonPagedPoolNx)) &&
+         !(WaitObjectInfo & 1)))
     {
         /* Fail */
         return STATUS_INVALID_PARAMETER;
@@ -1540,23 +1640,10 @@ ObCreateObjectType(IN PUNICODE_STRING TypeName,
         /* Use the "Default Object", a simple event */
         LocalObjectType->DefaultObject = &ObpDefaultObject;
     }
-    /* The File Object gets an optimized hack so it can be waited on */
-    else if ((TypeName->Length == 8) && !(wcscmp(TypeName->Buffer, L"File")))
-    {
-        /* Wait on the File Object's event directly */
-        LocalObjectType->DefaultObject = UlongToPtr(FIELD_OFFSET(FILE_OBJECT,
-                                                                 Event));
-    }
-    else if ((TypeName->Length == 24) && !(wcscmp(TypeName->Buffer, L"WaitablePort")))
-    {
-        /* Wait on the LPC Port's object directly */
-        LocalObjectType->DefaultObject = UlongToPtr(FIELD_OFFSET(LPCP_PORT_OBJECT,
-                                                                 WaitEvent));
-    }
     else
     {
-        /* No default Object */
-        LocalObjectType->DefaultObject = NULL;
+        /* Use the caller-supplied wait object encoding, if present */
+        LocalObjectType->DefaultObject = (PVOID)WaitObjectInfo;
     }
 
     /* Initialize Object Type components */
@@ -1565,6 +1652,23 @@ ObCreateObjectType(IN PUNICODE_STRING TypeName,
     InitializeListHead(&LocalObjectType->CallbackList);
     LocalObjectType->SeMandatoryLabelMask = 0;
     LocalObjectType->SeTrustConstraintMask = 0;
+    if (ObjectTypeInitializer->Length >= sizeof(*ObjectTypeInitializer) + (2 * sizeof(ULONG)))
+    {
+        LocalObjectType->SeMandatoryLabelMask = ReadUnalignedU32((const unsigned long*)((PUCHAR)ObjectTypeInitializer + sizeof(*ObjectTypeInitializer)));
+        LocalObjectType->SeTrustConstraintMask = ReadUnalignedU32((const unsigned long*)((PUCHAR)ObjectTypeInitializer + sizeof(*ObjectTypeInitializer) + sizeof(ULONG)));
+    }
+
+    /* Initialize the type object's security descriptor when policy enables it */
+    if (ObpObjectSecurityMode)
+    {
+        Status = ObpInitializeObjectTypeSecurity(LocalObjectType, SecurityDescriptor);
+        if (!NT_SUCCESS(Status))
+        {
+            ObpReleaseLookupContext(&Context);
+            ObDereferenceObject(LocalObjectType);
+            return Status;
+        }
+    }
 
     /* Lock the object type */
     ObpEnterObjectTypeMutex(ObpTypeObjectType);

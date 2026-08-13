@@ -649,6 +649,25 @@ ObpParseSymbolicLink(IN PVOID ParsedObject,
     return STATUS_REPARSE;
 }
 
+NTSTATUS
+NTAPI
+ObpParseSymbolicLinkEx(
+    _In_ PVOID ParsedObject,
+    _In_ PVOID ObjectType,
+    _Inout_ PACCESS_STATE AccessState,
+    _In_ KPROCESSOR_MODE AccessMode,
+    _In_ ULONG Attributes,
+    _Inout_ PUNICODE_STRING FullPath,
+    _Inout_ PUNICODE_STRING RemainingName,
+    _Inout_opt_ PVOID Context,
+    _In_opt_ PSECURITY_QUALITY_OF_SERVICE SecurityQos,
+    _In_ POB_EXTENDED_PARSE_PARAMETERS ExtendedParameters,
+    _Out_ PVOID *NextObject)
+{
+    UNREFERENCED_PARAMETER(ExtendedParameters);
+    return ObpParseSymbolicLink(ParsedObject, ObjectType, AccessState, AccessMode, Attributes, FullPath, RemainingName, Context, SecurityQos, NextObject);
+}
+
 /* PUBLIC FUNCTIONS **********************************************************/
 
 /*++

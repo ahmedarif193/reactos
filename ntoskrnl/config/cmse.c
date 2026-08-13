@@ -313,7 +313,7 @@ CmpSecurityMethod(IN PVOID ObjectBody,
     {
         case SetSecurityDescriptor:
             DPRINT("Set security descriptor\n");
-            ASSERT((PoolType == PagedPool) || (PoolType == NonPagedPool));
+            ASSERT((PoolType == PagedPool) || ((PoolType & 1) == NonPagedPool));
             Status = CmpSetSecurityDescriptor(Kcb,
                                               SecurityInformation,
                                               SecurityDescriptor,

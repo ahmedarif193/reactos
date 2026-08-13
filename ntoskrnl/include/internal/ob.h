@@ -43,6 +43,13 @@
      GENERIC_EXECUTE |                                  \
      GENERIC_ALL)
 
+typedef struct _OBP_EXTENDED_OBJECT_TYPE_INITIALIZER
+{
+    OBJECT_TYPE_INITIALIZER TypeInfo;
+    ULONG SeMandatoryLabelMask;
+    ULONG SeTrustConstraintMask;
+} OBP_EXTENDED_OBJECT_TYPE_INITIALIZER, *POBP_EXTENDED_OBJECT_TYPE_INITIALIZER;
+
 //
 // Handle Bit Flags
 //
@@ -217,6 +224,21 @@ ObpLookupEntryDirectory(
     IN POBP_LOOKUP_CONTEXT Context
 );
 
+VOID
+NTAPI
+ObpCloseDirectoryObject(
+    IN PEPROCESS Process OPTIONAL,
+    IN PVOID Object,
+    IN ULONG_PTR ProcessHandleCount,
+    IN ULONG_PTR SystemHandleCount
+);
+
+VOID
+NTAPI
+ObpDeleteDirectoryObject(
+    IN PVOID Object
+);
+
 //
 // Symbolic Link Functions
 //
@@ -239,6 +261,22 @@ ObpParseSymbolicLink(
     IN OUT PVOID Context OPTIONAL,
     IN PSECURITY_QUALITY_OF_SERVICE SecurityQos OPTIONAL,
     OUT PVOID *NextObject
+);
+
+NTSTATUS
+NTAPI
+ObpParseSymbolicLinkEx(
+    _In_ PVOID ParsedObject,
+    _In_ PVOID ObjectType,
+    _Inout_ PACCESS_STATE AccessState,
+    _In_ KPROCESSOR_MODE AccessMode,
+    _In_ ULONG Attributes,
+    _Inout_ PUNICODE_STRING FullPath,
+    _Inout_ PUNICODE_STRING RemainingName,
+    _Inout_opt_ PVOID Context,
+    _In_opt_ PSECURITY_QUALITY_OF_SERVICE SecurityQos,
+    _In_ POB_EXTENDED_PARSE_PARAMETERS ExtendedParameters,
+    _Out_ PVOID *NextObject
 );
 
 VOID

@@ -2852,6 +2852,8 @@ QSI_DEF(SystemObjectSecurityMode)
 {
     PULONG ObjectSecurityInfo = (PULONG)Buffer;
 
+    *ReqSize = sizeof(ULONG);
+
     /* Validate input size */
     if (Size != sizeof(ULONG))
     {
