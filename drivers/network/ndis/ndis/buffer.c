@@ -722,7 +722,6 @@ NdisDprAllocatePacketNonInterlocked(
         *Packet = Temp;
         *Status = NDIS_STATUS_SUCCESS;
     } else {
-        NDIS_DbgPrint(MIN_TRACE, ("No more free descriptors\n"));
         *Status = NDIS_STATUS_RESOURCES;
     }
 }
