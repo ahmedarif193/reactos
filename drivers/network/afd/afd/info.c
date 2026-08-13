@@ -10,6 +10,42 @@
 
 #include "afd.h"
 
+BOOLEAN
+AfdTryApplyPendingReceiveWindow(PAFD_FCB FCB)
+{
+    UINT BytesAvailable;
+
+    if (!FCB->PendingReceiveWindowSize)
+        return TRUE;
+
+    ASSERT(!FCB->ReceiveIrp.InFlightRequest);
+
+    if (FCB->Flags & AFD_ENDPOINT_CONNECTIONLESS)
+    {
+        FCB->Recv.Size = FCB->PendingReceiveWindowSize;
+        FCB->PendingReceiveWindowSize = 0;
+        return TRUE;
+    }
+
+    BytesAvailable = FCB->Recv.Content - FCB->Recv.BytesUsed;
+    if (BytesAvailable > FCB->PendingReceiveWindowSize)
+        return FALSE;
+
+    if (BytesAvailable && FCB->Recv.BytesUsed)
+    {
+        RtlMoveMemory(FCB->Recv.Window,
+                      FCB->Recv.Window + FCB->Recv.BytesUsed,
+                      BytesAvailable);
+    }
+
+    FCB->Recv.Size = FCB->PendingReceiveWindowSize;
+    FCB->Recv.Content = BytesAvailable;
+    FCB->Recv.BytesUsed = 0;
+    FCB->PendingReceiveWindowSize = 0;
+
+    return TRUE;
+}
+
 NTSTATUS NTAPI
 AfdGetInfo( PDEVICE_OBJECT DeviceObject, PIRP Irp,
             PIO_STACK_LOCATION IrpSp ) {
@@ -32,7 +68,9 @@ AfdGetInfo( PDEVICE_OBJECT DeviceObject, PIRP Irp,
     _SEH2_TRY {
         switch( InfoReq->InformationClass ) {
         case AFD_INFO_RECEIVE_WINDOW_SIZE:
-            InfoReq->Information.Ulong = FCB->Recv.Size;
+            InfoReq->Information.Ulong = FCB->PendingReceiveWindowSize ?
+                                         FCB->PendingReceiveWindowSize :
+                                         FCB->Recv.Size;
             break;
 
         case AFD_INFO_SEND_WINDOW_SIZE:
@@ -129,34 +167,27 @@ AfdSetInfo( PDEVICE_OBJECT DeviceObject, PIRP Irp,
                 {
                     /* FIXME: likely not right, check tcpip.sys for TDI_QUERY_MAX_DATAGRAM_INFO */
                     if (InfoReq->Information.Ulong > 0 && InfoReq->Information.Ulong < 0xFFFF &&
-                        InfoReq->Information.Ulong != FCB->Recv.Size)
+                        InfoReq->Information.Ulong != (FCB->PendingReceiveWindowSize ?
+                                                       FCB->PendingReceiveWindowSize :
+                                                       FCB->Recv.Size))
                     {
-                        NewBuffer = ExAllocatePoolWithTag(PagedPool,
-                                                          InfoReq->Information.Ulong,
-                                                          TAG_AFD_DATA_BUFFER);
-
-                        if (NewBuffer)
+                        if (InfoReq->Information.Ulong == FCB->Recv.Size)
                         {
-                            if (FCB->Recv.Content > InfoReq->Information.Ulong)
-                                FCB->Recv.Content = InfoReq->Information.Ulong;
+                            FCB->PendingReceiveWindowSize = 0;
+                            break;
+                        }
 
-                            if (FCB->Recv.Window)
-                            {
-                                RtlCopyMemory(NewBuffer,
-                                              FCB->Recv.Window,
-                                              FCB->Recv.Content);
-
-                                ExFreePoolWithTag(FCB->Recv.Window, TAG_AFD_DATA_BUFFER);
-                            }
-
-                            FCB->Recv.Size = InfoReq->Information.Ulong;
-                            FCB->Recv.Window = NewBuffer;
-
-                            Status = STATUS_SUCCESS;
+                        if (FCB->Recv.Window &&
+                            InfoReq->Information.Ulong > FCB->ReceiveWindowAllocationSize)
+                        {
+                            Status = STATUS_INVALID_PARAMETER;
                         }
                         else
                         {
-                            Status = STATUS_NO_MEMORY;
+                            FCB->PendingReceiveWindowSize = InfoReq->Information.Ulong;
+
+                            if (!FCB->ReceiveIrp.InFlightRequest)
+                                AfdTryApplyPendingReceiveWindow(FCB);
                         }
                     }
                     else

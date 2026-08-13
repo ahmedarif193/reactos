@@ -12,6 +12,7 @@
 
 NTSTATUS WarmSocketForBind( PAFD_FCB FCB, ULONG ShareType ) {
     NTSTATUS Status;
+    ULONG ReceiveWindowAllocationSize;
 
     AFD_DbgPrint(MID_TRACE,("Called (AF %u)\n",
                             FCB->LocalAddress->Address[0].AddressType));
@@ -43,6 +44,8 @@ NTSTATUS WarmSocketForBind( PAFD_FCB FCB, ULONG ShareType ) {
 
         if (NT_SUCCESS(Status) && !FCB->Recv.Window)
         {
+            ReceiveWindowAllocationSize = max(FCB->Recv.Size, AfdReceiveWindowSize);
+
             /* dev-nt6-1: NonPagedPool — tcpip's DGDeliverData runs from
              * the network RX DPC at DISPATCH_LEVEL and writes into this
              * buffer via RtlCopyMemory. PagedPool would bugcheck 0x50
@@ -50,11 +53,13 @@ NTSTATUS WarmSocketForBind( PAFD_FCB FCB, ULONG ShareType ) {
              * latent bug only surfaced once the NDIS 6 bridge actually
              * delivered packets up the stack. */
             FCB->Recv.Window = ExAllocatePoolWithTag(NonPagedPool,
-                                                     FCB->Recv.Size,
+                                                     ReceiveWindowAllocationSize,
                                                      TAG_AFD_DATA_BUFFER);
 
             if (!FCB->Recv.Window)
                 Status = STATUS_NO_MEMORY;
+            else
+                FCB->ReceiveWindowAllocationSize = ReceiveWindowAllocationSize;
         }
 
         if (NT_SUCCESS(Status) && FCB->Recv.Content < FCB->Recv.Size)
