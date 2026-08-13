@@ -26,6 +26,8 @@
 #define ARM64_OB_DPRINT(...) do { if (ARM64_OB_TRACE) DPRINT1(__VA_ARGS__); } while (0)
 #endif
 
+#define OBP_BASE_POOL_TYPE_MASK 1
+
 extern ULONG NtGlobalFlag;
 
 POBJECT_TYPE ObpTypeObjectType = NULL;
@@ -1506,13 +1508,13 @@ ObCreateObjectType(IN PUNICODE_STRING TypeName,
     }
 
     /* Calculate how much space our header'll take up */
-    HeaderSize = FIELD_OFFSET(OBJECT_HEADER, Body) +
+    HeaderSize = sizeof(OBJECT_HEADER) +
                  sizeof(OBJECT_HEADER_NAME_INFO) +
                  (ObjectTypeInitializer->MaintainHandleCount ?
                   sizeof(OBJECT_HEADER_HANDLE_INFO) : 0);
 
     /* Check the pool type */
-    if (ObjectTypeInitializer->PoolType == NonPagedPool)
+    if ((ObjectTypeInitializer->PoolType & OBP_BASE_POOL_TYPE_MASK) == NonPagedPool)
     {
         /* Update the NonPaged Pool charge */
         LocalObjectType->TypeInfo.DefaultNonPagedPoolCharge += HeaderSize;
