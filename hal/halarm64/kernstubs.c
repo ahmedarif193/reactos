@@ -4,6 +4,7 @@
  */
 
 #include <ntddk.h>
+#include <halacpi_arm64.h>
 #include <reactos/hal/msi.h>
 #define NDEBUG
 #include <debug.h>
@@ -124,12 +125,9 @@ NTSTATUS NTAPI HalEnumerateProcessors(PVOID Buffer, PULONG Count)
     return STATUS_NOT_SUPPORTED;
 }
 
-/* Number of processors the firmware (MADT GICC entries) described / brought up. */
-extern ULONG HalpStartedProcessorCount;
-
 ULONG NTAPI HalQueryMaximumProcessorCount(VOID)
 {
-    ULONG Count = HalpStartedProcessorCount;
+    ULONG Count = HalpArm64GicInfo.GiccEntryCount;
     return (Count != 0) ? Count : 1;
 }
 
