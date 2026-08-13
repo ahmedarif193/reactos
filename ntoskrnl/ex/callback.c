@@ -276,7 +276,8 @@ ExpInitializeCallbacks(VOID)
     ObjectTypeInitializer.Length = sizeof(ObjectTypeInitializer);
     ObjectTypeInitializer.InvalidAttributes = OBJ_OPENLINK;
     ObjectTypeInitializer.GenericMapping = ExpCallbackMapping;
-    ObjectTypeInitializer.PoolType = NonPagedPool;
+    ObjectTypeInitializer.PoolType = NonPagedPoolNx;
+    ObjectTypeInitializer.UseDefaultObject = TRUE;
     ObjectTypeInitializer.DeleteProcedure = ExpDeleteCallback;
     ObjectTypeInitializer.ValidAccessMask = CALLBACK_ALL_ACCESS;
     Status = ObCreateObjectType(&Name,
