@@ -880,6 +880,11 @@ E1000MiniportInterruptDpc(
     ULONG TotalRxBytes = 0;
     ULONG TotalTxBytes = 0;
     BOOLEAN BudgetExhausted = FALSE;
+    BOOLEAN IndicateAll = FALSE;
+#ifdef NDIS_SUPPORT_NDIS620
+    PNDIS_RECEIVE_THROTTLE_PARAMETERS ThrottleParams =
+        (PNDIS_RECEIVE_THROTTLE_PARAMETERS)ReceiveThrottleParameters;
+#endif
 
     UNREFERENCED_PARAMETER(MiniportDpcContext);
     UNREFERENCED_PARAMETER(NdisReserved2);
@@ -906,10 +911,9 @@ E1000MiniportInterruptDpc(
      * implementing fair scheduling across multiple adapters.
      */
 #ifdef NDIS_SUPPORT_NDIS620
-    if (ReceiveThrottleParameters != NULL)
+    if (ThrottleParams != NULL)
     {
-        PNDIS_RECEIVE_THROTTLE_PARAMETERS ThrottleParams =
-            (PNDIS_RECEIVE_THROTTLE_PARAMETERS)ReceiveThrottleParameters;
+        ThrottleParams->MoreNblsPending = FALSE;
 
         if (ThrottleParams->MaxNblsToIndicate != NDIS_INDICATE_ALL_NBLS)
         {
@@ -919,6 +923,11 @@ E1000MiniportInterruptDpc(
                 RxBudget = 1;  /* Ensure at least 1 packet processed */
             }
         }
+        else
+        {
+            IndicateAll = TRUE;
+            RxBudget = E1000_NUM_RX_DESC * max(Adapter->RxQueueCount, 1u);
+        }
     }
 #else
     UNREFERENCED_PARAMETER(ReceiveThrottleParameters);
@@ -927,7 +936,7 @@ E1000MiniportInterruptDpc(
     /* Get the interrupt cause that was saved in ISR */
     Icr = (ULONG)InterlockedExchange((LONG*)&Adapter->InterruptPending, 0);
 
-    if (Icr == 0)
+    if (Icr == 0 && !Adapter->MoreNblsPending)
     {
         /* Re-enable interrupts and return */
         E1000EnableInterrupts(Adapter);
@@ -992,10 +1001,14 @@ E1000MiniportInterruptDpc(
     }
 
     /* Check if we exhausted the RX budget */
-    if (RxWorkDone >= RxBudget)
+    if (RxWorkDone >= RxBudget && !IndicateAll)
     {
         BudgetExhausted = TRUE;
         Adapter->MoreNblsPending = TRUE;
+#ifdef NDIS_SUPPORT_NDIS620
+        if (ThrottleParams != NULL)
+            ThrottleParams->MoreNblsPending = TRUE;
+#endif
     }
     else
     {
