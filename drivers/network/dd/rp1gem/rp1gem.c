@@ -16,6 +16,10 @@ Rp1GemDrainTxCompletions(
     _In_ ULONG CompleteFlags);
 
 static VOID
+Rp1GemStartTransmit(
+    _In_ PRP1GEM_ADAPTER Adapter);
+
+static VOID
 Rp1GemPollReceive(
     _In_ PRP1GEM_ADAPTER Adapter,
     _In_ ULONG Budget);
@@ -313,6 +317,17 @@ Rp1GemDisableInterrupts(
 {
     if (Adapter->RegisterBase)
         Rp1GemWrite32(Adapter, MACB_IDR, MACB_INT_ALL);
+}
+
+static VOID
+Rp1GemStartTransmit(
+    _In_ PRP1GEM_ADAPTER Adapter)
+{
+    Rp1GemWrite32(Adapter,
+                  MACB_NCR,
+                  Rp1GemRead32(Adapter, MACB_NCR) | MACB_NCR_TSTART);
+    /* Flush the RP1 PCIe posted write so the TSTART doorbell reaches GEM. */
+    (VOID)Rp1GemRead32(Adapter, MACB_NCR);
 }
 
 static VOID
@@ -1608,7 +1623,11 @@ Rp1GemDrainTxCompletions(
     while (Adapter->TxFree < RP1GEM_TX_RING_SIZE)
     {
         ULONG Index = Adapter->TxTail;
-        ULONG Control = Adapter->TxRing[Index].Control;
+        ULONG Control;
+
+        /* Order the device's descriptor writeback before reading USED. */
+        KeMemoryBarrier();
+        Control = Adapter->TxRing[Index].Control;
 
         if (!(Control & MACB_TX_USED))
             break;
@@ -1879,6 +1898,7 @@ Rp1GemInterruptDpc(
     PNDIS_RECEIVE_THROTTLE_PARAMETERS ThrottleParameters =
         (PNDIS_RECEIVE_THROTTLE_PARAMETERS)ReceiveThrottleParameters;
     BOOLEAN ThrottleReceive = FALSE;
+    BOOLEAN RestartTx;
     ULONG RxBudget = RP1GEM_RX_BUDGET;
     ULONG RawIsr;
     ULONG Pending;
@@ -1919,7 +1939,19 @@ Rp1GemInterruptDpc(
     }
 
     if (Pending & (MACB_INT_TCOMP | MACB_INT_TXERR | MACB_INT_TUND | MACB_INT_RLE | MACB_INT_TXUBR))
+    {
         Rp1GemDrainTxCompletions(Adapter, NDIS_SEND_COMPLETE_FLAGS_DISPATCH_LEVEL);
+
+        if (Pending & MACB_INT_TXUBR)
+        {
+            NdisAcquireSpinLock(&Adapter->TxLock);
+            RestartTx = Adapter->TxFree < RP1GEM_TX_RING_SIZE;
+            NdisReleaseSpinLock(&Adapter->TxLock);
+
+            if (RestartTx)
+                Rp1GemStartTransmit(Adapter);
+        }
+    }
 
     if (ThrottleReceive && Rp1GemReceivePending(Adapter))
     {
@@ -2661,9 +2693,7 @@ FailNbl:
     }
 
     if (KickTx)
-        Rp1GemWrite32(Adapter,
-                      MACB_NCR,
-                      Rp1GemRead32(Adapter, MACB_NCR) | MACB_NCR_TSTART);
+        Rp1GemStartTransmit(Adapter);
 
     if (OkHead)
     {
