@@ -5666,6 +5666,7 @@ VOID
 NTAPI
 HalProcessorIdle(VOID)
 {
+    HalpArm64SetPmrExact(KeGetCurrentIrql());
     __asm__ __volatile__("dsb sy; isb; wfi" ::: "memory");
 }
 

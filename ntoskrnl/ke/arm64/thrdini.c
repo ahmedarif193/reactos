@@ -349,6 +349,7 @@ KiIdleLoop(VOID)
             __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(IdleStart));
             Prcb->PowerState.IdleFunction(&Prcb->PowerState);
             __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(IdleEnd));
+            _enable();
             KiArm64IdleCounterTicks[Prcb->Number] += IdleEnd - IdleStart;
         }
         SmpDbgWake(Prcb->Number);
@@ -365,8 +366,6 @@ KiIdleLoop(VOID)
         {
             KiProcessorFreezeHandler(NULL, NULL);
         }
-
-        _enable();
     }
 }
 
