@@ -8,6 +8,10 @@
 #ifndef __NEWDEVP__H
 #define __NEWDEVP__H
 
+/* Private ClientSideInstallW named-pipe protocol extension. */
+#define NEWDEV_INSTALL_BATCH_MARKER 0x48435442UL
+#define NEWDEV_INSTALL_BATCH_MAX_DEVICES 65536
+
 #ifdef __cplusplus
 extern "C" {
 #endif
