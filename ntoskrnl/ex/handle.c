@@ -402,8 +402,9 @@ ExpAllocateHandleTable(IN PEPROCESS Process OPTIONAL,
 
     /* Allocate the native header followed by one free list per processor */
     HandleTableSize = (ExpFreeListCount + 1) * sizeof(HANDLE_TABLE_FREE_LIST);
-    HandleTable = ExAllocatePoolWithTag(PagedPool, HandleTableSize, TAG_OBJECT_TABLE);
+    HandleTable = ExAllocatePoolWithTag(PagedPoolCacheAligned, HandleTableSize, TAG_OBJECT_TABLE);
     if (!HandleTable) return NULL;
+    ASSERT(((ULONG_PTR)HandleTable & (SYSTEM_CACHE_ALIGNMENT_SIZE - 1)) == 0);
 
     /* Check if we have a process */
     if (Process)
@@ -483,6 +484,7 @@ ExpAllocateHandleTable(IN PEPROCESS Process OPTIONAL,
     HandleTable->QuotaProcess = Process;
     HandleTable->UniqueProcessId = PtrToUlong(PsGetCurrentProcess()->UniqueProcessId);
     HandleTable->Flags = 0;
+    HandleTable->RaiseUMExceptionOnInvalidHandleClose = (Process != NULL);
 
     /* Initialize the table and per-processor free-list locks */
     ExInitializePushLock(&HandleTable->HandleTableLock);
