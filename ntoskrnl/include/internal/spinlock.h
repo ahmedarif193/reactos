@@ -31,22 +31,6 @@ KxLoadAcquirePointer(
 #endif
 }
 
-#ifdef _M_ARM64
-FORCEINLINE
-ULONG_PTR
-KxLoadExclusiveAcquirePointer(
-    _In_ PVOID const volatile *Address)
-{
-    ULONG_PTR Value;
-
-    __asm__ __volatile__("ldaxr %0, [%1]"
-                         : "=&r"(Value)
-                         : "r"(Address)
-                         : "memory");
-    return Value;
-}
-#endif
-
 FORCEINLINE
 VOID
 KxStoreReleasePointer(
@@ -98,17 +82,6 @@ KxAcquireSpinLock(
 #if defined(_M_IX86) && DBG
         /* On x86 debug builds, we use a much slower but useful routine */
         Kii386SpinOnSpinLock(SpinLock, 5);
-#elif defined(_M_ARM64)
-        ULONG_PTR LockValue;
-
-        /* The exclusive load lets the unlock store wake only this lock's waiters. */
-        __asm__ __volatile__("sevl" ::: "memory");
-        do
-        {
-            __asm__ __volatile__("wfe" ::: "memory");
-            LockValue = KxLoadExclusiveAcquirePointer(
-                (PVOID const volatile *)SpinLock);
-        } while (LockValue & 1);
 #else
         /* It's locked... spin until it's unlocked */
         while (*(volatile KSPIN_LOCK *)SpinLock & 1)
@@ -211,15 +184,6 @@ KxAcquireQueuedSpinLock(
 
     KxStoreReleasePointer((PVOID volatile *)&Predecessor->Next, LockQueue);
 
-#ifdef _M_ARM64
-    __asm__ __volatile__("sevl" ::: "memory");
-    do
-    {
-        __asm__ __volatile__("wfe" ::: "memory");
-        QueueState = KxLoadExclusiveAcquirePointer(
-            (PVOID const volatile *)&LockQueue->Lock);
-    } while (QueueState & KX_LOCK_QUEUE_WAIT);
-#else
     do
     {
         QueueState = KxLoadAcquirePointer((PVOID const volatile *)&LockQueue->Lock);
@@ -227,7 +191,6 @@ KxAcquireQueuedSpinLock(
             break;
         YieldProcessor();
     } while (TRUE);
-#endif
 
     ASSERT((QueueState & KX_LOCK_QUEUE_OWNER) != 0);
 #else
@@ -263,15 +226,6 @@ KxReleaseQueuedSpinLock(
             return;
         }
 
-#ifdef _M_ARM64
-        __asm__ __volatile__("sevl" ::: "memory");
-        do
-        {
-            __asm__ __volatile__("wfe" ::: "memory");
-            Successor = (PKSPIN_LOCK_QUEUE)KxLoadExclusiveAcquirePointer(
-                (PVOID const volatile *)&LockQueue->Next);
-        } while (Successor == NULL);
-#else
         do
         {
             Successor = (PKSPIN_LOCK_QUEUE)KxLoadAcquirePointer(
@@ -280,7 +234,6 @@ KxReleaseQueuedSpinLock(
                 break;
             YieldProcessor();
         } while (TRUE);
-#endif
     }
     ASSERT(((ULONG_PTR)Successor->Lock & ~KX_LOCK_QUEUE_FLAGS) ==
            (ULONG_PTR)SpinLock);
