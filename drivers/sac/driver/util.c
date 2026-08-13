@@ -10,6 +10,7 @@
 
 #include "sacdrv.h"
 
+#include <ndk/obfuncs.h>
 #include <ndk/rtlfuncs.h>
 
 /* GLOBALS ********************************************************************/
@@ -1192,7 +1193,7 @@ VerifyEventWaitable(IN HANDLE Handle,
     }
 
     /* Check if the object itself is NOT being used */
-    ObjectType = OBJECT_TO_OBJECT_HEADER(Object)->Type;
+    ObjectType = ObGetObjectType(Object);
     if (ObjectType->TypeInfo.UseDefaultObject == FALSE)
     {
         /* Get the actual object that's being used for the wait */

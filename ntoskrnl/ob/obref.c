@@ -324,7 +324,7 @@ ObfDereferenceObject(IN PVOID Object)
 
     if (Header->PointerCount < Header->HandleCount)
     {
-        DPRINT1("Misbehaving object: %wZ\n", &Header->Type->Name);
+        DPRINT1("Misbehaving object: %wZ\n", &ObpGetObjectTypeFromHeader(Header)->Name);
         return Header->PointerCount;
     }
 
@@ -391,7 +391,7 @@ ObReferenceObjectByPointer(IN PVOID Object,
      * Validate object type if the call is for UserMode.
      * NOTE: Unless it's a symbolic link (Caz Yokoyama [MSFT])
      */
-    if ((Header->Type != ObjectType) && ((AccessMode != KernelMode) ||
+    if ((ObpGetObjectTypeFromHeader(Header) != ObjectType) && ((AccessMode != KernelMode) ||
         (ObjectType == ObpSymbolicLinkObjectType)))
     {
         /* Invalid type */
@@ -646,7 +646,7 @@ ObReferenceObjectByHandle(IN HANDLE Handle,
     {
         /* Get the object header and validate the type*/
         ObjectHeader = ObpGetHandleObject(HandleEntry);
-        if (!(ObjectType) || (ObjectType == ObjectHeader->Type))
+        if (!(ObjectType) || (ObjectType == ObpGetObjectTypeFromHeader(ObjectHeader)))
         {
             /* Get the granted access and validate it */
             GrantedAccess = HandleEntry->GrantedAccess;

@@ -2018,9 +2018,10 @@ typedef struct _WIN32_JOBCALLOUT_PARAMETERS
 typedef struct _WIN32_OPENMETHOD_PARAMETERS
 {
     OB_OPEN_REASON OpenReason;
+    KPROCESSOR_MODE AccessMode;
     PEPROCESS Process;
     PVOID Object;
-    ULONG GrantedAccess;
+    PACCESS_MASK GrantedAccess;
     ULONG HandleCount;
 } WIN32_OPENMETHOD_PARAMETERS, *PWIN32_OPENMETHOD_PARAMETERS;
 
@@ -2036,9 +2037,8 @@ typedef struct _WIN32_CLOSEMETHOD_PARAMETERS
 {
     PEPROCESS Process;
     PVOID Object;
-    ACCESS_MASK AccessMask;
-    ULONG ProcessHandleCount;
-    ULONG SystemHandleCount;
+    ULONG_PTR ProcessHandleCount;
+    ULONG_PTR SystemHandleCount;
 } WIN32_CLOSEMETHOD_PARAMETERS, *PWIN32_CLOSEMETHOD_PARAMETERS;
 
 typedef struct _WIN32_DELETEMETHOD_PARAMETERS

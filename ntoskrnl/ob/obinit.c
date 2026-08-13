@@ -57,6 +57,70 @@ ULONG ObpInitializationPhase;
 ULONG ObpObjectSecurityMode = 0;
 ULONG ObpProtectionMode = 0;
 
+#ifdef _WIN64
+C_ASSERT(sizeof(OBJECT_HEADER) == 56);
+C_ASSERT(FIELD_OFFSET(OBJECT_HEADER, PointerCount) == 0);
+C_ASSERT(FIELD_OFFSET(OBJECT_HEADER, HandleCount) == 8);
+C_ASSERT(FIELD_OFFSET(OBJECT_HEADER, Lock) == 16);
+C_ASSERT(FIELD_OFFSET(OBJECT_HEADER, TypeIndex) == 24);
+C_ASSERT(FIELD_OFFSET(OBJECT_HEADER, TraceFlags) == 25);
+C_ASSERT(FIELD_OFFSET(OBJECT_HEADER, InfoMask) == 26);
+C_ASSERT(FIELD_OFFSET(OBJECT_HEADER, Flags) == 27);
+C_ASSERT(FIELD_OFFSET(OBJECT_HEADER, ObjectCreateInfo) == 32);
+C_ASSERT(FIELD_OFFSET(OBJECT_HEADER, SecurityDescriptor) == 40);
+C_ASSERT(FIELD_OFFSET(OBJECT_HEADER, Body) == 48);
+C_ASSERT(sizeof(OBJECT_HEADER_QUOTA_INFO) == 32);
+C_ASSERT(FIELD_OFFSET(OBJECT_HEADER_QUOTA_INFO, SecurityDescriptorQuotaBlock) == 16);
+C_ASSERT(FIELD_OFFSET(OBJECT_HEADER_QUOTA_INFO, Reserved2) == 24);
+C_ASSERT(sizeof(OBJECT_HEADER_PROCESS_INFO) == 16);
+C_ASSERT(sizeof(OBJECT_HEADER_HANDLE_INFO) == 16);
+C_ASSERT(sizeof(OBJECT_HEADER_NAME_INFO) == 32);
+C_ASSERT(FIELD_OFFSET(OBJECT_HEADER_NAME_INFO, Directory) == 0);
+C_ASSERT(FIELD_OFFSET(OBJECT_HEADER_NAME_INFO, Name) == 8);
+C_ASSERT(FIELD_OFFSET(OBJECT_HEADER_NAME_INFO, ReferenceCount) == 24);
+C_ASSERT(FIELD_OFFSET(OBJECT_HEADER_NAME_INFO, Reserved) == 28);
+C_ASSERT(sizeof(OBJECT_HEADER_CREATOR_INFO) == 32);
+C_ASSERT(FIELD_OFFSET(OBJECT_HEADER_CREATOR_INFO, CreatorUniqueProcess) == 16);
+C_ASSERT(FIELD_OFFSET(OBJECT_HEADER_CREATOR_INFO, CreatorBackTraceIndex) == 24);
+C_ASSERT(sizeof(OBJECT_HEADER_AUDIT_INFO) == 16);
+C_ASSERT(sizeof(OBJECT_HEADER_EXTENDED_INFO) == 16);
+C_ASSERT(sizeof(OBJECT_HEADER_PADDING_INFO) == 4);
+C_ASSERT(sizeof(OB_EXTENDED_PARSE_PARAMETERS) == 16);
+C_ASSERT(FIELD_OFFSET(OB_EXTENDED_PARSE_PARAMETERS, Length) == 0);
+C_ASSERT(FIELD_OFFSET(OB_EXTENDED_PARSE_PARAMETERS, RestrictedAccessMask) == 4);
+C_ASSERT(FIELD_OFFSET(OB_EXTENDED_PARSE_PARAMETERS, Silo) == 8);
+C_ASSERT(sizeof(OBJECT_TYPE_INITIALIZER) == 120);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE_INITIALIZER, ObjectTypeFlags) == 2);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE_INITIALIZER, ObjectTypeCode) == 4);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE_INITIALIZER, InvalidAttributes) == 8);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE_INITIALIZER, GenericMapping) == 12);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE_INITIALIZER, ValidAccessMask) == 28);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE_INITIALIZER, RetainAccess) == 32);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE_INITIALIZER, PoolType) == 36);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE_INITIALIZER, DefaultPagedPoolCharge) == 40);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE_INITIALIZER, DefaultNonPagedPoolCharge) == 44);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE_INITIALIZER, DumpProcedure) == 48);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE_INITIALIZER, OkayToCloseProcedure) == 104);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE_INITIALIZER, WaitObjectFlagMask) == 112);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE_INITIALIZER, WaitObjectFlagOffset) == 116);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE_INITIALIZER, WaitObjectPointerOffset) == 118);
+C_ASSERT(sizeof(OBJECT_TYPE) == 224);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE, TypeList) == 0);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE, Name) == 16);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE, DefaultObject) == 32);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE, Index) == 40);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE, TotalNumberOfObjects) == 44);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE, TotalNumberOfHandles) == 48);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE, HighWaterNumberOfObjects) == 52);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE, HighWaterNumberOfHandles) == 56);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE, TypeInfo) == 64);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE, TypeLock) == 184);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE, Key) == 192);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE, CallbackList) == 200);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE, SeMandatoryLabelMask) == 216);
+C_ASSERT(FIELD_OFFSET(OBJECT_TYPE, SeTrustConstraintMask) == 220);
+#endif
+
 /* PRIVATE FUNCTIONS *********************************************************/
 
 static
@@ -218,10 +282,31 @@ ObInitSystem(VOID)
     POBJECT_HEADER_CREATOR_INFO CreatorInfo;
     POBJECT_HEADER_NAME_INFO NameInfo;
     PSECURITY_DESCRIPTOR KernelObjectsSD = NULL;
+    LARGE_INTEGER Counter;
+    ULONG InfoMask;
+    UCHAR InfoOffset;
     NTSTATUS Status;
 
     /* Check if this is actually Phase 1 initialization */
     if (ObpInitializationPhase != 0) goto ObPostPhase0;
+
+    /* Initialize native object-header metadata before creating any objects */
+    RtlZeroMemory(ObTypeIndexTable, sizeof(ObTypeIndexTable));
+    for (InfoMask = 0; InfoMask < RTL_NUMBER_OF(ObpInfoMaskToOffset); InfoMask++)
+    {
+        InfoOffset = 0;
+        if (InfoMask & OBP_CREATOR_INFO_MASK) InfoOffset += sizeof(OBJECT_HEADER_CREATOR_INFO);
+        if (InfoMask & OBP_NAME_INFO_MASK) InfoOffset += sizeof(OBJECT_HEADER_NAME_INFO);
+        if (InfoMask & OBP_HANDLE_INFO_MASK) InfoOffset += sizeof(OBJECT_HEADER_HANDLE_INFO);
+        if (InfoMask & OBP_QUOTA_INFO_MASK) InfoOffset += sizeof(OBJECT_HEADER_QUOTA_INFO);
+        if (InfoMask & OBP_PROCESS_INFO_MASK) InfoOffset += sizeof(OBJECT_HEADER_PROCESS_INFO);
+        if (InfoMask & OBP_AUDIT_INFO_MASK) InfoOffset += sizeof(OBJECT_HEADER_AUDIT_INFO);
+        if (InfoMask & OBP_EXTENDED_INFO_MASK) InfoOffset += sizeof(OBJECT_HEADER_EXTENDED_INFO);
+        if (InfoMask & OBP_PADDING_INFO_MASK) InfoOffset += sizeof(OBJECT_HEADER_PADDING_INFO);
+        ObpInfoMaskToOffset[InfoMask] = InfoOffset;
+    }
+    Counter = KeQueryPerformanceCounter(NULL);
+    ObHeaderCookie = (UCHAR)(Counter.LowPart ^ Counter.HighPart ^ (ULONG_PTR)Prcb);
 
     /* Initialize the OBJECT_CREATE_INFORMATION List */
     ExInitializeSystemLookasideList(&ObpCreateInfoLookasideList,

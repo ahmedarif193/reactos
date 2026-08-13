@@ -2314,11 +2314,14 @@ static KDB_TYPE_FIELD KdbFieldsObjectHeader[] =
 {
     KDB_FIELD(OBJECT_HEADER, PointerCount, "LONG_PTR", KdbFieldSigned),
     KDB_FIELD(OBJECT_HEADER, HandleCount, "LONG_PTR", KdbFieldSigned),
-    KDB_FIELD(OBJECT_HEADER, Type, "_OBJECT_TYPE*", KdbFieldPointer),
-    KDB_FIELD(OBJECT_HEADER, NameInfoOffset, "UCHAR", KdbFieldHex),
-    KDB_FIELD(OBJECT_HEADER, HandleInfoOffset, "UCHAR", KdbFieldHex),
-    KDB_FIELD(OBJECT_HEADER, QuotaInfoOffset, "UCHAR", KdbFieldHex),
+    KDB_FIELD(OBJECT_HEADER, Lock, "_EX_PUSH_LOCK", KdbFieldHex),
+    KDB_FIELD(OBJECT_HEADER, TypeIndex, "UCHAR", KdbFieldHex),
+    KDB_FIELD(OBJECT_HEADER, TraceFlags, "UCHAR", KdbFieldHex),
+    KDB_FIELD(OBJECT_HEADER, InfoMask, "UCHAR", KdbFieldHex),
     KDB_FIELD(OBJECT_HEADER, Flags, "UCHAR", KdbFieldHex),
+#ifdef _WIN64
+    KDB_FIELD(OBJECT_HEADER, Reserved, "ULONG", KdbFieldHex),
+#endif
     KDB_FIELD(OBJECT_HEADER, ObjectCreateInfo, "pointer", KdbFieldPointer),
     KDB_FIELD(OBJECT_HEADER, SecurityDescriptor, "pointer", KdbFieldPointer),
     KDB_FIELD(OBJECT_HEADER, Body, "QUAD", KdbFieldHex)
@@ -4831,6 +4834,8 @@ KdbpCmdObject(ULONG Argc, PCHAR Argv[])
     OBJECT_HEADER Header;
     OBJECT_TYPE Type;
     OBJECT_HEADER_NAME_INFO NameInfo;
+    POBJECT_TYPE ObjectType;
+    UCHAR NameInfoOffset;
     NTSTATUS Status;
 
     if (!KdbpGetSingleAddressArgument(Argv[0], Argc, Argv, &Address))
@@ -4847,6 +4852,7 @@ KdbpCmdObject(ULONG Argc, PCHAR Argv[])
         KdbpPrint("!object: Header %p is unreadable (0x%08lx).\n", (PVOID)HeaderAddress, Status);
         return TRUE;
     }
+    ObjectType = ObTypeIndexTable[Header.TypeIndex ^ ObHeaderCookie ^ (UCHAR)(HeaderAddress >> 8)];
 
     KdbpPrint("Object %p, header %p\n"
               "  Pointer/handle count: %Id / %Id\n"
@@ -4857,12 +4863,11 @@ KdbpCmdObject(ULONG Argc, PCHAR Argv[])
               (PVOID)HeaderAddress,
               Header.PointerCount,
               Header.HandleCount,
-              Header.Type,
+              ObjectType,
               Header.Flags,
               Header.SecurityDescriptor);
 
-    if (Header.Type != NULL &&
-        NT_SUCCESS(KdbpSafeReadMemory(&Type, Header.Type, sizeof(Type))))
+    if (ObjectType != NULL && NT_SUCCESS(KdbpSafeReadMemory(&Type, ObjectType, sizeof(Type))))
     {
         KdbpPrint("  Type name:             ");
         KdbpPrintRemoteUnicodeString(&Type.Name);
@@ -4873,9 +4878,8 @@ KdbpCmdObject(ULONG Argc, PCHAR Argv[])
         KdbpPrint("  Type name:             <unreadable>\n");
     }
 
-    if (Header.NameInfoOffset != 0 &&
-        Header.NameInfoOffset <= HeaderAddress &&
-        NT_SUCCESS(KdbpSafeReadMemory(&NameInfo, (PVOID)(HeaderAddress - Header.NameInfoOffset), sizeof(NameInfo))))
+    NameInfoOffset = ObpInfoMaskToOffset[Header.InfoMask & (OBP_CREATOR_INFO_MASK | OBP_NAME_INFO_MASK)];
+    if ((Header.InfoMask & OBP_NAME_INFO_MASK) && NameInfoOffset <= HeaderAddress && NT_SUCCESS(KdbpSafeReadMemory(&NameInfo, (PVOID)(HeaderAddress - NameInfoOffset), sizeof(NameInfo))))
     {
         KdbpPrint("  Name:                  ");
         KdbpPrintRemoteUnicodeString(&NameInfo.Name);

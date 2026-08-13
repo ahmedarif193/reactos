@@ -94,46 +94,100 @@ typedef enum _OBJECT_INFORMATION_CLASS
 #define OBJ_VALID_KERNEL_ATTRIBUTES             (OBJ_VALID_ATTRIBUTES | \
                                                  OBJ_KERNEL_EXCLUSIVE)
 //
-// Object Flags
+// Object Header Information Masks
 //
-#define OB_FLAG_CREATE_INFO                     0x01
-#define OB_FLAG_KERNEL_MODE                     0x02
-#define OB_FLAG_CREATOR_INFO                    0x04
-#define OB_FLAG_EXCLUSIVE                       0x08
-#define OB_FLAG_PERMANENT                       0x10
-#define OB_FLAG_SECURITY                        0x20
-#define OB_FLAG_SINGLE_PROCESS                  0x40
-#define OB_FLAG_DEFER_DELETE                    0x80
+#define OBP_CREATOR_INFO_MASK                   0x01
+#define OBP_NAME_INFO_MASK                      0x02
+#define OBP_HANDLE_INFO_MASK                    0x04
+#define OBP_QUOTA_INFO_MASK                     0x08
+#define OBP_PROCESS_INFO_MASK                   0x10
+#define OBP_AUDIT_INFO_MASK                     0x20
+#define OBP_EXTENDED_INFO_MASK                  0x40
+#define OBP_PADDING_INFO_MASK                   0x80
 
 //
-// Object Flags encoded in "QueryReferences" field
+// Object Flags
 //
-#define OB_FLAG_KERNEL_EXCLUSIVE                0x40000000
+#define OB_FLAG_NEW_OBJECT                      0x01
+#define OB_FLAG_KERNEL_OBJECT                   0x02
+#define OB_FLAG_KERNEL_ONLY_ACCESS              0x04
+#define OB_FLAG_EXCLUSIVE_OBJECT                0x08
+#define OB_FLAG_PERMANENT_OBJECT                0x10
+#define OB_FLAG_DEFAULT_SECURITY_QUOTA          0x20
+#define OB_FLAG_SINGLE_HANDLE_ENTRY             0x40
+#define OB_FLAG_DELETED_INLINE                  0x80
+
+/* Compatibility names used by the current object manager. */
+#define OB_FLAG_CREATE_INFO                     OB_FLAG_NEW_OBJECT
+#define OB_FLAG_KERNEL_MODE                     OB_FLAG_KERNEL_OBJECT
+#define OB_FLAG_EXCLUSIVE                       OB_FLAG_EXCLUSIVE_OBJECT
+#define OB_FLAG_PERMANENT                       OB_FLAG_PERMANENT_OBJECT
+#define OB_FLAG_SECURITY                        OB_FLAG_DEFAULT_SECURITY_QUOTA
+#define OB_FLAG_SINGLE_PROCESS                  OB_FLAG_SINGLE_HANDLE_ENTRY
+#define OB_FLAG_DEFER_DELETE                    OB_FLAG_DELETED_INLINE
 
 #define OBJECT_TO_OBJECT_HEADER(o)                          \
     CONTAINING_RECORD((o), OBJECT_HEADER, Body)
 
-#define OBJECT_HEADER_TO_NAME_INFO(h)                       \
-    ((POBJECT_HEADER_NAME_INFO)(!(h)->NameInfoOffset ?      \
-        NULL: ((PCHAR)(h) - (h)->NameInfoOffset)))
-
-#define OBJECT_HEADER_TO_HANDLE_INFO(h)                     \
-    ((POBJECT_HEADER_HANDLE_INFO)(!(h)->HandleInfoOffset ?  \
-        NULL: ((PCHAR)(h) - (h)->HandleInfoOffset)))
-
-#define OBJECT_HEADER_TO_QUOTA_INFO(h)                      \
-    ((POBJECT_HEADER_QUOTA_INFO)(!(h)->QuotaInfoOffset ?    \
-        NULL: ((PCHAR)(h) - (h)->QuotaInfoOffset)))
+#define OBP_INFO_MASK_OFFSET(m)                             \
+    ((((m) & OBP_CREATOR_INFO_MASK) ?                       \
+        sizeof(OBJECT_HEADER_CREATOR_INFO) : 0) +           \
+     (((m) & OBP_NAME_INFO_MASK) ?                          \
+        sizeof(OBJECT_HEADER_NAME_INFO) : 0) +              \
+     (((m) & OBP_HANDLE_INFO_MASK) ?                        \
+        sizeof(OBJECT_HEADER_HANDLE_INFO) : 0) +            \
+     (((m) & OBP_QUOTA_INFO_MASK) ?                         \
+        sizeof(OBJECT_HEADER_QUOTA_INFO) : 0) +             \
+     (((m) & OBP_PROCESS_INFO_MASK) ?                       \
+        sizeof(OBJECT_HEADER_PROCESS_INFO) : 0) +           \
+     (((m) & OBP_AUDIT_INFO_MASK) ?                         \
+        sizeof(OBJECT_HEADER_AUDIT_INFO) : 0) +             \
+     (((m) & OBP_EXTENDED_INFO_MASK) ?                      \
+        sizeof(OBJECT_HEADER_EXTENDED_INFO) : 0) +          \
+     (((m) & OBP_PADDING_INFO_MASK) ?                       \
+        sizeof(OBJECT_HEADER_PADDING_INFO) : 0))
 
 #define OBJECT_HEADER_TO_CREATOR_INFO(h)                    \
-    ((POBJECT_HEADER_CREATOR_INFO)(!((h)->Flags &           \
-        OB_FLAG_CREATOR_INFO) ? NULL: ((PCHAR)(h) -         \
-        sizeof(OBJECT_HEADER_CREATOR_INFO))))
+    ((POBJECT_HEADER_CREATOR_INFO)(                         \
+        !((h)->InfoMask & OBP_CREATOR_INFO_MASK) ? NULL :   \
+        ((PCHAR)(h) - OBP_INFO_MASK_OFFSET(                 \
+            (h)->InfoMask & OBP_CREATOR_INFO_MASK))))
+
+#define OBJECT_HEADER_TO_NAME_INFO(h)                       \
+    ((POBJECT_HEADER_NAME_INFO)(                            \
+        !((h)->InfoMask & OBP_NAME_INFO_MASK) ? NULL :      \
+        ((PCHAR)(h) - OBP_INFO_MASK_OFFSET(                 \
+            (h)->InfoMask &                                \
+            (OBP_CREATOR_INFO_MASK | OBP_NAME_INFO_MASK)))))
+
+#define OBJECT_HEADER_TO_HANDLE_INFO(h)                     \
+    ((POBJECT_HEADER_HANDLE_INFO)(                          \
+        !((h)->InfoMask & OBP_HANDLE_INFO_MASK) ? NULL :    \
+        ((PCHAR)(h) - OBP_INFO_MASK_OFFSET(                 \
+            (h)->InfoMask &                                \
+            (OBP_CREATOR_INFO_MASK | OBP_NAME_INFO_MASK |  \
+             OBP_HANDLE_INFO_MASK)))))
+
+#define OBJECT_HEADER_TO_QUOTA_INFO(h)                      \
+    ((POBJECT_HEADER_QUOTA_INFO)(                           \
+        !((h)->InfoMask & OBP_QUOTA_INFO_MASK) ? NULL :     \
+        ((PCHAR)(h) - OBP_INFO_MASK_OFFSET(                 \
+            (h)->InfoMask &                                \
+            (OBP_CREATOR_INFO_MASK | OBP_NAME_INFO_MASK |  \
+             OBP_HANDLE_INFO_MASK | OBP_QUOTA_INFO_MASK)))))
+
+#define OBJECT_HEADER_TO_PROCESS_INFO(h)                    \
+    ((POBJECT_HEADER_PROCESS_INFO)(                         \
+        !((h)->InfoMask & OBP_PROCESS_INFO_MASK) ? NULL :   \
+        ((PCHAR)(h) - OBP_INFO_MASK_OFFSET(                 \
+            (h)->InfoMask &                                \
+            (OBP_CREATOR_INFO_MASK | OBP_NAME_INFO_MASK |  \
+             OBP_HANDLE_INFO_MASK | OBP_QUOTA_INFO_MASK |  \
+             OBP_PROCESS_INFO_MASK)))))
 
 #define OBJECT_HEADER_TO_EXCLUSIVE_PROCESS(h)               \
     ((!((h)->Flags & OB_FLAG_EXCLUSIVE)) ?                  \
-        NULL: (((POBJECT_HEADER_QUOTA_INFO)((PCHAR)(h) -    \
-        (h)->QuotaInfoOffset))->ExclusiveProcess))
+        NULL : OBJECT_HEADER_TO_PROCESS_INFO(h)->ExclusiveProcess)
 
 //
 // Reasons for Open Callback
@@ -193,9 +247,10 @@ typedef VOID
 typedef NTSTATUS
 (NTAPI *OB_OPEN_METHOD)(
     _In_ OB_OPEN_REASON Reason,
+    _In_ KPROCESSOR_MODE AccessMode,
     _In_opt_ PEPROCESS Process,
     _In_ PVOID ObjectBody,
-    _In_ ACCESS_MASK GrantedAccess,
+    _Inout_ PACCESS_MASK GrantedAccess,
     _In_ ULONG HandleCount
 );
 
@@ -203,9 +258,8 @@ typedef VOID
 (NTAPI *OB_CLOSE_METHOD)(
     _In_opt_ PEPROCESS Process,
     _In_ PVOID Object,
-    _In_ ACCESS_MASK GrantedAccess,
-    _In_ ULONG ProcessHandleCount,
-    _In_ ULONG SystemHandleCount
+    _In_ ULONG_PTR ProcessHandleCount,
+    _In_ ULONG_PTR SystemHandleCount
 );
 
 typedef VOID
@@ -227,6 +281,28 @@ typedef NTSTATUS
     _Out_ PVOID *Object
 );
 
+typedef struct _OB_EXTENDED_PARSE_PARAMETERS
+{
+    USHORT Length;
+    ACCESS_MASK RestrictedAccessMask;
+    struct _EJOB *Silo;
+} OB_EXTENDED_PARSE_PARAMETERS, *POB_EXTENDED_PARSE_PARAMETERS;
+
+typedef NTSTATUS
+(NTAPI *OB_EXTENDED_PARSE_METHOD)(
+    _In_ PVOID ParseObject,
+    _In_ PVOID ObjectType,
+    _Inout_ PACCESS_STATE AccessState,
+    _In_ KPROCESSOR_MODE AccessMode,
+    _In_ ULONG Attributes,
+    _Inout_ PUNICODE_STRING CompleteName,
+    _Inout_ PUNICODE_STRING RemainingName,
+    _Inout_opt_ PVOID Context,
+    _In_opt_ PSECURITY_QUALITY_OF_SERVICE SecurityQos,
+    _In_ POB_EXTENDED_PARSE_PARAMETERS ExtendedParameters,
+    _Out_ PVOID *Object
+);
+
 typedef NTSTATUS
 (NTAPI *OB_SECURITY_METHOD)(
     _In_ PVOID Object,
@@ -236,7 +312,8 @@ typedef NTSTATUS
     _Inout_ PULONG CapturedLength,
     _Inout_ PSECURITY_DESCRIPTOR *ObjectSecurityDescriptor,
     _In_ POOL_TYPE PoolType,
-    _In_ PGENERIC_MAPPING GenericMapping
+    _In_ PGENERIC_MAPPING GenericMapping,
+    _In_ KPROCESSOR_MODE AccessMode
 );
 
 typedef NTSTATUS
@@ -354,14 +431,29 @@ typedef struct _OBJECT_CREATE_INFORMATION
 typedef struct _OBJECT_TYPE_INITIALIZER
 {
     USHORT Length;
-    BOOLEAN UseDefaultObject;
-    BOOLEAN CaseInsensitive;
+    union
+    {
+        USHORT ObjectTypeFlags;
+        struct
+        {
+            UCHAR CaseInsensitive : 1;
+            UCHAR UnnamedObjectsOnly : 1;
+            UCHAR UseDefaultObject : 1;
+            UCHAR SecurityRequired : 1;
+            UCHAR MaintainHandleCount : 1;
+            UCHAR MaintainTypeList : 1;
+            UCHAR SupportsObjectCallbacks : 1;
+            UCHAR CacheAligned : 1;
+            UCHAR UseExtendedParameters : 1;
+            UCHAR SeTrustConstraintMaskPresent : 1;
+            UCHAR Reserved : 6;
+        };
+    };
+    ULONG ObjectTypeCode;
     ULONG InvalidAttributes;
     GENERIC_MAPPING GenericMapping;
     ULONG ValidAccessMask;
-    BOOLEAN SecurityRequired;
-    BOOLEAN MaintainHandleCount;
-    BOOLEAN MaintainTypeList;
+    ULONG RetainAccess;
     POOL_TYPE PoolType;
     ULONG DefaultPagedPoolCharge;
     ULONG DefaultNonPagedPoolCharge;
@@ -369,10 +461,17 @@ typedef struct _OBJECT_TYPE_INITIALIZER
     OB_OPEN_METHOD OpenProcedure;
     OB_CLOSE_METHOD CloseProcedure;
     OB_DELETE_METHOD DeleteProcedure;
-    OB_PARSE_METHOD ParseProcedure;
+    union
+    {
+        OB_PARSE_METHOD ParseProcedure;
+        OB_EXTENDED_PARSE_METHOD ParseProcedureEx;
+    };
     OB_SECURITY_METHOD SecurityProcedure;
     OB_QUERYNAME_METHOD QueryNameProcedure;
     OB_OKAYTOCLOSE_METHOD OkayToCloseProcedure;
+    ULONG WaitObjectFlagMask;
+    USHORT WaitObjectFlagOffset;
+    USHORT WaitObjectPointerOffset;
 } OBJECT_TYPE_INITIALIZER, *POBJECT_TYPE_INITIALIZER;
 
 //
@@ -380,18 +479,20 @@ typedef struct _OBJECT_TYPE_INITIALIZER
 //
 typedef struct _OBJECT_TYPE
 {
-    ERESOURCE Mutex;
     LIST_ENTRY TypeList;
     UNICODE_STRING Name;
     PVOID DefaultObject;
-    ULONG Index;
-    ULONG TotalNumberOfObjects;
-    ULONG TotalNumberOfHandles;
+    UCHAR Index;
+    volatile ULONG TotalNumberOfObjects;
+    volatile ULONG TotalNumberOfHandles;
     ULONG HighWaterNumberOfObjects;
     ULONG HighWaterNumberOfHandles;
     OBJECT_TYPE_INITIALIZER TypeInfo;
+    EX_PUSH_LOCK TypeLock;
     ULONG Key;
-    ERESOURCE ObjectLocks[4];
+    LIST_ENTRY CallbackList;
+    ULONG SeMandatoryLabelMask;
+    ULONG SeTrustConstraintMask;
 } OBJECT_TYPE;
 
 //
@@ -433,12 +534,12 @@ typedef struct _OBJECT_HEADER_NAME_INFO
 {
     POBJECT_DIRECTORY Directory;
     UNICODE_STRING Name;
-    ULONG QueryReferences;
-    ULONG Reserved2;
-    ULONG DbgReferenceCount;
-#ifdef _WIN64
-    ULONG64 Reserved3;
-#endif
+    union
+    {
+        LONG ReferenceCount;
+        ULONG QueryReferences;
+    };
+    ULONG Reserved;
 } OBJECT_HEADER_NAME_INFO, *POBJECT_HEADER_NAME_INFO;
 
 typedef struct _OBJECT_HANDLE_COUNT_ENTRY
@@ -458,6 +559,7 @@ typedef struct _OBJECT_HEADER_HANDLE_INFO
     union
     {
         POBJECT_HANDLE_COUNT_DATABASE HandleCountDatabase;
+        POBJECT_HANDLE_COUNT_DATABASE HandleCountDataBase;
         OBJECT_HANDLE_COUNT_ENTRY SingleEntry;
     };
 } OBJECT_HEADER_HANDLE_INFO, *POBJECT_HEADER_HANDLE_INFO;
@@ -467,7 +569,8 @@ typedef struct _OBJECT_HEADER_CREATOR_INFO
     LIST_ENTRY TypeList;
     PVOID CreatorUniqueProcess;
     USHORT CreatorBackTraceIndex;
-    USHORT Reserved;
+    USHORT Reserved1;
+    ULONG Reserved2;
 } OBJECT_HEADER_CREATOR_INFO, *POBJECT_HEADER_CREATOR_INFO;
 
 typedef struct _OBJECT_HEADER_QUOTA_INFO
@@ -475,11 +578,35 @@ typedef struct _OBJECT_HEADER_QUOTA_INFO
     ULONG PagedPoolCharge;
     ULONG NonPagedPoolCharge;
     ULONG SecurityDescriptorCharge;
-    PEPROCESS ExclusiveProcess;
-#ifdef _WIN64
-    ULONG64 Reserved;
-#endif
+    ULONG Reserved1;
+    PVOID SecurityDescriptorQuotaBlock;
+    ULONG64 Reserved2;
 } OBJECT_HEADER_QUOTA_INFO, *POBJECT_HEADER_QUOTA_INFO;
+
+typedef struct _OBJECT_HEADER_PROCESS_INFO
+{
+    PEPROCESS ExclusiveProcess;
+    ULONG_PTR Reserved;
+} OBJECT_HEADER_PROCESS_INFO, *POBJECT_HEADER_PROCESS_INFO;
+
+typedef struct _OBJECT_HEADER_AUDIT_INFO
+{
+    PSECURITY_DESCRIPTOR SecurityDescriptor;
+    ULONG_PTR Reserved;
+} OBJECT_HEADER_AUDIT_INFO, *POBJECT_HEADER_AUDIT_INFO;
+
+typedef struct _OBJECT_FOOTER *POBJECT_FOOTER;
+
+typedef struct _OBJECT_HEADER_EXTENDED_INFO
+{
+    POBJECT_FOOTER Footer;
+    ULONG_PTR Reserved;
+} OBJECT_HEADER_EXTENDED_INFO, *POBJECT_HEADER_EXTENDED_INFO;
+
+typedef struct _OBJECT_HEADER_PADDING_INFO
+{
+    ULONG PaddingAmount;
+} OBJECT_HEADER_PADDING_INFO, *POBJECT_HEADER_PADDING_INFO;
 
 //
 // Object Header
@@ -492,11 +619,14 @@ typedef struct _OBJECT_HEADER
         LONG_PTR HandleCount;
         volatile PVOID NextToFree;
     };
-    POBJECT_TYPE Type;
-    UCHAR NameInfoOffset;
-    UCHAR HandleInfoOffset;
-    UCHAR QuotaInfoOffset;
+    EX_PUSH_LOCK Lock;
+    UCHAR TypeIndex;
+    UCHAR TraceFlags;
+    UCHAR InfoMask;
     UCHAR Flags;
+#ifdef _WIN64
+    ULONG Reserved;
+#endif
     union
     {
         POBJECT_CREATE_INFORMATION ObjectCreateInfo;

@@ -1440,6 +1440,7 @@ BOOLEAN ExpKdbgExtHandle(ULONG Argc, PCHAR Argv[])
             {
                 OBJECT_HEADER ObjectHeaderSnapshot;
                 OBJECT_TYPE ObjectTypeSnapshot;
+                POBJECT_TYPE ObjectType;
 
                 ObjectHeader = (POBJECT_HEADER)
                     ((ULONG_PTR)TableEntrySnapshot.Object & ~OBJ_HANDLE_ATTRIBUTES);
@@ -1448,11 +1449,11 @@ BOOLEAN ExpKdbgExtHandle(ULONG Argc, PCHAR Argv[])
                     KdbpPrint("%p: ObjectHeader %p is unreadable\n", ExHandle.Value, ObjectHeader);
                     goto NextHandle;
                 }
+                ObjectType = ObTypeIndexTable[ObjectHeaderSnapshot.TypeIndex ^ ObHeaderCookie ^ (UCHAR)((ULONG_PTR)ObjectHeader >> 8)];
 
                 KdbpPrint("%p: Object: %p GrantedAccess: %x Entry: %p\n", ExHandle.Value, &ObjectHeader->Body, TableEntrySnapshot.GrantedAccess, TableEntry);
-                KdbpPrint("Object: %p Type: (%p) ", &ObjectHeader->Body, ObjectHeaderSnapshot.Type);
-                if (ObjectHeaderSnapshot.Type != NULL &&
-                    NT_SUCCESS(KdbpSafeReadMemory(&ObjectTypeSnapshot, ObjectHeaderSnapshot.Type, sizeof(ObjectTypeSnapshot))))
+                KdbpPrint("Object: %p Type: (%p) ", &ObjectHeader->Body, ObjectType);
+                if (ObjectType != NULL && NT_SUCCESS(KdbpSafeReadMemory(&ObjectTypeSnapshot, ObjectType, sizeof(ObjectTypeSnapshot))))
                 {
                     KdbpPrintUnicodeString(&ObjectTypeSnapshot.Name);
                 }
@@ -1467,7 +1468,7 @@ BOOLEAN ExpKdbgExtHandle(ULONG Argc, PCHAR Argv[])
                 /* Specific objects debug prints */
 
                 /* For file, display path */
-                if (ObjectHeaderSnapshot.Type == IoFileObjectType)
+                if (ObjectType == IoFileObjectType)
                 {
                     FILE_OBJECT FileObjectSnapshot;
 
@@ -1484,18 +1485,17 @@ BOOLEAN ExpKdbgExtHandle(ULONG Argc, PCHAR Argv[])
                 }
 
                 /* For directory, and win32k objects, display object name */
-                else if (ObjectHeaderSnapshot.Type == ObpDirectoryObjectType ||
-                         ObjectHeaderSnapshot.Type == ExWindowStationObjectType ||
-                         ObjectHeaderSnapshot.Type == ExDesktopObjectType ||
-                         ObjectHeaderSnapshot.Type == MmSectionObjectType)
+                else if (ObjectType == ObpDirectoryObjectType ||
+                         ObjectType == ExWindowStationObjectType ||
+                         ObjectType == ExDesktopObjectType ||
+                         ObjectType == MmSectionObjectType)
                 {
-                    if (ObjectHeaderSnapshot.NameInfoOffset != 0)
+                    if (ObjectHeaderSnapshot.InfoMask & OBP_NAME_INFO_MASK)
                     {
                         OBJECT_HEADER_NAME_INFO ObjectNameSnapshot;
                         POBJECT_HEADER_NAME_INFO ObjectNameInfo;
 
-                        ObjectNameInfo = (POBJECT_HEADER_NAME_INFO)
-                            ((PCHAR)ObjectHeader - ObjectHeaderSnapshot.NameInfoOffset);
+                        ObjectNameInfo = (POBJECT_HEADER_NAME_INFO)((PCHAR)ObjectHeader - ObpInfoMaskToOffset[ObjectHeaderSnapshot.InfoMask & (OBP_CREATOR_INFO_MASK | OBP_NAME_INFO_MASK)]);
                         KdbpPrint("\t\t\tName: ");
                         if (NT_SUCCESS(KdbpSafeReadMemory(&ObjectNameSnapshot, ObjectNameInfo, sizeof(ObjectNameSnapshot))))
                         {
@@ -1510,7 +1510,7 @@ BOOLEAN ExpKdbgExtHandle(ULONG Argc, PCHAR Argv[])
                 }
 
                 /* For registry keys, display full path */
-                else if (ObjectHeaderSnapshot.Type == CmpKeyObjectType)
+                else if (ObjectType == CmpKeyObjectType)
                 {
                     CM_KEY_BODY KeyBodySnapshot;
                     PCM_KEY_CONTROL_BLOCK CurrentKcb;

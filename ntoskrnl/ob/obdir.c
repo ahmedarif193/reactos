@@ -51,7 +51,7 @@ ObpInsertEntryDirectory(IN POBJECT_DIRECTORY Parent,
     POBJECT_HEADER_NAME_INFO HeaderNameInfo;
 
     /* Make sure we have a name */
-    ASSERT(ObjectHeader->NameInfoOffset != 0);
+    ASSERT(ObjectHeader->InfoMask & OBP_NAME_INFO_MASK);
 
     /* Validate the context */
     if ((Context->Object) ||
@@ -237,7 +237,7 @@ DoItAgain:
             ObjectHeader = OBJECT_TO_OBJECT_HEADER(CurrentEntry->Object);
 
             /* Get the name information */
-            ASSERT(ObjectHeader->NameInfoOffset != 0);
+            ASSERT(ObjectHeader->InfoMask & OBP_NAME_INFO_MASK);
             HeaderNameInfo = OBJECT_HEADER_TO_NAME_INFO(ObjectHeader);
 
             /* Do the names match? */
@@ -606,7 +606,7 @@ NtQueryDirectoryObject(IN HANDLE DirectoryHandle,
                 /* Calculate the length for this entry */
                 Length = sizeof(OBJECT_DIRECTORY_INFORMATION) +
                          Name.Length + sizeof(UNICODE_NULL) +
-                         ObjectHeader->Type->Name.Length + sizeof(UNICODE_NULL);
+                         ObpGetObjectTypeFromHeader(ObjectHeader)->Name.Length + sizeof(UNICODE_NULL);
 
                 /* Make sure this entry won't overflow */
                 if ((TotalLength + Length) > BufferLength)
@@ -634,13 +634,9 @@ NtQueryDirectoryObject(IN HANDLE DirectoryHandle,
                 DirectoryInfo->Name.MaximumLength = Name.Length +
                                                     sizeof(UNICODE_NULL);
                 DirectoryInfo->Name.Buffer = Name.Buffer;
-                DirectoryInfo->TypeName.Length = ObjectHeader->
-                                                 Type->Name.Length;
-                DirectoryInfo->TypeName.MaximumLength = ObjectHeader->
-                                                        Type->Name.Length +
-                                                        sizeof(UNICODE_NULL);
-                DirectoryInfo->TypeName.Buffer = ObjectHeader->
-                                                 Type->Name.Buffer;
+                DirectoryInfo->TypeName.Length = ObpGetObjectTypeFromHeader(ObjectHeader)->Name.Length;
+                DirectoryInfo->TypeName.MaximumLength = ObpGetObjectTypeFromHeader(ObjectHeader)->Name.Length + sizeof(UNICODE_NULL);
+                DirectoryInfo->TypeName.Buffer = ObpGetObjectTypeFromHeader(ObjectHeader)->Name.Buffer;
 
                 /* Set success */
                 Status = STATUS_SUCCESS;

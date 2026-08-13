@@ -350,7 +350,7 @@ ObpEnumFindHandleProcedure(IN PHANDLE_TABLE_ENTRY HandleEntry,
     }
 
     /* Now attempt to match the object type */
-    if ((FindData->ObjectType) && (FindData->ObjectType != ObjectHeader->Type))
+    if ((FindData->ObjectType) && (FindData->ObjectType != ObpGetObjectTypeFromHeader(ObjectHeader)))
     {
         /* No match, fail */
         return FALSE;
@@ -639,9 +639,6 @@ ObpValidateAccessMask(IN PACCESS_STATE AccessState)
 * @param Process
 *        <FILLMEIN>.
 *
-* @param GrantedAccess
-*        <FILLMEIN>.
-*
 * @return None.
 *
 * @remarks None.
@@ -651,7 +648,6 @@ VOID
 NTAPI
 ObpDecrementHandleCount(IN PVOID ObjectBody,
                         IN PEPROCESS Process,
-                        IN ACCESS_MASK GrantedAccess,
                         IN POBJECT_TYPE ObjectType)
 {
     POBJECT_HEADER ObjectHeader;
@@ -687,7 +683,7 @@ ObpDecrementHandleCount(IN PVOID ObjectBody,
     if (!(NewCount) && (ObjectHeader->Flags & OB_FLAG_EXCLUSIVE))
     {
         /* Clear the exclusive flag */
-        OBJECT_HEADER_TO_QUOTA_INFO(ObjectHeader)->ExclusiveProcess = NULL;
+        OBJECT_HEADER_TO_PROCESS_INFO(ObjectHeader)->ExclusiveProcess = NULL;
     }
 
     /* Is the object type keeping track of handles? */
@@ -756,11 +752,7 @@ ObpDecrementHandleCount(IN PVOID ObjectBody,
     {
         /* Call it */
         ObpCalloutStart(&CalloutIrql);
-        ObjectType->TypeInfo.CloseProcedure(Process,
-                                            ObjectBody,
-                                            GrantedAccess,
-                                            ProcessHandleCount,
-                                            SystemHandleCount);
+        ObjectType->TypeInfo.CloseProcedure(Process, ObjectBody, ProcessHandleCount, SystemHandleCount);
         ObpCalloutEnd(CalloutIrql, "Close", ObjectType, ObjectBody);
     }
 
@@ -819,7 +811,7 @@ ObpCloseHandleTableEntry(IN PHANDLE_TABLE HandleTable,
 
     /* Get the object data */
     ObjectHeader = ObpGetHandleObject(HandleEntry);
-    ObjectType = ObjectHeader->Type;
+    ObjectType = ObpGetObjectTypeFromHeader(ObjectHeader);
     Body = &ObjectHeader->Body;
     GrantedAccess = HandleEntry->GrantedAccess;
     OBTRACE(OB_HANDLE_DEBUG,
@@ -888,7 +880,6 @@ ObpCloseHandleTableEntry(IN PHANDLE_TABLE HandleTable,
     /* Now decrement the handle count */
     ObpDecrementHandleCount(Body,
                             PsGetCurrentProcess(),
-                            GrantedAccess,
                             ObjectType);
 
     /* Dereference the object as well */
@@ -949,13 +940,14 @@ ObpIncrementHandleCount(IN PVOID Object,
     POBJECT_HEADER_CREATOR_INFO CreatorInfo;
     KIRQL CalloutIrql;
     KPROCESSOR_MODE ProbeMode;
+    ACCESS_MASK LocalGrantedAccess = 0;
+    PACCESS_MASK GrantedAccess;
     ULONG Total;
-    POBJECT_HEADER_NAME_INFO NameInfo;
     PAGED_CODE();
 
     /* Get the object header and type */
     ObjectHeader = OBJECT_TO_OBJECT_HEADER(Object);
-    ObjectType = ObjectHeader->Type;
+    ObjectType = ObpGetObjectTypeFromHeader(ObjectHeader);
     OBTRACE(OB_HANDLE_DEBUG,
             "%s - Incrementing count for: %p. Reason: %lx. HC PC %lx %lx\n",
             __FUNCTION__,
@@ -1017,9 +1009,7 @@ ObpIncrementHandleCount(IN PVOID Object,
     }
 
     /* Check for exclusive kernel object */
-    NameInfo = OBJECT_HEADER_TO_NAME_INFO(ObjectHeader);
-    if ((NameInfo) && (NameInfo->QueryReferences & OB_FLAG_KERNEL_EXCLUSIVE) &&
-        (ProbeMode != KernelMode))
+    if ((ObjectHeader->Flags & OB_FLAG_KERNEL_ONLY_ACCESS) && (ProbeMode != KernelMode))
     {
         /* Caller is not kernel, but the object is kernel exclusive */
         Status = STATUS_ACCESS_DENIED;
@@ -1088,7 +1078,7 @@ ObpIncrementHandleCount(IN PVOID Object,
     if (Exclusive)
     {
         /* Save the owner process */
-        OBJECT_HEADER_TO_QUOTA_INFO(ObjectHeader)->ExclusiveProcess = Process;
+        OBJECT_HEADER_TO_PROCESS_INFO(ObjectHeader)->ExclusiveProcess = Process;
     }
 
     /* Increase the handle count */
@@ -1119,15 +1109,9 @@ ObpIncrementHandleCount(IN PVOID Object,
     if (ObjectType->TypeInfo.OpenProcedure)
     {
         /* Call it */
+        GrantedAccess = AccessState ? &AccessState->PreviouslyGrantedAccess : &LocalGrantedAccess;
         ObpCalloutStart(&CalloutIrql);
-        Status = ObjectType->TypeInfo.OpenProcedure(OpenReason,
-                                                    Process,
-                                                    Object,
-                                                    AccessState ?
-                                                    AccessState->
-                                                    PreviouslyGrantedAccess :
-                                                    0,
-                                                    ProcessHandleCount);
+        Status = ObjectType->TypeInfo.OpenProcedure(OpenReason, ProbeMode, Process, Object, GrantedAccess, ProcessHandleCount);
         ObpCalloutEnd(CalloutIrql, "Open", ObjectType, Object);
 
         /* Check if the open procedure failed */
@@ -1230,7 +1214,7 @@ ObpIncrementUnnamedHandleCount(IN PVOID Object,
 
     /* Get the object header and type */
     ObjectHeader = OBJECT_TO_OBJECT_HEADER(Object);
-    ObjectType = ObjectHeader->Type;
+    ObjectType = ObpGetObjectTypeFromHeader(ObjectHeader);
     OBTRACE(OB_HANDLE_DEBUG,
             "%s - Incrementing count for: %p. UNNAMED. HC PC %lx %lx\n",
             __FUNCTION__,
@@ -1315,7 +1299,7 @@ ObpIncrementUnnamedHandleCount(IN PVOID Object,
     if (Exclusive)
     {
         /* Save the owner process */
-        OBJECT_HEADER_TO_QUOTA_INFO(ObjectHeader)->ExclusiveProcess = Process;
+        OBJECT_HEADER_TO_PROCESS_INFO(ObjectHeader)->ExclusiveProcess = Process;
     }
 
     /* Increase the handle count */
@@ -1347,11 +1331,7 @@ ObpIncrementUnnamedHandleCount(IN PVOID Object,
     {
         /* Call it */
         ObpCalloutStart(&CalloutIrql);
-        Status = ObjectType->TypeInfo.OpenProcedure(ObCreateHandle,
-                                                    Process,
-                                                    Object,
-                                                    *DesiredAccess,
-                                                    ProcessHandleCount);
+        Status = ObjectType->TypeInfo.OpenProcedure(ObCreateHandle, AccessMode, Process, Object, DesiredAccess, ProcessHandleCount);
         ObpCalloutEnd(CalloutIrql, "Open", ObjectType, Object);
 
         /* Check if the open procedure failed */
@@ -1455,7 +1435,7 @@ ObpCreateUnnamedHandle(IN PVOID Object,
 
     /* Get the object header and type */
     ObjectHeader = OBJECT_TO_OBJECT_HEADER(Object);
-    ObjectType = ObjectHeader->Type;
+    ObjectType = ObpGetObjectTypeFromHeader(ObjectHeader);
     OBTRACE(OB_HANDLE_DEBUG,
             "%s - Creating handle for: %p. UNNAMED. HC PC %lx %lx\n",
             __FUNCTION__,
@@ -1574,7 +1554,6 @@ ObpCreateUnnamedHandle(IN PVOID Object,
     /* Decrement the handle count and detach */
     ObpDecrementHandleCount(&ObjectHeader->Body,
                             PsGetCurrentProcess(),
-                            GrantedAccess,
                             ObjectType);
 
     /* Detach and fail */
@@ -1646,7 +1625,7 @@ ObpCreateHandle(IN OB_OPEN_REASON OpenReason,
 
     /* Get the object header and type */
     ObjectHeader = OBJECT_TO_OBJECT_HEADER(Object);
-    ObjectType = ObjectHeader->Type;
+    ObjectType = ObpGetObjectTypeFromHeader(ObjectHeader);
     OBTRACE(OB_HANDLE_DEBUG,
             "%s - Creating handle for: %p. Reason: %lx. HC PC %lx %lx\n",
             __FUNCTION__,
@@ -1815,7 +1794,6 @@ ObpCreateHandle(IN OB_OPEN_REASON OpenReason,
     /* Decrement the handle count and detach */
     ObpDecrementHandleCount(&ObjectHeader->Body,
                             PsGetCurrentProcess(),
-                            GrantedAccess,
                             ObjectType);
 
     /* Handle extra references */
@@ -2010,7 +1988,7 @@ ObpSetHandleAttributes(
         /* If inheritance is not supported for this object,
          * fail without changing anything */
         POBJECT_HEADER ObjectHeader = ObpGetHandleObject(HandleTableEntry);
-        if (ObjectHeader->Type->TypeInfo.InvalidAttributes & OBJ_INHERIT)
+        if (ObpGetObjectTypeFromHeader(ObjectHeader)->TypeInfo.InvalidAttributes & OBJ_INHERIT)
             return FALSE;
 
         HandleTableEntry->ObAttributes |= OBJ_INHERIT;
@@ -2505,7 +2483,7 @@ ObDuplicateObject(IN PEPROCESS SourceProcess,
 
     /* Get object data */
     ObjectHeader = OBJECT_TO_OBJECT_HEADER(SourceObject);
-    ObjectType = ObjectHeader->Type;
+    ObjectType = ObpGetObjectTypeFromHeader(ObjectHeader);
 
     /* Fill out the entry */
     RtlZeroMemory(&NewHandleEntry, sizeof(HANDLE_TABLE_ENTRY));
@@ -2607,7 +2585,6 @@ ObDuplicateObject(IN PEPROCESS SourceProcess,
         /* Undo the increment */
         ObpDecrementHandleCount(SourceObject,
                                 TargetProcess,
-                                TargetAccess,
                                 ObjectType);
 
         /* Deference the object and set failure status */
@@ -2802,7 +2779,7 @@ ObOpenObjectByName(IN POBJECT_ATTRIBUTES ObjectAttributes,
     }
 
     /* Check if we have invalid object attributes */
-    if (ObjectHeader->Type->TypeInfo.InvalidAttributes &
+    if (ObpGetObjectTypeFromHeader(ObjectHeader)->TypeInfo.InvalidAttributes &
         TempBuffer->ObjectCreateInfo.Attributes)
     {
         /* Set failure code */
@@ -2926,7 +2903,7 @@ ObOpenObjectByPointer(IN PVOID Object,
         Status = SeCreateAccessState(&AccessState,
                                      &AuxData,
                                      DesiredAccess,
-                                     &Header->Type->TypeInfo.GenericMapping);
+                                     &ObpGetObjectTypeFromHeader(Header)->TypeInfo.GenericMapping);
         if (!NT_SUCCESS(Status))
         {
             /* Fail */
@@ -2936,7 +2913,7 @@ ObOpenObjectByPointer(IN PVOID Object,
     }
 
     /* Check if we have invalid object attributes */
-    if (Header->Type->TypeInfo.InvalidAttributes & HandleAttributes)
+    if (ObpGetObjectTypeFromHeader(Header)->TypeInfo.InvalidAttributes & HandleAttributes)
     {
         /* Delete the access state */
         if (PassedAccessState == &AccessState)
@@ -3126,7 +3103,7 @@ ObInsertObject(IN PVOID Object,
     /* Get the create and name info, as well as the object type */
     ObjectCreateInfo = ObjectHeader->ObjectCreateInfo;
     ObjectNameInfo = ObpReferenceNameInfo(ObjectHeader);
-    ObjectType = ObjectHeader->Type;
+    ObjectType = ObpGetObjectTypeFromHeader(ObjectHeader);
     ObjectName = NULL;
 
     /* Check if this is an named object */
@@ -3241,7 +3218,7 @@ ObInsertObject(IN PVOID Object,
             if (ObjectCreateInfo->Attributes & OBJ_OPENIF)
             {
                 /* He did, but did he want this type? */
-                if (ObjectType != OBJECT_TO_OBJECT_HEADER(InsertObject)->Type)
+                if (ObjectType != ObpGetObjectTypeFromHeader(OBJECT_TO_OBJECT_HEADER(InsertObject)))
                 {
                     /* Wrong type, so fail */
                     Status = STATUS_OBJECT_TYPE_MISMATCH;
@@ -3255,7 +3232,7 @@ ObInsertObject(IN PVOID Object,
             else
             {
                 /* Check if this was a symbolic link */
-                if (OBJECT_TO_OBJECT_HEADER(InsertObject)->Type ==
+                if (ObpGetObjectTypeFromHeader(OBJECT_TO_OBJECT_HEADER(InsertObject)) ==
                     ObpSymbolicLinkObjectType)
                 {
                     /* Dereference it */

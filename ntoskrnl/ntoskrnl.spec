@@ -970,11 +970,13 @@
 @ stdcall ObDereferenceSecurityDescriptor(ptr long)
 @ stdcall ObFindHandleForObject(ptr ptr ptr ptr ptr)
 @ stdcall ObGetObjectSecurity(ptr ptr ptr)
+@ stdcall ObGetObjectType(ptr)
 @ stdcall ObInsertObject(ptr ptr long long ptr ptr)
 @ stdcall ObLogSecurityDescriptor(ptr ptr long)
 @ stdcall ObMakeTemporaryObject(ptr)
 @ stdcall ObOpenObjectByName(ptr ptr long ptr long ptr ptr)
 @ stdcall ObOpenObjectByPointer(ptr long ptr long ptr long ptr)
+@ stdcall ObQueryNameInfo(ptr)
 @ stdcall ObQueryNameString(ptr ptr long ptr)
 @ stdcall ObQueryObjectAuditingByHandle(ptr ptr)
 @ stdcall ObReferenceObjectByHandle(ptr long ptr long ptr ptr)
@@ -2750,11 +2752,9 @@
 @ stub -arch=arm64 ObCreateObjectTypeEx
 @ stub -arch=arm64 ObDereferenceObjectDeferDeleteWithTag
 @ stub -arch=arm64 ObGetFilterVersion
-@ stub -arch=arm64 ObGetObjectType
 @ stub -arch=arm64 ObIsDosDeviceLocallyMapped
 @ stub -arch=arm64 ObOpenObjectByNameEx
 @ stub -arch=arm64 ObOpenObjectByPointerWithTag
-@ stub -arch=arm64 ObQueryNameInfo
 @ stub -arch=arm64 ObReferenceObjectByHandleWithTag
 @ stub -arch=arm64 ObReferenceObjectByPointerWithTag
 @ stub -arch=arm64 ObReferenceObjectSafeWithTag

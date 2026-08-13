@@ -243,9 +243,8 @@ VOID
 NTAPI
 LpcpClosePort(IN PEPROCESS Process OPTIONAL,
               IN PVOID Object,
-              IN ACCESS_MASK GrantedAccess,
-              IN ULONG ProcessHandleCount,
-              IN ULONG SystemHandleCount)
+              IN ULONG_PTR ProcessHandleCount,
+              IN ULONG_PTR SystemHandleCount)
 {
     PLPCP_PORT_OBJECT Port = (PLPCP_PORT_OBJECT)Object;
 

@@ -214,14 +214,16 @@ ExpDesktopDelete(PVOID DeletedObject)
 NTSTATUS
 NTAPI
 ExpDesktopOpen(IN OB_OPEN_REASON Reason,
+               IN KPROCESSOR_MODE AccessMode,
                IN PEPROCESS Process OPTIONAL,
                IN PVOID ObjectBody,
-               IN ACCESS_MASK GrantedAccess,
+               IN OUT PACCESS_MASK GrantedAccess,
                IN ULONG HandleCount)
 {
     WIN32_OPENMETHOD_PARAMETERS Parameters;
 
     Parameters.OpenReason = Reason;
+    Parameters.AccessMode = AccessMode;
     Parameters.Process = Process;
     Parameters.Object = ObjectBody;
     Parameters.GrantedAccess = GrantedAccess;
@@ -236,15 +238,13 @@ VOID
 NTAPI
 ExpDesktopClose(IN PEPROCESS Process OPTIONAL,
                 IN PVOID Object,
-                IN ACCESS_MASK GrantedAccess,
-                IN ULONG ProcessHandleCount,
-                IN ULONG SystemHandleCount)
+                IN ULONG_PTR ProcessHandleCount,
+                IN ULONG_PTR SystemHandleCount)
 {
     WIN32_CLOSEMETHOD_PARAMETERS Parameters;
 
     Parameters.Process = Process;
     Parameters.Object = Object;
-    Parameters.AccessMask = GrantedAccess;
     Parameters.ProcessHandleCount = ProcessHandleCount;
     Parameters.SystemHandleCount = SystemHandleCount;
 

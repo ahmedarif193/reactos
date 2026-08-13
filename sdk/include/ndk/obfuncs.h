@@ -112,6 +112,20 @@ ObGetObjectPointerCount(
 );
 
 NTKERNELAPI
+POBJECT_TYPE
+NTAPI
+ObGetObjectType(
+    _In_ PVOID Object
+);
+
+NTKERNELAPI
+POBJECT_HEADER_NAME_INFO
+NTAPI
+ObQueryNameInfo(
+    _In_ PVOID Object
+);
+
+NTKERNELAPI
 NTSTATUS
 NTAPI
 ObLogSecurityDescriptor(

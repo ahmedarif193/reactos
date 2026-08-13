@@ -1573,7 +1573,7 @@ QSI_DEF(SystemHandleInformation)
 
 #if 0 /* FIXME!!! Type field corrupted */
                         HandleInformation->Handles[Index].ObjectTypeIndex =
-                            (UCHAR) ObjectHeader->Type->Index;
+                            ObpGetObjectTypeFromHeader(ObjectHeader)->Index;
 #else
                         HandleInformation->Handles[Index].ObjectTypeIndex = 0;
 #endif
@@ -2804,7 +2804,7 @@ QSI_DEF(SystemExtendedHandleInformation)
 
 #if 0 /* FIXME!!! Type field corrupted */
                         HandleInformation->Handles[Index].ObjectTypeIndex =
-                            (UCHAR) ObjectHeader->Type->Index;
+                            ObpGetObjectTypeFromHeader(ObjectHeader)->Index;
 #else
                         HandleInformation->Handles[Index].ObjectTypeIndex = 0;
 #endif

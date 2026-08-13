@@ -933,7 +933,7 @@ IopParseDevice(IN PVOID ParseObject,
 
             /* Set it up */
             FileObject = (PFILE_OBJECT)&LocalFileObject->ObjectHeader.Body;
-            LocalFileObject->ObjectHeader.Type = IoFileObjectType;
+            ObpEncodeObjectTypeIndex(&LocalFileObject->ObjectHeader, IoFileObjectType);
             LocalFileObject->ObjectHeader.PointerCount = 1;
         }
 
@@ -1385,7 +1385,7 @@ IopDeleteFile(IN PVOID ObjectBody)
         if (!(FileObject->Flags & FO_HANDLE_CREATED))
         {
             /* Send the cleanup IRP */
-            IopCloseFile(NULL, ObjectBody, 0, 1, 1);
+            IopCloseFile(NULL, ObjectBody, 1, 1);
         }
 
         /* Clear and set up Events */
@@ -1655,7 +1655,8 @@ IopGetSetSecurityObject(IN PVOID ObjectBody,
                         IN OUT PULONG BufferLength,
                         IN OUT PSECURITY_DESCRIPTOR *OldSecurityDescriptor,
                         IN POOL_TYPE PoolType,
-                        IN OUT PGENERIC_MAPPING GenericMapping)
+                        IN OUT PGENERIC_MAPPING GenericMapping,
+                        IN KPROCESSOR_MODE AccessMode)
 {
     IO_STATUS_BLOCK IoStatusBlock;
     PIO_STACK_LOCATION StackPtr;
@@ -1780,7 +1781,7 @@ IopGetSetSecurityObject(IN PVOID ObjectBody,
     if (FileObject->Flags & FO_SYNCHRONOUS_IO)
     {
         /* Lock the file object */
-        Status = IopLockFileObject(FileObject, ExGetPreviousMode());
+        Status = IopLockFileObject(FileObject, AccessMode);
         if (Status != STATUS_SUCCESS)
         {
             ObDereferenceObject(FileObject);
@@ -1807,7 +1808,7 @@ IopGetSetSecurityObject(IN PVOID ObjectBody,
     /* Set the IRP */
     Irp->Tail.Overlay.OriginalFileObject = FileObject;
     Irp->Tail.Overlay.Thread = PsGetCurrentThread();
-    Irp->RequestorMode = ExGetPreviousMode();
+    Irp->RequestorMode = AccessMode;
     Irp->UserIosb = &IoStatusBlock;
     Irp->UserEvent = (LocalEvent) ? &Event : NULL;
     Irp->Flags = (LocalEvent) ? IRP_SYNCHRONOUS_API : 0;
@@ -2203,9 +2204,8 @@ VOID
 NTAPI
 IopCloseFile(IN PEPROCESS Process OPTIONAL,
              IN PVOID ObjectBody,
-             IN ACCESS_MASK GrantedAccess,
-             IN ULONG HandleCount,
-             IN ULONG SystemHandleCount)
+             IN ULONG_PTR HandleCount,
+             IN ULONG_PTR SystemHandleCount)
 {
     PFILE_OBJECT FileObject = (PFILE_OBJECT)ObjectBody;
     KEVENT Event;

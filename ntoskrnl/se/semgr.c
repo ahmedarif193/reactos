@@ -356,9 +356,12 @@ SeDefaultObjectMethod(
     _Inout_opt_ PULONG ReturnLength,
     _Inout_ PSECURITY_DESCRIPTOR *OldSecurityDescriptor,
     _In_ POOL_TYPE PoolType,
-    _In_ PGENERIC_MAPPING GenericMapping)
+    _In_ PGENERIC_MAPPING GenericMapping,
+    _In_ KPROCESSOR_MODE AccessMode)
 {
     PAGED_CODE();
+
+    UNREFERENCED_PARAMETER(AccessMode);
 
     /* Select the operation type */
     switch (OperationType)

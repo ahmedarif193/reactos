@@ -1114,9 +1114,8 @@ VOID
 NTAPI
 DbgkpCloseObject(IN PEPROCESS OwnerProcess OPTIONAL,
                  IN PVOID ObjectBody,
-                 IN ACCESS_MASK GrantedAccess,
-                 IN ULONG HandleCount,
-                 IN ULONG SystemHandleCount)
+                 IN ULONG_PTR HandleCount,
+                 IN ULONG_PTR SystemHandleCount)
 {
     PDEBUG_OBJECT DebugObject = ObjectBody;
     PEPROCESS Process = NULL;

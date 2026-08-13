@@ -193,7 +193,7 @@ NtWaitForMultipleObjects(IN ULONG ObjectCount,
         ObjectHeader = ObpGetHandleObject(HandleEntry);
 
         /* Get default Object */
-        DefaultObject = ObjectHeader->Type->DefaultObject;
+        DefaultObject = ObpGetObjectTypeFromHeader(ObjectHeader)->DefaultObject;
 
         /* Check if it's the internal offset */
         if (IsPointerOffset(DefaultObject))
@@ -403,7 +403,7 @@ NtWaitForSingleObject(IN HANDLE ObjectHandle,
     if (NT_SUCCESS(Status))
     {
         /* Get the Waitable Object */
-        ObjectType = OBJECT_TO_OBJECT_HEADER(Object)->Type;
+        ObjectType = ObpGetObjectTypeFromHeader(OBJECT_TO_OBJECT_HEADER(Object));
         WaitableObject = ObjectType->DefaultObject;
 
         /* Is it an offset for internal objects? */
@@ -527,7 +527,7 @@ NtSignalAndWaitForSingleObject(IN HANDLE ObjectHandleToSignal,
     }
 
     /* Get the real waitable object */
-    WaitableObject = OBJECT_TO_OBJECT_HEADER(WaitObj)->Type->DefaultObject;
+    WaitableObject = ObpGetObjectTypeFromHeader(OBJECT_TO_OBJECT_HEADER(WaitObj))->DefaultObject;
 
     /* Handle internal offset */
     if (IsPointerOffset(WaitableObject))
@@ -538,7 +538,7 @@ NtSignalAndWaitForSingleObject(IN HANDLE ObjectHandleToSignal,
     }
 
     /* Check Signal Object Type */
-    Type = OBJECT_TO_OBJECT_HEADER(SignalObj)->Type;
+    Type = ObpGetObjectTypeFromHeader(OBJECT_TO_OBJECT_HEADER(SignalObj));
     if (Type == ExEventObjectType)
     {
         /* Check if we came from user-mode without the right access */

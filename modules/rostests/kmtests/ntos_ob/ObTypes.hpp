@@ -49,6 +49,15 @@ typedef NTSTATUS
     _In_ KPROCESSOR_MODE AccessMode
 );
 
+typedef VOID
+(NTAPI *OB_CLOSE_METHOD_WS03)(
+    _In_opt_ PEPROCESS Process,
+    _In_ PVOID Object,
+    _In_ ACCESS_MASK GrantedAccess,
+    _In_ ULONG ProcessHandleCount,
+    _In_ ULONG SystemHandleCount
+);
+
 struct OBJECT_TYPE_INITIALIZER_WS03
 {
     USHORT Length;                                      // 0x00
@@ -65,7 +74,7 @@ struct OBJECT_TYPE_INITIALIZER_WS03
     ULONG DefaultNonPagedPoolCharge;                    // 0x28
     OB_DUMP_METHOD DumpProcedure;                       // 0x30
     OB_OPEN_METHOD_WS03 OpenProcedure;                  // 0x38
-    OB_CLOSE_METHOD CloseProcedure;                     // 0x40
+    OB_CLOSE_METHOD_WS03 CloseProcedure;                // 0x40
     OB_DELETE_METHOD DeleteProcedure;                   // 0x48
     OB_PARSE_METHOD ParseProcedure;                     // 0x50
     OB_SECURITY_METHOD_WS03 SecurityProcedure;          // 0x58
@@ -97,7 +106,7 @@ struct OBJECT_TYPE_INITIALIZER_VISTA
     ULONG DefaultNonPagedPoolCharge;                    // 0x28
     OB_DUMP_METHOD DumpProcedure;                       // 0x30
     OB_OPEN_METHOD_VISTA OpenProcedure;                 // 0x38
-    OB_CLOSE_METHOD CloseProcedure;                     // 0x40
+    OB_CLOSE_METHOD_WS03 CloseProcedure;                // 0x40
     OB_DELETE_METHOD DeleteProcedure;                   // 0x48
     OB_PARSE_METHOD ParseProcedure;                     // 0x50
     OB_SECURITY_METHOD_VISTA SecurityProcedure;         // 0x58
@@ -132,7 +141,7 @@ struct OBJECT_TYPE_INITIALIZER_VISTASP1
     ULONG DefaultNonPagedPoolCharge;                    // 0x2c
     OB_DUMP_METHOD DumpProcedure;                       // 0x30
     OB_OPEN_METHOD_VISTA OpenProcedure;                 // 0x38
-    OB_CLOSE_METHOD CloseProcedure;                     // 0x40
+    OB_CLOSE_METHOD_WS03 CloseProcedure;                // 0x40
     OB_DELETE_METHOD DeleteProcedure;                   // 0x48
     OB_PARSE_METHOD ParseProcedure;                     // 0x50
     OB_SECURITY_METHOD_VISTA SecurityProcedure;         // 0x58
