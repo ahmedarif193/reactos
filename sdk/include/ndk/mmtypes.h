@@ -121,6 +121,7 @@ typedef enum _SECTION_INHERIT
 typedef enum _POOL_TYPE
 {
     NonPagedPool,
+    NonPagedPoolExecute = NonPagedPool,
     PagedPool,
     NonPagedPoolMustSucceed,
     DontUseThisType,
@@ -140,7 +141,11 @@ typedef enum _POOL_TYPE
     DontUseThisTypeSession,
     NonPagedPoolCacheAlignedSession,
     PagedPoolCacheAlignedSession,
-    NonPagedPoolCacheAlignedMustSSession
+    NonPagedPoolCacheAlignedMustSSession,
+
+    NonPagedPoolNx = 512,
+    NonPagedPoolNxCacheAligned = NonPagedPoolNx + 4,
+    NonPagedPoolSessionNx = NonPagedPoolNx + 32
 } POOL_TYPE;
 
 #endif // NTOS_MODE_USER
