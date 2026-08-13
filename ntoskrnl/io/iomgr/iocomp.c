@@ -146,6 +146,19 @@ IopDeleteIoCompletion(PVOID ObjectBody)
     }
 }
 
+VOID
+NTAPI
+IopCloseIoCompletion(IN PEPROCESS Process OPTIONAL,
+                     IN PVOID Object,
+                     IN ULONG_PTR ProcessHandleCount,
+                     IN ULONG_PTR SystemHandleCount)
+{
+    UNREFERENCED_PARAMETER(Process);
+    UNREFERENCED_PARAMETER(ProcessHandleCount);
+
+    if (SystemHandleCount == 1) IopDeleteIoCompletion(Object);
+}
+
 /* PUBLIC FUNCTIONS **********************************************************/
 
 /*
@@ -507,9 +520,10 @@ NtRemoveIoCompletion(IN HANDLE IoCompletionHandle,
         /* Remove queue */
         ListEntry = KeRemoveQueue(Queue, PreviousMode, Timeout);
 
-        /* If we got a timeout or user_apc back, return the status */
+        /* If we got a wait status back, return it */
         if (((NTSTATUS)(ULONG_PTR)ListEntry == STATUS_TIMEOUT) ||
-            ((NTSTATUS)(ULONG_PTR)ListEntry == STATUS_USER_APC))
+            ((NTSTATUS)(ULONG_PTR)ListEntry == STATUS_USER_APC) ||
+            ((NTSTATUS)(ULONG_PTR)ListEntry == STATUS_ABANDONED))
         {
             /* Set this as the status */
             Status = (NTSTATUS)(ULONG_PTR)ListEntry;
@@ -692,7 +706,7 @@ NtRemoveIoCompletionEx(IN HANDLE IoCompletionHandle,
                                       Removed ? &ZeroTimeout : Timeout);
             Status = (NTSTATUS)(ULONG_PTR)ListEntry;
             if (Status == STATUS_TIMEOUT || Status == STATUS_USER_APC ||
-                Status == STATUS_ALERTED)
+                Status == STATUS_ALERTED || Status == STATUS_ABANDONED)
                 break;
             Status = STATUS_SUCCESS;
 

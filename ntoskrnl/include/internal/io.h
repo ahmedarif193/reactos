@@ -1385,6 +1385,15 @@ IopDeleteIoCompletion(
     PVOID ObjectBody
 );
 
+VOID
+NTAPI
+IopCloseIoCompletion(
+    IN PEPROCESS Process OPTIONAL,
+    IN PVOID Object,
+    IN ULONG_PTR ProcessHandleCount,
+    IN ULONG_PTR SystemHandleCount
+);
+
 NTSTATUS
 NTAPI
 IoSetIoCompletion(
