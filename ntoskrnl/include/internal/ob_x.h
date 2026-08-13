@@ -36,61 +36,57 @@ ObpValidateAttributes(IN ULONG Attributes,
 }
 
 FORCEINLINE
-ULONG
-ObpSelectObjectLockSlot(IN POBJECT_HEADER ObjectHeader)
+POBJECT_TYPE
+ObpGetObjectTypeFromHeader(IN POBJECT_HEADER ObjectHeader)
 {
-    /* We have 4 locks total, this will return a 0-index slot */
-    return (((ULONG_PTR)ObjectHeader) >> 8) & 3;
+    UCHAR TypeIndex;
+
+    TypeIndex = ObjectHeader->TypeIndex ^
+                ObHeaderCookie ^
+                (UCHAR)((ULONG_PTR)ObjectHeader >> 8);
+    return ObTypeIndexTable[TypeIndex];
+}
+
+FORCEINLINE
+VOID
+ObpEncodeObjectTypeIndex(IN POBJECT_HEADER ObjectHeader,
+                         IN POBJECT_TYPE ObjectType)
+{
+    ObjectHeader->TypeIndex = ObjectType->Index ^
+                              ObHeaderCookie ^
+                              (UCHAR)((ULONG_PTR)ObjectHeader >> 8);
 }
 
 FORCEINLINE
 VOID
 ObpAcquireObjectLock(IN POBJECT_HEADER ObjectHeader)
 {
-    ULONG Slot;
-    POBJECT_TYPE ObjectType = ObjectHeader->Type;
-
     /* Sanity check */
     ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
 
-    /* Pick a slot */
-    Slot = ObpSelectObjectLockSlot(ObjectHeader);
-
-    /* Enter a critical region and acquire the resource */
+    /* Enter a critical region and acquire the object lock */
     KeEnterCriticalRegion();
-    ExAcquireResourceExclusiveLite(&ObjectType->ObjectLocks[Slot], TRUE);
+    ExAcquirePushLockExclusive(&ObjectHeader->Lock);
 }
 
 FORCEINLINE
 VOID
 ObpAcquireObjectLockShared(IN POBJECT_HEADER ObjectHeader)
 {
-    ULONG Slot;
-    POBJECT_TYPE ObjectType = ObjectHeader->Type;
-
     /* Sanity check */
     ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
 
-    /* Pick a slot */
-    Slot = ObpSelectObjectLockSlot(ObjectHeader);
-
-    /* Enter a critical region and acquire the resource */
+    /* Enter a critical region and acquire the object lock */
     KeEnterCriticalRegion();
-    ExAcquireResourceSharedLite(&ObjectType->ObjectLocks[Slot], TRUE);
+    ExAcquirePushLockShared(&ObjectHeader->Lock);
 }
 
 FORCEINLINE
 VOID
 ObpReleaseObjectLock(IN POBJECT_HEADER ObjectHeader)
 {
-    ULONG Slot;
-    POBJECT_TYPE ObjectType = ObjectHeader->Type;
-
-    /* Pick a slot */
-    Slot = ObpSelectObjectLockSlot(ObjectHeader);
-
-    /* Release the resource and leave a critical region */
-    ExReleaseResourceLite(&ObjectType->ObjectLocks[Slot]);
+    /* Release the object lock and leave the critical region */
+    ExReleasePushLock(&ObjectHeader->Lock);
     KeLeaveCriticalRegion();
 
     /* Sanity check */
@@ -342,17 +338,17 @@ ObpEnterObjectTypeMutex(IN POBJECT_TYPE ObjectType)
     /* Sanity check */
     ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
 
-    /* Enter a critical region and acquire the resource */
+    /* Enter a critical region and acquire the type lock */
     KeEnterCriticalRegion();
-    ExAcquireResourceExclusiveLite(&ObjectType->Mutex, TRUE);
+    ExAcquirePushLockExclusive(&ObjectType->TypeLock);
 }
 
 FORCEINLINE
 VOID
 ObpLeaveObjectTypeMutex(IN POBJECT_TYPE ObjectType)
 {
-    /* Enter a critical region and acquire the resource */
-    ExReleaseResourceLite(&ObjectType->Mutex);
+    /* Release the type lock and leave the critical region */
+    ExReleasePushLock(&ObjectType->TypeLock);
     KeLeaveCriticalRegion();
 
     /* Sanity check */

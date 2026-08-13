@@ -309,7 +309,7 @@ ObpDeleteNameCheck(IN PVOID Object)
     /* Get object structures */
     ObjectHeader = OBJECT_TO_OBJECT_HEADER(Object);
     ObjectNameInfo = ObpReferenceNameInfo(ObjectHeader);
-    ObjectType = ObjectHeader->Type;
+    ObjectType = ObpGetObjectTypeFromHeader(ObjectHeader);
 
     /*
      * Check if the handle count is 0, if the object is named,
@@ -350,17 +350,8 @@ ObpDeleteNameCheck(IN PVOID Object)
                     ObpDeleteSymbolicLinkName(Object);
                 }
 
-                /* Check if the kernel exclusive flag is set */
-                ObjectNameInfo = OBJECT_HEADER_TO_NAME_INFO(ObjectHeader);
-                if ((ObjectNameInfo) &&
-                    (ObjectNameInfo->QueryReferences & OB_FLAG_KERNEL_EXCLUSIVE))
-                {
-                    /* Remove protection flag */
-                    InterlockedExchangeAdd((PLONG)&ObjectNameInfo->QueryReferences,
-                                           -OB_FLAG_KERNEL_EXCLUSIVE);
-                }
-
                 /* Get the directory */
+                ObjectNameInfo = OBJECT_HEADER_TO_NAME_INFO(ObjectHeader);
                 Directory = ObjectNameInfo->Directory;
             }
 
@@ -441,6 +432,30 @@ ObpIsUnsecureName(IN PUNICODE_STRING ObjectName,
     return Unsecure;
 }
 
+static
+NTSTATUS
+ObpCallParseProcedure(IN POBJECT_TYPE ParseObjectType,
+                      IN PVOID ParseObject,
+                      IN POBJECT_TYPE ObjectType,
+                      IN PACCESS_STATE AccessState,
+                      IN KPROCESSOR_MODE AccessMode,
+                      IN ULONG Attributes,
+                      IN OUT PUNICODE_STRING CompleteName,
+                      IN OUT PUNICODE_STRING RemainingName,
+                      IN OUT PVOID ParseContext,
+                      IN PSECURITY_QUALITY_OF_SERVICE SecurityQos OPTIONAL,
+                      OUT PVOID *Object)
+{
+    OB_EXTENDED_PARSE_PARAMETERS ExtendedParameters;
+
+    if (!ParseObjectType->TypeInfo.UseExtendedParameters) return ParseObjectType->TypeInfo.ParseProcedure(ParseObject, ObjectType, AccessState, AccessMode, Attributes, CompleteName, RemainingName, ParseContext, SecurityQos, Object);
+
+    RtlZeroMemory(&ExtendedParameters, sizeof(ExtendedParameters));
+    ExtendedParameters.Length = sizeof(ExtendedParameters);
+    ExtendedParameters.RestrictedAccessMask = MAXULONG;
+    return ParseObjectType->TypeInfo.ParseProcedureEx(ParseObject, ObjectType, AccessState, AccessMode, Attributes, CompleteName, RemainingName, ParseContext, SecurityQos, &ExtendedParameters, Object);
+}
+
 NTSTATUS
 NTAPI
 ObpLookupObjectName(IN HANDLE RootHandle OPTIONAL,
@@ -463,6 +478,7 @@ ObpLookupObjectName(IN HANDLE RootHandle OPTIONAL,
     POBJECT_DIRECTORY ReferencedDirectory = NULL, ReferencedParentDirectory = NULL;
     KIRQL CalloutIrql;
     OB_PARSE_METHOD ParseRoutine;
+    POBJECT_TYPE ParseObjectType;
     NTSTATUS Status;
     KPROCESSOR_MODE AccessCheckMode;
     PWCHAR NewName;
@@ -516,7 +532,7 @@ ObpLookupObjectName(IN HANDLE RootHandle OPTIONAL,
         /* The name cannot start with a separator, unless this is a file */
         if ((ObjectName->Buffer) &&
             (ObjectName->Buffer[0] == OBJ_NAME_PATH_SEPARATOR) &&
-            (ObjectHeader->Type != IoFileObjectType))
+            (ObpGetObjectTypeFromHeader(ObjectHeader) != IoFileObjectType))
         {
             /* The syntax is bad, so fail this request */
             ObDereferenceObject(RootDirectory);
@@ -524,10 +540,11 @@ ObpLookupObjectName(IN HANDLE RootHandle OPTIONAL,
         }
 
         /* Don't parse a Directory */
-        if (ObjectHeader->Type != ObpDirectoryObjectType)
+        if (ObpGetObjectTypeFromHeader(ObjectHeader) != ObpDirectoryObjectType)
         {
             /* Make sure the Object Type has a parse routine */
-            ParseRoutine = ObjectHeader->Type->TypeInfo.ParseProcedure;
+            ParseObjectType = ObpGetObjectTypeFromHeader(ObjectHeader);
+            ParseRoutine = ParseObjectType->TypeInfo.ParseProcedure;
             if (!ParseRoutine)
             {
                 /* We can't parse a name if we don't have a parse routine */
@@ -546,17 +563,8 @@ ObpLookupObjectName(IN HANDLE RootHandle OPTIONAL,
 
                 /* Call the Parse Procedure */
                 ObpCalloutStart(&CalloutIrql);
-                Status = ParseRoutine(RootDirectory,
-                                      ObjectType,
-                                      AccessState,
-                                      AccessCheckMode,
-                                      Attributes,
-                                      ObjectName,
-                                      &RemainingName,
-                                      ParseContext,
-                                      SecurityQos,
-                                      &Object);
-                ObpCalloutEnd(CalloutIrql, "Parse", ObjectHeader->Type, Object);
+                Status = ObpCallParseProcedure(ParseObjectType, RootDirectory, ObjectType, AccessState, AccessCheckMode, Attributes, ObjectName, &RemainingName, ParseContext, SecurityQos, &Object);
+                ObpCalloutEnd(CalloutIrql, "Parse", ParseObjectType, Object);
 
                 /* Check for success or failure, so not reparse */
                 if ((Status != STATUS_REPARSE) &&
@@ -895,8 +903,8 @@ ParseFromRoot:
                  */
                 if (RootDirectory->SessionId != -1)
                 {
-                    if (ObjectHeader->Type == MmSectionObjectType ||
-                        ObjectHeader->Type == ObpSymbolicLinkObjectType)
+                    if (ObpGetObjectTypeFromHeader(ObjectHeader) == MmSectionObjectType ||
+                        ObpGetObjectTypeFromHeader(ObjectHeader) == ObpSymbolicLinkObjectType)
                     {
                         if (RootDirectory->SessionId != PsGetCurrentProcessSessionId() &&
                             !SeSinglePrivilegeCheck(SeCreateGlobalPrivilege, AccessCheckMode) &&
@@ -967,7 +975,8 @@ ReparseObject:
              * Check for a parse Procedure, but don't bother to parse for an insert
              * unless it's a Symbolic Link, in which case we MUST parse
              */
-            ParseRoutine = ObjectHeader->Type->TypeInfo.ParseProcedure;
+            ParseObjectType = ObpGetObjectTypeFromHeader(ObjectHeader);
+            ParseRoutine = ParseObjectType->TypeInfo.ParseProcedure;
             if ((ParseRoutine) &&
                 (!(InsertObject) || (ParseRoutine == ObpParseSymbolicLink)))
             {
@@ -998,17 +1007,8 @@ ReparseObject:
 
                 /* Call the Parse Procedure */
                 ObpCalloutStart(&CalloutIrql);
-                Status = ParseRoutine(Object,
-                                      ObjectType,
-                                      AccessState,
-                                      AccessCheckMode,
-                                      Attributes,
-                                      ObjectName,
-                                      &RemainingName,
-                                      ParseContext,
-                                      SecurityQos,
-                                      &Object);
-                ObpCalloutEnd(CalloutIrql, "Parse", ObjectHeader->Type, Object);
+                Status = ObpCallParseProcedure(ParseObjectType, Object, ObjectType, AccessState, AccessCheckMode, Attributes, ObjectName, &RemainingName, ParseContext, SecurityQos, &Object);
+                ObpCalloutEnd(CalloutIrql, "Parse", ParseObjectType, Object);
 
                 /* Remove our extra reference */
                 ObDereferenceObject(&ObjectHeader->Body);
@@ -1129,7 +1129,7 @@ ReparseObject:
                 else
                 {
                     /* We still have a name; check if this is a directory object */
-                    if (ObjectHeader->Type == ObpDirectoryObjectType)
+                    if (ObpGetObjectTypeFromHeader(ObjectHeader) == ObpDirectoryObjectType)
                     {
                         /* Check if we have a referenced parent directory */
                         if (ReferencedParentDirectory)
@@ -1211,6 +1211,7 @@ ObQueryNameString(IN PVOID Object,
 {
     POBJECT_HEADER_NAME_INFO LocalInfo;
     POBJECT_HEADER ObjectHeader;
+    POBJECT_TYPE ObjectType;
     POBJECT_DIRECTORY ParentDirectory;
     ULONG NameSize;
     PWCH ObjectName;
@@ -1220,21 +1221,17 @@ ObQueryNameString(IN PVOID Object,
     /* Get the Kernel Meta-Structures */
     ObjectHeader = OBJECT_TO_OBJECT_HEADER(Object);
     LocalInfo = OBJECT_HEADER_TO_NAME_INFO(ObjectHeader);
+    ObjectType = ObpGetObjectTypeFromHeader(ObjectHeader);
 
     /* Check if a Query Name Procedure is available */
-    if (ObjectHeader->Type->TypeInfo.QueryNameProcedure)
+    if (ObjectType->TypeInfo.QueryNameProcedure)
     {
         /* Call the procedure inside SEH */
         ObjectIsNamed = ((LocalInfo) && (LocalInfo->Name.Length > 0));
 
         _SEH2_TRY
         {
-            Status = ObjectHeader->Type->TypeInfo.QueryNameProcedure(Object,
-                                                               ObjectIsNamed,
-                                                               ObjectNameInfo,
-                                                               Length,
-                                                               ReturnLength,
-                                                               KernelMode);
+            Status = ObjectType->TypeInfo.QueryNameProcedure(Object, ObjectIsNamed, ObjectNameInfo, Length, ReturnLength, KernelMode);
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {

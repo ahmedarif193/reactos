@@ -30,7 +30,7 @@ IoComputeDesiredAccessFileObject(IN PFILE_OBJECT FileObject,
     *DesiredAccess = 0;
 
     /* First check we really have a FileObject */
-    if (OBJECT_TO_OBJECT_HEADER(FileObject)->Type != IoFileObjectType)
+    if (ObpGetObjectTypeFromHeader(OBJECT_TO_OBJECT_HEADER(FileObject)) != IoFileObjectType)
     {
         return STATUS_OBJECT_TYPE_MISMATCH;
     }

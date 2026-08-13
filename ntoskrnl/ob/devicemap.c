@@ -114,12 +114,12 @@ ObSetDeviceMap(IN PEPROCESS Process,
         ObjectHeader = OBJECT_TO_OBJECT_HEADER(DirectoryObject);
         HeaderNameInfo = ObpReferenceNameInfo(ObjectHeader);
 
-        ObpEnterObjectTypeMutex(ObjectHeader->Type);
+        ObpEnterObjectTypeMutex(ObpGetObjectTypeFromHeader(ObjectHeader));
         if (HeaderNameInfo != NULL && HeaderNameInfo->Directory != NULL)
         {
             ObjectHeader->Flags |= OB_FLAG_PERMANENT;
         }
-        ObpLeaveObjectTypeMutex(ObjectHeader->Type);
+        ObpLeaveObjectTypeMutex(ObpGetObjectTypeFromHeader(ObjectHeader));
 
         if (HeaderNameInfo != NULL)
         {
@@ -220,12 +220,12 @@ ObSetDirectoryDeviceMap(OUT PDEVICE_MAP * DeviceMap,
     ObjectHeader = OBJECT_TO_OBJECT_HEADER(DirectoryObject);
     HeaderNameInfo = ObpReferenceNameInfo(ObjectHeader);
 
-    ObpEnterObjectTypeMutex(ObjectHeader->Type);
+    ObpEnterObjectTypeMutex(ObpGetObjectTypeFromHeader(ObjectHeader));
     if (HeaderNameInfo != NULL && HeaderNameInfo->Directory != NULL)
     {
         ObjectHeader->Flags |= OB_FLAG_PERMANENT;
     }
-    ObpLeaveObjectTypeMutex(ObjectHeader->Type);
+    ObpLeaveObjectTypeMutex(ObpGetObjectTypeFromHeader(ObjectHeader));
 
     if (HeaderNameInfo != NULL)
     {

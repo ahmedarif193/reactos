@@ -186,10 +186,10 @@ ReparseTargetPath:
             }
 
             /* If we don't have a directory object, we'll have to handle the object */
-            if (OBJECT_TO_OBJECT_HEADER(Object)->Type != ObpDirectoryObjectType)
+            if (ObpGetObjectTypeFromHeader(OBJECT_TO_OBJECT_HEADER(Object)) != ObpDirectoryObjectType)
             {
                 /* If that's not a symbolic link, stop here, nothing to do */
-                if (OBJECT_TO_OBJECT_HEADER(Object)->Type != ObpSymbolicLinkObjectType ||
+                if (ObpGetObjectTypeFromHeader(OBJECT_TO_OBJECT_HEADER(Object)) != ObpSymbolicLinkObjectType ||
                     (((POBJECT_SYMBOLIC_LINK)Object)->DosDeviceDriveIndex != 0))
                 {
                     break;
@@ -272,7 +272,7 @@ ReparseTargetPath:
 
         /* If we have a drive letter and a pointer device object */
         if (Object != NULL && SymbolicLink->DosDeviceDriveIndex != 0 &&
-            OBJECT_TO_OBJECT_HEADER(Object)->Type == IoDeviceObjectType)
+            ObpGetObjectTypeFromHeader(OBJECT_TO_OBJECT_HEADER(Object)) == IoDeviceObjectType)
         {
             /* Calculate the drive type */
             switch(((PDEVICE_OBJECT)Object)->DeviceType)
