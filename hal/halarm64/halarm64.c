@@ -5666,7 +5666,7 @@ VOID
 NTAPI
 HalProcessorIdle(VOID)
 {
-    __asm__ __volatile__("wfi" ::: "memory");
+    __asm__ __volatile__("dsb sy; isb; wfi" ::: "memory");
 }
 
 BOOLEAN
