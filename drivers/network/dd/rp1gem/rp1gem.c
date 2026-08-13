@@ -20,6 +20,10 @@ Rp1GemPollReceive(
     _In_ PRP1GEM_ADAPTER Adapter,
     _In_ ULONG Budget);
 
+static BOOLEAN
+Rp1GemReceivePending(
+    _In_ PRP1GEM_ADAPTER Adapter);
+
 static VOID
 Rp1GemWriteDiag(
     _In_ PRP1GEM_ADAPTER Adapter,
@@ -1689,13 +1693,14 @@ Rp1GemCopyNetBuffer(
     return NDIS_STATUS_SUCCESS;
 }
 
-static VOID
+static ULONG
 Rp1GemReleaseReceiveNetBufferLists(
     _In_ PRP1GEM_ADAPTER Adapter,
     _In_ PNET_BUFFER_LIST NetBufferLists)
 {
     PNET_BUFFER_LIST Nbl;
     PNET_BUFFER_LIST NextNbl;
+    ULONG Released = 0;
 
     for (Nbl = NetBufferLists; Nbl; Nbl = NextNbl)
     {
@@ -1711,9 +1716,29 @@ Rp1GemReleaseReceiveNetBufferLists(
         {
             Adapter->RxBuffers[Index].Indicated = FALSE;
             Rp1GemRearmRxDescriptor(Adapter, Index);
+            Released++;
         }
         NdisReleaseSpinLock(&Adapter->RxLock);
     }
+
+    return Released;
+}
+
+static BOOLEAN
+Rp1GemReceivePending(
+    _In_ PRP1GEM_ADAPTER Adapter)
+{
+    BOOLEAN Pending;
+
+    if (!Adapter->DatapathReady || !Adapter->RxRing)
+        return FALSE;
+
+    NdisAcquireSpinLock(&Adapter->RxLock);
+    KeMemoryBarrier();
+    Pending = !Adapter->RxBuffers[Adapter->RxTail].Indicated &&
+              (Adapter->RxRing[Adapter->RxTail].Address & MACB_RX_USED) != 0;
+    NdisReleaseSpinLock(&Adapter->RxLock);
+    return Pending;
 }
 
 static VOID
@@ -1748,10 +1773,13 @@ Rp1GemPollReceive(
         Control = Descriptor->Control;
         Length = Control & MACB_RX_FRMLEN_MASK;
 
+        /* NDIS owns this descriptor until MiniportReturnNetBufferLists. */
+        if (RxBuffer->Indicated)
+            break;
+
         if ((Control & (MACB_RX_SOF | MACB_RX_EOF)) != (MACB_RX_SOF | MACB_RX_EOF) ||
             Length < ETH_LENGTH_OF_ADDRESS ||
-            Length > RP1GEM_FRAME_SIZE ||
-            RxBuffer->Indicated)
+            Length > RP1GEM_FRAME_SIZE)
         {
             Adapter->RxErrors++;
             Rp1GemRearmRxDescriptor(Adapter, Index);
@@ -1789,7 +1817,7 @@ Rp1GemPollReceive(
 
     if (NblChain)
     {
-        ULONG Flags = NDIS_RECEIVE_FLAGS_RESOURCES;
+        ULONG Flags = 0;
 
         if (KeGetCurrentIrql() == DISPATCH_LEVEL)
             Flags |= NDIS_RECEIVE_FLAGS_DISPATCH_LEVEL;
@@ -1799,9 +1827,6 @@ Rp1GemPollReceive(
                                            0,
                                            Received,
                                            Flags);
-
-        /* NDIS_RECEIVE_FLAGS_RESOURCES requires immediate buffer reclamation. */
-        Rp1GemReleaseReceiveNetBufferLists(Adapter, NblChain);
     }
 
     Rp1GemWrite32(Adapter, MACB_RSR, MACB_RSR_ALL);
@@ -1851,25 +1876,66 @@ Rp1GemInterruptDpc(
     _In_ PVOID NdisReserved2)
 {
     PRP1GEM_ADAPTER Adapter = (PRP1GEM_ADAPTER)MiniportInterruptContext;
+    PNDIS_RECEIVE_THROTTLE_PARAMETERS ThrottleParameters =
+        (PNDIS_RECEIVE_THROTTLE_PARAMETERS)ReceiveThrottleParameters;
+    BOOLEAN ThrottleReceive = FALSE;
+    ULONG RxBudget = RP1GEM_RX_BUDGET;
+    ULONG RawIsr;
     ULONG Pending;
 
     UNREFERENCED_PARAMETER(MiniportDpcContext);
-    UNREFERENCED_PARAMETER(ReceiveThrottleParameters);
     UNREFERENCED_PARAMETER(NdisReserved2);
 
     if (!Adapter || !Adapter->RegisterBase)
         return;
 
     Pending = (ULONG)InterlockedExchange(&Adapter->InterruptPending, 0);
+    /* NDIS leaves interrupts masked across receive-throttle continuations. */
+    RawIsr = Rp1GemRead32(Adapter, MACB_ISR);
+    Rp1GemClearInterruptStatus(Adapter, RawIsr);
+    Pending |= RawIsr & RP1GEM_INT_MASK;
     Adapter->InterruptDpcCount++;
 
-    if (Pending & (MACB_INT_RCOMP | MACB_INT_RXUBR | MACB_INT_ROVR | MACB_INT_HRESP))
-        Rp1GemPollReceive(Adapter, RP1GEM_RX_BUDGET);
+    if (ThrottleParameters != NULL)
+    {
+        ThrottleParameters->MoreNblsPending = FALSE;
+        if (ThrottleParameters->MaxNblsToIndicate != NDIS_INDICATE_ALL_NBLS)
+        {
+            ThrottleReceive = TRUE;
+            RxBudget = min(RxBudget, ThrottleParameters->MaxNblsToIndicate);
+            if (RxBudget == 0)
+                RxBudget = 1;
+        }
+        else
+        {
+            RxBudget = RP1GEM_RX_RING_SIZE;
+        }
+    }
+
+    if ((Pending & (MACB_INT_RCOMP | MACB_INT_ROVR | MACB_INT_HRESP)) ||
+        Rp1GemReceivePending(Adapter))
+    {
+        Rp1GemPollReceive(Adapter, RxBudget);
+    }
 
     if (Pending & (MACB_INT_TCOMP | MACB_INT_TXERR | MACB_INT_TUND | MACB_INT_RLE | MACB_INT_TXUBR))
         Rp1GemDrainTxCompletions(Adapter, NDIS_SEND_COMPLETE_FLAGS_DISPATCH_LEVEL);
 
+    if (ThrottleReceive && Rp1GemReceivePending(Adapter))
+    {
+        ThrottleParameters->MoreNblsPending = TRUE;
+        return;
+    }
+
     Rp1GemEnableInterrupts(Adapter);
+
+    /* Close the receive-throttle race between the pre-enable check and IER. */
+    KeMemoryBarrier();
+    if (ThrottleReceive && Rp1GemReceivePending(Adapter))
+    {
+        Rp1GemDisableInterrupts(Adapter);
+        ThrottleParameters->MoreNblsPending = TRUE;
+    }
 }
 
 static VOID NTAPI
@@ -2621,11 +2687,25 @@ Rp1GemReturnNetBufferLists(
     _In_ ULONG ReturnFlags)
 {
     PRP1GEM_ADAPTER Adapter = (PRP1GEM_ADAPTER)MiniportAdapterContext;
+    GROUP_AFFINITY TargetProcessor = {0};
+    ULONG Released;
+    LONG ReturnedSinceKick;
 
     UNREFERENCED_PARAMETER(ReturnFlags);
 
     if (Adapter)
-        Rp1GemReleaseReceiveNetBufferLists(Adapter, NetBufferLists);
+    {
+        Released = Rp1GemReleaseReceiveNetBufferLists(Adapter, NetBufferLists);
+        ReturnedSinceKick = InterlockedExchangeAdd(&Adapter->RxReturnedSinceKick, Released) + Released;
+
+        if (ReturnedSinceKick >= RP1GEM_RX_RETURN_BATCH &&
+            Rp1GemReceivePending(Adapter))
+        {
+            InterlockedExchange(&Adapter->RxReturnedSinceKick, 0);
+            TargetProcessor.Mask = Adapter->InterruptAffinity ? Adapter->InterruptAffinity : 1;
+            NdisMQueueDpcEx(Adapter->InterruptHandle, 0, &TargetProcessor, NULL);
+        }
+    }
 }
 
 static VOID NTAPI

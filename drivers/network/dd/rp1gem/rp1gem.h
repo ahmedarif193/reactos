@@ -50,6 +50,7 @@
 #define RP1GEM_RX_RING_SIZE 256
 #define RP1GEM_TX_RING_SIZE 256
 #define RP1GEM_RX_BUDGET 128
+#define RP1GEM_RX_RETURN_BATCH 32
 #define RP1GEM_LINK_SPEED_10M 10000000ULL
 #define RP1GEM_LINK_SPEED_100M 100000000ULL
 #define RP1GEM_LINK_SPEED_1G 1000000000ULL
@@ -162,7 +163,8 @@
 #define MACB_INT_ROVR (1u << 10)
 #define MACB_INT_HRESP (1u << 11)
 #define MACB_INT_ALL 0xffffffff
-#define RP1GEM_INT_MASK (MACB_INT_RCOMP | MACB_INT_RXUBR | MACB_INT_TXUBR | \
+/* RXUBR is normal backpressure while NDIS owns receive descriptors. */
+#define RP1GEM_INT_MASK (MACB_INT_RCOMP | MACB_INT_TXUBR | \
                          MACB_INT_TUND | MACB_INT_RLE | MACB_INT_TXERR | \
                          MACB_INT_TCOMP | MACB_INT_ROVR | MACB_INT_HRESP)
 
@@ -308,6 +310,7 @@ typedef struct _RP1GEM_ADAPTER
     ULONG RxBufferAreaLength;
     RP1GEM_RX_BUFFER RxBuffers[RP1GEM_RX_RING_SIZE];
     ULONG RxTail;
+    volatile LONG RxReturnedSinceKick;
 
     PRP1GEM_DMA_DESCRIPTOR TxRing;
     NDIS_PHYSICAL_ADDRESS TxRingPhysical;
