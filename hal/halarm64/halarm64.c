@@ -3302,6 +3302,20 @@ HalInitSystem(
      */
     KeLowerIrql(OldIrql);
 
+    /*
+     * Reserve the AP startup code, data, and identity-map pages while the
+     * loader memory descriptors are still authoritative. Once phase 0 has
+     * returned, the memory manager can allocate LoaderFree pages itself, so
+     * carving those descriptors from HalStartNextProcessor would create two
+     * owners for the same physical pages.
+     */
+    if ((HalpArm64GicInfo.GiccEntryCount > 1) && !HalpArm64InitApTrampoline(LoaderBlock))
+    {
+        DPRINT1("[arm64][HAL] Phase0: failed to reserve AP startup memory\n");
+        return FALSE;
+    }
+    if (HalpArm64GicInfo.GiccEntryCount > 1) HalpArm64DiscoverParkedCpus(LoaderBlock);
+
     return TRUE;
 }
 
@@ -5915,7 +5929,6 @@ HalStartNextProcessor(
 {
     ULONG ProcessorNumber;
     ULONGLONG TargetMpidr;
-    PHYSICAL_ADDRESS EntryPoint;
     UINT64 TrampolinePhys;
     LONG PsciResult;
 
@@ -5923,7 +5936,7 @@ HalStartNextProcessor(
      * ARM64 SMP bring-up using PSCI CPU_ON with proper AP trampoline.
      *
      * The boot sequence is:
-     * 1. Initialize the AP trampoline (first call only)
+     * 1. Use the AP trampoline reserved during phase-zero initialization
      * 2. Prepare AP data structure with page tables and entry point
      * 3. Call PSCI CPU_ON with trampoline physical address
      * 4. AP wakes at trampoline, enables MMU, jumps to kernel entry
@@ -5969,18 +5982,11 @@ HalStartNextProcessor(
     DPRINT("[arm64][HAL] HalStartNextProcessor: starting CPU %lu (MPIDR 0x%llx)\n",
             ProcessorNumber, TargetMpidr);
 
-    /*
-     * Initialize the AP trampoline on first call.
-     * The trampoline enables MMU and transitions to virtual addressing.
-     */
+    /* The loader-backed startup pages must have been reserved in phase 0. */
     if (!HalpArm64IsTrampolineInitialized())
     {
-        if (!HalpArm64InitApTrampoline(LoaderBlock))
-        {
-            DPRINT1("[arm64][HAL] HalStartNextProcessor: trampoline init failed\n");
-            goto FallbackDirectPsci;
-        }
-        HalpArm64DiscoverParkedCpus(LoaderBlock);
+        DPRINT1("[arm64][HAL] HalStartNextProcessor: phase-0 trampoline unavailable\n");
+        return FALSE;
     }
 
     /* Get trampoline physical address */
@@ -5988,7 +5994,7 @@ HalStartNextProcessor(
     if (TrampolinePhys == 0)
     {
         DPRINT1("[arm64][HAL] HalStartNextProcessor: trampoline not ready\n");
-        goto FallbackDirectPsci;
+        return FALSE;
     }
 
     /*
@@ -6045,44 +6051,6 @@ HalStartNextProcessor(
     else
     {
         DPRINT1("[arm64][HAL] HalStartNextProcessor: PSCI CPU_ON failed, err=%ld\n",
-                PsciResult);
-        return FALSE;
-    }
-
-FallbackDirectPsci:
-    /*
-     * Fallback: Direct PSCI CPU_ON without trampoline.
-     * This assumes the kernel entry point is identity-mapped.
-     */
-    if (!HalpArm64PsciInfo.Present)
-    {
-        DPRINT1("[arm64][HAL] HalStartNextProcessor: PSCI not available (fallback)\n");
-        return FALSE;
-    }
-
-    EntryPoint = MmGetPhysicalAddress((PVOID)ProcessorState->ContextFrame.Pc);
-    if (EntryPoint.QuadPart == 0)
-    {
-        DPRINT1("[arm64][HAL] HalStartNextProcessor: failed to get entry PA\n");
-        return FALSE;
-    }
-
-    HalpApProcessorState = ProcessorState;
-    HalpApEntryPointPhys = EntryPoint;
-    __asm__ __volatile__("dsb sy; isb" ::: "memory");
-
-    PsciResult = HalpPsciCpuOn(TargetMpidr, EntryPoint.QuadPart, (ULONGLONG)ProcessorNumber);
-
-    if (PsciResult == PSCI_SUCCESS || PsciResult == PSCI_E_ALREADY_ON)
-    {
-        DPRINT1("[arm64][HAL] HalStartNextProcessor: CPU %lu started (fallback)\n",
-                ProcessorNumber);
-        HalpStartedProcessorCount++;
-        return TRUE;
-    }
-    else
-    {
-        DPRINT1("[arm64][HAL] HalStartNextProcessor: fallback PSCI failed, err=%ld\n",
                 PsciResult);
         return FALSE;
     }
