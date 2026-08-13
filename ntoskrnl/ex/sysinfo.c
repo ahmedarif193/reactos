@@ -1545,8 +1545,7 @@ QSI_DEF(SystemHandleInformation)
         while ((HandleTableEntry = ExpLookupHandleTableEntry(HandleTable, Handle)))
         {
             /* Validate the entry */
-            if ((HandleTableEntry->Object) &&
-                (HandleTableEntry->NextFreeTableEntry != -2))
+            if (Handle.LowIndex && HandleTableEntry->Object)
             {
                 /* Increase of count of handles */
                 ++HandleInformation->NumberOfHandles;
@@ -2777,8 +2776,7 @@ QSI_DEF(SystemExtendedHandleInformation)
         while ((HandleTableEntry = ExpLookupHandleTableEntry(HandleTable, Handle)))
         {
             /* Validate the entry */
-            if ((HandleTableEntry->Object) &&
-                (HandleTableEntry->NextFreeTableEntry != -2))
+            if (Handle.LowIndex && HandleTableEntry->Object)
             {
                 /* Increase of count of handles */
                 ++HandleInformation->NumberOfHandles;

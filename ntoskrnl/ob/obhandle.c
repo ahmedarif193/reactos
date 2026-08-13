@@ -180,7 +180,7 @@ ObGetProcessHandleCount(IN PEPROCESS Process)
     if (HandleTable != NULL)
     {
         /* Count the number of handles the process has */
-        HandleCount = HandleTable->HandleCount;
+        HandleCount = (ULONG)ExpGetHandleCount(HandleTable);
 
         /* Let the handle table go */
         ObDereferenceProcessHandleTable(Process);
@@ -2334,7 +2334,7 @@ ObKillProcess(IN PEPROCESS Process)
     ExSweepHandleTable(HandleTable,
                        ObpCloseHandleCallback,
                        &Context);
-    ASSERT(HandleTable->HandleCount == 0);
+    ASSERT(ExpGetHandleCount(HandleTable) == 0);
 
     /* Leave the critical region */
     KeLeaveCriticalRegion();
