@@ -13,6 +13,7 @@ KMT_TESTFUNC Test_ExDoubleList;
 KMT_TESTFUNC Test_ExFastMutex;
 KMT_TESTFUNC Test_ExHardError;
 KMT_TESTFUNC Test_ExHardErrorInteractive;
+KMT_TESTFUNC Test_ExHandleTable;
 KMT_TESTFUNC Test_ExInterlocked;
 KMT_TESTFUNC Test_ExPools;
 KMT_TESTFUNC Test_ExCallbackExtra;
@@ -194,6 +195,7 @@ const KMT_TEST TestList[] =
     { "ExHardError",                        Test_ExHardError },
     /* Keep the UI-driven variant available by name, but out of automated runs. */
     { "-ExHardErrorInteractive",            Test_ExHardErrorInteractive },
+    { "ExHandleTable",                      Test_ExHandleTable },
     { "ExInterlocked",                      Test_ExInterlocked },
     { "ExPools",                            Test_ExPools },
     { "ExLookaside",                        Test_ExLookaside },
