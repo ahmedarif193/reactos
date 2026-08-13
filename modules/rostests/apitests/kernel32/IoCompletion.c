@@ -22,6 +22,7 @@ typedef struct _DEQUEUE_WAIT_CONTEXT
     DWORD Bytes;
     ULONG_PTR Key;
     LPOVERLAPPED Overlapped;
+    DWORD Error;
 } DEQUEUE_WAIT_CONTEXT;
 
 typedef struct _OWN_QUEUE_WAIT_CONTEXT
@@ -57,6 +58,7 @@ DequeueWaitThread(_Inout_ PVOID Parameter)
 
     SetEvent(Context->Ready);
     Context->Success = GetQueuedCompletionStatus(Context->Port, &Context->Bytes, &Context->Key, &Context->Overlapped, 5000);
+    Context->Error = GetLastError();
     return 0;
 }
 
@@ -211,6 +213,37 @@ START_TEST(IoCompletion)
     if (Threads[1]) CloseHandle(Threads[1]);
     if (DequeueContext.Ready) CloseHandle(DequeueContext.Ready);
     if (DirectContexts[0].Ready) CloseHandle(DirectContexts[0].Ready);
+    if (MixedPort) CloseHandle(MixedPort);
+
+    MixedPort = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1);
+    ok(MixedPort != NULL, "CreateIoCompletionPort failed with %lu\n", GetLastError());
+    DequeueContext.Port = MixedPort;
+    DequeueContext.Ready = CreateEventW(NULL, FALSE, FALSE, NULL);
+    DequeueContext.Success = TRUE;
+    DequeueContext.Bytes = 0x55555555;
+    DequeueContext.Key = 0x55555555;
+    DequeueContext.Overlapped = (LPOVERLAPPED)(ULONG_PTR)0x55555555;
+    DequeueContext.Error = ERROR_SUCCESS;
+    Threads[0] = CreateThread(NULL, 0, DequeueWaitThread, &DequeueContext, 0, NULL);
+    ok(DequeueContext.Ready != NULL, "CreateEventW failed with %lu\n", GetLastError());
+    ok(Threads[0] != NULL, "CreateThread failed with %lu\n", GetLastError());
+    if (MixedPort && DequeueContext.Ready && Threads[0])
+    {
+        Result = WaitForSingleObject(DequeueContext.Ready, 5000);
+        ok(Result == WAIT_OBJECT_0, "Close waiter did not become ready: %#lx\n", Result);
+        Sleep(100);
+        CloseHandle(MixedPort);
+        MixedPort = NULL;
+        Result = WaitForSingleObject(Threads[0], 5000);
+        ok(Result == WAIT_OBJECT_0, "Close waiter did not exit: %#lx\n", Result);
+        ok(!DequeueContext.Success, "GetQueuedCompletionStatus succeeded after the port closed\n");
+        ok(DequeueContext.Error == ERROR_ABANDONED_WAIT_0, "Expected ERROR_ABANDONED_WAIT_0, got %lu\n", DequeueContext.Error);
+        ok(DequeueContext.Bytes == 0x55555555, "Bytes changed to %#lx\n", DequeueContext.Bytes);
+        ok(DequeueContext.Key == 0x55555555, "Key changed to %#Ix\n", DequeueContext.Key);
+        ok(DequeueContext.Overlapped == NULL, "Overlapped changed to %p\n", DequeueContext.Overlapped);
+    }
+    if (Threads[0]) CloseHandle(Threads[0]);
+    if (DequeueContext.Ready) CloseHandle(DequeueContext.Ready);
     if (MixedPort) CloseHandle(MixedPort);
 
     OwnPort = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1);

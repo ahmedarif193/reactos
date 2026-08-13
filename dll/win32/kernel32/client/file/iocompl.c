@@ -153,7 +153,9 @@ GetQueuedCompletionStatus(IN HANDLE CompletionHandle,
                                   (PVOID*)lpOverlapped,
                                   &IoStatus,
                                   TimePtr);
-    if (!(NT_SUCCESS(Status)) || (Status == STATUS_TIMEOUT))
+    if (!(NT_SUCCESS(Status)) ||
+        (Status == STATUS_TIMEOUT) ||
+        (Status == STATUS_ABANDONED))
     {
         /* Clear out the overlapped output */
         *lpOverlapped = NULL;
@@ -163,6 +165,10 @@ GetQueuedCompletionStatus(IN HANDLE CompletionHandle,
         {
             /* Timeout error is set directly since there's no conversion */
             SetLastError(WAIT_TIMEOUT);
+        }
+        else if (Status == STATUS_ABANDONED)
+        {
+            SetLastError(ERROR_ABANDONED_WAIT_0);
         }
         else
         {
