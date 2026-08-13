@@ -115,6 +115,8 @@ typedef struct _AFD_DEVICE_EXTENSION {
     KSPIN_LOCK Lock;
 } AFD_DEVICE_EXTENSION, *PAFD_DEVICE_EXTENSION;
 
+extern ULONG AfdReceiveWindowSize;
+
 typedef struct _AFD_ACTIVE_POLL {
     LIST_ENTRY ListEntry;
     PIRP Irp;
@@ -164,6 +166,7 @@ typedef struct _AFD_STORED_DATAGRAM {
 typedef struct _AFD_FCB {
     SOCK_SHARED_INFO SharedData;
     BOOLEAN Locked, Critical, NonBlocking, OobInline, TdiReceiveClosed, SendClosed;
+    BOOLEAN ReceiveRepostActive, ReceiveRepostPending;
     UINT Flags, GroupID, GroupType;
     KIRQL OldIrql;
     PVOID CurrentThread;
@@ -179,6 +182,7 @@ typedef struct _AFD_FCB {
     AFD_TDI_OBJECT AddressFile, Connection;
     AFD_IN_FLIGHT_REQUEST ConnectIrp, ListenIrp, ReceiveIrp, SendIrp, DisconnectIrp;
     AFD_DATA_WINDOW Send, Recv;
+    UINT ReceiveWindowAllocationSize, PendingReceiveWindowSize;
     KMUTEX Mutex;
     PKEVENT TdiRundownEvent;
     PKEVENT EventSelect;
@@ -266,6 +270,9 @@ AfdGetInfo( PDEVICE_OBJECT DeviceObject, PIRP Irp,
 NTSTATUS NTAPI
 AfdSetInfo( PDEVICE_OBJECT DeviceObject, PIRP Irp,
 	    PIO_STACK_LOCATION IrpSp );
+
+BOOLEAN
+AfdTryApplyPendingReceiveWindow(PAFD_FCB FCB);
 
 NTSTATUS NTAPI
 AfdGetSockName( PDEVICE_OBJECT DeviceObject, PIRP Irp,
