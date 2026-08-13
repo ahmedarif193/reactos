@@ -260,9 +260,9 @@ ExpInitializeTimerImplementation(VOID)
     RtlInitUnicodeString(&Name, L"Timer");
     ObjectTypeInitializer.Length = sizeof(ObjectTypeInitializer);
     ObjectTypeInitializer.InvalidAttributes = OBJ_OPENLINK;
-    ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(ETIMER);
+    ObjectTypeInitializer.DefaultNonPagedPoolCharge = 0x148;
     ObjectTypeInitializer.GenericMapping = ExpTimerMapping;
-    ObjectTypeInitializer.PoolType = NonPagedPool;
+    ObjectTypeInitializer.PoolType = NonPagedPoolNx;
     ObjectTypeInitializer.ValidAccessMask = TIMER_ALL_ACCESS;
     ObjectTypeInitializer.DeleteProcedure = ExpDeleteTimer;
     Status = ObCreateObjectType(&Name, &ObjectTypeInitializer, NULL, &ExTimerType);
