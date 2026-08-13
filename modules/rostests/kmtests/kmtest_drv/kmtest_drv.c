@@ -34,6 +34,7 @@ typedef struct _KMT_USER_WORK_LIST
     LIST_ENTRY ListHead;
     FAST_MUTEX Lock;
     KEVENT NewWorkEvent;
+    volatile LONG CancelWait;
 } KMT_USER_WORK_LIST, *PKMT_USER_WORK_LIST;
 
 extern
@@ -58,7 +59,7 @@ static PDEVICE_OBJECT MainDeviceObject;
 PDRIVER_OBJECT KmtDriverObject = NULL;
 static KMT_USER_WORK_LIST WorkList;
 static ULONG RequestId = 0;
-static const LONGLONG TimeoutDuration = -30LL * (1000 * 1000 * 10); // 30 seconds
+static const LONGLONG TimeoutDuration = -30LL * (1000 * 1000 * 10);
 
 /* Entry */
 /**
@@ -121,6 +122,7 @@ DriverEntry(
     ExInitializeFastMutex(&WorkList.Lock);
     KeInitializeEvent(&WorkList.NewWorkEvent, NotificationEvent, FALSE);
     InitializeListHead(&WorkList.ListHead);
+    WorkList.CancelWait = FALSE;
 
 cleanup:
     if (MainDeviceObject && !NT_SUCCESS(Status))
@@ -450,8 +452,15 @@ DriverIoControl(
             Timeout.QuadPart = TimeoutDuration;
             Status = KeWaitForSingleObject(&WorkList.NewWorkEvent, UserRequest, UserMode, FALSE, &Timeout);
 
+            if (InterlockedExchange(&WorkList.CancelWait, FALSE))
+            {
+                KeClearEvent(&WorkList.NewWorkEvent);
+                Status = STATUS_SUCCESS;
+                break;
+            }
+
             if (Status == STATUS_TIMEOUT)
-                DPRINT("User-mode callback poll timed out\n");
+                DPRINT("User-mode callback wait timed out\n");
 
             if (Status == STATUS_USER_APC || Status == STATUS_KERNEL_APC || Status == STATUS_TIMEOUT)
                 break;
@@ -474,6 +483,18 @@ DriverIoControl(
             KeClearEvent(&WorkList.NewWorkEvent);
             break;
 
+        }
+        case IOCTL_KMTEST_USERMODE_CANCEL_WAIT:
+        {
+            InterlockedExchange(&WorkList.CancelWait, TRUE);
+            KeSetEvent(&WorkList.NewWorkEvent, IO_NO_INCREMENT, FALSE);
+            break;
+        }
+        case IOCTL_KMTEST_USERMODE_RESET_WAIT:
+        {
+            InterlockedExchange(&WorkList.CancelWait, FALSE);
+            KeClearEvent(&WorkList.NewWorkEvent);
+            break;
         }
         case IOCTL_KMTEST_USERMODE_SEND_RESPONSE:
         {
