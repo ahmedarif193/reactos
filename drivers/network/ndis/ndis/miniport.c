@@ -250,6 +250,9 @@ MiniIndicateData(
   NDIS_DbgPrint(MAX_TRACE, ("Leaving.\n"));
 }
 
+#define MINI_PACKET_REFERENCE_COUNT(Packet) ((Packet)->WrapperReserved[0])
+#define MINI_PACKET_INDICATION_ACTIVE(Packet) ((Packet)->WrapperReserved[sizeof(PVOID)])
+
 /*
  * @implemented
  */
@@ -278,9 +281,21 @@ NdisReturnPackets(
         Adapter = (PVOID)(ULONG_PTR)PacketsToReturn[i]->Reserved[1];
         ReturnPacket = FALSE;
 
-        KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
-        PacketsToReturn[i]->WrapperReserved[0]--;
-        if (PacketsToReturn[i]->WrapperReserved[0] == 0)
+        for (;;)
+        {
+            KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
+            if (!MINI_PACKET_INDICATION_ACTIVE(PacketsToReturn[i]))
+                break;
+            KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+            /* A protocol may return a retained packet on another processor as
+             * soon as its receive callback exits. Wait until the indicating
+             * processor has committed that callback's returned reference. */
+            YieldProcessor();
+        }
+
+        ASSERT(MINI_PACKET_REFERENCE_COUNT(PacketsToReturn[i]) != 0);
+        MINI_PACKET_REFERENCE_COUNT(PacketsToReturn[i])--;
+        if (MINI_PACKET_REFERENCE_COUNT(PacketsToReturn[i]) == 0)
         {
             ReturnPacket = TRUE;
             IsNdis6 = Adapter->IsNdis6;
@@ -311,6 +326,108 @@ NdisReturnPackets(
     }
 }
 
+#define MINI_RECEIVE_INLINE_BINDINGS 4
+
+typedef struct _MINI_RECEIVE_BINDING_SNAPSHOT
+{
+    PADAPTER_BINDING Binding;
+    RECEIVE_PACKET_HANDLER ReceivePacketHandler;
+    RECEIVE_HANDLER ReceiveHandler;
+    NDIS_HANDLE ProtocolBindingContext;
+    NDIS_HANDLE MacReceiveContext;
+} MINI_RECEIVE_BINDING_SNAPSHOT, *PMINI_RECEIVE_BINDING_SNAPSHOT;
+
+/* Protocol callbacks can reenter NDIS and may run concurrently with unbind.
+ * Snapshot rundown-protected bindings so no protocol code runs while the
+ * adapter's serialization lock is held. */
+static PMINI_RECEIVE_BINDING_SNAPSHOT
+MiniSnapshotReceiveBindings(
+    _In_ PLOGICAL_ADAPTER Adapter,
+    _Out_writes_(InlineCapacity) PMINI_RECEIVE_BINDING_SNAPSHOT InlineSnapshot,
+    _In_ SIZE_T InlineCapacity,
+    _Out_ PSIZE_T SnapshotCount)
+{
+    PMINI_RECEIVE_BINDING_SNAPSHOT Snapshot;
+    PLIST_ENTRY Entry;
+    SIZE_T Capacity = 0;
+    SIZE_T Count = 0;
+    KIRQL OldIrql;
+
+    *SnapshotCount = 0;
+
+    KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
+    for (Entry = Adapter->ProtocolListHead.Flink;
+         Entry != &Adapter->ProtocolListHead;
+         Entry = Entry->Flink)
+    {
+        PADAPTER_BINDING Binding =
+            CONTAINING_RECORD(Entry, ADAPTER_BINDING, AdapterListEntry);
+
+        if (Binding->ProtocolBinding != NULL &&
+            (Binding->ProtocolBinding->Chars.ReceivePacketHandler != NULL ||
+             Binding->ProtocolBinding->Chars.ReceiveHandler != NULL))
+        {
+            Capacity++;
+        }
+    }
+    KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+
+    if (Capacity == 0)
+        return NULL;
+
+    Snapshot = InlineSnapshot;
+    if (Capacity > InlineCapacity)
+    {
+        if (Capacity > MAXULONG_PTR / sizeof(*Snapshot))
+            return NULL;
+
+        Snapshot = ExAllocatePoolWithTag(NonPagedPool,
+                                         Capacity * sizeof(*Snapshot),
+                                         'rBNn');
+        if (Snapshot == NULL)
+            return NULL;
+    }
+
+    KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
+    for (Entry = Adapter->ProtocolListHead.Flink;
+         Entry != &Adapter->ProtocolListHead && Count < Capacity;
+         Entry = Entry->Flink)
+    {
+        PADAPTER_BINDING Binding =
+            CONTAINING_RECORD(Entry, ADAPTER_BINDING, AdapterListEntry);
+
+        if (Binding->ProtocolBinding == NULL ||
+            (Binding->ProtocolBinding->Chars.ReceivePacketHandler == NULL &&
+             Binding->ProtocolBinding->Chars.ReceiveHandler == NULL) ||
+            !NdisReferenceAdapterBinding(Binding))
+        {
+            continue;
+        }
+
+        Snapshot[Count].Binding = Binding;
+        Snapshot[Count].ReceivePacketHandler =
+            Binding->ProtocolBinding->Chars.ReceivePacketHandler;
+        Snapshot[Count].ReceiveHandler =
+            Binding->ProtocolBinding->Chars.ReceiveHandler;
+        Snapshot[Count].ProtocolBindingContext =
+            Binding->NdisOpenBlock.ProtocolBindingContext;
+        Snapshot[Count].MacReceiveContext =
+            Binding->NdisOpenBlock.MacHandle;
+        Count++;
+    }
+    KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+
+    if (Count == 0)
+    {
+        if (Snapshot != InlineSnapshot)
+            ExFreePoolWithTag(Snapshot, 'rBNn');
+        return NULL;
+    }
+
+    *SnapshotCount = Count;
+    return Snapshot;
+}
+
 VOID NTAPI
 MiniIndicateReceivePacket(
     IN  NDIS_HANDLE    MiniportAdapterHandle,
@@ -326,10 +443,17 @@ MiniIndicateReceivePacket(
  */
 {
     PLOGICAL_ADAPTER Adapter = MiniportAdapterHandle;
-    PLIST_ENTRY CurrentEntry;
-    PADAPTER_BINDING AdapterBinding;
+    MINI_RECEIVE_BINDING_SNAPSHOT InlineSnapshot[MINI_RECEIVE_INLINE_BINDINGS];
+    PMINI_RECEIVE_BINDING_SNAPSHOT Snapshot;
+    SIZE_T SnapshotCount;
+    SIZE_T BindingIndex;
     KIRQL OldIrql;
     UINT i;
+
+    Snapshot = MiniSnapshotReceiveBindings(Adapter,
+                                           InlineSnapshot,
+                                           ARRAYSIZE(InlineSnapshot),
+                                           &SnapshotCount);
 
     KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
 
@@ -342,114 +466,159 @@ MiniIndicateReceivePacket(
          * routine releases the adapter lock. Protocol returns can otherwise
          * free the wrapper before the caller can decide whether to release
          * it. RESOURCES wrappers are reclaimed directly by their caller. */
-        PacketArray[i]->WrapperReserved[0] =
+        MINI_PACKET_REFERENCE_COUNT(PacketArray[i]) =
             (Adapter->IsNdis6 &&
              NDIS_GET_PACKET_STATUS(PacketArray[i]) != NDIS_STATUS_RESOURCES) ? 2 : 1;
+        /* NdisReturnPackets must observe callback-returned references before
+         * it can release this packet. */
+        MINI_PACKET_INDICATION_ACTIVE(PacketArray[i]) = TRUE;
     }
 
-    CurrentEntry = Adapter->ProtocolListHead.Flink;
+    KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
 
-    while (CurrentEntry != &Adapter->ProtocolListHead)
+    for (i = 0; i < NumberOfPackets; i++)
     {
-        AdapterBinding = CONTAINING_RECORD(CurrentEntry, ADAPTER_BINDING, AdapterListEntry);
+        UINT FirstBufferLength = 0;
+        UINT TotalBufferLength = 0;
+        UINT LookAheadSize = 0;
+        UINT HeaderSize = 0;
+        PNDIS_BUFFER NdisBuffer = NULL;
+        PVOID NdisBufferVA = NULL;
+        PVOID HeaderBuffer = NULL;
+        PVOID LookAheadBuffer = NULL;
+        PVOID ReceiveCopy = NULL;
+        UINT PacketReferences = 0;
+        BOOLEAN LegacyReceivePrepared = FALSE;
+        BOOLEAN LegacyReceiveValid = FALSE;
 
-        for (i = 0; i < NumberOfPackets; i++)
+        for (BindingIndex = 0; BindingIndex < SnapshotCount; BindingIndex++)
         {
-            if (AdapterBinding->ProtocolBinding->Chars.ReceivePacketHandler &&
+            if (Snapshot[BindingIndex].ReceivePacketHandler != NULL &&
                 NDIS_GET_PACKET_STATUS(PacketArray[i]) != NDIS_STATUS_RESOURCES)
             {
+                INT References;
+
                 NDIS_DbgPrint(MID_TRACE, ("Indicating packet to protocol's ReceivePacket handler\n"));
-                PacketArray[i]->WrapperReserved[0] += (*AdapterBinding->ProtocolBinding->Chars.ReceivePacketHandler)(
-                                                       AdapterBinding->NdisOpenBlock.ProtocolBindingContext,
-                                                       PacketArray[i]);
-                NDIS_DbgPrint(MID_TRACE, ("Protocol is holding %d references to the packet\n", PacketArray[i]->WrapperReserved[0]));
+                References = Snapshot[BindingIndex].ReceivePacketHandler(
+                    Snapshot[BindingIndex].ProtocolBindingContext,
+                    PacketArray[i]);
+                if (References > 0)
+                {
+                    ASSERT((UINT)References <= MAXULONG - PacketReferences);
+                    PacketReferences += (UINT)References;
+                }
+                NDIS_DbgPrint(MID_TRACE, ("Protocol retained %d packet references\n", References));
             }
-            else
+            else if (Snapshot[BindingIndex].ReceiveHandler != NULL)
             {
-                UINT FirstBufferLength, TotalBufferLength, LookAheadSize, HeaderSize;
-                UINT CacheSize, BytesCopied;
-                PNDIS_BUFFER NdisBuffer;
-                PVOID NdisBufferVA, HeaderBuffer, LookAheadBuffer;
-
-                NdisGetFirstBufferFromPacket(PacketArray[i],
-                                             &NdisBuffer,
-                                             &NdisBufferVA,
-                                             &FirstBufferLength,
-                                             &TotalBufferLength);
-
-                HeaderSize = NDIS_GET_PACKET_HEADER_SIZE(PacketArray[i]);
-
-                if (HeaderSize > TotalBufferLength)
+                if (!LegacyReceivePrepared)
                 {
-                    NDIS_DbgPrint(MIN_TRACE, ("Invalid receive header length %u for %u-byte packet\n",
-                                              HeaderSize, TotalBufferLength));
-                    continue;
-                }
+                    UINT BytesCopied;
 
-                LookAheadSize = TotalBufferLength - HeaderSize;
-                CacheSize = HeaderSize > FirstBufferLength ? TotalBufferLength : LookAheadSize;
+                    LegacyReceivePrepared = TRUE;
+                    NdisGetFirstBufferFromPacket(PacketArray[i],
+                                                 &NdisBuffer,
+                                                 &NdisBufferVA,
+                                                 &FirstBufferLength,
+                                                 &TotalBufferLength);
+                    HeaderSize = NDIS_GET_PACKET_HEADER_SIZE(PacketArray[i]);
 
-                if (Adapter->LookaheadCacheSize < CacheSize)
-                {
-                    PVOID NewCache = ExAllocatePool(NonPagedPool, CacheSize);
-                    if (!NewCache)
+                    if (HeaderSize > TotalBufferLength ||
+                        (TotalBufferLength != 0 && NdisBufferVA == NULL))
                     {
-                        NDIS_DbgPrint(MIN_TRACE, ("Failed to allocate lookahead buffer!\n"));
-                        continue;
-                    }
-                    if (Adapter->LookaheadCache != NULL)
-                    {
-                        ExFreePool(Adapter->LookaheadCache);
-                    }
-                    Adapter->LookaheadCache = NewCache;
-                    Adapter->LookaheadCacheSize = CacheSize;
-                }
-
-                HeaderBuffer = NdisBufferVA;
-                if (HeaderSize > FirstBufferLength)
-                {
-                    BytesCopied = CopyBufferChainToBuffer(Adapter->LookaheadCache,
-                                                          NdisBuffer,
-                                                          0,
-                                                          TotalBufferLength);
-                    if (BytesCopied != TotalBufferLength)
-                    {
-                        NDIS_DbgPrint(MIN_TRACE, ("Failed to copy fragmented receive header\n"));
+                        NDIS_DbgPrint(MIN_TRACE, ("Invalid receive header length %u for %u-byte packet\n",
+                                                  HeaderSize, TotalBufferLength));
                         continue;
                     }
 
-                    HeaderBuffer = Adapter->LookaheadCache;
-                    LookAheadBuffer = (PUCHAR)Adapter->LookaheadCache + HeaderSize;
-                }
-                else
-                {
-                    LookAheadBuffer = LookAheadSize != 0 ? Adapter->LookaheadCache : NULL;
-                    BytesCopied = LookAheadSize != 0 ?
-                        CopyBufferChainToBuffer(LookAheadBuffer,
-                                                NdisBuffer,
-                                                HeaderSize,
-                                                LookAheadSize) : 0;
-                    if (BytesCopied != LookAheadSize)
+                    LookAheadSize = TotalBufferLength - HeaderSize;
+                    HeaderBuffer = NdisBufferVA;
+
+                    if (TotalBufferLength <= FirstBufferLength)
                     {
-                        NDIS_DbgPrint(MIN_TRACE, ("Failed to copy receive lookahead\n"));
-                        continue;
+                        LookAheadBuffer = LookAheadSize != 0 ?
+                            (PUCHAR)NdisBufferVA + HeaderSize : NULL;
+                        LegacyReceiveValid = TRUE;
                     }
+                    else if (HeaderSize > FirstBufferLength)
+                    {
+                        ReceiveCopy = ExAllocatePoolWithTag(NonPagedPool,
+                                                            TotalBufferLength,
+                                                            'cRNN');
+                        if (ReceiveCopy != NULL)
+                        {
+                            BytesCopied = CopyBufferChainToBuffer(ReceiveCopy,
+                                                                  NdisBuffer,
+                                                                  0,
+                                                                  TotalBufferLength);
+                            if (BytesCopied == TotalBufferLength)
+                            {
+                                HeaderBuffer = ReceiveCopy;
+                                LookAheadBuffer = LookAheadSize != 0 ?
+                                    (PUCHAR)ReceiveCopy + HeaderSize : NULL;
+                                LegacyReceiveValid = TRUE;
+                            }
+                        }
+                    }
+                    else if (LookAheadSize != 0)
+                    {
+                        ReceiveCopy = ExAllocatePoolWithTag(NonPagedPool,
+                                                            LookAheadSize,
+                                                            'cRNN');
+                        if (ReceiveCopy != NULL)
+                        {
+                            BytesCopied = CopyBufferChainToBuffer(ReceiveCopy,
+                                                                  NdisBuffer,
+                                                                  HeaderSize,
+                                                                  LookAheadSize);
+                            if (BytesCopied == LookAheadSize)
+                            {
+                                LookAheadBuffer = ReceiveCopy;
+                                LegacyReceiveValid = TRUE;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        LegacyReceiveValid = TRUE;
+                    }
+
+                    if (!LegacyReceiveValid)
+                        NDIS_DbgPrint(MIN_TRACE, ("Failed to prepare fragmented receive packet\n"));
                 }
 
-                NDIS_DbgPrint(MID_TRACE, ("Indicating packet to protocol's legacy Receive handler\n"));
-                (*AdapterBinding->ProtocolBinding->Chars.ReceiveHandler)(
-                     AdapterBinding->NdisOpenBlock.ProtocolBindingContext,
-                     AdapterBinding->NdisOpenBlock.MacHandle,
-                     HeaderBuffer,
-                     HeaderSize,
-                     LookAheadBuffer,
-                     LookAheadSize,
-                     TotalBufferLength - HeaderSize);
+                if (LegacyReceiveValid)
+                {
+                    NDIS_DbgPrint(MID_TRACE, ("Indicating packet to protocol's legacy Receive handler\n"));
+                    Snapshot[BindingIndex].ReceiveHandler(
+                        Snapshot[BindingIndex].ProtocolBindingContext,
+                        Snapshot[BindingIndex].MacReceiveContext,
+                        HeaderBuffer,
+                        HeaderSize,
+                        LookAheadBuffer,
+                        LookAheadSize,
+                        TotalBufferLength - HeaderSize);
+                }
             }
         }
 
-        CurrentEntry = CurrentEntry->Flink;
+        if (ReceiveCopy != NULL)
+            ExFreePoolWithTag(ReceiveCopy, 'cRNN');
+
+        KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
+        ASSERT(PacketReferences <= MAXUCHAR - MINI_PACKET_REFERENCE_COUNT(PacketArray[i]));
+        MINI_PACKET_REFERENCE_COUNT(PacketArray[i]) += PacketReferences;
+        MINI_PACKET_INDICATION_ACTIVE(PacketArray[i]) = FALSE;
+        KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
     }
+
+    for (BindingIndex = 0; BindingIndex < SnapshotCount; BindingIndex++)
+        NdisDereferenceAdapterBinding(Snapshot[BindingIndex].Binding);
+
+    if (Snapshot != NULL && Snapshot != InlineSnapshot)
+        ExFreePoolWithTag(Snapshot, 'rBNn');
+
+    KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
 
     /* Loop the packet array to get everything
      * set up for return the packets to the miniport */
@@ -457,7 +626,7 @@ MiniIndicateReceivePacket(
     {
         if (NDIS_GET_PACKET_STATUS(PacketArray[i]) != NDIS_STATUS_RESOURCES)
         {
-            PacketArray[i]->WrapperReserved[0]--;
+            MINI_PACKET_REFERENCE_COUNT(PacketArray[i])--;
         }
 
         /* First, check the initial packet status */
@@ -472,7 +641,7 @@ MiniIndicateReceivePacket(
         if (Adapter->NdisMiniportBlock.Flags & NDIS_ATTRIBUTE_DESERIALIZE)
         {
             /* We need to check the reference count */
-            if (PacketArray[i]->WrapperReserved[0] == 0)
+            if (MINI_PACKET_REFERENCE_COUNT(PacketArray[i]) == 0)
             {
                 if (Adapter->IsNdis6)
                 {
@@ -500,7 +669,7 @@ MiniIndicateReceivePacket(
         else
         {
             /* Check the reference count */
-            if (PacketArray[i]->WrapperReserved[0] == 0)
+            if (MINI_PACKET_REFERENCE_COUNT(PacketArray[i]) == 0)
             {
                 /* NDIS_STATUS_SUCCESS means the miniport can have the packet back immediately */
                 NDIS_SET_PACKET_STATUS(PacketArray[i], NDIS_STATUS_SUCCESS);
