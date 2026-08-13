@@ -160,6 +160,15 @@ config ENABLE_CPUBENCH_BOOT_RUN
     help
       Run the architecture-neutral CPU benchmark after desktop startup.
 
+config ENABLE_RP1GEM_BENCHMARK
+    prompt "Run RP1 GEM single-stream benchmark at boot"
+    type bool
+    default n
+    depends PROFILE_ARM64=rpi5 && FREELDR_HTTP_BOOT
+    help
+      Run one 30-second TCP stream in each direction against the HTTP-boot
+      host before reporting boot-test completion.
+
 config ENABLE_KMTEST_BOOT_RUN
     prompt "Run all unattended KMTests at boot"
     type bool
