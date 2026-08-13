@@ -6,7 +6,7 @@
 
 #include <kmt_test.h>
 
-#define HANDLE_STRESS_MAX_THREADS 32
+#define HANDLE_STRESS_MAX_THREADS 64
 #define HANDLE_STRESS_MAX_BATCH 257
 #define HANDLE_VALUE_MASK 0x7fffffffUL
 #define HANDLE_STRESS_MIN_DRIFT 0x1000UL
@@ -33,6 +33,7 @@ typedef struct _HANDLE_STRESS_CONTEXT
 {
     PKEVENT StartEvent;
     PCHANDLE_STRESS_CONFIG Config;
+    PVOID Object;
     ULONG Index;
     ULONG Created;
     ULONG CreateFailures;
@@ -54,7 +55,7 @@ static const HANDLE_STRESS_CONFIG HandleStressConfigs[] =
     { "boundary", 16, 384, 64, HandleCloseReverse, 0 },
     { "above-boundary", 16, 384, 65, HandleCloseStride, 17 },
     { "wide-prime", 24, 192, 127, HandleCloseForward, 0 },
-    { "deep-prime", 32, 96, 257, HandleCloseStride, 17 },
+    { "deep-prime", 64, 96, 257, HandleCloseStride, 17 },
 };
 
 static
@@ -84,14 +85,12 @@ HandleStressThread(
     _In_ PVOID Parameter)
 {
     PHANDLE_STRESS_CONTEXT Context = Parameter;
-    OBJECT_ATTRIBUTES ObjectAttributes;
     HANDLE Handles[HANDLE_STRESS_MAX_BATCH];
     LARGE_INTEGER PhaseEnd;
     LARGE_INTEGER PhaseStart;
     NTSTATUS Status;
     ULONG Created, HandleValue, i, Round, Slot;
 
-    InitializeObjectAttributes(&ObjectAttributes, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
     Context->WaitStatus = KeWaitForSingleObject(Context->StartEvent, Executive, KernelMode, FALSE, NULL);
     if (!NT_SUCCESS(Context->WaitStatus)) return;
     Context->StartProcessor = KeGetCurrentProcessorNumber();
@@ -104,7 +103,7 @@ HandleStressThread(
         for (i = 0; i < Context->Config->Batch; i++)
         {
             Handles[i] = NULL;
-            Status = ZwCreateEvent(&Handles[i], EVENT_ALL_ACCESS, &ObjectAttributes, NotificationEvent, FALSE);
+            Status = ObOpenObjectByPointer(Context->Object, OBJ_KERNEL_HANDLE, NULL, EVENT_ALL_ACCESS, *ExEventObjectType, KernelMode, &Handles[i]);
             if (!NT_SUCCESS(Status))
             {
                 Context->CreateFailures++;
@@ -145,6 +144,7 @@ static
 VOID
 HandleStressRunConfig(
     _In_ PCHANDLE_STRESS_CONFIG Config,
+    _In_ PVOID Object,
     _Inout_ PULONG TotalCreated)
 {
     HANDLE_STRESS_CONTEXT Contexts[HANDLE_STRESS_MAX_THREADS];
@@ -176,6 +176,7 @@ HandleStressRunConfig(
     {
         Contexts[i].StartEvent = &StartEvent;
         Contexts[i].Config = Config;
+        Contexts[i].Object = Object;
         Contexts[i].Index = i;
         Threads[i] = KmtStartThread(HandleStressThread, &Contexts[i]);
     }
@@ -219,10 +220,29 @@ HandleStressRunConfig(
 
 START_TEST(ExHandleTable)
 {
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    HANDLE EventHandle = NULL;
+    PVOID EventObject = NULL;
+    NTSTATUS Status;
     ULONG TotalCreated = 0;
     ULONG i;
 
-    for (i = 0; i < RTL_NUMBER_OF(HandleStressConfigs); i++) HandleStressRunConfig(&HandleStressConfigs[i], &TotalCreated);
+    InitializeObjectAttributes(&ObjectAttributes, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ZwCreateEvent(&EventHandle, EVENT_ALL_ACCESS, &ObjectAttributes, NotificationEvent, FALSE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        Status = ObReferenceObjectByHandle(EventHandle, EVENT_ALL_ACCESS, *ExEventObjectType, KernelMode, &EventObject, NULL);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+    }
+
+    if (NT_SUCCESS(Status))
+    {
+        for (i = 0; i < RTL_NUMBER_OF(HandleStressConfigs); i++) HandleStressRunConfig(&HandleStressConfigs[i], EventObject, &TotalCreated);
+        ObDereferenceObject(EventObject);
+    }
+
+    if (EventHandle) ZwClose(EventHandle);
     trace("handle churn total: phases=%u created=%lu\n", RTL_NUMBER_OF(HandleStressConfigs), TotalCreated);
-    ok_eq_ulong(TotalCreated, 2693632);
+    ok_eq_ulong(TotalCreated, 3483136);
 }
