@@ -17,6 +17,11 @@
 
 extern HANDLE KmtestHandle;
 
+typedef struct _KMT_USER_CALLBACK_CONTEXT
+{
+    volatile LONG StopRequested;
+} KMT_USER_CALLBACK_CONTEXT, *PKMT_USER_CALLBACK_CONTEXT;
+
 /**
  * @name KmtUserCallbackThread
  *
@@ -29,14 +34,13 @@ WINAPI
 KmtUserCallbackThread(
     PVOID Parameter)
 {
+    PKMT_USER_CALLBACK_CONTEXT Context = Parameter;
     DWORD Error = ERROR_SUCCESS;
     /* TODO: RequestPacket? */
     KMT_CALLBACK_REQUEST_PACKET RequestPacket;
     KMT_RESPONSE Response;
     DWORD BytesReturned;
     HANDLE LocalKmtHandle;
-
-    UNREFERENCED_PARAMETER(Parameter);
 
     /* concurrent IoCtls on the same (non-overlapped) handle aren't possible,
      * so open a separate one.
@@ -45,7 +49,7 @@ KmtUserCallbackThread(
     if (LocalKmtHandle == INVALID_HANDLE_VALUE)
         error_goto(Error, cleanup);
 
-    while (1)
+    while (!InterlockedCompareExchange(&Context->StopRequested, 0, 0))
     {
         if (!DeviceIoControl(LocalKmtHandle, IOCTL_KMTEST_USERMODE_AWAIT_REQ, NULL, 0, &RequestPacket, sizeof(RequestPacket), &BytesReturned, NULL))
             error_goto(Error, cleanup);
@@ -103,17 +107,24 @@ DWORD
 KmtRunKernelTest(
     IN PCSTR TestName)
 {
+    KMT_USER_CALLBACK_CONTEXT CallbackContext = { 0 };
     HANDLE CallbackThread;
     DWORD Error = ERROR_SUCCESS;
     DWORD BytesRead;
 
-    CallbackThread = CreateThread(NULL, 0, KmtUserCallbackThread, NULL, 0, NULL);
+    CallbackThread = CreateThread(NULL, 0, KmtUserCallbackThread, &CallbackContext, 0, NULL);
 
     if (!DeviceIoControl(KmtestHandle, IOCTL_KMTEST_RUN_TEST, (PVOID)TestName, (DWORD)strlen(TestName), NULL, 0, &BytesRead, NULL))
         error(Error);
 
+    InterlockedExchange(&CallbackContext.StopRequested, 1);
     if (CallbackThread != NULL)
-         CloseHandle(CallbackThread);
+    {
+        if (!DeviceIoControl(KmtestHandle, IOCTL_KMTEST_USERMODE_CANCEL_WAIT, NULL, 0, NULL, 0, &BytesRead, NULL)) error(Error);
+        WaitForSingleObject(CallbackThread, INFINITE);
+        if (!DeviceIoControl(KmtestHandle, IOCTL_KMTEST_USERMODE_RESET_WAIT, NULL, 0, NULL, 0, &BytesRead, NULL)) error(Error);
+        CloseHandle(CallbackThread);
+    }
 
     return Error;
 }
