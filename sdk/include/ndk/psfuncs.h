@@ -285,6 +285,13 @@ PsGetProcessSessionId(
 );
 
 NTKERNELAPI
+ULONG
+NTAPI
+PsGetProcessSessionIdEx(
+    _In_ PEPROCESS Process
+);
+
+NTKERNELAPI
 BOOLEAN
 NTAPI
 PsGetProcessExitProcessCalled(

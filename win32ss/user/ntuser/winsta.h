@@ -42,7 +42,15 @@ typedef struct _WINSTATION_OBJECT
     struct _DESKTOP* ActiveDesktop;
     HANDLE         ShellWindow;
     HANDLE         ShellListView;
+#ifdef _WIN64
+    /* Keep the allocation boundary aligned with the native 64-bit object body. */
+    UCHAR NativeLayoutPadding[80];
+#endif
 } WINSTATION_OBJECT, *PWINSTATION_OBJECT;
+
+#ifdef _WIN64
+C_ASSERT(sizeof(WINSTATION_OBJECT) == 248);
+#endif
 
 #ifndef _WIN64
 C_ASSERT(offsetof(WINSTATION_OBJECT, Flags) == 0x10);
@@ -81,6 +89,11 @@ IntWinStaObjectParse(
 NTSTATUS
 NTAPI
 IntWinStaOkToClose(
+    _In_ PVOID Parameters);
+
+NTSTATUS
+NTAPI
+IntWinStaObjectOpen(
     _In_ PVOID Parameters);
 
 NTSTATUS
