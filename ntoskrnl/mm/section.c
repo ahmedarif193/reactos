@@ -2493,6 +2493,24 @@ MmpDeleteSection(PVOID ObjectBody)
     }
 }
 
+NTSTATUS
+NTAPI
+MmpOpenSection(IN OB_OPEN_REASON Reason,
+               IN KPROCESSOR_MODE AccessMode,
+               IN PEPROCESS Process OPTIONAL,
+               IN PVOID Object,
+               IN OUT PACCESS_MASK GrantedAccess,
+               IN ULONG HandleCount)
+{
+    UNREFERENCED_PARAMETER(Reason);
+    UNREFERENCED_PARAMETER(AccessMode);
+    UNREFERENCED_PARAMETER(Process);
+    UNREFERENCED_PARAMETER(Object);
+    UNREFERENCED_PARAMETER(GrantedAccess);
+    UNREFERENCED_PARAMETER(HandleCount);
+    return STATUS_SUCCESS;
+}
+
 VOID NTAPI
 MmpCloseSection(IN PEPROCESS Process OPTIONAL,
                 IN PVOID Object,
@@ -2612,10 +2630,12 @@ MmInitSectionImplementation(VOID)
     RtlZeroMemory(&ObjectTypeInitializer, sizeof(ObjectTypeInitializer));
     RtlInitUnicodeString(&Name, L"Section");
     ObjectTypeInitializer.Length = sizeof(ObjectTypeInitializer);
+    ObjectTypeInitializer.ObjectTypeCode = 0x80;
     ObjectTypeInitializer.DefaultPagedPoolCharge = sizeof(SECTION);
     ObjectTypeInitializer.PoolType = PagedPool;
     ObjectTypeInitializer.UseDefaultObject = TRUE;
     ObjectTypeInitializer.GenericMapping = MmpSectionMapping;
+    ObjectTypeInitializer.OpenProcedure = MmpOpenSection;
     ObjectTypeInitializer.DeleteProcedure = MmpDeleteSection;
     ObjectTypeInitializer.CloseProcedure = MmpCloseSection;
     ObjectTypeInitializer.ValidAccessMask = SECTION_ALL_ACCESS;
