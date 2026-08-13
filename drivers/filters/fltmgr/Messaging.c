@@ -381,9 +381,9 @@ FltpSetupCommunicationObjects(_In_ PDRIVER_OBJECT DriverObject)
 
     GENERIC_MAPPING Mapping =
     {
-        STANDARD_RIGHTS_READ,
-        STANDARD_RIGHTS_WRITE,
-        STANDARD_RIGHTS_EXECUTE | SYNCHRONIZE,
+        STANDARD_RIGHTS_READ | FLT_PORT_CONNECT,
+        DELETE | FLT_PORT_CONNECT,
+        0,
         FLT_PORT_ALL_ACCESS
     };
 
@@ -393,9 +393,11 @@ FltpSetupCommunicationObjects(_In_ PDRIVER_OBJECT DriverObject)
     ObjectTypeInitializer.Length = sizeof(OBJECT_TYPE_INITIALIZER);
     ObjectTypeInitializer.InvalidAttributes = OBJ_OPENLINK;
     ObjectTypeInitializer.GenericMapping = Mapping;
-    ObjectTypeInitializer.PoolType = NonPagedPool;
-    ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(FLT_SERVER_PORT_OBJECT);
-    ObjectTypeInitializer.ValidAccessMask = GENERIC_ALL;
+    ObjectTypeInitializer.PoolType = NonPagedPoolNx;
+    ObjectTypeInitializer.DefaultNonPagedPoolCharge = 0x158;
+    ObjectTypeInitializer.ValidAccessMask = FLT_PORT_ALL_ACCESS;
+    ObjectTypeInitializer.UseDefaultObject = TRUE;
+    ObjectTypeInitializer.SecurityRequired = TRUE;
     ObjectTypeInitializer.CloseProcedure = FltpServerPortClose;
     ObjectTypeInitializer.DeleteProcedure = FltpServerPortDelete;
     Status = ObCreateObjectType(&Name, &ObjectTypeInitializer, NULL, &ServerPortObjectType);
@@ -407,9 +409,10 @@ FltpSetupCommunicationObjects(_In_ PDRIVER_OBJECT DriverObject)
     ObjectTypeInitializer.Length = sizeof(OBJECT_TYPE_INITIALIZER);
     ObjectTypeInitializer.InvalidAttributes = OBJ_OPENLINK;
     ObjectTypeInitializer.GenericMapping = Mapping;
-    ObjectTypeInitializer.PoolType = NonPagedPool;
-    ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(FLT_PORT_OBJECT);
-    ObjectTypeInitializer.ValidAccessMask = GENERIC_ALL;
+    ObjectTypeInitializer.PoolType = NonPagedPoolNx;
+    ObjectTypeInitializer.DefaultNonPagedPoolCharge = 0x158;
+    ObjectTypeInitializer.ValidAccessMask = FLT_PORT_ALL_ACCESS;
+    ObjectTypeInitializer.UseDefaultObject = TRUE;
     ObjectTypeInitializer.CloseProcedure = FltpClientPortClose;
     ObjectTypeInitializer.DeleteProcedure = FltpClientPortDelete;
     Status = ObCreateObjectType(&Name, &ObjectTypeInitializer, NULL, &ClientPortObjectType);
