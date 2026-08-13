@@ -77,6 +77,18 @@ UCHAR *HalpGicLpiPending[MAXIMUM_PROCESSORS] = {0};
 PHYSICAL_ADDRESS HalpGicLpiPendingPa[MAXIMUM_PROCESSORS] = {0};
 PVOID HalpGicLpiPendingRaw[MAXIMUM_PROCESSORS] = {0};
 
+#define HALP_GIC_LPI_CPU_PREPARED    1
+#define HALP_GIC_LPI_CPU_ENABLED     2
+#define HALP_GIC_LPI_CPU_FAILED     -1
+
+#define HALP_GICR_CTLR_ENABLE_LPIS                 (1u << 0)
+#define HALP_GICR_LPI_INNER_CACHEABILITY_WBRAWA   (7ULL << 7)
+#define HALP_GICR_LPI_INNER_SHAREABLE             (1ULL << 10)
+#define HALP_GICR_LPI_OUTER_CACHEABILITY_WBRAWA   (7ULL << 56)
+#define HALP_GICR_LPI_OUTER_CACHEABILITY_MASK     (7ULL << 56)
+
+static volatile LONG HalpGicLpiCpuTableState[MAXIMUM_PROCESSORS] = {0};
+
 // Reverse map LPI -> (DeviceId, EventId) so a dropped LPI can be re-pended via the ITS INT command (Linux its_send_int). Populated at MAPTI, cleared at unmap.
 typedef struct _HALP_GIC_LPI_TARGET { ULONG DeviceId; ULONG EventId; UCHAR Valid; } HALP_GIC_LPI_TARGET;
 static HALP_GIC_LPI_TARGET HalpGicLpiTarget[HAL_ARM64_LPI_COUNT] = {0};
@@ -1411,21 +1423,13 @@ HalpGicItsInitLpiTables(VOID)
     return TRUE;
 }
 
-/*
- * HalpGicItsProgramCpuTables - Program PROPBASE/PENDBASE for a CPU
- */
-BOOLEAN
-HalpGicItsProgramCpuTables(
+static BOOLEAN
+HalpGicItsPrepareCpuTables(
     _In_ ULONG Cpu)
 {
-    ULONG_PTR Base;
     SIZE_T PendingSize;
-    ULONGLONG Prop;
-    ULONGLONG Pend;
-    ULONG Ctlr;
 
-    Base = HalpGicrBase(Cpu);
-    if (Base == 0 || HalpGicItsLpiIdBits == 0)
+    if ((Cpu >= MAXIMUM_PROCESSORS) || (HalpGicItsLpiIdBits == 0) || (HalpGicLpiConfig == NULL))
         return FALSE;
 
     /* PENDBASE size: 1 bit per LPI, 64KB aligned */
@@ -1434,45 +1438,158 @@ HalpGicItsProgramCpuTables(
 
     if (!HalpGicLpiPending[Cpu])
     {
-        HalpGicLpiPending[Cpu] = HalpGicItsAllocAligned(PendingSize, 0x10000,
-                                                        &HalpGicLpiPendingPa[Cpu],
-                                                        &HalpGicLpiPendingRaw[Cpu]);
+        HalpGicLpiPending[Cpu] = HalpGicItsAllocAligned(PendingSize, 0x10000, &HalpGicLpiPendingPa[Cpu], &HalpGicLpiPendingRaw[Cpu]);
         if (!HalpGicLpiPending[Cpu])
         {
             DPRINT1("[arm64][ITS] Failed to allocate pending table for CPU %lu\n", Cpu);
             return FALSE;
         }
+
+        RtlZeroMemory(HalpGicLpiPending[Cpu], PendingSize);
+        HalpArm64CleanInvalidateDcacheRange(HalpGicLpiPending[Cpu], PendingSize);
     }
 
-    RtlZeroMemory(HalpGicLpiPending[Cpu], PendingSize);
-    HalpArm64CleanInvalidateDcacheRange(HalpGicLpiPending[Cpu], PendingSize);
-    HalpArm64CleanDcacheRange(HalpGicLpiConfig, HalpGicLpiConfigSize);
+    InterlockedExchange(&HalpGicLpiCpuTableState[Cpu], HALP_GIC_LPI_CPU_PREPARED);
+    return TRUE;
+}
 
-    /* Program GICR_PROPBASER */
+static BOOLEAN
+HalpGicItsValidateCpuTables(
+    _In_ ULONG Cpu,
+    _In_ ULONG_PTR Base,
+    _In_ ULONGLONG ExpectedProp,
+    _In_ ULONGLONG ExpectedPend)
+{
+    ULONGLONG Prop;
+    ULONGLONG Pend;
+    ULONGLONG Outer;
+    ULONG Ctlr;
+
+    Ctlr = *HalpMmio(Base, GICR_CTLR);
+    if (!(Ctlr & HALP_GICR_CTLR_ENABLE_LPIS))
+        return FALSE;
+
+    __asm__ __volatile__("dsb sy" ::: "memory");
+    Pend = HalpMmioRead64(Base, GICR_PENDBASER);
+    if ((Pend & GICR_PENDBASER_ADDR_MASK) != (ExpectedPend & GICR_PENDBASER_ADDR_MASK))
+        return FALSE;
+    if ((Pend & HALP_GICR_LPI_INNER_CACHEABILITY_WBRAWA) != HALP_GICR_LPI_INNER_CACHEABILITY_WBRAWA)
+        return FALSE;
+    Outer = Pend & HALP_GICR_LPI_OUTER_CACHEABILITY_MASK;
+    if ((Outer != 0) && (Outer != HALP_GICR_LPI_OUTER_CACHEABILITY_WBRAWA))
+        return FALSE;
+
+    __asm__ __volatile__("dsb sy" ::: "memory");
+    Prop = HalpMmioRead64(Base, GICR_PROPBASER);
+    if ((Prop & GICR_PROPBASER_ADDR_MASK) != (ExpectedProp & GICR_PROPBASER_ADDR_MASK))
+        return FALSE;
+    if ((Prop & HALP_GICR_LPI_INNER_CACHEABILITY_WBRAWA) != HALP_GICR_LPI_INNER_CACHEABILITY_WBRAWA)
+        return FALSE;
+    Outer = Prop & HALP_GICR_LPI_OUTER_CACHEABILITY_MASK;
+    if ((Outer != 0) && (Outer != HALP_GICR_LPI_OUTER_CACHEABILITY_WBRAWA))
+        return FALSE;
+
+    InterlockedExchange(&HalpGicLpiCpuTableState[Cpu], HALP_GIC_LPI_CPU_ENABLED);
+    return TRUE;
+}
+
+static BOOLEAN
+HalpGicItsProgramCpuTablesLocal(
+    _In_ ULONG Cpu)
+{
+    ULONG CurrentCpu;
+    ULONG_PTR Base;
+    ULONGLONG Typer;
+    ULONGLONG Prop;
+    ULONGLONG Pend;
+    ULONG Ctlr;
+
+    CurrentCpu = KeGetCurrentProcessorNumber();
+    if ((Cpu >= MAXIMUM_PROCESSORS) || (Cpu != CurrentCpu) || (HalpGicLpiCpuTableState[Cpu] < HALP_GIC_LPI_CPU_PREPARED))
+        return FALSE;
+
+    Base = HalpGicrBase(Cpu);
+    if ((Base == 0) || (HalpGicLpiConfig == NULL) || (HalpGicLpiPending[Cpu] == NULL))
+        return FALSE;
+
+    Typer = HalpMmioRead64(Base, GICR_TYPER);
+    if (!(Typer & HALP_GICR_TYPER_PLPIS))
+        return FALSE;
+
     Prop = (HalpGicLpiConfigPa.QuadPart & GICR_PROPBASER_ADDR_MASK);
     Prop |= ((ULONGLONG)HalpGicItsLpiIdBits & GICR_PROPBASER_IDBITS_MASK);
-    /* Add inner-shareable, write-back attributes */
-    Prop |= (1ULL << 10);  /* InnerShareable */
-    Prop |= (7ULL << 7);   /* Write-Back, Read-Allocate, Write-Allocate */
-    HalpMmioWrite64(Base, GICR_PROPBASER, Prop);
+    Prop |= HALP_GICR_LPI_INNER_SHAREABLE;
+    Prop |= HALP_GICR_LPI_INNER_CACHEABILITY_WBRAWA;
+    Prop |= HALP_GICR_LPI_OUTER_CACHEABILITY_WBRAWA;
 
-    /* Program GICR_PENDBASER */
     Pend = (HalpGicLpiPendingPa[Cpu].QuadPart & GICR_PENDBASER_ADDR_MASK);
-    /* Add inner-shareable, write-back attributes */
-    Pend |= (1ULL << 10);  /* InnerShareable */
-    Pend |= (7ULL << 7);   /* Write-Back, Read-Allocate, Write-Allocate */
-    HalpMmioWrite64(Base, GICR_PENDBASER, Pend);
+    Pend |= HALP_GICR_LPI_INNER_SHAREABLE;
+    Pend |= HALP_GICR_LPI_INNER_CACHEABILITY_WBRAWA;
+    Pend |= HALP_GICR_LPI_OUTER_CACHEABILITY_WBRAWA;
 
-    /* Enable LPIs in GICR_CTLR */
     Ctlr = *HalpMmio(Base, GICR_CTLR);
-    Ctlr |= 1u;  /* EnableLPIs */
-    *HalpMmio(Base, GICR_CTLR) = Ctlr;
-    __asm__ __volatile__("dsb sy" ::: "memory");
+    if (!(Ctlr & HALP_GICR_CTLR_ENABLE_LPIS))
+    {
+        __asm__ __volatile__("dsb sy" ::: "memory");
+        HalpMmioWrite64(Base, GICR_PROPBASER, Prop);
+        __asm__ __volatile__("dsb sy" ::: "memory");
+        HalpMmioWrite64(Base, GICR_PENDBASER, Pend);
+        __asm__ __volatile__("dsb sy" ::: "memory");
+        *HalpMmio(Base, GICR_CTLR) = Ctlr | HALP_GICR_CTLR_ENABLE_LPIS;
+        __asm__ __volatile__("dsb sy" ::: "memory");
+    }
 
-    DPRINT("[arm64][ITS] Programmed LPI tables for CPU %lu: PROP=0x%llx PEND=0x%llx\n",
-           Cpu, Prop, Pend);
+    return HalpGicItsValidateCpuTables(Cpu, Base, Prop, Pend);
+}
+
+static ULONG_PTR NTAPI
+HalpGicItsProgramCpuTablesIpi(
+    _In_ ULONG_PTR Argument)
+{
+    ULONG Cpu;
+
+    UNREFERENCED_PARAMETER(Argument);
+    Cpu = KeGetCurrentProcessorNumber();
+    if (!HalpGicItsProgramCpuTablesLocal(Cpu))
+    {
+        InterlockedExchange(&HalpGicLpiCpuTableState[Cpu], HALP_GIC_LPI_CPU_FAILED);
+        return FALSE;
+    }
 
     return TRUE;
+}
+
+/*
+ * HalpGicItsProgramCpuTables - Program the current CPU's PROPBASE/PENDBASE
+ */
+BOOLEAN
+HalpGicItsProgramCpuTables(
+    _In_ ULONG Cpu)
+{
+    if (!HalpGicItsProgramCpuTablesLocal(Cpu))
+        return FALSE;
+
+    DPRINT("[arm64][ITS] Programmed local LPI tables for CPU %lu\n", Cpu);
+    return TRUE;
+}
+
+static NTSTATUS
+HalpGicItsValidateTargetCpu(
+    _In_ ULONG Cpu)
+{
+    KAFFINITY ActiveProcessors;
+
+    if ((Cpu >= MAXIMUM_PROCESSORS) || (Cpu >= (sizeof(KAFFINITY) * 8)))
+        return STATUS_INVALID_PARAMETER;
+
+    ActiveProcessors = KeQueryActiveProcessors();
+    if (!(ActiveProcessors & ((KAFFINITY)1 << Cpu)))
+        return STATUS_INVALID_PARAMETER;
+
+    if (InterlockedCompareExchange(&HalpGicLpiCpuTableState[Cpu], 0, 0) != HALP_GIC_LPI_CPU_ENABLED)
+        return STATUS_DEVICE_NOT_READY;
+
+    return STATUS_SUCCESS;
 }
 
 /*
@@ -1631,6 +1748,14 @@ HalpGicItsInitAllNodes(VOID)
     ULONG Index;
     ULONG InitCount = 0;
     ULONG Cpu;
+    ULONG ReadyCount = 0;
+    KAFFINITY ActiveProcessors;
+
+    if (KeGetCurrentIrql() > DISPATCH_LEVEL)
+    {
+        DPRINT1("[arm64][ITS] Cannot initialize at IRQL %u\n", KeGetCurrentIrql());
+        return FALSE;
+    }
 
     if (HalpGicItsNodeCount == 0)
     {
@@ -1668,50 +1793,56 @@ HalpGicItsInitAllNodes(VOID)
         return FALSE;
     }
 
+    ActiveProcessors = KeQueryActiveProcessors();
+    if (ActiveProcessors == 0)
+    {
+        DPRINT1("[arm64][ITS] No active processors available for LPI initialization\n");
+        return FALSE;
+    }
+
     for (Cpu = 0; Cpu < MAXIMUM_PROCESSORS; Cpu++)
     {
+        if ((Cpu >= (sizeof(KAFFINITY) * 8)) || !(ActiveProcessors & ((KAFFINITY)1 << Cpu)))
+            continue;
+
         if (!HalpGicCpuMpidrValid[Cpu] || (HalpGicrBase(Cpu) == 0))
-            continue;
-
-        /*
-         * Only enable LPIs on the redistributor of the CPU we are running on.
-         *
-         * GICR_CTLR.EnableLPIs (and the GICR_PROPBASER/PENDBASER programming in
-         * HalpGicItsProgramCpuTables) MUST be performed by the CPU that owns the
-         * redistributor. This loop runs entirely on the MSI-allocating CPU, so
-         * programming another CPU's redistributor here is a cross-CPU write that,
-         * on QEMU's GICv3, stops the *target* CPU's PPI 27 (EL1 virtual timer):
-         * the AP's timer ISR stops firing, so it can never wake from WFI and the
-         * boot wedges (the boot thread then blocks forever on whatever it next
-         * waits on - drive letters, a driver's I/O, etc.). Observed via per-CPU
-         * heartbeats: the self-programmed boot CPU keeps ticking while every AP
-         * whose redistributor is enabled cross-CPU has its timer die ~1s later.
-         * The HAL's own Phase-1 comment already notes "enabling LPIs ... causes
-         * PPI 27 to stop firing on QEMU".
-         *
-         * Linux does the same thing per-CPU from its_cpu_init_lpis() running on
-         * each CPU. Boot-time MSIs are routed to the boot CPU, so enabling LPIs
-         * on the current CPU is sufficient for MSI/ITS delivery. (Enabling other
-         * CPUs' LPIs for MSI affinity must be done from those CPUs - e.g. via a
-         * per-CPU IPI - never by a cross-CPU redistributor write.)
-         */
-        if (Cpu != KeGetCurrentProcessorNumber())
-            continue;
-
-        if (!HalpGicItsProgramCpuTables(Cpu))
         {
-            DPRINT1("[arm64][ITS] Failed to program CPU tables for CPU %lu\n", Cpu);
-            continue;
+            DPRINT1("[arm64][ITS] Active CPU %lu has no redistributor\n", Cpu);
+            return FALSE;
         }
 
-        HalpGicItsEnsureCollection(Cpu);
+        if (!HalpGicItsPrepareCpuTables(Cpu))
+            return FALSE;
+    }
+
+    HalpArm64CleanDcacheRange(HalpGicLpiConfig, HalpGicLpiConfigSize);
+    KeMemoryBarrier();
+    KeIpiGenericCall(HalpGicItsProgramCpuTablesIpi, 0);
+
+    for (Cpu = 0; Cpu < MAXIMUM_PROCESSORS; Cpu++)
+    {
+        if ((Cpu >= (sizeof(KAFFINITY) * 8)) || !(ActiveProcessors & ((KAFFINITY)1 << Cpu)))
+            continue;
+
+        if (HalpGicLpiCpuTableState[Cpu] != HALP_GIC_LPI_CPU_ENABLED)
+        {
+            DPRINT1("[arm64][ITS] CPU %lu failed local LPI table initialization\n", Cpu);
+            return FALSE;
+        }
+
+        if (!HalpGicItsEnsureCollection(Cpu))
+        {
+            DPRINT1("[arm64][ITS] Failed to map ITS collection for CPU %lu\n", Cpu);
+            return FALSE;
+        }
+
+        ReadyCount++;
     }
 
     HalpGicItsInitialized = TRUE;
     HalpGicItsEnabled = TRUE;
-    InterlockedExchange(&HalpGicItsInitState, 2);
 
-    DPRINT1("[arm64][ITS] Initialized %lu of %lu ITS nodes\n", InitCount, HalpGicItsNodeCount);
+    DPRINT1("[arm64][ITS] Initialized %lu ITS nodes and %lu local LPI redistributors\n", InitCount, ReadyCount);
     return TRUE;
 }
 
@@ -1721,20 +1852,20 @@ HalpGicItsInitAllNodes(VOID)
 BOOLEAN
 HalpGicItsInitialize(VOID)
 {
+    LONG State;
+
     DPRINT1("[arm64][ITS] HalpGicItsInitialize: entry, InitFailed=%d Initialized=%d Present=%d NodeCount=%lu\n",
             (int)HalpGicItsInitFailed, (int)HalpGicItsInitialized,
             (int)HalpGicItsPresent, HalpGicItsNodeCount);
 
-    if (HalpGicItsInitFailed)
+    State = InterlockedCompareExchange(&HalpGicItsInitState, 0, 0);
+    if (State == 2)
+        return TRUE;
+
+    if ((State < 0) || HalpGicItsInitFailed)
     {
         DPRINT1("[arm64][ITS] HalpGicItsInitialize: returning FALSE (InitFailed)\n");
         return FALSE;
-    }
-
-    if (HalpGicItsInitialized)
-    {
-        DPRINT1("[arm64][ITS] HalpGicItsInitialize: returning TRUE (already initialized)\n");
-        return TRUE;
     }
 
     if (!HalpGicItsPresent || HalpGicItsNodeCount == 0)
@@ -1744,12 +1875,35 @@ HalpGicItsInitialize(VOID)
         return FALSE;
     }
 
-    if (!HalpGicItsInitAllNodes())
+    if (KeGetCurrentIrql() > DISPATCH_LEVEL)
     {
-        HalpGicItsInitFailed = TRUE;
+        DPRINT1("[arm64][ITS] Deferring initialization requested at IRQL %u\n", KeGetCurrentIrql());
         return FALSE;
     }
 
+    State = InterlockedCompareExchange(&HalpGicItsInitState, 1, 0);
+    if (State == 2)
+        return TRUE;
+
+    if (State == 1)
+    {
+        while ((State = InterlockedCompareExchange(&HalpGicItsInitState, 0, 0)) == 1)
+            KeStallExecutionProcessor(1);
+
+        return (State == 2);
+    }
+
+    if (State != 0)
+        return FALSE;
+
+    if (!HalpGicItsInitAllNodes())
+    {
+        HalpGicItsInitFailed = TRUE;
+        InterlockedExchange(&HalpGicItsInitState, -1);
+        return FALSE;
+    }
+
+    InterlockedExchange(&HalpGicItsInitState, 2);
     return TRUE;
 }
 
@@ -1781,12 +1935,17 @@ HalpGicItsAllocateMsi(
     PHALP_GIC_ITS_NODE ItsNode;
     PHALP_ARM64_ITS_DEVICE Device;
     ULONG AllocatedLpi;
+    NTSTATUS Status;
 
     if (!HalpGicItsInitialized)
     {
         if (!HalpGicItsInitialize())
             return STATUS_DEVICE_NOT_READY;
     }
+
+    Status = HalpGicItsValidateTargetCpu(TargetCpu);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
     /* Select ITS node for this device */
     ItsNode = HalpGicItsSelectNodeForDevice(DeviceId);
@@ -1991,12 +2150,14 @@ HalpGicItsSetMsiAffinity(
     _In_ ULONG TargetCpu)
 {
     ULONG NodeIndex;
+    NTSTATUS Status;
 
     if (!HalpGicItsInitialized)
         return STATUS_DEVICE_NOT_READY;
 
-    if (TargetCpu >= MAXIMUM_PROCESSORS)
-        return STATUS_INVALID_PARAMETER;
+    Status = HalpGicItsValidateTargetCpu(TargetCpu);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
     /*
      * Locate the ITS node + device + event that owns this LPI (collections are
