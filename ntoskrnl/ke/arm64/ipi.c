@@ -19,6 +19,26 @@ static struct
     volatile LONG Release;       /* initiator sets 1 to let parked targets run   */
     volatile LONG Busy;
 } KiArm64IpiPacket;
+
+static __inline __attribute__((always_inline))
+VOID
+KiArm64IpiSpinWait(
+    _Inout_ PULONG SpinCount)
+{
+    if (++(*SpinCount) <= 256)
+        YieldProcessor();
+    else
+        __asm__ __volatile__("wfe" ::: "memory");
+
+    KeMemoryBarrier();
+}
+
+static __inline __attribute__((always_inline))
+VOID
+KiArm64IpiWakeWaiters(VOID)
+{
+    __asm__ __volatile__("dmb ishst; sev" ::: "memory");
+}
 #endif
 
 VOID
@@ -188,6 +208,7 @@ KiIpiServiceRoutine(
         {
             PKIPI_BROADCAST_WORKER Function = KiArm64IpiPacket.Function;
             ULONG_PTR Argument = KiArm64IpiPacket.Argument;
+            ULONG SpinCount = 0;
 
             SmpDbgGenericCallIpi(Prcb->Number);
             if (Function != NULL)
@@ -200,12 +221,10 @@ KiIpiServiceRoutine(
                  * runs, which is the contract callers rely on.
                  */
                 InterlockedIncrement(&KiArm64IpiPacket.Arrived);
+                KiArm64IpiWakeWaiters();
 
                 while (KiArm64IpiPacket.Release == 0)
-                {
-                    YieldProcessor();
-                    KeMemoryBarrier();
-                }
+                    KiArm64IpiSpinWait(&SpinCount);
 
                 /* Hardware IPI entry masks IRQs; generic-call workers execute
                  * at IPI_LEVEL with IRQ delivery enabled. The software-service
@@ -216,6 +235,7 @@ KiIpiServiceRoutine(
                 if (TrapFrame != NULL)
                     _disable();
                 InterlockedDecrement(&KiArm64IpiPacket.TargetCount);
+                KiArm64IpiWakeWaiters();
             }
         }
     }
@@ -257,6 +277,7 @@ KeIpiGenericCall(
     LONG TargetCount;
     ULONG64 Daif;
     BOOLEAN InterruptsEnabled;
+    ULONG SpinCount;
 
     if (Function == NULL)
     {
@@ -276,15 +297,13 @@ KeIpiGenericCall(
      */
     OldIrql = KfRaiseIrql(SYNCH_LEVEL);
 
+    SpinCount = 0;
     while (InterlockedCompareExchange(&KiArm64IpiPacket.Busy, 1, 0) != 0)
     {
         if (!InterruptsEnabled)
-        {
             KiArm64ServicePendingIpi();
-        }
 
-        YieldProcessor();
-        KeMemoryBarrier();
+        KiArm64IpiSpinWait(&SpinCount);
     }
 
     Targets = KeActiveProcessors & ~KeGetCurrentPrcb()->SetMember;
@@ -312,14 +331,13 @@ KeIpiGenericCall(
      * targets are spinning there, so the machine is fully quiesced.
      */
     {
-        ULONG_PTR SpinCount = 0;
+        SpinCount = 0;
 
         while (KiArm64IpiPacket.Arrived != TargetCount)
         {
-            YieldProcessor();
-            KeMemoryBarrier();
+            KiArm64IpiSpinWait(&SpinCount);
 
-            if (SmpDbgEnabled && ((++SpinCount & 0x3FFFFFF) == 0))
+            if (SmpDbgEnabled && ((SpinCount & 0x3FFFFFF) == 0))
             {
                 DbgPrint("SMP4DBG KeIpiGenericCall quiesce stuck: cpu=%lu arrived=%ld/%ld targets=0x%Ix\n",
                          KeGetCurrentProcessorNumber(),
@@ -339,16 +357,16 @@ KeIpiGenericCall(
      */
     ExecuteIrql = KfRaiseIrql(IPI_LEVEL);
     InterlockedExchange(&KiArm64IpiPacket.Release, 1);
+    KiArm64IpiWakeWaiters();
 
     Result = Function(Argument);
 
     {
-        ULONG_PTR SpinCount = 0;
+        SpinCount = 0;
 
         while (KiArm64IpiPacket.TargetCount != 0)
         {
-            YieldProcessor();
-            KeMemoryBarrier();
+            KiArm64IpiSpinWait(&SpinCount);
 
             /*
              * Watchdog: a target wedged at/above IPI_LEVEL (or not servicing
@@ -357,7 +375,7 @@ KeIpiGenericCall(
              * function, so we keep waiting - but surface the stuck state under
              * /SMPDIAG instead of spinning silently.
              */
-            if (SmpDbgEnabled && ((++SpinCount & 0x3FFFFFF) == 0))
+            if (SmpDbgEnabled && ((SpinCount & 0x3FFFFFF) == 0))
             {
                 DbgPrint("SMP4DBG KeIpiGenericCall stuck: cpu=%lu remaining=%ld targets=0x%Ix\n",
                          KeGetCurrentProcessorNumber(),
@@ -370,6 +388,7 @@ KeIpiGenericCall(
     KiArm64IpiPacket.Function = NULL;
     KfLowerIrql(ExecuteIrql);
     InterlockedExchange(&KiArm64IpiPacket.Busy, 0);
+    KiArm64IpiWakeWaiters();
     KfLowerIrql(OldIrql);
     return Result;
 #else
