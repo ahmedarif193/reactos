@@ -288,9 +288,8 @@ VOID
 NTAPI
 FltpServerPortClose(_In_opt_ PEPROCESS Process,
                     _In_ PVOID Object,
-                    _In_ ACCESS_MASK GrantedAccess,
-                    _In_ ULONG ProcessHandleCount,
-                    _In_ ULONG SystemHandleCount)
+                    _In_ ULONG_PTR ProcessHandleCount,
+                    _In_ ULONG_PTR SystemHandleCount)
 {
     PFLT_SERVER_PORT_OBJECT PortObject;
     PFAST_MUTEX Lock;
@@ -326,9 +325,8 @@ VOID
 NTAPI
 FltpClientPortClose(_In_opt_ PEPROCESS Process,
                     _In_ PVOID Object,
-                    _In_ ACCESS_MASK GrantedAccess,
-                    _In_ ULONG ProcessHandleCount,
-                    _In_ ULONG SystemHandleCount)
+                    _In_ ULONG_PTR ProcessHandleCount,
+                    _In_ ULONG_PTR SystemHandleCount)
 {
     PFLT_PORT_OBJECT PortObject = (PFLT_PORT_OBJECT)Object;
 

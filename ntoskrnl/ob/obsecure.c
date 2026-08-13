@@ -220,7 +220,7 @@ ObCheckCreateObjectAccess(IN PVOID Object,
 
     /* Get the header and type */
     ObjectHeader = OBJECT_TO_OBJECT_HEADER(Object);
-    ObjectType = ObjectHeader->Type;
+    ObjectType = ObpGetObjectTypeFromHeader(ObjectHeader);
 
     /* Get the security descriptor */
     Status = ObGetObjectSecurity(Object, &SecurityDescriptor, &SdAllocated);
@@ -283,7 +283,7 @@ ObpCheckTraverseAccess(IN PVOID Object,
 
     /* Get the header and type */
     ObjectHeader = OBJECT_TO_OBJECT_HEADER(Object);
-    ObjectType = ObjectHeader->Type;
+    ObjectType = ObpGetObjectTypeFromHeader(ObjectHeader);
 
     /* Get the security descriptor */
     Status = ObGetObjectSecurity(Object, &SecurityDescriptor, &SdAllocated);
@@ -355,7 +355,7 @@ ObpCheckObjectReference(IN PVOID Object,
 
     /* Get the header and type */
     ObjectHeader = OBJECT_TO_OBJECT_HEADER(Object);
-    ObjectType = ObjectHeader->Type;
+    ObjectType = ObpGetObjectTypeFromHeader(ObjectHeader);
 
     /* Get the security descriptor */
     Status = ObGetObjectSecurity(Object, &SecurityDescriptor, &SdAllocated);
@@ -456,7 +456,7 @@ ObCheckObjectAccess(IN PVOID Object,
 
     /* Get the object header and type */
     ObjectHeader = OBJECT_TO_OBJECT_HEADER(Object);
-    ObjectType = ObjectHeader->Type;
+    ObjectType = ObpGetObjectTypeFromHeader(ObjectHeader);
 
     /* Get security information */
     Status = ObGetObjectSecurity(Object, &SecurityDescriptor, &SdAllocated);
@@ -569,14 +569,7 @@ ObAssignSecurity(IN PACCESS_STATE AccessState,
 
     /* Call the security method */
     ObpCalloutStart(&CalloutIrql);
-    Status = Type->TypeInfo.SecurityProcedure(Object,
-                                              AssignSecurityDescriptor,
-                                              NULL,
-                                              NewDescriptor,
-                                              NULL,
-                                              NULL,
-                                              PagedPool,
-                                              &Type->TypeInfo.GenericMapping);
+    Status = Type->TypeInfo.SecurityProcedure(Object, AssignSecurityDescriptor, NULL, NewDescriptor, NULL, NULL, PagedPool, &Type->TypeInfo.GenericMapping, KernelMode);
     ObpCalloutEnd(CalloutIrql, "Security", Type, Object);
 
     /* Check for failure and deassign security if so */
@@ -622,7 +615,7 @@ ObGetObjectSecurity(IN PVOID Object,
 
     /* Get the object header and type */
     Header = OBJECT_TO_OBJECT_HEADER(Object);
-    Type = Header->Type;
+    Type = ObpGetObjectTypeFromHeader(Header);
 
     /* Tell the caller that we didn't have to allocate anything yet */
     *MemoryAllocated = FALSE;
@@ -643,14 +636,7 @@ ObGetObjectSecurity(IN PVOID Object,
 
     /* Get the security descriptor size */
     ObpCalloutStart(&CalloutIrql);
-    Status = Type->TypeInfo.SecurityProcedure(Object,
-                                              QuerySecurityDescriptor,
-                                              &SecurityInformation,
-                                              *SecurityDescriptor,
-                                              &Length,
-                                              &Header->SecurityDescriptor,
-                                              Type->TypeInfo.PoolType,
-                                              &Type->TypeInfo.GenericMapping);
+    Status = Type->TypeInfo.SecurityProcedure(Object, QuerySecurityDescriptor, &SecurityInformation, *SecurityDescriptor, &Length, &Header->SecurityDescriptor, Type->TypeInfo.PoolType, &Type->TypeInfo.GenericMapping, KernelMode);
     ObpCalloutEnd(CalloutIrql, "Security", Type, Object);
 
     /* Check for failure */
@@ -665,14 +651,7 @@ ObGetObjectSecurity(IN PVOID Object,
 
     /* Query security descriptor */
     ObpCalloutStart(&CalloutIrql);
-    Status = Type->TypeInfo.SecurityProcedure(Object,
-                                              QuerySecurityDescriptor,
-                                              &SecurityInformation,
-                                              *SecurityDescriptor,
-                                              &Length,
-                                              &Header->SecurityDescriptor,
-                                              Type->TypeInfo.PoolType,
-                                              &Type->TypeInfo.GenericMapping);
+    Status = Type->TypeInfo.SecurityProcedure(Object, QuerySecurityDescriptor, &SecurityInformation, *SecurityDescriptor, &Length, &Header->SecurityDescriptor, Type->TypeInfo.PoolType, &Type->TypeInfo.GenericMapping, KernelMode);
     ObpCalloutEnd(CalloutIrql, "Security", Type, Object);
 
     /* Check for failure */
@@ -756,20 +735,13 @@ ObSetSecurityObjectByPointer(IN PVOID Object,
 
     /* Get the header and type */
     Header = OBJECT_TO_OBJECT_HEADER(Object);
-    Type = Header->Type;
+    Type = ObpGetObjectTypeFromHeader(Header);
 
     /* Sanity check */
     ASSERT(SecurityDescriptor);
 
     /* Call the security procedure */
-    return Type->TypeInfo.SecurityProcedure(Object,
-                                            SetSecurityDescriptor,
-                                            &SecurityInformation,
-                                            SecurityDescriptor,
-                                            NULL,
-                                            &Header->SecurityDescriptor,
-                                            Type->TypeInfo.PoolType,
-                                            &Type->TypeInfo.GenericMapping);
+    return Type->TypeInfo.SecurityProcedure(Object, SetSecurityDescriptor, &SecurityInformation, SecurityDescriptor, NULL, &Header->SecurityDescriptor, Type->TypeInfo.PoolType, &Type->TypeInfo.GenericMapping, KernelMode);
 }
 
 /*++
@@ -851,17 +823,10 @@ NtQuerySecurityObject(IN HANDLE Handle,
 
     /* Get the Object Header and Type */
     Header = OBJECT_TO_OBJECT_HEADER(Object);
-    Type = Header->Type;
+    Type = ObpGetObjectTypeFromHeader(Header);
 
     /* Call the security procedure's query function */
-    Status = Type->TypeInfo.SecurityProcedure(Object,
-                                              QuerySecurityDescriptor,
-                                              &SecurityInformation,
-                                              SecurityDescriptor,
-                                              &Length,
-                                              &Header->SecurityDescriptor,
-                                              Type->TypeInfo.PoolType,
-                                              &Type->TypeInfo.GenericMapping);
+    Status = Type->TypeInfo.SecurityProcedure(Object, QuerySecurityDescriptor, &SecurityInformation, SecurityDescriptor, &Length, &Header->SecurityDescriptor, Type->TypeInfo.PoolType, &Type->TypeInfo.GenericMapping, PreviousMode);
 
     /* Dereference the object */
     ObDereferenceObject(Object);

@@ -1226,15 +1226,13 @@ NtUserGetObjectInformation(
         {
             if (WinStaObject != NULL)
             {
-                ObjectHeader = OBJECT_TO_OBJECT_HEADER(WinStaObject);
-                pStrNameU = &ObjectHeader->Type->Name;
+                pStrNameU = &ObGetObjectType(WinStaObject)->Name;
                 nDataSize = pStrNameU->Length + sizeof(UNICODE_NULL);
                 Status = STATUS_SUCCESS;
             }
             else if (DesktopObject != NULL)
             {
-                ObjectHeader = OBJECT_TO_OBJECT_HEADER(DesktopObject);
-                pStrNameU = &ObjectHeader->Type->Name;
+                pStrNameU = &ObGetObjectType(DesktopObject)->Name;
                 nDataSize = pStrNameU->Length + sizeof(UNICODE_NULL);
                 Status = STATUS_SUCCESS;
             }
