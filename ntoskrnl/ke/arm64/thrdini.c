@@ -341,13 +341,13 @@ KiIdleLoop(VOID)
          * exception (ESR EC=0) -> bugcheck 0x1E. We probe via silent counters and
          * read GIC state externally (QEMU monitor) instead. */
 
-        /* WFI wakes on a pending interrupt even with DAIF.I masked; unmasking afterwards takes it immediately */
+        /* Enter the processor power manager's selected idle state. */
         SmpDbgPark(Prcb->Number);
         {
             ULONG64 IdleStart, IdleEnd;
 
             __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(IdleStart));
-            __asm__ __volatile__("wfi" ::: "memory");
+            Prcb->PowerState.IdleFunction(&Prcb->PowerState);
             __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(IdleEnd));
             KiArm64IdleCounterTicks[Prcb->Number] += IdleEnd - IdleStart;
         }
