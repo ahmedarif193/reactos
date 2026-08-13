@@ -24,7 +24,8 @@
     (JOB_OBJECT_LIMIT_ACTIVE_PROCESS | JOB_OBJECT_LIMIT_AFFINITY | \
      JOB_OBJECT_LIMIT_SCHEDULING_CLASS)
 #define JOB_OBJECT_EXTENDED_LIMIT_SUPPORTED_FLAGS \
-    (JOB_OBJECT_BASIC_LIMIT_SUPPORTED_FLAGS | JOB_OBJECT_LIMIT_SUBSET_AFFINITY)
+    (JOB_OBJECT_BASIC_LIMIT_SUPPORTED_FLAGS | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | \
+     JOB_OBJECT_LIMIT_SUBSET_AFFINITY)
 
 /* GLOBALS *******************************************************************/
 
@@ -178,8 +179,47 @@ PspTerminateJobObject(PEJOB Job,
     KPROCESSOR_MODE AccessMode,
     NTSTATUS ExitStatus )
 {
-    DPRINT("PspTerminateJobObject() is unimplemented!\n");
-    return STATUS_NOT_IMPLEMENTED;
+    PEPROCESS Process = NULL;
+    NTSTATUS Status = STATUS_SUCCESS;
+    NTSTATUS TerminateStatus;
+
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(AccessMode);
+
+    while ((Process = PsGetNextProcess(Process)) != NULL)
+    {
+        if (Process->Job != Job) continue;
+
+        TerminateStatus = PsTerminateProcess(Process, ExitStatus);
+        if (!NT_SUCCESS(TerminateStatus) &&
+            (TerminateStatus != STATUS_NOTHING_TO_TERMINATE) &&
+            NT_SUCCESS(Status))
+        {
+            Status = TerminateStatus;
+        }
+    }
+
+    return Status;
+}
+
+VOID
+NTAPI
+PspJobClose(IN PEPROCESS Process OPTIONAL,
+            IN PVOID Object,
+            IN ULONG_PTR ProcessHandleCount,
+            IN ULONG_PTR SystemHandleCount)
+{
+    PEJOB Job = Object;
+
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(Process);
+    UNREFERENCED_PARAMETER(ProcessHandleCount);
+
+    if ((SystemHandleCount == 1) &&
+        (Job->LimitFlags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE))
+    {
+        PspTerminateJobObject(Job, KernelMode, STATUS_SUCCESS);
+    }
 }
 
 VOID
