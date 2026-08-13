@@ -1089,10 +1089,9 @@ DriverEntry(
     CalloutData.DesktopCloseProcedure = IntDesktopObjectClose;
     CalloutData.DesktopDeleteProcedure = IntDesktopObjectDelete;
     CalloutData.WindowStationOkToCloseProcedure = IntWinStaOkToClose;
-    // CalloutData.WindowStationCloseProcedure = NULL;
     CalloutData.WindowStationDeleteProcedure = IntWinStaObjectDelete;
     CalloutData.WindowStationParseProcedure = IntWinStaObjectParse;
-    // CalloutData.WindowStationOpenProcedure = NULL;
+    CalloutData.WindowStationOpenProcedure = IntWinStaObjectOpen;
 
     /* Register our per-process and per-thread structures. */
     PsEstablishWin32Callouts(&CalloutData);

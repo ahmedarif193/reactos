@@ -40,6 +40,8 @@ GENERIC_MAPPING ExpDesktopMapping =
 PKWIN32_SESSION_CALLOUT ExpWindowStationObjectParse = NULL;
 PKWIN32_SESSION_CALLOUT ExpWindowStationObjectDelete = NULL;
 PKWIN32_SESSION_CALLOUT ExpWindowStationObjectOkToClose = NULL;
+PKWIN32_SESSION_CALLOUT ExpWindowStationObjectOpen = NULL;
+PKWIN32_SESSION_CALLOUT ExpWindowStationObjectClose = NULL;
 PKWIN32_SESSION_CALLOUT ExpDesktopObjectOkToClose = NULL;
 PKWIN32_SESSION_CALLOUT ExpDesktopObjectDelete = NULL;
 PKWIN32_SESSION_CALLOUT ExpDesktopObjectOpen = NULL;
@@ -150,6 +152,44 @@ ExpWindowStationOkToClose( IN PEPROCESS Process OPTIONAL,
                                     &Parameters);
 
     return NT_SUCCESS(Status);
+}
+
+NTSTATUS
+NTAPI
+ExpWindowStationOpen(IN OB_OPEN_REASON Reason,
+                     IN KPROCESSOR_MODE AccessMode,
+                     IN PEPROCESS Process OPTIONAL,
+                     IN PVOID ObjectBody,
+                     IN OUT PACCESS_MASK GrantedAccess,
+                     IN ULONG HandleCount)
+{
+    WIN32_OPENMETHOD_PARAMETERS Parameters;
+
+    Parameters.OpenReason = Reason;
+    Parameters.AccessMode = AccessMode;
+    Parameters.Process = Process;
+    Parameters.Object = ObjectBody;
+    Parameters.GrantedAccess = GrantedAccess;
+    Parameters.HandleCount = HandleCount;
+
+    return ExpWin32SessionCallout(ObjectBody, ExpWindowStationObjectOpen, &Parameters);
+}
+
+VOID
+NTAPI
+ExpWindowStationClose(IN PEPROCESS Process OPTIONAL,
+                      IN PVOID Object,
+                      IN ULONG_PTR ProcessHandleCount,
+                      IN ULONG_PTR SystemHandleCount)
+{
+    WIN32_CLOSEMETHOD_PARAMETERS Parameters;
+
+    Parameters.Process = Process;
+    Parameters.Object = Object;
+    Parameters.ProcessHandleCount = ProcessHandleCount;
+    Parameters.SystemHandleCount = SystemHandleCount;
+
+    if (ExpWindowStationObjectClose != NULL) ExpWin32SessionCallout(Object, ExpWindowStationObjectClose, &Parameters);
 }
 
 VOID
@@ -268,7 +308,10 @@ ExpWin32kInit(VOID)
     RtlInitUnicodeString(&Name, L"WindowStation");
     ObjectTypeInitializer.Length = sizeof(ObjectTypeInitializer);
     ObjectTypeInitializer.GenericMapping = ExpWindowStationMapping;
-    ObjectTypeInitializer.PoolType = NonPagedPool;
+    ObjectTypeInitializer.PoolType = NonPagedPoolNx;
+    ObjectTypeInitializer.MaintainHandleCount = TRUE;
+    ObjectTypeInitializer.OpenProcedure = ExpWindowStationOpen;
+    ObjectTypeInitializer.CloseProcedure = ExpWindowStationClose;
     ObjectTypeInitializer.DeleteProcedure = ExpWinStaObjectDelete;
     ObjectTypeInitializer.ParseProcedure = ExpWinStaObjectParse;
     ObjectTypeInitializer.OkayToCloseProcedure = ExpWindowStationOkToClose;
@@ -285,6 +328,7 @@ ExpWin32kInit(VOID)
 
     /* Create desktop object type */
     RtlInitUnicodeString(&Name, L"Desktop");
+    ObjectTypeInitializer.SupportsObjectCallbacks = TRUE;
     ObjectTypeInitializer.GenericMapping = ExpDesktopMapping;
     ObjectTypeInitializer.DeleteProcedure = ExpDesktopDelete;
     ObjectTypeInitializer.ParseProcedure = NULL;

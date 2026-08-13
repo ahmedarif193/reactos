@@ -41,7 +41,15 @@ typedef struct _DESKTOP
     /* Thread blocking input */
     PVOID BlockInputThread;
     LIST_ENTRY ShellHookWindows;
+#ifdef _WIN64
+    /* Keep the allocation boundary aligned with the native 64-bit object body. */
+    UCHAR NativeLayoutPadding[120];
+#endif
 } DESKTOP, *PDESKTOP;
+
+#ifdef _WIN64
+C_ASSERT(sizeof(DESKTOP) == 360);
+#endif
 
 // Desktop flags
 #define DF_TME_HOVER        0x00000400

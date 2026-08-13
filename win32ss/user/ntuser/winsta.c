@@ -40,7 +40,11 @@ InitWindowStationImpl(VOID)
                                                 WINSTA_ACCESS_ALL};
 
     /* Set Winsta Object Attributes */
+#ifdef _WIN64
+    ExWindowStationObjectType->TypeInfo.DefaultNonPagedPoolCharge = 272;
+#else
     ExWindowStationObjectType->TypeInfo.DefaultNonPagedPoolCharge = sizeof(WINSTATION_OBJECT);
+#endif
     ExWindowStationObjectType->TypeInfo.GenericMapping = IntWindowStationMapping;
     ExWindowStationObjectType->TypeInfo.ValidAccessMask = WINSTA_ACCESS_ALL;
 
@@ -202,6 +206,25 @@ IntWinStaOkToClose(
     ppi = PsGetCurrentProcessWin32Process();
 
     if (ppi && (OkToCloseParameters->Handle == ppi->hwinsta))
+    {
+        return STATUS_ACCESS_DENIED;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+IntWinStaObjectOpen(
+    _In_ PVOID Parameters)
+{
+    PWIN32_OPENMETHOD_PARAMETERS OpenParameters = Parameters;
+    PWINSTATION_OBJECT WinSta = OpenParameters->Object;
+
+    if ((*OpenParameters->GrantedAccess & 0xFFFF) &&
+        OpenParameters->Process &&
+        !PsIsSystemProcess(OpenParameters->Process) &&
+        (PsGetProcessSessionIdEx(OpenParameters->Process) != WinSta->dwSessionId))
     {
         return STATUS_ACCESS_DENIED;
     }
