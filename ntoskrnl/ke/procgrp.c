@@ -493,6 +493,24 @@ KeCountSetBitsAffinityEx(
     return BitCount;
 }
 
+static
+ULONG
+KiGetProcessorIndexFromAffinityBit(
+    _In_ USHORT GroupNumber,
+    _In_ ULONG BitNumber)
+{
+    PROCESSOR_NUMBER ProcessorNumber;
+    ULONG ProcessorIndex;
+
+    ProcessorNumber.Group = GroupNumber;
+    ProcessorNumber.Number = (UCHAR)BitNumber;
+    ProcessorNumber.Reserved = 0;
+    ProcessorIndex = KeGetProcessorIndexFromNumber(&ProcessorNumber);
+
+    /* Native affinity scanners use the zero-initialized number-to-index table directly. */
+    return (ProcessorIndex == INVALID_PROCESSOR_INDEX) ? 0 : ProcessorIndex;
+}
+
 /*
  * @implemented
  */
@@ -501,7 +519,6 @@ NTAPI
 KeFindFirstSetLeftAffinityEx(
     _In_ PKAFFINITY_EX Affinity)
 {
-    PROCESSOR_NUMBER ProcessorNumber;
     ULONG BitNumber;
     USHORT GroupNumber;
 
@@ -509,12 +526,7 @@ KeFindFirstSetLeftAffinityEx(
     {
         GroupNumber--;
         if (BitScanReverseAffinity(&BitNumber, Affinity->Bitmap[GroupNumber]))
-        {
-            ProcessorNumber.Group = GroupNumber;
-            ProcessorNumber.Number = (UCHAR)BitNumber;
-            ProcessorNumber.Reserved = 0;
-            return KeGetProcessorIndexFromNumber(&ProcessorNumber);
-        }
+            return KiGetProcessorIndexFromAffinityBit(GroupNumber, BitNumber);
     }
 
     return INVALID_PROCESSOR_INDEX;
@@ -528,16 +540,12 @@ NTAPI
 KeFindFirstSetLeftGroupAffinity(
     _In_ PGROUP_AFFINITY GroupAffinity)
 {
-    PROCESSOR_NUMBER ProcessorNumber;
     ULONG BitNumber;
 
     if (!BitScanReverseAffinity(&BitNumber, GroupAffinity->Mask))
         return INVALID_PROCESSOR_INDEX;
 
-    ProcessorNumber.Group = GroupAffinity->Group;
-    ProcessorNumber.Number = (UCHAR)BitNumber;
-    ProcessorNumber.Reserved = 0;
-    return KeGetProcessorIndexFromNumber(&ProcessorNumber);
+    return KiGetProcessorIndexFromAffinityBit(GroupAffinity->Group, BitNumber);
 }
 
 /*
@@ -548,19 +556,13 @@ NTAPI
 KeFindFirstSetRightAffinityEx(
     _In_ PKAFFINITY_EX Affinity)
 {
-    PROCESSOR_NUMBER ProcessorNumber;
     ULONG BitNumber;
     USHORT GroupNumber;
 
     for (GroupNumber = 0; GroupNumber < Affinity->Count; GroupNumber++)
     {
         if (BitScanForwardAffinity(&BitNumber, Affinity->Bitmap[GroupNumber]))
-        {
-            ProcessorNumber.Group = GroupNumber;
-            ProcessorNumber.Number = (UCHAR)BitNumber;
-            ProcessorNumber.Reserved = 0;
-            return KeGetProcessorIndexFromNumber(&ProcessorNumber);
-        }
+            return KiGetProcessorIndexFromAffinityBit(GroupNumber, BitNumber);
     }
 
     return INVALID_PROCESSOR_INDEX;
@@ -574,16 +576,12 @@ NTAPI
 KeFindFirstSetRightGroupAffinity(
     _In_ PGROUP_AFFINITY GroupAffinity)
 {
-    PROCESSOR_NUMBER ProcessorNumber;
     ULONG BitNumber;
 
     if (!BitScanForwardAffinity(&BitNumber, GroupAffinity->Mask))
         return INVALID_PROCESSOR_INDEX;
 
-    ProcessorNumber.Group = GroupAffinity->Group;
-    ProcessorNumber.Number = (UCHAR)BitNumber;
-    ProcessorNumber.Reserved = 0;
-    return KeGetProcessorIndexFromNumber(&ProcessorNumber);
+    return KiGetProcessorIndexFromAffinityBit(GroupAffinity->Group, BitNumber);
 }
 
 /*

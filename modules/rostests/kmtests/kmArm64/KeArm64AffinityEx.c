@@ -2042,7 +2042,7 @@ START_TEST(KeArm64AffinityEx)
     }
 
     ActiveCount = KeQueryActiveProcessorCount(NULL);
-    ok((ActiveCount > 1) && (ActiveCount < 64), "unexpected active processor count %lu\n", ActiveCount);
+    ok((ActiveCount >= 1) && (ActiveCount < 64), "unexpected active processor count %lu\n", ActiveCount);
     RtlZeroMemory(&ProcessorNumber, sizeof(ProcessorNumber));
     ok_eq_ulong(GetProcessorIndexFromNumber(&ProcessorNumber), 0);
     ProcessorNumber.Reserved = 1;
@@ -2054,7 +2054,7 @@ START_TEST(KeArm64AffinityEx)
     ProcessorNumber.Number = 64;
     ok_eq_ulong(GetProcessorIndexFromNumber(&ProcessorNumber), INVALID_PROCESSOR_INDEX);
     ProcessorNumber.Number = 1;
-    ok_eq_ulong(GetProcessorIndexFromNumber(&ProcessorNumber), 1);
+    ok_eq_ulong(GetProcessorIndexFromNumber(&ProcessorNumber), (ActiveCount > 1) ? 1 : INVALID_PROCESSOR_INDEX);
     ProcessorNumber.Number = (UCHAR)(ActiveCount - 1);
     ok_eq_ulong(GetProcessorIndexFromNumber(&ProcessorNumber), ActiveCount - 1);
     ProcessorNumber.Number = (UCHAR)ActiveCount;
@@ -2074,10 +2074,20 @@ START_TEST(KeArm64AffinityEx)
     ok_eq_uint(ProcessorNumber.Number, 0);
     ok_eq_uint(ProcessorNumber.Reserved, 0);
     RtlFillMemory(&ProcessorNumber, sizeof(ProcessorNumber), 0xA5);
-    ok_eq_hex(GetProcessorNumberFromIndex(1, &ProcessorNumber), STATUS_SUCCESS);
-    ok_eq_uint(ProcessorNumber.Group, 0);
-    ok_eq_uint(ProcessorNumber.Number, 1);
-    ok_eq_uint(ProcessorNumber.Reserved, 0);
+    if (ActiveCount > 1)
+    {
+        ok_eq_hex(GetProcessorNumberFromIndex(1, &ProcessorNumber), STATUS_SUCCESS);
+        ok_eq_uint(ProcessorNumber.Group, 0);
+        ok_eq_uint(ProcessorNumber.Number, 1);
+        ok_eq_uint(ProcessorNumber.Reserved, 0);
+    }
+    else
+    {
+        ok_eq_hex(GetProcessorNumberFromIndex(1, &ProcessorNumber), STATUS_INVALID_PARAMETER);
+        ok_eq_uint(ProcessorNumber.Group, 0xA5A5);
+        ok_eq_uint(ProcessorNumber.Number, 0xA5);
+        ok_eq_uint(ProcessorNumber.Reserved, 0xA5);
+    }
     RtlFillMemory(&ProcessorNumber, sizeof(ProcessorNumber), 0xA5);
     ok_eq_hex(GetProcessorNumberFromIndex(ActiveCount - 1, &ProcessorNumber), STATUS_SUCCESS);
     ok_eq_uint(ProcessorNumber.Number, ActiveCount - 1);
@@ -3056,7 +3066,7 @@ START_TEST(KeArm64AffinityEx)
     Affinity.Bitmap[0] = 2;
     Affinity.Bitmap[1] = 1;
     Source = Affinity;
-    ok_eq_ulong(FindFirstSetLeftAffinityEx(&Affinity), 1);
+    ok_eq_ulong(FindFirstSetLeftAffinityEx(&Affinity), (ActiveCount > 1) ? 1 : 0);
     ok_eq_size(RtlCompareMemory(&Affinity, &Source, sizeof(Affinity)), sizeof(Affinity));
 
     RtlInitUnicodeString(&Name, L"KeFindFirstSetRightAffinityEx");
@@ -3150,7 +3160,7 @@ START_TEST(KeArm64AffinityEx)
     Affinity.Bitmap[0] = 2;
     Affinity.Bitmap[1] = 1;
     Source = Affinity;
-    ok_eq_ulong(FindFirstSetRightAffinityEx(&Affinity), 1);
+    ok_eq_ulong(FindFirstSetRightAffinityEx(&Affinity), (ActiveCount > 1) ? 1 : 0);
     ok_eq_size(RtlCompareMemory(&Affinity, &Source, sizeof(Affinity)), sizeof(Affinity));
 
     RtlInitUnicodeString(&Name, L"KeFindFirstSetLeftGroupAffinity");
@@ -3241,6 +3251,13 @@ START_TEST(KeArm64AffinityEx)
     ok_eq_ulong(FindFirstSetLeftGroupAffinity(&GroupAffinity), 0);
     ok_eq_size(RtlCompareMemory(&GroupAffinity, &GroupSource, sizeof(GroupAffinity)), sizeof(GroupAffinity));
 
+    RtlFillMemory(&GroupAffinity, sizeof(GroupAffinity), 0xA5);
+    GroupAffinity.Mask = 2;
+    GroupAffinity.Group = 0;
+    GroupSource = GroupAffinity;
+    ok_eq_ulong(FindFirstSetLeftGroupAffinity(&GroupAffinity), (ActiveCount > 1) ? 1 : 0);
+    ok_eq_size(RtlCompareMemory(&GroupAffinity, &GroupSource, sizeof(GroupAffinity)), sizeof(GroupAffinity));
+
     RtlInitUnicodeString(&Name, L"KeFindFirstSetRightGroupAffinity");
     FindFirstSetRightGroupAffinity = (PKMT_KE_FIND_FIRST_SET_RIGHT_GROUP_AFFINITY)MmGetSystemRoutineAddress(&Name);
     if (FindFirstSetRightGroupAffinity == NULL)
@@ -3327,6 +3344,13 @@ START_TEST(KeArm64AffinityEx)
     GroupAffinity.Group = ProcessorNumber.Group;
     GroupSource = GroupAffinity;
     ok_eq_ulong(FindFirstSetRightGroupAffinity(&GroupAffinity), 0);
+    ok_eq_size(RtlCompareMemory(&GroupAffinity, &GroupSource, sizeof(GroupAffinity)), sizeof(GroupAffinity));
+
+    RtlFillMemory(&GroupAffinity, sizeof(GroupAffinity), 0xA5);
+    GroupAffinity.Mask = 2;
+    GroupAffinity.Group = 0;
+    GroupSource = GroupAffinity;
+    ok_eq_ulong(FindFirstSetRightGroupAffinity(&GroupAffinity), (ActiveCount > 1) ? 1 : 0);
     ok_eq_size(RtlCompareMemory(&GroupAffinity, &GroupSource, sizeof(GroupAffinity)), sizeof(GroupAffinity));
 
     RtlInitUnicodeString(&Name, L"KeFirstGroupAffinityEx");
