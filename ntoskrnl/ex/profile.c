@@ -73,9 +73,9 @@ ExpInitializeProfileImplementation(VOID)
     RtlZeroMemory(&ObjectTypeInitializer, sizeof(ObjectTypeInitializer));
     RtlInitUnicodeString(&Name, L"Profile");
     ObjectTypeInitializer.Length = sizeof(ObjectTypeInitializer);
-    ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(KPROFILE);
+    ObjectTypeInitializer.DefaultNonPagedPoolCharge = 0x150;
     ObjectTypeInitializer.GenericMapping = ExpProfileMapping;
-    ObjectTypeInitializer.PoolType = NonPagedPool;
+    ObjectTypeInitializer.PoolType = NonPagedPoolNx;
     ObjectTypeInitializer.DeleteProcedure = ExpDeleteProfile;
     ObjectTypeInitializer.ValidAccessMask = PROFILE_ALL_ACCESS;
     ObjectTypeInitializer.InvalidAttributes = OBJ_OPENLINK;

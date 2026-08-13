@@ -47,9 +47,10 @@ ExpInitializeEventImplementation(VOID)
     RtlZeroMemory(&ObjectTypeInitializer, sizeof(ObjectTypeInitializer));
     RtlInitUnicodeString(&Name, L"Event");
     ObjectTypeInitializer.Length = sizeof(ObjectTypeInitializer);
+    ObjectTypeInitializer.ObjectTypeCode = 0x10;
     ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(KEVENT);
     ObjectTypeInitializer.GenericMapping = ExpEventMapping;
-    ObjectTypeInitializer.PoolType = NonPagedPool;
+    ObjectTypeInitializer.PoolType = NonPagedPoolNx;
     ObjectTypeInitializer.ValidAccessMask = EVENT_ALL_ACCESS;
     ObjectTypeInitializer.InvalidAttributes = OBJ_OPENLINK;
     Status = ObCreateObjectType(&Name, &ObjectTypeInitializer, NULL, &ExEventObjectType);

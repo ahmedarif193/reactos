@@ -1515,9 +1515,9 @@ DbgkInitialize(VOID)
     RtlZeroMemory(&ObjectTypeInitializer, sizeof(ObjectTypeInitializer));
     RtlInitUnicodeString(&Name, L"DebugObject");
     ObjectTypeInitializer.Length = sizeof(ObjectTypeInitializer);
-    ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(DEBUG_OBJECT);
+    ObjectTypeInitializer.DefaultNonPagedPoolCharge = 0;
     ObjectTypeInitializer.GenericMapping = DbgkDebugObjectMapping;
-    ObjectTypeInitializer.PoolType = NonPagedPool;
+    ObjectTypeInitializer.PoolType = NonPagedPoolNx;
     ObjectTypeInitializer.ValidAccessMask = DEBUG_OBJECT_ALL_ACCESS;
     ObjectTypeInitializer.SecurityRequired = TRUE;
     ObjectTypeInitializer.CloseProcedure = DbgkpCloseObject;

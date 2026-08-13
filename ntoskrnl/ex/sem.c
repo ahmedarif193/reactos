@@ -51,9 +51,10 @@ ExpInitializeSemaphoreImplementation(VOID)
     RtlZeroMemory(&ObjectTypeInitializer, sizeof(ObjectTypeInitializer));
     RtlInitUnicodeString(&Name, L"Semaphore");
     ObjectTypeInitializer.Length = sizeof(ObjectTypeInitializer);
+    ObjectTypeInitializer.ObjectTypeCode = 8;
     ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(KSEMAPHORE);
     ObjectTypeInitializer.GenericMapping = ExSemaphoreMapping;
-    ObjectTypeInitializer.PoolType = NonPagedPool;
+    ObjectTypeInitializer.PoolType = NonPagedPoolNx;
     ObjectTypeInitializer.InvalidAttributes = OBJ_OPENLINK;
     ObjectTypeInitializer.ValidAccessMask = SEMAPHORE_ALL_ACCESS;
     Status = ObCreateObjectType(&Name, &ObjectTypeInitializer, NULL, &ExSemaphoreObjectType);

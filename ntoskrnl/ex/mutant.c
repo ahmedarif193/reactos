@@ -60,9 +60,10 @@ ExpInitializeMutantImplementation(VOID)
     RtlZeroMemory(&ObjectTypeInitializer, sizeof(ObjectTypeInitializer));
     RtlInitUnicodeString(&Name, L"Mutant");
     ObjectTypeInitializer.Length = sizeof(ObjectTypeInitializer);
+    ObjectTypeInitializer.ObjectTypeCode = 0x40;
     ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(KMUTANT);
     ObjectTypeInitializer.GenericMapping = ExpMutantMapping;
-    ObjectTypeInitializer.PoolType = NonPagedPool;
+    ObjectTypeInitializer.PoolType = NonPagedPoolNx;
     ObjectTypeInitializer.DeleteProcedure = ExpDeleteMutant;
     ObjectTypeInitializer.ValidAccessMask = MUTANT_ALL_ACCESS;
     ObjectTypeInitializer.InvalidAttributes = OBJ_OPENLINK;

@@ -47,7 +47,7 @@ WmipSecurityMethod(
 
     UNREFERENCED_PARAMETER(AccessMode);
 
-    ASSERT((PoolType == PagedPool) || (PoolType == NonPagedPool));
+    ASSERT((PoolType == PagedPool) || ((PoolType & 1) == NonPagedPool));
     ASSERT((OperationType == QuerySecurityDescriptor) ||
            (OperationType == SetSecurityDescriptor) ||
            (OperationType == AssignSecurityDescriptor) ||
@@ -124,14 +124,14 @@ WmipInitializeGuidObjectType(
     ObjectTypeInitializer.Length = sizeof(ObjectTypeInitializer);
     ObjectTypeInitializer.InvalidAttributes = OBJ_OPENLINK;
     ObjectTypeInitializer.GenericMapping = WmipGenericMapping;
-    ObjectTypeInitializer.PoolType = NonPagedPool;
+    ObjectTypeInitializer.PoolType = NonPagedPoolNx;
     ObjectTypeInitializer.MaintainHandleCount = FALSE;
-    ObjectTypeInitializer.ValidAccessMask = STANDARD_RIGHTS_ALL | 0xFFF;
+    ObjectTypeInitializer.ValidAccessMask = STANDARD_RIGHTS_ALL | 0x1FFF;
     ObjectTypeInitializer.SecurityRequired = TRUE;
-    ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(WMIP_GUID_OBJECT);
+    ObjectTypeInitializer.DefaultNonPagedPoolCharge = 0xA8;
     ObjectTypeInitializer.SecurityProcedure = WmipSecurityMethod;
     ObjectTypeInitializer.DeleteProcedure = WmipDeleteMethod;
-    ObjectTypeInitializer.CloseProcedure = WmipCloseMethod;
+    ObjectTypeInitializer.CloseProcedure = NULL;
 
     /* Create the object type */
     Status = ObCreateObjectType(&GuidObjectName,
