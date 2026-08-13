@@ -2310,3 +2310,22 @@ Quickie:
     CmpUnlockRegistry();
     return Status;
 }
+
+NTSTATUS
+NTAPI
+CmpParseKeyEx(
+    IN PVOID ParseObject,
+    IN PVOID ObjectType,
+    IN OUT PACCESS_STATE AccessState,
+    IN KPROCESSOR_MODE AccessMode,
+    IN ULONG Attributes,
+    IN OUT PUNICODE_STRING CompleteName,
+    IN OUT PUNICODE_STRING RemainingName,
+    IN OUT PVOID Context OPTIONAL,
+    IN PSECURITY_QUALITY_OF_SERVICE SecurityQos OPTIONAL,
+    IN POB_EXTENDED_PARSE_PARAMETERS ExtendedParameters,
+    OUT PVOID *Object)
+{
+    UNREFERENCED_PARAMETER(ExtendedParameters);
+    return CmpParseKey(ParseObject, ObjectType, AccessState, AccessMode, Attributes, CompleteName, RemainingName, Context, SecurityQos, Object);
+}

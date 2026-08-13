@@ -965,6 +965,7 @@
 @ stdcall ObCloseHandle(ptr long)
 @ stdcall ObCreateObject(long ptr ptr long ptr long long long ptr)
 @ stdcall ObCreateObjectType(ptr ptr ptr ptr)
+@ stdcall ObCreateObjectTypeEx(ptr ptr ptr ptr ptr)
 @ stdcall ObDeleteCapturedInsertInfo(ptr)
 @ stdcall ObDereferenceObject(ptr)
 @ stdcall ObDereferenceSecurityDescriptor(ptr long)
@@ -2749,7 +2750,6 @@
 @ stub -arch=arm64 NtThawTransactions
 @ stub -arch=arm64 NtTraceControl
 @ stdcall -arch=arm64 NtWaitForAlertByThreadId(ptr ptr)
-@ stub -arch=arm64 ObCreateObjectTypeEx
 @ stub -arch=arm64 ObDereferenceObjectDeferDeleteWithTag
 @ stub -arch=arm64 ObGetFilterVersion
 @ stub -arch=arm64 ObIsDosDeviceLocallyMapped

@@ -10,10 +10,45 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
+#include <reactos/unaligned.h>
 #define NDEBUG
 #include <debug.h>
 
 /* FUNCTIONS *****************************************************************/
+
+static
+PVOID
+ObpGetObjectWaitObject(
+    _In_ POBJECT_TYPE ObjectType,
+    _In_ PVOID Object)
+{
+    ULONG_PTR WaitObjectInfo;
+    ULONG WaitObjectFlags;
+
+    if (!IsPointerOffset(ObjectType->DefaultObject))
+    {
+        return ObjectType->DefaultObject;
+    }
+
+    WaitObjectInfo = (ULONG_PTR)ObjectType->DefaultObject;
+    if (!(WaitObjectInfo & 1))
+    {
+        return (PUCHAR)Object + WaitObjectInfo;
+    }
+
+    if (!(WaitObjectInfo & 2))
+    {
+        return (PVOID)(ULONG_PTR)ReadUnalignedUlongPtr((const ULONG_PTR*)((PUCHAR)Object + WaitObjectInfo - 1));
+    }
+
+    WaitObjectFlags = ReadUnalignedU32((const unsigned long*)((PUCHAR)Object + ObjectType->TypeInfo.WaitObjectFlagOffset));
+    if ((WaitObjectFlags & ObjectType->TypeInfo.WaitObjectFlagMask) == ObjectType->TypeInfo.WaitObjectFlagMask)
+    {
+        return (PVOID)(ULONG_PTR)ReadUnalignedUlongPtr((const ULONG_PTR*)((PUCHAR)Object + ObjectType->TypeInfo.WaitObjectPointerOffset));
+    }
+
+    return (PUCHAR)Object + WaitObjectInfo - 3;
+}
 
 /*++
 * @name NtWaitForMultipleObjects
@@ -204,8 +239,7 @@ NtWaitForMultipleObjects(IN ULONG ObjectCount,
 
             /* Save the Object and Wait Object, this is a relative offset */
             Objects[i] = &ObjectHeader->Body;
-            WaitObjects[i] = (PVOID)((ULONG_PTR)&ObjectHeader->Body +
-                                     (ULONG_PTR)DefaultObject);
+            WaitObjects[i] = ObpGetObjectWaitObject(ObpGetObjectTypeFromHeader(ObjectHeader), &ObjectHeader->Body);
         }
         else
         {
@@ -404,15 +438,7 @@ NtWaitForSingleObject(IN HANDLE ObjectHandle,
     {
         /* Get the Waitable Object */
         ObjectType = ObpGetObjectTypeFromHeader(OBJECT_TO_OBJECT_HEADER(Object));
-        WaitableObject = ObjectType->DefaultObject;
-
-        /* Is it an offset for internal objects? */
-        if (IsPointerOffset(WaitableObject))
-        {
-            /* Turn it into a pointer */
-            WaitableObject = (PVOID)((ULONG_PTR)Object +
-                                     (ULONG_PTR)WaitableObject);
-        }
+        WaitableObject = ObpGetObjectWaitObject(ObjectType, Object);
 
         /* SEH this since it can also raise an exception */
         _SEH2_TRY
@@ -527,15 +553,7 @@ NtSignalAndWaitForSingleObject(IN HANDLE ObjectHandleToSignal,
     }
 
     /* Get the real waitable object */
-    WaitableObject = ObpGetObjectTypeFromHeader(OBJECT_TO_OBJECT_HEADER(WaitObj))->DefaultObject;
-
-    /* Handle internal offset */
-    if (IsPointerOffset(WaitableObject))
-    {
-        /* Get real pointer */
-        WaitableObject = (PVOID)((ULONG_PTR)WaitObj +
-                                 (ULONG_PTR)WaitableObject);
-    }
+    WaitableObject = ObpGetObjectWaitObject(ObpGetObjectTypeFromHeader(OBJECT_TO_OBJECT_HEADER(WaitObj)), WaitObj);
 
     /* Check Signal Object Type */
     Type = ObpGetObjectTypeFromHeader(OBJECT_TO_OBJECT_HEADER(SignalObj));

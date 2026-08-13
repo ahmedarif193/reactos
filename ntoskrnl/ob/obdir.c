@@ -21,6 +21,33 @@ POBJECT_TYPE ObpDirectoryObjectType = NULL;
 
 /* PRIVATE FUNCTIONS ******************************************************/
 
+VOID
+NTAPI
+ObpCloseDirectoryObject(IN PEPROCESS Process OPTIONAL,
+                        IN PVOID Object,
+                        IN ULONG_PTR ProcessHandleCount,
+                        IN ULONG_PTR SystemHandleCount)
+{
+    UNREFERENCED_PARAMETER(Process);
+    UNREFERENCED_PARAMETER(Object);
+    UNREFERENCED_PARAMETER(ProcessHandleCount);
+    UNREFERENCED_PARAMETER(SystemHandleCount);
+}
+
+VOID
+NTAPI
+ObpDeleteDirectoryObject(IN PVOID Object)
+{
+    POBJECT_DIRECTORY Directory = Object;
+    ULONG Index;
+
+    ASSERT(Directory->DeviceMap == NULL);
+    for (Index = 0; Index < NUMBER_HASH_BUCKETS; Index++)
+    {
+        ASSERT(Directory->HashBuckets[Index] == NULL);
+    }
+}
+
 /*++
 * @name ObpInsertEntryDirectory
 *
