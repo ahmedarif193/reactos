@@ -370,7 +370,7 @@ SeDefaultObjectMethod(
         case SetSecurityDescriptor:
 
             /* Sanity check */
-            ASSERT((PoolType == PagedPool) || (PoolType == NonPagedPool));
+            ASSERT((PoolType == PagedPool) || ((PoolType & 1) == NonPagedPool));
 
             /* Set the information */
             return ObSetSecurityDescriptorInfo(Object,

@@ -54,7 +54,7 @@ PsInitializeQuotaSystem(VOID);
 
 ULONG ObpInitializationPhase;
 
-ULONG ObpObjectSecurityMode = 0;
+ULONG ObpObjectSecurityMode = 1;
 ULONG ObpProtectionMode = 0;
 
 #ifdef _WIN64
@@ -365,11 +365,11 @@ ObInitSystem(VOID)
     ObjectTypeInitializer.ValidAccessMask = OBJECT_TYPE_ALL_ACCESS;
     ObjectTypeInitializer.UseDefaultObject = TRUE;
     ObjectTypeInitializer.MaintainTypeList = TRUE;
-    ObjectTypeInitializer.PoolType = NonPagedPool;
+    ObjectTypeInitializer.PoolType = NonPagedPoolNx;
     ObjectTypeInitializer.GenericMapping = ObpTypeMapping;
     ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(OBJECT_TYPE);
     ObjectTypeInitializer.InvalidAttributes = OBJ_OPENLINK;
-    ObjectTypeInitializer.DeleteProcedure = ObpDeleteObjectType;
+    ObjectTypeInitializer.DeleteProcedure = NULL;
     ObCreateObjectType(&Name, &ObjectTypeInitializer, NULL, &ObpTypeObjectType);
 
     /* Create the Directory Type */
@@ -377,19 +377,24 @@ ObInitSystem(VOID)
     ObjectTypeInitializer.PoolType = PagedPool;
     ObjectTypeInitializer.ValidAccessMask = DIRECTORY_ALL_ACCESS;
     ObjectTypeInitializer.CaseInsensitive = TRUE;
+    ObjectTypeInitializer.SecurityRequired = TRUE;
     ObjectTypeInitializer.MaintainTypeList = FALSE;
     ObjectTypeInitializer.GenericMapping = ObpDirectoryMapping;
-    ObjectTypeInitializer.DeleteProcedure = NULL;
-    ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(OBJECT_DIRECTORY);
+    ObjectTypeInitializer.CloseProcedure = ObpCloseDirectoryObject;
+    ObjectTypeInitializer.DeleteProcedure = ObpDeleteDirectoryObject;
+    ObjectTypeInitializer.DefaultNonPagedPoolCharge = 344;
     ObCreateObjectType(&Name, &ObjectTypeInitializer, NULL, &ObpDirectoryObjectType);
     ObpDirectoryObjectType->TypeInfo.ValidAccessMask &= ~SYNCHRONIZE;
 
     /* Create 'symbolic link' object type */
     RtlInitUnicodeString(&Name, L"SymbolicLink");
-    ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(OBJECT_SYMBOLIC_LINK);
+    ObjectTypeInitializer.SecurityRequired = FALSE;
+    ObjectTypeInitializer.UseExtendedParameters = TRUE;
+    ObjectTypeInitializer.DefaultNonPagedPoolCharge = 40;
     ObjectTypeInitializer.GenericMapping = ObpSymbolicLinkMapping;
-    ObjectTypeInitializer.ValidAccessMask = SYMBOLIC_LINK_ALL_ACCESS;
-    ObjectTypeInitializer.ParseProcedure = ObpParseSymbolicLink;
+    ObjectTypeInitializer.ValidAccessMask = 0x000FFFFF;
+    ObjectTypeInitializer.CloseProcedure = NULL;
+    ObjectTypeInitializer.ParseProcedureEx = ObpParseSymbolicLinkEx;
     ObjectTypeInitializer.DeleteProcedure = ObpDeleteSymbolicLink;
     ObCreateObjectType(&Name, &ObjectTypeInitializer, NULL, &ObpSymbolicLinkObjectType);
     ObpSymbolicLinkObjectType->TypeInfo.ValidAccessMask &= ~SYNCHRONIZE;

@@ -74,7 +74,18 @@ NTAPI
 ObCreateObjectType(
     _In_ PUNICODE_STRING TypeName,
     _In_ POBJECT_TYPE_INITIALIZER ObjectTypeInitializer,
-    _Reserved_ PVOID Reserved,
+    _In_opt_ PSECURITY_DESCRIPTOR SecurityDescriptor,
+    _Out_ POBJECT_TYPE *ObjectType
+);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+ObCreateObjectTypeEx(
+    _In_ PUNICODE_STRING TypeName,
+    _In_ POBJECT_TYPE_INITIALIZER ObjectTypeInitializer,
+    _In_opt_ PSECURITY_DESCRIPTOR SecurityDescriptor,
+    _In_opt_ LONG_PTR WaitObjectInfo,
     _Out_ POBJECT_TYPE *ObjectType
 );
 

@@ -247,7 +247,7 @@ IopCreateObjectTypes(VOID)
     /* Initialize default settings */
     RtlZeroMemory(&ObjectTypeInitializer, sizeof(ObjectTypeInitializer));
     ObjectTypeInitializer.Length = sizeof(ObjectTypeInitializer);
-    ObjectTypeInitializer.PoolType = NonPagedPool;
+    ObjectTypeInitializer.PoolType = NonPagedPoolNx;
     ObjectTypeInitializer.InvalidAttributes = OBJ_OPENLINK;
     ObjectTypeInitializer.ValidAccessMask = FILE_ALL_ACCESS;
     ObjectTypeInitializer.UseDefaultObject = TRUE;
@@ -272,7 +272,8 @@ IopCreateObjectTypes(VOID)
     RtlInitUnicodeString(&Name, L"Device");
     ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(DEVICE_OBJECT);
     ObjectTypeInitializer.DeleteProcedure = IopDeleteDevice;
-    ObjectTypeInitializer.ParseProcedure = IopParseDevice;
+    ObjectTypeInitializer.UseExtendedParameters = TRUE;
+    ObjectTypeInitializer.ParseProcedureEx = IopParseDeviceEx;
     ObjectTypeInitializer.SecurityProcedure = IopGetSetSecurityObject;
     ObjectTypeInitializer.CaseInsensitive = TRUE;
     if (!NT_SUCCESS(ObCreateObjectType(&Name,
@@ -284,6 +285,7 @@ IopCreateObjectTypes(VOID)
     RtlInitUnicodeString(&Name, L"Driver");
     ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(DRIVER_OBJECT);
     ObjectTypeInitializer.DeleteProcedure = IopDeleteDriver;
+    ObjectTypeInitializer.UseExtendedParameters = FALSE;
     ObjectTypeInitializer.ParseProcedure = NULL;
     ObjectTypeInitializer.SecurityProcedure = NULL;
     if (!NT_SUCCESS(ObCreateObjectType(&Name,
@@ -293,13 +295,14 @@ IopCreateObjectTypes(VOID)
 
     /* Initialize the I/O Completion object type */
     RtlInitUnicodeString(&Name, L"IoCompletion");
-    ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(KQUEUE);
+    ObjectTypeInitializer.DefaultNonPagedPoolCharge = 0x50;
     ObjectTypeInitializer.ValidAccessMask = IO_COMPLETION_ALL_ACCESS;
     ObjectTypeInitializer.InvalidAttributes |= OBJ_PERMANENT;
     ObjectTypeInitializer.GenericMapping = IopCompletionMapping;
     ObjectTypeInitializer.CloseProcedure = IopCloseIoCompletion;
     ObjectTypeInitializer.DeleteProcedure = IopDeleteIoCompletion;
     ObjectTypeInitializer.UseDefaultObject = FALSE;
+    ObjectTypeInitializer.CacheAligned = TRUE;
     if (!NT_SUCCESS(ObCreateObjectType(&Name,
                                        &ObjectTypeInitializer,
                                        NULL,
@@ -312,21 +315,25 @@ IopCreateObjectTypes(VOID)
 
     /* Initialize the File object type  */
     RtlInitUnicodeString(&Name, L"File");
-    ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(FILE_OBJECT);
+    ObjectTypeInitializer.DefaultPagedPoolCharge = 1024;
+    ObjectTypeInitializer.DefaultNonPagedPoolCharge = 280;
     ObjectTypeInitializer.InvalidAttributes |= OBJ_EXCLUSIVE;
     ObjectTypeInitializer.MaintainHandleCount = TRUE;
+    ObjectTypeInitializer.UseExtendedParameters = TRUE;
+    ObjectTypeInitializer.CacheAligned = FALSE;
+    ObjectTypeInitializer.ObjectTypeCode = 1;
     ObjectTypeInitializer.ValidAccessMask = FILE_ALL_ACCESS;
     ObjectTypeInitializer.GenericMapping = IopFileMapping;
     ObjectTypeInitializer.CloseProcedure = IopCloseFile;
     ObjectTypeInitializer.DeleteProcedure = IopDeleteFile;
     ObjectTypeInitializer.SecurityProcedure = IopGetSetSecurityObject;
     ObjectTypeInitializer.QueryNameProcedure = IopQueryName;
-    ObjectTypeInitializer.ParseProcedure = IopParseFile;
+    ObjectTypeInitializer.ParseProcedureEx = IopParseFileEx;
+    ObjectTypeInitializer.WaitObjectFlagMask = FO_INDIRECT_WAIT_OBJECT;
+    ObjectTypeInitializer.WaitObjectFlagOffset = FIELD_OFFSET(FILE_OBJECT, Flags);
+    ObjectTypeInitializer.WaitObjectPointerOffset = FIELD_OFFSET(FILE_OBJECT, FsContext2);
     ObjectTypeInitializer.UseDefaultObject = FALSE;
-    if (!NT_SUCCESS(ObCreateObjectType(&Name,
-                                       &ObjectTypeInitializer,
-                                       NULL,
-                                       &IoFileObjectType))) return FALSE;
+    if (!NT_SUCCESS(ObCreateObjectTypeEx(&Name, &ObjectTypeInitializer, NULL, FIELD_OFFSET(FILE_OBJECT, Event) | 3, &IoFileObjectType))) return FALSE;
 
     /* Success */
     return TRUE;
