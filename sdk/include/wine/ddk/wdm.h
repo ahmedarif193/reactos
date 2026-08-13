@@ -322,13 +322,18 @@ typedef struct _VPB {
 
 typedef enum _POOL_TYPE {
   NonPagedPool,
+  NonPagedPoolExecute = NonPagedPool,
   PagedPool,
   NonPagedPoolMustSucceed,
   DontUseThisType,
   NonPagedPoolCacheAligned,
   PagedPoolCacheAligned,
   NonPagedPoolCacheAlignedMustS,
-  MaxPoolType
+  MaxPoolType,
+
+  NonPagedPoolNx = 512,
+  NonPagedPoolNxCacheAligned = NonPagedPoolNx + 4,
+  NonPagedPoolSessionNx = NonPagedPoolNx + 32
 } POOL_TYPE;
 
 typedef ULONG64 POOL_FLAGS;
