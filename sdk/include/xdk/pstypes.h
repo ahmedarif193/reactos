@@ -18,6 +18,7 @@ $if (_WDMDDK_)
 #define THREAD_SET_INFORMATION           0x0020
 #define THREAD_SET_LIMITED_INFORMATION   0x0400
 #define THREAD_QUERY_LIMITED_INFORMATION 0x0800
+#define THREAD_RESUME                    0x1000
 
 #define PROCESS_DUP_HANDLE               (0x0040)
 
@@ -472,4 +473,3 @@ typedef struct _PROCESS_HANDLE_TRACING_QUERY {
 extern NTKERNELAPI PEPROCESS PsInitialSystemProcess;
 
 $endif (_NTDDK_)
-
