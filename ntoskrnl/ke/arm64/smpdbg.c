@@ -32,7 +32,6 @@ typedef struct _SMPDBG_CPU
     volatile ULONG GicEn;   /* timer PPI enabled          */
     volatile ULONG GicPend; /* timer PPI pending          */
     volatile ULONG GicAct;  /* timer PPI active           */
-    volatile ULONG IdleStreak; /* consecutive all-idle ticks seen by this CPU */
     volatile ULONG RemoteDpc;
     volatile ULONG SchedulerIpi;
     volatile ULONG QueuedDpcIpi;
@@ -47,9 +46,6 @@ typedef struct _SMPDBG_CPU
 } SMPDBG_CPU;
 
 static SMPDBG_CPU SmpDbgCpu[SMPDBG_MAXCPU];
-
-/* One-shot latch: dump the wedge state exactly once per all-idle episode, then stay silent until the system recovers (some CPU goes non-idle). Avoids thousands of repeated SMPWEDGE lines. */
-static volatile LONG SmpDbgWedgeDumped;
 
 VOID NTAPI SmpDbgTimerBegin(ULONG Cpu, ULONG IntId)
 {
@@ -161,70 +157,9 @@ VOID NTAPI SmpDbgWake(ULONG Cpu)
         SmpDbgCpu[Cpu].Wake++;
 }
 
-/*
- * Per-CPU heartbeat from the timer ISR. Each CPU prints its own line every 64
- * of its own ticks. If a CPU's heartbeat stops while the boot is stalled, that
- * CPU's timer is dead (no ticks); if heartbeats keep coming on all CPUs while
- * the boot is stalled, timers are alive and it is a lost wakeup / scheduler bug.
- * next=NextThread shows a runnable thread the idle CPU is failing to pick up.
- */
-extern PKPRCB KiProcessorBlock[];
-
 VOID NTAPI SmpDbgHeartbeat(ULONG Cpu)
 {
-    /*
-     * Wedge detector, called from the timer ISR (immune to the scheduler-dispatch
-     * deadlock it diagnoses, because the architected timer keeps firing). Silent
-     * during normal boot: it only prints when every CPU except this one is idle
-     * (KiIdleSummary), i.e. an all-CPUs-idle wedge, and then dumps each PRCB's
-     * dispatch state so a thread that is runnable-but-never-dispatched (NextThread
-     * set, or ReadySummary != 0, or a non-empty DeferredReadyList while all idle)
-     * is visible straight off the serial log.
-     */
-    if (SmpDbgEnabled && (Cpu < SMPDBG_MAXCPU))
-    {
-        KAFFINITY Active = (KAFFINITY)KeActiveProcessors;
-        KAFFINITY IdleOrMe = (KAFFINITY)KiIdleSummary | ((KAFFINITY)1 << Cpu);
-        BOOLEAN AllIdle = (Active != 0) && ((IdleOrMe & Active) == Active);
-
-        /* Require a sustained all-idle streak before crying wedge: brief all-idle windows during boot (waiting on I/O between phases) are normal and must not trigger. A real wedge is permanent, so the streak climbs without bound. */
-        if (!AllIdle)
-        {
-            SmpDbgCpu[Cpu].IdleStreak = 0;
-        }
-        else if (SmpDbgCpu[Cpu].IdleStreak < 0xFFFFFFFF)
-        {
-            SmpDbgCpu[Cpu].IdleStreak++;
-        }
-
-        if (AllIdle && (SmpDbgCpu[Cpu].IdleStreak >= 512) &&
-            (InterlockedCompareExchange(&SmpDbgWedgeDumped, 1, 0) == 0))
-        {
-            ULONG i;
-            DbgPrint("SMPWEDGE cpu=%lu tick=%lu streak=%lu idle=0x%Ix active=0x%Ix\n",
-                     Cpu, SmpDbgCpu[Cpu].Tick, SmpDbgCpu[Cpu].IdleStreak,
-                     (ULONG_PTR)KiIdleSummary, (ULONG_PTR)KeActiveProcessors);
-            for (i = 0; i < (ULONG)KeNumberProcessors && i < SMPDBG_MAXCPU; i++)
-            {
-                PKPRCB P = KiProcessorBlock[i];
-                if (P != NULL)
-                    DbgPrint("SMPWEDGE   cpu%lu next=%p ready=0x%lx defer=%p cur=%p sleep=%u tick=%lu treq=%p dpcq=%lu dpcact=%u dpcint=%u rdpc=%lu schedipi=%lu dpcipi=%lu tbipi=%lu genipi=%lu place=%lu idlebal=%lu quantbal=%lu periodbal=%lu standbybal=%lu from0=%lu from1=%lu from2=%lu from3=%lu\n",
-                             i, P->NextThread, (ULONG)P->ReadySummary,
-                             P->DeferredReadyListHead.Next, P->CurrentThread,
-                             (ULONG)P->Sleeping, SmpDbgCpu[i].Tick,
-                             (PVOID)P->TimerRequest, (ULONG)P->DpcData[0].DpcQueueDepth,
-                             (ULONG)P->DpcRoutineActive, (ULONG)P->DpcInterruptRequested,
-                             SmpDbgCpu[i].RemoteDpc, SmpDbgCpu[i].SchedulerIpi,
-                             SmpDbgCpu[i].QueuedDpcIpi, SmpDbgCpu[i].TbFlushIpi,
-                             SmpDbgCpu[i].GenericCallIpi, SmpDbgCpu[i].BalanceWake,
-                             SmpDbgCpu[i].BalanceIdle, SmpDbgCpu[i].BalanceQuantum,
-                             SmpDbgCpu[i].BalancePeriodic,
-                             SmpDbgCpu[i].StandbySteals,
-                             SmpDbgCpu[i].BalanceSources[0], SmpDbgCpu[i].BalanceSources[1],
-                             SmpDbgCpu[i].BalanceSources[2], SmpDbgCpu[i].BalanceSources[3]);
-            }
-        }
-    }
+    UNREFERENCED_PARAMETER(Cpu);
 }
 
 VOID NTAPI SmpDbgCntv(ULONG Cpu, ULONG Ctl, LONG Tval, ULONG Pmr)
