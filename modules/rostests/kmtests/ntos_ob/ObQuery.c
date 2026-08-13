@@ -13,6 +13,59 @@
 
 static
 VOID
+ObjectHeaderInformationTests(VOID)
+{
+    NTSTATUS Status;
+    HANDLE EventHandle;
+    PVOID EventObject;
+    POBJECT_HEADER_NAME_INFO NameInfo;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    UNICODE_STRING EventName = RTL_CONSTANT_STRING(L"\\BaseNamedObjects\\KmtestObQueryNameInfo");
+    UNICODE_STRING ExpectedName = RTL_CONSTANT_STRING(L"KmtestObQueryNameInfo");
+
+    ok_irql(PASSIVE_LEVEL);
+
+    InitializeObjectAttributes(&ObjectAttributes, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ZwCreateEvent(&EventHandle, EVENT_ALL_ACCESS, &ObjectAttributes, NotificationEvent, FALSE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status)) return;
+
+    EventObject = NULL;
+    Status = ObReferenceObjectByHandle(EventHandle, EVENT_ALL_ACCESS, *ExEventObjectType, KernelMode, &EventObject, NULL);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        ok_eq_pointer(ObGetObjectType(EventObject), *ExEventObjectType);
+        ok_eq_pointer(ObQueryNameInfo(EventObject), NULL);
+        ObDereferenceObject(EventObject);
+    }
+    ZwClose(EventHandle);
+
+    InitializeObjectAttributes(&ObjectAttributes, &EventName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE | OBJ_OPENIF, NULL, NULL);
+    Status = ZwCreateEvent(&EventHandle, EVENT_ALL_ACCESS, &ObjectAttributes, NotificationEvent, FALSE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status)) return;
+
+    EventObject = NULL;
+    Status = ObReferenceObjectByHandle(EventHandle, EVENT_ALL_ACCESS, *ExEventObjectType, KernelMode, &EventObject, NULL);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        ok_eq_pointer(ObGetObjectType(EventObject), *ExEventObjectType);
+        NameInfo = ObQueryNameInfo(EventObject);
+        ok(NameInfo != NULL, "ObQueryNameInfo returned NULL for %wZ\n", &EventName);
+        if (NameInfo)
+        {
+            ok(NameInfo->Directory != NULL, "Named event has no parent directory\n");
+            ok(RtlEqualUnicodeString(&NameInfo->Name, &ExpectedName, FALSE), "NameInfo->Name is %wZ, expected %wZ\n", &NameInfo->Name, &ExpectedName);
+        }
+        ObDereferenceObject(EventObject);
+    }
+    ZwClose(EventHandle);
+}
+
+static
+VOID
 ObjectBasicInformationTests(VOID)
 {
     NTSTATUS Status;
@@ -171,6 +224,7 @@ ObjectNameInformationTests(VOID)
 
 START_TEST(ObQuery)
 {
+    ObjectHeaderInformationTests();
     ObjectBasicInformationTests();
     ObjectNameInformationTests();
 }
