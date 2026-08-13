@@ -7895,6 +7895,19 @@ typedef MINIPORT_SHUTDOWN            MINIPORT_SHUTDOWN_EX;
 typedef MINIPORT_RESET               MINIPORT_RESET_EX;
 typedef MINIPORT_CHECK_FOR_HANG      MINIPORT_CHECK_FOR_HANG_EX;
 
+#if (NDIS_SUPPORT_NDIS620)
+#ifndef NDIS_INDICATE_ALL_NBLS
+#define NDIS_INDICATE_ALL_NBLS ((ULONG)-1)
+#endif
+
+typedef struct _NDIS_RECEIVE_THROTTLE_PARAMETERS
+{
+    _In_ ULONG MaxNblsToIndicate;
+    _Out_ ULONG MoreNblsPending : 1;
+} NDIS_RECEIVE_THROTTLE_PARAMETERS, *PNDIS_RECEIVE_THROTTLE_PARAMETERS;
+#define NDIS_RECEIVE_THROTTLE_PARAMETERS_DEFINED 1
+#endif
+
 /* NDIS 6 hardware interrupt callbacks (MSI / MSI-X capable miniports) */
 typedef BOOLEAN
 (NTAPI MINIPORT_ISR)(
@@ -8029,6 +8042,16 @@ VOID
 NDISAPI
 NdisMDeregisterInterruptEx(
   _In_ NDIS_HANDLE NdisInterruptHandle);
+
+#if (NDIS_SUPPORT_NDIS620)
+KAFFINITY
+NDISAPI
+NdisMQueueDpcEx(
+  _In_ NDIS_HANDLE NdisInterruptHandle,
+  _In_ ULONG MessageId,
+  _In_ PGROUP_AFFINITY TargetProcessors,
+  _In_opt_ PVOID MiniportDpcContext);
+#endif
 
 /* NDIS 6 scatter-gather DMA registration */
 NDIS_STATUS
