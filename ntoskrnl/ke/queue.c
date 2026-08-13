@@ -65,6 +65,46 @@ KiWakeQueueDequeueWaiter(
     return FALSE;
 }
 
+static VOID
+KiRundownQueueWaitersLocked(
+    _Inout_ PKQUEUE Queue)
+{
+    PLIST_ENTRY WaitEntry;
+    PKWAIT_BLOCK WaitBlock;
+    PKTHREAD Thread;
+    LONG_PTR WaitStatus;
+
+    while (!IsListEmpty(&Queue->Header.WaitListHead))
+    {
+        WaitEntry = Queue->Header.WaitListHead.Flink;
+        WaitBlock = CONTAINING_RECORD(WaitEntry, KWAIT_BLOCK, WaitListEntry);
+        Thread = WaitBlock->Thread;
+
+        KiAcquireThreadLock(Thread);
+        RemoveEntryList(WaitEntry);
+        WaitEntry->Flink = NULL;
+        if ((Thread->State == Waiting) && (WaitBlock->BlockState == WaitBlockActive))
+        {
+            WaitBlock->BlockState = WaitBlockInactive;
+            if (WaitBlock->WaitType == WaitDequeue)
+            {
+                KiIncrementQueueCurrentCount(Queue);
+                WaitStatus = STATUS_ABANDONED;
+            }
+            else if (WaitBlock->WaitType == WaitAny)
+                WaitStatus = WaitBlock->WaitKey;
+            else
+                WaitStatus = STATUS_KERNEL_APC;
+            KiUnwaitThread(Thread, WaitStatus, IO_NO_INCREMENT);
+        }
+        else
+        {
+            WaitBlock->BlockState = WaitBlockInactive;
+        }
+        KiReleaseThreadLock(Thread);
+    }
+}
+
 /*
  * Called when a thread which has a queue entry is entering a wait state
  */
@@ -339,6 +379,14 @@ KiRemoveQueueExInternal(
     /* Loop until the queue is processed */
     while (TRUE)
     {
+        if (Queue->Header.Abandoned)
+        {
+            EntryArray[0] = (PLIST_ENTRY)(ULONG_PTR)STATUS_ABANDONED;
+            EntriesRemoved = 1;
+            KiIncrementQueueCurrentCount(Queue);
+            break;
+        }
+
         /* Check if the counts are valid and if there is still a queued entry */
         QueueEntry = Queue->EntryListHead.Flink;
         if ((Queue->CurrentCount < Queue->MaximumCount) &&
@@ -542,7 +590,6 @@ KeRundownQueue(IN PKQUEUE Queue)
 #endif
     ASSERT_QUEUE(Queue);
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
-    ASSERT(IsListEmpty(&Queue->Header.WaitListHead));
 
     /* Lock the Queue object */
     OldIrql = KeRaiseIrqlToSynchLevel();
@@ -563,6 +610,8 @@ KeRundownQueue(IN PKQUEUE Queue)
         Queue->Header.SignalState = 0;
     }
 
+    Queue->Header.Abandoned = TRUE;
+
     /* Loop the list */
     while (!IsListEmpty(&Queue->ThreadListHead))
     {
@@ -573,11 +622,17 @@ KeRundownQueue(IN PKQUEUE Queue)
         Thread = CONTAINING_RECORD(NextEntry, KTHREAD, QueueListEntry);
 
         /* Clear its queue */
+        KiAcquireThreadLock(Thread);
         Thread->Queue = NULL;
 
         /* Remove this entry */
         RemoveEntryList(NextEntry);
+        KiReleaseThreadLock(Thread);
     }
+
+    /* Dequeue waiters become active as rundown wakes them. */
+    Queue->CurrentCount = 0;
+    KiRundownQueueWaitersLocked(Queue);
 
     /* Release the queue object */
     KiReleaseDispatcherObject(&Queue->Header);
