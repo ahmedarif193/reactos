@@ -501,6 +501,12 @@ ExpInitializeHandleTables(
     VOID
 );
 
+LONG
+NTAPI
+ExpGetHandleCount(
+    IN PHANDLE_TABLE HandleTable
+);
+
 PHANDLE_TABLE
 NTAPI
 ExCreateHandleTable(
