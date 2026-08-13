@@ -393,6 +393,7 @@
  @ stdcall NdisRequestPoll(ptr ptr)
  @ stdcall NdisMRegisterInterruptEx(ptr ptr ptr ptr)
  @ stdcall NdisMDeregisterInterruptEx(ptr)
+ @ stdcall NdisMQueueDpcEx(ptr long ptr ptr)
  @ stdcall NdisMRegisterScatterGatherDma(ptr ptr ptr)
  @ stdcall NdisMDeregisterScatterGatherDma(ptr)
  @ stdcall NdisMAllocateNetBufferSGList(ptr ptr ptr long ptr long)

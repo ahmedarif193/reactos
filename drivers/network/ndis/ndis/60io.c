@@ -718,21 +718,32 @@ Ndis6DpcWrapper(
     _In_opt_ PVOID SystemArgument2)
 {
     PNDIS6_ADAPTER_EXT Ext = (PNDIS6_ADAPTER_EXT)DeferredContext;
+    NDIS_RECEIVE_THROTTLE_PARAMETERS ThrottleParameters = {0};
+    ULONG MessageId = (ULONG)(ULONG_PTR)SystemArgument2;
 
     UNREFERENCED_PARAMETER(Dpc);
-    UNREFERENCED_PARAMETER(SystemArgument1);
-    UNREFERENCED_PARAMETER(SystemArgument2);
 
     if (Ext == NULL)
         return;
 
-    /* The NDIS 6 DPC handler signature takes:
-     *   (MiniportInterruptContext, MiniportDpcContext,
-     *    ReceiveThrottleParameters, NdisReserved2)
-     * Drivers tolerate NULL for the latter three; e1000e
-     * (interrupt_ndis6.c:743 and on) ignores them. */
-    if (Ext->IntChars.InterruptDpcHandler != NULL)
-        Ext->IntChars.InterruptDpcHandler(Ext->MiniportInterruptContext, NULL, NULL, NULL);
+    ThrottleParameters.MaxNblsToIndicate = NDIS_INDICATE_ALL_NBLS;
+    ThrottleParameters.MoreNblsPending = FALSE;
+
+    if (Ext->MsiConnected && Ext->IntChars.MessageInterruptDpcHandler != NULL)
+    {
+        Ext->IntChars.MessageInterruptDpcHandler(Ext->MiniportInterruptContext,
+                                                 MessageId,
+                                                 SystemArgument1,
+                                                 &ThrottleParameters,
+                                                 NULL);
+    }
+    else if (Ext->IntChars.InterruptDpcHandler != NULL)
+    {
+        Ext->IntChars.InterruptDpcHandler(Ext->MiniportInterruptContext,
+                                          SystemArgument1,
+                                          &ThrottleParameters,
+                                          NULL);
+    }
 
     Ndis6DereferenceInterrupt(Ext, TRUE);
 }
@@ -790,7 +801,7 @@ Ndis6MsiIsrWrapper(
         return FALSE;
     }
 
-    if (Recognized && QueueDpc && KeInsertQueueDpc(&Ext->InterruptDpc, NULL, NULL))
+    if (Recognized && QueueDpc && KeInsertQueueDpc(&Ext->InterruptDpc, NULL, (PVOID)(ULONG_PTR)MessageId))
         return Recognized;
 
     Ndis6DereferenceInterrupt(Ext, FALSE);
@@ -810,6 +821,8 @@ NdisMRegisterInterruptEx(
     KINTERRUPT_MODE    InterruptMode;
     BOOLEAN            ShareVector;
     BOOLEAN            WantsMsi;
+    PROCESSOR_NUMBER   Processor = {0};
+    ULONG              ProcessorIndex;
 
     if (NdisInterruptHandle == NULL || MiniportInterruptCharacteristics == NULL)
         return NDIS_STATUS_INVALID_PARAMETER;
@@ -843,6 +856,17 @@ NdisMRegisterInterruptEx(
     /* Initialize the wrapper DPC bound to Ndis6DpcWrapper. The driver's DPC
      * handler runs from inside this wrapper at DISPATCH_LEVEL. */
     KeInitializeDpc(&Ext->InterruptDpc, Ndis6DpcWrapper, Ext);
+    for (ProcessorIndex = 0;
+         ProcessorIndex < (ULONG)(UCHAR)KeNumberProcessors;
+         ProcessorIndex++)
+    {
+        Processor.Number = (UCHAR)ProcessorIndex;
+        KeInitializeDpc(&Ext->QueuedInterruptDpcs[ProcessorIndex], Ndis6DpcWrapper, Ext);
+        Status = KeSetTargetProcessorDpcEx(&Ext->QueuedInterruptDpcs[ProcessorIndex], &Processor);
+        ASSERT(NT_SUCCESS(Status));
+        if (!NT_SUCCESS(Status))
+            return NDIS_STATUS_FAILURE;
+    }
 
     /* C1/C2: the driver asks for MSI by setting IntChars.MsiSupported.
      * Some drivers also fill MessageInterruptHandler; many (e1000e
@@ -1039,6 +1063,55 @@ NdisMDeregisterInterruptEx(
     _In_ NDIS_HANDLE NdisInterruptHandle)
 {
     Ndis6DisconnectInterrupt((PNDIS6_ADAPTER_EXT)NdisInterruptHandle);
+}
+
+KAFFINITY
+NTAPI
+NdisMQueueDpcEx(
+    _In_ NDIS_HANDLE NdisInterruptHandle,
+    _In_ ULONG MessageId,
+    _In_ PGROUP_AFFINITY TargetProcessors,
+    _In_opt_ PVOID MiniportDpcContext)
+{
+    PNDIS6_ADAPTER_EXT Ext = (PNDIS6_ADAPTER_EXT)NdisInterruptHandle;
+    KAFFINITY ProcessorMask;
+    KAFFINITY ScheduledProcessors = 0;
+    ULONG ProcessorIndex;
+
+    if (Ext == NULL || TargetProcessors == NULL ||
+        Ext->Adapter == NULL || !Ext->Adapter->IsNdis6 ||
+        NDIS6_EXT(Ext->Adapter) != Ext ||
+        (Ext->IntChars.InterruptDpcHandler == NULL &&
+         Ext->IntChars.MessageInterruptDpcHandler == NULL) ||
+        TargetProcessors->Group != 0)
+    {
+        return 0;
+    }
+
+    for (ProcessorIndex = 0;
+         ProcessorIndex < (ULONG)(UCHAR)KeNumberProcessors;
+         ProcessorIndex++)
+    {
+        ProcessorMask = (KAFFINITY)1 << ProcessorIndex;
+        if (!(TargetProcessors->Mask & ProcessorMask) ||
+            !Ndis6ReferenceInterrupt(Ext))
+        {
+            continue;
+        }
+
+        if (KeInsertQueueDpc(&Ext->QueuedInterruptDpcs[ProcessorIndex],
+                             MiniportDpcContext,
+                             (PVOID)(ULONG_PTR)MessageId))
+        {
+            ScheduledProcessors |= ProcessorMask;
+        }
+        else
+        {
+            Ndis6DereferenceInterrupt(Ext, FALSE);
+        }
+    }
+
+    return ScheduledProcessors;
 }
 
 /* EOF */

@@ -308,6 +308,7 @@ typedef struct _NDIS6_ADAPTER_EXT
     PKINTERRUPT                     InterruptObject;
     KSPIN_LOCK                      IsrLock;
     KDPC                            InterruptDpc;
+    KDPC                            QueuedInterruptDpcs[MAXIMUM_PROCESSORS];
     NDIS_MINIPORT_INTERRUPT_CHARACTERISTICS IntChars;
     NDIS_HANDLE                     MiniportInterruptContext;
     /* High bit closes the gate; low bits count queued/running ISR-DPC work. */
