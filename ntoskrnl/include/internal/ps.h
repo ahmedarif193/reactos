@@ -331,6 +331,15 @@ PspDeleteThread(
     IN PVOID ObjectBody
 );
 
+VOID
+NTAPI
+PspJobClose(
+    IN PEPROCESS Process OPTIONAL,
+    IN PVOID Object,
+    IN ULONG_PTR ProcessHandleCount,
+    IN ULONG_PTR SystemHandleCount
+);
+
 //
 // Thread/Process Startup
 //
