@@ -531,22 +531,6 @@ NwifiAggregateBssList(
         Slot->IeLength = IeCopy;
         RtlCopyMemory(Slot->Ie, Entry->ucBuffer, IeCopy);
 
-        {
-            CHAR SsidText[DOT11_SSID_MAX_LENGTH + 1];
-            ULONG SsidLen = (Ssid.uSSIDLength <= DOT11_SSID_MAX_LENGTH)
-                                ? Ssid.uSSIDLength : DOT11_SSID_MAX_LENGTH;
-            if (SsidLen != 0)
-                RtlCopyMemory(SsidText, Ssid.ucSSID, SsidLen);
-            SsidText[SsidLen] = '\0';
-            DPRINT1("NWIFI: scan found BSS \"%s\" %02x:%02x:%02x:%02x:%02x:%02x "
-                    "RSSI %d freq %u cap 0x%04x\n",
-                    SsidText,
-                    Slot->Bssid[0], Slot->Bssid[1], Slot->Bssid[2],
-                    Slot->Bssid[3], Slot->Bssid[4], Slot->Bssid[5],
-                    (int)Slot->Rssi, Slot->ChCenterFrequency,
-                    Slot->CapabilityInformation);
-        }
-
         Cursor += EntrySize;
     }
 
