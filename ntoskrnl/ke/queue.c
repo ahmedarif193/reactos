@@ -559,6 +559,8 @@ KeRundownQueue(IN PKQUEUE Queue)
     {
         /* Remove this entry */
         RemoveEntryList(&Queue->EntryListHead);
+        InitializeListHead(&Queue->EntryListHead);
+        Queue->Header.SignalState = 0;
     }
 
     /* Loop the list */
