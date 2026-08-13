@@ -297,6 +297,7 @@ IopCreateObjectTypes(VOID)
     ObjectTypeInitializer.ValidAccessMask = IO_COMPLETION_ALL_ACCESS;
     ObjectTypeInitializer.InvalidAttributes |= OBJ_PERMANENT;
     ObjectTypeInitializer.GenericMapping = IopCompletionMapping;
+    ObjectTypeInitializer.CloseProcedure = IopCloseIoCompletion;
     ObjectTypeInitializer.DeleteProcedure = IopDeleteIoCompletion;
     ObjectTypeInitializer.UseDefaultObject = FALSE;
     if (!NT_SUCCESS(ObCreateObjectType(&Name,
