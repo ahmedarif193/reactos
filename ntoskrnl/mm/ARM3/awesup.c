@@ -516,12 +516,6 @@ MiAweUnmapRange(
     _In_ ULONG_PTR EndingAddress)
 {
     MI_ARM64_USER_PTE_WALK Walk;
-    PMMPTE PointerPte;
-    ULONG_PTR UnmapVa[MI_AWE_CHUNK];
-    ULONG UnmapCount, i;
-    PFN_NUMBER Page;
-    PMMPFN Pfn1;
-    KIRQL OldIrql;
 
     /* The exclusive working set lock keeps the hierarchy stable */
     ASSERT(PsGetCurrentThread()->OwnsProcessWorkingSetExclusive);
@@ -536,42 +530,11 @@ MiAweUnmapRange(
             continue;
         }
 
-        /* Erase this table's AWE leaves under one PFN lock hold, then
-           release the table references outside of it: the release helper
-           acquires the PFN lock itself and may collapse empty tables.
-           Remaining valid leaves keep the table alive across batches. */
-        UnmapCount = 0;
-        PointerPte = (PMMPTE)Walk.PointerPte;
-        OldIrql = MiAcquirePfnLock();
-        do
-        {
-            if (PointerPte->u.Hard.Valid)
-            {
-                if (UnmapCount == MI_AWE_CHUNK) break;
-
-                Page = PFN_FROM_PTE(PointerPte);
-                Pfn1 = MiGetPfnEntry(Page);
-                ASSERT(Pfn1->u4.PteFrame == MI_AWE_PTE_FRAME);
-                ASSERT(Pfn1->PteAddress == MiAddressToPte(Va));
-                MI_ERASE_PTE(PointerPte);
-                Pfn1->PteAddress = MI_AWE_UNMAPPED_PTE;
-                UnmapVa[UnmapCount++] = Va;
-            }
-
-            Va += PAGE_SIZE;
-            PointerPte++;
-        } while ((Va & (PDE_MAPPED_VA - 1)) && (Va <= EndingAddress));
-        MiReleasePfnLock(OldIrql);
-
-        if (UnmapCount != 0)
-        {
-            MiFlushProcessTbRange((PVOID)UnmapVa[0], BYTES_TO_PAGES(UnmapVa[UnmapCount - 1] - UnmapVa[0] + PAGE_SIZE));
-        }
-
-        for (i = 0; i < UnmapCount; i++)
-        {
-            MiArm64ReleaseUserPageTableReference(Process, (PVOID)UnmapVa[i], TRUE, &Walk);
-        }
+        /* Retire the leaf and its accounting together. Erasing a batch first
+           would make the table validator observe fewer live entries than
+           UsedPageTableEntries until the rest of the batch was released. */
+        MiAweUnmapVa(Process, Va);
+        Va += PAGE_SIZE;
     }
 }
 
