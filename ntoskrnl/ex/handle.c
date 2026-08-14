@@ -192,8 +192,7 @@ ExpFreeLowLevelTable(IN PEPROCESS Process,
         /* Free the entry */
         ExpFreeTablePagedPool(Process,
                               TableEntry[0].Object,
-                              LOW_LEVEL_ENTRIES *
-                              sizeof(HANDLE_TABLE_ENTRY_INFO));
+                              HANDLE_TABLE_ENTRY_INFO_SIZE);
     }
 
     /* Free the table */
@@ -285,11 +284,16 @@ ExpFreeHandleTableEntry(IN PHANDLE_TABLE HandleTable,
 {
     ULONG OldValue, *Free;
     ULONG LockIndex;
+    PULONG CachedReferenceCount;
     PAGED_CODE();
 
     /* Sanity checks */
     ASSERT(HandleTableEntry->Object == NULL);
     ASSERT(HandleTableEntry == ExpLookupHandleTableEntry(HandleTable, Handle));
+
+    /* A reused entry must never inherit per-handle state. */
+    CachedReferenceCount = ExGetHandleCachedReferenceCount(HandleTable, Handle.GenericHandleOverlay, HandleTableEntry);
+    if (CachedReferenceCount) *CachedReferenceCount = 0;
 
     /* Decrement the handle count */
     InterlockedDecrement(&HandleTable->HandleCount);
@@ -336,6 +340,7 @@ ExpAllocateHandleTable(IN PEPROCESS Process OPTIONAL,
 {
     PHANDLE_TABLE HandleTable;
     PHANDLE_TABLE_ENTRY HandleTableTable, HandleEntry;
+    PHANDLE_TABLE_ENTRY_INFO InfoTable;
     ULONG i;
     NTSTATUS Status;
     PAGED_CODE();
@@ -377,6 +382,16 @@ ExpAllocateHandleTable(IN PEPROCESS Process OPTIONAL,
         return NULL;
     }
 
+    /* Allocate the public audit records followed by our cached-ref counters. */
+    InfoTable = ExpAllocateTablePagedPool(Process, HANDLE_TABLE_ENTRY_INFO_SIZE);
+    if (!InfoTable)
+    {
+        ExpFreeTablePagedPool(Process, HandleTableTable, PAGE_SIZE);
+        ExFreePoolWithTag(HandleTable, TAG_OBJECT_TABLE);
+        if (Process) PsReturnProcessPagedPoolQuota(Process, sizeof(HANDLE_TABLE));
+        return NULL;
+    }
+
     /* Write the pointer to our first level structures */
     HandleTable->TableCode = (ULONG_PTR)HandleTableTable;
 
@@ -384,6 +399,7 @@ ExpAllocateHandleTable(IN PEPROCESS Process OPTIONAL,
     HandleEntry = &HandleTableTable[0];
     HandleEntry->NextFreeTableEntry = -2;
     HandleEntry->Value = 0;
+    HandleEntry->InfoTable = InfoTable;
 
     /* Check if this is a new table */
     if (NewTable)
@@ -435,16 +451,26 @@ ExpAllocateLowLevelTable(IN PHANDLE_TABLE HandleTable,
 {
     ULONG i, Base;
     PHANDLE_TABLE_ENTRY Low, HandleEntry;
+    PHANDLE_TABLE_ENTRY_INFO InfoTable;
 
     /* Allocate the low level table */
     Low = ExpAllocateTablePagedPoolNoZero(HandleTable->QuotaProcess,
                                           PAGE_SIZE);
     if (!Low) return NULL;
 
+    /* Keep auxiliary data separate so HANDLE_TABLE_ENTRY retains its ABI. */
+    InfoTable = ExpAllocateTablePagedPool(HandleTable->QuotaProcess, HANDLE_TABLE_ENTRY_INFO_SIZE);
+    if (!InfoTable)
+    {
+        ExpFreeTablePagedPool(HandleTable->QuotaProcess, Low, PAGE_SIZE);
+        return NULL;
+    }
+
     /* Setup the initial entry */
     HandleEntry = &Low[0];
     HandleEntry->NextFreeTableEntry = -2;
     HandleEntry->Value = 0;
+    HandleEntry->InfoTable = InfoTable;
 
     /* Check if we're initializing */
     if (DoInit)
@@ -832,6 +858,7 @@ ExCreateHandle(IN PHANDLE_TABLE HandleTable,
 {
     EXHANDLE Handle;
     PHANDLE_TABLE_ENTRY NewEntry;
+    PULONG CachedReferenceCount;
     PAGED_CODE();
 
     /* Start with a clean handle */
@@ -841,6 +868,11 @@ ExCreateHandle(IN PHANDLE_TABLE HandleTable,
     NewEntry = ExpAllocateHandleTableEntry(HandleTable, &Handle);
     if (NewEntry)
     {
+        /* Clear auxiliary state before publishing a reused entry. */
+        CachedReferenceCount = ExGetHandleCachedReferenceCount(HandleTable, Handle.GenericHandleOverlay, NewEntry);
+        ASSERT(CachedReferenceCount != NULL);
+        if (CachedReferenceCount) *CachedReferenceCount = 0;
+
         /* Enter a critical region */
         KeEnterCriticalRegion();
 
@@ -1068,6 +1100,30 @@ ExMapHandleToPointer(IN PHANDLE_TABLE HandleTable,
 
     /* Return the entry */
     return HandleTableEntry;
+}
+
+PULONG
+NTAPI
+ExGetHandleCachedReferenceCount(IN PHANDLE_TABLE HandleTable,
+                                IN HANDLE Handle,
+                                IN PHANDLE_TABLE_ENTRY HandleTableEntry)
+{
+    EXHANDLE ExHandle;
+    PHANDLE_TABLE_ENTRY LowLevelTable;
+    PHANDLE_TABLE_ENTRY_INFO InfoTable;
+    PULONG CachedReferenceCounts;
+
+    ExHandle.GenericHandleOverlay = Handle;
+    ExHandle.TagBits = 0;
+
+    if (HandleTableEntry != ExpLookupHandleTableEntry(HandleTable, ExHandle)) return NULL;
+
+    LowLevelTable = HandleTableEntry - ExHandle.LowIndex;
+    InfoTable = LowLevelTable[0].InfoTable;
+    if (!InfoTable) return NULL;
+
+    CachedReferenceCounts = (PULONG)((PUCHAR)InfoTable + LOW_LEVEL_ENTRIES * sizeof(*InfoTable));
+    return &CachedReferenceCounts[ExHandle.LowIndex];
 }
 
 PHANDLE_TABLE
