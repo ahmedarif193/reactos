@@ -959,6 +959,13 @@ MI_MAKE_HARDWARE_PTE_USER(IN PMMPTE NewPte,
 #endif
     NewPte->u.Hard.PageFrameNumber = PageFrameNumber;
     NewPte->u.Long |= MmProtectToPteMask[ProtectionMask];
+#if defined(_M_ARM64)
+    /*
+     * AP[2] must make software read-only and copy-on-write user mappings
+     * read-only at both EL0 and EL1. Writable mappings start dirty here.
+     */
+    NewPte->u.Hard.NotDirty = (NewPte->u.Hard.Writable == 0);
+#endif
 }
 
 #if !defined(_M_AMD64) && !defined(_M_ARM64)
