@@ -6,6 +6,12 @@
 
 #include "pnpcpu.h"
 
+#ifdef _M_ARM64
+#include <reactos/arm64/acpi.h>
+#define PNPCPU_ARM64_MPIDR_AFFINITY_MASK 0xFF00FFFFFFULL
+#define PNPCPU_ARM64_GICC_ENABLED 0x00000001
+#endif
+
 #define NDEBUG
 #include <debug.h>
 
@@ -33,6 +39,34 @@ static ULONG PnpcpuQueryActiveProcessorCount(VOID)
 #else
     return KeQueryActiveProcessorCount(NULL);
 #endif
+}
+
+static
+PCSTR
+PnpcpuPerformanceModeName(
+    _In_ ULONG PerfMode)
+{
+    switch (PerfMode)
+    {
+        case PNPCPU_PERF_PSS:
+            return "PSS";
+        case PNPCPU_PERF_CPPC:
+            return "CPPC";
+#if defined(_M_IX86) || defined(_M_AMD64)
+        case PNPCPU_PERF_HWP:
+            return "HWP";
+#endif
+        default:
+            return "none";
+    }
+}
+
+static
+PCSTR
+PnpcpuIdleSourceName(
+    _In_ PPNPCPU_DEVICE_EXTENSION DeviceExtension)
+{
+    return DeviceExtension->IdleFallback ? "fallback" : "ACPI";
 }
 
 #if defined(_M_IX86) || defined(_M_AMD64)
@@ -580,7 +614,13 @@ PnpcpuQueryMat(
     PUCHAR Data;
     NTSTATUS Status;
 
+#if defined(_M_IX86) || defined(_M_AMD64)
     DeviceExtension->ApicIdValid = FALSE;
+#elif defined(_M_ARM64)
+    DeviceExtension->MpidrValid = FALSE;
+    DeviceExtension->MatIdentityPresent = FALSE;
+    DeviceExtension->MatProcessorEnabled = FALSE;
+#endif
     Status = PnpcpuEvaluateMethod(DeviceExtension, PNPCPU_METHOD('_', 'M', 'A', 'T'), &OutputBuffer, &OutputLength);
     if (!NT_SUCCESS(Status))
         return;
@@ -591,6 +631,7 @@ PnpcpuQueryMat(
     if (Argument->Type != ACPI_METHOD_ARGUMENT_BUFFER || Argument->DataLength < 2)
         goto Exit;
     Data = Argument->Data;
+#if defined(_M_IX86) || defined(_M_AMD64)
     if (Data[0] == 0 && Data[1] >= 8 && Argument->DataLength >= 8)
     {
         RtlCopyMemory(&Flags, Data + 4, sizeof(Flags));
@@ -620,16 +661,44 @@ PnpcpuQueryMat(
             }
         }
     }
+#elif defined(_M_ARM64)
+    if (Data[0] == ARM64_ACPI_MADT_TYPE_GENERIC_INTERRUPT)
+    {
+        DeviceExtension->MatIdentityPresent = TRUE;
+        if (Data[1] >= FIELD_OFFSET(ARM64_ACPI_MADT_GENERIC_INTERRUPT, BaseAddress) + sizeof(((PARM64_ACPI_MADT_GENERIC_INTERRUPT)0)->BaseAddress) &&
+            Argument->DataLength >= FIELD_OFFSET(ARM64_ACPI_MADT_GENERIC_INTERRUPT, BaseAddress) + sizeof(((PARM64_ACPI_MADT_GENERIC_INTERRUPT)0)->BaseAddress))
+        {
+            RtlCopyMemory(&Flags, Data + FIELD_OFFSET(ARM64_ACPI_MADT_GENERIC_INTERRUPT, Flags), sizeof(Flags));
+            if (Flags & PNPCPU_ARM64_GICC_ENABLED)
+            {
+                DeviceExtension->MatProcessorEnabled = TRUE;
+                RtlCopyMemory(&MatUid, Data + FIELD_OFFSET(ARM64_ACPI_MADT_GENERIC_INTERRUPT, AcpiProcessorUid), sizeof(MatUid));
+                if (!DeviceExtension->UidValid)
+                {
+                    DeviceExtension->Uid = MatUid;
+                    DeviceExtension->UidValid = TRUE;
+                }
+                if (Data[1] >= FIELD_OFFSET(ARM64_ACPI_MADT_GENERIC_INTERRUPT, Mpidr) + sizeof(DeviceExtension->Mpidr) &&
+                    Argument->DataLength >= FIELD_OFFSET(ARM64_ACPI_MADT_GENERIC_INTERRUPT, Mpidr) + sizeof(DeviceExtension->Mpidr))
+                {
+                    RtlCopyMemory(&DeviceExtension->Mpidr, Data + FIELD_OFFSET(ARM64_ACPI_MADT_GENERIC_INTERRUPT, Mpidr), sizeof(DeviceExtension->Mpidr));
+                    DeviceExtension->Mpidr &= PNPCPU_ARM64_MPIDR_AFFINITY_MASK;
+                    DeviceExtension->MpidrValid = TRUE;
+                }
+            }
+        }
+    }
+#endif
 
 Exit:
     ExFreePoolWithTag(OutputBuffer, PNPCPU_TAG);
 }
 
+#if defined(_M_IX86) || defined(_M_AMD64)
 static
 ULONG
 PnpcpuQueryCurrentApicId(VOID)
 {
-#if defined(_M_IX86) || defined(_M_AMD64)
     int Registers[4];
     ULONG MaximumLeaf;
 
@@ -643,12 +712,8 @@ PnpcpuQueryCurrentApicId(VOID)
     }
     __cpuid(Registers, 1);
     return (ULONG)Registers[1] >> 24;
-#else
-    return MAXULONG;
-#endif
 }
 
-#if defined(_M_IX86) || defined(_M_AMD64)
 static
 VOID
 PnpcpuQueryProcessorFeatures(
@@ -757,6 +822,20 @@ PnpcpuInitializeHwpPerformance(
     DeviceExtension->PerfStates[1].Percentage = (UCHAR)max(1, ((ULONG)DeviceExtension->HwpLowest * 100) / DeviceExtension->HwpHighest);
     DeviceExtension->PerfStates[1].Frequency = DeviceExtension->HwpLowest;
 }
+#elif defined(_M_ARM64)
+static
+ULONGLONG
+PnpcpuQueryCurrentMpidr(VOID)
+{
+    ULONGLONG Mpidr;
+
+#if defined(_MSC_VER) && !defined(__clang__)
+    Mpidr = (ULONGLONG)_ReadStatusReg(0x4005);
+#else
+    __asm__ __volatile__("mrs %0, mpidr_el1" : "=r"(Mpidr));
+#endif
+    return Mpidr & PNPCPU_ARM64_MPIDR_AFFINITY_MASK;
+}
 #endif
 
 static
@@ -773,11 +852,12 @@ PnpcpuFindProcessorNumber(
 #if defined(_M_IX86) || defined(_M_AMD64)
     if (DeviceExtension->ApicIdValid)
     {
-        for (Index = 0; Index < ActiveProcessors; Index++)
+        for (Index = 0; Index < ActiveProcessors && Index < sizeof(KAFFINITY) * 8; Index++)
         {
             KAFFINITY PreviousAffinity = KeSetSystemAffinityThreadEx((KAFFINITY)1 << Index);
-            ULONG ApicId = PnpcpuQueryCurrentApicId();
+            ULONG ApicId;
 
+            ApicId = PnpcpuQueryCurrentApicId();
             KeRevertToUserAffinityThreadEx(PreviousAffinity);
             if (ApicId == DeviceExtension->ApicId)
             {
@@ -786,6 +866,28 @@ PnpcpuFindProcessorNumber(
                 return;
             }
         }
+        return;
+    }
+#elif defined(_M_ARM64)
+    if (DeviceExtension->MatIdentityPresent && !DeviceExtension->MatProcessorEnabled)
+        return;
+    if (DeviceExtension->MpidrValid)
+    {
+        for (Index = 0; Index < ActiveProcessors && Index < sizeof(KAFFINITY) * 8; Index++)
+        {
+            KAFFINITY PreviousAffinity = KeSetSystemAffinityThreadEx((KAFFINITY)1 << Index);
+            ULONGLONG Mpidr;
+
+            Mpidr = PnpcpuQueryCurrentMpidr();
+            KeRevertToUserAffinityThreadEx(PreviousAffinity);
+            if (Mpidr == DeviceExtension->Mpidr)
+            {
+                DeviceExtension->ProcessorNumber = Index;
+                DeviceExtension->ProcessorNumberValid = TRUE;
+                return;
+            }
+        }
+        return;
     }
 #endif
     if (DeviceExtension->UidValid && DeviceExtension->Uid < ActiveProcessors)
@@ -821,8 +923,11 @@ PnpcpuReleasePowerConfiguration(
     DeviceExtension->CppcLowestNonlinear = 0;
     DeviceExtension->CppcLowest = 0;
     DeviceExtension->CppcRestoreMask = 0;
+    DeviceExtension->IdleFallback = FALSE;
+#if defined(_M_IX86) || defined(_M_AMD64)
     DeviceExtension->HwpRequestCaptured = FALSE;
     DeviceExtension->HwpOriginalRequest = 0;
+#endif
 }
 
 static
@@ -841,6 +946,7 @@ PnpcpuParseCst(
     ULONG Index;
     NTSTATUS Status;
 
+    DeviceExtension->IdleFallback = FALSE;
     Status = PnpcpuEvaluateMethod(DeviceExtension, PNPCPU_METHOD('_', 'C', 'S', 'T'), &OutputBuffer, &OutputLength);
     if (!NT_SUCCESS(Status))
         goto Fallback;
@@ -893,6 +999,7 @@ Fallback:
         DeviceExtension->IdleStates[0].Type = 1;
         DeviceExtension->IdleStates[0].Latency = 1;
         DeviceExtension->IdleStateCount = 1;
+        DeviceExtension->IdleFallback = TRUE;
     }
     return DeviceExtension->IdleStateCount != 0;
 }
@@ -1457,13 +1564,21 @@ PnpcpuRegisterPowerConfiguration(
         return Status;
     }
     DeviceExtension->PowerRegistered = TRUE;
+#if defined(_M_IX86) || defined(_M_AMD64)
     if (DeviceExtension->PerfMode == PNPCPU_PERF_HWP && DeviceExtension->IntelHwpEppSupported)
     {
         Status = PoRegisterPowerSettingCallback(DeviceExtension->Self, &GUID_PROCESSOR_PERF_ENERGY_PERFORMANCE_PREFERENCE, PnpcpuPowerSettingCallback, DeviceExtension, &DeviceExtension->EnergyPreferenceHandle);
         if (!NT_SUCCESS(Status))
             DPRINT1("PNPCPU: CPU %lu HWP EPP registration failed, status 0x%08lx\n", DeviceExtension->ProcessorNumber, Status);
     }
-    DPRINT1("PNPCPU: P0 CPU %lu uid=%lu apic=%lu idle=%lu perf=%s/%lu registered SMP\n", DeviceExtension->ProcessorNumber, DeviceExtension->Uid, DeviceExtension->ApicId, DeviceExtension->IdleStateCount, DeviceExtension->PerfMode == PNPCPU_PERF_CPPC ? "CPPC" : (DeviceExtension->PerfMode == PNPCPU_PERF_PSS ? "PSS" : (DeviceExtension->PerfMode == PNPCPU_PERF_HWP ? "HWP" : "none")), DeviceExtension->PerfStateCount);
+#endif
+#if defined(_M_IX86) || defined(_M_AMD64)
+    DPRINT1("PNPCPU: P0 CPU %lu uid=%s%lu apic=%s%lu idle=%s/%lu perf=%s/%lu registered SMP\n", DeviceExtension->ProcessorNumber, DeviceExtension->UidValid ? "" : "?", DeviceExtension->Uid, DeviceExtension->ApicIdValid ? "" : "?", DeviceExtension->ApicId, PnpcpuIdleSourceName(DeviceExtension), DeviceExtension->IdleStateCount, PnpcpuPerformanceModeName(DeviceExtension->PerfMode), DeviceExtension->PerfStateCount);
+#elif defined(_M_ARM64)
+    DPRINT1("PNPCPU: P0 CPU %lu uid=%s%lu mpidr=%s0x%I64x idle=%s/%lu perf=%s/%lu registered SMP\n", DeviceExtension->ProcessorNumber, DeviceExtension->UidValid ? "" : "?", DeviceExtension->Uid, DeviceExtension->MpidrValid ? "" : "?", DeviceExtension->Mpidr, PnpcpuIdleSourceName(DeviceExtension), DeviceExtension->IdleStateCount, PnpcpuPerformanceModeName(DeviceExtension->PerfMode), DeviceExtension->PerfStateCount);
+#else
+    DPRINT1("PNPCPU: P0 CPU %lu uid=%s%lu idle=%s/%lu perf=%s/%lu registered SMP\n", DeviceExtension->ProcessorNumber, DeviceExtension->UidValid ? "" : "?", DeviceExtension->Uid, PnpcpuIdleSourceName(DeviceExtension), DeviceExtension->IdleStateCount, PnpcpuPerformanceModeName(DeviceExtension->PerfMode), DeviceExtension->PerfStateCount);
+#endif
     return STATUS_SUCCESS;
 }
 
@@ -1477,6 +1592,7 @@ PnpcpuUnregisterPowerConfiguration(
     KAFFINITY PreviousAffinity;
     NTSTATUS Status;
 
+#if defined(_M_IX86) || defined(_M_AMD64)
     if (DeviceExtension->EnergyPreferenceHandle)
     {
         Status = PoUnregisterPowerSettingCallback(DeviceExtension->EnergyPreferenceHandle);
@@ -1484,6 +1600,7 @@ PnpcpuUnregisterPowerConfiguration(
             DPRINT1("PNPCPU: CPU %lu HWP EPP unregister failed, status 0x%08lx\n", DeviceExtension->ProcessorNumber, Status);
         DeviceExtension->EnergyPreferenceHandle = NULL;
     }
+#endif
     if (!DeviceExtension->PowerRegistered || !DeviceExtension->ProcessorNumberValid)
         return;
     RtlZeroMemory(HandlerStorage, sizeof(HandlerStorage));
@@ -1511,7 +1628,13 @@ PnpcpuRefreshPowerConfiguration(
     PnpcpuReleasePowerConfiguration(DeviceExtension);
     if (!DeviceExtension->ProcessorNumberValid)
     {
+#if defined(_M_IX86) || defined(_M_AMD64)
         DPRINT("PNPCPU: inactive firmware processor uid=%s%lu apic=%s%lu left unregistered\n", DeviceExtension->UidValid ? "" : "?", DeviceExtension->Uid, DeviceExtension->ApicIdValid ? "" : "?", DeviceExtension->ApicId);
+#elif defined(_M_ARM64)
+        DPRINT("PNPCPU: inactive firmware processor uid=%s%lu mpidr=%s0x%I64x left unregistered\n", DeviceExtension->UidValid ? "" : "?", DeviceExtension->Uid, DeviceExtension->MpidrValid ? "" : "?", DeviceExtension->Mpidr);
+#else
+        DPRINT("PNPCPU: inactive firmware processor uid=%s%lu left unregistered\n", DeviceExtension->UidValid ? "" : "?", DeviceExtension->Uid);
+#endif
         return;
     }
 #if defined(_M_IX86) || defined(_M_AMD64)
@@ -1563,6 +1686,21 @@ PnpcpuWriteRegistryDword(
     ZwSetValueKey(KeyHandle, &ValueName, 0, REG_DWORD, &Value, sizeof(Value));
 }
 
+#ifdef _M_ARM64
+static
+VOID
+PnpcpuWriteRegistryQword(
+    _In_ HANDLE KeyHandle,
+    _In_ PCWSTR Name,
+    _In_ ULONGLONG Value)
+{
+    UNICODE_STRING ValueName;
+
+    RtlInitUnicodeString(&ValueName, Name);
+    ZwSetValueKey(KeyHandle, &ValueName, 0, REG_QWORD, &Value, sizeof(Value));
+}
+#endif
+
 static
 VOID
 PnpcpuPublishProperties(
@@ -1576,8 +1714,13 @@ PnpcpuPublishProperties(
         return;
     if (DeviceExtension->UidValid)
         PnpcpuWriteRegistryDword(KeyHandle, L"AcpiUid", DeviceExtension->Uid);
+#if defined(_M_IX86) || defined(_M_AMD64)
     if (DeviceExtension->ApicIdValid)
         PnpcpuWriteRegistryDword(KeyHandle, L"ApicId", DeviceExtension->ApicId);
+#elif defined(_M_ARM64)
+    if (DeviceExtension->MpidrValid)
+        PnpcpuWriteRegistryQword(KeyHandle, L"Mpidr", DeviceExtension->Mpidr);
+#endif
     if (DeviceExtension->ProximityValid)
         PnpcpuWriteRegistryDword(KeyHandle, L"ProximityDomain", DeviceExtension->ProximityDomain);
     if (DeviceExtension->ProcessorNumberValid)
@@ -1621,6 +1764,7 @@ PnpcpuRefreshCapabilities(
     }
     DeviceExtension->CapabilityMask = CapabilityMask;
 
+#if defined(_M_IX86) || defined(_M_AMD64)
     DPRINT1("PNPCPU: uid=%s%lu apic=%s%lu pxm=%s%lu active=%lu caps=0x%02lx CPC=%lu CST=%lu PSS=%lu PCT=%lu PSD=%lu PPC=%lu TSS=%lu TSD=%lu\n",
             DeviceExtension->UidValid ? "" : "?", DeviceExtension->Uid,
             DeviceExtension->ApicIdValid ? "" : "?", DeviceExtension->ApicId,
@@ -1630,6 +1774,26 @@ PnpcpuRefreshCapabilities(
             DeviceExtension->CapabilityCounts[2], DeviceExtension->CapabilityCounts[3],
             DeviceExtension->CapabilityCounts[4], DeviceExtension->CapabilityCounts[5],
             DeviceExtension->CapabilityCounts[6], DeviceExtension->CapabilityCounts[7]);
+#elif defined(_M_ARM64)
+    DPRINT1("PNPCPU: uid=%s%lu mpidr=%s0x%I64x pxm=%s%lu active=%lu caps=0x%02lx CPC=%lu CST=%lu PSS=%lu PCT=%lu PSD=%lu PPC=%lu TSS=%lu TSD=%lu\n",
+            DeviceExtension->UidValid ? "" : "?", DeviceExtension->Uid,
+            DeviceExtension->MpidrValid ? "" : "?", DeviceExtension->Mpidr,
+            DeviceExtension->ProximityValid ? "" : "?", DeviceExtension->ProximityDomain,
+            PnpcpuQueryActiveProcessorCount(), DeviceExtension->CapabilityMask,
+            DeviceExtension->CapabilityCounts[0], DeviceExtension->CapabilityCounts[1],
+            DeviceExtension->CapabilityCounts[2], DeviceExtension->CapabilityCounts[3],
+            DeviceExtension->CapabilityCounts[4], DeviceExtension->CapabilityCounts[5],
+            DeviceExtension->CapabilityCounts[6], DeviceExtension->CapabilityCounts[7]);
+#else
+    DPRINT1("PNPCPU: uid=%s%lu pxm=%s%lu active=%lu caps=0x%02lx CPC=%lu CST=%lu PSS=%lu PCT=%lu PSD=%lu PPC=%lu TSS=%lu TSD=%lu\n",
+            DeviceExtension->UidValid ? "" : "?", DeviceExtension->Uid,
+            DeviceExtension->ProximityValid ? "" : "?", DeviceExtension->ProximityDomain,
+            PnpcpuQueryActiveProcessorCount(), DeviceExtension->CapabilityMask,
+            DeviceExtension->CapabilityCounts[0], DeviceExtension->CapabilityCounts[1],
+            DeviceExtension->CapabilityCounts[2], DeviceExtension->CapabilityCounts[3],
+            DeviceExtension->CapabilityCounts[4], DeviceExtension->CapabilityCounts[5],
+            DeviceExtension->CapabilityCounts[6], DeviceExtension->CapabilityCounts[7]);
+#endif
 }
 
 static
