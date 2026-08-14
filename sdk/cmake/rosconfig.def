@@ -141,14 +141,36 @@ config ENABLE_ROSTESTS
       Build and package the ReactOS test suite, including the
       rosautotest runner. Tests are available only in Debug builds.
 
-config ENABLE_ARM64_NT10_ABI_PROBES
-    prompt "ARM64 NT10 kernel ABI boot probes"
+menu "Boot test automation"
+    depends BUILD_TYPE=Debug
+
+config ENABLE_ROSAUTOTEST_BOOT_RUN
+    prompt "Run the full RosAutoTest suite at boot"
     type bool
     default n
-    depends BUILD_TYPE=Debug && PROFILE_ARM64=rpi5 && FREELDR_HTTP_BOOT
     help
-      Build only the kernel-mode test harness and package the staged ARM64
-      NT10 layout, HAL, SMP, RTL, and memory-manager probes for HTTP boot.
+      Build and package the complete ReactOS test suite, then run it through
+      RosAutoTest after desktop startup. The standard RosAutoTest run includes
+      public KMTests.
+
+config ENABLE_CPUBENCH_BOOT_RUN
+    prompt "Run CPUbench at boot"
+    type bool
+    default n
+    help
+      Run the architecture-neutral CPU benchmark after desktop startup.
+
+config ENABLE_KMTEST_BOOT_RUN
+    prompt "Run all unattended KMTests at boot"
+    type bool
+    default n
+    help
+      Build the kernel-mode test harness when the complete test suite is
+      disabled, then enumerate and run its public and hidden unattended tests
+      after desktop startup. Interactive, negative self-test, and ExPools
+      cases remain manual-only.
+
+endmenu
 
 config ENABLE_WALLPAPERS
     prompt "ReactOS wallpapers"
