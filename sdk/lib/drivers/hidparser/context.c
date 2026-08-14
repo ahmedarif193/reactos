@@ -345,6 +345,29 @@ HidParser_GetReportInCollection(
     return HidParser_SearchReportInCollection(CollectionContext, (PHID_COLLECTION)&CollectionContext->RawData, ReportType);
 }
 
+ULONG
+HidParser_GetReportCountInCollection(
+    IN PVOID Context)
+{
+    PHID_COLLECTION Collection = HidParser_GetCollectionFromContext(Context);
+
+    return Collection != NULL ? Collection->ReportCount : 0;
+}
+
+PHID_REPORT
+HidParser_GetReportByIndex(
+    IN PVOID Context,
+    IN ULONG Index)
+{
+    PHID_COLLECTION_CONTEXT CollectionContext = Context;
+    PHID_COLLECTION Collection = HidParser_GetCollectionFromContext(Context);
+
+    if (Collection == NULL || Index >= Collection->ReportCount)
+        return NULL;
+
+    return (PHID_REPORT)(CollectionContext->RawData + Collection->Offsets[Index]);
+}
+
 static
 ULONG
 HidParser_BitsToBytes(
@@ -555,6 +578,53 @@ HidParser_GetCollectionFromContext(
     // return root collection
     //
     return (PHID_COLLECTION)CollectionContext->RawData;
+}
+
+static
+BOOLEAN
+HidParser_FindLinkCollectionUsage(
+    IN PHID_COLLECTION_CONTEXT CollectionContext,
+    IN ULONG CollectionOffset,
+    IN USHORT LinkCollection,
+    OUT PULONG Usage)
+{
+    PHID_COLLECTION Collection;
+    ULONG Index;
+
+    if (!HidParser_GetCollectionAtOffset(CollectionContext, CollectionOffset, &Collection))
+        return FALSE;
+
+    if (Collection->LinkCollection == LinkCollection)
+    {
+        *Usage = Collection->Usage;
+        return TRUE;
+    }
+
+    for (Index = 0; Index < Collection->NodeCount; Index++)
+    {
+        if (HidParser_FindLinkCollectionUsage(CollectionContext, Collection->Offsets[Collection->ReportCount + Index], LinkCollection, Usage))
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+NTSTATUS
+HidParser_GetLinkCollectionUsagePage(
+    IN PVOID Context,
+    IN USHORT LinkCollection,
+    OUT PUSHORT Usage,
+    OUT PUSHORT UsagePage)
+{
+    PHID_COLLECTION_CONTEXT CollectionContext = Context;
+    ULONG ExtendedUsage;
+
+    if (!Context || !Usage || !UsagePage || !HidParser_FindLinkCollectionUsage(CollectionContext, 0, LinkCollection, &ExtendedUsage))
+        return HIDP_STATUS_USAGE_NOT_FOUND;
+
+    *Usage = (USHORT)(ExtendedUsage & 0xFFFF);
+    *UsagePage = (USHORT)(ExtendedUsage >> 16);
+    return HIDP_STATUS_SUCCESS;
 }
 
 ULONG
