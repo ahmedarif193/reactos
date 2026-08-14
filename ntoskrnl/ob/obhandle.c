@@ -805,7 +805,6 @@ ObpCloseHandleTableEntry(IN PHANDLE_TABLE HandleTable,
     PVOID Body;
     POBJECT_TYPE ObjectType;
     POBJECT_HEADER ObjectHeader;
-    ACCESS_MASK GrantedAccess;
     KIRQL CalloutIrql;
     PAGED_CODE();
 
@@ -813,7 +812,6 @@ ObpCloseHandleTableEntry(IN PHANDLE_TABLE HandleTable,
     ObjectHeader = ObpGetHandleObject(HandleEntry);
     ObjectType = ObpGetObjectTypeFromHeader(ObjectHeader);
     Body = &ObjectHeader->Body;
-    GrantedAccess = HandleEntry->GrantedAccess;
     OBTRACE(OB_HANDLE_DEBUG,
             "%s - Closing handle: %p for %p. HC PC %lx %lx\n",
             __FUNCTION__,
