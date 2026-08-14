@@ -813,7 +813,7 @@ TestSharedCacheMap(VOID)
     if (skip(NT_SUCCESS(Status), "No SystemRoot object\n"))
         goto Cleanup;
 
-    /* Before read, caching is not initialized */
+    /* The system may already have cached this file before the test starts. */
     ok_eq_pointer(SystemRootObject->SectionObjectPointer, NULL);
     for (i = 0; i < RTL_NUMBER_OF(Tests); i++)
     {
@@ -822,8 +822,6 @@ TestSharedCacheMap(VOID)
            "FileObject[%lu]->SectionObjectPointer = %p, expected %p\n",
            i, FileObject[i]->SectionObjectPointer, FileObject[0]->SectionObjectPointer);
     }
-    if (!skip(FileObject[0]->SectionObjectPointer != NULL, "No section object pointers\n"))
-        ok_eq_pointer(FileObject[0]->SectionObjectPointer->SharedCacheMap, NULL);
 
     /* Perform a read on one handle to initialize caching */
     FileOffset.QuadPart = 0;

@@ -90,7 +90,7 @@ NtfsFsdQuerySecurity(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         goto Done;
     }
 
-    FileCB = (PFileContextBlock)IrpSp->FileObject->FsContext;
+    FileCB = NtfsGetFileContext(IrpSp->FileObject);
     if (!FileCB->FileRec)
     {
         Status = STATUS_INVALID_PARAMETER;
@@ -128,13 +128,13 @@ NtfsFsdQuerySecurity(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     }
 
     KeEnterCriticalRegion();
-    ExAcquireResourceSharedLite(&FileCB->MainResource, TRUE);
+    ExAcquireResourceSharedLite(NtfsGetMainResource(FileCB), TRUE);
     Status = NtfsQuerySecurityDescriptor(FileCB,
                                          SecurityInformation,
                                          Output,
                                          OutputLength,
                                          &ResultLength);
-    ExReleaseResourceLite(&FileCB->MainResource);
+    ExReleaseResourceLite(NtfsGetMainResource(FileCB));
     KeLeaveCriticalRegion();
 
 Done:
