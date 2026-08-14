@@ -670,9 +670,11 @@ CywRamWrite(
         if (Transfer >= CYW_F1_BLOCKSIZE)
         {
             ULONG Blocks = Transfer / CYW_F1_BLOCKSIZE;
-            if (Blocks > 64)
+            /* A count of 512 is encoded as zero in CMD53, allowing each
+             * 32-KiB backplane window to be written in one request. */
+            if (Blocks > CYW_SDIO_MAX_COUNT)
             {
-                Blocks = 64;
+                Blocks = CYW_SDIO_MAX_COUNT;
             }
             Transfer = Blocks * CYW_F1_BLOCKSIZE;
             Status = CywSdioRw(Adapter, CYW_SDIO_FUNC_BACKPLANE, TRUE,
