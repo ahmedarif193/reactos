@@ -165,6 +165,11 @@ SffdiskTransferWindow(
 
     if (WindowOffset != 0 || WindowLength != MasterLength)
     {
+        if (MasterVa == NULL)
+        {
+            return STATUS_INVALID_USER_BUFFER;
+        }
+
         PartialMdl = IoAllocateMdl((PUCHAR)MasterVa + WindowOffset,
                                    WindowLength,
                                    FALSE,
@@ -344,11 +349,6 @@ SffdiskReadWrite(
     }
 
     MdlVa = MmGetMdlVirtualAddress(Mdl);
-    if (MdlVa == NULL)
-    {
-        Status = STATUS_INVALID_USER_BUFFER;
-        goto Complete;
-    }
 
     Status = SffdiskAcquireBusRequest(DeviceExtension, IrpSp->FileObject);
     if (!NT_SUCCESS(Status))
