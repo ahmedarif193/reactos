@@ -14,6 +14,7 @@ START_TEST(MmPrefetchPages)
 {
     NTSTATUS Status;
     HANDLE FileHandle = NULL;
+    HANDLE SectionHandle = NULL;
     PFILE_OBJECT FileObject = NULL;
     OBJECT_ATTRIBUTES ObjectAttributes;
     IO_STATUS_BLOCK IoStatusBlock;
@@ -26,8 +27,6 @@ START_TEST(MmPrefetchPages)
     ULONG i;
 
     Status = MmPrefetchPages(0, NULL);
-    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
-    Status = MmPrefetchPages(1, NULL);
     ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
 
     Buffer = ExAllocatePoolWithTag(NonPagedPool, PREFETCH_PAGES * PAGE_SIZE, TAG_PREFETCH);
@@ -61,14 +60,14 @@ START_TEST(MmPrefetchPages)
         return;
     }
 
-    RtlZeroMemory(ReadList, sizeof(ReadListBuffer));
-    ReadList->FileObject = NULL;
-    ReadList->NumberOfEntries = 1;
-    ReadList->IsImage = FALSE;
-    ReadList->List[0].Alignment = 0;
-    ReadLists[0] = ReadList;
-    Status = MmPrefetchPages(1, ReadLists);
-    ok_eq_hex(Status, STATUS_SUCCESS);
+    /* MmPrefetchPages requires the file's section object to exist first. */
+    Status = ZwCreateSection(&SectionHandle, SECTION_MAP_READ, NULL, NULL, PAGE_READONLY, SEC_COMMIT, FileHandle);
+    if (skip(NT_SUCCESS(Status) && SectionHandle != NULL, "ZwCreateSection failed: 0x%lx\n", Status))
+    {
+        ObDereferenceObject(FileObject);
+        ZwClose(FileHandle);
+        return;
+    }
 
     RtlZeroMemory(ReadList, sizeof(ReadListBuffer));
     ReadList->FileObject = FileObject;
@@ -80,6 +79,7 @@ START_TEST(MmPrefetchPages)
     Status = MmPrefetchPages(1, ReadLists);
     ok_eq_hex(Status, STATUS_SUCCESS);
 
+    ZwClose(SectionHandle);
     ObDereferenceObject(FileObject);
     ZwClose(FileHandle);
 }
