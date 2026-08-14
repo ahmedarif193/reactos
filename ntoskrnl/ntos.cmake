@@ -14,6 +14,13 @@ add_definitions(
     -DNTDDI_VERSION=${REACTOS_TARGET_NTDDI})
 set_source_files_properties(${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/kdwatchdog.c PROPERTIES COMPILE_DEFINITIONS "KD_LOG_WATCHDOG_DEFAULT_SECONDS=${_KD_LOG_WATCHDOG_DEFAULT_SECONDS}")
 
+# KiBugCheckDebugBreak relies on native SEH catching the deliberate breakpoint.
+# Clang otherwise only models synchronous exceptions at selected instructions.
+if((ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64") AND CMAKE_C_COMPILER_ID STREQUAL "Clang" AND NOT USE_DUMMY_PSEH)
+    set_property(SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/bug.c PROPERTY SKIP_PRECOMPILE_HEADERS ON)
+    set_property(SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/bug.c APPEND PROPERTY COMPILE_OPTIONS -Xclang -fasync-exceptions)
+endif()
+
 if(NOT DEFINED NEWCC)
     set(NEWCC FALSE)
 endif()
