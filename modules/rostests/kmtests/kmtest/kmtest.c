@@ -116,7 +116,7 @@ ListTests(
     DWORD BufferSize = 1024;
     DWORD BytesRead = BufferSize;
     PCSTR TestName;
-    PCKMT_TEST TestEntry = TestList;
+    PCKMT_TEST TestEntry;
     PCSTR NextTestName;
 
     puts("Valid test names:");
@@ -137,42 +137,38 @@ ListTests(
         BufferSize *= 2;
     }
 
-    // output test list plus user-mode tests
+    /* Output every driver test in the order returned by the driver. */
     TestName = Buffer;
-    while (TestEntry->TestName || *TestName)
+    while (*TestName)
     {
-        if (!TestEntry->TestName)
-        {
-            NextTestName = TestName;
-            TestName += strlen(TestName) + 1;
-        }
-        else if (!*TestName)
-        {
-            NextTestName = TestEntry->TestName;
-            ++TestEntry;
-        }
-        else
-        {
-            INT Result = CompareTestNames(TestEntry->TestName, TestName);
+        NextTestName = TestName;
+        TestName += strlen(TestName) + 1;
 
-            if (Result == 0)
+        if (IncludeHidden && NextTestName[0] == '-')
+            ++NextTestName;
+
+        if (NextTestName[0] != '-')
+            printf("    %s\n", NextTestName);
+    }
+
+    /* Append user-mode tests that the driver did not already advertise. */
+    for (TestEntry = TestList; TestEntry->TestName; ++TestEntry)
+    {
+        BOOLEAN Found = FALSE;
+
+        for (TestName = Buffer; *TestName; TestName += strlen(TestName) + 1)
+        {
+            if (CompareTestNames(TestEntry->TestName, TestName) == 0)
             {
-                NextTestName = TestEntry->TestName;
-                TestName += strlen(TestName) + 1;
-                ++TestEntry;
-            }
-            else if (Result < 0)
-            {
-                NextTestName = TestEntry->TestName;
-                ++TestEntry;
-            }
-            else
-            {
-                NextTestName = TestName;
-                TestName += strlen(TestName) + 1;
+                Found = TRUE;
+                break;
             }
         }
 
+        if (Found)
+            continue;
+
+        NextTestName = TestEntry->TestName;
         if (IncludeHidden && NextTestName[0] == '-')
             ++NextTestName;
 
@@ -329,6 +325,7 @@ main(
     PCSTR TestName = NULL;
     KMT_OPERATION Operation = KMT_DO_NOTHING;
     BOOLEAN ShowHidden = FALSE;
+    BOOLEAN TestFailed = FALSE;
 
     Error = KmtServiceInit();
     if (Error)
@@ -385,6 +382,8 @@ main(
                 break;
             case KMT_RUN_TEST:
                 Error = RunTest(TestName);
+                if (!Error && ResultBuffer && ResultBuffer->Failures != 0)
+                    TestFailed = TRUE;
                 break;
             default:
                 assert(FALSE);
@@ -409,6 +408,10 @@ cleanup:
     {
         OutputError(Error);
 
+        Status = EXIT_FAILURE;
+    }
+    else if (TestFailed)
+    {
         Status = EXIT_FAILURE;
     }
 
