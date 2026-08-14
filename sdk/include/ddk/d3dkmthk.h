@@ -5931,7 +5931,7 @@ EXTERN_C _Check_return_ NTSTATUS APIENTRY D3DKMTShareObjectWithHost(_Inout_ D3DK
 EXTERN_C _Check_return_ NTSTATUS APIENTRY D3DKMTCreateSyncFile(_Inout_ D3DKMT_CREATESYNCFILE*);
 
 // Used in WSL to close the internal file descriptor to /dev/dxg
-EXTERN_C VOID APIENTRY D3DKMTCloseDxCoreDevice();
+EXTERN_C VOID APIENTRY D3DKMTCloseDxCoreDevice(VOID);
 #endif
 
 #if !defined(D3DKMDT_SPECIAL_MULTIPLATFORM_TOOL)
