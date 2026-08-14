@@ -5601,18 +5601,45 @@ NtQueryVirtualMemory(IN HANDLE ProcessHandle,
     return Status;
 }
 
-static ULONG_PTR
+static NTSTATUS
 MiGetHighestAddressFromZeroBits(
-    _In_ ULONG_PTR ZeroBits)
+    _In_ ULONG_PTR ZeroBits,
+    _Out_ PULONG_PTR HighestAddress)
 {
     ULONG Shift;
 
+#ifdef _WIN64
+    if (ZeroBits == 0)
+    {
+        *HighestAddress = MAXULONG_PTR;
+        return STATUS_SUCCESS;
+    }
+
     if (ZeroBits < 32)
-        return MAXULONG_PTR >> ZeroBits;
+    {
+        /* Count-form values retain the original 32-bit address constraint. */
+        ZeroBits += 32;
+        if (ZeroBits > MI_MAX_ZERO_BITS)
+            return STATUS_INVALID_PARAMETER_3;
+
+        *HighestAddress = MAXULONG_PTR >> ZeroBits;
+        return STATUS_SUCCESS;
+    }
 
     for (Shift = 1; Shift < sizeof(ZeroBits) * 8; Shift <<= 1)
         ZeroBits |= ZeroBits >> Shift;
-    return ZeroBits;
+
+    if (ZeroBits < (MAXULONG_PTR >> MI_MAX_ZERO_BITS))
+        return STATUS_INVALID_PARAMETER_3;
+
+    *HighestAddress = ZeroBits;
+#else
+    if (ZeroBits > MI_MAX_ZERO_BITS)
+        return STATUS_INVALID_PARAMETER_3;
+
+    *HighestAddress = MAXULONG_PTR >> ZeroBits;
+#endif
+    return STATUS_SUCCESS;
 }
 
 static
@@ -5730,16 +5757,12 @@ MiAllocateVirtualMemory(IN HANDLE ProcessHandle,
 #endif
     PAGED_CODE();
 
-    /* Values above 32 are an address mask on 64-bit Windows. */
-#ifdef _WIN64
-    if ((ZeroBits > 21 && ZeroBits < 32) ||
-        (ZeroBits > 32 && ZeroBits < MM_VIRTMEM_GRANULARITY - 1))
-#else
-    if (ZeroBits > 21)
-#endif
+    /* Validate ZeroBits and derive the caller's highest permitted address. */
+    Status = MiGetHighestAddressFromZeroBits(ZeroBits, &HighestAddress);
+    if (!NT_SUCCESS(Status))
     {
         DPRINT1("Too many zero bits\n");
-        return STATUS_INVALID_PARAMETER_3;
+        return Status;
     }
 
     /* Check for valid Allocation Types */
@@ -6012,7 +6035,7 @@ MiAllocateVirtualMemory(IN HANDLE ProcessHandle,
             //
             if (ZeroBits != 0)
             {
-                HighestAddress = min(MiGetHighestAddressFromZeroBits(ZeroBits), (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS);
+                HighestAddress = min(HighestAddress, (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS);
             }
         }
         else
