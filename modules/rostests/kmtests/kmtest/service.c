@@ -219,6 +219,7 @@ KmtStartService(
     IN OUT SC_HANDLE *ServiceHandle)
 {
     DWORD Error = ERROR_SUCCESS;
+    SERVICE_STATUS ServiceStatus;
 
     assert(ServiceHandle);
     assert(ServiceName || *ServiceHandle);
@@ -228,6 +229,16 @@ KmtStartService(
 
     if (!*ServiceHandle)
         error_goto(Error, cleanup);
+
+    if (!QueryServiceStatus(*ServiceHandle, &ServiceStatus))
+        error_goto(Error, cleanup);
+
+    if ((ServiceStatus.dwCurrentState == SERVICE_RUNNING) ||
+        (ServiceStatus.dwCurrentState == SERVICE_START_PENDING))
+    {
+        Error = ERROR_SERVICE_ALREADY_RUNNING;
+        goto cleanup;
+    }
 
     if (!StartService(*ServiceHandle, 0, NULL))
         error_goto(Error, cleanup);
