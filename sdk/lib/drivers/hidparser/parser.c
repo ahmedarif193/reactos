@@ -749,7 +749,7 @@ HidParser_ParseReportDescriptor(
     ULONG Index;
     PUSAGE_VALUE NewUsageStack, UsageValue;
     NTSTATUS Status;
-    PHID_COLLECTION CurrentCollection, NewCollection;
+    PHID_COLLECTION CurrentCollection, NewCollection, ReportCollection;
     PUCHAR CurrentOffset, ReportEnd;
     PITEM_PREFIX CurrentItem;
     ULONG CurrentItemSize;
@@ -959,10 +959,19 @@ HidParser_ParseReportDescriptor(
 
                     if (ReportType != HID_REPORT_TYPE_ANY)
                     {
+                        /*
+                         * A report spans all nested collections in one
+                         * top-level collection. Keep a single report there so
+                         * nested items continue at the correct bit offset.
+                         */
+                        ReportCollection = CurrentCollection;
+                        while (ReportCollection->Root != NULL && ReportCollection->Root != ParserContext->RootCollection)
+                            ReportCollection = ReportCollection->Root;
+
                         //
                         // get report
                         //
-                        Status = HidParser_GetReport(ParserContext, CurrentCollection, ReportType, ParserContext->GlobalItemState.ReportId, TRUE, &Report);
+                        Status = HidParser_GetReport(ParserContext, ReportCollection, ReportType, ParserContext->GlobalItemState.ReportId, TRUE, &Report);
                         ASSERT(Status == HIDP_STATUS_SUCCESS);
 
                         // fill in a sensible default if the index isn't set
