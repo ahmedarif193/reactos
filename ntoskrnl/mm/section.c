@@ -5098,6 +5098,11 @@ MmCreateSection (OUT PVOID  * Section,
         /* Did the caller pass a file object ? */
         if (FileObject)
         {
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+            if (AllocationAttributes & SEC_IMAGE)
+                return STATUS_INVALID_PARAMETER_6;
+#endif
+
             /* Reference the object directly */
             ObReferenceObject(FileObject);
             HaveFileObject = TRUE;
@@ -5115,6 +5120,12 @@ MmCreateSection (OUT PVOID  * Section,
             {
                 DPRINT1("Failed to get a handle to the FO: %lx\n", Status);
                 return Status;
+            }
+
+            if (FileObject->SectionObjectPointer == NULL)
+            {
+                ObDereferenceObject(FileObject);
+                return STATUS_INVALID_FILE_FOR_SECTION;
             }
 
             /* Lock the file */
