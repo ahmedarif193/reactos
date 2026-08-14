@@ -21,6 +21,9 @@ VOID Test_KeArm64SmpChurn(VOID);
 
 static volatile LONG ChurnRun;
 static volatile LONG ChurnIterations;
+static volatile LONG ChurnAttachIterations;
+static volatile LONG ChurnAttachFailures;
+static PEPROCESS ChurnTargetProcess;
 
 static VOID NTAPI ChurnRoutine(IN PVOID Context)
 {
@@ -29,9 +32,31 @@ static VOID NTAPI ChurnRoutine(IN PVOID Context)
 
     while (ChurnRun)
     {
+        KAPC_STATE ApcState;
         LARGE_INTEGER Delay;
 
         KeSetSystemAffinityThread((KAFFINITY)1 << (Index % Processors));
+
+        if (ChurnTargetProcess != PsInitialSystemProcess)
+        {
+            KeStackAttachProcess((PKPROCESS)ChurnTargetProcess, &ApcState);
+            Delay.QuadPart = -10000LL;
+            KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+
+            if (PsGetCurrentProcess() != ChurnTargetProcess)
+            {
+                InterlockedIncrement(&ChurnAttachFailures);
+            }
+
+            InterlockedIncrement(&ChurnAttachIterations);
+            KeUnstackDetachProcess(&ApcState);
+
+            if (PsGetCurrentProcess() != PsInitialSystemProcess)
+            {
+                InterlockedIncrement(&ChurnAttachFailures);
+            }
+        }
+
         Delay.QuadPart = -((LONGLONG)((Index & 7) + 1) * 10000LL);
         KeDelayExecutionThread(KernelMode, FALSE, &Delay);
 
@@ -60,6 +85,10 @@ static VOID Arm64SmpChurn(VOID)
 
     InterlockedExchange(&ChurnRun, 1);
     InterlockedExchange(&ChurnIterations, 0);
+    InterlockedExchange(&ChurnAttachIterations, 0);
+    InterlockedExchange(&ChurnAttachFailures, 0);
+    ChurnTargetProcess = PsGetCurrentProcess();
+    ObReferenceObject(ChurnTargetProcess);
 
     for (i = 0; i < CHURN_THREADS; i++)
     {
@@ -98,8 +127,20 @@ static VOID Arm64SmpChurn(VOID)
     }
 
     ok(ChurnIterations > 0, "Churn made no progress\n");
-    dump_trace("[arm64][KeArm64SmpChurn] survived %ld iterations on %lu cpus\n",
-               (LONG)ChurnIterations, KeNumberProcessors);
+    if (ChurnTargetProcess != PsInitialSystemProcess)
+    {
+        ok(ChurnAttachIterations > 0, "Process-attach churn made no progress\n");
+        ok_eq_long(ChurnAttachFailures, 0);
+    }
+    else
+    {
+        skip(FALSE, "kmtest is already in the System process\n");
+    }
+
+    ObDereferenceObject(ChurnTargetProcess);
+    ChurnTargetProcess = NULL;
+
+    dump_trace("[arm64][KeArm64SmpChurn] survived %ld scheduler and %ld process-attach iterations on %lu cpus\n", (LONG)ChurnIterations, (LONG)ChurnAttachIterations, KeNumberProcessors);
 }
 
 #endif /* _M_ARM64 */
