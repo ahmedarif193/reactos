@@ -934,15 +934,21 @@ DeviceInstallThread(LPVOID lpParameter)
 
     if (filteredList != NULL && filteredCount != 0)
     {
-        /* Diagnostic mode: install boot devices one at a time so the log
-         * identifies the exact device whose installer stops making progress. */
-        DPRINT1("Boot device install: serial diagnostic mode\n");
-
-        for (PWSTR currentDev = filteredList;
-             currentDev[0] != UNICODE_NULL;
-             currentDev += lstrlenW(currentDev) + 1)
+        /* Try the batch path first — one rundll32 spawn for the whole
+         * filtered boot device list. Falls back to the legacy per-device
+         * loop if the batch child fails to signal completion (e.g. an
+         * older newdev.dll without the private batch protocol, or an
+         * infrastructure failure). */
+        if (!InstallDevicesBatch(filteredList, filteredCount))
         {
-            InstallDevice(currentDev, FALSE);
+            DPRINT1("Batch install failed, falling back to per-device loop\n");
+
+            for (PWSTR currentDev = filteredList;
+                 currentDev[0] != UNICODE_NULL;
+                 currentDev += lstrlenW(currentDev) + 1)
+            {
+                InstallDevice(currentDev, FALSE);
+            }
         }
     }
     else if (filteredList == NULL)
