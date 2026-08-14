@@ -535,7 +535,8 @@ WaitStart:
     return EntriesRemoved;
 }
 
-static PLIST_ENTRY
+PLIST_ENTRY
+NTAPI
 KiRemoveQueue(
     _Inout_ PKQUEUE Queue,
     _In_ KPROCESSOR_MODE WaitMode,
