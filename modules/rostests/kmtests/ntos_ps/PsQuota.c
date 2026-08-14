@@ -16,7 +16,7 @@ typedef VOID (NTAPI *PFNKEGUARDEDREGION)(VOID);
 START_TEST(PsQuota)
 {
     NTSTATUS Status;
-    VM_COUNTERS VmCounters;
+    VM_COUNTERS VmCounters, ChargedVmCounters;
     QUOTA_LIMITS QuotaLimits;
     SIZE_T NonPagedUsage, PagedUsage;
     PEPROCESS Process = PsGetCurrentProcess();
@@ -91,27 +91,12 @@ START_TEST(PsQuota)
     }
 
 
-    /* Test again the usage that's within limits */
-    ok(VmCounters.QuotaNonPagedPoolUsage < QuotaLimits.NonPagedPoolLimit, "Non paged quota over limits (usage -> %lu || limit -> %lu)\n",
-       VmCounters.QuotaNonPagedPoolUsage, QuotaLimits.NonPagedPoolLimit);
-    ok(VmCounters.QuotaPagedPoolUsage < QuotaLimits.PagedPoolLimit, "Paged quota over limits (usage -> %lu || limit -> %lu)\n",
-       VmCounters.QuotaPagedPoolUsage, QuotaLimits.PagedPoolLimit);
-
     /*
-     * Make sure the results are consistent, that nobody else
-     * is charging quotas other than us.
+     * Preserve the charged snapshot and return our quota before reporting it.
+     * Formatting test output can grow the current kernel stack, which is a
+     * legitimate process quota charge and must stay outside this interval.
      */
-    ok_eq_size(VmCounters.QuotaNonPagedPoolUsage, NonPagedUsage + 0x200);
-    ok_eq_size(VmCounters.QuotaPagedPoolUsage, PagedUsage + 0x500);
-
-    /* Report the quota usage */
-    trace("=== QUOTA USAGE AFTER CHARGE ===\n\n");
-    trace("Process paged pool quota usage -- %lu\n", VmCounters.QuotaPagedPoolUsage);
-    trace("Process paged pool quota peak -- %lu\n", VmCounters.QuotaPeakPagedPoolUsage);
-    trace("Process non paged pool quota usage -- %lu\n", VmCounters.QuotaNonPagedPoolUsage);
-    trace("Process non paged pool quota peak -- %lu\n", VmCounters.QuotaPeakNonPagedPoolUsage);
-    trace("Process page file quota usage -- %lu\n", VmCounters.PagefileUsage);
-    trace("Process page file quota peak -- %lu\n\n", VmCounters.PeakPagefileUsage);
+    ChargedVmCounters = VmCounters;
 
     /* Return the quotas we've charged up */
     PsReturnProcessNonPagedPoolQuota(Process, 0x200);
@@ -128,12 +113,24 @@ START_TEST(PsQuota)
         return;
     }
 
-    /*
-     * Check that nobody else has returned quotas
-     * but only us.
-     */
+    /* Validate both snapshots only after closing the measured interval. */
+    ok(ChargedVmCounters.QuotaNonPagedPoolUsage < QuotaLimits.NonPagedPoolLimit, "Non paged quota over limits (usage -> %lu || limit -> %lu)\n",
+       ChargedVmCounters.QuotaNonPagedPoolUsage, QuotaLimits.NonPagedPoolLimit);
+    ok(ChargedVmCounters.QuotaPagedPoolUsage < QuotaLimits.PagedPoolLimit, "Paged quota over limits (usage -> %lu || limit -> %lu)\n",
+       ChargedVmCounters.QuotaPagedPoolUsage, QuotaLimits.PagedPoolLimit);
+    ok_eq_size(ChargedVmCounters.QuotaNonPagedPoolUsage, NonPagedUsage + 0x200);
+    ok_eq_size(ChargedVmCounters.QuotaPagedPoolUsage, PagedUsage + 0x500);
     ok_eq_size(VmCounters.QuotaNonPagedPoolUsage, NonPagedUsage);
     ok_eq_size(VmCounters.QuotaPagedPoolUsage, PagedUsage);
+
+    /* Report both cached snapshots. */
+    trace("=== QUOTA USAGE AFTER CHARGE ===\n\n");
+    trace("Process paged pool quota usage -- %lu\n", ChargedVmCounters.QuotaPagedPoolUsage);
+    trace("Process paged pool quota peak -- %lu\n", ChargedVmCounters.QuotaPeakPagedPoolUsage);
+    trace("Process non paged pool quota usage -- %lu\n", ChargedVmCounters.QuotaNonPagedPoolUsage);
+    trace("Process non paged pool quota peak -- %lu\n", ChargedVmCounters.QuotaPeakNonPagedPoolUsage);
+    trace("Process page file quota usage -- %lu\n", ChargedVmCounters.PagefileUsage);
+    trace("Process page file quota peak -- %lu\n\n", ChargedVmCounters.PeakPagefileUsage);
 
     /* Report the usage again */
     trace("=== QUOTA USAGE AFTER RETURN ===\n\n");
