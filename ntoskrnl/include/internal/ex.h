@@ -171,6 +171,8 @@ typedef struct _HARDERROR_USER_PARAMETERS
 #define LOW_LEVEL_ENTRIES   (PAGE_SIZE / sizeof(HANDLE_TABLE_ENTRY))
 #define MID_LEVEL_ENTRIES   (PAGE_SIZE / sizeof(PHANDLE_TABLE_ENTRY))
 #define HIGH_LEVEL_ENTRIES  (16777216 / (LOW_LEVEL_ENTRIES * MID_LEVEL_ENTRIES))
+#define HANDLE_TABLE_ENTRY_INFO_SIZE \
+    (LOW_LEVEL_ENTRIES * (sizeof(HANDLE_TABLE_ENTRY_INFO) + sizeof(ULONG)))
 
 //
 // Maximum index in each table level before we need another table
@@ -531,6 +533,14 @@ NTAPI
 ExMapHandleToPointer(
     IN PHANDLE_TABLE HandleTable,
     IN HANDLE Handle
+);
+
+PULONG
+NTAPI
+ExGetHandleCachedReferenceCount(
+    IN PHANDLE_TABLE HandleTable,
+    IN HANDLE Handle,
+    IN PHANDLE_TABLE_ENTRY HandleTableEntry
 );
 
 PHANDLE_TABLE

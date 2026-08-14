@@ -50,7 +50,7 @@ NtWaitForMultipleObjects(IN ULONG ObjectCount,
                          IN PLARGE_INTEGER TimeOut OPTIONAL)
 {
     PKWAIT_BLOCK WaitBlockArray;
-    HANDLE Handles[MAXIMUM_WAIT_OBJECTS], KernelHandle;
+    HANDLE Handles[MAXIMUM_WAIT_OBJECTS], MappedHandle;
     PVOID Objects[MAXIMUM_WAIT_OBJECTS];
     PVOID WaitObjects[MAXIMUM_WAIT_OBJECTS];
     ULONG i, ReferencedObjects, j;
@@ -157,19 +157,17 @@ NtWaitForMultipleObjects(IN ULONG ObjectCount,
         {
             /* Use the System Handle Table and decode */
             HandleTable = ObpKernelHandleTable;
-            KernelHandle = ObKernelHandleToHandle(Handles[i]);
-
-            /* Get a pointer to it */
-            HandleEntry = ExMapHandleToPointer(HandleTable, KernelHandle);
+            MappedHandle = ObKernelHandleToHandle(Handles[i]);
         }
         else
         {
             /* Use the Process' Handle table and get the Ex Handle */
             HandleTable = PsGetCurrentProcess()->ObjectTable;
-
-            /* Get a pointer to it */
-            HandleEntry = ExMapHandleToPointer(HandleTable, Handles[i]);
+            MappedHandle = Handles[i];
         }
+
+        /* Get a pointer to the decoded handle. */
+        HandleEntry = ExMapHandleToPointer(HandleTable, MappedHandle);
 
         /* Check if we have an entry */
         if (!HandleEntry)
@@ -200,8 +198,8 @@ NtWaitForMultipleObjects(IN ULONG ObjectCount,
         /* Check if it's the internal offset */
         if (IsPointerOffset(DefaultObject))
         {
-            /* Increase reference count */
-            InterlockedIncrementSizeT(&ObjectHeader->PointerCount);
+            /* Consume a reference precharged to this handle. */
+            ObpReferenceObjectByHandleEntry(HandleTable, MappedHandle, HandleEntry, ObjectHeader);
             ReferencedObjects++;
 
             /* Save the Object and Wait Object, this is a relative offset */

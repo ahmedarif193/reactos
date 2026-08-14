@@ -58,6 +58,12 @@
 //
 #define ObpAccessProtectCloseBit 0x02000000L
 
+#ifdef _WIN64
+#define OBP_HANDLE_REFERENCE_INCREMENT 0x8000UL
+#else
+#define OBP_HANDLE_REFERENCE_INCREMENT 0x20UL
+#endif
+
 //
 // System Process Quota Block
 //
@@ -265,6 +271,15 @@ VOID
 NTAPI
 ObDereferenceProcessHandleTable(
     IN PEPROCESS Process
+);
+
+VOID
+NTAPI
+ObpReferenceObjectByHandleEntry(
+    IN PHANDLE_TABLE HandleTable,
+    IN HANDLE Handle,
+    IN PHANDLE_TABLE_ENTRY HandleTableEntry,
+    IN POBJECT_HEADER ObjectHeader
 );
 
 VOID

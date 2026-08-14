@@ -163,6 +163,8 @@ START_TEST(ObHandle)
     OBJECT_ATTRIBUTES ObjectAttributes;
     HANDLE KernelDirectoryHandle;
     HANDLE UserDirectoryHandle;
+    HANDLE TaggedDirectoryHandle;
+    HANDLE TaggedHandle = NULL;
 
     if (skip(GetNTVersion() >= _WIN32_WINNT_VISTA,
              "NT 5.x system-process handle duplication needs separate validation\n"))
@@ -281,12 +283,30 @@ START_TEST(ObHandle)
             ok_eq_hex(Status, STATUS_SUCCESS);
         else
             ok_eq_hex(Status, STATUS_INVALID_HANDLE);
-        DPRINT("Closing 123 handle (NtClose)\n");
-        Status = NtClose(LongToHandle(123));
         if (GetNTVersion() >= _WIN32_WINNT_WIN8)
+        {
+            InitializeObjectAttributes(&ObjectAttributes, NULL, 0, NULL, NULL);
+            Status = ZwCreateDirectoryObject(&TaggedDirectoryHandle, DIRECTORY_ALL_ACCESS, &ObjectAttributes);
             ok_eq_hex(Status, STATUS_SUCCESS);
+            if (NT_SUCCESS(Status))
+            {
+                TaggedHandle = (HANDLE)((ULONG_PTR)TaggedDirectoryHandle | OBJ_HANDLE_TAGBITS);
+                DPRINT("Closing tagged handle %p (NtClose)\n", TaggedHandle);
+                Status = NtClose(TaggedHandle);
+                ok_eq_hex(Status, STATUS_SUCCESS);
+                if (!NT_SUCCESS(Status))
+                {
+                    Status = ZwClose(TaggedDirectoryHandle);
+                    ok_eq_hex(Status, STATUS_SUCCESS);
+                }
+            }
+        }
         else if (GetNTVersion() != _WIN32_WINNT_WS03)
+        {
+            DPRINT("Closing 123 handle (NtClose)\n");
+            Status = NtClose(LongToHandle(123));
             ok_eq_hex(Status, STATUS_INVALID_HANDLE);
+        }
         DPRINT("Closing 123 kernel handle (NtClose)\n");
         Status = NtClose(LongToHandle(123 | 0x80000000));
         ok_eq_hex(Status, STATUS_INVALID_HANDLE);
@@ -307,9 +327,18 @@ START_TEST(ObHandle)
             ok_eq_hex(Status, STATUS_SUCCESS);
         else
             ok_eq_hex(Status, STATUS_INVALID_HANDLE);
-        DPRINT("Closing 123 handle (ObCloseHandle, UserMode)\n");
-        Status = ObCloseHandle(LongToHandle(123), UserMode);
-        ok_eq_hex(Status, STATUS_INVALID_HANDLE);
+        if (GetNTVersion() >= _WIN32_WINNT_WIN8 && TaggedHandle != NULL)
+        {
+            DPRINT("Closing stale tagged handle %p (ObCloseHandle, UserMode)\n", TaggedHandle);
+            Status = ObCloseHandle(TaggedHandle, UserMode);
+            ok_eq_hex(Status, STATUS_INVALID_HANDLE);
+        }
+        else if (GetNTVersion() < _WIN32_WINNT_WIN8)
+        {
+            DPRINT("Closing 123 handle (ObCloseHandle, UserMode)\n");
+            Status = ObCloseHandle(LongToHandle(123), UserMode);
+            ok_eq_hex(Status, STATUS_INVALID_HANDLE);
+        }
         DPRINT("Closing 123 kernel handle (ObCloseHandle, UserMode)\n");
         Status = ObCloseHandle(LongToHandle(123 | 0x80000000), UserMode);
         ok_eq_hex(Status, STATUS_INVALID_HANDLE);

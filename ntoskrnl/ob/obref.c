@@ -270,8 +270,8 @@ ObReferenceFileObjectForWrite(IN HANDLE Handle,
             {
                 /* FIXME: Audit access if required */
 
-                /* Reference the object directly since we have its header */
-                InterlockedIncrementSizeT(&ObjectHeader->PointerCount);
+                /* Consume a reference precharged to this handle. */
+                ObpReferenceObjectByHandleEntry(HandleTable, Handle, HandleEntry, ObjectHeader);
 
                 /* Unlock the handle */
                 ExUnlockHandleTableEntry(HandleTable, HandleEntry);
@@ -658,8 +658,8 @@ ObReferenceObjectByHandle(IN HANDLE Handle,
             if ((AccessMode == KernelMode) ||
                 !(~GrantedAccess & DesiredAccess))
             {
-                /* Reference the object directly since we have its header */
-                InterlockedIncrementSizeT(&ObjectHeader->PointerCount);
+                /* Consume a reference precharged to this handle. */
+                ObpReferenceObjectByHandleEntry(HandleTable, Handle, HandleEntry, ObjectHeader);
 
                 /* Mask out the internal attributes */
                 Attributes = HandleEntry->ObAttributes & OBJ_HANDLE_ATTRIBUTES;
