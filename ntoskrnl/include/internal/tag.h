@@ -77,6 +77,11 @@
 #define IOC_CPU                 'PcpI'
 #define TAG_APC                 'CPAK'
 #define TAG_IO                  '  oI'
+#if (NTDDI_VERSION >= NTDDI_WIN11_GE)
+#define TAG_IO_DRIVER_NAME      '1NoI'
+#else
+#define TAG_IO_DRIVER_NAME      TAG_IO
+#endif
 #define TAG_ERROR_LOG           'rEoI'
 #define TAG_EA                  'aEoI'
 #define TAG_IO_NAME             'mNoI'

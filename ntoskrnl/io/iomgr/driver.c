@@ -504,6 +504,61 @@ Cleanup:
     return status;
 }
 
+static
+VOID
+IopNormalizeRegistryPathCase(
+    _Inout_ PUNICODE_STRING RegistryPath,
+    _In_ PCUNICODE_STRING ServiceName)
+{
+    static const UNICODE_STRING Services = RTL_CONSTANT_STRING(L"Services");
+    static const UNICODE_STRING ControlSet = RTL_CONSTANT_STRING(L"ControlSet");
+    UNICODE_STRING Component;
+    USHORT End, Start;
+
+    End = RegistryPath->Length / sizeof(WCHAR);
+    while (End && RegistryPath->Buffer[End - 1] == OBJ_NAME_PATH_SEPARATOR)
+        End--;
+
+    Start = End;
+    while (Start && RegistryPath->Buffer[Start - 1] != OBJ_NAME_PATH_SEPARATOR)
+        Start--;
+
+    Component.Buffer = &RegistryPath->Buffer[Start];
+    Component.Length = Component.MaximumLength = (End - Start) * sizeof(WCHAR);
+    if (RtlEqualUnicodeString(&Component, ServiceName, TRUE))
+        RtlCopyMemory(Component.Buffer, ServiceName->Buffer, ServiceName->Length);
+
+    if (!Start)
+        return;
+
+    End = Start - 1;
+    Start = End;
+    while (Start && RegistryPath->Buffer[Start - 1] != OBJ_NAME_PATH_SEPARATOR)
+        Start--;
+
+    Component.Buffer = &RegistryPath->Buffer[Start];
+    Component.Length = Component.MaximumLength = (End - Start) * sizeof(WCHAR);
+    if (RtlEqualUnicodeString(&Component, &Services, TRUE))
+        RtlCopyMemory(Component.Buffer, Services.Buffer, Services.Length);
+
+    if (!Start)
+        return;
+
+    End = Start - 1;
+    Start = End;
+    while (Start && RegistryPath->Buffer[Start - 1] != OBJ_NAME_PATH_SEPARATOR)
+        Start--;
+
+    Component.Buffer = &RegistryPath->Buffer[Start];
+    Component.Length = Component.MaximumLength = (End - Start) * sizeof(WCHAR);
+    if (Component.Length >= ControlSet.Length)
+    {
+        Component.Length = ControlSet.Length;
+        if (RtlEqualUnicodeString(&Component, &ControlSet, TRUE))
+            RtlCopyMemory(Component.Buffer, ControlSet.Buffer, ControlSet.Length);
+    }
+}
+
 /**
  * @brief   Determines whether String1 may be a suffix of String2.
  * @return  TRUE if String2 contains String1 as a suffix.
@@ -678,7 +733,9 @@ IopInitializeDriverModule(
     _Out_ PDRIVER_OBJECT *OutDriverObject,
     _Out_ NTSTATUS *DriverEntryStatus)
 {
-    UNICODE_STRING DriverName, RegistryPath, ServiceName;
+    UNICODE_STRING DriverName, ServiceName;
+    PUNICODE_STRING RegistryPath = NULL;
+    PKEY_NAME_INFORMATION nameInfo = NULL;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -704,7 +761,6 @@ IopInitializeDriverModule(
     ASSERT(ModuleObject->EntryPoint == RVA(ModuleObject->DllBase, NtHeaders->OptionalHeader.AddressOfEntryPoint));
 
     /* Obtain the registry path for the DriverInit routine */
-    PKEY_NAME_INFORMATION nameInfo;
     ULONG infoLength;
     Status = ZwQueryKey(ServiceHandle, KeyNameInformation, NULL, 0, &infoLength);
     if (Status == STATUS_BUFFER_TOO_SMALL)
@@ -712,20 +768,31 @@ IopInitializeDriverModule(
         nameInfo = ExAllocatePoolWithTag(NonPagedPool, infoLength, TAG_IO);
         if (nameInfo)
         {
-            Status = ZwQueryKey(ServiceHandle,
-                                KeyNameInformation,
-                                nameInfo,
-                                infoLength,
-                                &infoLength);
+            Status = ZwQueryKey(ServiceHandle, KeyNameInformation, nameInfo, infoLength, &infoLength);
             if (NT_SUCCESS(Status))
             {
-                RegistryPath.Length = nameInfo->NameLength;
-                RegistryPath.MaximumLength = nameInfo->NameLength;
-                RegistryPath.Buffer = nameInfo->Name;
-            }
-            else
-            {
-                ExFreePoolWithTag(nameInfo, TAG_IO);
+                if (nameInfo->NameLength > UNICODE_STRING_MAX_BYTES || nameInfo->NameLength > MAXULONG - sizeof(*RegistryPath) - PAGE_SIZE + 1)
+                {
+                    Status = STATUS_NAME_TOO_LONG;
+                }
+                else
+                {
+                    ULONG registryPathSize = ROUND_TO_PAGES(sizeof(*RegistryPath) + nameInfo->NameLength);
+
+                    RegistryPath = ExAllocatePoolWithTag(NonPagedPool, registryPathSize, TAG_IO);
+                    if (RegistryPath)
+                    {
+                        RegistryPath->Length = (USHORT)nameInfo->NameLength;
+                        RegistryPath->MaximumLength = RegistryPath->Length;
+                        RegistryPath->Buffer = (PWCHAR)(RegistryPath + 1);
+                        RtlCopyMemory(RegistryPath->Buffer, nameInfo->Name, RegistryPath->Length);
+                        IopNormalizeRegistryPathCase(RegistryPath, &ServiceName);
+                    }
+                    else
+                    {
+                        Status = STATUS_INSUFFICIENT_RESOURCES;
+                    }
+                }
             }
         }
         else
@@ -737,6 +804,9 @@ IopInitializeDriverModule(
     {
         Status = NT_SUCCESS(Status) ? STATUS_UNSUCCESSFUL : Status;
     }
+
+    if (nameInfo)
+        ExFreePoolWithTag(nameInfo, TAG_IO);
 
     if (!NT_SUCCESS(Status))
     {
@@ -767,7 +837,7 @@ IopInitializeDriverModule(
                             (PVOID*)&driverObject);
     if (!NT_SUCCESS(Status))
     {
-        ExFreePoolWithTag(nameInfo, TAG_IO); // container for RegistryPath
+        ExFreePoolWithTag(RegistryPath, TAG_IO);
         RtlFreeUnicodeString(&ServiceName);
         RtlFreeUnicodeString(&DriverName);
         MmUnloadSystemImage(ModuleObject);
@@ -805,7 +875,7 @@ IopInitializeDriverModule(
     Status = ObInsertObject(driverObject, NULL, FILE_READ_DATA, 0, NULL, &hDriver);
     if (!NT_SUCCESS(Status))
     {
-        ExFreePoolWithTag(nameInfo, TAG_IO);
+        ExFreePoolWithTag(RegistryPath, TAG_IO);
         RtlFreeUnicodeString(&ServiceName);
         RtlFreeUnicodeString(&DriverName);
         return Status;
@@ -824,7 +894,7 @@ IopInitializeDriverModule(
 
     if (!NT_SUCCESS(Status))
     {
-        ExFreePoolWithTag(nameInfo, TAG_IO); // container for RegistryPath
+        ExFreePoolWithTag(RegistryPath, TAG_IO);
         RtlFreeUnicodeString(&ServiceName);
         RtlFreeUnicodeString(&DriverName);
         return Status;
@@ -837,12 +907,12 @@ IopInitializeDriverModule(
     serviceKeyName.MaximumLength = ServiceName.MaximumLength + sizeof(UNICODE_NULL);
     serviceKeyName.Buffer = ExAllocatePoolWithTag(NonPagedPool,
                                                   serviceKeyName.MaximumLength,
-                                                  TAG_IO);
+                                                  TAG_IO_DRIVER_NAME);
     if (!serviceKeyName.Buffer)
     {
         ObMakeTemporaryObject(driverObject);
         ObDereferenceObject(driverObject);
-        ExFreePoolWithTag(nameInfo, TAG_IO); // container for RegistryPath
+        ExFreePoolWithTag(RegistryPath, TAG_IO);
         RtlFreeUnicodeString(&ServiceName);
         RtlFreeUnicodeString(&DriverName);
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -857,24 +927,26 @@ IopInitializeDriverModule(
     UNICODE_STRING driverNamePaged;
     driverNamePaged.Length = 0;
     // NULL-terminate for Windows compatibility
-    driverNamePaged.MaximumLength = DriverName.MaximumLength + sizeof(UNICODE_NULL);
+    driverNamePaged.MaximumLength = DriverName.Length + sizeof(UNICODE_NULL);
     driverNamePaged.Buffer = ExAllocatePoolWithTag(PagedPool,
                                                    driverNamePaged.MaximumLength,
-                                                   TAG_IO);
+                                                   TAG_IO_DRIVER_NAME);
     if (!driverNamePaged.Buffer)
     {
         ObMakeTemporaryObject(driverObject);
         ObDereferenceObject(driverObject);
-        ExFreePoolWithTag(nameInfo, TAG_IO); // container for RegistryPath
+        ExFreePoolWithTag(RegistryPath, TAG_IO);
         RtlFreeUnicodeString(&DriverName);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
     RtlCopyUnicodeString(&driverNamePaged, &DriverName);
+    driverNamePaged.Buffer[driverNamePaged.Length / sizeof(WCHAR)] = UNICODE_NULL;
+    driverNamePaged.MaximumLength = driverNamePaged.Length;
     driverObject->DriverName = driverNamePaged;
 
     /* Finally, call its init function */
-    Status = driverObject->DriverInit(driverObject, &RegistryPath);
+    Status = driverObject->DriverInit(driverObject, RegistryPath);
     *DriverEntryStatus = Status;
     if (!NT_SUCCESS(Status))
     {
@@ -913,7 +985,7 @@ IopInitializeDriverModule(
 
     // TODO: for legacy drivers, unload the driver if it didn't create any DO
 
-    ExFreePoolWithTag(nameInfo, TAG_IO); // container for RegistryPath
+    ExFreePoolWithTag(RegistryPath, TAG_IO);
     RtlFreeUnicodeString(&DriverName);
 
     if (!NT_SUCCESS(Status))
