@@ -15,6 +15,7 @@
 /* This is for COM usage */
 #define COBJMACROS
 #include <shlobj.h>
+#include <ndk/sefuncs.h>
 
 #include "../concfg/font.h"
 #include <alias.h>
@@ -1391,12 +1392,64 @@ ConSrvRemoveConsole(
 
 /* CONSOLE PROCESS MANAGEMENT FUNCTIONS ***************************************/
 
+/* Avoid reentering CSRSRV through the server-process CreateRemoteThread path. */
+static
+NTSTATUS
+ConSrvCreateCallbackThread(IN HANDLE ProcessHandle,
+                           IN PTHREAD_START_ROUTINE StartAddress,
+                           IN PVOID Parameter,
+                           OUT PHANDLE ThreadHandle)
+{
+    NTSTATUS Status;
+    HANDLE TokenHandle = NULL;
+    HANDLE CreatedThread = NULL;
+    TOKEN_DEFAULT_DACL DefaultDacl = {0};
+    PTOKEN_DEFAULT_DACL DefaultDaclInfo = NULL;
+    ULONG TokenDefaultDaclLength = 0;
+    SECURITY_DESCRIPTOR SecurityDescriptor;
+    LONG BasePriority = THREAD_PRIORITY_HIGHEST;
+
+    *ThreadHandle = NULL;
+
+    Status = NtOpenProcessToken(ProcessHandle, TOKEN_QUERY, &TokenHandle);
+    if (!NT_SUCCESS(Status)) goto Cleanup;
+
+    (VOID)NtQueryInformationToken(TokenHandle, TokenDefaultDacl, &DefaultDacl, sizeof(DefaultDacl), &TokenDefaultDaclLength);
+
+    DefaultDaclInfo = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, TokenDefaultDaclLength);
+    if (DefaultDaclInfo == NULL)
+    {
+        Status = STATUS_NO_MEMORY;
+        goto Cleanup;
+    }
+
+    Status = NtQueryInformationToken(TokenHandle, TokenDefaultDacl, DefaultDaclInfo, TokenDefaultDaclLength, &TokenDefaultDaclLength);
+    if (!NT_SUCCESS(Status)) goto Cleanup;
+
+    Status = RtlCreateSecurityDescriptor(&SecurityDescriptor, SECURITY_DESCRIPTOR_REVISION);
+    if (!NT_SUCCESS(Status)) goto Cleanup;
+
+    Status = RtlSetDaclSecurityDescriptor(&SecurityDescriptor, TRUE, DefaultDaclInfo->DefaultDacl, TRUE);
+    if (!NT_SUCCESS(Status)) goto Cleanup;
+
+    Status = RtlCreateUserThread(ProcessHandle, &SecurityDescriptor, FALSE, 0, 0, 0, StartAddress, Parameter, &CreatedThread, NULL);
+    if (NT_SUCCESS(Status)) NtSetInformationThread(CreatedThread, ThreadBasePriority, &BasePriority, sizeof(BasePriority));
+
+Cleanup:
+    if (DefaultDaclInfo != NULL) RtlFreeHeap(RtlGetProcessHeap(), 0, DefaultDaclInfo);
+    if (TokenHandle != NULL) NtClose(TokenHandle);
+    if (NT_SUCCESS(Status)) *ThreadHandle = CreatedThread;
+    else if (CreatedThread != NULL) NtClose(CreatedThread);
+    return Status;
+}
+
 NTSTATUS
 ConSrvConsoleCtrlEventTimeout(IN ULONG CtrlEvent,
                               IN PCONSOLE_PROCESS_DATA ProcessData,
                               IN ULONG Timeout)
 {
     NTSTATUS Status = STATUS_SUCCESS;
+    HANDLE Thread = NULL;
 
     DPRINT("ConSrvConsoleCtrlEventTimeout Parent ProcessId = %x\n", ProcessData->Process->ClientId.UniqueProcess);
 
@@ -1407,30 +1460,16 @@ ConSrvConsoleCtrlEventTimeout(IN ULONG CtrlEvent,
 
     _SEH2_TRY
     {
-        HANDLE Thread = NULL;
-
-        _SEH2_TRY
+        Status = ConSrvCreateCallbackThread(ProcessData->Process->ProcessHandle, ProcessData->CtrlRoutine, UlongToPtr(CtrlEvent), &Thread);
+        if (!NT_SUCCESS(Status))
         {
-            Thread = CreateRemoteThread(ProcessData->Process->ProcessHandle, NULL, 0,
-                                        ProcessData->CtrlRoutine,
-                                        UlongToPtr(CtrlEvent), 0, NULL);
-            if (NULL == Thread)
-            {
-                Status = RtlGetLastNtStatus();
-                DPRINT1("Failed thread creation, Status = 0x%08lx\n", Status);
-            }
-            else
-            {
-                DPRINT("ProcessData->CtrlRoutine remote thread creation succeeded, ProcessId = %x, Process = 0x%p\n",
-                       ProcessData->Process->ClientId.UniqueProcess, ProcessData->Process);
-                WaitForSingleObject(Thread, Timeout);
-            }
+            DPRINT1("Failed thread creation, Status = 0x%08lx\n", Status);
         }
-        _SEH2_FINALLY
+        else
         {
-            CloseHandle(Thread);
+            DPRINT("ProcessData->CtrlRoutine remote thread creation succeeded, ProcessId = %x, Process = 0x%p\n", ProcessData->Process->ClientId.UniqueProcess, ProcessData->Process);
+            WaitForSingleObject(Thread, Timeout);
         }
-        _SEH2_END;
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -1439,6 +1478,7 @@ ConSrvConsoleCtrlEventTimeout(IN ULONG CtrlEvent,
     }
     _SEH2_END;
 
+    if (Thread != NULL) NtClose(Thread);
     return Status;
 }
 
