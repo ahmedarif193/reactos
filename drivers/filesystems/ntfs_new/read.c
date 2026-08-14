@@ -336,6 +336,30 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         goto Complete;
     }
 
+    /*
+     * A direct or uncached read bypasses the VACB that normally shares the
+     * data-section page.  Flush the live section first so that file reads and
+     * mapped writes remain coherent.  Paging reads are the section page-in
+     * itself and must not recurse here.
+     */
+    if (RequestedLength &&
+        !PagingIo &&
+        FileCB->RequestedType == TypeData &&
+        FileObject->SectionObjectPointer != NULL &&
+        FileObject->SectionObjectPointer->DataSectionObject != NULL &&
+        (BooleanFlagOn(Irp->Flags, IRP_NOCACHE) ||
+         BooleanFlagOn(FileObject->Flags, FO_NO_INTERMEDIATE_BUFFERING)))
+    {
+        IO_STATUS_BLOCK FlushIoStatus;
+
+        CcFlushCache(FileObject->SectionObjectPointer, &ReadOffset, RequestedLength, &FlushIoStatus);
+        if (!NT_SUCCESS(FlushIoStatus.Status))
+        {
+            Status = FlushIoStatus.Status;
+            goto Complete;
+        }
+    }
+
     if (RequestedLength &&
         FileCB->RequestedType == TypeData &&
         (PagingIo ||
