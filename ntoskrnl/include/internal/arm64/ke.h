@@ -277,8 +277,9 @@ KiResolveUserDispatcherAddress(
  * The TTBR masks isolate translation-table bases from tagged TTBR values.
  * TTBR1 retains bit 11 because T1SZ=17 selects the upper 256-entry half of the
  * shared L0 page. TCR.A1=1 is forced on every CPU, so the current 8-bit ASID
- * belongs in TTBR1_EL1[55:48]. User and process-local leaf descriptors are nG;
- * shared kernel leaf descriptors remain global.
+ * is selected from TTBR1_EL1[55:48]. Mirror the tag in TTBR0_EL1 as NT does,
+ * even though A1 makes the TTBR0 copy architecturally inactive. User and
+ * process-local leaf descriptors are nG; shared kernel leaves remain global.
  */
 #define KI_ARM64_TTBR_ADDR_MASK   0x0000FFFFFFFFF000ULL
 #define KI_ARM64_TTBR1_ADDR_MASK  0x0000FFFFFFFFF800ULL
@@ -315,6 +316,7 @@ KiArm64WriteUserTtbr(
      * contract. Interrupts stay masked across the transient TTBR0/TTBR1 pair.
      */
     ULONGLONG RootBase = UserDirectoryBase & KI_ARM64_TTBR_ADDR_MASK;
+    ULONGLONG TaggedUserRoot = RootBase | ((ULONGLONG)Asid << KI_ARM64_TTBR_ASID_SHIFT);
     ULONGLONG TaggedKernelRoot = (KernelRootBase & KI_ARM64_TTBR1_ADDR_MASK) |
                                  ((ULONGLONG)Asid << KI_ARM64_TTBR_ASID_SHIFT);
     ULONGLONG SavedDaif;
@@ -323,7 +325,7 @@ KiArm64WriteUserTtbr(
     __asm__ __volatile__("msr daifset, #0xF" ::: "memory");
 
     __asm__ __volatile__("dsb ishst" ::: "memory");
-    __asm__ __volatile__("msr ttbr0_el1, %0" :: "r"(RootBase) : "memory");
+    __asm__ __volatile__("msr ttbr0_el1, %0" :: "r"(TaggedUserRoot) : "memory");
     __asm__ __volatile__("isb" ::: "memory");
     __asm__ __volatile__("msr ttbr1_el1, %0" :: "r"(TaggedKernelRoot) : "memory");
     __asm__ __volatile__("isb" ::: "memory");
