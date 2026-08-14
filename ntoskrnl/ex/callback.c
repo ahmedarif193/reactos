@@ -744,8 +744,10 @@ KeRegisterProcessorChangeCallback(IN PPROCESSOR_CALLBACK_FUNCTION CallbackFuncti
         ChangeContext.State = KeProcessorAddStartNotify;
         ChangeContext.NtNumber = ProcessorIndex;
         ChangeContext.Status = STATUS_SUCCESS;
+#if (NTDDI_VERSION >= NTDDI_WIN7)
         Status = KeGetProcessorNumberFromIndex(ProcessorIndex, &ChangeContext.ProcNumber);
         ASSERT(NT_SUCCESS(Status));
+#endif
         OperationStatus = STATUS_SUCCESS;
         CallbackFunction(CallbackContext, &ChangeContext, &OperationStatus);
         if (!NT_SUCCESS(OperationStatus))
@@ -767,8 +769,10 @@ KeRegisterProcessorChangeCallback(IN PPROCESSOR_CALLBACK_FUNCTION CallbackFuncti
     for (NotifyIndex = 0; NotifyIndex < ProcessorIndex; NotifyIndex++)
     {
         ChangeContext.NtNumber = NotifyIndex;
+#if (NTDDI_VERSION >= NTDDI_WIN7)
         Status = KeGetProcessorNumberFromIndex(NotifyIndex, &ChangeContext.ProcNumber);
         ASSERT(NT_SUCCESS(Status));
+#endif
         CallbackFunction(CallbackContext, &ChangeContext, &OperationStatus);
     }
 
