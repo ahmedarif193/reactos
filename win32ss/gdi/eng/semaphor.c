@@ -3,6 +3,20 @@
 #define NDEBUG
 #include <debug.h>
 
+static HSEMAPHORE ghsemSafeSemaphoreLock;
+
+CODE_SEG("INIT")
+NTSTATUS
+NTAPI
+InitSafeSemaphoreImpl(VOID)
+{
+    ghsemSafeSemaphoreLock = EngCreateSemaphore();
+    if (!ghsemSafeSemaphoreLock)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    return STATUS_SUCCESS;
+}
+
 /*
  * @implemented
  */
@@ -148,29 +162,30 @@ EngInitializeSafeSemaphore(
     _Out_ ENGSAFESEMAPHORE *Semaphore)
 {
     HSEMAPHORE hSem;
+    BOOL Result = TRUE;
 
-    if (InterlockedIncrement(&Semaphore->lCount) == 1)
+    ASSERT(ghsemSafeSemaphoreLock != NULL);
+    EngAcquireSemaphore(ghsemSafeSemaphoreLock);
+
+    if (Semaphore->lCount == 0)
     {
         /* Create the semaphore */
         hSem = EngCreateSemaphore();
-        if (hSem == 0)
+        if (hSem == NULL)
         {
-            InterlockedDecrement(&Semaphore->lCount);
-            return FALSE;
+            Result = FALSE;
         }
-        /* FIXME: Not thread-safe! Check result of InterlockedCompareExchangePointer
-                  and delete semaphore if already initialized! */
-        (void)InterlockedExchangePointer((volatile PVOID *)&Semaphore->hsem, hSem);
-    }
-    else
-    {
-        /* Wait for the other thread to create the semaphore */
-        ASSERT(Semaphore->lCount > 1);
-        ASSERT_IRQL_LESS_OR_EQUAL(PASSIVE_LEVEL);
-        while (Semaphore->hsem == NULL);
+        else
+        {
+            Semaphore->hsem = hSem;
+        }
     }
 
-    return TRUE;
+    if (Result)
+        ++Semaphore->lCount;
+
+    EngReleaseSemaphore(ghsemSafeSemaphoreLock);
+    return Result;
 }
 
 /*
@@ -181,12 +196,18 @@ APIENTRY
 EngDeleteSafeSemaphore(
     _Inout_ _Post_invalid_ ENGSAFESEMAPHORE *pssem)
 {
-    if (InterlockedDecrement(&pssem->lCount) == 0)
+    ASSERT(ghsemSafeSemaphoreLock != NULL);
+    EngAcquireSemaphore(ghsemSafeSemaphoreLock);
+
+    ASSERT(pssem->lCount > 0);
+    if (pssem->lCount == 1)
     {
-        /* FIXME: Not thread-safe! Use result of InterlockedCompareExchangePointer! */
         EngDeleteSemaphore(pssem->hsem);
-        (void)InterlockedExchangePointer((volatile PVOID *)&pssem->hsem, NULL);
+        pssem->hsem = NULL;
     }
+
+    --pssem->lCount;
+    EngReleaseSemaphore(ghsemSafeSemaphoreLock);
 }
 
 /* EOF */
