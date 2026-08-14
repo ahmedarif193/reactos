@@ -344,7 +344,7 @@ add_allusers_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "Prof
 add_user_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "Profiles" "Default User")
 
 # Disk image size configuration (in MB)
-set(_preinstall_image_size_default 512)
+set(_preinstall_image_size_default 700)
 set(PREINSTALL_IMAGE_SIZE_MB ${_preinstall_image_size_default} CACHE STRING "Boot and system area size in MB; the private crash-dump partition is additional")
 set(PREINSTALL_CRASH_DUMP_SIZE_MB 64 CACHE STRING "Private raw crash-dump partition size in MB")
 if(PREINSTALL_CRASH_DUMP_SIZE_MB LESS 1)
