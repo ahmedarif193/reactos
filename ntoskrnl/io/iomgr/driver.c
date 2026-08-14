@@ -1587,16 +1587,18 @@ IopInitializeSystemDrivers(VOID)
 NTSTATUS NTAPI
 IopUnloadDriver(PUNICODE_STRING DriverServiceName, BOOLEAN UnloadPnpDrivers)
 {
-    UNICODE_STRING Backslash = RTL_CONSTANT_STRING(L"\\");
     RTL_QUERY_REGISTRY_TABLE QueryTable[2];
+    OBJECT_ATTRIBUTES ObjectAttributes;
     UNICODE_STRING ImagePath;
+    UNICODE_STRING FileSystemRoot = RTL_CONSTANT_STRING(FILESYSTEM_ROOT_NAME);
     UNICODE_STRING ServiceName;
     UNICODE_STRING ObjectName;
+    HANDLE ServiceHandle;
     PDRIVER_OBJECT DriverObject;
     PDEVICE_OBJECT DeviceObject;
     PEXTENDED_DEVOBJ_EXTENSION DeviceExtension;
     NTSTATUS Status;
-    USHORT LastBackslash;
+    BOOLEAN IsFileSystemDriver;
     BOOLEAN SafeToUnload = TRUE;
     KPROCESSOR_MODE PreviousMode;
     UNICODE_STRING CapturedServiceName;
@@ -1630,47 +1632,24 @@ IopUnloadDriver(PUNICODE_STRING DriverServiceName, BOOLEAN UnloadPnpDrivers)
         return STATUS_INVALID_PARAMETER;
     }
 
-    /*
-     * Get the service name from the registry key name
-     */
-    Status = RtlFindCharInUnicodeString(RTL_FIND_CHAR_IN_UNICODE_STRING_START_AT_END,
-                                        &CapturedServiceName,
-                                        &Backslash,
-                                        &LastBackslash);
-    if (NT_SUCCESS(Status))
-    {
-        NT_ASSERT(CapturedServiceName.Length >= LastBackslash + sizeof(WCHAR));
-        ServiceName.Buffer = &CapturedServiceName.Buffer[LastBackslash / sizeof(WCHAR) + 1];
-        ServiceName.Length = CapturedServiceName.Length - LastBackslash - sizeof(WCHAR);
-        ServiceName.MaximumLength = CapturedServiceName.MaximumLength - LastBackslash - sizeof(WCHAR);
-    }
-    else
-    {
-        ServiceName = CapturedServiceName;
-    }
-
-    /*
-     * Construct the driver object name
-     */
-    Status = RtlUShortAdd(sizeof(DRIVER_ROOT_NAME),
-                          ServiceName.Length,
-                          &ObjectName.MaximumLength);
+    /* Resolve the object name using the service type (\Driver or \FileSystem). */
+    InitializeObjectAttributes(&ObjectAttributes, &CapturedServiceName, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
+    Status = ZwOpenKey(&ServiceHandle, KEY_QUERY_VALUE, &ObjectAttributes);
     if (!NT_SUCCESS(Status))
     {
         ReleaseCapturedUnicodeString(&CapturedServiceName, PreviousMode);
         return Status;
     }
-    ObjectName.Length = 0;
-    ObjectName.Buffer = ExAllocatePoolWithTag(PagedPool,
-                                              ObjectName.MaximumLength,
-                                              TAG_IO);
-    if (!ObjectName.Buffer)
+
+    Status = IopGetDriverNames(ServiceHandle, &ObjectName, &ServiceName);
+    ZwClose(ServiceHandle);
+    if (!NT_SUCCESS(Status))
     {
         ReleaseCapturedUnicodeString(&CapturedServiceName, PreviousMode);
-        return STATUS_INSUFFICIENT_RESOURCES;
+        return Status;
     }
-    NT_VERIFY(NT_SUCCESS(RtlAppendUnicodeToString(&ObjectName, DRIVER_ROOT_NAME)));
-    NT_VERIFY(NT_SUCCESS(RtlAppendUnicodeStringToString(&ObjectName, &ServiceName)));
+
+    IsFileSystemDriver = RtlPrefixUnicodeString(&FileSystemRoot, &ObjectName, TRUE);
 
     /*
      * Find the driver object
@@ -1688,6 +1667,7 @@ IopUnloadDriver(PUNICODE_STRING DriverServiceName, BOOLEAN UnloadPnpDrivers)
     {
         DPRINT1("Can't locate driver object for %wZ\n", &ObjectName);
         ExFreePoolWithTag(ObjectName.Buffer, TAG_IO);
+        ExFreePoolWithTag(ServiceName.Buffer, TAG_IO);
         ReleaseCapturedUnicodeString(&CapturedServiceName, PreviousMode);
         return Status;
     }
@@ -1700,8 +1680,18 @@ IopUnloadDriver(PUNICODE_STRING DriverServiceName, BOOLEAN UnloadPnpDrivers)
     {
         DPRINT1("Driver deletion pending\n");
         ObDereferenceObject(DriverObject);
+        ExFreePoolWithTag(ServiceName.Buffer, TAG_IO);
         ReleaseCapturedUnicodeString(&CapturedServiceName, PreviousMode);
         return STATUS_DELETE_PENDING;
+    }
+
+    if (!DriverObject->DriverUnload)
+    {
+        DPRINT1("No DriverUnload function! '%wZ' will not be unloaded!\n", &DriverObject->DriverName);
+        ObDereferenceObject(DriverObject);
+        ExFreePoolWithTag(ServiceName.Buffer, TAG_IO);
+        ReleaseCapturedUnicodeString(&CapturedServiceName, PreviousMode);
+        return STATUS_INVALID_DEVICE_REQUEST;
     }
 
     /*
@@ -1728,6 +1718,7 @@ IopUnloadDriver(PUNICODE_STRING DriverServiceName, BOOLEAN UnloadPnpDrivers)
     {
         DPRINT1("RtlQueryRegistryValues() failed (Status %x)\n", Status);
         ObDereferenceObject(DriverObject);
+        ExFreePoolWithTag(ServiceName.Buffer, TAG_IO);
         return Status;
     }
 
@@ -1740,11 +1731,13 @@ IopUnloadDriver(PUNICODE_STRING DriverServiceName, BOOLEAN UnloadPnpDrivers)
     {
         DPRINT1("IopNormalizeImagePath() failed (Status %x)\n", Status);
         ObDereferenceObject(DriverObject);
+        ExFreePoolWithTag(ServiceName.Buffer, TAG_IO);
         return Status;
     }
 
     /* Free the service path */
     ExFreePool(ImagePath.Buffer);
+    ExFreePoolWithTag(ServiceName.Buffer, TAG_IO);
 
     /*
      * Unload the module and release the references to the device object
@@ -1752,7 +1745,7 @@ IopUnloadDriver(PUNICODE_STRING DriverServiceName, BOOLEAN UnloadPnpDrivers)
 
     /* Call the load/unload routine, depending on current process */
     if (DriverObject->DriverUnload && DriverObject->DriverSection &&
-        (UnloadPnpDrivers || (DriverObject->Flags & DRVO_LEGACY_DRIVER)))
+        (UnloadPnpDrivers || (DriverObject->Flags & DRVO_LEGACY_DRIVER) || IsFileSystemDriver))
     {
         /* Loop through each device object of the driver
            and set DOE_UNLOAD_PENDING flag */

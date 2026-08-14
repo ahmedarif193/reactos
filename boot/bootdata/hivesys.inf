@@ -2514,7 +2514,7 @@ HKLM,"SYSTEM\CurrentControlSet\Services\RamDisk","Type",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\fltmgr","ErrorControl",0x00010001,0x00000003
 HKLM,"SYSTEM\CurrentControlSet\Services\fltmgr","Group",0x00000000,"FSFilter Infrastructure"
 HKLM,"SYSTEM\CurrentControlSet\Services\fltmgr","ImagePath",0x00020000,"system32\drivers\fltmgr.sys"
-HKLM,"SYSTEM\CurrentControlSet\Services\fltmgr","Start",0x00010001,0x00000003
+HKLM,"SYSTEM\CurrentControlSet\Services\fltmgr","Start",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\fltmgr","Type",0x00010001,0x00000002
 
 ; ControlSet selection settings

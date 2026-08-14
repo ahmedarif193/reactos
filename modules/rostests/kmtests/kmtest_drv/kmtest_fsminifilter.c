@@ -139,7 +139,7 @@ DriverEntry(
     UNICODE_STRING KmtestDeviceName;
     PFILE_OBJECT KmtestFileObject;
     PKMT_DEVICE_EXTENSION KmtestDeviceExtension;
-    PCWSTR DeviceNameSuffix;
+    PCWSTR DeviceNameSuffix = NULL;
     INT Flags = 0;
     PKPRCB Prcb;
 
@@ -186,7 +186,12 @@ DriverEntry(
     DeviceName.MaximumLength = sizeof DeviceNameBuffer;
     TestEntry(DriverObject, RegistryPath, &DeviceNameSuffix, &Flags);
 
-    RtlAppendUnicodeToString(&DeviceName, DeviceNameSuffix);
+    if (DeviceNameSuffix != NULL)
+    {
+        Status = RtlAppendUnicodeToString(&DeviceName, DeviceNameSuffix);
+        if (!NT_SUCCESS(Status))
+            goto cleanup;
+    }
 
     /* Register with the filter manager */
     if (!(Flags & TESTENTRY_NO_REGISTER_FILTER))

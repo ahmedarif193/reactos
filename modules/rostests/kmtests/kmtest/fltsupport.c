@@ -133,8 +133,8 @@ KmtFltLoadDriver(
         Error = KmtFltUnload(TestServiceName);
         if (Error)
         {
-            // TODO
-            __debugbreak();
+            trace("KmtFltUnload failed while restarting %ls: %lu\n", TestServiceName, Error);
+            return Error;
         }
 
         Error = KmtFltLoad(TestServiceName);
@@ -182,8 +182,7 @@ KmtFltUnloadDriver(
 
     if (Error)
     {
-        // TODO
-        __debugbreak();
+        trace("KmtFltUnload failed for %ls: %lu\n", TestServiceName, Error);
     }
 
     return Error;
