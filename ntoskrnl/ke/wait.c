@@ -252,15 +252,59 @@ VOID
 FASTCALL
 KiAcquireFastMutex(IN PFAST_MUTEX FastMutex)
 {
+#if (NTDDI_VERSION >= NTDDI_VISTA)
+    ULONG BitsToRemove, BitsToAdd;
+    LONG OldValue, NewValue;
+
+    C_ASSERT((FM_LOCK_WAITER_WOKEN * 2) == FM_LOCK_WAITER_INC);
+
+    /* Increase contention count */
+    FastMutex->Contention++;
+
+    BitsToRemove = FM_LOCK_BIT;
+    BitsToAdd = FM_LOCK_WAITER_INC;
+
+    for (;;)
+    {
+        OldValue = FastMutex->Count;
+        for (;;)
+        {
+            if (OldValue & FM_LOCK_BIT)
+            {
+                ASSERT((BitsToRemove == FM_LOCK_BIT) ||
+                       ((OldValue & FM_LOCK_WAITER_WOKEN) != 0));
+                NewValue = OldValue ^ BitsToRemove;
+                NewValue = InterlockedCompareExchange(&FastMutex->Count, NewValue, OldValue);
+                if (NewValue == OldValue)
+                {
+                    return;
+                }
+            }
+            else
+            {
+                NewValue = OldValue + BitsToAdd;
+                NewValue = InterlockedCompareExchange(&FastMutex->Count, NewValue, OldValue);
+                if (NewValue == OldValue)
+                {
+                    break;
+                }
+            }
+
+            OldValue = NewValue;
+        }
+
+        KeWaitForSingleObject(&FastMutex->Event, WrMutex, KernelMode, FALSE, NULL);
+        ASSERT((FastMutex->Count & FM_LOCK_WAITER_WOKEN) != 0);
+        BitsToRemove = FM_LOCK_BIT | FM_LOCK_WAITER_WOKEN;
+        BitsToAdd = FM_LOCK_WAITER_WOKEN;
+    }
+#else
     /* Increase contention count */
     FastMutex->Contention++;
 
     /* Wait for the event */
-    KeWaitForSingleObject(&FastMutex->Event,
-                          WrMutex,
-                          KernelMode,
-                          FALSE,
-                          NULL);
+    KeWaitForSingleObject(&FastMutex->Event, WrMutex, KernelMode, FALSE, NULL);
+#endif
 }
 
 VOID
