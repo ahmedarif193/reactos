@@ -425,31 +425,26 @@ HidParser_GetSpecificValueCaps(
 {
     NTSTATUS ParserStatus;
 
-    //
-    // FIXME: implement searching in specific collection
-    //
-    ASSERT(LinkCollection == HIDP_LINK_COLLECTION_UNSPECIFIED);
-
     if (ReportType == HidP_Input)
     {
         //
         // input report
         //
-        ParserStatus = HidParser_GetSpecificValueCapsWithReport(CollectionContext, HID_REPORT_TYPE_INPUT, UsagePage, Usage, ValueCaps, ValueCapsLength);
+        ParserStatus = HidParser_GetSpecificValueCapsWithReport(CollectionContext, HID_REPORT_TYPE_INPUT, UsagePage, LinkCollection, Usage, ValueCaps, ValueCapsLength);
     }
     else if (ReportType == HidP_Output)
     {
         //
         // input report
         //
-        ParserStatus = HidParser_GetSpecificValueCapsWithReport(CollectionContext, HID_REPORT_TYPE_OUTPUT, UsagePage, Usage, ValueCaps, ValueCapsLength);
+        ParserStatus = HidParser_GetSpecificValueCapsWithReport(CollectionContext, HID_REPORT_TYPE_OUTPUT, UsagePage, LinkCollection, Usage, ValueCaps, ValueCapsLength);
     }
     else if (ReportType == HidP_Feature)
     {
         //
         // input report
         //
-        ParserStatus = HidParser_GetSpecificValueCapsWithReport(CollectionContext, HID_REPORT_TYPE_FEATURE, UsagePage, Usage, ValueCaps, ValueCapsLength);
+        ParserStatus = HidParser_GetSpecificValueCapsWithReport(CollectionContext, HID_REPORT_TYPE_FEATURE, UsagePage, LinkCollection, Usage, ValueCaps, ValueCapsLength);
     }
     else
     {
@@ -923,35 +918,17 @@ HidParser_GetSpecificButtonCaps(
     OUT PHIDP_BUTTON_CAPS  ButtonCaps,
     IN OUT PULONG  ButtonCapsLength)
 {
-    if (LinkCollection != HIDP_LINK_COLLECTION_UNSPECIFIED)
-        return HIDP_STATUS_USAGE_NOT_FOUND;
-
     if (ReportType == HidP_Input)
     {
-        return HidParser_GetSpecificButtonCapsWithReport(CollectionContext,
-                                                         HID_REPORT_TYPE_INPUT,
-                                                         UsagePage,
-                                                         Usage,
-                                                         ButtonCaps,
-                                                         ButtonCapsLength);
+        return HidParser_GetSpecificButtonCapsWithReport(CollectionContext, HID_REPORT_TYPE_INPUT, UsagePage, LinkCollection, Usage, ButtonCaps, ButtonCapsLength);
     }
     else if (ReportType == HidP_Output)
     {
-        return HidParser_GetSpecificButtonCapsWithReport(CollectionContext,
-                                                         HID_REPORT_TYPE_OUTPUT,
-                                                         UsagePage,
-                                                         Usage,
-                                                         ButtonCaps,
-                                                         ButtonCapsLength);
+        return HidParser_GetSpecificButtonCapsWithReport(CollectionContext, HID_REPORT_TYPE_OUTPUT, UsagePage, LinkCollection, Usage, ButtonCaps, ButtonCapsLength);
     }
     else if (ReportType == HidP_Feature)
     {
-        return HidParser_GetSpecificButtonCapsWithReport(CollectionContext,
-                                                         HID_REPORT_TYPE_FEATURE,
-                                                         UsagePage,
-                                                         Usage,
-                                                         ButtonCaps,
-                                                         ButtonCapsLength);
+        return HidParser_GetSpecificButtonCapsWithReport(CollectionContext, HID_REPORT_TYPE_FEATURE, UsagePage, LinkCollection, Usage, ButtonCaps, ButtonCapsLength);
     }
 
     return HIDP_STATUS_INVALID_REPORT_TYPE;

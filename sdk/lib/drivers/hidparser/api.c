@@ -82,22 +82,14 @@ BOOLEAN
 HidParser_ReportItemIsButtonCap(
     _In_ PHID_REPORT_ITEM ReportItem)
 {
-    USHORT UsagePage;
-
     if (ReportItem->BitCount == 0)
         return FALSE;
 
-    UsagePage = HidParser_ReportItemUsagePage(ReportItem);
-
     /*
-     * HID button capabilities cover selector arrays and one-bit button-like
-     * variable fields. Multi-bit variable controls are value capabilities.
+     * HID button capabilities cover every selector array and every one-bit
+     * data field. Multi-bit variable controls are value capabilities.
      */
-    if (ReportItem->Array)
-        return TRUE;
-
-    return UsagePage == HID_USAGE_PAGE_BUTTON ||
-           UsagePage == HID_USAGE_PAGE_KEYBOARD;
+    return ReportItem->Array || ReportItem->BitCount == 1;
 }
 
 static
@@ -329,29 +321,21 @@ HidParser_GetSpecificValueCapsWithReport(
     IN PVOID CollectionContext,
     IN UCHAR ReportType,
     IN USHORT UsagePage,
+    IN USHORT LinkCollection,
     IN USHORT Usage,
     OUT PHIDP_VALUE_CAPS  ValueCaps,
     IN OUT PUSHORT  ValueCapsLength)
 {
-    ULONG Index;
+    ULONG Index, ReportCount, ReportIndex, DataIndex = 0;
     PHID_REPORT Report;
     USHORT ItemCount = 0;
     USHORT Capacity;
     USHORT CurrentUsagePage;
     USHORT CurrentUsage;
+    USHORT CurrentDataIndex;
     PHID_REPORT_ITEM ReportItem;
-
-    //
-    // get report
-    //
-    Report = HidParser_GetReportInCollection(CollectionContext, ReportType);
-    if (!Report)
-    {
-        //
-        // no such report
-        //
-        return HIDP_STATUS_REPORT_DOES_NOT_EXIST;
-    }
+    PHID_REPORT_ITEM PreviousItem;
+    BOOLEAN ReportFound = FALSE;
 
     if (!ValueCapsLength)
         return HIDP_STATUS_INVALID_PREPARSED_DATA;
@@ -360,73 +344,99 @@ HidParser_GetSpecificValueCapsWithReport(
     if (!ValueCaps)
         Capacity = 0;
 
-    for(Index = 0; Index < Report->ItemCount; Index++)
+    ReportCount = HidParser_GetReportCountInCollection(CollectionContext);
+    for (ReportIndex = 0; ReportIndex < ReportCount; ReportIndex++)
     {
-        ReportItem = &Report->Items[Index];
-        if (HidParser_ReportItemIsButtonCap(ReportItem))
+        Report = HidParser_GetReportByIndex(CollectionContext, ReportIndex);
+        if (Report->Type != ReportType)
             continue;
+        ReportFound = TRUE;
+        PreviousItem = NULL;
 
-        //
-        // check usage page
-        //
-        CurrentUsagePage = HidParser_ReportItemUsagePage(ReportItem);
-        CurrentUsage = (ReportItem->UsageMinimum & 0xFFFF);
-
-        if (HidParser_ReportItemMatchesUsage(ReportItem, UsagePage, Usage))
+        for (Index = 0; Index < Report->ItemCount; Index++)
         {
-            //
-            // check if there is enough place for the caps
-            //
+            ReportItem = &Report->Items[Index];
+            if (!ReportItem->HasData)
+            {
+                PreviousItem = NULL;
+                continue;
+            }
+            CurrentDataIndex = (USHORT)DataIndex++;
+            if (HidParser_ReportItemIsButtonCap(ReportItem))
+            {
+                PreviousItem = NULL;
+                continue;
+            }
+            if (LinkCollection != HIDP_LINK_COLLECTION_UNSPECIFIED && ReportItem->LinkCollection != LinkCollection)
+            {
+                PreviousItem = NULL;
+                continue;
+            }
+
+            CurrentUsagePage = HidParser_ReportItemUsagePage(ReportItem);
+            CurrentUsage = (ReportItem->UsageMinimum & 0xFFFF);
+
+            if (!HidParser_ReportItemMatchesUsage(ReportItem, UsagePage, Usage))
+            {
+                PreviousItem = NULL;
+                continue;
+            }
+
+            if (PreviousItem != NULL &&
+                PreviousItem->MainItem == ReportItem->MainItem &&
+                PreviousItem->UsageMinimum == ReportItem->UsageMinimum &&
+                PreviousItem->UsageMaximum == ReportItem->UsageMaximum)
+            {
+                if (ItemCount <= Capacity && ValueCaps[ItemCount - 1].ReportCount != MAXUSHORT)
+                    ValueCaps[ItemCount - 1].ReportCount++;
+                PreviousItem = ReportItem;
+                continue;
+            }
+
             if (ItemCount < Capacity)
             {
-                //
-                // zero caps
-                //
                 ZeroFunction(&ValueCaps[ItemCount], sizeof(HIDP_VALUE_CAPS));
-
-                //
-                // init caps
-                //
                 ValueCaps[ItemCount].UsagePage = CurrentUsagePage;
                 ValueCaps[ItemCount].ReportID = Report->ReportID;
                 ValueCaps[ItemCount].LogicalMin = ReportItem->Minimum;
                 ValueCaps[ItemCount].LogicalMax = ReportItem->Maximum;
                 ValueCaps[ItemCount].IsAbsolute = !ReportItem->Relative;
+                ValueCaps[ItemCount].BitField = ReportItem->BitField;
+                ValueCaps[ItemCount].LinkCollection = ReportItem->LinkCollection;
+                HidParser_GetLinkCollectionUsagePage(CollectionContext, ReportItem->LinkCollection, &ValueCaps[ItemCount].LinkUsage, &ValueCaps[ItemCount].LinkUsagePage);
                 ValueCaps[ItemCount].BitSize = ReportItem->BitCount;
                 ValueCaps[ItemCount].ReportCount = 1;
+                ValueCaps[ItemCount].HasNull = (ReportItem->BitField & (1 << 6)) != 0;
+                ValueCaps[ItemCount].PhysicalMin = ReportItem->PhysicalMinimum;
+                ValueCaps[ItemCount].PhysicalMax = ReportItem->PhysicalMaximum;
+                ValueCaps[ItemCount].UnitsExp = ReportItem->UnitExponent;
+                ValueCaps[ItemCount].Units = ReportItem->Units;
 
                 if (ReportItem->UsageMinimum != ReportItem->UsageMaximum)
                 {
                     ValueCaps[ItemCount].IsRange = TRUE;
                     ValueCaps[ItemCount].Range.UsageMin = (ReportItem->UsageMinimum & 0xFFFF);
                     ValueCaps[ItemCount].Range.UsageMax = (ReportItem->UsageMaximum & 0xFFFF);
-                    ValueCaps[ItemCount].Range.DataIndexMin = Index;
-                    ValueCaps[ItemCount].Range.DataIndexMax = Index;
+                    ValueCaps[ItemCount].Range.DataIndexMin = CurrentDataIndex;
+                    ValueCaps[ItemCount].Range.DataIndexMax = CurrentDataIndex;
                 }
                 else
                 {
                     ValueCaps[ItemCount].NotRange.Usage = CurrentUsage;
                     ValueCaps[ItemCount].NotRange.Reserved1 = CurrentUsage;
-                    ValueCaps[ItemCount].NotRange.DataIndex = Index;
-                    ValueCaps[ItemCount].NotRange.Reserved4 = Index;
+                    ValueCaps[ItemCount].NotRange.DataIndex = CurrentDataIndex;
+                    ValueCaps[ItemCount].NotRange.Reserved4 = CurrentDataIndex;
                 }
-
-                //
-                // FIXME: FILLMEIN
-                //
             }
 
-
-            //
-            // found item
-            //
             ItemCount++;
+            PreviousItem = ReportItem;
         }
     }
 
-    //
-    // store result
-    //
+    if (!ReportFound)
+        return HIDP_STATUS_REPORT_DOES_NOT_EXIST;
+
     *ValueCapsLength = ItemCount;
 
     if (!ItemCount)
@@ -436,31 +446,6 @@ HidParser_GetSpecificValueCapsWithReport(
         return HIDP_STATUS_BUFFER_TOO_SMALL;
 
     return HIDP_STATUS_SUCCESS;
-}
-
-static
-BOOLEAN
-HidParser_ButtonCapCanMerge(
-    IN PHIDP_BUTTON_CAPS ButtonCaps,
-    IN USAGE UsagePage,
-    IN USAGE UsageMin,
-    IN USAGE UsageMax,
-    IN UCHAR ReportID,
-    IN BOOLEAN IsAbsolute)
-{
-    USAGE CurrentMax;
-
-    if (ButtonCaps->UsagePage != UsagePage ||
-        ButtonCaps->ReportID != ReportID ||
-        ButtonCaps->IsAbsolute != IsAbsolute)
-    {
-        return FALSE;
-    }
-
-    CurrentMax = ButtonCaps->IsRange ? ButtonCaps->Range.UsageMax
-                                     : ButtonCaps->NotRange.Usage;
-
-    return (UsageMin <= CurrentMax + 1);
 }
 
 static
@@ -491,21 +476,24 @@ HidParser_GetSpecificButtonCapsWithReport(
     IN PVOID CollectionContext,
     IN UCHAR ReportType,
     IN USHORT UsagePage,
+    IN USHORT LinkCollection,
     IN USHORT Usage,
     OUT PHIDP_BUTTON_CAPS ButtonCaps,
     IN OUT PULONG ButtonCapsLength)
 {
-    ULONG Index;
+    ULONG Index, ReportCount, ReportIndex, DataIndex = 0;
     ULONG ItemCount = 0;
     ULONG Capacity;
     PHID_REPORT Report;
     PHID_REPORT_ITEM ReportItem;
+    PHID_REPORT_ITEM PreviousItem;
     PHIDP_BUTTON_CAPS CurrentCaps;
     USHORT CurrentUsagePage;
-    USHORT CollectionUsage;
-    USHORT CollectionUsagePage;
+    USHORT CurrentDataIndex;
     USAGE UsageMin;
     USAGE UsageMax;
+    USAGE PreviousUsageMax = 0;
+    BOOLEAN ReportFound = FALSE;
 
     if (!ButtonCapsLength)
         return HIDP_STATUS_INVALID_PREPARSED_DATA;
@@ -514,82 +502,96 @@ HidParser_GetSpecificButtonCapsWithReport(
     if (!ButtonCaps)
         Capacity = 0;
 
-    Report = HidParser_GetReportInCollection(CollectionContext, ReportType);
-    if (!Report)
+    ReportCount = HidParser_GetReportCountInCollection(CollectionContext);
+    for (ReportIndex = 0; ReportIndex < ReportCount; ReportIndex++)
+    {
+        Report = HidParser_GetReportByIndex(CollectionContext, ReportIndex);
+        if (Report->Type != ReportType)
+            continue;
+        ReportFound = TRUE;
+        PreviousItem = NULL;
+
+        for (Index = 0; Index < Report->ItemCount; Index++)
+        {
+            ReportItem = &Report->Items[Index];
+            if (!ReportItem->HasData)
+            {
+                PreviousItem = NULL;
+                continue;
+            }
+            CurrentDataIndex = (USHORT)DataIndex++;
+            if (!HidParser_ReportItemIsButtonCap(ReportItem))
+            {
+                PreviousItem = NULL;
+                continue;
+            }
+            if (LinkCollection != HIDP_LINK_COLLECTION_UNSPECIFIED && ReportItem->LinkCollection != LinkCollection)
+            {
+                PreviousItem = NULL;
+                continue;
+            }
+
+            CurrentUsagePage = HidParser_ReportItemUsagePage(ReportItem);
+            if (!HidParser_ReportItemMatchesUsage(ReportItem, UsagePage, Usage))
+            {
+                PreviousItem = NULL;
+                continue;
+            }
+
+            UsageMin = (USAGE)(ReportItem->UsageMinimum & 0xFFFF);
+            UsageMax = (USAGE)(ReportItem->UsageMaximum & 0xFFFF);
+            if (UsageMax < UsageMin)
+                UsageMax = UsageMin;
+
+            if (PreviousItem != NULL && PreviousItem->MainItem == ReportItem->MainItem && PreviousItem->LinkCollection == ReportItem->LinkCollection && PreviousItem->BitField == ReportItem->BitField && HidParser_ReportItemUsagePage(PreviousItem) == CurrentUsagePage && UsageMin <= PreviousUsageMax + 1)
+            {
+                if (ItemCount <= Capacity)
+                    HidParser_ExtendButtonCapRange(&ButtonCaps[ItemCount - 1], UsageMax, CurrentDataIndex);
+                if (UsageMax > PreviousUsageMax)
+                    PreviousUsageMax = UsageMax;
+                PreviousItem = ReportItem;
+                continue;
+            }
+
+            if (ItemCount < Capacity)
+            {
+                CurrentCaps = &ButtonCaps[ItemCount];
+                ZeroFunction(CurrentCaps, sizeof(HIDP_BUTTON_CAPS));
+
+                CurrentCaps->UsagePage = CurrentUsagePage;
+                CurrentCaps->ReportID = Report->ReportID;
+                CurrentCaps->BitField = ReportItem->BitField;
+                CurrentCaps->LinkCollection = ReportItem->LinkCollection;
+                HidParser_GetLinkCollectionUsagePage(CollectionContext, ReportItem->LinkCollection, &CurrentCaps->LinkUsage, &CurrentCaps->LinkUsagePage);
+                CurrentCaps->IsAbsolute = !ReportItem->Relative;
+
+                if (UsageMin != UsageMax)
+                {
+                    CurrentCaps->IsRange = TRUE;
+                    CurrentCaps->Range.UsageMin = UsageMin;
+                    CurrentCaps->Range.UsageMax = UsageMax;
+                    CurrentCaps->Range.DataIndexMin = CurrentDataIndex;
+                    CurrentCaps->Range.DataIndexMax = CurrentDataIndex;
+                }
+                else
+                {
+                    CurrentCaps->NotRange.Usage = UsageMin;
+                    CurrentCaps->NotRange.Reserved1 = UsageMin;
+                    CurrentCaps->NotRange.DataIndex = CurrentDataIndex;
+                    CurrentCaps->NotRange.Reserved4 = CurrentDataIndex;
+                }
+            }
+
+            ItemCount++;
+            PreviousUsageMax = UsageMax;
+            PreviousItem = ReportItem;
+        }
+    }
+
+    if (!ReportFound)
     {
         *ButtonCapsLength = 0;
         return HIDP_STATUS_REPORT_DOES_NOT_EXIST;
-    }
-
-    if (HidParser_GetCollectionUsagePage(CollectionContext,
-                                         &CollectionUsage,
-                                         &CollectionUsagePage) != HIDP_STATUS_SUCCESS)
-    {
-        CollectionUsage = HID_USAGE_PAGE_UNDEFINED;
-        CollectionUsagePage = HID_USAGE_PAGE_UNDEFINED;
-    }
-
-    for (Index = 0; Index < Report->ItemCount; Index++)
-    {
-        ReportItem = &Report->Items[Index];
-        if (!HidParser_ReportItemIsButtonCap(ReportItem))
-            continue;
-
-        CurrentUsagePage = HidParser_ReportItemUsagePage(ReportItem);
-        if (!HidParser_ReportItemMatchesUsage(ReportItem, UsagePage, Usage))
-            continue;
-
-        UsageMin = (USAGE)(ReportItem->UsageMinimum & 0xFFFF);
-        UsageMax = (USAGE)(ReportItem->UsageMaximum & 0xFFFF);
-        if (UsageMax < UsageMin)
-            UsageMax = UsageMin;
-
-        if (ItemCount > 0 &&
-            ItemCount <= Capacity &&
-            HidParser_ButtonCapCanMerge(&ButtonCaps[ItemCount - 1],
-                                        CurrentUsagePage,
-                                        UsageMin,
-                                        UsageMax,
-                                        Report->ReportID,
-                                        !ReportItem->Relative))
-        {
-            if (ItemCount <= Capacity)
-                HidParser_ExtendButtonCapRange(&ButtonCaps[ItemCount - 1],
-                                               UsageMax,
-                                               (USHORT)Index);
-            continue;
-        }
-
-        if (ItemCount < Capacity)
-        {
-            CurrentCaps = &ButtonCaps[ItemCount];
-            ZeroFunction(CurrentCaps, sizeof(HIDP_BUTTON_CAPS));
-
-            CurrentCaps->UsagePage = CurrentUsagePage;
-            CurrentCaps->ReportID = Report->ReportID;
-            CurrentCaps->LinkCollection = HIDP_LINK_COLLECTION_UNSPECIFIED;
-            CurrentCaps->LinkUsage = CollectionUsage;
-            CurrentCaps->LinkUsagePage = CollectionUsagePage;
-            CurrentCaps->IsAbsolute = !ReportItem->Relative;
-
-            if (UsageMin != UsageMax)
-            {
-                CurrentCaps->IsRange = TRUE;
-                CurrentCaps->Range.UsageMin = UsageMin;
-                CurrentCaps->Range.UsageMax = UsageMax;
-                CurrentCaps->Range.DataIndexMin = (USHORT)Index;
-                CurrentCaps->Range.DataIndexMax = (USHORT)Index;
-            }
-            else
-            {
-                CurrentCaps->NotRange.Usage = UsageMin;
-                CurrentCaps->NotRange.Reserved1 = UsageMin;
-                CurrentCaps->NotRange.DataIndex = (USHORT)Index;
-                CurrentCaps->NotRange.Reserved4 = (USHORT)Index;
-            }
-        }
-
-        ItemCount++;
     }
 
     *ButtonCapsLength = ItemCount;

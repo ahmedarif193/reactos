@@ -1,8 +1,9 @@
 #ifndef _HIDP_PRIVATE_H_
 #define _HIDP_PRIVATE_H_
 
-#define HIDP_WINE_PREPARSED_DATA_MAGIC 0x08491759
-#define HIDP_REACTOS_PREPARSED_DATA_MAGIC 0x52487050
+#include <reactos/hidp_private.h>
+
+#define HIDP_LEGACY_PREPARSED_DATA_MAGIC 0x08491759
 
 #define HID_VALUE_CAPS_IS_BUTTON            0x04
 #define HID_VALUE_CAPS_IS_ABSOLUTE          0x08
@@ -78,17 +79,18 @@ struct hid_preparsed_data
     struct hid_value_caps value_caps[1];
 };
 
-typedef struct _HIDP_REACTOS_PREPARSED_DATA
-{
-    ULONG Magic;
-    ULONG NativeOffset;
-    ULONG NativeSize;
-} HIDP_REACTOS_PREPARSED_DATA, *PHIDP_REACTOS_PREPARSED_DATA;
-
 PVOID NTAPI AllocFunction(ULONG Size);
 VOID NTAPI FreeFunction(PVOID Item);
 VOID NTAPI ZeroFunction(PVOID Item, ULONG Size);
 VOID NTAPI CopyFunction(PVOID Target, PVOID Source, ULONG Size);
 VOID __cdecl DebugFunction(LPCSTR Src, ...);
+
+BOOLEAN
+HidP_CreatePreparsedData(
+    IN PHIDP_PREPARSED_DATA NativeData,
+    IN ULONG NativeSize,
+    OUT PHIDP_PREPARSED_DATA *PreparsedData,
+    OUT PULONG PublicSize OPTIONAL,
+    OUT PULONG TotalSize OPTIONAL);
 
 #endif /* _HIDP_PRIVATE_H_ */
