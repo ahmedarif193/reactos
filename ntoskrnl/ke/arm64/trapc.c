@@ -1691,68 +1691,7 @@ KiArm64HandleSynchronousException(
                 goto HandledExit;
             }
 
-            /* Not resolved by Mm - unhandled data abort. */
-            if (PreviousMode == KernelMode)
-            {
-                ULONG InstWord = 0, PrevInstWord = 0;
-                NTSTATUS InstReadStatus = STATUS_SUCCESS;
-
-                _SEH2_TRY
-                {
-                    InstWord = *(volatile ULONG *)(ULONG_PTR)Context->State.Elr;
-                    if (Context->State.Elr >= sizeof(ULONG))
-                    {
-                        PrevInstWord = *(volatile ULONG *)(ULONG_PTR)(Context->State.Elr - sizeof(ULONG));
-                    }
-                }
-                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-                {
-                    InstReadStatus = _SEH2_GetExceptionCode();
-                }
-                _SEH2_END;
-
-                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                    "[DABORT-KERNEL] FAIL VA=%p ELR=%p Status=0x%lx DFSC=0x%lx Write=%d Vec=%p Irql=%u Proc=%s\n",
-                    (PVOID)(ULONG_PTR)Context->State.FaultAddress,
-                    (PVOID)(ULONG_PTR)Context->State.Elr,
-                    (ULONG)Status,
-                    (ULONG)FaultStatus,
-                    (int)WriteAccess,
-                    (PVOID)(ULONG_PTR)Context->State.VectorId,
-                    (ULONG)AbortIrql,
-                    (PCSTR)((PEPROCESS)KeGetCurrentThread()->ApcState.Process)->ImageFileName);
-                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                    "[DABORT-KERNEL] insn prev=0x%08lx cur=0x%08lx read=0x%lx sp=%p fp=%p lr=%p spsr=0x%lx\n",
-                    PrevInstWord,
-                    InstWord,
-                    InstReadStatus,
-                    (PVOID)TrapFrame->Sp,
-                    (PVOID)TrapFrame->Fp,
-                    (PVOID)TrapFrame->Lr,
-                    TrapFrame->Spsr);
-                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                    "[DABORT-KERNEL] X0=%p X1=%p X8=%p X10=%p X11=%p X16=%p X17=%p X18=%p\n",
-                    (PVOID)TrapFrame->X0,
-                    (PVOID)TrapFrame->X1,
-                    (PVOID)TrapFrame->X8,
-                    (PVOID)TrapFrame->X10,
-                    (PVOID)TrapFrame->X11,
-                    (PVOID)TrapFrame->X16,
-                    (PVOID)TrapFrame->X17,
-                    (PVOID)TrapFrame->X18);
-                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                    "[DABORT-KERNEL] X19=%p X20=%p X21=%p X22=%p X23=%p X24=%p X25=%p X26=%p X27=%p X28=%p\n",
-                    (PVOID)Context->ExceptionFrame.X19,
-                    (PVOID)Context->ExceptionFrame.X20,
-                    (PVOID)Context->ExceptionFrame.X21,
-                    (PVOID)Context->ExceptionFrame.X22,
-                    (PVOID)Context->ExceptionFrame.X23,
-                    (PVOID)Context->ExceptionFrame.X24,
-                    (PVOID)Context->ExceptionFrame.X25,
-                    (PVOID)Context->ExceptionFrame.X26,
-                    (PVOID)Context->ExceptionFrame.X27,
-                    (PVOID)Context->ExceptionFrame.X28);
-            }
+            /* Not resolved by Mm; dispatch the data abort as an exception. */
 
             if (PreviousMode == UserMode)
             {
