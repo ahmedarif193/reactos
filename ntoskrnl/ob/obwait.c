@@ -369,6 +369,7 @@ NtWaitForSingleObject(IN HANDLE ObjectHandle,
                       IN PLARGE_INTEGER TimeOut  OPTIONAL)
 {
     PVOID Object, WaitableObject;
+    POBJECT_TYPE ObjectType;
     KPROCESSOR_MODE PreviousMode;
     LARGE_INTEGER SafeTimeOut;
     NTSTATUS Status;
@@ -402,7 +403,8 @@ NtWaitForSingleObject(IN HANDLE ObjectHandle,
     if (NT_SUCCESS(Status))
     {
         /* Get the Waitable Object */
-        WaitableObject = OBJECT_TO_OBJECT_HEADER(Object)->Type->DefaultObject;
+        ObjectType = OBJECT_TO_OBJECT_HEADER(Object)->Type;
+        WaitableObject = ObjectType->DefaultObject;
 
         /* Is it an offset for internal objects? */
         if (IsPointerOffset(WaitableObject))
@@ -430,6 +432,8 @@ NtWaitForSingleObject(IN HANDLE ObjectHandle,
             Status = _SEH2_GetExceptionCode();
         }
         _SEH2_END;
+
+        if ((Status == STATUS_WAIT_0) && (ObjectType == ExTimerType)) ExpQueueTimerApcAfterWait(Object);
 
         /* Dereference the Object */
         ObDereferenceObject(Object);

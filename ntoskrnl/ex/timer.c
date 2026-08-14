@@ -155,17 +155,44 @@ ExpTimerDpcRoutine(IN PKDPC Dpc,
     /* Check if the timer is associated */
     if (Timer->ApcAssociated)
     {
-        /* Queue the APC */
-        Inserted = KeInsertQueueApc(&Timer->TimerApc,
-                                    SystemArgument1,
-                                    SystemArgument2,
-                                    IO_NO_INCREMENT);
+        if ((Timer->ApcQueuedSequence != Timer->SetSequence) ||
+            (Timer->ApcQueuedDueTime != Timer->KeTimer.DueTime.QuadPart))
+        {
+            Timer->ApcQueuedSequence = Timer->SetSequence;
+            Timer->ApcQueuedDueTime = Timer->KeTimer.DueTime.QuadPart;
+            Inserted = KeInsertQueueApc(&Timer->TimerApc, SystemArgument1, SystemArgument2, IO_NO_INCREMENT);
+        }
     }
 
     /* Release the Timer */
     KeReleaseSpinLockFromDpcLevel(&Timer->Lock);
 
     /* Dereference it if we couldn't queue the APC */
+    if (!Inserted) ObDereferenceObject(Timer);
+}
+
+VOID
+NTAPI
+ExpQueueTimerApcAfterWait(IN OUT PETIMER Timer)
+{
+    LARGE_INTEGER SystemTime;
+    BOOLEAN Inserted = FALSE;
+    KIRQL OldIrql;
+
+    if (!ObReferenceObjectSafe(Timer)) return;
+
+    KeQuerySystemTime(&SystemTime);
+    KeAcquireSpinLock(&Timer->Lock, &OldIrql);
+    if (Timer->ApcAssociated &&
+        ((Timer->ApcQueuedSequence != Timer->SetSequence) ||
+         (Timer->ApcQueuedDueTime != Timer->KeTimer.DueTime.QuadPart)))
+    {
+        Timer->ApcQueuedSequence = Timer->SetSequence;
+        Timer->ApcQueuedDueTime = Timer->KeTimer.DueTime.QuadPart;
+        Inserted = KeInsertQueueApc(&Timer->TimerApc, UlongToPtr(SystemTime.LowPart), UlongToPtr(SystemTime.HighPart), IO_NO_INCREMENT);
+    }
+    KeReleaseSpinLock(&Timer->Lock, OldIrql);
+
     if (!Inserted) ObDereferenceObject(Timer);
 }
 
@@ -430,6 +457,9 @@ NtCreateTimer(OUT PHANDLE TimerHandle,
         Timer->ApcAssociated = FALSE;
         Timer->WakeTimer = FALSE;
         Timer->WakeTimerListEntry.Flink = NULL;
+        Timer->SetSequence = 0;
+        Timer->ApcQueuedSequence = MAXULONG;
+        Timer->ApcQueuedDueTime = 0;
 
         /* Insert the Timer */
         Status = ObInsertObject((PVOID)Timer,
@@ -705,6 +735,7 @@ NtSetTimer(IN HANDLE TimerHandle,
 
         /* Set up the APC Routine if specified */
         Timer->Period = Period;
+        Timer->SetSequence++;
         if (TimerApcRoutine)
         {
             /* Initialize the APC */

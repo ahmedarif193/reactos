@@ -134,7 +134,15 @@ typedef struct _ETIMER
     BOOLEAN ApcAssociated;
     BOOLEAN WakeTimer;
     LIST_ENTRY WakeTimerListEntry;
+    ULONG SetSequence;
+    ULONG ApcQueuedSequence;
+    ULONGLONG ApcQueuedDueTime;
 } ETIMER, *PETIMER;
+
+VOID
+NTAPI
+ExpQueueTimerApcAfterWait(
+    _Inout_ PETIMER Timer);
 
 typedef struct
 {
