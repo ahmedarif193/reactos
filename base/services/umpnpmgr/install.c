@@ -113,6 +113,77 @@ done:
 }
 
 
+/*
+ * Wait for the installer process to connect without polling the pipe.
+ *
+ * The connect IRP is completed either by the client opening the pipe or by
+ * cancellation when the installer process exits. This also keeps a failed
+ * child from leaving the service blocked in ConnectNamedPipe indefinitely.
+ */
+static BOOL
+WaitForInstallClientConnect(
+    _In_ HANDLE hPipe,
+    _In_ HANDLE hProcess)
+{
+    BOOL Connected = FALSE;
+    DWORD BytesTransferred;
+    DWORD ErrCode;
+    DWORD WaitResult;
+    HANDLE WaitHandles[2];
+    OVERLAPPED Overlapped;
+
+    ZeroMemory(&Overlapped, sizeof(Overlapped));
+    Overlapped.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (Overlapped.hEvent == NULL)
+        return FALSE;
+
+    if (ConnectNamedPipe(hPipe, &Overlapped))
+    {
+        Connected = TRUE;
+        ErrCode = ERROR_SUCCESS;
+        goto cleanup;
+    }
+
+    ErrCode = GetLastError();
+    if (ErrCode == ERROR_PIPE_CONNECTED)
+    {
+        Connected = TRUE;
+        ErrCode = ERROR_SUCCESS;
+        goto cleanup;
+    }
+
+    if (ErrCode != ERROR_IO_PENDING)
+        goto cleanup;
+
+    WaitHandles[0] = Overlapped.hEvent;
+    WaitHandles[1] = hProcess;
+    WaitResult = WaitForMultipleObjects(RTL_NUMBER_OF(WaitHandles), WaitHandles, FALSE, INFINITE);
+    if (WaitResult == WAIT_OBJECT_0)
+    {
+        Connected = GetOverlappedResult(hPipe, &Overlapped, &BytesTransferred, FALSE);
+        ErrCode = Connected ? ERROR_SUCCESS : GetLastError();
+    }
+    else
+    {
+        if (WaitResult == WAIT_OBJECT_0 + 1)
+            ErrCode = ERROR_PROCESS_ABORTED;
+        else if (WaitResult == WAIT_FAILED)
+            ErrCode = GetLastError();
+        else
+            ErrCode = ERROR_GEN_FAILURE;
+
+        CancelIo(hPipe);
+    }
+
+cleanup:
+    CloseHandle(Overlapped.hEvent);
+    if (!Connected)
+        SetLastError(ErrCode);
+
+    return Connected;
+}
+
+
 static BOOL
 InstallDevice(PCWSTR DeviceInstance, BOOL ShowWizard)
 {
@@ -213,7 +284,7 @@ InstallDevice(PCWSTR DeviceInstance, BOOL ShowWizard)
     /* Create the named pipe */
     wcscpy(PipeName, L"\\\\.\\pipe\\PNP_Device_Install_Pipe_0.");
     wcscat(PipeName, UuidString);
-    hPipe = CreateNamedPipeW(PipeName, PIPE_ACCESS_OUTBOUND, PIPE_TYPE_BYTE, 1, 512, 512, 0, NULL);
+    hPipe = CreateNamedPipeW(PipeName, PIPE_ACCESS_OUTBOUND | FILE_FLAG_OVERLAPPED, PIPE_TYPE_BYTE | PIPE_WAIT, 1, 512, 512, 60000, NULL);
     if (hPipe == INVALID_HANDLE_VALUE)
     {
         DPRINT1("CreateNamedPipeW failed with error %u\n", GetLastError());
@@ -257,14 +328,11 @@ InstallDevice(PCWSTR DeviceInstance, BOOL ShowWizard)
         }
     }
 
-    /* Wait for the function to connect to our pipe */
-    if (!ConnectNamedPipe(hPipe, NULL))
+    /* Wait for the function to connect to our pipe or terminate */
+    if (!WaitForInstallClientConnect(hPipe, ProcessInfo.hProcess))
     {
-        if (GetLastError() != ERROR_PIPE_CONNECTED)
-        {
-            DPRINT1("ConnectNamedPipe failed with error %u\n", GetLastError());
-            goto cleanup;
-        }
+        DPRINT1("WaitForInstallClientConnect failed with error %u\n", GetLastError());
+        goto cleanup;
     }
 
     /* Pass the data. The following output is partly compatible to Windows XP SP2 (researched using a modified newdev.dll to log this stuff) */
@@ -308,42 +376,6 @@ cleanup:
     }
 
     return DeviceInstalled;
-}
-
-
-static BOOL
-WaitForBatchClientConnect(
-    _In_ HANDLE hPipe,
-    _In_ HANDLE hProcess)
-{
-    DWORD ErrCode;
-    DWORD WaitMode = PIPE_WAIT;
-
-    while (TRUE)
-    {
-        if (ConnectNamedPipe(hPipe, NULL))
-            break;
-
-        ErrCode = GetLastError();
-        if (ErrCode == ERROR_PIPE_CONNECTED)
-            break;
-
-        if (ErrCode != ERROR_PIPE_LISTENING)
-            return FALSE;
-
-        if (WaitForSingleObject(hProcess, 0) == WAIT_OBJECT_0)
-        {
-            SetLastError(ERROR_PIPE_NOT_CONNECTED);
-            return FALSE;
-        }
-
-        Sleep(50);
-    }
-
-    if (!SetNamedPipeHandleState(hPipe, &WaitMode, NULL, NULL))
-        return FALSE;
-
-    return TRUE;
 }
 
 
@@ -432,8 +464,7 @@ InstallDevicesBatch(PCWSTR MultiSzDeviceList, DWORD DeviceCount)
 
     wcscpy(PipeName, L"\\\\.\\pipe\\PNP_Device_Install_Pipe_0.");
     wcscat(PipeName, UuidString);
-    hPipe = CreateNamedPipeW(PipeName, PIPE_ACCESS_OUTBOUND, PIPE_TYPE_BYTE | PIPE_NOWAIT, 1,
-                             PipeBufferSize, PipeBufferSize, 0, NULL);
+    hPipe = CreateNamedPipeW(PipeName, PIPE_ACCESS_OUTBOUND | FILE_FLAG_OVERLAPPED, PIPE_TYPE_BYTE | PIPE_WAIT, 1, PipeBufferSize, PipeBufferSize, 60000, NULL);
     if (hPipe == INVALID_HANDLE_VALUE)
     {
         DPRINT1("CreateNamedPipeW failed with error %u\n", GetLastError());
@@ -477,9 +508,9 @@ InstallDevicesBatch(PCWSTR MultiSzDeviceList, DWORD DeviceCount)
     }
 
     /* Wait for the child to connect to our pipe */
-    if (!WaitForBatchClientConnect(hPipe, ProcessInfo.hProcess))
+    if (!WaitForInstallClientConnect(hPipe, ProcessInfo.hProcess))
     {
-        DPRINT1("WaitForBatchClientConnect failed with error %u\n", GetLastError());
+        DPRINT1("WaitForInstallClientConnect(batch) failed with error %u\n", GetLastError());
         goto cleanup;
     }
 
