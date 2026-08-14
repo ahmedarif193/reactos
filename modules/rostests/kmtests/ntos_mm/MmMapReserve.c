@@ -13,8 +13,8 @@
 
 START_TEST(MmMapReserve)
 {
+    PHYSICAL_ADDRESS LowAddress, HighAddress, SkipBytes;
     PVOID Reservation;
-    PVOID Buffer;
     PMDL Mdl;
     PVOID Mapped1, Mapped2;
     PUCHAR p;
@@ -23,43 +23,45 @@ START_TEST(MmMapReserve)
     ok(Reservation != NULL, "MmAllocateMappingAddress failed\n");
     if (Reservation == NULL) return;
 
-    Buffer = ExAllocatePoolWithTag(NonPagedPool, PAGE_SIZE, TAG_TEST);
-    ok(Buffer != NULL, "no pool\n");
-    if (Buffer == NULL)
+    LowAddress.QuadPart = 0;
+    HighAddress.QuadPart = MAXLONGLONG;
+    SkipBytes.QuadPart = 0;
+    Mdl = MmAllocatePagesForMdlEx(LowAddress, HighAddress, SkipBytes, PAGE_SIZE, MmCached, 0);
+    ok(Mdl != NULL, "MmAllocatePagesForMdlEx failed\n");
+    if (Mdl == NULL)
     {
         MmFreeMappingAddress(Reservation, TAG_TEST);
         return;
     }
-    RtlFillMemory(Buffer, PAGE_SIZE, 0x5E);
 
-    Mdl = IoAllocateMdl(Buffer, PAGE_SIZE, FALSE, FALSE, NULL);
-    ok(Mdl != NULL, "IoAllocateMdl failed\n");
-    if (Mdl != NULL)
+    ok_eq_ulong(MmGetMdlByteCount(Mdl), PAGE_SIZE);
+
+    Mapped1 = MmMapLockedPagesWithReservedMapping(Reservation, TAG_TEST, Mdl, MmCached);
+    ok(Mapped1 != NULL, "first reserved map failed\n");
+    if (Mapped1 != NULL)
     {
-        MmBuildMdlForNonPagedPool(Mdl);
-
-        Mapped1 = MmMapLockedPagesWithReservedMapping(Reservation, TAG_TEST, Mdl, MmCached);
-        ok(Mapped1 != NULL, "first reserved map failed\n");
-        if (Mapped1 != NULL)
-        {
-            p = Mapped1;
-            ok(p[0] == 0x5E, "reserved mapping readback failed: %02x\n", p[0]);
-            p[0] = 0xA5;
-            ok(*(PUCHAR)Buffer == 0xA5, "write-through reserved mapping failed\n");
-            MmUnmapReservedMapping(Mapped1, TAG_TEST, Mdl);
-        }
-
-        Mapped2 = MmMapLockedPagesWithReservedMapping(Reservation, TAG_TEST, Mdl, MmCached);
-        ok(Mapped2 != NULL, "reuse reserved map failed\n");
-        if (Mapped2 != NULL)
-        {
-            ok_eq_pointer(Mapped2, Mapped1);
-            MmUnmapReservedMapping(Mapped2, TAG_TEST, Mdl);
-        }
-
-        IoFreeMdl(Mdl);
+        ok_eq_pointer(Mapped1, Reservation);
+        RtlFillMemory(Mapped1, PAGE_SIZE, 0x5E);
+        p = Mapped1;
+        ok(p[0] == 0x5E, "reserved mapping readback failed: %02x\n", p[0]);
+        p[0] = 0xA5;
+        MmUnmapReservedMapping(Mapped1, TAG_TEST, Mdl);
     }
 
-    ExFreePoolWithTag(Buffer, TAG_TEST);
+    Mapped2 = MmMapLockedPagesWithReservedMapping(Reservation, TAG_TEST, Mdl, MmCached);
+    ok(Mapped2 != NULL, "reuse reserved map failed\n");
+    if (Mapped2 != NULL)
+    {
+        ok_eq_pointer(Mapped2, Reservation);
+        if (Mapped1 != NULL)
+        {
+            p = Mapped2;
+            ok(p[0] == 0xA5, "reserved mapping contents not preserved: %02x\n", p[0]);
+        }
+        MmUnmapReservedMapping(Mapped2, TAG_TEST, Mdl);
+    }
+
+    MmFreePagesFromMdl(Mdl);
+    ExFreePool(Mdl);
     MmFreeMappingAddress(Reservation, TAG_TEST);
 }
