@@ -1400,6 +1400,38 @@ ExReleasePushLock(PEX_PUSH_LOCK PushLock)
 
 FORCEINLINE
 VOID
+ExpReleaseFastMutexState(IN OUT PFAST_MUTEX FastMutex)
+{
+#if (NTDDI_VERSION >= NTDDI_VISTA)
+    LONG OldValue, NewValue;
+
+    /* Restore the lock bit and hand one waiter ownership, if necessary. */
+    OldValue = InterlockedExchangeAdd(&FastMutex->Count, FM_LOCK_BIT);
+    ASSERT((OldValue & FM_LOCK_BIT) == 0);
+    if (OldValue & FM_LOCK_BIT)
+        return;
+
+    if ((OldValue != 0) && !(OldValue & FM_LOCK_WAITER_WOKEN))
+    {
+        OldValue += FM_LOCK_BIT;
+        NewValue = OldValue + FM_LOCK_WAITER_WOKEN - FM_LOCK_WAITER_INC;
+        if (InterlockedCompareExchange(&FastMutex->Count, NewValue, OldValue) == OldValue)
+        {
+            KeSetEventBoostPriority(&FastMutex->Event, NULL);
+        }
+    }
+#else
+    /* Increase the count */
+    if (InterlockedIncrement(&FastMutex->Count) <= 0)
+    {
+        /* Someone was waiting for it, signal the waiter */
+        KeSetEventBoostPriority(&FastMutex->Event, NULL);
+    }
+#endif
+}
+
+FORCEINLINE
+VOID
 _ExAcquireFastMutexUnsafe(IN PFAST_MUTEX FastMutex)
 {
     PKTHREAD Thread = KeGetCurrentThread();
@@ -1411,8 +1443,13 @@ _ExAcquireFastMutexUnsafe(IN PFAST_MUTEX FastMutex)
            (Thread->Teb >= (PTEB)MM_SYSTEM_RANGE_START));
     ASSERT(FastMutex->Owner != Thread);
 
+#if (NTDDI_VERSION >= NTDDI_VISTA)
+    /* Remove the lock bit. */
+    if (!InterlockedBitTestAndReset(&FastMutex->Count, FM_LOCK_BIT_V))
+#else
     /* Decrease the count */
     if (InterlockedDecrement(&FastMutex->Count))
+#endif
     {
         /* Someone is still holding it, use slow path */
         KiAcquireFastMutex(FastMutex);
@@ -1435,12 +1472,7 @@ _ExReleaseFastMutexUnsafe(IN OUT PFAST_MUTEX FastMutex)
     /* Erase the owner */
     FastMutex->Owner = NULL;
 
-    /* Increase the count */
-    if (InterlockedIncrement(&FastMutex->Count) <= 0)
-    {
-        /* Someone was waiting for it, signal the waiter */
-        KeSetEventBoostPriority(&FastMutex->Event, NULL);
-    }
+    ExpReleaseFastMutexState(FastMutex);
 }
 
 FORCEINLINE
@@ -1453,8 +1485,13 @@ _ExAcquireFastMutex(IN PFAST_MUTEX FastMutex)
     /* Raise IRQL to APC */
     KeRaiseIrql(APC_LEVEL, &OldIrql);
 
+#if (NTDDI_VERSION >= NTDDI_VISTA)
+    /* Remove the lock bit. */
+    if (!InterlockedBitTestAndReset(&FastMutex->Count, FM_LOCK_BIT_V))
+#else
     /* Decrease the count */
     if (InterlockedDecrement(&FastMutex->Count))
+#endif
     {
         /* Someone is still holding it, use slow path */
         KiAcquireFastMutex(FastMutex);
@@ -1476,12 +1513,7 @@ _ExReleaseFastMutex(IN OUT PFAST_MUTEX FastMutex)
     FastMutex->Owner = NULL;
     OldIrql = (KIRQL)FastMutex->OldIrql;
 
-    /* Increase the count */
-    if (InterlockedIncrement(&FastMutex->Count) <= 0)
-    {
-        /* Someone was waiting for it, signal the waiter */
-        KeSetEventBoostPriority(&FastMutex->Event, NULL);
-    }
+    ExpReleaseFastMutexState(FastMutex);
 
     /* Lower IRQL back */
     KeLowerIrql(OldIrql);
