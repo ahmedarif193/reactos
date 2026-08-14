@@ -1058,7 +1058,11 @@ int _isunorderedf(float, float);
 
 #endif /* _M_ARM */
 
+/* Guarded by codegen, not ABI: ARM64EC translation units emit ARM64 code and
+ * need these intrinsics even though _M_ARM64 is not defined for them. */
 #if _VCRT_ARM64_CODEGEN
+__int64 _ReadStatusReg(int);
+void _WriteStatusReg(int, __int64);
 unsigned __int64 __getReg(int);
 #endif
 
