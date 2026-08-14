@@ -451,7 +451,7 @@ DriverIoControl(
             Status = KeWaitForSingleObject(&WorkList.NewWorkEvent, UserRequest, UserMode, FALSE, &Timeout);
 
             if (Status == STATUS_TIMEOUT)
-                DPRINT1("KeWaitForSingleObject timed out!\n");
+                DPRINT("User-mode callback poll timed out\n");
 
             if (Status == STATUS_USER_APC || Status == STATUS_KERNEL_APC || Status == STATUS_TIMEOUT)
                 break;

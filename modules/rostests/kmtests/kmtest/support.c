@@ -49,7 +49,15 @@ KmtUserCallbackThread(
     {
         if (!DeviceIoControl(LocalKmtHandle, IOCTL_KMTEST_USERMODE_AWAIT_REQ, NULL, 0, &RequestPacket, sizeof(RequestPacket), &BytesReturned, NULL))
             error_goto(Error, cleanup);
-        ASSERT(BytesReturned == sizeof(RequestPacket));
+        if (BytesReturned != sizeof(RequestPacket))
+        {
+            /* STATUS_TIMEOUT is a successful poll with no callback packet. */
+            if (BytesReturned == 0)
+                continue;
+
+            Error = ERROR_INVALID_DATA;
+            goto cleanup;
+        }
 
         switch (RequestPacket.OperationClass)
         {
