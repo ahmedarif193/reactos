@@ -7,6 +7,7 @@
 
 /* INCLUDES ******************************************************************/
 
+#include <sdkddkver.h>
 #include <asm.inc>
 #include <ksamd64.inc>
 
@@ -84,6 +85,15 @@ PUBLIC RtlCaptureContext
     test byte ptr [rcx + CxSegCs], MODE_MASK
     jnz RtlCaptureContextUM
 
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+    /* NT 6.2+ initializes the non-register part of the kernel FP save area. */
+    mov dword ptr [rcx + CxFltSave + LfControlWord], HEX(27f)
+    mov word ptr [rcx + CxFltSave + LfTagWord], 0
+    mov eax, [rcx + CxMxCsr]
+    mov [rcx + CxFltSave + LfMxCsr], eax
+    mov eax, [rcx + CxEFlags]
+#endif
+
     /* Store xmm registers */
     movaps [rcx + CxXmm0], xmm0
     movaps [rcx + CxXmm1], xmm1
@@ -108,6 +118,35 @@ RtlCaptureContextUM:
 
     /* Store MXCSR, legacy floating point, MMX and XMM registers */
     fxsave [rcx + CxFltSave]
+
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+    /* Normalize fields that changed in NT 6.2. */
+    mov byte ptr [rcx + CxFltSave + LfTagWord + 1], 0
+    mov word ptr [rcx + CxFltSave + LfErrorOpcode], 0
+    mov dword ptr [rcx + CxFltSave + LfErrorOffset], 0
+    mov dword ptr [rcx + CxFltSave + LfErrorSelector], 0
+    mov dword ptr [rcx + CxFltSave + LfDataOffset], 0
+    mov dword ptr [rcx + CxFltSave + LfDataSelector], 0
+    mov dword ptr [rcx + CxFltSave + LfMxCsr_Mask], HEX(2ffff)
+#endif
+
+    /* FXSAVE stores 80-bit x87 values in 16-byte slots; clear the padding. */
+    mov word ptr [rcx + CxFltSave + LfFloatRegisters + 10], 0
+    mov dword ptr [rcx + CxFltSave + LfFloatRegisters + 12], 0
+    mov word ptr [rcx + CxFltSave + LfFloatRegisters + 26], 0
+    mov dword ptr [rcx + CxFltSave + LfFloatRegisters + 28], 0
+    mov word ptr [rcx + CxFltSave + LfFloatRegisters + 42], 0
+    mov dword ptr [rcx + CxFltSave + LfFloatRegisters + 44], 0
+    mov word ptr [rcx + CxFltSave + LfFloatRegisters + 58], 0
+    mov dword ptr [rcx + CxFltSave + LfFloatRegisters + 60], 0
+    mov word ptr [rcx + CxFltSave + LfFloatRegisters + 74], 0
+    mov dword ptr [rcx + CxFltSave + LfFloatRegisters + 76], 0
+    mov word ptr [rcx + CxFltSave + LfFloatRegisters + 90], 0
+    mov dword ptr [rcx + CxFltSave + LfFloatRegisters + 92], 0
+    mov word ptr [rcx + CxFltSave + LfFloatRegisters + 106], 0
+    mov dword ptr [rcx + CxFltSave + LfFloatRegisters + 108], 0
+    mov word ptr [rcx + CxFltSave + LfFloatRegisters + 122], 0
+    mov dword ptr [rcx + CxFltSave + LfFloatRegisters + 124], 0
 
 RtlCaptureContextExit:
 
