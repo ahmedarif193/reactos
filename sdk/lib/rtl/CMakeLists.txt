@@ -125,6 +125,13 @@ elseif(ARCH STREQUAL "amd64")
         amd64/unwind.c
         amd64/stubs.c
         mem.c)
+
+    # RtlWalkFrameChain protects arbitrary stack reads with native SEH. Clang
+    # must model asynchronous faults so those loads remain inside the scope.
+    if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND NOT USE_DUMMY_PSEH)
+        set_property(SOURCE amd64/unwind.c PROPERTY SKIP_PRECOMPILE_HEADERS ON)
+        set_property(SOURCE amd64/unwind.c APPEND PROPERTY COMPILE_OPTIONS -Xclang -fasync-exceptions)
+    endif()
 elseif(ARCH STREQUAL "arm")
     list(APPEND ASM_SOURCE arm/debug_asm.S)
     list(APPEND SOURCE
