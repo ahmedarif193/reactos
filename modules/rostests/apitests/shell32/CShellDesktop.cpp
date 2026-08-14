@@ -27,7 +27,7 @@ compare_imp(IShellFolder* psf, LPCITEMIDLIST pidl1, LPCITEMIDLIST pidl2, HRESULT
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
-        winetest_ok(0, "Exception %lx!\n", _SEH2_GetExceptionCode());
+        winetest_ok(0, "Exception %x!\n", (unsigned int)_SEH2_GetExceptionCode());
         hr = HRESULT_FROM_WIN32(RtlNtStatusToDosError(_SEH2_GetExceptionCode()));
     }
     _SEH2_END;
