@@ -68,8 +68,9 @@ KdbpAcquireLock(
     _In_ PKSPIN_LOCK SpinLock,
     _Out_ PKIRQL OldIrql)
 {
-    /* A frozen processor may hold the lock, so the debugger must not wait. */
-    if (KdEnteredDebugger)
+    /* A frozen processor may hold the lock, so debugger and bugcheck paths
+     * must not wait for a lock that can no longer be released. */
+    if (KdEnteredDebugger || KeBugCheckActive)
     {
         KeRaiseIrql(HIGH_LEVEL, OldIrql);
         return KeTryToAcquireSpinLockAtDpcLevel(SpinLock);
