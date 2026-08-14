@@ -388,7 +388,8 @@ MiUnmapLockedPagesInUserSpace(
         if (MiDecrementPageTableReferences(BaseAddress) == 0)
         {
             ASSERT(MiIsPteOnPdeBoundary(PointerPte + 1) || (NumberOfPages == 1));
-            MiDeletePde(PointerPde, Process, FALSE);
+            /* Flush recursive aliases before the page-table page can be reused. */
+            MiDeletePde(PointerPde, Process, TRUE);
         }
 
         /* Next page */
