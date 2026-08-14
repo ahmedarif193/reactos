@@ -12,6 +12,10 @@
 
 VOID Test_KeArm64Irql(VOID);
 
+typedef VOID (FASTCALL *PHAL_SET_GIC_PRIORITY_MASK)(_In_ KIRQL Irql);
+typedef ULONG (FASTCALL *PHAL_GET_GIC_PRIORITY_MASK)(VOID);
+typedef VOID (FASTCALL *PHAL_REQUEST_SOFTWARE_INTERRUPT)(_In_ KIRQL SoftwareInterruptRequested);
+
 #define dump_trace(...) do { trace(__VA_ARGS__); DbgPrint(__VA_ARGS__); } while (0)
 
 #ifdef _M_ARM64
@@ -22,6 +26,13 @@ static VOID Arm64IrqlCheck(VOID)
     KIRQL OldIrql;
     KIRQL OldIrql2;
     KIRQL Target;
+    ULONG BaselinePriorityMask;
+    ULONG MaskedPriorityMask;
+    ULONG ReconciledPriorityMask;
+    UNICODE_STRING RoutineName;
+    PHAL_SET_GIC_PRIORITY_MASK HalSetGicPriorityMask;
+    PHAL_GET_GIC_PRIORITY_MASK HalGetGicPriorityMask;
+    PHAL_REQUEST_SOFTWARE_INTERRUPT HalRequestSoftwareInterrupt;
     static const KIRQL Targets[] = {
         PASSIVE_LEVEL,
         APC_LEVEL,
@@ -36,11 +47,39 @@ static VOID Arm64IrqlCheck(VOID)
     int i;
 
     ok(Pcr != NULL, "KPCR is NULL\n");
+    if (Pcr == NULL)
+        return;
 
     /* We should be at PASSIVE on entry. */
     ok_eq_uint(KeGetCurrentIrql(), PASSIVE_LEVEL);
-    if (Pcr != NULL)
-        ok_eq_uint(Pcr->CurrentIrql, PASSIVE_LEVEL);
+    ok_eq_uint(Pcr->CurrentIrql, PASSIVE_LEVEL);
+
+    RtlInitUnicodeString(&RoutineName, L"HalSetGicPriorityMask");
+    HalSetGicPriorityMask = (PHAL_SET_GIC_PRIORITY_MASK)MmGetSystemRoutineAddress(&RoutineName);
+    RtlInitUnicodeString(&RoutineName, L"HalGetGicPriorityMask");
+    HalGetGicPriorityMask = (PHAL_GET_GIC_PRIORITY_MASK)MmGetSystemRoutineAddress(&RoutineName);
+    RtlInitUnicodeString(&RoutineName, L"HalRequestSoftwareInterrupt");
+    HalRequestSoftwareInterrupt = (PHAL_REQUEST_SOFTWARE_INTERRUPT)MmGetSystemRoutineAddress(&RoutineName);
+
+    /* Win11 takes the KfLowerIrql slow path for a same-level lower below
+       DISPATCH_LEVEL. Verify that it reconciles a lazily masked GIC PMR even
+       though the logical IRQL is already PASSIVE_LEVEL. The GIC helpers are
+       HAL-private on Windows, so keep them out of the static import table. */
+    if (!skip(HalSetGicPriorityMask != NULL && HalGetGicPriorityMask != NULL && HalRequestSoftwareInterrupt != NULL, "GIC priority-mask helpers are not exported\n"))
+    {
+        HalSetGicPriorityMask(PASSIVE_LEVEL);
+        BaselinePriorityMask = HalGetGicPriorityMask();
+        KeRaiseIrql(HIGH_LEVEL, &OldIrql);
+        HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
+        MaskedPriorityMask = HalGetGicPriorityMask();
+        Pcr->CurrentIrql = PASSIVE_LEVEL;
+        KeLowerIrql(PASSIVE_LEVEL);
+        ReconciledPriorityMask = HalGetGicPriorityMask();
+        HalSetGicPriorityMask(PASSIVE_LEVEL);
+
+        ok(MaskedPriorityMask != BaselinePriorityMask, "PMR setup did not change the mask: 0x%lx\n", MaskedPriorityMask);
+        ok_eq_ulong(ReconciledPriorityMask, BaselinePriorityMask);
+    }
 
     /* Single hops up and back down. */
     for (i = 0; i < (int)(sizeof(Targets) / sizeof(Targets[0])); i++)

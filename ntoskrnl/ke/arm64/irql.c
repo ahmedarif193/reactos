@@ -125,7 +125,10 @@ KfLowerIrql(
         KeBugCheckEx(IRQL_NOT_GREATER_OR_EQUAL, NewIrql, OldIrql, (ULONG_PTR)_ReturnAddress(), 0);
     }
 
-    if (NewIrql == OldIrql)
+    /* Win11 still takes the lower-IRQL slow path when the requested level is
+       unchanged below DISPATCH_LEVEL. This reconciles lazy hardware masking
+       and gives pending kernel APCs their delivery point. */
+    if ((NewIrql == OldIrql) && (NewIrql >= DISPATCH_LEVEL))
     {
         return;
     }
