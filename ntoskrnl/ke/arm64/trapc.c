@@ -781,6 +781,9 @@ KiSwapProcess(_Inout_ PKPROCESS NewProcess,
 {
     ULONGLONG NewKernelRoot;
     ULONGLONG NewUserRoot;
+#ifdef CONFIG_SMP
+    KAFFINITY Member = 0;
+#endif
 
     ASSERT(NewProcess != NULL);
 
@@ -797,13 +800,8 @@ KiSwapProcess(_Inout_ PKPROCESS NewProcess,
         PKIPCR Pcr = KeGetPcr();
         if (Pcr != NULL)
         {
-            KAFFINITY Member = Pcr->Prcb.SetMember;
-
+            Member = Pcr->Prcb.SetMember;
             InterlockedOr64((PLONG64)&NewProcess->ActiveProcessors, (LONG64)Member);
-            if ((OldProcess != NULL) && (OldProcess != NewProcess))
-            {
-                InterlockedAnd64((PLONG64)&OldProcess->ActiveProcessors, (LONG64)~Member);
-            }
         }
     }
 #endif
@@ -815,6 +813,15 @@ KiSwapProcess(_Inout_ PKPROCESS NewProcess,
     ASSERT(NewProcess->Unused0 != 0);   /* hyperspace root (Win11 ARM64: 0x030 is the ASID field) */
 
     KiArm64SwitchAddressSpace(NewProcess, NewUserRoot, NewKernelRoot);
+
+#ifdef CONFIG_SMP
+    /* Keep this CPU visible to old-process TLB shootdowns until the new
+       translation tables have actually been installed. */
+    if ((Member != 0) && (OldProcess != NULL) && (OldProcess != NewProcess))
+    {
+        InterlockedAnd64((PLONG64)&OldProcess->ActiveProcessors, (LONG64)~Member);
+    }
+#endif
 }
 
 #define ARM64_EARLY_SYNC_CONTEXT_ALLOC_SIZE 0x590
