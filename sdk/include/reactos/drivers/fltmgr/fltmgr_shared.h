@@ -12,6 +12,9 @@
 #define IOCTL_FILTER_FIND_NEXT      CTL_CODE(FILE_DEVICE_DISK_FILE_SYSTEM, 0x0A, METHOD_BUFFERED, FILE_READ_DATA)  //84028
 #define IOCTL_FILTER_GET_INFO       CTL_CODE(FILE_DEVICE_DISK_FILE_SYSTEM, 0x0B, METHOD_BUFFERED, FILE_READ_DATA)  //8402C
 
+#define FLT_PORT_EA_NAME            "FLTPORT"
+#define FLT_PORT_EA_NAME_LENGTH     7
+#define FLT_PORT_VALID_OPTIONS      0x00000001
 
 typedef struct _FILTER_NAME
 {
@@ -24,10 +27,18 @@ typedef struct _FILTER_NAME
 
 typedef struct _FILTER_PORT_DATA
 {
-    ULONG Size;
-    UNICODE_STRING PortName;
-    ULONG Options;
-    PVOID Context;
-    ULONG ContextSize;
+    PUNICODE_STRING PortName;
+    PUNICODE_STRING64 PortName64;
+    USHORT ContextSize;
+    UCHAR Reserved[6];
 
 } FILTER_PORT_DATA, *PFILTER_PORT_DATA;
+
+typedef struct _FILTER_PORT_DATA32
+{
+    ULONG PortName;
+    ULONG PortName64;
+    USHORT ContextSize;
+    UCHAR Reserved[6];
+
+} FILTER_PORT_DATA32, *PFILTER_PORT_DATA32;
