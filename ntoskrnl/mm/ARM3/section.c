@@ -2239,6 +2239,14 @@ MmCreateArm3Section(OUT PVOID *SectionObject,
     PFILE_OBJECT File;
     BOOLEAN UserRefIncremented = FALSE;
     PVOID PreviousSectionPointer;
+    ULONG64 PagingFileMaximumSize = 0;
+
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    /* Pagefile-backed sections require a maximum size. Native accesses this
+       parameter before validating the protection mask. */
+    if (!FileHandle && !FileObject)
+        PagingFileMaximumSize = InputMaximumSize->QuadPart;
+#endif
 
     /* Make the same sanity checks that the Nt interface should've validated */
     ASSERT((AllocationAttributes & ~(SEC_COMMIT | SEC_RESERVE | SEC_BASED |
@@ -2420,9 +2428,13 @@ MmCreateArm3Section(OUT PVOID *SectionObject,
         /* A handle must be supplied with SEC_IMAGE, as this is the no-handle path */
         if (AllocationAttributes & SEC_IMAGE) return STATUS_INVALID_FILE_FOR_SECTION;
 
+#if (NTDDI_VERSION < NTDDI_WIN10)
+        PagingFileMaximumSize = InputMaximumSize->QuadPart;
+#endif
+
         /* So this must be a pagefile-backed section, create the mappings needed */
         Status = MiCreatePagingFileMap(&NewSegment,
-                                       InputMaximumSize->QuadPart,
+                                       PagingFileMaximumSize,
                                        ProtectionMask,
                                        AllocationAttributes & ~SEC_LARGE_PAGES);
         if (!NT_SUCCESS(Status)) return Status;
@@ -3739,6 +3751,7 @@ NtMapViewOfSection(
 
     if (Section->u.Flags.PhysicalMemory)
     {
+#if (NTDDI_VERSION < NTDDI_WIN10)
         if (PreviousMode == UserMode &&
             SafeSectionOffset.QuadPart + SafeViewSize > MmHighestPhysicalPage << PAGE_SHIFT)
         {
@@ -3747,6 +3760,7 @@ NtMapViewOfSection(
             ObDereferenceObject(Process);
             return STATUS_INVALID_PARAMETER_6;
         }
+#endif
     }
     else if (!(AllocationType & MEM_DOS_LIM))
     {
