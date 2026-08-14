@@ -23,9 +23,11 @@ TestRead(
     LARGE_INTEGER Offset;
     ULONG BaseKey, StatusKey, Key;
     DWORD WaitStatus;
+    BOOLEAN Win11GeOrLater;
 
     BaseKey = (UseFastIo ? KEY_USE_FASTIO : 0) |
               (ReturnPending ? KEY_RETURN_PENDING : 0);
+    Win11GeOrLater = GetNTDDIVersion() >= NTDDI_WIN11_GE;
 
     EventHandle = CreateEventW(NULL, TRUE, FALSE, NULL);
     ok(EventHandle != NULL, "CreateEvent failed with %lu\n", GetLastError());
@@ -47,11 +49,11 @@ TestRead(
                             &Offset,
                             &Key);
         WaitStatus = WaitForSingleObject(EventHandle, 0);
-        if (ReturnPending)
+        if (ReturnPending && !Win11GeOrLater)
             ok_eq_hex(Status, STATUS_ACCESS_VIOLATION);
         else
             ok_eq_hex(Status, STATUS_BUFFER_OVERFLOW);
-        if (Cached && UseFastIo && !ReturnPending)
+        if (Win11GeOrLater || (Cached && UseFastIo && !ReturnPending))
         {
             ok_eq_ulong(WaitStatus, WAIT_OBJECT_0);
             ok_eq_hex(IoStatus.Status, STATUS_BUFFER_OVERFLOW);
@@ -100,11 +102,11 @@ TestRead(
                             &Offset,
                             &Key);
         WaitStatus = WaitForSingleObject(EventHandle, 0);
-        if (ReturnPending)
+        if (ReturnPending && !Win11GeOrLater)
             ok_eq_hex(Status, STATUS_ACCESS_VIOLATION);
         else
             ok_eq_hex(Status, STATUS_BUFFER_OVERFLOW);
-        if (Cached && UseFastIo && !ReturnPending)
+        if (Win11GeOrLater || (Cached && UseFastIo && !ReturnPending))
         {
             ok_eq_ulong(WaitStatus, WAIT_OBJECT_0);
             ok_eq_hex(IoStatus.Status, STATUS_BUFFER_OVERFLOW);
@@ -134,7 +136,8 @@ TestRead(
                             &Key);
         WaitStatus = WaitForSingleObject(EventHandle, 0);
         ok_eq_hex(Status, TestGetReturnStatus(StatusKey));
-        if ((Cached && UseFastIo && !ReturnPending &&
+        if ((Win11GeOrLater && ReturnPending) ||
+            (Cached && UseFastIo && !ReturnPending &&
              (StatusKey == KEY_SUCCEED || StatusKey == KEY_FAIL_OVERFLOW || StatusKey == KEY_FAIL_EOF)) ||
             !KEY_ERROR(StatusKey))
         {
@@ -177,9 +180,11 @@ TestWrite(
     LARGE_INTEGER Offset;
     ULONG BaseKey, StatusKey, Key;
     DWORD WaitStatus;
+    BOOLEAN Win11GeOrLater;
 
     BaseKey = (UseFastIo ? KEY_USE_FASTIO : 0) |
               (ReturnPending ? KEY_RETURN_PENDING : 0);
+    Win11GeOrLater = GetNTDDIVersion() >= NTDDI_WIN11_GE;
 
     EventHandle = CreateEventW(NULL, TRUE, FALSE, NULL);
     ok(EventHandle != NULL, "CreateEvent failed with %lu\n", GetLastError());
@@ -202,7 +207,7 @@ TestWrite(
                              &Key);
         WaitStatus = WaitForSingleObject(EventHandle, 0);
         ok_eq_hex(Status, TestGetReturnStatus(StatusKey));
-        if (!KEY_ERROR(StatusKey))
+        if (!KEY_ERROR(StatusKey) || (Win11GeOrLater && ReturnPending))
         {
             ok_eq_ulong(WaitStatus, WAIT_OBJECT_0);
             ok_eq_hex(IoStatus.Status, TestGetReturnStatus(StatusKey));
@@ -252,7 +257,7 @@ TestWrite(
                              &Key);
         WaitStatus = WaitForSingleObject(EventHandle, 0);
         ok_eq_hex(Status, TestGetReturnStatus(StatusKey));
-        if (!KEY_ERROR(StatusKey))
+        if (!KEY_ERROR(StatusKey) || (Win11GeOrLater && ReturnPending))
         {
             ok_eq_ulong(WaitStatus, WAIT_OBJECT_0);
             ok_eq_hex(IoStatus.Status, TestGetReturnStatus(StatusKey));
@@ -281,7 +286,7 @@ TestWrite(
                              &Key);
         WaitStatus = WaitForSingleObject(EventHandle, 0);
         ok_eq_hex(Status, TestGetReturnStatus(StatusKey));
-        if (!KEY_ERROR(StatusKey))
+        if (!KEY_ERROR(StatusKey) || (Win11GeOrLater && ReturnPending))
         {
             ok_eq_ulong(WaitStatus, WAIT_OBJECT_0);
             ok_eq_hex(IoStatus.Status, TestGetReturnStatus(StatusKey));
