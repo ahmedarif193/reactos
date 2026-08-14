@@ -611,7 +611,7 @@ KiSelectNextProcessor(
         (Prcb->NextThread == NULL) &&
         (Prcb->ReadySummary == 0) &&
         (Prcb->CurrentThread != NULL) &&
-        (Thread->Priority >= Prcb->CurrentThread->Priority))
+        (Thread->BasePriority >= Prcb->CurrentThread->BasePriority))
     {
         return Processor;
     }
