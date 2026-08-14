@@ -494,9 +494,7 @@ NwifiSupplicantStart(
     if (Msm->Supplicant != Sup || Sup->Generation != Generation ||
         Msm->Connect.AuthAlgorithm != AuthAlgorithm ||
         Msm->Connect.Ssid.uSSIDLength != Ssid.uSSIDLength ||
-        !RtlEqualMemory(Msm->Connect.Ssid.ucSSID,
-                        Ssid.ucSSID,
-                        Ssid.uSSIDLength))
+        RtlCompareMemory(Msm->Connect.Ssid.ucSSID, Ssid.ucSSID, Ssid.uSSIDLength) != Ssid.uSSIDLength)
     {
         NdisReleaseSpinLock(&Msm->Lock);
         RStatus = RSNA_ERR_STATE;
