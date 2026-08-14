@@ -13,6 +13,7 @@
 
 EXTERN KiDispatchException:PROC
 EXTERN KeBugCheckWithTf:PROC
+EXTERN KeBugCheckEx:PROC
 EXTERN KiRaiseSecurityCheckFailureHandler:PROC
 EXTERN MmAccessFault:PROC
 EXTERN KiSystemFatalException:PROC
@@ -1027,6 +1028,20 @@ GLOBAL_LABEL KiSystemServiceExit
 
     ASSERT_TRAP_FRAME_INTS_ENABLED rsp + MAX_SYSCALL_PARAM_SIZE
 
+    /* A system service must return to user mode at PASSIVE_LEVEL, in the
+     * original APC environment, and with kernel APC delivery enabled. */
+    mov r10, cr8
+    test r10b, r10b
+    jnz SystemServiceIrqlMismatch
+
+    mov r11, gs:[PcCurrentThread]
+    movzx r8d, byte ptr [r11 + ThApcStateIndex]
+    movsx r9, word ptr [r11 + ThCombinedApcDisable]
+    test r8b, r8b
+    jnz SystemServiceApcMismatch
+    test r9w, r9w
+    jnz SystemServiceApcMismatch
+
     /* Check for pending user APCs */
     mov rcx, gs:[PcCurrentThread]
     cmp byte ptr [rcx + ThApcState + AsUserApcPending], 0
@@ -1100,6 +1115,25 @@ NoUserApcPending:
 
     /* return to user mode */
     sysretq
+
+SystemServiceIrqlMismatch:
+    /* Preserve the leaked IRQL as bugcheck parameter 2. */
+    mov r8, r10
+    xor r9d, r9d
+    mov ecx, IRQL_GT_ZERO_AT_SYSTEM_SERVICE
+    jmp SystemServiceInvariantBugCheck
+
+SystemServiceApcMismatch:
+    mov ecx, APC_INDEX_MISMATCH
+
+SystemServiceInvariantBugCheck:
+    /* Parameters 1 and 4 identify the user return site and trap frame. */
+    mov rdx, [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rip]
+    lea r11, [rsp + MAX_SYSCALL_PARAM_SIZE]
+    mov [rsp + 4 * 8], r11
+    cli
+    call KeBugCheckEx
+    int HEX(2C)
 
 .ENDP
 
