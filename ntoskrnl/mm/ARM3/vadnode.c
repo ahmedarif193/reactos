@@ -268,6 +268,7 @@ MiInsertVadEx(
     PETHREAD CurrentThread;
     TABLE_SEARCH_RESULT Result;
     PMMADDRESS_NODE Parent;
+    BOOLEAN SearchTopDown;
 
     /* Align the view size to pages */
     ViewSize = ALIGN_UP_BY(ViewSize, PAGE_SIZE);
@@ -293,8 +294,15 @@ MiInsertVadEx(
         HighestAddress = min(HighestAddress, (ULONG_PTR)MI_HIGHEST_AUTOMATIC_USER_ADDRESS);
 #endif
 
+        /* Explicit low address constraints must override the automatic floor. */
+        SearchTopDown = ((AllocationType & MEM_TOP_DOWN) != 0) || CurrentProcess->VmTopDown;
+#ifdef _M_ARM64
+        if (HighestAddress < MI_LOWEST_AUTOMATIC_USER_ADDRESS)
+            SearchTopDown = TRUE;
+#endif
+
         /* Which way should we search? */
-        if ((AllocationType & MEM_TOP_DOWN) || CurrentProcess->VmTopDown)
+        if (SearchTopDown)
         {
             /* Find an address top-down */
             Result = MiFindEmptyAddressRangeDownTree(ViewSize,

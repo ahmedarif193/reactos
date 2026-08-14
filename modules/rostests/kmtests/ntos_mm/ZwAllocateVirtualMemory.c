@@ -628,7 +628,7 @@ START_TEST(ZwAllocateVirtualMemory)
     CustomBaseAllocation();
 
     Status = StressTesting(MEM_RESERVE);
-#ifdef _M_AMD64
+#ifdef _WIN64
     ok_eq_hex(Status, STATUS_SUCCESS);
 #else
     ok_eq_hex(Status, STATUS_NO_MEMORY);
@@ -636,7 +636,7 @@ START_TEST(ZwAllocateVirtualMemory)
 
     Status = STATUS_SUCCESS;
     Status = StressTesting(MEM_COMMIT);
-#ifdef _M_AMD64
+#ifdef _WIN64
     ok_eq_hex(Status, STATUS_COMMITMENT_LIMIT);
 #else
     ok_eq_hex(Status, STATUS_NO_MEMORY);
