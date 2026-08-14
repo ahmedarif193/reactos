@@ -21,6 +21,120 @@ PHANDLE_TABLE ObpKernelHandleTable = NULL;
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
+static
+VOID
+NTAPI
+ObpChargeHandleCachedReferencesLocked(IN PHANDLE_TABLE HandleTable,
+                                      IN HANDLE Handle,
+                                      IN PHANDLE_TABLE_ENTRY HandleEntry,
+                                      IN POBJECT_HEADER ObjectHeader)
+{
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+    PULONG CachedReferenceCount;
+
+    CachedReferenceCount = ExGetHandleCachedReferenceCount(HandleTable, Handle, HandleEntry);
+    ASSERT(CachedReferenceCount != NULL);
+    if (CachedReferenceCount)
+    {
+        ASSERT(*CachedReferenceCount == 0);
+        InterlockedExchangeAddSizeT(&ObjectHeader->PointerCount, OBP_HANDLE_REFERENCE_INCREMENT);
+        *CachedReferenceCount = OBP_HANDLE_REFERENCE_INCREMENT;
+    }
+#else
+    UNREFERENCED_PARAMETER(HandleTable);
+    UNREFERENCED_PARAMETER(Handle);
+    UNREFERENCED_PARAMETER(HandleEntry);
+    UNREFERENCED_PARAMETER(ObjectHeader);
+#endif
+}
+
+static
+VOID
+NTAPI
+ObpChargeHandleCachedReferences(IN PHANDLE_TABLE HandleTable,
+                                IN HANDLE Handle,
+                                IN POBJECT_HEADER ObjectHeader)
+{
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+    PHANDLE_TABLE_ENTRY HandleEntry;
+
+    PAGED_CODE();
+    KeEnterCriticalRegion();
+    HandleEntry = ExMapHandleToPointer(HandleTable, Handle);
+    ASSERT(HandleEntry != NULL);
+    if (HandleEntry)
+    {
+        ObpChargeHandleCachedReferencesLocked(HandleTable, Handle, HandleEntry, ObjectHeader);
+        ExUnlockHandleTableEntry(HandleTable, HandleEntry);
+    }
+    KeLeaveCriticalRegion();
+#else
+    UNREFERENCED_PARAMETER(HandleTable);
+    UNREFERENCED_PARAMETER(Handle);
+    UNREFERENCED_PARAMETER(ObjectHeader);
+#endif
+}
+
+VOID
+NTAPI
+ObpReferenceObjectByHandleEntry(IN PHANDLE_TABLE HandleTable,
+                                IN HANDLE Handle,
+                                IN PHANDLE_TABLE_ENTRY HandleEntry,
+                                IN POBJECT_HEADER ObjectHeader)
+{
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+    PULONG CachedReferenceCount;
+
+    CachedReferenceCount = ExGetHandleCachedReferenceCount(HandleTable, Handle, HandleEntry);
+    ASSERT(CachedReferenceCount != NULL);
+    if (CachedReferenceCount)
+    {
+        if (*CachedReferenceCount == 0)
+        {
+            InterlockedExchangeAddSizeT(&ObjectHeader->PointerCount, OBP_HANDLE_REFERENCE_INCREMENT);
+            *CachedReferenceCount = OBP_HANDLE_REFERENCE_INCREMENT;
+        }
+
+        (*CachedReferenceCount)--;
+        return;
+    }
+#else
+    UNREFERENCED_PARAMETER(HandleTable);
+    UNREFERENCED_PARAMETER(Handle);
+    UNREFERENCED_PARAMETER(HandleEntry);
+#endif
+
+    InterlockedIncrementSizeT(&ObjectHeader->PointerCount);
+}
+
+static
+VOID
+NTAPI
+ObpReleaseHandleCachedReferences(IN PHANDLE_TABLE HandleTable,
+                                 IN HANDLE Handle,
+                                 IN PHANDLE_TABLE_ENTRY HandleEntry,
+                                 IN POBJECT_HEADER ObjectHeader)
+{
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+    PULONG CachedReferenceCount;
+    ULONG RemainingReferences;
+
+    CachedReferenceCount = ExGetHandleCachedReferenceCount(HandleTable, Handle, HandleEntry);
+    ASSERT(CachedReferenceCount != NULL);
+    if (CachedReferenceCount)
+    {
+        RemainingReferences = *CachedReferenceCount;
+        *CachedReferenceCount = 0;
+        if (RemainingReferences) InterlockedExchangeAddSizeT(&ObjectHeader->PointerCount, -(LONG_PTR)RemainingReferences);
+    }
+#else
+    UNREFERENCED_PARAMETER(HandleTable);
+    UNREFERENCED_PARAMETER(Handle);
+    UNREFERENCED_PARAMETER(HandleEntry);
+    UNREFERENCED_PARAMETER(ObjectHeader);
+#endif
+}
+
 PHANDLE_TABLE
 NTAPI
 ObReferenceProcessHandleTable(IN PEPROCESS Process)
@@ -765,6 +879,9 @@ ObpCloseHandleTableEntry(IN PHANDLE_TABLE HandleTable,
         }
     }
 
+    /* Return unused cached references before dropping the handle's base ref. */
+    ObpReleaseHandleCachedReferences(HandleTable, Handle, HandleEntry, ObjectHeader);
+
     /* Destroy and unlock the handle entry */
     ExDestroyHandle(HandleTable, Handle, HandleEntry);
 
@@ -1418,6 +1535,8 @@ ObpCreateUnnamedHandle(IN PVOID Object,
     /* Make sure we got a handle */
     if (Handle)
     {
+        ObpChargeHandleCachedReferences(HandleTable, Handle, ObjectHeader);
+
         /* Check if this was a kernel handle */
         if (KernelHandle) Handle = ObMarkHandleAsKernelHandle(Handle);
 
@@ -1638,6 +1757,8 @@ ObpCreateHandle(IN OB_OPEN_REASON OpenReason,
     /* Make sure we got a handle */
     if (Handle)
     {
+        ObpChargeHandleCachedReferences(HandleTable, Handle, ObjectHeader);
+
         /* Check if this was a kernel handle */
         if (KernelHandle) Handle = ObMarkHandleAsKernelHandle(Handle);
 
@@ -2019,6 +2140,21 @@ ObpDuplicateHandleCallback(IN PEPROCESS Process,
     return Ret;
 }
 
+static
+BOOLEAN
+NTAPI
+ObpChargeInheritedHandleCallback(IN PHANDLE_TABLE_ENTRY HandleEntry,
+                                 IN HANDLE Handle,
+                                 IN PVOID Context)
+{
+    PHANDLE_TABLE HandleTable = Context;
+    POBJECT_HEADER ObjectHeader;
+
+    ObjectHeader = ObpGetHandleObject(HandleEntry);
+    ObpChargeHandleCachedReferencesLocked(HandleTable, Handle, HandleEntry, ObjectHeader);
+    return FALSE;
+}
+
 /*++
 * @name ObClearProcessHandleTable
 *
@@ -2115,6 +2251,7 @@ ObInitProcess(IN PEPROCESS Parent OPTIONAL,
                                        ParentTable,
                                        ObpDuplicateHandleCallback,
                                        OBJ_INHERIT);
+        if (ObjectTable) ExEnumHandleTable(ObjectTable, ObpChargeInheritedHandleCallback, ObjectTable, NULL);
     }
     else
     {
@@ -2477,9 +2614,13 @@ ObDuplicateObject(IN PEPROCESS SourceProcess,
         ObDereferenceObject(SourceObject);
         Status = STATUS_INSUFFICIENT_RESOURCES;
     }
+    else
+    {
+        ObpChargeHandleCachedReferences(HandleTable, NewHandle, ObjectHeader);
+    }
 
     /* Mark it as a kernel handle if requested */
-    if (KernelHandle)
+    if (KernelHandle && NewHandle)
     {
         NewHandle = ObMarkHandleAsKernelHandle(NewHandle);
     }
