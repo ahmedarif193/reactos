@@ -4559,13 +4559,17 @@ MmMapViewOfSection(
         /* Check if the offset and size are bigger than the section itself */
         if (((ULONG64)ViewOffset + *ViewSize) > (ULONG64)Section->SizeOfSection.QuadPart)
         {
-            /* This is allowed for physical memory sections and kernel mode callers */
+            /* User mode may exceed physical section size starting with NT 10. */
             if ((AllocationType & MEM_RESERVE) &&
                 (ViewOffset < Section->SizeOfSection.QuadPart))
             {
                 *ViewSize = (SIZE_T)(Section->SizeOfSection.QuadPart - ViewOffset);
             }
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+            else if (!Section->u.Flags.PhysicalMemory)
+#else
             else if (!Section->u.Flags.PhysicalMemory || (ExGetPreviousMode() == UserMode))
+#endif
             {
                 DPRINT1("Section offset and size are larger than section\n");
                 Status = STATUS_INVALID_VIEW_SIZE;
@@ -4588,6 +4592,9 @@ MmMapViewOfSection(
         }
         else if ((ExGetPreviousMode() == UserMode) &&
             (((*ViewSize)+ViewOffset) > Section->SizeOfSection.QuadPart) &&
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+            (!Section->u.Flags.PhysicalMemory) &&
+#endif
             (!Section->u.Flags.Reserve))
         {
             /* Dubious */
