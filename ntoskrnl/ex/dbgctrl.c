@@ -238,10 +238,13 @@ NtSystemDebugControl(
         {
             case SysDbgQueryModuleInformation:
                 /* Removed in WinNT4 */
+#if (NTDDI_VERSION < NTDDI_VISTA)
                 Status = STATUS_INVALID_INFO_CLASS;
+#else
+                Status = STATUS_NOT_IMPLEMENTED;
+#endif
                 break;
 
-#ifdef _M_IX86
             case SysDbgQueryTraceInformation:
             case SysDbgSetTracepoint:
             case SysDbgSetSpecialCall:
@@ -250,7 +253,6 @@ NtSystemDebugControl(
                 UNIMPLEMENTED;
                 Status = STATUS_NOT_IMPLEMENTED;
                 break;
-#endif
 
             case SysDbgQueryVersion:
             case SysDbgReadVirtual:
@@ -424,6 +426,16 @@ NtSystemDebugControl(
                                         OutputBuffer,
                                         &Length);
                 break;
+
+#if (NTDDI_VERSION >= NTDDI_VISTA)
+            case SysDbgRegisterForUmBreakInfo:
+            case SysDbgGetUmBreakPid:
+            case SysDbgClearUmBreakPid:
+            case SysDbgGetUmAttachPid:
+            case SysDbgClearUmAttachPid:
+                Status = STATUS_NOT_IMPLEMENTED;
+                break;
+#endif
 
             default:
                 Status = STATUS_INVALID_INFO_CLASS;
