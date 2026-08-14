@@ -397,6 +397,7 @@ TestRelativeNames(VOID)
         BOOLEAN IsDirectory_NTFS;
         NTSTATUS Status_NTFS;
         BOOLEAN IsDrive;
+        BOOLEAN Win10NotDirectory;
     } RelativeNameTest;
 
     RelativeNameTest Tests[] =
@@ -412,7 +413,7 @@ TestRelativeNames(VOID)
         { NULL,                         L"C:\\\\ReactOS\\",                 TRUE,   STATUS_SUCCESS,                 TRUE,   STATUS_SUCCESS },
         { NULL,                         L"C:\\ReactOS\\explorer.exe",       FALSE,  STATUS_SUCCESS,                 FALSE,  STATUS_SUCCESS},
         { NULL,                         L"C:\\ReactOS\\\\explorer.exe",     FALSE,  STATUS_OBJECT_NAME_INVALID,     FALSE,  STATUS_OBJECT_NAME_INVALID },
-        { NULL,                         L"C:\\ReactOS\\explorer.exe\\",     FALSE,  STATUS_OBJECT_NAME_INVALID,     FALSE,  STATUS_OBJECT_NAME_INVALID },
+        { NULL,                         L"C:\\ReactOS\\explorer.exe\\",     FALSE,  STATUS_OBJECT_NAME_INVALID,     FALSE,  STATUS_OBJECT_NAME_INVALID, FALSE, TRUE },
         { NULL,                         L"C:\\ReactOS\\explorer.exe\\file", FALSE,  STATUS_OBJECT_PATH_NOT_FOUND,   FALSE,  STATUS_OBJECT_PATH_NOT_FOUND },
         { NULL,                         L"C:\\ReactOS\\explorer.exe\\\\",   FALSE,  STATUS_OBJECT_NAME_INVALID,     TRUE,  STATUS_OBJECT_NAME_INVALID },
         /* This will never return STATUS_NOT_A_DIRECTORY. IsDirectory=TRUE is a little hacky but achieves that without special handling */
@@ -534,6 +535,8 @@ TestRelativeNames(VOID)
         {
             isDirectory = Tests[i].IsDirectory_NTFS;
             expectedStatus = Tests[i].Status_NTFS;
+            if (Tests[i].Win10NotDirectory && (GetNTVersion() >= _WIN32_WINNT_WIN10))
+                expectedStatus = STATUS_NOT_A_DIRECTORY;
         }
 
         /* Open parent directory first */
