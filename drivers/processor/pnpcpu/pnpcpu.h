@@ -26,7 +26,9 @@ NTHALAPI VOID NTAPI HalProcessorIdle(VOID);
 #define PNPCPU_PERF_NONE 0
 #define PNPCPU_PERF_PSS 1
 #define PNPCPU_PERF_CPPC 2
+#if defined(_M_IX86) || defined(_M_AMD64)
 #define PNPCPU_PERF_HWP 3
+#endif
 
 #define PNPCPU_CPPC_RESTORE_DESIRED 0x00000001
 #define PNPCPU_CPPC_RESTORE_MINIMUM 0x00000002
@@ -93,8 +95,15 @@ typedef struct _PNPCPU_DEVICE_EXTENSION
     KEVENT WorkIdleEvent;
     BOOLEAN UidValid;
     ULONG Uid;
+#if defined(_M_IX86) || defined(_M_AMD64)
     BOOLEAN ApicIdValid;
     ULONG ApicId;
+#elif defined(_M_ARM64)
+    BOOLEAN MpidrValid;
+    BOOLEAN MatIdentityPresent;
+    BOOLEAN MatProcessorEnabled;
+    ULONGLONG Mpidr;
+#endif
     BOOLEAN ProximityValid;
     ULONG ProximityDomain;
     BOOLEAN ProcessorNumberValid;
@@ -102,6 +111,7 @@ typedef struct _PNPCPU_DEVICE_EXTENSION
     ULONG CapabilityMask;
     ULONG CapabilityCounts[8];
     BOOLEAN PowerRegistered;
+#if defined(_M_IX86) || defined(_M_AMD64)
     BOOLEAN MonitorMwaitSupported;
     BOOLEAN IntelEstSupported;
     BOOLEAN IntelHwpSupported;
@@ -113,6 +123,8 @@ typedef struct _PNPCPU_DEVICE_EXTENSION
     UCHAR HwpLowest;
     ULONGLONG HwpOriginalRequest;
     volatile LONG IdleMonitor;
+#endif
+    BOOLEAN IdleFallback;
     ULONG IdleStateCount;
     PNPCPU_IDLE_STATE IdleStates[PNPCPU_MAX_IDLE_STATES];
     ULONG PerfMode;
