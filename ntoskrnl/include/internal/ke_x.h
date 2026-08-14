@@ -1056,14 +1056,19 @@ KiCheckAlertability(IN PKTHREAD Thread,
                     IN BOOLEAN Alertable,
                     IN KPROCESSOR_MODE WaitMode)
 {
+    UCHAR WaitModeIndex;
+
+    ASSERT((WaitMode == KernelMode) || (WaitMode == UserMode));
+    WaitModeIndex = (UCHAR)WaitMode;
+
     /* Check if the wait is alertable */
     if (Alertable)
     {
         /* It is, first check if the thread is alerted in this mode */
-        if (Thread->Alerted[WaitMode])
+        if (Thread->Alerted[WaitModeIndex])
         {
             /* It is, so bail out of the wait */
-            Thread->Alerted[WaitMode] = FALSE;
+            Thread->Alerted[WaitModeIndex] = FALSE;
             return STATUS_ALERTED;
         }
         else if ((WaitMode != KernelMode) &&
