@@ -381,6 +381,8 @@ void _sgdt(void *Destination);
 #endif
 
 #if defined(_M_ARM64)
+#pragma intrinsic(_ReadStatusReg)
+#pragma intrinsic(_WriteStatusReg)
 #pragma intrinsic(__getReg)
 #endif
 
