@@ -203,7 +203,11 @@ DWORD
 KmtFltConnectComms(
     _Out_ HANDLE *hPort)
 {
-    return KmtFltConnect(TestServiceName, hPort);
+    WCHAR PortName[MAX_PATH];
+
+    StringCbCopyW(PortName, sizeof(PortName), L"\\Device\\");
+    StringCbCatW(PortName, sizeof(PortName), TestServiceName);
+    return KmtFltConnect(PortName, hPort);
 }
 
 /**
