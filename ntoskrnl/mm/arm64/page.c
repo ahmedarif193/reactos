@@ -1285,8 +1285,9 @@ MmCreateVirtualMappingUnsafeEx(
 
     ASSERT(((ULONG_PTR)Address & (PAGE_SIZE - 1)) == 0);
 
-    /* Reject PFN 0 - physical page 0 is reserved and should never be mapped */
-    if (Page == 0)
+    /* Ordinary mappings must reference an owned PFN. Explicit physical
+       mappings may address reserved page zero through \Device\PhysicalMemory. */
+    if ((Page == 0) && !IsPhysical)
     {
         return STATUS_INVALID_PARAMETER;
     }
