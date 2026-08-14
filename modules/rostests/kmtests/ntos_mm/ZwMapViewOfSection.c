@@ -325,6 +325,13 @@ CompareFileContents(HANDLE FileHandle, ULONG BufferLength, PVOID Buffer)
     {
         Status = ZwReadFile(FileHandle, NULL, NULL, NULL, &IoStatusBlock, FileContent, BufferLength, &ByteOffset, NULL);
         ok(Status == STATUS_SUCCESS || Status == STATUS_PENDING, "Unexpected status (0x%X).\n", Status);
+        if (Status == STATUS_PENDING)
+        {
+            Status = ZwWaitForSingleObject(FileHandle, FALSE, NULL);
+            ok_eq_hex(Status, STATUS_SUCCESS);
+            Status = IoStatusBlock.Status;
+        }
+        ok_eq_hex(Status, STATUS_SUCCESS);
         ok_eq_ulongptr(IoStatusBlock.Information, BufferLength);
 
         Match = 0;
