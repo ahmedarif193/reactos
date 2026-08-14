@@ -362,8 +362,6 @@ FUNC KiDoubleFaultAbort
     /* A zero error code is pushed */
     EnterTrap (TF_HAS_ERROR_CODE OR TF_SAVE_ALL)
 
-    int 3
-
     /* Bugcheck */
     Fatal 8 // EXCEPTION_DOUBLE_FAULT
 #ifdef _USE_ML
