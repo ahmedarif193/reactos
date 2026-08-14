@@ -299,6 +299,9 @@ add_custom_target(kmtest_drivers)
 add_dependencies(kmtest_drivers
     kmtest_drv
     example_drv
+    FltMgrLoad_drv
+    fltmgr_create
+    fltmgrreg_drv
     hidp_drv
     iocreatefile_drv
     iodeviceobject_drv
@@ -310,7 +313,11 @@ add_dependencies(kmtest_drivers
     poirp_drv
     tcpip_drv
     cccopyread_drv
-    ccmapdata_drv)
+    cccopywrite_drv
+    ccmapdata_drv
+    ccpinmappeddata_drv
+    ccpinread_drv
+    ccsetfilesizes_drv)
 
 add_custom_target(kmtest_all)
 add_dependencies(kmtest_all kmtest_drivers kmtest)
