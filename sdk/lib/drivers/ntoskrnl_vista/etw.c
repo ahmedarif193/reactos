@@ -9,6 +9,8 @@
 #include <ntifs.h>
 #include <pseh/pseh2.h>
 
+static DECLSPEC_ALIGN(8) volatile LONG64 EtwpNextRegistrationHandle;
+
 _IRQL_requires_max_(HIGH_LEVEL)
 NTSTATUS
 NTKRNLVISTAAPI
@@ -49,12 +51,10 @@ EtwRegister(
     if (RegHandle == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    /*
-     * ReactOS does not yet have an ETW provider backend. A zero handle keeps
-     * providers disabled while allowing tracing-only initialization to
-     * complete.
-     */
-    *RegHandle = 0;
+    /* Issue an opaque, process-local token until a provider backend exists. */
+    *RegHandle = (REGHANDLE)InterlockedIncrement64(&EtwpNextRegistrationHandle);
+    if (*RegHandle == 0)
+        *RegHandle = (REGHANDLE)InterlockedIncrement64(&EtwpNextRegistrationHandle);
     return STATUS_SUCCESS;
 }
 
