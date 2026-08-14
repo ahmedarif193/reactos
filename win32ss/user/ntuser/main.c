@@ -1140,6 +1140,7 @@ DriverEntry(
     CreateSysColorObjects();
 
     NT_ROF(InitBrushImpl());
+    NT_ROF(InitSafeSemaphoreImpl());
     NT_ROF(InitPDEVImpl());
     NT_ROF(InitLDEVImpl());
     NT_ROF(InitDeviceImpl());
