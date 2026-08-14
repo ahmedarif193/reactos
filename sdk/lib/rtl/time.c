@@ -351,6 +351,7 @@ RtlTimeToSecondsSince1980(IN PLARGE_INTEGER Time,
 /*
  * @implemented
  */
+#ifndef _BLDR_
 NTSTATUS
 NTAPI
 RtlLocalTimeToSystemTime(IN PLARGE_INTEGER LocalTime,
@@ -371,11 +372,13 @@ RtlLocalTimeToSystemTime(IN PLARGE_INTEGER LocalTime,
 
     return STATUS_SUCCESS;
 }
+#endif /* !_BLDR_ */
 
 
 /*
  * @implemented
  */
+#ifndef _BLDR_
 NTSTATUS
 NTAPI
 RtlSystemTimeToLocalTime(IN PLARGE_INTEGER SystemTime,
@@ -396,6 +399,7 @@ RtlSystemTimeToLocalTime(IN PLARGE_INTEGER SystemTime,
 
     return STATUS_SUCCESS;
 }
+#endif /* !_BLDR_ */
 
 
 /*

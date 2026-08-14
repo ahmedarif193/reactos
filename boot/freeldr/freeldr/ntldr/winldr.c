@@ -81,6 +81,10 @@ AllocateAndInitLPB(
 {
     PLOADER_PARAMETER_BLOCK LoaderBlock;
     PLOADER_PARAMETER_EXTENSION Extension;
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+    TIMEINFO *TimeInfo;
+    TIME_FIELDS TimeFields = {0};
+#endif
 
     /* Allocate and zero-init the Loader Parameter Block */
     WinLdrSystemBlock = MmAllocateMemoryWithType(sizeof(LOADER_SYSTEM_BLOCK),
@@ -114,6 +118,21 @@ AllocateAndInitLPB(
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
     LoaderBlock->FirmwareInformation.FirmwareTypeEfi = 1;
 #endif
+#endif
+
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+    /* Preserve the firmware clock before the kernel takes over the platform. */
+    TimeInfo = ArcGetTime();
+    if (TimeInfo != NULL)
+    {
+        TimeFields.Year = TimeInfo->Year;
+        TimeFields.Month = TimeInfo->Month;
+        TimeFields.Day = TimeInfo->Day;
+        TimeFields.Hour = TimeInfo->Hour;
+        TimeFields.Minute = TimeInfo->Minute;
+        TimeFields.Second = TimeInfo->Second;
+        RtlTimeFieldsToTime(&TimeFields, &Extension->SystemTime);
+    }
 #endif
 
     /* Init three critical lists, used right away */

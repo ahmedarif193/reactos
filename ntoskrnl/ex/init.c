@@ -1483,6 +1483,7 @@ Phase1InitializationDiscard(IN PVOID Context)
     TIME_FIELDS TimeFields;
     LARGE_INTEGER SystemBootTime, UniversalBootTime, OldTime, Timeout;
     BOOLEAN NoGuiBoot, ResetBias = FALSE, AlternateShell = FALSE;
+    BOOLEAN LoaderTimeAvailable = FALSE, TimeAvailable = FALSE;
     PLDR_DATA_TABLE_ENTRY NtosEntry;
     PMESSAGE_RESOURCE_ENTRY MsgEntry;
     PCHAR CommandLine, Y2KHackRequired, SafeBoot, Environment;
@@ -1668,15 +1669,38 @@ Phase1InitializationDiscard(IN PVOID Context)
     if (Y2KHackRequired) Y2KHackRequired = strstr(Y2KHackRequired, "=");
     if (Y2KHackRequired) YearHack = atol(Y2KHackRequired + 1);
 
-    /* Query the clock */
-    if ((ExCmosClockIsSane) && (HalQueryRealTimeClock(&TimeFields)))
+    /* Prefer the firmware time captured by the loader before ExitBootServices. */
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+    if ((LoaderBlock->Extension != NULL) &&
+        (LoaderBlock->Extension->Size >= RTL_SIZEOF_THROUGH_FIELD(LOADER_PARAMETER_EXTENSION, SystemTime)) &&
+        (LoaderBlock->Extension->SystemTime.QuadPart > 0))
     {
+        SystemBootTime = LoaderBlock->Extension->SystemTime;
+        LoaderTimeAvailable = TRUE;
+        TimeAvailable = TRUE;
+    }
+#endif
 
+    /* Fall back to the HAL clock when the loader supplied no usable time. */
+    if (!TimeAvailable && ExCmosClockIsSane && HalQueryRealTimeClock(&TimeFields))
+    {
         /* Check if we're using the Y2K hack */
         if (Y2KHackRequired) TimeFields.Year = (CSHORT)YearHack;
 
         /* Convert to time fields */
-        RtlTimeFieldsToTime(&TimeFields, &SystemBootTime);
+        TimeAvailable = RtlTimeFieldsToTime(&TimeFields, &SystemBootTime);
+    }
+
+    /* Apply the Y2K override to loader-provided time as well. */
+    if (TimeAvailable && Y2KHackRequired && LoaderTimeAvailable)
+    {
+        RtlTimeToTimeFields(&SystemBootTime, &TimeFields);
+        TimeFields.Year = (CSHORT)YearHack;
+        TimeAvailable = RtlTimeFieldsToTime(&TimeFields, &SystemBootTime);
+    }
+
+    if (TimeAvailable)
+    {
         UniversalBootTime = SystemBootTime;
 
         /* Check if real time is GMT */
