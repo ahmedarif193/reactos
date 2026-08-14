@@ -121,6 +121,7 @@
      Buffer->FileNameLength = FileCB->FileName.Length;
      AvailableBytes = *Length - HeaderSize;
      BytesToCopy = min(AvailableBytes, Buffer->FileNameLength);
+     BytesToCopy &= ~(sizeof(WCHAR) - 1);
      if (BytesToCopy)
          RtlCopyMemory(Buffer->FileName, FileCB->FileName.Buffer, BytesToCopy);
      *Length -= HeaderSize + BytesToCopy;
@@ -1158,15 +1159,11 @@ NtfsFsdQueryInformation(_In_    PDEVICE_OBJECT VolumeDeviceObject,
 
             NameLength = BufferLength - FixedLength;
             Status = GetFileNameInformation(FileCB, &All->NameInformation, &NameLength);
-            if (NT_SUCCESS(Status))
+            if (NT_SUCCESS(Status) || Status == STATUS_BUFFER_OVERFLOW)
             {
                 BufferLength = NameLength;
                 break;
             }
-
-            /* Not enough room for the name: report the fixed part only. */
-            BufferLength -= FixedLength;
-            Status = STATUS_BUFFER_OVERFLOW;
             break;
         }
         default:
