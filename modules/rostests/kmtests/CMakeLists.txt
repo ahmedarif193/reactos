@@ -27,6 +27,21 @@ list(APPEND COMMON_SOURCE
     rtl/RtlStrSafe.c
     rtl/RtlUnicodeString.c)
 
+# These tests depend on compiler behavior rather than a particular target ISA.
+if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
+    # Plain faulting loads and stores must remain covered by native SEH scopes.
+    if(NOT USE_DUMMY_PSEH)
+        set_property(SOURCE rtl/RtlException.c APPEND PROPERTY COMPILE_OPTIONS -Xclang -fasync-exceptions)
+    endif()
+
+    # Preserve every noinline helper in the stack-walk chain.
+    set_property(SOURCE rtl/RtlStack.c APPEND PROPERTY COMPILE_OPTIONS -fno-optimize-sibling-calls)
+
+    # This test snapshots nonvolatile registers around compiler intrinsics.
+    # Optimization may use those registers for the surrounding test itself.
+    set_property(SOURCE ntos_ex/ExInterlocked.c APPEND PROPERTY COMPILE_OPTIONS -O0)
+endif()
+
 if(ARCH STREQUAL "i386")
 
 elseif(ARCH STREQUAL "amd64")
