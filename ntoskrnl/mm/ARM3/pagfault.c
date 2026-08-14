@@ -2912,8 +2912,15 @@ Arm64UserLeafReady:
         {
             /* Add an additional page table reference */
 #if defined(_M_ARM64)
-            ASSERT(Arm64UserPteFrame != 0);
-            MiArm64IncrementUserLeafPteCount(Arm64UserPteFrame);
+            if ((ULONG_PTR)Address < (ULONG_PTR)MmSystemRangeStart)
+            {
+                ASSERT(Arm64UserPteFrame != 0);
+                MiArm64IncrementUserLeafPteCount(Arm64UserPteFrame);
+            }
+            else
+            {
+                MiIncrementPageTableReferences(Address);
+            }
 #else
             MiIncrementPageTableReferences(Address);
 #endif
