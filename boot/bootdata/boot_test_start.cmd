@@ -1,0 +1,157 @@
+@echo off
+rem Architecture- and media-neutral boot-test dispatcher.
+setlocal EnableExtensions EnableDelayedExpansion
+
+set S=%SystemRoot%\system32
+set BIN=%SystemRoot%\bin
+set OPTIONS=%TEMP%\boot-test-options.txt
+set KMTEST_LIST=%TEMP%\kmtests-all.txt
+set KMTEST_LOG=%TEMP%\kmtest-current.log
+set RUN_ROSAUTOTEST=0
+set RUN_CPUBENCH=0
+set RUN_KMTEST=0
+set BOOT_TEST_SELECTED=0
+set BOOT_TEST_FAILURES=0
+
+"%S%\reg.exe" query "HKLM\SYSTEM\CurrentControlSet\Control" /v SystemStartOptions > "%OPTIONS%" 2>nul
+if errorlevel 1 goto disabled
+
+"%S%\findstr.exe" /i /c:"ROSAUTOTEST" "%OPTIONS%" >nul 2>nul
+if not errorlevel 1 set RUN_ROSAUTOTEST=1
+"%S%\findstr.exe" /i /c:"CPUBENCH" "%OPTIONS%" >nul 2>nul
+if not errorlevel 1 set RUN_CPUBENCH=1
+"%S%\findstr.exe" /i /c:"KMTEST" "%OPTIONS%" >nul 2>nul
+if not errorlevel 1 set RUN_KMTEST=1
+
+if "!RUN_ROSAUTOTEST!!RUN_CPUBENCH!!RUN_KMTEST!" == "000" goto disabled
+
+del /q "%OPTIONS%" 2>nul
+"%S%\dbgprint.exe" BOOT_TESTS_BEGIN
+
+if "!RUN_CPUBENCH!" == "1" call :run_cpubench
+if "!RUN_KMTEST!" == "1" call :run_kmtests
+if "!RUN_ROSAUTOTEST!" == "1" call :run_rosautotest
+
+"%S%\dbgprint.exe" BOOT_TESTS_END selected=!BOOT_TEST_SELECTED! failures=!BOOT_TEST_FAILURES!
+if not "!BOOT_TEST_FAILURES!" == "0" goto tests_failed
+"%S%\dbgprint.exe" BOOT_TESTS_DONE
+endlocal
+exit /b 0
+
+:tests_failed
+"%S%\dbgprint.exe" BOOT_TESTS_FAILED
+"%S%\dbgprint.exe" BOOT_TESTS_DONE
+endlocal
+exit /b 1
+
+:disabled
+del /q "%OPTIONS%" 2>nul
+endlocal
+exit /b 0
+
+:run_cpubench
+set /a BOOT_TEST_SELECTED+=1
+"%S%\dbgprint.exe" CPUBENCH_BEGIN
+if not exist "%S%\cpubench.exe" goto cpubench_missing
+"%S%\cpubench.exe"
+set CPUBENCH_EXIT=!ERRORLEVEL!
+goto cpubench_finished
+
+:cpubench_missing
+"%S%\dbgprint.exe" CPUBENCH_MISSING
+set CPUBENCH_EXIT=1
+
+:cpubench_finished
+if not "!CPUBENCH_EXIT!" == "0" set /a BOOT_TEST_FAILURES+=1
+"%S%\dbgprint.exe" CPUBENCH_EXIT !CPUBENCH_EXIT!
+"%S%\dbgprint.exe" CPUBENCH_END
+exit /b 0
+
+:run_kmtests
+set /a BOOT_TEST_SELECTED+=1
+set /a KMTEST_COUNT=0
+set /a KMTEST_FAILURES=0
+set /a KMTEST_SKIPPED=0
+"%S%\dbgprint.exe" KMTEST_SUITE_BEGIN all
+if not exist "%BIN%\kmtest.exe" goto kmtest_missing
+if not exist "%BIN%\kmtest_drv.sys" goto kmtest_missing
+
+"%BIN%\kmtest.exe" --list-all > "%KMTEST_LIST%" 2>&1
+set KMTEST_LIST_EXIT=!ERRORLEVEL!
+if not "!KMTEST_LIST_EXIT!" == "0" goto kmtest_list_failed
+
+rem --list-all indents each name; tokens=* removes that indentation.
+for /f "usebackq skip=1 tokens=*" %%T in ("%KMTEST_LIST%") do (
+    if not "%%T" == "" (
+        set /a KMTEST_COUNT+=1
+        set KMTEST_RUN=1
+        set KMTEST_SKIP_REASON=
+        if /i "%%T" == "ExHardErrorInteractive" (
+            set KMTEST_RUN=0
+            set KMTEST_SKIP_REASON=manual-ui
+        )
+        if /i "%%T" == "Example" (
+            set KMTEST_RUN=0
+            set KMTEST_SKIP_REASON=framework-negative-selftest
+        )
+        if /i "%%T" == "ExPools" (
+            set KMTEST_RUN=0
+            set KMTEST_SKIP_REASON=manual-only
+        )
+        if "!KMTEST_RUN!" == "0" (
+            set /a KMTEST_SKIPPED+=1
+            "%S%\dbgprint.exe" KMTEST_SKIP %%T !KMTEST_SKIP_REASON!
+        ) else (
+            "%S%\dbgprint.exe" KMTEST_BEGIN %%T
+            "%BIN%\kmtest.exe" %%T > "!KMTEST_LOG!" 2>&1
+            set KMTEST_EXIT=!ERRORLEVEL!
+            "%S%\findstr.exe" /c:"Test failed:" "!KMTEST_LOG!" >nul 2>nul
+            if not errorlevel 1 set KMTEST_EXIT=1
+            type "!KMTEST_LOG!"
+            del /q "!KMTEST_LOG!" 2>nul
+            if not "!KMTEST_EXIT!" == "0" set /a KMTEST_FAILURES+=1
+            "%S%\dbgprint.exe" KMTEST_EXIT %%T !KMTEST_EXIT!
+            "%S%\dbgprint.exe" KMTEST_END %%T
+        )
+    )
+)
+
+del /q "%KMTEST_LIST%" 2>nul
+goto kmtest_finished
+
+:kmtest_list_failed
+del /q "%KMTEST_LIST%" 2>nul
+"%S%\dbgprint.exe" KMTEST_LIST_FAILED !KMTEST_LIST_EXIT!
+set /a KMTEST_FAILURES+=1
+goto kmtest_finished
+
+:kmtest_missing
+"%S%\dbgprint.exe" KMTEST_RUNNER_MISSING
+set /a KMTEST_FAILURES+=1
+
+:kmtest_finished
+set /a BOOT_TEST_FAILURES+=KMTEST_FAILURES
+"%S%\dbgprint.exe" KMTEST_SUITE_EXIT !KMTEST_FAILURES!
+"%S%\dbgprint.exe" KMTEST_SUITE_END all count=!KMTEST_COUNT! failures=!KMTEST_FAILURES! skipped=!KMTEST_SKIPPED!
+exit /b 0
+
+:run_rosautotest
+set /a BOOT_TEST_SELECTED+=1
+"%S%\dbgprint.exe" ROSAUTOTEST_BEGIN
+if not exist "%S%\rosautotest.exe" goto rosautotest_missing
+pushd "%BIN%"
+if errorlevel 1 goto rosautotest_missing
+"%S%\rosautotest.exe" /r /n
+set ROSAUTOTEST_EXIT=!ERRORLEVEL!
+popd
+goto rosautotest_finished
+
+:rosautotest_missing
+"%S%\dbgprint.exe" ROSAUTOTEST_MISSING
+set ROSAUTOTEST_EXIT=1
+
+:rosautotest_finished
+if not "!ROSAUTOTEST_EXIT!" == "0" set /a BOOT_TEST_FAILURES+=1
+"%S%\dbgprint.exe" ROSAUTOTEST_EXIT !ROSAUTOTEST_EXIT!
+"%S%\dbgprint.exe" ROSAUTOTEST_END
+exit /b 0

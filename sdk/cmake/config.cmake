@@ -210,9 +210,23 @@ cmake_dependent_option(FREELDR_HTTP_BOOT
                        "Whether to build the FreeLdr UEFI HTTP boot path." OFF
                        "LATTEPANDAMU_SUPPORT OR RPI_SUPPORT" OFF)
 
-cmake_dependent_option(ENABLE_ARM64_NT10_ABI_PROBES
-                       "Whether to package and run the ARM64 NT10 kernel ABI probes from HTTP boot." OFF
-                       "ARCH STREQUAL arm64 AND CMAKE_BUILD_TYPE STREQUAL Debug AND FREELDR_HTTP_BOOT" OFF)
+cmake_dependent_option(ENABLE_ROSAUTOTEST_BOOT_RUN
+                       "Whether to run the full RosAutoTest suite automatically at boot." OFF
+                       "CMAKE_BUILD_TYPE STREQUAL Debug" OFF)
+
+cmake_dependent_option(ENABLE_CPUBENCH_BOOT_RUN
+                       "Whether to run CPUbench automatically at boot." OFF
+                       "CMAKE_BUILD_TYPE STREQUAL Debug" OFF)
+
+cmake_dependent_option(ENABLE_KMTEST_BOOT_RUN
+                       "Whether to run unattended KMTests automatically at boot." OFF
+                       "CMAKE_BUILD_TYPE STREQUAL Debug" OFF)
+
+if(ENABLE_ROSAUTOTEST_BOOT_RUN OR ENABLE_CPUBENCH_BOOT_RUN OR ENABLE_KMTEST_BOOT_RUN)
+    set(ENABLE_BOOT_TEST_RUN TRUE)
+else()
+    set(ENABLE_BOOT_TEST_RUN FALSE)
+endif()
 
 # Set by the nested build that wow64.cmake configures: marks this i386 tree
 # as the 32-bit guest half of an amd64 WoW64 build.

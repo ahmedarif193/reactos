@@ -76,10 +76,8 @@ add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/bootcdregtest/unattend.inf DESTINAT
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/livecd/unattend.inf DESTINATION reactos NO_CAB FOR livecd)
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/preinstall/unattend.inf DESTINATION reactos FOR preinstall)
 
-add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/livecd_start.cmd DESTINATION "Profiles/Default User/My Documents" FOR livecd)
-add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/cpubench_start.cmd DESTINATION "Profiles/Default User/My Documents" FOR preinstall)
-if(ENABLE_ARM64_NT10_ABI_PROBES)
-    add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/cpubench_start.cmd DESTINATION "Profiles/Default User/My Documents" FOR livecd)
+if(ENABLE_BOOT_TEST_RUN)
+    add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/boot_test_start.cmd DESTINATION "Profiles/Default User/My Documents" FOR livecd preinstall)
 endif()
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/ethbench_start.cmd DESTINATION "Profiles/Default User/My Documents" FOR preinstall)
 

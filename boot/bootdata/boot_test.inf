@@ -1,0 +1,7 @@
+[Version]
+Signature = "$Windows NT$"
+
+[AddReg]
+
+; Run only the boot tests selected when this image was configured.
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Run","BootTests",0x00020000,"%SystemRoot%\system32\cmd.exe /c ""%SystemDrive%\Profiles\Default User\My Documents\boot_test_start.cmd"""
