@@ -420,7 +420,8 @@ KiExitDispatcher(IN KIRQL OldIrql)
 
     /* Drop a stale self-placement and keep the current thread running. */
     Thread = Prcb->CurrentThread;
-    if (KiConsumeSelfNextThread(Prcb, Thread))
+    if ((Prcb->NextThread == NULL) ||
+        KiConsumeSelfNextThread(Prcb, Thread))
     {
         KiReleasePrcbLock(Prcb);
         goto Quickie;
