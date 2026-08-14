@@ -2826,6 +2826,19 @@ NtQueryInformationFile(IN HANDLE FileHandle,
         DeviceObject = IoGetRelatedDeviceObject(FileObject);
     }
 
+#if DBG
+    /* Disk file systems require room for at least one name character on
+     * checked builds. Other file-object types, notably pipes, accept the
+     * fixed FileAllInformation prefix and report a truncated name. */
+    if (FileInformationClass == FileAllInformation &&
+        Length < sizeof(FILE_ALL_INFORMATION) &&
+        DeviceObject->DeviceType == FILE_DEVICE_DISK_FILE_SYSTEM)
+    {
+        ObDereferenceObject(FileObject);
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+#endif
+
     /* Check if this is a file that was opened for Synch I/O */
     if (FileObject->Flags & FO_SYNCHRONOUS_IO)
     {
