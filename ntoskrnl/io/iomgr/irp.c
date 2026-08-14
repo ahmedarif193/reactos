@@ -283,6 +283,7 @@ IopCompleteRequest(IN PKAPC Apc,
     {
         /* Check if we have an input buffer and if we succeeded */
         if ((Irp->Flags & IRP_INPUT_OPERATION) &&
+            (Irp->AssociatedIrp.SystemBuffer != NULL) &&
             (Irp->IoStatus.Status != STATUS_VERIFY_REQUIRED) &&
             !(NT_ERROR(Irp->IoStatus.Status)))
         {
@@ -514,6 +515,25 @@ IopCompleteRequest(IN PKAPC Apc,
                  */
                 FileObject->FinalStatus = Irp->IoStatus.Status;
                 KeSetEvent(&FileObject->Event, 0, FALSE);
+
+                /* A pended request also completes the caller's explicit
+                 * event and status block, even when the file object itself
+                 * is synchronous. */
+                if (Irp->UserIosb != NULL)
+                {
+                    _SEH2_TRY
+                    {
+                        *Irp->UserIosb = Irp->IoStatus;
+                    }
+                    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                    {
+                        /* Ignore an invalid caller status block. */
+                    }
+                    _SEH2_END;
+                }
+
+                if (Irp->UserEvent)
+                    KeSetEvent(Irp->UserEvent, 0, FALSE);
             }
         }
 
