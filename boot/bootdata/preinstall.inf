@@ -42,7 +42,6 @@ HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders","Common 
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders","Common Desktop",0x00020000,"%SystemDrive%\Profiles\All Users\Desktop"
 HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Desktop",0x00020000,"%SystemDrive%\Profiles\Default User\Desktop"
 HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Personal",0x00020000,"%SystemDrive%\Profiles\Default User\My Documents"
-HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Run","CpuBench",0x00020000,"%SystemRoot%\system32\cmd.exe /c ""%SystemDrive%\Profiles\Default User\My Documents\cpubench_start.cmd"""
 
 ; ComDlg32
 HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32",,0x00000012

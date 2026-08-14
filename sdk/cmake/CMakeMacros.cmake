@@ -979,6 +979,10 @@ function(create_registry_hives)
         ${_registry_inf}
         ${CMAKE_SOURCE_DIR}/boot/bootdata/livecd.inf
         ${CMAKE_SOURCE_DIR}/boot/bootdata/caroots.inf)
+    if(ENABLE_BOOT_TEST_RUN)
+        list(APPEND _livecd_inf_files
+            ${CMAKE_SOURCE_DIR}/boot/bootdata/boot_test.inf)
+    endif()
     if(SARCH STREQUAL "xbox")
         list(APPEND _livecd_inf_files
             ${CMAKE_SOURCE_DIR}/boot/bootdata/hiveinst_xbox.inf)
@@ -1023,6 +1027,10 @@ function(create_registry_hives)
         ${_registry_inf}
         ${CMAKE_SOURCE_DIR}/boot/bootdata/preinstall.inf
         ${CMAKE_SOURCE_DIR}/boot/bootdata/caroots.inf)
+    if(ENABLE_BOOT_TEST_RUN)
+        list(APPEND _preinstall_inf_files
+            ${CMAKE_SOURCE_DIR}/boot/bootdata/boot_test.inf)
+    endif()
     if(SARCH STREQUAL "xbox")
         list(APPEND _preinstall_inf_files
             ${CMAKE_SOURCE_DIR}/boot/bootdata/hiveinst_xbox.inf)
