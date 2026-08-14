@@ -249,9 +249,12 @@ RtlWalkFrameChain(OUT PVOID *Callers,
                   IN ULONG Flags)
 {
     ULONG_PTR Stack, NewStack, StackBegin, StackEnd = 0;
-    ULONG Eip;
+    ULONG_PTR Eip;
     BOOLEAN Result, StopSearch = FALSE;
     ULONG i = 0;
+
+    if ((Callers == NULL) || (Count == 0))
+        return 0;
 
     /* Get current EBP */
 #if defined(_M_IX86)

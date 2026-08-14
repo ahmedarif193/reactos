@@ -1040,6 +1040,11 @@ RtlWalkFrameChain(OUT PVOID *Callers,
 
     DPRINT("Enter RtlWalkFrameChain\n");
 
+    if ((Callers == NULL) || (Count == 0))
+    {
+        return 0;
+    }
+
     /* The upper bits in Flags define how many frames to skip */
     FramesToSkip = Flags >> 8;
 
