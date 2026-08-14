@@ -189,11 +189,14 @@ LOGICAL
 KeTryToAcquireQueuedSpinLock(IN KSPIN_LOCK_QUEUE_NUMBER LockNumber,
                              OUT PKIRQL OldIrql)
 {
+    KIRQL PreviousIrql;
+    LOGICAL Acquired;
+
     /* Raise to dispatch level */
-    KeRaiseIrql(DISPATCH_LEVEL, OldIrql);
+    KeRaiseIrql(DISPATCH_LEVEL, &PreviousIrql);
 
 #if defined(CONFIG_SMP) || DBG
-    return KxTryToAcquireQueuedSpinLock(&KeGetCurrentPrcb()->LockQueue[LockNumber]);
+    Acquired = KxTryToAcquireQueuedSpinLock(&KeGetCurrentPrcb()->LockQueue[LockNumber]);
 #else
 
     /* Add an explicit memory barrier to prevent the compiler from reordering
@@ -201,8 +204,17 @@ KeTryToAcquireQueuedSpinLock(IN KSPIN_LOCK_QUEUE_NUMBER LockNumber,
     KeMemoryBarrierWithoutFence();
 
     /* Always return true on UP Machines */
-    return TRUE;
+    Acquired = TRUE;
 #endif
+
+    if (!Acquired)
+    {
+        KeLowerIrql(PreviousIrql);
+        return FALSE;
+    }
+
+    *OldIrql = PreviousIrql;
+    return TRUE;
 }
 
 /* EOF */

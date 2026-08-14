@@ -57,10 +57,43 @@ static VOID Arm64SpinLockCheck(VOID)
     /* Prcb->LockQueue array sized per LockQueueMaximumLock. */
     if (Prcb)
     {
+        PKSPIN_LOCK_QUEUE SpareQueue = &Prcb->LockQueue[LockQueueUnusedSpare16];
+        PKSPIN_LOCK SavedLock = SpareQueue->Lock;
+        PKSPIN_LOCK_QUEUE SavedNext = SpareQueue->Next;
+
         ok_eq_size(sizeof(Prcb->LockQueue) / sizeof(Prcb->LockQueue[0]),
                    (SIZE_T)LockQueueMaximumLock);
         /* On ARM64 LockQueueMaximumLock = LockQueueUnusedSpare16 + 1 = 17. */
         ok_eq_uint(LockQueueMaximumLock, 17);
+
+        /* A failed queued try must restore IRQL and leave OldIrql untouched. */
+        if ((SavedLock == NULL) && (SavedNext == NULL))
+        {
+            LOGICAL Acquired;
+            KIRQL ObservedIrql;
+
+            Lock = 1;
+            SpareQueue->Lock = &Lock;
+            OldIrql = 0x55;
+            Acquired = KeTryToAcquireQueuedSpinLock(LockQueueUnusedSpare16, &OldIrql);
+            ObservedIrql = KeGetCurrentIrql();
+
+            if (ObservedIrql != PASSIVE_LEVEL)
+            {
+                KeLowerIrql(PASSIVE_LEVEL);
+            }
+
+            SpareQueue->Next = SavedNext;
+            SpareQueue->Lock = SavedLock;
+
+            ok_eq_bool(Acquired, FALSE);
+            ok_eq_uint(ObservedIrql, PASSIVE_LEVEL);
+            ok_eq_uint(OldIrql, 0x55);
+        }
+        else
+        {
+            skip(FALSE, "Unused lock queue is already in use\n");
+        }
     }
 
     /* KSPIN_LOCK is ULONG_PTR on ARM64. */
