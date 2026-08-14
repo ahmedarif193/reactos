@@ -1303,24 +1303,36 @@ VOID
 TestObsoleteReactOSSelfMapConstantsContract(
     _In_ ULONGLONG SelfMapIndex)
 {
+    ULONGLONG Ttbr1 = Arm64ReadTtbr1();
+    ULONGLONG RootPfn = (Ttbr1 & ARM64_TEST_PTE_ADDR_MASK) >> PAGE_SHIFT;
+    ULONGLONG EntryAddress;
+    ULONGLONG Entry = 0;
+    NTSTATUS Status;
+
     ok(SelfMapIndex != ARM64_TEST_OBSOLETE_PXE_SELFMAP_INDEX,
        "ARM64 self-map still uses the obsolete ReactOS fixed slot %I64u\n",
        ARM64_TEST_OBSOLETE_PXE_SELFMAP_INDEX);
     if (SelfMapIndex == ARM64_TEST_OBSOLETE_PXE_SELFMAP_INDEX)
         return;
 
-    TestInvalidAtL0SelfMapAddress(SelfMapIndex,
-                                  (PVOID)ARM64_TEST_OBSOLETE_PTE_BASE,
-                                  "obsolete PTE_BASE");
-    TestInvalidAtL0SelfMapAddress(SelfMapIndex,
-                                  (PVOID)ARM64_TEST_OBSOLETE_PDE_BASE,
-                                  "obsolete PDE_BASE");
-    TestInvalidAtL0SelfMapAddress(SelfMapIndex,
-                                  (PVOID)ARM64_TEST_OBSOLETE_PPE_BASE,
-                                  "obsolete PPE_BASE");
-    TestInvalidAtL0SelfMapAddress(SelfMapIndex,
-                                  (PVOID)ARM64_TEST_OBSOLETE_PXE_BASE,
-                                  "obsolete PXE_BASE");
+    ok_eq_hex64(Arm64SelfMapPteBase(ARM64_TEST_OBSOLETE_PXE_SELFMAP_INDEX), ARM64_TEST_OBSOLETE_PTE_BASE);
+    ok_eq_hex64(Arm64SelfMapPdeBase(ARM64_TEST_OBSOLETE_PXE_SELFMAP_INDEX), ARM64_TEST_OBSOLETE_PDE_BASE);
+    ok_eq_hex64(Arm64SelfMapPpeBase(ARM64_TEST_OBSOLETE_PXE_SELFMAP_INDEX), ARM64_TEST_OBSOLETE_PPE_BASE);
+    ok_eq_hex64(Arm64SelfMapPxeBase(ARM64_TEST_OBSOLETE_PXE_SELFMAP_INDEX), ARM64_TEST_OBSOLETE_PXE_BASE);
+
+    /*
+     * An unused recursive slot can still map an ordinary kernel VA region.
+     * The relevant negative contract is that it does not point back to TTBR1.
+     */
+    EntryAddress = Arm64SelfMapPxeBase(SelfMapIndex) +
+                   ARM64_TEST_OBSOLETE_PXE_SELFMAP_INDEX * sizeof(ULONGLONG);
+    Status = ProbeUlong64((volatile ULONGLONG *)EntryAddress, &Entry);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        dump_trace("[arm64][MmSelfMap] obsolete slot entry=%p value=0x%I64x root-pfn=0x%I64x\n", (PVOID)EntryAddress, Entry, RootPfn);
+        ok(!Arm64IsTableDescriptor(Entry) || Arm64PfnFromEntry(Entry) != RootPfn, "obsolete slot %I64u still points to the TTBR1 root\n", ARM64_TEST_OBSOLETE_PXE_SELFMAP_INDEX);
+    }
 }
 
 static
