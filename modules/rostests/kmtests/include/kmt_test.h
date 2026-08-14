@@ -549,6 +549,25 @@ static inline ULONG GetNTDDIVersion(VOID)
     RTL_OSVERSIONINFOW OSVersion;
     OSVersion.dwOSVersionInfoSize = sizeof(OSVersion);
     RtlGetVersion(&OSVersion);
+    if (OSVersion.dwBuildNumber >= 27695) return NTDDI_WIN11_SE;
+    if (OSVersion.dwBuildNumber >= 25947) return NTDDI_WIN11_GE;
+    if (OSVersion.dwBuildNumber >= 25905) return NTDDI_WIN11_GA;
+    if (OSVersion.dwBuildNumber >= 25246) return NTDDI_WIN11_ZN;
+    if (OSVersion.dwBuildNumber >= 25057) return NTDDI_WIN11_CU;
+    if (OSVersion.dwBuildNumber >= 22449) return NTDDI_WIN11_NI;
+    if (OSVersion.dwBuildNumber >= 19044) return NTDDI_WIN10_CO;
+    if (OSVersion.dwBuildNumber >= 19043) return NTDDI_WIN10_FE;
+    if (OSVersion.dwBuildNumber >= 19042) return NTDDI_WIN10_MN;
+    if (OSVersion.dwBuildNumber >= 19041) return NTDDI_WIN10_VB;
+    if (OSVersion.dwBuildNumber >= 18362) return NTDDI_WIN10_19H1;
+    if (OSVersion.dwBuildNumber >= 17763) return NTDDI_WIN10_RS5;
+    if (OSVersion.dwBuildNumber >= 17134) return NTDDI_WIN10_RS4;
+    if (OSVersion.dwBuildNumber >= 16299) return NTDDI_WIN10_RS3;
+    if (OSVersion.dwBuildNumber >= 15063) return NTDDI_WIN10_RS2;
+    if (OSVersion.dwBuildNumber >= 14393) return NTDDI_WIN10_RS1;
+    if (OSVersion.dwBuildNumber >= 10586) return NTDDI_WIN10_TH2;
+    if (OSVersion.dwBuildNumber >= 10240) return NTDDI_WIN10;
+
     switch (OSVersion.dwBuildNumber)
     {
         case 3790: return NTDDI_WS03;
