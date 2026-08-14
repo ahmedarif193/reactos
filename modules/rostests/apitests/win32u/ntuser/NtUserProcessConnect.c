@@ -40,7 +40,7 @@ START_TEST(NtUserProcessConnect)
     printf("UserConnect.siClient.psi = 0x%p\n", UserConnect.siClient.psi);
     printf("UserConnect.siClient.aheList = 0x%p\n", UserConnect.siClient.aheList);
     printf("UserConnect.siClient.pDispInfo = 0x%p\n", UserConnect.siClient.pDispInfo);
-    printf("UserConnect.siClient.ulSharedDelta = 0x%Ix\n", UserConnect.siClient.ulSharedDelta);
+    printf("UserConnect.siClient.ulSharedDelta = %p\n", (PVOID)UserConnect.siClient.ulSharedDelta);
 
     /* Verify the validity of some mandatory fields */
     TEST(UserConnect.ulVersion == MAKELONG(0, 5));
