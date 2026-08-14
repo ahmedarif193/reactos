@@ -176,6 +176,27 @@ KiArm64CopyToCurrentUserBuffer(
     return KiArm64ProbeAndCopyUserBuffer(TargetAddress, Buffer, BufferSize);
 }
 
+static
+DECLSPEC_NOINLINE
+ULONG
+KiGetGdiBatchCount(
+    _In_ PKTHREAD Thread)
+{
+    ULONG GdiBatchCount;
+
+    _SEH2_TRY
+    {
+        GdiBatchCount = Thread->Teb->GdiBatchCount;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        GdiBatchCount = 0;
+    }
+    _SEH2_END;
+
+    return GdiBatchCount;
+}
+
 VOID
 KiSystemService(
     _Inout_ PKTHREAD Thread,
@@ -318,15 +339,7 @@ ServiceDispatch:
         (TableIndex == SERVICE_TABLE_TEST) &&
         (KeGdiFlushUserBatch != NULL))
     {
-        _SEH2_TRY
-        {
-            GdiBatchCount = Thread->Teb->GdiBatchCount;
-        }
-        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-        {
-            GdiBatchCount = 0;
-        }
-        _SEH2_END;
+        GdiBatchCount = KiGetGdiBatchCount(Thread);
 
         if (GdiBatchCount != 0)
         {
