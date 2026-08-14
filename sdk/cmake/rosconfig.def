@@ -179,6 +179,16 @@ config ENABLE_KMTEST_BOOT_RUN
       after desktop startup. Interactive, negative self-test, and ExPools
       cases remain manual-only.
 
+config ENABLE_RPI5_WIFI_BOOT_RUN
+    prompt "Run RPi5 Wi-Fi diagnostics at boot"
+    type bool
+    default n
+    depends PROFILE_ARM64=rpi5
+    help
+      Scan through the native WLAN stack. An optional boot_test_network.cfg can
+      name a WIFI_SSID and WIFI_KEY_FILE for connection and throughput testing
+      without storing a passphrase in the source tree.
+
 endmenu
 
 config ENABLE_WALLPAPERS
