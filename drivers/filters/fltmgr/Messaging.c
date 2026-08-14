@@ -614,24 +614,79 @@ FltpCancelMessageWaiter(_In_ PIO_CSQ Csq,
 
 static
 NTSTATUS
+GetClientPortData(_In_ PIRP Irp,
+                  _Out_ PUNICODE_STRING *PortName,
+                  _Outptr_result_bytebuffer_(*ContextSize) PVOID *ConnectionContext,
+                  _Out_ PULONG ContextSize)
+{
+    PIO_STACK_LOCATION IrpStack;
+    PFILE_FULL_EA_INFORMATION EaBuffer;
+    PFILTER_PORT_DATA PortData;
+    ULONG EaLength;
+    ULONG ValueOffset;
+    ULONG FixedSize;
+    ULONG_PTR PortNameAddress;
+    USHORT CapturedContextSize;
+
+    IrpStack = IoGetCurrentIrpStackLocation(Irp);
+    EaBuffer = Irp->AssociatedIrp.SystemBuffer;
+    EaLength = IrpStack->Parameters.Create.EaLength;
+    ValueOffset = FIELD_OFFSET(FILE_FULL_EA_INFORMATION, EaName) + FLT_PORT_EA_NAME_LENGTH + 1;
+
+    if (EaBuffer == NULL || EaLength < ValueOffset || EaBuffer->EaNameLength != FLT_PORT_EA_NAME_LENGTH || RtlCompareMemory(EaBuffer->EaName, FLT_PORT_EA_NAME, FLT_PORT_EA_NAME_LENGTH) != FLT_PORT_EA_NAME_LENGTH || EaBuffer->EaValueLength > EaLength - ValueOffset)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    PortData = (PFILTER_PORT_DATA)((PUCHAR)EaBuffer + ValueOffset);
+#ifdef _WIN64
+    if (IoIs32bitProcess(Irp))
+    {
+        PFILTER_PORT_DATA32 PortData32 = (PFILTER_PORT_DATA32)PortData;
+
+        FixedSize = sizeof(*PortData32);
+        if (EaBuffer->EaValueLength < FixedSize) return STATUS_INVALID_PARAMETER;
+        PortNameAddress = PortData32->PortName64;
+        CapturedContextSize = PortData32->ContextSize;
+    }
+    else
+#endif
+    {
+        FixedSize = sizeof(*PortData);
+        if (EaBuffer->EaValueLength < FixedSize) return STATUS_INVALID_PARAMETER;
+        PortNameAddress = (ULONG_PTR)PortData->PortName;
+        CapturedContextSize = PortData->ContextSize;
+    }
+
+    if (PortNameAddress == 0 || CapturedContextSize > EaBuffer->EaValueLength - FixedSize) return STATUS_INVALID_PARAMETER;
+
+    *PortName = (PUNICODE_STRING)PortNameAddress;
+    *ContextSize = CapturedContextSize;
+    *ConnectionContext = CapturedContextSize ? (PUCHAR)PortData + FixedSize : NULL;
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
 CreateClientPort(_In_ PFILE_OBJECT FileObject,
                    _Inout_ PIRP Irp)
 {
     PFLT_SERVER_PORT_OBJECT ServerPortObject = NULL;
     OBJECT_ATTRIBUTES ObjectAttributes;
-    PFILTER_PORT_DATA FilterPortData;
+    PUNICODE_STRING PortName;
+    PVOID ConnectionContext;
     PFLT_PORT_OBJECT ClientPortObject = NULL;
     PFLT_PORT PortHandle = NULL;
     PPORT_CCB PortCCB = NULL;
-    //ULONG BufferLength;
+    ULONG ContextSize;
     LONG NumConns;
     NTSTATUS Status;
 
-    /* We received the buffer via FilterConnectCommunicationPort, cast it back to its original form */
-    FilterPortData = Irp->AssociatedIrp.SystemBuffer;
+    Status = GetClientPortData(Irp, &PortName, &ConnectionContext, &ContextSize);
+    if (!NT_SUCCESS(Status)) return Status;
 
     /* Get a reference to the server port the filter created */
-    Status = ObReferenceObjectByName(&FilterPortData->PortName,
+    Status = ObReferenceObjectByName(PortName,
                                      0,
                                      0,
                                      FLT_PORT_ALL_ACCESS,
@@ -715,8 +770,8 @@ CreateClientPort(_In_ PFILE_OBJECT FileObject,
         /* Invoke the callback to let the filter know we have a connection */
         Status = ServerPortObject->ConnectNotify(PortHandle,
                                                  ServerPortObject->Cookie,
-                                                 NULL, //ConnectionContext
-                                                 0, //SizeOfContext
+                                                 ConnectionContext,
+                                                 ContextSize,
                                                  &ClientPortObject->Cookie);
         if (NT_SUCCESS(Status))
         {
@@ -766,14 +821,20 @@ NTSTATUS
 CloseClientPort(_In_ PFILE_OBJECT FileObject,
                 _Inout_ PIRP Irp)
 {
-    PFLT_CCB Ccb;
+    PPORT_CCB PortCcb;
 
-    Ccb = (PFLT_CCB)FileObject->FsContext2;
+    UNREFERENCED_PARAMETER(Irp);
 
-    /* Remove the reference on the filter we added when we opened the port */
-    ObDereferenceObject(Ccb->Data.Port.Port);
+    PortCcb = FileObject->FsContext2;
+    if (PortCcb == NULL)
+    {
+        return STATUS_SUCCESS;
+    }
 
-    // FIXME: Free the CCB
+    /* Detach the CCB before dropping the client-port reference. */
+    FileObject->FsContext2 = NULL;
+    ObDereferenceObject(PortCcb->Port);
+    ExFreePoolWithTag(PortCcb, FM_TAG_CCB);
 
     return STATUS_SUCCESS;
 }

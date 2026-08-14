@@ -34,6 +34,7 @@
 
 #define FLT_MGR_LONGHORN (NTDDI_VERSION >= NTDDI_VISTA)
 #define FLT_MGR_WIN7 (NTDDI_VERSION >= NTDDI_WIN7)
+#define FLT_MGR_WINBLUE (NTDDI_VERSION >= NTDDI_WINBLUE)
 
 #include <fltuserstructures.h>
 
@@ -252,6 +253,10 @@ FilterConnectCommunicationPort(
     _In_ WORD wSizeOfContext,
     _In_opt_ LPSECURITY_ATTRIBUTES lpSecurityAttributes ,
     _Outptr_ HANDLE *hPort);
+
+#if FLT_MGR_WINBLUE
+#define FLT_PORT_FLAG_SYNC_HANDLE 0x00000001
+#endif
 
 _Must_inspect_result_
 HRESULT
