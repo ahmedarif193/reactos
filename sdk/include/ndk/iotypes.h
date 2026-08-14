@@ -91,8 +91,16 @@ extern POBJECT_TYPE NTSYSAPI IoDriverObjectType;
 //
 // NtCreateFile Attributes
 //
+#if (NTDDI_VERSION < NTDDI_WIN8)
 #define FILE_ATTRIBUTE_VALID_FLAGS              0x00007fb7
 #define FILE_ATTRIBUTE_VALID_SET_FLAGS          0x000031a7
+#elif (NTDDI_VERSION < NTDDI_WIN10_RS2)
+#define FILE_ATTRIBUTE_VALID_FLAGS              0x0002ffb7
+#define FILE_ATTRIBUTE_VALID_SET_FLAGS          0x000231a7
+#else
+#define FILE_ATTRIBUTE_VALID_FLAGS              0x005affb7
+#define FILE_ATTRIBUTE_VALID_SET_FLAGS          0x001a31a7
+#endif
 
 //
 // NtCreateFile OpenType Flags

@@ -3377,8 +3377,12 @@ typedef struct _RTL_ATOM_TABLE
 #define FILE_OPEN_OFFLINE_FILE          0x00400000
 #define FILE_OPEN_FOR_FREE_SPACE_QUERY  0x00800000
 
+#ifndef FILE_ATTRIBUTE_VALID_FLAGS
 #define FILE_ATTRIBUTE_VALID_FLAGS      0x00007fb7
+#endif
+#ifndef FILE_ATTRIBUTE_VALID_SET_FLAGS
 #define FILE_ATTRIBUTE_VALID_SET_FLAGS  0x000031a7
+#endif
 
 /* status for NtCreateFile or NtOpenFile */
 #define FILE_SUPERSEDED                 0
