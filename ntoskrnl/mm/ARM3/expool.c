@@ -1940,6 +1940,10 @@ ExReturnPoolQuota(IN PVOID P)
                               PoolType & BASE_POOL_TYPE_MASK,
                               BlockSize * POOL_BLOCK_SIZE);
             ObDereferenceObject(Process);
+
+            /* The allocation is no longer quota-charged. A caller may reuse
+             * the former owner slot before the block is eventually freed. */
+            Entry->PoolType -= QUOTA_POOL_MASK;
         }
     }
 }
