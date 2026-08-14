@@ -183,6 +183,15 @@ NtfsBindVolumeDisk(_In_ PVolumeContextBlock VolCB)
 
 typedef struct _SCB
 {
+    /*
+     * FsContext is the shared stream identity and is consumed directly as an
+     * FSRTL common header by Mm, Cc and FsRtl.  Per-open state lives in the
+     * FileContextBlock published through FsContext2.
+     */
+    FSRTL_ADVANCED_FCB_HEADER CommonFCBHeader;
+    ERESOURCE MainResource;
+    ERESOURCE PagingIoResource;
+    FAST_MUTEX HeaderMutex;
     LIST_ENTRY ListEntry;
     ULONGLONG FileReference;
     AttributeType RequestedType;
@@ -257,6 +266,37 @@ typedef struct _FCB
     LIST_ENTRY IdleLink;
 
 } FileContextBlock, *PFileContextBlock;
+
+FORCEINLINE
+PFileContextBlock
+NtfsGetFileContext(_In_opt_ PFILE_OBJECT FileObject)
+{
+    if (!FileObject)
+        return NULL;
+
+    return (PFileContextBlock)(FileObject->FsContext2 ? FileObject->FsContext2 : FileObject->FsContext);
+}
+
+FORCEINLINE
+PFSRTL_ADVANCED_FCB_HEADER
+NtfsGetCommonFcbHeader(_In_ PFileContextBlock FileCB)
+{
+    return FileCB->StreamCB ? &FileCB->StreamCB->CommonFCBHeader : &FileCB->CommonFCBHeader;
+}
+
+FORCEINLINE
+PERESOURCE
+NtfsGetMainResource(_In_ PFileContextBlock FileCB)
+{
+    return FileCB->StreamCB ? &FileCB->StreamCB->MainResource : &FileCB->MainResource;
+}
+
+FORCEINLINE
+PERESOURCE
+NtfsGetPagingIoResource(_In_ PFileContextBlock FileCB)
+{
+    return FileCB->StreamCB ? &FileCB->StreamCB->PagingIoResource : &FileCB->PagingIoResource;
+}
 
 BOOLEAN
 NtfsSplitParentName(

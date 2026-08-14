@@ -490,7 +490,7 @@ NtfsFsdQueryEa(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         goto Done;
     }
 
-    FileCB = (PFileContextBlock)IrpSp->FileObject->FsContext;
+    FileCB = NtfsGetFileContext(IrpSp->FileObject);
     if (!FileCB->FileRec)
     {
         Status = STATUS_INVALID_PARAMETER;
@@ -511,12 +511,12 @@ NtfsFsdQueryEa(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     }
 
     KeEnterCriticalRegion();
-    ExAcquireResourceExclusiveLite(&FileCB->MainResource, TRUE);
+    ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
     Status = NtfsQueryEa(FileCB,
                          IrpSp,
                          Output,
                          &BytesWritten);
-    ExReleaseResourceLite(&FileCB->MainResource);
+    ExReleaseResourceLite(NtfsGetMainResource(FileCB));
     KeLeaveCriticalRegion();
 
 Done:
@@ -562,9 +562,7 @@ NtfsFsdSetEa(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     Irp->IoStatus.Information = 0;
     IrpSp = IoGetCurrentIrpStackLocation(Irp);
     FileObject = IrpSp->FileObject;
-    FileCB = FileObject
-        ? (PFileContextBlock)FileObject->FsContext
-        : NULL;
+    FileCB = NtfsGetFileContext(FileObject);
     VolCB = VolumeDeviceObject
         ? (PVolumeContextBlock)
             VolumeDeviceObject->DeviceExtension
@@ -691,9 +689,7 @@ NtfsFsdSetEa(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     }
 
     KeEnterCriticalRegion();
-    ExAcquireResourceExclusiveLite(
-        &FileCB->MainResource,
-        TRUE);
+    ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
     ResourceAcquired = TRUE;
     Status = NtfsFileRecordUpdateExtendedAttributes(
         FileCB->FileRec,
@@ -708,7 +704,7 @@ NtfsFsdSetEa(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 Done:
     if (ResourceAcquired)
     {
-        ExReleaseResourceLite(&FileCB->MainResource);
+        ExReleaseResourceLite(NtfsGetMainResource(FileCB));
         KeLeaveCriticalRegion();
     }
     if (Updates)
