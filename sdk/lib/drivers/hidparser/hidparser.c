@@ -77,6 +77,8 @@ HidParser_GetCollectionDescription(
     ULONG ReportIdLocalIndex;
     PVOID ParserContext;
 
+    ZeroFunction(DeviceDescription, sizeof(HIDP_DEVICE_DESC));
+
     //
     // first parse the report descriptor
     //
@@ -101,11 +103,6 @@ HidParser_GetCollectionDescription(
         //
         return STATUS_NO_DATA_DETECTED;
     }
-
-    //
-    // zero description
-    //
-    ZeroFunction(DeviceDescription, sizeof(HIDP_DEVICE_DESC));
 
     //
     // allocate collection
