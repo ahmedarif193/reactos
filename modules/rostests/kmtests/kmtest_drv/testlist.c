@@ -188,7 +188,8 @@ const KMT_TEST TestList[] =
     { "ExDoubleList",                       Test_ExDoubleList },
     { "ExFastMutex",                        Test_ExFastMutex },
     { "ExHardError",                        Test_ExHardError },
-    { "ExHardErrorInteractive",             Test_ExHardErrorInteractive },
+    /* Keep the UI-driven variant available by name, but out of automated runs. */
+    { "-ExHardErrorInteractive",            Test_ExHardErrorInteractive },
     { "ExInterlocked",                      Test_ExInterlocked },
     { "ExPools",                            Test_ExPools },
     { "ExLookaside",                        Test_ExLookaside },
@@ -204,7 +205,8 @@ const KMT_TEST TestList[] =
     { "ExSingleList",                       Test_ExSingleList },
     { "ExTimer",                            Test_ExTimer },
     { "ExUuid",                             Test_ExUuid },
-    { "Example",                            Test_Example },
+    /* This deliberately exercises failure reporting and is not a parity test. */
+    { "-Example",                           Test_Example },
     { "FsRtlDissect",                       Test_FsRtlDissect },
     { "FsRtlExpression",                    Test_FsRtlExpression },
     { "FsRtlLegal",                         Test_FsRtlLegal },
