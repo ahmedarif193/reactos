@@ -405,11 +405,7 @@ CcUninitializeCacheMap (
                             FALSE);
     }
 
-    Status = CcRosReleaseFileCache(FileObject);
-    if (UninitializeCompleteEvent)
-    {
-        KeSetEvent(&UninitializeCompleteEvent->Event, IO_NO_INCREMENT, FALSE);
-    }
+    Status = CcRosReleaseFileCache(FileObject, UninitializeCompleteEvent);
     return NT_SUCCESS(Status);
 }
 

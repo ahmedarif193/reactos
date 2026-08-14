@@ -174,6 +174,7 @@ CcPerformReadAhead(
         return;
     }
     SharedCacheMap->OpenCount++;
+    SharedCacheMap->ReadAheadActiveCount++;
 
     KeReleaseQueuedSpinLock(LockQueueMasterLock, OldIrql);
 
@@ -277,29 +278,14 @@ CcPerformReadAhead(
     }
 
 Clear:
-    /* See previous comment about private cache map */
-    OldIrql = KeAcquireQueuedSpinLock(LockQueueMasterLock);
-    PrivateCacheMap = FileObject->PrivateCacheMap;
-    if (PrivateCacheMap != NULL)
-    {
-        /* Mark read ahead as unactive */
-        KeAcquireSpinLockAtDpcLevel(&PrivateCacheMap->ReadAheadSpinLock);
-        InterlockedAnd((volatile long *)&PrivateCacheMap->UlongFlags, ~PRIVATE_CACHE_MAP_READ_AHEAD_ACTIVE);
-        KeReleaseSpinLockFromDpcLevel(&PrivateCacheMap->ReadAheadSpinLock);
-    }
-    KeReleaseQueuedSpinLock(LockQueueMasterLock, OldIrql);
-
     /* If file was locked, release it */
     if (Locked)
     {
         SharedCacheMap->Callbacks->ReleaseFromReadAhead(SharedCacheMap->LazyWriteContext);
     }
 
-    /* Release the shared map after the read-ahead callback. */
-    CcRosDereferenceCache(FileObject);
-
-    /* And drop our extra reference (See: CcScheduleReadAhead) */
-    ObDereferenceObject(FileObject);
+    /* Release the map pin and scheduled file-object reference together. */
+    CcRosDereferenceCache(FileObject, SharedCacheMap);
 
     return;
 }
