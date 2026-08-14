@@ -260,6 +260,9 @@ TestBigPoolExpansion(VOID)
         BigAllocations = ExAllocatePoolWithTag(PoolType,
                                                MaxAllocations * sizeof(*BigAllocations),
                                                'ABmK');
+        ok(BigAllocations != NULL, "Failed to allocate the big-pool pointer array\n");
+        if (!BigAllocations)
+            continue;
 
         /* Allocate a lot of pages (== big pool allocations) */
         for (NumAllocations = 0; NumAllocations < MaxAllocations; NumAllocations++)
@@ -268,20 +271,17 @@ TestBigPoolExpansion(VOID)
                                                                    PAGE_SIZE,
                                                                    'aPmK');
             if (BigAllocations[NumAllocations] == NULL)
-            {
-                NumAllocations--;
                 break;
-            }
         }
 
         trace("Got %lu allocations for PoolType %d\n", NumAllocations, PoolType);
 
         /* Free them */
-        for (; NumAllocations < MaxAllocations; NumAllocations--)
+        while (NumAllocations != 0)
         {
+            NumAllocations--;
             ASSERT(BigAllocations[NumAllocations] != NULL);
-            ExFreePoolWithTag(BigAllocations[NumAllocations],
-                              'aPmK');
+            ExFreePoolWithTag(BigAllocations[NumAllocations], 'aPmK');
         }
         ExFreePoolWithTag(BigAllocations, 'ABmK');
     }
