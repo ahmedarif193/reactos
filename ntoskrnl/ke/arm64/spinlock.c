@@ -230,23 +230,33 @@ KeTryToAcquireQueuedSpinLock(
     _In_ KSPIN_LOCK_QUEUE_NUMBER LockNumber,
     _Out_ PKIRQL OldIrql)
 {
-    KeRaiseIrql(DISPATCH_LEVEL, OldIrql);
+    KIRQL PreviousIrql;
+    LOGICAL Acquired;
+
+    KeRaiseIrql(DISPATCH_LEVEL, &PreviousIrql);
 
 #if defined(CONFIG_SMP) || DBG
     {
         PKPRCB Prcb = KeGetCurrentPrcb();
-        LOGICAL Acquired = KxTryToAcquireQueuedSpinLock(
-            &Prcb->LockQueue[LockNumber]);
+        Acquired = KxTryToAcquireQueuedSpinLock(&Prcb->LockQueue[LockNumber]);
         if (Acquired && (LockNumber == LockQueuePfnLock))
         {
             KiArm64AdjustPfnLockDepth(Prcb, 1);
         }
-        return Acquired;
     }
 #else
     KeMemoryBarrierWithoutFence();
-    return TRUE;
+    Acquired = TRUE;
 #endif
+
+    if (!Acquired)
+    {
+        KeLowerIrql(PreviousIrql);
+        return FALSE;
+    }
+
+    *OldIrql = PreviousIrql;
+    return TRUE;
 }
 
 BOOLEAN
