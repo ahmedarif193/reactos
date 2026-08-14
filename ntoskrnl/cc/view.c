@@ -370,18 +370,34 @@ CcRosDeleteFileCache (
 
 VOID
 CcRosDereferenceCache (
-    PFILE_OBJECT FileObject)
+    PFILE_OBJECT FileObject,
+    PROS_SHARED_CACHE_MAP SharedCacheMap)
 /*
- * FUNCTION: Releases an OpenCount reference on a shared cache map.
+ * FUNCTION: Releases the references owned by an active read-ahead operation.
  */
 {
-    PROS_SHARED_CACHE_MAP SharedCacheMap;
+    PCACHE_UNINITIALIZE_EVENT UninitializeEvents = NULL;
+    PCACHE_UNINITIALIZE_EVENT NextEvent;
+    PPRIVATE_CACHE_MAP PrivateCacheMap;
     KIRQL OldIrql;
 
     OldIrql = KeAcquireQueuedSpinLock(LockQueueMasterLock);
 
-    SharedCacheMap = FileObject->SectionObjectPointer->SharedCacheMap;
-    ASSERT(SharedCacheMap);
+    PrivateCacheMap = FileObject->PrivateCacheMap;
+    if (PrivateCacheMap != NULL)
+    {
+        KeAcquireSpinLockAtDpcLevel(&PrivateCacheMap->ReadAheadSpinLock);
+        InterlockedAnd((volatile long *)&PrivateCacheMap->UlongFlags, ~PRIVATE_CACHE_MAP_READ_AHEAD_ACTIVE);
+        KeReleaseSpinLockFromDpcLevel(&PrivateCacheMap->ReadAheadSpinLock);
+    }
+
+    ASSERT(SharedCacheMap->ReadAheadActiveCount > 0);
+    if (--SharedCacheMap->ReadAheadActiveCount == 0)
+    {
+        UninitializeEvents = SharedCacheMap->UninitializeEvent;
+        SharedCacheMap->UninitializeEvent = NULL;
+    }
+
     ASSERT(SharedCacheMap->OpenCount > 0);
 
     if (--SharedCacheMap->OpenCount == 0)
@@ -390,6 +406,17 @@ CcRosDereferenceCache (
     }
 
     KeReleaseQueuedSpinLock(LockQueueMasterLock, OldIrql);
+
+    /* No waiter may release the FCB until this reference is gone. */
+    ObDereferenceObject(FileObject);
+
+    while (UninitializeEvents != NULL)
+    {
+        NextEvent = UninitializeEvents->Next;
+        UninitializeEvents->Next = NULL;
+        KeSetEvent(&UninitializeEvents->Event, IO_NO_INCREMENT, FALSE);
+        UninitializeEvents = NextEvent;
+    }
 }
 
 NTSTATUS
@@ -1308,7 +1335,8 @@ quit:
 
 NTSTATUS
 CcRosReleaseFileCache (
-    PFILE_OBJECT FileObject)
+    PFILE_OBJECT FileObject,
+    PCACHE_UNINITIALIZE_EVENT UninitializeCompleteEvent)
 /*
  * FUNCTION: Called by the file system when a handle to a file object
  * has been closed.
@@ -1317,6 +1345,7 @@ CcRosReleaseFileCache (
     KIRQL OldIrql;
     PPRIVATE_CACHE_MAP PrivateMap;
     PROS_SHARED_CACHE_MAP SharedCacheMap;
+    BOOLEAN SignalUninitializeEvent = (UninitializeCompleteEvent != NULL);
 
     OldIrql = KeAcquireQueuedSpinLock(LockQueueMasterLock);
 
@@ -1351,6 +1380,13 @@ CcRosReleaseFileCache (
 
             ASSERT(SharedCacheMap->OpenCount > 0);
 
+            if (UninitializeCompleteEvent != NULL && SharedCacheMap->ReadAheadActiveCount != 0)
+            {
+                UninitializeCompleteEvent->Next = SharedCacheMap->UninitializeEvent;
+                SharedCacheMap->UninitializeEvent = UninitializeCompleteEvent;
+                SignalUninitializeEvent = FALSE;
+            }
+
             SharedCacheMap->OpenCount--;
             if (SharedCacheMap->OpenCount == 0)
             {
@@ -1359,6 +1395,10 @@ CcRosReleaseFileCache (
         }
     }
     KeReleaseQueuedSpinLock(LockQueueMasterLock, OldIrql);
+
+    if (SignalUninitializeEvent)
+        KeSetEvent(&UninitializeCompleteEvent->Event, IO_NO_INCREMENT, FALSE);
+
     return STATUS_SUCCESS;
 }
 
@@ -1509,7 +1549,7 @@ CcRosInitializeFileCache (
 
         if (!NT_SUCCESS(Status))
         {
-            CcRosReleaseFileCache(FileObject);
+            CcRosReleaseFileCache(FileObject, NULL);
             return Status;
         }
 
