@@ -306,7 +306,10 @@ START_TEST(NtSystemDebugControl)
     }
     else
     {
-        ok_eq_hex_test(Command, Status, STATUS_DEBUGGER_INACTIVE);
+        if (Version >= NTDDI_WINBLUE)
+            ok_eq_hex_test(Command, Status, STATUS_INFO_LENGTH_MISMATCH);
+        else
+            ok_eq_hex_test(Command, Status, STATUS_DEBUGGER_INACTIVE);
     }
 
     Command = 38; // SysDbgKdPullRemoteFile
