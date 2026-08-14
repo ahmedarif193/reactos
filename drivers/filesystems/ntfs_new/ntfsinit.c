@@ -121,9 +121,7 @@ NtfsFsdLockControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
      * See: https://learn.microsoft.com/en-us/windows-hardware/drivers/ifs/irp-mj-lock-control
      */
     PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation(Irp);
-    PFileContextBlock FileCB = IrpSp->FileObject
-        ? (PFileContextBlock)IrpSp->FileObject->FsContext
-        : NULL;
+    PFileContextBlock FileCB = NtfsGetFileContext(IrpSp->FileObject);
 
     if (!FileCB || !FileCB->StreamCB)
     {
@@ -221,7 +219,7 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     }
 
     IrpSp = IoGetCurrentIrpStackLocation(Irp);
-    FileCB = (PFileContextBlock)IrpSp->FileObject->FsContext;
+    FileCB = NtfsGetFileContext(IrpSp->FileObject);
 
     if (FileCB && !FileCB->CleanupComplete)
     {

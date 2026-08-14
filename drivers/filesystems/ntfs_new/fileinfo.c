@@ -503,6 +503,7 @@ NtfsAppendDotDirectoryEntry(_In_ PFileContextBlock FileCB,
                             _Out_ PULONG EntrySize)
 {
     NtfsFileBasicInformation Information;
+    PFSRTL_ADVANCED_FCB_HEADER Header;
     NTSTATUS Status;
 
     *EntrySize = ALIGN_UP_BY(FIELD_OFFSET(FILE_BOTH_DIR_INFORMATION, FileName) + NameLength * sizeof(WCHAR), sizeof(ULONGLONG));
@@ -512,6 +513,7 @@ NtfsAppendDotDirectoryEntry(_In_ PFileContextBlock FileCB,
     Status = NtfsFileRecordGetBasicInformation(FileCB->FileRec, &Information);
     if (!NT_SUCCESS(Status))
         return Status;
+    Header = NtfsGetCommonFcbHeader(FileCB);
 
     RtlZeroMemory(Buffer, *EntrySize);
     Buffer->NextEntryOffset = *EntrySize;
@@ -519,8 +521,8 @@ NtfsAppendDotDirectoryEntry(_In_ PFileContextBlock FileCB,
     Buffer->LastAccessTime.QuadPart = Information.LastAccessTime;
     Buffer->LastWriteTime.QuadPart = Information.LastWriteTime;
     Buffer->ChangeTime.QuadPart = Information.ChangeTime;
-    Buffer->EndOfFile = FileCB->CommonFCBHeader.FileSize;
-    Buffer->AllocationSize = FileCB->CommonFCBHeader.AllocationSize;
+    Buffer->EndOfFile = Header->FileSize;
+    Buffer->AllocationSize = Header->AllocationSize;
     Buffer->FileAttributes = Information.FileAttributes | FILE_ATTRIBUTE_DIRECTORY;
     Buffer->FileNameLength = NameLength * sizeof(WCHAR);
     RtlCopyMemory(Buffer->FileName, Name, Buffer->FileNameLength);
@@ -724,9 +726,11 @@ NtfsRefreshFileSizes(_In_ PFileContextBlock FileCB,
                      _In_opt_ PFILE_OBJECT FileObject)
 {
     PAttribute DataAttribute;
+    PFSRTL_ADVANCED_FCB_HEADER Header;
 
     if (!FileCB || !FileCB->FileRec)
         return;
+    Header = NtfsGetCommonFcbHeader(FileCB);
 
     DataAttribute = NtfsFileRecordGetAttribute(
         FileCB->FileRec,
@@ -736,44 +740,39 @@ NtfsRefreshFileSizes(_In_ PFileContextBlock FileCB,
     {
         if (DataAttribute->IsNonResident)
         {
-            FileCB->CommonFCBHeader.AllocationSize.QuadPart =
+            Header->AllocationSize.QuadPart =
                 NtfsAttributeGetPhysicalAllocationSize(
                     DataAttribute);
-            FileCB->CommonFCBHeader.FileSize.QuadPart =
+            Header->FileSize.QuadPart =
                 DataAttribute->NonResident.DataSize;
-            FileCB->CommonFCBHeader.ValidDataLength.QuadPart =
+            Header->ValidDataLength.QuadPart =
                 DataAttribute->NonResident.InitalizedDataSize;
         }
         else
         {
-            FileCB->CommonFCBHeader.AllocationSize.QuadPart =
+            Header->AllocationSize.QuadPart =
                 DataAttribute->Resident.DataLength;
-            FileCB->CommonFCBHeader.FileSize.QuadPart =
+            Header->FileSize.QuadPart =
                 DataAttribute->Resident.DataLength;
-            FileCB->CommonFCBHeader.ValidDataLength.QuadPart =
+            Header->ValidDataLength.QuadPart =
                 DataAttribute->Resident.DataLength;
         }
     }
     else
     {
-        FileCB->CommonFCBHeader.AllocationSize.QuadPart = 0;
-        FileCB->CommonFCBHeader.FileSize.QuadPart = 0;
-        FileCB->CommonFCBHeader.ValidDataLength.QuadPart = 0;
+        Header->AllocationSize.QuadPart = 0;
+        Header->FileSize.QuadPart = 0;
+        Header->ValidDataLength.QuadPart = 0;
     }
 
     if (FileObject && CcIsFileCached(FileObject))
     {
-        CcSetFileSizes(
-            FileObject,
-            (PCC_FILE_SIZES)&
-                FileCB->CommonFCBHeader.AllocationSize);
+        CcSetFileSizes(FileObject, (PCC_FILE_SIZES)&Header->AllocationSize);
     }
     /* Cc dereferences its map assuming allocation covers the data. */
-    if (FileCB->CommonFCBHeader.AllocationSize.QuadPart <
-        FileCB->CommonFCBHeader.FileSize.QuadPart)
+    if (Header->AllocationSize.QuadPart < Header->FileSize.QuadPart)
     {
-        FileCB->CommonFCBHeader.AllocationSize.QuadPart =
-            FileCB->CommonFCBHeader.FileSize.QuadPart;
+        Header->AllocationSize.QuadPart = Header->FileSize.QuadPart;
     }
 
 }
@@ -796,9 +795,9 @@ NtfsPurgeStreamCache(_In_ PFileContextBlock FileCB,
         return;
 
     KeEnterCriticalRegion();
-    ExAcquireResourceExclusiveLite(&FileCB->PagingIoResource, TRUE);
+    ExAcquireResourceExclusiveLite(NtfsGetPagingIoResource(FileCB), TRUE);
     CcPurgeCacheSection(FileObject->SectionObjectPointer, Offset, Length, FALSE);
-    ExReleaseResourceLite(&FileCB->PagingIoResource);
+    ExReleaseResourceLite(NtfsGetPagingIoResource(FileCB));
     KeLeaveCriticalRegion();
 }
 
@@ -842,7 +841,7 @@ NtfsSetRenameInformation(_In_ PVolumeContextBlock VolCB,
     TargetFileObject = IrpSp->Parameters.SetFile.FileObject;
     if (TargetFileObject)
     {
-        TargetFileCB = (PFileContextBlock)TargetFileObject->FsContext;
+        TargetFileCB = NtfsGetFileContext(TargetFileObject);
         if (!TargetFileCB || !TargetFileCB->FileRec || !(NtfsFileRecordGetHeader(TargetFileCB->FileRec)->Flags & FR_IS_DIRECTORY))
             return STATUS_INVALID_PARAMETER;
         ParentName = TargetFileCB->FileName;
@@ -1024,7 +1023,7 @@ NtfsFsdQueryInformation(_In_    PDEVICE_OBJECT VolumeDeviceObject,
     IoStack = IoGetCurrentIrpStackLocation(Irp);
     FileInfoRequest = IoStack->Parameters.QueryFile.FileInformationClass;
     FileObject = IoStack->FileObject;
-    FileCB = (PFileContextBlock)FileObject->FsContext;
+    FileCB = NtfsGetFileContext(FileObject);
     if (!FileCB)
     {
         Status = STATUS_INVALID_DEVICE_REQUEST;
@@ -1250,9 +1249,7 @@ NtfsFsdSetInformation(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
     IrpSp = IoGetCurrentIrpStackLocation(Irp);
     FileObject = IrpSp->FileObject;
-    FileCB = FileObject
-        ? (PFileContextBlock)FileObject->FsContext
-        : NULL;
+    FileCB = NtfsGetFileContext(FileObject);
     VolCB = VolumeDeviceObject
         ? (PVolumeContextBlock)
             VolumeDeviceObject->DeviceExtension
@@ -1279,9 +1276,7 @@ NtfsFsdSetInformation(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     }
 
     KeEnterCriticalRegion();
-    ExAcquireResourceExclusiveLite(
-        &FileCB->MainResource,
-        TRUE);
+    ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
     ResourceAcquired = TRUE;
     ExAcquireResourceExclusiveLite(
         &VolCB->MetadataResource,
@@ -1523,8 +1518,7 @@ NtfsFsdSetInformation(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     }
     /* A stream with no section pointer has nothing mapped over it, so there is
      * nobody for a shrink to invalidate. */
-    if (RequestedSize.QuadPart <
-            FileCB->CommonFCBHeader.FileSize.QuadPart &&
+    if (RequestedSize.QuadPart < NtfsGetCommonFcbHeader(FileCB)->FileSize.QuadPart &&
         FileObject->SectionObjectPointer != NULL &&
         !MmCanFileBeTruncated(
             FileObject->SectionObjectPointer,
@@ -1563,8 +1557,7 @@ Complete:
     }
     if (ResourceAcquired)
     {
-        ExReleaseResourceLite(
-            &FileCB->MainResource);
+        ExReleaseResourceLite(NtfsGetMainResource(FileCB));
         KeLeaveCriticalRegion();
     }
     Irp->IoStatus.Status = Status;
@@ -1595,7 +1588,7 @@ NtfsFsdDirectoryControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     ULONG BufferLength;
 
     IrpSp = IoGetCurrentIrpStackLocation(Irp);
-    FileCB = (PFileContextBlock)(IrpSp->FileObject->FsContext);
+    FileCB = NtfsGetFileContext(IrpSp->FileObject);
     VolCB = (PVolumeContextBlock)(VolumeDeviceObject->DeviceExtension);
     SystemBuffer = GetBuffer(Irp);
     BufferLength = IrpSp->Parameters.QueryDirectory.Length;

@@ -143,7 +143,7 @@ NtfsNormalizeRelatedName(
     if (!RelatedFileObject)
         return STATUS_SUCCESS;
 
-    ParentFileCB = (PFileContextBlock)RelatedFileObject->FsContext;
+    ParentFileCB = NtfsGetFileContext(RelatedFileObject);
     if (!ParentFileCB)
         return STATUS_INVALID_PARAMETER;
 
@@ -532,6 +532,28 @@ NtfsReferenceStreamContext(
     StreamCB->FileReference = FileReference;
     StreamCB->RequestedType = RequestedType;
     StreamCB->ReferenceCount = 1;
+    if (!NT_SUCCESS(ExInitializeResourceLite(&StreamCB->MainResource)))
+    {
+        if (StreamCB->RequestedStream.Buffer)
+            ExFreePool(StreamCB->RequestedStream.Buffer);
+        ExFreePool(StreamCB);
+        ExReleaseFastMutex(&VolCB->StreamListMutex);
+        return NULL;
+    }
+    if (!NT_SUCCESS(ExInitializeResourceLite(&StreamCB->PagingIoResource)))
+    {
+        ExDeleteResourceLite(&StreamCB->MainResource);
+        if (StreamCB->RequestedStream.Buffer)
+            ExFreePool(StreamCB->RequestedStream.Buffer);
+        ExFreePool(StreamCB);
+        ExReleaseFastMutex(&VolCB->StreamListMutex);
+        return NULL;
+    }
+    ExInitializeFastMutex(&StreamCB->HeaderMutex);
+    FsRtlSetupAdvancedHeader(&StreamCB->CommonFCBHeader, &StreamCB->HeaderMutex);
+    StreamCB->CommonFCBHeader.Resource = &StreamCB->MainResource;
+    StreamCB->CommonFCBHeader.PagingIoResource = &StreamCB->PagingIoResource;
+    StreamCB->CommonFCBHeader.IsFastIoPossible = FastIoIsPossible;
     FsRtlInitializeFileLock(&StreamCB->FileLock, NULL, NULL);
     InsertTailList(&VolCB->StreamList, &StreamCB->ListEntry);
     ExReleaseFastMutex(&VolCB->StreamListMutex);
@@ -558,6 +580,8 @@ NtfsDereferenceStreamContext(
     if (FreeContext)
     {
         FsRtlUninitializeFileLock(&StreamCB->FileLock);
+        ExDeleteResourceLite(&StreamCB->MainResource);
+        ExDeleteResourceLite(&StreamCB->PagingIoResource);
         if (StreamCB->RequestedStream.Buffer)
             ExFreePool(StreamCB->RequestedStream.Buffer);
         ExFreePool(StreamCB);
@@ -825,7 +849,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
     if (FileObject->FileName.Length == 0 &&
         (FileObject->RelatedFileObject == NULL ||
-         ((PFileContextBlock)FileObject->RelatedFileObject->FsContext)->IsVolumeOpen))
+         NtfsGetFileContext(FileObject->RelatedFileObject)->IsVolumeOpen))
     {
         return NtfsOpenVolume(Irp,
                               IrpSp,
@@ -1412,21 +1436,18 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
      * For more details see:
      * https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_section_object_pointers
      */
-    if (!(NtfsFileRecordGetHeader(CurrentFile)->Flags & FR_IS_DIRECTORY))
+    FileCB->StreamCB = NtfsReferenceStreamContext(VolCB,
+                                                  CurrentFile,
+                                                  FileCB->RequestedType,
+                                                  FileCB->RequestedStream);
+    if (!FileCB->StreamCB)
     {
-        FileCB->StreamCB = NtfsReferenceStreamContext(VolCB,
-                                                      CurrentFile,
-                                                      FileCB->RequestedType,
-                                                      FileCB->RequestedStream);
-        if (!FileCB->StreamCB)
-        {
-            return NtfsCompleteFailedCreate(VolumeDeviceObject,
-                                            Irp,
-                                            FileCB,
-                                            CurrentFile,
-                                            CachedRecord,
-                                            STATUS_INSUFFICIENT_RESOURCES);
-        }
+        return NtfsCompleteFailedCreate(VolumeDeviceObject,
+                                        Irp,
+                                        FileCB,
+                                        CurrentFile,
+                                        CachedRecord,
+                                        STATUS_INSUFFICIENT_RESOURCES);
     }
 
     if (!!(NtfsFileRecordGetHeader(CurrentFile)->Flags & FR_IS_DIRECTORY))
@@ -1529,35 +1550,36 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         {
             if (DataAttr->IsNonResident)
             {
-                FileCB->CommonFCBHeader.AllocationSize.QuadPart =
+                NtfsGetCommonFcbHeader(FileCB)->AllocationSize.QuadPart =
                     NtfsAttributeGetPhysicalAllocationSize(
                         DataAttr);
-                FileCB->CommonFCBHeader.FileSize.QuadPart       = DataAttr->NonResident.DataSize;
-                FileCB->CommonFCBHeader.ValidDataLength.QuadPart= DataAttr->NonResident.InitalizedDataSize;
+                NtfsGetCommonFcbHeader(FileCB)->FileSize.QuadPart = DataAttr->NonResident.DataSize;
+                NtfsGetCommonFcbHeader(FileCB)->ValidDataLength.QuadPart = DataAttr->NonResident.InitalizedDataSize;
             }
             else
             {
                 /* Cc requires AllocationSize >= FileSize; resident data is
                  * wholly contained in the record, so they are equal. */
-                FileCB->CommonFCBHeader.AllocationSize.QuadPart = DataAttr->Resident.DataLength;
-                FileCB->CommonFCBHeader.FileSize.QuadPart       = DataAttr->Resident.DataLength;
-                FileCB->CommonFCBHeader.ValidDataLength.QuadPart= DataAttr->Resident.DataLength;
+                NtfsGetCommonFcbHeader(FileCB)->AllocationSize.QuadPart = DataAttr->Resident.DataLength;
+                NtfsGetCommonFcbHeader(FileCB)->FileSize.QuadPart = DataAttr->Resident.DataLength;
+                NtfsGetCommonFcbHeader(FileCB)->ValidDataLength.QuadPart = DataAttr->Resident.DataLength;
             }
         }
         else
         {
-            FileCB->CommonFCBHeader.AllocationSize.QuadPart = 0;
-            FileCB->CommonFCBHeader.FileSize.QuadPart       = 0;
-            FileCB->CommonFCBHeader.ValidDataLength.QuadPart= 0;
+            NtfsGetCommonFcbHeader(FileCB)->AllocationSize.QuadPart = 0;
+            NtfsGetCommonFcbHeader(FileCB)->FileSize.QuadPart = 0;
+            NtfsGetCommonFcbHeader(FileCB)->ValidDataLength.QuadPart = 0;
         }
 
-        if (FileCB->StreamCB)
+        if (FileCB->StreamCB && !(NtfsFileRecordGetHeader(CurrentFile)->Flags & FR_IS_DIRECTORY))
         {
             /* Mm requires SectionObjectPointer for image and data sections. */
             FileObject->SectionObjectPointer =
                 &FileCB->StreamCB->SectionObjectPointers;
         }
-        FileObject->FsContext = FileCB;
+        FileObject->FsContext = FileCB->StreamCB;
+        FileObject->FsContext2 = FileCB;
     }
 
     /* Asking to delete a read-only file on close is refused at the open, the

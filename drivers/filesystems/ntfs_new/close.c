@@ -43,7 +43,7 @@ NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     /* Perform final teardown of the file object's context. */
     {
         PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation(Irp);
-        PFileContextBlock FileCB = (PFileContextBlock)IrpSp->FileObject->FsContext;
+        PFileContextBlock FileCB = NtfsGetFileContext(IrpSp->FileObject);
         if (FileCB)
         {
             // Cleanup normally tore the private cache map down already; a
@@ -148,6 +148,7 @@ NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 }
             }
             IrpSp->FileObject->FsContext = NULL;
+            IrpSp->FileObject->FsContext2 = NULL;
         }
     }
 

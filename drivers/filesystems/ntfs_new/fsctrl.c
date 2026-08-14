@@ -52,7 +52,7 @@ NtfsGetReparsePoint(_Inout_ PIRP Irp,
         return STATUS_INVALID_PARAMETER;
     }
 
-    FileCB = (PFileContextBlock)IrpSp->FileObject->FsContext;
+    FileCB = NtfsGetFileContext(IrpSp->FileObject);
     if (!FileCB->FileRec)
         return STATUS_INVALID_PARAMETER;
 
@@ -91,9 +91,7 @@ NtfsUpdateReparsePoint(
     NTSTATUS Status;
 
     FileObject = IrpSp->FileObject;
-    FileCB = FileObject
-        ? (PFileContextBlock)FileObject->FsContext
-        : NULL;
+    FileCB = NtfsGetFileContext(FileObject);
     VolCB = VolumeDeviceObject
         ? (PVolumeContextBlock)
             VolumeDeviceObject->DeviceExtension
@@ -144,9 +142,7 @@ NtfsUpdateReparsePoint(
     }
 
     KeEnterCriticalRegion();
-    ExAcquireResourceExclusiveLite(
-        &FileCB->MainResource,
-        TRUE);
+    ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
     ResourceAcquired = TRUE;
     Status = Delete
         ? NtfsFileRecordDeleteReparsePoint(
@@ -162,7 +158,7 @@ NtfsUpdateReparsePoint(
 
     if (ResourceAcquired)
     {
-        ExReleaseResourceLite(&FileCB->MainResource);
+        ExReleaseResourceLite(NtfsGetMainResource(FileCB));
         KeLeaveCriticalRegion();
     }
     return Status;
@@ -181,9 +177,7 @@ NtfsDeleteExternalBacking(
     NTSTATUS Status;
 
     FileObject = IrpSp->FileObject;
-    FileCB = FileObject
-        ? (PFileContextBlock)FileObject->FsContext
-        : NULL;
+    FileCB = NtfsGetFileContext(FileObject);
     VolCB = VolumeDeviceObject
         ? (PVolumeContextBlock)
             VolumeDeviceObject->DeviceExtension
@@ -213,9 +207,7 @@ NtfsDeleteExternalBacking(
         return STATUS_MEDIA_WRITE_PROTECTED;
 
     KeEnterCriticalRegion();
-    ExAcquireResourceExclusiveLite(
-        &FileCB->MainResource,
-        TRUE);
+    ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
     Status = NtfsFileRecordDeleteExternalBacking(
         FileCB->FileRec);
     if (NT_SUCCESS(Status))
@@ -226,7 +218,7 @@ NtfsDeleteExternalBacking(
             FO_FILE_MODIFIED |
             FO_FILE_SIZE_CHANGED;
     }
-    ExReleaseResourceLite(&FileCB->MainResource);
+    ExReleaseResourceLite(NtfsGetMainResource(FileCB));
     KeLeaveCriticalRegion();
     return Status;
 }
@@ -245,9 +237,7 @@ NtfsSetSparse(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     NTSTATUS Status;
 
     FileObject = IrpSp->FileObject;
-    FileCB = FileObject
-        ? (PFileContextBlock)FileObject->FsContext
-        : NULL;
+    FileCB = NtfsGetFileContext(FileObject);
     VolCB = VolumeDeviceObject
         ? (PVolumeContextBlock)
             VolumeDeviceObject->DeviceExtension
@@ -294,9 +284,7 @@ NtfsSetSparse(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     }
 
     KeEnterCriticalRegion();
-    ExAcquireResourceExclusiveLite(
-        &FileCB->MainResource,
-        TRUE);
+    ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
     Status = NtfsFileRecordSetSparse(
         FileCB->FileRec,
         FileCB->RequestedType,
@@ -308,7 +296,7 @@ NtfsSetSparse(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                              FileObject);
         FileObject->Flags |= FO_FILE_MODIFIED;
     }
-    ExReleaseResourceLite(&FileCB->MainResource);
+    ExReleaseResourceLite(NtfsGetMainResource(FileCB));
     KeLeaveCriticalRegion();
     return Status;
 }
@@ -327,9 +315,7 @@ NtfsSetZeroData(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     NTSTATUS Status;
 
     FileObject = IrpSp->FileObject;
-    FileCB = FileObject
-        ? (PFileContextBlock)FileObject->FsContext
-        : NULL;
+    FileCB = NtfsGetFileContext(FileObject);
     VolCB = VolumeDeviceObject
         ? (PVolumeContextBlock)
             VolumeDeviceObject->DeviceExtension
@@ -373,9 +359,7 @@ NtfsSetZeroData(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     }
 
     KeEnterCriticalRegion();
-    ExAcquireResourceExclusiveLite(
-        &FileCB->MainResource,
-        TRUE);
+    ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
 
     /*
      * The shared core writes the volume directly. Drain and invalidate any
@@ -418,7 +402,7 @@ NtfsSetZeroData(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     }
 
 Done:
-    ExReleaseResourceLite(&FileCB->MainResource);
+    ExReleaseResourceLite(NtfsGetMainResource(FileCB));
     KeLeaveCriticalRegion();
     return Status;
 }
@@ -442,9 +426,7 @@ NtfsQueryAllocatedRanges(
 
     Irp->IoStatus.Information = 0;
     FileObject = IrpSp->FileObject;
-    FileCB = FileObject
-        ? (PFileContextBlock)FileObject->FsContext
-        : NULL;
+    FileCB = NtfsGetFileContext(FileObject);
     if (!FileObject || !FileCB || !FileCB->FileRec)
         return STATUS_INVALID_PARAMETER;
     if (FileCB->RequestedType != TypeData ||
@@ -541,9 +523,7 @@ NtfsQueryAllocatedRanges(
     Count = Capacity;
 
     KeEnterCriticalRegion();
-    ExAcquireResourceSharedLite(
-        &FileCB->MainResource,
-        TRUE);
+    ExAcquireResourceSharedLite(NtfsGetMainResource(FileCB), TRUE);
     Status = NtfsFileRecordQueryAllocatedRanges(
         FileCB->FileRec,
         FileCB->RequestedType,
@@ -552,7 +532,7 @@ NtfsQueryAllocatedRanges(
         (ULONGLONG)Query.Length.QuadPart,
         Ranges,
         &Count);
-    ExReleaseResourceLite(&FileCB->MainResource);
+    ExReleaseResourceLite(NtfsGetMainResource(FileCB));
     KeLeaveCriticalRegion();
 
     if (NT_SUCCESS(Status) ||
@@ -612,9 +592,7 @@ NtfsGetRetrievalPointers(
 
     Irp->IoStatus.Information = 0;
     FileObject = IrpSp->FileObject;
-    FileCB = FileObject
-        ? (PFileContextBlock)FileObject->FsContext
-        : NULL;
+    FileCB = NtfsGetFileContext(FileObject);
     if (!FileObject || !FileCB || !FileCB->FileRec)
         return STATUS_INVALID_PARAMETER;
 
@@ -702,9 +680,7 @@ NtfsGetRetrievalPointers(
 
     Count = Capacity;
     KeEnterCriticalRegion();
-    ExAcquireResourceSharedLite(
-        &FileCB->MainResource,
-        TRUE);
+    ExAcquireResourceSharedLite(NtfsGetMainResource(FileCB), TRUE);
     Status = NtfsFileRecordQueryRetrievalPointers(
         FileCB->FileRec,
         RequestedType,
@@ -713,7 +689,7 @@ NtfsGetRetrievalPointers(
         &ReturnedStartingVcn,
         Extents,
         &Count);
-    ExReleaseResourceLite(&FileCB->MainResource);
+    ExReleaseResourceLite(NtfsGetMainResource(FileCB));
     KeLeaveCriticalRegion();
     if (Status == STATUS_NOT_FOUND &&
         RequestedType == TypeIndexAllocation)
@@ -1198,9 +1174,7 @@ NtfsLockOrUnlockVolume(
     _In_ BOOLEAN Lock)
 {
     PFILE_OBJECT FileObject = IrpSp->FileObject;
-    PFileContextBlock FileCB = FileObject
-        ? (PFileContextBlock)FileObject->FsContext
-        : NULL;
+    PFileContextBlock FileCB = NtfsGetFileContext(FileObject);
     PVolumeContextBlock VolCB =
         (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
     KIRQL OldIrql;
@@ -1288,9 +1262,7 @@ NtfsDismountVolume(
     _In_ PIO_STACK_LOCATION IrpSp)
 {
     PFILE_OBJECT FileObject = IrpSp->FileObject;
-    PFileContextBlock FileCB = FileObject
-        ? (PFileContextBlock)FileObject->FsContext
-        : NULL;
+    PFileContextBlock FileCB = NtfsGetFileContext(FileObject);
     PVolumeContextBlock VolCB =
         (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
     KIRQL OldIrql;
@@ -1548,9 +1520,7 @@ NtfsFsdFlushBuffers(_In_ PDEVICE_OBJECT VolumeDeviceObject,
      */
     PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation(Irp);
     PFILE_OBJECT FileObject = IrpSp->FileObject;
-    PFileContextBlock FileCB = FileObject
-        ? (PFileContextBlock)FileObject->FsContext
-        : NULL;
+    PFileContextBlock FileCB = NtfsGetFileContext(FileObject);
     IO_STATUS_BLOCK IoStatus;
     NTSTATUS Status = STATUS_SUCCESS;
 
@@ -1562,7 +1532,7 @@ NtfsFsdFlushBuffers(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
     /* Hold the file still so no new data lands while its pages are written. */
     KeEnterCriticalRegion();
-    ExAcquireResourceExclusiveLite(&FileCB->MainResource, TRUE);
+    ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
 
     if (FileObject->PrivateCacheMap)
     {
@@ -1574,7 +1544,7 @@ NtfsFsdFlushBuffers(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     if (NT_SUCCESS(Status))
         Status = NtfsDiskFlushKm();
 
-    ExReleaseResourceLite(&FileCB->MainResource);
+    ExReleaseResourceLite(NtfsGetMainResource(FileCB));
     KeLeaveCriticalRegion();
 
 Complete:

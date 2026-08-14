@@ -10,13 +10,7 @@
 
 /* GLOBALS *****************************************************************/
 
-/*
- * Serving reads from the cache requires every file object for a stream to
- * share one SECTION_OBJECT_POINTERS. Each open currently builds its own
- * context block, so a second open of a file that still has a data section
- * aliases it, and Mm faults on the mismatched page state. Until context
- * blocks are shared per stream, reads go straight to the volume.
- */
+/* Every open of a stream shares its SECTION_OBJECT_POINTERS through the SCB. */
 const BOOLEAN NtfsCachedReadsEnabled = TRUE;
 
 /* The cache manager retains this table for the lifetime of every cache map. */
@@ -305,9 +299,7 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     ReadOffset = IrpSp->Parameters.Read.ByteOffset;
     RequestedLength = IrpSp->Parameters.Read.Length;
     OriginalLength = RequestedLength;
-    FileCB = FileObject
-        ? (PFileContextBlock)FileObject->FsContext
-        : NULL;
+    FileCB = NtfsGetFileContext(FileObject);
 
     if (FileCB && FileCB->IsVolumeOpen)
         return NtfsForwardVolumeIo(VolCB, FileCB, Irp, FALSE);
@@ -335,9 +327,7 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
      * so it synchronizes on PagingIoResource instead. */
     PagingIo = BooleanFlagOn(Irp->Flags, IRP_PAGING_IO);
     KeEnterCriticalRegion();
-    ExAcquireResourceSharedLite(
-        PagingIo ? &FileCB->PagingIoResource : &FileCB->MainResource,
-        TRUE);
+    ExAcquireResourceSharedLite(PagingIo ? NtfsGetPagingIoResource(FileCB) : NtfsGetMainResource(FileCB), TRUE);
     ResourceAcquired = TRUE;
 
     if (IrpSp->MinorFunction == IRP_MN_COMPLETE)
@@ -383,18 +373,16 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         goto Complete;
     }
 
-    /* Open-only and one-page streams should not pay for cache-map setup. */
+    /* The first ordinary read establishes the stream's shared cache map. */
     if (NtfsCachedReadsEnabled &&
         RequestedLength &&
         !PagingIo &&
         !BooleanFlagOn(Irp->Flags, IRP_NOCACHE) &&
         !BooleanFlagOn(FileObject->Flags, FO_NO_INTERMEDIATE_BUFFERING) &&
         FileCB->RequestedType == TypeData &&
-        FileCB->CommonFCBHeader.FileSize.QuadPart > PAGE_SIZE &&
         FileObject->PrivateCacheMap == NULL)
     {
-        PCC_FILE_SIZES FileSizes =
-            (PCC_FILE_SIZES)&FileCB->CommonFCBHeader.AllocationSize;
+        PCC_FILE_SIZES FileSizes = (PCC_FILE_SIZES)&NtfsGetCommonFcbHeader(FileCB)->AllocationSize;
 
         CcInitializeCacheMap(FileObject,
                              FileSizes,
@@ -419,18 +407,17 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         FileObject->PrivateCacheMap != NULL &&
         FileCB->RequestedType == TypeData)
     {
-        if (ReadOffset.QuadPart >= FileCB->CommonFCBHeader.FileSize.QuadPart)
+        if (ReadOffset.QuadPart >= NtfsGetCommonFcbHeader(FileCB)->FileSize.QuadPart)
         {
             RequestedLength = 0;
             Status = STATUS_END_OF_FILE;
         }
         else
         {
-            if (ReadOffset.QuadPart + RequestedLength >
-                FileCB->CommonFCBHeader.FileSize.QuadPart)
+            if (ReadOffset.QuadPart + RequestedLength > NtfsGetCommonFcbHeader(FileCB)->FileSize.QuadPart)
             {
                 RequestedLength =
-                    (ULONG)(FileCB->CommonFCBHeader.FileSize.QuadPart -
+                    (ULONG)(NtfsGetCommonFcbHeader(FileCB)->FileSize.QuadPart -
                             ReadOffset.QuadPart);
                 OriginalLength = RequestedLength;
             }
@@ -484,8 +471,8 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     }
 
 ReadDone:
-    ExReleaseResourceLite(PagingIo ? &FileCB->PagingIoResource
-                                   : &FileCB->MainResource);
+    ExReleaseResourceLite(PagingIo ? NtfsGetPagingIoResource(FileCB)
+                                   : NtfsGetMainResource(FileCB));
     KeLeaveCriticalRegion();
     ResourceAcquired = FALSE;
 
@@ -510,9 +497,7 @@ ReadDone:
              * which no exclusive acquire here could ever be granted over.
              */
             KeEnterCriticalRegion();
-            ExAcquireResourceExclusiveLite(
-                &FileCB->MainResource,
-                TRUE);
+            ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
             ExAcquireResourceExclusiveLite(
                 &VolCB->MetadataResource,
                 TRUE);
@@ -522,8 +507,7 @@ ReadDone:
                     NTFS_BASIC_INFO_LAST_ACCESS_TIME);
             ExReleaseResourceLite(
                 &VolCB->MetadataResource);
-            ExReleaseResourceLite(
-                &FileCB->MainResource);
+            ExReleaseResourceLite(NtfsGetMainResource(FileCB));
             KeLeaveCriticalRegion();
             if (!NT_SUCCESS(TimestampStatus))
             {
@@ -550,8 +534,8 @@ ReadDone:
 Complete:
     if (ResourceAcquired)
     {
-        ExReleaseResourceLite(PagingIo ? &FileCB->PagingIoResource
-                                       : &FileCB->MainResource);
+        ExReleaseResourceLite(PagingIo ? NtfsGetPagingIoResource(FileCB)
+                                       : NtfsGetMainResource(FileCB));
         KeLeaveCriticalRegion();
     }
     if (!NT_SUCCESS(Status))

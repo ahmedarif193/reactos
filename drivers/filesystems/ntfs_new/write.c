@@ -52,7 +52,7 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         goto Complete;
     }
 
-    FileCB = (PFileContextBlock)FileObj->FsContext;
+    FileCB = NtfsGetFileContext(FileObj);
     VolCB = (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
     if (FileCB->IsVolumeOpen)
         return NtfsForwardVolumeIo(VolCB, FileCB, Irp, TRUE);
@@ -118,9 +118,9 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     PagingIo = BooleanFlagOn(Irp->Flags, IRP_PAGING_IO);
     KeEnterCriticalRegion();
     if (PagingIo)
-        ExAcquireResourceSharedLite(&FileCB->PagingIoResource, TRUE);
+        ExAcquireResourceSharedLite(NtfsGetPagingIoResource(FileCB), TRUE);
     else
-        ExAcquireResourceExclusiveLite(&FileCB->MainResource, TRUE);
+        ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
     ResourceAcquired = TRUE;
 
     ExAcquireResourceExclusiveLite(&VolCB->MetadataResource, TRUE);
@@ -176,16 +176,16 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         Irp->IoStatus.Information = 0;
     }
 
-    ExReleaseResourceLite(PagingIo ? &FileCB->PagingIoResource
-                                   : &FileCB->MainResource);
+    ExReleaseResourceLite(PagingIo ? NtfsGetPagingIoResource(FileCB)
+                                   : NtfsGetMainResource(FileCB));
     KeLeaveCriticalRegion();
     ResourceAcquired = FALSE;
 
 Complete:
     if (ResourceAcquired)
     {
-        ExReleaseResourceLite(PagingIo ? &FileCB->PagingIoResource
-                                       : &FileCB->MainResource);
+        ExReleaseResourceLite(PagingIo ? NtfsGetPagingIoResource(FileCB)
+                                       : NtfsGetMainResource(FileCB));
         KeLeaveCriticalRegion();
     }
 

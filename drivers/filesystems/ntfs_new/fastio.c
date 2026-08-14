@@ -23,7 +23,7 @@ NtfsAcqLazyWrite(PVOID Context,
     PFileContextBlock FileCB = (PFileContextBlock)Context;
 
     FsRtlEnterFileSystem();
-    if (!ExAcquireResourceSharedLite(&FileCB->MainResource, Wait))
+    if (!ExAcquireResourceSharedLite(NtfsGetMainResource(FileCB), Wait))
     {
         FsRtlExitFileSystem();
         return FALSE;
@@ -41,7 +41,7 @@ NtfsRelLazyWrite(PVOID Context)
     PFileContextBlock FileCB = (PFileContextBlock)Context;
 
     IoSetTopLevelIrp(NULL);
-    ExReleaseResourceLite(&FileCB->MainResource);
+    ExReleaseResourceLite(NtfsGetMainResource(FileCB));
     FsRtlExitFileSystem();
 }
 
@@ -53,7 +53,7 @@ NtfsAcqReadAhead(PVOID Context,
     PFileContextBlock FileCB = (PFileContextBlock)Context;
 
     FsRtlEnterFileSystem();
-    if (!ExAcquireResourceSharedLite(&FileCB->MainResource, Wait))
+    if (!ExAcquireResourceSharedLite(NtfsGetMainResource(FileCB), Wait))
     {
         FsRtlExitFileSystem();
         return FALSE;
@@ -68,7 +68,7 @@ NtfsRelReadAhead(PVOID Context)
 {
     PFileContextBlock FileCB = (PFileContextBlock)Context;
 
-    ExReleaseResourceLite(&FileCB->MainResource);
+    ExReleaseResourceLite(NtfsGetMainResource(FileCB));
     FsRtlExitFileSystem();
 }
 
@@ -388,13 +388,13 @@ NtfsFastIoAcquireFileForNtCreateSection(
     if (!FileObject)
         return FALSE;
 
-    FileCB = (PFileContextBlock)FileObject->FsContext;
+    FileCB = NtfsGetFileContext(FileObject);
     if (!FileCB)
         return FALSE;
 
     // Acquire the main resource exclusively
     KeEnterCriticalRegion();
-    return ExAcquireResourceExclusiveLite(&FileCB->MainResource, TRUE);
+    return ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
 }
 
 BOOLEAN
@@ -407,12 +407,12 @@ NtfsFastIoReleaseFileForNtCreateSection(
     if (!FileObject)
         return FALSE;
 
-    FileCB = (PFileContextBlock)FileObject->FsContext;
+    FileCB = NtfsGetFileContext(FileObject);
     if (!FileCB)
         return FALSE;
 
     // Release the main resource
-    ExReleaseResourceLite(&FileCB->MainResource);
+    ExReleaseResourceLite(NtfsGetMainResource(FileCB));
     KeLeaveCriticalRegion();
     return TRUE;
 }
