@@ -122,12 +122,41 @@ MiGrabDataSection(PSECTION_OBJECT_POINTERS SectionObjectPointer)
 
 static
 NTSTATUS
+MmpReferenceFileObjectForSegment(
+    _In_ PFILE_OBJECT FileObject,
+    _In_opt_ HANDLE FileHandle)
+{
+    PFILE_OBJECT ReferencedFileObject;
+    NTSTATUS Status;
+
+    if (FileHandle == NULL)
+    {
+        ObReferenceObject(FileObject);
+        return STATUS_SUCCESS;
+    }
+
+    Status = ObReferenceObjectByHandle(FileHandle, 0, IoFileObjectType, ExGetPreviousMode(), (PVOID*)&ReferencedFileObject, NULL);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    if (ReferencedFileObject != FileObject)
+    {
+        ObDereferenceObject(ReferencedFileObject);
+        return STATUS_INVALID_HANDLE;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
 MmpReferenceSegmentFileObject(
     _Inout_ PMM_SECTION_SEGMENT Segment,
-    _In_ PFILE_OBJECT FileObject)
+    _In_ PFILE_OBJECT FileObject,
+    _In_opt_ HANDLE FileHandle)
 {
     PLIST_ENTRY Entry;
     PMM_SECTION_FILE_OBJECT_REF FileObjectRef;
+    NTSTATUS Status;
 
     if (Segment->FileObject == FileObject)
         return STATUS_SUCCESS;
@@ -138,7 +167,13 @@ MmpReferenceSegmentFileObject(
     if (FileObjectRef == NULL)
         return STATUS_NO_MEMORY;
 
-    ObReferenceObject(FileObject);
+    Status = MmpReferenceFileObjectForSegment(FileObject, FileHandle);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(FileObjectRef, TAG_MM_SECTION_SEGMENT);
+        return Status;
+    }
+
     FileObjectRef->FileObject = FileObject;
 
     MmLockSectionSegment(Segment);
@@ -2576,7 +2611,8 @@ MmCreateDataFileSection(PSECTION *SectionObject,
                         ULONG SectionPageProtection,
                         ULONG AllocationAttributes,
                         PFILE_OBJECT FileObject,
-                        BOOLEAN GotFileHandle)
+                        BOOLEAN GotFileHandle,
+                        HANDLE FileHandleForReference)
 /*
  * Create a section backed by a data file
  */
@@ -2728,6 +2764,14 @@ grab_segment:
             return STATUS_NO_MEMORY;
         }
 
+        Status = MmpReferenceFileObjectForSegment(FileObject, FileHandleForReference);
+        if (!NT_SUCCESS(Status))
+        {
+            ExFreePoolWithTag(Segment, TAG_MM_SECTION_SEGMENT);
+            ObDereferenceObject(Section);
+            return Status;
+        }
+
         /* We are creating it */
         RtlZeroMemory(Segment, sizeof(*Segment));
         Segment->SegFlags = MM_DATAFILE_SEGMENT | MM_SEGMENT_INCREATE;
@@ -2740,6 +2784,7 @@ grab_segment:
         {
             /* Well that's bad luck. Restart it all over */
             MiReleasePfnLock(OldIrql);
+            ObDereferenceObject(FileObject);
             ExFreePoolWithTag(Segment, TAG_MM_SECTION_SEGMENT);
             goto grab_segment;
         }
@@ -2760,7 +2805,6 @@ grab_segment:
 
         ExInitializeFastMutex(&Segment->Lock);
         Segment->FileObject = FileObject;
-        ObReferenceObject(FileObject);
         Segment->SegFlags |= MM_DATAFILE_SEGMENT_FILE_REF;
 
         Segment->Image.FileOffset = 0;
@@ -2805,7 +2849,7 @@ grab_segment:
         }
         else
         {
-            Status = MmpReferenceSegmentFileObject(Segment, FileObject);
+            Status = MmpReferenceSegmentFileObject(Segment, FileObject, FileHandleForReference);
             if (!NT_SUCCESS(Status))
             {
                 KIRQL OldIrql2 = MiAcquirePfnLock();
@@ -5130,14 +5174,7 @@ MmCreateSection (OUT PVOID  * Section,
 #ifndef NEWCC
     if (!(AllocationAttributes & SEC_IMAGE))
     {
-        Status =  MmCreateDataFileSection(SectionObject,
-                                          DesiredAccess,
-                                          ObjectAttributes,
-                                          MaximumSize,
-                                          SectionPageProtection,
-                                          AllocationAttributes,
-                                          FileObject,
-                                          FileHandle != NULL);
+        Status = MmCreateDataFileSection(SectionObject, DesiredAccess, ObjectAttributes, MaximumSize, SectionPageProtection, AllocationAttributes, FileObject, FileHandle != NULL, HaveFileObject ? NULL : FileHandle);
     }
 #else
     else
