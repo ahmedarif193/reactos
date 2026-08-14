@@ -480,6 +480,15 @@ CcpEnsureVacbResidentForCopy(
                                  FileOffset,
                                  Length))
     {
+        NTSTATUS Status;
+
+        /*
+         * A non-waiting copy still initiates the page-in.  Its caller must
+         * retry after FALSE even when the storage stack completed inline.
+         */
+        Status = MmMakeDataSectionResident(SharedCacheMap->FileObject->SectionObjectPointer, FileOffset, Length, &SharedCacheMap->ValidDataLength);
+        if (!NT_SUCCESS(Status))
+            ExRaiseStatus(Status);
         return FALSE;
     }
 
