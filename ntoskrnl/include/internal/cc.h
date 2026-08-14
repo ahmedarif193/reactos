@@ -184,6 +184,7 @@ typedef struct _ROS_SHARED_CACHE_MAP
     ULONG Flags;
     PVOID Section;
     PKEVENT CreateEvent;
+    PCACHE_UNINITIALIZE_EVENT UninitializeEvent;
     PCACHE_MANAGER_CALLBACKS Callbacks;
     PVOID LazyWriteContext;
     LIST_ENTRY PrivateList;
@@ -197,6 +198,7 @@ typedef struct _ROS_SHARED_CACHE_MAP
     BOOLEAN PinAccess;
     KSPIN_LOCK CacheMapLock;
     KGUARDED_MUTEX FlushCacheLock;
+    ULONG ReadAheadActiveCount;
 #if DBG
     BOOLEAN Trace; /* enable extra trace output for this cache map and it's VACBs */
 #endif
@@ -390,7 +392,9 @@ CcRosFlushDirtyPages(
 );
 
 VOID
-CcRosDereferenceCache(PFILE_OBJECT FileObject);
+CcRosDereferenceCache(
+    PFILE_OBJECT FileObject,
+    PROS_SHARED_CACHE_MAP SharedCacheMap);
 
 NTSTATUS
 CcRosReleaseVacb(
@@ -418,7 +422,8 @@ CcRosInitializeFileCache(
 
 NTSTATUS
 CcRosReleaseFileCache(
-    PFILE_OBJECT FileObject
+    PFILE_OBJECT FileObject,
+    PCACHE_UNINITIALIZE_EVENT UninitializeCompleteEvent
 );
 
 VOID
