@@ -29,9 +29,7 @@ FltpStartingToDrainObject(
     _Inout_ PFLT_OBJECT Object
 );
 
-VOID
-FltpMiniFilterDriverUnload(
-);
+DRIVER_UNLOAD FltpMiniFilterDriverUnload;
 
 NTSTATUS
 FltpAttachFrame(
@@ -63,19 +61,20 @@ FltLoadFilter(_In_ PCUNICODE_STRING FilterName)
 {
     UNICODE_STRING DriverServiceName;
     UNICODE_STRING ServicesKey;
-    CHAR Buffer[MAX_KEY_LENGTH];
+    WCHAR Buffer[MAX_KEY_LENGTH / sizeof(WCHAR)];
+    NTSTATUS Status;
 
     /* Setup the base services key */
     RtlInitUnicodeString(&ServicesKey, SERVICES_KEY);
 
     /* Initialize the string data */
-    DriverServiceName.Length = 0;
-    DriverServiceName.Buffer = (PWCH)Buffer;
-    DriverServiceName.MaximumLength = MAX_KEY_LENGTH;
+    RtlInitEmptyUnicodeString(&DriverServiceName, Buffer, sizeof(Buffer));
 
     /* Create the full service key for this filter */
     RtlCopyUnicodeString(&DriverServiceName, &ServicesKey);
-    RtlAppendUnicodeStringToString(&DriverServiceName, FilterName);
+    Status = RtlAppendUnicodeStringToString(&DriverServiceName, FilterName);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
     /* Ask the kernel to load it for us */
     return ZwLoadDriver(&DriverServiceName);
@@ -91,19 +90,21 @@ FltUnloadFilter(_In_ PCUNICODE_STRING FilterName)
 
     UNICODE_STRING DriverServiceName;
     UNICODE_STRING ServicesKey;
-    CHAR Buffer[MAX_KEY_LENGTH];
+    WCHAR Buffer[MAX_KEY_LENGTH / sizeof(WCHAR)];
+    NTSTATUS Status;
 
     /* Setup the base services key */
     RtlInitUnicodeString(&ServicesKey, SERVICES_KEY);
 
     /* Initialize the string data */
-    DriverServiceName.Length = 0;
-    DriverServiceName.Buffer = (PWCH)Buffer;
-    DriverServiceName.MaximumLength = MAX_KEY_LENGTH;
+    RtlInitEmptyUnicodeString(&DriverServiceName, Buffer, sizeof(Buffer));
 
     /* Create the full service key for this filter */
     RtlCopyUnicodeString(&DriverServiceName, &ServicesKey);
-    RtlAppendUnicodeStringToString(&DriverServiceName, FilterName);
+    Status = RtlAppendUnicodeStringToString(&DriverServiceName, FilterName);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
     return ZwUnloadDriver(&DriverServiceName);
 }
 
@@ -114,6 +115,8 @@ FltRegisterFilter(_In_ PDRIVER_OBJECT DriverObject,
                   _Out_ PFLT_FILTER *RetFilter)
 {
     PFLT_OPERATION_REGISTRATION Callbacks;
+    PFLT_FILTER ExistingFilter;
+    PLIST_ENTRY CurrentEntry;
     PFLT_FILTER Filter;
     PFLTP_FRAME Frame;
     ULONG CallbackBufferSize;
@@ -175,6 +178,7 @@ FltRegisterFilter(_In_ PDRIVER_OBJECT DriverObject,
     Filter->Base.PointerCount = 1;
     FltpExInitializeRundownProtection(&Filter->Base.RundownRef);
     FltObjectReference(&Filter->Base);
+    InitializeListHead(&Filter->Base.PrimaryLink);
 
     /* Set the callback addresses */
     Filter->FilterUnload = Registration->FilterUnloadCallback;
@@ -275,6 +279,30 @@ FltRegisterFilter(_In_ PDRIVER_OBJECT DriverObject,
         goto Quit;
     }
 
+    /* Filter names are unique, and non-empty default altitudes may not collide. */
+    KeEnterCriticalRegion();
+    ExAcquireResourceExclusiveLite(&FilterListLock, TRUE);
+    for (CurrentEntry = FilterList.Flink; CurrentEntry != &FilterList; CurrentEntry = CurrentEntry->Flink)
+    {
+        ExistingFilter = CONTAINING_RECORD(CurrentEntry, FLT_FILTER, Base.PrimaryLink);
+        if (ExistingFilter->DriverObject == DriverObject ||
+            (Filter->DefaultAltitude.Length != 0 &&
+             RtlCompareUnicodeString(&ExistingFilter->DefaultAltitude, &Filter->DefaultAltitude, FALSE) == 0))
+        {
+            Status = STATUS_FLT_INSTANCE_ALTITUDE_COLLISION;
+            break;
+        }
+    }
+
+    if (NT_SUCCESS(Status))
+        InsertTailList(&FilterList, &Filter->Base.PrimaryLink);
+
+    ExReleaseResourceLite(&FilterListLock);
+    KeLeaveCriticalRegion();
+
+    if (!NT_SUCCESS(Status))
+        goto Quit;
+
     //
     // - Slot the filter into the correct altitude location
     // - More stuff??
@@ -307,6 +335,9 @@ Quit:
 
         // Add cleanup for context resources
 
+        if (Filter->DefaultAltitude.Buffer)
+            ExFreePoolWithTag(Filter->DefaultAltitude.Buffer, FM_TAG_UNICODE_STRING);
+
         ExDeleteResourceLite(&Filter->InstanceList.rLock);
         ExFreePoolWithTag(Filter, FM_TAG_FILTER);
     }
@@ -330,6 +361,14 @@ FltUnregisterFilter(_In_ PFLT_FILTER Filter)
         FltObjectDereference(&Filter->Base);
         return;
     }
+
+    /* Stop new lookups from finding this filter while it drains. */
+    KeEnterCriticalRegion();
+    ExAcquireResourceExclusiveLite(&FilterListLock, TRUE);
+    RemoveEntryList(&Filter->Base.PrimaryLink);
+    InitializeListHead(&Filter->Base.PrimaryLink);
+    ExReleaseResourceLite(&FilterListLock);
+    KeLeaveCriticalRegion();
 
     /* Lock the instance list */
     KeEnterCriticalRegion();
@@ -367,6 +406,9 @@ FltUnregisterFilter(_In_ PFLT_FILTER Filter)
 
     /* We're finished cleaning up now */
     FltpExRundownCompleted(&Filter->Base.RundownRef);
+
+    if (Filter->DefaultAltitude.Buffer)
+        ExFreePoolWithTag(Filter->DefaultAltitude.Buffer, FM_TAG_UNICODE_STRING);
 
     /* Hand the memory back */
     ExFreePoolWithTag(Filter, FM_TAG_FILTER);
@@ -429,9 +471,34 @@ FltpStartingToDrainObject(_Inout_ PFLT_OBJECT Object)
 }
 
 VOID
-FltpMiniFilterDriverUnload()
+NTAPI
+FltpMiniFilterDriverUnload(_In_ PDRIVER_OBJECT DriverObject)
 {
-    __debugbreak();
+    PFLT_FILTER_UNLOAD_CALLBACK FilterUnload = NULL;
+    PFLT_FILTER_UNLOAD_CALLBACK OldDriverUnload = NULL;
+    PFLT_FILTER Filter;
+    PLIST_ENTRY CurrentEntry;
+
+    KeEnterCriticalRegion();
+    ExAcquireResourceSharedLite(&FilterListLock, TRUE);
+    for (CurrentEntry = FilterList.Flink; CurrentEntry != &FilterList; CurrentEntry = CurrentEntry->Flink)
+    {
+        Filter = CONTAINING_RECORD(CurrentEntry, FLT_FILTER, Base.PrimaryLink);
+        if (Filter->DriverObject == DriverObject)
+        {
+            FilterUnload = Filter->FilterUnload;
+            OldDriverUnload = Filter->OldDriverUnload;
+            break;
+        }
+    }
+    ExReleaseResourceLite(&FilterListLock);
+    KeLeaveCriticalRegion();
+
+    if (FilterUnload)
+        (VOID)FilterUnload(0);
+
+    if (OldDriverUnload)
+        ((PDRIVER_UNLOAD)OldDriverUnload)(DriverObject);
 }
 
 
@@ -465,6 +532,8 @@ GetFilterAltitude(_In_ PFLT_FILTER Filter,
     PWCH AltBuffer = NULL;
     NTSTATUS Status;
 
+    RtlInitUnicodeString(AltitudeString, NULL);
+
     /* Get a handle to the instances key in the filter's services key */
     Status = FltpOpenFilterServicesKey(Filter,
                                        KEY_QUERY_VALUE,
@@ -472,6 +541,9 @@ GetFilterAltitude(_In_ PFLT_FILTER Filter,
                                        &RootHandle);
     if (!NT_SUCCESS(Status))
     {
+        if (Status == STATUS_OBJECT_NAME_NOT_FOUND || Status == STATUS_OBJECT_PATH_NOT_FOUND)
+            return STATUS_SUCCESS;
+
         return Status;
     }
 
@@ -548,9 +620,18 @@ GetFilterAltitude(_In_ PFLT_FILTER Filter,
                                            &BytesRequired);
             if (NT_SUCCESS(Status))
             {
+                if (BytesRequired < sizeof(WCHAR) ||
+                    BytesRequired > UNICODE_STRING_MAX_BYTES ||
+                    (BytesRequired & (sizeof(WCHAR) - 1)) != 0 ||
+                    AltBuffer[(BytesRequired / sizeof(WCHAR)) - 1] != UNICODE_NULL)
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                    goto Quit;
+                }
+
                 /* We made it, setup the return buffer */
-                AltitudeString->Length = BytesRequired;
-                AltitudeString->MaximumLength = BytesRequired;
+                AltitudeString->Length = (USHORT)(BytesRequired - sizeof(UNICODE_NULL));
+                AltitudeString->MaximumLength = (USHORT)BytesRequired;
                 AltitudeString->Buffer = AltBuffer;
             }
         }

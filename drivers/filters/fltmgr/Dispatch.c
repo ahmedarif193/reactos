@@ -133,12 +133,24 @@ HandleLoadUnloadIoctl(_In_ PDEVICE_OBJECT DeviceObject,
 
     FLT_ASSERT(ControlCode == IOCTL_FILTER_LOAD || ControlCode == IOCTL_FILTER_UNLOAD);
 
+    UNREFERENCED_PARAMETER(DeviceObject);
+
     /* Make sure the buffer is valid */
-    if (BufferLength < sizeof(FILTER_NAME))
+    if (BufferLength < FIELD_OFFSET(FILTER_NAME, FilterName))
         return STATUS_INVALID_PARAMETER;
+
+    if (!SeSinglePrivilegeCheck(RtlConvertLongToLuid(SE_LOAD_DRIVER_PRIVILEGE), Irp->RequestorMode))
+        return STATUS_PRIVILEGE_NOT_HELD;
 
     /* Convert the file name buffer into a string */
     FilterName = (PFILTER_NAME)Irp->AssociatedIrp.SystemBuffer;
+    if (FilterName->Length == 0 ||
+        (FilterName->Length & (sizeof(WCHAR) - 1)) != 0 ||
+        FilterName->Length > BufferLength - FIELD_OFFSET(FILTER_NAME, FilterName))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     Name.Length = FilterName->Length;
     Name.MaximumLength = FilterName->Length;
     Name.Buffer = (PWCH)((PCHAR)FilterName + FIELD_OFFSET(FILTER_NAME, FilterName[0]));

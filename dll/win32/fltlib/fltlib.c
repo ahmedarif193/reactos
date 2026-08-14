@@ -85,7 +85,7 @@ FilterLoadUnload(_In_z_ LPCWSTR lpFilterName,
                           NULL,
                           OPEN_EXISTING,
                           FILE_ATTRIBUTE_NORMAL,
-                          &hFltMgr);
+                          NULL);
     if (hFltMgr == INVALID_HANDLE_VALUE)
     {
         dwError = GetLastError();
