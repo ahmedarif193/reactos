@@ -2078,10 +2078,21 @@ KiArm64HandleSynchronousException(
                 CONTEXT KdbContext;
 
                 RtlZeroMemory(&ExceptionRecord64, sizeof(ExceptionRecord64));
-                ExceptionRecord64.ExceptionCode = STATUS_ACCESS_VIOLATION;
+                if ((Status == STATUS_ACCESS_VIOLATION) ||
+                    (Status == STATUS_GUARD_PAGE_VIOLATION) ||
+                    (Status == STATUS_STACK_OVERFLOW))
+                {
+                    ExceptionRecord64.ExceptionCode = Status;
+                    ExceptionRecord64.NumberParameters = 2;
+                }
+                else
+                {
+                    ExceptionRecord64.ExceptionCode = STATUS_IN_PAGE_ERROR;
+                    ExceptionRecord64.NumberParameters = 3;
+                    ExceptionRecord64.ExceptionInformation[2] = Status;
+                }
                 ExceptionRecord64.ExceptionFlags = 0;
                 ExceptionRecord64.ExceptionAddress = Context->State.Elr;
-                ExceptionRecord64.NumberParameters = 2;
                 ExceptionRecord64.ExceptionInformation[0] = KiArm64AccessTypeToExceptionInfo(WriteAccess, FALSE);
                 ExceptionRecord64.ExceptionInformation[1] = (ULONG_PTR)Context->State.FaultAddress;
 
@@ -2100,11 +2111,22 @@ KiArm64HandleSynchronousException(
             {
                 EXCEPTION_RECORD ExceptionRecord;
                 RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
-                ExceptionRecord.ExceptionCode = STATUS_ACCESS_VIOLATION;
+                if ((Status == STATUS_ACCESS_VIOLATION) ||
+                    (Status == STATUS_GUARD_PAGE_VIOLATION) ||
+                    (Status == STATUS_STACK_OVERFLOW))
+                {
+                    ExceptionRecord.ExceptionCode = Status;
+                    ExceptionRecord.NumberParameters = 2;
+                }
+                else
+                {
+                    ExceptionRecord.ExceptionCode = STATUS_IN_PAGE_ERROR;
+                    ExceptionRecord.NumberParameters = 3;
+                    ExceptionRecord.ExceptionInformation[2] = Status;
+                }
                 ExceptionRecord.ExceptionFlags = 0;
                 ExceptionRecord.ExceptionRecord = NULL;
                 ExceptionRecord.ExceptionAddress = (PVOID)(ULONG_PTR)Context->State.Elr;
-                ExceptionRecord.NumberParameters = 2;
                 ExceptionRecord.ExceptionInformation[0] = KiArm64AccessTypeToExceptionInfo(WriteAccess, FALSE);
                 ExceptionRecord.ExceptionInformation[1] = (ULONG_PTR)Context->State.FaultAddress;
 
