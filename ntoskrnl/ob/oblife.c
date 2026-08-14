@@ -53,8 +53,8 @@ ObpCreateDefaultObjectTypeSecurityDescriptor(
     ULONG WorldSidBuffer[SECURITY_MAX_SID_SIZE / sizeof(ULONG)];
     ULONG AdminSidBuffer[SECURITY_MAX_SID_SIZE / sizeof(ULONG)];
     ULONG SystemSidBuffer[SECURITY_MAX_SID_SIZE / sizeof(ULONG)];
-    SID_IDENTIFIER_AUTHORITY WorldAuthority = SECURITY_WORLD_SID_AUTHORITY;
-    SID_IDENTIFIER_AUTHORITY NtAuthority = SECURITY_NT_AUTHORITY;
+    SID_IDENTIFIER_AUTHORITY WorldAuthority = {SECURITY_WORLD_SID_AUTHORITY};
+    SID_IDENTIFIER_AUTHORITY NtAuthority = {SECURITY_NT_AUTHORITY};
     PSID WorldSid = (PSID)WorldSidBuffer;
     PSID AdminSid = (PSID)AdminSidBuffer;
     PSID SystemSid = (PSID)SystemSidBuffer;
