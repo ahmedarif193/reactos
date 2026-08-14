@@ -113,6 +113,15 @@ ExpRaiseHardError(IN NTSTATUS ErrorStatus,
 
     PAGED_CODE();
 
+    if (ValidResponseOptions > OptionCancelTryContinue)
+    {
+        if ((NtMajorVersion > 6) || ((NtMajorVersion == 6) && (NtMinorVersion >= 1)))
+            *Response = ResponseNotHandled;
+        else
+            *Response = ResponseReturnToCaller;
+        return STATUS_SUCCESS;
+    }
+
 #ifdef _M_ARM64
     DPRINT1("[arm64][harderr] raise proc=%s status=0x%08lx params=%lu mask=0x%lx opts=%lu mode=%d ready=%u disabled=%u p0=%p p1=%p\n",
             Process->ImageFileName,
@@ -130,18 +139,8 @@ ExpRaiseHardError(IN NTSTATUS ErrorStatus,
     /* Check if this error will shutdown the system */
     if (ValidResponseOptions == OptionShutdownSystem)
     {
-        /*
-         * Check if we have the privileges.
-         *
-         * NOTE: In addition to the Shutdown privilege we also check whether
-         * the caller has the Tcb privilege. The purpose is to allow only
-         * SYSTEM processes to "shutdown" the system on hard errors (BSOD)
-         * while forbidding regular processes to do so. This behaviour differs
-         * from Windows, where any user-mode process, as soon as it has the
-         * Shutdown privilege, can trigger a hard-error BSOD.
-         */
-        if (!SeSinglePrivilegeCheck(SeTcbPrivilege, PreviousMode) ||
-            !SeSinglePrivilegeCheck(SeShutdownPrivilege, PreviousMode))
+        /* Check the caller's effective shutdown privilege. */
+        if (!SeSinglePrivilegeCheck(SeShutdownPrivilege, PreviousMode))
         {
             /* No rights */
             *Response = ResponseNotHandled;
