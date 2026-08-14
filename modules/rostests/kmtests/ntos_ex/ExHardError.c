@@ -6,6 +6,7 @@
  */
 
 #include <kmt_test.h>
+#include <ntifs.h>
 
 /* TODO: don't require user interaction, test Io* routines,
  *       test NTSTATUS values with special handling */
@@ -26,6 +27,53 @@ SetParameters(
 }
 
 #define NoResponse 27
+
+static
+BOOLEAN
+DisableShutdownPrivilege(
+    OUT PHANDLE TokenHandle,
+    OUT PTOKEN_PRIVILEGES PreviousState)
+{
+    NTSTATUS Status;
+    TOKEN_PRIVILEGES NewState;
+    ULONG ReturnLength;
+
+    *TokenHandle = NULL;
+    RtlZeroMemory(PreviousState, sizeof(*PreviousState));
+
+    Status = ZwOpenProcessToken(NtCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, TokenHandle);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+
+    NewState.PrivilegeCount = 1;
+    NewState.Privileges[0].Luid = SeExports->SeShutdownPrivilege;
+    NewState.Privileges[0].Attributes = 0;
+    Status = ZwAdjustPrivilegesToken(*TokenHandle, FALSE, &NewState, sizeof(*PreviousState), PreviousState, &ReturnLength);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+    {
+        ZwClose(*TokenHandle);
+        *TokenHandle = NULL;
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static
+VOID
+RestoreShutdownPrivilege(
+    IN HANDLE TokenHandle,
+    IN PTOKEN_PRIVILEGES PreviousState)
+{
+    NTSTATUS Status;
+    ULONG ReturnLength;
+
+    Status = ZwAdjustPrivilegesToken(TokenHandle, FALSE, PreviousState, 0, NULL, &ReturnLength);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ZwClose(TokenHandle);
+}
 
 #define CheckHardErrorEx(ErrStatus, UnicodeStringMask, ResponseOption,  \
                         ExpectedStatus, ExpectedResponse,               \
@@ -91,6 +139,11 @@ TestHardError(
     UNICODE_STRING String2 = RTL_CONSTANT_STRING(StringBuffer2);
     ULONG_PTR HardErrorParameters[6];
     BOOLEAN Ret;
+    BOOLEAN TestShutdownOption;
+    BOOLEAN CheckShutdownResponse;
+    ULONG ShutdownResponse;
+    HANDLE TokenHandle;
+    TOKEN_PRIVILEGES PreviousState;
 
     String1.Length = sizeof L"Parameter1" - sizeof UNICODE_NULL;
     String1Ansi.Length = sizeof "Parameter1" - sizeof ANSI_NULL;
@@ -104,28 +157,29 @@ TestHardError(
     CheckHardError(0x40000003,                  0, OptionOk,                STATUS_SUCCESS,            ResponseNotHandled,     6, 1, 2, 3, 4, 5, 6);           // TODO: interactive on ROS
     }
 
-    // The return value is a random large value on Windows Server 2003
-    if (GetNTVersion() > _WIN32_WINNT_WS03)
+    /* The return value is a random large value on Windows Server 2003. */
+    TestShutdownOption = (GetNTVersion() > _WIN32_WINNT_WS03);
+#if !defined(_WIN64)
+    TestShutdownOption = TestShutdownOption && (GetNTVersion() < _WIN32_WINNT_WIN8);
+#endif
+    if (TestShutdownOption)
     {
+        ShutdownResponse = ResponseReturnToCaller;
+        CheckShutdownResponse = FALSE;
 #if _WIN64
         if (GetNTVersion() == _WIN32_WINNT_VISTA)
         {
-            CheckHardError(0x40000004,                  0, OptionShutdownSystem,    STATUS_PRIVILEGE_NOT_HELD, 64,     0, 0);
-        }
-        else
-        {
-            /* Response is not meaningful when privilege validation fails before
-             * the hard error is raised. */
-            CheckHardErrorEx(0x40000004,                0, OptionShutdownSystem,    STATUS_PRIVILEGE_NOT_HELD, ResponseReturnToCaller, FALSE, 0, 0);
-        }
-#else
-        /* Response is not meaningful when privilege validation fails before
-         * the hard error is raised. */
-        if (GetNTVersion() < _WIN32_WINNT_WIN8)
-        {
-            CheckHardErrorEx(0x40000004,                0, OptionShutdownSystem,    STATUS_PRIVILEGE_NOT_HELD, ResponseReturnToCaller, FALSE, 0, 0);
+            ShutdownResponse = 64;
+            CheckShutdownResponse = TRUE;
         }
 #endif
+        if (DisableShutdownPrivilege(&TokenHandle, &PreviousState))
+        {
+            CheckHardErrorEx(0x40000004, 0, OptionShutdownSystem, STATUS_PRIVILEGE_NOT_HELD, ShutdownResponse, CheckShutdownResponse, 0, 0);
+            RestoreShutdownPrivilege(TokenHandle, &PreviousState);
+        }
+        else
+            skip(1, "Could not disable SeShutdownPrivilege\n");
     }
 
     if (InteractivePart1)
