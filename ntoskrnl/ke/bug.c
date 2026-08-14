@@ -1255,6 +1255,7 @@ KeBugCheckWithTf(IN ULONG BugCheckCode,
     ULONG MessageId;
     CHAR AnsiName[128];
     BOOLEAN IsSystem, IsHardError = FALSE, Reboot = FALSE;
+    BOOLEAN IsDoubleFault;
     PCHAR HardErrCaption = NULL, HardErrMessage = NULL;
     PVOID Pc = NULL, Memory;
     PVOID DriverBase;
@@ -1262,6 +1263,8 @@ KeBugCheckWithTf(IN ULONG BugCheckCode,
     PULONG_PTR HardErrorParameters;
     NTSTATUS DumpStatus;
     KIRQL OldIrql;
+
+    IsDoubleFault = (BugCheckCode == UNEXPECTED_KERNEL_MODE_TRAP) && (BugCheckParameter1 == EXCEPTION_DOUBLE_FAULT);
 
     /* Set active bugcheck */
     KeBugCheckActive = TRUE;
@@ -1581,7 +1584,7 @@ KeBugCheckWithTf(IN ULONG BugCheckCode,
                  KiBugCheckData[4]);
 
         /* Check if the debugger isn't currently connected */
-        if (!KdDebuggerNotPresent)
+        if (!KdDebuggerNotPresent && !IsDoubleFault)
         {
             /* Check if we have a driver to blame */
             if (KiBugCheckDriver)
@@ -1710,6 +1713,10 @@ KeBugCheckWithTf(IN ULONG BugCheckCode,
         DbgUnLoadImageSymbols(NULL, (PVOID)MAXULONG_PTR, 0);
         HalReturnToFirmware(HalRebootRoutine);
     }
+
+    /* A double fault is already using the emergency IST. Do not recursively
+     * enter the debugger after the crash report and dump are complete. */
+    if (IsDoubleFault) HalHaltSystem();
 
     /* Attempt to break in the debugger (otherwise halt CPU) */
     KiBugCheckDebugBreak(DBG_STATUS_BUGCHECK_SECOND);

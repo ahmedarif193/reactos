@@ -88,7 +88,7 @@ Author:
 //
 // Double fault stack size
 //
-#define DOUBLE_FAULT_STACK_SIZE 0x2000
+#define DOUBLE_FAULT_STACK_SIZE KERNEL_STACK_SIZE
 
 //
 // CPU Vendors
