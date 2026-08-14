@@ -821,7 +821,9 @@ NdisMRegisterInterruptEx(
     KINTERRUPT_MODE    InterruptMode;
     BOOLEAN            ShareVector;
     BOOLEAN            WantsMsi;
+#if (NTDDI_VERSION >= NTDDI_WIN7)
     PROCESSOR_NUMBER   Processor = {0};
+#endif
     ULONG              ProcessorIndex;
 
     if (NdisInterruptHandle == NULL || MiniportInterruptCharacteristics == NULL)
@@ -860,12 +862,16 @@ NdisMRegisterInterruptEx(
          ProcessorIndex < (ULONG)(UCHAR)KeNumberProcessors;
          ProcessorIndex++)
     {
-        Processor.Number = (UCHAR)ProcessorIndex;
         KeInitializeDpc(&Ext->QueuedInterruptDpcs[ProcessorIndex], Ndis6DpcWrapper, Ext);
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+        Processor.Number = (UCHAR)ProcessorIndex;
         Status = KeSetTargetProcessorDpcEx(&Ext->QueuedInterruptDpcs[ProcessorIndex], &Processor);
         ASSERT(NT_SUCCESS(Status));
         if (!NT_SUCCESS(Status))
             return NDIS_STATUS_FAILURE;
+#else
+        KeSetTargetProcessorDpc(&Ext->QueuedInterruptDpcs[ProcessorIndex], (CCHAR)ProcessorIndex);
+#endif
     }
 
     /* C1/C2: the driver asks for MSI by setting IntChars.MsiSupported.
