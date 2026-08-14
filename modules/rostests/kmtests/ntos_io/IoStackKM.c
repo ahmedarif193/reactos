@@ -29,12 +29,22 @@ START_TEST(IoStackKM)
         return;
     }
 
+    /* Dynamically created devices are ready for stack operations now. */
+    Lower->Flags &= ~DO_DEVICE_INITIALIZING;
+    Upper->Flags &= ~DO_DEVICE_INITIALIZING;
+
     Attached = IoGetAttachedDeviceReference(Lower);
     ok_eq_pointer(Attached, Lower);
     ObDereferenceObject(Attached);
 
     Result = IoAttachDeviceToDeviceStack(Upper, Lower);
     ok_eq_pointer(Result, Lower);
+    if (!Result)
+    {
+        IoDeleteDevice(Upper);
+        IoDeleteDevice(Lower);
+        return;
+    }
 
     Attached = IoGetAttachedDeviceReference(Lower);
     ok_eq_pointer(Attached, Upper);

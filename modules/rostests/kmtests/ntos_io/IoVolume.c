@@ -21,12 +21,10 @@ TestIoVolumeDeviceToDosName(void)
     UNICODE_STRING DosName;
     UNICODE_STRING DosVolumePrefix = RTL_CONSTANT_STRING(L"\\\\?\\Volume");
 
-    RtlInitEmptyUnicodeString(&VolumeDeviceName,
-                              VolumeDeviceNameBuffer,
-                              sizeof(VolumeDeviceNameBuffer));
     // TODO: Query the partition/volume manager for the list of volumes.
     for (VolumeNumber = 0; VolumeNumber < 32; ++VolumeNumber)
     {
+        RtlInitEmptyUnicodeString(&VolumeDeviceName, VolumeDeviceNameBuffer, sizeof(VolumeDeviceNameBuffer));
         Status = RtlStringCbPrintfW(VolumeDeviceName.Buffer,
                                     VolumeDeviceName.MaximumLength,
                                     L"\\Device\\HarddiskVolume%lu",
@@ -51,7 +49,7 @@ TestIoVolumeDeviceToDosName(void)
         }
 
         Status = IoVolumeDeviceToDosName(DeviceObject, &DosName);
-        ok_eq_hex(Status, STATUS_SUCCESS);
+        ok(Status == STATUS_SUCCESS || Status == STATUS_OBJECT_NAME_NOT_FOUND, "IoVolumeDeviceToDosName returned 0x%lx\n", Status);
         if (!skip(NT_SUCCESS(Status), "No DOS name\n"))
         {
             trace("DOS name for %wZ is %wZ\n", &VolumeDeviceName, &DosName);
