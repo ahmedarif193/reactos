@@ -216,11 +216,11 @@ SdBusSendAppCommandPrefix(
         return Status;
     }
 
-    Status = SdBusR1Status(AppCmdResp);
-    if (!NT_SUCCESS(Status))
-    {
-        return Status;
-    }
+    /*
+     * R1 error bits can report the preceding command.  In particular, an
+     * unsupported CMD5 probe may leave ILLEGAL_COMMAND set until CMD55 returns
+     * the next R1 response.  APP_CMD is the acknowledgement for CMD55 itself.
+     */
     if (!(AppCmdResp & SD_STATUS_APP_CMD))
     {
         return STATUS_INVALID_DEVICE_REQUEST;
