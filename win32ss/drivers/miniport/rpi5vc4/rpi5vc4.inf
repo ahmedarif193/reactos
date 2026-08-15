@@ -28,10 +28,10 @@ AddReg=Rpi5Vc4_SoftwareSettings
 rpi5vc4.sys
 
 [Rpi5Vc4.Display_CopyFiles]
-framebuf.dll
+rpi5vc4disp.dll
 
 [Rpi5Vc4_SoftwareSettings]
-HKR,,InstalledDisplayDrivers,%REG_MULTI_SZ%,framebuf
+HKR,,InstalledDisplayDrivers,%REG_MULTI_SZ%,rpi5vc4disp
 HKR,,VgaCompatible,%REG_DWORD%,0
 HKR,,DefaultSettings.VRefresh,%REG_DWORD%,1
 HKR,,DefaultSettings.BitsPerPel,%REG_DWORD%,32

@@ -37,6 +37,9 @@ static DRVFN DrvFunctionTable[] =
    {INDEX_DrvBitBlt, (PFN)DrvBitBlt},
    {INDEX_DrvCopyBits, (PFN)DrvCopyBits},
    {INDEX_DrvSynchronizeSurface, (PFN)DrvSynchronizeSurface},
+#ifdef RPI5VC4_XPDM_DISPLAY
+   {INDEX_DrvEscape, (PFN)DrvEscape},
+#endif
 
 };
 
