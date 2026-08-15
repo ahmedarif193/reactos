@@ -68,7 +68,8 @@ DrvEscape(
             return 0;
 
         RequestedEscape = *(PULONG)pvIn;
-        if (RequestedEscape == RPI5VC4_ESCAPE_RENDER_CLEAR)
+        if (RequestedEscape == RPI5VC4_ESCAPE_RENDER_CLEAR ||
+            RequestedEscape == RPI5VC4_ESCAPE_RENDER_TRIANGLE)
             return Rpi5Vc4V3dExecutionSupported(Device) ? 1 : 0;
 
         if (RequestedEscape == OPENGL_GETINFO)
@@ -144,6 +145,22 @@ DrvEscape(
     {
         if (EngDeviceIoControl(Device->hDriver,
                                IOCTL_VIDEO_RPI5VC4_RENDER_CLEAR,
+                               pvIn,
+                               cjIn,
+                               pvOut,
+                               cjOut,
+                               &Returned) == 0)
+        {
+            return Returned;
+        }
+    }
+    else if (iEsc == RPI5VC4_ESCAPE_RENDER_TRIANGLE &&
+             pvIn != NULL &&
+             cjIn >= sizeof(RPI5VC4_V3D_TRIANGLE_REQUEST) &&
+             cjOut >= FIELD_OFFSET(RPI5VC4_V3D_TRIANGLE_RESULT, Pixels))
+    {
+        if (EngDeviceIoControl(Device->hDriver,
+                               IOCTL_VIDEO_RPI5VC4_RENDER_TRIANGLE,
                                pvIn,
                                cjIn,
                                pvOut,
