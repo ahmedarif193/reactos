@@ -69,11 +69,19 @@ Rpi5V3dProbe(
     DeviceExtension->V3dFlags = 0;
     DeviceExtension->V3dVersion = 0;
     DeviceExtension->V3dCoreCount = 0;
+    VideoPortZeroMemory(DeviceExtension->V3dHubIdent,
+                        sizeof(DeviceExtension->V3dHubIdent));
+    VideoPortZeroMemory(DeviceExtension->V3dCoreIdent,
+                        sizeof(DeviceExtension->V3dCoreIdent));
+    DeviceExtension->V3dMmuDebugInfo = 0;
 
-    DeviceExtension->V3dSmsBase =
-        Rpi5V3dMapRange(DeviceExtension,
-                        &DeviceExtension->V3dSmsRange,
-                        V3D_SMS_TEE_CS + sizeof(ULONG));
+    if (DeviceExtension->V3dSmsBase == NULL)
+    {
+        DeviceExtension->V3dSmsBase =
+            Rpi5V3dMapRange(DeviceExtension,
+                            &DeviceExtension->V3dSmsRange,
+                            V3D_SMS_TEE_CS + sizeof(ULONG));
+    }
     if (DeviceExtension->V3dSmsBase == NULL)
     {
         DbgPrint("RPI5VC4: V3D SMS mapping failed\n");
@@ -96,14 +104,20 @@ Rpi5V3dProbe(
     }
 
     DeviceExtension->V3dFlags |= RPI5VC4_V3D_FLAG_POWERED;
-    DeviceExtension->V3dHubBase =
-        Rpi5V3dMapRange(DeviceExtension,
-                        &DeviceExtension->V3dHubRange,
-                        V3D_MMU_DEBUG_INFO + sizeof(ULONG));
-    DeviceExtension->V3dCoreBase =
-        Rpi5V3dMapRange(DeviceExtension,
-                        &DeviceExtension->V3dCoreRange,
-                        V3D_CTL_IDENT2 + sizeof(ULONG));
+    if (DeviceExtension->V3dHubBase == NULL)
+    {
+        DeviceExtension->V3dHubBase =
+            Rpi5V3dMapRange(DeviceExtension,
+                            &DeviceExtension->V3dHubRange,
+                            V3D_MMU_DEBUG_INFO + sizeof(ULONG));
+    }
+    if (DeviceExtension->V3dCoreBase == NULL)
+    {
+        DeviceExtension->V3dCoreBase =
+            Rpi5V3dMapRange(DeviceExtension,
+                            &DeviceExtension->V3dCoreRange,
+                            V3D_CTL_IDENT2 + sizeof(ULONG));
+    }
     if (DeviceExtension->V3dHubBase == NULL ||
         DeviceExtension->V3dCoreBase == NULL)
     {
