@@ -768,6 +768,23 @@ Rpi5Vc4StartIO(
             }
             break;
 
+        case IOCTL_VIDEO_RPI5VC4_RUN_V3D_SELFTEST:
+            if (RequestPacket->OutputBufferLength <
+                sizeof(RPI5VC4_V3D_SELFTEST))
+            {
+                Status = ERROR_INSUFFICIENT_BUFFER;
+                break;
+            }
+            Status = Rpi5V3dRunSelfTest(
+                DeviceExtension,
+                (PRPI5VC4_V3D_SELFTEST)RequestPacket->OutputBuffer);
+            if (Status == NO_ERROR)
+            {
+                RequestPacket->StatusBlock->Information =
+                    sizeof(RPI5VC4_V3D_SELFTEST);
+            }
+            break;
+
         default:
             Status = ERROR_INVALID_FUNCTION;
             break;

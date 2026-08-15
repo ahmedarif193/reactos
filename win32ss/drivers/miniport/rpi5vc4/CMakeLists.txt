@@ -5,6 +5,7 @@ list(APPEND SOURCE
     rpi5vc4_crtc.c
     rpi5vc4_crtc.h
     rpi5vc4_v3d.c
+    rpi5vc4_v3d_exec.c
     rpi5vc4_v3d.h
     rpi5vc4.h)
 
