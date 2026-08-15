@@ -370,10 +370,26 @@ NTAPI
 ChpeShouldEmulateImage(
     PVOID ImageBase);
 
+USHORT
+NTAPI
+ChpeGetImageMachine(
+    PVOID ImageBase);
+
 BOOLEAN
 NTAPI
 ChpeRegisterArm64EcImage(
     PVOID ImageBase);
+
+BOOLEAN
+NTAPI
+ChpeRegisterImageCodeRanges(
+    PVOID ImageBase);
+
+BOOLEAN
+NTAPI
+ChpeMarkEcCodeRange(
+    PVOID Address,
+    SIZE_T Length);
 
 BOOLEAN
 NTAPI

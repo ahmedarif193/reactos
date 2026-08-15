@@ -97,7 +97,8 @@ typedef struct _IMAGE_CHPE_RANGE_ENTRY
 #define CHPE_TEB_CPU_AREA_OFFSET 0x1788
 #define CHPE_CONTEXT_AMD64_SIZE  0x1000
 #define CHPE_PEB_EC_CODE_BITMAP_OFFSET 0x368
-#define CHPE_EC_CODE_BITMAP_SIZE 0x100000
+#define CHPE_EC_CODE_BITMAP_SIZE (1ULL << 32)
+#define CHPE_EC_CODE_BITMAP_INITIAL_COMMIT_SIZE 0x100000
 
 /* Exported entry/dispatch trampolines (DATA exports, resolved at load time) */
 typedef struct _CHPE_DISPATCH_TABLE
@@ -130,9 +131,64 @@ static CHPE_DISPATCH_TABLE             ChpeDispatchTable;
 
 /* Whether the CHPE emulator has been loaded for this process */
 static BOOLEAN ChpeEmulatorLoaded = FALSE;
-static PVOID ChpeEcCodeBitmap;
+static PVOID volatile ChpeEcCodeBitmap;
+
+extern PVOID NtDllBase;
+extern IMAGE_DOS_HEADER __ImageBase;
 
 static const UNICODE_STRING ChpeDllName = RTL_CONSTANT_STRING(L"arm64ecfex.dll");
+
+static
+PIMAGE_ARM64EC_METADATA
+ChpepGetArm64EcMetadata(PVOID ImageBase);
+
+static
+PIMAGE_NT_HEADERS
+ChpepGetImageNtHeader(PVOID ImageBase)
+{
+    MEMORY_BASIC_INFORMATION MemoryInfo;
+    SIZE_T ReturnLength;
+    NTSTATUS Status;
+
+    if (!ImageBase)
+        return NULL;
+
+    Status = ZwQueryVirtualMemory(NtCurrentProcess(), ImageBase, MemoryBasicInformation, &MemoryInfo, sizeof(MemoryInfo), &ReturnLength);
+    if (!NT_SUCCESS(Status) ||
+        MemoryInfo.AllocationBase != ImageBase ||
+        MemoryInfo.Type != MEM_IMAGE)
+    {
+        return NULL;
+    }
+
+    return RtlImageNtHeader(ImageBase);
+}
+
+static
+USHORT
+ChpepGetImageMachine(PVOID ImageBase)
+{
+    PIMAGE_NT_HEADERS NtHeader;
+
+    if (!ImageBase)
+        return IMAGE_FILE_MACHINE_UNKNOWN;
+
+    NtHeader = ChpepGetImageNtHeader(ImageBase);
+    if (!NtHeader)
+        return IMAGE_FILE_MACHINE_UNKNOWN;
+
+    if (NtHeader->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64 && ChpepGetArm64EcMetadata(ImageBase))
+        return IMAGE_FILE_MACHINE_ARM64EC;
+
+    return NtHeader->FileHeader.Machine;
+}
+
+USHORT
+NTAPI
+ChpeGetImageMachine(PVOID ImageBase)
+{
+    return ChpepGetImageMachine(ImageBase);
+}
 
 static
 PCHPE_V2_CPU_AREA_INFO *
@@ -166,33 +222,94 @@ ChpepGetPebEcCodeBitmapSlot(VOID)
 }
 
 static
+ULONG_PTR
+ChpepEcCodeBitmapOffset(ULONG_PTR Address)
+{
+    return (Address >> 15) & 0x1FFFFFFFFFFF8ULL;
+}
+
+static
 NTSTATUS
 ChpepEnsureProcessData(VOID)
 {
     PVOID *EcCodeBitmapSlot = ChpepGetPebEcCodeBitmapSlot();
     PVOID EcCodeBitmap = NULL;
+    PVOID ExistingBitmap;
     SIZE_T RegionSize = CHPE_EC_CODE_BITMAP_SIZE;
     NTSTATUS Status;
 
-    if (ChpeEcCodeBitmap)
+    ExistingBitmap = InterlockedCompareExchangePointer(EcCodeBitmapSlot, NULL, NULL);
+    if (ExistingBitmap)
     {
-        *EcCodeBitmapSlot = ChpeEcCodeBitmap;
+        InterlockedCompareExchangePointer(&ChpeEcCodeBitmap, ExistingBitmap, NULL);
         return STATUS_SUCCESS;
     }
 
-    Status = NtAllocateVirtualMemory(NtCurrentProcess(),
-                                     &EcCodeBitmap,
-                                     0,
-                                     &RegionSize,
-                                     MEM_RESERVE | MEM_COMMIT,
-                                     PAGE_READWRITE);
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &EcCodeBitmap, 0, &RegionSize, MEM_RESERVE, PAGE_READWRITE);
     if (!NT_SUCCESS(Status))
         return Status;
 
-    RtlZeroMemory(EcCodeBitmap, CHPE_EC_CODE_BITMAP_SIZE);
-    ChpeEcCodeBitmap = EcCodeBitmap;
-    *EcCodeBitmapSlot = ChpeEcCodeBitmap;
+    RegionSize = CHPE_EC_CODE_BITMAP_INITIAL_COMMIT_SIZE;
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &EcCodeBitmap, 0, &RegionSize, MEM_COMMIT, PAGE_READWRITE);
+    if (!NT_SUCCESS(Status))
+    {
+        SIZE_T FreeSize = 0;
+
+        ZwFreeVirtualMemory(NtCurrentProcess(), &EcCodeBitmap, &FreeSize, MEM_RELEASE);
+        return Status;
+    }
+
+    ExistingBitmap = InterlockedCompareExchangePointer(EcCodeBitmapSlot, EcCodeBitmap, NULL);
+    if (ExistingBitmap)
+    {
+        SIZE_T FreeSize = 0;
+
+        ZwFreeVirtualMemory(NtCurrentProcess(), &EcCodeBitmap, &FreeSize, MEM_RELEASE);
+        EcCodeBitmap = ExistingBitmap;
+    }
+
+    InterlockedCompareExchangePointer(&ChpeEcCodeBitmap, EcCodeBitmap, NULL);
     return STATUS_SUCCESS;
+}
+
+static
+BOOLEAN
+ChpepCommitEcCodeBitmapRange(ULONG_PTR Address,
+                             SIZE_T Length)
+{
+    PBYTE BitmapBase;
+    ULONG_PTR StartOffset, EndOffset, CommitStart, CommitEnd;
+    PVOID CommitBase;
+    SIZE_T CommitSize;
+    NTSTATUS Status;
+
+    if (!Length)
+        return TRUE;
+
+    if (!NT_SUCCESS(ChpepEnsureProcessData()))
+        return FALSE;
+
+    if (Address + Length - 1 < Address)
+        return FALSE;
+
+    BitmapBase = *ChpepGetPebEcCodeBitmapSlot();
+    if (!BitmapBase)
+        return FALSE;
+
+    StartOffset = ChpepEcCodeBitmapOffset(Address);
+    EndOffset = ChpepEcCodeBitmapOffset(Address + Length - 1) + sizeof(ULONGLONG);
+    if (EndOffset < StartOffset || EndOffset > CHPE_EC_CODE_BITMAP_SIZE)
+        return FALSE;
+
+    CommitStart = StartOffset & ~((ULONG_PTR)PAGE_SIZE - 1);
+    CommitEnd = (EndOffset + PAGE_SIZE - 1) & ~((ULONG_PTR)PAGE_SIZE - 1);
+    if (CommitEnd < CommitStart)
+        return FALSE;
+
+    CommitBase = BitmapBase + CommitStart;
+    CommitSize = CommitEnd - CommitStart;
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &CommitBase, 0, &CommitSize, MEM_COMMIT, PAGE_READWRITE);
+    return NT_SUCCESS(Status) || Status == STATUS_ALREADY_COMMITTED;
 }
 
 static
@@ -209,10 +326,7 @@ ChpepFreeProcessData(VOID)
         PVOID BaseAddress = ChpeEcCodeBitmap;
         SIZE_T RegionSize = 0;
 
-        NtFreeVirtualMemory(NtCurrentProcess(),
-                            &BaseAddress,
-                            &RegionSize,
-                            MEM_RELEASE);
+        ZwFreeVirtualMemory(NtCurrentProcess(), &BaseAddress, &RegionSize, MEM_RELEASE);
         ChpeEcCodeBitmap = NULL;
     }
 }
@@ -222,97 +336,194 @@ PIMAGE_ARM64EC_METADATA
 ChpepGetArm64EcMetadata(PVOID ImageBase)
 {
     PIMAGE_NT_HEADERS NtHeader;
-    PVOID LoadConfig;
-    ULONG ConfigSize, Offset, SizeOfImage;
+    PIMAGE_LOAD_CONFIG_DIRECTORY LoadConfig;
+    ULONG ConfigSize, SizeOfImage;
     ULONG_PTR ImageStart, ImageEnd, Candidate;
     PIMAGE_ARM64EC_METADATA Metadata;
 
     if (!ImageBase)
         return NULL;
 
-    NtHeader = RtlImageNtHeader(ImageBase);
+    NtHeader = ChpepGetImageNtHeader(ImageBase);
     if (!NtHeader ||
-        NtHeader->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64)
+        (NtHeader->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 &&
+         NtHeader->FileHeader.Machine != IMAGE_FILE_MACHINE_ARM64EC))
     {
         return NULL;
     }
 
     SizeOfImage = NtHeader->OptionalHeader.SizeOfImage;
-    ImageStart = (ULONG_PTR)ImageBase;
-    ImageEnd = ImageStart + SizeOfImage;
-
-    LoadConfig = RtlImageDirectoryEntryToData(ImageBase,
-                                              TRUE,
-                                              IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG,
-                                              &ConfigSize);
-    if (!LoadConfig)
+    if (SizeOfImage < sizeof(*Metadata))
         return NULL;
 
-    for (Offset = 0; Offset + sizeof(PVOID) <= ConfigSize; Offset += sizeof(PVOID))
+    ImageStart = (ULONG_PTR)ImageBase;
+    ImageEnd = ImageStart + SizeOfImage;
+    if (ImageEnd < ImageStart)
+        return NULL;
+
+    LoadConfig = RtlImageDirectoryEntryToData(ImageBase, TRUE, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG, &ConfigSize);
+    if (!LoadConfig ||
+        ConfigSize < RTL_SIZEOF_THROUGH_FIELD(IMAGE_LOAD_CONFIG_DIRECTORY, CHPEMetadataPointer))
+        return NULL;
+
+    Candidate = (ULONG_PTR)LoadConfig->CHPEMetadataPointer;
+    if (Candidate < ImageStart || Candidate > ImageEnd - sizeof(*Metadata))
+        return NULL;
+
+    Metadata = (PIMAGE_ARM64EC_METADATA)Candidate;
+    if (Metadata->Version != 1 ||
+        !Metadata->CodeMap ||
+        !Metadata->CodeMapCount ||
+        Metadata->CodeMap >= SizeOfImage ||
+        Metadata->CodeMapCount >
+        (SizeOfImage - Metadata->CodeMap) / sizeof(IMAGE_CHPE_RANGE_ENTRY))
     {
-        Candidate = *(PULONG_PTR)((PBYTE)LoadConfig + Offset);
-        if (Candidate < ImageStart ||
-            Candidate > ImageEnd - sizeof(IMAGE_ARM64EC_METADATA))
-        {
-            continue;
-        }
-
-        Metadata = (PIMAGE_ARM64EC_METADATA)Candidate;
-        if (Metadata->Version != 1 ||
-            !Metadata->CodeMap ||
-            !Metadata->CodeMapCount ||
-            Metadata->CodeMap >= SizeOfImage ||
-            Metadata->CodeMapCount >
-            (SizeOfImage - Metadata->CodeMap) / sizeof(IMAGE_CHPE_RANGE_ENTRY))
-        {
-            continue;
-        }
-
-        return Metadata;
+        return NULL;
     }
 
-    return NULL;
+    return Metadata;
 }
 
 static
-VOID
-ChpepMarkEcCodePage(ULONG_PTR Page)
+BOOLEAN
+ChpepSetEcCodePage(ULONG_PTR Page,
+                   BOOLEAN Mark)
 {
     PVOID BitmapBase;
-    PULONGLONG Bitmap;
+    volatile LONGLONG *Bitmap;
     ULONG_PTR Index;
+    ULONGLONG Mask;
 
     BitmapBase = *ChpepGetPebEcCodeBitmapSlot();
     if (!BitmapBase)
-        return;
+        return FALSE;
 
     Index = Page / 64;
     if (((Index + 1) * sizeof(ULONGLONG)) > CHPE_EC_CODE_BITMAP_SIZE)
-        return;
+        return FALSE;
 
-    Bitmap = (PULONGLONG)BitmapBase;
-    Bitmap[Index] |= 1ULL << (Page & 63);
+    Bitmap = (volatile LONGLONG *)BitmapBase;
+    Mask = 1ULL << (Page & 63);
+    if (Mark)
+        InterlockedOr64(&Bitmap[Index], (LONGLONG)Mask);
+    else
+        InterlockedAnd64(&Bitmap[Index], (LONGLONG)~Mask);
+
+    return TRUE;
 }
 
 static
-VOID
-ChpepMarkEcCodeRange(
-    ULONG_PTR ImageBase,
-    ULONG StartRva,
-    ULONG Length)
+BOOLEAN
+ChpepSetEcCodeRange(
+    ULONG_PTR BaseAddress,
+    SIZE_T Offset,
+    SIZE_T Length,
+    BOOLEAN Mark)
 {
-    ULONG_PTR Page, EndPage;
+    ULONG_PTR Address, EndAddress, Page, EndPage;
 
     if (!Length)
-        return;
+        return TRUE;
 
-    Page = (ImageBase + StartRva) >> PAGE_SHIFT;
-    EndPage = (ImageBase + StartRva + Length - 1) >> PAGE_SHIFT;
+    if (Offset > MAXULONG_PTR - BaseAddress)
+        return FALSE;
+
+    Address = BaseAddress + Offset;
+    if (Length - 1 > MAXULONG_PTR - Address)
+        return FALSE;
+
+    EndAddress = Address + Length - 1;
+    if (!ChpepCommitEcCodeBitmapRange(Address, Length))
+        return FALSE;
+
+    Page = Address >> PAGE_SHIFT;
+    EndPage = EndAddress >> PAGE_SHIFT;
 
     for (; Page <= EndPage; ++Page)
     {
-        ChpepMarkEcCodePage(Page);
+        if (!ChpepSetEcCodePage(Page, Mark))
+            return FALSE;
     }
+
+    return TRUE;
+}
+
+static
+BOOLEAN
+ChpepMarkEcCodeRange(ULONG_PTR BaseAddress,
+                     SIZE_T Offset,
+                     SIZE_T Length)
+{
+    return ChpepSetEcCodeRange(BaseAddress, Offset, Length, TRUE);
+}
+
+BOOLEAN
+NTAPI
+ChpeMarkEcCodeRange(PVOID Address,
+                    SIZE_T Length)
+{
+    if (!Address)
+        return FALSE;
+
+    return ChpepMarkEcCodeRange((ULONG_PTR)Address, 0, Length);
+}
+
+BOOLEAN
+NTAPI
+RtlIsEcCode(ULONG_PTR CodeAddress)
+{
+    PVOID BitmapBase;
+    PULONGLONG Bitmap;
+    ULONG_PTR Page, Index;
+
+    BitmapBase = *ChpepGetPebEcCodeBitmapSlot();
+    if (!BitmapBase)
+        return FALSE;
+
+    Page = CodeAddress >> PAGE_SHIFT;
+    Index = Page / 64;
+    if (((Index + 1) * sizeof(ULONGLONG)) > CHPE_EC_CODE_BITMAP_SIZE)
+        return FALSE;
+
+    if (!ChpepCommitEcCodeBitmapRange(CodeAddress, 1))
+        return FALSE;
+
+    Bitmap = (PULONGLONG)BitmapBase;
+    return (Bitmap[Index] & (1ULL << (Page & 63))) != 0;
+}
+
+static
+BOOLEAN
+ChpepSetImageExecuteSections(PVOID ImageBase,
+                             PIMAGE_NT_HEADERS NtHeader,
+                             BOOLEAN Mark)
+{
+    PIMAGE_SECTION_HEADER Section;
+    ULONG Index, StartRva, Length, SizeOfImage;
+
+    SizeOfImage = NtHeader->OptionalHeader.SizeOfImage;
+    Section = IMAGE_FIRST_SECTION(NtHeader);
+    for (Index = 0; Index < NtHeader->FileHeader.NumberOfSections; ++Index)
+    {
+        if (!(Section[Index].Characteristics & IMAGE_SCN_MEM_EXECUTE))
+            continue;
+
+        StartRva = Section[Index].VirtualAddress;
+        Length = Section[Index].Misc.VirtualSize;
+        if (Length < Section[Index].SizeOfRawData)
+            Length = Section[Index].SizeOfRawData;
+
+        if (!Length || StartRva >= SizeOfImage)
+            continue;
+
+        if (Length > SizeOfImage - StartRva)
+            Length = SizeOfImage - StartRva;
+
+        if (!ChpepSetEcCodeRange((ULONG_PTR)ImageBase, StartRva, Length, Mark))
+            return FALSE;
+    }
+
+    return TRUE;
 }
 
 static
@@ -389,35 +600,90 @@ ChpeRegisterArm64EcImage(PVOID ImageBase)
     PIMAGE_ARM64EC_METADATA Metadata;
     PIMAGE_CHPE_RANGE_ENTRY Range;
     PIMAGE_NT_HEADERS NtHeader;
-    ULONG Index;
+    ULONG Index, StartRva, Length, SizeOfImage;
 
     Metadata = ChpepGetArm64EcMetadata(ImageBase);
     if (!Metadata)
         return FALSE;
 
-    NtHeader = RtlImageNtHeader(ImageBase);
+    NtHeader = ChpepGetImageNtHeader(ImageBase);
     if (!NtHeader)
         return FALSE;
 
+    SizeOfImage = NtHeader->OptionalHeader.SizeOfImage;
     if (!NT_SUCCESS(ChpepEnsureProcessData()))
         return FALSE;
 
-    ChpepPatchArm64EcDispatchHelpers(ImageBase,
-                                     NtHeader->OptionalHeader.SizeOfImage,
-                                     Metadata);
+    ChpepPatchArm64EcDispatchHelpers(ImageBase, SizeOfImage, Metadata);
 
     Range = (PIMAGE_CHPE_RANGE_ENTRY)((PBYTE)ImageBase + Metadata->CodeMap);
     for (Index = 0; Index < Metadata->CodeMapCount; ++Index)
     {
-        if (Range[Index].StartOffset & 1)
-        {
-            ChpepMarkEcCodeRange((ULONG_PTR)ImageBase,
-                                 Range[Index].StartOffset & ~1UL,
-                                 Range[Index].Length);
-        }
+        StartRva = Range[Index].StartOffset & ~1UL;
+        Length = Range[Index].Length;
+
+        if (!Length)
+            continue;
+
+        if (StartRva >= SizeOfImage || Length > SizeOfImage - StartRva)
+            return FALSE;
+
+        if (!ChpepSetEcCodeRange((ULONG_PTR)ImageBase, StartRva, Length, (Range[Index].StartOffset & 1) != 0))
+            return FALSE;
     }
 
     return TRUE;
+}
+
+BOOLEAN
+NTAPI
+ChpeRegisterImageCodeRanges(PVOID ImageBase)
+{
+    PIMAGE_NT_HEADERS NtHeader;
+    USHORT Machine;
+
+    NtHeader = ChpepGetImageNtHeader(ImageBase);
+    if (!NtHeader)
+        return FALSE;
+
+    Machine = ChpepGetImageMachine(ImageBase);
+    if (Machine == IMAGE_FILE_MACHINE_ARM64EC)
+        return ChpeRegisterArm64EcImage(ImageBase);
+
+    if (!NT_SUCCESS(ChpepEnsureProcessData()))
+        return FALSE;
+
+    if (Machine == IMAGE_FILE_MACHINE_AMD64)
+        return ChpepSetImageExecuteSections(ImageBase, NtHeader, FALSE);
+
+    if (Machine == IMAGE_FILE_MACHINE_ARM64)
+        return ChpepSetImageExecuteSections(ImageBase, NtHeader, TRUE);
+
+    return TRUE;
+}
+
+static
+VOID
+ChpepRegisterNativeRuntimeImages(VOID)
+{
+    PPEB Peb = NtCurrentPeb();
+    PLIST_ENTRY ListHead, ListEntry;
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+    PVOID CurrentNtDllBase = &__ImageBase;
+
+    ChpeRegisterImageCodeRanges(CurrentNtDllBase);
+    if (NtDllBase && NtDllBase != CurrentNtDllBase)
+        ChpeRegisterImageCodeRanges(NtDllBase);
+
+    if (!Peb->Ldr)
+        return;
+
+    ListHead = &Peb->Ldr->InLoadOrderModuleList;
+    for (ListEntry = ListHead->Flink; ListEntry != ListHead; ListEntry = ListEntry->Flink)
+    {
+        LdrEntry = CONTAINING_RECORD(ListEntry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
+        ChpeRegisterImageCodeRanges(LdrEntry->DllBase);
+    }
 }
 
 static
@@ -604,6 +870,8 @@ ChpeInitializeProcess(VOID)
     if (!NT_SUCCESS(Status))
         return Status;
 
+    ChpepRegisterNativeRuntimeImages();
+
     Status = pChpeProcessInit();
     if (!NT_SUCCESS(Status))
     {
@@ -689,11 +957,12 @@ ChpeIsChpeProcess(VOID)
     if (Peb == NULL || Peb->ImageBaseAddress == NULL)
         return FALSE;
 
-    NtHeader = RtlImageNtHeader(Peb->ImageBaseAddress);
+    NtHeader = ChpepGetImageNtHeader(Peb->ImageBaseAddress);
     if (NtHeader == NULL)
         return FALSE;
 
-    return (NtHeader->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64);
+    return NtHeader->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64 ||
+           NtHeader->FileHeader.Machine == IMAGE_FILE_MACHINE_ARM64EC;
 }
 
 /*
