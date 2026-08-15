@@ -1351,6 +1351,13 @@ static const UNICODE_STRING ChpeArm64EcRedirectImports[] =
 
 static
 BOOLEAN
+ChpepIsX64CallableImageMachine(USHORT Machine)
+{
+    return (Machine == IMAGE_FILE_MACHINE_AMD64 || Machine == IMAGE_FILE_MACHINE_ARM64EC);
+}
+
+static
+BOOLEAN
 ChpepIsPureAmd64Image(PVOID ImageBase)
 {
     return ChpepGetImageMachine(ImageBase) == IMAGE_FILE_MACHINE_AMD64 &&
@@ -1417,6 +1424,44 @@ ChpeShouldRedirectImport(PVOID ImportBase,
     return FALSE;
 }
 
+NTSTATUS
+NTAPI
+ChpeValidateImportThunk(PVOID ImportBase,
+                        PVOID ExportBase,
+                        ULONG_PTR Function,
+                        PCSTR DllName,
+                        PCSTR ImportName,
+                        ULONG Ordinal,
+                        BOOLEAN IsOrdinal)
+{
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+    USHORT ExportMachine;
+
+    if (!ChpeIsChpeProcess() || !ChpepIsPureAmd64Image(ImportBase))
+        return STATUS_SUCCESS;
+
+    if (NT_SUCCESS(LdrFindEntryForAddress((PVOID)Function, &LdrEntry)))
+        ExportBase = LdrEntry->DllBase;
+
+    ExportMachine = ChpepGetImageMachine(ExportBase);
+    if (ChpepIsX64CallableImageMachine(ExportMachine))
+        return STATUS_SUCCESS;
+
+    if (IsOrdinal)
+    {
+        DPRINT1("CHPE: refusing AMD64 import %s!#%lu at %p: target image machine 0x%04x is not x64-callable\n",
+                DllName ? DllName : "<unknown>", Ordinal, (PVOID)Function, ExportMachine);
+    }
+    else
+    {
+        DPRINT1("CHPE: refusing AMD64 import %s!%s at %p: target image machine 0x%04x is not x64-callable\n",
+                DllName ? DllName : "<unknown>", ImportName ? ImportName : "<unknown>",
+                (PVOID)Function, ExportMachine);
+    }
+
+    return STATUS_INVALID_IMAGE_FORMAT;
+}
+
 BOOLEAN
 NTAPI
 ChpeGetArm64EcRedirection(PVOID ImageBase,
@@ -1463,6 +1508,132 @@ ChpeGetArm64EcRedirection(PVOID ImageBase,
     }
 
     return FALSE;
+}
+
+BOOLEAN
+NTAPI
+ChpeGetArm64EcNativeFunction(PVOID ExportBase,
+                             ULONG_PTR Function,
+                             PULONG_PTR NativeFunction)
+{
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+    PIMAGE_NT_HEADERS ExportNtHeader;
+    ULONG_PTR FunctionRva, NativeFunctionRva;
+
+    if (!ExportBase || !Function || !NativeFunction)
+        return FALSE;
+
+    ExportNtHeader = ChpepGetImageNtHeader(ExportBase);
+    if (!ExportNtHeader || Function < (ULONG_PTR)ExportBase ||
+        Function - (ULONG_PTR)ExportBase >= ExportNtHeader->OptionalHeader.SizeOfImage)
+    {
+        if (!NT_SUCCESS(LdrFindEntryForAddress((PVOID)Function, &LdrEntry)))
+            return FALSE;
+
+        ExportBase = LdrEntry->DllBase;
+        ExportNtHeader = ChpepGetImageNtHeader(ExportBase);
+        if (!ExportNtHeader)
+            return FALSE;
+    }
+
+    if (ChpepGetImageMachine(ExportBase) != IMAGE_FILE_MACHINE_ARM64EC)
+        return FALSE;
+
+    FunctionRva = Function - (ULONG_PTR)ExportBase;
+    if (FunctionRva >= ExportNtHeader->OptionalHeader.SizeOfImage ||
+        !ChpeGetArm64EcRedirection(ExportBase, FunctionRva, &NativeFunctionRva))
+    {
+        return FALSE;
+    }
+
+    *NativeFunction = (ULONG_PTR)ExportBase + NativeFunctionRva;
+    return ChpeRegisterArm64EcImage(ExportBase);
+}
+
+BOOLEAN
+NTAPI
+ChpePatchArm64EcAuxiliaryIat(PVOID ImportBase,
+                             PVOID ExportBase,
+                             PIMAGE_THUNK_DATA Thunk,
+                             ULONG_PTR Function)
+{
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+    PIMAGE_NT_HEADERS ImportNtHeader;
+    PIMAGE_DATA_DIRECTORY IatDirectory;
+    PIMAGE_ARM64EC_METADATA ImportMetadata;
+    ULONG ImportSizeOfImage, IatRva, IatSize;
+    ULONG_PTR ThunkRva, AuxiliaryIatRva, AuxiliaryIatCopyRva, ThunkOffset;
+    ULONG_PTR AuxiliaryFunction, NativeFunction;
+    PIMAGE_THUNK_DATA AuxiliaryThunk, AuxiliaryCopyThunk;
+    PVOID FunctionBase;
+
+    if (!Thunk || !Function || ChpepGetImageMachine(ImportBase) != IMAGE_FILE_MACHINE_ARM64EC)
+        return FALSE;
+
+    ImportNtHeader = ChpepGetImageNtHeader(ImportBase);
+    ImportMetadata = ChpepGetArm64EcMetadata(ImportBase);
+    if (!ImportNtHeader || !ImportMetadata || !ImportMetadata->AuxiliaryIat)
+        return FALSE;
+
+    ImportSizeOfImage = ImportNtHeader->OptionalHeader.SizeOfImage;
+    IatDirectory = &ImportNtHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IAT];
+    IatRva = IatDirectory->VirtualAddress;
+    IatSize = IatDirectory->Size;
+    if (!IatRva || IatSize < sizeof(PVOID) || IatRva >= ImportSizeOfImage || IatSize > ImportSizeOfImage - IatRva)
+        return FALSE;
+
+    if (ImportMetadata->AuxiliaryIat >= ImportSizeOfImage || IatSize > ImportSizeOfImage - ImportMetadata->AuxiliaryIat)
+        return FALSE;
+
+    if (ImportMetadata->AuxiliaryIatCopy &&
+        (ImportMetadata->AuxiliaryIatCopy >= ImportSizeOfImage ||
+         IatSize > ImportSizeOfImage - ImportMetadata->AuxiliaryIatCopy))
+    {
+        return FALSE;
+    }
+
+    if ((ULONG_PTR)Thunk < (ULONG_PTR)ImportBase)
+        return FALSE;
+
+    ThunkRva = (ULONG_PTR)Thunk - (ULONG_PTR)ImportBase;
+    if (ThunkRva < IatRva || ThunkRva > IatRva + IatSize - sizeof(PVOID))
+        return FALSE;
+
+    ThunkOffset = ThunkRva - IatRva;
+    AuxiliaryIatRva = ImportMetadata->AuxiliaryIat + ThunkOffset;
+    AuxiliaryThunk = (PIMAGE_THUNK_DATA)((PBYTE)ImportBase + AuxiliaryIatRva);
+
+    AuxiliaryCopyThunk = AuxiliaryThunk;
+    if (ImportMetadata->AuxiliaryIatCopy)
+    {
+        AuxiliaryIatCopyRva = ImportMetadata->AuxiliaryIatCopy + ThunkOffset;
+        AuxiliaryCopyThunk = (PIMAGE_THUNK_DATA)((PBYTE)ImportBase + AuxiliaryIatCopyRva);
+    }
+
+    /* A zero copy entry denotes data. Function entries contain an ARM64-callable import checker thunk. */
+    AuxiliaryFunction = AuxiliaryCopyThunk->u1.Function;
+    if (!AuxiliaryFunction)
+    {
+        AuxiliaryFunction = Function;
+    }
+    else if (ChpeGetArm64EcNativeFunction(ExportBase, Function, &NativeFunction))
+    {
+        AuxiliaryFunction = NativeFunction;
+    }
+    else
+    {
+        FunctionBase = ExportBase;
+        if (NT_SUCCESS(LdrFindEntryForAddress((PVOID)Function, &LdrEntry)))
+            FunctionBase = LdrEntry->DllBase;
+
+        if (ChpepGetImageMachine(FunctionBase) == IMAGE_FILE_MACHINE_ARM64)
+            AuxiliaryFunction = Function;
+    }
+
+    if (!ChpeRegisterArm64EcImage(ImportBase))
+        return FALSE;
+
+    return ChpepWritePointer(&AuxiliaryThunk->u1.Function, (PVOID)AuxiliaryFunction);
 }
 
 BOOLEAN
