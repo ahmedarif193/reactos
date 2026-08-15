@@ -47,6 +47,9 @@ KiIdleSchedule(IN PKPRCB Prcb)
     if (Thread != NULL)
         return Thread;
 
+    if (KiIsProcessorParked(Prcb))
+        return Prcb->IdleThread;
+
 #ifdef CONFIG_SMP
     KiReleasePrcbLock(Prcb);
     KiBalanceReadyQueues(Prcb, KiBalanceIdle);
@@ -109,8 +112,12 @@ KiFindIdealProcessor(
     _In_ UCHAR OriginalIdealProcessor)
 {
     PKPRCB OriginalIdealPrcb;
-    KAFFINITY NodeMask;
+    KAFFINITY NodeMask, NonParkedSet;
     ULONG Processor;
+
+    NonParkedSet = KiGetNonParkedProcessorSet();
+    if (ProcessorSet & NonParkedSet)
+        ProcessorSet &= NonParkedSet;
 
     /* Check if we can use the original ideal processor */
     if (ProcessorSet & AFFINITY_MASK(OriginalIdealProcessor))
@@ -390,7 +397,8 @@ KiBalanceReadyQueues(
 
     TargetCpu = Target->Number;
     if ((TargetCpu >= (ULONG)KeNumberProcessors) ||
-        !(KeActiveProcessors & Target->SetMember))
+        !(KeActiveProcessors & Target->SetMember) ||
+        KiIsProcessorParked(Target))
     {
         return FALSE;
     }
@@ -591,7 +599,7 @@ KiSelectNextProcessor(
     _In_ PKTHREAD Thread,
     _Out_ PKAFFINITY IdleRequest)
 {
-    KAFFINITY PreferredSet, IdleSet;
+    KAFFINITY PreferredSet, IdleSet, NonParkedSet;
     ULONG Processor, ProcessorCount, StartProcessor, Offset;
     ULONG BestProcessor, RunnableLoad, BestLoad;
     KPRIORITY DispatchPriority, BestPriority;
@@ -600,6 +608,9 @@ KiSelectNextProcessor(
     /* Start with the affinity */
     PreferredSet = KiThreadAffinityMask(Thread) & KeActiveProcessors;
     ASSERT(PreferredSet != 0);
+    NonParkedSet = KiGetNonParkedProcessorSet();
+    if (PreferredSet & NonParkedSet)
+        PreferredSet &= NonParkedSet;
     *IdleRequest = 0;
 
 #ifdef _M_ARM64

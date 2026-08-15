@@ -574,6 +574,20 @@ KiQuantumEnd(VOID)
         }
     }
 
+    /* A processor-aggregator request removes this CPU from ordinary
+     * placement without taking it offline. Move non-affinitized work to a
+     * non-parked CPU and let the local idle thread enter the selected C-state.
+     * Explicitly affinitized work is intentionally allowed to keep the CPU
+     * active, as required by the ACPI logical-processor-idling contract. */
+    if (!Prcb->NextThread &&
+        Thread != Prcb->IdleThread &&
+        KiIsProcessorParked(Prcb) &&
+        (KiThreadAffinityMask(Thread) & KiGetNonParkedProcessorSet()))
+    {
+        Prcb->IdleThread->State = Standby;
+        Prcb->NextThread = Prcb->IdleThread;
+    }
+
     /* Release the thread lock */
     KiReleaseThreadLock(Thread);
 
