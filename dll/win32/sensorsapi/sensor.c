@@ -73,6 +73,26 @@ static BOOL sensor_kind_from_channel(const REACTOS_SENSOR_CHANNEL_INFORMATION *c
             kind->scale = 1.0;
             return TRUE;
 
+        case REACTOS_SENSOR_TYPE_CURRENT:
+            if (channel->Unit != REACTOS_SENSOR_UNIT_MICROAMPS)
+                return FALSE;
+            kind->category = &SENSOR_CATEGORY_ELECTRICAL;
+            kind->type = &SENSOR_TYPE_CURRENT;
+            kind->data_key = &SENSOR_DATA_TYPE_CURRENT_AMPS;
+            kind->unit = REACTOS_SENSOR_UNIT_MICROAMPS;
+            kind->scale = 0.000001;
+            return TRUE;
+
+        case REACTOS_SENSOR_TYPE_POWER:
+            if (channel->Unit != REACTOS_SENSOR_UNIT_MILLIWATTS)
+                return FALSE;
+            kind->category = &SENSOR_CATEGORY_ELECTRICAL;
+            kind->type = &SENSOR_TYPE_ELECTRICAL_POWER;
+            kind->data_key = &SENSOR_DATA_TYPE_ELECTRICAL_POWER_WATTS;
+            kind->unit = REACTOS_SENSOR_UNIT_MILLIWATTS;
+            kind->scale = 0.001;
+            return TRUE;
+
         default:
             return FALSE;
     }
