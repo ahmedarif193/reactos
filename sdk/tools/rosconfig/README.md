@@ -8,10 +8,11 @@ with gcc, clang or MSVC.
 ## Usage
 
 ```
-./menuconfig.sh              # Linux/macOS: open the configuration UI
-menuconfig.cmd               # Windows: same
+./menuconfig.sh --build-dir output-Clang-arm64-debug
+menuconfig.cmd --build-dir output-Clang-arm64-debug
+                              # open one output tree's configuration UI
 ./configure.sh menuconfig    # open the UI, then configure with the result
-configure.cmd menuconfig     # Windows: same, restarting with the saved choices
+configure.cmd menuconfig     # Windows: same
 ./menuconfig.sh --self-test  # build the tool and run its non-interactive tests
 menuconfig.cmd --self-test   # same test on Windows
 ```
@@ -51,26 +52,28 @@ expressions are not parsed.
 
 ## How it works
 
-Everything lives in the untracked `.rosconfig/` directory at the source
-root (the tool's own tmp folder, listed in `.gitignore`):
+The compiled host tool lives in the ignored `.rosconfig/` directory at the
+source root. Persistent selections live below the output tree they configure:
 
 | File | Purpose |
 | --- | --- |
-| `.rosconfig/rosconfig(.exe)` | the compiled host tool (built on demand) |
-| `.rosconfig/rosconfig*.(o|obj)` and stamps | incremental host-build state |
-| `.rosconfig/config.cache` | **the cache** — your persistent selections |
-| `.rosconfig/overrides.cmake` | generated CMake fragment |
+| `$SOURCE/.rosconfig/rosconfig(.exe)` | the compiled host tool (built on demand) |
+| `$SOURCE/.rosconfig/rosconfig*.(o|obj)` and stamps | incremental host-build state |
+| `$BUILD/.rosconfig/config.cache` | persistent selections for one output tree |
+| `$BUILD/.rosconfig/overrides.cmake` | that tree's generated CMake fragment |
 
 - `configure.sh` / `configure.cmd` compile the tool if needed, create the
-  cache with defaults when it does not exist yet, and regenerate
-  `overrides.cmake` from it on every run. The entry point, utilities,
+  selected output tree's cache when it does not exist yet, persist its target
+  architecture/toolchain/build-type identity, and regenerate `overrides.cmake`
+  on every run. The entry point, utilities,
   configuration model, terminal UI and self-test are separate translation
   units, so the host build recompiles only the changed part before relinking.
 - On Windows, an already generated `rosconfig.exe` remains usable when no host
   compiler is installed; `build.cmd` reports that it is using the cached tool.
-- `/PreLoad.cmake` (auto-loaded by CMake) includes `overrides.cmake` if it
-  exists, so the selections also apply to trees configured with plain
-  `cmake`. Without a cache nothing changes: the stock defaults from
+- `/PreLoad.cmake` (auto-loaded by CMake) includes
+  `$CMAKE_BINARY_DIR/.rosconfig/overrides.cmake` if it exists. A configuration
+  from another output tree can therefore never leak into this tree or a
+  managed nested build. Without a cache nothing changes: the stock defaults from
   `sdk/cmake/config.cmake` apply.
 - Precedence, highest first:
   1. explicit `-D` options on the configure/cmake command line
@@ -79,13 +82,17 @@ root (the tool's own tmp folder, listed in `.gitignore`):
   3. the menuconfig cache;
   4. built-in defaults.
 - The target selections `ARCH`, `TOOLCHAIN` and `BUILD_TYPE` are "meta"
-  options: they are consumed by the configure scripts themselves (choice
-  of toolchain and output directory) and are never passed to CMake
-  directly.
+  options. They record the identity encoded by the selected output directory,
+  are refreshed by the configure scripts, and are never passed to CMake
+  directly. To select another target, pass the corresponding configure flag
+  and use its output directory instead of repurposing an existing tree.
 - Bool options can hold the value `auto`, which means "do not emit to
   CMake" — the conditional defaults in `sdk/cmake/config.cmake` (e.g.
   `DBG` following the build type) stay in charge.
-- Changed selections take effect the next time a tree is configured
+- `menuconfig.sh` / `menuconfig.cmd` must be run from an output directory or
+  given `--build-dir <output-directory>`; they do not consult source-global
+  target state.
+- Changed selections take effect the next time that tree is configured
   (`configure.sh` always starts from a fresh CMake cache).
 
 ## Target profiles and modules
@@ -190,7 +197,7 @@ Visibility follows the build path that actually consumes each setting:
 ## Tool CLI (used by the scripts)
 
 ```
-rosconfig --def <file> --cache <file> [mode] [--override K=V ...]
+rosconfig --def <file> --cache <file> [mode] [--set K=V ...] [--override K=V ...]
 rosconfig --self-test
   --menu             interactive UI (default mode)
   --ask-configure    ask on clean exit whether the calling configure workflow
@@ -200,6 +207,8 @@ rosconfig --self-test
   --generate <out>   write the CMake pre-load fragment
   --get <KEY>        print one value (used e.g. for ENABLE_FEX_ARM64EC)
   --self-test        run built-in parser/model/profile/cache/generator checks
+  --set K=V          validate and set a value before the selected mode;
+                     --defaults persists it to the cache
   --override K=V     transient value for dependency evaluation only,
                      e.g. the ARCH chosen on the command line
 ```

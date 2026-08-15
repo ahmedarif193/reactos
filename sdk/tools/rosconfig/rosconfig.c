@@ -14,7 +14,30 @@
 
 static void usage(FILE *f)
 {
-    fprintf(f, "rosconfig " ROSCONFIG_VERSION " - menuconfig-style configurator for the ReactOS build\n" "\n" "Usage: rosconfig --def <file> --cache <file> [mode] [options]\n" "       rosconfig --self-test\n" "\n" "Modes (default: --menu):\n" "  --menu             interactive terminal UI\n" "  --defaults         create/refresh the cache file (keeps existing values)\n" "  --generate <out>   write a CMake pre-load fragment from the cache\n" "  --get <KEY>        print the cached (or default) value of an option\n" "  --self-test        run parser/model/cache/generator tests and exit\n" "\n" "Options:\n" "  --ask-configure    on clean menu exit, ask whether configure should run\n" "  --override K=V     transient value used for dependency evaluation in\n" "                     --generate/--get (e.g. the ARCH chosen on the\n" "                     configure command line); not written to the cache\n" "  --version          print version and exit\n" "  --help             this text\n");
+    static const char text[] =
+        "rosconfig " ROSCONFIG_VERSION " - menuconfig-style configurator for the ReactOS build\n"
+        "\n"
+        "Usage: rosconfig --def <file> --cache <file> [mode] [options]\n"
+        "       rosconfig --self-test\n"
+        "\n"
+        "Modes (default: --menu):\n"
+        "  --menu             interactive terminal UI\n"
+        "  --defaults         create/refresh the cache file (keeps existing values)\n"
+        "  --generate <out>   write a CMake pre-load fragment from the cache\n"
+        "  --get <KEY>        print the cached (or default) value of an option\n"
+        "  --self-test        run parser/model/cache/generator tests and exit\n"
+        "\n"
+        "Options:\n"
+        "  --ask-configure    on clean menu exit, ask whether configure should run\n"
+        "  --set K=V          set a validated value before running the selected mode;\n"
+        "                     --defaults persists it to the cache\n"
+        "  --override K=V     transient value used for dependency evaluation in\n"
+        "                     --generate/--get (e.g. the ARCH chosen on the\n"
+        "                     configure command line); not written to the cache\n"
+        "  --version          print version and exit\n"
+        "  --help             this text\n";
+
+    fputs(text, f);
 }
 int main(int argc, char **argv)
 {
@@ -22,9 +45,13 @@ int main(int argc, char **argv)
     const char *cache_path = NULL;
     const char *gen_path = NULL;
     const char *get_key = NULL;
+    const char **sets;
     enum { M_MENU, M_DEFAULTS, M_GENERATE, M_GET, M_SELF_TEST } mode = M_MENU;
     int ask_configure = 0;
+    int nsets = 0;
     int i;
+
+    sets = xmalloc((size_t)argc * sizeof(*sets));
 
     for (i = 1; i < argc; i++) {
         const char *a = argv[i];
@@ -46,6 +73,8 @@ int main(int argc, char **argv)
             mode = M_SELF_TEST;
         } else if (strcmp(a, "--ask-configure") == 0) {
             ask_configure = 1;
+        } else if (strcmp(a, "--set") == 0 && i + 1 < argc) {
+            sets[nsets++] = argv[++i];
         } else if (strcmp(a, "--override") == 0 && i + 1 < argc) {
             add_override(argv[++i]);
         } else if (strcmp(a, "--version") == 0) {
@@ -70,6 +99,8 @@ int main(int argc, char **argv)
 
     load_def(def_path);
     cache_load(cache_path);
+    for (i = 0; i < nsets; i++)
+        set_config_value(sets[i]);
 
     switch (mode) {
         case M_DEFAULTS:
