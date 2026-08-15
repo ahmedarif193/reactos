@@ -54,6 +54,11 @@ elseif(ARCH STREQUAL "arm64")
 81 = winsxs\arm64_microsoft.windows.gdiplus_6595b64144ccf1df_1.0.14393.0_none_deadbeef
 84 = system32\spool\prtprocs\arm64
 ]=])
+    if(ENABLE_FEX_ARM64EC)
+        string(APPEND REACTOS_DFF_ARCH_DIRECTORIES [=[
+85 = system32\arm64ec
+]=])
+    endif()
 endif()
 
 configure_file(
