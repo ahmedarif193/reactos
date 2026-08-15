@@ -727,6 +727,12 @@ void gl_set_triangle_function( GLcontext *ctx )
              && ctx->Texture.Current2D->WrapT==GL_REPEAT
              && ctx->Texture.Current2D->Image[0]->Format==GL_RGB
              && ctx->Texture.Current2D->Image[0]->Border==0
+             && ctx->Texture.Current2D->Image[0]->Width2!=0
+             && ctx->Texture.Current2D->Image[0]->Height2!=0
+             && (ctx->Texture.Current2D->Image[0]->Width2 &
+                 (ctx->Texture.Current2D->Image[0]->Width2-1))==0
+             && (ctx->Texture.Current2D->Image[0]->Height2 &
+                 (ctx->Texture.Current2D->Image[0]->Height2-1))==0
              && (ctx->Texture.EnvMode==GL_DECAL
                  || ctx->Texture.EnvMode==GL_REPLACE)
              && ctx->Hint.PerspectiveCorrection==GL_FASTEST

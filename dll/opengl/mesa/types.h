@@ -293,12 +293,12 @@ struct gl_texture_image {
 				 */
 	GLenum IntFormat;	/* Internal format as given by the user */
 	GLuint Border;		/* 0 or 1 */
-	GLuint Width;		/* = 2^WidthLog2 + 2*Border */
-	GLuint Height;		/* = 2^HeightLog2 + 2*Border */
+	GLuint Width;		/* Image width including border */
+	GLuint Height;		/* Image height including border */
 	GLuint Width2;		/* = Width - 2*Border */
 	GLuint Height2;		/* = Height - 2*Border */
-	GLuint WidthLog2;	/* = log2(Width2) */
-	GLuint HeightLog2;	/* = log2(Height2) */
+	GLuint WidthLog2;	/* = floor(log2(max(Width2, 1))) */
+	GLuint HeightLog2;	/* = floor(log2(max(Height2, 1))) */
 	GLuint MaxLog2;		/* = MAX(WidthLog2, HeightLog2) */
 	GLubyte *Data;		/* Image data as unsigned bytes */
 
@@ -1350,6 +1350,7 @@ struct gl_context {
 	GLenum ErrorValue;		/* Last error code */
 
 	GLboolean DirectContext;	/* Important for real GLX */
+	GLboolean AllowNpotTextures; /* Driver accepts non-power-of-two images */
 
 	/* Miscellaneous */
         GLuint NewState;        /* bitwise OR of NEW_* flags */

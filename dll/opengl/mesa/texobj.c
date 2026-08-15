@@ -217,7 +217,8 @@ void gl_test_texture_object_completeness( struct gl_texture_object *t )
    t->Complete = GL_TRUE;  /* be optimistic */
 
    /* Always need level zero image */
-   if (!t->Image[0] || !t->Image[0]->Data) {
+   if (!t->Image[0] || !t->Image[0]->Data ||
+       !t->Image[0]->Width2 || !t->Image[0]->Height2) {
       t->Complete = GL_FALSE;
       return;
    }

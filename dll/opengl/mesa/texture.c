@@ -365,6 +365,23 @@ static void palette_sample(const struct gl_texture_object *tObj,
 
 
 
+static GLboolean is_power_of_two( GLint value )
+{
+   return value > 0 && (value & (value - 1)) == 0;
+}
+
+
+
+static GLint repeat_texel( GLint coordinate, GLint size )
+{
+   coordinate %= size;
+   if (coordinate < 0)
+      coordinate += size;
+   return coordinate;
+}
+
+
+
 /*
  * Given 1-D texture image and an (i) texel column coordinate, return the
  * texel color.
@@ -431,7 +448,7 @@ static void sample_1d_nearest( const struct gl_texture_object *tObj,
                                GLubyte *red, GLubyte *green,
                                GLubyte *blue, GLubyte *alpha )
 {
-   GLint width = img->Width2;  /* without border, power of two */
+   GLint width = img->Width2;  /* without border */
    GLint i;
    GLubyte *texel;
 
@@ -439,15 +456,20 @@ static void sample_1d_nearest( const struct gl_texture_object *tObj,
    if (tObj->WrapS==GL_REPEAT) {
       /* s limited to [0,1) */
       /* i limited to [0,width-1] */
-      i = (GLint) (s * width);
-      if (s<0.0F)  i -= 1;
-      i &= (width-1);
+      if (is_power_of_two(width)) {
+         i = (GLint) (s * width);
+         if (s<0.0F)  i -= 1;
+         i &= (width-1);
+      }
+      else {
+         i = repeat_texel((GLint) floor(s * width), width);
+      }
    }
    else {
       /* s limited to [0,1] */
       /* i limited to [0,width-1] */
       if (s<0.0F)        i = 0;
-      else if (s>1.0F)   i = width-1;
+      else if (s>=1.0F)  i = width-1;
       else               i = (GLint) (s * width);
    }
 
@@ -508,10 +530,15 @@ static void sample_1d_linear( const struct gl_texture_object *tObj,
    GLfloat u;
    GLint i0border, i1border;
 
-   u = s * width;
+   u = (tObj->WrapS==GL_REPEAT ? s : CLAMP(s, 0.0F, 1.0F)) * width;
    if (tObj->WrapS==GL_REPEAT) {
       i0 = ((GLint) floor(u - 0.5F)) % width;
-      i1 = (i0 + 1) & (width-1);
+      if (is_power_of_two(width))
+         i1 = (i0 + 1) & (width-1);
+      else {
+         i0 = repeat_texel(i0, width);
+         i1 = repeat_texel(i0 + 1, width);
+      }
       i0border = i1border = 0;
    }
    else {
@@ -527,7 +554,8 @@ static void sample_1d_linear( const struct gl_texture_object *tObj,
       i0border = i1border = 0;
    }
    else {
-      i0 &= (width-1);
+      if (is_power_of_two(width))
+         i0 &= (width-1);
    }
 
    {
@@ -842,8 +870,8 @@ static void sample_2d_nearest( const struct gl_texture_object *tObj,
                                GLubyte *blue, GLubyte *alpha )
 {
    GLint imgWidth = img->Width;  /* includes border */
-   GLint width = img->Width2;    /* without border, power of two */
-   GLint height = img->Height2;  /* without border, power of two */
+   GLint width = img->Width2;    /* without border */
+   GLint height = img->Height2;  /* without border */
    GLint i, j;
    GLubyte *texel;
 
@@ -851,15 +879,20 @@ static void sample_2d_nearest( const struct gl_texture_object *tObj,
    if (tObj->WrapS==GL_REPEAT) {
       /* s limited to [0,1) */
       /* i limited to [0,width-1] */
-      i = (GLint) (s * width);
-      if (s<0.0F)  i -= 1;
-      i &= (width-1);
+      if (is_power_of_two(width)) {
+         i = (GLint) (s * width);
+         if (s<0.0F)  i -= 1;
+         i &= (width-1);
+      }
+      else {
+         i = repeat_texel((GLint) floor(s * width), width);
+      }
    }
    else {
       /* s limited to [0,1] */
       /* i limited to [0,width-1] */
       if (s<=0.0F)      i = 0;
-      else if (s>1.0F)  i = width-1;
+      else if (s>=1.0F) i = width-1;
       else              i = (GLint) (s * width);
    }
 
@@ -867,15 +900,20 @@ static void sample_2d_nearest( const struct gl_texture_object *tObj,
    if (tObj->WrapT==GL_REPEAT) {
       /* t limited to [0,1) */
       /* j limited to [0,height-1] */
-      j = (GLint) (t * height);
-      if (t<0.0F)  j -= 1;
-      j &= (height-1);
+      if (is_power_of_two(height)) {
+         j = (GLint) (t * height);
+         if (t<0.0F)  j -= 1;
+         j &= (height-1);
+      }
+      else {
+         j = repeat_texel((GLint) floor(t * height), height);
+      }
    }
    else {
       /* t limited to [0,1] */
       /* j limited to [0,height-1] */
       if (t<=0.0F)      j = 0;
-      else if (t>1.0F)  j = height-1;
+      else if (t>=1.0F) j = height-1;
       else              j = (GLint) (t * height);
    }
 
@@ -937,10 +975,15 @@ static void sample_2d_linear( const struct gl_texture_object *tObj,
    GLint i0border, j0border, i1border, j1border;
    GLfloat u, v;
 
-   u = s * width;
+   u = (tObj->WrapS==GL_REPEAT ? s : CLAMP(s, 0.0F, 1.0F)) * width;
    if (tObj->WrapS==GL_REPEAT) {
       i0 = ((GLint) floor(u - 0.5F)) % width;
-      i1 = (i0 + 1) & (width-1);
+      if (is_power_of_two(width))
+         i1 = (i0 + 1) & (width-1);
+      else {
+         i0 = repeat_texel(i0, width);
+         i1 = repeat_texel(i0 + 1, width);
+      }
       i0border = i1border = 0;
    }
    else {
@@ -950,10 +993,15 @@ static void sample_2d_linear( const struct gl_texture_object *tObj,
       i1border = (i1<0) | (i1>=width);
    }
 
-   v = t * height;
+   v = (tObj->WrapT==GL_REPEAT ? t : CLAMP(t, 0.0F, 1.0F)) * height;
    if (tObj->WrapT==GL_REPEAT) {
       j0 = ((GLint) floor(v - 0.5F)) % height;
-      j1 = (j0 + 1) & (height-1);
+      if (is_power_of_two(height))
+         j1 = (j0 + 1) & (height-1);
+      else {
+         j0 = repeat_texel(j0, height);
+         j1 = repeat_texel(j0 + 1, height);
+      }
       j0border = j1border = 0;
    }
    else {
@@ -972,8 +1020,10 @@ static void sample_2d_linear( const struct gl_texture_object *tObj,
       j0border = j1border = 0;
    }
    else {
-      i0 &= (width-1);
-      j0 &= (height-1);
+      if (is_power_of_two(width))
+         i0 &= (width-1);
+      if (is_power_of_two(height))
+         j0 &= (height-1);
    }
 
    {
@@ -1359,11 +1409,15 @@ void gl_set_texture_sampler( struct gl_texture_object *t )
             else {
                ASSERT(t->MinFilter==GL_NEAREST);
                if (t->WrapS==GL_REPEAT && t->WrapT==GL_REPEAT
-                   && t->Image[0]->Border==0 && t->Image[0]->Format==GL_RGB) {
+                   && t->Image[0]->Border==0 && t->Image[0]->Format==GL_RGB
+                   && is_power_of_two(t->Image[0]->Width2)
+                   && is_power_of_two(t->Image[0]->Height2)) {
                   t->SampleFunc = opt_sample_rgb_2d;
                }
                else if (t->WrapS==GL_REPEAT && t->WrapT==GL_REPEAT
-                   && t->Image[0]->Border==0 && t->Image[0]->Format==GL_RGBA) {
+                   && t->Image[0]->Border==0 && t->Image[0]->Format==GL_RGBA
+                   && is_power_of_two(t->Image[0]->Width2)
+                   && is_power_of_two(t->Image[0]->Height2)) {
                   t->SampleFunc = opt_sample_rgba_2d;
                }
                else
