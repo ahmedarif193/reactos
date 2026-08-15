@@ -311,6 +311,7 @@ LdrpHandleOneNewFormatImportDescriptor(IN LPWSTR DllPath OPTIONAL,
 
     /* Load the module for this entry */
     Status = LdrpLoadImportModule(DllPath,
+                                  LdrEntry->DllBase,
                                   BoundImportName,
                                   &DllLdrEntry,
                                   &AlreadyLoaded);
@@ -384,6 +385,7 @@ LdrpHandleOneNewFormatImportDescriptor(IN LPWSTR DllPath OPTIONAL,
 
         /* Load the module */
         Status = LdrpLoadImportModule(DllPath,
+                                      LdrEntry->DllBase,
                                       ForwarderName,
                                       &ForwarderLdrEntry,
                                       &AlreadyLoaded);
@@ -572,6 +574,7 @@ LdrpHandleOneOldFormatImportDescriptor(IN LPWSTR DllPath OPTIONAL,
 
     /* Load the module associated to it */
     Status = LdrpLoadImportModule(DllPath,
+                                  LdrEntry->DllBase,
                                   ImportName,
                                   &DllLdrEntry,
                                   &AlreadyLoaded);
@@ -856,6 +859,7 @@ LdrpWalkImportDescriptor(IN LPWSTR DllPath OPTIONAL,
 NTSTATUS
 NTAPI
 LdrpLoadImportModule(IN PWSTR DllPath OPTIONAL,
+                     IN PVOID ImportBase,
                      IN LPSTR ImportName,
                      OUT PLDR_DATA_TABLE_ENTRY *DataTableEntry,
                      OUT PBOOLEAN Existing)
@@ -871,7 +875,7 @@ LdrpLoadImportModule(IN PWSTR DllPath OPTIONAL,
     UNICODE_STRING RedirectedImpDescName;
     BOOLEAN RedirectedDll;
 
-    DPRINT("LdrpLoadImportModule('%S' '%s' %p %p)\n", DllPath, ImportName, DataTableEntry, Existing);
+    DPRINT("LdrpLoadImportModule('%S' %p '%s' %p %p)\n", DllPath, ImportBase, ImportName, DataTableEntry, Existing);
 
     RedirectedDll = FALSE;
     RtlInitEmptyUnicodeString(&RedirectedImpDescName, NULL, 0);
