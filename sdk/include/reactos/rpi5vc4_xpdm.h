@@ -24,7 +24,7 @@
 #define RPI5VC4_ESCAPE_RENDER_CLEAR 0x5250434C /* "RPCL" */
 #define RPI5VC4_ESCAPE_RENDER_TRIANGLE 0x52505452 /* "RPTR" */
 
-#define RPI5VC4_XPDM_ABI_VERSION 4
+#define RPI5VC4_XPDM_ABI_VERSION 5
 
 #define RPI5VC4_V3D_FLAG_SMS_MAPPED  (1u << 0)
 #define RPI5VC4_V3D_FLAG_POWERED     (1u << 1)
@@ -142,11 +142,16 @@ typedef struct _RPI5VC4_V3D_CLEAR_RESULT
 } RPI5VC4_V3D_CLEAR_RESULT, *PRPI5VC4_V3D_CLEAR_RESULT;
 
 /*
- * A triangle request carries only three clip-space positions and their RGBA
- * colors. The miniport supplies fixed V3D 7.1 shaders and builds every state,
- * attribute, binning, and rendering packet. IEEE-754 values are represented
- * as raw words so the kernel never enters a floating-point context.
+ * A primitive request carries one bounded triangle or triangle strip with
+ * clip-space positions and RGBA colors. The miniport supplies fixed V3D 7.1
+ * shaders and builds every state, attribute, binning, and rendering packet.
+ * IEEE-754 values are represented as raw words so the kernel never enters a
+ * floating-point context.
  */
+#define RPI5VC4_V3D_PRIMITIVE_TRIANGLES     1u
+#define RPI5VC4_V3D_PRIMITIVE_TRIANGLE_STRIP 2u
+#define RPI5VC4_V3D_PRIMITIVE_MAX_VERTICES 4u
+
 typedef struct _RPI5VC4_V3D_VERTEX
 {
     ULONG Position[4];
@@ -160,8 +165,10 @@ typedef struct _RPI5VC4_V3D_TRIANGLE_REQUEST
     ULONG Width;
     ULONG Height;
     ULONG ClearColor;
-    ULONG Reserved[3];
-    RPI5VC4_V3D_VERTEX Vertices[3];
+    ULONG PrimitiveType;
+    ULONG VertexCount;
+    ULONG Reserved;
+    RPI5VC4_V3D_VERTEX Vertices[RPI5VC4_V3D_PRIMITIVE_MAX_VERTICES];
 } RPI5VC4_V3D_TRIANGLE_REQUEST, *PRPI5VC4_V3D_TRIANGLE_REQUEST;
 
 typedef struct _RPI5VC4_V3D_TRIANGLE_RESULT
@@ -176,6 +183,8 @@ typedef struct _RPI5VC4_V3D_TRIANGLE_RESULT
     ULONG ClearColor;
     ULONG PixelBytes;
     ULONG CoveredPixelCount;
+    ULONG PrimitiveType;
+    ULONG VertexCount;
     RPI5VC4_V3D_SELFTEST Diagnostics;
     ULONG Pixels[1];
 } RPI5VC4_V3D_TRIANGLE_RESULT, *PRPI5VC4_V3D_TRIANGLE_RESULT;

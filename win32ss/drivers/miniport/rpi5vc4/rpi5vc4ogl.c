@@ -87,6 +87,8 @@ static const PROC Rpi5OglDispatchEntries[] =
 
 C_ASSERT(RTL_NUMBER_OF(Rpi5OglDispatchEntries) ==
          RPI5VC4_OPENGL_ENTRY_COUNT);
+C_ASSERT(RPI5VC4_OGL_GL2_MAX_DRAW_VERTICES ==
+         RPI5VC4_V3D_PRIMITIVE_MAX_VERTICES);
 
 static PRPI5VC4_OGL_CONTEXT
 Rpi5OglValidateContext(
@@ -434,10 +436,12 @@ Rpi5OglTriangleStateSupported(
 }
 
 static BOOL
-Rpi5OglSubmitTriangle(
+Rpi5OglSubmitPrimitive(
     _Inout_ PRPI5VC4_OGL_CONTEXT Context,
     _In_ GLcontext *Mesa,
-    _In_reads_(3) const RPI5VC4_V3D_VERTEX Vertices[3],
+    _In_reads_(VertexCount) const RPI5VC4_V3D_VERTEX *Vertices,
+    _In_ ULONG PrimitiveType,
+    _In_ ULONG VertexCount,
     _In_ GLuint ProgramName)
 {
     RPI5VC4_V3D_TRIANGLE_REQUEST Request;
@@ -454,6 +458,12 @@ Rpi5OglSubmitTriangle(
     if (Context == NULL ||
         !Rpi5OglTriangleStateSupported(Mesa) ||
         Vertices == NULL ||
+        (PrimitiveType != RPI5VC4_V3D_PRIMITIVE_TRIANGLES &&
+         PrimitiveType != RPI5VC4_V3D_PRIMITIVE_TRIANGLE_STRIP) ||
+        ((PrimitiveType == RPI5VC4_V3D_PRIMITIVE_TRIANGLES &&
+          VertexCount != 3) ||
+         (PrimitiveType == RPI5VC4_V3D_PRIMITIVE_TRIANGLE_STRIP &&
+          VertexCount != 4)) ||
         !Rpi5OglRefreshDrawable(Context) ||
         !Context->HardwareClearFresh)
     {
@@ -481,7 +491,11 @@ Rpi5OglSubmitTriangle(
     Request.Width = Width;
     Request.Height = Height;
     Request.ClearColor = Context->HardwareClearColor;
-    CopyMemory(Request.Vertices, Vertices, sizeof(Request.Vertices));
+    Request.PrimitiveType = PrimitiveType;
+    Request.VertexCount = VertexCount;
+    CopyMemory(Request.Vertices,
+               Vertices,
+               VertexCount * sizeof(*Vertices));
 
     Returned = ExtEscape(Context->Hdc,
                          RPI5VC4_ESCAPE_RENDER_TRIANGLE,
@@ -500,7 +514,9 @@ Rpi5OglSubmitTriangle(
               Result->Height == Height &&
               Result->Stride == Width * sizeof(ULONG) &&
               Result->ClearColor == Context->HardwareClearColor &&
-              Result->PixelBytes == PixelBytes;
+              Result->PixelBytes == PixelBytes &&
+              Result->PrimitiveType == PrimitiveType &&
+              Result->VertexCount == VertexCount;
     if (Success)
     {
         for (Row = 0; Row < Height; Row++)
@@ -565,10 +581,12 @@ Rpi5OglHardwareTriangle(
             VertexBuffer->Clip[VertexIndices[Vertex]],
             VertexBuffer->Color[ColorVertex]);
     }
-    return Rpi5OglSubmitTriangle(
+    return Rpi5OglSubmitPrimitive(
         Context,
         Mesa,
         Vertices,
+        RPI5VC4_V3D_PRIMITIVE_TRIANGLES,
+        RTL_NUMBER_OF(Vertices),
         Rpi5OglGl2CurrentProgramName(Context->Gl2State));
 }
 
@@ -579,18 +597,21 @@ Rpi5OglDrawArrays(
     _In_ GLsizei Count)
 {
     PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
-    RPI5VC4_OGL_GL2_VERTEX Gl2Vertices[3];
-    RPI5VC4_V3D_VERTEX Vertices[3];
+    RPI5VC4_OGL_GL2_VERTEX
+        Gl2Vertices[RPI5VC4_V3D_PRIMITIVE_MAX_VERTICES];
+    RPI5VC4_V3D_VERTEX Vertices[RPI5VC4_V3D_PRIMITIVE_MAX_VERTICES];
     RPI5VC4_OGL_GL2_DRAW_RESULT DrawResult;
+    ULONG PrimitiveType;
+    ULONG VertexCount;
     ULONG Vertex;
 
     if (Context == NULL)
         return;
-    DrawResult = Rpi5OglGl2BuildTriangle(Context->Gl2State,
-                                         Mode,
-                                         First,
-                                         Count,
-                                         Gl2Vertices);
+    DrawResult = Rpi5OglGl2BuildPrimitive(Context->Gl2State,
+                                          Mode,
+                                          First,
+                                          Count,
+                                          Gl2Vertices);
     if (DrawResult == Rpi5OglGl2DrawNotApplicable)
     {
         _mesa_DrawArrays(Mode, First, Count);
@@ -599,16 +620,22 @@ Rpi5OglDrawArrays(
     if (DrawResult == Rpi5OglGl2DrawRejected)
         return;
 
-    for (Vertex = 0; Vertex < RTL_NUMBER_OF(Vertices); Vertex++)
+    PrimitiveType = Mode == GL_TRIANGLE_STRIP ?
+                    RPI5VC4_V3D_PRIMITIVE_TRIANGLE_STRIP :
+                    RPI5VC4_V3D_PRIMITIVE_TRIANGLES;
+    VertexCount = (ULONG)Count;
+    for (Vertex = 0; Vertex < VertexCount; Vertex++)
     {
         Rpi5OglFillTriangleVertex(&Vertices[Vertex],
                                   Gl2Vertices[Vertex].Position,
                                   Gl2Vertices[Vertex].Color);
     }
-    if (!Rpi5OglSubmitTriangle(
+    if (!Rpi5OglSubmitPrimitive(
             Context,
             Context->MesaContext,
             Vertices,
+            PrimitiveType,
+            VertexCount,
             Rpi5OglGl2CurrentProgramName(Context->Gl2State)))
     {
         gl_error(Context->MesaContext,
