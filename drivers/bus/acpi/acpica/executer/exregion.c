@@ -215,7 +215,15 @@ AcpiExSystemMemorySpaceHandler (
 
         /* Create a new mapping starting at the address given */
 
+#if defined(__REACTOS__) && defined(_M_ARM64)
+        /* ACPI tables are normal memory, but OperationRegions can be MMIO or
+         * shared firmware buffers and must not inherit the table mapping's
+         * cached ARM64 alias. MmNonCached selects Device memory for MMIO and
+         * Normal-NC for RAM-backed communication buffers. */
+        LogicalAddrPtr = AcpiOsMapOperationRegion(Address, MapLength);
+#else
         LogicalAddrPtr = AcpiOsMapMemory(Address, MapLength);
+#endif
         if (!LogicalAddrPtr)
         {
             ACPI_ERROR ((AE_INFO,
@@ -260,6 +268,10 @@ access:
      * transfer up into smaller (byte-size) chunks because the AML specifically
      * asked for a transfer width that the hardware may require.
      */
+#if defined(__REACTOS__) && defined(_M_ARM64)
+    /* Order Normal-NC shared-buffer accesses against Device MMIO doorbells. */
+    KeMemoryBarrier();
+#endif
     switch (Function)
     {
     case ACPI_READ:
@@ -332,6 +344,10 @@ access:
         Status = AE_BAD_PARAMETER;
         break;
     }
+
+#if defined(__REACTOS__) && defined(_M_ARM64)
+    KeMemoryBarrier();
+#endif
 
     return_ACPI_STATUS (Status);
 }
