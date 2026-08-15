@@ -17,9 +17,8 @@ Rpi5Vc4.Display_CopyFiles=11
 %ReactOS%=ReactOS,NTarm64
 
 [ReactOS.NTarm64]
-%Rpi5Vc4.DeviceDesc%=Rpi5Vc4_Install,ROOT\RPI5VC4
-%Rpi5Vc4.DeviceDesc%=Rpi5Vc4_Install,DETECTEDInternal\rpi5vc4
-%Rpi5Vc4.DeviceDesc%=Rpi5Vc4_Install,DETECTED\rpi5vc4
+%Rpi5Vc4.DeviceDesc%=Rpi5Vc4_Install,ACPI\BCM2712
+%Rpi5Vc4.DeviceDesc%=Rpi5Vc4_Install,ACPI\BCM2850
 
 [Rpi5Vc4_Install]
 CopyFiles=Rpi5Vc4.Miniport_CopyFiles,Rpi5Vc4.Display_CopyFiles

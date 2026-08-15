@@ -19,8 +19,16 @@ static PVOID
 Rpi5CrtcMapPv(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
-    if (DeviceExtension->PixelValveBase == NULL && DeviceExtension->PixelValveValid && DeviceExtension->PixelValvePhysical.QuadPart != 0)
-        DeviceExtension->PixelValveBase = MmMapIoSpace(DeviceExtension->PixelValvePhysical, RPI5_PV_LENGTH, MmNonCached);
+    if (DeviceExtension->PixelValveBase == NULL &&
+        DeviceExtension->PixelValveValid &&
+        DeviceExtension->PixelValvePhysical.QuadPart != 0 &&
+        DeviceExtension->PixelValveLength >= RPI5_PV_REQUIRED_LENGTH)
+    {
+        DeviceExtension->PixelValveBase =
+            MmMapIoSpace(DeviceExtension->PixelValvePhysical,
+                         DeviceExtension->PixelValveLength,
+                         MmNonCached);
+    }
 
     return DeviceExtension->PixelValveBase;
 }
@@ -28,16 +36,22 @@ Rpi5CrtcMapPv(
 static BOOLEAN
 Rpi5CrtcReportPv(
     _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
-    _In_ ULONGLONG PvPhys,
+    _In_ PVIDEO_ACCESS_RANGE Range,
     _In_ ULONG Index)
 {
-    PHYSICAL_ADDRESS Phys;
     PVOID Base;
     ULONG Control, VControl, HorzA, HorzB, VertA, VertB;
     BOOLEAN Enabled;
 
-    Phys.QuadPart = PvPhys;
-    Base = MmMapIoSpace(Phys, RPI5_PV_LENGTH, MmNonCached);
+    if (Range->RangeStart.QuadPart == 0 ||
+        Range->RangeLength < RPI5_PV_REQUIRED_LENGTH)
+    {
+        return FALSE;
+    }
+
+    Base = MmMapIoSpace(Range->RangeStart,
+                        Range->RangeLength,
+                        MmNonCached);
     if (Base == NULL)
     {
         DbgPrint("RPI5VC4: PV%lu map failed\n", Index);
@@ -62,7 +76,8 @@ Rpi5CrtcReportPv(
         {
             DeviceExtension->PixelValveValid = TRUE;
             DeviceExtension->PixelValveIndex = Index;
-            DeviceExtension->PixelValvePhysical.QuadPart = PvPhys;
+            DeviceExtension->PixelValvePhysical = Range->RangeStart;
+            DeviceExtension->PixelValveLength = Range->RangeLength;
             DeviceExtension->PixelValveControl = Control;
             DeviceExtension->PixelValveVControl = VControl;
             DeviceExtension->PixelValveVsyncEven =
@@ -76,7 +91,7 @@ Rpi5CrtcReportPv(
         }
     }
 
-    MmUnmapIoSpace(Base, RPI5_PV_LENGTH);
+    MmUnmapIoSpace(Base, Range->RangeLength);
     return Enabled;
 }
 
@@ -88,8 +103,12 @@ Rpi5CrtcReportTiming(
 
     DeviceExtension->PixelValveValid = FALSE;
 
-    Found  = Rpi5CrtcReportPv(DeviceExtension, RPI5_PV0_PHYS, 0);
-    Found |= Rpi5CrtcReportPv(DeviceExtension, RPI5_PV1_PHYS, 1);
+    Found  = Rpi5CrtcReportPv(DeviceExtension,
+                              &DeviceExtension->PixelValveRange[0],
+                              0);
+    Found |= Rpi5CrtcReportPv(DeviceExtension,
+                              &DeviceExtension->PixelValveRange[1],
+                              1);
     if (!Found)
         DbgPrint("RPI5VC4: no enabled PixelValve found (firmware HDMI off?)\n");
     return Found;

@@ -19,10 +19,7 @@
 
 #include "rpi5vc4.h"
 
-/* PixelValve register blocks (BCM2712), from the device-tree pixelvalve nodes. */
-#define RPI5_PV0_PHYS                   0x107C410000ULL
-#define RPI5_PV1_PHYS                   0x107C411000ULL
-#define RPI5_PV_LENGTH                  0x100
+#define RPI5_PV_REQUIRED_LENGTH         0x100
 
 /* PixelValve register offsets. */
 #define RPI5_PV_CONTROL                 0x00

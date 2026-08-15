@@ -18,6 +18,7 @@
 
 #define RPI5VC4_CURSOR_WIDTH 64
 #define RPI5VC4_CURSOR_HEIGHT 64
+#define RPI5VC4_ACPI_MEMORY_RESOURCE_COUNT 10
 
 #define IOCTL_VIDEO_RPI5VC4_LATCH_SCANOUT \
     CTL_CODE(FILE_DEVICE_VIDEO, 0x830, METHOD_BUFFERED, FILE_ANY_ACCESS)
@@ -38,9 +39,20 @@ typedef struct _LOADER_PARAMETER_FRAMEBUFFER
 
 typedef struct _RPI5VC4_DEVICE_EXTENSION
 {
+    VIDEO_ACCESS_RANGE V3dHubRange;
+    VIDEO_ACCESS_RANGE V3dCoreRange;
+    VIDEO_ACCESS_RANGE V3dSmsRange;
+    VIDEO_ACCESS_RANGE HvsRange;
+    VIDEO_ACCESS_RANGE HvsIommuRange;
+    VIDEO_ACCESS_RANGE PixelValveRange[2];
+    VIDEO_ACCESS_RANGE MopRange;
+    VIDEO_ACCESS_RANGE MopletRange;
+    VIDEO_ACCESS_RANGE DisplayInterruptRange;
+
     PHYSICAL_ADDRESS FirmwareFrameBufferPhysical;
     PHYSICAL_ADDRESS FrameBufferPhysical;
     PVOID FrameBufferVirtual;
+    PVOID HeadlessBuffer;
     ULONG FrameBufferSize;
     ULONG ScreenWidth;
     ULONG ScreenHeight;
@@ -70,6 +82,7 @@ typedef struct _RPI5VC4_DEVICE_EXTENSION
     BOOLEAN PixelValveValid;
     ULONG PixelValveIndex;
     PHYSICAL_ADDRESS PixelValvePhysical;
+    ULONG PixelValveLength;
     ULONG PixelValveControl;
     ULONG PixelValveVControl;
     ULONG PixelValveVsyncEven;
@@ -135,5 +148,15 @@ Rpi5Vc4SetPowerState(
     _In_ PVOID HwDeviceExtension,
     _In_ ULONG HwId,
     _In_ PVIDEO_POWER_MANAGEMENT VideoPowerControl);
+
+VP_STATUS
+NTAPI
+Rpi5Vc4GetVideoChildDescriptor(
+    _In_ PVOID HwDeviceExtension,
+    _In_ PVIDEO_CHILD_ENUM_INFO ChildEnumInfo,
+    _Out_ PVIDEO_CHILD_TYPE VideoChildType,
+    _Out_writes_bytes_(ChildEnumInfo->ChildDescriptorSize) PUCHAR ChildDescriptor,
+    _Out_ PULONG UId,
+    _Out_ PULONG Unused);
 
 #endif /* _RPI5VC4_PCH_ */
