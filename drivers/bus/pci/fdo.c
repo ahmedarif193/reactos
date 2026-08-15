@@ -100,11 +100,12 @@ FdoEnumerateDevices(
     SlotNumber.u.AsULONG = 0;
     RtlZeroMemory(&PciConfig, sizeof(PCI_COMMON_CONFIG));
 
-    Size = HalGetBusData(PCIConfiguration,
-                         Bus,
-                         SlotNumber.u.AsULONG,
-                         &PciConfig,
-                         PCI_COMMON_HDR_LENGTH);
+    Size = PciHalReadConfig(DeviceExtension->BusSegment,
+                            Bus,
+                            SlotNumber.u.AsULONG,
+                            &PciConfig,
+                            0,
+                            PCI_COMMON_HDR_LENGTH);
 
     if (Size != PCI_COMMON_HDR_LENGTH ||
         PciConfig.VendorID == PCI_INVALID_VENDORID ||
@@ -155,11 +156,12 @@ FdoEnumerateDevices(
                 RtlZeroMemory(&PciConfig,
                               sizeof(PCI_COMMON_CONFIG));
 
-                Size = HalGetBusData(PCIConfiguration,
-                                     Bus,
-                                     SlotNumber.u.AsULONG,
-                                     &PciConfig,
-                                     PCI_COMMON_HDR_LENGTH);
+                Size = PciHalReadConfig(DeviceExtension->BusSegment,
+                                        Bus,
+                                        SlotNumber.u.AsULONG,
+                                        &PciConfig,
+                                        0,
+                                        PCI_COMMON_HDR_LENGTH);
             }
 
             if (Size != PCI_COMMON_HDR_LENGTH ||
@@ -199,6 +201,7 @@ FdoEnumerateDevices(
                               sizeof(PCI_DEVICE));
 
                 Device->BusNumber = Bus;
+                Device->Segment = DeviceExtension->BusSegment;
 
                 if (PciIsDeviceDebugging(Bus, SlotNumber))
                 {
