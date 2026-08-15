@@ -556,7 +556,7 @@ ChpepSetImageExecuteSections(PVOID ImageBase,
 }
 
 static
-VOID
+BOOLEAN
 ChpepWritePointer(PVOID Address,
                   PVOID Value)
 {
@@ -573,7 +573,7 @@ ChpepWritePointer(PVOID Address,
                                     PAGE_READWRITE,
                                     &OldProtect);
     if (!NT_SUCCESS(Status))
-        return;
+        return FALSE;
 
     *(PVOID *)Address = Value;
 
@@ -584,6 +584,21 @@ ChpepWritePointer(PVOID Address,
                            &ProtectSize,
                            OldProtect,
                            &IgnoredProtect);
+
+    return TRUE;
+}
+
+static
+BOOLEAN
+ChpepPatchArm64EcPointer(PVOID ImageBase,
+                        ULONG SizeOfImage,
+                        ULONG Rva,
+                        PVOID Value)
+{
+    if (!ImageBase || !Value || !Rva || SizeOfImage < sizeof(PVOID) || Rva > SizeOfImage - sizeof(PVOID))
+        return FALSE;
+
+    return ChpepWritePointer((PBYTE)ImageBase + Rva, Value);
 }
 
 static
@@ -595,31 +610,208 @@ ChpepArm64EcNoopCheck(VOID)
 }
 
 static
+__attribute__((noinline, used))
+ULONG_PTR
+ChpepResolveArm64EcCallTarget(ULONG_PTR Target)
+{
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+    ULONG_PTR TargetRva, NativeRva;
+
+    if (!NT_SUCCESS(LdrFindEntryForAddress((PVOID)Target, &LdrEntry)) ||
+        Target < (ULONG_PTR)LdrEntry->DllBase)
+        return Target;
+
+    TargetRva = Target - (ULONG_PTR)LdrEntry->DllBase;
+    if (!ChpeGetArm64EcRedirection(LdrEntry->DllBase, TargetRva, &NativeRva))
+        return Target;
+
+    return (ULONG_PTR)LdrEntry->DllBase + NativeRva;
+}
+
+static
+VOID
+__attribute__((naked))
+ChpepArm64EcCheckCall(VOID)
+{
+    __asm__ volatile(
+        "ldr x16, [x18, #0x60]\n"
+        "ldr x16, [x16, #0x368]\n"
+        "cbz x16, 1f\n"
+        "lsr x17, x11, #15\n"
+        "and x17, x17, #0x1fffffffffff8\n"
+        "ldr x16, [x16, x17]\n"
+        "lsr x17, x11, #12\n"
+        "lsr x16, x16, x17\n"
+        "tbnz x16, #0, 1f\n"
+        "sub sp, sp, #0x100\n"
+        "stp x0, x1, [sp, #0x00]\n"
+        "stp x2, x3, [sp, #0x10]\n"
+        "stp x4, x5, [sp, #0x20]\n"
+        "stp x6, x7, [sp, #0x30]\n"
+        "stp x8, x9, [sp, #0x40]\n"
+        "stp x10, x11, [sp, #0x50]\n"
+        "str x30, [sp, #0x60]\n"
+        "str x15, [sp, #0x68]\n"
+        "stp q0, q1, [sp, #0x70]\n"
+        "stp q2, q3, [sp, #0x90]\n"
+        "stp q4, q5, [sp, #0xb0]\n"
+        "stp q6, q7, [sp, #0xd0]\n"
+        "mov x0, x11\n"
+        "bl ChpepResolveArm64EcCallTarget\n"
+        "str x0, [sp, #0xf0]\n"
+        "ldp q6, q7, [sp, #0xd0]\n"
+        "ldp q4, q5, [sp, #0xb0]\n"
+        "ldp q2, q3, [sp, #0x90]\n"
+        "ldp q0, q1, [sp, #0x70]\n"
+        "ldr x15, [sp, #0x68]\n"
+        "ldr x30, [sp, #0x60]\n"
+        "ldp x10, x11, [sp, #0x50]\n"
+        "ldp x8, x9, [sp, #0x40]\n"
+        "ldp x6, x7, [sp, #0x30]\n"
+        "ldp x4, x5, [sp, #0x20]\n"
+        "ldp x2, x3, [sp, #0x10]\n"
+        "ldp x0, x1, [sp, #0x00]\n"
+        "ldr x16, [sp, #0xf0]\n"
+        "add sp, sp, #0x100\n"
+        "cmp x16, x11\n"
+        "b.ne 2f\n"
+        "mov x9, x11\n"
+        "mov x11, x10\n"
+        "ret\n"
+        "2:\n"
+        "mov x11, x16\n"
+        "1:\n"
+        "ret\n");
+}
+
+/*
+ * The MXCSR/FPCR/FPSR conversion and x64 information helpers below are
+ * derived from Wine dlls/ntdll/unwind.h and signal_arm64ec.c.
+ *
+ * Copyright 1999, 2005, 2023 Alexandre Julliard
+ * SPDX-License-Identifier: LGPL-2.1-or-later
+ */
+static
+ULONG64
+ChpepMxCsrToFpCsr(ULONG MxCsr)
+{
+    ULONG Fpcr = 0, Fpsr = 0;
+
+    if (MxCsr & 0x0001) Fpsr |= 0x0001;
+    if (MxCsr & 0x0002) Fpsr |= 0x0080;
+    if (MxCsr & 0x0004) Fpsr |= 0x0002;
+    if (MxCsr & 0x0008) Fpsr |= 0x0004;
+    if (MxCsr & 0x0010) Fpsr |= 0x0008;
+    if (MxCsr & 0x0020) Fpsr |= 0x0010;
+
+    if (MxCsr & 0x0040) Fpcr |= 0x00080000;
+    if (!(MxCsr & 0x0080)) Fpcr |= 0x00000100;
+    if (!(MxCsr & 0x0100)) Fpcr |= 0x00008000;
+    if (!(MxCsr & 0x0200)) Fpcr |= 0x00000200;
+    if (!(MxCsr & 0x0400)) Fpcr |= 0x00000400;
+    if (!(MxCsr & 0x0800)) Fpcr |= 0x00000800;
+    if (!(MxCsr & 0x1000)) Fpcr |= 0x00001000;
+    if (MxCsr & 0x2000) Fpcr |= 0x00800000;
+    if (MxCsr & 0x4000) Fpcr |= 0x00400000;
+    if (MxCsr & 0x8000) Fpcr |= 0x01000000;
+
+    return Fpcr | ((ULONG64)Fpsr << 32);
+}
+
+static
+ULONG
+ChpepFpCsrToMxCsr(ULONG Fpcr,
+                  ULONG Fpsr)
+{
+    ULONG MxCsr = 0;
+
+    if (Fpsr & 0x0001) MxCsr |= 0x0001;
+    if (Fpsr & 0x0002) MxCsr |= 0x0004;
+    if (Fpsr & 0x0004) MxCsr |= 0x0008;
+    if (Fpsr & 0x0008) MxCsr |= 0x0010;
+    if (Fpsr & 0x0010) MxCsr |= 0x0020;
+    if (Fpsr & 0x0080) MxCsr |= 0x0002;
+
+    if (Fpcr & 0x00080000) MxCsr |= 0x0040;
+    if (!(Fpcr & 0x00000100)) MxCsr |= 0x0080;
+    if (!(Fpcr & 0x00000200)) MxCsr |= 0x0200;
+    if (!(Fpcr & 0x00000400)) MxCsr |= 0x0400;
+    if (!(Fpcr & 0x00000800)) MxCsr |= 0x0800;
+    if (!(Fpcr & 0x00001000)) MxCsr |= 0x1000;
+    if (!(Fpcr & 0x00008000)) MxCsr |= 0x0100;
+    if (Fpcr & 0x00400000) MxCsr |= 0x4000;
+    if (Fpcr & 0x00800000) MxCsr |= 0x2000;
+    if (Fpcr & 0x01000000) MxCsr |= 0x8000;
+
+    return MxCsr;
+}
+
+static
+NTSTATUS
+NTAPI
+ChpepGetX64Information(ULONG Type,
+                       PVOID Output,
+                       PVOID ExtraInformation)
+{
+    ULONG64 Fpcr, Fpsr;
+
+    UNREFERENCED_PARAMETER(ExtraInformation);
+
+    switch (Type)
+    {
+        case 0:
+            __asm__ volatile("mrs %0, fpcr; mrs %1, fpsr" : "=r" (Fpcr), "=r" (Fpsr));
+            *(PULONG)Output = ChpepFpCsrToMxCsr((ULONG)Fpcr, (ULONG)Fpsr);
+            return STATUS_SUCCESS;
+
+        case 2:
+            *(PULONG)Output = 0x27F;
+            return STATUS_SUCCESS;
+
+        default:
+            return STATUS_INVALID_PARAMETER;
+    }
+}
+
+static
+NTSTATUS
+NTAPI
+ChpepSetX64Information(ULONG Type,
+                       ULONG_PTR Input,
+                       PVOID ExtraInformation)
+{
+    ULONG64 FpCsr;
+
+    UNREFERENCED_PARAMETER(ExtraInformation);
+
+    if (Type != 0)
+        return STATUS_INVALID_PARAMETER;
+
+    FpCsr = ChpepMxCsrToFpCsr((ULONG)Input);
+    __asm__ volatile("msr fpcr, %0; msr fpsr, %1" :: "r" (FpCsr), "r" (FpCsr >> 32));
+    return STATUS_SUCCESS;
+}
+
+static
 VOID
 ChpepPatchArm64EcDispatchHelpers(PVOID ImageBase,
                                  ULONG SizeOfImage,
                                  PIMAGE_ARM64EC_METADATA Metadata)
 {
-    if (Metadata->DispatchCall &&
-        Metadata->DispatchCall <= SizeOfImage - sizeof(PVOID))
-    {
-        ChpepWritePointer((PBYTE)ImageBase + Metadata->DispatchCall,
-                          ChpepArm64EcNoopCheck);
-    }
+    PVOID CheckTarget = ChpeEmulatorLoaded ? (PVOID)ChpepArm64EcCheckCall : (PVOID)ChpepArm64EcNoopCheck;
 
-    if (Metadata->DispatchIcall &&
-        Metadata->DispatchIcall <= SizeOfImage - sizeof(PVOID))
-    {
-        ChpepWritePointer((PBYTE)ImageBase + Metadata->DispatchIcall,
-                          ChpepArm64EcNoopCheck);
-    }
+    ChpepPatchArm64EcPointer(ImageBase, SizeOfImage, Metadata->DispatchCall, CheckTarget);
+    ChpepPatchArm64EcPointer(ImageBase, SizeOfImage, Metadata->DispatchIcall, CheckTarget);
+    ChpepPatchArm64EcPointer(ImageBase, SizeOfImage, Metadata->DispatchIcallCfg, CheckTarget);
+    ChpepPatchArm64EcPointer(ImageBase, SizeOfImage, Metadata->GetX64InformationFunctionPointer, ChpepGetX64Information);
+    ChpepPatchArm64EcPointer(ImageBase, SizeOfImage, Metadata->SetX64InformationFunctionPointer, ChpepSetX64Information);
 
-    if (Metadata->DispatchIcallCfg &&
-        Metadata->DispatchIcallCfg <= SizeOfImage - sizeof(PVOID))
-    {
-        ChpepWritePointer((PBYTE)ImageBase + Metadata->DispatchIcallCfg,
-                          ChpepArm64EcNoopCheck);
-    }
+    if (!ChpeEmulatorLoaded)
+        return;
+
+    ChpepPatchArm64EcPointer(ImageBase, SizeOfImage, Metadata->DispatchCallNoRedirect, ChpeDispatchTable.ExitToX64);
+    ChpepPatchArm64EcPointer(ImageBase, SizeOfImage, Metadata->DispatchRet, ChpeDispatchTable.RetToEntryThunk);
+    ChpepPatchArm64EcPointer(ImageBase, SizeOfImage, Metadata->DispatchFptr, ChpeDispatchTable.DispatchJump);
 }
 
 BOOLEAN
