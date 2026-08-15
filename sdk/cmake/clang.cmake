@@ -371,6 +371,10 @@ function(set_module_type_toolchain MODULE TYPE)
     target_link_options(${MODULE} PRIVATE
         -Wl,--major-image-version,${_NT_MAJOR} -Wl,--minor-image-version,0${_NT_MINOR} -Wl,--major-os-version,${_NT_MAJOR} -Wl,--minor-os-version,0${_NT_MINOR})
 
+    if(ARM64EC_RUNTIME AND NOT TYPE IN_LIST KERNEL_MODULE_TYPES)
+        add_arm64ec_chpe_support(${MODULE})
+    endif()
+
     # Clang's _setjmp builtin on x64 lowers to __intrinsic_setjmp which must be
     # statically linked (it captures the caller's frame, so a DLL export won't work).
     target_link_libraries(${MODULE} setjmp)
@@ -396,6 +400,33 @@ function(set_module_type_toolchain MODULE TYPE)
 
         set_property(TARGET ${MODULE} APPEND PROPERTY LINK_DEPENDS $<TARGET_PROPERTY:native-pefixup,IMPORTED_LOCATION>)
     endif()
+endfunction()
+
+function(add_arm64ec_chpe_support MODULE)
+    if(NOT ARM64EC_RUNTIME)
+        return()
+    endif()
+
+    get_target_property(_chpe_added ${MODULE} REACTOS_ARM64EC_CHPE_ADDED)
+    if(_chpe_added)
+        return()
+    endif()
+
+    # Assembly-only targets otherwise have no language from which CMake can
+    # choose the ARM64EC linker driver.
+    get_target_property(_sources ${MODULE} SOURCES)
+    set(_has_c_link_language FALSE)
+    foreach(_source IN LISTS _sources)
+        if(_source MATCHES "\\.(c|cc|cpp|cxx)$")
+            set(_has_c_link_language TRUE)
+        endif()
+    endforeach()
+    if(NOT _has_c_link_language)
+        set_target_properties(${MODULE} PROPERTIES LINKER_LANGUAGE C)
+    endif()
+
+    target_sources(${MODULE} PRIVATE ${REACTOS_SOURCE_DIR}/sdk/lib/vcruntime/arm64ec/chpe.S)
+    set_target_properties(${MODULE} PROPERTIES REACTOS_ARM64EC_CHPE_ADDED TRUE)
 endfunction()
 
 function(add_delay_importlibs _module)
