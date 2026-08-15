@@ -1,0 +1,64 @@
+; ReactOS CYW43455 SDIO function transport
+; Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+; SPDX-License-Identifier: GPL-3.0-or-later
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = System
+ClassGUID   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ReactOS%
+DriverVer   = 08/15/2026,1.0.0.0
+CatalogFile = cyw43455sdio.cat
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[Manufacturer]
+%ReactOS% = Models,NTamd64,NTARM64
+
+[Models]
+%ControlDesc% = Transport_Install, SD\VID_02D0&PID_A9BF&FN_1
+%ControlDesc% = Transport_Install, SD\VID_02D0&PID_4345&FN_1
+%CompanionDesc% = Transport_Install, SD\VID_02D0&PID_A9BF&FN_3
+%CompanionDesc% = Transport_Install, SD\VID_02D0&PID_4345&FN_3
+
+[Models.NTamd64]
+%ControlDesc% = Transport_Install, SD\VID_02D0&PID_A9BF&FN_1
+%ControlDesc% = Transport_Install, SD\VID_02D0&PID_4345&FN_1
+%CompanionDesc% = Transport_Install, SD\VID_02D0&PID_A9BF&FN_3
+%CompanionDesc% = Transport_Install, SD\VID_02D0&PID_4345&FN_3
+
+[Models.NTARM64]
+%ControlDesc% = Transport_Install, SD\VID_02D0&PID_A9BF&FN_1
+%ControlDesc% = Transport_Install, SD\VID_02D0&PID_4345&FN_1
+%CompanionDesc% = Transport_Install, SD\VID_02D0&PID_A9BF&FN_3
+%CompanionDesc% = Transport_Install, SD\VID_02D0&PID_4345&FN_3
+
+[Transport_Install]
+CopyFiles = Transport_CopyFiles
+
+[Transport_Install.Services]
+AddService = cyw43455sdio, 2, Transport_Service
+
+[Transport_CopyFiles]
+cyw43455sdio.sys
+
+[Transport_Service]
+DisplayName   = %ServiceDesc%
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
+ServiceBinary = %12%\cyw43455sdio.sys
+
+[SourceDisksNames]
+1 = %DiskName%
+
+[SourceDisksFiles]
+cyw43455sdio.sys = 1
+
+[Strings]
+ReactOS       = "ReactOS Team"
+ControlDesc   = "Broadcom CYW43455 SDIO Control Function"
+CompanionDesc = "Broadcom CYW43455 SDIO Companion Function"
+ServiceDesc   = "ReactOS CYW43455 SDIO Function Transport"
+DiskName      = "ReactOS CYW43455 SDIO Function Transport Installation Disk"
