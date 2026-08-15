@@ -105,15 +105,12 @@ ExternalProject_Add(fex-arm64ec-build
 
 # Deploy uncompressed so ntdll can load the emulator during process startup.
 add_cd_file(
+    TARGET fex-arm64ec-build
     FILE "${FEX_DLL_DEST}"
     DESTINATION reactos/system32
     NAME_ON_CD arm64ecfex.dll
     NO_CAB
     FOR all)
-
-# Ensure the DLL is built before packaging.
-add_dependencies(bootcd fex-arm64ec-build)
-add_dependencies(livecd fex-arm64ec-build)
 
 set(FEX_ARM64EC_AMD64_TEST_BINARY
     "${REACTOS_SOURCE_DIR}/output-Clang-amd64-debug/modules/rostests/win32/cmd/cmd_rostest.exe"
