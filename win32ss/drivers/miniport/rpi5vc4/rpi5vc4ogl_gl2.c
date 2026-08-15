@@ -27,6 +27,23 @@
 #define RPI5VC4_GL2_MAX_SOURCE_BYTES   (64 * 1024)
 #define RPI5VC4_GL2_MAX_NORMALIZED      512
 #define RPI5VC4_GL2_INFO_LOG_BYTES      192
+#define RPI5VC4_GL2_MAX_VERTEX_ATTRIBS    16
+
+typedef enum _RPI5VC4_OGL_SHADER_EXECUTABLE
+{
+    Rpi5OglShaderExecutableNone,
+    Rpi5OglShaderExecutableFixedVertex,
+    Rpi5OglShaderExecutableFixedFragment,
+    Rpi5OglShaderExecutableGenericVertex,
+    Rpi5OglShaderExecutableGenericFragment
+} RPI5VC4_OGL_SHADER_EXECUTABLE;
+
+typedef enum _RPI5VC4_OGL_PROGRAM_EXECUTABLE
+{
+    Rpi5OglProgramExecutableNone,
+    Rpi5OglProgramExecutableFixedColor,
+    Rpi5OglProgramExecutableGenericColor
+} RPI5VC4_OGL_PROGRAM_EXECUTABLE;
 
 typedef struct _RPI5VC4_OGL_SHADER
 {
@@ -35,6 +52,7 @@ typedef struct _RPI5VC4_OGL_SHADER
     BOOL Compiled;
     BOOL DeletePending;
     ULONG AttachedCount;
+    RPI5VC4_OGL_SHADER_EXECUTABLE Executable;
     PCHAR Source;
     ULONG SourceLength;
     CHAR InfoLog[RPI5VC4_GL2_INFO_LOG_BYTES];
@@ -48,8 +66,26 @@ typedef struct _RPI5VC4_OGL_PROGRAM
     BOOL Linked;
     BOOL Validated;
     BOOL DeletePending;
+    RPI5VC4_OGL_PROGRAM_EXECUTABLE Executable;
+    GLint PositionBinding;
+    GLint ColorBinding;
+    BOOL PositionBindingSet;
+    BOOL ColorBindingSet;
+    GLint PositionAttribute;
+    GLint ColorAttribute;
     CHAR InfoLog[RPI5VC4_GL2_INFO_LOG_BYTES];
 } RPI5VC4_OGL_PROGRAM, *PRPI5VC4_OGL_PROGRAM;
+
+typedef struct _RPI5VC4_OGL_VERTEX_ATTRIB
+{
+    BOOL Enabled;
+    GLint Size;
+    GLenum Type;
+    GLboolean Normalized;
+    GLsizei Stride;
+    const GLvoid *Pointer;
+    GLfloat Current[4];
+} RPI5VC4_OGL_VERTEX_ATTRIB, *PRPI5VC4_OGL_VERTEX_ATTRIB;
 
 struct _RPI5VC4_OGL_GL2_STATE
 {
@@ -59,6 +95,7 @@ struct _RPI5VC4_OGL_GL2_STATE
     BOOL CurrentExecutableReady;
     RPI5VC4_OGL_SHADER Shaders[RPI5VC4_GL2_MAX_SHADERS];
     RPI5VC4_OGL_PROGRAM Programs[RPI5VC4_GL2_MAX_PROGRAMS];
+    RPI5VC4_OGL_VERTEX_ATTRIB VertexAttribs[RPI5VC4_GL2_MAX_VERTEX_ATTRIBS];
 };
 
 static PRPI5VC4_OGL_SHADER
@@ -245,8 +282,8 @@ Rpi5OglGl2NormalizeSource(
     return TRUE;
 }
 
-static BOOL
-Rpi5OglGl2SourceSupported(
+static RPI5VC4_OGL_SHADER_EXECUTABLE
+Rpi5OglGl2SourceExecutable(
     _In_ PRPI5VC4_OGL_SHADER Shader)
 {
     static const CHAR VertexMain[] =
@@ -257,6 +294,18 @@ Rpi5OglGl2SourceSupported(
         "voidmain(void){gl_FragColor=gl_Color;}";
     static const CHAR FragmentMainNoVoid[] =
         "voidmain(){gl_FragColor=gl_Color;}";
+    static const CHAR GenericVertexMain[] =
+        "attributevec4pos;attributevec4color;varyingvec4out_color;"
+        "voidmain(){gl_Position=pos;out_color=color;}";
+    static const CHAR GenericVertexMainVoid[] =
+        "attributevec4pos;attributevec4color;varyingvec4out_color;"
+        "voidmain(void){gl_Position=pos;out_color=color;}";
+    static const CHAR GenericFragmentMain[] =
+        "varyingvec4out_color;"
+        "voidmain(){gl_FragData[0]=out_color;}";
+    static const CHAR GenericFragmentMainVoid[] =
+        "varyingvec4out_color;"
+        "voidmain(void){gl_FragData[0]=out_color;}";
     CHAR Normalized[RPI5VC4_GL2_MAX_NORMALIZED];
     PCSTR Body;
 
@@ -266,7 +315,7 @@ Rpi5OglGl2SourceSupported(
                                    Normalized,
                                    sizeof(Normalized)))
     {
-        return FALSE;
+        return Rpi5OglShaderExecutableNone;
     }
 
     Body = Normalized;
@@ -275,11 +324,29 @@ Rpi5OglGl2SourceSupported(
 
     if (Shader->Type == GL_VERTEX_SHADER)
     {
-        return lstrcmpA(Body, VertexMain) == 0 ||
-               lstrcmpA(Body, VertexMainNoVoid) == 0;
+        if (lstrcmpA(Body, VertexMain) == 0 ||
+            lstrcmpA(Body, VertexMainNoVoid) == 0)
+        {
+            return Rpi5OglShaderExecutableFixedVertex;
+        }
+        if (lstrcmpA(Body, GenericVertexMain) == 0 ||
+            lstrcmpA(Body, GenericVertexMainVoid) == 0)
+        {
+            return Rpi5OglShaderExecutableGenericVertex;
+        }
+        return Rpi5OglShaderExecutableNone;
     }
-    return lstrcmpA(Body, FragmentMain) == 0 ||
-           lstrcmpA(Body, FragmentMainNoVoid) == 0;
+    if (lstrcmpA(Body, FragmentMain) == 0 ||
+        lstrcmpA(Body, FragmentMainNoVoid) == 0)
+    {
+        return Rpi5OglShaderExecutableFixedFragment;
+    }
+    if (lstrcmpA(Body, GenericFragmentMain) == 0 ||
+        lstrcmpA(Body, GenericFragmentMainVoid) == 0)
+    {
+        return Rpi5OglShaderExecutableGenericFragment;
+    }
+    return Rpi5OglShaderExecutableNone;
 }
 
 static VOID
@@ -433,6 +500,7 @@ Rpi5OglCompileShader(
 {
     PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
     PRPI5VC4_OGL_SHADER Shader;
+    RPI5VC4_OGL_SHADER_EXECUTABLE Executable;
 
     if (!Rpi5OglGl2CanChangeState(State, "glCompileShader"))
         return;
@@ -444,16 +512,18 @@ Rpi5OglCompileShader(
         return;
     }
 
-    Shader->Compiled = Rpi5OglGl2SourceSupported(Shader);
+    Executable = Rpi5OglGl2SourceExecutable(Shader);
+    Shader->Compiled = Executable != Rpi5OglShaderExecutableNone;
     if (Shader->Compiled)
     {
+        Shader->Executable = Executable;
         Shader->InfoLog[0] = '\0';
     }
     else
     {
         Rpi5OglGl2SetLog(
             Shader->InfoLog,
-            "RPi5 bounded GLSL 1.20 compiler supports only the fixed-transform/color shader");
+            "RPi5 bounded GLSL 1.20 compiler supports fixed-transform/color and the WineD3D capability shader");
     }
 }
 
@@ -621,6 +691,10 @@ Rpi5OglCreateProgram(VOID)
         Rpi5OglGl2Error(State, GL_OUT_OF_MEMORY, "glCreateProgram");
         return 0;
     }
+    Program->PositionBinding = -1;
+    Program->ColorBinding = -1;
+    Program->PositionAttribute = -1;
+    Program->ColorAttribute = -1;
     return Program->Name;
 }
 
@@ -704,6 +778,102 @@ Rpi5OglDetachShader(
         Rpi5OglGl2ReleaseShader(Shader);
 }
 
+static BOOL
+Rpi5OglGl2AssignGenericAttributes(
+    _In_ PRPI5VC4_OGL_PROGRAM Program,
+    _Out_ GLint *PositionAttribute,
+    _Out_ GLint *ColorAttribute)
+{
+    GLint Candidate;
+
+    *PositionAttribute = Program->PositionBindingSet ?
+                         Program->PositionBinding : -1;
+    *ColorAttribute = Program->ColorBindingSet ?
+                      Program->ColorBinding : -1;
+    if (*PositionAttribute >= 0 &&
+        *PositionAttribute == *ColorAttribute)
+    {
+        return FALSE;
+    }
+
+    if (*PositionAttribute < 0)
+    {
+        for (Candidate = 0;
+             Candidate < RPI5VC4_GL2_MAX_VERTEX_ATTRIBS;
+             Candidate++)
+        {
+            if (Candidate != *ColorAttribute)
+            {
+                *PositionAttribute = Candidate;
+                break;
+            }
+        }
+    }
+    if (*ColorAttribute < 0)
+    {
+        for (Candidate = 0;
+             Candidate < RPI5VC4_GL2_MAX_VERTEX_ATTRIBS;
+             Candidate++)
+        {
+            if (Candidate != *PositionAttribute)
+            {
+                *ColorAttribute = Candidate;
+                break;
+            }
+        }
+    }
+    return *PositionAttribute >= 0 && *ColorAttribute >= 0;
+}
+
+static VOID APIENTRY
+Rpi5OglBindAttribLocation(
+    _In_ GLuint ProgramName,
+    _In_ GLuint Index,
+    _In_z_ const GLchar *Name)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_PROGRAM Program;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glBindAttribLocation"))
+        return;
+    Program = Rpi5OglGl2FindProgram(State, ProgramName);
+    if (Program == NULL)
+    {
+        Rpi5OglGl2ProgramNameError(State, ProgramName,
+                                   "glBindAttribLocation(program)");
+        return;
+    }
+    if (Index >= RPI5VC4_GL2_MAX_VERTEX_ATTRIBS)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glBindAttribLocation(index)");
+        return;
+    }
+    if (Name == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glBindAttribLocation(name)");
+        return;
+    }
+    if (Name[0] == 'g' && Name[1] == 'l' && Name[2] == '_')
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                        "glBindAttribLocation(reserved name)");
+        return;
+    }
+
+    if (lstrcmpA(Name, "pos") == 0)
+    {
+        Program->PositionBinding = Index;
+        Program->PositionBindingSet = TRUE;
+    }
+    else if (lstrcmpA(Name, "color") == 0)
+    {
+        Program->ColorBinding = Index;
+        Program->ColorBindingSet = TRUE;
+    }
+}
+
 static VOID APIENTRY
 Rpi5OglLinkProgram(
     _In_ GLuint ProgramName)
@@ -712,6 +882,10 @@ Rpi5OglLinkProgram(
     PRPI5VC4_OGL_PROGRAM Program;
     PRPI5VC4_OGL_SHADER VertexShader;
     PRPI5VC4_OGL_SHADER FragmentShader;
+    RPI5VC4_OGL_PROGRAM_EXECUTABLE Executable =
+        Rpi5OglProgramExecutableNone;
+    GLint PositionAttribute = -1;
+    GLint ColorAttribute = -1;
 
     if (!Rpi5OglGl2CanChangeState(State, "glLinkProgram"))
         return;
@@ -726,19 +900,41 @@ Rpi5OglLinkProgram(
     VertexShader = Rpi5OglGl2FindShader(State, Program->VertexShader);
     FragmentShader = Rpi5OglGl2FindShader(State,
                                           Program->FragmentShader);
-    Program->Linked = VertexShader != NULL &&
-                      FragmentShader != NULL &&
-                      VertexShader->Compiled &&
-                      FragmentShader->Compiled;
+    if (VertexShader != NULL && FragmentShader != NULL &&
+        VertexShader->Compiled && FragmentShader->Compiled)
+    {
+        if (VertexShader->Executable ==
+                Rpi5OglShaderExecutableFixedVertex &&
+            FragmentShader->Executable ==
+                Rpi5OglShaderExecutableFixedFragment)
+        {
+            Executable = Rpi5OglProgramExecutableFixedColor;
+        }
+        else if (VertexShader->Executable ==
+                     Rpi5OglShaderExecutableGenericVertex &&
+                 FragmentShader->Executable ==
+                     Rpi5OglShaderExecutableGenericFragment &&
+                 Rpi5OglGl2AssignGenericAttributes(
+                     Program,
+                     &PositionAttribute,
+                     &ColorAttribute))
+        {
+            Executable = Rpi5OglProgramExecutableGenericColor;
+        }
+    }
+    Program->Linked = Executable != Rpi5OglProgramExecutableNone;
     if (Program->Linked)
     {
+        Program->Executable = Executable;
+        Program->PositionAttribute = PositionAttribute;
+        Program->ColorAttribute = ColorAttribute;
         Program->InfoLog[0] = '\0';
     }
     else
     {
         Rpi5OglGl2SetLog(
             Program->InfoLog,
-            "program requires one compiled bounded vertex shader and one compiled bounded fragment shader");
+            "program requires a matching compiled bounded vertex/fragment pair with distinct active attributes");
     }
 }
 
@@ -787,9 +983,18 @@ Rpi5OglGetProgramiv(
             break;
         case GL_ACTIVE_UNIFORMS:
         case GL_ACTIVE_UNIFORM_MAX_LENGTH:
-        case GL_ACTIVE_ATTRIBUTES:
-        case GL_ACTIVE_ATTRIBUTE_MAX_LENGTH:
             *Parameters = 0;
+            break;
+        case GL_ACTIVE_ATTRIBUTES:
+            *Parameters = Program->Linked &&
+                          Program->Executable ==
+                              Rpi5OglProgramExecutableGenericColor ? 2 : 0;
+            break;
+        case GL_ACTIVE_ATTRIBUTE_MAX_LENGTH:
+            *Parameters = Program->Linked &&
+                          Program->Executable ==
+                              Rpi5OglProgramExecutableGenericColor ?
+                          sizeof("color") : 0;
             break;
         default:
             Rpi5OglGl2Error(State, GL_INVALID_ENUM,
@@ -824,6 +1029,94 @@ Rpi5OglGetProgramInfoLog(
                              BufferSize,
                              Length,
                              InfoLog);
+}
+
+static VOID APIENTRY
+Rpi5OglGetActiveAttrib(
+    _In_ GLuint ProgramName,
+    _In_ GLuint Index,
+    _In_ GLsizei BufferSize,
+    _Out_opt_ GLsizei *Length,
+    _Out_opt_ GLint *Size,
+    _Out_opt_ GLenum *Type,
+    _Out_writes_bytes_opt_(BufferSize) GLchar *Name)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_PROGRAM Program;
+    PCSTR AttributeName;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glGetActiveAttrib"))
+        return;
+    Program = Rpi5OglGl2FindProgram(State, ProgramName);
+    if (Program == NULL)
+    {
+        Rpi5OglGl2ProgramNameError(State, ProgramName,
+                                   "glGetActiveAttrib(program)");
+        return;
+    }
+    if (!Program->Linked ||
+        Program->Executable != Rpi5OglProgramExecutableGenericColor ||
+        Index >= 2)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glGetActiveAttrib(index)");
+        return;
+    }
+    if (Size == NULL || Type == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glGetActiveAttrib(params)");
+        return;
+    }
+
+    AttributeName = Index == 0 ? "pos" : "color";
+    *Size = 1;
+    *Type = GL_FLOAT_VEC4;
+    Rpi5OglGl2CopyTextResult(State,
+                             "glGetActiveAttrib",
+                             AttributeName,
+                             lstrlenA(AttributeName),
+                             BufferSize,
+                             Length,
+                             Name);
+}
+
+static GLint APIENTRY
+Rpi5OglGetAttribLocation(
+    _In_ GLuint ProgramName,
+    _In_z_ const GLchar *Name)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_PROGRAM Program;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glGetAttribLocation"))
+        return -1;
+    Program = Rpi5OglGl2FindProgram(State, ProgramName);
+    if (Program == NULL)
+    {
+        Rpi5OglGl2ProgramNameError(State, ProgramName,
+                                   "glGetAttribLocation(program)");
+        return -1;
+    }
+    if (Name == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glGetAttribLocation(name)");
+        return -1;
+    }
+    if (!Program->Linked)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                        "glGetAttribLocation(link status)");
+        return -1;
+    }
+    if (Program->Executable != Rpi5OglProgramExecutableGenericColor)
+        return -1;
+    if (lstrcmpA(Name, "pos") == 0)
+        return Program->PositionAttribute;
+    if (lstrcmpA(Name, "color") == 0)
+        return Program->ColorAttribute;
+    return -1;
 }
 
 static VOID APIENTRY
@@ -960,6 +1253,303 @@ Rpi5OglDeleteProgram(
         Rpi5OglGl2ReleaseProgram(State, Program);
 }
 
+static PRPI5VC4_OGL_VERTEX_ATTRIB
+Rpi5OglGl2VertexAttrib(
+    _In_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLuint Index,
+    _In_z_ PCSTR Function)
+{
+    if (State == NULL)
+        return NULL;
+    if (Index >= RPI5VC4_GL2_MAX_VERTEX_ATTRIBS)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, Function);
+        return NULL;
+    }
+    return &State->VertexAttribs[Index];
+}
+
+static VOID APIENTRY
+Rpi5OglEnableVertexAttribArray(
+    _In_ GLuint Index)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_VERTEX_ATTRIB Attribute;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glEnableVertexAttribArray"))
+        return;
+    Attribute = Rpi5OglGl2VertexAttrib(
+        State, Index, "glEnableVertexAttribArray(index)");
+    if (Attribute != NULL)
+        Attribute->Enabled = TRUE;
+}
+
+static VOID APIENTRY
+Rpi5OglDisableVertexAttribArray(
+    _In_ GLuint Index)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_VERTEX_ATTRIB Attribute;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glDisableVertexAttribArray"))
+        return;
+    Attribute = Rpi5OglGl2VertexAttrib(
+        State, Index, "glDisableVertexAttribArray(index)");
+    if (Attribute != NULL)
+        Attribute->Enabled = FALSE;
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttribPointer(
+    _In_ GLuint Index,
+    _In_ GLint Size,
+    _In_ GLenum Type,
+    _In_ GLboolean Normalized,
+    _In_ GLsizei Stride,
+    _In_opt_ const GLvoid *Pointer)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_VERTEX_ATTRIB Attribute;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glVertexAttribPointer"))
+        return;
+    Attribute = Rpi5OglGl2VertexAttrib(
+        State, Index, "glVertexAttribPointer(index)");
+    if (Attribute == NULL)
+        return;
+    if (Size < 1 || Size > 4 || Stride < 0)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glVertexAttribPointer(size/stride)");
+        return;
+    }
+    if (Type != GL_FLOAT)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM,
+                        "glVertexAttribPointer(type)");
+        return;
+    }
+
+    Attribute->Size = Size;
+    Attribute->Type = Type;
+    Attribute->Normalized = Normalized;
+    Attribute->Stride = Stride;
+    Attribute->Pointer = Pointer;
+}
+
+static VOID
+Rpi5OglGl2SetCurrentAttrib(
+    _In_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLuint Index,
+    _In_ GLfloat X,
+    _In_ GLfloat Y,
+    _In_ GLfloat Z,
+    _In_ GLfloat W,
+    _In_z_ PCSTR Function)
+{
+    PRPI5VC4_OGL_VERTEX_ATTRIB Attribute;
+
+    if (!Rpi5OglGl2CanChangeState(State, Function))
+        return;
+    Attribute = Rpi5OglGl2VertexAttrib(State, Index, Function);
+    if (Attribute == NULL)
+        return;
+    Attribute->Current[0] = X;
+    Attribute->Current[1] = Y;
+    Attribute->Current[2] = Z;
+    Attribute->Current[3] = W;
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttrib1f(
+    _In_ GLuint Index,
+    _In_ GLfloat X)
+{
+    Rpi5OglGl2SetCurrentAttrib(Rpi5OglCurrentGl2State(), Index,
+                               X, 0.0f, 0.0f, 1.0f,
+                               "glVertexAttrib1f");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttrib1fv(
+    _In_ GLuint Index,
+    _In_reads_(1) const GLfloat *Values)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+    if (Values == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, "glVertexAttrib1fv(v)");
+        return;
+    }
+    Rpi5OglVertexAttrib1f(Index, Values[0]);
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttrib2f(
+    _In_ GLuint Index,
+    _In_ GLfloat X,
+    _In_ GLfloat Y)
+{
+    Rpi5OglGl2SetCurrentAttrib(Rpi5OglCurrentGl2State(), Index,
+                               X, Y, 0.0f, 1.0f,
+                               "glVertexAttrib2f");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttrib2fv(
+    _In_ GLuint Index,
+    _In_reads_(2) const GLfloat *Values)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+    if (Values == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, "glVertexAttrib2fv(v)");
+        return;
+    }
+    Rpi5OglVertexAttrib2f(Index, Values[0], Values[1]);
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttrib3f(
+    _In_ GLuint Index,
+    _In_ GLfloat X,
+    _In_ GLfloat Y,
+    _In_ GLfloat Z)
+{
+    Rpi5OglGl2SetCurrentAttrib(Rpi5OglCurrentGl2State(), Index,
+                               X, Y, Z, 1.0f,
+                               "glVertexAttrib3f");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttrib3fv(
+    _In_ GLuint Index,
+    _In_reads_(3) const GLfloat *Values)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+    if (Values == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, "glVertexAttrib3fv(v)");
+        return;
+    }
+    Rpi5OglVertexAttrib3f(Index, Values[0], Values[1], Values[2]);
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttrib4f(
+    _In_ GLuint Index,
+    _In_ GLfloat X,
+    _In_ GLfloat Y,
+    _In_ GLfloat Z,
+    _In_ GLfloat W)
+{
+    Rpi5OglGl2SetCurrentAttrib(Rpi5OglCurrentGl2State(), Index,
+                               X, Y, Z, W,
+                               "glVertexAttrib4f");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttrib4fv(
+    _In_ GLuint Index,
+    _In_reads_(4) const GLfloat *Values)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+    if (Values == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, "glVertexAttrib4fv(v)");
+        return;
+    }
+    Rpi5OglVertexAttrib4f(Index, Values[0], Values[1],
+                          Values[2], Values[3]);
+}
+
+static VOID APIENTRY
+Rpi5OglGetVertexAttribfv(
+    _In_ GLuint Index,
+    _In_ GLenum ParameterName,
+    _Out_ GLfloat *Parameters)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_VERTEX_ATTRIB Attribute;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glGetVertexAttribfv"))
+        return;
+    Attribute = Rpi5OglGl2VertexAttrib(
+        State, Index, "glGetVertexAttribfv(index)");
+    if (Attribute == NULL)
+        return;
+    if (Parameters == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glGetVertexAttribfv(params)");
+        return;
+    }
+
+    switch (ParameterName)
+    {
+        case GL_CURRENT_VERTEX_ATTRIB:
+            CopyMemory(Parameters, Attribute->Current,
+                       sizeof(Attribute->Current));
+            break;
+        case GL_VERTEX_ATTRIB_ARRAY_ENABLED:
+            *Parameters = Attribute->Enabled;
+            break;
+        case GL_VERTEX_ATTRIB_ARRAY_SIZE:
+            *Parameters = Attribute->Size;
+            break;
+        case GL_VERTEX_ATTRIB_ARRAY_STRIDE:
+            *Parameters = Attribute->Stride;
+            break;
+        case GL_VERTEX_ATTRIB_ARRAY_TYPE:
+            *Parameters = Attribute->Type;
+            break;
+        case GL_VERTEX_ATTRIB_ARRAY_NORMALIZED:
+            *Parameters = Attribute->Normalized;
+            break;
+        case GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING:
+            *Parameters = 0.0f;
+            break;
+        default:
+            Rpi5OglGl2Error(State, GL_INVALID_ENUM,
+                            "glGetVertexAttribfv(pname)");
+            break;
+    }
+}
+
+static VOID APIENTRY
+Rpi5OglGetVertexAttribPointerv(
+    _In_ GLuint Index,
+    _In_ GLenum ParameterName,
+    _Outptr_ GLvoid **Pointer)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_VERTEX_ATTRIB Attribute;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glGetVertexAttribPointerv"))
+        return;
+    Attribute = Rpi5OglGl2VertexAttrib(
+        State, Index, "glGetVertexAttribPointerv(index)");
+    if (Attribute == NULL)
+        return;
+    if (ParameterName != GL_VERTEX_ATTRIB_ARRAY_POINTER)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM,
+                        "glGetVertexAttribPointerv(pname)");
+        return;
+    }
+    if (Pointer == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glGetVertexAttribPointerv(pointer)");
+        return;
+    }
+    *Pointer = (GLvoid *)Attribute->Pointer;
+}
+
 typedef struct _RPI5VC4_OGL_GL2_PROC
 {
     PCSTR Name;
@@ -969,24 +1559,40 @@ typedef struct _RPI5VC4_OGL_GL2_PROC
 static const RPI5VC4_OGL_GL2_PROC Rpi5OglGl2Procedures[] =
 {
     {"glAttachShader", (PROC)Rpi5OglAttachShader},
+    {"glBindAttribLocation", (PROC)Rpi5OglBindAttribLocation},
     {"glCompileShader", (PROC)Rpi5OglCompileShader},
     {"glCreateProgram", (PROC)Rpi5OglCreateProgram},
     {"glCreateShader", (PROC)Rpi5OglCreateShader},
     {"glDeleteProgram", (PROC)Rpi5OglDeleteProgram},
     {"glDeleteShader", (PROC)Rpi5OglDeleteShader},
     {"glDetachShader", (PROC)Rpi5OglDetachShader},
+    {"glDisableVertexAttribArray", (PROC)Rpi5OglDisableVertexAttribArray},
+    {"glEnableVertexAttribArray", (PROC)Rpi5OglEnableVertexAttribArray},
+    {"glGetActiveAttrib", (PROC)Rpi5OglGetActiveAttrib},
     {"glGetAttachedShaders", (PROC)Rpi5OglGetAttachedShaders},
+    {"glGetAttribLocation", (PROC)Rpi5OglGetAttribLocation},
     {"glGetProgramInfoLog", (PROC)Rpi5OglGetProgramInfoLog},
     {"glGetProgramiv", (PROC)Rpi5OglGetProgramiv},
     {"glGetShaderInfoLog", (PROC)Rpi5OglGetShaderInfoLog},
     {"glGetShaderiv", (PROC)Rpi5OglGetShaderiv},
     {"glGetShaderSource", (PROC)Rpi5OglGetShaderSource},
+    {"glGetVertexAttribfv", (PROC)Rpi5OglGetVertexAttribfv},
+    {"glGetVertexAttribPointerv", (PROC)Rpi5OglGetVertexAttribPointerv},
     {"glIsProgram", (PROC)Rpi5OglIsProgram},
     {"glIsShader", (PROC)Rpi5OglIsShader},
     {"glLinkProgram", (PROC)Rpi5OglLinkProgram},
     {"glShaderSource", (PROC)Rpi5OglShaderSource},
     {"glUseProgram", (PROC)Rpi5OglUseProgram},
     {"glValidateProgram", (PROC)Rpi5OglValidateProgram},
+    {"glVertexAttrib1f", (PROC)Rpi5OglVertexAttrib1f},
+    {"glVertexAttrib1fv", (PROC)Rpi5OglVertexAttrib1fv},
+    {"glVertexAttrib2f", (PROC)Rpi5OglVertexAttrib2f},
+    {"glVertexAttrib2fv", (PROC)Rpi5OglVertexAttrib2fv},
+    {"glVertexAttrib3f", (PROC)Rpi5OglVertexAttrib3f},
+    {"glVertexAttrib3fv", (PROC)Rpi5OglVertexAttrib3fv},
+    {"glVertexAttrib4f", (PROC)Rpi5OglVertexAttrib4f},
+    {"glVertexAttrib4fv", (PROC)Rpi5OglVertexAttrib4fv},
+    {"glVertexAttribPointer", (PROC)Rpi5OglVertexAttribPointer},
 };
 
 BOOL
@@ -995,6 +1601,7 @@ Rpi5OglGl2Initialize(
     _In_ GLcontext *Mesa)
 {
     PRPI5VC4_OGL_GL2_STATE NewState;
+    ULONG Index;
 
     *State = NULL;
     NewState = HeapAlloc(GetProcessHeap(),
@@ -1004,6 +1611,12 @@ Rpi5OglGl2Initialize(
         return FALSE;
     NewState->Mesa = Mesa;
     NewState->NextName = 1;
+    for (Index = 0; Index < RTL_NUMBER_OF(NewState->VertexAttribs); Index++)
+    {
+        NewState->VertexAttribs[Index].Size = 4;
+        NewState->VertexAttribs[Index].Type = GL_FLOAT;
+        NewState->VertexAttribs[Index].Current[3] = 1.0f;
+    }
     *State = NewState;
     return TRUE;
 }
@@ -1038,6 +1651,138 @@ Rpi5OglGl2CurrentProgramName(
     _In_opt_ PRPI5VC4_OGL_GL2_STATE State)
 {
     return Rpi5OglGl2ProgramActive(State) ? State->CurrentProgram : 0;
+}
+
+static BOOL
+Rpi5OglGl2ReadVertexAttrib(
+    _In_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLint AttributeIndex,
+    _In_ GLint VertexIndex,
+    _Out_writes_(4) GLfloat Values[4])
+{
+    PRPI5VC4_OGL_VERTEX_ATTRIB Attribute;
+    const BYTE *Source;
+    SIZE_T EffectiveStride;
+    SIZE_T Offset;
+    GLint Component;
+
+    if (AttributeIndex < 0 ||
+        AttributeIndex >= RPI5VC4_GL2_MAX_VERTEX_ATTRIBS)
+    {
+        return FALSE;
+    }
+    Attribute = &State->VertexAttribs[AttributeIndex];
+    CopyMemory(Values, Attribute->Current, sizeof(Attribute->Current));
+    if (!Attribute->Enabled)
+        return TRUE;
+    if (Attribute->Pointer == NULL || Attribute->Type != GL_FLOAT ||
+        Attribute->Size < 1 || Attribute->Size > 4)
+    {
+        return FALSE;
+    }
+
+    EffectiveStride = Attribute->Stride != 0 ?
+                      (SIZE_T)Attribute->Stride :
+                      (SIZE_T)Attribute->Size * sizeof(GLfloat);
+    if (EffectiveStride != 0 &&
+        (SIZE_T)VertexIndex > (SIZE_T)-1 / EffectiveStride)
+    {
+        return FALSE;
+    }
+    Offset = (SIZE_T)VertexIndex * EffectiveStride;
+    Source = (const BYTE *)Attribute->Pointer + Offset;
+    Values[0] = 0.0f;
+    Values[1] = 0.0f;
+    Values[2] = 0.0f;
+    Values[3] = 1.0f;
+    for (Component = 0; Component < Attribute->Size; Component++)
+    {
+        CopyMemory(&Values[Component],
+                   Source + Component * sizeof(GLfloat),
+                   sizeof(GLfloat));
+    }
+    return TRUE;
+}
+
+static GLubyte
+Rpi5OglGl2FloatColor(
+    _In_ GLfloat Value)
+{
+    if (Value <= 0.0f)
+        return 0;
+    if (Value >= 1.0f)
+        return 255;
+    return (GLubyte)(Value * 255.0f + 0.5f);
+}
+
+RPI5VC4_OGL_GL2_DRAW_RESULT
+Rpi5OglGl2BuildTriangle(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum Mode,
+    _In_ GLint First,
+    _In_ GLsizei Count,
+    _Out_writes_(3) RPI5VC4_OGL_GL2_VERTEX Vertices[3])
+{
+    PRPI5VC4_OGL_PROGRAM Program;
+    GLfloat Position[4];
+    GLfloat Color[4];
+    GLint Vertex;
+    GLint Component;
+
+    if (!Rpi5OglGl2ProgramActive(State))
+        return Rpi5OglGl2DrawNotApplicable;
+    Program = Rpi5OglGl2FindProgram(State, State->CurrentProgram);
+    if (Program == NULL ||
+        Program->Executable != Rpi5OglProgramExecutableGenericColor)
+    {
+        return Rpi5OglGl2DrawNotApplicable;
+    }
+    if (Mode != GL_TRIANGLES || Count != 3)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                        "glDrawArrays(bounded generic draw)");
+        return Rpi5OglGl2DrawRejected;
+    }
+    if (First < 0 || First > 0x7ffffffd)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glDrawArrays(first)");
+        return Rpi5OglGl2DrawRejected;
+    }
+    if (Vertices == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glDrawArrays(vertices)");
+        return Rpi5OglGl2DrawRejected;
+    }
+
+    for (Vertex = 0; Vertex < 3; Vertex++)
+    {
+        if (!Rpi5OglGl2ReadVertexAttrib(
+                State,
+                Program->PositionAttribute,
+                First + Vertex,
+                Position) ||
+            !Rpi5OglGl2ReadVertexAttrib(
+                State,
+                Program->ColorAttribute,
+                First + Vertex,
+                Color))
+        {
+            Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                            "glDrawArrays(vertex input)");
+            return Rpi5OglGl2DrawRejected;
+        }
+        CopyMemory(Vertices[Vertex].Position,
+                   Position,
+                   sizeof(Position));
+        for (Component = 0; Component < 4; Component++)
+        {
+            Vertices[Vertex].Color[Component] =
+                Rpi5OglGl2FloatColor(Color[Component]);
+        }
+    }
+    return Rpi5OglGl2DrawReady;
 }
 
 PROC
