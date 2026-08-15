@@ -4943,14 +4943,14 @@ HalGetBusData(
 }
 
 /*
- * HalGetBusDataByOffset - Read PCI configuration space at specified offset
+ * HalGetPciConfigDataByOffset - Read one PCI segment's configuration space
  *
  * This function reads data from PCI configuration space starting at a specific
  * offset. On ARM64, ECAM provides access to the full 4KB PCIe extended
  * configuration space (not just the 256-byte legacy space).
  *
  * Parameters:
- *   BusDataType - Type of bus data (must be PCIConfiguration for PCI)
+ *   Segment     - PCI segment number
  *   BusNumber   - PCI bus number (0-255)
  *   SlotNumber  - Encoded device and function number (PCI_SLOT_NUMBER)
  *   Buffer      - Buffer to receive the configuration data
@@ -4968,8 +4968,8 @@ HalGetBusData(
  */
 ULONG
 NTAPI
-HalGetBusDataByOffset(
-    _In_ BUS_DATA_TYPE BusDataType,
+HalGetPciConfigDataByOffset(
+    _In_ USHORT Segment,
     _In_ ULONG BusNumber,
     _In_ ULONG SlotNumber,
     _Out_writes_bytes_(Length) PVOID Buffer,
@@ -4977,14 +4977,6 @@ HalGetBusDataByOffset(
     _In_ ULONG Length)
 {
     PCI_SLOT_NUMBER PciSlot;
-
-    /* Only PCIConfiguration bus data type is supported */
-    if (BusDataType != PCIConfiguration)
-    {
-        DPRINT1("[arm64][HAL] HalGetBusDataByOffset: unsupported BusDataType %u\n",
-                BusDataType);
-        return 0;
-    }
 
     /* Validate parameters */
     if (Buffer == NULL || Length == 0)
@@ -4995,7 +4987,7 @@ HalGetBusDataByOffset(
     /* Validate bus number (0-255) */
     if (BusNumber > 0xFF)
     {
-        DPRINT1("[arm64][HAL] HalGetBusDataByOffset: invalid bus %lu\n", BusNumber);
+        DPRINT1("[arm64][HAL] HalGetPciConfigDataByOffset: invalid bus %lu\n", BusNumber);
         RtlFillMemory(Buffer, Length, 0xFF);
         return Length;
     }
@@ -5003,7 +4995,7 @@ HalGetBusDataByOffset(
     /* Validate offset (0-4095 for PCIe extended config space) */
     if (Offset >= 0x1000)
     {
-        DPRINT1("[arm64][HAL] HalGetBusDataByOffset: invalid offset 0x%lx\n", Offset);
+        DPRINT1("[arm64][HAL] HalGetPciConfigDataByOffset: invalid offset 0x%lx\n", Offset);
         RtlFillMemory(Buffer, Length, 0xFF);
         return Length;
     }
@@ -5022,7 +5014,7 @@ HalGetBusDataByOffset(
      * Prefer MCFG when present, otherwise use ACPI root-bridge _CBA.
      */
     if (HalpArm64AccessPciConfigSpace(FALSE,                  /* Read */
-                                      HALP_ACPI_SEGMENT_ANY,  /* Use any segment */
+                                      Segment,
                                       BusNumber,
                                       PciSlot,
                                       Buffer,
@@ -5054,13 +5046,14 @@ HalGetBusDataByOffset(
                 ULONG Gsi;
                 UCHAR Polarity;
                 UCHAR Trigger;
-                USHORT Segment;
+                USHORT RouteSegment;
 
-                Segment = HalpArm64ResolvePciSegment((UCHAR)BusNumber);
+                RouteSegment = (Segment == HALP_ACPI_SEGMENT_ANY) ?
+                    HalpArm64ResolvePciSegment((UCHAR)BusNumber) : Segment;
 
                 /* Query ACPI _PRT for the correct GSI */
                 if (HalpArm64PciRouteQueryCallback(
-                        Segment,
+                        RouteSegment,
                         (UCHAR)BusNumber,
                         (UCHAR)PciSlot.u.bits.DeviceNumber,
                         (UCHAR)PciSlot.u.bits.FunctionNumber,
@@ -5097,6 +5090,31 @@ HalGetBusDataByOffset(
      */
     RtlFillMemory(Buffer, Length, 0xFF);
     return Length;
+}
+
+ULONG
+NTAPI
+HalGetBusDataByOffset(
+    _In_ BUS_DATA_TYPE BusDataType,
+    _In_ ULONG BusNumber,
+    _In_ ULONG SlotNumber,
+    _Out_writes_bytes_(Length) PVOID Buffer,
+    _In_ ULONG Offset,
+    _In_ ULONG Length)
+{
+    if (BusDataType != PCIConfiguration)
+    {
+        DPRINT1("[arm64][HAL] HalGetBusDataByOffset: unsupported BusDataType %u\n",
+                BusDataType);
+        return 0;
+    }
+
+    return HalGetPciConfigDataByOffset(HALP_ACPI_SEGMENT_ANY,
+                                       BusNumber,
+                                       SlotNumber,
+                                       Buffer,
+                                       Offset,
+                                       Length);
 }
 
 ARC_STATUS
@@ -6728,14 +6746,14 @@ HalSetBusData(
 }
 
 /*
- * HalSetBusDataByOffset - Write PCI configuration space at specified offset
+ * HalSetPciConfigDataByOffset - Write one PCI segment's configuration space
  *
  * This function writes data to PCI configuration space starting at a specific
  * offset. On ARM64, ECAM provides access to the full 4KB PCIe extended
  * configuration space (not just the 256-byte legacy space).
  *
  * Parameters:
- *   BusDataType - Type of bus data (must be PCIConfiguration for PCI)
+ *   Segment     - PCI segment number
  *   BusNumber   - PCI bus number (0-255)
  *   SlotNumber  - Encoded device and function number (PCI_SLOT_NUMBER)
  *   Buffer      - Buffer containing the configuration data to write
@@ -6754,8 +6772,8 @@ HalSetBusData(
  */
 ULONG
 NTAPI
-HalSetBusDataByOffset(
-    _In_ BUS_DATA_TYPE BusDataType,
+HalSetPciConfigDataByOffset(
+    _In_ USHORT Segment,
     _In_ ULONG BusNumber,
     _In_ ULONG SlotNumber,
     _In_reads_bytes_(Length) PVOID Buffer,
@@ -6763,14 +6781,6 @@ HalSetBusDataByOffset(
     _In_ ULONG Length)
 {
     PCI_SLOT_NUMBER PciSlot;
-
-    /* Only PCIConfiguration bus data type is supported */
-    if (BusDataType != PCIConfiguration)
-    {
-        DPRINT1("[arm64][HAL] HalSetBusDataByOffset: unsupported BusDataType %u\n",
-                BusDataType);
-        return 0;
-    }
 
     /* Validate parameters */
     if (Buffer == NULL || Length == 0)
@@ -6781,14 +6791,14 @@ HalSetBusDataByOffset(
     /* Validate bus number (0-255) */
     if (BusNumber > 0xFF)
     {
-        DPRINT1("[arm64][HAL] HalSetBusDataByOffset: invalid bus %lu\n", BusNumber);
+        DPRINT1("[arm64][HAL] HalSetPciConfigDataByOffset: invalid bus %lu\n", BusNumber);
         return 0;
     }
 
     /* Validate offset (0-4095 for PCIe extended config space) */
     if (Offset >= 0x1000)
     {
-        DPRINT1("[arm64][HAL] HalSetBusDataByOffset: invalid offset 0x%lx\n", Offset);
+        DPRINT1("[arm64][HAL] HalSetPciConfigDataByOffset: invalid offset 0x%lx\n", Offset);
         return 0;
     }
 
@@ -6806,7 +6816,7 @@ HalSetBusDataByOffset(
      * Prefer MCFG when present, otherwise use ACPI root-bridge _CBA.
      */
     if (HalpArm64AccessPciConfigSpace(TRUE,                  /* Write */
-                                      HALP_ACPI_SEGMENT_ANY, /* Use any segment */
+                                      Segment,
                                       BusNumber,
                                       PciSlot,
                                       Buffer,
@@ -6817,9 +6827,34 @@ HalSetBusDataByOffset(
     }
 
     /* ECAM access failed */
-    DPRINT1("[arm64][HAL] HalSetBusDataByOffset: ECAM write failed bus=%lu dev=%u func=%u offset=0x%lx\n",
-            BusNumber, PciSlot.u.bits.DeviceNumber, PciSlot.u.bits.FunctionNumber, Offset);
+    DPRINT1("[arm64][HAL] HalSetPciConfigDataByOffset: ECAM write failed segment=%u bus=%lu dev=%u func=%u offset=0x%lx\n",
+            Segment, BusNumber, PciSlot.u.bits.DeviceNumber, PciSlot.u.bits.FunctionNumber, Offset);
     return 0;
+}
+
+ULONG
+NTAPI
+HalSetBusDataByOffset(
+    _In_ BUS_DATA_TYPE BusDataType,
+    _In_ ULONG BusNumber,
+    _In_ ULONG SlotNumber,
+    _In_reads_bytes_(Length) PVOID Buffer,
+    _In_ ULONG Offset,
+    _In_ ULONG Length)
+{
+    if (BusDataType != PCIConfiguration)
+    {
+        DPRINT1("[arm64][HAL] HalSetBusDataByOffset: unsupported BusDataType %u\n",
+                BusDataType);
+        return 0;
+    }
+
+    return HalSetPciConfigDataByOffset(HALP_ACPI_SEGMENT_ANY,
+                                       BusNumber,
+                                       SlotNumber,
+                                       Buffer,
+                                       Offset,
+                                       Length);
 }
 
 VOID

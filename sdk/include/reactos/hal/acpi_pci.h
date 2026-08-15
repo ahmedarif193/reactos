@@ -196,6 +196,30 @@ HalGetMsiMessageAddress(
 
 #if defined(_M_ARM64) || defined(__aarch64__)
 NTHALAPI
+ULONG
+NTAPI
+HalGetPciConfigDataByOffset(
+    _In_ USHORT Segment,
+    _In_ ULONG Bus,
+    _In_ ULONG Slot,
+    _Out_writes_bytes_(Length) PVOID Buffer,
+    _In_ ULONG Offset,
+    _In_ ULONG Length
+    );
+
+NTHALAPI
+ULONG
+NTAPI
+HalSetPciConfigDataByOffset(
+    _In_ USHORT Segment,
+    _In_ ULONG Bus,
+    _In_ ULONG Slot,
+    _In_reads_bytes_(Length) PVOID Buffer,
+    _In_ ULONG Offset,
+    _In_ ULONG Length
+    );
+
+NTHALAPI
 BOOLEAN
 NTAPI
 HalGetMsiMessageAddressEx(

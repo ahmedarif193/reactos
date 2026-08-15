@@ -4414,6 +4414,19 @@ HalpAcpiEnumeratePciBusDebug(VOID)
     /* Set the NMI crash flag */
     HalpGetNMICrashFlag();
 
+#if defined(HALP_ARM64)
+    /*
+     * Several ARM64 platforms describe overlapping bus-number ranges in
+     * separate MCFG segments. This early diagnostic pass runs before the
+     * ACPI PCI roots have selected their _SEG/_STA state, so probing an
+     * arbitrary segment can manufacture devices from unrelated MMIO data.
+     * Functional PCI discovery is performed later by the segment-aware PnP
+     * bus driver; keep this phase read-only and limited to MCFG reporting.
+     */
+    HalpPciLogEcamCoverage();
+    return;
+#endif
+
     /* Print PCI bus enumeration header */
     DbgPrint("\n====== PCI BUS HARDWARE DETECTION (ACPI HAL) =======\n\n");
 
