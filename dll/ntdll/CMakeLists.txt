@@ -2,6 +2,7 @@
 add_subdirectory(nt_0600)
 
 spec2def(ntdll.dll def/ntdll.spec ADD_IMPORTLIB)
+spec2def(ntdll_chpe.dll chpebridge.spec ADD_IMPORTLIB)
 
 # Link GCC stack protector lib
 if (STACK_PROTECTOR)
@@ -110,6 +111,13 @@ endif()
 add_pch(ntdll include/ntdll.h "${PCH_SKIP_SOURCE}")
 add_dependencies(ntdll ntstatus asm)
 add_cd_file(TARGET ntdll DESTINATION reactos/system32 NO_CAB FOR all)
+
+add_library(ntdll_chpe MODULE EXCLUDE_FROM_ALL
+    chpebridge.c
+    ${CMAKE_CURRENT_BINARY_DIR}/ntdll_chpe.def)
+set_module_type(ntdll_chpe win32dll ENTRYPOINT 0)
+add_importlibs(ntdll_chpe ntdll)
+add_dependencies(ntdll_chpe psdk)
 
 # Newer VS versions link to _ftol2 / _ftoul2_legacy
 if(MSVC AND ARCH STREQUAL "i386")
