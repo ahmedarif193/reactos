@@ -110,6 +110,238 @@ AcpiPdoFromContext(PVOID Context)
     return (PPDO_DEVICE_DATA)DeviceObject->DeviceExtension;
 }
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+typedef struct _ACPI_DMA_WINDOW_CONTEXT
+{
+    HAL_ACPI_DMA_WINDOW Windows[HAL_ACPI_MAX_DMA_WINDOWS];
+    ULONG WindowCount;
+    BOOLEAN Overflow;
+} ACPI_DMA_WINDOW_CONTEXT, *PACPI_DMA_WINDOW_CONTEXT;
+
+static VOID
+AcpiDmaAddWindow(
+    _Inout_ PACPI_DMA_WINDOW_CONTEXT WindowContext,
+    _In_ ULONGLONG DeviceBase,
+    _In_ ULONGLONG Length,
+    _In_ LONGLONG TranslationOffset)
+{
+    PHAL_ACPI_DMA_WINDOW Window;
+    ULONGLONG CpuBase;
+    ULONGLONG Magnitude;
+
+    if (!Length || DeviceBase > MAXULONGLONG - (Length - 1))
+    {
+        WindowContext->Overflow = TRUE;
+        return;
+    }
+    if (WindowContext->WindowCount == HAL_ACPI_MAX_DMA_WINDOWS)
+    {
+        WindowContext->Overflow = TRUE;
+        return;
+    }
+
+    if (TranslationOffset < 0)
+    {
+        Magnitude = (ULONGLONG)(-(TranslationOffset + 1));
+        Magnitude++;
+        if (DeviceBase < Magnitude)
+        {
+            WindowContext->Overflow = TRUE;
+            return;
+        }
+        CpuBase = DeviceBase - Magnitude;
+    }
+    else
+    {
+        if (DeviceBase > MAXULONGLONG - (ULONGLONG)TranslationOffset)
+        {
+            WindowContext->Overflow = TRUE;
+            return;
+        }
+        CpuBase = DeviceBase + (ULONGLONG)TranslationOffset;
+    }
+
+    if (CpuBase > MAXULONGLONG - (Length - 1))
+    {
+        WindowContext->Overflow = TRUE;
+        return;
+    }
+
+    Window = &WindowContext->Windows[WindowContext->WindowCount++];
+    Window->DeviceBase = DeviceBase;
+    Window->CpuBase = CpuBase;
+    Window->Length = Length;
+}
+
+static ACPI_STATUS
+AcpiDmaResourceCallback(
+    _In_ ACPI_RESOURCE *Resource,
+    _Inout_ PVOID Context)
+{
+    PACPI_DMA_WINDOW_CONTEXT WindowContext = Context;
+
+    switch (Resource->Type)
+    {
+        case ACPI_RESOURCE_TYPE_ADDRESS16:
+        case ACPI_RESOURCE_TYPE_ADDRESS32:
+        case ACPI_RESOURCE_TYPE_ADDRESS64:
+        case ACPI_RESOURCE_TYPE_EXTENDED_ADDRESS64:
+            break;
+
+        default:
+            return AE_OK;
+    }
+
+    if (Resource->Data.Address.ResourceType != ACPI_MEMORY_RANGE || Resource->Data.Address.ProducerConsumer != ACPI_PRODUCER)
+        return AE_OK;
+
+    switch (Resource->Type)
+    {
+        case ACPI_RESOURCE_TYPE_ADDRESS16:
+            AcpiDmaAddWindow(WindowContext, Resource->Data.Address16.Address.Minimum, Resource->Data.Address16.Address.AddressLength, (SHORT)Resource->Data.Address16.Address.TranslationOffset);
+            break;
+
+        case ACPI_RESOURCE_TYPE_ADDRESS32:
+            AcpiDmaAddWindow(WindowContext, Resource->Data.Address32.Address.Minimum, Resource->Data.Address32.Address.AddressLength, (LONG)Resource->Data.Address32.Address.TranslationOffset);
+            break;
+
+        case ACPI_RESOURCE_TYPE_ADDRESS64:
+            AcpiDmaAddWindow(WindowContext, Resource->Data.Address64.Address.Minimum, Resource->Data.Address64.Address.AddressLength, (LONGLONG)Resource->Data.Address64.Address.TranslationOffset);
+            break;
+
+        case ACPI_RESOURCE_TYPE_EXTENDED_ADDRESS64:
+            AcpiDmaAddWindow(WindowContext, Resource->Data.ExtAddress64.Address.Minimum, Resource->Data.ExtAddress64.Address.AddressLength, (LONGLONG)Resource->Data.ExtAddress64.Address.TranslationOffset);
+            break;
+
+        default:
+            break;
+    }
+
+    return WindowContext->Overflow ? AE_CTRL_TERMINATE : AE_OK;
+}
+
+static BOOLEAN
+AcpiGetDmaWindows(
+    _In_ PPDO_DEVICE_DATA DeviceData,
+    _Out_writes_(HAL_ACPI_MAX_DMA_WINDOWS) HAL_ACPI_DMA_WINDOW *Windows,
+    _Out_ PULONG WindowCount)
+{
+    ACPI_DMA_WINDOW_CONTEXT WindowContext;
+    ACPI_HANDLE CurrentHandle;
+    ACPI_HANDLE DmaHandle;
+    ACPI_HANDLE ParentHandle;
+    ACPI_STATUS Status;
+
+    *WindowCount = 0;
+    if (!DeviceData || !DeviceData->AcpiHandle)
+        return TRUE;
+
+    CurrentHandle = DeviceData->AcpiHandle;
+    while (CurrentHandle)
+    {
+        DmaHandle = NULL;
+        Status = AcpiGetHandle(CurrentHandle, METHOD_NAME__DMA, &DmaHandle);
+        if (Status == AE_NOT_FOUND)
+            goto GetParent;
+        if (ACPI_FAILURE(Status))
+        {
+            DPRINT1("ACPI: failed to locate inherited _DMA (Status 0x%08lx)\n", Status);
+            return FALSE;
+        }
+
+        RtlZeroMemory(&WindowContext, sizeof(WindowContext));
+        Status = AcpiWalkResources(CurrentHandle, METHOD_NAME__DMA, AcpiDmaResourceCallback, &WindowContext);
+        if (ACPI_FAILURE(Status) || WindowContext.Overflow || !WindowContext.WindowCount)
+        {
+            DPRINT1("ACPI: inherited _DMA is invalid (Status 0x%08lx, windows %lu, overflow %u)\n", Status, WindowContext.WindowCount, WindowContext.Overflow);
+            return FALSE;
+        }
+
+        RtlCopyMemory(Windows, WindowContext.Windows, WindowContext.WindowCount * sizeof(*Windows));
+        *WindowCount = WindowContext.WindowCount;
+        return TRUE;
+
+GetParent:
+        ParentHandle = NULL;
+        Status = AcpiGetParent(CurrentHandle, &ParentHandle);
+        if (ACPI_FAILURE(Status) || !ParentHandle || ParentHandle == CurrentHandle)
+            break;
+        CurrentHandle = ParentHandle;
+    }
+
+    return TRUE;
+}
+
+static BOOLEAN
+NTAPI
+AcpiBusTranslateBusAddress(
+    _Inout_opt_ PVOID Context,
+    _In_ PHYSICAL_ADDRESS BusAddress,
+    _In_ ULONG Length,
+    _Out_ PULONG AddressSpace,
+    _Out_ PPHYSICAL_ADDRESS TranslatedAddress)
+{
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(Length);
+
+    if (!AddressSpace || !TranslatedAddress)
+        return FALSE;
+
+    *TranslatedAddress = BusAddress;
+    return TRUE;
+}
+
+static PDMA_ADAPTER
+NTAPI
+AcpiBusGetDmaAdapter(
+    _Inout_opt_ PVOID Context,
+    _In_ PDEVICE_DESCRIPTION DeviceDescription,
+    _Out_ PULONG NumberOfMapRegisters)
+{
+    HAL_ACPI_DMA_WINDOW Windows[HAL_ACPI_MAX_DMA_WINDOWS];
+    PPDO_DEVICE_DATA DeviceData = AcpiPdoFromContext(Context);
+    PDMA_ADAPTER DmaAdapter;
+    ULONG WindowCount;
+
+    DmaAdapter = (PDMA_ADAPTER)HalGetAdapter(DeviceDescription, NumberOfMapRegisters);
+    if (!DmaAdapter)
+        return NULL;
+
+    if (!AcpiGetDmaWindows(DeviceData, Windows, &WindowCount))
+    {
+        DPRINT1("ACPI: refusing unsafe DMA adapter for %p because _DMA could not be parsed\n", Context);
+        DmaAdapter->DmaOperations->PutDmaAdapter(DmaAdapter);
+        return NULL;
+    }
+
+    if (WindowCount && !HalpConfigureDmaAdapter(DmaAdapter, Windows, WindowCount))
+    {
+        DmaAdapter->DmaOperations->PutDmaAdapter(DmaAdapter);
+        return NULL;
+    }
+
+    DPRINT1("ACPI: DMA adapter for %p uses %lu inherited _DMA window(s)\n", Context, WindowCount);
+    return DmaAdapter;
+}
+
+static ULONG
+NTAPI
+AcpiBusGetSetDeviceData(
+    _Inout_opt_ PVOID Context,
+    _In_ ULONG DataType,
+    _Inout_updates_bytes_(Length) PVOID Buffer,
+    _In_ ULONG Offset,
+    _In_ ULONG Length)
+{
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(DataType);
+    UNREFERENCED_PARAMETER(Buffer);
+    UNREFERENCED_PARAMETER(Offset);
+    UNREFERENCED_PARAMETER(Length);
+    return 0;
+}
+#endif
+
 static
 UINT32
 ACPI_SYSTEM_XFACE
@@ -866,6 +1098,9 @@ Bus_PDO_QueryInterface(PPDO_DEVICE_DATA DeviceData,
   PACPI_INTERFACE_STANDARD AcpiInterface;
   PACPI_INTERFACE_STANDARD2 AcpiInterface2;
   PTHERMAL_COOLING_INTERFACE ThermalInterface;
+#if defined(_M_ARM64) || defined(__aarch64__)
+  PBUS_INTERFACE_STANDARD BusInterface;
+#endif
 
   if (IrpSp->Parameters.QueryInterface.Version != 1)
   {
@@ -953,6 +1188,27 @@ Bus_PDO_QueryInterface(PPDO_DEVICE_DATA DeviceData,
 
       return STATUS_SUCCESS;
   }
+#if defined(_M_ARM64) || defined(__aarch64__)
+  else if (RtlCompareMemory(IrpSp->Parameters.QueryInterface.InterfaceType, &GUID_BUS_INTERFACE_STANDARD, sizeof(GUID)) == sizeof(GUID))
+  {
+      if (IrpSp->Parameters.QueryInterface.Size < sizeof(BUS_INTERFACE_STANDARD))
+          return STATUS_BUFFER_TOO_SMALL;
+
+      BusInterface = (PBUS_INTERFACE_STANDARD)IrpSp->Parameters.QueryInterface.Interface;
+      RtlZeroMemory(BusInterface, sizeof(*BusInterface));
+      BusInterface->Size = sizeof(*BusInterface);
+      BusInterface->Version = 1;
+      BusInterface->Context = DeviceData->Common.Self;
+      BusInterface->InterfaceReference = AcpiInterfaceReference;
+      BusInterface->InterfaceDereference = AcpiInterfaceDereference;
+      BusInterface->TranslateBusAddress = AcpiBusTranslateBusAddress;
+      BusInterface->GetDmaAdapter = AcpiBusGetDmaAdapter;
+      BusInterface->SetBusData = AcpiBusGetSetDeviceData;
+      BusInterface->GetBusData = AcpiBusGetSetDeviceData;
+      AcpiInterfaceReference(BusInterface->Context);
+      return STATUS_SUCCESS;
+  }
+#endif
   else
   {
       DPRINT1("Invalid GUID\n");
