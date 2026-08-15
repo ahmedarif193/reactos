@@ -32,6 +32,8 @@ HKR, , NoInstallClass, 0, 1
 %PCI\CC_0C0320.DeviceDesc%=EHCI_Inst,PCI\CC_0C0320
 %PCI\CC_0C0330.DeviceDesc%=XHCI_Inst,PCI\CC_0C0330
 %ACPI\PNP0D10.DeviceDesc%=XHCI_Inst,ACPI\PNP0D10
+%ACPI\BCM2848.DeviceDesc%=DWC2_Inst,ACPI\BCM2848
+%ACPI\DWC_OTG.DeviceDesc%=DWC2_Inst,ACPI\DWC_OTG
 %USB\ROOT_HUB.DeviceDesc%=RootHub_Inst,USB\ROOT_HUB
 %USB\ROOT_HUB.DeviceDesc%=RootHub_Inst,USB\ROOT_HUB20
 
@@ -94,6 +96,25 @@ ServiceType   = 1
 StartType     = 0
 ErrorControl  = 1
 ServiceBinary = %12%\usbehci.sys
+LoadOrderGroup = Base
+
+;------------------------------ DWC2 DRIVER -----------------------------
+
+[DWC2_Inst.NT]
+CopyFiles = DWC2_CopyFiles.NT
+
+[DWC2_CopyFiles.NT]
+usbport.sys
+usbdwc2.sys
+
+[DWC2_Inst.NT.Services]
+AddService = usbdwc2, 0x00000002, usbdwc2_Service_Inst
+
+[usbdwc2_Service_Inst]
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
+ServiceBinary = %12%\usbdwc2.sys
 LoadOrderGroup = Base
 
 ;------------------------------ XHCI DRIVER -----------------------------
@@ -159,6 +180,8 @@ PCI\CC_0C0310.DeviceDesc = "OHCI USB controller"
 PCI\CC_0C0320.DeviceDesc = "EHCI USB controller"
 PCI\CC_0C0330.DeviceDesc = "xHCI USB controller"
 ACPI\PNP0D10.DeviceDesc = "xHCI USB controller"
+ACPI\BCM2848.DeviceDesc = "Broadcom DWC2 USB controller"
+ACPI\DWC_OTG.DeviceDesc = "Synopsys DWC2 USB controller"
 USB\ROOT_HUB.DeviceDesc = "Root hub"
 PCI\VEN_8086&DEV_7020&CC_0C0300.DeviceDesc = "Intel 82371SB PIIX3 USB controller"
 PCI\VEN_8086&DEV_7112&CC_0C0300.DeviceDesc = "Intel 82371AB/EB/MB PIIX4 USB controller"

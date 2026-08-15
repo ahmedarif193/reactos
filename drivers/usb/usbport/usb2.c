@@ -1838,7 +1838,22 @@ USBPORT_AllocateBandwidthUSB2(IN PDEVICE_OBJECT FdoDevice,
             case UsbLowSpeed:
             case UsbFullSpeed:
             {
-                Tt = &TtExtension->Tt;
+                if (TtExtension)
+                {
+                    Tt = &TtExtension->Tt;
+                }
+                else if (FdoExtension->MiniPortInterface->Packet.MiniPortFlags & USB_MINIPORT_FLAGS_USB2_DIRECT_FSLS)
+                {
+                    Tt = &FdoExtension->Usb2Extension->HcTt;
+                    DPRINT1("USBPORT_AllocateBandwidthUSB2: scheduling direct root FS/LS endpoint without a TT\n");
+                }
+                else
+                {
+                    DPRINT1("USBPORT_AllocateBandwidthUSB2: FS/LS endpoint has no transaction translator\n");
+                    ExFreePoolWithTag(Rebalance, USB_PORT_TAG);
+                    return FALSE;
+                }
+
                 Period = USB2_FRAMES;
 
                 while (Period > 0 && Period > EndpointProperties->Period)

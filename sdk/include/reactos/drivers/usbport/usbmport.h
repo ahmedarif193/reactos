@@ -650,6 +650,9 @@ typedef VOID
 #define USB_MINIPORT_FLAGS_CLOSE_AT_PASSIVE 0x0800
 /* Miniport can submit and poll dump transfers after a HIGH_LEVEL bugcheck. */
 #define USB_MINIPORT_FLAGS_DUMP_POLLING 0x1000
+/* USB 2.0 controller can transact directly with root-attached FS/LS devices
+ * without an EHCI companion controller or an external high-speed hub TT. */
+#define USB_MINIPORT_FLAGS_USB2_DIRECT_FSLS 0x2000
 
 #define TOTAL_USB11_BUS_BANDWIDTH        12000
 #define TOTAL_USB20_BUS_BANDWIDTH       400000
