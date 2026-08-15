@@ -1328,6 +1328,95 @@ ChpeShouldEmulateImage(PVOID ImageBase)
             NtHeader->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64);
 }
 
+static const UNICODE_STRING ChpeNtdllImportName = RTL_CONSTANT_STRING(L"ntdll.dll");
+
+static const UNICODE_STRING ChpeArm64EcRedirectImports[] =
+{
+    RTL_CONSTANT_STRING(L"advapi32.dll"),
+    RTL_CONSTANT_STRING(L"comctl32.dll"),
+    RTL_CONSTANT_STRING(L"comdlg32.dll"),
+    RTL_CONSTANT_STRING(L"gdi32.dll"),
+    RTL_CONSTANT_STRING(L"kernel32.dll"),
+    RTL_CONSTANT_STRING(L"kernelbase.dll"),
+    RTL_CONSTANT_STRING(L"kernelbase_ros.dll"),
+    RTL_CONSTANT_STRING(L"libpng.dll"),
+    RTL_CONSTANT_STRING(L"msvcrt.dll"),
+    RTL_CONSTANT_STRING(L"ntdll.dll"),
+    RTL_CONSTANT_STRING(L"ntdll_chpe.dll"),
+    RTL_CONSTANT_STRING(L"shell32.dll"),
+    RTL_CONSTANT_STRING(L"ucrtbase.dll"),
+    RTL_CONSTANT_STRING(L"user32.dll"),
+    RTL_CONSTANT_STRING(L"usp10.dll"),
+};
+
+static
+BOOLEAN
+ChpepIsPureAmd64Image(PVOID ImageBase)
+{
+    return ChpepGetImageMachine(ImageBase) == IMAGE_FILE_MACHINE_AMD64 &&
+           ChpepGetArm64EcMetadata(ImageBase) == NULL;
+}
+
+static
+BOOLEAN
+ChpepNeedsChpeImportRedirects(PVOID ImageBase)
+{
+    USHORT Machine;
+
+    if (!ChpeIsChpeProcess())
+        return FALSE;
+
+    Machine = ChpepGetImageMachine(ImageBase);
+    return Machine == IMAGE_FILE_MACHINE_AMD64 ||
+           Machine == IMAGE_FILE_MACHINE_ARM64EC;
+}
+
+static
+VOID
+ChpepGetImportBaseName(PUNICODE_STRING ImportName,
+                       PUNICODE_STRING BaseName)
+{
+    USHORT Index;
+
+    *BaseName = *ImportName;
+    BaseName->MaximumLength = BaseName->Length;
+
+    for (Index = ImportName->Length / sizeof(WCHAR); Index > 0; --Index)
+    {
+        if (ImportName->Buffer[Index - 1] == L'\\' || ImportName->Buffer[Index - 1] == L'/')
+        {
+            BaseName->Buffer += Index;
+            BaseName->Length -= Index * sizeof(WCHAR);
+            BaseName->MaximumLength = BaseName->Length;
+            break;
+        }
+    }
+}
+
+BOOLEAN
+NTAPI
+ChpeShouldRedirectImport(PVOID ImportBase,
+                         PUNICODE_STRING ImportName)
+{
+    UNICODE_STRING BaseName;
+    ULONG Index;
+
+    if (!ImportName || !ImportName->Buffer || !ChpepNeedsChpeImportRedirects(ImportBase))
+        return FALSE;
+
+    ChpepGetImportBaseName(ImportName, &BaseName);
+    if (RtlEqualUnicodeString(&BaseName, &ChpeNtdllImportName, TRUE) && !ChpepIsPureAmd64Image(ImportBase))
+        return FALSE;
+
+    for (Index = 0; Index < RTL_NUMBER_OF(ChpeArm64EcRedirectImports); ++Index)
+    {
+        if (RtlEqualUnicodeString(&BaseName, &ChpeArm64EcRedirectImports[Index], TRUE))
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
 BOOLEAN
 NTAPI
 ChpeGetArm64EcRedirection(PVOID ImageBase,
