@@ -105,6 +105,7 @@ HKR, , SilentInstall,  0, 1
 %Intel_BYT_SD.DeviceDesc% = sdbus_Inst, ACPI\80860F14
 %Intel_APL_SD.DeviceDesc% = sdbus_Inst, ACPI\80865ACA
 %Intel_GLK_SD.DeviceDesc% = sdbus_Inst, ACPI\80864B47
+%Broadcom_BCM2712_SD.DeviceDesc% = sdbus_Inst, ACPI\BRCM5D12
 
 [ControlFlags]
 ExcludeFromSelect = *
@@ -156,6 +157,7 @@ SD_HOST_ACPI.DeviceDesc = "Standard SD Host Controller (ACPI)"
 Intel_BYT_SD.DeviceDesc = "Intel Bay Trail SD/SDIO Host Controller"
 Intel_APL_SD.DeviceDesc = "Intel Apollo Lake SD Host Controller"
 Intel_GLK_SD.DeviceDesc = "Intel Gemini Lake SD Host Controller"
+Broadcom_BCM2712_SD.DeviceDesc = "Broadcom BCM2712 SD Host Controller"
 
 SPSVCINST_ASSOCSERVICE = 0x00000002
 SERVICE_KERNEL_DRIVER  = 1

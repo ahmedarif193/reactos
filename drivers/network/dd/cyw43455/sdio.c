@@ -6,6 +6,9 @@
  */
 
 #include "cyw43455.h"
+#include <devpkey.h>
+#include <initguid.h>
+#include <reactos/drivers/cyw43455sdio.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -15,6 +18,328 @@
 #define CYW_SDIO_MAX_COUNT             512
 #define CYW_SDIO_MAX_BLOCK_COUNT       511
 #define CYW_SDIO_MAX_BLOCK_SIZE        0x0FFF
+
+typedef struct _CYW_SDIO_CARD_IDENTITY
+{
+    UNICODE_STRING Prefix;
+    UNICODE_STRING Suffix;
+} CYW_SDIO_CARD_IDENTITY, *PCYW_SDIO_CARD_IDENTITY;
+
+static const DEVPROPKEY CywDevpkeyDeviceInstanceId =
+{
+    {0x78c34fc8, 0x104a, 0x4aca,
+     {0x9e, 0xa4, 0x52, 0x4d, 0x52, 0x99, 0x6e, 0x57}},
+    256
+};
+
+static
+BOOLEAN
+CywSdioParseCardIdentity(
+    _In_z_ PCWSTR DevicePath,
+    _In_ WCHAR ComponentSeparator,
+    _Out_ PCYW_SDIO_CARD_IDENTITY Identity)
+{
+    static const WCHAR FunctionMarker[] = L"_FUNC_";
+    PCWSTR Component;
+    PCWSTR Cursor;
+    PCWSTR Function;
+    PCWSTR FunctionNumber;
+    PCWSTR FunctionEnd;
+    PCWSTR ComponentEnd;
+    SIZE_T PrefixLength;
+    SIZE_T SuffixLength;
+
+    Function = wcsstr(DevicePath, FunctionMarker);
+    if (Function == NULL)
+        return FALSE;
+
+    Component = DevicePath;
+    for (Cursor = DevicePath; Cursor < Function; Cursor++)
+    {
+        if (*Cursor == ComponentSeparator)
+            Component = Cursor + 1;
+    }
+
+    FunctionNumber = Function + RTL_NUMBER_OF(FunctionMarker) - 1;
+    FunctionEnd = FunctionNumber;
+    if (*FunctionNumber < L'0' || *FunctionNumber > L'9')
+        return FALSE;
+    do
+    {
+        FunctionEnd++;
+    } while (*FunctionEnd >= L'0' && *FunctionEnd <= L'9');
+
+    ComponentEnd = FunctionEnd;
+    while (*ComponentEnd != UNICODE_NULL &&
+           *ComponentEnd != ComponentSeparator)
+    {
+        ComponentEnd++;
+    }
+
+    PrefixLength = (SIZE_T)(FunctionNumber - Component);
+    SuffixLength = (SIZE_T)(ComponentEnd - FunctionEnd);
+    if (PrefixLength > MAXUSHORT / sizeof(WCHAR) ||
+        SuffixLength > MAXUSHORT / sizeof(WCHAR))
+    {
+        return FALSE;
+    }
+
+    Identity->Prefix.Buffer = (PWSTR)Component;
+    Identity->Prefix.Length = (USHORT)(PrefixLength * sizeof(WCHAR));
+    Identity->Prefix.MaximumLength = Identity->Prefix.Length;
+    Identity->Suffix.Buffer = (PWSTR)FunctionEnd;
+    Identity->Suffix.Length = (USHORT)(SuffixLength * sizeof(WCHAR));
+    Identity->Suffix.MaximumLength = Identity->Suffix.Length;
+    return TRUE;
+}
+
+static
+BOOLEAN
+CywSdioInterfaceMatchesCard(
+    _In_z_ PCWSTR AdapterInstanceId,
+    _In_z_ PCWSTR InterfaceName)
+{
+    CYW_SDIO_CARD_IDENTITY AdapterIdentity;
+    CYW_SDIO_CARD_IDENTITY InterfaceIdentity;
+
+    if (!CywSdioParseCardIdentity(AdapterInstanceId,
+                                  L'\\',
+                                  &AdapterIdentity) ||
+        !CywSdioParseCardIdentity(InterfaceName,
+                                  L'#',
+                                  &InterfaceIdentity))
+    {
+        return FALSE;
+    }
+
+    return RtlEqualUnicodeString(&AdapterIdentity.Prefix,
+                                 &InterfaceIdentity.Prefix,
+                                 TRUE) &&
+           RtlEqualUnicodeString(&AdapterIdentity.Suffix,
+                                 &InterfaceIdentity.Suffix,
+                                 TRUE);
+}
+
+static
+NTSTATUS
+CywSdioGetInstanceId(
+    _In_ PDEVICE_OBJECT PhysicalDevice,
+    _Outptr_ PWSTR *InstanceId)
+{
+    DEVPROPTYPE PropertyType;
+    ULONG RequiredLength = 0;
+    PWSTR Buffer;
+    NTSTATUS Status;
+
+    *InstanceId = NULL;
+    Status = IoGetDevicePropertyData(PhysicalDevice,
+                                     &CywDevpkeyDeviceInstanceId,
+                                     0,
+                                     0,
+                                     0,
+                                     NULL,
+                                     &RequiredLength,
+                                     &PropertyType);
+    if (Status != STATUS_BUFFER_TOO_SMALL &&
+        Status != STATUS_BUFFER_OVERFLOW)
+    {
+        return Status;
+    }
+    if (PropertyType != DEVPROP_TYPE_STRING ||
+        RequiredLength < sizeof(WCHAR))
+    {
+        return STATUS_DEVICE_DATA_ERROR;
+    }
+
+    Buffer = CywAllocate(RequiredLength);
+    if (Buffer == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Status = IoGetDevicePropertyData(PhysicalDevice,
+                                     &CywDevpkeyDeviceInstanceId,
+                                     0,
+                                     0,
+                                     RequiredLength,
+                                     Buffer,
+                                     &RequiredLength,
+                                     &PropertyType);
+    if (!NT_SUCCESS(Status) || PropertyType != DEVPROP_TYPE_STRING ||
+        RequiredLength < sizeof(WCHAR) ||
+        Buffer[RequiredLength / sizeof(WCHAR) - 1] != UNICODE_NULL)
+    {
+        CywFree(Buffer);
+        return NT_SUCCESS(Status) ? STATUS_DEVICE_DATA_ERROR : Status;
+    }
+
+    *InstanceId = Buffer;
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+CywSdioOpenControl(
+    _Inout_ PCYW_ADAPTER Adapter)
+{
+    PWSTR InterfaceList;
+    PWSTR Cursor;
+    PWSTR AdapterInstanceId;
+    NTSTATUS Status;
+
+    Status = CywSdioGetInstanceId(Adapter->Pdo, &AdapterInstanceId);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = IoGetDeviceInterfaces(
+        &GUID_DEVINTERFACE_REACTOS_CYW43455_SDIO_CONTROL,
+        NULL,
+        0,
+        &InterfaceList);
+    if (!NT_SUCCESS(Status))
+    {
+        CywFree(AdapterInstanceId);
+        return Status;
+    }
+
+    Status = STATUS_DEVICE_NOT_CONNECTED;
+    for (Cursor = InterfaceList; *Cursor != UNICODE_NULL;
+         Cursor += wcslen(Cursor) + 1)
+    {
+        UNICODE_STRING InterfaceName;
+        PFILE_OBJECT FileObject;
+        PDEVICE_OBJECT DeviceObject;
+
+        if (!CywSdioInterfaceMatchesCard(AdapterInstanceId, Cursor))
+            continue;
+
+        RtlInitUnicodeString(&InterfaceName, Cursor);
+        Status = IoGetDeviceObjectPointer(&InterfaceName,
+                                          FILE_READ_DATA |
+                                              FILE_WRITE_DATA |
+                                              SYNCHRONIZE,
+                                          &FileObject,
+                                          &DeviceObject);
+        if (NT_SUCCESS(Status))
+        {
+            Adapter->SdioControlFileObject = FileObject;
+            Adapter->SdioControlDeviceObject = DeviceObject;
+            break;
+        }
+    }
+
+    ExFreePool(InterfaceList);
+    CywFree(AdapterInstanceId);
+    return Status;
+}
+
+static
+VOID
+CywSdioCloseControl(
+    _Inout_ PCYW_ADAPTER Adapter)
+{
+    if (Adapter->SdioControlFileObject != NULL)
+        ObDereferenceObject(Adapter->SdioControlFileObject);
+    Adapter->SdioControlFileObject = NULL;
+    Adapter->SdioControlDeviceObject = NULL;
+}
+
+static
+NTSTATUS
+CywSdioControlTransfer(
+    _In_ PCYW_ADAPTER Adapter,
+    _In_ BOOLEAN Direct,
+    _In_ BOOLEAN Write,
+    _In_ BOOLEAN BlockMode,
+    _In_ BOOLEAN Increment,
+    _In_ ULONG Address,
+    _Inout_updates_bytes_(Length) PUCHAR Buffer,
+    _In_ ULONG Length,
+    _In_ ULONG BlockSize)
+{
+    PCYW43455_SDIO_TRANSFER Transfer;
+    ULONG TransferSize;
+    ULONG InputLength;
+    ULONG OutputLength;
+    IO_STATUS_BLOCK IoStatus;
+    KEVENT Event;
+    PIRP Irp;
+    NTSTATUS Status;
+
+    if (Adapter->SdioControlDeviceObject == NULL ||
+        Adapter->SdioControlFileObject == NULL || Buffer == NULL ||
+        Length == 0 || Length > CYW43455_SDIO_MAX_TRANSFER ||
+        Length > MAXULONG - CYW43455_SDIO_TRANSFER_HEADER_SIZE)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    TransferSize = CYW43455_SDIO_TRANSFER_SIZE(Length);
+    Transfer = CywAllocate(TransferSize);
+    if (Transfer == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Transfer->Version = CYW43455_SDIO_TRANSPORT_VERSION;
+    Transfer->Size = CYW43455_SDIO_TRANSFER_HEADER_SIZE;
+    Transfer->Address = Address;
+    Transfer->Length = Length;
+    Transfer->BlockSize = BlockSize;
+    if (Direct)
+        Transfer->Flags |= CYW43455_SDIO_TRANSFER_DIRECT;
+    if (Write)
+    {
+        Transfer->Flags |= CYW43455_SDIO_TRANSFER_WRITE;
+        RtlCopyMemory(Transfer->Data, Buffer, Length);
+    }
+    if (BlockMode)
+        Transfer->Flags |= CYW43455_SDIO_TRANSFER_BLOCK_MODE;
+    if (Increment)
+        Transfer->Flags |= CYW43455_SDIO_TRANSFER_INCREMENT;
+
+    InputLength = Write ? TransferSize : CYW43455_SDIO_TRANSFER_HEADER_SIZE;
+    OutputLength = Write ? 0 : TransferSize;
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+    Irp = IoBuildDeviceIoControlRequest(IOCTL_CYW43455_SDIO_TRANSFER,
+                                        Adapter->SdioControlDeviceObject,
+                                        Transfer,
+                                        InputLength,
+                                        Write ? NULL : Transfer,
+                                        OutputLength,
+                                        TRUE,
+                                        &Event,
+                                        &IoStatus);
+    if (Irp == NULL)
+    {
+        CywFree(Transfer);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Status = IoCallDriver(Adapter->SdioControlDeviceObject, Irp);
+    if (Status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&Event,
+                              Executive,
+                              KernelMode,
+                              FALSE,
+                              NULL);
+        Status = IoStatus.Status;
+    }
+
+    if (NT_SUCCESS(Status) && !Write)
+    {
+        if (IoStatus.Information < TransferSize)
+            Status = STATUS_DEVICE_DATA_ERROR;
+        else
+            RtlCopyMemory(Buffer, Transfer->Data, Length);
+    }
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("CYW: FN1 %s%s address 0x%05lx length %lu failed 0x%08lx\n",
+                Write ? "write" : "read", Direct ? "-direct" : "",
+                Address, Length, Status);
+    }
+
+    CywFree(Transfer);
+    return Status;
+}
 
 PVOID
 CywAllocate(
@@ -51,6 +376,13 @@ CywSdioOpen(
     if (NT_SUCCESS(Status))
     {
         Adapter->SdBusOpened = TRUE;
+        Status = CywSdioOpenControl(Adapter);
+        if (!NT_SUCCESS(Status))
+        {
+            Adapter->SdBus.InterfaceDereference(Adapter->SdBus.Context);
+            Adapter->SdBusOpened = FALSE;
+            RtlZeroMemory(&Adapter->SdBus, sizeof(Adapter->SdBus));
+        }
     }
 
     return Status;
@@ -60,6 +392,7 @@ VOID
 CywSdioClose(
     _In_ PCYW_ADAPTER Adapter)
 {
+    CywSdioCloseControl(Adapter);
     if (Adapter->SdBusOpened && Adapter->SdBus.InterfaceDereference != NULL)
     {
         Adapter->SdBus.InterfaceDereference(Adapter->SdBus.Context);
@@ -83,6 +416,19 @@ CywSdioReadByte(
         Function > CYW_SDIO_MAX_FUNCTION || Address > CYW_SDIO_MAX_ADDRESS)
     {
         return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Function == CYW_SDIO_FUNC_BACKPLANE)
+    {
+        return CywSdioControlTransfer(Adapter,
+                                      TRUE,
+                                      FALSE,
+                                      FALSE,
+                                      FALSE,
+                                      Address,
+                                      Value,
+                                      sizeof(*Value),
+                                      0);
     }
 
     SD_INIT_REQUEST_PACKET(&Packet, SDRF_IO_RW_DIRECT);
@@ -114,6 +460,19 @@ CywSdioWriteByte(
         Function > CYW_SDIO_MAX_FUNCTION || Address > CYW_SDIO_MAX_ADDRESS)
     {
         return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Function == CYW_SDIO_FUNC_BACKPLANE)
+    {
+        return CywSdioControlTransfer(Adapter,
+                                      TRUE,
+                                      TRUE,
+                                      FALSE,
+                                      FALSE,
+                                      Address,
+                                      &Value,
+                                      sizeof(Value),
+                                      0);
     }
 
     SD_INIT_REQUEST_PACKET(&Packet, SDRF_IO_RW_DIRECT);
@@ -292,6 +651,19 @@ CywSdioRw(
     if (Increment && Length - 1 > CYW_SDIO_MAX_ADDRESS - Address)
     {
         return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Function == CYW_SDIO_FUNC_BACKPLANE)
+    {
+        return CywSdioControlTransfer(Adapter,
+                                      FALSE,
+                                      Write,
+                                      BlockMode,
+                                      Increment,
+                                      Address,
+                                      Buffer,
+                                      Length,
+                                      BlockSize);
     }
 
     Mdl = CywAcquireMdl(Adapter, Buffer, Length, &OwnedMdl);

@@ -925,18 +925,6 @@ CywChipBringUp(
         return STATUS_INVALID_PARAMETER;
     }
 
-    Status = CywSdioSetBlockSize(Adapter, CYW_SDIO_FUNC_BACKPLANE, CYW_F1_BLOCKSIZE);
-    if (!NT_SUCCESS(Status))
-    {
-        return Status;
-    }
-
-    Status = CywSdioEnableFunction(Adapter, CYW_SDIO_FUNC_BACKPLANE);
-    if (!NT_SUCCESS(Status))
-    {
-        return Status;
-    }
-
     Status = CywChipRecognize(Adapter);
     if (!NT_SUCCESS(Status))
     {
