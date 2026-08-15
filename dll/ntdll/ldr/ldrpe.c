@@ -237,6 +237,12 @@ LdrpSnapIAT(IN PLDR_DATA_TABLE_ENTRY ExportLdrEntry,
     }
 
 IatReady:
+#if LDRP_CHPE_IMPORT_REDIRECTION
+    /* ARM64EC auxiliary IAT entries must be rebuilt from their import-checker copies. */
+    if (EntriesValid && ChpeGetImageMachine(ImportLdrEntry->DllBase) == IMAGE_FILE_MACHINE_ARM64EC)
+        EntriesValid = FALSE;
+#endif
+
     /* Check if the Thunks are already valid */
     if (EntriesValid)
     {
@@ -1422,6 +1428,21 @@ FailurePath:
             /* It's not within the exports, let's hope it's valid */
             if (!AddressOfFunctions[Ordinal]) goto FailurePath;
         }
+
+#if LDRP_CHPE_IMPORT_REDIRECTION
+        if (Static)
+        {
+            Status = ChpeValidateImportThunk(ImportBase, ExportBase, Thunk->u1.Function, DllName, IsOrdinal ? NULL : ImportName, OriginalOrdinal, IsOrdinal);
+            if (!NT_SUCCESS(Status))
+                return Status;
+
+            if (ChpeGetImageMachine(ImportBase) == IMAGE_FILE_MACHINE_ARM64EC &&
+                !ChpePatchArm64EcAuxiliaryIat(ImportBase, ExportBase, Thunk, Thunk->u1.Function))
+            {
+                return STATUS_INVALID_IMAGE_FORMAT;
+            }
+        }
+#endif
 
         /* If we got here, then it's success */
         Status = STATUS_SUCCESS;
