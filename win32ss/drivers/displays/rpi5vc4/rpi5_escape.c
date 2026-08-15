@@ -8,6 +8,17 @@
 #include "framebuf.h"
 #include <reactos/rpi5vc4_xpdm.h>
 
+#define RPI5VC4_OPENGL_ICD_VERSION 1
+#define RPI5VC4_OPENGL_ICD_DRIVER_VERSION 1
+#define OPENGL_GETINFO_DRVNAME 0
+
+typedef struct _RPI5VC4_OPENGL_INFO
+{
+    ULONG Version;
+    ULONG DriverVersion;
+    WCHAR DriverName[MAX_PATH + 1];
+} RPI5VC4_OPENGL_INFO, *PRPI5VC4_OPENGL_INFO;
+
 static BOOL
 Rpi5Vc4V3dExecutionSupported(
     _In_ PPDEV Device)
@@ -60,6 +71,9 @@ DrvEscape(
         if (RequestedEscape == RPI5VC4_ESCAPE_RENDER_CLEAR)
             return Rpi5Vc4V3dExecutionSupported(Device) ? 1 : 0;
 
+        if (RequestedEscape == OPENGL_GETINFO)
+            return Rpi5Vc4V3dExecutionSupported(Device) ? 1 : 0;
+
         return RequestedEscape == RPI5VC4_ESCAPE_QUERY_V3D ||
                RequestedEscape == RPI5VC4_ESCAPE_RUN_V3D_SELFTEST;
     }
@@ -70,7 +84,32 @@ DrvEscape(
     }
 
     Returned = 0;
-    if (iEsc == RPI5VC4_ESCAPE_QUERY_V3D &&
+    if (iEsc == OPENGL_GETINFO)
+    {
+        static const WCHAR IcdName[] = L"Rpi5Vc4";
+        ULONG Query;
+        PRPI5VC4_OPENGL_INFO Info;
+
+        if (pvIn == NULL ||
+            cjIn < sizeof(Query) ||
+            cjOut < sizeof(*Info) ||
+            !Rpi5Vc4V3dExecutionSupported(Device))
+        {
+            return 0;
+        }
+
+        Query = *(PULONG)pvIn;
+        if (Query != OPENGL_GETINFO_DRVNAME)
+            return 0;
+
+        Info = pvOut;
+        memset(Info, 0, sizeof(*Info));
+        Info->Version = RPI5VC4_OPENGL_ICD_VERSION;
+        Info->DriverVersion = RPI5VC4_OPENGL_ICD_DRIVER_VERSION;
+        memcpy(Info->DriverName, IcdName, sizeof(IcdName));
+        return sizeof(*Info);
+    }
+    else if (iEsc == RPI5VC4_ESCAPE_QUERY_V3D &&
         cjOut >= sizeof(RPI5VC4_V3D_INFO))
     {
         if (EngDeviceIoControl(Device->hDriver,

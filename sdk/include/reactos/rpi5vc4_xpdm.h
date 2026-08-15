@@ -138,4 +138,18 @@ typedef struct _RPI5VC4_V3D_CLEAR_RESULT
     ULONG Pixels[1];
 } RPI5VC4_V3D_CLEAR_RESULT, *PRPI5VC4_V3D_CLEAR_RESULT;
 
+#define RPI5VC4_OGL_STATS_VERSION 1
+
+typedef struct _RPI5VC4_OGL_STATS
+{
+    ULONG Size;
+    ULONG Version;
+    ULONG HardwareClearCount;
+    ULONG SoftwareClearCount;
+    ULONG HardwareClearFailureCount;
+    ULONG LastHardwareStatus;
+    ULONG LastWidth;
+    ULONG LastHeight;
+} RPI5VC4_OGL_STATS, *PRPI5VC4_OGL_STATS;
+
 #endif /* _REACTOS_RPI5VC4_XPDM_H_ */

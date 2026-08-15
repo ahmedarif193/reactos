@@ -17,3 +17,7 @@ HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Device0","DefaultSettings.XResol
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Device0","DefaultSettings.YResolution",0x00010001,0x00000300
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Device0","Device Description",0x00000000,"Raspberry Pi 5 VC4 Display"
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Device0","VgaCompatible",0x00010001,0x00000000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Rpi5Vc4","Dll",0x00000000,"rpi5vc4ogl.dll"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Rpi5Vc4","Version",0x00010001,0x00000001
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Rpi5Vc4","DriverVersion",0x00010001,0x00000001
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Rpi5Vc4","Flags",0x00010001,0x00000000

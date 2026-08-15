@@ -29,6 +29,7 @@ rpi5vc4.sys
 
 [Rpi5Vc4.Display_CopyFiles]
 rpi5vc4disp.dll
+rpi5vc4ogl.dll
 
 [Rpi5Vc4_SoftwareSettings]
 HKR,,InstalledDisplayDrivers,%REG_MULTI_SZ%,rpi5vc4disp
@@ -38,6 +39,10 @@ HKR,,DefaultSettings.BitsPerPel,%REG_DWORD%,32
 HKR,,DefaultSettings.XResolution,%REG_DWORD%,1024
 HKR,,DefaultSettings.YResolution,%REG_DWORD%,768
 HKR,,"Device Description",%REG_SZ%,"%Rpi5Vc4.DeviceDesc%"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Rpi5Vc4","Dll",%REG_SZ%,"rpi5vc4ogl.dll"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Rpi5Vc4","Version",%REG_DWORD%,0x00000001
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Rpi5Vc4","DriverVersion",%REG_DWORD%,0x00000001
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Rpi5Vc4","Flags",%REG_DWORD%,0x00000000
 
 [Rpi5Vc4_Install.Services]
 AddService=rpi5vc4,0x00000002,Rpi5Vc4_Service
