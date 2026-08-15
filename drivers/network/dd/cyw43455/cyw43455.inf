@@ -16,17 +16,16 @@ DefaultDestDir = 12
 %ReactOS% = Models,NTamd64,NTARM64
 
 [Models]
-%cyw.DeviceDesc% = cyw.ndi, SD\VID_02D0&PID_A9BF&FN_1
-%cyw.DeviceDesc% = cyw.ndi, SD\VID_02D0&PID_4345&FN_1
+%cyw.DeviceDesc% = cyw.ndi, SD\VID_02D0&PID_A9BF&FN_2
+%cyw.DeviceDesc% = cyw.ndi, SD\VID_02D0&PID_4345&FN_2
 
 [Models.NTamd64]
-%cyw.DeviceDesc% = cyw.ndi, SD\VID_02D0&PID_A9BF&FN_1
-%cyw.DeviceDesc% = cyw.ndi, SD\VID_02D0&PID_4345&FN_1
+%cyw.DeviceDesc% = cyw.ndi, SD\VID_02D0&PID_A9BF&FN_2
+%cyw.DeviceDesc% = cyw.ndi, SD\VID_02D0&PID_4345&FN_2
 
 [Models.NTARM64]
-%cyw.DeviceDesc% = cyw.ndi, SD\VID_02D0&PID_A9BF&FN_1
-%cyw.DeviceDesc% = cyw.ndi, SD\VID_02D0&PID_4345&FN_1
-%cyw.DeviceDesc% = cyw.ndi, SD\CLASS_07
+%cyw.DeviceDesc% = cyw.ndi, SD\VID_02D0&PID_A9BF&FN_2
+%cyw.DeviceDesc% = cyw.ndi, SD\VID_02D0&PID_4345&FN_2
 
 [cyw.ndi]
 Characteristics = 0x84

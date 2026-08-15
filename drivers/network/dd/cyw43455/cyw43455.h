@@ -602,6 +602,8 @@ typedef struct _CYW_ADAPTER
     PDEVICE_OBJECT Pdo;
     SDBUS_INTERFACE_STANDARD SdBus;
     BOOLEAN SdBusOpened;
+    PFILE_OBJECT SdioControlFileObject;
+    PDEVICE_OBJECT SdioControlDeviceObject;
 
     ULONG ChipId;
     ULONG ChipRev;
