@@ -254,6 +254,13 @@ AcpiOsMapMemory (
     ACPI_SIZE               Length);
 #endif
 
+#if defined(__REACTOS__) && defined(_M_ARM64)
+void *
+AcpiOsMapOperationRegion (
+    ACPI_PHYSICAL_ADDRESS   Where,
+    ACPI_SIZE               Length);
+#endif
+
 #ifndef ACPI_USE_ALTERNATE_PROTOTYPE_AcpiOsUnmapMemory
 void
 AcpiOsUnmapMemory (
