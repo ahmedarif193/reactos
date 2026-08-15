@@ -56,6 +56,30 @@ Rpi5OglFboGetTexImage(
     _In_ GLenum Type,
     _Out_ GLvoid *Pixels);
 
+VOID APIENTRY
+Rpi5OglFboTexImage2D(
+    _In_ GLenum Target,
+    _In_ GLint Level,
+    _In_ GLint InternalFormat,
+    _In_ GLsizei Width,
+    _In_ GLsizei Height,
+    _In_ GLint Border,
+    _In_ GLenum Format,
+    _In_ GLenum Type,
+    _In_opt_ const GLvoid *Pixels);
+
+VOID APIENTRY
+Rpi5OglFboTexSubImage2D(
+    _In_ GLenum Target,
+    _In_ GLint Level,
+    _In_ GLint XOffset,
+    _In_ GLint YOffset,
+    _In_ GLsizei Width,
+    _In_ GLsizei Height,
+    _In_ GLenum Format,
+    _In_ GLenum Type,
+    _In_opt_ const GLvoid *Pixels);
+
 PROC
 Rpi5OglFboGetProcAddress(
     _In_z_ LPCSTR Name);
