@@ -1716,12 +1716,13 @@ Rpi5OglGl2FloatColor(
 }
 
 RPI5VC4_OGL_GL2_DRAW_RESULT
-Rpi5OglGl2BuildTriangle(
+Rpi5OglGl2BuildPrimitive(
     _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
     _In_ GLenum Mode,
     _In_ GLint First,
     _In_ GLsizei Count,
-    _Out_writes_(3) RPI5VC4_OGL_GL2_VERTEX Vertices[3])
+    _Out_writes_(RPI5VC4_OGL_GL2_MAX_DRAW_VERTICES)
+        RPI5VC4_OGL_GL2_VERTEX *Vertices)
 {
     PRPI5VC4_OGL_PROGRAM Program;
     GLfloat Position[4];
@@ -1737,13 +1738,14 @@ Rpi5OglGl2BuildTriangle(
     {
         return Rpi5OglGl2DrawNotApplicable;
     }
-    if (Mode != GL_TRIANGLES || Count != 3)
+    if ((Mode != GL_TRIANGLES || Count != 3) &&
+        (Mode != GL_TRIANGLE_STRIP || Count != 4))
     {
         Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
                         "glDrawArrays(bounded generic draw)");
         return Rpi5OglGl2DrawRejected;
     }
-    if (First < 0 || First > 0x7ffffffd)
+    if (First < 0 || First > 0x7fffffff - Count)
     {
         Rpi5OglGl2Error(State, GL_INVALID_VALUE,
                         "glDrawArrays(first)");
@@ -1756,7 +1758,7 @@ Rpi5OglGl2BuildTriangle(
         return Rpi5OglGl2DrawRejected;
     }
 
-    for (Vertex = 0; Vertex < 3; Vertex++)
+    for (Vertex = 0; Vertex < Count; Vertex++)
     {
         if (!Rpi5OglGl2ReadVertexAttrib(
                 State,
