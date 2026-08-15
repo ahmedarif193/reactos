@@ -1811,7 +1811,9 @@ KxQueueReadyThread(IN PKTHREAD Thread,
 
     /* Check if this thread is allowed to run in this CPU */
 #ifdef CONFIG_SMP
-    if (KiThreadAffinityMask(Thread) & (Prcb->SetMember))
+    if ((KiThreadAffinityMask(Thread) & Prcb->SetMember) &&
+        (!KiIsProcessorParked(Prcb) ||
+         !(KiThreadAffinityMask(Thread) & KiGetNonParkedProcessorSet())))
 #else
     if (TRUE)
 #endif
