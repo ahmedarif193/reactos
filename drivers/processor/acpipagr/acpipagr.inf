@@ -1,0 +1,43 @@
+; Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+; SPDX-License-Identifier: GPL-3.0-or-later
+
+[Version]
+Signature = "$Windows NT$"
+Class = System
+ClassGUID = {4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider = %ReactOS%
+DriverVer = 08/15/2026,1.0.0.0
+
+[ControlFlags]
+ExcludeFromSelect = *
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[Manufacturer]
+%ReactOS% = ReactOS,NTarm64
+
+[ReactOS.NTarm64]
+%AcpiPagr.DeviceDesc% = AcpiPagr_Inst,ACPI\ACPI000C
+
+[AcpiPagr_Inst.NT]
+CopyFiles = AcpiPagr_CopyFiles
+
+[AcpiPagr_CopyFiles]
+acpipagr.sys
+
+[AcpiPagr_Inst.NT.Services]
+AddService = ACPIPAGR,0x00000002,AcpiPagr_Service
+
+[AcpiPagr_Service]
+DisplayName = %AcpiPagr.ServiceDesc%
+ServiceType = 1
+StartType = 3
+ErrorControl = 1
+ServiceBinary = %12%\acpipagr.sys
+LoadOrderGroup = Extended Base
+
+[Strings]
+ReactOS = "ReactOS Project"
+AcpiPagr.DeviceDesc = "ACPI Processor Aggregator"
+AcpiPagr.ServiceDesc = "ReactOS ACPI Processor Aggregator Driver"

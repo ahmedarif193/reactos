@@ -1021,6 +1021,7 @@
 @ stdcall PoSetHiberRange(ptr long ptr long long)
 @ stdcall PoSetPowerState(ptr long long)
 @ stdcall PoSetSystemState(long)
+@ stdcall -arch=arm64 PoSetProcessorAggregatorParking(long ptr)
 @ stdcall PoSetSystemWake(ptr)
 @ stdcall -version=0xA00+ PoSetThermalActiveCooling(ptr long)
 @ stdcall -version=0xA00+ PoSetThermalPassiveCooling(ptr long)

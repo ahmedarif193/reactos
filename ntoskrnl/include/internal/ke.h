@@ -107,6 +107,9 @@ extern ULONG64 KeFeatureBits;
 extern KAFFINITY KeActiveProcessors;
 extern ULONG KeBugCheckActive;
 extern PKPRCB KiProcessorBlock[];
+#ifdef _M_ARM64
+extern KSCHEDULER_SUBNODE KiNode0SubNode;
+#endif
 #ifndef KI_MAX_NUMA_NODES
 #ifdef _M_ARM64
 #define KI_MAX_NUMA_NODES MAXIMUM_PROCESSORS
@@ -123,6 +126,15 @@ extern KNODE KiNode0;
 extern PKNODE KeNodeBlock[KI_MAX_NUMA_NODES];
 extern UCHAR KeNumberNodes;
 extern UCHAR KeProcessNodeSeed;
+
+KAFFINITY
+FASTCALL
+KiGetNonParkedProcessorSet(VOID);
+
+BOOLEAN
+FASTCALL
+KiIsProcessorParked(
+    _In_ PKPRCB Prcb);
 
 //
 // Processor cache/package topology records reported by per-architecture
