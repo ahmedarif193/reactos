@@ -79,21 +79,20 @@
 #define RPI5VC4_V3D_PAGE_SHIFT             12
 #define RPI5VC4_V3D_PAGE_SIZE              (1u << RPI5VC4_V3D_PAGE_SHIFT)
 #define RPI5VC4_V3D_PAGE_TABLE_SIZE        (4u * 1024u * 1024u)
-#define RPI5VC4_V3D_WORK_SIZE              (64u * 1024u)
+#define RPI5VC4_V3D_WORK_SIZE              (2u * 1024u * 1024u)
 #define RPI5VC4_V3D_WORK_GPU_VA            0x01000000u
 #define RPI5VC4_V3D_BCL_OFFSET             0x0000u
 #define RPI5VC4_V3D_RCL_OFFSET             0x1000u
 #define RPI5VC4_V3D_GENERIC_LIST_OFFSET    0x2000u
-#define RPI5VC4_V3D_TILE_ALLOC_OFFSET      0x3000u
-#define RPI5VC4_V3D_TILE_ALLOC_SIZE        0x3000u
-#define RPI5VC4_V3D_TILE_STATE_OFFSET      0x6000u
-#define RPI5VC4_V3D_OUTPUT_OFFSET          0x8000u
-#define RPI5VC4_V3D_OUTPUT_WIDTH           64u
-#define RPI5VC4_V3D_OUTPUT_HEIGHT          64u
-#define RPI5VC4_V3D_OUTPUT_STRIDE          \
-    (RPI5VC4_V3D_OUTPUT_WIDTH * sizeof(ULONG))
-#define RPI5VC4_V3D_OUTPUT_SIZE            \
-    (RPI5VC4_V3D_OUTPUT_STRIDE * RPI5VC4_V3D_OUTPUT_HEIGHT)
+#define RPI5VC4_V3D_TILE_ALLOC_OFFSET      0x4000u
+#define RPI5VC4_V3D_TILE_ALLOC_MAX_SIZE    0x4000u
+#define RPI5VC4_V3D_TILE_STATE_OFFSET      0x8000u
+#define RPI5VC4_V3D_TILE_STATE_MAX_SIZE    0x4000u
+#define RPI5VC4_V3D_OUTPUT_OFFSET          0x10000u
+#define RPI5VC4_V3D_TILE_WIDTH             64u
+#define RPI5VC4_V3D_TILE_HEIGHT            64u
+#define RPI5VC4_V3D_SELFTEST_WIDTH         64u
+#define RPI5VC4_V3D_SELFTEST_HEIGHT        64u
 #define RPI5VC4_V3D_EXPECTED_PIXEL         0xD25AA53Cu
 #define RPI5VC4_V3D_SENTINEL_PIXEL         0x6B1D4E97u
 #define RPI5VC4_V3D_PTE_PFN_LIMIT          (1u << 24)
@@ -193,15 +192,17 @@ Rpi5V3dClLe32(
 
 static VOID
 Rpi5V3dClRenderingCommon(
-    _Inout_ PRPI5VC4_V3D_CL_BUILDER Builder)
+    _Inout_ PRPI5VC4_V3D_CL_BUILDER Builder,
+    _In_ ULONG Width,
+    _In_ ULONG Height)
 {
     ULONG Log2Width = V3D71_TILE_SIZE_LOG2_64;
     ULONG Log2Height = V3D71_TILE_SIZE_LOG2_64;
 
     Rpi5V3dClByte(Builder, V3D71_CL_TILE_RENDERING_MODE_CFG);
     Rpi5V3dClByte(Builder, 0); /* sub-id 0, one render target minus one */
-    Rpi5V3dClLe16(Builder, RPI5VC4_V3D_OUTPUT_WIDTH);
-    Rpi5V3dClLe16(Builder, RPI5VC4_V3D_OUTPUT_HEIGHT);
+    Rpi5V3dClLe16(Builder, Width);
+    Rpi5V3dClLe16(Builder, Height);
     Rpi5V3dClByte(Builder, (1u << 6)); /* early-z disable */
     Rpi5V3dClByte(Builder,
                   (UCHAR)((Log2Width << 4) | (Log2Height << 7)));
@@ -285,22 +286,32 @@ Rpi5V3dClDummyTile(
 
 static VOID
 Rpi5V3dClSupertileConfig(
-    _Inout_ PRPI5VC4_V3D_CL_BUILDER Builder)
+    _Inout_ PRPI5VC4_V3D_CL_BUILDER Builder,
+    _In_ ULONG Width,
+    _In_ ULONG Height)
 {
+    ULONG TilesX = (Width + RPI5VC4_V3D_TILE_WIDTH - 1) /
+                   RPI5VC4_V3D_TILE_WIDTH;
+    ULONG TilesY = (Height + RPI5VC4_V3D_TILE_HEIGHT - 1) /
+                   RPI5VC4_V3D_TILE_HEIGHT;
+
     Rpi5V3dClByte(Builder, V3D71_CL_MULTICORE_RENDERING_SUPERTILE_CFG);
-    Rpi5V3dClByte(Builder, 0); /* supertile width: one tile minus one */
-    Rpi5V3dClByte(Builder, 0); /* supertile height: one tile minus one */
+    Rpi5V3dClByte(Builder, (UCHAR)(TilesX - 1));
+    Rpi5V3dClByte(Builder, (UCHAR)(TilesY - 1));
     Rpi5V3dClByte(Builder, 1); /* frame width in supertiles */
     Rpi5V3dClByte(Builder, 1); /* frame height in supertiles */
-    Rpi5V3dClByte(Builder, 1); /* frame width in tiles, low bits */
-    Rpi5V3dClByte(Builder, 0x10); /* frame height in tiles */
-    Rpi5V3dClByte(Builder, 0);
+    Rpi5V3dClByte(Builder, (UCHAR)TilesX);
+    Rpi5V3dClByte(Builder,
+                  (UCHAR)((TilesX >> 8) | ((TilesY & 0x0F) << 4)));
+    Rpi5V3dClByte(Builder, (UCHAR)(TilesY >> 4));
     Rpi5V3dClByte(Builder, 0); /* one tile list minus one */
 }
 
 static VOID
 Rpi5V3dBuildBinningList(
-    _Inout_ PRPI5VC4_V3D_CL_BUILDER Bcl)
+    _Inout_ PRPI5VC4_V3D_CL_BUILDER Bcl,
+    _In_ ULONG Width,
+    _In_ ULONG Height)
 {
     /* One layer, followed by Mesa's V3D 7.1 one-tile binning prologue. */
     Rpi5V3dClByte(Bcl, V3D71_CL_NUMBER_OF_LAYERS);
@@ -312,8 +323,8 @@ Rpi5V3dBuildBinningList(
                   V3D71_TILE_SIZE_LOG2_64 |
                   (V3D71_TILE_SIZE_LOG2_64 << 3));
     Rpi5V3dClLe16(Bcl, 0);
-    Rpi5V3dClLe16(Bcl, RPI5VC4_V3D_OUTPUT_WIDTH - 1);
-    Rpi5V3dClLe16(Bcl, RPI5VC4_V3D_OUTPUT_HEIGHT - 1);
+    Rpi5V3dClLe16(Bcl, Width - 1);
+    Rpi5V3dClLe16(Bcl, Height - 1);
     Rpi5V3dClByte(Bcl, V3D71_CL_FLUSH_VCD_CACHE);
     Rpi5V3dClByte(Bcl, V3D71_CL_START_TILE_BINNING);
     Rpi5V3dClByte(Bcl, V3D71_CL_FLUSH);
@@ -322,6 +333,9 @@ Rpi5V3dBuildBinningList(
 static BOOLEAN
 Rpi5V3dBuildControlLists(
     _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG Width,
+    _In_ ULONG Height,
+    _In_ ULONG ClearColor,
     _Out_ PULONG BclBytes,
     _Out_ PULONG RclBytes,
     _Out_ PULONG GenericBytes)
@@ -351,7 +365,7 @@ Rpi5V3dBuildControlLists(
     Generic.Length = 0;
     Generic.Overflow = FALSE;
 
-    Rpi5V3dBuildBinningList(&Bcl);
+    Rpi5V3dBuildBinningList(&Bcl, Width, Height);
 
     /* Generic per-tile list used by the one 64x64 supertile. */
     Rpi5V3dClByte(&Generic, V3D71_CL_TILE_COORDINATES_IMPLICIT);
@@ -361,22 +375,22 @@ Rpi5V3dBuildControlLists(
     Rpi5V3dClStoreGeneral(&Generic,
                           V3D71_BUFFER_RENDER_TARGET_0,
                           V3D71_OUTPUT_FORMAT_RGBA8UI,
-                          RPI5VC4_V3D_OUTPUT_STRIDE,
+                          Width * sizeof(ULONG),
                           WorkGpuVa + RPI5VC4_V3D_OUTPUT_OFFSET);
     Rpi5V3dClByte(&Generic, V3D71_CL_END_OF_TILE_MARKER);
     Rpi5V3dClByte(&Generic, V3D71_CL_RETURN_FROM_SUB_LIST);
     GenericEnd = GenericStart + Generic.Length;
 
     /* Mesa's V3D 7.1 render-only buffer-fill RCL, including GFXH-1742. */
-    Rpi5V3dClRenderingCommon(&Rcl);
-    Rpi5V3dClRenderTargetPart1(&Rcl, RPI5VC4_V3D_EXPECTED_PIXEL);
+    Rpi5V3dClRenderingCommon(&Rcl, Width, Height);
+    Rpi5V3dClRenderTargetPart1(&Rcl, ClearColor);
     Rpi5V3dClZsClear(&Rcl);
     Rpi5V3dClByte(&Rcl, V3D71_CL_TILE_LIST_INITIAL_BLOCK_SIZE);
     Rpi5V3dClByte(&Rcl, 5); /* 128-byte first block, auto-chain enabled */
     Rpi5V3dClByte(&Rcl, V3D71_CL_MULTICORE_RENDERING_TILE_LIST_BASE);
     Rpi5V3dClLe32(&Rcl,
                   WorkGpuVa + RPI5VC4_V3D_TILE_ALLOC_OFFSET);
-    Rpi5V3dClSupertileConfig(&Rcl);
+    Rpi5V3dClSupertileConfig(&Rcl, Width, Height);
     Rpi5V3dClDummyTile(&Rcl, TRUE);
     Rpi5V3dClDummyTile(&Rcl, FALSE);
     Rpi5V3dClByte(&Rcl, V3D71_CL_FLUSH_VCD_CACHE);
@@ -597,12 +611,37 @@ Rpi5V3dEnginesIdle(
     return Ct0Current == Ct0End && Ct1Current == Ct1End;
 }
 
-VP_STATUS
-Rpi5V3dRunSelfTest(
+static ULONG
+Rpi5V3dTileAllocationSize(
+    _In_ ULONG Width,
+    _In_ ULONG Height)
+{
+    ULONG TilesX = (Width + RPI5VC4_V3D_TILE_WIDTH - 1) /
+                   RPI5VC4_V3D_TILE_WIDTH;
+    ULONG TilesY = (Height + RPI5VC4_V3D_TILE_HEIGHT - 1) /
+                   RPI5VC4_V3D_TILE_HEIGHT;
+    ULONG InitialBytes = TilesX * TilesY * 128u;
+
+    return ((InitialBytes + RPI5VC4_V3D_PAGE_SIZE - 1) &
+            ~(RPI5VC4_V3D_PAGE_SIZE - 1)) +
+           (2u * RPI5VC4_V3D_PAGE_SIZE);
+}
+
+static VP_STATUS
+Rpi5V3dExecuteClear(
     _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
-    _Out_ PRPI5VC4_V3D_SELFTEST Result)
+    _In_ ULONG Width,
+    _In_ ULONG Height,
+    _In_ ULONG ClearColor,
+    _Out_ PRPI5VC4_V3D_SELFTEST Result,
+    _Out_writes_bytes_opt_(ReadbackBytes) PVOID Readback,
+    _In_ ULONG ReadbackBytes,
+    _In_ BOOLEAN DiagnosticLog)
 {
     PULONG Output;
+    ULONG OutputStride;
+    ULONG OutputSize;
+    ULONG TileAllocationSize;
     ULONG BclBytes = 0;
     ULONG RclBytes = 0;
     ULONG GenericBytes = 0;
@@ -621,9 +660,31 @@ Rpi5V3dRunSelfTest(
     Result->Size = sizeof(*Result);
     Result->AbiVersion = RPI5VC4_XPDM_ABI_VERSION;
     Result->Status = RPI5VC4_V3D_SELFTEST_STATUS_NOT_SUPPORTED;
-    Result->ExpectedPixel = RPI5VC4_V3D_EXPECTED_PIXEL;
+    Result->ExpectedPixel = ClearColor;
 
-    if (InterlockedCompareExchange(&DeviceExtension->V3dSelfTestBusy,
+    if (Width == 0 || Height == 0 ||
+        Width > RPI5VC4_V3D_CLEAR_MAX_WIDTH ||
+        Height > RPI5VC4_V3D_CLEAR_MAX_HEIGHT)
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
+
+    OutputStride = Width * sizeof(ULONG);
+    OutputSize = OutputStride * Height;
+    TileAllocationSize = Rpi5V3dTileAllocationSize(Width, Height);
+    if (RPI5VC4_V3D_OUTPUT_OFFSET + OutputSize > RPI5VC4_V3D_WORK_SIZE ||
+        TileAllocationSize > RPI5VC4_V3D_TILE_ALLOC_MAX_SIZE ||
+        (((Width + RPI5VC4_V3D_TILE_WIDTH - 1) /
+          RPI5VC4_V3D_TILE_WIDTH) *
+         ((Height + RPI5VC4_V3D_TILE_HEIGHT - 1) /
+          RPI5VC4_V3D_TILE_HEIGHT) * 256u) >
+            RPI5VC4_V3D_TILE_STATE_MAX_SIZE ||
+        (Readback != NULL && ReadbackBytes < OutputSize))
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
+
+    if (InterlockedCompareExchange(&DeviceExtension->V3dExecutionBusy,
                                    1,
                                    0) != 0)
     {
@@ -668,13 +729,16 @@ Rpi5V3dRunSelfTest(
     Output = (PULONG)((PUCHAR)DeviceExtension->V3dWorkVa +
                       RPI5VC4_V3D_OUTPUT_OFFSET);
     for (Poll = 0;
-         Poll < RPI5VC4_V3D_OUTPUT_SIZE / sizeof(ULONG);
+         Poll < OutputSize / sizeof(ULONG);
          Poll++)
     {
         Output[Poll] = RPI5VC4_V3D_SENTINEL_PIXEL;
     }
 
     if (!Rpi5V3dBuildControlLists(DeviceExtension,
+                                  Width,
+                                  Height,
+                                  ClearColor,
                                   &BclBytes,
                                   &RclBytes,
                                   &GenericBytes))
@@ -727,7 +791,7 @@ Rpi5V3dRunSelfTest(
                  RPI5VC4_V3D_TILE_ALLOC_OFFSET);
     Rpi5V3dWrite(DeviceExtension->V3dCoreBase,
                  V3D_CLE_CT0QMS,
-                 RPI5VC4_V3D_TILE_ALLOC_SIZE);
+                 TileAllocationSize);
     Rpi5V3dWrite(DeviceExtension->V3dCoreBase,
                  V3D_CLE_CT0QTS,
                  (RPI5VC4_V3D_WORK_GPU_VA +
@@ -862,17 +926,14 @@ Rpi5V3dRunSelfTest(
     KeMemoryBarrier();
     Result->FirstPixel = Output[0];
     Result->CenterPixel =
-        Output[(RPI5VC4_V3D_OUTPUT_HEIGHT / 2) *
-               RPI5VC4_V3D_OUTPUT_WIDTH +
-               (RPI5VC4_V3D_OUTPUT_WIDTH / 2)];
+        Output[(Height / 2) * Width + (Width / 2)];
     Result->LastPixel =
-        Output[RPI5VC4_V3D_OUTPUT_WIDTH *
-               RPI5VC4_V3D_OUTPUT_HEIGHT - 1];
+        Output[Width * Height - 1];
     for (Poll = 0;
-         Poll < RPI5VC4_V3D_OUTPUT_SIZE / sizeof(ULONG);
+         Poll < OutputSize / sizeof(ULONG);
          Poll++)
     {
-        if (Output[Poll] != RPI5VC4_V3D_EXPECTED_PIXEL)
+        if (Output[Poll] != ClearColor)
             Result->MismatchCount++;
     }
     Result->Flags |= RPI5VC4_V3D_SELFTEST_FLAG_READBACK_VALID;
@@ -885,6 +946,8 @@ Rpi5V3dRunSelfTest(
 
     Result->Status = RPI5VC4_V3D_SELFTEST_STATUS_SUCCESS;
     Result->Flags |= RPI5VC4_V3D_SELFTEST_FLAG_PASSED;
+    if (Readback != NULL)
+        VideoPortMoveMemory(Readback, Output, OutputSize);
 
 Capture:
     Result->CoreInterruptStatus =
@@ -916,29 +979,112 @@ Capture:
                      (V3D_INT_FRDONE | V3D_INT_FLDONE));
     }
 
-    DbgPrint("RPI5VC4: V3D selftest status=%lu flags=%08lx "
-             "bfc=%lu/%lu ct0=%08lx/%08lx rfc=%lu/%lu "
-             "ct1=%08lx/%08lx mmu=%08lx/%08lx err=%08lx "
-             "pixels=%08lx/%08lx/%08lx mismatches=%lu\n",
-             Result->Status,
-             Result->Flags,
-             Result->BfcBefore,
-             Result->BfcAfter,
-             Result->Ct0Current,
-             Result->Ct0End,
-             Result->RfcBefore,
-             Result->RfcAfter,
-             Result->Ct1Current,
-             Result->Ct1End,
-             Result->MmuControl,
-             Result->MmuViolationAddress,
-             Result->ErrorStatus,
-             Result->FirstPixel,
-             Result->CenterPixel,
-             Result->LastPixel,
-             Result->MismatchCount);
+    if (DiagnosticLog)
+    {
+        DbgPrint("RPI5VC4: V3D selftest status=%lu flags=%08lx "
+                 "bfc=%lu/%lu ct0=%08lx/%08lx rfc=%lu/%lu "
+                 "ct1=%08lx/%08lx mmu=%08lx/%08lx err=%08lx "
+                 "pixels=%08lx/%08lx/%08lx mismatches=%lu\n",
+                 Result->Status,
+                 Result->Flags,
+                 Result->BfcBefore,
+                 Result->BfcAfter,
+                 Result->Ct0Current,
+                 Result->Ct0End,
+                 Result->RfcBefore,
+                 Result->RfcAfter,
+                 Result->Ct1Current,
+                 Result->Ct1End,
+                 Result->MmuControl,
+                 Result->MmuViolationAddress,
+                 Result->ErrorStatus,
+                 Result->FirstPixel,
+                 Result->CenterPixel,
+                 Result->LastPixel,
+                 Result->MismatchCount);
+    }
 
 Done:
-    InterlockedExchange(&DeviceExtension->V3dSelfTestBusy, 0);
+    InterlockedExchange(&DeviceExtension->V3dExecutionBusy, 0);
+    return NO_ERROR;
+}
+
+VP_STATUS
+Rpi5V3dRunSelfTest(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _Out_ PRPI5VC4_V3D_SELFTEST Result)
+{
+    return Rpi5V3dExecuteClear(DeviceExtension,
+                               RPI5VC4_V3D_SELFTEST_WIDTH,
+                               RPI5VC4_V3D_SELFTEST_HEIGHT,
+                               RPI5VC4_V3D_EXPECTED_PIXEL,
+                               Result,
+                               NULL,
+                               0,
+                               TRUE);
+}
+
+VP_STATUS
+Rpi5V3dRenderClear(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ PRPI5VC4_V3D_CLEAR_REQUEST Request,
+    _Out_writes_bytes_(ResultBufferLength) PRPI5VC4_V3D_CLEAR_RESULT Result,
+    _In_ ULONG ResultBufferLength,
+    _Out_ PULONG BytesReturned)
+{
+    RPI5VC4_V3D_SELFTEST Diagnostics;
+    ULONG HeaderSize = FIELD_OFFSET(RPI5VC4_V3D_CLEAR_RESULT, Pixels);
+    ULONG PixelBytes;
+    ULONG RequiredSize;
+    ULONG Width;
+    ULONG Height;
+    ULONG ClearColor;
+    VP_STATUS Status;
+
+    *BytesReturned = 0;
+    if (Request->Size < sizeof(*Request) ||
+        Request->AbiVersion != RPI5VC4_XPDM_ABI_VERSION ||
+        Request->Width == 0 ||
+        Request->Width > RPI5VC4_V3D_CLEAR_MAX_WIDTH ||
+        Request->Height == 0 ||
+        Request->Height > RPI5VC4_V3D_CLEAR_MAX_HEIGHT)
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
+
+    Width = Request->Width;
+    Height = Request->Height;
+    ClearColor = Request->ClearColor;
+    PixelBytes = Width * Height * sizeof(ULONG);
+    RequiredSize = HeaderSize + PixelBytes;
+    if (ResultBufferLength < RequiredSize)
+        return ERROR_INSUFFICIENT_BUFFER;
+
+    Status = Rpi5V3dExecuteClear(DeviceExtension,
+                                 Width,
+                                 Height,
+                                 ClearColor,
+                                 &Diagnostics,
+                                 Result->Pixels,
+                                 PixelBytes,
+                                 FALSE);
+    if (Status != NO_ERROR)
+        return Status;
+
+    Result->Size = RequiredSize;
+    Result->AbiVersion = RPI5VC4_XPDM_ABI_VERSION;
+    Result->Status = Diagnostics.Status;
+    Result->Flags = Diagnostics.Flags;
+    Result->Width = Width;
+    Result->Height = Height;
+    Result->Stride = Width * sizeof(ULONG);
+    Result->ClearColor = ClearColor;
+    Result->PixelBytes = Diagnostics.Status ==
+                         RPI5VC4_V3D_SELFTEST_STATUS_SUCCESS ?
+                         PixelBytes : 0;
+    Result->Diagnostics = Diagnostics;
+    *BytesReturned = Diagnostics.Status ==
+                     RPI5VC4_V3D_SELFTEST_STATUS_SUCCESS ?
+                     RequiredSize : HeaderSize;
     return NO_ERROR;
 }
