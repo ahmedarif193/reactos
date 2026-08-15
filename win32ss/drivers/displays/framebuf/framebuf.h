@@ -86,6 +86,17 @@ typedef struct _PDEV
 #define ALLOC_TAG	'FUBF'
 
 
+#ifdef RPI5VC4_XPDM_DISPLAY
+ULONG APIENTRY
+DrvEscape(
+   IN SURFOBJ *pso,
+   IN ULONG iEsc,
+   IN ULONG cjIn,
+   IN PVOID pvIn,
+   IN ULONG cjOut,
+   OUT PVOID pvOut);
+#endif
+
 BOOL APIENTRY
 DrvEnableDirectDraw(
     DHPDEV dhpdev,
