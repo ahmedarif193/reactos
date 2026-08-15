@@ -1693,6 +1693,14 @@ KiArm64HandleSynchronousException(
 
             /* Not resolved by Mm; dispatch the data abort as an exception. */
 
+#if defined(ARM64_USER_ABORT_TRACE)
+            /*
+             * A user-mode access violation is not necessarily fatal here. It
+             * can still be consumed by a vectored or frame-based exception
+             * handler below (FEX uses this for demand-committing its caches).
+             * Keep the expensive pre-dispatch dump opt-in so normal handled
+             * exceptions are not mislabeled as failures or serialized to KD.
+             */
             if (PreviousMode == UserMode)
             {
                 PETHREAD EThread = PsGetCurrentThread();
@@ -2004,6 +2012,7 @@ KiArm64HandleSynchronousException(
                     }
                 }
             }
+#endif
 #ifdef KDBG
             /*
              * Call KDBG to display crash diagnostics (registers, stack trace,
