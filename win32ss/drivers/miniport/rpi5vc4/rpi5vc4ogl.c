@@ -1,13 +1,13 @@
 /*
  * PROJECT:     ReactOS Raspberry Pi 5 XPDM graphics stack
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
- * PURPOSE:     OpenGL 1.1 ICD with a bounded V3D clear path
+ * PURPOSE:     OpenGL 1.1 ICD with bounded V3D clear and triangle paths
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif193@gmail.com>
  *
  * Mesa 2.5 supplies the OpenGL 1.1 state tracker and software compatibility
- * rasterizer. Full, unmasked color clears are replaced with a kernel-built
- * V3D 7.1 job. No MMIO address or arbitrary command list crosses this ICD
- * boundary.
+ * rasterizer. Full, unmasked color clears and eligible first triangles are
+ * replaced with kernel-built V3D 7.1 jobs. No MMIO address or arbitrary
+ * command list crosses this ICD boundary.
  */
 
 #include <stddef.h>
@@ -19,6 +19,8 @@
 
 #include <context.h>
 #include <matrix.h>
+#include <triangle.h>
+#include <vb.h>
 #include <reactos/rpi5vc4_xpdm.h>
 
 #define RPI5VC4_OGL_CONTEXT_SIGNATURE '1GlR'
@@ -51,6 +53,8 @@ typedef struct _RPI5VC4_OGL_CONTEXT
     ULONG ClearColor;
     ULONG CurrentColor;
     GLenum BufferMode;
+    BOOL HardwareClearFresh;
+    ULONG HardwareClearColor;
     RPI5VC4_OGL_STATS Stats;
 } RPI5VC4_OGL_CONTEXT, *PRPI5VC4_OGL_CONTEXT;
 
@@ -218,6 +222,7 @@ Rpi5OglResizeBackBuffer(
     Context->Width = Width;
     Context->Height = Height;
     Context->Stride = Width * sizeof(ULONG);
+    Context->HardwareClearFresh = FALSE;
     return TRUE;
 }
 
@@ -348,17 +353,237 @@ Rpi5OglHardwareClear(
     if (Success)
     {
         CopyMemory(Context->BackBuffer, Result->Pixels, PixelBytes);
+        Context->HardwareClearFresh = TRUE;
+        Context->HardwareClearColor = Result->ClearColor;
         Context->Stats.HardwareClearCount++;
         Context->Stats.LastWidth = Context->Width;
         Context->Stats.LastHeight = Context->Height;
     }
     else
     {
+        Context->HardwareClearFresh = FALSE;
         Context->Stats.HardwareClearFailureCount++;
     }
 
     HeapFree(GetProcessHeap(), 0, Result);
     return Success;
+}
+
+static ULONG
+Rpi5OglFloatWord(
+    _In_ GLfloat Value)
+{
+    ULONG Word;
+
+    C_ASSERT(sizeof(Word) == sizeof(Value));
+    CopyMemory(&Word, &Value, sizeof(Word));
+    return Word;
+}
+
+static VOID
+Rpi5OglFillTriangleVertex(
+    _Out_ PRPI5VC4_V3D_VERTEX Destination,
+    _In_reads_(4) const GLfloat Position[4],
+    _In_reads_(4) const GLubyte Color[4])
+{
+    ULONG Component;
+
+    for (Component = 0; Component < 4; Component++)
+    {
+        Destination->Position[Component] =
+            Rpi5OglFloatWord(Position[Component]);
+        Destination->Color[Component] =
+            Rpi5OglFloatWord((GLfloat)Color[Component] / 255.0f);
+    }
+}
+
+static BOOL
+Rpi5OglTriangleStateSupported(
+    _In_ GLcontext *Mesa)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Mesa->DriverCtx;
+
+    return Context != NULL &&
+           Mesa->Visual != NULL &&
+           Mesa->Visual->RGBAflag &&
+           Mesa->RenderMode == GL_RENDER &&
+           Mesa->Texture.Enabled == 0 &&
+           Mesa->RasterMask == 0 &&
+           !Mesa->Polygon.Unfilled &&
+           !Mesa->Polygon.OffsetAny &&
+           !Mesa->Polygon.SmoothFlag &&
+           !Mesa->Polygon.StippleFlag &&
+           Mesa->Viewport.X >= 0 &&
+           Mesa->Viewport.Y >= 0 &&
+           Mesa->Viewport.Width > 0 &&
+           Mesa->Viewport.Height > 0 &&
+           Mesa->Viewport.Width <= RPI5VC4_V3D_CLEAR_MAX_WIDTH &&
+           Mesa->Viewport.Height <= RPI5VC4_V3D_CLEAR_MAX_HEIGHT;
+}
+
+static BOOL
+Rpi5OglHardwareTriangle(
+    _Inout_ PRPI5VC4_OGL_CONTEXT Context,
+    _In_ GLcontext *Mesa,
+    _In_ GLuint Vertex0,
+    _In_ GLuint Vertex1,
+    _In_ GLuint Vertex2,
+    _In_ GLuint ProvokingVertex)
+{
+    const GLuint VertexIndices[3] = {Vertex0, Vertex1, Vertex2};
+    RPI5VC4_V3D_TRIANGLE_REQUEST Request;
+    PRPI5VC4_V3D_TRIANGLE_RESULT Result;
+    struct vertex_buffer *VertexBuffer = Mesa->VB;
+    ULONG HeaderSize = FIELD_OFFSET(RPI5VC4_V3D_TRIANGLE_RESULT, Pixels);
+    ULONG Width;
+    ULONG Height;
+    ULONG PixelBytes;
+    ULONG ResultSize;
+    ULONG Row;
+    ULONG Vertex;
+    INT Returned;
+    BOOL Success;
+
+    if (Context == NULL ||
+        !Rpi5OglTriangleStateSupported(Mesa) ||
+        VertexBuffer == NULL ||
+        VertexBuffer->Color == NULL ||
+        Vertex0 >= VB_SIZE ||
+        Vertex1 >= VB_SIZE ||
+        Vertex2 >= VB_SIZE ||
+        ProvokingVertex >= VB_SIZE ||
+        !Rpi5OglRefreshDrawable(Context) ||
+        !Context->HardwareClearFresh)
+    {
+        return FALSE;
+    }
+
+    Width = Mesa->Viewport.Width;
+    Height = Mesa->Viewport.Height;
+    if (Mesa->Viewport.X + (GLint)Width > (GLint)Context->Width ||
+        Mesa->Viewport.Y + (GLint)Height > (GLint)Context->Height)
+    {
+        return FALSE;
+    }
+
+    PixelBytes = Width * Height * sizeof(ULONG);
+    ResultSize = HeaderSize + PixelBytes;
+    Context->HardwareClearFresh = FALSE;
+    Result = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, ResultSize);
+    if (Result == NULL)
+        return FALSE;
+
+    ZeroMemory(&Request, sizeof(Request));
+    Request.Size = sizeof(Request);
+    Request.AbiVersion = RPI5VC4_XPDM_ABI_VERSION;
+    Request.Width = Width;
+    Request.Height = Height;
+    Request.ClearColor = Context->HardwareClearColor;
+    for (Vertex = 0; Vertex < RTL_NUMBER_OF(VertexIndices); Vertex++)
+    {
+        GLuint ColorVertex = Mesa->Light.ShadeModel == GL_FLAT ?
+                             ProvokingVertex : VertexIndices[Vertex];
+
+        Rpi5OglFillTriangleVertex(
+            &Request.Vertices[Vertex],
+            VertexBuffer->Clip[VertexIndices[Vertex]],
+            VertexBuffer->Color[ColorVertex]);
+    }
+
+    Returned = ExtEscape(Context->Hdc,
+                         RPI5VC4_ESCAPE_RENDER_TRIANGLE,
+                         sizeof(Request),
+                         (LPCSTR)&Request,
+                         ResultSize,
+                         (LPSTR)Result);
+    Context->Stats.LastTriangleStatus = Returned > 0 ?
+                                        Result->Status : 0xFFFFFFFFu;
+    Success = Returned >= (INT)ResultSize &&
+              Result->Size == ResultSize &&
+              Result->AbiVersion == RPI5VC4_XPDM_ABI_VERSION &&
+              Result->Status == RPI5VC4_V3D_SELFTEST_STATUS_SUCCESS &&
+              (Result->Flags & RPI5VC4_V3D_SELFTEST_FLAG_PASSED) != 0 &&
+              Result->Width == Width &&
+              Result->Height == Height &&
+              Result->Stride == Width * sizeof(ULONG) &&
+              Result->ClearColor == Context->HardwareClearColor &&
+              Result->PixelBytes == PixelBytes;
+    if (Success)
+    {
+        for (Row = 0; Row < Height; Row++)
+        {
+            CopyMemory(Context->BackBuffer +
+                           (Mesa->Viewport.Y + Row) * Context->Width +
+                           Mesa->Viewport.X,
+                       Result->Pixels + Row * Width,
+                       Width * sizeof(ULONG));
+        }
+        Context->Stats.HardwareTriangleCount++;
+        Context->Stats.LastTriangleWidth = Width;
+        Context->Stats.LastTriangleHeight = Height;
+        Context->Stats.LastTriangleCoveredPixels =
+            Result->CoveredPixelCount;
+    }
+    else
+    {
+        Context->Stats.HardwareTriangleFailureCount++;
+    }
+
+    HeapFree(GetProcessHeap(), 0, Result);
+    return Success;
+}
+
+static VOID
+Rpi5OglSoftwareTriangle(
+    _In_ GLcontext *Mesa,
+    _In_ GLuint Vertex0,
+    _In_ GLuint Vertex1,
+    _In_ GLuint Vertex2,
+    _In_ GLuint ProvokingVertex)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Mesa->DriverCtx;
+    triangle_func DriverTriangle = Mesa->Driver.TriangleFunc;
+    triangle_func SoftwareTriangle;
+
+    Context->HardwareClearFresh = FALSE;
+    Context->Stats.SoftwareTriangleCount++;
+    Mesa->Driver.TriangleFunc = NULL;
+    gl_set_triangle_function(Mesa);
+    SoftwareTriangle = Mesa->Driver.TriangleFunc;
+    Mesa->Driver.TriangleFunc = DriverTriangle;
+    if (SoftwareTriangle != NULL && SoftwareTriangle != DriverTriangle)
+    {
+        SoftwareTriangle(Mesa,
+                         Vertex0,
+                         Vertex1,
+                         Vertex2,
+                         ProvokingVertex);
+    }
+}
+
+static VOID
+Rpi5OglTriangle(
+    _In_ GLcontext *Mesa,
+    _In_ GLuint Vertex0,
+    _In_ GLuint Vertex1,
+    _In_ GLuint Vertex2,
+    _In_ GLuint ProvokingVertex)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Mesa->DriverCtx;
+
+    if (!Rpi5OglHardwareTriangle(Context,
+                                 Mesa,
+                                 Vertex0,
+                                 Vertex1,
+                                 Vertex2,
+                                 ProvokingVertex))
+    {
+        Rpi5OglSoftwareTriangle(Mesa,
+                                Vertex0,
+                                Vertex1,
+                                Vertex2,
+                                ProvokingVertex);
+    }
 }
 
 static const CHAR *
@@ -401,6 +626,8 @@ Rpi5OglSoftwareClear(
 {
     GLint Row;
     GLint Column;
+
+    Context->HardwareClearFresh = FALSE;
 
     if (!Rpi5OglRefreshDrawable(Context))
         return;
@@ -493,6 +720,8 @@ Rpi5OglSetBuffer(
 
     if (Mode != GL_FRONT && Mode != GL_BACK)
         return GL_FALSE;
+    if (Context->BufferMode != Mode)
+        Context->HardwareClearFresh = FALSE;
     Context->BufferMode = Mode;
     return GL_TRUE;
 }
@@ -542,6 +771,8 @@ Rpi5OglWriteColorSpan(
     PRPI5VC4_OGL_CONTEXT Context = Mesa->DriverCtx;
     GLuint Index;
 
+    Context->HardwareClearFresh = FALSE;
+
     for (Index = 0; Index < Count; Index++)
     {
         GLint PixelX = X + Index;
@@ -568,6 +799,8 @@ Rpi5OglWriteMonoSpan(
 {
     PRPI5VC4_OGL_CONTEXT Context = Mesa->DriverCtx;
     GLuint Index;
+
+    Context->HardwareClearFresh = FALSE;
 
     for (Index = 0; Index < Count; Index++)
     {
@@ -597,6 +830,8 @@ Rpi5OglWriteColorPixels(
     PRPI5VC4_OGL_CONTEXT Context = Mesa->DriverCtx;
     GLuint Index;
 
+    Context->HardwareClearFresh = FALSE;
+
     for (Index = 0; Index < Count; Index++)
     {
         if ((Mask == NULL || Mask[Index]) &&
@@ -621,6 +856,8 @@ Rpi5OglWriteMonoPixels(
 {
     PRPI5VC4_OGL_CONTEXT Context = Mesa->DriverCtx;
     GLuint Index;
+
+    Context->HardwareClearFresh = FALSE;
 
     for (Index = 0; Index < Count; Index++)
     {
@@ -794,6 +1031,8 @@ Rpi5OglSetupDriver(
     Mesa->Driver.ReadColorPixels = Rpi5OglReadColorPixels;
     Mesa->Driver.Finish = Rpi5OglFinish;
     Mesa->Driver.Flush = Rpi5OglFinish;
+    if (Rpi5OglTriangleStateSupported(Mesa))
+        Mesa->Driver.TriangleFunc = Rpi5OglTriangle;
 }
 
 static VOID
@@ -1119,6 +1358,8 @@ DrvSetContext(
         return NULL;
     }
 
+    if (Context->Hdc != Hdc)
+        Context->HardwareClearFresh = FALSE;
     Context->Hdc = Hdc;
     if (!Rpi5OglRefreshDrawable(Context))
         return NULL;
