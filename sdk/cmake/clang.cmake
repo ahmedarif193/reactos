@@ -209,7 +209,9 @@ add_definitions(-D_GLIBCXX_HAVE_BROKEN_VSWPRINTF)
 add_definitions(-D_CRT_SUPPRESS_RESTRICT)
 
 # Alternative arch name
-if(ARCH STREQUAL "amd64")
+if(ARM64EC_RUNTIME)
+    set(ARCH2 arm64ec)
+elseif(ARCH STREQUAL "amd64")
     set(ARCH2 x86_64)
 else()
     set(ARCH2 ${ARCH})
@@ -223,7 +225,11 @@ elseif(ARCH STREQUAL "amd64")
 elseif(ARCH STREQUAL "arm")
     set(LLVM_DLLTOOL_MACHINE arm)
 elseif(ARCH STREQUAL "arm64")
-    set(LLVM_DLLTOOL_MACHINE arm64)
+    if(ARM64EC_RUNTIME)
+        set(LLVM_DLLTOOL_MACHINE arm64ec)
+    else()
+        set(LLVM_DLLTOOL_MACHINE arm64)
+    endif()
 endif()
 set(_target_tool_triplet ${CMAKE_C_COMPILER_TARGET})
 
@@ -311,18 +317,21 @@ set(CMAKE_CXX_COMPILE_OBJECT "<CMAKE_CXX_COMPILER> <DEFINES>${_reactos_cppstl_pr
 set(CMAKE_ASM_COMPILE_OBJECT "<CMAKE_ASM_COMPILER> ${_compress_debug_sections_flag} -x assembler-with-cpp -o <OBJECT> -I${REACTOS_SOURCE_DIR}/sdk/include/asm -I${REACTOS_BINARY_DIR}/sdk/include/asm <INCLUDES> <FLAGS> <DEFINES> -D__ASM__ -c <SOURCE>")
 
 set(_rc_target_flag)
+set(RC_PREPROCESSOR_TARGET "--preprocessor-arg=--target=${CMAKE_C_COMPILER_TARGET}")
 if(ARCH STREQUAL "i386")
     set(_rc_target_flag "--target=pe-i386")
 elseif(ARCH STREQUAL "amd64")
     set(_rc_target_flag "--target=pe-x86-64")
+elseif(ARCH STREQUAL "arm64" AND ARM64EC_RUNTIME)
+    # The triplet-named windres wrapper already selects ARM64EC. Passing an
+    # ARM64EC Clang target through windres is not supported by llvm-windres.
+    set(RC_PREPROCESSOR_TARGET "")
 elseif(ARCH STREQUAL "arm64")
     # The toolchain file selects aarch64-w64-mingw32-windres before RC is
     # enabled, because changing CMAKE_RC_COMPILER here invalidates the cache.
 endif()
 
 set(CMAKE_RC_COMPILE_OBJECT "<CMAKE_RC_COMPILER> ${_rc_target_flag} -O coff <INCLUDES> <FLAGS> -DRC_INVOKED -D__WIN32__=1 -D__FLAT__=1 ${I18N_DEFS} <DEFINES> <SOURCE> <OBJECT>")
-
-set(RC_PREPROCESSOR_TARGET "--preprocessor-arg=--target=${CMAKE_C_COMPILER_TARGET}")
 
 # We have to pass args to windres. one... by... one...
 set(CMAKE_DEPFILE_FLAGS_RC "--preprocessor=\"${CMAKE_C_COMPILER}\" ${RC_PREPROCESSOR_TARGET} --preprocessor-arg=-E --preprocessor-arg=-nostdlibinc --preprocessor-arg=-xc-header --preprocessor-arg=-MMD --preprocessor-arg=-MF --preprocessor-arg=<DEPFILE> --preprocessor-arg=-MT --preprocessor-arg=<OBJECT>")

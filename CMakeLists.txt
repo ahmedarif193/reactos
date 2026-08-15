@@ -293,8 +293,17 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
             add_definitions(-D_ZOOM2_)
         endif()
     elseif(ARCH STREQUAL "arm64")
-        # GNU tools refer to arm64 as aarch64
-        add_definitions(-D_ARM64_ -D_M_ARM64 -D__arm64__ -D__aarch64__ -D_WIN64)
+        if(ARM64EC_RUNTIME)
+            # ARM64EC has the x64 ABI/type model while emitting ARM64 code.
+            # llvm-mingw defines __arm64ec__ and __x86_64__; define the MS
+            # architecture macros expected by the ReactOS/SDK headers too.
+            add_definitions(-D_AMD64_ -D_M_AMD64 -D_M_X64
+                            -D_ARM64EC_ -D_M_ARM64EC
+                            -D__arm64ec__ -D__x86_64__ -D_WIN64)
+        else()
+            # GNU tools refer to arm64 as aarch64
+            add_definitions(-D_ARM64_ -D_M_ARM64 -D__arm64__ -D__aarch64__ -D_WIN64)
+        endif()
     endif()
 
     # Other
