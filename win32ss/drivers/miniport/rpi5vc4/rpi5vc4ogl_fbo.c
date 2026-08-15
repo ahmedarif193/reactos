@@ -24,6 +24,30 @@
 
 #define RPI5VC4_OGL_FBO_MAX_FRAMEBUFFERS 16
 
+extern VOID APIENTRY
+_mesa_TexImage2D(
+    GLenum Target,
+    GLint Level,
+    GLint InternalFormat,
+    GLsizei Width,
+    GLsizei Height,
+    GLint Border,
+    GLenum Format,
+    GLenum Type,
+    const GLvoid *Pixels);
+
+extern VOID APIENTRY
+_mesa_TexSubImage2D(
+    GLenum Target,
+    GLint Level,
+    GLint XOffset,
+    GLint YOffset,
+    GLsizei Width,
+    GLsizei Height,
+    GLenum Format,
+    GLenum Type,
+    const GLvoid *Pixels);
+
 typedef struct _RPI5VC4_OGL_FRAMEBUFFER
 {
     GLuint Name;
@@ -505,6 +529,299 @@ Rpi5OglFboReadTexel(
 }
 
 static ULONG
+Rpi5OglFboByteSwap32(
+    _In_ ULONG Value)
+{
+    return (Value >> 24) |
+           ((Value >> 8) & 0x0000FF00) |
+           ((Value << 8) & 0x00FF0000) |
+           (Value << 24);
+}
+
+static BOOL
+Rpi5OglFboPacked8888Type(
+    _In_ GLenum Type)
+{
+    return Type == GL_UNSIGNED_INT_8_8_8_8 ||
+           Type == GL_UNSIGNED_INT_8_8_8_8_REV;
+}
+
+static VOID
+Rpi5OglFboSetTightUnpack(
+    _Inout_ struct gl_pixelstore_attrib *Unpack)
+{
+    Unpack->Alignment = 1;
+    Unpack->RowLength = 0;
+    Unpack->SkipPixels = 0;
+    Unpack->SkipRows = 0;
+    Unpack->SwapBytes = GL_FALSE;
+    Unpack->LsbFirst = GL_FALSE;
+}
+
+static VOID
+Rpi5OglFboCallTexImage2DUbyte(
+    _In_ PRPI5VC4_OGL_FBO_STATE State,
+    _In_ GLenum Target,
+    _In_ GLint Level,
+    _In_ GLint InternalFormat,
+    _In_ GLsizei Width,
+    _In_ GLsizei Height,
+    _In_ GLint Border,
+    _In_ GLenum Format,
+    _In_opt_ const GLvoid *Pixels)
+{
+    struct gl_pixelstore_attrib SavedUnpack = State->Mesa->Unpack;
+
+    Rpi5OglFboSetTightUnpack(&State->Mesa->Unpack);
+    _mesa_TexImage2D(Target, Level, InternalFormat, Width, Height,
+                     Border, Format, GL_UNSIGNED_BYTE, Pixels);
+    State->Mesa->Unpack = SavedUnpack;
+}
+
+static VOID
+Rpi5OglFboCallTexSubImage2DUbyte(
+    _In_ PRPI5VC4_OGL_FBO_STATE State,
+    _In_ GLenum Target,
+    _In_ GLint Level,
+    _In_ GLint XOffset,
+    _In_ GLint YOffset,
+    _In_ GLsizei Width,
+    _In_ GLsizei Height,
+    _In_ GLenum Format,
+    _In_opt_ const GLvoid *Pixels)
+{
+    struct gl_pixelstore_attrib SavedUnpack = State->Mesa->Unpack;
+
+    Rpi5OglFboSetTightUnpack(&State->Mesa->Unpack);
+    _mesa_TexSubImage2D(Target, Level, XOffset, YOffset,
+                        Width, Height, Format, GL_UNSIGNED_BYTE, Pixels);
+    State->Mesa->Unpack = SavedUnpack;
+}
+
+static GLubyte *
+Rpi5OglFboUnpack8888(
+    _In_ PRPI5VC4_OGL_FBO_STATE State,
+    _In_ GLsizei Width,
+    _In_ GLsizei Height,
+    _In_ GLenum Format,
+    _In_ GLenum Type,
+    _In_reads_bytes_opt_(1) const GLvoid *Pixels,
+    _In_z_ PCSTR Function)
+{
+    const struct gl_pixelstore_attrib *Unpack = &State->Mesa->Unpack;
+    const GLubyte *Source;
+    GLubyte *Converted;
+    GLubyte *Destination;
+    ULONGLONG RowBytes;
+    ULONGLONG Stride;
+    ULONGLONG SourceOffset;
+    ULONGLONG SourceEnd;
+    ULONGLONG ConvertedBytes;
+    ULONG RowPixels;
+    ULONG Alignment;
+    ULONG Row;
+    ULONG Column;
+    ULONG Word;
+    GLubyte Components[4];
+
+    if (Pixels == NULL)
+        return NULL;
+    if (Width <= 0 || Height <= 0)
+        return NULL;
+
+    if (Unpack->RowLength < 0 || Unpack->SkipRows < 0 ||
+        Unpack->SkipPixels < 0)
+    {
+        Rpi5OglFboError(State, GL_INVALID_OPERATION, Function);
+        return NULL;
+    }
+
+    RowPixels = Unpack->RowLength > 0 ?
+                Unpack->RowLength : (ULONG)Width;
+    Alignment = Unpack->Alignment > 0 ? Unpack->Alignment : 1;
+    RowBytes = (ULONGLONG)RowPixels * sizeof(ULONG);
+    if ((Alignment != 1 && Alignment != 2 &&
+         Alignment != 4 && Alignment != 8) ||
+        RowBytes > 0xFFFFFFFFULL - (Alignment - 1))
+    {
+        Rpi5OglFboError(State, GL_OUT_OF_MEMORY, Function);
+        return NULL;
+    }
+    Stride = (RowBytes + Alignment - 1) & ~(ULONGLONG)(Alignment - 1);
+    ConvertedBytes = (ULONGLONG)(ULONG)Width * (ULONG)Height * 4;
+    if (ConvertedBytes == 0 || ConvertedBytes > 0xFFFFFFFFULL ||
+        (Unpack->SkipRows != 0 &&
+         Stride > 0xFFFFFFFFULL / (ULONG)Unpack->SkipRows))
+    {
+        Rpi5OglFboError(State, GL_OUT_OF_MEMORY, Function);
+        return NULL;
+    }
+    SourceOffset = (ULONGLONG)Unpack->SkipRows * Stride;
+    if ((ULONGLONG)Unpack->SkipPixels * sizeof(ULONG) >
+        0xFFFFFFFFULL - SourceOffset)
+    {
+        Rpi5OglFboError(State, GL_OUT_OF_MEMORY, Function);
+        return NULL;
+    }
+    SourceOffset += (ULONGLONG)Unpack->SkipPixels * sizeof(ULONG);
+    if ((ULONG)Height > 1 &&
+        Stride > (0xFFFFFFFFULL - SourceOffset) /
+            ((ULONG)Height - 1))
+    {
+        Rpi5OglFboError(State, GL_OUT_OF_MEMORY, Function);
+        return NULL;
+    }
+    SourceEnd = SourceOffset +
+                (ULONGLONG)((ULONG)Height - 1) * Stride;
+    if ((ULONGLONG)(ULONG)Width * sizeof(ULONG) >
+        0xFFFFFFFFULL - SourceEnd)
+    {
+        Rpi5OglFboError(State, GL_OUT_OF_MEMORY, Function);
+        return NULL;
+    }
+
+    Converted = HeapAlloc(GetProcessHeap(), 0, (SIZE_T)ConvertedBytes);
+    if (Converted == NULL)
+    {
+        Rpi5OglFboError(State, GL_OUT_OF_MEMORY, Function);
+        return NULL;
+    }
+
+    Source = (const GLubyte *)Pixels + (ULONG)SourceOffset;
+    Destination = Converted;
+    for (Row = 0; Row < (ULONG)Height; Row++)
+    {
+        for (Column = 0; Column < (ULONG)Width; Column++)
+        {
+            CopyMemory(&Word,
+                       Source + Row * (ULONG)Stride +
+                           Column * sizeof(Word),
+                       sizeof(Word));
+            if (Unpack->SwapBytes)
+                Word = Rpi5OglFboByteSwap32(Word);
+            if (Type == GL_UNSIGNED_INT_8_8_8_8_REV)
+            {
+                Components[0] = (GLubyte)Word;
+                Components[1] = (GLubyte)(Word >> 8);
+                Components[2] = (GLubyte)(Word >> 16);
+                Components[3] = (GLubyte)(Word >> 24);
+            }
+            else
+            {
+                Components[0] = (GLubyte)(Word >> 24);
+                Components[1] = (GLubyte)(Word >> 16);
+                Components[2] = (GLubyte)(Word >> 8);
+                Components[3] = (GLubyte)Word;
+            }
+            Destination[0] = Format == GL_BGRA_EXT ?
+                             Components[2] : Components[0];
+            Destination[1] = Components[1];
+            Destination[2] = Format == GL_BGRA_EXT ?
+                             Components[0] : Components[2];
+            Destination[3] = Components[3];
+            Destination += 4;
+        }
+    }
+    return Converted;
+}
+
+VOID APIENTRY
+Rpi5OglFboTexImage2D(
+    _In_ GLenum Target,
+    _In_ GLint Level,
+    _In_ GLint InternalFormat,
+    _In_ GLsizei Width,
+    _In_ GLsizei Height,
+    _In_ GLint Border,
+    _In_ GLenum Format,
+    _In_ GLenum Type,
+    _In_opt_ const GLvoid *Pixels)
+{
+    PRPI5VC4_OGL_FBO_STATE State = Rpi5OglCurrentFboState();
+    GLubyte *Converted;
+
+    if (!Rpi5OglFboPacked8888Type(Type))
+    {
+        _mesa_TexImage2D(Target, Level, InternalFormat, Width, Height,
+                         Border, Format, Type, Pixels);
+        return;
+    }
+    if (!Rpi5OglFboCanChangeState(State, "glTexImage2D"))
+        return;
+    if (Format != GL_RGBA && Format != GL_BGRA_EXT)
+    {
+        Rpi5OglFboError(State, GL_INVALID_OPERATION,
+                        "glTexImage2D(packed format)");
+        return;
+    }
+    if (Width <= 0 || Height <= 0 || Pixels == NULL)
+    {
+        Rpi5OglFboCallTexImage2DUbyte(State, Target, Level,
+                                      InternalFormat, Width, Height,
+                                      Border, GL_RGBA, NULL);
+        return;
+    }
+
+    Converted = Rpi5OglFboUnpack8888(State, Width, Height, Format, Type,
+                                     Pixels, "glTexImage2D(unpack)");
+    if (Converted == NULL)
+        return;
+    Rpi5OglFboCallTexImage2DUbyte(State, Target, Level, InternalFormat,
+                                  Width, Height, Border, GL_RGBA,
+                                  Converted);
+    HeapFree(GetProcessHeap(), 0, Converted);
+}
+
+VOID APIENTRY
+Rpi5OglFboTexSubImage2D(
+    _In_ GLenum Target,
+    _In_ GLint Level,
+    _In_ GLint XOffset,
+    _In_ GLint YOffset,
+    _In_ GLsizei Width,
+    _In_ GLsizei Height,
+    _In_ GLenum Format,
+    _In_ GLenum Type,
+    _In_opt_ const GLvoid *Pixels)
+{
+    PRPI5VC4_OGL_FBO_STATE State = Rpi5OglCurrentFboState();
+    GLubyte *Converted;
+
+    if (!Rpi5OglFboPacked8888Type(Type))
+    {
+        _mesa_TexSubImage2D(Target, Level, XOffset, YOffset,
+                            Width, Height, Format, Type, Pixels);
+        return;
+    }
+    if (!Rpi5OglFboCanChangeState(State, "glTexSubImage2D"))
+        return;
+    if (Format != GL_RGBA && Format != GL_BGRA_EXT)
+    {
+        Rpi5OglFboError(State, GL_INVALID_OPERATION,
+                        "glTexSubImage2D(packed format)");
+        return;
+    }
+    if (Width == 0 || Height == 0)
+        return;
+    if (Width < 0 || Height < 0 || Pixels == NULL)
+    {
+        Rpi5OglFboCallTexSubImage2DUbyte(State, Target, Level,
+                                         XOffset, YOffset, Width, Height,
+                                         GL_RGBA, NULL);
+        return;
+    }
+
+    Converted = Rpi5OglFboUnpack8888(State, Width, Height, Format, Type,
+                                     Pixels, "glTexSubImage2D(unpack)");
+    if (Converted == NULL)
+        return;
+    Rpi5OglFboCallTexSubImage2DUbyte(State, Target, Level,
+                                     XOffset, YOffset, Width, Height,
+                                     GL_RGBA, Converted);
+    HeapFree(GetProcessHeap(), 0, Converted);
+}
+
+static ULONG
 Rpi5OglFboPackStride(
     _In_ PRPI5VC4_OGL_FBO_STATE State,
     _In_ ULONG Width,
@@ -697,12 +1014,7 @@ Rpi5OglFboGetTexImage(
                        ((ULONG)Ordered[2] << 16) |
                        ((ULONG)Ordered[3] << 24);
                 if (State->Mesa->Pack.SwapBytes)
-                {
-                    Word = (Word >> 24) |
-                           ((Word >> 8) & 0x0000FF00) |
-                           ((Word << 8) & 0x00FF0000) |
-                           (Word << 24);
-                }
+                    Word = Rpi5OglFboByteSwap32(Word);
                 CopyMemory(Destination + Column * sizeof(Word),
                            &Word,
                            sizeof(Word));
@@ -714,12 +1026,7 @@ Rpi5OglFboGetTexImage(
                        ((ULONG)Ordered[2] << 8) |
                        Ordered[3];
                 if (State->Mesa->Pack.SwapBytes)
-                {
-                    Word = (Word >> 24) |
-                           ((Word >> 8) & 0x0000FF00) |
-                           ((Word << 8) & 0x00FF0000) |
-                           (Word << 24);
-                }
+                    Word = Rpi5OglFboByteSwap32(Word);
                 CopyMemory(Destination + Column * sizeof(Word),
                            &Word,
                            sizeof(Word));
