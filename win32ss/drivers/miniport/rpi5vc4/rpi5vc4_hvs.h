@@ -17,9 +17,6 @@
 
 #include "rpi5vc4.h"
 
-/* HVS register block (BCM2712), per the device-tree 'hvs' node. */
-#define RPI5_HVS_PHYS                   0x107C580000ULL
-#define RPI5_HVS_LENGTH                 0x1A000
 #define RPI5_HVS_DLIST_OFFSET           0x4000  /* SCALER6 display-list RAM base */
 
 /* Global / per-channel registers (byte offsets into the register block). */
