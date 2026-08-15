@@ -188,6 +188,10 @@ cmake_dependent_option(ENABLE_FEX_ARM64EC
                        "Whether to build the optional FEX ARM64EC emulator for running AMD64 binaries on ARM64." OFF
                        "ARCH STREQUAL arm64" OFF)
 
+cmake_dependent_option(ENABLE_FEX_ARM64EC_TEST_PAYLOADS
+                       "Whether to import optional AMD64 diagnostic executables into FEX ARM64EC images." OFF
+                       "ARCH STREQUAL arm64 AND ENABLE_FEX_ARM64EC" OFF)
+
 # Set only by the nested build configured from arm64ec.cmake. ARCH deliberately
 # remains arm64 so source selection and the kernel architecture never become a
 # new global ARM64EC target; the toolchain and user-mode ABI are switched here.

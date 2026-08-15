@@ -112,56 +112,64 @@ add_cd_file(
     NO_CAB
     FOR all)
 
-set(FEX_ARM64EC_AMD64_TEST_BINARY
-    "${REACTOS_SOURCE_DIR}/output-Clang-amd64-debug/modules/rostests/win32/cmd/cmd_rostest.exe"
-    CACHE FILEPATH "Optional AMD64 test binary to deploy as cmd_rostest_x64.exe")
+if(ENABLE_FEX_ARM64EC_TEST_PAYLOADS)
+    set(FEX_ARM64EC_AMD64_TEST_BINARY
+        "${REACTOS_SOURCE_DIR}/output-Clang-amd64-debug/modules/rostests/win32/cmd/cmd_rostest.exe"
+        CACHE FILEPATH "Optional AMD64 test binary to deploy as cmd_rostest_x64.exe")
 
-if(EXISTS "${FEX_ARM64EC_AMD64_TEST_BINARY}")
-    set(FEX_ARM64EC_AMD64_TEST_DEST "${CMAKE_CURRENT_BINARY_DIR}/cmd_rostest_x64.exe")
-    add_custom_command(
-        OUTPUT "${FEX_ARM64EC_AMD64_TEST_DEST}"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${FEX_ARM64EC_AMD64_TEST_BINARY}"
-            "${FEX_ARM64EC_AMD64_TEST_DEST}"
-        COMMENT "Copying optional AMD64 cmd_rostest.exe for CHPE testing")
-    add_custom_target(fex-arm64ec-amd64-test-binary
-        DEPENDS "${FEX_ARM64EC_AMD64_TEST_DEST}")
-    add_dependencies(bootcd fex-arm64ec-amd64-test-binary)
-    add_dependencies(livecd fex-arm64ec-amd64-test-binary)
+    if(EXISTS "${FEX_ARM64EC_AMD64_TEST_BINARY}")
+        set(FEX_ARM64EC_AMD64_TEST_DEST "${CMAKE_CURRENT_BINARY_DIR}/cmd_rostest_x64.exe")
+        add_custom_command(
+            OUTPUT "${FEX_ARM64EC_AMD64_TEST_DEST}"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${FEX_ARM64EC_AMD64_TEST_BINARY}"
+                "${FEX_ARM64EC_AMD64_TEST_DEST}"
+            COMMENT "Copying optional AMD64 cmd_rostest.exe for CHPE testing")
+        add_custom_target(fex-arm64ec-amd64-test-binary
+            DEPENDS "${FEX_ARM64EC_AMD64_TEST_DEST}")
+        add_dependencies(bootcd fex-arm64ec-amd64-test-binary)
+        add_dependencies(livecd fex-arm64ec-amd64-test-binary)
 
-    add_cd_file(
-        FILE "${FEX_ARM64EC_AMD64_TEST_DEST}"
-        DESTINATION reactos/system32
-        NAME_ON_CD cmd_rostest_x64.exe
-        NO_CAB
-        FOR all)
-    message(STATUS "FEX ARM64EC: AMD64 test binary = ${FEX_ARM64EC_AMD64_TEST_BINARY}")
-endif()
+        add_cd_file(
+            FILE "${FEX_ARM64EC_AMD64_TEST_DEST}"
+            DESTINATION reactos/system32
+            NAME_ON_CD cmd_rostest_x64.exe
+            NO_CAB
+            FOR all)
+        message(STATUS "FEX ARM64EC: AMD64 test binary = ${FEX_ARM64EC_AMD64_TEST_BINARY}")
+    endif()
 
-set(FEX_ARM64EC_AMD64_NTDLL_APITEST_BINARY
-    "${REACTOS_SOURCE_DIR}/output-Clang-amd64-debug/modules/rostests/apitests/ntdll/ntdll_apitest.exe"
-    CACHE FILEPATH "Optional AMD64 ntdll_apitest binary to deploy as ntdll_apitest_x64.exe")
+    set(FEX_ARM64EC_AMD64_NTDLL_APITEST_BINARY
+        "${REACTOS_SOURCE_DIR}/output-Clang-amd64-debug/modules/rostests/apitests/ntdll/ntdll_apitest.exe"
+        CACHE FILEPATH "Optional AMD64 ntdll_apitest binary to deploy as ntdll_apitest_x64.exe")
 
-if(EXISTS "${FEX_ARM64EC_AMD64_NTDLL_APITEST_BINARY}")
-    set(FEX_ARM64EC_AMD64_NTDLL_APITEST_DEST "${CMAKE_CURRENT_BINARY_DIR}/ntdll_apitest_x64.exe")
-    add_custom_command(
-        OUTPUT "${FEX_ARM64EC_AMD64_NTDLL_APITEST_DEST}"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${FEX_ARM64EC_AMD64_NTDLL_APITEST_BINARY}"
-            "${FEX_ARM64EC_AMD64_NTDLL_APITEST_DEST}"
-        COMMENT "Copying optional AMD64 ntdll_apitest.exe for CHPE testing")
-    add_custom_target(fex-arm64ec-amd64-ntdll-apitest-binary
-        DEPENDS "${FEX_ARM64EC_AMD64_NTDLL_APITEST_DEST}")
-    add_dependencies(bootcd fex-arm64ec-amd64-ntdll-apitest-binary)
-    add_dependencies(livecd fex-arm64ec-amd64-ntdll-apitest-binary)
+    if(EXISTS "${FEX_ARM64EC_AMD64_NTDLL_APITEST_BINARY}")
+        set(FEX_ARM64EC_AMD64_NTDLL_APITEST_DEST "${CMAKE_CURRENT_BINARY_DIR}/ntdll_apitest_x64.exe")
+        add_custom_command(
+            OUTPUT "${FEX_ARM64EC_AMD64_NTDLL_APITEST_DEST}"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${FEX_ARM64EC_AMD64_NTDLL_APITEST_BINARY}"
+                "${FEX_ARM64EC_AMD64_NTDLL_APITEST_DEST}"
+            COMMENT "Copying optional AMD64 ntdll_apitest.exe for CHPE testing")
+        add_custom_target(fex-arm64ec-amd64-ntdll-apitest-binary
+            DEPENDS "${FEX_ARM64EC_AMD64_NTDLL_APITEST_DEST}")
+        add_dependencies(bootcd fex-arm64ec-amd64-ntdll-apitest-binary)
+        add_dependencies(livecd fex-arm64ec-amd64-ntdll-apitest-binary)
 
-    add_cd_file(
-        FILE "${FEX_ARM64EC_AMD64_NTDLL_APITEST_DEST}"
-        DESTINATION reactos/system32
-        NAME_ON_CD ntdll_apitest_x64.exe
-        NO_CAB
-        FOR all)
-    message(STATUS "FEX ARM64EC: AMD64 ntdll apitest binary = ${FEX_ARM64EC_AMD64_NTDLL_APITEST_BINARY}")
+        add_cd_file(
+            FILE "${FEX_ARM64EC_AMD64_NTDLL_APITEST_DEST}"
+            DESTINATION reactos/system32
+            NAME_ON_CD ntdll_apitest_x64.exe
+            NO_CAB
+            FOR all)
+        message(STATUS "FEX ARM64EC: AMD64 ntdll apitest binary = ${FEX_ARM64EC_AMD64_NTDLL_APITEST_BINARY}")
+    endif()
+else()
+    # Older configurations created these cache entries unconditionally. Drop
+    # them when diagnostics are disabled so a neighboring AMD64 tree cannot
+    # remain an implicit input to an ordinary ARM64 image.
+    unset(FEX_ARM64EC_AMD64_TEST_BINARY CACHE)
+    unset(FEX_ARM64EC_AMD64_NTDLL_APITEST_BINARY CACHE)
 endif()
 
 message(STATUS "FEX ARM64EC: submodule   = ${FEX_UPSTREAM_DIR}")
