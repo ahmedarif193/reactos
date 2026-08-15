@@ -56,6 +56,7 @@ endfunction()
 
 set(CMAKE_TRY_COMPILE_PLATFORM_VARIABLES
     ARCH
+    ARM64EC_RUNTIME
     CLANG_VERSION
     REACTOS_CLANG_LLVM_MINGW_ROOT)
 set(CMAKE_SYSTEM_NAME Windows)
@@ -67,7 +68,11 @@ elseif(ARCH STREQUAL "amd64")
 elseif(ARCH STREQUAL "arm")
     set(CMAKE_SYSTEM_PROCESSOR arm)
 elseif(ARCH STREQUAL "arm64")
-    set(CMAKE_SYSTEM_PROCESSOR aarch64)
+    if(ARM64EC_RUNTIME)
+        set(CMAKE_SYSTEM_PROCESSOR arm64ec)
+    else()
+        set(CMAKE_SYSTEM_PROCESSOR aarch64)
+    endif()
 else()
     message(FATAL_ERROR "Unsupported ARCH: ${ARCH}")
 endif()
@@ -127,9 +132,9 @@ if(ARCH STREQUAL "arm64")
     # llvm-windres --target=pe-aarch64 currently fails at codegen with
     # LLVM 21.1.7. Use llvm-mingw's triplet-named symlink from the selected
     # llvm-mingw root.
-    find_program(CMAKE_RC_COMPILER NAMES aarch64-w64-mingw32-windres HINTS ${_llvm_tool_bin_hints} NO_DEFAULT_PATH)
+    find_program(CMAKE_RC_COMPILER NAMES ${triplet}-windres HINTS ${_llvm_tool_bin_hints} NO_DEFAULT_PATH)
     if(NOT CMAKE_RC_COMPILER)
-        message(FATAL_ERROR "aarch64-w64-mingw32-windres not found in llvm-mingw root")
+        message(FATAL_ERROR "${triplet}-windres not found in llvm-mingw root")
     endif()
 else()
     require_llvm_program(CMAKE_RC_COMPILER llvm-windres)
