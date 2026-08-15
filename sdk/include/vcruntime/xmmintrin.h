@@ -22,16 +22,18 @@
 #ifndef _INCLUDED_MM2
 #define _INCLUDED_MM2
 
+#include "intrin_target.h"
+
 /* When building with Clang, use Clang's own intrinsics headers instead.
  * ReactOS's versions use GCC-specific __builtin_ia32_* builtins that
  * don't exist in Clang. */
-#if defined(__clang__) && !defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64) || defined(_M_AMD64))
+#if _VCRT_USE_CLANG_X86_INTRINSICS
 #include_next <xmmintrin.h>
 /* Define ReactOS-specific macros that code may depend on */
 #ifndef __ATTRIBUTE_SSE__
 #define __ATTRIBUTE_SSE__
 #endif
-#elif defined(_M_ARM64) || defined(__aarch64__)
+#elif _VCRT_ARM64_CODEGEN
 /* ARM64: no x86 intrinsics available */
 #else
 

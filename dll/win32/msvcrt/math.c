@@ -745,7 +745,7 @@ static void set_mxcsr( unsigned int val )
 }
 #endif
 
-#ifdef __REACTOS__
+#if defined(__REACTOS__) && !defined(__arm64ec__)
 __ATTRIBUTE_SSE__
 #endif
 static void _setfp_sse( unsigned int *cw, unsigned int cw_mask,

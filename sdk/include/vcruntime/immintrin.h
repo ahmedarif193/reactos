@@ -9,10 +9,12 @@
 
 #define _INCLUDED_IMM
 
+#include "intrin_target.h"
+
 /* When building with Clang, use Clang's own intrinsics headers instead. */
-#if defined(__clang__) && !defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64) || defined(_M_AMD64))
+#if _VCRT_USE_CLANG_X86_INTRINSICS
 #include_next <immintrin.h>
-#elif defined(_M_ARM64) || defined(__aarch64__)
+#elif _VCRT_ARM64_CODEGEN
 /* ARM64: no x86 intrinsics */
 #else
 

@@ -9,9 +9,13 @@
 
 #define _INCLUDED_PMM
 
+#include "intrin_target.h"
+
 /* When building with Clang, use Clang's own intrinsics headers instead. */
-#if defined(__clang__) && !defined(_MSC_VER)
+#if _VCRT_USE_CLANG_X86_INTRINSICS
 #include_next <pmmintrin.h>
+#elif _VCRT_ARM64_CODEGEN
+/* ARM64: no x86 intrinsics available */
 #else
 
 #include <emmintrin.h>
