@@ -1534,6 +1534,11 @@ RelocDone:;
 
     // FIXME: LdrpCheckCorImage() is missing
 
+#if defined(_M_ARM64)
+    if (NT_SUCCESS(Status) && LdrEntry && ChpeIsChpeProcess() && !ChpeRegisterImageCodeRanges(LdrEntry->DllBase))
+        DPRINT1("LDR: CHPE failed to register image code ranges for %wZ\n", &LdrEntry->BaseDllName);
+#endif
+
     /* Check if this is an SMP Machine and a DLL */
     if ((LdrpNumberOfProcessors > 1) &&
         (LdrEntry && (LdrEntry->Flags & LDRP_IMAGE_DLL)))
@@ -2659,6 +2664,11 @@ LdrpLoadDll(IN BOOLEAN Redirected,
         else
         {
             /* We were already loaded. Are we a DLL? */
+#if defined(_M_ARM64)
+            if (ChpeIsChpeProcess() && !ChpeRegisterImageCodeRanges(LdrEntry->DllBase))
+                DPRINT1("LDR: CHPE failed to register existing image code ranges for %wZ\n", &LdrEntry->BaseDllName);
+#endif
+
             if ((LdrEntry->Flags & LDRP_IMAGE_DLL) && (LdrEntry->LoadCount != 0xFFFF))
             {
                 /* Increase load count */
