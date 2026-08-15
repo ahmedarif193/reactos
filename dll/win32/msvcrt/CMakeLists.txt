@@ -85,13 +85,13 @@ elseif(ARCH STREQUAL "arm")
     list(APPEND SHARED_SOURCE
         except_arm.c
     )
+elseif(ARM64EC_RUNTIME)
+    list(APPEND SHARED_SOURCE
+        except_arm64ec.c
+    )
 elseif(ARCH STREQUAL "arm64")
     list(APPEND SHARED_SOURCE
         except_arm64.c
-    )
-elseif(ARCH STREQUAL "arm64ec")
-    list(APPEND SHARED_SOURCE
-        except_arm64ec.c
     )
 endif()
 
@@ -157,7 +157,7 @@ list(APPEND MSVCRT_SOURCE
     wcs.c
 )
 
-if(ARCH STREQUAL "arm64")
+if(ARCH STREQUAL "arm64" AND NOT ARM64EC_RUNTIME)
     list(APPEND MSVCRT_ASM_SOURCE
         ${REACTOS_SOURCE_DIR}/sdk/lib/crt/string/arm64/strlen.S
         ${REACTOS_SOURCE_DIR}/sdk/lib/crt/string/arm64/strcpy.S
