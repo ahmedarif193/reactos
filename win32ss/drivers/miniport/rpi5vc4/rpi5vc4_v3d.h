@@ -32,4 +32,12 @@ Rpi5V3dRenderClear(
     _In_ ULONG ResultBufferLength,
     _Out_ PULONG BytesReturned);
 
+VP_STATUS
+Rpi5V3dRenderTriangle(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ PRPI5VC4_V3D_TRIANGLE_REQUEST Request,
+    _Out_writes_bytes_(ResultBufferLength) PRPI5VC4_V3D_TRIANGLE_RESULT Result,
+    _In_ ULONG ResultBufferLength,
+    _Out_ PULONG BytesReturned);
+
 #endif /* _RPI5VC4_V3D_H_ */

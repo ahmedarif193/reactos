@@ -805,6 +805,25 @@ Rpi5Vc4StartIO(
                 RequestPacket->StatusBlock->Information = Returned;
             break;
 
+        case IOCTL_VIDEO_RPI5VC4_RENDER_TRIANGLE:
+            if (RequestPacket->InputBufferLength <
+                    sizeof(RPI5VC4_V3D_TRIANGLE_REQUEST) ||
+                RequestPacket->OutputBufferLength <
+                    FIELD_OFFSET(RPI5VC4_V3D_TRIANGLE_RESULT, Pixels))
+            {
+                Status = ERROR_INSUFFICIENT_BUFFER;
+                break;
+            }
+            Status = Rpi5V3dRenderTriangle(
+                DeviceExtension,
+                (PRPI5VC4_V3D_TRIANGLE_REQUEST)RequestPacket->InputBuffer,
+                (PRPI5VC4_V3D_TRIANGLE_RESULT)RequestPacket->OutputBuffer,
+                RequestPacket->OutputBufferLength,
+                &Returned);
+            if (Status == NO_ERROR)
+                RequestPacket->StatusBlock->Information = Returned;
+            break;
+
         default:
             Status = ERROR_INVALID_FUNCTION;
             break;
