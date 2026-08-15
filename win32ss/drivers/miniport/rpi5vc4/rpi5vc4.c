@@ -8,6 +8,7 @@
 #include "rpi5vc4.h"
 #include "rpi5vc4_hvs.h"
 #include "rpi5vc4_crtc.h"
+#include "rpi5vc4_v3d.h"
 
 #define RPI5VC4_V3D_HUB_BASE             0x1002000000ULL
 #define RPI5VC4_V3D_HUB_LENGTH           0x4000
@@ -541,6 +542,7 @@ Rpi5Vc4Initialize(
 
     Rpi5Vc4BuildModeInfo(DeviceExtension);
     Rpi5Vc4InitFrameBuffer(DeviceExtension);
+    Rpi5V3dProbe(DeviceExtension);
     if (DeviceExtension->HeadlessBuffer == NULL)
     {
         Rpi5Vc4InitCursor(DeviceExtension);
@@ -749,6 +751,21 @@ Rpi5Vc4StartIO(
             Status = Rpi5HvsFlipScanout(DeviceExtension,
                                         DeviceExtension->FrameBufferPhysical) ?
                      NO_ERROR : ERROR_INVALID_PARAMETER;
+            break;
+
+        case IOCTL_VIDEO_RPI5VC4_QUERY_V3D:
+            if (RequestPacket->OutputBufferLength < sizeof(RPI5VC4_V3D_INFO))
+            {
+                Status = ERROR_INSUFFICIENT_BUFFER;
+                break;
+            }
+            Status = Rpi5V3dQuery(DeviceExtension,
+                                  (PRPI5VC4_V3D_INFO)RequestPacket->OutputBuffer);
+            if (Status == NO_ERROR)
+            {
+                RequestPacket->StatusBlock->Information =
+                    sizeof(RPI5VC4_V3D_INFO);
+            }
             break;
 
         default:
