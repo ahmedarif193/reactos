@@ -467,6 +467,9 @@ IopMarkBootPartition(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     ObReferenceObject(FileObject->DeviceObject);
     IopErrorLogObject = FileObject->DeviceObject;
 
+    /* Configure the crash target while the resolved boot-volume stack is held. */
+    IoInitializeDedicatedCrashDump(FileObject);
+
     /* Cleanup and return success */
     RtlFreeUnicodeString(&DeviceName);
     NtClose(FileHandle);
@@ -568,6 +571,9 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Make loader block available for the whole kernel */
     IopLoaderBlock = LoaderBlock;
 
+    /* Prepare all allocation-dependent crash state before loading boot drivers. */
+    IoInitializeCrashDumpCore(LoaderBlock);
+
     /* Load boot start drivers */
     IopInitializeBootDrivers();
 
@@ -631,6 +637,9 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         return FALSE;
     }
 
+    /* Let KD file providers open their targets against the final boot-volume path. */
+    KdSystemRootAvailable();
+
     /* Set the ANSI_STRING for the root path */
     RootString.MaximumLength = NtSystemRoot.MaximumLength / sizeof(WCHAR);
     RootString.Length = 0;
@@ -661,6 +670,9 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         return FALSE;
     }
 
+    /* Export a previous raw dump only after the final writable root is known. */
+    IoPublishCrashDumpArtifacts();
+
     /* Load the System DLL and its entrypoints */
     Status = PsLocateSystemDll();
     if (!NT_SUCCESS(Status))
@@ -682,9 +694,23 @@ IoInitializeCrashDump(IN HANDLE DumpFileHandle)
 
 BOOLEAN
 NTAPI
-IoInitializeDedicatedCrashDump(VOID)
+IoInitializeCrashDumpCore(IN PLOADER_PARAMETER_BLOCK LoaderBlock OPTIONAL)
 {
-    return KdpInitializeDedicatedCrashDump();
+    return KdpInitializeCrashDumpCore(LoaderBlock);
+}
+
+BOOLEAN
+NTAPI
+IoInitializeDedicatedCrashDump(IN PFILE_OBJECT BootFileObject)
+{
+    return KdpInitializeDedicatedCrashDump(BootFileObject);
+}
+
+VOID
+NTAPI
+IoPublishCrashDumpArtifacts(VOID)
+{
+    KdpPublishCrashDumpArtifacts();
 }
 
 /* EOF */

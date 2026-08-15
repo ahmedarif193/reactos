@@ -273,6 +273,30 @@ KdpDriverReinit(
     }
 }
 
+VOID
+NTAPI
+KdSystemRootAvailable(VOID)
+{
+    PLIST_ENTRY CurrentEntry;
+    PKD_DISPATCH_TABLE CurrentTable;
+    PKDP_INIT_ROUTINE KdpInitRoutine;
+
+    ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+
+    /* File-backed providers can now resolve \SystemRoot to the boot volume. */
+    for (CurrentEntry = KdProviders.Flink; CurrentEntry != &KdProviders; NOTHING)
+    {
+        CurrentTable = CONTAINING_RECORD(CurrentEntry, KD_DISPATCH_TABLE, KdProvidersList);
+        CurrentEntry = CurrentEntry->Flink;
+        if (CurrentTable->KdpInitRoutine == NULL)
+            continue;
+
+        KdpInitRoutine = CurrentTable->KdpInitRoutine;
+        CurrentTable->KdpInitRoutine = NULL;
+        CurrentTable->InitStatus = KdpInitRoutine(CurrentTable, KDP_BOOT_PHASE_SYSTEM_ROOT);
+    }
+}
+
 /**
  * @brief   Entry point for the auxiliary driver.
  * DRIVER_INITIALIZE
