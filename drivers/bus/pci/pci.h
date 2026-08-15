@@ -24,6 +24,8 @@ typedef struct _PCI_DEVICE
     PDEVICE_OBJECT Pdo;
     // PCI bus number
     ULONG BusNumber;
+    // PCI segment containing this bus
+    USHORT Segment;
     // PCI slot number
     PCI_SLOT_NUMBER SlotNumber;
     // PCI configuration data
@@ -212,6 +214,60 @@ PciIsBusInRange(
     }
 
     return TRUE;
+}
+
+static __inline ULONG
+PciHalReadConfig(
+    _In_ USHORT Segment,
+    _In_ ULONG BusNumber,
+    _In_ ULONG SlotNumber,
+    _Out_writes_bytes_(Length) PVOID Buffer,
+    _In_ ULONG Offset,
+    _In_ ULONG Length)
+{
+#ifdef _M_ARM64
+    return HalGetPciConfigDataByOffset(Segment,
+                                       BusNumber,
+                                       SlotNumber,
+                                       Buffer,
+                                       Offset,
+                                       Length);
+#else
+    UNREFERENCED_PARAMETER(Segment);
+    return HalGetBusDataByOffset(PCIConfiguration,
+                                 BusNumber,
+                                 SlotNumber,
+                                 Buffer,
+                                 Offset,
+                                 Length);
+#endif
+}
+
+static __inline ULONG
+PciHalWriteConfig(
+    _In_ USHORT Segment,
+    _In_ ULONG BusNumber,
+    _In_ ULONG SlotNumber,
+    _In_reads_bytes_(Length) PVOID Buffer,
+    _In_ ULONG Offset,
+    _In_ ULONG Length)
+{
+#ifdef _M_ARM64
+    return HalSetPciConfigDataByOffset(Segment,
+                                       BusNumber,
+                                       SlotNumber,
+                                       Buffer,
+                                       Offset,
+                                       Length);
+#else
+    UNREFERENCED_PARAMETER(Segment);
+    return HalSetBusDataByOffset(PCIConfiguration,
+                                 BusNumber,
+                                 SlotNumber,
+                                 Buffer,
+                                 Offset,
+                                 Length);
+#endif
 }
 
 

@@ -75,12 +75,12 @@ PciReadDeviceConfig(
         KdDisableDebugger();
     }
 
-    BytesRead = HalGetBusDataByOffset(PCIConfiguration,
-                                       Device->BusNumber,
-                                       Device->SlotNumber.u.AsULONG,
-                                       Buffer,
-                                       Offset,
-                                       Length);
+    BytesRead = PciHalReadConfig(Device->Segment,
+                                 Device->BusNumber,
+                                 Device->SlotNumber.u.AsULONG,
+                                 Buffer,
+                                 Offset,
+                                 Length);
 
     if (NeedKdBracket)
     {
@@ -108,12 +108,12 @@ PciWriteDeviceConfig(
         KdDisableDebugger();
     }
 
-    BytesWritten = HalSetBusDataByOffset(PCIConfiguration,
-                                          Device->BusNumber,
-                                          Device->SlotNumber.u.AsULONG,
-                                          Buffer,
-                                          Offset,
-                                          Length);
+    BytesWritten = PciHalWriteConfig(Device->Segment,
+                                     Device->BusNumber,
+                                     Device->SlotNumber.u.AsULONG,
+                                     Buffer,
+                                     Offset,
+                                     Length);
 
     if (NeedKdBracket)
     {

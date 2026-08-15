@@ -100,6 +100,11 @@ PciPdoGetArm64MsiMessage(
 #endif
 
 static
+USHORT
+PciPdoGetSegment(
+    _In_opt_ PPDO_DEVICE_EXTENSION DeviceExtension);
+
+static
 BOOLEAN
 PciPdoIsBusInRange(
     _In_ PPDO_DEVICE_EXTENSION DeviceExtension)
@@ -144,11 +149,12 @@ PciPdoGetBusData(
     if (!PciPdoIsBusInRange(DeviceExtension))
         return 0;
 
-    return HalGetBusData(PCIConfiguration,
-                         DeviceExtension->PciDevice->BusNumber,
-                         DeviceExtension->PciDevice->SlotNumber.u.AsULONG,
-                         Buffer,
-                         Length);
+    return PciHalReadConfig(PciPdoGetSegment(DeviceExtension),
+                            DeviceExtension->PciDevice->BusNumber,
+                            DeviceExtension->PciDevice->SlotNumber.u.AsULONG,
+                            Buffer,
+                            0,
+                            Length);
 }
 
 static
@@ -162,12 +168,12 @@ PciPdoGetBusDataByOffset(
     if (!PciPdoIsBusInRange(DeviceExtension))
         return 0;
 
-    return HalGetBusDataByOffset(PCIConfiguration,
-                                 DeviceExtension->PciDevice->BusNumber,
-                                 DeviceExtension->PciDevice->SlotNumber.u.AsULONG,
-                                 Buffer,
-                                 Offset,
-                                 Length);
+    return PciHalReadConfig(PciPdoGetSegment(DeviceExtension),
+                            DeviceExtension->PciDevice->BusNumber,
+                            DeviceExtension->PciDevice->SlotNumber.u.AsULONG,
+                            Buffer,
+                            Offset,
+                            Length);
 }
 
 static
@@ -181,12 +187,12 @@ PciPdoSetBusDataByOffset(
     if (!PciPdoIsBusInRange(DeviceExtension))
         return 0;
 
-    return HalSetBusDataByOffset(PCIConfiguration,
-                                 DeviceExtension->PciDevice->BusNumber,
-                                 DeviceExtension->PciDevice->SlotNumber.u.AsULONG,
-                                 Buffer,
-                                 Offset,
-                                 Length);
+    return PciHalWriteConfig(PciPdoGetSegment(DeviceExtension),
+                             DeviceExtension->PciDevice->BusNumber,
+                             DeviceExtension->PciDevice->SlotNumber.u.AsULONG,
+                             Buffer,
+                             Offset,
+                             Length);
 }
 
 #define PCI_CAP_PTR_FIRST      0x40
