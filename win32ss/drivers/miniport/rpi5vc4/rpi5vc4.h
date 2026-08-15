@@ -15,13 +15,11 @@
 #undef __BROKEN__
 #include <video.h>
 #include <devioctl.h>
+#include <reactos/rpi5vc4_xpdm.h>
 
 #define RPI5VC4_CURSOR_WIDTH 64
 #define RPI5VC4_CURSOR_HEIGHT 64
 #define RPI5VC4_ACPI_MEMORY_RESOURCE_COUNT 10
-
-#define IOCTL_VIDEO_RPI5VC4_LATCH_SCANOUT \
-    CTL_CODE(FILE_DEVICE_VIDEO, 0x830, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 typedef struct _LOADER_PARAMETER_FRAMEBUFFER
 {
@@ -69,6 +67,19 @@ typedef struct _RPI5VC4_DEVICE_EXTENSION
 
     /* Cached MMIO mapping of the HVS register block (mapped once, reused). */
     PVOID HvsBase;
+
+    /* Read-only V3D discovery state; submission remains disabled. */
+    PVOID V3dSmsBase;
+    PVOID V3dHubBase;
+    PVOID V3dCoreBase;
+    ULONG V3dFlags;
+    ULONG V3dVersion;
+    ULONG V3dCoreCount;
+    ULONG V3dSmsReeCs;
+    ULONG V3dSmsTeeCs;
+    ULONG V3dHubIdent[4];
+    ULONG V3dCoreIdent[3];
+    ULONG V3dMmuDebugInfo;
 
     /* Cached MMIO mapping of the active PixelValve (mapped once, reused). */
     PVOID PixelValveBase;
