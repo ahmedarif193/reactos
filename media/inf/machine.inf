@@ -49,6 +49,7 @@ HKR, , Icon,           0, "-27"
 %*PNP0C15.DeviceDesc% = NO_DRV,*PNP0C15
 
 %SWENUM.DeviceDesc%   = SWENUM_Inst, ROOT\SWENUM
+%ACPI\ACPI0004.DeviceDesc% = NO_DRV,ACPI\ACPI0004
 %ACPI\ACPI0013.DeviceDesc% = NO_DRV,ACPI\ACPI0013
 %ACPI\ARMH0011.DeviceDesc% = NO_DRV,ACPI\ARMH0011
 %ACPI\FixedButton.DeviceDesc% = NO_DRV,ACPI\FixedButton
@@ -200,6 +201,7 @@ GenericMfg = "(Generic system devices)"
 *PNP0C15.DeviceDesc = "Docking Station"
 
 SWENUM.DeviceDesc  = "Plug & Play Software Bus Enumerator"
+ACPI\ACPI0004.DeviceDesc = "ACPI container device"
 ACPI\ACPI0007.DeviceDesc = "ACPI processor device"
 ACPI\ACPI0013.DeviceDesc = "ACPI generic event device"
 ACPI\ARMH0011.DeviceDesc = "ARM generic timer"
