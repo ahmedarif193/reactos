@@ -86,6 +86,7 @@
 @ stdcall HalTranslateBusAddress(long long long long ptr ptr)
 @ stdcall -version=0x0601+ HalConvertDeviceIdtToIrql(long)
 @ stdcall HalpConfigurePciRootBridge(ptr)
+@ stdcall -arch=arm64 HalpConfigureDmaAdapter(ptr ptr long)
 @ stdcall HalpRegisterPciRouteQuery(ptr)
 @ stdcall HalpSetPciRoutingMap(ptr long)
 @ stdcall HalpRecordPciMaxGsi(ptr)
