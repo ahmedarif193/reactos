@@ -75,7 +75,13 @@ IoGetDmaAdapter(IN PDEVICE_OBJECT PhysicalDeviceObject,
                                                  NumberOfMapRegisters);
 
             BusInterface.InterfaceDereference(BusInterface.Context);
-            if (Adapter) return Adapter;
+            /*
+             * A successful bus-interface query is authoritative. In
+             * particular, NULL can mean that the bus driver cannot represent
+             * the requested DMA operation safely; falling back to HAL would
+             * bypass that decision.
+             */
+            return Adapter;
         }
     }
 
