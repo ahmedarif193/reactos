@@ -637,8 +637,10 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         return FALSE;
     }
 
-    /* Let KD file providers open their targets against the final boot-volume path. */
+    /* Let internal KD file providers open their targets against the final boot-volume path. */
+#ifndef _WINKD_
     KdSystemRootAvailable();
+#endif
 
     /* Set the ANSI_STRING for the root path */
     RootString.MaximumLength = NtSystemRoot.MaximumLength / sizeof(WCHAR);
