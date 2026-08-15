@@ -590,6 +590,7 @@ Rpi5Vc4StartIO(
     PVIDEO_POINTER_POSITION PointerPosition;
     PHYSICAL_ADDRESS FrameBuffer;
     ULONG InIoSpace;
+    ULONG Returned;
 
     switch (RequestPacket->IoControlCode)
     {
@@ -783,6 +784,25 @@ Rpi5Vc4StartIO(
                 RequestPacket->StatusBlock->Information =
                     sizeof(RPI5VC4_V3D_SELFTEST);
             }
+            break;
+
+        case IOCTL_VIDEO_RPI5VC4_RENDER_CLEAR:
+            if (RequestPacket->InputBufferLength <
+                    sizeof(RPI5VC4_V3D_CLEAR_REQUEST) ||
+                RequestPacket->OutputBufferLength <
+                    FIELD_OFFSET(RPI5VC4_V3D_CLEAR_RESULT, Pixels))
+            {
+                Status = ERROR_INSUFFICIENT_BUFFER;
+                break;
+            }
+            Status = Rpi5V3dRenderClear(
+                DeviceExtension,
+                (PRPI5VC4_V3D_CLEAR_REQUEST)RequestPacket->InputBuffer,
+                (PRPI5VC4_V3D_CLEAR_RESULT)RequestPacket->OutputBuffer,
+                RequestPacket->OutputBufferLength,
+                &Returned);
+            if (Status == NO_ERROR)
+                RequestPacket->StatusBlock->Information = Returned;
             break;
 
         default:
