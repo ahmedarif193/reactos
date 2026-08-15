@@ -215,6 +215,26 @@ ChpepIsCurrentThreadInitialized(VOID)
 }
 
 static
+PCHPE_V2_CPU_AREA_INFO
+ChpepEnterCurrentThreadCallback(VOID)
+{
+    PCHPE_V2_CPU_AREA_INFO CpuArea = ChpepGetCurrentCpuArea();
+
+    if (!CpuArea || !CpuArea->EmulatorData[1] || CpuArea->InSyscallCallback)
+        return NULL;
+
+    CpuArea->InSyscallCallback = TRUE;
+    return CpuArea;
+}
+
+static
+VOID
+ChpepLeaveCurrentThreadCallback(PCHPE_V2_CPU_AREA_INFO CpuArea)
+{
+    CpuArea->InSyscallCallback = FALSE;
+}
+
+static
 PVOID *
 ChpepGetPebEcCodeBitmapSlot(VOID)
 {
@@ -457,6 +477,15 @@ ChpepMarkEcCodeRange(ULONG_PTR BaseAddress,
     return ChpepSetEcCodeRange(BaseAddress, Offset, Length, TRUE);
 }
 
+static
+BOOLEAN
+ChpepClearEcCodeRange(ULONG_PTR BaseAddress,
+                      SIZE_T Offset,
+                      SIZE_T Length)
+{
+    return ChpepSetEcCodeRange(BaseAddress, Offset, Length, FALSE);
+}
+
 BOOLEAN
 NTAPI
 ChpeMarkEcCodeRange(PVOID Address,
@@ -633,6 +662,42 @@ ChpeRegisterArm64EcImage(PVOID ImageBase)
     }
 
     return TRUE;
+}
+
+static
+VOID
+ChpepClearImageCodeRanges(PVOID ImageBase)
+{
+    PIMAGE_NT_HEADERS NtHeader;
+    PIMAGE_ARM64EC_METADATA Metadata;
+    PIMAGE_CHPE_RANGE_ENTRY Range;
+    ULONG Index, StartRva, Length, SizeOfImage;
+
+    NtHeader = ChpepGetImageNtHeader(ImageBase);
+    if (!NtHeader)
+        return;
+
+    SizeOfImage = NtHeader->OptionalHeader.SizeOfImage;
+    Metadata = ChpepGetArm64EcMetadata(ImageBase);
+    if (!Metadata)
+    {
+        ChpepSetImageExecuteSections(ImageBase, NtHeader, FALSE);
+        return;
+    }
+
+    Range = (PIMAGE_CHPE_RANGE_ENTRY)((PBYTE)ImageBase + Metadata->CodeMap);
+    for (Index = 0; Index < Metadata->CodeMapCount; ++Index)
+    {
+        StartRva = Range[Index].StartOffset & ~1UL;
+        Length = Range[Index].Length;
+        if (!Length || StartRva >= SizeOfImage)
+            continue;
+
+        if (Length > SizeOfImage - StartRva)
+            Length = SizeOfImage - StartRva;
+
+        ChpepClearEcCodeRange((ULONG_PTR)ImageBase, StartRva, Length);
+    }
 }
 
 BOOLEAN
@@ -1141,9 +1206,21 @@ NTAPI
 ChpeNotifyMemoryAlloc(PVOID Address, SIZE_T Size, ULONG Type,
                       ULONG Prot, BOOLEAN After, NTSTATUS Status)
 {
-    if (!ChpeEmulatorLoaded || pChpeNotifyMemoryAlloc == NULL)
+    PCHPE_V2_CPU_AREA_INFO CpuArea;
+
+    if (After && NT_SUCCESS(Status) && Address && Size &&
+        (Type & MEM_RESERVE) && ChpeEcCodeBitmap)
+        ChpepClearEcCodeRange((ULONG_PTR)Address, 0, Size);
+
+    if (!ChpeEmulatorLoaded || !pChpeNotifyMemoryAlloc)
         return;
+
+    CpuArea = ChpepEnterCurrentThreadCallback();
+    if (!CpuArea)
+        return;
+
     pChpeNotifyMemoryAlloc(Address, Size, Type, Prot, After, Status);
+    ChpepLeaveCurrentThreadCallback(CpuArea);
 }
 
 /*
@@ -1154,9 +1231,17 @@ NTAPI
 ChpeNotifyMemoryFree(PVOID Address, SIZE_T Size, ULONG FreeType,
                      BOOLEAN After, NTSTATUS Status)
 {
-    if (!ChpeEmulatorLoaded || pChpeNotifyMemoryFree == NULL)
+    PCHPE_V2_CPU_AREA_INFO CpuArea;
+
+    if (!ChpeEmulatorLoaded || !pChpeNotifyMemoryFree)
         return;
+
+    CpuArea = ChpepEnterCurrentThreadCallback();
+    if (!CpuArea)
+        return;
+
     pChpeNotifyMemoryFree(Address, Size, FreeType, After, Status);
+    ChpepLeaveCurrentThreadCallback(CpuArea);
 }
 
 /*
@@ -1167,9 +1252,17 @@ NTAPI
 ChpeNotifyMemoryProtect(PVOID Address, SIZE_T Size, ULONG NewProt,
                         BOOLEAN After, NTSTATUS Status)
 {
-    if (!ChpeEmulatorLoaded || pChpeNotifyMemoryProtect == NULL)
+    PCHPE_V2_CPU_AREA_INFO CpuArea;
+
+    if (!ChpeEmulatorLoaded || !pChpeNotifyMemoryProtect)
         return;
+
+    CpuArea = ChpepEnterCurrentThreadCallback();
+    if (!CpuArea)
+        return;
+
     pChpeNotifyMemoryProtect(Address, Size, NewProt, After, Status);
+    ChpepLeaveCurrentThreadCallback(CpuArea);
 }
 
 /*
@@ -1180,9 +1273,30 @@ NTAPI
 ChpeNotifyMapViewOfSection(PVOID Unk1, PVOID Address, PVOID Unk2,
                            SIZE_T Size, ULONG AllocType, ULONG Prot)
 {
-    if (!ChpeEmulatorLoaded || pChpeNotifyMapViewOfSection == NULL)
+    PCHPE_V2_CPU_AREA_INFO CpuArea;
+    NTSTATUS Status;
+
+    if (Address && Size && ChpeEcCodeBitmap)
+        ChpepClearEcCodeRange((ULONG_PTR)Address, 0, Size);
+
+    if (!ChpeEmulatorLoaded || !pChpeNotifyMapViewOfSection)
         return STATUS_SUCCESS;
-    return pChpeNotifyMapViewOfSection(Unk1, Address, Unk2, Size, AllocType, Prot);
+
+    /* FEX treats this callback as an image-map notification. NtMapViewOfSection
+     * also maps data sections, so do not pass non-image views to FEX. */
+    if (!ChpepGetImageNtHeader(Address))
+        return STATUS_SUCCESS;
+
+    if (!ChpeRegisterImageCodeRanges(Address))
+        return STATUS_INVALID_IMAGE_FORMAT;
+
+    CpuArea = ChpepEnterCurrentThreadCallback();
+    if (!CpuArea)
+        return STATUS_SUCCESS;
+
+    Status = pChpeNotifyMapViewOfSection(Unk1, Address, Unk2, Size, AllocType, Prot);
+    ChpepLeaveCurrentThreadCallback(CpuArea);
+    return Status;
 }
 
 /*
@@ -1192,9 +1306,22 @@ VOID
 NTAPI
 ChpeNotifyUnmapViewOfSection(PVOID Address, BOOLEAN After, NTSTATUS Status)
 {
-    if (!ChpeEmulatorLoaded || pChpeNotifyUnmapViewOfSection == NULL)
+    PCHPE_V2_CPU_AREA_INFO CpuArea;
+
+    if (!After && Address && ChpeEcCodeBitmap)
+        ChpepClearImageCodeRanges(Address);
+    else if (After && !NT_SUCCESS(Status) && Address && ChpeEcCodeBitmap)
+        ChpeRegisterImageCodeRanges(Address);
+
+    if (!ChpeEmulatorLoaded || !pChpeNotifyUnmapViewOfSection)
         return;
+
+    CpuArea = ChpepEnterCurrentThreadCallback();
+    if (!CpuArea)
+        return;
+
     pChpeNotifyUnmapViewOfSection(Address, After, Status);
+    ChpepLeaveCurrentThreadCallback(CpuArea);
 }
 
 /*
@@ -1204,9 +1331,17 @@ VOID
 NTAPI
 ChpeFlushInstructionCache(const void *Address, SIZE_T Size)
 {
-    if (!ChpeEmulatorLoaded || pChpeFlushInstructionCache == NULL)
+    PCHPE_V2_CPU_AREA_INFO CpuArea;
+
+    if (!ChpeEmulatorLoaded || !pChpeFlushInstructionCache)
         return;
+
+    CpuArea = ChpepEnterCurrentThreadCallback();
+    if (!CpuArea)
+        return;
+
     pChpeFlushInstructionCache(Address, Size);
+    ChpepLeaveCurrentThreadCallback(CpuArea);
 }
 
 /*
