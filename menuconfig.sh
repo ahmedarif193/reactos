@@ -1,23 +1,34 @@
 #!/bin/sh
 # menuconfig.sh - interactive ReactOS build configuration (OpenWrt/kconfig
-# style). Compiles the rosconfig host tool on first use, opens the terminal
-# UI to enable/disable build options, and stores the selections in the
-# untracked .rosconfig/config.cache. The generated overrides.cmake is picked
-# up by /PreLoad.cmake whenever a tree is configured (configure.sh,
-# configure.cmd or plain cmake). See sdk/tools/rosconfig/README.md.
+# style). The host tool is built in the source tree, while selections and the
+# generated CMake fragment are owned by one output tree.
 
-REACTOS_SOURCE_DIR=$(cd "$(dirname "$0")" && pwd)
+REACTOS_SOURCE_DIR=$(cd "$(dirname "$0")" && pwd -P)
+REACTOS_START_DIR=$(pwd -P)
 
 ROSCONFIG_DIR="$REACTOS_SOURCE_DIR/.rosconfig"
 ROSCONFIG_BIN="$ROSCONFIG_DIR/rosconfig"
 ROSCONFIG_BUILD="$REACTOS_SOURCE_DIR/sdk/tools/rosconfig/build.sh"
 ROSCONFIG_DEF="$REACTOS_SOURCE_DIR/sdk/cmake/rosconfig.def"
-ROSCONFIG_CACHE="$ROSCONFIG_DIR/config.cache"
-ROSCONFIG_OVERRIDES="$ROSCONFIG_DIR/overrides.cmake"
 
 fail() {
 	echo "menuconfig.sh: $*" >&2
 	exit 1
+}
+
+usage() {
+	echo "Usage: ./menuconfig.sh [--build-dir <output-directory>] [--self-test]" >&2
+	exit 2
+}
+
+rosconfig_file_get() {
+	[ -f "$1" ] || return 0
+	sed -n "s/^$2=//p" "$1" | head -n 1
+}
+
+cmake_cache_get() {
+	[ -f "$1" ] || return 0
+	sed -n "s/^$2:[^=]*=//p" "$1" | head -n 1
 }
 
 [ -x "$ROSCONFIG_BUILD" ] || fail "missing $ROSCONFIG_BUILD"
@@ -26,7 +37,54 @@ fail() {
 if [ "$#" -eq 1 ] && [ "$1" = "--self-test" ]; then
 	exec "$ROSCONFIG_BIN" --self-test
 fi
-[ "$#" -eq 0 ] || fail "usage: ./menuconfig.sh [--self-test]"
+[ "$#" -eq 0 ] || [ "$#" -eq 2 ] || usage
+
+if [ "$#" -eq 2 ]; then
+	[ "$1" = "--build-dir" ] || usage
+	case "$2" in
+		/*) BUILD_DIR=$2 ;;
+		*) BUILD_DIR="$REACTOS_START_DIR/$2" ;;
+	esac
+else
+	BUILD_DIR=$REACTOS_START_DIR
+fi
+
+[ -d "$BUILD_DIR" ] || fail "output directory does not exist: $BUILD_DIR"
+BUILD_DIR=$(cd "$BUILD_DIR" && pwd -P)
+[ "$BUILD_DIR" != "$REACTOS_SOURCE_DIR" ] || fail "run from an output directory or pass --build-dir output-<toolchain>-<arch>-<type>"
+
+ROSCONFIG_STATE_DIR="$BUILD_DIR/.rosconfig"
+ROSCONFIG_CACHE="$ROSCONFIG_STATE_DIR/config.cache"
+ROSCONFIG_OVERRIDES="$ROSCONFIG_STATE_DIR/overrides.cmake"
+CMAKE_CACHE="$BUILD_DIR/CMakeCache.txt"
+
+ARCH=$(cmake_cache_get "$CMAKE_CACHE" ARCH)
+[ -n "$ARCH" ] || ARCH=$(rosconfig_file_get "$ROSCONFIG_CACHE" ARCH)
+case "$ARCH" in
+	amd64|i386|arm64|arm) ;;
+	*) fail "cannot determine a valid target architecture for $BUILD_DIR" ;;
+esac
+
+BUILD_TYPE=$(cmake_cache_get "$CMAKE_CACHE" CMAKE_BUILD_TYPE)
+[ -n "$BUILD_TYPE" ] || BUILD_TYPE=$(rosconfig_file_get "$ROSCONFIG_CACHE" BUILD_TYPE)
+case "$BUILD_TYPE" in
+	Debug|Release) ;;
+	*) fail "cannot determine Debug or Release configuration for $BUILD_DIR" ;;
+esac
+
+TOOLCHAIN_FILE=$(cmake_cache_get "$CMAKE_CACHE" CMAKE_TOOLCHAIN_FILE)
+case "$TOOLCHAIN_FILE" in
+	*toolchain-clang.cmake) TOOLCHAIN=clang ;;
+	*toolchain-gcc.cmake) TOOLCHAIN=gcc ;;
+	*) TOOLCHAIN=$(rosconfig_file_get "$ROSCONFIG_CACHE" TOOLCHAIN) ;;
+esac
+case "$TOOLCHAIN" in
+	clang|gcc|msvc) ;;
+	*) fail "cannot determine the toolchain for $BUILD_DIR" ;;
+esac
+
+mkdir -p "$ROSCONFIG_STATE_DIR"
+"$ROSCONFIG_BIN" --def "$ROSCONFIG_DEF" --cache "$ROSCONFIG_CACHE" --defaults --set "ARCH=$ARCH" --set "TOOLCHAIN=$TOOLCHAIN" --set "BUILD_TYPE=$BUILD_TYPE" || fail "could not initialize $ROSCONFIG_CACHE"
 
 "$ROSCONFIG_BIN" --def "$ROSCONFIG_DEF" --cache "$ROSCONFIG_CACHE" --menu
 menu_status=$?
@@ -35,12 +93,12 @@ if [ "$menu_status" -ne 0 ]; then
 	exit "$menu_status"
 fi
 
-# Make sure the cache exists even if the user quit without saving, and
-# refresh the CMake fragment consumed by /PreLoad.cmake.
-"$ROSCONFIG_BIN" --def "$ROSCONFIG_DEF" --cache "$ROSCONFIG_CACHE" --defaults || fail "could not write $ROSCONFIG_CACHE"
+# The output directory fixes these identity values; menu changes apply only to
+# the configuration owned by this tree.
+"$ROSCONFIG_BIN" --def "$ROSCONFIG_DEF" --cache "$ROSCONFIG_CACHE" --defaults --set "ARCH=$ARCH" --set "TOOLCHAIN=$TOOLCHAIN" --set "BUILD_TYPE=$BUILD_TYPE" || fail "could not write $ROSCONFIG_CACHE"
 "$ROSCONFIG_BIN" --def "$ROSCONFIG_DEF" --cache "$ROSCONFIG_CACHE" --generate "$ROSCONFIG_OVERRIDES" || fail "could not write $ROSCONFIG_OVERRIDES"
 
 echo ""
-echo "Configuration stored in .rosconfig/config.cache."
-echo "Run ./configure.sh to configure a build tree with these settings"
+echo "Configuration stored in $ROSCONFIG_CACHE."
+echo "Re-run configure.sh for this output tree to apply these settings"
 echo "(command-line flags and -D options still take precedence)."
