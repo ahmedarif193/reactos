@@ -28,6 +28,8 @@
 #ifndef KJK_INTRIN_H_
 #define KJK_INTRIN_H_
 
+#include "../intrin_target.h"
+
 #ifndef RC_INVOKED
 
 #ifndef _SIZE_T_DEFINED
@@ -93,9 +95,9 @@
 #include "intrin_mips.h"
 #elif defined(_M_ARM)
 #include "intrin_arm.h"
-#elif defined(_M_ARM64)
+#elif _VCRT_ARM64_INTRINSICS
 #include "intrin_arm64.h"
-#elif defined(__x86_64__)
+#elif _VCRT_GNU_AMD64_CODEGEN
 /* TODO: the x64 architecture shares most of the i386 intrinsics. It should be easy to support */
 #include "intrin_x86.h"
 #else

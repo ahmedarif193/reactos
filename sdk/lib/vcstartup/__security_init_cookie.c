@@ -22,11 +22,11 @@
 uintptr_t __security_cookie = DEFAULT_SECURITY_COOKIE;
 uintptr_t __security_cookie_complement = ~DEFAULT_SECURITY_COOKIE;
 
-#if defined(__clang__) && (defined(_M_IX86) || defined(_M_X64))
+#if defined(__clang__) && _VCRT_X86_INTRINSICS
 __attribute__((target("rdrnd")))
 static int __security_rdrand(uintptr_t *randomValue)
 {
-#ifdef _M_X64
+#if _VCRT_AMD64_INTRINSICS
     return _rdrand64_step((unsigned long long *)randomValue);
 #else
     return _rdrand32_step((unsigned int *)randomValue);
@@ -40,13 +40,13 @@ void __security_init_cookie(void)
     FILETIME fileTime;
     uintptr_t randomValue = (uintptr_t)0x27E30B2C16B07297ull;
 
-#if defined(_M_IX86) || defined(_M_X64)
+#if _VCRT_X86_INTRINSICS
     if (IsProcessorFeaturePresent(PF_RDRAND_INSTRUCTION_AVAILABLE))
     {
 #ifdef __clang__
         while (!__security_rdrand(&randomValue))
             _mm_pause();
-#elif defined(_M_X64)
+#elif _VCRT_AMD64_INTRINSICS
         while (!_rdrand64_step(&randomValue))
             _mm_pause();
 #else

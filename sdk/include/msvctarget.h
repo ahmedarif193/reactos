@@ -2,7 +2,23 @@
 
 /* Translate GCC/Clang target defines to the MS-style architecture macros
  * expected by the Windows-compatible SDK headers. */
-#if defined(__i386__)
+#if defined(__arm64ec__)
+ #if !defined(_AMD64_)
+  #define _AMD64_ 1
+ #endif
+ #if !defined(_M_AMD64)
+  #define _M_AMD64 1
+ #endif
+ #if !defined(_M_X64)
+  #define _M_X64 1
+ #endif
+ #if !defined(_ARM64EC_)
+  #define _ARM64EC_ 1
+ #endif
+ #if !defined(_M_ARM64EC)
+  #define _M_ARM64EC 1
+ #endif
+#elif defined(__i386__)
  #if !defined(_X86_)
   #define _X86_ 1
  #endif
@@ -56,4 +72,17 @@
  #endif
 #else
  #error Unknown architecture
+#endif
+
+/* ARM64EC has the AMD64 public ABI, but Clang emits AArch64 instructions. */
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
+ #define REACTOS_TARGET_ARM64_CODEGEN 1
+#else
+ #define REACTOS_TARGET_ARM64_CODEGEN 0
+#endif
+
+#if defined(_M_AMD64) && !REACTOS_TARGET_ARM64_CODEGEN
+ #define REACTOS_TARGET_AMD64_CODEGEN 1
+#else
+ #define REACTOS_TARGET_AMD64_CODEGEN 0
 #endif

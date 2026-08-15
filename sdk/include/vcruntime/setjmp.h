@@ -7,6 +7,7 @@
 #define _INC_SETJMP
 
 #include "vcruntime.h"
+#include "intrin_target.h"
 
 #pragma pack(push,_CRT_PACKING)
 
@@ -95,7 +96,7 @@ extern "C" {
 
   } _JUMP_BUFFER;
 
-#elif defined(__x86_64)
+#elif _VCRT_AMD64_CODEGEN || _VCRT_GNU_AMD64_CODEGEN || defined(_M_ARM64EC) || defined(__arm64ec__)
 
   typedef _CRT_ALIGN(16) struct _SETJMP_FLOAT128 {
     unsigned __int64 Part[2];
@@ -152,7 +153,7 @@ extern "C" {
     unsigned long long D[8]; // D8-D15 VFP/NEON regs
   } _JUMP_BUFFER;
 
-#elif defined(_M_ARM64)
+#elif _VCRT_ARM64_CODEGEN
 
 #define _JBLEN 24
 #define _JBTYPE unsigned __int64
@@ -189,18 +190,18 @@ typedef struct __JUMP_BUFFER {
 #define _JMP_BUF_DEFINED
 #endif
 
-#if defined(__clang__) && defined(__x86_64) && defined(USE_MINGW_SETJMP_TWO_ARGS)
+#if _VCRT_CLANG_INTRINSICS && _VCRT_GNU_AMD64_CODEGEN && defined(USE_MINGW_SETJMP_TWO_ARGS)
   /* Clang treats _setjmp as a 1-arg builtin on Win64. Route declarations and
    * macro expansion through the intrinsic aliases exported by the CRT. */
 #define _setjmp __intrinsic_setjmp
 #define _setjmpex __intrinsic_setjmpex
 #endif
 
-#if defined(USE_MINGW_SETJMP_TWO_ARGS) && (defined(__x86_64) || defined(_X86_))
-#if defined(__x86_64)
+#if defined(USE_MINGW_SETJMP_TWO_ARGS) && (_VCRT_GNU_X86_CODEGEN || defined(_X86_))
+#if _VCRT_GNU_AMD64_CODEGEN
 # define mingw_getsp() \
   ({ void* value; __asm__ __volatile__("movq %%rsp, %[value]" : [value] "=r" (value)); value; })
-#elif defined(_X86_)
+#elif defined(_X86_) || defined(__i386__)
 # define mingw_getsp() \
   ({ void* value; __asm__ __volatile__("movl %%esp, %[value]" : [value] "=r" (value)); value; })
 #endif

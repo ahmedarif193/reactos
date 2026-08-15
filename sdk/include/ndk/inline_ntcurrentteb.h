@@ -9,6 +9,8 @@ FORCEINLINE struct _TEB * NtCurrentTeb(VOID)
 {
 #if defined(_M_IX86)
     return (struct _TEB *)__readfsdword(0x18);
+#elif defined(_M_ARM64EC) || defined(__arm64ec__)
+    return (struct _TEB *)__getReg(18);
 #elif defined(_M_AMD64)
     return (struct _TEB *)__readgsqword(FIELD_OFFSET(NT_TIB, Self));
 #elif defined(_M_ARM)
