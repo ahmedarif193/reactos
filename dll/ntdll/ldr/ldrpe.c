@@ -18,6 +18,88 @@
 PLDR_MANIFEST_PROBER_ROUTINE LdrpManifestProberRoutine;
 ULONG LdrpNormalSnap;
 
+#if defined(_M_ARM64)
+#define LDRP_CHPE_IMPORT_REDIRECTION 1
+#else
+#define LDRP_CHPE_IMPORT_REDIRECTION 0
+#endif
+
+#if LDRP_CHPE_IMPORT_REDIRECTION
+static const UNICODE_STRING LdrpArm64EcImportDirectory = RTL_CONSTANT_STRING(L"\\System32\\arm64ec\\");
+static const UNICODE_STRING LdrpNtdllImportName = RTL_CONSTANT_STRING(L"ntdll.dll");
+static const UNICODE_STRING LdrpNtdllChpeImportName = RTL_CONSTANT_STRING(L"ntdll_chpe.dll");
+
+static
+VOID
+LdrpGetImportBaseName(PUNICODE_STRING ImportName,
+                      PUNICODE_STRING BaseName)
+{
+    USHORT Index;
+
+    *BaseName = *ImportName;
+    BaseName->MaximumLength = BaseName->Length;
+
+    for (Index = ImportName->Length / sizeof(WCHAR); Index > 0; --Index)
+    {
+        if (ImportName->Buffer[Index - 1] == L'\\' || ImportName->Buffer[Index - 1] == L'/')
+        {
+            BaseName->Buffer += Index;
+            BaseName->Length -= Index * sizeof(WCHAR);
+            BaseName->MaximumLength = BaseName->Length;
+            break;
+        }
+    }
+}
+
+static
+NTSTATUS
+LdrpBuildArm64EcImportName(PUNICODE_STRING ImportName,
+                           PUNICODE_STRING RedirectedImportName)
+{
+    UNICODE_STRING BaseName;
+    UNICODE_STRING NtSystemRoot;
+    PCUNICODE_STRING MappedImportName;
+    USHORT Length;
+    NTSTATUS Status;
+
+    LdrpGetImportBaseName(ImportName, &BaseName);
+    MappedImportName = &BaseName;
+    if (RtlEqualUnicodeString(&BaseName, &LdrpNtdllImportName, TRUE))
+        MappedImportName = &LdrpNtdllChpeImportName;
+
+    RtlInitUnicodeString(&NtSystemRoot, SharedUserData->NtSystemRoot);
+    if (MappedImportName->Length > MAXUSHORT - NtSystemRoot.Length - LdrpArm64EcImportDirectory.Length - sizeof(UNICODE_NULL))
+        return STATUS_NAME_TOO_LONG;
+
+    Length = NtSystemRoot.Length + LdrpArm64EcImportDirectory.Length + MappedImportName->Length;
+    RedirectedImportName->Buffer = RtlAllocateHeap(RtlGetProcessHeap(), 0, Length + sizeof(UNICODE_NULL));
+    if (!RedirectedImportName->Buffer)
+        return STATUS_NO_MEMORY;
+
+    RedirectedImportName->Length = 0;
+    RedirectedImportName->MaximumLength = Length + sizeof(UNICODE_NULL);
+    Status = RtlAppendUnicodeStringToString(RedirectedImportName, &NtSystemRoot);
+    if (!NT_SUCCESS(Status))
+        goto Failure;
+
+    Status = RtlAppendUnicodeStringToString(RedirectedImportName, &LdrpArm64EcImportDirectory);
+    if (!NT_SUCCESS(Status))
+        goto Failure;
+
+    Status = RtlAppendUnicodeStringToString(RedirectedImportName, MappedImportName);
+    if (!NT_SUCCESS(Status))
+        goto Failure;
+
+    RedirectedImportName->Buffer[RedirectedImportName->Length / sizeof(WCHAR)] = UNICODE_NULL;
+    return STATUS_SUCCESS;
+
+Failure:
+    RtlFreeHeap(RtlGetProcessHeap(), 0, RedirectedImportName->Buffer);
+    RtlInitEmptyUnicodeString(RedirectedImportName, NULL, 0);
+    return Status;
+}
+#endif
+
 typedef struct _LDRP_IAT_PROTECTION_CONTEXT
 {
     PVOID BaseAddress;
@@ -874,11 +956,19 @@ LdrpLoadImportModule(IN PWSTR DllPath OPTIONAL,
     PTEB Teb = NtCurrentTeb();
     UNICODE_STRING RedirectedImpDescName;
     BOOLEAN RedirectedDll;
+#if LDRP_CHPE_IMPORT_REDIRECTION
+    UNICODE_STRING ChpeImpDescName;
+    BOOLEAN ChpeRedirectedDll;
+#endif
 
     DPRINT("LdrpLoadImportModule('%S' %p '%s' %p %p)\n", DllPath, ImportBase, ImportName, DataTableEntry, Existing);
 
     RedirectedDll = FALSE;
     RtlInitEmptyUnicodeString(&RedirectedImpDescName, NULL, 0);
+#if LDRP_CHPE_IMPORT_REDIRECTION
+    RtlInitEmptyUnicodeString(&ChpeImpDescName, NULL, 0);
+    ChpeRedirectedDll = FALSE;
+#endif
 
     /* Convert import descriptor name to unicode string */
     ImpDescName = &Teb->StaticUnicodeString;
@@ -930,15 +1020,26 @@ LdrpLoadImportModule(IN PWSTR DllPath OPTIONAL,
     }
 
     /* Check if the SxS Assemblies specify another file */
-    Status = LdrpApplyFileNameRedirection(
-        ImpDescName, &LdrApiDefaultExtension, NULL, &RedirectedImpDescName, &ImpDescName, &RedirectedDll);
-
+    Status = LdrpApplyFileNameRedirection(ImpDescName, &LdrApiDefaultExtension, NULL, &RedirectedImpDescName, &ImpDescName, &RedirectedDll);
     if (!NT_SUCCESS(Status))
     {
-        /* Unrecoverable SxS failure */
-        DPRINT1("LDR: LdrpApplyFileNameRedirection failed  with status %x for dll %wZ\n", Status, ImpDescName);
+        DPRINT1("LDR: LdrpApplyFileNameRedirection failed with status %x for dll %wZ\n", Status, ImpDescName);
         goto done;
     }
+
+#if LDRP_CHPE_IMPORT_REDIRECTION
+    if (ChpeShouldRedirectImport(ImportBase, ImpDescName))
+    {
+        Status = LdrpBuildArm64EcImportName(ImpDescName, &ChpeImpDescName);
+        if (!NT_SUCCESS(Status))
+            goto done;
+
+        DPRINT("LDR: CHPE redirected %wZ to %wZ\n", ImpDescName, &ChpeImpDescName);
+        ImpDescName = &ChpeImpDescName;
+        RedirectedDll = TRUE;
+        ChpeRedirectedDll = TRUE;
+    }
+#endif
 
     /* Check if it's loaded */
     if (LdrpCheckForLoadedDll(DllPath,
@@ -949,6 +1050,16 @@ LdrpLoadImportModule(IN PWSTR DllPath OPTIONAL,
     {
         /* It's already existing in the list */
         *Existing = TRUE;
+#if LDRP_CHPE_IMPORT_REDIRECTION
+        if (ChpeRedirectedDll && ChpeGetImageMachine((*DataTableEntry)->DllBase) != IMAGE_FILE_MACHINE_ARM64EC)
+        {
+            Status = STATUS_INVALID_IMAGE_FORMAT;
+            goto done;
+        }
+
+        if (ChpeIsChpeProcess())
+            ChpeRegisterImageCodeRanges((*DataTableEntry)->DllBase);
+#endif
         Status = STATUS_SUCCESS;
         goto done;
     }
@@ -970,6 +1081,22 @@ LdrpLoadImportModule(IN PWSTR DllPath OPTIONAL,
         goto done;
     }
 
+#if LDRP_CHPE_IMPORT_REDIRECTION
+    if (ChpeRedirectedDll && ChpeGetImageMachine((*DataTableEntry)->DllBase) != IMAGE_FILE_MACHINE_ARM64EC)
+    {
+        DPRINT1("LDR: CHPE redirected image %wZ is not ARM64EC\n", &(*DataTableEntry)->BaseDllName);
+        Status = STATUS_INVALID_IMAGE_FORMAT;
+        goto done;
+    }
+
+    if (ChpeIsChpeProcess() && !ChpeRegisterImageCodeRanges((*DataTableEntry)->DllBase))
+    {
+        DPRINT1("LDR: CHPE failed to register image code ranges for %wZ\n", &(*DataTableEntry)->BaseDllName);
+        Status = STATUS_INVALID_IMAGE_FORMAT;
+        goto done;
+    }
+#endif
+
     /* Walk its import descriptor table */
     Status = LdrpWalkImportDescriptor(DllPath,
                                       *DataTableEntry);
@@ -981,6 +1108,10 @@ LdrpLoadImportModule(IN PWSTR DllPath OPTIONAL,
     }
 
 done:
+#if LDRP_CHPE_IMPORT_REDIRECTION
+    if (ChpeImpDescName.Buffer)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, ChpeImpDescName.Buffer);
+#endif
     RtlFreeUnicodeString(&RedirectedImpDescName);
 
     return Status;
@@ -1195,31 +1326,57 @@ FailurePath:
                 WCHAR StringBuffer[MAX_PATH];
                 UNICODE_STRING StaticString, *RedirectedImportName;
                 BOOLEAN Redirected = FALSE;
+#if LDRP_CHPE_IMPORT_REDIRECTION
+                WCHAR ForwarderDllBuffer[MAX_PATH];
+                UNICODE_STRING ForwarderDllName, ChpeImportName;
+                PUNICODE_STRING ChpeCandidateName;
+#endif
 
                 RtlInitEmptyUnicodeString(&StaticString, StringBuffer, sizeof(StringBuffer));
+                RedirectedImportName = &TempUString;
+                Status = LdrpApplyFileNameRedirection(&TempUString, &LdrApiDefaultExtension, &StaticString, NULL, &RedirectedImportName, &Redirected);
 
-                /* Check if the SxS Assemblies specify another file */
-                Status = LdrpApplyFileNameRedirection(
-                    &TempUString, &LdrApiDefaultExtension, &StaticString, NULL, &RedirectedImportName, &Redirected);
+#if LDRP_CHPE_IMPORT_REDIRECTION
+                RtlInitEmptyUnicodeString(&ForwarderDllName, ForwarderDllBuffer, sizeof(ForwarderDllBuffer));
+                RtlInitEmptyUnicodeString(&ChpeImportName, NULL, 0);
+                if (NT_SUCCESS(Status))
+                {
+                    ChpeCandidateName = RedirectedImportName;
+                    if (!Redirected)
+                    {
+                        Status = RtlAppendUnicodeStringToString(&ForwarderDllName, &TempUString);
+                        if (NT_SUCCESS(Status))
+                            Status = RtlAppendUnicodeStringToString(&ForwarderDllName, &LdrApiDefaultExtension);
+                        ChpeCandidateName = &ForwarderDllName;
+                    }
+
+                    if (NT_SUCCESS(Status) && ChpeShouldRedirectImport(ImportBase, ChpeCandidateName))
+                    {
+                        Status = LdrpBuildArm64EcImportName(ChpeCandidateName, &ChpeImportName);
+                        if (NT_SUCCESS(Status))
+                        {
+                            DPRINT("LDR: CHPE redirected forwarder %wZ to %wZ\n", ChpeCandidateName, &ChpeImportName);
+                            RedirectedImportName = &ChpeImportName;
+                            Redirected = TRUE;
+                        }
+                    }
+                }
+#endif
 
                 if (NT_SUCCESS(Status) && Redirected)
                 {
                     if (ShowSnaps)
                         DPRINT1("LDR: %Z got redirected to %wZ\n", &ForwarderName, RedirectedImportName);
                 }
-                else
-                {
-                    RedirectedImportName = &TempUString;
-                }
 
                 /* Load the forwarder */
-                Status = LdrpLoadDll(Redirected,
-                                     NULL,
-                                     NULL,
-                                     RedirectedImportName,
-                                     &ForwarderHandle,
-                                     FALSE);
+                if (NT_SUCCESS(Status))
+                    Status = LdrpLoadDll(Redirected, NULL, NULL, RedirectedImportName, &ForwarderHandle, FALSE);
 
+#if LDRP_CHPE_IMPORT_REDIRECTION
+                if (ChpeImportName.Buffer)
+                    RtlFreeHeap(RtlGetProcessHeap(), 0, ChpeImportName.Buffer);
+#endif
                 RtlFreeUnicodeString(&TempUString);
             }
 
