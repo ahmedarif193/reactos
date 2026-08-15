@@ -148,6 +148,8 @@ function(setup_host_tools)
             CMAKE_ARGS
                 -UCMAKE_TOOLCHAIN_FILE
                 -DARCH:STRING=${ARCH}
+                -DROSCONFIG_PROFILE:STRING=generic
+                -DROSCONFIG_SKIP_OVERRIDES:BOOL=ON
                 -DCMAKE_INSTALL_PREFIX=${REACTOS_BINARY_DIR}/host-tools
                 -DTOOLS_FOLDER=${REACTOS_BINARY_DIR}/host-tools/bin
                 -DTARGET_COMPILER_ID=${CMAKE_C_COMPILER_ID}
