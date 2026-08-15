@@ -2856,6 +2856,9 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     {
         PVOID Kernel32BaseAddress;
         PVOID FunctionAddress;
+#if defined(_M_ARM64)
+        ULONG_PTR NativeFunctionAddress;
+#endif
 
         Status = LdrLoadDll(NULL, NULL, &Kernel32String, &Kernel32BaseAddress);
 
@@ -2877,6 +2880,14 @@ LdrpInitializeProcess(IN PCONTEXT Context,
                 DPRINT1("LDR: Unable to find post-import process init function, Status=0x%08lx\n", Status);
             return Status;
         }
+#if defined(_M_ARM64)
+        if (ChpeGetImageMachine(Kernel32BaseAddress) == IMAGE_FILE_MACHINE_ARM64EC)
+        {
+            if (!ChpeGetArm64EcNativeFunction(Kernel32BaseAddress, (ULONG_PTR)FunctionAddress, &NativeFunctionAddress))
+                return STATUS_INVALID_IMAGE_FORMAT;
+            FunctionAddress = (PVOID)NativeFunctionAddress;
+        }
+#endif
         Kernel32ProcessInitPostImportFunction = FunctionAddress;
 
         Status = LdrGetProcedureAddress(Kernel32BaseAddress,
@@ -2890,6 +2901,14 @@ LdrpInitializeProcess(IN PCONTEXT Context,
                 DPRINT1("LDR: Unable to find BaseQueryModuleData, Status=0x%08lx\n", Status);
             return Status;
         }
+#if defined(_M_ARM64)
+        if (ChpeGetImageMachine(Kernel32BaseAddress) == IMAGE_FILE_MACHINE_ARM64EC)
+        {
+            if (!ChpeGetArm64EcNativeFunction(Kernel32BaseAddress, (ULONG_PTR)FunctionAddress, &NativeFunctionAddress))
+                return STATUS_INVALID_IMAGE_FORMAT;
+            FunctionAddress = (PVOID)NativeFunctionAddress;
+        }
+#endif
         Kernel32BaseQueryModuleData = FunctionAddress;
     }
 
