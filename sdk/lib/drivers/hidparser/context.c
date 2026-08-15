@@ -81,24 +81,40 @@ HidParser_GetCollectionAtOffset(
     return HidParser_IsRawRangeValid(CollectionContext, Offset, CollectionSize);
 }
 
-ULONG
+static
+BOOLEAN
 HidParser_CalculateCollectionSize(
-    IN PHID_COLLECTION Collection)
+    IN PHID_COLLECTION Collection,
+    OUT PULONG CollectionSize)
 {
-    ULONG Size = 0, Index;
+    ULONG Size, Index;
+    ULONG ItemSize;
+    ULONG ReportSize;
+    ULONG ChildSize;
+    ULONG OffsetCount;
+    ULONG OffsetSize;
 
-    Size = sizeof(HID_COLLECTION);
+    if (!Collection || !CollectionSize)
+        return FALSE;
+
+    Size = (ULONG)sizeof(HID_COLLECTION);
 
     //
     // add size required for the number of report items
     //
     for(Index = 0; Index < Collection->ReportCount; Index++)
     {
-        //
-        // get report size
-        //
-        ASSERT(Collection->Reports[Index]->ItemCount);
-        Size += sizeof(HID_REPORT) + Collection->Reports[Index]->ItemCount * sizeof(HID_REPORT_ITEM);
+        if (!Collection->Reports || !Collection->Reports[Index] || !Collection->Reports[Index]->ItemCount)
+            return FALSE;
+
+        if (!NT_SUCCESS(RtlULongMult(Collection->Reports[Index]->ItemCount, (ULONG)sizeof(HID_REPORT_ITEM), &ItemSize)))
+            return FALSE;
+
+        if (!NT_SUCCESS(RtlULongAdd((ULONG)sizeof(HID_REPORT), ItemSize, &ReportSize)))
+            return FALSE;
+
+        if (!NT_SUCCESS(RtlULongAdd(Size, ReportSize, &Size)))
+            return FALSE;
     }
 
     //
@@ -106,18 +122,30 @@ HidParser_CalculateCollectionSize(
     //
     for(Index = 0; Index < Collection->NodeCount; Index++)
     {
-        Size += HidParser_CalculateCollectionSize(Collection->Nodes[Index]);
+        if (!Collection->Nodes || !HidParser_CalculateCollectionSize(Collection->Nodes[Index], &ChildSize))
+            return FALSE;
+
+        if (!NT_SUCCESS(RtlULongAdd(Size, ChildSize, &Size)))
+            return FALSE;
     }
 
     //
     // append size for the offset
     //
-    Size += (Collection->ReportCount + Collection->NodeCount) * sizeof(ULONG);
+    if (!NT_SUCCESS(RtlULongAdd(Collection->ReportCount, Collection->NodeCount, &OffsetCount)))
+        return FALSE;
+
+    if (!NT_SUCCESS(RtlULongMult(OffsetCount, (ULONG)sizeof(ULONG), &OffsetSize)))
+        return FALSE;
+
+    if (!NT_SUCCESS(RtlULongAdd(Size, OffsetSize, &Size)))
+        return FALSE;
 
     //
     // done
     //
-    return Size;
+    *CollectionSize = Size;
+    return TRUE;
 }
 
 ULONG
@@ -129,71 +157,82 @@ HidParser_CalculateContextSize(
     //
     // minimum size is the size of the collection
     //
-    Size = HidParser_CalculateCollectionSize(Collection);
+    if (!HidParser_CalculateCollectionSize(Collection, &Size))
+        return 0;
 
     //
     // append collection context size
     //
-    Size += sizeof(HID_COLLECTION_CONTEXT);
+    if (!NT_SUCCESS(RtlULongAdd(Size, (ULONG)sizeof(HID_COLLECTION_CONTEXT), &Size)))
+        return 0;
+
     return Size;
 }
 
-ULONG
+static
+BOOLEAN
 HidParser_StoreCollection(
     IN PHID_COLLECTION Collection,
     IN PHID_COLLECTION_CONTEXT CollectionContext,
-    IN ULONG CurrentOffset)
+    IN ULONG CurrentOffset,
+    OUT PULONG StoredSize)
 {
     ULONG Index;
+    ULONG ItemSize;
     ULONG ReportSize;
     ULONG InitialOffset;
     ULONG CollectionSize;
+    ULONG OffsetCount;
+    ULONG OffsetSize;
+    ULONG ChildSize;
     PHID_COLLECTION TargetCollection;
+
+    if (!Collection || !CollectionContext || !StoredSize)
+        return FALSE;
 
     //
     // backup initial offset
     //
     InitialOffset = CurrentOffset;
 
-    //
-    // get target collection
-    //
-    TargetCollection = (PHID_COLLECTION)(&CollectionContext->RawData[CurrentOffset]);
+    if (!NT_SUCCESS(RtlULongAdd(Collection->ReportCount, Collection->NodeCount, &OffsetCount)))
+        return FALSE;
+
+    if (!NT_SUCCESS(RtlULongMult(OffsetCount, (ULONG)sizeof(ULONG), &OffsetSize)))
+        return FALSE;
+
+    if (!NT_SUCCESS(RtlULongAdd((ULONG)sizeof(HID_COLLECTION), OffsetSize, &CollectionSize)))
+        return FALSE;
+
+    if (!HidParser_IsRawRangeValid(CollectionContext, CurrentOffset, CollectionSize))
+        return FALSE;
+
+    TargetCollection = (PHID_COLLECTION)&CollectionContext->RawData[CurrentOffset];
 
     //
     // first copy the collection details
     //
     CopyFunction(TargetCollection, Collection, sizeof(HID_COLLECTION));
 
-    //
-    // calulcate collection size
-    //
-    CollectionSize = sizeof(HID_COLLECTION) + sizeof(ULONG) * (Collection->ReportCount + Collection->NodeCount);
-
-    //
-    // increase offset
-    //
-    CurrentOffset += CollectionSize;
-
-    //
-    // sanity check
-    //
-    ASSERT(CurrentOffset < CollectionContext->Size);
+    if (!NT_SUCCESS(RtlULongAdd(CurrentOffset, CollectionSize, &CurrentOffset)))
+        return FALSE;
 
     //
     // first store the report items
     //
     for(Index = 0; Index < Collection->ReportCount; Index++)
     {
-        //
-        // calculate report size
-        //
-        ReportSize = sizeof(HID_REPORT) + Collection->Reports[Index]->ItemCount * sizeof(HID_REPORT_ITEM);
+        if (!Collection->Reports || !Collection->Reports[Index])
+            return FALSE;
 
-        //
-        // sanity check
-        //
-        ASSERT(CurrentOffset + ReportSize < CollectionContext->Size);
+        if (!NT_SUCCESS(RtlULongMult(Collection->Reports[Index]->ItemCount, (ULONG)sizeof(HID_REPORT_ITEM), &ItemSize)))
+            return FALSE;
+
+        if (!NT_SUCCESS(RtlULongAdd((ULONG)sizeof(HID_REPORT), ItemSize, &ReportSize)))
+            return FALSE;
+
+        if (!HidParser_IsRawRangeValid(CollectionContext, CurrentOffset, ReportSize))
+            return FALSE;
 
         //
         // copy report item
@@ -208,16 +247,18 @@ HidParser_StoreCollection(
         //
         // move to next offset
         //
-        CurrentOffset += ReportSize;
+        if (!NT_SUCCESS(RtlULongAdd(CurrentOffset, ReportSize, &CurrentOffset)))
+            return FALSE;
     }
-
-    ASSERT(CurrentOffset <= CollectionContext->Size);
 
     //
     // now store the sub collections
     //
     for(Index = 0; Index < Collection->NodeCount; Index++)
     {
+        if (!Collection->Nodes || !Collection->Nodes[Index])
+            return FALSE;
+
         //
         // store offset
         //
@@ -226,18 +267,18 @@ HidParser_StoreCollection(
         //
         // store sub collections
         //
-        CurrentOffset += HidParser_StoreCollection(Collection->Nodes[Index], CollectionContext, CurrentOffset);
+        if (!HidParser_StoreCollection(Collection->Nodes[Index], CollectionContext, CurrentOffset, &ChildSize))
+            return FALSE;
 
-        //
-        // sanity check
-        //
-        ASSERT(CurrentOffset < CollectionContext->Size);
+        if (!NT_SUCCESS(RtlULongAdd(CurrentOffset, ChildSize, &CurrentOffset)))
+            return FALSE;
     }
 
     //
     // return size of collection
     //
-    return CurrentOffset - InitialOffset;
+    *StoredSize = CurrentOffset - InitialOffset;
+    return TRUE;
 }
 
 NTSTATUS
@@ -252,18 +293,23 @@ HidParser_BuildCollectionContext(
     //
     // init context
     //
+    if (!RootCollection || !Context || ContextSize < sizeof(HID_COLLECTION_CONTEXT))
+        return HIDP_STATUS_INTERNAL_ERROR;
+
     CollectionContext = (PHID_COLLECTION_CONTEXT)Context;
     CollectionContext->Size = ContextSize;
 
     //
     // store collections
     //
-    CollectionSize = HidParser_StoreCollection(RootCollection, CollectionContext, 0);
+    if (!HidParser_StoreCollection(RootCollection, CollectionContext, 0, &CollectionSize))
+        return HIDP_STATUS_INTERNAL_ERROR;
 
     //
     // sanity check
     //
-    ASSERT(CollectionSize + sizeof(HID_COLLECTION_CONTEXT) == ContextSize);
+    if (CollectionSize != ContextSize - sizeof(HID_COLLECTION_CONTEXT))
+        return HIDP_STATUS_INTERNAL_ERROR;
 
     DPRINT("CollectionContext %p\n", CollectionContext);
     DPRINT("CollectionContext RawData %p\n", CollectionContext->RawData);
@@ -273,6 +319,18 @@ HidParser_BuildCollectionContext(
     // done
     //
     return HIDP_STATUS_SUCCESS;
+}
+
+ULONG
+HidParser_GetCollectionContextSize(
+    IN PVOID Context)
+{
+    PHID_COLLECTION_CONTEXT CollectionContext = Context;
+
+    if (!CollectionContext || CollectionContext->Size < sizeof(HID_COLLECTION_CONTEXT))
+        return 0;
+
+    return CollectionContext->Size;
 }
 
 PHID_REPORT

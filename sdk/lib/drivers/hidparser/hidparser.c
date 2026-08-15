@@ -75,6 +75,7 @@ HidParser_GetCollectionDescription(
     ULONG ReportIdCount = 0;
     ULONG ReportIndex;
     ULONG ReportIdLocalIndex;
+    ULONG ContextSize;
     PVOID ParserContext;
 
     ZeroFunction(DeviceDescription, sizeof(HIDP_DEVICE_DESC));
@@ -120,10 +121,10 @@ HidParser_GetCollectionDescription(
     for(Index = 0; Index < CollectionCount; Index++)
     {
         //
-        // set preparsed data length
+        // calculate the private parser context size
         //
-        DeviceDescription->CollectionDesc[Index].PreparsedDataLength = HidParser_GetContextSize(ParserContext, Index);
-        ParserStatus = HidParser_BuildContext(ParserContext, Index, DeviceDescription->CollectionDesc[Index].PreparsedDataLength, (PVOID*)&DeviceDescription->CollectionDesc[Index].PreparsedData);
+        ContextSize = HidParser_GetContextSize(ParserContext, Index);
+        ParserStatus = HidParser_BuildContext(ParserContext, Index, ContextSize, (PVOID*)&DeviceDescription->CollectionDesc[Index].PreparsedData);
         if (ParserStatus != HIDP_STATUS_SUCCESS)
         {
             //

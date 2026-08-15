@@ -128,12 +128,35 @@ static UCHAR PowerProEliteDescriptor[] = {
 };
 C_ASSERT(sizeof(PowerProEliteDescriptor) == 148);
 
+static UCHAR LargeReportCountDescriptor[] = {
+    0x05, 0x01,                   /* Usage Page (Generic Desktop), */
+    0x09, 0x06,                   /* Usage (Keyboard), */
+    0xa1, 0x01,                   /* Collection (Application), */
+    0x75, 0x01,                   /*   Report Size (1), */
+    0x97, 0xec, 0x04, 0x00, 0x00, /*   Report Count (1260), */
+    0x81, 0x02,                   /*   Input (Data, Variable, Absolute), */
+    0xc0                          /* End Collection */
+};
+C_ASSERT(sizeof(LargeReportCountDescriptor) == 16);
+
+static UCHAR OverflowReportCountDescriptor[] = {
+    0x05, 0x01,                   /* Usage Page (Generic Desktop), */
+    0x09, 0x06,                   /* Usage (Keyboard), */
+    0xa1, 0x01,                   /* Collection (Application), */
+    0x75, 0x01,                   /*   Report Size (1), */
+    0x97, 0xff, 0xff, 0xff, 0xff, /*   Report Count (UINT32_MAX), */
+    0x81, 0x02,                   /*   Input (Data, Variable, Absolute), */
+    0xc0                          /* End Collection */
+};
+C_ASSERT(sizeof(OverflowReportCountDescriptor) == 16);
+
 static
 VOID
 TestGetCollectionDescription(VOID)
 {
     NTSTATUS Status;
     HIDP_DEVICE_DESC DeviceDescription;
+    HIDP_CAPS Caps;
 
     /* Empty report descriptor */
     RtlFillMemory(&DeviceDescription, sizeof(DeviceDescription), 0x55);
@@ -233,6 +256,56 @@ TestGetCollectionDescription(VOID)
         }
         HidP_FreeCollectionDescription(&DeviceDescription);
     }
+
+    /* A private parser context larger than the public USHORT size field */
+    Status = HidP_GetCollectionDescription(LargeReportCountDescriptor, sizeof(LargeReportCountDescriptor), NonPagedPool, &DeviceDescription);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_ulong(DeviceDescription.CollectionDescLength, 1);
+    ok_eq_ulong(DeviceDescription.ReportIDsLength, 1);
+    if (!skip(NT_SUCCESS(Status), "Parsing failure\n"))
+    {
+        if (!skip(DeviceDescription.CollectionDescLength >= 1, "No collection\n"))
+        {
+            ok_eq_uint(DeviceDescription.CollectionDesc[0].UsagePage, HID_USAGE_PAGE_GENERIC);
+            ok_eq_uint(DeviceDescription.CollectionDesc[0].Usage, HID_USAGE_GENERIC_KEYBOARD);
+            ok_eq_uint(DeviceDescription.CollectionDesc[0].CollectionNumber, 1);
+            ok_eq_uint(DeviceDescription.CollectionDesc[0].InputLength, 159);
+            ok_eq_uint(DeviceDescription.CollectionDesc[0].OutputLength, 0);
+            ok_eq_uint(DeviceDescription.CollectionDesc[0].FeatureLength, 0);
+            ok_eq_uint(DeviceDescription.CollectionDesc[0].PreparsedDataLength, 268);
+
+            Status = HidP_GetCaps(DeviceDescription.CollectionDesc[0].PreparsedData, &Caps);
+            ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+            if (Status == HIDP_STATUS_SUCCESS)
+            {
+                ok_eq_uint(Caps.UsagePage, HID_USAGE_PAGE_GENERIC);
+                ok_eq_uint(Caps.Usage, HID_USAGE_GENERIC_KEYBOARD);
+                ok_eq_uint(Caps.InputReportByteLength, 159);
+                ok_eq_uint(Caps.NumberLinkCollectionNodes, 1);
+                ok_eq_uint(Caps.NumberInputButtonCaps, 1);
+                ok_eq_uint(Caps.NumberInputValueCaps, 0);
+            }
+        }
+        if (!skip(DeviceDescription.ReportIDsLength >= 1, "No report ID\n"))
+        {
+            ok_eq_uint(DeviceDescription.ReportIDs[0].ReportID, 0);
+            ok_eq_uint(DeviceDescription.ReportIDs[0].CollectionNumber, 1);
+            ok_eq_uint(DeviceDescription.ReportIDs[0].InputLength, 158);
+            ok_eq_uint(DeviceDescription.ReportIDs[0].OutputLength, 0);
+            ok_eq_uint(DeviceDescription.ReportIDs[0].FeatureLength, 0);
+        }
+        HidP_FreeCollectionDescription(&DeviceDescription);
+    }
+
+    /* Reject a report count whose private report-item array would overflow */
+    RtlFillMemory(&DeviceDescription, sizeof(DeviceDescription), 0x55);
+    Status = HidP_GetCollectionDescription(OverflowReportCountDescriptor, sizeof(OverflowReportCountDescriptor), NonPagedPool, &DeviceDescription);
+    ok_eq_hex(Status, STATUS_INSUFFICIENT_RESOURCES);
+    ok_eq_pointer(DeviceDescription.CollectionDesc, NULL);
+    ok_eq_ulong(DeviceDescription.CollectionDescLength, 0);
+    ok_eq_pointer(DeviceDescription.ReportIDs, NULL);
+    ok_eq_ulong(DeviceDescription.ReportIDsLength, 0);
+    if (NT_SUCCESS(Status)) HidP_FreeCollectionDescription(&DeviceDescription);
 }
 
 NTSTATUS

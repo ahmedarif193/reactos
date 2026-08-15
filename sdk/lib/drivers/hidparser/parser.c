@@ -392,9 +392,19 @@ HidParser_ReserveReportItems(
     OUT PHID_REPORT *OutReport)
 {
     PHID_REPORT NewReport;
-    ULONG OldSize, Size;
+    ULONG OldItemSize;
+    ULONG NewItemSize;
+    ULONG OldSize;
+    ULONG AllocationSize;
+    ULONG NewItemCount;
 
-    if (Report->ItemCount + ReportCount <= Report->ItemAllocated)
+    if (!Report || !OutReport || Report->ItemCount > Report->ItemAllocated)
+        return HIDP_STATUS_INTERNAL_ERROR;
+
+    if (!NT_SUCCESS(RtlULongAdd(Report->ItemCount, ReportCount, &NewItemCount)))
+        return HIDP_STATUS_INTERNAL_ERROR;
+
+    if (NewItemCount <= Report->ItemAllocated)
     {
         //
         // space is already allocated
@@ -406,13 +416,22 @@ HidParser_ReserveReportItems(
     //
     //calculate new size
     //
-    OldSize = sizeof(HID_REPORT) + (Report->ItemCount) * sizeof(HID_REPORT_ITEM);
-    Size =  ReportCount * sizeof(HID_REPORT_ITEM);
+    if (!NT_SUCCESS(RtlULongMult(Report->ItemCount, (ULONG)sizeof(HID_REPORT_ITEM), &OldItemSize)))
+        return HIDP_STATUS_INTERNAL_ERROR;
+
+    if (!NT_SUCCESS(RtlULongAdd((ULONG)sizeof(HID_REPORT), OldItemSize, &OldSize)))
+        return HIDP_STATUS_INTERNAL_ERROR;
+
+    if (!NT_SUCCESS(RtlULongMult(ReportCount, (ULONG)sizeof(HID_REPORT_ITEM), &NewItemSize)))
+        return HIDP_STATUS_INTERNAL_ERROR;
+
+    if (!NT_SUCCESS(RtlULongAdd(OldSize, NewItemSize, &AllocationSize)))
+        return HIDP_STATUS_INTERNAL_ERROR;
 
     //
     // allocate memory
     //
-    NewReport = (PHID_REPORT)AllocFunction(Size + OldSize);
+    NewReport = (PHID_REPORT)AllocFunction(AllocationSize);
     if (!NewReport)
     {
         //
@@ -430,7 +449,7 @@ HidParser_ReserveReportItems(
     //
     // increase array size
     //
-    NewReport->ItemAllocated += ReportCount;
+    NewReport->ItemAllocated = NewItemCount;
 
     //
     // store result
@@ -1015,7 +1034,8 @@ HidParser_ParseReportDescriptor(
                         // get report
                         //
                         Status = HidParser_GetReport(ParserContext, ReportCollection, ReportType, ParserContext->GlobalItemState.ReportId, TRUE, &Report);
-                        ASSERT(Status == HIDP_STATUS_SUCCESS);
+                        if (Status != HIDP_STATUS_SUCCESS)
+                            return Status;
 
                         // fill in a sensible default if the index isn't set
                         if (!ParserContext->LocalItemState.DesignatorIndexSet) {
@@ -1035,7 +1055,8 @@ HidParser_ParseReportDescriptor(
                         // add states & data to the report
                         //
                         Status = HidParser_AddMainItem(ParserContext, Report, &ParserContext->GlobalItemState, &ParserContext->LocalItemState, MainItemData, CurrentCollection);
-                        ASSERT(Status == HIDP_STATUS_SUCCESS);
+                        if (Status != HIDP_STATUS_SUCCESS)
+                            return Status;
                     }
                 }
 
@@ -1401,6 +1422,11 @@ HidParser_BuildContext(
     PVOID Context;
     NTSTATUS Status;
 
+    if (!CollectionContext || !ContextSize)
+        return HIDP_STATUS_INTERNAL_ERROR;
+
+    *CollectionContext = NULL;
+
     //
     // lets get the collection
     //
@@ -1429,6 +1455,10 @@ HidParser_BuildContext(
         // store context
         //
         *CollectionContext = Context;
+    }
+    else
+    {
+        FreeFunction(Context);
     }
 
     //

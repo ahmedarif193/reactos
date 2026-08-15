@@ -2,6 +2,7 @@
 #define _HIDPARSER_H_
 
 #include <wdm.h>
+#include <ntintsafe.h>
 #define _HIDPI_
 #define _HIDPI_NO_FUNCTION_MACROS_
 #include <hidpddi.h>
