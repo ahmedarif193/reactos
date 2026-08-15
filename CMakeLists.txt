@@ -411,6 +411,10 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
     add_subdirectory(sdk/tools/wpp)
     add_subdirectory(win32ss)
 
+    if(ARCH STREQUAL "arm64" AND ENABLE_FEX_ARM64EC AND NOT ARM64EC_RUNTIME)
+        include(sdk/cmake/arm64ec.cmake)
+    endif()
+
     # PreLoad.cmake runs apply.cmake only as an initial-cache script, so the
     # profile package list and validation helper must be (re)loaded here.
     include(sdk/cmake/rosconfig/profiles/apply.cmake)
