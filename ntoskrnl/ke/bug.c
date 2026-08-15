@@ -74,6 +74,26 @@ KiIsScreenDebuggingEnabled(VOID)
     return FALSE;
 }
 
+static
+VOID
+KiLogBugCheckString(
+    _In_z_ PCSTR String)
+{
+    ANSI_STRING LogString;
+
+    RtlInitAnsiString(&LogString, String);
+    KdLogDbgPrint(&LogString);
+}
+
+static
+VOID
+KiDisplayAndLogBugCheckString(
+    _In_z_ PCSTR String)
+{
+    InbvDisplayString((PCHAR)String);
+    KiLogBugCheckString(String);
+}
+
 PVOID
 NTAPI
 KiPcToFileHeader(IN PVOID Pc,
@@ -597,6 +617,33 @@ KeBugCheckUnicodeToAnsi(IN PUNICODE_STRING Unicode,
 }
 
 #if defined(_M_AMD64) || defined(_M_ARM64)
+static
+BOOLEAN
+KiIsBugCheckCodeAddress(
+    _In_ ULONG_PTR Address)
+{
+    BOOLEAN InKernel;
+    BOOLEAN Valid = FALSE;
+    PVOID ImageBase;
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+
+    if ((Address <= (ULONG_PTR)MmHighestUserAddress) || !MmIsAddressValid((PVOID)Address))
+        return FALSE;
+
+    _SEH2_TRY
+    {
+        ImageBase = KiPcToFileHeader((PVOID)Address, &LdrEntry, FALSE, &InKernel);
+        Valid = (ImageBase != NULL) && (LdrEntry != NULL);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Valid = FALSE;
+    }
+    _SEH2_END;
+
+    return Valid;
+}
+
 /*
  * RtlLookupFunctionEntry takes the loaded-module spin lock. The other CPUs
  * are frozen during a bugcheck, so use the bounded lock-free module walk and
@@ -746,7 +793,7 @@ KiUnwindBugCheckFrame(
 
     OldPc = KeGetContextPc(Context);
     OldSp = KeGetContextStackRegister(Context);
-    if ((OldPc == 0) || (OldPc <= (ULONG_PTR)MmHighestUserAddress) || (OldSp < StackLow) || (OldSp >= StackHigh) || ((OldSp & (sizeof(ULONG_PTR) - 1)) != 0) || !MmIsAddressValid((PVOID)OldPc))
+    if ((OldPc == 0) || (OldSp < StackLow) || (OldSp >= StackHigh) || ((OldSp & (sizeof(ULONG_PTR) - 1)) != 0) || !KiIsBugCheckCodeAddress(OldPc))
         return FALSE;
 
     LookupPc = OldPc;
@@ -795,7 +842,7 @@ KiUnwindBugCheckFrame(
 
     NewPc = KeGetContextPc(Context);
     NewSp = KeGetContextStackRegister(Context);
-    if ((NewPc <= (ULONG_PTR)MmHighestUserAddress) || !MmIsAddressValid((PVOID)NewPc) || ((NewPc == OldPc) && (NewSp == OldSp)) || (NewSp < OldSp) || (NewSp < StackLow) || (NewSp > StackHigh))
+    if (!KiIsBugCheckCodeAddress(NewPc) || ((NewPc == OldPc) && (NewSp == OldSp)) || (NewSp < OldSp) || (NewSp < StackLow) || (NewSp > StackHigh))
         return FALSE;
 
     return TRUE;
@@ -807,10 +854,10 @@ ULONG
 KiCaptureBugCheckBackTrace(
     _In_opt_ PKTRAP_FRAME TrapFrame,
     _In_ PCONTEXT Context,
+    _In_opt_ PKTHREAD Thread,
     _Out_writes_(MaximumFrames) PULONG_PTR Frames,
     _In_ ULONG MaximumFrames)
 {
-    PKTHREAD Thread;
     ULONG_PTR StackLow;
     ULONG_PTR StackHigh;
     ULONG_PTR Frame;
@@ -849,6 +896,10 @@ KiCaptureBugCheckBackTrace(
 #endif
     if (ProgramCounter == 0)
         return 0;
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    if (!KiIsBugCheckCodeAddress(ProgramCounter))
+        return 0;
+#endif
     Frames[FrameCount++] = ProgramCounter;
     if (FrameCount == MaximumFrames)
         return FrameCount;
@@ -857,9 +908,21 @@ KiCaptureBugCheckBackTrace(
         return FrameCount;
 #endif
 
-    Thread = KeGetCurrentThread();
-    StackLow = (ULONG_PTR)Thread->StackLimit;
-    StackHigh = (ULONG_PTR)Thread->StackBase;
+    if ((Thread == NULL) || !MmIsAddressValid(Thread) || !MmIsAddressValid(&Thread->StackLimit) || !MmIsAddressValid(&Thread->StackBase))
+        return FrameCount;
+
+    _SEH2_TRY
+    {
+        StackLow = (ULONG_PTR)Thread->StackLimit;
+        StackHigh = (ULONG_PTR)Thread->StackBase;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        StackLow = 0;
+        StackHigh = 0;
+    }
+    _SEH2_END;
+
     if ((StackLow == 0) || (StackHigh <= StackLow))
         return FrameCount;
 
@@ -892,6 +955,10 @@ KiCaptureBugCheckBackTrace(
         ReturnAddress = *(volatile ULONG_PTR *)(Frame + sizeof(ULONG_PTR));
         if (ReturnAddress == 0)
             break;
+#if defined(_M_AMD64) || defined(_M_ARM64)
+        if (!KiIsBugCheckCodeAddress(ReturnAddress))
+            break;
+#endif
         if (Frames[FrameCount - 1] != ReturnAddress)
             Frames[FrameCount++] = ReturnAddress;
         if ((NextFrame <= Frame) || (NextFrame < StackLow) || (NextFrame >= StackHigh))
@@ -911,7 +978,7 @@ KiDisplayBugCheckRegisters(
 {
     CHAR Line[128];
 
-    InbvDisplayString("Registers:\r\n");
+    KiDisplayAndLogBugCheckString("Registers:\r\n");
 
 #if defined(_M_ARM64)
     {
@@ -946,12 +1013,12 @@ KiDisplayBugCheckRegisters(
         }
 
         RtlStringCbPrintfA(Line, sizeof(Line), "PC=%016I64x LR=%016I64x SP=%016I64x\r\n", Pc, Lr, Sp);
-        InbvDisplayString(Line);
+        KiDisplayAndLogBugCheckString(Line);
         if (TrapFrame != NULL)
             RtlStringCbPrintfA(Line, sizeof(Line), "FP=%016I64x PSR=%08lx ESR=%08lx\r\n", Fp, Cpsr, TrapFrame->Esr);
         else
             RtlStringCbPrintfA(Line, sizeof(Line), "FP=%016I64x PSR=%08lx\r\n", Fp, Cpsr);
-        InbvDisplayString(Line);
+        KiDisplayAndLogBugCheckString(Line);
 
         for (Base = 0; Base < RegisterCount; Base += 3)
         {
@@ -961,42 +1028,84 @@ KiDisplayBugCheckRegisters(
                 RtlStringCbPrintfA(Line, sizeof(Line), "X%02lu=%016I64x X%02lu=%016I64x\r\n", Base, Registers[Base], Base + 1, Registers[Base + 1]);
             else
                 RtlStringCbPrintfA(Line, sizeof(Line), "X%02lu=%016I64x\r\n", Base, Registers[Base]);
-            InbvDisplayString(Line);
+            KiDisplayAndLogBugCheckString(Line);
         }
     }
 #elif defined(_M_AMD64)
     if (TrapFrame != NULL)
     {
         RtlStringCbPrintfA(Line, sizeof(Line), "RIP=%016I64x RSP=%016I64x RBP=%016I64x EFL=%08lx\r\n", TrapFrame->Rip, TrapFrame->Rsp, TrapFrame->Rbp, TrapFrame->EFlags);
-        InbvDisplayString(Line);
+        KiDisplayAndLogBugCheckString(Line);
         RtlStringCbPrintfA(Line, sizeof(Line), "RAX=%016I64x RBX=%016I64x RCX=%016I64x\r\n", TrapFrame->Rax, TrapFrame->Rbx, TrapFrame->Rcx);
-        InbvDisplayString(Line);
+        KiDisplayAndLogBugCheckString(Line);
         RtlStringCbPrintfA(Line, sizeof(Line), "RDX=%016I64x RSI=%016I64x RDI=%016I64x\r\n", TrapFrame->Rdx, TrapFrame->Rsi, TrapFrame->Rdi);
-        InbvDisplayString(Line);
+        KiDisplayAndLogBugCheckString(Line);
         RtlStringCbPrintfA(Line, sizeof(Line), "R8 =%016I64x R9 =%016I64x R10=%016I64x\r\n", TrapFrame->R8, TrapFrame->R9, TrapFrame->R10);
-        InbvDisplayString(Line);
+        KiDisplayAndLogBugCheckString(Line);
         RtlStringCbPrintfA(Line, sizeof(Line), "R11=%016I64x FAR=%016I64x ERR=%016I64x\r\n", TrapFrame->R11, TrapFrame->FaultAddress, TrapFrame->ErrorCode);
-        InbvDisplayString(Line);
+        KiDisplayAndLogBugCheckString(Line);
     }
     else
     {
         RtlStringCbPrintfA(Line, sizeof(Line), "RIP=%016I64x RSP=%016I64x RBP=%016I64x EFL=%08lx\r\n", Context->Rip, Context->Rsp, Context->Rbp, Context->EFlags);
-        InbvDisplayString(Line);
+        KiDisplayAndLogBugCheckString(Line);
         RtlStringCbPrintfA(Line, sizeof(Line), "RAX=%016I64x RBX=%016I64x RCX=%016I64x\r\n", Context->Rax, Context->Rbx, Context->Rcx);
-        InbvDisplayString(Line);
+        KiDisplayAndLogBugCheckString(Line);
         RtlStringCbPrintfA(Line, sizeof(Line), "RDX=%016I64x RSI=%016I64x RDI=%016I64x\r\n", Context->Rdx, Context->Rsi, Context->Rdi);
-        InbvDisplayString(Line);
+        KiDisplayAndLogBugCheckString(Line);
         RtlStringCbPrintfA(Line, sizeof(Line), "R8 =%016I64x R9 =%016I64x R10=%016I64x\r\n", Context->R8, Context->R9, Context->R10);
-        InbvDisplayString(Line);
+        KiDisplayAndLogBugCheckString(Line);
         RtlStringCbPrintfA(Line, sizeof(Line), "R11=%016I64x R12=%016I64x R13=%016I64x\r\n", Context->R11, Context->R12, Context->R13);
-        InbvDisplayString(Line);
+        KiDisplayAndLogBugCheckString(Line);
         RtlStringCbPrintfA(Line, sizeof(Line), "R14=%016I64x R15=%016I64x\r\n", Context->R14, Context->R15);
-        InbvDisplayString(Line);
+        KiDisplayAndLogBugCheckString(Line);
     }
 #else
     RtlStringCbPrintfA(Line, sizeof(Line), "PC=%p\r\n", (PVOID)KeGetContextPc(Context));
-    InbvDisplayString(Line);
+    KiDisplayAndLogBugCheckString(Line);
 #endif
+}
+
+static
+VOID
+KiFormatBugCheckFrame(
+    _In_ ULONG Index,
+    _In_ ULONG_PTR Frame,
+    _Out_writes_bytes_(LineSize) PCHAR Line,
+    _In_ SIZE_T LineSize)
+{
+    BOOLEAN InKernel;
+    PVOID ImageBase;
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+    CHAR ModuleName[64];
+#ifdef KDBG
+    CHAR FunctionName[64];
+    ULONG_PTR Displacement;
+
+    if (KdbSymDescribeAddress((PVOID)Frame, ModuleName, sizeof(ModuleName), FunctionName, sizeof(FunctionName), &Displacement))
+    {
+        if (FunctionName[0] != ANSI_NULL)
+            RtlStringCbPrintfA(Line, LineSize, "#%02lu %s!%s+0x%Ix\r\n", Index, ModuleName, FunctionName, Displacement);
+        else
+            RtlStringCbPrintfA(Line, LineSize, "#%02lu %s+0x%Ix\r\n", Index, ModuleName, Displacement);
+        return;
+    }
+#endif
+
+    ImageBase = NULL;
+    LdrEntry = NULL;
+    if (Frame > (ULONG_PTR)MmHighestUserAddress)
+        ImageBase = KiPcToFileHeader((PVOID)Frame, &LdrEntry, FALSE, &InKernel);
+
+    if ((ImageBase != NULL) && (LdrEntry != NULL))
+    {
+        KeBugCheckUnicodeToAnsi(&LdrEntry->BaseDllName, ModuleName, sizeof(ModuleName));
+        RtlStringCbPrintfA(Line, LineSize, "#%02lu %s+0x%Ix\r\n", Index, ModuleName, Frame - (ULONG_PTR)ImageBase);
+    }
+    else
+    {
+        RtlStringCbPrintfA(Line, LineSize, "#%02lu %p\r\n", Index, (PVOID)Frame);
+    }
 }
 
 static
@@ -1008,51 +1117,121 @@ KiDisplayBugCheckBackTrace(
     ULONG_PTR Frames[KI_BUGCHECK_BACKTRACE_FRAMES];
     ULONG FrameCount;
     ULONG Index;
-    BOOLEAN InKernel;
-    PVOID ImageBase;
-    PLDR_DATA_TABLE_ENTRY LdrEntry;
-    CHAR ModuleName[64];
-#ifdef KDBG
-    CHAR FunctionName[64];
-    ULONG_PTR Displacement;
-#endif
     CHAR Line[128];
 
-    FrameCount = KiCaptureBugCheckBackTrace(TrapFrame, Context, Frames, RTL_NUMBER_OF(Frames));
-    InbvDisplayString("Backtrace:\r\n");
+    FrameCount = KiCaptureBugCheckBackTrace(TrapFrame, Context, KeGetCurrentThread(), Frames, RTL_NUMBER_OF(Frames));
+    KiDisplayAndLogBugCheckString("Backtrace:\r\n");
 
     for (Index = 0; Index < FrameCount; Index++)
     {
-#ifdef KDBG
-        if (KdbSymDescribeAddress((PVOID)Frames[Index], ModuleName, sizeof(ModuleName), FunctionName, sizeof(FunctionName), &Displacement))
-        {
-            if (FunctionName[0] != ANSI_NULL)
-                RtlStringCbPrintfA(Line, sizeof(Line), "#%02lu %s!%s+0x%Ix\r\n", Index, ModuleName, FunctionName, Displacement);
-            else
-                RtlStringCbPrintfA(Line, sizeof(Line), "#%02lu %s+0x%Ix\r\n", Index, ModuleName, Displacement);
-            InbvDisplayString(Line);
-            continue;
-        }
-#endif
-        ImageBase = NULL;
-        LdrEntry = NULL;
-        if (Frames[Index] > (ULONG_PTR)MmHighestUserAddress)
-            ImageBase = KiPcToFileHeader((PVOID)Frames[Index], &LdrEntry, FALSE, &InKernel);
-
-        if ((ImageBase != NULL) && (LdrEntry != NULL))
-        {
-            KeBugCheckUnicodeToAnsi(&LdrEntry->BaseDllName, ModuleName, sizeof(ModuleName));
-            RtlStringCbPrintfA(Line, sizeof(Line), "#%02lu %s+0x%Ix\r\n", Index, ModuleName, Frames[Index] - (ULONG_PTR)ImageBase);
-        }
-        else
-        {
-            RtlStringCbPrintfA(Line, sizeof(Line), "#%02lu %p\r\n", Index, (PVOID)Frames[Index]);
-        }
-        InbvDisplayString(Line);
+        KiFormatBugCheckFrame(Index, Frames[Index], Line, sizeof(Line));
+        KiDisplayAndLogBugCheckString(Line);
     }
 
     if (FrameCount == 0)
-        InbvDisplayString("<unavailable>\r\n");
+        KiDisplayAndLogBugCheckString("<unavailable>\r\n");
+}
+
+#ifdef CONFIG_SMP
+static
+VOID
+KiLogProcessorBackTraces(
+    _In_ PCONTEXT OwnerContext)
+{
+    PKPRCB CurrentPrcb;
+    PKPRCB TargetPrcb;
+    PKTHREAD Thread;
+    PCONTEXT Context;
+    ULONG_PTR Frames[KI_BUGCHECK_BACKTRACE_FRAMES];
+    ULONG FrameCount;
+    ULONG Processor;
+    ULONG Index;
+    CHAR Line[128];
+
+    CurrentPrcb = KeGetCurrentPrcb();
+    KiLogBugCheckString("\r\nSMP processor backtraces:\r\n");
+
+    for (Processor = 0; Processor < KeNumberProcessors; Processor++)
+    {
+        TargetPrcb = KiProcessorBlock[Processor];
+        if (TargetPrcb == NULL)
+            continue;
+
+        RtlStringCbPrintfA(Line, sizeof(Line), "CPU %lu%s:\r\n", Processor, TargetPrcb == CurrentPrcb ? " (bugcheck owner)" : "");
+        KiLogBugCheckString(Line);
+
+        if ((TargetPrcb != CurrentPrcb) && ((TargetPrcb->IpiFrozen & ~IPI_FROZEN_FLAG_ACTIVE) != IPI_FROZEN_STATE_FROZEN))
+        {
+            KiLogBugCheckString("<not frozen>\r\n");
+            continue;
+        }
+
+        Context = TargetPrcb == CurrentPrcb ? OwnerContext : &TargetPrcb->ProcessorState.ContextFrame;
+        Thread = TargetPrcb->CurrentThread;
+        FrameCount = KiCaptureBugCheckBackTrace(NULL, Context, Thread, Frames, RTL_NUMBER_OF(Frames));
+        if (FrameCount == 0)
+        {
+            KiLogBugCheckString("<unavailable>\r\n");
+            continue;
+        }
+
+        for (Index = 0; Index < FrameCount; Index++)
+        {
+            KiFormatBugCheckFrame(Index, Frames[Index], Line, sizeof(Line));
+            KiLogBugCheckString(Line);
+        }
+    }
+}
+#endif
+
+static
+BOOLEAN
+KiUseExceptionBugCheckContext(
+    _In_ ULONG BugCheckCode,
+    _In_ ULONG_PTR ContextAddress,
+    _Out_ PCONTEXT Context)
+{
+    CONTEXT ExceptionContext;
+    ULONG_PTR ProgramCounter;
+    BOOLEAN ContextCopied = FALSE;
+
+    if ((BugCheckCode != SYSTEM_THREAD_EXCEPTION_NOT_HANDLED) ||
+        (ContextAddress <= (ULONG_PTR)MmHighestUserAddress) ||
+        (ContextAddress > MAXULONG_PTR - (sizeof(CONTEXT) - 1)) ||
+        !MmIsAddressValid((PVOID)ContextAddress) ||
+        !MmIsAddressValid((PVOID)(ContextAddress + sizeof(CONTEXT) - 1)))
+    {
+        return FALSE;
+    }
+
+    _SEH2_TRY
+    {
+        ExceptionContext = *(volatile CONTEXT *)ContextAddress;
+        ContextCopied = TRUE;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        ContextCopied = FALSE;
+    }
+    _SEH2_END;
+
+    if (!ContextCopied)
+        return FALSE;
+
+    ProgramCounter = KeGetContextPc(&ExceptionContext);
+    if (ProgramCounter == 0)
+        return FALSE;
+
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    if (!KiIsBugCheckCodeAddress(ProgramCounter))
+        return FALSE;
+#else
+    if (!MmIsAddressValid((PVOID)ProgramCounter))
+        return FALSE;
+#endif
+
+    *Context = ExceptionContext;
+    return TRUE;
 }
 
 VOID
@@ -1234,7 +1413,7 @@ KiDisplayBlueScreen(IN ULONG MessageId,
                        (PVOID)KiBugCheckData[2],
                        (PVOID)KiBugCheckData[3],
                        (PVOID)KiBugCheckData[4]);
-    InbvDisplayString(AnsiName);
+    KiDisplayAndLogBugCheckString(AnsiName);
 
     KiDisplayBugCheckRegisters(TrapFrame, Context);
     KiDisplayBugCheckBackTrace(TrapFrame, Context);
@@ -1286,6 +1465,13 @@ KeBugCheckWithTf(IN ULONG BugCheckCode,
     RtlCaptureContext(&Prcb->ProcessorState.ContextFrame);
     KiSaveProcessorControlState(&Prcb->ProcessorState);
     Context = Prcb->ProcessorState.ContextFrame;
+
+    /* 0x7E parameter 4 is the context at the original exception. */
+    if (KiUseExceptionBugCheckContext(BugCheckCode, BugCheckParameter4, &Context))
+    {
+        TrapFrame = NULL;
+        Prcb->ProcessorState.ContextFrame = Context;
+    }
 
     /* FIXME: Call the Watchdog if it's registered */
 
@@ -1355,6 +1541,10 @@ KeBugCheckWithTf(IN ULONG BugCheckCode,
     /* Now check what bugcheck this is */
     switch (BugCheckCode)
     {
+        case SYSTEM_THREAD_EXCEPTION_NOT_HANDLED:
+            Pc = (PVOID)BugCheckParameter2;
+            break;
+
         /* Invalid access to R/O memory or Unhandled KM Exception */
         case KERNEL_MODE_EXCEPTION_NOT_HANDLED:
         case ATTEMPTED_WRITE_TO_READONLY_MEMORY:
@@ -1623,6 +1813,11 @@ KeBugCheckWithTf(IN ULONG BugCheckCode,
 
         /* Display the BSOD */
         KiDisplayBlueScreen(MessageId, IsHardError, HardErrCaption, HardErrMessage, TrapFrame, &Context);
+
+#ifdef CONFIG_SMP
+        /* Frozen PRCB contexts are stable now; preserve every CPU trace in the crash-log tail. */
+        KiLogProcessorBackTraces(&Context);
+#endif
 
         // TODO/FIXME: Run the registered reason-callbacks from
         // the KeBugcheckReasonCallbackListHead list with the
