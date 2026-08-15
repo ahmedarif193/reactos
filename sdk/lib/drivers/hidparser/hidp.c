@@ -1,6 +1,7 @@
 #define _HIDPI_
 #define _HIDPI_NO_FUNCTION_MACROS_
 #include <ntddk.h>
+#include <ntintsafe.h>
 #include <hidpddi.h>
 
 #include "hidparser.h"
@@ -510,8 +511,9 @@ HidP_GetCollectionDescription(
         PHIDP_COLLECTION_DESC CollectionDesc = &DeviceDescription->CollectionDesc[Index];
         PHIDP_PREPARSED_DATA NativeData = CollectionDesc->PreparsedData;
         PHIDP_PREPARSED_DATA PublicData;
-        ULONG NativeSize = CollectionDesc->PreparsedDataLength;
+        ULONG NativeSize = HidParser_GetCollectionContextSize(NativeData);
         ULONG PublicSize;
+        USHORT PublicSize16;
 
         if (!HidP_CreatePreparsedData(NativeData, NativeSize, &PublicData, &PublicSize, NULL))
         {
@@ -519,9 +521,16 @@ HidP_GetCollectionDescription(
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
+        if (!NT_SUCCESS(RtlULongToUShort(PublicSize, &PublicSize16)))
+        {
+            FreeFunction(PublicData);
+            HidParser_FreeCollectionDescription(DeviceDescription);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
         FreeFunction(NativeData);
         CollectionDesc->PreparsedData = PublicData;
-        CollectionDesc->PreparsedDataLength = (USHORT)PublicSize;
+        CollectionDesc->PreparsedDataLength = PublicSize16;
     }
 
     return STATUS_SUCCESS;

@@ -23,6 +23,10 @@ NTAPI
 HidParser_FreeCollectionDescription(
     IN PHIDP_DEVICE_DESC DeviceDescription);
 
+ULONG
+HidParser_GetCollectionContextSize(
+    IN PVOID Context);
+
 HIDAPI
 NTSTATUS
 NTAPI
