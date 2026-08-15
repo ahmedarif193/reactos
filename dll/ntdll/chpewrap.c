@@ -15,6 +15,23 @@
 
 #if defined(_M_ARM64)
 
+static
+BOOLEAN
+ChpeIsCurrentProcessHandle(HANDLE ProcessHandle)
+{
+    PROCESS_BASIC_INFORMATION ProcessInfo;
+    NTSTATUS Status;
+
+    if (ProcessHandle == NtCurrentProcess())
+        return TRUE;
+
+    Status = ZwQueryInformationProcess(ProcessHandle, ProcessBasicInformation, &ProcessInfo, sizeof(ProcessInfo), NULL);
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+
+    return ProcessInfo.UniqueProcessId == (ULONG_PTR)NtCurrentTeb()->ClientId.UniqueProcess;
+}
+
 /*
  * @implemented
  */
@@ -28,14 +45,15 @@ NtAllocateVirtualMemory(HANDLE ProcessHandle,
                         ULONG Protect)
 {
     NTSTATUS Status;
+    BOOLEAN Notify = ChpeIsCurrentProcessHandle(ProcessHandle);
 
-    ChpeNotifyMemoryAlloc(*BaseAddress, *RegionSize, AllocationType, Protect, FALSE, 0);
+    if (Notify)
+        ChpeNotifyMemoryAlloc(*BaseAddress, *RegionSize, AllocationType, Protect, FALSE, 0);
 
-    Status = ZwAllocateVirtualMemory(ProcessHandle, BaseAddress, ZeroBits,
-                                     RegionSize, AllocationType, Protect);
+    Status = ZwAllocateVirtualMemory(ProcessHandle, BaseAddress, ZeroBits, RegionSize, AllocationType, Protect);
 
-    ChpeNotifyMemoryAlloc(*BaseAddress, *RegionSize, AllocationType,
-                          Protect, TRUE, Status);
+    if (Notify)
+        ChpeNotifyMemoryAlloc(*BaseAddress, *RegionSize, AllocationType, Protect, TRUE, Status);
 
     return Status;
 }
@@ -51,12 +69,15 @@ NtFreeVirtualMemory(HANDLE ProcessHandle,
                     ULONG FreeType)
 {
     NTSTATUS Status;
+    BOOLEAN Notify = ChpeIsCurrentProcessHandle(ProcessHandle);
 
-    ChpeNotifyMemoryFree(*BaseAddress, *RegionSize, FreeType, FALSE, 0);
+    if (Notify)
+        ChpeNotifyMemoryFree(*BaseAddress, *RegionSize, FreeType, FALSE, 0);
 
     Status = ZwFreeVirtualMemory(ProcessHandle, BaseAddress, RegionSize, FreeType);
 
-    ChpeNotifyMemoryFree(*BaseAddress, *RegionSize, FreeType, TRUE, Status);
+    if (Notify)
+        ChpeNotifyMemoryFree(*BaseAddress, *RegionSize, FreeType, TRUE, Status);
 
     return Status;
 }
@@ -73,13 +94,15 @@ NtProtectVirtualMemory(HANDLE ProcessHandle,
                        PULONG OldProtect)
 {
     NTSTATUS Status;
+    BOOLEAN Notify = ChpeIsCurrentProcessHandle(ProcessHandle);
 
-    ChpeNotifyMemoryProtect(*BaseAddress, *RegionSize, NewProtect, FALSE, 0);
+    if (Notify)
+        ChpeNotifyMemoryProtect(*BaseAddress, *RegionSize, NewProtect, FALSE, 0);
 
-    Status = ZwProtectVirtualMemory(ProcessHandle, BaseAddress, RegionSize,
-                                    NewProtect, OldProtect);
+    Status = ZwProtectVirtualMemory(ProcessHandle, BaseAddress, RegionSize, NewProtect, OldProtect);
 
-    ChpeNotifyMemoryProtect(*BaseAddress, *RegionSize, NewProtect, TRUE, Status);
+    if (Notify)
+        ChpeNotifyMemoryProtect(*BaseAddress, *RegionSize, NewProtect, TRUE, Status);
 
     return Status;
 }
@@ -101,12 +124,11 @@ NtMapViewOfSection(HANDLE SectionHandle,
                    ULONG Protect)
 {
     NTSTATUS Status;
+    BOOLEAN Notify = ChpeIsCurrentProcessHandle(ProcessHandle);
 
-    Status = ZwMapViewOfSection(SectionHandle, ProcessHandle, BaseAddress,
-                                ZeroBits, CommitSize, SectionOffset, ViewSize,
-                                InheritDisposition, AllocationType, Protect);
+    Status = ZwMapViewOfSection(SectionHandle, ProcessHandle, BaseAddress, ZeroBits, CommitSize, SectionOffset, ViewSize, InheritDisposition, AllocationType, Protect);
 
-    if (NT_SUCCESS(Status))
+    if (Notify && NT_SUCCESS(Status))
     {
         ChpeNotifyMapViewOfSection(NULL, *BaseAddress, NULL,
                                    ViewSize ? *ViewSize : 0,
@@ -124,12 +146,15 @@ NTAPI
 NtUnmapViewOfSection(HANDLE ProcessHandle, PVOID BaseAddress)
 {
     NTSTATUS Status;
+    BOOLEAN Notify = ChpeIsCurrentProcessHandle(ProcessHandle);
 
-    ChpeNotifyUnmapViewOfSection(BaseAddress, FALSE, 0);
+    if (Notify)
+        ChpeNotifyUnmapViewOfSection(BaseAddress, FALSE, 0);
 
     Status = ZwUnmapViewOfSection(ProcessHandle, BaseAddress);
 
-    ChpeNotifyUnmapViewOfSection(BaseAddress, TRUE, Status);
+    if (Notify)
+        ChpeNotifyUnmapViewOfSection(BaseAddress, TRUE, Status);
 
     return Status;
 }
@@ -144,10 +169,11 @@ NtFlushInstructionCache(HANDLE ProcessHandle,
                         SIZE_T NumberOfBytesToFlush)
 {
     NTSTATUS Status;
+    BOOLEAN Notify = ChpeIsCurrentProcessHandle(ProcessHandle);
 
     Status = ZwFlushInstructionCache(ProcessHandle, BaseAddress, NumberOfBytesToFlush);
 
-    if (NT_SUCCESS(Status))
+    if (Notify && NT_SUCCESS(Status))
     {
         ChpeFlushInstructionCache(BaseAddress, NumberOfBytesToFlush);
     }
