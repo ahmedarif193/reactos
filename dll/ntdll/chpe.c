@@ -1075,7 +1075,7 @@ ChpeShouldEmulateImage(PVOID ImageBase)
     if (!ImageBase)
         return FALSE;
 
-    NtHeader = RtlImageNtHeader(ImageBase);
+    NtHeader = ChpepGetImageNtHeader(ImageBase);
     return (NtHeader &&
             NtHeader->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64);
 }
@@ -1095,7 +1095,7 @@ ChpeGetArm64EcRedirection(PVOID ImageBase,
     if (!ImageBase || !DestinationRva || SourceRva > MAXULONG)
         return FALSE;
 
-    NtHeader = RtlImageNtHeader(ImageBase);
+    NtHeader = ChpepGetImageNtHeader(ImageBase);
     if (!NtHeader)
         return FALSE;
 
