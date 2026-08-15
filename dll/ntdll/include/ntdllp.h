@@ -382,6 +382,17 @@ ChpeShouldRedirectImport(
     PVOID ImportBase,
     PUNICODE_STRING ImportName);
 
+NTSTATUS
+NTAPI
+ChpeValidateImportThunk(
+    PVOID ImportBase,
+    PVOID ExportBase,
+    ULONG_PTR Function,
+    PCSTR DllName,
+    PCSTR ImportName,
+    ULONG Ordinal,
+    BOOLEAN IsOrdinal);
+
 BOOLEAN
 NTAPI
 ChpeRegisterArm64EcImage(
@@ -404,6 +415,21 @@ ChpeGetArm64EcRedirection(
     PVOID ImageBase,
     ULONG_PTR SourceRva,
     PULONG_PTR DestinationRva);
+
+BOOLEAN
+NTAPI
+ChpeGetArm64EcNativeFunction(
+    PVOID ExportBase,
+    ULONG_PTR Function,
+    PULONG_PTR NativeFunction);
+
+BOOLEAN
+NTAPI
+ChpePatchArm64EcAuxiliaryIat(
+    PVOID ImportBase,
+    PVOID ExportBase,
+    PIMAGE_THUNK_DATA Thunk,
+    ULONG_PTR Function);
 
 BOOLEAN
 NTAPI
