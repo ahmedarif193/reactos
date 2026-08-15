@@ -386,6 +386,19 @@ AcpiOsMapMemory (
     return Ptr;
 }
 
+#if defined(_M_ARM64)
+void *
+AcpiOsMapOperationRegion (
+    ACPI_PHYSICAL_ADDRESS   phys,
+    ACPI_SIZE               length)
+{
+    PHYSICAL_ADDRESS Address;
+
+    Address.QuadPart = (ULONGLONG)phys;
+    return MmMapIoSpace(Address, length, MmNonCached);
+}
+#endif
+
 void
 AcpiOsUnmapMemory (
     void                    *virt,
