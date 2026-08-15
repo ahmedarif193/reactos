@@ -2528,7 +2528,9 @@ void APIENTRY _mesa_TexImage1D( GLenum target, GLint level, GLint internalformat
 {
    struct gl_image *teximage;
    GET_CONTEXT;
-          teximage = gl_unpack_image( CC, width, 1, format, type, pixels );
+   teximage = width > 0 && pixels != NULL
+            ? gl_unpack_image( CC, width, 1, format, type, pixels )
+            : NULL;
    (*CC->API.TexImage1D)( CC, target, level, internalformat,
                           width, border, format, type, teximage );
 }
@@ -2543,7 +2545,9 @@ void APIENTRY _mesa_TexImage2D( GLenum target, GLint level, GLint internalformat
 
   GET_CONTEXT;
 
-  teximage = gl_unpack_image( CC, width, height, format, type, pixels );
+  teximage = width > 0 && height > 0 && pixels != NULL
+           ? gl_unpack_image( CC, width, height, format, type, pixels )
+           : NULL;
   (*CC->API.TexImage2D)( CC, target, level, internalformat,
              width, height, border, format, type, teximage );
 }

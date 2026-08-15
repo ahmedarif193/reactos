@@ -1571,6 +1571,7 @@ DrvCreateContext(
                                              Context);
     if (Context->MesaContext == NULL)
         goto Failure;
+    Context->MesaContext->AllowNpotTextures = GL_TRUE;
     if (!Rpi5OglFboInitialize(&Context->FboState,
                               Context->MesaContext))
     {

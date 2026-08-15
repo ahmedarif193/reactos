@@ -187,6 +187,23 @@ static int logbase2( int n )
 
 
 /*
+ * Compute floor(log2(n)).  Zero-sized texture images carry zero here and
+ * remain incomplete until a non-empty level zero image is supplied.
+ */
+static int floor_logbase2( int n )
+{
+   GLint log2 = 0;
+
+   while (n > 1) {
+      n >>= 1;
+      log2++;
+   }
+   return log2;
+}
+
+
+
+/*
  * Given an internal texture format enum or 1, 2, 3, 4 return the
  * corresponding _base_ internal format:  GL_ALPHA, GL_LUMINANCE,
  * GL_LUMANCE_ALPHA, GL_INTENSITY, GL_RGB, or GL_RGBA.  Return -1 if
@@ -379,18 +396,18 @@ image_to_texture( GLcontext *ctx, const struct gl_image *image,
    texImage->Border = border;
    texImage->Width = image->Width;
    texImage->Height = image->Height;
-   texImage->WidthLog2 = logbase2(image->Width - 2*border);
+   texImage->Width2 = image->Width - 2*border;
+   texImage->WidthLog2 = floor_logbase2(texImage->Width2);
    if (image->Height==1)  /* 1-D texture */
       texImage->HeightLog2 = 0;
-   else
-      texImage->HeightLog2 = logbase2(image->Height - 2*border);
-   texImage->Width2 = 1 << texImage->WidthLog2;
-   texImage->Height2 = 1 << texImage->HeightLog2;
+   else {
+      texImage->Height2 = image->Height - 2*border;
+      texImage->HeightLog2 = floor_logbase2(texImage->Height2);
+   }
+   if (image->Height==1)
+      texImage->Height2 = 1;
    texImage->MaxLog2 = MAX2( texImage->WidthLog2, texImage->HeightLog2 );
    texImage->Data = (GLubyte *) malloc( numPixels * components );
-
-   assert(texImage->WidthLog2>=0);
-   assert(texImage->HeightLog2>=0);
 
    if (!texImage->Data) {
       /* out of memory */
@@ -830,19 +847,23 @@ make_null_texture( GLcontext *ctx, GLenum internalFormat,
    texImage->Border = border;
    texImage->Width = width;
    texImage->Height = height;
-   texImage->WidthLog2 = logbase2(width - 2*border);
+   texImage->Width2 = width - 2*border;
+   texImage->WidthLog2 = floor_logbase2(texImage->Width2);
    if (height==1)  /* 1-D texture */
       texImage->HeightLog2 = 0;
-   else
-      texImage->HeightLog2 = logbase2(height - 2*border);
-   texImage->Width2 = 1 << texImage->WidthLog2;
-   texImage->Height2 = 1 << texImage->HeightLog2;
+   else {
+      texImage->Height2 = height - 2*border;
+      texImage->HeightLog2 = floor_logbase2(texImage->Height2);
+   }
+   if (height==1)
+      texImage->Height2 = 1;
    texImage->MaxLog2 = MAX2( texImage->WidthLog2, texImage->HeightLog2 );
 
    /* XXX should we really allocate memory for the image or let it be NULL? */
    /*texImage->Data = NULL;*/
 
-   texImage->Data = (GLubyte *) malloc( numPixels * components );
+   texImage->Data = numPixels > 0 ?
+                    (GLubyte *) malloc( numPixels * components ) : NULL;
 
    /*
     * Let's see if anyone finds this.  If glTexImage2D() is called with
@@ -916,7 +937,7 @@ static GLboolean texture_1d_error_check( GLcontext *ctx, GLenum target,
       }
       return GL_TRUE;
    }
-   if (logbase2( width-2*border )<0) {
+   if (!ctx->AllowNpotTextures && logbase2( width-2*border )<0) {
       gl_error( ctx, GL_INVALID_VALUE,
                "glTexImage1D(width != 2^k + 2*border)");
       return GL_TRUE;
@@ -997,12 +1018,12 @@ static GLboolean texture_2d_error_check( GLcontext *ctx, GLenum target,
       }
       return GL_TRUE;
    }
-   if (logbase2( width-2*border )<0) {
+   if (!ctx->AllowNpotTextures && logbase2( width-2*border )<0) {
       gl_error( ctx,GL_INVALID_VALUE,
                "glTexImage2D(width != 2^k + 2*border)");
       return GL_TRUE;
    }
-   if (logbase2( height-2*border )<0) {
+   if (!ctx->AllowNpotTextures && logbase2( height-2*border )<0) {
       gl_error( ctx,GL_INVALID_VALUE,
                "glTexImage2D(height != 2^k + 2*border)");
       return GL_TRUE;
@@ -1241,6 +1262,10 @@ gl_unpack_texsubimage( GLcontext *ctx, GLint width, GLint height,
       return NULL;
    }
 
+   if (width <= 0 || height <= 0 || pixels == NULL) {
+      return NULL;
+   }
+
    return gl_unpack_image( ctx, width, height, format, type, pixels );
 }
 
@@ -1346,6 +1371,8 @@ void gl_TexSubImage1D( GLcontext *ctx,
          gl_error( ctx, GL_INVALID_ENUM, "glTexSubImage1D(type)" );
          return;
       }
+      if (width==0)
+         return;
       /* if we get here, probably ran out of memory during unpacking */
       gl_error( ctx, GL_OUT_OF_MEMORY, "glTexSubImage1D" );
    }
@@ -1477,6 +1504,8 @@ void gl_TexSubImage2D( GLcontext *ctx,
          gl_error( ctx, GL_INVALID_ENUM, "glTexSubImage2D(type)" );
          return;
       }
+      if (width==0 || height==0)
+         return;
       /* if we get here, probably ran out of memory during unpacking */
       gl_error( ctx, GL_OUT_OF_MEMORY, "glTexSubImage2D" );
    }
@@ -1631,6 +1660,12 @@ void gl_CopyTexImage1D( GLcontext *ctx,
       return;
    }
 
+   if (width==0) {
+      gl_TexImage1D( ctx, target, level, internalformat, width,
+                     border, GL_RGBA, GL_UNSIGNED_BYTE, NULL );
+      return;
+   }
+
    teximage = read_color_image( ctx, x, y, width, 1, format );
    if (!teximage) {
       gl_error( ctx, GL_OUT_OF_MEMORY, "glCopyTexImage1D" );
@@ -1680,6 +1715,12 @@ void gl_CopyTexImage2D( GLcontext *ctx,
    format = decode_internal_format( internalformat );
    if (format<0 || (internalformat>=1 && internalformat<=4)) {
       gl_error( ctx, GL_INVALID_VALUE, "glCopyTexImage2D(format)" );
+      return;
+   }
+
+   if (width==0 || height==0) {
+      gl_TexImage2D( ctx, target, level, internalformat, width, height,
+                     border, GL_RGBA, GL_UNSIGNED_BYTE, NULL );
       return;
    }
 
