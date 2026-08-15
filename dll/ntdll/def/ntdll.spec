@@ -863,7 +863,7 @@
 @ stdcall LdrGetDllFullName(ptr ptr)
 @ stdcall NtOpenKeyEx(ptr long ptr long)
 @ stdcall -arch=x86_64,arm64 RtlWow64GetCurrentCpuArea(ptr ptr ptr)
-@ stdcall -stub -arch=arm64 RtlIsEcCode(ptr)
+@ stdcall -arch=arm64 RtlIsEcCode(ptr)
 @ stdcall -arch=arm64 ProcessPendingCrossProcessEmulatorWork()
 @ stdcall -arch=x86_64,arm64 RtlWow64PopAllCrossProcessWorkFromWorkList(ptr ptr)
 @ stdcall -arch=x86_64,arm64 RtlWow64PushCrossProcessWorkOntoFreeList(ptr ptr)

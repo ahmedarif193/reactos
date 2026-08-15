@@ -14,11 +14,13 @@
 static NTSTATUS
 RtlpGetExtendedParameterZeroBits(PMEM_EXTENDED_PARAMETER ExtendedParameters,
                                  ULONG ExtendedParameterCount,
-                                 PULONG_PTR ZeroBits)
+                                 PULONG_PTR ZeroBits,
+                                 PBOOLEAN EcCode)
 {
     ULONG Index, Present = 0;
 
     *ZeroBits = 0;
+    *EcCode = FALSE;
     if (ExtendedParameterCount && !ExtendedParameters)
         return STATUS_INVALID_PARAMETER;
 
@@ -54,6 +56,7 @@ RtlpGetExtendedParameterZeroBits(PMEM_EXTENDED_PARAMETER ExtendedParameters,
                 case MemExtendedParameterAttributeFlags:
                     if (ExtendedParameters[Index].ULong64 & ~MEM_EXTENDED_PARAMETER_EC_CODE)
                         _SEH2_YIELD(return STATUS_NOT_SUPPORTED);
+                    *EcCode = !!(ExtendedParameters[Index].ULong64 & MEM_EXTENDED_PARAMETER_EC_CODE);
                     break;
 
                 case MemExtendedParameterNumaNode:
@@ -88,12 +91,21 @@ NtAllocateVirtualMemoryEx(HANDLE ProcessHandle,
                           ULONG ExtendedParameterCount)
 {
     ULONG_PTR ZeroBits;
+    BOOLEAN EcCode;
     NTSTATUS Status;
 
-    Status = RtlpGetExtendedParameterZeroBits(ExtendedParameters, ExtendedParameterCount, &ZeroBits);
+    Status = RtlpGetExtendedParameterZeroBits(ExtendedParameters, ExtendedParameterCount, &ZeroBits, &EcCode);
     if (!NT_SUCCESS(Status))
         return Status;
-    return NtAllocateVirtualMemory(ProcessHandle, BaseAddress, ZeroBits, RegionSize, AllocationType, Protect);
+
+    Status = NtAllocateVirtualMemory(ProcessHandle, BaseAddress, ZeroBits, RegionSize, AllocationType, Protect);
+#if defined(_M_ARM64)
+    if (NT_SUCCESS(Status) && EcCode && ProcessHandle == NtCurrentProcess())
+        ChpeMarkEcCodeRange(*BaseAddress, *RegionSize);
+#else
+    UNREFERENCED_PARAMETER(EcCode);
+#endif
+    return Status;
 }
 
 NTSTATUS
@@ -128,11 +140,13 @@ NtMapViewOfSectionEx(HANDLE SectionHandle,
                      ULONG ExtendedParameterCount)
 {
     ULONG_PTR ZeroBits;
+    BOOLEAN EcCode;
     NTSTATUS Status;
 
-    Status = RtlpGetExtendedParameterZeroBits(ExtendedParameters, ExtendedParameterCount, &ZeroBits);
+    Status = RtlpGetExtendedParameterZeroBits(ExtendedParameters, ExtendedParameterCount, &ZeroBits, &EcCode);
     if (!NT_SUCCESS(Status))
         return Status;
+    UNREFERENCED_PARAMETER(EcCode);
     return NtMapViewOfSection(SectionHandle, ProcessHandle, BaseAddress, ZeroBits, 0, SectionOffset, ViewSize, ViewUnmap, AllocationType, Protect);
 }
 
