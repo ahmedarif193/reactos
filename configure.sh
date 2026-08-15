@@ -195,6 +195,14 @@ sync_arm64_submodules() {
 	fi
 
 	command -v git >/dev/null 2>&1 || fail "git is required to initialize ARM64 submodules"
+	FEX_CHECKOUT_DIR="$REACTOS_SOURCE_DIR/submodules/fex-arm64ec"
+	if [ -f "$FEX_CHECKOUT_DIR/CMakeLists.txt" ] && git -C "$FEX_CHECKOUT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+		FEX_MISSING_SUBMODULES=$(git -C "$FEX_CHECKOUT_DIR" submodule status --recursive 2>/dev/null | sed -n '/^-/p')
+		if [ -z "$FEX_MISSING_SUBMODULES" ]; then
+			echo "FEX ARM64EC submodules already initialized; skipping sync."
+			return 0
+		fi
+	fi
 
 	echo "Syncing FEX ARM64EC submodule..."
 	git -C "$REACTOS_SOURCE_DIR" submodule sync -- submodules/fex-arm64ec || fail "failed to sync FEX submodule metadata"
@@ -214,6 +222,20 @@ prepare_arm64_fex_source() {
 	[ -f "$FEX_UPSTREAM_DIR/External/fmt/CMakeLists.txt" ] || fail "FEX submodule dependencies are incomplete"
 	[ -f "$FEX_PATCH_FILE" ] || fail "FEX ReactOS patch is missing at $FEX_PATCH_FILE"
 	command -v patch >/dev/null 2>&1 || fail "patch is required to prepare the FEX ARM64EC source"
+	command -v cksum >/dev/null 2>&1 || fail "cksum is required to identify the prepared FEX source"
+
+	FEX_SOURCE_ID=
+	if command -v git >/dev/null 2>&1 && git -C "$FEX_UPSTREAM_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 && git -C "$FEX_UPSTREAM_DIR" diff --quiet --ignore-submodules=dirty HEAD --; then
+		FEX_SOURCE_REV=$(git -C "$FEX_UPSTREAM_DIR" rev-parse HEAD) || fail "could not identify the FEX source revision"
+		FEX_PATCH_ID=$(git -C "$REACTOS_SOURCE_DIR" hash-object "$FEX_PATCH_FILE") || fail "could not identify the FEX ReactOS patch"
+		FEX_SUBMODULE_STATE=$(git -C "$FEX_UPSTREAM_DIR" submodule status --recursive) || fail "could not identify FEX submodule revisions"
+		FEX_SOURCE_ID=$(printf '%s\n%s\n%s\n' "$FEX_SOURCE_REV" "$FEX_PATCH_ID" "$FEX_SUBMODULE_STATE" | cksum | awk '{print $1 "-" $2}')
+	fi
+	FEX_PREPARED_STAMP="$FEX_PREPARED_DIR/.reactos-source-id"
+	if [ -n "$FEX_SOURCE_ID" ] && [ -f "$FEX_PREPARED_DIR/CMakeLists.txt" ] && [ "$(sed -n '1p' "$FEX_PREPARED_STAMP" 2>/dev/null)" = "$FEX_SOURCE_ID" ]; then
+		echo "Prepared FEX ARM64EC source is current; reusing it."
+		return 0
+	fi
 
 	echo "Preparing FEX ARM64EC source..."
 	rm -rf "$FEX_PREPARED_DIR"
@@ -221,6 +243,9 @@ prepare_arm64_fex_source() {
 	cp -a "$FEX_UPSTREAM_DIR" "$FEX_PREPARED_DIR"
 	rm -rf "$FEX_PREPARED_DIR/.git"
 	patch -d "$FEX_PREPARED_DIR" -p1 < "$FEX_PATCH_FILE" >/dev/null || fail "failed to apply FEX ReactOS patch"
+	if [ -n "$FEX_SOURCE_ID" ]; then
+		printf '%s\n' "$FEX_SOURCE_ID" > "$FEX_PREPARED_STAMP"
+	fi
 }
 
 lower_build_type() {
