@@ -23,6 +23,8 @@
 #include <vb.h>
 #include <reactos/rpi5vc4_xpdm.h>
 
+#include "rpi5vc4ogl_gl2.h"
+
 #define RPI5VC4_OGL_CONTEXT_SIGNATURE '1GlR'
 #define RPI5VC4_OPENGL_ICD_DRIVER_VERSION 1
 #define RPI5VC4_OPENGL_ENTRY_COUNT 336
@@ -55,6 +57,7 @@ typedef struct _RPI5VC4_OGL_CONTEXT
     GLenum BufferMode;
     BOOL HardwareClearFresh;
     ULONG HardwareClearColor;
+    PRPI5VC4_OGL_GL2_STATE Gl2State;
     RPI5VC4_OGL_STATS Stats;
 } RPI5VC4_OGL_CONTEXT, *PRPI5VC4_OGL_CONTEXT;
 
@@ -108,6 +111,14 @@ Rpi5OglCurrentContext(VOID)
 
     return Rpi5OglValidateContext(
         (DHGLRC)Rpi5OglGetCurrentValue());
+}
+
+PRPI5VC4_OGL_GL2_STATE
+Rpi5OglCurrentGl2State(VOID)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+
+    return Context != NULL ? Context->Gl2State : NULL;
 }
 
 GLcontext *
@@ -519,6 +530,12 @@ Rpi5OglHardwareTriangle(
                        Width * sizeof(ULONG));
         }
         Context->Stats.HardwareTriangleCount++;
+        if (Rpi5OglGl2ProgramActive(Context->Gl2State))
+        {
+            Context->Stats.HardwareProgramTriangleCount++;
+            Context->Stats.LastProgramTriangleName =
+                Rpi5OglGl2CurrentProgramName(Context->Gl2State);
+        }
         Context->Stats.LastTriangleWidth = Width;
         Context->Stats.LastTriangleHeight = Height;
         Context->Stats.LastTriangleCoveredPixels =
@@ -1188,6 +1205,11 @@ DrvCreateContext(
                                              Context);
     if (Context->MesaContext == NULL)
         goto Failure;
+    if (!Rpi5OglGl2Initialize(&Context->Gl2State,
+                               Context->MesaContext))
+    {
+        goto Failure;
+    }
 
     Rpi5OglGetDrawableSize(Hdc, &Width, &Height);
     if (!Rpi5OglResizeBackBuffer(Context, Width, Height))
@@ -1202,6 +1224,7 @@ DrvCreateContext(
     return (DHGLRC)Context;
 
 Failure:
+    Rpi5OglGl2Cleanup(Context->Gl2State);
     if (Context->MesaContext != NULL)
         gl_destroy_context(Context->MesaContext);
     if (Context->FrameBuffer != NULL)
@@ -1239,6 +1262,7 @@ DrvDeleteContext(
     }
 
     Context->Signature = 0;
+    Rpi5OglGl2Cleanup(Context->Gl2State);
     gl_destroy_context(Context->MesaContext);
     gl_destroy_framebuffer(Context->FrameBuffer);
     gl_destroy_visual(Context->Visual);
@@ -1311,8 +1335,12 @@ PROC WINAPI
 DrvGetProcAddress(
     _In_ LPCSTR Name)
 {
+    PROC Procedure;
+
     if (Name != NULL && lstrcmpA(Name, "Rpi5Vc4GetStats") == 0)
         return (PROC)Rpi5Vc4GetStats;
+    if (Name != NULL && (Procedure = Rpi5OglGl2GetProcAddress(Name)) != NULL)
+        return Procedure;
     return NULL;
 }
 

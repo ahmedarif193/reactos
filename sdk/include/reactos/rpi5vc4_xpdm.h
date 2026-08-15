@@ -180,7 +180,7 @@ typedef struct _RPI5VC4_V3D_TRIANGLE_RESULT
     ULONG Pixels[1];
 } RPI5VC4_V3D_TRIANGLE_RESULT, *PRPI5VC4_V3D_TRIANGLE_RESULT;
 
-#define RPI5VC4_OGL_STATS_VERSION 2
+#define RPI5VC4_OGL_STATS_VERSION 3
 
 typedef struct _RPI5VC4_OGL_STATS
 {
@@ -199,6 +199,8 @@ typedef struct _RPI5VC4_OGL_STATS
     ULONG LastTriangleWidth;
     ULONG LastTriangleHeight;
     ULONG LastTriangleCoveredPixels;
+    ULONG HardwareProgramTriangleCount;
+    ULONG LastProgramTriangleName;
 } RPI5VC4_OGL_STATS, *PRPI5VC4_OGL_STATS;
 
 #endif /* _REACTOS_RPI5VC4_XPDM_H_ */

@@ -24,6 +24,8 @@ include_directories(BEFORE
 spec2def(rpi5vc4ogl.dll rpi5vc4ogl.spec)
 add_library(rpi5vc4ogl MODULE
     rpi5vc4ogl.c
+    rpi5vc4ogl_gl2.c
+    rpi5vc4ogl_gl2.h
     ${CMAKE_CURRENT_BINARY_DIR}/rpi5vc4ogl.def)
 target_compile_definitions(rpi5vc4ogl PRIVATE
     _GDI32_
