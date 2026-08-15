@@ -16,6 +16,7 @@
 #include <wingdi.h>
 #include <winuser.h>
 #include <GL/gl.h>
+#include <GL/glext.h>
 
 #include <context.h>
 #include <matrix.h>
@@ -23,12 +24,14 @@
 #include <vb.h>
 #include <reactos/rpi5vc4_xpdm.h>
 
+#include "rpi5vc4ogl_fbo.h"
 #include "rpi5vc4ogl_gl2.h"
 
 #define RPI5VC4_OGL_CONTEXT_SIGNATURE '1GlR'
 #define RPI5VC4_OPENGL_ICD_DRIVER_VERSION 1
 #define RPI5VC4_OPENGL_ENTRY_COUNT 336
 #define RPI5VC4_OPENGL_PIXEL_FORMAT_COUNT 1
+#define RPI5VC4_OPENGL_GET_TEX_IMAGE_INDEX 281
 #define RPI5VC4_OPENGL_DRAW_ARRAYS_INDEX 310
 
 DECLARE_HANDLE(DHGLRC);
@@ -58,6 +61,9 @@ typedef struct _RPI5VC4_OGL_CONTEXT
     GLenum BufferMode;
     BOOL HardwareClearFresh;
     ULONG HardwareClearColor;
+    GLuint HardwareClearFramebuffer;
+    ULONG HardwareClearGeneration;
+    PRPI5VC4_OGL_FBO_STATE FboState;
     PRPI5VC4_OGL_GL2_STATE Gl2State;
     RPI5VC4_OGL_STATS Stats;
 } RPI5VC4_OGL_CONTEXT, *PRPI5VC4_OGL_CONTEXT;
@@ -122,6 +128,14 @@ Rpi5OglCurrentGl2State(VOID)
     PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
 
     return Context != NULL ? Context->Gl2State : NULL;
+}
+
+PRPI5VC4_OGL_FBO_STATE
+Rpi5OglCurrentFboState(VOID)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+
+    return Context != NULL ? Context->FboState : NULL;
 }
 
 GLcontext *
@@ -278,6 +292,141 @@ Rpi5OglUnpackColor(
     *Alpha = (GLubyte)(Color >> 24);
 }
 
+typedef struct _RPI5VC4_OGL_RENDER_TARGET
+{
+    PULONG Pixels;
+    GLubyte *TextureData;
+    ULONG Width;
+    ULONG Height;
+    GLenum TextureFormat;
+    GLuint Framebuffer;
+    ULONG Generation;
+} RPI5VC4_OGL_RENDER_TARGET, *PRPI5VC4_OGL_RENDER_TARGET;
+
+static BOOL
+Rpi5OglResolveRenderTarget(
+    _Inout_ PRPI5VC4_OGL_CONTEXT Context,
+    _Out_ PRPI5VC4_OGL_RENDER_TARGET Target)
+{
+    RPI5VC4_OGL_FBO_COLOR_TARGET FboTarget;
+    GLuint Framebuffer;
+
+    ZeroMemory(Target, sizeof(*Target));
+    Framebuffer = Rpi5OglFboCurrentName(Context->FboState);
+    if (Framebuffer != 0)
+    {
+        if (!Rpi5OglFboGetColorTarget(Context->FboState, &FboTarget))
+            return FALSE;
+        Target->TextureData = FboTarget.Data;
+        Target->Width = FboTarget.Width;
+        Target->Height = FboTarget.Height;
+        Target->TextureFormat = FboTarget.Format;
+        Target->Framebuffer = FboTarget.Framebuffer;
+        Target->Generation = FboTarget.Generation;
+        return TRUE;
+    }
+
+    if (!Rpi5OglRefreshDrawable(Context))
+        return FALSE;
+    Target->Pixels = Context->BackBuffer;
+    Target->Width = Context->Width;
+    Target->Height = Context->Height;
+    return TRUE;
+}
+
+static BOOL
+Rpi5OglTargetPixelValid(
+    _In_ const RPI5VC4_OGL_RENDER_TARGET *Target,
+    _In_ GLint X,
+    _In_ GLint Y)
+{
+    return X >= 0 && Y >= 0 &&
+           X < (GLint)Target->Width && Y < (GLint)Target->Height;
+}
+
+static VOID
+Rpi5OglWriteTargetPixel(
+    _Inout_ PRPI5VC4_OGL_RENDER_TARGET Target,
+    _In_ ULONG X,
+    _In_ ULONG Y,
+    _In_ ULONG Color)
+{
+    GLubyte Red;
+    GLubyte Green;
+    GLubyte Blue;
+    GLubyte Alpha;
+    GLubyte *Texel;
+    ULONG Components;
+
+    if (Target->Pixels != NULL)
+    {
+        Target->Pixels[Y * Target->Width + X] = Color;
+        return;
+    }
+
+    Components = Target->TextureFormat == GL_RGBA ? 4 : 3;
+    Texel = Target->TextureData +
+            (Y * Target->Width + X) * Components;
+    Rpi5OglUnpackColor(Color, &Red, &Green, &Blue, &Alpha);
+    Texel[0] = Red;
+    Texel[1] = Green;
+    Texel[2] = Blue;
+    if (Components == 4)
+        Texel[3] = Alpha;
+}
+
+static ULONG
+Rpi5OglReadTargetPixel(
+    _In_ const RPI5VC4_OGL_RENDER_TARGET *Target,
+    _In_ ULONG X,
+    _In_ ULONG Y)
+{
+    const GLubyte *Texel;
+    ULONG Components;
+
+    if (Target->Pixels != NULL)
+        return Target->Pixels[Y * Target->Width + X];
+
+    Components = Target->TextureFormat == GL_RGBA ? 4 : 3;
+    Texel = Target->TextureData +
+            (Y * Target->Width + X) * Components;
+    return Rpi5OglPackColor(Texel[0], Texel[1], Texel[2],
+                            Components == 4 ? Texel[3] : 255);
+}
+
+static VOID
+Rpi5OglCopyTargetPixels(
+    _Inout_ PRPI5VC4_OGL_RENDER_TARGET Target,
+    _In_ ULONG DestinationX,
+    _In_ ULONG DestinationY,
+    _In_reads_(Width * Height) const ULONG *Pixels,
+    _In_ ULONG Width,
+    _In_ ULONG Height)
+{
+    ULONG Row;
+    ULONG Column;
+
+    if (Target->Pixels != NULL && DestinationX == 0 &&
+        Width == Target->Width)
+    {
+        CopyMemory(Target->Pixels + DestinationY * Target->Width,
+                   Pixels,
+                   Width * Height * sizeof(*Pixels));
+        return;
+    }
+
+    for (Row = 0; Row < Height; Row++)
+    {
+        for (Column = 0; Column < Width; Column++)
+        {
+            Rpi5OglWriteTargetPixel(Target,
+                                    DestinationX + Column,
+                                    DestinationY + Row,
+                                    Pixels[Row * Width + Column]);
+        }
+    }
+}
+
 static BOOL
 Rpi5OglPresent(
     _Inout_ PRPI5VC4_OGL_CONTEXT Context)
@@ -318,6 +467,7 @@ static BOOL
 Rpi5OglHardwareClear(
     _Inout_ PRPI5VC4_OGL_CONTEXT Context)
 {
+    RPI5VC4_OGL_RENDER_TARGET Target;
     RPI5VC4_V3D_CLEAR_REQUEST Request;
     PRPI5VC4_V3D_CLEAR_RESULT Result;
     ULONG HeaderSize = FIELD_OFFSET(RPI5VC4_V3D_CLEAR_RESULT, Pixels);
@@ -326,14 +476,14 @@ Rpi5OglHardwareClear(
     INT Returned;
     BOOL Success;
 
-    if (!Rpi5OglRefreshDrawable(Context) ||
-        Context->Width > RPI5VC4_V3D_CLEAR_MAX_WIDTH ||
-        Context->Height > RPI5VC4_V3D_CLEAR_MAX_HEIGHT)
+    if (!Rpi5OglResolveRenderTarget(Context, &Target) ||
+        Target.Width > RPI5VC4_V3D_CLEAR_MAX_WIDTH ||
+        Target.Height > RPI5VC4_V3D_CLEAR_MAX_HEIGHT)
     {
         return FALSE;
     }
 
-    PixelBytes = Context->Stride * Context->Height;
+    PixelBytes = Target.Width * Target.Height * sizeof(ULONG);
     ResultSize = HeaderSize + PixelBytes;
     Result = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, ResultSize);
     if (Result == NULL)
@@ -342,8 +492,8 @@ Rpi5OglHardwareClear(
     ZeroMemory(&Request, sizeof(Request));
     Request.Size = sizeof(Request);
     Request.AbiVersion = RPI5VC4_XPDM_ABI_VERSION;
-    Request.Width = Context->Width;
-    Request.Height = Context->Height;
+    Request.Width = Target.Width;
+    Request.Height = Target.Height;
     Request.ClearColor = Context->ClearColor;
 
     Returned = ExtEscape(Context->Hdc,
@@ -359,19 +509,26 @@ Rpi5OglHardwareClear(
               Result->AbiVersion == RPI5VC4_XPDM_ABI_VERSION &&
               Result->Status == RPI5VC4_V3D_SELFTEST_STATUS_SUCCESS &&
               (Result->Flags & RPI5VC4_V3D_SELFTEST_FLAG_PASSED) != 0 &&
-              Result->Width == Context->Width &&
-              Result->Height == Context->Height &&
-              Result->Stride == Context->Stride &&
+              Result->Width == Target.Width &&
+              Result->Height == Target.Height &&
+              Result->Stride == Target.Width * sizeof(ULONG) &&
               Result->ClearColor == Context->ClearColor &&
               Result->PixelBytes == PixelBytes;
     if (Success)
     {
-        CopyMemory(Context->BackBuffer, Result->Pixels, PixelBytes);
+        Rpi5OglCopyTargetPixels(&Target,
+                                0,
+                                0,
+                                Result->Pixels,
+                                Target.Width,
+                                Target.Height);
         Context->HardwareClearFresh = TRUE;
         Context->HardwareClearColor = Result->ClearColor;
+        Context->HardwareClearFramebuffer = Target.Framebuffer;
+        Context->HardwareClearGeneration = Target.Generation;
         Context->Stats.HardwareClearCount++;
-        Context->Stats.LastWidth = Context->Width;
-        Context->Stats.LastHeight = Context->Height;
+        Context->Stats.LastWidth = Target.Width;
+        Context->Stats.LastHeight = Target.Height;
     }
     else
     {
@@ -444,6 +601,7 @@ Rpi5OglSubmitPrimitive(
     _In_ ULONG VertexCount,
     _In_ GLuint ProgramName)
 {
+    RPI5VC4_OGL_RENDER_TARGET Target;
     RPI5VC4_V3D_TRIANGLE_REQUEST Request;
     PRPI5VC4_V3D_TRIANGLE_RESULT Result;
     ULONG HeaderSize = FIELD_OFFSET(RPI5VC4_V3D_TRIANGLE_RESULT, Pixels);
@@ -451,7 +609,6 @@ Rpi5OglSubmitPrimitive(
     ULONG Height;
     ULONG PixelBytes;
     ULONG ResultSize;
-    ULONG Row;
     INT Returned;
     BOOL Success;
 
@@ -464,16 +621,18 @@ Rpi5OglSubmitPrimitive(
           VertexCount != 3) ||
          (PrimitiveType == RPI5VC4_V3D_PRIMITIVE_TRIANGLE_STRIP &&
           VertexCount != 4)) ||
-        !Rpi5OglRefreshDrawable(Context) ||
-        !Context->HardwareClearFresh)
+        !Rpi5OglResolveRenderTarget(Context, &Target) ||
+        !Context->HardwareClearFresh ||
+        Context->HardwareClearFramebuffer != Target.Framebuffer ||
+        Context->HardwareClearGeneration != Target.Generation)
     {
         return FALSE;
     }
 
     Width = Mesa->Viewport.Width;
     Height = Mesa->Viewport.Height;
-    if (Mesa->Viewport.X + (GLint)Width > (GLint)Context->Width ||
-        Mesa->Viewport.Y + (GLint)Height > (GLint)Context->Height)
+    if (Mesa->Viewport.X + (GLint)Width > (GLint)Target.Width ||
+        Mesa->Viewport.Y + (GLint)Height > (GLint)Target.Height)
     {
         return FALSE;
     }
@@ -519,14 +678,12 @@ Rpi5OglSubmitPrimitive(
               Result->VertexCount == VertexCount;
     if (Success)
     {
-        for (Row = 0; Row < Height; Row++)
-        {
-            CopyMemory(Context->BackBuffer +
-                           (Mesa->Viewport.Y + Row) * Context->Width +
-                           Mesa->Viewport.X,
-                       Result->Pixels + Row * Width,
-                       Width * sizeof(ULONG));
-        }
+        Rpi5OglCopyTargetPixels(&Target,
+                                Mesa->Viewport.X,
+                                Mesa->Viewport.Y,
+                                Result->Pixels,
+                                Width,
+                                Height);
         Context->Stats.HardwareTriangleCount++;
         if (ProgramName != 0)
         {
@@ -735,20 +892,21 @@ Rpi5OglSoftwareClear(
     _In_ GLint Width,
     _In_ GLint Height)
 {
+    RPI5VC4_OGL_RENDER_TARGET Target;
     GLint Row;
     GLint Column;
 
     Context->HardwareClearFresh = FALSE;
 
-    if (!Rpi5OglRefreshDrawable(Context))
+    if (!Rpi5OglResolveRenderTarget(Context, &Target))
         return;
 
     if (All)
     {
         X = 0;
         Y = 0;
-        Width = Context->Width;
-        Height = Context->Height;
+        Width = Target.Width;
+        Height = Target.Height;
     }
     if (X < 0)
     {
@@ -760,20 +918,22 @@ Rpi5OglSoftwareClear(
         Height += Y;
         Y = 0;
     }
-    if (X + Width > (GLint)Context->Width)
-        Width = Context->Width - X;
-    if (Y + Height > (GLint)Context->Height)
-        Height = Context->Height - Y;
+    if (X + Width > (GLint)Target.Width)
+        Width = Target.Width - X;
+    if (Y + Height > (GLint)Target.Height)
+        Height = Target.Height - Y;
     if (Width <= 0 || Height <= 0)
         return;
 
     for (Row = 0; Row < Height; Row++)
     {
-        PULONG Pixel = Context->BackBuffer +
-                       ((Y + Row) * Context->Width) + X;
-
         for (Column = 0; Column < Width; Column++)
-            Pixel[Column] = Context->ClearColor;
+        {
+            Rpi5OglWriteTargetPixel(&Target,
+                                    X + Column,
+                                    Y + Row,
+                                    Context->ClearColor);
+        }
     }
     Context->Stats.SoftwareClearCount++;
 }
@@ -791,7 +951,8 @@ Rpi5OglClear(
 
     if (All && Rpi5OglHardwareClear(Context))
     {
-        if (Context->BufferMode == GL_FRONT)
+        if (Rpi5OglFboCurrentName(Context->FboState) == 0 &&
+            Context->BufferMode == GL_FRONT)
             Rpi5OglPresent(Context);
         return;
     }
@@ -828,9 +989,17 @@ Rpi5OglSetBuffer(
     _In_ GLenum Mode)
 {
     PRPI5VC4_OGL_CONTEXT Context = Mesa->DriverCtx;
+    GLuint Framebuffer = Rpi5OglFboCurrentName(Context->FboState);
 
-    if (Mode != GL_FRONT && Mode != GL_BACK)
+    if (Framebuffer != 0)
+    {
+        if (Mode != GL_COLOR_ATTACHMENT0_EXT)
+            return GL_FALSE;
+    }
+    else if (Mode != GL_FRONT && Mode != GL_BACK)
+    {
         return GL_FALSE;
+    }
     if (Context->BufferMode != Mode)
         Context->HardwareClearFresh = FALSE;
     Context->BufferMode = Mode;
@@ -844,27 +1013,17 @@ Rpi5OglGetBufferSize(
     _Out_ GLuint *Height)
 {
     PRPI5VC4_OGL_CONTEXT Context = Mesa->DriverCtx;
+    RPI5VC4_OGL_RENDER_TARGET Target;
 
-    if (!Rpi5OglRefreshDrawable(Context))
+    if (!Rpi5OglResolveRenderTarget(Context, &Target))
     {
         *Width = Context->Width != 0 ? Context->Width : 1;
         *Height = Context->Height != 0 ? Context->Height : 1;
         return;
     }
 
-    *Width = Context->Width;
-    *Height = Context->Height;
-}
-
-static BOOL
-Rpi5OglPixelValid(
-    _In_ PRPI5VC4_OGL_CONTEXT Context,
-    _In_ GLint X,
-    _In_ GLint Y)
-{
-    return X >= 0 && Y >= 0 &&
-           X < (GLint)Context->Width &&
-           Y < (GLint)Context->Height;
+    *Width = Target.Width;
+    *Height = Target.Height;
 }
 
 static VOID
@@ -880,22 +1039,28 @@ Rpi5OglWriteColorSpan(
     _In_reads_opt_(Count) const GLubyte Mask[])
 {
     PRPI5VC4_OGL_CONTEXT Context = Mesa->DriverCtx;
+    RPI5VC4_OGL_RENDER_TARGET Target;
     GLuint Index;
 
     Context->HardwareClearFresh = FALSE;
+    if (!Rpi5OglResolveRenderTarget(Context, &Target))
+        return;
 
     for (Index = 0; Index < Count; Index++)
     {
         GLint PixelX = X + Index;
 
         if ((Mask == NULL || Mask[Index]) &&
-            Rpi5OglPixelValid(Context, PixelX, Y))
+            Rpi5OglTargetPixelValid(&Target, PixelX, Y))
         {
-            Context->BackBuffer[Y * Context->Width + PixelX] =
+            Rpi5OglWriteTargetPixel(
+                &Target,
+                PixelX,
+                Y,
                 Rpi5OglPackColor(Red[Index],
                                  Green[Index],
                                  Blue[Index],
-                                 Alpha[Index]);
+                                 Alpha[Index]));
         }
     }
 }
@@ -909,19 +1074,24 @@ Rpi5OglWriteMonoSpan(
     _In_reads_opt_(Count) const GLubyte Mask[])
 {
     PRPI5VC4_OGL_CONTEXT Context = Mesa->DriverCtx;
+    RPI5VC4_OGL_RENDER_TARGET Target;
     GLuint Index;
 
     Context->HardwareClearFresh = FALSE;
+    if (!Rpi5OglResolveRenderTarget(Context, &Target))
+        return;
 
     for (Index = 0; Index < Count; Index++)
     {
         GLint PixelX = X + Index;
 
         if ((Mask == NULL || Mask[Index]) &&
-            Rpi5OglPixelValid(Context, PixelX, Y))
+            Rpi5OglTargetPixelValid(&Target, PixelX, Y))
         {
-            Context->BackBuffer[Y * Context->Width + PixelX] =
-                Context->CurrentColor;
+            Rpi5OglWriteTargetPixel(&Target,
+                                    PixelX,
+                                    Y,
+                                    Context->CurrentColor);
         }
     }
 }
@@ -939,20 +1109,26 @@ Rpi5OglWriteColorPixels(
     _In_reads_opt_(Count) const GLubyte Mask[])
 {
     PRPI5VC4_OGL_CONTEXT Context = Mesa->DriverCtx;
+    RPI5VC4_OGL_RENDER_TARGET Target;
     GLuint Index;
 
     Context->HardwareClearFresh = FALSE;
+    if (!Rpi5OglResolveRenderTarget(Context, &Target))
+        return;
 
     for (Index = 0; Index < Count; Index++)
     {
         if ((Mask == NULL || Mask[Index]) &&
-            Rpi5OglPixelValid(Context, X[Index], Y[Index]))
+            Rpi5OglTargetPixelValid(&Target, X[Index], Y[Index]))
         {
-            Context->BackBuffer[Y[Index] * Context->Width + X[Index]] =
+            Rpi5OglWriteTargetPixel(
+                &Target,
+                X[Index],
+                Y[Index],
                 Rpi5OglPackColor(Red[Index],
                                  Green[Index],
                                  Blue[Index],
-                                 Alpha[Index]);
+                                 Alpha[Index]));
         }
     }
 }
@@ -966,17 +1142,22 @@ Rpi5OglWriteMonoPixels(
     _In_reads_opt_(Count) const GLubyte Mask[])
 {
     PRPI5VC4_OGL_CONTEXT Context = Mesa->DriverCtx;
+    RPI5VC4_OGL_RENDER_TARGET Target;
     GLuint Index;
 
     Context->HardwareClearFresh = FALSE;
+    if (!Rpi5OglResolveRenderTarget(Context, &Target))
+        return;
 
     for (Index = 0; Index < Count; Index++)
     {
         if ((Mask == NULL || Mask[Index]) &&
-            Rpi5OglPixelValid(Context, X[Index], Y[Index]))
+            Rpi5OglTargetPixelValid(&Target, X[Index], Y[Index]))
         {
-            Context->BackBuffer[Y[Index] * Context->Width + X[Index]] =
-                Context->CurrentColor;
+            Rpi5OglWriteTargetPixel(&Target,
+                                    X[Index],
+                                    Y[Index],
+                                    Context->CurrentColor);
         }
     }
 }
@@ -993,15 +1174,25 @@ Rpi5OglReadColorSpan(
     _Out_writes_(Count) GLubyte Alpha[])
 {
     PRPI5VC4_OGL_CONTEXT Context = Mesa->DriverCtx;
+    RPI5VC4_OGL_RENDER_TARGET Target;
     GLuint Index;
+
+    if (!Rpi5OglResolveRenderTarget(Context, &Target))
+    {
+        ZeroMemory(Red, Count * sizeof(*Red));
+        ZeroMemory(Green, Count * sizeof(*Green));
+        ZeroMemory(Blue, Count * sizeof(*Blue));
+        ZeroMemory(Alpha, Count * sizeof(*Alpha));
+        return;
+    }
 
     for (Index = 0; Index < Count; Index++)
     {
         GLint PixelX = X + Index;
         ULONG Color = 0;
 
-        if (Rpi5OglPixelValid(Context, PixelX, Y))
-            Color = Context->BackBuffer[Y * Context->Width + PixelX];
+        if (Rpi5OglTargetPixelValid(&Target, PixelX, Y))
+            Color = Rpi5OglReadTargetPixel(&Target, PixelX, Y);
         Rpi5OglUnpackColor(Color,
                            &Red[Index],
                            &Green[Index],
@@ -1023,7 +1214,17 @@ Rpi5OglReadColorPixels(
     _In_reads_opt_(Count) const GLubyte Mask[])
 {
     PRPI5VC4_OGL_CONTEXT Context = Mesa->DriverCtx;
+    RPI5VC4_OGL_RENDER_TARGET Target;
     GLuint Index;
+
+    if (!Rpi5OglResolveRenderTarget(Context, &Target))
+    {
+        ZeroMemory(Red, Count * sizeof(*Red));
+        ZeroMemory(Green, Count * sizeof(*Green));
+        ZeroMemory(Blue, Count * sizeof(*Blue));
+        ZeroMemory(Alpha, Count * sizeof(*Alpha));
+        return;
+    }
 
     for (Index = 0; Index < Count; Index++)
     {
@@ -1031,8 +1232,8 @@ Rpi5OglReadColorPixels(
 
         if (Mask != NULL && !Mask[Index])
             continue;
-        if (Rpi5OglPixelValid(Context, X[Index], Y[Index]))
-            Color = Context->BackBuffer[Y[Index] * Context->Width + X[Index]];
+        if (Rpi5OglTargetPixelValid(&Target, X[Index], Y[Index]))
+            Color = Rpi5OglReadTargetPixel(&Target, X[Index], Y[Index]);
         Rpi5OglUnpackColor(Color,
                            &Red[Index],
                            &Green[Index],
@@ -1111,8 +1312,66 @@ Rpi5OglFinish(
 {
     PRPI5VC4_OGL_CONTEXT Context = Mesa->DriverCtx;
 
-    if (Context->BufferMode == GL_FRONT)
+    if (Rpi5OglFboCurrentName(Context->FboState) == 0 &&
+        Context->BufferMode == GL_FRONT)
         Rpi5OglPresent(Context);
+}
+
+static VOID
+Rpi5OglTextureImageChanged(
+    _In_ GLcontext *Mesa,
+    _In_ GLenum Target,
+    _In_ struct gl_texture_object *Texture,
+    _In_ GLint Level,
+    _In_ GLint InternalFormat,
+    _In_ const struct gl_texture_image *Image)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Mesa->DriverCtx;
+
+    UNREFERENCED_PARAMETER(Target);
+    UNREFERENCED_PARAMETER(Level);
+    UNREFERENCED_PARAMETER(InternalFormat);
+    UNREFERENCED_PARAMETER(Image);
+    Context->HardwareClearFresh = FALSE;
+    Rpi5OglFboTextureChanged(Context->FboState, Texture->Name);
+}
+
+static VOID
+Rpi5OglTextureSubImageChanged(
+    _In_ GLcontext *Mesa,
+    _In_ GLenum Target,
+    _In_ struct gl_texture_object *Texture,
+    _In_ GLint Level,
+    _In_ GLint XOffset,
+    _In_ GLint YOffset,
+    _In_ GLsizei Width,
+    _In_ GLsizei Height,
+    _In_ GLint InternalFormat,
+    _In_ const struct gl_texture_image *Image)
+{
+    UNREFERENCED_PARAMETER(Target);
+    UNREFERENCED_PARAMETER(Level);
+    UNREFERENCED_PARAMETER(XOffset);
+    UNREFERENCED_PARAMETER(YOffset);
+    UNREFERENCED_PARAMETER(Width);
+    UNREFERENCED_PARAMETER(Height);
+    UNREFERENCED_PARAMETER(InternalFormat);
+    UNREFERENCED_PARAMETER(Image);
+    ((PRPI5VC4_OGL_CONTEXT)Mesa->DriverCtx)->HardwareClearFresh = FALSE;
+    Rpi5OglFboTextureChanged(
+        ((PRPI5VC4_OGL_CONTEXT)Mesa->DriverCtx)->FboState,
+        Texture->Name);
+}
+
+static VOID
+Rpi5OglTextureDeleted(
+    _In_ GLcontext *Mesa,
+    _In_ struct gl_texture_object *Texture)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Mesa->DriverCtx;
+
+    Context->HardwareClearFresh = FALSE;
+    Rpi5OglFboTextureDeleted(Context->FboState, Texture->Name);
 }
 
 static VOID
@@ -1142,6 +1401,9 @@ Rpi5OglSetupDriver(
     Mesa->Driver.ReadColorPixels = Rpi5OglReadColorPixels;
     Mesa->Driver.Finish = Rpi5OglFinish;
     Mesa->Driver.Flush = Rpi5OglFinish;
+    Mesa->Driver.TexImage = Rpi5OglTextureImageChanged;
+    Mesa->Driver.TexSubImage = Rpi5OglTextureSubImageChanged;
+    Mesa->Driver.DeleteTexture = Rpi5OglTextureDeleted;
     if (Rpi5OglTriangleStateSupported(Mesa))
         Mesa->Driver.TriangleFunc = Rpi5OglTriangle;
 }
@@ -1156,6 +1418,8 @@ Rpi5OglInitializeProcTable(VOID)
     CopyMemory(Rpi5OglProcTable.Entries,
                Rpi5OglDispatchEntries,
                sizeof(Rpi5OglDispatchEntries));
+    Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_GET_TEX_IMAGE_INDEX] =
+        (PROC)Rpi5OglFboGetTexImage;
     Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_DRAW_ARRAYS_INDEX] =
         (PROC)Rpi5OglDrawArrays;
 }
@@ -1301,6 +1565,11 @@ DrvCreateContext(
                                              Context);
     if (Context->MesaContext == NULL)
         goto Failure;
+    if (!Rpi5OglFboInitialize(&Context->FboState,
+                              Context->MesaContext))
+    {
+        goto Failure;
+    }
     if (!Rpi5OglGl2Initialize(&Context->Gl2State,
                                Context->MesaContext))
     {
@@ -1321,6 +1590,7 @@ DrvCreateContext(
 
 Failure:
     Rpi5OglGl2Cleanup(Context->Gl2State);
+    Rpi5OglFboCleanup(Context->FboState);
     if (Context->MesaContext != NULL)
         gl_destroy_context(Context->MesaContext);
     if (Context->FrameBuffer != NULL)
@@ -1359,6 +1629,7 @@ DrvDeleteContext(
 
     Context->Signature = 0;
     Rpi5OglGl2Cleanup(Context->Gl2State);
+    Rpi5OglFboCleanup(Context->FboState);
     gl_destroy_context(Context->MesaContext);
     gl_destroy_framebuffer(Context->FrameBuffer);
     gl_destroy_visual(Context->Visual);
@@ -1435,6 +1706,11 @@ DrvGetProcAddress(
 
     if (Name != NULL && lstrcmpA(Name, "Rpi5Vc4GetStats") == 0)
         return (PROC)Rpi5Vc4GetStats;
+    if (Name != NULL &&
+        (Procedure = Rpi5OglFboGetProcAddress(Name)) != NULL)
+    {
+        return Procedure;
+    }
     if (Name != NULL && (Procedure = Rpi5OglGl2GetProcAddress(Name)) != NULL)
         return Procedure;
     return NULL;
