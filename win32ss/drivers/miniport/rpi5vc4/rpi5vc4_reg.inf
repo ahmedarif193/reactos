@@ -1,3 +1,6 @@
+; The CriticalDeviceDatabase binds this service to ACPI\BCM2712\0. Do not
+; create a synthetic root display device alongside the firmware GPU child.
+
 [AddReg]
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","ErrorControl",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","Group",0x00000000,"Video Save"

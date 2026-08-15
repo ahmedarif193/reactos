@@ -26,12 +26,14 @@ static volatile ULONG *
 Rpi5HvsMap(
     _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
-    PHYSICAL_ADDRESS HvsPhys;
-
-    if (DeviceExtension->HvsBase == NULL)
+    if (DeviceExtension->HvsBase == NULL &&
+        DeviceExtension->HvsRange.RangeStart.QuadPart != 0 &&
+        DeviceExtension->HvsRange.RangeLength != 0)
     {
-        HvsPhys.QuadPart = RPI5_HVS_PHYS;
-        DeviceExtension->HvsBase = MmMapIoSpace(HvsPhys, RPI5_HVS_LENGTH, MmNonCached);
+        DeviceExtension->HvsBase =
+            MmMapIoSpace(DeviceExtension->HvsRange.RangeStart,
+                         DeviceExtension->HvsRange.RangeLength,
+                         MmNonCached);
     }
 
     return (volatile ULONG *)DeviceExtension->HvsBase;
@@ -192,7 +194,8 @@ Rpi5HvsInstallScanout(
     ULONG Pitch  = DeviceExtension->BytesPerScanLine;
     ULONGLONG Phys = (ULONGLONG)DeviceExtension->FrameBufferPhysical.QuadPart;
 
-    if (Width == 0 || Height == 0 || Pitch == 0 || Phys == 0)
+    if (DeviceExtension->HeadlessBuffer != NULL ||
+        Width == 0 || Height == 0 || Pitch == 0 || Phys == 0)
         return;
 
     DeviceExtension->HvsCursorFastValid = FALSE;
@@ -392,7 +395,7 @@ Rpi5HvsFlipScanout(
     ULONGLONG Phys = (ULONGLONG)FrameBufferPhysical.QuadPart;
     ULONGLONG CurrentPhys = (ULONGLONG)DeviceExtension->FrameBufferPhysical.QuadPart;
 
-    if (Phys == 0)
+    if (DeviceExtension->HeadlessBuffer != NULL || Phys == 0)
         return FALSE;
 
     if (Phys == CurrentPhys)

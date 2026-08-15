@@ -9,18 +9,172 @@
 #include "rpi5vc4_hvs.h"
 #include "rpi5vc4_crtc.h"
 
-#define RPI5VC4_ACPI_SIGNATURE(a, b, c, d) \
-    ((ULONG)(a) | ((ULONG)(b) << 8) | ((ULONG)(c) << 16) | ((ULONG)(d) << 24))
+#define RPI5VC4_V3D_HUB_BASE             0x1002000000ULL
+#define RPI5VC4_V3D_HUB_LENGTH           0x4000
+#define RPI5VC4_V3D_CORE_BASE            0x1002008000ULL
+#define RPI5VC4_V3D_CORE_LENGTH          0x6000
+#define RPI5VC4_V3D_SMS_BASE             0x1002030800ULL
+#define RPI5VC4_V3D_SMS_LENGTH           0x700
+#define RPI5VC4_HVS_BASE                 0x107C580000ULL
+#define RPI5VC4_HVS_LENGTH               0x1A000
+#define RPI5VC4_HVS_IOMMU_BASE           0x1000005200ULL
+#define RPI5VC4_HVS_IOMMU_LENGTH         0x80
+#define RPI5VC4_PIXELVALVE0_BASE         0x107C410000ULL
+#define RPI5VC4_PIXELVALVE1_BASE         0x107C411000ULL
+#define RPI5VC4_PIXELVALVE_LENGTH        0x100
+#define RPI5VC4_MOP_BASE                 0x107C500000ULL
+#define RPI5VC4_MOP_LENGTH               0x28
+#define RPI5VC4_MOPLET_BASE              0x107C501000ULL
+#define RPI5VC4_MOPLET_LENGTH            0x20
+#define RPI5VC4_DISPLAY_INTERRUPT_BASE   0x107C502000ULL
+#define RPI5VC4_DISPLAY_INTERRUPT_LENGTH 0x30
 
-#define RPI5VC4_ACPI_FADT RPI5VC4_ACPI_SIGNATURE('F', 'A', 'C', 'P')
+#define RPI5VC4_HEADLESS_WIDTH  1024
+#define RPI5VC4_HEADLESS_HEIGHT 768
+#define RPI5VC4_HEADLESS_BPP    32
 
-static BOOLEAN
-Rpi5Vc4IsRpi5Platform(VOID)
+typedef struct _RPI5VC4_RESOURCE_REQUIREMENT
 {
-    if (HalGetCachedAcpiTable == NULL)
-        return FALSE;
+    ULONGLONG Base;
+    ULONG MinimumLength;
+    PVIDEO_ACCESS_RANGE Destination;
+    PCSTR Name;
+} RPI5VC4_RESOURCE_REQUIREMENT, *PRPI5VC4_RESOURCE_REQUIREMENT;
 
-    return HalGetCachedAcpiTable(RPI5VC4_ACPI_FADT, "RPIFDN", "RPI5") != NULL;
+static VP_STATUS
+Rpi5Vc4CaptureAcpiResources(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
+{
+    VIDEO_ACCESS_RANGE AccessRanges[RPI5VC4_ACPI_MEMORY_RESOURCE_COUNT];
+    RPI5VC4_RESOURCE_REQUIREMENT Requirements[] =
+    {
+        {RPI5VC4_V3D_HUB_BASE, RPI5VC4_V3D_HUB_LENGTH,
+         &DeviceExtension->V3dHubRange, "V3D hub"},
+        {RPI5VC4_V3D_CORE_BASE, RPI5VC4_V3D_CORE_LENGTH,
+         &DeviceExtension->V3dCoreRange, "V3D core"},
+        {RPI5VC4_V3D_SMS_BASE, RPI5VC4_V3D_SMS_LENGTH,
+         &DeviceExtension->V3dSmsRange, "V3D SMS"},
+        {RPI5VC4_HVS_BASE, RPI5VC4_HVS_LENGTH,
+         &DeviceExtension->HvsRange, "HVS"},
+        {RPI5VC4_HVS_IOMMU_BASE, RPI5VC4_HVS_IOMMU_LENGTH,
+         &DeviceExtension->HvsIommuRange, "HVS IOMMU"},
+        {RPI5VC4_PIXELVALVE0_BASE, RPI5VC4_PIXELVALVE_LENGTH,
+         &DeviceExtension->PixelValveRange[0], "PixelValve 0"},
+        {RPI5VC4_PIXELVALVE1_BASE, RPI5VC4_PIXELVALVE_LENGTH,
+         &DeviceExtension->PixelValveRange[1], "PixelValve 1"},
+        {RPI5VC4_MOP_BASE, RPI5VC4_MOP_LENGTH,
+         &DeviceExtension->MopRange, "MOP"},
+        {RPI5VC4_MOPLET_BASE, RPI5VC4_MOPLET_LENGTH,
+         &DeviceExtension->MopletRange, "MOPLET"},
+        {RPI5VC4_DISPLAY_INTERRUPT_BASE, RPI5VC4_DISPLAY_INTERRUPT_LENGTH,
+         &DeviceExtension->DisplayInterruptRange, "display interrupt"},
+    };
+    VP_STATUS Status;
+    ULONG RequirementIndex;
+    ULONG RangeIndex;
+
+    VideoPortZeroMemory(AccessRanges, sizeof(AccessRanges));
+    Status = VideoPortGetAccessRanges(DeviceExtension,
+                                      0,
+                                      NULL,
+                                      ARRAYSIZE(AccessRanges),
+                                      AccessRanges,
+                                      NULL,
+                                      NULL,
+                                      NULL);
+    if (Status != NO_ERROR)
+    {
+        DbgPrint("RPI5VC4: cannot read GPU0 _CRS resources (status=0x%lx)\n",
+                 Status);
+        return Status;
+    }
+
+    for (RequirementIndex = 0;
+         RequirementIndex < ARRAYSIZE(Requirements);
+         RequirementIndex++)
+    {
+        PRPI5VC4_RESOURCE_REQUIREMENT Requirement =
+            &Requirements[RequirementIndex];
+        PVIDEO_ACCESS_RANGE Match = NULL;
+
+        for (RangeIndex = 0; RangeIndex < ARRAYSIZE(AccessRanges); RangeIndex++)
+        {
+            if (!AccessRanges[RangeIndex].RangeInIoSpace &&
+                AccessRanges[RangeIndex].RangeStart.QuadPart ==
+                    Requirement->Base &&
+                AccessRanges[RangeIndex].RangeLength >=
+                    Requirement->MinimumLength)
+            {
+                Match = &AccessRanges[RangeIndex];
+                break;
+            }
+        }
+
+        if (Match == NULL)
+        {
+            DbgPrint("RPI5VC4: GPU0 _CRS is missing %s at 0x%I64x\n",
+                     Requirement->Name,
+                     Requirement->Base);
+            return ERROR_DEV_NOT_EXIST;
+        }
+
+        *Requirement->Destination = *Match;
+    }
+
+    DbgPrint("RPI5VC4: GPU0 _CRS V3D hub=0x%I64x core=0x%I64x SMS=0x%I64x\n",
+             DeviceExtension->V3dHubRange.RangeStart.QuadPart,
+             DeviceExtension->V3dCoreRange.RangeStart.QuadPart,
+             DeviceExtension->V3dSmsRange.RangeStart.QuadPart);
+    DbgPrint("RPI5VC4: GPU0 _CRS HVS=0x%I64x PV0=0x%I64x PV1=0x%I64x\n",
+             DeviceExtension->HvsRange.RangeStart.QuadPart,
+             DeviceExtension->PixelValveRange[0].RangeStart.QuadPart,
+             DeviceExtension->PixelValveRange[1].RangeStart.QuadPart);
+    return NO_ERROR;
+}
+
+static VP_STATUS
+Rpi5Vc4InitHeadlessFallback(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
+{
+    const ULONG BytesPerPixel = RPI5VC4_HEADLESS_BPP / 8;
+    const ULONG Pitch = RPI5VC4_HEADLESS_WIDTH * BytesPerPixel;
+    const SIZE_T SizeInBytes = (SIZE_T)Pitch * RPI5VC4_HEADLESS_HEIGHT;
+    PHYSICAL_ADDRESS Low;
+    PHYSICAL_ADDRESS High;
+    PHYSICAL_ADDRESS Boundary;
+    PVOID Buffer;
+
+    Low.QuadPart = 0;
+    High.QuadPart = (LONGLONG)-1;
+    Boundary.QuadPart = 0;
+    Buffer = MmAllocateContiguousMemorySpecifyCache(SizeInBytes,
+                                                    Low,
+                                                    High,
+                                                    Boundary,
+                                                    MmWriteCombined);
+    if (Buffer == NULL)
+        return ERROR_NOT_ENOUGH_MEMORY;
+
+    VideoPortZeroMemory(Buffer, (ULONG)SizeInBytes);
+    DeviceExtension->HeadlessBuffer = Buffer;
+    DeviceExtension->FrameBufferPhysical = MmGetPhysicalAddress(Buffer);
+    DeviceExtension->FrameBufferSize = (ULONG)SizeInBytes;
+    DeviceExtension->ScreenWidth = RPI5VC4_HEADLESS_WIDTH;
+    DeviceExtension->ScreenHeight = RPI5VC4_HEADLESS_HEIGHT;
+    DeviceExtension->PixelsPerScanLine = RPI5VC4_HEADLESS_WIDTH;
+    DeviceExtension->BitsPerPixel = RPI5VC4_HEADLESS_BPP;
+    DeviceExtension->RedMask = 0x00FF0000;
+    DeviceExtension->GreenMask = 0x0000FF00;
+    DeviceExtension->BlueMask = 0x000000FF;
+    DeviceExtension->ReservedMask = 0xFF000000;
+    DeviceExtension->BytesPerScanLine = Pitch;
+    DeviceExtension->CurrentMode = 0;
+
+    DbgPrint("RPI5VC4: no GOP framebuffer; using %lux%lu headless surface at 0x%I64x\n",
+             DeviceExtension->ScreenWidth,
+             DeviceExtension->ScreenHeight,
+             DeviceExtension->FrameBufferPhysical.QuadPart);
+    return NO_ERROR;
 }
 
 static VP_STATUS
@@ -144,16 +298,6 @@ DriverEntry(
 {
     VIDEO_HW_INITIALIZATION_DATA InitData;
 
-    if (!Rpi5Vc4IsRpi5Platform())
-    {
-        /*
-         * The ARM64 image is shared with generic UEFI machines.  Decline before
-         * entering videoport so no \Device\VideoN slot is consumed and uefifb can
-         * handle the firmware framebuffer.
-         */
-        return STATUS_SUCCESS;
-    }
-
     VideoPortZeroMemory(&InitData, sizeof(InitData));
     InitData.HwInitDataSize = sizeof(VIDEO_HW_INITIALIZATION_DATA);
     InitData.StartingDeviceNumber = 0;
@@ -164,7 +308,7 @@ DriverEntry(
     InitData.HwResetHw = Rpi5Vc4ResetHw;
     InitData.HwGetPowerState = Rpi5Vc4GetPowerState;
     InitData.HwSetPowerState = Rpi5Vc4SetPowerState;
-    InitData.HwGetVideoChildDescriptor = NULL;
+    InitData.HwGetVideoChildDescriptor = Rpi5Vc4GetVideoChildDescriptor;
     InitData.HwDeviceExtensionSize = sizeof(RPI5VC4_DEVICE_EXTENSION);
 
     return VideoPortInitialize(Context1, Context2, &InitData, NULL);
@@ -192,9 +336,17 @@ Rpi5Vc4FindAdapter(
     if (ConfigInfo->Length < sizeof(VIDEO_PORT_CONFIG_INFO))
         return ERROR_INVALID_PARAMETER;
 
-    Status = Rpi5Vc4LoadGopInfo(DeviceExtension);
+    Status = Rpi5Vc4CaptureAcpiResources(DeviceExtension);
     if (Status != NO_ERROR)
         return Status;
+
+    Status = Rpi5Vc4LoadGopInfo(DeviceExtension);
+    if (Status != NO_ERROR)
+    {
+        Status = Rpi5Vc4InitHeadlessFallback(DeviceExtension);
+        if (Status != NO_ERROR)
+            return Status;
+    }
 
     ConfigInfo->NumEmulatorAccessEntries = 0;
     ConfigInfo->EmulatorAccessEntries = NULL;
@@ -206,6 +358,43 @@ Rpi5Vc4FindAdapter(
         DeviceExtension->FrameBufferSize;
 
     return NO_ERROR;
+}
+
+VP_STATUS
+NTAPI
+Rpi5Vc4GetVideoChildDescriptor(
+    _In_ PVOID HwDeviceExtension,
+    _In_ PVIDEO_CHILD_ENUM_INFO ChildEnumInfo,
+    _Out_ PVIDEO_CHILD_TYPE VideoChildType,
+    _Out_writes_bytes_(ChildEnumInfo->ChildDescriptorSize) PUCHAR ChildDescriptor,
+    _Out_ PULONG UId,
+    _Out_ PULONG Unused)
+{
+    UNREFERENCED_PARAMETER(HwDeviceExtension);
+    UNREFERENCED_PARAMETER(ChildDescriptor);
+
+    if (ChildEnumInfo == NULL ||
+        VideoChildType == NULL ||
+        UId == NULL ||
+        Unused == NULL ||
+        ChildEnumInfo->Size < sizeof(*ChildEnumInfo))
+    {
+        return VIDEO_ENUM_INVALID_DEVICE;
+    }
+
+    *Unused = 0;
+    if (ChildEnumInfo->ChildIndex == 0)
+        return VIDEO_ENUM_INVALID_DEVICE;
+
+    if (ChildEnumInfo->ChildIndex == DISPLAY_ADAPTER_HW_ID)
+    {
+        *VideoChildType = VideoChip;
+        *UId = DISPLAY_ADAPTER_HW_ID;
+        return VIDEO_ENUM_MORE_DEVICES;
+    }
+
+    /* Connector enumeration is added once HDMI hot-plug/EDID is implemented. */
+    return VIDEO_ENUM_NO_MORE_DEVICES;
 }
 
 /* Allocate the hardware cursor surface used by the HVS overlay plane. */
@@ -352,17 +541,21 @@ Rpi5Vc4Initialize(
 
     Rpi5Vc4BuildModeInfo(DeviceExtension);
     Rpi5Vc4InitFrameBuffer(DeviceExtension);
-    Rpi5Vc4InitCursor(DeviceExtension);
-    if (Rpi5CrtcReportTiming(DeviceExtension))
-        Rpi5CrtcProgramCurrentTiming(DeviceExtension);
+    if (DeviceExtension->HeadlessBuffer == NULL)
+    {
+        Rpi5Vc4InitCursor(DeviceExtension);
+        if (Rpi5CrtcReportTiming(DeviceExtension))
+            Rpi5CrtcProgramCurrentTiming(DeviceExtension);
 
-    /*
-     * Take ownership of the HVS scanout: install our own display list (built
-     * to ignore the per-pixel source alpha, i.e. XRGB) over the firmware's at
-     * the live head. Without this the HVS treats the top byte as alpha, so
-     * GDI-drawn pixels (which leave it 0) are composited to black.
-     */
-    Rpi5HvsInstallScanout(DeviceExtension);
+        /*
+         * Take ownership of the HVS scanout: install our own display list
+         * (built to ignore the per-pixel source alpha, i.e. XRGB) over the
+         * firmware's at the live head. Without this the HVS treats the top
+         * byte as alpha, so GDI-drawn pixels (which leave it 0) are composited
+         * to black.
+         */
+        Rpi5HvsInstallScanout(DeviceExtension);
+    }
 
     VideoPortSetRegistryParameters(DeviceExtension,
                                    L"HardwareInformation.ChipType",
