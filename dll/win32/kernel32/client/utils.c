@@ -701,6 +701,33 @@ BaseInitializeContext(IN PCONTEXT Context,
         Context->Eip = (ULONG)BaseProcessStartThunk;
     }
 
+#elif defined(_M_ARM64EC)
+    PARM64EC_NT_CONTEXT EcContext = (PARM64EC_NT_CONTEXT)Context;
+
+    DPRINT("BaseInitializeContext: %p\n", Context);
+    ASSERT(((ULONG_PTR)StackAddress & 15) == 0);
+
+    /* ARM64EC exposes a public x64 CONTEXT with native register overlays. */
+    RtlZeroMemory(Context, sizeof(*Context));
+    EcContext->X0 = (ULONG_PTR)StartAddress;
+    EcContext->X1 = (ULONG_PTR)Parameter;
+    EcContext->Sp = (ULONG_PTR)StackAddress;
+    EcContext->Lr = (ULONG_PTR)ExitThread;
+
+    if (ContextType == 1)      /* For Threads */
+    {
+        EcContext->Pc = (ULONG_PTR)BaseThreadStartup;
+    }
+    else if (ContextType == 2) /* For Fibers */
+    {
+        EcContext->Pc = (ULONG_PTR)BaseFiberStartup;
+    }
+    else                       /* For first thread in a Process */
+    {
+        EcContext->Pc = (ULONG_PTR)BaseProcessStartup;
+    }
+
+    EcContext->ContextFlags = CONTEXT_FULL;
 #elif defined(_M_AMD64)
     DPRINT("BaseInitializeContext: %p\n", Context);
     ASSERT(((ULONG_PTR)StackAddress & 15) == 0);
