@@ -151,6 +151,7 @@
 #define V3D71_TILE_SIZE_LOG2_64      3
 
 #define V3D71_PRIMITIVE_TRIANGLES    4
+#define V3D71_PRIMITIVE_TRIANGLE_STRIP 5
 #define V3D71_LIST_TRIANGLES         2
 #define V3D71_ATTRIBUTE_FLOAT        2
 
@@ -212,7 +213,8 @@ C_ASSERT(sizeof(Rpi5V3dBinShader) == 0x78);
 C_ASSERT(sizeof(Rpi5V3dRenderShader) == 0xB8);
 C_ASSERT(sizeof(Rpi5V3dFragmentShader) == 0x48);
 C_ASSERT(RPI5VC4_V3D_VERTEX_DATA_OFFSET +
-         (3 * sizeof(RPI5VC4_V3D_VERTEX)) <= RPI5VC4_V3D_PAGE_SIZE);
+         (RPI5VC4_V3D_PRIMITIVE_MAX_VERTICES *
+          sizeof(RPI5VC4_V3D_VERTEX)) <= RPI5VC4_V3D_PAGE_SIZE);
 
 #define V3D_PTB_BPOS                 0x030C
 
@@ -320,7 +322,17 @@ Rpi5V3dTriangleRequestValid(
     ULONG Vertex;
     ULONG Component;
 
-    for (Vertex = 0; Vertex < RTL_NUMBER_OF(Request->Vertices); Vertex++)
+    if ((Request->PrimitiveType == RPI5VC4_V3D_PRIMITIVE_TRIANGLES &&
+         Request->VertexCount != 3) ||
+        (Request->PrimitiveType == RPI5VC4_V3D_PRIMITIVE_TRIANGLE_STRIP &&
+         Request->VertexCount != 4) ||
+        (Request->PrimitiveType != RPI5VC4_V3D_PRIMITIVE_TRIANGLES &&
+         Request->PrimitiveType != RPI5VC4_V3D_PRIMITIVE_TRIANGLE_STRIP))
+    {
+        return FALSE;
+    }
+
+    for (Vertex = 0; Vertex < Request->VertexCount; Vertex++)
     {
         for (Component = 0; Component < 4; Component++)
         {
@@ -377,14 +389,20 @@ Rpi5V3dClViewportOffset(
 }
 
 static VOID
-Rpi5V3dClTriangleState(
+Rpi5V3dClPrimitiveState(
     _Inout_ PRPI5VC4_V3D_CL_BUILDER Bcl,
     _In_ ULONG Width,
     _In_ ULONG Height,
-    _In_ ULONG ShaderRecordAddress)
+    _In_ ULONG ShaderRecordAddress,
+    _In_ ULONG PrimitiveType,
+    _In_ ULONG VertexCount)
 {
     ULONG XyScaleX = Rpi5V3dUnsignedFloatWord(Width << 5);
     ULONG XyScaleY = Rpi5V3dUnsignedFloatWord(Height << 5);
+    UCHAR V3dPrimitive = PrimitiveType ==
+                         RPI5VC4_V3D_PRIMITIVE_TRIANGLE_STRIP ?
+                         V3D71_PRIMITIVE_TRIANGLE_STRIP :
+                         V3D71_PRIMITIVE_TRIANGLES;
 
     Rpi5V3dClByte(Bcl, V3D71_CL_CFG_BITS);
     Rpi5V3dClByte(Bcl, 0x03); /* render both primitive orientations */
@@ -427,8 +445,8 @@ Rpi5V3dClTriangleState(
     Rpi5V3dClByte(Bcl, (UCHAR)(ShaderRecordAddress >> 24));
 
     Rpi5V3dClByte(Bcl, V3D71_CL_VERTEX_ARRAY_PRIMS);
-    Rpi5V3dClByte(Bcl, V3D71_PRIMITIVE_TRIANGLES);
-    Rpi5V3dClLe32(Bcl, 3); /* one triangle */
+    Rpi5V3dClByte(Bcl, V3dPrimitive);
+    Rpi5V3dClLe32(Bcl, VertexCount);
     Rpi5V3dClLe32(Bcl, 0); /* first vertex */
 }
 
@@ -444,11 +462,12 @@ Rpi5V3dStoreLe32(
 }
 
 static VOID
-Rpi5V3dBuildTriangleData(
+Rpi5V3dBuildPrimitiveData(
     _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
     _In_ ULONG Width,
     _In_ ULONG Height,
-    _In_reads_(3) const RPI5VC4_V3D_VERTEX Vertices[3])
+    _In_reads_(VertexCount) const RPI5VC4_V3D_VERTEX *Vertices,
+    _In_ ULONG VertexCount)
 {
     PUCHAR Data = (PUCHAR)DeviceExtension->V3dWorkVa +
                   RPI5VC4_V3D_DRAW_DATA_OFFSET;
@@ -502,7 +521,7 @@ Rpi5V3dBuildTriangleData(
     Attribute0[4] = V3D71_ATTRIBUTE_FLOAT << 2; /* vec_size zero means four */
     Attribute0[5] = 0x44; /* four values read by coordinate and vertex */
     Rpi5V3dStoreLe32(Attribute0 + 8, sizeof(RPI5VC4_V3D_VERTEX));
-    Rpi5V3dStoreLe32(Attribute0 + 12, 2);
+    Rpi5V3dStoreLe32(Attribute0 + 12, VertexCount - 1);
 
     Rpi5V3dStoreLe32(Attribute1,
                      DataGpuVa + RPI5VC4_V3D_VERTEX_DATA_OFFSET +
@@ -510,7 +529,7 @@ Rpi5V3dBuildTriangleData(
     Attribute1[4] = V3D71_ATTRIBUTE_FLOAT << 2;
     Attribute1[5] = 0x44;
     Rpi5V3dStoreLe32(Attribute1 + 8, sizeof(RPI5VC4_V3D_VERTEX));
-    Rpi5V3dStoreLe32(Attribute1 + 12, 2);
+    Rpi5V3dStoreLe32(Attribute1 + 12, VertexCount - 1);
 
     BinUniforms[0] = XyScaleX;
     for (Index = 0; Index < 4; Index++)
@@ -533,7 +552,7 @@ Rpi5V3dBuildTriangleData(
     *(PULONG)(Data + RPI5VC4_V3D_FRAGMENT_UNIFORMS_OFFSET) = 0;
     VideoPortMoveMemory(Data + RPI5VC4_V3D_VERTEX_DATA_OFFSET,
                         (PVOID)Vertices,
-                        3 * sizeof(*Vertices));
+                        VertexCount * sizeof(*Vertices));
 }
 
 static VOID
@@ -659,9 +678,12 @@ Rpi5V3dBuildBinningList(
     _Inout_ PRPI5VC4_V3D_CL_BUILDER Bcl,
     _In_ ULONG Width,
     _In_ ULONG Height,
-    _In_ BOOLEAN DrawTriangle,
+    _In_ ULONG PrimitiveType,
+    _In_ ULONG VertexCount,
     _In_ ULONG ShaderRecordAddress)
 {
+    BOOLEAN DrawPrimitive = VertexCount != 0;
+
     /* One layer, followed by Mesa's V3D 7.1 one-tile binning prologue. */
     Rpi5V3dClByte(Bcl, V3D71_CL_NUMBER_OF_LAYERS);
     Rpi5V3dClByte(Bcl, 0); /* one layer minus one */
@@ -675,14 +697,21 @@ Rpi5V3dBuildBinningList(
     Rpi5V3dClLe16(Bcl, Width - 1);
     Rpi5V3dClLe16(Bcl, Height - 1);
     Rpi5V3dClByte(Bcl, V3D71_CL_FLUSH_VCD_CACHE);
-    if (DrawTriangle)
+    if (DrawPrimitive)
     {
         Rpi5V3dClByte(Bcl, V3D71_CL_OCCLUSION_QUERY_COUNTER);
         Rpi5V3dClLe32(Bcl, 0);
     }
     Rpi5V3dClByte(Bcl, V3D71_CL_START_TILE_BINNING);
-    if (DrawTriangle)
-        Rpi5V3dClTriangleState(Bcl, Width, Height, ShaderRecordAddress);
+    if (DrawPrimitive)
+    {
+        Rpi5V3dClPrimitiveState(Bcl,
+                                Width,
+                                Height,
+                                ShaderRecordAddress,
+                                PrimitiveType,
+                                VertexCount);
+    }
     Rpi5V3dClByte(Bcl, V3D71_CL_FLUSH);
 }
 
@@ -692,7 +721,8 @@ Rpi5V3dBuildControlLists(
     _In_ ULONG Width,
     _In_ ULONG Height,
     _In_ ULONG ClearColor,
-    _In_ BOOLEAN DrawTriangle,
+    _In_ ULONG PrimitiveType,
+    _In_ ULONG VertexCount,
     _Out_ PULONG BclBytes,
     _Out_ PULONG RclBytes,
     _Out_ PULONG GenericBytes)
@@ -703,6 +733,7 @@ Rpi5V3dBuildControlLists(
     ULONG WorkGpuVa = RPI5VC4_V3D_WORK_GPU_VA;
     ULONG GenericStart = WorkGpuVa + RPI5VC4_V3D_GENERIC_LIST_OFFSET;
     ULONG GenericEnd;
+    BOOLEAN DrawPrimitive = VertexCount != 0;
 
     Bcl.Base = (PUCHAR)DeviceExtension->V3dWorkVa +
                RPI5VC4_V3D_BCL_OFFSET;
@@ -726,14 +757,15 @@ Rpi5V3dBuildControlLists(
         &Bcl,
         Width,
         Height,
-        DrawTriangle,
+        PrimitiveType,
+        VertexCount,
         WorkGpuVa + RPI5VC4_V3D_DRAW_DATA_OFFSET +
         RPI5VC4_V3D_SHADER_RECORD_OFFSET);
 
     /* Generic per-tile list used by the one 64x64 supertile. */
     Rpi5V3dClByte(&Generic, V3D71_CL_TILE_COORDINATES_IMPLICIT);
     Rpi5V3dClByte(&Generic, V3D71_CL_END_OF_LOADS);
-    if (DrawTriangle)
+    if (DrawPrimitive)
     {
         Rpi5V3dClByte(&Generic, V3D71_CL_PRIMITIVE_LIST_FORMAT);
         Rpi5V3dClByte(&Generic, V3D71_LIST_TRIANGLES);
@@ -744,11 +776,11 @@ Rpi5V3dBuildControlLists(
     Rpi5V3dClByte(&Generic, 0); /* tile-list set 0 */
     Rpi5V3dClStoreGeneral(&Generic,
                           V3D71_BUFFER_RENDER_TARGET_0,
-                          DrawTriangle ? V3D71_OUTPUT_FORMAT_RGBA8 :
-                                         V3D71_OUTPUT_FORMAT_RGBA8UI,
+                          DrawPrimitive ? V3D71_OUTPUT_FORMAT_RGBA8 :
+                                          V3D71_OUTPUT_FORMAT_RGBA8UI,
                           Width * sizeof(ULONG),
                           WorkGpuVa + RPI5VC4_V3D_OUTPUT_OFFSET);
-    if (DrawTriangle)
+    if (DrawPrimitive)
     {
         /* Do not carry one tile's fragments into the next tile. */
         Rpi5V3dClByte(&Generic, V3D71_CL_CLEAR_RENDER_TARGETS);
@@ -762,7 +794,7 @@ Rpi5V3dBuildControlLists(
     Rpi5V3dClRenderTargetPart1(
         &Rcl,
         ClearColor,
-        DrawTriangle ? V3D71_RT_TYPE_8 : V3D71_RT_TYPE_8UI_CLAMPED);
+        DrawPrimitive ? V3D71_RT_TYPE_8 : V3D71_RT_TYPE_8UI_CLAMPED);
     Rpi5V3dClZsClear(&Rcl);
     Rpi5V3dClByte(&Rcl, V3D71_CL_TILE_LIST_INITIAL_BLOCK_SIZE);
     Rpi5V3dClByte(&Rcl, 5); /* 128-byte first block, auto-chain enabled */
@@ -1012,7 +1044,9 @@ Rpi5V3dExecuteClear(
     _In_ ULONG Width,
     _In_ ULONG Height,
     _In_ ULONG ClearColor,
-    _In_reads_opt_(3) const RPI5VC4_V3D_VERTEX Vertices[3],
+    _In_reads_opt_(VertexCount) const RPI5VC4_V3D_VERTEX *Vertices,
+    _In_ ULONG PrimitiveType,
+    _In_ ULONG VertexCount,
     _Out_ PRPI5VC4_V3D_SELFTEST Result,
     _Out_writes_bytes_opt_(ReadbackBytes) PVOID Readback,
     _In_ ULONG ReadbackBytes,
@@ -1036,7 +1070,7 @@ Rpi5V3dExecuteClear(
                          V3D_MMU_CTL_WRITE_VIOLATION;
     BOOLEAN BinningCompleted = FALSE;
     BOOLEAN Completed = FALSE;
-    BOOLEAN DrawTriangle = Vertices != NULL;
+    BOOLEAN DrawPrimitive = Vertices != NULL && VertexCount != 0;
 
     VideoPortZeroMemory(Result, sizeof(*Result));
     Result->Size = sizeof(*Result);
@@ -1119,14 +1153,21 @@ Rpi5V3dExecuteClear(
         Output[Poll] = RPI5VC4_V3D_SENTINEL_PIXEL;
     }
 
-    if (DrawTriangle)
-        Rpi5V3dBuildTriangleData(DeviceExtension, Width, Height, Vertices);
+    if (DrawPrimitive)
+    {
+        Rpi5V3dBuildPrimitiveData(DeviceExtension,
+                                  Width,
+                                  Height,
+                                  Vertices,
+                                  VertexCount);
+    }
 
     if (!Rpi5V3dBuildControlLists(DeviceExtension,
                                   Width,
                                   Height,
                                   ClearColor,
-                                  DrawTriangle,
+                                  PrimitiveType,
+                                  VertexCount,
                                   &BclBytes,
                                   &RclBytes,
                                   &GenericBytes))
@@ -1319,7 +1360,7 @@ Rpi5V3dExecuteClear(
         Output[Width * Height - 1];
     for (Poll = 0; Poll < OutputSize / sizeof(ULONG); Poll++)
     {
-        if (DrawTriangle)
+        if (DrawPrimitive)
         {
             if (CoveredPixelCount != NULL && Output[Poll] != ClearColor)
                 (*CoveredPixelCount)++;
@@ -1331,7 +1372,7 @@ Rpi5V3dExecuteClear(
     }
     Result->Flags |= RPI5VC4_V3D_SELFTEST_FLAG_READBACK_VALID;
 
-    if (!DrawTriangle && Result->MismatchCount != 0)
+    if (!DrawPrimitive && Result->MismatchCount != 0)
     {
         Result->Status = RPI5VC4_V3D_SELFTEST_STATUS_READBACK_MISMATCH;
         goto Capture;
@@ -1412,6 +1453,8 @@ Rpi5V3dRunSelfTest(
                                RPI5VC4_V3D_SELFTEST_HEIGHT,
                                RPI5VC4_V3D_EXPECTED_PIXEL,
                                NULL,
+                               0,
+                               0,
                                Result,
                                NULL,
                                0,
@@ -1460,6 +1503,8 @@ Rpi5V3dRenderClear(
                                  Height,
                                  ClearColor,
                                  NULL,
+                                 0,
+                                 0,
                                  &Diagnostics,
                                  Result->Pixels,
                                  PixelBytes,
@@ -1495,7 +1540,7 @@ Rpi5V3dRenderTriangle(
     _Out_ PULONG BytesReturned)
 {
     RPI5VC4_V3D_SELFTEST Diagnostics;
-    RPI5VC4_V3D_VERTEX Vertices[3];
+    RPI5VC4_V3D_VERTEX Vertices[RPI5VC4_V3D_PRIMITIVE_MAX_VERTICES];
     ULONG HeaderSize = FIELD_OFFSET(RPI5VC4_V3D_TRIANGLE_RESULT, Pixels);
     ULONG PixelBytes;
     ULONG RequiredSize;
@@ -1503,6 +1548,8 @@ Rpi5V3dRenderTriangle(
     ULONG Width;
     ULONG Height;
     ULONG ClearColor;
+    ULONG PrimitiveType;
+    ULONG VertexCount;
     VP_STATUS Status;
 
     *BytesReturned = 0;
@@ -1520,9 +1567,11 @@ Rpi5V3dRenderTriangle(
     Width = Request->Width;
     Height = Request->Height;
     ClearColor = Request->ClearColor;
+    PrimitiveType = Request->PrimitiveType;
+    VertexCount = Request->VertexCount;
     VideoPortMoveMemory(Vertices,
                         Request->Vertices,
-                        sizeof(Vertices));
+                        VertexCount * sizeof(*Vertices));
     PixelBytes = Width * Height * sizeof(ULONG);
     RequiredSize = HeaderSize + PixelBytes;
     if (ResultBufferLength < RequiredSize)
@@ -1533,6 +1582,8 @@ Rpi5V3dRenderTriangle(
                                  Height,
                                  ClearColor,
                                  Vertices,
+                                 PrimitiveType,
+                                 VertexCount,
                                  &Diagnostics,
                                  Result->Pixels,
                                  PixelBytes,
@@ -1553,6 +1604,8 @@ Rpi5V3dRenderTriangle(
                          RPI5VC4_V3D_SELFTEST_STATUS_SUCCESS ?
                          PixelBytes : 0;
     Result->CoveredPixelCount = CoveredPixelCount;
+    Result->PrimitiveType = PrimitiveType;
+    Result->VertexCount = VertexCount;
     Result->Diagnostics = Diagnostics;
     *BytesReturned = Diagnostics.Status ==
                      RPI5VC4_V3D_SELFTEST_STATUS_SUCCESS ?

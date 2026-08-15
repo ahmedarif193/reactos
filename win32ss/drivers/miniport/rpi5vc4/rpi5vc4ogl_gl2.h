@@ -7,6 +7,8 @@
 
 #pragma once
 
+#define RPI5VC4_OGL_GL2_MAX_DRAW_VERTICES 4u
+
 typedef struct _RPI5VC4_OGL_GL2_STATE RPI5VC4_OGL_GL2_STATE;
 typedef RPI5VC4_OGL_GL2_STATE *PRPI5VC4_OGL_GL2_STATE;
 
@@ -41,12 +43,13 @@ Rpi5OglGl2CurrentProgramName(
     _In_opt_ PRPI5VC4_OGL_GL2_STATE State);
 
 RPI5VC4_OGL_GL2_DRAW_RESULT
-Rpi5OglGl2BuildTriangle(
+Rpi5OglGl2BuildPrimitive(
     _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
     _In_ GLenum Mode,
     _In_ GLint First,
     _In_ GLsizei Count,
-    _Out_writes_(3) RPI5VC4_OGL_GL2_VERTEX Vertices[3]);
+    _Out_writes_(RPI5VC4_OGL_GL2_MAX_DRAW_VERTICES)
+        RPI5VC4_OGL_GL2_VERTEX *Vertices);
 
 PROC
 Rpi5OglGl2GetProcAddress(
