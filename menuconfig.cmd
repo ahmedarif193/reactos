@@ -4,18 +4,14 @@ set "_EXIT_CODE=0"
 
 REM menuconfig.cmd - interactive ReactOS build configuration (OpenWrt/kconfig
 REM style). Compiles the rosconfig host tool on first use, opens the console
-REM UI to enable/disable build options, and stores the selections in the
-REM untracked .rosconfig\config.cache. The generated overrides.cmake is
-REM picked up by \PreLoad.cmake whenever a tree is configured
-REM (configure.cmd, configure.sh or plain cmake).
+REM UI to enable/disable build options, and stores selections in one output
+REM tree. The generated overrides.cmake is picked up by \PreLoad.cmake.
 REM See sdk\tools\rosconfig\README.md.
 
 set "_ROSCONFIG_DIR=%~dp0.rosconfig"
-set "_ROSCONFIG_CACHE=%_ROSCONFIG_DIR%\config.cache"
 set "_ROSCONFIG_BUILD=%~dp0sdk\tools\rosconfig\build.cmd"
 set "_ROSCONFIG_DEF=%~dp0sdk\cmake\rosconfig.def"
 set "_ROSCONFIG_BIN=%_ROSCONFIG_DIR%\rosconfig.exe"
-set "_ROSCONFIG_OVERRIDES=%_ROSCONFIG_DIR%\overrides.cmake"
 
 if not exist "%_ROSCONFIG_BUILD%" (
     echo Error: missing %_ROSCONFIG_BUILD%
@@ -30,32 +26,96 @@ if /I "%~1" == "--self-test" (
     set "_EXIT_CODE=!ERRORLEVEL!"
     goto quit
 )
-if not "%~1" == "" goto usage
+if "%~1" == "" (
+    set "_BUILD_DIR=%CD%"
+) else if /I "%~1" == "--build-dir" (
+    if "%~2" == "" goto usage
+    if not "%~3" == "" goto usage
+    for %%I in ("%~2") do set "_BUILD_DIR=%%~fI"
+) else (
+    goto usage
+)
+
+if not exist "!_BUILD_DIR!" (
+    echo Error: output directory does not exist: !_BUILD_DIR!
+    set "_EXIT_CODE=1"
+    goto quit
+)
+for %%I in ("%~dp0.") do set "_SOURCE_DIR=%%~fI"
+for %%I in ("!_BUILD_DIR!") do set "_BUILD_DIR=%%~fI"
+if /I "!_BUILD_DIR!" == "!_SOURCE_DIR!" (
+    echo Error: run from an output directory or pass --build-dir output-^<toolchain^>-^<arch^>-^<type^>.
+    set "_EXIT_CODE=1"
+    goto quit
+)
+
+set "_ROSCONFIG_STATE_DIR=!_BUILD_DIR!\.rosconfig"
+set "_ROSCONFIG_CACHE=!_ROSCONFIG_STATE_DIR!\config.cache"
+set "_ROSCONFIG_OVERRIDES=!_ROSCONFIG_STATE_DIR!\overrides.cmake"
+set "_CMAKE_CACHE=!_BUILD_DIR!\CMakeCache.txt"
+
+set "_ARCH="
+set "_BUILD_TYPE="
+set "_TOOLCHAIN="
+set "_TOOLCHAIN_FILE="
+if exist "!_CMAKE_CACHE!" (
+    for /f "tokens=2 delims==" %%v in ('findstr /b /c:"ARCH:" "!_CMAKE_CACHE!"') do set "_ARCH=%%v"
+    for /f "tokens=2 delims==" %%v in ('findstr /b /c:"CMAKE_BUILD_TYPE:" "!_CMAKE_CACHE!"') do set "_BUILD_TYPE=%%v"
+    for /f "tokens=2 delims==" %%v in ('findstr /b /c:"CMAKE_TOOLCHAIN_FILE:" "!_CMAKE_CACHE!"') do set "_TOOLCHAIN_FILE=%%v"
+)
+if not defined _ARCH if exist "!_ROSCONFIG_CACHE!" for /f "tokens=2 delims==" %%v in ('findstr /b /c:"ARCH=" "!_ROSCONFIG_CACHE!"') do set "_ARCH=%%v"
+if not defined _BUILD_TYPE if exist "!_ROSCONFIG_CACHE!" for /f "tokens=2 delims==" %%v in ('findstr /b /c:"BUILD_TYPE=" "!_ROSCONFIG_CACHE!"') do set "_BUILD_TYPE=%%v"
+echo !_TOOLCHAIN_FILE! | findstr /I /C:"toolchain-clang.cmake" > NUL && set "_TOOLCHAIN=clang"
+echo !_TOOLCHAIN_FILE! | findstr /I /C:"toolchain-gcc.cmake" > NUL && set "_TOOLCHAIN=gcc"
+echo !_TOOLCHAIN_FILE! | findstr /I /C:"toolchain-msvc.cmake" > NUL && set "_TOOLCHAIN=msvc"
+if not defined _TOOLCHAIN if exist "!_ROSCONFIG_CACHE!" for /f "tokens=2 delims==" %%v in ('findstr /b /c:"TOOLCHAIN=" "!_ROSCONFIG_CACHE!"') do set "_TOOLCHAIN=%%v"
+
+if not defined _ARCH (
+    echo Error: cannot determine a target architecture for !_BUILD_DIR!.
+    set "_EXIT_CODE=1"
+    goto quit
+)
+if not defined _BUILD_TYPE (
+    echo Error: cannot determine a build type for !_BUILD_DIR!.
+    set "_EXIT_CODE=1"
+    goto quit
+)
+if not defined _TOOLCHAIN (
+    echo Error: cannot determine a toolchain for !_BUILD_DIR!.
+    set "_EXIT_CODE=1"
+    goto quit
+)
+
+if not exist "!_ROSCONFIG_STATE_DIR!" mkdir "!_ROSCONFIG_STATE_DIR!"
+"%_ROSCONFIG_BIN%" --def "%_ROSCONFIG_DEF%" --cache "!_ROSCONFIG_CACHE!" --defaults --set "ARCH=!_ARCH!" --set "TOOLCHAIN=!_TOOLCHAIN!" --set "BUILD_TYPE=!_BUILD_TYPE!"
+if not "!ERRORLEVEL!" == "0" (
+    set "_EXIT_CODE=!ERRORLEVEL!"
+    goto quit
+)
 
 :run_menu
-"%_ROSCONFIG_BIN%" --def "%_ROSCONFIG_DEF%" --cache "%_ROSCONFIG_CACHE%" --menu
+"%_ROSCONFIG_BIN%" --def "%_ROSCONFIG_DEF%" --cache "!_ROSCONFIG_CACHE!" --menu
 if not "!ERRORLEVEL!" == "0" (
     set "_EXIT_CODE=!ERRORLEVEL!"
     if "!ERRORLEVEL!" == "130" echo menuconfig.cmd: cancelled; configuration was not regenerated.
     goto quit
 )
 
-REM Make sure the cache exists even if the user quit without saving, and
-REM refresh the CMake fragment consumed by \PreLoad.cmake.
-"%_ROSCONFIG_BIN%" --def "%_ROSCONFIG_DEF%" --cache "%_ROSCONFIG_CACHE%" --defaults
+REM Preserve the identity encoded by the selected output directory.
+"%_ROSCONFIG_BIN%" --def "%_ROSCONFIG_DEF%" --cache "!_ROSCONFIG_CACHE!" --defaults --set "ARCH=!_ARCH!" --set "TOOLCHAIN=!_TOOLCHAIN!" --set "BUILD_TYPE=!_BUILD_TYPE!"
 if not "!ERRORLEVEL!" == "0" (
     set "_EXIT_CODE=!ERRORLEVEL!"
     goto quit
 )
-"%_ROSCONFIG_BIN%" --def "%_ROSCONFIG_DEF%" --cache "%_ROSCONFIG_CACHE%" --generate "%_ROSCONFIG_OVERRIDES%"
+"%_ROSCONFIG_BIN%" --def "%_ROSCONFIG_DEF%" --cache "!_ROSCONFIG_CACHE!" --generate "!_ROSCONFIG_OVERRIDES!"
 if not "!ERRORLEVEL!" == "0" (
     set "_EXIT_CODE=!ERRORLEVEL!"
     goto quit
 )
 
 echo.
-echo Configuration stored in .rosconfig\config.cache.
-echo Run configure.cmd to configure a build tree with these settings
+echo Configuration stored in !_ROSCONFIG_CACHE!.
+echo Re-run configure.cmd for this output tree to apply these settings
 echo ^(command-line flags and -D options still take precedence^).
 goto quit
 
@@ -65,7 +125,7 @@ set "_EXIT_CODE=1"
 goto quit
 
 :usage
-echo Usage: menuconfig.cmd [--self-test]
+echo Usage: menuconfig.cmd [--build-dir ^<output-directory^>] [--self-test]
 set "_EXIT_CODE=2"
 
 :quit

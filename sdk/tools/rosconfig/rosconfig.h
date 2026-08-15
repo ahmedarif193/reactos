@@ -15,7 +15,7 @@
 #include <stddef.h>
 #include <stdio.h>
 
-#define ROSCONFIG_VERSION "1.2"
+#define ROSCONFIG_VERSION "1.3"
 
 void die(const char *fmt, ...);
 void *xmalloc(size_t n);
@@ -107,6 +107,7 @@ extern DefEntry *g_entries;
 extern int g_nentries;
 
 void add_override(const char *kv);
+void set_config_value(const char *kv);
 Option *find_opt(const char *key);
 int choice_index(const Option *o, const char *value);
 void set_value(Option *o, const char *v);

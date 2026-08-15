@@ -414,6 +414,9 @@ int rosconfig_self_test(void)
     expect_string(&test, enable->value, "y", "cache loads a boolean");
     expect_string(&test, level->value, "expert", "cache loads a choice");
     expect_string(&test, label->value, "from cache", "cache loads a string containing spaces");
+    set_config_value("ARCH=arm64");
+    expect_string(&test, arch->value, "arm64", "validated settings update cache values");
+    set_config_value("ARCH=amd64");
     expect(&test, cache_save(saved_cache_path) == 0, "cache saves successfully");
     expect(&test, file_contains(saved_cache_path, "# --- Build / Advanced"), "saved cache records the nested menu path");
     expect(&test, file_contains(saved_cache_path, "UNKNOWN_KEEP=y") && file_contains(saved_cache_path, "legacy line"), "unknown cache entries are preserved");
