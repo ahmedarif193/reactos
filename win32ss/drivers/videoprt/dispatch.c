@@ -916,40 +916,61 @@ IntVideoPortPnPStartDevice(
         ULONG ResourceCount;
         ULONG ResourceListSize;
 
-        /* Save the resource list */
-        ResourceCount = AllocatedResources->List[0].PartialResourceList.Count;
+        if (AllocatedResources->Count != 1)
+        {
+            ERR_(VIDEOPRT, "Invalid PnP resource-list count %lu\n",
+                 AllocatedResources->Count);
+            return STATUS_DEVICE_CONFIGURATION_ERROR;
+        }
+
+        FullList = AllocatedResources->List;
+        INFO_(VIDEOPRT, "InterfaceType %u BusNumber List %u Device BusNumber %u Version %u Revision %u\n",
+              FullList->InterfaceType, FullList->BusNumber, DeviceExtension->SystemIoBusNumber, FullList->PartialResourceList.Version, FullList->PartialResourceList.Revision);
+
+        if (FullList->InterfaceType != DeviceExtension->AdapterInterfaceType ||
+            FullList->BusNumber != DeviceExtension->SystemIoBusNumber ||
+            FullList->PartialResourceList.Version != 1 ||
+            FullList->PartialResourceList.Revision != 1)
+        {
+            ERR_(VIDEOPRT,
+                 "Invalid PnP resource list: count=%lu interface=%u/%u bus=%lu/%lu version=%u revision=%u\n",
+                 AllocatedResources->Count,
+                 FullList->InterfaceType,
+                 DeviceExtension->AdapterInterfaceType,
+                 FullList->BusNumber,
+                 DeviceExtension->SystemIoBusNumber,
+                 FullList->PartialResourceList.Version,
+                 FullList->PartialResourceList.Revision);
+            return STATUS_DEVICE_CONFIGURATION_ERROR;
+        }
+
+        /* Save the resource list after validating its single full descriptor. */
+        ResourceCount = FullList->PartialResourceList.Count;
         ResourceListSize =
             FIELD_OFFSET(CM_RESOURCE_LIST, List[0].PartialResourceList.
                          PartialDescriptors[ResourceCount]);
         DeviceExtension->AllocatedResources = ExAllocatePool(PagedPool, ResourceListSize);
         if (DeviceExtension->AllocatedResources == NULL)
-        {
             return STATUS_INSUFFICIENT_RESOURCES;
-        }
 
         RtlCopyMemory(DeviceExtension->AllocatedResources,
                       AllocatedResources,
                       ResourceListSize);
 
-        /* Get the interrupt level/vector - needed by HwFindAdapter sometimes */
-        FullList = AllocatedResources->List;
-        ASSERT(AllocatedResources->Count == 1);
-        INFO_(VIDEOPRT, "InterfaceType %u BusNumber List %u Device BusNumber %u Version %u Revision %u\n",
-              FullList->InterfaceType, FullList->BusNumber, DeviceExtension->SystemIoBusNumber, FullList->PartialResourceList.Version, FullList->PartialResourceList.Revision);
-
-        /* FIXME: Is this ASSERT ok for resources from the PNP manager? */
-        ASSERT(FullList->InterfaceType == PCIBus);
-        ASSERT(FullList->BusNumber == DeviceExtension->SystemIoBusNumber);
-        ASSERT(1 == FullList->PartialResourceList.Version);
-        ASSERT(1 == FullList->PartialResourceList.Revision);
+        /* VIDEO_PORT_CONFIG_INFO can describe one interrupt. Keep the first. */
         for (Descriptor = FullList->PartialResourceList.PartialDescriptors;
              Descriptor < FullList->PartialResourceList.PartialDescriptors + FullList->PartialResourceList.Count;
              Descriptor++)
         {
-            if (Descriptor->Type == CmResourceTypeInterrupt)
+            if (Descriptor->Type == CmResourceTypeInterrupt &&
+                !DeviceExtension->InterruptPresent)
             {
                 DeviceExtension->InterruptLevel = Descriptor->u.Interrupt.Level;
                 DeviceExtension->InterruptVector = Descriptor->u.Interrupt.Vector;
+                DeviceExtension->InterruptMode =
+                    (Descriptor->Flags & CM_RESOURCE_INTERRUPT_LATCHED) ?
+                    Latched : LevelSensitive;
+                DeviceExtension->InterruptPresent = TRUE;
                 if (Descriptor->ShareDisposition == CmResourceShareShared)
                     DeviceExtension->InterruptShared = TRUE;
                 else

@@ -524,7 +524,9 @@ IntVideoPortFindAdapter(
     RtlZeroMemory(&ConfigInfo, sizeof(VIDEO_PORT_CONFIG_INFO));
     ConfigInfo.Length = sizeof(VIDEO_PORT_CONFIG_INFO);
     ConfigInfo.AdapterInterfaceType = DeviceExtension->AdapterInterfaceType;
-    if (ConfigInfo.AdapterInterfaceType == PCIBus)
+    if (DeviceExtension->PhysicalDeviceObject != NULL)
+        ConfigInfo.InterruptMode = DeviceExtension->InterruptMode;
+    else if (ConfigInfo.AdapterInterfaceType == PCIBus)
         ConfigInfo.InterruptMode = LevelSensitive;
     else
         ConfigInfo.InterruptMode = Latched;

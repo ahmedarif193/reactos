@@ -95,6 +95,8 @@ typedef struct _VIDEO_PORT_DEVICE_EXTENSTION
    PCM_RESOURCE_LIST AllocatedResources;
    ULONG InterruptVector;
    ULONG InterruptLevel;
+   KINTERRUPT_MODE InterruptMode;
+   BOOLEAN InterruptPresent;
    BOOLEAN InterruptShared;
    INTERFACE_TYPE AdapterInterfaceType;
    ULONG SystemIoBusNumber;
