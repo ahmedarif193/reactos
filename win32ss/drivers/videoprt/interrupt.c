@@ -61,8 +61,9 @@ IntVideoPortSetupInterrupt(
     */
 
    if (DriverExtension->InitializationData.HwInterrupt != NULL &&
-       (ConfigInfo->BusInterruptLevel != 0 ||
-       ConfigInfo->BusInterruptVector != 0))
+       (DeviceExtension->InterruptPresent ||
+        ConfigInfo->BusInterruptLevel != 0 ||
+        ConfigInfo->BusInterruptVector != 0))
    {
       ULONG InterruptVector;
       KIRQL Irql;

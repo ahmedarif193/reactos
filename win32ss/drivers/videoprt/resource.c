@@ -963,16 +963,34 @@ VideoPortGetAccessRanges(
     /* Return the slot number if the caller wants it */
     if (Slot != NULL) *Slot = DeviceExtension->SystemIoSlotNumber;
 
+    if (AllocatedResources->Count != 1)
+    {
+        ERR_(VIDEOPRT, "Invalid allocated resource-list count %lu\n",
+             AllocatedResources->Count);
+        return ERROR_INVALID_PARAMETER;
+    }
+
     FullList = AllocatedResources->List;
-    ASSERT(AllocatedResources->Count == 1);
     INFO_(VIDEOPRT, "InterfaceType %u BusNumber List %u Device BusNumber %u Version %u Revision %u\n",
           FullList->InterfaceType, FullList->BusNumber, DeviceExtension->SystemIoBusNumber,
           FullList->PartialResourceList.Version, FullList->PartialResourceList.Revision);
 
-    ASSERT(FullList->InterfaceType == PCIBus);
-    ASSERT(FullList->BusNumber == DeviceExtension->SystemIoBusNumber);
-    ASSERT(1 == FullList->PartialResourceList.Version);
-    ASSERT(1 == FullList->PartialResourceList.Revision);
+    if (FullList->InterfaceType != DeviceExtension->AdapterInterfaceType ||
+        FullList->BusNumber != DeviceExtension->SystemIoBusNumber ||
+        FullList->PartialResourceList.Version != 1 ||
+        FullList->PartialResourceList.Revision != 1)
+    {
+        ERR_(VIDEOPRT,
+             "Invalid allocated resource list: count=%lu interface=%u/%u bus=%lu/%lu version=%u revision=%u\n",
+             AllocatedResources->Count,
+             FullList->InterfaceType,
+             DeviceExtension->AdapterInterfaceType,
+             FullList->BusNumber,
+             DeviceExtension->SystemIoBusNumber,
+             FullList->PartialResourceList.Version,
+             FullList->PartialResourceList.Revision);
+        return ERROR_INVALID_PARAMETER;
+    }
 
     for (Descriptor = FullList->PartialResourceList.PartialDescriptors;
          Descriptor < FullList->PartialResourceList.PartialDescriptors + FullList->PartialResourceList.Count;
@@ -1015,14 +1033,24 @@ VideoPortGetAccessRanges(
                 AccessRanges[AssignedCount].RangePassive |= VIDEO_RANGE_PASSIVE_DECODE;
             AssignedCount++;
         }
-        else if (Descriptor->Type == CmResourceTypeInterrupt)
+        else if (Descriptor->Type == CmResourceTypeInterrupt &&
+                 !DeviceExtension->InterruptPresent)
         {
             DeviceExtension->InterruptLevel = Descriptor->u.Interrupt.Level;
             DeviceExtension->InterruptVector = Descriptor->u.Interrupt.Vector;
+            DeviceExtension->InterruptMode =
+                (Descriptor->Flags & CM_RESOURCE_INTERRUPT_LATCHED) ?
+                Latched : LevelSensitive;
+            DeviceExtension->InterruptPresent = TRUE;
             if (Descriptor->ShareDisposition == CmResourceShareShared)
                 DeviceExtension->InterruptShared = TRUE;
             else
                 DeviceExtension->InterruptShared = FALSE;
+        }
+        else if (Descriptor->Type == CmResourceTypeInterrupt)
+        {
+            /* VIDEO_PORT_CONFIG_INFO has room for only one interrupt. */
+            continue;
         }
         // else if (Descriptor->Type == CmResourceTypeDma) // TODO!
         else
