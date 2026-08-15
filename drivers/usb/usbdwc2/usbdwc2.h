@@ -21,6 +21,7 @@
 #define DWC2_SETUP_BUFFER_SIZE                 64
 #define DWC2_MAX_TRANSFER_SIZE                 0x10000
 #define DWC2_ENDPOINT_BUFFER_SIZE              (DWC2_SETUP_BUFFER_SIZE + DWC2_MAX_TRANSFER_SIZE)
+#define DWC2_HANG_DIAGNOSTIC_INTERVAL          2500000ULL
 
 typedef enum _DWC2_TRANSFER_STAGE
 {
@@ -45,11 +46,14 @@ typedef struct _DWC2_TRANSFER
     ULONG InitialPacketCount;
     ULONG DataToggle;
     ULONG NakCount;
+    ULONG RetrySof;
+    ULONGLONG StageStartTime;
     UCHAR Channel;
     BOOLEAN DirectionIn;
     BOOLEAN Done;
     BOOLEAN NeedsSof;
     BOOLEAN CompleteSplit;
+    BOOLEAN HangDiagnosticLogged;
 } DWC2_TRANSFER, *PDWC2_TRANSFER;
 
 typedef struct _DWC2_ENDPOINT
@@ -76,8 +80,9 @@ typedef struct _DWC2_EXTENSION
     ULONG RegisterLength;
     ULONG NumberOfChannels;
     ULONG InterruptMask;
-    ULONG PendingGlobalInterrupts;
-    ULONG PendingChannelInterrupts;
+    volatile LONG PendingGlobalInterrupts;
+    volatile LONG PendingChannelInterrupts;
+    ULONG SofCount;
     ULONG ResetChange;
     ULONG SuspendChange;
     ULONG LastConnectStatus;
