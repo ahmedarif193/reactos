@@ -1050,6 +1050,32 @@ ChpepCallX64Routine(PVOID EntryPoint,
 
 static
 NTSTATUS
+ChpepGetNativeProcedureAddress(PVOID Base,
+                               PANSI_STRING Name,
+                               PVOID *Procedure)
+{
+    NTSTATUS Status;
+    ULONG_PTR ExportRva, NativeRva;
+
+    Status = LdrGetProcedureAddress(Base, Name, 0, Procedure);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    ExportRva = (ULONG_PTR)*Procedure - (ULONG_PTR)Base;
+    if (!ChpeGetArm64EcRedirection(Base, ExportRva, &NativeRva))
+    {
+        if (RtlIsEcCode((ULONG_PTR)*Procedure))
+            return STATUS_SUCCESS;
+
+        return STATUS_INVALID_IMAGE_FORMAT;
+    }
+
+    *Procedure = (PBYTE)Base + NativeRva;
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
 ChpepLoadEmulator(VOID)
 {
     ANSI_STRING ProcInitName = RTL_CONSTANT_STRING("ProcessInit");
@@ -1088,9 +1114,10 @@ ChpepLoadEmulator(VOID)
     ChpeEmulatorModule = Base;
 
 #define CHPE_GET_PROC(name, field) \
-    Status = LdrGetProcedureAddress(Base, &name##Name, 0, (PVOID*)&field); \
+    Status = ChpepGetNativeProcedureAddress(Base, &name##Name, (PVOID*)&field); \
     if (!NT_SUCCESS(Status)) { \
-        DPRINT1("CHPE: Failed to resolve %Z, Status = 0x%08lx\n", &name##Name, Status); \
+        DPRINT1("CHPE: Failed to resolve native ARM64EC entry for %Z, Status = 0x%08lx\n", \
+                &name##Name, Status); \
         return Status; \
     }
 
@@ -1155,6 +1182,13 @@ ChpeInitializeProcess(VOID)
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("[CHPE] ntdll: ProcessInit failed, Status = 0x%08lx\n", Status);
+        return Status;
+    }
+
+    Status = ChpeInitializeThread();
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("[CHPE] ntdll: initial ThreadInit failed, Status = 0x%08lx\n", Status);
         return Status;
     }
 
