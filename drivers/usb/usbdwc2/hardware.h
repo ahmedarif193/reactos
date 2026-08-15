@@ -18,11 +18,14 @@
 #define DWC2_GRSTCTL                           0x0010
 #define DWC2_GINTSTS                           0x0014
 #define DWC2_GINTMSK                           0x0018
+#define DWC2_GRXFSIZ                           0x0024
+#define DWC2_GNPTXFSIZ                         0x0028
 #define DWC2_GSNPSID                           0x0040
 #define DWC2_GHWCFG2                           0x0048
 
 #define DWC2_GAHBCFG_DMA_EN                    DWC2_BIT(5)
-#define DWC2_GAHBCFG_HBSTLEN_INCR4             (3UL << 1)
+#define DWC2_GAHBCFG_AXI_BURST4_MASK           (3UL << 1)
+#define DWC2_GAHBCFG_WAIT_AXI_WRITES           DWC2_BIT(4)
 #define DWC2_GAHBCFG_GLBL_INTR_EN              DWC2_BIT(0)
 
 #define DWC2_GUSBCFG_FORCEHOSTMODE             DWC2_BIT(29)
@@ -54,11 +57,15 @@
 #define DWC2_HAINT                             0x0414
 #define DWC2_HAINTMSK                          0x0418
 #define DWC2_HPRT0                             0x0440
+#define DWC2_HPTXFSIZ                          0x0100
+
+/* Power and clock gating register. */
+#define DWC2_PCGCCTL                           0x0E00
 
 #define DWC2_HCFG_FSLSPCLKSEL_MASK             0x3UL
 #define DWC2_HCFG_FSLSPCLKSEL_30_60_MHZ        0x0UL
 
-#define DWC2_HFNUM_FRNUM_MASK                  0xFFFFUL
+#define DWC2_HFNUM_FRNUM_MASK                  0x3FFFUL
 
 #define DWC2_HPRT_SPD_SHIFT                    17
 #define DWC2_HPRT_SPD_MASK                     (0x3UL << DWC2_HPRT_SPD_SHIFT)
@@ -91,6 +98,7 @@
 #define DWC2_HCCHAR_ODDFRM                     DWC2_BIT(29)
 #define DWC2_HCCHAR_DEVADDR_SHIFT              22
 #define DWC2_HCCHAR_MULTICNT_SHIFT             20
+#define DWC2_HCCHAR_MULTICNT_ONE               (1UL << DWC2_HCCHAR_MULTICNT_SHIFT)
 #define DWC2_HCCHAR_EPTYPE_SHIFT               18
 #define DWC2_HCCHAR_LSPDDEV                    DWC2_BIT(17)
 #define DWC2_HCCHAR_EPDIR                      DWC2_BIT(15)

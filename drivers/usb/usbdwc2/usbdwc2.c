@@ -201,7 +201,7 @@ Dwc2CoreReset(
     return TRUE;
 }
 
-static VOID
+static BOOLEAN
 Dwc2FlushFifos(
     _In_ PDWC2_EXTENSION Extension)
 {
@@ -216,6 +216,12 @@ Dwc2FlushFifos(
         KeStallExecutionProcessor(10);
     }
 
+    if (Index == 1000)
+    {
+        DPRINT1("[DWC2] transmit FIFO flush timed out GRSTCTL=%08lx\n", Dwc2ReadRegister(Extension, DWC2_GRSTCTL));
+        return FALSE;
+    }
+
     Dwc2WriteRegister(Extension, DWC2_GRSTCTL, DWC2_GRSTCTL_RXFFLSH);
     for (Index = 0; Index < 1000; Index++)
     {
@@ -224,7 +230,20 @@ Dwc2FlushFifos(
 
         KeStallExecutionProcessor(10);
     }
+
+    if (Index == 1000)
+    {
+        DPRINT1("[DWC2] receive FIFO flush timed out GRSTCTL=%08lx\n", Dwc2ReadRegister(Extension, DWC2_GRSTCTL));
+        return FALSE;
+    }
+
+    return TRUE;
 }
+
+static BOOLEAN
+Dwc2HaltChannel(
+    _In_ PDWC2_EXTENSION Extension,
+    _In_ UCHAR Channel);
 
 static BOOLEAN
 Dwc2InitializeHardware(
@@ -238,6 +257,7 @@ Dwc2InitializeHardware(
 
     Dwc2SetGlobalInterruptEnable(Extension, FALSE);
     Dwc2WriteRegister(Extension, DWC2_GINTMSK, 0);
+    Dwc2WriteRegister(Extension, DWC2_PCGCCTL, 0);
 
     UsbConfig = Dwc2ReadRegister(Extension, DWC2_GUSBCFG);
     UsbConfig |= DWC2_GUSBCFG_FORCEHOSTMODE;
@@ -253,6 +273,8 @@ Dwc2InitializeHardware(
     if (!Dwc2CoreReset(Extension))
         return FALSE;
 
+    Dwc2WriteRegister(Extension, DWC2_PCGCCTL, 0);
+
     HardwareConfig = Dwc2ReadRegister(Extension, DWC2_GHWCFG2);
     Extension->NumberOfChannels = ((HardwareConfig & DWC2_GHWCFG2_NUM_HOST_CHAN_MASK) >> DWC2_GHWCFG2_NUM_HOST_CHAN_SHIFT) + 1;
     if (Extension->NumberOfChannels == 0 || Extension->NumberOfChannels > DWC2_MAX_CHANNELS)
@@ -264,16 +286,17 @@ Dwc2InitializeHardware(
     Dwc2WriteRegister(Extension, DWC2_HCFG, HostConfig);
 
     AhbConfig = Dwc2ReadRegister(Extension, DWC2_GAHBCFG);
-    AhbConfig &= ~DWC2_GAHBCFG_GLBL_INTR_EN;
-    AhbConfig |= DWC2_GAHBCFG_DMA_EN | DWC2_GAHBCFG_HBSTLEN_INCR4;
+    AhbConfig &= ~(DWC2_GAHBCFG_GLBL_INTR_EN | DWC2_GAHBCFG_AXI_BURST4_MASK);
+    AhbConfig |= DWC2_GAHBCFG_DMA_EN | DWC2_GAHBCFG_WAIT_AXI_WRITES;
     Dwc2WriteRegister(Extension, DWC2_GAHBCFG, AhbConfig);
 
-    Dwc2FlushFifos(Extension);
+    if (!Dwc2FlushFifos(Extension))
+        return FALSE;
 
     for (Index = 0; Index < Extension->NumberOfChannels; Index++)
     {
-        Dwc2WriteRegister(Extension, DWC2_HCINTMSK(Index), 0);
-        Dwc2WriteRegister(Extension, DWC2_HCINT(Index), DWC2_HCINT_VALID_MASK);
+        if (!Dwc2HaltChannel(Extension, (UCHAR)Index))
+            return FALSE;
         Extension->Channels[Index] = NULL;
     }
 
@@ -284,10 +307,15 @@ Dwc2InitializeHardware(
     Dwc2WritePort(Extension, DWC2_HPRT_PWR, 0, 0);
     Dwc2RegPacket.UsbPortWait(Extension, 20);
 
-    DPRINT1("[DWC2] initialized GSNPSID=%08lx GHWCFG2=%08lx channels=%lu HPRT0=%08lx\n",
+    DPRINT1("[DWC2] initialized GSNPSID=%08lx GHWCFG2=%08lx channels=%lu GAHBCFG=%08lx PCGCCTL=%08lx RXFIFO=%08lx NPTXFIFO=%08lx PTXFIFO=%08lx HPRT0=%08lx\n",
             Dwc2ReadRegister(Extension, DWC2_GSNPSID),
             HardwareConfig,
             Extension->NumberOfChannels,
+            Dwc2ReadRegister(Extension, DWC2_GAHBCFG),
+            Dwc2ReadRegister(Extension, DWC2_PCGCCTL),
+            Dwc2ReadRegister(Extension, DWC2_GRXFSIZ),
+            Dwc2ReadRegister(Extension, DWC2_GNPTXFSIZ),
+            Dwc2ReadRegister(Extension, DWC2_HPTXFSIZ),
             Dwc2ReadRegister(Extension, DWC2_HPRT0));
     return TRUE;
 }
@@ -332,22 +360,40 @@ Dwc2ReleaseChannel(
     Transfer->Channel = DWC2_INVALID_CHANNEL;
 }
 
-static VOID
+static BOOLEAN
 Dwc2HaltChannel(
     _In_ PDWC2_EXTENSION Extension,
     _In_ UCHAR Channel)
 {
     ULONG Character;
+    ULONG Index;
+    BOOLEAN Halted = TRUE;
 
     if (Channel >= Extension->NumberOfChannels)
-        return;
+        return FALSE;
 
     Character = Dwc2ReadRegister(Extension, DWC2_HCCHAR(Channel));
     if (Character & DWC2_HCCHAR_CHENA)
+    {
         Dwc2WriteRegister(Extension, DWC2_HCCHAR(Channel), Character | DWC2_HCCHAR_CHDIS | DWC2_HCCHAR_CHENA);
+
+        for (Index = 0; Index < 10000; Index++)
+        {
+            if (!(Dwc2ReadRegister(Extension, DWC2_HCCHAR(Channel)) & DWC2_HCCHAR_CHENA))
+                break;
+            KeStallExecutionProcessor(10);
+        }
+
+        if (Index == 10000)
+        {
+            DPRINT1("[DWC2] CH%u halt timed out HCCHAR=%08lx HCINT=%08lx\n", Channel, Dwc2ReadRegister(Extension, DWC2_HCCHAR(Channel)), Dwc2ReadRegister(Extension, DWC2_HCINT(Channel)));
+            Halted = FALSE;
+        }
+    }
 
     Dwc2WriteRegister(Extension, DWC2_HCINTMSK(Channel), 0);
     Dwc2WriteRegister(Extension, DWC2_HCINT(Channel), DWC2_HCINT_VALID_MASK);
+    return Halted;
 }
 
 static VOID
@@ -446,6 +492,7 @@ Dwc2ProgramStage(
     Character |= ((ULONG)Properties->EndpointAddress & 0x0F) << DWC2_HCCHAR_EPNUM_SHIFT;
     Character |= EndpointType << DWC2_HCCHAR_EPTYPE_SHIFT;
     Character |= PacketSize & DWC2_HCCHAR_MPS_MASK;
+    Character |= DWC2_HCCHAR_MULTICNT_ONE;
 
     if (DirectionIn)
         Character |= DWC2_HCCHAR_EPDIR;
@@ -455,7 +502,6 @@ Dwc2ProgramStage(
 
     if (Properties->TransferType == USBPORT_TRANSFER_TYPE_INTERRUPT)
     {
-        Character |= 1UL << DWC2_HCCHAR_MULTICNT_SHIFT;
         if (!(Dwc2ReadRegister(Extension, DWC2_HFNUM) & 1))
             Character |= DWC2_HCCHAR_ODDFRM;
     }
@@ -475,12 +521,14 @@ Dwc2ProgramStage(
     Dwc2WriteRegister(Extension, DWC2_HCTSIZ(Channel), (Pid << DWC2_HCTSIZ_PID_SHIFT) | (PacketCount << DWC2_HCTSIZ_PKTCNT_SHIFT) | TransferSize);
     Dwc2WriteRegister(Extension, DWC2_HCDMA(Channel), DmaAddress);
     Dwc2WriteRegister(Extension, DWC2_HCINTMSK(Channel), DWC2_HCINT_DRIVER_MASK);
+    Transfer->StageStartTime = KeQueryInterruptTime();
+    Transfer->HangDiagnosticLogged = FALSE;
     KeMemoryBarrier();
     Dwc2WriteRegister(Extension, DWC2_HCCHAR(Channel), Character | DWC2_HCCHAR_CHENA);
 
     if (Transfer->Stage != Dwc2StageData || Transfer->NakCount < 4)
     {
-        DPRINT1("[DWC2] CH%u start stage=%u addr=%u ep=%u type=%lu dir=%s len=%lu pid=%lu split=%u/%u dma=%08lx\n",
+        DPRINT1("[DWC2] CH%u start stage=%u addr=%u ep=%u type=%lu dir=%s len=%lu pid=%lu split=%u/%u dma=%08lx HCCHAR=%08lx HCTSIZ=%08lx\n",
                 Channel,
                 Transfer->Stage,
                 Properties->DeviceAddress,
@@ -491,7 +539,9 @@ Dwc2ProgramStage(
                 Pid,
                 Endpoint->RequiresSplit,
                 Transfer->CompleteSplit,
-                DmaAddress);
+                DmaAddress,
+                Dwc2ReadRegister(Extension, DWC2_HCCHAR(Channel)),
+                Dwc2ReadRegister(Extension, DWC2_HCTSIZ(Channel)));
     }
 
     return TRUE;
@@ -536,10 +586,15 @@ Dwc2DecodeChannelError(
 }
 
 static VOID
-Dwc2RetryAtNextSof(
+Dwc2ScheduleRetry(
     _In_ PDWC2_EXTENSION Extension,
-    _In_ PDWC2_TRANSFER Transfer)
+    _In_ PDWC2_TRANSFER Transfer,
+    _In_ ULONG FrameDelay)
 {
+    if (!FrameDelay)
+        FrameDelay = 1;
+
+    Transfer->RetrySof = Extension->SofCount + FrameDelay;
     Dwc2ReleaseChannel(Extension, Transfer);
     Transfer->NeedsSof = TRUE;
     Dwc2UpdateSofMask(Extension);
@@ -556,6 +611,7 @@ Dwc2ProcessChannel(
     ULONG InterruptStatus;
     ULONG RemainingPackets;
     ULONG RemainingSize;
+    ULONG RetryDelay;
     ULONG TransferredPackets;
     BOOLEAN ShortPacket;
 
@@ -579,7 +635,7 @@ Dwc2ProcessChannel(
     if ((InterruptStatus & DWC2_HCINT_ACK) && Endpoint->RequiresSplit && !Transfer->CompleteSplit && !(InterruptStatus & DWC2_HCINT_XFERCOMPL))
     {
         Transfer->CompleteSplit = TRUE;
-        Dwc2RetryAtNextSof(Extension, Transfer);
+        Dwc2ScheduleRetry(Extension, Transfer, 1);
         return;
     }
 
@@ -596,8 +652,14 @@ Dwc2ProcessChannel(
                     Transfer->CompleteSplit);
         }
 
+        RetryDelay = 1;
+        if ((InterruptStatus & DWC2_HCINT_NAK) && Transfer->CompleteSplit)
+            Transfer->CompleteSplit = FALSE;
+        if (Endpoint->Properties.TransferType == USBPORT_TRANSFER_TYPE_INTERRUPT && !Transfer->CompleteSplit)
+            RetryDelay = Endpoint->Properties.Period;
+
         if ((InterruptStatus & DWC2_HCINT_CHHLTD) || Endpoint->Properties.TransferType == USBPORT_TRANSFER_TYPE_INTERRUPT || Transfer->CompleteSplit)
-            Dwc2RetryAtNextSof(Extension, Transfer);
+            Dwc2ScheduleRetry(Extension, Transfer, RetryDelay);
         return;
     }
 
@@ -687,16 +749,24 @@ Dwc2TryStartPending(
 {
     PLIST_ENTRY Entry;
 
+    if (!Extension->Started)
+        return;
+
     for (Entry = Extension->EndpointList.Flink; Entry != &Extension->EndpointList; Entry = Entry->Flink)
     {
         PDWC2_ENDPOINT Endpoint = CONTAINING_RECORD(Entry, DWC2_ENDPOINT, Link);
         PDWC2_TRANSFER Transfer = Endpoint->Transfer;
         UCHAR Channel;
 
-        if (!Transfer || Transfer->Done || Transfer->Channel != DWC2_INVALID_CHANNEL)
+        if (Endpoint->State != USBPORT_ENDPOINT_ACTIVE || !Transfer || Transfer->Done || Transfer->Channel != DWC2_INVALID_CHANNEL)
             continue;
         if (Transfer->NeedsSof && !FromSof)
             continue;
+        if (Transfer->NeedsSof)
+        {
+            if ((LONG)(Extension->SofCount - Transfer->RetrySof) < 0)
+                continue;
+        }
 
         Channel = Dwc2AllocateChannel(Extension, Endpoint);
         if (Channel == DWC2_INVALID_CHANNEL)
@@ -738,15 +808,19 @@ Dwc2OpenEndpoint(
     InsertTailList(&Extension->EndpointList, &Endpoint->Link);
     Endpoint->Listed = TRUE;
 
-    DPRINT1("[DWC2] endpoint open ep=%p addr=%u endpoint=%u type=%lu speed=%u mps=%lu hub=%u port=%u split=%u buffer=%08lx/%p\n",
+    DPRINT1("[DWC2] endpoint open ep=%p addr=%u endpoint=%u type=%lu speed=%u mps=%lu period=%u interval=%u hub=%u port=%u tt=%u/%u split=%u buffer=%08lx/%p\n",
             Endpoint,
             Properties->DeviceAddress,
             Properties->EndpointAddress,
             Properties->TransferType,
             Properties->DeviceSpeed,
             Properties->MaxPacketSize,
+            Properties->Period,
+            Properties->Reserved4,
             Properties->HubAddr,
             Properties->PortNumber,
+            Properties->TtHubAddr,
+            Properties->TtPortNumber,
             Endpoint->RequiresSplit,
             Endpoint->BufferPA,
             Endpoint->BufferVA);
@@ -803,7 +877,8 @@ Dwc2CloseEndpoint(
 
     if (Endpoint->Transfer && Endpoint->Transfer->Channel != DWC2_INVALID_CHANNEL)
     {
-        Dwc2HaltChannel(Extension, Endpoint->Transfer->Channel);
+        if (!Dwc2HaltChannel(Extension, Endpoint->Transfer->Channel))
+            Dwc2RegPacket.UsbPortInvalidateController(Extension, USBPORT_INVALIDATE_CONTROLLER_RESET);
         Dwc2ReleaseChannel(Extension, Endpoint->Transfer);
     }
 
@@ -815,6 +890,8 @@ Dwc2CloseEndpoint(
     }
 
     Endpoint->State = USBPORT_ENDPOINT_CLOSED;
+    Dwc2UpdateSofMask(Extension);
+    Dwc2TryStartPending(Extension, FALSE);
     DPRINT1("[DWC2] endpoint close ep=%p\n", Endpoint);
 }
 
@@ -932,9 +1009,9 @@ Dwc2InterruptService(
     if (!InterruptStatus)
         return FALSE;
 
-    Extension->PendingGlobalInterrupts |= InterruptStatus;
+    InterlockedOr(&Extension->PendingGlobalInterrupts, (LONG)InterruptStatus);
     if (InterruptStatus & DWC2_GINT_HCHINT)
-        Extension->PendingChannelInterrupts |= Dwc2ReadRegister(Extension, DWC2_HAINT) & Dwc2ReadRegister(Extension, DWC2_HAINTMSK);
+        InterlockedOr(&Extension->PendingChannelInterrupts, (LONG)(Dwc2ReadRegister(Extension, DWC2_HAINT) & Dwc2ReadRegister(Extension, DWC2_HAINTMSK)));
 
     Dwc2WriteRegister(Extension, DWC2_GINTSTS, InterruptStatus & ~(DWC2_GINT_HCHINT | DWC2_GINT_PRTINT));
     return TRUE;
@@ -952,14 +1029,14 @@ Dwc2InterruptDpc(
     ULONG Index;
     BOOLEAN FromSof;
 
-    GlobalInterrupts = Extension->PendingGlobalInterrupts;
-    Extension->PendingGlobalInterrupts = 0;
-    ChannelBits = Extension->PendingChannelInterrupts;
-    Extension->PendingChannelInterrupts = 0;
+    GlobalInterrupts = (ULONG)InterlockedExchange(&Extension->PendingGlobalInterrupts, 0);
+    ChannelBits = (ULONG)InterlockedExchange(&Extension->PendingChannelInterrupts, 0);
 
     GlobalInterrupts |= Dwc2ReadRegister(Extension, DWC2_GINTSTS) & Dwc2ReadRegister(Extension, DWC2_GINTMSK);
     ChannelBits |= Dwc2ReadRegister(Extension, DWC2_HAINT) & Dwc2ReadRegister(Extension, DWC2_HAINTMSK);
     FromSof = !!(GlobalInterrupts & DWC2_GINT_SOF);
+    if (FromSof)
+        Extension->SofCount++;
 
     if (GlobalInterrupts & (DWC2_GINT_PRTINT | DWC2_GINT_DISCONNINT | DWC2_GINT_WKUPINT))
     {
@@ -1048,7 +1125,8 @@ Dwc2AbortTransfer(
     *CompletedLength = Transfer->BytesTransferred;
     if (Transfer->Channel != DWC2_INVALID_CHANNEL)
     {
-        Dwc2HaltChannel(Extension, Transfer->Channel);
+        if (!Dwc2HaltChannel(Extension, Transfer->Channel))
+            Dwc2RegPacket.UsbPortInvalidateController(Extension, USBPORT_INVALIDATE_CONTROLLER_RESET);
         Dwc2ReleaseChannel(Extension, Transfer);
     }
 
@@ -1173,6 +1251,53 @@ Dwc2DisableInterrupts(
 }
 
 static VOID
+Dwc2DiagnoseStalledChannels(
+    _In_ PDWC2_EXTENSION Extension)
+{
+    ULONGLONG CurrentTime = KeQueryInterruptTime();
+    ULONG Index;
+
+    for (Index = 0; Index < Extension->NumberOfChannels; Index++)
+    {
+        PDWC2_ENDPOINT Endpoint = Extension->Channels[Index];
+        PDWC2_TRANSFER Transfer;
+        ULONG Character;
+
+        if (!Endpoint || !Endpoint->Transfer)
+            continue;
+
+        Transfer = Endpoint->Transfer;
+        if (Transfer->Done || Transfer->HangDiagnosticLogged || !Transfer->StageStartTime)
+            continue;
+        if (CurrentTime - Transfer->StageStartTime < DWC2_HANG_DIAGNOSTIC_INTERVAL)
+            continue;
+
+        Character = Dwc2ReadRegister(Extension, DWC2_HCCHAR(Index));
+        if (!(Character & DWC2_HCCHAR_CHENA))
+            continue;
+
+        Transfer->HangDiagnosticLogged = TRUE;
+        DPRINT1("[DWC2] CH%lu stalled for >=250ms stage=%u addr=%u ep=%u GAHBCFG=%08lx GINTSTS=%08lx GINTMSK=%08lx HAINT=%08lx HAINTMSK=%08lx HCCHAR=%08lx HCSPLT=%08lx HCINT=%08lx HCINTMSK=%08lx HCTSIZ=%08lx HCDMA=%08lx HPRT0=%08lx\n",
+                Index,
+                Transfer->Stage,
+                Endpoint->Properties.DeviceAddress,
+                Endpoint->Properties.EndpointAddress,
+                Dwc2ReadRegister(Extension, DWC2_GAHBCFG),
+                Dwc2ReadRegister(Extension, DWC2_GINTSTS),
+                Dwc2ReadRegister(Extension, DWC2_GINTMSK),
+                Dwc2ReadRegister(Extension, DWC2_HAINT),
+                Dwc2ReadRegister(Extension, DWC2_HAINTMSK),
+                Character,
+                Dwc2ReadRegister(Extension, DWC2_HCSPLT(Index)),
+                Dwc2ReadRegister(Extension, DWC2_HCINT(Index)),
+                Dwc2ReadRegister(Extension, DWC2_HCINTMSK(Index)),
+                Dwc2ReadRegister(Extension, DWC2_HCTSIZ(Index)),
+                Dwc2ReadRegister(Extension, DWC2_HCDMA(Index)),
+                Dwc2ReadRegister(Extension, DWC2_HPRT0));
+    }
+}
+
+static VOID
 NTAPI
 Dwc2PollController(
     _In_ PVOID MiniportExtension)
@@ -1190,6 +1315,7 @@ Dwc2PollController(
         Dwc2RegPacket.UsbPortInvalidateRootHub(Extension);
 
     Dwc2InterruptDpc(Extension, FALSE);
+    Dwc2DiagnoseStalledChannels(Extension);
 }
 
 static VOID
