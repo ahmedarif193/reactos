@@ -2284,6 +2284,9 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     ULONG ExecuteOptions = 0;
     PVOID ViewBase;
     BOOLEAN IsWow64 = FALSE;
+#if defined(_M_ARM64)
+    BOOLEAN IsChpe = FALSE;
+#endif
     SIZE_T HeapReserve, HeapCommit;
 
     /* Set a NULL SEH Filter */
@@ -2309,6 +2312,9 @@ LdrpInitializeProcess(IN PCONTEXT Context,
 
 #ifdef _M_AMD64
     IsWow64 = Teb->WowTebOffset && NtHeader->FileHeader.Machine == IMAGE_FILE_MACHINE_I386;
+#endif
+#if defined(_M_ARM64)
+    IsChpe = ChpeIsChpeProcess();
 #endif
 
     if (IsWow64)
@@ -2771,8 +2777,10 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     LdrpInsertMemoryTableEntry(NtLdrEntry);
 
 #if defined(_M_ARM64)
-    if (ChpeIsChpeProcess())
+    if (IsChpe)
     {
+        RtlpInitializeKeyedEvent();
+        RtlpInitializeThreadPooling();
         Status = ChpeInitializeProcess();
         if (!NT_SUCCESS(Status))
         {
@@ -2969,8 +2977,16 @@ LdrpInitializeProcess(IN PCONTEXT Context,
 
     /* Following two calls are for Vista+ support, required for winesync */
     /* Initialize the keyed event for condition variables */
+#if defined(_M_ARM64)
+    if (!IsChpe)
+    {
+        RtlpInitializeKeyedEvent();
+        RtlpInitializeThreadPooling();
+    }
+#else
     RtlpInitializeKeyedEvent();
     RtlpInitializeThreadPooling();
+#endif
 
     /* Initialize TLS */
     Status = LdrpInitializeTls();
