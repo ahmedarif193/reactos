@@ -1649,11 +1649,7 @@ ChpeCallX64DllMain(PVOID EntryPoint,
     if (!NT_SUCCESS(Status))
         return FALSE;
 
-    return (BOOLEAN)ChpepCallX64Routine(EntryPoint,
-                                        (ULONG_PTR)BaseAddress,
-                                        Reason,
-                                        (ULONG_PTR)Context,
-                                        0);
+    return (BOOLEAN)ChpepCallX64Routine(EntryPoint, (ULONG_PTR)BaseAddress, Reason, (ULONG_PTR)Context, 0);
 }
 
 VOID
