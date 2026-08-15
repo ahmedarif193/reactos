@@ -923,7 +923,7 @@ DrvCreateContext(
 
     Context->Hdc = Hdc;
     Context->Visual = gl_create_visual(GL_TRUE,
-                                      GL_TRUE,
+                                      GL_FALSE,
                                       GL_TRUE,
                                       24,
                                       8,
