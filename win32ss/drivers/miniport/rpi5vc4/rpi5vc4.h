@@ -81,6 +81,15 @@ typedef struct _RPI5VC4_DEVICE_EXTENSION
     ULONG V3dCoreIdent[3];
     ULONG V3dMmuDebugInfo;
 
+    /* GPU-addressable buffers owned by this ACPI GPU0 miniport instance. */
+    PVP_DMA_ADAPTER V3dDmaAdapter;
+    PVOID V3dPageTableVa;
+    PHYSICAL_ADDRESS V3dPageTableLogical;
+    PVOID V3dWorkVa;
+    PHYSICAL_ADDRESS V3dWorkLogical;
+    LONG V3dSelfTestBusy;
+    BOOLEAN V3dExecutionPoisoned;
+
     /* Cached MMIO mapping of the active PixelValve (mapped once, reused). */
     PVOID PixelValveBase;
 

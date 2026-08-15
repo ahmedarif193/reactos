@@ -32,27 +32,44 @@ DrvEscape(
             return 0;
 
         RequestedEscape = *(PULONG)pvIn;
-        return RequestedEscape == RPI5VC4_ESCAPE_QUERY_V3D;
+        return RequestedEscape == RPI5VC4_ESCAPE_QUERY_V3D ||
+               RequestedEscape == RPI5VC4_ESCAPE_RUN_V3D_SELFTEST;
     }
 
-    if (iEsc != RPI5VC4_ESCAPE_QUERY_V3D ||
-        pvOut == NULL ||
-        cjOut < sizeof(RPI5VC4_V3D_INFO))
+    if (pvOut == NULL)
     {
         return 0;
     }
 
     Returned = 0;
-    if (EngDeviceIoControl(Device->hDriver,
-                           IOCTL_VIDEO_RPI5VC4_QUERY_V3D,
-                           NULL,
-                           0,
-                           pvOut,
-                           cjOut,
-                           &Returned) != 0)
+    if (iEsc == RPI5VC4_ESCAPE_QUERY_V3D &&
+        cjOut >= sizeof(RPI5VC4_V3D_INFO))
     {
-        return 0;
+        if (EngDeviceIoControl(Device->hDriver,
+                               IOCTL_VIDEO_RPI5VC4_QUERY_V3D,
+                               NULL,
+                               0,
+                               pvOut,
+                               cjOut,
+                               &Returned) == 0)
+        {
+            return Returned;
+        }
+    }
+    else if (iEsc == RPI5VC4_ESCAPE_RUN_V3D_SELFTEST &&
+             cjOut >= sizeof(RPI5VC4_V3D_SELFTEST))
+    {
+        if (EngDeviceIoControl(Device->hDriver,
+                               IOCTL_VIDEO_RPI5VC4_RUN_V3D_SELFTEST,
+                               NULL,
+                               0,
+                               pvOut,
+                               cjOut,
+                               &Returned) == 0)
+        {
+            return Returned;
+        }
     }
 
-    return Returned;
+    return 0;
 }
