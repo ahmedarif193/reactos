@@ -1002,15 +1002,37 @@ ChpepCallX64Routine(PVOID EntryPoint,
     if (!ChpeEmulatorLoaded || !ChpeDispatchTable.ExitToX64)
         return 0;
 
+    /* FEX uses the ARM64 callee-saved register bank for the x64 CPU state. */
     __asm__ volatile(
+        "sub sp, sp, #0x100\n"
+        "stp x19, x20, [sp, #0x20]\n"
+        "stp x21, x22, [sp, #0x30]\n"
+        "stp x23, x24, [sp, #0x40]\n"
+        "stp x25, x26, [sp, #0x50]\n"
+        "stp x27, x28, [sp, #0x60]\n"
+        "str x29, [sp, #0x70]\n"
+        "stp q8, q9, [sp, #0x80]\n"
+        "stp q10, q11, [sp, #0xa0]\n"
+        "stp q12, q13, [sp, #0xc0]\n"
+        "stp q14, q15, [sp, #0xe0]\n"
         "mov x0, %x[arg0]\n"
         "mov x1, %x[arg1]\n"
         "mov x2, %x[arg2]\n"
         "mov x3, %x[arg3]\n"
         "mov x9, %x[target]\n"
-        "sub sp, sp, #0x20\n"
-        "blr %x[dispatch]\n"
-        "add sp, sp, #0x20\n"
+        "mov x16, %x[dispatch]\n"
+        "blr x16\n"
+        "ldp q14, q15, [sp, #0xe0]\n"
+        "ldp q12, q13, [sp, #0xc0]\n"
+        "ldp q10, q11, [sp, #0xa0]\n"
+        "ldp q8, q9, [sp, #0x80]\n"
+        "ldr x29, [sp, #0x70]\n"
+        "ldp x27, x28, [sp, #0x60]\n"
+        "ldp x25, x26, [sp, #0x50]\n"
+        "ldp x23, x24, [sp, #0x40]\n"
+        "ldp x21, x22, [sp, #0x30]\n"
+        "ldp x19, x20, [sp, #0x20]\n"
+        "add sp, sp, #0x100\n"
         "mov %x[result], x0\n"
         : [result] "=r" (Result)
         : [arg0] "r" (Arg0),
@@ -1021,7 +1043,7 @@ ChpepCallX64Routine(PVOID EntryPoint,
           [dispatch] "r" (ChpeDispatchTable.ExitToX64)
         : "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7",
           "x8", "x9", "x10", "x11", "x12", "x13", "x14",
-          "x15", "x16", "x17", "x30", "memory");
+          "x15", "x16", "x17", "x30", "cc", "memory");
 
     return Result;
 }
