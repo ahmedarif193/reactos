@@ -31,8 +31,10 @@
 #define RPI5VC4_OPENGL_ICD_DRIVER_VERSION 1
 #define RPI5VC4_OPENGL_ENTRY_COUNT 336
 #define RPI5VC4_OPENGL_PIXEL_FORMAT_COUNT 1
+#define RPI5VC4_OPENGL_TEX_IMAGE_2D_INDEX 183
 #define RPI5VC4_OPENGL_GET_TEX_IMAGE_INDEX 281
 #define RPI5VC4_OPENGL_DRAW_ARRAYS_INDEX 310
+#define RPI5VC4_OPENGL_TEX_SUB_IMAGE_2D_INDEX 333
 
 DECLARE_HANDLE(DHGLRC);
 
@@ -1418,10 +1420,14 @@ Rpi5OglInitializeProcTable(VOID)
     CopyMemory(Rpi5OglProcTable.Entries,
                Rpi5OglDispatchEntries,
                sizeof(Rpi5OglDispatchEntries));
+    Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_TEX_IMAGE_2D_INDEX] =
+        (PROC)Rpi5OglFboTexImage2D;
     Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_GET_TEX_IMAGE_INDEX] =
         (PROC)Rpi5OglFboGetTexImage;
     Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_DRAW_ARRAYS_INDEX] =
         (PROC)Rpi5OglDrawArrays;
+    Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_TEX_SUB_IMAGE_2D_INDEX] =
+        (PROC)Rpi5OglFboTexSubImage2D;
 }
 
 static VOID
