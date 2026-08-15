@@ -59,6 +59,7 @@ enum _ARCH
     ARCH_IA64,
     ARCH_ARM,
     ARCH_ARM64,
+    ARCH_ARM64EC,
     ARCH_PPC
 };
 
@@ -479,7 +480,7 @@ OutputHeader_asmstub(FILE *file, char *libname)
     {
         fprintf(file, ".code\n");
     }
-    else if (giArch == ARCH_ARM || giArch == ARCH_ARM64)
+    else if (giArch == ARCH_ARM || giArch == ARCH_ARM64 || giArch == ARCH_ARM64EC)
     {
         fprintf(file, "    AREA |.text|,ALIGN=2,CODE,READONLY\n\n");
     }
@@ -488,7 +489,7 @@ OutputHeader_asmstub(FILE *file, char *libname)
 void
 Output_stublabel(FILE *fileDest, char* pszSymbolName)
 {
-    if (giArch == ARCH_ARM || giArch == ARCH_ARM64)
+    if (giArch == ARCH_ARM || giArch == ARCH_ARM64 || giArch == ARCH_ARM64EC)
     {
         fprintf(fileDest,
                 "\tEXPORT |%s| [FUNC]\n|%s|\n",
@@ -899,7 +900,7 @@ PrintNameOrImpName(FILE *fileDest, EXPORT *pexp, PSTRING pstr, int fDeco, int fI
 void
 OutputAlias(FILE *fileDest, EXPORT *pexp, int fImp)
 {
-    if ((giArch == ARCH_ARM) || (giArch == ARCH_ARM64))
+    if ((giArch == ARCH_ARM) || (giArch == ARCH_ARM64) || (giArch == ARCH_ARM64EC))
     {
         fprintf(fileDest, "    IMPORT ");
         PrintNameOrImpName(fileDest, pexp, &pexp->strName, 1, fImp);
@@ -1164,7 +1165,8 @@ ParseFile(char* pcStart, FILE *fileDest, unsigned *cExports)
                     }
 
                     if (CompareToken(pc, pszArchString) ||
-                        CompareToken(pc, pszArchString2))
+                        CompareToken(pc, pszArchString2) ||
+                        ((giArch == ARCH_ARM64EC) && CompareToken(pc, "arm64")))
                     {
                         match = 1;
                     }
@@ -1629,7 +1631,7 @@ void usage(void)
            "  --version=<version>     Sets the version to create exports for\n"
            "  --implib                generate a def file for an import library\n"
            "  --no-private-warnings   suppress warnings about symbols that should be -private\n"
-           "  -a=<arch>               set architecture to <arch> (i386, x86_64, arm, arm64)\n"
+           "  -a=<arch>               set architecture to <arch> (i386, x86_64, arm, arm64, arm64ec)\n"
            "  --with-tracing          generate wine-like \"+relay\" trace trampolines (needs -s)\n");
 }
 
@@ -1728,9 +1730,11 @@ int main(int argc, char *argv[])
     else if (strcasecmp(pszArchString, "ia64") == 0) giArch = ARCH_IA64;
     else if (strcasecmp(pszArchString, "arm") == 0) giArch = ARCH_ARM;
     else if (strcasecmp(pszArchString, "arm64") == 0) giArch = ARCH_ARM64;
+    else if (strcasecmp(pszArchString, "arm64ec") == 0) giArch = ARCH_ARM64EC;
     else if (strcasecmp(pszArchString, "ppc") == 0) giArch = ARCH_PPC;
 
-    if ((giArch == ARCH_AMD64) || (giArch == ARCH_IA64) || (giArch == ARCH_ARM64))
+    if ((giArch == ARCH_AMD64) || (giArch == ARCH_IA64) ||
+        (giArch == ARCH_ARM64) || (giArch == ARCH_ARM64EC))
     {
         pszArchString2 = "win64";
     }
