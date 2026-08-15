@@ -29,6 +29,7 @@
 #define RPI5VC4_OPENGL_ICD_DRIVER_VERSION 1
 #define RPI5VC4_OPENGL_ENTRY_COUNT 336
 #define RPI5VC4_OPENGL_PIXEL_FORMAT_COUNT 1
+#define RPI5VC4_OPENGL_DRAW_ARRAYS_INDEX 310
 
 DECLARE_HANDLE(DHGLRC);
 
@@ -433,36 +434,26 @@ Rpi5OglTriangleStateSupported(
 }
 
 static BOOL
-Rpi5OglHardwareTriangle(
+Rpi5OglSubmitTriangle(
     _Inout_ PRPI5VC4_OGL_CONTEXT Context,
     _In_ GLcontext *Mesa,
-    _In_ GLuint Vertex0,
-    _In_ GLuint Vertex1,
-    _In_ GLuint Vertex2,
-    _In_ GLuint ProvokingVertex)
+    _In_reads_(3) const RPI5VC4_V3D_VERTEX Vertices[3],
+    _In_ GLuint ProgramName)
 {
-    const GLuint VertexIndices[3] = {Vertex0, Vertex1, Vertex2};
     RPI5VC4_V3D_TRIANGLE_REQUEST Request;
     PRPI5VC4_V3D_TRIANGLE_RESULT Result;
-    struct vertex_buffer *VertexBuffer = Mesa->VB;
     ULONG HeaderSize = FIELD_OFFSET(RPI5VC4_V3D_TRIANGLE_RESULT, Pixels);
     ULONG Width;
     ULONG Height;
     ULONG PixelBytes;
     ULONG ResultSize;
     ULONG Row;
-    ULONG Vertex;
     INT Returned;
     BOOL Success;
 
     if (Context == NULL ||
         !Rpi5OglTriangleStateSupported(Mesa) ||
-        VertexBuffer == NULL ||
-        VertexBuffer->Color == NULL ||
-        Vertex0 >= VB_SIZE ||
-        Vertex1 >= VB_SIZE ||
-        Vertex2 >= VB_SIZE ||
-        ProvokingVertex >= VB_SIZE ||
+        Vertices == NULL ||
         !Rpi5OglRefreshDrawable(Context) ||
         !Context->HardwareClearFresh)
     {
@@ -490,16 +481,7 @@ Rpi5OglHardwareTriangle(
     Request.Width = Width;
     Request.Height = Height;
     Request.ClearColor = Context->HardwareClearColor;
-    for (Vertex = 0; Vertex < RTL_NUMBER_OF(VertexIndices); Vertex++)
-    {
-        GLuint ColorVertex = Mesa->Light.ShadeModel == GL_FLAT ?
-                             ProvokingVertex : VertexIndices[Vertex];
-
-        Rpi5OglFillTriangleVertex(
-            &Request.Vertices[Vertex],
-            VertexBuffer->Clip[VertexIndices[Vertex]],
-            VertexBuffer->Color[ColorVertex]);
-    }
+    CopyMemory(Request.Vertices, Vertices, sizeof(Request.Vertices));
 
     Returned = ExtEscape(Context->Hdc,
                          RPI5VC4_ESCAPE_RENDER_TRIANGLE,
@@ -530,11 +512,10 @@ Rpi5OglHardwareTriangle(
                        Width * sizeof(ULONG));
         }
         Context->Stats.HardwareTriangleCount++;
-        if (Rpi5OglGl2ProgramActive(Context->Gl2State))
+        if (ProgramName != 0)
         {
             Context->Stats.HardwareProgramTriangleCount++;
-            Context->Stats.LastProgramTriangleName =
-                Rpi5OglGl2CurrentProgramName(Context->Gl2State);
+            Context->Stats.LastProgramTriangleName = ProgramName;
         }
         Context->Stats.LastTriangleWidth = Width;
         Context->Stats.LastTriangleHeight = Height;
@@ -548,6 +529,92 @@ Rpi5OglHardwareTriangle(
 
     HeapFree(GetProcessHeap(), 0, Result);
     return Success;
+}
+
+static BOOL
+Rpi5OglHardwareTriangle(
+    _Inout_ PRPI5VC4_OGL_CONTEXT Context,
+    _In_ GLcontext *Mesa,
+    _In_ GLuint Vertex0,
+    _In_ GLuint Vertex1,
+    _In_ GLuint Vertex2,
+    _In_ GLuint ProvokingVertex)
+{
+    const GLuint VertexIndices[3] = {Vertex0, Vertex1, Vertex2};
+    RPI5VC4_V3D_VERTEX Vertices[3];
+    struct vertex_buffer *VertexBuffer = Mesa->VB;
+    ULONG Vertex;
+
+    if (VertexBuffer == NULL ||
+        VertexBuffer->Color == NULL ||
+        Vertex0 >= VB_SIZE ||
+        Vertex1 >= VB_SIZE ||
+        Vertex2 >= VB_SIZE ||
+        ProvokingVertex >= VB_SIZE)
+    {
+        return FALSE;
+    }
+
+    for (Vertex = 0; Vertex < RTL_NUMBER_OF(VertexIndices); Vertex++)
+    {
+        GLuint ColorVertex = Mesa->Light.ShadeModel == GL_FLAT ?
+                             ProvokingVertex : VertexIndices[Vertex];
+
+        Rpi5OglFillTriangleVertex(
+            &Vertices[Vertex],
+            VertexBuffer->Clip[VertexIndices[Vertex]],
+            VertexBuffer->Color[ColorVertex]);
+    }
+    return Rpi5OglSubmitTriangle(
+        Context,
+        Mesa,
+        Vertices,
+        Rpi5OglGl2CurrentProgramName(Context->Gl2State));
+}
+
+static VOID APIENTRY
+Rpi5OglDrawArrays(
+    _In_ GLenum Mode,
+    _In_ GLint First,
+    _In_ GLsizei Count)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+    RPI5VC4_OGL_GL2_VERTEX Gl2Vertices[3];
+    RPI5VC4_V3D_VERTEX Vertices[3];
+    RPI5VC4_OGL_GL2_DRAW_RESULT DrawResult;
+    ULONG Vertex;
+
+    if (Context == NULL)
+        return;
+    DrawResult = Rpi5OglGl2BuildTriangle(Context->Gl2State,
+                                         Mode,
+                                         First,
+                                         Count,
+                                         Gl2Vertices);
+    if (DrawResult == Rpi5OglGl2DrawNotApplicable)
+    {
+        _mesa_DrawArrays(Mode, First, Count);
+        return;
+    }
+    if (DrawResult == Rpi5OglGl2DrawRejected)
+        return;
+
+    for (Vertex = 0; Vertex < RTL_NUMBER_OF(Vertices); Vertex++)
+    {
+        Rpi5OglFillTriangleVertex(&Vertices[Vertex],
+                                  Gl2Vertices[Vertex].Position,
+                                  Gl2Vertices[Vertex].Color);
+    }
+    if (!Rpi5OglSubmitTriangle(
+            Context,
+            Context->MesaContext,
+            Vertices,
+            Rpi5OglGl2CurrentProgramName(Context->Gl2State)))
+    {
+        gl_error(Context->MesaContext,
+                 GL_INVALID_OPERATION,
+                 "glDrawArrays(RPi5 V3D submission)");
+    }
 }
 
 static VOID
@@ -1062,6 +1129,8 @@ Rpi5OglInitializeProcTable(VOID)
     CopyMemory(Rpi5OglProcTable.Entries,
                Rpi5OglDispatchEntries,
                sizeof(Rpi5OglDispatchEntries));
+    Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_DRAW_ARRAYS_INDEX] =
+        (PROC)Rpi5OglDrawArrays;
 }
 
 static VOID
