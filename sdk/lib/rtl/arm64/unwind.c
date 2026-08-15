@@ -26,6 +26,14 @@
 #define ARM64_XDATA_FUNCTION_LENGTH_MASK 0x3FFFFUL
 
 VOID NTAPI RtlRestoreContext(_In_ PCONTEXT ContextRecord, _In_opt_ PEXCEPTION_RECORD ExceptionRecord);
+BOOLEAN NTAPI RtlIsEcCode(_In_ ULONG_PTR CodeAddress);
+
+PRUNTIME_FUNCTION
+NTAPI
+RtlLookupFunctionTable(
+    _In_ ULONG_PTR ControlPc,
+    _Out_ PULONG_PTR ImageBase,
+    _Out_ PULONG Length);
 
 PRUNTIME_FUNCTION
 NTAPI
@@ -89,6 +97,82 @@ typedef struct _ARM64_XDATA_EPILOG
     DWORD index : 10;
 } ARM64_XDATA_EPILOG;
 
+typedef struct _RTL_ARM64EC_METADATA
+{
+    ULONG Version;
+    ULONG CodeMap;
+    ULONG CodeMapCount;
+    ULONG CodeRangesToEntryPoints;
+    ULONG RedirectionMetadata;
+    ULONG DispatchCallNoRedirect;
+    ULONG DispatchRet;
+    ULONG DispatchCall;
+    ULONG DispatchIcall;
+    ULONG DispatchIcallCfg;
+    ULONG AlternateEntryPoint;
+    ULONG AuxiliaryIat;
+    ULONG CodeRangesToEntryPointsCount;
+    ULONG RedirectionMetadataCount;
+    ULONG GetX64InformationFunctionPointer;
+    ULONG SetX64InformationFunctionPointer;
+    ULONG ExtraRfeTable;
+    ULONG ExtraRfeTableSize;
+} RTL_ARM64EC_METADATA, *PRTL_ARM64EC_METADATA;
+
+static PRUNTIME_FUNCTION
+RtlpArm64GetImageFunctionTable(
+    _In_ ULONG_PTR ControlPc,
+    _In_ PVOID ImageBase,
+    _In_ PIMAGE_NT_HEADERS NtHeaders,
+    _Out_ PULONG TableSize)
+{
+    PIMAGE_LOAD_CONFIG_DIRECTORY LoadConfig;
+    PRTL_ARM64EC_METADATA Metadata;
+    ULONG LoadConfigSize;
+    ULONG_PTR ImageStart, ImageEnd, Candidate;
+    ULONG SizeOfImage;
+
+    *TableSize = 0;
+
+    if (!RtlIsEcCode(ControlPc))
+        return RtlImageDirectoryEntryToData(ImageBase, TRUE, IMAGE_DIRECTORY_ENTRY_EXCEPTION, TableSize);
+
+    LoadConfig = RtlImageDirectoryEntryToData(ImageBase, TRUE, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG, &LoadConfigSize);
+    if (!LoadConfig ||
+        LoadConfigSize < RTL_SIZEOF_THROUGH_FIELD(IMAGE_LOAD_CONFIG_DIRECTORY, CHPEMetadataPointer))
+    {
+        return NULL;
+    }
+
+    SizeOfImage = NtHeaders->OptionalHeader.SizeOfImage;
+    ImageStart = (ULONG_PTR)ImageBase;
+    if (SizeOfImage < sizeof(*Metadata))
+        return NULL;
+
+    ImageEnd = ImageStart + SizeOfImage;
+    Candidate = (ULONG_PTR)LoadConfig->CHPEMetadataPointer;
+    if (ImageEnd < ImageStart ||
+        Candidate < ImageStart ||
+        Candidate > ImageEnd - sizeof(*Metadata))
+    {
+        return NULL;
+    }
+
+    Metadata = (PRTL_ARM64EC_METADATA)Candidate;
+    if (Metadata->Version != 1 ||
+        Metadata->ExtraRfeTable == 0 ||
+        Metadata->ExtraRfeTableSize < sizeof(RUNTIME_FUNCTION) ||
+        Metadata->ExtraRfeTableSize % sizeof(RUNTIME_FUNCTION) != 0 ||
+        Metadata->ExtraRfeTable >= SizeOfImage ||
+        Metadata->ExtraRfeTableSize > SizeOfImage - Metadata->ExtraRfeTable)
+    {
+        return NULL;
+    }
+
+    *TableSize = Metadata->ExtraRfeTableSize;
+    return (PRUNTIME_FUNCTION)(ImageStart + Metadata->ExtraRfeTable);
+}
+
 ULONG
 RtlpArm64FunctionLength(
     _In_ ULONG_PTR ImageBase,
@@ -115,54 +199,16 @@ RtlLookupFunctionEntry(
     _Out_ PDWORD64 ImageBase,
     _Inout_opt_ PUNWIND_HISTORY_TABLE HistoryTable)
 {
-    PIMAGE_DOS_HEADER DosHeader = NULL;
-    PIMAGE_NT_HEADERS NtHeaders;
-    PIMAGE_DATA_DIRECTORY ExceptionDir;
     PRUNTIME_FUNCTION FunctionTable, FunctionEntry;
-    ULONG TableLength;
+    ULONG TableSize, TableLength;
     ULONG_PTR ControlRva;
     ULONG IndexLow, IndexHigh, IndexMid;
-    ULONG_PTR Cookie = 0;
-    PLIST_ENTRY ListHead, Entry;
-    PLDR_DATA_TABLE_ENTRY LdrEntry;
 
-    if (!NT_SUCCESS(LdrLockLoaderLock(0, NULL, &Cookie)))
-    {
-        goto LookupDynamic;
-    }
-
-    ListHead = &NtCurrentPeb()->Ldr->InLoadOrderModuleList;
-    for (Entry = ListHead->Flink; Entry != ListHead; Entry = Entry->Flink)
-    {
-        LdrEntry = CONTAINING_RECORD(Entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
-        if (ControlPc >= (ULONG_PTR)LdrEntry->DllBase &&
-            ControlPc < (ULONG_PTR)LdrEntry->DllBase + LdrEntry->SizeOfImage)
-        {
-            DosHeader = (PIMAGE_DOS_HEADER)LdrEntry->DllBase;
-            break;
-        }
-    }
-
-    LdrUnlockLoaderLock(0, Cookie);
-
-    if (DosHeader == NULL || DosHeader->e_magic != IMAGE_DOS_SIGNATURE)
-    {
-        goto LookupDynamic;
-    }
-
-    *ImageBase = (DWORD64)(ULONG_PTR)DosHeader;
-    NtHeaders = (PIMAGE_NT_HEADERS)((ULONG_PTR)DosHeader + DosHeader->e_lfanew);
-    if (NtHeaders->Signature != IMAGE_NT_SIGNATURE)
-    {
-        goto LookupDynamic;
-    }
-
-    ExceptionDir = &NtHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
-    if (ExceptionDir->VirtualAddress == 0 || ExceptionDir->Size == 0)
+    FunctionTable = RtlLookupFunctionTable(ControlPc, (PULONG_PTR)ImageBase, &TableSize);
+    if (FunctionTable == NULL)
         goto LookupDynamic;
 
-    FunctionTable = (PRUNTIME_FUNCTION)((ULONG_PTR)DosHeader + ExceptionDir->VirtualAddress);
-    TableLength = ExceptionDir->Size / sizeof(RUNTIME_FUNCTION);
+    TableLength = TableSize / sizeof(*FunctionTable);
     ControlRva = (ULONG_PTR)(ControlPc - *ImageBase);
 
     IndexLow = 0;
@@ -904,10 +950,21 @@ RtlLookupFunctionTable(
     _Out_ PULONG_PTR ImageBase,
     _Out_ PULONG Length)
 {
-    (VOID)ControlPc;
-    if (ImageBase)
-        *ImageBase = 0;
-    if (Length)
+    PIMAGE_NT_HEADERS NtHeaders;
+    PRUNTIME_FUNCTION FunctionTable;
+    PVOID BaseAddress;
+
+    if (!RtlPcToFileHeader((PVOID)ControlPc, &BaseAddress))
+        return NULL;
+
+    *ImageBase = (ULONG_PTR)BaseAddress;
+    NtHeaders = RtlImageNtHeader(BaseAddress);
+    if (!NtHeaders)
+    {
         *Length = 0;
-    return NULL;
+        return NULL;
+    }
+
+    FunctionTable = RtlpArm64GetImageFunctionTable(ControlPc, BaseAddress, NtHeaders, Length);
+    return FunctionTable;
 }
