@@ -96,9 +96,15 @@ typedef struct _ADAPTER_OBJECT {
     BOOLEAN ScatterGather;
     BOOLEAN IgnoreCount;
     BOOLEAN NeedsMapRegisters;
+    ULONG DmaAddressWidth;
 
     /* NUMA node affinity */
     USHORT NumaNode;
+
+    /* Per-device address translation supplied by the parent ACPI bus. */
+    ULONG Signature;
+    ULONG DmaWindowCount;
+    HAL_ACPI_DMA_WINDOW DmaWindows[HAL_ACPI_MAX_DMA_WINDOWS];
 } ADAPTER_OBJECT, *PADAPTER_OBJECT;
 
 /*
@@ -109,8 +115,11 @@ typedef struct _ADAPTER_OBJECT {
  */
 typedef struct _HAL_ARM64_MAP_REGISTER_ENTRY
 {
-    /* Virtual address of the original buffer */
+    /* Kernel physical-map alias used for bounce-buffer copies. */
     PVOID OriginalVa;
+
+    /* Original CurrentVa token used to match FlushAdapterBuffers ranges. */
+    PVOID MappedVa;
 
     /* Physical address returned to the device */
     PHYSICAL_ADDRESS PhysicalAddress;
@@ -129,7 +138,8 @@ typedef struct _HAL_ARM64_MAP_REGISTER_ENTRY
         struct {
             ULONG UsesBounceBuffer : 1;
             ULONG WriteToDevice : 1;
-            ULONG Reserved : 30;
+            ULONG CopyBackDone : 1;
+            ULONG Reserved : 29;
         };
         ULONG Flags;
     };
@@ -310,12 +320,13 @@ static ULONG HalpArm64PciRootBridgeCount = 0;
 #define TAG_DMA_BUF  'BMAD'
 #define TAG_DMA_CMN  'CMAD'
 #define TAG_DMA_SGL  'GSAD'
+#define TAG_DMA_ADAPTER 'AMAD'
+
+#define HAL_ARM64_DMA_ADAPTER_SIGNATURE 'ADMA'
 
 /* Maximum map registers per adapter */
 #define HAL_ARM64_MAX_MAP_REGISTERS 256
 
-/* Bounce buffer threshold - use bounce buffer if physical address exceeds this */
-#define HAL_ARM64_DMA_32BIT_LIMIT 0x100000000ULL
 #define HAL_ARM64_DMA_DEFAULT_ALIGNMENT 64
 
 #ifndef TAG_HAL
@@ -3472,6 +3483,203 @@ HalAllocateAdapterChannel(
     return STATUS_SUCCESS;
 }
 
+static ULONGLONG
+HalpArm64GetDmaAddressLimit(
+    _In_opt_ PADAPTER_OBJECT AdapterObject)
+{
+    if (!AdapterObject || AdapterObject->Signature != HAL_ARM64_DMA_ADAPTER_SIGNATURE || AdapterObject->DmaAddressWidth >= 64)
+        return 0;
+
+    return 1ULL << AdapterObject->DmaAddressWidth;
+}
+
+static BOOLEAN
+HalpArm64TranslateDmaAddress(
+    _In_opt_ PADAPTER_OBJECT AdapterObject,
+    _In_ PHYSICAL_ADDRESS CpuAddress,
+    _In_ ULONG Length,
+    _Out_ PPHYSICAL_ADDRESS DeviceAddress)
+{
+    ULONGLONG CpuEnd;
+    ULONGLONG DmaAddressLimit;
+    ULONGLONG DeviceEnd;
+    ULONGLONG EffectiveLength;
+    ULONG Index;
+
+    if (!DeviceAddress)
+        return FALSE;
+
+    DeviceAddress->QuadPart = 0;
+    EffectiveLength = Length ? Length : 1;
+    if (CpuAddress.QuadPart > MAXULONGLONG - (EffectiveLength - 1))
+        return FALSE;
+
+    CpuEnd = CpuAddress.QuadPart + EffectiveLength - 1;
+    DmaAddressLimit = HalpArm64GetDmaAddressLimit(AdapterObject);
+
+    if (AdapterObject && AdapterObject->Signature == HAL_ARM64_DMA_ADAPTER_SIGNATURE && AdapterObject->DmaWindowCount)
+    {
+        for (Index = 0; Index < AdapterObject->DmaWindowCount; Index++)
+        {
+            const HAL_ACPI_DMA_WINDOW *Window = &AdapterObject->DmaWindows[Index];
+            ULONGLONG WindowCpuEnd;
+            ULONGLONG Offset;
+
+            if (!Window->Length || Window->CpuBase > MAXULONGLONG - (Window->Length - 1))
+                continue;
+
+            WindowCpuEnd = Window->CpuBase + Window->Length - 1;
+            if (CpuAddress.QuadPart < Window->CpuBase || CpuEnd > WindowCpuEnd)
+                continue;
+
+            Offset = CpuAddress.QuadPart - Window->CpuBase;
+            if (Window->DeviceBase > MAXULONGLONG - Offset)
+                return FALSE;
+
+            DeviceAddress->QuadPart = Window->DeviceBase + Offset;
+            if (DeviceAddress->QuadPart > MAXULONGLONG - (EffectiveLength - 1))
+                return FALSE;
+
+            DeviceEnd = DeviceAddress->QuadPart + EffectiveLength - 1;
+            if (DmaAddressLimit && DeviceEnd >= DmaAddressLimit)
+            {
+                DeviceAddress->QuadPart = 0;
+                return FALSE;
+            }
+
+            return TRUE;
+        }
+
+        return FALSE;
+    }
+
+    *DeviceAddress = CpuAddress;
+    DeviceEnd = DeviceAddress->QuadPart + EffectiveLength - 1;
+    if (DmaAddressLimit && DeviceEnd >= DmaAddressLimit)
+    {
+        DeviceAddress->QuadPart = 0;
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static PVOID
+HalpArm64AllocateDmaMemory(
+    _In_opt_ PADAPTER_OBJECT AdapterObject,
+    _In_ ULONG Length,
+    _In_ MEMORY_CACHING_TYPE CacheType,
+    _Out_ PPHYSICAL_ADDRESS CpuAddress,
+    _Out_ PPHYSICAL_ADDRESS DeviceAddress)
+{
+    PHYSICAL_ADDRESS BoundaryAddress;
+    PHYSICAL_ADDRESS HighAddress;
+    PHYSICAL_ADDRESS LowAddress;
+    ULONGLONG DmaAddressLimit;
+    PVOID VirtualAddress;
+    ULONG Index;
+
+    CpuAddress->QuadPart = 0;
+    DeviceAddress->QuadPart = 0;
+    BoundaryAddress.QuadPart = 0;
+    DmaAddressLimit = HalpArm64GetDmaAddressLimit(AdapterObject);
+
+    if (AdapterObject && AdapterObject->Signature == HAL_ARM64_DMA_ADAPTER_SIGNATURE && AdapterObject->DmaWindowCount)
+    {
+        for (Index = 0; Index < AdapterObject->DmaWindowCount; Index++)
+        {
+            const HAL_ACPI_DMA_WINDOW *Window = &AdapterObject->DmaWindows[Index];
+            ULONGLONG AccessibleLength = Window->Length;
+
+            if (!Window->Length || Length > Window->Length || Window->CpuBase > MAXULONGLONG - (Window->Length - 1))
+                continue;
+            if (Window->DeviceBase > MAXULONGLONG - (Window->Length - 1))
+                continue;
+
+            if (DmaAddressLimit)
+            {
+                if (Window->DeviceBase >= DmaAddressLimit)
+                    continue;
+                if (AccessibleLength > DmaAddressLimit - Window->DeviceBase)
+                    AccessibleLength = DmaAddressLimit - Window->DeviceBase;
+                if (Length > AccessibleLength)
+                    continue;
+            }
+
+            LowAddress.QuadPart = Window->CpuBase;
+            HighAddress.QuadPart = Window->CpuBase + AccessibleLength - 1;
+            VirtualAddress = MmAllocateContiguousMemorySpecifyCache(Length, LowAddress, HighAddress, BoundaryAddress, CacheType);
+            if (!VirtualAddress)
+                continue;
+
+            *CpuAddress = MmGetPhysicalAddress(VirtualAddress);
+            if (HalpArm64TranslateDmaAddress(AdapterObject, *CpuAddress, Length, DeviceAddress))
+                return VirtualAddress;
+
+            MmFreeContiguousMemorySpecifyCache(VirtualAddress, Length, CacheType);
+        }
+
+        return NULL;
+    }
+
+    LowAddress.QuadPart = 0;
+    HighAddress.QuadPart = DmaAddressLimit ? DmaAddressLimit - 1 : MAXULONGLONG;
+    VirtualAddress = MmAllocateContiguousMemorySpecifyCache(Length, LowAddress, HighAddress, BoundaryAddress, CacheType);
+    if (!VirtualAddress)
+        return NULL;
+
+    *CpuAddress = MmGetPhysicalAddress(VirtualAddress);
+    if (HalpArm64TranslateDmaAddress(AdapterObject, *CpuAddress, Length, DeviceAddress))
+        return VirtualAddress;
+
+    MmFreeContiguousMemorySpecifyCache(VirtualAddress, Length, CacheType);
+    CpuAddress->QuadPart = 0;
+    return NULL;
+}
+
+BOOLEAN
+NTAPI
+HalpConfigureDmaAdapter(
+    _In_ PVOID DmaAdapter,
+    _In_reads_(WindowCount) const HAL_ACPI_DMA_WINDOW *Windows,
+    _In_ ULONG WindowCount)
+{
+    PADAPTER_OBJECT AdapterObject = DmaAdapter;
+    ULONG Index;
+
+    if (!AdapterObject || AdapterObject->Signature != HAL_ARM64_DMA_ADAPTER_SIGNATURE)
+        return FALSE;
+    if (WindowCount > HAL_ACPI_MAX_DMA_WINDOWS || (WindowCount && !Windows))
+        return FALSE;
+
+    for (Index = 0; Index < WindowCount; Index++)
+    {
+        if (!Windows[Index].Length)
+            return FALSE;
+        if (Windows[Index].CpuBase > MAXULONGLONG - (Windows[Index].Length - 1))
+            return FALSE;
+        if (Windows[Index].DeviceBase > MAXULONGLONG - (Windows[Index].Length - 1))
+            return FALSE;
+    }
+
+    RtlZeroMemory(AdapterObject->DmaWindows, sizeof(AdapterObject->DmaWindows));
+    if (WindowCount)
+        RtlCopyMemory(AdapterObject->DmaWindows, Windows, WindowCount * sizeof(*Windows));
+    KeMemoryBarrier();
+    AdapterObject->DmaWindowCount = WindowCount;
+
+    for (Index = 0; Index < WindowCount; Index++)
+    {
+        DPRINT1("[arm64][DMA] window %lu device=%I64x cpu=%I64x length=%I64x\n",
+                Index,
+                Windows[Index].DeviceBase,
+                Windows[Index].CpuBase,
+                Windows[Index].Length);
+    }
+
+    return TRUE;
+}
+
 /*
  * HalAllocateCommonBuffer
  *
@@ -3489,9 +3697,7 @@ HalAllocateCommonBuffer(
     _Out_ PPHYSICAL_ADDRESS LogicalAddress,
     _In_ BOOLEAN CacheEnabled)
 {
-    PHYSICAL_ADDRESS LowAddress;
-    PHYSICAL_ADDRESS HighAddress;
-    PHYSICAL_ADDRESS BoundaryAddress;
+    PHYSICAL_ADDRESS CpuAddress;
     MEMORY_CACHING_TYPE CacheType;
     PVOID VirtualAddress;
     PHAL_ARM64_COMMON_BUFFER BufferEntry;
@@ -3516,15 +3722,12 @@ HalAllocateCommonBuffer(
         Alignment = HAL_ARM64_DMA_DEFAULT_ALIGNMENT;
 
     /* Round length up to alignment */
+    if (Length > MAXULONG - (Alignment - 1))
+    {
+        LogicalAddress->QuadPart = 0;
+        return NULL;
+    }
     Length = (Length + Alignment - 1) & ~(Alignment - 1);
-
-    /* Set memory constraints */
-    LowAddress.QuadPart = 0;
-    if (AdapterObject && !AdapterObject->Dma64BitAddresses)
-        HighAddress.QuadPart = HAL_ARM64_DMA_32BIT_LIMIT - 1;
-    else
-        HighAddress.QuadPart = ~0ULL;
-    BoundaryAddress.QuadPart = 0;
 
     /*
      * ARM64 DMA common buffer cache type.
@@ -3548,12 +3751,8 @@ HalAllocateCommonBuffer(
                 MmCached :
                 MmNonCached;
 
-    /* Allocate physically contiguous memory */
-    VirtualAddress = MmAllocateContiguousMemorySpecifyCache(Length,
-                                                             LowAddress,
-                                                             HighAddress,
-                                                             BoundaryAddress,
-                                                             CacheType);
+    /* Allocate from a CPU range reachable through this device's DMA window. */
+    VirtualAddress = HalpArm64AllocateDmaMemory(AdapterObject, Length, CacheType, &CpuAddress, LogicalAddress);
     if (!VirtualAddress)
     {
         DPRINT1("[arm64][DMA] HalAllocateCommonBuffer: allocation failed (len=%lu)\n", Length);
@@ -3562,13 +3761,6 @@ HalAllocateCommonBuffer(
     }
 
     RtlZeroMemory(VirtualAddress, Length);
-    *LogicalAddress = MmGetPhysicalAddress(VirtualAddress);
-
-    if (LogicalAddress->QuadPart == 0)
-    {
-        MmFreeContiguousMemorySpecifyCache(VirtualAddress, Length, CacheType);
-        return NULL;
-    }
 
     /* For non-coherent systems, clean and invalidate cache */
     if (CacheType == MmCached && !HalpArm64DmaCoherency.SystemCoherent)
@@ -3581,19 +3773,24 @@ HalAllocateCommonBuffer(
     BufferEntry = ExAllocatePoolWithTag(NonPagedPool,
                                         sizeof(HAL_ARM64_COMMON_BUFFER),
                                         TAG_DMA_CMN);
-    if (BufferEntry)
+    if (!BufferEntry)
     {
-        BufferEntry->VirtualAddress = VirtualAddress;
-        BufferEntry->PhysicalAddress = *LogicalAddress;
-        BufferEntry->RawAllocation = VirtualAddress;
-        BufferEntry->Length = Length;
-        BufferEntry->Alignment = Alignment;
-        BufferEntry->CacheEnabled = (CacheType == MmCached);
-
-        KeAcquireSpinLock(&HalpArm64CommonBufferLock, &OldIrql);
-        InsertTailList(&HalpArm64CommonBufferList, &BufferEntry->ListEntry);
-        KeReleaseSpinLock(&HalpArm64CommonBufferLock, OldIrql);
+        DPRINT1("[arm64][DMA] HalAllocateCommonBuffer: tracking allocation failed (len=%lu)\n", Length);
+        MmFreeContiguousMemorySpecifyCache(VirtualAddress, Length, CacheType);
+        LogicalAddress->QuadPart = 0;
+        return NULL;
     }
+
+    BufferEntry->VirtualAddress = VirtualAddress;
+    BufferEntry->PhysicalAddress = *LogicalAddress;
+    BufferEntry->RawAllocation = VirtualAddress;
+    BufferEntry->Length = Length;
+    BufferEntry->Alignment = Alignment;
+    BufferEntry->CacheEnabled = (CacheType == MmCached);
+
+    KeAcquireSpinLock(&HalpArm64CommonBufferLock, &OldIrql);
+    InsertTailList(&HalpArm64CommonBufferList, &BufferEntry->ListEntry);
+    KeReleaseSpinLock(&HalpArm64CommonBufferLock, OldIrql);
 
     return VirtualAddress;
 }
@@ -4308,14 +4505,10 @@ HalFreeCommonBuffer(
  * This is a simplified adapter for ARM64 systems that support identity-mapped
  * DMA or use an SMMU for IOVA translation.
  *
- * TODO: Full implementation requires:
- * - Master adapter management
- * - Map register allocation and bounce buffers for non-coherent DMA
- * - SMMU programming for systems with IOMMU
+ * IOMMU-backed address translation still requires SMMU programming.
  */
 static DMA_OPERATIONS HalpArm64DmaOperations;
-static ADAPTER_OBJECT HalpArm64DmaAdapter;
-static BOOLEAN HalpArm64DmaAdapterInitialized = FALSE;
+static volatile LONG HalpArm64DmaOperationsState;
 
 typedef struct _HAL_ARM64_SCATTER_GATHER_CONTEXT
 {
@@ -4343,7 +4536,13 @@ static VOID NTAPI
 HalpArm64PutDmaAdapter(
     _In_ PDMA_ADAPTER DmaAdapter)
 {
-    UNREFERENCED_PARAMETER(DmaAdapter);
+    PADAPTER_OBJECT AdapterObject = (PADAPTER_OBJECT)DmaAdapter;
+
+    if (!AdapterObject || AdapterObject->Signature != HAL_ARM64_DMA_ADAPTER_SIGNATURE)
+        return;
+
+    AdapterObject->Signature = 0;
+    ExFreePoolWithTag(AdapterObject, TAG_DMA_ADAPTER);
 }
 
 static NTSTATUS NTAPI
@@ -4560,7 +4759,7 @@ HalpArm64ScatterGatherAdapterControl(
                                 CurrentVa,
                                 &MappedLength,
                                 SgContext->WriteToDevice);
-        if (MappedLength == 0 || Address.QuadPart == 0)
+        if (MappedLength == 0)
         {
             SgContext->Status = STATUS_INSUFFICIENT_RESOURCES;
             ExFreePoolWithTag(ScatterGatherList, TAG_DMA_SGL);
@@ -4752,13 +4951,47 @@ HalpArm64BuildMdlFromScatterGatherList(
     return STATUS_NOT_IMPLEMENTED;
 }
 
+static VOID
+HalpArm64InitializeDmaOperations(VOID)
+{
+    if (InterlockedCompareExchange(&HalpArm64DmaOperationsState, 1, 0) == 0)
+    {
+        RtlZeroMemory(&HalpArm64DmaOperations, sizeof(HalpArm64DmaOperations));
+        HalpArm64DmaOperations.Size = sizeof(DMA_OPERATIONS);
+        HalpArm64DmaOperations.PutDmaAdapter = HalpArm64PutDmaAdapter;
+        HalpArm64DmaOperations.AllocateCommonBuffer = HalpArm64AllocateCommonBuffer;
+        HalpArm64DmaOperations.FreeCommonBuffer = HalpArm64FreeCommonBuffer;
+        HalpArm64DmaOperations.AllocateAdapterChannel = HalpArm64AllocateAdapterChannel;
+        HalpArm64DmaOperations.FlushAdapterBuffers = HalpArm64FlushAdapterBuffers;
+        HalpArm64DmaOperations.FreeAdapterChannel = HalpArm64FreeAdapterChannel;
+        HalpArm64DmaOperations.FreeMapRegisters = HalpArm64FreeMapRegisters;
+        HalpArm64DmaOperations.MapTransfer = HalpArm64MapTransfer;
+        HalpArm64DmaOperations.GetDmaAlignment = HalpArm64GetDmaAlignment;
+        HalpArm64DmaOperations.ReadDmaCounter = HalpArm64ReadDmaCounter;
+        HalpArm64DmaOperations.GetScatterGatherList = HalpArm64GetScatterGatherList;
+        HalpArm64DmaOperations.PutScatterGatherList = HalpArm64PutScatterGatherList;
+        HalpArm64DmaOperations.CalculateScatterGatherList = HalpArm64CalculateScatterGatherListSize;
+        HalpArm64DmaOperations.BuildScatterGatherList = HalpArm64BuildScatterGatherList;
+        HalpArm64DmaOperations.BuildMdlFromScatterGatherList = HalpArm64BuildMdlFromScatterGatherList;
+        KeMemoryBarrier();
+        InterlockedExchange(&HalpArm64DmaOperationsState, 2);
+        return;
+    }
+
+    while (InterlockedCompareExchange(&HalpArm64DmaOperationsState, 2, 2) != 2)
+        KeStallExecutionProcessor(1);
+}
+
 PADAPTER_OBJECT
 NTAPI
 HalGetAdapter(
     _In_ PDEVICE_DESCRIPTION DeviceDescription,
     _Out_ PULONG NumberOfMapRegisters)
 {
-    ULONG MaximumLength;
+    PADAPTER_OBJECT AdapterObject;
+    ULONG DmaAddressWidth;
+    ULONGLONG MaximumLength;
+    ULONGLONG MapRegisterCount;
     ULONG MapRegisters;
 
     /*
@@ -4769,12 +5002,7 @@ HalGetAdapter(
      * 2. Provides cache maintenance through IoFlushAdapterBuffers/IoMapTransfer
      * 3. Does not support ISA/EISA DMA controllers (not applicable on ARM64)
      *
-     * For systems with SMMU, additional work is needed to program the IOMMU.
-     *
-     * TODO: Implement full DMA support with:
-     * - Bounce buffers for devices that can't reach all memory
-     * - SMMU programming for IOVA translation
-     * - Scatter/gather support
+     * SMMU programming is still needed for IOMMU-backed mappings.
      */
 
     if (!DeviceDescription)
@@ -4803,91 +5031,77 @@ HalGetAdapter(
     if (!DeviceDescription->Master)
     {
         DPRINT1("[arm64][HAL] HalGetAdapter: non-master DMA not supported on ARM64\n");
-        /*
-         * Return a minimal adapter anyway since some drivers might still work.
-         * TODO: Implement proper error handling or minimal DMA support.
-         */
+        return NULL;
+    }
+
+    if (DeviceDescription->Version == DEVICE_DESCRIPTION_VERSION3)
+    {
+        DmaAddressWidth = DeviceDescription->DmaAddressWidth;
+        if (DmaAddressWidth < 32 || DmaAddressWidth > 64)
+        {
+            DPRINT1("[arm64][HAL] HalGetAdapter: invalid DMA address width %lu\n", DmaAddressWidth);
+            return NULL;
+        }
+    }
+    else if (DeviceDescription->Dma64BitAddresses)
+    {
+        DmaAddressWidth = 64;
+    }
+    else if (DeviceDescription->Dma32BitAddresses || DeviceDescription->ScatterGather)
+    {
+        DmaAddressWidth = 32;
+    }
+    else
+    {
+        DmaAddressWidth = 24;
     }
 
     /*
      * Calculate the number of map registers needed.
      * This determines how many pages can be transferred at once.
      */
-    MaximumLength = DeviceDescription->MaximumLength;
-    if (MaximumLength == 0)
-    {
-        /* Use a reasonable default */
-        MaximumLength = 0x10000; /* 64 KB */
-    }
+    MaximumLength = DeviceDescription->MaximumLength & MAXLONG;
 
-    MapRegisters = (MaximumLength + PAGE_SIZE - 1) >> PAGE_SHIFT;
+    /* The extra register covers a transfer that begins on a partial page. */
+    MapRegisterCount = ((MaximumLength + PAGE_SIZE - 1) >> PAGE_SHIFT) + 1;
 
     /* Limit to a reasonable maximum */
-    if (MapRegisters > 256)
-    {
-        MapRegisters = 256;
-    }
+    if (MapRegisterCount > HAL_ARM64_MAX_MAP_REGISTERS)
+        MapRegisterCount = HAL_ARM64_MAX_MAP_REGISTERS;
+    if (!MapRegisterCount)
+        MapRegisterCount = 1;
+    MapRegisters = (ULONG)MapRegisterCount;
 
-    /*
-     * Initialize the shared DMA adapter if not already done.
-     * For simplicity, we use a single adapter object for all devices.
-     * A full implementation would allocate per-device adapters.
-     */
-    if (!HalpArm64DmaAdapterInitialized)
-    {
-        RtlZeroMemory(&HalpArm64DmaAdapter, sizeof(ADAPTER_OBJECT));
-        RtlZeroMemory(&HalpArm64DmaOperations, sizeof(DMA_OPERATIONS));
+    HalpArm64InitializeDmaOperations();
+    AdapterObject = ExAllocatePoolWithTag(NonPagedPool, sizeof(*AdapterObject), TAG_DMA_ADAPTER);
+    if (!AdapterObject)
+        return NULL;
 
-        /* Set up the DMA operations structure */
-        HalpArm64DmaOperations.Size = sizeof(DMA_OPERATIONS);
-        HalpArm64DmaOperations.PutDmaAdapter = HalpArm64PutDmaAdapter;
-        HalpArm64DmaOperations.AllocateCommonBuffer = HalpArm64AllocateCommonBuffer;
-        HalpArm64DmaOperations.FreeCommonBuffer = HalpArm64FreeCommonBuffer;
-        HalpArm64DmaOperations.AllocateAdapterChannel = HalpArm64AllocateAdapterChannel;
-        HalpArm64DmaOperations.FlushAdapterBuffers = HalpArm64FlushAdapterBuffers;
-        HalpArm64DmaOperations.FreeAdapterChannel = HalpArm64FreeAdapterChannel;
-        HalpArm64DmaOperations.FreeMapRegisters = HalpArm64FreeMapRegisters;
-        HalpArm64DmaOperations.MapTransfer = HalpArm64MapTransfer;
-        HalpArm64DmaOperations.GetDmaAlignment = HalpArm64GetDmaAlignment;
-        HalpArm64DmaOperations.ReadDmaCounter = HalpArm64ReadDmaCounter;
-        HalpArm64DmaOperations.GetScatterGatherList = HalpArm64GetScatterGatherList;
-        HalpArm64DmaOperations.PutScatterGatherList = HalpArm64PutScatterGatherList;
-        HalpArm64DmaOperations.CalculateScatterGatherList = HalpArm64CalculateScatterGatherListSize;
-        HalpArm64DmaOperations.BuildScatterGatherList = HalpArm64BuildScatterGatherList;
-        HalpArm64DmaOperations.BuildMdlFromScatterGatherList = HalpArm64BuildMdlFromScatterGatherList;
-
-        /* Set up the adapter object */
-        HalpArm64DmaAdapter.DmaHeader.Size = sizeof(ADAPTER_OBJECT);
-        HalpArm64DmaAdapter.DmaHeader.Version = 1;
-        HalpArm64DmaAdapter.DmaHeader.DmaOperations = &HalpArm64DmaOperations;
-        HalpArm64DmaAdapter.MasterDevice = TRUE;
-        HalpArm64DmaAdapter.ScatterGather = DeviceDescription->ScatterGather;
-        /*
-         * FIXME: HalpArm64DmaAdapter is a global singleton — last caller's
-         * DMA settings overwrite previous ones.  This breaks when multiple
-         * devices with different DMA widths call HalGetAdapter.  Needs
-         * per-device adapter allocation (like Windows HalGetAdapter).
-         */
-        HalpArm64DmaAdapter.Dma32BitAddresses = DeviceDescription->Dma32BitAddresses;
-        HalpArm64DmaAdapter.Dma64BitAddresses = DeviceDescription->Dma64BitAddresses;
-        HalpArm64DmaAdapter.MapRegistersPerChannel = MapRegisters;
-        HalpArm64DmaAdapter.ChannelNumber = 0xFF; /* Mark as system adapter */
-
-        HalpArm64DmaAdapterInitialized = TRUE;
-    }
-
-    /* Update the map registers count */
-    if (MapRegisters > HalpArm64DmaAdapter.MapRegistersPerChannel)
-    {
-        HalpArm64DmaAdapter.MapRegistersPerChannel = MapRegisters;
-    }
+    RtlZeroMemory(AdapterObject, sizeof(*AdapterObject));
+    AdapterObject->DmaHeader.Size = sizeof(*AdapterObject);
+    AdapterObject->DmaHeader.Version = (USHORT)DeviceDescription->Version;
+    AdapterObject->DmaHeader.DmaOperations = &HalpArm64DmaOperations;
+    AdapterObject->MapRegistersPerChannel = MapRegisters;
+    AdapterObject->ChannelNumber = 0xFF;
+    AdapterObject->Width = DeviceDescription->DmaWidth;
+    AdapterObject->Speed = DeviceDescription->DmaSpeed;
+    AdapterObject->MasterDevice = DeviceDescription->Master;
+    AdapterObject->Dma32BitAddresses = DeviceDescription->Dma32BitAddresses;
+    AdapterObject->Dma64BitAddresses = DeviceDescription->Dma64BitAddresses;
+    AdapterObject->ScatterGather = DeviceDescription->ScatterGather;
+    AdapterObject->DmaAddressWidth = DmaAddressWidth;
+    AdapterObject->Signature = HAL_ARM64_DMA_ADAPTER_SIGNATURE;
+    KeInitializeDeviceQueue(&AdapterObject->ChannelWaitQueue);
+    InitializeListHead(&AdapterObject->AdapterQueue);
+    InitializeListHead(&AdapterObject->AdapterList);
+    KeInitializeSpinLock(&AdapterObject->SpinLock);
 
     if (NumberOfMapRegisters)
     {
         *NumberOfMapRegisters = MapRegisters;
     }
 
-    return &HalpArm64DmaAdapter;
+    return AdapterObject;
 }
 
 /*
@@ -4905,8 +5119,11 @@ HalpArm64GetDmaAdapter(
     _In_ PDEVICE_DESCRIPTION DeviceDescription,
     _Out_ PULONG NumberOfMapRegisters)
 {
+    PADAPTER_OBJECT AdapterObject;
+
     UNREFERENCED_PARAMETER(Context);
-    return &HalGetAdapter(DeviceDescription, NumberOfMapRegisters)->DmaHeader;
+    AdapterObject = HalGetAdapter(DeviceDescription, NumberOfMapRegisters);
+    return AdapterObject ? &AdapterObject->DmaHeader : NULL;
 }
 
 /*
@@ -6234,37 +6451,19 @@ IoFlushAdapterBuffers(
     _In_ BOOLEAN WriteToDevice)
 {
     PHAL_ARM64_MAP_REGISTER_BASE Base;
+    ULONG_PTR FlushEnd;
+    ULONG_PTR FlushStart;
     ULONG i;
 
     UNREFERENCED_PARAMETER(AdapterObject);
 
-    if (!Mdl || !CurrentVa || Length == 0)
+    if (Length == 0)
     {
         return TRUE;
     }
 
-    /* Check for bounce buffers that need data copied back */
-    if (MapRegisterBase)
-    {
-        Base = (PHAL_ARM64_MAP_REGISTER_BASE)MapRegisterBase;
-        if (Base->Signature == HAL_ARM64_MAP_REG_SIGNATURE)
-        {
-            for (i = 0; i < Base->NumberOfMapRegisters; i++)
-            {
-                PHAL_ARM64_MAP_REGISTER_ENTRY Entry = &Base->Registers[i];
-
-                /* For DMA from device, copy bounce buffer back to original */
-                if (Entry->UsesBounceBuffer && Entry->BounceBuffer &&
-                    !Entry->WriteToDevice && Entry->OriginalVa)
-                {
-                    RtlCopyMemory(Entry->OriginalVa, Entry->BounceBuffer, Entry->Length);
-                }
-            }
-        }
-    }
-
     /* Perform cache maintenance for non-coherent DMA */
-    if (!HalpArm64DmaCoherency.SystemCoherent)
+    if (!HalpArm64DmaCoherency.SystemCoherent && Mdl && CurrentVa)
     {
         /*
          * Ensure DMA writes from the device have committed to memory before
@@ -6287,6 +6486,50 @@ IoFlushAdapterBuffers(
 
         /* Ensure cache operations complete before returning */
         __asm__ __volatile__("dsb sy" ::: "memory");
+    }
+
+    /* Copy device reads back only after stale original cache lines are gone. */
+    if (MapRegisterBase)
+    {
+        Base = (PHAL_ARM64_MAP_REGISTER_BASE)MapRegisterBase;
+        if (Base->Signature == HAL_ARM64_MAP_REG_SIGNATURE)
+        {
+            FlushStart = (ULONG_PTR)CurrentVa;
+            if (FlushStart > MAXULONG_PTR - (Length - 1))
+                return FALSE;
+            FlushEnd = FlushStart + Length - 1;
+
+            for (i = 0; i < Base->NumberOfMapRegisters; i++)
+            {
+                PHAL_ARM64_MAP_REGISTER_ENTRY Entry = &Base->Registers[i];
+                ULONG_PTR CopyEnd;
+                ULONG_PTR CopyStart;
+                ULONG_PTR EntryEnd;
+                ULONG_PTR EntryStart;
+                ULONG CopyLength;
+                ULONG EntryOffset;
+
+                if (Entry->UsesBounceBuffer && Entry->BounceBuffer && !Entry->WriteToDevice && !Entry->CopyBackDone && Entry->OriginalVa)
+                {
+                    EntryStart = (ULONG_PTR)Entry->MappedVa;
+                    if (!Entry->Length || EntryStart > MAXULONG_PTR - (Entry->Length - 1))
+                        continue;
+                    EntryEnd = EntryStart + Entry->Length - 1;
+                    if (EntryEnd < FlushStart || EntryStart > FlushEnd)
+                        continue;
+
+                    CopyStart = EntryStart > FlushStart ? EntryStart : FlushStart;
+                    CopyEnd = EntryEnd < FlushEnd ? EntryEnd : FlushEnd;
+                    EntryOffset = (ULONG)(CopyStart - EntryStart);
+                    CopyLength = (ULONG)(CopyEnd - CopyStart + 1);
+                    __asm__ __volatile__("dsb sy" ::: "memory");
+                    RtlCopyMemory((PUCHAR)Entry->OriginalVa + EntryOffset, (PUCHAR)Entry->BounceBuffer + EntryOffset, CopyLength);
+                    __asm__ __volatile__("dsb sy" ::: "memory");
+                    if (!EntryOffset && CopyLength == Entry->Length)
+                        Entry->CopyBackDone = TRUE;
+                }
+            }
+        }
     }
 
     return TRUE;
@@ -6351,9 +6594,12 @@ IoFreeMapRegisters(
              * If this was a read from device (DMA write), copy data
              * from bounce buffer back to original buffer before freeing.
              */
-            if (!Entry->WriteToDevice && Entry->OriginalVa && Entry->Length > 0)
+            if (!Entry->WriteToDevice && !Entry->CopyBackDone && Entry->OriginalVa && Entry->Length > 0)
             {
+                HalpArm64CleanInvalidateDcacheRange(Entry->OriginalVa, Entry->Length);
+                __asm__ __volatile__("dsb sy" ::: "memory");
                 RtlCopyMemory(Entry->OriginalVa, Entry->BounceBuffer, Entry->Length);
+                __asm__ __volatile__("dsb sy" ::: "memory");
             }
 
             MmFreeContiguousMemorySpecifyCache(Entry->BounceBuffer,
@@ -6454,23 +6700,6 @@ IoMapTransfer(
         return (PHYSICAL_ADDRESS){0};
     }
 
-    if (PhysicalAddress.QuadPart == 0)
-    {
-        PPFN_NUMBER PfnDbg = Mdl ? MmGetMdlPfnArray(Mdl) : NULL;
-        ULONG_PTR OffDbg = Mdl ? ((ULONG_PTR)CurrentVa - (ULONG_PTR)Mdl->StartVa) : 0;
-        ULONG PgIdx = (ULONG)(OffDbg >> PAGE_SHIFT);
-        DPRINT1("[arm64][HAL] IoMapTransfer: PA=0 VA=%p Mdl=%p StartVa=%p ByteOff=%lu PageIdx=%u PFN[0]=%lx PFN[idx]=%lx Len=%lu\n",
-                CurrentVa, Mdl,
-                Mdl ? Mdl->StartVa : NULL,
-                Mdl ? Mdl->ByteOffset : 0,
-                PgIdx,
-                PfnDbg ? (ULONG_PTR)PfnDbg[0] : 0,
-                PfnDbg ? (ULONG_PTR)PfnDbg[PgIdx] : 0,
-                *Length);
-        *Length = 0;
-        return (PHYSICAL_ADDRESS){0};
-    }
-
     /* Calculate the transfer length, limited by page boundaries */
     TransferLength = *Length;
     {
@@ -6482,17 +6711,8 @@ IoMapTransfer(
         }
     }
 
-    /*
-     * Check if we need a bounce buffer.
-     * On ARM64, bus-master devices handle their own DMA addressing.
-     * The shared adapter object's Dma64BitAddresses flag is unreliable
-     * (overwritten by the last HalGetAdapter caller). Since ARM64
-     * systems typically have all RAM above 4GB, bounce
-     * buffer allocation below 4GB would fail anyway. Skip bounce
-     * buffers entirely — the device driver is responsible for ensuring
-     * its DMA addresses are reachable (via XHCI 64-bit capability, etc.).
-     */
-    (void)NeedsBounceBuffer; /* always FALSE on ARM64 */
+    /* Translate CPU physical addresses into this device's bus address space. */
+    NeedsBounceBuffer = !HalpArm64TranslateDmaAddress(AdapterObject, PhysicalAddress, TransferLength, &ReturnAddress);
 
     /* Get map register entry if available */
     if (MapRegisterBase)
@@ -6509,18 +6729,18 @@ IoMapTransfer(
     /* Handle bounce buffer allocation */
     if (NeedsBounceBuffer)
     {
-        PHYSICAL_ADDRESS Low = {0};
-        PHYSICAL_ADDRESS High;
-        PHYSICAL_ADDRESS Boundary = {0};
+        PHYSICAL_ADDRESS BounceCpuAddress;
+        PVOID OriginalKernelVa;
         PVOID BounceBuffer;
 
-        High.QuadPart = HAL_ARM64_DMA_32BIT_LIMIT - 1;
+        if (!MapEntry)
+        {
+            DPRINT1("[arm64][DMA] IoMapTransfer: unreachable CPU PA %I64x without map registers\n", PhysicalAddress.QuadPart);
+            *Length = 0;
+            return (PHYSICAL_ADDRESS){0};
+        }
 
-        BounceBuffer = MmAllocateContiguousMemorySpecifyCache(TransferLength,
-                                                               Low,
-                                                               High,
-                                                               Boundary,
-                                                               MmNonCached);
+        BounceBuffer = HalpArm64AllocateDmaMemory(AdapterObject, TransferLength, MmNonCached, &BounceCpuAddress, &ReturnAddress);
         if (!BounceBuffer)
         {
             DPRINT1("[arm64][DMA] IoMapTransfer: Failed to allocate bounce buffer\n");
@@ -6528,38 +6748,35 @@ IoMapTransfer(
             return (PHYSICAL_ADDRESS){0};
         }
 
+        OriginalKernelVa = (PVOID)(HAL_ARM64_PHYS_MAP_BASE | (PhysicalAddress.QuadPart & HAL_ARM64_PHYS_ADDR_MASK));
+
         /* For write to device, copy data to bounce buffer */
         if (WriteToDevice)
         {
-            RtlCopyMemory(BounceBuffer, CurrentVa, TransferLength);
+            RtlCopyMemory(BounceBuffer, OriginalKernelVa, TransferLength);
+            KeMemoryBarrier();
         }
-
-        ReturnAddress = MmGetPhysicalAddress(BounceBuffer);
 
         /* Track in map register if available */
-        if (MapEntry)
-        {
-            MapEntry->OriginalVa = CurrentVa;
-            MapEntry->PhysicalAddress = ReturnAddress;
-            MapEntry->BounceBuffer = BounceBuffer;
-            MapEntry->BouncePhysical = ReturnAddress;
-            MapEntry->Length = TransferLength;
-            MapEntry->UsesBounceBuffer = TRUE;
-            MapEntry->WriteToDevice = WriteToDevice;
-        }
+        MapEntry->OriginalVa = OriginalKernelVa;
+        MapEntry->MappedVa = CurrentVa;
+        MapEntry->PhysicalAddress = ReturnAddress;
+        MapEntry->BounceBuffer = BounceBuffer;
+        MapEntry->BouncePhysical = BounceCpuAddress;
+        MapEntry->Length = TransferLength;
+        MapEntry->UsesBounceBuffer = TRUE;
+        MapEntry->WriteToDevice = WriteToDevice;
 
-        DPRINT("[arm64][DMA] IoMapTransfer: Using bounce buffer %p->%p (PA 0x%llx)\n",
-               CurrentVa, BounceBuffer, ReturnAddress.QuadPart);
+        DPRINT("[arm64][DMA] IoMapTransfer: bounce CPU=%I64x device=%I64x length=%lu\n", BounceCpuAddress.QuadPart, ReturnAddress.QuadPart, TransferLength);
     }
     else
     {
-        ReturnAddress = PhysicalAddress;
-
         /* Track in map register if available */
         if (MapEntry)
         {
-            MapEntry->OriginalVa = CurrentVa;
-            MapEntry->PhysicalAddress = PhysicalAddress;
+            MapEntry->OriginalVa = NULL;
+            MapEntry->MappedVa = CurrentVa;
+            MapEntry->PhysicalAddress = ReturnAddress;
             MapEntry->BounceBuffer = NULL;
             MapEntry->Length = TransferLength;
             MapEntry->UsesBounceBuffer = FALSE;
@@ -6573,7 +6790,7 @@ IoMapTransfer(
      * CurrentVa, which may not be mapped in the current address space
      * (e.g. user-mode MDL pages during DPC-level I/O).
      */
-    if (!HalpArm64DmaCoherency.SystemCoherent && TransferLength > 0)
+    if (!NeedsBounceBuffer && !HalpArm64DmaCoherency.SystemCoherent && TransferLength > 0)
     {
         ULONG_PTR KsegVa = HAL_ARM64_PHYS_MAP_BASE |
                             (PhysicalAddress.QuadPart & HAL_ARM64_PHYS_ADDR_MASK);

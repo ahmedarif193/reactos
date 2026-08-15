@@ -74,6 +74,20 @@ typedef struct _HAL_ACPI_PCI_ROOT_INFO
     HAL_ACPI_PCI_OSC_INFO Osc;
 } HAL_ACPI_PCI_ROOT_INFO, *PHAL_ACPI_PCI_ROOT_INFO;
 
+/*
+ * ACPI _DMA address window. The device-visible address range starts at
+ * DeviceBase and is translated to the CPU physical range starting at CpuBase.
+ * ReactOS-specific; used by ARM64 platform buses without an IOMMU mapping.
+ */
+#define HAL_ACPI_MAX_DMA_WINDOWS 8
+
+typedef struct _HAL_ACPI_DMA_WINDOW
+{
+    ULONGLONG DeviceBase;
+    ULONGLONG CpuBase;
+    ULONGLONG Length;
+} HAL_ACPI_DMA_WINDOW, *PHAL_ACPI_DMA_WINDOW;
+
 /* Polarity values for HAL_ACPI_PCI_ROUTE_ENTRY */
 #define HAL_ACPI_POLARITY_HIGH   0
 #define HAL_ACPI_POLARITY_LOW    1
@@ -195,6 +209,15 @@ HalGetMsiMessageAddress(
     );
 
 #if defined(_M_ARM64) || defined(__aarch64__)
+NTHALAPI
+BOOLEAN
+NTAPI
+HalpConfigureDmaAdapter(
+    _In_ PVOID DmaAdapter,
+    _In_reads_(WindowCount) const HAL_ACPI_DMA_WINDOW *Windows,
+    _In_ ULONG WindowCount
+    );
+
 NTHALAPI
 ULONG
 NTAPI
