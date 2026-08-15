@@ -719,15 +719,16 @@ NTAPI
 ChpeDispatchException(PEXCEPTION_RECORD ExceptionRecord,
                       PCONTEXT Context)
 {
-    if (!ChpeEmulatorLoaded)
+    PCHPE_V2_CPU_AREA_INFO CpuArea;
+
+    if (!ChpeEmulatorLoaded || !pChpeResetToConsistentState)
         return FALSE;
 
-    if (!ChpepIsCurrentThreadInitialized())
+    CpuArea = ChpepGetCurrentCpuArea();
+    if (!CpuArea || !CpuArea->EmulatorData[1] || !CpuArea->ContextAmd64)
         return FALSE;
 
-    pChpeResetToConsistentState(ExceptionRecord,
-                                Context,
-                                Context /* Native ARM64 context */);
+    pChpeResetToConsistentState(ExceptionRecord, CpuArea->ContextAmd64, Context);
     return FALSE;
 }
 
