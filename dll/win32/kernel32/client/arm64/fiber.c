@@ -9,12 +9,10 @@
  * expressed in terms of the public CONTEXT structure.
  *
  * IMPORTANT: on Windows ARM64 x18 holds the TEB pointer and is *per-thread*,
- * never per-fiber.  RtlRestoreContext() restores x18 from the CONTEXT, so before
- * resuming a fiber we overwrite its saved x18 with the current thread's TEB.
- * Without this a fiber resumed on any worker thread (or a freshly created fiber,
- * whose context has x18 == 0) would run with a stale/NULL TEB and silently
- * corrupt everything reached through the TEB - the process heap and TLS in
- * particular.
+ * never per-fiber.  Native ARM64 CONTEXT exposes x18, so before resuming a
+ * native fiber we overwrite its saved x18 with the current thread's TEB.
+ * ARM64EC CONTEXT uses the x64-compatible ARM64EC_NT_CONTEXT overlay and does
+ * not expose x18; ARM64EC context restore must preserve the live x18 instead.
  */
 
 #include <k32.h>
@@ -42,9 +40,13 @@ WINAPI
 BaseFiberStartup(VOID)
 {
     PFIBER Fiber = (PFIBER)NtCurrentTeb()->NtTib.FiberData;
+#ifdef __arm64ec__
+    PARM64EC_NT_CONTEXT FiberContext = (PARM64EC_NT_CONTEXT)&Fiber->FiberContext;
 
-    BaseThreadStartup((LPTHREAD_START_ROUTINE)(ULONG_PTR)Fiber->FiberContext.X0,
-                      (LPVOID)(ULONG_PTR)Fiber->FiberContext.X1);
+    BaseThreadStartup((LPTHREAD_START_ROUTINE)(ULONG_PTR)FiberContext->X0, (LPVOID)(ULONG_PTR)FiberContext->X1);
+#else
+    BaseThreadStartup((LPTHREAD_START_ROUTINE)(ULONG_PTR)Fiber->FiberContext.X0, (LPVOID)(ULONG_PTR)Fiber->FiberContext.X1);
+#endif
 }
 
 /*
@@ -88,8 +90,10 @@ SwitchToFiber(_In_ LPVOID Fiber)
     Teb->ActivationContextStackPointer = NewFiber->ActivationContextStackPointer;
     Teb->FlsData = NewFiber->FlsData;
 
-    /* Keep the current thread's TEB pointer (x18) - see file header */
+    /* Keep the current thread's TEB pointer (x18) - see file header. */
+#ifndef __arm64ec__
     NewFiber->FiberContext.X18 = (ULONG64)(ULONG_PTR)Teb;
+#endif
 
     /* Switch into the target fiber; this does not return */
     RtlRestoreContext(&NewFiber->FiberContext, NULL);
