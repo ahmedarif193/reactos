@@ -2066,9 +2066,6 @@ Phase1InitializationDiscard(IN PVOID Context)
     /* Initialize the I/O Subsystem */
     if (!IoInitSystem(LoaderBlock)) KeBugCheck(IO1_INITIALIZATION_FAILED);
 
-    /* Arm the private raw crash target before the initial user process starts. */
-    IoInitializeDedicatedCrashDump();
-
     /* Set maximum update to 100% */
     InbvSetProgressBarSubset(0, 100);
 

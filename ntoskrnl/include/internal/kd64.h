@@ -88,9 +88,19 @@ KdUpdateDataBlock(
     VOID
 );
 
+VOID
+NTAPI
+KdSystemRootAvailable(
+    VOID
+);
+
 BOOLEAN NTAPI KdpInitializeCrashDump(_In_ HANDLE DumpFileHandle);
 
-BOOLEAN NTAPI KdpInitializeDedicatedCrashDump(VOID);
+BOOLEAN NTAPI KdpInitializeCrashDumpCore(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock);
+
+BOOLEAN NTAPI KdpInitializeDedicatedCrashDump(_In_ PFILE_OBJECT BootFileObject);
+
+VOID NTAPI KdpPublishCrashDumpArtifacts(VOID);
 
 NTSTATUS NTAPI KdpWriteCrashDump(VOID);
 

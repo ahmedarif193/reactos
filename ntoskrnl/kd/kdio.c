@@ -307,12 +307,15 @@ KdpDebugLogInit(
         {
             DPRINT1("Failed to open log file: 0x%08lx\n", Status);
 
-            /* Schedule an I/O reinitialization if needed */
+            /* The final retry is issued after the I/O manager replaces the ARC-form \SystemRoot link. */
             if (Status == STATUS_OBJECT_NAME_NOT_FOUND ||
                 Status == STATUS_OBJECT_PATH_NOT_FOUND)
             {
-                DispatchTable->KdpInitRoutine = KdpDebugLogInit;
-                return Status;
+                if (BootPhase < KDP_BOOT_PHASE_SYSTEM_ROOT)
+                {
+                    DispatchTable->KdpInitRoutine = KdpDebugLogInit;
+                    return Status;
+                }
             }
             goto Failure;
         }
@@ -332,6 +335,7 @@ KdpDebugLogInit(
         {
             DPRINT1("Failed to create log file thread: 0x%08lx\n", Status);
             ZwClose(KdpLogFileHandle);
+            KdpLogFileHandle = NULL;
             goto Failure;
         }
 

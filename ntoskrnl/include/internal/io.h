@@ -863,7 +863,19 @@ IoInitializeCrashDump(
 
 BOOLEAN
 NTAPI
+IoInitializeCrashDumpCore(
+    IN PLOADER_PARAMETER_BLOCK LoaderBlock OPTIONAL
+);
+
+BOOLEAN
+NTAPI
 IoInitializeDedicatedCrashDump(
+    IN PFILE_OBJECT BootFileObject
+);
+
+VOID
+NTAPI
+IoPublishCrashDumpArtifacts(
     VOID
 );
 
