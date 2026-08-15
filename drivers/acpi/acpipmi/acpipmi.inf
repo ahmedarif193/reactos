@@ -1,0 +1,43 @@
+; Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+; SPDX-License-Identifier: GPL-3.0-or-later
+
+[Version]
+Signature = "$Windows NT$"
+Class = System
+ClassGUID = {4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider = %ReactOS%
+DriverVer = 08/15/2026,1.0.0.0
+
+[ControlFlags]
+ExcludeFromSelect = *
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[Manufacturer]
+%ReactOS% = ReactOS
+
+[ReactOS]
+%AcpiPmi.DeviceDesc% = AcpiPmi_Inst,ACPI\ACPI000D
+
+[AcpiPmi_Inst.NT]
+CopyFiles = AcpiPmi_CopyFiles
+
+[AcpiPmi_CopyFiles]
+acpipmi.sys
+
+[AcpiPmi_Inst.NT.Services]
+AddService = ACPIPMI,0x00000002,AcpiPmi_Service
+
+[AcpiPmi_Service]
+DisplayName = %AcpiPmi.ServiceDesc%
+ServiceType = 1
+StartType = 3
+ErrorControl = 1
+ServiceBinary = %12%\acpipmi.sys
+LoadOrderGroup = Extended Base
+
+[Strings]
+ReactOS = "ReactOS Project"
+AcpiPmi.DeviceDesc = "ACPI Power Meter"
+AcpiPmi.ServiceDesc = "ReactOS ACPI Power Meter Driver"
