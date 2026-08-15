@@ -24,4 +24,12 @@ Rpi5V3dRunSelfTest(
     _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
     _Out_ PRPI5VC4_V3D_SELFTEST Result);
 
+VP_STATUS
+Rpi5V3dRenderClear(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ PRPI5VC4_V3D_CLEAR_REQUEST Request,
+    _Out_writes_bytes_(ResultBufferLength) PRPI5VC4_V3D_CLEAR_RESULT Result,
+    _In_ ULONG ResultBufferLength,
+    _Out_ PULONG BytesReturned);
+
 #endif /* _RPI5VC4_V3D_H_ */

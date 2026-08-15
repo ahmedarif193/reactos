@@ -87,7 +87,7 @@ typedef struct _RPI5VC4_DEVICE_EXTENSION
     PHYSICAL_ADDRESS V3dPageTableLogical;
     PVOID V3dWorkVa;
     PHYSICAL_ADDRESS V3dWorkLogical;
-    LONG V3dSelfTestBusy;
+    LONG V3dExecutionBusy;
     BOOLEAN V3dExecutionPoisoned;
 
     /* Cached MMIO mapping of the active PixelValve (mapped once, reused). */
