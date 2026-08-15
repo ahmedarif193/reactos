@@ -105,6 +105,7 @@ LdrpCallInitRoutine(IN PDLL_INIT_ROUTINE EntryPoint,
 #if defined(_M_ARM64)
     PIMAGE_NT_HEADERS NtHeaders;
     ULONG_PTR EntryPointRva, NativeEntryPointRva;
+    USHORT ImageMachine;
 
     NtHeaders = RtlImageNtHeader(BaseAddress);
     if (NtHeaders && (ULONG_PTR)EntryPoint >= (ULONG_PTR)BaseAddress)
@@ -112,16 +113,16 @@ LdrpCallInitRoutine(IN PDLL_INIT_ROUTINE EntryPoint,
         EntryPointRva = (ULONG_PTR)EntryPoint - (ULONG_PTR)BaseAddress;
         if (EntryPointRva < NtHeaders->OptionalHeader.SizeOfImage)
         {
-            ChpeRegisterArm64EcImage(BaseAddress);
+            ImageMachine = ChpeGetImageMachine(BaseAddress);
+            if (ImageMachine == IMAGE_FILE_MACHINE_ARM64EC && !ChpeRegisterArm64EcImage(BaseAddress))
+                return FALSE;
 
-            if (ChpeGetArm64EcRedirection(BaseAddress,
-                                          EntryPointRva,
-                                          &NativeEntryPointRva))
+            if (ChpeGetArm64EcRedirection(BaseAddress, EntryPointRva, &NativeEntryPointRva))
             {
-                EntryPoint = (PDLL_INIT_ROUTINE)((ULONG_PTR)BaseAddress +
-                                                 NativeEntryPointRva);
+                EntryPoint = (PDLL_INIT_ROUTINE)((ULONG_PTR)BaseAddress + NativeEntryPointRva);
             }
-            else if (NtHeaders->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64)
+            else if (ImageMachine == IMAGE_FILE_MACHINE_AMD64 ||
+                     (ImageMachine == IMAGE_FILE_MACHINE_ARM64EC && !RtlIsEcCode((ULONG_PTR)EntryPoint)))
             {
                 return ChpeCallX64DllMain(EntryPoint, BaseAddress, Reason, Context);
             }

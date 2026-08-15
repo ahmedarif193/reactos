@@ -411,6 +411,11 @@ ChpeMarkEcCodeRange(
 
 BOOLEAN
 NTAPI
+RtlIsEcCode(
+    ULONG_PTR CodeAddress);
+
+BOOLEAN
+NTAPI
 ChpeGetArm64EcRedirection(
     PVOID ImageBase,
     ULONG_PTR SourceRva,
