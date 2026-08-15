@@ -378,6 +378,12 @@ ChpeGetImageMachine(
 
 BOOLEAN
 NTAPI
+ChpeShouldRedirectImport(
+    PVOID ImportBase,
+    PUNICODE_STRING ImportName);
+
+BOOLEAN
+NTAPI
 ChpeRegisterArm64EcImage(
     PVOID ImageBase);
 
