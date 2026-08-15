@@ -13,6 +13,7 @@
 #define CYW_SDIO_MAX_FUNCTION          7
 #define CYW_SDIO_MAX_ADDRESS           0x1FFFFUL
 #define CYW_SDIO_MAX_COUNT             512
+#define CYW_SDIO_MAX_BLOCK_COUNT       511
 #define CYW_SDIO_MAX_BLOCK_SIZE        0x0FFF
 
 PVOID
@@ -279,7 +280,9 @@ CywSdioRw(
         Count = Length;
     }
 
-    if (Count == 0 || Count > CYW_SDIO_MAX_COUNT)
+    if (Count == 0 ||
+        Count > (BlockMode ? CYW_SDIO_MAX_BLOCK_COUNT :
+                             CYW_SDIO_MAX_COUNT))
     {
         return STATUS_INVALID_PARAMETER;
     }
@@ -670,11 +673,11 @@ CywRamWrite(
         if (Transfer >= CYW_F1_BLOCKSIZE)
         {
             ULONG Blocks = Transfer / CYW_F1_BLOCKSIZE;
-            /* A count of 512 is encoded as zero in CMD53, allowing each
-             * 32-KiB backplane window to be written in one request. */
-            if (Blocks > CYW_SDIO_MAX_COUNT)
+            /* Keep the block count nonzero in the CMD53 argument. The
+             * CYW43455 enters R5 error state after a 512-block command. */
+            if (Blocks > CYW_SDIO_MAX_BLOCK_COUNT)
             {
-                Blocks = CYW_SDIO_MAX_COUNT;
+                Blocks = CYW_SDIO_MAX_BLOCK_COUNT;
             }
             Transfer = Blocks * CYW_F1_BLOCKSIZE;
             Status = CywSdioRw(Adapter, CYW_SDIO_FUNC_BACKPLANE, TRUE,
