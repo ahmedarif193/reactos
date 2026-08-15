@@ -22,9 +22,13 @@
 #ifndef _MMINTRIN_H_INCLUDED
 #define _MMINTRIN_H_INCLUDED
 
+#include "intrin_target.h"
+
 /* When building with Clang, use Clang's own intrinsics headers instead. */
-#if defined(__clang__) && !defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64) || defined(_M_AMD64))
+#if _VCRT_USE_CLANG_X86_INTRINSICS
 #include_next <mmintrin.h>
+#elif _VCRT_ARM64_CODEGEN
+/* ARM64: no x86 intrinsics available */
 #else
 
 #include <vcruntime.h>
@@ -35,7 +39,7 @@ extern "C" {
 
 #ifdef _MSC_VER
 #define DECLSPEC_INTRINTYPE __declspec(intrin_type)
-#elif defined(_M_ARM64) || defined(__aarch64__)
+#elif _VCRT_ARM64_CODEGEN
 /* ARM64: no x86 intrinsics available */
 #else
 #define DECLSPEC_INTRINTYPE
@@ -67,7 +71,7 @@ extern "C" {
 
 #ifdef __clang__
 #define __INTRIN_INLINE_MMX __INTRIN_INLINE __attribute__((__target__("mmx"),__min_vector_width__(64)))
-#elif defined(_M_ARM64) || defined(__aarch64__)
+#elif _VCRT_ARM64_CODEGEN
 /* ARM64: no x86 intrinsics available */
 #else
 #define __INTRIN_INLINE_MMX __INTRIN_INLINE __attribute__((__target__("mmx")))

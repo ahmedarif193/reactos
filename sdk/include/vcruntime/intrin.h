@@ -5,32 +5,33 @@
 #ifndef RC_INVOKED
 
 #include "vcruntime.h"
+#include "intrin_target.h"
 #include "intrin0.inl.h"
 #include "setjmp.h"
 #include <stddef.h>
 
-#if defined(_M_IX86) || defined(_M_X64)
+#if _VCRT_X86_INTRINSICS
 #include <immintrin.h>
 //#include <ammintrin.h>
 #include <xmmintrin.h> // native headers: immintrin.h -> wmmintrin.h -> nmmintrin.h -> smmintrin.h -> tmmintrin.h -> pmmintrin.h -> emmintrin.h
 #if defined(__clang__)
 #include <x86intrin.h>
 #endif
-#endif /* _M_IX86 || _M_X64 */
+#endif /* _VCRT_X86_INTRINSICS */
 
-#if defined(_M_IX86)
+#if _VCRT_I386_INTRINSICS
 //#include <mm3dnow.h>
-#endif /* _M_IX86 */
+#endif /* _VCRT_I386_INTRINSICS */
 
 #if defined(_M_ARM)
 //#include <arm_neon.h>
 #include <armintr.h>
 #endif /* _M_ARM */
 
-#if defined(_M_ARM64)
+#if _VCRT_ARM64_CODEGEN
 #include <arm64intr.h>
 //#include <arm64_neon.h>
-#endif /* _M_ARM64 */
+#endif /* _VCRT_ARM64_CODEGEN */
 
 #if defined(__clang__) && !defined(_MSC_VER)
 #ifdef __lzcnt16
@@ -112,7 +113,7 @@ _Check_return_ unsigned short __cdecl _rotr16(_In_ unsigned short _Value, _In_ u
 _Check_return_ unsigned __int64 __cdecl _rotr64(_In_ unsigned __int64 _Value, _In_ int _Shift);
 _Check_return_ unsigned char __cdecl _rotr8(_In_ unsigned char _Value, _In_ unsigned char _Shift);
 
-#if defined(_M_IX86) || defined(_M_X64)
+#if _VCRT_X86_INTRINSICS
 
 void __cpuid(int[4], int);
 void __cpuidex(int[4], int, int);
@@ -600,9 +601,9 @@ int __cdecl outp(unsigned short, int);
 unsigned long __cdecl outpd(unsigned short, unsigned long);
 unsigned short __cdecl outpw(unsigned short, unsigned short);
 
-#endif /* _M_IX86 || _M_X64 */
+#endif /* _VCRT_X86_INTRINSICS */
 
-#if defined(_M_IX86)
+#if _VCRT_I386_INTRINSICS
 
 long _InterlockedAddLargeStatistic(_Interlocked_operand_ __int64 volatile * _Addend, long _Value);
 void __addfsbyte(unsigned long, unsigned char);
@@ -756,9 +757,9 @@ void _mm_stream_pi(__m64 *, __m64);
 __m64 _mm_sub_si64(__m64, __m64);
 #endif // 0
 
-#endif /* _M_IX86 */
+#endif /* _VCRT_I386_INTRINSICS */
 
-#if defined(_M_ARM64)
+#if _VCRT_ARM64_CODEGEN
 
 unsigned char _BitScanForward64(unsigned long * _Index, unsigned __int64 _Mask);
 unsigned char _BitScanReverse64(unsigned long * _Index, unsigned __int64 _Mask);
@@ -774,9 +775,9 @@ long _InterlockedOr_nf(_Interlocked_operand_ long volatile * _Value, long _Mask)
 void __break(int);
 void __yield(void);
 
-#endif /* _M_ARM64 */
+#endif /* _VCRT_ARM64_CODEGEN */
 
-#if defined(_M_X64)
+#if _VCRT_AMD64_INTRINSICS
 
 unsigned char _BitScanForward64(unsigned long * _Index, unsigned __int64 _Mask);
 unsigned char _BitScanReverse64(unsigned long * _Index, unsigned __int64 _Mask);
@@ -880,9 +881,9 @@ __m128i _mm_set1_epi64x(__int64);
 __m128i _mm_set_epi64x(__int64, __int64);
 void _mm_stream_si64x(__int64 *, __int64);
 #endif
-#endif /* _M_X64 */
+#endif /* _VCRT_AMD64_INTRINSICS */
 
-#if defined(_M_ARM) || defined(_M_ARM64) || defined(_M_X64)
+#if _VCRT_64BIT_INTERLOCKED_INTRINSICS
 
 __int64 _InterlockedAnd64(_Interlocked_operand_ __int64 volatile * _Value, __int64 _Mask);
 __int64 _InterlockedDecrement64(_Interlocked_operand_ __int64 volatile * _Addend);
@@ -892,7 +893,7 @@ __int64 _InterlockedIncrement64(_Interlocked_operand_ __int64 volatile * _Addend
 __int64 _InterlockedOr64(_Interlocked_operand_ __int64 volatile * _Value, __int64 _Mask);
 __int64 _InterlockedXor64(_Interlocked_operand_ __int64 volatile * _Value, __int64 _Mask);
 
-#endif /* _M_ARM || _M_ARM64 || _M_X64 */
+#endif /* _VCRT_64BIT_INTERLOCKED_INTRINSICS */
 
 #if defined(_M_ARM)
 
@@ -1057,7 +1058,7 @@ int _isunorderedf(float, float);
 
 #endif /* _M_ARM */
 
-#ifdef _M_ARM64
+#if _VCRT_ARM64_CODEGEN
 unsigned __int64 __getReg(int);
 #endif
 
