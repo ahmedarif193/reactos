@@ -446,6 +446,12 @@ ChpeCallX64DllMain(
 
 VOID
 NTAPI
+RtlUserThreadStart(
+    PVOID StartAddress,
+    PVOID Parameter);
+
+VOID
+NTAPI
 ChpeRtlUserThreadStart(
     PVOID StartAddress,
     PVOID Parameter);

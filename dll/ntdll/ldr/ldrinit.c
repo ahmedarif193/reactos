@@ -3148,6 +3148,9 @@ LdrpInit(PCONTEXT Context,
     NTSTATUS Status, LoaderStatus = STATUS_SUCCESS;
     MEMORY_BASIC_INFORMATION MemoryBasicInfo;
     PPEB Peb = NtCurrentPeb();
+#if defined(_M_ARM64)
+    BOOLEAN InitializeChpeProcess = ChpeIsChpeProcess() && !Peb->Ldr;
+#endif
 
     DPRINT("LdrpInit() %p/%p\n",
         NtCurrentTeb()->RealClientId.UniqueProcess,
@@ -3235,6 +3238,22 @@ LdrpInit(PCONTEXT Context,
         {
             /* Set the process as Initialized */
             _InterlockedIncrement(&LdrpProcessInitialized);
+
+#if defined(_M_ARM64)
+            /*
+             * The native creator seeds the initial context with its own
+             * kernel32!BaseProcessStartup address. A CHPE process replaces
+             * that module with the ARM64EC kernel32 image, whose native code
+             * has a different layout. Resume through the architecture-stable
+             * ntdll thread gateway instead; it enters the x64 image through
+             * the emulator and never relies on a cross-image kernel32 RVA.
+             */
+            if (InitializeChpeProcess)
+            {
+                Context->Pc = (ULONG64)(ULONG_PTR)RtlUserThreadStart;
+                Context->Lr = (ULONG64)(ULONG_PTR)RtlExitUserThread;
+            }
+#endif
         }
     }
     else
