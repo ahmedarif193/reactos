@@ -233,6 +233,7 @@ LdrpGetResidentSize(PIMAGE_NT_HEADERS NTHeaders);
 NTSTATUS
 NTAPI
 LdrpLoadImportModule(IN PWSTR DllPath OPTIONAL,
+                     IN PVOID ImportBase,
                      IN LPSTR ImportName,
                      OUT PLDR_DATA_TABLE_ENTRY *DataTableEntry,
                      OUT PBOOLEAN Existing);
