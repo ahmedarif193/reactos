@@ -16,12 +16,15 @@
     CTL_CODE(FILE_DEVICE_VIDEO, 0x832, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_VIDEO_RPI5VC4_RENDER_CLEAR \
     CTL_CODE(FILE_DEVICE_VIDEO, 0x833, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_VIDEO_RPI5VC4_RENDER_TRIANGLE \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x834, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #define RPI5VC4_ESCAPE_QUERY_V3D 0x52505633 /* "RPV3" */
 #define RPI5VC4_ESCAPE_RUN_V3D_SELFTEST 0x52505654 /* "RPVT" */
 #define RPI5VC4_ESCAPE_RENDER_CLEAR 0x5250434C /* "RPCL" */
+#define RPI5VC4_ESCAPE_RENDER_TRIANGLE 0x52505452 /* "RPTR" */
 
-#define RPI5VC4_XPDM_ABI_VERSION 3
+#define RPI5VC4_XPDM_ABI_VERSION 4
 
 #define RPI5VC4_V3D_FLAG_SMS_MAPPED  (1u << 0)
 #define RPI5VC4_V3D_FLAG_POWERED     (1u << 1)
@@ -137,6 +140,45 @@ typedef struct _RPI5VC4_V3D_CLEAR_RESULT
     RPI5VC4_V3D_SELFTEST Diagnostics;
     ULONG Pixels[1];
 } RPI5VC4_V3D_CLEAR_RESULT, *PRPI5VC4_V3D_CLEAR_RESULT;
+
+/*
+ * A triangle request carries only three clip-space positions and their RGBA
+ * colors. The miniport supplies fixed V3D 7.1 shaders and builds every state,
+ * attribute, binning, and rendering packet. IEEE-754 values are represented
+ * as raw words so the kernel never enters a floating-point context.
+ */
+typedef struct _RPI5VC4_V3D_VERTEX
+{
+    ULONG Position[4];
+    ULONG Color[4];
+} RPI5VC4_V3D_VERTEX, *PRPI5VC4_V3D_VERTEX;
+
+typedef struct _RPI5VC4_V3D_TRIANGLE_REQUEST
+{
+    ULONG Size;
+    ULONG AbiVersion;
+    ULONG Width;
+    ULONG Height;
+    ULONG ClearColor;
+    ULONG Reserved[3];
+    RPI5VC4_V3D_VERTEX Vertices[3];
+} RPI5VC4_V3D_TRIANGLE_REQUEST, *PRPI5VC4_V3D_TRIANGLE_REQUEST;
+
+typedef struct _RPI5VC4_V3D_TRIANGLE_RESULT
+{
+    ULONG Size;
+    ULONG AbiVersion;
+    ULONG Status;
+    ULONG Flags;
+    ULONG Width;
+    ULONG Height;
+    ULONG Stride;
+    ULONG ClearColor;
+    ULONG PixelBytes;
+    ULONG CoveredPixelCount;
+    RPI5VC4_V3D_SELFTEST Diagnostics;
+    ULONG Pixels[1];
+} RPI5VC4_V3D_TRIANGLE_RESULT, *PRPI5VC4_V3D_TRIANGLE_RESULT;
 
 #define RPI5VC4_OGL_STATS_VERSION 1
 
