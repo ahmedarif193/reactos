@@ -1161,6 +1161,7 @@ ConSrvInheritConsole(
 {
     NTSTATUS Status = STATUS_SUCCESS;
     PCONSRV_CONSOLE Console;
+    BOOLEAN AlreadyAttached;
 
     /* Validate and lock the console */
     if (!ConSrvValidateConsole(&Console,
@@ -1171,8 +1172,27 @@ ConSrvInheritConsole(
         return STATUS_UNSUCCESSFUL;
     }
 
-    /* Inherit the console */
-    ProcessData->ConsoleHandle = ConsoleHandle;
+    /*
+     * A process can connect to the console server more than once (for example,
+     * when more than one machine view of a hybrid process initializes its
+     * client runtime).  Keep the existing list membership and reference in
+     * that case; inserting ConsoleLink twice corrupts Console->ProcessList.
+     */
+    AlreadyAttached = (ProcessData->ConsoleHandle != NULL);
+    if (AlreadyAttached && ProcessData->ConsoleHandle != ConsoleHandle)
+    {
+        Status = STATUS_ACCESS_DENIED;
+        goto Quit;
+    }
+
+    if (AlreadyAttached && CreateNewHandleTable)
+    {
+        Status = STATUS_ACCESS_DENIED;
+        goto Quit;
+    }
+
+    if (!AlreadyAttached)
+        ProcessData->ConsoleHandle = ConsoleHandle;
 
     if (CreateNewHandleTable)
     {
@@ -1211,8 +1231,11 @@ ConSrvInheritConsole(
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("NtDuplicateObject(InitEvents[INIT_SUCCESS]) failed: %lu\n", Status);
-        ConSrvFreeHandlesTable(ProcessData);
-        ProcessData->ConsoleHandle = NULL;
+        if (!AlreadyAttached)
+        {
+            ConSrvFreeHandlesTable(ProcessData);
+            ProcessData->ConsoleHandle = NULL;
+        }
         goto Quit;
     }
 
@@ -1227,8 +1250,11 @@ ConSrvInheritConsole(
         NtDuplicateObject(ProcessData->Process->ProcessHandle,
                           ConsoleStartInfo->InitEvents[INIT_SUCCESS],
                           NULL, NULL, 0, 0, DUPLICATE_CLOSE_SOURCE);
-        ConSrvFreeHandlesTable(ProcessData);
-        ProcessData->ConsoleHandle = NULL;
+        if (!AlreadyAttached)
+        {
+            ConSrvFreeHandlesTable(ProcessData);
+            ProcessData->ConsoleHandle = NULL;
+        }
         goto Quit;
     }
 
@@ -1247,8 +1273,11 @@ ConSrvInheritConsole(
         NtDuplicateObject(ProcessData->Process->ProcessHandle,
                           ConsoleStartInfo->InitEvents[INIT_SUCCESS],
                           NULL, NULL, 0, 0, DUPLICATE_CLOSE_SOURCE);
-        ConSrvFreeHandlesTable(ProcessData); // NOTE: Always free the handle table.
-        ProcessData->ConsoleHandle = NULL;
+        if (!AlreadyAttached)
+        {
+            ConSrvFreeHandlesTable(ProcessData);
+            ProcessData->ConsoleHandle = NULL;
+        }
         goto Quit;
     }
 
@@ -1259,18 +1288,22 @@ ConSrvInheritConsole(
     /* Return the console handle to the caller */
     ConsoleStartInfo->ConsoleHandle = ProcessData->ConsoleHandle;
 
-    /*
-     * Insert the process into the processes list of the console,
-     * and set its foreground priority.
-     */
-    InsertHeadList(&Console->ProcessList, &ProcessData->ConsoleLink);
-    ConSrvSetProcessFocus(ProcessData->Process, Console->HasFocus);
+    if (!AlreadyAttached)
+    {
+        /*
+         * Insert the process into the processes list of the console,
+         * and set its foreground priority.
+         */
+        InsertHeadList(&Console->ProcessList, &ProcessData->ConsoleLink);
+        ConSrvSetProcessFocus(ProcessData->Process, Console->HasFocus);
 
-    /* Add a reference count because the process is tied to the console */
-    _InterlockedIncrement(&Console->ReferenceCount);
+        /* Add a reference count because the process is tied to the console */
+        _InterlockedIncrement(&Console->ReferenceCount);
+    }
 
-    /* Update the internal info of the terminal */
-    TermRefreshInternalInfo(Console);
+    /* Update the internal info only when list membership changed. */
+    if (!AlreadyAttached)
+        TermRefreshInternalInfo(Console);
 
     Status = STATUS_SUCCESS;
 
