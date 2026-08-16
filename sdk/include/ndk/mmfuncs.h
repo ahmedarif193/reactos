@@ -105,6 +105,21 @@ NtAllocateVirtualMemory(
     _In_ ULONG Protect
 );
 
+_Must_inspect_result_
+__kernel_entry
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtAllocateVirtualMemoryEx(
+    _In_ HANDLE ProcessHandle,
+    _Inout_ _Outptr_result_buffer_(*RegionSize) PVOID *BaseAddress,
+    _Inout_ PSIZE_T RegionSize,
+    _In_ ULONG AllocationType,
+    _In_ ULONG Protect,
+    _In_reads_opt_(ExtendedParameterCount) PMEM_EXTENDED_PARAMETER ExtendedParameters,
+    _In_ ULONG ExtendedParameterCount
+);
+
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -343,6 +358,19 @@ ZwAllocateVirtualMemory(
     _Inout_ PSIZE_T RegionSize,
     _In_ ULONG AllocationType,
     _In_ ULONG Protect
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+ZwAllocateVirtualMemoryEx(
+    _In_ HANDLE ProcessHandle,
+    _Inout_ _Outptr_result_buffer_(*RegionSize) PVOID *BaseAddress,
+    _Inout_ PSIZE_T RegionSize,
+    _In_ ULONG AllocationType,
+    _In_ ULONG Protect,
+    _In_reads_opt_(ExtendedParameterCount) PMEM_EXTENDED_PARAMETER ExtendedParameters,
+    _In_ ULONG ExtendedParameterCount
 );
 
 NTSYSAPI

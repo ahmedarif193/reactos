@@ -77,6 +77,7 @@ RtlpGetExtendedParameterZeroBits(PMEM_EXTENDED_PARAMETER ExtendedParameters,
     return STATUS_SUCCESS;
 }
 
+#if defined(_M_ARM64)
 /*
  * @implemented
  */
@@ -99,14 +100,11 @@ NtAllocateVirtualMemoryEx(HANDLE ProcessHandle,
         return Status;
 
     Status = NtAllocateVirtualMemory(ProcessHandle, BaseAddress, ZeroBits, RegionSize, AllocationType, Protect);
-#if defined(_M_ARM64)
     if (NT_SUCCESS(Status) && EcCode && ProcessHandle == NtCurrentProcess())
         ChpeMarkEcCodeRange(*BaseAddress, *RegionSize);
-#else
-    UNREFERENCED_PARAMETER(EcCode);
-#endif
     return Status;
 }
+#endif
 
 NTSTATUS
 NTAPI
