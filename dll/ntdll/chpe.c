@@ -1330,25 +1330,6 @@ ChpeShouldEmulateImage(PVOID ImageBase)
 
 static const UNICODE_STRING ChpeNtdllImportName = RTL_CONSTANT_STRING(L"ntdll.dll");
 
-static const UNICODE_STRING ChpeArm64EcRedirectImports[] =
-{
-    RTL_CONSTANT_STRING(L"advapi32.dll"),
-    RTL_CONSTANT_STRING(L"comctl32.dll"),
-    RTL_CONSTANT_STRING(L"comdlg32.dll"),
-    RTL_CONSTANT_STRING(L"gdi32.dll"),
-    RTL_CONSTANT_STRING(L"kernel32.dll"),
-    RTL_CONSTANT_STRING(L"kernelbase.dll"),
-    RTL_CONSTANT_STRING(L"kernelbase_ros.dll"),
-    RTL_CONSTANT_STRING(L"libpng.dll"),
-    RTL_CONSTANT_STRING(L"msvcrt.dll"),
-    RTL_CONSTANT_STRING(L"ntdll.dll"),
-    RTL_CONSTANT_STRING(L"ntdll_chpe.dll"),
-    RTL_CONSTANT_STRING(L"shell32.dll"),
-    RTL_CONSTANT_STRING(L"ucrtbase.dll"),
-    RTL_CONSTANT_STRING(L"user32.dll"),
-    RTL_CONSTANT_STRING(L"usp10.dll"),
-};
-
 static
 BOOLEAN
 ChpepIsX64CallableImageMachine(USHORT Machine)
@@ -1375,7 +1356,8 @@ ChpepNeedsChpeImportRedirects(PVOID ImageBase)
 
     Machine = ChpepGetImageMachine(ImageBase);
     return Machine == IMAGE_FILE_MACHINE_AMD64 ||
-           Machine == IMAGE_FILE_MACHINE_ARM64EC;
+           Machine == IMAGE_FILE_MACHINE_ARM64EC ||
+           Machine == IMAGE_FILE_MACHINE_ARM64;
 }
 
 static
@@ -1406,7 +1388,6 @@ ChpeShouldRedirectImport(PVOID ImportBase,
                          PUNICODE_STRING ImportName)
 {
     UNICODE_STRING BaseName;
-    ULONG Index;
 
     if (!ImportName || !ImportName->Buffer || !ChpepNeedsChpeImportRedirects(ImportBase))
         return FALSE;
@@ -1415,13 +1396,26 @@ ChpeShouldRedirectImport(PVOID ImportBase,
     if (RtlEqualUnicodeString(&BaseName, &ChpeNtdllImportName, TRUE) && !ChpepIsPureAmd64Image(ImportBase))
         return FALSE;
 
-    for (Index = 0; Index < RTL_NUMBER_OF(ChpeArm64EcRedirectImports); ++Index)
-    {
-        if (RtlEqualUnicodeString(&BaseName, &ChpeArm64EcRedirectImports[Index], TRUE))
-            return TRUE;
-    }
+    return TRUE;
+}
 
-    return FALSE;
+BOOLEAN
+NTAPI
+ChpeShouldRedirectDynamicLoad(PUNICODE_STRING DllName)
+{
+    UNICODE_STRING BaseName;
+
+    if (!DllName || !DllName->Buffer || !ChpeIsChpeProcess())
+        return FALSE;
+
+    ChpepGetImportBaseName(DllName, &BaseName);
+
+    /* The host ntdll owns the loader. Pure AMD64 imports are redirected to
+     * ntdll_chpe.dll while explicit ntdll.dll loads keep the host module. */
+    if (RtlEqualUnicodeString(&BaseName, &ChpeNtdllImportName, TRUE))
+        return FALSE;
+
+    return TRUE;
 }
 
 NTSTATUS

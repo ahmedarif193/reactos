@@ -1087,7 +1087,8 @@ LdrpApplyFileNameRedirection(
     _Inout_opt_ PUNICODE_STRING StaticString,
     _Inout_opt_ PUNICODE_STRING DynamicString,
     _Inout_ PUNICODE_STRING *NewName,
-    _Out_ PBOOLEAN RedirectedDll)
+    _Out_ PBOOLEAN RedirectedDll,
+    _Out_opt_ PBOOLEAN ApiSetRedirected)
 {
 
     /* Check for invalid parameters */
@@ -1107,6 +1108,8 @@ LdrpApplyFileNameRedirection(
     }
 
     *RedirectedDll = FALSE;
+    if (ApiSetRedirected)
+        *ApiSetRedirected = FALSE;
 
     PCUNICODE_STRING PrevNewName = *NewName;
     UNICODE_STRING ApisetName = {0};
@@ -1130,6 +1133,8 @@ LdrpApplyFileNameRedirection(
         PUNICODE_STRING ResultPath = NULL;
 
         /* This is an apiset we can use */
+        if (ApiSetRedirected)
+            *ApiSetRedirected = TRUE;
         RtlInitUnicodeString(&NtSystemRoot, SharedUserData->NtSystemRoot);
 
         SIZE_T Needed = System32.Length + ApisetName.Length + NtSystemRoot.Length + sizeof(UNICODE_NULL);

@@ -107,7 +107,8 @@ LdrpApplyFileNameRedirection(
     _Inout_opt_ PUNICODE_STRING StaticString,
     _Inout_opt_ PUNICODE_STRING DynamicString,
     _Inout_ PUNICODE_STRING *NewName,
-    _Inout_ PBOOLEAN RedirectedDll);
+    _Out_ PBOOLEAN RedirectedDll,
+    _Out_opt_ PBOOLEAN ApiSetRedirected);
 
 /* ldrutils.c */
 PVOID NTAPI
@@ -120,6 +121,13 @@ LdrpCreateDllSection(IN PUNICODE_STRING FullName,
                      IN HANDLE DllHandle,
                      IN PULONG DllCharacteristics OPTIONAL,
                      OUT PHANDLE SectionHandle);
+
+#if defined(_M_ARM64)
+NTSTATUS
+LdrpBuildArm64EcImportName(
+    PUNICODE_STRING ImportName,
+    PUNICODE_STRING RedirectedImportName);
+#endif
 
 NTSTATUS
 NTAPI
@@ -381,6 +389,11 @@ NTAPI
 ChpeShouldRedirectImport(
     PVOID ImportBase,
     PUNICODE_STRING ImportName);
+
+BOOLEAN
+NTAPI
+ChpeShouldRedirectDynamicLoad(
+    PUNICODE_STRING DllName);
 
 NTSTATUS
 NTAPI

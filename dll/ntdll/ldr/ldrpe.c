@@ -51,7 +51,6 @@ LdrpGetImportBaseName(PUNICODE_STRING ImportName,
     }
 }
 
-static
 NTSTATUS
 LdrpBuildArm64EcImportName(PUNICODE_STRING ImportName,
                            PUNICODE_STRING RedirectedImportName)
@@ -1026,7 +1025,7 @@ LdrpLoadImportModule(IN PWSTR DllPath OPTIONAL,
     }
 
     /* Check if the SxS Assemblies specify another file */
-    Status = LdrpApplyFileNameRedirection(ImpDescName, &LdrApiDefaultExtension, NULL, &RedirectedImpDescName, &ImpDescName, &RedirectedDll);
+    Status = LdrpApplyFileNameRedirection(ImpDescName, &LdrApiDefaultExtension, NULL, &RedirectedImpDescName, &ImpDescName, &RedirectedDll, NULL);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("LDR: LdrpApplyFileNameRedirection failed with status %x for dll %wZ\n", Status, ImpDescName);
@@ -1040,10 +1039,12 @@ LdrpLoadImportModule(IN PWSTR DllPath OPTIONAL,
         if (!NT_SUCCESS(Status))
             goto done;
 
-        DPRINT("LDR: CHPE redirected %wZ to %wZ\n", ImpDescName, &ChpeImpDescName);
-        ImpDescName = &ChpeImpDescName;
-        RedirectedDll = TRUE;
-        ChpeRedirectedDll = TRUE;
+        if (RtlDoesFileExists_UStr(&ChpeImpDescName))
+        {
+            ImpDescName = &ChpeImpDescName;
+            RedirectedDll = TRUE;
+            ChpeRedirectedDll = TRUE;
+        }
     }
 #endif
 
@@ -1154,6 +1155,10 @@ LdrpSnapThunk(IN PVOID ExportBase,
     PANSI_STRING ForwardName;
     PVOID ForwarderHandle = NULL;
     ULONG ForwardOrdinal;
+#if LDRP_CHPE_IMPORT_REDIRECTION
+    ULONG_PTR NativeFunction;
+    USHORT ImportMachine;
+#endif
 
     /* Check if the snap is by ordinal */
     if ((IsOrdinal = IMAGE_SNAP_BY_ORDINAL(OriginalThunk->u1.Ordinal)))
@@ -1340,7 +1345,7 @@ FailurePath:
 
                 RtlInitEmptyUnicodeString(&StaticString, StringBuffer, sizeof(StringBuffer));
                 RedirectedImportName = &TempUString;
-                Status = LdrpApplyFileNameRedirection(&TempUString, &LdrApiDefaultExtension, &StaticString, NULL, &RedirectedImportName, &Redirected);
+                Status = LdrpApplyFileNameRedirection(&TempUString, &LdrApiDefaultExtension, &StaticString, NULL, &RedirectedImportName, &Redirected, NULL);
 
 #if LDRP_CHPE_IMPORT_REDIRECTION
                 RtlInitEmptyUnicodeString(&ForwarderDllName, ForwarderDllBuffer, sizeof(ForwarderDllBuffer));
@@ -1359,9 +1364,8 @@ FailurePath:
                     if (NT_SUCCESS(Status) && ChpeShouldRedirectImport(ImportBase, ChpeCandidateName))
                     {
                         Status = LdrpBuildArm64EcImportName(ChpeCandidateName, &ChpeImportName);
-                        if (NT_SUCCESS(Status))
+                        if (NT_SUCCESS(Status) && RtlDoesFileExists_UStr(&ChpeImportName))
                         {
-                            DPRINT("LDR: CHPE redirected forwarder %wZ to %wZ\n", ChpeCandidateName, &ChpeImportName);
                             RedirectedImportName = &ChpeImportName;
                             Redirected = TRUE;
                         }
@@ -1436,10 +1440,15 @@ FailurePath:
             if (!NT_SUCCESS(Status))
                 return Status;
 
-            if (ChpeGetImageMachine(ImportBase) == IMAGE_FILE_MACHINE_ARM64EC &&
+            ImportMachine = ChpeGetImageMachine(ImportBase);
+            if (ImportMachine == IMAGE_FILE_MACHINE_ARM64EC &&
                 !ChpePatchArm64EcAuxiliaryIat(ImportBase, ExportBase, Thunk, Thunk->u1.Function))
             {
                 return STATUS_INVALID_IMAGE_FORMAT;
+            }
+            else if (ImportMachine == IMAGE_FILE_MACHINE_ARM64 && ChpeGetArm64EcNativeFunction(ExportBase, Thunk->u1.Function, &NativeFunction))
+            {
+                Thunk->u1.Function = NativeFunction;
             }
         }
 #endif

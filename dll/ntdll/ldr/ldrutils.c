@@ -215,9 +215,7 @@ LdrpUpdateLoadCount3(IN PLDR_DATA_TABLE_ENTRY LdrEntry,
                 RedirectedImportName = ImportNameUnic;
 
                 /* Check if the SxS Assemblies specify another file */
-                Status = LdrpApplyFileNameRedirection(
-                    ImportNameUnic, &LdrApiDefaultExtension, UpdateString, NULL, &RedirectedImportName,
-                    &RedirectedDll);
+                Status = LdrpApplyFileNameRedirection(ImportNameUnic, &LdrApiDefaultExtension, UpdateString, NULL, &RedirectedImportName, &RedirectedDll, NULL);
 
                 /* Check success */
                 if (NT_SUCCESS(Status) && RedirectedDll)
@@ -289,9 +287,7 @@ LdrpUpdateLoadCount3(IN PLDR_DATA_TABLE_ENTRY LdrEntry,
                     RedirectedImportName = ImportNameUnic;
 
                     /* Check if the SxS Assemblies specify another file */
-                    Status = LdrpApplyFileNameRedirection(
-                        ImportNameUnic, &LdrApiDefaultExtension, UpdateString, NULL, &RedirectedImportName,
-                        &RedirectedDll);
+                    Status = LdrpApplyFileNameRedirection(ImportNameUnic, &LdrApiDefaultExtension, UpdateString, NULL, &RedirectedImportName, &RedirectedDll, NULL);
 
                     /* Check success */
                     if (NT_SUCCESS(Status) && RedirectedDll)
@@ -388,8 +384,7 @@ LdrpUpdateLoadCount3(IN PLDR_DATA_TABLE_ENTRY LdrEntry,
                 RedirectedImportName = ImportNameUnic;
 
                 /* Check if the SxS Assemblies specify another file */
-                Status = LdrpApplyFileNameRedirection(
-                    ImportNameUnic, &LdrApiDefaultExtension, UpdateString, NULL, &RedirectedImportName, &RedirectedDll);
+                Status = LdrpApplyFileNameRedirection(ImportNameUnic, &LdrApiDefaultExtension, UpdateString, NULL, &RedirectedImportName, &RedirectedDll, NULL);
 
                 /* Check success */
                 if (NT_SUCCESS(Status) && RedirectedDll)
