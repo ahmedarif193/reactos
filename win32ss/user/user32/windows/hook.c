@@ -325,6 +325,19 @@ UnhookWindowsHook ( int nCode, HOOKPROC pfnFilterProc )
   return NtUserxUnhookWindowsHook(nCode, pfnFilterProc);
 }
 
+#ifdef __arm64ec__
+/*
+ * ARM64EC exports need a signature-specific entry thunk.  The direct spec
+ * alias targets a native syscall stub, which has no ARM64EC entry metadata.
+ */
+BOOL
+WINAPI
+UnhookWindowsHookEx(HHOOK Hook)
+{
+  return NtUserUnhookWindowsHookEx(Hook);
+}
+#endif
+
 /*
  * @implemented
  */
@@ -854,4 +867,3 @@ User32CallEventProcFromKernel(PVOID Arguments, ULONG ArgumentLength)
 
   return ZwCallbackReturn(NULL, 0, STATUS_SUCCESS);
 }
-
