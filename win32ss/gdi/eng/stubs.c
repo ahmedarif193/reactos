@@ -558,28 +558,6 @@ EngLpkInstalled(VOID)
 /*
  * @unimplemented
  */
-BOOL
-APIENTRY
-EngPlgBlt(
-    IN SURFOBJ *Dest,
-    IN SURFOBJ *Source,
-    IN SURFOBJ *Mask,
-    IN CLIPOBJ *Clip,
-    IN XLATEOBJ *Xlate,
-    IN COLORADJUSTMENT *ColorAdjustment,
-    IN POINTL *BrusOrigin,
-    IN POINTFIX *DestPoints,
-    IN RECTL *SourceRect,
-    IN POINTL *MaskPoint,
-    IN ULONG Mode)
-{
-    UNIMPLEMENTED;
-    return FALSE;
-}
-
-/*
- * @unimplemented
- */
 LARGE_INTEGER
 APIENTRY
 EngQueryFileTimeStamp(IN LPWSTR FileName)

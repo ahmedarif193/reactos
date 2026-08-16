@@ -82,6 +82,19 @@ IntEngBitBlt(SURFOBJ *DestObj,
                ROP4 Rop4);
 
 BOOL APIENTRY
+IntEngPlgBlt(_Inout_ SURFOBJ *psoDest,
+             _Inout_ SURFOBJ *psoSource,
+             _In_opt_ SURFOBJ *psoMask,
+             _In_opt_ CLIPOBJ *pco,
+             _In_opt_ XLATEOBJ *pxlo,
+             _In_opt_ COLORADJUSTMENT *pca,
+             _In_opt_ POINTL *pptlBrushOrg,
+             _In_reads_(3) POINTFIX *pptfx,
+             _In_ RECTL *prclSource,
+             _In_opt_ POINTL *pptlMask,
+             _In_ ULONG iMode);
+
+BOOL APIENTRY
 IntEngStretchBlt(SURFOBJ *DestObj,
                  SURFOBJ *SourceObj,
                  SURFOBJ *Mask,

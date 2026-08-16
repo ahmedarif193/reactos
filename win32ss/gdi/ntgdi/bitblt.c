@@ -555,8 +555,273 @@ NtGdiPlgBlt(
     IN INT yMask,
     IN DWORD crBackColor)
 {
-    FIXME("NtGdiPlgBlt: unimplemented.\n");
-    return FALSE;
+    PDC DCDest;
+    PDC DCSrc;
+    HDC ahDC[2];
+    PGDIOBJ apObj[2];
+    SURFACE *BitmapDest;
+    SURFACE *BitmapSrc;
+    SURFACE *BitmapMask = NULL;
+    POINTL TargetLogical[3];
+    POINTL SourcePoints[3];
+    POINTFIX TargetTransformed[3];
+    POINTFIX TargetCorners[4];
+    POINTFIX TargetPoints[3];
+    POINTL MaskPoint;
+    POINTL BrushOrigin;
+    RECTL DestRect;
+    RECTL SourceRect;
+    XFORMOBJ xform;
+    EXLATEOBJ exlo;
+    LONGLONG Coordinate;
+    LONGLONG SourceRight;
+    LONGLONG SourceBottom;
+    LONGLONG MinimumLong;
+    LONG MinX;
+    LONG MinY;
+    LONG MaxX;
+    LONG MaxY;
+    BOOL FlipX;
+    BOOL FlipY;
+    BOOL Result = FALSE;
+    BOOL XlateInitialized = FALSE;
+    ULONG Index;
+
+    MinimumLong = -((LONGLONG)MAXLONG) - 1;
+    SourceRight = (LONGLONG)xSrc + cxSrc;
+    SourceBottom = (LONGLONG)ySrc + cySrc;
+    if (hdcTrg == NULL || hdcSrc == NULL || pptlTrg == NULL ||
+        cxSrc == 0 || cySrc == 0 ||
+        SourceRight < MinimumLong || SourceRight > MAXLONG ||
+        SourceBottom < MinimumLong || SourceBottom > MAXLONG)
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    SourcePoints[1].x = (LONG)SourceRight;
+    SourcePoints[2].y = (LONG)SourceBottom;
+
+    _SEH2_TRY
+    {
+        ProbeForRead(pptlTrg, sizeof(TargetLogical), 1);
+        RtlCopyMemory(TargetLogical, pptlTrg, sizeof(TargetLogical));
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        _SEH2_YIELD(return FALSE);
+    }
+    _SEH2_END;
+
+    if (hbmMask != NULL)
+    {
+        BitmapMask = SURFACE_ShareLockSurface(hbmMask);
+        if (BitmapMask == NULL ||
+            BitmapMask->SurfObj.iBitmapFormat != BMF_1BPP)
+        {
+            if (BitmapMask != NULL)
+                SURFACE_ShareUnlockSurface(BitmapMask);
+            EngSetLastError(ERROR_INVALID_HANDLE);
+            return FALSE;
+        }
+    }
+
+    ahDC[0] = hdcTrg;
+    ahDC[1] = hdcSrc;
+    if (!GDIOBJ_bLockMultipleObjects(2,
+                                     (HGDIOBJ *)ahDC,
+                                     apObj,
+                                     GDIObjType_DC_TYPE))
+    {
+        if (BitmapMask != NULL)
+            SURFACE_ShareUnlockSurface(BitmapMask);
+        EngSetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+    DCDest = apObj[0];
+    DCSrc = apObj[1];
+
+    if (DCDest->dctype == DCTYPE_INFO || DCSrc->dctype == DCTYPE_INFO)
+    {
+        Result = TRUE;
+        goto Cleanup;
+    }
+
+    XFORMOBJ_vInit(&xform, DC_pmxWorldToDevice(DCDest));
+    if (!XFORMOBJ_bApplyXform(&xform,
+                              XF_LTOFX,
+                              ARRAYSIZE(TargetLogical),
+                              TargetLogical,
+                              TargetTransformed))
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        goto Cleanup;
+    }
+
+    for (Index = 0; Index < ARRAYSIZE(TargetTransformed); ++Index)
+    {
+        Coordinate = (LONGLONG)TargetTransformed[Index].x +
+                     (LONGLONG)DCDest->ptlDCOrig.x * 16 - 8;
+        if (Coordinate < MinimumLong || Coordinate > MAXLONG)
+        {
+            EngSetLastError(ERROR_INVALID_PARAMETER);
+            goto Cleanup;
+        }
+        TargetCorners[Index].x = (LONG)Coordinate;
+
+        Coordinate = (LONGLONG)TargetTransformed[Index].y +
+                     (LONGLONG)DCDest->ptlDCOrig.y * 16 - 8;
+        if (Coordinate < MinimumLong || Coordinate > MAXLONG)
+        {
+            EngSetLastError(ERROR_INVALID_PARAMETER);
+            goto Cleanup;
+        }
+        TargetCorners[Index].y = (LONG)Coordinate;
+    }
+
+    Coordinate = (LONGLONG)TargetCorners[1].x +
+                 TargetCorners[2].x - TargetCorners[0].x;
+    if (Coordinate < MinimumLong || Coordinate > MAXLONG)
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        goto Cleanup;
+    }
+    TargetCorners[3].x = (LONG)Coordinate;
+    Coordinate = (LONGLONG)TargetCorners[1].y +
+                 TargetCorners[2].y - TargetCorners[0].y;
+    if (Coordinate < MinimumLong || Coordinate > MAXLONG)
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        goto Cleanup;
+    }
+    TargetCorners[3].y = (LONG)Coordinate;
+
+    SourcePoints[0].x = xSrc;
+    SourcePoints[0].y = ySrc;
+    SourcePoints[1].y = ySrc;
+    SourcePoints[2].x = xSrc;
+    if (!IntLPtoDP(DCSrc, SourcePoints, ARRAYSIZE(SourcePoints)))
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        goto Cleanup;
+    }
+    for (Index = 0; Index < ARRAYSIZE(SourcePoints); ++Index)
+    {
+        Coordinate = (LONGLONG)SourcePoints[Index].x +
+                     DCSrc->ptlDCOrig.x;
+        if (Coordinate < MinimumLong || Coordinate > MAXLONG)
+        {
+            EngSetLastError(ERROR_INVALID_PARAMETER);
+            goto Cleanup;
+        }
+        SourcePoints[Index].x = (LONG)Coordinate;
+        Coordinate = (LONGLONG)SourcePoints[Index].y +
+                     DCSrc->ptlDCOrig.y;
+        if (Coordinate < MinimumLong || Coordinate > MAXLONG)
+        {
+            EngSetLastError(ERROR_INVALID_PARAMETER);
+            goto Cleanup;
+        }
+        SourcePoints[Index].y = (LONG)Coordinate;
+    }
+
+    /* The source DC may scale, translate, or reflect, but not rotate/shear. */
+    if (SourcePoints[1].y != SourcePoints[0].y ||
+        SourcePoints[2].x != SourcePoints[0].x ||
+        SourcePoints[1].x == SourcePoints[0].x ||
+        SourcePoints[2].y == SourcePoints[0].y)
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        goto Cleanup;
+    }
+
+    FlipX = SourcePoints[1].x < SourcePoints[0].x;
+    FlipY = SourcePoints[2].y < SourcePoints[0].y;
+    SourceRect.left = min(SourcePoints[0].x, SourcePoints[1].x);
+    SourceRect.right = max(SourcePoints[0].x, SourcePoints[1].x);
+    SourceRect.top = min(SourcePoints[0].y, SourcePoints[2].y);
+    SourceRect.bottom = max(SourcePoints[0].y, SourcePoints[2].y);
+
+    if (FlipX && FlipY)
+    {
+        TargetPoints[0] = TargetCorners[3];
+        TargetPoints[1] = TargetCorners[2];
+        TargetPoints[2] = TargetCorners[1];
+    }
+    else if (FlipX)
+    {
+        TargetPoints[0] = TargetCorners[1];
+        TargetPoints[1] = TargetCorners[0];
+        TargetPoints[2] = TargetCorners[3];
+    }
+    else if (FlipY)
+    {
+        TargetPoints[0] = TargetCorners[2];
+        TargetPoints[1] = TargetCorners[3];
+        TargetPoints[2] = TargetCorners[0];
+    }
+    else
+    {
+        TargetPoints[0] = TargetCorners[0];
+        TargetPoints[1] = TargetCorners[1];
+        TargetPoints[2] = TargetCorners[2];
+    }
+
+    MinX = min(min(TargetCorners[0].x, TargetCorners[1].x),
+               min(TargetCorners[2].x, TargetCorners[3].x));
+    MinY = min(min(TargetCorners[0].y, TargetCorners[1].y),
+               min(TargetCorners[2].y, TargetCorners[3].y));
+    MaxX = max(max(TargetCorners[0].x, TargetCorners[1].x),
+               max(TargetCorners[2].x, TargetCorners[3].x));
+    MaxY = max(max(TargetCorners[0].y, TargetCorners[1].y),
+               max(TargetCorners[2].y, TargetCorners[3].y));
+    DestRect.left = FXTOLFLOOR(MinX);
+    DestRect.top = FXTOLFLOOR(MinY);
+    DestRect.right = FXTOLCEILING(MaxX);
+    DestRect.bottom = FXTOLCEILING(MaxY);
+    if (DestRect.right < MAXLONG)
+        DestRect.right++;
+    if (DestRect.bottom < MAXLONG)
+        DestRect.bottom++;
+
+    if (DCDest->fs & (DC_ACCUM_APP | DC_ACCUM_WMGR))
+        IntUpdateBoundsRect(DCDest, &DestRect);
+
+    DC_vPrepareDCsForBlit(DCDest, &DestRect, DCSrc, &SourceRect);
+    BitmapDest = DCDest->dclevel.pSurface;
+    BitmapSrc = DCSrc->dclevel.pSurface;
+    if (BitmapDest == NULL || BitmapSrc == NULL)
+    {
+        DC_vFinishBlit(DCDest, DCSrc);
+        goto Cleanup;
+    }
+
+    EXLATEOBJ_vInitXlateFromDCsEx(&exlo, DCSrc, DCDest, crBackColor);
+    XlateInitialized = TRUE;
+    MaskPoint.x = xMask;
+    MaskPoint.y = yMask;
+    BrushOrigin = DCDest->ptlDCOrig;
+    Result = IntEngPlgBlt(&BitmapDest->SurfObj,
+                          &BitmapSrc->SurfObj,
+                          BitmapMask != NULL ? &BitmapMask->SurfObj : NULL,
+                          (CLIPOBJ *)&DCDest->co,
+                          &exlo.xlo,
+                          &DCDest->dclevel.ca,
+                          &BrushOrigin,
+                          TargetPoints,
+                          &SourceRect,
+                          BitmapMask != NULL ? &MaskPoint : NULL,
+                          DCDest->pdcattr->jStretchBltMode);
+    DC_vFinishBlit(DCDest, DCSrc);
+
+Cleanup:
+    if (XlateInitialized)
+        EXLATEOBJ_vCleanup(&exlo);
+    DC_UnlockDc(DCSrc);
+    DC_UnlockDc(DCDest);
+    if (BitmapMask != NULL)
+        SURFACE_ShareUnlockSurface(BitmapMask);
+    return Result;
 }
 
 BOOL
