@@ -381,6 +381,96 @@ static GLint repeat_texel( GLint coordinate, GLint size )
 }
 
 
+static GLfloat mirror_coordinate( GLfloat coordinate )
+{
+   GLfloat integer = (GLfloat) floor(coordinate);
+   GLfloat fraction = coordinate - integer;
+
+   return fmod(integer, 2.0F) == 0.0F ? fraction : 1.0F - fraction;
+}
+
+
+static GLfloat clamp_texture_coordinate( GLenum wrap, GLfloat coordinate,
+                                         GLint size )
+{
+   GLfloat halfTexel;
+
+   switch (wrap) {
+      case GL_MIRRORED_REPEAT:
+         coordinate = mirror_coordinate(coordinate);
+         halfTexel = 0.5F / (GLfloat) size;
+         return CLAMP(coordinate, halfTexel, 1.0F - halfTexel);
+      case GL_CLAMP_TO_EDGE:
+         halfTexel = 0.5F / (GLfloat) size;
+         return CLAMP(coordinate, halfTexel, 1.0F - halfTexel);
+      case GL_CLAMP_TO_BORDER:
+         halfTexel = 0.5F / (GLfloat) size;
+         return CLAMP(coordinate, -halfTexel, 1.0F + halfTexel);
+      default:
+         return CLAMP(coordinate, 0.0F, 1.0F);
+   }
+}
+
+
+static GLint nearest_texel( GLenum wrap, GLfloat coordinate, GLint size,
+                            GLboolean *border )
+{
+   GLint texel;
+
+   if (wrap == GL_REPEAT) {
+      texel = repeat_texel((GLint) floor(coordinate * size), size);
+   }
+   else {
+      coordinate = clamp_texture_coordinate(wrap, coordinate, size);
+      if (coordinate == 1.0F) {
+         texel = size - 1;
+      }
+      else {
+         texel = (GLint) floor(coordinate * size);
+      }
+   }
+
+   *border = texel < 0 || texel >= size;
+   return texel;
+}
+
+
+static GLfloat linear_texels( GLenum wrap, GLfloat coordinate, GLint size,
+                              GLint *texel0, GLint *texel1,
+                              GLboolean *border0, GLboolean *border1 )
+{
+   GLfloat mapped;
+   GLint first;
+
+   if (wrap == GL_REPEAT) {
+      mapped = coordinate * size;
+      first = (GLint) floor(mapped - 0.5F);
+      *texel0 = repeat_texel(first, size);
+      *texel1 = repeat_texel(first + 1, size);
+      *border0 = *border1 = GL_FALSE;
+   }
+   else {
+      mapped = clamp_texture_coordinate(wrap, coordinate, size) * size;
+      first = (GLint) floor(mapped - 0.5F);
+      *texel0 = first;
+      *texel1 = first + 1;
+
+      if (wrap == GL_CLAMP_TO_EDGE || wrap == GL_MIRRORED_REPEAT) {
+         *texel0 = CLAMP(*texel0, 0, size - 1);
+         *texel1 = CLAMP(*texel1, 0, size - 1);
+      }
+      else {
+         *texel0 = CLAMP(*texel0, -1, size);
+         *texel1 = CLAMP(*texel1, -1, size);
+      }
+      *border0 = *texel0 < 0 || *texel0 >= size;
+      *border1 = *texel1 < 0 || *texel1 >= size;
+   }
+
+   return mapped;
+}
+
+
 
 /*
  * Given 1-D texture image and an (i) texel column coordinate, return the
@@ -450,27 +540,16 @@ static void sample_1d_nearest( const struct gl_texture_object *tObj,
 {
    GLint width = img->Width2;  /* without border */
    GLint i;
+   GLboolean border;
    GLubyte *texel;
 
-   /* Clamp/Repeat S and convert to integer texel coordinate */
-   if (tObj->WrapS==GL_REPEAT) {
-      /* s limited to [0,1) */
-      /* i limited to [0,width-1] */
-      if (is_power_of_two(width)) {
-         i = (GLint) (s * width);
-         if (s<0.0F)  i -= 1;
-         i &= (width-1);
-      }
-      else {
-         i = repeat_texel((GLint) floor(s * width), width);
-      }
-   }
-   else {
-      /* s limited to [0,1] */
-      /* i limited to [0,width-1] */
-      if (s<0.0F)        i = 0;
-      else if (s>=1.0F)  i = width-1;
-      else               i = (GLint) (s * width);
+   i = nearest_texel(tObj->WrapS, s, width, &border);
+   if (border && !img->Border) {
+      *red = tObj->BorderColor[0];
+      *green = tObj->BorderColor[1];
+      *blue = tObj->BorderColor[2];
+      *alpha = tObj->BorderColor[3];
+      return;
    }
 
    /* skip over the border, if any */
@@ -528,34 +607,15 @@ static void sample_1d_linear( const struct gl_texture_object *tObj,
    GLint width = img->Width2;
    GLint i0, i1;
    GLfloat u;
-   GLint i0border, i1border;
+   GLboolean i0border, i1border;
 
-   u = (tObj->WrapS==GL_REPEAT ? s : CLAMP(s, 0.0F, 1.0F)) * width;
-   if (tObj->WrapS==GL_REPEAT) {
-      i0 = ((GLint) floor(u - 0.5F)) % width;
-      if (is_power_of_two(width))
-         i1 = (i0 + 1) & (width-1);
-      else {
-         i0 = repeat_texel(i0, width);
-         i1 = repeat_texel(i0 + 1, width);
-      }
-      i0border = i1border = 0;
-   }
-   else {
-      i0 = (GLint) floor(u - 0.5F);
-      i1 = i0 + 1;
-      i0border = (i0<0) | (i0>=width);
-      i1border = (i1<0) | (i1>=width);
-   }
+   u = linear_texels(tObj->WrapS, s, width, &i0, &i1,
+                     &i0border, &i1border);
 
    if (img->Border) {
       i0 += img->Border;
       i1 += img->Border;
       i0border = i1border = 0;
-   }
-   else {
-      if (is_power_of_two(width))
-         i0 &= (width-1);
    }
 
    {
@@ -873,48 +933,17 @@ static void sample_2d_nearest( const struct gl_texture_object *tObj,
    GLint width = img->Width2;    /* without border */
    GLint height = img->Height2;  /* without border */
    GLint i, j;
+   GLboolean iBorder, jBorder;
    GLubyte *texel;
 
-   /* Clamp/Repeat S and convert to integer texel coordinate */
-   if (tObj->WrapS==GL_REPEAT) {
-      /* s limited to [0,1) */
-      /* i limited to [0,width-1] */
-      if (is_power_of_two(width)) {
-         i = (GLint) (s * width);
-         if (s<0.0F)  i -= 1;
-         i &= (width-1);
-      }
-      else {
-         i = repeat_texel((GLint) floor(s * width), width);
-      }
-   }
-   else {
-      /* s limited to [0,1] */
-      /* i limited to [0,width-1] */
-      if (s<=0.0F)      i = 0;
-      else if (s>=1.0F) i = width-1;
-      else              i = (GLint) (s * width);
-   }
-
-   /* Clamp/Repeat T and convert to integer texel coordinate */
-   if (tObj->WrapT==GL_REPEAT) {
-      /* t limited to [0,1) */
-      /* j limited to [0,height-1] */
-      if (is_power_of_two(height)) {
-         j = (GLint) (t * height);
-         if (t<0.0F)  j -= 1;
-         j &= (height-1);
-      }
-      else {
-         j = repeat_texel((GLint) floor(t * height), height);
-      }
-   }
-   else {
-      /* t limited to [0,1] */
-      /* j limited to [0,height-1] */
-      if (t<=0.0F)      j = 0;
-      else if (t>=1.0F) j = height-1;
-      else              j = (GLint) (t * height);
+   i = nearest_texel(tObj->WrapS, s, width, &iBorder);
+   j = nearest_texel(tObj->WrapT, t, height, &jBorder);
+   if ((iBorder || jBorder) && !img->Border) {
+      *red = tObj->BorderColor[0];
+      *green = tObj->BorderColor[1];
+      *blue = tObj->BorderColor[2];
+      *alpha = tObj->BorderColor[3];
+      return;
    }
 
    /* skip over the border, if any */
@@ -972,44 +1001,13 @@ static void sample_2d_linear( const struct gl_texture_object *tObj,
    GLint width = img->Width2;
    GLint height = img->Height2;
    GLint i0, j0, i1, j1;
-   GLint i0border, j0border, i1border, j1border;
+   GLboolean i0border, j0border, i1border, j1border;
    GLfloat u, v;
 
-   u = (tObj->WrapS==GL_REPEAT ? s : CLAMP(s, 0.0F, 1.0F)) * width;
-   if (tObj->WrapS==GL_REPEAT) {
-      i0 = ((GLint) floor(u - 0.5F)) % width;
-      if (is_power_of_two(width))
-         i1 = (i0 + 1) & (width-1);
-      else {
-         i0 = repeat_texel(i0, width);
-         i1 = repeat_texel(i0 + 1, width);
-      }
-      i0border = i1border = 0;
-   }
-   else {
-      i0 = (GLint) floor(u - 0.5F);
-      i1 = i0 + 1;
-      i0border = (i0<0) | (i0>=width);
-      i1border = (i1<0) | (i1>=width);
-   }
-
-   v = (tObj->WrapT==GL_REPEAT ? t : CLAMP(t, 0.0F, 1.0F)) * height;
-   if (tObj->WrapT==GL_REPEAT) {
-      j0 = ((GLint) floor(v - 0.5F)) % height;
-      if (is_power_of_two(height))
-         j1 = (j0 + 1) & (height-1);
-      else {
-         j0 = repeat_texel(j0, height);
-         j1 = repeat_texel(j0 + 1, height);
-      }
-      j0border = j1border = 0;
-   }
-   else {
-      j0 = (GLint) floor(v - 0.5F );
-      j1 = j0 + 1;
-      j0border = (j0<0) | (j0>=height);
-      j1border = (j1<0) | (j1>=height);
-   }
+   u = linear_texels(tObj->WrapS, s, width, &i0, &i1,
+                     &i0border, &i1border);
+   v = linear_texels(tObj->WrapT, t, height, &j0, &j1,
+                     &j0border, &j1border);
 
    if (img->Border) {
       i0 += img->Border;
@@ -1018,12 +1016,6 @@ static void sample_2d_linear( const struct gl_texture_object *tObj,
       j1 += img->Border;
       i0border = i1border = 0;
       j0border = j1border = 0;
-   }
-   else {
-      if (is_power_of_two(width))
-         i0 &= (width-1);
-      if (is_power_of_two(height))
-         j0 &= (height-1);
    }
 
    {

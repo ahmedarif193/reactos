@@ -229,7 +229,11 @@ void gl_TexParameterfv( GLcontext *ctx,
          }
          break;
       case GL_TEXTURE_WRAP_S:
-         if (eparam==GL_CLAMP || eparam==GL_REPEAT) {
+         if (eparam==GL_CLAMP || eparam==GL_REPEAT
+             || (ctx->AllowNpotTextures
+                 && (eparam==GL_CLAMP_TO_EDGE
+                     || eparam==GL_CLAMP_TO_BORDER
+                     || eparam==GL_MIRRORED_REPEAT))) {
             texObj->WrapS = eparam;
          }
          else {
@@ -238,7 +242,11 @@ void gl_TexParameterfv( GLcontext *ctx,
          }
          break;
       case GL_TEXTURE_WRAP_T:
-         if (eparam==GL_CLAMP || eparam==GL_REPEAT) {
+         if (eparam==GL_CLAMP || eparam==GL_REPEAT
+             || (ctx->AllowNpotTextures
+                 && (eparam==GL_CLAMP_TO_EDGE
+                     || eparam==GL_CLAMP_TO_BORDER
+                     || eparam==GL_MIRRORED_REPEAT))) {
             texObj->WrapT = eparam;
          }
          else {
@@ -247,7 +255,11 @@ void gl_TexParameterfv( GLcontext *ctx,
          }
          break;
       case GL_TEXTURE_WRAP_R_EXT:
-         if (eparam==GL_CLAMP || eparam==GL_REPEAT) {
+         if (eparam==GL_CLAMP || eparam==GL_REPEAT
+             || (ctx->AllowNpotTextures
+                 && (eparam==GL_CLAMP_TO_EDGE
+                     || eparam==GL_CLAMP_TO_BORDER
+                     || eparam==GL_MIRRORED_REPEAT))) {
             texObj->WrapR = eparam;
          }
          else {
