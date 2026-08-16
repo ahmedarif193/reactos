@@ -169,13 +169,24 @@ typedef struct STRUCT(_PEB)
 #if (NTDDI_VERSION >= NTDDI_WS03)
     PTR(PVOID*) FlsCallback;
     STRUCT(LIST_ENTRY) FlsListHead;
-    PTR(PVOID) FlsBitmap;
+    union
+    {
+        PTR(PVOID) FlsBitmap;
+        PTR(PVOID) ChpeV2ProcessInfo;
+    };
     ULONG FlsBitmapBits[4]; // [FLS_MAXIMUM_AVAILABLE/(sizeof(ULONG)*8)];
     ULONG FlsHighIndex;
 #endif
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
     PTR(PVOID) WerRegistrationData;
     PTR(PVOID) WerShipAssertPtr;
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+#ifdef _STRUCT64
+    PTR(PVOID) EcCodeBitMap;
+#else
+    PTR(PVOID) pUnused;
+#endif
 #endif
 } STRUCT(PEB), *STRUCT(PPEB);
 
@@ -194,7 +205,11 @@ C_ASSERT(FIELD_OFFSET(STRUCT(PEB), ImageProcessAffinityMask) == 0x138);
 C_ASSERT(FIELD_OFFSET(STRUCT(PEB), PostProcessInitRoutine) == 0x230);
 C_ASSERT(FIELD_OFFSET(STRUCT(PEB), SessionId) == 0x2C0);
 #if (NTDDI_VERSION >= NTDDI_WS03)
+C_ASSERT(FIELD_OFFSET(STRUCT(PEB), ChpeV2ProcessInfo) == 0x338);
 C_ASSERT(FIELD_OFFSET(STRUCT(PEB), FlsHighIndex) == 0x350);
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+C_ASSERT(FIELD_OFFSET(STRUCT(PEB), EcCodeBitMap) == 0x368);
 #endif
 #else
 C_ASSERT(FIELD_OFFSET(STRUCT(PEB), Mutant) == 0x04);
@@ -209,7 +224,11 @@ C_ASSERT(FIELD_OFFSET(STRUCT(PEB), ImageProcessAffinityMask) == 0x0C0);
 C_ASSERT(FIELD_OFFSET(STRUCT(PEB), PostProcessInitRoutine) == 0x14C);
 C_ASSERT(FIELD_OFFSET(STRUCT(PEB), SessionId) == 0x1D4);
 #if (NTDDI_VERSION >= NTDDI_WS03)
+C_ASSERT(FIELD_OFFSET(STRUCT(PEB), ChpeV2ProcessInfo) == 0x218);
 C_ASSERT(FIELD_OFFSET(STRUCT(PEB), FlsHighIndex) == 0x22C);
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+C_ASSERT(FIELD_OFFSET(STRUCT(PEB), pUnused) == 0x238);
 #endif
 #endif
 
