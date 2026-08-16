@@ -12,18 +12,32 @@
 
 set(ARM64EC_RUNTIME_MODULES
     advapi32
+    bcrypt
+    combase
     comctl32
     comdlg32
+    dwmapi
     gdi32
+    imm32
     kernel32
     kernelbase_ros
     libpng
+    msctf
+    msctfime
     msvcrt
     ntdll_chpe
+    ole32
+    oleaut32
+    opengl32
     shell32
+    setupapi
     ucrtbase
     user32
-    usp10)
+    userenv
+    usp10
+    winhttp
+    winmm
+    ws2_32)
 
 # Additional names under which a runtime module must be shipped. Keep the
 # implementation name because existing ReactOS modules import it directly.
