@@ -413,8 +413,7 @@ NtQueryInformationProcess(
         return Status;
     }
 
-    if (((ProcessInformationClass == ProcessCookie) ||
-         (ProcessInformationClass == ProcessImageInformation)) &&
+    if ((ProcessInformationClass == ProcessCookie) &&
         (ProcessHandle != NtCurrentProcess()))
     {
         /*
@@ -1248,6 +1247,8 @@ NtQueryInformationProcess(
         }
 
         case ProcessImageInformation:
+        {
+            SECTION_IMAGE_INFORMATION ImageInformation;
 
             if (ProcessInformationLength != sizeof(SECTION_IMAGE_INFORMATION))
             {
@@ -1259,13 +1260,38 @@ NtQueryInformationProcess(
             /* Set the length required and validate it */
             Length = sizeof(SECTION_IMAGE_INFORMATION);
 
-            /* Indicate success */
-            Status = STATUS_SUCCESS;
+            Status = PspReferenceProcessForLimitedQuery(ProcessHandle, PreviousMode, &Process);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            if (!ExAcquireRundownProtection(&Process->RundownProtect))
+            {
+                ObDereferenceObject(Process);
+                Status = STATUS_PROCESS_IS_TERMINATING;
+                break;
+            }
+
+            if (Process->SectionObject)
+            {
+                Status = MmGetSectionImageInformation(Process->SectionObject, &ImageInformation);
+            }
+            else
+            {
+                RtlZeroMemory(&ImageInformation, sizeof(ImageInformation));
+                ImageInformation.Machine = IMAGE_FILE_MACHINE_NATIVE;
+                Status = STATUS_SUCCESS;
+            }
+
+            ExReleaseRundownProtection(&Process->RundownProtect);
+            ObDereferenceObject(Process);
+
+            if (!NT_SUCCESS(Status))
+                break;
 
             /* Enter SEH to protect write */
             _SEH2_TRY
             {
-                MmGetImageInformation((PSECTION_IMAGE_INFORMATION)ProcessInformation);
+                *(PSECTION_IMAGE_INFORMATION)ProcessInformation = ImageInformation;
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
             {
@@ -1274,6 +1300,7 @@ NtQueryInformationProcess(
             }
             _SEH2_END;
             break;
+        }
 
         case ProcessCycleTime:
         {
