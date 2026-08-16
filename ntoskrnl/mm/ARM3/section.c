@@ -2017,6 +2017,14 @@ MiFlushTbAndCapture(IN PMMVAD FoundVad,
 #endif
     }
 
+#if defined(_M_ARM64)
+    if (PsGetCurrentProcess()->ExecutableWriteExceptions && MiIsExecutableWriteProtection(ProtectionMask) && !MiIsEcCodeAddress(PsGetCurrentProcess(), VirtualAddress))
+    {
+        TempPte.u.Hard.Writable = 0;
+        MI_MAKE_CLEAN_PAGE(&TempPte);
+    }
+#endif
+
     //
     // Write the new PTE, making sure we are only changing the bits
     //

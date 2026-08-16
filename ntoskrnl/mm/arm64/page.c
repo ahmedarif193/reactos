@@ -1339,7 +1339,16 @@ MmCreateVirtualMappingUnsafeEx(
          * NonGlobal on every reachable protection) */
         MI_MAKE_HARDWARE_PTE_USER(&FinalPte, MiAddressToPte(Address), ProtectionMask, Page);
 
-        if (FinalPte.u.Hard.Writable)
+        if (FinalPte.u.Hard.Writable &&
+            Process->ExecutableWriteExceptions &&
+            MiIsExecutableWriteProtection(ProtectionMask) &&
+            !MiIsEcCodeAddress(Process, Address) &&
+            !CurrentThread->ExecutableWriteAllowed)
+        {
+            FinalPte.u.Hard.Writable = 0;
+            MI_MAKE_CLEAN_PAGE(&FinalPte);
+        }
+        else if (FinalPte.u.Hard.Writable)
         {
             MI_MAKE_DIRTY_PAGE(&FinalPte);
         }
@@ -1850,12 +1859,13 @@ MmGetPageProtect(
     }
 }
 
+static
 VOID
-NTAPI
-MmSetPageProtect(
+MiArm64SetPageProtect(
     _Inout_ PEPROCESS Process,
     _In_ PVOID Address,
-    _In_ ULONG Protection)
+    _In_ ULONG Protection,
+    _In_ BOOLEAN AllowExecutableWrite)
 {
     ULONG ProtectionMask;
     MMPTE TempPte, OldPte;
@@ -1895,9 +1905,13 @@ MmSetPageProtect(
         }
 
         if (TempPte.u.Hard.Writable)
+        {
             MI_MAKE_DIRTY_PAGE(&TempPte);
+        }
         else
+        {
             MI_MAKE_CLEAN_PAGE(&TempPte);
+        }
 
         PointerPte->u.Long = TempPte.u.Long;
         MiArm64SyncKernelLeafPteWriteTo(PointerPte, Kseg0Pte);
@@ -1943,7 +1957,17 @@ MmSetPageProtect(
         if (TempPte.u.Hard.Valid)
             TempPte.u.Hard.NotLargePage = 1;
 
-        if (TempPte.u.Hard.Writable)
+        if (TempPte.u.Hard.Writable &&
+            Process->ExecutableWriteExceptions &&
+            MiIsExecutableWriteProtection(ProtectionMask) &&
+            !MiIsEcCodeAddress(Process, Address) &&
+            !AllowExecutableWrite &&
+            !PsGetCurrentThread()->ExecutableWriteAllowed)
+        {
+            TempPte.u.Hard.Writable = 0;
+            MI_MAKE_CLEAN_PAGE(&TempPte);
+        }
+        else if (TempPte.u.Hard.Writable)
             MI_MAKE_DIRTY_PAGE(&TempPte);
         else
             MI_MAKE_CLEAN_PAGE(&TempPte);
@@ -1959,6 +1983,26 @@ MmSetPageProtect(
     }
 
     MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
+}
+
+VOID
+NTAPI
+MmSetPageProtect(
+    _Inout_ PEPROCESS Process,
+    _In_ PVOID Address,
+    _In_ ULONG Protection)
+{
+    MiArm64SetPageProtect(Process, Address, Protection, FALSE);
+}
+
+VOID
+NTAPI
+MmSetPageProtectForWriteFault(
+    _Inout_ PEPROCESS Process,
+    _In_ PVOID Address,
+    _In_ ULONG Protection)
+{
+    MiArm64SetPageProtect(Process, Address, Protection, TRUE);
 }
 
 VOID

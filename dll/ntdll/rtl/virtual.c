@@ -151,12 +151,15 @@ NtMapViewOfSectionEx(HANDLE SectionHandle,
 NTSTATUS
 NTAPI
 NtSetInformationVirtualMemory(HANDLE ProcessHandle,
-                              ULONG InformationClass,
+                              VIRTUAL_MEMORY_INFORMATION_CLASS InformationClass,
                               ULONG_PTR NumberOfEntries,
-                              PVOID VirtualAddresses,
+                              PMEMORY_RANGE_ENTRY VirtualAddresses,
                               PVOID Information,
                               ULONG InformationLength)
 {
+#if defined(_M_ARM64)
+    return ZwSetInformationVirtualMemory(ProcessHandle, InformationClass, NumberOfEntries, VirtualAddresses, Information, InformationLength);
+#else
     UNREFERENCED_PARAMETER(ProcessHandle);
     UNREFERENCED_PARAMETER(InformationClass);
     UNREFERENCED_PARAMETER(Information);
@@ -165,6 +168,7 @@ NtSetInformationVirtualMemory(HANDLE ProcessHandle,
     if (NumberOfEntries && !VirtualAddresses)
         return STATUS_INVALID_PARAMETER;
     return STATUS_NOT_SUPPORTED;
+#endif
 }
 
 NTSTATUS

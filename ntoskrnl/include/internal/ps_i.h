@@ -367,6 +367,86 @@ static const INFORMATION_CLASS_INFO PsProcessInfoClass[] =
 
     /* ProcessMemoryAllocationMode */
     IQS_NONE,
+
+    /* ProcessGroupInformation */
+    IQS_NONE,
+    /* ProcessTokenVirtualizationEnabled */
+    IQS_NONE,
+    /* ProcessConsoleHostProcess */
+    IQS_NONE,
+    /* ProcessWindowInformation */
+    IQS_NONE,
+    /* ProcessHandleInformation */
+    IQS_NONE,
+    /* ProcessMitigationPolicy */
+    IQS_NONE,
+    /* ProcessDynamicFunctionTableInformation */
+    IQS_NONE,
+    /* ProcessHandleCheckingMode */
+    IQS_NONE,
+    /* ProcessKeepAliveCount */
+    IQS_NONE,
+    /* ProcessRevokeFileHandles */
+    IQS_NONE,
+    /* ProcessWorkingSetControl */
+    IQS_NONE,
+    /* ProcessHandleTable */
+    IQS_NONE,
+    /* ProcessCheckStackExtentsMode */
+    IQS_NONE,
+    /* ProcessCommandLineInformation */
+    IQS_NONE,
+    /* ProcessProtectionInformation */
+    IQS_NONE,
+    /* ProcessMemoryExhaustion */
+    IQS_NONE,
+    /* ProcessFaultInformation */
+    IQS_NONE,
+    /* ProcessTelemetryIdInformation */
+    IQS_NONE,
+    /* ProcessCommitReleaseInformation */
+    IQS_NONE,
+    /* ProcessDefaultCpuSetsInformation */
+    IQS_NONE,
+    /* ProcessAllowedCpuSetsInformation */
+    IQS_NONE,
+    /* ProcessSubsystemProcess */
+    IQS_NONE,
+    /* ProcessJobMemoryInformation */
+    IQS_NONE,
+    /* ProcessInPrivate */
+    IQS_NONE,
+    /* ProcessRaiseUMExceptionOnInvalidHandleClose */
+    IQS_NONE,
+    /* ProcessIumChallengeResponse */
+    IQS_NONE,
+    /* ProcessChildProcessInformation */
+    IQS_NONE,
+    /* ProcessHighGraphicsPriorityInformation */
+    IQS_NONE,
+    /* ProcessSubsystemInformation */
+    IQS_NONE,
+    /* ProcessEnergyValues */
+    IQS_NONE,
+    /* ProcessPowerThrottlingState */
+    IQS_NONE,
+    /* ProcessReserved3Information */
+    IQS_NONE,
+    /* ProcessWin32kSyscallFilterInformation */
+    IQS_NONE,
+    /* ProcessDisableSystemAllowedCpuSets */
+    IQS_NONE,
+    /* ProcessWakeInformation */
+    IQS_NONE,
+    /* ProcessEnergyTrackingState */
+    IQS_NONE,
+    /* ProcessManageWritesToExecutableMemory */
+    IQS_SAME
+    (
+        MANAGE_WRITES_TO_EXECUTABLE_MEMORY,
+        ULONG,
+        ICIF_SET
+    ),
 };
 
 //
@@ -661,7 +741,12 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
     /* ThreadAttachContainer */
     IQS_NONE,
     /* ThreadManageWritesToExecutableMemory */
-    IQS_NONE,
+    IQS_SAME
+    (
+        MANAGE_WRITES_TO_EXECUTABLE_MEMORY,
+        ULONG,
+        ICIF_SET
+    ),
     /* ThreadPowerThrottlingState */
     IQS_NONE,
     /* ThreadWorkloadClass */

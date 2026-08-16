@@ -22,6 +22,141 @@
 
 static SIZE_T MiTotalCommitCharge;
 
+#if defined(_M_ARM64)
+#define MI_EC_CODE_BITMAP_SIZE (1ULL << 32)
+
+BOOLEAN
+MiIsEcCodeAddress(
+    _In_ PEPROCESS Process,
+    _In_ PVOID Address)
+{
+    volatile ULONGLONG *BitmapWord;
+    ULONG_PTR AddressValue;
+    ULONG_PTR BitmapAddress;
+    ULONG_PTR BitmapOffset;
+    PVOID BitmapBase;
+    BOOLEAN IsEcCode = FALSE;
+
+    if ((Process != PsGetCurrentProcess()) || !Process->Peb)
+        return FALSE;
+
+    AddressValue = (ULONG_PTR)Address;
+    if (AddressValue > (ULONG_PTR)MM_HIGHEST_USER_ADDRESS)
+        return FALSE;
+
+    BitmapOffset = (AddressValue >> 15) & (MI_EC_CODE_BITMAP_SIZE - sizeof(*BitmapWord));
+
+    _SEH2_TRY
+    {
+        if (!MmIsAddressValid(Process->Peb))
+            _SEH2_YIELD(return FALSE);
+
+        BitmapBase = Process->Peb->EcCodeBitMap;
+        BitmapAddress = (ULONG_PTR)BitmapBase + BitmapOffset;
+        if (!BitmapBase || (BitmapAddress < (ULONG_PTR)BitmapBase) || (BitmapAddress > (ULONG_PTR)MM_HIGHEST_USER_ADDRESS - sizeof(*BitmapWord) + 1))
+            _SEH2_YIELD(return FALSE);
+
+        BitmapWord = (volatile ULONGLONG *)BitmapAddress;
+        if (!MmIsAddressValid((PVOID)BitmapWord))
+            _SEH2_YIELD(return FALSE);
+
+        IsEcCode = !!(*BitmapWord & (1ULL << ((AddressValue >> PAGE_SHIFT) & 63)));
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        IsEcCode = FALSE;
+    }
+    _SEH2_END;
+
+    return IsEcCode;
+}
+
+static
+NTSTATUS
+MiResetExecutableWriteTrackingRange(
+    _In_ PEPROCESS Process,
+    _In_ const MEMORY_RANGE_ENTRY *Range)
+{
+    PMMSUPPORT AddressSpace;
+    PETHREAD CurrentThread;
+    ULONG_PTR StartAddress;
+    ULONG_PTR EndAddress;
+    ULONG_PTR CurrentAddress;
+    BOOLEAN FlushRange = FALSE;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (!Range->NumberOfBytes)
+        return STATUS_INVALID_PARAMETER_4;
+
+    StartAddress = (ULONG_PTR)Range->VirtualAddress;
+    if ((StartAddress > (ULONG_PTR)MM_HIGHEST_USER_ADDRESS) || ((Range->NumberOfBytes - 1) > ((ULONG_PTR)MM_HIGHEST_USER_ADDRESS - StartAddress)))
+        return STATUS_INVALID_PARAMETER_4;
+
+    EndAddress = (StartAddress + Range->NumberOfBytes - 1) & ~(ULONG_PTR)(PAGE_SIZE - 1);
+    StartAddress &= ~(ULONG_PTR)(PAGE_SIZE - 1);
+    AddressSpace = MmGetCurrentAddressSpace();
+    CurrentThread = PsGetCurrentThread();
+    MmLockAddressSpace(AddressSpace);
+
+    if (Process->VmDeleted)
+    {
+        MmUnlockAddressSpace(AddressSpace);
+        return STATUS_PROCESS_IS_TERMINATING;
+    }
+
+    MiLockProcessWorkingSetUnsafe(Process, CurrentThread);
+    for (CurrentAddress = StartAddress; CurrentAddress <= EndAddress; CurrentAddress += PAGE_SIZE)
+    {
+        PMMVAD Vad;
+        PMMPTE PointerPte;
+        MMPTE OldPte;
+        MMPTE NewPte;
+        ULONG Protection = MM_ZERO_ACCESS;
+
+        Vad = MiLocateAddress((PVOID)CurrentAddress);
+        if (!Vad)
+        {
+            Status = STATUS_MEMORY_NOT_ALLOCATED;
+            break;
+        }
+        if (MiIsEcCodeAddress(Process, (PVOID)CurrentAddress))
+            continue;
+
+        PointerPte = MiArm64UserPteKseg0((PVOID)CurrentAddress);
+        if (!PointerPte || !PointerPte->u.Hard.Valid)
+            continue;
+
+        OldPte = *PointerPte;
+        NewPte = OldPte;
+        if (!MI_IS_ROSMM_VAD(Vad))
+        {
+            PMMPFN Pfn = MiGetPfnEntry(PFN_FROM_PTE(&OldPte));
+            if (Pfn)
+                Protection = Pfn->OriginalPte.u.Soft.Protection;
+            if (!MiIsExecutableWriteProtection(Protection))
+                Protection = Vad->u.VadFlags.Protection;
+        }
+
+        if (MiIsExecutableWriteProtection(Protection) || (MI_IS_PAGE_EXECUTABLE(&OldPte) && (MI_IS_PAGE_WRITEABLE(&OldPte) || MI_IS_PAGE_COPY_ON_WRITE(&OldPte))))
+        {
+            NewPte.u.Hard.Writable = 0;
+            MI_MAKE_CLEAN_PAGE(&NewPte);
+            if (NewPte.u.Long != OldPte.u.Long)
+            {
+                MI_UPDATE_VALID_PTE(PointerPte, NewPte);
+                FlushRange = TRUE;
+            }
+        }
+    }
+
+    if (FlushRange)
+        MiFlushProcessTbRange((PVOID)StartAddress, BYTES_TO_PAGES(EndAddress - StartAddress + PAGE_SIZE));
+    MiUnlockProcessWorkingSetUnsafe(Process, CurrentThread);
+    MmUnlockAddressSpace(AddressSpace);
+    return Status;
+}
+#endif
+
 NTSTATUS NTAPI
 MiProtectVirtualMemory(IN PEPROCESS Process,
                        IN OUT PVOID *BaseAddress,
@@ -3965,6 +4100,124 @@ NtFlushInstructionCache(_In_ HANDLE ProcessHandle,
 
     /* All done, return to caller */
     return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+NtSetInformationVirtualMemory(
+    _In_ HANDLE ProcessHandle,
+    _In_ VIRTUAL_MEMORY_INFORMATION_CLASS VirtualMemoryInformationClass,
+    _In_ ULONG_PTR NumberOfEntries,
+    _In_reads_(NumberOfEntries) PMEMORY_RANGE_ENTRY VirtualAddresses,
+    _In_reads_bytes_(VirtualMemoryInformationLength) PVOID VirtualMemoryInformation,
+    _In_ ULONG VirtualMemoryInformationLength)
+{
+#if defined(_M_ARM64)
+    PEPROCESS Process;
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    ULONG Flag;
+    ULONG_PTR Index;
+    NTSTATUS Status;
+    PAGED_CODE();
+
+    if (VirtualMemoryInformationClass != VmPageDirtyStateInformation)
+        return STATUS_INVALID_PARAMETER_2;
+
+    Status = ObReferenceObjectByHandle(ProcessHandle, PROCESS_VM_OPERATION, PsProcessType, PreviousMode, (PVOID*)&Process, NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (Process != PsGetCurrentProcess())
+    {
+        ObDereferenceObject(Process);
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    if (!Process->ExecutableWriteExceptions)
+    {
+        ObDereferenceObject(Process);
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    if (!VirtualMemoryInformation)
+    {
+        ObDereferenceObject(Process);
+        return STATUS_INVALID_PARAMETER_5;
+    }
+
+    if (VirtualMemoryInformationLength != sizeof(ULONG))
+    {
+        ObDereferenceObject(Process);
+        return STATUS_INVALID_PARAMETER_6;
+    }
+
+    if (!NumberOfEntries)
+    {
+        ObDereferenceObject(Process);
+        return STATUS_INVALID_PARAMETER_3;
+    }
+
+    if (!VirtualAddresses || (NumberOfEntries > (MAXULONG_PTR / sizeof(*VirtualAddresses))))
+    {
+        ObDereferenceObject(Process);
+        return STATUS_INVALID_PARAMETER_4;
+    }
+
+    _SEH2_TRY
+    {
+        if (PreviousMode != KernelMode)
+        {
+            ProbeForRead(VirtualMemoryInformation, sizeof(ULONG), sizeof(ULONG));
+            ProbeForRead(VirtualAddresses, NumberOfEntries * sizeof(*VirtualAddresses), sizeof(ULONG_PTR));
+        }
+        Flag = *(PULONG)VirtualMemoryInformation;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+        _SEH2_YIELD(goto SetInformationVirtualMemoryDone);
+    }
+    _SEH2_END;
+
+    if (Flag)
+    {
+        Status = STATUS_INVALID_PARAMETER_5;
+        goto SetInformationVirtualMemoryDone;
+    }
+
+    Status = STATUS_SUCCESS;
+    for (Index = 0; Index < NumberOfEntries; ++Index)
+    {
+        MEMORY_RANGE_ENTRY Range;
+
+        _SEH2_TRY
+        {
+            Range = VirtualAddresses[Index];
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+            _SEH2_YIELD(break);
+        }
+        _SEH2_END;
+
+        Status = MiResetExecutableWriteTrackingRange(Process, &Range);
+        if (!NT_SUCCESS(Status))
+            break;
+    }
+
+SetInformationVirtualMemoryDone:
+    ObDereferenceObject(Process);
+    return Status;
+#else
+    UNREFERENCED_PARAMETER(ProcessHandle);
+    UNREFERENCED_PARAMETER(VirtualMemoryInformationClass);
+    UNREFERENCED_PARAMETER(NumberOfEntries);
+    UNREFERENCED_PARAMETER(VirtualAddresses);
+    UNREFERENCED_PARAMETER(VirtualMemoryInformation);
+    UNREFERENCED_PARAMETER(VirtualMemoryInformationLength);
+    return STATUS_NOT_SUPPORTED;
+#endif
 }
 
 NTSTATUS

@@ -1628,6 +1628,9 @@ typedef struct _ETHREAD
     PUNICODE_STRING ThreadName;
     // TODO: Missing Win10+ members
 #endif
+#if defined(_M_ARM64)
+    volatile LONG ExecutableWriteAllowed;
+#endif
 } ETHREAD;
 
 //
@@ -1828,6 +1831,9 @@ typedef struct _EPROCESS
     UCHAR PriorityClass;
     MM_AVL_TABLE VadRoot;
     ULONG Cookie;
+#if defined(_M_ARM64)
+    volatile LONG ExecutableWriteExceptions;
+#endif
 } EPROCESS;
 
 //
