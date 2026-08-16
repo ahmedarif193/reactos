@@ -46,7 +46,6 @@ list(APPEND SOURCE
     rtl/registry.c
     rtl/time.c
     rtl/virtual.c
-    rtl/wait.c
     rtl/xstate.c)
 
 set_source_files_properties(rtl/capability.c PROPERTIES
