@@ -4001,6 +4001,11 @@ NtWriteVirtualMemory(IN HANDLE ProcessHandle,
                                          PreviousMode,
                                          &BytesWritten);
 
+            /* NtWriteVirtualMemory reports a failed copy as a partial copy,
+             * even when no bytes reached the destination. */
+            if (Status == STATUS_ACCESS_VIOLATION)
+                Status = STATUS_PARTIAL_COPY;
+
             //
             // Dereference the process
             //
