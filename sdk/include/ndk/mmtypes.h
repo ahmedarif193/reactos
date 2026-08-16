@@ -187,6 +187,54 @@ typedef enum _MEMORY_INFORMATION_CLASS
     MemoryWorkingSetExList
 } MEMORY_INFORMATION_CLASS;
 
+#ifndef MEM_EXTENDED_PARAMETER_TYPE_BITS
+#define MEM_EXTENDED_PARAMETER_GRAPHICS            0x00000001
+#define MEM_EXTENDED_PARAMETER_NONPAGED            0x00000002
+#define MEM_EXTENDED_PARAMETER_ZERO_PAGES_OPTIONAL 0x00000004
+#define MEM_EXTENDED_PARAMETER_NONPAGED_LARGE      0x00000008
+#define MEM_EXTENDED_PARAMETER_NONPAGED_HUGE       0x00000010
+#define MEM_EXTENDED_PARAMETER_SOFT_FAULT_PAGES    0x00000020
+#define MEM_EXTENDED_PARAMETER_EC_CODE             0x00000040
+
+typedef enum _MEM_EXTENDED_PARAMETER_TYPE
+{
+    MemExtendedParameterInvalidType,
+    MemExtendedParameterAddressRequirements,
+    MemExtendedParameterNumaNode,
+    MemExtendedParameterPartitionHandle,
+    MemExtendedParameterUserPhysicalHandle,
+    MemExtendedParameterAttributeFlags,
+    MemExtendedParameterImageMachine,
+    MemExtendedParameterMax
+} MEM_EXTENDED_PARAMETER_TYPE, *PMEM_EXTENDED_PARAMETER_TYPE;
+
+typedef struct _MEM_ADDRESS_REQUIREMENTS
+{
+    PVOID LowestStartingAddress;
+    PVOID HighestEndingAddress;
+    SIZE_T Alignment;
+} MEM_ADDRESS_REQUIREMENTS, *PMEM_ADDRESS_REQUIREMENTS;
+
+#define MEM_EXTENDED_PARAMETER_TYPE_BITS 8
+
+typedef struct DECLSPEC_ALIGN(8) _MEM_EXTENDED_PARAMETER
+{
+    struct
+    {
+        ULONGLONG Type : MEM_EXTENDED_PARAMETER_TYPE_BITS;
+        ULONGLONG Reserved : 64 - MEM_EXTENDED_PARAMETER_TYPE_BITS;
+    } DUMMYSTRUCTNAME;
+    union
+    {
+        ULONGLONG ULong64;
+        PVOID Pointer;
+        SIZE_T Size;
+        HANDLE Handle;
+        ULONG ULong;
+    } DUMMYUNIONNAME;
+} MEM_EXTENDED_PARAMETER, *PMEM_EXTENDED_PARAMETER;
+#endif
+
 //
 // Section Information Clasess for NtQuerySection
 //
