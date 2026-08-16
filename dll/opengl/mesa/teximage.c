@@ -931,7 +931,8 @@ static GLboolean texture_1d_error_check( GLcontext *ctx, GLenum target,
       }
       return GL_TRUE;
    }
-   if (width<2*border || width>2+MAX_TEXTURE_SIZE) {
+   if (width<2*border
+       || width>(MAX_TEXTURE_SIZE >> level)+2*border) {
       if (target!=GL_PROXY_TEXTURE_1D) {
          gl_error( ctx, GL_INVALID_VALUE, "glTexImage1D(width)" );
       }
@@ -1006,13 +1007,15 @@ static GLboolean texture_2d_error_check( GLcontext *ctx, GLenum target,
       }
       return GL_TRUE;
    }
-   if (width<2*border || width>2+MAX_TEXTURE_SIZE) {
+   if (width<2*border
+       || width>(MAX_TEXTURE_SIZE >> level)+2*border) {
       if (target!=GL_PROXY_TEXTURE_2D) {
          gl_error( ctx, GL_INVALID_VALUE, "glTexImage2D(width)" );
       }
       return GL_TRUE;
    }
-   if (height<2*border || height>2+MAX_TEXTURE_SIZE) {
+   if (height<2*border
+       || height>(MAX_TEXTURE_SIZE >> level)+2*border) {
       if (target!=GL_PROXY_TEXTURE_2D) {
          gl_error( ctx, GL_INVALID_VALUE, "glTexImage2D(height)" );
       }
@@ -1650,7 +1653,8 @@ void gl_CopyTexImage1D( GLcontext *ctx,
       gl_error( ctx, GL_INVALID_VALUE, "glCopyTexImage1D(border)" );
       return;
    }
-   if (width<2*border || width>2+MAX_TEXTURE_SIZE || width<0) {
+   if (width<2*border
+       || width>(MAX_TEXTURE_SIZE >> level)+2*border) {
       gl_error( ctx, GL_INVALID_VALUE, "glCopyTexImage1D(width)" );
       return;
    }
@@ -1704,11 +1708,13 @@ void gl_CopyTexImage2D( GLcontext *ctx,
       gl_error( ctx, GL_INVALID_VALUE, "glCopyTexImage2D(border)" );
       return;
    }
-   if (width<2*border || width>2+MAX_TEXTURE_SIZE || width<0) {
+   if (width<2*border
+       || width>(MAX_TEXTURE_SIZE >> level)+2*border) {
       gl_error( ctx, GL_INVALID_VALUE, "glCopyTexImage2D(width)" );
       return;
    }
-   if (height<2*border || height>2+MAX_TEXTURE_SIZE || height<0) {
+   if (height<2*border
+       || height>(MAX_TEXTURE_SIZE >> level)+2*border) {
       gl_error( ctx, GL_INVALID_VALUE, "glCopyTexImage2D(height)" );
       return;
    }
