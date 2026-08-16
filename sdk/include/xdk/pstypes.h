@@ -281,6 +281,39 @@ typedef enum _PROCESSINFOCLASS {
   ProcessTokenVirtualizationEnabled,
   ProcessConsoleHostProcess,
   ProcessWindowInformation,
+  ProcessHandleInformation,
+  ProcessMitigationPolicy,
+  ProcessDynamicFunctionTableInformation,
+  ProcessHandleCheckingMode,
+  ProcessKeepAliveCount,
+  ProcessRevokeFileHandles,
+  ProcessWorkingSetControl,
+  ProcessHandleTable,
+  ProcessCheckStackExtentsMode,
+  ProcessCommandLineInformation,
+  ProcessProtectionInformation,
+  ProcessMemoryExhaustion,
+  ProcessFaultInformation,
+  ProcessTelemetryIdInformation,
+  ProcessCommitReleaseInformation,
+  ProcessDefaultCpuSetsInformation,
+  ProcessAllowedCpuSetsInformation,
+  ProcessSubsystemProcess,
+  ProcessJobMemoryInformation,
+  ProcessInPrivate,
+  ProcessRaiseUMExceptionOnInvalidHandleClose,
+  ProcessIumChallengeResponse,
+  ProcessChildProcessInformation,
+  ProcessHighGraphicsPriorityInformation,
+  ProcessSubsystemInformation,
+  ProcessEnergyValues,
+  ProcessPowerThrottlingState,
+  ProcessReserved3Information,
+  ProcessWin32kSyscallFilterInformation,
+  ProcessDisableSystemAllowedCpuSets,
+  ProcessWakeInformation,
+  ProcessEnergyTrackingState,
+  ProcessManageWritesToExecutableMemory,
   MaxProcessInfoClass
 } PROCESSINFOCLASS;
 
@@ -343,6 +376,14 @@ typedef enum _THREADINFOCLASS {
   ThreadEffectivePagePriority,
   MaxThreadInfoClass
 } THREADINFOCLASS;
+
+typedef struct _MANAGE_WRITES_TO_EXECUTABLE_MEMORY {
+  ULONG Version : 8;
+  ULONG ProcessEnableWriteExceptions : 1;
+  ULONG ThreadAllowWrites : 1;
+  ULONG Spare : 22;
+  PVOID KernelWriteToExecutableSignal;
+} MANAGE_WRITES_TO_EXECUTABLE_MEMORY, *PMANAGE_WRITES_TO_EXECUTABLE_MEMORY;
 
 typedef struct _PAGE_PRIORITY_INFORMATION {
   ULONG PagePriority;
