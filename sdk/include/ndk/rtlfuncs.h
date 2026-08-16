@@ -1608,6 +1608,22 @@ RtlFlsFree(
 NTSYSAPI
 NTSTATUS
 NTAPI
+RtlFlsGetValue(
+    _In_ ULONG Index,
+    _Out_ PVOID *Data
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlFlsSetValue(
+    _In_ ULONG Index,
+    _In_opt_ PVOID Data
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
 RtlQueryInformationAcl(
     PACL Acl,
     PVOID Information,
@@ -2906,6 +2922,20 @@ ULONG
 NTAPI
 RtlGetCurrentProcessorNumber(
     VOID
+);
+
+NTSYSAPI
+BOOLEAN
+NTAPI
+RtlIsCurrentProcess(
+    _In_ HANDLE ProcessHandle
+);
+
+NTSYSAPI
+BOOLEAN
+NTAPI
+RtlIsProcessorFeaturePresent(
+    _In_ ULONG ProcessorFeature
 );
 
 #if (NTDDI_VERSION >= NTDDI_WIN7)
@@ -4222,6 +4252,54 @@ NTAPI
 RtlWow64EnableFsRedirectionEx(
     _In_ PVOID Wow64FsEnableRedirection,
     _Out_ PVOID *OldFsRedirectionLevel
+);
+
+NTSYSAPI
+VOID
+NTAPI
+RtlOpenCrossProcessEmulatorWorkConnection(
+    _In_ HANDLE ProcessHandle,
+    _Out_ PHANDLE SectionHandle,
+    _Out_ PVOID *MappedAddress
+);
+
+NTSYSAPI
+PCROSS_PROCESS_WORK_ENTRY
+NTAPI
+RtlWow64PopAllCrossProcessWorkFromWorkList(
+    _Inout_ PCROSS_PROCESS_WORK_HDR List,
+    _Out_ PBOOLEAN Flush
+);
+
+NTSYSAPI
+PCROSS_PROCESS_WORK_ENTRY
+NTAPI
+RtlWow64PopCrossProcessWorkFromFreeList(
+    _Inout_ PCROSS_PROCESS_WORK_HDR List
+);
+
+NTSYSAPI
+BOOLEAN
+NTAPI
+RtlWow64PushCrossProcessWorkOntoFreeList(
+    _Inout_ PCROSS_PROCESS_WORK_HDR List,
+    _Inout_ PCROSS_PROCESS_WORK_ENTRY Entry
+);
+
+NTSYSAPI
+BOOLEAN
+NTAPI
+RtlWow64PushCrossProcessWorkOntoWorkList(
+    _Inout_ PCROSS_PROCESS_WORK_HDR List,
+    _Inout_ PCROSS_PROCESS_WORK_ENTRY Entry,
+    _Out_ PVOID *Unknown
+);
+
+NTSYSAPI
+BOOLEAN
+NTAPI
+RtlWow64RequestCrossProcessHeavyFlush(
+    _Inout_ PCROSS_PROCESS_WORK_HDR List
 );
 
 #endif

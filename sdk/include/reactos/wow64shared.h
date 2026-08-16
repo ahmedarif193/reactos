@@ -86,7 +86,7 @@ typedef struct
     ULONGLONG addr;
     ULONGLONG size;
     ULONG     args[4];
-} CROSS_PROCESS_WORK_ENTRY;
+} CROSS_PROCESS_WORK_ENTRY, *PCROSS_PROCESS_WORK_ENTRY;
 
 typedef union
 {
@@ -96,7 +96,7 @@ typedef union
         ULONG counter;
     };
     volatile LONGLONG hdr;
-} CROSS_PROCESS_WORK_HDR;
+} CROSS_PROCESS_WORK_HDR, *PCROSS_PROCESS_WORK_HDR;
 
 typedef struct
 {
@@ -104,7 +104,20 @@ typedef struct
     CROSS_PROCESS_WORK_HDR   work_list;
     ULONGLONG                unknown[4];
     CROSS_PROCESS_WORK_ENTRY entries[1];
-} CROSS_PROCESS_WORK_LIST;
+} CROSS_PROCESS_WORK_LIST, *PCROSS_PROCESS_WORK_LIST;
+
+/* Native 64-bit process state used by the ARM64EC runtime. */
+typedef struct _CHPEV2_PROCESS_INFO64
+{
+    ULONG     Wow64ExecuteFlags;
+    USHORT    NativeMachineType;
+    USHORT    EmulatedMachineType;
+    ULONGLONG SectionHandle;
+    ULONGLONG CrossProcessWorkList;
+    ULONGLONG Reserved;
+} CHPEV2_PROCESS_INFO64, *PCHPEV2_PROCESS_INFO64;
+
+C_ASSERT(sizeof(CHPEV2_PROCESS_INFO64) == 0x20);
 
 typedef enum
 {
