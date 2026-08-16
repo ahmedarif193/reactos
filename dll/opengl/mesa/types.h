@@ -185,6 +185,10 @@
 #include "GL/gl.h"
 #include "config.h"
 
+#ifndef GL_MIRRORED_REPEAT
+#define GL_MIRRORED_REPEAT 0x8370
+#endif
+
 
 struct HashTable;
 
@@ -1091,9 +1095,9 @@ struct gl_texture_object {
 	GLuint Dimensions;		/* 1 or 2 or 3 */
 	GLfloat Priority;		/* in [0,1] */
 	GLint BorderColor[4];		/* as integers in [0,255] */
-	GLenum WrapS;			/* GL_CLAMP or GL_REPEAT */
-	GLenum WrapT;			/* GL_CLAMP or GL_REPEAT */
-	GLenum WrapR;			/* GL_CLAMP or GL_REPEAT */
+	GLenum WrapS;			/* Texture coordinate wrap mode */
+	GLenum WrapT;			/* Texture coordinate wrap mode */
+	GLenum WrapR;			/* Texture coordinate wrap mode */
 	GLenum MinFilter;		/* minification filter */
 	GLenum MagFilter;		/* magnification filter */
 	GLfloat MinMagThresh;		/* min/mag threshold */
