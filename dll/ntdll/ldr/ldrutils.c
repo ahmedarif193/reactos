@@ -2425,26 +2425,6 @@ LdrpGetProcedureAddress(
         /* Make sure we're OK till here */
         if (NT_SUCCESS(Status))
         {
-#if defined(_M_ARM64)
-            ULONG_PTR FunctionRva, NativeFunctionRva;
-
-            if ((ULONG_PTR)Thunk.u1.Function >= (ULONG_PTR)LdrEntry->DllBase)
-            {
-                FunctionRva = (ULONG_PTR)Thunk.u1.Function -
-                              (ULONG_PTR)LdrEntry->DllBase;
-                ChpeRegisterArm64EcImage(LdrEntry->DllBase);
-
-                if (FunctionRva < LdrEntry->SizeOfImage &&
-                    ChpeGetArm64EcRedirection(LdrEntry->DllBase,
-                                              FunctionRva,
-                                              &NativeFunctionRva))
-                {
-                    Thunk.u1.Function = (ULONG_PTR)LdrEntry->DllBase +
-                                        NativeFunctionRva;
-                }
-            }
-#endif
-
             /* Return the address */
             *ProcedureAddress = (PVOID)Thunk.u1.Function;
         }
