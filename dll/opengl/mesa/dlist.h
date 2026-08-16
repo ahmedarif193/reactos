@@ -84,6 +84,26 @@ extern void gl_init_lists( void );
 extern void gl_destroy_list( GLcontext *ctx, GLuint list );
 
 
+/*
+ * Read-only visitor for drivers which can cache a deliberately small subset
+ * of display-list geometry.  The walk fails on every instruction which is
+ * not represented here, so a driver can always fall back to gl_CallList().
+ */
+struct gl_display_list_visitor {
+   GLboolean (*Begin)( void *user, GLenum mode );
+   GLboolean (*End)( void *user );
+   GLboolean (*Material)( void *user, GLenum face, GLenum pname,
+                          const GLfloat params[4] );
+   GLboolean (*Normal)( void *user, const GLfloat normal[3] );
+   GLboolean (*ShadeModel)( void *user, GLenum mode );
+   GLboolean (*Vertex)( void *user, const GLfloat vertex[4] );
+};
+
+extern GLboolean gl_visit_display_list(
+   GLcontext *ctx, GLuint list,
+   const struct gl_display_list_visitor *visitor, void *user );
+
+
 
 extern void gl_CallList( GLcontext *ctx, GLuint list );
 

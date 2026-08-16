@@ -2916,6 +2916,97 @@ GLboolean gl_IsList( GLcontext *ctx, GLuint list )
 }
 
 
+/*
+ * Walk the compact, immutable representation used by a finished display
+ * list.  This intentionally recognizes only the state and vertex operations
+ * needed by simple fixed-function geometry.  Encountering anything else is
+ * a clean failure, allowing a hardware driver to execute the original list.
+ */
+GLboolean gl_visit_display_list(
+   GLcontext *ctx, GLuint list,
+   const struct gl_display_list_visitor *visitor, void *user )
+{
+   Node *n;
+
+   if (!ctx || !visitor || !gl_IsList(ctx, list))
+      return GL_FALSE;
+
+   n = (Node *) HashLookup(ctx->Shared->DisplayList, list);
+   for (;;) {
+      OpCode opcode = n[0].opcode;
+      GLboolean accepted;
+
+      if ((GLuint) opcode > OPCODE_END_OF_LIST)
+         return GL_FALSE;
+
+      switch (opcode) {
+         case OPCODE_BEGIN:
+            if (!visitor->Begin)
+               return GL_FALSE;
+            accepted = visitor->Begin(user, n[1].e);
+            break;
+         case OPCODE_END:
+            if (!visitor->End)
+               return GL_FALSE;
+            accepted = visitor->End(user);
+            break;
+         case OPCODE_MATERIAL:
+            {
+               GLfloat params[4];
+               if (!visitor->Material)
+                  return GL_FALSE;
+               params[0] = n[3].f;
+               params[1] = n[4].f;
+               params[2] = n[5].f;
+               params[3] = n[6].f;
+               accepted = visitor->Material(user, n[1].e, n[2].e,
+                                             params);
+            }
+            break;
+         case OPCODE_NORMAL:
+            {
+               GLfloat normal[3];
+               if (!visitor->Normal)
+                  return GL_FALSE;
+               normal[0] = n[1].f;
+               normal[1] = n[2].f;
+               normal[2] = n[3].f;
+               accepted = visitor->Normal(user, normal);
+            }
+            break;
+         case OPCODE_SHADE_MODEL:
+            if (!visitor->ShadeModel)
+               return GL_FALSE;
+            accepted = visitor->ShadeModel(user, n[1].e);
+            break;
+         case OPCODE_VERTEX3:
+            {
+               GLfloat vertex[4];
+               if (!visitor->Vertex)
+                  return GL_FALSE;
+               vertex[0] = n[1].f;
+               vertex[1] = n[2].f;
+               vertex[2] = n[3].f;
+               vertex[3] = 1.0F;
+               accepted = visitor->Vertex(user, vertex);
+            }
+            break;
+         case OPCODE_CONTINUE:
+            n = (Node *) n[1].next;
+            continue;
+         case OPCODE_END_OF_LIST:
+            return GL_TRUE;
+         default:
+            return GL_FALSE;
+      }
+
+      if (!accepted)
+         return GL_FALSE;
+      n += InstSize[opcode];
+   }
+}
+
+
 
 /*
  * Delete a sequence of consecutive display lists.
