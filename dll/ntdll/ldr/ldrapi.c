@@ -318,6 +318,10 @@ LdrLoadDll(
     WCHAR StringBuffer[MAX_PATH];
     UNICODE_STRING StaticString, DynamicString;
     BOOLEAN RedirectedDll = FALSE;
+    BOOLEAN ApiSetRedirected = FALSE;
+#if defined(_M_ARM64)
+    UNICODE_STRING ChpeDynamicString;
+#endif
     NTSTATUS Status;
     ULONG_PTR Cookie;
     PUNICODE_STRING OldTldDll;
@@ -326,8 +330,28 @@ LdrLoadDll(
     /* Initialize the strings */
     RtlInitEmptyUnicodeString(&StaticString, StringBuffer, sizeof(StringBuffer));
     RtlInitEmptyUnicodeString(&DynamicString, NULL, 0);
+#if defined(_M_ARM64)
+    RtlInitEmptyUnicodeString(&ChpeDynamicString, NULL, 0);
+#endif
 
-    Status = LdrpApplyFileNameRedirection(DllName, &LdrApiDefaultExtension, &StaticString, &DynamicString, &DllName, &RedirectedDll);
+    Status = LdrpApplyFileNameRedirection(DllName, &LdrApiDefaultExtension, &StaticString, &DynamicString, &DllName, &RedirectedDll, &ApiSetRedirected);
+
+#if defined(_M_ARM64)
+    /* API-set resolution selects a host name, not its process architecture.
+     * Preserve activation-context assembly selection, including WinSxS paths. */
+    if (NT_SUCCESS(Status) && (!RedirectedDll || ApiSetRedirected) && ChpeShouldRedirectDynamicLoad(DllName))
+    {
+        Status = LdrpBuildArm64EcImportName(DllName, &ChpeDynamicString);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+
+        if (RtlDoesFileExists_UStr(&ChpeDynamicString))
+        {
+            DllName = &ChpeDynamicString;
+            RedirectedDll = TRUE;
+        }
+    }
+#endif
 
     /* Lock the loader lock */
     LdrLockLoaderLock(LDR_LOCK_LOADER_LOCK_FLAG_RAISE_ON_ERRORS, NULL, &Cookie);
@@ -409,9 +433,14 @@ LdrLoadDll(
     }
     _SEH2_END;
 
+Cleanup:
     /* Do we have a redirect string? */
     if (DynamicString.Buffer)
         RtlFreeUnicodeString(&DynamicString);
+#if defined(_M_ARM64)
+    if (ChpeDynamicString.Buffer)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, ChpeDynamicString.Buffer);
+#endif
 
     /* Return */
     return Status;
@@ -552,8 +581,7 @@ LdrGetDllHandleEx(
         Locked = TRUE;
     }
 
-    Status = LdrpApplyFileNameRedirection(
-        pRedirectName, &LdrApiDefaultExtension, NULL, &DynamicString, &pRedirectName, &RedirectedDll);
+    Status = LdrpApplyFileNameRedirection(pRedirectName, &LdrApiDefaultExtension, NULL, &DynamicString, &pRedirectName, &RedirectedDll, NULL);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("LdrpApplyFileNameRedirection FAILED: (Status 0x%x)\n", Status);
