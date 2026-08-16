@@ -1501,6 +1501,13 @@ MmGetImageInformation(
     OUT PSECTION_IMAGE_INFORMATION ImageInformation
 );
 
+NTSTATUS
+NTAPI
+MmGetSectionImageInformation(
+    IN PSECTION SectionObject,
+    OUT PSECTION_IMAGE_INFORMATION ImageInformation
+);
+
 PFILE_OBJECT
 NTAPI
 MmGetFileObjectForSection(

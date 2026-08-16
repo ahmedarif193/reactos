@@ -1727,6 +1727,30 @@ MmGetImageInformation (OUT PSECTION_IMAGE_INFORMATION ImageInformation)
     *ImageInformation = ((PMM_IMAGE_SECTION_OBJECT)SectionObject->Segment)->ImageInformation;
 }
 
+NTSTATUS
+NTAPI
+MmGetSectionImageInformation(IN PSECTION SectionObject,
+                             OUT PSECTION_IMAGE_INFORMATION ImageInformation)
+{
+    if (!SectionObject || !ImageInformation)
+        return STATUS_INVALID_PARAMETER;
+
+    if (!SectionObject->u.Flags.Image || !SectionObject->Segment)
+        return STATUS_SECTION_NOT_IMAGE;
+
+    if (MiIsRosSectionObject(SectionObject))
+    {
+        *ImageInformation = ((PMM_IMAGE_SECTION_OBJECT)SectionObject->Segment)->ImageInformation;
+        return STATUS_SUCCESS;
+    }
+
+    if (!SectionObject->Segment->u2.ImageInformation)
+        return STATUS_SECTION_NOT_IMAGE;
+
+    *ImageInformation = *SectionObject->Segment->u2.ImageInformation;
+    return STATUS_SUCCESS;
+}
+
 static
 NTSTATUS
 MmGetFileNameForFileObject(IN PFILE_OBJECT FileObject,
