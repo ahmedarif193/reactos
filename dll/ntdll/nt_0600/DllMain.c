@@ -15,17 +15,9 @@ DllMain(HANDLE hDll,
     if (dwReason == DLL_PROCESS_ATTACH)
     {
         LdrDisableThreadCalloutsForDll(hDll);
-        RtlpInitializeKeyedEvent();
         Status = RtlpInitializeLocaleTable();
         if (!NT_SUCCESS(Status))
-        {
-            RtlpCloseKeyedEvent();
             return FALSE;
-        }
-    }
-    else if (dwReason == DLL_PROCESS_DETACH)
-    {
-        RtlpCloseKeyedEvent();
     }
     return TRUE;
 }
