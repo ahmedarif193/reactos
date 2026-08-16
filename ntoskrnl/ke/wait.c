@@ -673,6 +673,7 @@ KeWaitForAlertByThreadId(IN PVOID Address,
     PKTIMER Timer = &Thread->Timer;
     PKWAIT_BLOCK TimerBlock = &Thread->WaitBlock[TIMER_WAIT_BLOCK];
     NTSTATUS WaitStatus;
+    BOOLEAN AlertedByThreadId;
     BOOLEAN Swappable;
     PLARGE_INTEGER OriginalDueTime = Timeout;
     LARGE_INTEGER DueTime = {{0}}, NewDueTime, InterruptTime;
@@ -734,6 +735,24 @@ WaitStart:
         }
         else
         {
+            /* A pending thread-id alert has priority over an already-expired
+             * timeout. Take the thread lock to make this check a linearization
+             * point against KeAlertThreadByThreadId. KxTryBeginThreadWait also
+             * closes the late kernel-APC window before inspecting the flag. */
+            if (!KxTryBeginThreadWait(Thread))
+            {
+                KiReleaseDispatcherObject(&Timer->Header);
+                KiExitDispatcher(Thread->WaitIrql);
+                goto WaitStart;
+            }
+            AlertedByThreadId = InterlockedBitTestAndReset(&Thread->ThreadFlags, KTHREAD_ALERTED_BY_THREAD_ID_BIT);
+            KiReleaseThreadLock(Thread);
+            if (AlertedByThreadId)
+            {
+                WaitStatus = STATUS_ALERTED;
+                goto NoWait;
+            }
+
             /* If a timeout was given, check whether it already expired */
             if (Timeout)
             {
@@ -748,8 +767,6 @@ WaitStart:
                 /* It didn't, so activate the timer */
                 Timer->TimerListEntry.Flink = NULL;
                 Timer->TimerListEntry.Blink = NULL;
-                Timer->Header.Inserted = TRUE;
-                TimerBlock->BlockState = WaitBlockActive;
             }
 
             /* Handle a waiter on this thread's own queue, under the queue lock */
@@ -760,36 +777,34 @@ WaitStart:
                 KiReleaseDispatcherObject(&Thread->Queue->Header);
             }
 
-            /* Commit the wait under the thread lock. AlertedByThreadId is read
-             * and cleared here, atomically with the State transition, so it
-             * serializes against KeAlertThreadByThreadId (same thread lock):
-             * either we observe the pending alert and abort the block, or the
-             * alerter observes State == Waiting and unwaits us. No lost wakeup. */
-            KiAcquireThreadLock(Thread);
-            if (InterlockedBitTestAndReset(&Thread->ThreadFlags,
-                                           KTHREAD_ALERTED_BY_THREAD_ID_BIT))
+            /* Commit the wait under the thread lock. Recheck both late kernel
+             * APC insertion and AlertedByThreadId after queue activation, at
+             * the exact point where the thread transitions to Waiting. */
+            if (!KxTryBeginThreadWait(Thread))
+            {
+                KiReleaseDispatcherObject(&Timer->Header);
+                KiUndoActivateWaiterQueue(Thread);
+                KiExitDispatcher(Thread->WaitIrql);
+                goto WaitStart;
+            }
+            AlertedByThreadId = InterlockedBitTestAndReset(&Thread->ThreadFlags, KTHREAD_ALERTED_BY_THREAD_ID_BIT);
+            if (AlertedByThreadId)
             {
                 /* An alert is already pending: consume it and don't block */
                 KiReleaseThreadLock(Thread);
-
-                /* Roll back the timer we armed (it has not been inserted yet) */
-                if (Timeout)
-                {
-                    Timer->Header.Inserted = FALSE;
-                    TimerBlock->BlockState = WaitBlockInactive;
-                }
+                KiUndoActivateWaiterQueue(Thread);
                 WaitStatus = STATUS_ALERTED;
                 goto NoWait;
             }
-            Thread->State = Waiting;
 
-            /* Add the thread to the wait list */
-            KiAddThreadToWaitList(Thread, Swappable);
+            if (Timeout)
+            {
+                Timer->Header.Inserted = TRUE;
+                TimerBlock->BlockState = WaitBlockActive;
+            }
 
-            /* Set up the swap */
-            ASSERT(Thread->WaitIrql <= DISPATCH_LEVEL);
-            KiSetThreadSwapBusy(Thread);
-            KiReleaseThreadLock(Thread);
+            /* Publish the wait and release the thread lock */
+            KxCommitThreadWait(Thread, Swappable);
 
             /* Release the timer lock and insert the timer if we armed one */
             KiReleaseDispatcherObject(&Timer->Header);
