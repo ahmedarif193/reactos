@@ -2779,7 +2779,6 @@ LdrpInitializeProcess(IN PCONTEXT Context,
 #if defined(_M_ARM64)
     if (IsChpe)
     {
-        RtlpInitializeKeyedEvent();
         RtlpInitializeThreadPooling();
         Status = ChpeInitializeProcess();
         if (!NT_SUCCESS(Status))
@@ -2833,7 +2832,6 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     if (IsWow64)
     {
         LdrpLdrDatabaseIsSetup = TRUE;
-        RtlpInitializeKeyedEvent();
         RtlpInitializeThreadPooling();
         Status = LdrpInitializeWow64(Context);
         if (OptionsKey) NtClose(OptionsKey);
@@ -2975,16 +2973,11 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     /* Check whether all static imports were properly loaded and return here */
     if (!NT_SUCCESS(ImportStatus)) return ImportStatus;
 
-    /* Following two calls are for Vista+ support, required for winesync */
-    /* Initialize the keyed event for condition variables */
+    /* Initialize Vista+ thread pooling support required by Wine-synced code. */
 #if defined(_M_ARM64)
     if (!IsChpe)
-    {
-        RtlpInitializeKeyedEvent();
         RtlpInitializeThreadPooling();
-    }
 #else
-    RtlpInitializeKeyedEvent();
     RtlpInitializeThreadPooling();
 #endif
 
