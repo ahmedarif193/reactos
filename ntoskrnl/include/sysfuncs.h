@@ -18,6 +18,11 @@
     SVC_(AllocateUserPhysicalPages, 3)
     SVC_(AllocateUuids, 4)
     SVC_WRAP_(AllocateVirtualMemory, 6)
+#if defined(_M_ARM64)
+    SVC_WRAP_(AllocateVirtualMemoryEx, 7)
+#else
+    SVC_(AllocateVirtualMemoryEx, 7)
+#endif
     SVC_(ApphelpCacheControl, 2)
     SVC_(AreMappedFilesTheSame, 2)
     SVC_(AssignProcessToJobObject, 2)

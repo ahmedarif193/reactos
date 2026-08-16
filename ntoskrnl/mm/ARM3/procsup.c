@@ -72,7 +72,6 @@ MiCreatePebOrTebEx(IN PEPROCESS Process,
     Vad->u.VadFlags.Protection = MM_READWRITE;
     Vad->u.VadFlags.NoChange = TRUE;
     Vad->u1.Parent = NULL;
-
     /* Setup the secondary flags to make it a secured, writable, long VAD */
     Vad->u2.LongFlags2 = 0;
     Vad->u2.VadFlags2.OneSecured = TRUE;

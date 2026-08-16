@@ -1519,6 +1519,7 @@
 @ stdcall ZwAlertThread(ptr)
 @ stdcall -version=0x600+ ZwAllocateReserveObject(ptr ptr long)
 @ stdcall ZwAllocateVirtualMemory(ptr ptr long ptr long long)
+@ stdcall ZwAllocateVirtualMemoryEx(ptr ptr ptr long long ptr long)
 @ stdcall ZwAssignProcessToJobObject(ptr ptr)
 @ stdcall ZwCancelIoFile(ptr ptr)
 @ stdcall ZwCancelIoFileEx(ptr ptr ptr)
@@ -3324,7 +3325,6 @@
 @ stub -arch=arm64 WheaUnconfigureErrorSource
 @ stub -arch=arm64 WheaUnregisterErrorSourceOverride
 @ stdcall -arch=arm64 ZwAlertThreadByThreadId(ptr)
-@ stub -arch=arm64 ZwAllocateVirtualMemoryEx
 @ stub -arch=arm64 ZwAlpcAcceptConnectPort
 @ stub -arch=arm64 ZwAlpcCancelMessage
 @ stub -arch=arm64 ZwAlpcConnectPort
