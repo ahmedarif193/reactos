@@ -1,10 +1,12 @@
 
 list(APPEND SOURCE
+    driver.c
     enable.c
     palette.c
     pointer.c
     screen.c
     shadow.c
+    shadow_hooks.c
     surface.c
     framebuf.h)
 

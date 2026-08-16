@@ -20,29 +20,6 @@
 
 #include "framebuf.h"
 
-static DRVFN DrvFunctionTable[] =
-{
-   {INDEX_DrvEnablePDEV, (PFN)DrvEnablePDEV},
-   {INDEX_DrvCompletePDEV, (PFN)DrvCompletePDEV},
-   {INDEX_DrvDisablePDEV, (PFN)DrvDisablePDEV},
-   {INDEX_DrvEnableSurface, (PFN)DrvEnableSurface},
-   {INDEX_DrvDisableSurface, (PFN)DrvDisableSurface},
-   {INDEX_DrvAssertMode, (PFN)DrvAssertMode},
-   {INDEX_DrvGetModes, (PFN)DrvGetModes},
-   {INDEX_DrvSetPalette, (PFN)DrvSetPalette},
-   {INDEX_DrvSetPointerShape, (PFN)DrvSetPointerShape},
-   {INDEX_DrvMovePointer, (PFN)DrvMovePointer},
-   {INDEX_DrvEnableDirectDraw, (PFN)DrvEnableDirectDraw},
-   {INDEX_DrvDisableDirectDraw, (PFN)DrvDisableDirectDraw},
-   {INDEX_DrvBitBlt, (PFN)DrvBitBlt},
-   {INDEX_DrvCopyBits, (PFN)DrvCopyBits},
-   {INDEX_DrvSynchronizeSurface, (PFN)DrvSynchronizeSurface},
-#ifdef RPI5VC4_XPDM_DISPLAY
-   {INDEX_DrvEscape, (PFN)DrvEscape},
-#endif
-
-};
-
 /*
  * DrvEnableDirectDraw
  */
@@ -78,37 +55,7 @@ DrvDisableDirectDraw(
 }
 
 /*
- * DrvEnableDriver
- *
- * Initial driver entry point exported by the driver DLL. It fills in a
- * DRVENABLEDATA structure with the driver's DDI version number and the
- * calling addresses of all DDI functions supported by the driver.
- *
- * Status
- *    @implemented
- */
-
-BOOL APIENTRY
-DrvEnableDriver(
-   ULONG iEngineVersion,
-   ULONG cj,
-   PDRVENABLEDATA pded)
-{
-   if (cj >= sizeof(DRVENABLEDATA))
-   {
-      pded->c = sizeof(DrvFunctionTable) / sizeof(DRVFN);
-      pded->pdrvfn = DrvFunctionTable;
-      pded->iDriverVersion = DDI_DRIVER_VERSION_NT5;
-      return TRUE;
-   }
-   else
-   {
-      return FALSE;
-   }
-}
-
-/*
- * DrvEnablePDEV
+ * FrameBufferEnablePDEV
  *
  * Returns a description of the physical device's characteristics to GDI.
  *
@@ -117,7 +64,7 @@ DrvEnableDriver(
  */
 
 DHPDEV APIENTRY
-DrvEnablePDEV(
+FrameBufferEnablePDEV(
    IN DEVMODEW *pdm,
    IN LPWSTR pwszLogAddress,
    IN ULONG cPat,
@@ -201,11 +148,6 @@ DrvDisablePDEV(
    if (((PPDEV)dhpdev)->PaletteEntries != NULL)
    {
       EngFreeMem(((PPDEV)dhpdev)->PaletteEntries);
-   }
-
-   if (((PPDEV)dhpdev)->ShadowPtr != NULL)
-   {
-      EngFreeMem(((PPDEV)dhpdev)->ShadowPtr);
    }
 
    IntDisableHardwarePointer((PPDEV)dhpdev);
