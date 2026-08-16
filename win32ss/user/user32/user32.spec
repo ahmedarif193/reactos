@@ -762,7 +762,8 @@
 @ stdcall TranslateMessageEx(ptr long)
 @ stdcall UnhookWinEvent(long) NtUserUnhookWinEvent
 @ stdcall UnhookWindowsHook(long ptr)
-@ stdcall UnhookWindowsHookEx(long) NtUserUnhookWindowsHookEx
+@ stdcall -arch=!arm64ec UnhookWindowsHookEx(long) NtUserUnhookWindowsHookEx
+@ stdcall -arch=arm64ec UnhookWindowsHookEx(long)
 @ stdcall UnionRect(ptr ptr ptr)
 @ stdcall UnloadKeyboardLayout(ptr)
 @ stdcall UnlockWindowStation(long) NtUserUnlockWindowStation
