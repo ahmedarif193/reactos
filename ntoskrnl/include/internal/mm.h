@@ -1248,6 +1248,16 @@ MmSetPageProtect(
     ULONG flProtect
 );
 
+#ifdef _M_ARM64
+VOID
+NTAPI
+MmSetPageProtectForWriteFault(
+    struct _EPROCESS* Process,
+    PVOID Address,
+    ULONG flProtect
+);
+#endif
+
 BOOLEAN
 NTAPI
 MmIsPagePresent(
@@ -1578,6 +1588,8 @@ MmCreatePhysicalMemorySection(VOID);
 NTSTATUS
 NTAPI
 MmAccessFaultSectionView(
+    KPROCESSOR_MODE Mode,
+    ULONG FaultCode,
     PMMSUPPORT AddressSpace,
     MEMORY_AREA* MemoryArea,
     PVOID Address,

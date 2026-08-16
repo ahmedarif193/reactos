@@ -71,6 +71,22 @@ C_ASSERT(SYSTEM_PD_SIZE == PAGE_SIZE);
 #define MM_OUTSWAPPED_KSTACK  (MM_EXECUTE_WRITECOPY | MM_WRITECOMBINE)
 #define MM_INVALID_PROTECTION  0xFFFFFFFF
 
+FORCEINLINE
+BOOLEAN
+MiIsExecutableWriteProtection(
+    _In_ ULONG Protection)
+{
+    Protection &= MM_PROTECT_ACCESS;
+    return (Protection == MM_EXECUTE_READWRITE) || (Protection == MM_EXECUTE_WRITECOPY);
+}
+
+#if defined(_M_ARM64)
+BOOLEAN
+MiIsEcCodeAddress(
+    _In_ PEPROCESS Process,
+    _In_ PVOID Address);
+#endif
+
 //
 // Specific PTE Definitions that map to the Memory Manager's Protection Mask Bits
 // The Memory Manager's definition define the attributes that must be preserved

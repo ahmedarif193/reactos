@@ -128,6 +128,20 @@ MiArm64WriteFaultPte(
     _Inout_ PMMPTE PointerPte,
     _In_ MMPTE ValidPte)
 {
+    PEPROCESS Process = PsGetCurrentProcess();
+    PETHREAD Thread = PsGetCurrentThread();
+
+    if (((ULONG_PTR)FaultAddress < (ULONG_PTR)MmSystemRangeStart) &&
+        Process->ExecutableWriteExceptions &&
+        ((THREAD_TO_PROCESS(Thread) != Process) || !Thread->ExecutableWriteAllowed) &&
+        MI_IS_PAGE_EXECUTABLE(&ValidPte) &&
+        (MI_IS_PAGE_WRITEABLE(&ValidPte) || MI_IS_PAGE_COPY_ON_WRITE(&ValidPte)) &&
+        !MiIsEcCodeAddress(Process, FaultAddress))
+    {
+        ValidPte.u.Hard.Writable = 0;
+        MI_MAKE_CLEAN_PAGE(&ValidPte);
+    }
+
     if (MiArm64IsUserFaultPte(FaultAddress, PointerPte))
     {
         /* Real user leaf slot (KSEG0): publish, then invalidate the mapped VA */
@@ -2133,6 +2147,7 @@ MmArmAccessFault(IN ULONG FaultCode,
     PFN_NUMBER PageFrameIndex;
 #if defined(_M_ARM64)
     PFN_NUMBER Arm64UserPteFrame = 0;
+    BOOLEAN ManagedExecutableWrite;
 #endif
     ULONG Color;
     BOOLEAN IsSessionAddress;
@@ -2751,6 +2766,24 @@ Arm64UserLeafReady:
         /* Check if this is a write on a readonly PTE */
         if (MI_IS_WRITE_ACCESS(FaultCode))
         {
+#if defined(_M_ARM64)
+            Pfn1 = MI_PFN_ELEMENT(PFN_FROM_PTE(&TempPte));
+            ManagedExecutableWrite = MiIsExecutableWriteProtection(Pfn1->OriginalPte.u.Soft.Protection);
+            if (ManagedExecutableWrite && CurrentProcess->ExecutableWriteExceptions)
+            {
+                if (MiIsEcCodeAddress(CurrentProcess, Address))
+                    ManagedExecutableWrite = FALSE;
+            }
+            if (ManagedExecutableWrite &&
+                CurrentProcess->ExecutableWriteExceptions &&
+                (Mode == UserMode) &&
+                !CurrentThread->ExecutableWriteAllowed)
+            {
+                MiUnlockProcessWorkingSet(CurrentProcess, CurrentThread);
+                return STATUS_EXECUTABLE_MEMORY_WRITE;
+            }
+#endif
+
             /* Is this a copy on write PTE? */
             if (MI_IS_PAGE_COPY_ON_WRITE(&TempPte))
             {
@@ -2813,6 +2846,18 @@ Arm64UserLeafReady:
             /* Is this a read-only PTE? */
             if (!MI_IS_PAGE_WRITEABLE(&TempPte))
             {
+#if defined(_M_ARM64)
+                if (ManagedExecutableWrite)
+                {
+                    MI_MAKE_WRITE_PAGE(&TempPte);
+                    MI_MAKE_DIRTY_PAGE(&TempPte);
+                    MI_UPDATE_VALID_PTE(PointerPte, TempPte);
+                    MiArm64InvalidateUserAddress(Address);
+                    MiUnlockProcessWorkingSet(CurrentProcess, CurrentThread);
+                    return STATUS_SUCCESS;
+                }
+#endif
+
                 /* Return the status */
                 MiUnlockProcessWorkingSet(CurrentProcess, CurrentThread);
                 return STATUS_ACCESS_VIOLATION;

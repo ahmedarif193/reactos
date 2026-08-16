@@ -2743,7 +2743,7 @@
 @ stub -arch=arm64 NtSetInformationEnlistment
 @ stub -arch=arm64 NtSetInformationResourceManager
 @ stub -arch=arm64 NtSetInformationTransaction
-@ stub -arch=arm64 NtSetInformationVirtualMemory
+@ stdcall -arch=arm64 NtSetInformationVirtualMemory(ptr long ptr ptr ptr long)
 @ stub -arch=arm64 NtThawTransactions
 @ stub -arch=arm64 NtTraceControl
 @ stdcall -arch=arm64 NtWaitForAlertByThreadId(ptr ptr)
@@ -3419,7 +3419,7 @@
 @ stub -arch=arm64 ZwSetInformationEnlistment
 @ stub -arch=arm64 ZwSetInformationResourceManager
 @ stub -arch=arm64 ZwSetInformationTransaction
-@ stub -arch=arm64 ZwSetInformationVirtualMemory
+@ stdcall -arch=arm64 ZwSetInformationVirtualMemory()
 @ stub -arch=arm64 ZwSetTimerEx
 @ stub -arch=arm64 ZwTraceControl
 @ stdcall -version=0x602+ -arch=arm64 ZwUpdateWnfStateData(ptr ptr long ptr ptr long long)
