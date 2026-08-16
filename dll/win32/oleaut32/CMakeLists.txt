@@ -12,6 +12,8 @@ add_rpcproxy_files(oleaut32_oaidl.idl oleaut32_ocidl.idl)
 
 include_directories(BEFORE ${REACTOS_SOURCE_DIR}/sdk/include/ucrt)
 
+add_arm64ec_x64_source(OLEAUT32_THUNKS_SOURCE thunks.c __WINESRC__)
+
 list(APPEND SOURCE
     connpt.c
     dispatch.c
@@ -22,7 +24,7 @@ list(APPEND SOURCE
     olepropframe.c
     recinfo.c
     safearray.c
-    thunks.c
+    ${OLEAUT32_THUNKS_SOURCE}
     typelib.c
     usrmarshal.c
     varformat.c

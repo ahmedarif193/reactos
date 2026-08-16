@@ -841,6 +841,82 @@ function(get_defines OUTPUT_VAR)
     set(${OUTPUT_VAR} ${__tmp_var} PARENT_SCOPE)
 endfunction()
 
+# Wine marks a small number of sources with `#pragma makedep arm64ec_x64`.
+# They contain genuine AMD64 call thunks which must be linked into the hybrid
+# image as AMD64 objects; compiling their ARM64 branch changes the ABI.
+function(add_arm64ec_x64_source OUTPUT_VAR SOURCE_FILE)
+    if(NOT (ARCH STREQUAL "arm64" AND ARM64EC_RUNTIME))
+        set(${OUTPUT_VAR} "${SOURCE_FILE}" PARENT_SCOPE)
+        return()
+    endif()
+
+    if(NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
+        message(FATAL_ERROR "ARM64EC x64 source objects require Clang")
+    endif()
+
+    get_filename_component(_source_path "${SOURCE_FILE}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+    get_filename_component(_source_name "${SOURCE_FILE}" NAME_WE)
+    set(_object_path "${CMAKE_CURRENT_BINARY_DIR}/${_source_name}.arm64ec_x64.obj")
+    set(_depfile_path "${_object_path}.d")
+    set(_x64_compiler "${REACTOS_CLANG_LLVM_MINGW_ROOT}/bin/x86_64-w64-mingw32-clang")
+
+    if(NOT EXISTS "${_x64_compiler}")
+        message(FATAL_ERROR "ARM64EC x64 compiler not found: ${_x64_compiler}")
+    endif()
+
+    get_includes(_x64_includes)
+    get_defines(_directory_defines)
+    foreach(_define IN LISTS _directory_defines)
+        if(NOT _define MATCHES "^-D(_ARM64EC_|_M_ARM64EC|__arm64ec__)(=.*)?$")
+            list(APPEND _x64_defines "${_define}")
+        endif()
+    endforeach()
+    foreach(_define IN LISTS ARGN)
+        list(APPEND _x64_defines "-D${_define}")
+    endforeach()
+    list(APPEND _x64_defines -D__arm64ec_x64__)
+
+    set(_debug_flags)
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        list(APPEND _debug_flags -gdwarf-2 -ggdb)
+    endif()
+
+    if(POLICY CMP0116)
+        cmake_policy(SET CMP0116 NEW)
+    endif()
+
+    add_custom_command(
+        OUTPUT "${_object_path}"
+        COMMAND "${_x64_compiler}"
+            --target=x86_64-w64-mingw32
+            --sysroot="${REACTOS_CLANG_LLVM_MINGW_ROOT}"
+            ${_x64_defines}
+            -isystem "${CLANG_RESOURCE_DIR}/include"
+            ${_x64_includes}
+            -std=gnu99
+            -ffile-prefix-map=${REACTOS_SOURCE_DIR}=
+            -ffile-prefix-map=../../=
+            -fms-extensions
+            -fno-strict-aliasing
+            -fno-common
+            -nostdlibinc
+            -Wno-microsoft
+            -Wno-pragma-pack
+            -O1
+            -fno-optimize-sibling-calls
+            -fno-omit-frame-pointer
+            ${_debug_flags}
+            -MMD -MF "${_depfile_path}" -MT "${_object_path}"
+            -c "${_source_path}" -o "${_object_path}"
+        DEPENDS "${_source_path}"
+        DEPFILE "${_depfile_path}"
+        COMMAND_EXPAND_LISTS
+        VERBATIM)
+
+    set_source_files_properties("${_object_path}" PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE)
+    set(${OUTPUT_VAR} "${_object_path}" PARENT_SCOPE)
+endfunction()
+
 function(add_registry_inf)
     # Add to the inf files list
     foreach(_file ${ARGN})
