@@ -7,24 +7,8 @@
 
 #include "k32_vista.h"
 
-typedef struct _K32_MEMORY_RANGE_ENTRY
-{
-    PVOID VirtualAddress;
-    SIZE_T NumberOfBytes;
-} K32_MEMORY_RANGE_ENTRY, *PK32_MEMORY_RANGE_ENTRY;
-
-#if defined(_M_AMD64) || defined(_M_ARM64)
-NTSYSAPI
-NTSTATUS
-NTAPI
-NtSetInformationVirtualMemory(
-    _In_ HANDLE ProcessHandle,
-    _In_ int VmInformationClass,
-    _In_ ULONG_PTR NumberOfEntries,
-    _In_ PK32_MEMORY_RANGE_ENTRY VirtualAddresses,
-    _In_ PVOID VmInformation,
-    _In_ ULONG VmInformationLength);
-#endif
+typedef MEMORY_RANGE_ENTRY K32_MEMORY_RANGE_ENTRY;
+typedef PMEMORY_RANGE_ENTRY PK32_MEMORY_RANGE_ENTRY;
 
 BOOL
 WINAPI

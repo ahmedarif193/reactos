@@ -300,6 +300,18 @@ NtReadVirtualMemory(
     _Out_opt_ PSIZE_T NumberOfBytesRead
 );
 
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtSetInformationVirtualMemory(
+    _In_ HANDLE ProcessHandle,
+    _In_ VIRTUAL_MEMORY_INFORMATION_CLASS VirtualMemoryInformationClass,
+    _In_ ULONG_PTR NumberOfEntries,
+    _In_reads_(NumberOfEntries) PMEMORY_RANGE_ENTRY VirtualAddresses,
+    _In_reads_bytes_(VirtualMemoryInformationLength) PVOID VirtualMemoryInformation,
+    _In_ ULONG VirtualMemoryInformationLength
+);
+
 NTSTATUS
 NTAPI
 NtResetWriteWatch(
@@ -495,6 +507,18 @@ ZwReadVirtualMemory(
     _Out_ PVOID Buffer,
     _In_ SIZE_T NumberOfBytesToRead,
     _Out_opt_ PSIZE_T NumberOfBytesRead
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+ZwSetInformationVirtualMemory(
+    _In_ HANDLE ProcessHandle,
+    _In_ VIRTUAL_MEMORY_INFORMATION_CLASS VirtualMemoryInformationClass,
+    _In_ ULONG_PTR NumberOfEntries,
+    _In_reads_(NumberOfEntries) PMEMORY_RANGE_ENTRY VirtualAddresses,
+    _In_reads_bytes_(VirtualMemoryInformationLength) PVOID VirtualMemoryInformation,
+    _In_ ULONG VirtualMemoryInformationLength
 );
 
 NTSYSAPI
