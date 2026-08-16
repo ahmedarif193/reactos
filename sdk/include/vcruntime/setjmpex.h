@@ -18,7 +18,17 @@
 #ifdef setjmp
 #undef setjmp
 #endif
+#if defined(_M_ARM64EC) || defined(__arm64ec__)
+/*
+ * Clang supplies the hidden frame argument only for its _setjmp builtin on
+ * ARM64EC.  Both Win64 entry points use the same frame-aware implementation,
+ * so retain the extended semantics while routing through that builtin.
+ */
+#define setjmp _setjmp
+#define setjmpex _setjmp
+#else
 #define setjmp _setjmpex
+#endif
 #endif
 
 #include <setjmp.h>
