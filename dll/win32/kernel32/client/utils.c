@@ -702,32 +702,39 @@ BaseInitializeContext(IN PCONTEXT Context,
     }
 
 #elif defined(_M_ARM64EC)
-    PARM64EC_NT_CONTEXT EcContext = (PARM64EC_NT_CONTEXT)Context;
-
     DPRINT("BaseInitializeContext: %p\n", Context);
     ASSERT(((ULONG_PTR)StackAddress & 15) == 0);
 
-    /* ARM64EC exposes a public x64 CONTEXT with native register overlays. */
     RtlZeroMemory(Context, sizeof(*Context));
-    EcContext->X0 = (ULONG_PTR)StartAddress;
-    EcContext->X1 = (ULONG_PTR)Parameter;
-    EcContext->Sp = (ULONG_PTR)StackAddress;
-    EcContext->Lr = (ULONG_PTR)ExitThread;
 
-    if (ContextType == 1)      /* For Threads */
+    if (ContextType == 2) /* For Fibers */
     {
-        EcContext->Pc = (ULONG_PTR)BaseThreadStartup;
-    }
-    else if (ContextType == 2) /* For Fibers */
-    {
+        PARM64EC_NT_CONTEXT EcContext = (PARM64EC_NT_CONTEXT)Context;
+
+        /* Fiber save/restore uses the public x64-compatible hybrid layout. */
+        EcContext->X0 = (ULONG_PTR)StartAddress;
+        EcContext->X1 = (ULONG_PTR)Parameter;
+        EcContext->Sp = (ULONG_PTR)StackAddress;
+        EcContext->Lr = (ULONG_PTR)ExitThread;
         EcContext->Pc = (ULONG_PTR)BaseFiberStartup;
+        EcContext->ContextFlags = CONTEXT_FULL;
     }
-    else                       /* For first thread in a Process */
+    else
     {
-        EcContext->Pc = (ULONG_PTR)BaseProcessStartup;
-    }
+        PARM64_NT_CONTEXT ArmContext = (PARM64_NT_CONTEXT)Context;
 
-    EcContext->ContextFlags = CONTEXT_FULL;
+        /* NtCreateThread consumes the native ARM64 context layout. */
+        C_ASSERT(sizeof(ARM64_NT_CONTEXT) <= sizeof(CONTEXT));
+        ArmContext->X0 = (ULONG_PTR)StartAddress;
+        ArmContext->X1 = (ULONG_PTR)Parameter;
+        ArmContext->Sp = (ULONG_PTR)StackAddress;
+        ArmContext->Lr = (ULONG_PTR)ExitThread;
+        if (ContextType == 1)
+            ArmContext->Pc = (ULONG_PTR)BaseThreadStartup;
+        else
+            ArmContext->Pc = (ULONG_PTR)BaseProcessStartup;
+        ArmContext->ContextFlags = CONTEXT_ARM64_FULL;
+    }
 #elif defined(_M_AMD64)
     DPRINT("BaseInitializeContext: %p\n", Context);
     ASSERT(((ULONG_PTR)StackAddress & 15) == 0);
