@@ -2173,7 +2173,9 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
 
 NTSTATUS
 NTAPI
-MmAccessFaultSectionView(PMMSUPPORT AddressSpace,
+MmAccessFaultSectionView(KPROCESSOR_MODE Mode,
+                         ULONG FaultCode,
+                         PMMSUPPORT AddressSpace,
                          MEMORY_AREA* MemoryArea,
                          PVOID Address,
                          BOOLEAN Locked)
@@ -2203,6 +2205,19 @@ MmAccessFaultSectionView(PMMSUPPORT AddressSpace,
     ASSERT(Region != NULL);
     if (!(Region->Protect & PAGE_IS_WRITABLE))
         return STATUS_ACCESS_VIOLATION;
+
+#if defined(_M_ARM64)
+    if ((Mode == UserMode) &&
+        MI_IS_WRITE_ACCESS(FaultCode) &&
+        Process &&
+        Process->ExecutableWriteExceptions &&
+        (Region->Protect & PAGE_IS_EXECUTABLE) &&
+        !MiIsEcCodeAddress(Process, Address) &&
+        !PsGetCurrentThread()->ExecutableWriteAllowed)
+    {
+        return STATUS_EXECUTABLE_MEMORY_WRITE;
+    }
+#endif
 
     /* Make sure we have a page mapping for this address.  */
     if (!MmIsPagePresent(Process, Address))
@@ -2235,7 +2250,11 @@ MmAccessFaultSectionView(PMMSUPPORT AddressSpace,
     if (!Cow)
     {
         /* Simply update page protection and we're done */
+#if defined(_M_ARM64)
+        MmSetPageProtectForWriteFault(Process, Address, Region->Protect);
+#else
         MmSetPageProtect(Process, Address, Region->Protect);
+#endif
         return STATUS_SUCCESS;
     }
 
@@ -2274,7 +2293,11 @@ MmAccessFaultSectionView(PMMSUPPORT AddressSpace,
     {
         MmUnlockSectionSegment(Segment);
         /* This is a private page. We must only change the page protection. */
+#if defined(_M_ARM64)
+        MmSetPageProtectForWriteFault(Process, PAddress, NewProtect);
+#else
         MmSetPageProtect(Process, PAddress, NewProtect);
+#endif
         return STATUS_SUCCESS;
     }
 
@@ -2321,6 +2344,10 @@ MmAccessFaultSectionView(PMMSUPPORT AddressSpace,
         DPRINT1("MmCreateVirtualMapping failed, unable to create virtual mapping, not out of memory\n");
         KeBugCheck(MEMORY_MANAGEMENT);
     }
+
+#if defined(_M_ARM64)
+    MmSetPageProtectForWriteFault(Process, PAddress, NewProtect);
+#endif
 
     if (Process)
         MmInsertRmap(NewPage, Process, PAddress);

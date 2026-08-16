@@ -246,8 +246,42 @@ PspDumpProcessInfoClassName(
         DBG_PROCESS_INFO_CLASS(ProcessAffinityUpdateMode),
         DBG_PROCESS_INFO_CLASS(ProcessMemoryAllocationMode),
         DBG_PROCESS_INFO_CLASS(ProcessGroupInformation),
+        DBG_PROCESS_INFO_CLASS(ProcessTokenVirtualizationEnabled),
         DBG_PROCESS_INFO_CLASS(ProcessConsoleHostProcess),
         DBG_PROCESS_INFO_CLASS(ProcessWindowInformation),
+        DBG_PROCESS_INFO_CLASS(ProcessHandleInformation),
+        DBG_PROCESS_INFO_CLASS(ProcessMitigationPolicy),
+        DBG_PROCESS_INFO_CLASS(ProcessDynamicFunctionTableInformation),
+        DBG_PROCESS_INFO_CLASS(ProcessHandleCheckingMode),
+        DBG_PROCESS_INFO_CLASS(ProcessKeepAliveCount),
+        DBG_PROCESS_INFO_CLASS(ProcessRevokeFileHandles),
+        DBG_PROCESS_INFO_CLASS(ProcessWorkingSetControl),
+        DBG_PROCESS_INFO_CLASS(ProcessHandleTable),
+        DBG_PROCESS_INFO_CLASS(ProcessCheckStackExtentsMode),
+        DBG_PROCESS_INFO_CLASS(ProcessCommandLineInformation),
+        DBG_PROCESS_INFO_CLASS(ProcessProtectionInformation),
+        DBG_PROCESS_INFO_CLASS(ProcessMemoryExhaustion),
+        DBG_PROCESS_INFO_CLASS(ProcessFaultInformation),
+        DBG_PROCESS_INFO_CLASS(ProcessTelemetryIdInformation),
+        DBG_PROCESS_INFO_CLASS(ProcessCommitReleaseInformation),
+        DBG_PROCESS_INFO_CLASS(ProcessDefaultCpuSetsInformation),
+        DBG_PROCESS_INFO_CLASS(ProcessAllowedCpuSetsInformation),
+        DBG_PROCESS_INFO_CLASS(ProcessSubsystemProcess),
+        DBG_PROCESS_INFO_CLASS(ProcessJobMemoryInformation),
+        DBG_PROCESS_INFO_CLASS(ProcessInPrivate),
+        DBG_PROCESS_INFO_CLASS(ProcessRaiseUMExceptionOnInvalidHandleClose),
+        DBG_PROCESS_INFO_CLASS(ProcessIumChallengeResponse),
+        DBG_PROCESS_INFO_CLASS(ProcessChildProcessInformation),
+        DBG_PROCESS_INFO_CLASS(ProcessHighGraphicsPriorityInformation),
+        DBG_PROCESS_INFO_CLASS(ProcessSubsystemInformation),
+        DBG_PROCESS_INFO_CLASS(ProcessEnergyValues),
+        DBG_PROCESS_INFO_CLASS(ProcessPowerThrottlingState),
+        DBG_PROCESS_INFO_CLASS(ProcessReserved3Information),
+        DBG_PROCESS_INFO_CLASS(ProcessWin32kSyscallFilterInformation),
+        DBG_PROCESS_INFO_CLASS(ProcessDisableSystemAllowedCpuSets),
+        DBG_PROCESS_INFO_CLASS(ProcessWakeInformation),
+        DBG_PROCESS_INFO_CLASS(ProcessEnergyTrackingState),
+        DBG_PROCESS_INFO_CLASS(ProcessManageWritesToExecutableMemory),
     };
 #undef DBG_PROCESS_INFO_CLASS
 
@@ -1649,6 +1683,9 @@ NtSetInformationProcess(
     BOOLEAN HasPrivilege;
     PLIST_ENTRY Next;
     PETHREAD Thread;
+#if defined(_M_ARM64)
+    MANAGE_WRITES_TO_EXECUTABLE_MEMORY ManageWrites;
+#endif
     PAGED_CODE();
 
     /* Validate the information class */
@@ -2550,6 +2587,44 @@ NtSetInformationProcess(
             Status = STATUS_NOT_IMPLEMENTED;
             break;
 
+        case ProcessManageWritesToExecutableMemory:
+#if defined(_M_ARM64)
+            if (Process != PsGetCurrentProcess())
+            {
+                Status = STATUS_NOT_SUPPORTED;
+                break;
+            }
+
+            _SEH2_TRY
+            {
+                ManageWrites = *(PMANAGE_WRITES_TO_EXECUTABLE_MEMORY)ProcessInformation;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(break);
+            }
+            _SEH2_END;
+
+            if (ManageWrites.Version != 2)
+            {
+                Status = STATUS_REVISION_MISMATCH;
+                break;
+            }
+
+            if (ManageWrites.ThreadAllowWrites)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            InterlockedExchange(&Process->ExecutableWriteExceptions, ManageWrites.ProcessEnableWriteExceptions != 0);
+            Status = STATUS_SUCCESS;
+#else
+            Status = STATUS_NOT_SUPPORTED;
+#endif
+            break;
+
         /* Anything else is invalid */
         default:
 #if DBG
@@ -2580,6 +2655,9 @@ NtSetInformationThread(
     KPRIORITY Priority = 0;
     PEPROCESS Process;
     PTEB Teb;
+#if defined(_M_ARM64)
+    MANAGE_WRITES_TO_EXECUTABLE_MEMORY ManageWrites;
+#endif
 
     PAGED_CODE();
 
@@ -3220,6 +3298,52 @@ NtSetInformationThread(
             ObDereferenceObject(Thread);
             break;
         }
+
+        case ThreadManageWritesToExecutableMemory:
+#if defined(_M_ARM64)
+            _SEH2_TRY
+            {
+                ManageWrites = *(PMANAGE_WRITES_TO_EXECUTABLE_MEMORY)ThreadInformation;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(break);
+            }
+            _SEH2_END;
+
+            Status = ObReferenceObjectByHandle(ThreadHandle, THREAD_SET_INFORMATION, PsThreadType, PreviousMode, (PVOID*)&Thread, NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            if (Thread != PsGetCurrentThread())
+            {
+                ObDereferenceObject(Thread);
+                Status = STATUS_NOT_SUPPORTED;
+                break;
+            }
+
+            if (ManageWrites.Version != 2)
+            {
+                ObDereferenceObject(Thread);
+                Status = STATUS_REVISION_MISMATCH;
+                break;
+            }
+
+            if (ManageWrites.ProcessEnableWriteExceptions)
+            {
+                ObDereferenceObject(Thread);
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            InterlockedExchange(&Thread->ExecutableWriteAllowed, ManageWrites.ThreadAllowWrites != 0);
+            ObDereferenceObject(Thread);
+            Status = STATUS_SUCCESS;
+#else
+            Status = STATUS_NOT_SUPPORTED;
+#endif
+            break;
 
 #if (NTDDI_VERSION >= NTDDI_WIN10_RS1) || defined(__REACTOS__)
         case ThreadNameInformation:

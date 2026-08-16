@@ -1812,6 +1812,7 @@
 @ stdcall ZwSetInformationToken(long long ptr long)
 @ stdcall -stub -version=0x600+ ZwSetInformationTransaction(ptr long ptr long)
 @ stdcall -stub -version=0x600+ ZwSetInformationTransactionManager(ptr long ptr long)
+@ stdcall -arch=arm64 ZwSetInformationVirtualMemory(ptr long ptr ptr ptr long)
 @ stdcall -stub -version=0x600+ ZwSetInformationWorkerFactory(ptr long ptr long)
 @ stdcall ZwSetIntervalProfile(long long)
 @ stdcall ZwSetIoCompletion(ptr long ptr long long)

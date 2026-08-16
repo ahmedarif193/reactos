@@ -196,10 +196,7 @@ MmpAccessFault(KPROCESSOR_MODE Mode,
         switch (MemoryArea->Type)
         {
         case MEMORY_AREA_SECTION_VIEW:
-            Status = MmAccessFaultSectionView(AddressSpace,
-                                              MemoryArea,
-                                              (PVOID)Address,
-                                              TRUE);
+            Status = MmAccessFaultSectionView(Mode, FaultCode, AddressSpace, MemoryArea, (PVOID)Address, TRUE);
             break;
 #ifdef NEWCC
         case MEMORY_AREA_CACHE:
