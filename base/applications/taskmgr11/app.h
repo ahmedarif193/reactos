@@ -515,7 +515,7 @@ struct ProcExtra
     WCHAR   path[MAX_PATH];
     WCHAR   desc[128];       /* version FileDescription          */
     WCHAR   user[96];
-    WCHAR   arch[8];         /* x64 / x86                        */
+    WCHAR   arch[8];         /* x64 / x86 / ARM64                */
     DWORD   appHistorySlot;  /* cached one-based history index   */
     BOOL    efficiencySet;   /* explicitly enabled by this app   */
     BOOL    inUse;           /* GC mark                          */

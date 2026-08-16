@@ -28,10 +28,12 @@ SysSnapshot g;
 typedef BOOL (WINAPI *PFN_QueryFullProcessImageNameW)(HANDLE, DWORD, LPWSTR, PDWORD);
 typedef BOOL (WINAPI *PFN_IsHungAppWindow)(HWND);
 typedef BOOL (WINAPI *PFN_IsWow64Process)(HANDLE, PBOOL);
+typedef BOOL (WINAPI *PFN_GetProcessInformation)(HANDLE, PROCESS_INFORMATION_CLASS, PVOID, DWORD);
 
 static PFN_QueryFullProcessImageNameW pQueryFullProcessImageNameW;
 static PFN_IsHungAppWindow pIsHungAppWindow;
 static PFN_IsWow64Process pIsWow64Process;
+static PFN_GetProcessInformation pGetProcessInformation;
 
 /* ProcessPowerThrottlingState (Win10 EcoQoS); harmless failure elsewhere */
 #define TM_ProcessPowerThrottlingState ((PROCESSINFOCLASS)77)
@@ -2701,6 +2703,7 @@ void Init(void)
     HMODULE u32 = GetModuleHandleW(L"user32.dll");
     pQueryFullProcessImageNameW = (PFN_QueryFullProcessImageNameW)GetProcAddress(k32, "QueryFullProcessImageNameW");
     pIsWow64Process = (PFN_IsWow64Process)GetProcAddress(k32, "IsWow64Process");
+    pGetProcessInformation = (PFN_GetProcessInformation)GetProcAddress(k32, "GetProcessInformation");
     pIsHungAppWindow = (PFN_IsHungAppWindow)GetProcAddress(u32, "IsHungAppWindow");
 
     s_currentPid = GetCurrentProcessId();
@@ -2933,11 +2936,34 @@ static void ResolveExtra(ProcRow& p)
         }
 
         /* architecture */
-        if (pIsWow64Process)
+        PROCESS_MACHINE_INFORMATION machineInfo;
+        if (pGetProcessInformation && pGetProcessInformation(h, ProcessMachineTypeInfo, &machineInfo, sizeof(machineInfo)))
+        {
+            switch (machineInfo.ProcessMachine)
+            {
+                case IMAGE_FILE_MACHINE_I386:
+                    StringCchCopyW(x->arch, _countof(x->arch), L"x86");
+                    break;
+
+                case IMAGE_FILE_MACHINE_AMD64:
+                case IMAGE_FILE_MACHINE_ARM64EC:
+                    StringCchCopyW(x->arch, _countof(x->arch), L"x64");
+                    break;
+
+                case IMAGE_FILE_MACHINE_ARM64:
+                    StringCchCopyW(x->arch, _countof(x->arch), L"ARM64");
+                    break;
+            }
+        }
+        else if (pIsWow64Process)
         {
             BOOL wow = FALSE;
             if (pIsWow64Process(h, &wow))
+#if defined(_M_ARM64)
+                StringCchCopyW(x->arch, _countof(x->arch), wow ? L"x86" : L"ARM64");
+#else
                 StringCchCopyW(x->arch, _countof(x->arch), wow ? L"x86" : L"x64");
+#endif
         }
 
         CloseHandle(h);

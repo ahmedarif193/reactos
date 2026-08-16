@@ -189,7 +189,6 @@ void PerfDataRefresh(void)
     PSID                                       ProcessUser;
     ULONG                                      Buffer[64]; /* must be 4 bytes aligned! */
     ULONG                                      cwcUserName;
-    BOOL                                       bIsWow64;
 
     /* Get new system time */
     status = NtQuerySystemInformation(SystemTimeOfDayInformation, &SysTimeInfo, sizeof(SysTimeInfo), NULL);
@@ -430,9 +429,17 @@ ReadProcOwner:
                     pPerfData[Idx].GDIObjectCount = GetGuiResources(hProcess, GR_GDIOBJECTS);
                 }
 
-                if (IsWow64Process(hProcess, &bIsWow64) && bIsWow64)
+                PROCESS_MACHINE_INFORMATION MachineInformation;
+
+                if (GetProcessInformation(hProcess, ProcessMachineTypeInfo, &MachineInformation, sizeof(MachineInformation)))
                 {
-                    wcscat(pPerfData[Idx].ImageName, L" *32");
+                    pPerfData[Idx].ImageMachine = MachineInformation.ProcessMachine;
+                    if (MachineInformation.ProcessMachine == IMAGE_FILE_MACHINE_I386)
+                        StringCchCatW(pPerfData[Idx].ImageName, _countof(pPerfData[Idx].ImageName), L" *32");
+#if defined(_M_ARM64)
+                    else if (MachineInformation.ProcessMachine == IMAGE_FILE_MACHINE_AMD64)
+                        StringCchCatW(pPerfData[Idx].ImageName, _countof(pPerfData[Idx].ImageName), L" *x64");
+#endif
                 }
 
                 GetProcessIoCounters(hProcess, &pPerfData[Idx].IOCounters);
@@ -1184,4 +1191,3 @@ BOOL PerfDataGet(ULONG Index, PPERFDATA *lppData)
     LeaveCriticalSection(&PerfDataCriticalSection);
     return bSuccessful;
 }
-
