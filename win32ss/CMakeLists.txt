@@ -86,6 +86,7 @@ list(APPEND SOURCE
     gdi/eng/pathobj.c
     gdi/eng/pdevobj.c
     gdi/eng/perfcnt.c
+    gdi/eng/plgblt.c
     gdi/eng/rlecomp.c
     gdi/eng/semaphor.c
     gdi/eng/sort.c
