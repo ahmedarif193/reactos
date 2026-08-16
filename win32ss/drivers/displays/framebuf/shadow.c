@@ -200,33 +200,42 @@ IntFlushShadowRect(
    }
 }
 
-/* Publish the target rectangle, narrowed by the clip bounding box if any. */
-static VOID
-IntPublishTarget(
-   SURFOBJ *psoTrg,
-   const RECTL *prclTrg,
-   CLIPOBJ *pco)
+VOID
+IntPublishShadowSurface(
+   SURFOBJ *pso,
+   const RECTL *prcl,
+   CLIPOBJ *pco,
+   FRAMEBUF_SHADOW_OPERATION Operation)
 {
    PPDEV ppdev;
    RECTL rcl;
 
-   if (psoTrg == NULL || psoTrg->dhpdev == NULL)
+   UNREFERENCED_PARAMETER(Operation);
+
+   if (pso == NULL || pso->dhpdev == NULL || prcl == NULL)
       return;
 
-   ppdev = (PPDEV)psoTrg->dhpdev;
-   if (!ppdev->ShadowActive || psoTrg->pvScan0 != ppdev->ShadowPtr)
+   ppdev = (PPDEV)pso->dhpdev;
+   if (!ppdev->ShadowActive || ppdev->psoShadow == NULL ||
+       pso->dhsurf != (DHSURF)ppdev)
       return;
 
-   rcl = *prclTrg;
+   if (ppdev->ShadowPublish != NULL)
+   {
+      ppdev->ShadowPublish(pso, prcl, pco, Operation);
+      return;
+   }
+
+   rcl = *prcl;
    if (rcl.right < rcl.left)
    {
-      rcl.left = prclTrg->right;
-      rcl.right = prclTrg->left;
+      rcl.left = prcl->right;
+      rcl.right = prcl->left;
    }
    if (rcl.bottom < rcl.top)
    {
-      rcl.top = prclTrg->bottom;
-      rcl.bottom = prclTrg->top;
+      rcl.top = prcl->bottom;
+      rcl.bottom = prcl->top;
    }
 
    if (pco != NULL && pco->iDComplexity != DC_TRIVIAL)
@@ -240,52 +249,11 @@ IntPublishTarget(
    IntQueueShadowRect(ppdev, &rcl);
 }
 
-BOOL APIENTRY
-DrvBitBlt(
-   IN SURFOBJ *psoTrg,
-   IN SURFOBJ *psoSrc,
-   IN SURFOBJ *psoMask,
-   IN CLIPOBJ *pco,
-   IN XLATEOBJ *pxlo,
-   IN RECTL *prclTrg,
-   IN POINTL *pptlSrc,
-   IN POINTL *pptlMask,
-   IN BRUSHOBJ *pbo,
-   IN POINTL *pptlBrush,
-   IN ROP4 rop4)
-{
-   BOOL Result;
-
-   Result = EngBitBlt(psoTrg, psoSrc, psoMask, pco, pxlo, prclTrg, pptlSrc, pptlMask, pbo, pptlBrush, rop4);
-   if (Result)
-      IntPublishTarget(psoTrg, prclTrg, pco);
-
-   return Result;
-}
-
-BOOL APIENTRY
-DrvCopyBits(
-   IN SURFOBJ *psoDest,
-   IN SURFOBJ *psoSrc,
-   IN CLIPOBJ *pco,
-   IN XLATEOBJ *pxlo,
-   IN RECTL *prclDest,
-   IN POINTL *pptlSrc)
-{
-   BOOL Result;
-
-   Result = EngCopyBits(psoDest, psoSrc, pco, pxlo, prclDest, pptlSrc);
-   if (Result)
-      IntPublishTarget(psoDest, prclDest, pco);
-
-   return Result;
-}
-
-VOID APIENTRY
-DrvSynchronizeSurface(
-   IN SURFOBJ *pso,
-   IN RECTL *prcl,
-   IN FLONG fl)
+VOID
+IntSynchronizeShadowSurface(
+   SURFOBJ *pso,
+   RECTL *prcl,
+   FLONG fl)
 {
    PPDEV ppdev;
 
@@ -293,8 +261,19 @@ DrvSynchronizeSurface(
       return;
 
    ppdev = (PPDEV)pso->dhpdev;
-   if (!ppdev->ShadowActive || pso->pvScan0 != ppdev->ShadowPtr)
+   if (!ppdev->ShadowActive || ppdev->psoShadow == NULL ||
+       pso->dhsurf != (DHSURF)ppdev)
       return;
+
+   if (ppdev->ShadowPublish != NULL)
+   {
+      if ((fl & DSS_FLUSH_EVENT) != 0 && prcl != NULL)
+      {
+         ppdev->ShadowPublish(pso, prcl, NULL,
+                              FramebufShadowSynchronize);
+      }
+      return;
+   }
 
    if (fl & DSS_TIMER_EVENT)
    {

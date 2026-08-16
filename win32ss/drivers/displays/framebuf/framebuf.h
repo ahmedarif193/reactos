@@ -30,6 +30,27 @@
 
 //#define EXPERIMENTAL_MOUSE_CURSOR_SUPPORT
 
+typedef enum _FRAMEBUF_SHADOW_OPERATION
+{
+   FramebufShadowBitBlt,
+   FramebufShadowCopyBits,
+   FramebufShadowLineTo,
+   FramebufShadowPaint,
+   FramebufShadowStretchBlt,
+   FramebufShadowStretchBltRop,
+   FramebufShadowAlphaBlend,
+   FramebufShadowTransparentBlt,
+   FramebufShadowGradientFill,
+   FramebufShadowSynchronize,
+   FramebufShadowOperationCount
+} FRAMEBUF_SHADOW_OPERATION;
+
+typedef VOID (APIENTRY *PFRAMEBUF_SHADOW_PUBLISH)(
+   SURFOBJ *pso,
+   const RECTL *prcl,
+   CLIPOBJ *pco,
+   FRAMEBUF_SHADOW_OPERATION Operation);
+
 typedef struct _PDEV
 {
    HANDLE hDriver;
@@ -45,8 +66,11 @@ typedef struct _PDEV
    ULONG BlueMask;
    BYTE PaletteShift;
    PVOID ScreenPtr;
+   HSURF hSurfShadow;
+   SURFOBJ *psoShadow;
    PUCHAR ShadowPtr;
    BOOL ShadowActive;
+   PFRAMEBUF_SHADOW_PUBLISH ShadowPublish;
    RECTL ShadowFlushRect;
    RECTL ShadowPendingRect;
    BOOL ShadowFlushValid;
@@ -85,18 +109,6 @@ typedef struct _PDEV
 #define DEVICE_NAME	L"framebuf"
 #define ALLOC_TAG	'FUBF'
 
-
-#ifdef RPI5VC4_XPDM_DISPLAY
-ULONG APIENTRY
-DrvEscape(
-   IN SURFOBJ *pso,
-   IN ULONG iEsc,
-   IN ULONG cjIn,
-   IN PVOID pvIn,
-   IN ULONG cjOut,
-   OUT PVOID pvOut);
-#endif
-
 BOOL APIENTRY
 DrvEnableDirectDraw(
     DHPDEV dhpdev,
@@ -109,7 +121,7 @@ DrvDisableDirectDraw(
     DHPDEV dhpdev);
 
 DHPDEV APIENTRY
-DrvEnablePDEV(
+FrameBufferEnablePDEV(
    IN DEVMODEW *pdm,
    IN LPWSTR pwszLogAddress,
    IN ULONG cPat,
@@ -201,6 +213,90 @@ DrvCopyBits(
    IN RECTL *prclDest,
    IN POINTL *pptlSrc);
 
+BOOL APIENTRY
+DrvLineTo(
+   IN SURFOBJ *pso,
+   IN CLIPOBJ *pco,
+   IN BRUSHOBJ *pbo,
+   IN LONG x1,
+   IN LONG y1,
+   IN LONG x2,
+   IN LONG y2,
+   IN RECTL *prclBounds,
+   IN MIX mix);
+
+BOOL APIENTRY
+DrvPaint(
+   IN SURFOBJ *pso,
+   IN CLIPOBJ *pco,
+   IN BRUSHOBJ *pbo,
+   IN POINTL *pptlBrushOrg,
+   IN MIX mix);
+
+BOOL APIENTRY
+DrvStretchBlt(
+   IN SURFOBJ *psoDest,
+   IN SURFOBJ *psoSrc,
+   IN SURFOBJ *psoMask,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN COLORADJUSTMENT *pca,
+   IN POINTL *pptlHTOrg,
+   IN RECTL *prclDest,
+   IN RECTL *prclSrc,
+   IN POINTL *pptlMask,
+   IN ULONG iMode);
+
+BOOL APIENTRY
+DrvStretchBltROP(
+   IN SURFOBJ *psoDest,
+   IN SURFOBJ *psoSrc,
+   IN SURFOBJ *psoMask,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN COLORADJUSTMENT *pca,
+   IN POINTL *pptlHTOrg,
+   IN RECTL *prclDest,
+   IN RECTL *prclSrc,
+   IN POINTL *pptlMask,
+   IN ULONG iMode,
+   IN BRUSHOBJ *pbo,
+   IN DWORD rop4);
+
+BOOL APIENTRY
+DrvAlphaBlend(
+   IN SURFOBJ *psoDest,
+   IN SURFOBJ *psoSrc,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN RECTL *prclDest,
+   IN RECTL *prclSrc,
+   IN BLENDOBJ *pBlendObj);
+
+BOOL APIENTRY
+DrvTransparentBlt(
+   IN SURFOBJ *psoDst,
+   IN SURFOBJ *psoSrc,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN RECTL *prclDst,
+   IN RECTL *prclSrc,
+   IN ULONG iTransColor,
+   IN ULONG ulReserved);
+
+BOOL APIENTRY
+DrvGradientFill(
+   IN SURFOBJ *psoDest,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN TRIVERTEX *pVertex,
+   IN ULONG nVertex,
+   IN PVOID pMesh,
+   IN ULONG nMesh,
+   IN RECTL *prclExtents,
+   IN POINTL *pptlDitherOrg,
+   IN ULONG ulMode);
+
 VOID APIENTRY
 DrvSynchronizeSurface(
    IN SURFOBJ *pso,
@@ -211,6 +307,19 @@ VOID
 IntFlushShadowRect(
    PPDEV ppdev,
    const RECTL *prcl);
+
+VOID
+IntPublishShadowSurface(
+   SURFOBJ *pso,
+   const RECTL *prcl,
+   CLIPOBJ *pco,
+   FRAMEBUF_SHADOW_OPERATION Operation);
+
+VOID
+IntSynchronizeShadowSurface(
+   SURFOBJ *pso,
+   RECTL *prcl,
+   FLONG fl);
 
 BOOL
 IntInitScreenInfo(
