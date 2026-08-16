@@ -126,7 +126,7 @@ RtlWow64IsWowGuestMachineSupported(USHORT machine, BOOLEAN *supported)
 static BOOLEAN
 RtlpIsCurrentProcess(HANDLE process)
 {
-    return process == NtCurrentProcess() || !NtCompareObjects(process, NtCurrentProcess());
+    return process == NtCurrentProcess() || !NtCompareObjects(NtCurrentProcess(), process);
 }
 
 BOOLEAN
@@ -289,6 +289,35 @@ done:
     return STATUS_SUCCESS;
 }
 
+#endif /* _WIN64 && !(ReactOS ARM64) */
+
+#if defined(_WIN64)
+
+#define CROSS_PROCESS_WORK_LIST_ALIGNMENT 0x1000
+#define CROSS_PROCESS_WORK_LIST_SIZE      0x4000
+
+static VOID
+RtlpValidateCrossProcessWorkEntry(CROSS_PROCESS_WORK_HDR *list, CROSS_PROCESS_WORK_ENTRY *entry)
+{
+    ULONG_PTR list_base = (ULONG_PTR)list & ~(CROSS_PROCESS_WORK_LIST_ALIGNMENT - 1);
+    ULONG_PTR list_end = list_base + CROSS_PROCESS_WORK_LIST_SIZE;
+    ULONG_PTR entry_address = (ULONG_PTR)entry;
+    ULONG_PTR entry_end = entry_address + sizeof(*entry);
+
+    if (list_end <= list_base || entry_end <= entry_address || entry_address < list_base || entry_end > list_end)
+        RtlRaiseStatus(STATUS_INVALID_PARAMETER);
+}
+
+static __inline LONGLONG
+RtlpReadCrossProcessWorkHeader(CROSS_PROCESS_WORK_HDR *list)
+{
+#if defined(__GNUC__)
+    return __atomic_load_n(&list->hdr, __ATOMIC_ACQUIRE);
+#else
+    return ReadAcquire64(&list->hdr);
+#endif
+}
+
 VOID
 WINAPI
 RtlOpenCrossProcessEmulatorWorkConnection(HANDLE process, HANDLE *section, void **address)
@@ -296,6 +325,8 @@ RtlOpenCrossProcessEmulatorWorkConnection(HANDLE process, HANDLE *section, void 
     WOW64INFO wow64info;
     BOOLEAN is_wow64;
     HANDLE remote_handle = NULL;
+    HANDLE local_section = NULL;
+    PVOID local_address = NULL;
     SIZE_T size = 0;
 
     *address = NULL;
@@ -303,21 +334,41 @@ RtlOpenCrossProcessEmulatorWorkConnection(HANDLE process, HANDLE *section, void 
 
     if (RtlpIsCurrentProcess(process))
         return;
-    if (RtlWow64GetSharedInfoProcess(process, &is_wow64, &wow64info))
-        return;
-    if (is_wow64)
+    if (!RtlWow64GetSharedInfoProcess(process, &is_wow64, &wow64info) && is_wow64 && (wow64info.CpuFlags & WOW64_CPUFLAGS_SOFTWARE))
         remote_handle = (HANDLE)(ULONG_PTR)wow64info.SectionHandle;
+
+#if defined(__REACTOS__) && defined(_M_ARM64)
+    if (!remote_handle)
+    {
+        PROCESS_BASIC_INFORMATION process_info;
+        CHPEV2_PROCESS_INFO64 chpe_info;
+        PVOID remote_info = NULL;
+
+        C_ASSERT(FIELD_OFFSET(PEB, ChpeV2ProcessInfo) == 0x338);
+
+        if (!NtQueryInformationProcess(process, ProcessBasicInformation, &process_info, sizeof(process_info), NULL) && !NtReadVirtualMemory(process, &process_info.PebBaseAddress->ChpeV2ProcessInfo, &remote_info, sizeof(remote_info), NULL) && remote_info && !NtReadVirtualMemory(process, remote_info, &chpe_info, sizeof(chpe_info), NULL))
+            remote_handle = (HANDLE)(ULONG_PTR)chpe_info.SectionHandle;
+    }
+#endif
+
     if (!remote_handle)
         return;
 
-    if (NtDuplicateObject(process, remote_handle, NtCurrentProcess(), section, 0, 0, DUPLICATE_SAME_ACCESS))
-        return;
+    if (NtDuplicateObject(process, remote_handle, NtCurrentProcess(), &local_section, 0, 0, DUPLICATE_SAME_ACCESS | DUPLICATE_SAME_ATTRIBUTES))
+        goto failed;
 
-    if (!NtMapViewOfSection(*section, NtCurrentProcess(), address, 0, 0, NULL, &size, ViewShare, 0, PAGE_READWRITE))
+    if (!NtMapViewOfSection(local_section, NtCurrentProcess(), &local_address, 0, 0, NULL, &size, ViewUnmap, MEM_TOP_DOWN, PAGE_READWRITE))
+    {
+        *section = local_section;
+        *address = local_address;
         return;
+    }
 
-    NtClose(*section);
-    *section = NULL;
+failed:
+    if (local_address)
+        NtUnmapViewOfSection(NtCurrentProcess(), local_address);
+    if (local_section)
+        NtClose(local_section);
 }
 
 CROSS_PROCESS_WORK_ENTRY *
@@ -325,32 +376,41 @@ WINAPI
 RtlWow64PopAllCrossProcessWorkFromWorkList(CROSS_PROCESS_WORK_HDR *list, BOOLEAN *flush)
 {
     CROSS_PROCESS_WORK_HDR previous, next_header;
-    ULONG position, previous_position = 0;
+    CROSS_PROCESS_WORK_ENTRY *entry;
+    BOOLEAN flush_requested;
+    ULONG position, previous_position;
 
     do
     {
-        previous.hdr = list->hdr;
-        if (!previous.first)
+        previous.hdr = RtlpReadCrossProcessWorkHeader(list);
+        position = previous.first & ~CROSS_PROCESS_LIST_FLUSH;
+        flush_requested = (previous.first & CROSS_PROCESS_LIST_FLUSH) != 0;
+        if (!position && !flush_requested)
             break;
         next_header.first = 0;
         next_header.counter = previous.counter + 1;
     } while (InterlockedCompareExchange64(&list->hdr, next_header.hdr, previous.hdr) != previous.hdr);
 
-    *flush = (previous.first & CROSS_PROCESS_LIST_FLUSH) != 0;
-    position = previous.first & ~CROSS_PROCESS_LIST_FLUSH;
+    *flush = flush_requested;
     if (!position)
         return NULL;
+    entry = (CROSS_PROCESS_WORK_ENTRY *)((char *)list + position);
+    if (flush_requested)
+        return entry;
 
+    previous_position = 0;
     for (;;)
     {
-        CROSS_PROCESS_WORK_ENTRY *entry = CROSS_PROCESS_LIST_ENTRY(list, position);
-        ULONG next = entry->next;
+        ULONG next;
 
+        RtlpValidateCrossProcessWorkEntry(list, entry);
+        next = entry->next;
         entry->next = previous_position;
         if (!next)
             return entry;
         previous_position = position;
         position = next;
+        entry = (CROSS_PROCESS_WORK_ENTRY *)((char *)list + position);
     }
 }
 
@@ -363,11 +423,12 @@ RtlWow64PopCrossProcessWorkFromFreeList(CROSS_PROCESS_WORK_HDR *list)
 
     do
     {
-        previous.hdr = list->hdr;
-        if (!previous.first)
+        previous.hdr = RtlpReadCrossProcessWorkHeader(list);
+        if (!(previous.first & ~CROSS_PROCESS_LIST_FLUSH))
             return NULL;
         entry = CROSS_PROCESS_LIST_ENTRY(list, previous.first);
-        next_header.first = entry->next;
+        RtlpValidateCrossProcessWorkEntry(list, entry);
+        next_header.first = (previous.first & CROSS_PROCESS_LIST_FLUSH) | (entry->next & ~CROSS_PROCESS_LIST_FLUSH);
         next_header.counter = previous.counter + 1;
     } while (InterlockedCompareExchange64(&list->hdr, next_header.hdr, previous.hdr) != previous.hdr);
 
@@ -380,12 +441,16 @@ WINAPI
 RtlWow64PushCrossProcessWorkOntoFreeList(CROSS_PROCESS_WORK_HDR *list, CROSS_PROCESS_WORK_ENTRY *entry)
 {
     CROSS_PROCESS_WORK_HDR previous, next_header;
+    ULONG position;
+
+    RtlpValidateCrossProcessWorkEntry(list, entry);
+    position = (ULONG)((char *)entry - (char *)list);
 
     do
     {
-        previous.hdr = list->hdr;
-        entry->next = previous.first;
-        next_header.first = (ULONG)((char *)entry - (char *)list);
+        previous.hdr = RtlpReadCrossProcessWorkHeader(list);
+        entry->next = previous.first & ~CROSS_PROCESS_LIST_FLUSH;
+        next_header.first = (previous.first & CROSS_PROCESS_LIST_FLUSH) | position;
         next_header.counter = previous.counter + 1;
     } while (InterlockedCompareExchange64(&list->hdr, next_header.hdr, previous.hdr) != previous.hdr);
 
@@ -399,17 +464,66 @@ RtlWow64PushCrossProcessWorkOntoWorkList(CROSS_PROCESS_WORK_HDR *list,
                                          void **unknown)
 {
     CROSS_PROCESS_WORK_HDR previous, next_header;
+    CROSS_PROCESS_WORK_ENTRY saved_entry, *previous_entry, *returned_entry;
+    BOOLEAN coalesced, saved = FALSE;
+    ULONG position;
+    ULONGLONG entry_end, previous_end;
 
-    *unknown = NULL;
+    RtlpValidateCrossProcessWorkEntry(list, entry);
+    position = (ULONG)((char *)entry - (char *)list);
+
     do
     {
-        previous.hdr = list->hdr;
-        entry->next = previous.first;
-        next_header.first = (ULONG)((char *)entry - (char *)list) |
-                            (previous.first & CROSS_PROCESS_LIST_FLUSH);
-        next_header.counter = previous.counter + 1;
-    } while (InterlockedCompareExchange64(&list->hdr, next_header.hdr, previous.hdr) != previous.hdr);
+        previous.hdr = RtlpReadCrossProcessWorkHeader(list);
+        coalesced = FALSE;
 
+        if (previous.first & CROSS_PROCESS_LIST_FLUSH)
+        {
+            returned_entry = entry;
+            next_header.first = previous.first;
+        }
+        else
+        {
+            returned_entry = NULL;
+            previous_entry = NULL;
+            entry_end = entry->addr + entry->size;
+
+            if (entry->id == CrossProcessMemoryWrite && (previous.first & ~CROSS_PROCESS_LIST_FLUSH) && entry_end >= entry->addr)
+            {
+                previous_entry = CROSS_PROCESS_LIST_ENTRY(list, previous.first);
+                RtlpValidateCrossProcessWorkEntry(list, previous_entry);
+                previous_end = previous_entry->addr + previous_entry->size;
+                if (previous_entry->id == CrossProcessMemoryWrite && previous_end >= previous_entry->addr && entry->addr == previous_end)
+                {
+                    if (!saved)
+                    {
+                        saved_entry = *entry;
+                        saved = TRUE;
+                    }
+                    entry->next = previous_entry->next;
+                    entry->addr = previous_entry->addr;
+                    entry->size = entry_end - previous_entry->addr;
+                    returned_entry = previous_entry;
+                    coalesced = TRUE;
+                }
+            }
+
+            if (!coalesced)
+                entry->next = previous.first & ~CROSS_PROCESS_LIST_FLUSH;
+
+            next_header.first = position;
+        }
+
+        next_header.counter = previous.counter + 1;
+
+        if (InterlockedCompareExchange64(&list->hdr, next_header.hdr, previous.hdr) == previous.hdr)
+            break;
+
+        if (coalesced)
+            *entry = saved_entry;
+    } while (TRUE);
+
+    *unknown = returned_entry;
     return TRUE;
 }
 
@@ -421,7 +535,7 @@ RtlWow64RequestCrossProcessHeavyFlush(CROSS_PROCESS_WORK_HDR *list)
 
     do
     {
-        previous.hdr = list->hdr;
+        previous.hdr = RtlpReadCrossProcessWorkHeader(list);
         next_header.first = previous.first | CROSS_PROCESS_LIST_FLUSH;
         next_header.counter = previous.counter + 1;
     } while (InterlockedCompareExchange64(&list->hdr, next_header.hdr, previous.hdr) != previous.hdr);

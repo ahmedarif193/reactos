@@ -1861,22 +1861,4 @@ ProcessPendingCrossProcessEmulatorWork(VOID)
      * inline by the memory notification hooks in chpewrap.c */
 }
 
-/*
- * ARM64EC cross-process work list helpers (stubs).
- */
-void *
-WINAPI
-RtlWow64PopAllCrossProcessWorkFromWorkList(void *list, BOOLEAN *flush)
-{
-    if (flush) *flush = FALSE;
-    return NULL;
-}
-
-BOOLEAN
-WINAPI
-RtlWow64PushCrossProcessWorkOntoFreeList(void *list, void *entry)
-{
-    return TRUE;
-}
-
 #endif /* _M_ARM64 */
