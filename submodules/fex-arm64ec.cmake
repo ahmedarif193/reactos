@@ -28,6 +28,12 @@ if(NOT EXISTS "${FEX_SOURCE_DIR}/CMakeLists.txt")
         "Run configure.sh for the ARM64 build with -DENABLE_FEX_ARM64EC=ON")
 endif()
 
+set(FEX_SOURCE_STATE "${FEX_SOURCE_DIR}/.reactos-source-id")
+if(NOT EXISTS "${FEX_SOURCE_STATE}")
+    message(FATAL_ERROR "Prepared FEX ARM64EC source state not found at ${FEX_SOURCE_STATE}. "
+        "Run configure.sh for the ARM64 build with -DENABLE_FEX_ARM64EC=ON")
+endif()
+
 include(ExternalProject)
 
 set(FEX_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/fex-arm64ec-build")
@@ -102,6 +108,16 @@ ExternalProject_Add(fex-arm64ec-build
     BUILD_BYPRODUCTS "${FEX_DLL_DEST}"
     USES_TERMINAL_BUILD OFF
 )
+
+# configure.sh writes this state file from the FEX revision, ReactOS patch hash,
+# and recursive FEX submodule revisions.  Updating it invalidates the external
+# configure and build stamps without rebuilding FEX on every image invocation.
+ExternalProject_Add_Step(fex-arm64ec-build source-state
+    COMMAND ${CMAKE_COMMAND} -E true
+    DEPENDEES patch
+    DEPENDERS configure
+    DEPENDS "${FEX_SOURCE_STATE}"
+    COMMENT "Checking prepared FEX ARM64EC source state")
 
 # Deploy uncompressed so ntdll can load the emulator during process startup.
 add_cd_file(
