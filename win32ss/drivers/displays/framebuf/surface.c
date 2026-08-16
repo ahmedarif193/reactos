@@ -43,7 +43,6 @@ DrvEnableSurface(
    ULONG ulTemp;
    ULONG ShadowSize;
    FLONG flHooks = 0;
-   PVOID SurfaceBits;
 
    /*
     * Set video mode of our adapter.
@@ -99,40 +98,69 @@ DrvEnableSurface(
    ScreenSize.cx = ppdev->ScreenWidth;
    ScreenSize.cy = ppdev->ScreenHeight;
 
-   /* GDI draws into a cached shadow; dirty rects are streamed to the WC framebuffer. */
+   /*
+    * Expose a real XPDM device surface and render software fallbacks into a
+    * separate cached bitmap. The hook layer maps the device surface to this
+    * bitmap before calling Eng* and publishes only the resulting dirty area.
+    */
    ppdev->ShadowActive = FALSE;
+   ppdev->hSurfShadow = NULL;
+   ppdev->psoShadow = NULL;
+   ppdev->ShadowPtr = NULL;
    ShadowSize = ppdev->ScreenHeight * ppdev->ScreenDelta;
-   if (ppdev->ShadowPtr == NULL && ShadowSize != 0)
+   if (ShadowSize != 0)
    {
-      ppdev->ShadowPtr = EngAllocMem(0, ShadowSize, ALLOC_TAG);
+      ppdev->hSurfShadow = (HSURF)EngCreateBitmap(
+         ScreenSize,
+         ppdev->ScreenDelta,
+         BitmapType,
+         (ppdev->ScreenDelta > 0) ? BMF_TOPDOWN : 0,
+         NULL);
    }
-   if (ppdev->ShadowPtr != NULL)
+   if (ppdev->hSurfShadow != NULL &&
+       EngAssociateSurface(ppdev->hSurfShadow, ppdev->hDevEng, 0))
    {
-      /* Seed the shadow with the live framebuffer contents (one-time read). */
+      ppdev->psoShadow = EngLockSurface(ppdev->hSurfShadow);
+   }
+   if (ppdev->psoShadow != NULL && ppdev->psoShadow->pvScan0 != NULL)
+   {
+      ppdev->ShadowPtr = ppdev->psoShadow->pvScan0;
       memcpy(ppdev->ShadowPtr, ppdev->ScreenPtr, ShadowSize);
       ppdev->ShadowActive = TRUE;
       ppdev->ShadowFlushValid = FALSE;
       ppdev->ShadowPendingValid = FALSE;
-      SurfaceBits = ppdev->ShadowPtr;
-      flHooks = HOOK_BITBLT | HOOK_COPYBITS | HOOK_SYNCHRONIZE;
+      flHooks = HOOK_BITBLT | HOOK_COPYBITS | HOOK_LINETO | HOOK_PAINT |
+                HOOK_STRETCHBLT | HOOK_STRETCHBLTROP | HOOK_ALPHABLEND |
+                HOOK_TRANSPARENTBLT | HOOK_GRADIENTFILL |
+                HOOK_SYNCHRONIZE;
+      hSurface = EngCreateDeviceSurface((DHSURF)ppdev,
+                                        ScreenSize,
+                                        BitmapType);
    }
    else
    {
-      SurfaceBits = ppdev->ScreenPtr;
+      if (ppdev->psoShadow != NULL)
+      {
+         EngUnlockSurface(ppdev->psoShadow);
+         ppdev->psoShadow = NULL;
+      }
+      if (ppdev->hSurfShadow != NULL)
+      {
+         EngDeleteSurface(ppdev->hSurfShadow);
+         ppdev->hSurfShadow = NULL;
+      }
+
+      hSurface = (HSURF)EngCreateBitmap(
+         ScreenSize,
+         ppdev->ScreenDelta,
+         BitmapType,
+         (ppdev->ScreenDelta > 0) ? BMF_TOPDOWN : 0,
+         ppdev->ScreenPtr);
    }
 
-   hSurface = (HSURF)EngCreateBitmap(ScreenSize, ppdev->ScreenDelta, BitmapType,
-                                     (ppdev->ScreenDelta > 0) ? BMF_TOPDOWN : 0,
-                                     SurfaceBits);
    if (hSurface == NULL)
    {
-      ppdev->ShadowActive = FALSE;
-      if (ppdev->ShadowPtr != NULL)
-      {
-         EngFreeMem(ppdev->ShadowPtr);
-         ppdev->ShadowPtr = NULL;
-      }
-      return NULL;
+      goto Failure;
    }
 
    /*
@@ -142,18 +170,27 @@ DrvEnableSurface(
    if (!EngAssociateSurface(hSurface, ppdev->hDevEng, flHooks))
    {
       EngDeleteSurface(hSurface);
-      ppdev->ShadowActive = FALSE;
-      if (ppdev->ShadowPtr != NULL)
-      {
-         EngFreeMem(ppdev->ShadowPtr);
-         ppdev->ShadowPtr = NULL;
-      }
-      return NULL;
+      goto Failure;
    }
 
    ppdev->hSurfEng = hSurface;
 
    return hSurface;
+
+Failure:
+   ppdev->ShadowActive = FALSE;
+   ppdev->ShadowPtr = NULL;
+   if (ppdev->psoShadow != NULL)
+   {
+      EngUnlockSurface(ppdev->psoShadow);
+      ppdev->psoShadow = NULL;
+   }
+   if (ppdev->hSurfShadow != NULL)
+   {
+      EngDeleteSurface(ppdev->hSurfShadow);
+      ppdev->hSurfShadow = NULL;
+   }
+   return NULL;
 }
 
 /*
@@ -180,10 +217,16 @@ DrvDisableSurface(
    ppdev->ShadowActive = FALSE;
    ppdev->ShadowFlushValid = FALSE;
    ppdev->ShadowPendingValid = FALSE;
-   if (ppdev->ShadowPtr != NULL)
+   ppdev->ShadowPtr = NULL;
+   if (ppdev->psoShadow != NULL)
    {
-      EngFreeMem(ppdev->ShadowPtr);
-      ppdev->ShadowPtr = NULL;
+      EngUnlockSurface(ppdev->psoShadow);
+      ppdev->psoShadow = NULL;
+   }
+   if (ppdev->hSurfShadow != NULL)
+   {
+      EngDeleteSurface(ppdev->hSurfShadow);
+      ppdev->hSurfShadow = NULL;
    }
 
 #ifdef EXPERIMENTAL_MOUSE_CURSOR_SUPPORT
