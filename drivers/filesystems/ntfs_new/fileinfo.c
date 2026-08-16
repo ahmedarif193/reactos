@@ -721,6 +721,123 @@ GetFileDirectoryInformation(_In_ PFileContextBlock FileCB,
     return Status;
 }
 
+static
+NTSTATUS
+GetFileFullDirectoryInformation(_In_ PFileContextBlock FileCB,
+                                _In_ UCHAR IrpFlags,
+                                _In_ PUNICODE_STRING FileNameFilter,
+                                _Out_ PFILE_FULL_DIR_INFORMATION Buffer,
+                                _Inout_ PULONG Length)
+{
+    PFILE_BOTH_DIR_INFORMATION Source;
+    PFILE_FULL_DIR_INFORMATION Current;
+    PFILE_FULL_DIR_INFORMATION Previous = NULL;
+    PVOID TemporaryBuffer;
+    ULONG Available;
+    ULONG Remaining;
+    ULONG SourceCapacity;
+    ULONG SourceBytes;
+    ULONG SourceOffset = 0;
+    ULONG BytesWritten = 0;
+    ULONG EntrySize;
+    ULONG SourceEntrySize;
+    ULONG SourceSlack;
+    NTSTATUS Status;
+
+    if (!FileCB || !FileCB->FileDir)
+        return STATUS_NOT_FOUND;
+
+    Available = *Length;
+    if (Available < sizeof(FILE_FULL_DIR_INFORMATION))
+        return STATUS_BUFFER_OVERFLOW;
+
+    /*
+     * FILE_BOTH_DIR_INFORMATION has the same payload plus the short-name
+     * fields.  Supply enough extra space for at least every entry that can
+     * fit in the caller's FILE_FULL_DIR_INFORMATION buffer.  The aligned
+     * size difference is at least SourceSlack bytes per entry, so consuming
+     * SourceCapacity can never advance the directory past an entry that the
+     * destination cannot hold.
+     */
+    SourceSlack = ALIGN_DOWN_BY(FIELD_OFFSET(FILE_BOTH_DIR_INFORMATION, FileName) - FIELD_OFFSET(FILE_FULL_DIR_INFORMATION, FileName), sizeof(ULONGLONG));
+    if (Available > MAXULONG - SourceSlack)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    SourceCapacity = Available + SourceSlack;
+
+    TemporaryBuffer = ExAllocatePoolZero(PagedPool, SourceCapacity, TAG_NTFS);
+    if (!TemporaryBuffer)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Remaining = SourceCapacity;
+    Status = GetFileBothDirectoryInformation(FileCB, IrpFlags, FileNameFilter, (PFILE_BOTH_DIR_INFORMATION)TemporaryBuffer, &Remaining);
+    SourceBytes = SourceCapacity - Remaining;
+    if (!NT_SUCCESS(Status) || SourceBytes == 0)
+    {
+        ExFreePoolWithTag(TemporaryBuffer, TAG_NTFS);
+        return NT_SUCCESS(Status) ? STATUS_BUFFER_OVERFLOW : Status;
+    }
+
+    while (SourceOffset < SourceBytes)
+    {
+        Source = (PFILE_BOTH_DIR_INFORMATION)((PUCHAR)TemporaryBuffer + SourceOffset);
+        if (SourceBytes - SourceOffset < FIELD_OFFSET(FILE_BOTH_DIR_INFORMATION, FileName) ||
+            Source->FileNameLength > SourceBytes - SourceOffset - FIELD_OFFSET(FILE_BOTH_DIR_INFORMATION, FileName) ||
+            (Source->FileNameLength & (sizeof(WCHAR) - 1)))
+        {
+            Status = STATUS_FILE_CORRUPT_ERROR;
+            break;
+        }
+
+        SourceEntrySize = ALIGN_UP_BY(FIELD_OFFSET(FILE_BOTH_DIR_INFORMATION, FileName) + Source->FileNameLength, sizeof(ULONGLONG));
+        if (SourceEntrySize > SourceBytes - SourceOffset)
+        {
+            Status = STATUS_FILE_CORRUPT_ERROR;
+            break;
+        }
+
+        EntrySize = ALIGN_UP_BY(FIELD_OFFSET(FILE_FULL_DIR_INFORMATION, FileName) + Source->FileNameLength, sizeof(ULONGLONG));
+        if (EntrySize > Available - BytesWritten)
+        {
+            Status = STATUS_FILE_CORRUPT_ERROR;
+            break;
+        }
+
+        Current = (PFILE_FULL_DIR_INFORMATION)((PUCHAR)Buffer + BytesWritten);
+        RtlZeroMemory(Current, EntrySize);
+        Current->FileIndex = Source->FileIndex;
+        Current->CreationTime = Source->CreationTime;
+        Current->LastAccessTime = Source->LastAccessTime;
+        Current->LastWriteTime = Source->LastWriteTime;
+        Current->ChangeTime = Source->ChangeTime;
+        Current->EndOfFile = Source->EndOfFile;
+        Current->AllocationSize = Source->AllocationSize;
+        Current->FileAttributes = Source->FileAttributes;
+        Current->FileNameLength = Source->FileNameLength;
+        Current->EaSize = Source->EaSize;
+        RtlCopyMemory(Current->FileName, Source->FileName, Source->FileNameLength);
+
+        if (Previous)
+            Previous->NextEntryOffset = (ULONG)((PUCHAR)Current - (PUCHAR)Previous);
+        Previous = Current;
+        BytesWritten += EntrySize;
+
+        if (Source->NextEntryOffset == 0)
+            break;
+        if (Source->NextEntryOffset < SourceEntrySize || Source->NextEntryOffset > SourceBytes - SourceOffset)
+        {
+            Status = STATUS_FILE_CORRUPT_ERROR;
+            break;
+        }
+        SourceOffset += Source->NextEntryOffset;
+    }
+
+    if (Previous)
+        Previous->NextEntryOffset = 0;
+    *Length = Available - BytesWritten;
+    ExFreePoolWithTag(TemporaryBuffer, TAG_NTFS);
+    return Status;
+}
+
 VOID
 NtfsRefreshFileSizes(_In_ PFileContextBlock FileCB,
                      _In_opt_ PFILE_OBJECT FileObject)
@@ -1624,6 +1741,8 @@ NtfsFsdDirectoryControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                                          &BufferLength);
                 break;
             case FileFullDirectoryInformation:
+                Status = GetFileFullDirectoryInformation(FileCB, IrpSp->Flags, IrpSp->Parameters.QueryDirectory.FileName, (PFILE_FULL_DIR_INFORMATION)SystemBuffer, &BufferLength);
+                break;
             case FileIdBothDirectoryInformation:
             case FileIdFullDirectoryInformation:
             case FileNamesInformation:
