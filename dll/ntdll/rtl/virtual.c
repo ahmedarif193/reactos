@@ -11,7 +11,7 @@
 
 #if defined(_M_ARM64) || defined(_M_AMD64)
 
-static NTSTATUS
+NTSTATUS
 RtlpGetExtendedParameterZeroBits(PMEM_EXTENDED_PARAMETER ExtendedParameters,
                                  ULONG ExtendedParameterCount,
                                  PULONG_PTR ZeroBits,
@@ -76,35 +76,6 @@ RtlpGetExtendedParameterZeroBits(PMEM_EXTENDED_PARAMETER ExtendedParameters,
 
     return STATUS_SUCCESS;
 }
-
-#if defined(_M_ARM64)
-/*
- * @implemented
- */
-NTSTATUS
-NTAPI
-NtAllocateVirtualMemoryEx(HANDLE ProcessHandle,
-                          PVOID *BaseAddress,
-                          PSIZE_T RegionSize,
-                          ULONG AllocationType,
-                          ULONG Protect,
-                          PMEM_EXTENDED_PARAMETER ExtendedParameters,
-                          ULONG ExtendedParameterCount)
-{
-    ULONG_PTR ZeroBits;
-    BOOLEAN EcCode;
-    NTSTATUS Status;
-
-    Status = RtlpGetExtendedParameterZeroBits(ExtendedParameters, ExtendedParameterCount, &ZeroBits, &EcCode);
-    if (!NT_SUCCESS(Status))
-        return Status;
-
-    Status = NtAllocateVirtualMemory(ProcessHandle, BaseAddress, ZeroBits, RegionSize, AllocationType, Protect);
-    if (NT_SUCCESS(Status) && EcCode && ProcessHandle == NtCurrentProcess())
-        ChpeMarkEcCodeRange(*BaseAddress, *RegionSize);
-    return Status;
-}
-#endif
 
 NTSTATUS
 NTAPI

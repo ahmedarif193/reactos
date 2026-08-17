@@ -80,6 +80,13 @@ extern PVOID g_pfnSE_InstallBeforeInit;
 extern PVOID g_pfnSE_InstallAfterInit;
 extern PVOID g_pfnSE_ProcessDying;
 
+NTSTATUS
+RtlpGetExtendedParameterZeroBits(
+    _In_reads_opt_(ExtendedParameterCount) PMEM_EXTENDED_PARAMETER ExtendedParameters,
+    _In_ ULONG ExtendedParameterCount,
+    _Out_ PULONG_PTR ZeroBits,
+    _Out_ PBOOLEAN EcCode);
+
 /* ldrinit.c */
 NTSTATUS NTAPI LdrpRunInitializeRoutines(IN PCONTEXT Context OPTIONAL);
 VOID NTAPI LdrpInitializeThread(IN PCONTEXT Context);
@@ -282,16 +289,6 @@ RtlDoesFileExists_UStr(
 
 VOID
 NTAPI
-RtlpInitializeKeyedEvent(
-    VOID);
-
-VOID
-NTAPI
-RtlpCloseKeyedEvent(
-    VOID);
-
-VOID
-NTAPI
 RtlpInitializeThreadPooling(
     VOID);
 
@@ -412,6 +409,12 @@ ChpeFlushInstructionCache(
 
 VOID
 NTAPI
+ChpeNotifyMemoryDirty(
+    PVOID Address,
+    SIZE_T Size);
+
+VOID
+NTAPI
 ChpeNotifyReadFile(
     HANDLE FileHandle,
     PVOID Address,
@@ -419,15 +422,15 @@ ChpeNotifyReadFile(
     BOOLEAN After,
     NTSTATUS Status);
 
-VOID
-NTAPI
-ChpeUpdateProcessorInformation(
-    PVOID ProcessorInformation);
-
 BOOLEAN
 NTAPI
 ChpeIsProcessorFeaturePresent(
     ULONG ProcessorFeature);
+
+VOID
+NTAPI
+ChpeUpdateProcessorInformation(
+    PVOID ProcessorInformation);
 
 BOOLEAN
 NTAPI
