@@ -16,6 +16,55 @@
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
+static BOOLEAN
+KiWakeQueueDequeueWaiter(
+    _Inout_ PKQUEUE Queue,
+    _Inout_ PLIST_ENTRY QueueEntry,
+    _In_ BOOLEAN EntryIsQueued)
+{
+    PLIST_ENTRY PreviousEntry;
+    PLIST_ENTRY WaitEntry;
+    PLIST_ENTRY WaitList;
+    PKWAIT_BLOCK WaitBlock;
+    PKTHREAD Thread;
+
+    WaitList = &Queue->Header.WaitListHead;
+    WaitEntry = WaitList->Blink;
+    while (WaitEntry != WaitList)
+    {
+        PreviousEntry = WaitEntry->Blink;
+        WaitBlock = CONTAINING_RECORD(WaitEntry, KWAIT_BLOCK, WaitListEntry);
+        if (WaitBlock->WaitType != WaitDequeue)
+        {
+            WaitEntry = PreviousEntry;
+            continue;
+        }
+
+        Thread = WaitBlock->Thread;
+        KiAcquireThreadLock(Thread);
+        if ((Thread->State == Waiting) && (WaitBlock->BlockState == WaitBlockActive))
+        {
+            if (EntryIsQueued)
+            {
+                RemoveEntryList(QueueEntry);
+                QueueEntry->Flink = NULL;
+                Queue->Header.SignalState--;
+            }
+
+            RemoveEntryList(WaitEntry);
+            WaitEntry->Flink = NULL;
+            WaitBlock->BlockState = WaitBlockInactive;
+            KiUnwaitThread(Thread, (LONG_PTR)QueueEntry, IO_NO_INCREMENT);
+            KiReleaseThreadLock(Thread);
+            return TRUE;
+        }
+        KiReleaseThreadLock(Thread);
+        WaitEntry = PreviousEntry;
+    }
+
+    return FALSE;
+}
+
 /*
  * Called when a thread which has a queue entry is entering a wait state
  */
@@ -24,9 +73,6 @@ FASTCALL
 KiActivateWaiterQueue(IN PKQUEUE Queue)
 {
     PLIST_ENTRY QueueEntry;
-    PLIST_ENTRY WaitEntry;
-    PKWAIT_BLOCK WaitBlock;
-    PKTHREAD Thread;
     ASSERT_QUEUE(Queue);
 
     /* Decrement the number of active threads */
@@ -38,45 +84,8 @@ KiActivateWaiterQueue(IN PKQUEUE Queue)
         /* Get the Queue Entry */
         QueueEntry = Queue->EntryListHead.Flink;
 
-        /* Get the Wait Entry */
-        WaitEntry = Queue->Header.WaitListHead.Blink;
-
-        /* Make sure that the Queue entries are not part of empty lists */
-        if ((WaitEntry != &Queue->Header.WaitListHead) &&
-            (QueueEntry != &Queue->EntryListHead))
-        {
-            /* Get the Wait Block and the waiting Thread */
-            WaitBlock = CONTAINING_RECORD(WaitEntry,
-                                          KWAIT_BLOCK,
-                                          WaitListEntry);
-            Thread = WaitBlock->Thread;
-
-            /* Unwait it under its thread lock, and only if still waiting: the
-             * wake and the PRCB wait-list teardown (KiUnlinkThread) must be
-             * serialized by the thread lock against the wait commit. */
-            KiAcquireThreadLock(Thread);
-            if (Thread->State == Waiting)
-            {
-                /* Remove this entry */
-                RemoveEntryList(QueueEntry);
-                QueueEntry->Flink = NULL;
-
-                /* Decrease the Signal State */
-                Queue->Header.SignalState--;
-
-                /* Eagerly unlink the wait block from the queue's wait list.
-                 * The thread's embedded WaitBlock is reused by its next wait, so
-                 * leaving it linked here makes one LIST_ENTRY reachable from two
-                 * dispatcher lists -> a later KiWaitTest walks a stale block and
-                 * dereferences a garbage WaitBlock->Thread. (Caller holds the
-                 * queue object lock; Win11 unlinks wait blocks eagerly.) */
-                RemoveEntryList(WaitEntry);
-                WaitEntry->Flink = NULL;
-                WaitBlock->BlockState = WaitBlockInactive;
-                KiUnwaitThread(Thread, (LONG_PTR)QueueEntry, IO_NO_INCREMENT);
-            }
-            KiReleaseThreadLock(Thread);
-        }
+        if (QueueEntry != &Queue->EntryListHead)
+            KiWakeQueueDequeueWaiter(Queue, QueueEntry, TRUE);
     }
 }
 
@@ -91,41 +100,16 @@ KiInsertQueue(IN PKQUEUE Queue,
 {
     ULONG InitialState;
     PKTHREAD Thread = KeGetCurrentThread();
-    PKWAIT_BLOCK WaitBlock;
-    PLIST_ENTRY WaitEntry;
     ASSERT_QUEUE(Queue);
 
     /* Save the old state */
     InitialState = Queue->Header.SignalState;
 
-    /* Get the Entry */
-    WaitEntry = Queue->Header.WaitListHead.Blink;
-
-    /*
-     * Why the KeGetCurrentThread()->Queue != Queue?
-     * KiInsertQueue might be called from an APC for the current thread.
-     * -Gunnar
-     */
     if ((Queue->CurrentCount < Queue->MaximumCount) &&
-        (WaitEntry != &Queue->Header.WaitListHead) &&
-        ((Thread->Queue != Queue) ||
-         (Thread->WaitReason != WrQueue)))
+        ((Thread->Queue != Queue) || (Thread->WaitReason != WrQueue)) &&
+        KiWakeQueueDequeueWaiter(Queue, Entry, FALSE))
     {
-        /* Get the Wait Block and Thread */
-        WaitBlock = CONTAINING_RECORD(WaitEntry, KWAIT_BLOCK, WaitListEntry);
-        Thread = WaitBlock->Thread;
-
-        KiAcquireThreadLock(Thread);
-        if (Thread->State == Waiting)
-        {
-            RemoveEntryList(WaitEntry);
-            WaitEntry->Flink = NULL;
-            WaitBlock->BlockState = WaitBlockInactive;
-            KiUnwaitThread(Thread, (LONG_PTR)Entry, IO_NO_INCREMENT);
-            KiReleaseThreadLock(Thread);
-            return InitialState;
-        }
-        KiReleaseThreadLock(Thread);
+        return InitialState;
     }
 
     /* Increase the Entries */
@@ -142,6 +126,11 @@ KiInsertQueue(IN PKQUEUE Queue,
         /* Insert at the end */
         InsertTailList(&Queue->EntryListHead, Entry);
     }
+
+    /* Ordinary object waiters observe the signaled queue without consuming
+     * its entry. A single transition wakes every such waiter. */
+    if ((InitialState == 0) && !IsListEmpty(&Queue->Header.WaitListHead))
+        KiWaitTest(Queue, IO_NO_INCREMENT);
 
     /* Return the previous state */
     return InitialState;

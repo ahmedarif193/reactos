@@ -1591,7 +1591,7 @@ KxCommitThreadWait(IN PKTHREAD Thread,
     Thread->WaitBlockList = WaitBlock;                                      \
     WaitBlock->WaitKey = STATUS_SUCCESS;                                    \
     WaitBlock->Object = Queue;                                              \
-    WaitBlock->WaitType = WaitAny;                                          \
+    WaitBlock->WaitType = WaitDequeue;                                      \
     WaitBlock->Thread = Thread;                                             \
                                                                             \
     /* Clear wait status */                                                 \
