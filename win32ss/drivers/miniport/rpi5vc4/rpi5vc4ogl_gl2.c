@@ -21,6 +21,7 @@
 #include <context.h>
 #include <blend.h>
 #include <macros.h>
+#include <misc.h>
 
 #include "rpi5vc4ogl_gl2.h"
 
@@ -358,7 +359,13 @@ struct _RPI5VC4_OGL_GL2_STATE
     ULONG TextureGeneration1;
     ULONG ActiveTextureUnit;
     struct gl_texture_object *TextureUnits[RPI5VC4_OGL_TEXTURE_UNIT_COUNT];
-    BOOL PreserveDestinationAlphaBlend;
+    GLenum BlendEquationRgb;
+    GLenum BlendEquationAlpha;
+    GLenum BlendSourceRgb;
+    GLenum BlendDestinationRgb;
+    GLenum BlendSourceAlpha;
+    GLenum BlendDestinationAlpha;
+    GLfloat BlendColor[4];
     GLfloat IdeasLampLights[12];
     GLfloat IdeasLogoLight[4];
     GLfloat JellyfishGradientColors[RPI5VC4_V3D_JELLYFISH_UNIFORM_WORDS];
@@ -474,6 +481,197 @@ Rpi5OglGl2CanChangeState(
     return TRUE;
 }
 
+static BOOL
+Rpi5OglGl2ValidSourceBlendFactor(
+    _In_ GLenum Factor)
+{
+    switch (Factor)
+    {
+        case GL_ZERO:
+        case GL_ONE:
+        case GL_SRC_COLOR:
+        case GL_ONE_MINUS_SRC_COLOR:
+        case GL_DST_COLOR:
+        case GL_ONE_MINUS_DST_COLOR:
+        case GL_SRC_ALPHA:
+        case GL_ONE_MINUS_SRC_ALPHA:
+        case GL_DST_ALPHA:
+        case GL_ONE_MINUS_DST_ALPHA:
+        case GL_CONSTANT_COLOR:
+        case GL_ONE_MINUS_CONSTANT_COLOR:
+        case GL_CONSTANT_ALPHA:
+        case GL_ONE_MINUS_CONSTANT_ALPHA:
+        case GL_SRC_ALPHA_SATURATE:
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+
+static BOOL
+Rpi5OglGl2ValidDestinationBlendFactor(
+    _In_ GLenum Factor)
+{
+    return Factor != GL_SRC_ALPHA_SATURATE &&
+           Rpi5OglGl2ValidSourceBlendFactor(Factor);
+}
+
+static BOOL
+Rpi5OglGl2ValidBlendEquation(
+    _In_ GLenum Equation)
+{
+    return Equation == GL_FUNC_ADD ||
+           Equation == GL_FUNC_SUBTRACT ||
+           Equation == GL_FUNC_REVERSE_SUBTRACT ||
+           Equation == GL_MIN ||
+           Equation == GL_MAX;
+}
+
+static GLfloat
+Rpi5OglGl2ClampBlendColor(
+    _In_ GLfloat Component)
+{
+    if (!(Component > 0.0f))
+        return 0.0f;
+    if (Component >= 1.0f)
+        return 1.0f;
+    return Component;
+}
+
+static VOID
+Rpi5OglGl2SetBlendFactors(
+    _Inout_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum SourceRgb,
+    _In_ GLenum DestinationRgb,
+    _In_ GLenum SourceAlpha,
+    _In_ GLenum DestinationAlpha)
+{
+    if (State->BlendSourceRgb == SourceRgb &&
+        State->BlendDestinationRgb == DestinationRgb &&
+        State->BlendSourceAlpha == SourceAlpha &&
+        State->BlendDestinationAlpha == DestinationAlpha)
+    {
+        return;
+    }
+
+    gl_Flush(State->Mesa);
+    State->BlendSourceRgb = SourceRgb;
+    State->BlendDestinationRgb = DestinationRgb;
+    State->BlendSourceAlpha = SourceAlpha;
+    State->BlendDestinationAlpha = DestinationAlpha;
+    State->Mesa->Color.BlendSrc = SourceRgb;
+    State->Mesa->Color.BlendDst = DestinationRgb;
+    State->Mesa->NewState |= NEW_RASTER_OPS;
+}
+
+VOID
+Rpi5OglGl2BlendFunc(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum Source,
+    _In_ GLenum Destination)
+{
+    if (!Rpi5OglGl2CanChangeState(State, "glBlendFunc"))
+        return;
+    if (!Rpi5OglGl2ValidSourceBlendFactor(Source))
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM, "glBlendFunc(sfactor)");
+        return;
+    }
+    if (!Rpi5OglGl2ValidDestinationBlendFactor(Destination))
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM, "glBlendFunc(dfactor)");
+        return;
+    }
+
+    Rpi5OglGl2SetBlendFactors(State,
+                              Source,
+                              Destination,
+                              Source,
+                              Destination);
+}
+
+static VOID APIENTRY
+Rpi5OglBlendColor(
+    _In_ GLclampf Red,
+    _In_ GLclampf Green,
+    _In_ GLclampf Blue,
+    _In_ GLclampf Alpha)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    GLfloat Color[4];
+
+    if (!Rpi5OglGl2CanChangeState(State, "glBlendColor"))
+        return;
+
+    Color[0] = Rpi5OglGl2ClampBlendColor(Red);
+    Color[1] = Rpi5OglGl2ClampBlendColor(Green);
+    Color[2] = Rpi5OglGl2ClampBlendColor(Blue);
+    Color[3] = Rpi5OglGl2ClampBlendColor(Alpha);
+    if (memcmp(State->BlendColor, Color, sizeof(Color)) == 0)
+        return;
+
+    gl_Flush(State->Mesa);
+    CopyMemory(State->BlendColor, Color, sizeof(Color));
+}
+
+static VOID APIENTRY
+Rpi5OglBlendEquation(
+    _In_ GLenum Equation)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+    if (!Rpi5OglGl2CanChangeState(State, "glBlendEquation"))
+        return;
+    if (!Rpi5OglGl2ValidBlendEquation(Equation))
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM, "glBlendEquation(mode)");
+        return;
+    }
+    if (State->BlendEquationRgb == Equation &&
+        State->BlendEquationAlpha == Equation)
+    {
+        return;
+    }
+
+    gl_Flush(State->Mesa);
+    State->BlendEquationRgb = Equation;
+    State->BlendEquationAlpha = Equation;
+}
+
+static VOID APIENTRY
+Rpi5OglBlendEquationSeparate(
+    _In_ GLenum EquationRgb,
+    _In_ GLenum EquationAlpha)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+    if (!Rpi5OglGl2CanChangeState(State, "glBlendEquationSeparate"))
+        return;
+    if (!Rpi5OglGl2ValidBlendEquation(EquationRgb))
+    {
+        Rpi5OglGl2Error(State,
+                        GL_INVALID_ENUM,
+                        "glBlendEquationSeparate(modeRGB)");
+        return;
+    }
+    if (!Rpi5OglGl2ValidBlendEquation(EquationAlpha))
+    {
+        Rpi5OglGl2Error(State,
+                        GL_INVALID_ENUM,
+                        "glBlendEquationSeparate(modeAlpha)");
+        return;
+    }
+    if (State->BlendEquationRgb == EquationRgb &&
+        State->BlendEquationAlpha == EquationAlpha)
+    {
+        return;
+    }
+
+    gl_Flush(State->Mesa);
+    State->BlendEquationRgb = EquationRgb;
+    State->BlendEquationAlpha = EquationAlpha;
+}
+
 static VOID APIENTRY
 Rpi5OglBlendFuncSeparate(
     _In_ GLenum SourceRgb,
@@ -485,19 +683,40 @@ Rpi5OglBlendFuncSeparate(
 
     if (!Rpi5OglGl2CanChangeState(State, "glBlendFuncSeparate"))
         return;
-    if (SourceRgb != GL_SRC_ALPHA ||
-        DestinationRgb != GL_ONE_MINUS_SRC_ALPHA ||
-        SourceAlpha != GL_ZERO ||
-        DestinationAlpha != GL_ONE)
+    if (!Rpi5OglGl2ValidSourceBlendFactor(SourceRgb))
     {
         Rpi5OglGl2Error(State,
-                        GL_INVALID_OPERATION,
-                        "glBlendFuncSeparate(RPi5 blend state)");
+                        GL_INVALID_ENUM,
+                        "glBlendFuncSeparate(srcRGB)");
+        return;
+    }
+    if (!Rpi5OglGl2ValidDestinationBlendFactor(DestinationRgb))
+    {
+        Rpi5OglGl2Error(State,
+                        GL_INVALID_ENUM,
+                        "glBlendFuncSeparate(dstRGB)");
+        return;
+    }
+    if (!Rpi5OglGl2ValidSourceBlendFactor(SourceAlpha))
+    {
+        Rpi5OglGl2Error(State,
+                        GL_INVALID_ENUM,
+                        "glBlendFuncSeparate(srcAlpha)");
+        return;
+    }
+    if (!Rpi5OglGl2ValidDestinationBlendFactor(DestinationAlpha))
+    {
+        Rpi5OglGl2Error(State,
+                        GL_INVALID_ENUM,
+                        "glBlendFuncSeparate(dstAlpha)");
         return;
     }
 
-    gl_BlendFunc(State->Mesa, SourceRgb, DestinationRgb);
-    State->PreserveDestinationAlphaBlend = TRUE;
+    Rpi5OglGl2SetBlendFactors(State,
+                              SourceRgb,
+                              DestinationRgb,
+                              SourceAlpha,
+                              DestinationAlpha);
 }
 
 static VOID
@@ -4558,6 +4777,9 @@ static const RPI5VC4_OGL_GL2_PROC Rpi5OglGl2Procedures[] =
     {"glActiveTexture", (PROC)Rpi5OglActiveTexture},
     {"glAttachShader", (PROC)Rpi5OglAttachShader},
     {"glBindAttribLocation", (PROC)Rpi5OglBindAttribLocation},
+    {"glBlendColor", (PROC)Rpi5OglBlendColor},
+    {"glBlendEquation", (PROC)Rpi5OglBlendEquation},
+    {"glBlendEquationSeparate", (PROC)Rpi5OglBlendEquationSeparate},
     {"glBlendFuncSeparate", (PROC)Rpi5OglBlendFuncSeparate},
     {"glCompileShader", (PROC)Rpi5OglCompileShader},
     {"glCreateProgram", (PROC)Rpi5OglCreateProgram},
@@ -4622,6 +4844,12 @@ Rpi5OglGl2Initialize(
     NewState->BufferState = BufferState;
     NewState->NextName = 1;
     NewState->TextureSerial = 1;
+    NewState->BlendEquationRgb = GL_FUNC_ADD;
+    NewState->BlendEquationAlpha = GL_FUNC_ADD;
+    NewState->BlendSourceRgb = GL_ONE;
+    NewState->BlendDestinationRgb = GL_ZERO;
+    NewState->BlendSourceAlpha = GL_ONE;
+    NewState->BlendDestinationAlpha = GL_ZERO;
     NewState->ActiveTextureUnit = RPI5VC4_V3D_TEXTURE_SLOT_PRIMARY;
     NewState->TextureUnits[RPI5VC4_V3D_TEXTURE_SLOT_PRIMARY] =
         Mesa->Texture.Current2D;
@@ -4866,17 +5094,391 @@ Rpi5OglGl2PreservesDestinationAlphaBlend(
 {
     return State != NULL &&
            State->Mesa != NULL &&
-           State->PreserveDestinationAlphaBlend &&
-           State->Mesa->Color.BlendSrc == GL_SRC_ALPHA &&
-           State->Mesa->Color.BlendDst == GL_ONE_MINUS_SRC_ALPHA;
+           State->BlendEquationRgb == GL_FUNC_ADD &&
+           State->BlendEquationAlpha == GL_FUNC_ADD &&
+           State->BlendSourceRgb == GL_SRC_ALPHA &&
+           State->BlendDestinationRgb == GL_ONE_MINUS_SRC_ALPHA &&
+           State->BlendSourceAlpha == GL_ZERO &&
+           State->BlendDestinationAlpha == GL_ONE;
 }
 
-VOID
-Rpi5OglGl2BlendFuncChanged(
-    _In_opt_ PRPI5VC4_OGL_GL2_STATE State)
+static BOOL
+Rpi5OglGl2MapBlendEquation(
+    _In_ GLenum Equation,
+    _Out_ PULONG HardwareEquation)
 {
-    if (State != NULL)
-        State->PreserveDestinationAlphaBlend = FALSE;
+    switch (Equation)
+    {
+        case GL_FUNC_ADD:
+            *HardwareEquation = RPI5VC4_V3D_BLEND_EQUATION_ADD;
+            return TRUE;
+        case GL_FUNC_SUBTRACT:
+            *HardwareEquation = RPI5VC4_V3D_BLEND_EQUATION_SUBTRACT;
+            return TRUE;
+        case GL_FUNC_REVERSE_SUBTRACT:
+            *HardwareEquation =
+                RPI5VC4_V3D_BLEND_EQUATION_REVERSE_SUBTRACT;
+            return TRUE;
+        case GL_MIN:
+            *HardwareEquation = RPI5VC4_V3D_BLEND_EQUATION_MINIMUM;
+            return TRUE;
+        case GL_MAX:
+            *HardwareEquation = RPI5VC4_V3D_BLEND_EQUATION_MAXIMUM;
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+
+static BOOL
+Rpi5OglGl2MapBlendFactor(
+    _In_ GLenum Factor,
+    _Out_ PULONG HardwareFactor)
+{
+    switch (Factor)
+    {
+        case GL_ZERO:
+            *HardwareFactor = RPI5VC4_V3D_BLEND_FACTOR_ZERO;
+            return TRUE;
+        case GL_ONE:
+            *HardwareFactor = RPI5VC4_V3D_BLEND_FACTOR_ONE;
+            return TRUE;
+        case GL_SRC_COLOR:
+            *HardwareFactor = RPI5VC4_V3D_BLEND_FACTOR_SOURCE_COLOR;
+            return TRUE;
+        case GL_ONE_MINUS_SRC_COLOR:
+            *HardwareFactor =
+                RPI5VC4_V3D_BLEND_FACTOR_ONE_MINUS_SOURCE_COLOR;
+            return TRUE;
+        case GL_DST_COLOR:
+            *HardwareFactor = RPI5VC4_V3D_BLEND_FACTOR_DESTINATION_COLOR;
+            return TRUE;
+        case GL_ONE_MINUS_DST_COLOR:
+            *HardwareFactor =
+                RPI5VC4_V3D_BLEND_FACTOR_ONE_MINUS_DESTINATION_COLOR;
+            return TRUE;
+        case GL_SRC_ALPHA:
+            *HardwareFactor = RPI5VC4_V3D_BLEND_FACTOR_SOURCE_ALPHA;
+            return TRUE;
+        case GL_ONE_MINUS_SRC_ALPHA:
+            *HardwareFactor =
+                RPI5VC4_V3D_BLEND_FACTOR_ONE_MINUS_SOURCE_ALPHA;
+            return TRUE;
+        case GL_DST_ALPHA:
+            *HardwareFactor = RPI5VC4_V3D_BLEND_FACTOR_DESTINATION_ALPHA;
+            return TRUE;
+        case GL_ONE_MINUS_DST_ALPHA:
+            *HardwareFactor =
+                RPI5VC4_V3D_BLEND_FACTOR_ONE_MINUS_DESTINATION_ALPHA;
+            return TRUE;
+        case GL_CONSTANT_COLOR:
+            *HardwareFactor = RPI5VC4_V3D_BLEND_FACTOR_CONSTANT_COLOR;
+            return TRUE;
+        case GL_ONE_MINUS_CONSTANT_COLOR:
+            *HardwareFactor =
+                RPI5VC4_V3D_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR;
+            return TRUE;
+        case GL_CONSTANT_ALPHA:
+            *HardwareFactor = RPI5VC4_V3D_BLEND_FACTOR_CONSTANT_ALPHA;
+            return TRUE;
+        case GL_ONE_MINUS_CONSTANT_ALPHA:
+            *HardwareFactor =
+                RPI5VC4_V3D_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
+            return TRUE;
+        case GL_SRC_ALPHA_SATURATE:
+            *HardwareFactor =
+                RPI5VC4_V3D_BLEND_FACTOR_SOURCE_ALPHA_SATURATE;
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+
+static ULONG
+Rpi5OglGl2FloatToHalf(
+    _In_ GLfloat Value)
+{
+    ULONG Bits;
+    ULONG Exponent;
+    ULONG Mantissa;
+    ULONG HalfExponent;
+    ULONG HalfMantissa;
+    ULONG Remainder;
+    ULONG Halfway;
+    ULONG Shift;
+
+    if (!(Value > 0.0f))
+        return 0;
+    if (Value >= 1.0f)
+        return 0x3C00u;
+
+    CopyMemory(&Bits, &Value, sizeof(Bits));
+    Exponent = (Bits >> 23) & 0xFFu;
+    Mantissa = Bits & 0x7FFFFFu;
+    if (Exponent < 102u)
+        return 0;
+    if (Exponent < 113u)
+    {
+        Mantissa |= 0x800000u;
+        Shift = 126u - Exponent;
+        HalfMantissa = Mantissa >> Shift;
+        Remainder = Mantissa & ((1u << Shift) - 1u);
+        Halfway = 1u << (Shift - 1u);
+        if (Remainder > Halfway ||
+            (Remainder == Halfway && (HalfMantissa & 1u) != 0))
+        {
+            HalfMantissa++;
+        }
+        return HalfMantissa;
+    }
+
+    HalfExponent = Exponent - 112u;
+    HalfMantissa = Mantissa >> 13;
+    Remainder = Mantissa & 0x1FFFu;
+    if (Remainder > 0x1000u ||
+        (Remainder == 0x1000u && (HalfMantissa & 1u) != 0))
+    {
+        HalfMantissa++;
+        if (HalfMantissa == 0x400u)
+        {
+            HalfMantissa = 0;
+            HalfExponent++;
+        }
+    }
+    return (HalfExponent << 10) | HalfMantissa;
+}
+
+BOOL
+Rpi5OglGl2GetBlendState(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _Out_ PRPI5VC4_V3D_BLEND_STATE BlendState)
+{
+    ULONG Red;
+    ULONG Green;
+    ULONG Blue;
+    ULONG Alpha;
+
+    if (State == NULL || State->Mesa == NULL || BlendState == NULL)
+        return FALSE;
+    ZeroMemory(BlendState, sizeof(*BlendState));
+    if (!State->Mesa->Color.BlendEnabled)
+        return TRUE;
+
+    if (!Rpi5OglGl2MapBlendEquation(State->BlendEquationRgb,
+                                    &BlendState->ColorEquation) ||
+        !Rpi5OglGl2MapBlendEquation(State->BlendEquationAlpha,
+                                    &BlendState->AlphaEquation) ||
+        !Rpi5OglGl2MapBlendFactor(State->BlendSourceRgb,
+                                  &BlendState->SourceColorFactor) ||
+        !Rpi5OglGl2MapBlendFactor(State->BlendDestinationRgb,
+                                  &BlendState->DestinationColorFactor) ||
+        !Rpi5OglGl2MapBlendFactor(State->BlendSourceAlpha,
+                                  &BlendState->SourceAlphaFactor) ||
+        !Rpi5OglGl2MapBlendFactor(State->BlendDestinationAlpha,
+                                  &BlendState->DestinationAlphaFactor))
+    {
+        return FALSE;
+    }
+
+    Red = Rpi5OglGl2FloatToHalf(State->BlendColor[0]);
+    Green = Rpi5OglGl2FloatToHalf(State->BlendColor[1]);
+    Blue = Rpi5OglGl2FloatToHalf(State->BlendColor[2]);
+    Alpha = Rpi5OglGl2FloatToHalf(State->BlendColor[3]);
+    BlendState->Flags = RPI5VC4_V3D_BLEND_FLAG_ENABLE;
+    BlendState->ConstantColorLow = Red | (Green << 16);
+    BlendState->ConstantColorHigh = Blue | (Alpha << 16);
+    return TRUE;
+}
+
+static ULONG
+Rpi5OglGl2BlendQueryCount(
+    _In_ GLenum ParameterName)
+{
+    switch (ParameterName)
+    {
+        case GL_BLEND_COLOR:
+            return 4;
+        case GL_BLEND_EQUATION_RGB:
+        case GL_BLEND_EQUATION_ALPHA:
+        case GL_BLEND_SRC:
+        case GL_BLEND_DST:
+        case GL_BLEND_SRC_RGB:
+        case GL_BLEND_DST_RGB:
+        case GL_BLEND_SRC_ALPHA:
+        case GL_BLEND_DST_ALPHA:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static GLenum
+Rpi5OglGl2BlendQueryEnum(
+    _In_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum ParameterName)
+{
+    switch (ParameterName)
+    {
+        case GL_BLEND_EQUATION_RGB:
+            return State->BlendEquationRgb;
+        case GL_BLEND_EQUATION_ALPHA:
+            return State->BlendEquationAlpha;
+        case GL_BLEND_SRC:
+        case GL_BLEND_SRC_RGB:
+            return State->BlendSourceRgb;
+        case GL_BLEND_DST:
+        case GL_BLEND_DST_RGB:
+            return State->BlendDestinationRgb;
+        case GL_BLEND_SRC_ALPHA:
+            return State->BlendSourceAlpha;
+        case GL_BLEND_DST_ALPHA:
+            return State->BlendDestinationAlpha;
+        default:
+            return 0;
+    }
+}
+
+static BOOL
+Rpi5OglGl2BlendQueryReady(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum ParameterName,
+    _In_z_ PCSTR Function)
+{
+    if (Rpi5OglGl2BlendQueryCount(ParameterName) == 0)
+        return FALSE;
+    if (State != NULL && State->Mesa != NULL &&
+        INSIDE_BEGIN_END(State->Mesa))
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION, Function);
+    }
+    return TRUE;
+}
+
+BOOL
+Rpi5OglGl2GetBooleanv(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum ParameterName,
+    _Out_ GLboolean *Parameters)
+{
+    ULONG Index;
+
+    if (!Rpi5OglGl2BlendQueryReady(State,
+                                   ParameterName,
+                                   "glGetBooleanv"))
+    {
+        return FALSE;
+    }
+    if (State == NULL || Parameters == NULL ||
+        INSIDE_BEGIN_END(State->Mesa))
+    {
+        return TRUE;
+    }
+    if (ParameterName == GL_BLEND_COLOR)
+    {
+        for (Index = 0; Index < 4; Index++)
+            Parameters[Index] = State->BlendColor[Index] != 0.0f;
+    }
+    else
+    {
+        Parameters[0] =
+            Rpi5OglGl2BlendQueryEnum(State, ParameterName) != 0;
+    }
+    return TRUE;
+}
+
+BOOL
+Rpi5OglGl2GetDoublev(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum ParameterName,
+    _Out_ GLdouble *Parameters)
+{
+    ULONG Index;
+
+    if (!Rpi5OglGl2BlendQueryReady(State,
+                                   ParameterName,
+                                   "glGetDoublev"))
+    {
+        return FALSE;
+    }
+    if (State == NULL || Parameters == NULL ||
+        INSIDE_BEGIN_END(State->Mesa))
+    {
+        return TRUE;
+    }
+    if (ParameterName == GL_BLEND_COLOR)
+    {
+        for (Index = 0; Index < 4; Index++)
+            Parameters[Index] = (GLdouble)State->BlendColor[Index];
+    }
+    else
+    {
+        Parameters[0] =
+            (GLdouble)Rpi5OglGl2BlendQueryEnum(State, ParameterName);
+    }
+    return TRUE;
+}
+
+BOOL
+Rpi5OglGl2GetFloatv(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum ParameterName,
+    _Out_ GLfloat *Parameters)
+{
+    if (!Rpi5OglGl2BlendQueryReady(State,
+                                   ParameterName,
+                                   "glGetFloatv"))
+    {
+        return FALSE;
+    }
+    if (State == NULL || Parameters == NULL ||
+        INSIDE_BEGIN_END(State->Mesa))
+    {
+        return TRUE;
+    }
+    if (ParameterName == GL_BLEND_COLOR)
+    {
+        CopyMemory(Parameters,
+                   State->BlendColor,
+                   sizeof(State->BlendColor));
+    }
+    else
+    {
+        Parameters[0] =
+            (GLfloat)Rpi5OglGl2BlendQueryEnum(State, ParameterName);
+    }
+    return TRUE;
+}
+
+BOOL
+Rpi5OglGl2GetIntegerv(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum ParameterName,
+    _Out_ GLint *Parameters)
+{
+    ULONG Index;
+
+    if (!Rpi5OglGl2BlendQueryReady(State,
+                                   ParameterName,
+                                   "glGetIntegerv"))
+    {
+        return FALSE;
+    }
+    if (State == NULL || Parameters == NULL ||
+        INSIDE_BEGIN_END(State->Mesa))
+    {
+        return TRUE;
+    }
+    if (ParameterName == GL_BLEND_COLOR)
+    {
+        for (Index = 0; Index < 4; Index++)
+            Parameters[Index] = FLOAT_TO_INT(State->BlendColor[Index]);
+    }
+    else
+    {
+        Parameters[0] =
+            (GLint)Rpi5OglGl2BlendQueryEnum(State, ParameterName);
+    }
+    return TRUE;
 }
 
 BOOL

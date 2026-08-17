@@ -38,7 +38,7 @@
 #define RPI5VC4_ESCAPE_RENDER_GRAPH 0x52504752 /* "RPGR" */
 #define RPI5VC4_ESCAPE_READ_GRAPH 0x52504744 /* "RPGD" */
 
-#define RPI5VC4_XPDM_ABI_VERSION 6
+#define RPI5VC4_XPDM_ABI_VERSION 7
 
 #define RPI5VC4_V3D_FLAG_SMS_MAPPED  (1u << 0)
 #define RPI5VC4_V3D_FLAG_POWERED     (1u << 1)
@@ -176,6 +176,49 @@ typedef struct _RPI5VC4_V3D_VERTEX
     ULONG TexCoord[2];
 } RPI5VC4_V3D_VERTEX, *PRPI5VC4_V3D_VERTEX;
 
+/*
+ * These values are the bounded, API-independent blend operations accepted by
+ * the miniport. They intentionally mirror the V3D 7.1 blend packet encoding,
+ * but applications still cannot provide a packet or a command list.
+ */
+#define RPI5VC4_V3D_BLEND_FLAG_ENABLE (1u << 0)
+
+#define RPI5VC4_V3D_BLEND_EQUATION_ADD              0u
+#define RPI5VC4_V3D_BLEND_EQUATION_SUBTRACT         1u
+#define RPI5VC4_V3D_BLEND_EQUATION_REVERSE_SUBTRACT 2u
+#define RPI5VC4_V3D_BLEND_EQUATION_MINIMUM          3u
+#define RPI5VC4_V3D_BLEND_EQUATION_MAXIMUM          4u
+
+#define RPI5VC4_V3D_BLEND_FACTOR_ZERO                     0u
+#define RPI5VC4_V3D_BLEND_FACTOR_ONE                      1u
+#define RPI5VC4_V3D_BLEND_FACTOR_SOURCE_COLOR             2u
+#define RPI5VC4_V3D_BLEND_FACTOR_ONE_MINUS_SOURCE_COLOR   3u
+#define RPI5VC4_V3D_BLEND_FACTOR_DESTINATION_COLOR        4u
+#define RPI5VC4_V3D_BLEND_FACTOR_ONE_MINUS_DESTINATION_COLOR 5u
+#define RPI5VC4_V3D_BLEND_FACTOR_SOURCE_ALPHA             6u
+#define RPI5VC4_V3D_BLEND_FACTOR_ONE_MINUS_SOURCE_ALPHA   7u
+#define RPI5VC4_V3D_BLEND_FACTOR_DESTINATION_ALPHA        8u
+#define RPI5VC4_V3D_BLEND_FACTOR_ONE_MINUS_DESTINATION_ALPHA 9u
+#define RPI5VC4_V3D_BLEND_FACTOR_CONSTANT_COLOR          10u
+#define RPI5VC4_V3D_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR 11u
+#define RPI5VC4_V3D_BLEND_FACTOR_CONSTANT_ALPHA          12u
+#define RPI5VC4_V3D_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA 13u
+#define RPI5VC4_V3D_BLEND_FACTOR_SOURCE_ALPHA_SATURATE   14u
+
+typedef struct _RPI5VC4_V3D_BLEND_STATE
+{
+    ULONG Flags;
+    ULONG ColorEquation;
+    ULONG AlphaEquation;
+    ULONG SourceColorFactor;
+    ULONG DestinationColorFactor;
+    ULONG SourceAlphaFactor;
+    ULONG DestinationAlphaFactor;
+    /* IEEE-754 binary16 values packed as R|G and B|A, low component first. */
+    ULONG ConstantColorLow;
+    ULONG ConstantColorHigh;
+} RPI5VC4_V3D_BLEND_STATE, *PRPI5VC4_V3D_BLEND_STATE;
+
 typedef struct _RPI5VC4_V3D_TRIANGLE_REQUEST
 {
     ULONG Size;
@@ -185,7 +228,7 @@ typedef struct _RPI5VC4_V3D_TRIANGLE_REQUEST
     ULONG ClearColor;
     ULONG PrimitiveType;
     ULONG VertexCount;
-    ULONG Reserved;
+    RPI5VC4_V3D_BLEND_STATE BlendState;
     RPI5VC4_V3D_VERTEX Vertices[RPI5VC4_V3D_PRIMITIVE_MAX_VERTICES];
 } RPI5VC4_V3D_TRIANGLE_REQUEST, *PRPI5VC4_V3D_TRIANGLE_REQUEST;
 
@@ -320,6 +363,7 @@ typedef struct _RPI5VC4_V3D_BATCH_REQUEST
     ULONG TextureGeneration;
     ULONG TextureGeneration1;
     ULONG NormalMatrix[RPI5VC4_V3D_NORMAL_MATRIX_WORDS];
+    RPI5VC4_V3D_BLEND_STATE BlendState;
     ULONG DrawCount;
     RPI5VC4_V3D_BATCH_DRAW Draws[RPI5VC4_V3D_BATCH_MAX_DRAWS];
     ULONG ShaderUniforms[RPI5VC4_V3D_IDEAS_UNIFORM_WORDS];

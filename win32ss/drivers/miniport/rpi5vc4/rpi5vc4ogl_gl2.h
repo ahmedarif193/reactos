@@ -105,8 +105,39 @@ Rpi5OglGl2PreservesDestinationAlphaBlend(
     _In_opt_ PRPI5VC4_OGL_GL2_STATE State);
 
 VOID
-Rpi5OglGl2BlendFuncChanged(
-    _In_opt_ PRPI5VC4_OGL_GL2_STATE State);
+Rpi5OglGl2BlendFunc(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum Source,
+    _In_ GLenum Destination);
+
+BOOL
+Rpi5OglGl2GetBlendState(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _Out_ PRPI5VC4_V3D_BLEND_STATE BlendState);
+
+BOOL
+Rpi5OglGl2GetBooleanv(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum ParameterName,
+    _Out_ GLboolean *Parameters);
+
+BOOL
+Rpi5OglGl2GetDoublev(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum ParameterName,
+    _Out_ GLdouble *Parameters);
+
+BOOL
+Rpi5OglGl2GetFloatv(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum ParameterName,
+    _Out_ GLfloat *Parameters);
+
+BOOL
+Rpi5OglGl2GetIntegerv(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum ParameterName,
+    _Out_ GLint *Parameters);
 
 BOOL
 Rpi5OglGl2GetNormalMatrix(

@@ -74,6 +74,14 @@ _mesa_GetIntegerv(
     GLint *Parameters);
 
 extern VOID APIENTRY
+_mesa_GetTexImage(
+    GLenum Target,
+    GLint Level,
+    GLenum Format,
+    GLenum Type,
+    GLvoid *Pixels);
+
+extern VOID APIENTRY
 _mesa_ReadBuffer(
     GLenum Mode);
 
@@ -2353,29 +2361,6 @@ Rpi5OglFboTexSubImage2D(
     HeapFree(GetProcessHeap(), 0, Converted);
 }
 
-static ULONG
-Rpi5OglFboPackStride(
-    _In_ PRPI5VC4_OGL_FBO_STATE State,
-    _In_ ULONG Width,
-    _In_ ULONG BytesPerPixel)
-{
-    ULONG RowLength;
-    ULONG Alignment;
-    ULONGLONG RowBytes;
-
-    RowLength = State->Mesa->Pack.RowLength > 0 ?
-                State->Mesa->Pack.RowLength : Width;
-    Alignment = State->Mesa->Pack.Alignment > 0 ?
-                State->Mesa->Pack.Alignment : 1;
-    RowBytes = (ULONGLONG)RowLength * BytesPerPixel;
-    if (RowBytes > 0xFFFFFFFFULL ||
-        RowBytes + Alignment - 1 > 0xFFFFFFFFULL)
-    {
-        return 0;
-    }
-    return ((ULONG)RowBytes + Alignment - 1) & ~(Alignment - 1);
-}
-
 VOID APIENTRY
 Rpi5OglFboGetTexImage(
     _In_ GLenum Target,
@@ -2385,188 +2370,26 @@ Rpi5OglFboGetTexImage(
     _Out_ GLvoid *Pixels)
 {
     PRPI5VC4_OGL_FBO_STATE State = Rpi5OglCurrentFboState();
-    struct gl_texture_object *Texture;
-    struct gl_texture_image *Image;
-    GLubyte Components[4];
-    GLubyte Ordered[4];
-    GLubyte *Destination;
-    ULONG ComponentCount;
-    ULONG BytesPerPixel;
-    ULONG Stride;
-    ULONG Row;
-    ULONG Column;
-    ULONG Pixel;
-    ULONG Word;
+    struct gl_texture_object *Texture = NULL;
 
     if (!Rpi5OglFboCanChangeState(State, "glGetTexImage"))
         return;
-    if (Target == GL_TEXTURE_1D)
-        Texture = State->Mesa->Texture.Current1D;
-    else if (Target == GL_TEXTURE_2D)
-        Texture = State->Mesa->Texture.Current2D;
-    else
+
+    switch (Target)
     {
-        Rpi5OglFboError(State, GL_INVALID_ENUM, "glGetTexImage(target)");
-        return;
+        case GL_TEXTURE_1D:
+            Texture = State->Mesa->Texture.Current1D;
+            break;
+        case GL_TEXTURE_2D:
+            Texture = State->Mesa->Texture.Current2D;
+            break;
+        case GL_TEXTURE_3D:
+            Texture = State->Mesa->Texture.Current3D;
+            break;
     }
+
     Rpi5OglMaterializeTextureClear(Texture);
-    if (Level < 0 || Level >= MAX_TEXTURE_LEVELS)
-    {
-        Rpi5OglFboError(State, GL_INVALID_VALUE, "glGetTexImage(level)");
-        return;
-    }
-    Image = Texture != NULL ? Texture->Image[Level] : NULL;
-    if (Image == NULL || Image->Data == NULL)
-    {
-        Rpi5OglFboError(State, GL_INVALID_OPERATION, "glGetTexImage(image)");
-        return;
-    }
-    if (Pixels == NULL)
-    {
-        Rpi5OglFboError(State, GL_INVALID_VALUE, "glGetTexImage(pixels)");
-        return;
-    }
-
-    switch (Format)
-    {
-        case GL_RGBA:
-        case GL_BGRA_EXT:
-            ComponentCount = 4;
-            break;
-        case GL_RGB:
-        case GL_BGR_EXT:
-            ComponentCount = 3;
-            break;
-        case GL_RED:
-        case GL_GREEN:
-        case GL_BLUE:
-        case GL_ALPHA:
-        case GL_LUMINANCE:
-            ComponentCount = 1;
-            break;
-        case GL_LUMINANCE_ALPHA:
-            ComponentCount = 2;
-            break;
-        default:
-            Rpi5OglFboError(State, GL_INVALID_ENUM, "glGetTexImage(format)");
-            return;
-    }
-    if (Type == GL_UNSIGNED_BYTE)
-        BytesPerPixel = ComponentCount;
-    else if ((Type == GL_UNSIGNED_INT_8_8_8_8 ||
-              Type == GL_UNSIGNED_INT_8_8_8_8_REV) &&
-             ComponentCount == 4)
-        BytesPerPixel = sizeof(ULONG);
-    else
-    {
-        Rpi5OglFboError(State, GL_INVALID_ENUM, "glGetTexImage(type)");
-        return;
-    }
-
-    Stride = Rpi5OglFboPackStride(State, Image->Width, BytesPerPixel);
-    if (Stride == 0 || State->Mesa->Pack.SkipRows < 0 ||
-        State->Mesa->Pack.SkipPixels < 0 ||
-        (ULONGLONG)State->Mesa->Pack.SkipRows * Stride > 0xFFFFFFFFULL ||
-        (ULONGLONG)State->Mesa->Pack.SkipPixels * BytesPerPixel >
-            0xFFFFFFFFULL)
-    {
-        Rpi5OglFboError(State, GL_INVALID_OPERATION,
-                        "glGetTexImage(pack state)");
-        return;
-    }
-    Destination = (GLubyte *)Pixels +
-                  State->Mesa->Pack.SkipRows * Stride +
-                  State->Mesa->Pack.SkipPixels * BytesPerPixel;
-
-    for (Row = 0; Row < Image->Height; Row++)
-    {
-        for (Column = 0; Column < Image->Width; Column++)
-        {
-            Pixel = Row * Image->Width + Column;
-            if (!Rpi5OglFboReadTexel(Image, Pixel, Components))
-            {
-                Rpi5OglFboError(State, GL_INVALID_OPERATION,
-                                "glGetTexImage(internal format)");
-                return;
-            }
-            switch (Format)
-            {
-                case GL_RGBA:
-                    Ordered[0] = Components[0];
-                    Ordered[1] = Components[1];
-                    Ordered[2] = Components[2];
-                    Ordered[3] = Components[3];
-                    break;
-                case GL_BGRA_EXT:
-                    Ordered[0] = Components[2];
-                    Ordered[1] = Components[1];
-                    Ordered[2] = Components[0];
-                    Ordered[3] = Components[3];
-                    break;
-                case GL_RGB:
-                    Ordered[0] = Components[0];
-                    Ordered[1] = Components[1];
-                    Ordered[2] = Components[2];
-                    break;
-                case GL_BGR_EXT:
-                    Ordered[0] = Components[2];
-                    Ordered[1] = Components[1];
-                    Ordered[2] = Components[0];
-                    break;
-                case GL_RED:
-                    Ordered[0] = Components[0];
-                    break;
-                case GL_GREEN:
-                    Ordered[0] = Components[1];
-                    break;
-                case GL_BLUE:
-                    Ordered[0] = Components[2];
-                    break;
-                case GL_ALPHA:
-                    Ordered[0] = Components[3];
-                    break;
-                case GL_LUMINANCE:
-                    Ordered[0] = Components[0];
-                    break;
-                case GL_LUMINANCE_ALPHA:
-                    Ordered[0] = Components[0];
-                    Ordered[1] = Components[3];
-                    break;
-            }
-
-            if (Type == GL_UNSIGNED_BYTE)
-            {
-                CopyMemory(Destination + Column * BytesPerPixel,
-                           Ordered,
-                           BytesPerPixel);
-            }
-            else if (Type == GL_UNSIGNED_INT_8_8_8_8_REV)
-            {
-                Word = (ULONG)Ordered[0] |
-                       ((ULONG)Ordered[1] << 8) |
-                       ((ULONG)Ordered[2] << 16) |
-                       ((ULONG)Ordered[3] << 24);
-                if (State->Mesa->Pack.SwapBytes)
-                    Word = Rpi5OglFboByteSwap32(Word);
-                CopyMemory(Destination + Column * sizeof(Word),
-                           &Word,
-                           sizeof(Word));
-            }
-            else
-            {
-                Word = ((ULONG)Ordered[0] << 24) |
-                       ((ULONG)Ordered[1] << 16) |
-                       ((ULONG)Ordered[2] << 8) |
-                       Ordered[3];
-                if (State->Mesa->Pack.SwapBytes)
-                    Word = Rpi5OglFboByteSwap32(Word);
-                CopyMemory(Destination + Column * sizeof(Word),
-                           &Word,
-                           sizeof(Word));
-            }
-        }
-        Destination += Stride;
-    }
+    _mesa_GetTexImage(Target, Level, Format, Type, Pixels);
 }
 
 typedef struct _RPI5VC4_OGL_FBO_PROC
