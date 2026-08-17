@@ -181,43 +181,6 @@ RtlGetCallersAddress(
     *CallersCaller = NULL;
 }
 
-/*
- * Advance a freshly captured CONTEXT up exactly one frame so it describes this
- * routine's caller instead of the helper that captured it.
- *
- * RtlRaiseStatus / RtlRaiseException capture their own register state with
- * RtlCaptureContext, which records Pc/Sp/Fp pointing INTO the raise helper. The
- * exception logically originates at the helper's call site, so dispatch must
- * begin in the caller (where the __try scope lives). Do one virtual unwind
- * step to obtain a fully self-consistent caller context (Pc, Sp, Fp, Lr)
- * regardless of the helper's frame layout.
- */
-VOID
-NTAPI
-RtlpArm64StepContextToCaller(
-    _Inout_ PCONTEXT Context)
-{
-    PRUNTIME_FUNCTION FunctionEntry;
-    ULONG_PTR ImageBase = 0;
-    ULONG64 EstablisherFrame = 0;
-    PVOID HandlerData = NULL;
-
-    FunctionEntry = RtlLookupFunctionEntry(Context->Pc,
-                                           (PULONG_PTR)&ImageBase,
-                                           NULL);
-    if (FunctionEntry != NULL)
-    {
-        RtlVirtualUnwind(UNW_FLAG_NHANDLER,
-                         (ULONG64)ImageBase,
-                         Context->Pc,
-                         FunctionEntry,
-                         Context,
-                         &HandlerData,
-                         &EstablisherFrame,
-                         NULL);
-    }
-}
-
 BOOLEAN
 NTAPI
 RtlDispatchException(
