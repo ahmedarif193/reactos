@@ -272,7 +272,10 @@ typedef enum _TIMER_TYPE
 typedef enum _WAIT_TYPE
 {
     WaitAll,
-    WaitAny
+    WaitAny,
+    WaitNotification,
+    WaitDequeue,
+    WaitDpc
 } WAIT_TYPE;
 
 //
