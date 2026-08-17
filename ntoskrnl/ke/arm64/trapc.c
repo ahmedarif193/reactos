@@ -858,57 +858,14 @@ C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, VfpState.Fpsr) == 0x37C);
 C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, VfpState.V) == 0x380);
 C_ASSERT(sizeof(ARM64_EARLY_SYNC_CONTEXT) == ARM64_EARLY_SYNC_CONTEXT_ALLOC_SIZE);
 
-/*
- * KiArm64PreviousModeFromContext - Determine the true previous mode
- *
- * On ARM64, when kernel code dereferences a NULL pointer (e.g., accessing
- * offset 4 from NULL), the FAR contains a low user address (0x4), but the
- * ELR contains the kernel address where the fault occurred.
- *
- * SPSR.M[3:0] should indicate EL1 for kernel faults, but in some scenarios
- * (possibly related to exception nesting or SPSR caching), it may be 0 (EL0).
- *
- * To correctly identify kernel faults, we check BOTH:
- * 1. SPSR.M[3:0] - the processor mode bits
- * 2. ELR - the exception link register (faulting instruction address)
- *
- * If ELR is in kernel space (>= MmSystemRangeStart), the fault came from
- * kernel code, regardless of what SPSR says. This ensures NULL pointer
- * dereferences in kernel code are properly treated as kernel faults.
- */
+/* The vector slot, not the faulting address, identifies the interrupted EL. */
 static
 KPROCESSOR_MODE
-KiArm64PreviousModeFromContext(
-    _In_ ULONG64 SpsrValue,
-    _In_ ULONG64 ElrValue)
+KiArm64PreviousModeFromVector(
+    _In_ ULONG64 VectorId)
 {
-    ULONG Mode = (ULONG)(SpsrValue & 0xFULL);
-
-    /*
-     * If SPSR.M indicates EL1 (non-zero), it's definitely a kernel fault.
-     */
-    if (Mode != 0)
-    {
-        return KernelMode;
-    }
-
-    /*
-     * SPSR.M is 0 (EL0), but check ELR to catch kernel NULL pointer dereferences.
-     * If ELR is in kernel space, the faulting instruction was in the kernel,
-     * so this is a kernel fault even though FAR may be a user address.
-     *
-     * Use KSEG0_BASE (compile-time constant) instead of MmSystemRangeStart
-     * because MmSystemRangeStart may not be initialized during early boot.
-     */
-    if (ElrValue >= KSEG0_BASE)
-    {
-        return KernelMode;
-    }
-
-    /*
-     * Both SPSR.M is 0 (EL0) and ELR is in user space - this is a true user fault.
-     */
-    return UserMode;
+    ASSERT(VectorId < 16);
+    return (VectorId >= 8) ? UserMode : KernelMode;
 }
 
 static
@@ -930,7 +887,7 @@ KiArm64InitializeTrapFrame(
      */
     CurrentIrql = KeGetCurrentIrql();
 
-    TrapFrame->PreviousMode = (CHAR)KiArm64PreviousModeFromContext(Context->State.Spsr, Context->State.Elr);
+    TrapFrame->PreviousMode = (CHAR)KiArm64PreviousModeFromVector(Context->State.VectorId);
     TrapFrame->PreviousIrql = (UCHAR)CurrentIrql;
     TrapFrame->TrapFrame = (ULONG64)(ULONG_PTR)TrapFrame;
     Context->VfpState.Link = NULL;
@@ -1052,8 +1009,7 @@ KiArm64HandleSystemService(
     ULONG Instruction;
 
     /* The fast vector path already populated architectural state directly. */
-    TrapFrame->PreviousMode = (CHAR)KiArm64PreviousModeFromContext(
-        Context->State.Spsr, Context->State.Elr);
+    TrapFrame->PreviousMode = (CHAR)KiArm64PreviousModeFromVector(Context->State.VectorId);
     TrapFrame->PreviousIrql = (UCHAR)KeGetCurrentIrql();
     ExceptionFrame->TrapFrame = (ULONG64)(ULONG_PTR)TrapFrame;
     Context->TrapFramePointer = TrapFrame;
@@ -1297,8 +1253,7 @@ KiArm64HandleSynchronousException(
      * at KiUserApcDispatcher after instruction abort resolution.
      */
     {
-        KPROCESSOR_MODE FaultMode = KiArm64PreviousModeFromContext(
-            Context->State.Spsr, Context->State.Elr);
+        KPROCESSOR_MODE FaultMode = KiArm64PreviousModeFromVector(Context->State.VectorId);
 
         if ((EsrClass != ESR_EC_BRK) &&
             (FaultMode == KernelMode))
@@ -1333,8 +1288,7 @@ KiArm64HandleSynchronousException(
 
             TrapFrame = &Context->TrapFrame;
             KiArm64InitializeTrapFrame(Context, TrapFrame);
-            PreviousMode = KiArm64PreviousModeFromContext(Context->State.Spsr,
-                                                          Context->State.Elr);
+            PreviousMode = KiArm64PreviousModeFromVector(Context->State.VectorId);
 
             RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
             ExceptionRecord.ExceptionCode = STATUS_ILLEGAL_INSTRUCTION;
@@ -1365,7 +1319,7 @@ KiArm64HandleSynchronousException(
             TrapFrame = &Context->TrapFrame;
             KiArm64InitializeTrapFrame(Context, TrapFrame);
 
-	            PreviousMode = KiArm64PreviousModeFromContext(Context->State.Spsr, Context->State.Elr);
+	            PreviousMode = KiArm64PreviousModeFromVector(Context->State.VectorId);
 	            WriteAccess = FALSE;
 
             /*
@@ -1516,8 +1470,7 @@ KiArm64HandleSynchronousException(
 
                 TrapFrame = &Context->TrapFrame;
                 KiArm64InitializeTrapFrame(Context, TrapFrame);
-
-                Mode = KiArm64PreviousModeFromContext(Context->State.Spsr, Context->State.Elr);
+                Mode = KiArm64PreviousModeFromVector(Context->State.VectorId);
 
                 RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
                 ExceptionRecord.ExceptionCode = STATUS_DATATYPE_MISALIGNMENT;
@@ -1540,8 +1493,7 @@ KiArm64HandleSynchronousException(
 
             TrapFrame = &Context->TrapFrame;
             KiArm64InitializeTrapFrame(Context, TrapFrame);
-            PreviousMode = KiArm64PreviousModeFromContext(Context->State.Spsr,
-                                                          Context->State.Elr);
+            PreviousMode = KiArm64PreviousModeFromVector(Context->State.VectorId);
 
             /*
              * Check the interrupted kernel SP, not this C handler's SP. The
@@ -2098,7 +2050,7 @@ KiArm64HandleSynchronousException(
             TrapFrame = &Context->TrapFrame;
             KiArm64InitializeTrapFrame(Context, TrapFrame);
 
-            Mode = KiArm64PreviousModeFromContext(Context->State.Spsr, Context->State.Elr);
+            Mode = KiArm64PreviousModeFromVector(Context->State.VectorId);
 
             RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
             ExceptionRecord.ExceptionCode = STATUS_DATATYPE_MISALIGNMENT;
@@ -2151,7 +2103,7 @@ KiArm64HandleSynchronousException(
             TrapFrame = &Context->TrapFrame;
             KiArm64InitializeTrapFrame(Context, TrapFrame);
 
-            Mode = KiArm64PreviousModeFromContext(Context->State.Spsr, Context->State.Elr);
+            Mode = KiArm64PreviousModeFromVector(Context->State.VectorId);
 
             /*
              * A watchpoint reports the accessed data address in FAR_EL1, which
@@ -2189,7 +2141,7 @@ KiArm64HandleSynchronousException(
 
         case 0x3C: /* BRK instruction */
         {
-            KPROCESSOR_MODE Mode = KiArm64PreviousModeFromContext(Context->State.Spsr, Context->State.Elr);
+            KPROCESSOR_MODE Mode = KiArm64PreviousModeFromVector(Context->State.VectorId);
             ULONG BrkImm = Esr & 0xFFFF;
 
             /*
@@ -2331,7 +2283,7 @@ KiArm64HandleSynchronousException(
             TrapFrame = &Context->TrapFrame;
             KiArm64InitializeTrapFrame(Context, TrapFrame);
 
-            Mode = KiArm64PreviousModeFromContext(Context->State.Spsr, Context->State.Elr);
+            Mode = KiArm64PreviousModeFromVector(Context->State.VectorId);
 
             DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
                     "[arm64] UNHANDLED ESR class=0x%lx ISS=0x%lx Vec=%p ELR=%p FAR=%p SPSR=0x%lx Mode=%d Proc=%s\n",
@@ -2501,7 +2453,7 @@ KiSErrorHandler(
     Iss = (ULONG)(Esr & 0x1FFFFFF);
 
     /* Determine if exception was from user mode or kernel mode */
-    PreviousMode = KiArm64PreviousModeFromContext(TrapFrame->Spsr, TrapFrame->Pc);
+    PreviousMode = (TrapFrame->PreviousMode == UserMode) ? UserMode : KernelMode;
 
     DPRINT1("\n");
     DPRINT1("========================================\n");
