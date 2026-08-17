@@ -7,15 +7,18 @@ list(APPEND RPI5VC4_DISPLAY_SOURCE
     ../framebuf/pointer.c
     ../framebuf/screen.c
     ../framebuf/shadow.c
+    ../framebuf/shadow_hooks.c
     ../framebuf/surface.c
     ../framebuf/framebuf.h
+    rpi5_driver.c
+    rpi5_gdi.c
+    rpi5_gdi.h
     rpi5_escape.c)
 
 add_library(rpi5vc4disp MODULE
     ${RPI5VC4_DISPLAY_SOURCE}
     rpi5vc4disp.rc)
 
-target_compile_definitions(rpi5vc4disp PRIVATE RPI5VC4_XPDM_DISPLAY)
 target_include_directories(rpi5vc4disp PRIVATE ../framebuf)
 set_module_type(rpi5vc4disp kerneldll ENTRYPOINT DrvEnableDriver 12)
 target_link_libraries(rpi5vc4disp libcntpr)
