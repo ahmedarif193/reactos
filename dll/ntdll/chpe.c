@@ -2,6 +2,8 @@
  * PROJECT:         ReactOS NT Library
  * FILE:            dll/ntdll/chpe.c
  * PURPOSE:         CHPE (ARM64EC) emulator integration for x64-on-ARM64
+ * LICENSE:         LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
+ * COPYRIGHT:       Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  *
  * CHPE (Compiled Hybrid Portable Executable) allows running x86_64 (AMD64)
  * binaries on an ARM64 host by loading the FEX ARM64EC emulator DLL and
@@ -39,7 +41,9 @@ typedef struct _CHPE_V2_CPU_AREA_INFO
 {
     BOOLEAN InSimulation;
     BOOLEAN InSyscallCallback;
-    UCHAR Reserved0[6];
+    BOOLEAN CriticalLockHeld;
+    BOOLEAN AvoidUpcallToKernel32;
+    UCHAR Reserved0[4];
     ULONG64 EmulatorStackBase;
     ULONG64 EmulatorStackLimit;
     PVOID ContextAmd64;
@@ -48,6 +52,9 @@ typedef struct _CHPE_V2_CPU_AREA_INFO
     PVOID EmulatorData[4];
     ULONG64 EmulatorDataInline;
 } CHPE_V2_CPU_AREA_INFO, *PCHPE_V2_CPU_AREA_INFO;
+
+C_ASSERT(FIELD_OFFSET(CHPE_V2_CPU_AREA_INFO, CriticalLockHeld) == 0x2);
+C_ASSERT(FIELD_OFFSET(CHPE_V2_CPU_AREA_INFO, SuspendDoorbell) == 0x20);
 
 typedef struct _IMAGE_ARM64EC_METADATA
 {
@@ -99,6 +106,7 @@ typedef struct _IMAGE_CHPE_RANGE_ENTRY
 #define CHPE_PEB_EC_CODE_BITMAP_OFFSET 0x368
 #define CHPE_EC_CODE_BITMAP_SIZE (1ULL << 32)
 #define CHPE_EC_CODE_BITMAP_INITIAL_COMMIT_SIZE 0x100000
+#define CHPE_CROSS_PROCESS_WORK_LIST_SIZE 0x4000
 
 /* Exported entry/dispatch trampolines (DATA exports, resolved at load time) */
 typedef struct _CHPE_DISPATCH_TABLE
@@ -127,11 +135,20 @@ static PCHPE_NOTIFY_MEMORY_DIRTY       pChpeNotifyMemoryDirty;
 static PCHPE_NOTIFY_READ_FILE          pChpeNotifyReadFile;
 static PCHPE_IS_PROCESSOR_FEATURE_PRESENT pChpeIsProcessorFeaturePresent;
 static PCHPE_UPDATE_PROCESSOR_INFO     pChpeUpdateProcessorInfo;
+typedef NTSTATUS (NTAPI *PCHPE_DISPATCH_EXCEPTION_NATIVE)(PEXCEPTION_RECORD ExceptionRecord, PARM64_NT_CONTEXT NativeContext);
+static PCHPE_DISPATCH_EXCEPTION_NATIVE pChpeDispatchExceptionNative;
 static CHPE_DISPATCH_TABLE             ChpeDispatchTable;
+
+BOOLEAN NTAPI RtlCallVectoredExceptionHandlers(PEXCEPTION_RECORD ExceptionRecord, PCONTEXT ContextRecord);
+VOID NTAPI RtlCallVectoredContinueHandlers(PEXCEPTION_RECORD ExceptionRecord, PCONTEXT ContextRecord);
 
 /* Whether the CHPE emulator has been loaded for this process */
 static BOOLEAN ChpeEmulatorLoaded = FALSE;
+static BOOLEAN ChpeProcessInitialized = FALSE;
 static PVOID volatile ChpeEcCodeBitmap;
+static CHPEV2_PROCESS_INFO64 ChpeProcessInfoStorage;
+static PCHPEV2_PROCESS_INFO64 ChpeProcessInfo;
+static PVOID ChpePreviousFlsBitmap;
 static BOOLEAN ChpeProcessorFeatures[PROCESSOR_FEATURE_MAX];
 
 extern PVOID NtDllBase;
@@ -221,7 +238,10 @@ ChpepEnterCurrentThreadCallback(VOID)
 {
     PCHPE_V2_CPU_AREA_INFO CpuArea = ChpepGetCurrentCpuArea();
 
-    if (!CpuArea || !CpuArea->EmulatorData[1] || CpuArea->InSyscallCallback)
+    if (!CpuArea ||
+        !CpuArea->EmulatorData[1] ||
+        CpuArea->InSimulation ||
+        CpuArea->InSyscallCallback)
         return NULL;
 
     CpuArea->InSyscallCallback = TRUE;
@@ -232,7 +252,30 @@ static
 VOID
 ChpepLeaveCurrentThreadCallback(PCHPE_V2_CPU_AREA_INFO CpuArea)
 {
+    CONTEXT Context;
+
     CpuArea->InSyscallCallback = FALSE;
+
+    /*
+     * A suspend can race with an emulator callback.  The kernel sets the
+     * doorbell while the callback is non-suspendable; re-entering NtContinue
+     * after dropping the guard gives FEX a safe point at which to reconstruct
+     * and suspend the guest context.
+     *
+     * Keep the callback-state and context-flag checks aligned with the
+     * Windows 11 ARM64EC NTDLL callback epilogue.
+     */
+    if (CpuArea->SuspendDoorbell &&
+        *CpuArea->SuspendDoorbell &&
+        !CpuArea->InSimulation &&
+        !CpuArea->InSyscallCallback &&
+        !CpuArea->CriticalLockHeld)
+    {
+        RtlCaptureContext(&Context);
+        Context.ContextFlags = CONTEXT_ARM64;
+        if (*CpuArea->SuspendDoorbell)
+            NtContinue(&Context, FALSE);
+    }
 }
 
 PVOID
@@ -257,7 +300,8 @@ static
 PVOID *
 ChpepGetPebEcCodeBitmapSlot(VOID)
 {
-    return (PVOID *)((PBYTE)NtCurrentPeb() + CHPE_PEB_EC_CODE_BITMAP_OFFSET);
+    C_ASSERT(FIELD_OFFSET(PEB, EcCodeBitMap) == CHPE_PEB_EC_CODE_BITMAP_OFFSET);
+    return &NtCurrentPeb()->EcCodeBitMap;
 }
 
 static
@@ -273,6 +317,7 @@ ChpepEnsureProcessData(VOID)
 {
     PVOID *EcCodeBitmapSlot = ChpepGetPebEcCodeBitmapSlot();
     PVOID EcCodeBitmap = NULL;
+    PVOID CommitBase;
     PVOID ExistingBitmap;
     SIZE_T RegionSize = CHPE_EC_CODE_BITMAP_SIZE;
     NTSTATUS Status;
@@ -286,14 +331,19 @@ ChpepEnsureProcessData(VOID)
 
     Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &EcCodeBitmap, 0, &RegionSize, MEM_RESERVE, PAGE_READWRITE);
     if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("CHPE: EC bitmap reserve failed, Status = 0x%08lx, Base = %p, Size = %Iu\n", Status, EcCodeBitmap, RegionSize);
         return Status;
+    }
 
+    CommitBase = EcCodeBitmap;
     RegionSize = CHPE_EC_CODE_BITMAP_INITIAL_COMMIT_SIZE;
-    Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &EcCodeBitmap, 0, &RegionSize, MEM_COMMIT, PAGE_READWRITE);
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &CommitBase, 0, &RegionSize, MEM_COMMIT, PAGE_READWRITE);
     if (!NT_SUCCESS(Status))
     {
         SIZE_T FreeSize = 0;
 
+        DPRINT1("CHPE: EC bitmap initial commit failed, Status = 0x%08lx, Reserve = %p, Commit = %p, Size = %Iu\n", Status, EcCodeBitmap, CommitBase, RegionSize);
         ZwFreeVirtualMemory(NtCurrentProcess(), &EcCodeBitmap, &FreeSize, MEM_RELEASE);
         return Status;
     }
@@ -348,6 +398,8 @@ ChpepCommitEcCodeBitmapRange(ULONG_PTR Address,
     CommitBase = BitmapBase + CommitStart;
     CommitSize = CommitEnd - CommitStart;
     Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &CommitBase, 0, &CommitSize, MEM_COMMIT, PAGE_READWRITE);
+    if (!NT_SUCCESS(Status) && Status != STATUS_ALREADY_COMMITTED)
+        DPRINT1("CHPE: EC bitmap range commit failed, Status = 0x%08lx, Bitmap = %p, Address = %p, Length = %Iu, Offset = 0x%Ix, Commit = %p, Size = %Iu\n", Status, BitmapBase, (PVOID)Address, Length, CommitStart, CommitBase, CommitSize);
     return NT_SUCCESS(Status) || Status == STATUS_ALREADY_COMMITTED;
 }
 
@@ -368,6 +420,84 @@ ChpepFreeProcessData(VOID)
         ZwFreeVirtualMemory(NtCurrentProcess(), &BaseAddress, &RegionSize, MEM_RELEASE);
         ChpeEcCodeBitmap = NULL;
     }
+}
+
+/*
+ * ARM64EC uses the PEB FlsBitmap/ChpeV2ProcessInfo union for a discoverable
+ * shared work queue.  NTDLL keeps the actual FLS bitmap in process-global
+ * state, so publishing this pointer does not consume or corrupt FLS state.
+ *
+ * Queue layout and initialization are adapted from Wine
+ * dlls/ntdll/signal_arm64ec.c.
+ * Copyright 2023 Alexandre Julliard.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
+ */
+static
+NTSTATUS
+ChpepCreateCrossProcessWorkList(VOID)
+{
+    PCHPEV2_PROCESS_INFO64 Info = &ChpeProcessInfoStorage;
+    PCROSS_PROCESS_WORK_LIST List = NULL;
+    PCROSS_PROCESS_WORK_ENTRY Entry, End;
+    LARGE_INTEGER MaximumSize;
+    SIZE_T ViewSize;
+    HANDLE Section = NULL;
+    NTSTATUS Status;
+
+    if (ChpeProcessInfo)
+        return STATUS_SUCCESS;
+
+    MaximumSize.QuadPart = CHPE_CROSS_PROCESS_WORK_LIST_SIZE;
+    Status = NtCreateSection(&Section, SECTION_ALL_ACCESS, NULL, &MaximumSize, PAGE_READWRITE, SEC_COMMIT, NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    ViewSize = CHPE_CROSS_PROCESS_WORK_LIST_SIZE;
+    Status = NtMapViewOfSection(Section, NtCurrentProcess(), (PVOID *)&List, 0, 0, NULL, &ViewSize, ViewShare, MEM_TOP_DOWN, PAGE_READWRITE);
+    if (!NT_SUCCESS(Status))
+    {
+        NtClose(Section);
+        return Status;
+    }
+
+    End = (PCROSS_PROCESS_WORK_ENTRY)((PBYTE)List + ViewSize);
+    for (Entry = List->entries; Entry + 1 <= End; ++Entry)
+        RtlWow64PushCrossProcessWorkOntoFreeList(&List->free_list, Entry);
+
+    RtlZeroMemory(Info, sizeof(*Info));
+    Info->NativeMachineType = IMAGE_FILE_MACHINE_ARM64;
+    Info->EmulatedMachineType = IMAGE_FILE_MACHINE_AMD64;
+    Info->SectionHandle = (ULONGLONG)(ULONG_PTR)Section;
+    Info->CrossProcessWorkList = (ULONGLONG)(ULONG_PTR)List;
+    ChpeProcessInfo = Info;
+    MemoryBarrier();
+    ChpePreviousFlsBitmap = InterlockedExchangePointer((PVOID volatile *)&NtCurrentPeb()->ChpeV2ProcessInfo, Info);
+    return STATUS_SUCCESS;
+}
+
+static
+VOID
+ChpepFreeCrossProcessWorkList(VOID)
+{
+    PCHPEV2_PROCESS_INFO64 Info = ChpeProcessInfo;
+    PVOID List;
+    HANDLE Section;
+
+    if (!Info)
+        return;
+
+    InterlockedCompareExchangePointer((PVOID volatile *)&NtCurrentPeb()->ChpeV2ProcessInfo, ChpePreviousFlsBitmap, Info);
+    MemoryBarrier();
+    List = (PVOID)(ULONG_PTR)Info->CrossProcessWorkList;
+    Section = (HANDLE)(ULONG_PTR)Info->SectionHandle;
+    ChpeProcessInfo = NULL;
+    ChpePreviousFlsBitmap = NULL;
+
+    if (List)
+        NtUnmapViewOfSection(NtCurrentProcess(), List);
+    if (Section)
+        NtClose(Section);
+    RtlZeroMemory(Info, sizeof(*Info));
 }
 
 static
@@ -620,87 +750,65 @@ ChpepPatchArm64EcPointer(PVOID ImageBase,
     return ChpepWritePointer((PBYTE)ImageBase + Rva, Value);
 }
 
-static
-VOID
-__attribute__((naked))
-ChpepArm64EcNoopCheck(VOID)
-{
-    __asm__ volatile("ret");
-}
-
-static
-__attribute__((noinline, used))
-ULONG_PTR
-ChpepResolveArm64EcCallTarget(ULONG_PTR Target)
-{
-    PLDR_DATA_TABLE_ENTRY LdrEntry;
-    ULONG_PTR TargetRva, NativeRva;
-
-    if (!NT_SUCCESS(LdrFindEntryForAddress((PVOID)Target, &LdrEntry)) ||
-        Target < (ULONG_PTR)LdrEntry->DllBase)
-        return Target;
-
-    TargetRva = Target - (ULONG_PTR)LdrEntry->DllBase;
-    if (!ChpeGetArm64EcRedirection(LdrEntry->DllBase, TargetRva, &NativeRva))
-        return Target;
-
-    return (ULONG_PTR)LdrEntry->DllBase + NativeRva;
-}
-
+/*
+ * Resolve indirect ARM64EC calls without entering FEX when the target is
+ * native code or one of the standard hybrid/import forwarding thunks.
+ *
+ * Adapted from Wine dlls/ntdll/signal_arm64ec.c.
+ * Copyright 1999, 2005, 2023 Alexandre Julliard.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
+ */
 static
 VOID
 __attribute__((naked))
 ChpepArm64EcCheckCall(VOID)
 {
     __asm__ volatile(
+        "1:\n"
         "ldr x16, [x18, #0x60]\n"
         "ldr x16, [x16, #0x368]\n"
-        "cbz x16, 1f\n"
-        "lsr x17, x11, #15\n"
-        "and x17, x17, #0x1fffffffffff8\n"
-        "ldr x16, [x16, x17]\n"
-        "lsr x17, x11, #12\n"
-        "lsr x16, x16, x17\n"
-        "tbnz x16, #0, 1f\n"
-        "sub sp, sp, #0x100\n"
-        "stp x0, x1, [sp, #0x00]\n"
-        "stp x2, x3, [sp, #0x10]\n"
-        "stp x4, x5, [sp, #0x20]\n"
-        "stp x6, x7, [sp, #0x30]\n"
-        "stp x8, x9, [sp, #0x40]\n"
-        "stp x10, x11, [sp, #0x50]\n"
-        "str x30, [sp, #0x60]\n"
-        "str x15, [sp, #0x68]\n"
-        "stp q0, q1, [sp, #0x70]\n"
-        "stp q2, q3, [sp, #0x90]\n"
-        "stp q4, q5, [sp, #0xb0]\n"
-        "stp q6, q7, [sp, #0xd0]\n"
-        "mov x0, x11\n"
-        "bl ChpepResolveArm64EcCallTarget\n"
-        "str x0, [sp, #0xf0]\n"
-        "ldp q6, q7, [sp, #0xd0]\n"
-        "ldp q4, q5, [sp, #0xb0]\n"
-        "ldp q2, q3, [sp, #0x90]\n"
-        "ldp q0, q1, [sp, #0x70]\n"
-        "ldr x15, [sp, #0x68]\n"
-        "ldr x30, [sp, #0x60]\n"
-        "ldp x10, x11, [sp, #0x50]\n"
-        "ldp x8, x9, [sp, #0x40]\n"
-        "ldp x6, x7, [sp, #0x30]\n"
-        "ldp x4, x5, [sp, #0x20]\n"
-        "ldp x2, x3, [sp, #0x10]\n"
-        "ldp x0, x1, [sp, #0x00]\n"
-        "ldr x16, [sp, #0xf0]\n"
-        "add sp, sp, #0x100\n"
-        "cmp x16, x11\n"
-        "b.ne 2f\n"
+        "cbz x16, 4f\n"
+        "lsr x17, x11, #18\n"
+        "ldr x16, [x16, x17, lsl #3]\n"
+        "lsr x9, x11, #12\n"
+        "lsr x16, x16, x9\n"
+        "tbnz x16, #0, 5f\n"
+        "tst x11, #15\n"
+        "b.ne 3f\n"
+        "ldr x16, [x11]\n"
+        "ldr x17, 6f\n"
+        "cmp x16, x17\n"
+        "b.ne 3f\n"
+        "ldr x16, [x11, #8]\n"
+        "ldr x17, 7f\n"
+        "eor x17, x16, x17\n"
+        "tst x17, #0xffff\n"
+        "b.ne 4f\n"
+        "add x11, x11, #14\n"
+        "lsr x9, x16, #16\n"
+        "add x11, x11, w9, sxtw\n"
+        "ret\n"
+        "3:\n"
+        "ldrb w16, [x11]\n"
+        "cmp w16, #0xff\n"
+        "b.ne 4f\n"
+        "ldrb w16, [x11, #1]\n"
+        "cmp w16, #0x25\n"
+        "b.ne 4f\n"
+        "ldr w9, [x11, #2]\n"
+        "add x16, x11, #6\n"
+        "ldr x11, [x16, w9, sxtw]\n"
+        "b 1b\n"
+        "4:\n"
         "mov x9, x11\n"
         "mov x11, x10\n"
+        "5:\n"
         "ret\n"
-        "2:\n"
-        "mov x11, x16\n"
-        "1:\n"
-        "ret\n");
+        ".balign 8\n"
+        "6:\n"
+        ".byte 0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x20, 0x55\n"
+        "7:\n"
+        ".byte 0x5d, 0xe9, 0, 0, 0, 0, 0, 0\n");
 }
 
 /*
@@ -817,7 +925,7 @@ ChpepPatchArm64EcDispatchHelpers(PVOID ImageBase,
                                  ULONG SizeOfImage,
                                  PIMAGE_ARM64EC_METADATA Metadata)
 {
-    PVOID CheckTarget = ChpeEmulatorLoaded ? (PVOID)ChpepArm64EcCheckCall : (PVOID)ChpepArm64EcNoopCheck;
+    PVOID CheckTarget = ChpepArm64EcCheckCall;
 
     ChpepPatchArm64EcPointer(ImageBase, SizeOfImage, Metadata->DispatchCall, CheckTarget);
     ChpepPatchArm64EcPointer(ImageBase, SizeOfImage, Metadata->DispatchIcall, CheckTarget);
@@ -1118,6 +1226,40 @@ ChpepGetNativeProcedureAddress(PVOID Base,
 }
 
 static
+VOID
+ChpepResetEmulatorState(BOOLEAN UnloadModule)
+{
+    HMODULE Module = ChpeEmulatorModule;
+
+    RtlpSetFlsCallbackDispatcher(NULL);
+    ChpeProcessInitialized = FALSE;
+    ChpeEmulatorLoaded = FALSE;
+    RtlZeroMemory(&ChpeDispatchTable, sizeof(ChpeDispatchTable));
+    ChpeEmulatorModule = NULL;
+    pChpeProcessInit = NULL;
+    pChpeProcessTerm = NULL;
+    pChpeThreadInit = NULL;
+    pChpeThreadTerm = NULL;
+    pChpeResetToConsistentState = NULL;
+    pChpeNotifyMemoryAlloc = NULL;
+    pChpeNotifyMemoryFree = NULL;
+    pChpeNotifyMemoryProtect = NULL;
+    pChpeNotifyMapViewOfSection = NULL;
+    pChpeNotifyUnmapViewOfSection = NULL;
+    pChpeFlushInstructionCacheHeavy = NULL;
+    pChpeFlushInstructionCache = NULL;
+    pChpeNotifyMemoryDirty = NULL;
+    pChpeNotifyReadFile = NULL;
+    pChpeIsProcessorFeaturePresent = NULL;
+    pChpeUpdateProcessorInfo = NULL;
+    pChpeDispatchExceptionNative = NULL;
+    RtlZeroMemory(ChpeProcessorFeatures, sizeof(ChpeProcessorFeatures));
+
+    if (UnloadModule && Module)
+        LdrUnloadDll(Module);
+}
+
+static
 NTSTATUS
 ChpepLoadEmulator(VOID)
 {
@@ -1137,13 +1279,16 @@ ChpepLoadEmulator(VOID)
     ANSI_STRING ReadFileName = RTL_CONSTANT_STRING("BTCpu64NotifyReadFile");
     ANSI_STRING IsFeatureName = RTL_CONSTANT_STRING("BTCpu64IsProcessorFeaturePresent");
     ANSI_STRING UpdateProcInfoName = RTL_CONSTANT_STRING("UpdateProcessorInformation");
+    ANSI_STRING DispatchExceptionName = RTL_CONSTANT_STRING("ChpeDispatchExceptionNative");
     ANSI_STRING DispatchJumpName = RTL_CONSTANT_STRING("DispatchJump");
     ANSI_STRING RetToEntryName = RTL_CONSTANT_STRING("RetToEntryThunk");
     ANSI_STRING ExitToX64Name = RTL_CONSTANT_STRING("ExitToX64");
     ANSI_STRING BeginSimName = RTL_CONSTANT_STRING("BeginSimulation");
     NTSTATUS Status;
     UNICODE_STRING DllName;
+    UNICODE_STRING BridgeDllName = RTL_CONSTANT_STRING(L"ntdll_chpe.dll");
     PVOID Base;
+    PVOID BridgeBase;
 
     RtlInitUnicodeString(&DllName, ChpeDllName.Buffer);
 
@@ -1156,12 +1301,22 @@ ChpepLoadEmulator(VOID)
 
     ChpeEmulatorModule = Base;
 
+    Status = LdrGetDllHandle(NULL, NULL, &BridgeDllName, &BridgeBase);
+    if (!NT_SUCCESS(Status))
+        Status = LdrLoadDll(NULL, NULL, &BridgeDllName, &BridgeBase);
+    if (!NT_SUCCESS(Status))
+        goto Failure;
+
+    Status = ChpepGetNativeProcedureAddress(BridgeBase, &DispatchExceptionName, (PVOID *)&pChpeDispatchExceptionNative);
+    if (!NT_SUCCESS(Status))
+        goto Failure;
+
 #define CHPE_GET_PROC(name, field) \
     Status = ChpepGetNativeProcedureAddress(Base, &name##Name, (PVOID*)&field); \
     if (!NT_SUCCESS(Status)) { \
         DPRINT1("CHPE: Failed to resolve native ARM64EC entry for %Z, Status = 0x%08lx\n", \
                 &name##Name, Status); \
-        return Status; \
+        goto Failure; \
     }
 
     CHPE_GET_PROC(ProcInit, pChpeProcessInit);
@@ -1183,18 +1338,23 @@ ChpepLoadEmulator(VOID)
 
     /* Resolve DATA exports (trampoline addresses) */
     Status = LdrGetProcedureAddress(Base, &DispatchJumpName, 0, (PVOID*)&ChpeDispatchTable.DispatchJump);
-    if (!NT_SUCCESS(Status)) return Status;
+    if (!NT_SUCCESS(Status)) goto Failure;
     Status = LdrGetProcedureAddress(Base, &RetToEntryName, 0, (PVOID*)&ChpeDispatchTable.RetToEntryThunk);
-    if (!NT_SUCCESS(Status)) return Status;
+    if (!NT_SUCCESS(Status)) goto Failure;
     Status = LdrGetProcedureAddress(Base, &ExitToX64Name, 0, (PVOID*)&ChpeDispatchTable.ExitToX64);
-    if (!NT_SUCCESS(Status)) return Status;
+    if (!NT_SUCCESS(Status)) goto Failure;
     Status = LdrGetProcedureAddress(Base, &BeginSimName, 0, (PVOID*)&ChpeDispatchTable.BeginSimulation);
-    if (!NT_SUCCESS(Status)) return Status;
+    if (!NT_SUCCESS(Status)) goto Failure;
 
 #undef CHPE_GET_PROC
 
     ChpeEmulatorLoaded = TRUE;
     return STATUS_SUCCESS;
+
+Failure:
+#undef CHPE_GET_PROC
+    ChpepResetEmulatorState(TRUE);
+    return Status;
 }
 
 /*
@@ -1209,16 +1369,19 @@ ChpeInitializeProcess(VOID)
     ULONG Feature;
     NTSTATUS Status;
 
-    if (ChpeEmulatorLoaded)
+    if (ChpeProcessInitialized)
         return STATUS_SUCCESS;
 
-    Status = ChpepLoadEmulator();
-    if (!NT_SUCCESS(Status))
-        return Status;
+    if (!ChpeEmulatorLoaded)
+    {
+        Status = ChpepLoadEmulator();
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
 
     Status = ChpepEnsureProcessData();
     if (!NT_SUCCESS(Status))
-        return Status;
+        goto Failure;
 
     ChpepRegisterNativeRuntimeImages();
 
@@ -1226,21 +1389,39 @@ ChpeInitializeProcess(VOID)
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("[CHPE] ntdll: ProcessInit failed, Status = 0x%08lx\n", Status);
-        return Status;
+        goto Failure;
     }
 
     for (Feature = 0; Feature < RTL_NUMBER_OF(ChpeProcessorFeatures); ++Feature)
         ChpeProcessorFeatures[Feature] = pChpeIsProcessorFeaturePresent(Feature);
 
+    ChpeProcessInitialized = TRUE;
+    RtlpSetFlsCallbackDispatcher(ChpepCallFlsCallback);
+
+    Status = ChpepCreateCrossProcessWorkList();
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("[CHPE] ntdll: cross-process work-list initialization failed, Status = 0x%08lx\n", Status);
+        goto ProcessFailure;
+    }
+
     Status = ChpeInitializeThread();
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("[CHPE] ntdll: initial ThreadInit failed, Status = 0x%08lx\n", Status);
-        return Status;
+        goto ProcessFailure;
     }
 
-    RtlpSetFlsCallbackDispatcher(ChpepCallFlsCallback);
     return STATUS_SUCCESS;
+
+ProcessFailure:
+    pChpeProcessTerm(NtCurrentProcess(), TRUE, Status);
+
+Failure:
+    ChpepFreeCrossProcessWorkList();
+    ChpepFreeProcessData();
+    ChpepResetEmulatorState(TRUE);
+    return Status;
 }
 
 /*
@@ -1252,7 +1433,7 @@ ChpeInitializeThread(VOID)
 {
     NTSTATUS Status;
 
-    if (!ChpeEmulatorLoaded)
+    if (!ChpeProcessInitialized)
         return STATUS_UNSUCCESSFUL;
 
     if (ChpepIsCurrentThreadInitialized())
@@ -1276,13 +1457,21 @@ VOID
 NTAPI
 ChpeCleanupThread(HANDLE ThreadHandle, LONG ExitCode)
 {
-    if (!ChpeEmulatorLoaded)
+    NTSTATUS Status;
+
+    if (!ChpeProcessInitialized)
         return;
 
     if (!ChpepIsCurrentThreadInitialized())
         return;
 
-    pChpeThreadTerm(ThreadHandle, ExitCode);
+    Status = pChpeThreadTerm(ThreadHandle, ExitCode);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("[CHPE] ntdll: ThreadTerm failed, Status = 0x%08lx\n", Status);
+        return;
+    }
+
     ChpepFreeCurrentCpuArea();
 }
 
@@ -1315,13 +1504,14 @@ VOID
 NTAPI
 ChpeCleanupProcess(HANDLE ProcessHandle, NTSTATUS ExitStatus)
 {
-    if (!ChpeEmulatorLoaded)
+    if (!ChpeProcessInitialized)
         return;
 
-    RtlpSetFlsCallbackDispatcher(NULL);
+    ChpeCleanupThread(NtCurrentThread(), ExitStatus);
     pChpeProcessTerm(ProcessHandle, TRUE, ExitStatus);
+    ChpepFreeCrossProcessWorkList();
     ChpepFreeProcessData();
-    ChpeEmulatorLoaded = FALSE;
+    ChpepResetEmulatorState(FALSE);
 }
 
 /*
@@ -1356,12 +1546,12 @@ BOOLEAN
 NTAPI
 ChpeIsEmulatorReady(VOID)
 {
-    return ChpeEmulatorLoaded;
+    return ChpeProcessInitialized;
 }
 
 /*
  * Forward an ARM64 exception to the CHPE emulator for translation to x64.
- * Called by KiUserExceptionDispatcher before RtlDispatchException.
+ * Called by KiUserExceptionDispatcher before native ARM64 exception dispatch.
  *
  * If the emulator handles the exception internally, this call continues
  * execution through the native context and does not return.  If it returns,
@@ -1373,8 +1563,9 @@ ChpeDispatchException(PEXCEPTION_RECORD ExceptionRecord,
                       PCONTEXT Context)
 {
     PCHPE_V2_CPU_AREA_INFO CpuArea;
+    NTSTATUS Status;
 
-    if (!ChpeEmulatorLoaded || !pChpeResetToConsistentState)
+    if (!ChpeProcessInitialized || !pChpeResetToConsistentState || !pChpeDispatchExceptionNative)
         return FALSE;
 
     CpuArea = ChpepGetCurrentCpuArea();
@@ -1382,6 +1573,21 @@ ChpeDispatchException(PEXCEPTION_RECORD ExceptionRecord,
         return FALSE;
 
     pChpeResetToConsistentState(ExceptionRecord, CpuArea->ContextAmd64, Context);
+
+    if (RtlCallVectoredExceptionHandlers(ExceptionRecord, Context))
+    {
+        RtlCallVectoredContinueHandlers(ExceptionRecord, Context);
+        return TRUE;
+    }
+
+    Status = pChpeDispatchExceptionNative(ExceptionRecord, (PARM64_NT_CONTEXT)Context);
+    RtlCallVectoredContinueHandlers(ExceptionRecord, Context);
+    if (Status == STATUS_SUCCESS)
+        return TRUE;
+
+    if (Status != STATUS_UNHANDLED_EXCEPTION)
+        RtlRaiseStatus(Status);
+
     return FALSE;
 }
 
@@ -1708,13 +1914,15 @@ ChpeCallX64DllMain(PVOID EntryPoint,
                    ULONG Reason,
                    PVOID Context)
 {
+    ULONG_PTR Result;
     NTSTATUS Status;
 
     Status = ChpeInitializeThread();
     if (!NT_SUCCESS(Status))
         return FALSE;
 
-    return (BOOLEAN)ChpepCallX64Routine(EntryPoint, (ULONG_PTR)BaseAddress, Reason, (ULONG_PTR)Context, 0);
+    Result = ChpepCallX64Routine(EntryPoint, (ULONG_PTR)BaseAddress, Reason, (ULONG_PTR)Context, 0);
+    return (BOOLEAN)Result;
 }
 
 VOID
@@ -1732,11 +1940,7 @@ ChpeRtlUserThreadStart(PVOID StartAddress, PVOID Parameter)
             RtlExitUserThread(InitStatus);
         }
 
-        Status = ChpepCallX64Routine(StartAddress,
-                                     (ULONG_PTR)Parameter,
-                                     0,
-                                     0,
-                                     0);
+        Status = ChpepCallX64Routine(StartAddress, (ULONG_PTR)Parameter, 0, 0, 0);
     }
     else
     {
@@ -1775,21 +1979,14 @@ NTAPI
 ChpeNotifyMemoryAlloc(PVOID Address, SIZE_T Size, ULONG Type,
                       ULONG Prot, BOOLEAN After, NTSTATUS Status)
 {
-    PCHPE_V2_CPU_AREA_INFO CpuArea;
-
     if (After && NT_SUCCESS(Status) && Address && Size &&
         (Type & MEM_RESERVE) && ChpeEcCodeBitmap)
         ChpepClearEcCodeRange((ULONG_PTR)Address, 0, Size);
 
-    if (!ChpeEmulatorLoaded || !pChpeNotifyMemoryAlloc)
-        return;
-
-    CpuArea = ChpepEnterCurrentThreadCallback();
-    if (!CpuArea)
+    if (!ChpeProcessInitialized || !pChpeNotifyMemoryAlloc)
         return;
 
     pChpeNotifyMemoryAlloc(Address, Size, Type, Prot, After, Status);
-    ChpepLeaveCurrentThreadCallback(CpuArea);
 }
 
 /*
@@ -1800,17 +1997,10 @@ NTAPI
 ChpeNotifyMemoryFree(PVOID Address, SIZE_T Size, ULONG FreeType,
                      BOOLEAN After, NTSTATUS Status)
 {
-    PCHPE_V2_CPU_AREA_INFO CpuArea;
-
-    if (!ChpeEmulatorLoaded || !pChpeNotifyMemoryFree)
-        return;
-
-    CpuArea = ChpepEnterCurrentThreadCallback();
-    if (!CpuArea)
+    if (!ChpeProcessInitialized || !pChpeNotifyMemoryFree)
         return;
 
     pChpeNotifyMemoryFree(Address, Size, FreeType, After, Status);
-    ChpepLeaveCurrentThreadCallback(CpuArea);
 }
 
 /*
@@ -1821,17 +2011,10 @@ NTAPI
 ChpeNotifyMemoryProtect(PVOID Address, SIZE_T Size, ULONG NewProt,
                         BOOLEAN After, NTSTATUS Status)
 {
-    PCHPE_V2_CPU_AREA_INFO CpuArea;
-
-    if (!ChpeEmulatorLoaded || !pChpeNotifyMemoryProtect)
-        return;
-
-    CpuArea = ChpepEnterCurrentThreadCallback();
-    if (!CpuArea)
+    if (!ChpeProcessInitialized || !pChpeNotifyMemoryProtect)
         return;
 
     pChpeNotifyMemoryProtect(Address, Size, NewProt, After, Status);
-    ChpepLeaveCurrentThreadCallback(CpuArea);
 }
 
 /*
@@ -1842,13 +2025,10 @@ NTAPI
 ChpeNotifyMapViewOfSection(PVOID Unk1, PVOID Address, PVOID Unk2,
                            SIZE_T Size, ULONG AllocType, ULONG Prot)
 {
-    PCHPE_V2_CPU_AREA_INFO CpuArea;
-    NTSTATUS Status;
-
     if (Address && Size && ChpeEcCodeBitmap)
         ChpepClearEcCodeRange((ULONG_PTR)Address, 0, Size);
 
-    if (!ChpeEmulatorLoaded || !pChpeNotifyMapViewOfSection)
+    if (!ChpeProcessInitialized || !pChpeNotifyMapViewOfSection)
         return STATUS_SUCCESS;
 
     /* FEX treats this callback as an image-map notification. NtMapViewOfSection
@@ -1859,13 +2039,7 @@ ChpeNotifyMapViewOfSection(PVOID Unk1, PVOID Address, PVOID Unk2,
     if (!ChpeRegisterImageCodeRanges(Address))
         return STATUS_INVALID_IMAGE_FORMAT;
 
-    CpuArea = ChpepEnterCurrentThreadCallback();
-    if (!CpuArea)
-        return STATUS_SUCCESS;
-
-    Status = pChpeNotifyMapViewOfSection(Unk1, Address, Unk2, Size, AllocType, Prot);
-    ChpepLeaveCurrentThreadCallback(CpuArea);
-    return Status;
+    return pChpeNotifyMapViewOfSection(Unk1, Address, Unk2, Size, AllocType, Prot);
 }
 
 /*
@@ -1875,22 +2049,15 @@ VOID
 NTAPI
 ChpeNotifyUnmapViewOfSection(PVOID Address, BOOLEAN After, NTSTATUS Status)
 {
-    PCHPE_V2_CPU_AREA_INFO CpuArea;
-
     if (!After && Address && ChpeEcCodeBitmap)
         ChpepClearImageCodeRanges(Address);
     else if (After && !NT_SUCCESS(Status) && Address && ChpeEcCodeBitmap)
         ChpeRegisterImageCodeRanges(Address);
 
-    if (!ChpeEmulatorLoaded || !pChpeNotifyUnmapViewOfSection)
-        return;
-
-    CpuArea = ChpepEnterCurrentThreadCallback();
-    if (!CpuArea)
+    if (!ChpeProcessInitialized || !pChpeNotifyUnmapViewOfSection)
         return;
 
     pChpeNotifyUnmapViewOfSection(Address, After, Status);
-    ChpepLeaveCurrentThreadCallback(CpuArea);
 }
 
 /*
@@ -1900,17 +2067,20 @@ VOID
 NTAPI
 ChpeFlushInstructionCache(const void *Address, SIZE_T Size)
 {
-    PCHPE_V2_CPU_AREA_INFO CpuArea;
-
-    if (!ChpeEmulatorLoaded || !pChpeFlushInstructionCache)
-        return;
-
-    CpuArea = ChpepEnterCurrentThreadCallback();
-    if (!CpuArea)
+    if (!ChpeProcessInitialized || !pChpeFlushInstructionCache)
         return;
 
     pChpeFlushInstructionCache(Address, Size);
-    ChpepLeaveCurrentThreadCallback(CpuArea);
+}
+
+VOID
+NTAPI
+ChpeNotifyMemoryDirty(PVOID Address, SIZE_T Size)
+{
+    if (!ChpeProcessInitialized || !pChpeNotifyMemoryDirty)
+        return;
+
+    pChpeNotifyMemoryDirty(Address, Size);
 }
 
 VOID
@@ -1919,14 +2089,6 @@ ChpeNotifyReadFile(HANDLE FileHandle, PVOID Address, SIZE_T Size, BOOLEAN After,
 {
     if (pChpeNotifyReadFile)
         pChpeNotifyReadFile(FileHandle, Address, Size, After, Status);
-}
-
-VOID
-NTAPI
-ChpeUpdateProcessorInformation(PVOID ProcessorInformation)
-{
-    if (pChpeUpdateProcessorInfo && ProcessorInformation)
-        pChpeUpdateProcessorInfo(ProcessorInformation);
 }
 
 BOOLEAN
@@ -1961,17 +2123,95 @@ ChpeIsProcessorFeaturePresent(ULONG ProcessorFeature)
     return ChpeProcessorFeatures[ProcessorFeature];
 }
 
+VOID
+NTAPI
+ChpeUpdateProcessorInformation(PVOID ProcessorInformation)
+{
+    if (pChpeUpdateProcessorInfo && ProcessorInformation)
+        pChpeUpdateProcessorInfo(ProcessorInformation);
+}
+
 /*
- * ARM64EC emulator cross-process work processing.
- * Stub: CHPEV2_PROCESS_INFO work list is not yet wired.
+ * Dispatch the memory notifications queued by another process and recycle
+ * every consumed entry.  A heavy-flush request supersedes the individual
+ * notifications in the detached batch.
+ *
+ * Adapted from Wine dlls/ntdll/signal_arm64ec.c.
+ * Copyright 2023 Alexandre Julliard.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 VOID
 WINAPI
 ProcessPendingCrossProcessEmulatorWork(VOID)
 {
-    /* Empty stub for now - cross-process work items
-     * (memory alloc/free/protect notifications) are handled
-     * inline by the memory notification hooks in chpewrap.c */
+    PCHPEV2_PROCESS_INFO64 Info = ChpeProcessInfo;
+    PCROSS_PROCESS_WORK_LIST List;
+    PCROSS_PROCESS_WORK_ENTRY Entry;
+    BOOLEAN Flush = FALSE;
+    ULONG Next;
+
+    if (!ChpeProcessInitialized || !Info || !Info->CrossProcessWorkList)
+        return;
+
+    List = (PCROSS_PROCESS_WORK_LIST)(ULONG_PTR)Info->CrossProcessWorkList;
+    Entry = RtlWow64PopAllCrossProcessWorkFromWorkList(&List->work_list, &Flush);
+
+    if (Flush)
+    {
+        if (pChpeFlushInstructionCacheHeavy)
+            pChpeFlushInstructionCacheHeavy(NULL, 0);
+
+        while (Entry)
+        {
+            Next = Entry->next;
+            RtlWow64PushCrossProcessWorkOntoFreeList(&List->free_list, Entry);
+            Entry = Next ? CROSS_PROCESS_LIST_ENTRY(&List->work_list, Next) : NULL;
+        }
+        return;
+    }
+
+    while (Entry)
+    {
+        switch (Entry->id)
+        {
+            case CrossProcessPreVirtualAlloc:
+            case CrossProcessPostVirtualAlloc:
+                if (pChpeNotifyMemoryAlloc)
+                    pChpeNotifyMemoryAlloc((PVOID)(ULONG_PTR)Entry->addr, (SIZE_T)Entry->size, Entry->args[0], Entry->args[1], Entry->id == CrossProcessPostVirtualAlloc, (NTSTATUS)Entry->args[2]);
+                break;
+
+            case CrossProcessPreVirtualFree:
+            case CrossProcessPostVirtualFree:
+                if (pChpeNotifyMemoryFree)
+                    pChpeNotifyMemoryFree((PVOID)(ULONG_PTR)Entry->addr, (SIZE_T)Entry->size, Entry->args[0], Entry->id == CrossProcessPostVirtualFree, (NTSTATUS)Entry->args[1]);
+                break;
+
+            case CrossProcessPreVirtualProtect:
+            case CrossProcessPostVirtualProtect:
+                if (pChpeNotifyMemoryProtect)
+                    pChpeNotifyMemoryProtect((PVOID)(ULONG_PTR)Entry->addr, (SIZE_T)Entry->size, Entry->args[0], Entry->id == CrossProcessPostVirtualProtect, (NTSTATUS)Entry->args[1]);
+                break;
+
+            case CrossProcessFlushCache:
+                if (pChpeFlushInstructionCache)
+                    pChpeFlushInstructionCache((PVOID)(ULONG_PTR)Entry->addr, (SIZE_T)Entry->size);
+                break;
+
+            case CrossProcessFlushCacheHeavy:
+                if (pChpeFlushInstructionCacheHeavy)
+                    pChpeFlushInstructionCacheHeavy((PVOID)(ULONG_PTR)Entry->addr, (SIZE_T)Entry->size);
+                break;
+
+            case CrossProcessMemoryWrite:
+                if (pChpeNotifyMemoryDirty)
+                    pChpeNotifyMemoryDirty((PVOID)(ULONG_PTR)Entry->addr, (SIZE_T)Entry->size);
+                break;
+        }
+
+        Next = Entry->next;
+        RtlWow64PushCrossProcessWorkOntoFreeList(&List->free_list, Entry);
+        Entry = Next ? CROSS_PROCESS_LIST_ENTRY(&List->work_list, Next) : NULL;
+    }
 }
 
 #endif /* _M_ARM64 */
