@@ -49,6 +49,9 @@ VOID NTAPI ChpeRtlCaptureContext(PCONTEXT ContextRecord);
 DECLSPEC_NORETURN VOID NTAPI ChpeRtlRaiseException(PEXCEPTION_RECORD ExceptionRecord);
 DECLSPEC_NORETURN VOID NTAPI ChpeRtlRaiseStatus(NTSTATUS Status);
 ULONG CDECL ChpeDbgPrint(PCCH Format, ...);
+BOOLEAN NTAPI ChpeCanContinueToGuest(VOID);
+DECLSPEC_NORETURN VOID NTAPI ChpeContinueToGuest(PVOID Amd64Context);
+BOOLEAN NTAPI RtlIsEcCode(ULONG_PTR Address);
 
 typedef struct _CHPE_AMD64_SCOPE_TABLE
 {
@@ -631,7 +634,7 @@ ChpeDispatchExceptionNative(PEXCEPTION_RECORD ExceptionRecord, PARM64_NT_CONTEXT
     if (!RtlIsEcCode(EcContext.Pc))
         return ChpeNtContinue(&EcContext.AMD64_Context, FALSE);
 
-    ChpepContextX64ToArm64(NativeContext, &EcContext);
+    ChpepMergeContextX64ToArm64(NativeContext, &EcContext);
     return STATUS_SUCCESS;
 }
 
@@ -1245,11 +1248,24 @@ ChpeRtlInstallFunctionTableCallback(DWORD64 TableIdentifier, DWORD64 BaseAddress
     return ChpepAmd64InstallFunctionTableCallback(TableIdentifier, BaseAddress, Length, Callback, Context, OutOfProcessCallbackDll);
 }
 
+static VOID
+ChpepContinueToGuestIfNeeded(PCONTEXT ContextRecord)
+{
+    if (RtlIsEcCode(((PARM64EC_NT_CONTEXT)ContextRecord)->Pc))
+        return;
+
+    if (!ChpeCanContinueToGuest())
+        return;
+
+    ChpeContinueToGuest(ContextRecord);
+}
+
 NTSTATUS NTAPI
 ChpeNtContinue(PCONTEXT ContextRecord, BOOLEAN Alertable)
 {
     ARM64_NT_CONTEXT ArmContext;
 
+    ChpepContinueToGuestIfNeeded(ContextRecord);
     ChpepContextX64ToArm64(&ArmContext, (PARM64EC_NT_CONTEXT)ContextRecord);
     return NtContinue((PCONTEXT)&ArmContext, Alertable);
 }
@@ -1259,6 +1275,7 @@ ChpeNtContinueEx(PCONTEXT ContextRecord, PKCONTINUE_ARGUMENT ContinueArgument)
 {
     ARM64_NT_CONTEXT ArmContext;
 
+    ChpepContinueToGuestIfNeeded(ContextRecord);
     ChpepContextX64ToArm64(&ArmContext, (PARM64EC_NT_CONTEXT)ContextRecord);
     return NtContinueEx((PCONTEXT)&ArmContext, ContinueArgument);
 }
