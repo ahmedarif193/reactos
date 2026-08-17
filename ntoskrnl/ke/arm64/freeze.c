@@ -51,8 +51,9 @@ KiProcessorFreezeHandler(
 
     {
         ULONG64 Spins = 0;
+        ULONG64 Daif;
 
-        __asm__ __volatile__("msr daifset, #2" ::: "memory");
+        __asm__ __volatile__("mrs %0, daif\n\tmsr daifset, #2" : "=r"(Daif) :: "memory");
 
         for (;;)
         {
@@ -91,7 +92,7 @@ KiProcessorFreezeHandler(
             KeMemoryBarrier();
         }
 
-        __asm__ __volatile__("msr daifclr, #2" ::: "memory");
+        __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
     }
 
     KiRestoreProcessorState(TrapFrame, ExceptionFrame);
