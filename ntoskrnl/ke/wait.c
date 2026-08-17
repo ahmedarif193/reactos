@@ -25,7 +25,9 @@ KiWaitTest(IN PVOID ObjectPointer,
     PKTHREAD WaitThread;
     PKMUTANT FirstObject = ObjectPointer;
     NTSTATUS WaitStatus;
+    BOOLEAN IsQueue;
 
+    IsQueue = ((FirstObject->Header.Type & KOBJECT_TYPE_MASK) == QueueObject);
     WaitList = &FirstObject->Header.WaitListHead;
     WaitEntry = WaitList->Flink;
     while ((FirstObject->Header.SignalState > 0) && (WaitEntry != WaitList))
@@ -33,6 +35,11 @@ KiWaitTest(IN PVOID ObjectPointer,
         WaitBlock = CONTAINING_RECORD(WaitEntry, KWAIT_BLOCK, WaitListEntry);
         WaitThread = WaitBlock->Thread;
         WaitEntry = WaitEntry->Flink;
+
+        /* Dequeue waits consume an entry in KiInsertQueue and must not be
+         * completed as ordinary dispatcher-object waits. */
+        if (IsQueue && (WaitBlock->WaitType == WaitDequeue))
+            continue;
 
         RemoveEntryList(&WaitBlock->WaitListEntry);
         WaitBlock->WaitListEntry.Flink = NULL;
@@ -899,9 +906,6 @@ KeWaitForSingleObject(IN PVOID Object,
         }
         else
         {
-            /* Sanity check */
-            ASSERT((CurrentObject->Header.Type & KOBJECT_TYPE_MASK) != QueueObject);
-
             /* Check if it's a mutant */
             if ((CurrentObject->Header.Type & KOBJECT_TYPE_MASK) == MutantObject)
             {
@@ -959,15 +963,17 @@ KeWaitForSingleObject(IN PVOID Object,
             /* Handle Kernel Queues */
             if (Thread->Queue)
             {
-                /* Wake a waiter on the thread's own queue UNDER THE QUEUE LOCK.
-                 * The caller holds a different object's lock, and
-                 * KiActivateWaiterQueue mutates the queue's wait list, so it must
-                 * hold Queue->Header (else it races KeInsertQueue and corrupts
-                 * the queue wait list). A thread never KeWaitForSingleObject's on
-                 * its own KQUEUE, so this is never the already-held object. */
-                KiAcquireDispatcherObject(&Thread->Queue->Header);
-                KiActivateWaiterQueue(Thread->Queue);
-                KiReleaseDispatcherObject(&Thread->Queue->Header);
+                /* A completion-port thread may wait on its own queue handle. */
+                if (Thread->Queue == (PKQUEUE)CurrentObject)
+                {
+                    KiActivateWaiterQueue(Thread->Queue);
+                }
+                else
+                {
+                    KiAcquireDispatcherObject(&Thread->Queue->Header);
+                    KiActivateWaiterQueue(Thread->Queue);
+                    KiReleaseDispatcherObject(&Thread->Queue->Header);
+                }
             }
 
             /* Serialize APC insertion with the final wait publication. */
@@ -1152,7 +1158,6 @@ KeWaitForMultipleObjects(IN ULONG Count,
                 {
                     /* Get the Current Object */
                     CurrentObject = (PKMUTANT)Object[Index];
-                    ASSERT((CurrentObject->Header.Type & KOBJECT_TYPE_MASK) != QueueObject);
 
                     /* Check if the Object is a mutant */
                     if ((CurrentObject->Header.Type & KOBJECT_TYPE_MASK) == MutantObject)
@@ -1198,7 +1203,6 @@ KeWaitForMultipleObjects(IN ULONG Count,
                 {
                     /* Get the Current Object */
                     CurrentObject = (PKMUTANT)Object[Index];
-                    ASSERT((CurrentObject->Header.Type & KOBJECT_TYPE_MASK) != QueueObject);
 
                     /* Check if we're dealing with a mutant again */
                     if ((CurrentObject->Header.Type & KOBJECT_TYPE_MASK) == MutantObject)
@@ -1288,15 +1292,27 @@ KeWaitForMultipleObjects(IN ULONG Count,
             /* Handle Kernel Queues */
             if (Thread->Queue)
             {
-                /* Wake a waiter on the thread's own queue UNDER THE QUEUE LOCK.
-                 * The caller holds a different object's lock, and
-                 * KiActivateWaiterQueue mutates the queue's wait list, so it must
-                 * hold Queue->Header (else it races KeInsertQueue and corrupts
-                 * the queue wait list). A thread never KeWaitForSingleObject's on
-                 * its own KQUEUE, so this is never the already-held object. */
-                KiAcquireDispatcherObject(&Thread->Queue->Header);
-                KiActivateWaiterQueue(Thread->Queue);
-                KiReleaseDispatcherObject(&Thread->Queue->Header);
+                BOOLEAN QueueLockHeld = FALSE;
+
+                for (Index = 0; Index < Count; Index++)
+                {
+                    if (Object[Index] == Thread->Queue)
+                    {
+                        QueueLockHeld = TRUE;
+                        break;
+                    }
+                }
+
+                if (QueueLockHeld)
+                {
+                    KiActivateWaiterQueue(Thread->Queue);
+                }
+                else
+                {
+                    KiAcquireDispatcherObject(&Thread->Queue->Header);
+                    KiActivateWaiterQueue(Thread->Queue);
+                    KiReleaseDispatcherObject(&Thread->Queue->Header);
+                }
             }
 
             /* Timer expiration holds the timer object while acquiring the
