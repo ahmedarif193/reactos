@@ -36,6 +36,71 @@
 .equ ARM64_IRQ_FRAME_SIZE,            0x340
 
 /*
+ * Dispatch hardware interrupts on the per-processor ISR stack.
+ * The vector has already captured the interrupted state in IrqFrame, so x9-x11
+ * are available as scratch registers here.  Nested interrupts already running
+ * within the ISR stack range stay on their current stack.  Only the outermost
+ * interrupt may run dispatcher exit work after returning to the thread stack.
+ */
+    .global KiArm64InterruptDispatchOnIsrStack
+    .seh_proc KiArm64InterruptDispatchOnIsrStack
+KiArm64InterruptDispatchOnIsrStack:
+    stp x29, x30, [sp, #-16]!
+    .seh_save_fplr_x 16
+    mov x29, sp
+    .seh_set_fp
+    .seh_endprologue
+
+    mrs x9, tpidr_el1
+    ldr x9, [x9, #PcCurrentPrcb]
+    cbz x9, .Ldispatch_interrupt_current_stack
+    ldrb w11, [x9, #PbNestingLevel]
+    add w11, w11, #1
+    strb w11, [x9, #PbNestingLevel]
+    ldr x10, [x9, #PbIsrStack]
+    cbz x10, .Ldispatch_interrupt_current_stack
+    sub x11, x10, #KERNEL_STACK_SIZE
+    cmp x29, x11
+    b.lo .Ldispatch_interrupt_switch_stack
+    cmp x29, x10
+    b.lo .Ldispatch_interrupt_current_stack
+
+.Ldispatch_interrupt_switch_stack:
+    mov sp, x10
+    sub sp, sp, #16
+
+.Ldispatch_interrupt_current_stack:
+    bl KiArm64InterruptDispatchEntry
+    mov sp, x29
+    mov w12, w0
+
+    mrs x9, tpidr_el1
+    ldr x9, [x9, #PcCurrentPrcb]
+    cbz x9, .Ldispatch_interrupt_no_prcb
+    ldrb w11, [x9, #PbNestingLevel]
+    cmp w11, #1
+    b.ls .Ldispatch_interrupt_outermost
+    sub w11, w11, #1
+    strb w11, [x9, #PbNestingLevel]
+    b .Ldispatch_interrupt_done
+
+.Ldispatch_interrupt_outermost:
+    strb wzr, [x9, #PbNestingLevel]
+    mov w0, w12
+    bl KiArm64InterruptDispatchExit
+    b .Ldispatch_interrupt_done
+
+.Ldispatch_interrupt_no_prcb:
+    mov w0, w12
+    cbz w0, .Ldispatch_interrupt_done
+    bl KiArm64InterruptDispatchExit
+
+.Ldispatch_interrupt_done:
+    ldp x29, x30, [sp], #16
+    ret
+    .seh_endproc
+
+/*
  * The ARM64 compiler can use FP/SIMD registers for ordinary C struct copies and
  * zeroing. Preserve Q0-Q31 plus FPCR/FPSR around exception/interrupt C handlers
  * so an asynchronous kernel entry cannot corrupt interrupted user or kernel
@@ -96,9 +161,10 @@
 .endm
 
 /* Preserve the nonvolatile GPRs that are otherwise invisible to the C IRQ
- * dispatcher. X20-X21 and FP/LR already have slots in the original frame. */
+ * dispatcher. X20-X21 and FP/LR already have slots in the original frame.
+ * Keep 0x330..0x33f untouched: it is the interrupted SP's 16-byte red zone. */
 .macro ARM64_SAVE_IRQ_EXTRA Base
-    add x9, \Base, #0x300
+    add x9, \Base, #0x2F0
     stp x22, x23, [x9, #0x00]
     stp x24, x25, [x9, #0x10]
     stp x26, x27, [x9, #0x20]
@@ -106,7 +172,7 @@
 .endm
 
 .macro ARM64_RESTORE_IRQ_EXTRA Base
-    add x9, \Base, #0x300
+    add x9, \Base, #0x2F0
     ldp x22, x23, [x9, #0x00]
     ldp x24, x25, [x9, #0x10]
     ldp x26, x27, [x9, #0x20]
@@ -737,7 +803,7 @@ KiArm64PermVectorIrqSp0_Handler:
     ARM64_SAVE_IRQ_EXTRA sp
     mov w0, #1
     mov x1, sp
-    bl KiArm64InterruptDispatchEntry
+    bl KiArm64InterruptDispatchOnIsrStack
     /*
      * CRITICAL: Mask ALL exceptions before restoring ELR_EL1/SPSR_EL1.
      * If an IRQ fires between msr elr_el1 and eret, the hardware overwrites
@@ -799,7 +865,7 @@ KiArm64PermVectorFiqSp0_Handler:
     ARM64_SAVE_IRQ_EXTRA sp
     mov w0, #2
     mov x1, sp
-    bl KiArm64InterruptDispatchEntry
+    bl KiArm64InterruptDispatchOnIsrStack
     msr daifset, #0xF
     isb
     ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
@@ -854,7 +920,7 @@ KiArm64PermVectorIrqSpx_Handler:
     ARM64_SAVE_IRQ_EXTRA sp
     mov w0, #5
     mov x1, sp
-    bl KiArm64InterruptDispatchEntry
+    bl KiArm64InterruptDispatchOnIsrStack
     msr daifset, #0xF
     isb
     ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
@@ -909,7 +975,7 @@ KiArm64PermVectorFiqSpx_Handler:
     ARM64_SAVE_IRQ_EXTRA sp
     mov w0, #6
     mov x1, sp
-    bl KiArm64InterruptDispatchEntry
+    bl KiArm64InterruptDispatchOnIsrStack
     msr daifset, #0xF
     isb
     ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
@@ -983,7 +1049,7 @@ KiArm64PermVectorIrqLowerA64_Handler:
 
     mov w0, #9
     mov x1, sp
-    bl KiArm64InterruptDispatchEntry
+    bl KiArm64InterruptDispatchOnIsrStack
     msr daifset, #0xF
     isb
     ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
@@ -1043,7 +1109,7 @@ KiArm64PermVectorFiqLowerA64_Handler:
 
     mov w0, #10
     mov x1, sp
-    bl KiArm64InterruptDispatchEntry
+    bl KiArm64InterruptDispatchOnIsrStack
     msr daifset, #0xF
     isb
     ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
@@ -1102,7 +1168,7 @@ KiArm64PermVectorIrqLowerA32_Handler:
     ARM64_SAVE_IRQ_EXTRA sp
     mov w0, #13
     mov x1, sp
-    bl KiArm64InterruptDispatchEntry
+    bl KiArm64InterruptDispatchOnIsrStack
     msr daifset, #0xF
     isb
     ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
@@ -1161,7 +1227,7 @@ KiArm64PermVectorFiqLowerA32_Handler:
     ARM64_SAVE_IRQ_EXTRA sp
     mov w0, #14
     mov x1, sp
-    bl KiArm64InterruptDispatchEntry
+    bl KiArm64InterruptDispatchOnIsrStack
     msr daifset, #0xF
     isb
     ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR

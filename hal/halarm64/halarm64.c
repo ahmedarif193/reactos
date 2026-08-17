@@ -3310,16 +3310,23 @@ FASTCALL
 HalRequestSoftwareInterrupt(
     _In_ KIRQL SoftwareInterruptRequested)
 {
+    PKIPCR Pcr;
     ULONG SgiId;
     KIRQL CurrentIrql;
+
+    Pcr = KeGetPcr();
 
     if (SoftwareInterruptRequested == APC_LEVEL)
     {
         SgiId = HAL_ARM64_SGI_APC;
+        if (Pcr != NULL)
+            Pcr->ApcInterrupt = 1;
     }
     else if (SoftwareInterruptRequested == DISPATCH_LEVEL)
     {
         SgiId = HAL_ARM64_SGI_DPC;
+        if (Pcr != NULL)
+            Pcr->DispatchInterrupt = 1;
     }
     else
     {
@@ -3761,12 +3768,18 @@ FASTCALL
 HalClearSoftwareInterrupt(
     _In_ KIRQL Request)
 {
+    PKIPCR Pcr = KeGetPcr();
+
     if (Request == APC_LEVEL)
     {
+        if (Pcr != NULL)
+            Pcr->ApcInterrupt = 0;
         HalpArm64ClearSelfSgi(HAL_ARM64_SGI_APC);
     }
     else if (Request == DISPATCH_LEVEL)
     {
+        if (Pcr != NULL)
+            Pcr->DispatchInterrupt = 0;
         HalpArm64ClearSelfSgi(HAL_ARM64_SGI_DPC);
     }
 }

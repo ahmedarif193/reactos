@@ -816,6 +816,7 @@ typedef struct _ARM64_LOADER_BLOCK
     ULONG PsciFlags;
     ULONG_PTR PanicStack;
     ULONG_PTR InterruptStack;
+    ULONG_PTR DpcStack;
     ULONG_PTR PcrPage;
     ULONG_PTR PdrPage;
     ULONGLONG EarlyUartAddress;
