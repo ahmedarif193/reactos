@@ -487,6 +487,7 @@ typedef struct _PS_CREATE_INFO
 //
 #define KPSF_AUTO_ALIGNMENT_BIT                 0
 #define KPSF_DISABLE_BOOST_BIT                  1
+#define KPSF_CHECK_STACK_EXTENTS_BIT            5
 
 //
 // Process Flags
@@ -1759,6 +1760,7 @@ typedef struct _EPROCESS
             ULONG DefaultPagePriority:3;
             ULONG ProcessDeleteSelf:1;
             ULONG ProcessVerifierTarget:1;
+            ULONG RestrictSetThreadContext:1;
         };
         ULONG Flags2;
     };

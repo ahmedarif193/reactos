@@ -249,6 +249,13 @@ KeSetAutoAlignmentProcess(
     IN BOOLEAN Enable
 );
 
+BOOLEAN
+NTAPI
+KeSetCheckStackExtentsProcess(
+    IN PKPROCESS Process,
+    IN BOOLEAN Enable
+);
+
 KAFFINITY
 NTAPI
 KeSetAffinityProcess(
