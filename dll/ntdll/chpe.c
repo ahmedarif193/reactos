@@ -234,6 +234,24 @@ ChpepLeaveCurrentThreadCallback(PCHPE_V2_CPU_AREA_INFO CpuArea)
     CpuArea->InSyscallCallback = FALSE;
 }
 
+PVOID
+NTAPI
+ChpeEnterEmulatorCallback(VOID)
+{
+    if (!ChpeIsEmulatorReady())
+        return NULL;
+
+    return ChpepEnterCurrentThreadCallback();
+}
+
+VOID
+NTAPI
+ChpeLeaveEmulatorCallback(PVOID CallbackToken)
+{
+    if (CallbackToken)
+        ChpepLeaveCurrentThreadCallback(CallbackToken);
+}
+
 static
 PVOID *
 ChpepGetPebEcCodeBitmapSlot(VOID)
@@ -1261,6 +1279,28 @@ ChpeCleanupThread(HANDLE ThreadHandle, LONG ExitCode)
 
     pChpeThreadTerm(ThreadHandle, ExitCode);
     ChpepFreeCurrentCpuArea();
+}
+
+/*
+ * Prepare an explicitly terminated thread while its TEB and emulator state
+ * are still addressable. Normal self-exit remains handled by LdrShutdownThread.
+ */
+NTSTATUS
+NTAPI
+ChpePrepareThreadTermination(HANDLE ThreadHandle, LONG ExitCode)
+{
+    if (!ChpeIsEmulatorReady() || !pChpeThreadTerm)
+        return STATUS_SUCCESS;
+
+    return pChpeThreadTerm(ThreadHandle, ExitCode);
+}
+
+VOID
+NTAPI
+ChpeNotifyProcessTermination(HANDLE ProcessHandle, BOOLEAN After, NTSTATUS Status)
+{
+    if (ChpeIsEmulatorReady() && pChpeProcessTerm)
+        pChpeProcessTerm(ProcessHandle, After, Status);
 }
 
 /*

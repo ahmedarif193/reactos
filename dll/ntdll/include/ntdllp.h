@@ -308,6 +308,16 @@ NTAPI
 ChpeIsEmulatorReady(
     VOID);
 
+PVOID
+NTAPI
+ChpeEnterEmulatorCallback(
+    VOID);
+
+VOID
+NTAPI
+ChpeLeaveEmulatorCallback(
+    PVOID CallbackToken);
+
 NTSTATUS
 NTAPI
 ChpeInitializeProcess(
@@ -323,6 +333,19 @@ NTAPI
 ChpeCleanupThread(
     HANDLE ThreadHandle,
     LONG ExitCode);
+
+NTSTATUS
+NTAPI
+ChpePrepareThreadTermination(
+    HANDLE ThreadHandle,
+    LONG ExitCode);
+
+VOID
+NTAPI
+ChpeNotifyProcessTermination(
+    HANDLE ProcessHandle,
+    BOOLEAN After,
+    NTSTATUS Status);
 
 VOID
 NTAPI
