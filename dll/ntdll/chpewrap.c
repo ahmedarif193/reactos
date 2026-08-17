@@ -181,4 +181,46 @@ NtFlushInstructionCache(HANDLE ProcessHandle,
     return Status;
 }
 
+NTSTATUS
+NTAPI
+NtTerminateProcess(HANDLE ProcessHandle, NTSTATUS ExitStatus)
+{
+    PVOID CallbackToken;
+    NTSTATUS Status;
+
+    if (ProcessHandle)
+        return ZwTerminateProcess(ProcessHandle, ExitStatus);
+
+    CallbackToken = ChpeEnterEmulatorCallback();
+    if (!CallbackToken)
+        return ZwTerminateProcess(ProcessHandle, ExitStatus);
+
+    ChpeNotifyProcessTermination(ProcessHandle, FALSE, 0);
+    Status = ZwTerminateProcess(ProcessHandle, ExitStatus);
+    ChpeNotifyProcessTermination(ProcessHandle, TRUE, Status);
+    ChpeLeaveEmulatorCallback(CallbackToken);
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+NtTerminateThread(HANDLE ThreadHandle, NTSTATUS ExitStatus)
+{
+    PVOID CallbackToken;
+    NTSTATUS Status;
+
+    CallbackToken = ChpeEnterEmulatorCallback();
+    if (!CallbackToken)
+        return ZwTerminateThread(ThreadHandle, ExitStatus);
+
+    Status = ChpePrepareThreadTermination(ThreadHandle, ExitStatus);
+    if (!NT_SUCCESS(Status))
+        DPRINT1("CHPE: ThreadTerm failed before NtTerminateThread, Status = 0x%08lx\n", Status);
+
+    Status = ZwTerminateThread(ThreadHandle, ExitStatus);
+
+    ChpeLeaveEmulatorCallback(CallbackToken);
+    return Status;
+}
+
 #endif /* _M_ARM64 */
