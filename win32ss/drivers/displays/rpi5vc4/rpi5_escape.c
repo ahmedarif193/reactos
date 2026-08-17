@@ -5,8 +5,7 @@
  * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
  */
 
-#include "framebuf.h"
-#include <reactos/rpi5vc4_xpdm.h>
+#include "rpi5_gdi.h"
 
 #define RPI5VC4_OPENGL_ICD_VERSION 1
 #define RPI5VC4_OPENGL_ICD_DRIVER_VERSION 1
@@ -69,7 +68,11 @@ DrvEscape(
 
         RequestedEscape = *(PULONG)pvIn;
         if (RequestedEscape == RPI5VC4_ESCAPE_RENDER_CLEAR ||
-            RequestedEscape == RPI5VC4_ESCAPE_RENDER_TRIANGLE)
+            RequestedEscape == RPI5VC4_ESCAPE_RENDER_TRIANGLE ||
+            RequestedEscape == RPI5VC4_ESCAPE_RENDER_BATCH ||
+            RequestedEscape == RPI5VC4_ESCAPE_UPLOAD_TEXTURE ||
+            RequestedEscape == RPI5VC4_ESCAPE_RENDER_GRAPH ||
+            RequestedEscape == RPI5VC4_ESCAPE_READ_GRAPH)
             return Rpi5Vc4V3dExecutionSupported(Device) ? 1 : 0;
 
         if (RequestedEscape == OPENGL_GETINFO)
@@ -161,6 +164,73 @@ DrvEscape(
     {
         if (EngDeviceIoControl(Device->hDriver,
                                IOCTL_VIDEO_RPI5VC4_RENDER_TRIANGLE,
+                               pvIn,
+                               cjIn,
+                               pvOut,
+                               cjOut,
+                               &Returned) == 0)
+        {
+            return Returned;
+        }
+    }
+    else if (iEsc == RPI5VC4_ESCAPE_RENDER_BATCH &&
+             pvIn != NULL &&
+             cjIn >= FIELD_OFFSET(RPI5VC4_V3D_BATCH_REQUEST, Vertices) &&
+             cjOut >= FIELD_OFFSET(RPI5VC4_V3D_BATCH_RESULT, Pixels))
+    {
+        if (EngDeviceIoControl(Device->hDriver,
+                               IOCTL_VIDEO_RPI5VC4_RENDER_BATCH,
+                               pvIn,
+                               cjIn,
+                               pvOut,
+                               cjOut,
+                               &Returned) == 0)
+        {
+            return Returned;
+        }
+    }
+    else if (iEsc == RPI5VC4_ESCAPE_UPLOAD_TEXTURE &&
+             pvIn != NULL &&
+             cjIn >= FIELD_OFFSET(RPI5VC4_V3D_TEXTURE_UPLOAD_REQUEST,
+                                  Pixels) &&
+             cjOut >= sizeof(RPI5VC4_V3D_TEXTURE_UPLOAD_RESULT))
+    {
+        if (EngDeviceIoControl(Device->hDriver,
+                               IOCTL_VIDEO_RPI5VC4_UPLOAD_TEXTURE,
+                               pvIn,
+                               cjIn,
+                               pvOut,
+                               cjOut,
+                               &Returned) == 0)
+        {
+            return Returned;
+        }
+    }
+    else if (iEsc == RPI5VC4_ESCAPE_RENDER_GRAPH &&
+             pvIn != NULL &&
+             cjIn >= FIELD_OFFSET(RPI5VC4_V3D_RENDER_GRAPH_REQUEST,
+                                  Pixels) &&
+             cjOut >= sizeof(RPI5VC4_V3D_RENDER_GRAPH_RESULT))
+    {
+        if (EngDeviceIoControl(Device->hDriver,
+                               IOCTL_VIDEO_RPI5VC4_RENDER_GRAPH,
+                               pvIn,
+                               cjIn,
+                               pvOut,
+                               cjOut,
+                               &Returned) == 0)
+        {
+            return Returned;
+        }
+    }
+    else if (iEsc == RPI5VC4_ESCAPE_READ_GRAPH &&
+             pvIn != NULL &&
+             cjIn >= sizeof(RPI5VC4_V3D_READ_GRAPH_REQUEST) &&
+             cjOut >= FIELD_OFFSET(RPI5VC4_V3D_READ_GRAPH_RESULT,
+                                   Pixels))
+    {
+        if (EngDeviceIoControl(Device->hDriver,
+                               IOCTL_VIDEO_RPI5VC4_READ_GRAPH,
                                pvIn,
                                cjIn,
                                pvOut,
