@@ -298,6 +298,7 @@ IopCreateObjectTypes(VOID)
     ObjectTypeInitializer.InvalidAttributes |= OBJ_PERMANENT;
     ObjectTypeInitializer.GenericMapping = IopCompletionMapping;
     ObjectTypeInitializer.DeleteProcedure = IopDeleteIoCompletion;
+    ObjectTypeInitializer.UseDefaultObject = FALSE;
     if (!NT_SUCCESS(ObCreateObjectType(&Name,
                                        &ObjectTypeInitializer,
                                        NULL,
