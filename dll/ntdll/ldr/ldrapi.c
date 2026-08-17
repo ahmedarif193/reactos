@@ -335,6 +335,8 @@ LdrLoadDll(
 #endif
 
     Status = LdrpApplyFileNameRedirection(DllName, &LdrApiDefaultExtension, &StaticString, &DynamicString, &DllName, &RedirectedDll, &ApiSetRedirected);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
 
 #if defined(_M_ARM64)
     /* API-set resolution selects a host name, not its process architecture.
