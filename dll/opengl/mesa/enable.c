@@ -385,7 +385,18 @@ static void gl_enable( GLcontext* ctx, GLenum cap, GLboolean state )
             }
             ctx->NewState |= (NEW_RASTER_OPS | NEW_TEXTURING);
          }
-	 break;
+		 break;
+      case GL_TEXTURE_3D:
+         if (ctx->Visual->RGBAflag) {
+            if (state) {
+               ctx->Texture.Enabled |= TEXTURE_3D;
+            }
+            else {
+               ctx->Texture.Enabled &= (~TEXTURE_3D);
+            }
+            ctx->NewState |= (NEW_RASTER_OPS | NEW_TEXTURING);
+         }
+		 break;
       case GL_TEXTURE_GEN_Q:
          if (state) {
             ctx->Texture.TexGenEnabled |= Q_BIT;
@@ -576,7 +587,9 @@ GLboolean gl_IsEnabled( GLcontext* ctx, GLenum cap )
       case GL_TEXTURE_1D:
 	 return (ctx->Texture.Enabled & TEXTURE_1D) ? GL_TRUE : GL_FALSE;
       case GL_TEXTURE_2D:
-	 return (ctx->Texture.Enabled & TEXTURE_2D) ? GL_TRUE : GL_FALSE;
+		 return (ctx->Texture.Enabled & TEXTURE_2D) ? GL_TRUE : GL_FALSE;
+      case GL_TEXTURE_3D:
+		 return (ctx->Texture.Enabled & TEXTURE_3D) ? GL_TRUE : GL_FALSE;
       case GL_TEXTURE_GEN_Q:
 	 return (ctx->Texture.TexGenEnabled & Q_BIT) ? GL_TRUE : GL_FALSE;
       case GL_TEXTURE_GEN_R:
@@ -649,4 +662,3 @@ void gl_DisableClientState( GLcontext *ctx, GLenum cap )
 {
    gl_client_state( ctx, cap, GL_FALSE );
 }
-

@@ -376,16 +376,17 @@ image_to_texture( GLcontext *ctx, const struct gl_image *image,
 {
    GLint components;
    struct gl_texture_image *texImage;
-   GLint numPixels, pixel;
+   size_t numPixels, pixel;
    GLboolean scaleOrBias;
 
    assert(image);
    assert(image->Width>0);
    assert(image->Height>0);
+   assert(image->Depth>0);
 
    /*   internalFormat = decode_internal_format(internalFormat);*/
    components = components_in_intformat(internalFormat);
-   numPixels = image->Width * image->Height;
+   numPixels = (size_t) image->Width * image->Height * image->Depth;
 
    texImage = gl_alloc_texture_image();
    if (!texImage)
@@ -396,6 +397,7 @@ image_to_texture( GLcontext *ctx, const struct gl_image *image,
    texImage->Border = border;
    texImage->Width = image->Width;
    texImage->Height = image->Height;
+   texImage->Depth = image->Depth;
    texImage->Width2 = image->Width - 2*border;
    texImage->WidthLog2 = floor_logbase2(texImage->Width2);
    if (image->Height==1)  /* 1-D texture */
@@ -406,7 +408,17 @@ image_to_texture( GLcontext *ctx, const struct gl_image *image,
    }
    if (image->Height==1)
       texImage->Height2 = 1;
-   texImage->MaxLog2 = MAX2( texImage->WidthLog2, texImage->HeightLog2 );
+   if (image->Depth==1) {
+      texImage->Depth2 = 1;
+      texImage->DepthLog2 = 0;
+   }
+   else {
+      texImage->Depth2 = image->Depth - 2*border;
+      texImage->DepthLog2 = floor_logbase2(texImage->Depth2);
+   }
+   texImage->MaxLog2 = MAX2( texImage->WidthLog2,
+                             MAX2( texImage->HeightLog2,
+                                   texImage->DepthLog2 ) );
    texImage->Data = (GLubyte *) malloc( numPixels * components );
 
    if (!texImage->Data) {
@@ -436,14 +448,15 @@ image_to_texture( GLcontext *ctx, const struct gl_image *image,
             GLint gMask = ctx->Pixel.MapItoGsize-1;
             GLint bMask = ctx->Pixel.MapItoBsize-1;
             GLint aMask = ctx->Pixel.MapItoAsize-1;
-            GLint i, j;
+            GLint i, j, d;
             GLubyte *srcPtr = (GLubyte *) image->Data;
 
             assert( image->Format==GL_COLOR_INDEX );
 
-            for (j=0; j<image->Height; j++) {
-               GLubyte bitMask = 128;
-               for (i=0; i<image->Width; i++) {
+            for (d=0; d<image->Depth; d++) {
+               for (j=0; j<image->Height; j++) {
+                  GLubyte bitMask = 128;
+                  for (i=0; i<image->Width; i++) {
                   GLint index;
                   GLubyte red, green, blue, alpha;
 
@@ -468,7 +481,8 @@ image_to_texture( GLcontext *ctx, const struct gl_image *image,
                   alpha = (GLint) (ctx->Pixel.MapItoA[index & aMask] * 255.0F);
 
                   /* store texel (components are GLubytes in [0,255]) */
-                  pixel = j * image->Width + i;
+                  pixel = ((size_t) d * image->Height + j) *
+                          image->Width + i;
                   switch (texImage->Format) {
                      case GL_ALPHA:
                         texImage->Data[pixel] = alpha;
@@ -498,9 +512,10 @@ image_to_texture( GLcontext *ctx, const struct gl_image *image,
                         gl_problem(ctx,"Bad format in image_to_texture");
                         return NULL;
                   }
-               }
-               if (bitMask!=128) {
-                  srcPtr++;
+                  }
+                  if (bitMask!=128) {
+                     srcPtr++;
+                  }
                }
             }
          }
@@ -702,10 +717,22 @@ image_to_texture( GLcontext *ctx, const struct gl_image *image,
                   blue  = ((GLfloat*) image->Data)[pixel*3+2];
                   alpha = 1.0;
                   break;
+               case GL_BGR_EXT:
+                  blue  = ((GLfloat*) image->Data)[pixel*3+0];
+                  green = ((GLfloat*) image->Data)[pixel*3+1];
+                  red   = ((GLfloat*) image->Data)[pixel*3+2];
+                  alpha = 1.0;
+                  break;
                case GL_RGBA:
                   red   = ((GLfloat*) image->Data)[pixel*4+0];
                   green = ((GLfloat*) image->Data)[pixel*4+1];
                   blue  = ((GLfloat*) image->Data)[pixel*4+2];
+                  alpha = ((GLfloat*) image->Data)[pixel*4+3];
+                  break;
+               case GL_BGRA_EXT:
+                  blue  = ((GLfloat*) image->Data)[pixel*4+0];
+                  green = ((GLfloat*) image->Data)[pixel*4+1];
+                  red   = ((GLfloat*) image->Data)[pixel*4+2];
                   alpha = ((GLfloat*) image->Data)[pixel*4+3];
                   break;
                case GL_RED:
@@ -832,11 +859,11 @@ make_null_texture( GLcontext *ctx, GLenum internalFormat,
 {
    GLint components;
    struct gl_texture_image *texImage;
-   GLint numPixels;
+   size_t numPixels;
 
    /*internalFormat = decode_internal_format(internalFormat);*/
    components = components_in_intformat(internalFormat);
-   numPixels = width * height * depth;
+   numPixels = (size_t) width * height * depth;
 
    texImage = gl_alloc_texture_image();
    if (!texImage)
@@ -847,6 +874,7 @@ make_null_texture( GLcontext *ctx, GLenum internalFormat,
    texImage->Border = border;
    texImage->Width = width;
    texImage->Height = height;
+   texImage->Depth = depth;
    texImage->Width2 = width - 2*border;
    texImage->WidthLog2 = floor_logbase2(texImage->Width2);
    if (height==1)  /* 1-D texture */
@@ -857,7 +885,17 @@ make_null_texture( GLcontext *ctx, GLenum internalFormat,
    }
    if (height==1)
       texImage->Height2 = 1;
-   texImage->MaxLog2 = MAX2( texImage->WidthLog2, texImage->HeightLog2 );
+   if (depth==1) {
+      texImage->Depth2 = 1;
+      texImage->DepthLog2 = 0;
+   }
+   else {
+      texImage->Depth2 = depth - 2*border;
+      texImage->DepthLog2 = floor_logbase2(texImage->Depth2);
+   }
+   texImage->MaxLog2 = MAX2( texImage->WidthLog2,
+                             MAX2( texImage->HeightLog2,
+                                   texImage->DepthLog2 ) );
 
    /* XXX should we really allocate memory for the image or let it be NULL? */
    /*texImage->Data = NULL;*/
@@ -883,20 +921,35 @@ make_null_texture( GLcontext *ctx, GLenum internalFormat,
       };
 
       GLubyte *imgPtr = texImage->Data;
-      GLint i, j, k;
-      for (i=0;i<height;i++) {
-         GLint srcRow = 7 - i % 8;
-         for (j=0;j<width;j++) {
-            GLint srcCol = j % 32;
-            GLubyte texel = (message[srcRow][srcCol]=='X') ? 255 : 70;
-            for (k=0;k<components;k++) {
-               *imgPtr++ = texel;
+      GLint d, i, j, k;
+      for (d=0;d<depth;d++) {
+         for (i=0;i<height;i++) {
+            GLint srcRow = 7 - i % 8;
+            for (j=0;j<width;j++) {
+               GLint srcCol = j % 32;
+               GLubyte texel = (message[srcRow][srcCol]=='X') ? 255 : 70;
+               for (k=0;k<components;k++) {
+                  *imgPtr++ = texel;
+               }
             }
          }
       }
    }
 
    return texImage;
+}
+
+
+
+static GLboolean packed_type_error_check( GLcontext *ctx, GLenum format,
+                                          GLenum type, const char *where )
+{
+   if (gl_sizeof_packed_type(type) &&
+       !gl_packed_type_matches_format(type, format)) {
+      gl_error(ctx, GL_INVALID_OPERATION, where);
+      return GL_TRUE;
+   }
+   return GL_FALSE;
 }
 
 
@@ -966,13 +1019,35 @@ static GLboolean texture_1d_error_check( GLcontext *ctx, GLenum target,
       case GL_BYTE:
       case GL_UNSIGNED_SHORT:
       case GL_SHORT:
+      case GL_UNSIGNED_INT:
+      case GL_INT:
       case GL_FLOAT:
+      case GL_BITMAP:
+      case GL_UNSIGNED_BYTE_3_3_2:
+      case GL_UNSIGNED_BYTE_2_3_3_REV:
+      case GL_UNSIGNED_SHORT_5_6_5:
+      case GL_UNSIGNED_SHORT_5_6_5_REV:
+      case GL_UNSIGNED_SHORT_4_4_4_4:
+      case GL_UNSIGNED_SHORT_4_4_4_4_REV:
+      case GL_UNSIGNED_SHORT_5_5_5_1:
+      case GL_UNSIGNED_SHORT_1_5_5_5_REV:
+      case GL_UNSIGNED_INT_8_8_8_8:
+      case GL_UNSIGNED_INT_8_8_8_8_REV:
+      case GL_UNSIGNED_INT_10_10_10_2:
+      case GL_UNSIGNED_INT_2_10_10_10_REV:
          /* OK */
          break;
       default:
          gl_error( ctx, GL_INVALID_ENUM, "glTexImage1D(type)" );
          return GL_TRUE;
    }
+   if (type==GL_BITMAP && format!=GL_COLOR_INDEX) {
+      gl_error(ctx, GL_INVALID_ENUM, "glTexImage1D(format/type)");
+      return GL_TRUE;
+   }
+   if (packed_type_error_check(ctx, format, type,
+                               "glTexImage1D(format/type)"))
+      return GL_TRUE;
    return GL_FALSE;
 }
 
@@ -1057,12 +1132,154 @@ static GLboolean texture_2d_error_check( GLcontext *ctx, GLenum target,
       case GL_UNSIGNED_INT:
       case GL_INT:
       case GL_FLOAT:
+      case GL_BITMAP:
+      case GL_UNSIGNED_BYTE_3_3_2:
+      case GL_UNSIGNED_BYTE_2_3_3_REV:
+      case GL_UNSIGNED_SHORT_5_6_5:
+      case GL_UNSIGNED_SHORT_5_6_5_REV:
+      case GL_UNSIGNED_SHORT_4_4_4_4:
+      case GL_UNSIGNED_SHORT_4_4_4_4_REV:
+      case GL_UNSIGNED_SHORT_5_5_5_1:
+      case GL_UNSIGNED_SHORT_1_5_5_5_REV:
+      case GL_UNSIGNED_INT_8_8_8_8:
+      case GL_UNSIGNED_INT_8_8_8_8_REV:
+      case GL_UNSIGNED_INT_10_10_10_2:
+      case GL_UNSIGNED_INT_2_10_10_10_REV:
          /* OK */
          break;
       default:
          gl_error( ctx, GL_INVALID_ENUM, "glTexImage2D(type)" );
          return GL_TRUE;
    }
+   if (type==GL_BITMAP && format!=GL_COLOR_INDEX) {
+      gl_error(ctx, GL_INVALID_ENUM, "glTexImage2D(format/type)");
+      return GL_TRUE;
+   }
+   if (packed_type_error_check(ctx, format, type,
+                               "glTexImage2D(format/type)"))
+      return GL_TRUE;
+   return GL_FALSE;
+}
+
+
+
+/*
+ * Test glTexImage3D() parameters for errors.
+ * Return:  GL_TRUE = an error was detected, GL_FALSE = no errors
+ */
+static GLboolean texture_3d_error_check( GLcontext *ctx, GLenum target,
+                                         GLint level, GLenum internalFormat,
+                                         GLenum format, GLenum type,
+                                         GLint width, GLint height,
+                                         GLint depth, GLint border )
+{
+   GLint iformat;
+
+   if (target!=GL_TEXTURE_3D && target!=GL_PROXY_TEXTURE_3D) {
+      gl_error( ctx, GL_INVALID_ENUM, "glTexImage3D(target)" );
+      return GL_TRUE;
+   }
+   if (level<0 || level>=MAX_TEXTURE_LEVELS) {
+      gl_error( ctx, GL_INVALID_VALUE, "glTexImage3D(level)" );
+      return GL_TRUE;
+   }
+   iformat = decode_internal_format( internalFormat );
+   if (iformat<0) {
+      gl_error( ctx, GL_INVALID_VALUE, "glTexImage3D(internalFormat)" );
+      return GL_TRUE;
+   }
+   if (border!=0 && border!=1) {
+      if (target!=GL_PROXY_TEXTURE_3D) {
+         gl_error( ctx, GL_INVALID_VALUE, "glTexImage3D(border)" );
+      }
+      return GL_TRUE;
+   }
+   if (width<2*border
+       || width>(MAX_TEXTURE_SIZE >> level)+2*border) {
+      if (target!=GL_PROXY_TEXTURE_3D) {
+         gl_error( ctx, GL_INVALID_VALUE, "glTexImage3D(width)" );
+      }
+      return GL_TRUE;
+   }
+   if (height<2*border
+       || height>(MAX_TEXTURE_SIZE >> level)+2*border) {
+      if (target!=GL_PROXY_TEXTURE_3D) {
+         gl_error( ctx, GL_INVALID_VALUE, "glTexImage3D(height)" );
+      }
+      return GL_TRUE;
+   }
+   if (depth<2*border
+       || depth>(MAX_TEXTURE_SIZE >> level)+2*border) {
+      if (target!=GL_PROXY_TEXTURE_3D) {
+         gl_error( ctx, GL_INVALID_VALUE, "glTexImage3D(depth)" );
+      }
+      return GL_TRUE;
+   }
+   if (!ctx->AllowNpotTextures && logbase2( width-2*border )<0) {
+      gl_error( ctx, GL_INVALID_VALUE,
+                "glTexImage3D(width != 2^k + 2*border)" );
+      return GL_TRUE;
+   }
+   if (!ctx->AllowNpotTextures && logbase2( height-2*border )<0) {
+      gl_error( ctx, GL_INVALID_VALUE,
+                "glTexImage3D(height != 2^k + 2*border)" );
+      return GL_TRUE;
+   }
+   if (!ctx->AllowNpotTextures && logbase2( depth-2*border )<0) {
+      gl_error( ctx, GL_INVALID_VALUE,
+                "glTexImage3D(depth != 2^k + 2*border)" );
+      return GL_TRUE;
+   }
+   switch (format) {
+      case GL_COLOR_INDEX:
+      case GL_RED:
+      case GL_GREEN:
+      case GL_BLUE:
+      case GL_ALPHA:
+      case GL_RGB:
+      case GL_BGR_EXT:
+      case GL_RGBA:
+      case GL_BGRA_EXT:
+      case GL_LUMINANCE:
+      case GL_LUMINANCE_ALPHA:
+         break;
+      default:
+         gl_error( ctx, GL_INVALID_ENUM, "glTexImage3D(format)" );
+         return GL_TRUE;
+   }
+   switch (type) {
+      case GL_UNSIGNED_BYTE:
+      case GL_BYTE:
+      case GL_UNSIGNED_SHORT:
+      case GL_SHORT:
+      case GL_UNSIGNED_INT:
+      case GL_INT:
+      case GL_FLOAT:
+      case GL_BITMAP:
+      case GL_UNSIGNED_BYTE_3_3_2:
+      case GL_UNSIGNED_BYTE_2_3_3_REV:
+      case GL_UNSIGNED_SHORT_5_6_5:
+      case GL_UNSIGNED_SHORT_5_6_5_REV:
+      case GL_UNSIGNED_SHORT_4_4_4_4:
+      case GL_UNSIGNED_SHORT_4_4_4_4_REV:
+      case GL_UNSIGNED_SHORT_5_5_5_1:
+      case GL_UNSIGNED_SHORT_1_5_5_5_REV:
+      case GL_UNSIGNED_INT_8_8_8_8:
+      case GL_UNSIGNED_INT_8_8_8_8_REV:
+      case GL_UNSIGNED_INT_10_10_10_2:
+      case GL_UNSIGNED_INT_2_10_10_10_REV:
+         break;
+      default:
+         gl_error( ctx, GL_INVALID_ENUM, "glTexImage3D(type)" );
+         return GL_TRUE;
+   }
+   if (type==GL_BITMAP && format!=GL_COLOR_INDEX) {
+      gl_error(ctx, GL_INVALID_ENUM, "glTexImage3D(format/type)");
+      return GL_TRUE;
+   }
+   if (packed_type_error_check(ctx, format, type,
+                               "glTexImage3D(format/type)"))
+      return GL_TRUE;
    return GL_FALSE;
 }
 
@@ -1234,11 +1451,461 @@ void gl_TexImage2D( GLcontext *ctx,
 
 
 
+/*
+ * Called by the API or display list executor.
+ * Width, height, and depth include the border.
+ */
+void gl_TexImage3D( GLcontext *ctx,
+                    GLenum target, GLint level, GLint internalformat,
+                    GLsizei width, GLsizei height, GLsizei depth,
+                    GLint border, GLenum format, GLenum type,
+                    struct gl_image *image )
+{
+   struct gl_texture_image *teximage;
+
+   if (INSIDE_BEGIN_END(ctx)) {
+      gl_error( ctx, GL_INVALID_OPERATION, "glTexImage3D" );
+      if (image && image->RefCount==0)
+         gl_free_image(image);
+      return;
+   }
+
+   if (texture_3d_error_check( ctx, target, level, internalformat,
+                               format, type, width, height, depth, border )) {
+      if (target==GL_PROXY_TEXTURE_3D &&
+          level>=0 && level<MAX_TEXTURE_LEVELS) {
+         MEMSET( ctx->Texture.Proxy3D->Image[level], 0,
+                 sizeof(struct gl_texture_image) );
+      }
+      if (image && image->RefCount==0)
+         gl_free_image(image);
+      return;
+   }
+
+   if (target==GL_TEXTURE_3D) {
+      if (image) {
+         teximage = image_to_texture(ctx, image, internalformat, border);
+      }
+      else {
+         teximage = make_null_texture(ctx, internalformat,
+                                      width, height, depth, border);
+      }
+
+      if (!teximage ||
+          (width>0 && height>0 && depth>0 && !teximage->Data)) {
+         if (teximage)
+            gl_free_texture_image(teximage);
+         if (image && image->RefCount==0)
+            gl_free_image(image);
+         gl_error( ctx, GL_OUT_OF_MEMORY, "glTexImage3D" );
+         return;
+      }
+
+      if (ctx->Texture.Current3D->Image[level]) {
+         gl_free_texture_image( ctx->Texture.Current3D->Image[level] );
+      }
+      ctx->Texture.Current3D->Image[level] = teximage;
+      ctx->Texture.Current3D->Dirty = GL_TRUE;
+      ctx->Texture.AnyDirty = GL_TRUE;
+      ctx->NewState |= NEW_TEXTURING;
+
+      if (image && image->RefCount==0)
+         gl_free_image(image);
+
+      if (ctx->Driver.TexImage) {
+         (*ctx->Driver.TexImage)( ctx, GL_TEXTURE_3D,
+                                  ctx->Texture.Current3D,
+                                  level, internalformat, teximage );
+      }
+   }
+   else {
+      struct gl_texture_image *proxy = ctx->Texture.Proxy3D->Image[level];
+
+      MEMSET( proxy, 0, sizeof(*proxy) );
+      proxy->Format = decode_internal_format(internalformat);
+      proxy->IntFormat = internalformat;
+      proxy->Border = border;
+      proxy->Width = width;
+      proxy->Height = height;
+      proxy->Depth = depth;
+      proxy->Width2 = width - 2*border;
+      proxy->Height2 = height - 2*border;
+      proxy->Depth2 = depth - 2*border;
+
+      if (image && image->RefCount==0)
+         gl_free_image(image);
+   }
+}
+
+
+
+static GLboolean texture_image_texel( const struct gl_texture_image *image,
+                                      size_t pixel, GLfloat rgba[4] )
+{
+   const GLubyte *source;
+
+   switch (image->Format) {
+      case GL_ALPHA:
+         rgba[0] = rgba[1] = rgba[2] = 0.0F;
+         rgba[3] = UBYTE_TO_FLOAT(image->Data[pixel]);
+         return GL_TRUE;
+      case GL_LUMINANCE:
+         rgba[0] = UBYTE_TO_FLOAT(image->Data[pixel]);
+         rgba[1] = rgba[2] = 0.0F;
+         rgba[3] = 1.0F;
+         return GL_TRUE;
+      case GL_LUMINANCE_ALPHA:
+         source = image->Data + pixel * 2;
+         rgba[0] = UBYTE_TO_FLOAT(source[0]);
+         rgba[1] = rgba[2] = 0.0F;
+         rgba[3] = UBYTE_TO_FLOAT(source[1]);
+         return GL_TRUE;
+      case GL_INTENSITY:
+         rgba[0] = UBYTE_TO_FLOAT(image->Data[pixel]);
+         rgba[1] = rgba[2] = 0.0F;
+         rgba[3] = 1.0F;
+         return GL_TRUE;
+      case GL_RGB:
+         source = image->Data + pixel * 3;
+         rgba[0] = UBYTE_TO_FLOAT(source[0]);
+         rgba[1] = UBYTE_TO_FLOAT(source[1]);
+         rgba[2] = UBYTE_TO_FLOAT(source[2]);
+         rgba[3] = 1.0F;
+         return GL_TRUE;
+      case GL_RGBA:
+         source = image->Data + pixel * 4;
+         rgba[0] = UBYTE_TO_FLOAT(source[0]);
+         rgba[1] = UBYTE_TO_FLOAT(source[1]);
+         rgba[2] = UBYTE_TO_FLOAT(source[2]);
+         rgba[3] = UBYTE_TO_FLOAT(source[3]);
+         return GL_TRUE;
+      default:
+         return GL_FALSE;
+   }
+}
+
+
+
+static GLint texture_output_components( GLenum format, const GLfloat rgba[4],
+                                        GLfloat output[4] )
+{
+   switch (format) {
+      case GL_RED:
+         output[0] = rgba[0];
+         return 1;
+      case GL_GREEN:
+         output[0] = rgba[1];
+         return 1;
+      case GL_BLUE:
+         output[0] = rgba[2];
+         return 1;
+      case GL_ALPHA:
+         output[0] = rgba[3];
+         return 1;
+      case GL_LUMINANCE:
+         output[0] = CLAMP(rgba[0] + rgba[1] + rgba[2], 0.0F, 1.0F);
+         return 1;
+      case GL_LUMINANCE_ALPHA:
+         output[0] = CLAMP(rgba[0] + rgba[1] + rgba[2], 0.0F, 1.0F);
+         output[1] = rgba[3];
+         return 2;
+      case GL_RGB:
+         output[0] = rgba[0];
+         output[1] = rgba[1];
+         output[2] = rgba[2];
+         return 3;
+      case GL_BGR_EXT:
+         output[0] = rgba[2];
+         output[1] = rgba[1];
+         output[2] = rgba[0];
+         return 3;
+      case GL_RGBA:
+         output[0] = rgba[0];
+         output[1] = rgba[1];
+         output[2] = rgba[2];
+         output[3] = rgba[3];
+         return 4;
+      case GL_BGRA_EXT:
+         output[0] = rgba[2];
+         output[1] = rgba[1];
+         output[2] = rgba[0];
+         output[3] = rgba[3];
+         return 4;
+      default:
+         return 0;
+   }
+}
+
+
+
+static GLuint texture_packed_component( GLfloat value, GLuint bits )
+{
+   value = CLAMP(value, 0.0F, 1.0F);
+   return (GLuint) (value * (GLfloat) ((1U << bits) - 1U));
+}
+
+
+
+static void texture_store_scalar( GLenum type, GLfloat value,
+                                  GLboolean swapBytes, GLvoid *destination )
+{
+   GLushort word;
+   GLuint dword;
+
+   value = CLAMP(value, 0.0F, 1.0F);
+   switch (type) {
+      case GL_UNSIGNED_BYTE:
+         *(GLubyte *) destination = FLOAT_TO_UBYTE(value);
+         break;
+      case GL_BYTE:
+      {
+         GLbyte byte = (GLbyte) FLOAT_TO_BYTE(value);
+         MEMCPY(destination, &byte, sizeof(byte));
+         break;
+      }
+      case GL_UNSIGNED_SHORT:
+         word = FLOAT_TO_USHORT(value);
+         if (swapBytes)
+            word = (word >> 8) | (word << 8);
+         MEMCPY(destination, &word, sizeof(word));
+         break;
+      case GL_SHORT:
+      {
+         GLshort shortValue = (GLshort) FLOAT_TO_SHORT(value);
+         MEMCPY(&word, &shortValue, sizeof(word));
+         if (swapBytes)
+            word = (word >> 8) | (word << 8);
+         MEMCPY(destination, &word, sizeof(word));
+         break;
+      }
+      case GL_UNSIGNED_INT:
+         dword = FLOAT_TO_UINT(value);
+         if (swapBytes) {
+            dword = (dword >> 24) |
+                    ((dword >> 8) & 0x0000ff00) |
+                    ((dword << 8) & 0x00ff0000) |
+                    (dword << 24);
+         }
+         MEMCPY(destination, &dword, sizeof(dword));
+         break;
+      case GL_INT:
+      {
+         GLint intValue = FLOAT_TO_INT(value);
+         MEMCPY(&dword, &intValue, sizeof(dword));
+         if (swapBytes) {
+            dword = (dword >> 24) |
+                    ((dword >> 8) & 0x0000ff00) |
+                    ((dword << 8) & 0x00ff0000) |
+                    (dword << 24);
+         }
+         MEMCPY(destination, &dword, sizeof(dword));
+         break;
+      }
+      case GL_FLOAT:
+         MEMCPY(&dword, &value, sizeof(dword));
+         if (swapBytes) {
+            dword = (dword >> 24) |
+                    ((dword >> 8) & 0x0000ff00) |
+                    ((dword << 8) & 0x00ff0000) |
+                    (dword << 24);
+         }
+         MEMCPY(destination, &dword, sizeof(dword));
+         break;
+   }
+}
+
+
+
+static void texture_store_packed( GLenum type, const GLfloat component[4],
+                                  GLboolean swapBytes, GLvoid *destination )
+{
+   GLubyte byte;
+   GLushort word;
+   GLuint dword;
+
+   switch (type) {
+      case GL_UNSIGNED_BYTE_3_3_2:
+         byte = (texture_packed_component(component[0], 3) << 5) |
+                (texture_packed_component(component[1], 3) << 2) |
+                texture_packed_component(component[2], 2);
+         MEMCPY(destination, &byte, sizeof(byte));
+         return;
+      case GL_UNSIGNED_BYTE_2_3_3_REV:
+         byte = texture_packed_component(component[0], 3) |
+                (texture_packed_component(component[1], 3) << 3) |
+                (texture_packed_component(component[2], 2) << 6);
+         MEMCPY(destination, &byte, sizeof(byte));
+         return;
+      case GL_UNSIGNED_SHORT_5_6_5:
+         word = (texture_packed_component(component[0], 5) << 11) |
+                (texture_packed_component(component[1], 6) << 5) |
+                texture_packed_component(component[2], 5);
+         break;
+      case GL_UNSIGNED_SHORT_5_6_5_REV:
+         word = texture_packed_component(component[0], 5) |
+                (texture_packed_component(component[1], 6) << 5) |
+                (texture_packed_component(component[2], 5) << 11);
+         break;
+      case GL_UNSIGNED_SHORT_4_4_4_4:
+         word = (texture_packed_component(component[0], 4) << 12) |
+                (texture_packed_component(component[1], 4) << 8) |
+                (texture_packed_component(component[2], 4) << 4) |
+                texture_packed_component(component[3], 4);
+         break;
+      case GL_UNSIGNED_SHORT_4_4_4_4_REV:
+         word = texture_packed_component(component[0], 4) |
+                (texture_packed_component(component[1], 4) << 4) |
+                (texture_packed_component(component[2], 4) << 8) |
+                (texture_packed_component(component[3], 4) << 12);
+         break;
+      case GL_UNSIGNED_SHORT_5_5_5_1:
+         word = (texture_packed_component(component[0], 5) << 11) |
+                (texture_packed_component(component[1], 5) << 6) |
+                (texture_packed_component(component[2], 5) << 1) |
+                texture_packed_component(component[3], 1);
+         break;
+      case GL_UNSIGNED_SHORT_1_5_5_5_REV:
+         word = texture_packed_component(component[0], 5) |
+                (texture_packed_component(component[1], 5) << 5) |
+                (texture_packed_component(component[2], 5) << 10) |
+                (texture_packed_component(component[3], 1) << 15);
+         break;
+      case GL_UNSIGNED_INT_8_8_8_8:
+         dword = (texture_packed_component(component[0], 8) << 24) |
+                 (texture_packed_component(component[1], 8) << 16) |
+                 (texture_packed_component(component[2], 8) << 8) |
+                 texture_packed_component(component[3], 8);
+         goto store_dword;
+      case GL_UNSIGNED_INT_8_8_8_8_REV:
+         dword = texture_packed_component(component[0], 8) |
+                 (texture_packed_component(component[1], 8) << 8) |
+                 (texture_packed_component(component[2], 8) << 16) |
+                 (texture_packed_component(component[3], 8) << 24);
+         goto store_dword;
+      case GL_UNSIGNED_INT_10_10_10_2:
+         dword = (texture_packed_component(component[0], 10) << 22) |
+                 (texture_packed_component(component[1], 10) << 12) |
+                 (texture_packed_component(component[2], 10) << 2) |
+                 texture_packed_component(component[3], 2);
+         goto store_dword;
+      default:
+         dword = texture_packed_component(component[0], 10) |
+                 (texture_packed_component(component[1], 10) << 10) |
+                 (texture_packed_component(component[2], 10) << 20) |
+                 (texture_packed_component(component[3], 2) << 30);
+store_dword:
+         if (swapBytes) {
+            dword = (dword >> 24) |
+                    ((dword >> 8) & 0x0000ff00) |
+                    ((dword << 8) & 0x00ff0000) |
+                    (dword << 24);
+         }
+         MEMCPY(destination, &dword, sizeof(dword));
+         return;
+   }
+
+   if (swapBytes)
+      word = (word >> 8) | (word << 8);
+   MEMCPY(destination, &word, sizeof(word));
+}
+
+
+
 void gl_GetTexImage( GLcontext *ctx, GLenum target, GLint level, GLenum format,
                      GLenum type, GLvoid *pixels )
 {
-   gl_problem(ctx, "glGetTexImage not implemented");
-   /* TODO */
+   struct gl_texture_object *texture;
+   struct gl_texture_image *image;
+   struct gl_pixelstore_attrib pack;
+   GLint components;
+   GLint packedSize;
+   GLint scalarSize;
+   GLint img, row, column;
+
+   if (INSIDE_BEGIN_END(ctx)) {
+      gl_error(ctx, GL_INVALID_OPERATION, "glGetTexImage");
+      return;
+   }
+
+   switch (target) {
+      case GL_TEXTURE_1D:
+         texture = ctx->Texture.Current1D;
+         break;
+      case GL_TEXTURE_2D:
+         texture = ctx->Texture.Current2D;
+         break;
+      case GL_TEXTURE_3D:
+         texture = ctx->Texture.Current3D;
+         break;
+      default:
+         gl_error(ctx, GL_INVALID_ENUM, "glGetTexImage(target)");
+         return;
+   }
+   if (level<0 || level>=MAX_TEXTURE_LEVELS) {
+      gl_error(ctx, GL_INVALID_VALUE, "glGetTexImage(level)");
+      return;
+   }
+
+   components = gl_components_in_format(format);
+   if (components<0 || format==GL_COLOR_INDEX ||
+       format==GL_STENCIL_INDEX || format==GL_DEPTH_COMPONENT) {
+      gl_error(ctx, GL_INVALID_ENUM, "glGetTexImage(format)");
+      return;
+   }
+
+   packedSize = gl_sizeof_packed_type(type);
+   scalarSize = gl_sizeof_type(type);
+   if (!packedSize && scalarSize<=0) {
+      gl_error(ctx, GL_INVALID_ENUM, "glGetTexImage(type)");
+      return;
+   }
+   if (packedSize && !gl_packed_type_matches_format(type, format)) {
+      gl_error(ctx, GL_INVALID_OPERATION, "glGetTexImage(format/type)");
+      return;
+   }
+
+   image = texture ? texture->Image[level] : NULL;
+   if (!image || !image->Data || !pixels)
+      return;
+
+   pack = ctx->Pack;
+   if (target!=GL_TEXTURE_3D) {
+      pack.ImageHeight = 0;
+      pack.SkipImages = 0;
+   }
+
+   for (img=0; img<(GLint)image->Depth; img++) {
+      for (row=0; row<(GLint)image->Height; row++) {
+         for (column=0; column<(GLint)image->Width; column++) {
+            GLfloat rgba[4];
+            GLfloat output[4];
+            size_t pixel = ((size_t)img * image->Height + row) *
+                           image->Width + column;
+            GLvoid *destination = gl_pixel_addr_in_image(
+               &pack, pixels, image->Width, image->Height, format, type,
+               img, row, column);
+            GLint component;
+
+            if (!destination || !texture_image_texel(image, pixel, rgba)) {
+               gl_problem(ctx, "Bad texture image in glGetTexImage");
+               return;
+            }
+            components = texture_output_components(format, rgba, output);
+            if (packedSize) {
+               texture_store_packed(type, output, pack.SwapBytes,
+                                    destination);
+            }
+            else {
+               for (component=0; component<components; component++) {
+                  texture_store_scalar(type, output[component],
+                                       pack.SwapBytes,
+                                       (GLubyte *)destination +
+                                       component * scalarSize);
+               }
+            }
+         }
+      }
+   }
 }
 
 
@@ -1250,7 +1917,7 @@ void gl_GetTexImage( GLcontext *ctx, GLenum target, GLint level, GLenum format,
  * some extra error checking.
  */
 struct gl_image *
-gl_unpack_texsubimage( GLcontext *ctx, GLint width, GLint height,
+gl_unpack_texsubimage( GLcontext *ctx, GLint width, GLint height, GLint depth,
                        GLenum format, GLenum type, const GLvoid *pixels )
 {
    if (type==GL_BITMAP && format!=GL_COLOR_INDEX) {
@@ -1261,15 +1928,21 @@ gl_unpack_texsubimage( GLcontext *ctx, GLint width, GLint height,
       return NULL;
    }
 
-   if (gl_sizeof_type(type)<=0) {
+   if (gl_sizeof_type(type)<0 && !gl_sizeof_packed_type(type)) {
       return NULL;
    }
 
-   if (width <= 0 || height <= 0 || pixels == NULL) {
+   if (gl_sizeof_packed_type(type) &&
+       !gl_packed_type_matches_format(type, format)) {
       return NULL;
    }
 
-   return gl_unpack_image( ctx, width, height, format, type, pixels );
+   if (width <= 0 || height <= 0 || depth <= 0 || pixels == NULL) {
+      return NULL;
+   }
+
+   return gl_unpack_image3D( ctx, width, height, depth,
+                             format, type, pixels );
 }
 
 
@@ -1363,15 +2036,21 @@ void gl_TexSubImage1D( GLcontext *ctx,
          gl_error( ctx, GL_INVALID_ENUM, "glTexSubImage1D(format)" );
          return;
       }
-      components = components_in_intformat( format );
+      components = gl_components_in_format( format );
       if (components<0 || format==GL_STENCIL_INDEX
           || format==GL_DEPTH_COMPONENT){
          gl_error( ctx, GL_INVALID_ENUM, "glTexSubImage1D(format)" );
          return;
       }
       size = gl_sizeof_type( type );
-      if (size<=0) {
+      if (size<0 && !gl_sizeof_packed_type(type)) {
          gl_error( ctx, GL_INVALID_ENUM, "glTexSubImage1D(type)" );
+         return;
+      }
+      if (gl_sizeof_packed_type(type) &&
+          !gl_packed_type_matches_format(type, format)) {
+         gl_error( ctx, GL_INVALID_OPERATION,
+                   "glTexSubImage1D(format/type)" );
          return;
       }
       if (width==0)
@@ -1503,8 +2182,14 @@ void gl_TexSubImage2D( GLcontext *ctx,
          return;
       }
       size = gl_sizeof_type( type );
-      if (size<=0) {
+      if (size<0 && !gl_sizeof_packed_type(type)) {
          gl_error( ctx, GL_INVALID_ENUM, "glTexSubImage2D(type)" );
+         return;
+      }
+      if (gl_sizeof_packed_type(type) &&
+          !gl_packed_type_matches_format(type, format)) {
+         gl_error( ctx, GL_INVALID_OPERATION,
+                   "glTexSubImage2D(format/type)" );
          return;
       }
       if (width==0 || height==0)
@@ -1513,6 +2198,141 @@ void gl_TexSubImage2D( GLcontext *ctx,
       gl_error( ctx, GL_OUT_OF_MEMORY, "glTexSubImage2D" );
    }
 }
+
+
+
+void gl_TexSubImage3D( GLcontext *ctx,
+                       GLenum target, GLint level,
+                       GLint xoffset, GLint yoffset, GLint zoffset,
+                       GLsizei width, GLsizei height, GLsizei depth,
+                       GLenum format, GLenum type,
+                       struct gl_image *image )
+{
+   struct gl_texture_image *destTex;
+   GLint texcomponents;
+   GLint srccomponents;
+
+   if (INSIDE_BEGIN_END(ctx)) {
+      gl_error( ctx, GL_INVALID_OPERATION, "glTexSubImage3D" );
+      goto release_image;
+   }
+   if (target!=GL_TEXTURE_3D) {
+      gl_error( ctx, GL_INVALID_ENUM, "glTexSubImage3D(target)" );
+      goto release_image;
+   }
+   if (level<0 || level>=MAX_TEXTURE_LEVELS) {
+      gl_error( ctx, GL_INVALID_VALUE, "glTexSubImage3D(level)" );
+      goto release_image;
+   }
+   if (width<0 || height<0 || depth<0) {
+      gl_error( ctx, GL_INVALID_VALUE, "glTexSubImage3D(size)" );
+      goto release_image;
+   }
+
+   srccomponents = gl_components_in_format(format);
+   if (srccomponents<0 || format==GL_STENCIL_INDEX ||
+       format==GL_DEPTH_COMPONENT ||
+       (type==GL_BITMAP && format!=GL_COLOR_INDEX)) {
+      gl_error( ctx, GL_INVALID_ENUM, "glTexSubImage3D(format)" );
+      goto release_image;
+   }
+   if (gl_sizeof_type(type)<0 && !gl_sizeof_packed_type(type)) {
+      gl_error( ctx, GL_INVALID_ENUM, "glTexSubImage3D(type)" );
+      goto release_image;
+   }
+   if (gl_sizeof_packed_type(type) &&
+       !gl_packed_type_matches_format(type, format)) {
+      gl_error( ctx, GL_INVALID_OPERATION,
+                "glTexSubImage3D(format/type)" );
+      goto release_image;
+   }
+
+   destTex = ctx->Texture.Current3D->Image[level];
+   if (!destTex) {
+      gl_error( ctx, GL_INVALID_OPERATION, "glTexSubImage3D" );
+      goto release_image;
+   }
+   if (xoffset < -((GLint)destTex->Border) ||
+       yoffset < -((GLint)destTex->Border) ||
+       zoffset < -((GLint)destTex->Border) ||
+       width > (GLint)destTex->Width - (GLint)destTex->Border - xoffset ||
+       height > (GLint)destTex->Height - (GLint)destTex->Border - yoffset ||
+       depth > (GLint)destTex->Depth - (GLint)destTex->Border - zoffset) {
+      gl_error( ctx, GL_INVALID_VALUE, "glTexSubImage3D(offset+size)" );
+      goto release_image;
+   }
+
+   if (width==0 || height==0 || depth==0)
+      goto release_image;
+   if (!image) {
+      gl_error( ctx, GL_OUT_OF_MEMORY, "glTexSubImage3D" );
+      return;
+   }
+
+   texcomponents = components_in_intformat(destTex->Format);
+   if (image->Type==GL_UNSIGNED_BYTE &&
+       texcomponents==image->Components) {
+      GLubyte *srcBase = (GLubyte *) image->Data;
+      GLint k, j;
+
+      for (k=0; k<depth; k++) {
+         GLubyte *dst = destTex->Data +
+            ((((zoffset+(GLint)destTex->Border)+k) * destTex->Height +
+              yoffset+(GLint)destTex->Border) * destTex->Width +
+             xoffset+(GLint)destTex->Border) * texcomponents;
+         GLubyte *src = srcBase +
+            (size_t)k * width * height * texcomponents;
+
+         for (j=0; j<height; j++) {
+            MEMCPY( dst, src, (size_t)width * texcomponents );
+            dst += (size_t)destTex->Width * texcomponents;
+            src += (size_t)width * texcomponents;
+         }
+      }
+   }
+   else {
+      struct gl_texture_image *subTexImg =
+         image_to_texture(ctx, image, destTex->IntFormat, 0);
+      GLubyte *srcBase;
+      GLint k, j;
+
+      if (!subTexImg) {
+         gl_error( ctx, GL_OUT_OF_MEMORY, "glTexSubImage3D" );
+         goto release_image;
+      }
+      srcBase = subTexImg->Data;
+      for (k=0; k<depth; k++) {
+         GLubyte *dst = destTex->Data +
+            ((((zoffset+(GLint)destTex->Border)+k) * destTex->Height +
+              yoffset+(GLint)destTex->Border) * destTex->Width +
+             xoffset+(GLint)destTex->Border) * texcomponents;
+         GLubyte *src = srcBase +
+            (size_t)k * width * height * texcomponents;
+
+         for (j=0; j<height; j++) {
+            MEMCPY( dst, src, (size_t)width * texcomponents );
+            dst += (size_t)destTex->Width * texcomponents;
+            src += (size_t)width * texcomponents;
+         }
+      }
+      gl_free_texture_image(subTexImg);
+   }
+
+   ctx->Texture.Current3D->Dirty = GL_TRUE;
+   ctx->Texture.AnyDirty = GL_TRUE;
+   ctx->NewState |= NEW_TEXTURING;
+
+   if (ctx->Driver.TexImage) {
+      (*ctx->Driver.TexImage)( ctx, GL_TEXTURE_3D,
+                               ctx->Texture.Current3D, level,
+                               destTex->IntFormat, destTex );
+   }
+
+release_image:
+   if (image && image->RefCount==0)
+      gl_free_image(image);
+}
+
 
 /*
  * Read an RGBA image from the frame buffer.
@@ -1540,6 +2360,7 @@ static struct gl_image *read_color_image( GLcontext *ctx, GLint x, GLint y,
    if (image) {
       image->Width = width;
       image->Height = height;
+      image->Depth = 1;
       image->Components = components;
       image->Format = format;
       image->Type = GL_UNSIGNED_BYTE;
@@ -1746,19 +2567,21 @@ void gl_CopyTexImage2D( GLcontext *ctx,
 
 
 /*
- * Do the work of glCopyTexSubImage[12]D.
+ * Do the work of glCopyTexSubImage[123]D.
  * TODO: apply pixel bias scale and mapping.
  */
 static void copy_tex_sub_image( GLcontext *ctx, struct gl_texture_image *dest,
                                 GLint width, GLint height,
                                 GLint srcx, GLint srcy,
-                                GLint dstx, GLint dsty)
+                                GLint dstx, GLint dsty, GLint dstz )
 {
    GLint i, j;
    GLint format, components;
 
    format = dest->Format;
    components = components_in_intformat( format );
+
+   (void) (*ctx->Driver.SetBuffer)( ctx, ctx->Pixel.ReadBuffer );
 
    for (j=0;j<height;j++) {
       GLubyte red[MAX_WIDTH], green[MAX_WIDTH];
@@ -1781,7 +2604,9 @@ static void copy_tex_sub_image( GLcontext *ctx, struct gl_texture_image *dest,
          }
       }
 
-      texptr = dest->Data + ( (dsty+j) * width + dstx) * components;
+      texptr = dest->Data +
+               (((dstz * dest->Height + dsty+j) * dest->Width) + dstx)
+               * components;
 
       switch (format) {
          case GL_ALPHA:
@@ -1822,6 +2647,8 @@ static void copy_tex_sub_image( GLcontext *ctx, struct gl_texture_image *dest,
             break;
       } /*switch*/
    } /*for*/         
+
+   (void) (*ctx->Driver.SetBuffer)( ctx, ctx->Color.DrawBuffer );
 }
 
 
@@ -1857,14 +2684,16 @@ void gl_CopyTexSubImage1D( GLcontext *ctx,
          gl_error( ctx, GL_INVALID_VALUE, "glCopyTexSubImage1D(xoffset)" );
          return;
       }
-      /* NOTE: we're adding the border here, not subtracting! */
-      if (xoffset+width > teximage->Width+teximage->Border) {
+      if (width > (GLint)teximage->Width - (GLint)teximage->Border - xoffset) {
          gl_error( ctx, GL_INVALID_VALUE,
                    "glCopyTexSubImage1D(xoffset+width)" );
          return;
       }
       if (teximage->Data) {
-         copy_tex_sub_image( ctx, teximage, width, 1, x, y, xoffset, 0);
+         copy_tex_sub_image( ctx, teximage, width, 1, x, y,
+                             xoffset+(GLint)teximage->Border, 0, 0 );
+         ctx->Texture.Current1D->Dirty = GL_TRUE;
+         ctx->Texture.AnyDirty = GL_TRUE;
       }
    }
    else {
@@ -1913,13 +2742,12 @@ void gl_CopyTexSubImage2D( GLcontext *ctx,
          gl_error( ctx, GL_INVALID_VALUE, "glCopyTexSubImage2D(yoffset)" );
          return;
       }
-      /* NOTE: we're adding the border here, not subtracting! */
-      if (xoffset+width > teximage->Width+teximage->Border) {
+      if (width > (GLint)teximage->Width - (GLint)teximage->Border - xoffset) {
          gl_error( ctx, GL_INVALID_VALUE,
                    "glCopyTexSubImage2D(xoffset+width)" );
          return;
       }
-      if (yoffset+height > teximage->Height+teximage->Border) {
+      if (height > (GLint)teximage->Height - (GLint)teximage->Border - yoffset) {
          gl_error( ctx, GL_INVALID_VALUE,
                    "glCopyTexSubImage2D(yoffset+height)" );
          return;
@@ -1927,7 +2755,11 @@ void gl_CopyTexSubImage2D( GLcontext *ctx,
 
       if (teximage->Data) {
          copy_tex_sub_image( ctx, teximage, width, height,
-                             x, y, xoffset, yoffset);
+                             x, y,
+                             xoffset+(GLint)teximage->Border,
+                             yoffset+(GLint)teximage->Border, 0 );
+         ctx->Texture.Current2D->Dirty = GL_TRUE;
+         ctx->Texture.AnyDirty = GL_TRUE;
       }
    }
    else {
@@ -1935,3 +2767,66 @@ void gl_CopyTexSubImage2D( GLcontext *ctx,
    }
 }
 
+
+
+void gl_CopyTexSubImage3D( GLcontext *ctx,
+                           GLenum target, GLint level,
+                           GLint xoffset, GLint yoffset, GLint zoffset,
+                           GLint x, GLint y,
+                           GLsizei width, GLsizei height )
+{
+   struct gl_texture_image *teximage;
+
+   if (INSIDE_BEGIN_END(ctx)) {
+      gl_error( ctx, GL_INVALID_OPERATION, "glCopyTexSubImage3D" );
+      return;
+   }
+   if (target!=GL_TEXTURE_3D) {
+      gl_error( ctx, GL_INVALID_ENUM, "glCopyTexSubImage3D(target)" );
+      return;
+   }
+   if (level<0 || level>=MAX_TEXTURE_LEVELS) {
+      gl_error( ctx, GL_INVALID_VALUE, "glCopyTexSubImage3D(level)" );
+      return;
+   }
+   if (width<0 || height<0) {
+      gl_error( ctx, GL_INVALID_VALUE, "glCopyTexSubImage3D(size)" );
+      return;
+   }
+
+   teximage = ctx->Texture.Current3D->Image[level];
+   if (!teximage) {
+      gl_error( ctx, GL_INVALID_OPERATION, "glCopyTexSubImage3D" );
+      return;
+   }
+   if (xoffset < -((GLint)teximage->Border) ||
+       yoffset < -((GLint)teximage->Border) ||
+       zoffset < -((GLint)teximage->Border) ||
+       width > (GLint)teximage->Width - (GLint)teximage->Border - xoffset ||
+       height > (GLint)teximage->Height - (GLint)teximage->Border - yoffset ||
+       zoffset >= (GLint)teximage->Depth - (GLint)teximage->Border) {
+      gl_error( ctx, GL_INVALID_VALUE, "glCopyTexSubImage3D(offset+size)" );
+      return;
+   }
+
+   if (width==0 || height==0)
+      return;
+   if (!teximage->Data) {
+      gl_error( ctx, GL_INVALID_OPERATION, "glCopyTexSubImage3D(storage)" );
+      return;
+   }
+
+   copy_tex_sub_image( ctx, teximage, width, height, x, y,
+                       xoffset+(GLint)teximage->Border,
+                       yoffset+(GLint)teximage->Border,
+                       zoffset+(GLint)teximage->Border );
+   ctx->Texture.Current3D->Dirty = GL_TRUE;
+   ctx->Texture.AnyDirty = GL_TRUE;
+   ctx->NewState |= NEW_TEXTURING;
+
+   if (ctx->Driver.TexImage) {
+      (*ctx->Driver.TexImage)( ctx, GL_TEXTURE_3D,
+                               ctx->Texture.Current3D, level,
+                               teximage->IntFormat, teximage );
+   }
+}

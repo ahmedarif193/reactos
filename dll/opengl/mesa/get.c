@@ -549,6 +549,9 @@ void gl_GetBooleanv( GLcontext *ctx, GLenum pname, GLboolean *params )
       case GL_MAX_TEXTURE_SIZE:
 	 *params = INT_TO_BOOL(MAX_TEXTURE_SIZE);
 	 break;
+      case GL_MAX_3D_TEXTURE_SIZE:
+	 *params = INT_TO_BOOL(MAX_TEXTURE_SIZE);
+	 break;
       case GL_MAX_TEXTURE_STACK_DEPTH:
 	 *params = INT_TO_BOOL(MAX_TEXTURE_STACK_DEPTH);
 	 break;
@@ -584,6 +587,12 @@ void gl_GetBooleanv( GLcontext *ctx, GLenum pname, GLboolean *params )
 	 break;
       case GL_PACK_SKIP_ROWS:
 	 *params = INT_TO_BOOL(ctx->Pack.SkipRows);
+	 break;
+      case GL_PACK_IMAGE_HEIGHT:
+	 *params = INT_TO_BOOL(ctx->Pack.ImageHeight);
+	 break;
+      case GL_PACK_SKIP_IMAGES:
+	 *params = INT_TO_BOOL(ctx->Pack.SkipImages);
 	 break;
       case GL_PACK_SWAP_BYTES:
 	 *params = ctx->Pack.SwapBytes;
@@ -741,6 +750,9 @@ void gl_GetBooleanv( GLcontext *ctx, GLenum pname, GLboolean *params )
       case GL_TEXTURE_2D:
 	 *params = (ctx->Texture.Enabled & TEXTURE_2D) ? GL_TRUE : GL_FALSE;
 	 break;
+      case GL_TEXTURE_3D:
+	 *params = (ctx->Texture.Enabled & TEXTURE_3D) ? GL_TRUE : GL_FALSE;
+	 break;
       case GL_TEXTURE_ENV_COLOR:
 	 params[0] = FLOAT_TO_BOOL(ctx->Texture.EnvColor[0]);
 	 params[1] = FLOAT_TO_BOOL(ctx->Texture.EnvColor[1]);
@@ -784,6 +796,12 @@ void gl_GetBooleanv( GLcontext *ctx, GLenum pname, GLboolean *params )
 	 break;
       case GL_UNPACK_SKIP_ROWS:
 	 *params = INT_TO_BOOL(ctx->Unpack.SkipRows);
+	 break;
+      case GL_UNPACK_IMAGE_HEIGHT:
+	 *params = INT_TO_BOOL(ctx->Unpack.ImageHeight);
+	 break;
+      case GL_UNPACK_SKIP_IMAGES:
+	 *params = INT_TO_BOOL(ctx->Unpack.SkipImages);
 	 break;
       case GL_UNPACK_SWAP_BYTES:
 	 *params = ctx->Unpack.SwapBytes;
@@ -866,8 +884,8 @@ void gl_GetBooleanv( GLcontext *ctx, GLenum pname, GLboolean *params )
       case GL_TEXTURE_BINDING_2D:
          *params = INT_TO_BOOL(ctx->Texture.Current2D->Name);
           break;
-      case GL_TEXTURE_3D_BINDING_EXT:
-         *params = INT_TO_BOOL(ctx->Texture.Current2D->Name);
+      case GL_TEXTURE_BINDING_3D:
+	 *params = INT_TO_BOOL(ctx->Texture.Current3D->Name);
           break;
       default:
          gl_error( ctx, GL_INVALID_ENUM, "glGetBooleanv" );
@@ -1312,6 +1330,9 @@ void gl_GetDoublev( GLcontext *ctx, GLenum pname, GLdouble *params )
       case GL_MAX_TEXTURE_SIZE:
 	 *params = (GLdouble) MAX_TEXTURE_SIZE;
 	 break;
+      case GL_MAX_3D_TEXTURE_SIZE:
+	 *params = (GLdouble) MAX_TEXTURE_SIZE;
+	 break;
       case GL_MAX_TEXTURE_STACK_DEPTH:
 	 *params = (GLdouble) MAX_TEXTURE_STACK_DEPTH;
 	 break;
@@ -1347,6 +1368,12 @@ void gl_GetDoublev( GLcontext *ctx, GLenum pname, GLdouble *params )
 	 break;
       case GL_PACK_SKIP_ROWS:
 	 *params = (GLdouble) ctx->Pack.SkipRows;
+	 break;
+      case GL_PACK_IMAGE_HEIGHT:
+	 *params = (GLdouble) ctx->Pack.ImageHeight;
+	 break;
+      case GL_PACK_SKIP_IMAGES:
+	 *params = (GLdouble) ctx->Pack.SkipImages;
 	 break;
       case GL_PACK_SWAP_BYTES:
 	 *params = (GLdouble) ctx->Pack.SwapBytes;
@@ -1506,6 +1533,9 @@ void gl_GetDoublev( GLcontext *ctx, GLenum pname, GLdouble *params )
       case GL_TEXTURE_2D:
 	 *params = (ctx->Texture.Enabled & TEXTURE_2D) ? 1.0 : 0.0;
 	 break;
+      case GL_TEXTURE_3D:
+	 *params = (ctx->Texture.Enabled & TEXTURE_3D) ? 1.0 : 0.0;
+	 break;
       case GL_TEXTURE_ENV_COLOR:
 	 params[0] = (GLdouble) ctx->Texture.EnvColor[0];
 	 params[1] = (GLdouble) ctx->Texture.EnvColor[1];
@@ -1549,6 +1579,12 @@ void gl_GetDoublev( GLcontext *ctx, GLenum pname, GLdouble *params )
 	 break;
       case GL_UNPACK_SKIP_ROWS:
 	 *params = (GLdouble) ctx->Unpack.SkipRows;
+	 break;
+      case GL_UNPACK_IMAGE_HEIGHT:
+	 *params = (GLdouble) ctx->Unpack.ImageHeight;
+	 break;
+      case GL_UNPACK_SKIP_IMAGES:
+	 *params = (GLdouble) ctx->Unpack.SkipImages;
 	 break;
       case GL_UNPACK_SWAP_BYTES:
 	 *params = (GLdouble) ctx->Unpack.SwapBytes;
@@ -1630,6 +1666,9 @@ void gl_GetDoublev( GLcontext *ctx, GLenum pname, GLdouble *params )
           break;
       case GL_TEXTURE_BINDING_2D:
          *params = (GLdouble) ctx->Texture.Current2D->Name;
+          break;
+      case GL_TEXTURE_BINDING_3D:
+         *params = (GLdouble) ctx->Texture.Current3D->Name;
           break;
 
       default:
@@ -2074,6 +2113,9 @@ void gl_GetFloatv( GLcontext *ctx, GLenum pname, GLfloat *params )
       case GL_MAX_TEXTURE_SIZE:
 	 *params = (GLfloat) MAX_TEXTURE_SIZE;
 	 break;
+      case GL_MAX_3D_TEXTURE_SIZE:
+	 *params = (GLfloat) MAX_TEXTURE_SIZE;
+	 break;
       case GL_MAX_TEXTURE_STACK_DEPTH:
 	 *params = (GLfloat) MAX_TEXTURE_STACK_DEPTH;
 	 break;
@@ -2109,6 +2151,12 @@ void gl_GetFloatv( GLcontext *ctx, GLenum pname, GLfloat *params )
 	 break;
       case GL_PACK_SKIP_ROWS:
 	 *params = (GLfloat) ctx->Pack.SkipRows;
+	 break;
+      case GL_PACK_IMAGE_HEIGHT:
+	 *params = (GLfloat) ctx->Pack.ImageHeight;
+	 break;
+      case GL_PACK_SKIP_IMAGES:
+	 *params = (GLfloat) ctx->Pack.SkipImages;
 	 break;
       case GL_PACK_SWAP_BYTES:
 	 *params = (GLfloat) ctx->Pack.SwapBytes;
@@ -2268,6 +2316,9 @@ void gl_GetFloatv( GLcontext *ctx, GLenum pname, GLfloat *params )
       case GL_TEXTURE_2D:
 	 *params = (ctx->Texture.Enabled & TEXTURE_2D) ? 1.0 : 0.0;
 	 break;
+      case GL_TEXTURE_3D:
+	 *params = (ctx->Texture.Enabled & TEXTURE_3D) ? 1.0 : 0.0;
+	 break;
       case GL_TEXTURE_ENV_COLOR:
 	 params[0] = ctx->Texture.EnvColor[0];
 	 params[1] = ctx->Texture.EnvColor[1];
@@ -2311,6 +2362,12 @@ void gl_GetFloatv( GLcontext *ctx, GLenum pname, GLfloat *params )
 	 break;
       case GL_UNPACK_SKIP_ROWS:
 	 *params = (GLfloat) ctx->Unpack.SkipRows;
+	 break;
+      case GL_UNPACK_IMAGE_HEIGHT:
+	 *params = (GLfloat) ctx->Unpack.ImageHeight;
+	 break;
+      case GL_UNPACK_SKIP_IMAGES:
+	 *params = (GLfloat) ctx->Unpack.SkipImages;
 	 break;
       case GL_UNPACK_SWAP_BYTES:
 	 *params = (GLfloat) ctx->Unpack.SwapBytes;
@@ -2393,8 +2450,8 @@ void gl_GetFloatv( GLcontext *ctx, GLenum pname, GLfloat *params )
       case GL_TEXTURE_BINDING_2D:
          *params = (GLfloat) ctx->Texture.Current2D->Name;
           break;
-      case GL_TEXTURE_3D_BINDING_EXT:
-         *params = (GLfloat) ctx->Texture.Current2D->Name;
+      case GL_TEXTURE_BINDING_3D:
+	 *params = (GLfloat) ctx->Texture.Current3D->Name;
           break;
 
       default:
@@ -2840,6 +2897,9 @@ void gl_GetIntegerv( GLcontext *ctx, GLenum pname, GLint *params )
       case GL_MAX_TEXTURE_SIZE:
 	 *params = (GLint) MAX_TEXTURE_SIZE;
 	 break;
+      case GL_MAX_3D_TEXTURE_SIZE:
+	 *params = (GLint) MAX_TEXTURE_SIZE;
+	 break;
       case GL_MAX_TEXTURE_STACK_DEPTH:
 	 *params = (GLint) MAX_TEXTURE_STACK_DEPTH;
 	 break;
@@ -2875,6 +2935,12 @@ void gl_GetIntegerv( GLcontext *ctx, GLenum pname, GLint *params )
 	 break;
       case GL_PACK_SKIP_ROWS:
 	 *params = ctx->Pack.SkipRows;
+	 break;
+      case GL_PACK_IMAGE_HEIGHT:
+	 *params = ctx->Pack.ImageHeight;
+	 break;
+      case GL_PACK_SKIP_IMAGES:
+	 *params = ctx->Pack.SkipImages;
 	 break;
       case GL_PACK_SWAP_BYTES:
 	 *params = (GLint) ctx->Pack.SwapBytes;
@@ -3034,6 +3100,9 @@ void gl_GetIntegerv( GLcontext *ctx, GLenum pname, GLint *params )
       case GL_TEXTURE_2D:
 	 *params = (ctx->Texture.Enabled & TEXTURE_2D) ? 1.0 : 0.0;
 	 break;
+      case GL_TEXTURE_3D:
+	 *params = (ctx->Texture.Enabled & TEXTURE_3D) ? 1 : 0;
+	 break;
       case GL_TEXTURE_ENV_COLOR:
 	 params[0] = FLOAT_TO_INT( ctx->Texture.EnvColor[0] );
 	 params[1] = FLOAT_TO_INT( ctx->Texture.EnvColor[1] );
@@ -3077,6 +3146,12 @@ void gl_GetIntegerv( GLcontext *ctx, GLenum pname, GLint *params )
 	 break;
       case GL_UNPACK_SKIP_ROWS:
 	 *params = ctx->Unpack.SkipRows;
+	 break;
+      case GL_UNPACK_IMAGE_HEIGHT:
+	 *params = ctx->Unpack.ImageHeight;
+	 break;
+      case GL_UNPACK_SKIP_IMAGES:
+	 *params = ctx->Unpack.SkipImages;
 	 break;
       case GL_UNPACK_SWAP_BYTES:
 	 *params = (GLint) ctx->Unpack.SwapBytes;
@@ -3158,6 +3233,9 @@ void gl_GetIntegerv( GLcontext *ctx, GLenum pname, GLint *params )
           break;
       case GL_TEXTURE_BINDING_2D:
          *params = ctx->Texture.Current2D->Name;
+          break;
+      case GL_TEXTURE_BINDING_3D:
+         *params = ctx->Texture.Current3D->Name;
           break;
 
       default:

@@ -55,7 +55,7 @@ extern void gl_free_texture_image( struct gl_texture_image *teximage );
 
 
 extern struct gl_image *
-gl_unpack_texsubimage( GLcontext *ctx, GLint width, GLint height,
+gl_unpack_texsubimage( GLcontext *ctx, GLint width, GLint height, GLint depth,
                        GLenum format, GLenum type, const GLvoid *pixels );
 
 
@@ -117,6 +117,12 @@ extern void gl_TexImage2D( GLcontext *ctx,
                            GLenum format, GLenum type,
                            struct gl_image *teximage );
 
+extern void gl_TexImage3D( GLcontext *ctx,
+                           GLenum target, GLint level, GLint internalformat,
+                           GLsizei width, GLsizei height, GLsizei depth,
+                           GLint border, GLenum format, GLenum type,
+                           struct gl_image *teximage );
+
 extern void gl_GetTexImage( GLcontext *ctx, GLenum target, GLint level,
                             GLenum format, GLenum type, GLvoid *pixels );
 
@@ -132,6 +138,13 @@ extern void gl_TexSubImage2D( GLcontext *ctx,
                               GLenum target, GLint level,
                               GLint xoffset, GLint yoffset,
                               GLsizei width, GLsizei height,
+                              GLenum format, GLenum type,
+                              struct gl_image *image );
+
+extern void gl_TexSubImage3D( GLcontext *ctx,
+                              GLenum target, GLint level,
+                              GLint xoffset, GLint yoffset, GLint zoffset,
+                              GLsizei width, GLsizei height, GLsizei depth,
                               GLenum format, GLenum type,
                               struct gl_image *image );
 
@@ -162,5 +175,10 @@ extern void gl_CopyTexSubImage2D( GLcontext *ctx,
                                   GLint x, GLint y,
                                   GLsizei width, GLsizei height );
 
-#endif
+extern void gl_CopyTexSubImage3D( GLcontext *ctx,
+                                  GLenum target, GLint level,
+                                  GLint xoffset, GLint yoffset, GLint zoffset,
+                                  GLint x, GLint y,
+                                  GLsizei width, GLsizei height );
 
+#endif

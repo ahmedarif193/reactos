@@ -194,6 +194,7 @@ static void init_exec_pointers( struct gl_api_table *table )
    table->CopyTexImage2D = gl_CopyTexImage2D;
    table->CopyTexSubImage1D = gl_CopyTexSubImage1D;
    table->CopyTexSubImage2D = gl_CopyTexSubImage2D;
+   table->CopyTexSubImage3D = gl_CopyTexSubImage3D;
    table->CullFace = gl_CullFace;
    table->DeleteLists = gl_DeleteLists;
    table->DeleteTextures = gl_DeleteTextures;
@@ -326,8 +327,10 @@ static void init_exec_pointers( struct gl_api_table *table )
    table->TexGenfv = gl_TexGenfv;
    table->TexImage1D = gl_TexImage1D;
    table->TexImage2D = gl_TexImage2D;
+   table->TexImage3D = gl_TexImage3D;
    table->TexSubImage1D = gl_TexSubImage1D;
    table->TexSubImage2D = gl_TexSubImage2D;
+   table->TexSubImage3D = gl_TexSubImage3D;
    table->TexParameterfv = gl_TexParameterfv;
    table->Translatef = gl_Translatef;
    table->Vertex2f = gl_vertex2f_nop;
@@ -379,6 +382,7 @@ static void init_dlist_pointers( struct gl_api_table *table )
    table->CopyTexImage2D = gl_save_CopyTexImage2D;
    table->CopyTexSubImage1D = gl_save_CopyTexSubImage1D;
    table->CopyTexSubImage2D = gl_save_CopyTexSubImage2D;
+   table->CopyTexSubImage3D = gl_save_CopyTexSubImage3D;
    table->CullFace = gl_save_CullFace;
    table->DeleteLists = gl_DeleteLists;   /* NOT SAVED */
    table->DeleteTextures = gl_DeleteTextures;  /* NOT SAVED */
@@ -514,8 +518,10 @@ static void init_dlist_pointers( struct gl_api_table *table )
    table->TexGenfv = gl_save_TexGenfv;
    table->TexImage1D = gl_save_TexImage1D;
    table->TexImage2D = gl_save_TexImage2D;
+   table->TexImage3D = gl_save_TexImage3D;
    table->TexSubImage1D = gl_save_TexSubImage1D;
    table->TexSubImage2D = gl_save_TexSubImage2D;
+   table->TexSubImage3D = gl_save_TexSubImage3D;
    table->TexParameterfv = gl_save_TexParameterfv;
    table->Translatef = gl_save_Translatef;
    table->Vertex2f = gl_save_Vertex2f;
@@ -538,4 +544,3 @@ void gl_init_api_function_pointers( GLcontext *ctx )
    check_pointers( &ctx->Exec );
    check_pointers( &ctx->Save );
 }
-
