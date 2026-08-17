@@ -39,6 +39,9 @@ include(ExternalProject)
 set(FEX_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/fex-arm64ec-build")
 set(FEX_DLL_SOURCE "${FEX_BINARY_DIR}/Bin/libarm64ecfex.dll")
 set(FEX_DLL_DEST   "${CMAKE_CURRENT_BINARY_DIR}/arm64ecfex.dll")
+set(FEX_DLL_SYMBOLS "${REACTOS_BINARY_DIR}/symbols/arm64ecfex.dll")
+
+find_program(FEX_LLVM_STRIP llvm-strip HINTS "${REACTOS_CLANG_LLVM_MINGW_ROOT}/bin" REQUIRED)
 
 # FEX requires Python 3.9+ for IR/config code generation.
 # Use find_program instead of find_package(Python) to avoid internal
@@ -102,10 +105,10 @@ ExternalProject_Add(fex-arm64ec-build
         # Python for code generation.
         -DPython_EXECUTABLE=${FEX_PYTHON_EXECUTABLE}
     BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target arm64ecfex
-    INSTALL_COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${FEX_DLL_SOURCE}"
-        "${FEX_DLL_DEST}"
-    BUILD_BYPRODUCTS "${FEX_DLL_DEST}"
+    INSTALL_COMMAND ${CMAKE_COMMAND} -E make_directory "${REACTOS_BINARY_DIR}/symbols"
+    COMMAND ${FEX_LLVM_STRIP} --only-keep-debug "${FEX_DLL_SOURCE}" -o "${FEX_DLL_SYMBOLS}"
+    COMMAND ${FEX_LLVM_STRIP} --strip-debug "${FEX_DLL_SOURCE}" -o "${FEX_DLL_DEST}"
+    BUILD_BYPRODUCTS "${FEX_DLL_DEST}" "${FEX_DLL_SYMBOLS}"
     USES_TERMINAL_BUILD OFF
 )
 
