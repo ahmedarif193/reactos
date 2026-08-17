@@ -214,22 +214,19 @@ prepare_arm64_fex_source() {
 
 	fex_arm64ec_enabled || return 0
 
+	# The ReactOS changes to FEX live in the fork's main-ros branch (see .gitmodules); the submodule is used as-is.
 	FEX_UPSTREAM_DIR="$REACTOS_SOURCE_DIR/submodules/fex-arm64ec"
-	FEX_PATCH_FILE="$REACTOS_SOURCE_DIR/submodules/fex-arm64ec-reactos.patch"
 	FEX_PREPARED_DIR="$REACTOS_SOURCE_DIR/$REACTOS_OUTPUT_PATH/submodules/fex-arm64ec-src"
 
 	[ -f "$FEX_UPSTREAM_DIR/CMakeLists.txt" ] || fail "FEX submodule source is missing at $FEX_UPSTREAM_DIR"
 	[ -f "$FEX_UPSTREAM_DIR/External/fmt/CMakeLists.txt" ] || fail "FEX submodule dependencies are incomplete"
-	[ -f "$FEX_PATCH_FILE" ] || fail "FEX ReactOS patch is missing at $FEX_PATCH_FILE"
-	command -v patch >/dev/null 2>&1 || fail "patch is required to prepare the FEX ARM64EC source"
 	command -v cksum >/dev/null 2>&1 || fail "cksum is required to identify the prepared FEX source"
 
 	FEX_SOURCE_ID=
 	if command -v git >/dev/null 2>&1 && git -C "$FEX_UPSTREAM_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 && git -C "$FEX_UPSTREAM_DIR" diff --quiet --ignore-submodules=dirty HEAD --; then
 		FEX_SOURCE_REV=$(git -C "$FEX_UPSTREAM_DIR" rev-parse HEAD) || fail "could not identify the FEX source revision"
-		FEX_PATCH_ID=$(git -C "$REACTOS_SOURCE_DIR" hash-object "$FEX_PATCH_FILE") || fail "could not identify the FEX ReactOS patch"
 		FEX_SUBMODULE_STATE=$(git -C "$FEX_UPSTREAM_DIR" submodule status --recursive) || fail "could not identify FEX submodule revisions"
-		FEX_SOURCE_ID=$(printf '%s\n%s\n%s\n' "$FEX_SOURCE_REV" "$FEX_PATCH_ID" "$FEX_SUBMODULE_STATE" | cksum | awk '{print $1 "-" $2}')
+		FEX_SOURCE_ID=$(printf '%s\n%s\n' "$FEX_SOURCE_REV" "$FEX_SUBMODULE_STATE" | cksum | awk '{print $1 "-" $2}')
 	fi
 	FEX_PREPARED_STAMP="$FEX_PREPARED_DIR/.reactos-source-id"
 	if [ -n "$FEX_SOURCE_ID" ] && [ -f "$FEX_PREPARED_DIR/CMakeLists.txt" ] && [ "$(sed -n '1p' "$FEX_PREPARED_STAMP" 2>/dev/null)" = "$FEX_SOURCE_ID" ]; then
@@ -242,7 +239,6 @@ prepare_arm64_fex_source() {
 	mkdir -p "$(dirname "$FEX_PREPARED_DIR")"
 	cp -a "$FEX_UPSTREAM_DIR" "$FEX_PREPARED_DIR"
 	rm -rf "$FEX_PREPARED_DIR/.git"
-	patch -d "$FEX_PREPARED_DIR" -p1 < "$FEX_PATCH_FILE" >/dev/null || fail "failed to apply FEX ReactOS patch"
 	if [ -n "$FEX_SOURCE_ID" ]; then
 		printf '%s\n' "$FEX_SOURCE_ID" > "$FEX_PREPARED_STAMP"
 	fi

@@ -71,9 +71,9 @@ ExternalProject_Add(fex-arm64ec-build
         -DCMAKE_RC_COMPILER=${CMAKE_RC_COMPILER}
         -DCMAKE_SYSROOT=${CMAKE_SYSROOT}
         -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY
-        -DCMAKE_C_FLAGS=-D__reactos__
-        -DCMAKE_CXX_FLAGS=-D__reactos__
-        -DCMAKE_ASM_FLAGS=-D__reactos__
+        -DCMAKE_C_FLAGS=-D__REACTOS__
+        -DCMAKE_CXX_FLAGS=-D__REACTOS__
+        -DCMAKE_ASM_FLAGS=-D__REACTOS__
         # This is a Windows ARM64EC cross-build. FEX's default native tuning
         # probes Linux /proc/cpuinfo from the build host, which is not useful.
         -DTUNE_CPU=none
@@ -112,8 +112,8 @@ ExternalProject_Add(fex-arm64ec-build
     USES_TERMINAL_BUILD OFF
 )
 
-# configure.sh writes this state file from the FEX revision, ReactOS patch hash,
-# and recursive FEX submodule revisions.  Updating it invalidates the external
+# configure.sh writes this state file from the FEX revision and recursive FEX
+# submodule revisions.  Updating it invalidates the external
 # configure and build stamps without rebuilding FEX on every image invocation.
 ExternalProject_Add_Step(fex-arm64ec-build source-state
     COMMAND ${CMAKE_COMMAND} -E true
