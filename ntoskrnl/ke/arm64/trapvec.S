@@ -71,12 +71,33 @@ KiArm64InterruptDispatchOnIsrStack:
 
 .Ldispatch_interrupt_current_stack:
     bl KiArm64InterruptDispatchEntry
+    msr daifset, #0xF
     mov sp, x29
     mov w12, w0
 
     mrs x9, tpidr_el1
     ldr x9, [x9, #PcCurrentPrcb]
     cbz x9, .Ldispatch_interrupt_no_prcb
+    ldr x10, [x9, #PbIsrStack]
+    cbz x10, .Ldispatch_interrupt_by_level
+    sub x11, x10, #KERNEL_STACK_SIZE
+    cmp x29, x11
+    b.lo .Ldispatch_interrupt_outermost
+    cmp x29, x10
+    b.hs .Ldispatch_interrupt_outermost
+    ldrb w11, [x9, #PbNestingLevel]
+    cmp w11, #1
+    b.ls .Ldispatch_interrupt_nested_done
+    sub w11, w11, #1
+    strb w11, [x9, #PbNestingLevel]
+    b .Ldispatch_interrupt_done
+
+.Ldispatch_interrupt_nested_done:
+    mov w11, #1
+    strb w11, [x9, #PbNestingLevel]
+    b .Ldispatch_interrupt_done
+
+.Ldispatch_interrupt_by_level:
     ldrb w11, [x9, #PbNestingLevel]
     cmp w11, #1
     b.ls .Ldispatch_interrupt_outermost

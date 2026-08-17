@@ -96,6 +96,9 @@ KiShouldDeliverApcOnLower(
     _In_ KIRQL NewIrql)
 {
     ULONG64 Daif;
+    ULONG_PTR StackPointer;
+    ULONG_PTR IsrStack;
+    PKPRCB Prcb;
     PKTHREAD Thread;
 
     if (NewIrql >= APC_LEVEL)
@@ -107,6 +110,19 @@ KiShouldDeliverApcOnLower(
     if (Daif & ARM64_PSTATE_IRQ_MASK)
     {
         return FALSE;
+    }
+
+    Prcb = KeGetCurrentPrcb();
+    if (Prcb != NULL)
+    {
+        IsrStack = (ULONG_PTR)Prcb->IsrStack;
+        __asm__ __volatile__("mov %0, sp" : "=r"(StackPointer));
+        if ((IsrStack != 0) &&
+            (StackPointer >= (IsrStack - KERNEL_STACK_SIZE)) &&
+            (StackPointer < IsrStack))
+        {
+            return FALSE;
+        }
     }
 
     Thread = KeGetCurrentThread();
