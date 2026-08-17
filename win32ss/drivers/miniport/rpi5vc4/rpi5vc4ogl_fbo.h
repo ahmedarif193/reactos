@@ -9,13 +9,28 @@
 
 typedef struct _RPI5VC4_OGL_FBO_STATE RPI5VC4_OGL_FBO_STATE;
 typedef RPI5VC4_OGL_FBO_STATE *PRPI5VC4_OGL_FBO_STATE;
+struct gl_texture_object;
+
+VOID
+Rpi5OglMaterializeTextureClear(
+    _In_ struct gl_texture_object *Texture);
+
+BOOL
+Rpi5OglRecordGraphTextureMipmap(
+    _In_ struct gl_texture_object *Texture);
 
 typedef struct _RPI5VC4_OGL_FBO_COLOR_TARGET
 {
+    struct gl_texture_object *Texture;
     GLubyte *Data;
+    struct gl_texture_object *DepthTexture;
+    GLdepth *DepthData;
+    BOOL HasColor;
+    BOOL HasDepth;
     ULONG Width;
     ULONG Height;
     GLenum Format;
+    GLenum DepthFormat;
     GLuint Framebuffer;
     ULONG Generation;
 } RPI5VC4_OGL_FBO_COLOR_TARGET, *PRPI5VC4_OGL_FBO_COLOR_TARGET;
@@ -23,7 +38,8 @@ typedef struct _RPI5VC4_OGL_FBO_COLOR_TARGET
 BOOL
 Rpi5OglFboInitialize(
     _Outptr_ PRPI5VC4_OGL_FBO_STATE *State,
-    _In_ GLcontext *Mesa);
+    _In_ GLcontext *Mesa,
+    _In_ GLframebuffer *DefaultBuffer);
 
 VOID
 Rpi5OglFboCleanup(
@@ -34,6 +50,15 @@ Rpi5OglFboCurrentName(
     _In_opt_ PRPI5VC4_OGL_FBO_STATE State);
 
 BOOL
+Rpi5OglFboCurrentComplete(
+    _In_opt_ PRPI5VC4_OGL_FBO_STATE State);
+
+BOOL
+Rpi5OglFboValidateCurrent(
+    _In_opt_ PRPI5VC4_OGL_FBO_STATE State,
+    _In_z_ PCSTR Function);
+
+BOOL
 Rpi5OglFboGetColorTarget(
     _In_opt_ PRPI5VC4_OGL_FBO_STATE State,
     _Out_ PRPI5VC4_OGL_FBO_COLOR_TARGET Target);
@@ -41,12 +66,29 @@ Rpi5OglFboGetColorTarget(
 VOID
 Rpi5OglFboTextureChanged(
     _In_opt_ PRPI5VC4_OGL_FBO_STATE State,
-    _In_ GLuint Texture);
+    _In_ struct gl_texture_object *Texture);
 
 VOID
 Rpi5OglFboTextureDeleted(
     _In_opt_ PRPI5VC4_OGL_FBO_STATE State,
-    _In_ GLuint Texture);
+    _Inout_ struct gl_texture_object *Texture);
+
+VOID
+Rpi5OglFboRestoreBinding(
+    _In_opt_ PRPI5VC4_OGL_FBO_STATE State);
+
+VOID APIENTRY
+Rpi5OglFboDrawBuffer(
+    _In_ GLenum Mode);
+
+VOID APIENTRY
+Rpi5OglFboGetIntegerv(
+    _In_ GLenum ParameterName,
+    _Out_ GLint *Parameters);
+
+VOID APIENTRY
+Rpi5OglFboReadBuffer(
+    _In_ GLenum Mode);
 
 VOID APIENTRY
 Rpi5OglFboGetTexImage(
