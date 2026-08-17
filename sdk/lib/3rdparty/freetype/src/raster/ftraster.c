@@ -3285,14 +3285,8 @@
     const FT_Bitmap*   target_map = params->target;
 
 #ifdef __REACTOS__
-    black_TWorker *worker = malloc(sizeof(*worker));
-    Long *buffer = malloc(FT_MAX_BLACK_POOL * sizeof(Long));
-    if (!worker || !buffer)
-    {
-        free(worker);
-        free(buffer);
-        return FT_THROW( Out_Of_Memory );
-    }
+    black_TWorker *worker;
+    Long *buffer;
 #else
 #ifndef FT_STATIC_RASTER
     black_TWorker  worker[1];
@@ -3334,6 +3328,17 @@
 
     if ( !target_map->buffer )
       return FT_THROW( Invalid );
+
+#ifdef __REACTOS__
+    worker = malloc(sizeof(*worker));
+    buffer = malloc(FT_MAX_BLACK_POOL * sizeof(Long));
+    if (!worker || !buffer)
+    {
+        free(worker);
+        free(buffer);
+        return FT_THROW( Out_Of_Memory );
+    }
+#endif
 
     ras.outline = *outline;
     ras.target  = *target_map;
