@@ -38,6 +38,40 @@
 #include "rpi5vc4ogl_fbo.h"
 #include "rpi5vc4ogl_gl2.h"
 
+extern void APIENTRY _mesa_CopyTexSubImage3D(
+    GLenum Target,
+    GLint Level,
+    GLint XOffset,
+    GLint YOffset,
+    GLint ZOffset,
+    GLint X,
+    GLint Y,
+    GLsizei Width,
+    GLsizei Height);
+extern void APIENTRY _mesa_TexImage3D(
+    GLenum Target,
+    GLint Level,
+    GLint InternalFormat,
+    GLsizei Width,
+    GLsizei Height,
+    GLsizei Depth,
+    GLint Border,
+    GLenum Format,
+    GLenum Type,
+    const GLvoid *Pixels);
+extern void APIENTRY _mesa_TexSubImage3D(
+    GLenum Target,
+    GLint Level,
+    GLint XOffset,
+    GLint YOffset,
+    GLint ZOffset,
+    GLsizei Width,
+    GLsizei Height,
+    GLsizei Depth,
+    GLenum Format,
+    GLenum Type,
+    const GLvoid *Pixels);
+
 #define RPI5VC4_OGL_CONTEXT_SIGNATURE '1GlR'
 #define RPI5VC4_OPENGL_ICD_DRIVER_VERSION 1
 #define RPI5VC4_OPENGL_ENTRY_COUNT 336
@@ -50,6 +84,9 @@
 #define RPI5VC4_OPENGL_DRAW_BUFFER_INDEX 202
 #define RPI5VC4_OPENGL_CLEAR_INDEX 203
 #define RPI5VC4_OPENGL_READ_BUFFER_INDEX 254
+#define RPI5VC4_OPENGL_GET_BOOLEANV_INDEX 258
+#define RPI5VC4_OPENGL_GET_DOUBLEV_INDEX 260
+#define RPI5VC4_OPENGL_GET_FLOATV_INDEX 262
 #define RPI5VC4_OPENGL_GET_INTEGERV_INDEX 263
 #define RPI5VC4_OPENGL_GET_TEX_IMAGE_INDEX 281
 #define RPI5VC4_OPENGL_DRAW_ARRAYS_INDEX 310
@@ -1912,14 +1949,22 @@ Rpi5OglTriangleStateSupported(
     _In_ GLcontext *Mesa)
 {
     PRPI5VC4_OGL_CONTEXT Context = Mesa->DriverCtx;
-    RPI5VC4_OGL_RENDER_TARGET Target;
+    RPI5VC4_V3D_BLEND_STATE BlendState;
 
-    return Context != NULL &&
+    if (Context == NULL ||
+        !Rpi5OglGl2GetBlendState(Context->Gl2State, &BlendState))
+    {
+        return FALSE;
+    }
+
+    return
            Mesa->Visual != NULL &&
            Mesa->Visual->RGBAflag &&
            Mesa->RenderMode == GL_RENDER &&
            Mesa->Texture.Enabled == 0 &&
-           Mesa->RasterMask == 0 &&
+           Mesa->RasterMask ==
+               ((BlendState.Flags & RPI5VC4_V3D_BLEND_FLAG_ENABLE) != 0 ?
+                    BLEND_BIT : 0) &&
            !Mesa->Polygon.Unfilled &&
            !Mesa->Polygon.OffsetAny &&
            !Mesa->Polygon.SmoothFlag &&
@@ -2599,6 +2644,7 @@ Rpi5OglSubmitPrimitive(
 {
     RPI5VC4_OGL_RENDER_TARGET Target;
     RPI5VC4_V3D_TRIANGLE_REQUEST Request;
+    RPI5VC4_V3D_BLEND_STATE BlendState;
     PRPI5VC4_V3D_TRIANGLE_RESULT Result;
     ULONG HeaderSize = FIELD_OFFSET(RPI5VC4_V3D_TRIANGLE_RESULT, Pixels);
     ULONG Width;
@@ -2624,6 +2670,8 @@ Rpi5OglSubmitPrimitive(
     {
         return FALSE;
     }
+    if (!Rpi5OglGl2GetBlendState(Context->Gl2State, &BlendState))
+        return FALSE;
 
     Width = Mesa->Viewport.Width;
     Height = Mesa->Viewport.Height;
@@ -2648,6 +2696,9 @@ Rpi5OglSubmitPrimitive(
     Request.ClearColor = Context->HardwareClearColor;
     Request.PrimitiveType = PrimitiveType;
     Request.VertexCount = VertexCount;
+    CopyMemory(&Request.BlendState,
+               &BlendState,
+               sizeof(Request.BlendState));
     CopyMemory(Request.Vertices,
                Vertices,
                VertexCount * sizeof(*Vertices));
@@ -2836,8 +2887,7 @@ Rpi5OglApiBlendFunc(
 
     if (Context == NULL)
         return;
-    Rpi5OglGl2BlendFuncChanged(Context->Gl2State);
-    gl_BlendFunc(Context->MesaContext, Source, Destination);
+    Rpi5OglGl2BlendFunc(Context->Gl2State, Source, Destination);
 }
 
 static VOID APIENTRY
@@ -3410,6 +3460,30 @@ Rpi5OglDrawElements(
 
 Done:
     HeapFree(GetProcessHeap(), 0, IndexValues);
+}
+
+static VOID APIENTRY
+Rpi5OglDrawRangeElements(
+    _In_ GLenum Mode,
+    _In_ GLuint Start,
+    _In_ GLuint End,
+    _In_ GLsizei Count,
+    _In_ GLenum Type,
+    _In_opt_ const GLvoid *Indices)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+
+    if (Context == NULL)
+        return;
+    if (End < Start)
+    {
+        gl_error(Context->MesaContext,
+                 GL_INVALID_VALUE,
+                 "glDrawRangeElements(end < start)");
+        return;
+    }
+
+    Rpi5OglDrawElements(Mode, Count, Type, Indices);
 }
 
 static VOID
@@ -5261,12 +5335,70 @@ Rpi5OglGetString(
 }
 
 static VOID APIENTRY
+Rpi5OglGetBooleanv(
+    _In_ GLenum ParameterName,
+    _Out_ GLboolean *Parameters)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+
+    if (Context != NULL &&
+        Rpi5OglGl2GetBooleanv(Context->Gl2State,
+                              ParameterName,
+                              Parameters))
+    {
+        return;
+    }
+    _mesa_GetBooleanv(ParameterName, Parameters);
+}
+
+static VOID APIENTRY
+Rpi5OglGetDoublev(
+    _In_ GLenum ParameterName,
+    _Out_ GLdouble *Parameters)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+
+    if (Context != NULL &&
+        Rpi5OglGl2GetDoublev(Context->Gl2State,
+                             ParameterName,
+                             Parameters))
+    {
+        return;
+    }
+    _mesa_GetDoublev(ParameterName, Parameters);
+}
+
+static VOID APIENTRY
+Rpi5OglGetFloatv(
+    _In_ GLenum ParameterName,
+    _Out_ GLfloat *Parameters)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+
+    if (Context != NULL &&
+        Rpi5OglGl2GetFloatv(Context->Gl2State,
+                            ParameterName,
+                            Parameters))
+    {
+        return;
+    }
+    _mesa_GetFloatv(ParameterName, Parameters);
+}
+
+static VOID APIENTRY
 Rpi5OglGetIntegerv(
     _In_ GLenum ParameterName,
     _Out_ GLint *Parameters)
 {
     PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
 
+    if (Context != NULL &&
+        Rpi5OglGl2GetIntegerv(Context->Gl2State,
+                              ParameterName,
+                              Parameters))
+    {
+        return;
+    }
     if (Context != NULL &&
         Rpi5OglBufferGetIntegerv(Context->BufferState,
                                  ParameterName,
@@ -5998,6 +6130,12 @@ Rpi5OglInitializeProcTable(VOID)
         (PROC)Rpi5OglApiClear;
     Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_READ_BUFFER_INDEX] =
         (PROC)Rpi5OglFboReadBuffer;
+    Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_GET_BOOLEANV_INDEX] =
+        (PROC)Rpi5OglGetBooleanv;
+    Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_GET_DOUBLEV_INDEX] =
+        (PROC)Rpi5OglGetDoublev;
+    Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_GET_FLOATV_INDEX] =
+        (PROC)Rpi5OglGetFloatv;
     Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_GET_INTEGERV_INDEX] =
         (PROC)Rpi5OglGetIntegerv;
     Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_GET_TEX_IMAGE_INDEX] =
@@ -6335,6 +6473,26 @@ DrvGetProcAddress(
         return (PROC)Rpi5OglWglGetExtensionsStringArb;
     if (Name != NULL && lstrcmpA(Name, "Rpi5Vc4GetStats") == 0)
         return (PROC)Rpi5Vc4GetStats;
+    if (Name != NULL && lstrcmpA(Name, "glDrawRangeElements") == 0)
+        return (PROC)Rpi5OglDrawRangeElements;
+    if (Name != NULL &&
+        (lstrcmpA(Name, "glCopyTexSubImage3D") == 0 ||
+         lstrcmpA(Name, "glCopyTexSubImage3DEXT") == 0))
+    {
+        return (PROC)_mesa_CopyTexSubImage3D;
+    }
+    if (Name != NULL &&
+        (lstrcmpA(Name, "glTexImage3D") == 0 ||
+         lstrcmpA(Name, "glTexImage3DEXT") == 0))
+    {
+        return (PROC)_mesa_TexImage3D;
+    }
+    if (Name != NULL &&
+        (lstrcmpA(Name, "glTexSubImage3D") == 0 ||
+         lstrcmpA(Name, "glTexSubImage3DEXT") == 0))
+    {
+        return (PROC)_mesa_TexSubImage3D;
+    }
     if (Name != NULL &&
         (Procedure = Rpi5OglBufferGetProcAddress(Name)) != NULL)
     {
