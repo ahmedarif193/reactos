@@ -9,13 +9,14 @@
 
 static SURFOBJ *
 IntGetShadowSurface(
-   SURFOBJ *pso,
-   PPDEV ppdev)
+   SURFOBJ *pso)
 {
-   if (pso != NULL && ppdev != NULL &&
-       pso->dhpdev == (DHPDEV)ppdev &&
-       pso->dhsurf == (DHSURF)ppdev)
+   PPDEV ppdev;
+
+   if (pso != NULL && pso->dhpdev != NULL &&
+       pso->dhsurf == (DHSURF)pso->dhpdev)
    {
+      ppdev = (PPDEV)pso->dhpdev;
       if (ppdev->ShadowActive && ppdev->psoShadow != NULL)
          return ppdev->psoShadow;
    }
@@ -37,12 +38,11 @@ DrvBitBlt(
    IN POINTL *pptlBrush,
    IN ROP4 rop4)
 {
-   PPDEV ppdev = (PPDEV)psoTrg->dhpdev;
    BOOL Result;
 
-   Result = EngBitBlt(IntGetShadowSurface(psoTrg, ppdev),
-                      IntGetShadowSurface(psoSrc, ppdev),
-                      IntGetShadowSurface(psoMask, ppdev), pco, pxlo, prclTrg,
+   Result = EngBitBlt(IntGetShadowSurface(psoTrg),
+                      IntGetShadowSurface(psoSrc),
+                      IntGetShadowSurface(psoMask), pco, pxlo, prclTrg,
                       pptlSrc, pptlMask, pbo, pptlBrush, rop4);
    if (Result)
       IntPublishShadowSurface(psoTrg, prclTrg, pco,
@@ -60,11 +60,10 @@ DrvCopyBits(
    IN RECTL *prclDest,
    IN POINTL *pptlSrc)
 {
-   PPDEV ppdev = (PPDEV)psoDest->dhpdev;
    BOOL Result;
 
-   Result = EngCopyBits(IntGetShadowSurface(psoDest, ppdev),
-                        IntGetShadowSurface(psoSrc, ppdev), pco, pxlo,
+   Result = EngCopyBits(IntGetShadowSurface(psoDest),
+                        IntGetShadowSurface(psoSrc), pco, pxlo,
                         prclDest, pptlSrc);
    if (Result)
       IntPublishShadowSurface(psoDest, prclDest, pco,
@@ -85,11 +84,10 @@ DrvLineTo(
    IN RECTL *prclBounds,
    IN MIX mix)
 {
-   PPDEV ppdev = (PPDEV)pso->dhpdev;
    RECTL Bounds;
    BOOL Result;
 
-   Result = EngLineTo(IntGetShadowSurface(pso, ppdev), pco, pbo,
+   Result = EngLineTo(IntGetShadowSurface(pso), pco, pbo,
                       x1, y1, x2, y2, prclBounds, mix);
    if (!Result)
       return FALSE;
@@ -121,10 +119,9 @@ DrvPaint(
    IN POINTL *pptlBrushOrg,
    IN MIX mix)
 {
-   PPDEV ppdev = (PPDEV)pso->dhpdev;
    BOOL Result;
 
-   Result = EngPaint(IntGetShadowSurface(pso, ppdev), pco, pbo,
+   Result = EngPaint(IntGetShadowSurface(pso), pco, pbo,
                      pptlBrushOrg, mix);
    if (Result)
    {
@@ -162,12 +159,11 @@ DrvStretchBlt(
    IN POINTL *pptlMask,
    IN ULONG iMode)
 {
-   PPDEV ppdev = (PPDEV)psoDest->dhpdev;
    BOOL Result;
 
-   Result = EngStretchBlt(IntGetShadowSurface(psoDest, ppdev),
-                          IntGetShadowSurface(psoSrc, ppdev),
-                          IntGetShadowSurface(psoMask, ppdev), pco, pxlo, pca,
+   Result = EngStretchBlt(IntGetShadowSurface(psoDest),
+                          IntGetShadowSurface(psoSrc),
+                          IntGetShadowSurface(psoMask), pco, pxlo, pca,
                           pptlHTOrg, prclDest, prclSrc, pptlMask, iMode);
    if (Result)
       IntPublishShadowSurface(psoDest, prclDest, pco,
@@ -191,12 +187,11 @@ DrvStretchBltROP(
    IN BRUSHOBJ *pbo,
    IN DWORD rop4)
 {
-   PPDEV ppdev = (PPDEV)psoDest->dhpdev;
    BOOL Result;
 
-   Result = EngStretchBltROP(IntGetShadowSurface(psoDest, ppdev),
-                             IntGetShadowSurface(psoSrc, ppdev),
-                             IntGetShadowSurface(psoMask, ppdev), pco, pxlo, pca,
+   Result = EngStretchBltROP(IntGetShadowSurface(psoDest),
+                             IntGetShadowSurface(psoSrc),
+                             IntGetShadowSurface(psoMask), pco, pxlo, pca,
                              pptlHTOrg, prclDest, prclSrc, pptlMask,
                              iMode, pbo, rop4);
    if (Result)
@@ -215,11 +210,10 @@ DrvAlphaBlend(
    IN RECTL *prclSrc,
    IN BLENDOBJ *pBlendObj)
 {
-   PPDEV ppdev = (PPDEV)psoDest->dhpdev;
    BOOL Result;
 
-   Result = EngAlphaBlend(IntGetShadowSurface(psoDest, ppdev),
-                          IntGetShadowSurface(psoSrc, ppdev), pco, pxlo,
+   Result = EngAlphaBlend(IntGetShadowSurface(psoDest),
+                          IntGetShadowSurface(psoSrc), pco, pxlo,
                           prclDest, prclSrc, pBlendObj);
    if (Result)
       IntPublishShadowSurface(psoDest, prclDest, pco,
@@ -238,11 +232,10 @@ DrvTransparentBlt(
    IN ULONG iTransColor,
    IN ULONG ulReserved)
 {
-   PPDEV ppdev = (PPDEV)psoDst->dhpdev;
    BOOL Result;
 
-   Result = EngTransparentBlt(IntGetShadowSurface(psoDst, ppdev),
-                              IntGetShadowSurface(psoSrc, ppdev), pco, pxlo,
+   Result = EngTransparentBlt(IntGetShadowSurface(psoDst),
+                              IntGetShadowSurface(psoSrc), pco, pxlo,
                               prclDst, prclSrc, iTransColor, ulReserved);
    if (Result)
       IntPublishShadowSurface(psoDst, prclDst, pco,
@@ -263,10 +256,9 @@ DrvGradientFill(
    IN POINTL *pptlDitherOrg,
    IN ULONG ulMode)
 {
-   PPDEV ppdev = (PPDEV)psoDest->dhpdev;
    BOOL Result;
 
-   Result = EngGradientFill(IntGetShadowSurface(psoDest, ppdev), pco, pxlo,
+   Result = EngGradientFill(IntGetShadowSurface(psoDest), pco, pxlo,
                             pVertex, nVertex,
                             pMesh, nMesh, prclExtents,
                             pptlDitherOrg, ulMode);
