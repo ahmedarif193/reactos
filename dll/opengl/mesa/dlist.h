@@ -216,6 +216,12 @@ extern void gl_save_CopyTexSubImage2D( GLcontext *ctx,
                                        GLint x, GLint y,
                                        GLsizei width, GLint height );
 
+extern void gl_save_CopyTexSubImage3D( GLcontext *ctx,
+                                       GLenum target, GLint level,
+                                       GLint xoffset, GLint yoffset,
+                                       GLint zoffset, GLint x, GLint y,
+                                       GLsizei width, GLsizei height );
+
 extern void gl_save_CullFace( GLcontext *ctx, GLenum mode );
 
 extern void gl_save_DepthFunc( GLcontext *ctx, GLenum func );
@@ -417,6 +423,12 @@ extern void gl_save_TexImage2D( GLcontext *ctx, GLenum target,
                                 GLenum format, GLenum type,
                                 struct gl_image *teximage );
 
+extern void gl_save_TexImage3D( GLcontext *ctx, GLenum target,
+                                GLint level, GLint components,
+			        GLsizei width, GLsizei height, GLsizei depth,
+                                GLint border, GLenum format, GLenum type,
+                                struct gl_image *teximage );
+
 extern void gl_save_TexSubImage1D( GLcontext *ctx,
                                    GLenum target, GLint level,
                                    GLint xoffset, GLsizei width,
@@ -428,6 +440,13 @@ extern void gl_save_TexSubImage2D( GLcontext *ctx,
                                    GLenum target, GLint level,
                                    GLint xoffset, GLint yoffset,
                                    GLsizei width, GLsizei height,
+                                   GLenum format, GLenum type,
+                                   struct gl_image *image );
+
+extern void gl_save_TexSubImage3D( GLcontext *ctx,
+                                   GLenum target, GLint level,
+                                   GLint xoffset, GLint yoffset, GLint zoffset,
+                                   GLsizei width, GLsizei height, GLsizei depth,
                                    GLenum format, GLenum type,
                                    struct gl_image *image );
 

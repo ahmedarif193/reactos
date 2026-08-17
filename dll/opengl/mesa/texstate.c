@@ -198,6 +198,9 @@ void gl_TexParameterfv( GLcontext *ctx,
       case GL_TEXTURE_2D:
          texObj = ctx->Texture.Current2D;
          break;
+      case GL_TEXTURE_3D:
+         texObj = ctx->Texture.Current3D;
+         break;
       default:
          gl_error( ctx, GL_INVALID_ENUM, "glTexParameter(target)" );
          return;
@@ -302,7 +305,12 @@ void gl_GetTexLevelParameteriv( GLcontext *ctx, GLenum target, GLint level,
                                 GLenum pname, GLint *params )
 {
    struct gl_texture_image *tex;
+   GLuint dimensions;
 
+   if (INSIDE_BEGIN_END(ctx)) {
+      gl_error( ctx, GL_INVALID_OPERATION, "glGetTexLevelParameter[if]v" );
+      return;
+   }
    if (level<0 || level>=MAX_TEXTURE_LEVELS) {
       gl_error( ctx, GL_INVALID_VALUE, "glGetTexLevelParameter[if]v" );
       return;
@@ -311,125 +319,88 @@ void gl_GetTexLevelParameteriv( GLcontext *ctx, GLenum target, GLint level,
    switch (target) {
       case GL_TEXTURE_1D:
          tex = ctx->Texture.Current1D->Image[level];
-         switch (pname) {
-	    case GL_TEXTURE_WIDTH:
-	       *params = tex->Width;
-	       break;
-	    case GL_TEXTURE_COMPONENTS:
-	       *params = tex->Format;
-	       break;
-	    case GL_TEXTURE_BORDER:
-	       *params = tex->Border;
-	       break;
-            case GL_TEXTURE_RED_SIZE:
-            case GL_TEXTURE_GREEN_SIZE:
-            case GL_TEXTURE_BLUE_SIZE:
-            case GL_TEXTURE_ALPHA_SIZE:
-            case GL_TEXTURE_INTENSITY_SIZE:
-            case GL_TEXTURE_LUMINANCE_SIZE:
-               *params = 8;  /* 8-bits */
-               break;
-            case GL_TEXTURE_INDEX_SIZE_EXT:
-               *params = 8;
-               break;
-	    default:
-	       gl_error( ctx, GL_INVALID_ENUM,
-                         "glGetTexLevelParameter[if]v(pname)" );
-	 }
-	 break;
+         dimensions = 1;
+         break;
       case GL_TEXTURE_2D:
          tex = ctx->Texture.Current2D->Image[level];
-	 switch (pname) {
-	    case GL_TEXTURE_WIDTH:
-	       *params = tex->Width;
-	       break;
-	    case GL_TEXTURE_HEIGHT:
-	       *params = tex->Height;
-	       break;
-	    case GL_TEXTURE_COMPONENTS:
-	       *params = tex->Format;
-	       break;
-	    case GL_TEXTURE_BORDER:
-	       *params = tex->Border;
-	       break;
-            case GL_TEXTURE_RED_SIZE:
-            case GL_TEXTURE_GREEN_SIZE:
-            case GL_TEXTURE_BLUE_SIZE:
-            case GL_TEXTURE_ALPHA_SIZE:
-            case GL_TEXTURE_INTENSITY_SIZE:
-            case GL_TEXTURE_LUMINANCE_SIZE:
-               *params = 8;  /* 8-bits */
-               break;
-            case GL_TEXTURE_INDEX_SIZE_EXT:
-               *params = 8;
-               break;
-	    default:
-	       gl_error( ctx, GL_INVALID_ENUM,
-                         "glGetTexLevelParameter[if]v(pname)" );
-	 }
-	 break;
+         dimensions = 2;
+         break;
+      case GL_TEXTURE_3D:
+         tex = ctx->Texture.Current3D->Image[level];
+         dimensions = 3;
+         break;
       case GL_PROXY_TEXTURE_1D:
          tex = ctx->Texture.Proxy1D->Image[level];
-         switch (pname) {
-	    case GL_TEXTURE_WIDTH:
-	       *params = tex->Width;
-	       break;
-	    case GL_TEXTURE_COMPONENTS:
-	       *params = tex->Format;
-	       break;
-	    case GL_TEXTURE_BORDER:
-	       *params = tex->Border;
-	       break;
-            case GL_TEXTURE_RED_SIZE:
-            case GL_TEXTURE_GREEN_SIZE:
-            case GL_TEXTURE_BLUE_SIZE:
-            case GL_TEXTURE_ALPHA_SIZE:
-            case GL_TEXTURE_INTENSITY_SIZE:
-            case GL_TEXTURE_LUMINANCE_SIZE:
-               *params = 8;  /* 8-bits */
-               break;
-            case GL_TEXTURE_INDEX_SIZE_EXT:
-               *params = 8;
-               break;
-	    default:
-	       gl_error( ctx, GL_INVALID_ENUM,
-                         "glGetTexLevelParameter[if]v(pname)" );
-	 }
-	 break;
+         dimensions = 1;
+         break;
       case GL_PROXY_TEXTURE_2D:
          tex = ctx->Texture.Proxy2D->Image[level];
-	 switch (pname) {
-	    case GL_TEXTURE_WIDTH:
-	       *params = tex->Width;
-	       break;
-	    case GL_TEXTURE_HEIGHT:
-	       *params = tex->Height;
-	       break;
-	    case GL_TEXTURE_COMPONENTS:
-	       *params = tex->Format;
-	       break;
-	    case GL_TEXTURE_BORDER:
-	       *params = tex->Border;
-	       break;
-            case GL_TEXTURE_RED_SIZE:
-            case GL_TEXTURE_GREEN_SIZE:
-            case GL_TEXTURE_BLUE_SIZE:
-            case GL_TEXTURE_ALPHA_SIZE:
-            case GL_TEXTURE_INTENSITY_SIZE:
-            case GL_TEXTURE_LUMINANCE_SIZE:
-               *params = 8;  /* 8-bits */
-               break;
-            case GL_TEXTURE_INDEX_SIZE_EXT:
-               *params = 8;
-               break;
-	    default:
-	       gl_error( ctx, GL_INVALID_ENUM,
-                         "glGetTexLevelParameter[if]v(pname)" );
-	 }
-	 break;
-     default:
-	 gl_error(ctx, GL_INVALID_ENUM, "glGetTexLevelParameter[if]v(target)");
-   }	 
+         dimensions = 2;
+         break;
+      case GL_PROXY_TEXTURE_3D:
+         tex = ctx->Texture.Proxy3D->Image[level];
+         dimensions = 3;
+         break;
+      default:
+         gl_error(ctx, GL_INVALID_ENUM,
+                  "glGetTexLevelParameter[if]v(target)");
+         return;
+   }
+
+   switch (pname) {
+      case GL_TEXTURE_WIDTH:
+         *params = tex ? tex->Width : 0;
+         break;
+      case GL_TEXTURE_HEIGHT:
+         if (dimensions<2) {
+            gl_error(ctx, GL_INVALID_ENUM,
+                     "glGetTexLevelParameter[if]v(pname)");
+            return;
+         }
+         *params = tex ? tex->Height : 0;
+         break;
+      case GL_TEXTURE_DEPTH:
+         if (dimensions<3) {
+            gl_error(ctx, GL_INVALID_ENUM,
+                     "glGetTexLevelParameter[if]v(pname)");
+            return;
+         }
+         *params = tex ? tex->Depth : 0;
+         break;
+      case GL_TEXTURE_COMPONENTS:
+         *params = tex ? (tex->IntFormat ? tex->IntFormat : tex->Format) : 0;
+         break;
+      case GL_TEXTURE_BORDER:
+         *params = tex ? tex->Border : 0;
+         break;
+      case GL_TEXTURE_RED_SIZE:
+         *params = tex && (tex->Format==GL_RED || tex->Format==GL_RGB ||
+                           tex->Format==GL_RGBA) ? 8 : 0;
+         break;
+      case GL_TEXTURE_GREEN_SIZE:
+      case GL_TEXTURE_BLUE_SIZE:
+         *params = tex && (tex->Format==GL_RGB || tex->Format==GL_RGBA) ? 8 : 0;
+         break;
+      case GL_TEXTURE_ALPHA_SIZE:
+         *params = tex && (tex->Format==GL_ALPHA ||
+                           tex->Format==GL_LUMINANCE_ALPHA ||
+                           tex->Format==GL_RGBA) ? 8 : 0;
+         break;
+      case GL_TEXTURE_INTENSITY_SIZE:
+         *params = tex && tex->Format==GL_INTENSITY ? 8 : 0;
+         break;
+      case GL_TEXTURE_LUMINANCE_SIZE:
+         *params = tex && (tex->Format==GL_LUMINANCE ||
+                           tex->Format==GL_LUMINANCE_ALPHA) ? 8 : 0;
+         break;
+      case GL_TEXTURE_INDEX_SIZE_EXT:
+         *params = tex && tex->Format==GL_COLOR_INDEX ? 8 : 0;
+         break;
+      default:
+         gl_error( ctx, GL_INVALID_ENUM,
+                   "glGetTexLevelParameter[if]v(pname)" );
+         return;
+   }
 }
 
 
@@ -497,8 +468,42 @@ void gl_GetTexParameterfv( GLcontext *ctx,
 	       break;
 	    default:
 	       gl_error( ctx, GL_INVALID_ENUM, "glGetTexParameterfv(pname)" );
-	 }
-	 break;
+		 }
+		 break;
+      case GL_TEXTURE_3D:
+         switch (pname) {
+		    case GL_TEXTURE_MAG_FILTER:
+		       *params = ENUM_TO_FLOAT(ctx->Texture.Current3D->MagFilter);
+		       break;
+		    case GL_TEXTURE_MIN_FILTER:
+		       *params = ENUM_TO_FLOAT(ctx->Texture.Current3D->MinFilter);
+		       break;
+		    case GL_TEXTURE_WRAP_S:
+		       *params = ENUM_TO_FLOAT(ctx->Texture.Current3D->WrapS);
+		       break;
+		    case GL_TEXTURE_WRAP_T:
+		       *params = ENUM_TO_FLOAT(ctx->Texture.Current3D->WrapT);
+		       break;
+		    case GL_TEXTURE_WRAP_R:
+		       *params = ENUM_TO_FLOAT(ctx->Texture.Current3D->WrapR);
+		       break;
+		    case GL_TEXTURE_BORDER_COLOR:
+               params[0] = ctx->Texture.Current3D->BorderColor[0] / 255.0f;
+               params[1] = ctx->Texture.Current3D->BorderColor[1] / 255.0f;
+               params[2] = ctx->Texture.Current3D->BorderColor[2] / 255.0f;
+               params[3] = ctx->Texture.Current3D->BorderColor[3] / 255.0f;
+               break;
+		    case GL_TEXTURE_RESIDENT:
+               *params = ENUM_TO_FLOAT(GL_TRUE);
+		       break;
+		    case GL_TEXTURE_PRIORITY:
+               *params = ctx->Texture.Current3D->Priority;
+		       break;
+		    default:
+		       gl_error( ctx, GL_INVALID_ENUM,
+                         "glGetTexParameterfv(pname)" );
+		 }
+		 break;
       default:
          gl_error( ctx, GL_INVALID_ENUM, "glGetTexParameterfv(target)" );
    }
@@ -571,8 +576,8 @@ void gl_GetTexParameteriv( GLcontext *ctx,
                   params[1] = FLOAT_TO_INT( color[1] );
                   params[2] = FLOAT_TO_INT( color[2] );
                   params[3] = FLOAT_TO_INT( color[3] );
-               }
-	       break;
+		 }
+		 break;
 	    case GL_TEXTURE_RESIDENT:
                *params = (GLint) GL_TRUE;
 	       break;
@@ -581,8 +586,49 @@ void gl_GetTexParameteriv( GLcontext *ctx,
 	       break;
 	    default:
 	       gl_error( ctx, GL_INVALID_ENUM, "glGetTexParameteriv(pname)" );
-	 }
-	 break;
+		 }
+		 break;
+      case GL_TEXTURE_3D:
+         switch (pname) {
+		    case GL_TEXTURE_MAG_FILTER:
+		       *params = (GLint) ctx->Texture.Current3D->MagFilter;
+		       break;
+		    case GL_TEXTURE_MIN_FILTER:
+		       *params = (GLint) ctx->Texture.Current3D->MinFilter;
+		       break;
+		    case GL_TEXTURE_WRAP_S:
+		       *params = (GLint) ctx->Texture.Current3D->WrapS;
+		       break;
+		    case GL_TEXTURE_WRAP_T:
+		       *params = (GLint) ctx->Texture.Current3D->WrapT;
+		       break;
+		    case GL_TEXTURE_WRAP_R:
+		       *params = (GLint) ctx->Texture.Current3D->WrapR;
+		       break;
+		    case GL_TEXTURE_BORDER_COLOR:
+               {
+                  GLfloat color[4];
+                  color[0] = ctx->Texture.Current3D->BorderColor[0]/255.0;
+                  color[1] = ctx->Texture.Current3D->BorderColor[1]/255.0;
+                  color[2] = ctx->Texture.Current3D->BorderColor[2]/255.0;
+                  color[3] = ctx->Texture.Current3D->BorderColor[3]/255.0;
+                  params[0] = FLOAT_TO_INT( color[0] );
+                  params[1] = FLOAT_TO_INT( color[1] );
+                  params[2] = FLOAT_TO_INT( color[2] );
+                  params[3] = FLOAT_TO_INT( color[3] );
+               }
+		       break;
+		    case GL_TEXTURE_RESIDENT:
+               *params = (GLint) GL_TRUE;
+		       break;
+		    case GL_TEXTURE_PRIORITY:
+               *params = (GLint) ctx->Texture.Current3D->Priority;
+		       break;
+		    default:
+		       gl_error( ctx, GL_INVALID_ENUM,
+                         "glGetTexParameteriv(pname)" );
+		 }
+		 break;
       default:
          gl_error( ctx, GL_INVALID_ENUM, "glGetTexParameteriv(target)" );
    }
@@ -980,7 +1026,9 @@ void gl_update_texture_state( GLcontext *ctx )
 {
    struct gl_texture_object *t;
 
-   if (ctx->Texture.Enabled & TEXTURE_2D)
+   if (ctx->Texture.Enabled & TEXTURE_3D)
+      ctx->Texture.Current = ctx->Texture.Current3D;
+   else if (ctx->Texture.Enabled & TEXTURE_2D)
       ctx->Texture.Current = ctx->Texture.Current2D;
    else if (ctx->Texture.Enabled & TEXTURE_1D)
       ctx->Texture.Current = ctx->Texture.Current1D;

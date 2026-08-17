@@ -71,13 +71,11 @@
  */
 #define SHORTCUT
 
-
 /*
  * Windows 95/NT DLL stuff.
  */
 #if !defined(WIN32) && !defined(WINDOWS_NT) && !defined(__CYGWIN32__)
 #define APIENTRY
 #endif
-
 
 #endif

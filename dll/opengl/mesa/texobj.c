@@ -120,7 +120,7 @@ gl_alloc_texture_object( struct gl_shared_state *shared, GLuint name,
 {
    struct gl_texture_object *obj;
 
-   assert(dimensions >= 0 && dimensions <= 2);
+   assert(dimensions <= 3);
 
    obj = (struct gl_texture_object *)
                      calloc(1,sizeof(struct gl_texture_object));
@@ -130,6 +130,7 @@ gl_alloc_texture_object( struct gl_shared_state *shared, GLuint name,
       obj->Dimensions = dimensions;
       obj->WrapS = GL_REPEAT;
       obj->WrapT = GL_REPEAT;
+      obj->WrapR = GL_REPEAT;
       obj->MinFilter = GL_NEAREST_MIPMAP_LINEAR;
       obj->MagFilter = GL_LINEAR;
       obj->MinMagThresh = 0.0F;
@@ -218,7 +219,8 @@ void gl_test_texture_object_completeness( struct gl_texture_object *t )
 
    /* Always need level zero image */
    if (!t->Image[0] || !t->Image[0]->Data ||
-       !t->Image[0]->Width2 || !t->Image[0]->Height2) {
+       !t->Image[0]->Width2 || !t->Image[0]->Height2 ||
+       (t->Dimensions==3 && !t->Image[0]->Depth2)) {
       t->Complete = GL_FALSE;
       return;
    }
@@ -308,6 +310,36 @@ void gl_test_texture_object_completeness( struct gl_texture_object *t )
             }
          }
       }
+      else if (t->Dimensions==3) {
+         /* Test 3-D mipmaps */
+         GLuint width = t->Image[0]->Width2;
+         GLuint height = t->Image[0]->Height2;
+         GLuint depth = t->Image[0]->Depth2;
+         for (i=1; i<MAX_TEXTURE_LEVELS; i++) {
+            if (width>1) {
+               width /= 2;
+            }
+            if (height>1) {
+               height /= 2;
+            }
+            if (depth>1) {
+               depth /= 2;
+            }
+            if (!t->Image[i]) {
+               t->Complete = GL_FALSE;
+               return;
+            }
+            if (t->Image[i]->Width2 != width ||
+                t->Image[i]->Height2 != height ||
+                t->Image[i]->Depth2 != depth) {
+               t->Complete = GL_FALSE;
+               return;
+            }
+            if (width==1 && height==1 && depth==1) {
+               return;
+            }
+         }
+      }
       else {
          /* Dimensions = ??? */
          gl_problem(NULL, "Bug in gl_test_texture_object_completeness\n");
@@ -381,6 +413,12 @@ void gl_DeleteTextures( GLcontext *ctx, GLsizei n, const GLuint *texName)
                t->RefCount--;
                assert( t->RefCount >= 0 );
             }
+            else if (ctx->Texture.Current3D==t) {
+               /* revert to default 3-D texture */
+               ctx->Texture.Current3D = ctx->Shared->Default3D;
+               t->RefCount--;
+               assert( t->RefCount >= 0 );
+            }
 
             /* tell device driver to delete texture */
             if (ctx->Driver.DeleteTexture) {
@@ -422,6 +460,11 @@ void gl_BindTexture( GLcontext *ctx, GLenum target, GLuint texName )
          targetPointer = &ctx->Texture.Current2D;
          targetDimensions = 2;
          break;
+      case GL_TEXTURE_3D:
+         oldTexObj = ctx->Texture.Current3D;
+         targetPointer = &ctx->Texture.Current3D;
+         targetDimensions = 3;
+         break;
       default:
          gl_error( ctx, GL_INVALID_ENUM, "glBindTexture" );
          return;
@@ -435,6 +478,9 @@ void gl_BindTexture( GLcontext *ctx, GLenum target, GLuint texName )
             break;
          case GL_TEXTURE_2D:
             newTexObj = ctx->Shared->Default2D;
+            break;
+         case GL_TEXTURE_3D:
+            newTexObj = ctx->Shared->Default3D;
             break;
          default:
             gl_problem(ctx, "Bad target in gl_BindTexture");
@@ -595,4 +641,3 @@ GLboolean gl_IsTexture( GLcontext *ctx, GLuint texture )
       return GL_FALSE;
    }
 }
-

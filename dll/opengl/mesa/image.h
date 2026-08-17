@@ -59,19 +59,33 @@ extern void gl_swap4( GLuint *p, GLuint n );
 extern GLint gl_sizeof_type( GLenum type );
 
 
+extern GLint gl_sizeof_packed_type( GLenum type );
+
+
+extern GLint gl_components_in_packed_type( GLenum type );
+
+
+extern GLboolean gl_packed_type_matches_format( GLenum type, GLenum format );
+
+
 extern GLint gl_components_in_format( GLenum format );
 
 
 extern GLvoid *gl_pixel_addr_in_image( struct gl_pixelstore_attrib *packing,
                                 const GLvoid *image, GLsizei width,
                                 GLsizei height, GLenum format, GLenum type,
-                                GLint row);
+                                GLint img, GLint row, GLint column );
 
 
 extern struct gl_image *gl_unpack_image( GLcontext *ctx,
                                   GLint width, GLint height,
                                   GLenum srcFormat, GLenum srcType,
                                   const GLvoid *pixels );
+
+extern struct gl_image *gl_unpack_image3D( GLcontext *ctx,
+                                    GLint width, GLint height, GLint depth,
+                                    GLenum srcFormat, GLenum srcType,
+                                    const GLvoid *pixels );
 
 
 extern void gl_free_image( struct gl_image *image );

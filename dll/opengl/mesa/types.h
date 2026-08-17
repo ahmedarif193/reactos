@@ -274,6 +274,7 @@ typedef void (*TextureSampleFunc)( const struct gl_texture_object *tObj,
 struct gl_image {
 	GLint Width;
 	GLint Height;
+	GLint Depth;		/* for 3-D texturing */
 	GLint Components;	/* 1, 2, 3 or 4 */
         GLenum Format;		/* GL_COLOR_INDEX, GL_RED, GL_RGB, etc */
 	GLenum Type;		/* GL_UNSIGNED_BYTE or GL_FLOAT or GL_BITMAP */
@@ -299,11 +300,14 @@ struct gl_texture_image {
 	GLuint Border;		/* 0 or 1 */
 	GLuint Width;		/* Image width including border */
 	GLuint Height;		/* Image height including border */
+	GLuint Depth;		/* Image depth including border */
 	GLuint Width2;		/* = Width - 2*Border */
 	GLuint Height2;		/* = Height - 2*Border */
+	GLuint Depth2;		/* = Depth - 2*Border */
 	GLuint WidthLog2;	/* = floor(log2(max(Width2, 1))) */
 	GLuint HeightLog2;	/* = floor(log2(max(Height2, 1))) */
-	GLuint MaxLog2;		/* = MAX(WidthLog2, HeightLog2) */
+	GLuint DepthLog2;	/* = floor(log2(max(Depth2, 1))) */
+	GLuint MaxLog2;		/* = MAX(WidthLog2, HeightLog2, DepthLog2) */
 	GLubyte *Data;		/* Image data as unsigned bytes */
 
 	/* For device driver: */
@@ -355,6 +359,8 @@ struct gl_api_table {
    void (*CopyTexSubImage1D)( GLcontext *, GLenum, GLint, GLint,
                               GLint, GLint, GLsizei );
    void (*CopyTexSubImage2D)( GLcontext *, GLenum, GLint, GLint, GLint,
+                              GLint, GLint, GLsizei, GLsizei );
+   void (*CopyTexSubImage3D)( GLcontext *, GLenum, GLint, GLint, GLint, GLint,
                               GLint, GLint, GLsizei, GLsizei );
    void (*CullFace)( GLcontext *, GLenum );
    void (*DeleteLists)( GLcontext *, GLuint, GLsizei );
@@ -511,6 +517,13 @@ struct gl_api_table {
    void (*TexSubImage2D)( GLcontext *, GLenum, GLint, GLint, GLint,
                           GLsizei, GLsizei, GLenum, GLenum,
                           struct gl_image * );
+   void (*TexImage3D)( GLcontext *, GLenum, GLint, GLint,
+                       GLsizei, GLsizei, GLsizei, GLint,
+                       GLenum, GLenum, struct gl_image * );
+   void (*TexSubImage3D)( GLcontext *, GLenum, GLint,
+                          GLint, GLint, GLint,
+                          GLsizei, GLsizei, GLsizei,
+                          GLenum, GLenum, struct gl_image * );
    void (*TexParameterfv)( GLcontext *, GLenum, GLenum, const GLfloat * );
    /* Translated implemented by Translatef */
    void (*Translatef)( GLcontext *, GLfloat, GLfloat, GLfloat );
@@ -897,6 +910,7 @@ struct gl_stencil_attrib {
 
 #define TEXTURE_1D 1
 #define TEXTURE_2D 2
+#define TEXTURE_3D 4
 
 
 struct gl_texture_attrib {
@@ -918,10 +932,12 @@ struct gl_texture_attrib {
 	GLfloat EyePlaneQ[4];
 	struct gl_texture_object *Current1D;
 	struct gl_texture_object *Current2D;
-	struct gl_texture_object *Current;  /* = Current1D, 2D or NULL */
+	struct gl_texture_object *Current3D;
+	struct gl_texture_object *Current;  /* = Current1D, 2D, 3D or NULL */
 #ifdef GL_VERSION_1_1
 	struct gl_texture_object *Proxy1D;
 	struct gl_texture_object *Proxy2D;
+	struct gl_texture_object *Proxy3D;
 #endif
 	GLboolean AnyDirty;
 };
@@ -962,6 +978,8 @@ struct gl_pixelstore_attrib {
 	GLint RowLength;
 	GLint SkipPixels;
 	GLint SkipRows;
+	GLint ImageHeight;
+	GLint SkipImages;
 	GLboolean SwapBytes;
 	GLboolean LsbFirst;
 };
@@ -1130,6 +1148,7 @@ struct gl_shared_state {
    struct gl_texture_object *TexObjectList;/* Linked list of texture objects */
    struct gl_texture_object *Default1D;	/* Default texture objects */
    struct gl_texture_object *Default2D;
+   struct gl_texture_object *Default3D;
 };
 
 

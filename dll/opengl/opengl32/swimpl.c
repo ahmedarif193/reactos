@@ -469,6 +469,15 @@ extern void APIENTRY _mesa_ColorSubTableEXT(GLenum, GLsizei, GLsizei, GLenum, GL
 extern void APIENTRY _mesa_GetColorTableEXT(GLenum, GLenum, GLenum, void*);
 extern void APIENTRY _mesa_GetColorTableParameterivEXT(GLenum, GLenum, GLfloat*);
 extern void APIENTRY _mesa_GetColorTableParameterfvEXT(GLenum, GLenum, GLint*);
+extern void APIENTRY _mesa_CopyTexSubImage3D(GLenum, GLint, GLint, GLint,
+                                             GLint, GLint, GLint, GLsizei,
+                                             GLsizei);
+extern void APIENTRY _mesa_TexImage3D(GLenum, GLint, GLint, GLsizei, GLsizei,
+                                      GLsizei, GLint, GLenum, GLenum,
+                                      const GLvoid*);
+extern void APIENTRY _mesa_TexSubImage3D(GLenum, GLint, GLint, GLint, GLint,
+                                         GLsizei, GLsizei, GLsizei, GLenum,
+                                         GLenum, const GLvoid*);
 
 static void APIENTRY _swimpl_AddSwapHintRectWIN(GLint x, GLint y, GLsizei width, GLsizei height)
 {
@@ -477,6 +486,16 @@ static void APIENTRY _swimpl_AddSwapHintRectWIN(GLint x, GLint y, GLsizei width,
 
 PROC sw_GetProcAddress(LPCSTR name)
 {
+    if (strcmp(name, "glCopyTexSubImage3D") == 0 ||
+        strcmp(name, "glCopyTexSubImage3DEXT") == 0)
+        return (PROC)_mesa_CopyTexSubImage3D;
+    if (strcmp(name, "glTexImage3D") == 0 ||
+        strcmp(name, "glTexImage3DEXT") == 0)
+        return (PROC)_mesa_TexImage3D;
+    if (strcmp(name, "glTexSubImage3D") == 0 ||
+        strcmp(name, "glTexSubImage3DEXT") == 0)
+        return (PROC)_mesa_TexSubImage3D;
+
     /* GL_EXT_paletted_texture */
     if (strcmp(name, "glColorTableEXT") == 0)
         return (PROC)_mesa_ColorTableEXT;

@@ -1351,6 +1351,313 @@ static void opt_sample_rgba_2d( const struct gl_texture_object *tObj,
 
 
 /**********************************************************************/
+/*                    3-D Texture Sampling Functions                  */
+/**********************************************************************/
+
+
+static void get_3d_texel( const struct gl_texture_object *tObj,
+                          const struct gl_texture_image *img,
+                          GLint i, GLint j, GLint k,
+                          GLubyte *red, GLubyte *green, GLubyte *blue,
+                          GLubyte *alpha )
+{
+   size_t index;
+   GLubyte *texel;
+
+#ifdef DEBUG
+   if (i<0 || i>=img->Width)  abort();
+   if (j<0 || j>=img->Height)  abort();
+   if (k<0 || k>=img->Depth)  abort();
+#endif
+
+   index = ((size_t) k * img->Height + j) * img->Width + i;
+   switch (img->Format) {
+      case GL_COLOR_INDEX:
+         palette_sample(tObj, img->Data[index],
+                        red, green, blue, alpha);
+         return;
+      case GL_ALPHA:
+         *alpha = img->Data[index];
+         return;
+      case GL_LUMINANCE:
+      case GL_INTENSITY:
+         *red = img->Data[index];
+         return;
+      case GL_LUMINANCE_ALPHA:
+         texel = img->Data + index * 2;
+         *red = texel[0];
+         *alpha = texel[1];
+         return;
+      case GL_RGB:
+         texel = img->Data + index * 3;
+         *red = texel[0];
+         *green = texel[1];
+         *blue = texel[2];
+         return;
+      case GL_RGBA:
+         texel = img->Data + index * 4;
+         *red = texel[0];
+         *green = texel[1];
+         *blue = texel[2];
+         *alpha = texel[3];
+         return;
+      default:
+         gl_problem(NULL, "Bad format in get_3d_texel");
+   }
+}
+
+
+static void sample_3d_nearest( const struct gl_texture_object *tObj,
+                               const struct gl_texture_image *img,
+                               GLfloat s, GLfloat t, GLfloat r,
+                               GLubyte *red, GLubyte *green,
+                               GLubyte *blue, GLubyte *alpha )
+{
+   GLint i, j, k;
+   GLboolean iBorder, jBorder, kBorder;
+
+   i = nearest_texel(tObj->WrapS, s, img->Width2, &iBorder);
+   j = nearest_texel(tObj->WrapT, t, img->Height2, &jBorder);
+   k = nearest_texel(tObj->WrapR, r, img->Depth2, &kBorder);
+   if ((iBorder || jBorder || kBorder) && !img->Border) {
+      *red = tObj->BorderColor[0];
+      *green = tObj->BorderColor[1];
+      *blue = tObj->BorderColor[2];
+      *alpha = tObj->BorderColor[3];
+      return;
+   }
+
+   i += img->Border;
+   j += img->Border;
+   k += img->Border;
+   get_3d_texel(tObj, img, i, j, k, red, green, blue, alpha);
+}
+
+
+static void sample_3d_linear( const struct gl_texture_object *tObj,
+                              const struct gl_texture_image *img,
+                              GLfloat s, GLfloat t, GLfloat r,
+                              GLubyte *red, GLubyte *green,
+                              GLubyte *blue, GLubyte *alpha )
+{
+   GLint texel[3][2];
+   GLboolean border[3][2];
+   GLfloat fraction[3];
+   GLfloat mapped;
+   GLfloat accum[4] = {0.0F, 0.0F, 0.0F, 0.0F};
+   GLint x, y, z;
+
+   mapped = linear_texels(tObj->WrapS, s, img->Width2,
+                          &texel[0][0], &texel[0][1],
+                          &border[0][0], &border[0][1]);
+   fraction[0] = frac(mapped - 0.5F);
+   mapped = linear_texels(tObj->WrapT, t, img->Height2,
+                          &texel[1][0], &texel[1][1],
+                          &border[1][0], &border[1][1]);
+   fraction[1] = frac(mapped - 0.5F);
+   mapped = linear_texels(tObj->WrapR, r, img->Depth2,
+                          &texel[2][0], &texel[2][1],
+                          &border[2][0], &border[2][1]);
+   fraction[2] = frac(mapped - 0.5F);
+
+   if (img->Border) {
+      GLint axis;
+      for (axis=0;axis<3;axis++) {
+         texel[axis][0] += img->Border;
+         texel[axis][1] += img->Border;
+         border[axis][0] = border[axis][1] = GL_FALSE;
+      }
+   }
+
+   for (z=0;z<2;z++) {
+      for (y=0;y<2;y++) {
+         for (x=0;x<2;x++) {
+            GLubyte sample[4] = {0, 0, 0, 0};
+            GLfloat weight =
+               (x ? fraction[0] : 1.0F-fraction[0]) *
+               (y ? fraction[1] : 1.0F-fraction[1]) *
+               (z ? fraction[2] : 1.0F-fraction[2]);
+
+            if (border[0][x] || border[1][y] || border[2][z]) {
+               sample[0] = tObj->BorderColor[0];
+               sample[1] = tObj->BorderColor[1];
+               sample[2] = tObj->BorderColor[2];
+               sample[3] = tObj->BorderColor[3];
+            }
+            else {
+               get_3d_texel(tObj, img,
+                            texel[0][x], texel[1][y], texel[2][z],
+                            &sample[0], &sample[1],
+                            &sample[2], &sample[3]);
+            }
+            accum[0] += weight * sample[0];
+            accum[1] += weight * sample[1];
+            accum[2] += weight * sample[2];
+            accum[3] += weight * sample[3];
+         }
+      }
+   }
+
+   *red = (GLubyte) accum[0];
+   *green = (GLubyte) accum[1];
+   *blue = (GLubyte) accum[2];
+   *alpha = (GLubyte) accum[3];
+}
+
+
+static void sample_3d_level( const struct gl_texture_object *tObj,
+                             GLint level, GLboolean linear,
+                             GLfloat s, GLfloat t, GLfloat r,
+                             GLubyte *red, GLubyte *green,
+                             GLubyte *blue, GLubyte *alpha )
+{
+   if (linear) {
+      sample_3d_linear(tObj, tObj->Image[level], s, t, r,
+                       red, green, blue, alpha);
+   }
+   else {
+      sample_3d_nearest(tObj, tObj->Image[level], s, t, r,
+                        red, green, blue, alpha);
+   }
+}
+
+
+static void sample_3d_mipmap_nearest(
+                  const struct gl_texture_object *tObj, GLboolean linear,
+                  GLfloat s, GLfloat t, GLfloat r, GLfloat lambda,
+                  GLubyte *red, GLubyte *green,
+                  GLubyte *blue, GLubyte *alpha )
+{
+   GLint level = lambda <= 0.5F ? 0 : (GLint) (lambda + 0.499999F);
+
+   level = CLAMP(level, 0, tObj->Image[0]->MaxLog2);
+   sample_3d_level(tObj, level, linear, s, t, r,
+                   red, green, blue, alpha);
+}
+
+
+static void sample_3d_mipmap_linear(
+                  const struct gl_texture_object *tObj, GLboolean linear,
+                  GLfloat s, GLfloat t, GLfloat r, GLfloat lambda,
+                  GLubyte *red, GLubyte *green,
+                  GLubyte *blue, GLubyte *alpha )
+{
+   GLint max = tObj->Image[0]->MaxLog2;
+
+   if (lambda >= max) {
+      sample_3d_level(tObj, max, linear, s, t, r,
+                      red, green, blue, alpha);
+   }
+   else {
+      GLubyte color0[4], color1[4];
+      GLfloat f = frac(lambda);
+      GLint level = CLAMP((GLint) (lambda + 1.0F), 1, max);
+
+      sample_3d_level(tObj, level-1, linear, s, t, r,
+                      &color0[0], &color0[1], &color0[2], &color0[3]);
+      sample_3d_level(tObj, level, linear, s, t, r,
+                      &color1[0], &color1[1], &color1[2], &color1[3]);
+      *red = (GLubyte) ((1.0F-f)*color0[0] + f*color1[0]);
+      *green = (GLubyte) ((1.0F-f)*color0[1] + f*color1[1]);
+      *blue = (GLubyte) ((1.0F-f)*color0[2] + f*color1[2]);
+      *alpha = (GLubyte) ((1.0F-f)*color0[3] + f*color1[3]);
+   }
+}
+
+
+static void sample_nearest_3d( const struct gl_texture_object *tObj, GLuint n,
+                               const GLfloat s[], const GLfloat t[],
+                               const GLfloat u[], const GLfloat lambda[],
+                               GLubyte red[], GLubyte green[], GLubyte blue[],
+                               GLubyte alpha[] )
+{
+   GLuint i;
+   for (i=0;i<n;i++) {
+      sample_3d_nearest(tObj, tObj->Image[0], s[i], t[i], u[i],
+                        &red[i], &green[i], &blue[i], &alpha[i]);
+   }
+}
+
+
+static void sample_linear_3d( const struct gl_texture_object *tObj, GLuint n,
+                              const GLfloat s[], const GLfloat t[],
+                              const GLfloat u[], const GLfloat lambda[],
+                              GLubyte red[], GLubyte green[], GLubyte blue[],
+                              GLubyte alpha[] )
+{
+   GLuint i;
+   for (i=0;i<n;i++) {
+      sample_3d_linear(tObj, tObj->Image[0], s[i], t[i], u[i],
+                       &red[i], &green[i], &blue[i], &alpha[i]);
+   }
+}
+
+
+static void sample_lambda_3d( const struct gl_texture_object *tObj, GLuint n,
+                              const GLfloat s[], const GLfloat t[],
+                              const GLfloat u[], const GLfloat lambda[],
+                              GLubyte red[], GLubyte green[], GLubyte blue[],
+                              GLubyte alpha[] )
+{
+   GLuint i;
+
+   for (i=0;i<n;i++) {
+      if (lambda[i] > tObj->MinMagThresh) {
+         switch (tObj->MinFilter) {
+            case GL_NEAREST:
+               sample_3d_nearest(tObj, tObj->Image[0], s[i], t[i], u[i],
+                                 &red[i], &green[i], &blue[i], &alpha[i]);
+               break;
+            case GL_LINEAR:
+               sample_3d_linear(tObj, tObj->Image[0], s[i], t[i], u[i],
+                                &red[i], &green[i], &blue[i], &alpha[i]);
+               break;
+            case GL_NEAREST_MIPMAP_NEAREST:
+               sample_3d_mipmap_nearest(tObj, GL_FALSE,
+                                        s[i], t[i], u[i], lambda[i],
+                                        &red[i], &green[i],
+                                        &blue[i], &alpha[i]);
+               break;
+            case GL_LINEAR_MIPMAP_NEAREST:
+               sample_3d_mipmap_nearest(tObj, GL_TRUE,
+                                        s[i], t[i], u[i], lambda[i],
+                                        &red[i], &green[i],
+                                        &blue[i], &alpha[i]);
+               break;
+            case GL_NEAREST_MIPMAP_LINEAR:
+               sample_3d_mipmap_linear(tObj, GL_FALSE,
+                                       s[i], t[i], u[i], lambda[i],
+                                       &red[i], &green[i],
+                                       &blue[i], &alpha[i]);
+               break;
+            case GL_LINEAR_MIPMAP_LINEAR:
+               sample_3d_mipmap_linear(tObj, GL_TRUE,
+                                       s[i], t[i], u[i], lambda[i],
+                                       &red[i], &green[i],
+                                       &blue[i], &alpha[i]);
+               break;
+            default:
+               gl_problem(NULL, "Bad min filter in sample_lambda_3d");
+               return;
+         }
+      }
+      else if (tObj->MagFilter==GL_NEAREST) {
+         sample_3d_nearest(tObj, tObj->Image[0], s[i], t[i], u[i],
+                           &red[i], &green[i], &blue[i], &alpha[i]);
+      }
+      else if (tObj->MagFilter==GL_LINEAR) {
+         sample_3d_linear(tObj, tObj->Image[0], s[i], t[i], u[i],
+                          &red[i], &green[i], &blue[i], &alpha[i]);
+      }
+      else {
+         gl_problem(NULL, "Bad mag filter in sample_lambda_3d");
+         return;
+      }
+   }
+}
+
+
+/**********************************************************************/
 /*                       Texture Sampling Setup                       */
 /**********************************************************************/
 
@@ -1414,6 +1721,18 @@ void gl_set_texture_sampler( struct gl_texture_object *t )
                }
                else
                   t->SampleFunc = sample_nearest_2d;
+            }
+            break;
+         case 3:
+            if (needLambda) {
+               t->SampleFunc = sample_lambda_3d;
+            }
+            else if (t->MinFilter==GL_LINEAR) {
+               t->SampleFunc = sample_linear_3d;
+            }
+            else {
+               ASSERT(t->MinFilter==GL_NEAREST);
+               t->SampleFunc = sample_nearest_3d;
             }
             break;
          default:
