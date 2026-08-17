@@ -1532,7 +1532,18 @@ RelocDone:;
 
 #if defined(_M_ARM64)
     if (NT_SUCCESS(Status) && LdrEntry && ChpeIsChpeProcess() && !ChpeRegisterImageCodeRanges(LdrEntry->DllBase))
+    {
         DPRINT1("LDR: CHPE failed to register image code ranges for %wZ\n", &LdrEntry->BaseDllName);
+
+        RemoveEntryList(&LdrEntry->InLoadOrderLinks);
+        RemoveEntryList(&LdrEntry->InMemoryOrderLinks);
+        RemoveEntryList(&LdrEntry->HashLinks);
+
+        NtUnmapViewOfSection(NtCurrentProcess(), LdrEntry->DllBase);
+        LdrEntry = NULL;
+        *DataTableEntry = NULL;
+        Status = STATUS_INVALID_IMAGE_FORMAT;
+    }
 #endif
 
     /* Check if this is an SMP Machine and a DLL */
