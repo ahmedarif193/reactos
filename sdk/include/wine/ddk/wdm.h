@@ -31,7 +31,10 @@
 typedef enum _WAIT_TYPE
 {
     WaitAll,
-    WaitAny
+    WaitAny,
+    WaitNotification,
+    WaitDequeue,
+    WaitDpc
 } WAIT_TYPE;
 #endif
 #pragma push_macro("FORCEINLINE")
