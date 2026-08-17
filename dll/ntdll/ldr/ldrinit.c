@@ -3247,6 +3247,8 @@ LdrpInit(PCONTEXT Context,
              */
             if (InitializeChpeProcess)
             {
+                Context->X0 = (ULONG64)(ULONG_PTR)LdrpImageEntry->EntryPoint;
+                Context->X1 = (ULONG64)(ULONG_PTR)Peb;
                 Context->Pc = (ULONG64)(ULONG_PTR)RtlUserThreadStart;
                 Context->Lr = (ULONG64)(ULONG_PTR)RtlExitUserThread;
             }
