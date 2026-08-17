@@ -14,9 +14,6 @@ ACPI_MODULE_NAME("acpi_thermal")
 
 #define ACPI_THERMAL_TAG 'hTcA'
 #define ACPI_THERMAL_ACTIVE_LEVELS 10
-#define ACPI_THERMAL_DEFAULT_POLL_MS 5000
-#define ACPI_THERMAL_MIN_POLL_MS 1000
-#define ACPI_THERMAL_MAX_POLL_MS 30000
 #define ACPI_THERMAL_PASSIVE_HYSTERESIS 20
 #define ACPI_THERMAL_MAX_COOLING_DEVICES 64
 
@@ -36,19 +33,15 @@ typedef struct _ACPI_THERMAL_ZONE
 {
     struct acpi_device *Device;
     ACPI_HANDLE Handle;
-    KTIMER Timer;
-    KDPC TimerDpc;
     EX_RUNDOWN_REF Rundown;
     FAST_MUTEX PolicyLock;
     KEVENT WorkIdleEvent;
     volatile LONG WorkCount;
     volatile LONG Removing;
-    ULONG PollMilliseconds;
     ACPI_THERMAL_TRIP Critical;
     ACPI_THERMAL_TRIP Hot;
     ACPI_THERMAL_TRIP Passive;
     ACPI_THERMAL_TRIP Active[ACPI_THERMAL_ACTIVE_LEVELS];
-    UINT64 LastTemperature;
     ULONG ActiveMask;
     BOOLEAN PassiveEngaged;
     BOOLEAN PassiveCoolingFailed;
@@ -173,8 +166,6 @@ acpi_thermal_refresh_trips(
         "_AC0", "_AC1", "_AC2", "_AC3", "_AC4",
         "_AC5", "_AC6", "_AC7", "_AC8", "_AC9"
     };
-    UINT64 polling;
-    ULONG poll_milliseconds = ACPI_THERMAL_DEFAULT_POLL_MS;
     ULONG i;
 
     acpi_thermal_query_trip(zone, "_CRT", &zone->Critical);
@@ -183,22 +174,11 @@ acpi_thermal_refresh_trips(
     for (i = 0; i < ACPI_THERMAL_ACTIVE_LEVELS; i++)
         acpi_thermal_query_trip(zone, active_methods[i], &zone->Active[i]);
 
-    if (acpi_thermal_evaluate_integer(zone->Handle, "_TZP", &polling) && polling != 0 && polling <= MAXULONG / 100)
-        poll_milliseconds = (ULONG)polling * 100;
-    if (zone->Passive.Valid && acpi_thermal_evaluate_integer(zone->Handle, "_TSP", &polling) && polling != 0 && polling <= MAXULONG / 100 && polling * 100 < poll_milliseconds)
-        poll_milliseconds = (ULONG)polling * 100;
-    if (poll_milliseconds < ACPI_THERMAL_MIN_POLL_MS)
-        poll_milliseconds = ACPI_THERMAL_MIN_POLL_MS;
-    if (poll_milliseconds > ACPI_THERMAL_MAX_POLL_MS)
-        poll_milliseconds = ACPI_THERMAL_MAX_POLL_MS;
-    zone->PollMilliseconds = poll_milliseconds;
-
-    DPRINT1("ACPI: Thermal [%s] trips CRT=%s%ld.%luC HOT=%s%ld.%luC PSV=%s%ld.%luC poll=%lums\n",
+    DPRINT1("ACPI: Thermal [%s] trips CRT=%s%ld.%luC HOT=%s%ld.%luC PSV=%s%ld.%luC\n",
             acpi_device_bid(zone->Device),
             zone->Critical.Valid ? "" : "?", acpi_thermal_celsius_tenths(zone->Critical.Temperature) / 10, acpi_thermal_fraction(acpi_thermal_celsius_tenths(zone->Critical.Temperature)),
             zone->Hot.Valid ? "" : "?", acpi_thermal_celsius_tenths(zone->Hot.Temperature) / 10, acpi_thermal_fraction(acpi_thermal_celsius_tenths(zone->Hot.Temperature)),
-            zone->Passive.Valid ? "" : "?", acpi_thermal_celsius_tenths(zone->Passive.Temperature) / 10, acpi_thermal_fraction(acpi_thermal_celsius_tenths(zone->Passive.Temperature)),
-            zone->PollMilliseconds);
+            zone->Passive.Valid ? "" : "?", acpi_thermal_celsius_tenths(zone->Passive.Temperature) / 10, acpi_thermal_fraction(acpi_thermal_celsius_tenths(zone->Passive.Temperature)));
 }
 
 #if (NTDDI_VERSION >= NTDDI_WINTHRESHOLD)
@@ -631,7 +611,6 @@ acpi_thermal_check(
     ULONG activated;
     ULONG targets;
     ULONG level;
-    LONG celsius_tenths;
     BOOLEAN emergency;
     BOOLEAN active_policy_failed;
 
@@ -640,10 +619,6 @@ acpi_thermal_check(
         DPRINT1("ACPI: Thermal [%s] _TMP evaluation failed; retaining previous cooling state\n", acpi_device_bid(zone->Device));
         return;
     }
-    celsius_tenths = acpi_thermal_celsius_tenths(temperature);
-    DPRINT1("ACPI: Thermal [%s] temperature %ld.%luC reason=0x%02lx\n", acpi_device_bid(zone->Device), celsius_tenths / 10, acpi_thermal_fraction(celsius_tenths), reason);
-    zone->LastTemperature = temperature;
-
     if (zone->Critical.Valid && temperature >= zone->Critical.Temperature)
     {
         if (!zone->CriticalEngaged)
@@ -707,19 +682,11 @@ acpi_thermal_worker(
 {
     PACPI_THERMAL_WORK work = context;
     PACPI_THERMAL_ZONE zone = work->Zone;
-    LARGE_INTEGER due_time;
-    ULONG old_poll_milliseconds;
 
     ExAcquireFastMutex(&zone->PolicyLock);
     if (!InterlockedCompareExchange(&zone->Removing, 0, 0)) {
-        if (work->Reason == ACPI_THERMAL_NOTIFY_THRESHOLDS || work->Reason == ACPI_THERMAL_NOTIFY_DEVICES) {
-            old_poll_milliseconds = zone->PollMilliseconds;
+        if (work->Reason == ACPI_THERMAL_NOTIFY_THRESHOLDS || work->Reason == ACPI_THERMAL_NOTIFY_DEVICES)
             acpi_thermal_refresh_trips(zone);
-            if (zone->PollMilliseconds != old_poll_milliseconds) {
-                due_time.QuadPart = -(LONGLONG)zone->PollMilliseconds * 10000;
-                KeSetTimerEx(&zone->Timer, due_time, zone->PollMilliseconds, &zone->TimerDpc);
-            }
-        }
         acpi_thermal_check(zone, work->Reason);
     }
     ExReleaseFastMutex(&zone->PolicyLock);
@@ -762,20 +729,6 @@ acpi_thermal_queue_check(
 }
 
 static VOID
-NTAPI
-acpi_thermal_timer_dpc(
-    PKDPC dpc,
-    PVOID deferred_context,
-    PVOID system_argument1,
-    PVOID system_argument2)
-{
-    UNREFERENCED_PARAMETER(dpc);
-    UNREFERENCED_PARAMETER(system_argument1);
-    UNREFERENCED_PARAMETER(system_argument2);
-    acpi_thermal_queue_check((PACPI_THERMAL_ZONE)deferred_context, 0);
-}
-
-static VOID
 acpi_thermal_notify(
     ACPI_HANDLE handle,
     UINT32 event,
@@ -804,7 +757,6 @@ acpi_thermal_add(
     struct acpi_device *device)
 {
     PACPI_THERMAL_ZONE zone;
-    LARGE_INTEGER due_time;
     ACPI_STATUS status;
 
     if (!device)
@@ -821,8 +773,6 @@ acpi_thermal_add(
     ExInitializeRundownProtection(&zone->Rundown);
     ExInitializeFastMutex(&zone->PolicyLock);
     KeInitializeEvent(&zone->WorkIdleEvent, NotificationEvent, TRUE);
-    KeInitializeTimerEx(&zone->Timer, NotificationTimer);
-    KeInitializeDpc(&zone->TimerDpc, acpi_thermal_timer_dpc, zone);
     acpi_thermal_set_active_cooling_policy(zone);
     acpi_thermal_refresh_trips(zone);
 
@@ -835,8 +785,6 @@ acpi_thermal_add(
         return_VALUE(-15);
     }
 
-    due_time.QuadPart = -10000000LL;
-    KeSetTimerEx(&zone->Timer, due_time, zone->PollMilliseconds, &zone->TimerDpc);
     acpi_thermal_queue_check(zone, ACPI_THERMAL_NOTIFY_TEMPERATURE);
     return_VALUE(0);
 }
@@ -853,9 +801,6 @@ acpi_thermal_remove(
         return_VALUE(-1);
     zone = device->driver_data;
     InterlockedExchange(&zone->Removing, 1);
-    KeCancelTimer(&zone->Timer);
-    KeRemoveQueueDpc(&zone->TimerDpc);
-    KeFlushQueuedDpcs();
     AcpiRemoveNotifyHandler(zone->Handle, ACPI_DEVICE_NOTIFY, acpi_thermal_notify);
     ExWaitForRundownProtectionRelease(&zone->Rundown);
     KeWaitForSingleObject(&zone->WorkIdleEvent, Executive, KernelMode, FALSE, NULL);
