@@ -69,6 +69,10 @@ extern "C" {
 #define CONTEXT_FULL            (CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_FLOATING_POINT)
 #endif
 
+#ifndef CONTEXT_ARM64_RET_TO_GUEST
+#define CONTEXT_ARM64_RET_TO_GUEST 0x04000000L
+#endif
+
 //
 // HAL Variables
 //
