@@ -359,6 +359,18 @@ DWORD
 WINAPI
 FlsAlloc(PFLS_CALLBACK_FUNCTION lpCallback)
 {
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
+    NTSTATUS Status;
+    ULONG Index;
+
+    Status = RtlFlsAlloc(lpCallback, &Index);
+    if (!NT_SUCCESS(Status))
+    {
+        BaseSetLastNTError(Status);
+        return FLS_OUT_OF_INDEXES;
+    }
+    return Index;
+#else
     DWORD dwFlsIndex;
     PPEB Peb = NtCurrentPeb();
     PRTL_FLS_DATA pFlsData;
@@ -408,6 +420,7 @@ FlsAlloc(PFLS_CALLBACK_FUNCTION lpCallback)
     }
     RtlReleasePebLock();
     return dwFlsIndex;
+#endif
 }
 
 
@@ -418,6 +431,13 @@ BOOL
 WINAPI
 FlsFree(DWORD dwFlsIndex)
 {
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
+    NTSTATUS Status = RtlFlsFree(dwFlsIndex);
+
+    if (!NT_SUCCESS(Status))
+        BaseSetLastNTError(Status);
+    return NT_SUCCESS(Status);
+#else
     BOOL ret;
     PPEB Peb = NtCurrentPeb();
 
@@ -468,6 +488,7 @@ FlsFree(DWORD dwFlsIndex)
     _SEH2_END;
 
     return ret;
+#endif
 }
 
 

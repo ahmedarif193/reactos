@@ -1049,6 +1049,30 @@ ChpepCallX64Routine(PVOID EntryPoint,
 }
 
 static
+VOID
+NTAPI
+ChpepCallFlsCallback(PFLS_CALLBACK_FUNCTION Callback,
+                     PVOID Data)
+{
+    NTSTATUS Status;
+
+    if (RtlIsEcCode((ULONG_PTR)Callback))
+    {
+        Callback(Data);
+        return;
+    }
+
+    Status = ChpeInitializeThread();
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("[CHPE] ntdll: cannot dispatch x64 FLS callback %p, ThreadInit failed with Status = 0x%08lx\n", Callback, Status);
+        return;
+    }
+
+    ChpepCallX64Routine((PVOID)Callback, (ULONG_PTR)Data, 0, 0, 0);
+}
+
+static
 NTSTATUS
 ChpepGetNativeProcedureAddress(PVOID Base,
                                PANSI_STRING Name,
@@ -1192,6 +1216,7 @@ ChpeInitializeProcess(VOID)
         return Status;
     }
 
+    RtlpSetFlsCallbackDispatcher(ChpepCallFlsCallback);
     return STATUS_SUCCESS;
 }
 
@@ -1248,6 +1273,7 @@ ChpeCleanupProcess(HANDLE ProcessHandle, NTSTATUS ExitStatus)
     if (!ChpeEmulatorLoaded)
         return;
 
+    RtlpSetFlsCallbackDispatcher(NULL);
     pChpeProcessTerm(ProcessHandle, TRUE, ExitStatus);
     ChpepFreeProcessData();
     ChpeEmulatorLoaded = FALSE;
