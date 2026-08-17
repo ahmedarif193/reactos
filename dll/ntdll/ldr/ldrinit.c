@@ -48,7 +48,11 @@ static BOOL (WINAPI *Kernel32BaseQueryModuleData)(IN LPSTR ModuleName, IN LPSTR 
 
 RTL_BITMAP TlsBitMap;
 RTL_BITMAP TlsExpansionBitMap;
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
+extern RTL_BITMAP FlsBitMap;
+#else
 RTL_BITMAP FlsBitMap;
+#endif
 BOOLEAN LdrpImageHasTls;
 LIST_ENTRY LdrpTlsList;
 ULONG LdrpNumberOfTlsEntries;
@@ -1410,7 +1414,7 @@ LdrShutdownThread(VOID)
             lpCallback = NtCurrentPeb()->FlsCallback[n];
             if (lpCallback && pFlsData->Data[n])
             {
-                lpCallback(pFlsData->Data[n]);
+                RtlpCallFlsCallback(lpCallback, pFlsData->Data[n]);
             }
         }
 

@@ -10,6 +10,10 @@
 @ stdcall RtlCaptureContext(ptr) ChpeRtlCaptureContext
 @ stdcall RtlDeleteCriticalSection(ptr) ChpeRtlDeleteCriticalSection
 @ stdcall RtlEnterCriticalSection(ptr) ChpeRtlEnterCriticalSection
+@ stdcall RtlFlsAlloc(ptr ptr) ChpeRtlFlsAlloc
+@ stdcall RtlFlsFree(long) ChpeRtlFlsFree
+@ stdcall RtlFlsGetValue(long ptr) ChpeRtlFlsGetValue
+@ stdcall RtlFlsSetValue(long ptr) ChpeRtlFlsSetValue
 @ stdcall RtlFreeHeap(long long long) ChpeRtlFreeHeap
 @ stdcall RtlGetLastWin32Error() ChpeRtlGetLastWin32Error
 @ stdcall RtlLeaveCriticalSection(ptr) ChpeRtlLeaveCriticalSection

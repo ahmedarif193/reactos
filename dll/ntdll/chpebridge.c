@@ -119,6 +119,30 @@ ChpeRtlFreeHeap(HANDLE HeapHandle, ULONG Flags, PVOID Pointer)
 }
 
 NTSTATUS NTAPI
+ChpeRtlFlsAlloc(PFLS_CALLBACK_FUNCTION Callback, PULONG Index)
+{
+    return RtlFlsAlloc(Callback, Index);
+}
+
+NTSTATUS NTAPI
+ChpeRtlFlsFree(ULONG Index)
+{
+    return RtlFlsFree(Index);
+}
+
+NTSTATUS NTAPI
+ChpeRtlFlsGetValue(ULONG Index, PVOID *Data)
+{
+    return RtlFlsGetValue(Index, Data);
+}
+
+NTSTATUS NTAPI
+ChpeRtlFlsSetValue(ULONG Index, PVOID Data)
+{
+    return RtlFlsSetValue(Index, Data);
+}
+
+NTSTATUS NTAPI
 ChpeRtlLeaveCriticalSection(PRTL_CRITICAL_SECTION CriticalSection)
 {
     return RtlLeaveCriticalSection(CriticalSection);
