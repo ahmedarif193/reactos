@@ -393,7 +393,12 @@ static const INFORMATION_CLASS_INFO PsProcessInfoClass[] =
     /* ProcessHandleTable */
     IQS_NONE,
     /* ProcessCheckStackExtentsMode */
-    IQS_NONE,
+    IQS_SAME
+    (
+        ULONG,
+        ULONG,
+        ICIF_SET
+    ),
     /* ProcessCommandLineInformation */
     IQS_NONE,
     /* ProcessProtectionInformation */

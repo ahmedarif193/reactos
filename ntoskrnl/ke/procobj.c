@@ -388,6 +388,19 @@ KeSetAutoAlignmentProcess(IN PKPROCESS Process,
 
 BOOLEAN
 NTAPI
+KeSetCheckStackExtentsProcess(IN PKPROCESS Process,
+                              IN BOOLEAN Enable)
+{
+    if (Enable)
+    {
+        return InterlockedBitTestAndSet(&Process->ProcessFlags, KPSF_CHECK_STACK_EXTENTS_BIT);
+    }
+
+    return InterlockedBitTestAndReset(&Process->ProcessFlags, KPSF_CHECK_STACK_EXTENTS_BIT);
+}
+
+BOOLEAN
+NTAPI
 KeSetDisableBoostProcess(IN PKPROCESS Process,
                          IN BOOLEAN Disable)
 {

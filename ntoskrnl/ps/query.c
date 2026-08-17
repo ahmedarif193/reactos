@@ -1680,6 +1680,7 @@ NtSetInformationProcess(
     ULONG DefaultHardErrorMode = 0;
     ULONG DebugFlags = 0, EnableFixup = 0, Boost = 0;
     ULONG NoExecute = 0, VdmPower = 0;
+    ULONG CheckStackExtents = 0;
     BOOLEAN HasPrivilege;
     PLIST_ENTRY Next;
     PETHREAD Thread;
@@ -2468,6 +2469,36 @@ NtSetInformationProcess(
 
             /* Call Ke for the update */
             KeSetAutoAlignmentProcess(&Process->Pcb, FALSE);
+            Status = STATUS_SUCCESS;
+            break;
+
+        case ProcessCheckStackExtentsMode:
+            _SEH2_TRY
+            {
+                CheckStackExtents = *(volatile ULONG *)ProcessInformation;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(break);
+            }
+            _SEH2_END;
+
+            if (Process == PsGetCurrentProcess())
+            {
+                Status = STATUS_ACCESS_DENIED;
+                break;
+            }
+
+            if (!SeSinglePrivilegeCheck(SeTcbPrivilege, PreviousMode))
+            {
+                Status = STATUS_PRIVILEGE_NOT_HELD;
+                break;
+            }
+
+            KeSetCheckStackExtentsProcess(&Process->Pcb, CheckStackExtents != 0);
+            if (!CheckStackExtents)
+                InterlockedBitTestAndReset((PLONG)&Process->Flags2, 17);
             Status = STATUS_SUCCESS;
             break;
 
