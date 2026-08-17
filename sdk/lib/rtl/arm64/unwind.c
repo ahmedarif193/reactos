@@ -796,8 +796,6 @@ RtlUnwindEx(
     if (ContextRecord == NULL)
         return;
 
-    RtlCaptureContext(ContextRecord);
-
     if (ExceptionRecord == NULL)
     {
         RtlZeroMemory(&LocalExceptionRecord, sizeof(LocalExceptionRecord));
@@ -933,6 +931,7 @@ RtlUnwind(
 {
     CONTEXT ContextRecord;
 
+    RtlCaptureContext(&ContextRecord);
     RtlUnwindEx(TargetFrame,
                 TargetIp,
                 ExceptionRecord,
