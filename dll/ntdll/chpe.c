@@ -103,6 +103,7 @@ typedef struct _IMAGE_CHPE_RANGE_ENTRY
 
 #define CHPE_TEB_CPU_AREA_OFFSET 0x1788
 #define CHPE_CONTEXT_AMD64_SIZE  0x1000
+#define CHPE_CONTEXT_AMD64_LENGTH 0x4d0
 #define CHPE_PEB_EC_CODE_BITMAP_OFFSET 0x368
 #define CHPE_EC_CODE_BITMAP_SIZE (1ULL << 32)
 #define CHPE_EC_CODE_BITMAP_INITIAL_COMMIT_SIZE 0x100000
@@ -116,6 +117,8 @@ typedef struct _CHPE_DISPATCH_TABLE
     PVOID ExitToX64;
     PVOID BeginSimulation;
 } CHPE_DISPATCH_TABLE, *PCHPE_DISPATCH_TABLE;
+
+typedef DECLSPEC_NORETURN VOID (NTAPI *PCHPE_BEGIN_SIMULATION)(VOID);
 
 /* CHPE emulator state, stored in ntdll globals (per-process) */
 static HMODULE ChpeEmulatorModule;
@@ -1041,7 +1044,15 @@ ChpeRegisterImageCodeRanges(PVOID ImageBase)
         return ChpepSetImageExecuteSections(ImageBase, NtHeader, FALSE);
 
     if (Machine == IMAGE_FILE_MACHINE_ARM64)
+    {
+        if (ImageBase != NtDllBase && ImageBase != (PVOID)&__ImageBase)
+        {
+            DPRINT1("CHPE: native ARM64 image %p has no entry thunks, refusing to mark as EC code\n", ImageBase);
+            return FALSE;
+        }
+
         return ChpepSetImageExecuteSections(ImageBase, NtHeader, TRUE);
+    }
 
     return TRUE;
 }
@@ -1948,6 +1959,40 @@ ChpeRtlUserThreadStart(PVOID StartAddress, PVOID Parameter)
     }
 
     RtlExitUserThread((NTSTATUS)Status);
+}
+
+BOOLEAN
+NTAPI
+ChpeCanContinueToGuest(VOID);
+
+DECLSPEC_NORETURN
+VOID
+NTAPI
+ChpeContinueToGuest(PVOID Amd64Context)
+{
+    PCHPE_V2_CPU_AREA_INFO CpuArea = ChpepGetCurrentCpuArea();
+
+    if (!ChpeCanContinueToGuest())
+        RtlRaiseStatus(STATUS_NOT_SUPPORTED);
+
+    RtlCopyMemory(CpuArea->ContextAmd64, Amd64Context, CHPE_CONTEXT_AMD64_LENGTH);
+    CpuArea->InSimulation = TRUE;
+
+    ((PCHPE_BEGIN_SIMULATION)ChpeDispatchTable.BeginSimulation)();
+    RtlRaiseStatus(STATUS_ILLEGAL_INSTRUCTION);
+}
+
+BOOLEAN
+NTAPI
+ChpeCanContinueToGuest(VOID)
+{
+    PCHPE_V2_CPU_AREA_INFO CpuArea;
+
+    if (!ChpeEmulatorLoaded || !ChpeDispatchTable.BeginSimulation)
+        return FALSE;
+
+    CpuArea = ChpepGetCurrentCpuArea();
+    return CpuArea && CpuArea->EmulatorData[1] && CpuArea->ContextAmd64;
 }
 
 NTSTATUS
