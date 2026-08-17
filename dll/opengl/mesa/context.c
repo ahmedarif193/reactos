@@ -455,18 +455,21 @@ static struct gl_shared_state *alloc_shared_state( void )
    /* Default Texture objects */
    ss->Default1D = gl_alloc_texture_object(ss, 0, 1);
    ss->Default2D = gl_alloc_texture_object(ss, 0, 2);
+   ss->Default3D = gl_alloc_texture_object(ss, 0, 3);
 
    if (!ss->DisplayList || !ss->TexObjects
-       || !ss->Default1D || !ss->Default2D) {
+       || !ss->Default1D || !ss->Default2D || !ss->Default3D) {
       /* Ran out of memory at some point.  Free everything and return NULL */
-      if (!ss->DisplayList)
+      if (ss->DisplayList)
          DeleteHashTable(ss->DisplayList);
-      if (!ss->TexObjects)
+      if (ss->TexObjects)
          DeleteHashTable(ss->TexObjects);
-      if (!ss->Default1D)
+      if (ss->Default1D)
          gl_free_texture_object(ss, ss->Default1D);
-      if (!ss->Default2D)
+      if (ss->Default2D)
          gl_free_texture_object(ss, ss->Default2D);
+      if (ss->Default3D)
+         gl_free_texture_object(ss, ss->Default3D);
       free(ss);
       return NULL;
    }
@@ -808,6 +811,7 @@ static void initialize_context( GLcontext *ctx )
 
       ctx->Texture.Current1D = ctx->Shared->Default1D;
       ctx->Texture.Current2D = ctx->Shared->Default2D;
+      ctx->Texture.Current3D = ctx->Shared->Default3D;
 
       ctx->Texture.AnyDirty = GL_FALSE;
 
@@ -839,12 +843,16 @@ static void initialize_context( GLcontext *ctx )
       ctx->Pack.RowLength = 0;
       ctx->Pack.SkipPixels = 0;
       ctx->Pack.SkipRows = 0;
+      ctx->Pack.ImageHeight = 0;
+      ctx->Pack.SkipImages = 0;
       ctx->Pack.SwapBytes = GL_FALSE;
       ctx->Pack.LsbFirst = GL_FALSE;
       ctx->Unpack.Alignment = 4;
       ctx->Unpack.RowLength = 0;
       ctx->Unpack.SkipPixels = 0;
       ctx->Unpack.SkipRows = 0;
+      ctx->Unpack.ImageHeight = 0;
+      ctx->Unpack.SkipImages = 0;
       ctx->Unpack.SwapBytes = GL_FALSE;
       ctx->Unpack.LsbFirst = GL_FALSE;
 
@@ -1054,12 +1062,21 @@ static GLboolean alloc_proxy_textures( GLcontext *ctx )
       return GL_FALSE;
    }
 
+   ctx->Texture.Proxy3D = gl_alloc_texture_object(NULL, 0, 3);
+   if (!ctx->Texture.Proxy3D) {
+      gl_free_texture_object(NULL, ctx->Texture.Proxy1D);
+      gl_free_texture_object(NULL, ctx->Texture.Proxy2D);
+      return GL_FALSE;
+   }
+
    out_of_memory = GL_FALSE;
    for (i=0;i<MAX_TEXTURE_LEVELS;i++) {
       ctx->Texture.Proxy1D->Image[i] = gl_alloc_texture_image();
       ctx->Texture.Proxy2D->Image[i] = gl_alloc_texture_image();
+      ctx->Texture.Proxy3D->Image[i] = gl_alloc_texture_image();
       if (!ctx->Texture.Proxy1D->Image[i]
-          || !ctx->Texture.Proxy2D->Image[i]) {
+          || !ctx->Texture.Proxy2D->Image[i]
+          || !ctx->Texture.Proxy3D->Image[i]) {
          out_of_memory = GL_TRUE;
       }
    }
@@ -1071,9 +1088,13 @@ static GLboolean alloc_proxy_textures( GLcontext *ctx )
          if (ctx->Texture.Proxy2D->Image[i]) {
             gl_free_texture_image(ctx->Texture.Proxy2D->Image[i]);
          }
+         if (ctx->Texture.Proxy3D->Image[i]) {
+            gl_free_texture_image(ctx->Texture.Proxy3D->Image[i]);
+         }
       }
       gl_free_texture_object(NULL, ctx->Texture.Proxy1D);
       gl_free_texture_object(NULL, ctx->Texture.Proxy2D);
+      gl_free_texture_object(NULL, ctx->Texture.Proxy3D);
       return GL_FALSE;
    }
    else {
@@ -1206,6 +1227,7 @@ void gl_destroy_context( GLcontext *ctx )
       /* Free proxy texture objects */
       gl_free_texture_object( NULL, ctx->Texture.Proxy1D );
       gl_free_texture_object( NULL, ctx->Texture.Proxy2D );
+      gl_free_texture_object( NULL, ctx->Texture.Proxy3D );
 
       free( (void *) ctx );
 
@@ -1923,4 +1945,3 @@ void gl_update_state( GLcontext *ctx )
 
    ctx->NewState = 0;
 }
-

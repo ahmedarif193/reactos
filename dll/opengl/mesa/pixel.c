@@ -448,13 +448,29 @@ void gl_PixelStorei( GLcontext *ctx, GLenum pname, GLint param )
 	 }
 	 break;
       case GL_PACK_SKIP_ROWS:
-	 if (param<0) {
+		 if (param<0) {
 	    gl_error( ctx, GL_INVALID_VALUE, "glPixelStore(param)" );
 	 }
 	 else {
 	    ctx->Pack.SkipRows = param;
-	 }
-	 break;
+		 }
+		 break;
+      case GL_PACK_IMAGE_HEIGHT:
+		 if (param<0) {
+		    gl_error( ctx, GL_INVALID_VALUE, "glPixelStore(param)" );
+		 }
+		 else {
+		    ctx->Pack.ImageHeight = param;
+		 }
+		 break;
+      case GL_PACK_SKIP_IMAGES:
+		 if (param<0) {
+		    gl_error( ctx, GL_INVALID_VALUE, "glPixelStore(param)" );
+		 }
+		 else {
+		    ctx->Pack.SkipImages = param;
+		 }
+		 break;
       case GL_PACK_ALIGNMENT:
          if (param==1 || param==2 || param==4 || param==8) {
 	    ctx->Pack.Alignment = param;
@@ -486,13 +502,29 @@ void gl_PixelStorei( GLcontext *ctx, GLenum pname, GLint param )
 	 }
 	 break;
       case GL_UNPACK_SKIP_ROWS:
-	 if (param<0) {
+		 if (param<0) {
 	    gl_error( ctx, GL_INVALID_VALUE, "glPixelStore(param)" );
 	 }
 	 else {
 	    ctx->Unpack.SkipRows = param;
-	 }
-	 break;
+		 }
+		 break;
+      case GL_UNPACK_IMAGE_HEIGHT:
+		 if (param<0) {
+		    gl_error( ctx, GL_INVALID_VALUE, "glPixelStore(param)" );
+		 }
+		 else {
+		    ctx->Unpack.ImageHeight = param;
+		 }
+		 break;
+      case GL_UNPACK_SKIP_IMAGES:
+		 if (param<0) {
+		    gl_error( ctx, GL_INVALID_VALUE, "glPixelStore(param)" );
+		 }
+		 else {
+		    ctx->Unpack.SkipImages = param;
+		 }
+		 break;
       case GL_UNPACK_ALIGNMENT:
          if (param==1 || param==2 || param==4 || param==8) {
 	    ctx->Unpack.Alignment = param;
@@ -914,7 +946,7 @@ GLvoid *gl_unpack_pixels( GLcontext *ctx,
       dst = buffer;
       for (i=0;i<height;i++) {
          src = gl_pixel_addr_in_image( &ctx->Unpack, pixels, width, height,
-                                       format, type, i);
+                                       format, type, 0, i, 0 );
          if (!src) {
             free(buffer);
             return NULL;
@@ -948,7 +980,7 @@ GLvoid *gl_unpack_pixels( GLcontext *ctx,
       dst = buffer;
       for (i=0;i<height;i++) {
          src = gl_pixel_addr_in_image( &ctx->Unpack, pixels, width, height,
-                                       format, type, i);
+                                       format, type, 0, i, 0 );
          if (!src) {
             free(buffer);
             return NULL;
@@ -988,4 +1020,3 @@ GLvoid *gl_unpack_pixels( GLcontext *ctx,
 
    k = number of components or indices between first pixel in each row in mem.
 */
-
