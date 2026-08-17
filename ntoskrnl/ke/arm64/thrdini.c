@@ -493,8 +493,8 @@ KiDispatchInterrupt(VOID)
     else if (Prcb->NextThread)
     {
         /* Thread switch needed - acquire PRCB lock and swap context */
-        _disable();
         KiAcquirePrcbLock(Prcb);
+        _disable();
 
         OldThread = Prcb->CurrentThread;
 
