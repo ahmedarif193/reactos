@@ -114,6 +114,11 @@ add_cd_file(TARGET ntdll DESTINATION reactos/system32 NO_CAB FOR all)
 add_library(ntdll_chpe MODULE EXCLUDE_FROM_ALL
     chpebridge.c
     ${CMAKE_CURRENT_BINARY_DIR}/ntdll_chpe.def)
+if(ARM64EC_RUNTIME)
+    target_sources(ntdll_chpe PRIVATE
+        chpedynfntbl.c
+        chpeunwind.c)
+endif()
 set_module_type(ntdll_chpe win32dll ENTRYPOINT 0)
 add_importlibs(ntdll_chpe ntdll)
 add_dependencies(ntdll_chpe psdk)

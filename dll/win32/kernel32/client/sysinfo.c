@@ -168,8 +168,12 @@ BOOL
 WINAPI
 IsProcessorFeaturePresent(IN DWORD ProcessorFeature)
 {
+#if defined(_M_ARM64EC)
+    return RtlIsProcessorFeaturePresent(ProcessorFeature);
+#else
     if (ProcessorFeature >= PROCESSOR_FEATURE_MAX) return FALSE;
     return ((BOOL)SharedUserData->ProcessorFeatures[ProcessorFeature]);
+#endif
 }
 
 /*
