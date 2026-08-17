@@ -5708,6 +5708,9 @@ HalSetGicPriorityMask(
     _In_ KIRQL Irql)
 {
     ULONG Cpu = KeGetCurrentProcessorNumber();
+    ULONG64 Daif;
+
+    __asm__ __volatile__("mrs %0, daif\n\tmsr daifset, #3" : "=r"(Daif) :: "memory");
 
     if (Irql > HIGH_LEVEL)
     {
@@ -5731,11 +5734,13 @@ HalSetGicPriorityMask(
         Shadow = HalpArm64PmrShadow[Cpu];
         if ((Shadow != 0) && (Shadow <= (UCHAR)(Irql + 1)))
         {
+            __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
             return;
         }
     }
 
     HalpArm64SetPmrExact(Irql);
+    __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
 }
 
 /*
