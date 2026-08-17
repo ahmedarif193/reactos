@@ -32,7 +32,6 @@
 
 # Files with these extensions must always have LF (Unix) line endings.
 *.sh text eol=lf
-submodules/fex-arm64ec-reactos.patch text eol=lf -whitespace
 
 # Files with these extensions end up in the built ReactOS system, so they
 # need to have CRLF line endings.
