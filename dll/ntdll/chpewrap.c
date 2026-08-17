@@ -2,10 +2,15 @@
  * PROJECT:         ReactOS NT Library
  * FILE:            dll/ntdll/chpewrap.c
  * PURPOSE:         CHPE-wrapped Nt* syscall implementations
+ * LICENSE:         LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
+ * COPYRIGHT:       Copyright 2023 Alexandre Julliard
+ * COPYRIGHT:       Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  *
  * SVC_WRAP_ emits only the raw Zw* syscall stubs for the selected ARM64
  * services.  This file provides the corresponding Nt* entry points and
  * brackets address-space changes with CHPE emulator notifications.
+ * Callback ordering and cross-process notifications are adapted from Wine's
+ * dlls/ntdll/signal_arm64ec.c.
  */
 
 #include <ntdll.h>
@@ -177,6 +182,48 @@ NtFlushInstructionCache(HANDLE ProcessHandle,
     {
         ChpeFlushInstructionCache(BaseAddress, NumberOfBytesToFlush);
     }
+
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+NtReadFile(HANDLE FileHandle,
+           HANDLE Event,
+           PIO_APC_ROUTINE ApcRoutine,
+           PVOID ApcContext,
+           PIO_STATUS_BLOCK IoStatusBlock,
+           PVOID Buffer,
+           ULONG Length,
+           PLARGE_INTEGER ByteOffset,
+           PULONG Key)
+{
+    PVOID CallbackToken;
+    NTSTATUS Status;
+
+    CallbackToken = ChpeEnterEmulatorCallback();
+    if (!CallbackToken)
+        return ZwReadFile(FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, Buffer, Length, ByteOffset, Key);
+
+    ChpeNotifyReadFile(FileHandle, Buffer, Length, FALSE, 0);
+    Status = ZwReadFile(FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, Buffer, Length, ByteOffset, Key);
+    ChpeNotifyReadFile(FileHandle, Buffer, Length, TRUE, Status);
+    ChpeLeaveEmulatorCallback(CallbackToken);
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+NtQuerySystemInformation(SYSTEM_INFORMATION_CLASS SystemInformationClass,
+                         PVOID SystemInformation,
+                         ULONG SystemInformationLength,
+                         PULONG ReturnLength)
+{
+    NTSTATUS Status;
+
+    Status = ZwQuerySystemInformation(SystemInformationClass, SystemInformation, SystemInformationLength, ReturnLength);
+    if (NT_SUCCESS(Status) && SystemInformationClass == SystemProcessorInformation)
+        ChpeUpdateProcessorInformation(SystemInformation);
 
     return Status;
 }

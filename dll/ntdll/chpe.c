@@ -1908,6 +1908,22 @@ ChpeFlushInstructionCache(const void *Address, SIZE_T Size)
     ChpepLeaveCurrentThreadCallback(CpuArea);
 }
 
+VOID
+NTAPI
+ChpeNotifyReadFile(HANDLE FileHandle, PVOID Address, SIZE_T Size, BOOLEAN After, NTSTATUS Status)
+{
+    if (pChpeNotifyReadFile)
+        pChpeNotifyReadFile(FileHandle, Address, Size, After, Status);
+}
+
+VOID
+NTAPI
+ChpeUpdateProcessorInformation(PVOID ProcessorInformation)
+{
+    if (pChpeUpdateProcessorInfo && ProcessorInformation)
+        pChpeUpdateProcessorInfo(ProcessorInformation);
+}
+
 /*
  * ARM64EC emulator cross-process work processing.
  * Stub: CHPEV2_PROCESS_INFO work list is not yet wired.

@@ -410,6 +410,20 @@ ChpeFlushInstructionCache(
     const void *Address,
     SIZE_T Size);
 
+VOID
+NTAPI
+ChpeNotifyReadFile(
+    HANDLE FileHandle,
+    PVOID Address,
+    SIZE_T Size,
+    BOOLEAN After,
+    NTSTATUS Status);
+
+VOID
+NTAPI
+ChpeUpdateProcessorInformation(
+    PVOID ProcessorInformation);
+
 BOOLEAN
 NTAPI
 ChpeShouldEmulateImage(
