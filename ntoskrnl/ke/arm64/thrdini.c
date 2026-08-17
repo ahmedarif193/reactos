@@ -176,7 +176,10 @@ KiInitializeContextThread(_Inout_ PKTHREAD Thread,
  * remote CPU can install (or replace) Prcb->NextThread while this core is busy
  * draining DPCs, and that thread must be consumed before parking in WFI.
  *
- * Must be called with interrupts disabled and at DISPATCH_LEVEL (idle context).
+ * Called with interrupts disabled and at DISPATCH_LEVEL (idle context).  The
+ * work check remains protected by the PRCB lock, but IRQs must be enabled
+ * before waiting for that lock so a freeze or reschedule IPI can interrupt a
+ * contended idle processor.  The helper returns with IRQs enabled.
  */
 static
 BOOLEAN
@@ -184,6 +187,7 @@ KiArm64IdleDispatchNextThread(_In_ PKPRCB Prcb, _In_ BOOLEAN AdvertiseIdle)
 {
     PKTHREAD OldThread, NewThread;
 
+    _enable();
     KiAcquirePrcbLock(Prcb);
 
     if (!Prcb->NextThread)
@@ -299,6 +303,24 @@ KiIdleLoop(VOID)
          * Advertises this core idle under the PRCB lock when no work is found. */
         if (KiArm64IdleDispatchNextThread(Prcb, TRUE))
             continue;
+
+        /*
+         * The PRCB-lock helper enabled IRQs.  Close the idle window again and
+         * recheck for work that could have arrived between releasing the lock
+         * and masking IRQs.  A pending interrupt will then make WFI return
+         * immediately instead of leaving a runnable NextThread parked.
+         */
+        _disable();
+        __asm__ __volatile__("dmb ish" ::: "memory");
+        if (Prcb->NextThread ||
+            Prcb->DpcData[0].DpcQueueDepth ||
+            Prcb->TimerRequest ||
+            Prcb->DeferredReadyListHead.Next ||
+            Prcb->DpcInterruptRequested)
+        {
+            _enable();
+            continue;
+        }
 
         if (Prcb->SchedulerSubNode != NULL)
         {
