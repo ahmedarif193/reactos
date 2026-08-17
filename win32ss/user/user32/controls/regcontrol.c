@@ -141,6 +141,71 @@ DialogWndProc_common( HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL u
   return DefDlgProcA( hwnd, uMsg, wParam, lParam);
 }
 
+#define USER32_SHARED_PFN_COUNT ((2 * sizeof(PFNCLIENT) + sizeof(PFNCLIENTWORKER)) / sizeof(ULONG_PTR))
+
+static ULONG_PTR User32SharedPfnForeign[USER32_SHARED_PFN_COUNT];
+static ULONG_PTR User32SharedPfnLocal[USER32_SHARED_PFN_COUNT];
+static ULONG User32SharedPfnCount;
+
+static BOOL
+User32IsLocalSharedPfn(ULONG_PTR Value)
+{
+    const ULONG_PTR *Tables[3] = { (const ULONG_PTR *)&pfnClientA,
+                                   (const ULONG_PTR *)&pfnClientW,
+                                   (const ULONG_PTR *)&pfnClientWorker };
+    SIZE_T Sizes[3] = { sizeof(PFNCLIENT), sizeof(PFNCLIENT), sizeof(PFNCLIENTWORKER) };
+    ULONG Table;
+    SIZE_T Index;
+
+    for (Table = 0; Table < 3; Table++)
+    {
+        for (Index = 0; Index < Sizes[Table] / sizeof(ULONG_PTR); Index++)
+        {
+            if (Tables[Table][Index] == Value)
+                return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+static VOID
+User32CaptureSharedPfnMap(const VOID *Shared, const VOID *Local, SIZE_T Size)
+{
+    const ULONG_PTR *SharedPfn = Shared;
+    const ULONG_PTR *LocalPfn = Local;
+    SIZE_T Index;
+
+    for (Index = 0; Index < Size / sizeof(ULONG_PTR); Index++)
+    {
+        if ((SharedPfn[Index] == 0) ||
+            (SharedPfn[Index] == LocalPfn[Index]) ||
+            User32IsLocalSharedPfn(SharedPfn[Index]) ||
+            (User32SharedPfnCount >= USER32_SHARED_PFN_COUNT))
+        {
+            continue;
+        }
+
+        User32SharedPfnForeign[User32SharedPfnCount] = SharedPfn[Index];
+        User32SharedPfnLocal[User32SharedPfnCount] = LocalPfn[Index];
+        User32SharedPfnCount++;
+    }
+}
+
+WNDPROC FASTCALL
+User32TranslateSharedPfn(WNDPROC Proc)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < User32SharedPfnCount; Index++)
+    {
+        if (User32SharedPfnForeign[Index] == (ULONG_PTR)Proc)
+            return (WNDPROC)User32SharedPfnLocal[Index];
+    }
+
+    return Proc;
+}
+
 BOOL WINAPI RegisterClientPFN(VOID)
 {
   NTSTATUS Status;
@@ -208,6 +273,14 @@ BOOL WINAPI RegisterClientPFN(VOID)
                                             &pfnClientW,
                                             &pfnClientWorker,
                                             User32Instance);
-  
+
+  if (NT_SUCCESS(Status) && (gpsi != NULL))
+  {
+      User32SharedPfnCount = 0;
+      User32CaptureSharedPfnMap(&gpsi->apfnClientA, &pfnClientA, sizeof(PFNCLIENT));
+      User32CaptureSharedPfnMap(&gpsi->apfnClientW, &pfnClientW, sizeof(PFNCLIENT));
+      User32CaptureSharedPfnMap(&gpsi->apfnClientWorker, &pfnClientWorker, sizeof(PFNCLIENTWORKER));
+  }
+
   return NT_SUCCESS(Status) ? TRUE : FALSE;
 }

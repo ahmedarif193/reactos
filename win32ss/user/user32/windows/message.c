@@ -1575,6 +1575,8 @@ IntCallWindowProcW(BOOL IsAnsiProc,
       return FALSE;
   }
 
+  WndProc = User32TranslateSharedPfn(WndProc);
+
   if (pWnd)
      Dialog = (pWnd->fnid == FNID_DIALOG);
   else
@@ -1736,6 +1738,8 @@ IntCallWindowProcA(BOOL IsAnsiProc,
       WARN("IntCallWindowsProcA() called with WndProc = NULL!\n");
       return FALSE;
   }
+
+  WndProc = User32TranslateSharedPfn(WndProc);
 
   if (pWnd)
      Dialog = (pWnd->fnid == FNID_DIALOG);
