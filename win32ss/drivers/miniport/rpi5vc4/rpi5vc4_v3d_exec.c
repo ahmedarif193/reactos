@@ -196,6 +196,7 @@
 #define V3D71_CL_VCM_CACHE_SIZE                       71
 #define V3D71_CL_BLEND_ENABLES                        83
 #define V3D71_CL_BLEND_CFG                            84
+#define V3D71_CL_BLEND_CONSTANT_COLOR                 86
 #define V3D71_CL_COLOR_WRITE_MASKS                    87
 #define V3D71_CL_ZERO_ALL_CENTROID_FLAGS              88
 #define V3D71_CL_SAMPLE_STATE                         91
@@ -1324,6 +1325,7 @@ typedef struct _RPI5VC4_V3D_BINNING_DRAW
     ULONG VertexCount;
     ULONG DepthFunction;
     RPI5VC4_V3D_BLEND_MODE BlendMode;
+    RPI5VC4_V3D_BLEND_STATE BlendState;
     ULONG AttributeCount;
     BOOLEAN Indexed;
     ULONG IndexBufferAddress;
@@ -2324,6 +2326,44 @@ Rpi5V3dHeightTexCoordsValid(
 }
 
 static BOOLEAN
+Rpi5V3dBlendStateValid(
+    _In_ const RPI5VC4_V3D_BLEND_STATE *State)
+{
+    ULONG ConstantRed = State->ConstantColorLow & 0xFFFFu;
+    ULONG ConstantGreen = State->ConstantColorLow >> 16;
+    ULONG ConstantBlue = State->ConstantColorHigh & 0xFFFFu;
+    ULONG ConstantAlpha = State->ConstantColorHigh >> 16;
+
+    if (State->Flags == 0)
+    {
+        return State->ColorEquation == 0 &&
+               State->AlphaEquation == 0 &&
+               State->SourceColorFactor == 0 &&
+               State->DestinationColorFactor == 0 &&
+               State->SourceAlphaFactor == 0 &&
+               State->DestinationAlphaFactor == 0 &&
+               State->ConstantColorLow == 0 &&
+               State->ConstantColorHigh == 0;
+    }
+
+    return State->Flags == RPI5VC4_V3D_BLEND_FLAG_ENABLE &&
+           State->ColorEquation <= RPI5VC4_V3D_BLEND_EQUATION_MAXIMUM &&
+           State->AlphaEquation <= RPI5VC4_V3D_BLEND_EQUATION_MAXIMUM &&
+           State->SourceColorFactor <=
+               RPI5VC4_V3D_BLEND_FACTOR_SOURCE_ALPHA_SATURATE &&
+           State->DestinationColorFactor <=
+               RPI5VC4_V3D_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA &&
+           State->SourceAlphaFactor <=
+               RPI5VC4_V3D_BLEND_FACTOR_SOURCE_ALPHA_SATURATE &&
+           State->DestinationAlphaFactor <=
+               RPI5VC4_V3D_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA &&
+           ConstantRed <= 0x3C00u &&
+           ConstantGreen <= 0x3C00u &&
+           ConstantBlue <= 0x3C00u &&
+           ConstantAlpha <= 0x3C00u;
+}
+
+static BOOLEAN
 Rpi5V3dTriangleRequestValid(
     _In_ PRPI5VC4_V3D_TRIANGLE_REQUEST Request)
 {
@@ -2337,7 +2377,8 @@ Rpi5V3dTriangleRequestValid(
         return FALSE;
     }
 
-    return Rpi5V3dVerticesValid(Request->Vertices,
+    return Rpi5V3dBlendStateValid(&Request->BlendState) &&
+           Rpi5V3dVerticesValid(Request->Vertices,
                                Request->VertexCount,
                                FALSE,
                                FALSE,
@@ -2391,6 +2432,7 @@ Rpi5V3dClPrimitiveState(
     _In_ ULONG VertexCount,
     _In_ ULONG DepthFunction,
     _In_ RPI5VC4_V3D_BLEND_MODE BlendMode,
+    _In_opt_ const RPI5VC4_V3D_BLEND_STATE *BlendState,
     _In_ ULONG AttributeCount,
     _In_ BOOLEAN Indexed,
     _In_ ULONG IndexBufferAddress,
@@ -2398,6 +2440,8 @@ Rpi5V3dClPrimitiveState(
     _In_ ULONG IndexOffset,
     _In_ ULONG IndexType)
 {
+    RPI5VC4_V3D_BLEND_STATE LegacyBlendState;
+    const RPI5VC4_V3D_BLEND_STATE *EffectiveBlendState = BlendState;
     ULONG XyScaleX = Rpi5V3dUnsignedFloatWord(Width << 5);
     ULONG XyScaleY = Rpi5V3dUnsignedFloatWord(Height << 5);
     UCHAR V3dPrimitive = PrimitiveType ==
@@ -2405,33 +2449,77 @@ Rpi5V3dClPrimitiveState(
                          V3D71_PRIMITIVE_TRIANGLE_STRIP :
                          V3D71_PRIMITIVE_TRIANGLES;
 
+    if (EffectiveBlendState == NULL &&
+        BlendMode != Rpi5V3dBlendDisabled)
+    {
+        VideoPortZeroMemory(&LegacyBlendState, sizeof(LegacyBlendState));
+        LegacyBlendState.Flags = RPI5VC4_V3D_BLEND_FLAG_ENABLE;
+        LegacyBlendState.ColorEquation = RPI5VC4_V3D_BLEND_EQUATION_ADD;
+        LegacyBlendState.AlphaEquation = RPI5VC4_V3D_BLEND_EQUATION_ADD;
+        if (BlendMode == Rpi5V3dBlendAdditive)
+        {
+            LegacyBlendState.SourceColorFactor =
+                RPI5VC4_V3D_BLEND_FACTOR_ONE;
+            LegacyBlendState.DestinationColorFactor =
+                RPI5VC4_V3D_BLEND_FACTOR_ONE;
+            LegacyBlendState.SourceAlphaFactor =
+                RPI5VC4_V3D_BLEND_FACTOR_ONE;
+            LegacyBlendState.DestinationAlphaFactor =
+                RPI5VC4_V3D_BLEND_FACTOR_ONE;
+        }
+        else
+        {
+            LegacyBlendState.SourceColorFactor =
+                RPI5VC4_V3D_BLEND_FACTOR_SOURCE_ALPHA;
+            LegacyBlendState.DestinationColorFactor =
+                RPI5VC4_V3D_BLEND_FACTOR_ONE_MINUS_SOURCE_ALPHA;
+            LegacyBlendState.SourceAlphaFactor =
+                BlendMode == Rpi5V3dBlendPreserveDestinationAlpha ?
+                    RPI5VC4_V3D_BLEND_FACTOR_ZERO :
+                    RPI5VC4_V3D_BLEND_FACTOR_SOURCE_ALPHA;
+            LegacyBlendState.DestinationAlphaFactor =
+                BlendMode == Rpi5V3dBlendPreserveDestinationAlpha ?
+                    RPI5VC4_V3D_BLEND_FACTOR_ONE :
+                    RPI5VC4_V3D_BLEND_FACTOR_ONE_MINUS_SOURCE_ALPHA;
+        }
+        EffectiveBlendState = &LegacyBlendState;
+    }
+
     Rpi5V3dClByte(Bcl, V3D71_CL_CFG_BITS);
     Rpi5V3dClByte(Bcl, 0x03); /* render both primitive orientations */
     Rpi5V3dClByte(Bcl,
                   (UCHAR)((DepthFunction << 4) |
                           (DepthFunction != V3D71_COMPARE_ALWAYS ?
                            0x80 : 0))); /* depth writes when testing */
-    Rpi5V3dClByte(Bcl, 0x40); /* clip Z from -W through W */
+    Rpi5V3dClByte(Bcl,
+                  (UCHAR)(0x40 |
+                          (EffectiveBlendState != NULL ? 0x08 : 0)));
 
     Rpi5V3dClByte(Bcl, V3D71_CL_BLEND_ENABLES);
-    Rpi5V3dClByte(Bcl, BlendMode != Rpi5V3dBlendDisabled ? 1 : 0);
-    if (BlendMode != Rpi5V3dBlendDisabled)
+    Rpi5V3dClByte(Bcl, EffectiveBlendState != NULL ? 1 : 0);
+    if (EffectiveBlendState != NULL)
     {
-        /*
-         * Mesa's V3D 7.1 packet layout for RT0:
-         *   RGB   = src * SRC_ALPHA + dst * INV_SRC_ALPHA
-         *   alpha = either the same equation or src * ZERO + dst * ONE
-         */
+        ULONG ConstantColorLow =
+            (EffectiveBlendState->ConstantColorHigh & 0xFFFFu) |
+            (EffectiveBlendState->ConstantColorLow & 0xFFFF0000u);
+        ULONG ConstantColorHigh =
+            (EffectiveBlendState->ConstantColorLow & 0xFFFFu) |
+            (EffectiveBlendState->ConstantColorHigh & 0xFFFF0000u);
+        ULONG BlendConfig =
+            EffectiveBlendState->AlphaEquation |
+            (EffectiveBlendState->SourceAlphaFactor << 4) |
+            (EffectiveBlendState->DestinationAlphaFactor << 8) |
+            (EffectiveBlendState->ColorEquation << 12) |
+            (EffectiveBlendState->SourceColorFactor << 16) |
+            (EffectiveBlendState->DestinationColorFactor << 20) |
+            (1u << 24); /* render target 0 */
+
         Rpi5V3dClByte(Bcl, V3D71_CL_BLEND_CFG);
-        Rpi5V3dClByte(Bcl,
-                      BlendMode == Rpi5V3dBlendPreserveDestinationAlpha ?
-                          0x00 : 0x60);
-        Rpi5V3dClByte(Bcl,
-                      BlendMode == Rpi5V3dBlendStandardAlpha ? 0x07 : 0x01);
-        Rpi5V3dClByte(Bcl,
-                      BlendMode == Rpi5V3dBlendAdditive ?
-                          0x16 : 0x76);
-        Rpi5V3dClByte(Bcl, 0x01); /* render target 0 */
+        Rpi5V3dClLe32(Bcl, BlendConfig);
+        /* Match the fixed shader's R/B-swapped XPDM color output. */
+        Rpi5V3dClByte(Bcl, V3D71_CL_BLEND_CONSTANT_COLOR);
+        Rpi5V3dClLe32(Bcl, ConstantColorLow);
+        Rpi5V3dClLe32(Bcl, ConstantColorHigh);
     }
     Rpi5V3dClByte(Bcl, V3D71_CL_COLOR_WRITE_MASKS);
     Rpi5V3dClLe32(Bcl, 0); /* zero bits enable all RGBA channels */
@@ -4374,6 +4462,9 @@ Rpi5V3dBuildBinningList(
                                 Draw->VertexCount,
                                 Draw->DepthFunction,
                                 Draw->BlendMode,
+                                (Draw->BlendState.Flags &
+                                 RPI5VC4_V3D_BLEND_FLAG_ENABLE) != 0 ?
+                                    &Draw->BlendState : NULL,
                                 Draw->AttributeCount,
                                 Draw->Indexed,
                                 Draw->IndexBufferAddress,
@@ -5108,6 +5199,7 @@ Rpi5V3dExecuteClear(
     _In_ ULONG VertexCount,
     _In_ ULONG DepthFunction,
     _In_ RPI5VC4_V3D_BLEND_MODE BlendMode,
+    _In_opt_ const RPI5VC4_V3D_BLEND_STATE *BlendState,
     _In_ BOOLEAN Textured,
     _In_ BOOLEAN LinearTextureFilter,
     _In_ BOOLEAN MipmapTextureFilter,
@@ -5206,6 +5298,14 @@ Rpi5V3dExecuteClear(
     if (CoveredPixelCount != NULL)
         *CoveredPixelCount = 0;
 
+    if (BlendState != NULL &&
+        (!Rpi5V3dBlendStateValid(BlendState) ||
+         (BlendState->Flags & RPI5VC4_V3D_BLEND_FLAG_ENABLE) == 0 ||
+         BlendMode != Rpi5V3dBlendDisabled))
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
+
     if (Terrain)
     {
         ULONG ExpectedSourceCount = TerrainMain ? 6u :
@@ -5226,6 +5326,7 @@ Rpi5V3dExecuteClear(
             TextureGeneration != 0 || TextureGeneration1 != 0 ||
             FusedGraphDraw != NULL || IdeasDraws != NULL ||
             IdeasDrawCount != 0 || IdeasUniforms != NULL ||
+            BlendState != NULL ||
             PreserveTerrainGeometry ||
             (TerrainMain &&
              (Vertices != NULL ||
@@ -5354,6 +5455,9 @@ Rpi5V3dExecuteClear(
          DepthFunction != V3D71_COMPARE_LEQUAL) ||
         (!Terrain &&
          BlendMode > Rpi5V3dBlendPreserveDestinationAlpha) ||
+        (BlendState != NULL &&
+         (Terrain || Ideas || Jellyfish || Shadow || OutputDepth ||
+          FusedGraphDraw != NULL || PreserveTerrainGeometry)) ||
         (!Jellyfish && TextureGeneration1 != 0) ||
         (FusedGraphDraw != NULL &&
          (!DrawPrimitive || !Textured || !LinearTextureFilter ||
@@ -5806,6 +5910,8 @@ Rpi5V3dExecuteClear(
             Draws[0].VertexCount = VertexCount;
             Draws[0].DepthFunction = DepthFunction;
             Draws[0].BlendMode = BlendMode;
+            if (BlendState != NULL)
+                Draws[0].BlendState = *BlendState;
             Draws[0].AttributeCount = HeightMap ? 4u :
                 ((Textured || Phong || Cel) ? 3u : 2u);
             DrawCount = 1;
@@ -6274,6 +6380,7 @@ Rpi5V3dRunSelfTest(
                                0,
                                V3D71_COMPARE_ALWAYS,
                                Rpi5V3dBlendDisabled,
+                               NULL,
                                FALSE, /* Textured */
                                FALSE, /* LinearTextureFilter */
                                FALSE, /* MipmapTextureFilter */
@@ -6358,6 +6465,7 @@ Rpi5V3dRenderClear(
                                  0,
                                  V3D71_COMPARE_ALWAYS,
                                  Rpi5V3dBlendDisabled,
+                                 NULL,
                                  FALSE, /* Textured */
                                  FALSE, /* LinearTextureFilter */
                                  FALSE, /* MipmapTextureFilter */
@@ -6471,6 +6579,9 @@ Rpi5V3dRenderTriangle(
                                  VertexCount,
                                  V3D71_COMPARE_ALWAYS,
                                  Rpi5V3dBlendDisabled,
+                                 (Request->BlendState.Flags &
+                                  RPI5VC4_V3D_BLEND_FLAG_ENABLE) != 0 ?
+                                     &Request->BlendState : NULL,
                                  FALSE, /* Textured */
                                  FALSE, /* LinearTextureFilter */
                                  FALSE, /* MipmapTextureFilter */
@@ -6584,6 +6695,12 @@ Rpi5V3dRenderBatch(
         Request->Width > RPI5VC4_V3D_CLEAR_MAX_WIDTH ||
         Request->Height == 0 ||
         Request->Height > RPI5VC4_V3D_CLEAR_MAX_HEIGHT ||
+        !Rpi5V3dBlendStateValid(&Request->BlendState) ||
+        (((Request->BlendState.Flags &
+           RPI5VC4_V3D_BLEND_FLAG_ENABLE) != 0) &&
+         ((Request->Flags &
+           (RPI5VC4_V3D_BATCH_FLAG_BLEND_STANDARD |
+            RPI5VC4_V3D_BATCH_FLAG_BLEND_PRESERVE_ALPHA)) != 0)) ||
         ((Request->Flags & DepthFlags) != 0 &&
          (Request->Flags & DepthFlags) != DepthFlags) ||
         ((Request->Flags & RPI5VC4_V3D_BATCH_FLAG_DEPTH_LEQUAL) != 0 &&
@@ -6830,6 +6947,9 @@ Rpi5V3dRenderBatch(
                                   RPI5VC4_V3D_BATCH_FLAG_BLEND_STANDARD) != 0 ?
                                      Rpi5V3dBlendStandardAlpha :
                                      Rpi5V3dBlendDisabled,
+                                 (Request->BlendState.Flags &
+                                  RPI5VC4_V3D_BLEND_FLAG_ENABLE) != 0 ?
+                                     &Request->BlendState : NULL,
                                  (Request->Flags &
                                   RPI5VC4_V3D_BATCH_FLAG_TEXTURED) != 0,
                                  (Request->Flags &
@@ -7320,6 +7440,7 @@ Rpi5V3dPresentGdi(
                                  RTL_NUMBER_OF(Vertices),
                                  V3D71_COMPARE_ALWAYS,
                                  Rpi5V3dBlendDisabled,
+                                 NULL,
                                  TRUE,
                                  FALSE,
                                  FALSE,
@@ -8518,6 +8639,7 @@ Rpi5V3dRenderGraph(
                     V3D71_COMPARE_LEQUAL : V3D71_COMPARE_LESS) :
                 V3D71_COMPARE_ALWAYS,
             BlendMode,
+            NULL,
             Fixed,
             Fixed && (Pass->Flags &
                       RPI5VC4_V3D_BATCH_FLAG_TEXTURE_LINEAR) != 0,
