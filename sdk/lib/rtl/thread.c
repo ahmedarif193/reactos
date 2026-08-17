@@ -18,6 +18,41 @@
 
 /* PRIVATE FUNCTIONS *******************************************************/
 
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
+/* The ARM64 PEB slot is used for CHPE process information after startup. */
+RTL_BITMAP FlsBitMap;
+#define RtlpGetFlsBitmap(Peb) (&FlsBitMap)
+#else
+#define RtlpGetFlsBitmap(Peb) ((Peb)->FlsBitmap)
+#endif
+
+typedef VOID (NTAPI *PRTLP_FLS_CALLBACK_DISPATCHER)(PFLS_CALLBACK_FUNCTION Callback, PVOID Data);
+
+static PRTLP_FLS_CALLBACK_DISPATCHER volatile RtlpFlsCallbackDispatcher;
+
+VOID
+NTAPI
+RtlpSetFlsCallbackDispatcher(
+    _In_opt_ PRTLP_FLS_CALLBACK_DISPATCHER Dispatcher)
+{
+    InterlockedExchangePointer((PVOID volatile *)&RtlpFlsCallbackDispatcher, (PVOID)Dispatcher);
+}
+
+VOID
+NTAPI
+RtlpCallFlsCallback(
+    _In_ PFLS_CALLBACK_FUNCTION Callback,
+    _In_opt_ PVOID Data)
+{
+    PRTLP_FLS_CALLBACK_DISPATCHER Dispatcher;
+
+    Dispatcher = (PRTLP_FLS_CALLBACK_DISPATCHER)InterlockedCompareExchangePointer((PVOID volatile *)&RtlpFlsCallbackDispatcher, NULL, NULL);
+    if (Dispatcher)
+        Dispatcher(Callback, Data);
+    else
+        Callback(Data);
+}
+
 NTSTATUS
 WINAPI
 DECLSPEC_HOTPATCH
@@ -39,14 +74,14 @@ RtlFlsAlloc(
     }
     else
     {
-        FlsIndex = RtlFindClearBitsAndSet(Peb->FlsBitmap, 1, 1);
+        FlsIndex = RtlFindClearBitsAndSet(RtlpGetFlsBitmap(Peb), 1, 1);
         if (FlsIndex == ~0UL)
         {
             Status = STATUS_NO_MEMORY;
         }
         else if (!FlsData && !(FlsData = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*FlsData))))
         {
-            RtlClearBits(Peb->FlsBitmap, FlsIndex, 1);
+            RtlClearBits(RtlpGetFlsBitmap(Peb), FlsIndex, 1);
             Status = STATUS_NO_MEMORY;
         }
         else
@@ -84,7 +119,7 @@ RtlFlsFree(
     RtlAcquirePebLock();
     _SEH2_TRY
     {
-        if (RtlAreBitsSet(Peb->FlsBitmap, Index, 1))
+        if (RtlAreBitsSet(RtlpGetFlsBitmap(Peb), Index, 1))
         {
             PFLS_CALLBACK_FUNCTION Callback = Peb->FlsCallback[Index];
             PLIST_ENTRY Entry;
@@ -96,12 +131,12 @@ RtlFlsFree(
                 if (FlsData->Data[Index])
                 {
                     if (Callback)
-                        Callback(FlsData->Data[Index]);
+                        RtlpCallFlsCallback(Callback, FlsData->Data[Index]);
                     FlsData->Data[Index] = NULL;
                 }
             }
             Peb->FlsCallback[Index] = NULL;
-            RtlClearBits(Peb->FlsBitmap, Index, 1);
+            RtlClearBits(RtlpGetFlsBitmap(Peb), Index, 1);
         }
         else
         {
