@@ -609,11 +609,17 @@ endif()
 
 function(add_importlibs _module)
     add_dependency_node(${_module})
-    foreach(LIB ${ARGN})
-        if(ARM64EC_RUNTIME AND LIB STREQUAL "ntdll" AND NOT _module STREQUAL "ntdll_chpe")
+
+    if(ARM64EC_RUNTIME AND NOT _module STREQUAL "ntdll_chpe")
+        # Prefer native ABI bridge exports over regular ntdll syscall stubs.
+        list(FIND ARGN "ntdll" _ntdll_index)
+        if(NOT _ntdll_index EQUAL -1)
             target_link_libraries(${_module} libntdll_chpe)
             add_dependency_edge(${_module} ntdll_chpe)
         endif()
+    endif()
+
+    foreach(LIB ${ARGN})
         target_link_libraries(${_module} lib${LIB})
         add_dependency_edge(${_module} ${LIB})
     endforeach()
