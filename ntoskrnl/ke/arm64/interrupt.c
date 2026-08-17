@@ -29,6 +29,8 @@ extern BOOLEAN NTAPI HalArm64ProfileSample(ULONG Increment);
 #define ARM64_SGI_APC 1
 #define ARM64_SGI_DPC 2
 #define ARM64_SGI_FREEZE 3
+#define ARM64_INTERRUPT_EXIT_APC 0x1
+#define ARM64_INTERRUPT_EXIT_DPC 0x2
 static PKINTERRUPT KiArm64IntTable[ARM64_MAX_INTID] = {0};
 static KSPIN_LOCK KiArm64IntTableLock;
 /* Simple timer wiring for bring-up */
@@ -70,7 +72,7 @@ typedef struct _KI_ARM64_IRQ_FRAME
     ULONG Fpcr;
     ULONG ReservedFpcr;
     ULONG Fpsr;
-    UCHAR Reserved1[0x14];
+    UCHAR Reserved1[0x4];
     ULONG64 X22;
     ULONG64 X23;
     ULONG64 X24;
@@ -79,6 +81,7 @@ typedef struct _KI_ARM64_IRQ_FRAME
     ULONG64 X27;
     ULONG64 X28;
     ULONG64 Reserved2;
+    UCHAR RedZone[0x10];
 } KI_ARM64_IRQ_FRAME, *PKI_ARM64_IRQ_FRAME;
 
 C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, Fp) == 0xB0);
@@ -87,8 +90,24 @@ C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, SpEl0) == 0xD0);
 C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, V) == 0xE0);
 C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, Fpcr) == 0x2E0);
 C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, Fpsr) == 0x2E8);
-C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, X22) == 0x300);
+C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, X22) == 0x2F0);
+C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, RedZone) == 0x330);
 C_ASSERT(sizeof(KI_ARM64_IRQ_FRAME) == 0x340);
+
+/*
+ * A freeze IPI can interrupt a thread near the end of its kernel stack.  Keep
+ * the large synthetic frames in per-processor storage so debugger entry does
+ * not consume another trap frame, exception frame, and full SIMD save area on
+ * that thread's stack.  IRQs remain masked while a processor owns its slot.
+ */
+typedef struct DECLSPEC_CACHEALIGN _KI_ARM64_FREEZE_FRAMES
+{
+    KTRAP_FRAME TrapFrame;
+    KEXCEPTION_FRAME ExceptionFrame;
+    KARM64_VFP_STATE VfpState;
+} KI_ARM64_FREEZE_FRAMES, *PKI_ARM64_FREEZE_FRAMES;
+
+static KI_ARM64_FREEZE_FRAMES KiArm64FreezeFrames[MAXIMUM_PROCESSORS];
 
 typedef struct DECLSPEC_CACHEALIGN _KI_ARM64_TIMER_STATE
 {
@@ -757,34 +776,87 @@ KiArm64DispatchChain(_In_ ULONG IntId)
 }
 
 static
-VOID
+ULONG
 KiArm64SoftwareInterrupt(_In_ ULONG IntId)
 {
     KIRQL Level = (IntId == ARM64_SGI_DPC) ? DISPATCH_LEVEL : APC_LEVEL;
     KIRQL OldIrql;
 
     if (!HalBeginSystemInterrupt(Level, IntId, &OldIrql))
-        return;
+        return 0;
 
-    HalPerformEndOfInterrupt();
-    _enable();
-
-    if (IntId == ARM64_SGI_DPC)
-    {
-        PKPRCB Prcb = KeGetCurrentPrcb();
-        if (Prcb) Prcb->DpcInterruptRequested = FALSE;
-        KiDispatchInterrupt();
-    }
-    else
-    {
-        KiDeliverApc(KernelMode, NULL, NULL);
-    }
-
-    _disable();
-    KeLowerIrql(OldIrql);
+    /*
+     * Acknowledge the SGI while still on the per-processor ISR stack, but do
+     * not run dispatcher/APC code here.  Either path can switch threads and
+     * therefore must execute after the assembly wrapper has restored the
+     * interrupted thread's kernel stack.  This is the same stack ownership
+     * split used by Windows ARM64's KiSwitchStackAndPlayInterrupt path.
+     */
+    HalEndSystemInterrupt(OldIrql, NULL);
+    return (IntId == ARM64_SGI_DPC) ? ARM64_INTERRUPT_EXIT_DPC : ARM64_INTERRUPT_EXIT_APC;
 }
 
 VOID
+KiArm64InterruptDispatchExit(_In_ ULONG ExitWork)
+{
+    PKIPCR Pcr;
+    PKPRCB Prcb;
+    PKTHREAD Thread;
+    KIRQL OldIrql;
+
+    ASSERT((ExitWork & ~(ARM64_INTERRUPT_EXIT_APC | ARM64_INTERRUPT_EXIT_DPC)) == 0);
+
+    /*
+     * A nested SGI has already been acknowledged by the GIC, but its logical
+     * pending bit remains set until the outermost interrupt returns to the
+     * interrupted thread stack.
+     */
+    Pcr = KeGetPcr();
+    if (Pcr != NULL)
+    {
+        if (Pcr->DispatchInterrupt != 0)
+            ExitWork |= ARM64_INTERRUPT_EXIT_DPC;
+        if (Pcr->ApcInterrupt != 0)
+            ExitWork |= ARM64_INTERRUPT_EXIT_APC;
+    }
+
+    if (ExitWork & ARM64_INTERRUPT_EXIT_DPC)
+    {
+        OldIrql = KeGetCurrentIrql();
+        if (OldIrql < DISPATCH_LEVEL)
+        {
+            Prcb = KeGetCurrentPrcb();
+            HalClearSoftwareInterrupt(DISPATCH_LEVEL);
+            if (Prcb != NULL)
+                Prcb->DpcInterruptRequested = FALSE;
+
+            KfRaiseIrql(DISPATCH_LEVEL);
+            _enable();
+            KiDispatchInterrupt();
+            _disable();
+            KfLowerIrql(OldIrql);
+        }
+    }
+
+    if (ExitWork & ARM64_INTERRUPT_EXIT_APC)
+    {
+        OldIrql = KeGetCurrentIrql();
+        Thread = KeGetCurrentThread();
+        if ((OldIrql < APC_LEVEL) &&
+            (Thread != NULL) &&
+            KiIsKernelApcDeliverable(Thread, OldIrql))
+        {
+            HalClearSoftwareInterrupt(APC_LEVEL);
+            KfRaiseIrql(APC_LEVEL);
+            _enable();
+            KiDeliverApc(KernelMode, NULL, NULL);
+            _disable();
+            KfLowerIrql(OldIrql);
+        }
+    }
+}
+
+ULONG
 KiArm64InterruptDispatchEntry(_In_ ULONG VectorId, _In_ PKI_ARM64_IRQ_FRAME IrqFrame)
 {
     ULONG IntId;
@@ -801,32 +873,49 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId, _In_ PKI_ARM64_IRQ_FRAME IrqF
 
     if ((IntId == ARM64_SGI_APC) || (IntId == ARM64_SGI_DPC))
     {
-        KiArm64SoftwareInterrupt(IntId);
-        return;
+        return KiArm64SoftwareInterrupt(IntId);
     }
 
     if (IntId == ARM64_SGI_FREEZE)
     {
-        HalPerformEndOfInterrupt();
-        return;
+        /*
+         * Enter the interrupt through the normal HAL path so the acknowledged
+         * SGI is pushed on the active-INTID stack before it is completed.
+         * Calling HalPerformEndOfInterrupt directly here can otherwise pop an
+         * interrupted device/timer entry, or decode the HAL's raw fallback as
+         * an intid-plus-one value and EOI the wrong SGI.
+         */
+        if (HalBeginSystemInterrupt(HIGH_LEVEL, IntId, &OldIrql))
+            HalEndSystemInterrupt(OldIrql, NULL);
+        return 0;
     }
 
     if (IntId == ARM64_SGI_IPI)
     {
-        KTRAP_FRAME FreezeTrapFrame;
-        KEXCEPTION_FRAME FreezeExceptionFrame;
-        KARM64_VFP_STATE FreezeVfpState;
+        PKPRCB Prcb;
+        PKI_ARM64_FREEZE_FRAMES FreezeFrames;
 
         /* Service the reschedule/generic-call IPI directly: KiIpiServiceRoutine is
          * lockless, and taking the shared chain lock here can deadlock KeIpiGenericCall. */
         if (HalBeginSystemInterrupt(IPI_LEVEL, IntId, &OldIrql))
         {
-            KiArm64BuildFreezeFrames(VectorId, OldIrql, IrqFrame, &FreezeTrapFrame, &FreezeExceptionFrame, &FreezeVfpState);
-            KiIpiServiceRoutine(&FreezeTrapFrame, &FreezeExceptionFrame);
-            KiArm64RestoreFreezeFrames(VectorId, IrqFrame, &FreezeTrapFrame, &FreezeExceptionFrame, &FreezeVfpState);
+            Prcb = KeGetCurrentPrcb();
+            if ((Prcb != NULL) && (Prcb->IpiFrozen == IPI_FROZEN_STATE_TARGET_FREEZE))
+            {
+                Cpu = Prcb->Number;
+                ASSERT(Cpu < MAXIMUM_PROCESSORS);
+                FreezeFrames = &KiArm64FreezeFrames[Cpu];
+                KiArm64BuildFreezeFrames(VectorId, OldIrql, IrqFrame, &FreezeFrames->TrapFrame, &FreezeFrames->ExceptionFrame, &FreezeFrames->VfpState);
+                KiIpiServiceRoutine(&FreezeFrames->TrapFrame, &FreezeFrames->ExceptionFrame);
+                KiArm64RestoreFreezeFrames(VectorId, IrqFrame, &FreezeFrames->TrapFrame, &FreezeFrames->ExceptionFrame, &FreezeFrames->VfpState);
+            }
+            else
+            {
+                KiIpiServiceRoutine(NULL, NULL);
+            }
             HalEndSystemInterrupt(OldIrql, NULL);
         }
-        return;
+        return 0;
     }
 
     Head = (IntId < ARM64_MAX_INTID) ? KiArm64IntTable[IntId] : NULL;
@@ -837,7 +926,7 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId, _In_ PKI_ARM64_IRQ_FRAME IrqF
 
     Begun = HalBeginSystemInterrupt(RequestIrql, IntId, &OldIrql);
     if (!Begun)
-        return;
+        return 0;
 
     Cpu = KeGetCurrentProcessorNumber();
     if (Cpu >= MAXIMUM_PROCESSORS)
@@ -846,12 +935,17 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId, _In_ PKI_ARM64_IRQ_FRAME IrqF
     }
 
     /*
-     * Only PreviousMode/PreviousIrql are ever consumed from this frame
-     * (KeUpdateSystemTime/KeUpdateRunTime via KiArm64GetCurrentInterruptTrapFrame),
-     * so skip zeroing the remaining 340+ bytes on every interrupt.
+     * The clock path consumes PreviousMode/PreviousIrql for accounting and Pc
+     * for profiling.  Keep the control state coherent with the architectural
+     * IRQ frame without zeroing/copying the unused 340+ bytes on every tick.
      */
     LocalTrapFrame.PreviousMode = (VectorId >= 8) ? UserMode : KernelMode;
     LocalTrapFrame.PreviousIrql = OldIrql;
+    LocalTrapFrame.Spsr = (ULONG)IrqFrame->Spsr;
+    LocalTrapFrame.Sp = (VectorId >= 8) ? IrqFrame->SpEl0 : (ULONG_PTR)(IrqFrame + 1);
+    LocalTrapFrame.Lr = IrqFrame->Lr;
+    LocalTrapFrame.Fp = IrqFrame->Fp;
+    LocalTrapFrame.Pc = IrqFrame->Elr;
     SavedTrapFrame = KiArm64CurrentInterruptTrapFrame[Cpu];
     KiArm64CurrentInterruptTrapFrame[Cpu] = &LocalTrapFrame;
 
@@ -868,7 +962,7 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId, _In_ PKI_ARM64_IRQ_FRAME IrqF
 
     HalEndSystemInterrupt(OldIrql, NULL);
 
-    UNREFERENCED_PARAMETER(VectorId);
+    return 0;
 }
 
 /*

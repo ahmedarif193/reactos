@@ -162,3 +162,8 @@ SIZE(KTRAP_FRAME_LENGTH, KTRAP_FRAME),
 HEADER("KPCR offsets"),
 OFFSET(PcCurrentPrcb, KIPCR, CurrentPrcb),
 OFFSET(PcCurrentThread, KIPCR, Prcb.CurrentThread),
+
+HEADER("KPRCB offsets"),
+OFFSET(PbNestingLevel, KPRCB, NestingLevel),
+OFFSET(PbDpcStack, KPRCB, DpcStack),
+OFFSET(PbIsrStack, KPRCB, IsrStack),
