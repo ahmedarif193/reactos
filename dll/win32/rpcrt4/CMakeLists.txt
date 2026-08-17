@@ -15,6 +15,8 @@ set(IDL_FLAGS ${IDL_FLAGS} -Oicf)
 add_rpcproxy_files(ndr_types.idl)
 set(IDL_FLAGS ${OLD_IDL_FLAGS})
 
+add_arm64ec_x64_source(RPCRT4_THUNKS_SOURCE thunks.c __WINESRC__)
+
 list(APPEND SOURCE
     cproxy.c
     cpsf.c
@@ -35,7 +37,7 @@ list(APPEND SOURCE
     rpcrt4_main.c
     rpc_server.c
     rpc_transport.c
-    thunks.c
+    ${RPCRT4_THUNKS_SOURCE}
     unix_func.c
     ${CMAKE_CURRENT_BINARY_DIR}/epm_c.c)
 
@@ -45,7 +47,7 @@ endif()
 
 list(APPEND PCH_SKIP_SOURCE
     ndr_typelib.c
-    thunks.c
+    ${RPCRT4_THUNKS_SOURCE}
     ${CMAKE_CURRENT_BINARY_DIR}/ndr_types_p.c
     ${CMAKE_CURRENT_BINARY_DIR}/proxy.dlldata.c
     ${CMAKE_CURRENT_BINARY_DIR}/rpcrt4_stubs.c)
