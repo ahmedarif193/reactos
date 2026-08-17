@@ -15,7 +15,7 @@
 
     END
 
-#elif defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+#elif defined(_M_ARM64) || defined(_M_ARM64EC) || defined(_ARM64_) || defined(_ARM64EC_) || defined(__aarch64__) || defined(__arm64__) || defined(__arm64ec__)
 
     .text
 

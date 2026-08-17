@@ -2,7 +2,9 @@
  *                              Kernel Functions                              *
  ******************************************************************************/
 $if (_WDMDDK_)
-#if defined(_M_IX86)
+#if defined(_M_ARM64EC)
+$include(arm64/ke.h)
+#elif defined(_M_IX86)
 $include(x86/ke.h)
 #elif defined(_M_AMD64)
 $include(amd64/ke.h)
