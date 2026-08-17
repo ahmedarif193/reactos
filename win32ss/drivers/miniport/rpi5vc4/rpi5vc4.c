@@ -306,6 +306,7 @@ DriverEntry(
     InitData.HwFindAdapter = Rpi5Vc4FindAdapter;
     InitData.HwInitialize = Rpi5Vc4Initialize;
     InitData.HwStartIO = Rpi5Vc4StartIO;
+    InitData.HwInterrupt = Rpi5V3dInterrupt;
     InitData.HwResetHw = Rpi5Vc4ResetHw;
     InitData.HwGetPowerState = Rpi5Vc4GetPowerState;
     InitData.HwSetPowerState = Rpi5Vc4SetPowerState;
@@ -336,6 +337,13 @@ Rpi5Vc4FindAdapter(
 
     if (ConfigInfo->Length < sizeof(VIDEO_PORT_CONFIG_INFO))
         return ERROR_INVALID_PARAMETER;
+
+    KeInitializeEvent(&DeviceExtension->V3dCompletionEvent,
+                      SynchronizationEvent,
+                      FALSE);
+    DeviceExtension->V3dInterruptAvailable =
+        ConfigInfo->BusInterruptLevel != 0 ||
+        ConfigInfo->BusInterruptVector != 0;
 
     Status = Rpi5Vc4CaptureAcpiResources(DeviceExtension);
     if (Status != NO_ERROR)
@@ -543,6 +551,7 @@ Rpi5Vc4Initialize(
     Rpi5Vc4BuildModeInfo(DeviceExtension);
     Rpi5Vc4InitFrameBuffer(DeviceExtension);
     Rpi5V3dProbe(DeviceExtension);
+    Rpi5V3dInitializeInterrupts(DeviceExtension);
     if (DeviceExtension->HeadlessBuffer == NULL)
     {
         Rpi5Vc4InitCursor(DeviceExtension);
@@ -818,6 +827,112 @@ Rpi5Vc4StartIO(
                 DeviceExtension,
                 (PRPI5VC4_V3D_TRIANGLE_REQUEST)RequestPacket->InputBuffer,
                 (PRPI5VC4_V3D_TRIANGLE_RESULT)RequestPacket->OutputBuffer,
+                RequestPacket->OutputBufferLength,
+                &Returned);
+            if (Status == NO_ERROR)
+                RequestPacket->StatusBlock->Information = Returned;
+            break;
+
+        case IOCTL_VIDEO_RPI5VC4_RENDER_BATCH:
+            if (RequestPacket->InputBufferLength <
+                    FIELD_OFFSET(RPI5VC4_V3D_BATCH_REQUEST, Vertices) ||
+                RequestPacket->OutputBufferLength <
+                    FIELD_OFFSET(RPI5VC4_V3D_BATCH_RESULT, Pixels))
+            {
+                Status = ERROR_INSUFFICIENT_BUFFER;
+                break;
+            }
+            Status = Rpi5V3dRenderBatch(
+                DeviceExtension,
+                (PRPI5VC4_V3D_BATCH_REQUEST)RequestPacket->InputBuffer,
+                RequestPacket->InputBufferLength,
+                (PRPI5VC4_V3D_BATCH_RESULT)RequestPacket->OutputBuffer,
+                RequestPacket->OutputBufferLength,
+                &Returned);
+            if (Status == NO_ERROR)
+                RequestPacket->StatusBlock->Information = Returned;
+            break;
+
+        case IOCTL_VIDEO_RPI5VC4_UPLOAD_TEXTURE:
+            if (RequestPacket->InputBufferLength <
+                    FIELD_OFFSET(RPI5VC4_V3D_TEXTURE_UPLOAD_REQUEST,
+                                 Pixels) ||
+                RequestPacket->OutputBufferLength <
+                    sizeof(RPI5VC4_V3D_TEXTURE_UPLOAD_RESULT))
+            {
+                Status = ERROR_INSUFFICIENT_BUFFER;
+                break;
+            }
+            Status = Rpi5V3dUploadTexture(
+                DeviceExtension,
+                (PRPI5VC4_V3D_TEXTURE_UPLOAD_REQUEST)
+                    RequestPacket->InputBuffer,
+                RequestPacket->InputBufferLength,
+                (PRPI5VC4_V3D_TEXTURE_UPLOAD_RESULT)
+                    RequestPacket->OutputBuffer,
+                &Returned);
+            if (Status == NO_ERROR)
+                RequestPacket->StatusBlock->Information = Returned;
+            break;
+
+        case IOCTL_VIDEO_RPI5VC4_PRESENT_GDI:
+            if (RequestPacket->InputBufferLength <
+                    FIELD_OFFSET(RPI5VC4_GDI_PRESENT_REQUEST, Pixels) ||
+                RequestPacket->OutputBufferLength <
+                    sizeof(RPI5VC4_GDI_PRESENT_RESULT))
+            {
+                Status = ERROR_INSUFFICIENT_BUFFER;
+                break;
+            }
+            Status = Rpi5V3dPresentGdi(
+                DeviceExtension,
+                (PRPI5VC4_GDI_PRESENT_REQUEST)
+                    RequestPacket->InputBuffer,
+                RequestPacket->InputBufferLength,
+                (PRPI5VC4_GDI_PRESENT_RESULT)
+                    RequestPacket->OutputBuffer,
+                &Returned);
+            if (Status == NO_ERROR)
+                RequestPacket->StatusBlock->Information = Returned;
+            break;
+
+        case IOCTL_VIDEO_RPI5VC4_RENDER_GRAPH:
+            if (RequestPacket->InputBufferLength <
+                    FIELD_OFFSET(RPI5VC4_V3D_RENDER_GRAPH_REQUEST,
+                                 Pixels) ||
+                RequestPacket->OutputBufferLength <
+                    sizeof(RPI5VC4_V3D_RENDER_GRAPH_RESULT))
+            {
+                Status = ERROR_INSUFFICIENT_BUFFER;
+                break;
+            }
+            Status = Rpi5V3dRenderGraph(
+                DeviceExtension,
+                (PRPI5VC4_V3D_RENDER_GRAPH_REQUEST)
+                    RequestPacket->InputBuffer,
+                RequestPacket->InputBufferLength,
+                (PRPI5VC4_V3D_RENDER_GRAPH_RESULT)
+                    RequestPacket->OutputBuffer,
+                &Returned);
+            if (Status == NO_ERROR)
+                RequestPacket->StatusBlock->Information = Returned;
+            break;
+
+        case IOCTL_VIDEO_RPI5VC4_READ_GRAPH:
+            if (RequestPacket->InputBufferLength <
+                    sizeof(RPI5VC4_V3D_READ_GRAPH_REQUEST) ||
+                RequestPacket->OutputBufferLength <
+                    FIELD_OFFSET(RPI5VC4_V3D_READ_GRAPH_RESULT, Pixels))
+            {
+                Status = ERROR_INSUFFICIENT_BUFFER;
+                break;
+            }
+            Status = Rpi5V3dReadGraph(
+                DeviceExtension,
+                (PRPI5VC4_V3D_READ_GRAPH_REQUEST)
+                    RequestPacket->InputBuffer,
+                (PRPI5VC4_V3D_READ_GRAPH_RESULT)
+                    RequestPacket->OutputBuffer,
                 RequestPacket->OutputBufferLength,
                 &Returned);
             if (Status == NO_ERROR)
