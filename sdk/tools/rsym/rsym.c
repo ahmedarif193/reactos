@@ -37,17 +37,23 @@ BOOL WINAPI SymUnloadModule64(HANDLE hProcess, DWORD64 BaseOfDll);
 #define MAX_PATH 260
 #define MAX_SYM_NAME 2000
 
+/* Offset 0 always holds the empty string, so -1 is free as a failure marker. */
+#define RSYM_STRING_OFFSET_INVALID ((ULONG)-1)
+
 struct StringEntry
 {
     struct StringEntry *Next;
     ULONG Offset;
-    char *String;
 };
 
+/* The strings buffer grows on demand, so entries record offsets and the table
+ * keeps the caller's buffer pointer indirectly. Storing raw string pointers
+ * would dangle as soon as the buffer is reallocated. */
 struct StringHashTable
 {
     ULONG TableSize;
     struct StringEntry **Table;
+    char **StringsBase;
 };
 
 /* This is the famous DJB hash */
@@ -68,12 +74,10 @@ ComputeDJBHash(const char *name)
 static void
 AddStringToHash(struct StringHashTable *StringTable,
                 unsigned int hash,
-                ULONG Offset,
-                char *StringPtr)
+                ULONG Offset)
 {
     struct StringEntry *entry = calloc(1, sizeof(struct StringEntry));
     entry->Offset = Offset;
-    entry->String = StringPtr;
     entry->Next = StringTable->Table[hash];
     StringTable->Table[hash] = entry;
 }
@@ -81,18 +85,16 @@ AddStringToHash(struct StringHashTable *StringTable,
 static void
 StringHashTableInit(struct StringHashTable *StringTable,
                     ULONG StringsLength,
-                    char *StringsBase)
+                    char **StringsBase)
 {
-    char *Start = StringsBase;
-    char *End = StringsBase + StringsLength;
+    char *Start = *StringsBase;
+    char *End = *StringsBase + StringsLength;
     StringTable->TableSize = 1024;
     StringTable->Table = calloc(1024, sizeof(struct StringEntry *));
+    StringTable->StringsBase = StringsBase;
     while (Start < End)
     {
-        AddStringToHash(StringTable,
-                        ComputeDJBHash(Start) % StringTable->TableSize,
-                        Start - StringsBase,
-                        Start);
+        AddStringToHash(StringTable, ComputeDJBHash(Start) % StringTable->TableSize, Start - *StringsBase);
         Start += strlen(Start) + 1;
     }
 }
@@ -204,16 +206,62 @@ GetCoffInfo(void *FileData, PIMAGE_FILE_HEADER PEFileHeader,
     return 0;
 }
 
+/* Grows the strings buffer so that Needed more bytes fit. Returns 0 on failure,
+ * which callers report as an allocation error. */
+static int
+GrowStrings(char **StringsBase, ULONG *StringsLength, ULONG *StringsCapacity, size_t Needed)
+{
+    size_t Required = (size_t)*StringsLength + Needed;
+    size_t Capacity = *StringsCapacity;
+    char *Grown;
+
+    if (Required <= Capacity)
+        return 1;
+
+    if (Required > UINT32_MAX)
+    {
+        fprintf(stderr, "Converted strings table is too large\n");
+        return 0;
+    }
+
+    if (Capacity < 4096)
+        Capacity = 4096;
+
+    while (Capacity < Required)
+    {
+        if (Capacity > UINT32_MAX / 2)
+        {
+            Capacity = Required;
+            break;
+        }
+        Capacity *= 2;
+    }
+
+    Grown = realloc(*StringsBase, Capacity);
+    if (Grown == NULL)
+    {
+        fprintf(stderr, "Unable to grow the strings table to %zu bytes\n", Capacity);
+        return 0;
+    }
+
+    *StringsBase = Grown;
+    *StringsCapacity = (ULONG)Capacity;
+    return 1;
+}
+
 static ULONG
 FindOrAddString(struct StringHashTable *StringTable,
                 char *StringToFind,
                 ULONG *StringsLength,
-                void *StringsBase)
+                ULONG *StringsCapacity,
+                char **StringsBase)
 {
     unsigned int hash = ComputeDJBHash(StringToFind) % StringTable->TableSize;
     struct StringEntry *entry = StringTable->Table[hash];
+    size_t Needed = strlen(StringToFind) + 1;
+    ULONG Offset;
 
-    while (entry && strcmp(entry->String, StringToFind))
+    while (entry && strcmp(*StringsBase + entry->Offset, StringToFind))
         entry = entry->Next;
 
     if (entry)
@@ -222,20 +270,24 @@ FindOrAddString(struct StringHashTable *StringTable,
     }
     else
     {
-        char *End = (char *)StringsBase + *StringsLength;
+        /* The COFF pass stores demangled name variants in addition to the
+         * original names, so no fixed size estimate covers this buffer. */
+        if (!GrowStrings(StringsBase, StringsLength, StringsCapacity, Needed))
+            return RSYM_STRING_OFFSET_INVALID;
 
-        strcpy(End, StringToFind);
-        *StringsLength += strlen(StringToFind) + 1;
+        Offset = *StringsLength;
+        memcpy(*StringsBase + Offset, StringToFind, Needed);
+        *StringsLength += (ULONG)Needed;
 
-        AddStringToHash(StringTable, hash, End - (char *)StringsBase, End);
+        AddStringToHash(StringTable, hash, Offset);
 
-        return End - (char *)StringsBase;
+        return Offset;
     }
 }
 
 static int
 ConvertStabs(ULONG *SymbolsCount, PROSSYM_ENTRY *SymbolsBase,
-             ULONG *StringsLength, void *StringsBase,
+             ULONG *StringsLength, ULONG *StringsCapacity, char **StringsBase,
              ULONG StabSymbolsLength, void *StabSymbolsBase,
              ULONG StabStringsLength, void *StabStringsBase,
              ULONG_PTR ImageBase, PIMAGE_FILE_HEADER PEFileHeader,
@@ -271,7 +323,7 @@ ConvertStabs(ULONG *SymbolsCount, PROSSYM_ENTRY *SymbolsBase,
     Current = *SymbolsBase;
     memset(Current, 0, sizeof(*Current));
 
-    StringHashTableInit(&StringHash, *StringsLength, (char *)StringsBase);
+    StringHashTableInit(&StringHash, *StringsLength, StringsBase);
 
     LastFunctionAddress = 0;
     for (i = 0; i < Count; i++)
@@ -308,10 +360,13 @@ ConvertStabs(ULONG *SymbolsCount, PROSSYM_ENTRY *SymbolsBase,
                         First = 0;
                     Current->Address = Address;
                 }
-                Current->FileOffset = FindOrAddString(&StringHash,
-                                                      (char *)StabStringsBase + StabEntry[i].n_strx,
-                                                      StringsLength,
-                                                      StringsBase);
+                Current->FileOffset = FindOrAddString(&StringHash, (char *)StabStringsBase + StabEntry[i].n_strx, StringsLength, StringsCapacity, StringsBase);
+                if (Current->FileOffset == RSYM_STRING_OFFSET_INVALID)
+                {
+                    free(*SymbolsBase);
+                    StringHashTableFree(&StringHash);
+                    return 1;
+                }
                 break;
             case N_FUN:
                 if (StabEntry[i].n_desc == 0 || StabEntry[i].n_value < ImageBase)
@@ -338,10 +393,13 @@ ConvertStabs(ULONG *SymbolsCount, PROSSYM_ENTRY *SymbolsBase,
                 }
                 memcpy(FuncName, Name, NameLen);
                 FuncName[NameLen] = '\0';
-                Current->FunctionOffset = FindOrAddString(&StringHash,
-                                                          FuncName,
-                                                          StringsLength,
-                                                          StringsBase);
+                Current->FunctionOffset = FindOrAddString(&StringHash, FuncName, StringsLength, StringsCapacity, StringsBase);
+                if (Current->FunctionOffset == RSYM_STRING_OFFSET_INVALID)
+                {
+                    free(*SymbolsBase);
+                    StringHashTableFree(&StringHash);
+                    return 1;
+                }
                 Current->SourceLine = 0;
                 LastFunctionAddress = Address;
                 break;
@@ -375,7 +433,7 @@ ConvertStabs(ULONG *SymbolsCount, PROSSYM_ENTRY *SymbolsBase,
 
 static int
 ConvertCoffs(ULONG *SymbolsCount, PROSSYM_ENTRY *SymbolsBase,
-             ULONG *StringsLength, void *StringsBase,
+             ULONG *StringsLength, ULONG *StringsCapacity, char **StringsBase,
              ULONG CoffSymbolsLength, void *CoffSymbolsBase,
              ULONG CoffStringsLength, void *CoffStringsBase,
              ULONG_PTR ImageBase, PIMAGE_FILE_HEADER PEFileHeader,
@@ -409,7 +467,7 @@ ConvertCoffs(ULONG *SymbolsCount, PROSSYM_ENTRY *SymbolsBase,
     *SymbolsCount = 0;
     Current = *SymbolsBase;
 
-    StringHashTableInit(&StringHash, *StringsLength, (char*)StringsBase);
+    StringHashTableInit(&StringHash, *StringsLength, StringsBase);
 
     for (i = 0; i < Count; i++)
     {
@@ -499,11 +557,14 @@ ConvertCoffs(ULONG *SymbolsCount, PROSSYM_ENTRY *SymbolsBase,
                 *p = '\0';
             }
             p = ('_' == FuncName[0] || '@' == FuncName[0] ? FuncName + 1 : FuncName);
-            Current->FunctionOffset = FindOrAddString(&StringHash,
-                                                      p,
-                                                      StringsLength,
-                                                      StringsBase);
+            Current->FunctionOffset = FindOrAddString(&StringHash, p, StringsLength, StringsCapacity, StringsBase);
             free(FuncName);
+            if (Current->FunctionOffset == RSYM_STRING_OFFSET_INVALID)
+            {
+                free(*SymbolsBase);
+                StringHashTableFree(&StringHash);
+                return 1;
+            }
             Current->SourceLine = 0;
             memset(++Current, 0, sizeof(*Current));
         }
@@ -730,7 +791,7 @@ DbgHelpAddLineNumber(PSRCCODEINFO LineInfo, void *UserContext)
 static int
 ConvertDbgHelp(void *process, DWORD64 module_base, char *SourcePath,
                ULONG *SymbolsCount, PROSSYM_ENTRY *SymbolsBase,
-               ULONG *StringsLength, void **StringsBase)
+               ULONG *StringsLength, ULONG *StringsCapacity, char **StringsBase)
 {
     char *strings, *strings_copy;
     int i, j, bucket, entry;
@@ -754,7 +815,8 @@ ConvertDbgHelp(void *process, DWORD64 module_base, char *SourcePath,
 
     /* Transcribe necessary strings */
     *StringsLength = strtab.Bytes;
-    strings = strings_copy = ((char *)(*StringsBase = malloc(strtab.Bytes)));
+    *StringsCapacity = strtab.Bytes;
+    strings = strings_copy = (*StringsBase = malloc(strtab.Bytes));
 
     /* Copy in strings */
     for (i = 0; i < strtab.Length; i++)
@@ -1376,8 +1438,9 @@ int main(int argc, char* argv[])
     char* path1;
     char* path2;
     FILE* out;
-    void *StringBase = NULL;
+    char *StringBase = NULL;
     ULONG StringsLength = 0;
+    ULONG StringsCapacity = 0;
     ULONG StabSymbolsCount = 0;
     PROSSYM_ENTRY StabSymbols = NULL;
     ULONG CoffSymbolsCount = 0;
@@ -1527,6 +1590,7 @@ int main(int argc, char* argv[])
                            &StabSymbolsCount,
                            &StabSymbols,
                            &StringsLength,
+                           &StringsCapacity,
                            &StringBase))
         {
             free(FileData);
@@ -1550,18 +1614,16 @@ int main(int argc, char* argv[])
         exit(1);
     }
 
+    /* The conversion passes grow this buffer as they go, so the sizes below are
+     * only an initial reservation that avoids repeated early reallocation. */
     if (!UseDbgHelp)
     {
         size_t CoffSymbolsCount = CoffsLength / sizeof(COFF_SYMENT);
-        size_t StringCapacity = 1 + (size_t)CoffStringsLength +
-                                CoffSymbolsCount * (E_SYMNMLEN + 1);
+        size_t StringCapacity = 1 + (size_t)StabStringsLength + (size_t)CoffStringsLength + CoffSymbolsCount * (E_SYMNMLEN + 1);
 
         if (StringCapacity > UINT32_MAX)
-        {
-            free(FileData);
-            fprintf(stderr, "Converted strings table is too large\n");
-            exit(1);
-        }
+            StringCapacity = UINT32_MAX;
+
         StringBase = malloc(StringCapacity);
         if (StringBase == NULL)
         {
@@ -1569,14 +1631,16 @@ int main(int argc, char* argv[])
             fprintf(stderr, "Failed to allocate memory for strings table\n");
             exit(1);
         }
+        StringsCapacity = (ULONG)StringCapacity;
         /* Make offset 0 into an empty string */
-        *((char *) StringBase) = '\0';
+        *StringBase = '\0';
         StringsLength = 1;
 
         if (ConvertStabs(&StabSymbolsCount,
                          &StabSymbols,
                          &StringsLength,
-                         StringBase,
+                         &StringsCapacity,
+                         &StringBase,
                          StabsLength,
                          StabBase,
                          StabStringsLength,
@@ -1587,36 +1651,36 @@ int main(int argc, char* argv[])
         {
             free(StringBase);
             free(FileData);
-            fprintf(stderr, "Failed to allocate memory for strings table\n");
+            fprintf(stderr, "Failed to convert .stab symbols\n");
             exit(1);
         }
     }
     else
     {
         size_t CoffSymbolsCount = CoffsLength / sizeof(COFF_SYMENT);
-        size_t StringCapacity = (size_t)StringsLength + CoffStringsLength +
-                                CoffSymbolsCount * (E_SYMNMLEN + 1);
+        size_t StringCapacity = (size_t)StringsLength + (size_t)CoffStringsLength + CoffSymbolsCount * (E_SYMNMLEN + 1);
+        char *Reserved;
 
         if (StringCapacity > UINT32_MAX)
+            StringCapacity = UINT32_MAX;
+
+        Reserved = realloc(StringBase, StringCapacity);
+        if (Reserved == NULL)
         {
             free(StringBase);
-            free(FileData);
-            fprintf(stderr, "Converted strings table is too large\n");
-            exit(1);
-        }
-        StringBase = realloc(StringBase, StringCapacity);
-        if (!StringBase)
-        {
             free(FileData);
             fprintf(stderr, "Failed to allocate memory for strings table\n");
             exit(1);
         }
+        StringBase = Reserved;
+        StringsCapacity = (ULONG)StringCapacity;
     }
 
     if (ConvertCoffs(&CoffSymbolsCount,
                      &CoffSymbols,
                      &StringsLength,
-                     StringBase,
+                     &StringsCapacity,
+                     &StringBase,
                      CoffsLength,
                      CoffBase,
                      CoffStringsLength,
