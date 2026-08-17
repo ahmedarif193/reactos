@@ -14,6 +14,11 @@
 #undef NTDDI_VERSION
 #define NTDDI_VERSION NTDDI_WS03SP1
 
+/* winnt.h selected these masks for the original target version. Let the NDK
+ * select the matching Server 2003 values below. */
+#undef FILE_ATTRIBUTE_VALID_FLAGS
+#undef FILE_ATTRIBUTE_VALID_SET_FLAGS
+
 #define NTOS_MODE_USER
 #include <ndk/iofuncs.h>
 #include <ndk/kefuncs.h>
