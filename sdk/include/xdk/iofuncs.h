@@ -38,7 +38,7 @@ $if (_WDMDDK_)
     } \
 }
 
-#if !defined(_M_AMD64)
+#if !defined(_M_AMD64) || defined(_M_ARM64EC)
 NTHALAPI
 VOID
 NTAPI
@@ -81,7 +81,7 @@ NTAPI
 READ_PORT_USHORT(
   IN PUSHORT Port);
 
-#if !defined(_M_ARM64)
+#if !defined(_M_ARM64) && !defined(_M_ARM64EC)
 NTKERNELAPI
 VOID
 NTAPI
@@ -170,7 +170,7 @@ WRITE_PORT_USHORT(
   IN PUSHORT Port,
   IN USHORT Value);
 
-#if !defined(_M_ARM64)
+#if !defined(_M_ARM64) && !defined(_M_ARM64EC)
 NTKERNELAPI
 VOID
 NTAPI
@@ -217,7 +217,7 @@ WRITE_REGISTER_USHORT(
   IN USHORT Value);
 #endif
 
-#if defined(_M_ARM64) && !defined(NO_PORT_MACROS)
+#if (defined(_M_ARM64) || defined(_M_ARM64EC)) && !defined(NO_PORT_MACROS)
 FORCEINLINE
 UCHAR
 READ_REGISTER_UCHAR(
