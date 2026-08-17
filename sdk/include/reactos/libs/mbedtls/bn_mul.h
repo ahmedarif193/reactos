@@ -237,7 +237,8 @@
 #endif /* SSE2 */
 #endif /* i386 */
 
-#if defined(__amd64__) || defined (__x86_64__)
+#if ( defined(__amd64__) || defined (__x86_64__) ) && \
+    ! defined(__arm64ec__)
 
 #define MULADDC_INIT                        \
     asm(                                    \
