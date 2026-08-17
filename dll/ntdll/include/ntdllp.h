@@ -426,6 +426,11 @@ ChpeUpdateProcessorInformation(
 
 BOOLEAN
 NTAPI
+ChpeIsProcessorFeaturePresent(
+    ULONG ProcessorFeature);
+
+BOOLEAN
+NTAPI
 ChpeShouldEmulateImage(
     PVOID ImageBase);
 

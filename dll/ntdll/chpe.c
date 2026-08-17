@@ -132,6 +132,7 @@ static CHPE_DISPATCH_TABLE             ChpeDispatchTable;
 /* Whether the CHPE emulator has been loaded for this process */
 static BOOLEAN ChpeEmulatorLoaded = FALSE;
 static PVOID volatile ChpeEcCodeBitmap;
+static BOOLEAN ChpeProcessorFeatures[PROCESSOR_FEATURE_MAX];
 
 extern PVOID NtDllBase;
 extern IMAGE_DOS_HEADER __ImageBase;
@@ -1205,6 +1206,7 @@ NTSTATUS
 NTAPI
 ChpeInitializeProcess(VOID)
 {
+    ULONG Feature;
     NTSTATUS Status;
 
     if (ChpeEmulatorLoaded)
@@ -1226,6 +1228,9 @@ ChpeInitializeProcess(VOID)
         DPRINT1("[CHPE] ntdll: ProcessInit failed, Status = 0x%08lx\n", Status);
         return Status;
     }
+
+    for (Feature = 0; Feature < RTL_NUMBER_OF(ChpeProcessorFeatures); ++Feature)
+        ChpeProcessorFeatures[Feature] = pChpeIsProcessorFeaturePresent(Feature);
 
     Status = ChpeInitializeThread();
     if (!NT_SUCCESS(Status))
@@ -1922,6 +1927,38 @@ ChpeUpdateProcessorInformation(PVOID ProcessorInformation)
 {
     if (pChpeUpdateProcessorInfo && ProcessorInformation)
         pChpeUpdateProcessorInfo(ProcessorInformation);
+}
+
+BOOLEAN
+NTAPI
+ChpeIsProcessorFeaturePresent(ULONG ProcessorFeature)
+{
+    static const ULONGLONG NativeFeatureMask =
+        (1ULL << PF_COMPARE_EXCHANGE_DOUBLE) |
+        (1ULL << PF_NX_ENABLED) |
+        (1ULL << PF_ARM_VFP_32_REGISTERS_AVAILABLE) |
+        (1ULL << PF_ARM_NEON_INSTRUCTIONS_AVAILABLE) |
+        (1ULL << PF_SECOND_LEVEL_ADDRESS_TRANSLATION) |
+        (1ULL << PF_FASTFAIL_AVAILABLE) |
+        (1ULL << PF_ARM_DIVIDE_INSTRUCTION_AVAILABLE) |
+        (1ULL << PF_ARM_64BIT_LOADSTORE_ATOMIC) |
+        (1ULL << PF_ARM_EXTERNAL_CACHE_AVAILABLE) |
+        (1ULL << PF_ARM_FMAC_INSTRUCTIONS_AVAILABLE) |
+        (1ULL << PF_ARM_V8_INSTRUCTIONS_AVAILABLE) |
+        (1ULL << PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE) |
+        (1ULL << PF_ARM_V8_CRC32_INSTRUCTIONS_AVAILABLE) |
+        (1ULL << PF_ARM_V81_ATOMIC_INSTRUCTIONS_AVAILABLE) |
+        (1ULL << PF_ARM_V82_DP_INSTRUCTIONS_AVAILABLE) |
+        (1ULL << PF_ARM_V83_JSCVT_INSTRUCTIONS_AVAILABLE) |
+        (1ULL << PF_ARM_V83_LRCPC_INSTRUCTIONS_AVAILABLE);
+
+    if (ProcessorFeature >= RTL_NUMBER_OF(ChpeProcessorFeatures))
+        return FALSE;
+
+    if (ProcessorFeature < 64 && (NativeFeatureMask & (1ULL << ProcessorFeature)))
+        return RtlIsProcessorFeaturePresent(ProcessorFeature);
+
+    return ChpeProcessorFeatures[ProcessorFeature];
 }
 
 /*

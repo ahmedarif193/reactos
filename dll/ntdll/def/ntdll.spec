@@ -865,6 +865,7 @@
 @ stdcall -arch=x86_64,arm64 RtlWow64GetCurrentCpuArea(ptr ptr ptr)
 @ stdcall -arch=arm64 RtlIsEcCode(ptr)
 @ stdcall -arch=arm64 ProcessPendingCrossProcessEmulatorWork()
+@ stdcall -arch=arm64,arm64ec ChpeIsProcessorFeaturePresent(long)
 @ stdcall -arch=x86_64,arm64 RtlWow64PopAllCrossProcessWorkFromWorkList(ptr ptr)
 @ stdcall -arch=x86_64,arm64 RtlWow64PushCrossProcessWorkOntoFreeList(ptr ptr)
 @ stdcall RtlLocateExtendedFeature(ptr long ptr)
