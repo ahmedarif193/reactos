@@ -950,7 +950,9 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId, _In_ PKI_ARM64_IRQ_FRAME IrqF
             }
             else
             {
+                _enable();
                 KiIpiServiceRoutine(NULL, NULL);
+                _disable();
             }
             HalEndSystemInterrupt(OldIrql, NULL);
         }
