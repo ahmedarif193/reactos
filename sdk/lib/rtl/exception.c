@@ -32,14 +32,6 @@ RtlpAmd64StepContextToCaller(
 #endif
 
 #if defined(_M_ARM64)
-/* Defined in rtl/arm64/except.c - advances a captured CONTEXT one frame up so it
- * describes the caller of the routine that captured it (used by RtlRaiseStatus
- * and RtlRaiseException to raise from the caller's frame). */
-VOID
-NTAPI
-RtlpArm64StepContextToCaller(
-    _Inout_ PCONTEXT Context);
-
 /* Defined in rtl/arm64/context_asm.S - loads the register file from Context and
  * branches to Context->Pc (does not return). Used to resume at a handler-patched
  * context; ZwContinue cannot resume a kernel-mode context from a non-trap call
@@ -144,14 +136,6 @@ RtlRaiseStatus(IN NTSTATUS Status)
      * all nonvolatile registers restored.
      */
     RtlpAmd64StepContextToCaller(&Context);
-#elif defined(_M_ARM64)
-    /*
-     * Same problem on arm64: RtlCaptureContext records this helper's own
-     * Pc/Sp/Fp, so dispatch would begin inside RtlRaiseStatus and never match
-     * the caller's __try scope. Step the captured context up one frame so it
-     * describes the caller (see RtlpArm64StepContextToCaller).
-     */
-    RtlpArm64StepContextToCaller(&Context);
 #endif
 
     /* Check if user mode debugger is active */
