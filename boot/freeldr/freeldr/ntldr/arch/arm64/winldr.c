@@ -115,6 +115,7 @@ typedef struct _ARM64_KERNEL_DATA
 } ARM64_KERNEL_DATA, *PARM64_KERNEL_DATA;
 
 static PARM64_KERNEL_DATA KernelDataBlock = NULL;
+static PVOID Arm64DpcStack = NULL;
 static PVOID Arm64SharedUserDataPage = NULL;
 
 static BOOLEAN Arm64InitializeMemory(IN PLOADER_PARAMETER_BLOCK LoaderBlock);
@@ -659,6 +660,7 @@ Arm64SetupForNt(
     ULONG_PTR KernelStackPA     = (ULONG_PTR)KernelDataBlock->KernelStack + KERNEL_STACK_SIZE;
     ULONG_PTR PanicStackPA      = (ULONG_PTR)KernelDataBlock->PanicStack + KERNEL_STACK_SIZE;
     ULONG_PTR InterruptStackPA  = (ULONG_PTR)KernelDataBlock->InterruptStack + KERNEL_STACK_SIZE;
+    ULONG_PTR DpcStackPA        = (ULONG_PTR)Arm64DpcStack + KERNEL_STACK_SIZE;
     ULONG_PTR PcrPA             = (ULONG_PTR)KernelDataBlock->Pcr;
     ULONG_PTR PrcbPA            = (ULONG_PTR)KernelDataBlock->Prcb;
     ULONG_PTR ProcessPA         = (ULONG_PTR)KernelDataBlock->InitialProcess;
@@ -668,11 +670,13 @@ Arm64SetupForNt(
     KernelStackPA    = ALIGN_DOWN_16(KernelStackPA);
     PanicStackPA     = ALIGN_DOWN_16(PanicStackPA);
     InterruptStackPA = ALIGN_DOWN_16(InterruptStackPA);
+    DpcStackPA       = ALIGN_DOWN_16(DpcStackPA);
 
     /* Convert to kernel VA (KSEG0) if still physical */
     LoaderBlock->KernelStack             = (KernelStackPA     < ARM64_KSEG0_BASE) ? (KernelStackPA     + ARM64_KSEG0_BASE) : KernelStackPA;
     LoaderBlock->u.Arm64.PanicStack      = (PanicStackPA      < ARM64_KSEG0_BASE) ? (PanicStackPA      + ARM64_KSEG0_BASE) : PanicStackPA;
     LoaderBlock->u.Arm64.InterruptStack  = (InterruptStackPA  < ARM64_KSEG0_BASE) ? (InterruptStackPA  + ARM64_KSEG0_BASE) : InterruptStackPA;
+    LoaderBlock->u.Arm64.DpcStack        = (DpcStackPA        < ARM64_KSEG0_BASE) ? (DpcStackPA        + ARM64_KSEG0_BASE) : DpcStackPA;
 
     LoaderBlock->u.Arm64.PcrPage         = (PcrPA             < ARM64_KSEG0_BASE) ? (PcrPA             + ARM64_KSEG0_BASE) : PcrPA;
     LoaderBlock->u.Arm64.PdrPage         = 0; /* Not used on ARM64 */
@@ -802,6 +806,14 @@ Arm64AllocateKernelDataStructures(VOID)
     /* Zero out the entire data block for clean initialization */
     RtlZeroMemory(KernelDataBlock, sizeof(ARM64_KERNEL_DATA));
 
+    Arm64DpcStack = MmAllocateMemoryWithType(KERNEL_STACK_SIZE, LoaderStartupDpcStack);
+    if (!Arm64DpcStack)
+    {
+        ERR("failed to allocate ARM64 DPC stack\n");
+        return FALSE;
+    }
+    RtlZeroMemory(Arm64DpcStack, KERNEL_STACK_SIZE);
+
     /*
      * Initialize the KTHREAD structure's stack fields.
      * The kernel expects these to be set up by the loader.
@@ -840,6 +852,18 @@ Arm64AllocateKernelDataStructures(VOID)
         if (!Arm64MapVirtualMemory(block_va, block_pa, map_size, map_attrs))
         {
             ERR("ARM64: Failed to map kernel data block (PA=0x%llx VA=0x%llx size=0x%llx)\n",
+                (unsigned long long)block_pa,
+                (unsigned long long)block_va,
+                (unsigned long long)map_size);
+            return FALSE;
+        }
+
+        block_pa = (ULONGLONG)(ULONG_PTR)Arm64DpcStack;
+        block_va = (block_pa < ARM64_KSEG0_BASE) ? ARM64_KSEG0_BASE + block_pa : block_pa;
+        map_size = KERNEL_STACK_SIZE;
+        if (!Arm64MapVirtualMemory(block_va, block_pa, map_size, map_attrs))
+        {
+            ERR("ARM64: Failed to map DPC stack (PA=0x%llx VA=0x%llx size=0x%llx)\n",
                 (unsigned long long)block_pa,
                 (unsigned long long)block_va,
                 (unsigned long long)map_size);

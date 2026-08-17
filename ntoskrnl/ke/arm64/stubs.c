@@ -658,6 +658,7 @@ KiInitializePcr(
     _In_ PKTHREAD IdleThread,
     _In_ BOOLEAN SetCurrentPcr,
     _In_opt_ PVOID PanicStack,
+    _In_ PVOID InterruptStack,
     _In_ PVOID DpcStack);
 
 VOID
@@ -687,6 +688,7 @@ KeStartAllProcessors(
 #else
     PVOID KernelStack;
     PVOID DPCStack;
+    PVOID InterruptStack;
     PARM64_APINFO APInfo;
     ULONG ProcessorCount;
     ULONG MaximumProcessors;
@@ -745,6 +747,7 @@ KeStartAllProcessors(
 
         KernelStack = NULL;
         DPCStack = NULL;
+        InterruptStack = NULL;
         APInfo = NULL;
 
         /* Allocate structures for a new CPU */
@@ -773,6 +776,14 @@ KeStartAllProcessors(
             break;
         }
 
+        InterruptStack = MmCreateKernelStack(FALSE, 0);
+        if (!InterruptStack)
+        {
+            DPRINT1("[arm64] KeStartAllProcessors: Failed to create interrupt stack for CPU %lu\n",
+                    ProcessorCount);
+            break;
+        }
+
         /* Initialize a new PCR for this AP */
         CurrentPcr = KeGetPcr();
         KiInitializePcr(ProcessorCount,
@@ -780,6 +791,7 @@ KeStartAllProcessors(
                         (PKTHREAD)&APInfo->Thread,
                         FALSE,
                         NULL,   /* ARM64 doesn't use separate panic stack here */
+                        InterruptStack,
                         DPCStack);
         ASSERT(KeGetPcr() == CurrentPcr);
 
@@ -818,7 +830,8 @@ KeStartAllProcessors(
              */
             KeLoaderBlock->u.Arm64.PcrPage = (ULONG_PTR)&APInfo->Pcr;
             KeLoaderBlock->u.Arm64.PanicStack = 0;
-            KeLoaderBlock->u.Arm64.InterruptStack = (ULONG_PTR)DPCStack;
+            KeLoaderBlock->u.Arm64.InterruptStack = (ULONG_PTR)InterruptStack;
+            KeLoaderBlock->u.Arm64.DpcStack = (ULONG_PTR)DPCStack;
 
             DPRINT("[arm64] KeStartAllProcessors: Attempting to start CPU %lu\n",
                     ProcessorCount);
@@ -859,6 +872,7 @@ KeStartAllProcessors(
             APInfo = NULL;
             KernelStack = NULL;
             DPCStack = NULL;
+            InterruptStack = NULL;
         }
     }
 
@@ -871,6 +885,8 @@ KeStartAllProcessors(
         MmDeleteKernelStack(KernelStack, FALSE);
     if (DPCStack)
         MmDeleteKernelStack(DPCStack, FALSE);
+    if (InterruptStack)
+        MmDeleteKernelStack(InterruptStack, FALSE);
 
     DPRINT1("[arm64] KeStartAllProcessors: Successfully started %lu APs\n", ProcessorCount);
 

@@ -836,7 +836,8 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
                 _Inout_ PKTHREAD IdleThread,
                 _In_ BOOLEAN SetCurrentPcr,
                 _In_opt_ PVOID PanicStack,
-                _In_opt_ PVOID InterruptStack)
+                _In_opt_ PVOID InterruptStack,
+                _In_opt_ PVOID DpcStack)
 {
     ULONG CacheCount = 0;
     PARM64_LOADER_BLOCK Arm64Block;
@@ -852,7 +853,9 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
     Pcr->Prcb.CurrentThread = IdleThread;
     Pcr->Prcb.IdleThread = IdleThread;
     Pcr->Prcb.NextThread = NULL;
-    Pcr->Prcb.DpcStack = InterruptStack;
+    Pcr->Prcb.PanicStackBase = (ULONG_PTR)PanicStack;
+    Pcr->Prcb.IsrStack = InterruptStack;
+    Pcr->Prcb.DpcStack = DpcStack;
     if (KeLoaderBlock != NULL)
     {
         Pcr->Prcb.SpBase = (PVOID)KeLoaderBlock->KernelStack;
@@ -1132,6 +1135,7 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         Arm64Block->PcrPage = ARM64_LDR_TO_VIRT(Arm64Block->PcrPage);
         Arm64Block->PanicStack = ARM64_LDR_TO_VIRT(Arm64Block->PanicStack);
         Arm64Block->InterruptStack = ARM64_LDR_TO_VIRT(Arm64Block->InterruptStack);
+        Arm64Block->DpcStack = ARM64_LDR_TO_VIRT(Arm64Block->DpcStack);
 
 #undef ARM64_LDR_TO_VIRT
     }
@@ -1178,7 +1182,8 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                         InitialThread,
                         TRUE,
                         (PVOID)(ULONG_PTR)Arm64Block->PanicStack,
-                        (PVOID)(ULONG_PTR)Arm64Block->InterruptStack);
+                        (PVOID)(ULONG_PTR)Arm64Block->InterruptStack,
+                        (PVOID)(ULONG_PTR)Arm64Block->DpcStack);
 
         if (LoaderBlock->KernelStack != 0)
         {
