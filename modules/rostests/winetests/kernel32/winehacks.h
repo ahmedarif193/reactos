@@ -15,19 +15,6 @@
 /* WINBASE.H */
 typedef void *HPCON;
 
-typedef enum _MACHINE_ATTRIBUTES
-{
-    UserEnabled    = 0x00000001,
-    KernelEnabled  = 0x00000002,
-    Wow64Container = 0x00000004,
-} MACHINE_ATTRIBUTES;
-
-typedef struct _PROCESS_MACHINE_INFORMATION {
-    USHORT ProcessMachine;
-    USHORT Res0;
-    MACHINE_ATTRIBUTES MachineAttributes;
-} PROCESS_MACHINE_INFORMATION;
-
 /* WINCON.H */
 WINBASEAPI BOOL   WINAPI CloseConsoleHandle(HANDLE);
 WINBASEAPI HANDLE WINAPI DuplicateConsoleHandle(HANDLE,DWORD,BOOL,DWORD);
