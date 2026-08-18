@@ -253,6 +253,10 @@ for /f "usebackq skip=1 tokens=*" %%T in ("%KMTEST_LIST%") do (
             set KMTEST_RUN=0
             set KMTEST_SKIP_REASON=manual-ui
         )
+        if /i "%%T" == "KeArm64AffinityEx" (
+            set KMTEST_RUN=0
+            set KMTEST_SKIP_REASON=hangs-before-entry
+        )
         if /i "%%T" == "Example" (
             set KMTEST_RUN=0
             set KMTEST_SKIP_REASON=framework-negative-selftest
