@@ -1669,11 +1669,17 @@ Phase1InitializationDiscard(IN PVOID Context)
     if (Y2KHackRequired) Y2KHackRequired = strstr(Y2KHackRequired, "=");
     if (Y2KHackRequired) YearHack = atol(Y2KHackRequired + 1);
 
+    /*
+     * Firmware that has no battery-backed clock reports a time at or near the
+     * epoch. Treat anything older than this as absent so the HAL clock is used.
+     */
+#define EXP_EARLIEST_PLAUSIBLE_SYSTEM_TIME 134116992000000000LL
+
     /* Prefer the firmware time captured by the loader before ExitBootServices. */
 #if (NTDDI_VERSION >= NTDDI_WIN8)
     if ((LoaderBlock->Extension != NULL) &&
         (LoaderBlock->Extension->Size >= RTL_SIZEOF_THROUGH_FIELD(LOADER_PARAMETER_EXTENSION, SystemTime)) &&
-        (LoaderBlock->Extension->SystemTime.QuadPart > 0))
+        (LoaderBlock->Extension->SystemTime.QuadPart >= EXP_EARLIEST_PLAUSIBLE_SYSTEM_TIME))
     {
         SystemBootTime = LoaderBlock->Extension->SystemTime;
         LoaderTimeAvailable = TRUE;
