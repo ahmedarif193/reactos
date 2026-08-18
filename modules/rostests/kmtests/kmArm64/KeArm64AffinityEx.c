@@ -349,6 +349,7 @@ KmtTestOrAffinityEx2(
     {
         for (PatternIndex = 0; PatternIndex <= MAXUSHORT; PatternIndex++)
         {
+            if ((PatternIndex & 0x3FFF) == 0) DbgPrint("KeArm64AffinityEx: exhaustive phase %u, pattern %lu\n", 0u, (ULONG)PatternIndex);
             Seed = (CountIndex << 16) ^ PatternIndex;
             KmtInitializeOrAffinityEx2Inputs(&Buffer1, &Buffer2, ExhaustiveTriples[CountIndex][0], ExhaustiveTriples[CountIndex][1], (USHORT)((PatternIndex + CountIndex) % (KMT_AFFINITY_EX2_GROUPS + 1)), (USHORT)((PatternIndex + CountIndex + 1) % (KMT_AFFINITY_EX2_GROUPS + 1)), Seed);
             Source1 = Buffer1;
@@ -668,6 +669,7 @@ KmtTestSubtractAffinityEx2(
     {
         for (PatternIndex = 0; PatternIndex <= MAXUSHORT; PatternIndex++)
         {
+            if ((PatternIndex & 0x3FFF) == 0) DbgPrint("KeArm64AffinityEx: exhaustive phase %u, pattern %lu\n", 1u, (ULONG)PatternIndex);
             Seed = (CountIndex << 16) ^ PatternIndex;
             KmtInitializeSubtractAffinityEx2Inputs(&Buffer1, &Buffer2, ExhaustiveTriples[CountIndex][0], ExhaustiveTriples[CountIndex][1], (USHORT)((PatternIndex + CountIndex) % (KMT_AFFINITY_EX2_GROUPS + 1)), (USHORT)((PatternIndex + CountIndex + 1) % (KMT_AFFINITY_EX2_GROUPS + 1)), Seed);
             Source1 = Buffer1;
@@ -1813,6 +1815,7 @@ START_TEST(KeArm64AffinityEx)
         ResultSize = AndAffinityEx2ExhaustiveTriples[CountIndex][2];
         for (PatternIndex = 0; PatternIndex <= MAXUSHORT; PatternIndex++)
         {
+            if ((PatternIndex & 0x3FFF) == 0) DbgPrint("KeArm64AffinityEx: exhaustive phase %u, pattern %lu\n", 2u, (ULONG)PatternIndex);
             RtlFillMemory(&AffinityEx2Buffer, sizeof(AffinityEx2Buffer), (UCHAR)(CountIndex ^ PatternIndex));
             RtlFillMemory(&AffinityEx2Buffer2, sizeof(AffinityEx2Buffer2), (UCHAR)(0x3C ^ CountIndex ^ PatternIndex));
             AffinityEx2Buffer.Affinity.Count = AffinityCount1;
@@ -2316,6 +2319,7 @@ START_TEST(KeArm64AffinityEx)
     {
         for (PatternIndex = 0; PatternIndex <= MAXUSHORT; PatternIndex++)
         {
+            if ((PatternIndex & 0x3FFF) == 0) DbgPrint("KeArm64AffinityEx: exhaustive phase %u, pattern %lu\n", 3u, (ULONG)PatternIndex);
             RtlFillMemory(&AffinityEx2Buffer, sizeof(AffinityEx2Buffer), (UCHAR)(CountIndex ^ PatternIndex));
             AffinityEx2Buffer.Affinity.Count = ComplementAffinityCounts[CountIndex];
             AffinityEx2Buffer.Affinity.Size = (USHORT)(PatternIndex ^ 0xA55A);
@@ -2437,6 +2441,7 @@ START_TEST(KeArm64AffinityEx)
         ResultSize = ComplementAffinityEx2ExhaustivePairs[CountIndex][1];
         for (PatternIndex = 0; PatternIndex <= MAXUSHORT; PatternIndex++)
         {
+            if ((PatternIndex & 0x3FFF) == 0) DbgPrint("KeArm64AffinityEx: exhaustive phase %u, pattern %lu\n", 4u, (ULONG)PatternIndex);
             RtlFillMemory(&AffinityEx2Buffer, sizeof(AffinityEx2Buffer), (UCHAR)(CountIndex ^ PatternIndex));
             AffinityEx2Buffer.Affinity.Count = AffinityCount1;
             AffinityEx2Buffer.Affinity.Size = (USHORT)((PatternIndex + CountIndex) % (KMT_AFFINITY_EX2_GROUPS + 1));
@@ -2544,6 +2549,7 @@ START_TEST(KeArm64AffinityEx)
         ResultSize = CopyAffinityEx2ExhaustivePairs[CountIndex][1];
         for (PatternIndex = 0; PatternIndex <= MAXUSHORT; PatternIndex++)
         {
+            if ((PatternIndex & 0x3FFF) == 0) DbgPrint("KeArm64AffinityEx: exhaustive phase %u, pattern %lu\n", 5u, (ULONG)PatternIndex);
             RtlFillMemory(&AffinityEx2Buffer, sizeof(AffinityEx2Buffer), (UCHAR)(CountIndex ^ PatternIndex));
             AffinityEx2Buffer.Affinity.Count = AffinityCount1;
             AffinityEx2Buffer.Affinity.Size = (USHORT)((PatternIndex + CountIndex) % (KMT_AFFINITY_EX2_GROUPS + 1));
@@ -2694,6 +2700,7 @@ START_TEST(KeArm64AffinityEx)
         AffinityCount2 = SubtractAffinityExhaustivePairs[CountIndex][1];
         for (PatternIndex = 0; PatternIndex <= MAXUSHORT; PatternIndex++)
         {
+            if ((PatternIndex & 0x3FFF) == 0) DbgPrint("KeArm64AffinityEx: exhaustive phase %u, pattern %lu\n", 6u, (ULONG)PatternIndex);
             RtlFillMemory(&AffinityEx2Buffer, sizeof(AffinityEx2Buffer), (UCHAR)(CountIndex ^ PatternIndex));
             AffinityEx2Buffer.Affinity.Count = AffinityCount1;
             AffinityEx2Buffer.Affinity.Size = (USHORT)(0xA55A ^ PatternIndex);
