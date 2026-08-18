@@ -1419,6 +1419,8 @@ CreateOutputFile(FILE *OutFile, void *InData,
     return 0;
 }
 
+int CompressRosSym = 0;
+
 int main(int argc, char* argv[])
 {
     PSYMBOLFILE_HEADER SymbolFileHeader;
@@ -1470,6 +1472,10 @@ int main(int argc, char* argv[])
                 if (!strcmp(argv[arg], "-s"))
                 {
                     argstate = 1;
+                }
+                else if (!strcmp(argv[arg], "-c"))
+                {
+                    CompressRosSym = 1;
                 }
                 else
                 {
@@ -1764,6 +1770,40 @@ int main(int argc, char* argv[])
                SymbolFileHeader->StringsLength);
 
         free(MergedSymbols);
+
+        if (CompressRosSym)
+        {
+            ULONG PayloadLength = SymbolFileHeader->SymbolsLength + SymbolFileHeader->StringsLength;
+            char *Payload = (char *) RosSymSection + SymbolFileHeader->SymbolsOffset;
+            unsigned Limit = sizeof(ROSSYM_COMPRESSED_HEADER) + PayloadLength + (PayloadLength / 4096 + 1) * 3 + 64;
+            char *Packed = malloc(Limit);
+            unsigned Produced = 0;
+
+            if (Packed != NULL)
+            {
+                Produced = Lznt1Compress(Payload, PayloadLength, Packed + sizeof(ROSSYM_COMPRESSED_HEADER), Limit - sizeof(ROSSYM_COMPRESSED_HEADER));
+            }
+
+            if (Produced != 0)
+            {
+                PROSSYM_COMPRESSED_HEADER Compressed = (PROSSYM_COMPRESSED_HEADER)Packed;
+
+                Compressed->Magic = ROSSYM_COMPRESSED_MAGIC;
+                Compressed->CompressionFormat = 2;
+                Compressed->SymbolsLength = SymbolFileHeader->SymbolsLength;
+                Compressed->StringsLength = SymbolFileHeader->StringsLength;
+                Compressed->CompressedOffset = sizeof(ROSSYM_COMPRESSED_HEADER);
+                Compressed->CompressedLength = Produced;
+                free(RosSymSection);
+                RosSymSection = Packed;
+                RosSymLength = sizeof(ROSSYM_COMPRESSED_HEADER) + Produced;
+            }
+            else
+            {
+                free(Packed);
+                fprintf(stderr, "rsym: .rossym compression failed, storing uncompressed\n");
+            }
+        }
     }
 
     free(StringBase);

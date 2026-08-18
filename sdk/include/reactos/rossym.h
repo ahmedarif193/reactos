@@ -25,6 +25,20 @@ typedef struct _ROSSYM_HEADER {
   ULONG StringsLength;
 } ROSSYM_HEADER, *PROSSYM_HEADER;
 
+/* A compressed section carries this in place of ROSSYM_HEADER. The magic sits
+ * where SymbolsOffset would be, and is far larger than any valid offset, so a
+ * loader that predates compression rejects the section instead of misreading it. */
+#define ROSSYM_COMPRESSED_MAGIC 0x43595352
+
+typedef struct _ROSSYM_COMPRESSED_HEADER {
+  ULONG Magic;
+  ULONG CompressionFormat;
+  ULONG SymbolsLength;
+  ULONG StringsLength;
+  ULONG CompressedOffset;
+  ULONG CompressedLength;
+} ROSSYM_COMPRESSED_HEADER, *PROSSYM_COMPRESSED_HEADER;
+
 /* ROSSYM_ENTRY is the packed on-disk ABI. Address is an RVA, so the entry
  * remains 16 bytes for both 32-bit and 64-bit PE images. */
 typedef struct _ROSSYM_ENTRY {
