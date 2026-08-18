@@ -5940,6 +5940,8 @@ HalQueryDisplayParameters(
     return FALSE;
 }
 
+#define HAL_ARM64_RTC_EARLIEST_SECONDS 1767225600UL
+
 BOOLEAN
 NTAPI
 HalQueryRealTimeClock(
@@ -5960,11 +5962,23 @@ HalQueryRealTimeClock(
     LARGE_INTEGER SystemTime;
 
     Pl031Va = MmMapIoSpace(Pl031Phys, PAGE_SIZE, MmNonCached);
-    if (!Pl031Va)
-        return FALSE;
+    if (Pl031Va)
+    {
+        Seconds = READ_REGISTER_ULONG((PULONG)Pl031Va);
+        MmUnmapIoSpace(Pl031Va, PAGE_SIZE);
+    }
+    else
+    {
+        Seconds = 0;
+    }
 
-    Seconds = READ_REGISTER_ULONG((PULONG)Pl031Va);
-    MmUnmapIoSpace(Pl031Va, PAGE_SIZE);
+    /*
+     * A board without a PL031 at this address reads back zero or all ones.
+     * Report the baseline below rather than 1970, which the rest of the system
+     * would otherwise take as the real date.
+     */
+    if ((Seconds < HAL_ARM64_RTC_EARLIEST_SECONDS) || (Seconds == MAXULONG))
+        Seconds = HAL_ARM64_RTC_EARLIEST_SECONDS;
 
     RtlSecondsSince1970ToTime(Seconds, &SystemTime);
     RtlTimeToTimeFields(&SystemTime, TimeFields);
