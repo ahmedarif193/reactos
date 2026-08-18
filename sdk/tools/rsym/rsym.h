@@ -35,6 +35,18 @@ typedef struct _SYMBOLFILE_HEADER {
   ULONG StringsLength;
 } SYMBOLFILE_HEADER, *PSYMBOLFILE_HEADER;
 
+/* Mirrors ROSSYM_COMPRESSED_HEADER in sdk/include/reactos/rossym.h */
+#define ROSSYM_COMPRESSED_MAGIC 0x43595352
+
+typedef struct _ROSSYM_COMPRESSED_HEADER {
+  ULONG Magic;
+  ULONG CompressionFormat;
+  ULONG SymbolsLength;
+  ULONG StringsLength;
+  ULONG CompressedOffset;
+  ULONG CompressedLength;
+} ROSSYM_COMPRESSED_HEADER, *PROSSYM_COMPRESSED_HEADER;
+
 typedef struct _STAB_ENTRY {
   ULONG n_strx;         /* index into string table of name */
   UCHAR n_type;         /* type of symbol */
@@ -184,3 +196,5 @@ convert_path(const char* origpath);
 
 extern void*
 load_file ( const char* file_name, size_t* file_size );
+
+unsigned Lznt1Compress(const void *Uncompressed, unsigned UncompressedLength, void *Compressed, unsigned CompressedLimit);

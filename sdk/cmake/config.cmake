@@ -184,6 +184,8 @@ set(GENERATE_DEPENDENCY_GRAPH FALSE CACHE BOOL
 cmake_dependent_option(ENABLE_ROSTESTS "Whether to build the ReactOS test suite." OFF
                        "CMAKE_BUILD_TYPE STREQUAL Debug" OFF)
 
+option(ROSSYM_COMPRESSION "Whether to compress the embedded .rossym symbol section." OFF)
+
 cmake_dependent_option(ENABLE_FEX_ARM64EC
                        "Whether to build the optional FEX ARM64EC emulator for running AMD64 binaries on ARM64." OFF
                        "ARCH STREQUAL arm64" OFF)
@@ -230,11 +232,16 @@ cmake_dependent_option(ENABLE_RPI5_WIFI_BOOT_RUN
                        "Whether to run the RPi5 Wi-Fi scan automatically at boot." OFF
                        "ARCH STREQUAL arm64 AND CMAKE_BUILD_TYPE STREQUAL Debug AND RPI_SUPPORT" OFF)
 
+cmake_dependent_option(ENABLE_CHPE_GAME_BOOT_RUN
+                       "Whether to run the ARM64EC (FEX) game smoke test shipped by the image payload manifest automatically at boot." OFF
+                       "ARCH STREQUAL arm64 AND CMAKE_BUILD_TYPE STREQUAL Debug AND ENABLE_FEX_ARM64EC" OFF)
+
 if(ENABLE_ROSAUTOTEST_BOOT_RUN OR
    ENABLE_CPUBENCH_BOOT_RUN OR
    ENABLE_KMTEST_BOOT_RUN OR
    ENABLE_RP1GEM_BENCHMARK OR
-   ENABLE_RPI5_WIFI_BOOT_RUN)
+   ENABLE_RPI5_WIFI_BOOT_RUN OR
+   ENABLE_CHPE_GAME_BOOT_RUN)
     set(ENABLE_BOOT_TEST_RUN TRUE)
 else()
     set(ENABLE_BOOT_TEST_RUN FALSE)
