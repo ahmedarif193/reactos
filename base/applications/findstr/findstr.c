@@ -169,10 +169,16 @@ main (int argc, char **argv)
 	        at_start = 1;
 	        break;
 
-	      //case 'c':
-	      //case 'C':		/* Literal? */
-	      //  literal_search = 1;
-	      //  break;
+	      case 'c':
+	      case 'C':		/* Literal search string follows a colon */
+	        if (opt[2] != ':')
+	          {
+	            usage ();
+	            exit (2);
+	          }
+	        needle = &opt[3];
+	        literal_search = 1;
+	        break;
 
 	      case 'e':
 	      case 'E':		/* matches pattern if at end of line */
