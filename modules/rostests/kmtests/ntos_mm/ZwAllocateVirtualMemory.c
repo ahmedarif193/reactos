@@ -7,6 +7,8 @@
 
 #include <kmt_test.h>
 
+static BOOLEAN MachineCanCommit(SIZE_T Bytes);
+
 #define ROUND_DOWN(n,align) (((ULONG_PTR)n) & ~((align) - 1l))
 #define DEFAULT_ALLOC_SIZE 200
 #define IGNORE -1
@@ -166,8 +168,10 @@ SimpleErrorChecks(VOID)
     ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_INVALID_PARAMETER_4, STATUS_MEMORY_NOT_ALLOCATED);
     RegionSize = 0;
     ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_INVALID_PARAMETER_4, STATUS_MEMORY_NOT_ALLOCATED);
-    RegionSize = 0xFFFFFFFF; // 4 gb is invalid or over the commit limit, depending on NT version/bitness
-    if (GetNTVersion() >= _WIN32_WINNT_VISTA)
+    RegionSize = 0xFFFFFFFF; // 4 gb is invalid or over the commit limit, depending on NT version/bitness and installed memory
+    if (GetNTVersion() >= _WIN32_WINNT_VISTA && MachineCanCommit(RegionSize))
+        ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_SUCCESS, STATUS_SUCCESS);
+    else if (GetNTVersion() >= _WIN32_WINNT_VISTA)
         ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_COMMITMENT_LIMIT, STATUS_MEMORY_NOT_ALLOCATED);
     else
         ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_INVALID_PARAMETER_4, STATUS_MEMORY_NOT_ALLOCATED);
@@ -416,15 +420,42 @@ CustomBaseAllocation(VOID)
 
 
 static
+BOOLEAN
+MachineCanCommit(SIZE_T Bytes)
+{
+    SYSTEM_BASIC_INFORMATION BasicInfo;
+    SIZE_T Installed;
+
+    if (!NT_SUCCESS(ZwQuerySystemInformation(SystemBasicInformation, &BasicInfo, sizeof(BasicInfo), NULL)))
+        return FALSE;
+
+    Installed = (SIZE_T)BasicInfo.NumberOfPhysicalPages * BasicInfo.PageSize;
+    return (Bytes < (Installed - (Installed / 4)));
+}
+
+static
 NTSTATUS
 StressTesting(ULONG AllocationType)
 {
     NTSTATUS Status = STATUS_SUCCESS;
     NTSTATUS ReturnStatus = STATUS_SUCCESS;
-    static PVOID bases[1024]; //assume we are going to allocate only 5 gigs. static here means the arrays is not allocated on the stack but in the BSS segment of the driver
+    static PVOID bases[1024]; //static here means the arrays is not allocated on the stack but in the BSS segment of the driver
     ULONG Index = 0;
     PVOID Base = NULL;
-    SIZE_T RegionSize = 5 * 1024 * 1024; // 5 megabytes;
+    SIZE_T RegionSize;
+    SYSTEM_BASIC_INFORMATION BasicInfo;
+    SIZE_T CommitBudget;
+
+    /* Size the chunks so the whole array is guaranteed to outrun the commit
+     * limit, whatever this machine happens to have installed. */
+    RegionSize = 5 * 1024 * 1024;
+    if (NT_SUCCESS(ZwQuerySystemInformation(SystemBasicInformation, &BasicInfo, sizeof(BasicInfo), NULL)))
+    {
+        CommitBudget = (SIZE_T)BasicInfo.NumberOfPhysicalPages * BasicInfo.PageSize;
+        CommitBudget = CommitBudget + (CommitBudget / 2);
+        if ((CommitBudget / RTL_NUMBER_OF(bases)) > RegionSize)
+            RegionSize = ((CommitBudget / RTL_NUMBER_OF(bases)) + 0xFFFFF) & ~(SIZE_T)0xFFFFF;
+    }
 
     RtlZeroMemory(bases, sizeof(bases));
 
