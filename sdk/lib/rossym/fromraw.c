@@ -14,6 +14,19 @@
 #define NDEBUG
 #include <debug.h>
 
+/* rossym is built for both kernel and user mode, so declare the decompressor
+ * here rather than pulling in a mode-specific header for it. */
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlDecompressBuffer(
+    _In_ USHORT CompressionFormat,
+    _Out_writes_bytes_to_(UncompressedBufferSize, *FinalUncompressedSize) PUCHAR UncompressedBuffer,
+    _In_ ULONG UncompressedBufferSize,
+    _In_reads_bytes_(CompressedBufferSize) PUCHAR CompressedBuffer,
+    _In_ ULONG CompressedBufferSize,
+    _Out_ PULONG FinalUncompressedSize);
+
 static BOOLEAN
 RosSymValidateEntries(PROSSYM_INFO *RosSymInfo)
 {
