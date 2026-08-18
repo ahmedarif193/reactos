@@ -14,6 +14,7 @@ set RUN_CPUBENCH=0
 set RUN_ETHBENCH=0
 set RUN_KMTEST=0
 set RUN_RPI5_WIFI=0
+set RUN_CHPE_GAME=0
 set ETHBENCH_PEER=10.42.0.1
 set ETHBENCH_SECONDS=30
 set WIFI_SSID=
@@ -21,27 +22,26 @@ set WIFI_KEY_FILE=
 set BOOT_TEST_SELECTED=0
 set BOOT_TEST_FAILURES=0
 
+"%S%\dbgprint.exe" BOOT_TESTS_DISPATCHER_BEGIN
 "%S%\reg.exe" query "HKLM\SYSTEM\CurrentControlSet\Control" /v SystemStartOptions > "%OPTIONS%" 2>nul
-if errorlevel 1 goto disabled
+if errorlevel 1 goto no_options
+set OPTS_TEXT=
+for /f "usebackq delims=" %%L in ("%OPTIONS%") do set OPTS_TEXT=!OPTS_TEXT! %%L
+if not "!OPTS_TEXT:ROSAUTOTEST=!" == "!OPTS_TEXT!" set RUN_ROSAUTOTEST=1
+if not "!OPTS_TEXT:CPUBENCH=!" == "!OPTS_TEXT!" set RUN_CPUBENCH=1
+if not "!OPTS_TEXT:ETHBENCH=!" == "!OPTS_TEXT!" set RUN_ETHBENCH=1
+if not "!OPTS_TEXT:KMTEST=!" == "!OPTS_TEXT!" set RUN_KMTEST=1
+if not "!OPTS_TEXT:RPI5WIFITEST=!" == "!OPTS_TEXT!" set RUN_RPI5_WIFI=1
+if not "!OPTS_TEXT:CHPEGAME=!" == "!OPTS_TEXT!" set RUN_CHPE_GAME=1
 
-"%S%\findstr.exe" /i /c:"ROSAUTOTEST" "%OPTIONS%" >nul 2>nul
-if not errorlevel 1 set RUN_ROSAUTOTEST=1
-"%S%\findstr.exe" /i /c:"CPUBENCH" "%OPTIONS%" >nul 2>nul
-if not errorlevel 1 set RUN_CPUBENCH=1
-"%S%\findstr.exe" /i /c:"ETHBENCH" "%OPTIONS%" >nul 2>nul
-if not errorlevel 1 set RUN_ETHBENCH=1
-"%S%\findstr.exe" /i /c:"KMTEST" "%OPTIONS%" >nul 2>nul
-if not errorlevel 1 set RUN_KMTEST=1
-"%S%\findstr.exe" /i /c:"RPI5WIFITEST" "%OPTIONS%" >nul 2>nul
-if not errorlevel 1 set RUN_RPI5_WIFI=1
-
-if "!RUN_ROSAUTOTEST!!RUN_CPUBENCH!!RUN_ETHBENCH!!RUN_KMTEST!!RUN_RPI5_WIFI!" == "00000" goto disabled
+if "!RUN_ROSAUTOTEST!!RUN_CPUBENCH!!RUN_ETHBENCH!!RUN_KMTEST!!RUN_RPI5_WIFI!!RUN_CHPE_GAME!" == "000000" goto disabled
 
 if not "!RUN_ETHBENCH!!RUN_RPI5_WIFI!" == "00" call :load_network_config
 
 del /q "%OPTIONS%" 2>nul
 "%S%\dbgprint.exe" BOOT_TESTS_BEGIN
 
+if "!RUN_CHPE_GAME!" == "1" call :run_chpe_game
 if "!RUN_ETHBENCH!" == "1" call :run_ethbench
 if "!RUN_RPI5_WIFI!" == "1" call :run_rpi5_wifi
 if "!RUN_CPUBENCH!" == "1" call :run_cpubench
@@ -60,7 +60,13 @@ exit /b 0
 endlocal
 exit /b 1
 
+:no_options
+"%S%\dbgprint.exe" BOOT_TESTS_NO_START_OPTIONS
+endlocal
+exit /b 0
+
 :disabled
+"%S%\dbgprint.exe" BOOT_TESTS_DISABLED
 del /q "%OPTIONS%" 2>nul
 endlocal
 exit /b 0
@@ -179,6 +185,31 @@ set NETWORK_RX_EXIT=!ERRORLEVEL!
 set NETWORK_TX_EXIT=!ERRORLEVEL!
 "%S%\dbgprint.exe" !NETWORK_LABEL!_TX_EXIT !NETWORK_TX_EXIT!
 if not "!NETWORK_TX_EXIT!!NETWORK_RX_EXIT!" == "00" set NETWORK_BENCH_EXIT=1
+exit /b 0
+
+:run_chpe_game
+set /a BOOT_TEST_SELECTED+=1
+"%S%\dbgprint.exe" CHPE_GAME_BEGIN
+if not exist "%S%\arm64ecfex.dll" goto chpe_game_no_emulator
+if not exist "%~dp0chpe_game_start.cmd" goto chpe_game_missing
+rem The payload manifest ships the game and its launcher next to this script.
+call "%~dp0chpe_game_start.cmd"
+set CHPE_GAME_EXIT=!ERRORLEVEL!
+goto chpe_game_finished
+
+:chpe_game_no_emulator
+"%S%\dbgprint.exe" CHPE_GAME_EMULATOR_MISSING
+set CHPE_GAME_EXIT=1
+goto chpe_game_finished
+
+:chpe_game_missing
+"%S%\dbgprint.exe" CHPE_GAME_LAUNCHER_MISSING
+set CHPE_GAME_EXIT=1
+
+:chpe_game_finished
+if not "!CHPE_GAME_EXIT!" == "0" set /a BOOT_TEST_FAILURES+=1
+"%S%\dbgprint.exe" CHPE_GAME_EXIT !CHPE_GAME_EXIT!
+"%S%\dbgprint.exe" CHPE_GAME_END
 exit /b 0
 
 :run_cpubench
