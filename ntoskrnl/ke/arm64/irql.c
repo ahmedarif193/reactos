@@ -96,6 +96,7 @@ KiShouldDeliverApcOnLower(
     _In_ KIRQL NewIrql)
 {
     ULONG64 Daif;
+    PKPRCB Prcb;
     PKTHREAD Thread;
 
     if (NewIrql >= APC_LEVEL)
@@ -105,6 +106,12 @@ KiShouldDeliverApcOnLower(
 
     __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
     if (Daif & ARM64_PSTATE_IRQ_MASK)
+    {
+        return FALSE;
+    }
+
+    Prcb = KeGetCurrentPrcb();
+    if ((Prcb != NULL) && (Prcb->NestingLevel != 0))
     {
         return FALSE;
     }
