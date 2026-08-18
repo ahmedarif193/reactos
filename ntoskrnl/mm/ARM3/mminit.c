@@ -3015,11 +3015,14 @@ MmArmInitSystem(IN ULONG Phase,
         /* Update working set tuning parameters */
         MiAdjustWorkingSetManagerParameters(!MmProductType);
 
+        /* Seed the resident-available count; nothing else establishes it */
+        MmResidentAvailablePages = MmNumberOfPhysicalPages;
+
         /* Finetune the page count by removing working set and NP expansion */
         MmResidentAvailablePages -= MiExpansionPoolPagesInitialCharge;
         MmResidentAvailablePages -= MmSystemCacheWsMinimum;
         MmResidentAvailableAtInit = MmResidentAvailablePages;
-        if (MmResidentAvailablePages <= 0)
+        if ((SSIZE_T)MmResidentAvailablePages <= 0)
         {
             /* This should not happen */
             DPRINT1("System cache working set too big\n");
