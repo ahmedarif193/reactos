@@ -11,19 +11,6 @@
 
 extern ROSSYM_CALLBACKS RosSymCallbacks;
 
-/* rossym is built for both kernel and user mode, so declare the decompressor
- * rather than pulling in a mode-specific header for it. */
-NTSYSAPI
-NTSTATUS
-NTAPI
-RtlDecompressBuffer(
-    _In_ USHORT CompressionFormat,
-    _Out_writes_bytes_to_(UncompressedBufferSize, *FinalUncompressedSize) PUCHAR UncompressedBuffer,
-    _In_ ULONG UncompressedBufferSize,
-    _In_reads_bytes_(CompressedBufferSize) PUCHAR CompressedBuffer,
-    _In_ ULONG CompressedBufferSize,
-    _Out_ PULONG FinalUncompressedSize);
-
 #define RosSymAllocMem(Size) (*RosSymCallbacks.AllocMemProc)(Size)
 #define RosSymFreeMem(Area) (*RosSymCallbacks.FreeMemProc)(Area)
 #define RosSymReadFile(FileContext, Buffer, Size) (*RosSymCallbacks.ReadFileProc)((FileContext), (Buffer), (Size))
