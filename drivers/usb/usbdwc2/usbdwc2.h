@@ -22,6 +22,15 @@
 #define DWC2_MAX_TRANSFER_SIZE                 0x10000
 #define DWC2_ENDPOINT_BUFFER_SIZE              (DWC2_SETUP_BUFFER_SIZE + DWC2_MAX_TRANSFER_SIZE)
 #define DWC2_HANG_DIAGNOSTIC_INTERVAL          2500000ULL
+#define DWC2_WEDGE_RECOVERY_INTERVAL           20000000ULL
+#define DWC2_WEDGE_RECOVERY_LIMIT              3
+#define DWC2_TRANSACTION_ERROR_LIMIT           3
+#define DWC2_DPC_DRAIN_LIMIT                   64
+#define DWC2_HOST_RX_FIFO_SIZE                 (516 + DWC2_MAX_CHANNELS)
+#define DWC2_HOST_NPERIODIC_TX_FIFO_SIZE       0x100
+#define DWC2_HOST_PERIODIC_TX_FIFO_SIZE         0x200
+#define DWC2_MICROFRAME_100NS                   1250ULL
+#define DWC2_FRAME_100NS                        10000ULL
 
 typedef enum _DWC2_TRANSFER_STAGE
 {
@@ -43,17 +52,28 @@ typedef struct _DWC2_TRANSFER
     USBD_STATUS UsbdStatus;
     ULONG BytesTransferred;
     ULONG ProgrammedLength;
+    ULONG ProgrammedDmaAddress;
     ULONG InitialPacketCount;
     ULONG DataToggle;
     ULONG NakCount;
-    ULONG RetrySof;
+    ULONG ChannelWaitCount;
+    ULONG PendingChannelStatus;
+    ULONG ErrorCount;
+    ULONG RecoveryCount;
+    ULONG HangDiagnosticCount;
+    ULONG StageStartFrame;
+    ULONGLONG SubmitTime;
     ULONGLONG StageStartTime;
+    ULONGLONG CompletionTime;
+    ULONGLONG RetryTime;
     UCHAR Channel;
     BOOLEAN DirectionIn;
     BOOLEAN Done;
-    BOOLEAN NeedsSof;
+    BOOLEAN NeedsRetry;
     BOOLEAN CompleteSplit;
-    BOOLEAN HangDiagnosticLogged;
+    BOOLEAN QueueDiagnosticLogged;
+    BOOLEAN CompletionDiagnosticLogged;
+    BOOLEAN RetryDiagnosticLogged;
 } DWC2_TRANSFER, *PDWC2_TRANSFER;
 
 typedef struct _DWC2_ENDPOINT
@@ -68,9 +88,13 @@ typedef struct _DWC2_ENDPOINT
     ULONG State;
     ULONG Status;
     ULONG DataToggle;
+    ULONG SubmitCount;
+    ULONG StateChangeCount;
+    ULONGLONG OpenTime;
     UCHAR Channel;
     BOOLEAN Listed;
     BOOLEAN RequiresSplit;
+    BOOLEAN IdleDiagnosticLogged;
 } DWC2_ENDPOINT, *PDWC2_ENDPOINT;
 
 typedef struct _DWC2_EXTENSION
@@ -80,17 +104,44 @@ typedef struct _DWC2_EXTENSION
     ULONG RegisterLength;
     ULONG NumberOfChannels;
     ULONG InterruptMask;
+    KSPIN_LOCK Lock;
     volatile LONG PendingGlobalInterrupts;
     volatile LONG PendingChannelInterrupts;
-    ULONG SofCount;
+    volatile LONG ImmediateInterruptCount;
+    volatile LONG DmaProgressFallbackCount;
+    volatile LONG GlobalEnableRaceCount;
+    volatile LONG RetryTimerArmCount;
+    volatile LONG RetryTimerWakeCount;
+    volatile LONG RetryTimerScheduled;
+    volatile LONG RetryTimerDpcActive;
+    volatile LONG SofRequestCount;
+    volatile LONG SofInterruptCount;
+    volatile LONG CompletionCount;
+    volatile LONG TransferErrorCount;
+    volatile LONG DeferredHaltCount;
+    volatile LONG WedgeRecoveryCount;
+    volatile LONG HeartbeatCount;
+    volatile LONG FifoCorruptionCount;
+    volatile LONG PortStatusQueryCount;
+    volatile LONG Stopping;
+    KTIMER RetryTimer;
+    KDPC RetryTimerDpc;
+    KEVENT RetryTimerDpcEvent;
+    KSPIN_LOCK RetryTimerLock;
+    ULONGLONG RetryTimerDueTime;
     ULONG ResetChange;
     ULONG SuspendChange;
     ULONG LastConnectStatus;
+    ULONG LastFrameNumber;
+    ULONG FrameHighBits;
+    ULONG LastPortStatusRaw;
+    ULONG LastPortStatusPacked;
     LIST_ENTRY EndpointList;
     PDWC2_ENDPOINT Channels[DWC2_MAX_CHANNELS];
     BOOLEAN Started;
     BOOLEAN Suspended;
     BOOLEAN RootHubIrqEnabled;
+    BOOLEAN SofRequested;
 } DWC2_EXTENSION, *PDWC2_EXTENSION;
 
 extern USBPORT_REGISTRATION_PACKET Dwc2RegPacket;
