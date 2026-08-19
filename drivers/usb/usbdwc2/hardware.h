@@ -13,6 +13,7 @@
 #define DWC2_BIT(_Bit)                         (1UL << (_Bit))
 
 /* Core global registers. */
+#define DWC2_GOTGCTL                            0x0000
 #define DWC2_GAHBCFG                           0x0008
 #define DWC2_GUSBCFG                           0x000C
 #define DWC2_GRSTCTL                           0x0010
@@ -20,8 +21,12 @@
 #define DWC2_GINTMSK                           0x0018
 #define DWC2_GRXFSIZ                           0x0024
 #define DWC2_GNPTXFSIZ                         0x0028
+#define DWC2_GNPTXSTS                          0x002C
 #define DWC2_GSNPSID                           0x0040
+#define DWC2_GHWCFG1                           0x0044
 #define DWC2_GHWCFG2                           0x0048
+#define DWC2_GHWCFG3                           0x004C
+#define DWC2_GHWCFG4                           0x0050
 
 #define DWC2_GAHBCFG_DMA_EN                    DWC2_BIT(5)
 #define DWC2_GAHBCFG_AXI_BURST4_MASK           (3UL << 1)
@@ -50,10 +55,18 @@
 
 #define DWC2_GHWCFG2_NUM_HOST_CHAN_SHIFT       14
 #define DWC2_GHWCFG2_NUM_HOST_CHAN_MASK        (0xFUL << DWC2_GHWCFG2_NUM_HOST_CHAN_SHIFT)
+#define DWC2_GHWCFG2_DYNAMIC_FIFO              DWC2_BIT(19)
+
+#define DWC2_GHWCFG3_DFIFO_DEPTH_SHIFT         16
+#define DWC2_GHWCFG3_DFIFO_DEPTH_MASK          (0xFFFFUL << DWC2_GHWCFG3_DFIFO_DEPTH_SHIFT)
+
+#define DWC2_FIFOSIZE_DEPTH_SHIFT              16
 
 /* Host registers. */
 #define DWC2_HCFG                              0x0400
+#define DWC2_HFIR                              0x0404
 #define DWC2_HFNUM                             0x0408
+#define DWC2_HPTXSTS                           0x0410
 #define DWC2_HAINT                             0x0414
 #define DWC2_HAINTMSK                          0x0418
 #define DWC2_HPRT0                             0x0440
@@ -122,7 +135,12 @@
 #define DWC2_HCINT_CHHLTD                      DWC2_BIT(1)
 #define DWC2_HCINT_XFERCOMPL                   DWC2_BIT(0)
 #define DWC2_HCINT_VALID_MASK                  0x3FFFUL
-#define DWC2_HCINT_DRIVER_MASK                 (DWC2_HCINT_DATATGLERR | DWC2_HCINT_FRMOVRUN | DWC2_HCINT_BBLERR | DWC2_HCINT_XACTERR | DWC2_HCINT_NYET | DWC2_HCINT_ACK | DWC2_HCINT_NAK | DWC2_HCINT_STALL | DWC2_HCINT_AHBERR | DWC2_HCINT_CHHLTD | DWC2_HCINT_XFERCOMPL)
+#define DWC2_HCINT_DRIVER_MASK                 (DWC2_HCINT_CHHLTD | DWC2_HCINT_AHBERR)
+#define DWC2_HCINT_ERROR_MASK                  (DWC2_HCINT_STALL | DWC2_HCINT_BBLERR | DWC2_HCINT_AHBERR | DWC2_HCINT_XACTERR | DWC2_HCINT_DATATGLERR | DWC2_HCINT_FRMOVRUN)
+#define DWC2_HCINT_REASON_MASK                 (DWC2_HCINT_ERROR_MASK | DWC2_HCINT_XFERCOMPL | DWC2_HCINT_NAK | DWC2_HCINT_NYET | DWC2_HCINT_ACK)
+
+#define DWC2_GNPTXSTS_FIFO_SPACE_MASK          0xFFFFUL
+#define DWC2_FIFOSIZE_DEPTH_MASK               0xFFFF0000UL
 
 #define DWC2_HCTSIZ_PID_SHIFT                  29
 #define DWC2_HCTSIZ_PID_DATA0                  0
