@@ -389,8 +389,14 @@ set(_preinstall_system_partition_file ${CMAKE_CURRENT_BINARY_DIR}/partition.ntfs
 set(_preinstall_image_file ${REACTOS_BINARY_DIR}/ReactOS.img)
 set(_preinstall_vhd_file ${REACTOS_BINARY_DIR}/ReactOS.vhd)
 # Keep ROSBOOT as an active MBR ESP. UEFI discovers it by type, while the BIOS
-# MBR follows the active flag and loads its FAT32 boot sector.
-set(_preinstall_boot_partition_type ef)
+# MBR follows the active flag and loads its FAT32 boot sector. The Raspberry Pi
+# 1-3 boot ROM only scans for FAT MBR ids and skips 0xEF, so the ARM images
+# mark the same volume as FAT32 LBA instead; UEFI mounts it by content.
+if(ARCH MATCHES "^arm")
+    set(_preinstall_boot_partition_type 0c)
+else()
+    set(_preinstall_boot_partition_type ef)
+endif()
 
 # Create TEMP dir
 file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "reactos/TEMP=${CMAKE_CURRENT_BINARY_DIR}/empty\n")
@@ -467,6 +473,18 @@ foreach(_rpi_firmware_file ${_preinstall_rpi_firmware})
             -add ${_rpi_firmware_file} ${_rpi_firmware_name})
     endif()
 endforeach()
+# config.txt dtoverlay= lines resolve against overlays/ on the boot volume.
+file(GLOB _preinstall_rpi_overlays ${REACTOS_SOURCE_DIR}/media/boot/rpi/overlays/*)
+if(_preinstall_rpi_overlays)
+    list(APPEND _preinstall_boot_partition_files -mkdir overlays)
+    foreach(_rpi_overlay_file ${_preinstall_rpi_overlays})
+        if(NOT IS_DIRECTORY ${_rpi_overlay_file})
+            get_filename_component(_rpi_overlay_name ${_rpi_overlay_file} NAME)
+            list(APPEND _preinstall_boot_partition_files
+                -add ${_rpi_overlay_file} overlays/${_rpi_overlay_name})
+        endif()
+    endforeach()
+endif()
 set(_preinstall_partition_deps native-fatten native-ntfsimg)
 set(_reactosimg_mbr_args)
 set(_reactosimg_deps native-mkdiskimg)
