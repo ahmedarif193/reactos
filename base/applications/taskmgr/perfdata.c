@@ -39,6 +39,9 @@ static LARGE_INTEGER                       liOldPerCpuKernel[PERF_MAX_CPUS];
 static LARGE_INTEGER                       liOldPerCpuUser[PERF_MAX_CPUS];
 static BYTE                                PerCpuUsage[PERF_MAX_CPUS];
 
+typedef BOOL (WINAPI *PFN_GetProcessInformation)(HANDLE, PROCESS_INFORMATION_CLASS, PVOID, DWORD);
+static PFN_GetProcessInformation pGetProcessInformation;
+
 PCMD_LINE_CACHE global_cache = NULL;
 
 #define CMD_LINE_MIN(a, b) (a < b ? a - sizeof(WCHAR) : b)
@@ -58,6 +61,7 @@ BOOL PerfDataInitialize(void)
     NTSTATUS    status;
 
     InitializeCriticalSection(&PerfDataCriticalSection);
+    pGetProcessInformation = (PFN_GetProcessInformation)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetProcessInformation");
 
     /*
      * Get number of processors in the system
@@ -189,6 +193,7 @@ void PerfDataRefresh(void)
     PSID                                       ProcessUser;
     ULONG                                      Buffer[64]; /* must be 4 bytes aligned! */
     ULONG                                      cwcUserName;
+    BOOL                                       bIsWow64;
 
     /* Get new system time */
     status = NtQuerySystemInformation(SystemTimeOfDayInformation, &SysTimeInfo, sizeof(SysTimeInfo), NULL);
@@ -431,7 +436,8 @@ ReadProcOwner:
 
                 PROCESS_MACHINE_INFORMATION MachineInformation;
 
-                if (GetProcessInformation(hProcess, ProcessMachineTypeInfo, &MachineInformation, sizeof(MachineInformation)))
+                if (pGetProcessInformation &&
+                    pGetProcessInformation(hProcess, ProcessMachineTypeInfo, &MachineInformation, sizeof(MachineInformation)))
                 {
                     pPerfData[Idx].ImageMachine = MachineInformation.ProcessMachine;
                     if (MachineInformation.ProcessMachine == IMAGE_FILE_MACHINE_I386)
@@ -440,6 +446,11 @@ ReadProcOwner:
                     else if (MachineInformation.ProcessMachine == IMAGE_FILE_MACHINE_AMD64)
                         StringCchCatW(pPerfData[Idx].ImageName, _countof(pPerfData[Idx].ImageName), L" *x64");
 #endif
+                }
+                else if (IsWow64Process(hProcess, &bIsWow64) && bIsWow64)
+                {
+                    pPerfData[Idx].ImageMachine = IMAGE_FILE_MACHINE_I386;
+                    StringCchCatW(pPerfData[Idx].ImageName, _countof(pPerfData[Idx].ImageName), L" *32");
                 }
 
                 GetProcessIoCounters(hProcess, &pPerfData[Idx].IOCounters);

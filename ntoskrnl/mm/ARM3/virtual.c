@@ -5606,9 +5606,9 @@ MiGetHighestAddressFromZeroBits(
     _In_ ULONG_PTR ZeroBits,
     _Out_ PULONG_PTR HighestAddress)
 {
+#ifdef _WIN64
     ULONG Shift;
 
-#ifdef _WIN64
     if (ZeroBits == 0)
     {
         *HighestAddress = MAXULONG_PTR;
