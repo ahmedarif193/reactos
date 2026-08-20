@@ -200,6 +200,13 @@ Dwc2ValidPort(
 }
 
 static ULONG
+Dwc2EndpointDataCapacity(
+    _In_ ULONG TransferType)
+{
+    return TransferType == USBPORT_TRANSFER_TYPE_BULK ? DWC2_BULK_TRANSFER_SIZE : DWC2_SMALL_TRANSFER_SIZE;
+}
+
+static ULONG
 Dwc2CopySgToBuffer(
     _In_ PUSBPORT_SCATTER_GATHER_LIST SgList,
     _Out_writes_bytes_(BufferLength) PVOID Buffer,
@@ -1580,9 +1587,14 @@ Dwc2OpenEndpoint(
         DPRINT1("[DWC2] isochronous endpoint rejected addr=%u ep=%u mps=%lu\n", Properties->DeviceAddress, Properties->EndpointAddress, Properties->MaxPacketSize);
         return MP_STATUS_NOT_SUPPORTED;
     }
-    if (!Properties->BufferVA || Properties->BufferLength < DWC2_ENDPOINT_BUFFER_SIZE)
+    if (!Properties->BufferVA ||
+        Properties->BufferLength < DWC2_SETUP_BUFFER_SIZE + Dwc2EndpointDataCapacity(Properties->TransferType))
     {
-        DPRINT1("[DWC2] endpoint buffer invalid VA=%p PA=%08lx length=%lu required=%lu\n", Properties->BufferVA, Properties->BufferPA, Properties->BufferLength, DWC2_ENDPOINT_BUFFER_SIZE);
+        DPRINT1("[DWC2] endpoint buffer invalid VA=%p PA=%08lx length=%lu required=%lu\n",
+                Properties->BufferVA,
+                Properties->BufferPA,
+                Properties->BufferLength,
+                DWC2_SETUP_BUFFER_SIZE + Dwc2EndpointDataCapacity(Properties->TransferType));
         return MP_STATUS_NO_RESOURCES;
     }
 
@@ -1641,9 +1653,15 @@ Dwc2ReopenEndpoint(
         DPRINT1("[DWC2] isochronous endpoint reopen rejected addr=%u ep=%u mps=%lu\n", Properties->DeviceAddress, Properties->EndpointAddress, Properties->MaxPacketSize);
         return MP_STATUS_NOT_SUPPORTED;
     }
-    if (!Properties->BufferVA || Properties->BufferLength < DWC2_ENDPOINT_BUFFER_SIZE)
+    if (!Properties->BufferVA ||
+        Properties->BufferLength < DWC2_SETUP_BUFFER_SIZE + Dwc2EndpointDataCapacity(Properties->TransferType))
     {
-        DPRINT1("[DWC2] endpoint reopen buffer invalid endpoint=%p VA=%p PA=%08lx length=%lu required=%lu\n", Endpoint, Properties->BufferVA, Properties->BufferPA, Properties->BufferLength, DWC2_ENDPOINT_BUFFER_SIZE);
+        DPRINT1("[DWC2] endpoint reopen buffer invalid endpoint=%p VA=%p PA=%08lx length=%lu required=%lu\n",
+                Endpoint,
+                Properties->BufferVA,
+                Properties->BufferPA,
+                Properties->BufferLength,
+                DWC2_SETUP_BUFFER_SIZE + Dwc2EndpointDataCapacity(Properties->TransferType));
         return MP_STATUS_NO_RESOURCES;
     }
 
@@ -1672,8 +1690,8 @@ Dwc2QueryEndpointRequirements(
 
     if (Properties->TransferType != USBPORT_TRANSFER_TYPE_ISOCHRONOUS)
     {
-        Requirements->HeaderBufferSize = DWC2_ENDPOINT_BUFFER_SIZE;
-        Requirements->MaxTransferSize = DWC2_MAX_TRANSFER_SIZE;
+        Requirements->MaxTransferSize = Dwc2EndpointDataCapacity(Properties->TransferType);
+        Requirements->HeaderBufferSize = DWC2_SETUP_BUFFER_SIZE + Requirements->MaxTransferSize;
     }
 }
 
@@ -2017,13 +2035,15 @@ Dwc2SubmitTransfer(
     }
 
     KeAcquireSpinLock(&Extension->Lock, &OldIrql);
-    if (!Extension->Started || Endpoint->Transfer || Parameters->TransferBufferLength > DWC2_MAX_TRANSFER_SIZE)
+    if (!Extension->Started ||
+        Endpoint->Transfer ||
+        Parameters->TransferBufferLength > Endpoint->BufferLength - DWC2_SETUP_BUFFER_SIZE)
     {
         DPRINT1("[DWC2] submit rejected started=%u active=%p length=%lu maximum=%lu ep=%p state=%lu\n",
                 Extension->Started,
                 Endpoint->Transfer,
                 Parameters->TransferBufferLength,
-                DWC2_MAX_TRANSFER_SIZE,
+                Endpoint->BufferLength - DWC2_SETUP_BUFFER_SIZE,
                 Endpoint,
                 Endpoint->State);
         KeReleaseSpinLock(&Extension->Lock, OldIrql);
