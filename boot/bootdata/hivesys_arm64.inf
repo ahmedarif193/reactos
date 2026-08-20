@@ -19,6 +19,18 @@ HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2847","Cla
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2855","Service",0x00000000,"sdbus"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2855","ClassGUID",0x00000000,"{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}"
 
+; Raspberry Pi DWC2 USB OTG controller (ACPI\BCM2848, _CID DWC_OTG): boot-start
+; it like usbxhci so a USB mass-storage boot volume exists before ARC names.
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2848","Service",0x00000000,"usbdwc2"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2848","ClassGUID",0x00000000,"{36FC9E60-C465-11CF-8056-444553540000}"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#DWC_OTG","Service",0x00000000,"usbdwc2"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#DWC_OTG","ClassGUID",0x00000000,"{36FC9E60-C465-11CF-8056-444553540000}"
+HKLM,"SYSTEM\CurrentControlSet\Services\usbdwc2","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\usbdwc2","Group",0x00000000,"Boot Bus Extender"
+HKLM,"SYSTEM\CurrentControlSet\Services\usbdwc2","ImagePath",0x00020000,"system32\drivers\usbdwc2.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\usbdwc2","Start",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\usbdwc2","Type",0x00010001,0x00000001
+
 ; Raspberry Pi 5 RP1 southbridge: no OS bus driver. The UEFI firmware exposes
 ; the RP1 functions (USB XHC0/XHC1, Ethernet ETH0) as standard ACPI devices
 ; under the RP1B ACPI0004 container and hides the RP1 PCIe endpoint, so acpi.sys
