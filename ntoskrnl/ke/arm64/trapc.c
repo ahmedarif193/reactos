@@ -22,6 +22,11 @@
 #endif
 
 #define ESR_EC_BRK 0x3C
+#define KI_ARM64_BRK_BREAKPOINT    0xF000
+#define KI_ARM64_BRK_ASSERT        0xF001
+#define KI_ARM64_BRK_DEBUG_SERVICE 0xF002
+#define KI_ARM64_BRK_FASTFAIL      0xF003
+#define KI_ARM64_BRK_DIVIDE_BY_0   0xF004
 // Cookie lives in Reserved bits 16-31, mode in bits 8-15; byte 0 carries SavedIrql
 #define ARM64_PREVIOUS_MODE_COOKIE 0x4D500000UL
 #define ARM64_PREVIOUS_MODE_MASK   0xFFFF0000UL
@@ -2216,12 +2221,8 @@ KiArm64HandleSynchronousException(
             KPROCESSOR_MODE Mode = KiArm64PreviousModeFromVector(Context->State.VectorId);
             ULONG BrkImm = Esr & 0xFFFF;
 
-            /*
-             * BRK #0xF003: Debug service request from user-mode or kernel-mode.
-             * The caller places the service type in X0 and arguments in X1-X4.
-             * Handle this directly without going through exception dispatch.
-             */
-            if (BrkImm == 0xF003)
+            /* X0 selects the service and X1-X4 carry its arguments. */
+            if (BrkImm == KI_ARM64_BRK_DEBUG_SERVICE)
             {
                 ULONG DebugService = (ULONG)Context->State.Registers.X[0];
                 ULONG64 ServiceElr;
@@ -2328,20 +2329,50 @@ KiArm64HandleSynchronousException(
                 EXCEPTION_RECORD ExceptionRecord;
 
                 RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
-                ExceptionRecord.ExceptionCode = STATUS_BREAKPOINT;
                 ExceptionRecord.ExceptionFlags = 0;
                 ExceptionRecord.ExceptionRecord = NULL;
                 ExceptionRecord.ExceptionAddress = (PVOID)(ULONG_PTR)Context->State.Elr;
-                ExceptionRecord.NumberParameters = 3;
-                ExceptionRecord.ExceptionInformation[0] = BREAKPOINT_BREAK;
-                ExceptionRecord.ExceptionInformation[1] = 0;
-                ExceptionRecord.ExceptionInformation[2] = 0;
 
-                KiDispatchException(&ExceptionRecord,
-                                    Context->ExceptionFramePointer,
-                                    TrapFrame,
-                                    Mode,
-                                    TRUE);
+                switch (BrkImm)
+                {
+                    case KI_ARM64_BRK_BREAKPOINT:
+                        ExceptionRecord.ExceptionCode = STATUS_BREAKPOINT;
+                        ExceptionRecord.NumberParameters = 1;
+                        ExceptionRecord.ExceptionInformation[0] = 0;
+                        break;
+
+                    case KI_ARM64_BRK_ASSERT:
+                        ExceptionRecord.ExceptionCode = STATUS_ASSERTION_FAILURE;
+                        break;
+
+                    case KI_ARM64_BRK_FASTFAIL:
+                        ExceptionRecord.ExceptionCode = STATUS_STACK_BUFFER_OVERRUN;
+                        ExceptionRecord.ExceptionFlags = EXCEPTION_NONCONTINUABLE;
+                        ExceptionRecord.NumberParameters = 1;
+                        ExceptionRecord.ExceptionInformation[0] = Context->State.Registers.X[0];
+                        if (Mode == KernelMode)
+                        {
+                            KeBugCheckWithTf(KERNEL_SECURITY_CHECK_FAILURE, Context->State.Registers.X[0], (ULONG_PTR)TrapFrame, (ULONG_PTR)&ExceptionRecord, 0, TrapFrame);
+                        }
+
+                        ZwTerminateProcess(NtCurrentProcess(),
+                                           STATUS_STACK_BUFFER_OVERRUN);
+                        KeBugCheckEx(KMODE_EXCEPTION_NOT_HANDLED,
+                                     STATUS_STACK_BUFFER_OVERRUN,
+                                     (ULONG_PTR)ExceptionRecord.ExceptionAddress,
+                                     (ULONG_PTR)TrapFrame,
+                                     0);
+
+                    case KI_ARM64_BRK_DIVIDE_BY_0:
+                        ExceptionRecord.ExceptionCode = STATUS_INTEGER_DIVIDE_BY_ZERO;
+                        break;
+
+                    default:
+                        ExceptionRecord.ExceptionCode = STATUS_ILLEGAL_INSTRUCTION;
+                        break;
+                }
+
+                KiDispatchException(&ExceptionRecord, Context->ExceptionFramePointer, TrapFrame, Mode, TRUE);
             }
 
             goto HandledExit;

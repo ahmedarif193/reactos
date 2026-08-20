@@ -61,26 +61,6 @@ KiTrapReturn:
     ands    w27, w22, #0xF
     cbnz    w27, 1f
 
-    cbnz    x23, .Luser_pc_ready
-
-    /*
-     * Keep the system alive when the debug-print BRK frame got clobbered.
-     * BRK #0xF003 resume address can safely fall back to LR.
-     */
-    ldr     w16, [x20, #TfEsr]
-    lsr     w17, w16, #26
-    cmp     w17, #0x3C
-    b.ne    .Luser_pc_ready
-    and     w17, w16, #0xFFFF
-    mov     w18, #0xF003
-    cmp     w17, w18
-    b.ne    .Luser_pc_ready
-    ldr     x16, [x20, #TfLr]
-    cbz     x16, .Luser_pc_ready
-    mov     x23, x16
-    str     x23, [x20, #TfPc]
-.Luser_pc_ready:
-
     msr     sp_el0, x26              /* Returning to EL0 */
 
     /* User I-cache maintenance is handled on fault/map paths. */

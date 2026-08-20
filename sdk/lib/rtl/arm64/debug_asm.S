@@ -17,7 +17,7 @@ DbgUserBreakPoint:
     .seh_proc DbgBreakPoint
 DbgBreakPoint:
     .seh_endprologue
-    brk     #0
+    brk     #0xf000
     ret
     .seh_endproc
 
@@ -28,7 +28,7 @@ RtlpBreakWithStatusInstruction:
     .seh_proc DbgBreakPointWithStatus
 DbgBreakPointWithStatus:
     .seh_endprologue
-    brk     #0
+    brk     #0xf000
     ret
     .seh_endproc
 
@@ -37,14 +37,14 @@ DbgBreakPointWithStatus:
      *     ULONG Service, PVOID Argument1, PVOID Argument2,
      *     PVOID Argument3, PVOID Argument4);
      *
-     * The kernel ARM64 BRK handler expects:
+     * The ARM64 debug-service ABI expects:
      *   x0 = service, x1-x4 = service arguments.
      */
     .global DebugService
     .seh_proc DebugService
 DebugService:
     .seh_endprologue
-    brk     #0xf003
+    brk     #0xf002
     ret
     .seh_endproc
 
@@ -59,6 +59,6 @@ DebugService2:
     mov     x2, x1
     mov     x1, x0
     mov     x0, x3
-    brk     #0xf003
+    brk     #0xf002
     ret
     .seh_endproc
