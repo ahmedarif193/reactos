@@ -4001,6 +4001,24 @@ NtCreateNamedPipeFile(OUT PHANDLE FileHandle,
                         0);
 }
 
+static ULONG_PTR
+NTAPI
+IopFlushProcessWriteBuffers(
+    _In_ ULONG_PTR Argument)
+{
+    UNREFERENCED_PARAMETER(Argument);
+    KeFlushWriteBuffer();
+    return 0;
+}
+
+NTSTATUS
+NTAPI
+NtFlushProcessWriteBuffers(VOID)
+{
+    KeIpiGenericCall(IopFlushProcessWriteBuffers, 0);
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 NTAPI
 NtFlushWriteBuffer(VOID)

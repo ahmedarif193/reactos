@@ -1555,6 +1555,7 @@
 @ stdcall ZwEnumerateValueKey(ptr long long ptr long ptr)
 @ stdcall ZwFlushInstructionCache(ptr ptr long)
 @ stdcall ZwFlushKey(ptr)
+@ stdcall ZwFlushProcessWriteBuffers()
 @ stdcall ZwFlushVirtualMemory(ptr ptr ptr ptr)
 @ stdcall ZwFreeVirtualMemory(ptr ptr ptr long)
 @ stdcall ZwFsControlFile(ptr ptr ptr ptr ptr long ptr long ptr long)

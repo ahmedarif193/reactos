@@ -42,6 +42,9 @@ typedef VOID (CALLBACK *PRTL_OVERLAPPED_COMPLETION_ROUTINE)(DWORD,DWORD,LPVOID);
 
 typedef void (CALLBACK *PTP_IO_CALLBACK)(PTP_CALLBACK_INSTANCE,void*,void*,IO_STATUS_BLOCK*,PTP_IO);
 NTSYSAPI NTSTATUS  WINAPI TpSimpleTryPost(PTP_SIMPLE_CALLBACK,PVOID,TP_CALLBACK_ENVIRON *);
+#if defined(_M_ARM64)
+NTSYSAPI BOOLEAN NTAPI RtlIsEcCode(ULONG_PTR CodeAddress);
+#endif
 #define PRTL_WORK_ITEM_ROUTINE WORKERCALLBACKFUNC
 
 #define CRITICAL_SECTION RTL_CRITICAL_SECTION
@@ -74,6 +77,54 @@ struct rtl_work_item
     PRTL_WORK_ITEM_ROUTINE function;
     PVOID context;
 };
+
+enum threadpool_callback_type
+{
+    THREADPOOL_CALLBACK_SIMPLE,
+    THREADPOOL_CALLBACK_WORK,
+    THREADPOOL_CALLBACK_TIMER,
+    THREADPOOL_CALLBACK_WAIT
+};
+
+static PRTLP_THREADPOOL_CALLBACK_DISPATCHER volatile threadpool_callback_dispatcher;
+
+VOID
+NTAPI
+RtlpSetThreadpoolCallbackDispatcher(PRTLP_THREADPOOL_CALLBACK_DISPATCHER dispatcher)
+{
+    InterlockedExchangePointer((PVOID volatile *)&threadpool_callback_dispatcher, (PVOID)dispatcher);
+}
+
+static void
+threadpool_call_callback(enum threadpool_callback_type type, void *callback, ULONG_PTR argument0, ULONG_PTR argument1, ULONG_PTR argument2, ULONG_PTR argument3)
+{
+#if defined(_M_ARM64)
+    PRTLP_THREADPOOL_CALLBACK_DISPATCHER dispatcher;
+
+    dispatcher = (PRTLP_THREADPOOL_CALLBACK_DISPATCHER)InterlockedCompareExchangePointer((PVOID volatile *)&threadpool_callback_dispatcher, NULL, NULL);
+    if (dispatcher && !RtlIsEcCode((ULONG_PTR)callback))
+    {
+        dispatcher(callback, argument0, argument1, argument2, argument3);
+        return;
+    }
+#endif
+
+    switch (type)
+    {
+        case THREADPOOL_CALLBACK_SIMPLE:
+            ((PTP_SIMPLE_CALLBACK)callback)((TP_CALLBACK_INSTANCE *)argument0, (void *)argument1);
+            break;
+        case THREADPOOL_CALLBACK_WORK:
+            ((PTP_WORK_CALLBACK)callback)((TP_CALLBACK_INSTANCE *)argument0, (void *)argument1, (TP_WORK *)argument2);
+            break;
+        case THREADPOOL_CALLBACK_TIMER:
+            ((PTP_TIMER_CALLBACK)callback)((TP_CALLBACK_INSTANCE *)argument0, (void *)argument1, (TP_TIMER *)argument2);
+            break;
+        case THREADPOOL_CALLBACK_WAIT:
+            ((PTP_WAIT_CALLBACK)callback)((TP_CALLBACK_INSTANCE *)argument0, (void *)argument1, (TP_WAIT *)argument2, (TP_WAIT_RESULT)argument3);
+            break;
+    }
+}
 
 #define EXPIRE_NEVER       (~(ULONGLONG)0)
 #define TIMER_QUEUE_MAGIC  0x516d6954   /* TimQ */
@@ -2526,7 +2577,7 @@ static void tp_object_execute( struct threadpool_object *object, BOOL wait_threa
         {
             TRACE( "executing simple callback %p(%p, %p)\n",
                    object->u.simple.callback, callback_instance, object->userdata );
-            object->u.simple.callback( callback_instance, object->userdata );
+            threadpool_call_callback(THREADPOOL_CALLBACK_SIMPLE, object->u.simple.callback, (ULONG_PTR)callback_instance, (ULONG_PTR)object->userdata, 0, 0);
             TRACE( "callback %p returned\n", object->u.simple.callback );
             break;
         }
@@ -2535,7 +2586,7 @@ static void tp_object_execute( struct threadpool_object *object, BOOL wait_threa
         {
             TRACE( "executing work callback %p(%p, %p, %p)\n",
                    object->u.work.callback, callback_instance, object->userdata, object );
-            object->u.work.callback( callback_instance, object->userdata, (TP_WORK *)object );
+            threadpool_call_callback(THREADPOOL_CALLBACK_WORK, object->u.work.callback, (ULONG_PTR)callback_instance, (ULONG_PTR)object->userdata, (ULONG_PTR)object, 0);
             TRACE( "callback %p returned\n", object->u.work.callback );
             break;
         }
@@ -2544,7 +2595,7 @@ static void tp_object_execute( struct threadpool_object *object, BOOL wait_threa
         {
             TRACE( "executing timer callback %p(%p, %p, %p)\n",
                    object->u.timer.callback, callback_instance, object->userdata, object );
-            object->u.timer.callback( callback_instance, object->userdata, (TP_TIMER *)object );
+            threadpool_call_callback(THREADPOOL_CALLBACK_TIMER, object->u.timer.callback, (ULONG_PTR)callback_instance, (ULONG_PTR)object->userdata, (ULONG_PTR)object, 0);
             TRACE( "callback %p returned\n", object->u.timer.callback );
             break;
         }
@@ -2553,7 +2604,7 @@ static void tp_object_execute( struct threadpool_object *object, BOOL wait_threa
         {
             TRACE( "executing wait callback %p(%p, %p, %p, %lu)\n",
                    object->u.wait.callback, callback_instance, object->userdata, object, wait_result );
-            object->u.wait.callback( callback_instance, object->userdata, (TP_WAIT *)object, wait_result );
+            threadpool_call_callback(THREADPOOL_CALLBACK_WAIT, object->u.wait.callback, (ULONG_PTR)callback_instance, (ULONG_PTR)object->userdata, (ULONG_PTR)object, wait_result);
             TRACE( "callback %p returned\n", object->u.wait.callback );
             break;
         }
@@ -2579,7 +2630,7 @@ static void tp_object_execute( struct threadpool_object *object, BOOL wait_threa
     {
         TRACE( "executing finalization callback %p(%p, %p)\n",
                object->finalization_callback, callback_instance, object->userdata );
-        object->finalization_callback( callback_instance, object->userdata );
+        threadpool_call_callback(THREADPOOL_CALLBACK_SIMPLE, object->finalization_callback, (ULONG_PTR)callback_instance, (ULONG_PTR)object->userdata, 0, 0);
         TRACE( "callback %p returned\n", object->finalization_callback );
     }
 
@@ -2605,7 +2656,8 @@ static void tp_object_execute( struct threadpool_object *object, BOOL wait_threa
     }
     if (instance.cleanup.library)
     {
-        LdrUnloadDll( instance.cleanup.library );
+        status = LdrUnloadDll( instance.cleanup.library );
+        if (status != STATUS_SUCCESS) goto skip_cleanup;
     }
 
 skip_cleanup:
@@ -3141,7 +3193,7 @@ VOID WINAPI TpReleaseCleanupGroupMembers( TP_CLEANUP_GROUP *group, BOOL cancel_p
             {
                 TRACE( "executing group cancel callback %p(%p, %p)\n",
                        object->group_cancel_callback, object->userdata, userdata );
-                object->group_cancel_callback( object->userdata, userdata );
+                threadpool_call_callback(THREADPOOL_CALLBACK_SIMPLE, object->group_cancel_callback, (ULONG_PTR)object->userdata, (ULONG_PTR)userdata, 0, 0);
                 TRACE( "callback %p returned\n", object->group_cancel_callback );
             }
 
@@ -3276,15 +3328,13 @@ BOOL WINAPI TpSetPoolMinThreads( TP_POOL *pool, DWORD minimum )
     return !status;
 }
 
-/***********************************************************************
- *           TpSetTimer    (NTDLL.@)
- */
-VOID WINAPI TpSetTimer( TP_TIMER *timer, LARGE_INTEGER *timeout, LONG period, LONG window_length )
+static BOOL tp_set_timer( TP_TIMER *timer, LARGE_INTEGER *timeout, LONG period, LONG window_length )
 {
     struct threadpool_object *this = impl_from_TP_TIMER( timer );
     struct threadpool_object *other_timer;
     struct list *pending_timers;
     BOOL submit_timer = FALSE;
+    BOOL was_pending;
     ULONGLONG timestamp;
 
     TRACE( "%p %p %lu %lu\n", timer, timeout, period, window_length );
@@ -3292,6 +3342,7 @@ VOID WINAPI TpSetTimer( TP_TIMER *timer, LARGE_INTEGER *timeout, LONG period, LO
     RtlEnterCriticalSection( &timerqueue.cs );
 
     assert( this->u.timer.timer_initialized );
+    was_pending = this->u.timer.timer_pending;
     this->u.timer.timer_set = timeout != NULL;
 
     /* Convert relative timeout to absolute timestamp and handle a timeout
@@ -3371,15 +3422,31 @@ VOID WINAPI TpSetTimer( TP_TIMER *timer, LARGE_INTEGER *timeout, LONG period, LO
 
     if (submit_timer)
        tp_object_submit( this, FALSE );
+
+    return was_pending;
 }
 
 /***********************************************************************
- *           TpSetWait    (NTDLL.@)
+ *           TpSetTimer    (NTDLL.@)
  */
-VOID WINAPI TpSetWait( TP_WAIT *wait, HANDLE handle, LARGE_INTEGER *timeout )
+VOID WINAPI TpSetTimer( TP_TIMER *timer, LARGE_INTEGER *timeout, LONG period, LONG window_length )
+{
+    tp_set_timer( timer, timeout, period, window_length );
+}
+
+/***********************************************************************
+ *           TpSetTimerEx    (NTDLL.@)
+ */
+BOOL WINAPI TpSetTimerEx( TP_TIMER *timer, LARGE_INTEGER *timeout, LONG period, LONG window_length )
+{
+    return tp_set_timer( timer, timeout, period, window_length );
+}
+
+static BOOL tp_set_wait( TP_WAIT *wait, HANDLE handle, LARGE_INTEGER *timeout )
 {
     struct threadpool_object *this = impl_from_TP_WAIT( wait );
     ULONGLONG timestamp = MAXLONGLONG;
+    BOOL was_pending;
     BOOL same_handle;
 
     TRACE( "%p %p %p\n", wait, handle, timeout );
@@ -3387,6 +3454,7 @@ VOID WINAPI TpSetWait( TP_WAIT *wait, HANDLE handle, LARGE_INTEGER *timeout )
     RtlEnterCriticalSection( &waitqueue.cs );
 
     assert( this->u.wait.bucket );
+    was_pending = this->u.wait.wait_pending;
 
     same_handle = this->u.wait.handle == handle;
     tp_wait_close_duped_handle( this );
@@ -3434,6 +3502,25 @@ VOID WINAPI TpSetWait( TP_WAIT *wait, HANDLE handle, LARGE_INTEGER *timeout )
     }
 
     RtlLeaveCriticalSection( &waitqueue.cs );
+
+    return was_pending;
+}
+
+/***********************************************************************
+ *           TpSetWait    (NTDLL.@)
+ */
+VOID WINAPI TpSetWait( TP_WAIT *wait, HANDLE handle, LARGE_INTEGER *timeout )
+{
+    tp_set_wait( wait, handle, timeout );
+}
+
+/***********************************************************************
+ *           TpSetWaitEx    (NTDLL.@)
+ */
+BOOL WINAPI TpSetWaitEx( TP_WAIT *wait, HANDLE handle, LARGE_INTEGER *timeout, PVOID reserved )
+{
+    if (reserved) return FALSE;
+    return tp_set_wait( wait, handle, timeout );
 }
 
 /***********************************************************************

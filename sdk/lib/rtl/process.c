@@ -586,10 +586,14 @@ RtlEncodePointer(IN PVOID Pointer)
     if(!NT_SUCCESS(Status))
     {
         DPRINT1("Failed to receive the process cookie! Status: 0x%lx\n", Status);
-        return Pointer;
+        RtlRaiseStatus(Status);
     }
 
-    return (PVOID)((ULONG_PTR)Pointer ^ Cookie);
+#ifdef _WIN64
+    return (PVOID)(ULONG_PTR)RotateRight64((ULONG_PTR)Pointer ^ Cookie, Cookie);
+#else
+    return (PVOID)(ULONG_PTR)RotateRight32((ULONG_PTR)Pointer ^ Cookie, Cookie);
+#endif
 }
 
 /*
@@ -599,7 +603,21 @@ PVOID
 NTAPI
 RtlDecodePointer(IN PVOID Pointer)
 {
-    return RtlEncodePointer(Pointer);
+    ULONG Cookie;
+    NTSTATUS Status;
+
+    Status = ZwQueryInformationProcess(NtCurrentProcess(), ProcessCookie, &Cookie, sizeof(Cookie), NULL);
+    if(!NT_SUCCESS(Status))
+    {
+        DPRINT1("Failed to receive the process cookie! Status: 0x%lx\n", Status);
+        RtlRaiseStatus(Status);
+    }
+
+#ifdef _WIN64
+    return (PVOID)(ULONG_PTR)(RotateLeft64((ULONG_PTR)Pointer, Cookie) ^ Cookie);
+#else
+    return (PVOID)(ULONG_PTR)(RotateLeft32((ULONG_PTR)Pointer, Cookie) ^ Cookie);
+#endif
 }
 
 /*
@@ -609,7 +627,11 @@ PVOID
 NTAPI
 RtlEncodeSystemPointer(IN PVOID Pointer)
 {
-    return (PVOID)((ULONG_PTR)Pointer ^ SharedUserData->Cookie);
+#ifdef _WIN64
+    return (PVOID)(ULONG_PTR)RotateRight64((ULONG_PTR)Pointer ^ SharedUserData->Cookie, SharedUserData->Cookie);
+#else
+    return (PVOID)(ULONG_PTR)RotateRight32((ULONG_PTR)Pointer ^ SharedUserData->Cookie, SharedUserData->Cookie);
+#endif
 }
 
 /*
@@ -619,7 +641,11 @@ PVOID
 NTAPI
 RtlDecodeSystemPointer(IN PVOID Pointer)
 {
-    return RtlEncodeSystemPointer(Pointer);
+#ifdef _WIN64
+    return (PVOID)(ULONG_PTR)(RotateLeft64((ULONG_PTR)Pointer, SharedUserData->Cookie) ^ SharedUserData->Cookie);
+#else
+    return (PVOID)(ULONG_PTR)(RotateLeft32((ULONG_PTR)Pointer, SharedUserData->Cookie) ^ SharedUserData->Cookie);
+#endif
 }
 
 /*

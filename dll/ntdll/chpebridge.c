@@ -12,21 +12,52 @@
  */
 
 #include <ntdll.h>
+#include <delayloadhandler.h>
 #include <setjmp.h>
 
 BOOLEAN NTAPI ChpeIsProcessorFeaturePresent(ULONG ProcessorFeature);
+PVOID NTAPI LdrResolveDelayLoadedAPI(PVOID ParentBase, PCIMAGE_DELAYLOAD_DESCRIPTOR Descriptor, PDELAYLOAD_FAILURE_DLL_CALLBACK DllHook, PDELAYLOAD_FAILURE_SYSTEM_ROUTINE SystemHook, PIMAGE_THUNK_DATA ThunkAddress, ULONG Flags);
+NTSTATUS NTAPI LdrResolveDelayLoadsFromDll(PVOID ParentBase, PCSTR TargetDllName, ULONG Flags);
+NTSTATUS NTAPI NtFlushProcessWriteBuffers(VOID);
 NTSTATUS NTAPI NtAllocateVirtualMemoryEx(HANDLE ProcessHandle, PVOID *BaseAddress, PSIZE_T RegionSize, ULONG AllocationType, ULONG Protect, PMEM_EXTENDED_PARAMETER ExtendedParameters, ULONG ExtendedParameterCount);
 NTSTATUS NTAPI NtMapViewOfSectionEx(HANDLE SectionHandle, HANDLE ProcessHandle, PVOID *BaseAddress, PLARGE_INTEGER SectionOffset, PSIZE_T ViewSize, ULONG AllocationType, ULONG Protect, PMEM_EXTENDED_PARAMETER ExtendedParameters, ULONG ExtendedParameterCount);
 NTSTATUS NTAPI NtUnmapViewOfSectionEx(HANDLE ProcessHandle, PVOID BaseAddress, ULONG Flags);
 PRUNTIME_FUNCTION NTAPI RtlLookupFunctionTable(ULONG_PTR ControlPc, PULONG_PTR ImageBase, PULONG Length);
+NTSTATUS NTAPI RtlLogUnexpectedCodepath(const ULONG *Codepath);
+VOID NTAPI RtlGetCurrentProcessorNumberEx(PPROCESSOR_NUMBER ProcessorNumber);
+PSLIST_ENTRY NTAPI RtlInterlockedPushListSList(PSLIST_HEADER SListHead, PSLIST_ENTRY List, PSLIST_ENTRY ListEnd, ULONG Count);
+ULONG NTAPI RtlSetCriticalSectionSpinCount(PRTL_CRITICAL_SECTION CriticalSection, ULONG SpinCount);
+VOID NTAPI RtlRestoreLastWin32Error(ULONG Win32Error);
 NTSTATUS NTAPI RtlWaitOnAddress(const VOID *Address, const VOID *CompareAddress, SIZE_T AddressSize, const LARGE_INTEGER *Timeout);
 VOID NTAPI RtlWakeAddressAll(const VOID *Address);
 VOID NTAPI RtlWakeAddressSingle(const VOID *Address);
+VOID WINAPI TpCancelAsyncIoOperation(TP_IO *Io);
+VOID WINAPI TpCallbackLeaveCriticalSectionOnCompletion(TP_CALLBACK_INSTANCE *Instance, RTL_CRITICAL_SECTION *CriticalSection);
+VOID WINAPI TpCallbackReleaseMutexOnCompletion(TP_CALLBACK_INSTANCE *Instance, HANDLE Mutex);
+VOID WINAPI TpCallbackReleaseSemaphoreOnCompletion(TP_CALLBACK_INSTANCE *Instance, HANDLE Semaphore, DWORD Count);
+VOID WINAPI TpCallbackSetEventOnCompletion(TP_CALLBACK_INSTANCE *Instance, HANDLE Event);
+VOID WINAPI TpCallbackUnloadDllOnCompletion(TP_CALLBACK_INSTANCE *Instance, HMODULE Module);
+VOID WINAPI TpDisassociateCallback(TP_CALLBACK_INSTANCE *Instance);
+BOOL WINAPI TpIsTimerSet(TP_TIMER *Timer);
+VOID WINAPI TpPostWork(TP_WORK *Work);
+VOID WINAPI TpReleaseCleanupGroup(TP_CLEANUP_GROUP *CleanupGroup);
+VOID WINAPI TpReleaseCleanupGroupMembers(TP_CLEANUP_GROUP *CleanupGroup, BOOL CancelPending, PVOID CleanupParameter);
+VOID WINAPI TpReleaseIoCompletion(TP_IO *Io);
+VOID WINAPI TpReleasePool(TP_POOL *Pool);
 VOID WINAPI TpReleaseTimer(TP_TIMER *Timer);
 VOID WINAPI TpReleaseWait(TP_WAIT *Wait);
+VOID WINAPI TpReleaseWork(TP_WORK *Work);
+VOID WINAPI TpSetPoolMaxThreads(TP_POOL *Pool, DWORD MaximumThreads);
+BOOL WINAPI TpSetPoolMinThreads(TP_POOL *Pool, DWORD MinimumThreads);
 VOID WINAPI TpSetTimer(TP_TIMER *Timer, LARGE_INTEGER *Timeout, LONG Period, LONG WindowLength);
+BOOL WINAPI TpSetTimerEx(TP_TIMER *Timer, LARGE_INTEGER *Timeout, LONG Period, LONG WindowLength);
 VOID WINAPI TpSetWait(TP_WAIT *Wait, HANDLE Handle, LARGE_INTEGER *Timeout);
+BOOL WINAPI TpSetWaitEx(TP_WAIT *Wait, HANDLE Handle, LARGE_INTEGER *Timeout, PVOID Reserved);
+VOID WINAPI TpStartAsyncIoOperation(TP_IO *Io);
+VOID WINAPI TpWaitForIoCompletion(TP_IO *Io, BOOL CancelPending);
 VOID WINAPI TpWaitForTimer(TP_TIMER *Timer, BOOL CancelPending);
+VOID WINAPI TpWaitForWait(TP_WAIT *Wait, BOOL CancelPending);
+VOID WINAPI TpWaitForWork(TP_WORK *Work, BOOL CancelPending);
 NTSTATUS WINAPI RtlWow64GetCurrentCpuArea(USHORT *Machine, void **Context, void **CpuArea);
 PRUNTIME_FUNCTION NTAPI ChpepAmd64LookupFunctionTable(DWORD64 ControlPc, PDWORD64 ImageBase, PULONG Length);
 PRUNTIME_FUNCTION NTAPI ChpepAmd64LookupFunctionEntry(DWORD64 ControlPc, PDWORD64 ImageBase, PUNWIND_HISTORY_TABLE HistoryTable);
@@ -641,6 +672,12 @@ ChpeDispatchExceptionNative(PEXCEPTION_RECORD ExceptionRecord, PARM64_NT_CONTEXT
 /* Fixed-argument native entry point used to carry an ARM64EC va_list. */
 ULONG NTAPI vDbgPrintEx(ULONG ComponentId, ULONG Level, PCCH Format, va_list Arguments);
 
+VOID NTAPI
+ChpeDbgBreakPoint(VOID)
+{
+    DbgBreakPoint();
+}
+
 ULONG CDECL
 ChpeDbgPrint(PCCH Format, ...)
 {
@@ -741,6 +778,46 @@ ChpepIsNativeNtdllName(const UNICODE_STRING *Name)
     return RtlEqualUnicodeString(&BaseName, &ChpeNativeNtdllName, TRUE);
 }
 
+static NTSTATUS
+ChpepRedirectNativeNtdllProcedure(PVOID NativeBase, PVOID BridgeBase, PVOID NativeProcedure, PVOID *ProcedureAddress)
+{
+    PIMAGE_EXPORT_DIRECTORY ExportDirectory;
+    PULONG Functions;
+    PULONG Names;
+    PUSHORT NameOrdinals;
+    ULONG ExportSize;
+    ULONG Index;
+
+    ExportDirectory = RtlImageDirectoryEntryToData(NativeBase, TRUE, IMAGE_DIRECTORY_ENTRY_EXPORT, &ExportSize);
+    if (ExportDirectory == NULL || ExportSize < sizeof(*ExportDirectory))
+        return STATUS_PROCEDURE_NOT_FOUND;
+
+    Functions = (PULONG)((PUCHAR)NativeBase + ExportDirectory->AddressOfFunctions);
+    Names = (PULONG)((PUCHAR)NativeBase + ExportDirectory->AddressOfNames);
+    NameOrdinals = (PUSHORT)((PUCHAR)NativeBase + ExportDirectory->AddressOfNameOrdinals);
+
+    for (Index = 0; Index < ExportDirectory->NumberOfNames; ++Index)
+    {
+        ANSI_STRING ExportName;
+        PVOID Candidate;
+        NTSTATUS Status;
+
+        if (NameOrdinals[Index] >= ExportDirectory->NumberOfFunctions)
+            continue;
+
+        Candidate = (PUCHAR)NativeBase + Functions[NameOrdinals[Index]];
+        if (Candidate != NativeProcedure)
+            continue;
+
+        RtlInitAnsiString(&ExportName, (PCSTR)NativeBase + Names[Index]);
+        Status = LdrGetProcedureAddress(BridgeBase, &ExportName, 0, ProcedureAddress);
+        if (NT_SUCCESS(Status))
+            return Status;
+    }
+
+    return STATUS_PROCEDURE_NOT_FOUND;
+}
+
 NTSTATUS NTAPI
 ChpeLdrGetDllHandle(PWSTR DllPath, PULONG DllCharacteristics, PUNICODE_STRING DllName, PVOID *DllHandle)
 {
@@ -764,6 +841,7 @@ ChpeLdrGetProcedureAddress(PVOID BaseAddress, PANSI_STRING Name, ULONG Ordinal, 
 {
     PVOID NativeBase = NULL;
     PVOID BridgeBase = NULL;
+    PVOID NativeProcedure;
     NTSTATUS Status;
 
     LdrGetDllHandle(NULL, NULL, (PUNICODE_STRING)&ChpeNativeNtdllName, &NativeBase);
@@ -781,7 +859,28 @@ ChpeLdrGetProcedureAddress(PVOID BaseAddress, PANSI_STRING Name, ULONG Ordinal, 
             BaseAddress = NativeBase;
     }
 
-    return LdrGetProcedureAddress(BaseAddress, Name, Ordinal, ProcedureAddress);
+    Status = LdrGetProcedureAddress(BaseAddress, Name, Ordinal, ProcedureAddress);
+    if (!NT_SUCCESS(Status) || NativeBase == NULL || BridgeBase == NULL || BaseAddress == BridgeBase)
+        return Status;
+
+    NativeProcedure = *ProcedureAddress;
+    if (NT_SUCCESS(ChpepRedirectNativeNtdllProcedure(NativeBase, BridgeBase, NativeProcedure, ProcedureAddress)))
+        return STATUS_SUCCESS;
+
+    *ProcedureAddress = NativeProcedure;
+    return Status;
+}
+
+PVOID NTAPI
+ChpeLdrResolveDelayLoadedAPI(PVOID ParentBase, PCIMAGE_DELAYLOAD_DESCRIPTOR Descriptor, PDELAYLOAD_FAILURE_DLL_CALLBACK DllHook, PDELAYLOAD_FAILURE_SYSTEM_ROUTINE SystemHook, PIMAGE_THUNK_DATA ThunkAddress, ULONG Flags)
+{
+    return LdrResolveDelayLoadedAPI(ParentBase, Descriptor, DllHook, SystemHook, ThunkAddress, Flags);
+}
+
+NTSTATUS NTAPI
+ChpeLdrResolveDelayLoadsFromDll(PVOID ParentBase, PCSTR TargetDllName, ULONG Flags)
+{
+    return LdrResolveDelayLoadsFromDll(ParentBase, TargetDllName, Flags);
 }
 
 NTSTATUS NTAPI
@@ -826,6 +925,24 @@ ChpeRtlInitializeSListHead(PSLIST_HEADER SListHead)
     RtlInitializeSListHead(SListHead);
 }
 
+NTSTATUS NTAPI
+ChpeRtlInitializeCriticalSection(PRTL_CRITICAL_SECTION CriticalSection)
+{
+    return RtlInitializeCriticalSection(CriticalSection);
+}
+
+VOID NTAPI
+ChpeRtlInitializeConditionVariable(PRTL_CONDITION_VARIABLE ConditionVariable)
+{
+    RtlInitializeConditionVariable(ConditionVariable);
+}
+
+VOID NTAPI
+ChpeRtlInitializeSRWLock(PRTL_SRWLOCK Lock)
+{
+    RtlInitializeSRWLock(Lock);
+}
+
 PSLIST_ENTRY NTAPI
 ChpeRtlInterlockedFlushSList(PSLIST_HEADER SListHead)
 {
@@ -833,9 +950,57 @@ ChpeRtlInterlockedFlushSList(PSLIST_HEADER SListHead)
 }
 
 PSLIST_ENTRY NTAPI
+ChpeRtlInterlockedPopEntrySList(PSLIST_HEADER SListHead)
+{
+    return RtlInterlockedPopEntrySList(SListHead);
+}
+
+PSLIST_ENTRY NTAPI
 ChpeRtlInterlockedPushEntrySList(PSLIST_HEADER SListHead, PSLIST_ENTRY SListEntry)
 {
     return RtlInterlockedPushEntrySList(SListHead, SListEntry);
+}
+
+PSLIST_ENTRY NTAPI
+ChpeRtlInterlockedPushListSList(PSLIST_HEADER SListHead, PSLIST_ENTRY List, PSLIST_ENTRY ListEnd, ULONG Count)
+{
+    return RtlInterlockedPushListSList(SListHead, List, ListEnd, Count);
+}
+
+PSLIST_ENTRY NTAPI
+ChpeRtlInterlockedPushListSListEx(PSLIST_HEADER SListHead, PSLIST_ENTRY List, PSLIST_ENTRY ListEnd, ULONG Count)
+{
+    return RtlInterlockedPushListSList(SListHead, List, ListEnd, Count);
+}
+
+USHORT NTAPI
+ChpeRtlQueryDepthSList(PSLIST_HEADER SListHead)
+{
+    return RtlQueryDepthSList(SListHead);
+}
+
+VOID NTAPI
+ChpeRtlMoveMemory(PVOID Destination, const VOID *Source, SIZE_T Length)
+{
+    RtlMoveMemory(Destination, Source, Length);
+}
+
+NTSTATUS NTAPI
+ChpeRtlLogUnexpectedCodepath(const ULONG *Codepath)
+{
+    return RtlLogUnexpectedCodepath(Codepath);
+}
+
+VOID NTAPI
+ChpeRtlZeroMemory(PVOID Destination, SIZE_T Length)
+{
+    RtlZeroMemory(Destination, Length);
+}
+
+VOID NTAPI
+ChpeRtlFillMemory(PVOID Destination, SIZE_T Length, UCHAR Fill)
+{
+    RtlFillMemory(Destination, Length, Fill);
 }
 
 PVOID NTAPI
@@ -861,6 +1026,9 @@ typedef struct _CHPE_VECTORED_HANDLER_SNAPSHOT
 static RTL_SRWLOCK ChpeVectoredHandlerLock = { 0 };
 static LIST_ENTRY ChpeVectoredHandlerList = { &ChpeVectoredHandlerList, &ChpeVectoredHandlerList };
 static PVOID ChpeNativeVectoredHandler;
+static RTL_SRWLOCK ChpeVectoredContinueHandlerLock = { 0 };
+static LIST_ENTRY ChpeVectoredContinueHandlerList = { &ChpeVectoredContinueHandlerList, &ChpeVectoredContinueHandlerList };
+static PVOID ChpeNativeVectoredContinueHandler;
 
 static
 VOID
@@ -877,23 +1045,41 @@ ChpepDereferenceVectoredHandler(PCHPE_VECTORED_HANDLER_ENTRY Entry)
         RtlFreeHeap(RtlGetProcessHeap(), 0, Entry);
 }
 
+static
+VOID
+ChpepDereferenceVectoredContinueHandler(PCHPE_VECTORED_HANDLER_ENTRY Entry)
+{
+    BOOLEAN FreeEntry;
+
+    RtlAcquireSRWLockExclusive(&ChpeVectoredContinueHandlerLock);
+    Entry->References--;
+    FreeEntry = Entry->Removed && Entry->References == 0;
+    RtlReleaseSRWLockExclusive(&ChpeVectoredContinueHandlerLock);
+
+    if (FreeEntry)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Entry);
+}
+
+static
 LONG
-NTAPI
-ChpepVectoredExceptionDispatcher(PEXCEPTION_POINTERS NativePointers)
+ChpepCallVectoredHandlersX64(PRTL_SRWLOCK Lock,
+                             PLIST_ENTRY ListHead,
+                             BOOLEAN ContinueHandlers,
+                             PEXCEPTION_RECORD ExceptionRecord,
+                             PCONTEXT ContextRecord)
 {
     PCHPE_VECTORED_HANDLER_SNAPSHOT Snapshot;
     PCHPE_VECTORED_HANDLER_ENTRY Entry;
+    EXCEPTION_POINTERS ExceptionPointers;
     PLIST_ENTRY Link;
-    ARM64EC_NT_CONTEXT EcContext;
-    EXCEPTION_POINTERS EcPointers;
     SIZE_T Count = 0;
     SIZE_T Index = 0;
     LONG Result = EXCEPTION_CONTINUE_SEARCH;
 
-    RtlAcquireSRWLockShared(&ChpeVectoredHandlerLock);
-    for (Link = ChpeVectoredHandlerList.Flink; Link != &ChpeVectoredHandlerList; Link = Link->Flink)
+    RtlAcquireSRWLockShared(Lock);
+    for (Link = ListHead->Flink; Link != ListHead; Link = Link->Flink)
         Count++;
-    RtlReleaseSRWLockShared(&ChpeVectoredHandlerLock);
+    RtlReleaseSRWLockShared(Lock);
 
     if (!Count || Count > MAXULONG_PTR / sizeof(*Snapshot))
         return EXCEPTION_CONTINUE_SEARCH;
@@ -902,8 +1088,8 @@ ChpepVectoredExceptionDispatcher(PEXCEPTION_POINTERS NativePointers)
     if (!Snapshot)
         return EXCEPTION_CONTINUE_SEARCH;
 
-    RtlAcquireSRWLockExclusive(&ChpeVectoredHandlerLock);
-    for (Link = ChpeVectoredHandlerList.Flink; Link != &ChpeVectoredHandlerList && Index < Count; Link = Link->Flink)
+    RtlAcquireSRWLockExclusive(Lock);
+    for (Link = ListHead->Flink; Link != ListHead && Index < Count; Link = Link->Flink)
     {
         Entry = CONTAINING_RECORD(Link, CHPE_VECTORED_HANDLER_ENTRY, ListEntry);
         Entry->References++;
@@ -911,26 +1097,56 @@ ChpepVectoredExceptionDispatcher(PEXCEPTION_POINTERS NativePointers)
         Snapshot[Index].Handler = Entry->Handler;
         Index++;
     }
-    RtlReleaseSRWLockExclusive(&ChpeVectoredHandlerLock);
+    RtlReleaseSRWLockExclusive(Lock);
     Count = Index;
 
-    ChpepContextArm64ToX64(&EcContext, (PARM64_NT_CONTEXT)NativePointers->ContextRecord);
-
-    EcPointers.ExceptionRecord = NativePointers->ExceptionRecord;
-    EcPointers.ContextRecord = (PCONTEXT)(PVOID)&EcContext;
+    ExceptionPointers.ExceptionRecord = ExceptionRecord;
+    ExceptionPointers.ContextRecord = ContextRecord;
     for (Index = 0; Index < Count; Index++)
     {
-        Result = Snapshot[Index].Handler(&EcPointers);
+        Result = Snapshot[Index].Handler(&ExceptionPointers);
         if (Result == EXCEPTION_CONTINUE_EXECUTION)
             break;
     }
 
+    for (Index = 0; Index < Count; Index++)
+    {
+        if (ContinueHandlers)
+            ChpepDereferenceVectoredContinueHandler(Snapshot[Index].Entry);
+        else
+            ChpepDereferenceVectoredHandler(Snapshot[Index].Entry);
+    }
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Snapshot);
+    return Result;
+}
+
+LONG
+NTAPI
+ChpepVectoredExceptionDispatcher(PEXCEPTION_POINTERS NativePointers)
+{
+    ARM64EC_NT_CONTEXT EcContext;
+    LONG Result;
+
+    ChpepContextArm64ToX64(&EcContext, (PARM64_NT_CONTEXT)NativePointers->ContextRecord);
+    Result = ChpepCallVectoredHandlersX64(&ChpeVectoredHandlerLock, &ChpeVectoredHandlerList, FALSE, NativePointers->ExceptionRecord, &EcContext.AMD64_Context);
+
     if (Result == EXCEPTION_CONTINUE_EXECUTION)
         ChpepMergeContextX64ToArm64((PARM64_NT_CONTEXT)NativePointers->ContextRecord, &EcContext);
+    return Result;
+}
 
-    for (Index = 0; Index < Count; Index++)
-        ChpepDereferenceVectoredHandler(Snapshot[Index].Entry);
-    RtlFreeHeap(RtlGetProcessHeap(), 0, Snapshot);
+LONG
+NTAPI
+ChpepVectoredContinueDispatcher(PEXCEPTION_POINTERS NativePointers)
+{
+    ARM64EC_NT_CONTEXT EcContext;
+    LONG Result;
+
+    ChpepContextArm64ToX64(&EcContext, (PARM64_NT_CONTEXT)NativePointers->ContextRecord);
+    Result = ChpepCallVectoredHandlersX64(&ChpeVectoredContinueHandlerLock, &ChpeVectoredContinueHandlerList, TRUE, NativePointers->ExceptionRecord, &EcContext.AMD64_Context);
+
+    if (Result == EXCEPTION_CONTINUE_EXECUTION)
+        ChpepMergeContextX64ToArm64((PARM64_NT_CONTEXT)NativePointers->ContextRecord, &EcContext);
     return Result;
 }
 
@@ -957,6 +1173,26 @@ ChpepNativeVectoredExceptionDispatcher(PEXCEPTION_POINTERS NativePointers)
         ".seh_save_reg x30, 0x18\n"
         ".seh_endprologue\n"
         "bl \"#ChpepVectoredExceptionDispatcher\"\n"
+        "ldr x30, [sp, #0x18]\n"
+        "ldr x28, [sp, #0x10]\n"
+        "ldp x23, x24, [sp], #0x20\n"
+        "ret\n"
+        ".seh_endproc\n");
+}
+
+static LONG NTAPI __attribute__((naked, used))
+ChpepNativeVectoredContinueDispatcher(PEXCEPTION_POINTERS NativePointers)
+{
+    __asm__ volatile(
+        ".seh_proc \"#ChpepNativeVectoredContinueDispatcher\"\n"
+        "stp x23, x24, [sp, #-0x20]!\n"
+        ".seh_save_regp_x x23, 0x20\n"
+        "str x28, [sp, #0x10]\n"
+        ".seh_save_reg x28, 0x10\n"
+        "str x30, [sp, #0x18]\n"
+        ".seh_save_reg x30, 0x18\n"
+        ".seh_endprologue\n"
+        "bl \"#ChpepVectoredContinueDispatcher\"\n"
         "ldr x30, [sp, #0x18]\n"
         "ldr x28, [sp, #0x10]\n"
         "ldp x23, x24, [sp], #0x20\n"
@@ -1026,10 +1262,90 @@ ChpeRtlRemoveVectoredExceptionHandler(PVOID HandlerHandle)
     return Found;
 }
 
+PVOID NTAPI
+ChpeRtlAddVectoredContinueHandler(ULONG FirstHandler, PVECTORED_EXCEPTION_HANDLER Handler)
+{
+    PCHPE_VECTORED_HANDLER_ENTRY Entry;
+
+    if (!Handler)
+        return NULL;
+
+    Entry = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Entry));
+    if (!Entry)
+        return NULL;
+    Entry->Handler = Handler;
+
+    RtlAcquireSRWLockExclusive(&ChpeVectoredContinueHandlerLock);
+    if (!ChpeNativeVectoredContinueHandler)
+        ChpeNativeVectoredContinueHandler = RtlAddVectoredContinueHandler(FirstHandler, ChpepNativeVectoredContinueDispatcher);
+    if (!ChpeNativeVectoredContinueHandler)
+    {
+        RtlReleaseSRWLockExclusive(&ChpeVectoredContinueHandlerLock);
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Entry);
+        return NULL;
+    }
+
+    if (FirstHandler)
+        InsertHeadList(&ChpeVectoredContinueHandlerList, &Entry->ListEntry);
+    else
+        InsertTailList(&ChpeVectoredContinueHandlerList, &Entry->ListEntry);
+    RtlReleaseSRWLockExclusive(&ChpeVectoredContinueHandlerLock);
+    return Entry;
+}
+
+ULONG NTAPI
+ChpeRtlRemoveVectoredContinueHandler(PVOID HandlerHandle)
+{
+    PCHPE_VECTORED_HANDLER_ENTRY Entry;
+    PLIST_ENTRY Link;
+    BOOLEAN FreeEntry = FALSE;
+    ULONG Found = FALSE;
+
+    RtlAcquireSRWLockExclusive(&ChpeVectoredContinueHandlerLock);
+    for (Link = ChpeVectoredContinueHandlerList.Flink; Link != &ChpeVectoredContinueHandlerList; Link = Link->Flink)
+    {
+        Entry = CONTAINING_RECORD(Link, CHPE_VECTORED_HANDLER_ENTRY, ListEntry);
+        if (Entry != HandlerHandle)
+            continue;
+
+        RemoveEntryList(&Entry->ListEntry);
+        Entry->Removed = TRUE;
+        FreeEntry = Entry->References == 0;
+        Found = TRUE;
+        break;
+    }
+    RtlReleaseSRWLockExclusive(&ChpeVectoredContinueHandlerLock);
+
+    if (FreeEntry)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Entry);
+    return Found;
+}
+
 ULONG NTAPI
 ChpeRtlGetCurrentProcessorNumber(VOID)
 {
     return RtlGetCurrentProcessorNumber();
+}
+
+VOID NTAPI
+ChpeRtlGetCurrentProcessorNumberEx(PPROCESSOR_NUMBER ProcessorNumber)
+{
+    RtlGetCurrentProcessorNumberEx(ProcessorNumber);
+}
+
+BOOLEAN NTAPI
+ChpeRtlGetProductInfo(DWORD MajorVersion, DWORD MinorVersion, DWORD ServicePackMajor, DWORD ServicePackMinor, PDWORD ProductType)
+{
+    return RtlGetProductInfo(MajorVersion, MinorVersion, ServicePackMajor, ServicePackMinor, ProductType);
+}
+
+USHORT NTAPI
+ChpeRtlCaptureStackBackTrace(ULONG FramesToSkip, ULONG FramesToCapture, PVOID *BackTrace, PULONG BackTraceHash)
+{
+    if (FramesToSkip == MAXULONG)
+        return 0;
+
+    return RtlCaptureStackBackTrace(FramesToSkip + 1, FramesToCapture, BackTrace, BackTraceHash);
 }
 
 PVOID NTAPI
@@ -1039,9 +1355,28 @@ ChpeRtlDecodePointer(PVOID Pointer)
 }
 
 PVOID NTAPI
+ChpeRtlDecodeSystemPointer(PVOID Pointer)
+{
+    return RtlDecodeSystemPointer(Pointer);
+}
+
+PVOID NTAPI
 ChpeRtlEncodePointer(PVOID Pointer)
 {
     return RtlEncodePointer(Pointer);
+}
+
+PVOID NTAPI
+ChpeRtlEncodeSystemPointer(PVOID Pointer)
+{
+    return RtlEncodeSystemPointer(Pointer);
+}
+
+DECLSPEC_NORETURN VOID NTAPI
+ChpeRtlExitUserThread(NTSTATUS Status)
+{
+    RtlExitUserThread(Status);
+    __builtin_unreachable();
 }
 
 BOOLEAN NTAPI
@@ -1093,6 +1428,84 @@ ChpeRtlWakeConditionVariable(PRTL_CONDITION_VARIABLE ConditionVariable)
 }
 
 VOID WINAPI
+ChpeTpCancelAsyncIoOperation(TP_IO *Io)
+{
+    TpCancelAsyncIoOperation(Io);
+}
+
+VOID WINAPI
+ChpeTpCallbackLeaveCriticalSectionOnCompletion(TP_CALLBACK_INSTANCE *Instance, RTL_CRITICAL_SECTION *CriticalSection)
+{
+    TpCallbackLeaveCriticalSectionOnCompletion(Instance, CriticalSection);
+}
+
+VOID WINAPI
+ChpeTpCallbackReleaseMutexOnCompletion(TP_CALLBACK_INSTANCE *Instance, HANDLE Mutex)
+{
+    TpCallbackReleaseMutexOnCompletion(Instance, Mutex);
+}
+
+VOID WINAPI
+ChpeTpCallbackReleaseSemaphoreOnCompletion(TP_CALLBACK_INSTANCE *Instance, HANDLE Semaphore, DWORD Count)
+{
+    TpCallbackReleaseSemaphoreOnCompletion(Instance, Semaphore, Count);
+}
+
+VOID WINAPI
+ChpeTpCallbackSetEventOnCompletion(TP_CALLBACK_INSTANCE *Instance, HANDLE Event)
+{
+    TpCallbackSetEventOnCompletion(Instance, Event);
+}
+
+VOID WINAPI
+ChpeTpCallbackUnloadDllOnCompletion(TP_CALLBACK_INSTANCE *Instance, HMODULE Module)
+{
+    TpCallbackUnloadDllOnCompletion(Instance, Module);
+}
+
+VOID WINAPI
+ChpeTpDisassociateCallback(TP_CALLBACK_INSTANCE *Instance)
+{
+    TpDisassociateCallback(Instance);
+}
+
+BOOL WINAPI
+ChpeTpIsTimerSet(TP_TIMER *Timer)
+{
+    return TpIsTimerSet(Timer);
+}
+
+VOID WINAPI
+ChpeTpPostWork(TP_WORK *Work)
+{
+    TpPostWork(Work);
+}
+
+VOID WINAPI
+ChpeTpReleaseCleanupGroup(TP_CLEANUP_GROUP *CleanupGroup)
+{
+    TpReleaseCleanupGroup(CleanupGroup);
+}
+
+VOID WINAPI
+ChpeTpReleaseCleanupGroupMembers(TP_CLEANUP_GROUP *CleanupGroup, BOOL CancelPending, PVOID CleanupParameter)
+{
+    TpReleaseCleanupGroupMembers(CleanupGroup, CancelPending, CleanupParameter);
+}
+
+VOID WINAPI
+ChpeTpReleaseIoCompletion(TP_IO *Io)
+{
+    TpReleaseIoCompletion(Io);
+}
+
+VOID WINAPI
+ChpeTpReleasePool(TP_POOL *Pool)
+{
+    TpReleasePool(Pool);
+}
+
+VOID WINAPI
 ChpeTpReleaseTimer(TP_TIMER *Timer)
 {
     TpReleaseTimer(Timer);
@@ -1105,9 +1518,33 @@ ChpeTpReleaseWait(TP_WAIT *Wait)
 }
 
 VOID WINAPI
+ChpeTpReleaseWork(TP_WORK *Work)
+{
+    TpReleaseWork(Work);
+}
+
+VOID WINAPI
+ChpeTpSetPoolMaxThreads(TP_POOL *Pool, DWORD MaximumThreads)
+{
+    TpSetPoolMaxThreads(Pool, MaximumThreads);
+}
+
+BOOL WINAPI
+ChpeTpSetPoolMinThreads(TP_POOL *Pool, DWORD MinimumThreads)
+{
+    return TpSetPoolMinThreads(Pool, MinimumThreads);
+}
+
+VOID WINAPI
 ChpeTpSetTimer(TP_TIMER *Timer, LARGE_INTEGER *Timeout, LONG Period, LONG WindowLength)
 {
     TpSetTimer(Timer, Timeout, Period, WindowLength);
+}
+
+BOOL WINAPI
+ChpeTpSetTimerEx(TP_TIMER *Timer, LARGE_INTEGER *Timeout, LONG Period, LONG WindowLength)
+{
+    return TpSetTimerEx(Timer, Timeout, Period, WindowLength);
 }
 
 VOID WINAPI
@@ -1116,10 +1553,40 @@ ChpeTpSetWait(TP_WAIT *Wait, HANDLE Handle, LARGE_INTEGER *Timeout)
     TpSetWait(Wait, Handle, Timeout);
 }
 
+BOOL WINAPI
+ChpeTpSetWaitEx(TP_WAIT *Wait, HANDLE Handle, LARGE_INTEGER *Timeout, PVOID Reserved)
+{
+    return TpSetWaitEx(Wait, Handle, Timeout, Reserved);
+}
+
+VOID WINAPI
+ChpeTpStartAsyncIoOperation(TP_IO *Io)
+{
+    TpStartAsyncIoOperation(Io);
+}
+
+VOID WINAPI
+ChpeTpWaitForIoCompletion(TP_IO *Io, BOOL CancelPending)
+{
+    TpWaitForIoCompletion(Io, CancelPending);
+}
+
 VOID WINAPI
 ChpeTpWaitForTimer(TP_TIMER *Timer, BOOL CancelPending)
 {
     TpWaitForTimer(Timer, CancelPending);
+}
+
+VOID WINAPI
+ChpeTpWaitForWait(TP_WAIT *Wait, BOOL CancelPending)
+{
+    TpWaitForWait(Wait, CancelPending);
+}
+
+VOID WINAPI
+ChpeTpWaitForWork(TP_WORK *Work, BOOL CancelPending)
+{
+    TpWaitForWork(Work, CancelPending);
 }
 
 ULONGLONG WINAPI
@@ -1147,6 +1614,18 @@ ChpeRtlEnterCriticalSection(PRTL_CRITICAL_SECTION CriticalSection)
 }
 
 ULONG NTAPI
+ChpeRtlSetCriticalSectionSpinCount(PRTL_CRITICAL_SECTION CriticalSection, ULONG SpinCount)
+{
+    return RtlSetCriticalSectionSpinCount(CriticalSection, SpinCount);
+}
+
+LOGICAL NTAPI
+ChpeRtlTryEnterCriticalSection(PRTL_CRITICAL_SECTION CriticalSection)
+{
+    return RtlTryEnterCriticalSection(CriticalSection);
+}
+
+ULONG NTAPI
 ChpeRtlGetLastWin32Error(VOID)
 {
     return RtlGetLastWin32Error();
@@ -1156,6 +1635,18 @@ VOID NTAPI
 ChpeRtlSetLastWin32Error(ULONG Win32Error)
 {
     RtlSetLastWin32Error(Win32Error);
+}
+
+VOID NTAPI
+ChpeRtlRestoreLastWin32Error(ULONG Win32Error)
+{
+    RtlRestoreLastWin32Error(Win32Error);
+}
+
+VOID NTAPI
+ChpeRtlRunOnceInitialize(PRTL_RUN_ONCE RunOnce)
+{
+    RtlRunOnceInitialize(RunOnce);
 }
 
 BOOLEAN NTAPI
@@ -1248,6 +1739,18 @@ ChpeRtlInstallFunctionTableCallback(DWORD64 TableIdentifier, DWORD64 BaseAddress
     return ChpepAmd64InstallFunctionTableCallback(TableIdentifier, BaseAddress, Length, Callback, Context, OutOfProcessCallbackDll);
 }
 
+PVOID CDECL
+ChpeMemcpy(PVOID Destination, const VOID *Source, SIZE_T Length)
+{
+    return memmove(Destination, Source, Length);
+}
+
+VOID CDECL
+ChpeLocalUnwind(PVOID TargetFrame, PVOID TargetIp)
+{
+    ChpeRtlUnwind(TargetFrame, TargetIp, NULL, NULL);
+}
+
 static VOID
 ChpepContinueToGuestIfNeeded(PCONTEXT ContextRecord)
 {
@@ -1334,6 +1837,12 @@ NTSTATUS NTAPI
 ChpeNtFlushInstructionCache(HANDLE ProcessHandle, PVOID BaseAddress, SIZE_T Size)
 {
     return NtFlushInstructionCache(ProcessHandle, BaseAddress, Size);
+}
+
+NTSTATUS NTAPI
+ChpeNtFlushProcessWriteBuffers(VOID)
+{
+    return NtFlushProcessWriteBuffers();
 }
 
 NTSTATUS NTAPI
@@ -1547,12 +2056,21 @@ ChpeRtlCaptureContext(PCONTEXT ContextRecord)
 static NTSTATUS __attribute__((used))
 ChpepDispatchRaisedException(PEXCEPTION_RECORD ExceptionRecord, PCONTEXT ContextRecord)
 {
+    LONG VectoredResult;
     NTSTATUS Status;
 
     if (NtCurrentPeb()->BeingDebugged)
         return ChpeNtRaiseException(ExceptionRecord, ContextRecord, TRUE);
 
+    VectoredResult = ChpepCallVectoredHandlersX64(&ChpeVectoredHandlerLock, &ChpeVectoredHandlerList, FALSE, ExceptionRecord, ContextRecord);
+    if (VectoredResult == EXCEPTION_CONTINUE_EXECUTION)
+    {
+        ChpepCallVectoredHandlersX64(&ChpeVectoredContinueHandlerLock, &ChpeVectoredContinueHandlerList, TRUE, ExceptionRecord, ContextRecord);
+        return ChpeNtContinue(ContextRecord, FALSE);
+    }
+
     Status = ChpepCallExceptionHandlers(ExceptionRecord, ContextRecord);
+    ChpepCallVectoredHandlersX64(&ChpeVectoredContinueHandlerLock, &ChpeVectoredContinueHandlerList, TRUE, ExceptionRecord, ContextRecord);
     if (Status == STATUS_SUCCESS)
         return ChpeNtContinue(ContextRecord, FALSE);
 

@@ -44,6 +44,7 @@ list(APPEND SOURCE
     rtl/exit.c
     rtl/nls.c
     rtl/registry.c
+    rtl/telemetry.c
     rtl/time.c
     rtl/virtual.c
     rtl/xstate.c)
@@ -111,8 +112,13 @@ add_pch(ntdll include/ntdll.h "${PCH_SKIP_SOURCE}")
 add_dependencies(ntdll ntstatus asm)
 add_cd_file(TARGET ntdll DESTINATION reactos/system32 NO_CAB FOR all)
 
+if(ARM64EC_RUNTIME)
+    add_arm64ec_x64_source(NTDLL_CHPE_X64_SOURCE chpebridge_x64.c)
+endif()
+
 add_library(ntdll_chpe MODULE EXCLUDE_FROM_ALL
     chpebridge.c
+    ${NTDLL_CHPE_X64_SOURCE}
     ${CMAKE_CURRENT_BINARY_DIR}/ntdll_chpe.def)
 if(ARM64EC_RUNTIME)
     target_sources(ntdll_chpe PRIVATE

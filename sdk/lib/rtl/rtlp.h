@@ -106,6 +106,13 @@ RtlpFreeMemory(
 
 #ifndef _BLDR_
 
+typedef VOID (NTAPI *PRTLP_THREADPOOL_CALLBACK_DISPATCHER)(PVOID Callback, ULONG_PTR Argument0, ULONG_PTR Argument1, ULONG_PTR Argument2, ULONG_PTR Argument3);
+
+VOID
+NTAPI
+RtlpSetThreadpoolCallbackDispatcher(
+    _In_opt_ PRTLP_THREADPOOL_CALLBACK_DISPATCHER Dispatcher);
+
 KPROCESSOR_MODE
 NTAPI
 RtlpGetMode(VOID);
