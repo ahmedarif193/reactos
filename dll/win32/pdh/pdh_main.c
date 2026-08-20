@@ -169,8 +169,15 @@ static void CALLBACK collect_uptime( struct counter *counter )
 static const struct source counter_sources[] =
 {
     { 6,   L"\\Processor(_Total)\\% Processor Time", collect_processor_time, TYPE_PROCESSOR_TIME, -5, 10000000 },
+    { 6,   L"\\Processor Information(_Total)\\% Processor Time", collect_processor_time, TYPE_PROCESSOR_TIME, -5, 10000000 },
     { 674, L"\\System\\System Up Time",              collect_uptime,         TYPE_UPTIME,         -3, 1000 }
 };
+
+static const WCHAR pdh_objectsW[] = L"Processor\0Processor Information\0System\0";
+static const WCHAR processor_countersW[] = L"% Processor Time\0";
+static const WCHAR processor_instancesW[] = L"_Total\0";
+static const WCHAR system_countersW[] = L"System Up Time\0";
+static const WCHAR empty_multiszW[] = L"\0";
 
 static BOOL is_local_machine( const WCHAR *name, DWORD len )
 {
@@ -193,6 +200,20 @@ static BOOL pdh_match_path( LPCWSTR fullpath, LPCWSTR path )
     if (wcschr( path, '\\' )) p = fullpath;
     else p = wcsrchr( fullpath, '\\' ) + 1;
     return !wcscmp( p, path );
+}
+
+static PDH_STATUS write_multiszW( const WCHAR *source, DWORD required, WCHAR *buffer, DWORD *size )
+{
+    if (!size) return PDH_INVALID_ARGUMENT;
+    if (!buffer || *size < required)
+    {
+        if (buffer && *size) buffer[0] = 0;
+        *size = required;
+        return PDH_MORE_DATA;
+    }
+    memcpy( buffer, source, required * sizeof(*buffer) );
+    *size = required;
+    return ERROR_SUCCESS;
 }
 
 /***********************************************************************
@@ -1331,11 +1352,43 @@ PDH_STATUS WINAPI PdhEnumObjectItemsW(LPCWSTR szDataSource, LPCWSTR szMachineNam
                                       LPWSTR mszCounterList, LPDWORD pcchCounterListLength, LPWSTR mszInstanceList,
                                       LPDWORD pcchInstanceListLength, DWORD dwDetailLevel, DWORD dwFlags)
 {
-    FIXME("%s, %s, %s, %p, %p, %p, %p, %ld, 0x%lx: stub\n", debugstr_w(szDataSource), debugstr_w(szMachineName),
-         debugstr_w(szObjectName), mszCounterList, pcchCounterListLength, mszInstanceList,
-         pcchInstanceListLength, dwDetailLevel, dwFlags);
+    const WCHAR *counter_source;
+    const WCHAR *instance_source;
+    DWORD counter_required;
+    DWORD instance_required;
+    PDH_STATUS counter_status;
+    PDH_STATUS instance_status;
+    BOOL processor_object;
+    BOOL processor_information_object;
 
-    return PDH_NOT_IMPLEMENTED;
+    TRACE("%s, %s, %s, %p, %p, %p, %p, %ld, 0x%lx\n", debugstr_w(szDataSource), debugstr_w(szMachineName), debugstr_w(szObjectName), mszCounterList, pcchCounterListLength, mszInstanceList, pcchInstanceListLength, dwDetailLevel, dwFlags);
+
+    if (szDataSource || !szObjectName) return PDH_INVALID_ARGUMENT;
+    if (szMachineName) return PDH_CSTATUS_NO_MACHINE;
+    if (!pcchCounterListLength || !pcchInstanceListLength) return PDH_INVALID_ARGUMENT;
+    processor_object = !lstrcmpiW( szObjectName, L"Processor" );
+    processor_information_object = !lstrcmpiW( szObjectName, L"Processor Information" );
+    if (processor_object || processor_information_object)
+    {
+        counter_source = processor_countersW;
+        counter_required = ARRAY_SIZE(processor_countersW);
+        instance_source = processor_instancesW;
+        instance_required = ARRAY_SIZE(processor_instancesW);
+    }
+    else if (!lstrcmpiW( szObjectName, L"System" ))
+    {
+        counter_source = system_countersW;
+        counter_required = ARRAY_SIZE(system_countersW);
+        instance_source = empty_multiszW;
+        instance_required = ARRAY_SIZE(empty_multiszW);
+    }
+    else return PDH_CSTATUS_NO_OBJECT;
+
+    counter_status = write_multiszW( counter_source, counter_required, mszCounterList, pcchCounterListLength );
+    instance_status = write_multiszW( instance_source, instance_required, mszInstanceList, pcchInstanceListLength );
+    if (counter_status == PDH_MORE_DATA || instance_status == PDH_MORE_DATA) return PDH_MORE_DATA;
+    if (counter_status != ERROR_SUCCESS) return counter_status;
+    return instance_status;
 }
 
 /***********************************************************************
@@ -1386,10 +1439,98 @@ PDH_STATUS WINAPI PdhBindInputDataSourceW(PDH_HLOG *source, const WCHAR *filenam
 /***********************************************************************
  *              PdhConnectMachineA   (PDH.@)
  */
+PDH_STATUS WINAPI PdhConnectMachineW(const WCHAR *name);
+
 PDH_STATUS WINAPI PdhConnectMachineA(const char *name)
 {
-    FIXME("%s: stub\n", debugstr_a(name));
-    return PDH_NOT_IMPLEMENTED;
+    PDH_STATUS ret;
+    WCHAR *nameW;
+
+    TRACE("%s\n", debugstr_a(name));
+
+    if (!name) return PdhConnectMachineW( NULL );
+    nameW = pdh_strdup_aw( name );
+    if (!nameW) return PDH_MEMORY_ALLOCATION_FAILURE;
+    ret = PdhConnectMachineW( nameW );
+    free( nameW );
+    return ret;
+}
+
+/***********************************************************************
+ *              PdhConnectMachineW   (PDH.@)
+ */
+PDH_STATUS WINAPI PdhConnectMachineW(const WCHAR *name)
+{
+    DWORD len;
+
+    TRACE("%s\n", debugstr_w(name));
+
+    if (!name) return ERROR_SUCCESS;
+    len = lstrlenW( name );
+    if (!len) return PDH_INVALID_ARGUMENT;
+    if (len > 2 && name[0] == '\\' && name[1] == '\\')
+    {
+        name += 2;
+        len -= 2;
+    }
+    if (is_local_machine( name, len )) return ERROR_SUCCESS;
+    return PDH_CSTATUS_NO_MACHINE;
+}
+
+static PDH_STATUS enum_machinesA(char *list, DWORD *size)
+{
+    const DWORD required = 2;
+
+    if (!size) return PDH_INVALID_ARGUMENT;
+    if (!list || *size < required)
+    {
+        if (list && *size) list[0] = 0;
+        *size = required;
+        return PDH_MORE_DATA;
+    }
+    list[0] = 0;
+    list[1] = 0;
+    *size = required;
+    return ERROR_SUCCESS;
+}
+
+static PDH_STATUS enum_machinesW(WCHAR *list, DWORD *size)
+{
+    const DWORD required = 2;
+
+    if (!size) return PDH_INVALID_ARGUMENT;
+    if (!list || *size < required)
+    {
+        if (list && *size) list[0] = 0;
+        *size = required;
+        return PDH_MORE_DATA;
+    }
+    list[0] = 0;
+    list[1] = 0;
+    *size = required;
+    return ERROR_SUCCESS;
+}
+
+/***********************************************************************
+ *              PdhEnumMachinesA   (PDH.@)
+ */
+PDH_STATUS WINAPI PdhEnumMachinesA(const char *source, char *list, DWORD *size)
+{
+    TRACE("%s %p %p\n", debugstr_a(source), list, size);
+
+    if (source) return PDH_INVALID_ARGUMENT;
+    return enum_machinesA( list, size );
+}
+
+/***********************************************************************
+ *              PdhEnumMachinesW   (PDH.@)
+ */
+PDH_STATUS WINAPI PdhEnumMachinesW(const WCHAR *source, WCHAR *list, DWORD *size)
+{
+    TRACE("%s %p %p\n", debugstr_w(source), list, size);
+
+    if (source) return PDH_INVALID_ARGUMENT;
+    return enum_machinesW( list, size );
 }
 
 /***********************************************************************
@@ -1408,8 +1549,11 @@ PDH_STATUS WINAPI PdhEnumObjectsA(const char *source, const char *machine, char 
 PDH_STATUS WINAPI PdhEnumObjectsW(const WCHAR *source, const WCHAR *machine, WCHAR *list,
                                   DWORD *size, DWORD detail, BOOL refresh)
 {
-    FIXME("%s %s %p %p %lu %d: stub\n", debugstr_w(source),debugstr_w(machine), list, size, detail, refresh);
-    return PDH_NOT_IMPLEMENTED;
+    TRACE("%s %s %p %p %lu %d\n", debugstr_w(source), debugstr_w(machine), list, size, detail, refresh);
+
+    if (source) return PDH_INVALID_ARGUMENT;
+    if (machine) return PDH_CSTATUS_NO_MACHINE;
+    return write_multiszW( pdh_objectsW, ARRAY_SIZE(pdh_objectsW), list, size );
 }
 
 /***********************************************************************
