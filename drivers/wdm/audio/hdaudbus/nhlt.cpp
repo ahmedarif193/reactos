@@ -12,7 +12,7 @@ NHLTQuery(
 	_In_ ULONG Arg2,
 	_Out_ WDFMEMORY* outputBufferMemoryArg
 ) {
-	ULONG_PTR bytesReturned = 0;
+	ULONG_PTR bytesReturned;
 	NTSTATUS status = STATUS_ACPI_NOT_INITIALIZED;
 	WDFMEMORY inputBufferMemory = NULL;
 	PACPI_EVAL_INPUT_BUFFER_COMPLEX_EX inputBuffer = NULL;
@@ -21,12 +21,6 @@ NHLTQuery(
 	WDFMEMORY outputBufferMemory = NULL;
 	WDF_MEMORY_DESCRIPTOR inputBufferMemoryDescriptor;
 	WDF_MEMORY_DESCRIPTOR outputBufferMemoryDescriptor;
-
-	if (outputBufferMemoryArg == NULL) {
-		return STATUS_INVALID_PARAMETER;
-	}
-
-	*outputBufferMemoryArg = NULL;
 
 	ULONG inputBufferSize =
 		(ULONG)(
@@ -100,9 +94,7 @@ NHLTQuery(
 		status = STATUS_SUCCESS;
 	}
 	else if (!NT_SUCCESS(status)) {
-		SklHdAudBusPrint(DEBUG_LEVEL_ERROR, DBG_INIT,
-			"NHLT support query failed (status 0x%08lx, bytes %Iu)\n",
-			status, bytesReturned);
+		SklHdAudBusPrint(DEBUG_LEVEL_ERROR, DBG_INIT, "Failed first ioctl\n");
 		goto end;
 	}
 
@@ -129,9 +121,7 @@ NHLTQuery(
 		&bytesReturned);
 
 	if (!NT_SUCCESS(status)) {
-		SklHdAudBusPrint(DEBUG_LEVEL_ERROR, DBG_INIT,
-			"NHLT data query failed (status 0x%08lx, bytes %Iu)\n",
-			status, bytesReturned);
+		SklHdAudBusPrint(DEBUG_LEVEL_ERROR, DBG_INIT, "Failed to do 2nd ioctl\n");
 		goto end;
 	}
 
