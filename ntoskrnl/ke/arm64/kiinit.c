@@ -46,12 +46,13 @@ ARM64_CPU_FEATURES
 KiArm64ReadCpuFeatures(VOID)
 {
     ARM64_CPU_FEATURES Features = {0};
-    ULONG64 Pfr0, Pfr1, Isar0, Mmfr0, Mmfr1, Ctr;
+    ULONG64 Pfr0, Pfr1, Isar0, Isar1, Mmfr0, Mmfr1, Ctr;
     ULONG AsidField;
 
     __asm__ __volatile__("mrs %0, id_aa64pfr0_el1" : "=r"(Pfr0));
     __asm__ __volatile__("mrs %0, id_aa64pfr1_el1" : "=r"(Pfr1));
     __asm__ __volatile__("mrs %0, id_aa64isar0_el1" : "=r"(Isar0));
+    __asm__ __volatile__("mrs %0, id_aa64isar1_el1" : "=r"(Isar1));
     __asm__ __volatile__("mrs %0, id_aa64mmfr0_el1" : "=r"(Mmfr0));
     __asm__ __volatile__("mrs %0, id_aa64mmfr1_el1" : "=r"(Mmfr1));
     __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
@@ -62,7 +63,15 @@ KiArm64ReadCpuFeatures(VOID)
     Features.SmeSupported = (((Pfr1 >> 24) & 0xFULL) != 0);
     Features.El2Implemented = (((Pfr0 >> 8) & 0xFULL) != 0);
     Features.AtomicSupported = (ULONG)((Isar0 >> 20) & 0xFULL);
+    Features.FpSupported = (((Pfr0 >> 16) & 0xFULL) != 0xFULL);
     Features.NeonSupported = (((Pfr0 >> 20) & 0xFULL) != 0xFULL);
+    Features.AesSupported = (ULONG)((Isar0 >> 4) & 0xFULL);
+    Features.Sha1Supported = (ULONG)((Isar0 >> 8) & 0xFULL);
+    Features.Sha2Supported = (ULONG)((Isar0 >> 12) & 0xFULL);
+    Features.Crc32Supported = (ULONG)((Isar0 >> 16) & 0xFULL);
+    Features.DotProdSupported = (ULONG)((Isar0 >> 44) & 0xFULL);
+    Features.JscvtSupported = (ULONG)((Isar1 >> 12) & 0xFULL);
+    Features.LrcpcSupported = (ULONG)((Isar1 >> 20) & 0xFULL);
     AsidField = (ULONG)((Mmfr0 >> 4) & 0xFULL);
     Features.AsidBits = (AsidField >= 2) ? 16 : 8;
     Features.DcacheLineSize = 4u << ((Ctr >> 16) & 0xFULL);
@@ -97,6 +106,7 @@ KiArm64ValidateProcessorFeatures(
     BOOLEAN Mismatch = FALSE;
 
     if ((Arm64CpuFeatures.NeonSupported && !LocalFeatures.NeonSupported) ||
+        (Arm64CpuFeatures.FpSupported && !LocalFeatures.FpSupported) ||
         (Arm64CpuFeatures.PanSupported && !LocalFeatures.PanSupported) ||
         (Arm64CpuFeatures.SveSupported && !LocalFeatures.SveSupported) ||
         (Arm64CpuFeatures.SmeSupported && !LocalFeatures.SmeSupported))
@@ -112,6 +122,17 @@ KiArm64ValidateProcessorFeatures(
 
     if ((Arm64CpuFeatures.AtomicSupported >= KI_ARM64_ID_AA64ISAR0_ATOMIC_LSE) &&
         (LocalFeatures.AtomicSupported < KI_ARM64_ID_AA64ISAR0_ATOMIC_LSE))
+    {
+        Mismatch = TRUE;
+    }
+
+    if ((Arm64CpuFeatures.AesSupported && !LocalFeatures.AesSupported) ||
+        (Arm64CpuFeatures.Sha1Supported && !LocalFeatures.Sha1Supported) ||
+        (Arm64CpuFeatures.Sha2Supported && !LocalFeatures.Sha2Supported) ||
+        (Arm64CpuFeatures.Crc32Supported && !LocalFeatures.Crc32Supported) ||
+        (Arm64CpuFeatures.DotProdSupported && !LocalFeatures.DotProdSupported) ||
+        (Arm64CpuFeatures.JscvtSupported && !LocalFeatures.JscvtSupported) ||
+        (Arm64CpuFeatures.LrcpcSupported && !LocalFeatures.LrcpcSupported))
     {
         Mismatch = TRUE;
     }
@@ -518,6 +539,31 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
         /* ARM64 uses 16-byte SLIST headers and 128-bit CAS */
         RtlpUse16ByteSLists = TRUE;
         MmWriteableSharedUserData->ProcessorFeatures[PF_COMPARE_EXCHANGE128] = TRUE;
+
+        /* Publish the architectural instruction features exposed by NT. */
+        MmWriteableSharedUserData->ProcessorFeatures[PF_ARM_VFP_32_REGISTERS_AVAILABLE] =
+            Arm64CpuFeatures.FpSupported;
+        MmWriteableSharedUserData->ProcessorFeatures[PF_ARM_NEON_INSTRUCTIONS_AVAILABLE] =
+            Arm64CpuFeatures.NeonSupported;
+        MmWriteableSharedUserData->ProcessorFeatures[PF_ARM_DIVIDE_INSTRUCTION_AVAILABLE] = TRUE;
+        MmWriteableSharedUserData->ProcessorFeatures[PF_ARM_64BIT_LOADSTORE_ATOMIC] = TRUE;
+        MmWriteableSharedUserData->ProcessorFeatures[PF_ARM_FMAC_INSTRUCTIONS_AVAILABLE] =
+            Arm64CpuFeatures.FpSupported;
+        MmWriteableSharedUserData->ProcessorFeatures[PF_ARM_V8_INSTRUCTIONS_AVAILABLE] = TRUE;
+        MmWriteableSharedUserData->ProcessorFeatures[PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE] =
+            Arm64CpuFeatures.AesSupported &&
+            Arm64CpuFeatures.Sha1Supported &&
+            Arm64CpuFeatures.Sha2Supported;
+        MmWriteableSharedUserData->ProcessorFeatures[PF_ARM_V8_CRC32_INSTRUCTIONS_AVAILABLE] =
+            Arm64CpuFeatures.Crc32Supported;
+        MmWriteableSharedUserData->ProcessorFeatures[PF_ARM_V81_ATOMIC_INSTRUCTIONS_AVAILABLE] =
+            (Arm64CpuFeatures.AtomicSupported >= KI_ARM64_ID_AA64ISAR0_ATOMIC_LSE);
+        MmWriteableSharedUserData->ProcessorFeatures[PF_ARM_V82_DP_INSTRUCTIONS_AVAILABLE] =
+            Arm64CpuFeatures.DotProdSupported;
+        MmWriteableSharedUserData->ProcessorFeatures[PF_ARM_V83_JSCVT_INSTRUCTIONS_AVAILABLE] =
+            Arm64CpuFeatures.JscvtSupported;
+        MmWriteableSharedUserData->ProcessorFeatures[PF_ARM_V83_LRCPC_INSTRUCTIONS_AVAILABLE] =
+            Arm64CpuFeatures.LrcpcSupported;
 
         /* Report firmware virtualization support when EL2 is implemented */
         if (Arm64CpuFeatures.El2Implemented)
