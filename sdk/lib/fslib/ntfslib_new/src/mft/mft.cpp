@@ -16,7 +16,7 @@
  * Reserve $MFT data in coarse chunks so its records stay in long runs
  * instead of interleaving one mapping pair per newly touched cluster.
  */
-#define MFT_ALLOCATION_GROWTH_CLUSTERS 16
+#define MFT_ALLOCATION_GROWTH_CLUSTERS 256
 #define NTFS_MAX_SIGNED_OFFSET \
     ((ULONGLONG)0x7fffffffffffffffULL)
 
