@@ -255,7 +255,7 @@ RtlDispatchException(
             DispatcherContext.ImageBase = ImageBase;
             DispatcherContext.FunctionEntry = FunctionEntry;
             DispatcherContext.EstablisherFrame = EstablisherFrame;
-            DispatcherContext.ContextRecord = ContextRecord;
+            DispatcherContext.ContextRecord = &UnwindContext;
             DispatcherContext.LanguageHandler = ExceptionRoutine;
             DispatcherContext.HandlerData = HandlerData;
             DispatcherContext.ScopeIndex = 0;
