@@ -25,6 +25,7 @@
 #define DWC2_WEDGE_RECOVERY_INTERVAL           20000000ULL
 #define DWC2_WEDGE_RECOVERY_LIMIT              3
 #define DWC2_TRANSACTION_ERROR_LIMIT           3
+#define DWC2_CSPLIT_NYET_LIMIT                 8
 #define DWC2_DPC_DRAIN_LIMIT                   64
 #define DWC2_HOST_RX_FIFO_SIZE                 (516 + DWC2_MAX_CHANNELS)
 #define DWC2_HOST_NPERIODIC_TX_FIFO_SIZE       0x100
@@ -56,7 +57,7 @@ typedef struct _DWC2_TRANSFER
     ULONG InitialPacketCount;
     ULONG DataToggle;
     ULONG NakCount;
-    ULONG ChannelWaitCount;
+    ULONG CsplitNyetCount;
     ULONG PendingChannelStatus;
     ULONG ErrorCount;
     ULONG RecoveryCount;

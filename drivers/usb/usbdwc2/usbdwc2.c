@@ -1201,10 +1201,9 @@ Dwc2ProcessChannel(
     ULONG CurrentDmaAddress;
     ULONG DeferredHalts;
     ULONG DmaProgress;
-    ULONG DmaProgressCount;
-    ULONG HctsizActualLength;
     ULONG InterruptStatus;
     ULONG LateStatus;
+    ULONG PacketProgress;
     ULONG RemainingPackets;
     ULONG RemainingSize;
     ULONG RereadIndex;
@@ -1212,6 +1211,7 @@ Dwc2ProcessChannel(
     ULONG TransferDescriptor;
     ULONG TransferredPackets;
     BOOLEAN ShortPacket;
+    BOOLEAN StageOut;
 
     InterruptStatus = Dwc2ReadRegister(Extension, DWC2_HCINT(Channel)) & DWC2_HCINT_VALID_MASK;
     if (!InterruptStatus)
@@ -1292,6 +1292,15 @@ Dwc2ProcessChannel(
     if ((InterruptStatus & DWC2_HCINT_ACK) && Endpoint->RequiresSplit && !Transfer->CompleteSplit && !(InterruptStatus & DWC2_HCINT_XFERCOMPL))
     {
         Transfer->CompleteSplit = TRUE;
+        Transfer->CsplitNyetCount = 0;
+        /*
+         * Issue the complete-split from this DPC, keeping the channel: the
+         * result only stays collectable inside the start-split's frame, and
+         * a timer hop wakes a tick later in a frame where the TT has
+         * already flushed the transaction.
+         */
+        if (Dwc2ProgramStage(Extension, Transfer))
+            return;
         Dwc2ScheduleRetry(Extension, Transfer, DWC2_MICROFRAME_100NS);
         return;
     }
@@ -1302,24 +1311,21 @@ Dwc2ProcessChannel(
         RetryDelay = DWC2_MICROFRAME_100NS;
         if ((InterruptStatus & DWC2_HCINT_NAK) && Transfer->CompleteSplit)
             Transfer->CompleteSplit = FALSE;
+        /*
+         * A NYETed complete-split is only collectable within the frame of
+         * its start-split, so retry it immediately while still owning the
+         * channel; once the attempts are exhausted the TT has abandoned
+         * the transaction and only a fresh start-split makes progress.
+         */
+        if ((InterruptStatus & DWC2_HCINT_NYET) && Transfer->CompleteSplit)
+        {
+            if (++Transfer->CsplitNyetCount < DWC2_CSPLIT_NYET_LIMIT && Dwc2ProgramStage(Extension, Transfer))
+                return;
+            Transfer->CompleteSplit = FALSE;
+            Transfer->CsplitNyetCount = 0;
+        }
         if (Endpoint->Properties.TransferType == USBPORT_TRANSFER_TYPE_INTERRUPT && !Transfer->CompleteSplit)
             RetryDelay = (ULONG)Dwc2GetInterruptRetryDelay(Endpoint);
-
-        if (Dwc2ShouldLogCount(Transfer->NakCount))
-        {
-            DPRINT1("[DWC2] CH%u retry status=%08lx count=%lu addr=%u ep=%u type=%lu stage=%u split=%u delay100ns=%lu interval=%u period=%u\n",
-                    Channel,
-                    InterruptStatus,
-                    Transfer->NakCount,
-                    Endpoint->Properties.DeviceAddress,
-                    Endpoint->Properties.EndpointAddress,
-                    Endpoint->Properties.TransferType,
-                    Transfer->Stage,
-                    Transfer->CompleteSplit,
-                    RetryDelay,
-                    Endpoint->Properties.Reserved4,
-                    Endpoint->Properties.Period);
-        }
 
         Dwc2ScheduleRetry(Extension, Transfer, RetryDelay);
         return;
@@ -1397,25 +1403,28 @@ Dwc2ProcessChannel(
         return;
     }
 
-    HctsizActualLength = Transfer->ProgrammedLength - RemainingSize;
-    ActualLength = HctsizActualLength;
+    ActualLength = Transfer->ProgrammedLength - RemainingSize;
     DmaProgress = CurrentDmaAddress - Transfer->ProgrammedDmaAddress;
     if (DmaProgress <= Transfer->ProgrammedLength && DmaProgress > ActualLength)
     {
         ActualLength = DmaProgress;
-        DmaProgressCount = (ULONG)InterlockedIncrement(&Extension->DmaProgressFallbackCount);
-        if (Dwc2ShouldLogCount(DmaProgressCount))
-        {
-            DPRINT1("[DWC2] CH%u completion accounting used DMA progress stage=%u hctsiz=%lu dma=%lu/%lu start=%08lx current=%08lx count=%lu\n",
-                    Channel,
-                    Transfer->Stage,
-                    HctsizActualLength,
-                    DmaProgress,
-                    Transfer->ProgrammedLength,
-                    Transfer->ProgrammedDmaAddress,
-                    CurrentDmaAddress,
-                    DmaProgressCount);
-        }
+    }
+
+    /*
+     * OUT stages need packet accounting: the core decrements only PktCnt for
+     * them, and on split transactions the HCDMA readback does not advance
+     * either, so a fully-ACKed SSPLIT/CSPLIT SETUP otherwise scores 0 bytes.
+     */
+    StageOut = Transfer->Stage == Dwc2StageSetup ||
+               (Transfer->Stage == Dwc2StageData && !Transfer->DirectionIn) ||
+               (Transfer->Stage == Dwc2StageStatus && Transfer->DirectionIn);
+    if (StageOut)
+    {
+        PacketProgress = (Transfer->InitialPacketCount - RemainingPackets) * Endpoint->Properties.MaxPacketSize;
+        if (PacketProgress > Transfer->ProgrammedLength)
+            PacketProgress = Transfer->ProgrammedLength;
+        if (PacketProgress > ActualLength)
+            ActualLength = PacketProgress;
     }
 
     TransferredPackets = Transfer->InitialPacketCount;
@@ -1424,7 +1433,16 @@ Dwc2ProcessChannel(
     else
         TransferredPackets = ActualLength ? (ActualLength + Endpoint->Properties.MaxPacketSize - 1) / Endpoint->Properties.MaxPacketSize : 1;
 
-    ShortPacket = Transfer->ProgrammedLength != 0 && ActualLength < Transfer->ProgrammedLength;
+    /*
+     * Split transactions move one packet per channel enable and halt with
+     * XFERCOMPL while packets remain, so a stage is only over when the
+     * device terminated it with a short or zero-length packet. Ending on a
+     * full-packet boundary means the stage continues with a new enable.
+     */
+    ShortPacket = Transfer->ProgrammedLength != 0 &&
+                  ActualLength < Transfer->ProgrammedLength &&
+                  (ActualLength == 0 ||
+                   (ActualLength % Endpoint->Properties.MaxPacketSize) != 0);
     Transfer->CompleteSplit = FALSE;
     Transfer->NakCount = 0;
 
