@@ -385,9 +385,6 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     POBJECT_TYPE_INITIALIZER ObjectTypeInitializer = &ObjectTypeInitializerEx.TypeInfo;
     ULONG i;
 
-#if defined(_M_ARM64)
-    DPRINT("[arm64][ps] PspInitPhase0: begin\n");
-#endif
 
     /* Get the system size */
     SystemSize = MmQuerySystemSize();
@@ -416,9 +413,6 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 
     /* Setup callbacks */
-#if defined(_M_ARM64)
-    DPRINT("[arm64][ps] PspInitPhase0: initializing callbacks\n");
-#endif
     for (i = 0; i < PSP_MAX_CREATE_THREAD_NOTIFY; i++)
     {
         ExInitializeCallBack(&PspThreadNotifyRoutine[i]);
@@ -460,9 +454,6 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Get the idle process */
     PsIdleProcess = PsGetCurrentProcess();
-#if defined(_M_ARM64)
-    DPRINT("[arm64][ps] PspInitPhase0: idle process=%p\n", PsIdleProcess);
-#endif
 
     /* Setup the locks */
     PsIdleProcess->ProcessLock.Value = 0;
@@ -499,9 +490,6 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     ObjectTypeInitializer->DeleteProcedure = PspDeleteProcess;
     ObjectTypeInitializerEx.SeMandatoryLabelMask = 3;
     ObCreateObjectType(&Name, ObjectTypeInitializer, NULL, &PsProcessType);
-#if defined(_M_ARM64)
-    DPRINT("[arm64][ps] PspInitPhase0: process type=%p\n", PsProcessType);
-#endif
 
     /*  Initialize the Thread type  */
     RtlInitUnicodeString(&Name, L"Thread");
@@ -515,9 +503,6 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     ObjectTypeInitializer->CloseProcedure = NULL;
     ObjectTypeInitializer->DeleteProcedure = PspDeleteThread;
     ObCreateObjectType(&Name, ObjectTypeInitializer, NULL, &PsThreadType);
-#if defined(_M_ARM64)
-    DPRINT("[arm64][ps] PspInitPhase0: thread type=%p\n", PsThreadType);
-#endif
 
     /*  Initialize the Job type  */
     RtlInitUnicodeString(&Name, L"Job");
@@ -535,9 +520,6 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     ObjectTypeInitializer->DeleteProcedure = PspDeleteJob;
     ObjectTypeInitializerEx.SeMandatoryLabelMask = 1;
     ObCreateObjectType(&Name, ObjectTypeInitializer, NULL, &PsJobType);
-#if defined(_M_ARM64)
-    DPRINT("[arm64][ps] PspInitPhase0: job type=%p\n", PsJobType);
-#endif
 
     /* Initialize job structures external to this file */
     PspInitializeJobStructures();
@@ -547,14 +529,8 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     KeInitializeGuardedMutex(&PspWorkingSetChangeHead.Lock);
 
     /* Create the CID Handle table */
-#if defined(_M_ARM64)
-    DPRINT("[arm64][ps] PspInitPhase0: creating CID table\n");
-#endif
     PspCidTable = ExCreateHandleTable(NULL);
     if (!PspCidTable) return FALSE;
-#if defined(_M_ARM64)
-    DPRINT("[arm64][ps] PspInitPhase0: CID table=%p\n", PspCidTable);
-#endif
 
     /* FIXME: Initialize LDT/VDM support */
 
@@ -572,9 +548,6 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                                NULL);
 
     /* Create the Initial System Process */
-#if defined(_M_ARM64)
-    DPRINT("[arm64][ps] PspInitPhase0: creating initial system process\n");
-#endif
     Status = PspCreateProcess(&PspInitialSystemProcessHandle,
                               PROCESS_ALL_ACCESS,
                               &ObjectAttributes,
@@ -584,11 +557,6 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                               0,
                               0,
                               FALSE);
-#if defined(_M_ARM64)
-    DPRINT("[arm64][ps] PspInitPhase0: PspCreateProcess status=0x%08lx handle=%p\n",
-            Status,
-            PspInitialSystemProcessHandle);
-#endif
     if (!NT_SUCCESS(Status)) return FALSE;
 
     /* Get a reference to it */
@@ -598,9 +566,6 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                               KernelMode,
                               (PVOID*)&PsInitialSystemProcess,
                               NULL);
-#if defined(_M_ARM64)
-    DPRINT("[arm64][ps] PspInitPhase0: initial system process=%p\n", PsInitialSystemProcess);
-#endif
 
     /* Copy the process names */
     strcpy(PsIdleProcess->ImageFileName, "Idle");
@@ -611,10 +576,6 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         ExAllocatePoolWithTag(PagedPool,
                               sizeof(OBJECT_NAME_INFORMATION),
                               TAG_SEPA);
-#if defined(_M_ARM64)
-    DPRINT("[arm64][ps] PspInitPhase0: audit image name=%p\n",
-            PsInitialSystemProcess->SeAuditProcessCreationInfo.ImageFileName);
-#endif
     if (!PsInitialSystemProcess->SeAuditProcessCreationInfo.ImageFileName)
     {
         /* Allocation failed */
@@ -627,9 +588,6 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                   sizeof(OBJECT_NAME_INFORMATION));
 
     /* Setup the system initialization thread */
-#if defined(_M_ARM64)
-    DPRINT("[arm64][ps] PspInitPhase0: creating phase1 system thread\n");
-#endif
     Status = PsCreateSystemThread(&SysThreadHandle,
                                   THREAD_ALL_ACCESS,
                                   &ObjectAttributes,
@@ -637,11 +595,6 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                                   NULL,
                                   Phase1Initialization,
                                   LoaderBlock);
-#if defined(_M_ARM64)
-    DPRINT("[arm64][ps] PspInitPhase0: PsCreateSystemThread status=0x%08lx handle=%p\n",
-            Status,
-            SysThreadHandle);
-#endif
     if (!NT_SUCCESS(Status)) return FALSE;
 
     /* Create a handle to it */
@@ -653,9 +606,6 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                               NULL);
     ObCloseHandle(SysThreadHandle, KernelMode);
 
-#if defined(_M_ARM64)
-    DPRINT("[arm64][ps] PspInitPhase0: end sysThread=%p\n", SysThread);
-#endif
 
     /* Return success */
     return TRUE;

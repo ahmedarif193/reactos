@@ -21,8 +21,6 @@ static LONG PiParallelPoolThreads = 0;
 static LIST_ENTRY PiParallelWorkList;
 static KSPIN_LOCK PiParallelWorkLock;
 static KSEMAPHORE PiParallelWorkSem;
-static volatile LONG PiParallelEnumReady = 0;
-static volatile LONG PiParallelEnablerStarted = 0;
 
 typedef struct _PI_PARALLEL_CONTEXT
 {
@@ -102,18 +100,6 @@ PiParallelPoolThread(_In_ PVOID Context)
 }
 
 static
-VOID
-NTAPI
-PiParallelEnablerThread(_In_ PVOID Context)
-{
-    LARGE_INTEGER delay;
-    UNREFERENCED_PARAMETER(Context);
-    delay.QuadPart = -60LL * 10 * 1000 * 1000;
-    KeDelayExecutionThread(KernelMode, FALSE, &delay);
-    InterlockedExchange(&PiParallelEnumReady, 1);
-}
-
-static
 BOOLEAN
 PiParallelPoolInit(VOID)
 {
@@ -166,17 +152,6 @@ PiProcessChildrenParallel(_In_ PDEVICE_NODE Parent)
     /* Stay serial until boot drivers are loaded. */
     if (!PnPBootDriversLoaded)
         return FALSE;
-
-    if (!PiParallelEnumReady)
-    {
-        if (InterlockedCompareExchange(&PiParallelEnablerStarted, 1, 0) == 0)
-        {
-            HANDLE handle;
-            if (NT_SUCCESS(PsCreateSystemThread(&handle, THREAD_ALL_ACCESS, NULL, NULL, NULL, PiParallelEnablerThread, NULL)))
-                ZwClose(handle);
-        }
-        return FALSE;
-    }
 
     KeAcquireSpinLock(&IopDeviceTreeLock, &oldIrql);
     for (child = Parent->Child; child != NULL; child = child->Sibling)

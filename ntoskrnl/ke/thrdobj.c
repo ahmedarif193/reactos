@@ -939,14 +939,7 @@ KeInitThread(IN OUT PKTHREAD Thread,
     if (!KernelStack)
     {
         /* We don't, allocate one */
-#if defined(_M_ARM64)
-        DPRINT("[arm64][ke] KeInitThread: MmCreateKernelStack\n");
-#endif
         KernelStack = MmCreateKernelStack(FALSE, 0);
-#if defined(_M_ARM64)
-        DPRINT("[arm64][ke] KeInitThread: MmCreateKernelStack returned %p\n",
-                KernelStack);
-#endif
         if (!KernelStack) return STATUS_INSUFFICIENT_RESOURCES;
 
         /* Remember for later */
@@ -964,20 +957,11 @@ KeInitThread(IN OUT PKTHREAD Thread,
     _SEH2_TRY
     {
         /* Initialize the Thread Context */
-#if defined(_M_ARM64)
-        DPRINT("[arm64][ke] KeInitThread: KiInitializeContextThread stack=%p limit=%p\n",
-                Thread->InitialStack,
-                (PVOID)Thread->StackLimit);
-#endif
         KiInitializeContextThread(Thread,
                                   SystemRoutine,
                                   StartRoutine,
                                   StartContext,
                                   Context);
-#if defined(_M_ARM64)
-        DPRINT("[arm64][ke] KeInitThread: KiInitializeContextThread done kernelStack=%p\n",
-                Thread->KernelStack);
-#endif
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
