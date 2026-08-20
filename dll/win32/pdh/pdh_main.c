@@ -25,6 +25,7 @@
 
 #include "windef.h"
 #include "winbase.h"
+#include "winternl.h"
 
 #include "pdh.h"
 #include "pdhmsg.h"
@@ -79,6 +80,9 @@ struct counter
     void (CALLBACK *collect)( struct counter * );   /* collect callback */
     union value     one;                            /* first value */
     union value     two;                            /* second value */
+    ULONGLONG       previous_total;                 /* prior processor time sample */
+    ULONGLONG       previous_idle;                  /* prior processor idle sample */
+    BOOL            have_previous;                  /* processor time sample valid */
 };
 
 #define PDH_MAGIC_COUNTER   0x50444831 /* 'PDH1' */
@@ -158,6 +162,148 @@ static void CALLBACK collect_uptime( struct counter *counter )
     counter->status = PDH_CSTATUS_VALID_DATA;
 }
 
+typedef struct
+{
+    ULONG Number;
+    ULONG MaxMhz;
+    ULONG CurrentMhz;
+    ULONG MhzLimit;
+    ULONG MaxIdleState;
+    ULONG CurrentIdleState;
+} PDH_PROCESSOR_POWER_INFORMATION;
+
+static ULONG processor_index_from_path( const WCHAR *path )
+{
+    const WCHAR *open, *comma;
+    WCHAR *end;
+    ULONG index;
+
+    open = wcschr( path, '(' );
+    if (!open) return MAXDWORD;
+    comma = wcschr( open + 1, ',' );
+    if (!comma || !wcsncmp( comma + 1, L"_Total", 6 )) return MAXDWORD;
+    index = wcstoul( comma + 1, &end, 10 );
+    if (end == comma + 1 || *end != ')') return MAXDWORD;
+    return index;
+}
+
+static BOOL query_processor_power( const WCHAR *path, ULONG *current, ULONG *maximum )
+{
+    SYSTEM_INFO info;
+    PDH_PROCESSOR_POWER_INFORMATION *power;
+    ULONG index, count, i;
+    ULONGLONG current_sum = 0, maximum_sum = 0;
+    NTSTATUS status;
+
+    GetSystemInfo( &info );
+    count = info.dwNumberOfProcessors;
+    if (!count) return FALSE;
+    if (!(power = calloc( count, sizeof(*power) ))) return FALSE;
+    status = NtPowerInformation( ProcessorInformation, NULL, 0,
+                                 power, count * sizeof(*power) );
+    if (status < 0)
+    {
+        free( power );
+        return FALSE;
+    }
+
+    index = processor_index_from_path( path );
+    if (index < count)
+    {
+        *current = power[index].CurrentMhz;
+        *maximum = power[index].MaxMhz;
+    }
+    else
+    {
+        for (i = 0; i < count; ++i)
+        {
+            current_sum += power[i].CurrentMhz;
+            maximum_sum += power[i].MaxMhz;
+        }
+        *current = (ULONG)(current_sum / count);
+        *maximum = (ULONG)(maximum_sum / count);
+    }
+    free( power );
+    return TRUE;
+}
+
+static void CALLBACK collect_processor_frequency( struct counter *counter )
+{
+    ULONG current, maximum;
+
+    if (!query_processor_power( counter->path, &current, &maximum ))
+    {
+        counter->status = PDH_CSTATUS_INVALID_DATA;
+        return;
+    }
+    counter->one.longvalue = current;
+    counter->two.largevalue = 0;
+    counter->status = PDH_CSTATUS_VALID_DATA;
+}
+
+static void CALLBACK collect_maximum_frequency_percent( struct counter *counter )
+{
+    ULONG current, maximum;
+
+    if (!query_processor_power( counter->path, &current, &maximum ) || !maximum)
+    {
+        counter->status = PDH_CSTATUS_INVALID_DATA;
+        return;
+    }
+    counter->one.longvalue = (ULONG)(((ULONGLONG)current * 100) / maximum);
+    counter->two.largevalue = 0;
+    counter->status = PDH_CSTATUS_VALID_DATA;
+}
+
+static void CALLBACK collect_processor_utility( struct counter *counter )
+{
+    SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION *performance;
+    SYSTEM_INFO info;
+    ULONG index, count, i, returned = 0;
+    ULONGLONG total = 0, idle = 0, delta_total, delta_idle, utility = 0;
+    NTSTATUS status;
+
+    GetSystemInfo( &info );
+    count = info.dwNumberOfProcessors;
+    if (!count || !(performance = calloc( count, sizeof(*performance) )))
+    {
+        counter->status = PDH_CSTATUS_INVALID_DATA;
+        return;
+    }
+    status = NtQuerySystemInformation( SystemProcessorPerformanceInformation,
+                                       performance, count * sizeof(*performance),
+                                       &returned );
+    if (status < 0)
+    {
+        free( performance );
+        counter->status = PDH_CSTATUS_INVALID_DATA;
+        return;
+    }
+
+    index = processor_index_from_path( counter->path );
+    for (i = 0; i < count; ++i)
+    {
+        if (index < count && i != index) continue;
+        total += performance[i].KernelTime.QuadPart + performance[i].UserTime.QuadPart;
+        idle += performance[i].IdleTime.QuadPart;
+    }
+    free( performance );
+
+    if (counter->have_previous && total > counter->previous_total)
+    {
+        delta_total = total - counter->previous_total;
+        delta_idle = idle - counter->previous_idle;
+        if (delta_idle < delta_total)
+            utility = ((delta_total - delta_idle) * 100) / delta_total;
+    }
+    counter->previous_total = total;
+    counter->previous_idle = idle;
+    counter->have_previous = TRUE;
+    counter->one.largevalue = utility;
+    counter->two.largevalue = 100;
+    counter->status = PDH_CSTATUS_VALID_DATA;
+}
+
 #define TYPE_PROCESSOR_TIME \
     (PERF_SIZE_LARGE | PERF_TYPE_COUNTER | PERF_COUNTER_RATE | PERF_TIMER_100NS | PERF_DELTA_COUNTER | \
      PERF_INVERSE_COUNTER | PERF_DISPLAY_PERCENT)
@@ -165,17 +311,24 @@ static void CALLBACK collect_uptime( struct counter *counter )
 #define TYPE_UPTIME \
     (PERF_SIZE_LARGE | PERF_TYPE_COUNTER | PERF_COUNTER_ELAPSED | PERF_OBJECT_TIMER | PERF_DISPLAY_SECONDS)
 
+#define TYPE_PROCESSOR_UTILITY \
+    (PERF_SIZE_LARGE | PERF_TYPE_COUNTER | PERF_COUNTER_FRACTION | PERF_DISPLAY_NOSHOW)
+
 /* counter source registry */
 static const struct source counter_sources[] =
 {
     { 6,   L"\\Processor(_Total)\\% Processor Time", collect_processor_time, TYPE_PROCESSOR_TIME, -5, 10000000 },
     { 6,   L"\\Processor Information(_Total)\\% Processor Time", collect_processor_time, TYPE_PROCESSOR_TIME, -5, 10000000 },
+    { 3114, L"\\Processor Information(*)\\Processor Frequency", collect_processor_frequency, PERF_COUNTER_RAWCOUNT, 0, 0 },
+    { 3116, L"\\Processor Information(*)\\% of Maximum Frequency", collect_maximum_frequency_percent, PERF_COUNTER_RAWCOUNT, 0, 0 },
+    { 3132, L"\\Processor Information(*)\\% Processor Utility", collect_processor_utility, TYPE_PROCESSOR_UTILITY, 0, 0 },
     { 674, L"\\System\\System Up Time",              collect_uptime,         TYPE_UPTIME,         -3, 1000 }
 };
 
 static const WCHAR pdh_objectsW[] = L"Processor\0Processor Information\0System\0";
 static const WCHAR processor_countersW[] = L"% Processor Time\0";
-static const WCHAR processor_instancesW[] = L"_Total\0";
+static const WCHAR processor_information_countersW[] =
+    L"% Processor Time\0Processor Frequency\0% of Maximum Frequency\0% Processor Utility\0";
 static const WCHAR system_countersW[] = L"System Up Time\0";
 static const WCHAR empty_multiszW[] = L"\0";
 
@@ -190,12 +343,18 @@ static BOOL is_local_machine( const WCHAR *name, DWORD len )
 
 static BOOL pdh_match_path( LPCWSTR fullpath, LPCWSTR path )
 {
-    const WCHAR *p;
+    const WCHAR *p, *wildcard, *close;
 
     if (path[0] == '\\' && path[1] == '\\' && (p = wcschr( path + 2, '\\' )) &&
         is_local_machine( path + 2, p - path - 2 ))
     {
         path += p - path;
+    }
+    wildcard = wcsstr( fullpath, L"(*)" );
+    if (wildcard && (close = wcschr( path, ')' )))
+    {
+        SIZE_T prefix = wildcard - fullpath + 1;
+        return !wcsncmp( fullpath, path, prefix ) && !wcscmp( wildcard + 3, close + 1 );
     }
     if (wcschr( path, '\\' )) p = fullpath;
     else p = wcsrchr( fullpath, '\\' ) + 1;
@@ -212,6 +371,46 @@ static PDH_STATUS write_multiszW( const WCHAR *source, DWORD required, WCHAR *bu
         return PDH_MORE_DATA;
     }
     memcpy( buffer, source, required * sizeof(*buffer) );
+    *size = required;
+    return ERROR_SUCCESS;
+}
+
+static PDH_STATUS write_processor_instancesW( WCHAR *buffer, DWORD *size )
+{
+    SYSTEM_INFO info;
+    WCHAR name[32];
+    WCHAR *current;
+    DWORD count, i, required = 1;
+
+    if (!size) return PDH_INVALID_ARGUMENT;
+    GetSystemInfo( &info );
+    count = info.dwNumberOfProcessors;
+    for (i = 0; i < count; ++i)
+    {
+        swprintf( name, ARRAY_SIZE(name), L"0,%lu", i );
+        required += lstrlenW( name ) + 1;
+    }
+    required += ARRAY_SIZE(L"0,_Total") + ARRAY_SIZE(L"_Total");
+
+    if (!buffer || *size < required)
+    {
+        if (buffer && *size) buffer[0] = 0;
+        *size = required;
+        return PDH_MORE_DATA;
+    }
+
+    current = buffer;
+    for (i = 0; i < count; ++i)
+    {
+        swprintf( name, ARRAY_SIZE(name), L"0,%lu", i );
+        lstrcpyW( current, name );
+        current += lstrlenW( current ) + 1;
+    }
+    lstrcpyW( current, L"0,_Total" );
+    current += ARRAY_SIZE(L"0,_Total");
+    lstrcpyW( current, L"_Total" );
+    current += ARRAY_SIZE(L"_Total");
+    *current = 0;
     *size = required;
     return ERROR_SUCCESS;
 }
@@ -266,7 +465,7 @@ PDH_STATUS WINAPI PdhAddCounterW( PDH_HQUERY hquery, LPCWSTR path,
         {
             if ((counter = create_counter()))
             {
-                counter->path         = wcsdup( counter_sources[i].path );
+                counter->path         = wcsdup( path );
                 counter->collect      = counter_sources[i].collect;
                 counter->type         = counter_sources[i].type;
                 counter->defaultscale = counter_sources[i].scale;
@@ -321,6 +520,24 @@ static PDH_STATUS format_value( struct counter *counter, DWORD format, union val
     LONG factor;
 
     factor = counter->scale ? counter->scale : counter->defaultscale;
+    if (counter->type == PERF_COUNTER_RAWCOUNT)
+    {
+        if (format & PDH_FMT_LONG) value->longValue = raw1->longvalue;
+        else if (format & PDH_FMT_LARGE) value->largeValue = raw1->longvalue;
+        else if (format & PDH_FMT_DOUBLE) value->doubleValue = raw1->longvalue;
+        else return PDH_INVALID_ARGUMENT;
+        return ERROR_SUCCESS;
+    }
+    if (counter->type == TYPE_PROCESSOR_UTILITY)
+    {
+        double utility = raw2->largevalue ?
+                         (double)raw1->largevalue * 100.0 / raw2->largevalue : 0.0;
+        if (format & PDH_FMT_LONG) value->longValue = (LONG)utility;
+        else if (format & PDH_FMT_LARGE) value->largeValue = (LONGLONG)utility;
+        else if (format & PDH_FMT_DOUBLE) value->doubleValue = utility;
+        else return PDH_INVALID_ARGUMENT;
+        return ERROR_SUCCESS;
+    }
     if (format & PDH_FMT_LONG)
     {
         if (format & PDH_FMT_1000) value->longValue = raw2->longvalue * 1000;
@@ -1370,10 +1587,20 @@ PDH_STATUS WINAPI PdhEnumObjectItemsW(LPCWSTR szDataSource, LPCWSTR szMachineNam
     processor_information_object = !lstrcmpiW( szObjectName, L"Processor Information" );
     if (processor_object || processor_information_object)
     {
-        counter_source = processor_countersW;
-        counter_required = ARRAY_SIZE(processor_countersW);
-        instance_source = processor_instancesW;
-        instance_required = ARRAY_SIZE(processor_instancesW);
+        if (processor_information_object)
+        {
+            counter_source = processor_information_countersW;
+            counter_required = ARRAY_SIZE(processor_information_countersW);
+            instance_source = NULL;
+            instance_required = 0;
+        }
+        else
+        {
+            counter_source = processor_countersW;
+            counter_required = ARRAY_SIZE(processor_countersW);
+            instance_source = L"_Total\0";
+            instance_required = ARRAY_SIZE(L"_Total\0");
+        }
     }
     else if (!lstrcmpiW( szObjectName, L"System" ))
     {
@@ -1385,7 +1612,10 @@ PDH_STATUS WINAPI PdhEnumObjectItemsW(LPCWSTR szDataSource, LPCWSTR szMachineNam
     else return PDH_CSTATUS_NO_OBJECT;
 
     counter_status = write_multiszW( counter_source, counter_required, mszCounterList, pcchCounterListLength );
-    instance_status = write_multiszW( instance_source, instance_required, mszInstanceList, pcchInstanceListLength );
+    if (processor_information_object)
+        instance_status = write_processor_instancesW( mszInstanceList, pcchInstanceListLength );
+    else
+        instance_status = write_multiszW( instance_source, instance_required, mszInstanceList, pcchInstanceListLength );
     if (counter_status == PDH_MORE_DATA || instance_status == PDH_MORE_DATA) return PDH_MORE_DATA;
     if (counter_status != ERROR_SUCCESS) return counter_status;
     return instance_status;
