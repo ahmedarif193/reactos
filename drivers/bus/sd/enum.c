@@ -11,6 +11,7 @@
 #include <debug.h>
 
 #include "hardware.h"
+#include "sdhost.h"
 
 #define SDIO_OCR_READY                 0x80000000
 #define SDIO_OCR_NUM_FUNCTIONS_MASK    0x70000000
@@ -104,6 +105,11 @@ SdBusSendCommand(
     ULONG CmdBits;
     NTSTATUS WaitStatus;
     ULONG Timeout;
+
+    if (FdoExtension->HostType == SdBusHostBcm2835)
+    {
+        return SdHostSendCommand(FdoExtension, CommandIndex, Argument, CommandFlags, Response);
+    }
 
     /* Wait for CMD_INHIBIT to clear (hardware readiness, not completion) */
     Timeout = SD_CMD_TIMEOUT_MS * 100;
@@ -528,6 +534,31 @@ SdBusSendDataReadCommand(
     NTSTATUS WaitStatus;
     ULONG Timeout;
 
+    if (FdoExtension->HostType == SdBusHostBcm2835)
+    {
+        ULONG SdHostResponse = 0;
+
+        Status = SdHostExecuteDataCommand(FdoExtension,
+                                          CommandIndex,
+                                          Argument,
+                                          CommandFlags,
+                                          TRUE,
+                                          FALSE,
+                                          DataBuffer,
+                                          DataLength,
+                                          1,
+                                          &SdHostResponse);
+        if (Response != NULL)
+        {
+            Response[0] = SdHostResponse;
+        }
+        if (NT_SUCCESS(Status))
+        {
+            Status = SdBusR1Status(SdHostResponse);
+        }
+        return Status;
+    }
+
     /* Wait for DATA_INHIBIT to clear (hardware readiness) */
     Timeout = SD_CMD_TIMEOUT_MS * 100;
     while (Timeout > 0)
@@ -665,9 +696,12 @@ SdBusEnableSdHighSpeed(
         return STATUS_NOT_SUPPORTED;
     }
 
-    HostCtrl = SdBusReadReg8(FdoExtension, SDHCI_HOST_CONTROL);
-    HostCtrl |= SDHCI_HC_HIGH_SPEED;
-    SdBusWriteReg8(FdoExtension, SDHCI_HOST_CONTROL, HostCtrl);
+    if (FdoExtension->HostType == SdBusHostSdhci)
+    {
+        HostCtrl = SdBusReadReg8(FdoExtension, SDHCI_HOST_CONTROL);
+        HostCtrl |= SDHCI_HC_HIGH_SPEED;
+        SdBusWriteReg8(FdoExtension, SDHCI_HOST_CONTROL, HostCtrl);
+    }
 
     DPRINT1("SdBusEnableSdHighSpeed: SD high-speed mode enabled\n");
     return STATUS_SUCCESS;
@@ -914,6 +948,12 @@ SdBusSetEmmcHostBusWidth(
     _In_ UCHAR BusWidth)
 {
     UCHAR HostCtrl;
+
+    if (FdoExtension->HostType == SdBusHostBcm2835)
+    {
+        SdHostSetBusWidth(FdoExtension, (UCHAR)SdBusEmmcHostWidthFromExtCsd(BusWidth));
+        return;
+    }
 
     HostCtrl = SdBusReadReg8(FdoExtension, SDHCI_HOST_CONTROL);
     HostCtrl &= ~(SDHCI_HC_DATA_WIDTH_4BIT | SDHCI_HC_DATA_WIDTH_8BIT);
@@ -1984,6 +2024,12 @@ SdBusProgramClock(
     {
         return STATUS_INVALID_PARAMETER;
     }
+
+    if (FdoExtension->HostType == SdBusHostBcm2835)
+    {
+        return SdHostSetClock(FdoExtension, TargetClockKhz);
+    }
+
     if (TargetClockKhz != 0 && FdoExtension->MaxClockFrequency == 0)
     {
         return STATUS_DEVICE_CONFIGURATION_ERROR;
