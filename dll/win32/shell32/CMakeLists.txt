@@ -102,6 +102,7 @@ list(APPEND WINE_SOURCE
 
 list(APPEND PCH_SKIP_SOURCE
     ${WINE_SOURCE}
+    network_address.c
     vista.c
     ${CMAKE_CURRENT_BINARY_DIR}/shell32_stubs.c)
 
@@ -134,7 +135,7 @@ target_link_libraries(shell32 shellmenu shelldesktop wine uuid recyclebin cpprt 
 if(DLL_EXPORT_VERSION GREATER_EQUAL 0x600)
     target_link_libraries(shell32 evalcmd)
 endif()
-add_delay_importlibs(shell32 powrprof shdocvw devmgr winspool.drv winmm mpr uxtheme ole32 oleaut32 userenv browseui version fmifs netapi32 secur32 gdiplus)
+add_delay_importlibs(shell32 powrprof shdocvw devmgr winspool.drv winmm mpr uxtheme ole32 oleaut32 userenv browseui version fmifs netapi32 secur32 gdiplus iphlpapi)
 add_importlibs(shell32 advapi32 gdi32 user32 comctl32 comdlg32 shlwapi shcore msvcrt kernel32 ntdll)
 add_dependencies(shell32 stdole2) # shell32_shldisp.tlb needs stdole2.tlb
 add_pch(shell32 precomp.h "${PCH_SKIP_SOURCE}")

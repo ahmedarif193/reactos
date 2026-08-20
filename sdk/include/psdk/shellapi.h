@@ -764,6 +764,39 @@ typedef LPSHNAMEMAPPINGA LPSHNAMEMAPPING;
 
 #if (NTDDI_VERSION >= NTDDI_VISTA)
 
+#if !defined(_WIN64)
+#include <poppack.h>
+#endif
+
+#define WC_NETADDRESS L"msctls_netaddress"
+
+WINSHELLAPI BOOL WINAPI InitNetworkAddressControl(VOID);
+
+#define NCM_GETADDRESS      (WM_USER + 1)
+#define NCM_SETALLOWTYPE    (WM_USER + 2)
+#define NCM_GETALLOWTYPE    (WM_USER + 3)
+#define NCM_DISPLAYERRORTIP (WM_USER + 4)
+
+typedef struct tagNC_ADDRESS
+{
+    struct NET_ADDRESS_INFO_ *pAddrInfo;
+    USHORT PortNumber;
+    BYTE PrefixLength;
+} NC_ADDRESS, *PNC_ADDRESS;
+
+#define NetAddr_GetAddress(hwnd, address) \
+    ((HRESULT)SNDMSG((hwnd), NCM_GETADDRESS, 0, (LPARAM)(address)))
+#define NetAddr_SetAllowType(hwnd, mask) \
+    ((HRESULT)SNDMSG((hwnd), NCM_SETALLOWTYPE, (WPARAM)(mask), 0))
+#define NetAddr_GetAllowType(hwnd) \
+    ((DWORD)SNDMSG((hwnd), NCM_GETALLOWTYPE, 0, 0))
+#define NetAddr_DisplayErrorTip(hwnd) \
+    ((HRESULT)SNDMSG((hwnd), NCM_DISPLAYERRORTIP, 0, 0))
+
+#if !defined(_WIN64)
+#include <pshpack1.h>
+#endif
+
 typedef struct _SHSTOCKICONINFO {
   DWORD cbSize;
   HICON hIcon;
