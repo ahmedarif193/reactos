@@ -3241,7 +3241,6 @@ USBPORT_ResubmitInterruptTransfer(IN PUSBPORT_TRANSFER Transfer)
     /* Reset the transfer for resubmission */
     USBPORT_ResetTransferForResubmit(Transfer);
 
-    /* Queue back to the endpoint's transfer list for DMA mapping and submission */
     KeAcquireSpinLock(&Endpoint->EndpointSpinLock, &OldIrql);
 
     /* Check endpoint is still healthy */
@@ -3261,14 +3260,15 @@ USBPORT_ResubmitInterruptTransfer(IN PUSBPORT_TRANSFER Transfer)
         return;
     }
 
-    /* Insert at tail of transfer list (it will be DMA mapped and submitted) */
-    InsertTailList(&Endpoint->TransferList, &Transfer->TransferLink);
-
     KeReleaseSpinLock(&Endpoint->EndpointSpinLock, OldIrql);
 
-    /* Now we need to DMA map this transfer. Queue it for mapping. */
+    /*
+     * Queue straight to the map list; USBPORT_MapTransfer links the mapped
+     * transfer into Endpoint->TransferList itself. Parking it on the
+     * endpoint list first meant unlinking it again under the map lock,
+     * mutating Endpoint->TransferList under the wrong lock.
+     */
     KeAcquireSpinLock(&FdoExtension->MapTransferSpinLock, &OldIrql);
-    RemoveEntryList(&Transfer->TransferLink);
     InsertTailList(&FdoExtension->MapTransferList, &Transfer->TransferLink);
     KeReleaseSpinLock(&FdoExtension->MapTransferSpinLock, OldIrql);
 
@@ -3302,15 +3302,6 @@ USBPORT_FreeReusableTransfer(IN PUSBPORT_ENDPOINT Endpoint)
     if (Transfer)
     {
         DPRINT_CORE("USBPORT_FreeReusableTransfer: Freeing Transfer - %p\n", Transfer);
-
-        /* Remove from any list it might be on */
-        if (Transfer->TransferLink.Flink && Transfer->TransferLink.Blink)
-        {
-            RemoveEntryList(&Transfer->TransferLink);
-            Transfer->TransferLink.Flink = NULL;
-            Transfer->TransferLink.Blink = NULL;
-        }
-
         ExFreePoolWithTag(Transfer, USB_PORT_TAG);
     }
 }
@@ -3665,8 +3656,13 @@ SkipDmaCleanup:
 
         KeAcquireSpinLock(&Endpoint->EndpointSpinLock, &CacheIrql);
 
-        /* Double-check under lock */
+        /*
+         * Never cache a transfer that is still linked somewhere, or reuse
+         * would reset live list links.
+         */
         if (Endpoint->ReusableTransfer == NULL &&
+            Transfer->TransferLink.Flink == NULL &&
+            Transfer->TransferLink.Blink == NULL &&
             !(Endpoint->Flags & (ENDPOINT_FLAG_NUKE | ENDPOINT_FLAG_ABORTING |
                                   ENDPOINT_FLAG_CLOSED)))
         {
