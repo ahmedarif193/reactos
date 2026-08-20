@@ -51,6 +51,19 @@ DWORD WINAPI GetActiveProcessorCount(WORD group)
     return cpus;
 }
 
+WORD WINAPI GetActiveProcessorGroupCount(void)
+{
+    WORD groups;
+    SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *info;
+
+    if (!(info = get_logical_processor_info())) return 0;
+
+    groups = info->Group.ActiveGroupCount;
+
+    HeapFree(GetProcessHeap(), 0, info);
+    return groups;
+}
+
 DWORD WINAPI GetMaximumProcessorCount(WORD group)
 {
     DWORD cpus = 0;
