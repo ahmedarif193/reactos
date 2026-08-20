@@ -137,6 +137,11 @@ elseif(ARCH STREQUAL "arm")
         lib/arm/aesasm.S
         lib/arm/fdef_asm.S
         lib/arm/wipe.S)
+elseif(ARCH STREQUAL "arm64" AND ARM64EC_RUNTIME)
+    list(APPEND SOURCE
+        lib/arm64ec/fdef369_asm.S
+        lib/arm64ec/fdef_asm.S
+        lib/arm64ec/wipe.S)
 elseif(ARCH STREQUAL "arm64")
     list(APPEND SOURCE
         lib/arm64/fdef369_asm.S
