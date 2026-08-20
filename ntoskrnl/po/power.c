@@ -1007,7 +1007,7 @@ PoRequestPowerIrp(
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 POWER_STATE
 NTAPI
@@ -1015,14 +1015,31 @@ PoSetPowerState(IN PDEVICE_OBJECT DeviceObject,
                 IN POWER_STATE_TYPE Type,
                 IN POWER_STATE State)
 {
-    POWER_STATE ps;
+    PEXTENDED_DEVOBJ_EXTENSION DeviceExtension;
+    POWER_STATE PreviousState = {0};
+    KIRQL OldIrql;
 
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
 
-    ps.SystemState = PowerSystemWorking;  // Fully on
-    ps.DeviceState = PowerDeviceD0;       // Fully on
+    DeviceExtension = IoGetDevObjExtension(DeviceObject);
+    KeAcquireSpinLock(&PopDopeGlobalLock, &OldIrql);
 
-    return ps;
+    if (Type == SystemPowerState)
+    {
+        PreviousState.SystemState = DeviceExtension->PowerFlags & 0xF;
+        DeviceExtension->PowerFlags &= ~0xF;
+        DeviceExtension->PowerFlags |= State.SystemState & 0xF;
+    }
+    else if (Type == DevicePowerState)
+    {
+        PreviousState.DeviceState = (DeviceExtension->PowerFlags >> 4) & 0xF;
+        DeviceExtension->PowerFlags &= ~0xF0;
+        DeviceExtension->PowerFlags |= (State.DeviceState << 4) & 0xF0;
+    }
+
+    KeReleaseSpinLock(&PopDopeGlobalLock, OldIrql);
+
+    return PreviousState;
 }
 
 /*
@@ -1465,8 +1482,66 @@ NTAPI
 NtGetDevicePowerState(IN HANDLE Device,
                       IN PDEVICE_POWER_STATE PowerState)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    KPROCESSOR_MODE PreviousMode = KeGetPreviousMode();
+    PEXTENDED_DEVOBJ_EXTENSION DeviceExtension;
+    PDEVICE_OBJECT DeviceObject;
+    PFILE_OBJECT FileObject;
+    DEVICE_POWER_STATE CurrentState;
+    KIRQL OldIrql;
+    NTSTATUS Status;
+    PAGED_CODE();
+
+    if (PreviousMode != KernelMode)
+    {
+        _SEH2_TRY
+        {
+            ProbeForWrite(PowerState,
+                          sizeof(*PowerState),
+                          TYPE_ALIGNMENT(DEVICE_POWER_STATE));
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+    }
+
+    Status = ObReferenceObjectByHandle(Device,
+                                       0,
+                                       IoFileObjectType,
+                                       PreviousMode,
+                                       (PVOID *)&FileObject,
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = IoGetRelatedTargetDevice(FileObject, &DeviceObject);
+    if (!NT_SUCCESS(Status))
+    {
+        ObDereferenceObject(FileObject);
+        return Status;
+    }
+
+    ObDereferenceObject(FileObject);
+
+    DeviceExtension = IoGetDevObjExtension(DeviceObject);
+    KeAcquireSpinLock(&PopDopeGlobalLock, &OldIrql);
+    CurrentState = (DeviceExtension->PowerFlags >> 4) & 0xF;
+    KeReleaseSpinLock(&PopDopeGlobalLock, OldIrql);
+
+    _SEH2_TRY
+    {
+        *PowerState = CurrentState;
+        Status = STATUS_SUCCESS;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    ObDereferenceObject(DeviceObject);
+    return Status;
 }
 
 BOOLEAN
