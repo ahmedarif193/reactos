@@ -365,8 +365,7 @@ RtlpArm64ProcessUnwindCodes(
     _In_ PBYTE End,
     _Inout_ PCONTEXT Context,
     _In_ int Skip,
-    _Inout_ PBOOLEAN FinalPcFromLr,
-    _Inout_ PBOOLEAN UsedFp)
+    _Inout_ PBOOLEAN FinalPcFromLr)
 {
     unsigned int i, val, len, save_next = 2;
 
@@ -423,15 +422,9 @@ RtlpArm64ProcessUnwindCodes(
         else if (*Ptr == 0xe0)
             Context->Sp += 16 * ((Ptr[1] << 16) + (Ptr[2] << 8) + Ptr[3]);
         else if (*Ptr == 0xe1)
-        {
             Context->Sp = Context->Fp;
-            *UsedFp = TRUE;
-        }
         else if (*Ptr == 0xe2)
-        {
             Context->Sp = Context->Fp - 8 * (val & 0xff);
-            *UsedFp = TRUE;
-        }
         else if (*Ptr == 0xe3)
             ;
         else if (*Ptr == 0xe4)
@@ -638,8 +631,7 @@ RtlpArm64UnwindFull(
     _In_ PARM64_RT_FUNCTION Func,
     _Inout_ PCONTEXT Context,
     _Out_ PVOID *HandlerData,
-    _Inout_ PBOOLEAN FinalPcFromLr,
-    _Inout_ PBOOLEAN UsedFp)
+    _Inout_ PBOOLEAN FinalPcFromLr)
 {
     PARM64_XDATA_HEADER info;
     ARM64_XDATA_EPILOG *info_epilog;
@@ -670,7 +662,7 @@ RtlpArm64UnwindFull(
         len = RtlpArm64SequenceLen(data, end);
         if (offset < len)
         {
-            RtlpArm64ProcessUnwindCodes(data, end, Context, len - offset, FinalPcFromLr, UsedFp);
+            RtlpArm64ProcessUnwindCodes(data, end, Context, len - offset, FinalPcFromLr);
             return NULL;
         }
     }
@@ -687,7 +679,7 @@ RtlpArm64UnwindFull(
                 len = RtlpArm64SequenceLen(ptr, end);
                 if (offset <= info_epilog[i].offset + len)
                 {
-                    RtlpArm64ProcessUnwindCodes(ptr, end, Context, offset - info_epilog[i].offset, FinalPcFromLr, UsedFp);
+                    RtlpArm64ProcessUnwindCodes(ptr, end, Context, offset - info_epilog[i].offset, FinalPcFromLr);
                     return NULL;
                 }
             }
@@ -699,12 +691,12 @@ RtlpArm64UnwindFull(
         len = RtlpArm64SequenceLen(ptr, end) + 1;
         if (offset >= info->FunctionLength - len)
         {
-            RtlpArm64ProcessUnwindCodes(ptr, end, Context, offset - (info->FunctionLength - len), FinalPcFromLr, UsedFp);
+            RtlpArm64ProcessUnwindCodes(ptr, end, Context, offset - (info->FunctionLength - len), FinalPcFromLr);
             return NULL;
         }
     }
 
-    RtlpArm64ProcessUnwindCodes(data, end, Context, 0, FinalPcFromLr, UsedFp);
+    RtlpArm64ProcessUnwindCodes(data, end, Context, 0, FinalPcFromLr);
 
     if (info->ExceptionDataPresent)
     {
@@ -731,8 +723,6 @@ RtlVirtualUnwind(
     PVOID Handler = NULL;
     PVOID LocalHandlerData = NULL;
     BOOLEAN FinalPcFromLr = TRUE;
-    BOOLEAN UsedFp = FALSE;
-    ULONG64 OriginalFp = Context->Fp;
 
     (VOID)ContextPointers;
 
@@ -753,12 +743,12 @@ RtlVirtualUnwind(
     else if (Func->Flag)
         Handler = RtlpArm64UnwindPacked(ImageBase, ControlPc, Func, Context);
     else
-        Handler = RtlpArm64UnwindFull(ImageBase, ControlPc, Func, Context, &LocalHandlerData, &FinalPcFromLr, &UsedFp);
+        Handler = RtlpArm64UnwindFull(ImageBase, ControlPc, Func, Context, &LocalHandlerData, &FinalPcFromLr);
 
     if (FinalPcFromLr)
         Context->Pc = Context->Lr;
 
-    *EstablisherFrame = UsedFp ? OriginalFp : Context->Sp;
+    *EstablisherFrame = Context->Sp;
 
     if (Handler != NULL && (HandlerType & (UNW_FLAG_EHANDLER | UNW_FLAG_UHANDLER)))
     {
@@ -795,6 +785,8 @@ RtlUnwindEx(
 
     if (ContextRecord == NULL)
         return;
+
+    RtlCaptureContext(ContextRecord);
 
     if (ExceptionRecord == NULL)
     {
