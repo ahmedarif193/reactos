@@ -1160,7 +1160,12 @@ KiLogProcessorBackTraces(
         RtlStringCbPrintfA(Line, sizeof(Line), "CPU %lu%s:\r\n", Processor, TargetPrcb == CurrentPrcb ? " (bugcheck owner)" : "");
         KiLogBugCheckString(Line);
 
-        if ((TargetPrcb != CurrentPrcb) && ((TargetPrcb->IpiFrozen & ~IPI_FROZEN_FLAG_ACTIVE) != IPI_FROZEN_STATE_FROZEN))
+#if defined(_M_AMD64) || defined(_M_ARM64)
+        if ((TargetPrcb != CurrentPrcb) &&
+            ((TargetPrcb->IpiFrozen & ~IPI_FROZEN_FLAG_ACTIVE) != IPI_FROZEN_STATE_FROZEN))
+#else
+        if (TargetPrcb != CurrentPrcb)
+#endif
         {
             KiLogBugCheckString("<not frozen>\r\n");
             continue;

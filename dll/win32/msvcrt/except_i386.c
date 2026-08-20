@@ -500,6 +500,7 @@ static DWORD MSVCRT_nested_handler(PEXCEPTION_RECORD rec,
   return ExceptionCollidedUnwind;
 }
 
+#ifndef __REACTOS__
 static void msvcrt_local_unwind2(MSVCRT_EXCEPTION_FRAME* frame, int trylevel, void *ebp)
 {
   EXCEPTION_REGISTRATION_RECORD reg;
@@ -525,6 +526,7 @@ static void msvcrt_local_unwind2(MSVCRT_EXCEPTION_FRAME* frame, int trylevel, vo
   __wine_pop_frame(&reg);
   TRACE("unwound OK\n");
 }
+#endif
 
 static void msvcrt_local_unwind4( ULONG *cookie, MSVCRT_EXCEPTION_FRAME* frame, int trylevel, void *ebp )
 {
