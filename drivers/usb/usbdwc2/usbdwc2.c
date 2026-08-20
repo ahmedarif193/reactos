@@ -323,7 +323,6 @@ Dwc2SetGlobalInterruptEnable(
     ULONG AhbConfig;
     ULONG AhbConfigReadback;
     ULONG PendingInterrupts;
-    ULONG RaceCount;
 
     AhbConfig = Dwc2ReadRegister(Extension, DWC2_GAHBCFG);
 
@@ -341,9 +340,6 @@ Dwc2SetGlobalInterruptEnable(
         PendingInterrupts |= Dwc2ReadRegister(Extension, DWC2_GINTSTS) & Dwc2ReadRegister(Extension, DWC2_GINTMSK);
         if (Enable && PendingInterrupts)
         {
-            RaceCount = (ULONG)InterlockedIncrement(&Extension->GlobalEnableRaceCount);
-            if (Dwc2ShouldLogCount(RaceCount))
-                DPRINT1("[DWC2] global interrupt enable raced ISR masking pending=%08lx count=%lu\n", PendingInterrupts, RaceCount);
             return;
         }
 
@@ -743,8 +739,6 @@ Dwc2RetryTimerDpc(
             DPRINT1("[DWC2] retry timer cannot wake USBPORT: callback is NULL wake=%lu\n", WakeCount);
         }
 
-        if (Dwc2ShouldLogCount(WakeCount))
-            DPRINT1("[DWC2] retry timer wake count=%lu status=%08lx\n", WakeCount, InvalidateStatus);
     }
 
     KeAcquireSpinLock(&Extension->RetryTimerLock, &OldIrql);
@@ -763,8 +757,6 @@ Dwc2ArmRetryTimer(
     ULONGLONG CurrentTime;
     ULONGLONG EarliestTime = 0;
     ULONGLONG Delay;
-    ULONG ArmCount = 0;
-    ULONG WaitingCount = 0;
     KIRQL OldIrql;
     BOOLEAN Cancelled;
 
@@ -785,7 +777,6 @@ Dwc2ArmRetryTimer(
         if (!Transfer || Transfer->Done || !Transfer->NeedsRetry)
             continue;
 
-        WaitingCount++;
         if (!EarliestTime || Transfer->RetryTime < EarliestTime)
             EarliestTime = Transfer->RetryTime;
     }
@@ -829,11 +820,8 @@ Dwc2ArmRetryTimer(
     Extension->RetryTimerScheduled = 1;
     Extension->RetryTimerDueTime = EarliestTime;
     KeSetTimer(&Extension->RetryTimer, DueTime, &Extension->RetryTimerDpc);
-    ArmCount = (ULONG)InterlockedIncrement(&Extension->RetryTimerArmCount);
+    InterlockedIncrement(&Extension->RetryTimerArmCount);
     KeReleaseSpinLock(&Extension->RetryTimerLock, OldIrql);
-
-    if (Dwc2ShouldLogCount(ArmCount))
-        DPRINT1("[DWC2] retry timer armed count=%lu waiting=%lu delay100ns=%I64u due=%I64u now=%I64u\n", ArmCount, WaitingCount, Delay, EarliestTime, CurrentTime);
 }
 
 static VOID
@@ -924,16 +912,10 @@ Dwc2UpdateSofMask(
 
 static VOID
 Dwc2RequestOneShotSof(
-    _In_ PDWC2_EXTENSION Extension,
-    _In_ PCSTR Reason)
+    _In_ PDWC2_EXTENSION Extension)
 {
-    ULONG RequestCount;
-
     Extension->SofRequested = TRUE;
-    RequestCount = (ULONG)InterlockedIncrement(&Extension->SofRequestCount);
     Dwc2UpdateSofMask(Extension);
-    if (Dwc2ShouldLogCount(RequestCount))
-        DPRINT1("[DWC2] one-shot SOF requested count=%lu reason=%s frame=%08lx mask=%08lx\n", RequestCount, Reason, Dwc2ReadRegister(Extension, DWC2_HFNUM), Extension->InterruptMask);
 }
 
 static BOOLEAN
@@ -947,7 +929,6 @@ Dwc2ProgramStage(
     ULONG DirectionIn;
     ULONG DmaAddress;
     ULONG EndpointType;
-    ULONG ImmediateCount;
     ULONG InvalidateStatus;
     ULONG MaximumStageLength;
     ULONG PacketCount;
@@ -1096,22 +1077,14 @@ Dwc2ProgramStage(
 
     /*
      * A short transaction can finish before the platform interrupt reaches
-     * USBPORT. Sample the channel before doing any serial output: on SMP the
-     * interrupt DPC can already be advancing this transfer on another CPU.
+     * USBPORT. Sample the channel immediately because on SMP the interrupt
+     * DPC can already be advancing this transfer on another CPU.
      * Do not modify transfer state after CHENA is written. A coalesced soft
      * interrupt is sufficient to make USBPORT drain any terminal status that
      * is still pending; if the DPC already consumed it, the request is benign.
      */
     if (ImmediateInterrupts && !(ProgrammedCharacter & DWC2_HCCHAR_CHENA))
     {
-        ImmediateCount = (ULONG)InterlockedIncrement(&Extension->ImmediateInterruptCount);
-        if (Dwc2ShouldLogCount(ImmediateCount))
-        {
-            DPRINT1("[DWC2] CH%u terminal status observed immediately after arm HCINT=%08lx count=%lu; queuing soft DPC\n",
-                    Channel,
-                    ImmediateInterrupts,
-                    ImmediateCount);
-        }
         if (Dwc2RegPacket.UsbPortInvalidateController)
         {
             InvalidateStatus = Dwc2RegPacket.UsbPortInvalidateController(Extension, USBPORT_INVALIDATE_CONTROLLER_SOFT_INTERRUPT);
@@ -1151,15 +1124,6 @@ Dwc2FinishTransfer(
     Dwc2UpdateSofMask(Extension);
     Dwc2ArmRetryTimer(Extension);
 
-    if (Status != USBD_STATUS_SUCCESS)
-    {
-        DPRINT1("[DWC2] transfer failed ep=%p addr=%u endpoint=%u status=%08lx bytes=%lu\n",
-                Endpoint,
-                Endpoint->Properties.DeviceAddress,
-                Endpoint->Properties.EndpointAddress,
-                Status,
-                Transfer->BytesTransferred);
-    }
     Dwc2RegPacket.UsbPortInvalidateEndpoint(Extension, Endpoint);
 }
 
@@ -1192,7 +1156,7 @@ Dwc2ScheduleRetry(
     Transfer->NeedsRetry = TRUE;
     Transfer->RetryDiagnosticLogged = FALSE;
     if (Delay100ns <= DWC2_MICROFRAME_100NS)
-        Dwc2RequestOneShotSof(Extension, "short transfer retry");
+        Dwc2RequestOneShotSof(Extension);
     Dwc2ArmRetryTimer(Extension);
 }
 
@@ -1206,7 +1170,6 @@ Dwc2ProcessChannel(
     ULONG ActualLength;
     ULONG Character;
     ULONG CurrentDmaAddress;
-    ULONG DeferredHalts;
     ULONG DmaProgress;
     ULONG InterruptStatus;
     ULONG LateStatus;
@@ -1271,9 +1234,6 @@ Dwc2ProcessChannel(
             Character = Dwc2ReadRegister(Extension, DWC2_HCCHAR(Channel));
             if ((Character & DWC2_HCCHAR_CHENA) && !(Character & DWC2_HCCHAR_CHDIS))
                 Dwc2WriteRegister(Extension, DWC2_HCCHAR(Channel), Character | DWC2_HCCHAR_CHDIS | DWC2_HCCHAR_CHENA);
-            DeferredHalts = (ULONG)InterlockedIncrement(&Extension->DeferredHaltCount);
-            if (Dwc2ShouldLogCount(DeferredHalts))
-                DPRINT1("[DWC2] CH%u status before halt HCINT=%08lx count=%lu; awaiting CHHLTD\n", Channel, InterruptStatus, DeferredHalts);
         }
         return;
     }
@@ -1357,20 +1317,16 @@ Dwc2ProcessChannel(
                 if (TransferredPackets & 1)
                     Transfer->DataToggle ^= 1;
             }
-            DPRINT1("[DWC2] CH%u transaction error retry HCINT=%08lx count=%lu addr=%u ep=%u stage=%u bytes=%lu/%lu\n",
-                    Channel,
-                    InterruptStatus,
-                    Transfer->ErrorCount,
-                    Endpoint->Properties.DeviceAddress,
-                    Endpoint->Properties.EndpointAddress,
-                    Transfer->Stage,
-                    Transfer->BytesTransferred,
-                    Transfer->Parameters->TransferBufferLength);
             Dwc2ScheduleRetry(Extension, Transfer, DWC2_MICROFRAME_100NS);
             return;
         }
 
         Endpoint->Status = USBPORT_ENDPOINT_HALT;
+        if ((InterruptStatus & DWC2_HCINT_ERROR_MASK) == DWC2_HCINT_STALL)
+        {
+            Dwc2FinishTransfer(Extension, Transfer, Dwc2DecodeChannelError(InterruptStatus));
+            return;
+        }
         DPRINT1("[DWC2] CH%u error HCINT=%08lx HCTSIZ=%08lx HCDMA=%08lx HCCHAR=%08lx errors=%lu\n",
                 Channel,
                 InterruptStatus,
@@ -1553,9 +1509,6 @@ Dwc2TryStartPending(
         Channel = Dwc2AllocateChannel(Extension, Endpoint);
         if (Channel == DWC2_INVALID_CHANNEL)
         {
-            Transfer->ChannelWaitCount++;
-            if (Dwc2ShouldLogCount(Transfer->ChannelWaitCount))
-                DPRINT1("[DWC2] channel allocation deferred count=%lu endpoint=%p transfer=%p addr=%u ep=%u type=%lu state=%lu retry=%u\n", Transfer->ChannelWaitCount, Endpoint, Transfer, Endpoint->Properties.DeviceAddress, Endpoint->Properties.EndpointAddress, Endpoint->Properties.TransferType, Endpoint->State, Transfer->NeedsRetry);
             break;
         }
 
@@ -1579,7 +1532,6 @@ Dwc2OpenEndpoint(
 {
     PDWC2_EXTENSION Extension = MiniportExtension;
     PDWC2_ENDPOINT Endpoint = MiniportEndpoint;
-    ULONGLONG RetryDelay = 0;
     KIRQL OldIrql;
 
     if (Properties->TransferType == USBPORT_TRANSFER_TYPE_ISOCHRONOUS)
@@ -1613,27 +1565,6 @@ Dwc2OpenEndpoint(
     Endpoint->Listed = TRUE;
     KeReleaseSpinLock(&Extension->Lock, OldIrql);
 
-    if (Properties->TransferType == USBPORT_TRANSFER_TYPE_INTERRUPT)
-        RetryDelay = Dwc2GetInterruptRetryDelay(Endpoint);
-
-    DPRINT1("[DWC2] endpoint open ep=%p addr=%u endpoint=%u type=%lu speed=%u mps=%lu period=%u interval=%u retry100ns=%I64u hub=%u port=%u tt=%u/%u split=%u state=%lu buffer=%08lx/%p\n",
-            Endpoint,
-            Properties->DeviceAddress,
-            Properties->EndpointAddress,
-            Properties->TransferType,
-            Properties->DeviceSpeed,
-            Properties->MaxPacketSize,
-            Properties->Period,
-            Properties->Reserved4,
-            RetryDelay,
-            Properties->HubAddr,
-            Properties->PortNumber,
-            Properties->TtHubAddr,
-            Properties->TtPortNumber,
-            Endpoint->RequiresSplit,
-            Endpoint->State,
-            Endpoint->BufferPA,
-            Endpoint->BufferVA);
     return MP_STATUS_SUCCESS;
 }
 
@@ -1674,7 +1605,6 @@ Dwc2ReopenEndpoint(
     Endpoint->OpenTime = KeQueryInterruptTime();
     Endpoint->IdleDiagnosticLogged = FALSE;
     KeReleaseSpinLock(&Extension->Lock, OldIrql);
-    DPRINT1("[DWC2] endpoint reopen ep=%p addr=%u endpoint=%u type=%lu speed=%u mps=%lu period=%u interval=%u state=%lu submits=%lu\n", Endpoint, Properties->DeviceAddress, Properties->EndpointAddress, Properties->TransferType, Properties->DeviceSpeed, Properties->MaxPacketSize, Properties->Period, Properties->Reserved4, Endpoint->State, Endpoint->SubmitCount);
     return MP_STATUS_SUCCESS;
 }
 
@@ -1731,7 +1661,6 @@ Dwc2CloseEndpoint(
     Dwc2UpdateSofMask(Extension);
     Dwc2TryStartPending(Extension);
     KeReleaseSpinLock(&Extension->Lock, OldIrql);
-    DPRINT1("[DWC2] endpoint close ep=%p\n", Endpoint);
 }
 
 static MPSTATUS
@@ -1759,24 +1688,14 @@ Dwc2StartController(
     Extension->RegisterLength = Resources->IoSpaceLength;
     Extension->PendingGlobalInterrupts = 0;
     Extension->PendingChannelInterrupts = 0;
-    Extension->ImmediateInterruptCount = 0;
-    Extension->DmaProgressFallbackCount = 0;
-    Extension->GlobalEnableRaceCount = 0;
     Extension->RetryTimerArmCount = 0;
     Extension->RetryTimerWakeCount = 0;
     Extension->RetryTimerScheduled = 0;
     Extension->RetryTimerDpcActive = 0;
-    Extension->SofRequestCount = 0;
-    Extension->SofInterruptCount = 0;
     Extension->CompletionCount = 0;
     Extension->TransferErrorCount = 0;
-    Extension->DeferredHaltCount = 0;
     Extension->WedgeRecoveryCount = 0;
-    Extension->HeartbeatCount = 0;
     Extension->FifoCorruptionCount = 0;
-    Extension->PortStatusQueryCount = 0;
-    Extension->LastPortStatusRaw = 0xFFFFFFFF;
-    Extension->LastPortStatusPacked = 0xFFFFFFFF;
     Extension->RetryTimerDueTime = 0;
     Extension->Stopping = 0;
     Extension->Suspended = FALSE;
@@ -1914,11 +1833,9 @@ Dwc2ProcessEventsLocked(
     ULONG GlobalInterrupts;
     ULONG Index;
     ULONG PendingChannels;
-    ULONG SofInterruptCount;
     ULONG ValidChannelMask;
     BOOLEAN FromSof;
     BOOLEAN NotifyRootHub = FALSE;
-    BOOLEAN SofWasRequested;
 
     GlobalInterrupts = (ULONG)InterlockedExchange(&Extension->PendingGlobalInterrupts, 0);
     GlobalInterrupts |= Dwc2ReadRegister(Extension, DWC2_GINTSTS) & Dwc2ReadRegister(Extension, DWC2_GINTMSK);
@@ -1926,19 +1843,12 @@ Dwc2ProcessEventsLocked(
     FromSof = !!(GlobalInterrupts & DWC2_GINT_SOF);
     if (FromSof)
     {
-        SofWasRequested = Extension->SofRequested;
         Extension->SofRequested = FALSE;
-        SofInterruptCount = (ULONG)InterlockedIncrement(&Extension->SofInterruptCount);
         Dwc2UpdateSofMask(Extension);
-        if (!SofWasRequested || Dwc2ShouldLogCount(SofInterruptCount))
-            DPRINT1("[DWC2] one-shot SOF serviced count=%lu requested=%u frame=%08lx mask=%08lx\n", SofInterruptCount, SofWasRequested, Dwc2ReadRegister(Extension, DWC2_HFNUM), Extension->InterruptMask);
     }
 
     if (GlobalInterrupts & (DWC2_GINT_PRTINT | DWC2_GINT_DISCONNINT | DWC2_GINT_WKUPINT))
-    {
-        DPRINT1("[DWC2] root interrupt GINTSTS=%08lx HPRT0=%08lx\n", GlobalInterrupts, Dwc2ReadRegister(Extension, DWC2_HPRT0));
         NotifyRootHub = TRUE;
-    }
 
     /*
      * Drain until quiescent. Processing one completion can arm the next
@@ -2064,30 +1974,6 @@ Dwc2SubmitTransfer(
     Endpoint->SubmitCount++;
     Endpoint->IdleDiagnosticLogged = FALSE;
 
-    if (Dwc2ShouldLogCount(Endpoint->SubmitCount))
-    {
-        if (Endpoint->Properties.TransferType == USBPORT_TRANSFER_TYPE_CONTROL)
-        {
-            DPRINT1("[DWC2] control submit accepted endpoint=%p transfer=%p addr=%u state=%lu count=%lu dir=%s length=%lu setup=%02x/%02x/%04x/%04x/%u\n",
-                    Endpoint,
-                    Transfer,
-                    Endpoint->Properties.DeviceAddress,
-                    Endpoint->State,
-                    Endpoint->SubmitCount,
-                    Transfer->DirectionIn ? "IN" : "OUT",
-                    Parameters->TransferBufferLength,
-                    Parameters->SetupPacket.bmRequestType.B,
-                    Parameters->SetupPacket.bRequest,
-                    Parameters->SetupPacket.wValue.W,
-                    Parameters->SetupPacket.wIndex.W,
-                    Parameters->SetupPacket.wLength);
-        }
-        else
-        {
-            DPRINT1("[DWC2] transfer submit accepted endpoint=%p transfer=%p addr=%u ep=%u type=%lu state=%lu count=%lu dir=%s length=%lu interval=%u\n", Endpoint, Transfer, Endpoint->Properties.DeviceAddress, Endpoint->Properties.EndpointAddress, Endpoint->Properties.TransferType, Endpoint->State, Endpoint->SubmitCount, Transfer->DirectionIn ? "IN" : "OUT", Parameters->TransferBufferLength, Endpoint->Properties.Reserved4);
-        }
-    }
-
     if (!Transfer->DirectionIn && Parameters->TransferBufferLength)
     {
         Copied = Dwc2CopySgToBuffer(SgList, (PUCHAR)Endpoint->BufferVA + DWC2_SETUP_BUFFER_SIZE, Parameters->TransferBufferLength);
@@ -2164,15 +2050,11 @@ Dwc2SetEndpointState(
 {
     PDWC2_EXTENSION Extension = MiniportExtension;
     PDWC2_ENDPOINT Endpoint = MiniportEndpoint;
-    ULONG OldState;
     KIRQL OldIrql;
 
     KeAcquireSpinLock(&Extension->Lock, &OldIrql);
-    OldState = Endpoint->State;
     Endpoint->State = State;
     Endpoint->StateChangeCount++;
-    if (Dwc2ShouldLogCount(Endpoint->StateChangeCount))
-        DPRINT1("[DWC2] endpoint state change endpoint=%p addr=%u ep=%u type=%lu old=%lu new=%lu count=%lu transfer=%p channel=%u\n", Endpoint, Endpoint->Properties.DeviceAddress, Endpoint->Properties.EndpointAddress, Endpoint->Properties.TransferType, OldState, State, Endpoint->StateChangeCount, Endpoint->Transfer, Endpoint->Channel);
     if (State == USBPORT_ENDPOINT_ACTIVE)
         Dwc2TryStartPending(Extension);
     KeReleaseSpinLock(&Extension->Lock, OldIrql);
@@ -2218,17 +2100,6 @@ Dwc2PollEndpoint(
     }
 
     Endpoint->Transfer = NULL;
-    if (Transfer->UsbdStatus != USBD_STATUS_SUCCESS)
-    {
-        DPRINT1("[DWC2] completing to USBPORT endpoint=%p transfer=%p addr=%u ep=%u status=%08lx bytes=%lu/%lu\n",
-                Endpoint,
-                Transfer,
-                Endpoint->Properties.DeviceAddress,
-                Endpoint->Properties.EndpointAddress,
-                Transfer->UsbdStatus,
-                Transfer->BytesTransferred,
-                Transfer->Parameters->TransferBufferLength);
-    }
     Dwc2RegPacket.UsbPortCompleteTransfer(Extension, Endpoint, Transfer->Parameters, Transfer->UsbdStatus, Transfer->BytesTransferred);
     Dwc2TryStartPending(Extension);
     KeReleaseSpinLock(&Extension->Lock, OldIrql);
@@ -2238,18 +2109,9 @@ static VOID
 Dwc2Heartbeat(
     _In_ PDWC2_EXTENSION Extension)
 {
-    ULONG ChannelMask = 0;
     ULONG CorruptCount;
-    ULONG HeartbeatCount;
-    ULONG Index;
     ULONG NpTxDepth;
     ULONG NpTxStatus;
-
-    for (Index = 0; Index < Extension->NumberOfChannels; Index++)
-    {
-        if (Extension->Channels[Index])
-            ChannelMask |= 1UL << Index;
-    }
 
     NpTxStatus = Dwc2ReadRegister(Extension, DWC2_GNPTXSTS);
     NpTxDepth = Dwc2ReadRegister(Extension, DWC2_GNPTXFSIZ) >> DWC2_FIFOSIZE_DEPTH_SHIFT;
@@ -2263,28 +2125,6 @@ Dwc2Heartbeat(
         }
     }
 
-    HeartbeatCount = (ULONG)InterlockedIncrement(&Extension->HeartbeatCount);
-    if (Dwc2ShouldLogCount(HeartbeatCount))
-    {
-        DPRINT1("[DWC2] heartbeat count=%lu GINTSTS=%08lx GINTMSK=%08lx GAHBCFG=%08lx GNPTXSTS=%08lx HPTXSTS=%08lx HAINT=%08lx HPRT0=%08lx HFNUM=%08lx channels=%02lx completions=%ld errors=%ld deferredHalts=%ld recoveries=%ld immediates=%ld fifoCorrupt=%ld wakes=%ld\n",
-                HeartbeatCount,
-                Dwc2ReadRegister(Extension, DWC2_GINTSTS),
-                Dwc2ReadRegister(Extension, DWC2_GINTMSK),
-                Dwc2ReadRegister(Extension, DWC2_GAHBCFG),
-                NpTxStatus,
-                Dwc2ReadRegister(Extension, DWC2_HPTXSTS),
-                Dwc2ReadRegister(Extension, DWC2_HAINT),
-                Dwc2ReadRegister(Extension, DWC2_HPRT0),
-                Dwc2ReadRegister(Extension, DWC2_HFNUM),
-                ChannelMask,
-                Extension->CompletionCount,
-                Extension->TransferErrorCount,
-                Extension->DeferredHaltCount,
-                Extension->WedgeRecoveryCount,
-                Extension->ImmediateInterruptCount,
-                Extension->FifoCorruptionCount,
-                Extension->RetryTimerWakeCount);
-    }
 }
 
 static VOID
@@ -2340,7 +2180,7 @@ Dwc2InterruptNextSof(
     KIRQL OldIrql;
 
     KeAcquireSpinLock(&Extension->Lock, &OldIrql);
-    Dwc2RequestOneShotSof(Extension, "USBPORT endpoint handoff");
+    Dwc2RequestOneShotSof(Extension);
     KeReleaseSpinLock(&Extension->Lock, OldIrql);
 }
 
@@ -2670,14 +2510,6 @@ Dwc2RootHubGetPortStatus(
     PortStatus->PortChange.Usb20PortChange.SuspendChange = !!Extension->SuspendChange;
     Extension->LastConnectStatus = Connected;
 
-    if (PortValue != Extension->LastPortStatusRaw ||
-        PortStatus->AsUlong32 != Extension->LastPortStatusPacked ||
-        Dwc2ShouldLogCount((ULONG)InterlockedIncrement(&Extension->PortStatusQueryCount)))
-    {
-        Extension->LastPortStatusRaw = PortValue;
-        Extension->LastPortStatusPacked = PortStatus->AsUlong32;
-        DPRINT1("[DWC2] root status raw=%08lx status/change=%08lx speed=%lu queries=%ld\n", PortValue, PortStatus->AsUlong32, Speed, Extension->PortStatusQueryCount);
-    }
     return MP_STATUS_SUCCESS;
 }
 
@@ -2706,7 +2538,6 @@ Dwc2PortResetComplete(
 
     Dwc2WritePort(Extension, 0, DWC2_HPRT_RST, 0);
     Extension->ResetChange = 1;
-    DPRINT1("[DWC2] root port reset complete HPRT0=%08lx\n", Dwc2ReadRegister(Extension, DWC2_HPRT0));
     Dwc2RegPacket.UsbPortInvalidateRootHub(Extension);
 }
 
@@ -2723,7 +2554,6 @@ Dwc2RootHubSetReset(
 
     Extension->ResetChange = 0;
     Dwc2WritePort(Extension, DWC2_HPRT_RST | DWC2_HPRT_PWR, 0, 0);
-    DPRINT1("[DWC2] root port reset asserted HPRT0=%08lx\n", Dwc2ReadRegister(Extension, DWC2_HPRT0));
     Dwc2RegPacket.UsbPortRequestAsyncCallback(Extension, 50, &Port, sizeof(Port), Dwc2PortResetComplete);
     return MP_STATUS_SUCCESS;
 }
