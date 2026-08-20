@@ -5,6 +5,7 @@
 
 REACTOS_SOURCE_DIR=$(cd "$(dirname "$0")" && pwd -P)
 REACTOS_START_DIR=$(pwd -P)
+REACTOS_DEFAULT_BUILD_DIR="$REACTOS_SOURCE_DIR/output-Clang-amd64-debug"
 
 ROSCONFIG_DIR="$REACTOS_SOURCE_DIR/.rosconfig"
 ROSCONFIG_BIN="$ROSCONFIG_DIR/rosconfig"
@@ -18,6 +19,7 @@ fail() {
 
 usage() {
 	echo "Usage: ./menuconfig.sh [--build-dir <output-directory>] [--self-test]" >&2
+	echo "Default build directory: $REACTOS_DEFAULT_BUILD_DIR" >&2
 	exit 2
 }
 
@@ -46,7 +48,10 @@ if [ "$#" -eq 2 ]; then
 		*) BUILD_DIR="$REACTOS_START_DIR/$2" ;;
 	esac
 else
-	BUILD_DIR=$REACTOS_START_DIR
+	case "$(basename "$REACTOS_START_DIR")" in
+		output-*) BUILD_DIR=$REACTOS_START_DIR ;;
+		*) BUILD_DIR=$REACTOS_DEFAULT_BUILD_DIR ;;
+	esac
 fi
 
 [ -d "$BUILD_DIR" ] || fail "output directory does not exist: $BUILD_DIR"
