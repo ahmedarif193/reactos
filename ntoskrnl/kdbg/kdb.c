@@ -1781,8 +1781,7 @@ KdbEnterDebuggerException(
 
     /* Set continue type to kdContinue for single steps and breakpoints */
     if (ExceptionCode == STATUS_SINGLE_STEP ||
-        ExceptionCode == STATUS_BREAKPOINT ||
-        ExceptionCode == STATUS_ASSERTION_FAILURE)
+        ExceptionCode == STATUS_BREAKPOINT)
     {
         ContinueType = kdContinue;
     }
