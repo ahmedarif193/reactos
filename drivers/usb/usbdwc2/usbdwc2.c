@@ -520,6 +520,18 @@ Dwc2InitializeHardware(
     Dwc2WriteRegister(Extension, DWC2_GINTMSK, 0);
     Dwc2WriteRegister(Extension, DWC2_PCGCCTL, 0);
 
+    /*
+     * Reset first, then force host mode and give the core the full 25 ms to
+     * settle: host-mode registers written while the mode is still switching
+     * (HAINTMSK in particular) are silently lost on this core.
+     */
+    if (!Dwc2CoreReset(Extension))
+    {
+        DPRINT1("[DWC2] initialization failed during core reset\n");
+        return FALSE;
+    }
+
+    Dwc2WriteRegister(Extension, DWC2_PCGCCTL, 0);
     UsbConfig = Dwc2ReadRegister(Extension, DWC2_GUSBCFG);
     UsbConfig |= DWC2_GUSBCFG_FORCEHOSTMODE;
     Dwc2WriteRegister(Extension, DWC2_GUSBCFG, UsbConfig);
@@ -531,14 +543,6 @@ Dwc2InitializeHardware(
         Dwc2DumpControllerState(Extension, "host mode timeout");
         return FALSE;
     }
-
-    if (!Dwc2CoreReset(Extension))
-    {
-        DPRINT1("[DWC2] initialization failed during core reset\n");
-        return FALSE;
-    }
-
-    Dwc2WriteRegister(Extension, DWC2_PCGCCTL, 0);
 
     HardwareConfig = Dwc2ReadRegister(Extension, DWC2_GHWCFG2);
     Extension->NumberOfChannels = ((HardwareConfig & DWC2_GHWCFG2_NUM_HOST_CHAN_MASK) >> DWC2_GHWCFG2_NUM_HOST_CHAN_SHIFT) + 1;
@@ -1909,7 +1913,8 @@ Dwc2ProcessEventsLocked(
     for (DrainPass = 0; DrainPass < DWC2_DPC_DRAIN_LIMIT; DrainPass++)
     {
         ChannelBits = (ULONG)InterlockedExchange(&Extension->PendingChannelInterrupts, 0);
-        ChannelBits |= Dwc2ReadRegister(Extension, DWC2_HAINT) & Dwc2ReadRegister(Extension, DWC2_HAINTMSK);
+        /* Poll raw HAINT: a completion whose HAINTMSK lane was lost must still be reaped here. */
+        ChannelBits |= Dwc2ReadRegister(Extension, DWC2_HAINT);
         ValidChannelMask = (1UL << Extension->NumberOfChannels) - 1;
         if (ChannelBits & ~ValidChannelMask)
         {
@@ -1926,7 +1931,7 @@ Dwc2ProcessEventsLocked(
 
         Dwc2TryStartPending(Extension);
         PendingChannels = (ULONG)InterlockedCompareExchange(&Extension->PendingChannelInterrupts, 0, 0);
-        PendingChannels |= Dwc2ReadRegister(Extension, DWC2_HAINT) & Dwc2ReadRegister(Extension, DWC2_HAINTMSK);
+        PendingChannels |= Dwc2ReadRegister(Extension, DWC2_HAINT) & ValidChannelMask;
         if (!PendingChannels)
             break;
     }
