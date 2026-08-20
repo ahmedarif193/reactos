@@ -778,7 +778,7 @@ Fdo_EvtDevicePrepareHardware(
     fdoCtx->nhlt = NULL;
     fdoCtx->nhltSz = 0;
 
-    if (fdoCtx->venId == VEN_INTEL) { // Check NHLT for Intel SST
+    { //Check NHLT for Intel SST
         NTSTATUS status2 = NHLTCheckSupported(Device);
         if (NT_SUCCESS(status2)) {
             UINT64 nhltAddr;
@@ -799,16 +799,6 @@ Fdo_EvtDevicePrepareHardware(
                 }
             }
         }
-        else {
-            SklHdAudBusPrint(DEBUG_LEVEL_INFO, DBG_INIT,
-                             "Intel SST NHLT is unavailable (status 0x%08lx); continuing with the HDA codec path\n",
-                             status2);
-        }
-    }
-    else {
-        SklHdAudBusPrint(DEBUG_LEVEL_INFO, DBG_INIT,
-                         "Skipping Intel SST NHLT query for PCI vendor 0x%04x\n",
-                         fdoCtx->venId);
     }
 
     fdoCtx->sofTplg = NULL;

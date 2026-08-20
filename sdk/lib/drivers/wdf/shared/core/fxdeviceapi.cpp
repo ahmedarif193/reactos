@@ -37,24 +37,6 @@ struct FxOffsetAndName {
 #define OFFSET_AND_NAME(type, offset) { #offset, FIELD_OFFSET(type, offset) }
 
 //
-// AssignedToGuest was appended to WDF_DEVICE_STATE in KMDF 1.31 and UMDF
-// 2.31.  Drivers built against older framework headers therefore pass the
-// original structure size even when they bind to a newer framework.
-//
-static const ULONG FxDeviceStateLegacySize =
-    FIELD_OFFSET(WDF_DEVICE_STATE, ResourcesChanged) + sizeof(WDF_TRI_STATE);
-
-static
-BOOLEAN
-FxIsValidDeviceStateSize(
-    __in ULONG Size
-    )
-{
-    return Size == FxDeviceStateLegacySize ||
-           Size == sizeof(WDF_DEVICE_STATE);
-}
-
-//
 // extern "C" the entire file
 //
 extern "C" {
@@ -783,12 +765,11 @@ WDFEXPORT(WdfDeviceGetDeviceState)(
 
     FxPointerNotNull(pFxDriverGlobals, DeviceState);
 
-    if (!FxIsValidDeviceStateSize(DeviceState->Size)) {
+    if (DeviceState->Size != sizeof(WDF_DEVICE_STATE)) {
         DoTraceLevelMessage(
             pFxDriverGlobals, TRACE_LEVEL_ERROR, TRACINGDEVICE,
-            "WDFDEVICE 0x%p DeviceState Size %lu, expected %lu or %lu",
-            Device, DeviceState->Size, FxDeviceStateLegacySize,
-            (ULONG)sizeof(WDF_DEVICE_STATE));
+            "WDFDEVICE 0x%p DeviceState Size %d, expected %d",
+            Device, DeviceState->Size, sizeof(WDF_DEVICE_STATE));
 
         FxVerifierDbgBreakPoint(pFxDriverGlobals);
 
@@ -823,7 +804,6 @@ WDFEXPORT(WdfDeviceSetDeviceState)(
         OFFSET_AND_NAME(WDF_DEVICE_STATE, NotDisableable),
         OFFSET_AND_NAME(WDF_DEVICE_STATE, Removed),
         OFFSET_AND_NAME(WDF_DEVICE_STATE, ResourcesChanged),
-        OFFSET_AND_NAME(WDF_DEVICE_STATE, AssignedToGuest),
     };
 
     FxObjectHandleGetPtrAndGlobals(GetFxDriverGlobals(DriverGlobals),
@@ -834,12 +814,11 @@ WDFEXPORT(WdfDeviceSetDeviceState)(
 
     FxPointerNotNull(pFxDriverGlobals, DeviceState);
 
-    if (!FxIsValidDeviceStateSize(DeviceState->Size)) {
+    if (DeviceState->Size != sizeof(WDF_DEVICE_STATE)) {
         DoTraceLevelMessage(
             pFxDriverGlobals, TRACE_LEVEL_ERROR, TRACINGDEVICE,
-            "WDFDEVICE 0x%p, DeviceState Size %lu, expected %lu or %lu",
-            Device, DeviceState->Size, FxDeviceStateLegacySize,
-            (ULONG)sizeof(WDF_DEVICE_STATE));
+            "WDFDEVICE 0x%p, DeviceState Size %d, expected %d",
+            Device, DeviceState->Size, sizeof(WDF_DEVICE_STATE));
 
         FxVerifierDbgBreakPoint(pFxDriverGlobals);
         return; // STATUS_INFO_LENGTH_MISMATCH;
@@ -853,14 +832,6 @@ WDFEXPORT(WdfDeviceSetDeviceState)(
         //
         if (offsets[i].Offset + sizeof(WDF_TRI_STATE) > sizeof(*DeviceState)) {
             return;
-        }
-
-        //
-        // If the device state passed in by the driver is an older version that
-        // does not contain this field, stop validating.
-        //
-        if (offsets[i].Offset + sizeof(WDF_TRI_STATE) > DeviceState->Size) {
-            break;
         }
 
         value = *(WDF_TRI_STATE*) WDF_PTR_ADD_OFFSET(DeviceState,
