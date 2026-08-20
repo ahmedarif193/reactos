@@ -1823,35 +1823,6 @@ KeBugCheckWithTf(IN ULONG BugCheckCode,
         // the KeBugcheckReasonCallbackListHead list with the
         // KbCallbackReserved1 reason.
 
-#if defined(_M_ARM64)
-        {
-            static const CHAR Hex[] = "0123456789ABCDEF";
-            volatile UCHAR *Uart = (volatile UCHAR *)0xFFFFFC0009000000ULL;
-            ULONG Index;
-            ULONG Shift;
-            ULONG_PTR Values[5];
-
-            Values[0] = KiBugCheckData[0];
-            Values[1] = KiBugCheckData[1];
-            Values[2] = KiBugCheckData[2];
-            Values[3] = KiBugCheckData[3];
-            Values[4] = KiBugCheckData[4];
-
-            for (const CHAR *Text = "[arm64][bugcheck] "; *Text; ++Text) *Uart = *Text;
-            for (Index = 0; Index < RTL_NUMBER_OF(Values); ++Index)
-            {
-                if (Index != 0) *Uart = ' ';
-                for (Shift = (sizeof(ULONG_PTR) * 8) - 4;
-                     Shift < (sizeof(ULONG_PTR) * 8);
-                     Shift -= 4)
-                {
-                    *Uart = Hex[(Values[Index] >> Shift) & 0xF];
-                }
-            }
-            *Uart = '\n';
-        }
-#endif
-
         /* Re-enable an initialized debugger, but never probe a new transport after drawing the crash report. */
         if (!(KdDebuggerEnabled) && !(KdPitchDebugger) && KdPreviouslyEnabled)
         {
