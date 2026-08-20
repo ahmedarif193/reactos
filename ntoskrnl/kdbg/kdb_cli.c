@@ -9260,11 +9260,8 @@ KdbpCliMainLoop(
     static CHAR Command[1024];
     static CHAR LastCommand[1024] = "";
 
-// FIXME HACK: SYSREG SUPPORT CORE-19807 -- Emit a backtrace.
-// TODO: Remove once SYSREG "bt" command emission is fixed!
-#if 1
+    KdbpDoCommand("regs");
     KdbpDoCommand("bt");
-#endif
 
     if (EnteredOnSingleStep)
     {
@@ -9291,8 +9288,7 @@ KdbpCliMainLoop(
          * Repeat the last one if the user pressed Enter.
          * This reduces the risk of RSI when single-stepping!
          */
-        // TEMP HACK! Issue an empty string instead of duplicating "kdb:>"
-        SIZE_T CmdLen = KdbPrompt(/*KdbPromptStr.Buffer*/"", Command, sizeof(Command));
+        SIZE_T CmdLen = KdbPrompt(KdbPromptStr.Buffer, Command, sizeof(Command));
         if (CmdLen == 0)
         {
             /* Nothing received but the user didn't press Enter, retry */
