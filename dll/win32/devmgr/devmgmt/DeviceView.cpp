@@ -41,6 +41,8 @@ CDeviceView::CDeviceView(
     m_hMenu(NULL),
     m_ViewType(DevicesByType),
     m_ShowHidden(false),
+    m_RefreshRunning(FALSE),
+    m_RefreshRerun(FALSE),
     m_RootNode(NULL)
 {
     ZeroMemory(&m_ImageListData, sizeof(SP_CLASSIMAGELIST_DATA));
@@ -223,6 +225,11 @@ CDeviceView::Refresh(
 
     m_ViewType = Type;
 
+    InterlockedExchange(&m_RefreshRerun, TRUE);
+    if (InterlockedCompareExchange(&m_RefreshRunning, TRUE, FALSE))
+        return;
+    InterlockedExchange(&m_RefreshRerun, FALSE);
+
     RefreshThreadData *ThreadData;
     ThreadData = new RefreshThreadData;
     ThreadData->This = this;
@@ -236,7 +243,15 @@ CDeviceView::Refresh(
                                      ThreadData,
                                      0,
                                      NULL);
-    if (hThread) CloseHandle(hThread);
+    if (hThread)
+    {
+        CloseHandle(hThread);
+    }
+    else
+    {
+        delete ThreadData;
+        InterlockedExchange(&m_RefreshRunning, FALSE);
+    }
 }
 
 LRESULT
@@ -405,37 +420,41 @@ unsigned int __stdcall CDeviceView::RefreshThread(void *Param)
     This->EmptyDeviceView();
 
     // Re-add the root node to the tree
-    if (This->AddRootDevice() == false)
-        return 0;
-
-    // Refresh the devices only if requested
-    if (ThreadData->ScanForChanges)
+    if (This->AddRootDevice() != false)
     {
-        This->RefreshDeviceList();
+        // Refresh the devices only if requested
+        if (ThreadData->ScanForChanges)
+        {
+            This->RefreshDeviceList();
+        }
+
+        // display the type of view the user wants
+        switch (This->m_ViewType)
+        {
+            case DevicesByType:
+                (void)This->ListDevicesByType();
+                break;
+
+            case DevicesByConnection:
+                (VOID)This->ListDevicesByConnection();
+                break;
+
+            case ResourcesByType:
+                (VOID)This->ListResourcesByType();
+                break;
+
+            case ResourcesByConnection:
+                break;
+        }
+
+        This->SelectNode(LastSelectedNode);
     }
-
-    // display the type of view the user wants
-    switch (This->m_ViewType)
-    {
-        case DevicesByType:
-            (void)This->ListDevicesByType();
-            break;
-
-        case DevicesByConnection:
-            (VOID)This->ListDevicesByConnection();
-            break;
-
-        case ResourcesByType:
-            (VOID)This->ListResourcesByType();
-            break;
-
-        case ResourcesByConnection:
-            break;
-    }
-
-    This->SelectNode(LastSelectedNode);
 
     delete ThreadData;
+
+    InterlockedExchange(&This->m_RefreshRunning, FALSE);
+    if (InterlockedExchange(&This->m_RefreshRerun, FALSE))
+        This->Refresh(This->m_ViewType, true, true);
 
     return 0;
 }

@@ -24,6 +24,8 @@ class CDeviceView
     ViewType m_ViewType;
     HTREEITEM m_hTreeRoot;
     bool m_ShowHidden;
+    LONG m_RefreshRunning;
+    LONG m_RefreshRerun;
 
     CRootNode *m_RootNode;
     CAtlList<CClassNode *> m_ClassNodeList;
