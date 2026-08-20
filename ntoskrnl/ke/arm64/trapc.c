@@ -1045,6 +1045,8 @@ KiArm64HandleSystemService(
 #define KI_ARM64_ACCESS_READ    0
 #define KI_ARM64_ACCESS_WRITE   1
 #define KI_ARM64_ACCESS_EXECUTE 8
+#define KI_ARM64_MRS_CURRENTEL  0xD5384240UL
+#define KI_ARM64_MRS_RT_MASK    0x0000001FUL
 
 static __inline ULONG_PTR
 KiArm64AccessTypeToExceptionInfo(
@@ -1057,6 +1059,77 @@ KiArm64AccessTypeToExceptionInfo(
     }
 
     return WriteAccess ? KI_ARM64_ACCESS_WRITE : KI_ARM64_ACCESS_READ;
+}
+
+static
+BOOLEAN
+KiArm64TryEmulateCurrentEl(
+    _Inout_ PARM64_EARLY_SYNC_CONTEXT Context,
+    _Inout_ PKTRAP_FRAME TrapFrame,
+    _In_ KPROCESSOR_MODE PreviousMode)
+{
+    ULONG Instruction;
+    ULONG Register;
+    BOOLEAN ValidInstruction = FALSE;
+
+    if (PreviousMode != UserMode ||
+        Context->State.Elr >= (ULONG_PTR)MmSystemRangeStart ||
+        (Context->State.Elr & (sizeof(Instruction) - 1)) != 0)
+    {
+        return FALSE;
+    }
+
+    _SEH2_TRY
+    {
+        ProbeForRead((PVOID)(ULONG_PTR)Context->State.Elr,
+                     sizeof(Instruction),
+                     TYPE_ALIGNMENT(ULONG));
+        Instruction = *(volatile ULONG *)(ULONG_PTR)Context->State.Elr;
+        ValidInstruction = TRUE;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        NOTHING;
+    }
+    _SEH2_END;
+
+    if (!ValidInstruction)
+    {
+        return FALSE;
+    }
+
+    if ((Instruction & ~KI_ARM64_MRS_RT_MASK) != KI_ARM64_MRS_CURRENTEL)
+    {
+        return FALSE;
+    }
+
+    Register = Instruction & KI_ARM64_MRS_RT_MASK;
+    if (Register != 31)
+    {
+        Context->State.Registers.X[Register] = 0;
+        if (Register < RTL_NUMBER_OF(TrapFrame->X))
+        {
+            TrapFrame->X[Register] = 0;
+        }
+        else if (Register < 29)
+        {
+            (&Context->ExceptionFrame.X19)[Register - 19] = 0;
+        }
+        else if (Register == 29)
+        {
+            TrapFrame->Fp = 0;
+            Context->ExceptionFrame.Fp = 0;
+        }
+        else
+        {
+            TrapFrame->Lr = 0;
+            Context->ExceptionFrame.Lr = 0;
+        }
+    }
+
+    Context->State.Elr += sizeof(Instruction);
+    TrapFrame->Pc = Context->State.Elr;
+    return TRUE;
 }
 
 static
@@ -2283,6 +2356,7 @@ KiArm64HandleSynchronousException(
             KiArm64InitializeTrapFrame(Context, TrapFrame);
 
             Mode = KiArm64PreviousModeFromVector(Context->State.VectorId);
+            if (KiArm64TryEmulateCurrentEl(Context, TrapFrame, Mode)) goto HandledExit;
 
             DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
                     "[arm64] UNHANDLED ESR class=0x%lx ISS=0x%lx Vec=%p ELR=%p FAR=%p SPSR=0x%lx Mode=%d Proc=%s\n",
