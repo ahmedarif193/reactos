@@ -2789,6 +2789,7 @@ LdrpInitializeProcess(IN PCONTEXT Context,
 
     /* Processing done, insert it */
     LdrpInsertMemoryTableEntry(LdrpImageEntry);
+    LdrpInitSecurityCookie(LdrpImageEntry);
     LdrpImageEntry->Flags |= LDRP_ENTRY_PROCESSED;
 
     /* Now add an entry for NTDLL */
