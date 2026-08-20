@@ -1386,15 +1386,13 @@ NtPowerInformation(IN POWER_INFORMATION_LEVEL PowerInformationLevel,
 #if defined(_M_ARM64)
                 KeSetSystemAffinityThread(AFFINITY_MASK(i));
                 CurrentSpeed[i] = KiArm64QueryEffectiveClockMHz(i);
-                MaxSpeed[i] = KiArm64GetProcessorClockMHz(i);
 #elif defined(_M_AMD64)
                 KeSetSystemAffinityThread(AFFINITY_MASK(i));
                 CurrentSpeed[i] = KiAmd64QueryEffectiveMHz(i);
-                MaxSpeed[i] = KiProcessorBlock[i]->MHz;
 #else
                 CurrentSpeed[i] = KiProcessorBlock[i]->MHz;
-                MaxSpeed[i] = CurrentSpeed[i];
 #endif
+                MaxSpeed[i] = KiProcessorBlock[i]->MHz;
             }
 #if defined(_M_ARM64) || defined(_M_AMD64)
             if (ProcessorCount != 0)

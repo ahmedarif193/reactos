@@ -1173,6 +1173,12 @@ CmpSaveBootControlSet(
 // Hardware Configuration Routines
 //
 CODE_SEG("INIT")
+VOID
+NTAPI
+CmpInitializeProcessorClockFromFirmware(
+    _In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock);
+
+CODE_SEG("INIT")
 NTSTATUS
 NTAPI
 CmpInitializeRegistryNode(

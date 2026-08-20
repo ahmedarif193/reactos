@@ -1853,6 +1853,9 @@ CmInitSystem1(VOID)
         KeBugCheckEx(CONFIG_INITIALIZATION_FAILED, 1, 13, Status, 0);
     }
 
+    /* Use firmware CPU speed only when architecture-specific probing failed. */
+    CmpInitializeProcessorClockFromFirmware(KeLoaderBlock);
+
     /* Initialize machine-dependent information into the registry */
     Status = CmpInitializeMachineDependentConfiguration(KeLoaderBlock);
     if (!NT_SUCCESS(Status))
