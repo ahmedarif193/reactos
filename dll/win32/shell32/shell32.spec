@@ -453,7 +453,7 @@
 @ stdcall FindExecutableA(str str ptr) # 2k3:226, Vista:292
 @ stdcall FindExecutableW(wstr wstr ptr) # 2k3:227, Vista:293
 @ stdcall FreeIconList(long) # 2k3:228, Vista:294
-@ stub -version=0x600+ InitNetworkAddressControl # Vista:295
+@ stdcall -version=0x600+ InitNetworkAddressControl() # Vista:295
 @ stdcall InternalExtractIconListA(ptr str ptr) # 2k3:229, Vista:296
 @ stdcall InternalExtractIconListW(ptr wstr ptr) # 2k3:238, Vista:297
 @ stdcall Options_RunDLL(ptr ptr str long) # 2k3:255, Vista:298

@@ -174,6 +174,12 @@ typedef struct NET_ADDRESS_INFO_
     } DUMMYUNIONNAME;
 } NET_ADDRESS_INFO, *PNET_ADDRESS_INFO;
 
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI ParseNetworkString(const WCHAR *NetworkString,
+                                                      DWORD Types,
+                                                      PNET_ADDRESS_INFO AddressInfo,
+                                                      USHORT *PortNumber,
+                                                      BYTE *PrefixLength);
+
 #endif /* __WINE_WINDNS_H || (__REACTOS__ && _WINDNS_INCLUDED_) */
 
 #ifdef __cplusplus
