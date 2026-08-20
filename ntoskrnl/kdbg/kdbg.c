@@ -138,13 +138,6 @@ KdSendPacket(
         {
             KD_CONTINUE_TYPE Result;
 
-            /* Check if this is an assertion failure */
-            if (KdbgExceptionRecord.ExceptionCode == STATUS_ASSERTION_FAILURE)
-            {
-                /* Bump the PC to the instruction following the assertion breakpoint */
-                KeSetContextPc(&KdbgContext, KeGetContextPc(&KdbgContext) + KD_ASSERT_BREAKPOINT_SIZE);
-            }
-
             Result = KdbEnterDebuggerException(&KdbgExceptionRecord,
 #ifdef _M_ARM64
                                                KiGetContextPreviousMode(&KdbgContext),
@@ -159,7 +152,15 @@ KdSendPacket(
             Result = kdHandleException;
 #endif
             if (Result != kdHandleException)
+            {
+                if (KdbgExceptionRecord.ExceptionCode == STATUS_ASSERTION_FAILURE)
+                {
+                    /* A handled assertion resumes after its breakpoint. */
+                    KeSetContextPc(&KdbgContext,
+                                   KeGetContextPc(&KdbgContext) + KD_ASSERT_BREAKPOINT_SIZE);
+                }
                 KdbgContinueStatus = STATUS_SUCCESS;
+            }
             else
                 KdbgContinueStatus = STATUS_UNSUCCESSFUL;
             KdbgNextApiNumber = DbgKdSetContextApi;
