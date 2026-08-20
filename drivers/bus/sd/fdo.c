@@ -11,6 +11,7 @@
 #include <debug.h>
 
 #include "hardware.h"
+#include "sdhost.h"
 
 static VOID
 SdBusCompleteFdoIrp(
@@ -120,6 +121,12 @@ SdBusResetHost(
     _In_ UCHAR ResetMask)
 {
     ULONG Timeout;
+
+    /* The SDHost block has no per-line reset circuits; its reset always covers CMD and DAT */
+    if (FdoExtension->HostType == SdBusHostBcm2835)
+    {
+        return SdHostReset(FdoExtension);
+    }
 
     SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET, ResetMask);
 
@@ -349,6 +356,12 @@ SdBusInitializeController(
 
     DPRINT1("SdBusInitializeController: RegisterBase %p\n",
            FdoExtension->RegisterBase);
+
+    /* The BCM2835 SDHost is not SDHCI-compatible; its backend fabricates the capability fields */
+    if (FdoExtension->HostType == SdBusHostBcm2835)
+    {
+        return SdHostInitializeController(FdoExtension);
+    }
 
     /* Read host controller version */
     Version = SdBusReadReg16(FdoExtension, SDHCI_HOST_VERSION);
@@ -772,8 +785,11 @@ SdBusFdoStartDevice(
         return Status;
     }
 
-    /* Connect the interrupt if available */
-    if (FoundInterrupt)
+    /* Select the controller model before connecting an SDHCI interrupt. */
+    (VOID)SdBusHardwareAttach(FdoExtension);
+
+    /* The polled SDHost backend does not use its interrupt resource. */
+    if (FoundInterrupt && FdoExtension->HostType != SdBusHostBcm2835)
     {
         Status = IoConnectInterrupt(&FdoExtension->InterruptObject,
                                     SdBusInterruptService,
@@ -795,10 +811,6 @@ SdBusFdoStartDevice(
             return Status;
         }
     }
-
-    /* Select platform hooks before controller initialization so their reset
-     * and voltage requirements participate in the first start, not only resume. */
-    (VOID)SdBusHardwareAttach(FdoExtension);
 
     /* Initialize the SDHCI controller */
     Status = SdBusInitializeController(FdoExtension);
@@ -842,25 +854,29 @@ SdBusFdoStartDevice(
     }
 
     {
-        ULONG PresentState;
+        ULONG PresentState = SDHCI_PS_CARD_INSERTED | SDHCI_PS_CARD_STATE_STABLE;
         ULONG SettleWait = 100;
         LARGE_INTEGER SettleDelay;
 
-        do
+        /* The SDHost has no present-state register; its boot SD card is always treated as inserted */
+        if (FdoExtension->HostType == SdBusHostSdhci)
         {
+            do
+            {
+                PresentState = SdBusReadReg32(FdoExtension, SDHCI_PRESENT_STATE);
+                if (PresentState & (SDHCI_PS_CARD_STATE_STABLE | SDHCI_PS_CARD_INSERTED))
+                    break;
+                SettleDelay.QuadPart = -50000;
+                KeDelayExecutionThread(KernelMode, FALSE, &SettleDelay);
+            } while (--SettleWait);
+
             PresentState = SdBusReadReg32(FdoExtension, SDHCI_PRESENT_STATE);
-            if (PresentState & (SDHCI_PS_CARD_STATE_STABLE | SDHCI_PS_CARD_INSERTED))
-                break;
-            SettleDelay.QuadPart = -50000;
-            KeDelayExecutionThread(KernelMode, FALSE, &SettleDelay);
-        } while (--SettleWait);
 
-        PresentState = SdBusReadReg32(FdoExtension, SDHCI_PRESENT_STATE);
-
-        DPRINT1("SdBusFdoStartDevice: PresentState=0x%08lx HostControl=0x%02x settle=%lu\n",
-                PresentState,
-                SdBusReadReg8(FdoExtension, SDHCI_HOST_CONTROL),
-                SettleWait);
+            DPRINT1("SdBusFdoStartDevice: PresentState=0x%08lx HostControl=0x%02x settle=%lu\n",
+                    PresentState,
+                    SdBusReadReg8(FdoExtension, SDHCI_HOST_CONTROL),
+                    SettleWait);
+        }
 
         if ((PresentState & SDHCI_PS_CARD_INSERTED) || FdoExtension->NonRemovable)
         {
@@ -1047,7 +1063,7 @@ SdBusFdoStopDevice(
     FdoExtension->Common.DeviceState = SdBusDeviceStateStopped;
 
     /* Disable all interrupts */
-    if (FdoExtension->RegistersMapped)
+    if (FdoExtension->RegistersMapped && FdoExtension->HostType == SdBusHostSdhci)
     {
         SdBusWriteReg32(FdoExtension, SDHCI_INT_SIGNAL_ENABLE, 0);
         SdBusWriteReg32(FdoExtension, SDHCI_INT_STATUS_ENABLE, 0);
@@ -1101,7 +1117,7 @@ SdBusFdoRemoveDevice(
     FdoExtension->Common.DeviceState = SdBusDeviceStateRemoved;
 
     /* Disable all interrupts and disconnect */
-    if (FdoExtension->RegistersMapped)
+    if (FdoExtension->RegistersMapped && FdoExtension->HostType == SdBusHostSdhci)
     {
         SdBusWriteReg32(FdoExtension, SDHCI_INT_SIGNAL_ENABLE, 0);
         SdBusWriteReg32(FdoExtension, SDHCI_INT_STATUS_ENABLE, 0);
@@ -1173,7 +1189,7 @@ SdBusFdoSurpriseRemoval(
     InterlockedExchange(&FdoExtension->RequestsBlocked, 1);
     FdoExtension->Common.DeviceState = SdBusDeviceStateSurpriseRemoved;
 
-    if (FdoExtension->RegistersMapped)
+    if (FdoExtension->RegistersMapped && FdoExtension->HostType == SdBusHostSdhci)
     {
         SdBusWriteReg32(FdoExtension, SDHCI_INT_SIGNAL_ENABLE, 0);
         SdBusWriteReg32(FdoExtension, SDHCI_INT_STATUS_ENABLE, 0);

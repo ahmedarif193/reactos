@@ -15,6 +15,9 @@ HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows ARM64\Print Pr
 ; the boot SD controller as ACPI\BCM2847, so bind it before ARC-name creation.
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2847","Service",0x00000000,"sdbus"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2847","ClassGUID",0x00000000,"{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}"
+; The RPi3 firmware routes the boot SD slot to the BCM2835 SDHost (ACPI\BCM2855).
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2855","Service",0x00000000,"sdbus"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2855","ClassGUID",0x00000000,"{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}"
 
 ; Raspberry Pi 5 RP1 southbridge: no OS bus driver. The UEFI firmware exposes
 ; the RP1 functions (USB XHC0/XHC1, Ethernet ETH0) as standard ACPI devices

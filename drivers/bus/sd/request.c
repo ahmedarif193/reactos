@@ -10,6 +10,8 @@
 #define NDEBUG
 #include <debug.h>
 
+#include "sdhost.h"
+
 #define SD_MAX_RETRIES 3
 #define SDIO_BUS_WIDTH_MASK 0x03
 #define SDIO_BUS_WIDTH_1BIT 0x00
@@ -261,7 +263,7 @@ SdBusWaitForInterrupt(
  *
  * @return SDHCI command register flags for the given response type.
  */
-static USHORT
+USHORT
 SdBusResponseTypeToFlags(
     _In_ SD_RESPONSE_TYPE ResponseType)
 {
@@ -1087,6 +1089,37 @@ SdBusSendSdhciCommand(
     IsRead = (CmdDesc->TransferDirection == SDTD_READ);
     WriteToDevice = !IsRead;
 
+    if (HasData)
+    {
+        if (BlockSize == 0 || BlockSize > SDHCI_BLOCK_SIZE_MASK ||
+            (DataLength % BlockSize) != 0)
+        {
+            DPRINT1("SdBusSendSdhciCommand: invalid data length %lu block size %lu\n",
+                    DataLength, BlockSize);
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        BlockCount = DataLength / BlockSize;
+        if (BlockCount == 0 || BlockCount > 0xFFFF)
+        {
+            DPRINT1("SdBusSendSdhciCommand: Invalid block count %lu\n", BlockCount);
+            return STATUS_INVALID_PARAMETER;
+        }
+    }
+
+    /* The BCM2835 SDHost backend runs the whole request synchronously via polled PIO */
+    if (FdoExtension->HostType == SdBusHostBcm2835)
+    {
+        return SdHostExecuteRequest(FdoExtension,
+                                    CmdDesc,
+                                    Argument,
+                                    Mdl,
+                                    DataLength,
+                                    BlockSize,
+                                    RequestFlags,
+                                    Response);
+    }
+
     TransferPath = SdTransferPathNone;
     if (HasData)
     {
@@ -1110,24 +1143,6 @@ SdBusSendSdhciCommand(
            HasData ? (IsRead ? "READ" : "WRITE") : "NODATA",
            DataLength,
            SdBusTransferPathName(TransferPath));
-
-    if (HasData)
-    {
-        if (BlockSize == 0 || BlockSize > SDHCI_BLOCK_SIZE_MASK ||
-            (DataLength % BlockSize) != 0)
-        {
-            DPRINT1("SdBusSendSdhciCommand: invalid data length %lu block size %lu\n",
-                    DataLength, BlockSize);
-            return STATUS_INVALID_PARAMETER;
-        }
-
-        BlockCount = DataLength / BlockSize;
-        if (BlockCount == 0 || BlockCount > 0xFFFF)
-        {
-            DPRINT1("SdBusSendSdhciCommand: Invalid block count %lu\n", BlockCount);
-            return STATUS_INVALID_PARAMETER;
-        }
-    }
 
     /* Step 1: Wait for CMD_INHIBIT (and DATA_INHIBIT if data transfer) to clear.
      * This is a hardware-readiness poll, not a completion wait. The previous
@@ -2397,6 +2412,12 @@ SdBusSetHostBusWidth(
     _In_ UCHAR BusWidth)
 {
     UCHAR HostControl;
+
+    if (FdoExtension->HostType == SdBusHostBcm2835)
+    {
+        SdHostSetBusWidth(FdoExtension, BusWidth);
+        return;
+    }
 
     HostControl = SdBusReadReg8(FdoExtension, SDHCI_HOST_CONTROL);
     HostControl &= ~(SDHCI_HC_DATA_WIDTH_4BIT | SDHCI_HC_DATA_WIDTH_8BIT);

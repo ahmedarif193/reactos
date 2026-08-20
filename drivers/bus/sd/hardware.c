@@ -683,6 +683,7 @@ NTSTATUS
 SdBusHardwareAttach(
     _In_ PFDO_EXTENSION FdoExtension)
 {
+    static const PCWSTR Bcm2835SdHostIds[] = { L"BCM2855" };
     static const PCWSTR BrcmstbIds[] = { L"BRCM5D12", L"80860F16" };
     static const PCWSTR Bcm2847Ids[] = { L"BCM2847" };
     PDEVICE_OBJECT Pdo;
@@ -697,6 +698,12 @@ SdBusHardwareAttach(
     Pdo = FdoExtension->PhysicalDevice;
     if (Pdo == NULL)
     {
+        return STATUS_SUCCESS;
+    }
+
+    if (SdBusDeviceMatchesAnyId(Pdo, Bcm2835SdHostIds, RTL_NUMBER_OF(Bcm2835SdHostIds)))
+    {
+        FdoExtension->HostType = SdBusHostBcm2835;
         return STATUS_SUCCESS;
     }
 

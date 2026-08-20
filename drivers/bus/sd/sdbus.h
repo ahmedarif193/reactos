@@ -33,6 +33,14 @@ typedef enum _SDBUS_DEVICE_STATE {
 } SDBUS_DEVICE_STATE;
 
 /**
+ * @brief Host controller register model driven by this FDO.
+ */
+typedef enum _SDBUS_HOST_TYPE {
+    SdBusHostSdhci = 0,
+    SdBusHostBcm2835
+} SDBUS_HOST_TYPE;
+
+/**
  * @brief Common device extension shared prefix for FDO and PDO.
  */
 typedef struct _SDBUS_COMMON_EXTENSION {
@@ -66,6 +74,11 @@ typedef struct _FDO_EXTENSION {
     ULONG RegisterLength;
     BOOLEAN RegistersMapped;
     BOOLEAN NonRemovable;
+
+    /* Controller register model; the BCM2835 SDHost backend lives in sdhost.c */
+    SDBUS_HOST_TYPE HostType;
+    ULONG SdHostHcfg;
+    ULONG SdHostCdiv;
 
     /* Optional hardware-specific controller extension */
     PVOID HardwareExtension;
@@ -551,6 +564,10 @@ NTSTATUS
 SdBusInterruptErrorToStatus(
     _In_ ULONG ErrorBits);
 
+USHORT
+SdBusResponseTypeToFlags(
+    _In_ SD_RESPONSE_TYPE ResponseType);
+
 /**
  * @brief Execute an SDHCI command with optional PIO data transfer.
  *
@@ -873,6 +890,12 @@ SdBusUpdateInterruptSignalEnable(
     SDBUS_SIGNAL_ENABLE_UPDATE Update;
 
     if (FdoExtension == NULL || FdoExtension->RegisterBase == NULL)
+    {
+        return 0;
+    }
+
+    /* The BCM2835 SDHost backend is fully polled and has no SDHCI interrupt registers */
+    if (FdoExtension->HostType == SdBusHostBcm2835)
     {
         return 0;
     }

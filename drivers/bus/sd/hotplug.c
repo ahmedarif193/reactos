@@ -221,27 +221,31 @@ SdBusEnumerateInsertedCard(
         KeDelayExecutionThread(KernelMode, FALSE, &Delay);
     }
 
-    PresentState = SdBusReadReg32(FdoExtension, SDHCI_PRESENT_STATE);
-    if (!(PresentState & SDHCI_PS_CARD_INSERTED))
+    /* The BCM2835 SDHost has no present-state register; its boot card is always inserted */
+    if (FdoExtension->HostType == SdBusHostSdhci)
     {
-        DPRINT1("SdBusEnumerateInsertedCard: insert bounced, card gone "
-                "(gen=%lu)\n", CurrentGeneration);
-        return STATUS_NO_MEDIA_IN_DEVICE;
-    }
-
-    {
-        ULONG StableTimeout = 100;
-        while (StableTimeout > 0)
+        PresentState = SdBusReadReg32(FdoExtension, SDHCI_PRESENT_STATE);
+        if (!(PresentState & SDHCI_PS_CARD_INSERTED))
         {
-            PresentState = SdBusReadReg32(FdoExtension, SDHCI_PRESENT_STATE);
-            if (PresentState & SDHCI_PS_CARD_STATE_STABLE)
-            {
-                break;
-            }
+            DPRINT1("SdBusEnumerateInsertedCard: insert bounced, card gone "
+                    "(gen=%lu)\n", CurrentGeneration);
+            return STATUS_NO_MEDIA_IN_DEVICE;
+        }
 
-            Delay.QuadPart = -10000;
-            KeDelayExecutionThread(KernelMode, FALSE, &Delay);
-            StableTimeout--;
+        {
+            ULONG StableTimeout = 100;
+            while (StableTimeout > 0)
+            {
+                PresentState = SdBusReadReg32(FdoExtension, SDHCI_PRESENT_STATE);
+                if (PresentState & SDHCI_PS_CARD_STATE_STABLE)
+                {
+                    break;
+                }
+
+                Delay.QuadPart = -10000;
+                KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+                StableTimeout--;
+            }
         }
     }
 

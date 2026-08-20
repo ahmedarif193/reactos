@@ -14,7 +14,9 @@ list(APPEND SOURCE
     power.c
     sdio.c
     emmc.c
+    sdhost.c
     hardware.h
+    sdhost.h
     sdbus.h)
 
 add_library(sdbus MODULE ${SOURCE} sdbus.rc)
