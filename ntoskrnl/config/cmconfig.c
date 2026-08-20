@@ -9,10 +9,150 @@
 /* INCLUDES ******************************************************************/
 
 #include "ntoskrnl.h"
+#include <reactos/arc/loaderblk.h>
 #define NDEBUG
 #include "debug.h"
 
 /* FUNCTIONS *****************************************************************/
+
+CODE_SEG("INIT")
+VOID
+NTAPI
+CmpInitializeProcessorClockFromFirmware(
+    _In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    enum
+    {
+        SmbiosEntryPointMapSize = 32,
+        SmbiosMaximumTableSize = 16 * 1024 * 1024
+    };
+    PHYSICAL_ADDRESS PhysicalAddress;
+    PSMBIOS3_ENTRY_POINT EntryPoint;
+    PSMBIOS_HEADER Header;
+    PKPRCB Prcb;
+    PUCHAR Table;
+    PUCHAR TableEnd;
+    PUCHAR Next;
+    ULONG TableSize;
+    ULONG FirmwareMHz = 0;
+    ULONG ProcessorNumber;
+    UCHAR Checksum = 0;
+    UCHAR Index;
+    USHORT MaxSpeed;
+    USHORT CurrentSpeed;
+    USHORT Speed;
+    BOOLEAN ConflictingSpeeds = FALSE;
+
+    if ((LoaderBlock == NULL) ||
+        (LoaderBlock->Extension == NULL) ||
+        (LoaderBlock->Extension->SMBiosEPSHeader == NULL))
+    {
+        return;
+    }
+
+    PhysicalAddress.QuadPart =
+        (ULONGLONG)(ULONG_PTR)LoaderBlock->Extension->SMBiosEPSHeader;
+    EntryPoint = MmMapIoSpace(PhysicalAddress,
+                              SmbiosEntryPointMapSize,
+                              MmCached);
+    if (EntryPoint == NULL)
+    {
+        return;
+    }
+
+    if (!RtlEqualMemory(EntryPoint->Anchor, "_SM3_", 5) ||
+        (EntryPoint->Length < sizeof(*EntryPoint)) ||
+        (EntryPoint->Length > SmbiosEntryPointMapSize) ||
+        (EntryPoint->TableAddress == 0) ||
+        (EntryPoint->MaxStructureSize < sizeof(SMBIOS_HEADER)) ||
+        (EntryPoint->MaxStructureSize > SmbiosMaximumTableSize))
+    {
+        MmUnmapIoSpace(EntryPoint, SmbiosEntryPointMapSize);
+        return;
+    }
+
+    for (Index = 0; Index < EntryPoint->Length; ++Index)
+    {
+        Checksum += ((PUCHAR)EntryPoint)[Index];
+    }
+    if (Checksum != 0)
+    {
+        MmUnmapIoSpace(EntryPoint, SmbiosEntryPointMapSize);
+        return;
+    }
+
+    PhysicalAddress.QuadPart = EntryPoint->TableAddress;
+    TableSize = EntryPoint->MaxStructureSize;
+    MmUnmapIoSpace(EntryPoint, SmbiosEntryPointMapSize);
+
+    Table = MmMapIoSpace(PhysicalAddress, TableSize, MmCached);
+    if (Table == NULL)
+    {
+        return;
+    }
+
+    Header = (PSMBIOS_HEADER)Table;
+    TableEnd = Table + TableSize;
+    while (((PUCHAR)Header + sizeof(*Header)) <= TableEnd)
+    {
+        if ((Header->Length < sizeof(*Header)) ||
+            ((PUCHAR)Header + Header->Length > TableEnd))
+        {
+            break;
+        }
+
+        if ((Header->Type == 4) &&
+            (Header->Length >= 0x18) &&
+            ((Header->Length < 0x19) || (((PUCHAR)Header)[0x18] & 0x40)))
+        {
+            RtlCopyMemory(&MaxSpeed, (PUCHAR)Header + 0x14, sizeof(MaxSpeed));
+            RtlCopyMemory(&CurrentSpeed, (PUCHAR)Header + 0x16, sizeof(CurrentSpeed));
+
+            if ((CurrentSpeed != 0) && (CurrentSpeed != MAXUSHORT))
+                Speed = CurrentSpeed;
+            else
+                Speed = MaxSpeed;
+
+            if ((Speed != 0) && (Speed != MAXUSHORT))
+            {
+                if (FirmwareMHz == 0)
+                    FirmwareMHz = Speed;
+                else if (FirmwareMHz != Speed)
+                    ConflictingSpeeds = TRUE;
+            }
+        }
+
+        if (Header->Type == 127)
+            break;
+
+        Next = (PUCHAR)Header + Header->Length;
+        while ((Next + 1 < TableEnd) &&
+               ((Next[0] != ANSI_NULL) || (Next[1] != ANSI_NULL)))
+        {
+            ++Next;
+        }
+        if (Next + 1 >= TableEnd)
+            break;
+
+        Header = (PSMBIOS_HEADER)(Next + 2);
+    }
+
+    MmUnmapIoSpace(Table, TableSize);
+
+    /* Do not guess a package-to-processor mapping for heterogeneous systems. */
+    if ((FirmwareMHz == 0) || ConflictingSpeeds)
+        return;
+
+    for (ProcessorNumber = 0;
+         ProcessorNumber < (ULONG)KeNumberProcessors;
+         ++ProcessorNumber)
+    {
+        Prcb = KiProcessorBlock[ProcessorNumber];
+
+        if ((Prcb != NULL) && (Prcb->MHz == 0))
+            Prcb->MHz = FirmwareMHz;
+    }
+}
 
 CODE_SEG("INIT")
 NTSTATUS

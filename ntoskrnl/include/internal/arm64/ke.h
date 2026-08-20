@@ -585,11 +585,6 @@ KiArm64SaveProcessorClock(
 
 ULONG
 NTAPI
-KiArm64GetProcessorClockMHz(
-    _In_ ULONG ProcessorNumber);
-
-ULONG
-NTAPI
 KiArm64QueryEffectiveClockMHz(
     _In_ ULONG ProcessorNumber);
 

@@ -258,7 +258,7 @@ CmpInitializeMachineDependentConfiguration(_In_ PLOADER_PARAMETER_BLOCK LoaderBl
 
             /* Set processor speed if available */
             {
-                ULONG CpuMHz = KiArm64GetProcessorClockMHz(i);
+                ULONG CpuMHz = KiProcessorBlock[i]->MHz;
 
                 if (CpuMHz)
                 {

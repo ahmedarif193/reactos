@@ -738,28 +738,15 @@ KiArm64SaveProcessorClock(_In_ ULONG ProcessorNumber)
     if (CpuClock >= 10000000ULL)
     {
         KiArm64CpuClockHz[ProcessorNumber] = CpuClock;
+        if (KiProcessorBlock[ProcessorNumber] != NULL)
+        {
+            KiProcessorBlock[ProcessorNumber]->MHz =
+                (ULONG)((CpuClock + 500000ULL) / 1000000ULL);
+        }
         DPRINT1("[arm64] CPU%u clock %u MHz\n",
                 ProcessorNumber,
                 (ULONG)((CpuClock + 500000ULL) / 1000000ULL));
     }
-}
-
-ULONG
-NTAPI
-KiArm64GetProcessorClockMHz(_In_ ULONG ProcessorNumber)
-{
-    ULONG64 CpuClock = 0;
-
-    if (ProcessorNumber < MAXIMUM_PROCESSORS)
-    {
-        CpuClock = KiArm64CpuClockHz[ProcessorNumber];
-    }
-    if (CpuClock == 0)
-    {
-        CpuClock = KiArm64CpuClockHz[0];
-    }
-
-    return (ULONG)((CpuClock + 500000ULL) / 1000000ULL);
 }
 
 ULONG64 KiArm64IdleCounterTicks[MAXIMUM_PROCESSORS];
@@ -780,9 +767,14 @@ KiArm64QueryEffectiveClockMHz(_In_ ULONG ProcessorNumber)
     ULONG64 DeltaCycles, DeltaRef, DeltaIdle, BusyRef, EffectiveHz;
     ULONG MaxMhz, Mhz;
 
-    MaxMhz = KiArm64GetProcessorClockMHz(ProcessorNumber);
     if ((ProcessorNumber >= MAXIMUM_PROCESSORS) ||
-        (KiArm64CpuClockHz[ProcessorNumber] == 0))
+        (KiProcessorBlock[ProcessorNumber] == NULL))
+    {
+        return 0;
+    }
+
+    MaxMhz = KiProcessorBlock[ProcessorNumber]->MHz;
+    if (KiArm64CpuClockHz[ProcessorNumber] == 0)
     {
         return MaxMhz;
     }
@@ -957,7 +949,6 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
         ULONG64 CounterFrequency = KiArm64GetCounterFrequency();
 
         Pcr->Prcb.CycleCounterFrequency = CounterFrequency;
-        Pcr->Prcb.MHz = (ULONG)((CounterFrequency + 500000ULL) / 1000000ULL);
     }
 
     {
