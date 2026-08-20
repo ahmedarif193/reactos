@@ -332,7 +332,9 @@ ChpepEnsureProcessData(VOID)
         return STATUS_SUCCESS;
     }
 
-    Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &EcCodeBitmap, 0, &RegionSize, MEM_RESERVE, PAGE_READWRITE);
+    /* Keep the low address range available for fixed system mappings used by
+     * both native and emulated process initialization. */
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &EcCodeBitmap, 0, &RegionSize, MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("CHPE: EC bitmap reserve failed, Status = 0x%08lx, Base = %p, Size = %Iu\n", Status, EcCodeBitmap, RegionSize);
@@ -1211,6 +1213,27 @@ ChpepCallFlsCallback(PFLS_CALLBACK_FUNCTION Callback,
 }
 
 static
+VOID
+NTAPI
+ChpepCallThreadpoolCallback(PVOID Callback,
+                            ULONG_PTR Argument0,
+                            ULONG_PTR Argument1,
+                            ULONG_PTR Argument2,
+                            ULONG_PTR Argument3)
+{
+    NTSTATUS Status;
+
+    Status = ChpeInitializeThread();
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("[CHPE] ntdll: cannot dispatch x64 threadpool callback %p, ThreadInit failed with Status = 0x%08lx\n", Callback, Status);
+        return;
+    }
+
+    ChpepCallX64Routine(Callback, Argument0, Argument1, Argument2, Argument3);
+}
+
+static
 NTSTATUS
 ChpepGetNativeProcedureAddress(PVOID Base,
                                PANSI_STRING Name,
@@ -1243,6 +1266,7 @@ ChpepResetEmulatorState(BOOLEAN UnloadModule)
     HMODULE Module = ChpeEmulatorModule;
 
     RtlpSetFlsCallbackDispatcher(NULL);
+    RtlpSetThreadpoolCallbackDispatcher(NULL);
     ChpeProcessInitialized = FALSE;
     ChpeEmulatorLoaded = FALSE;
     RtlZeroMemory(&ChpeDispatchTable, sizeof(ChpeDispatchTable));
@@ -1408,6 +1432,7 @@ ChpeInitializeProcess(VOID)
 
     ChpeProcessInitialized = TRUE;
     RtlpSetFlsCallbackDispatcher(ChpepCallFlsCallback);
+    RtlpSetThreadpoolCallbackDispatcher(ChpepCallThreadpoolCallback);
 
     Status = ChpepCreateCrossProcessWorkList();
     if (!NT_SUCCESS(Status))

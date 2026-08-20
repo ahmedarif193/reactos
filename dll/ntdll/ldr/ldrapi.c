@@ -10,6 +10,7 @@
 /* INCLUDES *****************************************************************/
 
 #include <ntdll.h>
+#include <delayloadhandler.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -24,6 +25,143 @@ ULONG AlternateResourceModuleCount;
 extern PLDR_MANIFEST_PROBER_ROUTINE LdrpManifestProberRoutine;
 
 /* FUNCTIONS *****************************************************************/
+
+static PVOID
+LdrpDelayRvaToAddress(PVOID BaseAddress, ULONG Rva)
+{
+    return (PBYTE)BaseAddress + Rva;
+}
+
+/*
+ * Resolve one entry from an RVA-based delay import descriptor.  The callback
+ * contract follows the public delay-load helper ABI; unlike the compiler
+ * helper, a NULL failure hook leaves the unresolved entry as NULL.
+ */
+PVOID
+NTAPI
+LdrResolveDelayLoadedAPI(
+    _In_ PVOID ParentBase,
+    _In_ PCIMAGE_DELAYLOAD_DESCRIPTOR Descriptor,
+    _In_opt_ PDELAYLOAD_FAILURE_DLL_CALLBACK DllHook,
+    _In_opt_ PDELAYLOAD_FAILURE_SYSTEM_ROUTINE SystemHook,
+    _In_ PIMAGE_THUNK_DATA ThunkAddress,
+    _In_ ULONG Flags)
+{
+    PIMAGE_THUNK_DATA ImportAddressTable, ImportNameTable;
+    PIMAGE_IMPORT_BY_NAME ImportByName;
+    DELAYLOAD_INFO DelayInfo;
+    PVOID ProcedureAddress = NULL;
+    PVOID *ModuleHandle;
+    UNICODE_STRING ModuleName;
+    ANSI_STRING ProcedureName;
+    PCSTR TargetDllName;
+    ULONG_PTR Index;
+    NTSTATUS Status;
+
+    UNREFERENCED_PARAMETER(Flags);
+
+    ModuleHandle = LdrpDelayRvaToAddress(ParentBase, Descriptor->ModuleHandleRVA);
+    ImportAddressTable = LdrpDelayRvaToAddress(ParentBase, Descriptor->ImportAddressTableRVA);
+    ImportNameTable = LdrpDelayRvaToAddress(ParentBase, Descriptor->ImportNameTableRVA);
+    TargetDllName = LdrpDelayRvaToAddress(ParentBase, Descriptor->DllNameRVA);
+    Index = ThunkAddress - ImportAddressTable;
+
+    if (!*ModuleHandle)
+    {
+        if (!RtlCreateUnicodeStringFromAsciiz(&ModuleName, TargetDllName))
+        {
+            Status = STATUS_NO_MEMORY;
+            goto Failure;
+        }
+
+        Status = LdrLoadDll(NULL, 0, &ModuleName, ModuleHandle);
+        RtlFreeUnicodeString(&ModuleName);
+        if (!NT_SUCCESS(Status)) goto Failure;
+    }
+
+    if (IMAGE_SNAP_BY_ORDINAL(ImportNameTable[Index].u1.Ordinal))
+    {
+        Status = LdrGetProcedureAddress(*ModuleHandle, NULL, IMAGE_ORDINAL(ImportNameTable[Index].u1.Ordinal), &ProcedureAddress);
+    }
+    else
+    {
+        ImportByName = LdrpDelayRvaToAddress(ParentBase, ImportNameTable[Index].u1.AddressOfData);
+        RtlInitAnsiString(&ProcedureName, (PCSZ)ImportByName->Name);
+        Status = LdrGetProcedureAddress(*ModuleHandle, &ProcedureName, 0, &ProcedureAddress);
+    }
+
+    if (NT_SUCCESS(Status))
+    {
+        ImportAddressTable[Index].u1.Function = (ULONG_PTR)ProcedureAddress;
+        return ProcedureAddress;
+    }
+
+Failure:
+    RtlZeroMemory(&DelayInfo, sizeof(DelayInfo));
+    DelayInfo.Size = sizeof(DelayInfo);
+    DelayInfo.DelayloadDescriptor = Descriptor;
+    DelayInfo.ThunkAddress = ThunkAddress;
+    DelayInfo.TargetDllName = TargetDllName;
+    DelayInfo.TargetApiDescriptor.ImportDescribedByName = !IMAGE_SNAP_BY_ORDINAL(ImportNameTable[Index].u1.Ordinal);
+    if (DelayInfo.TargetApiDescriptor.ImportDescribedByName)
+    {
+        ImportByName = LdrpDelayRvaToAddress(ParentBase, ImportNameTable[Index].u1.AddressOfData);
+        DelayInfo.TargetApiDescriptor.Description.Name = (PCSTR)ImportByName->Name;
+    }
+    else
+    {
+        DelayInfo.TargetApiDescriptor.Description.Ordinal = IMAGE_ORDINAL(ImportNameTable[Index].u1.Ordinal);
+    }
+    DelayInfo.TargetModuleBase = *ModuleHandle;
+    DelayInfo.LastError = Status;
+
+    if (DllHook) return DllHook(DELAYLOAD_GPA_FAILURE, &DelayInfo);
+    if (!SystemHook) return NULL;
+    if (DelayInfo.TargetApiDescriptor.ImportDescribedByName) return SystemHook(TargetDllName, DelayInfo.TargetApiDescriptor.Description.Name);
+    return SystemHook(TargetDllName, (PCSTR)(ULONG_PTR)DelayInfo.TargetApiDescriptor.Description.Ordinal);
+}
+
+/*
+ * Resolve every delayed import from one named DLL.  Win11 rejects non-zero
+ * flags, matches the descriptor name without case sensitivity, and reports a
+ * failed entry with STATUS_DELAY_LOAD_FAILED.
+ */
+NTSTATUS
+NTAPI
+LdrResolveDelayLoadsFromDll(
+    _In_ PVOID ParentBase,
+    _In_ PCSTR TargetDllName,
+    _In_ ULONG Flags)
+{
+    PIMAGE_DELAYLOAD_DESCRIPTOR Descriptor, DescriptorEnd;
+    PIMAGE_THUNK_DATA ImportAddressTable;
+    ULONG DirectorySize;
+    NTSTATUS Status;
+
+    if (Flags) return STATUS_INVALID_PARAMETER;
+
+    Descriptor = RtlImageDirectoryEntryToData((HMODULE)ParentBase, TRUE, IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT, &DirectorySize);
+    if (!Descriptor) return STATUS_DLL_NOT_FOUND;
+
+    DescriptorEnd = Descriptor + DirectorySize / sizeof(*Descriptor);
+    while (Descriptor < DescriptorEnd && Descriptor->DllNameRVA)
+    {
+        if (!_stricmp(LdrpDelayRvaToAddress(ParentBase, Descriptor->DllNameRVA), TargetDllName)) break;
+        Descriptor++;
+    }
+
+    if (Descriptor == DescriptorEnd || !Descriptor->DllNameRVA) return STATUS_DLL_NOT_FOUND;
+
+    Status = STATUS_SUCCESS;
+    ImportAddressTable = LdrpDelayRvaToAddress(ParentBase, Descriptor->ImportAddressTableRVA);
+    while (ImportAddressTable->u1.Function)
+    {
+        if (!LdrResolveDelayLoadedAPI(ParentBase, Descriptor, NULL, NULL, ImportAddressTable, 0)) Status = STATUS_DELAY_LOAD_FAILED;
+        ImportAddressTable++;
+    }
+
+    return Status;
+}
 
 NTSTATUS
 NTAPI
@@ -1528,7 +1666,7 @@ LdrUnloadDll(
         EntryPoint = LdrEntry->EntryPoint;
 
         /* Check if we should call it */
-        if ((EntryPoint) && (LdrEntry->Flags & LDRP_PROCESS_ATTACH_CALLED))
+        if ((EntryPoint || LdrEntry->TlsIndex) && (LdrEntry->Flags & LDRP_PROCESS_ATTACH_CALLED))
         {
             /* Show message */
             if (ShowSnaps)
@@ -1548,10 +1686,8 @@ LdrUnloadDll(
             /* Call the entrypoint */
             _SEH2_TRY
             {
-                LdrpCallInitRoutine(LdrEntry->EntryPoint,
-                                    LdrEntry->DllBase,
-                                    DLL_PROCESS_DETACH,
-                                    NULL);
+                if (LdrEntry->TlsIndex) LdrpCallTlsInitializers(LdrEntry, DLL_PROCESS_DETACH);
+                if (EntryPoint) LdrpCallInitRoutine(LdrEntry->EntryPoint, LdrEntry->DllBase, DLL_PROCESS_DETACH, NULL);
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
             {
@@ -1563,6 +1699,8 @@ LdrUnloadDll(
             /* Release the context */
             RtlDeactivateActivationContextUnsafeFast(&ActCtx);
         }
+
+        LdrpReleaseTlsData(LdrEntry);
 
         /* Remove it from the list */
         RemoveEntryList(&CurrentEntry->InLoadOrderLinks);

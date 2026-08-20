@@ -1715,9 +1715,10 @@ LdrpHandleTlsData(IN PLDR_DATA_TABLE_ENTRY LdrEntry)
     TlsData = RtlAllocateHeap(RtlGetProcessHeap(), 0, sizeof(LDRP_TLS_DATA));
     if (!TlsData) return STATUS_NO_MEMORY;
 
-    LdrEntry->LoadCount = -1;
     LdrEntry->TlsIndex = -1;
     TlsData->TlsDirectory = *TlsDirectory;
+    TlsData->DllBase = LdrEntry->DllBase;
+    TlsData->Active = TRUE;
     InsertTailList(&LdrpTlsList, &TlsData->TlsLinks);
 
     Index = LdrpNumberOfTlsEntries++;
@@ -1758,6 +1759,35 @@ LdrpHandleTlsData(IN PLDR_DATA_TABLE_ENTRY LdrEntry)
                         (LONG)Index);
 
     return STATUS_SUCCESS;
+}
+
+/*
+ * Retire a dynamically unloaded module's TLS slot without reusing its index.
+ * Existing thread vectors keep their private block until thread teardown, so
+ * concurrent readers never observe freed TLS storage. New thread vectors leave
+ * the retired slot empty and no longer read template data from the unmapped DLL.
+ */
+VOID
+NTAPI
+LdrpReleaseTlsData(IN PLDR_DATA_TABLE_ENTRY LdrEntry)
+{
+    PLDRP_TLS_DATA TlsData;
+    PLIST_ENTRY Link;
+
+    if (!LdrEntry->TlsIndex || !LdrpTlsList.Flink)
+        return;
+
+    for (Link = LdrpTlsList.Flink; Link != &LdrpTlsList; Link = Link->Flink)
+    {
+        TlsData = CONTAINING_RECORD(Link, LDRP_TLS_DATA, TlsLinks);
+        if (!TlsData->Active || TlsData->DllBase != LdrEntry->DllBase)
+            continue;
+
+        TlsData->Active = FALSE;
+        InterlockedExchange((LONG volatile *)TlsData->TlsDirectory.AddressOfIndex, 0);
+        LdrEntry->TlsIndex = 0;
+        return;
+    }
 }
 
 NTSTATUS
@@ -1805,9 +1835,7 @@ LdrpAllocateTls(VOID)
         return STATUS_SUCCESS;
 
     /* Allocate the vector array */
-    TlsVector = RtlAllocateHeap(RtlGetProcessHeap(),
-                                    0,
-                                    LdrpNumberOfTlsEntries * sizeof(PVOID));
+    TlsVector = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, LdrpNumberOfTlsEntries * sizeof(PVOID));
     if (!TlsVector) return STATUS_NO_MEMORY;
     Teb->ThreadLocalStoragePointer = TlsVector;
 
@@ -1819,6 +1847,9 @@ LdrpAllocateTls(VOID)
         /* Get the entry */
         TlsData = CONTAINING_RECORD(NextEntry, LDRP_TLS_DATA, TlsLinks);
         NextEntry = NextEntry->Flink;
+
+        if (!TlsData->Active)
+            continue;
 
         /* Allocate a per-thread copy of this module's TLS block. Its size is the
          * initialised raw data PLUS SizeOfZeroFill zero-initialised bytes that

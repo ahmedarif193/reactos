@@ -307,6 +307,7 @@
 #endif // SYSFUNCS_NT6_ONLY
 
 #ifndef SYSFUNCS_NT5_ONLY
+    SVC_(FlushProcessWriteBuffers, 0)
     SVC_(GetCurrentProcessorNumberEx, 1)
     SVC_(CreateUserProcess, 11)
     SVC_(CompareObjects, 2)

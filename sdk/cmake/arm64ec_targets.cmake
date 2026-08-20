@@ -13,6 +13,8 @@
 set(ARM64EC_RUNTIME_MODULES
     advapi32
     advpack
+    apphelp
+    avrt
     bcrypt
     browseui
     cabinet
@@ -51,10 +53,12 @@ set(ARM64EC_RUNTIME_MODULES
     mlang
     mpr
     msacm32
+    msafd
     msctf
     msctfime
     msimg32
     msvcrt
+    mswsock
     ncrypt
     netapi32
     newdev
@@ -74,6 +78,7 @@ set(ARM64EC_RUNTIME_MODULES
     shcore
     shell32
     shdocvw
+    shfolder
     shlwapi
     setupapi
     ucrtbase
@@ -90,7 +95,14 @@ set(ARM64EC_RUNTIME_MODULES
     winmm
     winspool
     wintrust
-    ws2_32)
+    wsock32
+    ws2_32
+    wshtcpip
+    xinput1_1
+    xinput1_2
+    xinput1_3
+    xinput1_4
+    xinput9_1_0)
 
 # Additional names under which a runtime module must be shipped. Keep the
 # implementation name because existing ReactOS modules import it directly.

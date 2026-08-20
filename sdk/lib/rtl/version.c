@@ -263,35 +263,19 @@ VerSetConditionMask(IN ULONGLONG ConditionMask,
                     IN ULONG TypeMask,
                     IN UCHAR Condition)
 {
-    ULONGLONG ullCondMask;
+    ULONG Shift = 0;
 
     if (TypeMask == 0)
-        return ConditionMask;
+        return 0;
 
-    Condition &= VER_CONDITION_MASK;
+    do
+    {
+        TypeMask >>= 1;
+        Shift += VER_NUM_BITS_PER_CONDITION_MASK;
+    } while (TypeMask != 0);
 
-    if (Condition == 0)
-        return ConditionMask;
-
-    ullCondMask = Condition;
-    if (TypeMask & VER_PRODUCT_TYPE)
-        ConditionMask |= ullCondMask << (7 * VER_NUM_BITS_PER_CONDITION_MASK);
-    else if (TypeMask & VER_SUITENAME)
-        ConditionMask |= ullCondMask << (6 * VER_NUM_BITS_PER_CONDITION_MASK);
-    else if (TypeMask & VER_SERVICEPACKMAJOR)
-        ConditionMask |= ullCondMask << (5 * VER_NUM_BITS_PER_CONDITION_MASK);
-    else if (TypeMask & VER_SERVICEPACKMINOR)
-        ConditionMask |= ullCondMask << (4 * VER_NUM_BITS_PER_CONDITION_MASK);
-    else if (TypeMask & VER_PLATFORMID)
-        ConditionMask |= ullCondMask << (3 * VER_NUM_BITS_PER_CONDITION_MASK);
-    else if (TypeMask & VER_BUILDNUMBER)
-        ConditionMask |= ullCondMask << (2 * VER_NUM_BITS_PER_CONDITION_MASK);
-    else if (TypeMask & VER_MAJORVERSION)
-        ConditionMask |= ullCondMask << (1 * VER_NUM_BITS_PER_CONDITION_MASK);
-    else if (TypeMask & VER_MINORVERSION)
-        ConditionMask |= ullCondMask << (0 * VER_NUM_BITS_PER_CONDITION_MASK);
-
-    return ConditionMask;
+    Shift = (Shift - VER_NUM_BITS_PER_CONDITION_MASK) & 63;
+    return ConditionMask | ((ULONGLONG)(Condition & VER_CONDITION_MASK) << Shift) | (1ULL << 63);
 }
 
 /* EOF */

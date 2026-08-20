@@ -247,6 +247,12 @@ NtFlushBuffersFileEx(
     _Out_ PIO_STATUS_BLOCK IoStatusBlock
 );
 
+__kernel_entry
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtFlushProcessWriteBuffers(VOID);
+
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -866,6 +872,12 @@ ZwFlushBuffersFileEx(
     _In_ ULONG ParametersSize,
     _Out_ PIO_STATUS_BLOCK IoStatusBlock
 );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+ZwFlushProcessWriteBuffers(VOID);
 
 NTSYSAPI
 NTSTATUS

@@ -448,7 +448,7 @@ RtlDeleteCriticalSection(PRTL_CRITICAL_SECTION CriticalSection)
  *     SpinCount - Spin count for the critical section.
  *
  * Returns:
- *     STATUS_SUCCESS.
+ *     The previous spin count.
  *
  * Remarks:
  *     SpinCount is ignored on single-processor systems.
@@ -459,11 +459,12 @@ NTAPI
 RtlSetCriticalSectionSpinCount(PRTL_CRITICAL_SECTION CriticalSection,
                                ULONG SpinCount)
 {
-    ULONG OldCount = (ULONG)CriticalSection->SpinCount;
+    ULONG_PTR OldValue = CriticalSection->SpinCount;
+    ULONG_PTR Flags = OldValue & RTL_CRITICAL_SECTION_ALL_FLAG_BITS;
 
-    /* Set to parameter if MP, or to 0 if this is Uniprocessor */
-    CriticalSection->SpinCount = (NtCurrentPeb()->NumberOfProcessors > 1) ? SpinCount : 0;
-    return OldCount;
+    /* Preserve the internal flag byte and replace only the low 24-bit count. */
+    CriticalSection->SpinCount = Flags | ((NtCurrentPeb()->NumberOfProcessors > 1) ? (SpinCount & ~RTL_CRITICAL_SECTION_ALL_FLAG_BITS) : 0);
+    return (ULONG)(OldValue & ~RTL_CRITICAL_SECTION_ALL_FLAG_BITS);
 }
 
 /*++

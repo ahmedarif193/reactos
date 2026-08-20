@@ -27,6 +27,8 @@ typedef struct _LDRP_TLS_DATA
 {
     LIST_ENTRY TlsLinks;
     IMAGE_TLS_DIRECTORY TlsDirectory;
+    PVOID DllBase;
+    BOOLEAN Active;
 } LDRP_TLS_DATA, *PLDRP_TLS_DATA;
 
 typedef VOID (NTAPI *PRTLP_FLS_CALLBACK_DISPATCHER)(PFLS_CALLBACK_FUNCTION Callback, PVOID Data);
@@ -41,6 +43,13 @@ NTAPI
 RtlpCallFlsCallback(
     _In_ PFLS_CALLBACK_FUNCTION Callback,
     _In_opt_ PVOID Data);
+
+typedef VOID (NTAPI *PRTLP_THREADPOOL_CALLBACK_DISPATCHER)(PVOID Callback, ULONG_PTR Argument0, ULONG_PTR Argument1, ULONG_PTR Argument2, ULONG_PTR Argument3);
+
+VOID
+NTAPI
+RtlpSetThreadpoolCallbackDispatcher(
+    _In_opt_ PRTLP_THREADPOOL_CALLBACK_DISPATCHER Dispatcher);
 
 typedef
 NTSTATUS
@@ -92,6 +101,7 @@ NTSTATUS NTAPI LdrpRunInitializeRoutines(IN PCONTEXT Context OPTIONAL);
 VOID NTAPI LdrpInitializeThread(IN PCONTEXT Context);
 NTSTATUS NTAPI LdrpInitializeTls(VOID);
 NTSTATUS NTAPI LdrpHandleTlsData(IN PLDR_DATA_TABLE_ENTRY LdrEntry);
+VOID NTAPI LdrpReleaseTlsData(IN PLDR_DATA_TABLE_ENTRY LdrEntry);
 NTSTATUS NTAPI LdrpAllocateTls(VOID);
 VOID NTAPI LdrpFreeTls(VOID);
 VOID NTAPI LdrpCallTlsInitializers(IN PLDR_DATA_TABLE_ENTRY LdrEntry, IN ULONG Reason);
