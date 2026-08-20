@@ -351,6 +351,7 @@
 @ stdcall GenerateConsoleCtrlEvent(long long)
 @ stdcall GetACP()
 @ stdcall -version=0x601+ GetActiveProcessorCount(long)
+@ stdcall -version=0x601+ GetActiveProcessorGroupCount()
 @ stdcall -version=0x600+ GetApplicationRecoveryCallback(ptr ptr ptr ptr ptr)
 @ stdcall -version=0x600+ GetApplicationRestartSettings(ptr ptr ptr ptr)
 @ stdcall GetAtomNameA(long ptr long)
