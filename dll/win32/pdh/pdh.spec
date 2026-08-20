@@ -19,15 +19,15 @@
 @ stdcall PdhCollectQueryDataEx(ptr long ptr)
 @ stub PdhComputeCounterStatistics
 @ stdcall PdhConnectMachineA(str)
-@ stub PdhConnectMachineW
+@ stdcall PdhConnectMachineW(wstr)
 @ stub PdhCreateSQLTablesA
 @ stub PdhCreateSQLTablesW
 @ stub PdhEnumLogSetNamesA
 @ stub PdhEnumLogSetNamesW
-@ stub PdhEnumMachinesA
+@ stdcall PdhEnumMachinesA(str ptr ptr)
 @ stub PdhEnumMachinesHA
 @ stub PdhEnumMachinesHW
-@ stub PdhEnumMachinesW
+@ stdcall PdhEnumMachinesW(wstr ptr ptr)
 @ stdcall PdhEnumObjectItemsA(str str str ptr ptr ptr ptr long long)
 @ stub PdhEnumObjectItemsHA
 @ stub PdhEnumObjectItemsHW
