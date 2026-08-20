@@ -617,7 +617,15 @@ typedef struct _ARM64_CPU_FEATURES
     ULONG SmeSupported:1;       /* ID_AA64PFR1_EL1[27:24]  SME present           */
     ULONG El2Implemented:1;     /* ID_AA64PFR0_EL1[11:8]   EL2 implemented       */
     ULONG AtomicSupported:4;    /* ID_AA64ISAR0_EL1[23:20] 2=FEAT_LSE           */
+    ULONG FpSupported:1;        /* ID_AA64PFR0_EL1[19:16]  FP present             */
     ULONG NeonSupported:1;      /* ID_AA64PFR0_EL1[23:20]  FP/SIMD present       */
+    ULONG AesSupported:4;       /* ID_AA64ISAR0_EL1[7:4]   AES/PMULL level        */
+    ULONG Sha1Supported:4;      /* ID_AA64ISAR0_EL1[11:8]  SHA1 present           */
+    ULONG Sha2Supported:4;      /* ID_AA64ISAR0_EL1[15:12] SHA2 level             */
+    ULONG Crc32Supported:4;     /* ID_AA64ISAR0_EL1[19:16] CRC32 present          */
+    ULONG DotProdSupported:4;   /* ID_AA64ISAR0_EL1[47:44] dot product present    */
+    ULONG JscvtSupported:4;     /* ID_AA64ISAR1_EL1[15:12] JSCVT present          */
+    ULONG LrcpcSupported:4;     /* ID_AA64ISAR1_EL1[23:20] LRCPC level            */
     ULONG AsidBits:5;           /* ID_AA64MMFR0_EL1[7:4] decoded as 8 or 16      */
     ULONG HaEnabled:1;          /* TCR_EL1.HA committed by BSP                   */
     ULONG HdEnabled:1;          /* TCR_EL1.HD committed (DBM hardware dirty)     */
