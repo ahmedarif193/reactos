@@ -31,6 +31,7 @@ KiArm64TtbrToPa(
 #define SCTLR_EL1_SA    (1ULL << 3)
 #define SCTLR_EL1_SA0   (1ULL << 4)
 #define SCTLR_EL1_I     (1ULL << 12)
+#define SCTLR_EL1_DZE   (1ULL << 14)
 #define SCTLR_EL1_nTWE  (1ULL << 18)
 #define SCTLR_EL1_BT0   (1ULL << 35)
 #define SCTLR_EL1_BT1   (1ULL << 36)
@@ -140,9 +141,10 @@ KiArm64ApplySctlrPolicy(VOID)
     ULONG64 NewSctlr;
 
     __asm__ __volatile__("mrs %0, sctlr_el1" : "=r"(Sctlr));
-    /* FEX uses WFE in EL0 synchronization paths, so do not trap it to EL1. */
+    /* Permit the architectural EL0 instructions used by optimized runtimes. */
     NewSctlr = (Sctlr & ~(SCTLR_EL1_A | SCTLR_EL1_BT0 | SCTLR_EL1_BT1)) |
-               SCTLR_EL1_SA | SCTLR_EL1_SA0 | SCTLR_EL1_I | SCTLR_EL1_nTWE;
+               SCTLR_EL1_SA | SCTLR_EL1_SA0 | SCTLR_EL1_I | SCTLR_EL1_DZE |
+               SCTLR_EL1_nTWE;
     if (NewSctlr != Sctlr)
     {
         __asm__ __volatile__("msr sctlr_el1, %0" :: "r"(NewSctlr) : "memory");
