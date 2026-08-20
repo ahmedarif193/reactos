@@ -929,6 +929,7 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
     Pcr->Prcb.GroupIndex = (UCHAR)ProcessorNumber;
     Pcr->Prcb.SetMember = 1ULL << ProcessorNumber;
     Pcr->Prcb.MultiThreadProcessorSet = Pcr->Prcb.SetMember;
+    Pcr->Prcb.MultiThreadSetMaster = &Pcr->Prcb;
     Pcr->Prcb.CoresPerPhysicalProcessor = 1;
     Pcr->Prcb.LogicalProcessorsPerCore = 1;
     KiArm64InitializeProcessorNumaTopology(ProcessorNumber, &Pcr->Prcb, KeLoaderBlock);

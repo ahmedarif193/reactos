@@ -953,6 +953,7 @@ KiArm64FinalizeSmtTopology(VOID)
         if (!KiArm64CpuNumaTopology[Cpu].HasMpidr)
         {
             Prcb->MultiThreadProcessorSet = Prcb->SetMember;
+            Prcb->MultiThreadSetMaster = Prcb;
             Prcb->LogicalProcessorsPerCore = 1;
             Prcb->CoresPerPhysicalProcessor = 1;
             continue;
@@ -1013,6 +1014,16 @@ KiArm64FinalizeSmtTopology(VOID)
         }
 
         Prcb->MultiThreadProcessorSet = Siblings;
+        Prcb->MultiThreadSetMaster = Prcb;
+        for (Other = 0; Other < MAXIMUM_PROCESSORS; Other++)
+        {
+            if ((Siblings & AFFINITY_MASK(Other)) &&
+                (KiProcessorBlock[Other] != NULL))
+            {
+                Prcb->MultiThreadSetMaster = KiProcessorBlock[Other];
+                break;
+            }
+        }
         Prcb->LogicalProcessorsPerCore = (UCHAR)ThreadCount;
         Prcb->CoresPerPhysicalProcessor = (UCHAR)CoreCount;
     }
