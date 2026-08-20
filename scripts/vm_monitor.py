@@ -46,6 +46,8 @@ import bisect
 import glob
 import socket
 
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+
 # Configuration (never change those values)
 LOG_FILE = "/tmp/freeldr_arm64.log"
 STALL_TIMEOUT = int(os.environ.get("ROS_VM_STALL_TIMEOUT", "15"))
@@ -54,20 +56,33 @@ VM_NAME = os.environ.get("ROS_VM_NAME", "ROS11")
 ENABLE_GDB_DUMP = os.environ.get("ROS_VM_GDB_DUMP", "1") != "0"
 QEMU_GDB_PORT = int(os.environ.get("ROS_QEMU_GDB_PORT", "1234"))
 QEMU_ARM64_GIC_VERSION = os.environ.get("ROS_QEMU_GIC_VERSION", "auto")
-QEMU_ARM64_MEMORY = os.environ.get("ROS_QEMU_ARM64_MEMORY", "24G")
+QEMU_ARM64_MEMORY = "2G"
+QEMU_ARM64_RAMFB_WIDTH = 1440
+QEMU_ARM64_RAMFB_HEIGHT = 900
+QEMU_ARM64_FIRMWARE_SIZE = 64 * 1024 * 1024
+QEMU_ARM64_FIRMWARE = os.path.realpath(
+    os.environ.get(
+        "ROS_QEMU_ARM64_FIRMWARE",
+        os.path.join(SCRIPT_DIR, "firmware", "edk2-aarch64-code-1440x900.fd"),
+    )
+)
 ENABLE_SMP_TABLE = os.environ.get("ROS_VM_SMP_TABLE", "1") != "0"
 KERNEL_TEXT_ADDRESS = (
     int(os.environ["ROS_KERNEL_TEXT"], 0)
     if "ROS_KERNEL_TEXT" in os.environ else None
 )
-CRASH_LOG_MARKERS = (
+CRASH_NOTICE_MARKERS = (
     "*** Fatal System Error:",
     "*** Assertion failed:",
+)
+DEBUGGER_ENTRY_MARKERS = (
     "Entered debugger on embedded breakpoint",
     "Entered debugger on last-chance exception",
     "Break repeatedly, break Once",
 )
-SUCCESS_LOG_MARKER = "BOOT_TESTS_DONE"
+DEBUGGER_READY_MARKERS = ("kdb:>",)
+KDBG_GRACE_TIMEOUT = float(os.environ.get("ROS_VM_KDBG_GRACE_TIMEOUT", "15"))
+SUCCESS_LOG_MARKER = os.environ.get("ROS_VM_SUCCESS_MARKER", "BOOT_TESTS_DONE")
 KERNEL_LOG_MARKERS = (
     "Command Line: HAL=",
     "SMPSTAT reporter started",
@@ -95,6 +110,23 @@ def get_build_dir():
 BUILD_DIR = get_build_dir()
 FAT32_IMG = os.path.join(BUILD_DIR, "fat32.img")
 REACTOS_IMG = os.path.realpath(os.path.join(BUILD_DIR, "ReactOS.img"))
+AUXILIARY_IMG = os.path.realpath(
+    os.environ.get(
+        "ROS_QEMU_AUXILIARY_IMAGE",
+        os.environ.get("ROS_QEMU_GAMES3D_IMAGE", os.path.join(BUILD_DIR, "Arm64Apps.img")),
+    )
+)
+QEMU_DISPLAY = os.environ.get(
+    "ROS_QEMU_DISPLAY",
+    "cocoa,full-screen=on,zoom-to-fit=on" if platform.system() == "Darwin" else "none",
+)
+QEMU_VGA_WIDTH = int(os.environ.get("ROS_QEMU_VGA_WIDTH", "1440"))
+QEMU_VGA_HEIGHT = int(os.environ.get("ROS_QEMU_VGA_HEIGHT", "900"))
+VBOX_FRONTEND = os.environ.get("ROS_VBOX_FRONTEND", "gui")
+VBOX_SCALE_FACTOR = os.environ.get(
+    "ROS_VBOX_SCALE_FACTOR",
+    "1.5" if platform.system() == "Darwin" else "",
+)
 LIVECD_ISO = os.path.realpath(os.path.join(BUILD_DIR, "livecd.iso"))
 POST_BOOT_PROGRAM = None
 POST_BOOT_DELAY = float(os.environ.get("ROS_VM_POST_BOOT_DELAY", "8"))
@@ -621,6 +653,33 @@ def qemu_arm64_disk_drive_args(image_path):
     ]
 
 
+def qemu_auxiliary_drive_args(is_iso_boot):
+    """Attach the optional auxiliary image to disk-image boots."""
+    if is_iso_boot or not os.path.isfile(AUXILIARY_IMG):
+        return []
+
+    if target_arch == "arm64":
+        return [
+            "-drive", f"if=none,id=auxiliary,format=raw,file.driver=file,file.filename={AUXILIARY_IMG},file.locking=off",
+            "-device", "ide-hd,drive=auxiliary,bus=ahci.1",
+        ]
+
+    return ["-drive", f"file={AUXILIARY_IMG},format=raw"]
+
+
+def qemu_x86_display_args():
+    """Return a visible, Retina-friendly x86 display configuration."""
+    if not (640 <= QEMU_VGA_WIDTH <= 8192 and 480 <= QEMU_VGA_HEIGHT <= 8192):
+        raise ValueError(
+            f"invalid QEMU VGA size: {QEMU_VGA_WIDTH}x{QEMU_VGA_HEIGHT}"
+        )
+    return [
+        "-display", QEMU_DISPLAY,
+        "-vga", "none",
+        "-device", f"VGA,xres={QEMU_VGA_WIDTH},yres={QEMU_VGA_HEIGHT},vgamem_mb=32",
+    ]
+
+
 def resolve_qemu_arm64_gic_version(rpi_mode, is_darwin=False):
     """Return the QEMU virt GIC version to use for ARM64."""
     requested = str(QEMU_ARM64_GIC_VERSION).strip().lower()
@@ -684,6 +743,26 @@ def start_qemu(rpi_mode=False, smp=4):
     if target_arch == "arm64":
         is_darwin = platform.system() == "Darwin"
         machine_arg, gic_version = qemu_arm64_machine_arg(rpi_mode, is_darwin)
+        if is_darwin:
+            if not os.path.isfile(QEMU_ARM64_FIRMWARE):
+                print(f"Error: ARM64 firmware blob not found: {QEMU_ARM64_FIRMWARE}")
+                return False
+            firmware_size = os.path.getsize(QEMU_ARM64_FIRMWARE)
+            if firmware_size != QEMU_ARM64_FIRMWARE_SIZE:
+                print(
+                    "Error: ARM64 pflash firmware must be exactly "
+                    f"{QEMU_ARM64_FIRMWARE_SIZE} bytes, got {firmware_size}: "
+                    f"{QEMU_ARM64_FIRMWARE}"
+                )
+                return False
+            arm64_firmware_args = [
+                "-drive",
+                f"if=pflash,format=raw,readonly=on,file={QEMU_ARM64_FIRMWARE}",
+            ]
+        else:
+            arm64_firmware_args = [
+                "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd"
+            ]
         arm64_usb_devices = [
             "-device", "qemu-xhci,id=xhci",
             "-device", "usb-kbd,bus=xhci.0",
@@ -699,6 +778,12 @@ def start_qemu(rpi_mode=False, smp=4):
                 f"CPU max ({smp} cores{gic_desc})"
             )
         print(f"Starting QEMU (ARM64 - {mode_str}, {QEMU_ARM64_MEMORY} RAM)...")
+        if is_darwin:
+            print(f"  Firmware: {QEMU_ARM64_FIRMWARE}")
+            print(
+                f"  Display: {QEMU_DISPLAY}; ARM64 ramfb "
+                f"{QEMU_ARM64_RAMFB_WIDTH}x{QEMU_ARM64_RAMFB_HEIGHT}"
+            )
 
         # Darwin-specific configuration (macOS)
         if is_darwin:
@@ -714,9 +799,9 @@ def start_qemu(rpi_mode=False, smp=4):
                     "-machine", machine_arg,
                     "-cpu", "cortex-a72",
                     "-m", QEMU_ARM64_MEMORY,
-                    "-drive", "if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
+                    *arm64_firmware_args,
                     *(qemu_arm64_iso_drive_args(img_path) if is_iso_boot else qemu_arm64_disk_drive_args(img_path)),
-                    "-display", "none",
+                    "-display", QEMU_DISPLAY,
                     "-serial", "stdio"
                 ]
             else:
@@ -729,9 +814,9 @@ def start_qemu(rpi_mode=False, smp=4):
                     "-cpu", "max",
                     "-smp", smp_arg, *numa_args,
                     "-m", QEMU_ARM64_MEMORY,
-                    "-drive", "if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
+                    *arm64_firmware_args,
                     *(qemu_arm64_iso_drive_args(img_path) if is_iso_boot else qemu_arm64_disk_drive_args(img_path)),
-                    "-display", "none",
+                    "-display", QEMU_DISPLAY,
                     "-serial", f"file:{LOG_FILE}"
                 ]
         else:
@@ -753,9 +838,9 @@ def start_qemu(rpi_mode=False, smp=4):
                     "-machine", machine_arg,
                     "-cpu", "cortex-a72",
                     "-m", QEMU_ARM64_MEMORY,
-                    "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
+                    *arm64_firmware_args,
                     *(qemu_arm64_iso_drive_args(img_path) if is_iso_boot else qemu_arm64_disk_drive_args(img_path)),
-                    "-display", "none",
+                    "-display", QEMU_DISPLAY,
                     "-serial", "stdio"
                 ]
             else:
@@ -768,12 +853,16 @@ def start_qemu(rpi_mode=False, smp=4):
                     "-machine", machine_arg,
                     "-cpu", "max",
                     "-m", QEMU_ARM64_MEMORY,
-                    "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
+                    *arm64_firmware_args,
                     *(qemu_arm64_iso_drive_args(img_path) if is_iso_boot else qemu_arm64_disk_drive_args(img_path)),
-                    "-display", "none",
+                    "-display", QEMU_DISPLAY,
                     "-serial", f"file:{LOG_FILE}"
                 ]
 
+        auxiliary_args = qemu_auxiliary_drive_args(is_iso_boot)
+        qemu_cmd.extend(auxiliary_args)
+        if auxiliary_args:
+            print(f"  Auxiliary disk: {AUXILIARY_IMG}")
         add_qemu_control_monitor(qemu_cmd)
         add_qemu_gdb_server(qemu_cmd)
         print(f"  Command: {' '.join(qemu_cmd)}")
@@ -854,6 +943,7 @@ def start_qemu(rpi_mode=False, smp=4):
                 # macOS amd64: Homebrew EDK2 code-only
                 qemu_cmd = [
                     qemu_binary,
+                    "-smp", smp_arg, *numa_args,
                     "-M", "q35",
                     "-m", "3G",
                     *(qemu_iso_drive_args(img_path) if is_iso_boot else [
@@ -907,6 +997,14 @@ def start_qemu(rpi_mode=False, smp=4):
                 ])
             ]
 
+        qemu_cmd.extend(qemu_x86_display_args())
+        print(f"  Display: {QEMU_DISPLAY}; VGA {QEMU_VGA_WIDTH}x{QEMU_VGA_HEIGHT}")
+
+        auxiliary_args = qemu_auxiliary_drive_args(is_iso_boot)
+        qemu_cmd.extend(auxiliary_args)
+        if auxiliary_args:
+            print(f"  Auxiliary disk: {AUXILIARY_IMG}")
+
         # Add acceleration: TCG on macOS, KVM on Linux
         if is_darwin:
             qemu_cmd.insert(1, "-accel")
@@ -946,15 +1044,45 @@ def start_qemu(rpi_mode=False, smp=4):
 
 
 def start_vbox():
-    """Start VirtualBox VM in headless mode."""
-    print(f"Starting VirtualBox VM '{VM_NAME}' (headless)...")
+    """Start VirtualBox with a visible, scaled GUI and report launch failures."""
+    valid_frontends = {"gui", "headless", "sdl", "separate"}
+    if VBOX_FRONTEND not in valid_frontends:
+        print(f"Error: invalid ROS_VBOX_FRONTEND: {VBOX_FRONTEND}")
+        return False
+
+    print(f"Starting VirtualBox VM '{VM_NAME}' ({VBOX_FRONTEND})...")
     try:
-        subprocess.Popen(
-            ["VBoxManage", "startvm", VM_NAME, "--type", "headless"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+        open(LOG_FILE, "w").close()
+
+        if VBOX_SCALE_FACTOR:
+            scale_factor = float(VBOX_SCALE_FACTOR)
+            if not 1.0 <= scale_factor <= 4.0:
+                raise ValueError("ROS_VBOX_SCALE_FACTOR must be between 1.0 and 4.0")
+            scale_result = subprocess.run(
+                ["VBoxManage", "setextradata", VM_NAME, "GUI/ScaleFactor", VBOX_SCALE_FACTOR],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=30,
+            )
+            if scale_result.returncode != 0:
+                print(f"Error configuring VirtualBox display:\n{scale_result.stdout.rstrip()}")
+                return False
+            print(f"  Display scale: {VBOX_SCALE_FACTOR}x")
+
+        start_result = subprocess.run(
+            ["VBoxManage", "startvm", VM_NAME, "--type", VBOX_FRONTEND],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=60,
         )
-        print(f"VM '{VM_NAME}' start command issued.")
+        if start_result.returncode != 0:
+            print(f"Error starting VirtualBox VM:\n{start_result.stdout.rstrip()}")
+            return False
+        if start_result.stdout.strip():
+            print(start_result.stdout.rstrip())
+        print(f"VM '{VM_NAME}' started with the {VBOX_FRONTEND} frontend.")
         return True
     except Exception as e:
         print(f"Error starting VM: {e}")
@@ -1010,9 +1138,9 @@ def read_log_tail(filepath, max_bytes=65536):
         return ""
 
 
-def log_has_crash_marker(log_text):
-    """Return True if the log tail shows a debugger stop/crash/assertion."""
-    return any(marker in log_text for marker in CRASH_LOG_MARKERS)
+def log_has_marker(log_text, markers):
+    """Return True if the log tail contains any marker in the sequence."""
+    return any(marker in log_text for marker in markers)
 
 
 def extract_interesting_log_addresses(log_text, limit=12):
@@ -2400,7 +2528,7 @@ def monitor_log():
     last_size = -1
     last_change_time = time.time()
     
-    overall_start_time = time.time()
+    overall_start_time = time.monotonic()
 
     print(f"Monitoring log file: {LOG_FILE}")
     print(f"Stall timeout: {STALL_TIMEOUT} seconds")
@@ -2410,14 +2538,14 @@ def monitor_log():
 
     wait_count = 0
     while get_file_size(LOG_FILE) <= 0:
-        if time.time() - overall_start_time > HARD_TIMEOUT:
+        if time.monotonic() - overall_start_time > HARD_TIMEOUT:
             print(f"HARD TIMEOUT ({HARD_TIMEOUT}s) reached waiting for log.")
             capture_gdb_dump("hard timeout waiting for serial")
             force_kill_vm()
             return
 
         if wait_count % 10 == 0:
-            print(f"Waiting for log output... ({int(time.time() - overall_start_time)}s)")
+            print(f"Waiting for log output... ({int(time.monotonic() - overall_start_time)}s)")
         wait_count += 1
         time.sleep(0.5)
         
@@ -2430,8 +2558,10 @@ def monitor_log():
     last_change_time = time.time()
     crash_dumped = False
     initial_log_tail = read_log_tail(LOG_FILE)
+    debugger_ready_initially = log_has_marker(initial_log_tail, DEBUGGER_READY_MARKERS)
+    crash_notice_at = time.time() if log_has_marker(initial_log_tail, CRASH_NOTICE_MARKERS + DEBUGGER_ENTRY_MARKERS) else None
     kernel_started = any(marker in initial_log_tail for marker in KERNEL_LOG_MARKERS)
-    post_boot_marker_seen = SUCCESS_LOG_MARKER in initial_log_tail
+    post_boot_marker_seen = crash_notice_at is None and SUCCESS_LOG_MARKER in initial_log_tail
     post_boot_launch_at = None
     post_boot_capture_at = None
     post_boot_finish_at = None
@@ -2447,6 +2577,13 @@ def monitor_log():
     log_follower.read_available()
 
     try:
+        if debugger_ready_initially:
+            print("KDBG prompt was already present; preserving native debugger output before GDB capture.")
+            capture_gdb_dump("KDBG ready")
+            check_and_translate_backtrace(LOG_FILE)
+            force_kill_vm()
+            return
+
         if post_boot_marker_seen:
             print(f"Runtime matrix completed: {SUCCESS_LOG_MARKER}")
             if not POST_BOOT_PROGRAM:
@@ -2459,7 +2596,7 @@ def monitor_log():
             time.sleep(0.5)
 
             # 1. Check Hard Timeout
-            total_runtime = time.time() - overall_start_time
+            total_runtime = time.monotonic() - overall_start_time
             if total_runtime > HARD_TIMEOUT:
                 print(f"HARD TIMEOUT REACHED! Running for {total_runtime:.1f} seconds.")
                 capture_gdb_dump("hard timeout")
@@ -2487,7 +2624,17 @@ def monitor_log():
                 log_tail = read_log_tail(LOG_FILE)
                 if not kernel_started:
                     kernel_started = any(marker in log_tail for marker in KERNEL_LOG_MARKERS)
-                if not post_boot_marker_seen and SUCCESS_LOG_MARKER in log_tail:
+                if not crash_dumped and log_has_marker(log_tail, DEBUGGER_READY_MARKERS):
+                    crash_dumped = True
+                    print("KDBG prompt reached; preserving native debugger output before GDB capture.")
+                    capture_gdb_dump("KDBG ready")
+                    check_and_translate_backtrace(LOG_FILE)
+                    force_kill_vm()
+                    return
+                if crash_notice_at is None and log_has_marker(log_tail, CRASH_NOTICE_MARKERS + DEBUGGER_ENTRY_MARKERS):
+                    crash_notice_at = current_time
+                    print(f"Crash announced; waiting up to {KDBG_GRACE_TIMEOUT:g} seconds for KDBG output and prompt.")
+                if crash_notice_at is None and not post_boot_marker_seen and SUCCESS_LOG_MARKER in log_tail:
                     post_boot_marker_seen = True
                     print(f"Runtime matrix completed: {SUCCESS_LOG_MARKER}")
                     if not POST_BOOT_PROGRAM:
@@ -2495,13 +2642,14 @@ def monitor_log():
                         return
                     post_boot_launch_at = current_time + POST_BOOT_DELAY
                     print(f"Post-boot launch scheduled in {POST_BOOT_DELAY:g} seconds.")
-                if not crash_dumped and log_has_crash_marker(log_tail):
-                    crash_dumped = True
-                    print("Crash/debugger marker detected in serial log.")
-                    capture_gdb_dump("serial crash marker")
-                    check_and_translate_backtrace(LOG_FILE)
-                    force_kill_vm()
-                    return
+
+            if crash_notice_at is not None and current_time - crash_notice_at >= KDBG_GRACE_TIMEOUT:
+                crash_dumped = True
+                print("KDBG prompt did not arrive within the grace period; using GDB fallback.")
+                capture_gdb_dump("KDBG grace timeout")
+                check_and_translate_backtrace(LOG_FILE)
+                force_kill_vm()
+                return
 
             if post_boot_launch_at is not None and current_time >= post_boot_launch_at:
                 print(f"Launching post-boot program: {POST_BOOT_PROGRAM}")
@@ -2539,7 +2687,7 @@ def monitor_log():
                 return
 
             post_boot_pending = POST_BOOT_PROGRAM and post_boot_marker_seen
-            if not log_changed and not post_boot_pending:
+            if not log_changed and not post_boot_pending and crash_notice_at is None:
                 stall_duration = current_time - last_change_time
 
                 if kernel_started and stall_duration >= STALL_TIMEOUT:
@@ -2631,8 +2779,13 @@ def main():
         boot_image_path = LIVECD_ISO
         build_target = "livecd"
     
-    # Force QEMU for ARM64 (VirtualBox does not exist for arm64)
+    # VirtualBox on ARM hosts can only run ARM guests. Use QEMU TCG for x86.
+    host_arch = platform.machine().lower()
     if target_arch == "arm64":
+        use_qemu = True
+    elif host_arch in ("arm64", "aarch64") and target_arch in ("i386", "amd64"):
+        if not use_qemu:
+            print(f"VirtualBox cannot run {target_arch} on this {host_arch} host; using QEMU TCG.")
         use_qemu = True
 
     atexit.register(force_kill_vm)
