@@ -112,10 +112,10 @@ AddService = usbdwc2, 0x00000002, usbdwc2_Service_Inst
 
 [usbdwc2_Service_Inst]
 ServiceType   = 1
-StartType     = 3
+StartType     = 0
 ErrorControl  = 1
 ServiceBinary = %12%\usbdwc2.sys
-LoadOrderGroup = Base
+LoadOrderGroup = Boot Bus Extender
 
 ;------------------------------ XHCI DRIVER -----------------------------
 
