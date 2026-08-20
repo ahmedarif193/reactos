@@ -122,6 +122,8 @@ typedef struct _FDO_CONTEXT
     PCI_BAR m_BAR4; //Intel AudioDSP
     BUS_INTERFACE_STANDARD BusInterface; //PCI Bus Interface
     WDFINTERRUPT Interrupt;
+    BOOLEAN InterruptResourcePresent;
+    BOOLEAN InterruptConnected;
 
     //Graphics Notifications
     PVOID GraphicsNotificationHandle;

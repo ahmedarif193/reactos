@@ -1215,9 +1215,20 @@ PciPdoNeedsMessageInterruptRequirementsRefresh(
     if (PciPdoRequirementsListHasMessageInterrupt(DeviceNode->ResourceRequirements))
         return FALSE;
 
-    if (EffectiveResources != NULL)
-        return HasLegacyResource;
-
+    /*
+     * The MSI policy can arrive from DDInstall.HW after the initial resource
+     * query. An MSI-only device can already have a non-NULL resource list at
+     * this point containing its BARs but no interrupt descriptor. Treat that
+     * state exactly like a legacy-INTx allocation: both need a fresh query so
+     * PdoQueryResourceRequirements can advertise the newly enabled message
+     * interrupt.
+     *
+     * Returning FALSE merely because EffectiveResources is non-NULL strands
+     * devices such as modern HDA controllers with Vector == 0. KMDF then has
+     * an interrupt object but no resource to connect to it.
+     */
+    DPRINT1("PCI PDO: MSI policy requires a resource refresh (%s current interrupt)\n",
+            HasLegacyResource ? "legacy" : "no");
     return TRUE;
 }
 
