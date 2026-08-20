@@ -175,9 +175,12 @@ NTSTATUS StartHDAController(PFDO_CONTEXT fdoCtx) {
 	HDAStartCorb(fdoCtx);
 	HDAStartRirb(fdoCtx);
 
-	//Enabling Controller Interrupt
+	// Unsolicited responses may be enabled while the global interrupt mask is
+	// still clear. KMDF connects the WDM interrupt only after EvtDeviceD0Entry;
+	// Fdo_EvtInterruptEnable turns on INTCTL at the correct point in that
+	// sequence.
 	hda_write32(fdoCtx, GCTL, hda_read32(fdoCtx, GCTL) | HDA_GCTL_UNSOL);
-	hda_write32(fdoCtx, INTCTL, hda_read32(fdoCtx, INTCTL) | HDA_INT_CTRL_EN | HDA_INT_GLOBAL_EN);
+	hda_write32(fdoCtx, INTCTL, 0);
 
 	{
 	//Program position buffer
@@ -205,6 +208,31 @@ static UINT16 HDACommandAddr(UINT32 cmd) {
 }
 
 NTSTATUS SendHDACmds(PFDO_CONTEXT fdoCtx, ULONG count, PHDAUDIO_CODEC_TRANSFER CodecTransfer) {
+	PKINTERRUPT wdmInterrupt;
+
+	if (fdoCtx == NULL || CodecTransfer == NULL || count == 0 ||
+		count > HDA_MAX_CORB_ENTRIES) {
+		SklHdAudBusPrint(DEBUG_LEVEL_ERROR, DBG_IOCTL,
+			"%s: invalid request (context=%p count=%lu transfers=%p)\n",
+			__func__, fdoCtx, count, CodecTransfer);
+		return STATUS_INVALID_PARAMETER;
+	}
+
+	wdmInterrupt = (fdoCtx->Interrupt != NULL) ?
+		WdfInterruptWdmGetInterrupt(fdoCtx->Interrupt) : NULL;
+	if (fdoCtx->Interrupt == NULL || !fdoCtx->InterruptResourcePresent ||
+		!fdoCtx->ControllerEnabled || !fdoCtx->InterruptConnected ||
+		wdmInterrupt == NULL) {
+		SklHdAudBusPrint(DEBUG_LEVEL_ERROR, DBG_IOCTL,
+			"%s: controller/interrupt is not ready (controller=%u resource=%u connected=%u wdm=%p)\n",
+			__func__,
+			fdoCtx->ControllerEnabled,
+			fdoCtx->InterruptResourcePresent,
+			fdoCtx->InterruptConnected,
+			wdmInterrupt);
+		return STATUS_DEVICE_NOT_READY;
+	}
+
 	WdfInterruptAcquireLock(fdoCtx->Interrupt);
 	for (ULONG i = 0; i < count; i++) {
 		PHDAUDIO_CODEC_TRANSFER transfer = &CodecTransfer[i];
