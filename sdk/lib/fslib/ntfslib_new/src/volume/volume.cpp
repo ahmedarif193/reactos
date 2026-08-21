@@ -146,6 +146,18 @@ NtfsProbePartitionAndOpenVolume(
     _In_ ULONG BytesPerSector,
     _Out_ PNtfsVolume* VolumeOut)
 {
+    return NtfsProbePartitionAndOpenVolumeEx(BytesPerSector,
+                                             NULL,
+                                             VolumeOut);
+}
+
+EXTERN_C
+NTSTATUS
+NtfsProbePartitionAndOpenVolumeEx(
+    _In_ ULONG BytesPerSector,
+    _In_opt_ void* IoContext,
+    _Out_ PNtfsVolume* VolumeOut)
+{
     NTSTATUS Status;
     PVolume VolumeObject;
     PUCHAR BootSectorData;
@@ -161,7 +173,11 @@ NtfsProbePartitionAndOpenVolume(
     if (!BootSectorData)
         return STATUS_INSUFFICIENT_RESOURCES;
 
-    Status = NtfsReadVolume(0, BytesPerSector, BootSectorData);
+    Status = NtfsReadVolumeContext(IoContext,
+                                   BytesPerSector,
+                                   0,
+                                   BytesPerSector,
+                                   BootSectorData);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Failed to read the boot sector! (Status %lx)\n", Status);
@@ -180,7 +196,8 @@ NtfsProbePartitionAndOpenVolume(
         goto Done;
     }
 
-    Status = VolumeObject->Initialize(BootSectorData);
+    Status = VolumeObject->Initialize(BootSectorData,
+                                      IoContext);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Failed to initialize volume object! (Status %lx)\n", Status);
@@ -220,7 +237,8 @@ Volume::~Volume()
 }
 
 NTSTATUS
-Volume::Initialize(_In_ PUCHAR BootSectorData)
+Volume::Initialize(_In_ PUCHAR BootSectorData,
+                   _In_opt_ void* Context)
 {
     ExInitializeFastMutex(&RecordPoolMutex);
 
@@ -231,6 +249,7 @@ Volume::Initialize(_In_ PUCHAR BootSectorData)
     NTSTATUS Status;
 
     PartitionBootSector = (BootSector*)BootSectorData;
+    IoContext = Context;
     VolumeFile = NULL;
     ShowMetadataFiles = NtfsDefaultShowMetadataFiles;
     IsReadOnly = NtfsDefaultReadOnlyMode;

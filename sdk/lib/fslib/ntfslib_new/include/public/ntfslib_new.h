@@ -768,6 +768,12 @@ NtfsProbePartitionAndOpenVolume(
     _In_ ULONG BytesPerSector,
     _Out_ PNtfsVolume* VolumeOut);
 
+NTSTATUS
+NtfsProbePartitionAndOpenVolumeEx(
+    _In_ ULONG BytesPerSector,
+    _In_opt_ void* IoContext,
+    _Out_ PNtfsVolume* VolumeOut);
+
 /* Library options */
 void
 NtfsSetShowMetadataFiles(
