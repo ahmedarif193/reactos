@@ -82,6 +82,25 @@ DEBUGGER_ENTRY_MARKERS = (
 )
 DEBUGGER_READY_MARKERS = ("kdb:>",)
 KDBG_GRACE_TIMEOUT = float(os.environ.get("ROS_VM_KDBG_GRACE_TIMEOUT", "15"))
+KDBG_NATIVE_EVIDENCE_TIMEOUT = float(
+    os.environ.get("ROS_VM_KDBG_NATIVE_EVIDENCE_TIMEOUT", "10")
+)
+KDBG_REGISTER_MARKERS = (
+    "PC  0x",       # ARM64
+    "CS:RIP  ",     # AMD64
+    "CS:EIP  ",     # i386
+)
+KDBG_BACKTRACE_FRAME_RE = re.compile(
+    r"^(?:"
+    r"\[(?:0x)?[0-9A-Fa-f]{8,16}\]\s+\S+"
+    r"|#\d+\s+SP=(?:0x)?[0-9A-Fa-f]{8,16}\s+"
+    r"FP=(?:0x)?[0-9A-Fa-f]{8,16}\s+"
+    r"PC=(?:0x)?[0-9A-Fa-f]{8,16}\s+\S+"
+    r"|<(?:[A-Za-z0-9_.-]+\.(?:exe|sys|dll):[0-9A-Fa-f]+(?:\s+[^>\r\n]*)?"
+    r"|(?:0x)?[0-9A-Fa-f]{8,16})>\s*"
+    r")$",
+    re.MULTILINE | re.IGNORECASE,
+)
 SUCCESS_LOG_MARKER = os.environ.get("ROS_VM_SUCCESS_MARKER", "BOOT_TESTS_DONE")
 KERNEL_LOG_MARKERS = (
     "Command Line: HAL=",
@@ -1141,6 +1160,29 @@ def read_log_tail(filepath, max_bytes=65536):
 def log_has_marker(log_text, markers):
     """Return True if the log tail contains any marker in the sequence."""
     return any(marker in log_text for marker in markers)
+
+
+def has_complete_native_kdbg_evidence(log_text):
+    """Check that the latest crash has both native register and stack output."""
+    evidence_start = max(
+        (log_text.rfind(marker) for marker in CRASH_NOTICE_MARKERS + DEBUGGER_ENTRY_MARKERS),
+        default=-1,
+    )
+    if evidence_start < 0:
+        return False
+
+    evidence = log_text[evidence_start:]
+    frames_start = evidence.rfind("Frames:")
+    has_backtrace_frame = (
+        frames_start >= 0
+        and KDBG_BACKTRACE_FRAME_RE.search(
+            evidence[frames_start + len("Frames:"):]
+        ) is not None
+    )
+    return (
+        log_has_marker(evidence, KDBG_REGISTER_MARKERS)
+        and has_backtrace_frame
+    )
 
 
 def extract_interesting_log_addresses(log_text, limit=12):
@@ -2559,6 +2601,7 @@ def monitor_log():
     crash_dumped = False
     initial_log_tail = read_log_tail(LOG_FILE)
     debugger_ready_initially = log_has_marker(initial_log_tail, DEBUGGER_READY_MARKERS)
+    debugger_ready_at = time.time() if debugger_ready_initially else None
     crash_notice_at = time.time() if log_has_marker(initial_log_tail, CRASH_NOTICE_MARKERS + DEBUGGER_ENTRY_MARKERS) else None
     kernel_started = any(marker in initial_log_tail for marker in KERNEL_LOG_MARKERS)
     post_boot_marker_seen = crash_notice_at is None and SUCCESS_LOG_MARKER in initial_log_tail
@@ -2578,11 +2621,15 @@ def monitor_log():
 
     try:
         if debugger_ready_initially:
-            print("KDBG prompt was already present; preserving native debugger output before GDB capture.")
-            capture_gdb_dump("KDBG ready")
-            check_and_translate_backtrace(LOG_FILE)
-            force_kill_vm()
-            return
+            if has_complete_native_kdbg_evidence(initial_log_tail):
+                print("KDBG prompt and complete native registers/backtrace were already present; skipping GDB fallback.")
+                check_and_translate_backtrace(LOG_FILE)
+                force_kill_vm()
+                return
+            print(
+                "KDBG prompt was already present without complete native evidence; "
+                f"waiting up to {KDBG_NATIVE_EVIDENCE_TIMEOUT:g} seconds before GDB fallback."
+            )
 
         if post_boot_marker_seen:
             print(f"Runtime matrix completed: {SUCCESS_LOG_MARKER}")
@@ -2597,7 +2644,7 @@ def monitor_log():
 
             # 1. Check Hard Timeout
             total_runtime = time.monotonic() - overall_start_time
-            if total_runtime > HARD_TIMEOUT:
+            if total_runtime > HARD_TIMEOUT and crash_notice_at is None:
                 print(f"HARD TIMEOUT REACHED! Running for {total_runtime:.1f} seconds.")
                 capture_gdb_dump("hard timeout")
                 # Try to translate any backtrace before exiting
@@ -2624,16 +2671,21 @@ def monitor_log():
                 log_tail = read_log_tail(LOG_FILE)
                 if not kernel_started:
                     kernel_started = any(marker in log_tail for marker in KERNEL_LOG_MARKERS)
-                if not crash_dumped and log_has_marker(log_tail, DEBUGGER_READY_MARKERS):
-                    crash_dumped = True
-                    print("KDBG prompt reached; preserving native debugger output before GDB capture.")
-                    capture_gdb_dump("KDBG ready")
-                    check_and_translate_backtrace(LOG_FILE)
-                    force_kill_vm()
-                    return
                 if crash_notice_at is None and log_has_marker(log_tail, CRASH_NOTICE_MARKERS + DEBUGGER_ENTRY_MARKERS):
                     crash_notice_at = current_time
                     print(f"Crash announced; waiting up to {KDBG_GRACE_TIMEOUT:g} seconds for KDBG output and prompt.")
+                if debugger_ready_at is None and log_has_marker(log_tail, DEBUGGER_READY_MARKERS):
+                    debugger_ready_at = current_time
+                    print(
+                        "KDBG prompt reached; waiting up to "
+                        f"{KDBG_NATIVE_EVIDENCE_TIMEOUT:g} seconds for native registers/backtrace."
+                    )
+                if debugger_ready_at is not None and has_complete_native_kdbg_evidence(log_tail):
+                    crash_dumped = True
+                    print("KDBG native registers and backtrace are complete; skipping GDB fallback.")
+                    check_and_translate_backtrace(LOG_FILE)
+                    force_kill_vm()
+                    return
                 if crash_notice_at is None and not post_boot_marker_seen and SUCCESS_LOG_MARKER in log_tail:
                     post_boot_marker_seen = True
                     print(f"Runtime matrix completed: {SUCCESS_LOG_MARKER}")
@@ -2643,7 +2695,25 @@ def monitor_log():
                     post_boot_launch_at = current_time + POST_BOOT_DELAY
                     print(f"Post-boot launch scheduled in {POST_BOOT_DELAY:g} seconds.")
 
-            if crash_notice_at is not None and current_time - crash_notice_at >= KDBG_GRACE_TIMEOUT:
+            if (
+                debugger_ready_at is not None
+                and current_time - debugger_ready_at >= KDBG_NATIVE_EVIDENCE_TIMEOUT
+            ):
+                crash_dumped = True
+                print(
+                    "KDBG native evidence remained incomplete for "
+                    f"{KDBG_NATIVE_EVIDENCE_TIMEOUT:g} seconds; using GDB fallback."
+                )
+                capture_gdb_dump("KDBG native evidence timeout")
+                check_and_translate_backtrace(LOG_FILE)
+                force_kill_vm()
+                return
+
+            if (
+                debugger_ready_at is None
+                and crash_notice_at is not None
+                and current_time - crash_notice_at >= KDBG_GRACE_TIMEOUT
+            ):
                 crash_dumped = True
                 print("KDBG prompt did not arrive within the grace period; using GDB fallback.")
                 capture_gdb_dump("KDBG grace timeout")
