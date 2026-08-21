@@ -4,10 +4,25 @@
     .align 4
 
     .extern LdrpInit
+    .extern KiUserExceptionDispatcherWorker
     .extern NtContinue
     .extern RtlExitUserThread
     .extern RtlRaiseStatus
     .extern ChpeRtlUserThreadStart
+
+    /*
+     * The kernel enters with sp pointing at a KUSER_EXCEPTION_STACK whose
+     * first member is the interrupted CONTEXT. Describe that synthetic frame
+     * explicitly so a second-pass unwind resumes from the interrupted state.
+     */
+    .global KiUserExceptionDispatcher
+    .seh_proc KiUserExceptionDispatcher
+KiUserExceptionDispatcher:
+    .seh_context
+    .seh_endprologue
+    bl      KiUserExceptionDispatcherWorker
+    brk     #1
+    .seh_endproc
 
     .global LdrInitializeThunk
     .seh_proc LdrInitializeThunk
