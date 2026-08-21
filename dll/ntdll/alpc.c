@@ -100,9 +100,6 @@ void WINAPI AlpcFreeCompletionListMessage(void *completion_list, PORT_MESSAGE *m
     start_bit = (ULONG)((message_address - data_address) / ALPC_COMPLETION_LIST_GRANULARITY);
     end_bit = (ULONG)((end_address - data_address + ALPC_COMPLETION_LIST_GRANULARITY - 1) /
                       ALPC_COMPLETION_LIST_GRANULARITY);
-    if (end_bit > header->BitmapSize * 8 || start_bit >= end_bit)
-        return;
-
     bitmap = (volatile LONG *)((ULONG_PTR)header + header->BitmapOffset);
     for (bit = start_bit; bit < end_bit; bit++)
         InterlockedAnd(&bitmap[bit / 32], ~(LONG)(1u << (bit % 32)));
@@ -179,8 +176,8 @@ PORT_MESSAGE *WINAPI AlpcGetMessageFromCompletionList(void *completion_list,
         }
     }
 
-    if (attributes)
-        *attributes = message ? AlpcGetCompletionListMessageAttributes(header, message) : NULL;
+    if (message && attributes)
+        *attributes = AlpcGetCompletionListMessageAttributes(header, message);
     RtlReleaseSRWLockExclusive(&header->UserLock);
     return message;
 }
