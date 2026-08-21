@@ -326,7 +326,11 @@ HalpGicv2ConfigureSpiAffinity(
     UCHAR CpuTarget;
     BOOLEAN NewAssignment = FALSE;
 
-    if (IntId < HALP_GICV2_SPI_BASE || IntId >= HALP_GICV2_SPI_MAX || !Affinity)
+    if (!Affinity)
+        return FALSE;
+
+    *Affinity = 0;
+    if (IntId < HALP_GICV2_SPI_BASE || IntId >= HALP_GICV2_SPI_MAX)
         return FALSE;
 
     Index = IntId - HALP_GICV2_SPI_BASE;
@@ -388,13 +392,21 @@ HalpInitGicv2SpiTargets(
     _In_ ULONG Lines)
 {
     ULONG i;
+    ULONG TargetWord;
+    UCHAR BootTarget;
 
     RtlZeroMemory(HalpGicv2SpiCpu, sizeof(HalpGicv2SpiCpu));
+
+    /* The boot processor's target bit is implementation-defined. */
+    BootTarget = HalpGicv2CpuTarget[0];
+    if (BootTarget == 0)
+        BootTarget = 0x01;
+    TargetWord = (ULONG)BootTarget * 0x01010101u;
 
     /* SPIs start at interrupt 32 */
     for (i = 32; i < Lines; i += 4)
     {
-        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ITARGETSR + (i & ~3)) = 0x01010101;
+        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ITARGETSR + (i & ~3)) = TargetWord;
     }
 
     __asm__ __volatile__("dsb sy" ::: "memory");
