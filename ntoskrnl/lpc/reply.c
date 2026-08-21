@@ -14,6 +14,21 @@
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
+/*
+ * Complete a thread reply while LpcpLock is held. The reply semaphore is
+ * binary, and an interrupted reply wait can leave its completion token
+ * pending until the thread runs again. In that case the existing token is
+ * already sufficient to make the newly installed reply observable; releasing
+ * it again would exceed the semaphore limit.
+ */
+static
+VOID
+LpcpCompleteThreadReplyWait(_In_ PETHREAD Thread)
+{
+    if (!KeReadStateSemaphore(&Thread->LpcReplySemaphore))
+        LpcpCompleteWait(&Thread->LpcReplySemaphore);
+}
+
 VOID
 NTAPI
 LpcpFreeDataInfoMessage(IN PLPCP_PORT_OBJECT Port,
@@ -340,9 +355,9 @@ NtReplyPort(IN HANDLE PortHandle,
                             CapturedReplyMessage.CallbackId,
                             CapturedReplyMessage.ClientId);
 
-    /* Release the lock and release the LPC semaphore to wake up waiters */
+    /* Complete the binary reply wait while its state is protected */
+    LpcpCompleteThreadReplyWait(WakeupThread);
     KeReleaseGuardedMutex(&LpcpLock);
-    LpcpCompleteWait(&WakeupThread->LpcReplySemaphore);
 
     /* Now we can let go of the thread */
     ObDereferenceObject(WakeupThread);
@@ -586,9 +601,9 @@ NtReplyWaitReceivePortEx(IN HANDLE PortHandle,
                                 CapturedReplyMessage.CallbackId,
                                 CapturedReplyMessage.ClientId);
 
-        /* Release the lock and release the LPC semaphore to wake up waiters */
+        /* Complete the binary reply wait while its state is protected */
+        LpcpCompleteThreadReplyWait(WakeupThread);
         KeReleaseGuardedMutex(&LpcpLock);
-        LpcpCompleteWait(&WakeupThread->LpcReplySemaphore);
 
         /* Now we can let go of the thread */
         ObDereferenceObject(WakeupThread);
