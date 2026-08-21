@@ -108,17 +108,42 @@ rosconfig_build() {
 	fi
 }
 
-# FEX ARM64EC is opt-in (default OFF, matching sdk/cmake/config.cmake). It is
-# enabled when -DENABLE_FEX_ARM64EC=ON (or an equivalent) is passed, or when
-# it has been enabled through menuconfig (rosconfig cache).
+# FEX ARM64EC is enabled by default for ARM64 builds. An explicit CMake value
+# takes precedence over menuconfig; otherwise the rosconfig value is used.
 fex_arm64ec_enabled() {
-	case " $ROS_CMAKEOPTS " in
-		*" -DENABLE_FEX_ARM64EC=ON "*|*" -DENABLE_FEX_ARM64EC:BOOL=ON "*|*" -DENABLE_FEX_ARM64EC=TRUE "*|*" -DENABLE_FEX_ARM64EC:BOOL=TRUE "*|*" -DENABLE_FEX_ARM64EC=1 "*|*" -DENABLE_FEX_ARM64EC:BOOL=1 "*)
-			return 0
-			;;
+	FEX_ARM64EC_OVERRIDE_SET=0
+	FEX_ARM64EC_OVERRIDE=
+	for FEX_ARM64EC_ARG in $ROS_CMAKEOPTS; do
+		case "$FEX_ARM64EC_ARG" in
+			-DENABLE_FEX_ARM64EC=*|-DENABLE_FEX_ARM64EC:*=*)
+				FEX_ARM64EC_OVERRIDE_SET=1
+				FEX_ARM64EC_OVERRIDE=${FEX_ARM64EC_ARG#*=}
+				;;
+		esac
+	done
+
+	if [ "$FEX_ARM64EC_OVERRIDE_SET" = "1" ]; then
+		FEX_ARM64EC_OVERRIDE=$(printf '%s' "$FEX_ARM64EC_OVERRIDE" | tr '[:lower:]' '[:upper:]')
+		case "$FEX_ARM64EC_OVERRIDE" in
+			""|0|OFF|NO|FALSE|N|IGNORE|NOTFOUND|*-NOTFOUND)
+				return 1
+				;;
+			*)
+				return 0
+				;;
+		esac
+	fi
+
+	case "$(rosconfig_cache_get ENABLE_FEX_ARM64EC)" in
+		y) return 0 ;;
+		n) return 1 ;;
 	esac
-	[ "$(rosconfig_cache_get ENABLE_FEX_ARM64EC)" = "y" ] && return 0
-	return 1
+
+	return 0
+}
+
+optional_fex_warning() {
+	echo "configure.sh: warning: $*. FEX ARM64EC is optional; configuration will continue." >&2
 }
 
 # KDBG on x86 uses the Zydis and Zycore revisions nested in FEX. Fetch only
@@ -181,11 +206,10 @@ sync_kdb_submodules() {
 sync_arm64_submodules() {
 	[ "$ARCH" = "arm64" ] || return 0
 
-	# The FEX submodule (and its recursive gvisor test binaries) is huge; only
-	# fetch it when FEX ARM64EC is explicitly enabled.
+	# The FEX submodule includes large recursive test-binary dependencies. Do
+	# not fetch it when FEX ARM64EC has been explicitly disabled.
 	if ! fex_arm64ec_enabled; then
-		echo "FEX ARM64EC disabled (default); skipping FEX submodule sync."
-		echo "  Pass -DENABLE_FEX_ARM64EC=ON to configure.sh to enable it."
+		echo "FEX ARM64EC disabled by configuration; skipping FEX submodule sync."
 		return 0
 	fi
 
@@ -194,7 +218,10 @@ sync_arm64_submodules() {
 		return 0
 	fi
 
-	command -v git >/dev/null 2>&1 || fail "git is required to initialize ARM64 submodules"
+	if ! command -v git >/dev/null 2>&1; then
+		optional_fex_warning "git is unavailable"
+		return 0
+	fi
 	FEX_CHECKOUT_DIR="$REACTOS_SOURCE_DIR/submodules/fex-arm64ec"
 	if [ -f "$FEX_CHECKOUT_DIR/CMakeLists.txt" ] && git -C "$FEX_CHECKOUT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 		FEX_MISSING_SUBMODULES=$(git -C "$FEX_CHECKOUT_DIR" submodule status --recursive 2>/dev/null | sed -n '/^-/p')
@@ -205,8 +232,14 @@ sync_arm64_submodules() {
 	fi
 
 	echo "Syncing FEX ARM64EC submodule..."
-	git -C "$REACTOS_SOURCE_DIR" submodule sync -- submodules/fex-arm64ec || fail "failed to sync FEX submodule metadata"
-	git -C "$REACTOS_SOURCE_DIR" submodule update --init --recursive -- submodules/fex-arm64ec || fail "failed to initialize FEX submodule"
+	if ! git -C "$REACTOS_SOURCE_DIR" submodule sync -- submodules/fex-arm64ec; then
+		optional_fex_warning "failed to sync the FEX submodule metadata"
+		return 0
+	fi
+	if ! git -C "$REACTOS_SOURCE_DIR" submodule update --init --recursive -- submodules/fex-arm64ec; then
+		optional_fex_warning "failed to initialize the FEX submodule"
+		return 0
+	fi
 }
 
 prepare_arm64_fex_source() {
@@ -218,18 +251,43 @@ prepare_arm64_fex_source() {
 	FEX_UPSTREAM_DIR="$REACTOS_SOURCE_DIR/submodules/fex-arm64ec"
 	FEX_PREPARED_DIR="$REACTOS_SOURCE_DIR/$REACTOS_OUTPUT_PATH/submodules/fex-arm64ec-src"
 
-	[ -f "$FEX_UPSTREAM_DIR/CMakeLists.txt" ] || fail "FEX submodule source is missing at $FEX_UPSTREAM_DIR"
-	[ -f "$FEX_UPSTREAM_DIR/External/fmt/CMakeLists.txt" ] || fail "FEX submodule dependencies are incomplete"
-	command -v cksum >/dev/null 2>&1 || fail "cksum is required to identify the prepared FEX source"
-
-	FEX_SOURCE_ID=
-	if command -v git >/dev/null 2>&1 && git -C "$FEX_UPSTREAM_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 && git -C "$FEX_UPSTREAM_DIR" diff --quiet --ignore-submodules=dirty HEAD --; then
-		FEX_SOURCE_REV=$(git -C "$FEX_UPSTREAM_DIR" rev-parse HEAD) || fail "could not identify the FEX source revision"
-		FEX_SUBMODULE_STATE=$(git -C "$FEX_UPSTREAM_DIR" submodule status --recursive) || fail "could not identify FEX submodule revisions"
-		FEX_SOURCE_ID=$(printf '%s\n%s\n' "$FEX_SOURCE_REV" "$FEX_SUBMODULE_STATE" | cksum | awk '{print $1 "-" $2}')
+	if [ ! -f "$FEX_UPSTREAM_DIR/CMakeLists.txt" ]; then
+		optional_fex_warning "FEX submodule source is missing at $FEX_UPSTREAM_DIR"
+		return 0
 	fi
+	if [ ! -f "$FEX_UPSTREAM_DIR/External/fmt/CMakeLists.txt" ]; then
+		optional_fex_warning "FEX submodule dependencies are incomplete"
+		return 0
+	fi
+	if ! command -v cksum >/dev/null 2>&1; then
+		optional_fex_warning "cksum is unavailable"
+		return 0
+	fi
+	if ! command -v git >/dev/null 2>&1 || ! git -C "$FEX_UPSTREAM_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+		optional_fex_warning "the FEX source revision cannot be identified"
+		return 0
+	fi
+	if ! git -C "$FEX_UPSTREAM_DIR" diff --quiet --ignore-submodules=dirty HEAD --; then
+		optional_fex_warning "the FEX source contains local changes"
+		return 0
+	fi
+
+	if ! FEX_SOURCE_REV=$(git -C "$FEX_UPSTREAM_DIR" rev-parse HEAD); then
+		optional_fex_warning "the FEX source revision cannot be identified"
+		return 0
+	fi
+	if ! FEX_SUBMODULE_STATE=$(git -C "$FEX_UPSTREAM_DIR" submodule status --recursive); then
+		optional_fex_warning "the FEX submodule revisions cannot be identified"
+		return 0
+	fi
+	FEX_MISSING_SUBMODULES=$(printf '%s\n' "$FEX_SUBMODULE_STATE" | sed -n '/^-/p')
+	if [ -n "$FEX_MISSING_SUBMODULES" ]; then
+		optional_fex_warning "FEX submodule dependencies are incomplete"
+		return 0
+	fi
+	FEX_SOURCE_ID=$(printf '%s\n%s\n' "$FEX_SOURCE_REV" "$FEX_SUBMODULE_STATE" | cksum | awk '{print $1 "-" $2}')
 	FEX_PREPARED_STAMP="$FEX_PREPARED_DIR/.reactos-source-id"
-	if [ -n "$FEX_SOURCE_ID" ] && [ -f "$FEX_PREPARED_DIR/CMakeLists.txt" ] && [ "$(sed -n '1p' "$FEX_PREPARED_STAMP" 2>/dev/null)" = "$FEX_SOURCE_ID" ]; then
+	if [ -f "$FEX_PREPARED_DIR/CMakeLists.txt" ] && [ "$(sed -n '1p' "$FEX_PREPARED_STAMP" 2>/dev/null)" = "$FEX_SOURCE_ID" ]; then
 		echo "Prepared FEX ARM64EC source is current; reusing it."
 		return 0
 	fi
@@ -239,9 +297,7 @@ prepare_arm64_fex_source() {
 	mkdir -p "$(dirname "$FEX_PREPARED_DIR")"
 	cp -a "$FEX_UPSTREAM_DIR" "$FEX_PREPARED_DIR"
 	rm -rf "$FEX_PREPARED_DIR/.git"
-	if [ -n "$FEX_SOURCE_ID" ]; then
-		printf '%s\n' "$FEX_SOURCE_ID" > "$FEX_PREPARED_STAMP"
-	fi
+	printf '%s\n' "$FEX_SOURCE_ID" > "$FEX_PREPARED_STAMP"
 }
 
 lower_build_type() {

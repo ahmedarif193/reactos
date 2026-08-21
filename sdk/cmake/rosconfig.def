@@ -474,12 +474,13 @@ config ISAPNP_ENABLE
 config ENABLE_FEX_ARM64EC
     prompt "FEX ARM64EC emulator (run AMD64 binaries)"
     type bool
-    default n
+    default y
     depends ARCH=arm64
     help
       Whether to build the optional FEX ARM64EC emulator for
-      running AMD64 binaries on ARM64. Enabling this makes
-      configure.sh sync and patch the (large) FEX submodule.
+      running AMD64 binaries on ARM64. This is enabled by default;
+      configure.sh syncs and prepares the (large) FEX submodule.
+      Missing FEX prerequisites do not block the main ARM64 build.
 
 config ENABLE_FEX_ARM64EC_TEST_PAYLOADS
     prompt "Include local AMD64 FEX diagnostic payloads"

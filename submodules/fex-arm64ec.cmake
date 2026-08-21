@@ -3,7 +3,8 @@
 # This builds FEX's arm64ecfex.dll from the FEX submodule using FEX's own
 # CMake build system as an external project, then deploys the resulting DLL.
 #
-# Disabled by default. Configure with -DENABLE_FEX_ARM64EC=ON.
+# Enabled by default on ARM64. Configure with -DENABLE_FEX_ARM64EC=OFF to
+# exclude it explicitly.
 
 if(NOT ARCH STREQUAL "arm64")
     message(FATAL_ERROR "FEX ARM64EC module is only supported on ARM64 builds")
@@ -11,42 +12,51 @@ endif()
 
 set(FEX_UPSTREAM_DIR "${REACTOS_SOURCE_DIR}/submodules/fex-arm64ec")
 set(FEX_SOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/fex-arm64ec-src")
-
-if(NOT EXISTS "${FEX_UPSTREAM_DIR}/CMakeLists.txt")
-    message(FATAL_ERROR "FEX source not found at ${FEX_UPSTREAM_DIR}. "
-        "Run: git submodule update --init --recursive -- submodules/fex-arm64ec")
-endif()
-
-# FEX requires its External/* dependencies.
-if(NOT EXISTS "${FEX_UPSTREAM_DIR}/External/fmt/CMakeLists.txt")
-    message(FATAL_ERROR "FEX dependencies are incomplete (External/fmt/ missing). "
-        "Run: git submodule update --init --recursive -- submodules/fex-arm64ec")
-endif()
+set(FEX_SOURCE_STATE "${FEX_SOURCE_DIR}/.reactos-source-id")
+set(FEX_ARM64EC_UNAVAILABLE_REASON)
 
 if(NOT EXISTS "${FEX_SOURCE_DIR}/CMakeLists.txt")
-    message(FATAL_ERROR "Prepared FEX ARM64EC source not found at ${FEX_SOURCE_DIR}. "
-        "Run configure.sh for the ARM64 build with -DENABLE_FEX_ARM64EC=ON")
+    set(FEX_ARM64EC_UNAVAILABLE_REASON "prepared source is missing at ${FEX_SOURCE_DIR}")
+elseif(NOT EXISTS "${FEX_SOURCE_DIR}/External/fmt/CMakeLists.txt")
+    set(FEX_ARM64EC_UNAVAILABLE_REASON "prepared source dependencies are incomplete")
+elseif(NOT EXISTS "${FEX_SOURCE_STATE}")
+    set(FEX_ARM64EC_UNAVAILABLE_REASON "prepared source state is missing at ${FEX_SOURCE_STATE}")
+elseif(NOT EXISTS "${REACTOS_CLANG_LLVM_MINGW_ROOT}/bin/arm64ec-w64-mingw32-clang" OR
+       NOT EXISTS "${REACTOS_CLANG_LLVM_MINGW_ROOT}/bin/arm64ec-w64-mingw32-clang++")
+    set(FEX_ARM64EC_UNAVAILABLE_REASON "the ARM64EC Clang toolchain is unavailable")
 endif()
 
-set(FEX_SOURCE_STATE "${FEX_SOURCE_DIR}/.reactos-source-id")
-if(NOT EXISTS "${FEX_SOURCE_STATE}")
-    message(FATAL_ERROR "Prepared FEX ARM64EC source state not found at ${FEX_SOURCE_STATE}. "
-        "Run configure.sh for the ARM64 build with -DENABLE_FEX_ARM64EC=ON")
+if(NOT FEX_ARM64EC_UNAVAILABLE_REASON)
+    find_program(FEX_LLVM_STRIP llvm-strip HINTS "${REACTOS_CLANG_LLVM_MINGW_ROOT}/bin")
+    if(NOT FEX_LLVM_STRIP OR NOT EXISTS "${FEX_LLVM_STRIP}")
+        set(FEX_ARM64EC_UNAVAILABLE_REASON "llvm-strip is unavailable")
+    endif()
 endif()
 
+if(NOT FEX_ARM64EC_UNAVAILABLE_REASON)
+    # FEX requires Python 3.9+ for IR/config code generation. Use find_program
+    # instead of find_package(Python) to avoid internal target conflicts with
+    # ReactOS's CMakeMacros overlay.
+    find_program(FEX_PYTHON_EXECUTABLE python3)
+    if(NOT FEX_PYTHON_EXECUTABLE OR NOT EXISTS "${FEX_PYTHON_EXECUTABLE}")
+        set(FEX_ARM64EC_UNAVAILABLE_REASON "Python 3 is unavailable")
+    endif()
+endif()
+
+if(FEX_ARM64EC_UNAVAILABLE_REASON)
+    message(WARNING "FEX ARM64EC is enabled but unavailable: ${FEX_ARM64EC_UNAVAILABLE_REASON}. "
+        "Continuing without the optional emulator. Run configure.sh to prepare FEX, "
+        "or use -DENABLE_FEX_ARM64EC=OFF to disable it explicitly.")
+    return()
+endif()
+
+set(FEX_ARM64EC_AVAILABLE ON)
 include(ExternalProject)
 
 set(FEX_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/fex-arm64ec-build")
 set(FEX_DLL_SOURCE "${FEX_BINARY_DIR}/Bin/libarm64ecfex.dll")
 set(FEX_DLL_DEST   "${CMAKE_CURRENT_BINARY_DIR}/arm64ecfex.dll")
 set(FEX_DLL_SYMBOLS "${REACTOS_BINARY_DIR}/symbols/arm64ecfex.dll")
-
-find_program(FEX_LLVM_STRIP llvm-strip HINTS "${REACTOS_CLANG_LLVM_MINGW_ROOT}/bin" REQUIRED)
-
-# FEX requires Python 3.9+ for IR/config code generation.
-# Use find_program instead of find_package(Python) to avoid internal
-# target conflicts with ReactOS's CMakeMacros overlay.
-find_program(FEX_PYTHON_EXECUTABLE python3 REQUIRED)
 
 ExternalProject_Add(fex-arm64ec-build
     SOURCE_DIR "${FEX_SOURCE_DIR}"
