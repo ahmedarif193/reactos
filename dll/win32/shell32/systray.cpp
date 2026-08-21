@@ -205,3 +205,61 @@ BOOL WINAPI Shell_NotifyIconW(DWORD dwMessage, PNOTIFYICONDATAW pnid)
 
     return ret;
 }
+
+/*************************************************************************
+ * Shell_NotifyIconGetRect
+ */
+HRESULT WINAPI Shell_NotifyIconGetRect(const NOTIFYICONIDENTIFIER *Identifier, RECT *IconLocation)
+{
+    static LONG MappingCounter;
+    TRAYNOTIFYICONGETRECTDATA Request = {0};
+    PTRAYNOTIFYICONGETRECTRESULT Result;
+    COPYDATASTRUCT CopyData;
+    WCHAR MappingName[NI_GETRECT_MAPPING_LENGTH];
+    HANDLE Mapping;
+    HWND ShellTrayWnd;
+    HRESULT Status;
+
+    if (!Identifier || !IconLocation)
+        return E_POINTER;
+
+    SetRectEmpty(IconLocation);
+    if (Identifier->cbSize != sizeof(*Identifier))
+        return E_INVALIDARG;
+
+    ShellTrayWnd = FindWindowW(L"Shell_TrayWnd", NULL);
+    if (!ShellTrayWnd)
+        return E_FAIL;
+
+    if (FAILED(StringCchPrintfW(MappingName, _countof(MappingName), L"ROS_NotifyIconRect_%08lx_%08lx_%08lx", GetCurrentProcessId(), GetCurrentThreadId(), InterlockedIncrement(&MappingCounter))))
+        return E_FAIL;
+
+    Mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, sizeof(*Result), MappingName);
+    if (!Mapping)
+        return E_FAIL;
+
+    Result = (PTRAYNOTIFYICONGETRECTRESULT)MapViewOfFile(Mapping, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, sizeof(*Result));
+    if (!Result)
+    {
+        CloseHandle(Mapping);
+        return E_FAIL;
+    }
+
+    Result->Result = E_FAIL;
+    SetRectEmpty(&Result->IconRect);
+    Request.dwSignature = NI_GETRECT_SIG;
+    Request.Identifier = *Identifier;
+    StringCchCopyW(Request.MappingName, _countof(Request.MappingName), MappingName);
+    CopyData.dwData = TABDMC_NOTIFY_GETRECT;
+    CopyData.cbData = sizeof(Request);
+    CopyData.lpData = &Request;
+    SendMessageW(ShellTrayWnd, WM_COPYDATA, (WPARAM)Identifier->hWnd, (LPARAM)&CopyData);
+
+    Status = Result->Result;
+    if (SUCCEEDED(Status))
+        *IconLocation = Result->IconRect;
+
+    UnmapViewOfFile(Result);
+    CloseHandle(Mapping);
+    return Status;
+}

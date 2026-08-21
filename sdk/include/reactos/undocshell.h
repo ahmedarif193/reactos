@@ -59,6 +59,22 @@ typedef struct _TRAYNOTIFYDATAW
 
 #define NI_NOTIFY_SIG 0x34753423 /* TRAYNOTIFYDATA */
 
+#define NI_GETRECT_SIG 0x3472434E /* TRAYNOTIFYICONGETRECTDATA */
+#define NI_GETRECT_MAPPING_LENGTH 64
+
+typedef struct _TRAYNOTIFYICONGETRECTDATA
+{
+    DWORD dwSignature;
+    NOTIFYICONIDENTIFIER Identifier;
+    WCHAR MappingName[NI_GETRECT_MAPPING_LENGTH];
+} TRAYNOTIFYICONGETRECTDATA, *PTRAYNOTIFYICONGETRECTDATA;
+
+typedef struct _TRAYNOTIFYICONGETRECTRESULT
+{
+    HRESULT Result;
+    RECT IconRect;
+} TRAYNOTIFYICONGETRECTRESULT, *PTRAYNOTIFYICONGETRECTRESULT;
+
 #endif /* defined (_SHELLAPI_H) || defined (_INC_SHELLAPI) */
 
 /****************************************************************************
@@ -1024,6 +1040,7 @@ BOOL WINAPI LinkWindow_UnregisterClass(_In_ DWORD dwUnused);
 #define TABDMC_APPBAR     0
 #define TABDMC_NOTIFY     1
 #define TABDMC_LOADINPROC 2
+#define TABDMC_NOTIFY_GETRECT 3
 
 void WINAPI ShellDDEInit(BOOL bInit);
 
