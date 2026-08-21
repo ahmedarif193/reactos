@@ -504,6 +504,15 @@ endif()
         file(APPEND ${REACTOS_BINARY_DIR}/boot/preinstall.cmake.lst "${_filelist}\n")
     endif()
     unset(_filelist)
+
+    # Build-local preinstall overlays are deliberately written after every
+    # regular image entry so that a matching destination replaces the default.
+    get_property(_filelist GLOBAL PROPERTY PREINSTALL_OVERLAY_FILE_LIST)
+    if(_filelist)
+        string(REPLACE ";" "\n" _filelist "${_filelist}")
+        file(APPEND ${REACTOS_BINARY_DIR}/boot/preinstall.cmake.lst "${_filelist}\n")
+    endif()
+    unset(_filelist)
     file(GENERATE
          OUTPUT ${REACTOS_BINARY_DIR}/boot/preinstall.$<CONFIG>.lst
          INPUT ${REACTOS_BINARY_DIR}/boot/preinstall.cmake.lst)

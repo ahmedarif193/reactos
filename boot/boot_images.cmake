@@ -409,6 +409,49 @@ file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "Program Files/Comm
 add_allusers_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "Profiles")
 add_user_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "Profiles" "Default User")
 
+# Optional build-local payload for preinstalled disk images. Each non-comment
+# line uses the same "image/path=host/path" format as preinstall.cmake.lst.
+# Keep external payloads outside the source tree while still making their
+# contents and dependencies part of the generated image build graph.
+set(PREINSTALL_EXTRA_FILE_LIST "" CACHE FILEPATH
+    "Additional file manifest for preinstalled ReactOS disk images")
+set(_preinstall_overlay_deps)
+if(PREINSTALL_EXTRA_FILE_LIST)
+    get_filename_component(_preinstall_extra_file_list
+        "${PREINSTALL_EXTRA_FILE_LIST}" ABSOLUTE BASE_DIR "${REACTOS_BINARY_DIR}")
+    if(NOT EXISTS "${_preinstall_extra_file_list}")
+        message(FATAL_ERROR "PREINSTALL_EXTRA_FILE_LIST does not exist: ${_preinstall_extra_file_list}")
+    endif()
+
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${_preinstall_extra_file_list}")
+    file(STRINGS "${_preinstall_extra_file_list}" _preinstall_extra_entries)
+    get_filename_component(_preinstall_extra_base "${_preinstall_extra_file_list}" DIRECTORY)
+    foreach(_preinstall_extra_entry IN LISTS _preinstall_extra_entries)
+        if(_preinstall_extra_entry STREQUAL "" OR _preinstall_extra_entry MATCHES "^[ \t]*#")
+            continue()
+        endif()
+
+        string(FIND "${_preinstall_extra_entry}" "=" _preinstall_extra_separator)
+        if(_preinstall_extra_separator LESS 1)
+            message(FATAL_ERROR "Invalid preinstall overlay entry: ${_preinstall_extra_entry}")
+        endif()
+
+        string(SUBSTRING "${_preinstall_extra_entry}" 0 ${_preinstall_extra_separator} _preinstall_extra_destination)
+        math(EXPR _preinstall_extra_source_offset "${_preinstall_extra_separator} + 1")
+        string(SUBSTRING "${_preinstall_extra_entry}" ${_preinstall_extra_source_offset} -1 _preinstall_extra_source)
+        get_filename_component(_preinstall_extra_source "${_preinstall_extra_source}" ABSOLUTE BASE_DIR "${_preinstall_extra_base}")
+        if(NOT EXISTS "${_preinstall_extra_source}")
+            message(FATAL_ERROR "Preinstall overlay source does not exist: ${_preinstall_extra_source}")
+        endif()
+
+        set_property(GLOBAL APPEND PROPERTY PREINSTALL_OVERLAY_FILE_LIST
+            "${_preinstall_extra_destination}=${_preinstall_extra_source}")
+        list(APPEND _preinstall_overlay_deps "${_preinstall_extra_source}")
+    endforeach()
+    list(APPEND _preinstall_overlay_deps "${_preinstall_extra_file_list}")
+endif()
+
 # Disk image size configuration (in MB)
 set(_preinstall_image_size_default 1024)
 set(PREINSTALL_IMAGE_SIZE_MB ${_preinstall_image_size_default} CACHE STRING "Boot and system area size in MB; the private crash-dump partition is additional")
@@ -485,7 +528,7 @@ if(_preinstall_rpi_overlays)
         endif()
     endforeach()
 endif()
-set(_preinstall_partition_deps native-fatten native-ntfsimg)
+set(_preinstall_partition_deps native-fatten native-ntfsimg ${_preinstall_overlay_deps})
 set(_reactosimg_mbr_args)
 set(_reactosimg_deps native-mkdiskimg)
 if(FREELDR_HAS_BIOS_BOOT)
