@@ -480,6 +480,9 @@ typedef struct _USBPORT_DEVICE_EXTENSION {
   /* Transfers */
   LIST_ENTRY MapTransferList;
   KSPIN_LOCK MapTransferSpinLock;
+  volatile LONG MapTransferBusy;
+  volatile LONG MapTransferCallbackState;
+  KDPC MapTransferDpc;
   LIST_ENTRY DoneTransferList;
   KSPIN_LOCK DoneTransferSpinLock;
   KDPC TransferFlushDpc;
@@ -821,6 +824,14 @@ USBPORT_Wait(
 VOID
 NTAPI
 USBPORT_TransferFlushDpc(
+  IN PRKDPC Dpc,
+  IN PVOID DeferredContext,
+  IN PVOID SystemArgument1,
+  IN PVOID SystemArgument2);
+
+VOID
+NTAPI
+USBPORT_MapTransferDpc(
   IN PRKDPC Dpc,
   IN PVOID DeferredContext,
   IN PVOID SystemArgument1,
