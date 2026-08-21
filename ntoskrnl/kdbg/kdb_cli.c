@@ -3453,22 +3453,45 @@ KdbpContextIsUsable(IN PCONTEXT Context)
 
 static
 BOOLEAN
-GetNextFrame(_Inout_ PCONTEXT Context)
+GetNextFrame(
+    _Inout_ PCONTEXT Context,
+    _In_ BOOLEAN FirstFrame)
 {
     PRUNTIME_FUNCTION FunctionEntry;
     ULONG64 ImageBase, EstablisherFrame;
     PVOID HandlerData;
     ULONG64 OldPc = KeGetContextPc(Context);
     ULONG64 OldSp = KeGetContextStackRegister(Context);
+    ULONG64 LookupPc = OldPc;
     UCHAR InstructionByte;
 
-    if (!NT_SUCCESS(KdbpSafeReadMemory(&InstructionByte, (PVOID)(ULONG_PTR)OldPc, sizeof(InstructionByte))))
+    /*
+     * The first frame contains an interrupted instruction pointer. Every
+     * frame produced by an unwind contains a return address instead. Convert
+     * those return addresses to call-site PCs before selecting unwind data;
+     * otherwise an address at a function boundary can select the following
+     * function and make the rest of the backtrace walk arbitrary stack data.
+     */
+    if (!FirstFrame)
+    {
+#ifdef _M_AMD64
+        if (LookupPc == 0)
+            return FALSE;
+        LookupPc--;
+#else
+        if (LookupPc < sizeof(ULONG))
+            return FALSE;
+        LookupPc -= sizeof(ULONG);
+#endif
+    }
+
+    if (!NT_SUCCESS(KdbpSafeReadMemory(&InstructionByte, (PVOID)(ULONG_PTR)LookupPc, sizeof(InstructionByte))))
         return FALSE;
 
     _SEH2_TRY
     {
         /* Lookup the FunctionEntry for the current PC */
-        FunctionEntry = RtlLookupFunctionEntry(OldPc, &ImageBase, NULL);
+        FunctionEntry = RtlLookupFunctionEntry(LookupPc, &ImageBase, NULL);
         if (FunctionEntry == NULL)
         {
             /* No function entry, so this must be a leaf function.
@@ -3488,7 +3511,7 @@ GetNextFrame(_Inout_ PCONTEXT Context)
 #endif
         }
 
-        RtlVirtualUnwind(UNW_FLAG_NHANDLER, ImageBase, OldPc, FunctionEntry, Context, &HandlerData, &EstablisherFrame, NULL);
+        RtlVirtualUnwind(UNW_FLAG_NHANDLER, ImageBase, LookupPc, FunctionEntry, Context, &HandlerData, &EstablisherFrame, NULL);
     }
     _SEH2_EXCEPT(1)
     {
@@ -3545,7 +3568,7 @@ KdbpPrintBackTraceContext(IN PCONTEXT InputContext, IN BOOLEAN Verbose, IN BOOLE
 
         if (KdbOutputAborted)
             return;
-        GotNextFrame = GetNextFrame(&Context);
+        GotNextFrame = GetNextFrame(&Context, FrameNumber == 0);
         if (!GotNextFrame)
         {
             KdbpPrint("Couldn't get next frame\n");
@@ -3767,7 +3790,7 @@ KdbpCmdFrame(ULONG Argc, PCHAR Argv[])
     Context = KdbFrameBaseContext;
     for (Index = 0; Index < FrameNumber; Index++)
     {
-        if (!GetNextFrame(&Context))
+        if (!GetNextFrame(&Context, Index == 0))
         {
             KdbpPrint(".frame: Frame %lu is unavailable; unwind stopped at frame %lu.\n", FrameNumber, Index);
             return TRUE;
