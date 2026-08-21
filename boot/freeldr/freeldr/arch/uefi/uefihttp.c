@@ -18,9 +18,9 @@ DBG_DEFAULT_CHANNEL(WARNING);
 #define HTTP_HOST_MAX_CHARS     256
 #define HTTP_BODY_CHUNK_SIZE    (4 * 1024 * 1024)
 #define HTTP_LOG_INTERVAL_SECONDS 5
+#define HTTP_PROGRESS_TICK_INTERVAL (1ULL * 10000000ULL)
 #define HTTP_OPERATION_TIMEOUT  (30ULL * 10000000ULL)
 #define HTTP_BOOT_MAX_FAILURES  3
-#define HTTP_SECONDS_PER_DAY    (24 * 60 * 60)
 typedef struct _UEFI_HTTP_SESSION
 {
     EFI_SERVICE_BINDING_PROTOCOL *Binding;
@@ -87,26 +87,6 @@ UefiHttpFindFunctionOwner(
 
     GlobalSystemTable->BootServices->FreePool(Handles);
     return Owner;
-}
-
-static ULONG
-UefiHttpGetSecondsOfDay(VOID)
-{
-    TIMEINFO *TimeInfo = ArcGetTime();
-
-    return ((TimeInfo->Hour * 60) + TimeInfo->Minute) * 60 +
-           TimeInfo->Second;
-}
-
-static ULONG
-UefiHttpElapsedSeconds(
-    _In_ ULONG StartSeconds,
-    _In_ ULONG EndSeconds)
-{
-    if (EndSeconds >= StartSeconds)
-        return EndSeconds - StartSeconds;
-
-    return HTTP_SECONDS_PER_DAY - StartSeconds + EndSeconds;
 }
 
 static EFI_HANDLE
@@ -222,6 +202,16 @@ UefiHttpNotify(
     volatile BOOLEAN *Done = Context;
 
     *Done = TRUE;
+}
+
+static VOID EFIAPI
+UefiHttpProgressTick(
+    _In_ EFI_EVENT Event,
+    _In_ VOID *Context)
+{
+    volatile ULONG *ElapsedSeconds = Context;
+
+    (*ElapsedSeconds)++;
 }
 
 static VOID
@@ -600,16 +590,43 @@ UefiHttpReadBody(
     _In_ UINTN ContentLength)
 {
     EFI_STATUS Status;
+    EFI_EVENT ProgressTimerEvent = NULL;
     UINT8 *Destination = Buffer;
     UINTN TotalReceived = 0;
     UINTN LastSpeedBytes = 0;
-    ULONG StartSeconds = UefiHttpGetSecondsOfDay();
-    ULONG LastSpeedSeconds = StartSeconds;
-    ULONG LastLogSeconds = StartSeconds;
+    volatile ULONG ElapsedSeconds = 0;
+    ULONG LastSpeedSeconds = 0;
+    ULONG LastLogSeconds = 0;
     ULONG CurrentSpeedTenths = 0;
     ULONG AverageSpeedTenths = 0;
     ULONG LastPercent = 0;
     CHAR ProgressText[64];
+    BOOLEAN Success = FALSE;
+
+    Status = GlobalSystemTable->BootServices->CreateEvent(
+        EVT_TIMER | EVT_NOTIFY_SIGNAL,
+        TPL_CALLBACK,
+        UefiHttpProgressTick,
+        (VOID *)&ElapsedSeconds,
+        &ProgressTimerEvent);
+    if (EFI_ERROR(Status))
+    {
+        TRACE("UEFI HttpBoot: could not create progress timer (Status %llx)\n",
+              (unsigned long long)Status);
+        return FALSE;
+    }
+
+    Status = GlobalSystemTable->BootServices->SetTimer(
+        ProgressTimerEvent,
+        TimerPeriodic,
+        HTTP_PROGRESS_TICK_INTERVAL);
+    if (EFI_ERROR(Status))
+    {
+        TRACE("UEFI HttpBoot: could not start progress timer (Status %llx)\n",
+              (unsigned long long)Status);
+        GlobalSystemTable->BootServices->CloseEvent(ProgressTimerEvent);
+        return FALSE;
+    }
 
     UiUpdateProgressBar(0, "ISO download 0% | measuring speed...");
 
@@ -633,7 +650,7 @@ UefiHttpReadBody(
                   (unsigned long)TotalReceived,
                   (unsigned long)ContentLength,
                   (unsigned long long)Status);
-            return FALSE;
+            goto Cleanup;
         }
 
         /*
@@ -660,17 +677,15 @@ UefiHttpReadBody(
         {
             ULONG Percent = (ULONG)(((ULONGLONG)TotalReceived * 100ULL) /
                                     (ULONGLONG)ContentLength);
-            ULONG NowSeconds = UefiHttpGetSecondsOfDay();
+            ULONG NowSeconds = ElapsedSeconds;
             BOOLEAN UpdateSpeed =
                 (NowSeconds != LastSpeedSeconds) ||
                 (TotalReceived == ContentLength);
 
             if (UpdateSpeed)
             {
-                ULONG SampleSeconds =
-                    UefiHttpElapsedSeconds(LastSpeedSeconds, NowSeconds);
-                ULONG TotalSeconds =
-                    UefiHttpElapsedSeconds(StartSeconds, NowSeconds);
+                ULONG SampleSeconds = NowSeconds - LastSpeedSeconds;
+                ULONG TotalSeconds = NowSeconds;
 
                 if (SampleSeconds != 0)
                 {
@@ -719,8 +734,7 @@ UefiHttpReadBody(
                 LastPercent = Percent;
             }
 
-            if (UefiHttpElapsedSeconds(LastLogSeconds, NowSeconds) >=
-                    HTTP_LOG_INTERVAL_SECONDS ||
+            if (NowSeconds - LastLogSeconds >= HTTP_LOG_INTERVAL_SECONDS ||
                 TotalReceived == ContentLength)
             {
                 TRACE("UEFI HttpBoot: %lu/%lu MiB (%lu%%, %lu.%lu MiB/s)\n",
@@ -734,7 +748,13 @@ UefiHttpReadBody(
         }
     }
 
-    return TRUE;
+    Success = TRUE;
+
+Cleanup:
+    GlobalSystemTable->BootServices->SetTimer(
+        ProgressTimerEvent, TimerCancel, 0);
+    GlobalSystemTable->BootServices->CloseEvent(ProgressTimerEvent);
+    return Success;
 }
 
 BOOLEAN
