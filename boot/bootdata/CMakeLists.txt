@@ -79,6 +79,8 @@ add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/preinstall/unattend.inf DESTINATION
 if(ENABLE_BOOT_TEST_RUN)
     add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/boot_test_start.cmd DESTINATION "Profiles/Default User/My Documents" FOR livecd preinstall)
 endif()
+
+add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/app_launcher.cmd DESTINATION "Profiles/Default User/My Documents" FOR livecd preinstall)
 # LiveImage shortcuts
 add_custom_target(livecd_links)
 function(add_livecd_shortcut name path)
