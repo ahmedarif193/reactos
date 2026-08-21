@@ -400,6 +400,7 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
     add_subdirectory(boot)
     add_subdirectory(base)
     add_subdirectory(dll)
+    set(FEX_ARM64EC_AVAILABLE OFF)
     add_subdirectory(submodules)
     add_subdirectory(drivers)
     add_subdirectory(hal)
@@ -411,7 +412,7 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
     add_subdirectory(sdk/tools/wpp)
     add_subdirectory(win32ss)
 
-    if(ARCH STREQUAL "arm64" AND ENABLE_FEX_ARM64EC AND NOT ARM64EC_RUNTIME)
+    if(ARCH STREQUAL "arm64" AND ENABLE_FEX_ARM64EC AND FEX_ARM64EC_AVAILABLE AND NOT ARM64EC_RUNTIME)
         include(sdk/cmake/arm64ec.cmake)
     endif()
 

@@ -187,7 +187,7 @@ cmake_dependent_option(ENABLE_ROSTESTS "Whether to build the ReactOS test suite.
 option(ROSSYM_COMPRESSION "Whether to compress the embedded .rossym symbol section." OFF)
 
 cmake_dependent_option(ENABLE_FEX_ARM64EC
-                       "Whether to build the optional FEX ARM64EC emulator for running AMD64 binaries on ARM64." OFF
+                       "Whether to build the optional FEX ARM64EC emulator for running AMD64 binaries on ARM64." ON
                        "ARCH STREQUAL arm64" OFF)
 
 cmake_dependent_option(ENABLE_FEX_ARM64EC_TEST_PAYLOADS
