@@ -468,6 +468,92 @@ ULONG
 NTAPI
 AlpcMaxAllowedMessageLength(VOID);
 
+NTSYSAPI
+NTSTATUS
+NTAPI
+AlpcAdjustCompletionListConcurrencyCount(
+    _In_ HANDLE PortHandle,
+    _In_ ULONG ConcurrencyCount
+);
+
+NTSYSAPI
+VOID
+NTAPI
+AlpcFreeCompletionListMessage(
+    _In_ PVOID CompletionList,
+    _In_ PPORT_MESSAGE Message
+);
+
+NTSYSAPI
+VOID
+NTAPI
+AlpcGetCompletionListLastMessageInformation(
+    _In_ PVOID CompletionList,
+    _Out_ PULONG LastMessageId,
+    _Out_ PULONG LastCallbackId
+);
+
+NTSYSAPI
+PALPC_MESSAGE_ATTRIBUTES
+NTAPI
+AlpcGetCompletionListMessageAttributes(
+    _In_ PVOID CompletionList,
+    _In_ PPORT_MESSAGE Message
+);
+
+NTSYSAPI
+PPORT_MESSAGE
+NTAPI
+AlpcGetMessageFromCompletionList(
+    _In_ PVOID CompletionList,
+    _Out_opt_ PALPC_MESSAGE_ATTRIBUTES *MessageAttributes
+);
+
+NTSYSAPI
+ULONG
+NTAPI
+AlpcGetOutstandingCompletionListMessageCount(
+    _In_ PVOID CompletionList
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+AlpcRegisterCompletionList(
+    _In_ HANDLE PortHandle,
+    _In_ PVOID CompletionList,
+    _In_ ULONG CompletionListSize,
+    _In_ ULONG ConcurrencyCount,
+    _In_ ULONG AttributeFlags
+);
+
+NTSYSAPI
+BOOLEAN
+NTAPI
+AlpcRegisterCompletionListWorkerThread(
+    _In_ PVOID CompletionList
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+AlpcRundownCompletionList(
+    _In_ HANDLE PortHandle
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+AlpcUnregisterCompletionList(
+    _In_ HANDLE PortHandle
+);
+
+NTSYSAPI
+BOOLEAN
+NTAPI
+AlpcUnregisterCompletionListWorkerThread(
+    _In_ PVOID CompletionList
+);
 
 NTSYSCALLAPI
 NTSTATUS
