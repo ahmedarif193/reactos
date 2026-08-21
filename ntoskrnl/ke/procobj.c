@@ -26,6 +26,9 @@ KSERVICE_TABLE_DESCRIPTOR KeServiceDescriptorTableShadow[SSDT_MAX_ENTRIES];
 PVOID KeUserApcDispatcher;
 PVOID KeUserCallbackDispatcher;
 PVOID KeUserExceptionDispatcher;
+#if defined(_M_ARM64)
+PVOID KeUserExceptionDispatcherWorker;
+#endif
 PVOID KeRaiseUserExceptionDispatcher;
 
 /* PRIVATE FUNCTIONS *********************************************************/

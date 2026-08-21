@@ -96,8 +96,21 @@ KiDispatchExceptionToUser(
                  */
                 ULONG_PTR DispLo = (DispatcherAddr > 0x200) ? (DispatcherAddr - 0x200) : 0;
                 ULONG_PTR DispHi = DispatcherAddr + 0x100;
+                PVOID UserWorker = KiResolveUserDispatcherAddress(KeUserExceptionDispatcherWorker,
+                                                                  Process);
+                ULONG_PTR WorkerLo = 0;
+                ULONG_PTR WorkerHi = 0;
 
-                if (FaultPc >= DispLo && FaultPc < DispHi)
+                if (UserWorker != NULL)
+                {
+                    ULONG_PTR WorkerAddr = (ULONG_PTR)UserWorker;
+
+                    WorkerLo = (WorkerAddr > 0x200) ? (WorkerAddr - 0x200) : 0;
+                    WorkerHi = WorkerAddr + 0x100;
+                }
+
+                if ((FaultPc >= DispLo && FaultPc < DispHi) ||
+                    (WorkerHi != 0 && FaultPc >= WorkerLo && FaultPc < WorkerHi))
                 {
                     DPRINT1("[arm64][EXC] KiDispatchExceptionToUser: recursion guard hit (dispatcher range) Pc=%p Lr=%p Disp=[%p,%p)\n",
                             (PVOID)FaultPc,
@@ -115,7 +128,8 @@ KiDispatchExceptionToUser(
                 if (FaultPc < PAGE_SIZE)
                 {
                     ULONG_PTR CallerLr = (ULONG_PTR)Context->Lr;
-                    if (CallerLr >= DispLo && CallerLr < DispHi)
+                    if ((CallerLr >= DispLo && CallerLr < DispHi) ||
+                        (WorkerHi != 0 && CallerLr >= WorkerLo && CallerLr < WorkerHi))
                     {
                         DPRINT1("[arm64][EXC] KiDispatchExceptionToUser: recursion guard hit (null-call) Pc=%p Lr=%p Disp=[%p,%p)\n",
                                 (PVOID)FaultPc,

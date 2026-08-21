@@ -96,6 +96,9 @@ extern KSPIN_LOCK KiNmiCallbackListLock;
 extern PVOID KeUserApcDispatcher;
 extern PVOID KeUserCallbackDispatcher;
 extern PVOID KeUserExceptionDispatcher;
+#if defined(_M_ARM64)
+extern PVOID KeUserExceptionDispatcherWorker;
+#endif
 extern PVOID KeRaiseUserExceptionDispatcher;
 extern LARGE_INTEGER KeBootTime;
 extern ULONGLONG KeBootTimeBias;
@@ -195,6 +198,9 @@ extern KAFFINITY KiIdleSummary;
 extern PVOID KeUserApcDispatcher;
 extern PVOID KeUserCallbackDispatcher;
 extern PVOID KeUserExceptionDispatcher;
+#if defined(_M_ARM64)
+extern PVOID KeUserExceptionDispatcherWorker;
+#endif
 extern PVOID KeRaiseUserExceptionDispatcher;
 extern ULONG KeTimeIncrement;
 extern ULONG KeTimeAdjustment;
