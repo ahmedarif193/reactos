@@ -224,6 +224,10 @@ cmake_dependent_option(ENABLE_KMTEST_BOOT_RUN
                        "Whether to run unattended KMTests automatically at boot." OFF
                        "CMAKE_BUILD_TYPE STREQUAL Debug" OFF)
 
+cmake_dependent_option(ENABLE_USB_STORAGE_BOOT_BENCHMARK
+                       "Whether to run matched kernel- and user-mode USB storage read benchmarks at boot." OFF
+                       "CMAKE_BUILD_TYPE STREQUAL Debug" OFF)
+
 cmake_dependent_option(ENABLE_RP1GEM_BENCHMARK
                        "Whether to run the single-stream RP1 GEM benchmark from ARM64 HTTP boot." OFF
                        "ARCH STREQUAL arm64 AND CMAKE_BUILD_TYPE STREQUAL Debug AND RPI_SUPPORT AND FREELDR_HTTP_BOOT" OFF)
@@ -239,6 +243,7 @@ cmake_dependent_option(ENABLE_CHPE_GAME_BOOT_RUN
 if(ENABLE_ROSAUTOTEST_BOOT_RUN OR
    ENABLE_CPUBENCH_BOOT_RUN OR
    ENABLE_KMTEST_BOOT_RUN OR
+   ENABLE_USB_STORAGE_BOOT_BENCHMARK OR
    ENABLE_RP1GEM_BENCHMARK OR
    ENABLE_RPI5_WIFI_BOOT_RUN OR
    ENABLE_CHPE_GAME_BOOT_RUN)

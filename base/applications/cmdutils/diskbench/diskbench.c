@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <reactos/storage_read_benchmark.h>
 
 #define DEFAULT_FILE_MB 64
 #define RANDOM_OPS      2048
@@ -375,6 +376,159 @@ static int RawScan(PUCHAR Buffer)
     return 0;
 }
 
+static int RawReadBenchmark(int argc, char* argv[], PUCHAR Buffer)
+{
+    char Path[32];
+    HANDLE Disk;
+    GET_LENGTH_INFORMATION LengthInfo;
+    LARGE_INTEGER Start, End, Offset;
+    LARGE_INTEGER IoStart, IoEnd;
+    ULONGLONG StartOffset;
+    ULONGLONG Length;
+    ULONGLONG Done;
+    ULONGLONG MaxIoOffset;
+    ULONGLONG MaxIoUs;
+    LONGLONG IoTicks;
+    LONGLONG MaxIoTicks;
+    ULONG DiskNumber;
+    ULONG BlockSize;
+    ULONG Runs;
+    ULONG Run;
+    ULONG Ops;
+    ULONG Over10Ms;
+    ULONG Over100Ms;
+    ULONG Over1S;
+    DWORD Transferred;
+    DWORD Tick0;
+    DWORD ReadError;
+    BOOL ReadOk;
+    BOOL Failed = FALSE;
+
+    DiskNumber = argc >= 3 ? strtoul(argv[2], NULL, 0) : 0;
+    StartOffset = (ULONGLONG)(argc >= 4 ? strtoul(argv[3], NULL, 0) :
+                              (ULONG)(STORAGE_READ_BENCHMARK_OFFSET >> 20)) << 20;
+    Length = (ULONGLONG)(argc >= 5 ? strtoul(argv[4], NULL, 0) :
+                         (ULONG)(STORAGE_READ_BENCHMARK_LENGTH >> 20)) << 20;
+    BlockSize = (argc >= 6 ? strtoul(argv[5], NULL, 0) :
+                 STORAGE_READ_BENCHMARK_BLOCK_SIZE >> 10) << 10;
+    Runs = argc >= 7 ? strtoul(argv[6], NULL, 0) : STORAGE_READ_BENCHMARK_USER_RUNS;
+
+    if (DiskNumber >= 32 ||
+        Length == 0 ||
+        BlockSize < 4096 ||
+        BlockSize > 1024 * 1024 ||
+        (BlockSize & 511) != 0 ||
+        (StartOffset % BlockSize) != 0 ||
+        (Length % BlockSize) != 0 ||
+        Runs == 0 ||
+        Runs > 100)
+    {
+        Report("DISKBENCH RAWREAD SETUP FAILED invalid arguments\n");
+        return 1;
+    }
+
+    _snprintf(Path, sizeof(Path), "\\\\.\\PhysicalDrive%lu", DiskNumber);
+    Disk = CreateFileA(Path,
+                       GENERIC_READ,
+                       FILE_SHARE_READ | FILE_SHARE_WRITE,
+                       NULL,
+                       OPEN_EXISTING,
+                       FILE_FLAG_NO_BUFFERING | FILE_FLAG_SEQUENTIAL_SCAN,
+                       NULL);
+    if (Disk == INVALID_HANDLE_VALUE)
+    {
+        Report("DISKBENCH RAWREAD SETUP FAILED open disk %lu error %lu\n",
+               DiskNumber, GetLastError());
+        return 1;
+    }
+
+    if (!DeviceIoControl(Disk, IOCTL_DISK_GET_LENGTH_INFO, NULL, 0,
+                         &LengthInfo, sizeof(LengthInfo), &Transferred, NULL))
+    {
+        Report("DISKBENCH RAWREAD SETUP FAILED length error %lu\n", GetLastError());
+        CloseHandle(Disk);
+        return 1;
+    }
+    if (StartOffset > (ULONGLONG)LengthInfo.Length.QuadPart ||
+        Length > (ULONGLONG)LengthInfo.Length.QuadPart - StartOffset)
+    {
+        Report("DISKBENCH RAWREAD SETUP FAILED range disk-bytes %I64u\n",
+               (ULONGLONG)LengthInfo.Length.QuadPart);
+        CloseHandle(Disk);
+        return 1;
+    }
+
+    Report("DISKBENCH RAWREAD PROTOCOL disk %lu offset %I64u bytes %I64u block %lu qd 1 runs %lu\n",
+           DiskNumber, StartOffset, Length, BlockSize, Runs);
+    for (Run = 1; Run <= Runs; Run++)
+    {
+        char Tag[40];
+
+        Offset.QuadPart = StartOffset;
+        if (!SetFilePointerEx(Disk, Offset, NULL, FILE_BEGIN))
+        {
+            Report("DISKBENCH RAWREAD-%lu-RUN%lu FAILED seek error %lu\n",
+                   DiskNumber, Run, GetLastError());
+            Failed = TRUE;
+            break;
+        }
+
+        Done = 0;
+        Ops = 0;
+        MaxIoOffset = 0;
+        MaxIoTicks = 0;
+        Over10Ms = 0;
+        Over100Ms = 0;
+        Over1S = 0;
+        Tick0 = GetTickCount();
+        QueryPerformanceCounter(&Start);
+        while (Done < Length)
+        {
+            Transferred = 0;
+            QueryPerformanceCounter(&IoStart);
+            ReadOk = ReadFile(Disk, Buffer, BlockSize, &Transferred, NULL);
+            ReadError = ReadOk ? ERROR_SUCCESS : GetLastError();
+            QueryPerformanceCounter(&IoEnd);
+            IoTicks = IoEnd.QuadPart - IoStart.QuadPart;
+            if (IoTicks > MaxIoTicks)
+            {
+                MaxIoTicks = IoTicks;
+                MaxIoOffset = StartOffset + Done;
+            }
+            if (IoTicks >= Frequency.QuadPart / 100)
+                Over10Ms++;
+            if (IoTicks >= Frequency.QuadPart / 10)
+                Over100Ms++;
+            if (IoTicks >= Frequency.QuadPart)
+                Over1S++;
+            if (!ReadOk || Transferred != BlockSize)
+            {
+                Report("DISKBENCH RAWREAD-%lu-RUN%lu FAILED error %lu at %I64u transferred %lu\n",
+                       DiskNumber, Run, ReadError, StartOffset + Done, Transferred);
+                Failed = TRUE;
+                break;
+            }
+            Done += BlockSize;
+            Ops++;
+        }
+        QueryPerformanceCounter(&End);
+        if (Failed)
+            break;
+
+        _snprintf(Tag, sizeof(Tag), "RAWREAD-%lu-RUN%lu", DiskNumber, Run);
+        ReportPhase(Tag, BlockSize, Done, Ops,
+                    ElapsedSeconds(Start, End), GetTickCount() - Tick0);
+        MaxIoUs = ((ULONGLONG)MaxIoTicks * 1000000) /
+                  (ULONGLONG)Frequency.QuadPart;
+        Report("DISKBENCH %s LATENCY max-us %I64u offset %I64u over-10ms %lu over-100ms %lu over-1s %lu\n",
+               Tag, MaxIoUs, MaxIoOffset, Over10Ms, Over100Ms, Over1S);
+    }
+
+    CloseHandle(Disk);
+    Report("DISKBENCH RAWREAD DONE status %s\n", Failed ? "failed" : "passed");
+    return Failed ? 1 : 0;
+}
+
 int main(int argc, char* argv[])
 {
     HANDLE File;
@@ -384,7 +538,8 @@ int main(int argc, char* argv[])
 
     if (argc < 2)
     {
-        printf("Usage: diskbench <file> [size-MB] [random-ops] | diskbench -raw\n");
+        printf("Usage: diskbench <file> [size-MB] [random-ops] | diskbench -raw |\n"
+               "       diskbench -rawread [disk] [offset-MB] [size-MB] [block-KB] [runs]\n");
         return 1;
     }
     FileSize = (ULONGLONG)(argc >= 3 ? atoi(argv[2]) : DEFAULT_FILE_MB) * 1024 * 1024;
@@ -406,6 +561,8 @@ int main(int argc, char* argv[])
 
     if (strcmp(argv[1], "-raw") == 0)
         return RawScan(Buffer);
+    if (strcmp(argv[1], "-rawread") == 0)
+        return RawReadBenchmark(argc, argv, Buffer);
     if (strcmp(argv[1], "-araw") == 0)
         return AsyncRawScan(argc >= 3 && atoi(argv[2]) > 0 ? atoi(argv[2]) : 32);
 

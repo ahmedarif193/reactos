@@ -13,6 +13,7 @@ set RUN_ROSAUTOTEST=0
 set RUN_CPUBENCH=0
 set RUN_ETHBENCH=0
 set RUN_KMTEST=0
+set RUN_USB_READ_BENCH=0
 set RUN_RPI5_WIFI=0
 set RUN_CHPE_GAME=0
 set ETHBENCH_PEER=10.42.0.1
@@ -31,10 +32,11 @@ if not "!OPTS_TEXT:ROSAUTOTEST=!" == "!OPTS_TEXT!" set RUN_ROSAUTOTEST=1
 if not "!OPTS_TEXT:CPUBENCH=!" == "!OPTS_TEXT!" set RUN_CPUBENCH=1
 if not "!OPTS_TEXT:ETHBENCH=!" == "!OPTS_TEXT!" set RUN_ETHBENCH=1
 if not "!OPTS_TEXT:KMTEST=!" == "!OPTS_TEXT!" set RUN_KMTEST=1
+if not "!OPTS_TEXT:USBREADBENCH=!" == "!OPTS_TEXT!" set RUN_USB_READ_BENCH=1
 if not "!OPTS_TEXT:RPI5WIFITEST=!" == "!OPTS_TEXT!" set RUN_RPI5_WIFI=1
 if not "!OPTS_TEXT:CHPEGAME=!" == "!OPTS_TEXT!" set RUN_CHPE_GAME=1
 
-if "!RUN_ROSAUTOTEST!!RUN_CPUBENCH!!RUN_ETHBENCH!!RUN_KMTEST!!RUN_RPI5_WIFI!!RUN_CHPE_GAME!" == "000000" goto disabled
+if "!RUN_ROSAUTOTEST!!RUN_CPUBENCH!!RUN_ETHBENCH!!RUN_KMTEST!!RUN_USB_READ_BENCH!!RUN_RPI5_WIFI!!RUN_CHPE_GAME!" == "0000000" goto disabled
 
 if not "!RUN_ETHBENCH!!RUN_RPI5_WIFI!" == "00" call :load_network_config
 
@@ -45,6 +47,7 @@ if "!RUN_CHPE_GAME!" == "1" call :run_chpe_game
 if "!RUN_ETHBENCH!" == "1" call :run_ethbench
 if "!RUN_RPI5_WIFI!" == "1" call :run_rpi5_wifi
 if "!RUN_CPUBENCH!" == "1" call :run_cpubench
+if "!RUN_USB_READ_BENCH!" == "1" call :run_usb_read_bench
 if "!RUN_KMTEST!" == "1" call :run_kmtests
 if "!RUN_ROSAUTOTEST!" == "1" call :run_rosautotest
 
@@ -52,6 +55,24 @@ if "!RUN_ROSAUTOTEST!" == "1" call :run_rosautotest
 if not "!BOOT_TEST_FAILURES!" == "0" goto tests_failed
 "%S%\dbgprint.exe" BOOT_TESTS_DONE
 endlocal
+exit /b 0
+
+:run_usb_read_bench
+set /a BOOT_TEST_SELECTED+=1
+set USB_READ_BENCH_EXIT=0
+if not exist "%S%\diskbench.exe" goto usb_read_bench_missing
+"%S%\dbgprint.exe" USBREADBENCH USER BEGIN
+"%S%\diskbench.exe" -rawread
+set USB_READ_BENCH_EXIT=!ERRORLEVEL!
+goto usb_read_bench_finished
+
+:usb_read_bench_missing
+"%S%\dbgprint.exe" USBREADBENCH USER MISSING
+set USB_READ_BENCH_EXIT=1
+
+:usb_read_bench_finished
+if not "!USB_READ_BENCH_EXIT!" == "0" set /a BOOT_TEST_FAILURES+=1
+"%S%\dbgprint.exe" USBREADBENCH USER EXIT !USB_READ_BENCH_EXIT!
 exit /b 0
 
 :tests_failed
