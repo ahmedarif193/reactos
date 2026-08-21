@@ -33,6 +33,55 @@ cmake_cache_get() {
 	sed -n "s/^$2:[^=]*=//p" "$1" | head -n 1
 }
 
+infer_build_identity() {
+	INFERRED_ARCH=
+	INFERRED_BUILD_TYPE=
+	INFERRED_TOOLCHAIN=
+	BUILD_TARGET=
+
+	BUILD_NAME=$(basename "$1")
+	BUILD_NAME=${BUILD_NAME%-docker}
+	BUILD_NAME=${BUILD_NAME%-sln}
+	case "$BUILD_NAME" in
+		output-Clang-*)
+			INFERRED_TOOLCHAIN=clang
+			BUILD_TARGET=${BUILD_NAME#output-Clang-}
+			;;
+		output-GCC-*|output-MinGW-*)
+			INFERRED_TOOLCHAIN=gcc
+			BUILD_TARGET=${BUILD_NAME#output-GCC-}
+			BUILD_TARGET=${BUILD_TARGET#output-MinGW-}
+			;;
+		output-VS-*|output-MSVC-*)
+			INFERRED_TOOLCHAIN=msvc
+			BUILD_TARGET=${BUILD_NAME#output-VS-}
+			BUILD_TARGET=${BUILD_TARGET#output-MSVC-}
+			;;
+		*)
+			return
+			;;
+	esac
+
+	case "$BUILD_TARGET" in
+		*-debug)
+			INFERRED_ARCH=${BUILD_TARGET%-debug}
+			INFERRED_BUILD_TYPE=Debug
+			;;
+		*-release)
+			INFERRED_ARCH=${BUILD_TARGET%-release}
+			INFERRED_BUILD_TYPE=Release
+			;;
+	esac
+	case "$INFERRED_ARCH" in
+		amd64|i386|arm64|arm) ;;
+		*)
+			INFERRED_ARCH=
+			INFERRED_BUILD_TYPE=
+			INFERRED_TOOLCHAIN=
+			;;
+	esac
+}
+
 [ -x "$ROSCONFIG_BUILD" ] || fail "missing $ROSCONFIG_BUILD"
 "$ROSCONFIG_BUILD" "$ROSCONFIG_DIR" "$ROSCONFIG_BIN" || fail "failed to build the rosconfig tool"
 
@@ -54,8 +103,10 @@ else
 	esac
 fi
 
-[ -d "$BUILD_DIR" ] || fail "output directory does not exist: $BUILD_DIR"
-BUILD_DIR=$(cd "$BUILD_DIR" && pwd -P)
+[ ! -e "$BUILD_DIR" ] || [ -d "$BUILD_DIR" ] || fail "build path is not a directory: $BUILD_DIR"
+if [ -d "$BUILD_DIR" ]; then
+	BUILD_DIR=$(cd "$BUILD_DIR" && pwd -P)
+fi
 [ "$BUILD_DIR" != "$REACTOS_SOURCE_DIR" ] || fail "run from an output directory or pass --build-dir output-<toolchain>-<arch>-<type>"
 
 ROSCONFIG_STATE_DIR="$BUILD_DIR/.rosconfig"
@@ -63,8 +114,11 @@ ROSCONFIG_CACHE="$ROSCONFIG_STATE_DIR/config.cache"
 ROSCONFIG_OVERRIDES="$ROSCONFIG_STATE_DIR/overrides.cmake"
 CMAKE_CACHE="$BUILD_DIR/CMakeCache.txt"
 
+infer_build_identity "$BUILD_DIR"
+
 ARCH=$(cmake_cache_get "$CMAKE_CACHE" ARCH)
 [ -n "$ARCH" ] || ARCH=$(rosconfig_file_get "$ROSCONFIG_CACHE" ARCH)
+[ -n "$ARCH" ] || ARCH=$INFERRED_ARCH
 case "$ARCH" in
 	amd64|i386|arm64|arm) ;;
 	*) fail "cannot determine a valid target architecture for $BUILD_DIR" ;;
@@ -72,6 +126,7 @@ esac
 
 BUILD_TYPE=$(cmake_cache_get "$CMAKE_CACHE" CMAKE_BUILD_TYPE)
 [ -n "$BUILD_TYPE" ] || BUILD_TYPE=$(rosconfig_file_get "$ROSCONFIG_CACHE" BUILD_TYPE)
+[ -n "$BUILD_TYPE" ] || BUILD_TYPE=$INFERRED_BUILD_TYPE
 case "$BUILD_TYPE" in
 	Debug|Release) ;;
 	*) fail "cannot determine Debug or Release configuration for $BUILD_DIR" ;;
@@ -81,12 +136,23 @@ TOOLCHAIN_FILE=$(cmake_cache_get "$CMAKE_CACHE" CMAKE_TOOLCHAIN_FILE)
 case "$TOOLCHAIN_FILE" in
 	*toolchain-clang.cmake) TOOLCHAIN=clang ;;
 	*toolchain-gcc.cmake) TOOLCHAIN=gcc ;;
+	*toolchain-msvc.cmake) TOOLCHAIN=msvc ;;
 	*) TOOLCHAIN=$(rosconfig_file_get "$ROSCONFIG_CACHE" TOOLCHAIN) ;;
 esac
+[ -n "$TOOLCHAIN" ] || TOOLCHAIN=$INFERRED_TOOLCHAIN
 case "$TOOLCHAIN" in
 	clang|gcc|msvc) ;;
 	*) fail "cannot determine the toolchain for $BUILD_DIR" ;;
 esac
+
+if [ ! -d "$BUILD_DIR" ]; then
+	echo "Creating output configuration directory: $BUILD_DIR"
+	mkdir -p "$BUILD_DIR" || fail "could not create output directory: $BUILD_DIR"
+	BUILD_DIR=$(cd "$BUILD_DIR" && pwd -P)
+	ROSCONFIG_STATE_DIR="$BUILD_DIR/.rosconfig"
+	ROSCONFIG_CACHE="$ROSCONFIG_STATE_DIR/config.cache"
+	ROSCONFIG_OVERRIDES="$ROSCONFIG_STATE_DIR/overrides.cmake"
+fi
 
 mkdir -p "$ROSCONFIG_STATE_DIR"
 "$ROSCONFIG_BIN" --def "$ROSCONFIG_DEF" --cache "$ROSCONFIG_CACHE" --defaults --set "ARCH=$ARCH" --set "TOOLCHAIN=$TOOLCHAIN" --set "BUILD_TYPE=$BUILD_TYPE" || fail "could not initialize $ROSCONFIG_CACHE"

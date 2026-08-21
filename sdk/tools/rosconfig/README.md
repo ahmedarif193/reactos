@@ -8,6 +8,8 @@ with gcc, clang or MSVC.
 ## Usage
 
 ```
+./menuconfig.sh              # first run: prepare output-Clang-amd64-debug
+menuconfig.cmd               # Windows: prepare output-MinGW-amd64-debug
 ./menuconfig.sh --build-dir output-Clang-arm64-debug
 menuconfig.cmd --build-dir output-Clang-arm64-debug
                               # open one output tree's configuration UI
@@ -68,6 +70,11 @@ source root. Persistent selections live below the output tree they configure:
   on every run. The entry point, utilities,
   configuration model, terminal UI and self-test are separate translation
   units, so the host build recompiles only the changed part before relinking.
+- `menuconfig.sh` / `menuconfig.cmd` can run before the first configure. When
+  the selected output directory does not exist, they infer its target identity
+  from a conventional `output-<toolchain>-<arch>-<type>` name, create only the
+  directory and its `.rosconfig` state, and leave CMake generation to the
+  subsequent configure run.
 - On Windows, an already generated `rosconfig.exe` remains usable when no host
   compiler is installed; `build.cmd` reports that it is using the cached tool.
 - `/PreLoad.cmake` (auto-loaded by CMake) includes
@@ -89,9 +96,10 @@ source root. Persistent selections live below the output tree they configure:
 - Bool options can hold the value `auto`, which means "do not emit to
   CMake" — the conditional defaults in `sdk/cmake/config.cmake` (e.g.
   `DBG` following the build type) stay in charge.
-- `menuconfig.sh` / `menuconfig.cmd` must be run from an output directory or
-  given `--build-dir <output-directory>`; they do not consult source-global
-  target state.
+- From the source directory, the no-argument wrappers prepare their platform's
+  default output tree. From another output directory they use that tree; an
+  explicit `--build-dir <output-directory>` selects any conventionally named
+  target tree. They do not consult source-global target state.
 - Changed selections take effect the next time that tree is configured
   (`configure.sh` always starts from a fresh CMake cache).
 
