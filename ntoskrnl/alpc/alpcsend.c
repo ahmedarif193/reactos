@@ -484,12 +484,6 @@ AlpcpDeliverToUser(
     Status = AlpcpCopyOut(ReceiveMessage, &Message->PortMessage, TotalLength, PreviousMode);
     if (!NT_SUCCESS(Status)) return Status;
 
-    if (BufferLength)
-    {
-        Status = AlpcpCopyOut(BufferLength, &TotalLength, sizeof(SIZE_T), PreviousMode);
-        if (!NT_SUCCESS(Status)) return Status;
-    }
-
     if (ReceiveAttributes)
     {
         Status = AlpcpExposeReceiveAttributes(Port, Message, ReceiveAttributes, UserReceiveAttributes, PreviousMode);
