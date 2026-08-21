@@ -9,7 +9,7 @@
 #include "alpc_test_utils.h"
 #include <pseh/pseh2.h>
 
-#define TP_ALPC_LIST_SIZE (4 * PAGE_SIZE)
+#define TP_ALPC_LIST_SIZE (16 * PAGE_SIZE)
 #define TP_ALPC_ACTION_NONE 0
 #define TP_ALPC_ACTION_ON_COMPLETION 1
 #define TP_ALPC_ACTION_PENDING 2
@@ -23,6 +23,7 @@ typedef NTSTATUS (WINAPI *PFN_TP_ALLOC_ALPC_COMPLETION)(PVOID *, HANDLE, PTEST_T
 typedef VOID (WINAPI *PFN_TP_ALPC_OBJECT_ROUTINE)(PVOID);
 typedef NTSTATUS (WINAPI *PFN_TP_CALLBACK_SEND_ALPC_MESSAGE_ON_COMPLETION)(PVOID, HANDLE, ULONG, PPORT_MESSAGE);
 typedef NTSTATUS (WINAPI *PFN_TP_CALLBACK_SEND_PENDING_ALPC_MESSAGE)(PVOID);
+typedef VOID (WINAPI *PFN_TP_CALLBACK_SET_EVENT_ON_COMPLETION)(PVOID, HANDLE);
 
 typedef struct _TEST_TP_ALPC_FUNCTIONS
 {
@@ -34,10 +35,12 @@ typedef struct _TEST_TP_ALPC_FUNCTIONS
     PFN_TP_ALPC_OBJECT_ROUTINE Wait;
     PFN_TP_CALLBACK_SEND_ALPC_MESSAGE_ON_COMPLETION SendOnCompletion;
     PFN_TP_CALLBACK_SEND_PENDING_ALPC_MESSAGE SendPending;
+    PFN_TP_CALLBACK_SET_EVENT_ON_COMPLETION SetEventOnCompletion;
 } TEST_TP_ALPC_FUNCTIONS, *PTEST_TP_ALPC_FUNCTIONS;
 
 typedef struct _TEST_TP_ALPC_CONTEXT
 {
+    HANDLE ReceivePort;
     HANDLE ServerPort;
     HANDLE CallbackEvent;
     PVOID CompletionList;
@@ -285,6 +288,7 @@ TpAlpcResolveFunctions(VOID)
     TpAlpcFunctions.Wait = (PFN_TP_ALPC_OBJECT_ROUTINE)GetProcAddress(Ntdll, "TpWaitForAlpcCompletion");
     TpAlpcFunctions.SendOnCompletion = (PFN_TP_CALLBACK_SEND_ALPC_MESSAGE_ON_COMPLETION)GetProcAddress(Ntdll, "TpCallbackSendAlpcMessageOnCompletion");
     TpAlpcFunctions.SendPending = (PFN_TP_CALLBACK_SEND_PENDING_ALPC_MESSAGE)GetProcAddress(Ntdll, "TpCallbackSendPendingAlpcMessage");
+    TpAlpcFunctions.SetEventOnCompletion = (PFN_TP_CALLBACK_SET_EVENT_ON_COMPLETION)GetProcAddress(Ntdll, "TpCallbackSetEventOnCompletion");
 
     ok(TpAlpcFunctions.Alloc != NULL, "TpAllocAlpcCompletion is not exported\n");
     ok(TpAlpcFunctions.AllocEx != NULL, "TpAllocAlpcCompletionEx is not exported\n");
@@ -294,8 +298,9 @@ TpAlpcResolveFunctions(VOID)
     ok(TpAlpcFunctions.Wait != NULL, "TpWaitForAlpcCompletion is not exported\n");
     ok(TpAlpcFunctions.SendOnCompletion != NULL, "TpCallbackSendAlpcMessageOnCompletion is not exported\n");
     ok(TpAlpcFunctions.SendPending != NULL, "TpCallbackSendPendingAlpcMessage is not exported\n");
+    ok(TpAlpcFunctions.SetEventOnCompletion != NULL, "TpCallbackSetEventOnCompletion is not exported\n");
 
-    return TpAlpcFunctions.Alloc && TpAlpcFunctions.AllocEx && TpAlpcFunctions.RegisterCompletionList && TpAlpcFunctions.UnregisterCompletionList && TpAlpcFunctions.Release && TpAlpcFunctions.Wait && TpAlpcFunctions.SendOnCompletion && TpAlpcFunctions.SendPending;
+    return TpAlpcFunctions.Alloc && TpAlpcFunctions.AllocEx && TpAlpcFunctions.RegisterCompletionList && TpAlpcFunctions.UnregisterCompletionList && TpAlpcFunctions.Release && TpAlpcFunctions.Wait && TpAlpcFunctions.SendOnCompletion && TpAlpcFunctions.SendPending && TpAlpcFunctions.SetEventOnCompletion;
 }
 
 static
@@ -309,48 +314,46 @@ TpAlpcCallback(
     PTEST_TP_ALPC_CONTEXT Context = Parameter;
     ALPC_TEST_MESSAGE ReceivedMessage;
     ALPC_TEST_MESSAGE OutgoingMessage;
+    PORT_MESSAGE ReplyHeader;
     PALPC_MESSAGE_ATTRIBUTES Attributes = NULL;
     PPORT_MESSAGE CompletionMessage;
     LARGE_INTEGER Timeout;
     SIZE_T BufferLength;
     NTSTATUS CompletionException;
-    BOOLEAN MessageValid;
+    NTSTATUS ReceiveStatus = STATUS_UNSUCCESSFUL;
+    NTSTATUS NullMessageStatus = STATUS_UNSUCCESSFUL;
+    NTSTATUS NullMessageException = STATUS_SUCCESS;
+    NTSTATUS EmptyPendingStatus = STATUS_UNSUCCESSFUL;
+    NTSTATUS EmptyPendingException = STATUS_SUCCESS;
+    NTSTATUS SendOnCompletionStatus = STATUS_NOT_SUPPORTED;
+    NTSTATUS SendPendingStatus = STATUS_NOT_SUPPORTED;
+    ULONG ReceivedCookie = 0;
+    ULONG ReceivedValue = 0;
+    ULONG ReceivedMessageId = 0;
+    ULONG ReceivedCallbackId = 0;
+    BOOLEAN MessageValid = FALSE;
+    BOOLEAN HaveReplyHeader = FALSE;
     LONG Action;
 
-    Context->SeenInstance = Instance;
-    Context->SeenContext = Parameter;
-    Context->SeenAlpc = Alpc;
-    Context->ReceiveStatus = STATUS_UNSUCCESSFUL;
-    Context->NullMessageStatus = STATUS_UNSUCCESSFUL;
-    Context->NullMessageException = STATUS_SUCCESS;
     _SEH2_TRY
     {
-        Context->NullMessageStatus = TpAlpcFunctions.SendOnCompletion(Instance, Context->ServerPort, 0, NULL);
+        NullMessageStatus = TpAlpcFunctions.SendOnCompletion(Instance, Context->ReceivePort, 0, NULL);
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
-        Context->NullMessageException = _SEH2_GetExceptionCode();
+        NullMessageException = _SEH2_GetExceptionCode();
     }
     _SEH2_END;
-    Context->EmptyPendingStatus = STATUS_UNSUCCESSFUL;
-    Context->EmptyPendingException = STATUS_SUCCESS;
     _SEH2_TRY
     {
-        Context->EmptyPendingStatus = TpAlpcFunctions.SendPending(Instance);
+        EmptyPendingStatus = TpAlpcFunctions.SendPending(Instance);
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
-        Context->EmptyPendingException = _SEH2_GetExceptionCode();
+        EmptyPendingException = _SEH2_GetExceptionCode();
     }
     _SEH2_END;
-    Context->SendOnCompletionStatus = STATUS_NOT_SUPPORTED;
-    Context->SendPendingStatus = STATUS_NOT_SUPPORTED;
-    Context->WaitTimedOut = FALSE;
-    Context->ReceivedCookie = 0;
-    Context->ReceivedValue = 0;
-    Context->ReceivedMessageId = 0;
-    Context->ReceivedCallbackId = 0;
-    Action = InterlockedCompareExchange(&Context->Action, 0, 0);
+    RtlZeroMemory(&ReplyHeader, sizeof(ReplyHeader));
 
     if (Context->CompletionList)
     {
@@ -366,7 +369,7 @@ TpAlpcCallback(
         }
         _SEH2_END;
         if (CompletionException != STATUS_SUCCESS)
-            Context->ReceiveStatus = CompletionException;
+            ReceiveStatus = CompletionException;
         if (CompletionMessage)
         {
             MessageValid = TpAlpcCompletionMessageValid(Context->CompletionList, CompletionMessage, Attributes);
@@ -375,11 +378,13 @@ TpAlpcCallback(
             {
                 PALPC_TEST_MESSAGE Message = CONTAINING_RECORD(CompletionMessage, ALPC_TEST_MESSAGE, Header);
 
-                Context->ReceiveStatus = STATUS_SUCCESS;
-                Context->ReceivedCookie = Message->Cookie;
-                Context->ReceivedValue = Message->Value;
-                Context->ReceivedMessageId = Message->Header.MessageId;
-                Context->ReceivedCallbackId = Message->Header.CallbackId;
+                ReceiveStatus = STATUS_SUCCESS;
+                ReceivedCookie = Message->Cookie;
+                ReceivedValue = Message->Value;
+                ReceivedMessageId = Message->Header.MessageId;
+                ReceivedCallbackId = Message->Header.CallbackId;
+                ReplyHeader = Message->Header;
+                HaveReplyHeader = TRUE;
                 trace("ALPC_OBSERVE tp_callback completion_attributes=%p allocated=%08lx valid=%08lx\n", Attributes, Attributes->AllocatedAttributes, Attributes->ValidAttributes);
                 _SEH2_TRY
                 {
@@ -387,18 +392,18 @@ TpAlpcCallback(
                 }
                 _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
                 {
-                    Context->ReceiveStatus = _SEH2_GetExceptionCode();
+                    ReceiveStatus = _SEH2_GetExceptionCode();
                 }
                 _SEH2_END;
             }
             else
             {
-                Context->ReceiveStatus = STATUS_DATA_ERROR;
+                ReceiveStatus = STATUS_DATA_ERROR;
             }
         }
         else if (CompletionException == STATUS_SUCCESS)
         {
-            Context->ReceiveStatus = STATUS_NO_MORE_ENTRIES;
+            ReceiveStatus = STATUS_NO_MORE_ENTRIES;
         }
     }
     else
@@ -406,26 +411,52 @@ TpAlpcCallback(
         RtlZeroMemory(&ReceivedMessage, sizeof(ReceivedMessage));
         BufferLength = sizeof(ReceivedMessage);
         Timeout.QuadPart = 0;
-        Context->ReceiveStatus = NtAlpcSendWaitReceivePort(Context->ServerPort, 0, NULL, NULL, &ReceivedMessage.Header, &BufferLength, NULL, &Timeout);
-        if (NT_SUCCESS(Context->ReceiveStatus))
+        ReceiveStatus = NtAlpcSendWaitReceivePort(Context->ReceivePort, 0, NULL, NULL, &ReceivedMessage.Header, &BufferLength, NULL, &Timeout);
+        if (NT_SUCCESS(ReceiveStatus))
         {
-            Context->ReceivedCookie = ReceivedMessage.Cookie;
-            Context->ReceivedValue = ReceivedMessage.Value;
-            Context->ReceivedMessageId = ReceivedMessage.Header.MessageId;
-            Context->ReceivedCallbackId = ReceivedMessage.Header.CallbackId;
+            ReceivedCookie = ReceivedMessage.Cookie;
+            ReceivedValue = ReceivedMessage.Value;
+            ReceivedMessageId = ReceivedMessage.Header.MessageId;
+            ReceivedCallbackId = ReceivedMessage.Header.CallbackId;
+            ReplyHeader = ReceivedMessage.Header;
+            HaveReplyHeader = TRUE;
         }
     }
 
+    if (!HaveReplyHeader)
+        return;
+
+    Action = InterlockedExchange(&Context->Action, TP_ALPC_ACTION_NONE);
     if (Action != TP_ALPC_ACTION_NONE)
     {
         AlpcTestInitializeMessage(&OutgoingMessage, 0x54504F00 | (ULONG)Action, 900 + (ULONG)Action);
-        Context->SendOnCompletionStatus = TpAlpcFunctions.SendOnCompletion(Instance, Context->ServerPort, ALPC_MSGFLG_REPLY_MESSAGE, &OutgoingMessage.Header);
-        if (Action == TP_ALPC_ACTION_PENDING && NT_SUCCESS(Context->SendOnCompletionStatus))
-            Context->SendPendingStatus = TpAlpcFunctions.SendPending(Instance);
+        if (HaveReplyHeader)
+        {
+            OutgoingMessage.Header.ClientId = ReplyHeader.ClientId;
+            OutgoingMessage.Header.MessageId = ReplyHeader.MessageId;
+            OutgoingMessage.Header.CallbackId = ReplyHeader.CallbackId;
+        }
+        SendOnCompletionStatus = TpAlpcFunctions.SendOnCompletion(Instance, Context->ReceivePort, ALPC_MSGFLG_REPLY_MESSAGE, &OutgoingMessage.Header);
+        if (Action == TP_ALPC_ACTION_PENDING && NT_SUCCESS(SendOnCompletionStatus))
+            SendPendingStatus = TpAlpcFunctions.SendPending(Instance);
     }
 
+    Context->SeenInstance = Instance;
+    Context->SeenContext = Parameter;
+    Context->SeenAlpc = Alpc;
+    Context->ReceiveStatus = ReceiveStatus;
+    Context->NullMessageStatus = NullMessageStatus;
+    Context->NullMessageException = NullMessageException;
+    Context->EmptyPendingStatus = EmptyPendingStatus;
+    Context->EmptyPendingException = EmptyPendingException;
+    Context->SendOnCompletionStatus = SendOnCompletionStatus;
+    Context->SendPendingStatus = SendPendingStatus;
+    Context->ReceivedCookie = ReceivedCookie;
+    Context->ReceivedValue = ReceivedValue;
+    Context->ReceivedMessageId = ReceivedMessageId;
+    Context->ReceivedCallbackId = ReceivedCallbackId;
     InterlockedIncrement(&Context->CallbackCount);
-    SetEvent(Context->CallbackEvent);
+    TpAlpcFunctions.SetEventOnCompletion(Instance, Context->CallbackEvent);
 }
 
 static
@@ -696,7 +727,7 @@ TpAlpcSendAndWaitForCallback(
     InterlockedExchange(&Context->Action, Action);
 
     AlpcTestInitializeMessage(&SendMessage, Cookie, Value);
-    Status = NtAlpcSendWaitReceivePort(ClientPort, ALPC_MSGFLG_REPLY_MESSAGE, &SendMessage.Header, NULL, NULL, NULL, NULL, NULL);
+    Status = NtAlpcSendWaitReceivePort(ClientPort, 0, &SendMessage.Header, NULL, NULL, NULL, NULL, NULL);
     ok_hex(Status, STATUS_SUCCESS);
     if (!NT_SUCCESS(Status))
         goto WaitForCallbacks;
@@ -753,10 +784,6 @@ TpAlpcTestBasicLifecycle(VOID)
 {
     static UNICODE_STRING PortName = RTL_CONSTANT_STRING(L"\\RPC Control\\NtdllApitestTpAlpcBasic");
     PTEST_TP_ALPC_CONTEXT Context = NULL;
-    ALPC_TEST_MESSAGE DirectMessage;
-    ALPC_TEST_MESSAGE ReceivedMessage;
-    LARGE_INTEGER Timeout;
-    SIZE_T BufferLength;
     PVOID Alpc = (PVOID)(ULONG_PTR)0x55555555;
     HANDLE ConnectionPort = NULL;
     HANDLE ServerPort = NULL;
@@ -773,13 +800,14 @@ TpAlpcTestBasicLifecycle(VOID)
     ok(Context != NULL, "basic TP context allocation failed\n");
     if (!Context)
         goto Cleanup;
+    Context->ReceivePort = ConnectionPort;
     Context->ServerPort = ServerPort;
     Context->CallbackEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
     ok(Context->CallbackEvent != NULL, "CreateEventW failed: %lu\n", GetLastError());
     if (!Context->CallbackEvent)
         goto Cleanup;
 
-    Status = TpAlpcFunctions.Alloc(&Alpc, ServerPort, TpAlpcCallback, Context, NULL);
+    Status = TpAlpcFunctions.Alloc(&Alpc, ConnectionPort, TpAlpcCallback, Context, NULL);
     trace("ALPC_OBSERVE tp_alpc alloc_valid status=%08lx output=%p\n", Status, Alpc);
     ok_hex(Status, STATUS_SUCCESS);
     ok(Alpc != NULL, "TpAllocAlpcCompletion returned NULL\n");
@@ -801,32 +829,19 @@ TpAlpcTestBasicLifecycle(VOID)
         goto Cleanup;
     }
 
-    TpAlpcFunctions.Release(Alpc);
-    Alpc = NULL;
-
-    AlpcTestInitializeMessage(&DirectMessage, 0x54504452, 222);
-    Status = NtAlpcSendWaitReceivePort(ClientPort, ALPC_MSGFLG_REPLY_MESSAGE, &DirectMessage.Header, NULL, NULL, NULL, NULL, NULL);
-    ok_hex(Status, STATUS_SUCCESS);
-    RtlZeroMemory(&ReceivedMessage, sizeof(ReceivedMessage));
-    BufferLength = sizeof(ReceivedMessage);
-    Timeout = AlpcTestRelativeTimeout(ALPC_TEST_TIMEOUT_MS);
-    Status = NtAlpcSendWaitReceivePort(ServerPort, 0, NULL, NULL, &ReceivedMessage.Header, &BufferLength, NULL, &Timeout);
-    ok_hex(Status, STATUS_SUCCESS);
-    if (NT_SUCCESS(Status))
-    {
-        ok_eq_ulong(ReceivedMessage.Cookie, 0x54504452);
-        ok_eq_ulong(ReceivedMessage.Value, 222);
-    }
-
 Cleanup:
     if (Quarantine)
     {
         trace("ALPC_OBSERVE tp_alpc base_quarantine object=%p context=%p event=%p ports=%p/%p/%p\n", Alpc, Context, Context ? Context->CallbackEvent : NULL, ConnectionPort, ServerPort, ClientPort);
         return;
     }
+    AlpcTestCloseConnectedPorts(ConnectionPort, ServerPort, ClientPort);
+    ConnectionPort = NULL;
+    ServerPort = NULL;
+    ClientPort = NULL;
     if (Alpc && Alpc != (PVOID)(ULONG_PTR)0x55555555)
     {
-        if (!TpAlpcWaitBounded(Alpc, "base cleanup", TRUE))
+        if (!TpAlpcWaitBounded(Alpc, "base port-close cleanup", TRUE))
         {
             trace("ALPC_OBSERVE tp_alpc base_cleanup_quarantine object=%p context=%p event=%p ports=%p/%p/%p\n", Alpc, Context, Context ? Context->CallbackEvent : NULL, ConnectionPort, ServerPort, ClientPort);
             return;
@@ -839,7 +854,6 @@ Cleanup:
             CloseHandle(Context->CallbackEvent);
         RtlFreeHeap(RtlGetProcessHeap(), 0, Context);
     }
-    AlpcTestCloseConnectedPorts(ConnectionPort, ServerPort, ClientPort);
 }
 
 static
@@ -868,29 +882,11 @@ TpAlpcTestExtendedLifecycle(VOID)
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 
-    Status = AlpcRegisterCompletionList(ServerPort, CompletionList, TP_ALPC_LIST_SIZE, 1, ALPC_MESSAGE_CONTEXT_ATTRIBUTE);
-    trace("ALPC_OBSERVE tp_alpc completion_list_register status=%08lx buffer=%p\n", Status, CompletionList);
-    ok_hex(Status, STATUS_SUCCESS);
-    if (!NT_SUCCESS(Status))
-        goto Cleanup;
-    CompletionListRegistered = TRUE;
-    HeaderValid = TpAlpcCompletionHeaderValid(CompletionList);
-    ok(HeaderValid, "kernel initialized an unsafe TP completion-list header\n");
-    if (!HeaderValid)
-    {
-        Status = NtAlpcSetInformation(ServerPort, AlpcUnregisterCompletionListInformation, NULL, 0);
-        trace("ALPC_OBSERVE tp_alpc unsafe_header_unregister status=%08lx\n", Status);
-        if (NT_SUCCESS(Status))
-            CompletionListRegistered = FALSE;
-        else
-            Quarantine = TRUE;
-        goto Cleanup;
-    }
-
     Context = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Context));
     ok(Context != NULL, "extended TP context allocation failed\n");
     if (!Context)
         goto Cleanup;
+    Context->ReceivePort = ConnectionPort;
     Context->ServerPort = ServerPort;
     Context->CompletionList = CompletionList;
     Context->CallbackEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
@@ -898,7 +894,7 @@ TpAlpcTestExtendedLifecycle(VOID)
     if (!Context->CallbackEvent)
         goto Cleanup;
 
-    Status = TpAlpcFunctions.AllocEx(&Alpc, ServerPort, TpAlpcCallback, Context, NULL);
+    Status = TpAlpcFunctions.AllocEx(&Alpc, ConnectionPort, TpAlpcCallback, Context, NULL);
     trace("ALPC_OBSERVE tp_alpc alloc_ex_valid status=%08lx output=%p\n", Status, Alpc);
     ok_hex(Status, STATUS_SUCCESS);
     ok(Alpc != NULL, "TpAllocAlpcCompletionEx returned NULL\n");
@@ -908,6 +904,25 @@ TpAlpcTestExtendedLifecycle(VOID)
     if (!TpAlpcWaitBounded(Alpc, "extended initial", TRUE))
     {
         Quarantine = TRUE;
+        goto Cleanup;
+    }
+
+    Status = AlpcRegisterCompletionList(ConnectionPort, CompletionList, TP_ALPC_LIST_SIZE, 1, ALPC_MESSAGE_CONTEXT_ATTRIBUTE);
+    trace("ALPC_OBSERVE tp_alpc completion_list_register status=%08lx buffer=%p\n", Status, CompletionList);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    CompletionListRegistered = TRUE;
+    HeaderValid = TpAlpcCompletionHeaderValid(CompletionList);
+    ok(HeaderValid, "kernel initialized an unsafe TP completion-list header\n");
+    if (!HeaderValid)
+    {
+        Status = NtAlpcSetInformation(ConnectionPort, AlpcUnregisterCompletionListInformation, NULL, 0);
+        trace("ALPC_OBSERVE tp_alpc unsafe_header_unregister status=%08lx\n", Status);
+        if (NT_SUCCESS(Status))
+            CompletionListRegistered = FALSE;
+        else
+            Quarantine = TRUE;
         goto Cleanup;
     }
     ok_hex(TpAlpcCallObjectRoutine("extended_register", TpAlpcFunctions.RegisterCompletionList, Alpc), STATUS_SUCCESS);
@@ -926,18 +941,10 @@ TpAlpcTestExtendedLifecycle(VOID)
 
     ok_hex(TpAlpcCallObjectRoutine("extended_unregister", TpAlpcFunctions.UnregisterCompletionList, Alpc), STATUS_SUCCESS);
     ok_hex(TpAlpcCallObjectRoutine("extended_unregister_repeated", TpAlpcFunctions.UnregisterCompletionList, Alpc), STATUS_SUCCESS);
-    if (!TpAlpcWaitBounded(Alpc, "extended release", TRUE))
-    {
-        Quarantine = TRUE;
-        goto Cleanup;
-    }
-    TpAlpcFunctions.Release(Alpc);
-    Alpc = NULL;
-
-    Status = AlpcRundownCompletionList(ServerPort);
+    Status = AlpcRundownCompletionList(ConnectionPort);
     trace("ALPC_OBSERVE tp_alpc completion_list_rundown status=%08lx outstanding=%lu\n", Status, AlpcGetOutstandingCompletionListMessageCount(CompletionList));
     ok_hex(Status, STATUS_SUCCESS);
-    Status = AlpcUnregisterCompletionList(ServerPort);
+    Status = AlpcUnregisterCompletionList(ConnectionPort);
     ok_hex(Status, STATUS_SUCCESS);
     if (NT_SUCCESS(Status))
         CompletionListRegistered = FALSE;
@@ -948,19 +955,23 @@ Cleanup:
         trace("ALPC_OBSERVE tp_alpc extended_quarantine object=%p context=%p event=%p list=%p ports=%p/%p/%p\n", Alpc, Context, Context ? Context->CallbackEvent : NULL, CompletionList, ConnectionPort, ServerPort, ClientPort);
         return;
     }
+    if (CompletionListRegistered && ConnectionPort)
+    {
+        AlpcRundownCompletionList(ConnectionPort);
+        AlpcUnregisterCompletionList(ConnectionPort);
+    }
+    AlpcTestCloseConnectedPorts(ConnectionPort, ServerPort, ClientPort);
+    ConnectionPort = NULL;
+    ServerPort = NULL;
+    ClientPort = NULL;
     if (Alpc && Alpc != (PVOID)(ULONG_PTR)0x55555555)
     {
-        if (!TpAlpcWaitBounded(Alpc, "extended cleanup", TRUE))
+        if (!TpAlpcWaitBounded(Alpc, "extended port-close cleanup", TRUE))
         {
             trace("ALPC_OBSERVE tp_alpc extended_cleanup_quarantine object=%p context=%p event=%p list=%p ports=%p/%p/%p\n", Alpc, Context, Context ? Context->CallbackEvent : NULL, CompletionList, ConnectionPort, ServerPort, ClientPort);
             return;
         }
         TpAlpcFunctions.Release(Alpc);
-    }
-    if (CompletionListRegistered && ServerPort)
-    {
-        AlpcRundownCompletionList(ServerPort);
-        AlpcUnregisterCompletionList(ServerPort);
     }
     if (Context)
     {
@@ -968,7 +979,6 @@ Cleanup:
             CloseHandle(Context->CallbackEvent);
         RtlFreeHeap(RtlGetProcessHeap(), 0, Context);
     }
-    AlpcTestCloseConnectedPorts(ConnectionPort, ServerPort, ClientPort);
     TpAlpcFreePages(CompletionList);
 }
 
