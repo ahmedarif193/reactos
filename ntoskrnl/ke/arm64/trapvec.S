@@ -619,8 +619,8 @@ KiArm64PermVectorSyncSp0_Handler:
  *   [sp+24] = original x10 (volatile, used as scratch in common handler)
  *   [sp+32] = original x11 (volatile, used as scratch in common handler)
  *   [sp+40] = original x28 (callee-saved, used as temp for vector ID)
- *   [sp+48] = padding
- *   [sp+56] = padding
+ *   [sp+48] = interrupted SP (machine frame)
+ *   [sp+56] = interrupted PC (machine frame)
  *   [sp+64] = original x29
  *   [sp+72] = original x30
  *   [sp+80..95] = untouched Windows ARM64 red zone
@@ -630,17 +630,21 @@ KiArm64PermVectorSyncSp0_Handler:
 KiArm64PermVectorSyncSpx_Handler:
     msr daifset, #0x3
     .seh_nop
+    .seh_pushframe
     stp x0, x1, [sp, #-ARM64_SYNC_ENTRY_FRAME_SIZE]! /* Save original x0, x1 FIRST */
-    .seh_stackalloc ARM64_SYNC_ENTRY_FRAME_SIZE
+    .seh_stackalloc 48
     stp x9, x10, [sp, #16]        /* Save x9, x10 before common handler uses them */
     .seh_nop
     stp x11, x28, [sp, #32]       /* Save x11, x28 */
-    .seh_nop
+    .seh_save_reg x28, 40
     stp x29, x30, [sp, #64]       /* Save x29, x30 */
     .seh_save_fplr 64
     add x29, sp, #64
     .seh_add_fp 64
     .seh_endprologue
+    add x9, sp, #ARM64_SYNC_ENTRY_FRAME_SIZE
+    mrs x10, elr_el1
+    stp x9, x10, [sp, #48]
     mrs x9, esr_el1
     lsr x10, x9, #26
     cmp x10, #0x15               /* SVC from the current EL */
