@@ -250,6 +250,30 @@ NtfsWriteVolume(_In_ ULONGLONG Offset,
     return STATUS_SUCCESS;
 }
 
+extern "C" NTSTATUS
+NtfsReadVolumeContext(_In_opt_ void* Context,
+                      _In_ ULONG BytesPerSector,
+                      _In_ ULONGLONG Offset,
+                      _In_ ULONG Length,
+                      _Inout_ PUCHAR Buffer)
+{
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(BytesPerSector);
+    return NtfsReadVolume(Offset, Length, Buffer);
+}
+
+extern "C" NTSTATUS
+NtfsWriteVolumeContext(_In_opt_ void* Context,
+                       _In_ ULONG BytesPerSector,
+                       _In_ ULONGLONG Offset,
+                       _In_ ULONG Length,
+                       _Inout_ PUCHAR Buffer)
+{
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(BytesPerSector);
+    return NtfsWriteVolume(Offset, Length, Buffer);
+}
+
 extern "C" BOOLEAN
 NtfsIsNameInExpression(_In_ PUNICODE_STRING Expression,
                        _In_ PUNICODE_STRING Name,

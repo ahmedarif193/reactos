@@ -114,14 +114,15 @@ NtfsCacheDiscardAll(VOID)
 /* Both ways of a block's set, matching slot or NULL. Caller holds the lock. */
 static
 NTFS_CACHE_SLOT*
-NtfsCacheProbe(_In_ ULONGLONG Block)
+NtfsCacheProbe(_In_ PDEVICE_OBJECT Owner,
+               _In_ ULONGLONG Block)
 {
     NTFS_CACHE_SLOT* Set =
         &NtfsCacheSlots[(Block & NTFS_CACHE_SET_MASK) * NTFS_CACHE_WAYS];
 
-    if (Set[0].Tag == Block && Set[0].Owner == PartDeviceObj)
+    if (Set[0].Tag == Block && Set[0].Owner == Owner)
         return &Set[0];
-    if (Set[1].Tag == Block && Set[1].Owner == PartDeviceObj)
+    if (Set[1].Tag == Block && Set[1].Owner == Owner)
         return &Set[1];
     return NULL;
 }
@@ -131,14 +132,15 @@ NtfsCacheProbe(_In_ ULONGLONG Block)
  * forcing a write-back when its neighbour is hot and modified. */
 static
 NTFS_CACHE_SLOT*
-NtfsCacheVictim(_In_ ULONGLONG Block)
+NtfsCacheVictim(_In_ PDEVICE_OBJECT Owner,
+                _In_ ULONGLONG Block)
 {
     NTFS_CACHE_SLOT* Set =
         &NtfsCacheSlots[(Block & NTFS_CACHE_SET_MASK) * NTFS_CACHE_WAYS];
 
-    if (Set[0].Tag == Block && Set[0].Owner == PartDeviceObj)
+    if (Set[0].Tag == Block && Set[0].Owner == Owner)
         return &Set[0];
-    if (Set[1].Tag == Block && Set[1].Owner == PartDeviceObj)
+    if (Set[1].Tag == Block && Set[1].Owner == Owner)
         return &Set[1];
     if (Set[0].Tag == NTFS_CACHE_EMPTY)
         return &Set[0];
@@ -167,7 +169,9 @@ NtfsCacheInitialize(VOID)
 /* Drops every block overlapping [Offset, Offset + Length). */
 static
 VOID
-NtfsCacheInvalidateRange(_In_ ULONGLONG Offset, _In_ ULONG Length)
+NtfsCacheInvalidateRange(_In_ PDEVICE_OBJECT Owner,
+                         _In_ ULONGLONG Offset,
+                         _In_ ULONG Length)
 {
     ULONGLONG Block;
     ULONGLONG LastBlock;
@@ -181,7 +185,7 @@ NtfsCacheInvalidateRange(_In_ ULONGLONG Offset, _In_ ULONG Length)
     ExAcquireFastMutex(&NtfsCacheMutex);
     for (; Block <= LastBlock; Block++)
     {
-        NTFS_CACHE_SLOT* Slot = NtfsCacheProbe(Block);
+        NTFS_CACHE_SLOT* Slot = NtfsCacheProbe(Owner, Block);
 
         if (Slot)
         {
@@ -203,7 +207,8 @@ NtfsCacheInvalidateRange(_In_ ULONGLONG Offset, _In_ ULONG Length)
  */
 static
 VOID
-NtfsCacheUpdateRange(_In_ ULONGLONG Offset, _In_ ULONG Length,
+NtfsCacheUpdateRange(_In_ PDEVICE_OBJECT Owner,
+                     _In_ ULONGLONG Offset, _In_ ULONG Length,
                      _In_reads_bytes_(Length) PUCHAR Data)
 {
     ULONG Remaining = Length;
@@ -219,7 +224,7 @@ NtfsCacheUpdateRange(_In_ ULONGLONG Offset, _In_ ULONG Length,
         ULONGLONG Block = Current >> NTFS_CACHE_BLOCK_SHIFT;
         ULONG BlockOffset = (ULONG)(Current & (NTFS_CACHE_BLOCK_SIZE - 1));
         ULONG Chunk = min(Remaining, NTFS_CACHE_BLOCK_SIZE - BlockOffset);
-        NTFS_CACHE_SLOT* Slot = NtfsCacheProbe(Block);
+        NTFS_CACHE_SLOT* Slot = NtfsCacheProbe(Owner, Block);
 
         if (Slot && Slot->Data)
             RtlCopyMemory(Slot->Data + BlockOffset, In, Chunk);
@@ -242,7 +247,8 @@ NtfsCacheUpdateRange(_In_ ULONGLONG Offset, _In_ ULONG Length,
  */
 static
 NTSTATUS
-NtfsCacheWriteBackOne(_In_ ULONGLONG Block)
+NtfsCacheWriteBackOne(_In_ PDEVICE_OBJECT Owner,
+                      _In_ ULONGLONG Block)
 {
     PUCHAR Staged;
     BOOLEAN Pending = FALSE;
@@ -257,7 +263,7 @@ NtfsCacheWriteBackOne(_In_ ULONGLONG Block)
         return STATUS_INSUFFICIENT_RESOURCES;
 
     ExAcquireFastMutex(&NtfsCacheMutex);
-    Slot = NtfsCacheProbe(Block);
+    Slot = NtfsCacheProbe(Owner, Block);
     if (Slot && Slot->Dirty && Slot->Data)
     {
         RtlCopyMemory(Staged, Slot->Data, NTFS_CACHE_BLOCK_SIZE);
@@ -278,7 +284,7 @@ NtfsCacheWriteBackOne(_In_ ULONGLONG Block)
         {
             /* Put it back so the data is not simply lost. */
             ExAcquireFastMutex(&NtfsCacheMutex);
-            Slot = NtfsCacheProbe(Block);
+            Slot = NtfsCacheProbe(Owner, Block);
             if (Slot && !Slot->Dirty)
             {
                 Slot->Dirty = TRUE;
@@ -307,15 +313,17 @@ NtfsCacheFlushSome(_In_ ULONG Budget)
     {
         ULONGLONG Block;
         BOOLEAN Dirty;
+        PDEVICE_OBJECT Owner;
 
         ExAcquireFastMutex(&NtfsCacheMutex);
         Block = NtfsCacheSlots[Index].Tag;
         Dirty = NtfsCacheSlots[Index].Dirty;
+        Owner = NtfsCacheSlots[Index].Owner;
         ExReleaseFastMutex(&NtfsCacheMutex);
 
-        if (Dirty && Block != NTFS_CACHE_EMPTY)
+        if (Dirty && Owner && Block != NTFS_CACHE_EMPTY)
         {
-            NTSTATUS One = NtfsCacheWriteBackOne(Block);
+            NTSTATUS One = NtfsCacheWriteBackOne(Owner, Block);
 
             if (!NT_SUCCESS(One))
                 Status = One;
@@ -339,15 +347,17 @@ NtfsCacheFlushAll(VOID)
     {
         ULONGLONG Block;
         BOOLEAN Dirty;
+        PDEVICE_OBJECT Owner;
 
         ExAcquireFastMutex(&NtfsCacheMutex);
         Block = NtfsCacheSlots[Index].Tag;
         Dirty = NtfsCacheSlots[Index].Dirty;
+        Owner = NtfsCacheSlots[Index].Owner;
         ExReleaseFastMutex(&NtfsCacheMutex);
 
-        if (Dirty && Block != NTFS_CACHE_EMPTY)
+        if (Dirty && Owner && Block != NTFS_CACHE_EMPTY)
         {
-            NTSTATUS One = NtfsCacheWriteBackOne(Block);
+            NTSTATUS One = NtfsCacheWriteBackOne(Owner, Block);
 
             if (!NT_SUCCESS(One))
                 Status = One;
@@ -360,7 +370,9 @@ NtfsCacheFlushAll(VOID)
  * or write those bytes on the disk directly. */
 static
 NTSTATUS
-NtfsCacheFlushRange(_In_ ULONGLONG Offset, _In_ ULONG Length)
+NtfsCacheFlushRange(_In_ PDEVICE_OBJECT Owner,
+                    _In_ ULONGLONG Offset,
+                    _In_ ULONG Length)
 {
     NTSTATUS Status = STATUS_SUCCESS;
     ULONGLONG Block;
@@ -384,14 +396,14 @@ NtfsCacheFlushRange(_In_ ULONGLONG Offset, _In_ ULONG Length)
             NTFS_CACHE_SLOT* Slot;
 
             ExAcquireFastMutex(&NtfsCacheMutex);
-            Slot = NtfsCacheProbe(Block);
+            Slot = NtfsCacheProbe(Owner, Block);
             Dirty = (Slot != NULL && Slot->Dirty);
             ExReleaseFastMutex(&NtfsCacheMutex);
         }
         if (!Dirty)
             continue;
 
-        One = NtfsCacheWriteBackOne(Block);
+        One = NtfsCacheWriteBackOne(Owner, Block);
         if (!NT_SUCCESS(One))
             Status = One;
     }
@@ -401,7 +413,8 @@ NtfsCacheFlushRange(_In_ ULONGLONG Offset, _In_ ULONG Length)
 /* TRUE when the whole block was served from memory. */
 static
 BOOLEAN
-NtfsCacheCopyOut(_In_ ULONGLONG Block, _In_ ULONG BlockOffset,
+NtfsCacheCopyOut(_In_ PDEVICE_OBJECT Owner,
+                 _In_ ULONGLONG Block, _In_ ULONG BlockOffset,
                  _In_ ULONG Length, _Out_writes_bytes_(Length) PUCHAR Buffer)
 {
     NTFS_CACHE_SLOT* Slot;
@@ -411,7 +424,7 @@ NtfsCacheCopyOut(_In_ ULONGLONG Block, _In_ ULONG BlockOffset,
         return FALSE;
 
     ExAcquireFastMutex(&NtfsCacheMutex);
-    Slot = NtfsCacheProbe(Block);
+    Slot = NtfsCacheProbe(Owner, Block);
     if (Slot && Slot->Data)
     {
         RtlCopyMemory(Buffer, Slot->Data + BlockOffset, Length);
@@ -423,7 +436,9 @@ NtfsCacheCopyOut(_In_ ULONGLONG Block, _In_ ULONG BlockOffset,
 
 static
 VOID
-NtfsCacheInstall(_In_ ULONGLONG Block, _In_reads_bytes_(NTFS_CACHE_BLOCK_SIZE) PUCHAR Data)
+NtfsCacheInstall(_In_ PDEVICE_OBJECT Owner,
+                 _In_ ULONGLONG Block,
+                 _In_reads_bytes_(NTFS_CACHE_BLOCK_SIZE) PUCHAR Data)
 {
     NTFS_CACHE_SLOT* Slot;
 
@@ -432,15 +447,16 @@ NtfsCacheInstall(_In_ ULONGLONG Block, _In_reads_bytes_(NTFS_CACHE_BLOCK_SIZE) P
 
     /* Never lose an update by dropping the block that is being replaced. */
     ExAcquireFastMutex(&NtfsCacheMutex);
-    Slot = NtfsCacheVictim(Block);
-    if (Slot->Dirty && (Slot->Tag != Block || Slot->Owner != PartDeviceObj))
+    Slot = NtfsCacheVictim(Owner, Block);
+    if (Slot->Dirty && (Slot->Tag != Block || Slot->Owner != Owner))
     {
         ULONGLONG Victim = Slot->Tag;
+        PDEVICE_OBJECT VictimOwner = Slot->Owner;
 
         ExReleaseFastMutex(&NtfsCacheMutex);
-        NtfsCacheWriteBackOne(Victim);
+        NtfsCacheWriteBackOne(VictimOwner, Victim);
         ExAcquireFastMutex(&NtfsCacheMutex);
-        Slot = NtfsCacheVictim(Block);
+        Slot = NtfsCacheVictim(Owner, Block);
     }
     if (!Slot->Data)
     {
@@ -455,7 +471,7 @@ NtfsCacheInstall(_In_ ULONGLONG Block, _In_reads_bytes_(NTFS_CACHE_BLOCK_SIZE) P
     }
     RtlCopyMemory(Slot->Data, Data, NTFS_CACHE_BLOCK_SIZE);
     Slot->Tag = Block;
-    Slot->Owner = PartDeviceObj;
+    Slot->Owner = Owner;
     Slot->Dirty = FALSE;
     ExReleaseFastMutex(&NtfsCacheMutex);
 }
@@ -701,16 +717,25 @@ extern "C" {
 #endif
 
 NTSTATUS
-NtfsReadVolume(_In_    ULONGLONG Offset,
-               _In_    ULONG Length,
-               _Inout_ PUCHAR Buffer)
+NtfsReadVolumeContext(_In_opt_ void* Context,
+                      _In_ ULONG SectorBytes,
+                      _In_ ULONGLONG Offset,
+                      _In_ ULONG Length,
+                      _Inout_ PUCHAR Buffer)
 {
     NTSTATUS Status;
+    PDEVICE_OBJECT DeviceObject;
     PUCHAR ReadBuffer;
     ULONGLONG SectorAlignedOffset;
     ULONG SectorAlignedLength;
 
     ASSERT(Length);
+    DeviceObject = Context ? static_cast<PDEVICE_OBJECT>(Context) : PartDeviceObj;
+    if (!DeviceObject ||
+        (SectorBytes != 512 && SectorBytes != 4096))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
     /*
      * Metadata is read over and over from the same handful of index and MFT
@@ -734,7 +759,7 @@ NtfsReadVolume(_In_    ULONGLONG Offset,
             ULONG BlockOffset = (ULONG)(Current & (NTFS_CACHE_BLOCK_SIZE - 1));
             ULONG Chunk = min(Remaining, NTFS_CACHE_BLOCK_SIZE - BlockOffset);
 
-            if (!NtfsCacheCopyOut(Block, BlockOffset, Chunk, Out))
+            if (!NtfsCacheCopyOut(DeviceObject, Block, BlockOffset, Chunk, Out))
             {
                 PUCHAR BlockData = (PUCHAR)ExAllocatePoolUninitialized(
                     NonPagedPool, NTFS_CACHE_BLOCK_SIZE, 'CftN');
@@ -742,7 +767,7 @@ NtfsReadVolume(_In_    ULONGLONG Offset,
                 if (!BlockData)
                     break;
 
-                Status = ReadDisk(PartDeviceObj,
+                Status = ReadDisk(DeviceObject,
                                   Block << NTFS_CACHE_BLOCK_SHIFT,
                                   NTFS_CACHE_BLOCK_SIZE,
                                   BlockData);
@@ -753,7 +778,7 @@ NtfsReadVolume(_In_    ULONGLONG Offset,
                 }
 
                 RtlCopyMemory(Out, BlockData + BlockOffset, Chunk);
-                NtfsCacheInstall(Block, BlockData);
+                NtfsCacheInstall(DeviceObject, Block, BlockData);
                 ExFreePoolWithTag(BlockData, 'CftN');
             }
 
@@ -768,17 +793,17 @@ NtfsReadVolume(_In_    ULONGLONG Offset,
     }
 
     /* This read goes to the disk, so anything held back for it must be there. */
-    NtfsCacheFlushRange(Offset, Length);
+    NtfsCacheFlushRange(DeviceObject, Offset, Length);
 
-    SectorAlignedOffset = Offset - (Offset % BytesPerSector);
+    SectorAlignedOffset = Offset - (Offset % SectorBytes);
     SectorAlignedLength = ALIGN_UP_BY((Offset - SectorAlignedOffset) + Length,
-                                      BytesPerSector);
+                                      SectorBytes);
 
     if (SectorAlignedOffset == Offset
         && SectorAlignedLength == Length)
     {
         // Read directly to the supplied buffer.
-        Status = ReadDisk(PartDeviceObj,
+        Status = ReadDisk(DeviceObject,
                           SectorAlignedOffset,
                           SectorAlignedLength,
                           Buffer);
@@ -790,7 +815,7 @@ NtfsReadVolume(_In_    ULONGLONG Offset,
         ReadBuffer = new(NonPagedPool) UCHAR[SectorAlignedLength];
 
         // Fill the read buffer.
-        Status = ReadDisk(PartDeviceObj,
+        Status = ReadDisk(DeviceObject,
                           SectorAlignedOffset,
                           SectorAlignedLength,
                           ReadBuffer);
@@ -799,7 +824,7 @@ NtfsReadVolume(_In_    ULONGLONG Offset,
         {
             // Copy the contents we need into the supplied buffer.
             RtlCopyMemory(Buffer,
-                          ReadBuffer + (Offset % BytesPerSector),
+                          ReadBuffer + (Offset % SectorBytes),
                           Length);
         }
 
@@ -811,10 +836,21 @@ NtfsReadVolume(_In_    ULONGLONG Offset,
 }
 
 NTSTATUS
-NtfsWriteVolume(_In_    ULONGLONG Offset,
-                _In_    ULONG Length,
-                _Inout_ PUCHAR Buffer)
+NtfsWriteVolumeContext(_In_opt_ void* Context,
+                       _In_ ULONG SectorBytes,
+                       _In_ ULONGLONG Offset,
+                       _In_ ULONG Length,
+                       _Inout_ PUCHAR Buffer)
 {
+    PDEVICE_OBJECT DeviceObject;
+
+    DeviceObject = Context ? static_cast<PDEVICE_OBJECT>(Context) : PartDeviceObj;
+    if (!DeviceObject ||
+        (SectorBytes != 512 && SectorBytes != 4096))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     /*
      * Metadata is rewritten constantly and usually superseded moments later,
      * so a write that fits inside one block is held in the cache and
@@ -833,7 +869,7 @@ NtfsWriteVolume(_In_    ULONGLONG Offset,
             BOOLEAN Absorbed = FALSE;
 
             ExAcquireFastMutex(&NtfsCacheMutex);
-            Slot = NtfsCacheProbe(Block);
+            Slot = NtfsCacheProbe(DeviceObject, Block);
             if (Slot && Slot->Data)
             {
                 RtlCopyMemory(Slot->Data + BlockOffset, Buffer, Length);
@@ -872,7 +908,7 @@ NtfsWriteVolume(_In_    ULONGLONG Offset,
                     else
                     {
                         FillStatus = ReadDisk(
-                            PartDeviceObj,
+                            DeviceObject,
                             Block << NTFS_CACHE_BLOCK_SHIFT,
                             NTFS_CACHE_BLOCK_SIZE,
                             Staged);
@@ -881,12 +917,12 @@ NtfsWriteVolume(_In_    ULONGLONG Offset,
                     if (NT_SUCCESS(FillStatus))
                     {
                         RtlCopyMemory(Staged + BlockOffset, Buffer, Length);
-                        NtfsCacheInstall(Block, Staged);
+                        NtfsCacheInstall(DeviceObject, Block, Staged);
 
                         /* Mark it held-back; if the slot was lost meanwhile,
                          * fall through and write through instead. */
                         ExAcquireFastMutex(&NtfsCacheMutex);
-                        Slot = NtfsCacheProbe(Block);
+                        Slot = NtfsCacheProbe(DeviceObject, Block);
                         if (Slot && Slot->Data)
                         {
                             if (!Slot->Dirty)
@@ -912,22 +948,22 @@ NtfsWriteVolume(_In_    ULONGLONG Offset,
     }
 
     /* Going to the disk directly: commit anything held for these bytes. */
-    NtfsCacheFlushRange(Offset, Length);
+    NtfsCacheFlushRange(DeviceObject, Offset, Length);
 
     NTSTATUS Status;
     PUCHAR WriteBuffer;
     ULONGLONG SectorAlignedOffset;
     ULONG SectorAlignedLength;
 
-    SectorAlignedOffset = Offset - (Offset % BytesPerSector);
+    SectorAlignedOffset = Offset - (Offset % SectorBytes);
     SectorAlignedLength = ALIGN_UP_BY((Offset - SectorAlignedOffset) + Length,
-                                      BytesPerSector);
+                                      SectorBytes);
 
     if (SectorAlignedOffset == Offset
         && SectorAlignedLength == Length)
     {
         // Write directly to the disk using the supplied buffer.
-        Status = WriteDisk(PartDeviceObj,
+        Status = WriteDisk(DeviceObject,
                            SectorAlignedOffset,
                            SectorAlignedLength,
                            Buffer);
@@ -939,7 +975,7 @@ NtfsWriteVolume(_In_    ULONGLONG Offset,
         WriteBuffer = new(NonPagedPool) UCHAR[SectorAlignedLength];
 
         // Fill the write buffer with what's on disk.
-        Status = ReadDisk(PartDeviceObj,
+        Status = ReadDisk(DeviceObject,
                           SectorAlignedOffset,
                           SectorAlignedLength,
                           WriteBuffer);
@@ -947,12 +983,12 @@ NtfsWriteVolume(_In_    ULONGLONG Offset,
         if (NT_SUCCESS(Status))
         {
             // Copy the buffer contents we want to write into the write buffer.
-            RtlCopyMemory(WriteBuffer + (Offset % BytesPerSector),
+            RtlCopyMemory(WriteBuffer + (Offset % SectorBytes),
                           Buffer,
                           Length);
 
             // Write to the disk.
-            Status = WriteDisk(PartDeviceObj,
+            Status = WriteDisk(DeviceObject,
                                SectorAlignedOffset,
                                SectorAlignedLength,
                                WriteBuffer);
@@ -964,11 +1000,35 @@ NtfsWriteVolume(_In_    ULONGLONG Offset,
 
     /* Keep whatever we still hold in step with what just went to the disk. */
     if (NT_SUCCESS(Status))
-        NtfsCacheUpdateRange(Offset, Length, Buffer);
+        NtfsCacheUpdateRange(DeviceObject, Offset, Length, Buffer);
     else
-        NtfsCacheInvalidateRange(Offset, Length);
+        NtfsCacheInvalidateRange(DeviceObject, Offset, Length);
 
     return Status;
+}
+
+NTSTATUS
+NtfsReadVolume(_In_ ULONGLONG Offset,
+               _In_ ULONG Length,
+               _Inout_ PUCHAR Buffer)
+{
+    return NtfsReadVolumeContext(PartDeviceObj,
+                                 BytesPerSector,
+                                 Offset,
+                                 Length,
+                                 Buffer);
+}
+
+NTSTATUS
+NtfsWriteVolume(_In_ ULONGLONG Offset,
+                _In_ ULONG Length,
+                _Inout_ PUCHAR Buffer)
+{
+    return NtfsWriteVolumeContext(PartDeviceObj,
+                                  BytesPerSector,
+                                  Offset,
+                                  Length,
+                                  Buffer);
 }
 
 BOOLEAN

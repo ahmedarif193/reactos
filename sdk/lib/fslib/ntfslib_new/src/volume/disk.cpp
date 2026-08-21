@@ -14,7 +14,23 @@ Volume::ReadVolume(_In_    ULONGLONG Offset,
                    _In_    ULONG Length,
                    _Inout_ PUCHAR Buffer)
 {
-    return NtfsReadVolume(Offset, Length, Buffer);
+    ULONGLONG VolumeBytes;
+
+    if (BytesPerSector == 0 ||
+        SectorsInVolume > (ULONGLONG)-1 / BytesPerSector)
+    {
+        return STATUS_FILE_CORRUPT_ERROR;
+    }
+
+    VolumeBytes = SectorsInVolume * BytesPerSector;
+    if (Offset > VolumeBytes || Length > VolumeBytes - Offset)
+        return STATUS_END_OF_FILE;
+
+    return NtfsReadVolumeContext(IoContext,
+                                 BytesPerSector,
+                                 Offset,
+                                 Length,
+                                 Buffer);
 }
 
 NTSTATUS
@@ -22,5 +38,21 @@ Volume::WriteVolume(_In_    ULONGLONG Offset,
                     _In_    ULONG Length,
                     _Inout_ PUCHAR Buffer)
 {
-    return NtfsWriteVolume(Offset, Length, Buffer);
+    ULONGLONG VolumeBytes;
+
+    if (BytesPerSector == 0 ||
+        SectorsInVolume > (ULONGLONG)-1 / BytesPerSector)
+    {
+        return STATUS_FILE_CORRUPT_ERROR;
+    }
+
+    VolumeBytes = SectorsInVolume * BytesPerSector;
+    if (Offset > VolumeBytes || Length > VolumeBytes - Offset)
+        return STATUS_DISK_FULL;
+
+    return NtfsWriteVolumeContext(IoContext,
+                                  BytesPerSector,
+                                  Offset,
+                                  Length,
+                                  Buffer);
 }

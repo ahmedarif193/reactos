@@ -436,6 +436,20 @@ NtfsWriteVolume(_In_    ULONGLONG Offset,
                 _In_    ULONG Length,
                 _Inout_ PUCHAR Buffer);
 
+NTSTATUS
+NtfsReadVolumeContext(_In_opt_ void* Context,
+                      _In_ ULONG BytesPerSector,
+                      _In_ ULONGLONG Offset,
+                      _In_ ULONG Length,
+                      _Inout_ PUCHAR Buffer);
+
+NTSTATUS
+NtfsWriteVolumeContext(_In_opt_ void* Context,
+                       _In_ ULONG BytesPerSector,
+                       _In_ ULONGLONG Offset,
+                       _In_ ULONG Length,
+                       _Inout_ PUCHAR Buffer);
+
 #ifdef __cplusplus
 }
 #endif
@@ -463,6 +477,7 @@ NtfsWriteVolume(_In_    ULONGLONG Offset,
 typedef class Volume
 {
 public:
+    void*  IoContext = NULL;
     ULONG  BytesPerSector;
     UINT8  SectorsPerCluster;
     UINT64 SectorsInVolume;
@@ -653,7 +668,8 @@ public:
                          _Inout_ PUCHAR Buffer);
 
     NTSTATUS
-    Initialize(_In_ PUCHAR BootSectorData);
+    Initialize(_In_ PUCHAR BootSectorData,
+               _In_opt_ void* Context);
 
     NTSTATUS
     GetADSPreference(_In_  PUNICODE_STRING FileName,

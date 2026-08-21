@@ -316,8 +316,9 @@ NtfsMountVolume(IN PDEVICE_OBJECT TargetDeviceObject,
     /* Check if we're really NTFS. It's OK if we're not.
      * We're a boot driver, NT will try every possible filesystem.
      */
-    Status = NtfsProbePartitionAndOpenVolume(DiskGeometry.BytesPerSector,
-                                             &DiskVolume);
+    Status = NtfsProbePartitionAndOpenVolumeEx(DiskGeometry.BytesPerSector,
+                                               TargetDeviceObject,
+                                               &DiskVolume);
 
     if (!NT_SUCCESS(Status))
         goto Cleanup;
