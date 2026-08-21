@@ -25,10 +25,16 @@ static LPCWSTR GetItemFileName(PCUITEMID_CHILD pidl, LPWSTR Buf, UINT cchMax)
 {
     FileStructW* pDataW = _ILGetFileStructW(pidl);
     if (pDataW)
-        return pDataW->wszName;
+    {
+        lstrcpynW(Buf, pDataW->wszName, cchMax);
+        return Buf;
+    }
     LPPIDLDATA pdata = _ILGetDataPointer(pidl);
     if (_ILGetFSType(pidl) & PT_FS_UNICODE_FLAG)
-        return (LPWSTR)pdata->u.file.szNames;
+    {
+        lstrcpynW(Buf, (LPCWSTR)pdata->u.file.szNames, cchMax);
+        return Buf;
+    }
     if (_ILSimpleGetTextW(pidl, Buf, cchMax))
         return Buf;
     return NULL;
