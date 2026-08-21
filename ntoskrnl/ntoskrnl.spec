@@ -796,8 +796,11 @@
 @ stdcall LdrFindResourceDirectory_U(ptr ptr long ptr)
 @ stdcall LdrFindResource_U(ptr ptr long ptr)
 @ extern LpcPortObjectType
+@ stdcall LpcReplyWaitReplyPort(ptr long ptr)
 @ stdcall LpcRequestPort(ptr ptr)
 @ stdcall LpcRequestWaitReplyPort(ptr ptr ptr)
+@ stdcall LpcRequestWaitReplyPortEx(ptr ptr ptr)
+@ stdcall LpcSendWaitReceivePort(ptr long ptr ptr ptr ptr)
 @ stdcall LsaCallAuthenticationPackage(long long ptr long ptr ptr ptr)
 @ stdcall LsaDeregisterLogonProcess(long)
 @ stdcall LsaFreeReturnBuffer(ptr)
@@ -1532,6 +1535,29 @@
 @ stdcall ZwClose(ptr)
 @ stdcall ZwCloseObjectAuditAlarm(ptr ptr long)
 @ stdcall ZwConnectPort(ptr ptr ptr ptr ptr ptr ptr ptr)
+@ stdcall ZwAlpcAcceptConnectPort(ptr ptr long ptr ptr ptr ptr ptr long)
+@ stdcall ZwAlpcCancelMessage(ptr long ptr)
+@ stdcall ZwAlpcConnectPort(ptr ptr ptr ptr long ptr ptr ptr ptr ptr ptr)
+@ stdcall ZwAlpcConnectPortEx(ptr ptr ptr ptr long ptr ptr ptr ptr ptr ptr)
+@ stdcall ZwAlpcCreatePort(ptr ptr ptr)
+@ stdcall ZwAlpcCreatePortSection(ptr long ptr long ptr ptr)
+@ stdcall ZwAlpcCreateResourceReserve(ptr long long ptr)
+@ stdcall ZwAlpcCreateSectionView(ptr long ptr)
+@ stdcall ZwAlpcCreateSecurityContext(ptr long ptr)
+@ stdcall ZwAlpcDeletePortSection(ptr long ptr)
+@ stdcall ZwAlpcDeleteResourceReserve(ptr long long)
+@ stdcall ZwAlpcDeleteSectionView(ptr long ptr)
+@ stdcall ZwAlpcDeleteSecurityContext(ptr long ptr)
+@ stdcall ZwAlpcDisconnectPort(ptr long)
+@ stdcall ZwAlpcImpersonateClientContainerOfPort(ptr ptr long)
+@ stdcall ZwAlpcImpersonateClientOfPort(ptr ptr ptr)
+@ stdcall ZwAlpcOpenSenderProcess(ptr ptr ptr long long ptr)
+@ stdcall ZwAlpcOpenSenderThread(ptr ptr ptr long long ptr)
+@ stdcall ZwAlpcQueryInformation(ptr long ptr long ptr)
+@ stdcall ZwAlpcQueryInformationMessage(ptr ptr long ptr long ptr)
+@ stdcall ZwAlpcRevokeSecurityContext(ptr long ptr)
+@ stdcall ZwAlpcSendWaitReceivePort(ptr long ptr ptr ptr ptr ptr ptr)
+@ stdcall ZwAlpcSetInformation(ptr long ptr long)
 @ stdcall ZwCreateDirectoryObject(ptr long ptr)
 @ stdcall ZwCreateEvent(ptr long ptr long long)
 @ stdcall ZwCreateFile(ptr long ptr ptr ptr long long long long ptr long)
@@ -2006,10 +2032,11 @@
 @ extern -arch=arm64 TmTransactionObjectType
 @ extern -arch=arm64 psMUITest
 # --- Unimplemented Win11 exports (auto-generated stubs raise STATUS via DbgPrint) ---
-@ stub -arch=arm64 AlpcCreateSecurityContext
-@ stub -arch=arm64 AlpcGetHeaderSize
-@ stub -arch=arm64 AlpcGetMessageAttribute
-@ stub -arch=arm64 AlpcInitializeMessageAttribute
+@ stdcall -arch=arm64 AlpcCreateSecurityContext(ptr ptr long ptr)
+@ stdcall -arch=arm64 AlpcGetHeaderSize(long)
+@ stdcall -arch=arm64 AlpcGetMessageAttribute(ptr long)
+@ stdcall -arch=arm64 AlpcInitializeMessageAttribute(long ptr long ptr)
+@ stdcall -arch=arm64 AlpcMaxAllowedMessageLength()
 @ stub -arch=arm64 BgkDisplayCharacter
 @ stub -arch=arm64 BgkGetConsoleState
 @ stub -arch=arm64 BgkGetCursorState
@@ -2655,9 +2682,6 @@
 @ stub -arch=arm64 LdrResFindResource
 @ stub -arch=arm64 LdrResFindResourceDirectory
 @ stub -arch=arm64 LdrResSearchResource
-@ stub -arch=arm64 LpcReplyWaitReplyPort
-@ stub -arch=arm64 LpcRequestWaitReplyPortEx
-@ stub -arch=arm64 LpcSendWaitReceivePort
 @ stub -arch=arm64 MmAddVerifierSpecialThunks
 @ stub -arch=arm64 MmAllocateContiguousMemoryEx
 @ stdcall -arch=arm64 MmAllocateContiguousMemorySpecifyCacheNode(long long long long long long long long long)
@@ -3327,26 +3351,6 @@
 @ stub -arch=arm64 WheaUnconfigureErrorSource
 @ stub -arch=arm64 WheaUnregisterErrorSourceOverride
 @ stdcall -arch=arm64 ZwAlertThreadByThreadId(ptr)
-@ stub -arch=arm64 ZwAlpcAcceptConnectPort
-@ stub -arch=arm64 ZwAlpcCancelMessage
-@ stub -arch=arm64 ZwAlpcConnectPort
-@ stub -arch=arm64 ZwAlpcConnectPortEx
-@ stub -arch=arm64 ZwAlpcCreatePort
-@ stub -arch=arm64 ZwAlpcCreatePortSection
-@ stub -arch=arm64 ZwAlpcCreateResourceReserve
-@ stub -arch=arm64 ZwAlpcCreateSectionView
-@ stub -arch=arm64 ZwAlpcCreateSecurityContext
-@ stub -arch=arm64 ZwAlpcDeletePortSection
-@ stub -arch=arm64 ZwAlpcDeleteResourceReserve
-@ stub -arch=arm64 ZwAlpcDeleteSectionView
-@ stub -arch=arm64 ZwAlpcDeleteSecurityContext
-@ stub -arch=arm64 ZwAlpcDisconnectPort
-@ stub -arch=arm64 ZwAlpcOpenSenderProcess
-@ stub -arch=arm64 ZwAlpcOpenSenderThread
-@ stub -arch=arm64 ZwAlpcQueryInformation
-@ stub -arch=arm64 ZwAlpcQueryInformationMessage
-@ stub -arch=arm64 ZwAlpcSendWaitReceivePort
-@ stub -arch=arm64 ZwAlpcSetInformation
 @ stub -arch=arm64 ZwAssociateWaitCompletionPacket
 @ stub -arch=arm64 ZwCancelWaitCompletionPacket
 @ stub -arch=arm64 ZwCommitComplete

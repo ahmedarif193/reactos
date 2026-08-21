@@ -184,6 +184,10 @@ set(GENERATE_DEPENDENCY_GRAPH FALSE CACHE BOOL
 cmake_dependent_option(ENABLE_ROSTESTS "Whether to build the ReactOS test suite." OFF
                        "CMAKE_BUILD_TYPE STREQUAL Debug" OFF)
 
+option(ENABLE_ALPC
+       "Whether to build the experimental ALPC port implementation in place of LPC."
+       ON)
+
 option(ROSSYM_COMPRESSION "Whether to compress the embedded .rossym symbol section." OFF)
 
 cmake_dependent_option(ENABLE_FEX_ARM64EC

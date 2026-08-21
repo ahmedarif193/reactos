@@ -348,4 +348,33 @@
 #if (NTDDI_VERSION >= NTDDI_WIN10_RS3)
     SVC_(NotifyChangeDirectoryFileEx, 10)
 #endif
+#if (NTDDI_VERSION >= NTDDI_VISTA)
+    SVC_(AlpcAcceptConnectPort, 9)
+    SVC_(AlpcCancelMessage, 3)
+    SVC_(AlpcConnectPort, 11)
+    SVC_(AlpcCreatePort, 3)
+    SVC_(AlpcCreatePortSection, 6)
+    SVC_(AlpcCreateResourceReserve, 4)
+    SVC_(AlpcCreateSectionView, 3)
+    SVC_(AlpcCreateSecurityContext, 3)
+    SVC_(AlpcDeletePortSection, 3)
+    SVC_(AlpcDeleteResourceReserve, 3)
+    SVC_(AlpcDeleteSectionView, 3)
+    SVC_(AlpcDeleteSecurityContext, 3)
+    SVC_(AlpcDisconnectPort, 2)
+    SVC_(AlpcImpersonateClientOfPort, 3)
+    SVC_(AlpcOpenSenderProcess, 6)
+    SVC_(AlpcOpenSenderThread, 6)
+    SVC_(AlpcQueryInformation, 5)
+    SVC_(AlpcQueryInformationMessage, 6)
+    SVC_(AlpcRevokeSecurityContext, 3)
+    SVC_(AlpcSendWaitReceivePort, 8)
+    SVC_(AlpcSetInformation, 4)
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+    SVC_(AlpcConnectPortEx, 11)
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    SVC_(AlpcImpersonateClientContainerOfPort, 3)
+#endif
 #endif // SYSFUNCS_NT5_ONLY

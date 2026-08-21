@@ -209,6 +209,7 @@ DbgkpSendApiMessageLpc(IN OUT PDBGKM_MSG Message,
 {
     NTSTATUS Status;
     UCHAR Buffer[PORT_MAXIMUM_MESSAGE_LENGTH];
+    SIZE_T BufferLength = sizeof(Buffer);
     BOOLEAN Suspended = FALSE;
     PAGED_CODE();
 
@@ -222,9 +223,7 @@ DbgkpSendApiMessageLpc(IN OUT PDBGKM_MSG Message,
     PspSetProcessFlag(PsGetCurrentProcess(), PSF_CREATE_REPORTED_BIT);
 
     /* Send the LPC command */
-    Status = LpcRequestWaitReplyPort(Port,
-                                     (PPORT_MESSAGE)Message,
-                                     (PPORT_MESSAGE)&Buffer[0]);
+    Status = LpcSendWaitReceivePort(Port, ALPC_MSGFLG_SYNC_REQUEST, (PPORT_MESSAGE)Message, (PPORT_MESSAGE)&Buffer[0], &BufferLength, NULL);
 
     /* Flush the instruction cache */
     ZwFlushInstructionCache(NtCurrentProcess(), NULL, 0);
