@@ -248,9 +248,9 @@ ExpRaiseHardError(IN NTSTATUS ErrorStatus,
     }
 
     /* Setup the LPC Message */
+    RtlZeroMemory(&Message->h, sizeof(Message->h));
     Message->h.u1.Length = (sizeof(HARDERROR_MSG) << 16) |
                            (sizeof(HARDERROR_MSG) - sizeof(PORT_MESSAGE));
-    Message->h.u2.ZeroInit = 0;
     Message->h.u2.s2.Type = LPC_ERROR_EVENT;
     Message->Status = ErrorStatus & ~HARDERROR_OVERRIDE_ERRORMODE;
     Message->ValidResponseOptions = ValidResponseOptions;

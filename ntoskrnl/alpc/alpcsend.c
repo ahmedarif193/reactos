@@ -307,18 +307,46 @@ AlpcpQueueNewMessage(
     PETHREAD Thread = PsGetCurrentThread();
     ULONG MessageType;
     ULONG Capacity = Port->MaxMessageLength;
+    BOOLEAN LpcMode = (Flags & ALPC_MSGFLG_LPC_MODE_INTERNAL) != 0;
     BOOLEAN Synchronous = (Flags & ALPC_MSGFLG_SYNC_REQUEST) != 0;
     BOOLEAN AsyncRequest = FALSE;
     BOOLEAN CallbackRequest;
+    BOOLEAN LegacySpecialMessage = FALSE;
+    USHORT LegacyType = Header->u2.s2.Type & ~LPC_KERNELMODE_MESSAGE;
 
     CallbackRequest = Synchronous && Header->MessageId;
 
     *OutMessage = NULL;
 
     if ((USHORT)Header->u1.s1.TotalLength > Port->MaxMessageLength) return STATUS_PORT_MESSAGE_TOO_LONG;
-    if (!Header->MessageId && (Header->ClientId.UniqueProcess || Header->ClientId.UniqueThread)) return STATUS_REPLY_MESSAGE_MISMATCH;
+    if (!LpcMode && !Header->MessageId && (Header->ClientId.UniqueProcess || Header->ClientId.UniqueThread)) return STATUS_REPLY_MESSAGE_MISMATCH;
 
-    if ((Flags & ALPC_MSGFLG_REPLY_MESSAGE) && !Header->MessageId)
+    if (LpcMode)
+    {
+        switch (LegacyType)
+        {
+            case LPC_NEW_MESSAGE:
+            case LPC_REQUEST:
+                break;
+
+            case LPC_CLIENT_DIED:
+            case LPC_PORT_CLOSED:
+            case LPC_EXCEPTION:
+            case LPC_DEBUG_EVENT:
+            case LPC_ERROR_EVENT:
+                LegacySpecialMessage = TRUE;
+                break;
+
+            default:
+                return STATUS_INVALID_PARAMETER;
+        }
+    }
+
+    if (LegacySpecialMessage)
+    {
+        MessageType = LegacyType;
+    }
+    else if ((Flags & ALPC_MSGFLG_REPLY_MESSAGE) && !Header->MessageId)
     {
         MessageType = LPC_DATAGRAM | (Header->u2.s2.Type & (LPC_NO_IMPERSONATE | LPC_KERNELMODE_MESSAGE));
     }
@@ -338,7 +366,7 @@ AlpcpQueueNewMessage(
     Message->PortMessage.CallbackId = 0;
     AlpcpSetMessageSenderPort(Message, Port);
     Message->State = (PreviousMode == KernelMode) ? ALPC_MSG_STATE_KERNEL : 0;
-    if (Flags & ALPC_MSGFLG_LPC_MODE_INTERNAL) Message->State |= ALPC_MSG_STATE_LPC_MODE;
+    if (LpcMode) Message->State |= ALPC_MSG_STATE_LPC_MODE;
     if (Synchronous) Message->State |= ALPC_MSG_STATE_SYNC;
     if (AsyncRequest) Message->State |= ALPC_MSG_STATE_SYNC | ALPC_MSG_STATE_ASYNC_REPLY;
 

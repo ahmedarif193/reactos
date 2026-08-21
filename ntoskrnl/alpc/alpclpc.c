@@ -7,6 +7,8 @@
 
 #include <ntoskrnl.h>
 
+#define ALPCP_LEGACY_MESSAGE_TYPE_MASK (LPC_NO_IMPERSONATE | LPC_KERNELMODE_MESSAGE | 0x000F)
+
 static
 KPROCESSOR_MODE
 AlpcpLegacyWaitMode(
@@ -663,6 +665,7 @@ AlpcpLegacyReceive(
         {
             ProbeForWrite(ReceiveMessage, sizeof(PORT_MESSAGE) + CopyLength, sizeof(ULONG));
             RtlCopyMemory(ReceiveMessage, &Message->PortMessage, sizeof(PORT_MESSAGE) + CopyLength);
+            ReceiveMessage->u2.s2.Type &= ALPCP_LEGACY_MESSAGE_TYPE_MASK;
             if (PortContext)
             {
                 ProbeForWritePointer(PortContext);
@@ -678,6 +681,7 @@ AlpcpLegacyReceive(
     else
     {
         RtlCopyMemory(ReceiveMessage, &Message->PortMessage, sizeof(PORT_MESSAGE) + CopyLength);
+        ReceiveMessage->u2.s2.Type &= ALPCP_LEGACY_MESSAGE_TYPE_MASK;
         if (PortContext) *PortContext = Context;
     }
 
@@ -1765,9 +1769,7 @@ NtQueryInformationPort(
     {
         _SEH2_TRY
         {
-            ProbeForWrite(PortInformation,
-                          PortInformationLength,
-                          sizeof(ULONG));
+            ProbeForWrite(PortInformation, PortInformationLength, sizeof(ULONG));
             if (ReturnLength)
                 ProbeForWriteUlong(ReturnLength);
         }
