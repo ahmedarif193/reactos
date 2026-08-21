@@ -65,23 +65,13 @@ LpcInitSystem(VOID)
     ObjectTypeInitializer.DeleteProcedure = AlpcpDeletePort;
     ObjectTypeInitializer.ValidAccessMask = PORT_ALL_ACCESS;
     ObjectTypeInitializer.InvalidAttributes = OBJ_VALID_ATTRIBUTES & ~OBJ_CASE_INSENSITIVE;
-    ObCreateObjectTypeEx(&Name,
-                         &ObjectTypeInitializer,
-                         NULL,
-                         FIELD_OFFSET(ALPC_PORT, WaitEvent),
-                         &AlpcPortObjectType);
+    ObCreateObjectTypeEx(&Name, &ObjectTypeInitializer, NULL, FIELD_OFFSET(ALPC_PORT, WaitEvent), &AlpcPortObjectType);
     if (!AlpcPortObjectType) return FALSE;
 
     LpcPortObjectType = AlpcPortObjectType;
     LpcWaitablePortObjectType = AlpcPortObjectType;
 
-    ExInitializePagedLookasideList(&AlpcpSmallMessageLookaside,
-                                   NULL,
-                                   NULL,
-                                   0,
-                                   ALPC_SMALL_MESSAGE_ALLOCATION,
-                                   'McpA',
-                                   32);
+    ExInitializePagedLookasideList(&AlpcpSmallMessageLookaside, NULL, NULL, 0, ALPC_SMALL_MESSAGE_ALLOCATION, 'McpA', 32);
     return TRUE;
 }
 
@@ -431,12 +421,7 @@ AlpcpQueueMessage(
         }
         if (Port->CompletionPort)
         {
-            IoSetIoCompletion(Port->CompletionPort,
-                              Port->CompletionKey,
-                              NULL,
-                              STATUS_SUCCESS,
-                              0,
-                              TRUE);
+            IoSetIoCompletion(Port->CompletionPort, Port->CompletionKey, NULL, STATUS_SUCCESS, 0, TRUE);
         }
         return;
     }
@@ -451,12 +436,7 @@ AlpcpQueueMessage(
     }
     if (Port->CompletionPort)
     {
-        IoSetIoCompletion(Port->CompletionPort,
-                          Port->CompletionKey,
-                          NULL,
-                          STATUS_SUCCESS,
-                          0,
-                          TRUE);
+        IoSetIoCompletion(Port->CompletionPort, Port->CompletionKey, NULL, STATUS_SUCCESS, 0, TRUE);
     }
     AlpcpWakeWaiter(Port);
 }
@@ -785,10 +765,7 @@ AlpcpCompleteWithStatus(
     {
         Message->ActiveCallback = NULL;
         Callback->CallbackParent = NULL;
-        AlpcpCompleteWithStatus(Callback,
-                                ALPC_MSG_STATE_CANCELED |
-                                ALPC_MSG_STATE_DISCONNECTED,
-                                Status);
+        AlpcpCompleteWithStatus(Callback, ALPC_MSG_STATE_CANCELED | ALPC_MSG_STATE_DISCONNECTED, Status);
     }
 
     Parent = Message->CallbackParent;

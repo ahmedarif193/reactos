@@ -305,9 +305,7 @@ AlpcpQueryServerInformation(
                     ServerInformation->Out.ConnectionPortName.MaximumLength = PortName.MaximumLength;
                     ServerInformation->Out.ConnectionPortName.Buffer =
                         (PWSTR)((PUCHAR)ServerInformation + sizeof(*ServerInformation));
-                    RtlCopyMemory(ServerInformation->Out.ConnectionPortName.Buffer,
-                                  PortName.Buffer,
-                                  PortName.MaximumLength);
+                    RtlCopyMemory(ServerInformation->Out.ConnectionPortName.Buffer, PortName.Buffer, PortName.MaximumLength);
                 }
             }
         }
@@ -332,9 +330,7 @@ AlpcpQueryServerInformation(
                 ServerInformation->Out.ConnectionPortName.MaximumLength = PortName.MaximumLength;
                 ServerInformation->Out.ConnectionPortName.Buffer =
                     (PWSTR)((PUCHAR)ServerInformation + sizeof(*ServerInformation));
-                RtlCopyMemory(ServerInformation->Out.ConnectionPortName.Buffer,
-                              PortName.Buffer,
-                              PortName.MaximumLength);
+                RtlCopyMemory(ServerInformation->Out.ConnectionPortName.Buffer, PortName.Buffer, PortName.MaximumLength);
             }
         }
     }
@@ -651,9 +647,7 @@ NtAlpcSetInformation(
             {
                 _SEH2_TRY
                 {
-                    ProbeForRead(PortInformation,
-                                 sizeof(CompletionListInformation),
-                                 sizeof(ULONG));
+                    ProbeForRead(PortInformation, sizeof(CompletionListInformation), sizeof(ULONG));
                     CompletionListInformation =
                         *(volatile ALPC_PORT_COMPLETION_LIST_INFORMATION *)PortInformation;
                 }
