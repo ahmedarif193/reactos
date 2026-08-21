@@ -589,9 +589,7 @@ NtAlpcConnectPortEx(
 Exit:
     if (CapturedSecurityRequirements)
     {
-        SeReleaseSecurityDescriptor(CapturedSecurityRequirements,
-                                    PreviousMode,
-                                    FALSE);
+        SeReleaseSecurityDescriptor(CapturedSecurityRequirements, PreviousMode, FALSE);
     }
     return Status;
 }

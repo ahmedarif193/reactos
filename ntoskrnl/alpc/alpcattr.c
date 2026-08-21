@@ -636,12 +636,8 @@ SkipViewAttribute:;
             {
                 _SEH2_TRY
                 {
-                    ProbeForRead(HandleAttr->HandleAttrArray,
-                                 HandleCount * sizeof(*HandleInformation),
-                                 sizeof(ULONG));
-                    RtlCopyMemory(HandleInformation,
-                                  HandleAttr->HandleAttrArray,
-                                  HandleCount * sizeof(*HandleInformation));
+                    ProbeForRead(HandleAttr->HandleAttrArray, HandleCount * sizeof(*HandleInformation), sizeof(ULONG));
+                    RtlCopyMemory(HandleInformation, HandleAttr->HandleAttrArray, HandleCount * sizeof(*HandleInformation));
                 }
                 _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
                 {
@@ -656,9 +652,7 @@ SkipViewAttribute:;
             }
             else
             {
-                RtlCopyMemory(HandleInformation,
-                              HandleAttr->HandleAttrArray,
-                              HandleCount * sizeof(*HandleInformation));
+                RtlCopyMemory(HandleInformation, HandleAttr->HandleAttrArray, HandleCount * sizeof(*HandleInformation));
             }
         }
 
@@ -893,8 +887,7 @@ AlpcpExposeReceiveAttributes(
 
                 HandleInformation = ExAllocatePoolWithTag(PagedPool, HandleData->Count * sizeof(*HandleInformation), 'IcpA');
                 if (!HandleInformation) return STATUS_NO_MEMORY;
-                RtlZeroMemory(HandleInformation,
-                              HandleData->Count * sizeof(*HandleInformation));
+                RtlZeroMemory(HandleInformation, HandleData->Count * sizeof(*HandleInformation));
 
                 for (HandleIndex = 0; HandleIndex < HandleData->Count; HandleIndex++)
                 {
@@ -918,12 +911,8 @@ AlpcpExposeReceiveAttributes(
                     {
                         _SEH2_TRY
                         {
-                            ProbeForWrite(UserHandleInformation,
-                                          HandleData->Count * sizeof(*HandleInformation),
-                                          sizeof(ULONG));
-                            RtlCopyMemory(UserHandleInformation,
-                                          HandleInformation,
-                                          HandleData->Count * sizeof(*HandleInformation));
+                            ProbeForWrite(UserHandleInformation, HandleData->Count * sizeof(*HandleInformation), sizeof(ULONG));
+                            RtlCopyMemory(UserHandleInformation, HandleInformation, HandleData->Count * sizeof(*HandleInformation));
                         }
                         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
                         {
@@ -933,9 +922,7 @@ AlpcpExposeReceiveAttributes(
                     }
                     else
                     {
-                        RtlCopyMemory(UserHandleInformation,
-                                      HandleInformation,
-                                      HandleData->Count * sizeof(*HandleInformation));
+                        RtlCopyMemory(UserHandleInformation, HandleInformation, HandleData->Count * sizeof(*HandleInformation));
                     }
                 }
 
@@ -1011,8 +998,7 @@ Exit:
         while (OpenedHandleCount)
         {
             OpenedHandleCount--;
-            ObCloseHandle(UlongToHandle(HandleInformation[OpenedHandleCount].Handle),
-                          KernelMode);
+            ObCloseHandle(UlongToHandle(HandleInformation[OpenedHandleCount].Handle), KernelMode);
         }
         if (SingleHandle) ObCloseHandle(SingleHandle, KernelMode);
     }
