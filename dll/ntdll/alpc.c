@@ -14,12 +14,12 @@
 #define NDEBUG
 #include <debug.h>
 
-SIZE_T WINAPI AlpcGetHeaderSize(ULONG attribute_flags)
+ULONG WINAPI AlpcGetHeaderSize(ULONG attribute_flags)
 {
     static const struct
     {
         ULONG attribute;
-        SIZE_T size;
+        ULONG size;
     } attribute_sizes[] =
     {
         /* Attribute with a higher bit is stored before that with a lower bit */
@@ -32,7 +32,7 @@ SIZE_T WINAPI AlpcGetHeaderSize(ULONG attribute_flags)
         {ALPC_MESSAGE_WORK_ON_BEHALF_ATTRIBUTE, sizeof(ALPC_WORK_ON_BEHALF_ATTR)},
     };
     unsigned int i;
-    SIZE_T size;
+    ULONG size;
 
     size = sizeof(ALPC_MESSAGE_ATTRIBUTES);
     for (i = 0; i < RTL_NUMBER_OF(attribute_sizes); i++)
