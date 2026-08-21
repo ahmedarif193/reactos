@@ -551,19 +551,19 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
             Arm64CpuFeatures.FpSupported;
         MmWriteableSharedUserData->ProcessorFeatures[PF_ARM_V8_INSTRUCTIONS_AVAILABLE] = TRUE;
         MmWriteableSharedUserData->ProcessorFeatures[PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE] =
-            Arm64CpuFeatures.AesSupported &&
-            Arm64CpuFeatures.Sha1Supported &&
-            Arm64CpuFeatures.Sha2Supported;
+            ((Arm64CpuFeatures.AesSupported != 0) &&
+             (Arm64CpuFeatures.Sha1Supported != 0) &&
+             (Arm64CpuFeatures.Sha2Supported != 0));
         MmWriteableSharedUserData->ProcessorFeatures[PF_ARM_V8_CRC32_INSTRUCTIONS_AVAILABLE] =
-            Arm64CpuFeatures.Crc32Supported;
+            (Arm64CpuFeatures.Crc32Supported != 0);
         MmWriteableSharedUserData->ProcessorFeatures[PF_ARM_V81_ATOMIC_INSTRUCTIONS_AVAILABLE] =
             (Arm64CpuFeatures.AtomicSupported >= KI_ARM64_ID_AA64ISAR0_ATOMIC_LSE);
         MmWriteableSharedUserData->ProcessorFeatures[PF_ARM_V82_DP_INSTRUCTIONS_AVAILABLE] =
-            Arm64CpuFeatures.DotProdSupported;
+            (Arm64CpuFeatures.DotProdSupported != 0);
         MmWriteableSharedUserData->ProcessorFeatures[PF_ARM_V83_JSCVT_INSTRUCTIONS_AVAILABLE] =
-            Arm64CpuFeatures.JscvtSupported;
+            (Arm64CpuFeatures.JscvtSupported != 0);
         MmWriteableSharedUserData->ProcessorFeatures[PF_ARM_V83_LRCPC_INSTRUCTIONS_AVAILABLE] =
-            Arm64CpuFeatures.LrcpcSupported;
+            (Arm64CpuFeatures.LrcpcSupported != 0);
 
         /* Report firmware virtualization support when EL2 is implemented */
         if (Arm64CpuFeatures.El2Implemented)
