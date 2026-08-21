@@ -12,6 +12,11 @@
 #define TEST_REQUEST_COOKIE  0x52514553
 #define TEST_REPLY_COOKIE    0x52504C59
 #define TEST_ASYNC_COOKIE    0x4153594E
+#define TEST_LEGACY_COOKIE   0x4C504352
+#define TEST_LEGACY2_COOKIE  0x4C504332
+#define TEST_STALE_PROCESS_ID ((HANDLE)(ULONG_PTR)0x11111111)
+#define TEST_STALE_THREAD_ID ((HANDLE)(ULONG_PTR)0x22222222)
+#define TEST_STALE_MESSAGE_ID 0x33333333
 #define TEST_PORT_CONTEXT ((PVOID)(ULONG_PTR)0x12345678)
 #define TEST_LPC_CONTINUATION_REQUIRED 0x2000
 
@@ -27,11 +32,19 @@ typedef struct _TEST_CLIENT_RESULT
     NTSTATUS ConnectStatus;
     NTSTATUS RequestStatus;
     NTSTATUS AsyncStatus;
+    NTSTATUS LegacyStatus;
+    NTSTATUS Legacy2Status;
     NTSTATUS DisconnectStatus;
     ULONG ConnectType;
     SIZE_T ConnectLength;
     ULONG ReplyCookie;
     ULONG ReplyValue;
+    ULONG LegacyReplyCookie;
+    ULONG LegacyReplyValue;
+    USHORT LegacyReplyType;
+    ULONG Legacy2ReplyCookie;
+    ULONG Legacy2ReplyValue;
+    USHORT Legacy2ReplyType;
 } TEST_CLIENT_RESULT, *PTEST_CLIENT_RESULT;
 
 static UNICODE_STRING PortName = RTL_CONSTANT_STRING(L"\\RPC Control\\NtdllApitestNtAlpcPort");
@@ -70,7 +83,7 @@ WINAPI
 AlpcClientThread(
     _In_ PVOID Parameter)
 {
-    TEST_ALPC_MESSAGE ConnectMessage, RequestMessage, ReplyMessage, AsyncMessage;
+    TEST_ALPC_MESSAGE ConnectMessage, RequestMessage, ReplyMessage, AsyncMessage, LegacyRequest, LegacyReply, Legacy2Request, Legacy2Reply;
     LARGE_INTEGER Timeout;
     SIZE_T BufferLength;
     HANDLE ClientPort = NULL;
@@ -102,6 +115,23 @@ AlpcClientThread(
     ClientResult.AsyncStatus = NtAlpcSendWaitReceivePort(ClientPort, 0, &AsyncMessage.Header, NULL, NULL, NULL, NULL, NULL);
     if (NT_SUCCESS(ClientResult.AsyncStatus) && AsyncReceivedEvent)
         WaitForSingleObject(AsyncReceivedEvent, 10000);
+
+    InitializeTestMessage(&LegacyRequest, TEST_LEGACY_COOKIE, 91);
+    RtlZeroMemory(&LegacyReply, sizeof(LegacyReply));
+    ClientResult.LegacyStatus = NtRequestWaitReplyPort(ClientPort, &LegacyRequest.Header, &LegacyReply.Header);
+    ClientResult.LegacyReplyCookie = LegacyReply.Cookie;
+    ClientResult.LegacyReplyValue = LegacyReply.Value;
+    ClientResult.LegacyReplyType = LegacyReply.Header.u2.s2.Type;
+
+    InitializeTestMessage(&Legacy2Request, TEST_LEGACY2_COOKIE, 92);
+    Legacy2Request.Header.ClientId.UniqueProcess = TEST_STALE_PROCESS_ID;
+    Legacy2Request.Header.ClientId.UniqueThread = TEST_STALE_THREAD_ID;
+    Legacy2Request.Header.MessageId = TEST_STALE_MESSAGE_ID;
+    RtlZeroMemory(&Legacy2Reply, sizeof(Legacy2Reply));
+    ClientResult.Legacy2Status = NtRequestWaitReplyPort(ClientPort, &Legacy2Request.Header, &Legacy2Reply.Header);
+    ClientResult.Legacy2ReplyCookie = Legacy2Reply.Cookie;
+    ClientResult.Legacy2ReplyValue = Legacy2Reply.Value;
+    ClientResult.Legacy2ReplyType = Legacy2Reply.Header.u2.s2.Type;
     ClientResult.DisconnectStatus = NtAlpcDisconnectPort(ClientPort, 0);
     NtClose(ClientPort);
     return 0;
@@ -114,6 +144,7 @@ START_TEST(NtAlpcPort)
     TEST_ALPC_MESSAGE Message;
     LARGE_INTEGER Timeout;
     ULONG ReturnLength;
+    PVOID LegacyPortContext;
     SIZE_T BufferLength;
     NTSTATUS Status;
     HANDLE ConnectionPort = NULL;
@@ -122,6 +153,7 @@ START_TEST(NtAlpcPort)
     DWORD WaitStatus = WAIT_OBJECT_0;
 
     RtlZeroMemory(&PortAttributes, sizeof(PortAttributes));
+    PortAttributes.Flags = ALPC_PORFLG_ALLOW_LPC_REQUESTS;
     PortAttributes.SecurityQos.Length = sizeof(PortAttributes.SecurityQos);
     PortAttributes.SecurityQos.ImpersonationLevel = SecurityImpersonation;
     PortAttributes.SecurityQos.ContextTrackingMode = SECURITY_DYNAMIC_TRACKING;
@@ -211,6 +243,32 @@ START_TEST(NtAlpcPort)
         SetEvent(AsyncReceivedEvent);
     }
 
+    RtlZeroMemory(&Message, sizeof(Message));
+    BufferLength = sizeof(Message);
+    Timeout = RelativeTimeout(10000);
+    Status = NtAlpcSendWaitReceivePort(ConnectionPort, 0, NULL, NULL, &Message.Header, &BufferLength, NULL, &Timeout);
+    trace("ALPC_OBSERVE status LegacyLpc.server_receive=%08lx type=%04x continuation=%u cookie=%08lx value=%lu\n", Status, Message.Header.u2.s2.Type, !!(Message.Header.u2.s2.Type & LPC_CONTINUATION_REQUIRED), Message.Cookie, Message.Value);
+    if (NT_SUCCESS(Status))
+    {
+        Message.Cookie = TEST_REPLY_COOKIE;
+        Message.Value++;
+        Status = NtAlpcSendWaitReceivePort(ServerPort, ALPC_MSGFLG_REPLY_MESSAGE, &Message.Header, NULL, NULL, NULL, NULL, NULL);
+        trace("ALPC_OBSERVE status LegacyLpc.server_reply=%08lx request_type=%04x\n", Status, Message.Header.u2.s2.Type);
+    }
+
+    RtlZeroMemory(&Message, sizeof(Message));
+    LegacyPortContext = (PVOID)(ULONG_PTR)0x55555555;
+    Timeout = RelativeTimeout(10000);
+    Status = NtReplyWaitReceivePortEx(ConnectionPort, &LegacyPortContext, NULL, &Message.Header, &Timeout);
+    trace("ALPC_OBSERVE status LegacyLpc.legacy_server_receive=%08lx type=%04x continuation=%u context=%p process=%p thread=%p message_id=%lu callback_id=%lu cookie=%08lx value=%lu\n", Status, Message.Header.u2.s2.Type, !!(Message.Header.u2.s2.Type & LPC_CONTINUATION_REQUIRED), LegacyPortContext, Message.Header.ClientId.UniqueProcess, Message.Header.ClientId.UniqueThread, Message.Header.MessageId, Message.Header.CallbackId, Message.Cookie, Message.Value);
+    if (NT_SUCCESS(Status))
+    {
+        Message.Cookie = TEST_REPLY_COOKIE;
+        Message.Value++;
+        Status = NtReplyPort(ServerPort, &Message.Header);
+        trace("ALPC_OBSERVE status LegacyLpc.legacy_server_reply=%08lx request_type=%04x\n", Status, Message.Header.u2.s2.Type);
+    }
+
 WaitForClient:
     if (AsyncReceivedEvent)
         SetEvent(AsyncReceivedEvent);
@@ -225,6 +283,8 @@ WaitForClient:
         ok_eq_ulong(ClientResult.ReplyCookie, TEST_REPLY_COOKIE);
         ok_eq_ulong(ClientResult.ReplyValue, 42);
         ok_hex(ClientResult.AsyncStatus, STATUS_SUCCESS);
+        trace("ALPC_OBSERVE status LegacyLpc.client=%08lx reply_type=%04x continuation=%u cookie=%08lx value=%lu\n", ClientResult.LegacyStatus, ClientResult.LegacyReplyType, !!(ClientResult.LegacyReplyType & LPC_CONTINUATION_REQUIRED), ClientResult.LegacyReplyCookie, ClientResult.LegacyReplyValue);
+        trace("ALPC_OBSERVE status LegacyLpc.legacy_server_client=%08lx reply_type=%04x continuation=%u cookie=%08lx value=%lu\n", ClientResult.Legacy2Status, ClientResult.Legacy2ReplyType, !!(ClientResult.Legacy2ReplyType & LPC_CONTINUATION_REQUIRED), ClientResult.Legacy2ReplyCookie, ClientResult.Legacy2ReplyValue);
         ok_hex(ClientResult.DisconnectStatus, STATUS_SUCCESS);
     }
 
