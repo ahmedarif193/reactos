@@ -971,6 +971,25 @@ KiArm64DeliverPendingUserApc(
         return;
     }
 
+    if (IsListEmpty(&Thread->ApcState.ApcListHead[UserMode]))
+    {
+        KLOCK_QUEUE_HANDLE ApcLock;
+        BOOLEAN Stale;
+
+        KiAcquireApcLockRaiseToSynch(Thread, &ApcLock);
+        Stale = IsListEmpty(&Thread->ApcState.ApcListHead[UserMode]);
+        if (Stale)
+        {
+            Thread->ApcState.UserApcPending = FALSE;
+        }
+        KiReleaseApcLock(&ApcLock);
+
+        if (Stale)
+        {
+            return;
+        }
+    }
+
     if (ClearKernelAlert)
     {
         Thread->Alerted[KernelMode] = FALSE;
@@ -990,6 +1009,14 @@ KiArm64DeliverPendingUserApc(
     {
         KeLowerIrql(OldIrql);
     }
+}
+
+VOID
+KiArm64DeliverUserApcOnExceptionExit(
+    _Inout_ PKEXCEPTION_FRAME ExceptionFrame,
+    _Inout_ PKTRAP_FRAME TrapFrame)
+{
+    KiArm64DeliverPendingUserApc(ExceptionFrame, TrapFrame, FALSE);
 }
 
 static __inline VOID
