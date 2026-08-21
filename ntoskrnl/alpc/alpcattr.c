@@ -788,12 +788,8 @@ AlpcpExposeReceiveAttributes(
     PALPC_WORK_ON_BEHALF_ATTR WorkAttr;
     PKALPC_VIEW View, SourceView;
     PKALPC_HANDLE_DATA HandleData;
-    PALPC_MESSAGE_HANDLE_INFORMATION HandleInformation = NULL;
-    PALPC_MESSAGE_HANDLE_INFORMATION UserHandleInformation;
-    ULONG HandleCapacity, HandleIndex;
+    ULONG HandleIndex;
     SIZE_T ViewSize;
-    HANDLE NewHandle, SingleHandle = NULL;
-    ULONG OpenedHandleCount = 0;
 
     if (!Attributes) return STATUS_SUCCESS;
     Wanted = Attributes->AllocatedAttributes;
@@ -875,74 +871,11 @@ AlpcpExposeReceiveAttributes(
                     return STATUS_OBJECT_TYPE_MISMATCH;
                 }
             }
-
-            if ((HandleData->Flags & ALPC_HANDLEFLG_INDIRECT) || HandleData->Count > 1)
-            {
-                UserHandleInformation = HandleAttr->HandleAttrArray;
-                HandleCapacity = HandleAttr->HandleCount;
-                HandleAttr->Flags = HandleData->Flags | ALPC_HANDLEFLG_INDIRECT;
-                HandleAttr->HandleCount = HandleData->Count;
-                if (!UserHandleInformation || HandleCapacity < HandleData->Count)
-                    return STATUS_BUFFER_TOO_SMALL;
-
-                HandleInformation = ExAllocatePoolWithTag(PagedPool, HandleData->Count * sizeof(*HandleInformation), 'IcpA');
-                if (!HandleInformation) return STATUS_NO_MEMORY;
-                RtlZeroMemory(HandleInformation, HandleData->Count * sizeof(*HandleInformation));
-
-                for (HandleIndex = 0; HandleIndex < HandleData->Count; HandleIndex++)
-                {
-                    Status = ObOpenObjectByPointer(HandleData->Entries[HandleIndex].Object, ((HandleData->Entries[HandleIndex].Flags & ALPC_HANDLEFLG_DUPLICATE_SAME_ATTRIBUTES) ? HandleData->Entries[HandleIndex].HandleAttributes : 0) | ((HandleData->Entries[HandleIndex].Flags & ALPC_HANDLEFLG_DUPLICATE_INHERIT) ? OBJ_INHERIT : 0), NULL, HandleData->Entries[HandleIndex].DesiredAccess, NULL, PreviousMode, &NewHandle);
-                    if (!NT_SUCCESS(Status)) break;
-                    OpenedHandleCount++;
-                    HandleInformation[HandleIndex].Index =
-                        HandleData->Entries[HandleIndex].Index;
-                    HandleInformation[HandleIndex].Flags =
-                        HandleData->Entries[HandleIndex].Flags;
-                    HandleInformation[HandleIndex].Handle = HandleToUlong(NewHandle);
-                    HandleInformation[HandleIndex].ObjectType =
-                        HandleData->Entries[HandleIndex].ObjectType;
-                    HandleInformation[HandleIndex].GrantedAccess =
-                        HandleData->Entries[HandleIndex].DesiredAccess;
-                }
-
-                if (NT_SUCCESS(Status))
-                {
-                    if (PreviousMode != KernelMode)
-                    {
-                        _SEH2_TRY
-                        {
-                            ProbeForWrite(UserHandleInformation, HandleData->Count * sizeof(*HandleInformation), sizeof(ULONG));
-                            RtlCopyMemory(UserHandleInformation, HandleInformation, HandleData->Count * sizeof(*HandleInformation));
-                        }
-                        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-                        {
-                            Status = _SEH2_GetExceptionCode();
-                        }
-                        _SEH2_END;
-                    }
-                    else
-                    {
-                        RtlCopyMemory(UserHandleInformation, HandleInformation, HandleData->Count * sizeof(*HandleInformation));
-                    }
-                }
-
-                if (!NT_SUCCESS(Status))
-                {
-                    goto Exit;
-                }
-                Exposed |= ALPC_MESSAGE_HANDLE_ATTRIBUTE;
-            }
-            else
-            {
-                Status = ObOpenObjectByPointer(HandleData->Entries[0].Object, ((HandleData->Entries[0].Flags & ALPC_HANDLEFLG_DUPLICATE_SAME_ATTRIBUTES) ? HandleData->Entries[0].HandleAttributes : 0) | ((HandleData->Entries[0].Flags & ALPC_HANDLEFLG_DUPLICATE_INHERIT) ? OBJ_INHERIT : 0), NULL, HandleData->Entries[0].DesiredAccess, NULL, PreviousMode, &NewHandle);
-                if (!NT_SUCCESS(Status)) return Status;
-                SingleHandle = NewHandle;
-                HandleAttr->Flags = HandleData->Entries[0].Flags;
-                HandleAttr->Handle = NewHandle;
-                HandleAttr->ObjectType = HandleData->Entries[0].ObjectType;
-                HandleAttr->DesiredAccess = HandleData->Entries[0].DesiredAccess;
-                Exposed |= ALPC_MESSAGE_HANDLE_ATTRIBUTE;
-            }
+            HandleAttr->Flags = ALPC_HANDLEFLG_INDIRECT;
+            HandleAttr->HandleAttrArray = NULL;
+            HandleAttr->HandleCount = HandleData->Count;
+            HandleAttr->DesiredAccess = 0;
+            Exposed |= ALPC_MESSAGE_HANDLE_ATTRIBUTE;
         }
     }
 
@@ -990,20 +923,7 @@ AlpcpExposeReceiveAttributes(
     }
 
     Attributes->ValidAttributes = Exposed;
-    Status = AlpcpWriteAttributes(UserAttributes, Attributes, PreviousMode);
-
-Exit:
-    if (!NT_SUCCESS(Status))
-    {
-        while (OpenedHandleCount)
-        {
-            OpenedHandleCount--;
-            ObCloseHandle(UlongToHandle(HandleInformation[OpenedHandleCount].Handle), KernelMode);
-        }
-        if (SingleHandle) ObCloseHandle(SingleHandle, KernelMode);
-    }
-    if (HandleInformation) ExFreePoolWithTag(HandleInformation, 'IcpA');
-    return Status;
+    return AlpcpWriteAttributes(UserAttributes, Attributes, PreviousMode);
 }
 
 NTSTATUS

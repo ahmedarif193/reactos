@@ -795,7 +795,11 @@ NtAlpcQueryInformationMessage(
     PTOKEN_STATISTICS Statistics;
     ALPC_MESSAGE_HANDLE_INFORMATION HandleInfo;
     ULONG HandleIndex = 0;
+    ULONG HandleAttributes = 0;
     BOOLEAN Found, HandleFound = FALSE, DirectCompleted = FALSE;
+    PVOID HandleObject = NULL;
+    POBJECT_TYPE HandleObjectType = NULL;
+    HANDLE NewHandle = NULL;
 
     PAGED_CODE();
 
@@ -836,14 +840,22 @@ NtAlpcQueryInformationMessage(
     {
         ClientId = Message->PortMessage.ClientId;
         DirectCompleted = (Message->State & ALPC_MSG_STATE_REPLIED) != 0;
-        if (Message->Attributes.HandleData &&
-            HandleIndex < Message->Attributes.HandleData->Count)
+        if ((MessageInformationClass == AlpcMessageHandleInformation) &&
+            (Length == sizeof(HandleInfo)) &&
+            Message->Attributes.HandleData &&
+            (HandleIndex < Message->Attributes.HandleData->Count) &&
+            Message->Attributes.HandleData->Entries[HandleIndex].Object)
         {
             HandleInfo.Index = HandleIndex;
-            HandleInfo.Flags = Message->Attributes.HandleData->Entries[HandleIndex].Flags;
+            HandleAttributes = (Message->Attributes.HandleData->Entries[HandleIndex].Flags & ALPC_HANDLEFLG_DUPLICATE_SAME_ATTRIBUTES) ? Message->Attributes.HandleData->Entries[HandleIndex].HandleAttributes : 0;
+            if (Message->Attributes.HandleData->Entries[HandleIndex].Flags & ALPC_HANDLEFLG_DUPLICATE_INHERIT) HandleAttributes |= OBJ_INHERIT;
+            HandleInfo.Flags = HandleAttributes;
             HandleInfo.Handle = 0;
             HandleInfo.ObjectType = Message->Attributes.HandleData->Entries[HandleIndex].ObjectType;
             HandleInfo.GrantedAccess = Message->Attributes.HandleData->Entries[HandleIndex].DesiredAccess;
+            HandleObject = Message->Attributes.HandleData->Entries[HandleIndex].Object;
+            ObReferenceObject(HandleObject);
+            HandleObjectType = ObGetObjectType(HandleObject);
             HandleFound = TRUE;
         }
     }
@@ -896,7 +908,13 @@ NtAlpcQueryInformationMessage(
             }
             else
             {
-                Status = AlpcpWriteInformation(MessageInformation, Length, &HandleInfo, sizeof(HandleInfo), ReturnLength, PreviousMode);
+                Status = ObOpenObjectByPointer(HandleObject, HandleAttributes, NULL, HandleInfo.GrantedAccess, HandleObjectType, KernelMode, &NewHandle);
+                if (NT_SUCCESS(Status))
+                {
+                    HandleInfo.Handle = HandleToUlong(NewHandle);
+                    Status = AlpcpWriteInformation(MessageInformation, Length, &HandleInfo, sizeof(HandleInfo), ReturnLength, PreviousMode);
+                    if (!NT_SUCCESS(Status)) ObCloseHandle(NewHandle, KernelMode);
+                }
             }
             break;
 
@@ -912,6 +930,7 @@ NtAlpcQueryInformationMessage(
             break;
     }
 
+    if (HandleObject) ObDereferenceObject(HandleObject);
     ObDereferenceObject(Port);
     return Status;
 }
