@@ -46,6 +46,10 @@ BOOLEAN USBPORT_Initialized = FALSE;
 
 static volatile LONG USBPORT_DuplicateDoneTransferCount = 0;
 
+#define USBPORT_MAP_CALLBACK_NONE 0
+#define USBPORT_MAP_CALLBACK_DONE 1
+#define USBPORT_MAP_CALLBACK_PENDING 2
+
 static
 VOID
 USBPORT_CleanupTransferOnBadUrb(IN PUSBPORT_TRANSFER Transfer,
@@ -2815,6 +2819,8 @@ USBPORT_AddDevice(IN PDRIVER_OBJECT DriverObject,
     InitializeListHead(&FdoExtension->WorkerList);
     InitializeListHead(&FdoExtension->EpStateChangeList);
     InitializeListHead(&FdoExtension->MapTransferList);
+    FdoExtension->MapTransferBusy = 0;
+    FdoExtension->MapTransferCallbackState = USBPORT_MAP_CALLBACK_NONE;
     InitializeListHead(&FdoExtension->DeviceHandleList);
     InitializeListHead(&FdoExtension->IdleIrpList);
     InitializeListHead(&FdoExtension->BadRequestList);
@@ -3736,6 +3742,7 @@ USBPORT_MapTransfer(IN PDEVICE_OBJECT FdoDevice,
     USBD_STATUS USBDStatus;
     LIST_ENTRY List;
     PUSBPORT_TRANSFER transfer;
+    LONG CallbackState;
 
     DPRINT_CORE("USBPORT_MapTransfer: ...\n");
 
@@ -3926,12 +3933,20 @@ USBPORT_MapTransfer(IN PDEVICE_OBJECT FdoDevice,
                                           INVALIDATE_ENDPOINT_WORKER_THREAD);
     }
 
+    CallbackState = InterlockedExchange(&FdoExtension->MapTransferCallbackState,
+                                        USBPORT_MAP_CALLBACK_DONE);
+    if (CallbackState == USBPORT_MAP_CALLBACK_PENDING)
+    {
+        /* This processor cannot run the DPC until the callback returns. */
+        KeInsertQueueDpc(&FdoExtension->MapTransferDpc, NULL, NULL);
+    }
+
     return DeallocateObjectKeepRegisters;
 }
 
+static
 NTSTATUS
-NTAPI
-USBPORT_FlushMapTransfers(IN PDEVICE_OBJECT FdoDevice)
+USBPORT_SubmitMapTransfer(IN PDEVICE_OBJECT FdoDevice)
 {
     PUSBPORT_DEVICE_EXTENSION FdoExtension;
     PLIST_ENTRY MapTransferList;
@@ -3940,17 +3955,15 @@ USBPORT_FlushMapTransfers(IN PDEVICE_OBJECT FdoDevice)
     PMDL Mdl;
     SIZE_T TransferBufferLength;
     ULONG_PTR VirtualAddr;
-    KIRQL OldIrql;
     NTSTATUS Status;
     NTSTATUS FlushStatus = STATUS_SUCCESS;
+    LONG CallbackState;
     PDMA_OPERATIONS DmaOperations;
-
-    DPRINT_CORE("USBPORT_FlushMapTransfers: ...\n");
 
     FdoExtension = FdoDevice->DeviceExtension;
     DmaOperations = FdoExtension->DmaAdapter->DmaOperations;
 
-    KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+    ASSERT(KeGetCurrentIrql() == DISPATCH_LEVEL);
 
     while (TRUE)
     {
@@ -3960,8 +3973,9 @@ USBPORT_FlushMapTransfers(IN PDEVICE_OBJECT FdoDevice)
 
         if (IsListEmpty(&FdoExtension->MapTransferList))
         {
+            /* Do not let an enqueuer miss the transition back to idle. */
+            InterlockedExchange(&FdoExtension->MapTransferBusy, 0);
             KeReleaseSpinLockFromDpcLevel(&FdoExtension->MapTransferSpinLock);
-            KeLowerIrql(OldIrql);
             return FlushStatus;
         }
 
@@ -4021,10 +4035,62 @@ USBPORT_FlushMapTransfers(IN PDEVICE_OBJECT FdoDevice)
                                       TRUE);
             continue;
         }
+
+        /* Keep draining if the callback completed before the call returned. */
+        CallbackState = InterlockedCompareExchange(&FdoExtension->MapTransferCallbackState,
+                                                   USBPORT_MAP_CALLBACK_PENDING,
+                                                   USBPORT_MAP_CALLBACK_NONE);
+        if (CallbackState == USBPORT_MAP_CALLBACK_DONE)
+        {
+            InterlockedExchange(&FdoExtension->MapTransferCallbackState,
+                                USBPORT_MAP_CALLBACK_NONE);
+            continue;
+        }
+
+        return FlushStatus;
+    }
+}
+
+NTSTATUS
+NTAPI
+USBPORT_FlushMapTransfers(IN PDEVICE_OBJECT FdoDevice)
+{
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    KIRQL OldIrql;
+    NTSTATUS Status;
+
+    DPRINT_CORE("USBPORT_FlushMapTransfers: ...\n");
+
+    FdoExtension = FdoDevice->DeviceExtension;
+
+    KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+
+    if (InterlockedCompareExchange(&FdoExtension->MapTransferBusy, 1, 0))
+    {
+        KeLowerIrql(OldIrql);
+        return STATUS_SUCCESS;
     }
 
+    Status = USBPORT_SubmitMapTransfer(FdoDevice);
+
     KeLowerIrql(OldIrql);
-    return STATUS_SUCCESS;
+    return Status;
+}
+
+VOID
+NTAPI
+USBPORT_MapTransferDpc(IN PRKDPC Dpc,
+                       IN PVOID DeferredContext,
+                       IN PVOID SystemArgument1,
+                       IN PVOID SystemArgument2)
+{
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    PDEVICE_OBJECT FdoDevice = DeferredContext;
+
+    FdoExtension = FdoDevice->DeviceExtension;
+    InterlockedExchange(&FdoExtension->MapTransferCallbackState,
+                        USBPORT_MAP_CALLBACK_NONE);
+    USBPORT_SubmitMapTransfer(FdoDevice);
 }
 
 USBD_STATUS
