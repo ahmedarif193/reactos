@@ -16,6 +16,7 @@
 #define WRITE_SYSREG64(_reg, _val) __asm__ __volatile__("msr " #_reg ", %0" :: "r"(_val))
 
 #define ARM64_MDSCR_SS             (1ULL << 0)
+#define ARM64_MDSCR_TDCC           (1ULL << 12)
 #define ARM64_MDSCR_KDE            (1ULL << 13)
 #define ARM64_MDSCR_MDE            (1ULL << 15)
 #define ARM64_PSTATE_SS            (1ULL << 21)
@@ -152,8 +153,10 @@ ULONG KiArm64NumWatchpoints = 2;
  *
  * Firmware can leave either OS debug lock set. While locked, writes to the
  * breakpoint and watchpoint registers are permitted, but the corresponding
- * debug events do not become active. Both registers are banked per processor,
- * so this must run during BSP and AP initialization.
+ * debug events do not become active. Establish MDSCR_EL1 with TDCC set so EL0
+ * cannot access the Debug Communications Channel while all event controls
+ * remain disabled. These registers are banked per processor, so this must run
+ * during BSP and AP initialization.
  */
 VOID
 KiInitializeDebugMonitors(VOID)
@@ -162,6 +165,7 @@ KiInitializeDebugMonitors(VOID)
 
     WRITE_SYSREG64(osdlr_el1, Zero);
     WRITE_SYSREG64(oslar_el1, Zero);
+    WRITE_SYSREG64(mdscr_el1, ARM64_MDSCR_TDCC);
     __asm__ __volatile__("isb" ::: "memory");
 }
 
@@ -330,7 +334,7 @@ VOID
 NTAPI
 KiRestoreProcessorControlState(_In_ PKPROCESSOR_STATE ProcessorState)
 {
-    ULONGLONG Mdscr;
+    ULONGLONG Mdscr = ARM64_MDSCR_TDCC;
     ULONG NumBps, NumWps;
 
     if (ProcessorState == NULL)
@@ -367,16 +371,16 @@ KiRestoreProcessorControlState(_In_ PKPROCESSOR_STATE ProcessorState)
 
     /*
      * The debug registers above only take effect once MDSCR_EL1 enables monitor
-     * debug events (MDE) and debug exceptions at EL1 (KDE). Preserve unrelated
-     * MDSCR state and derive the bits owned here from the state being restored.
+     * debug events (MDE) and debug exceptions at EL1 (KDE). Start from the
+     * OS-owned baseline and derive the dynamic bits from the state being
+     * restored. This also avoids a trapped read of MDSCR_EL1 during external
+     * debugging; TDCC keeps EL0 access to the Debug Communications Channel
+     * disabled.
      *
      * ContextFrame is authoritative for exception return: a debugger can modify
      * its CPSR after KiSaveProcessorControlState captured Spsr_El1, and
      * KiTrapReturn later copies that CPSR to SPSR_EL1.
      */
-    READ_SYSREG64(Mdscr, mdscr_el1);
-    Mdscr &= ~(ARM64_MDSCR_SS | ARM64_MDSCR_KDE | ARM64_MDSCR_MDE);
-
     if (KiArm64DebugRegistersEnabled(&ProcessorState->SpecialRegisters,
                                      NumBps,
                                      NumWps))
