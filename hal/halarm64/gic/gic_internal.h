@@ -1169,6 +1169,15 @@ HalpGicv2EndInterrupt(
     _In_ ULONG IntId);
 
 VOID
+HalpGicv2RegisterCpuTarget(
+    _In_ ULONG ProcessorNumber);
+
+BOOLEAN
+HalpGicv2ConfigureSpiAffinity(
+    _In_ ULONG IntId,
+    _Out_ PKAFFINITY Affinity);
+
+VOID
 HalpInitGicv2SpiTargets(
     _In_ ULONG Lines);
 

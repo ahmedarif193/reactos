@@ -5416,6 +5416,7 @@ HalGetInterruptVector(
     ULONG Vector;
     KIRQL DeviceIrql;
     KIRQL OldIrql = PASSIVE_LEVEL;
+    KAFFINITY Gicv2Affinity = 0;
     UCHAR IntPolarity = 0;
     UCHAR IntTrigger = 0;
     PHALP_ARM64_INT_OVERRIDE_ENTRY Override;
@@ -5554,6 +5555,9 @@ HalGetInterruptVector(
             /* Already allocated - return existing IRQL for consistency */
             DeviceIrql = HalpArm64IntIdToIrql[Vector];
         }
+
+        if (!HalpGicUseSysRegs && Vector >= HAL_ARM64_SPI_BASE)
+            HalpGicv2ConfigureSpiAffinity(Vector, &Gicv2Affinity);
         KeReleaseSpinLock(&HalpArm64VectorLock, OldIrql);
     }
 
@@ -5576,7 +5580,8 @@ HalGetInterruptVector(
         }
         else
         {
-            *Affinity = HalpDefaultInterruptAffinity ? HalpDefaultInterruptAffinity : 1;
+            *Affinity = Gicv2Affinity ? Gicv2Affinity :
+                        (HalpDefaultInterruptAffinity ? HalpDefaultInterruptAffinity : 1);
         }
     }
 
@@ -5851,6 +5856,8 @@ HalInitializeProcessor(
     }
     else
     {
+
+        HalpGicv2RegisterCpuTarget(ProcessorNumber);
 
         /*
          * GIC-v2: Initialize the per-CPU GICC (CPU interface) for this processor.
