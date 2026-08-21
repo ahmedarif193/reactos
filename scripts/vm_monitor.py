@@ -1806,14 +1806,17 @@ def capture_gdb_dump(reason):
         "info symbol $pc",
         "info symbol $x30",
         "x/8i $pc",
-        'printf "SMP4DBG per-CPU counters at stall. Layout per CPU = 14 u32:\\n"',
-        'printf "  [Begin Eoi Reject Tick Ipi Park Wake Ctl Tval Pmr GicPrio GicEn GicPend GicAct]\\n"',
-        "info address SmpDbgCpu",
-        "x/112xw &SmpDbgCpu",
         'printf "GICv2 GICD ISPENDR0 / ISACTIVER0 (phys, INTID 0-31):\\n"',
         "monitor xp/1xw 0x08000200",
         "monitor xp/1xw 0x08000300",
         ])
+        if symbols_loaded:
+            commands.extend([
+                'printf "SMP4DBG per-CPU counters at stall. Layout per CPU = 14 u32:\\n"',
+                'printf "  [Begin Eoi Reject Tick Ipi Park Wake Ctl Tval Pmr GicPrio GicEn GicPend GicAct]\\n"',
+                "info address SmpDbgCpu",
+                "x/112xw &SmpDbgCpu",
+            ])
     else:
         commands.extend([
         "info symbol $pc",
