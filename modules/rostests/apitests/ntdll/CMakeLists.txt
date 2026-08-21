@@ -36,6 +36,19 @@ target_compile_definitions(ntdll_crt_test_lib PRIVATE TEST_NTDLL TEST_DLL_NAME="
 target_link_libraries(ntdll_crt_test_lib ${PSEH_LIB})
 add_dependencies(ntdll_crt_test_lib psdk)
 
+set(ALPC_SOURCE
+    AlpcCompletionList.c
+    AlpcMessageAttribute.c
+    NtAlpcConnectMatrix.c
+    NtAlpcInformation.c
+    NtAlpcLifecycle.c
+    NtAlpcMessageAttributes.c
+    NtAlpcMessageBoundary.c
+    NtAlpcPort.c
+    NtAlpcResources.c
+    NtAlpcValidation.c
+    TpAlpc.c)
+
 list(APPEND SOURCE
     DllLoadNotification.c
     arm64_chpe.c
@@ -202,6 +215,13 @@ endif()
 
 add_rostests_file(TARGET ntdll_apitest)
 add_rostests_file(TARGET ntdll_apitest SUBDIR testdata)
+
+add_executable(alpc_apitest ${ALPC_SOURCE} alpc_testlist.c)
+target_link_libraries(alpc_apitest wine ${PSEH_LIB})
+set_module_type(alpc_apitest win32cui)
+add_importlibs(alpc_apitest advapi32 msvcrt kernel32 ntdll)
+add_pch(alpc_apitest precomp.h alpc_testlist.c)
+add_rostests_file(TARGET alpc_apitest)
 # These are empty files
 add_rostests_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/ntdll_apitest.exe.local" SUBDIR testdata)
 add_rostests_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/shell32.dll" SUBDIR testdata)
