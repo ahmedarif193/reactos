@@ -1,6 +1,0 @@
-add_library(usbreadbench MODULE usbreadbench.c usbreadbench.rc)
-set_module_type(usbreadbench kernelmodedriver)
-target_link_libraries(usbreadbench wdmguid)
-add_importlibs(usbreadbench ntoskrnl hal)
-add_cd_file(TARGET usbreadbench DESTINATION reactos/system32/drivers FOR all)
-add_registry_inf(usbreadbench_reg.inf)
