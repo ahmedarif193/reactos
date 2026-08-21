@@ -4119,6 +4119,14 @@ XHCI_PrepareBounceBuffer(
                 (ULONG)KeGetCurrentIrql());
     }
 
+    if (KeGetCurrentIrql() > PASSIVE_LEVEL)
+    {
+        DPRINT1("usbxhci: bounce fallback unavailable at irql=%lu len=%lu\n",
+                (ULONG)KeGetCurrentIrql(),
+                Length);
+        return MP_STATUS_NO_RESOURCES;
+    }
+
     Lowest.QuadPart = 0;
     Highest.QuadPart = 0xFFFFFFFFull;
     Boundary.QuadPart = 0;
@@ -4273,6 +4281,7 @@ XHCI_InitBouncePool(
 
     for (Index = 0; Index < XHCI_BOUNCE_POOL_SLOTS; Index++)
     {
+        PHYSICAL_ADDRESS Physical;
         PVOID Buffer = MmAllocateContiguousMemorySpecifyCache(Extension->BounceBufferSize,
                                                              Low,
                                                              High,
@@ -4283,25 +4292,35 @@ XHCI_InitBouncePool(
             DPRINT1("usbxhci: bounce pool alloc failed slot=%lu len=%lu\n",
                     Index,
                     Extension->BounceBufferSize);
-            XHCI_FreeBouncePool(Extension);
-            return MP_STATUS_NO_RESOURCES;
+            break;
         }
 
-        Extension->BounceBuffers[Index] = Buffer;
-        Extension->BounceBuffersPhysical[Index] = MmGetPhysicalAddress(Buffer);
-
-        if ((Extension->BounceBuffersPhysical[Index].QuadPart >> 32) != 0)
+        Physical = MmGetPhysicalAddress(Buffer);
+        if ((Physical.QuadPart >> 32) != 0)
         {
             DPRINT1("usbxhci: bounce pool entry above 4G (slot=%lu PA=%I64x)\n",
                     Index,
-                    Extension->BounceBuffersPhysical[Index].QuadPart);
-            XHCI_FreeBouncePool(Extension);
-            return MP_STATUS_NO_RESOURCES;
+                    Physical.QuadPart);
+            MmFreeContiguousMemory(Buffer);
+            break;
         }
+
+        Extension->BounceBuffers[Index] = Buffer;
+        Extension->BounceBuffersPhysical[Index] = Physical;
     }
 
-    DPRINT1("usbxhci: bounce pool ready slots=%u size=%lu\n",
-            XHCI_BOUNCE_POOL_SLOTS,
+    if (Index < XHCI_BOUNCE_POOL_MIN_SLOTS)
+    {
+        DPRINT1("usbxhci: bounce pool too small slots=%lu min=%u size=%lu\n",
+                Index,
+                XHCI_BOUNCE_POOL_MIN_SLOTS,
+                Extension->BounceBufferSize);
+        XHCI_FreeBouncePool(Extension);
+        return MP_STATUS_NO_RESOURCES;
+    }
+
+    DPRINT1("usbxhci: bounce pool ready slots=%lu size=%lu\n",
+            Index,
             Extension->BounceBufferSize);
     return MP_STATUS_SUCCESS;
 }
