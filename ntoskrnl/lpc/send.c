@@ -12,6 +12,38 @@
 #define NDEBUG
 #include <debug.h>
 
+/* PRIVATE FUNCTIONS *********************************************************/
+
+static
+VOID
+LpcpDiscardUnreceivedRequest(IN PLPCP_PORT_OBJECT QueuePort,
+                             IN PLPCP_MESSAGE Request,
+                             IN ULONG MessageId,
+                             IN PETHREAD Thread)
+{
+    PLIST_ENTRY ListHead, NextEntry;
+    PLPCP_MESSAGE Message;
+
+    if (!QueuePort) return;
+
+    ListHead = &QueuePort->MsgQueue.ReceiveHead;
+    for (NextEntry = ListHead->Flink;
+         NextEntry != ListHead;
+         NextEntry = NextEntry->Flink)
+    {
+        Message = CONTAINING_RECORD(NextEntry, LPCP_MESSAGE, Entry);
+        if ((Message == Request) &&
+            (Message->Request.MessageId == MessageId) &&
+            (Message->Request.ClientId.UniqueThread == Thread->Cid.UniqueThread))
+        {
+            RemoveEntryList(&Message->Entry);
+            InitializeListHead(&Message->Entry);
+            LpcpFreeToPortZone(Message, LPCP_LOCK_HELD);
+            return;
+        }
+    }
+}
+
 /* PUBLIC FUNCTIONS **********************************************************/
 
 /*
@@ -188,6 +220,9 @@ LpcRequestWaitReplyPort(IN PVOID PortObject,
     PLPCP_MESSAGE Message;
     BOOLEAN Callback = FALSE;
     PKSEMAPHORE Semaphore;
+    PLPCP_MESSAGE RequestMessage = NULL;
+    PLPCP_PORT_OBJECT DiscardPort = NULL;
+    ULONG RequestId = 0;
 
     PAGED_CODE();
 
@@ -337,6 +372,9 @@ LpcRequestWaitReplyPort(IN PVOID PortObject,
         InsertTailList(&QueuePort->MsgQueue.ReceiveHead, &Message->Entry);
         InsertTailList(&ReplyPort->LpcReplyChainHead, &Thread->LpcReplyChain);
         LpcpSetPortToThread(Thread, Port);
+        RequestMessage = Message;
+        RequestId = Message->Request.MessageId;
+        DiscardPort = ((QueuePort == Port) || (QueuePort == ConnectionPort)) ? QueuePort : NULL;
 
         /* Release the lock and get the semaphore we'll use later */
         KeEnterCriticalRegion();
@@ -356,7 +394,7 @@ LpcRequestWaitReplyPort(IN PVOID PortObject,
     KeLeaveCriticalRegion();
 
     /* And let's wait for the reply */
-    LpcpReplyWait(&Thread->LpcReplySemaphore, PreviousMode);
+    LpcpReplyWait(&Thread->LpcReplySemaphore, KernelMode);
 
     /* Acquire the LPC lock */
     KeAcquireGuardedMutex(&LpcpLock);
@@ -365,6 +403,11 @@ LpcRequestWaitReplyPort(IN PVOID PortObject,
     Message = LpcpGetMessageFromThread(Thread);
     Thread->LpcReplyMessage = NULL;
     Thread->LpcReplyMessageId = 0;
+
+    if (!Message)
+    {
+        LpcpDiscardUnreceivedRequest(DiscardPort, RequestMessage, RequestId, Thread);
+    }
 
     /* Check if we have anything on the reply chain*/
     if (!IsListEmpty(&Thread->LpcReplyChain))
@@ -706,6 +749,9 @@ NtRequestWaitReplyPort(IN HANDLE PortHandle,
     PETHREAD Thread = PsGetCurrentThread();
     BOOLEAN Callback;
     PKSEMAPHORE Semaphore;
+    PLPCP_MESSAGE RequestMessage = NULL;
+    PLPCP_PORT_OBJECT DiscardPort = NULL;
+    ULONG RequestId = 0;
     ULONG MessageType;
     PLPCP_DATA_INFO DataInfo;
 
@@ -945,6 +991,9 @@ NtRequestWaitReplyPort(IN HANDLE PortHandle,
         InsertTailList(&QueuePort->MsgQueue.ReceiveHead, &Message->Entry);
         InsertTailList(&ReplyPort->LpcReplyChainHead, &Thread->LpcReplyChain);
         LpcpSetPortToThread(Thread, Port);
+        RequestMessage = Message;
+        RequestId = Message->Request.MessageId;
+        DiscardPort = ((QueuePort == Port) || (QueuePort == ConnectionPort)) ? QueuePort : NULL;
 
         /* Release the lock and get the semaphore we'll use later */
         KeEnterCriticalRegion();
@@ -973,6 +1022,11 @@ NtRequestWaitReplyPort(IN HANDLE PortHandle,
     Message = LpcpGetMessageFromThread(Thread);
     Thread->LpcReplyMessage = NULL;
     Thread->LpcReplyMessageId = 0;
+
+    if (!Message)
+    {
+        LpcpDiscardUnreceivedRequest(DiscardPort, RequestMessage, RequestId, Thread);
+    }
 
     /* Check if we have anything on the reply chain*/
     if (!IsListEmpty(&Thread->LpcReplyChain))

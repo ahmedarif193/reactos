@@ -711,6 +711,11 @@ VOID
 KiUserCallbackExit(
     _In_ PKTRAP_FRAME TrapFrame);
 
+VOID
+KiArm64DeliverUserApcOnExceptionExit(
+    _Inout_ PKEXCEPTION_FRAME ExceptionFrame,
+    _Inout_ PKTRAP_FRAME TrapFrame);
+
 DECLSPEC_NORETURN
 VOID
 KiExceptionExit(

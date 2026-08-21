@@ -440,6 +440,7 @@ KiExceptionExit(
     _In_ PKTRAP_FRAME TrapFrame,
     _In_ PKEXCEPTION_FRAME ExceptionFrame)
 {
+    KiArm64DeliverUserApcOnExceptionExit(ExceptionFrame, TrapFrame);
     KiTrapReturn(TrapFrame, ExceptionFrame);
     UNREACHABLE;
 }
