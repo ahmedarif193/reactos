@@ -57,6 +57,7 @@ LpcpFreeToPortZone(IN PLPCP_MESSAGE Message,
     PETHREAD Thread = NULL;
     BOOLEAN LockHeld = (LockFlags & LPCP_LOCK_HELD);
     BOOLEAN ReleaseLock = (LockFlags & LPCP_LOCK_RELEASE);
+    BOOLEAN Dereference;
 
     PAGED_CODE();
 
@@ -92,18 +93,26 @@ LpcpFreeToPortZone(IN PLPCP_MESSAGE Message,
         if (ClientPort) ConnectMessage->ClientPort = NULL;
     }
 
-    /* Release the lock */
-    KeReleaseGuardedMutex(&LpcpLock);
+    /* Free the entry */
+    ExFreeToPagedLookasideList(&LpcpMessagesLookaside, Message);
+
+    Dereference = (Thread != NULL) || (ClientPort != NULL);
+
+    /* Release the lock if required by the caller or object cleanup */
+    if (!LockHeld || ReleaseLock || Dereference)
+    {
+        KeReleaseGuardedMutex(&LpcpLock);
+    }
 
     /* Check if we had anything to dereference */
     if (Thread) ObDereferenceObject(Thread);
     if (ClientPort) ObDereferenceObject(ClientPort);
 
-    /* Free the entry */
-    ExFreeToPagedLookasideList(&LpcpMessagesLookaside, Message);
-
     /* Reacquire the lock if needed */
-    if ((LockHeld) && !(ReleaseLock)) KeAcquireGuardedMutex(&LpcpLock);
+    if (LockHeld && !ReleaseLock && Dereference)
+    {
+        KeAcquireGuardedMutex(&LpcpLock);
+    }
 }
 
 VOID
