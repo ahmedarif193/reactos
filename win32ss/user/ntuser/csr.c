@@ -77,6 +77,7 @@ CsrClientCallServer(IN OUT PCSR_API_MESSAGE ApiMessage,
                     IN ULONG DataLength)
 {
     NTSTATUS Status;
+    SIZE_T BufferLength = sizeof(*ApiMessage);
 #if 0
     ULONG PointerCount;
     PULONG_PTR OffsetPointer;
@@ -148,9 +149,7 @@ CsrClientCallServer(IN OUT PCSR_API_MESSAGE ApiMessage,
     }
     else
     {
-        Status = LpcRequestWaitReplyPort(CsrApiPort,
-                                         &ApiMessage->Header,
-                                         &ApiMessage->Header);
+        Status = LpcSendWaitReceivePort(CsrApiPort, ALPC_MSGFLG_SYNC_REQUEST, &ApiMessage->Header, &ApiMessage->Header, &BufferLength, NULL);
     }
 
     UserEnterCo();

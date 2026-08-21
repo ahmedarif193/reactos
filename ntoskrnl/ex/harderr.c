@@ -108,6 +108,7 @@ ExpRaiseHardError(IN NTSTATUS ErrorStatus,
     PETHREAD Thread = PsGetCurrentThread();
     UCHAR Buffer[PORT_MAXIMUM_MESSAGE_LENGTH];
     PHARDERROR_MSG Message = (PHARDERROR_MSG)Buffer;
+    SIZE_T BufferLength = sizeof(Buffer);
     HANDLE PortHandle;
     KPROCESSOR_MODE PreviousMode = KeGetPreviousMode();
 
@@ -275,9 +276,7 @@ ExpRaiseHardError(IN NTSTATUS ErrorStatus,
     }
 
     /* Send the LPC Message */
-    Status = LpcRequestWaitReplyPort(PortHandle,
-                                     (PPORT_MESSAGE)Message,
-                                     (PPORT_MESSAGE)Message);
+    Status = LpcSendWaitReceivePort(PortHandle, ALPC_MSGFLG_SYNC_REQUEST, (PPORT_MESSAGE)Message, (PPORT_MESSAGE)Message, &BufferLength, NULL);
     if (NT_SUCCESS(Status))
     {
         /* Check what kind of response we got */
