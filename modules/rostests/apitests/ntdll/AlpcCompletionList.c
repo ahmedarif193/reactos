@@ -22,7 +22,7 @@
 #define TEST_LOCAL_BITMAP_SIZE              0x20
 #define TEST_LOCAL_DATA_OFFSET              0x400
 #define TEST_LOCAL_DATA_SIZE                0x400
-#define TEST_KERNEL_LIST_SIZE               (4 * PAGE_SIZE)
+#define TEST_KERNEL_LIST_SIZE               (16 * PAGE_SIZE)
 #define TEST_WORKER_COUNT                   8
 
 typedef struct _TEST_COMPLETION_LIST_HEADER
@@ -329,7 +329,7 @@ TestCompletionDequeue(
     State = (ULONGLONG)Header->State;
     Result = AlpcGetMessageFromCompletionList(Header, &Attributes);
     ok(Result == NULL, "empty list returned %p\n", Result);
-    ok(Attributes == NULL, "empty list attribute pointer is %p\n", Attributes);
+    ok(Attributes == (PALPC_MESSAGE_ATTRIBUTES)(ULONG_PTR)0x55555555, "empty list changed attribute pointer to %p\n", Attributes);
     ok_eq_ulonglong((ULONGLONG)Header->State, State);
 
     Header = TestInitializeLocalCompletionList(Buffer);
@@ -420,6 +420,8 @@ TestCompletionFree(
     ok_eq_long(Header->ReturnCount, 1);
     AlpcFreeCompletionListMessage(Header, &Message->Header);
     trace("ALPC_OBSERVE completion_free repeated bitmap=%08lx return_count=%ld\n", (ULONG)Bitmap[0], Header->ReturnCount);
+    ok_eq_long(Bitmap[0], (LONG)0xfffffffe);
+    ok_eq_long(Header->ReturnCount, 2);
 
     Header = TestInitializeLocalCompletionList(Buffer);
     Bitmap = TestCompletionBitmap(Header);
@@ -486,8 +488,8 @@ TestCompletionFree(
     Message = TestCompletionMessage(Header, 0);
     Message->Header.u1.s1.TotalLength = sizeof(PORT_MESSAGE);
     AlpcFreeCompletionListMessage(Header, &Message->Header);
-    ok_eq_long(Bitmap[0], Before);
-    ok_eq_long(Header->ReturnCount, 0);
+    ok_eq_long(Bitmap[0], (LONG)0xfffffffe);
+    ok_eq_long(Header->ReturnCount, 1);
 
     Header = TestInitializeLocalCompletionList(Buffer);
     Bitmap = TestCompletionBitmap(Header);
@@ -496,6 +498,8 @@ TestCompletionFree(
     Message->Header.u1.s1.TotalLength = 1;
     AlpcFreeCompletionListMessage(Header, &Message->Header);
     trace("ALPC_OBSERVE completion_free short_total_length bitmap=%08lx return_count=%ld\n", (ULONG)Bitmap[0], Header->ReturnCount);
+    ok_eq_long(Bitmap[0], (LONG)0xfffffffe);
+    ok_eq_long(Header->ReturnCount, 1);
 }
 
 static
@@ -839,15 +843,15 @@ TestCompletionKernelEndToEnd(VOID)
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 
-    Status = AlpcAdjustCompletionListConcurrencyCount(ServerPort, 1);
+    Status = AlpcAdjustCompletionListConcurrencyCount(ConnectionPort, 1);
     TestObserveRegistrationStatus("adjust_before_register", Status, Buffer);
 
     RtlFillMemory(Buffer, TEST_KERNEL_LIST_SIZE, 0xa5);
-    Status = AlpcRegisterCompletionList(ServerPort, (PUCHAR)Buffer + 1, TEST_KERNEL_LIST_SIZE - 1, 1, 0);
+    Status = AlpcRegisterCompletionList(ConnectionPort, (PUCHAR)Buffer + 1, TEST_KERNEL_LIST_SIZE - 1, 1, 0);
     TestObserveRegistrationStatus("register_misaligned_buffer", Status, Buffer);
     if (NT_SUCCESS(Status))
     {
-        Status = AlpcUnregisterCompletionList(ServerPort);
+        Status = AlpcUnregisterCompletionList(ConnectionPort);
         TestObserveRegistrationStatus("unregister_after_misaligned_buffer", Status, Buffer);
         if (!NT_SUCCESS(Status))
         {
@@ -857,11 +861,11 @@ TestCompletionKernelEndToEnd(VOID)
     }
 
     RtlFillMemory(Buffer, TEST_KERNEL_LIST_SIZE, 0xa5);
-    Status = AlpcRegisterCompletionList(ServerPort, Buffer, TEST_KERNEL_LIST_SIZE - 1, 1, 0);
+    Status = AlpcRegisterCompletionList(ConnectionPort, Buffer, TEST_KERNEL_LIST_SIZE - 1, 1, 0);
     TestObserveRegistrationStatus("register_unaligned_size", Status, Buffer);
     if (NT_SUCCESS(Status))
     {
-        Status = AlpcUnregisterCompletionList(ServerPort);
+        Status = AlpcUnregisterCompletionList(ConnectionPort);
         TestObserveRegistrationStatus("unregister_after_unaligned_size", Status, Buffer);
         if (!NT_SUCCESS(Status))
         {
@@ -871,11 +875,11 @@ TestCompletionKernelEndToEnd(VOID)
     }
 
     RtlFillMemory(Buffer, TEST_KERNEL_LIST_SIZE, 0xa5);
-    Status = AlpcRegisterCompletionList(ServerPort, Buffer, 3 * PAGE_SIZE, 1, 0);
+    Status = AlpcRegisterCompletionList(ConnectionPort, Buffer, 3 * PAGE_SIZE, 1, 0);
     TestObserveRegistrationStatus("register_undersized", Status, Buffer);
     if (NT_SUCCESS(Status))
     {
-        Status = AlpcUnregisterCompletionList(ServerPort);
+        Status = AlpcUnregisterCompletionList(ConnectionPort);
         TestObserveRegistrationStatus("unregister_after_undersized", Status, Buffer);
         if (!NT_SUCCESS(Status))
         {
@@ -885,11 +889,11 @@ TestCompletionKernelEndToEnd(VOID)
     }
 
     RtlFillMemory(Buffer, TEST_KERNEL_LIST_SIZE, 0xa5);
-    Status = AlpcRegisterCompletionList(ServerPort, Buffer, TEST_KERNEL_LIST_SIZE, 0, 0);
+    Status = AlpcRegisterCompletionList(ConnectionPort, Buffer, TEST_KERNEL_LIST_SIZE, 0, 0);
     TestObserveRegistrationStatus("register_zero_concurrency", Status, Buffer);
     if (NT_SUCCESS(Status))
     {
-        Status = AlpcUnregisterCompletionList(ServerPort);
+        Status = AlpcUnregisterCompletionList(ConnectionPort);
         TestObserveRegistrationStatus("unregister_after_zero_concurrency", Status, Buffer);
         if (!NT_SUCCESS(Status))
         {
@@ -899,11 +903,11 @@ TestCompletionKernelEndToEnd(VOID)
     }
 
     RtlFillMemory(Buffer, TEST_KERNEL_LIST_SIZE, 0xa5);
-    Status = AlpcRegisterCompletionList(ServerPort, Buffer, TEST_KERNEL_LIST_SIZE, 1, 1);
+    Status = AlpcRegisterCompletionList(ConnectionPort, Buffer, TEST_KERNEL_LIST_SIZE, 1, 1);
     TestObserveRegistrationStatus("register_unknown_attribute", Status, Buffer);
     if (NT_SUCCESS(Status))
     {
-        Status = AlpcUnregisterCompletionList(ServerPort);
+        Status = AlpcUnregisterCompletionList(ConnectionPort);
         TestObserveRegistrationStatus("unregister_after_unknown_attribute", Status, Buffer);
         if (!NT_SUCCESS(Status))
         {
@@ -918,7 +922,7 @@ TestCompletionKernelEndToEnd(VOID)
     ExceptionStatus = STATUS_SUCCESS;
     _SEH2_TRY
     {
-        Status = AlpcRegisterCompletionList(ServerPort, NULL, TEST_KERNEL_LIST_SIZE, 1, 0);
+        Status = AlpcRegisterCompletionList(ConnectionPort, NULL, TEST_KERNEL_LIST_SIZE, 1, 0);
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -929,7 +933,7 @@ TestCompletionKernelEndToEnd(VOID)
     TestObserveRegistrationStatus("register_null_buffer", Status, NULL);
     if (ExceptionStatus == STATUS_SUCCESS && NT_SUCCESS(Status))
     {
-        Status = NtAlpcSetInformation(ServerPort, AlpcUnregisterCompletionListInformation, NULL, 0);
+        Status = NtAlpcSetInformation(ConnectionPort, AlpcUnregisterCompletionListInformation, NULL, 0);
         TestObserveRegistrationStatus("unregister_after_null_buffer", Status, NULL);
         if (!NT_SUCCESS(Status))
         {
@@ -939,7 +943,7 @@ TestCompletionKernelEndToEnd(VOID)
     }
 
     RtlFillMemory(Buffer, TEST_KERNEL_LIST_SIZE, 0xcc);
-    Status = AlpcRegisterCompletionList(ServerPort, Buffer, TEST_KERNEL_LIST_SIZE, 1, ALPC_MESSAGE_CONTEXT_ATTRIBUTE);
+    Status = AlpcRegisterCompletionList(ConnectionPort, Buffer, TEST_KERNEL_LIST_SIZE, 1, ALPC_MESSAGE_CONTEXT_ATTRIBUTE);
     ok_hex(Status, STATUS_SUCCESS);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
@@ -950,7 +954,7 @@ TestCompletionKernelEndToEnd(VOID)
     ok(HeaderValid, "kernel initialized an unsafe completion-list header\n");
     if (!HeaderValid)
     {
-        Status = NtAlpcSetInformation(ServerPort, AlpcUnregisterCompletionListInformation, NULL, 0);
+        Status = NtAlpcSetInformation(ConnectionPort, AlpcUnregisterCompletionListInformation, NULL, 0);
         TestObserveRegistrationStatus("unregister_after_invalid_header", Status, Buffer);
         if (!NT_SUCCESS(Status))
             Quarantine = TRUE;
@@ -971,11 +975,11 @@ TestCompletionKernelEndToEnd(VOID)
     ok_eq_ulong(TestCompletionTail((ULONGLONG)Header->State), TEST_COMPLETION_LIST_EMPTY);
     ok(Header->UserLock.Ptr == NULL, "user lock is %p\n", Header->UserLock.Ptr);
 
-    Status = AlpcRegisterCompletionList(ServerPort, SecondBuffer, TEST_KERNEL_LIST_SIZE, 1, 0);
+    Status = AlpcRegisterCompletionList(ConnectionPort, SecondBuffer, TEST_KERNEL_LIST_SIZE, 1, 0);
     TestObserveRegistrationStatus("register_repeated", Status, SecondBuffer);
     if (NT_SUCCESS(Status))
     {
-        Status = AlpcUnregisterCompletionList(ServerPort);
+        Status = AlpcUnregisterCompletionList(ConnectionPort);
         TestObserveRegistrationStatus("unregister_after_repeated_success", Status, SecondBuffer);
         if (!NT_SUCCESS(Status))
             Quarantine = TRUE;
@@ -987,11 +991,11 @@ TestCompletionKernelEndToEnd(VOID)
     Attributes = (PALPC_MESSAGE_ATTRIBUTES)(ULONG_PTR)0x55555555;
     ReceivedMessage = AlpcGetMessageFromCompletionList(Buffer, &Attributes);
     ok(ReceivedMessage == NULL, "fresh kernel list returned %p\n", ReceivedMessage);
-    ok(Attributes == NULL, "fresh kernel list attributes are %p\n", Attributes);
+    ok(Attributes == (PALPC_MESSAGE_ATTRIBUTES)(ULONG_PTR)0x55555555, "fresh kernel list changed attributes to %p\n", Attributes);
 
-    Status = AlpcAdjustCompletionListConcurrencyCount(ServerPort, 0);
+    Status = AlpcAdjustCompletionListConcurrencyCount(ConnectionPort, 0);
     TestObserveRegistrationStatus("adjust_zero", Status, Buffer);
-    Status = AlpcAdjustCompletionListConcurrencyCount(ServerPort, 2);
+    Status = AlpcAdjustCompletionListConcurrencyCount(ConnectionPort, 2);
     ok_hex(Status, STATUS_SUCCESS);
 
     AlpcTestInitializeMessage(&SendMessage, 0x434C4531, 101);
@@ -1032,7 +1036,7 @@ TestCompletionKernelEndToEnd(VOID)
     Result = AlpcRegisterCompletionListWorkerThread(Buffer);
     ok_bool_true(Result, "kernel-list worker registration");
     WorkerRegistered = Result;
-    Status = AlpcUnregisterCompletionList(ServerPort);
+    Status = AlpcUnregisterCompletionList(ConnectionPort);
     TestObserveRegistrationStatus("unregister_with_worker", Status, Buffer);
     if (NT_SUCCESS(Status))
     {
@@ -1047,7 +1051,7 @@ TestCompletionKernelEndToEnd(VOID)
         ok_eq_ulong(AlpcGetOutstandingCompletionListMessageCount(Buffer), 1);
 
 Rundown:
-    Status = AlpcRundownCompletionList(ServerPort);
+    Status = AlpcRundownCompletionList(ConnectionPort);
     ok_hex(Status, STATUS_SUCCESS);
     if (NT_SUCCESS(Status))
     {
@@ -1057,7 +1061,7 @@ Rundown:
         ok_eq_ulong(TestCompletionHead((ULONGLONG)Header->State), TEST_COMPLETION_LIST_EMPTY);
         ok_eq_ulong(TestCompletionTail((ULONGLONG)Header->State), TEST_COMPLETION_LIST_EMPTY);
     }
-    Status = AlpcRundownCompletionList(ServerPort);
+    Status = AlpcRundownCompletionList(ConnectionPort);
     TestObserveRegistrationStatus("rundown_repeated", Status, Buffer);
 
     if (WorkerRegistered)
@@ -1066,13 +1070,13 @@ Rundown:
         ok_bool_true(Result, "kernel-list worker unregistration");
         WorkerRegistered = FALSE;
     }
-    Status = AlpcUnregisterCompletionList(ServerPort);
+    Status = AlpcUnregisterCompletionList(ConnectionPort);
     ok_hex(Status, STATUS_SUCCESS);
-    Status = AlpcUnregisterCompletionList(ServerPort);
+    Status = AlpcUnregisterCompletionList(ConnectionPort);
     TestObserveRegistrationStatus("unregister_repeated", Status, Buffer);
-    Status = AlpcRundownCompletionList(ServerPort);
+    Status = AlpcRundownCompletionList(ConnectionPort);
     TestObserveRegistrationStatus("rundown_after_unregister", Status, Buffer);
-    Status = AlpcAdjustCompletionListConcurrencyCount(ServerPort, 1);
+    Status = AlpcAdjustCompletionListConcurrencyCount(ConnectionPort, 1);
     TestObserveRegistrationStatus("adjust_after_unregister", Status, Buffer);
 
 Cleanup:
@@ -1083,8 +1087,8 @@ Cleanup:
     }
     if (WorkerRegistered)
         AlpcUnregisterCompletionListWorkerThread(Buffer);
-    if (ServerPort && !SkipWrapperUnregister)
-        AlpcUnregisterCompletionList(ServerPort);
+    if (ConnectionPort && !SkipWrapperUnregister)
+        AlpcUnregisterCompletionList(ConnectionPort);
     AlpcTestCloseConnectedPorts(ConnectionPort, ServerPort, ClientPort);
     TestFreePages(SecondBuffer);
     TestFreePages(Buffer);

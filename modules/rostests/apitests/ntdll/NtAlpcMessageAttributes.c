@@ -281,7 +281,10 @@ AlpcTestBasicAttributes(
     ContextAttribute = AlpcGetMessageAttribute(ReceiveAttributes, ALPC_MESSAGE_CONTEXT_ATTRIBUTE);
     trace("ALPC_OBSERVE value Attributes.context port=%p message=%p sequence=%lu message_id=%lu callback_id=%lu\n", ContextAttribute->PortContext, ContextAttribute->MessageContext, ContextAttribute->Sequence, ContextAttribute->MessageId, ContextAttribute->CallbackId);
     if (ReceiveAttributes->ValidAttributes & ALPC_MESSAGE_CONTEXT_ATTRIBUTE)
-        ok(ContextAttribute->MessageContext == ALPC_ATTRIBUTE_TEST_CONTEXT, "message context %p expected %p\n", ContextAttribute->MessageContext, ALPC_ATTRIBUTE_TEST_CONTEXT);
+    {
+        ok(ContextAttribute->PortContext == ALPC_TEST_PORT_CONTEXT, "port context %p expected %p\n", ContextAttribute->PortContext, ALPC_TEST_PORT_CONTEXT);
+        ok(ContextAttribute->MessageContext == NULL, "message context %p expected NULL\n", ContextAttribute->MessageContext);
+    }
 
     TokenAttribute = AlpcGetMessageAttribute(ReceiveAttributes, ALPC_MESSAGE_TOKEN_ATTRIBUTE);
     trace("ALPC_OBSERVE value Attributes.token token=%I64x auth=%I64x modified=%I64x\n", TokenAttribute->TokenId, TokenAttribute->AuthenticationId, TokenAttribute->ModifiedId);
@@ -355,20 +358,31 @@ AlpcTestSingleHandle(
     trace("ALPC_OBSERVE value Handle.single valid=%08lx flags=%08lx handle=%p type=%08lx access=%08lx\n", ReceiveAttributes->ValidAttributes, ReceiveHandleAttribute->Flags, ReceiveHandleAttribute->Handle, ReceiveHandleAttribute->ObjectType, ReceiveHandleAttribute->DesiredAccess);
     if (ReceiveAttributes->ValidAttributes & ALPC_MESSAGE_HANDLE_ATTRIBUTE)
     {
-        ReceivedHandle = ReceiveHandleAttribute->Handle;
-        ok_eq_ulong(WaitForSingleObject(ReceivedHandle, 0), WAIT_OBJECT_0);
+        ok(ReceiveHandleAttribute->Handle == NULL, "single handle attribute exposed %p instead of an indexed handle\n", ReceiveHandleAttribute->Handle);
+        ok_eq_ulong(ReceiveHandleAttribute->Flags, ALPC_HANDLEFLG_INDIRECT);
+        ok_eq_ulong(ReceiveHandleAttribute->HandleCount, 1);
+        ok_eq_ulong(ReceiveHandleAttribute->DesiredAccess, 0);
     }
 
     RtlFillMemory(&Information, sizeof(Information), 0x55);
     Information.Index = 0;
     ReturnLength = 0x55555555;
-    alpc_observe_status("QueryMessage.handle_index_0", NtAlpcQueryInformationMessage(ConnectionPort, &Message.Header, AlpcMessageHandleInformation, &Information, sizeof(Information), &ReturnLength));
+    alpc_expect_status("QueryMessage.handle_index_0", NtAlpcQueryInformationMessage(ConnectionPort, &Message.Header, AlpcMessageHandleInformation, &Information, sizeof(Information), &ReturnLength), STATUS_SUCCESS);
     trace("ALPC_OBSERVE value QueryMessage.handle_0 index=%lu flags=%08lx handle=%08lx type=%08lx access=%08lx length=%lu\n", Information.Index, Information.Flags, Information.Handle, Information.ObjectType, Information.GrantedAccess, ReturnLength);
+    if (NT_SUCCESS(Status))
+    {
+        ok_eq_ulong(Information.Index, 0);
+        ok_eq_ulong(ReturnLength, sizeof(Information));
+        ReceivedHandle = UlongToHandle(Information.Handle);
+        ok(ReceivedHandle != NULL, "indexed handle query returned NULL\n");
+        if (ReceivedHandle)
+            ok_eq_ulong(WaitForSingleObject(ReceivedHandle, 0), WAIT_OBJECT_0);
+    }
 
     RtlFillMemory(&Information, sizeof(Information), 0x55);
     Information.Index = 1;
     ReturnLength = 0x55555555;
-    alpc_observe_status("QueryMessage.handle_index_1", NtAlpcQueryInformationMessage(ConnectionPort, &Message.Header, AlpcMessageHandleInformation, &Information, sizeof(Information), &ReturnLength));
+    alpc_expect_status("QueryMessage.handle_index_1", NtAlpcQueryInformationMessage(ConnectionPort, &Message.Header, AlpcMessageHandleInformation, &Information, sizeof(Information), &ReturnLength), STATUS_INVALID_HANDLE);
     trace("ALPC_OBSERVE value QueryMessage.handle_1 index=%lu flags=%08lx handle=%08lx type=%08lx access=%08lx length=%lu\n", Information.Index, Information.Flags, Information.Handle, Information.ObjectType, Information.GrantedAccess, ReturnLength);
 
     alpc_expect_status("Handle.single_reply", AlpcTestReplyRequest(ServerPort, &Message), STATUS_SUCCESS);

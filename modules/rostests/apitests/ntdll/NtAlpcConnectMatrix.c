@@ -349,7 +349,7 @@ AlpcTestMalformedConnectionMessages(VOID)
     Message.Header.u1.s1.DataLength++;
     Length = sizeof(Message);
     Output = (HANDLE)(ULONG_PTR)0x5555555555555555ULL;
-    alpc_expect_status("Connect.malformed.data_exceeds_total", NtAlpcConnectPort(&Output, &MissingName, NULL, &Attributes, 0, NULL, &Message.Header, &Length, NULL, NULL, &Timeout), STATUS_INVALID_PARAMETER);
+    alpc_expect_status("Connect.malformed.data_exceeds_total", NtAlpcConnectPort(&Output, &MissingName, NULL, &Attributes, 0, NULL, &Message.Header, &Length, NULL, NULL, &Timeout), STATUS_OBJECT_NAME_NOT_FOUND);
     trace("ALPC_OBSERVE value Connect.malformed.data_exceeds_total output=%p length=%Iu\n", Output, Length);
     alpc_trace_scalar_mutation("Connect.malformed.data_exceeds_total", "output", (HANDLE)(ULONG_PTR)0x5555555555555555ULL, Output);
     alpc_trace_scalar_mutation("Connect.malformed.data_exceeds_total", "length", sizeof(Message), Length);

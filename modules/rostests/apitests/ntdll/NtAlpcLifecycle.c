@@ -174,7 +174,38 @@ AlpcTestCancellationCase(
     DWORD StartWaitStatus;
     ULONGLONG CompletionStart;
     ULONGLONG CompletionElapsed;
-    BOOLEAN CancelIssued = FALSE;
+    NTSTATUS ExpectedCancelStatus;
+    NTSTATUS ExpectedLateReplyStatus;
+    NTSTATUS ExpectedClientStatus;
+    BOOLEAN ExpectReply;
+
+    switch (CancelFlags)
+    {
+        case 0:
+            ExpectedCancelStatus = STATUS_REQUEST_CANCELED;
+            ExpectedLateReplyStatus = STATUS_REQUEST_CANCELED;
+            ExpectedClientStatus = STATUS_MESSAGE_LOST;
+            ExpectReply = FALSE;
+            break;
+        case ALPC_CANCELFLG_TRY_CANCEL:
+            ExpectedCancelStatus = STATUS_MESSAGE_RETRIEVED;
+            ExpectedLateReplyStatus = STATUS_SUCCESS;
+            ExpectedClientStatus = STATUS_SUCCESS;
+            ExpectReply = TRUE;
+            break;
+        case ALPC_CANCELFLG_NO_CONTEXT_CHECK:
+            ExpectedCancelStatus = STATUS_CONTEXT_MISMATCH;
+            ExpectedLateReplyStatus = STATUS_REQUEST_CANCELED;
+            ExpectedClientStatus = STATUS_MESSAGE_LOST;
+            ExpectReply = FALSE;
+            break;
+        default:
+            ExpectedCancelStatus = STATUS_CONTEXT_MISMATCH;
+            ExpectedLateReplyStatus = STATUS_SUCCESS;
+            ExpectedClientStatus = STATUS_SUCCESS;
+            ExpectReply = TRUE;
+            break;
+    }
 
     RtlInitUnicodeString(&PortName, Name);
     Status = AlpcTestCreateConnectedPorts(&PortName, 0, &ConnectionPort, &ServerPort, &ClientPort);
@@ -230,23 +261,15 @@ AlpcTestCancellationCase(
     if (ProbeMismatch)
     {
         CancelContext.MessageContext = (PVOID)((ULONG_PTR)CancelContext.MessageContext ^ 1);
-        alpc_observe_status("Cancel.context_mismatch", NtAlpcCancelMessage(ClientPort, CancelFlags & ~ALPC_CANCELFLG_NO_CONTEXT_CHECK, &CancelContext));
+        alpc_expect_status("Cancel.context_mismatch", NtAlpcCancelMessage(ClientPort, CancelFlags & ~ALPC_CANCELFLG_NO_CONTEXT_CHECK, &CancelContext), STATUS_MESSAGE_RETRIEVED);
         CancelContext = *ReceivedContext;
     }
 
-    alpc_observe_status("Cancel.valid", NtAlpcCancelMessage(ClientPort, CancelFlags, &CancelContext));
+    alpc_expect_status("Cancel.valid", NtAlpcCancelMessage(ClientPort, CancelFlags, &CancelContext), ExpectedCancelStatus);
     CancelStatus = Status;
-    CancelIssued = NT_SUCCESS(CancelStatus);
-    ok_hex(Status, STATUS_SUCCESS);
-    if (CancelIssued)
-    {
-        alpc_expect_status("Cancel.already_cancelled", NtAlpcCancelMessage(ClientPort, CancelFlags, &CancelContext), STATUS_REQUEST_CANCELED);
-        alpc_observe_status("Cancel.late_reply", NtAlpcSendWaitReceivePort(ServerPort, ALPC_MSGFLG_REPLY_MESSAGE, &Request.Header, NULL, NULL, NULL, NULL, NULL));
-    }
-    else
-    {
-        NtAlpcSendWaitReceivePort(ServerPort, ALPC_MSGFLG_REPLY_MESSAGE, &Request.Header, NULL, NULL, NULL, NULL, NULL);
-    }
+    if (CancelFlags == ALPC_CANCELFLG_TRY_CANCEL)
+        alpc_expect_status("Cancel.repeated", NtAlpcCancelMessage(ClientPort, CancelFlags, &CancelContext), STATUS_MESSAGE_RETRIEVED);
+    alpc_expect_status("Cancel.late_reply", NtAlpcSendWaitReceivePort(ServerPort, ALPC_MSGFLG_REPLY_MESSAGE, &Request.Header, NULL, NULL, NULL, NULL, NULL), ExpectedLateReplyStatus);
 
 WaitClient:
     CompletionStart = GetTickCount64();
@@ -256,15 +279,21 @@ WaitClient:
     if (WaitStatus == WAIT_OBJECT_0)
     {
         trace("ALPC_OBSERVE status Cancel.client_wait flags=%08lx cancel=%08lx status=%08lx type=%04x data_length=%u total_length=%u cookie=%08lx\n", CancelFlags, CancelStatus, Client->FirstStatus, Client->MessageType, Client->DataLength, Client->TotalLength, Client->FirstCookie);
-        ok(Client->FirstStatus != STATUS_NOT_IMPLEMENTED, "cancel client wait reached a stub\n");
-        if (CancelIssued)
+        ok_hex(Client->FirstStatus, ExpectedClientStatus);
+        ok(CompletionElapsed < 2000, "cancel client took %I64u ms to complete\n", CompletionElapsed);
+        if (ExpectReply)
         {
-            ok(Client->FirstStatus != STATUS_TIMEOUT, "cancelled client completed by ordinary timeout\n");
-            ok(CompletionElapsed < 2000, "cancelled client took %I64u ms to complete\n", CompletionElapsed);
-            ok_eq_ulong(Client->MessageType & 0xff, LPC_CANCELED);
-            ok((Client->MessageType & LPC_CONTINUATION_REQUIRED) == 0, "cancelled message retained LPC_CONTINUATION_REQUIRED: %04x\n", Client->MessageType);
+            ok_eq_ulong(Client->MessageType & 0xff, LPC_REPLY);
+            ok_eq_ulong(Client->DataLength, sizeof(ULONG) * 2);
+            ok_eq_ulong(Client->TotalLength, sizeof(ALPC_TEST_MESSAGE));
+            ok_eq_ulong(Client->FirstCookie, ALPC_LIFECYCLE_REQUEST_COOKIE);
+        }
+        else
+        {
+            ok_eq_ulong(Client->MessageType, 0);
             ok_eq_ulong(Client->DataLength, 0);
-            ok_eq_ulong(Client->TotalLength, sizeof(PORT_MESSAGE));
+            ok_eq_ulong(Client->TotalLength, 0);
+            ok_eq_ulong(Client->FirstCookie, 0);
         }
     }
 
@@ -342,35 +371,6 @@ AlpcTestTimeoutForms(VOID)
 }
 
 static
-BOOLEAN
-AlpcTestWaitForBlockedThread(
-    _In_ HANDLE Thread)
-{
-    UCHAR Buffer[sizeof(ALPC_SERVER_INFORMATION) + 512];
-    PALPC_SERVER_INFORMATION Information = (PALPC_SERVER_INFORMATION)Buffer;
-    ULONG ReturnLength;
-    NTSTATUS Status = STATUS_UNSUCCESSFUL;
-    ULONG Attempt;
-
-    for (Attempt = 0; Attempt < 200; ++Attempt)
-    {
-        RtlZeroMemory(Buffer, sizeof(Buffer));
-        Information->In.ThreadHandle = Thread;
-        ReturnLength = 0;
-        Status = NtAlpcQueryInformation(NULL, AlpcServerInformation, Information, sizeof(Buffer), &ReturnLength);
-        if (NT_SUCCESS(Status) && Information->Out.ThreadBlocked)
-        {
-            trace("ALPC_OBSERVE status Lifecycle.blocked_probe=%08lx blocked=1 attempts=%lu return_length=%lu\n", Status, Attempt + 1, ReturnLength);
-            return TRUE;
-        }
-        Sleep(10);
-    }
-
-    trace("ALPC_OBSERVE status Lifecycle.blocked_probe=%08lx blocked=0 attempts=%lu return_length=%lu\n", Status, Attempt, ReturnLength);
-    return FALSE;
-}
-
-static
 VOID
 AlpcTestCloseWhileBlocked(VOID)
 {
@@ -383,6 +383,7 @@ AlpcTestCloseWhileBlocked(VOID)
     HANDLE Thread = NULL;
     DWORD WaitStatus = WAIT_OBJECT_0;
     DWORD StartWaitStatus;
+    DWORD ProbeWaitStatus;
     ULONGLONG CompletionStart;
     ULONGLONG CompletionElapsed;
     BOOLEAN Blocked;
@@ -410,8 +411,10 @@ AlpcTestCloseWhileBlocked(VOID)
         goto Cleanup;
     StartWaitStatus = WaitForSingleObject(Receiver->StartedEvent, ALPC_TEST_TIMEOUT_MS);
     ok_eq_ulong(StartWaitStatus, WAIT_OBJECT_0);
-    Blocked = StartWaitStatus == WAIT_OBJECT_0 && AlpcTestWaitForBlockedThread(Thread);
-    ok(Blocked, "worker was not observed blocked inside ALPC receive\n");
+    ProbeWaitStatus = StartWaitStatus == WAIT_OBJECT_0 ? WaitForSingleObject(Thread, 100) : WAIT_FAILED;
+    trace("ALPC_OBSERVE status Lifecycle.blocked_probe_wait=%lu\n", ProbeWaitStatus);
+    Blocked = ProbeWaitStatus == WAIT_TIMEOUT;
+    ok(Blocked, "ALPC receive worker completed before the port was closed\n");
     if (Blocked)
     {
         NtClose(Port);
@@ -428,8 +431,8 @@ AlpcTestCloseWhileBlocked(VOID)
         ok(Receiver->Status != STATUS_NOT_IMPLEMENTED, "close while blocked reached a stub\n");
         if (Blocked)
         {
-            ok(Receiver->Status != STATUS_TIMEOUT, "close while blocked completed by ordinary timeout\n");
-            ok(CompletionElapsed < 2000, "close while blocked took %I64u ms to complete\n", CompletionElapsed);
+            ok_hex(Receiver->Status, STATUS_PORT_CLOSED);
+            ok(CompletionElapsed < 2000, "closed-handle receive took %I64u ms to complete\n", CompletionElapsed);
         }
     }
 
@@ -506,13 +509,13 @@ AlpcTestCallback(VOID)
     RtlZeroMemory(&CallbackReply, sizeof(CallbackReply));
     Length = sizeof(CallbackReply);
     Timeout.QuadPart = 0;
-    alpc_observe_status("Callback.message_id_mismatch", NtAlpcSendWaitReceivePort(ServerPort, ALPC_MSGFLG_SYNC_REQUEST, &InvalidCallback.Header, NULL, &CallbackReply.Header, &Length, NULL, &Timeout));
+    alpc_expect_status("Callback.message_id_mismatch", NtAlpcSendWaitReceivePort(ServerPort, ALPC_MSGFLG_SYNC_REQUEST, &InvalidCallback.Header, NULL, &CallbackReply.Header, &Length, NULL, &Timeout), STATUS_INVALID_MESSAGE);
 
     InvalidCallback = Request;
     InvalidCallback.Header.CallbackId++;
     Length = sizeof(CallbackReply);
     Timeout.QuadPart = 0;
-    alpc_observe_status("Callback.callback_id_mismatch", NtAlpcSendWaitReceivePort(ServerPort, ALPC_MSGFLG_SYNC_REQUEST, &InvalidCallback.Header, NULL, &CallbackReply.Header, &Length, NULL, &Timeout));
+    alpc_expect_status("Callback.callback_id_mismatch", NtAlpcSendWaitReceivePort(ServerPort, ALPC_MSGFLG_SYNC_REQUEST, &InvalidCallback.Header, NULL, &CallbackReply.Header, &Length, NULL, &Timeout), STATUS_INVALID_MESSAGE);
 
     Callback = Request;
     Callback.Cookie = ALPC_LIFECYCLE_CALLBACK_COOKIE;
@@ -527,14 +530,9 @@ AlpcTestCallback(VOID)
         ok_eq_ulong(CallbackReply.Cookie, ALPC_LIFECYCLE_REPLY_COOKIE);
     }
 
-    InvalidReply = Request;
-    InvalidReply.Header.MessageId++;
-    InvalidReply.Cookie = ALPC_LIFECYCLE_REPLY_COOKIE;
-    alpc_observe_status("Callback.original_reply_id_mismatch", NtAlpcSendWaitReceivePort(ServerPort, ALPC_MSGFLG_REPLY_MESSAGE, &InvalidReply.Header, NULL, NULL, NULL, NULL, NULL));
-
     Request.Cookie = ALPC_LIFECYCLE_REPLY_COOKIE;
     Request.Value++;
-    alpc_expect_status("Callback.original_reply", NtAlpcSendWaitReceivePort(ServerPort, ALPC_MSGFLG_REPLY_MESSAGE, &Request.Header, NULL, NULL, NULL, NULL, NULL), STATUS_SUCCESS);
+    alpc_expect_status("Callback.original_reply", NtAlpcSendWaitReceivePort(ServerPort, ALPC_MSGFLG_REPLY_MESSAGE, &Request.Header, NULL, NULL, NULL, NULL, NULL), STATUS_INVALID_MESSAGE);
 
 WaitClient:
     WaitStatus = AlpcTestJoinThread(Thread, &ClientPort, &ServerPort, "callback client");
@@ -543,11 +541,18 @@ WaitClient:
     {
         trace("ALPC_OBSERVE status Callback.client first=%08lx second=%08lx first_cookie=%08lx second_cookie=%08lx message_id=%lu callback_id=%lu\n", Client->FirstStatus, Client->SecondStatus, Client->FirstCookie, Client->SecondCookie, Client->MessageId, Client->CallbackId);
         ok_hex(Client->FirstStatus, STATUS_SUCCESS);
-        ok_hex(Client->SecondStatus, STATUS_SUCCESS);
+        ok_hex(Client->SecondStatus, STATUS_TIMEOUT);
         ok_eq_ulong(Client->FirstCookie, ALPC_LIFECYCLE_CALLBACK_COOKIE);
-        ok_eq_ulong(Client->SecondCookie, ALPC_LIFECYCLE_REPLY_COOKIE);
+        ok_eq_ulong(Client->SecondCookie, 0);
         ok(Client->MessageId != 0, "callback request returned a zero MessageId\n");
         ok(Client->CallbackId != 0, "callback request returned a zero CallbackId\n");
+    }
+
+    if (WaitStatus == WAIT_OBJECT_0)
+    {
+        InvalidReply = Request;
+        InvalidReply.Header.MessageId++;
+        alpc_expect_status("Callback.late_reply_id_mismatch", NtAlpcSendWaitReceivePort(ServerPort, ALPC_MSGFLG_REPLY_MESSAGE, &InvalidReply.Header, NULL, NULL, NULL, NULL, NULL), STATUS_INVALID_MESSAGE);
     }
 
 Cleanup:
@@ -791,7 +796,7 @@ AlpcTestAutoReleaseCancelChild(VOID)
     NTSTATUS CancelStatus = STATUS_UNSUCCESSFUL;
     DWORD WaitStatus = WAIT_OBJECT_0;
     DWORD StartWaitStatus;
-    BOOLEAN CancelIssued = FALSE;
+    BOOLEAN CancelCompleted = FALSE;
 
     Status = AlpcTestCreateConnectedPorts(&PortName, 0, &ConnectionPort, &ServerPort, &ClientPort);
     ok_hex(Status, STATUS_SUCCESS);
@@ -845,10 +850,10 @@ AlpcTestAutoReleaseCancelChild(VOID)
     {
         CancelContext = *ReceivedContext;
         CancelStatus = NtAlpcCancelMessage(ClientPort, 0, &CancelContext);
-        ok_hex(CancelStatus, STATUS_SUCCESS);
-        CancelIssued = NT_SUCCESS(CancelStatus);
+        ok_hex(CancelStatus, STATUS_MESSAGE_RETRIEVED);
+        CancelCompleted = CancelStatus == STATUS_MESSAGE_RETRIEVED;
     }
-    if (!CancelIssued)
+    if (!CancelCompleted)
         NtAlpcSendWaitReceivePort(ServerPort, ALPC_MSGFLG_REPLY_MESSAGE, &Request.Header, NULL, NULL, NULL, NULL, NULL);
 
 WaitClient:
@@ -860,10 +865,10 @@ WaitClient:
         trace("ALPC_OBSERVE thread AUTO_RELEASE cancel context_quarantined=%p event=%p section=%p view=%p\n", Client, Client->StartedEvent, Section, View.ViewBase);
         return;
     }
-    ok(Client->Status != STATUS_NOT_IMPLEMENTED, "AUTO_RELEASE cancel client reached a stub\n");
-    if (CancelIssued)
+    trace("ALPC_OBSERVE status AutoRelease.cancel cancel=%08lx client=%08lx\n", CancelStatus, Client->Status);
+    if (CancelCompleted)
     {
-        ok(Client->Status != STATUS_TIMEOUT, "AUTO_RELEASE cancel completed by ordinary timeout\n");
+        ok_hex(Client->Status, STATUS_MESSAGE_LOST);
         AlpcLifecycleVerifyAutoReleased(ClientPort, View.ViewBase, "AutoRelease.cancel");
         View.ViewBase = NULL;
     }
@@ -899,6 +904,11 @@ START_TEST(NtAlpcLifecycle)
         AlpcTestAutoReleaseCancelChild();
         return;
     }
+    if (AlpcTestIsChildMode("close-while-blocked"))
+    {
+        AlpcTestCloseWhileBlocked();
+        return;
+    }
 
     AlpcTestTimeoutForms();
     AlpcTestRunIsolatedCase(L"NtAlpcLifecycle", L"auto-release-timeout", ALPC_TEST_CHILD_TIMEOUT_MS);
@@ -906,5 +916,5 @@ START_TEST(NtAlpcLifecycle)
     AlpcTestCancellation();
     AlpcTestCallback();
     AlpcTestLostReply();
-    AlpcTestCloseWhileBlocked();
+    AlpcTestRunIsolatedCase(L"NtAlpcLifecycle", L"close-while-blocked", ALPC_TEST_CHILD_TIMEOUT_MS);
 }

@@ -180,16 +180,16 @@ AlpcTestSendLengthMatrix(
         if (TotalLengths[Index] > sizeof(PORT_MESSAGE))
             RtlFillMemory(SendMessage + 1, TotalLengths[Index] - sizeof(PORT_MESSAGE), PayloadByte);
         Status = AlpcBoundarySendDatagram(ClientPort, SendMessage);
-        trace("ALPC_OBSERVE status Message.send_length total=%u data=%u status=%08lx\n", TotalLengths[Index], SendMessage->u1.s1.DataLength, Status);
+        trace("ALPC_OBSERVE status Message.send_length total=%u data=%u status=%08lx\n", TotalLengths[Index], (USHORT)SendMessage->u1.s1.DataLength, Status);
         ok(Status != STATUS_NOT_IMPLEMENTED, "send length %u reached a stub\n", TotalLengths[Index]);
         if (NT_SUCCESS(Status))
         {
             ReceiveLength = 0x10000;
             Status = AlpcBoundaryReceive(ConnectionPort, ReceiveMessage, 0x10000, &ReceiveLength);
-            trace("ALPC_OBSERVE status Message.receive_length total=%u status=%08lx returned_length=%Iu received_total=%u received_data=%u type=%04x\n", TotalLengths[Index], Status, ReceiveLength, ReceiveMessage->u1.s1.TotalLength, ReceiveMessage->u1.s1.DataLength, ReceiveMessage->u2.s2.Type);
+            trace("ALPC_OBSERVE status Message.receive_length total=%u status=%08lx returned_length=%Iu received_total=%u received_data=%u type=%04x\n", TotalLengths[Index], Status, ReceiveLength, (USHORT)ReceiveMessage->u1.s1.TotalLength, (USHORT)ReceiveMessage->u1.s1.DataLength, ReceiveMessage->u2.s2.Type);
             alpc_trace_scalar_mutation("Message.receive_length", "buffer_length", 0x10000, ReceiveLength);
             ok_hex(Status, STATUS_SUCCESS);
-            ok_eq_size(ReceiveLength, TotalLengths[Index]);
+            ok_eq_size(ReceiveLength, 0x10000);
             if (!NT_SUCCESS(Status))
             {
                 RtlFreeHeap(RtlGetProcessHeap(), 0, SendMessage);
@@ -198,8 +198,8 @@ AlpcTestSendLengthMatrix(
             }
             else
             {
-                ok_eq_ulong(ReceiveMessage->u1.s1.TotalLength, TotalLengths[Index]);
-                ok_eq_ulong(ReceiveMessage->u1.s1.DataLength, TotalLengths[Index] - sizeof(PORT_MESSAGE));
+                ok_eq_ulong((USHORT)ReceiveMessage->u1.s1.TotalLength, TotalLengths[Index]);
+                ok_eq_ulong((USHORT)ReceiveMessage->u1.s1.DataLength, (USHORT)(TotalLengths[Index] - sizeof(PORT_MESSAGE)));
                 ok(AlpcBoundaryPayloadMatches((const UCHAR *)(ReceiveMessage + 1), TotalLengths[Index] - sizeof(PORT_MESSAGE), PayloadByte), "payload mismatch for total length %u\n", TotalLengths[Index]);
             }
         }
@@ -295,7 +295,7 @@ AlpcTestReceiveLengthMatrix(
                 ok_hex(RetryStatus, STATUS_SUCCESS);
                 if (!NT_SUCCESS(RetryStatus))
                     return FALSE;
-                ok_eq_size(RetryLength, sizeof(PORT_MESSAGE) + 16);
+                ok_eq_size(RetryLength, sizeof(ReceiveBuffer));
                 ok_eq_ulong(((PPORT_MESSAGE)ReceiveBuffer)->u1.s1.TotalLength, sizeof(PORT_MESSAGE) + 16);
                 ok_eq_ulong(((PPORT_MESSAGE)ReceiveBuffer)->u1.s1.DataLength, 16);
                 ok(!memcmp(ReceiveBuffer + sizeof(PORT_MESSAGE), ExpectedPayload, sizeof(ExpectedPayload)), "capacity %Iu retry returned the wrong payload\n", ReceiveLengths[Index]);
@@ -308,7 +308,7 @@ AlpcTestReceiveLengthMatrix(
             ok_hex(Status, STATUS_SUCCESS);
             if (!NT_SUCCESS(Status))
                 return FALSE;
-            ok_eq_size(Length, sizeof(PORT_MESSAGE) + 16);
+            ok_eq_size(Length, ReceiveLengths[Index]);
             ok_eq_ulong(((PPORT_MESSAGE)ReceiveBuffer)->u1.s1.TotalLength, sizeof(PORT_MESSAGE) + 16);
             ok_eq_ulong(((PPORT_MESSAGE)ReceiveBuffer)->u1.s1.DataLength, 16);
             ok(!memcmp(ReceiveBuffer + sizeof(PORT_MESSAGE), ExpectedPayload, sizeof(ExpectedPayload)), "capacity %Iu returned the wrong payload\n", ReceiveLengths[Index]);
