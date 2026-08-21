@@ -103,6 +103,7 @@ CmpInitializeProcessorClockFromFirmware(
 
         if ((Header->Type == 4) &&
             (Header->Length >= 0x18) &&
+            (((PUCHAR)Header)[0x05] == 3) &&
             ((Header->Length < 0x19) || (((PUCHAR)Header)[0x18] & 0x40)))
         {
             RtlCopyMemory(&MaxSpeed, (PUCHAR)Header + 0x14, sizeof(MaxSpeed));
