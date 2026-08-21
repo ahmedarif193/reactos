@@ -405,4 +405,22 @@ ZwWriteRequestData(
     _Out_ PULONG ReturnLength
 );
 
+NTSYSAPI
+PVOID
+NTAPI
+AlpcGetMessageAttribute(
+    _In_ PALPC_MESSAGE_ATTRIBUTES Attributes,
+    _In_ ULONG AttributeFlag
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+AlpcInitializeMessageAttribute(
+    _In_ ULONG AttributeFlags,
+    _Out_writes_bytes_opt_(BufferSize) PALPC_MESSAGE_ATTRIBUTES Buffer,
+    _In_ SIZE_T BufferSize,
+    _Out_ PSIZE_T RequiredBufferSize
+);
+
 #endif
