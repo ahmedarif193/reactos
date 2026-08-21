@@ -1,0 +1,7 @@
+[Version]
+Signature = "$Windows NT$"
+
+[AddReg]
+
+; Run launcher.cmd from an attached app disk, when one is present.
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Run","AppLauncher",0x00020000,"%SystemRoot%\system32\cmd.exe /c ""%SystemDrive%\Profiles\Default User\My Documents\app_launcher.cmd"""

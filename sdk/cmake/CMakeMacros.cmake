@@ -992,6 +992,8 @@ function(create_registry_hives)
         list(APPEND _livecd_inf_files
             ${CMAKE_SOURCE_DIR}/boot/bootdata/boot_test.inf)
     endif()
+    list(APPEND _livecd_inf_files
+        ${CMAKE_SOURCE_DIR}/boot/bootdata/app_launcher.inf)
     if(SARCH STREQUAL "xbox")
         list(APPEND _livecd_inf_files
             ${CMAKE_SOURCE_DIR}/boot/bootdata/hiveinst_xbox.inf)
@@ -1040,6 +1042,8 @@ function(create_registry_hives)
         list(APPEND _preinstall_inf_files
             ${CMAKE_SOURCE_DIR}/boot/bootdata/boot_test.inf)
     endif()
+    list(APPEND _preinstall_inf_files
+        ${CMAKE_SOURCE_DIR}/boot/bootdata/app_launcher.inf)
     if(SARCH STREQUAL "xbox")
         list(APPEND _preinstall_inf_files
             ${CMAKE_SOURCE_DIR}/boot/bootdata/hiveinst_xbox.inf)
