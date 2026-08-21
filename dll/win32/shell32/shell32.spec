@@ -611,6 +611,7 @@
 @ stdcall Shell_NotifyIcon(long ptr) Shell_NotifyIconA # 2k3:366, Vista:430
 @ stdcall Shell_NotifyIconA(long ptr) # 2k3:367, Vista:431
 @ stdcall Shell_NotifyIconW(long ptr) # 2k3:368, Vista:432
+@ stdcall -version=0x601+ Shell_NotifyIconGetRect(ptr ptr)
 @ stdcall StrChrA(str long) shlwapi.StrChrA # 2k3:369, Vista:433
 @ stdcall StrChrIA(str long) shlwapi.StrChrIA # 2k3:370, Vista:434
 @ stdcall StrChrIW(wstr long) shlwapi.StrChrIW # 2k3:371, Vista:435

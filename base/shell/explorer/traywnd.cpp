@@ -2554,6 +2554,7 @@ ChangePos:
                 return OnAppBarMessage(pCopyData);
             case TABDMC_NOTIFY:
             case TABDMC_LOADINPROC:
+            case TABDMC_NOTIFY_GETRECT:
                 return ::SendMessageW(m_TrayNotify, uMsg, wParam, lParam);
         }
         return FALSE;

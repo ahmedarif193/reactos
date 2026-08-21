@@ -163,6 +163,7 @@ public:
     BOOL SwitchVersion(IN CONST NOTIFYICONDATA *iconData);
     BOOL UpdateButton(IN CONST NOTIFYICONDATA *iconData);
     BOOL RemoveButton(IN CONST NOTIFYICONDATA *iconData);
+    HRESULT GetIconRect(IN CONST NOTIFYICONIDENTIFIER *Identifier, OUT PRECT IconRect);
     VOID ResizeImagelist();
     bool SendNotifyCallback(InternalIconData* notifyItem, UINT uMsg);
     void RefreshToolbarMetrics(BOOL bForceRefresh);
@@ -719,6 +720,34 @@ int CNotifyToolbar::FindExistingSharedIcon(HICON handle)
     return -1;
 }
 
+HRESULT CNotifyToolbar::GetIconRect(IN CONST NOTIFYICONIDENTIFIER *Identifier, OUT PRECT IconRect)
+{
+    BOOL FindByGuid = !IsEqualGUID(Identifier->guidItem, GUID_NULL);
+    int Count = GetButtonCount();
+
+    for (int Index = 0; Index < Count; Index++)
+    {
+        InternalIconData *Data = GetItemData(Index);
+        BOOL Matches;
+
+        if (FindByGuid)
+            Matches = (Data->uFlags & NIF_GUID) && IsEqualGUID(Data->guidItem, Identifier->guidItem);
+        else
+            Matches = Data->hWnd == Identifier->hWnd && Data->uID == Identifier->uID;
+
+        if (!Matches)
+            continue;
+
+        if ((Data->dwState & NIS_HIDDEN) || !GetItemRect(Index, IconRect))
+            return E_FAIL;
+
+        ClientToScreen(IconRect);
+        return S_OK;
+    }
+
+    return E_FAIL;
+}
+
 BOOL CNotifyToolbar::AddButton(_In_ CONST NOTIFYICONDATA *iconData)
 {
     TBBUTTON tbBtn = { 0 };
@@ -744,6 +773,9 @@ BOOL CNotifyToolbar::AddButton(_In_ CONST NOTIFYICONDATA *iconData)
 
     notifyItem->hWnd = iconData->hWnd;
     notifyItem->uID = iconData->uID;
+    notifyItem->uFlags = iconData->uFlags;
+    if (iconData->uFlags & NIF_GUID)
+        notifyItem->guidItem = iconData->guidItem;
 
     tbBtn.fsState = TBSTATE_ENABLED;
     tbBtn.fsStyle = BTNS_NOPREFIX;
@@ -1590,6 +1622,36 @@ LRESULT CSysPagerWnd::OnCopyData(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& 
     else if (cpData->dwData == TABDMC_LOADINPROC)
     {
         FIXME("Taskbar Load In Proc\n");
+    }
+    else if (cpData->dwData == TABDMC_NOTIFY_GETRECT)
+    {
+        PTRAYNOTIFYICONGETRECTDATA Request;
+        PTRAYNOTIFYICONGETRECTRESULT Result;
+        HANDLE Mapping;
+
+        if (cpData->cbData != sizeof(*Request))
+            return FALSE;
+
+        Request = (PTRAYNOTIFYICONGETRECTDATA)cpData->lpData;
+        if (Request->dwSignature != NI_GETRECT_SIG || !Request->MappingName[0])
+            return FALSE;
+
+        Mapping = OpenFileMappingW(FILE_MAP_WRITE, FALSE, Request->MappingName);
+        if (!Mapping)
+            return FALSE;
+
+        Result = (PTRAYNOTIFYICONGETRECTRESULT)MapViewOfFile(Mapping, FILE_MAP_WRITE, 0, 0, sizeof(*Result));
+        if (!Result)
+        {
+            CloseHandle(Mapping);
+            return FALSE;
+        }
+
+        SetRectEmpty(&Result->IconRect);
+        Result->Result = Toolbar.GetIconRect(&Request->Identifier, &Result->IconRect);
+        UnmapViewOfFile(Result);
+        CloseHandle(Mapping);
+        return TRUE;
     }
 
     return FALSE;
