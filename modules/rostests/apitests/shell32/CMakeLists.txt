@@ -50,6 +50,7 @@ list(APPEND SOURCE
     #ShellExecuteW.cpp # Broke on Windows
     ShellHook.cpp
     ShellInfo.cpp
+    Shell_NotifyIconGetRect.cpp
     ShellState.cpp
     SHGetAttributesFromDataObject.cpp
     SHGetUserDisplayName.cpp
