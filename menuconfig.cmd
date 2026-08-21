@@ -26,8 +26,13 @@ if /I "%~1" == "--self-test" (
     set "_EXIT_CODE=!ERRORLEVEL!"
     goto quit
 )
+for %%I in ("%~dp0.") do set "_SOURCE_DIR=%%~fI"
 if "%~1" == "" (
-    set "_BUILD_DIR=%CD%"
+    for %%I in ("%CD%") do (
+        set "_BUILD_DIR=%%~fI"
+        set "_START_NAME=%%~nxI"
+    )
+    if /I not "!_START_NAME:~0,7!" == "output-" set "_BUILD_DIR=!_SOURCE_DIR!\output-MinGW-amd64-debug"
 ) else if /I "%~1" == "--build-dir" (
     if "%~2" == "" goto usage
     if not "%~3" == "" goto usage
@@ -36,12 +41,6 @@ if "%~1" == "" (
     goto usage
 )
 
-if not exist "!_BUILD_DIR!" (
-    echo Error: output directory does not exist: !_BUILD_DIR!
-    set "_EXIT_CODE=1"
-    goto quit
-)
-for %%I in ("%~dp0.") do set "_SOURCE_DIR=%%~fI"
 for %%I in ("!_BUILD_DIR!") do set "_BUILD_DIR=%%~fI"
 if /I "!_BUILD_DIR!" == "!_SOURCE_DIR!" (
     echo Error: run from an output directory or pass --build-dir output-^<toolchain^>-^<arch^>-^<type^>.
@@ -58,6 +57,25 @@ set "_ARCH="
 set "_BUILD_TYPE="
 set "_TOOLCHAIN="
 set "_TOOLCHAIN_FILE="
+set "_INFERRED_ARCH="
+set "_INFERRED_BUILD_TYPE="
+set "_INFERRED_TOOLCHAIN="
+for %%I in ("!_BUILD_DIR!") do set "_BUILD_NAME=%%~nxI"
+for /f "tokens=1-4 delims=-" %%a in ("!_BUILD_NAME!") do (
+    if /I "%%a" == "output" (
+        if /I "%%b" == "Clang" set "_INFERRED_TOOLCHAIN=clang"
+        if /I "%%b" == "GCC" set "_INFERRED_TOOLCHAIN=gcc"
+        if /I "%%b" == "MinGW" set "_INFERRED_TOOLCHAIN=gcc"
+        if /I "%%b" == "VS" set "_INFERRED_TOOLCHAIN=msvc"
+        if /I "%%b" == "MSVC" set "_INFERRED_TOOLCHAIN=msvc"
+        if /I "%%c" == "amd64" set "_INFERRED_ARCH=amd64"
+        if /I "%%c" == "i386" set "_INFERRED_ARCH=i386"
+        if /I "%%c" == "arm64" set "_INFERRED_ARCH=arm64"
+        if /I "%%c" == "arm" set "_INFERRED_ARCH=arm"
+        if /I "%%d" == "debug" set "_INFERRED_BUILD_TYPE=Debug"
+        if /I "%%d" == "release" set "_INFERRED_BUILD_TYPE=Release"
+    )
+)
 if exist "!_CMAKE_CACHE!" (
     for /f "tokens=2 delims==" %%v in ('findstr /b /c:"ARCH:" "!_CMAKE_CACHE!"') do set "_ARCH=%%v"
     for /f "tokens=2 delims==" %%v in ('findstr /b /c:"CMAKE_BUILD_TYPE:" "!_CMAKE_CACHE!"') do set "_BUILD_TYPE=%%v"
@@ -69,6 +87,9 @@ echo !_TOOLCHAIN_FILE! | findstr /I /C:"toolchain-clang.cmake" > NUL && set "_TO
 echo !_TOOLCHAIN_FILE! | findstr /I /C:"toolchain-gcc.cmake" > NUL && set "_TOOLCHAIN=gcc"
 echo !_TOOLCHAIN_FILE! | findstr /I /C:"toolchain-msvc.cmake" > NUL && set "_TOOLCHAIN=msvc"
 if not defined _TOOLCHAIN if exist "!_ROSCONFIG_CACHE!" for /f "tokens=2 delims==" %%v in ('findstr /b /c:"TOOLCHAIN=" "!_ROSCONFIG_CACHE!"') do set "_TOOLCHAIN=%%v"
+if not defined _ARCH set "_ARCH=!_INFERRED_ARCH!"
+if not defined _BUILD_TYPE set "_BUILD_TYPE=!_INFERRED_BUILD_TYPE!"
+if not defined _TOOLCHAIN set "_TOOLCHAIN=!_INFERRED_TOOLCHAIN!"
 
 if not defined _ARCH (
     echo Error: cannot determine a target architecture for !_BUILD_DIR!.
@@ -86,6 +107,15 @@ if not defined _TOOLCHAIN (
     goto quit
 )
 
+if not exist "!_BUILD_DIR!" (
+    echo Creating output configuration directory: !_BUILD_DIR!
+    mkdir "!_BUILD_DIR!"
+)
+if not exist "!_BUILD_DIR!" (
+    echo Error: could not create output directory: !_BUILD_DIR!
+    set "_EXIT_CODE=1"
+    goto quit
+)
 if not exist "!_ROSCONFIG_STATE_DIR!" mkdir "!_ROSCONFIG_STATE_DIR!"
 "%_ROSCONFIG_BIN%" --def "%_ROSCONFIG_DEF%" --cache "!_ROSCONFIG_CACHE!" --defaults --set "ARCH=!_ARCH!" --set "TOOLCHAIN=!_TOOLCHAIN!" --set "BUILD_TYPE=!_BUILD_TYPE!"
 if not "!ERRORLEVEL!" == "0" (
