@@ -129,7 +129,7 @@ SVC_(AlpcAcceptConnectPort, 9)
 SVC_(AlpcCancelMessage, 3)
 SVC_(AlpcConnectPort, 11)
 #if (NTDDI_VERSION >= NTDDI_WIN8)
-SVC_(AlpcConnectPortEx, 0) // FIXME
+SVC_(AlpcConnectPortEx, 11)
 #endif // (NTDDI_VERSION >= NTDDI_WIN8)
 SVC_(AlpcCreatePort, 3)
 SVC_(AlpcCreatePortSection, 6)
