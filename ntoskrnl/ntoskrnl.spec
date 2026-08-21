@@ -1549,13 +1549,10 @@
 @ stdcall ZwAlpcDeleteSectionView(ptr long ptr)
 @ stdcall ZwAlpcDeleteSecurityContext(ptr long ptr)
 @ stdcall ZwAlpcDisconnectPort(ptr long)
-@ stdcall ZwAlpcImpersonateClientContainerOfPort(ptr ptr long)
-@ stdcall ZwAlpcImpersonateClientOfPort(ptr ptr ptr)
 @ stdcall ZwAlpcOpenSenderProcess(ptr ptr ptr long long ptr)
 @ stdcall ZwAlpcOpenSenderThread(ptr ptr ptr long long ptr)
 @ stdcall ZwAlpcQueryInformation(ptr long ptr long ptr)
 @ stdcall ZwAlpcQueryInformationMessage(ptr ptr long ptr long ptr)
-@ stdcall ZwAlpcRevokeSecurityContext(ptr long ptr)
 @ stdcall ZwAlpcSendWaitReceivePort(ptr long ptr ptr ptr ptr ptr ptr)
 @ stdcall ZwAlpcSetInformation(ptr long ptr long)
 @ stdcall ZwCreateDirectoryObject(ptr long ptr)
@@ -2031,12 +2028,11 @@
 @ extern -arch=arm64 TmTransactionManagerObjectType
 @ extern -arch=arm64 TmTransactionObjectType
 @ extern -arch=arm64 psMUITest
+@ stdcall -arch=arm64,x86_64 AlpcCreateSecurityContext(ptr ptr long ptr)
+@ stdcall -arch=arm64,x86_64 AlpcGetHeaderSize(long)
+@ stdcall -arch=arm64,x86_64 AlpcGetMessageAttribute(ptr long)
+@ stdcall -arch=arm64,x86_64 AlpcInitializeMessageAttribute(long ptr long ptr)
 # --- Unimplemented Win11 exports (auto-generated stubs raise STATUS via DbgPrint) ---
-@ stdcall -arch=arm64 AlpcCreateSecurityContext(ptr ptr long ptr)
-@ stdcall -arch=arm64 AlpcGetHeaderSize(long)
-@ stdcall -arch=arm64 AlpcGetMessageAttribute(ptr long)
-@ stdcall -arch=arm64 AlpcInitializeMessageAttribute(long ptr long ptr)
-@ stdcall -arch=arm64 AlpcMaxAllowedMessageLength()
 @ stub -arch=arm64 BgkDisplayCharacter
 @ stub -arch=arm64 BgkGetConsoleState
 @ stub -arch=arm64 BgkGetCursorState
