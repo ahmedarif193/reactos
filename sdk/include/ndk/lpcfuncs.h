@@ -423,4 +423,88 @@ AlpcInitializeMessageAttribute(
     _Out_ PSIZE_T RequiredBufferSize
 );
 
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtAlpcImpersonateClientOfPort(
+    _In_ HANDLE PortHandle,
+    _In_ PPORT_MESSAGE Message,
+    _In_ PVOID Flags
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtAlpcImpersonateClientContainerOfPort(
+    _In_ HANDLE PortHandle,
+    _In_ PPORT_MESSAGE Message,
+    _In_ ULONG Flags
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtAlpcOpenSenderProcess(
+    _Out_ PHANDLE ProcessHandle,
+    _In_ HANDLE PortHandle,
+    _In_ PPORT_MESSAGE PortMessage,
+    _In_ ULONG Flags,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ POBJECT_ATTRIBUTES ObjectAttributes
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtAlpcOpenSenderThread(
+    _Out_ PHANDLE ThreadHandle,
+    _In_ HANDLE PortHandle,
+    _In_ PPORT_MESSAGE PortMessage,
+    _In_ ULONG Flags,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ POBJECT_ATTRIBUTES ObjectAttributes
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+ZwAlpcImpersonateClientOfPort(
+    _In_ HANDLE PortHandle,
+    _In_ PPORT_MESSAGE Message,
+    _In_ PVOID Flags
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+ZwAlpcImpersonateClientContainerOfPort(
+    _In_ HANDLE PortHandle,
+    _In_ PPORT_MESSAGE Message,
+    _In_ ULONG Flags
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+ZwAlpcOpenSenderProcess(
+    _Out_ PHANDLE ProcessHandle,
+    _In_ HANDLE PortHandle,
+    _In_ PPORT_MESSAGE PortMessage,
+    _In_ ULONG Flags,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ POBJECT_ATTRIBUTES ObjectAttributes
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+ZwAlpcOpenSenderThread(
+    _Out_ PHANDLE ThreadHandle,
+    _In_ HANDLE PortHandle,
+    _In_ PPORT_MESSAGE PortMessage,
+    _In_ ULONG Flags,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ POBJECT_ATTRIBUTES ObjectAttributes
+);
+
 #endif
