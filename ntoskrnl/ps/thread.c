@@ -299,6 +299,9 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
 
     /* Initialize the list heads and locks */
     InitializeListHead(&Thread->LpcReplyChain);
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    InitializeListHead(&Thread->AlpcWaitListEntry);
+#endif
     InitializeListHead(&Thread->IrpList);
     InitializeListHead(&Thread->PostBlockList);
     InitializeListHead(&Thread->ActiveTimerListHead);

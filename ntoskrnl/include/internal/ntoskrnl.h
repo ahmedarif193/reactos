@@ -147,6 +147,9 @@
 #include "kd64.h"
 #include "fsrtl.h"
 #include "lpc.h"
+#ifdef _ALPC_ENABLED
+#include "alpc.h"
+#endif
 #include "rtl.h"
 #include "dbgk.h"
 #include "spinlock.h"
