@@ -47,6 +47,7 @@ extern void func_ShellExecCmdLine(void);
 extern void func_ShellExecuteEx(void);
 extern void func_ShellExecuteW(void);
 extern void func_ShellHook(void);
+extern void func_Shell_NotifyIconGetRect(void);
 extern void func_ShellState(void);
 extern void func_SHGetAttributesFromDataObject(void);
 extern void func_SHGetComputerDisplayNameW(void);
@@ -109,6 +110,7 @@ const struct test winetest_testlist[] =
     //{ "ShellExecuteEx", func_ShellExecuteEx }, Broke on Windows
     //{ "ShellExecuteW", func_ShellExecuteW }, Broke on Windows
     { "ShellHook", func_ShellHook },
+    { "Shell_NotifyIconGetRect", func_Shell_NotifyIconGetRect },
     { "ShellState", func_ShellState },
     { "SHGetAttributesFromDataObject", func_SHGetAttributesFromDataObject },
     { "SHGetComputerDisplayNameW", func_SHGetComputerDisplayNameW },
