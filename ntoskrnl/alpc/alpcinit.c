@@ -503,7 +503,7 @@ AlpcpWaitForMessage(
         if (Port->Flags & ALPC_PORT_FLAG_CLOSED)
         {
             AlpcpReleaseLock();
-            return STATUS_PORT_DISCONNECTED;
+            return (Port->Flags & ALPC_PORT_FLAG_LPC) ? STATUS_PORT_DISCONNECTED : STATUS_PORT_CLOSED;
         }
 
         if (Effective && (Effective->QuadPart == 0))
@@ -930,6 +930,36 @@ AlpcpMarkSenderDisconnected(
     }
 }
 
+static
+VOID
+AlpcpRundownPendingReplies(
+    _In_ PALPC_PORT Port)
+{
+    PLIST_ENTRY PortEntry, MessageEntry, NextEntry;
+    PALPC_PORT CurrentPort;
+    PALPC_COMMUNICATION_INFO CommunicationInfo;
+    PKALPC_MESSAGE Message;
+
+    ASSERT(AlpcpLock.Owner == KeGetCurrentThread());
+
+    for (PortEntry = AlpcpPortList.Flink; PortEntry != &AlpcpPortList; PortEntry = PortEntry->Flink)
+    {
+        CurrentPort = CONTAINING_RECORD(PortEntry, ALPC_PORT, PortListEntry);
+        for (MessageEntry = CurrentPort->PendingQueue.Flink; MessageEntry != &CurrentPort->PendingQueue; MessageEntry = NextEntry)
+        {
+            NextEntry = MessageEntry->Flink;
+            Message = CONTAINING_RECORD(MessageEntry, KALPC_MESSAGE, Entry);
+            CommunicationInfo = Message->SenderPort ? Message->SenderPort->CommunicationInfo : Message->CommunicationInfo;
+            if (!(Message->State & ALPC_MSG_STATE_CONNECTION) &&
+                CommunicationInfo &&
+                CommunicationInfo->ServerCommunicationPort == Port)
+            {
+                AlpcpCompleteWithStatus(Message, ALPC_MSG_STATE_DISCONNECTED, STATUS_MESSAGE_LOST);
+            }
+        }
+    }
+}
+
 VOID
 NTAPI
 AlpcpDereferenceCommunicationInfo(
@@ -1018,6 +1048,8 @@ AlpcpDisconnectPort(
         AlpcpSendPortClosed(Port);
         AlpcpAcquireLock();
     }
+
+    if (AlpcpPortType(Port) == ALPC_PORT_TYPE_SERVER) AlpcpRundownPendingReplies(Port);
 
     AlpcpMarkSenderDisconnected(Port);
     AlpcpRundownQueues(Port);
