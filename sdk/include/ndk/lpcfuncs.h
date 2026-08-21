@@ -405,6 +405,16 @@ ZwWriteRequestData(
     _Out_ PULONG ReturnLength
 );
 
+//
+// ALPC Native calls
+//
+NTSYSAPI
+ULONG
+NTAPI
+AlpcGetHeaderSize(
+    _In_ ULONG AttributeFlags
+);
+
 NTSYSAPI
 PVOID
 NTAPI
