@@ -31,10 +31,12 @@ set(ARM64EC_RUNTIME_MODULES
     dhcpcsvc
     dinput8
     dnsapi
+    dsound
     dwmapi
     fmifs
     gdi32
     gdiplus
+    glu32
     hid
     iertutil
     imagehlp
@@ -70,7 +72,9 @@ set(ARM64EC_RUNTIME_MODULES
     oleaut32
     opengl32
     powrprof
+    psapi
     propsys
+    rsaenh
     rpcrt4
     samlib
     sechost

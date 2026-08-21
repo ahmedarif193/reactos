@@ -1142,7 +1142,7 @@ ChpepCallX64Routine(PVOID EntryPoint,
     if (!ChpeEmulatorLoaded || !ChpeDispatchTable.ExitToX64)
         return 0;
 
-    /* FEX uses the ARM64 callee-saved register bank for the x64 CPU state. */
+    /* FEX uses the ARM64EC static register map, including x8 for x64 RAX. */
     __asm__ volatile(
         "sub sp, sp, #0x100\n"
         "stp x19, x20, [sp, #0x20]\n"
@@ -1173,7 +1173,7 @@ ChpepCallX64Routine(PVOID EntryPoint,
         "ldp x21, x22, [sp, #0x30]\n"
         "ldp x19, x20, [sp, #0x20]\n"
         "add sp, sp, #0x100\n"
-        "mov %x[result], x0\n"
+        "mov %x[result], x8\n"
         : [result] "=r" (Result)
         : [arg0] "r" (Arg0),
           [arg1] "r" (Arg1),
