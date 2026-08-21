@@ -189,18 +189,6 @@ config ENABLE_RPI5_WIFI_BOOT_RUN
       name a WIFI_SSID and WIFI_KEY_FILE for connection and throughput testing
       without storing a passphrase in the source tree.
 
-config ENABLE_CHPE_GAME_BOOT_RUN
-    prompt "Run the ARM64EC (FEX) game smoke test at boot"
-    type bool
-    default n
-    depends ARCH=arm64 && ENABLE_FEX_ARM64EC
-    help
-      After desktop startup run chpe_game_start.cmd from the boot-test
-      directory when an image payload manifest (LIVECD_EXTRA_FILE_LIST or
-      PREINSTALL_EXTRA_FILE_LIST) ships it next to boot_test_start.cmd. The
-      script launches an AMD64 game through arm64ecfex and reports
-      CHPE_GAME_* markers on the debug console.
-
 endmenu
 
 config ENABLE_WALLPAPERS
