@@ -23,6 +23,9 @@ struct SETTINGS_INFO
     /* Software source settings */
     BOOL bUseSource;
     WCHAR szSourceURL[INTERNET_MAX_URL_LENGTH];
+#ifdef _M_ARM64
+    BOOL bUseAmd64Catalog;
+#endif
 };
 
 typedef SETTINGS_INFO *PSETTINGS_INFO;
@@ -30,5 +33,6 @@ typedef SETTINGS_INFO *PSETTINGS_INFO;
 BOOL LoadSettings(PSETTINGS_INFO pSettingsInfo);
 BOOL SaveSettings(HWND hwnd, PSETTINGS_INFO pSettingsInfo);
 VOID FillDefaultSettings(PSETTINGS_INFO pSettingsInfo);
+LPCWSTR GetPackageArchitecture();
 
 extern SETTINGS_INFO SettingsInfo;

@@ -118,6 +118,9 @@ HandleGeneralListItems(HWND hWndList, PSETTINGS_INFO Load, PSETTINGS_INFO Save)
         { IDS_CFG_UPDATE_AVLIST, &Info->bUpdateAtStart },
         { IDS_CFG_LOG_ENABLED, &Info->bLogEnabled },
         { IDS_CFG_SMALL_ICONS, &Info->bSmallIcons },
+#ifdef _M_ARM64
+        { IDS_APPLICATIONS, &Info->bUseAmd64Catalog },
+#endif
     };
 
     if (ListView_GetItemCount(hWndList) == 0)
@@ -139,6 +142,10 @@ HandleGeneralListItems(HWND hWndList, PSETTINGS_INFO Load, PSETTINGS_INFO Save)
             Item.iSubItem = 0;
             Item.lParam = Map[i].Id;
             Name.LoadStringW(Map[i].Id);
+#ifdef _M_ARM64
+            if (Map[i].Id == IDS_APPLICATIONS)
+                Name += L" (AMD64 / FEX)";
+#endif
             Item.pszText = const_cast<PWSTR>(Name.GetString());
             Item.iItem = ListView_InsertItem(hWndList, &Item);
         }
@@ -329,13 +336,20 @@ SettingsDlgProc(HWND hDlg, UINT Msg, WPARAM wParam, LPARAM lParam)
                             szSource.GetLength() + 1);
                     }
 
+                    BOOL bRefresh = FALSE;
                     if (SettingsInfo.bSmallIcons != NewSettingsInfo.bSmallIcons)
                     {
                         SendMessageW(hMainWnd, WM_SETTINGCHANGE, SPI_SETICONMETRICS, 0); // Note: WM_SETTINGCHANGE cannot be posted
-                        PostMessageW(hMainWnd, WM_COMMAND, ID_REFRESH, 0);
+                        bRefresh = TRUE;
                     }
+#ifdef _M_ARM64
+                    if (SettingsInfo.bUseAmd64Catalog != NewSettingsInfo.bUseAmd64Catalog)
+                        bRefresh = TRUE;
+#endif
                     SettingsInfo = NewSettingsInfo;
                     SaveSettings(GetParent(hDlg), &SettingsInfo);
+                    if (bRefresh)
+                        PostMessageW(hMainWnd, WM_COMMAND, ID_REFRESH, 0);
                     EndDialog(hDlg, LOWORD(wParam));
                 }
                 break;
