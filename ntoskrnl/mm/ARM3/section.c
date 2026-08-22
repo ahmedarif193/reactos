@@ -141,6 +141,13 @@ MiMakeProtectionMask(IN ULONG Protect)
 {
     ULONG Mask1, Mask2, ProtectMask;
 
+    /* CFG target flags are valid only when the base protection is executable. */
+    if (Protect & PAGE_TARGETS_NO_UPDATE)
+    {
+        if (!(Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))) return MM_INVALID_PROTECTION;
+        Protect &= ~PAGE_TARGETS_NO_UPDATE;
+    }
+
     /* PAGE_EXECUTE_WRITECOMBINE is theoretically the maximum */
     if (Protect >= (PAGE_WRITECOMBINE * 2)) return MM_INVALID_PROTECTION;
 

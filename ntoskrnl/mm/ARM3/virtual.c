@@ -4242,6 +4242,12 @@ NtProtectVirtualMemory(IN HANDLE ProcessHandle,
     //
     // Check for valid protection flags
     //
+    if ((NewAccessProtection & PAGE_TARGETS_NO_UPDATE) &&
+        !(NewAccessProtection & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))
+    {
+        return STATUS_INVALID_PAGE_PROTECTION;
+    }
+    NewAccessProtection &= ~PAGE_TARGETS_NO_UPDATE;
     Protection = NewAccessProtection & ~(PAGE_GUARD|PAGE_NOCACHE);
     if (Protection != PAGE_NOACCESS &&
         Protection != PAGE_READONLY &&
