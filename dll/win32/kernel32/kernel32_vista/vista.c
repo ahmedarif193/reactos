@@ -652,11 +652,9 @@ K32GetPreferredUILanguages(
 
     LocaleType = (dwFlags & MUI_LANGUAGE_ID) ? LOCALE_ILANGUAGE : LOCALE_SNAME;
 
-    if (!GetLocaleInfoW(Locale, LocaleType, Language, RTL_NUMBER_OF(Language)))
-        return FALSE;
+    if (!GetLocaleInfoW(Locale, LocaleType, Language, RTL_NUMBER_OF(Language))) return FALSE;
 
     Length = (ULONG)wcslen(Language) + 2;
-
     *pulNumLanguages = 1;
 
     if (!pwszLanguagesBuffer)
@@ -723,7 +721,7 @@ GetThreadUILanguage(VOID)
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 BOOL
 WINAPI
@@ -751,8 +749,10 @@ GetUserPreferredUILanguages(
     PZZWSTR pwszLanguagesBuffer,
     PULONG pcchLanguagesBuffer)
 {
-    DPRINT1("%x %p %p %p\n", dwFlags, pulNumLanguages, pwszLanguagesBuffer, pcchLanguagesBuffer);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    NTSTATUS Status = RtlGetUserPreferredUILanguages(dwFlags, 0, pulNumLanguages, pwszLanguagesBuffer, pcchLanguagesBuffer);
+
+    if (NT_SUCCESS(Status)) return TRUE;
+    BaseSetLastNTError(Status);
     return FALSE;
 }
 
