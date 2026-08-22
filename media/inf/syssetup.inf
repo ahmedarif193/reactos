@@ -55,6 +55,7 @@ AddReg=Classes
 11,,browseui.dll,1
 11,,cabview.dll,1
 11,,comcat.dll,1
+11,,comdlg32.dll,1
 11,,cryptdlg.dll,1
 11,,cryptnet.dll,1
 11,,d3dxof.dll,1
@@ -85,12 +86,14 @@ AddReg=Classes
 11,,mf.dll,1
 11,,mfasfsrcsnk.dll,1
 11,,mfh264enc.dll,1
+11,,mfmediaengine.dll,1
 11,,mfmp4srcsnk.dll,1
 11,,mfplay.dll,1
 11,,mfreadwrite.dll,1
 11,,mfsrcsnk.dll,1
 11,,mmdevapi.dll,1
 11,,mscat32.dll,1
+11,,mscoree.dll,1
 11,,msctf.dll,1
 11,,mshtml.dll,3
 11,,msi.dll,1
@@ -117,6 +120,7 @@ AddReg=Classes
 11,,portabledevicetypes.dll,1
 11,,propsys.dll,1
 11,,pstorec.dll,1
+11,,qcap.dll,1
 11,,qedit.dll,1
 11,,qasf.dll,1
 11,,qmgr.dll,1

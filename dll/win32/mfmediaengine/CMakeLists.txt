@@ -8,7 +8,7 @@ add_library(mfmediaengine MODULE ${SOURCE} ${CMAKE_CURRENT_BINARY_DIR}/mfmediaen
 add_idl_reg_scripts(mfmediaengine registry mediaengine_classes.idl)
 set_module_type(mfmediaengine win32dll)
 target_compile_definitions(mfmediaengine PRIVATE __WINESRC__)
-target_link_libraries(mfmediaengine mfuuid uuid wine wine_dll_canunload)
+target_link_libraries(mfmediaengine mfuuid uuid wine wine_dll_canunload wine_dll_register)
 add_importlibs(mfmediaengine oleaut32 ole32 mfplat mf msvcrt kernel32 ntdll)
 add_cd_file(TARGET mfmediaengine DESTINATION reactos/system32 FOR all)
 set_wine_module(mfmediaengine)
