@@ -1183,6 +1183,9 @@ static DWORD APPINFO_QueryOption(object_header_t *hdr, DWORD option, void *buffe
             INTERNET_PER_CONN_OPTIONA *optionA = conA->pOptions + i;
 
             switch (optionW->dwOption) {
+#ifdef __REACTOS__
+            case INTERNET_PER_CONN_FLAGS_UI:
+#endif
             case INTERNET_PER_CONN_FLAGS:
                 optionW->Value.dwValue = global_proxy.flags;
                 break;
@@ -1267,8 +1270,16 @@ static DWORD APPINFO_SetOption(object_header_t *hdr, DWORD option, void *buf, DW
                 global_proxy.proxy = wcsdup(option->Value.pszValue);
                 break;
 
+#ifdef __REACTOS__
+            case INTERNET_PER_CONN_FLAGS_UI:
+#endif
             case INTERNET_PER_CONN_FLAGS:
+#ifdef __REACTOS__
+                if(option->Value.dwValue & ~(PROXY_TYPE_PROXY | PROXY_TYPE_DIRECT |
+                                             PROXY_TYPE_AUTO_PROXY_URL | PROXY_TYPE_AUTO_DETECT))
+#else
                 if(option->Value.dwValue & ~(PROXY_TYPE_PROXY | PROXY_TYPE_DIRECT))
+#endif
                     FIXME("Unhandled flags: 0x%lx\n", option->Value.dwValue);
                 global_proxy.flags = option->Value.dwValue;
                 break;
@@ -3023,6 +3034,9 @@ static DWORD query_global_option(DWORD option, void *buffer, DWORD *size, BOOL u
             INTERNET_PER_CONN_OPTIONA *optionA = conA->pOptions + i;
 
             switch (optionW->dwOption) {
+#ifdef __REACTOS__
+            case INTERNET_PER_CONN_FLAGS_UI:
+#endif
             case INTERNET_PER_CONN_FLAGS:
                 optionW->Value.dwValue = pi.flags;
                 break;
@@ -3648,8 +3662,16 @@ BOOL WINAPI InternetSetOptionW(HINTERNET hInternet, DWORD dwOption,
                 pi.proxy = wcsdup(option->Value.pszValue);
                 break;
 
+#ifdef __REACTOS__
+            case INTERNET_PER_CONN_FLAGS_UI:
+#endif
             case INTERNET_PER_CONN_FLAGS:
+#ifdef __REACTOS__
+                if(option->Value.dwValue & ~(PROXY_TYPE_PROXY | PROXY_TYPE_DIRECT |
+                                             PROXY_TYPE_AUTO_PROXY_URL | PROXY_TYPE_AUTO_DETECT))
+#else
                 if(option->Value.dwValue & ~(PROXY_TYPE_PROXY | PROXY_TYPE_DIRECT))
+#endif
                     FIXME("Unhandled flags: 0x%lx\n", option->Value.dwValue);
                 pi.flags = option->Value.dwValue;
                 break;
@@ -3793,6 +3815,9 @@ BOOL WINAPI InternetSetOptionA(HINTERNET hInternet, DWORD dwOption,
                     optW->Value.pszValue = NULL;
                 break;
             case INTERNET_PER_CONN_AUTODISCOVERY_FLAGS:
+#ifdef __REACTOS__
+            case INTERNET_PER_CONN_FLAGS_UI:
+#endif
             case INTERNET_PER_CONN_FLAGS:
             case INTERNET_PER_CONN_AUTOCONFIG_RELOAD_DELAY_MINS:
                 optW->Value.dwValue = optA->Value.dwValue;
