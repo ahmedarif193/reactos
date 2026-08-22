@@ -209,6 +209,9 @@ FUNC KiDebugTrapOrFault
     sti
 
 KiDebugTrapOrFaultKMode:
+    /* Do not single-step the exception dispatcher itself */
+    and dword ptr [rbp + KTRAP_FRAME_EFlags], HEX(FFFFFEFF)
+
     /* Dispatch the exception */
     DispatchException STATUS_SINGLE_STEP, 0, 0, 0, 0
 
