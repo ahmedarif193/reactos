@@ -1871,12 +1871,6 @@ ChpeNtAdjustPrivilegesToken(HANDLE TokenHandle, BOOLEAN DisableAllPrivileges, PT
 }
 
 NTSTATUS NTAPI
-ChpeNtClose(HANDLE Handle)
-{
-    return NtClose(Handle);
-}
-
-NTSTATUS NTAPI
 ChpeNtAllocateVirtualMemory(HANDLE ProcessHandle, PVOID *BaseAddress, ULONG_PTR ZeroBits, PSIZE_T RegionSize, ULONG AllocationType, ULONG Protect)
 {
     return NtAllocateVirtualMemory(ProcessHandle, BaseAddress, ZeroBits, RegionSize, AllocationType, Protect);
