@@ -955,7 +955,9 @@ end:
 
 HRESULT WINAPI DllRegisterServer(void)
 {
+#ifndef __REACTOS__
     install_wine_mono();
+#endif
 
     return __wine_register_resources();
 }
