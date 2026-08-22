@@ -427,6 +427,8 @@ typedef struct _PCI_MSIX_TABLE_ENTRY
     ULONG VectorControl;
 } PCI_MSIX_TABLE_ENTRY, *PPCI_MSIX_TABLE_ENTRY;
 
+#define PCI_MSIX_VECTOR_CONTROL_MASK 0x00000001
+
 typedef struct _PCI_MSIX_MESSAGE_INFO
 {
     ULONG Vector;
@@ -1477,6 +1479,10 @@ PciPdoEnableMsix(
     ULONG ProgramCount;
     ULONG i;
     USHORT Control;
+    USHORT Command;
+    USHORT EnabledCommand;
+    USHORT ReadControl;
+    BOOLEAN EnabledMemoryDecode = FALSE;
     NTSTATUS Status;
 
     Device = DeviceExtension->PciDevice;
@@ -1490,17 +1496,51 @@ PciPdoEnableMsix(
     if (Device->MsixTableSize != 0 && ProgramCount > Device->MsixTableSize)
         ProgramCount = Device->MsixTableSize;
 
+    /*
+     * The MSI-X table lives in a memory BAR.  A restarted PDO reaches this
+     * helper with its decodes disabled by PciPdoDisableDecodes, so MMIO writes
+     * to the table would otherwise be dropped even though MmMapIoSpace and the
+     * following configuration-space writes report success.
+     */
+    if (PciPdoGetBusDataByOffset(DeviceExtension,
+                                 &Command,
+                                 FIELD_OFFSET(PCI_COMMON_CONFIG, Command),
+                                 sizeof(Command)) != sizeof(Command))
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    if (!(Command & PCI_ENABLE_MEMORY_SPACE))
+    {
+        EnabledCommand = Command | PCI_ENABLE_MEMORY_SPACE;
+        if (PciPdoSetBusDataByOffset(DeviceExtension,
+                                     &EnabledCommand,
+                                     FIELD_OFFSET(PCI_COMMON_CONFIG, Command),
+                                     sizeof(EnabledCommand)) != sizeof(EnabledCommand))
+        {
+            return STATUS_DEVICE_CONFIGURATION_ERROR;
+        }
+        EnabledMemoryDecode = TRUE;
+    }
+
     Control = Device->MsixControl | PCI_MSIX_FLAGS_MASKALL;
-    PciPdoSetBusDataByOffset(DeviceExtension,
-                             &Control,
-                             Device->MsixCapability + PCI_MSIX_FLAGS,
-                             sizeof(Control));
+    if (PciPdoSetBusDataByOffset(DeviceExtension,
+                                 &Control,
+                                 Device->MsixCapability + PCI_MSIX_FLAGS,
+                                 sizeof(Control)) != sizeof(Control))
+    {
+        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        goto CleanupDecode;
+    }
 
     TableMapping = MmMapIoSpace(TableAddress,
                                 ProgramCount * sizeof(PCI_MSIX_TABLE_ENTRY),
                                 MmNonCached);
     if (!TableMapping)
-        return STATUS_INSUFFICIENT_RESOURCES;
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto CleanupDecode;
+    }
 
     for (i = 0; i < ProgramCount; ++i)
     {
@@ -1535,10 +1575,7 @@ PciPdoEnableMsix(
         RoutingInfo.MessageCount = 1;
         Status = HalpGetMessageRoutingInfo(&RoutingInfo);
         if (!NT_SUCCESS(Status))
-        {
-            MmUnmapIoSpace(TableMapping, ProgramCount * sizeof(PCI_MSIX_TABLE_ENTRY));
-            return Status;
-        }
+            goto CleanupMapping;
 
         AddressLow = RoutingInfo.MessageAddress.LowPart;
         AddressHigh = RoutingInfo.MessageAddress.HighPart;
@@ -1551,10 +1588,7 @@ PciPdoEnableMsix(
                                           &AddressHigh,
                                           &Data);
         if (!NT_SUCCESS(Status))
-        {
-            MmUnmapIoSpace(TableMapping, ProgramCount * sizeof(PCI_MSIX_TABLE_ENTRY));
-            return Status;
-        }
+            goto CleanupMapping;
 #elif (NTDDI_VERSION >= NTDDI_WIN7)
         RtlZeroMemory(&TargetInfo, sizeof(TargetInfo));
         TargetInfo.Version = HAL_INTERRUPT_TARGET_INFORMATION_VERSION;
@@ -1570,10 +1604,7 @@ PciPdoEnableMsix(
         RoutingInfo.MessageCount = 1;
         Status = HalGetMessageRoutingInfo(&RoutingInfo);
         if (!NT_SUCCESS(Status))
-        {
-            MmUnmapIoSpace(TableMapping, ProgramCount * sizeof(PCI_MSIX_TABLE_ENTRY));
-            return Status;
-        }
+            goto CleanupMapping;
 
         AddressLow = RoutingInfo.MessageAddress.LowPart;
         AddressHigh = RoutingInfo.MessageAddress.HighPart;
@@ -1588,18 +1619,63 @@ PciPdoEnableMsix(
         WRITE_REGISTER_ULONG(&Entry->MessageAddressHigh, AddressHigh);
         WRITE_REGISTER_ULONG(&Entry->MessageData, Data);
         WRITE_REGISTER_ULONG(&Entry->VectorControl, 0);
+
+        /* Flush posted MMIO writes and reject a silently inaccessible BAR. */
+        KeMemoryBarrier();
+        if (READ_REGISTER_ULONG(&Entry->MessageAddressLow) != AddressLow ||
+            READ_REGISTER_ULONG(&Entry->MessageAddressHigh) != AddressHigh ||
+            READ_REGISTER_ULONG(&Entry->MessageData) != Data ||
+            (READ_REGISTER_ULONG(&Entry->VectorControl) & PCI_MSIX_VECTOR_CONTROL_MASK))
+        {
+            DPRINT1("PCI PDO: MSI-X table entry %lu readback failed at 0x%I64x\n",
+                    i,
+                    TableAddress.QuadPart + i * sizeof(PCI_MSIX_TABLE_ENTRY));
+            Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+            goto CleanupMapping;
+        }
     }
 
     Control |= PCI_MSIX_FLAGS_ENABLE;
     Control &= ~PCI_MSIX_FLAGS_MASKALL;
-    PciPdoSetBusDataByOffset(DeviceExtension,
-                             &Control,
-                             Device->MsixCapability + PCI_MSIX_FLAGS,
-                             sizeof(Control));
-    Device->MsixControl = Control;
+    if (PciPdoSetBusDataByOffset(DeviceExtension,
+                                 &Control,
+                                 Device->MsixCapability + PCI_MSIX_FLAGS,
+                                 sizeof(Control)) != sizeof(Control) ||
+        PciPdoGetBusDataByOffset(DeviceExtension,
+                                 &ReadControl,
+                                 Device->MsixCapability + PCI_MSIX_FLAGS,
+                                 sizeof(ReadControl)) != sizeof(ReadControl) ||
+        !(ReadControl & PCI_MSIX_FLAGS_ENABLE) ||
+        (ReadControl & PCI_MSIX_FLAGS_MASKALL))
+    {
+        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        goto CleanupMapping;
+    }
+
+    Device->MsixControl = ReadControl;
     Status = STATUS_SUCCESS;
 
+CleanupMapping:
     MmUnmapIoSpace(TableMapping, ProgramCount * sizeof(PCI_MSIX_TABLE_ENTRY));
+
+CleanupDecode:
+    if (!NT_SUCCESS(Status))
+    {
+        Control = Device->MsixControl | PCI_MSIX_FLAGS_MASKALL;
+        PciPdoSetBusDataByOffset(DeviceExtension,
+                                 &Control,
+                                 Device->MsixCapability + PCI_MSIX_FLAGS,
+                                 sizeof(Control));
+
+        if (EnabledMemoryDecode)
+        {
+            PciPdoSetBusDataByOffset(DeviceExtension,
+                                     &Command,
+                                     FIELD_OFFSET(PCI_COMMON_CONFIG, Command),
+                                     sizeof(Command));
+        }
+    }
+
     return Status;
 }
 
