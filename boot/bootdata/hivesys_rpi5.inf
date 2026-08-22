@@ -6,10 +6,8 @@
 [AddReg]
 
 ; Raspberry Pi 5 VideoCore VII GPU + HVS/PixelValve display pipeline. The UEFI
-; firmware exposes it as ACPI device _HID "BCM2712" and _CID "BCM2850".
-; Bind either identifier to the configuration-selected rpi5vc4 provider:
+; firmware exposes it as ACPI device _HID "BCM2712". Bind that Pi 5-specific
+; identifier to the configuration-selected rpi5vc4 provider:
 ; VideoPort for XPDM or dxgkrnl for WDDM 2.0 and later.
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2712","Service",0x00000000,"rpi5vc4"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2712","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2850","Service",0x00000000,"rpi5vc4"
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2850","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
