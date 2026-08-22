@@ -5,4 +5,4 @@ target_compile_definitions(windows_networking_hostname_winetest PRIVATE WINETEST
 target_link_libraries(windows_networking_hostname_winetest uuid)
 set_module_type(windows_networking_hostname_winetest win32cui)
 add_importlibs(windows_networking_hostname_winetest combase msvcrt kernel32)
-add_rostests_file(TARGET windows_networking_hostname_winetest)
+add_rostests_file(TARGET windows_networking_hostname_winetest RENAME wnhost.exe)
