@@ -519,12 +519,27 @@ LdrpCallTlsInitializers(IN PLDR_DATA_TABLE_ENTRY LdrEntry,
             }
         }
     }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    _SEH2_EXCEPT(LdrpDebugExceptionFilter(_SEH2_GetExceptionInformation()))
     {
-        DPRINT1("LDR: Exception 0x%x during Tls Callback(%u) for %wZ\n",
-                _SEH2_GetExceptionCode(), Reason, &LdrEntry->BaseDllName);
+        DPRINT1("LDR: Exception during Tls Callback(%u) for %wZ\n",
+                Reason, &LdrEntry->BaseDllName);
     }
     _SEH2_END;
+}
+
+LONG
+NTAPI
+LdrpDebugExceptionFilter(IN PEXCEPTION_POINTERS ExceptionPointers)
+{
+    PEXCEPTION_RECORD ExceptionRecord = ExceptionPointers->ExceptionRecord;
+
+    DPRINT1("LDR: Exception 0x%08lx at %p flags 0x%08lx info %Ix/%Ix\n",
+            ExceptionRecord->ExceptionCode,
+            ExceptionRecord->ExceptionAddress,
+            ExceptionRecord->ExceptionFlags,
+            ExceptionRecord->NumberParameters > 0 ? ExceptionRecord->ExceptionInformation[0] : 0,
+            ExceptionRecord->NumberParameters > 1 ? ExceptionRecord->ExceptionInformation[1] : 0);
+    return EXCEPTION_EXECUTE_HANDLER;
 }
 
 NTSTATUS

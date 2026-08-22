@@ -1023,11 +1023,11 @@ LdrpRunInitializeRoutines(IN PCONTEXT Context OPTIONAL)
                                                 DLL_PROCESS_ATTACH,
                                                 Context);
             }
-            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            _SEH2_EXCEPT(LdrpDebugExceptionFilter(_SEH2_GetExceptionInformation()))
             {
                 DllStatus = FALSE;
-                DPRINT1("WARNING: Exception 0x%x during LdrpCallInitRoutine(DLL_PROCESS_ATTACH) for %wZ\n",
-                        _SEH2_GetExceptionCode(), &LdrEntry->BaseDllName);
+                DPRINT1("WARNING: Exception during LdrpCallInitRoutine(DLL_PROCESS_ATTACH) for %wZ\n",
+                        &LdrEntry->BaseDllName);
             }
             _SEH2_END;
 
