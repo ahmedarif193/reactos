@@ -893,6 +893,59 @@ ObpCloseHandleTableEntry(IN PHANDLE_TABLE HandleTable,
 }
 
 /*++
+* @name ObpRollbackHandleCount
+*
+*     Undo the bookkeeping performed before an object type open callback.
+*
+*--*/
+static
+VOID
+ObpRollbackHandleCount(
+    _In_ POBJECT_HEADER ObjectHeader,
+    _In_ POBJECT_TYPE ObjectType,
+    _In_ PEPROCESS Process)
+{
+    POBJECT_HEADER_HANDLE_INFO HandleInfo;
+    POBJECT_HANDLE_COUNT_DATABASE HandleDatabase;
+    POBJECT_HANDLE_COUNT_ENTRY HandleEntry = NULL;
+    LONG NewCount;
+    ULONG i;
+
+    ObpAcquireObjectLock(ObjectHeader);
+    NewCount = InterlockedDecrementSizeT(&ObjectHeader->HandleCount);
+    if (!(NewCount) && (ObjectHeader->Flags & OB_FLAG_EXCLUSIVE)) OBJECT_HEADER_TO_PROCESS_INFO(ObjectHeader)->ExclusiveProcess = NULL;
+
+    if (ObjectType->TypeInfo.MaintainHandleCount)
+    {
+        HandleInfo = OBJECT_HEADER_TO_HANDLE_INFO(ObjectHeader);
+        if (ObjectHeader->Flags & OB_FLAG_SINGLE_PROCESS)
+        {
+            ASSERT(HandleInfo->SingleEntry.Process == Process);
+            HandleEntry = &HandleInfo->SingleEntry;
+        }
+        else
+        {
+            HandleDatabase = HandleInfo->HandleCountDatabase;
+            if (HandleDatabase)
+            {
+                HandleEntry = &HandleDatabase->HandleCountEntries[0];
+                for (i = 0; i < HandleDatabase->CountEntries; i++, HandleEntry++)
+                {
+                    if (HandleEntry->HandleCount && HandleEntry->Process == Process) break;
+                }
+                if (i == HandleDatabase->CountEntries) HandleEntry = NULL;
+            }
+        }
+
+        ASSERT(HandleEntry != NULL);
+        ASSERT(!HandleEntry || HandleEntry->HandleCount != 0);
+        if (HandleEntry && HandleEntry->HandleCount && !--HandleEntry->HandleCount) HandleEntry->Process = NULL;
+    }
+
+    ObpReleaseObjectLock(ObjectHeader);
+}
+
+/*++
 * @name ObpIncrementHandleCount
 *
 *     The ObpIncrementHandleCount routine <FILLMEIN>
@@ -1115,9 +1168,7 @@ ObpIncrementHandleCount(IN PVOID Object,
         /* Check if the open procedure failed */
         if (!NT_SUCCESS(Status))
         {
-            /* FIXME: This should never happen for now */
-            DPRINT1("Unhandled case\n");
-            ASSERT(FALSE);
+            ObpRollbackHandleCount(ObjectHeader, ObjectType, Process);
             return Status;
         }
     }
@@ -1335,9 +1386,7 @@ ObpIncrementUnnamedHandleCount(IN PVOID Object,
         /* Check if the open procedure failed */
         if (!NT_SUCCESS(Status))
         {
-            /* FIXME: This should never happen for now */
-            DPRINT1("Unhandled case\n");
-            ASSERT(FALSE);
+            ObpRollbackHandleCount(ObjectHeader, ObjectType, Process);
             return Status;
         }
     }
