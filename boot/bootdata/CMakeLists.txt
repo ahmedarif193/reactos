@@ -159,6 +159,11 @@ add_livecd_shortcut("Command Prompt"
     "shell:system\\cmd.exe" ICON_INDEX 0
     WORKDIR "${envvar_homedrive}${envvar_homepath}"
     DESTINATION "${dir_allusers_desktop}" "${dir_startmenu_accessories}" "${dir_quicklaunch}")
+if(ARCH STREQUAL "arm64")
+    add_livecd_shortcut("Applications Manager"
+        "shell:system\\rapps.exe" ICON_INDEX 0
+        DESTINATION "${dir_allusers_desktop}")
+endif()
 add_livecd_shortcut("Device Manager"
     "shell:system\\devmgmt.exe" ICON_INDEX 0
     DESTINATION "${dir_allusers_desktop}" "${dir_startmenu_admintools}")

@@ -129,6 +129,9 @@ AddInfoFields(ATL::CAtlList<SettingsField *> &infoFields, SETTINGS_INFO &setting
     infoFields.AddTail(new SettingsFieldString((settings.szNoProxyFor), MAX_PATH, L"NoProxyFor"));
     infoFields.AddTail(new SettingsFieldBool(&(settings.bUseSource), L"bUseSource"));
     infoFields.AddTail(new SettingsFieldString((settings.szSourceURL), INTERNET_MAX_URL_LENGTH, L"SourceURL"));
+#ifdef _M_ARM64
+    infoFields.AddTail(new SettingsFieldBool(&(settings.bUseAmd64Catalog), L"bUseAmd64Catalog"));
+#endif
 }
 
 static BOOL
@@ -216,6 +219,9 @@ FillDefaultSettings(PSETTINGS_INFO pSettingsInfo)
     pSettingsInfo->bUpdateAtStart = FALSE;
     pSettingsInfo->bLogEnabled = TRUE;
     pSettingsInfo->bUseSource = FALSE;
+#ifdef _M_ARM64
+    pSettingsInfo->bUseAmd64Catalog = FALSE;
+#endif
     pSettingsInfo->bDelInstaller = FALSE;
     pSettingsInfo->Maximized = FALSE;
     pSettingsInfo->Left = CW_USEDEFAULT;
@@ -224,6 +230,16 @@ FillDefaultSettings(PSETTINGS_INFO pSettingsInfo)
     pSettingsInfo->Height = 450;
 
     ValidateStringSettings(pSettingsInfo);
+}
+
+LPCWSTR
+GetPackageArchitecture()
+{
+#ifdef _M_ARM64
+    return SettingsInfo.bUseAmd64Catalog ? L"amd64" : L"arm64";
+#else
+    return CurrentArchitecture;
+#endif
 }
 
 BOOL

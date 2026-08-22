@@ -22,6 +22,7 @@ struct CSectionNames
 {
     CLocaleSections ArchSpecific;
     CLocaleSections ArchNeutral;
+    CStringW Architecture;
 };
 static CSectionNames g_Names;
 
@@ -104,6 +105,13 @@ CConfigParser::ReadSection(CStringW &Buffer, const CStringW &Section, BOOL isArc
 VOID
 CConfigParser::CacheINI()
 {
+    LPCWSTR Architecture = GetPackageArchitecture();
+    if (g_Names.Architecture != Architecture)
+    {
+        g_Names = CSectionNames();
+        g_Names.Architecture = Architecture;
+    }
+
     // Cache section names
     if (g_Names.ArchSpecific.Locale.IsEmpty())
     {
@@ -114,17 +122,17 @@ CConfigParser::CacheINI()
         szLocaleID.ReleaseBuffer();
         CString INISectionLocale = L"Section." + szLocaleID;
 
-        g_Names.ArchSpecific.Locale = INISectionLocale + L"." CurrentArchitecture;
+        g_Names.ArchSpecific.Locale = INISectionLocale + L"." + g_Names.Architecture;
         g_Names.ArchNeutral.Locale = INISectionLocale;
 
         // turn "Section.0c0a" into "Section.0a", keeping just the neutral lang part
         if (szLocaleID.GetLength() >= 2)
         {
-            g_Names.ArchSpecific.LocaleNeutral = L"Section." + szLocaleID.Right(2) + L"." CurrentArchitecture;
+            g_Names.ArchSpecific.LocaleNeutral = L"Section." + szLocaleID.Right(2) + L"." + g_Names.Architecture;
             g_Names.ArchNeutral.LocaleNeutral = L"Section." + szLocaleID.Right(2);
         }
 
-        g_Names.ArchSpecific.Section = L"Section." CurrentArchitecture;
+        g_Names.ArchSpecific.Section = L"Section." + g_Names.Architecture;
         g_Names.ArchNeutral.Section = L"Section";
     }
 
@@ -186,21 +194,22 @@ CConfigParser::GetSectionString(LPCWSTR Section, LPCWSTR Name, CStringW &Result)
 {
     HRESULT hr; // Return value; length of ini string or 0 on failure.
     CStringW SecBuf;
+    LPCWSTR Architecture = GetPackageArchitecture();
     WCHAR FullLoc[5], *NeutralLoc = FullLoc + 2;
     GetLocaleInfoW(GetUserDefaultLCID(), LOCALE_ILANGUAGE, FullLoc, _countof(FullLoc));
 
-    SecBuf.Format(L"%s.%s.%s", Section, FullLoc, CurrentArchitecture);
+    SecBuf.Format(L"%s.%s.%s", Section, FullLoc, Architecture);
     if ((hr = ReadIniValue(szConfigPath, SecBuf, Name, Result)) > 0)
         return hr;
 
     if (*NeutralLoc)
     {
-        SecBuf.Format(L"%s.%s.%s", Section, NeutralLoc, CurrentArchitecture);
+        SecBuf.Format(L"%s.%s.%s", Section, NeutralLoc, Architecture);
         if ((hr = ReadIniValue(szConfigPath, SecBuf, Name, Result)) > 0)
             return hr;
     }
 
-    SecBuf.Format(L"%s.%s", Section, CurrentArchitecture);
+    SecBuf.Format(L"%s.%s", Section, Architecture);
     if ((hr = ReadIniValue(szConfigPath, SecBuf, Name, Result)) > 0)
         return hr;
 
