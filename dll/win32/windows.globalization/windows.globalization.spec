@@ -1,3 +1,3 @@
-@ stdcall -private DllCanUnloadNow()
+1 stdcall -private DllCanUnloadNow()
 2 stdcall -private DllGetActivationFactory(ptr ptr)
-@ stdcall -private DllGetClassObject(ptr ptr ptr)
+3 stdcall -private DllGetClassObject(ptr ptr ptr)
