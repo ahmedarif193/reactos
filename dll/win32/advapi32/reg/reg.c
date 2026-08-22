@@ -4472,6 +4472,33 @@ Cleanup:
 }
 
 
+/******************************************************************************
+ * RegRenameKey [ADVAPI32.@]
+ *
+ */
+LSTATUS WINAPI RegRenameKey(HKEY hkey, LPCWSTR subkey_name, LPCWSTR new_name)
+{
+    UNICODE_STRING str;
+    LSTATUS ret;
+    HKEY subkey;
+
+    TRACE("%p, %s, %s.\n", hkey, debugstr_w(subkey_name), debugstr_w(new_name));
+
+    RtlInitUnicodeString(&str, new_name);
+
+    if (!subkey_name)
+        return RtlNtStatusToDosError(NtRenameKey(hkey, &str));
+
+    if ((ret = RegOpenKeyExW(hkey, subkey_name, 0, KEY_WRITE, &subkey)))
+        return ret;
+
+    ret = RtlNtStatusToDosError(NtRenameKey(subkey, &str));
+    RegCloseKey(subkey);
+
+    return ret;
+}
+
+
 /************************************************************************
  *  RegRestoreKeyA
  *
