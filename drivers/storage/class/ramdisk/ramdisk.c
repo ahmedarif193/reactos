@@ -1968,7 +1968,20 @@ RamdiskCreateDiskDevice(IN PRAMDISK_BUS_EXTENSION DeviceExtension,
         DriveExtension->BytesPerSector = 0;
         DriveExtension->SectorsPerTrack = 0;
         DriveExtension->NumberOfHeads = 0;
-        DriveExtension->DiskNumber = (ULONG)(InterlockedIncrement(&RamdiskDiskNumberSeed) - 1);
+        if (Input->DiskType == RAMDISK_BOOT_DISK)
+        {
+            /*
+             * A boot RAM disk has no backing physical disk.  Native WinPE
+             * reports ULONG_MAX for its volume extent, which also prevents
+             * applications from confusing X: with PhysicalDrive0.
+             */
+            DriveExtension->DiskNumber = ULONG_MAX;
+        }
+        else
+        {
+            DriveExtension->DiskNumber =
+                (ULONG)(InterlockedIncrement(&RamdiskDiskNumberSeed) - 1);
+        }
         DriveExtension->HiddenSectors = 0;
         DriveExtension->VolumeOffline = FALSE;
         DriveExtension->MountdevLinkCount = 0;
@@ -3793,6 +3806,14 @@ RamdiskDeviceControl(IN PDEVICE_OBJECT DeviceObject,
             case IOCTL_NORMALIZE_ACCESS(IOCTL_STORAGE_GET_DEVICE_NUMBER):
             {
                 PSTORAGE_DEVICE_NUMBER DeviceNumber;
+
+                /* A boot RAM disk is a volume, not a physical storage device. */
+                if (DriveExtension->DiskType == RAMDISK_BOOT_DISK)
+                {
+                    Status = STATUS_INVALID_DEVICE_REQUEST;
+                    Information = 0;
+                    break;
+                }
 
                 if (IoStackLocation->Parameters.DeviceIoControl.OutputBufferLength < sizeof(STORAGE_DEVICE_NUMBER))
                 {
