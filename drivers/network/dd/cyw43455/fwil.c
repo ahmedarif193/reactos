@@ -646,7 +646,8 @@ CywActivateEvents(
         BRCMF_E_SET_SSID, BRCMF_E_JOIN, BRCMF_E_AUTH, BRCMF_E_DEAUTH,
         BRCMF_E_DEAUTH_IND, BRCMF_E_ASSOC, BRCMF_E_REASSOC,
         BRCMF_E_REASSOC_IND, BRCMF_E_DISASSOC, BRCMF_E_DISASSOC_IND,
-        BRCMF_E_LINK, BRCMF_E_MIC_ERROR, BRCMF_E_ROAM, BRCMF_E_IF,
+        BRCMF_E_LINK, BRCMF_E_MIC_ERROR, BRCMF_E_ROAM, BRCMF_E_TXFAIL,
+        BRCMF_E_EAPOL_MSG, BRCMF_E_PSK_SUP, BRCMF_E_IF,
         BRCMF_E_ESCAN_RESULT
     };
     ULONG i;
@@ -1000,6 +1001,7 @@ CywConnect(
     UCHAR PairwiseSuite;
     UCHAR GroupSuite;
     BOOLEAN Sae;
+    BOOLEAN FirmwareSupplicant;
     CYW_CONNECT_SETTINGS Settings;
     NTSTATUS Status;
 
@@ -1036,10 +1038,14 @@ CywConnect(
     NdisReleaseSpinLock(&Adapter->Lock);
 
     Sae = (Settings.AuthAlgorithm == DOT11_AUTH_ALGO_WPA3_SAE);
+    FirmwareSupplicant =
+        (Settings.AuthAlgorithm == DOT11_AUTH_ALGO_RSNA_PSK || Sae);
     if (Settings.SsidLength == 0 ||
         Settings.SsidLength > DOT11_SSID_MAX_LENGTH ||
         Settings.SaePasswordLength > CYW_SAE_PASSWORD_MAX ||
-        (Sae && Settings.SaePasswordLength == 0))
+        (FirmwareSupplicant && Settings.SaePasswordLength == 0) ||
+        (Settings.AuthAlgorithm == DOT11_AUTH_ALGO_RSNA_PSK &&
+         Settings.SaePasswordLength != 32))
     {
         Status = STATUS_INVALID_DEVICE_STATE;
         goto Exit;
@@ -1142,7 +1148,8 @@ CywConnect(
         goto Exit;
     }
 
-    Status = CywFilIovarSetInt(Adapter, "sup_wpa", Sae ? 1 : 0);
+    Status = CywFilIovarSetInt(Adapter, "sup_wpa",
+                               FirmwareSupplicant ? 1 : 0);
     if (!NT_SUCCESS(Status))
     {
         goto Exit;
@@ -1193,13 +1200,13 @@ CywConnect(
         }
     }
 
-    if (Sae)
+    if (FirmwareSupplicant)
     {
         CYW_WSEC_PMK_LE Pmk;
 
         RtlZeroMemory(&Pmk, sizeof(Pmk));
         Pmk.KeyLen = (USHORT)Settings.SaePasswordLength;
-        Pmk.Flags = CYW_WSEC_PASSPHRASE;
+        Pmk.Flags = Sae ? CYW_WSEC_PASSPHRASE : 0;
         RtlCopyMemory(Pmk.Key, Settings.SaePassword,
                       Settings.SaePasswordLength);
         Status = CywFilCmdSet(Adapter, BRCMF_C_SET_WSEC_PMK, &Pmk, sizeof(Pmk));
@@ -1278,6 +1285,8 @@ CywDisconnect(
     NdisAcquireSpinLock(&Adapter->Lock);
     Adapter->Associated = FALSE;
     Adapter->LinkUp = FALSE;
+    Adapter->FirmwareHandshakeComplete = FALSE;
+    Adapter->PortAuthorized = FALSE;
     Adapter->ConnectedChannelFrequency = 0;
     Adapter->ConnectedRssi = 0;
     Adapter->CurrentRateUnits500Kbps = 0;
@@ -1487,6 +1496,7 @@ CywProcessEvent(
     {
         USHORT LinkFlags = RtlUshortByteSwap(Msg->Flags);
         BOOLEAN WasUp;
+        BOOLEAN Complete = FALSE;
 
         if (LinkFlags & BRCMF_EVENT_MSG_LINK)
         {
@@ -1509,11 +1519,19 @@ CywProcessEvent(
                 }
             }
             Adapter->Associated = TRUE;
-            Adapter->LinkUp = TRUE;
-            NdisReleaseSpinLock(&Adapter->Lock);
-            CywCompletePendingConnect(Adapter, NDIS_STATUS_SUCCESS);
-            if (!WasUp)
+            if (!Adapter->FirmwareSupplicant ||
+                Adapter->FirmwareHandshakeComplete)
             {
+                Adapter->LinkUp = TRUE;
+                Adapter->PortAuthorized =
+                    (Adapter->AuthAlgorithm == DOT11_AUTH_ALGO_80211_OPEN ||
+                     Adapter->FirmwareHandshakeComplete);
+                Complete = !WasUp;
+            }
+            NdisReleaseSpinLock(&Adapter->Lock);
+            if (Complete)
+            {
+                CywCompletePendingConnect(Adapter, NDIS_STATUS_SUCCESS);
                 /* Link speed and RSSI need firmware round-trips that cannot
                  * run on the bus thread; a work item indicates link state
                  * and link quality with live values. */
@@ -1526,6 +1544,8 @@ CywProcessEvent(
             WasUp = Adapter->LinkUp;
             Adapter->Associated = FALSE;
             Adapter->LinkUp = FALSE;
+            Adapter->FirmwareHandshakeComplete = FALSE;
+            Adapter->PortAuthorized = FALSE;
             Adapter->ConnectedChannelFrequency = 0;
             Adapter->ConnectedRssi = 0;
             Adapter->CurrentRateUnits500Kbps = 0;
@@ -1554,6 +1574,32 @@ CywProcessEvent(
         else
         {
             InterlockedExchange(&Adapter->JoinRetries, 0);
+        }
+    }
+    else if (EventType == BRCMF_E_PSK_SUP)
+    {
+        BOOLEAN Complete = FALSE;
+
+        if (EventStatus == BRCMF_E_STATUS_FWSUP_COMPLETED)
+        {
+            NdisAcquireSpinLock(&Adapter->Lock);
+            if (Adapter->FirmwareSupplicant)
+            {
+                Adapter->FirmwareHandshakeComplete = TRUE;
+                if (Adapter->Associated && !Adapter->LinkUp)
+                {
+                    Adapter->LinkUp = TRUE;
+                    Adapter->PortAuthorized = TRUE;
+                    Complete = TRUE;
+                }
+            }
+            NdisReleaseSpinLock(&Adapter->Lock);
+
+            if (Complete)
+            {
+                CywCompletePendingConnect(Adapter, NDIS_STATUS_SUCCESS);
+                CywQueueLinkUpWork(Adapter);
+            }
         }
     }
 }

@@ -609,17 +609,14 @@ NwifiMsmConnect(
         goto ConnectFailed;
     }
 
-    /* WPA3-SAE is completed by a capable fullmac adapter.  WPA2-PSK uses the
-     * host supplicant so EAPOL is armed before association completes. */
+    /* Fullmac adapters complete WPA2-PSK and WPA3-SAE in firmware after the
+     * credential is seeded through the lower miniport. */
     if (Params->Secure)
     {
-        if (Params->AuthAlgorithm == DOT11_AUTH_ALGO_WPA3_SAE)
+        if (Params->AuthAlgorithm == DOT11_AUTH_ALGO_RSNA_PSK ||
+            Params->AuthAlgorithm == DOT11_AUTH_ALGO_WPA3_SAE)
         {
             Status = NwifiSupplicantSeedFirmware(Msm);
-        }
-        else if (Params->AuthAlgorithm == DOT11_AUTH_ALGO_RSNA_PSK)
-        {
-            Status = NwifiSupplicantStart(Msm);
         }
         else
         {

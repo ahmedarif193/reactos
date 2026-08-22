@@ -280,11 +280,15 @@ typedef struct _CYW_DLOAD_DATA
 #define BRCMF_E_LINK                    16
 #define BRCMF_E_MIC_ERROR               17
 #define BRCMF_E_ROAM                    19
+#define BRCMF_E_TXFAIL                  20
+#define BRCMF_E_EAPOL_MSG               25
+#define BRCMF_E_PSK_SUP                 46
 #define BRCMF_E_IF                      54
 #define BRCMF_E_ESCAN_RESULT            69
 
 #define BRCMF_E_STATUS_SUCCESS          0
 #define BRCMF_E_STATUS_PARTIAL          8
+#define BRCMF_E_STATUS_FWSUP_COMPLETED  6
 
 #define BRCMF_EVENT_MSG_LINK            0x01
 
@@ -690,6 +694,9 @@ typedef struct _CYW_ADAPTER
     ULONG CurrentRateUnits500Kbps;
     BOOLEAN Associated;
     BOOLEAN LinkUp;
+    BOOLEAN FirmwareSupplicant;
+    BOOLEAN FirmwareHandshakeComplete;
+    BOOLEAN PortAuthorized;
     PNDIS_OID_REQUEST PendingConnectOid;
 
     volatile LONG64 TxOkCount;

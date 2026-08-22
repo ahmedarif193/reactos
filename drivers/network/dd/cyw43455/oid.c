@@ -329,9 +329,7 @@ CywIndicateAssocComplete(
         Params.AuthAlgo = Adapter->AuthAlgorithm;
         Params.UnicastCipher = Adapter->UnicastCipher;
         Params.MulticastCipher = Adapter->MulticastCipher;
-        Params.bPortAuthorized =
-            (Adapter->AuthAlgorithm == DOT11_AUTH_ALGO_80211_OPEN ||
-             Adapter->AuthAlgorithm == DOT11_AUTH_ALGO_WPA3_SAE);
+        Params.bPortAuthorized = Adapter->PortAuthorized;
         Params.DSInfo = DOT11_DS_UNKNOWN;
     }
     NdisReleaseSpinLock(&Adapter->Lock);
@@ -871,6 +869,13 @@ CywOidConnectRequest(
         return NDIS_STATUS_DOT11_MEDIA_IN_USE;
     }
     Adapter->PendingConnectOid = Request;
+    Adapter->Associated = FALSE;
+    Adapter->LinkUp = FALSE;
+    Adapter->FirmwareSupplicant =
+        (Adapter->AuthAlgorithm == DOT11_AUTH_ALGO_RSNA_PSK ||
+         Adapter->AuthAlgorithm == DOT11_AUTH_ALGO_WPA3_SAE);
+    Adapter->FirmwareHandshakeComplete = FALSE;
+    Adapter->PortAuthorized = FALSE;
     Sequence = ++Adapter->ConnectSeq;
     NdisReleaseSpinLock(&Adapter->Lock);
 
@@ -1694,8 +1699,8 @@ CywOidSet(
 
             if (Value->AlgorithmId == DOT11_CIPHER_ALGO_NONE)
             {
-                /* The nwifi stack seeds passphrases under an Algorithm==NONE
-                 * sentinel for the firmware-offloaded SAE handshake. */
+                /* The nwifi stack seeds credentials under an Algorithm==NONE
+                 * sentinel for a firmware-offloaded WPA handshake. */
                 if (!Value->bDelete &&
                     Value->usKeyLength > CYW_SAE_PASSWORD_MAX)
                 {
