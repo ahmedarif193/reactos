@@ -571,11 +571,46 @@ EnumProcessModulesEx(HANDLE hProcess,
                      LPDWORD lpcbNeeded,
                      DWORD dwFilterFlag)
 {
+    DWORD Needed;
+#ifdef _WIN64
+    BOOL Wow64Process;
+#endif
+
     if (dwFilterFlag & ~LIST_MODULES_ALL)
     {
         SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
+
+    if (cb && !lphModule)
+    {
+        SetLastError(ERROR_NOACCESS);
+        return FALSE;
+    }
+
+    if (!lpcbNeeded)
+    {
+        if (!EnumProcessModules(hProcess, lphModule, cb, &Needed))
+        {
+            return FALSE;
+        }
+
+        SetLastError(ERROR_NOACCESS);
+        return FALSE;
+    }
+
+#ifdef _WIN64
+    if (!IsWow64Process(hProcess, &Wow64Process))
+    {
+        return FALSE;
+    }
+
+    if (dwFilterFlag == LIST_MODULES_32BIT && !Wow64Process)
+    {
+        *lpcbNeeded = 0;
+        return TRUE;
+    }
+#endif
 
     return EnumProcessModules(hProcess, lphModule, cb, lpcbNeeded);
 }
