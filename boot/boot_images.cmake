@@ -228,8 +228,9 @@ set(ISO_MANUFACTURER "ReactOS Project") # For both the publisher and the prepare
 set(ISO_VOLNAME      "ReactOS")         # For both the Volume ID and the Volume set ID
 
 # ISO image options
+# Preserve Windows DLL names such as avformat-62.dll in the primary ISO directory.
 set(ISO_COMMON_OPTIONS
-    -iso-level 4 -publisher ${ISO_MANUFACTURER} -preparer ${ISO_MANUFACTURER} -volid ${ISO_VOLNAME} -volset ${ISO_VOLNAME})
+    -iso-level 4 -relaxed-filenames -publisher ${ISO_MANUFACTURER} -preparer ${ISO_MANUFACTURER} -volid ${ISO_VOLNAME} -volset ${ISO_VOLNAME})
 set(ISO_LAYOUT_OPTIONS
     -duplicates-once -no-cache-inodes -graft-points)
 # Boot catalog and sorting files options
