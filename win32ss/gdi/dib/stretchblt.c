@@ -14,11 +14,37 @@
 #define NDEBUG
 #include <debug.h>
 
+static ULONG
+DIB_BilinearColor(
+    ULONG Color00,
+    ULONG Color01,
+    ULONG Color10,
+    ULONG Color11,
+    ULONG FractionX,
+    ULONG FractionY)
+{
+  ULONGLONG InverseX = 0x10000 - FractionX;
+  ULONGLONG InverseY = 0x10000 - FractionY;
+  ULONGLONG Weight00 = InverseX * InverseY;
+  ULONGLONG Weight01 = FractionX * InverseY;
+  ULONGLONG Weight10 = InverseX * FractionY;
+  ULONGLONG Weight11 = FractionX * FractionY;
+  ULONGLONG Blue;
+  ULONGLONG Green;
+  ULONGLONG Red;
+
+  Blue = ((Color00 & 0xff) * Weight00) + ((Color01 & 0xff) * Weight01) + ((Color10 & 0xff) * Weight10) + ((Color11 & 0xff) * Weight11);
+  Green = (((Color00 >> 8) & 0xff) * Weight00) + (((Color01 >> 8) & 0xff) * Weight01) + (((Color10 >> 8) & 0xff) * Weight10) + (((Color11 >> 8) & 0xff) * Weight11);
+  Red = (((Color00 >> 16) & 0xff) * Weight00) + (((Color01 >> 16) & 0xff) * Weight01) + (((Color10 >> 16) & 0xff) * Weight10) + (((Color11 >> 16) & 0xff) * Weight11);
+  return (ULONG)(((Blue + 0x80000000ULL) >> 32) | (((Green + 0x80000000ULL) >> 32) << 8) | (((Red + 0x80000000ULL) >> 32) << 16));
+}
+
 BOOLEAN DIB_XXBPP_StretchBlt(SURFOBJ *DestSurf, SURFOBJ *SourceSurf, SURFOBJ *MaskSurf,
                             SURFOBJ *PatternSurface,
                             RECTL *DestRect, RECTL *SourceRect,
                             POINTL *MaskOrigin, BRUSHOBJ *Brush,
                             POINTL *BrushOrigin, XLATEOBJ *ColorTranslation,
+                            ULONG Mode,
                             ROP4 ROP)
 {
   LONG sx = 0;
@@ -35,8 +61,14 @@ BOOLEAN DIB_XXBPP_StretchBlt(SURFOBJ *DestSurf, SURFOBJ *SourceSurf, SURFOBJ *Ma
 
   ULONG Color;
   ULONG Dest, Source = 0, Pattern = 0;
+  ULONG Color00, Color01, Color10, Color11;
+  ULONG FractionX, FractionY;
   ULONG xxBPPMask;
   BOOLEAN CanDraw;
+  BOOLEAN UseHalftone;
+  ULONGLONG StepX, StepY;
+  ULONGLONG SourceFixedX, SourceFixedY;
+  LONG sx1, sy1;
 
   PFN_DIB_GetPixel fnSource_GetPixel = NULL;
   PFN_DIB_GetPixel fnDest_GetPixel = NULL;
@@ -62,6 +94,10 @@ BOOLEAN DIB_XXBPP_StretchBlt(SURFOBJ *DestSurf, SURFOBJ *SourceSurf, SURFOBJ *Ma
   DstWidth = DestRect->right - DestRect->left;
   SrcHeight = SourceRect->bottom - SourceRect->top;
   SrcWidth = SourceRect->right - SourceRect->left;
+
+  UseHalftone = (Mode == HALFTONE && ROP == ROP4_SRCCOPY && UsesSource && !MaskSurf && !PatternSurface && SrcWidth > 0 && SrcHeight > 0 && DstWidth > 0 && DstHeight > 0 && (DestSurf->iBitmapFormat == BMF_24BPP || DestSurf->iBitmapFormat == BMF_32BPP));
+  StepX = UseHalftone ? ((ULONGLONG)(ULONG)SrcWidth << 32) / (ULONG)DstWidth : 0;
+  StepY = UseHalftone ? ((ULONGLONG)(ULONG)SrcHeight << 32) / (ULONG)DstHeight : 0;
 
   /* Here we do the tests and set our conditions */
   if (((SrcWidth < 0) && (DstWidth < 0)) || ((SrcWidth >= 0) && (DstWidth >= 0)))
@@ -149,7 +185,14 @@ BOOLEAN DIB_XXBPP_StretchBlt(SURFOBJ *DestSurf, SURFOBJ *SourceSurf, SURFOBJ *Ma
     }
     if (UsesSource)
     {
-      if (bTopToBottom)
+      if (UseHalftone)
+      {
+        SourceFixedY = (ULONGLONG)(DesY - DestRect->top) * StepY;
+        sy = SourceRect->top + (LONG)(SourceFixedY >> 32);
+        sy1 = min(sy + 1, SourceRect->bottom - 1);
+        FractionY = (ULONG)((SourceFixedY >> 16) & 0xffff);
+      }
+      else if (bTopToBottom)
       {
         sy = SourceRect->bottom-(DesY - DestRect->top) * SrcHeight / DstHeight;  // flips about the x-axis
       }
@@ -183,7 +226,19 @@ BOOLEAN DIB_XXBPP_StretchBlt(SURFOBJ *DestSurf, SURFOBJ *SourceSurf, SURFOBJ *Ma
 
       if (UsesSource && CanDraw)
       {
-        if (bLeftToRight)
+        if (UseHalftone)
+        {
+          SourceFixedX = (ULONGLONG)(DesX - DestRect->left) * StepX;
+          sx = SourceRect->left + (LONG)(SourceFixedX >> 32);
+          sx1 = min(sx + 1, SourceRect->right - 1);
+          FractionX = (ULONG)((SourceFixedX >> 16) & 0xffff);
+          Color00 = XLATEOBJ_iXlate(ColorTranslation, fnSource_GetPixel(SourceSurf, sx, sy));
+          Color01 = XLATEOBJ_iXlate(ColorTranslation, fnSource_GetPixel(SourceSurf, sx1, sy));
+          Color10 = XLATEOBJ_iXlate(ColorTranslation, fnSource_GetPixel(SourceSurf, sx, sy1));
+          Color11 = XLATEOBJ_iXlate(ColorTranslation, fnSource_GetPixel(SourceSurf, sx1, sy1));
+          Source = DIB_BilinearColor(Color00, Color01, Color10, Color11, FractionX, FractionY);
+        }
+        else if (bLeftToRight)
         {
           sx = SourceRect->right-(DesX - DestRect->left) * SrcWidth / DstWidth;  // flips about the y-axis
         }
@@ -191,12 +246,12 @@ BOOLEAN DIB_XXBPP_StretchBlt(SURFOBJ *DestSurf, SURFOBJ *SourceSurf, SURFOBJ *Ma
         {
           sx = SourceRect->left + (DesX - DestRect->left) * SrcWidth / DstWidth;
         }
-        if (sx >= 0 && sy >= 0 &&
+        if (!UseHalftone && sx >= 0 && sy >= 0 &&
           SourceSurf->sizlBitmap.cx > sx && SourceCy > sy)
         {
           Source = XLATEOBJ_iXlate(ColorTranslation, fnSource_GetPixel(SourceSurf, sx, sy));
         }
-        else
+        else if (!UseHalftone)
         {
           Source = 0;
           CanDraw = ((ROP & 0xFF) != R3_OPINDEX_SRCCOPY);
