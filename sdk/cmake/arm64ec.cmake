@@ -11,8 +11,11 @@
 include("${REACTOS_SOURCE_DIR}/sdk/cmake/arm64ec_targets.cmake")
 
 set(ARM64EC_BINARY_DIR "${REACTOS_BINARY_DIR}/_fex_arm64ec")
+set(ARM64EC_RUNTIME_BUILD_MODULES
+    ${ARM64EC_RUNTIME_MODULES}
+    ${ARM64EC_RUNTIME_AUXILIARY_MODULES})
 
-foreach(_target IN LISTS ARM64EC_RUNTIME_MODULES)
+foreach(_target IN LISTS ARM64EC_RUNTIME_BUILD_MODULES)
     if(NOT TARGET "${_target}")
         message(FATAL_ERROR "arm64ec_targets.cmake lists '${_target}', which is not a target in this tree")
     endif()
@@ -55,6 +58,12 @@ foreach(_target IN LISTS ARM64EC_RUNTIME_MODULES)
     list(APPEND ARM64EC_RUNTIME_FILES "${_file}")
 endforeach()
 
+set(ARM64EC_RUNTIME_VALIDATION_FILES ${ARM64EC_RUNTIME_FILES})
+foreach(_target IN LISTS ARM64EC_RUNTIME_AUXILIARY_MODULES)
+    _arm64ec_get_target_file("${_target}" _file)
+    list(APPEND ARM64EC_RUNTIME_VALIDATION_FILES "${_file}")
+endforeach()
+
 set(ARM64EC_ALIAS_FILES)
 set(ARM64EC_ALIAS_SOURCES)
 foreach(_alias IN LISTS ARM64EC_RUNTIME_ALIASES)
@@ -64,7 +73,7 @@ foreach(_alias IN LISTS ARM64EC_RUNTIME_ALIASES)
 
     set(_alias_target "${CMAKE_MATCH_1}")
     set(_alias_name "${CMAKE_MATCH_2}")
-    if(NOT _alias_target IN_LIST ARM64EC_RUNTIME_MODULES)
+    if(NOT _alias_target IN_LIST ARM64EC_RUNTIME_BUILD_MODULES)
         message(FATAL_ERROR "ARM64EC runtime alias target '${_alias_target}' is not in the target list")
     endif()
 
@@ -130,11 +139,11 @@ add_dependencies(fex_arm64ec_configure asm)
 
 find_program(FEX_LLVM_READOBJ llvm-readobj HINTS "${REACTOS_CLANG_LLVM_MINGW_ROOT}/bin" REQUIRED)
 
-list(LENGTH ARM64EC_RUNTIME_MODULES _arm64ec_target_count)
+list(LENGTH ARM64EC_RUNTIME_BUILD_MODULES _arm64ec_target_count)
 add_custom_target(fex_arm64ec_runtime ALL
-    COMMAND ${CMAKE_COMMAND} --build "${ARM64EC_BINARY_DIR}" --target ${ARM64EC_RUNTIME_MODULES}
-    COMMAND ${CMAKE_COMMAND} -DLLVM_READOBJ:FILEPATH=${FEX_LLVM_READOBJ} -P "${REACTOS_SOURCE_DIR}/sdk/cmake/arm64ec-validate.cmake" -- ${ARM64EC_RUNTIME_FILES}
-    BYPRODUCTS ${ARM64EC_RUNTIME_FILES}
+    COMMAND ${CMAKE_COMMAND} --build "${ARM64EC_BINARY_DIR}" --target ${ARM64EC_RUNTIME_BUILD_MODULES}
+    COMMAND ${CMAKE_COMMAND} -DLLVM_READOBJ:FILEPATH=${FEX_LLVM_READOBJ} -P "${REACTOS_SOURCE_DIR}/sdk/cmake/arm64ec-validate.cmake" -- ${ARM64EC_RUNTIME_VALIDATION_FILES}
+    BYPRODUCTS ${ARM64EC_RUNTIME_VALIDATION_FILES}
     COMMENT "Building ${_arm64ec_target_count} ARM64EC FEX runtime DLLs"
     USES_TERMINAL
     VERBATIM)

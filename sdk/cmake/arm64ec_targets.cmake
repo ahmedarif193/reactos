@@ -74,6 +74,7 @@ set(ARM64EC_RUNTIME_MODULES
     powrprof
     psapi
     propsys
+    riched20
     rsaenh
     rpcrt4
     samlib
@@ -108,7 +109,13 @@ set(ARM64EC_RUNTIME_MODULES
     xinput1_4
     xinput9_1_0)
 
+# SxS implementations need a distinct packaged identity because the native
+# ARM64 and ARM64EC double-builds cannot occupy the same assembly path.
+set(ARM64EC_RUNTIME_AUXILIARY_MODULES
+    comctl32_v6)
+
 # Additional names under which a runtime module must be shipped. Keep the
 # implementation name because existing ReactOS modules import it directly.
 set(ARM64EC_RUNTIME_ALIASES
+    "comctl32_v6=comctl32_v6.dll"
     "kernelbase_ros=kernelbase.dll")
