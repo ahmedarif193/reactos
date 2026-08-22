@@ -52,6 +52,14 @@ typedef ULONGLONG REGHANDLE, *PREGHANDLE;
 
 #define EVENT_FILTER_TYPE_SCHEMATIZED        (0x80000000)
 
+typedef enum _EVENT_INFO_CLASS {
+  EventProviderBinaryTrackInfo,
+  EventProviderSetReserved1,
+  EventProviderSetTraits,
+  EventProviderUseDescriptorType,
+  MaxEventInfo
+} EVENT_INFO_CLASS;
+
 typedef struct _EVENT_DATA_DESCRIPTOR {
   ULONGLONG Ptr;
   ULONG Size;
@@ -111,6 +119,14 @@ ULONG
 EVNTAPI
 EventUnregister(
   _In_ REGHANDLE RegHandle);
+
+ULONG
+EVNTAPI
+EventSetInformation(
+  _In_ REGHANDLE RegHandle,
+  _In_ EVENT_INFO_CLASS InformationClass,
+  _In_reads_bytes_opt_(InformationLength) PVOID EventInformation,
+  _In_ ULONG InformationLength);
 
 BOOLEAN
 EVNTAPI

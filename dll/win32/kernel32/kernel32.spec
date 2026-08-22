@@ -272,6 +272,16 @@
 @ stdcall EnumerateLocalComputerNamesW(ptr long wstr ptr)
 @ stdcall EraseTape(ptr long long)
 @ stdcall EscapeCommFunction(long long)
+@ stdcall -version=0x600+ EventActivityIdControl(long ptr) kernelbase.EventActivityIdControl
+@ stdcall -version=0x600+ EventEnabled(int64 ptr) kernelbase.EventEnabled
+@ stdcall -version=0x600+ EventProviderEnabled(int64 long int64) kernelbase.EventProviderEnabled
+@ stdcall -version=0x600+ EventRegister(ptr ptr ptr ptr) kernelbase.EventRegister
+@ stdcall -version=0x600+ EventSetInformation(int64 long ptr long) kernelbase.EventSetInformation
+@ stdcall -version=0x600+ EventUnregister(int64) kernelbase.EventUnregister
+@ stdcall -version=0x600+ EventWrite(int64 ptr long ptr) kernelbase.EventWrite
+@ stdcall -version=0x601+ EventWriteEx(int64 ptr int64 long ptr ptr long ptr) kernelbase.EventWriteEx
+@ stdcall -version=0x600+ EventWriteString(int64 long int64 wstr) kernelbase.EventWriteString
+@ stdcall -version=0x600+ EventWriteTransfer(int64 ptr ptr ptr long ptr) kernelbase.EventWriteTransfer
 @ stdcall ExitProcess(long) ; FIXME: ntdll.RtlExitUserProcess
 @ stdcall ExitThread(long) ; FIXME: ntdll.RtlExitUserThread
 @ stdcall ExitVDM(long long)
