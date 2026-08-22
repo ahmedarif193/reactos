@@ -25,6 +25,10 @@
 
 #include <ndk/exfuncs.h>
 
+#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
+#include <reactos/early_splash.h>
+#endif
+
 #include <wine/debug.h>
 WINE_DEFAULT_DEBUG_CHANNEL(userinit);
 

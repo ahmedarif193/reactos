@@ -144,6 +144,9 @@ typedef struct _SPIVALUES
     WALLPAPER_MODE WallpaperMode;
     UNICODE_STRING ustrWallpaper;
     WCHAR awcWallpaper[MAX_PATH + 1];
+#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
+    BOOL bEarlySplashWallpaper;
+#endif
 
     BOOL bHandHeld;
     BOOL bFastTaskSwitch;

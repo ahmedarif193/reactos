@@ -12,6 +12,9 @@
 // - Save appropriate text metrics.
 
 #include <win32k.h>
+#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
+#include <reactos/early_splash.h>
+#endif
 DBG_DEFAULT_CHANNEL(UserSysparams);
 
 SPIVALUES gspv;
@@ -234,11 +237,39 @@ SpiUpdatePerUserSystemParameters(VOID)
     static LOGFONTW lf2 = {-11, 0, 0, 0, FW_BOLD, FALSE, FALSE,
                            FALSE, ANSI_CHARSET, 0, 0, DEFAULT_QUALITY,
                            VARIABLE_PITCH | FF_SWISS, L"MS Sans Serif"};
+#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
+    HBITMAP EarlyWallpaper = NULL;
+    LONG EarlyWallpaperWidth = 0;
+    LONG EarlyWallpaperHeight = 0;
+    WALLPAPER_MODE EarlyWallpaperMode = wmCenter;
+#endif
 
     TRACE("Enter SpiUpdatePerUserSystemParameters\n");
 
+#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
+    if (gspv.bEarlySplashWallpaper)
+    {
+        EarlyWallpaper = gspv.hbmWallpaper;
+        EarlyWallpaperWidth = gspv.cxWallpaper;
+        EarlyWallpaperHeight = gspv.cyWallpaper;
+        EarlyWallpaperMode = gspv.WallpaperMode;
+    }
+#endif
+
     /* Clear the structure */
     RtlZeroMemory(&gspv, sizeof(gspv));
+
+#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
+    if (EarlyWallpaper)
+    {
+        gspv.hbmWallpaper = EarlyWallpaper;
+        gspv.cxWallpaper = EarlyWallpaperWidth;
+        gspv.cyWallpaper = EarlyWallpaperHeight;
+        gspv.WallpaperMode = EarlyWallpaperMode;
+        gspv.bEarlySplashWallpaper = TRUE;
+        TRACE("EARLY_SPLASH: WIN32K_WALLPAPER_PRESERVED stage=user_parameters bitmap=%p\n", EarlyWallpaper);
+    }
+#endif
 
     /* Load mouse settings */
     gspv.caiMouse.FirstThreshold = SpiLoadMouse(VAL_MOUSE1, 6);
@@ -776,12 +807,91 @@ SpiSetWallpaper(PVOID pvParam, FLONG fl)
 
     /* Set the new wallpaper */
     gspv.hbmWallpaper = hbmp;
+#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
+    if (gspv.bEarlySplashWallpaper)
+        TRACE("EARLY_SPLASH: WIN32K_WALLPAPER_REPLACED path=%S\n", gspv.awcWallpaper);
+    gspv.bEarlySplashWallpaper = FALSE;
+#endif
 
     NtUserRedrawWindow(UserGetShellWindow(), NULL, NULL, RDW_INVALIDATE | RDW_ERASE);
 
 
     return (UINT_PTR)KEY_DESKTOP;
 }
+
+#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
+static
+UINT_PTR
+SpiSetEarlyWallpaper(
+    _In_ HBITMAP Bitmap)
+{
+    HBITMAP OldBitmap;
+    SURFACE *Surface;
+    LONG Width, Height;
+    PWND DesktopWindow;
+    HDC Dc;
+
+    REQ_INTERACTIVE_WINSTA(ERROR_REQUIRES_INTERACTIVE_WINDOWSTATION);
+
+    if (gpidLogon != PsGetCurrentProcessId())
+    {
+        ERR("EARLY_SPLASH: WIN32K_WALLPAPER_FAIL stage=caller pid=%p logon_pid=%p\n", PsGetCurrentProcessId(), gpidLogon);
+        EngSetLastError(ERROR_ACCESS_DENIED);
+        return 0;
+    }
+
+    Surface = SURFACE_ShareLockSurface(Bitmap);
+    if (!Surface)
+    {
+        ERR("EARLY_SPLASH: WIN32K_WALLPAPER_FAIL stage=bitmap handle=%p\n", Bitmap);
+        EngSetLastError(ERROR_INVALID_HANDLE);
+        return 0;
+    }
+
+    Width = Surface->SurfObj.sizlBitmap.cx;
+    Height = Surface->SurfObj.sizlBitmap.cy;
+    SURFACE_ShareUnlockSurface(Surface);
+    if (Width <= 0 || Height <= 0)
+    {
+        ERR("EARLY_SPLASH: WIN32K_WALLPAPER_FAIL stage=dimensions width=%ld height=%ld\n", Width, Height);
+        EngSetLastError(ERROR_INVALID_DATA);
+        return 0;
+    }
+
+    if (!GreSetObjectOwner(Bitmap, GDI_OBJ_HMGR_PUBLIC))
+    {
+        ERR("EARLY_SPLASH: WIN32K_WALLPAPER_FAIL stage=ownership handle=%p\n", Bitmap);
+        EngSetLastError(ERROR_INVALID_HANDLE);
+        return 0;
+    }
+
+    OldBitmap = gspv.hbmWallpaper;
+    gspv.hbmWallpaper = Bitmap;
+    gspv.cxWallpaper = Width;
+    gspv.cyWallpaper = Height;
+    gspv.WallpaperMode = wmStretch;
+    gspv.bEarlySplashWallpaper = TRUE;
+
+    if (OldBitmap && OldBitmap != Bitmap)
+    {
+        GreSetObjectOwner(OldBitmap, GDI_OBJ_HMGR_POWNED);
+        GreDeleteObject(OldBitmap);
+    }
+
+    TRACE("EARLY_SPLASH: WIN32K_WALLPAPER_OK bitmap=%p source=%ldx%ld mode=stretch\n", Bitmap, Width, Height);
+    UserRedrawDesktop();
+
+    DesktopWindow = UserGetDesktopWindow();
+    Dc = UserGetWindowDC(DesktopWindow);
+    if (Dc)
+    {
+        IntPaintDesktop(Dc);
+        UserReleaseDC(DesktopWindow, Dc, FALSE);
+    }
+
+    return 1;
+}
+#endif
 
 static BOOL
 SpiNotifyNCMetricsChanged(VOID)
@@ -885,6 +995,11 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
 
         case SPI_SETDESKWALLPAPER:
             return SpiSetWallpaper(pvParam, fl);
+
+#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
+        case REACTOS_SPI_SET_EARLY_WALLPAPER:
+            return SpiSetEarlyWallpaper((HBITMAP)pvParam);
+#endif
 
         case SPI_SETDESKPATTERN:
             ERR("SPI_SETDESKPATTERN is unimplemented\n");
