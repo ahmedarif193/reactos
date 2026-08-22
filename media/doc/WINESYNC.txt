@@ -258,6 +258,7 @@ dll/win32/windows.system.profile.systemid # Synced to Wine-11.14
 dll/win32/windows.system.profile.systemmanufacturers # Synced to Wine-11.14
 dll/win32/windows.ui          # Synced to Wine-11.14
 dll/win32/windows.ui.core.textinput # Synced to Wine-11.14
+dll/win32/windows.ui.xaml     # Synced to Wine-11.14
 dll/win32/windowscodecs       # Synced to Wine-11.14
 dll/win32/windowscodecsext    # Synced to Wine-11.14
 dll/win32/l3codeca.acm        # Synced to Wine-11.14

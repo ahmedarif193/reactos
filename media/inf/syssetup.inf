@@ -171,6 +171,7 @@ windows.system.profile.systemid.dll
 windows.system.profile.systemmanufacturers.dll
 windows.ui.dll
 windows.ui.core.textinput.dll
+windows.ui.xaml.dll
 wintypes.dll
 
 [Strings]
