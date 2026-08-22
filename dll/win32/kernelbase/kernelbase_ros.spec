@@ -711,7 +711,7 @@
 #@ stdcall GetStringTypeW(long wstr long ptr)
 # #@ stub GetSystemAppDataFolder
 # #@ stub GetSystemAppDataKey
-#@ stdcall GetSystemCpuSetInformation(ptr long ptr ptr long)
+@ stdcall GetSystemCpuSetInformation(ptr long ptr ptr long)
 #@ stdcall GetSystemDefaultLCID()
 #@ stdcall GetSystemDefaultLangID()
 #@ stdcall GetSystemDefaultLocaleName(ptr long)
@@ -1752,11 +1752,11 @@
 #@ stdcall WerGetFlags(ptr ptr)
 #@ stdcall WerRegisterFile(wstr long long)
 #@ stdcall WerRegisterMemoryBlock(ptr long)
-#@ stdcall WerRegisterRuntimeExceptionModule(wstr ptr)
+@ stdcall WerRegisterRuntimeExceptionModule(wstr ptr)
 #@ stdcall WerSetFlags(long)
 #@ stdcall WerUnregisterFile(wstr)
 #@ stdcall WerUnregisterMemoryBlock(ptr)
-#@ stdcall WerUnregisterRuntimeExceptionModule(wstr ptr)
+@ stdcall WerUnregisterRuntimeExceptionModule(wstr ptr)
 # #@ stub WerpNotifyLoadStringResource
 # #@ stub WerpNotifyUseStringResource
 #@ stdcall WideCharToMultiByte(long long wstr long ptr long ptr ptr)

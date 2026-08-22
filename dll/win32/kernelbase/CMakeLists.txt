@@ -14,9 +14,11 @@ spec2def(kernelbase_ros.dll kernelbase_ros.spec ADD_IMPORTLIB)
 
 add_library(kernelbase_ros MODULE
     CancelSynchronousIo.c
+    CpuSets.c
     DllMain.c
     PssSnapshot.c
     SyncObjects.c
+    WerRuntime.c
     ${CMAKE_CURRENT_BINARY_DIR}/kernelbase_ros_stubs.c
     ${CMAKE_CURRENT_BINARY_DIR}/kernelbase_ros.def)
 
