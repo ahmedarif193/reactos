@@ -9,6 +9,44 @@
 
 BOOL WINAPI QueryUnbiasedInterruptTime(_Out_ PULONGLONG UnbiasedTime);
 
+static BOOL
+BaseValidateTimerWakeContext(
+    _In_opt_ PREASON_CONTEXT WakeContext)
+{
+    UNICODE_STRING ReasonString;
+    WCHAR ModulePath[MAX_PATH];
+    ULONG Index;
+
+    if (!WakeContext) return TRUE;
+    if (WakeContext->Version != POWER_REQUEST_CONTEXT_VERSION)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (WakeContext->Flags == POWER_REQUEST_CONTEXT_SIMPLE_STRING)
+    {
+        if (!WakeContext->Reason.SimpleReasonString || !*WakeContext->Reason.SimpleReasonString)
+        {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        return TRUE;
+    }
+    if (WakeContext->Flags != POWER_REQUEST_CONTEXT_DETAILED_STRING)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (!GetModuleFileNameW(WakeContext->Reason.Detailed.LocalizedReasonModule, ModulePath, ARRAYSIZE(ModulePath))) return FALSE;
+    if (WakeContext->Reason.Detailed.ReasonStringCount > MAXULONG / sizeof(ReasonString) || (WakeContext->Reason.Detailed.ReasonStringCount && !WakeContext->Reason.Detailed.ReasonStrings))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    for (Index = 0; Index < WakeContext->Reason.Detailed.ReasonStringCount; ++Index) RtlInitUnicodeString(&ReasonString, WakeContext->Reason.Detailed.ReasonStrings[Index]);
+    return TRUE;
+}
+
 BOOL
 WINAPI
 SetWaitableTimerEx(
@@ -17,12 +55,23 @@ SetWaitableTimerEx(
     _In_ LONG lPeriod,
     _In_opt_ PTIMERAPCROUTINE pfnCompletionRoutine,
     _In_opt_ LPVOID lpArgToCompletionRoutine,
-    _In_opt_ PVOID WakeContext,
+    _In_opt_ PREASON_CONTEXT WakeContext,
     _In_ ULONG TolerableDelay)
 {
-    UNREFERENCED_PARAMETER(WakeContext);
+    BOOL Result;
+
+    /* Scheduling at the nominal due time is always within the caller's maximum tolerance. */
     UNREFERENCED_PARAMETER(TolerableDelay);
-    return SetWaitableTimer(hTimer, lpDueTime, lPeriod, pfnCompletionRoutine, lpArgToCompletionRoutine, FALSE);
+    if (!BaseValidateTimerWakeContext(WakeContext)) return FALSE;
+    if (!lpDueTime || lPeriod < 0)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    Result = SetWaitableTimer(hTimer, lpDueTime, lPeriod, pfnCompletionRoutine, lpArgToCompletionRoutine, WakeContext != NULL);
+    if (Result) SetLastError(WakeContext ? ERROR_NOT_SUPPORTED : ERROR_SUCCESS);
+    return Result;
 }
 
 LONG
