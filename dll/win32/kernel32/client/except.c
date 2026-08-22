@@ -126,7 +126,7 @@ PrintStackTrace(IN PEXCEPTION_POINTERS ExceptionInfo)
 
     _dump_context(ContextRecord);
     _module_name_from_addr(ExceptionRecord->ExceptionAddress, &StartAddr, szMod, sizeof(szMod), &szModFile);
-    DbgPrint("Address:\n<%s:%x> (%s@%x)\n",
+    DbgPrint("Address:\n<%s:%Ix> (%s@%p)\n",
              szModFile,
              (ULONG_PTR)ExceptionRecord->ExceptionAddress - (ULONG_PTR)StartAddr,
              szMod,
@@ -160,6 +160,46 @@ PrintStackTrace(IN PEXCEPTION_POINTERS ExceptionInfo)
                 break;
 
             Frame = (PULONG)Frame[0];
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        DbgPrint("<error dumping stack trace: 0x%x>\n", _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+#elif defined(_M_AMD64)
+    DbgPrint("Frames:\n");
+
+    _SEH2_TRY
+    {
+        CONTEXT UnwindContext = *ContextRecord;
+        PRUNTIME_FUNCTION FunctionEntry;
+        ULONG64 ImageBase;
+        ULONG64 EstablisherFrame;
+        ULONG64 PreviousRsp;
+        ULONG64 StackLow = (ULONG64)NtCurrentTeb()->NtTib.StackLimit;
+        ULONG64 StackHigh = (ULONG64)NtCurrentTeb()->NtTib.StackBase;
+        PVOID HandlerData;
+        UINT i;
+
+        for (i = 0; i < 128; i++)
+        {
+            PreviousRsp = UnwindContext.Rsp;
+            FunctionEntry = RtlLookupFunctionEntry(UnwindContext.Rip, &ImageBase, NULL);
+            if (FunctionEntry)
+            {
+                RtlVirtualUnwind(UNW_FLAG_NHANDLER, ImageBase, UnwindContext.Rip, FunctionEntry, &UnwindContext, &HandlerData, &EstablisherFrame, NULL);
+            }
+            else
+            {
+                if (UnwindContext.Rsp < StackLow || UnwindContext.Rsp > StackHigh - sizeof(ULONG64)) break;
+                UnwindContext.Rip = *(PULONG64)UnwindContext.Rsp;
+                UnwindContext.Rsp += sizeof(ULONG64);
+            }
+
+            if (!UnwindContext.Rip || UnwindContext.Rsp <= PreviousRsp || UnwindContext.Rsp > StackHigh) break;
+            _module_name_from_addr((const void *)UnwindContext.Rip, &StartAddr, szMod, sizeof(szMod), &szModFile);
+            DbgPrint("<%s:%Ix> (%s@%p)\n", szModFile, (ULONG_PTR)UnwindContext.Rip - (ULONG_PTR)StartAddr, szMod, StartAddr);
         }
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
