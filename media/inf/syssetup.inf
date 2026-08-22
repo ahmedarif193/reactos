@@ -148,6 +148,7 @@ mshtml.tlb
 cryptowinrt.dll
 threadpoolwinrt.dll
 windows.applicationmodel.dll
+windows.devices.bluetooth.dll
 windows.globalization.dll
 windows.graphics.dll
 windows.ui.dll
