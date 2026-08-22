@@ -17,7 +17,6 @@ Rpi5Vc4.Miniport_CopyFiles=12
 
 [ReactOS.NTarm64]
 %Rpi5Vc4.DeviceDesc%=Rpi5Vc4_Install,ACPI\BCM2712
-%Rpi5Vc4.DeviceDesc%=Rpi5Vc4_Install,ACPI\BCM2850
 
 [Rpi5Vc4_Install]
 CopyFiles=Rpi5Vc4.Miniport_CopyFiles
