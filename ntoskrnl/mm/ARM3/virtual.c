@@ -3613,9 +3613,6 @@ MiResetPrivatePages(
                         TRUE);
             MiReleasePfnLock(OldIrql);
 
-#if !defined(_M_ARM64)
-            MiIncrementPageTableReferences((PVOID)CurrentAddress);
-#endif
             MI_WRITE_SOFTWARE_PTE(PointerPte, TempPte);
         }
 
