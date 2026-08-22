@@ -164,6 +164,7 @@ windows.media.playback.mediaplayer.dll
 windows.media.speech.dll
 windows.perception.stub.dll
 windows.security.authentication.onlineid.dll
+windows.security.credentials.ui.userconsentverifier.dll
 windows.ui.dll
 wintypes.dll
 
