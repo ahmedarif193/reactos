@@ -5,6 +5,7 @@ add_definitions(
 spec2def(msxml.dll msxml.spec)
 
 list(APPEND SOURCE
+    ${CMAKE_CURRENT_BINARY_DIR}/msxml_stubs.c
     ${CMAKE_CURRENT_BINARY_DIR}/msxml.def)
 
 add_library(msxml MODULE ${SOURCE} rsrc.rc)

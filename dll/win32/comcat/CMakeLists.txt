@@ -2,6 +2,7 @@
 spec2def(comcat.dll comcat.spec)
 
 list(APPEND SOURCE
+    ${CMAKE_CURRENT_BINARY_DIR}/comcat_stubs.c
     ${CMAKE_CURRENT_BINARY_DIR}/comcat.def)
 
 add_library(comcat MODULE ${SOURCE} version.rc)
