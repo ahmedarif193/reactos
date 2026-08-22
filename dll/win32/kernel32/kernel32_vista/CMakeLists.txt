@@ -12,6 +12,7 @@ list(APPEND SOURCE
     CompareObjectHandles.c
     DepPolicy.c
     DiscardVirtualMemory.c
+    DllDirectory.c
     DynamicTimeZone.c
     EnumSystemLocalesEx.c
     FirefoxCompat.c

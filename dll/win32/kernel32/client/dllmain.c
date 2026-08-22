@@ -30,6 +30,7 @@ static BOOL DllInitialized = FALSE;
 
 /* Critical section for various kernel32 data structures */
 RTL_CRITICAL_SECTION BaseDllDirectoryLock;
+LIST_ENTRY BaseDllDirectoryList;
 
 extern BOOL FASTCALL NlsInit(VOID);
 extern VOID FASTCALL NlsUninit(VOID);
@@ -198,6 +199,7 @@ DllMain(HANDLE hDll,
 
             /* Initialize the DLL critical section */
             RtlInitializeCriticalSection(&BaseDllDirectoryLock);
+            InitializeListHead(&BaseDllDirectoryList);
 
             /* Initialize the National Language Support routines */
             if (!NlsInit())

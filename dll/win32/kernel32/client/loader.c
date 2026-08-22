@@ -301,6 +301,8 @@ LoadLibraryExW(LPCWSTR lpLibFileName,
     NTSTATUS Status;
     PWSTR SearchPath;
     ULONG DllCharacteristics = 0;
+    DWORD SearchFlags;
+    RTL_PATH_TYPE PathType;
     BOOL FreeString = FALSE;
 
     /* Check for any flags LdrLoadDll might be interested in */
@@ -342,10 +344,38 @@ LoadLibraryExW(LPCWSTR lpLibFileName,
         FreeString = TRUE;
     }
 
-    /* Compute the load path. An altered path overrides the process-wide
-     * secure default selected by SetDefaultDllDirectories. */
-    if (!(dwFlags & LOAD_WITH_ALTERED_SEARCH_PATH) && BaseDefaultDllDirectoriesFlags)
-        SearchPath = BaseComputeSecureDllPath();
+    SearchFlags = dwFlags & (LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
+                             LOAD_LIBRARY_SEARCH_APPLICATION_DIR |
+                             LOAD_LIBRARY_SEARCH_USER_DIRS |
+                             LOAD_LIBRARY_SEARCH_SYSTEM32 |
+                             LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+
+    if ((dwFlags & LOAD_WITH_ALTERED_SEARCH_PATH) && SearchFlags)
+    {
+        BaseSetLastNTError(STATUS_INVALID_PARAMETER);
+        if (FreeString) RtlFreeUnicodeString(&DllName);
+        return NULL;
+    }
+
+    if (!SearchFlags)
+    {
+        SearchFlags = BaseDefaultDllDirectoriesFlags;
+        if ((dwFlags & LOAD_WITH_ALTERED_SEARCH_PATH) && SearchFlags) SearchFlags |= LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR;
+    }
+
+    if (SearchFlags & LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR)
+    {
+        PathType = RtlDetermineDosPathNameType_U(DllName.Buffer);
+        if (PathType != RtlPathTypeRooted && PathType != RtlPathTypeDriveAbsolute && PathType != RtlPathTypeUncAbsolute && PathType != RtlPathTypeLocalDevice)
+        {
+            BaseSetLastNTError(STATUS_INVALID_PARAMETER);
+            if (FreeString) RtlFreeUnicodeString(&DllName);
+            return NULL;
+        }
+    }
+
+    if (SearchFlags)
+        SearchPath = BaseComputeSecureDllPath(DllName.Buffer, SearchFlags);
     else
         SearchPath = BaseComputeProcessDllPath((dwFlags & LOAD_WITH_ALTERED_SEARCH_PATH) ? DllName.Buffer : NULL, NULL);
     if (!SearchPath)
