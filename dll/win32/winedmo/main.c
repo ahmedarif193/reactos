@@ -17,7 +17,11 @@
  */
 
 #define COBJMACROS
+#ifdef __REACTOS__
+#include "reactos.h"
+#else
 #include "unixlib.h"
+#endif
 #include "winnls.h"
 #include "mfidl.h"
 
@@ -47,6 +51,7 @@ static void stream_context_destroy( struct stream_context *context )
 }
 
 
+#ifndef __REACTOS__
 static struct stream_context *get_stream_context( UINT64 handle )
 {
     return (struct stream_context *)(UINT_PTR)handle;
@@ -92,6 +97,7 @@ static NTSTATUS WINAPI read_callback( void *args, ULONG size )
 
     return NtCallbackReturn( &ret, sizeof(ret), status );
 }
+#endif
 
 
 BOOL WINAPI DllMain( HINSTANCE instance, DWORD reason, void *reserved )
@@ -100,6 +106,13 @@ BOOL WINAPI DllMain( HINSTANCE instance, DWORD reason, void *reserved )
 
     if (reason == DLL_PROCESS_ATTACH)
     {
+#ifdef __REACTOS__
+        NTSTATUS status;
+
+        DisableThreadLibraryCalls( instance );
+        status = UNIX_CALL( process_attach, NULL );
+        if (status) WARN( "Failed to init native backend, status %#lx\n", status );
+#else
         struct process_attach_params params =
         {
             .seek_callback = (UINT_PTR)seek_callback,
@@ -112,6 +125,7 @@ BOOL WINAPI DllMain( HINSTANCE instance, DWORD reason, void *reserved )
         status = __wine_init_unix_call();
         if (!status) status = UNIX_CALL( process_attach, &params );
         if (status) WARN( "Failed to init unixlib, status %#lx\n", status );
+#endif
     }
 
     return TRUE;
@@ -308,10 +322,18 @@ static HRESULT get_media_type( UINT code, void *params, struct media_type *media
     NTSTATUS status;
 
     media_type->format = NULL;
+#ifdef __REACTOS__
+    if ((status = demuxer_stream_type( params )) && status == STATUS_BUFFER_TOO_SMALL)
+#else
     if ((status = WINE_UNIX_CALL( code, params )) && status == STATUS_BUFFER_TOO_SMALL)
+#endif
     {
         if (!(media_type->format = malloc( media_type->format_size ))) return STATUS_NO_MEMORY;
+#ifdef __REACTOS__
+        status = demuxer_stream_type( params );
+#else
         status = WINE_UNIX_CALL( code, params );
+#endif
     }
 
     if (!status)

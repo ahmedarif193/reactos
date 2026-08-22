@@ -289,6 +289,7 @@ dll/win32/winscard            # Synced to Wine-11.14
 dll/win32/wintrust            # Synced to Wine-11.14
 dll/win32/winusb              # Synced to Wine-11.14
 dll/win32/wintypes            # Synced to Wine-11.14
+dll/win32/winedmo             # Synced to Wine-11.14 (ReactOS native FFmpeg backend)
 dll/win32/wldap32             # Synced to Wine-11.14
 dll/win32/wmi                 # Synced to Wine-11.14
 dll/win32/wmiutils            # Synced to Wine-11.14

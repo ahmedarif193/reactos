@@ -35,6 +35,10 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(dmo);
 
+#ifdef __REACTOS__
+#undef __out
+#endif
+
 DEFINE_MEDIATYPE_GUID( MFVideoFormat_ABGR32, D3DFMT_A8B8G8R8 );
 
 static inline const char *debugstr_ratio( const MFRatio *ratio )
