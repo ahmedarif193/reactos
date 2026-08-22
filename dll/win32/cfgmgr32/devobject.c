@@ -316,14 +316,44 @@ static LSTATUS copy_device_interface_property( HKEY hkey, const struct device_in
 {
     struct property prop;
     LSTATUS err;
+#ifdef __REACTOS__
+    DWORD terminator_count = 0, allocation_size;
+#endif
 
     init_property( &prop, &property->CompKey.Key, &property->Type, property->Buffer, &property->BufferSize, TRUE );
     if (!(err = query_device_interface_property( hkey, iface, &prop ))) return ERROR_SUCCESS;
     if (err && err != ERROR_MORE_DATA) return ERROR_SUCCESS;
 
+#ifdef __REACTOS__
+    if (property->Type == DEVPROP_TYPE_STRING) terminator_count = 1;
+    else if (property->Type == DEVPROP_TYPE_STRING_LIST) terminator_count = 2;
+    if (property->BufferSize > MAXDWORD - terminator_count * sizeof(WCHAR)) return ERROR_OUTOFMEMORY;
+    allocation_size = property->BufferSize + terminator_count * sizeof(WCHAR);
+    if (!(prop.buffer = malloc( allocation_size ))) return E_OUTOFMEMORY;
+    property->BufferSize = allocation_size;
+#else
     if (!(prop.buffer = malloc( property->BufferSize ))) return E_OUTOFMEMORY;
+#endif
     if ((err = query_device_interface_property( hkey, iface, &prop ))) free( prop.buffer );
-    else property->Buffer = prop.buffer;
+    else
+    {
+        property->Buffer = prop.buffer;
+#ifdef __REACTOS__
+        if (terminator_count && !(property->BufferSize % sizeof(WCHAR)))
+        {
+            WCHAR *string = property->Buffer;
+            DWORD char_count = property->BufferSize / sizeof(WCHAR), trailing_count = 0;
+
+            while (trailing_count < terminator_count && trailing_count < char_count && !string[char_count - trailing_count - 1]) trailing_count++;
+            while (trailing_count < terminator_count)
+            {
+                string[char_count++] = 0;
+                trailing_count++;
+            }
+            property->BufferSize = char_count * sizeof(WCHAR);
+        }
+#endif
+    }
 
     return err;
 }
