@@ -76,6 +76,8 @@ typedef ULONG NODE_REQUIREMENT;
 #define PAGE_GUARD            0x100
 #define PAGE_NOCACHE          0x200
 #define PAGE_WRITECOMBINE     0x400
+#define PAGE_TARGETS_NO_UPDATE 0x40000000
+#define PAGE_TARGETS_INVALID  0x40000000
 
 #define MEM_COMMIT           0x1000
 #define MEM_RESERVE          0x2000
