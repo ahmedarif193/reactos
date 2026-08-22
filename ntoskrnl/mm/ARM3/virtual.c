@@ -5565,6 +5565,384 @@ NtResetWriteWatch(IN HANDLE ProcessHandle,
     return STATUS_SUCCESS;
 }
 
+static
+ULONG_PTR
+MiNextWorkingSetBoundary(
+    _In_ ULONG_PTR Address,
+    _In_ ULONG Shift)
+{
+    ULONG_PTR BoundaryMask = ((ULONG_PTR)1 << Shift) - 1;
+    ULONG_PTR NextAddress = (Address | BoundaryMask) + 1;
+
+    if (NextAddress <= Address)
+        return MAXULONG_PTR;
+
+    return NextAddress;
+}
+
+static
+BOOLEAN
+MiGetWorkingSetPte(
+    _In_ PEPROCESS Process,
+    _In_ ULONG_PTR Address,
+    _Out_ PMMPTE Pte,
+    _Out_ PULONG_PTR NextAddress)
+{
+#if defined(_M_ARM64)
+    MI_ARM64_USER_PTE_WALK Walk;
+    ULONG BlockShift;
+
+    if (MiArm64GetUserPteAddressForProcess(Process, (PVOID)Address, &Walk))
+    {
+        Pte->u.Long = Walk.PteValue;
+        *NextAddress = Address + PAGE_SIZE;
+        return Pte->u.Hard.Valid != 0;
+    }
+
+    if (Walk.PteValue & 1)
+    {
+        BlockShift = (Walk.Depth == 1) ? PPI_SHIFT : PDI_SHIFT;
+        Pte->u.Long = Walk.PteValue;
+        Pte->u.Hard.PageFrameNumber += (Address & (((ULONG_PTR)1 << BlockShift) - 1)) >> PAGE_SHIFT;
+        *NextAddress = Address + PAGE_SIZE;
+        return TRUE;
+    }
+
+    BlockShift = (Walk.Depth == 0) ? PXI_SHIFT :
+                 (Walk.Depth == 1) ? PPI_SHIFT :
+                                     PDI_SHIFT;
+    *NextAddress = MiNextWorkingSetBoundary(Address, BlockShift);
+    return FALSE;
+#else
+#if (_MI_PAGING_LEVELS >= 4)
+    PMMPXE PointerPxe = MiAddressToPxe((PVOID)Address);
+
+    if (!PointerPxe->u.Hard.Valid)
+    {
+        *NextAddress = MiNextWorkingSetBoundary(Address, PXI_SHIFT);
+        return FALSE;
+    }
+#endif
+#if (_MI_PAGING_LEVELS >= 3)
+    PMMPPE PointerPpe = MiAddressToPpe((PVOID)Address);
+
+    if (!PointerPpe->u.Hard.Valid)
+    {
+        *NextAddress = MiNextWorkingSetBoundary(Address, PPI_SHIFT);
+        return FALSE;
+    }
+
+    if (MI_IS_PAGE_LARGE(PointerPpe))
+    {
+        *Pte = *PointerPpe;
+        Pte->u.Hard.PageFrameNumber += (Address & (((ULONG_PTR)1 << PPI_SHIFT) - 1)) >> PAGE_SHIFT;
+        *NextAddress = Address + PAGE_SIZE;
+        return TRUE;
+    }
+#endif
+    {
+        PMMPDE PointerPde = MiAddressToPde((PVOID)Address);
+
+        if (!PointerPde->u.Hard.Valid)
+        {
+            *NextAddress = MiNextWorkingSetBoundary(Address, PDI_SHIFT);
+            return FALSE;
+        }
+
+        if (MI_IS_PAGE_LARGE(PointerPde))
+        {
+            *Pte = *PointerPde;
+            Pte->u.Hard.PageFrameNumber += (Address & (((ULONG_PTR)1 << PDI_SHIFT) - 1)) >> PAGE_SHIFT;
+            *NextAddress = Address + PAGE_SIZE;
+            return TRUE;
+        }
+    }
+
+    *Pte = *MiAddressToPte((PVOID)Address);
+    *NextAddress = Address + PAGE_SIZE;
+    return Pte->u.Hard.Valid != 0;
+#endif
+}
+
+static
+ULONG
+MiGetWorkingSetProtection(
+    _In_ PMMPTE Pte)
+{
+#if defined(_M_ARM64)
+    ULONG Protection;
+    ULONG_PTR PteProtection = Pte->u.Long & PTE_PROTECT_MASK;
+
+    for (Protection = 0; Protection < RTL_NUMBER_OF(MmProtectToPteMask); Protection++)
+    {
+        if ((MmProtectToPteMask[Protection] & PTE_PROTECT_MASK) == PteProtection)
+            return Protection;
+    }
+
+    return MM_READONLY;
+#else
+    ULONG Protection;
+
+    if (MI_IS_PAGE_COPY_ON_WRITE(Pte))
+        Protection = MM_WRITECOPY;
+    else if (MI_IS_PAGE_WRITEABLE(Pte))
+        Protection = MM_READWRITE;
+    else
+        Protection = MM_READONLY;
+
+#if (_MI_PAGING_LEVELS >= 3)
+    if (MI_IS_PAGE_EXECUTABLE(Pte))
+    {
+        if (Protection == MM_WRITECOPY)
+            Protection = MM_EXECUTE_WRITECOPY;
+        else if (Protection == MM_READWRITE)
+            Protection = MM_EXECUTE_READWRITE;
+        else
+            Protection = MM_EXECUTE_READ;
+    }
+#endif
+
+    if (Pte->u.Hard.CacheDisable)
+        Protection |= MM_NOCACHE;
+    else if (Pte->u.Hard.WriteThrough)
+        Protection |= MM_WRITECOMBINE;
+
+    return Protection;
+#endif
+}
+
+static
+ULONG_PTR
+MiMakeWorkingSetBlock(
+    _In_ ULONG_PTR Address,
+    _In_ PMMPTE Pte)
+{
+    PMMPFN Pfn;
+    KIRQL OldIrql;
+    ULONG_PTR ShareCount = 0;
+    BOOLEAN Shared = FALSE;
+
+    OldIrql = MiAcquirePfnLock();
+    Pfn = MiGetPfnEntry(Pte->u.Hard.PageFrameNumber);
+    if (Pfn != NULL)
+    {
+        ShareCount = Pfn->u2.ShareCount;
+        Shared = (Pfn->u3.e1.PrototypePte != 0) || (ShareCount > 1);
+        if (Shared)
+        {
+            if (ShareCount == 0)
+                ShareCount = 1;
+            else if (ShareCount > 7)
+                ShareCount = 7;
+        }
+        else
+        {
+            ShareCount = 0;
+        }
+    }
+    MiReleasePfnLock(OldIrql);
+
+    return Address |
+           MiGetWorkingSetProtection(Pte) |
+           (ShareCount << 5) |
+           ((ULONG_PTR)Shared << 8);
+}
+
+static
+NTSTATUS
+MiWalkWorkingSetList(
+    _In_ PEPROCESS Process,
+    _Out_writes_opt_(Capacity) PULONG_PTR Entries,
+    _In_ ULONG_PTR Capacity,
+    _Out_ PULONG_PTR NumberOfPages)
+{
+    ULONG_PTR Address = 0;
+    ULONG_PTR Count = 0;
+    ULONG_PTR NextAddress;
+    MMPTE Pte;
+
+    while (Address <= (ULONG_PTR)MM_HIGHEST_USER_ADDRESS)
+    {
+        if (MiGetWorkingSetPte(Process, Address, &Pte, &NextAddress))
+        {
+            if (Entries != NULL)
+            {
+                ASSERT(Count < Capacity);
+                Entries[Count] = MiMakeWorkingSetBlock(Address, &Pte);
+            }
+            if (Count == MAXULONG_PTR)
+                return STATUS_INTEGER_OVERFLOW;
+            Count++;
+        }
+
+        if ((NextAddress <= Address) || (NextAddress > (ULONG_PTR)MM_HIGHEST_USER_ADDRESS))
+            break;
+        Address = NextAddress;
+    }
+
+    *NumberOfPages = Count;
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+MiCaptureWorkingSetList(
+    _In_ PEPROCESS Process,
+    _Out_writes_opt_(Capacity) PULONG_PTR Entries,
+    _In_ ULONG_PTR Capacity,
+    _Out_ PULONG_PTR NumberOfPages)
+{
+    ULONG_PTR Count;
+    ULONG_PTR CapturedCount;
+    PETHREAD CurrentThread = PsGetCurrentThread();
+    NTSTATUS Status;
+
+    MmLockAddressSpace(&Process->Vm);
+    if (Process->VmDeleted)
+    {
+        MmUnlockAddressSpace(&Process->Vm);
+        return STATUS_PROCESS_IS_TERMINATING;
+    }
+
+    MiLockProcessWorkingSetShared(Process, CurrentThread);
+    Status = MiWalkWorkingSetList(Process, NULL, 0, &Count);
+    if (NT_SUCCESS(Status) && (Entries != NULL) && (Count <= Capacity))
+    {
+        Status = MiWalkWorkingSetList(Process,
+                                     Entries,
+                                     Capacity,
+                                     &CapturedCount);
+        ASSERT(!NT_SUCCESS(Status) || (CapturedCount == Count));
+    }
+    MiUnlockProcessWorkingSetShared(Process, CurrentThread);
+    MmUnlockAddressSpace(&Process->Vm);
+
+    if (NT_SUCCESS(Status))
+        *NumberOfPages = Count;
+
+    return Status;
+}
+
+static
+NTSTATUS
+MiCaptureProcessWorkingSetList(
+    _In_ PEPROCESS Process,
+    _Out_writes_opt_(Capacity) PULONG_PTR Entries,
+    _In_ ULONG_PTR Capacity,
+    _Out_ PULONG_PTR NumberOfPages)
+{
+    BOOLEAN Attached = FALSE;
+    KAPC_STATE ApcState;
+    NTSTATUS Status;
+
+    if (Process != PsGetCurrentProcess())
+    {
+        KeStackAttachProcess(&Process->Pcb, &ApcState);
+        Attached = TRUE;
+    }
+
+    Status = MiCaptureWorkingSetList(Process,
+                                     Entries,
+                                     Capacity,
+                                     NumberOfPages);
+
+    if (Attached)
+        KeUnstackDetachProcess(&ApcState);
+
+    return Status;
+}
+
+static
+NTSTATUS
+MiQueryMemoryWorkingSetList(
+    _In_ HANDLE ProcessHandle,
+    _Out_writes_bytes_(MemoryInformationLength) PVOID MemoryInformation,
+    _In_ SIZE_T MemoryInformationLength,
+    _Out_opt_ PSIZE_T ReturnLength)
+{
+    PEPROCESS Process;
+    BOOLEAN Referenced = FALSE;
+    PULONG_PTR WorkingSetList = NULL;
+    PMDL Mdl = NULL;
+    ULONG_PTR NumberOfPages;
+    ULONG_PTR Capacity;
+    SIZE_T RequiredLength;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (ProcessHandle == NtCurrentProcess())
+    {
+        Process = PsGetCurrentProcess();
+    }
+    else
+    {
+        Status = ObReferenceObjectByHandle(ProcessHandle,
+                                           PROCESS_QUERY_INFORMATION,
+                                           PsProcessType,
+                                           ExGetPreviousMode(),
+                                           (PVOID *)&Process,
+                                           NULL);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        Referenced = TRUE;
+    }
+
+    if (MemoryInformationLength > MAXULONG)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Cleanup;
+    }
+
+    Status = ExLockUserBuffer(MemoryInformation,
+                              (ULONG)MemoryInformationLength,
+                              ExGetPreviousMode(),
+                              IoWriteAccess,
+                              (PVOID *)&WorkingSetList,
+                              &Mdl);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    Capacity = (MemoryInformationLength / sizeof(ULONG_PTR)) - 1;
+    Status = MiCaptureProcessWorkingSetList(Process,
+                                            WorkingSetList + 1,
+                                            Capacity,
+                                            &NumberOfPages);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    WorkingSetList[0] = NumberOfPages;
+    if (NumberOfPages > Capacity)
+    {
+        Status = STATUS_INFO_LENGTH_MISMATCH;
+        goto Cleanup;
+    }
+
+    RequiredLength = (NumberOfPages + 1) * sizeof(ULONG_PTR);
+
+Cleanup:
+    if (Mdl != NULL)
+        ExUnlockUserBuffer(Mdl);
+    if (Referenced)
+        ObDereferenceObject(Process);
+
+    if (NT_SUCCESS(Status))
+    {
+        _SEH2_TRY
+        {
+            if (ReturnLength)
+                *ReturnLength = RequiredLength;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+    }
+
+    return Status;
+}
+
 NTSTATUS
 NTAPI
 NtQueryVirtualMemory(IN HANDLE ProcessHandle,
@@ -5636,9 +6014,18 @@ NtQueryVirtualMemory(IN HANDLE ProcessHandle,
                                               ReturnLength);
             break;
         case MemoryWorkingSetList:
+            if (MemoryInformationLength < sizeof(ULONG_PTR))
+                return STATUS_INFO_LENGTH_MISMATCH;
+            Status = MiQueryMemoryWorkingSetList(ProcessHandle,
+                                                 MemoryInformation,
+                                                 MemoryInformationLength,
+                                                 ReturnLength);
+            break;
+
         case MemoryBasicVlmInformation:
         default:
             DPRINT1("Unhandled memory information class %d\n", MemoryInformationClass);
+            Status = STATUS_INVALID_INFO_CLASS;
             break;
     }
 
