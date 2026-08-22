@@ -399,6 +399,28 @@ static void TestHandshake(void)
           reply[EAPOL_HDR_LEN + KEYDESC_OFF_KEYLEN + 1] == 0,
           NULL, NULL, 0);
 
+    /* A retransmitted msg1 may carry a newer replay counter, but it remains
+     * part of the same handshake and must not rotate the SNonce/PTK. */
+    {
+        rsna_u8 firstSnonce[RSNA_NONCE_LEN];
+
+        memcpy(firstSnonce,
+               &reply[EAPOL_HDR_LEN + KEYDESC_OFF_NONCE],
+               sizeof(firstSnonce));
+        replay[7] = 2;
+        frameLen = ApBuildKeyFrame(frame,
+                                   KEYINFO_VER_HMAC_SHA1_AES | KEYINFO_KEY_TYPE |
+                                   KEYINFO_KEY_ACK,
+                                   replay, anonce, NULL, NULL, NULL, 0);
+        replyLen = sizeof(reply);
+        st = RsnaRxEapol(&ctx, frame, frameLen, reply, &replyLen);
+        Check("msg1 retransmit stays PTK_NEGOTIATING",
+              st == RSNA_STATE_PTK_NEGOTIATING, NULL, NULL, 0);
+        CheckBytes("msg1 retransmit reuses SNonce",
+                   &reply[EAPOL_HDR_LEN + KEYDESC_OFF_NONCE],
+                   firstSnonce, sizeof(firstSnonce));
+    }
+
     /* The AP now derives the same PTK using the SNonce echoed in msg2. */
     {
         const rsna_u8 *m2body = reply + EAPOL_HDR_LEN;
@@ -450,7 +472,7 @@ static void TestHandshake(void)
         n = plainKdLen / 8;
         RsnaAesWrap(kek, 128, plainKd, n, wrapped);   /* -> (n+1)*8 bytes */
 
-        replay[7] = 2;     /* strictly greater than msg1's counter */
+        replay[7] = 3;     /* strictly greater than msg1's counter */
         m3info = KEYINFO_VER_HMAC_SHA1_AES | KEYINFO_KEY_TYPE | KEYINFO_KEY_ACK |
                  KEYINFO_KEY_MIC | KEYINFO_INSTALL | KEYINFO_SECURE |
                  KEYINFO_ENCRYPTED_DATA;
