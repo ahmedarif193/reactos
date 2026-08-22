@@ -152,6 +152,7 @@ windows.devices.bluetooth.dll
 windows.devices.enumeration.dll
 windows.devices.radios.dll
 windows.devices.usb.dll
+windows.gaming.input.dll
 windows.globalization.dll
 windows.graphics.dll
 windows.ui.dll
