@@ -7,6 +7,7 @@ spec2def(msxml4.dll msxml4.spec)
 add_typelib(msxml4_tlb.idl)
 
 list(APPEND SOURCE
+    ${CMAKE_CURRENT_BINARY_DIR}/msxml4_stubs.c
     ${CMAKE_CURRENT_BINARY_DIR}/msxml4.def)
 
 add_library(msxml4 MODULE ${SOURCE} rsrc.rc)
