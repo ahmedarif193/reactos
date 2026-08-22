@@ -19,6 +19,7 @@ BOOLEAN NTAPI ChpeIsProcessorFeaturePresent(ULONG ProcessorFeature);
 PVOID NTAPI LdrResolveDelayLoadedAPI(PVOID ParentBase, PCIMAGE_DELAYLOAD_DESCRIPTOR Descriptor, PDELAYLOAD_FAILURE_DLL_CALLBACK DllHook, PDELAYLOAD_FAILURE_SYSTEM_ROUTINE SystemHook, PIMAGE_THUNK_DATA ThunkAddress, ULONG Flags);
 NTSTATUS NTAPI LdrResolveDelayLoadsFromDll(PVOID ParentBase, PCSTR TargetDllName, ULONG Flags);
 NTSTATUS NTAPI NtFlushProcessWriteBuffers(VOID);
+NTSTATUS NTAPI NtAdjustPrivilegesToken(HANDLE TokenHandle, BOOLEAN DisableAllPrivileges, PTOKEN_PRIVILEGES NewState, ULONG BufferLength, PTOKEN_PRIVILEGES PreviousState, PULONG ReturnLength);
 NTSTATUS NTAPI NtAllocateVirtualMemoryEx(HANDLE ProcessHandle, PVOID *BaseAddress, PSIZE_T RegionSize, ULONG AllocationType, ULONG Protect, PMEM_EXTENDED_PARAMETER ExtendedParameters, ULONG ExtendedParameterCount);
 NTSTATUS NTAPI NtMapViewOfSectionEx(HANDLE SectionHandle, HANDLE ProcessHandle, PVOID *BaseAddress, PLARGE_INTEGER SectionOffset, PSIZE_T ViewSize, ULONG AllocationType, ULONG Protect, PMEM_EXTENDED_PARAMETER ExtendedParameters, ULONG ExtendedParameterCount);
 NTSTATUS NTAPI NtUnmapViewOfSectionEx(HANDLE ProcessHandle, PVOID BaseAddress, ULONG Flags);
@@ -1607,6 +1608,18 @@ ChpeRtlAllocateHeap(PVOID HeapHandle, ULONG Flags, SIZE_T Size)
     return RtlAllocateHeap(HeapHandle, Flags, Size);
 }
 
+LONG NTAPI
+ChpeRtlCompareUnicodeString(PCUNICODE_STRING String1, PCUNICODE_STRING String2, BOOLEAN CaseInSensitive)
+{
+    return RtlCompareUnicodeString(String1, String2, CaseInSensitive);
+}
+
+VOID NTAPI
+ChpeRtlCopyUnicodeString(PUNICODE_STRING DestinationString, PCUNICODE_STRING SourceString)
+{
+    RtlCopyUnicodeString(DestinationString, SourceString);
+}
+
 NTSTATUS NTAPI
 ChpeRtlDeleteCriticalSection(PRTL_CRITICAL_SECTION CriticalSection)
 {
@@ -1637,6 +1650,18 @@ ChpeRtlGetLastWin32Error(VOID)
     return RtlGetLastWin32Error();
 }
 
+NTSTATUS NTAPI
+ChpeRtlGetVersion(PRTL_OSVERSIONINFOW VersionInformation)
+{
+    return RtlGetVersion(VersionInformation);
+}
+
+VOID NTAPI
+ChpeRtlInitUnicodeString(PUNICODE_STRING DestinationString, PCWSTR SourceString)
+{
+    RtlInitUnicodeString(DestinationString, SourceString);
+}
+
 VOID NTAPI
 ChpeRtlSetLastWin32Error(ULONG Win32Error)
 {
@@ -1659,6 +1684,12 @@ VOID NTAPI
 ChpeRtlRunOnceInitialize(PRTL_RUN_ONCE RunOnce)
 {
     RtlRunOnceInitialize(RunOnce);
+}
+
+ULONG NTAPI
+ChpeRtlRandom(PULONG Seed)
+{
+    return RtlRandom(Seed);
 }
 
 BOOLEAN NTAPI
@@ -1834,6 +1865,18 @@ ChpeNtTerminateThread(HANDLE ThreadHandle, NTSTATUS ExitStatus)
 }
 
 NTSTATUS NTAPI
+ChpeNtAdjustPrivilegesToken(HANDLE TokenHandle, BOOLEAN DisableAllPrivileges, PTOKEN_PRIVILEGES NewState, ULONG BufferLength, PTOKEN_PRIVILEGES PreviousState, PULONG ReturnLength)
+{
+    return NtAdjustPrivilegesToken(TokenHandle, DisableAllPrivileges, NewState, BufferLength, PreviousState, ReturnLength);
+}
+
+NTSTATUS NTAPI
+ChpeNtClose(HANDLE Handle)
+{
+    return NtClose(Handle);
+}
+
+NTSTATUS NTAPI
 ChpeNtAllocateVirtualMemory(HANDLE ProcessHandle, PVOID *BaseAddress, ULONG_PTR ZeroBits, PSIZE_T RegionSize, ULONG AllocationType, ULONG Protect)
 {
     return NtAllocateVirtualMemory(ProcessHandle, BaseAddress, ZeroBits, RegionSize, AllocationType, Protect);
@@ -1876,6 +1919,12 @@ ChpeNtMapViewOfSectionEx(HANDLE SectionHandle, HANDLE ProcessHandle, PVOID *Base
 }
 
 NTSTATUS NTAPI
+ChpeNtOpenFile(PHANDLE FileHandle, ACCESS_MASK DesiredAccess, POBJECT_ATTRIBUTES ObjectAttributes, PIO_STATUS_BLOCK IoStatusBlock, ULONG ShareAccess, ULONG OpenOptions)
+{
+    return NtOpenFile(FileHandle, DesiredAccess, ObjectAttributes, IoStatusBlock, ShareAccess, OpenOptions);
+}
+
+NTSTATUS NTAPI
 ChpeNtProtectVirtualMemory(HANDLE ProcessHandle, PVOID *BaseAddress, PSIZE_T RegionSize, ULONG NewProtect, PULONG OldProtect)
 {
     return NtProtectVirtualMemory(ProcessHandle, BaseAddress, RegionSize, NewProtect, OldProtect);
@@ -1885,6 +1934,12 @@ NTSTATUS NTAPI
 ChpeNtQueryInformationFile(HANDLE FileHandle, PIO_STATUS_BLOCK IoStatusBlock, PVOID FileInformation, ULONG Length, FILE_INFORMATION_CLASS FileInformationClass)
 {
     return NtQueryInformationFile(FileHandle, IoStatusBlock, FileInformation, Length, FileInformationClass);
+}
+
+NTSTATUS NTAPI
+ChpeNtQueryObject(HANDLE Handle, OBJECT_INFORMATION_CLASS ObjectInformationClass, PVOID ObjectInformation, ULONG ObjectInformationLength, PULONG ReturnLength)
+{
+    return NtQueryObject(Handle, ObjectInformationClass, ObjectInformation, ObjectInformationLength, ReturnLength);
 }
 
 NTSTATUS NTAPI

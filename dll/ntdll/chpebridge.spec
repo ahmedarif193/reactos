@@ -13,6 +13,7 @@
 @ stdcall LdrGetProcedureAddress(ptr ptr long ptr) ChpeLdrGetProcedureAddress
 @ stdcall -version=0x602+ LdrResolveDelayLoadedAPI(ptr ptr ptr ptr ptr long) ChpeLdrResolveDelayLoadedAPI
 @ stdcall -version=0x602+ LdrResolveDelayLoadsFromDll(ptr str long) ChpeLdrResolveDelayLoadsFromDll
+@ stdcall NtAdjustPrivilegesToken(long long ptr long ptr ptr) ChpeNtAdjustPrivilegesToken
 @ stdcall NtAllocateVirtualMemory(long ptr ptr ptr long long) ChpeNtAllocateVirtualMemory
 @ stdcall NtAllocateVirtualMemoryEx(long ptr ptr long long ptr long) ChpeNtAllocateVirtualMemoryEx
 @ stdcall NtAlertThreadByThreadId(long) ChpeNtAlertThreadByThreadId
@@ -25,8 +26,10 @@
 @ stdcall NtGetContextThread(long ptr) ChpeNtGetContextThread
 @ stdcall NtMapViewOfSection(long long ptr long ptr ptr ptr long long long) ChpeNtMapViewOfSection
 @ stdcall NtMapViewOfSectionEx(long long ptr ptr ptr long long ptr long) ChpeNtMapViewOfSectionEx
+@ stdcall NtOpenFile(ptr long ptr ptr long long) ChpeNtOpenFile
 @ stdcall NtProtectVirtualMemory(long ptr ptr long ptr) ChpeNtProtectVirtualMemory
 @ stdcall NtQueryInformationFile(long ptr ptr long long) ChpeNtQueryInformationFile
+@ stdcall NtQueryObject(long long long long long) ChpeNtQueryObject
 @ stdcall NtQuerySystemInformation(long ptr long ptr) ChpeNtQuerySystemInformation
 @ stdcall NtRaiseException(ptr ptr long) ChpeNtRaiseException
 @ stdcall NtReadFile(long long ptr ptr ptr ptr long ptr ptr) ChpeNtReadFile
@@ -48,6 +51,8 @@
 @ stdcall RtlCaptureContext(ptr) ChpeRtlCaptureContext
 @ stdcall RtlCaptureStackBackTrace(long long ptr ptr) ChpeRtlCaptureStackBackTrace
 @ stdcall RtlCompareMemory(ptr ptr long) ChpeRtlCompareMemory
+@ stdcall RtlCompareUnicodeString(ptr ptr long) ChpeRtlCompareUnicodeString
+@ stdcall RtlCopyUnicodeString(ptr ptr) ChpeRtlCopyUnicodeString
 @ stdcall RtlDecodePointer(ptr) ChpeRtlDecodePointer
 @ stdcall RtlDecodeSystemPointer(ptr) ChpeRtlDecodeSystemPointer
 @ stdcall RtlDeleteCriticalSection(ptr) ChpeRtlDeleteCriticalSection
@@ -68,7 +73,9 @@
 @ stdcall RtlGetCurrentProcessorNumber() ChpeRtlGetCurrentProcessorNumber
 @ stdcall -version=0x601+ RtlGetCurrentProcessorNumberEx(ptr) ChpeRtlGetCurrentProcessorNumberEx
 @ stdcall -version=0x600+ RtlGetProductInfo(long long long long ptr) ChpeRtlGetProductInfo
+@ stdcall RtlGetVersion(ptr) ChpeRtlGetVersion
 @ stdcall RtlGrowFunctionTable(ptr long) ChpeRtlGrowFunctionTable
+@ stdcall RtlInitUnicodeString(ptr wstr) ChpeRtlInitUnicodeString
 @ stdcall -version=0x600+ RtlInitializeConditionVariable(ptr) ChpeRtlInitializeConditionVariable
 @ stdcall RtlInitializeCriticalSection(ptr) ChpeRtlInitializeCriticalSection
 @ stdcall RtlInitializeSListHead(ptr) ChpeRtlInitializeSListHead
@@ -90,6 +97,7 @@
 @ stdcall RtlQueryDepthSList(ptr) ChpeRtlQueryDepthSList
 @ stdcall -norelay RtlRaiseException(ptr) ChpeRtlRaiseException
 @ stdcall RtlRaiseStatus(long) ChpeRtlRaiseStatus
+@ stdcall RtlRandom(ptr) ChpeRtlRandom
 @ stdcall RtlReAllocateHeap(long long ptr long) ChpeRtlReAllocateHeap
 @ stdcall RtlReleaseSRWLockExclusive(ptr) ChpeRtlReleaseSRWLockExclusive
 @ stdcall RtlReleaseSRWLockShared(ptr) ChpeRtlReleaseSRWLockShared
