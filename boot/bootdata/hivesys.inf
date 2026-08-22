@@ -1624,6 +1624,7 @@ HKLM,"SYSTEM\CurrentControlSet\Control\TimeZoneInformation","StandardBias",0x000
 HKLM,"SYSTEM\CurrentControlSet\Control\TimeZoneInformation","DaylightBias",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Control\TimeZoneInformation","StandardName",0x00000000,"Coordinated Universal Time"
 HKLM,"SYSTEM\CurrentControlSet\Control\TimeZoneInformation","DaylightName",0x00000000,"Coordinated Universal Time"
+HKLM,"SYSTEM\CurrentControlSet\Control\TimeZoneInformation","TimeZoneKeyName",0x00000000,"UTC"
 HKLM,"SYSTEM\CurrentControlSet\Control\TimeZoneInformation","StandardStart",0x00000001,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00
 HKLM,"SYSTEM\CurrentControlSet\Control\TimeZoneInformation","DaylightStart",0x00000001,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00,00
 
