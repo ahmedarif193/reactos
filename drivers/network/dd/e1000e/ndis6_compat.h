@@ -763,7 +763,7 @@ E1000_NdisAllocateMdl(
  * ============================================================================ */
 
 #ifndef NDIS_OBJECT_TYPE_OFFLOAD
-#define NDIS_OBJECT_TYPE_OFFLOAD    0x90
+#define NDIS_OBJECT_TYPE_OFFLOAD    0xA7
 #endif
 
 #ifndef NDIS_OFFLOAD_REVISION_1
@@ -851,16 +851,32 @@ typedef struct _NDIS_TCP_LARGE_SEND_OFFLOAD_V2 {
     } IPv6;
 } NDIS_TCP_LARGE_SEND_OFFLOAD_V2, *PNDIS_TCP_LARGE_SEND_OFFLOAD_V2;
 
-/* IPSEC Offload v1 - minimal placeholder */
+/* IPsec offload version 1 */
 typedef struct _NDIS_IPSEC_OFFLOAD_V1 {
     struct {
         ULONG Encapsulation;
+        ULONG AhEspCombined;
+        ULONG TransportTunnelCombined;
+        ULONG IPv4Options;
+        ULONG Flags;
     } Supported;
     struct {
-        ULONG Encapsulation;
+        ULONG Md5:2;
+        ULONG Sha_1:2;
+        ULONG Transport:2;
+        ULONG Tunnel:2;
+        ULONG Send:2;
+        ULONG Receive:2;
     } IPv4AH;
     struct {
-        ULONG Encapsulation;
+        ULONG Des:2;
+        ULONG Reserved:2;
+        ULONG TripleDes:2;
+        ULONG NullEsp:2;
+        ULONG Transport:2;
+        ULONG Tunnel:2;
+        ULONG Send:2;
+        ULONG Receive:2;
     } IPv4ESP;
 } NDIS_IPSEC_OFFLOAD_V1, *PNDIS_IPSEC_OFFLOAD_V1;
 
@@ -874,6 +890,14 @@ typedef struct _NDIS_OFFLOAD {
     ULONG                           Flags;
 } NDIS_OFFLOAD, *PNDIS_OFFLOAD;
 #define NDIS_OFFLOAD_DEFINED 1
+
+#ifndef NDIS_SIZEOF_NDIS_OFFLOAD_REVISION_1
+#define NDIS_SIZEOF_NDIS_OFFLOAD_REVISION_1 \
+    RTL_SIZEOF_THROUGH_FIELD(NDIS_OFFLOAD, Flags)
+#endif
+
+C_ASSERT(sizeof(NDIS_IPSEC_OFFLOAD_V1) == 0x1C);
+C_ASSERT(NDIS_SIZEOF_NDIS_OFFLOAD_REVISION_1 == 0x70);
 #endif
 
 /* ============================================================================
@@ -881,23 +905,23 @@ typedef struct _NDIS_OFFLOAD {
  * ============================================================================ */
 
 #ifndef NDIS_OFFLOAD_PARAMETERS_TX_RX_DISABLED
-#define NDIS_OFFLOAD_PARAMETERS_TX_RX_DISABLED          0
+#define NDIS_OFFLOAD_PARAMETERS_TX_RX_DISABLED          1
 #endif
 
 #ifndef NDIS_OFFLOAD_PARAMETERS_TX_ENABLED_RX_DISABLED
-#define NDIS_OFFLOAD_PARAMETERS_TX_ENABLED_RX_DISABLED  1
+#define NDIS_OFFLOAD_PARAMETERS_TX_ENABLED_RX_DISABLED  2
 #endif
 
 #ifndef NDIS_OFFLOAD_PARAMETERS_RX_ENABLED_TX_DISABLED
-#define NDIS_OFFLOAD_PARAMETERS_RX_ENABLED_TX_DISABLED  2
+#define NDIS_OFFLOAD_PARAMETERS_RX_ENABLED_TX_DISABLED  3
 #endif
 
 #ifndef NDIS_OFFLOAD_PARAMETERS_TX_RX_ENABLED
-#define NDIS_OFFLOAD_PARAMETERS_TX_RX_ENABLED           3
+#define NDIS_OFFLOAD_PARAMETERS_TX_RX_ENABLED           4
 #endif
 
 #ifndef NDIS_OFFLOAD_PARAMETERS_NO_CHANGE
-#define NDIS_OFFLOAD_PARAMETERS_NO_CHANGE               0xFF
+#define NDIS_OFFLOAD_PARAMETERS_NO_CHANGE               0
 #endif
 
 #ifndef NDIS_OFFLOAD_PARAMETERS_REVISION_1
@@ -905,7 +929,7 @@ typedef struct _NDIS_OFFLOAD {
 #endif
 
 #ifndef NDIS_OBJECT_TYPE_DEFAULT_OFFLOAD_PARAMETERS
-#define NDIS_OBJECT_TYPE_DEFAULT_OFFLOAD_PARAMETERS     0x91
+#define NDIS_OBJECT_TYPE_DEFAULT_OFFLOAD_PARAMETERS     NDIS_OBJECT_TYPE_DEFAULT
 #endif
 
 #ifndef NDIS_OFFLOAD_PARAMETERS_DEFINED
