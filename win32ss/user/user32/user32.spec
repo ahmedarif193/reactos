@@ -354,9 +354,12 @@
 @ stdcall -version=0x602+ GetPointerTouchInfo(long ptr)
 @ stdcall -version=0x602+ GetPointerTouchInfoHistory(long ptr ptr)
 @ stdcall -version=0x602+ GetPointerDevice(long ptr)
+@ stdcall -version=0x602+ GetPointerDeviceRects(long ptr ptr)
 @ stdcall -version=0x602+ GetAutoRotationState(ptr)
 @ stdcall -version=0x601+ GetPointerDevices(ptr ptr)
+@ stdcall -version=0x602+ GetPointerFrameTouchInfoHistory(long ptr ptr ptr)
 @ stdcall -version=0x602+ GetPointerPenInfo(long ptr)
+@ stdcall -version=0x602+ GetPointerPenInfoHistory(long ptr ptr)
 @ stdcall -stub -version=0x602+ GetPointerFrameTouchInfo(long ptr ptr)
 @ stdcall -version=0x602+ GetPointerType(long ptr)
 @ stdcall GetPriorityClipboardFormat(ptr long) NtUserGetPriorityClipboardFormat
@@ -737,6 +740,7 @@
 @ stdcall ShowStartGlass(long)
 @ stdcall ShowWindow(long long) NtUserShowWindow
 @ stdcall ShowWindowAsync(long long) NtUserShowWindowAsync
+@ stdcall -version=0x602+ SkipPointerFrameMessages(long)
 @ stdcall -version=0x600+ ShutdownBlockReasonCreate(long wstr)
 @ stdcall -version=0x600+ ShutdownBlockReasonDestroy(long)
 @ stdcall SoftModalMessageBox(ptr)

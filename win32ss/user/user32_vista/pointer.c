@@ -21,6 +21,12 @@ typedef struct tagPOINTER_PEN_INFO POINTER_PEN_INFO;
 #define NDEBUG
 #include <debug.h>
 
+BOOL APIENTRY
+NtUserGetPointerDeviceRects(
+    _In_ HANDLE device,
+    _Out_ RECT *deviceRect,
+    _Out_ RECT *displayRect);
+
 BOOL
 WINAPI
 GetAutoRotationState(
@@ -51,12 +57,71 @@ GetPointerDevice(
 
 BOOL
 WINAPI
+GetPointerDeviceRects(
+    _In_ HANDLE device,
+    _Out_ RECT *deviceRect,
+    _Out_ RECT *displayRect)
+{
+    if (device == NULL || deviceRect == NULL || displayRect == NULL)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    return NtUserGetPointerDeviceRects(device, deviceRect, displayRect);
+}
+
+BOOL
+WINAPI
+GetPointerFrameTouchInfoHistory(
+    _In_ UINT32 pointerId,
+    _Inout_ UINT32 *entriesCount,
+    _Inout_ UINT32 *pointerCount,
+    _Out_writes_(*entriesCount * *pointerCount) POINTER_TOUCH_INFO *touchInfo)
+{
+    UNREFERENCED_PARAMETER(pointerId);
+    UNREFERENCED_PARAMETER(entriesCount);
+    UNREFERENCED_PARAMETER(pointerCount);
+    UNREFERENCED_PARAMETER(touchInfo);
+
+    SetLastError(ERROR_INVALID_PARAMETER);
+    return FALSE;
+}
+
+BOOL
+WINAPI
 GetPointerPenInfo(
     _In_ UINT32 pointerId,
     _Out_ POINTER_PEN_INFO *penInfo)
 {
     UNREFERENCED_PARAMETER(pointerId);
     UNREFERENCED_PARAMETER(penInfo);
+
+    SetLastError(ERROR_INVALID_PARAMETER);
+    return FALSE;
+}
+
+BOOL
+WINAPI
+GetPointerPenInfoHistory(
+    _In_ UINT32 pointerId,
+    _Inout_ UINT32 *entriesCount,
+    _Out_writes_(*entriesCount) POINTER_PEN_INFO *penInfo)
+{
+    UNREFERENCED_PARAMETER(pointerId);
+    UNREFERENCED_PARAMETER(entriesCount);
+    UNREFERENCED_PARAMETER(penInfo);
+
+    SetLastError(ERROR_INVALID_PARAMETER);
+    return FALSE;
+}
+
+BOOL
+WINAPI
+SkipPointerFrameMessages(
+    _In_ UINT32 pointerId)
+{
+    UNREFERENCED_PARAMETER(pointerId);
 
     SetLastError(ERROR_INVALID_PARAMETER);
     return FALSE;
