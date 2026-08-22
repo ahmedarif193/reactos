@@ -96,7 +96,12 @@ NwifiBuildNbl(
         return NULL;
     }
 
-    Nbl = NdisAllocateNetBufferAndNetBufferList(Pool, 0, 0, Mdl, 0, FrameLength);
+    Nbl = NdisAllocateNetBufferAndNetBufferList(Pool,
+                                                NWIFI_NBL_CONTEXT_SIZE,
+                                                0,
+                                                Mdl,
+                                                0,
+                                                FrameLength);
     if (Nbl == NULL)
     {
         NdisFreeMdl(Mdl);

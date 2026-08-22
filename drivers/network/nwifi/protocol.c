@@ -180,8 +180,7 @@ NwifiCreateNblPools(
     PoolParams.fAllocateNetBuffer = TRUE;
     PoolParams.PoolTag = NWIFI_TAG;
     /* NDIS requires per-NBL context storage to use allocation alignment. */
-    PoolParams.ContextSize = ALIGN_UP_BY(sizeof(NWIFI_NBL_CONTEXT),
-                                         MEMORY_ALLOCATION_ALIGNMENT);
+    PoolParams.ContextSize = NWIFI_NBL_CONTEXT_SIZE;
 
     /* TX pool: NBLs we build (802.11 frames) and send down to the dot11 NIC. */
     Adapter->TxNblPool = NdisAllocateNetBufferListPool(gNwifi.MiniportDriverHandle,
