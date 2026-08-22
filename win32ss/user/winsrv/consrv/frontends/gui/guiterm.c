@@ -42,7 +42,8 @@ typedef struct _GUI_INIT_INFO
     GUI_CONSOLE_INFO TermInfo;
 } GUI_INIT_INFO, *PGUI_INIT_INFO;
 
-static BOOL ConsInitialized = FALSE;
+static INIT_ONCE ConsInitOnce = INIT_ONCE_STATIC_INIT;
+static CRITICAL_SECTION GuiInitLock;
 
 extern HICON   ghDefaultIcon;
 extern HICON   ghDefaultIconSm;
@@ -56,6 +57,23 @@ BOOLEAN
 UnRegisterConWndClass(HINSTANCE hInstance);
 
 /* FUNCTIONS ******************************************************************/
+
+static BOOL CALLBACK
+GuiInitOnceCallback(
+    PINIT_ONCE InitOnce,
+    PVOID Parameter,
+    PVOID *Context)
+{
+    UNREFERENCED_PARAMETER(InitOnce);
+    UNREFERENCED_PARAMETER(Parameter);
+    UNREFERENCED_PARAMETER(Context);
+
+    if (!RegisterConWndClass(ConSrvDllInstance)) return FALSE;
+
+    InitTTFontCache();
+    InitializeCriticalSection(&GuiInitLock);
+    return TRUE;
+}
 
 VOID
 GuiConsoleMoveWindow(PGUI_CONSOLE_DATA GuiData)
@@ -286,6 +304,7 @@ GuiInit(IN PCONSOLE_INIT_INFO ConsoleInitInfo,
         IN OUT PGUI_INIT_INFO GuiInitInfo)
 {
     BOOL Success = TRUE;
+    BOOL GuiInitLockHeld = FALSE;
     UNICODE_STRING DesktopPath;
     DESKTOP_CONSOLE_THREAD DesktopConsoleThreadInfo;
     HWINSTA hWinSta;
@@ -295,17 +314,8 @@ GuiInit(IN PCONSOLE_INIT_INFO ConsoleInitInfo,
     HANDLE hInputThread;
     CLIENT_ID ClientId;
 
-    /* Perform one-time initialization */
-    if (!ConsInitialized)
-    {
-        /* Initialize and register the console window class */
-        if (!RegisterConWndClass(ConSrvDllInstance)) return FALSE;
-
-        /* Initialize the font support -- additional TrueType font cache */
-        InitTTFontCache();
-
-        ConsInitialized = TRUE;
-    }
+    /* Serialize process-wide class and font-cache initialization. */
+    if (!InitOnceExecuteOnce(&ConsInitOnce, GuiInitOnceCallback, NULL, NULL)) return FALSE;
 
     /*
      * Set-up the console input thread. We have
@@ -337,6 +347,10 @@ GuiInit(IN PCONSOLE_INIT_INFO ConsoleInitInfo,
     CsrRevertToSelf();
 
     if (hDesk == NULL) return FALSE;
+
+    /* Serialize the lookup and publication of the per-desktop input thread. */
+    EnterCriticalSection(&GuiInitLock);
+    GuiInitLockHeld = TRUE;
 
     /*
      * We need to see whether we need to create a
@@ -454,6 +468,8 @@ GuiInit(IN PCONSOLE_INIT_INFO ConsoleInitInfo,
     /* Here GuiInitInfo contains again original handles */
 
 Quit:
+    if (GuiInitLockHeld) LeaveCriticalSection(&GuiInitLock);
+
     if (!Success)
     {
         /*
