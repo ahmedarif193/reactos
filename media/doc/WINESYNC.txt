@@ -123,6 +123,7 @@ dll/win32/mciseq              # Synced to Wine-11.14
 dll/win32/mciwave             # Synced to Wine-11.14
 dll/win32/mgmtapi             # Synced to Wine-11.14
 dll/win32/mf                  # Synced to Wine-11.14
+dll/win32/mfmediaengine       # Synced to Wine-11.14
 dll/win32/mfplat              # Synced to Wine-11.14
 dll/win32/mfreadwrite         # Synced to Wine-11.14
 dll/win32/mlang               # Synced to Wine-11.14
