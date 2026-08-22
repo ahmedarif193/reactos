@@ -59,6 +59,8 @@ HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer","StartMenuLog
 ; User Profile environment variables
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","USERPROFILE",0x00020000,"%SystemDrive%\Profiles\Default User"
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","ALLUSERSPROFILE",0x00020000,"%SystemDrive%\Profiles\All Users"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","APPDATA",0x00020000,"%USERPROFILE%\Application Data"
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","LOCALAPPDATA",0x00020000,"%USERPROFILE%\Local Settings\Application Data"
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management","PagingFiles",0x00000000,""
 
 ; Font Substitution
