@@ -1,10 +1,11 @@
 /*
- * ReactOS native FFmpeg adapter for Wine's winedmo demuxer.
- *
- * Wine normally invokes the FFmpeg backend through its Unix-call boundary.
- * ReactOS loads the Windows FFmpeg libraries directly, so the same upstream
- * demuxer calls the stream callbacks in-process.
+ * PROJECT:     ReactOS Wine DMO compatibility layer
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:     Native FFmpeg adapter for Wine's winedmo demuxer
+ * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif.ing@outlook.com>
  */
+
+/* Wine normally uses a Unix-call boundary. ReactOS invokes the same upstream demuxer callbacks in-process. */
 
 #include "config.h"
 #include "unix_private.h"

@@ -1,7 +1,8 @@
 /*
  * PROJECT:     ReactOS Win32 Base API
- * LICENSE:     LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * PURPOSE:     Process Snapshotting process-information support
+ * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif.ing@outlook.com>
  */
 
 #include <stdarg.h>
