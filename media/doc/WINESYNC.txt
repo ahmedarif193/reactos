@@ -191,6 +191,7 @@ dll/win32/propsys             # Synced to Wine-11.14
 dll/win32/pstorec             # Synced to Wine-11.14
 dll/win32/qmgr                # Synced to Wine-11.14
 dll/win32/qmgrprxy            # Synced to Wine-11.14
+dll/win32/qasf                # Synced to Wine-11.14
 dll/win32/query               # Synced to Wine-11.14
 dll/win32/rasapi32            # Synced to Wine-11.14
 dll/win32/regapi              # Synced to Wine-11.14
