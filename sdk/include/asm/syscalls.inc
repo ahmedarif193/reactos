@@ -301,6 +301,7 @@ MACRO(STUBCODE_U, Name, SyscallId, ArgCount)
     mov r10, rcx
     syscall
     ret
+    ALIGN 32
 ENDM
 MACRO(STUBCODE_K, Name, SyscallId, ArgCount)
     .ENDPROLOG
