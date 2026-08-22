@@ -1607,6 +1607,40 @@ NtQueryInformationProcess(
             break;
         }
 
+        case ProcessGroupInformation:
+        {
+            Length = sizeof(USHORT);
+
+            Status = PspReferenceProcessForLimitedQuery(ProcessHandle, PreviousMode, &Process);
+            if (!NT_SUCCESS(Status)) break;
+
+            if (ProcessInformationLength < Length)
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+            }
+            else if (!ProcessInformation)
+            {
+                Status = STATUS_ACCESS_VIOLATION;
+            }
+            else
+            {
+                _SEH2_TRY
+                {
+                    /* ReactOS models one processor group, so every process belongs to group zero. */
+                    *(PUSHORT)ProcessInformation = 0;
+                    Status = STATUS_SUCCESS;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+            }
+
+            ObDereferenceObject(Process);
+            break;
+        }
+
         case ProcessLdtInformation:
             DPRINT1("VDM/16-bit not implemented: %lu\n", ProcessInformationClass);
             Status = STATUS_NOT_IMPLEMENTED;
