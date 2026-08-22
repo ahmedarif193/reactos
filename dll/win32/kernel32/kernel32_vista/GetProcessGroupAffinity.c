@@ -1,19 +1,26 @@
 #include "k32_vista.h"
 
-#define NDEBUG
-#include <debug.h>
-
-#undef FIXME
-#define FIXME DPRINT1
-
-/* Taken from Wine kernelbase/process.c */
-
 /***********************************************************************
  *           GetProcessGroupAffinity   (kernelbase.@)
  */
 BOOL WINAPI DECLSPEC_HOTPATCH GetProcessGroupAffinity( HANDLE process, USHORT *count, USHORT *array )
 {
-    FIXME( "(%p,%p,%p): stub\n", process, count, array );
-    SetLastError( ERROR_CALL_NOT_IMPLEMENTED );
-    return FALSE;
+    ULONG length = 0;
+    NTSTATUS status;
+
+    if (!count)
+    {
+        SetLastError(ERROR_NOACCESS);
+        return FALSE;
+    }
+
+    status = NtQueryInformationProcess(process, ProcessGroupInformation, array, *count * sizeof(*array), &length);
+    if (NT_SUCCESS(status) || status == STATUS_BUFFER_TOO_SMALL) *count = (USHORT)(length / sizeof(*array));
+    if (!NT_SUCCESS(status))
+    {
+        BaseSetLastNTError(status);
+        return FALSE;
+    }
+
+    return TRUE;
 }

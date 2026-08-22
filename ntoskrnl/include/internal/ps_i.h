@@ -369,7 +369,12 @@ static const INFORMATION_CLASS_INFO PsProcessInfoClass[] =
     IQS_NONE,
 
     /* ProcessGroupInformation */
-    IQS_NONE,
+    IQS_SAME
+    (
+        USHORT,
+        USHORT,
+        ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE
+    ),
     /* ProcessTokenVirtualizationEnabled */
     IQS_NONE,
     /* ProcessConsoleHostProcess */
