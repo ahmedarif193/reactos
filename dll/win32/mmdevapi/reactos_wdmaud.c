@@ -58,14 +58,21 @@ struct reactos_stream
     HANDLE timer_thread;
     CRITICAL_SECTION lock;
     WAVEFORMATEX format;
+    WAVEFORMATEX device_format;
     UINT32 frame_size;
+    UINT32 device_frame_size;
     UINT32 buffer_frames;
     UINT32 period_frames;
+    UINT32 device_period_frames;
     UINT32 padding;
     UINT32 capture_frames;
     UINT64 position;
+    UINT64 resample_offset;
     BYTE *buffer;
+    BYTE *device_buffer;
     UINT32 buffer_alloc_frames;
+    UINT32 device_buffer_alloc_frames;
+    BOOL capture_conversion;
     BOOL capture_locked;
     BOOL started;
 };
@@ -428,28 +435,34 @@ static BOOL is_pcm_format(const WAVEFORMATEX *fmt)
     return IsEqualGUID(&ext->SubFormat, &KSDATAFORMAT_SUBTYPE_PCM);
 }
 
+static HRESULT validate_pcm_format(const WAVEFORMATEX *fmt)
+{
+    UINT block_align;
+
+    if (!is_pcm_format(fmt))
+        return AUDCLNT_E_UNSUPPORTED_FORMAT;
+
+    if (!fmt->nChannels || !fmt->nSamplesPerSec || fmt->nSamplesPerSec > 192000 || (fmt->wBitsPerSample != 8 && fmt->wBitsPerSample != 16 && fmt->wBitsPerSample != 24 && fmt->wBitsPerSample != 32))
+        return AUDCLNT_E_UNSUPPORTED_FORMAT;
+
+    block_align = (fmt->nChannels * fmt->wBitsPerSample) / 8;
+    if (!block_align || fmt->nBlockAlign != block_align || fmt->nAvgBytesPerSec != fmt->nSamplesPerSec * fmt->nBlockAlign)
+        return AUDCLNT_E_UNSUPPORTED_FORMAT;
+
+    return S_OK;
+}
+
 static HRESULT validate_format(const char *device, EDataFlow flow, const WAVEFORMATEX *fmt)
 {
     WDMAUD_DEVICE_INFO caps;
     WAVEFORMATEXTENSIBLE mix;
     DWORD index = 0, formats, flag;
     EDataFlow parsed_flow = flow;
-    UINT block_align;
+    HRESULT hr;
     WORD cap_channels;
 
-    if (!is_pcm_format(fmt))
-        return AUDCLNT_E_UNSUPPORTED_FORMAT;
-
-    if (!fmt->nChannels ||
-        !fmt->nSamplesPerSec || fmt->nSamplesPerSec > 192000 ||
-        (fmt->wBitsPerSample != 8 && fmt->wBitsPerSample != 16 &&
-         fmt->wBitsPerSample != 24 && fmt->wBitsPerSample != 32))
-        return AUDCLNT_E_UNSUPPORTED_FORMAT;
-
-    block_align = (fmt->nChannels * fmt->wBitsPerSample) / 8;
-    if (!block_align || fmt->nBlockAlign != block_align ||
-        fmt->nAvgBytesPerSec != fmt->nSamplesPerSec * fmt->nBlockAlign)
-        return AUDCLNT_E_UNSUPPORTED_FORMAT;
+    if (FAILED(hr = validate_pcm_format(fmt)))
+        return hr;
 
     flag = RosSoundWaveFormatFieldsToLegacyFlag(fmt->nSamplesPerSec,
                                                 fmt->wBitsPerSample,
@@ -499,7 +512,7 @@ static HRESULT open_stream_pin(struct reactos_stream *stream)
     ZeroMemory(&info, sizeof(info));
     info.DeviceType = stream->type;
     info.DeviceIndex = stream->index;
-    info.u.WaveFormatEx = stream->format;
+    info.u.WaveFormatEx = stream->device_format;
 
     if (!wdmaud_ioctl(IOCTL_OPEN_WDMAUD, &info))
     {
@@ -587,6 +600,9 @@ static void reset_stream_pin(struct reactos_stream *stream)
 static UINT64 query_stream_position(struct reactos_stream *stream)
 {
     WDMAUD_DEVICE_INFO info;
+
+    if (stream->capture_conversion)
+        return stream->position;
 
     if (!stream->pin)
         return stream->position;
@@ -681,6 +697,8 @@ void reactos_audio_driver_deinit(void)
 static NTSTATUS reactos_create_stream(struct create_stream_params *params)
 {
     struct reactos_stream *stream;
+    WAVEFORMATEXTENSIBLE mix;
+    BOOL allow_conversion;
     EDataFlow flow;
     DWORD index;
     HRESULT hr;
@@ -691,7 +709,9 @@ static NTSTATUS reactos_create_stream(struct create_stream_params *params)
         return STATUS_SUCCESS;
     }
 
-    if (FAILED(hr = validate_format(params->device, params->flow, params->fmt)))
+    allow_conversion = flow == eCapture && params->share == AUDCLNT_SHAREMODE_SHARED && (params->flags & AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM);
+    hr = validate_format(params->device, params->flow, params->fmt);
+    if (FAILED(hr) && !(allow_conversion && hr == AUDCLNT_E_UNSUPPORTED_FORMAT && SUCCEEDED(validate_pcm_format(params->fmt))))
     {
         params->result = hr;
         return STATUS_SUCCESS;
@@ -719,10 +739,29 @@ static NTSTATUS reactos_create_stream(struct create_stream_params *params)
     }
     InitializeCriticalSection(&stream->lock);
     normalize_wdmaud_format(&stream->format, params->fmt);
+    stream->device_format = stream->format;
     stream->frame_size = params->fmt->nBlockAlign;
+    stream->device_frame_size = stream->frame_size;
+    if (FAILED(hr) && allow_conversion)
+    {
+        if (!fill_mix_format(params->device, params->flow, &mix))
+        {
+            DeleteCriticalSection(&stream->lock);
+            CloseHandle(stream->stop_event);
+            free(stream);
+            params->result = AUDCLNT_E_UNSUPPORTED_FORMAT;
+            return STATUS_SUCCESS;
+        }
+        normalize_wdmaud_format(&stream->device_format, &mix.Format);
+        stream->device_frame_size = stream->device_format.nBlockAlign;
+        stream->capture_conversion = TRUE;
+    }
     stream->period_frames = (params->fmt->nSamplesPerSec * REACTOS_DEFAULT_PERIOD) / 10000000;
     if (!stream->period_frames)
         stream->period_frames = 1;
+    stream->device_period_frames = (stream->device_format.nSamplesPerSec * REACTOS_DEFAULT_PERIOD) / 10000000;
+    if (!stream->device_period_frames)
+        stream->device_period_frames = 1;
     stream->buffer_frames = (UINT32)max(REACTOS_DEFAULT_BUFFER_FRAMES,
                                         (params->duration * params->fmt->nSamplesPerSec) / 10000000);
     if (!stream->buffer_frames)
@@ -773,6 +812,7 @@ static NTSTATUS reactos_release_stream(struct release_stream_params *params)
         CloseHandle(stream->stop_event);
     DeleteCriticalSection(&stream->lock);
     free(stream->buffer);
+    free(stream->device_buffer);
     free(stream);
     params->result = S_OK;
     return STATUS_SUCCESS;
@@ -795,6 +835,7 @@ static NTSTATUS reactos_start(struct start_params *params)
         EnterCriticalSection(&stream->lock);
         stream->capture_frames = 0;
         stream->capture_locked = FALSE;
+        stream->resample_offset = 0;
         stream->started = TRUE;
         LeaveCriticalSection(&stream->lock);
         stream->timer_thread = CreateThread(NULL, 0, reactos_timer_thread, stream, 0, NULL);
@@ -808,7 +849,7 @@ static NTSTATUS reactos_start(struct start_params *params)
             return STATUS_SUCCESS;
         }
         SetThreadPriority(stream->timer_thread, THREAD_PRIORITY_TIME_CRITICAL);
-        if (stream->event)
+        if (stream->event && stream->flow != eCapture)
             SetEvent(stream->event);
     }
     return STATUS_SUCCESS;
@@ -857,6 +898,7 @@ static NTSTATUS reactos_reset(struct reset_params *params)
     stream->capture_frames = 0;
     stream->capture_locked = FALSE;
     stream->position = 0;
+    stream->resample_offset = 0;
     LeaveCriticalSection(&stream->lock);
     params->result = S_OK;
     return STATUS_SUCCESS;
@@ -1025,9 +1067,121 @@ static HRESULT ensure_stream_buffer(struct reactos_stream *stream, UINT32 frames
     return S_OK;
 }
 
+static HRESULT ensure_device_buffer(struct reactos_stream *stream, UINT32 frames)
+{
+    size_t bytes = frames * stream->device_frame_size;
+
+    if (stream->device_buffer_alloc_frames < frames)
+    {
+        BYTE *buffer = realloc(stream->device_buffer, bytes);
+        if (!buffer)
+            return E_OUTOFMEMORY;
+
+        stream->device_buffer = buffer;
+        stream->device_buffer_alloc_frames = frames;
+    }
+
+    return S_OK;
+}
+
+static INT32 read_pcm_sample(const BYTE *data, WORD bits)
+{
+    INT32 value;
+
+    switch (bits)
+    {
+        case 8:
+            return ((INT32)data[0] - 128) * 0x1000000;
+        case 16:
+            return (INT32)(INT16)(data[0] | (data[1] << 8)) * 0x10000;
+        case 24:
+            value = data[0] | (data[1] << 8) | (data[2] << 16);
+            if (value & 0x800000)
+                value |= ~0xffffff;
+            return value * 0x100;
+        case 32:
+            memcpy(&value, data, sizeof(value));
+            return value;
+        default:
+            return 0;
+    }
+}
+
+static void write_pcm_sample(BYTE *data, WORD bits, INT32 value)
+{
+    switch (bits)
+    {
+        case 8:
+            data[0] = (BYTE)((value >> 24) + 128);
+            break;
+        case 16:
+            data[0] = (BYTE)(value >> 16);
+            data[1] = (BYTE)(value >> 24);
+            break;
+        case 24:
+            data[0] = (BYTE)(value >> 8);
+            data[1] = (BYTE)(value >> 16);
+            data[2] = (BYTE)(value >> 24);
+            break;
+        case 32:
+            memcpy(data, &value, sizeof(value));
+            break;
+    }
+}
+
+static UINT32 convert_capture_frames(struct reactos_stream *stream, const BYTE *source, UINT32 source_frames, BYTE *destination, UINT32 destination_capacity)
+{
+    const WAVEFORMATEX *source_format = &stream->device_format;
+    const WAVEFORMATEX *destination_format = &stream->format;
+    UINT source_sample_size = source_format->wBitsPerSample / 8;
+    UINT destination_sample_size = destination_format->wBitsPerSample / 8;
+    UINT64 offset = stream->resample_offset;
+    UINT32 source_index, destination_frames = 0;
+    WORD channel;
+
+    while (offset / destination_format->nSamplesPerSec < source_frames && destination_frames < destination_capacity)
+    {
+        const BYTE *source_frame;
+        BYTE *destination_frame;
+
+        source_index = (UINT32)(offset / destination_format->nSamplesPerSec);
+        source_frame = source + source_index * source_format->nBlockAlign;
+        destination_frame = destination + destination_frames * destination_format->nBlockAlign;
+
+        for (channel = 0; channel < destination_format->nChannels; ++channel)
+        {
+            INT32 sample;
+
+            if (destination_format->nChannels == 1 && source_format->nChannels > 1)
+            {
+                LONGLONG total = 0;
+                WORD source_channel;
+
+                for (source_channel = 0; source_channel < source_format->nChannels; ++source_channel)
+                    total += read_pcm_sample(source_frame + source_channel * source_sample_size, source_format->wBitsPerSample);
+                sample = (INT32)(total / source_format->nChannels);
+            }
+            else
+            {
+                WORD source_channel = source_format->nChannels == 1 ? 0 : min(channel, source_format->nChannels - 1);
+                sample = read_pcm_sample(source_frame + source_channel * source_sample_size, source_format->wBitsPerSample);
+            }
+
+            write_pcm_sample(destination_frame + channel * destination_sample_size, destination_format->wBitsPerSample, sample);
+        }
+
+        ++destination_frames;
+        offset += source_format->nSamplesPerSec;
+    }
+
+    stream->resample_offset = offset - (UINT64)source_frames * destination_format->nSamplesPerSec;
+    return destination_frames;
+}
+
 static void reactos_capture_timer_loop(struct reactos_stream *stream)
 {
-    UINT32 bytes, frames, used;
+    BYTE *read_buffer;
+    UINT32 bytes, frames, output_capacity, source_frames, used;
     DWORD error;
 
     while (stream_from_handle((stream_handle)(ULONG_PTR)stream))
@@ -1048,18 +1202,20 @@ static void reactos_capture_timer_loop(struct reactos_stream *stream)
             continue;
         }
 
-        if (FAILED(ensure_stream_buffer(stream, stream->period_frames)))
+        output_capacity = stream->capture_conversion ? (UINT32)(((UINT64)stream->device_period_frames * stream->format.nSamplesPerSec + stream->device_format.nSamplesPerSec - 1) / stream->device_format.nSamplesPerSec + 1) : stream->device_period_frames;
+        if (FAILED(ensure_stream_buffer(stream, output_capacity)) || (stream->capture_conversion && FAILED(ensure_device_buffer(stream, stream->device_period_frames))))
         {
             LeaveCriticalSection(&stream->lock);
             Sleep(10);
             continue;
         }
 
-        bytes = stream->period_frames * stream->frame_size;
+        read_buffer = stream->capture_conversion ? stream->device_buffer : stream->buffer;
+        bytes = stream->device_period_frames * stream->device_frame_size;
         LeaveCriticalSection(&stream->lock);
 
         used = 0;
-        if (!stream_io_wait(stream, TRUE, stream->buffer, bytes, &used))
+        if (!stream_io_wait(stream, TRUE, read_buffer, bytes, &used))
         {
             error = GetLastError();
             if (error == ERROR_OPERATION_ABORTED)
@@ -1070,7 +1226,8 @@ static void reactos_capture_timer_loop(struct reactos_stream *stream)
             continue;
         }
 
-        frames = used / stream->frame_size;
+        source_frames = used / stream->device_frame_size;
+        frames = stream->capture_conversion ? convert_capture_frames(stream, stream->device_buffer, source_frames, stream->buffer, stream->buffer_alloc_frames) : source_frames;
         EnterCriticalSection(&stream->lock);
         if (stream->closing || !stream->started)
         {
