@@ -471,6 +471,7 @@
 @ stdcall SHAddToRecentDocs(long ptr) # 2k3:270, Vista:310
 @ stdcall SHAppBarMessage(long ptr) # 2k3:271, Vista:311
 @ stub -version=0x600+ SHAssocEnumHandlers # Vista:312
+@ stdcall -version=0x600+ SHAssocEnumHandlersForProtocolByApplication(wstr ptr ptr)
 @ stub -version=0x600+ SHBindToFolderIDListParent # Vista:313
 @ stub -version=0x600+ SHBindToFolderIDListParentEx # Vista:314
 @ stdcall -version=0x600+ SHBindToObject(ptr ptr ptr ptr ptr) # Vista:315
