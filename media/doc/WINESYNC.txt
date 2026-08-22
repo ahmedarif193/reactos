@@ -252,6 +252,7 @@ dll/win32/windows.networking.hostname # Synced to Wine-11.14
 dll/win32/windows.perception.stub # Synced to Wine-11.14
 dll/win32/windows.security.authentication.onlineid # Synced to Wine-11.14
 dll/win32/windows.security.credentials.ui.userconsentverifier # Synced to Wine-11.14
+dll/win32/windows.storage     # Synced to Wine-11.14
 dll/win32/windows.ui          # Synced to Wine-11.14
 dll/win32/windowscodecs       # Synced to Wine-11.14
 dll/win32/windowscodecsext    # Synced to Wine-11.14
