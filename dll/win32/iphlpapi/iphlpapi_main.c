@@ -62,6 +62,10 @@ WINE_DEFAULT_DEBUG_CHANNEL(iphlpapi);
 #ifdef __REACTOS__
 #undef interface
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
+DWORD IphlpapiCancelMibChangeNotify2(HANDLE handle);
+DWORD IphlpapiNotifyIpInterfaceChange(ADDRESS_FAMILY family, PIPINTERFACE_CHANGE_CALLBACK callback, PVOID context, BOOLEAN initial, PHANDLE handle);
+DWORD IphlpapiNotifyRouteChange2(ADDRESS_FAMILY family, PIPFORWARD_CHANGE_CALLBACK callback, PVOID context, BOOLEAN initial, PHANDLE handle);
+DWORD IphlpapiNotifyUnicastIpAddressChange(ADDRESS_FAMILY family, PUNICAST_IPADDRESS_CHANGE_CALLBACK callback, PVOID context, BOOLEAN initial, PHANDLE handle);
 #endif
 
 #define CHARS_IN_GUID 39
@@ -170,8 +174,12 @@ BOOL WINAPI CancelIPChangeNotify(LPOVERLAPPED overlapped)
  */
 DWORD WINAPI CancelMibChangeNotify2(HANDLE handle)
 {
+#ifdef __REACTOS__
+    return IphlpapiCancelMibChangeNotify2(handle);
+#else
     FIXME("(handle %p): stub\n", handle);
     return NO_ERROR;
+#endif
 }
 
 
@@ -2264,6 +2272,7 @@ static void forward_row2_fill( MIB_IPFORWARD_ROW2 *row, USHORT fam, void *key, s
     struct nsi_ipv4_forward_dynamic *dyn4 = (struct nsi_ipv4_forward_dynamic *)dyn;
     struct nsi_ipv6_forward_dynamic *dyn6 = (struct nsi_ipv6_forward_dynamic *)dyn;
 
+    memset( row, 0, sizeof(*row) );
     if (fam == AF_INET)
     {
         row->InterfaceLuid = key4->luid;
@@ -3769,7 +3778,7 @@ static void unicast_row_fill( MIB_UNICASTIPADDRESS_ROW *row, USHORT fam, void *k
     struct nsi_ipv4_unicast_key *key4 = (struct nsi_ipv4_unicast_key *)key;
     struct nsi_ipv6_unicast_key *key6 = (struct nsi_ipv6_unicast_key *)key;
 
-    memset( &row->Address, 0, sizeof(row->Address) );
+    memset( row, 0, sizeof(*row) );
     if (fam == AF_INET)
     {
         row->Address.Ipv4.sin_family = fam;
@@ -4014,10 +4023,14 @@ DWORD WINAPI NotifyAddrChange(PHANDLE Handle, LPOVERLAPPED overlapped)
 DWORD WINAPI NotifyIpInterfaceChange(ADDRESS_FAMILY family, PIPINTERFACE_CHANGE_CALLBACK callback,
                                      PVOID context, BOOLEAN init_notify, PHANDLE handle)
 {
+#ifdef __REACTOS__
+    return IphlpapiNotifyIpInterfaceChange(family, callback, context, init_notify, handle);
+#else
     FIXME("(family %d, callback %p, context %p, init_notify %d, handle %p): stub\n",
           family, callback, context, init_notify, handle);
     if (handle) *handle = NULL;
     return NO_ERROR;
+#endif
 }
 
 /******************************************************************
@@ -4026,10 +4039,14 @@ DWORD WINAPI NotifyIpInterfaceChange(ADDRESS_FAMILY family, PIPINTERFACE_CHANGE_
 DWORD WINAPI NotifyRouteChange2(ADDRESS_FAMILY family, PIPFORWARD_CHANGE_CALLBACK callback, VOID* context,
                                 BOOLEAN init_notify, HANDLE* handle)
 {
+#ifdef __REACTOS__
+    return IphlpapiNotifyRouteChange2(family, callback, context, init_notify, handle);
+#else
     FIXME("(family %d, callback %p, context %p, init_notify %d, handle %p): stub\n",
         family, callback, context, init_notify, handle);
     if (handle) *handle = NULL;
     return NO_ERROR;
+#endif
 }
 
 
@@ -4062,6 +4079,9 @@ DWORD WINAPI NotifyRouteChange(PHANDLE Handle, LPOVERLAPPED overlapped)
 DWORD WINAPI NotifyUnicastIpAddressChange(ADDRESS_FAMILY family, PUNICAST_IPADDRESS_CHANGE_CALLBACK callback,
                                           PVOID context, BOOLEAN init_notify, PHANDLE handle)
 {
+#ifdef __REACTOS__
+    return IphlpapiNotifyUnicastIpAddressChange(family, callback, context, init_notify, handle);
+#else
     FIXME("(family %d, callback %p, context %p, init_notify %d, handle %p): semi-stub\n",
           family, callback, context, init_notify, handle);
     if (handle) *handle = NULL;
@@ -4070,6 +4090,7 @@ DWORD WINAPI NotifyUnicastIpAddressChange(ADDRESS_FAMILY family, PUNICAST_IPADDR
         callback(context, NULL, MibInitialNotification);
 
     return NO_ERROR;
+#endif
 }
 
 /******************************************************************
