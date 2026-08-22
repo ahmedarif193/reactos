@@ -495,10 +495,12 @@ static rsna_size RsnaBuildReply(RSNA_CTX *ctx,
 
     RsnaPutU16(&body[KEYDESC_OFF_KEYINFO], keyInfo);
 
-    /* Key Length: pairwise cipher key length (CCMP 16, TKIP 32). */
+    /* RSN sets Key Length to zero in messages 2 and 4.  Legacy WPA echoes
+     * the pairwise cipher key length instead. */
     RsnaPutU16(&body[KEYDESC_OFF_KEYLEN],
-               (ctx->cipher == RSNA_CIPHER_TKIP) ? RSNA_TK_TKIP_LEN
-                                                 : RSNA_TK_CCMP_LEN);
+               (body[KEYDESC_OFF_TYPE] == EAPOL_KEY_DESC_RSN) ? 0 :
+               ((ctx->cipher == RSNA_CIPHER_TKIP) ? RSNA_TK_TKIP_LEN
+                                                  : RSNA_TK_CCMP_LEN));
 
     /* Echo the AP's replay counter. */
     RsnaMemcpy(&body[KEYDESC_OFF_REPLAY], ctx->replayCounter, KEYDESC_REPLAY_LEN);
