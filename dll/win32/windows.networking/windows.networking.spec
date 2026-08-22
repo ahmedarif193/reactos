@@ -1,7 +1,7 @@
 1 stub @
 @ stdcall -private DllCanUnloadNow()
 @ stdcall -private DllGetActivationFactory(ptr ptr)
-@ stub DllGetClassObject
+@ stub -private DllGetClassObject
 @ stdcall -private DllMain(long long ptr)
 @ stdcall -private DllRegisterServer()
 @ stdcall -private DllUnregisterServer()
