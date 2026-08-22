@@ -587,7 +587,9 @@ Ndis6LegacyDoRequest(
                 Request->DATA.QUERY_INFORMATION.BytesNeeded = sizeof(NDIS_MEDIUM);
                 return NDIS_STATUS_BUFFER_TOO_SHORT;
             }
-            *(NDIS_MEDIUM*)Buffer = NdisMedium802_3;
+            *(NDIS_MEDIUM*)Buffer = Ext->GeneralAttrsValid
+                ? gen->MediaType
+                : NdisMedium802_3;
             Request->DATA.QUERY_INFORMATION.BytesWritten = sizeof(NDIS_MEDIUM);
             return NDIS_STATUS_SUCCESS;
 
