@@ -242,6 +242,8 @@ SpiUpdatePerUserSystemParameters(VOID)
     LONG EarlyWallpaperWidth = 0;
     LONG EarlyWallpaperHeight = 0;
     WALLPAPER_MODE EarlyWallpaperMode = wmCenter;
+    WCHAR EarlyWallpaperPath[MAX_PATH + 1];
+    USHORT EarlyWallpaperPathLength = 0;
 #endif
 
     TRACE("Enter SpiUpdatePerUserSystemParameters\n");
@@ -249,10 +251,14 @@ SpiUpdatePerUserSystemParameters(VOID)
 #ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
     if (gspv.bEarlySplashWallpaper)
     {
+        ASSERT(gspv.ustrWallpaper.Buffer == gspv.awcWallpaper);
+        ASSERT(gspv.ustrWallpaper.Length <= MAX_PATH * sizeof(WCHAR));
         EarlyWallpaper = gspv.hbmWallpaper;
         EarlyWallpaperWidth = gspv.cxWallpaper;
         EarlyWallpaperHeight = gspv.cyWallpaper;
         EarlyWallpaperMode = gspv.WallpaperMode;
+        EarlyWallpaperPathLength = gspv.ustrWallpaper.Length;
+        RtlCopyMemory(EarlyWallpaperPath, gspv.awcWallpaper, EarlyWallpaperPathLength + sizeof(WCHAR));
     }
 #endif
 
@@ -267,6 +273,10 @@ SpiUpdatePerUserSystemParameters(VOID)
         gspv.cyWallpaper = EarlyWallpaperHeight;
         gspv.WallpaperMode = EarlyWallpaperMode;
         gspv.bEarlySplashWallpaper = TRUE;
+        RtlCopyMemory(gspv.awcWallpaper, EarlyWallpaperPath, EarlyWallpaperPathLength + sizeof(WCHAR));
+        gspv.ustrWallpaper.Buffer = gspv.awcWallpaper;
+        gspv.ustrWallpaper.Length = EarlyWallpaperPathLength;
+        gspv.ustrWallpaper.MaximumLength = sizeof(gspv.awcWallpaper);
         TRACE("EARLY_SPLASH: WIN32K_WALLPAPER_PRESERVED stage=user_parameters bitmap=%p\n", EarlyWallpaper);
     }
 #endif
@@ -675,15 +685,40 @@ SpiGetUserPref(DWORD dwMask, PVOID pvParam, FLONG fl)
 }
 
 static
+WALLPAPER_MODE
+SpiLoadWallpaperMode(VOID)
+{
+    ULONG ulTile = SpiLoadInt(KEY_DESKTOP, L"TileWallpaper", 0);
+    ULONG ulStyle = SpiLoadInt(KEY_DESKTOP, L"WallpaperStyle", 0);
+
+    TRACE("SpiLoadWallpaperMode: ulTile=%lu, ulStyle=%lu\n", ulTile, ulStyle);
+    if (ulTile && !ulStyle)
+        return wmTile;
+    if (!ulTile && ulStyle == 2)
+        return wmStretch;
+    if (!ulTile && ulStyle == 6)
+        return wmFit;
+    if (!ulTile && ulStyle == 10)
+        return wmFill;
+    return wmCenter;
+}
+
+static
 UINT_PTR
 SpiSetWallpaper(PVOID pvParam, FLONG fl)
 {
     UNICODE_STRING ustr;
+#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
+    UNICODE_STRING CapturedWallpaper;
+#endif
     WCHAR awc[MAX_PATH];
+    WCHAR awcCaptured[MAX_PATH + 1];
     BOOL bResult;
+#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
+    BOOL ReuseEarlyWallpaper;
+#endif
     HBITMAP hbmp, hOldBitmap;
     SURFACE *psurfBmp;
-    ULONG ulTile, ulStyle;
 
     REQ_INTERACTIVE_WINSTA(ERROR_REQUIRES_INTERACTIVE_WINDOWSTATION);
 
@@ -699,23 +734,32 @@ SpiSetWallpaper(PVOID pvParam, FLONG fl)
     {
         return 0;
     }
-    if (ustr.Length > MAX_PATH * sizeof(WCHAR))
+    if (ustr.Length > MAX_PATH * sizeof(WCHAR) || (ustr.Length % sizeof(WCHAR)) != 0)
     {
         return 0;
     }
 
     /* Copy the string buffer name */
-    bResult = SpiMemCopy(gspv.awcWallpaper, ustr.Buffer, ustr.Length, fl & SPIF_PROTECT);
+    bResult = SpiMemCopy(awcCaptured, ustr.Buffer, ustr.Length, fl & SPIF_PROTECT);
     if (!bResult)
     {
         return 0;
     }
+    awcCaptured[ustr.Length / sizeof(WCHAR)] = UNICODE_NULL;
+
+#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
+    CapturedWallpaper.Buffer = awcCaptured;
+    CapturedWallpaper.Length = ustr.Length;
+    CapturedWallpaper.MaximumLength = sizeof(awcCaptured);
+    ReuseEarlyWallpaper = gspv.bEarlySplashWallpaper && RtlEqualUnicodeString(&CapturedWallpaper, &gspv.ustrWallpaper, TRUE);
+#endif
+
+    RtlCopyMemory(gspv.awcWallpaper, awcCaptured, ustr.Length + sizeof(WCHAR));
 
     /* Update the UNICODE_STRING */
     gspv.ustrWallpaper.Buffer = gspv.awcWallpaper;
-    gspv.ustrWallpaper.MaximumLength = MAX_PATH * sizeof(WCHAR);
+    gspv.ustrWallpaper.MaximumLength = sizeof(gspv.awcWallpaper);
     gspv.ustrWallpaper.Length = ustr.Length;
-    gspv.awcWallpaper[ustr.Length / sizeof(WCHAR)] = 0;
 
     TRACE("SpiSetWallpaper, name=%S\n", gspv.awcWallpaper);
 
@@ -724,6 +768,16 @@ SpiSetWallpaper(PVOID pvParam, FLONG fl)
     {
         SpiStoreSz(KEY_DESKTOP, L"Wallpaper", gspv.awcWallpaper);
     }
+
+#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
+    if (ReuseEarlyWallpaper)
+    {
+        gspv.WallpaperMode = SpiLoadWallpaperMode();
+        TRACE("EARLY_SPLASH: WIN32K_WALLPAPER_REUSED path=%S mode=%u\n", gspv.awcWallpaper, gspv.WallpaperMode);
+        NtUserRedrawWindow(UserGetShellWindow(), NULL, NULL, RDW_INVALIDATE | RDW_ERASE);
+        return (UINT_PTR)KEY_DESKTOP;
+    }
+#endif
 
     /* Got a filename? */
     if (gspv.awcWallpaper[0] != 0)
@@ -755,38 +809,13 @@ SpiSetWallpaper(PVOID pvParam, FLONG fl)
 
         gspv.cxWallpaper = psurfBmp->SurfObj.sizlBitmap.cx;
         gspv.cyWallpaper = psurfBmp->SurfObj.sizlBitmap.cy;
-        gspv.WallpaperMode = wmCenter;
-
         SURFACE_ShareUnlockSurface(psurfBmp);
 
         /* Change the bitmap's ownership */
         GreSetObjectOwner(hbmp, GDI_OBJ_HMGR_PUBLIC);
 
         /* Yes, Windows really loads the current setting from the registry. */
-        ulTile = SpiLoadInt(KEY_DESKTOP, L"TileWallpaper", 0);
-        ulStyle = SpiLoadInt(KEY_DESKTOP, L"WallpaperStyle", 0);
-        TRACE("SpiSetWallpaper: ulTile=%lu, ulStyle=%lu\n", ulTile, ulStyle);
-
-        /* Check the values we found in the registry */
-        if (ulTile && !ulStyle)
-        {
-            gspv.WallpaperMode = wmTile;
-        }
-        else if (!ulTile && ulStyle)
-        {
-            if (ulStyle == 2)
-            {
-                gspv.WallpaperMode = wmStretch;
-            }
-            else if (ulStyle == 6)
-            {
-                gspv.WallpaperMode = wmFit;
-            }
-            else if (ulStyle == 10)
-            {
-                gspv.WallpaperMode = wmFill;
-            }
-        }
+        gspv.WallpaperMode = SpiLoadWallpaperMode();
     }
     else
     {
@@ -827,6 +856,9 @@ SpiSetEarlyWallpaper(
 {
     HBITMAP OldBitmap;
     SURFACE *Surface;
+    UNICODE_STRING WallpaperPath;
+    WCHAR WallpaperPathBuffer[MAX_PATH + 1];
+    NTSTATUS Status;
     LONG Width, Height;
     PWND DesktopWindow;
     HDC Dc;
@@ -858,6 +890,16 @@ SpiSetEarlyWallpaper(
         return 0;
     }
 
+    RtlInitEmptyUnicodeString(&WallpaperPath, WallpaperPathBuffer, sizeof(WallpaperPathBuffer));
+    Status = RtlAppendUnicodeToString(&WallpaperPath, SharedUserData->NtSystemRoot);
+    if (NT_SUCCESS(Status)) Status = RtlAppendUnicodeToString(&WallpaperPath, REACTOS_EARLY_SPLASH_RELATIVE_PATH);
+    if (!NT_SUCCESS(Status))
+    {
+        ERR("EARLY_SPLASH: WIN32K_WALLPAPER_FAIL stage=path status=0x%08lx\n", Status);
+        EngSetLastError(RtlNtStatusToDosError(Status));
+        return 0;
+    }
+
     if (!GreSetObjectOwner(Bitmap, GDI_OBJ_HMGR_PUBLIC))
     {
         ERR("EARLY_SPLASH: WIN32K_WALLPAPER_FAIL stage=ownership handle=%p\n", Bitmap);
@@ -871,6 +913,10 @@ SpiSetEarlyWallpaper(
     gspv.cyWallpaper = Height;
     gspv.WallpaperMode = wmStretch;
     gspv.bEarlySplashWallpaper = TRUE;
+    RtlCopyMemory(gspv.awcWallpaper, WallpaperPath.Buffer, WallpaperPath.Length + sizeof(WCHAR));
+    gspv.ustrWallpaper.Buffer = gspv.awcWallpaper;
+    gspv.ustrWallpaper.Length = WallpaperPath.Length;
+    gspv.ustrWallpaper.MaximumLength = sizeof(gspv.awcWallpaper);
 
     if (OldBitmap && OldBitmap != Bitmap)
     {

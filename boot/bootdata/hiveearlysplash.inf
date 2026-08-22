@@ -1,0 +1,9 @@
+[Version]
+Signature = "$Windows NT$"
+
+[AddReg]
+
+; Keep the configured desktop wallpaper identical to the early Winlogon image.
+HKCU,"Control Panel\Desktop","Wallpaper",0x00020000,"%SystemRoot%\Web\Wallpaper\BlueHorizon.png"
+HKCU,"Control Panel\Desktop","TileWallpaper",0x00000000,"0"
+HKCU,"Control Panel\Desktop","WallpaperStyle",0x00000000,"2"
