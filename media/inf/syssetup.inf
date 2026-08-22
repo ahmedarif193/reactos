@@ -160,6 +160,7 @@ windows.media.dll
 windows.media.devices.dll
 windows.media.mediacontrol.dll
 windows.media.playback.backgroundmediaplayer.dll
+windows.media.playback.mediaplayer.dll
 windows.ui.dll
 wintypes.dll
 
