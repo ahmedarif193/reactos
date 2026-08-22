@@ -1887,7 +1887,7 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
             return SpiGetInt(pvParam, &gspv.bClientAreaAnimation, fl);
 
         case SPI_SETCLIENTAREAANIMATION:
-            return SpiSetBool(&gspv.bClientAreaAnimation, uiParam, KEY_MOUSE, L"", fl);
+            return SpiSetBool(&gspv.bClientAreaAnimation, PtrToUlong(pvParam), KEY_MOUSE, L"", fl);
 
         case SPI_GETCLEARTYPE:
             return SpiGetInt(pvParam, &gspv.bClearType, fl);
