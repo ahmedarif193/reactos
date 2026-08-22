@@ -1,0 +1,11 @@
+spec2def(windows.gaming.ui.gamebar.dll windows.gaming.ui.gamebar.spec)
+
+add_library(windows_gaming_ui_gamebar MODULE main.c ${CMAKE_CURRENT_BINARY_DIR}/windows.gaming.ui.gamebar.def ${CMAKE_CURRENT_BINARY_DIR}/windows.gaming.ui.gamebar_stubs.c)
+set_target_properties(windows_gaming_ui_gamebar PROPERTIES OUTPUT_NAME "windows.gaming.ui.gamebar")
+add_idl_reg_scripts(windows_gaming_ui_gamebar winrt classes.idl)
+set_module_type(windows_gaming_ui_gamebar win32dll)
+target_compile_definitions(windows_gaming_ui_gamebar PRIVATE __WINESRC__)
+target_link_libraries(windows_gaming_ui_gamebar uuid wine wine_dll_canunload wine_dll_register)
+add_importlibs(windows_gaming_ui_gamebar combase msvcrt kernel32 ntdll)
+add_cd_file(TARGET windows_gaming_ui_gamebar DESTINATION reactos/system32 FOR all)
+set_wine_module_FIXME(windows_gaming_ui_gamebar)

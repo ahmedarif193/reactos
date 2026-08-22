@@ -153,6 +153,7 @@ windows.devices.enumeration.dll
 windows.devices.radios.dll
 windows.devices.usb.dll
 windows.gaming.input.dll
+windows.gaming.ui.gamebar.dll
 windows.globalization.dll
 windows.graphics.dll
 windows.ui.dll
