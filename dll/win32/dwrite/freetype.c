@@ -76,6 +76,9 @@ void FT_Panic(const char *format, ...)
     wine_dbg_printf("FreeType panic: %s", buffer);
     abort();
 }
+
+/* FT_New_Memory_Face and FT_Done_Face mutate lists owned by FT_Library. */
+static CRITICAL_SECTION library_cs;
 #endif
 
 static FT_Library library = 0;
@@ -177,6 +180,9 @@ static NTSTATUS process_attach(void *args)
 {
     FT_Version_t FT_Version;
 
+#ifdef __REACTOS__
+    InitializeCriticalSection(&library_cs);
+#endif
 #ifndef __REACTOS__
     ft_handle = dlopen(SONAME_LIBFREETYPE, RTLD_NOW);
     if (!ft_handle)
@@ -223,6 +229,8 @@ static NTSTATUS process_attach(void *args)
 #ifndef __REACTOS__
         dlclose(ft_handle);
         ft_handle = NULL;
+#else
+        DeleteCriticalSection(&library_cs);
 #endif
         return STATUS_UNSUCCESSFUL;
     }
@@ -242,7 +250,15 @@ sym_not_found:
 
 static NTSTATUS process_detach(void *args)
 {
+#ifdef __REACTOS__
+    EnterCriticalSection(&library_cs);
+#endif
     pFT_Done_FreeType(library);
+#ifdef __REACTOS__
+    library = NULL;
+    LeaveCriticalSection(&library_cs);
+    DeleteCriticalSection(&library_cs);
+#endif
     return STATUS_SUCCESS;
 }
 
@@ -252,7 +268,13 @@ static NTSTATUS create_font_object(void *args)
     FT_Face face = NULL;
     FT_Error fterror;
 
+#ifdef __REACTOS__
+    EnterCriticalSection(&library_cs);
+#endif
     fterror = pFT_New_Memory_Face(library, params->data, params->size, params->index, &face);
+#ifdef __REACTOS__
+    LeaveCriticalSection(&library_cs);
+#endif
     if (fterror != FT_Err_Ok)
     {
         WARN("Failed to create a face object, error %d.\n", fterror);
@@ -267,7 +289,13 @@ static NTSTATUS create_font_object(void *args)
 static NTSTATUS release_font_object(void *args)
 {
     struct release_font_object_params *params = args;
+#ifdef __REACTOS__
+    EnterCriticalSection(&library_cs);
+#endif
     pFT_Done_Face(FaceFromObject(params->object));
+#ifdef __REACTOS__
+    LeaveCriticalSection(&library_cs);
+#endif
     return STATUS_SUCCESS;
 }
 
