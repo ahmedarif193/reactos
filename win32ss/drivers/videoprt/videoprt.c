@@ -51,6 +51,48 @@ static BOOLEAN NTAPI VpMiniportInterruptThunk(_In_ PVOID HwDeviceExtension);
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
+static BOOLEAN
+IntIsUefiFbDriver(
+    _In_ PDRIVER_OBJECT DriverObject)
+{
+    static const UNICODE_STRING UefiFb = RTL_CONSTANT_STRING(L"\\Driver\\uefifb");
+    return RtlEqualUnicodeString(&UefiFb, &DriverObject->DriverName, TRUE);
+}
+
+static BOOLEAN
+IntVideoPortHasEarlierVideoDevice(
+    _In_ ULONG DeviceNumber)
+{
+    ULONG i;
+
+    for (i = 0; i < DeviceNumber; ++i)
+    {
+        WCHAR DeviceBuffer[20];
+        UNICODE_STRING DeviceName;
+        PFILE_OBJECT FileObject;
+        PDEVICE_OBJECT DeviceObject;
+        NTSTATUS Status;
+
+        swprintf(DeviceBuffer,
+                 RTL_NUMBER_OF(DeviceBuffer),
+                 L"\\Device\\Video%lu",
+                 i);
+        RtlInitUnicodeString(&DeviceName, DeviceBuffer);
+        Status = IoGetDeviceObjectPointer(&DeviceName,
+                                          FILE_READ_DATA,
+                                          &FileObject,
+                                          &DeviceObject);
+        if (NT_SUCCESS(Status))
+        {
+            UNREFERENCED_PARAMETER(DeviceObject);
+            ObDereferenceObject(FileObject);
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
 ULONG
 NTAPI
 DriverEntry(
