@@ -1,0 +1,13 @@
+spec2def(mfmp4srcsnk.dll mfmp4srcsnk.spec)
+
+set(MFSRCSNK_DIR ${REACTOS_SOURCE_DIR}/dll/win32/mfsrcsnk)
+set_source_files_properties(mfmp4srcsnk.rc PROPERTIES OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/mfmp4srcsnk.rgs)
+add_library(mfmp4srcsnk MODULE ${MFSRCSNK_DIR}/media_sink.c ${MFSRCSNK_DIR}/media_source.c mfmp4srcsnk.c mfmp4srcsnk.rc ${CMAKE_CURRENT_BINARY_DIR}/mfmp4srcsnk.def ${CMAKE_CURRENT_BINARY_DIR}/mfmp4srcsnk_stubs.c)
+add_idl_reg_scripts(mfmp4srcsnk registry mfmp4srcsnk.idl)
+target_include_directories(mfmp4srcsnk PRIVATE ${MFSRCSNK_DIR})
+set_module_type(mfmp4srcsnk win32dll)
+target_compile_definitions(mfmp4srcsnk PRIVATE __WINESRC__)
+target_link_libraries(mfmp4srcsnk mfuuid uuid wine wine_dll_register)
+add_importlibs(mfmp4srcsnk advapi32 ole32 mfplat winedmo msvcrt kernel32 ntdll)
+add_cd_file(TARGET mfmp4srcsnk DESTINATION reactos/system32 FOR all)
+set_wine_module(mfmp4srcsnk)
