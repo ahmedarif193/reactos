@@ -114,6 +114,7 @@ AddReg=Classes
 11,,propsys.dll,1
 11,,pstorec.dll,1
 11,,qedit.dll,1
+11,,qasf.dll,1
 11,,qmgr.dll,1
 11,,qmgrprxy.dll,1
 11,,rpcrt4.dll,1
