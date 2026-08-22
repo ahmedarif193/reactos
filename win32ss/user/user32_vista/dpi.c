@@ -749,3 +749,39 @@ LogicalToPhysicalPoint(
     UNIMPLEMENTED;
     return TRUE;
 }
+
+static BOOL
+IntValidatePerMonitorDpiPoint(
+    _In_ HWND hwnd,
+    _In_ const POINT *point)
+{
+    RECT Rect;
+
+    if (!point)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (!GetWindowRect(hwnd, &Rect)) return FALSE;
+    return point->x >= Rect.left && point->y >= Rect.top && point->x <= Rect.right && point->y <= Rect.bottom;
+}
+
+/* ReactOS currently uses physical coordinates for all DPI awareness modes. */
+BOOL
+WINAPI
+LogicalToPhysicalPointForPerMonitorDPI(
+    _In_ HWND hwnd,
+    _Inout_ POINT *point)
+{
+    return IntValidatePerMonitorDpiPoint(hwnd, point);
+}
+
+/* ReactOS currently uses physical coordinates for all DPI awareness modes. */
+BOOL
+WINAPI
+PhysicalToLogicalPointForPerMonitorDPI(
+    _In_ HWND hwnd,
+    _Inout_ POINT *point)
+{
+    return IntValidatePerMonitorDpiPoint(hwnd, point);
+}
