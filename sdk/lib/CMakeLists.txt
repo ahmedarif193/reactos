@@ -44,6 +44,7 @@ endif()
 
 add_subdirectory(ioevent)
 add_subdirectory(lsalib)
+add_subdirectory(mfuuid)
 add_subdirectory(nt)
 add_subdirectory(pathcch)
 add_subdirectory(poguid)
@@ -67,6 +68,7 @@ add_subdirectory(vcruntime)
 add_subdirectory(vcstartup)
 add_subdirectory(wine2ros)
 add_subdirectory(wdmguid)
+add_subdirectory(wmcodecdspuuid)
 
 else()
 
