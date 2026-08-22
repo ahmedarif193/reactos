@@ -3158,7 +3158,7 @@ RtlSecureZeroMemory(
   _In_ SIZE_T Size)
 {
   volatile char* vptr = (volatile char*)Pointer;
-#if defined(_M_AMD64)
+#if _VCRT_AMD64_INTRINSICS
   __stosb((PUCHAR)vptr, 0, Size);
 #else
   char * endptr = (char *)vptr + Size;

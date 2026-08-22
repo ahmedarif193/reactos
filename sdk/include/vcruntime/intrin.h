@@ -763,6 +763,8 @@ __m64 _mm_sub_si64(__m64, __m64);
 
 unsigned char _BitScanForward64(unsigned long * _Index, unsigned __int64 _Mask);
 unsigned char _BitScanReverse64(unsigned long * _Index, unsigned __int64 _Mask);
+__int64 __mulh(__int64, __int64);
+unsigned __int64 __umulh(unsigned __int64, unsigned __int64);
 long _InterlockedAdd(_Interlocked_operand_ long volatile * _Addend, long _Value);
 __int64 _InterlockedAdd64(_Interlocked_operand_ __int64 volatile * _Addend, __int64 _Value);
 __int64 _InterlockedAdd64_nf(_Interlocked_operand_ __int64 volatile * _Addend, __int64 _Value);
