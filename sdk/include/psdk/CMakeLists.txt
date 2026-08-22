@@ -49,6 +49,7 @@ list(APPEND SOURCE
     docobjectservice.idl
     downloadmgr.idl
     drmexternals.idl
+    dragdropinterop.idl
     d2d1.idl
     d2d1_1.idl
     d2d1_2.idl
@@ -67,15 +68,19 @@ list(APPEND SOURCE
     emptyvc.idl
     endpointvolume.idl
     evr.idl
+    evr9.idl
     eventtoken.idl
     exdisp.idl
     fusion.idl
     gameinput.idl
     hlink.idl
+    holographicspaceinterop.idl
     hstring.idl
     htiface.idl
     htiframe.idl
     httprequest.idl
+    icodecapi.idl
+    inputpaneinterop.idl
     iads.idl
     icftypes.idl
     ieautomation.idl
@@ -88,8 +93,12 @@ list(APPEND SOURCE
     ivectorchangedeventargs.idl
     mediaobj.idl
     metahost.idl
+    mfd3d12.idl
     mfidl.idl
+    mfmediaengine.idl
     mfobjects.idl
+    mfplay.idl
+    mfreadwrite.idl
     mftransform.idl
     mimeinfo.idl
     mimeole.idl
@@ -132,6 +141,7 @@ list(APPEND SOURCE
     richole.idl
     robuffer.idl
     roparameterizediid.idl
+    rtworkq.idl
 #   row.idl
 #   rowchg.idl
 #   rstbas.idl
@@ -147,6 +157,7 @@ list(APPEND SOURCE
     shobjidl.idl
     shtypes.idl
     spatialaudioclient.idl
+    systemmediatransportcontrolsinterop.idl
 #   stdole2.idl
     strmif.idl
     structuredquerycondition.idl
@@ -163,6 +174,7 @@ list(APPEND SOURCE
     unknwn.idl
     urlhist.idl
     urlmon.idl
+    uiviewsettingsinterop.idl
     vmr9.idl
 #   vmrender.idl
     vsbackup.idl
@@ -174,33 +186,98 @@ list(APPEND SOURCE
     weakreference.idl
     wia_lh.idl
     wia_xp.idl
+    windows.applicationmodel.activation.idl
+    windows.applicationmodel.background.idl
+    windows.applicationmodel.core.idl
+    windows.applicationmodel.datatransfer.dragdrop.core.idl
+    windows.applicationmodel.datatransfer.dragdrop.idl
+    windows.applicationmodel.datatransfer.idl
+    windows.applicationmodel.idl
+    windows.data.json.idl
+    windows.data.xml.dom.idl
+    windows.devices.bluetooth.advertisement.idl
+    windows.devices.bluetooth.genericattributeprofile.idl
+    windows.devices.bluetooth.idl
+    windows.devices.bluetooth.rfcomm.idl
+    windows.devices.enumeration.idl
     windows.devices.geolocation.idl
     windows.devices.haptics.idl
+    windows.devices.input.idl
     windows.devices.power.idl
+    windows.devices.radios.idl
+    windows.devices.usb.idl
     windows.foundation.collections.idl
     windows.foundation.idl
     windows.foundation.metadata.idl
     windows.foundation.numerics.idl
-    windows.globalization.idl
-    windows.graphics.display.idl
-    windows.graphics.idl
     windows.gaming.input.custom.idl
     windows.gaming.input.forcefeedback.idl
     windows.gaming.input.idl
+    windows.gaming.ui.idl
+    windows.globalization.idl
+    windows.graphics.capture.idl
+    windows.graphics.capture.interop.idl
+    windows.graphics.directx.direct3d11.idl
+    windows.graphics.directx.direct3d11.interop.idl
+    windows.graphics.directx.idl
+    windows.graphics.display.idl
+    windows.graphics.effects.idl
+    windows.graphics.holographic.idl
+    windows.graphics.idl
+    windows.graphics.imaging.idl
+    windows.management.deployment.idl
+    windows.media.capture.idl
+    windows.media.closedcaptioning.idl
+    windows.media.core.idl
+    windows.media.devices.idl
+    windows.media.effects.idl
+    windows.media.faceanalysis.idl
     windows.media.idl
+    windows.media.mediaproperties.idl
+    windows.media.playback.idl
+    windows.media.render.idl
+    windows.media.speechrecognition.idl
+    windows.media.speechsynthesis.idl
+    windows.media.transcoding.idl
     windows.networking.connectivity.idl
     windows.networking.idl
+    windows.networking.sockets.idl
+    windows.perception.idl
+    windows.perception.spatial.idl
+    windows.perception.spatial.surfaces.idl
+    windows.security.authentication.onlineid.idl
+    windows.security.authorization.appcapabilityaccess.idl
     windows.security.credentials.idl
+    windows.security.credentials.ui.idl
     windows.security.cryptography.core.idl
     windows.security.cryptography.idl
+    windows.security.enterprisedata.idl
+    windows.security.exchangeactivesyncprovisioning.idl
+    windows.security.isolation.idl
     windows.storage.fileproperties.idl
     windows.storage.idl
     windows.storage.search.idl
     windows.storage.streams.idl
     windows.system.idl
     windows.system.power.idl
+    windows.system.profile.idl
+    windows.system.profile.systemmanufacturers.idl
     windows.system.threading.idl
     windows.system.userprofile.idl
+    windows.ui.composition.idl
+    windows.ui.composition.interop.idl
+    windows.ui.core.idl
+    windows.ui.idl
+    windows.ui.input.idl
+    windows.ui.notifications.idl
+    windows.ui.text.core.idl
+    windows.ui.text.idl
+    windows.ui.viewmanagement.core.idl
+    windows.ui.viewmanagement.idl
+    windows.ui.windowmanagement.idl
+    windows.ui.xaml.hosting.desktopwindowxamlsource.idl
+    windows.ui.xaml.idl
+    windows.ui.xaml.interop.idl
     windowscontracts.idl
     wincodec.idl
     wincodecsdk.idl
@@ -252,6 +329,8 @@ add_idl_headers(d3d_idl_headers
     dxgi1_6.idl
     dxgicommon.idl
     dxgidebug.idl
+    dxva2api.idl
+    dxvahd.idl
     dxgitype.idl)
 add_dependencies(psdk d3d_idl_headers)
 

@@ -12,6 +12,11 @@
 #ifndef KSMEDIA_H
 #define KSMEDIA_H
 
+/* Match the Windows SDK feature-test macro used by dependent media headers. */
+#ifndef _KSMEDIA_
+#define _KSMEDIA_
+#endif
+
 /*
     KS CATEGORIES
 */
