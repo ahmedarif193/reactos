@@ -567,9 +567,13 @@ static RSNA_STATE RsnaHandleMsg1(RSNA_CTX *ctx,
     }
     ctx->keys.pairwiseCipher = ctx->cipher;
 
-    /* Fresh SNonce, then derive the PTK. */
-    RsnaGenNonce(ctx, ctx->snonce);
-    ctx->haveSnonce = 1;
+    /* Reuse the SNonce while message 1 is being retransmitted.  A new nonce
+     * here would derive a different PTK for every retry of the same handshake. */
+    if (!ctx->haveSnonce)
+    {
+        RsnaGenNonce(ctx, ctx->snonce);
+        ctx->haveSnonce = 1;
+    }
 
     RsnaDerivePtk(ctx->pmk, ctx->aa, ctx->spa, ctx->anonce, ctx->snonce,
                   ctx->keys.ptk, ctx->keys.ptkLen);
@@ -714,6 +718,9 @@ static RSNA_STATE RsnaHandleMsg3(RSNA_CTX *ctx,
     if (outLen != RSNA_NULL)
         *outLen = n;
 
+    /* The SNonce is renewed only for the next handshake.  It must remain
+     * stable until a valid message 3 proves this PTK was accepted. */
+    ctx->haveSnonce = 0;
     ctx->lastError = RSNA_OK;
     ctx->state = RSNA_STATE_COMPLETED;
     return ctx->state;
