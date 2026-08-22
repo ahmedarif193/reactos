@@ -36,3 +36,16 @@ KillSystemTimer( HWND hWnd, UINT_PTR IDEvent)
 {
   return NtUserxKillSystemTimer(hWnd, IDEvent);
 }
+
+UINT_PTR
+WINAPI
+SetCoalescableTimer(
+    _In_opt_ HWND hWnd,
+    _In_ UINT_PTR IDEvent,
+    _In_ UINT Period,
+    _In_opt_ TIMERPROC TimerFunc,
+    _In_ ULONG ToleranceDelay)
+{
+    UNREFERENCED_PARAMETER(ToleranceDelay);
+    return NtUserSetTimer(hWnd, IDEvent, Period, TimerFunc);
+}
