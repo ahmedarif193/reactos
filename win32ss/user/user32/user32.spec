@@ -655,6 +655,7 @@
 @ stdcall SetClassWord(long long long) ; Direct call NtUserSetClassWord
 @ stdcall SetClipboardData(long long)
 @ stdcall SetClipboardViewer(long) NtUserSetClipboardViewer
+@ stdcall -version=0x602+ SetCoalescableTimer(long long long ptr long)
 @ stdcall SetConsoleReserveKeys(long long) NtUserSetConsoleReserveKeys
 @ stdcall SetCursor(long) NtUserSetCursor
 @ stdcall SetCursorContents(ptr ptr) NtUserSetCursorContents
