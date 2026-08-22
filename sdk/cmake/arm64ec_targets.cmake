@@ -26,6 +26,7 @@ set(ARM64EC_RUNTIME_MODULES
     crypt32
     cryptnet
     cryptui
+    d3dwine
     dbghelp
     devmgr
     dhcpcsvc
@@ -33,6 +34,8 @@ set(ARM64EC_RUNTIME_MODULES
     dnsapi
     dsound
     dwmapi
+    dwrite
+    dxgi
     fmifs
     gdi32
     gdiplus
@@ -69,6 +72,7 @@ set(ARM64EC_RUNTIME_MODULES
     ntdll_chpe
     ntdll_vista
     ole32
+    oleacc
     oleaut32
     opengl32
     powrprof
@@ -87,6 +91,7 @@ set(ARM64EC_RUNTIME_MODULES
     shlwapi
     setupapi
     ucrtbase
+    uiautomationcore
     urlmon
     user32
     user32_vista
