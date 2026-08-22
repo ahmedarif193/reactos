@@ -263,6 +263,52 @@ Fat32LfnChecksum(
 }
 
 /*
+ * Apply a decimal collision tail to an 8-byte short-name basis.
+ *
+ * The tail consumes one byte for '~' plus one to six decimal digits, so the
+ * preserved basis shrinks from six bytes for ~1 to one byte for ~999999.
+ */
+static
+BOOLEAN
+Fat32SetShortNameTail(
+    _In_reads_(6) const UCHAR *Basis,
+    _In_ ULONG Tail,
+    _Inout_updates_(11) PUCHAR ShortName)
+{
+    ULONG Digits = 1;
+    ULONG Divisor = 1;
+    ULONG Value = Tail;
+    ULONG PrefixLength;
+    ULONG i;
+
+    if (Tail == 0)
+        return FALSE;
+
+    while (Value >= 10)
+    {
+        Value /= 10;
+        Divisor *= 10;
+        Digits++;
+    }
+
+    if (Digits > 6)
+        return FALSE;
+
+    PrefixLength = 7 - Digits;
+    RtlFillMemory(ShortName, 8, ' ');
+    RtlCopyMemory(ShortName, Basis, PrefixLength);
+    ShortName[PrefixLength] = '~';
+
+    for (i = 0; i < Digits; i++)
+    {
+        ShortName[PrefixLength + 1 + i] = (UCHAR)('0' + (Tail / Divisor) % 10);
+        Divisor /= 10;
+    }
+
+    return TRUE;
+}
+
+/*
  * Get the next cluster in a chain. Returns 0 if end-of-chain or invalid.
  */
 static
@@ -626,6 +672,7 @@ Fat32AddDirectoryEntry(
     _In_ UCHAR Attributes)
 {
     UCHAR ShortName[11];
+    UCHAR ShortNameBasis[6];
     BOOLEAN NeedsLfn;
     UCHAR CaseFlags;
     ULONG SlotsNeeded;
@@ -637,15 +684,18 @@ Fat32AddDirectoryEntry(
     /* Handle short name collisions */
     if (NeedsLfn)
     {
-        CHAR Digit;
-        for (Digit = '1'; Digit <= '9'; Digit++)
+        ULONG Tail;
+
+        RtlCopyMemory(ShortNameBasis, ShortName, sizeof(ShortNameBasis));
+        for (Tail = 1; Tail <= 999999; Tail++)
         {
+            if (!Fat32SetShortNameTail(ShortNameBasis, Tail, ShortName))
+                break;
             if (!Fat32ShortNameExists(Writer, DirCluster, ShortName))
                 break;
-            ShortName[7] = (UCHAR)Digit;
         }
 
-        if (Digit > '9')
+        if (Tail > 999999)
         {
             WARN("Fat32AddDirectoryEntry: too many short name collisions for '%s'\n",
                  LeafName);
