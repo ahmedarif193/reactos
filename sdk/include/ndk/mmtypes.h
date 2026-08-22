@@ -388,8 +388,8 @@ typedef struct _MMPFN_IDENTITY
 //
 typedef struct _MEMORY_WORKING_SET_LIST
 {
-    ULONG NumberOfPages;
-    ULONG WorkingSetList[1];
+    ULONG_PTR NumberOfPages;
+    ULONG_PTR WorkingSetList[1];
 } MEMORY_WORKING_SET_LIST, *PMEMORY_WORKING_SET_LIST;
 
 //
