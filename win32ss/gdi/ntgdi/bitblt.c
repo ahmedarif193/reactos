@@ -1044,6 +1044,7 @@ GreStretchBltMask(
                               BitmapMask ? &MaskPoint : NULL,
                               &DCDest->eboFill.BrushObject,
                               &BrushOrigin,
+                              pdcattr->jStretchBltMode,
                               rop4);
     if (UsesSource)
     {
@@ -1880,4 +1881,3 @@ leave:
     /* Return the new RGB color or -1 on failure */
     return ulRGBColor;
 }
-

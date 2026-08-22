@@ -79,6 +79,84 @@ static inline int get_dib_image_size( const BITMAPINFO *info )
         * abs( info->bmiHeader.biHeight );
 }
 
+static void test_StretchBlt_halftone(void)
+{
+    BITMAPINFO src_info = {0};
+    BITMAPINFO dst_info = {0};
+    UINT32 *src_bits = NULL;
+    UINT32 *dst_bits = NULL;
+    UINT32 color_pixels[25];
+    HBITMAP src_bitmap = NULL;
+    HBITMAP dst_bitmap = NULL;
+    HBITMAP old_src_bitmap = NULL;
+    HBITMAP old_dst_bitmap = NULL;
+    HDC hdc_src = NULL;
+    HDC hdc_dst = NULL;
+    BOOL differs = FALSE;
+    BOOL has_intermediate = FALSE;
+    INT old_mode;
+    UINT i;
+
+    src_info.bmiHeader.biSize = sizeof(src_info.bmiHeader);
+    src_info.bmiHeader.biWidth = 2;
+    src_info.bmiHeader.biHeight = -2;
+    src_info.bmiHeader.biPlanes = 1;
+    src_info.bmiHeader.biBitCount = 32;
+    src_info.bmiHeader.biCompression = BI_RGB;
+    dst_info = src_info;
+    dst_info.bmiHeader.biWidth = 5;
+    dst_info.bmiHeader.biHeight = -5;
+
+    hdc_src = CreateCompatibleDC(NULL);
+    hdc_dst = CreateCompatibleDC(NULL);
+    src_bitmap = CreateDIBSection(hdc_src, &src_info, DIB_RGB_COLORS, (void **)&src_bits, NULL, 0);
+    dst_bitmap = CreateDIBSection(hdc_dst, &dst_info, DIB_RGB_COLORS, (void **)&dst_bits, NULL, 0);
+    ok(hdc_src != NULL && hdc_dst != NULL && src_bitmap != NULL && dst_bitmap != NULL, "Failed to create HALFTONE test DCs or bitmaps, error %lu\n", GetLastError());
+    if (!hdc_src || !hdc_dst || !src_bitmap || !dst_bitmap)
+        goto cleanup;
+
+    old_src_bitmap = SelectObject(hdc_src, src_bitmap);
+    old_dst_bitmap = SelectObject(hdc_dst, dst_bitmap);
+    src_bits[0] = 0x00000000;
+    src_bits[1] = 0x00ffffff;
+    src_bits[2] = 0x00ffffff;
+    src_bits[3] = 0x00000000;
+
+    memset(dst_bits, 0, sizeof(color_pixels));
+    old_mode = SetStretchBltMode(hdc_dst, COLORONCOLOR);
+    ok(old_mode == BLACKONWHITE, "Expected default mode BLACKONWHITE, got %d\n", old_mode);
+    ok(StretchBlt(hdc_dst, 0, 0, 5, 5, hdc_src, 0, 0, 2, 2, SRCCOPY), "COLORONCOLOR StretchBlt failed, error %lu\n", GetLastError());
+    memcpy(color_pixels, dst_bits, sizeof(color_pixels));
+
+    memset(dst_bits, 0, sizeof(color_pixels));
+    old_mode = SetStretchBltMode(hdc_dst, HALFTONE);
+    ok(old_mode == COLORONCOLOR, "Expected previous mode COLORONCOLOR, got %d\n", old_mode);
+    ok(GetStretchBltMode(hdc_dst) == HALFTONE, "Expected current mode HALFTONE, got %d\n", GetStretchBltMode(hdc_dst));
+    SetBrushOrgEx(hdc_dst, 0, 0, NULL);
+    ok(StretchBlt(hdc_dst, 0, 0, 5, 5, hdc_src, 0, 0, 2, 2, SRCCOPY), "HALFTONE StretchBlt failed, error %lu\n", GetLastError());
+
+    for (i = 0; i < ARRAYSIZE(color_pixels); ++i)
+    {
+        UINT32 pixel = dst_bits[i] & 0x00ffffff;
+
+        if (dst_bits[i] != color_pixels[i])
+            differs = TRUE;
+        if (pixel != 0x00000000 && pixel != 0x00ffffff)
+            has_intermediate = TRUE;
+        ok((pixel & 0xff) == ((pixel >> 8) & 0xff) && (pixel & 0xff) == ((pixel >> 16) & 0xff), "HALFTONE pixel %u is not grayscale: %08x\n", i, dst_bits[i]);
+    }
+    ok(differs, "HALFTONE output unexpectedly matches COLORONCOLOR output\n");
+    ok(has_intermediate, "HALFTONE output contains no filtered intermediate pixels\n");
+
+cleanup:
+    if (hdc_src && old_src_bitmap) SelectObject(hdc_src, old_src_bitmap);
+    if (hdc_dst && old_dst_bitmap) SelectObject(hdc_dst, old_dst_bitmap);
+    if (src_bitmap) DeleteObject(src_bitmap);
+    if (dst_bitmap) DeleteObject(dst_bitmap);
+    if (hdc_src) DeleteDC(hdc_src);
+    if (hdc_dst) DeleteDC(hdc_dst);
+}
+
 static void check_StretchBlt_stretch(HDC hdcDst, HDC hdcSrc, BITMAPINFO *dst_info, UINT32 *dstBuffer, UINT32 *srcBuffer,
                                      int nXOriginDest, int nYOriginDest, int nWidthDest, int nHeightDest,
                                      int nXOriginSrc, int nYOriginSrc, int nWidthSrc, int nHeightSrc,
@@ -852,6 +930,8 @@ static void test_StretchBlt_TopDownOptions(BOOL SrcTopDown, BOOL DstTopDown)
 
 START_TEST(StretchBlt)
 {
+    test_StretchBlt_halftone();
+
     trace("\n\n## Start of generalized StretchBlt tests.\n\n");
     test_StretchBlt();
 

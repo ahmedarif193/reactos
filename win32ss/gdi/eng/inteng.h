@@ -106,7 +106,8 @@ IntEngStretchBlt(SURFOBJ *DestObj,
                  POINTL *pMaskOrigin,
                  BRUSHOBJ *Brush,
                  POINTL *BrushOrigin,
-                 ULONG Mode);
+                 ULONG Mode,
+                 DWORD Rop4);
 
 BOOL APIENTRY
 IntEngGradientFill(SURFOBJ *psoDest,
