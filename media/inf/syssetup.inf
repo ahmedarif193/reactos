@@ -170,6 +170,7 @@ windows.storage.applicationdata.dll
 windows.system.profile.systemid.dll
 windows.system.profile.systemmanufacturers.dll
 windows.ui.dll
+windows.ui.core.textinput.dll
 wintypes.dll
 
 [Strings]
