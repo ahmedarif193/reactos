@@ -27,8 +27,8 @@ E1000InitializeOffloadCapabilities(
 
     /* Set header */
     OffloadCapabilities->Header.Type = NDIS_OBJECT_TYPE_OFFLOAD;
-    OffloadCapabilities->Header.Revision = NDIS_OFFLOAD_REVISION_3;
-    OffloadCapabilities->Header.Size = sizeof(NDIS_OFFLOAD);
+    OffloadCapabilities->Header.Revision = NDIS_OFFLOAD_REVISION_1;
+    OffloadCapabilities->Header.Size = NDIS_SIZEOF_NDIS_OFFLOAD_REVISION_1;
 
     /*
      * E1000 checksum offload capabilities:
