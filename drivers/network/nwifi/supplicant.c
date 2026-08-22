@@ -64,6 +64,55 @@ NwifiHexNibble(
     return FALSE;
 }
 
+static
+RSNA_STATUS
+NwifiInitRsnaContext(
+    _Out_ RSNA_CTX *Context,
+    _In_ const DOT11_SSID *Ssid,
+    _In_reads_bytes_(CredentialLength) const UCHAR *Credential,
+    _In_ ULONG CredentialLength)
+{
+    RSNA_STATUS Status;
+
+    RtlZeroMemory(Context, sizeof(*Context));
+    if (Ssid->uSSIDLength == 0 ||
+        Ssid->uSSIDLength > RSNA_SSID_MAX_LEN)
+    {
+        return RSNA_ERR_PARAM;
+    }
+
+    /* A 64-digit hexadecimal credential is an already-derived 256-bit PSK;
+     * ordinary 8..63 byte credentials use PBKDF2-HMAC-SHA1. */
+    if (CredentialLength == 64)
+    {
+        UCHAR Pmk[RSNA_PMK_LEN];
+        ULONG Index;
+
+        for (Index = 0; Index < ARRAYSIZE(Pmk); Index++)
+        {
+            UCHAR High;
+            UCHAR Low;
+
+            if (!NwifiHexNibble(Credential[Index * 2], &High) ||
+                !NwifiHexNibble(Credential[Index * 2 + 1], &Low))
+            {
+                RtlSecureZeroMemory(Pmk, sizeof(Pmk));
+                return RSNA_ERR_PARAM;
+            }
+            Pmk[Index] = (High << 4) | Low;
+        }
+        Status = RsnaInitWithPmk(Context,
+                                 Ssid->ucSSID, Ssid->uSSIDLength,
+                                 Pmk);
+        RtlSecureZeroMemory(Pmk, sizeof(Pmk));
+        return Status;
+    }
+
+    return RsnaInit(Context,
+                    Ssid->ucSSID, Ssid->uSSIDLength,
+                    (const char *)Credential, CredentialLength);
+}
+
 /* ===========================================================================
  *  Cipher-key install helpers (build DOT11 cipher-key structs, push down)
  * ===========================================================================
@@ -402,44 +451,10 @@ NwifiSupplicantStart(
         RStatus = RSNA_ERR_PARAM;
         goto StartFailed;
     }
-    if (Ssid.uSSIDLength == 0 || Ssid.uSSIDLength > RSNA_SSID_MAX_LEN)
-    {
-        RStatus = RSNA_ERR_PARAM;
-        goto StartFailed;
-    }
-
-    /* A 64-digit hexadecimal credential is an already-derived 256-bit PSK;
-     * ordinary 8..63 byte credentials use PBKDF2-HMAC-SHA1. */
-    if (CredentialLength == 64)
-    {
-        UCHAR Pmk[RSNA_PMK_LEN];
-        ULONG Index;
-
-        for (Index = 0; Index < ARRAYSIZE(Pmk); Index++)
-        {
-            UCHAR High;
-            UCHAR Low;
-
-            if (!NwifiHexNibble(Credential[Index * 2], &High) ||
-                !NwifiHexNibble(Credential[Index * 2 + 1], &Low))
-            {
-                RtlSecureZeroMemory(Pmk, sizeof(Pmk));
-                RStatus = RSNA_ERR_PARAM;
-                goto StartFailed;
-            }
-            Pmk[Index] = (High << 4) | Low;
-        }
-        RStatus = RsnaInitWithPmk(&NewCtx,
-                                  Ssid.ucSSID, Ssid.uSSIDLength,
-                                  Pmk);
-        RtlSecureZeroMemory(Pmk, sizeof(Pmk));
-    }
-    else
-    {
-        RStatus = RsnaInit(&NewCtx,
-                           Ssid.ucSSID, Ssid.uSSIDLength,
-                           (const char *)Credential, CredentialLength);
-    }
+    RStatus = NwifiInitRsnaContext(&NewCtx,
+                                   &Ssid,
+                                   Credential,
+                                   CredentialLength);
     if (RStatus != RSNA_OK)
     {
         goto StartFailed;
@@ -532,11 +547,16 @@ NwifiSupplicantSeedFirmware(
     PNWIFI_SUPPLICANT Sup;
     PDOT11_CIPHER_DEFAULT_KEY_VALUE Value;
     UCHAR Credential[NWIFI_CREDENTIAL_MAX];
+    UCHAR FirmwareCredential[NWIFI_CREDENTIAL_MAX];
+    DOT11_SSID Ssid;
+    DOT11_AUTH_ALGORITHM AuthAlgorithm;
     ULONG CredentialLength;
+    ULONG FirmwareCredentialLength;
     ULONG ValueSize;
     NDIS_STATUS Status;
 
     RtlZeroMemory(Credential, sizeof(Credential));
+    RtlZeroMemory(FirmwareCredential, sizeof(FirmwareCredential));
     NdisAcquireSpinLock(&Msm->Lock);
     Sup = Msm->Supplicant;
     if (Sup == NULL || !Sup->PassphraseSet ||
@@ -548,14 +568,51 @@ NwifiSupplicantSeedFirmware(
     }
     CredentialLength = Sup->PassphraseLen;
     RtlCopyMemory(Credential, Sup->Passphrase, CredentialLength);
+    Ssid = Msm->Connect.Ssid;
+    AuthAlgorithm = Msm->Connect.AuthAlgorithm;
     NdisReleaseSpinLock(&Msm->Lock);
 
+    if (AuthAlgorithm == DOT11_AUTH_ALGO_RSNA_PSK)
+    {
+        RSNA_CTX Context;
+        RSNA_STATUS RStatus;
+
+        RStatus = NwifiInitRsnaContext(&Context,
+                                       &Ssid,
+                                       Credential,
+                                       CredentialLength);
+        if (RStatus == RSNA_OK)
+        {
+            RStatus = RsnaGetPmk(&Context, FirmwareCredential);
+        }
+        RsnaClear(&Context);
+        if (RStatus != RSNA_OK)
+        {
+            RtlSecureZeroMemory(Credential, sizeof(Credential));
+            RtlSecureZeroMemory(FirmwareCredential,
+                                sizeof(FirmwareCredential));
+            return NDIS_STATUS_INVALID_DATA;
+        }
+        FirmwareCredentialLength = RSNA_PMK_LEN;
+    }
+    else if (AuthAlgorithm == DOT11_AUTH_ALGO_WPA3_SAE)
+    {
+        RtlCopyMemory(FirmwareCredential, Credential, CredentialLength);
+        FirmwareCredentialLength = CredentialLength;
+    }
+    else
+    {
+        RtlSecureZeroMemory(Credential, sizeof(Credential));
+        return NDIS_STATUS_NOT_SUPPORTED;
+    }
+
     ValueSize = FIELD_OFFSET(DOT11_CIPHER_DEFAULT_KEY_VALUE, ucKey) +
-                CredentialLength;
+                FirmwareCredentialLength;
     Value = (PDOT11_CIPHER_DEFAULT_KEY_VALUE)NwifiAllocate(ValueSize);
     if (Value == NULL)
     {
         RtlSecureZeroMemory(Credential, sizeof(Credential));
+        RtlSecureZeroMemory(FirmwareCredential, sizeof(FirmwareCredential));
         return NDIS_STATUS_RESOURCES;
     }
 
@@ -567,8 +624,9 @@ NwifiSupplicantSeedFirmware(
     RtlZeroMemory(Value->MacAddr, IEEE80211_ADDR_LEN);
     Value->bDelete = FALSE;
     Value->bStatic = FALSE;
-    Value->usKeyLength = (USHORT)CredentialLength;
-    RtlCopyMemory(Value->ucKey, Credential, CredentialLength);
+    Value->usKeyLength = (USHORT)FirmwareCredentialLength;
+    RtlCopyMemory(Value->ucKey, FirmwareCredential,
+                  FirmwareCredentialLength);
 
     Status = NwifiProtocolDoRequest(Msm->Adapter,
                                     NdisRequestSetInformation,
@@ -579,6 +637,7 @@ NwifiSupplicantSeedFirmware(
     RtlSecureZeroMemory(Value, ValueSize);
     NwifiFree(Value);
     RtlSecureZeroMemory(Credential, sizeof(Credential));
+    RtlSecureZeroMemory(FirmwareCredential, sizeof(FirmwareCredential));
     return Status;
 }
 
