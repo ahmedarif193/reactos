@@ -1,0 +1,11 @@
+spec2def(windows.media.mediacontrol.dll windows.media.mediacontrol.spec)
+
+add_library(windows_media_mediacontrol MODULE main.c ${CMAKE_CURRENT_BINARY_DIR}/windows.media.mediacontrol.def ${CMAKE_CURRENT_BINARY_DIR}/windows.media.mediacontrol_stubs.c)
+set_target_properties(windows_media_mediacontrol PROPERTIES OUTPUT_NAME "windows.media.mediacontrol")
+add_idl_reg_scripts(windows_media_mediacontrol winrt classes.idl)
+set_module_type(windows_media_mediacontrol win32dll)
+target_compile_definitions(windows_media_mediacontrol PRIVATE __WINESRC__)
+target_link_libraries(windows_media_mediacontrol uuid wine wine_dll_canunload wine_dll_register)
+add_importlibs(windows_media_mediacontrol combase msvcrt kernel32 ntdll)
+add_cd_file(TARGET windows_media_mediacontrol DESTINATION reactos/system32 FOR all)
+set_wine_module_FIXME(windows_media_mediacontrol)
