@@ -1,0 +1,11 @@
+spec2def(windows.media.playback.mediaplayer.dll windows.media.playback.mediaplayer.spec)
+
+add_library(windows_media_playback_mediaplayer MODULE main.c ${CMAKE_CURRENT_BINARY_DIR}/windows.media.playback.mediaplayer.def ${CMAKE_CURRENT_BINARY_DIR}/windows.media.playback.mediaplayer_stubs.c)
+set_target_properties(windows_media_playback_mediaplayer PROPERTIES OUTPUT_NAME "windows.media.playback.mediaplayer")
+add_idl_reg_scripts(windows_media_playback_mediaplayer winrt classes.idl)
+set_module_type(windows_media_playback_mediaplayer win32dll)
+target_compile_definitions(windows_media_playback_mediaplayer PRIVATE __WINESRC__)
+target_link_libraries(windows_media_playback_mediaplayer uuid wine wine_dll_canunload wine_dll_register)
+add_importlibs(windows_media_playback_mediaplayer combase user32 msvcrt kernel32 ntdll)
+add_cd_file(TARGET windows_media_playback_mediaplayer DESTINATION reactos/system32 FOR all)
+set_wine_module_FIXME(windows_media_playback_mediaplayer)
