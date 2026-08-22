@@ -2,6 +2,7 @@
  * PROJECT:     LiberNT Win32 Base API
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * PURPOSE:     Process Snapshotting process-information support
+ * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif.ing@outlook.com>
  */
 
 #include <stdarg.h>
