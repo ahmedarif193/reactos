@@ -2004,8 +2004,12 @@ DIB_CreateDIBSection(
         }
     }
 
-//  hSecure = MmSecureVirtualMemory(bm.bmBits, totalSize, PAGE_READWRITE);
-    hSecure = (HANDLE)0x1; // HACK OF UNIMPLEMENTED KERNEL STUFF !!!!
+    hSecure = EngSecureMem(bm.bmBits, totalSize);
+    if (!hSecure)
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        goto cleanup;
+    }
 
     // Create Device Dependent Bitmap and add DIB pointer
     //Size.cx = bm.bmWidth;
@@ -2037,14 +2041,18 @@ DIB_CreateDIBSection(
                   table between the DIB and the X physical device. Obviously,
                   this is left out of the ReactOS implementation. Instead,
                   we call NtGdiSetDIBColorTable. */
-    bmp->hDIBSection = section;
-    bmp->hSecure = hSecure;
-    bmp->dwOffset = offset;
-    bmp->flags = API_BITMAP;
-    bmp->biClrImportant = bi->biClrImportant;
-
     /* Create a palette for the DIB */
     ppalDIB = CreateDIBPalette(bmi, dc, usage);
+
+    if (ppalDIB)
+    {
+        bmp->hDIBSection = section;
+        bmp->hSecure = hSecure;
+        bmp->dwOffset = offset;
+        bmp->flags = API_BITMAP;
+        bmp->biClrImportant = bi->biClrImportant;
+        hSecure = NULL;
+    }
 
     // Clean up in case of errors
 cleanup:
@@ -2053,7 +2061,7 @@ cleanup:
         DPRINT("Got an error res=%p, bmp=%p, bm.bmBits=%p\n", res, bmp, bm.bmBits);
         if (bm.bmBits)
         {
-            // MmUnsecureVirtualMemory(hSecure); // FIXME: Implement this!
+            if (hSecure) EngUnsecureMem(hSecure);
             if (section)
             {
                 ZwUnmapViewOfSection(NtCurrentProcess(), mapBits);
