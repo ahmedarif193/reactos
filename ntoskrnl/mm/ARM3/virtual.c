@@ -4263,6 +4263,8 @@ NtProtectVirtualMemory(IN HANDLE ProcessHandle,
     //
     if (PreviousMode != KernelMode)
     {
+        if (UnsafeOldAccessProtection == NULL) return STATUS_ACCESS_VIOLATION;
+
         //
         // Enter SEH for probing
         //

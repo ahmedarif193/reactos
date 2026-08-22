@@ -158,6 +158,12 @@ VirtualProtectEx(IN HANDLE hProcess,
 {
     NTSTATUS Status;
 
+    if (lpflOldProtect == NULL)
+    {
+        BaseSetLastNTError(STATUS_ACCESS_VIOLATION);
+        return FALSE;
+    }
+
     /* Change the protection */
     Status = NtProtectVirtualMemory(hProcess,
                                     &lpAddress,
