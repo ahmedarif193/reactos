@@ -24,6 +24,26 @@ CmpArm64ReadMidr(VOID)
 }
 
 static
+VOID
+CmpArm64SetProcessorRegister(
+    _In_ HANDLE KeyHandle,
+    _In_ PCWSTR ValueNameString,
+    _In_ ULONGLONG Value)
+{
+    UNICODE_STRING ValueName;
+    NTSTATUS Status;
+
+    RtlInitUnicodeString(&ValueName, ValueNameString);
+    Status = NtSetValueKey(KeyHandle, &ValueName, 0, REG_QWORD, &Value, sizeof(Value));
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("ARM64: Failed to set processor register %S: 0x%lx\n",
+                ValueNameString,
+                Status);
+    }
+}
+
+static
 const WCHAR*
 CmpArm64GetVendorName(
     _In_ ULONG Implementer)
@@ -132,7 +152,8 @@ CmpInitializeMachineDependentConfiguration(_In_ PLOADER_PARAMETER_BLOCK LoaderBl
     HANDLE KeyHandle, SystemHandle;
     CONFIGURATION_COMPONENT_DATA ConfigData;
     CHAR Buffer[128];
-    ULONGLONG Midr;
+    ULONGLONG Midr, Pfr0, Pfr1, Isar0, Isar1, Isar2;
+    ULONGLONG Mmfr0, Mmfr1, Mmfr2, Ctr;
     ULONG Implementer, Architecture, Variant, PartNumber, Revision;
     const WCHAR *VendorName;
     USHORT IndexTable[MaximumType + 1] = {0};
@@ -142,6 +163,15 @@ CmpInitializeMachineDependentConfiguration(_In_ PLOADER_PARAMETER_BLOCK LoaderBl
     DPRINT("ARM64: Initializing machine-dependent configuration\n");
 
     Midr = CmpArm64ReadMidr();
+    __asm__ __volatile__("mrs %0, id_aa64pfr0_el1" : "=r"(Pfr0));
+    __asm__ __volatile__("mrs %0, id_aa64pfr1_el1" : "=r"(Pfr1));
+    __asm__ __volatile__("mrs %0, id_aa64isar0_el1" : "=r"(Isar0));
+    __asm__ __volatile__("mrs %0, id_aa64isar1_el1" : "=r"(Isar1));
+    __asm__ __volatile__("mrs %0, id_aa64isar2_el1" : "=r"(Isar2));
+    __asm__ __volatile__("mrs %0, id_aa64mmfr0_el1" : "=r"(Mmfr0));
+    __asm__ __volatile__("mrs %0, id_aa64mmfr1_el1" : "=r"(Mmfr1));
+    __asm__ __volatile__("mrs %0, id_aa64mmfr2_el1" : "=r"(Mmfr2));
+    __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
     Implementer = (ULONG)((Midr >> 24) & 0xFF);
     Variant = (ULONG)((Midr >> 20) & 0xF);
     Architecture = (ULONG)((Midr >> 16) & 0xF);
@@ -238,6 +268,18 @@ CmpInitializeMachineDependentConfiguration(_In_ PLOADER_PARAMETER_BLOCK LoaderBl
             /*
              * Add ARM64-specific registry values
              */
+
+            /* Publish the architectural register values used by ARM64 runtimes. */
+            CmpArm64SetProcessorRegister(KeyHandle, L"CP 4000", Midr);
+            CmpArm64SetProcessorRegister(KeyHandle, L"CP 4020", Pfr0);
+            CmpArm64SetProcessorRegister(KeyHandle, L"CP 4021", Pfr1);
+            CmpArm64SetProcessorRegister(KeyHandle, L"CP 4030", Isar0);
+            CmpArm64SetProcessorRegister(KeyHandle, L"CP 4031", Isar1);
+            CmpArm64SetProcessorRegister(KeyHandle, L"CP 4032", Isar2);
+            CmpArm64SetProcessorRegister(KeyHandle, L"CP 4038", Mmfr0);
+            CmpArm64SetProcessorRegister(KeyHandle, L"CP 4039", Mmfr1);
+            CmpArm64SetProcessorRegister(KeyHandle, L"CP 403A", Mmfr2);
+            CmpArm64SetProcessorRegister(KeyHandle, L"CP 5801", Ctr);
 
             /* Set VendorIdentifier based on MIDR_EL1 implementer field */
             {
