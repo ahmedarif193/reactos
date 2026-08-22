@@ -1,0 +1,6 @@
+add_definitions(-DUSE_WINE_TODOS -DWINETEST_USE_DBGSTR_HSTRING -D__WINESRC__)
+
+add_executable(windows_security_authentication_onlineid_winetest onlineid.c testlist.c)
+set_module_type(windows_security_authentication_onlineid_winetest win32cui)
+add_importlibs(windows_security_authentication_onlineid_winetest combase msvcrt kernel32 ntdll)
+add_rostests_file(TARGET windows_security_authentication_onlineid_winetest RENAME wsonid.exe)
