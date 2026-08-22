@@ -104,6 +104,12 @@ typedef enum _BASE_SEARCH_PATH_TYPE
     BaseSearchPathMax
 } BASE_SEARCH_PATH_TYPE, *PBASE_SEARCH_PATH_TYPE;
 
+typedef struct _BASE_DLL_DIRECTORY_ENTRY
+{
+    LIST_ENTRY ListEntry;
+    WCHAR NtPath[ANYSIZE_ARRAY];
+} BASE_DLL_DIRECTORY_ENTRY, *PBASE_DLL_DIRECTORY_ENTRY;
+
 typedef enum _BASE_CURRENT_DIR_PLACEMENT
 {
     BaseCurrentDirPlacementInvalid = -1,
@@ -155,6 +161,7 @@ extern BOOL bIsFileApiAnsi;
 extern HMODULE hCurrentModule;
 
 extern RTL_CRITICAL_SECTION BaseDllDirectoryLock;
+extern LIST_ENTRY BaseDllDirectoryList;
 
 extern UNICODE_STRING BaseDllDirectory;
 extern UNICODE_STRING BaseDefaultPath;
@@ -351,7 +358,9 @@ BaseComputeProcessDllPath(
 
 LPWSTR
 WINAPI
-BaseComputeSecureDllPath(VOID);
+BaseComputeSecureDllPath(
+    IN LPCWSTR FullPath,
+    IN DWORD Flags);
 
 LPWSTR
 WINAPI

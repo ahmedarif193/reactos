@@ -526,17 +526,34 @@ BaseComputeProcessDllPath(IN LPWSTR FullPath,
     return DllPath;
 }
 
+static PWSTR
+BasepAppendDllSearchDirectory(
+    _Out_ PWSTR Destination,
+    _In_reads_(Length) PCWSTR Directory,
+    _In_ SIZE_T Length)
+{
+    if (Length)
+    {
+        RtlCopyMemory(Destination, Directory, Length * sizeof(WCHAR));
+        Destination += Length;
+        *Destination++ = L';';
+    }
+    return Destination;
+}
+
 LPWSTR
 WINAPI
-BaseComputeSecureDllPath(VOID)
+BaseComputeSecureDllPath(
+    IN LPCWSTR FullPath,
+    IN DWORD Flags)
 {
-    BASE_SEARCH_PATH_TYPE PathOrder[BaseSearchPathMax];
-    DWORD Flags;
-    ULONG Index = 0;
-    LPWSTR DllPath;
+    PBASE_DLL_DIRECTORY_ENTRY Entry;
+    PLIST_ENTRY ListEntry;
+    PCWSTR ModuleEnd = NULL, ImagePath = NULL, ImageEnd = NULL, Directory;
+    SIZE_T Length = 1;
+    LPWSTR DllPath, Current;
 
     RtlEnterCriticalSection(&BaseDllDirectoryLock);
-    Flags = BaseDefaultDllDirectoriesFlags;
 
     if (Flags & LOAD_LIBRARY_SEARCH_DEFAULT_DIRS)
     {
@@ -545,21 +562,60 @@ BaseComputeSecureDllPath(VOID)
                  LOAD_LIBRARY_SEARCH_SYSTEM32;
     }
 
-    if (Flags & LOAD_LIBRARY_SEARCH_APPLICATION_DIR)
-        PathOrder[Index++] = BaseSearchPathApp;
-    if ((Flags & LOAD_LIBRARY_SEARCH_USER_DIRS) && BaseDllDirectory.Buffer && BaseDllDirectory.Length)
-        PathOrder[Index++] = BaseSearchPathDll;
-    if (Flags & LOAD_LIBRARY_SEARCH_SYSTEM32)
-        PathOrder[Index++] = BaseSearchPathSystem;
-    PathOrder[Index] = BaseSearchPathInvalid;
+    if (Flags & LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR)
+    {
+        ModuleEnd = BasepEndOfDirName((PWSTR)FullPath);
+        if (ModuleEnd) Length += ModuleEnd - FullPath + 1;
+    }
 
-    if (Index == 0)
+    if (Flags & LOAD_LIBRARY_SEARCH_APPLICATION_DIR)
+    {
+        ImagePath = NtCurrentPeb()->ProcessParameters->ImagePathName.Buffer;
+        ImageEnd = BasepEndOfDirName((PWSTR)ImagePath);
+        if (ImageEnd) Length += ImageEnd - ImagePath + 1;
+    }
+
+    if (Flags & LOAD_LIBRARY_SEARCH_USER_DIRS)
+    {
+        for (ListEntry = BaseDllDirectoryList.Flink; ListEntry != &BaseDllDirectoryList; ListEntry = ListEntry->Flink)
+        {
+            Entry = CONTAINING_RECORD(ListEntry, BASE_DLL_DIRECTORY_ENTRY, ListEntry);
+            Directory = Entry->NtPath;
+            if (!wcsncmp(Directory, L"\\??\\", 4)) Directory += 4;
+            Length += wcslen(Directory) + 1;
+        }
+        if (BaseDllDirectory.Length) Length += BaseDllDirectory.Length / sizeof(WCHAR) + 1;
+    }
+
+    if (Flags & LOAD_LIBRARY_SEARCH_SYSTEM32) Length += BaseWindowsSystemDirectory.Length / sizeof(WCHAR) + 1;
+
+    DllPath = RtlAllocateHeap(RtlGetProcessHeap(), 0, Length * sizeof(WCHAR));
+    if (!DllPath)
     {
         RtlLeaveCriticalSection(&BaseDllDirectoryLock);
         return NULL;
     }
 
-    DllPath = BasepComputeProcessPath(PathOrder, NULL, NULL);
+    Current = DllPath;
+    if (ModuleEnd) Current = BasepAppendDllSearchDirectory(Current, FullPath, ModuleEnd - FullPath);
+    if (ImageEnd) Current = BasepAppendDllSearchDirectory(Current, ImagePath, ImageEnd - ImagePath);
+
+    if (Flags & LOAD_LIBRARY_SEARCH_USER_DIRS)
+    {
+        for (ListEntry = BaseDllDirectoryList.Flink; ListEntry != &BaseDllDirectoryList; ListEntry = ListEntry->Flink)
+        {
+            Entry = CONTAINING_RECORD(ListEntry, BASE_DLL_DIRECTORY_ENTRY, ListEntry);
+            Directory = Entry->NtPath;
+            if (!wcsncmp(Directory, L"\\??\\", 4)) Directory += 4;
+            Current = BasepAppendDllSearchDirectory(Current, Directory, wcslen(Directory));
+        }
+        Current = BasepAppendDllSearchDirectory(Current, BaseDllDirectory.Buffer, BaseDllDirectory.Length / sizeof(WCHAR));
+    }
+
+    if (Flags & LOAD_LIBRARY_SEARCH_SYSTEM32) Current = BasepAppendDllSearchDirectory(Current, BaseWindowsSystemDirectory.Buffer, BaseWindowsSystemDirectory.Length / sizeof(WCHAR));
+
+    if (Current != DllPath) --Current;
+    *Current = UNICODE_NULL;
     RtlLeaveCriticalSection(&BaseDllDirectoryLock);
     return DllPath;
 }
