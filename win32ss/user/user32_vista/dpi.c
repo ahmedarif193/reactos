@@ -822,6 +822,21 @@ AdjustWindowRectExForDpi(_Inout_ LPRECT Rect, _In_ DWORD Style, _In_ BOOL Menu, 
 
 BOOL
 WINAPI
+EnableNonClientDpiScaling(
+    _In_ HWND hWnd)
+{
+    if (!IsWindow(hWnd))
+    {
+        SetLastError(ERROR_INVALID_WINDOW_HANDLE);
+        return FALSE;
+    }
+
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+BOOL
+WINAPI
 LogicalToPhysicalPoint(
     _In_ HWND hWnd,
     _Inout_ POINT *Point)
