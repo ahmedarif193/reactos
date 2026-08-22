@@ -24,6 +24,7 @@ NtCallbackReturn 3
 NtCancelDeviceWakeupRequest 1
 NtCancelIoFile 2
 NtCancelIoFileEx 3
+NtCancelSynchronousIoFile 3
 NtCancelTimer 2
 NtClearEvent 1
 NtClose 1

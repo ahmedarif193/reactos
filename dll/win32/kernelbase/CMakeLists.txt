@@ -13,6 +13,7 @@ add_subdirectory(wine)
 spec2def(kernelbase_ros.dll kernelbase_ros.spec ADD_IMPORTLIB)
 
 add_library(kernelbase_ros MODULE
+    CancelSynchronousIo.c
     DllMain.c
     PssSnapshot.c
     SyncObjects.c

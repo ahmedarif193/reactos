@@ -106,7 +106,7 @@
 #@ stdcall CallbackMayRunLong(ptr)
 #@ stdcall CancelIo(long)
 #@ stdcall CancelIoEx(long ptr)
-#@ stdcall CancelSynchronousIo(long)
+@ stdcall CancelSynchronousIo(long)
 @ stdcall CancelThreadpoolIo(ptr) ntdll.TpCancelAsyncIoOperation
 #@ stdcall CancelWaitableTimer(long)
 # #@ stub CeipIsOptedIn

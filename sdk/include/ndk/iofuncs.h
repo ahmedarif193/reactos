@@ -110,6 +110,15 @@ NtCancelIoFileEx(
     _Out_ PIO_STATUS_BLOCK IoStatusBlock
 );
 
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtCancelSynchronousIoFile(
+    _In_ HANDLE ThreadHandle,
+    _In_opt_ PIO_STATUS_BLOCK IoRequestToCancel,
+    _Out_ PIO_STATUS_BLOCK IoStatusBlock
+);
+
 __kernel_entry
 NTSYSCALLAPI
 NTSTATUS
