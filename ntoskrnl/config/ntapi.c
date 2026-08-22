@@ -1605,8 +1605,52 @@ NTAPI
 NtRenameKey(IN HANDLE KeyHandle,
             IN PUNICODE_STRING ReplacementName)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    PCM_KEY_BODY KeyObject;
+    REG_RENAME_KEY_INFORMATION RenameKeyInfo;
+    REG_POST_OPERATION_INFORMATION PostOperationInfo;
+    UNICODE_STRING NewName;
+    NTSTATUS Status;
+    ULONG i;
+
+    PAGED_CODE();
+
+    Status = ProbeAndCaptureUnicodeString(&NewName, PreviousMode, ReplacementName);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    if (!NewName.Buffer || !NewName.Length || (NewName.Length & (sizeof(WCHAR) - 1)))
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Exit;
+    }
+
+    for (i = 0; i < NewName.Length / sizeof(WCHAR); i++)
+    {
+        if (!NewName.Buffer[i] || (NewName.Buffer[i] == OBJ_NAME_PATH_SEPARATOR))
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Exit;
+        }
+    }
+
+    Status = ObReferenceObjectByHandle(KeyHandle, KEY_WRITE, CmpKeyObjectType, PreviousMode, (PVOID*)&KeyObject, NULL);
+    if (!NT_SUCCESS(Status)) goto Exit;
+
+    PostOperationInfo.Object = KeyObject;
+    RenameKeyInfo.Object = KeyObject;
+    RenameKeyInfo.NewName = &NewName;
+    Status = CmiCallRegisteredCallbacks(RegNtPreRenameKey, &RenameKeyInfo);
+    if (NT_SUCCESS(Status))
+    {
+        Status = CmRenameKey(KeyObject->KeyControlBlock, &NewName);
+        PostOperationInfo.Status = Status;
+        CmiCallRegisteredCallbacks(RegNtPostRenameKey, &PostOperationInfo);
+    }
+
+    ObDereferenceObject(KeyObject);
+Exit:
+    ReleaseCapturedUnicodeString(&NewName, PreviousMode);
+    return Status;
 }
 
 NTSTATUS

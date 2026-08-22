@@ -980,6 +980,32 @@ CmpRemoveKeyControlBlock(
 
 VOID
 NTAPI
+CmpDereferenceNameControlBlockWithLock(
+    IN PCM_NAME_CONTROL_BLOCK Ncb
+);
+
+PVOID
+NTAPI
+CmpPrepareKeyControlBlockRename(
+    IN PCM_KEY_CONTROL_BLOCK Kcb,
+    IN PUNICODE_STRING NewName
+);
+
+VOID
+NTAPI
+CmpCommitKeyControlBlockRename(
+    IN PVOID RenameContext,
+    IN HCELL_INDEX NewCell
+);
+
+VOID
+NTAPI
+CmpCancelKeyControlBlockRename(
+    IN PVOID RenameContext
+);
+
+VOID
+NTAPI
 CmpCleanUpKcbValueCache(
     IN PCM_KEY_CONTROL_BLOCK Kcb
 );
@@ -1312,6 +1338,13 @@ NTSTATUS
 NTAPI
 CmDeleteKey(
     IN PCM_KEY_BODY KeyBody
+);
+
+NTSTATUS
+NTAPI
+CmRenameKey(
+    IN PCM_KEY_CONTROL_BLOCK Kcb,
+    IN PUNICODE_STRING NewName
 );
 
 NTSTATUS

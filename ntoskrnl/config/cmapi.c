@@ -1524,91 +1524,40 @@ CmpQueryNameInformation(
     _In_ ULONG Length,
     _Out_ PULONG ResultLength)
 {
+    PUNICODE_STRING KeyName;
     ULONG NeededLength;
-    PCM_KEY_CONTROL_BLOCK CurrentKcb;
+    NTSTATUS Status = STATUS_SUCCESS;
 
-    NeededLength = 0;
-    CurrentKcb = Kcb;
-
-    /* Count the needed buffer size */
-    while (CurrentKcb)
-    {
-        if (CurrentKcb->NameBlock->Compressed)
-            NeededLength += CmpCompressedNameSize(CurrentKcb->NameBlock->Name, CurrentKcb->NameBlock->NameLength);
-        else
-            NeededLength += CurrentKcb->NameBlock->NameLength;
-
-        NeededLength += sizeof(OBJ_NAME_PATH_SEPARATOR);
-
-        CurrentKcb = CurrentKcb->ParentKcb;
-    }
+    KeyName = CmpConstructName(Kcb);
+    if (!KeyName) return STATUS_INSUFFICIENT_RESOURCES;
+    NeededLength = KeyName->Length;
 
     _SEH2_TRY
     {
         *ResultLength = FIELD_OFFSET(KEY_NAME_INFORMATION, Name) + NeededLength;
         if (Length < RTL_SIZEOF_THROUGH_FIELD(KEY_NAME_INFORMATION, NameLength))
-            _SEH2_YIELD(return STATUS_BUFFER_TOO_SMALL);
-        if (Length < *ResultLength)
+        {
+            Status = STATUS_BUFFER_TOO_SMALL;
+        }
+        else if (Length < *ResultLength)
         {
             KeyNameInfo->NameLength = NeededLength;
-            _SEH2_YIELD(return STATUS_BUFFER_OVERFLOW);
+            Status = STATUS_BUFFER_OVERFLOW;
         }
-    }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-    {
-        _SEH2_YIELD(return _SEH2_GetExceptionCode());
-    }
-    _SEH2_END;
-
-    /* Do the real copy */
-    KeyNameInfo->NameLength = 0;
-    CurrentKcb = Kcb;
-
-    _SEH2_TRY
-    {
-        while (CurrentKcb)
+        else
         {
-            ULONG NameLength;
-
-            if (CurrentKcb->NameBlock->Compressed)
-            {
-                NameLength = CmpCompressedNameSize(CurrentKcb->NameBlock->Name, CurrentKcb->NameBlock->NameLength);
-                /* Copy the compressed name */
-                CmpCopyCompressedName(&KeyNameInfo->Name[(NeededLength - NameLength)/sizeof(WCHAR)],
-                                      NameLength,
-                                      CurrentKcb->NameBlock->Name,
-                                      CurrentKcb->NameBlock->NameLength);
-            }
-            else
-            {
-                NameLength = CurrentKcb->NameBlock->NameLength;
-                /* Otherwise, copy the raw name */
-                RtlCopyMemory(&KeyNameInfo->Name[(NeededLength - NameLength)/sizeof(WCHAR)],
-                              CurrentKcb->NameBlock->Name,
-                              NameLength);
-            }
-
-            NeededLength -= NameLength;
-            NeededLength -= sizeof(OBJ_NAME_PATH_SEPARATOR);
-            /* Add path separator */
-            KeyNameInfo->Name[NeededLength/sizeof(WCHAR)] = OBJ_NAME_PATH_SEPARATOR;
-            KeyNameInfo->NameLength += NameLength + sizeof(OBJ_NAME_PATH_SEPARATOR);
-
-            CurrentKcb = CurrentKcb->ParentKcb;
+            KeyNameInfo->NameLength = NeededLength;
+            RtlCopyMemory(KeyNameInfo->Name, KeyName->Buffer, NeededLength);
         }
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
-        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        Status = _SEH2_GetExceptionCode();
     }
     _SEH2_END;
 
-    /* Make sure we copied everything */
-    ASSERT(NeededLength == 0);
-    ASSERT(KeyNameInfo->Name[0] == OBJ_NAME_PATH_SEPARATOR);
-
-    /* We're done */
-    return STATUS_SUCCESS;
+    CmpFree(KeyName, TAG_CM);
+    return Status;
 }
 
 
@@ -1822,6 +1771,237 @@ Quickie:
 
     /* Release locks */
     CmpReleaseKcbLock(Kcb);
+    CmpUnlockRegistry();
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+CmRenameKey(IN PCM_KEY_CONTROL_BLOCK Kcb,
+            IN PUNICODE_STRING NewName)
+{
+    PHHIVE Hive;
+    PCM_KEY_NODE Node, Parent, ChildNode;
+    HCELL_INDEX Cell, ParentCell, NewCell, ChildCell, ExistingCell;
+    PVOID RenameContext = NULL;
+    PWCHAR OldNameBuffer = NULL;
+    UNICODE_STRING OldName;
+    LARGE_INTEGER OldLastWriteTime, TimeStamp;
+    NTSTATUS Status = STATUS_SUCCESS;
+    ULONG ChildCount, i, MaxNameLength = 0;
+    LONG OldNodeSize;
+    ULONG NewNodeSize;
+    USHORT NameLength;
+    BOOLEAN Removed = FALSE;
+
+    PAGED_CODE();
+    CmpLockRegistryExclusive();
+
+    if (!Kcb->ParentKcb || Kcb->Delete)
+    {
+        Status = Kcb->Delete ? STATUS_OBJECT_NAME_NOT_FOUND : STATUS_ACCESS_DENIED;
+        goto Exit;
+    }
+
+    if ((Kcb->ExtFlags & CM_KCB_READ_ONLY_KEY) || (Kcb->ParentKcb->ExtFlags & CM_KCB_READ_ONLY_KEY))
+    {
+        Status = STATUS_ACCESS_DENIED;
+        goto Exit;
+    }
+
+    Hive = Kcb->KeyHive;
+    Cell = Kcb->KeyCell;
+    if ((Kcb->ParentKcb->KeyHive != Hive) || (Cell == Hive->BaseBlock->RootCell))
+    {
+        Status = STATUS_ACCESS_DENIED;
+        goto Exit;
+    }
+
+    CmpLockHiveFlusherShared((PCMHIVE)Hive);
+    Node = (PCM_KEY_NODE)HvGetCell(Hive, Cell);
+    if (!Node)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto ExitFlusher;
+    }
+
+    ParentCell = Node->Parent;
+    OldLastWriteTime = Node->LastWriteTime;
+    OldNodeSize = HvGetCellSize(Hive, Node);
+    OldName.Length = (Node->Flags & KEY_COMP_NAME) ? CmpCompressedNameSize(Node->Name, Node->NameLength) : Node->NameLength;
+    OldName.MaximumLength = OldName.Length;
+    OldNameBuffer = CmpAllocate(OldName.Length, TRUE, TAG_CM);
+    if (!OldNameBuffer)
+    {
+        HvReleaseCell(Hive, Cell);
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto ExitFlusher;
+    }
+    OldName.Buffer = OldNameBuffer;
+    if (Node->Flags & KEY_COMP_NAME)
+        CmpCopyCompressedName(OldName.Buffer, OldName.MaximumLength, Node->Name, Node->NameLength);
+    else
+        RtlCopyMemory(OldName.Buffer, Node->Name, Node->NameLength);
+    HvReleaseCell(Hive, Cell);
+
+    if (ParentCell != Kcb->ParentKcb->KeyCell)
+    {
+        Status = STATUS_ACCESS_DENIED;
+        goto ExitFlusher;
+    }
+
+    Parent = (PCM_KEY_NODE)HvGetCell(Hive, ParentCell);
+    if (!Parent)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto ExitFlusher;
+    }
+    ExistingCell = CmpFindSubKeyByName(Hive, Parent, NewName);
+    HvReleaseCell(Hive, ParentCell);
+    if ((ExistingCell != HCELL_NIL) && (ExistingCell != Cell))
+    {
+        Status = STATUS_ACCESS_DENIED;
+        goto ExitFlusher;
+    }
+
+    RenameContext = CmpPrepareKeyControlBlockRename(Kcb, NewName);
+    if (!RenameContext)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto ExitFlusher;
+    }
+
+    if (!CmpMarkKeyDirty(Hive, Cell, FALSE))
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto ExitFlusher;
+    }
+
+    if (!CmpRemoveSubKey(Hive, ParentCell, Cell))
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto ExitFlusher;
+    }
+    Removed = TRUE;
+
+    NewNodeSize = FIELD_OFFSET(CM_KEY_NODE, Name) + CmpNameSize(Hive, NewName);
+    NewCell = Cell;
+    if (NewNodeSize > (ULONG)OldNodeSize)
+    {
+        NewCell = HvAllocateCell(Hive, NewNodeSize, HvGetCellType(Cell), HCELL_NIL);
+        if (NewCell == HCELL_NIL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Rollback;
+        }
+
+        Node = (PCM_KEY_NODE)HvGetCell(Hive, Cell);
+        Parent = (PCM_KEY_NODE)HvGetCell(Hive, NewCell);
+        if (!Node || !Parent)
+        {
+            if (Parent) HvReleaseCell(Hive, NewCell);
+            if (Node) HvReleaseCell(Hive, Cell);
+            HvFreeCell(Hive, NewCell);
+            NewCell = Cell;
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Rollback;
+        }
+        RtlCopyMemory(Parent, Node, OldNodeSize);
+        HvReleaseCell(Hive, NewCell);
+        HvReleaseCell(Hive, Cell);
+    }
+
+    HvMarkCellDirty(Hive, NewCell, FALSE);
+    Node = (PCM_KEY_NODE)HvGetCell(Hive, NewCell);
+    if (!Node)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Rollback;
+    }
+    Node->Flags &= ~KEY_COMP_NAME;
+    NameLength = CmpCopyName(Hive, Node->Name, NewName);
+    Node->NameLength = NameLength;
+    if (NameLength < NewName->Length) Node->Flags |= KEY_COMP_NAME;
+    KeQuerySystemTime(&TimeStamp);
+    Node->LastWriteTime = TimeStamp;
+    HvReleaseCell(Hive, NewCell);
+
+    if (!CmpAddSubKey(Hive, ParentCell, NewCell))
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Rollback;
+    }
+    Removed = FALSE;
+
+    if (NewCell != Cell)
+    {
+        Node = (PCM_KEY_NODE)HvGetCell(Hive, NewCell);
+        ASSERT(Node != NULL);
+        ChildCount = Node->SubKeyCounts[Stable] + Node->SubKeyCounts[Volatile];
+        for (i = 0; i < ChildCount; i++)
+        {
+            ChildCell = CmpFindSubKeyByNumber(Hive, Node, i);
+            ASSERT(ChildCell != HCELL_NIL);
+            HvMarkCellDirty(Hive, ChildCell, FALSE);
+            ChildNode = (PCM_KEY_NODE)HvGetCell(Hive, ChildCell);
+            ASSERT(ChildNode != NULL);
+            ChildNode->Parent = NewCell;
+            HvReleaseCell(Hive, ChildCell);
+        }
+        HvReleaseCell(Hive, NewCell);
+        HvFreeCell(Hive, Cell);
+    }
+
+    CmpCommitKeyControlBlockRename(RenameContext, NewCell);
+    RenameContext = NULL;
+    Kcb->KcbLastWriteTime = TimeStamp;
+
+    Parent = (PCM_KEY_NODE)HvGetCell(Hive, ParentCell);
+    ASSERT(Parent != NULL);
+    ChildCount = Parent->SubKeyCounts[Stable] + Parent->SubKeyCounts[Volatile];
+    for (i = 0; i < ChildCount; i++)
+    {
+        ChildCell = CmpFindSubKeyByNumber(Hive, Parent, i);
+        ASSERT(ChildCell != HCELL_NIL);
+        ChildNode = (PCM_KEY_NODE)HvGetCell(Hive, ChildCell);
+        ASSERT(ChildNode != NULL);
+        NameLength = (ChildNode->Flags & KEY_COMP_NAME) ? CmpCompressedNameSize(ChildNode->Name, ChildNode->NameLength) : ChildNode->NameLength;
+        if (NameLength > MaxNameLength) MaxNameLength = NameLength;
+        HvReleaseCell(Hive, ChildCell);
+    }
+    KeQuerySystemTime(&Parent->LastWriteTime);
+    Parent->MaxNameLen = MaxNameLength;
+    Kcb->ParentKcb->KcbLastWriteTime = Parent->LastWriteTime;
+    Kcb->ParentKcb->KcbMaxNameLen = (USHORT)MaxNameLength;
+    HvReleaseCell(Hive, ParentCell);
+
+    CmpCleanUpSubKeyInfo(Kcb->ParentKcb);
+    CmpReportNotify(Kcb, Hive, NewCell, REG_NOTIFY_CHANGE_NAME);
+    goto ExitFlusher;
+
+Rollback:
+    if (NewCell != Cell)
+    {
+        HvFreeCell(Hive, NewCell);
+    }
+    else
+    {
+        Node = (PCM_KEY_NODE)HvGetCell(Hive, Cell);
+        ASSERT(Node != NULL);
+        Node->Flags &= ~KEY_COMP_NAME;
+        NameLength = CmpCopyName(Hive, Node->Name, &OldName);
+        Node->NameLength = NameLength;
+        if (NameLength < OldName.Length) Node->Flags |= KEY_COMP_NAME;
+        Node->LastWriteTime = OldLastWriteTime;
+        HvReleaseCell(Hive, Cell);
+    }
+    if (Removed) ASSERT(CmpAddSubKey(Hive, ParentCell, Cell));
+
+ExitFlusher:
+    if (RenameContext) CmpCancelKeyControlBlockRename(RenameContext);
+    if (OldNameBuffer) CmpFree(OldNameBuffer, TAG_CM);
+    CmpUnlockHiveFlusher((PCMHIVE)Hive);
+Exit:
     CmpUnlockRegistry();
     return Status;
 }

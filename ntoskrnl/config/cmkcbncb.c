@@ -312,6 +312,156 @@ CmpRemoveKeyControlBlock(IN PCM_KEY_CONTROL_BLOCK Kcb)
     CmpRemoveKeyHash(&Kcb->KeyHash);
 }
 
+typedef struct _CMP_KCB_RENAME_CONTEXT
+{
+    PCM_KEY_CONTROL_BLOCK RootKcb;
+    PCM_NAME_CONTROL_BLOCK NewNameBlock;
+    ULONG KcbCount;
+    PCM_KEY_CONTROL_BLOCK Kcbs[ANYSIZE_ARRAY];
+} CMP_KCB_RENAME_CONTEXT, *PCMP_KCB_RENAME_CONTEXT;
+
+static
+BOOLEAN
+CmpIsKcbInRenameTree(IN PCM_KEY_CONTROL_BLOCK Kcb,
+                     IN PCM_KEY_CONTROL_BLOCK RootKcb)
+{
+    PCM_KEY_CONTROL_BLOCK CurrentKcb = Kcb;
+
+    if ((Kcb->KeyHive != RootKcb->KeyHive) || (Kcb->TotalLevels < RootKcb->TotalLevels))
+        return FALSE;
+
+    while (CurrentKcb->TotalLevels > RootKcb->TotalLevels)
+        CurrentKcb = CurrentKcb->ParentKcb;
+
+    return CurrentKcb == RootKcb;
+}
+
+static
+ULONG
+CmpHashNameControlBlock(IN ULONG ConvKey,
+                        IN PCM_NAME_CONTROL_BLOCK NameBlock)
+{
+    ULONG i;
+
+    if (NameBlock->Compressed)
+    {
+        for (i = 0; i < NameBlock->NameLength; i++)
+            ConvKey = COMPUTE_HASH_CHAR(ConvKey, ((PUCHAR)NameBlock->Name)[i]);
+    }
+    else
+    {
+        for (i = 0; i < NameBlock->NameLength / sizeof(WCHAR); i++)
+            ConvKey = COMPUTE_HASH_CHAR(ConvKey, NameBlock->Name[i]);
+    }
+
+    return ConvKey;
+}
+
+PVOID
+NTAPI
+CmpPrepareKeyControlBlockRename(IN PCM_KEY_CONTROL_BLOCK Kcb,
+                                IN PUNICODE_STRING NewName)
+{
+    PCMP_KCB_RENAME_CONTEXT Context;
+    PCM_KEY_HASH Entry;
+    PCM_KEY_CONTROL_BLOCK CachedKcb;
+    ULONG Count = 0, i, Index;
+    SIZE_T Size;
+
+    CMP_ASSERT_EXCLUSIVE_REGISTRY_LOCK();
+
+    for (i = 0; i < CmpHashTableSize; i++)
+    {
+        for (Entry = CmpCacheTable[i].Entry; Entry; Entry = Entry->NextHash)
+        {
+            CachedKcb = CONTAINING_RECORD(Entry, CM_KEY_CONTROL_BLOCK, KeyHash);
+            if (CmpIsKcbInRenameTree(CachedKcb, Kcb)) Count++;
+        }
+    }
+
+    ASSERT(Count != 0);
+    Size = FIELD_OFFSET(CMP_KCB_RENAME_CONTEXT, Kcbs) + Count * sizeof(Context->Kcbs[0]);
+    Context = CmpAllocate(Size, TRUE, TAG_CM);
+    if (!Context) return NULL;
+
+    Context->NewNameBlock = CmpGetNameControlBlock(NewName);
+    if (!Context->NewNameBlock)
+    {
+        CmpFree(Context, TAG_CM);
+        return NULL;
+    }
+
+    Context->RootKcb = Kcb;
+    Context->KcbCount = Count;
+    Index = 0;
+    for (i = 0; i < CmpHashTableSize; i++)
+    {
+        for (Entry = CmpCacheTable[i].Entry; Entry; Entry = Entry->NextHash)
+        {
+            CachedKcb = CONTAINING_RECORD(Entry, CM_KEY_CONTROL_BLOCK, KeyHash);
+            if (CmpIsKcbInRenameTree(CachedKcb, Kcb)) Context->Kcbs[Index++] = CachedKcb;
+        }
+    }
+    ASSERT(Index == Count);
+
+    for (i = 1; i < Count; i++)
+    {
+        CachedKcb = Context->Kcbs[i];
+        Index = i;
+        while (Index && (Context->Kcbs[Index - 1]->TotalLevels > CachedKcb->TotalLevels))
+        {
+            Context->Kcbs[Index] = Context->Kcbs[Index - 1];
+            Index--;
+        }
+        Context->Kcbs[Index] = CachedKcb;
+    }
+
+    ASSERT(Context->Kcbs[0] == Kcb);
+    return Context;
+}
+
+VOID
+NTAPI
+CmpCommitKeyControlBlockRename(IN PVOID RenameContext,
+                               IN HCELL_INDEX NewCell)
+{
+    PCMP_KCB_RENAME_CONTEXT Context = RenameContext;
+    PCM_KEY_CONTROL_BLOCK Kcb;
+    PCM_NAME_CONTROL_BLOCK OldNameBlock;
+    ULONG i;
+
+    CMP_ASSERT_EXCLUSIVE_REGISTRY_LOCK();
+
+    for (i = 0; i < Context->KcbCount; i++)
+        CmpRemoveKeyControlBlock(Context->Kcbs[i]);
+
+    Kcb = Context->RootKcb;
+    OldNameBlock = Kcb->NameBlock;
+    Kcb->NameBlock = Context->NewNameBlock;
+    Kcb->KeyCell = NewCell;
+
+    for (i = 0; i < Context->KcbCount; i++)
+    {
+        Kcb = Context->Kcbs[i];
+        Kcb->ConvKey = CmpHashNameControlBlock(Kcb->ParentKcb ? Kcb->ParentKcb->ConvKey : 0, Kcb->NameBlock);
+        ASSERT(CmpInsertKeyHash(&Kcb->KeyHash, FALSE) == NULL);
+    }
+
+    CmpDereferenceNameControlBlockWithLock(OldNameBlock);
+    CmpFree(Context, TAG_CM);
+}
+
+VOID
+NTAPI
+CmpCancelKeyControlBlockRename(IN PVOID RenameContext)
+{
+    PCMP_KCB_RENAME_CONTEXT Context = RenameContext;
+
+    CMP_ASSERT_EXCLUSIVE_REGISTRY_LOCK();
+    CmpDereferenceNameControlBlockWithLock(Context->NewNameBlock);
+    CmpFree(Context, TAG_CM);
+}
+
 VOID
 NTAPI
 CmpDereferenceNameControlBlockWithLock(IN PCM_NAME_CONTROL_BLOCK Ncb)
@@ -904,6 +1054,7 @@ CmpConstructName(IN PCM_KEY_CONTROL_BLOCK Kcb)
     BOOLEAN DeletedKey = FALSE;
     PWCHAR TargetBuffer, CurrentNameW;
     PUCHAR CurrentName;
+    USHORT ComponentLength;
 
     /* Calculate how much size our key name is going to occupy */
     NameLength = 0;
@@ -976,8 +1127,8 @@ CmpConstructName(IN PCM_KEY_CONTROL_BLOCK Kcb)
             DeletedKey = TRUE;
         }
 
-        /* Get the pointer to the beginning of the current key name */
-        NameLength += (MyKcb->NameBlock->NameLength + 1) * sizeof(WCHAR);
+        ComponentLength = MyKcb->NameBlock->Compressed ? CmpCompressedNameSize(MyKcb->NameBlock->Name, MyKcb->NameBlock->NameLength) : MyKcb->NameBlock->NameLength;
+        NameLength += ComponentLength + sizeof(WCHAR);
         TargetBuffer = &KeyName->Buffer[(KeyName->Length - NameLength) / sizeof(WCHAR)];
 
         /* Add a separator */
@@ -997,12 +1148,7 @@ CmpConstructName(IN PCM_KEY_CONTROL_BLOCK Kcb)
                 CurrentNameW = KeyNode->Name;
             }
 
-            /* Copy the name */
-            for (i=0; i < MyKcb->NameBlock->NameLength; i++)
-            {
-                TargetBuffer[i+1] = *CurrentNameW;
-                CurrentNameW++;
-            }
+            RtlCopyMemory(&TargetBuffer[1], CurrentNameW, ComponentLength);
         }
         else
         {
@@ -1017,12 +1163,7 @@ CmpConstructName(IN PCM_KEY_CONTROL_BLOCK Kcb)
                 CurrentName = (PUCHAR)KeyNode->Name;
             }
 
-            /* Copy the name */
-            for (i=0; i < MyKcb->NameBlock->NameLength; i++)
-            {
-                TargetBuffer[i+1] = (WCHAR)*CurrentName;
-                CurrentName++;
-            }
+            for (i = 0; i < MyKcb->NameBlock->NameLength; i++) TargetBuffer[i + 1] = (WCHAR)CurrentName[i];
         }
 
         /* Release the cell, if needed */

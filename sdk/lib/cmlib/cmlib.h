@@ -744,6 +744,14 @@ CmpRemoveSubKey(
 
 BOOLEAN
 NTAPI
+CmpMarkKeyDirty(
+    IN PHHIVE Hive,
+    IN HCELL_INDEX Cell,
+    IN BOOLEAN CheckNoSubkeys
+);
+
+BOOLEAN
+NTAPI
 CmpMarkIndexDirty(
     IN PHHIVE Hive,
     HCELL_INDEX ParentKey,
