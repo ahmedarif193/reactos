@@ -3591,6 +3591,63 @@ ExpQueryLogicalProcessorInformationEx(
     return Status;
 }
 
+static
+NTSTATUS
+ExpQueryCpuSetInformation(
+    _In_reads_bytes_(InputBufferLength) PVOID InputBuffer,
+    _In_ ULONG InputBufferLength,
+    _Out_writes_bytes_opt_(SystemInformationLength) PVOID SystemInformation,
+    _In_ ULONG SystemInformationLength,
+    _Out_ PULONG ResultLength,
+    _In_ KPROCESSOR_MODE PreviousMode)
+{
+    PSYSTEM_CPU_SET_INFORMATION Information = SystemInformation;
+    ULONG ProcessorCount = KeQueryActiveProcessorCount(NULL);
+    ULONG RequiredLength = ProcessorCount * sizeof(*Information);
+    ULONG ProcessorIndex;
+    ULONG OutputIndex = 0;
+    PEPROCESS Process;
+    PKPRCB Prcb;
+    HANDLE ProcessHandle;
+    NTSTATUS Status;
+
+    if (InputBufferLength < sizeof(ProcessHandle)) return STATUS_INVALID_PARAMETER;
+    ProcessHandle = *(volatile HANDLE *)InputBuffer;
+    if (ProcessHandle)
+    {
+        Status = ObReferenceObjectByHandle(ProcessHandle, PROCESS_QUERY_LIMITED_INFORMATION, PsProcessType, PreviousMode, (PVOID *)&Process, NULL);
+        if (!NT_SUCCESS(Status)) return Status;
+        ObDereferenceObject(Process);
+    }
+
+    if (SystemInformationLength < RequiredLength)
+    {
+        *ResultLength = RequiredLength;
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    if (!Information) return STATUS_ACCESS_VIOLATION;
+
+    RtlZeroMemory(Information, RequiredLength);
+    for (ProcessorIndex = 0; ProcessorIndex < sizeof(KeActiveProcessors) * 8 && OutputIndex < ProcessorCount; ProcessorIndex++)
+    {
+        if (!(KeActiveProcessors & ((KAFFINITY)1 << ProcessorIndex))) continue;
+        Prcb = KiProcessorBlock[ProcessorIndex];
+        Information[OutputIndex].Size = sizeof(*Information);
+        Information[OutputIndex].Type = CpuSetInformation;
+        Information[OutputIndex].CpuSet.Id = 0x100 + ProcessorIndex;
+        Information[OutputIndex].CpuSet.Group = 0;
+        Information[OutputIndex].CpuSet.LogicalProcessorIndex = (UCHAR)ProcessorIndex;
+        Information[OutputIndex].CpuSet.CoreIndex = Prcb->MultiThreadSetMaster ? (UCHAR)Prcb->MultiThreadSetMaster->Number : (UCHAR)ProcessorIndex;
+        Information[OutputIndex].CpuSet.LastLevelCacheIndex = 0;
+        Information[OutputIndex].CpuSet.NumaNodeIndex = Prcb->ParentNode ? (UCHAR)Prcb->ParentNode->NodeNumber : 0;
+        Information[OutputIndex].CpuSet.EfficiencyClass = 0;
+        OutputIndex++;
+    }
+
+    *ResultLength = RequiredLength;
+    return STATUS_SUCCESS;
+}
+
 __kernel_entry
 NTSTATUS
 NTAPI
@@ -3629,7 +3686,7 @@ NtQuerySystemInformationEx(
                 ProbeForWriteUlong(ReturnLength);
         }
 
-        if (ReturnLength)
+        if (ReturnLength && SystemInformationClass != SystemCpuSetInformation)
             *ReturnLength = 0;
 
         switch (SystemInformationClass)
@@ -3712,6 +3769,13 @@ NtQuerySystemInformationEx(
                                                                &CapturedResultLength);
                 if (ReturnLength)
                     *ReturnLength = CapturedResultLength;
+                break;
+            }
+
+            case SystemCpuSetInformation:
+            {
+                Status = ExpQueryCpuSetInformation(InputBuffer, InputBufferLength, SystemInformation, SystemInformationLength, &CapturedResultLength, PreviousMode);
+                if (ReturnLength && (NT_SUCCESS(Status) || Status == STATUS_BUFFER_TOO_SMALL)) *ReturnLength = CapturedResultLength;
                 break;
             }
 

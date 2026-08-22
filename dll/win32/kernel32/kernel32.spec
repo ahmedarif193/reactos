@@ -614,6 +614,7 @@
 @ stdcall GetStringTypeExA(long long str long ptr)
 @ stdcall GetStringTypeExW(long long wstr long ptr)
 @ stdcall GetStringTypeW(long wstr long ptr)
+@ stdcall -version=0xA00+ GetSystemCpuSetInformation(ptr long ptr ptr long) kernelbase.GetSystemCpuSetInformation
 @ stub -version=0x600+ GetSystemDEPPolicy
 @ stdcall GetSystemDefaultLCID()
 @ stdcall GetSystemDefaultLangID()
@@ -1274,9 +1275,11 @@
 @ stub -version=0x600+ WerGetFlags
 @ stub -version=0x600+ WerRegisterFile
 @ stub -version=0x600+ WerRegisterMemoryBlock
+@ stdcall -version=0x601+ WerRegisterRuntimeExceptionModule(wstr ptr) kernelbase.WerRegisterRuntimeExceptionModule
 @ stub -version=0x600+ WerSetFlags
 @ stub -version=0x600+ WerUnregisterFile
 @ stub -version=0x600+ WerUnregisterMemoryBlock
+@ stdcall -version=0x601+ WerUnregisterRuntimeExceptionModule(wstr ptr) kernelbase.WerUnregisterRuntimeExceptionModule
 @ stub -version=0x600+ WerpCleanupMessageMapping
 @ stub -version=0x600+ WerpInitiateRemoteRecovery
 @ stub -version=0x600+ WerpNotifyLoadStringResource
