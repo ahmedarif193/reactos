@@ -1,0 +1,10 @@
+spec2def(dxva2.dll dxva2.spec ADD_IMPORTLIB)
+
+add_library(dxva2 MODULE main.c ${CMAKE_CURRENT_BINARY_DIR}/dxva2.def ${CMAKE_CURRENT_BINARY_DIR}/dxva2_stubs.c)
+set_module_type(dxva2 win32dll)
+target_compile_definitions(dxva2 PRIVATE __WINESRC__)
+target_link_libraries(dxva2 uuid wine)
+add_importlibs(dxva2 ole32 user32 msvcrt kernel32 ntdll)
+add_dependencies(dxva2 d3d_idl_headers)
+add_cd_file(TARGET dxva2 DESTINATION reactos/system32 FOR all)
+set_wine_module(dxva2)
