@@ -2027,6 +2027,9 @@ static HRESULT byte_stream_plugin_create(IUnknown *outer, REFIID riid, void **ou
 
 static BOOL use_gst_byte_stream_handler(void)
 {
+#ifdef __REACTOS__
+    return FALSE;
+#else
     BOOL result;
     DWORD size = sizeof(result);
 
@@ -2036,6 +2039,7 @@ static BOOL use_gst_byte_stream_handler(void)
         return !result;
 
     return TRUE;
+#endif
 }
 
 static HRESULT WINAPI asf_byte_stream_plugin_factory_CreateInstance(IClassFactory *iface,
