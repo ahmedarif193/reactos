@@ -166,6 +166,7 @@ windows.perception.stub.dll
 windows.security.authentication.onlineid.dll
 windows.security.credentials.ui.userconsentverifier.dll
 windows.storage.dll
+windows.storage.applicationdata.dll
 windows.ui.dll
 wintypes.dll
 
