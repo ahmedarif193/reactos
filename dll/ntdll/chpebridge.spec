@@ -16,6 +16,7 @@
 @ stdcall NtAllocateVirtualMemory(long ptr ptr ptr long long) ChpeNtAllocateVirtualMemory
 @ stdcall NtAllocateVirtualMemoryEx(long ptr ptr long long ptr long) ChpeNtAllocateVirtualMemoryEx
 @ stdcall NtAlertThreadByThreadId(long) ChpeNtAlertThreadByThreadId
+@ stdcall NtClose(long) ChpeNtClose
 @ stdcall NtContinue(ptr long) ChpeNtContinue
 @ stdcall -version=0xA00+ NtContinueEx(ptr ptr) ChpeNtContinueEx
 @ stdcall -version=0x600+ NtFlushProcessWriteBuffers() ChpeNtFlushProcessWriteBuffers

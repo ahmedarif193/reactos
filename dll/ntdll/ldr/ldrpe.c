@@ -26,8 +26,40 @@ ULONG LdrpNormalSnap;
 
 #if LDRP_CHPE_IMPORT_REDIRECTION
 static const UNICODE_STRING LdrpArm64EcImportDirectory = RTL_CONSTANT_STRING(L"\\System32\\arm64ec\\");
+static const UNICODE_STRING LdrpComCtl32ImportName = RTL_CONSTANT_STRING(L"comctl32.dll");
+static const UNICODE_STRING LdrpComCtl32V6ImportName = RTL_CONSTANT_STRING(L"comctl32_v6.dll");
 static const UNICODE_STRING LdrpNtdllImportName = RTL_CONSTANT_STRING(L"ntdll.dll");
 static const UNICODE_STRING LdrpNtdllChpeImportName = RTL_CONSTANT_STRING(L"ntdll_chpe.dll");
+static const UNICODE_STRING LdrpDllExtension = RTL_CONSTANT_STRING(L".dll");
+static const UNICODE_STRING LdrpWinSxsPath = RTL_CONSTANT_STRING(L"\\winsxs\\");
+static const UNICODE_STRING LdrpVersion6Path = RTL_CONSTANT_STRING(L"_6.0.");
+
+static
+BOOLEAN
+LdrpUnicodeStringContains(PUNICODE_STRING String,
+                          PCUNICODE_STRING Substring)
+{
+    USHORT Index;
+    USHORT StringLength = String->Length / sizeof(WCHAR);
+    USHORT SubstringLength = Substring->Length / sizeof(WCHAR);
+
+    if (SubstringLength > StringLength)
+        return FALSE;
+
+    for (Index = 0; Index <= StringLength - SubstringLength; ++Index)
+    {
+        if (RtlCompareUnicodeStrings(&String->Buffer[Index],
+                                     SubstringLength,
+                                     Substring->Buffer,
+                                     SubstringLength,
+                                     TRUE) == 0)
+        {
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
 
 static
 VOID
@@ -58,19 +90,40 @@ LdrpBuildArm64EcImportName(PUNICODE_STRING ImportName,
     UNICODE_STRING BaseName;
     UNICODE_STRING NtSystemRoot;
     PCUNICODE_STRING MappedImportName;
+    PCUNICODE_STRING Extension = NULL;
     USHORT Length;
+    USHORT Index;
     NTSTATUS Status;
 
     LdrpGetImportBaseName(ImportName, &BaseName);
     MappedImportName = &BaseName;
     if (RtlEqualUnicodeString(&BaseName, &LdrpNtdllImportName, TRUE))
         MappedImportName = &LdrpNtdllChpeImportName;
+    else if (RtlEqualUnicodeString(&BaseName, &LdrpComCtl32ImportName, TRUE) &&
+             LdrpUnicodeStringContains(ImportName, &LdrpWinSxsPath) &&
+             LdrpUnicodeStringContains(ImportName, &LdrpVersion6Path))
+    {
+        /* Windows uses one hybrid image at the selected SxS path. ReactOS
+         * currently double-builds native ARM64 and ARM64EC images, so keep
+         * the v6 implementation under a distinct x64-callable identity. */
+        MappedImportName = &LdrpComCtl32V6ImportName;
+    }
+
+    for (Index = 0; Index < MappedImportName->Length / sizeof(WCHAR); ++Index)
+    {
+        if (MappedImportName->Buffer[Index] == L'.')
+            break;
+    }
+    if (Index == MappedImportName->Length / sizeof(WCHAR))
+        Extension = &LdrpDllExtension;
 
     RtlInitUnicodeString(&NtSystemRoot, SharedUserData->NtSystemRoot);
-    if (MappedImportName->Length > MAXUSHORT - NtSystemRoot.Length - LdrpArm64EcImportDirectory.Length - sizeof(UNICODE_NULL))
+    if (MappedImportName->Length > MAXUSHORT - NtSystemRoot.Length - LdrpArm64EcImportDirectory.Length -
+                                   (Extension ? Extension->Length : 0) - sizeof(UNICODE_NULL))
         return STATUS_NAME_TOO_LONG;
 
-    Length = NtSystemRoot.Length + LdrpArm64EcImportDirectory.Length + MappedImportName->Length;
+    Length = NtSystemRoot.Length + LdrpArm64EcImportDirectory.Length + MappedImportName->Length +
+             (Extension ? Extension->Length : 0);
     RedirectedImportName->Buffer = RtlAllocateHeap(RtlGetProcessHeap(), 0, Length + sizeof(UNICODE_NULL));
     if (!RedirectedImportName->Buffer)
         return STATUS_NO_MEMORY;
@@ -88,6 +141,13 @@ LdrpBuildArm64EcImportName(PUNICODE_STRING ImportName,
     Status = RtlAppendUnicodeStringToString(RedirectedImportName, MappedImportName);
     if (!NT_SUCCESS(Status))
         goto Failure;
+
+    if (Extension)
+    {
+        Status = RtlAppendUnicodeStringToString(RedirectedImportName, Extension);
+        if (!NT_SUCCESS(Status))
+            goto Failure;
+    }
 
     RedirectedImportName->Buffer[RedirectedImportName->Length / sizeof(WCHAR)] = UNICODE_NULL;
     return STATUS_SUCCESS;

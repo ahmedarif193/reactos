@@ -456,7 +456,6 @@ LdrLoadDll(
     WCHAR StringBuffer[MAX_PATH];
     UNICODE_STRING StaticString, DynamicString;
     BOOLEAN RedirectedDll = FALSE;
-    BOOLEAN ApiSetRedirected = FALSE;
 #if defined(_M_ARM64)
     UNICODE_STRING ChpeDynamicString;
 #endif
@@ -472,14 +471,14 @@ LdrLoadDll(
     RtlInitEmptyUnicodeString(&ChpeDynamicString, NULL, 0);
 #endif
 
-    Status = LdrpApplyFileNameRedirection(DllName, &LdrApiDefaultExtension, &StaticString, &DynamicString, &DllName, &RedirectedDll, &ApiSetRedirected);
+    Status = LdrpApplyFileNameRedirection(DllName, &LdrApiDefaultExtension, &StaticString, &DynamicString, &DllName, &RedirectedDll, NULL);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 
 #if defined(_M_ARM64)
-    /* API-set resolution selects a host name, not its process architecture.
-     * Preserve activation-context assembly selection, including WinSxS paths. */
-    if (NT_SUCCESS(Status) && (!RedirectedDll || ApiSetRedirected) && ChpeShouldRedirectDynamicLoad(DllName))
+    /* Redirection selects a logical module, not an image architecture. Keep
+     * dynamic loads on the same ARM64EC module identity as static imports. */
+    if (NT_SUCCESS(Status) && ChpeShouldRedirectDynamicLoad(DllName))
     {
         Status = LdrpBuildArm64EcImportName(DllName, &ChpeDynamicString);
         if (!NT_SUCCESS(Status))

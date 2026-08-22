@@ -890,6 +890,12 @@ ChpeNtAlertThreadByThreadId(HANDLE ThreadId)
 }
 
 NTSTATUS NTAPI
+ChpeNtClose(HANDLE Handle)
+{
+    return NtClose(Handle);
+}
+
+NTSTATUS NTAPI
 ChpeNtWaitForAlertByThreadId(PVOID Address, PLARGE_INTEGER Timeout)
 {
     return NtWaitForAlertByThreadId(Address, Timeout);
