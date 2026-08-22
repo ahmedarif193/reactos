@@ -168,6 +168,7 @@ windows.security.credentials.ui.userconsentverifier.dll
 windows.storage.dll
 windows.storage.applicationdata.dll
 windows.system.profile.systemid.dll
+windows.system.profile.systemmanufacturers.dll
 windows.ui.dll
 wintypes.dll
 

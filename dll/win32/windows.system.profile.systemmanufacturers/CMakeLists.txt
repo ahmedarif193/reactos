@@ -1,0 +1,11 @@
+spec2def(windows.system.profile.systemmanufacturers.dll windows.system.profile.systemmanufacturers.spec)
+
+add_library(windows_system_profile_systemmanufacturers MODULE main.c ${CMAKE_CURRENT_BINARY_DIR}/windows.system.profile.systemmanufacturers.def ${CMAKE_CURRENT_BINARY_DIR}/windows.system.profile.systemmanufacturers_stubs.c)
+set_target_properties(windows_system_profile_systemmanufacturers PROPERTIES OUTPUT_NAME "windows.system.profile.systemmanufacturers")
+add_idl_reg_scripts(windows_system_profile_systemmanufacturers winrt classes.idl)
+set_module_type(windows_system_profile_systemmanufacturers win32dll)
+target_compile_definitions(windows_system_profile_systemmanufacturers PRIVATE __WINESRC__)
+target_link_libraries(windows_system_profile_systemmanufacturers uuid wine wine_dll_canunload wine_dll_register)
+add_importlibs(windows_system_profile_systemmanufacturers combase oleaut32 msvcrt kernel32 ntdll)
+add_cd_file(TARGET windows_system_profile_systemmanufacturers DESTINATION reactos/system32 FOR all)
+set_wine_module_FIXME(windows_system_profile_systemmanufacturers)
