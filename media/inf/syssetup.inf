@@ -167,6 +167,7 @@ windows.security.authentication.onlineid.dll
 windows.security.credentials.ui.userconsentverifier.dll
 windows.storage.dll
 windows.storage.applicationdata.dll
+windows.system.profile.systemid.dll
 windows.ui.dll
 wintypes.dll
 

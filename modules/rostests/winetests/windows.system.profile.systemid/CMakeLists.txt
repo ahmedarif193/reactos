@@ -1,0 +1,6 @@
+add_definitions(-DUSE_WINE_TODOS -DWINETEST_USE_DBGSTR_HSTRING -D__WINESRC__)
+
+add_executable(windows_system_profile_systemid_winetest systemid.c testlist.c)
+set_module_type(windows_system_profile_systemid_winetest win32cui)
+add_importlibs(windows_system_profile_systemid_winetest combase msvcrt kernel32 ntdll)
+add_rostests_file(TARGET windows_system_profile_systemid_winetest RENAME wsysid.exe)
