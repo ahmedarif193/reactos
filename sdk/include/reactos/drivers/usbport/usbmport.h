@@ -19,6 +19,7 @@
 /* Endpoint status */
 #define USBPORT_ENDPOINT_RUN     0
 #define USBPORT_ENDPOINT_HALT    1
+#define USBPORT_ENDPOINT_TT_BUFFER_DIRTY 2
 #define USBPORT_ENDPOINT_CONTROL 4
 
 /* Interrupt Endpoint Poll Interval */

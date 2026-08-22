@@ -1316,6 +1316,9 @@ USBPORT_StopDevice(IN PDEVICE_OBJECT FdoDevice)
              NULL;
     UsbPortResources = &FdoExtension->UsbPortResources;
 
+    if (FdoExtension->Aux.TtClearRundown)
+        USBPORT_StopTtClearRundown(FdoExtension);
+
     if (FdoExtension->MiniPortFlags & USBPORT_MPFLAG_INTERRUPTS_ENABLED)
     {
         USBPORT_MiniportInterrupts(FdoDevice, FALSE);
@@ -1336,6 +1339,12 @@ USBPORT_StopDevice(IN PDEVICE_OBJECT FdoDevice)
     }
     FdoExtension->TimerFlags = 0;
     USBPORT_StopIsrDpcRundown(FdoExtension);
+
+    if (FdoExtension->Aux.TtClearRundown)
+    {
+        ExFreePoolWithTag(FdoExtension->Aux.TtClearRundown, USB_PORT_TAG);
+        FdoExtension->Aux.TtClearRundown = NULL;
+    }
 
     if (Packet && (FdoExtension->Flags & USBPORT_FLAG_HC_STARTED) &&
         Packet->StopController)
@@ -1552,6 +1561,7 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
 {
     PUSBPORT_DEVICE_EXTENSION FdoExtension;
     PUSBPORT_REGISTRATION_PACKET Packet;
+    PUSBPORT_TT_CLEAR_RUNDOWN TtClearRundown;
     NTSTATUS Status;
     PCI_COMMON_CONFIG PciConfig;
     ULONG BytesRead;
@@ -1695,6 +1705,18 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
     KeInitializeSpinLock(&FdoExtension->TimerFlagsSpinLock);
     KeInitializeEvent(&FdoExtension->TimerDpcEvent, NotificationEvent, TRUE);
     KeInitializeEvent(&FdoExtension->IsrDpcRundownEvent, NotificationEvent, TRUE);
+    ASSERT(FdoExtension->Aux.TtClearRundown == NULL);
+    TtClearRundown = ExAllocatePoolWithTag(NonPagedPool,
+                                           sizeof(*TtClearRundown),
+                                           USB_PORT_TAG);
+    if (!TtClearRundown)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto ExitWithError;
+    }
+    RtlZeroMemory(TtClearRundown, sizeof(*TtClearRundown));
+    KeInitializeEvent(&TtClearRundown->Event, NotificationEvent, FALSE);
+    FdoExtension->Aux.TtClearRundown = TtClearRundown;
     KeInitializeSpinLock(&FdoExtension->PowerWakeSpinLock);
     KeInitializeSpinLock(&FdoExtension->SetPowerD0SpinLock);
     KeInitializeSpinLock(&FdoExtension->RootHubCallbackSpinLock);

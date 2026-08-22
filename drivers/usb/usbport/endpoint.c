@@ -2315,6 +2315,7 @@ USBPORT_EndpointWorker(IN PUSBPORT_ENDPOINT Endpoint,
     PUSBPORT_DEVICE_EXTENSION FdoExtension;
     PUSBPORT_REGISTRATION_PACKET Packet;
     ULONG EndpointState;
+    ULONG EndpointStatus = USBPORT_ENDPOINT_RUN;
 
     DPRINT_CORE("USBPORT_EndpointWorker: Endpoint - %p, LockNotChecked - %x\n",
            Endpoint,
@@ -2350,6 +2351,30 @@ USBPORT_EndpointWorker(IN PUSBPORT_ENDPOINT Endpoint,
     {
         KeAcquireSpinLockAtDpcLevel(&FdoExtension->MiniportSpinLock);
         Packet->PollEndpoint(FdoExtension->MiniPortExt, Endpoint + 1);
+        if (Endpoint->TtExtension &&
+            Packet->GetEndpointStatus &&
+            Packet->SetEndpointStatus)
+        {
+            EndpointStatus = Packet->GetEndpointStatus(FdoExtension->MiniPortExt,
+                                                       Endpoint + 1);
+        }
+        KeReleaseSpinLockFromDpcLevel(&FdoExtension->MiniportSpinLock);
+    }
+
+    if (EndpointStatus & USBPORT_ENDPOINT_TT_BUFFER_DIRTY)
+    {
+        if (USBPORT_QueueTtClear(Endpoint))
+        {
+            /* The work item owns this endpoint reference until completion. */
+            KeReleaseSpinLockFromDpcLevel(&Endpoint->EndpointSpinLock);
+            return FALSE;
+        }
+
+        /* Queueing failed; unblock the HCD and let its retry path recover. */
+        KeAcquireSpinLockAtDpcLevel(&FdoExtension->MiniportSpinLock);
+        Packet->SetEndpointStatus(FdoExtension->MiniPortExt,
+                                  Endpoint + 1,
+                                  USBPORT_ENDPOINT_RUN);
         KeReleaseSpinLockFromDpcLevel(&FdoExtension->MiniportSpinLock);
     }
 

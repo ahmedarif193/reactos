@@ -774,7 +774,8 @@ Dwc2ArmRetryTimer(
         PDWC2_ENDPOINT Endpoint = CONTAINING_RECORD(Entry, DWC2_ENDPOINT, Link);
         PDWC2_TRANSFER Transfer = Endpoint->Transfer;
 
-        if (!Transfer || Transfer->Done || !Transfer->NeedsRetry)
+        if (!Transfer || Transfer->Done || !Transfer->NeedsRetry ||
+            (Endpoint->Status & USBPORT_ENDPOINT_TT_BUFFER_DIRTY))
             continue;
 
         if (!EarliestTime || Transfer->RetryTime < EarliestTime)
@@ -1298,7 +1299,29 @@ Dwc2ProcessChannel(
         return;
     }
 
-    if (InterruptStatus & DWC2_HCINT_ERROR_MASK)
+    /*
+     * A periodic channel can miss its selected (micro)frame when its DPC is
+     * delayed.  No USB transaction took place, so do not consume the
+     * transaction-error budget or halt the endpoint.  Start again at the
+     * endpoint's next polling opportunity; a split transaction must begin
+     * again because its previous frame is no longer collectable.
+     */
+    if (!(InterruptStatus & DWC2_HCINT_XFERCOMPL) &&
+        (InterruptStatus & DWC2_HCINT_ERROR_MASK) == DWC2_HCINT_FRMOVRUN &&
+        Endpoint->Properties.TransferType == USBPORT_TRANSFER_TYPE_INTERRUPT)
+    {
+        Transfer->CompleteSplit = FALSE;
+        Transfer->CsplitNyetCount = 0;
+        if (Endpoint->RequiresSplit)
+            Endpoint->Status |= USBPORT_ENDPOINT_TT_BUFFER_DIRTY;
+        Dwc2ScheduleRetry(Extension, Transfer, Dwc2GetInterruptRetryDelay(Endpoint));
+        if (Endpoint->RequiresSplit)
+            Dwc2RegPacket.UsbPortInvalidateEndpoint(Extension, Endpoint);
+        return;
+    }
+
+    if (!(InterruptStatus & DWC2_HCINT_XFERCOMPL) &&
+        (InterruptStatus & DWC2_HCINT_ERROR_MASK))
     {
         if (!(InterruptStatus & (DWC2_HCINT_STALL | DWC2_HCINT_BBLERR | DWC2_HCINT_AHBERR)) &&
             Transfer->ErrorCount + 1 < DWC2_TRANSACTION_ERROR_LIMIT)
@@ -1498,7 +1521,10 @@ Dwc2TryStartPending(
         PDWC2_TRANSFER Transfer = Endpoint->Transfer;
         UCHAR Channel;
 
-        if (Endpoint->State != USBPORT_ENDPOINT_ACTIVE || !Transfer || Transfer->Done || Transfer->Channel != DWC2_INVALID_CHANNEL)
+        if (Endpoint->State != USBPORT_ENDPOINT_ACTIVE ||
+            (Endpoint->Status & USBPORT_ENDPOINT_TT_BUFFER_DIRTY) ||
+            !Transfer || Transfer->Done ||
+            Transfer->Channel != DWC2_INVALID_CHANNEL)
             continue;
         if (Transfer->NeedsRetry)
         {
@@ -2453,12 +2479,19 @@ Dwc2SetEndpointStatus(
 {
     PDWC2_EXTENSION Extension = MiniportExtension;
     PDWC2_ENDPOINT Endpoint = MiniportEndpoint;
+    ULONG OldStatus;
     KIRQL OldIrql;
 
     KeAcquireSpinLock(&Extension->Lock, &OldIrql);
+    OldStatus = Endpoint->Status;
     Endpoint->Status = Status;
     if (Status == USBPORT_ENDPOINT_RUN)
-        Endpoint->DataToggle = 0;
+    {
+        if (OldStatus & USBPORT_ENDPOINT_TT_BUFFER_DIRTY)
+            Dwc2TryStartPending(Extension);
+        else
+            Endpoint->DataToggle = 0;
+    }
     KeReleaseSpinLock(&Extension->Lock, OldIrql);
 }
 
