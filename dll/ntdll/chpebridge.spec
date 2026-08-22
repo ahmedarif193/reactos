@@ -26,6 +26,7 @@
 @ stdcall NtMapViewOfSection(long long ptr long ptr ptr ptr long long long) ChpeNtMapViewOfSection
 @ stdcall NtMapViewOfSectionEx(long long ptr ptr ptr long long ptr long) ChpeNtMapViewOfSectionEx
 @ stdcall NtProtectVirtualMemory(long ptr ptr long ptr) ChpeNtProtectVirtualMemory
+@ stdcall NtQueryInformationFile(long ptr ptr long long) ChpeNtQueryInformationFile
 @ stdcall NtQuerySystemInformation(long ptr long ptr) ChpeNtQuerySystemInformation
 @ stdcall NtRaiseException(ptr ptr long) ChpeNtRaiseException
 @ stdcall NtReadFile(long long ptr ptr ptr ptr long ptr ptr) ChpeNtReadFile
@@ -35,6 +36,7 @@
 @ stdcall NtUnmapViewOfSection(long ptr) ChpeNtUnmapViewOfSection
 @ stdcall NtUnmapViewOfSectionEx(long ptr long) ChpeNtUnmapViewOfSectionEx
 @ stdcall NtWaitForAlertByThreadId(ptr ptr) ChpeNtWaitForAlertByThreadId
+@ stdcall NtWriteFile(long long ptr ptr ptr ptr long ptr ptr) ChpeNtWriteFile
 @ stdcall NtWriteVirtualMemory(long ptr ptr long ptr) ChpeNtWriteVirtualMemory
 @ stdcall RtlAddFunctionTable(ptr long long) ChpeRtlAddFunctionTable
 @ stdcall RtlAddGrowableFunctionTable(ptr ptr long long long long) ChpeRtlAddGrowableFunctionTable
@@ -83,6 +85,7 @@
 @ stdcall RtlLookupFunctionTable(int64 ptr ptr) ChpeRtlLookupFunctionTable
 @ stdcall -version=0xA00+ RtlLogUnexpectedCodepath(ptr) ChpeRtlLogUnexpectedCodepath
 @ stdcall RtlMoveMemory(ptr ptr long) ChpeRtlMoveMemory
+@ stdcall RtlNtStatusToDosError(long) ChpeRtlNtStatusToDosError
 @ stdcall RtlPcToFileHeader(ptr ptr) ChpeRtlPcToFileHeader
 @ stdcall RtlQueryDepthSList(ptr) ChpeRtlQueryDepthSList
 @ stdcall -norelay RtlRaiseException(ptr) ChpeRtlRaiseException
