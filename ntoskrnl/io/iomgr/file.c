@@ -4237,13 +4237,15 @@ typedef struct _IOP_CANCEL_IO_APC_CONTEXT
     PIO_STATUS_BLOCK IoRequestToCancel;
     NTSTATUS Status;
     BOOLEAN Found;
+    BOOLEAN SynchronousOnly;
 } IOP_CANCEL_IO_APC_CONTEXT, *PIOP_CANCEL_IO_APC_CONTEXT;
 
 static
 BOOLEAN
 IopCancelMatchingIrpsInCurrentThread(
-    _In_ PFILE_OBJECT FileObject,
-    _In_opt_ PIO_STATUS_BLOCK IoRequestToCancel)
+    _In_opt_ PFILE_OBJECT FileObject,
+    _In_opt_ PIO_STATUS_BLOCK IoRequestToCancel,
+    _In_ BOOLEAN SynchronousOnly)
 {
     PETHREAD Thread;
     PLIST_ENTRY ListHead, NextEntry;
@@ -4261,7 +4263,8 @@ IopCancelMatchingIrpsInCurrentThread(
         Irp = CONTAINING_RECORD(NextEntry, IRP, ThreadListEntry);
         NextEntry = NextEntry->Flink;
 
-        if ((Irp->Tail.Overlay.OriginalFileObject == FileObject) &&
+        if ((!FileObject || (Irp->Tail.Overlay.OriginalFileObject == FileObject)) &&
+            (!SynchronousOnly || IsIrpSynchronous(Irp, Irp->Tail.Overlay.OriginalFileObject)) &&
             (!IoRequestToCancel || (Irp->UserIosb == IoRequestToCancel)))
         {
             IoCancelIrp(Irp);
@@ -4290,8 +4293,7 @@ IopCancelIoFileExKernelApc(
     UNREFERENCED_PARAMETER(NormalContext);
     UNREFERENCED_PARAMETER(SystemArgument2);
 
-    Context->Found = IopCancelMatchingIrpsInCurrentThread(Context->FileObject,
-                                                          Context->IoRequestToCancel);
+    Context->Found = IopCancelMatchingIrpsInCurrentThread(Context->FileObject, Context->IoRequestToCancel, Context->SynchronousOnly);
     Context->Status = STATUS_SUCCESS;
     KeSetEvent(&Context->Event, IO_NO_INCREMENT, FALSE);
 }
@@ -4314,8 +4316,9 @@ static
 NTSTATUS
 IopCancelIoFileExInThread(
     _In_ PETHREAD Thread,
-    _In_ PFILE_OBJECT FileObject,
+    _In_opt_ PFILE_OBJECT FileObject,
     _In_opt_ PIO_STATUS_BLOCK IoRequestToCancel,
+    _In_ BOOLEAN SynchronousOnly,
     _Out_ PBOOLEAN Found)
 {
     IOP_CANCEL_IO_APC_CONTEXT Context;
@@ -4325,7 +4328,7 @@ IopCancelIoFileExInThread(
 
     if (Thread == PsGetCurrentThread())
     {
-        *Found = IopCancelMatchingIrpsInCurrentThread(FileObject, IoRequestToCancel);
+        *Found = IopCancelMatchingIrpsInCurrentThread(FileObject, IoRequestToCancel, SynchronousOnly);
         return STATUS_SUCCESS;
     }
 
@@ -4334,15 +4337,9 @@ IopCancelIoFileExInThread(
     Context.IoRequestToCancel = IoRequestToCancel;
     Context.Status = STATUS_PENDING;
     Context.Found = FALSE;
+    Context.SynchronousOnly = SynchronousOnly;
 
-    KeInitializeApc(&Context.Apc,
-                    &Thread->Tcb,
-                    OriginalApcEnvironment,
-                    IopCancelIoFileExKernelApc,
-                    IopCancelIoFileExRundownApc,
-                    NULL,
-                    KernelMode,
-                    NULL);
+    KeInitializeApc(&Context.Apc, &Thread->Tcb, OriginalApcEnvironment, IopCancelIoFileExKernelApc, IopCancelIoFileExRundownApc, NULL, KernelMode, NULL);
 
     if (!KeInsertQueueApc(&Context.Apc, &Context, NULL, IO_NO_INCREMENT))
         return STATUS_SUCCESS;
@@ -4352,11 +4349,7 @@ IopCancelIoFileExInThread(
      * the owning thread.  Run the scan in that same thread context, then wait
      * until the APC has either run or been rundown.
      */
-    Status = KeWaitForSingleObject(&Context.Event,
-                                   Executive,
-                                   KernelMode,
-                                   FALSE,
-                                   NULL);
+    Status = KeWaitForSingleObject(&Context.Event, Executive, KernelMode, FALSE, NULL);
 
     if (NT_SUCCESS(Status))
     {
@@ -4424,10 +4417,7 @@ NtCancelIoFileEx(IN HANDLE FileHandle,
     Thread = PsGetNextProcessThread(Process, NULL);
     while (Thread)
     {
-        ApcStatus = IopCancelIoFileExInThread(Thread,
-                                             FileObject,
-                                             IoRequestToCancel,
-                                             &Found);
+        ApcStatus = IopCancelIoFileExInThread(Thread, FileObject, IoRequestToCancel, FALSE, &Found);
         if (NT_SUCCESS(ApcStatus))
         {
             if (Found)
@@ -4455,6 +4445,66 @@ NtCancelIoFileEx(IN HANDLE FileHandle,
     _SEH2_END;
 
     ObDereferenceObject(FileObject);
+    return Status;
+}
+
+/**
+ * @name NtCancelSynchronousIoFile
+ *
+ * Cancel matching synchronous I/O operations issued by a specified thread.
+ *
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+NtCancelSynchronousIoFile(
+    _In_ HANDLE ThreadHandle,
+    _In_opt_ PIO_STATUS_BLOCK IoRequestToCancel,
+    _Out_ PIO_STATUS_BLOCK IoStatusBlock)
+{
+    PETHREAD Thread;
+    KPROCESSOR_MODE PreviousMode = KeGetPreviousMode();
+    BOOLEAN Found;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (!IoStatusBlock)
+        return STATUS_ACCESS_VIOLATION;
+
+    if (PreviousMode != KernelMode)
+    {
+        _SEH2_TRY
+        {
+            ProbeForWrite(IoStatusBlock, sizeof(*IoStatusBlock), 1);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+    }
+
+    Status = ObReferenceObjectByHandle(ThreadHandle, THREAD_TERMINATE, PsThreadType, PreviousMode, (PVOID *)&Thread, NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    IopUpdateOperationCount(IopOtherTransfer);
+    Status = IopCancelIoFileExInThread(Thread, NULL, IoRequestToCancel, TRUE, &Found);
+    if (NT_SUCCESS(Status) && !Found)
+        Status = STATUS_NOT_FOUND;
+
+    _SEH2_TRY
+    {
+        IoStatusBlock->Status = Status;
+        IoStatusBlock->Information = 0;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+    _SEH2_END;
+
+    ObDereferenceObject(Thread);
     return Status;
 }
 
