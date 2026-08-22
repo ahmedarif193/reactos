@@ -1,5 +1,6 @@
 @echo off
-rem Architecture-, media- and app-neutral launcher.
+rem Architecture-, media- and app-neutral startup launcher.
+rem Runs the optional boot-test dispatcher in this process, then scans for apps.
 rem Runs \launcher.cmd from the first attached drive that carries one.
 rem Knows nothing about any app: the payload disk owns everything.
 setlocal EnableExtensions EnableDelayedExpansion
@@ -7,8 +8,11 @@ setlocal EnableExtensions EnableDelayedExpansion
 set S=%SystemRoot%\system32
 set DBGPRINT=%S%\dbgprint.exe
 set SLEEP=%S%\ping.exe
+set BOOTTEST=%~dp0boot_test_start.cmd
 set APPDRIVE=
 set /a TRIES=0
+
+if exist "%BOOTTEST%" call "%BOOTTEST%"
 
 :scan
 for %%D in (D E F G H I J K L M N O P Q R S T U V W X Y Z C) do (
