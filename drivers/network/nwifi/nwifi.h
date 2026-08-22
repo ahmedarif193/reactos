@@ -202,6 +202,9 @@ typedef struct _NWIFI_NBL_CONTEXT
     PMDL          Mdl;
 } NWIFI_NBL_CONTEXT, *PNWIFI_NBL_CONTEXT;
 
+#define NWIFI_NBL_CONTEXT_SIZE \
+    ((USHORT)ALIGN_UP_BY(sizeof(NWIFI_NBL_CONTEXT), MEMORY_ALLOCATION_ALIGNMENT))
+
 /* ===========================================================================
  *  Prototypes
  * ===========================================================================
