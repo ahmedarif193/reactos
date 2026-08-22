@@ -10,6 +10,7 @@
 @ stdcall AnyPopup()
 @ stdcall AppendMenuA(long long long ptr)
 @ stdcall AppendMenuW(long long long ptr)
+@ stdcall -version=0xA00+ AreDpiAwarenessContextsEqual(long long)
 @ stdcall ArrangeIconicWindows(long)
 @ stdcall AttachThreadInput(long long long) NtUserAttachThreadInput
 @ stdcall BeginDeferWindowPos(long)
@@ -287,6 +288,7 @@
 @ stdcall GetDialogBaseUnits()
 @ stdcall -version=0x602+ GetDisplayAutoRotationPreferences(ptr)
 @ stdcall -version=0x600+ GetDisplayConfigBufferSizes(long ptr ptr)
+@ stdcall -version=0xA00+ GetAwarenessFromDpiAwarenessContext(long)
 @ stdcall GetDlgCtrlID(long)
 @ stdcall GetDlgItem(long long)
 @ stdcall GetDlgItemInt(long long ptr long)
@@ -402,6 +404,7 @@
 @ stdcall GetWindow(long long)
 @ stdcall GetWindowContextHelpId(long)
 @ stdcall GetWindowDC(long) NtUserGetWindowDC
+@ stdcall -version=0xA00+ GetWindowDpiAwarenessContext(long)
 @ stdcall -version=0x601+ GetWindowDisplayAffinity(long ptr)
 @ stdcall GetWindowInfo(long ptr)
 @ stdcall GetWindowLongA(long long)
@@ -743,6 +746,7 @@
 @ stdcall SwitchToThisWindow(long long)
 @ stdcall SystemParametersInfoA(long long ptr long)
 @ stdcall SystemParametersInfoW(long long ptr long)
+@ stdcall -version=0xA00+ SystemParametersInfoForDpi(long long ptr long long)
 @ stdcall TabbedTextOutA(long long long str long long ptr long)
 @ stdcall TabbedTextOutW(long long long wstr long long ptr long)
 @ stdcall TileChildWindows(long long)

@@ -376,6 +376,62 @@ IsValidDpiAwarenessContext(
     return IsValidNtUserDpiContext(GetNtUserDpiContext(context, SystemDpi), SystemDpi);
 }
 
+BOOL
+WINAPI
+AreDpiAwarenessContextsEqual(
+    _In_ DPI_AWARENESS_CONTEXT context1,
+    _In_ DPI_AWARENESS_CONTEXT context2)
+{
+    UINT SystemDpi = GetDpiForSystem();
+    UINT Context1 = GetNtUserDpiContext(context1, SystemDpi);
+    UINT Context2 = GetNtUserDpiContext(context2, SystemDpi);
+
+    if (!Context1 || !Context2) return FALSE;
+    if (!IsValidNtUserDpiContext(Context1, SystemDpi) || !IsValidNtUserDpiContext(Context2, SystemDpi)) return FALSE;
+    return (Context1 & ~NTUSER_DPI_CONTEXT_FLAG_PROCESS) == (Context2 & ~NTUSER_DPI_CONTEXT_FLAG_PROCESS);
+}
+
+DPI_AWARENESS
+WINAPI
+GetAwarenessFromDpiAwarenessContext(
+    _In_ DPI_AWARENESS_CONTEXT context)
+{
+    UINT Context = GetNtUserDpiContext(context, 0);
+
+    if (!IsValidNtUserDpiContext(Context, 0)) return DPI_AWARENESS_INVALID;
+    return (DPI_AWARENESS)NTUSER_DPI_CONTEXT_GET_AWARENESS(Context);
+}
+
+DPI_AWARENESS_CONTEXT
+WINAPI
+GetWindowDpiAwarenessContext(
+    _In_ HWND hwnd)
+{
+    DWORD ProcessId;
+    DWORD ThreadId;
+    HANDLE Process;
+    ULONG Context;
+
+    if (!IsWindow(hwnd))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return NULL;
+    }
+
+    ThreadId = GetWindowThreadProcessId(hwnd, &ProcessId);
+    if (ThreadId == GetCurrentThreadId())
+    {
+        Context = (ULONG)(ULONG_PTR)GetThreadDpiAwarenessContext();
+        return (DPI_AWARENESS_CONTEXT)(ULONG_PTR)(Context & ~NTUSER_DPI_CONTEXT_FLAG_PROCESS);
+    }
+
+    Process = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, ProcessId);
+    if (Process == NULL) return NULL;
+    Context = NtUserGetProcessDpiAwarenessContext(Process);
+    CloseHandle(Process);
+    return (DPI_AWARENESS_CONTEXT)(ULONG_PTR)Context;
+}
+
 static INT
 ScaleDpiValue(
     _In_ INT Value,
@@ -449,6 +505,47 @@ GetIconMetricsForDpi(
     Metrics->iVertSpacing = ScaleDpiValue(Metrics->iVertSpacing, SystemDpi, Dpi);
     ScaleLogFontForDpi(&Metrics->lfFont, SystemDpi, Dpi);
     return TRUE;
+}
+
+BOOL
+WINAPI
+SystemParametersInfoForDpi(
+    _In_ UINT action,
+    _In_ UINT val,
+    _Inout_ PVOID ptr,
+    _In_ UINT winini,
+    _In_ UINT dpi)
+{
+    UINT SystemDpi;
+
+    UNREFERENCED_PARAMETER(winini);
+
+    if (ptr == NULL || dpi == 0)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    switch (action)
+    {
+        case SPI_GETNONCLIENTMETRICS:
+            if (val != sizeof(NONCLIENTMETRICSW) || ((PNONCLIENTMETRICSW)ptr)->cbSize != sizeof(NONCLIENTMETRICSW)) break;
+            return GetNonClientMetricsForDpi((PNONCLIENTMETRICSW)ptr, dpi);
+
+        case SPI_GETICONMETRICS:
+            if (val != sizeof(ICONMETRICSW) || ((PICONMETRICSW)ptr)->cbSize != sizeof(ICONMETRICSW)) break;
+            return GetIconMetricsForDpi((PICONMETRICSW)ptr, dpi);
+
+        case SPI_GETICONTITLELOGFONT:
+            if (val != sizeof(LOGFONTW)) break;
+            if (!SystemParametersInfoW(SPI_GETICONTITLELOGFONT, sizeof(LOGFONTW), ptr, 0)) return FALSE;
+            SystemDpi = GetDpiForSystem();
+            ScaleLogFontForDpi((PLOGFONTW)ptr, SystemDpi, dpi);
+            return TRUE;
+    }
+
+    SetLastError(ERROR_INVALID_PARAMETER);
+    return FALSE;
 }
 
 int
