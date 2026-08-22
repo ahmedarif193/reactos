@@ -16,11 +16,31 @@
 
 static
 VOID
+SetShellFolderEnvironmentVariable(
+    IN HKEY hKeyVolatileEnv,
+    IN HKEY hKeyShellFolders,
+    IN LPCWSTR ShellFolderName,
+    IN LPCWSTR EnvironmentName)
+{
+    WCHAR szPath[MAX_PATH + 1];
+    DWORD dwType;
+    DWORD dwSize = sizeof(szPath);
+    LONG lError;
+
+    lError = RegQueryValueExW(hKeyShellFolders, ShellFolderName, NULL, &dwType, (LPBYTE)szPath, &dwSize);
+    if (lError != ERROR_SUCCESS || (dwType != REG_SZ && dwType != REG_EXPAND_SZ))
+        return;
+
+    TRACE("%S path: %S\n", EnvironmentName, szPath);
+    RegSetValueExW(hKeyVolatileEnv, EnvironmentName, 0, REG_SZ, (LPBYTE)szPath, (wcslen(szPath) + 1) * sizeof(WCHAR));
+}
+
+static
+VOID
 BuildVolatileEnvironment(
     IN PWLSESSION Session,
     IN HKEY hKeyCurrentUser)
 {
-    WCHAR szPath[MAX_PATH + 1];
     LPCWSTR wstr;
     SIZE_T size;
     WCHAR szEnvKey[MAX_PATH];
@@ -31,8 +51,6 @@ BuildVolatileEnvironment(
     LONG lError;
     HKEY hKeyVolatileEnv;
     HKEY hKeyShellFolders;
-    DWORD dwType;
-    DWORD dwSize;
 
     /* Create the 'Volatile Environment' key */
     lError = RegCreateKeyExW(hKeyCurrentUser,
@@ -91,32 +109,12 @@ BuildVolatileEnvironment(
         }
     }
 
-    /* Set the 'APPDATA' environment variable */
-    lError = RegOpenKeyExW(hKeyCurrentUser,
-                           L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders",
-                           0,
-                           KEY_READ,
-                           &hKeyShellFolders);
+    /* Set the per-user application data environment variables */
+    lError = RegOpenKeyExW(hKeyCurrentUser, L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", 0, KEY_READ, &hKeyShellFolders);
     if (lError == ERROR_SUCCESS)
     {
-        dwSize = (MAX_PATH + 1) * sizeof(WCHAR);
-        lError = RegQueryValueExW(hKeyShellFolders,
-                                  L"AppData",
-                                  NULL,
-                                  &dwType,
-                                  (LPBYTE)szPath,
-                                  &dwSize);
-        if (lError == ERROR_SUCCESS)
-        {
-            TRACE("APPDATA path: %S\n", szPath);
-            RegSetValueExW(hKeyVolatileEnv,
-                           L"APPDATA",
-                           0,
-                           REG_SZ,
-                           (LPBYTE)szPath,
-                           (wcslen(szPath) + 1) * sizeof(WCHAR));
-        }
-
+        SetShellFolderEnvironmentVariable(hKeyVolatileEnv, hKeyShellFolders, L"AppData", L"APPDATA");
+        SetShellFolderEnvironmentVariable(hKeyVolatileEnv, hKeyShellFolders, L"Local AppData", L"LOCALAPPDATA");
         RegCloseKey(hKeyShellFolders);
     }
 
