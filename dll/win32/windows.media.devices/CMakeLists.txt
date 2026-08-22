@@ -1,0 +1,11 @@
+spec2def(windows.media.devices.dll windows.media.devices.spec)
+
+add_library(windows_media_devices MODULE main.c ${CMAKE_CURRENT_BINARY_DIR}/windows.media.devices.def ${CMAKE_CURRENT_BINARY_DIR}/windows.media.devices_stubs.c)
+set_target_properties(windows_media_devices PROPERTIES OUTPUT_NAME "windows.media.devices")
+add_idl_reg_scripts(windows_media_devices winrt classes.idl)
+set_module_type(windows_media_devices win32dll)
+target_compile_definitions(windows_media_devices PRIVATE __WINESRC__)
+target_link_libraries(windows_media_devices uuid wine wine_dll_canunload wine_dll_register)
+add_importlibs(windows_media_devices combase msvcrt kernel32 ntdll)
+add_cd_file(TARGET windows_media_devices DESTINATION reactos/system32 FOR all)
+set_wine_module_FIXME(windows_media_devices)
