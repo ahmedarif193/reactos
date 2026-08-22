@@ -236,6 +236,11 @@ cmake_dependent_option(ENABLE_RPI5_WIFI_BOOT_RUN
                        "Whether to run the RPi5 Wi-Fi scan automatically at boot." OFF
                        "ARCH STREQUAL arm64 AND CMAKE_BUILD_TYPE STREQUAL Debug AND RPI_SUPPORT" OFF)
 
+set(PREINSTALL_BOOT_TEST_NETWORK_CONFIG "" CACHE FILEPATH
+    "Optional private network configuration to include in the preinstall test image")
+set(PREINSTALL_BOOT_TEST_WIFI_KEY_FILE "" CACHE FILEPATH
+    "Optional private Wi-Fi key file to include in the preinstall test image")
+
 if(ENABLE_ROSAUTOTEST_BOOT_RUN OR
    ENABLE_CPUBENCH_BOOT_RUN OR
    ENABLE_KMTEST_BOOT_RUN OR

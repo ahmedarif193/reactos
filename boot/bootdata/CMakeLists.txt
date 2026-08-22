@@ -82,6 +82,26 @@ add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/preinstall/unattend.inf DESTINATION
 
 if(ENABLE_BOOT_TEST_RUN)
     add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/boot_test_start.cmd DESTINATION "Profiles/Default User/My Documents" FOR livecd preinstall)
+
+    if(PREINSTALL_BOOT_TEST_NETWORK_CONFIG)
+        if(NOT EXISTS "${PREINSTALL_BOOT_TEST_NETWORK_CONFIG}")
+            message(FATAL_ERROR "Preinstall boot-test network config not found: ${PREINSTALL_BOOT_TEST_NETWORK_CONFIG}")
+        endif()
+        add_cd_file(FILE ${PREINSTALL_BOOT_TEST_NETWORK_CONFIG}
+                    DESTINATION "Profiles/Default User/My Documents"
+                    NAME_ON_CD boot_test_network.cfg
+                    FOR preinstall)
+    endif()
+
+    if(PREINSTALL_BOOT_TEST_WIFI_KEY_FILE)
+        if(NOT EXISTS "${PREINSTALL_BOOT_TEST_WIFI_KEY_FILE}")
+            message(FATAL_ERROR "Preinstall boot-test Wi-Fi key file not found: ${PREINSTALL_BOOT_TEST_WIFI_KEY_FILE}")
+        endif()
+        add_cd_file(FILE ${PREINSTALL_BOOT_TEST_WIFI_KEY_FILE}
+                    DESTINATION "Profiles/Default User/My Documents"
+                    NAME_ON_CD boot_test_wifi.key
+                    FOR preinstall)
+    endif()
 endif()
 
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/app_launcher.cmd DESTINATION "Profiles/Default User/My Documents" FOR livecd preinstall)
