@@ -1,0 +1,11 @@
+/*
+ * PROJECT:     ReactOS Boot Configuration Data boot file creation tool
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:     Defines the BCDBoot executable version resource
+ * COPYRIGHT:   Copyright 2026 Ahmed Arif
+ */
+
+#define REACTOS_STR_FILE_DESCRIPTION  "ReactOS Boot File Creation Tool"
+#define REACTOS_STR_INTERNAL_NAME     "bcdboot"
+#define REACTOS_STR_ORIGINAL_FILENAME "bcdboot.exe"
+#include <reactos/version.rc>
