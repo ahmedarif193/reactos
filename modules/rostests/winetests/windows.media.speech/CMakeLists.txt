@@ -1,0 +1,7 @@
+add_definitions(-DUSE_WINE_TODOS -DWINETEST_USE_DBGSTR_HSTRING -D__WINESRC__)
+
+add_executable(windows_media_speech_winetest speech.c testlist.c)
+target_link_libraries(windows_media_speech_winetest uuid)
+set_module_type(windows_media_speech_winetest win32cui)
+add_importlibs(windows_media_speech_winetest combase msvcrt kernel32 ntdll)
+add_rostests_file(TARGET windows_media_speech_winetest RENAME wmspch.exe)
