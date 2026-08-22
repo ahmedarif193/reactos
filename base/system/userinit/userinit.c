@@ -434,6 +434,8 @@ SetUserWallpaper(VOID)
     HKEY hKey;
     DWORD Type, Size;
     WCHAR szWallpaper[MAX_PATH + 1];
+    WCHAR szExpandedWallpaper[MAX_PATH + 1];
+    DWORD ExpandedLength;
     LONG rc;
 
     rc = RegOpenKeyExW(HKEY_CURRENT_USER, REGSTR_PATH_DESKTOP,
@@ -456,13 +458,23 @@ SetUserWallpaper(VOID)
                           &Size);
     RegCloseKey(hKey);
 
-    if (rc == ERROR_SUCCESS && Type == REG_SZ)
+    if (rc == ERROR_SUCCESS && (Type == REG_SZ || Type == REG_EXPAND_SZ))
     {
-        ExpandEnvironmentStringsW(szWallpaper, szWallpaper, ARRAYSIZE(szWallpaper));
-        TRACE("Using wallpaper %s\n", debugstr_w(szWallpaper));
+        ExpandedLength = ExpandEnvironmentStringsW(szWallpaper, szExpandedWallpaper, ARRAYSIZE(szExpandedWallpaper));
+        if (!ExpandedLength)
+        {
+            WARN("ExpandEnvironmentStringsW() failed with error %lu\n", GetLastError());
+            return;
+        }
+        if (ExpandedLength > ARRAYSIZE(szExpandedWallpaper))
+        {
+            WARN("Expanded wallpaper path is too long (%lu characters)\n", ExpandedLength);
+            return;
+        }
+        TRACE("Using wallpaper %s\n", debugstr_w(szExpandedWallpaper));
 
         /* Load and change the wallpaper */
-        SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, szWallpaper, SPIF_SENDCHANGE);
+        SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, szExpandedWallpaper, SPIF_SENDCHANGE);
     }
     else
     {
