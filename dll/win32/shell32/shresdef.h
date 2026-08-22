@@ -961,3 +961,4 @@
 #define IDR_RECYCLEBINCLEANER   162
 #define IDR_EXPLORER            163
 #define IDR_SYSTEMFILEASSOC     164
+#define IDR_WINECLASSES         165

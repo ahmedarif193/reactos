@@ -478,6 +478,7 @@ static HRESULT UpdateRegistryFromResource(BOOL Register)
 {
     static const BYTE resid[] =
     {
+        IDR_WINECLASSES,
         IDR_FOLDEROPTIONS,
         IDR_EXPLORER,
         IDR_SYSTEMFILEASSOC,
