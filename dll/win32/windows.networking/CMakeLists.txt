@@ -1,0 +1,10 @@
+spec2def(windows.networking.dll windows.networking.spec)
+
+add_library(windows_networking MODULE main.c ${CMAKE_CURRENT_BINARY_DIR}/windows.networking.def ${CMAKE_CURRENT_BINARY_DIR}/windows.networking_stubs.c)
+set_target_properties(windows_networking PROPERTIES OUTPUT_NAME "windows.networking")
+set_module_type(windows_networking win32dll)
+target_compile_definitions(windows_networking PRIVATE __WINESRC__)
+target_link_libraries(windows_networking uuid wine wine_dll_canunload wine_dll_register)
+add_importlibs(windows_networking combase msvcrt kernel32 ntdll)
+add_cd_file(TARGET windows_networking DESTINATION reactos/system32 FOR all)
+set_wine_module_FIXME(windows_networking)
