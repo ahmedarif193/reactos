@@ -158,6 +158,7 @@ windows.globalization.dll
 windows.graphics.dll
 windows.media.dll
 windows.media.devices.dll
+windows.media.mediacontrol.dll
 windows.ui.dll
 wintypes.dll
 
