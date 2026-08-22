@@ -923,6 +923,9 @@
 @ stdcall Process32Next(ptr ptr)
 @ stdcall Process32NextW(ptr ptr)
 @ stdcall ProcessIdToSessionId(long ptr)
+@ stdcall -version=0x603+ PssCaptureSnapshot(ptr long long ptr) kernelbase.PssCaptureSnapshot
+@ stdcall -version=0x603+ PssFreeSnapshot(ptr ptr) kernelbase.PssFreeSnapshot
+@ stdcall -version=0x603+ PssQuerySnapshot(ptr long ptr long) kernelbase.PssQuerySnapshot
 @ stdcall PulseEvent(long)
 @ stdcall PurgeComm(long long)
 @ stub -version=0x600+ QueryActCtxSettingsW
