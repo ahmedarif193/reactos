@@ -126,6 +126,7 @@ dll/win32/mf                  # Synced to Wine-11.14
 dll/win32/mf3216              # Synced to Wine-11.14
 dll/win32/mfasfsrcsnk         # Synced to Wine-11.14
 dll/win32/mferror             # Synced to Wine-11.14
+dll/win32/mfh264enc           # Synced to Wine-11.14
 dll/win32/mfmediaengine       # Synced to Wine-11.14
 dll/win32/mfplat              # Synced to Wine-11.14
 dll/win32/mfplay              # Synced to Wine-11.14

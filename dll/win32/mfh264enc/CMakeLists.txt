@@ -1,0 +1,10 @@
+spec2def(mfh264enc.dll mfh264enc.spec)
+
+add_library(mfh264enc MODULE mfh264enc.c ${CMAKE_CURRENT_BINARY_DIR}/mfh264enc.def ${CMAKE_CURRENT_BINARY_DIR}/mfh264enc_stubs.c)
+add_idl_reg_scripts(mfh264enc registry mfh264enc.idl)
+set_module_type(mfh264enc win32dll)
+target_compile_definitions(mfh264enc PRIVATE __WINESRC__)
+target_link_libraries(mfh264enc mfuuid dmoguids strmiids wmcodecdspuuid uuid wine wine_dll_canunload wine_dll_register)
+add_importlibs(mfh264enc combase mfplat msvcrt kernel32 ntdll)
+add_cd_file(TARGET mfh264enc DESTINATION reactos/system32 FOR all)
+set_wine_module(mfh264enc)
