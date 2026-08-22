@@ -84,6 +84,7 @@ AddReg=Classes
 11,,mlang.dll,1
 11,,mf.dll,1
 11,,mfasfsrcsnk.dll,1
+11,,mfh264enc.dll,1
 11,,mfplay.dll,1
 11,,mfreadwrite.dll,1
 11,,mmdevapi.dll,1
