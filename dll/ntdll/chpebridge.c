@@ -1649,6 +1649,12 @@ ChpeRtlRestoreLastWin32Error(ULONG Win32Error)
     RtlRestoreLastWin32Error(Win32Error);
 }
 
+ULONG NTAPI
+ChpeRtlNtStatusToDosError(NTSTATUS Status)
+{
+    return RtlNtStatusToDosError(Status);
+}
+
 VOID NTAPI
 ChpeRtlRunOnceInitialize(PRTL_RUN_ONCE RunOnce)
 {
@@ -1876,6 +1882,12 @@ ChpeNtProtectVirtualMemory(HANDLE ProcessHandle, PVOID *BaseAddress, PSIZE_T Reg
 }
 
 NTSTATUS NTAPI
+ChpeNtQueryInformationFile(HANDLE FileHandle, PIO_STATUS_BLOCK IoStatusBlock, PVOID FileInformation, ULONG Length, FILE_INFORMATION_CLASS FileInformationClass)
+{
+    return NtQueryInformationFile(FileHandle, IoStatusBlock, FileInformation, Length, FileInformationClass);
+}
+
+NTSTATUS NTAPI
 ChpeNtQuerySystemInformation(SYSTEM_INFORMATION_CLASS SystemInformationClass, PVOID SystemInformation, ULONG SystemInformationLength, PULONG ReturnLength)
 {
     return NtQuerySystemInformation(SystemInformationClass, SystemInformation, SystemInformationLength, ReturnLength);
@@ -1903,6 +1915,12 @@ NTSTATUS NTAPI
 ChpeNtUnmapViewOfSectionEx(HANDLE ProcessHandle, PVOID BaseAddress, ULONG Flags)
 {
     return NtUnmapViewOfSectionEx(ProcessHandle, BaseAddress, Flags);
+}
+
+NTSTATUS NTAPI
+ChpeNtWriteFile(HANDLE FileHandle, HANDLE Event, PIO_APC_ROUTINE ApcRoutine, PVOID ApcContext, PIO_STATUS_BLOCK IoStatusBlock, PVOID Buffer, ULONG Length, PLARGE_INTEGER ByteOffset, PULONG Key)
+{
+    return NtWriteFile(FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, Buffer, Length, ByteOffset, Key);
 }
 
 NTSTATUS NTAPI
