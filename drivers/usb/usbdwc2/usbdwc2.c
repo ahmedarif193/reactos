@@ -2219,9 +2219,11 @@ Dwc2DiagnoseStalledChannels(
         PDWC2_ENDPOINT Endpoint = Extension->Channels[Index];
         PDWC2_TRANSFER Transfer;
         ULONG Character;
+        ULONG FrameNumber;
         ULONG RawInterrupt;
         ULONG Informational;
         ULONGLONG Elapsed;
+        BOOLEAN StageDirectionIn;
 
         if (!Endpoint || !Endpoint->Transfer)
             continue;
@@ -2235,7 +2237,38 @@ Dwc2DiagnoseStalledChannels(
             continue;
 
         Character = Dwc2ReadRegister(Extension, DWC2_HCCHAR(Index));
+        FrameNumber = Dwc2ReadRegister(Extension, DWC2_HFNUM);
         RawInterrupt = Dwc2ReadRegister(Extension, DWC2_HCINT(Index)) & DWC2_HCINT_VALID_MASK;
+
+        /*
+         * In DMA mode a non-split control/bulk IN channel remains enabled
+         * after NAK and the core retries it without software intervention.
+         * Linux uses NAK here only to clear the transaction-error count.  A
+         * freshly latched NAK therefore proves bus activity; treating it as
+         * a stalled channel produces false timeout dumps for an idle bulk-IN
+         * request and eventually obscures real wedges.
+         */
+        StageDirectionIn = Transfer->Stage == Dwc2StageStatus ?
+                           !Transfer->DirectionIn :
+                           Transfer->Stage != Dwc2StageSetup && Transfer->DirectionIn;
+        Informational = RawInterrupt & (DWC2_HCINT_NAK | DWC2_HCINT_ACK | DWC2_HCINT_NYET);
+        if ((RawInterrupt & DWC2_HCINT_REASON_MASK) == DWC2_HCINT_NAK &&
+            !(RawInterrupt & DWC2_HCINT_CHHLTD) &&
+            (Character & DWC2_HCCHAR_CHENA) &&
+            !Endpoint->RequiresSplit &&
+            StageDirectionIn &&
+            (Endpoint->Properties.TransferType == USBPORT_TRANSFER_TYPE_CONTROL ||
+             Endpoint->Properties.TransferType == USBPORT_TRANSFER_TYPE_BULK))
+        {
+            Dwc2WriteRegister(Extension, DWC2_HCINT(Index), DWC2_HCINT_NAK);
+            Transfer->ErrorCount = 0;
+            Transfer->RecoveryCount = 0;
+            Transfer->HangDiagnosticCount = 0;
+            Transfer->StageStartTime = CurrentTime;
+            Transfer->StageStartFrame = FrameNumber;
+            continue;
+        }
+
         Transfer->HangDiagnosticCount++;
         DPRINT1("[DWC2] CH%lu stalled count=%lu stage=%u addr=%u ep=%u enabled=%u HCINT=%08lx HFNUM=%08lx armFrame=%08lx elapsed100ns=%I64u recoveries=%lu\n",
                 Index,
@@ -2245,7 +2278,7 @@ Dwc2DiagnoseStalledChannels(
                 Endpoint->Properties.EndpointAddress,
                 !!(Character & DWC2_HCCHAR_CHENA),
                 RawInterrupt,
-                Dwc2ReadRegister(Extension, DWC2_HFNUM),
+                FrameNumber,
                 Transfer->StageStartFrame,
                 Elapsed,
                 Transfer->RecoveryCount);
@@ -2259,7 +2292,6 @@ Dwc2DiagnoseStalledChannels(
          * Preserve the sampled bits for the CHHLTD decode, then recover the
          * wedge by halting and re-arming the stage a bounded number of times.
          */
-        Informational = RawInterrupt & (DWC2_HCINT_NAK | DWC2_HCINT_ACK | DWC2_HCINT_NYET);
         if (Informational)
         {
             Transfer->PendingChannelStatus |= Informational;
