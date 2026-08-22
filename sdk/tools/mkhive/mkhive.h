@@ -62,7 +62,6 @@ unsigned char BitScanReverse(ULONG * const Index, unsigned long Mask);
 
 typedef DWORD REGSAM;
 typedef LPVOID LPSECURITY_ATTRIBUTES;
-typedef HANDLE HKEY, *PHKEY;
 
 VOID NTAPI
 RtlInitUnicodeString(
