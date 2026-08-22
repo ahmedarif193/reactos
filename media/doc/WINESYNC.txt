@@ -246,6 +246,7 @@ dll/win32/windows.media.devices # Synced to Wine-11.14
 dll/win32/windows.media.mediacontrol # Synced to Wine-11.14
 dll/win32/windows.media.playback.backgroundmediaplayer # Synced to Wine-11.14
 dll/win32/windows.media.playback.mediaplayer # Synced to Wine-11.14
+dll/win32/windows.media.speech # Synced to Wine-11.14
 dll/win32/windows.networking.connectivity # Synced to Wine-11.14
 dll/win32/windows.networking.hostname # Synced to Wine-11.14
 dll/win32/windows.ui          # Synced to Wine-11.14
