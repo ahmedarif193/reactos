@@ -1450,6 +1450,18 @@ HRESULT WINAPI ShellImageDataFactory_Constructor(IUnknown *outer, REFIID riid, v
 }
 
 #ifdef __REACTOS__
+typedef struct
+{
+    IClassFactory IClassFactory_iface;
+    LONG ref;
+    LPFNCREATEINSTANCE constructor;
+} WineShell32ClassFactory;
+
+static inline WineShell32ClassFactory *impl_from_WineShell32ClassFactory(IClassFactory *iface)
+{
+    return CONTAINING_RECORD(iface, WineShell32ClassFactory, IClassFactory_iface);
+}
+
 static HRESULT WINAPI WineShell32ClassFactory_QueryInterface(IClassFactory *iface, REFIID riid, void **obj)
 {
     if (!obj) return E_POINTER;
@@ -1465,18 +1477,26 @@ static HRESULT WINAPI WineShell32ClassFactory_QueryInterface(IClassFactory *ifac
 
 static ULONG WINAPI WineShell32ClassFactory_AddRef(IClassFactory *iface)
 {
-    return 2;
+    WineShell32ClassFactory *factory = impl_from_WineShell32ClassFactory(iface);
+    return InterlockedIncrement(&factory->ref);
 }
 
 static ULONG WINAPI WineShell32ClassFactory_Release(IClassFactory *iface)
 {
-    return 1;
+    WineShell32ClassFactory *factory = impl_from_WineShell32ClassFactory(iface);
+    ULONG ref = InterlockedDecrement(&factory->ref);
+
+    if (!ref)
+        free(factory);
+
+    return ref;
 }
 
 static HRESULT WINAPI WineShell32ClassFactory_CreateInstance(IClassFactory *iface, IUnknown *outer,
                                                               REFIID riid, void **obj)
 {
-    return ShellImageDataFactory_Constructor(outer, riid, obj);
+    WineShell32ClassFactory *factory = impl_from_WineShell32ClassFactory(iface);
+    return factory->constructor(outer, riid, obj);
 }
 
 static HRESULT WINAPI WineShell32ClassFactory_LockServer(IClassFactory *iface, BOOL lock)
@@ -1493,13 +1513,43 @@ static const IClassFactoryVtbl WineShell32ClassFactoryVtbl =
     WineShell32ClassFactory_LockServer,
 };
 
-static IClassFactory WineShell32ClassFactory = { &WineShell32ClassFactoryVtbl };
-
 HRESULT WINAPI WineShell32_GetClassObject(REFCLSID clsid, REFIID riid, void **obj)
 {
-    if (!IsEqualCLSID(clsid, &CLSID_ShellImageDataFactory))
+    static const struct
+    {
+        const CLSID *clsid;
+        LPFNCREATEINSTANCE constructor;
+    }
+    classes[] =
+    {
+        { &CLSID_ExplorerBrowser, ExplorerBrowser_Constructor },
+        { &CLSID_NamespaceTreeControl, NamespaceTreeControl_Constructor },
+        { &CLSID_ShellImageDataFactory, ShellImageDataFactory_Constructor },
+    };
+    WineShell32ClassFactory *factory;
+    unsigned int i;
+    HRESULT hr;
+
+    if (!obj)
+        return E_POINTER;
+    *obj = NULL;
+
+    for (i = 0; i < ARRAY_SIZE(classes); ++i)
+        if (IsEqualCLSID(clsid, classes[i].clsid))
+            break;
+
+    if (i == ARRAY_SIZE(classes))
         return CLASS_E_CLASSNOTAVAILABLE;
 
-    return IClassFactory_QueryInterface(&WineShell32ClassFactory, riid, obj);
+    if (!(factory = calloc(1, sizeof(*factory))))
+        return E_OUTOFMEMORY;
+
+    factory->IClassFactory_iface.lpVtbl = &WineShell32ClassFactoryVtbl;
+    factory->ref = 1;
+    factory->constructor = classes[i].constructor;
+
+    hr = IClassFactory_QueryInterface(&factory->IClassFactory_iface, riid, obj);
+    IClassFactory_Release(&factory->IClassFactory_iface);
+    return hr;
 }
 #endif /* __REACTOS__ */

@@ -1,0 +1,27 @@
+HKCR
+{
+    NoRemove CLSID
+    {
+        ForceRemove {71F96385-DDD6-48D3-A0C1-AE06E8B055FB} = s 'Explorer Browser'
+        {
+            InprocServer32 = s '%MODULE%'
+            {
+                val ThreadingModel = s 'Apartment'
+            }
+        }
+        ForceRemove {AE054212-3535-4430-83ED-D501AA6680E6} = s 'Namespace Tree Control'
+        {
+            InprocServer32 = s '%MODULE%'
+            {
+                val ThreadingModel = s 'Apartment'
+            }
+        }
+        ForceRemove {66E4E4FB-F385-4DD0-8D74-A2EFD1BC6178} = s 'Shell Image Data Factory'
+        {
+            InprocServer32 = s '%MODULE%'
+            {
+                val ThreadingModel = s 'Apartment'
+            }
+        }
+    }
+}

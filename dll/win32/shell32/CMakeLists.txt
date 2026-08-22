@@ -20,6 +20,7 @@ list(APPEND SOURCE
     CActiveDesktop.cpp
     CActiveDesktop.h
     CIDLDataObj.cpp
+    CNamespaceTreeControl.cpp
     CQueryAssociations.cpp
     changenotify.cpp
     debughlp.cpp
@@ -90,6 +91,7 @@ list(APPEND WINE_SOURCE
     wine/classes.c
     wine/clipboard.c
     wine/control.c
+    wine/ebrowser.c
     wine/pidl.c
     wine/shell32_main.c
     wine/shellole.c
@@ -107,7 +109,10 @@ list(APPEND PCH_SKIP_SOURCE
     ${CMAKE_CURRENT_BINARY_DIR}/shell32_stubs.c)
 
 file(GLOB_RECURSE shell32_rc_deps res/*.*)
-list(APPEND shell32_rc_deps ${CMAKE_CURRENT_BINARY_DIR}/shell32_shldisp.tlb)
+list(APPEND shell32_rc_deps
+    ${CMAKE_CURRENT_BINARY_DIR}/shell32_shldisp.tlb
+    ${CMAKE_CURRENT_SOURCE_DIR}/rgs_res.rc
+    ${CMAKE_CURRENT_SOURCE_DIR}/shresdef.h)
 add_rc_deps(shell32.rc ${shell32_rc_deps})
 
 add_library(shell32 MODULE
@@ -124,7 +129,6 @@ if(MSVC)
 endif()
 
 add_typelib(shell32_shldisp.idl)
-set_source_files_properties(shell32.rc PROPERTIES OBJECT_DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/shell32_shldisp.tlb)
 
 set_module_type(shell32 win32dll UNICODE)
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU")

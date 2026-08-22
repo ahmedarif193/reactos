@@ -36,3 +36,5 @@ IDR_MOVETOMENU REGISTRY "res/rgs/movetomenu.rgs"
 IDR_RECYCLEBINCLEANER REGISTRY "res/rgs/recyclebincleaner.rgs"
 IDR_EXPLORER REGISTRY "res/rgs/explorer.rgs"
 IDR_SYSTEMFILEASSOC REGISTRY "res/rgs/systemfileassociations.rgs"
+/* Derived from Wine 11.14 shell32_classes.idl, Copyright 2011 Alexandre Julliard, LGPL-2.1-or-later. */
+IDR_WINECLASSES REGISTRY "res/rgs/wineclasses.rgs"

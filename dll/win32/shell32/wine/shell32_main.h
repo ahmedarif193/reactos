@@ -46,6 +46,11 @@ extern "C" {
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(*(a)))
 
+/* explorer ("cabinet") window messages */
+#ifndef CWM_GETISHELLBROWSER
+#define CWM_GETISHELLBROWSER (WM_USER + 7)
+#endif
+
 /*******************************************
 *  global SHELL32.DLL variables
 */
@@ -70,6 +75,8 @@ SH32_ExtCoCreateInstance(
 
 #ifdef __REACTOS__
 HRESULT WINAPI WineShell32_GetClassObject(REFCLSID clsid, REFIID riid, void **obj);
+HRESULT WINAPI ExplorerBrowser_Constructor(IUnknown *outer, REFIID riid, void **obj);
+HRESULT WINAPI NamespaceTreeControl_Constructor(IUnknown *outer, REFIID riid, void **obj);
 #endif
 
 /* Iconcache */
