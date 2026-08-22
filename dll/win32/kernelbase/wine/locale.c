@@ -7427,6 +7427,10 @@ INT WINAPI DECLSPEC_HOTPATCH WideCharToMultiByte( UINT codepage, DWORD flags, LP
 }
 
 
+/* kernel32 forwards these two exports to kernelbase, so their Wine
+ * implementations must remain active on ReactOS to avoid circular imports. */
+#endif /* !__REACTOS__ */
+
 /***********************************************************************
  *	GetUserDefaultGeoName  (kernelbase.@)
  */
@@ -7488,6 +7492,7 @@ BOOL WINAPI SetUserGeoName(PWSTR geo_name)
     return SetUserGeoID( geo->id );
 }
 
+#ifndef __REACTOS__
 
 static void grouping_to_string( UINT grouping, WCHAR *buffer )
 {
