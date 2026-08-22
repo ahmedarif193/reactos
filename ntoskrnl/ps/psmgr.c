@@ -527,7 +527,7 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     ObjectTypeInitializer->InvalidAttributes = 0;
     ObjectTypeInitializer->ValidAccessMask = JOB_OBJECT_ALL_ACCESS;
     ObjectTypeInitializer->OpenProcedure = NULL;
-    ObjectTypeInitializer->CloseProcedure = PspJobClose;
+    ObjectTypeInitializer->CloseProcedure = PspCloseJob;
     ObjectTypeInitializer->DeleteProcedure = PspDeleteJob;
     ObjectTypeInitializerEx.SeMandatoryLabelMask = 1;
     ObCreateObjectType(&Name, ObjectTypeInitializer, NULL, &PsJobType);
