@@ -11,9 +11,9 @@ list(APPEND SOURCE
 
 add_library(propsys MODULE
     ${SOURCE}
-    propsys.rc
     ${CMAKE_CURRENT_BINARY_DIR}/propsys.def)
 
+add_idl_reg_scripts(propsys registry propsys_classes.idl)
 target_compile_definitions(propsys PRIVATE _FORCENAMELESSUNION)
 set_module_type(propsys win32dll)
 target_link_libraries(propsys uuid wine wine_dll_register wine_dll_canunload)
