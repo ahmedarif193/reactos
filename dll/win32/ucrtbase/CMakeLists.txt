@@ -16,6 +16,22 @@ add_compile_definitions(
 add_library(ucrtbase SHARED
     printf.c
     stubs.c
+    ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/acosh.c
+    ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/acoshf.c
+    ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/asinh.c
+    ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/asinhf.c
+    ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/atanh.c
+    ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/atanhf.c
+    ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/cbrt.c
+    ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/cbrtf.c
+    ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/copysign.c
+    ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/copysignf.c
+    ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/erf.c
+    ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/erff.c
+    ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/expm1.c
+    ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/expm1f.c
+    ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/log1p.c
+    ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/log1pf.c
     ucrtbase_stubs.c
     ucrtbase.def
 )

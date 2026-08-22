@@ -2230,23 +2230,23 @@
 @ cdecl abs(long)
 @ cdecl acos(double)
 @ cdecl -arch=!i386 acosf(float)
-@ cdecl -stub acosh(double)
-@ cdecl -stub acoshf(float)
-@ cdecl -stub acoshl(double)
+@ cdecl acosh(double)
+@ cdecl acoshf(float)
+@ cdecl acoshl(double) acosh
 @ cdecl asctime(ptr)
 @ cdecl asctime_s(ptr long ptr)
 @ cdecl asin(double)
 @ cdecl -arch=!i386 asinf(float)
-@ cdecl -stub asinh(double)
-@ cdecl -stub asinhf(float)
-@ cdecl -stub asinhl(double) asinh
+@ cdecl asinh(double)
+@ cdecl asinhf(float)
+@ cdecl asinhl(double) asinh
 @ cdecl atan(double)
 @ cdecl atan2(double double)
 @ cdecl -arch=!i386 atan2f(float float)
 @ cdecl -arch=!i386 atanf(float)
-@ cdecl -stub atanh(double)
-@ cdecl -stub atanhf(float)
-@ cdecl -stub atanhl(double)
+@ cdecl atanh(double)
+@ cdecl atanhf(float)
+@ cdecl atanhl(double) atanh
 @ cdecl atof(str)
 @ cdecl atoi(str)
 @ cdecl atol(str)
@@ -2281,9 +2281,9 @@
 @ stub catanhf
 @ stub catanhl
 @ stub catanl
-@ cdecl -stub cbrt(double)
-@ cdecl -stub cbrtf(float)
-@ cdecl -stub cbrtl(double) cbrt
+@ cdecl cbrt(double)
+@ cdecl cbrtf(float)
+@ cdecl cbrtl(double) cbrt
 @ stub ccos
 @ stub ccosf
 @ stub ccosh
@@ -2310,9 +2310,9 @@
 @ stub conj
 @ stub conjf
 @ stub conjl
-@ cdecl -stub copysign(double double)
-@ cdecl -stub copysignf(float float)
-@ cdecl -stub copysignl(double double) copysign
+@ cdecl copysign(double double)
+@ cdecl copysignf(float float)
+@ cdecl copysignl(double double) copysign
 @ cdecl cos(double)
 @ cdecl -arch=!i386 cosf(float)
 @ cdecl cosh(double)
@@ -2342,20 +2342,20 @@
 @ stub ctanhl
 @ stub ctanl
 @ cdecl -ret64 div(long long)
-@ cdecl -stub erf(double)
-@ cdecl -stub erfc(double)
-@ cdecl -stub erfcf(float)
-@ cdecl -stub erfcl(double) erfc
-@ cdecl -stub erff(float)
-@ cdecl -stub erfl(double) erf
+@ cdecl erf(double)
+@ cdecl erfc(double)
+@ cdecl erfcf(float)
+@ cdecl erfcl(double) erfc
+@ cdecl erff(float)
+@ cdecl erfl(double) erf
 @ cdecl exit(long)
 @ cdecl exp(double)
 @ cdecl exp2(double)
 @ cdecl exp2f(float)
 @ cdecl exp2l(double) exp2
 @ cdecl -arch=!i386 expf(float)
-@ cdecl -stub expm1(double)
-@ cdecl -stub expm1f(float)
+@ cdecl expm1(double)
+@ cdecl expm1f(float)
 @ cdecl expm1l(double) expm1
 @ cdecl fabs(double)
 @ cdecl -stub -arch=arm,arm64 fabsf(float)
@@ -2469,8 +2469,8 @@
 @ cdecl log(double)
 @ cdecl log10(double)
 @ cdecl -arch=!i386 log10f(float)
-@ cdecl -stub log1p(double)
-@ cdecl -stub log1pf(float)
+@ cdecl log1p(double)
+@ cdecl log1pf(float)
 @ cdecl log1pl(double) log1p
 @ cdecl log2(double)
 @ cdecl log2f(float)
