@@ -7569,6 +7569,25 @@ HRESULT WINAPI SHGetKnownFolderIDList(
     return SHGetFolderLocation(NULL, csidl, hToken, 0, ppidl);
 }
 
+HRESULT WINAPI SHGetKnownFolderItem(REFKNOWNFOLDERID rfid, KNOWN_FOLDER_FLAG flags, HANDLE hToken, REFIID riid, void **ppv)
+{
+    PIDLIST_ABSOLUTE pidl;
+    HRESULT hr;
+
+    TRACE("%s, 0x%08x, %p, %s, %p\n", debugstr_guid(rfid), flags, hToken, debugstr_guid(riid), ppv);
+
+    hr = SHGetKnownFolderIDList(rfid, flags, hToken, &pidl);
+    if (FAILED(hr))
+    {
+        *ppv = NULL;
+        return hr == E_INVALIDARG ? HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) : hr;
+    }
+
+    hr = SHCreateItemFromIDList(pidl, riid, ppv);
+    CoTaskMemFree(pidl);
+    return hr;
+}
+
 
 HRESULT WINAPI SHGetFolderPathAndSubDirA(
 	HWND hwndOwner,    /* [I] owner window */
