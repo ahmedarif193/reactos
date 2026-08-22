@@ -157,6 +157,7 @@ windows.gaming.ui.gamebar.dll
 windows.globalization.dll
 windows.graphics.dll
 windows.media.dll
+windows.media.devices.dll
 windows.ui.dll
 wintypes.dll
 
