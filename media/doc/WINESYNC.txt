@@ -237,6 +237,7 @@ dll/win32/windows.devices.bluetooth # Synced to Wine-11.14
 dll/win32/windows.devices.enumeration # Synced to Wine-11.14
 dll/win32/windows.devices.radios # Synced to Wine-11.14
 dll/win32/windows.devices.usb # Synced to Wine-11.14
+dll/win32/windows.gaming.input # Synced to Wine-11.14
 dll/win32/windows.globalization # Synced to Wine-11.14
 dll/win32/windows.graphics    # Synced to Wine-11.14
 dll/win32/windows.networking.connectivity # Synced to Wine-11.14
