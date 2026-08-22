@@ -233,6 +233,7 @@ dll/win32/wbemdisp            # Synced to Wine-11.14
 dll/win32/wbemprox            # Synced to Wine-11.14
 dll/win32/webservices         # Synced to Wine-11.14
 dll/win32/windows.applicationmodel # Synced to Wine-11.14
+dll/win32/windows.devices.bluetooth # Synced to Wine-11.14
 dll/win32/windows.globalization # Synced to Wine-11.14
 dll/win32/windows.graphics    # Synced to Wine-11.14
 dll/win32/windows.networking.connectivity # Synced to Wine-11.14
