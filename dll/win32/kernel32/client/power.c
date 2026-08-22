@@ -230,3 +230,159 @@ SetThreadExecutionState(EXECUTION_STATE esFlags)
 
     return esFlags;
 }
+
+typedef struct _BASE_POWER_REQUEST_ACTION
+{
+    HANDLE PowerRequestHandle;
+    POWER_REQUEST_TYPE RequestType;
+    ULONG SetAction;
+    PVOID Reserved;
+} BASE_POWER_REQUEST_ACTION, *PBASE_POWER_REQUEST_ACTION;
+
+typedef struct _BASE_COUNTED_REASON_CONTEXT
+{
+    ULONG Version;
+    ULONG Flags;
+    union
+    {
+        struct
+        {
+            UNICODE_STRING ResourceFileName;
+            USHORT ResourceReasonId;
+            ULONG StringCount;
+            PUNICODE_STRING ReasonStrings;
+        };
+        UNICODE_STRING SimpleString;
+    };
+} BASE_COUNTED_REASON_CONTEXT, *PBASE_COUNTED_REASON_CONTEXT;
+
+/*
+ * @implemented
+ */
+HANDLE
+WINAPI
+PowerCreateRequest(
+    _In_opt_ PREASON_CONTEXT Context)
+{
+    BASE_COUNTED_REASON_CONTEXT CountedContext;
+    PUNICODE_STRING ReasonStrings = NULL;
+    WCHAR ModulePath[MAX_PATH];
+    HANDLE Handle;
+    NTSTATUS Status;
+    ULONG i;
+
+    RtlZeroMemory(&CountedContext, sizeof(CountedContext));
+    CountedContext.Version = POWER_REQUEST_CONTEXT_VERSION;
+
+    if (!Context)
+    {
+        CountedContext.Flags = DIAGNOSTIC_REASON_NOT_SPECIFIED;
+    }
+    else if (Context->Version != POWER_REQUEST_CONTEXT_VERSION)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return INVALID_HANDLE_VALUE;
+    }
+    else if (Context->Flags == POWER_REQUEST_CONTEXT_SIMPLE_STRING)
+    {
+        if (!Context->Reason.SimpleReasonString || !*Context->Reason.SimpleReasonString)
+        {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return INVALID_HANDLE_VALUE;
+        }
+        CountedContext.Flags = POWER_REQUEST_CONTEXT_SIMPLE_STRING;
+        RtlInitUnicodeString(&CountedContext.SimpleString, Context->Reason.SimpleReasonString);
+    }
+    else if (Context->Flags == POWER_REQUEST_CONTEXT_DETAILED_STRING)
+    {
+        if (!GetModuleFileNameW(Context->Reason.Detailed.LocalizedReasonModule, ModulePath, ARRAYSIZE(ModulePath))) return INVALID_HANDLE_VALUE;
+        if (Context->Reason.Detailed.ReasonStringCount > MAXULONG / sizeof(*ReasonStrings))
+        {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return INVALID_HANDLE_VALUE;
+        }
+
+        CountedContext.Flags = POWER_REQUEST_CONTEXT_DETAILED_STRING;
+        RtlInitUnicodeString(&CountedContext.ResourceFileName, ModulePath);
+        CountedContext.ResourceReasonId = (USHORT)Context->Reason.Detailed.LocalizedReasonId;
+        CountedContext.StringCount = Context->Reason.Detailed.ReasonStringCount;
+        if (CountedContext.StringCount)
+        {
+            ReasonStrings = RtlAllocateHeap(RtlGetProcessHeap(), 0, CountedContext.StringCount * sizeof(*ReasonStrings));
+            if (!ReasonStrings)
+            {
+                SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+                return INVALID_HANDLE_VALUE;
+            }
+
+            for (i = 0; i < CountedContext.StringCount; i++) RtlInitUnicodeString(&ReasonStrings[i], Context->Reason.Detailed.ReasonStrings[i]);
+            CountedContext.ReasonStrings = ReasonStrings;
+        }
+    }
+    else
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return INVALID_HANDLE_VALUE;
+    }
+
+    Status = NtPowerInformation(PowerRequestCreate, &CountedContext, sizeof(CountedContext), &Handle, sizeof(Handle));
+    if (ReasonStrings) RtlFreeHeap(RtlGetProcessHeap(), 0, ReasonStrings);
+    if (!NT_SUCCESS(Status))
+    {
+        BaseSetLastNTError(Status);
+        return INVALID_HANDLE_VALUE;
+    }
+
+    if (Context && Context->Flags == POWER_REQUEST_CONTEXT_DETAILED_STRING) SetLastError(ERROR_SUCCESS);
+    return Handle;
+}
+
+/*
+ * @implemented
+ */
+BOOL
+WINAPI
+PowerSetRequest(
+    _In_ HANDLE PowerRequest,
+    _In_ POWER_REQUEST_TYPE RequestType)
+{
+    BASE_POWER_REQUEST_ACTION Action;
+    NTSTATUS Status;
+
+    Action.PowerRequestHandle = PowerRequest;
+    Action.RequestType = RequestType;
+    Action.SetAction = TRUE;
+    Action.Reserved = NULL;
+    Status = NtPowerInformation(PowerRequestAction, &Action, sizeof(Action), NULL, 0);
+    if (!NT_SUCCESS(Status))
+    {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+/*
+ * @implemented
+ */
+BOOL
+WINAPI
+PowerClearRequest(
+    _In_ HANDLE PowerRequest,
+    _In_ POWER_REQUEST_TYPE RequestType)
+{
+    BASE_POWER_REQUEST_ACTION Action;
+    NTSTATUS Status;
+
+    Action.PowerRequestHandle = PowerRequest;
+    Action.RequestType = RequestType;
+    Action.SetAction = FALSE;
+    Action.Reserved = NULL;
+    Status = NtPowerInformation(PowerRequestAction, &Action, sizeof(Action), NULL, 0);
+    if (!NT_SUCCESS(Status))
+    {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+    return TRUE;
+}

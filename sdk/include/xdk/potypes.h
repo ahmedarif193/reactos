@@ -229,12 +229,13 @@ typedef enum {
 #define POWER_REQUEST_CONTEXT_SIMPLE_STRING      0x00000001
 #define POWER_REQUEST_CONTEXT_DETAILED_STRING    0x00000002
 
-#define PowerRequestMaximum                      3
+#define PowerRequestMaximum                      4
 
 typedef enum _POWER_REQUEST_TYPE {
   PowerRequestDisplayRequired,
   PowerRequestSystemRequired,
-  PowerRequestAwayModeRequired
+  PowerRequestAwayModeRequired,
+  PowerRequestExecutionRequired
 } POWER_REQUEST_TYPE, *PPOWER_REQUEST_TYPE;
 
 typedef enum _PO_THERMAL_REQUEST_TYPE {

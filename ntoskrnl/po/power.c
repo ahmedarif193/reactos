@@ -33,10 +33,177 @@ SYSTEM_POWER_CAPABILITIES PopCapabilities;
 #define POP_PROCESSOR_PERF_PERIOD_MS 100
 #define POP_MAXIMUM_PERF_STATES 32
 
+typedef struct _POP_POWER_REQUEST
+{
+    volatile LONG RequestCount[PowerRequestMaximum];
+} POP_POWER_REQUEST, *PPOP_POWER_REQUEST;
+
+typedef struct _POP_POWER_REQUEST_ACTION
+{
+    HANDLE PowerRequestHandle;
+    POWER_REQUEST_TYPE RequestType;
+    ULONG SetAction;
+    PVOID Reserved;
+} POP_POWER_REQUEST_ACTION, *PPOP_POWER_REQUEST_ACTION;
+
+static POBJECT_TYPE PopPowerRequestObjectType;
+static GENERIC_MAPPING PopPowerRequestMapping =
+{
+    STANDARD_RIGHTS_READ,
+    STANDARD_RIGHTS_WRITE,
+    STANDARD_RIGHTS_EXECUTE,
+    STANDARD_RIGHTS_ALL
+};
+
 static volatile LONG PopProcessorPolicyMinimum = 5;
 static volatile LONG PopProcessorPolicyMaximum = 100;
 
 /* PRIVATE FUNCTIONS *********************************************************/
+
+static
+NTSTATUS
+NTAPI
+PopPowerRequestOpen(
+    _In_ OB_OPEN_REASON Reason,
+    _In_ KPROCESSOR_MODE AccessMode,
+    _In_opt_ PEPROCESS Process,
+    _In_ PVOID ObjectBody,
+    _Inout_ PACCESS_MASK GrantedAccess,
+    _In_ ULONG HandleCount)
+{
+    UNREFERENCED_PARAMETER(AccessMode);
+    UNREFERENCED_PARAMETER(Process);
+    UNREFERENCED_PARAMETER(ObjectBody);
+    UNREFERENCED_PARAMETER(GrantedAccess);
+    UNREFERENCED_PARAMETER(HandleCount);
+
+    return Reason == ObDuplicateHandle ? STATUS_ACCESS_DENIED : STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+PopInitializePowerRequestObjectType(VOID)
+{
+    OBJECT_TYPE_INITIALIZER ObjectTypeInitializer;
+    UNICODE_STRING Name;
+
+    RtlZeroMemory(&ObjectTypeInitializer, sizeof(ObjectTypeInitializer));
+    RtlInitUnicodeString(&Name, L"PowerRequest");
+    ObjectTypeInitializer.Length = sizeof(ObjectTypeInitializer);
+    ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(POP_POWER_REQUEST);
+    ObjectTypeInitializer.GenericMapping = PopPowerRequestMapping;
+    ObjectTypeInitializer.PoolType = NonPagedPoolNx;
+    ObjectTypeInitializer.ValidAccessMask = STANDARD_RIGHTS_ALL;
+    ObjectTypeInitializer.InvalidAttributes = OBJ_OPENLINK;
+    ObjectTypeInitializer.UseDefaultObject = TRUE;
+    ObjectTypeInitializer.UnnamedObjectsOnly = TRUE;
+    ObjectTypeInitializer.OpenProcedure = PopPowerRequestOpen;
+    return ObCreateObjectType(&Name, &ObjectTypeInitializer, NULL, &PopPowerRequestObjectType);
+}
+
+static
+NTSTATUS
+PopValidatePowerRequestReason(
+    _In_ PCOUNTED_REASON_CONTEXT Context,
+    _In_ KPROCESSOR_MODE AccessMode)
+{
+    ULONG i;
+
+    if (Context->Version != POWER_REQUEST_CONTEXT_VERSION) return STATUS_INVALID_PARAMETER;
+    if (Context->Flags == DIAGNOSTIC_REASON_NOT_SPECIFIED) return STATUS_SUCCESS;
+
+    if (Context->Flags == POWER_REQUEST_CONTEXT_SIMPLE_STRING)
+    {
+        if (!Context->SimpleString.Buffer || !Context->SimpleString.Length || Context->SimpleString.MaximumLength < Context->SimpleString.Length || (Context->SimpleString.Length & (sizeof(WCHAR) - 1))) return STATUS_INVALID_PARAMETER;
+        if (AccessMode != KernelMode) ProbeForRead(Context->SimpleString.Buffer, Context->SimpleString.Length, TYPE_ALIGNMENT(WCHAR));
+        return STATUS_SUCCESS;
+    }
+
+    if (Context->Flags != POWER_REQUEST_CONTEXT_DETAILED_STRING) return STATUS_INVALID_PARAMETER;
+    if (!Context->ResourceFileName.Buffer || !Context->ResourceFileName.Length || Context->ResourceFileName.MaximumLength < Context->ResourceFileName.Length || (Context->ResourceFileName.Length & (sizeof(WCHAR) - 1))) return STATUS_INVALID_PARAMETER;
+    if (AccessMode != KernelMode) ProbeForRead(Context->ResourceFileName.Buffer, Context->ResourceFileName.Length, TYPE_ALIGNMENT(WCHAR));
+    if (!Context->StringCount) return STATUS_SUCCESS;
+    if (!Context->ReasonStrings) return STATUS_INVALID_PARAMETER;
+    if (Context->StringCount > MAXULONG / sizeof(UNICODE_STRING)) return STATUS_INVALID_PARAMETER;
+
+    if (AccessMode != KernelMode) ProbeForRead(Context->ReasonStrings, Context->StringCount * sizeof(UNICODE_STRING), TYPE_ALIGNMENT(UNICODE_STRING));
+    for (i = 0; i < Context->StringCount; i++)
+    {
+        if (Context->ReasonStrings[i].MaximumLength < Context->ReasonStrings[i].Length || (Context->ReasonStrings[i].Length & (sizeof(WCHAR) - 1))) return STATUS_INVALID_PARAMETER;
+        if (Context->ReasonStrings[i].Length && !Context->ReasonStrings[i].Buffer) return STATUS_INVALID_PARAMETER;
+        if (AccessMode != KernelMode && Context->ReasonStrings[i].Length) ProbeForRead(Context->ReasonStrings[i].Buffer, Context->ReasonStrings[i].Length, TYPE_ALIGNMENT(WCHAR));
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+PopCreatePowerRequest(
+    _In_ PCOUNTED_REASON_CONTEXT Context,
+    _In_ KPROCESSOR_MODE AccessMode,
+    _Out_ PHANDLE PowerRequestHandle)
+{
+    PPOP_POWER_REQUEST PowerRequest;
+    HANDLE Handle;
+    NTSTATUS Status;
+
+    Status = PopValidatePowerRequestReason(Context, AccessMode);
+    if (!NT_SUCCESS(Status)) return Status;
+    Status = ObCreateObject(AccessMode, PopPowerRequestObjectType, NULL, AccessMode, NULL, sizeof(*PowerRequest), 0, 0, (PVOID *)&PowerRequest);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    RtlZeroMemory(PowerRequest, sizeof(*PowerRequest));
+    Status = ObInsertObject(PowerRequest, NULL, STANDARD_RIGHTS_ALL, 0, NULL, &Handle);
+    if (!NT_SUCCESS(Status)) return Status;
+    *PowerRequestHandle = Handle;
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+PopApplyPowerRequestAction(
+    _In_ PPOP_POWER_REQUEST_ACTION Action,
+    _In_ KPROCESSOR_MODE AccessMode)
+{
+    PPOP_POWER_REQUEST PowerRequest;
+    LONG Count;
+    NTSTATUS Status;
+
+    if ((ULONG)Action->RequestType >= PowerRequestMaximum) return STATUS_NOT_SUPPORTED;
+    if (Action->Reserved) return STATUS_INVALID_PARAMETER;
+    Status = ObReferenceObjectByHandle(Action->PowerRequestHandle, 0, PopPowerRequestObjectType, AccessMode, (PVOID *)&PowerRequest, NULL);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    Status = STATUS_SUCCESS;
+    if (Action->SetAction)
+    {
+        do
+        {
+            Count = PowerRequest->RequestCount[Action->RequestType];
+            if (Count == MAXLONG)
+            {
+                Status = STATUS_INTEGER_OVERFLOW;
+                break;
+            }
+        } while (InterlockedCompareExchange((PLONG)&PowerRequest->RequestCount[Action->RequestType], Count + 1, Count) != Count);
+    }
+    else
+    {
+        do
+        {
+            Count = PowerRequest->RequestCount[Action->RequestType];
+            if (Count <= 0)
+            {
+                Status = STATUS_NOT_SUPPORTED;
+                break;
+            }
+        } while (InterlockedCompareExchange((PLONG)&PowerRequest->RequestCount[Action->RequestType], Count - 1, Count) != Count);
+    }
+
+    ObDereferenceObject(PowerRequest);
+    return Status;
+}
 
 static VOID
 PopApplyProcessorThrottlePolicy(
@@ -423,6 +590,8 @@ PoInitSystem(IN ULONG BootPhase)
     PVOID NotificationEntry;
     PCHAR CommandLine;
     BOOLEAN ForceAcpiDisable = FALSE;
+
+    if (BootPhase == 0 && !NT_SUCCESS(PopInitializePowerRequestObjectType())) return FALSE;
 
     /* Check if this is phase 1 init */
     if (BootPhase == 1)
@@ -1247,6 +1416,45 @@ NtPowerInformation(IN POWER_INFORMATION_LEVEL PowerInformationLevel,
 
     switch (PowerInformationLevel)
     {
+        case PowerRequestCreate:
+        {
+            COUNTED_REASON_CONTEXT Context;
+            HANDLE Handle = NULL;
+
+            if (!InputBuffer || InputBufferLength != sizeof(Context) || !OutputBuffer || OutputBufferLength != sizeof(Handle)) return STATUS_INVALID_PARAMETER;
+            _SEH2_TRY
+            {
+                RtlCopyMemory(&Context, InputBuffer, sizeof(Context));
+                Status = PopCreatePowerRequest(&Context, PreviousMode, &Handle);
+                if (NT_SUCCESS(Status)) *(PHANDLE)OutputBuffer = Handle;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                if (Handle) ObCloseHandle(Handle, PreviousMode);
+            }
+            _SEH2_END;
+            break;
+        }
+
+        case PowerRequestAction:
+        {
+            POP_POWER_REQUEST_ACTION Action;
+
+            if (!InputBuffer || InputBufferLength != sizeof(Action) || OutputBuffer || OutputBufferLength) return STATUS_INVALID_PARAMETER;
+            _SEH2_TRY
+            {
+                RtlCopyMemory(&Action, InputBuffer, sizeof(Action));
+                Status = PopApplyPowerRequestAction(&Action, PreviousMode);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            break;
+        }
+
         case ProcessorStateHandler2:
         {
             if (PreviousMode != KernelMode)
