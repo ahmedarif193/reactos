@@ -90,6 +90,7 @@ dll/win32/dbghelp             # Synced to Wine-11.14
 dll/win32/dciman32            # Synced to Wine-11.14
 dll/win32/dwmapi              # Synced to Wine-11.14
 dll/win32/dxva2               # Synced to Wine-11.14
+dll/win32/evr                 # Synced to Wine-11.14
 dll/win32/faultrep            # Synced to Wine-11.14
 dll/win32/feclient            # Synced to Wine-11.14
 dll/win32/fontsub             # Synced to Wine-11.14
