@@ -9,6 +9,7 @@
 #define USBPORT_H__
 
 #define USBPORT_ISR_DPC_RUNDOWN_STOPPING ((LONG)0x80000000)
+#define USBPORT_TT_CLEAR_RUNDOWN_STOPPING ((LONG)0x80000000)
 
 #include <ntifs.h>
 #include <windef.h>
@@ -419,6 +420,11 @@ typedef struct _USBPORT_RHDEVICE_EXTENSION USBPORT_RHDEVICE_EXTENSION, *PUSBPORT
 
 typedef struct _USBPORT_ROOT_HUB_CALLBACK_DATA USBPORT_ROOT_HUB_CALLBACK_DATA, *PUSBPORT_ROOT_HUB_CALLBACK_DATA;
 
+typedef struct _USBPORT_TT_CLEAR_RUNDOWN {
+  volatile LONG State;
+  KEVENT Event;
+} USBPORT_TT_CLEAR_RUNDOWN, *PUSBPORT_TT_CLEAR_RUNDOWN;
+
 typedef struct _USBPORT_DEVICE_EXTENSION {
   USBPORT_COMMON_DEVICE_EXTENSION CommonExtension;
   ULONG Flags;
@@ -547,6 +553,7 @@ typedef struct _USBPORT_DEVICE_EXTENSION {
       KSPIN_LOCK TimeSyncSpinLock;
       ULONG NextTimeSyncId;
       PVOID DumpContext;
+      PUSBPORT_TT_CLEAR_RUNDOWN TtClearRundown;
     } Aux;
   };
 #else
@@ -559,6 +566,7 @@ typedef struct _USBPORT_DEVICE_EXTENSION {
       KSPIN_LOCK TimeSyncSpinLock;
       ULONG NextTimeSyncId;
       PVOID DumpContext;
+      PUSBPORT_TT_CLEAR_RUNDOWN TtClearRundown;
     } Aux;
   };
 #endif
@@ -917,6 +925,15 @@ VOID
 NTAPI
 USBPORT_SignalWorkerThread(
   IN PDEVICE_OBJECT FdoDevice);
+
+BOOLEAN
+NTAPI
+USBPORT_QueueTtClear(
+  IN PUSBPORT_ENDPOINT Endpoint);
+
+VOID
+USBPORT_StopTtClearRundown(
+  IN PUSBPORT_DEVICE_EXTENSION FdoExtension);
 
 VOID
 NTAPI

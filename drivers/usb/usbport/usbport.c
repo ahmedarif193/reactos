@@ -1820,6 +1820,295 @@ USBPORT_SignalWorkerThread(IN PDEVICE_OBJECT FdoDevice)
     KeReleaseSpinLock(&FdoExtension->WorkerThreadEventSpinLock, OldIrql);
 }
 
+typedef struct _USBPORT_TT_CLEAR_CONTEXT
+{
+    PIO_WORKITEM WorkItem;
+    PUSBPORT_ENDPOINT Endpoint;
+    PUSBPORT_DEVICE_HANDLE HubDeviceHandle;
+} USBPORT_TT_CLEAR_CONTEXT, *PUSBPORT_TT_CLEAR_CONTEXT;
+
+static BOOLEAN
+USBPORT_AcquireTtClearRundown(IN PUSBPORT_DEVICE_EXTENSION FdoExtension)
+{
+    PUSBPORT_TT_CLEAR_RUNDOWN Rundown;
+    LONG State;
+
+    Rundown = FdoExtension->Aux.TtClearRundown;
+    if (!Rundown)
+        return FALSE;
+
+    for (;;)
+    {
+        State = InterlockedCompareExchange(&Rundown->State, 0, 0);
+        if (State < 0)
+            return FALSE;
+
+        ASSERT(State != MAXLONG);
+        if (InterlockedCompareExchange(&Rundown->State,
+                                       State + 1,
+                                       State) == State)
+        {
+            return TRUE;
+        }
+    }
+}
+
+static VOID
+USBPORT_ReleaseTtClearRundown(IN PUSBPORT_DEVICE_EXTENSION FdoExtension)
+{
+    PUSBPORT_TT_CLEAR_RUNDOWN Rundown;
+
+    Rundown = FdoExtension->Aux.TtClearRundown;
+    ASSERT(Rundown != NULL);
+
+    if (InterlockedDecrement(&Rundown->State) ==
+        USBPORT_TT_CLEAR_RUNDOWN_STOPPING)
+    {
+        KeSetEvent(&Rundown->Event, IO_NO_INCREMENT, FALSE);
+    }
+}
+
+VOID
+USBPORT_StopTtClearRundown(IN PUSBPORT_DEVICE_EXTENSION FdoExtension)
+{
+    PUSBPORT_TT_CLEAR_RUNDOWN Rundown;
+    LONG State;
+
+    Rundown = FdoExtension->Aux.TtClearRundown;
+    if (!Rundown)
+        return;
+
+    for (;;)
+    {
+        State = InterlockedCompareExchange(&Rundown->State, 0, 0);
+        if (State < 0)
+            break;
+
+        if (InterlockedCompareExchange(&Rundown->State,
+                                       State | USBPORT_TT_CLEAR_RUNDOWN_STOPPING,
+                                       State) == State)
+        {
+            break;
+        }
+    }
+
+    if (InterlockedCompareExchange(&Rundown->State, 0, 0) ==
+        USBPORT_TT_CLEAR_RUNDOWN_STOPPING)
+    {
+        KeSetEvent(&Rundown->Event, IO_NO_INCREMENT, FALSE);
+    }
+
+    KeWaitForSingleObject(&Rundown->Event,
+                          Executive,
+                          KernelMode,
+                          FALSE,
+                          NULL);
+}
+
+static PUSBPORT_DEVICE_HANDLE
+USBPORT_GetTtHubDeviceHandle(IN PUSBPORT_ENDPOINT Endpoint)
+{
+    PUSBPORT_DEVICE_HANDLE HubDeviceHandle;
+    PUSB2_TT_EXTENSION TtExtension;
+
+    TtExtension = Endpoint->TtExtension;
+    if (!Endpoint->DeviceHandle || !TtExtension)
+        return NULL;
+
+    for (HubDeviceHandle = Endpoint->DeviceHandle->HubDeviceHandle;
+         HubDeviceHandle && !HubDeviceHandle->IsRootHub;
+         HubDeviceHandle = HubDeviceHandle->HubDeviceHandle)
+    {
+        if (HubDeviceHandle->DeviceAddress == TtExtension->DeviceAddress)
+            return HubDeviceHandle;
+    }
+
+    return NULL;
+}
+
+static NTSTATUS
+USBPORT_SendClearTtBuffer(IN PDEVICE_OBJECT FdoDevice,
+                          IN PUSBPORT_TT_CLEAR_CONTEXT Context)
+{
+    PUSBPORT_DEVICE_HANDLE HubDeviceHandle;
+    PUSB2_TT_EXTENSION TtExtension;
+    PUSBPORT_ENDPOINT Endpoint;
+    PUSBPORT_ENDPOINT_PROPERTIES Properties;
+    USB_DEFAULT_PIPE_SETUP_PACKET SetupPacket;
+    NTSTATUS Status;
+    USHORT DeviceInfo;
+
+    Endpoint = Context->Endpoint;
+    TtExtension = Endpoint->TtExtension;
+    HubDeviceHandle = Context->HubDeviceHandle;
+    if (!TtExtension || !HubDeviceHandle || !TtExtension->TtNumber)
+        return STATUS_DEVICE_NOT_CONNECTED;
+
+    if (TtExtension->Flags & USB2_TT_EXTENSION_FLAG_DELETED)
+        return STATUS_DEVICE_NOT_CONNECTED;
+
+    if (HubDeviceHandle->Flags & DEVICE_HANDLE_FLAG_REMOVED)
+        return STATUS_DEVICE_NOT_CONNECTED;
+
+    Properties = &Endpoint->EndpointProperties;
+    DeviceInfo = Properties->EndpointAddress & 0x0F;
+    DeviceInfo |= (Properties->DeviceAddress & 0x7F) << 4;
+    DeviceInfo |= (Properties->TransferType == USBPORT_TRANSFER_TYPE_CONTROL ?
+                   USB_ENDPOINT_TYPE_CONTROL : USB_ENDPOINT_TYPE_BULK) << 11;
+    if (USB_ENDPOINT_DIRECTION_IN(Properties->EndpointAddress))
+        DeviceInfo |= 0x8000;
+
+    RtlZeroMemory(&SetupPacket, sizeof(SetupPacket));
+    SetupPacket.bmRequestType.Recipient = BMREQUEST_TO_OTHER;
+    SetupPacket.bmRequestType.Type = BMREQUEST_CLASS;
+    SetupPacket.bmRequestType.Dir = BMREQUEST_HOST_TO_DEVICE;
+    SetupPacket.bRequest = USB_REQUEST_CLEAR_TT_BUFFER;
+    SetupPacket.wIndex.W = TtExtension->TtNumber;
+
+    /* A control endpoint can leave state in either TT direction. */
+    if (Properties->TransferType == USBPORT_TRANSFER_TYPE_CONTROL)
+    {
+        SetupPacket.wValue.W = DeviceInfo ^ 0x8000;
+        Status = USBPORT_SendSetupPacket(HubDeviceHandle,
+                                         FdoDevice,
+                                         &SetupPacket,
+                                         NULL,
+                                         0,
+                                         NULL,
+                                         NULL);
+        if (!NT_SUCCESS(Status))
+            goto Exit;
+    }
+
+    SetupPacket.wValue.W = DeviceInfo;
+    Status = USBPORT_SendSetupPacket(HubDeviceHandle,
+                                     FdoDevice,
+                                     &SetupPacket,
+                                     NULL,
+                                     0,
+                                     NULL,
+                                     NULL);
+
+Exit:
+    return Status;
+}
+
+static VOID
+NTAPI
+USBPORT_TtClearWorker(IN PDEVICE_OBJECT FdoDevice,
+                      IN PVOID ContextPointer)
+{
+    PUSBPORT_TT_CLEAR_CONTEXT Context = ContextPointer;
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    PUSBPORT_REGISTRATION_PACKET Packet;
+    PUSBPORT_ENDPOINT Endpoint;
+    ULONG EndpointStatus;
+    NTSTATUS Status;
+    KIRQL OldIrql;
+
+    FdoExtension = FdoDevice->DeviceExtension;
+    Packet = &FdoExtension->MiniPortInterface->Packet;
+    Endpoint = Context->Endpoint;
+
+    Status = USBPORT_SendClearTtBuffer(FdoDevice, Context);
+    if (!NT_SUCCESS(Status) && Status != STATUS_DEVICE_NOT_CONNECTED)
+    {
+        DPRINT1("USBPORT: CLEAR_TT_BUFFER failed endpoint=%p hub=%u tt=%u status=%08lx\n",
+                Endpoint,
+                Endpoint->EndpointProperties.TtHubAddr,
+                Endpoint->TtExtension ? Endpoint->TtExtension->TtNumber : 0,
+                Status);
+    }
+
+    /* Linux releases the HCD queue even if the hub request failed. */
+    KeAcquireSpinLock(&FdoExtension->MiniportSpinLock, &OldIrql);
+    EndpointStatus = Packet->GetEndpointStatus(FdoExtension->MiniPortExt,
+                                               Endpoint + 1);
+    if (EndpointStatus & USBPORT_ENDPOINT_TT_BUFFER_DIRTY)
+    {
+        Packet->SetEndpointStatus(FdoExtension->MiniPortExt,
+                                  Endpoint + 1,
+                                  USBPORT_ENDPOINT_RUN);
+    }
+    KeReleaseSpinLock(&FdoExtension->MiniportSpinLock, OldIrql);
+
+    InterlockedDecrement(&Context->HubDeviceHandle->DeviceHandleLock);
+    USBPORT_InvalidateEndpointHandler(FdoDevice,
+                                      Endpoint,
+                                      INVALIDATE_ENDPOINT_WORKER_THREAD);
+    InterlockedDecrement(&Endpoint->LockCounter);
+    IoFreeWorkItem(Context->WorkItem);
+    ExFreePoolWithTag(Context, USB_PORT_TAG);
+    USBPORT_ReleaseTtClearRundown(FdoExtension);
+}
+
+BOOLEAN
+NTAPI
+USBPORT_QueueTtClear(IN PUSBPORT_ENDPOINT Endpoint)
+{
+    PUSBPORT_TT_CLEAR_CONTEXT Context;
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    PUSBPORT_DEVICE_HANDLE HubDeviceHandle;
+    PDEVICE_OBJECT FdoDevice;
+
+    ASSERT(KeGetCurrentIrql() == DISPATCH_LEVEL);
+
+    FdoDevice = Endpoint->FdoDevice;
+    FdoExtension = FdoDevice->DeviceExtension;
+    if (!USBPORT_AcquireTtClearRundown(FdoExtension))
+        return FALSE;
+
+    Context = ExAllocatePoolWithTag(NonPagedPool,
+                                    sizeof(*Context),
+                                    USB_PORT_TAG);
+    if (!Context)
+    {
+        USBPORT_ReleaseTtClearRundown(FdoExtension);
+        return FALSE;
+    }
+
+    RtlZeroMemory(Context, sizeof(*Context));
+    Context->WorkItem = IoAllocateWorkItem(FdoDevice);
+    if (!Context->WorkItem)
+    {
+        ExFreePoolWithTag(Context, USB_PORT_TAG);
+        USBPORT_ReleaseTtClearRundown(FdoExtension);
+        return FALSE;
+    }
+
+    /* Parent-handle detachment and final free use this same lock. */
+    KeAcquireSpinLockAtDpcLevel(&FdoExtension->DeviceHandleSpinLock);
+    HubDeviceHandle = USBPORT_GetTtHubDeviceHandle(Endpoint);
+    if (HubDeviceHandle &&
+        !(HubDeviceHandle->Flags & DEVICE_HANDLE_FLAG_REMOVED))
+    {
+        if (InterlockedIncrement(&HubDeviceHandle->DeviceHandleLock) > 0)
+        {
+            Context->HubDeviceHandle = HubDeviceHandle;
+        }
+        else
+        {
+            InterlockedDecrement(&HubDeviceHandle->DeviceHandleLock);
+        }
+    }
+    KeReleaseSpinLockFromDpcLevel(&FdoExtension->DeviceHandleSpinLock);
+
+    if (!Context->HubDeviceHandle)
+    {
+        IoFreeWorkItem(Context->WorkItem);
+        ExFreePoolWithTag(Context, USB_PORT_TAG);
+        USBPORT_ReleaseTtClearRundown(FdoExtension);
+        return FALSE;
+    }
+
+    Context->Endpoint = Endpoint;
+    IoQueueWorkItem(Context->WorkItem,
+                    USBPORT_TtClearWorker,
+                    DelayedWorkQueue,
+                    Context);
+    return TRUE;
+}
+
 VOID
 NTAPI
 USBPORT_WorkerThreadHandler(IN PDEVICE_OBJECT FdoDevice)
@@ -2200,6 +2489,9 @@ USBPORT_StopWorkerThread(IN PDEVICE_OBJECT FdoDevice)
     DPRINT("USBPORT_StopWorkerThread ...\n");
 
     FdoExtension = FdoDevice->DeviceExtension;
+
+    /* A TT-clear control transfer can still need the USBPORT worker. */
+    USBPORT_StopTtClearRundown(FdoExtension);
 
     ThreadHandle = FdoExtension->WorkerThreadHandle;
 
