@@ -251,6 +251,10 @@ add_library(win32k MODULE
 set_module_type(win32k kernelmodedriver)
 target_link_libraries(win32k ${PSEH_LIB} dxguid libcntpr)
 
+if(ENABLE_EXPERIMENTAL_EARLY_SPLASH)
+    target_compile_definitions(win32k PRIVATE ENABLE_EXPERIMENTAL_EARLY_SPLASH)
+endif()
+
 if(USE_DIBLIB)
     target_link_libraries(win32k diblib)
 endif()

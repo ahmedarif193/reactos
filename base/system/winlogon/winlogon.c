@@ -488,6 +488,11 @@ WinMain(
         ExitProcess(1);
     }
 
+#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
+    if (!EarlySplashCreate())
+        ERR("EARLY_SPLASH: INIT_FAIL continuing_without_background\n");
+#endif
+
     LockWorkstation(WLSession);
 
     /* Load default keyboard layouts */

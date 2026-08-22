@@ -441,6 +441,9 @@ SetUserWallpaper(VOID)
     if (rc != ERROR_SUCCESS)
     {
         WARN("RegOpenKeyEx() failed with error %lu\n", rc);
+#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
+        SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, NULL, SPIF_SENDCHANGE);
+#endif
         return;
     }
 
@@ -476,6 +479,33 @@ SetUserSettings(VOID)
     SetUserSysColors();
     SetUserWallpaper();
 }
+
+#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
+static VOID
+SignalEarlySplashDesktopReady(
+    _In_ PCSTR Stage)
+{
+    HANDLE ReadyEvent;
+
+    ReadyEvent = OpenEventW(EVENT_MODIFY_STATE, FALSE, REACTOS_EARLY_SPLASH_READY_EVENT);
+    if (!ReadyEvent)
+    {
+        DWORD Error = GetLastError();
+
+        if (Error == ERROR_FILE_NOT_FOUND)
+            TRACE("EARLY_SPLASH: USER_DESKTOP_READY_SKIP stage=%s reason=no_waiter\n", Stage);
+        else
+            ERR("EARLY_SPLASH: USER_DESKTOP_READY_FAIL stage=%s operation=open error=%lu\n", Stage, Error);
+        return;
+    }
+
+    if (SetEvent(ReadyEvent))
+        TRACE("EARLY_SPLASH: USER_DESKTOP_READY stage=%s\n", Stage);
+    else
+        ERR("EARLY_SPLASH: USER_DESKTOP_READY_FAIL stage=%s operation=signal error=%lu\n", Stage, GetLastError());
+    CloseHandle(ReadyEvent);
+}
+#endif
 
 static VOID
 ApplyUserPowerScheme(VOID)
@@ -723,6 +753,9 @@ Restart:
 
     if (State.NextPage != DONE) // && bIsLiveCD
     {
+#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
+        SignalEarlySplashDesktopReady("livecd_ui_ready");
+#endif
         RunLiveCD(&State);
     }
 
@@ -742,6 +775,10 @@ Restart:
             Success = StartShell(pEnvironment);
             if (pEnvironment)
                 DestroyEnvironmentBlock(pEnvironment);
+#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
+            if (!bIsLiveCD)
+                SignalEarlySplashDesktopReady(Success ? "shell_started" : "shell_failed");
+#endif
             if (Success)
                 NotifyLogon();
             break;

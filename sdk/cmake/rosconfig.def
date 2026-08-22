@@ -471,6 +471,21 @@ config ISAPNP_ENABLE
       except for the Xbox platform variant, like
       sdk/cmake/config.cmake.
 
+menu "Experimental"
+
+config ENABLE_EXPERIMENTAL_EARLY_SPLASH
+    prompt "Early Winlogon PNG background"
+    type bool
+    default y
+    help
+      Display the shipped BlueHorizon PNG as soon as Winlogon creates the
+      interactive desktop. Keep it stretched across the full virtual screen
+      until Userinit has prepared the normal user background and launched the
+      shell. Disable this option to retain the classic solid-color startup
+      background and omit the PNG decoder path from Winlogon.
+
+endmenu
+
 config ENABLE_FEX_ARM64EC
     prompt "FEX ARM64EC emulator (run AMD64 binaries)"
     type bool

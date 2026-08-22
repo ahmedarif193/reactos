@@ -8,6 +8,10 @@ file(GLOB WALLPAPER_FILES
 
 list(REMOVE_ITEM WALLPAPER_FILES "${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt")
 
+if(ENABLE_EXPERIMENTAL_EARLY_SPLASH)
+    list(REMOVE_ITEM WALLPAPER_FILES "${CMAKE_CURRENT_SOURCE_DIR}/BlueHorizon.png")
+endif()
+
 foreach(f ${WALLPAPER_FILES})
     add_cd_file(FILE "${f}" DESTINATION reactos/Web/Wallpaper FOR all)
 endforeach()

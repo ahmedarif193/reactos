@@ -89,6 +89,9 @@ StartUserShell(
     IN OUT PWLSESSION Session)
 {
     LPVOID lpEnvironment = NULL;
+#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
+    HANDLE ReadyEvent;
+#endif
     BOOLEAN Old;
     BOOL ret;
 
@@ -104,11 +107,20 @@ StartUserShell(
     /* FIXME: reverting to lower privileges after creating user shell? */
     RtlAdjustPrivilege(SE_ASSIGNPRIMARYTOKEN_PRIVILEGE, TRUE, FALSE, &Old);
 
+#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
+    ReadyEvent = EarlySplashCreateUserDesktopReadyEvent(Session);
+#endif
     ret = Session->Gina.Functions.WlxActivateUserShell(
                 Session->Gina.Context,
                 L"Default",
                 NULL, /* FIXME */
                 lpEnvironment);
+#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
+    if (ret && ReadyEvent)
+        EarlySplashWaitForUserDesktopReady(ReadyEvent);
+    if (ReadyEvent)
+        CloseHandle(ReadyEvent);
+#endif
 
     DestroyEnvironmentBlock(lpEnvironment);
     return ret;
@@ -725,7 +737,19 @@ cleanup:
     }
     else // if (ret)
     {
+#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
+        if (SwitchDesktop(Session->ApplicationDesktop))
+        {
+            TRACE("EARLY_SPLASH: HANDOFF_COMPLETE desktop=Default\n");
+            EarlySplashDestroy();
+        }
+        else
+        {
+            ERR("EARLY_SPLASH: HANDOFF_SWITCH_FAIL error=%lu\n", GetLastError());
+        }
+#else
         SwitchDesktop(Session->ApplicationDesktop);
+#endif
         Session->LogonState = STATE_LOGGED_ON;
     }
     return ret;

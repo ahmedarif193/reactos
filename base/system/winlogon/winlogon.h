@@ -422,6 +422,22 @@ DisplayStatusMessage(IN PWLSESSION Session,
 BOOL
 RemoveStatusMessage(IN PWLSESSION Session);
 
+#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
+BOOL
+EarlySplashCreate(VOID);
+
+VOID
+EarlySplashDestroy(VOID);
+
+HANDLE
+EarlySplashCreateUserDesktopReadyEvent(
+    _In_ PWLSESSION Session);
+
+DWORD
+EarlySplashWaitForUserDesktopReady(
+    _In_ HANDLE ReadyEvent);
+#endif
+
 /* wlx.c */
 VOID
 InitDialogListHead(VOID);
