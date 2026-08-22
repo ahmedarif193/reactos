@@ -1130,8 +1130,17 @@ SoftGpuCopyCurrentPrimaryToScanout(
         Status = STATUS_SUCCESS;
         goto Complete;
     }
-    if (!Snapshot.Valid ||
-        Snapshot.Source == NULL ||
+    if (!Snapshot.Valid)
+    {
+        /*
+         * Initial timing and visibility transactions precede the first
+         * SetVidPnSourceAddress call. There is no primary to copy yet; that
+         * callback increments the generation and schedules the first present.
+         */
+        Status = STATUS_SUCCESS;
+        goto Complete;
+    }
+    if (Snapshot.Source == NULL ||
         Snapshot.Width == 0 ||
         Snapshot.Height == 0 ||
         Snapshot.Width >
