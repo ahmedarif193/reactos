@@ -226,11 +226,16 @@
 @ stdcall EqualDomainSid(ptr ptr ptr) kernelbase.EqualDomainSid
 @ stdcall EqualPrefixSid(ptr ptr) kernelbase.EqualPrefixSid
 @ stdcall EqualSid(ptr ptr) kernelbase.EqualSid
+@ stdcall -version=0x600+ EventActivityIdControl(long ptr) ntdll.EtwEventActivityIdControl
+@ stdcall -version=0x600+ EventEnabled(int64 ptr) ntdll.EtwEventEnabled
+@ stdcall -version=0x600+ EventProviderEnabled(int64 long int64) ntdll.EtwEventProviderEnabled
 @ stdcall -version=0x600+ EventRegister(ptr ptr ptr ptr) ntdll.EtwEventRegister
 @ stdcall -version=0x600+ EventSetInformation(int64 long ptr long) ntdll.EtwEventSetInformation
 @ stdcall -version=0x600+ EventUnregister(int64) ntdll.EtwEventUnregister
 @ stdcall -version=0x600+ EventWrite(int64 ptr long ptr) ntdll.EtwEventWrite
-@ stdcall -version=0x600+ EventWriteTransfer(int64 ptr ptr ptr long long) ntdll.EtwEventWriteTransfer
+@ stdcall -version=0x601+ EventWriteEx(int64 ptr int64 long ptr ptr long ptr) ntdll.EtwEventWriteEx
+@ stdcall -version=0x600+ EventWriteString(int64 long int64 wstr) ntdll.EtwEventWriteString
+@ stdcall -version=0x600+ EventWriteTransfer(int64 ptr ptr ptr long ptr) ntdll.EtwEventWriteTransfer
 @ stdcall FileEncryptionStatusA(str ptr)
 @ stdcall FileEncryptionStatusW(wstr ptr)
 @ stdcall FindFirstFreeAce(ptr ptr) kernelbase.FindFirstFreeAce

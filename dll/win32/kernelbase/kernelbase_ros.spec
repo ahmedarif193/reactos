@@ -332,16 +332,16 @@
 @ stdcall EqualPrefixSid(ptr ptr)
 @ stdcall EqualSid(ptr ptr)
 #@ stdcall EscapeCommFunction(long long)
-#@ stdcall EventActivityIdControl(long ptr) ntdll.EtwEventActivityIdControl
-#@ stdcall EventEnabled(int64 ptr) ntdll.EtwEventEnabled
-#@ stdcall EventProviderEnabled(int64 long int64) ntdll.EtwEventProviderEnabled
-#@ stdcall EventRegister(ptr ptr ptr ptr) ntdll.EtwEventRegister
-#@ stdcall EventSetInformation(int64 long ptr long) ntdll.EtwEventSetInformation
-#@ stdcall EventUnregister(int64) ntdll.EtwEventUnregister
-#@ stdcall EventWrite(int64 ptr long ptr) ntdll.EtwEventWrite
-# #@ stub EventWriteEx
-#@ stdcall EventWriteString(int64 long int64 ptr) ntdll.EtwEventWriteString
-#@ stdcall EventWriteTransfer(int64 ptr ptr ptr long ptr) ntdll.EtwEventWriteTransfer
+@ stdcall EventActivityIdControl(long ptr) ntdll.EtwEventActivityIdControl
+@ stdcall EventEnabled(int64 ptr) ntdll.EtwEventEnabled
+@ stdcall EventProviderEnabled(int64 long int64) ntdll.EtwEventProviderEnabled
+@ stdcall EventRegister(ptr ptr ptr ptr) ntdll.EtwEventRegister
+@ stdcall EventSetInformation(int64 long ptr long) ntdll.EtwEventSetInformation
+@ stdcall EventUnregister(int64) ntdll.EtwEventUnregister
+@ stdcall EventWrite(int64 ptr long ptr) ntdll.EtwEventWrite
+@ stdcall EventWriteEx(int64 ptr int64 long ptr ptr long ptr) ntdll.EtwEventWriteEx
+@ stdcall EventWriteString(int64 long int64 wstr) ntdll.EtwEventWriteString
+@ stdcall EventWriteTransfer(int64 ptr ptr ptr long ptr) ntdll.EtwEventWriteTransfer
 #@ stdcall ExitProcess(long) ntdll.RtlExitUserProcess
 #@ stdcall ExitThread(long) ntdll.RtlExitUserThread
 #@ stdcall ExpandEnvironmentStringsA(str ptr long)
