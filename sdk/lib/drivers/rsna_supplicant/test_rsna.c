@@ -394,6 +394,10 @@ static void TestHandshake(void)
     st = RsnaRxEapol(&ctx, frame, frameLen, reply, &replyLen);
     Check("msg1 -> state PTK_NEGOTIATING", st == RSNA_STATE_PTK_NEGOTIATING, NULL, NULL, 0);
     Check("msg2 produced", replyLen >= EAPOL_KEY_FRAME_FIXED_LEN, NULL, NULL, 0);
+    Check("RSN msg2 Key Length is zero",
+          reply[EAPOL_HDR_LEN + KEYDESC_OFF_KEYLEN] == 0 &&
+          reply[EAPOL_HDR_LEN + KEYDESC_OFF_KEYLEN + 1] == 0,
+          NULL, NULL, 0);
 
     /* The AP now derives the same PTK using the SNonce echoed in msg2. */
     {
