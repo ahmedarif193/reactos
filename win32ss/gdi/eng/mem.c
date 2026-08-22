@@ -108,67 +108,6 @@ EngFreeUserMem(PVOID pvBaseAddress)
   /* TODO: Remove allocation info from AVL tree */
 }
 
-PVOID
-APIENTRY
-HackSecureVirtualMemory(
-    IN PVOID Address,
-    IN SIZE_T Size,
-    IN ULONG ProbeMode,
-    OUT PVOID *SafeAddress)
-{
-    NTSTATUS Status = STATUS_SUCCESS;
-    PMDL pmdl;
-    LOCK_OPERATION Operation;
-
-    if (ProbeMode == PAGE_READONLY) Operation = IoReadAccess;
-    else if (ProbeMode == PAGE_READWRITE) Operation = IoModifyAccess;
-    else return NULL;
-
-    pmdl = IoAllocateMdl(Address, (ULONG)Size, FALSE, TRUE, NULL);
-    if (pmdl == NULL)
-    {
-        return NULL;
-    }
-
-    _SEH2_TRY
-    {
-        MmProbeAndLockPages(pmdl, UserMode, Operation);
-    }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-    {
-        Status = _SEH2_GetExceptionCode();
-    }
-    _SEH2_END
-
-    if (!NT_SUCCESS(Status))
-    {
-        IoFreeMdl(pmdl);
-        return NULL;
-    }
-
-    *SafeAddress = MmGetSystemAddressForMdlSafe(pmdl, NormalPagePriority);
-
-    if(!*SafeAddress)
-    {
-        MmUnlockPages(pmdl);
-        IoFreeMdl(pmdl);
-        return NULL;
-    }
-
-    return pmdl;
-}
-
-VOID
-APIENTRY
-HackUnsecureVirtualMemory(
-    IN PVOID  SecureHandle)
-{
-    PMDL pmdl = (PMDL)SecureHandle;
-
-    MmUnlockPages(pmdl);
-    IoFreeMdl(pmdl);
-}
-
 /*
  * @implemented
  */
@@ -176,18 +115,6 @@ HANDLE
 APIENTRY
 EngSecureMem(PVOID Address, ULONG Length)
 {
-    {// HACK!!!
-        _SEH2_TRY
-        {
-            ProbeForWrite(Address, Length, 1);
-        }
-        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-        {
-            _SEH2_YIELD(return NULL);
-        }
-        _SEH2_END;
-        return (HANDLE)-1;
-    }
     return MmSecureVirtualMemory(Address, Length, PAGE_READWRITE);
 }
 
@@ -195,29 +122,6 @@ HANDLE
 APIENTRY
 EngSecureMemForRead(PVOID Address, ULONG Length)
 {
-    {// HACK!!!
-        ULONG cPages;
-        volatile BYTE *pjProbe;
-
-        _SEH2_TRY
-        {
-            ProbeForRead(Address, Length, 1);
-            cPages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(Address, Length);
-            pjProbe = ALIGN_DOWN_POINTER_BY(Address, PAGE_SIZE);
-            while(cPages--)
-            {
-                /* Do a read probe */
-                (void)*pjProbe;
-                pjProbe += PAGE_SIZE;
-            }
-        }
-        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-        {
-            _SEH2_YIELD(return NULL);
-        }
-        _SEH2_END;
-        return (HANDLE)-1;
-    }
     return MmSecureVirtualMemory(Address, Length, PAGE_READONLY);
 }
 
@@ -227,8 +131,7 @@ EngSecureMemForRead(PVOID Address, ULONG Length)
 VOID APIENTRY
 EngUnsecureMem(HANDLE Mem)
 {
-    if (Mem == (HANDLE)-1) return;  // HACK!!!
-    MmUnsecureVirtualMemory((PVOID) Mem);
+    MmUnsecureVirtualMemory((PVOID)Mem);
 }
 
 /* EOF */

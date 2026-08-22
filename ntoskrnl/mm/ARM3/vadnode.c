@@ -886,7 +886,10 @@ MiCheckSecuredVad(IN PMMVAD Vad,
         PMMSECURE_ENTRY Secure;
         CHAR Required;
 
-        ListHead = &((PMMVAD_LONG)Vad)->u3.List;
+        if (MI_IS_ROSMM_VAD(Vad))
+            ListHead = &((PMEMORY_AREA)Vad)->SecureListHead;
+        else
+            ListHead = &((PMMVAD_LONG)Vad)->u3.List;
         for (NextEntry = ListHead->Flink;
              NextEntry != ListHead;
              NextEntry = NextEntry->Flink)

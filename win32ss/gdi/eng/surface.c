@@ -84,6 +84,7 @@ SURFACE_vCleanup(PVOID ObjectBody)
         else if (psurf->SurfObj.fjBitmap & BMF_USERMEM)
         {
             /* Bitmap was allocated from usermode memory */
+            if (psurf->hSecure) EngUnsecureMem(psurf->hSecure);
             EngFreeUserMem(pvBits);
         }
         else if (psurf->SurfObj.fjBitmap & BMF_KMSECTION)

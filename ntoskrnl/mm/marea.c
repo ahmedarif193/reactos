@@ -263,6 +263,8 @@ MmFreeMemoryArea(
 {
     ULONG_PTR Address;
     PVOID EndAddress;
+    PLIST_ENTRY ListEntry;
+    PMMSECURE_ENTRY Secure;
 
     /* Make sure we own the address space lock! */
 #if (NTDDI_VERSION < NTDDI_LONGHORN)
@@ -339,6 +341,14 @@ MmFreeMemoryArea(
         {
             KeDetachProcess();
         }
+    }
+
+    /* Process teardown may remove a still-secured ROSMM view. */
+    while (!IsListEmpty(&MemoryArea->SecureListHead))
+    {
+        ListEntry = RemoveHeadList(&MemoryArea->SecureListHead);
+        Secure = CONTAINING_RECORD(ListEntry, MMSECURE_ENTRY, List);
+        ExFreePoolWithTag(Secure, TAG_MM_SECURE);
     }
 
 #if DBG
@@ -419,6 +429,7 @@ MmCreateMemoryArea(PMMSUPPORT AddressSpace,
     }
 
     RtlZeroMemory(MemoryArea, sizeof(MEMORY_AREA));
+    InitializeListHead(&MemoryArea->SecureListHead);
     MemoryArea->Type = Type & ~MEMORY_AREA_STATIC;
     MemoryArea->Flags = AllocationFlags;
     MemoryArea->Magic = 'erAM';

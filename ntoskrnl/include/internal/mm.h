@@ -318,6 +318,9 @@ typedef struct _MEMORY_AREA
 {
     MMVAD VadNode;
 
+    /* Secured ranges for ROSMM VADs, which do not embed MMVAD_LONG.u3. */
+    LIST_ENTRY SecureListHead;
+
     ULONG Type;
     ULONG Flags;
     BOOLEAN DeleteInProgress;

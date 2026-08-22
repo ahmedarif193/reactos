@@ -3651,13 +3651,13 @@ MmGetVirtualForPhysical(IN PHYSICAL_ADDRESS PhysicalAddress)
 /*
  * @implemented
  *
- * Records a "secured" sub-range inside the owning private VAD so that a later
+ * Records a "secured" sub-range inside the owning VAD so that a later
  * attempt to drop the protection of any overlapping page below ProbeMode (via
  * NtProtectVirtualMemory) or to decommit/free it (via NtFreeVirtualMemory) is
  * rejected until MmUnsecureVirtualMemory() is called with the returned handle.
  *
- * Mirrors the Win11/WRK mechanism using ReactOS' existing MMVAD_LONG secured
- * fields (u2.VadFlags2.MultipleSecured + u3.List of MMSECURE_ENTRY).
+ * Uses ReactOS' MMVAD_LONG secured fields to reproduce the native Windows
+ * protection contract (u2.VadFlags2.MultipleSecured + u3.List).
  */
 PVOID
 NTAPI
@@ -3668,8 +3668,9 @@ MmSecureVirtualMemory(IN PVOID Address,
     PEPROCESS Process = PsGetCurrentProcess();
     PMMSUPPORT AddressSpace;
     PMMVAD Vad;
-    PMMVAD_LONG LongVad;
+    PMEMORY_AREA MemoryArea;
     PMMSECURE_ENTRY Secure;
+    PLIST_ENTRY ListHead;
     ULONG_PTR StartVa, EndVa;
     ULONG SecureProbe;
 
@@ -3696,40 +3697,70 @@ MmSecureVirtualMemory(IN PVOID Address,
     AddressSpace = &Process->Vm;
     MmLockAddressSpace(AddressSpace);
 
-    if (Process->VmDeleted) goto Fail;
+    if (Process->VmDeleted)
+    {
+        DPRINT1("MmSecureVirtualMemory: process address space is deleted\n");
+        goto Fail;
+    }
 
     /* Find the VAD that owns the start of the range */
     Vad = MiLocateAddress((PVOID)StartVa);
-    if (Vad == NULL) goto Fail;
-
-    /* ROSMM section views embed a *short* MMVAD (no u3 list) - not securable here */
-    if (MI_IS_ROSMM_VAD(Vad)) goto Fail;
-
-    /* Only private memory is supported by this minimal mechanism */
-    if (Vad->u.VadFlags.PrivateMemory == 0) goto Fail;
+    if (Vad == NULL)
+    {
+        DPRINT1("MmSecureVirtualMemory: no VAD for %p-%p\n", (PVOID)StartVa, (PVOID)EndVa);
+        goto Fail;
+    }
 
     /* The whole range must live inside this single VAD */
     if (((StartVa >> PAGE_SHIFT) < Vad->StartingVpn) ||
         ((EndVa >> PAGE_SHIFT) > Vad->EndingVpn))
+    {
+        DPRINT1("MmSecureVirtualMemory: range %p-%p exceeds VAD %p-%p\n", (PVOID)StartVa, (PVOID)EndVa, (PVOID)(Vad->StartingVpn << PAGE_SHIFT), (PVOID)(((Vad->EndingVpn + 1) << PAGE_SHIFT) - 1));
         goto Fail;
+    }
 
     /* AWE / physical / large-page VADs cannot be secured */
     if ((Vad->u.VadFlags.VadType == VadAwe) ||
         (Vad->u.VadFlags.VadType == VadDevicePhysicalMemory) ||
         (Vad->u.VadFlags.VadType == VadLargePages))
+    {
+        DPRINT1("MmSecureVirtualMemory: unsupported VAD type %lu\n", Vad->u.VadFlags.VadType);
         goto Fail;
+    }
 
-    /* The internal OneSecured slot (PEB/TEB) uses the same u3 union - don't mix */
-    if (Vad->u2.VadFlags2.OneSecured) goto Fail;
-
-    LongVad = (PMMVAD_LONG)Vad;
+    if (MI_IS_ROSMM_VAD(Vad))
+    {
+        MemoryArea = (PMEMORY_AREA)Vad;
+        if (MemoryArea->Type != MEMORY_AREA_SECTION_VIEW)
+        {
+            DPRINT1("MmSecureVirtualMemory: unsupported ROSMM memory-area type %lu\n", MemoryArea->Type);
+            goto Fail;
+        }
+        ListHead = &MemoryArea->SecureListHead;
+    }
+    else
+    {
+        /* ARM3 section mappings and private allocations use long VAD storage. */
+        if ((Vad->u.VadFlags.PrivateMemory == 0) &&
+            (Vad->u2.VadFlags2.LongVad == 0))
+        {
+            DPRINT1("MmSecureVirtualMemory: section VAD %p has no secured-list storage\n", Vad);
+            goto Fail;
+        }
+        if (Vad->u2.VadFlags2.OneSecured)
+        {
+            DPRINT1("MmSecureVirtualMemory: VAD %p already uses OneSecured\n", Vad);
+            goto Fail;
+        }
+        ListHead = &((PMMVAD_LONG)Vad)->u3.List;
+    }
 
     /* Initialize the secured list and mark the VAD on the first secure only */
     if (Vad->u2.VadFlags2.MultipleSecured == 0)
     {
-        InitializeListHead(&LongVad->u3.List);
+        if (!MI_IS_ROSMM_VAD(Vad)) InitializeListHead(ListHead);
         Vad->u2.VadFlags2.MultipleSecured = 1;
-        Vad->u2.VadFlags2.LongVad = 1;
+        if (!MI_IS_ROSMM_VAD(Vad) && Vad->u.VadFlags.PrivateMemory) Vad->u2.VadFlags2.LongVad = 1;
         Vad->u.VadFlags.NoChange = 1;
     }
 
@@ -3739,7 +3770,7 @@ MmSecureVirtualMemory(IN PVOID Address,
     Secure->StartVa = StartVa;
     Secure->EndVa = EndVa;
     Secure->ProbeMode = SecureProbe;
-    InsertTailList(&LongVad->u3.List, &Secure->List);
+    InsertTailList(ListHead, &Secure->List);
 
     MmUnlockAddressSpace(AddressSpace);
 
@@ -3765,7 +3796,8 @@ MmUnsecureVirtualMemory(IN PVOID SecureMem)
 {
     PMMSECURE_ENTRY Secure = (PMMSECURE_ENTRY)SecureMem;
     PMMSUPPORT AddressSpace;
-    PMMVAD_LONG LongVad;
+    PMMVAD Vad;
+    PLIST_ENTRY ListHead;
 
     PAGED_CODE();
 
@@ -3775,20 +3807,27 @@ MmUnsecureVirtualMemory(IN PVOID SecureMem)
     AddressSpace = &Secure->Process->Vm;
     MmLockAddressSpace(AddressSpace);
 
-    LongVad = (PMMVAD_LONG)Secure->Vad;
+    Vad = Secure->Vad;
+    if (MI_IS_ROSMM_VAD(Vad))
+        ListHead = &((PMEMORY_AREA)Vad)->SecureListHead;
+    else
+        ListHead = &((PMMVAD_LONG)Vad)->u3.List;
 
     /* Unlink this descriptor */
     RemoveEntryList(&Secure->List);
 
     /* If nothing is secured anymore, clear the VAD's secured state */
-    if (IsListEmpty(&LongVad->u3.List))
+    if (IsListEmpty(ListHead))
     {
-        ((PMMVAD)LongVad)->u2.VadFlags2.MultipleSecured = 0;
-        ((PMMVAD)LongVad)->u.VadFlags.NoChange = 0;
+        Vad->u2.VadFlags2.MultipleSecured = 0;
+        if (!Vad->u2.VadFlags2.OneSecured && !Vad->u2.VadFlags2.SecNoChange) Vad->u.VadFlags.NoChange = 0;
 
-        /* Leave the u3 union in a clean (zeroed) state */
-        LongVad->u3.List.Flink = NULL;
-        LongVad->u3.List.Blink = NULL;
+        /* Leave the long-VAD union in a clean state after its final secure range. */
+        if (!MI_IS_ROSMM_VAD(Vad))
+        {
+            ((PMMVAD_LONG)Vad)->u3.List.Flink = NULL;
+            ((PMMVAD_LONG)Vad)->u3.List.Blink = NULL;
+        }
     }
 
     MmUnlockAddressSpace(AddressSpace);

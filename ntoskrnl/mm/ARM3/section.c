@@ -889,6 +889,19 @@ MiUnmapViewOfSection(IN PEPROCESS Process,
     /* Check for RosMm memory area */
     if (MI_IS_MEMORY_AREA_VAD(Vad))
     {
+        RegionSize = PAGE_SIZE + ((Vad->EndingVpn - Vad->StartingVpn) << PAGE_SHIFT);
+
+        if (Vad->u.VadFlags.NoChange == 1)
+        {
+            Status = MiCheckSecuredVad(Vad, (PVOID)(Vad->StartingVpn << PAGE_SHIFT), RegionSize, MM_DELETE_CHECK);
+            if (!NT_SUCCESS(Status))
+            {
+                DPRINT1("Trying to unmap protected ROSMM VAD!\n");
+                if (!Flags) MmUnlockAddressSpace(&Process->Vm);
+                return Status;
+            }
+        }
+
         /* Call Mm API */
         ASSERT(MI_IS_ROSMM_VAD(Vad));
         Status = MiRosUnmapViewOfSection(Process, (PMEMORY_AREA)Vad, BaseAddress, Process->ProcessExiting);
@@ -931,7 +944,7 @@ MiUnmapViewOfSection(IN PEPROCESS Process,
     {
         /* Are we allowed to mess with this VAD? */
         Status = MiCheckSecuredVad(Vad,
-                                   (PVOID)(Vad->StartingVpn >> PAGE_SHIFT),
+                                   (PVOID)(Vad->StartingVpn << PAGE_SHIFT),
                                    RegionSize,
                                    MM_DELETE_CHECK);
         if (!NT_SUCCESS(Status))
@@ -1376,6 +1389,7 @@ MiMapViewOfDataSection(
     }
 
     RtlZeroMemory(Vad, sizeof(MMVAD_LONG));
+    Vad->u2.VadFlags2.LongVad = TRUE;
     Vad->u4.Banked = (PVOID)(ULONG_PTR)0xDEADBABEDEADBABEULL;
 
     /* Write all the data required in the VAD for handling a fault */
