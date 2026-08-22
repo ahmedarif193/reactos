@@ -5345,6 +5345,16 @@ RtlLocaleNameToLcid(
     _In_ ULONG Flags);
 
 NTSYSAPI
+NTSTATUS
+NTAPI
+RtlGetUserPreferredUILanguages(
+    _In_ DWORD Flags,
+    _In_ ULONG Reserved,
+    _Out_ PULONG Count,
+    _Out_writes_opt_(*Size) PWSTR Buffer,
+    _Inout_ PULONG Size);
+
+NTSYSAPI
 BOOLEAN
 NTAPI
 RtlIsValidLocaleName(

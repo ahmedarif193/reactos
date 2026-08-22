@@ -42,6 +42,7 @@ list(APPEND SOURCE
     ldr/ldrutils.c
     ldr/verifier.c
     rtl/exit.c
+    rtl/mui.c
     rtl/nls.c
     rtl/registry.c
     rtl/telemetry.c

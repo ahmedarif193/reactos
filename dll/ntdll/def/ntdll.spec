@@ -986,7 +986,7 @@
 @ stdcall RtlGetUnloadEventTrace()
 @ stdcall -version=0x600+ RtlGetUnloadEventTraceEx(ptr ptr ptr)
 @ stdcall RtlGetUserInfoHeap(ptr long ptr ptr ptr)
-@ stdcall -stub -version=0x600+ RtlGetUserPreferredUILanguages(long ptr ptr ptr ptr)
+@ stdcall -version=0x600+ RtlGetUserPreferredUILanguages(long long ptr ptr ptr)
 @ stdcall RtlGetVersion(ptr)
 @ stdcall RtlHashUnicodeString(ptr long long ptr)
 @ stdcall -stub -version=0x600+ RtlHeapTrkInitialize(ptr)
