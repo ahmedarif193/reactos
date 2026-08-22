@@ -129,61 +129,80 @@ VOID NTAPI DispCancelRequest(
     PTRANSPORT_CONTEXT TranContext;
     PFILE_OBJECT FileObject;
     UCHAR MinorFunction;
-    PCONNECTION_ENDPOINT Connection;
-    BOOLEAN DequeuedIrp = TRUE;
-
-    IoReleaseCancelSpinLock(Irp->CancelIrql);
+    PVOID ContextType;
+    PCONNECTION_ENDPOINT Connection = NULL;
+    PADDRESS_FILE AddressFile = NULL;
+    BOOLEAN DequeuedIrp = FALSE;
 
     TI_DbgPrint(DEBUG_IRP, ("Called.\n"));
 
     IrpSp         = IoGetCurrentIrpStackLocation(Irp);
     FileObject    = IrpSp->FileObject;
     TranContext   = (PTRANSPORT_CONTEXT)FileObject->FsContext;
+    ContextType   = FileObject->FsContext2;
     MinorFunction = IrpSp->MinorFunction;
 
-    TI_DbgPrint(DEBUG_IRP, ("IRP at (0x%X)  MinorFunction (0x%X)  IrpSp (0x%X).\n", Irp, MinorFunction, IrpSp));
+    if (TranContext)
+    {
+        switch (MinorFunction)
+        {
+            case TDI_SEND:
+            case TDI_RECEIVE:
+            case TDI_CONNECT:
+            case TDI_DISCONNECT:
+                Connection = (PCONNECTION_ENDPOINT)TranContext->Handle.ConnectionContext;
+                if (Connection) ReferenceObject(Connection);
+                break;
 
-    Irp->IoStatus.Status = STATUS_CANCELLED;
-    Irp->IoStatus.Information = 0;
+            case TDI_SEND_DATAGRAM:
+            case TDI_RECEIVE_DATAGRAM:
+                AddressFile = (PADDRESS_FILE)TranContext->Handle.AddressHandle;
+                if (AddressFile) ReferenceObject(AddressFile);
+                break;
+        }
+    }
 
 #if DBG
     if (!Irp->Cancel)
         TI_DbgPrint(MIN_TRACE, ("Irp->Cancel is FALSE, should be TRUE.\n"));
 #endif
 
+    /* IRP stack locations are no longer stable once completion acquires this lock. */
+    IoReleaseCancelSpinLock(Irp->CancelIrql);
+
+    TI_DbgPrint(DEBUG_IRP, ("IRP at (0x%X)  MinorFunction (0x%X)  IrpSp (0x%X).\n", Irp, MinorFunction, IrpSp));
+
     /* Try canceling the request */
     switch(MinorFunction) {
     case TDI_SEND:
     case TDI_RECEIVE:
-	DequeuedIrp = TCPRemoveIRP( TranContext->Handle.ConnectionContext, Irp );
+        if (Connection) DequeuedIrp = TCPRemoveIRP(Connection, Irp);
         break;
 
     case TDI_SEND_DATAGRAM:
-        if (FileObject->FsContext2 != (PVOID)TDI_TRANSPORT_ADDRESS_FILE) {
+        if (ContextType != (PVOID)TDI_TRANSPORT_ADDRESS_FILE) {
             TI_DbgPrint(MIN_TRACE, ("TDI_SEND_DATAGRAM, but no address file.\n"));
             break;
         }
 
-        DequeuedIrp = DGRemoveIRP(TranContext->Handle.AddressHandle, Irp);
+        if (AddressFile) DequeuedIrp = DGRemoveIRP(AddressFile, Irp);
         break;
 
     case TDI_RECEIVE_DATAGRAM:
-        if (FileObject->FsContext2 != (PVOID)TDI_TRANSPORT_ADDRESS_FILE) {
+        if (ContextType != (PVOID)TDI_TRANSPORT_ADDRESS_FILE) {
             TI_DbgPrint(MIN_TRACE, ("TDI_RECEIVE_DATAGRAM, but no address file.\n"));
             break;
         }
 
-        DequeuedIrp = DGRemoveIRP(TranContext->Handle.AddressHandle, Irp);
+        if (AddressFile) DequeuedIrp = DGRemoveIRP(AddressFile, Irp);
         break;
 
     case TDI_CONNECT:
-        DequeuedIrp = TCPRemoveIRP(TranContext->Handle.ConnectionContext, Irp);
+        if (Connection) DequeuedIrp = TCPRemoveIRP(Connection, Irp);
         break;
 
     case TDI_DISCONNECT:
-        Connection = (PCONNECTION_ENDPOINT)TranContext->Handle.ConnectionContext;
-
-        DequeuedIrp = TCPRemoveIRP(TranContext->Handle.ConnectionContext, Irp);
+        if (Connection) DequeuedIrp = TCPRemoveIRP(Connection, Irp);
         if (DequeuedIrp)
         {
             if (KeCancelTimer(&Connection->DisconnectTimer))
@@ -201,6 +220,9 @@ VOID NTAPI DispCancelRequest(
 
     if (DequeuedIrp)
        IRPFinish(Irp, STATUS_CANCELLED);
+
+    if (AddressFile) DereferenceObject(AddressFile);
+    if (Connection) DereferenceObject(Connection);
 
     TI_DbgPrint(MAX_TRACE, ("Leaving.\n"));
 }
@@ -220,32 +242,59 @@ VOID NTAPI DispCancelListenRequest(
     PTRANSPORT_CONTEXT TranContext;
     PFILE_OBJECT FileObject;
     PCONNECTION_ENDPOINT Connection;
-
-    IoReleaseCancelSpinLock(Irp->CancelIrql);
+    PCONNECTION_ENDPOINT Listener = NULL;
+    PADDRESS_FILE AddressFile = NULL;
+    BOOLEAN DequeuedIrp = FALSE;
 
     TI_DbgPrint(DEBUG_IRP, ("Called.\n"));
 
     IrpSp         = IoGetCurrentIrpStackLocation(Irp);
     FileObject    = IrpSp->FileObject;
     TranContext   = (PTRANSPORT_CONTEXT)FileObject->FsContext;
-    ASSERT( TDI_LISTEN == IrpSp->MinorFunction);
-
-    TI_DbgPrint(DEBUG_IRP, ("IRP at (0x%X).\n", Irp));
+    ASSERT(TDI_LISTEN == IrpSp->MinorFunction);
+    Connection    = TranContext ? (PCONNECTION_ENDPOINT)TranContext->Handle.ConnectionContext : NULL;
+    if (Connection) ReferenceObject(Connection);
 
 #if DBG
     if (!Irp->Cancel)
         TI_DbgPrint(MIN_TRACE, ("Irp->Cancel is FALSE, should be TRUE.\n"));
 #endif
 
-    /* Try canceling the request */
-    Connection = (PCONNECTION_ENDPOINT)TranContext->Handle.ConnectionContext;
+    /* Capture the endpoint before completion can advance or release the IRP stack. */
+    IoReleaseCancelSpinLock(Irp->CancelIrql);
 
-    if (TCPAbortListenForSocket(Connection->AddressFile->Listener,
-                                Connection))
+    TI_DbgPrint(DEBUG_IRP, ("IRP at (0x%X).\n", Irp));
+
+    if (Connection)
+    {
+        LockObject(Connection);
+        AddressFile = Connection->AddressFile;
+        if (AddressFile) ReferenceObject(AddressFile);
+        UnlockObject(Connection);
+    }
+
+    if (AddressFile)
+    {
+        LockObject(AddressFile);
+        Listener = AddressFile->Listener;
+        if (Listener) ReferenceObject(Listener);
+        UnlockObject(AddressFile);
+        DereferenceObject(AddressFile);
+    }
+
+    if (Listener)
+    {
+        DequeuedIrp = TCPAbortListenForSocket(Listener, Connection);
+        DereferenceObject(Listener);
+    }
+
+    if (DequeuedIrp)
     {
         Irp->IoStatus.Information = 0;
         IRPFinish(Irp, STATUS_CANCELLED);
     }
+
+    if (Connection) DereferenceObject(Connection);
 
     TI_DbgPrint(MAX_TRACE, ("Leaving.\n"));
 }
