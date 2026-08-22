@@ -1,7 +1,19 @@
-WiFi firmware for the Broadcom/Cypress CYW43455 (BCM4345) FullMAC SDIO chip,
-as fitted to the Raspberry Pi 5. Installed to
-\SystemRoot\system32\drivers\brcm\ and loaded by the cyw43455 driver during
-chip bring-up.
+WiFi firmware for the Broadcom/Cypress BCM43430 and CYW43455 FullMAC SDIO
+chips, as fitted to the Raspberry Pi 3 Model B and Raspberry Pi 5. Installed
+to \SystemRoot\system32\drivers\brcm\ and loaded by the cyw43455 driver
+during chip bring-up.
+
+File: brcmfmac43430-sdio.bin
+File: brcmfmac43430-sdio.clm_blob
+  Cypress firmware image and regulatory (CLM) blob, distributed by
+  linux-firmware as cypress/cyfmac43430-sdio.bin and
+  cypress/cyfmac43430-sdio.clm_blob. Redistributable in binary form solely for
+  use with Cypress integrated circuit products under LICENCE.cypress (this
+  directory).
+
+File: brcmfmac43430-sdio.txt
+  Board NVRAM configuration for the Raspberry Pi 3 Model B, from
+  linux-firmware (brcm/). SPDX-License-Identifier: GPL-2.0+.
 
 File: brcmfmac43455-sdio.bin
 File: brcmfmac43455-sdio.clm_blob

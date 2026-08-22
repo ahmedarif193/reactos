@@ -1,5 +1,5 @@
 /*
- * PROJECT:     ReactOS Broadcom/Cypress CYW43455 Native 802.11 Miniport
+ * PROJECT:     ReactOS Broadcom/Cypress CYW43xx Native 802.11 Miniport
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
  * PURPOSE:     Chip recognition, firmware download and bring-up
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
@@ -179,12 +179,37 @@ CywChipRecognize(
     Adapter->ChipId = RegData & CID_ID_MASK;
     Adapter->ChipRev = (RegData & CID_REV_MASK) >> CID_REV_SHIFT;
 
-    if (Adapter->ChipId != BRCM_CC_4345_CHIP_ID)
+    switch (Adapter->ChipId)
     {
-        return STATUS_DEVICE_CONFIGURATION_ERROR;
+        case BRCM_CC_43430_CHIP_ID:
+            if (Adapter->ChipRev != 1)
+            {
+                return STATUS_DEVICE_CONFIGURATION_ERROR;
+            }
+            Adapter->CpuCoreType = CywCpuCoreArmCm3;
+            Adapter->RamBase = 0;
+            Adapter->FirmwarePath = CYW_FW_43430_BIN;
+            Adapter->ClmPath = CYW_FW_43430_CLM;
+            Adapter->NvramPath = CYW_FW_43430_NVRAM;
+            Adapter->F2Watermark = CY_DEFAULT_F2_WATERMARK;
+            Adapter->UseExtendedWatermark = FALSE;
+            break;
+
+        case BRCM_CC_4345_CHIP_ID:
+            Adapter->CpuCoreType = CywCpuCoreArmCr4;
+            Adapter->RamBase = CYW43455_RAMBASE;
+            Adapter->RamSize = CYW43455_RAMSIZE;
+            Adapter->FirmwarePath = CYW_FW_43455_BIN;
+            Adapter->ClmPath = CYW_FW_43455_CLM;
+            Adapter->NvramPath = CYW_FW_43455_NVRAM;
+            Adapter->F2Watermark = CY_43455_F2_WATERMARK;
+            Adapter->UseExtendedWatermark = TRUE;
+            break;
+
+        default:
+            return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
 
-    Adapter->RamBase = CYW43455_RAMBASE;
     return STATUS_SUCCESS;
 }
 
@@ -208,12 +233,13 @@ CywDownloadNvram(
     ULONG i;
 
     if (Adapter == NULL || Adapter->ControlBuffer == NULL ||
-        Adapter->RamSize == 0 || FirmwareSize == 0)
+        Adapter->NvramPath == NULL || Adapter->RamSize == 0 ||
+        FirmwareSize == 0)
     {
         return STATUS_INVALID_PARAMETER;
     }
 
-    Status = CywReadFile(CYW_FW_DIR CYW_FW_NVRAM, &Raw, &RawSize);
+    Status = CywReadFile(Adapter->NvramPath, &Raw, &RawSize);
     if (!NT_SUCCESS(Status))
     {
         return Status;
@@ -327,12 +353,12 @@ CywDownloadClm(
     ULONG HdrSize = FIELD_OFFSET(CYW_DLOAD_DATA, Data);
     ULONG Offset;
 
-    if (Adapter == NULL)
+    if (Adapter == NULL || Adapter->ClmPath == NULL)
     {
         return STATUS_INVALID_PARAMETER;
     }
 
-    Status = CywReadFile(CYW_FW_DIR CYW_FW_CLM, &Blob, &BlobSize);
+    Status = CywReadFile(Adapter->ClmPath, &Blob, &BlobSize);
     if (!NT_SUCCESS(Status))
     {
         if (Status == STATUS_OBJECT_NAME_NOT_FOUND ||
@@ -397,12 +423,13 @@ CywChipDownloadFirmware(
     PUCHAR FwImage;
     ULONG FwSize;
 
-    if (Adapter == NULL || Adapter->RamSize == 0)
+    if (Adapter == NULL || Adapter->FirmwarePath == NULL ||
+        Adapter->RamSize == 0)
     {
         return STATUS_INVALID_PARAMETER;
     }
 
-    Status = CywReadFile(CYW_FW_DIR CYW_FW_BIN, &FwImage, &FwSize);
+    Status = CywReadFile(Adapter->FirmwarePath, &FwImage, &FwSize);
     if (!NT_SUCCESS(Status))
     {
         return Status;
@@ -608,6 +635,7 @@ CywChipEnumerateCores(
     ULONG DescriptorB;
     ULONG DescriptorType;
     ULONG CoreId;
+    ULONG CoreRev;
     ULONG MasterWrappers;
     ULONG SlaveWrappers;
     ULONG RegisterBase;
@@ -619,7 +647,12 @@ CywChipEnumerateCores(
         return STATUS_INVALID_PARAMETER;
     }
 
+    Adapter->Cm3WrapBase = 0;
     Adapter->Cr4WrapBase = 0;
+    Adapter->D11WrapBase = 0;
+    Adapter->SocramCoreBase = 0;
+    Adapter->SocramWrapBase = 0;
+    Adapter->SocramCoreRev = 0;
     Adapter->SdioCoreBase = 0;
 
     Status = CywBackplaneReadl(Adapter, SI_ENUM_BASE_DEFAULT + CC_EROMPTR,
@@ -672,6 +705,8 @@ CywChipEnumerateCores(
                          DMP_COMP_NUM_MWRAP_S;
         SlaveWrappers = (DescriptorB & DMP_COMP_NUM_SWRAP) >>
                         DMP_COMP_NUM_SWRAP_S;
+        CoreRev = (DescriptorB & DMP_COMP_REVISION) >>
+                  DMP_COMP_REVISION_S;
         if (MasterWrappers + SlaveWrappers == 0)
         {
             continue;
@@ -688,13 +723,39 @@ CywChipEnumerateCores(
             return Status;
         }
 
-        if (CoreId == BCMA_CORE_ARM_CR4)
+        if (CoreId == BCMA_CORE_ARM_CM3)
+        {
+            if (WrapperBase == 0 || Adapter->Cm3WrapBase != 0)
+            {
+                return STATUS_DEVICE_CONFIGURATION_ERROR;
+            }
+            Adapter->Cm3WrapBase = WrapperBase;
+        }
+        else if (CoreId == BCMA_CORE_ARM_CR4)
         {
             if (WrapperBase == 0 || Adapter->Cr4WrapBase != 0)
             {
                 return STATUS_DEVICE_CONFIGURATION_ERROR;
             }
             Adapter->Cr4WrapBase = WrapperBase;
+        }
+        else if (CoreId == BCMA_CORE_80211)
+        {
+            if (WrapperBase != 0 && Adapter->D11WrapBase == 0)
+            {
+                Adapter->D11WrapBase = WrapperBase;
+            }
+        }
+        else if (CoreId == BCMA_CORE_INTERNAL_MEM)
+        {
+            if (RegisterBase == 0 || WrapperBase == 0 ||
+                Adapter->SocramCoreBase != 0)
+            {
+                return STATUS_DEVICE_CONFIGURATION_ERROR;
+            }
+            Adapter->SocramCoreBase = RegisterBase;
+            Adapter->SocramWrapBase = WrapperBase;
+            Adapter->SocramCoreRev = CoreRev;
         }
         else if (CoreId == BCMA_CORE_SDIO_DEV)
         {
@@ -706,11 +767,31 @@ CywChipEnumerateCores(
         }
     }
 
-    if (!FoundEnd || Adapter->Cr4WrapBase == 0 ||
-        Adapter->SdioCoreBase == 0)
+    if (!FoundEnd || Adapter->SdioCoreBase == 0)
     {
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
+
+    if (Adapter->CpuCoreType == CywCpuCoreArmCm3)
+    {
+        if (Adapter->Cm3WrapBase == 0 || Adapter->D11WrapBase == 0 ||
+            Adapter->SocramCoreBase == 0 || Adapter->SocramWrapBase == 0)
+        {
+            return STATUS_DEVICE_CONFIGURATION_ERROR;
+        }
+    }
+    else if (Adapter->CpuCoreType == CywCpuCoreArmCr4)
+    {
+        if (Adapter->Cr4WrapBase == 0)
+        {
+            return STATUS_DEVICE_CONFIGURATION_ERROR;
+        }
+    }
+    else
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
     return STATUS_SUCCESS;
 }
 
@@ -846,27 +927,251 @@ CywChipResetCore(
 
 static
 NTSTATUS
-CywChipSetActive(
+CywChipIsCoreUp(
     _In_ PCYW_ADAPTER Adapter,
-    _In_ ULONG Rstvec)
+    _In_ ULONG WrapBase,
+    _Out_ PBOOLEAN IsUp)
 {
     NTSTATUS Status;
+    ULONG Ioctl;
+    ULONG Reset;
 
-    if (Adapter == NULL || Adapter->ControlBuffer == NULL ||
-        Adapter->Cr4WrapBase == 0)
+    if (Adapter == NULL || WrapBase == 0 || IsUp == NULL ||
+        WrapBase > MAXULONG - BCMA_RESET_CTL)
     {
         return STATUS_INVALID_PARAMETER;
     }
 
-    ((PULONG)Adapter->ControlBuffer)[0] = Rstvec;
-    Status = CywRamWrite(Adapter, 0, Adapter->ControlBuffer, sizeof(Rstvec));
+    Status = CywBackplaneReadl(Adapter, WrapBase + BCMA_IOCTL, &Ioctl);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+    Status = CywBackplaneReadl(Adapter, WrapBase + BCMA_RESET_CTL, &Reset);
     if (!NT_SUCCESS(Status))
     {
         return Status;
     }
 
-    return CywChipResetCore(Adapter, Adapter->Cr4WrapBase,
-                            ARMCR4_BCMA_IOCTL_CPUHALT, 0, 0);
+    *IsUp = ((Ioctl & (SICF_FGC | SICF_CLOCK_EN)) == SICF_CLOCK_EN &&
+             !(Reset & BCMA_RESET_CTL_RESET));
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+CywChipSetPassiveCm3(
+    _In_ PCYW_ADAPTER Adapter)
+{
+    NTSTATUS Status;
+
+    if (Adapter == NULL || Adapter->Cm3WrapBase == 0 ||
+        Adapter->D11WrapBase == 0 || Adapter->SocramCoreBase == 0 ||
+        Adapter->SocramWrapBase == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = CywChipDisableCore(Adapter, Adapter->Cm3WrapBase, 0, 0);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    Status = CywChipResetCore(Adapter, Adapter->D11WrapBase,
+                              D11_BCMA_IOCTL_PHYRESET |
+                              D11_BCMA_IOCTL_PHYCLOCKEN,
+                              D11_BCMA_IOCTL_PHYCLOCKEN,
+                              D11_BCMA_IOCTL_PHYCLOCKEN);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    Status = CywChipResetCore(Adapter, Adapter->SocramWrapBase, 0, 0, 0);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    Status = CywBackplaneWritel(Adapter,
+                               Adapter->SocramCoreBase + SOCRAM_BANKIDX,
+                               3);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+    return CywBackplaneWritel(Adapter,
+                              Adapter->SocramCoreBase + SOCRAM_BANKPDA,
+                              0);
+}
+
+static
+NTSTATUS
+CywChipGetSocramSize(
+    _In_ PCYW_ADAPTER Adapter)
+{
+    NTSTATUS Status;
+    BOOLEAN IsUp;
+    ULONG CoreInfo;
+    ULONG BankCount;
+    ULONG BankSize;
+    ULONG LastSegmentSize;
+    ULONG Index;
+    ULONGLONG RamSize = 0;
+
+    if (Adapter == NULL || Adapter->SocramCoreBase == 0 ||
+        Adapter->SocramWrapBase == 0 || Adapter->SocramCoreRev < 4)
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    Status = CywChipIsCoreUp(Adapter, Adapter->SocramWrapBase, &IsUp);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+    if (!IsUp)
+    {
+        Status = CywChipResetCore(Adapter, Adapter->SocramWrapBase,
+                                  0, 0, 0);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+    }
+
+    Status = CywBackplaneReadl(Adapter,
+                               Adapter->SocramCoreBase + SOCRAM_COREINFO,
+                               &CoreInfo);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    BankCount = (CoreInfo & SRCI_SRNB_MASK) >> SRCI_SRNB_SHIFT;
+    if (Adapter->SocramCoreRev <= 7 || Adapter->SocramCoreRev == 12)
+    {
+        BankSize = CoreInfo & SRCI_SRBSZ_MASK;
+        LastSegmentSize = (CoreInfo & SRCI_LSS_MASK) >> SRCI_LSS_SHIFT;
+        if (BankCount == 0 || BankSize + SR_BSZ_BASE >= 32 ||
+            LastSegmentSize + SR_BSZ_BASE > 32)
+        {
+            return STATUS_DEVICE_DATA_ERROR;
+        }
+        if (LastSegmentSize != 0)
+        {
+            BankCount--;
+        }
+        RamSize = (ULONGLONG)BankCount << (BankSize + SR_BSZ_BASE);
+        if (LastSegmentSize != 0)
+        {
+            RamSize += 1ULL << ((LastSegmentSize - 1) + SR_BSZ_BASE);
+        }
+    }
+    else
+    {
+        if (Adapter->SocramCoreRev >= 23)
+        {
+            BankCount = (CoreInfo & (SRCI_SRNB_MASK |
+                                     SRCI_SRNB_MASK_EXT)) >>
+                        SRCI_SRNB_SHIFT;
+        }
+        if (BankCount == 0)
+        {
+            return STATUS_DEVICE_DATA_ERROR;
+        }
+
+        for (Index = 0; Index < BankCount; Index++)
+        {
+            Status = CywBackplaneWritel(Adapter,
+                                       Adapter->SocramCoreBase +
+                                       SOCRAM_BANKIDX,
+                                       (SOCRAM_MEMTYPE_RAM <<
+                                        SOCRAM_BANKIDX_MEMTYPE_SHIFT) |
+                                       Index);
+            if (!NT_SUCCESS(Status))
+            {
+                return Status;
+            }
+            Status = CywBackplaneReadl(Adapter,
+                                      Adapter->SocramCoreBase +
+                                      SOCRAM_BANKINFO,
+                                      &BankSize);
+            if (!NT_SUCCESS(Status))
+            {
+                return Status;
+            }
+            RamSize += ((BankSize & SOCRAM_BANKINFO_SZMASK) + 1ULL) *
+                       SOCRAM_BANKINFO_SZBASE;
+            if (RamSize > CYW_CHIP_MAX_MEMSIZE)
+            {
+                return STATUS_DEVICE_DATA_ERROR;
+            }
+        }
+    }
+
+    if (RamSize == 0 || RamSize > CYW_CHIP_MAX_MEMSIZE)
+    {
+        return STATUS_DEVICE_DATA_ERROR;
+    }
+
+    Adapter->RamSize = (ULONG)RamSize;
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+CywChipSetActive(
+    _In_ PCYW_ADAPTER Adapter,
+    _In_ ULONG Rstvec)
+{
+    NTSTATUS Status;
+    BOOLEAN IsUp;
+
+    if (Adapter == NULL || Adapter->ControlBuffer == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Adapter->CpuCoreType == CywCpuCoreArmCm3)
+    {
+        Status = CywChipIsCoreUp(Adapter, Adapter->SocramWrapBase, &IsUp);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+        if (!IsUp)
+        {
+            return STATUS_DEVICE_NOT_READY;
+        }
+
+        Status = CywBackplaneWritel(Adapter,
+                                   Adapter->SdioCoreBase + SD_REG_INTSTATUS,
+                                   MAXULONG);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+        return CywChipResetCore(Adapter, Adapter->Cm3WrapBase, 0, 0, 0);
+    }
+
+    if (Adapter->CpuCoreType == CywCpuCoreArmCr4 &&
+        Adapter->Cr4WrapBase != 0)
+    {
+        ((PULONG)Adapter->ControlBuffer)[0] = Rstvec;
+        Status = CywRamWrite(Adapter, 0, Adapter->ControlBuffer,
+                             sizeof(Rstvec));
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+
+        return CywChipResetCore(Adapter, Adapter->Cr4WrapBase,
+                                ARMCR4_BCMA_IOCTL_CPUHALT, 0, 0);
+    }
+
+    return STATUS_DEVICE_CONFIGURATION_ERROR;
 }
 
 static
@@ -931,14 +1236,26 @@ CywChipBringUp(
         return Status;
     }
 
-    Adapter->RamSize = CYW43455_RAMSIZE;
-
     Status = CywChipEnumerateCores(Adapter);
     if (!NT_SUCCESS(Status))
     {
         return Status;
     }
 
+    if (Adapter->CpuCoreType == CywCpuCoreArmCm3)
+    {
+        Status = CywChipSetPassiveCm3(Adapter);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+        Status = CywChipGetSocramSize(Adapter);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+    }
+    else if (Adapter->CpuCoreType == CywCpuCoreArmCr4)
     {
         ULONG Cr4Ioctl;
 
@@ -958,6 +1275,10 @@ CywChipBringUp(
         {
             return Status;
         }
+    }
+    else
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
 
     Status = CywChipDownloadFirmware(Adapter);
@@ -979,6 +1300,7 @@ CywChipBringUp(
         return Status;
     }
 
+    if (Adapter->UseExtendedWatermark)
     {
         UCHAR Devctl;
 
@@ -998,18 +1320,21 @@ CywChipBringUp(
     }
     Status = CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BACKPLANE,
                               SBSDIO_FUNC1_WATERMARK,
-                              CY_43455_F2_WATERMARK);
+                              Adapter->F2Watermark);
     if (!NT_SUCCESS(Status))
     {
         return Status;
     }
-    Status = CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BACKPLANE,
-                              SBSDIO_FUNC1_MESBUSYCTRL,
-                              CY_43455_MES_WATERMARK |
-                              SBSDIO_MESBUSYCTRL_ENAB);
-    if (!NT_SUCCESS(Status))
+    if (Adapter->UseExtendedWatermark)
     {
-        return Status;
+        Status = CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BACKPLANE,
+                                  SBSDIO_FUNC1_MESBUSYCTRL,
+                                  CY_43455_MES_WATERMARK |
+                                  SBSDIO_MESBUSYCTRL_ENAB);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
     }
 
     Status = CywSdioSetBlockSize(Adapter, CYW_SDIO_FUNC_RADIO, CYW_F2_BLOCKSIZE);
@@ -1109,6 +1434,7 @@ CywChipBringUp(
         DPRINT1("CYW: optional mpc setup failed 0x%08lx\n", Status);
     }
 
+    if (Adapter->CpuCoreType == CywCpuCoreArmCr4)
     {
         ULONG Bw[2];
 

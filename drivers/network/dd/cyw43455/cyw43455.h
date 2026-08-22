@@ -1,7 +1,7 @@
 /*
- * PROJECT:     ReactOS Broadcom/Cypress CYW43455 Native 802.11 Miniport
+ * PROJECT:     ReactOS Broadcom/Cypress CYW43xx Native 802.11 Miniport
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
- * PURPOSE:     FullMAC SDIO WiFi driver for the Raspberry Pi 4/5 CYW43455
+ * PURPOSE:     FullMAC SDIO WiFi driver for Raspberry Pi CYW43xx radios
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
@@ -16,6 +16,7 @@
 #define CYW_TAG '54YC'
 
 #define CYW_SDIO_VENDOR_BROADCOM        0x02D0
+#define CYW_SDIO_DEVICE_43430           0xA9A6
 #define CYW_SDIO_DEVICE_43455           0xA9BF
 #define CYW_SDIO_DEVICE_4345            0x4345
 
@@ -55,6 +56,7 @@
 
 #define CY_43455_F2_WATERMARK           0x60
 #define CY_43455_MES_WATERMARK          0x50
+#define CY_DEFAULT_F2_WATERMARK         0x08
 #define SBSDIO_MESBUSYCTRL_ENAB         0x80
 #define SBSDIO_DEVCTL_F2WM_ENAB         0x10
 
@@ -82,10 +84,13 @@
 #define CID_TYPE_SHIFT                  28
 
 #define BRCM_CC_4345_CHIP_ID            0x4345
+#define BRCM_CC_43430_CHIP_ID           43430
 
 #define BCMA_CORE_CHIPCOMMON            0x800
+#define BCMA_CORE_80211                 0x812
 #define BCMA_CORE_INTERNAL_MEM          0x80E
 #define BCMA_CORE_SDIO_DEV              0x829
+#define BCMA_CORE_ARM_CM3               0x82A
 #define BCMA_CORE_ARM_CR4               0x83E
 #define BCMA_CORE_SYS_MEM               0x849
 
@@ -93,6 +98,25 @@
 #define CYW43455_RAMSIZE                0x0C8000
 
 #define ARMCR4_BCMA_IOCTL_CPUHALT       0x20
+#define D11_BCMA_IOCTL_PHYCLOCKEN       0x04
+#define D11_BCMA_IOCTL_PHYRESET         0x08
+
+#define SOCRAM_COREINFO                 0x00
+#define SOCRAM_BANKIDX                  0x10
+#define SOCRAM_BANKINFO                 0x40
+#define SOCRAM_BANKPDA                  0x44
+#define SOCRAM_BANKINFO_SZMASK          0x0000007F
+#define SOCRAM_BANKINFO_SZBASE          8192
+#define SOCRAM_BANKIDX_MEMTYPE_SHIFT    8
+#define SOCRAM_MEMTYPE_RAM              0
+#define SRCI_LSS_MASK                   0x00F00000
+#define SRCI_LSS_SHIFT                  20
+#define SRCI_SRNB_MASK                  0x000000F0
+#define SRCI_SRNB_MASK_EXT              0x00000100
+#define SRCI_SRNB_SHIFT                 4
+#define SRCI_SRBSZ_MASK                 0x0000000F
+#define SR_BSZ_BASE                     14
+#define CYW_CHIP_MAX_MEMSIZE            (4 * 1024 * 1024)
 
 #define SD_REG_INTSTATUS                0x020
 #define SD_REG_HOSTINTMASK              0x024
@@ -137,6 +161,8 @@
 #define DMP_COMP_NUM_MWRAP_S            14
 #define DMP_COMP_NUM_SWRAP              0x00F80000
 #define DMP_COMP_NUM_SWRAP_S            19
+#define DMP_COMP_REVISION               0xFF000000
+#define DMP_COMP_REVISION_S             24
 #define DMP_SLAVE_ADDR_BASE             0xFFFFF000
 #define DMP_SLAVE_TYPE                  0x000000C0
 #define DMP_SLAVE_TYPE_S                6
@@ -155,9 +181,12 @@
 #define SICF_CLOCK_EN                   0x0001
 
 #define CYW_FW_DIR                      L"\\SystemRoot\\system32\\drivers\\brcm\\"
-#define CYW_FW_BIN                      L"brcmfmac43455-sdio.bin"
-#define CYW_FW_CLM                      L"brcmfmac43455-sdio.clm_blob"
-#define CYW_FW_NVRAM                    L"brcmfmac43455-sdio.txt"
+#define CYW_FW_43430_BIN                CYW_FW_DIR L"brcmfmac43430-sdio.bin"
+#define CYW_FW_43430_CLM                CYW_FW_DIR L"brcmfmac43430-sdio.clm_blob"
+#define CYW_FW_43430_NVRAM              CYW_FW_DIR L"brcmfmac43430-sdio.txt"
+#define CYW_FW_43455_BIN                CYW_FW_DIR L"brcmfmac43455-sdio.bin"
+#define CYW_FW_43455_CLM                CYW_FW_DIR L"brcmfmac43455-sdio.clm_blob"
+#define CYW_FW_43455_NVRAM              CYW_FW_DIR L"brcmfmac43455-sdio.txt"
 
 #define CYW_NVRAM_TOKEN(words)          ((((~(words)) << 16) & 0xFFFF0000) | ((words) & 0x0000FFFF))
 
@@ -600,6 +629,13 @@ typedef struct _CYW_DMA_BUF
 
 #define CYW_DMA_BUF_COUNT               4
 
+typedef enum _CYW_CPU_CORE_TYPE
+{
+    CywCpuCoreUnknown = 0,
+    CywCpuCoreArmCm3,
+    CywCpuCoreArmCr4
+} CYW_CPU_CORE_TYPE;
+
 typedef struct _CYW_ADAPTER
 {
     NDIS_HANDLE MiniportAdapterHandle;
@@ -613,7 +649,18 @@ typedef struct _CYW_ADAPTER
     ULONG ChipRev;
     ULONG RamBase;
     ULONG RamSize;
+    CYW_CPU_CORE_TYPE CpuCoreType;
+    PCWSTR FirmwarePath;
+    PCWSTR ClmPath;
+    PCWSTR NvramPath;
+    UCHAR F2Watermark;
+    BOOLEAN UseExtendedWatermark;
+    ULONG Cm3WrapBase;
     ULONG Cr4WrapBase;
+    ULONG D11WrapBase;
+    ULONG SocramCoreBase;
+    ULONG SocramWrapBase;
+    ULONG SocramCoreRev;
     ULONG SdioCoreBase;
     ULONG RstVec;
     ULONG CurrentBackplaneWindow;

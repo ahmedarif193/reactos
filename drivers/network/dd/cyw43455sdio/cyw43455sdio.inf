@@ -1,4 +1,4 @@
-; ReactOS CYW43455 SDIO function transport
+; ReactOS CYW43xx SDIO function transport
 ; Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
 ; SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -17,18 +17,21 @@ DefaultDestDir = 12
 %ReactOS% = Models,NTamd64,NTARM64
 
 [Models]
+%Control43430Desc% = Transport_Install, SD\VID_02D0&PID_A9A6&FN_1
 %ControlDesc% = Transport_Install, SD\VID_02D0&PID_A9BF&FN_1
 %ControlDesc% = Transport_Install, SD\VID_02D0&PID_4345&FN_1
 %CompanionDesc% = Transport_Install, SD\VID_02D0&PID_A9BF&FN_3
 %CompanionDesc% = Transport_Install, SD\VID_02D0&PID_4345&FN_3
 
 [Models.NTamd64]
+%Control43430Desc% = Transport_Install, SD\VID_02D0&PID_A9A6&FN_1
 %ControlDesc% = Transport_Install, SD\VID_02D0&PID_A9BF&FN_1
 %ControlDesc% = Transport_Install, SD\VID_02D0&PID_4345&FN_1
 %CompanionDesc% = Transport_Install, SD\VID_02D0&PID_A9BF&FN_3
 %CompanionDesc% = Transport_Install, SD\VID_02D0&PID_4345&FN_3
 
 [Models.NTARM64]
+%Control43430Desc% = Transport_Install, SD\VID_02D0&PID_A9A6&FN_1
 %ControlDesc% = Transport_Install, SD\VID_02D0&PID_A9BF&FN_1
 %ControlDesc% = Transport_Install, SD\VID_02D0&PID_4345&FN_1
 %CompanionDesc% = Transport_Install, SD\VID_02D0&PID_A9BF&FN_3
@@ -58,7 +61,8 @@ cyw43455sdio.sys = 1
 
 [Strings]
 ReactOS       = "ReactOS Team"
+Control43430Desc = "Broadcom BCM43430 SDIO Control Function"
 ControlDesc   = "Broadcom CYW43455 SDIO Control Function"
 CompanionDesc = "Broadcom CYW43455 SDIO Companion Function"
-ServiceDesc   = "ReactOS CYW43455 SDIO Function Transport"
-DiskName      = "ReactOS CYW43455 SDIO Function Transport Installation Disk"
+ServiceDesc   = "ReactOS CYW43xx SDIO Function Transport"
+DiskName      = "ReactOS CYW43xx SDIO Function Transport Installation Disk"

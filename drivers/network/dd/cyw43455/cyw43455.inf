@@ -1,4 +1,4 @@
-; ReactOS Broadcom/Cypress CYW43455 SDIO Native 802.11 Miniport
+; ReactOS Broadcom/Cypress CYW43xx SDIO Native 802.11 Miniport
 ; Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
 
 [Version]
@@ -16,14 +16,17 @@ DefaultDestDir = 12
 %ReactOS% = Models,NTamd64,NTARM64
 
 [Models]
+%cyw43430.DeviceDesc% = cyw.ndi, SD\VID_02D0&PID_A9A6&FN_2
 %cyw.DeviceDesc% = cyw.ndi, SD\VID_02D0&PID_A9BF&FN_2
 %cyw.DeviceDesc% = cyw.ndi, SD\VID_02D0&PID_4345&FN_2
 
 [Models.NTamd64]
+%cyw43430.DeviceDesc% = cyw.ndi, SD\VID_02D0&PID_A9A6&FN_2
 %cyw.DeviceDesc% = cyw.ndi, SD\VID_02D0&PID_A9BF&FN_2
 %cyw.DeviceDesc% = cyw.ndi, SD\VID_02D0&PID_4345&FN_2
 
 [Models.NTARM64]
+%cyw43430.DeviceDesc% = cyw.ndi, SD\VID_02D0&PID_A9A6&FN_2
 %cyw.DeviceDesc% = cyw.ndi, SD\VID_02D0&PID_A9BF&FN_2
 %cyw.DeviceDesc% = cyw.ndi, SD\VID_02D0&PID_4345&FN_2
 
@@ -72,6 +75,7 @@ cyw43455.sys = 1
 
 [Strings]
 ReactOS         = "ReactOS Team"
+cyw43430.DeviceDesc = "Broadcom BCM43430 802.11n SDIO WiFi Adapter"
 cyw.DeviceDesc  = "Broadcom CYW43455 802.11ac SDIO WiFi Adapter"
-cyw.ServiceDesc = "ReactOS CYW43455 WiFi Driver"
-DiskName        = "ReactOS CYW43455 WiFi Driver Installation Disk"
+cyw.ServiceDesc = "ReactOS CYW43xx WiFi Driver"
+DiskName        = "ReactOS CYW43xx WiFi Driver Installation Disk"
