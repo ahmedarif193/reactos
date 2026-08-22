@@ -677,6 +677,7 @@ NdisMSetMiniportAttributes(
             OldOidList = Ext->GeneralAttrs.SupportedOidList;
             Ext->GeneralAttrs = NewGen;
             Ext->GeneralAttrsValid = TRUE;
+            Adapter->NdisMiniportBlock.MediaType = Gen->MediaType;
             if (OldOidList != NULL)
                 ExFreePoolWithTag(OldOidList, NDIS6_ATTR_TAG);
 
