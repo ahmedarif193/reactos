@@ -132,6 +132,7 @@ dll/win32/mfmp4srcsnk         # Synced to Wine-11.14
 dll/win32/mfplat              # Synced to Wine-11.14
 dll/win32/mfplay              # Synced to Wine-11.14
 dll/win32/mfreadwrite         # Synced to Wine-11.14
+dll/win32/mfsrcsnk            # Synced to Wine-11.14
 dll/win32/mlang               # Synced to Wine-11.14
 dll/win32/mmdevapi            # Synced to Wine-11.14
 dll/win32/mpr                 # Synced to Wine-11.14
