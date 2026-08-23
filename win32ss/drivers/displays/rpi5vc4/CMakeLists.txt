@@ -1,5 +1,7 @@
-# Copyright 2026 Ahmed Arif <arif193@gmail.com>
-# SPDX-License-Identifier: GPL-3.0-or-later
+# PROJECT:     ReactOS Raspberry Pi 5 XPDM graphics stack
+# LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+# PURPOSE:     Raspberry Pi 5 XPDM display driver build rules
+# COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
 
 list(APPEND RPI5VC4_DISPLAY_SOURCE
     ../framebuf/enable.c

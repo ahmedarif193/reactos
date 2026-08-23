@@ -1,3 +1,8 @@
+; PROJECT:     ReactOS Raspberry Pi 5 framebuffer miniport
+; LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+; PURPOSE:     Raspberry Pi 5 VC4 boot and display registry configuration
+; COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
+;
 ; The CriticalDeviceDatabase binds this service to ACPI\BCM2712\0. Do not
 ; create a synthetic root display device alongside the firmware GPU child.
 
