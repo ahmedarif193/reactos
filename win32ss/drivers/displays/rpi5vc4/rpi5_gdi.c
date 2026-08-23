@@ -75,6 +75,7 @@ Rpi5PublishShadowSurface(
     ULONG Returned = 0;
     ULONG IoStatus;
     ULONG Row;
+    PUCHAR Source;
     BOOL HardwarePresented;
 
     UNREFERENCED_PARAMETER(Operation);
@@ -116,13 +117,20 @@ Rpi5PublishShadowSurface(
     Request->Format = RPI5VC4_GDI_FORMAT_BGRX8;
     Request->RowStride = RowBytes;
     Request->PixelBytes = PixelBytes;
-    for (Row = 0; Row < Height; Row++)
+    Source = Device->ShadowPtr +
+             Clipped.top * Device->ScreenDelta +
+             Clipped.left * sizeof(ULONG);
+    if (RowBytes == Device->ScreenDelta)
     {
-        memcpy(Request->Pixels + Row * RowBytes,
-               Device->ShadowPtr +
-                   (Clipped.top + Row) * Device->ScreenDelta +
-                   Clipped.left * sizeof(ULONG),
-               RowBytes);
+        memcpy(Request->Pixels, Source, PixelBytes);
+    }
+    else
+    {
+        for (Row = 0; Row < Height; Row++)
+        {
+            memcpy(Request->Pixels + Row * RowBytes, Source, RowBytes);
+            Source += Device->ScreenDelta;
+        }
     }
 
     memset(&Result, 0, sizeof(Result));

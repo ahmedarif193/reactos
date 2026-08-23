@@ -278,9 +278,6 @@ static const PROC Rpi5OglDispatchEntries[] =
 
 C_ASSERT(RTL_NUMBER_OF(Rpi5OglDispatchEntries) ==
          RPI5VC4_OPENGL_ENTRY_COUNT);
-C_ASSERT(RPI5VC4_OGL_GL2_MAX_DRAW_VERTICES ==
-         RPI5VC4_V3D_PRIMITIVE_MAX_VERTICES);
-
 static BOOL
 Rpi5OglSubmitBatch(
     _Inout_ PRPI5VC4_OGL_CONTEXT Context,
@@ -1269,13 +1266,13 @@ Rpi5OglResolveRenderTarget(
     Framebuffer = Rpi5OglFboCurrentName(Context->FboState);
     if (Framebuffer != 0)
     {
-        if (!Rpi5OglFboValidateCurrent(Context->FboState,
-                                       "RPi5 framebuffer access"))
+        if (!Rpi5OglFboGetValidatedColorTarget(
+                Context->FboState,
+                "RPi5 framebuffer access",
+                &FboTarget))
         {
             return FALSE;
         }
-        if (!Rpi5OglFboGetColorTarget(Context->FboState, &FboTarget))
-            return FALSE;
         Target->Texture = FboTarget.Texture;
         Target->DepthTexture = FboTarget.DepthTexture;
         Target->TextureData = FboTarget.Data;

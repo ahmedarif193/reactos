@@ -47,6 +47,7 @@ Rpi5Vc4CaptureAcpiResources(
     _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
     VIDEO_ACCESS_RANGE AccessRanges[RPI5VC4_ACPI_MEMORY_RESOURCE_COUNT];
+    VIDEO_ACCESS_RANGE IgnoredRange;
     RPI5VC4_RESOURCE_REQUIREMENT Requirements[] =
     {
         {RPI5VC4_V3D_HUB_BASE, RPI5VC4_V3D_HUB_LENGTH,
@@ -58,17 +59,17 @@ Rpi5Vc4CaptureAcpiResources(
         {RPI5VC4_HVS_BASE, RPI5VC4_HVS_LENGTH,
          &DeviceExtension->HvsRange, "HVS"},
         {RPI5VC4_HVS_IOMMU_BASE, RPI5VC4_HVS_IOMMU_LENGTH,
-         &DeviceExtension->HvsIommuRange, "HVS IOMMU"},
+         &IgnoredRange, "HVS IOMMU"},
         {RPI5VC4_PIXELVALVE0_BASE, RPI5VC4_PIXELVALVE_LENGTH,
          &DeviceExtension->PixelValveRange[0], "PixelValve 0"},
         {RPI5VC4_PIXELVALVE1_BASE, RPI5VC4_PIXELVALVE_LENGTH,
          &DeviceExtension->PixelValveRange[1], "PixelValve 1"},
         {RPI5VC4_MOP_BASE, RPI5VC4_MOP_LENGTH,
-         &DeviceExtension->MopRange, "MOP"},
+         &IgnoredRange, "MOP"},
         {RPI5VC4_MOPLET_BASE, RPI5VC4_MOPLET_LENGTH,
-         &DeviceExtension->MopletRange, "MOPLET"},
+         &IgnoredRange, "MOPLET"},
         {RPI5VC4_DISPLAY_INTERRUPT_BASE, RPI5VC4_DISPLAY_INTERRUPT_LENGTH,
-         &DeviceExtension->DisplayInterruptRange, "display interrupt"},
+         &IgnoredRange, "display interrupt"},
     };
     VP_STATUS Status;
     ULONG RequirementIndex;

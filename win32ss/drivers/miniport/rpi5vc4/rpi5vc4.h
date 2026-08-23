@@ -71,11 +71,7 @@ typedef struct _RPI5VC4_DEVICE_EXTENSION
     VIDEO_ACCESS_RANGE V3dCoreRange;
     VIDEO_ACCESS_RANGE V3dSmsRange;
     VIDEO_ACCESS_RANGE HvsRange;
-    VIDEO_ACCESS_RANGE HvsIommuRange;
     VIDEO_ACCESS_RANGE PixelValveRange[2];
-    VIDEO_ACCESS_RANGE MopRange;
-    VIDEO_ACCESS_RANGE MopletRange;
-    VIDEO_ACCESS_RANGE DisplayInterruptRange;
 
     PHYSICAL_ADDRESS FirmwareFrameBufferPhysical;
     PHYSICAL_ADDRESS FrameBufferPhysical;
@@ -171,7 +167,6 @@ typedef struct _RPI5VC4_DEVICE_EXTENSION
     BOOLEAN HvsCursorFastValid;
 
     BOOLEAN PixelValveValid;
-    ULONG PixelValveIndex;
     PHYSICAL_ADDRESS PixelValvePhysical;
     ULONG PixelValveLength;
     ULONG PixelValveControl;
