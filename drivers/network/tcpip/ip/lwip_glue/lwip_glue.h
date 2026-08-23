@@ -120,6 +120,8 @@ void        LibTCPAccept(PTCP_PCB pcb, struct tcp_pcb *listen_pcb, void *arg);
 NTSTATUS    LibTCPDeferAcceptLocked(PCONNECTION_ENDPOINT Connection, PTCP_PCB pcb);
 void        LibTCPDrainPendingAccept(PCONNECTION_ENDPOINT Connection);
 void        LibTCPSetNoDelay(PTCP_PCB pcb, BOOLEAN Set);
+void        LibTCPSetKeepAlive(PTCP_PCB pcb, BOOLEAN Set);
+void        LibTcpSetKeepAliveValues(PTCP_PCB pcb, u32_t KeepAliveTime, u32_t KeepAliveInterval);
 void        LibTCPGetSocketStatus(PTCP_PCB pcb, PULONG State);
 
 /* IP functions */
