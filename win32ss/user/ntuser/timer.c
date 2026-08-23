@@ -214,6 +214,9 @@ IntSetTimer( PWND Window,
      Elapse = USER_TIMER_MINIMUM; // 1024hz .9765625 ms, set to 10.0 ms (+/-)1 ms
   }
 
+  if ((Type & TMRF_RIT) && !ptiRawInput)
+     return 0;
+
   /* Passing an IDEvent of 0 and the SetTimer returns 1.
      It will create the timer with an ID of 0 */
   if ((Window) && (IDEvent == 0))
@@ -268,6 +271,7 @@ IntSetTimer( PWND Window,
   {
      pTmr->cmsCountdown = Elapse;
      pTmr->cmsRate = Elapse;
+     pTmr->flags &= ~TMRF_WAITING;
   }
 
   ASSERT(MasterTimer != NULL);
