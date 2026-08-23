@@ -7546,11 +7546,30 @@ NtGdiExtTextOutW(
     LPCWSTR SafeString = NULL;
     PINT SafeDx = NULL;
     ULONG BufSize, StringSize, DxSize = 0;
+    const UINT ValidOptions = ETO_OPAQUE | ETO_CLIPPED | ETO_GLYPH_INDEX |
+                              ETO_RTLREADING | ETO_NUMERICSLOCAL |
+                              ETO_NUMERICSLATIN | ETO_IGNORELANGUAGE | ETO_PDY;
+
+    /* Reject undefined flags without changing the caller's last error. */
+    if (fuOptions & ~ValidOptions)
+        return FALSE;
 
     /* Check if String is valid */
     if ((Count > 0xFFFF) || (Count > 0 && UnsafeString == NULL))
     {
+        return FALSE;
+    }
+
+    if ((fuOptions & ETO_PDY) && (Count > 0) && (UnsafeDx == NULL))
+    {
         EngSetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    /* Invalid DC handles fail without changing the caller's last error. */
+    if (!GreIsHandleValid(hDC) ||
+        (GDI_HANDLE_GET_TYPE(hDC) != GDI_OBJECT_TYPE_DC))
+    {
         return FALSE;
     }
 

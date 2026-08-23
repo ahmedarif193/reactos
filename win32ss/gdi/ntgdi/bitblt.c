@@ -1809,6 +1809,7 @@ NtGdiSetPixel(
     PEBRUSHOBJ pebo;
     ULONG ulDirty;
     EXLATEOBJ exlo;
+    POINTL ptl;
 
     /* Lock the DC */
     pdc = DC_LockDc(hdc);
@@ -1821,6 +1822,20 @@ NtGdiSetPixel(
     if (pdc->dclevel.pSurface == NULL)
     {
         /* Fail! */
+        DC_UnlockDc(pdc);
+        return CLR_INVALID;
+    }
+
+    /* Fail if the transformed pixel lies outside the target surface. */
+    ptl.x = x;
+    ptl.y = y;
+    IntLPtoDP(pdc, &ptl, 1);
+    ptl.x += pdc->ptlDCOrig.x;
+    ptl.y += pdc->ptlDCOrig.y;
+    if ((ptl.x < 0) || (ptl.y < 0) ||
+        (ptl.x >= pdc->dclevel.pSurface->SurfObj.sizlBitmap.cx) ||
+        (ptl.y >= pdc->dclevel.pSurface->SurfObj.sizlBitmap.cy))
+    {
         DC_UnlockDc(pdc);
         return CLR_INVALID;
     }
@@ -1843,6 +1858,11 @@ NtGdiSetPixel(
 
     /* Translate the color to the target format */
     iSolidColor = TranslateCOLORREF(pdc, crColor);
+    if (((crColor & 0x10FF0000) == 0x10FF0000) &&
+        !(pdc->dclevel.pSurface->ppal->flFlags & PAL_INDEXED))
+    {
+        iSolidColor = 0;
+    }
 
     /* Use the DC's text brush, which is always a solid brush */
     pebo = &pdc->eboText;
@@ -1854,8 +1874,10 @@ NtGdiSetPixel(
     ulDirty = pdc->pdcattr->ulDirty_;
     pdc->pdcattr->ulDirty_ &= ~DIRTY_TEXT;
 
-    /* Call the internal function */
-    bResult = IntPatBlt(pdc, x, y, 1, 1, PATCOPY, pebo);
+    /* Honor the DC's ROP2 mix mode. */
+    bResult = IntPatBlt(pdc, x, y, 1, 1,
+                        (DWORD)gajRop2ToRop3[(pdc->pdcattr->jROP2 - 1) & 0xF] << 16,
+                        pebo);
 
     /* Restore old text brush color and dirty flags */
     EBRUSHOBJ_iSetSolidColor(pebo, iOldColor);
