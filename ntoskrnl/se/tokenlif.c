@@ -18,6 +18,49 @@
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
+VOID
+NTAPI
+SepSetTokenObjectSecurity(
+    _In_ PTOKEN Token)
+{
+    SECURITY_DESCRIPTOR SecurityDescriptor;
+    PACL Dacl;
+    PACE_HEADER Ace;
+    ULONG i;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (!Token->DefaultDacl)
+        return;
+
+    Dacl = ExAllocatePoolWithTag(PagedPool, Token->DefaultDacl->AclSize, TAG_ACL);
+    if (!Dacl)
+        return;
+
+    RtlCopyMemory(Dacl, Token->DefaultDacl, Token->DefaultDacl->AclSize);
+    for (i = 0; i < Dacl->AceCount; i++)
+    {
+        if (!NT_SUCCESS(RtlGetAce(Dacl, i, (PVOID*)&Ace)))
+            break;
+        if (Ace->AceType == ACCESS_ALLOWED_ACE_TYPE || Ace->AceType == ACCESS_DENIED_ACE_TYPE)
+            RtlMapGenericMask(&((PACCESS_ALLOWED_ACE)Ace)->Mask, &SeTokenObjectType->TypeInfo.GenericMapping);
+    }
+
+    RtlCreateSecurityDescriptor(&SecurityDescriptor, SECURITY_DESCRIPTOR_REVISION);
+    RtlSetOwnerSecurityDescriptor(&SecurityDescriptor, Token->UserAndGroups[Token->DefaultOwnerIndex].Sid, FALSE);
+    RtlSetGroupSecurityDescriptor(&SecurityDescriptor, Token->PrimaryGroup, FALSE);
+    RtlSetDaclSecurityDescriptor(&SecurityDescriptor, TRUE, Dacl, FALSE);
+
+    Status = ObSetSecurityObjectByPointer(Token,
+                                          OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                                          &SecurityDescriptor);
+    if (!NT_SUCCESS(Status))
+        DPRINT1("SepSetTokenObjectSecurity(): failed to set token security (Status 0x%lx)\n", Status);
+
+    ExFreePoolWithTag(Dacl, TAG_ACL);
+}
+
 static
 ULONG
 SepFindIntegrityGroupIndex(
@@ -475,6 +518,8 @@ SepCreateToken(
             /* Note: ObInsertObject dereferences AccessToken on failure */
             return Status;
         }
+
+        SepSetTokenObjectSecurity(AccessToken);
     }
     else
     {
@@ -1569,6 +1614,8 @@ SeFilterToken(
         return Status;
     }
 
+    SepSetTokenObjectSecurity(AccessToken);
+
     /* Return it to the caller */
     *FilteredToken = AccessToken;
     return Status;
@@ -2059,6 +2106,8 @@ NtDuplicateToken(
                                 &hToken);
         if (NT_SUCCESS(Status))
         {
+            SepSetTokenObjectSecurity(NewToken);
+
             _SEH2_TRY
             {
                 *NewTokenHandle = hToken;
@@ -2319,6 +2368,7 @@ NtFilterToken(
         goto Quit;
     }
 
+    SepSetTokenObjectSecurity(FilteredToken);
 
     /* And return it to the caller once we're done */
     _SEH2_TRY
