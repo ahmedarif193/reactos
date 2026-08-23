@@ -75,6 +75,155 @@ InitCursorImpl(VOID)
     return TRUE;
 }
 
+static UINT_PTR gtmridAniCursor = 0;
+
+static
+PCURICON_OBJECT
+IntGetCursorFrame(
+    _In_ PCURICON_OBJECT pcur)
+{
+    PACON pacon;
+
+    if (!(pcur->CURSORF_flags & CURSORF_ACON))
+        return pcur;
+
+    pacon = (PACON)pcur;
+    return pacon->aspcur[pacon->aicur[pacon->iicur]];
+}
+
+static
+UINT
+IntGetAconFrameDelay(
+    _In_ PACON pacon)
+{
+    INT jiffies = pacon->ajifRate[pacon->iicur];
+
+    if (jiffies < 1)
+        jiffies = 1;
+
+    return (UINT)jiffies * 1000 / 60;
+}
+
+static
+VOID
+IntDrawCursorFrame(
+    _In_ HDC hdcScreen,
+    _In_ PCURICON_OBJECT pcur)
+{
+    PCURICON_OBJECT pFrame = IntGetCursorFrame(pcur);
+
+    GreSetPointerShape(hdcScreen,
+                       pFrame->hbmAlpha ? NULL : pFrame->hbmMask,
+                       pFrame->hbmAlpha ? pFrame->hbmAlpha : pFrame->hbmColor,
+                       pFrame->xHotspot,
+                       pFrame->yHotspot,
+                       gpsi->ptCursor.x,
+                       gpsi->ptCursor.y,
+                       pFrame->hbmAlpha ? SPS_ALPHA : 0);
+}
+
+static
+VOID
+CALLBACK
+IntAnimateCursorTimerProc(
+    HWND hwnd,
+    UINT uMsg,
+    UINT_PTR idEvent,
+    DWORD dwTime)
+{
+    PSYSTEM_CURSORINFO CurInfo = IntGetSysCursorInfo();
+    PCURICON_OBJECT pcur = CurInfo->CurrentCursorObject;
+    PACON pacon;
+    HDC hdcScreen;
+
+    if (!pcur || !(pcur->CURSORF_flags & CURSORF_ACON))
+        return;
+
+    pacon = (PACON)pcur;
+    if (pacon->cicur <= 1)
+        return;
+
+    pacon->iicur = (pacon->iicur + 1) % pacon->cicur;
+    IntSetTimer(NULL,
+                gtmridAniCursor,
+                IntGetAconFrameDelay(pacon),
+                IntAnimateCursorTimerProc,
+                TMRF_RIT | TMRF_ONESHOT);
+
+    if (CurInfo->ShowingCursor < 0)
+        return;
+
+    hdcScreen = IntGetScreenDC();
+    if (hdcScreen)
+        IntDrawCursorFrame(hdcScreen, pcur);
+}
+
+static
+VOID
+IntStartCursorAnimation(
+    _In_ PCURICON_OBJECT pcur)
+{
+    PACON pacon;
+
+    if (!(pcur->CURSORF_flags & CURSORF_ACON))
+        return;
+
+    pacon = (PACON)pcur;
+    if (pacon->cicur <= 1)
+        return;
+
+    gtmridAniCursor = IntSetTimer(NULL,
+                                  gtmridAniCursor,
+                                  IntGetAconFrameDelay(pacon),
+                                  IntAnimateCursorTimerProc,
+                                  TMRF_RIT | TMRF_ONESHOT);
+}
+
+VOID
+FASTCALL
+IntSetCurrentCursorObject(
+    _In_opt_ PCURICON_OBJECT pcur)
+{
+    PSYSTEM_CURSORINFO CurInfo = IntGetSysCursorInfo();
+    PCURICON_OBJECT pcurOld = CurInfo->CurrentCursorObject;
+
+    if (pcurOld == pcur)
+        return;
+
+    if (pcur)
+    {
+        UserReferenceObject(pcur);
+        if (pcur->CURSORF_flags & CURSORF_ACON)
+            ((PACON)pcur)->iicur = 0;
+    }
+
+    CurInfo->CurrentCursorObject = pcur;
+
+    if (pcurOld)
+        UserDereferenceObject(pcurOld);
+}
+
+VOID
+FASTCALL
+IntSetPointerShape(
+    _In_ HDC hdcScreen,
+    _In_ PCURICON_OBJECT pcur)
+{
+    IntSetCurrentCursorObject(pcur);
+    IntDrawCursorFrame(hdcScreen, pcur);
+    IntStartCursorAnimation(pcur);
+}
+
+VOID
+FASTCALL
+IntResumeCursorAnimation(VOID)
+{
+    PCURICON_OBJECT pcur = IntGetSysCursorInfo()->CurrentCursorObject;
+
+    if (pcur)
+        IntStartCursorAnimation(pcur);
+}
+
 static
 VOID
 IntInsertCursorIntoList(
