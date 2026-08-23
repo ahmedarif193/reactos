@@ -1396,6 +1396,8 @@ WSPSelect(IN int nfds,
                     TRACE("Event %x on handle %x\n",
                         Events,
                         Handle);
+                    Socket->SharedData->SocketLastError =
+                        TranslateNtStatusError(PollInfo->Handles[i].Status);
                     if( exceptfds && Socket->SharedData->NonBlocking != 0 )
                         FD_SET(Handle, exceptfds);
                     break;

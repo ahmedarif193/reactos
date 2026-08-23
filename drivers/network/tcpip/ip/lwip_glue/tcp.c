@@ -284,23 +284,139 @@ InternalRecvEventHandler(void *arg, PTCP_PCB pcb, struct pbuf *p, const err_t er
     return ERR_OK;
 }
 
+static
+err_t
+InternalPendingAcceptRecvEventHandler(void *arg,
+                                      PTCP_PCB pcb,
+                                      struct pbuf *p,
+                                      const err_t err)
+{
+    UNREFERENCED_PARAMETER(arg);
+    UNREFERENCED_PARAMETER(pcb);
+
+    if (p)
+        return ERR_MEM;
+
+    return err;
+}
+
+static
+void
+InternalPendingAcceptErrorEventHandler(void *arg, const err_t err)
+{
+    PTCP_PENDING_ACCEPT Pending = arg;
+    PCONNECTION_ENDPOINT Listener;
+
+    UNREFERENCED_PARAMETER(err);
+
+    if (!Pending)
+        return;
+
+    Listener = Pending->Listener;
+    LockObject(Listener);
+    RemoveEntryList(&Pending->Entry);
+    UnlockObject(Listener);
+
+    DereferenceObject(Listener);
+    ExFreePoolWithTag(Pending, TCP_ACCEPT_TAG);
+}
+
+NTSTATUS
+LibTCPDeferAcceptLocked(PCONNECTION_ENDPOINT Connection, PTCP_PCB pcb)
+{
+    PTCP_PENDING_ACCEPT Pending;
+
+    ASSERT_TCPIP_OBJECT_LOCKED(Connection);
+
+    Pending = ExAllocatePoolWithTag(NonPagedPool,
+                                    sizeof(*Pending),
+                                    TCP_ACCEPT_TAG);
+    if (!Pending)
+        return STATUS_NO_MEMORY;
+
+    Pending->Listener = Connection;
+    Pending->SocketContext = pcb;
+    ReferenceObject(Connection);
+    InsertTailList(&Connection->PendingAccepts, &Pending->Entry);
+
+    tcp_arg(pcb, Pending);
+    tcp_recv(pcb, InternalPendingAcceptRecvEventHandler);
+    tcp_sent(pcb, NULL);
+    tcp_err(pcb, InternalPendingAcceptErrorEventHandler);
+    tcp_backlog_delayed(pcb);
+
+    return STATUS_PENDING;
+}
+
+static
+void
+LibTCPDrainPendingAcceptCallback(void *arg)
+{
+    PCONNECTION_ENDPOINT Connection = arg;
+    PTCP_PENDING_ACCEPT Pending;
+    PTCP_PCB pcb;
+    PLIST_ENTRY Entry;
+    NTSTATUS Status;
+
+    LockObject(Connection);
+    if (IsListEmpty(&Connection->PendingAccepts) ||
+        IsListEmpty(&Connection->ListenRequest))
+    {
+        UnlockObject(Connection);
+        return;
+    }
+
+    Entry = RemoveHeadList(&Connection->PendingAccepts);
+    Pending = CONTAINING_RECORD(Entry, TCP_PENDING_ACCEPT, Entry);
+    pcb = Pending->SocketContext;
+    UnlockObject(Connection);
+
+    Status = TCPAcceptEventHandler(Connection, pcb);
+    if (Status == STATUS_SUCCESS)
+    {
+        tcp_backlog_accepted(pcb);
+    }
+    else if (Status != STATUS_PENDING)
+    {
+        tcp_arg(pcb, NULL);
+        tcp_recv(pcb, NULL);
+        tcp_sent(pcb, NULL);
+        tcp_err(pcb, NULL);
+        tcp_abort(pcb);
+    }
+
+    DereferenceObject(Pending->Listener);
+    ExFreePoolWithTag(Pending, TCP_ACCEPT_TAG);
+}
+
+void
+LibTCPDrainPendingAccept(PCONNECTION_ENDPOINT Connection)
+{
+    (void)tcpip_callback_wait(LibTCPDrainPendingAcceptCallback, Connection);
+}
+
 /* This function MUST return an error value that is not ERR_ABRT or ERR_OK if the connection
  * is not accepted to avoid leaking the new PCB */
 static
 err_t
 InternalAcceptEventHandler(void *arg, PTCP_PCB newpcb, const err_t err)
 {
+    NTSTATUS Status;
+
+    UNREFERENCED_PARAMETER(err);
+
     /* Make sure the socket didn't get closed */
     if (!arg)
         return ERR_CLSD;
+    if (!newpcb)
+        return ERR_MEM;
 
-    TCPAcceptEventHandler(arg, newpcb);
+    Status = TCPAcceptEventHandler(arg, newpcb);
 
-    /* Set in LibTCPAccept (called from TCPAcceptEventHandler) */
-    if (newpcb->callback_arg)
+    if (NT_SUCCESS(Status))
         return ERR_OK;
-    else
-        return ERR_CLSD;
+
+    return ERR_MEM;
 }
 
 static
@@ -447,6 +563,7 @@ void
 LibTCPListenCallback(void *arg)
 {
     struct lwip_callback_msg *msg = arg;
+    u8_t backlog;
 
     ASSERT(msg);
 
@@ -456,7 +573,12 @@ LibTCPListenCallback(void *arg)
         goto done;
     }
 
-    msg->Output.Listen.NewPcb = tcp_listen_with_backlog((PTCP_PCB)msg->Input.Listen.Connection->SocketContext, msg->Input.Listen.Backlog);
+    /* lwIP stores the backlog in a u8_t. Saturate larger TDI values. */
+    backlog = msg->Input.Listen.Backlog > 0xffU ?
+              0xffU : (u8_t)msg->Input.Listen.Backlog;
+    msg->Output.Listen.NewPcb =
+        tcp_listen_with_backlog((PTCP_PCB)msg->Input.Listen.Connection->SocketContext,
+                                backlog);
 
     if (msg->Output.Listen.NewPcb)
     {
@@ -468,7 +590,7 @@ done:
 }
 
 PTCP_PCB
-LibTCPListen(PCONNECTION_ENDPOINT Connection, const u8_t backlog)
+LibTCPListen(PCONNECTION_ENDPOINT Connection, const UINT backlog)
 {
     struct lwip_callback_msg msg;
     PTCP_PCB ret;
@@ -703,10 +825,45 @@ LibTCPShutdown(PCONNECTION_ENDPOINT Connection, const int shut_rx, const int shu
 
 static
 void
+LibTCPAbortPendingAccepts(PCONNECTION_ENDPOINT Connection)
+{
+    PTCP_PENDING_ACCEPT Pending;
+    PTCP_PCB pcb;
+    PLIST_ENTRY Entry;
+
+    while (TRUE)
+    {
+        LockObject(Connection);
+        if (IsListEmpty(&Connection->PendingAccepts))
+        {
+            UnlockObject(Connection);
+            break;
+        }
+
+        Entry = RemoveHeadList(&Connection->PendingAccepts);
+        Pending = CONTAINING_RECORD(Entry, TCP_PENDING_ACCEPT, Entry);
+        pcb = Pending->SocketContext;
+        UnlockObject(Connection);
+
+        tcp_arg(pcb, NULL);
+        tcp_recv(pcb, NULL);
+        tcp_sent(pcb, NULL);
+        tcp_err(pcb, NULL);
+        tcp_abort(pcb);
+
+        DereferenceObject(Pending->Listener);
+        ExFreePoolWithTag(Pending, TCP_ACCEPT_TAG);
+    }
+}
+
+static
+void
 LibTCPCloseCallback(void *arg)
 {
     struct lwip_callback_msg *msg = arg;
     PTCP_PCB pcb = msg->Input.Close.Connection->SocketContext;
+
+    LibTCPAbortPendingAccepts(msg->Input.Close.Connection);
 
     /* Empty the queue even if we're already "closed" */
     LibTCPEmptyQueue(msg->Input.Close.Connection);

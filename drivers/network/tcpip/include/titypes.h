@@ -250,6 +250,7 @@ typedef struct _CONNECTION_ENDPOINT {
     /* Requests */
     LIST_ENTRY ConnectRequest; /* Queued connect requests */
     LIST_ENTRY ListenRequest;  /* Queued listen requests */
+    LIST_ENTRY PendingAccepts; /* Established connections awaiting a listen request */
     LIST_ENTRY ReceiveRequest; /* Queued receive requests */
     LIST_ENTRY SendRequest;    /* Queued send requests */
     LIST_ENTRY ShutdownRequest;/* Queued shutdown requests */
@@ -272,6 +273,12 @@ typedef struct _CONNECTION_ENDPOINT {
 
     struct _CONNECTION_ENDPOINT *Next; /* Next connection in address file list */
 } CONNECTION_ENDPOINT, *PCONNECTION_ENDPOINT;
+
+typedef struct _TCP_PENDING_ACCEPT {
+    LIST_ENTRY Entry;
+    PCONNECTION_ENDPOINT Listener;
+    PVOID SocketContext;
+} TCP_PENDING_ACCEPT, *PTCP_PENDING_ACCEPT;
 
 
 

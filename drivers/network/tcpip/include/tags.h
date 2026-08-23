@@ -29,6 +29,7 @@
 #define FIB_TAG ' BIF'
 #define IFC_TAG ' CFI'
 #define TDI_BUCKET_TAG 'BidT'
+#define TCP_ACCEPT_TAG 'cAcT'
 #define FBSD_TAG 'DSBF'
 #define OSK_OTHER_TAG 'OKSO'
 #define OSK_LARGE_TAG 'LKSO'
