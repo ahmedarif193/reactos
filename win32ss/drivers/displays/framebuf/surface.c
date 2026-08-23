@@ -20,6 +20,18 @@
 
 #include "framebuf.h"
 
+static VOID
+IntResetShadowState(
+   PPDEV ppdev)
+{
+   ppdev->ShadowActive = FALSE;
+   ppdev->ShadowFlushValid = FALSE;
+   ppdev->ShadowPendingValid = FALSE;
+   ppdev->ShadowFlushStarted = FALSE;
+   ppdev->ShadowBatchActive = FALSE;
+   ppdev->ShadowBatchValid = FALSE;
+}
+
 /*
  * DrvEnableSurface
  *
@@ -99,11 +111,13 @@ DrvEnableSurface(
    ScreenSize.cy = ppdev->ScreenHeight;
 
    /*
-    * Expose a real XPDM device surface and render software fallbacks into a
-    * separate cached bitmap. The hook layer maps the device surface to this
-    * bitmap before calling Eng* and publishes only the resulting dirty area.
+    * Expose a hooked bitmap over the cached shadow. Keeping the primary
+    * bitmap-backed lets GDI complete a software-pointer update in the shadow
+    * before its synchronization hook publishes the final dirty rectangle.
+    * The hook layer still redirects normal driver calls to the separate,
+    * unhooked shadow surface to avoid recursion.
     */
-   ppdev->ShadowActive = FALSE;
+   IntResetShadowState(ppdev);
    ppdev->hSurfShadow = NULL;
    ppdev->psoShadow = NULL;
    ppdev->ShadowPtr = NULL;
@@ -127,8 +141,6 @@ DrvEnableSurface(
       ppdev->ShadowPtr = ppdev->psoShadow->pvScan0;
       memcpy(ppdev->ShadowPtr, ppdev->ScreenPtr, ShadowSize);
       ppdev->ShadowActive = TRUE;
-      ppdev->ShadowFlushValid = FALSE;
-      ppdev->ShadowPendingValid = FALSE;
       flHooks = HOOK_BITBLT | HOOK_COPYBITS | HOOK_LINETO | HOOK_PAINT |
                 HOOK_STRETCHBLT | HOOK_STRETCHBLTROP | HOOK_ALPHABLEND |
                 HOOK_TRANSPARENTBLT | HOOK_GRADIENTFILL |
@@ -167,7 +179,22 @@ DrvEnableSurface(
     * Associate the surface with our device.
     */
 
-   if (!EngAssociateSurface(hSurface, ppdev->hDevEng, flHooks))
+   if (ppdev->ShadowActive)
+   {
+      if (!EngModifySurface(hSurface,
+                            ppdev->hDevEng,
+                            flHooks,
+                            0,
+                            (DHSURF)ppdev,
+                            ppdev->ShadowPtr,
+                            ppdev->ScreenDelta,
+                            NULL))
+      {
+         EngDeleteSurface(hSurface);
+         goto Failure;
+      }
+   }
+   else if (!EngAssociateSurface(hSurface, ppdev->hDevEng, flHooks))
    {
       EngDeleteSurface(hSurface);
       goto Failure;
@@ -178,7 +205,7 @@ DrvEnableSurface(
    return hSurface;
 
 Failure:
-   ppdev->ShadowActive = FALSE;
+   IntResetShadowState(ppdev);
    ppdev->ShadowPtr = NULL;
    if (ppdev->psoShadow != NULL)
    {
@@ -214,9 +241,7 @@ DrvDisableSurface(
    EngDeleteSurface(ppdev->hSurfEng);
    ppdev->hSurfEng = NULL;
 
-   ppdev->ShadowActive = FALSE;
-   ppdev->ShadowFlushValid = FALSE;
-   ppdev->ShadowPendingValid = FALSE;
+   IntResetShadowState(ppdev);
    ppdev->ShadowPtr = NULL;
    if (ppdev->psoShadow != NULL)
    {

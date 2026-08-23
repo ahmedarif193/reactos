@@ -76,6 +76,9 @@ typedef struct _PDEV
    BOOL ShadowFlushValid;
    BOOL ShadowPendingValid;
    BOOL ShadowFlushStarted;
+   BOOL ShadowBatchActive;
+   RECTL ShadowBatchRect;
+   BOOL ShadowBatchValid;
    HPALETTE DefaultPalette;
    PALETTEENTRY *PaletteEntries;
 

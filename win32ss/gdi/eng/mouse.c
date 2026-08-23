@@ -15,6 +15,11 @@
 
 /* FUNCTIONS *****************************************************************/
 
+static BOOL
+IntCanBatchMousePointer(
+    _In_ PDEVOBJ *ppdev,
+    _In_ SURFOBJ *pso);
+
 __drv_preferredFunction("(see documentation)", "Obsolete, always returns false. ")
 BOOL
 APIENTRY
@@ -84,6 +89,16 @@ MouseSafetyOnDrawStart(
         && pgp->Exclude.top <= HazardY2)
     {
         ppdev->SafetyRemoveLevel = ppdev->SafetyRemoveCount;
+        if ((ppdev->flFlags & PDEV_SOFTWARE_POINTER) &&
+            IntCanBatchMousePointer(ppdev, &ppdev->pSurface->SurfObj))
+        {
+            RECTL rcl = pgp->Exclude;
+
+            GDIDEVFUNCS(&ppdev->pSurface->SurfObj).SynchronizeSurface(
+                &ppdev->pSurface->SurfObj, &rcl, DSS_RESERVED);
+            pgp->psoSafetyBatch = &ppdev->pSurface->SurfObj;
+        }
+
         if (ppdev->flFlags & PDEV_HARDWARE_POINTER)
             ppdev->pfnMovePointer(&ppdev->pSurface->SurfObj, -1, -1, NULL);
         else if (ppdev->flFlags & PDEV_SOFTWARE_POINTER)
@@ -103,6 +118,7 @@ MouseSafetyOnDrawEnd(
     _Inout_ PPDEVOBJ ppdev)
 {
     GDIPOINTER *pgp;
+    SURFOBJ *psoSafetyBatch;
 
     ASSERT(ppdev != NULL);
     ASSERT(ppdev->pSurface != NULL);
@@ -119,6 +135,8 @@ MouseSafetyOnDrawEnd(
         return FALSE;
     }
 
+    psoSafetyBatch = pgp->psoSafetyBatch;
+
     if (ppdev->flFlags & PDEV_HARDWARE_POINTER)
         ppdev->pfnMovePointer(&ppdev->pSurface->SurfObj,
                               gpsi->ptCursor.x,
@@ -129,6 +147,15 @@ MouseSafetyOnDrawEnd(
                        gpsi->ptCursor.x,
                        gpsi->ptCursor.y,
                        &pgp->Exclude);
+
+    if (psoSafetyBatch != NULL)
+    {
+        RECTL rcl = pgp->Exclude;
+
+        pgp->psoSafetyBatch = NULL;
+        GDIDEVFUNCS(psoSafetyBatch).SynchronizeSurface(
+            psoSafetyBatch, &rcl, DSS_RESERVED | DSS_FLUSH_EVENT);
+    }
 
     ppdev->SafetyRemoveLevel = 0;
 

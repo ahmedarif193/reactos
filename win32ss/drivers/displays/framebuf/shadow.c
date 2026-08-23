@@ -93,6 +93,27 @@ IntUnionShadowRect(
 }
 
 static VOID
+IntAccumulateShadowRect(
+   PPDEV ppdev,
+   const RECTL *prcl)
+{
+   RECTL Clipped;
+
+   if (!IntClipShadowRect(ppdev, prcl, &Clipped))
+      return;
+
+   if (ppdev->ShadowBatchValid)
+   {
+      IntUnionShadowRect(&ppdev->ShadowBatchRect, &Clipped);
+   }
+   else
+   {
+      ppdev->ShadowBatchRect = Clipped;
+      ppdev->ShadowBatchValid = TRUE;
+   }
+}
+
+static VOID
 IntQueueShadowRect(
    PPDEV ppdev,
    const RECTL *prcl)
@@ -131,6 +152,28 @@ IntQueueShadowRect(
       ppdev->ShadowPendingRect = Clipped;
       ppdev->ShadowPendingValid = TRUE;
    }
+}
+
+static VOID
+IntSubmitShadowRect(
+   SURFOBJ *pso,
+   PPDEV ppdev,
+   const RECTL *prcl,
+   FRAMEBUF_SHADOW_OPERATION Operation)
+{
+   if (ppdev->ShadowBatchActive)
+   {
+      IntAccumulateShadowRect(ppdev, prcl);
+      return;
+   }
+
+   if (ppdev->ShadowPublish != NULL)
+   {
+      ppdev->ShadowPublish(pso, prcl, NULL, Operation);
+      return;
+   }
+
+   IntQueueShadowRect(ppdev, prcl);
 }
 
 static VOID
@@ -210,8 +253,6 @@ IntPublishShadowSurface(
    PPDEV ppdev;
    RECTL rcl;
 
-   UNREFERENCED_PARAMETER(Operation);
-
    if (pso == NULL || pso->dhpdev == NULL || prcl == NULL)
       return;
 
@@ -220,7 +261,7 @@ IntPublishShadowSurface(
        pso->dhsurf != (DHSURF)ppdev)
       return;
 
-   if (ppdev->ShadowPublish != NULL)
+   if (!ppdev->ShadowBatchActive && ppdev->ShadowPublish != NULL)
    {
       ppdev->ShadowPublish(pso, prcl, pco, Operation);
       return;
@@ -246,7 +287,7 @@ IntPublishShadowSurface(
       rcl.bottom = min(rcl.bottom, pco->rclBounds.bottom);
    }
 
-   IntQueueShadowRect(ppdev, &rcl);
+   IntSubmitShadowRect(pso, ppdev, &rcl, Operation);
 }
 
 VOID
@@ -256,6 +297,8 @@ IntSynchronizeShadowSurface(
    FLONG fl)
 {
    PPDEV ppdev;
+   RECTL BatchRect;
+   BOOL BatchValid;
 
    if (pso == NULL || pso->dhpdev == NULL)
       return;
@@ -265,27 +308,54 @@ IntSynchronizeShadowSurface(
        pso->dhsurf != (DHSURF)ppdev)
       return;
 
-   if (ppdev->ShadowPublish != NULL)
+   if (fl & DSS_TIMER_EVENT)
    {
-      if ((fl & DSS_FLUSH_EVENT) != 0 && prcl != NULL)
+      if (!ppdev->ShadowBatchActive &&
+          ppdev->ShadowPublish == NULL)
+         IntFlushShadowStripe(ppdev);
+      return;
+   }
+
+   /* DSS_RESERVED brackets an explicit compound update. Ordinary zero-flag
+    * synchronization can be read-only and therefore has no matching flush. */
+   if ((fl & DSS_RESERVED) != 0 &&
+       (fl & DSS_FLUSH_EVENT) == 0)
+   {
+      if (prcl != NULL && !ppdev->ShadowBatchActive)
       {
-         ppdev->ShadowPublish(pso, prcl, NULL,
-                              FramebufShadowSynchronize);
+         ppdev->ShadowBatchActive = TRUE;
+         ppdev->ShadowBatchValid = FALSE;
+         IntAccumulateShadowRect(ppdev, prcl);
       }
       return;
    }
 
-   if (fl & DSS_TIMER_EVENT)
+   if ((fl & (DSS_RESERVED | DSS_FLUSH_EVENT)) ==
+       (DSS_RESERVED | DSS_FLUSH_EVENT))
    {
-      IntFlushShadowStripe(ppdev);
+      if (!ppdev->ShadowBatchActive)
+         return;
+
+      if (prcl != NULL)
+         IntAccumulateShadowRect(ppdev, prcl);
+
+      BatchRect = ppdev->ShadowBatchRect;
+      BatchValid = ppdev->ShadowBatchValid;
+      ppdev->ShadowBatchActive = FALSE;
+      ppdev->ShadowBatchValid = FALSE;
+      if (BatchValid)
+         IntSubmitShadowRect(pso, ppdev, &BatchRect,
+                             FramebufShadowSynchronize);
       return;
    }
 
    if (fl & DSS_FLUSH_EVENT)
    {
       if (prcl != NULL)
-         IntQueueShadowRect(ppdev, prcl);
-      else
+         IntSubmitShadowRect(pso, ppdev, prcl,
+                             FramebufShadowSynchronize);
+      else if (!ppdev->ShadowBatchActive &&
+               ppdev->ShadowPublish == NULL)
          IntFlushShadowStripe(ppdev);
    }
 }
