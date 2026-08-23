@@ -12,8 +12,7 @@ static NDIS_HANDLE Rp1GemDriverHandle;
 
 static VOID
 Rp1GemDrainTxCompletions(
-    _In_ PRP1GEM_ADAPTER Adapter,
-    _In_ ULONG CompleteFlags);
+    _In_ PRP1GEM_ADAPTER Adapter);
 
 static VOID
 Rp1GemStartTransmit(
@@ -1153,22 +1152,27 @@ Rp1GemRefreshLink(
     NDIS_MEDIA_CONNECT_STATE OldConnectState;
     NDIS_MEDIA_DUPLEX_STATE OldDuplexState;
     ULONG64 OldLinkSpeed;
-    USHORT Bmcr, Bmsr1, Bmsr2, Advertise, Lpa, Expansion, Ctrl1000, Stat1000, Estatus;
+    USHORT Bmcr, Bmsr1, Bmsr2, Lpa, Stat1000;
     BOOLEAN LinkChanged;
+#ifndef NDEBUG
+    USHORT Advertise, Expansion, Ctrl1000, Estatus;
     PCSTR DuplexText;
     PCSTR MasterSlaveText;
+#endif
 
     OldConnectState = Adapter->MediaConnectState;
     OldDuplexState = Adapter->MediaDuplexState;
     OldLinkSpeed = Adapter->LinkSpeed;
     Bmcr = 0;
     Bmsr2 = 0;
-    Advertise = 0;
     Lpa = 0;
+    Stat1000 = 0;
+#ifndef NDEBUG
+    Advertise = 0;
     Expansion = 0;
     Ctrl1000 = 0;
-    Stat1000 = 0;
     Estatus = 0;
+#endif
 
     if (!Rp1GemIsValidPhyId(Adapter->PhyId1, Adapter->PhyId2) ||
         Rp1GemMdioRead(Adapter, Adapter->PhyAddress, MII_BMCR, &Bmcr) != NDIS_STATUS_SUCCESS ||
@@ -1219,6 +1223,7 @@ Rp1GemRefreshLink(
     if (LinkChanged && Adapter->RegisterBase)
         Rp1GemApplyLinkState(Adapter);
 
+#ifndef NDEBUG
     if (LinkChanged || ForceLog)
     {
         DuplexText = "unknown";
@@ -1257,6 +1262,9 @@ Rp1GemRefreshLink(
                (Stat1000 & LPA_1000LOCALRXOK) ? 1 : 0,
                (Stat1000 & LPA_1000REMRXOK) ? 1 : 0);
     }
+#else
+    UNREFERENCED_PARAMETER(ForceLog);
+#endif
 
     return LinkChanged;
 }
@@ -1340,7 +1348,7 @@ Rp1GemLinkTimer(
         Adapter->MediaConnectState == MediaConnectStateConnected)
     {
         Rp1GemPollReceive(Adapter, RP1GEM_RX_BUDGET);
-        Rp1GemDrainTxCompletions(Adapter, 0);
+        Rp1GemDrainTxCompletions(Adapter);
     }
 
     /* Snapshot runtime datapath state to the registry (at PASSIVE via work item). */
@@ -1610,11 +1618,8 @@ Rp1GemProbeHardware(
 
 static VOID
 Rp1GemDrainTxCompletions(
-    _In_ PRP1GEM_ADAPTER Adapter,
-    _In_ ULONG CompleteFlags)
+    _In_ PRP1GEM_ADAPTER Adapter)
 {
-    UNREFERENCED_PARAMETER(CompleteFlags);
-
     if (!Adapter->DatapathReady)
         return;
 
@@ -1872,7 +1877,6 @@ Rp1GemInterrupt(
     Isr = RawIsr & RP1GEM_INT_MASK;
     Rp1GemClearInterruptStatus(Adapter, RawIsr);
     Adapter->InterruptLastRawIsr = RawIsr;
-    Adapter->InterruptLastPending = Isr;
     if (!Isr)
     {
         Adapter->SpuriousInterruptCount++;
@@ -1940,7 +1944,7 @@ Rp1GemInterruptDpc(
 
     if (Pending & (MACB_INT_TCOMP | MACB_INT_TXERR | MACB_INT_TUND | MACB_INT_RLE | MACB_INT_TXUBR))
     {
-        Rp1GemDrainTxCompletions(Adapter, NDIS_SEND_COMPLETE_FLAGS_DISPATCH_LEVEL);
+        Rp1GemDrainTxCompletions(Adapter);
 
         if (Pending & MACB_INT_TXUBR)
         {
@@ -2231,7 +2235,7 @@ Rp1GemSetInformation(
             if (Adapter->MediaConnectState == MediaConnectStateConnected)
             {
                 Rp1GemPollReceive(Adapter, RP1GEM_RX_BUDGET);
-                Rp1GemDrainTxCompletions(Adapter, 0);
+                Rp1GemDrainTxCompletions(Adapter);
             }
             *BytesRead = sizeof(ULONG);
             return NDIS_STATUS_SUCCESS;
@@ -2573,7 +2577,7 @@ Rp1GemSendNetBufferLists(
     if (NDIS_TEST_SEND_AT_DISPATCH_LEVEL(SendFlags))
         CompleteFlags |= NDIS_SEND_COMPLETE_FLAGS_DISPATCH_LEVEL;
 
-    Rp1GemDrainTxCompletions(Adapter, CompleteFlags);
+    Rp1GemDrainTxCompletions(Adapter);
 
     for (Nbl = NetBufferLists; Nbl; Nbl = NextNbl)
     {
@@ -2707,7 +2711,7 @@ FailNbl:
         NdisMSendNetBufferListsComplete(Adapter->MiniportHandle, FailHead, CompleteFlags);
     }
 
-    Rp1GemDrainTxCompletions(Adapter, CompleteFlags);
+    Rp1GemDrainTxCompletions(Adapter);
 }
 
 static VOID NTAPI
@@ -2756,7 +2760,7 @@ Rp1GemCheckForHang(
     if (Adapter)
     {
         Rp1GemPollReceive(Adapter, RP1GEM_RX_BUDGET);
-        Rp1GemDrainTxCompletions(Adapter, 0);
+        Rp1GemDrainTxCompletions(Adapter);
     }
 
     if (Adapter && Rp1GemRefreshLink(Adapter, FALSE))
