@@ -17,6 +17,7 @@ extern void func_open_osfhandle(void);
 extern void func_pollable_event(void);
 extern void func_recv(void);
 extern void func_send(void);
+extern void func_udp_quic(void);
 extern void func_WSAAsync(void);
 extern void func_WSAIoctl(void);
 extern void func_WSARecv(void);
@@ -39,6 +40,7 @@ const struct test winetest_testlist[] =
     { "pollable_event", func_pollable_event },
     { "recv", func_recv },
     { "send", func_send },
+    { "udp_quic", func_udp_quic },
     { "WSAAsync", func_WSAAsync },
     { "WSAIoctl", func_WSAIoctl },
     { "WSARecv", func_WSARecv },

@@ -34,6 +34,8 @@ list(APPEND SOURCE
     JobObject.c
     LCMapString.c
     LoadLibraryExW.c
+    LockFileEx.c
+    SharedMemoryTransfer.c
     LocaleNameToLCID.c
     lstrcpynW.c
     lstrlen.c
