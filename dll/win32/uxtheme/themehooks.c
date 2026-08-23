@@ -385,6 +385,17 @@ ThemePostWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, ULONG_PTR
 {
     switch(Msg)
     {
+        case WM_THEMECHANGED:
+        {
+            DWORD style = GetWindowLongW(hWnd, GWL_STYLE);
+
+            if ((style & WS_CAPTION) == WS_CAPTION)
+            {
+                SetWindowPos(hWnd, NULL, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);
+                RedrawWindow(hWnd, NULL, NULL, RDW_ERASE | RDW_FRAME | RDW_INVALIDATE);
+            }
+            return 0;
+        }
         case WM_WINDOWPOSCHANGED:
         {
             return OnPostWinPosChanged(hWnd, (WINDOWPOS*)lParam);
