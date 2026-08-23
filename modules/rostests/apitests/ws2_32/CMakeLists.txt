@@ -16,6 +16,7 @@ list(APPEND SOURCE
     pollable_event.c
     recv.c
     send.c
+    udp_quic.c
     WSAAsync.c
     WSAIoctl.c
     WSARecv.c

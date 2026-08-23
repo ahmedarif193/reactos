@@ -33,6 +33,8 @@ extern void func_JapaneseCalendar(void);
 extern void func_JobObject(void);
 extern void func_LCMapString(void);
 extern void func_LoadLibraryExW(void);
+extern void func_LockFileEx(void);
+extern void func_SharedMemoryTransfer(void);
 extern void func_LocaleNameToLCID(void);
 extern void func_lstrcpynW(void);
 extern void func_lstrlen(void);
@@ -87,6 +89,8 @@ const struct test winetest_testlist[] =
     { "JobObject",                   func_JobObject },
     { "LCMapString",                 func_LCMapString },
     { "LoadLibraryExW",              func_LoadLibraryExW },
+    { "LockFileEx",                  func_LockFileEx },
+    { "SharedMemoryTransfer",        func_SharedMemoryTransfer },
     { "LocaleNameToLCID",            func_LocaleNameToLCID },
     { "lstrcpynW",                   func_lstrcpynW },
     { "lstrlen",                     func_lstrlen },
