@@ -298,9 +298,6 @@ MakeSocketIntoConnection(PAFD_FCB FCB) {
         if( !FCB->Send.Window ) return STATUS_NO_MEMORY;
     }
 
-    FCB->SharedData.State = SOCKET_STATE_CONNECTED;
-    FCB->SharedData.ConnectTime = 0; // Not used
-
     Status = TdiReceive( &FCB->ReceiveIrp.InFlightRequest,
                          FCB->Connection.Object,
                          TDI_RECEIVE_NORMAL,
@@ -310,6 +307,10 @@ MakeSocketIntoConnection(PAFD_FCB FCB) {
                          FCB );
 
    if( Status == STATUS_PENDING ) Status = STATUS_SUCCESS;
+   if( !NT_SUCCESS(Status) ) return Status;
+
+   FCB->SharedData.State = SOCKET_STATE_CONNECTED;
+   FCB->SharedData.ConnectTime = 0; // Not used
 
    FCB->PollState |= AFD_EVENT_CONNECT | AFD_EVENT_SEND;
    FCB->PollStatus[FD_CONNECT_BIT] = STATUS_SUCCESS;
@@ -418,33 +419,17 @@ StreamSocketConnectComplete(PDEVICE_OBJECT DeviceObject, PIRP Irp,
         return STATUS_FILE_CLOSED;
     }
 
-    if( !NT_SUCCESS(Irp->IoStatus.Status) ) {
+    if( NT_SUCCESS(Status) ) {
+        Status = MakeSocketIntoConnection( FCB );
+    }
+
+    if( !NT_SUCCESS(Status) ) {
         FCB->PollState |= AFD_EVENT_CONNECT_FAIL;
-        FCB->PollStatus[FD_CONNECT_BIT] = Irp->IoStatus.Status;
+        FCB->PollStatus[FD_CONNECT_BIT] = Status;
         AFD_DbgPrint(MID_TRACE,("Going to bound state\n"));
         FCB->SharedData.State = SOCKET_STATE_BOUND;
         PollReeval( FCB->DeviceExt, FCB->FileObject );
-    }
-
-    /* Succeed pending irps on the FUNCTION_CONNECT list */
-    while( !IsListEmpty( &FCB->PendingIrpList[FUNCTION_CONNECT] ) ) {
-        NextIrpEntry = RemoveHeadList(&FCB->PendingIrpList[FUNCTION_CONNECT]);
-        NextIrp = CONTAINING_RECORD(NextIrpEntry, IRP, Tail.Overlay.ListEntry);
-        AFD_DbgPrint(MID_TRACE,("Completing connect %p\n", NextIrp));
-        NextIrp->IoStatus.Status = Status;
-        NextIrp->IoStatus.Information = NT_SUCCESS(Status) ? ((ULONG_PTR)FCB->Connection.Handle) : 0;
-        if( NextIrp->MdlAddress ) UnlockRequest( NextIrp, IoGetCurrentIrpStackLocation( NextIrp ) );
-        (void)IoSetCancelRoutine(NextIrp, NULL);
-        IoCompleteRequest( NextIrp, IO_NETWORK_INCREMENT );
-    }
-
-    if( NT_SUCCESS(Status) ) {
-        Status = MakeSocketIntoConnection( FCB );
-
-        if( !NT_SUCCESS(Status) ) {
-            goto end;
-        }
-
+    } else {
         FCB->FilledConnectData = MIN(FCB->ConnectReturnInfo->UserDataLength, FCB->ConnectDataSize);
         if (FCB->FilledConnectData)
         {
@@ -460,7 +445,21 @@ StreamSocketConnectComplete(PDEVICE_OBJECT DeviceObject, PIRP Irp,
                           FCB->ConnectReturnInfo->Options,
                           FCB->FilledConnectOptions);
         }
+    }
 
+    /* Complete connect only after the socket state and poll state are final. */
+    while( !IsListEmpty( &FCB->PendingIrpList[FUNCTION_CONNECT] ) ) {
+        NextIrpEntry = RemoveHeadList(&FCB->PendingIrpList[FUNCTION_CONNECT]);
+        NextIrp = CONTAINING_RECORD(NextIrpEntry, IRP, Tail.Overlay.ListEntry);
+        AFD_DbgPrint(MID_TRACE,("Completing connect %p\n", NextIrp));
+        NextIrp->IoStatus.Status = Status;
+        NextIrp->IoStatus.Information = NT_SUCCESS(Status) ? ((ULONG_PTR)FCB->Connection.Handle) : 0;
+        if( NextIrp->MdlAddress ) UnlockRequest( NextIrp, IoGetCurrentIrpStackLocation( NextIrp ) );
+        (void)IoSetCancelRoutine(NextIrp, NULL);
+        IoCompleteRequest( NextIrp, IO_NETWORK_INCREMENT );
+    }
+
+    if( NT_SUCCESS(Status) ) {
         if( !IsListEmpty( &FCB->PendingIrpList[FUNCTION_SEND] ) ) {
             NextIrpEntry = RemoveHeadList(&FCB->PendingIrpList[FUNCTION_SEND]);
             NextIrp = CONTAINING_RECORD(NextIrpEntry, IRP,
@@ -495,7 +494,6 @@ StreamSocketConnectComplete(PDEVICE_OBJECT DeviceObject, PIRP Irp,
         }
     }
 
-end:
     while (!IsListEmpty(&FCB->PendingIrpList[FUNCTION_CONNECTEX]))
     {
         NextIrpEntry = RemoveHeadList(&FCB->PendingIrpList[FUNCTION_CONNECTEX]);
