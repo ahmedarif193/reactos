@@ -2788,6 +2788,7 @@ NtUserGetClassInfo(
     PCLS Class;
     RTL_ATOM ClassAtom = 0;
     PPROCESSINFO ppi;
+    LPWSTR pszMenuName = NULL;
     BOOL Ret = TRUE;
     NTSTATUS Status;
 
@@ -2850,10 +2851,14 @@ NtUserGetClassInfo(
 
     if (Ret)
     {
+        pszMenuName = (LPWSTR)Safewcexw.lpszMenuName;
+        Safewcexw.lpszMenuName = NULL;
+        Safewcexw.lpszClassName = NULL;
+
         _SEH2_TRY
         {
             /* Emulate Function. */
-            if (ppszMenuName) *ppszMenuName = (LPWSTR)Safewcexw.lpszMenuName;
+            if (ppszMenuName) *ppszMenuName = pszMenuName;
 
             RtlCopyMemory(lpWndClassEx, &Safewcexw, sizeof(WNDCLASSEXW));
 
