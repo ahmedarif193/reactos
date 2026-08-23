@@ -219,6 +219,10 @@ Rpi5Vc4StartIO(
     _In_ PVOID HwDeviceExtension,
     _In_ PVIDEO_REQUEST_PACKET RequestPacket);
 
+VP_STATUS
+Rpi5Vc4QueryPlatformInfo(
+    _Out_ PRPI5VC4_PLATFORM_INFO PlatformInfo);
+
 BOOLEAN
 NTAPI
 Rpi5Vc4ResetHw(
