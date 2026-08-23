@@ -1509,6 +1509,9 @@ public:
         else
             m_Theme = NULL;
 
+        UpdateButtonsSize(FALSE);
+        InvalidateRect(NULL, TRUE);
+
         return TRUE;
     }
 
