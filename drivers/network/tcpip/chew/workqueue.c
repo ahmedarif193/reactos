@@ -14,6 +14,7 @@
 
 PDEVICE_OBJECT WorkQueueDevice;
 LIST_ENTRY     WorkQueue;
+LIST_ENTRY     HighPriorityWorkQueue;
 KSPIN_LOCK     WorkQueueLock;
 KEVENT         WorkQueueEvent;
 KEVENT         WorkQueueClear;
@@ -29,6 +30,12 @@ typedef struct _WORK_ITEM
     PVOID WorkerContext;
 } WORK_ITEM, *PWORK_ITEM;
 
+static BOOLEAN
+ChewQueuesEmpty(VOID)
+{
+    return IsListEmpty(&HighPriorityWorkQueue) && IsListEmpty(&WorkQueue);
+}
+
 VOID NTAPI ChewWorkItem(PDEVICE_OBJECT DeviceObject, PVOID ChewItem)
 {
     PWORK_ITEM WorkItem = ChewItem;
@@ -43,7 +50,7 @@ VOID NTAPI ChewWorkItem(PDEVICE_OBJECT DeviceObject, PVOID ChewItem)
     KeAcquireSpinLock(&WorkQueueLock, &OldIrql);
     RemoveEntryList(&WorkItem->Entry);
 
-    if (IsListEmpty(&WorkQueue))
+    if (ChewQueuesEmpty())
         KeSetEvent(&WorkQueueClear, 0, FALSE);
 
     KeReleaseSpinLock(&WorkQueueLock, OldIrql);
@@ -66,12 +73,16 @@ VOID NTAPI ChewWorkerThread(PVOID Context)
         for (;;)
         {
             KeAcquireSpinLock(&WorkQueueLock, &OldIrql);
-            if (IsListEmpty(&WorkQueue))
+            if (ChewQueuesEmpty())
             {
                 KeReleaseSpinLock(&WorkQueueLock, OldIrql);
                 break;
             }
-            Entry = RemoveHeadList(&WorkQueue);
+
+            if (!IsListEmpty(&HighPriorityWorkQueue))
+                Entry = RemoveHeadList(&HighPriorityWorkQueue);
+            else
+                Entry = RemoveHeadList(&WorkQueue);
             KeReleaseSpinLock(&WorkQueueLock, OldIrql);
 
             Item = CONTAINING_RECORD(Entry, WORK_ITEM, Entry);
@@ -92,6 +103,7 @@ VOID ChewInit(PDEVICE_OBJECT DeviceObject)
 
     WorkQueueDevice = DeviceObject;
     InitializeListHead(&WorkQueue);
+    InitializeListHead(&HighPriorityWorkQueue);
     KeInitializeSpinLock(&WorkQueueLock);
     KeInitializeEvent(&WorkQueueEvent, SynchronizationEvent, FALSE);
     KeInitializeEvent(&WorkQueueClear, NotificationEvent, TRUE);
@@ -129,9 +141,13 @@ VOID ChewShutdown(VOID)
     ExDeleteNPagedLookasideList(&ChewLookaside);
 }
 
-BOOLEAN ChewCreate(VOID (*Worker)(PVOID), PVOID WorkerContext)
+static BOOLEAN
+ChewCreateInternal(VOID (*Worker)(PVOID),
+                   PVOID WorkerContext,
+                   BOOLEAN HighPriority)
 {
     PWORK_ITEM Item;
+    PLIST_ENTRY Queue;
 
     if (WorkQueueStop)
         return FALSE;
@@ -142,11 +158,12 @@ BOOLEAN ChewCreate(VOID (*Worker)(PVOID), PVOID WorkerContext)
 
     Item->Worker = Worker;
     Item->WorkerContext = WorkerContext;
+    Queue = HighPriority ? &HighPriorityWorkQueue : &WorkQueue;
 
     if (WorkQueueThread)
     {
         Item->WorkItem = NULL;
-        ExInterlockedInsertTailList(&WorkQueue, &Item->Entry, &WorkQueueLock);
+        ExInterlockedInsertTailList(Queue, &Item->Entry, &WorkQueueLock);
         KeSetEvent(&WorkQueueEvent, 0, FALSE);
         return TRUE;
     }
@@ -158,9 +175,21 @@ BOOLEAN ChewCreate(VOID (*Worker)(PVOID), PVOID WorkerContext)
         return FALSE;
     }
 
-    ExInterlockedInsertTailList(&WorkQueue, &Item->Entry, &WorkQueueLock);
+    ExInterlockedInsertTailList(Queue, &Item->Entry, &WorkQueueLock);
     KeClearEvent(&WorkQueueClear);
     IoQueueWorkItem(Item->WorkItem, ChewWorkItem, DelayedWorkQueue, Item);
 
     return TRUE;
+}
+
+BOOLEAN
+ChewCreate(VOID (*Worker)(PVOID), PVOID WorkerContext)
+{
+    return ChewCreateInternal(Worker, WorkerContext, FALSE);
+}
+
+BOOLEAN
+ChewCreateHighPriority(VOID (*Worker)(PVOID), PVOID WorkerContext)
+{
+    return ChewCreateInternal(Worker, WorkerContext, TRUE);
 }

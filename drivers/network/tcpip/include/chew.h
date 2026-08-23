@@ -25,5 +25,6 @@ VOID ChewShutdown(VOID);
  * Creates and queues a work item.
  */
 BOOLEAN ChewCreate(VOID (*Worker)(PVOID), PVOID WorkerContext);
+BOOLEAN ChewCreateHighPriority(VOID (*Worker)(PVOID), PVOID WorkerContext);
 
 #endif/*_REACTOS_CHEW_H*/
