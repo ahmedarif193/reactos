@@ -105,6 +105,7 @@ set(ARM64EC_RUNTIME_MODULES
     winmm
     winspool
     wintrust
+    wldap32
     wsock32
     ws2_32
     wshtcpip
