@@ -778,6 +778,22 @@ Rpi5Vc4StartIO(
             }
             break;
 
+        case IOCTL_VIDEO_RPI5VC4_QUERY_PLATFORM:
+            if (RequestPacket->OutputBufferLength <
+                sizeof(RPI5VC4_PLATFORM_INFO))
+            {
+                Status = ERROR_INSUFFICIENT_BUFFER;
+                break;
+            }
+            Status = Rpi5Vc4QueryPlatformInfo(
+                (PRPI5VC4_PLATFORM_INFO)RequestPacket->OutputBuffer);
+            if (Status == NO_ERROR)
+            {
+                RequestPacket->StatusBlock->Information =
+                    sizeof(RPI5VC4_PLATFORM_INFO);
+            }
+            break;
+
         case IOCTL_VIDEO_RPI5VC4_RUN_V3D_SELFTEST:
             if (RequestPacket->OutputBufferLength <
                 sizeof(RPI5VC4_V3D_SELFTEST))

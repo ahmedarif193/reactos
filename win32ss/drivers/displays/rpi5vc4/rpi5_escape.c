@@ -78,7 +78,8 @@ DrvEscape(
         if (RequestedEscape == OPENGL_GETINFO)
             return Rpi5Vc4V3dExecutionSupported(Device) ? 1 : 0;
 
-        return RequestedEscape == RPI5VC4_ESCAPE_QUERY_V3D ||
+        return RequestedEscape == RPI5VC4_ESCAPE_QUERY_PLATFORM ||
+               RequestedEscape == RPI5VC4_ESCAPE_QUERY_V3D ||
                RequestedEscape == RPI5VC4_ESCAPE_RUN_V3D_SELFTEST;
     }
 
@@ -112,6 +113,20 @@ DrvEscape(
         Info->DriverVersion = RPI5VC4_OPENGL_ICD_DRIVER_VERSION;
         memcpy(Info->DriverName, IcdName, sizeof(IcdName));
         return sizeof(*Info);
+    }
+    else if (iEsc == RPI5VC4_ESCAPE_QUERY_PLATFORM &&
+             cjOut >= sizeof(RPI5VC4_PLATFORM_INFO))
+    {
+        if (EngDeviceIoControl(Device->hDriver,
+                               IOCTL_VIDEO_RPI5VC4_QUERY_PLATFORM,
+                               NULL,
+                               0,
+                               pvOut,
+                               cjOut,
+                               &Returned) == 0)
+        {
+            return Returned;
+        }
     }
     else if (iEsc == RPI5VC4_ESCAPE_QUERY_V3D &&
         cjOut >= sizeof(RPI5VC4_V3D_INFO))
