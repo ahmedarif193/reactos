@@ -791,7 +791,6 @@ NTSTATUS CywSdioSetBlockSize(_In_ PCYW_ADAPTER Adapter, _In_ UCHAR Function, _In
 NTSTATUS CywRegisterDmaBuf(_In_ PCYW_ADAPTER Adapter, _In_ PUCHAR Buffer, _In_ ULONG Size);
 VOID CywFreeDmaBufs(_In_ PCYW_ADAPTER Adapter);
 
-NTSTATUS CywBackplaneSetWindow(_In_ PCYW_ADAPTER Adapter, _In_ ULONG Address);
 NTSTATUS CywBackplaneReadl(_In_ PCYW_ADAPTER Adapter, _In_ ULONG Address, _Out_ PULONG Value);
 NTSTATUS CywBackplaneWritel(_In_ PCYW_ADAPTER Adapter, _In_ ULONG Address, _In_ ULONG Value);
 NTSTATUS CywBackplaneReadlSc(_In_ PCYW_ADAPTER Adapter, _In_ ULONG Address, _Out_ PULONG Value, _Inout_ PUCHAR Scratch);

@@ -6,6 +6,7 @@
  */
 
 #include "cyw43455.h"
+#include <reactos/unaligned.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -313,7 +314,7 @@ CywSdpcmRecvCtl(
                                   Frame, SDPCM_HEADER_LEN);
         if (NT_SUCCESS(Status))
         {
-            FrameLen = Frame[0] | (Frame[1] << 8);
+            FrameLen = ReadUnalignedU16((PUSHORT)Frame);
             if (FrameLen >= SDPCM_HEADER_LEN &&
                 FrameLen <= CYW_CONTROL_BUFFER_SIZE &&
                 ((Frame[0] ^ Frame[2]) == 0xFF) &&
@@ -1276,13 +1277,10 @@ Exit:
     return Status;
 }
 
-NTSTATUS
-CywDisconnect(
-    _In_ PCYW_ADAPTER Adapter)
+static VOID
+CywClearLinkStateLocked(
+    _Inout_ PCYW_ADAPTER Adapter)
 {
-    ULONG Value = 0;
-
-    NdisAcquireSpinLock(&Adapter->Lock);
     Adapter->Associated = FALSE;
     Adapter->LinkUp = FALSE;
     Adapter->FirmwareHandshakeComplete = FALSE;
@@ -1290,6 +1288,16 @@ CywDisconnect(
     Adapter->ConnectedChannelFrequency = 0;
     Adapter->ConnectedRssi = 0;
     Adapter->CurrentRateUnits500Kbps = 0;
+}
+
+NTSTATUS
+CywDisconnect(
+    _In_ PCYW_ADAPTER Adapter)
+{
+    ULONG Value = 0;
+
+    NdisAcquireSpinLock(&Adapter->Lock);
+    CywClearLinkStateLocked(Adapter);
     NdisReleaseSpinLock(&Adapter->Lock);
 
     return CywFilCmdSet(Adapter, BRCMF_C_DISASSOC, &Value, sizeof(Value));
@@ -1542,13 +1550,7 @@ CywProcessEvent(
         {
             NdisAcquireSpinLock(&Adapter->Lock);
             WasUp = Adapter->LinkUp;
-            Adapter->Associated = FALSE;
-            Adapter->LinkUp = FALSE;
-            Adapter->FirmwareHandshakeComplete = FALSE;
-            Adapter->PortAuthorized = FALSE;
-            Adapter->ConnectedChannelFrequency = 0;
-            Adapter->ConnectedRssi = 0;
-            Adapter->CurrentRateUnits500Kbps = 0;
+            CywClearLinkStateLocked(Adapter);
             NdisReleaseSpinLock(&Adapter->Lock);
             if (WasUp)
             {
@@ -1945,8 +1947,8 @@ CywBusThread(
                 break;
             }
 
-            HwLen = Frame[0] | (Frame[1] << 8);
-            HwCheck = Frame[2] | (Frame[3] << 8);
+            HwLen = ReadUnalignedU16((PUSHORT)&Frame[0]);
+            HwCheck = ReadUnalignedU16((PUSHORT)&Frame[2]);
 
             if (HwLen == 0 && HwCheck == 0)
             {
@@ -2028,7 +2030,8 @@ CywBusThread(
                 ULONG p = DataOffset;
                 while (p + 2 <= FrameLen && n < RTL_NUMBER_OF(Adapter->GlomLens))
                 {
-                    Adapter->GlomLens[n] = (USHORT)(Frame[p] | (Frame[p + 1] << 8));
+                    Adapter->GlomLens[n] =
+                        ReadUnalignedU16((PUSHORT)&Frame[p]);
                     n++;
                     p += 2;
                 }
@@ -2066,7 +2069,7 @@ CywBusThread(
                         continue;
                     }
                     Sub = Frame + HdrAt;
-                    OwnLen = Sub[0] | (Sub[1] << 8);
+                    OwnLen = ReadUnalignedU16((PUSHORT)Sub);
                     if (OwnLen < SDPCM_HEADER_LEN ||
                         OwnLen > SegmentEnd - HdrAt ||
                         ((Sub[0] ^ Sub[2]) != 0xFF) ||
@@ -2165,19 +2168,14 @@ CywBusThread(
 
         CywRxChainFlush(Adapter, &ChainHead, &ChainTail, &ChainCount);
 
-        if (AnyFrame)
-        {
-            if (HadInterrupt && Adapter->SdBus.AcknowledgeInterrupt != NULL)
-            {
-                Adapter->SdBus.AcknowledgeInterrupt(Adapter->SdBus.Context);
-            }
-            continue;
-        }
-
         if (HadInterrupt && Adapter->SdBus.AcknowledgeInterrupt != NULL)
         {
             Adapter->SdBus.AcknowledgeInterrupt(Adapter->SdBus.Context);
         }
+
+        if (AnyFrame)
+            continue;
+
         RxWait.QuadPart = CYW_RX_POLL_FALLBACK;
         KeWaitForSingleObject(&Adapter->BusEvent, Executive, KernelMode,
                               FALSE, &RxWait);

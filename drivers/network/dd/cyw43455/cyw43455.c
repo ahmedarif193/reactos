@@ -1014,6 +1014,10 @@ CywMiniportReturnNetBufferLists(
 {
     PCYW_ADAPTER Adapter = (PCYW_ADAPTER)MiniportAdapterContext;
     PNET_BUFFER_LIST Nbl = NetBufferLists;
+    PCYW_RX_BUF ReturnHead = NULL;
+    PCYW_RX_BUF ReturnTail = NULL;
+    LONG Returned = 0;
+    KIRQL OldIrql;
     UNREFERENCED_PARAMETER(ReturnFlags);
 
     while (Nbl != NULL)
@@ -1024,9 +1028,34 @@ CywMiniportReturnNetBufferLists(
         NdisFreeNetBufferList(Nbl);
         if (Rb != NULL)
         {
-            CywReleaseRxBuffer(Adapter, Rb);
+            if (ReturnTail == NULL)
+                ReturnTail = Rb;
+            Rb->Next = ReturnHead;
+            ReturnHead = Rb;
+            Returned++;
         }
         Nbl = Next;
+    }
+
+    if (ReturnHead != NULL)
+    {
+        KeAcquireSpinLock(&Adapter->RxBufLock, &OldIrql);
+        ReturnTail->Next = Adapter->RxBufFree;
+        Adapter->RxBufFree = ReturnHead;
+        ASSERT(Adapter->OutstandingRxNbls >= Returned);
+        if (Adapter->OutstandingRxNbls > 0)
+        {
+            if (Returned >= Adapter->OutstandingRxNbls)
+            {
+                Adapter->OutstandingRxNbls = 0;
+                KeSetEvent(&Adapter->RxDrainEvent, IO_NO_INCREMENT, FALSE);
+            }
+            else
+            {
+                Adapter->OutstandingRxNbls -= Returned;
+            }
+        }
+        KeReleaseSpinLock(&Adapter->RxBufLock, OldIrql);
     }
 }
 
