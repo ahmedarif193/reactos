@@ -20,6 +20,7 @@ SID_IDENTIFIER_AUTHORITY SeWorldSidAuthority = {SECURITY_WORLD_SID_AUTHORITY};
 SID_IDENTIFIER_AUTHORITY SeLocalSidAuthority = {SECURITY_LOCAL_SID_AUTHORITY};
 SID_IDENTIFIER_AUTHORITY SeCreatorSidAuthority = {SECURITY_CREATOR_SID_AUTHORITY};
 SID_IDENTIFIER_AUTHORITY SeNtSidAuthority = {SECURITY_NT_AUTHORITY};
+SID_IDENTIFIER_AUTHORITY SeMandatoryLabelAuthority = {SECURITY_MANDATORY_LABEL_AUTHORITY};
 
 PSID SeNullSid = NULL;
 PSID SeWorldSid = NULL;
@@ -51,6 +52,11 @@ PSID SeRestrictedSid = NULL;
 PSID SeAnonymousLogonSid = NULL;
 PSID SeLocalServiceSid = NULL;
 PSID SeNetworkServiceSid = NULL;
+PSID SeUntrustedMandatorySid = NULL;
+PSID SeLowMandatorySid = NULL;
+PSID SeMediumMandatorySid = NULL;
+PSID SeHighMandatorySid = NULL;
+PSID SeSystemMandatorySid = NULL;
 
 typedef struct _SID_VALIDATE
 {
@@ -72,6 +78,11 @@ NTAPI
 FreeInitializedSids(VOID)
 {
     if (SeNullSid) ExFreePoolWithTag(SeNullSid, TAG_SID);
+    if (SeUntrustedMandatorySid) ExFreePoolWithTag(SeUntrustedMandatorySid, TAG_SID);
+    if (SeLowMandatorySid) ExFreePoolWithTag(SeLowMandatorySid, TAG_SID);
+    if (SeMediumMandatorySid) ExFreePoolWithTag(SeMediumMandatorySid, TAG_SID);
+    if (SeHighMandatorySid) ExFreePoolWithTag(SeHighMandatorySid, TAG_SID);
+    if (SeSystemMandatorySid) ExFreePoolWithTag(SeSystemMandatorySid, TAG_SID);
     if (SeWorldSid) ExFreePoolWithTag(SeWorldSid, TAG_SID);
     if (SeLocalSid) ExFreePoolWithTag(SeLocalSid, TAG_SID);
     if (SeCreatorOwnerSid) ExFreePoolWithTag(SeCreatorOwnerSid, TAG_SID);
@@ -154,6 +165,11 @@ SepInitSecurityIDs(VOID)
     SeAnonymousLogonSid = ExAllocatePoolWithTag(PagedPool, SidLength1, TAG_SID);
     SeLocalServiceSid = ExAllocatePoolWithTag(PagedPool, SidLength1, TAG_SID);
     SeNetworkServiceSid = ExAllocatePoolWithTag(PagedPool, SidLength1, TAG_SID);
+    SeUntrustedMandatorySid = ExAllocatePoolWithTag(PagedPool, SidLength1, TAG_SID);
+    SeLowMandatorySid = ExAllocatePoolWithTag(PagedPool, SidLength1, TAG_SID);
+    SeMediumMandatorySid = ExAllocatePoolWithTag(PagedPool, SidLength1, TAG_SID);
+    SeHighMandatorySid = ExAllocatePoolWithTag(PagedPool, SidLength1, TAG_SID);
+    SeSystemMandatorySid = ExAllocatePoolWithTag(PagedPool, SidLength1, TAG_SID);
 
     if (SeNullSid == NULL || SeWorldSid == NULL ||
         SeLocalSid == NULL || SeCreatorOwnerSid == NULL ||
@@ -169,13 +185,20 @@ SepInitSecurityIDs(VOID)
         SeAliasPrintOpsSid == NULL || SeAliasBackupOpsSid == NULL ||
         SeAuthenticatedUsersSid == NULL || SeRestrictedSid == NULL ||
         SeAnonymousLogonSid == NULL || SeLocalServiceSid == NULL ||
-        SeNetworkServiceSid == NULL)
+        SeNetworkServiceSid == NULL || SeUntrustedMandatorySid == NULL ||
+        SeLowMandatorySid == NULL || SeMediumMandatorySid == NULL ||
+        SeHighMandatorySid == NULL || SeSystemMandatorySid == NULL)
     {
         FreeInitializedSids();
         return FALSE;
     }
 
     RtlInitializeSid(SeNullSid, &SeNullSidAuthority, 1);
+    RtlInitializeSid(SeUntrustedMandatorySid, &SeMandatoryLabelAuthority, 1);
+    RtlInitializeSid(SeLowMandatorySid, &SeMandatoryLabelAuthority, 1);
+    RtlInitializeSid(SeMediumMandatorySid, &SeMandatoryLabelAuthority, 1);
+    RtlInitializeSid(SeHighMandatorySid, &SeMandatoryLabelAuthority, 1);
+    RtlInitializeSid(SeSystemMandatorySid, &SeMandatoryLabelAuthority, 1);
     RtlInitializeSid(SeWorldSid, &SeWorldSidAuthority, 1);
     RtlInitializeSid(SeLocalSid, &SeLocalSidAuthority, 1);
     RtlInitializeSid(SeCreatorOwnerSid, &SeCreatorSidAuthority, 1);
@@ -208,6 +231,16 @@ SepInitSecurityIDs(VOID)
 
     SubAuthority = RtlSubAuthoritySid(SeNullSid, 0);
     *SubAuthority = SECURITY_NULL_RID;
+    SubAuthority = RtlSubAuthoritySid(SeUntrustedMandatorySid, 0);
+    *SubAuthority = SECURITY_MANDATORY_UNTRUSTED_RID;
+    SubAuthority = RtlSubAuthoritySid(SeLowMandatorySid, 0);
+    *SubAuthority = SECURITY_MANDATORY_LOW_RID;
+    SubAuthority = RtlSubAuthoritySid(SeMediumMandatorySid, 0);
+    *SubAuthority = SECURITY_MANDATORY_MEDIUM_RID;
+    SubAuthority = RtlSubAuthoritySid(SeHighMandatorySid, 0);
+    *SubAuthority = SECURITY_MANDATORY_HIGH_RID;
+    SubAuthority = RtlSubAuthoritySid(SeSystemMandatorySid, 0);
+    *SubAuthority = SECURITY_MANDATORY_SYSTEM_RID;
     SubAuthority = RtlSubAuthoritySid(SeWorldSid, 0);
     *SubAuthority = SECURITY_WORLD_RID;
     SubAuthority = RtlSubAuthoritySid(SeLocalSid, 0);

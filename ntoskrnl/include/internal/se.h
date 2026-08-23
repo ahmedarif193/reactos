@@ -174,6 +174,7 @@ SepGetSaclFromDescriptor(
 // SID Authorities
 //
 extern SID_IDENTIFIER_AUTHORITY SeNullSidAuthority;
+extern SID_IDENTIFIER_AUTHORITY SeMandatoryLabelAuthority;
 extern SID_IDENTIFIER_AUTHORITY SeWorldSidAuthority;
 extern SID_IDENTIFIER_AUTHORITY SeLocalSidAuthority;
 extern SID_IDENTIFIER_AUTHORITY SeCreatorSidAuthority;
@@ -198,6 +199,11 @@ extern PSID SeServiceSid;
 extern PSID SeAnonymousLogonSid;
 extern PSID SePrincipalSelfSid;
 extern PSID SeLocalSystemSid;
+extern PSID SeUntrustedMandatorySid;
+extern PSID SeLowMandatorySid;
+extern PSID SeMediumMandatorySid;
+extern PSID SeHighMandatorySid;
+extern PSID SeSystemMandatorySid;
 extern PSID SeAuthenticatedUserSid;
 extern PSID SeRestrictedCodeSid;
 extern PSID SeAliasAdminsSid;

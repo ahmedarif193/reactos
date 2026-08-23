@@ -16,6 +16,15 @@
 
 /* INFORMATION CLASSES ********************************************************/
 
+#ifndef TokenElevationTypeDefault
+#define TokenElevationTypeDefault 1
+#endif
+
+typedef struct _SEP_TOKEN_APPCONTAINER_INFORMATION
+{
+    PSID TokenAppContainer;
+} SEP_TOKEN_APPCONTAINER_INFORMATION, *PSEP_TOKEN_APPCONTAINER_INFORMATION;
+
 static const INFORMATION_CLASS_INFO SeTokenInformationClass[] = {
 
     /* Class 0 not used, blame MS! */
@@ -55,6 +64,52 @@ static const INFORMATION_CLASS_INFO SeTokenInformationClass[] = {
     IQS_SAME(TOKEN_AUDIT_POLICY_INFORMATION, ULONG, ICIF_SET | ICIF_SET_SIZE_VARIABLE),
     /* TokenOrigin */
     IQS_SAME(TOKEN_ORIGIN, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE | ICIF_SET),
+    /* TokenElevationType */
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY),
+    /* TokenLinkedToken */
+    IQS_SAME(TOKEN_LINKED_TOKEN, ULONG, ICIF_QUERY),
+    /* TokenElevation */
+    IQS_SAME(TOKEN_ELEVATION, ULONG, ICIF_QUERY),
+    /* TokenHasRestrictions */
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY),
+    /* TokenAccessInformation */
+    IQS_NONE,
+    /* TokenVirtualizationAllowed */
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY),
+    /* TokenVirtualizationEnabled */
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY),
+    /* TokenIntegrityLevel */
+    IQS_SAME(TOKEN_MANDATORY_LABEL, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE | ICIF_SET | ICIF_SET_SIZE_VARIABLE),
+    /* TokenUIAccess */
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY),
+    /* TokenMandatoryPolicy */
+    IQS_SAME(TOKEN_MANDATORY_POLICY, ULONG, ICIF_QUERY | ICIF_SET),
+    /* TokenLogonSid */
+    IQS_SAME(TOKEN_GROUPS, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
+    /* TokenIsAppContainer */
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY),
+    /* TokenCapabilities */
+    IQS_SAME(TOKEN_GROUPS, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
+    /* TokenAppContainerSid */
+    IQS_SAME(SEP_TOKEN_APPCONTAINER_INFORMATION, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
+    /* TokenAppContainerNumber */
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY),
+    /* TokenUserClaimAttributes */
+    IQS_NONE,
+    /* TokenDeviceClaimAttributes */
+    IQS_NONE,
+    /* TokenRestrictedUserClaimAttributes */
+    IQS_NONE,
+    /* TokenRestrictedDeviceClaimAttributes */
+    IQS_NONE,
+    /* TokenDeviceGroups */
+    IQS_NONE,
+    /* TokenRestrictedDeviceGroups */
+    IQS_NONE,
+    /* TokenSecurityAttributes */
+    IQS_NONE,
+    /* TokenIsRestricted */
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY),
 };
 
 /* PRIVATE FUNCTIONS **********************************************************/
@@ -1182,6 +1237,242 @@ NtQueryInformationToken(
                 break;
             }
 
+            case TokenIntegrityLevel:
+            {
+                PTOKEN_MANDATORY_LABEL Label = (PTOKEN_MANDATORY_LABEL)TokenInformation;
+                PSID_AND_ATTRIBUTES Integrity;
+                ULONG SidLength;
+
+                DPRINT("NtQueryInformationToken(TokenIntegrityLevel)\n");
+                if (Token->IntegrityLevelIndex == 0)
+                {
+                    Status = STATUS_NOT_FOUND;
+                    break;
+                }
+
+                Integrity = &Token->UserAndGroups[Token->IntegrityLevelIndex];
+                SidLength = RtlLengthSid(Integrity->Sid);
+                RequiredLength = sizeof(TOKEN_MANDATORY_LABEL) + SidLength;
+
+                _SEH2_TRY
+                {
+                    if (TokenInformationLength >= RequiredLength)
+                    {
+                        Label->Label.Sid = (PSID)(Label + 1);
+                        Label->Label.Attributes = Integrity->Attributes;
+                        RtlCopySid(SidLength, Label->Label.Sid, Integrity->Sid);
+                    }
+                    else
+                    {
+                        Status = STATUS_BUFFER_TOO_SMALL;
+                    }
+
+                    *ReturnLength = RequiredLength;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+
+                break;
+            }
+
+            case TokenMandatoryPolicy:
+            {
+                DPRINT("NtQueryInformationToken(TokenMandatoryPolicy)\n");
+                RequiredLength = sizeof(TOKEN_MANDATORY_POLICY);
+
+                _SEH2_TRY
+                {
+                    if (TokenInformationLength >= RequiredLength)
+                    {
+                        ((PTOKEN_MANDATORY_POLICY)TokenInformation)->Policy = Token->MandatoryPolicy;
+                    }
+                    else
+                    {
+                        Status = STATUS_BUFFER_TOO_SMALL;
+                    }
+
+                    *ReturnLength = RequiredLength;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+
+                break;
+            }
+
+            case TokenLogonSid:
+            {
+                PTOKEN_GROUPS tg = (PTOKEN_GROUPS)TokenInformation;
+                PSID_AND_ATTRIBUTES LogonSid = NULL;
+                ULONG i;
+
+                DPRINT("NtQueryInformationToken(TokenLogonSid)\n");
+                for (i = 1; i < Token->UserAndGroupCount; i++)
+                {
+                    if ((Token->UserAndGroups[i].Attributes & SE_GROUP_LOGON_ID) == SE_GROUP_LOGON_ID)
+                    {
+                        LogonSid = &Token->UserAndGroups[i];
+                        break;
+                    }
+                }
+
+                if (LogonSid == NULL)
+                {
+                    Status = STATUS_NOT_FOUND;
+                    break;
+                }
+
+                RequiredLength = FIELD_OFFSET(TOKEN_GROUPS, Groups) +
+                                 RtlLengthSidAndAttributes(1, LogonSid);
+
+                _SEH2_TRY
+                {
+                    if (TokenInformationLength >= RequiredLength)
+                    {
+                        ULONG SidLen = RequiredLength - FIELD_OFFSET(TOKEN_GROUPS, Groups) - sizeof(SID_AND_ATTRIBUTES);
+                        PSID Sid = (PSID)&tg->Groups[1];
+
+                        tg->GroupCount = 1;
+                        Status = RtlCopySidAndAttributesArray(1,
+                                                              LogonSid,
+                                                              SidLen,
+                                                              &tg->Groups[0],
+                                                              Sid,
+                                                              &Unused.PSid,
+                                                              &Unused.Ulong);
+                    }
+                    else
+                    {
+                        Status = STATUS_BUFFER_TOO_SMALL;
+                    }
+
+                    *ReturnLength = RequiredLength;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+
+                break;
+            }
+
+            case TokenElevationType:
+            case TokenElevation:
+            case TokenHasRestrictions:
+            case TokenVirtualizationAllowed:
+            case TokenVirtualizationEnabled:
+            case TokenUIAccess:
+            case TokenIsAppContainer:
+            case TokenAppContainerNumber:
+            case TokenIsRestricted:
+            {
+                ULONG Value;
+
+                DPRINT("NtQueryInformationToken(%d)\n", TokenInformationClass);
+                RequiredLength = sizeof(ULONG);
+
+                switch (TokenInformationClass)
+                {
+                    case TokenElevationType:
+                        Value = TokenElevationTypeDefault;
+                        break;
+                    case TokenHasRestrictions:
+                    case TokenIsRestricted:
+                        Value = (Token->RestrictedSidCount != 0);
+                        break;
+                    default:
+                        Value = 0;
+                        break;
+                }
+
+                _SEH2_TRY
+                {
+                    if (TokenInformationLength >= RequiredLength)
+                    {
+                        *(PULONG)TokenInformation = Value;
+                    }
+                    else
+                    {
+                        Status = STATUS_BUFFER_TOO_SMALL;
+                    }
+
+                    *ReturnLength = RequiredLength;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+
+                break;
+            }
+
+            case TokenLinkedToken:
+            {
+                DPRINT("NtQueryInformationToken(TokenLinkedToken)\n");
+                Status = STATUS_NO_SUCH_LOGON_SESSION;
+                break;
+            }
+
+            case TokenCapabilities:
+            {
+                DPRINT("NtQueryInformationToken(TokenCapabilities)\n");
+                RequiredLength = FIELD_OFFSET(TOKEN_GROUPS, Groups);
+
+                _SEH2_TRY
+                {
+                    if (TokenInformationLength >= RequiredLength)
+                    {
+                        ((PTOKEN_GROUPS)TokenInformation)->GroupCount = 0;
+                    }
+                    else
+                    {
+                        Status = STATUS_BUFFER_TOO_SMALL;
+                    }
+
+                    *ReturnLength = RequiredLength;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+
+                break;
+            }
+
+            case TokenAppContainerSid:
+            {
+                DPRINT("NtQueryInformationToken(TokenAppContainerSid)\n");
+                RequiredLength = sizeof(SEP_TOKEN_APPCONTAINER_INFORMATION);
+
+                _SEH2_TRY
+                {
+                    if (TokenInformationLength >= RequiredLength)
+                    {
+                        ((PSEP_TOKEN_APPCONTAINER_INFORMATION)TokenInformation)->TokenAppContainer = NULL;
+                    }
+                    else
+                    {
+                        Status = STATUS_BUFFER_TOO_SMALL;
+                    }
+
+                    *ReturnLength = RequiredLength;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+
+                break;
+            }
             default:
                 DPRINT1("NtQueryInformationToken(%d) invalid information class\n", TokenInformationClass);
                 Status = STATUS_INVALID_INFO_CLASS;
@@ -1801,6 +2092,100 @@ NtSetInformationToken(
                 break;
             }
 
+            case TokenIntegrityLevel:
+            {
+                TOKEN_MANDATORY_LABEL CapturedLabel;
+                PSID_AND_ATTRIBUTES Integrity;
+                PSID NewSid = NULL;
+                ULONG NewRid = 0, OldRid;
+
+                _SEH2_TRY
+                {
+                    CapturedLabel = *(PTOKEN_MANDATORY_LABEL)TokenInformation;
+                    if (!RtlValidSid(CapturedLabel.Label.Sid) ||
+                        *RtlSubAuthorityCountSid(CapturedLabel.Label.Sid) != 1 ||
+                        !RtlEqualMemory(RtlIdentifierAuthoritySid(CapturedLabel.Label.Sid),
+                                        &SeMandatoryLabelAuthority,
+                                        sizeof(SID_IDENTIFIER_AUTHORITY)))
+                    {
+                        Status = STATUS_INVALID_SID;
+                        _SEH2_YIELD(goto Cleanup);
+                    }
+                    NewRid = *RtlSubAuthoritySid(CapturedLabel.Label.Sid, 0);
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                    _SEH2_YIELD(goto Cleanup);
+                }
+                _SEH2_END;
+
+                switch (NewRid)
+                {
+                    case SECURITY_MANDATORY_UNTRUSTED_RID: NewSid = SeUntrustedMandatorySid; break;
+                    case SECURITY_MANDATORY_LOW_RID: NewSid = SeLowMandatorySid; break;
+                    case SECURITY_MANDATORY_MEDIUM_RID: NewSid = SeMediumMandatorySid; break;
+                    case SECURITY_MANDATORY_HIGH_RID: NewSid = SeHighMandatorySid; break;
+                    case SECURITY_MANDATORY_SYSTEM_RID: NewSid = SeSystemMandatorySid; break;
+                    default: break;
+                }
+
+                if (NewSid == NULL)
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                    break;
+                }
+
+                if (Token->IntegrityLevelIndex == 0)
+                {
+                    Status = STATUS_NOT_FOUND;
+                    break;
+                }
+
+                SepAcquireTokenLockExclusive(Token);
+
+                Integrity = &Token->UserAndGroups[Token->IntegrityLevelIndex];
+                OldRid = *RtlSubAuthoritySid(Integrity->Sid, 0);
+                if (NewRid > OldRid && !SeSinglePrivilegeCheck(SeTcbPrivilege, PreviousMode))
+                {
+                    SepReleaseTokenLock(Token);
+                    Status = STATUS_PRIVILEGE_NOT_HELD;
+                    break;
+                }
+
+                RtlCopySid(RtlLengthSid(Integrity->Sid), Integrity->Sid, NewSid);
+                ExAllocateLocallyUniqueId(&Token->ModifiedId);
+                SepReleaseTokenLock(Token);
+                break;
+            }
+
+            case TokenMandatoryPolicy:
+            {
+                ULONG Policy = 0;
+
+                _SEH2_TRY
+                {
+                    Policy = ((PTOKEN_MANDATORY_POLICY)TokenInformation)->Policy;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                    _SEH2_YIELD(goto Cleanup);
+                }
+                _SEH2_END;
+
+                if (Policy & ~TOKEN_MANDATORY_POLICY_VALID_MASK)
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                    break;
+                }
+
+                SepAcquireTokenLockExclusive(Token);
+                Token->MandatoryPolicy = Policy;
+                ExAllocateLocallyUniqueId(&Token->ModifiedId);
+                SepReleaseTokenLock(Token);
+                break;
+            }
             default:
             {
                 DPRINT1("Invalid TokenInformationClass: 0x%lx\n",
