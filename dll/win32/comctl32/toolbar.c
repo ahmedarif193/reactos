@@ -284,6 +284,17 @@ static BOOL TOOLBAR_IsThemed(const TOOLBAR_INFO *infoPtr)
 #endif
 }
 
+#ifdef __REACTOS__
+static inline DWORD TOOLBAR_GetButtonDTFlags(const TOOLBAR_INFO *infoPtr, const TBUTTON_INFO *btnPtr)
+{
+    DWORD flags = infoPtr->dwDTFlags;
+
+    if (btnPtr->fsStyle & BTNS_NOPREFIX)
+        flags |= DT_NOPREFIX;
+    return flags;
+}
+#endif
+
 static LPWSTR
 TOOLBAR_GetText(const TOOLBAR_INFO *infoPtr, const TBUTTON_INFO *btnPtr)
 {
@@ -614,6 +625,9 @@ TOOLBAR_DrawArrow (HDC hdc, INT left, INT top, COLORREF clr)
  */
 static void
 TOOLBAR_DrawString (const TOOLBAR_INFO *infoPtr, RECT *rcText, LPCWSTR lpText,
+#ifdef __REACTOS__
+                    const TBUTTON_INFO *btnPtr,
+#endif
                     const NMTBCUSTOMDRAW *tbcd, DWORD dwItemCDFlag)
 {
     HDC hdc = tbcd->nmcd.hdc;
@@ -629,6 +643,29 @@ TOOLBAR_DrawString (const TOOLBAR_INFO *infoPtr, RECT *rcText, LPCWSTR lpText,
               wine_dbgstr_rect(rcText));
 
 	hOldFont = SelectObject (hdc, infoPtr->hFont);
+#if defined(__REACTOS__) && __WINE_COMCTL32_VERSION == 6
+        if (infoPtr->hTheme)
+        {
+            DWORD textFlags2 = 0;
+            int stateId = TS_NORMAL;
+
+            if (state & CDIS_DISABLED)
+            {
+                stateId = TS_DISABLED;
+                textFlags2 = DTT_GRAYED;
+            }
+            else if (state & CDIS_SELECTED)
+                stateId = TS_PRESSED;
+            else if (state & CDIS_CHECKED)
+                stateId = (state & CDIS_HOT) ? TS_HOTCHECKED : TS_CHECKED;
+            else if (state & CDIS_HOT)
+                stateId = TS_HOT;
+
+            DrawThemeText(infoPtr->hTheme, hdc, TP_BUTTON, stateId, lpText, -1, TOOLBAR_GetButtonDTFlags(infoPtr, btnPtr), textFlags2, rcText);
+            SelectObject(hdc, hOldFont);
+            return;
+        }
+#endif
 	if ((state & CDIS_HOT) && (dwItemCDFlag & TBCDRF_HILITEHOTTRACK )) {
 	    clrOld = SetTextColor (hdc, tbcd->clrTextHighlight);
 	}
@@ -1154,7 +1191,11 @@ TOOLBAR_DrawButton (const TOOLBAR_INFO *infoPtr, TBUTTON_INFO *btnPtr, HDC hdc, 
 
     oldBkMode = SetBkMode (hdc, tbcd.nStringBkMode);
     if (!(infoPtr->dwExStyle & TBSTYLE_EX_MIXEDBUTTONS) || (btnPtr->fsStyle & BTNS_SHOWTEXT))
-        TOOLBAR_DrawString (infoPtr, &rcText, lpText, &tbcd, dwItemCDFlag);
+        TOOLBAR_DrawString (infoPtr, &rcText, lpText,
+#ifdef __REACTOS__
+                            btnPtr,
+#endif
+                            &tbcd, dwItemCDFlag);
     SetBkMode (hdc, oldBkMode);
 
     TOOLBAR_DrawImage(infoPtr, btnPtr, rcBitmap.left, rcBitmap.top, &tbcd, dwItemCDFlag);
