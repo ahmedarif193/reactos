@@ -1132,12 +1132,21 @@ SepPerformTokenFiltering(
          */
         AccessToken->RestrictedSidCount = RestrictedSidsCount;
         AccessToken->RestrictedSids = EndMem;
-        EndMem = (PVOID)((ULONG_PTR)EndMem + RestrictedSidsLength);
-        VariableLength -= RestrictedSidsLength;
+        EndMem = &AccessToken->RestrictedSids[RestrictedSidsCount];
+        VariableLength -= ((ULONG_PTR)EndMem - (ULONG_PTR)AccessToken->RestrictedSids);
 
-        RtlCopyMemory(AccessToken->RestrictedSids,
-                      RestrictedSidsIntoToken,
-                      AccessToken->RestrictedSidCount * sizeof(SID_AND_ATTRIBUTES));
+        Status = RtlCopySidAndAttributesArray(RestrictedSidsCount,
+                                              RestrictedSidsIntoToken,
+                                              VariableLength,
+                                              AccessToken->RestrictedSids,
+                                              EndMem,
+                                              &EndMem,
+                                              &VariableLength);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("SepPerformTokenFiltering(): Failed to copy the new restricted SIDs into token (Status 0x%lx)\n", Status);
+            goto Quit;
+        }
 
         /*
          * As we've copied the restricted SIDs into
