@@ -2251,6 +2251,9 @@ BOOL WINAPI IsThemeBackgroundPartiallyTransparent(HTHEME hTheme, int iPartId,
 
     GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_BGTYPE, &bgtype);
 
+#ifdef __REACTOS__
+    if (bgtype == BT_NONE) return TRUE;
+#endif
     if (bgtype != BT_IMAGEFILE) return FALSE;
 
     if (FAILED(UXTHEME_LoadImage(hTheme, iPartId, iStateId, &rect, FALSE, &bmpSrc, &rcSrc,
