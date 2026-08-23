@@ -18,6 +18,11 @@ typedef struct _RTL_MUI_REGISTRY_VALUE
     ULONG CharacterCount;
 } RTL_MUI_REGISTRY_VALUE, *PRTL_MUI_REGISTRY_VALUE;
 
+#define RTL_MUI_MAX_PROCESS_LANGUAGES 5
+
+static PWSTR RtlpProcessPreferredLanguages;
+static ULONG RtlpProcessPreferredLanguageCharacters;
+
 static NTSTATUS
 RtlpOpenUserLanguageKey(PHANDLE KeyHandle)
 {
@@ -227,6 +232,219 @@ RtlpGetDefaultPreferredLanguage(DWORD Flags, PULONG Count, PWSTR Buffer, PULONG 
     Languages[LocaleName.Length / sizeof(WCHAR)] = UNICODE_NULL;
     Languages[LocaleName.Length / sizeof(WCHAR) + 1] = UNICODE_NULL;
     return RtlpWritePreferredLanguages(Flags, Languages, LocaleName.Length / sizeof(WCHAR) + 2, Count, Buffer, Size);
+}
+
+static INT
+RtlpHexDigitValue(WCHAR Character)
+{
+    if (Character >= L'0' && Character <= L'9') return Character - L'0';
+    if (Character >= L'A' && Character <= L'F') return Character - L'A' + 10;
+    if (Character >= L'a' && Character <= L'f') return Character - L'a' + 10;
+    return -1;
+}
+
+static NTSTATUS
+RtlpCanonicalizePreferredLanguage(DWORD Flags, PCWSTR Input, PWSTR Output, PULONG Length)
+{
+    UNICODE_STRING LocaleName;
+    LCID Locale;
+    NTSTATUS Status;
+
+    if (Flags & MUI_LANGUAGE_ID)
+    {
+        ULONG Value = 0;
+        ULONG Index;
+
+        if (wcslen(Input) != 4) return STATUS_INVALID_PARAMETER;
+        for (Index = 0; Index < 4; ++Index)
+        {
+            INT Digit = RtlpHexDigitValue(Input[Index]);
+
+            if (Digit < 0) return STATUS_INVALID_PARAMETER;
+            Value = (Value << 4) | Digit;
+        }
+        Locale = MAKELCID((LANGID)Value, SORT_DEFAULT);
+    }
+    else
+    {
+        Status = RtlLocaleNameToLcid(Input, &Locale, RTL_LOCALE_ALLOW_NEUTRAL_NAMES);
+        if (!NT_SUCCESS(Status)) return Status;
+    }
+
+    LocaleName.Buffer = Output;
+    LocaleName.Length = 0;
+    LocaleName.MaximumLength = LOCALE_NAME_MAX_LENGTH * sizeof(WCHAR);
+    Status = RtlLcidToLocaleName(Locale, &LocaleName, RTL_LOCALE_ALLOW_NEUTRAL_NAMES, FALSE);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    *Length = LocaleName.Length / sizeof(WCHAR);
+    Output[*Length] = UNICODE_NULL;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+RtlpNormalizeProcessPreferredLanguages(DWORD Flags,
+                                       PCZZWSTR Input,
+                                       PWSTR *Languages,
+                                       PULONG CharacterCount,
+                                       PULONG LanguageCount)
+{
+    WCHAR Canonical[RTL_MUI_MAX_PROCESS_LANGUAGES][LOCALE_NAME_MAX_LENGTH];
+    ULONG Lengths[RTL_MUI_MAX_PROCESS_LANGUAGES];
+    ULONG ValidCount = 0;
+    ULONG UniqueCount = 0;
+    ULONG RequiredCharacters = 1;
+    PCWSTR Current = Input;
+    PWSTR Result;
+    PWSTR Output;
+    ULONG Index;
+
+    while (*Current && ValidCount < RTL_MUI_MAX_PROCESS_LANGUAGES)
+    {
+        ULONG Length;
+        ULONG InputLength = wcslen(Current);
+        NTSTATUS Status;
+        BOOLEAN Duplicate = FALSE;
+
+        Status = RtlpCanonicalizePreferredLanguage(Flags,
+                                                   Current,
+                                                   Canonical[UniqueCount],
+                                                   &Length);
+        Current += InputLength + 1;
+        if (!NT_SUCCESS(Status)) continue;
+
+        ++ValidCount;
+        for (Index = 0; Index < UniqueCount; ++Index)
+        {
+            UNICODE_STRING Existing;
+            UNICODE_STRING Candidate;
+
+            Existing.Buffer = Canonical[Index];
+            Existing.Length = Lengths[Index] * sizeof(WCHAR);
+            Existing.MaximumLength = Existing.Length;
+            Candidate.Buffer = Canonical[UniqueCount];
+            Candidate.Length = Length * sizeof(WCHAR);
+            Candidate.MaximumLength = Candidate.Length;
+            if (RtlEqualUnicodeString(&Existing, &Candidate, TRUE))
+            {
+                Duplicate = TRUE;
+                break;
+            }
+        }
+        if (Duplicate) continue;
+
+        Lengths[UniqueCount] = Length;
+        RequiredCharacters += Length + 1;
+        ++UniqueCount;
+    }
+
+    if (!UniqueCount)
+    {
+        *Languages = NULL;
+        *CharacterCount = 0;
+        *LanguageCount = 0;
+        return STATUS_SUCCESS;
+    }
+
+    Result = RtlAllocateHeap(RtlGetProcessHeap(),
+                             0,
+                             RequiredCharacters * sizeof(WCHAR));
+    if (!Result) return STATUS_NO_MEMORY;
+
+    Output = Result;
+    for (Index = 0; Index < UniqueCount; ++Index)
+    {
+        RtlCopyMemory(Output,
+                      Canonical[Index],
+                      (Lengths[Index] + 1) * sizeof(WCHAR));
+        Output += Lengths[Index] + 1;
+    }
+    *Output = UNICODE_NULL;
+
+    *Languages = Result;
+    *CharacterCount = RequiredCharacters;
+    *LanguageCount = UniqueCount;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+RtlGetProcessPreferredUILanguages(DWORD Flags, PULONG Count, PWSTR Buffer, PULONG Size)
+{
+    NTSTATUS Status;
+
+    if (!Count || !Size ||
+        (Flags & ~(MUI_LANGUAGE_NAME | MUI_LANGUAGE_ID)) ||
+        ((Flags & MUI_LANGUAGE_NAME) && (Flags & MUI_LANGUAGE_ID)) ||
+        (*Size && !Buffer))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    RtlAcquirePebLock();
+    if (RtlpProcessPreferredLanguages)
+    {
+        Status = RtlpWritePreferredLanguages(Flags,
+                                             RtlpProcessPreferredLanguages,
+                                             RtlpProcessPreferredLanguageCharacters,
+                                             Count,
+                                             Buffer,
+                                             Size);
+    }
+    else if (Buffer && *Size < 2)
+    {
+        *Size = 2;
+        Status = STATUS_BUFFER_TOO_SMALL;
+    }
+    else
+    {
+        if (Buffer)
+        {
+            Buffer[0] = UNICODE_NULL;
+            Buffer[1] = UNICODE_NULL;
+        }
+        *Size = 2;
+        Status = STATUS_SUCCESS;
+    }
+    RtlReleasePebLock();
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+RtlSetProcessPreferredUILanguages(DWORD Flags, PCZZWSTR Buffer, PULONG Count)
+{
+    PWSTR Languages = NULL;
+    PWSTR OldLanguages;
+    ULONG CharacterCount = 0;
+    ULONG LanguageCount = 0;
+    NTSTATUS Status;
+
+    if ((Flags & ~(MUI_LANGUAGE_NAME | MUI_LANGUAGE_ID)) ||
+        ((Flags & MUI_LANGUAGE_NAME) && (Flags & MUI_LANGUAGE_ID)))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Buffer)
+    {
+        Status = RtlpNormalizeProcessPreferredLanguages(Flags,
+                                                        Buffer,
+                                                        &Languages,
+                                                        &CharacterCount,
+                                                        &LanguageCount);
+        if (!NT_SUCCESS(Status)) return Status;
+    }
+
+    RtlAcquirePebLock();
+    OldLanguages = RtlpProcessPreferredLanguages;
+    RtlpProcessPreferredLanguages = Languages;
+    RtlpProcessPreferredLanguageCharacters = CharacterCount;
+    RtlReleasePebLock();
+
+    if (OldLanguages) RtlFreeHeap(RtlGetProcessHeap(), 0, OldLanguages);
+    if (Buffer && Count) *Count = LanguageCount;
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS

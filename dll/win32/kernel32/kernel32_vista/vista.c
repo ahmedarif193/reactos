@@ -602,9 +602,8 @@ GetFileMUIPath(
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
-#if 0 // This is Windows 7+
 BOOL
 WINAPI
 GetProcessPreferredUILanguages(
@@ -613,9 +612,15 @@ GetProcessPreferredUILanguages(
     PZZWSTR pwszLanguagesBuffer,
     PULONG pcchLanguagesBuffer)
 {
-    return K32GetPreferredUILanguages(dwFlags, MUI_LANGUAGE_ID | MUI_LANGUAGE_NAME, LOCALE_USER_DEFAULT, pulNumLanguages, pwszLanguagesBuffer, pcchLanguagesBuffer);
+    NTSTATUS Status = RtlGetProcessPreferredUILanguages(dwFlags,
+                                                        pulNumLanguages,
+                                                        pwszLanguagesBuffer,
+                                                        pcchLanguagesBuffer);
+
+    if (NT_SUCCESS(Status)) return TRUE;
+    BaseSetLastNTError(Status);
+    return FALSE;
 }
-#endif
 
 /*
  * The preferred-UI-language APIs all return the same shape: a double-null
@@ -757,9 +762,8 @@ GetUserPreferredUILanguages(
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
-#if 0 // Tis is Windows 7+
 BOOL
 WINAPI
 SetProcessPreferredUILanguages(
@@ -767,11 +771,14 @@ SetProcessPreferredUILanguages(
     PCZZWSTR pwszLanguagesBuffer,
     PULONG pulNumLanguages)
 {
-    DPRINT1("%x %p %p\n", dwFlags, pwszLanguagesBuffer, pulNumLanguages);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    NTSTATUS Status = RtlSetProcessPreferredUILanguages(dwFlags,
+                                                        pwszLanguagesBuffer,
+                                                        pulNumLanguages);
+
+    if (NT_SUCCESS(Status)) return TRUE;
+    BaseSetLastNTError(Status);
     return FALSE;
 }
-#endif
 
 /*
  * @unimplemented

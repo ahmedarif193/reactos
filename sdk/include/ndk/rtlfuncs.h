@@ -5347,6 +5347,23 @@ RtlLocaleNameToLcid(
 NTSYSAPI
 NTSTATUS
 NTAPI
+RtlGetProcessPreferredUILanguages(
+    _In_ DWORD Flags,
+    _Out_ PULONG Count,
+    _Out_writes_opt_(*Size) PWSTR Buffer,
+    _Inout_ PULONG Size);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlSetProcessPreferredUILanguages(
+    _In_ DWORD Flags,
+    _In_opt_ PCZZWSTR Buffer,
+    _Out_opt_ PULONG Count);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
 RtlGetUserPreferredUILanguages(
     _In_ DWORD Flags,
     _In_ ULONG Reserved,

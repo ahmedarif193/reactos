@@ -40,6 +40,7 @@ list(APPEND SOURCE
     Mailslot.c
     MultiByteToWideChar.c
     Pipes.c
+    ProcessPreferredUILanguages.c
     PrivMoveFileIdentityW.c
     QueueUserAPC.c
     ReadFile.c
