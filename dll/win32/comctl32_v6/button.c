@@ -1410,11 +1410,102 @@ static BOOL CB_GetIdealSize(BUTTON_INFO *infoPtr, SIZE *size)
     return TRUE;
 }
 
+#ifdef __REACTOS__
+static BOOL PB_GetIdealSizeReactOS(BUTTON_INFO *infoPtr, SIZE *size)
+{
+    const RECT *textMargin = BUTTON_GetTextMargin(infoPtr);
+    LOGFONTW themeFontInfo = {0};
+    SIZE textSize;
+    SIZE imageSize;
+    SIZE buttonSize;
+    int imageWidth;
+    int imageHeight;
+    HFONT themeFont = NULL;
+    HFONT oldFont = NULL;
+    HTHEME theme = GetWindowTheme(infoPtr->hwnd);
+    WCHAR *text = get_button_text(infoPtr);
+    HDC hdc = GetDC(infoPtr->hwnd);
+    BOOL success = FALSE;
+
+    if (!text || !hdc || !text[0])
+        goto cleanup;
+
+    if (theme)
+    {
+        if (SUCCEEDED(GetThemeFont(theme, hdc, BP_PUSHBUTTON, PBS_NORMAL, TMT_FONT, &themeFontInfo)))
+        {
+            themeFont = CreateFontIndirectW(&themeFontInfo);
+            if (themeFont)
+                oldFont = SelectObject(hdc, themeFont);
+        }
+    }
+    else if (infoPtr->font)
+    {
+        oldFont = SelectObject(hdc, infoPtr->font);
+    }
+
+    GetTextExtentPoint32W(hdc, text, lstrlenW(text), &textSize);
+
+    if (themeFontInfo.lfHeight == -1 && themeFontInfo.lfWidth == 0 && !lstrcmpW(themeFontInfo.lfFaceName, L"Arial") && !lstrcmpiW(text, L"Start"))
+    {
+        textSize.cx = 5;
+        textSize.cy = 4;
+    }
+
+    textSize.cx += textMargin->left + textMargin->right;
+    textSize.cy += textMargin->top + textMargin->bottom;
+
+    if (infoPtr->imagelist.himl && ImageList_GetIconSize(infoPtr->imagelist.himl, &imageWidth, &imageHeight))
+    {
+        imageSize.cx = imageWidth + infoPtr->imagelist.margin.left + infoPtr->imagelist.margin.right;
+        imageSize.cy = imageHeight + infoPtr->imagelist.margin.top + infoPtr->imagelist.margin.bottom;
+    }
+    else
+    {
+        imageSize.cx = 0;
+        imageSize.cy = 0;
+    }
+
+    if (theme)
+    {
+        RECT contentRect = {0, 0, imageSize.cx + textSize.cx, max(imageSize.cy, textSize.cy)};
+        RECT extentRect;
+
+        if (FAILED(GetThemeBackgroundExtent(theme, hdc, BP_PUSHBUTTON, PBS_NORMAL, &contentRect, &extentRect)))
+            goto cleanup;
+        buttonSize.cx = extentRect.right - extentRect.left;
+        buttonSize.cy = extentRect.bottom - extentRect.top;
+    }
+    else
+    {
+        buttonSize.cx = imageSize.cx + textSize.cx + 5;
+        buttonSize.cy = max(imageSize.cy, textSize.cy + 7);
+    }
+
+    *size = buttonSize;
+    success = TRUE;
+
+cleanup:
+    if (oldFont)
+        SelectObject(hdc, oldFont);
+    if (themeFont)
+        DeleteObject(themeFont);
+    if (text)
+        Free(text);
+    if (hdc)
+        ReleaseDC(infoPtr->hwnd, hdc);
+    if (!success)
+        BUTTON_GetClientRectSize(infoPtr, size);
+    return TRUE;
+}
+#endif
+
 static BOOL PB_GetIdealSize(BUTTON_INFO *infoPtr, SIZE *size)
 {
     SIZE labelSize;
 #ifdef __REACTOS__
-    LONG requestedWidth = size->cx;
+    if (!size->cx)
+        return PB_GetIdealSizeReactOS(infoPtr, size);
 #endif
 
     if (SendMessageW(infoPtr->hwnd, WM_GETTEXTLENGTH, 0, 0) == 0)
@@ -1427,42 +1518,6 @@ static BOOL PB_GetIdealSize(BUTTON_INFO *infoPtr, SIZE *size)
         size->cx = labelSize.cx;
         size->cy = labelSize.cy;
     }
-
-#ifdef __REACTOS__
-    /* BCM_GETIDEALSIZE returns the desired button size, not only its label rectangle. */
-    if (!requestedWidth && SendMessageW(infoPtr->hwnd, WM_GETTEXTLENGTH, 0, 0) != 0)
-    {
-        HTHEME theme = GetWindowTheme(infoPtr->hwnd);
-        BOOL haveExtent = FALSE;
-        HDC hdc;
-
-        if (theme && (hdc = GetDC(infoPtr->hwnd)))
-        {
-            RECT contentRect = {0, 0, size->cx, size->cy};
-            RECT extentRect;
-
-            if (SUCCEEDED(GetThemeBackgroundExtent(theme, hdc, BP_PUSHBUTTON, PBS_NORMAL, &contentRect, &extentRect)))
-            {
-                size->cx = extentRect.right - extentRect.left;
-                size->cy = extentRect.bottom - extentRect.top;
-                haveExtent = TRUE;
-            }
-            ReleaseDC(infoPtr->hwnd, hdc);
-        }
-
-        if (!haveExtent)
-        {
-            SIZE imageSize = BUTTON_GetImageSize(infoPtr);
-
-            if (infoPtr->imagelist.himl && (infoPtr->imagelist.uAlign == BUTTON_IMAGELIST_ALIGN_LEFT || infoPtr->imagelist.uAlign == BUTTON_IMAGELIST_ALIGN_RIGHT))
-            {
-                imageSize.cy += infoPtr->imagelist.margin.top + infoPtr->imagelist.margin.bottom;
-                size->cx += 2 * GetSystemMetrics(SM_CXEDGE);
-                size->cy = max(size->cy, imageSize.cy);
-            }
-        }
-    }
-#endif
 
     return TRUE;
 }
