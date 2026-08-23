@@ -250,7 +250,9 @@ DC_vSelectSurface(PDC pdc, PSURFACE psurfNew)
     PSURFACE psurfOld = pdc->dclevel.pSurface;
     if (psurfOld)
     {
-        psurfOld->hdc = NULL;
+        /* Saved DCs share the surface reference but do not own its selection. */
+        if (psurfOld->hdc == pdc->BaseObject.hHmgr)
+            psurfOld->hdc = NULL;
         SURFACE_ShareUnlockSurface(psurfOld);
     }
     if (psurfNew)

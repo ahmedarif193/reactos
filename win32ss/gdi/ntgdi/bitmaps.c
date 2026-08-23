@@ -215,7 +215,10 @@ NtGdiCreateBitmap(
     {
         DPRINT1("Invalid bitmap format! Width=%d, Height=%d, Bpp=%u, Planes=%u\n",
                 nWidth, nHeight, cBitsPixel, cPlanes);
-        EngSetLastError(ERROR_INVALID_PARAMETER);
+        /* A negative height with an initial-bits pointer fails before the
+           parameter-error path and leaves the caller's last error intact. */
+        if (!((nHeight < 0) && pUnsafeBits))
+            EngSetLastError(ERROR_INVALID_PARAMETER);
         return NULL;
     }
 

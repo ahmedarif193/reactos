@@ -259,9 +259,15 @@ NtGdiSelectBrush(
     IN HBRUSH hBrush)
 {
     PDC pDC;
+    PBRUSH pBrush;
     HBRUSH hOrgBrush;
 
     if (hDC == NULL || hBrush == NULL) return NULL;
+
+    pBrush = BRUSH_ShareLockBrush(hBrush);
+    if (!pBrush)
+        return NULL;
+    BRUSH_ShareUnlockBrush(pBrush);
 
     pDC = DC_LockDc(hDC);
     if (!pDC)
@@ -289,9 +295,15 @@ NtGdiSelectPen(
     IN HPEN hPen)
 {
     PDC pDC;
+    PBRUSH pPen;
     HPEN hOrgPen;
 
     if (hDC == NULL || hPen == NULL) return NULL;
+
+    pPen = PEN_ShareLockPen(hPen);
+    if (!pPen)
+        return NULL;
+    PEN_ShareUnlockPen(pPen);
 
     pDC = DC_LockDc(hDC);
     if (!pDC)
@@ -335,6 +347,34 @@ DC_bIsBitmapCompatible(PDC pdc, PSURFACE psurf)
     return FALSE;
 }
 
+static
+BOOL
+DC_bIsSurfaceSaved(PDC pdc, PSURFACE psurf)
+{
+    HDC hdcSave = pdc->dclevel.hdcSave;
+
+    while (hdcSave)
+    {
+        PDC pdcSave = DC_LockDc(hdcSave);
+        HDC hdcNext;
+        BOOL bFound;
+
+        if (!pdcSave)
+            break;
+
+        hdcNext = pdcSave->dclevel.hdcSave;
+        bFound = (pdcSave->dclevel.pSurface == psurf);
+        DC_UnlockDc(pdcSave);
+
+        if (bFound)
+            return TRUE;
+
+        hdcSave = hdcNext;
+    }
+
+    return FALSE;
+}
+
 /*
  * @implemented
  */
@@ -353,7 +393,6 @@ NtGdiSelectBitmap(
     /* Verify parameters */
     if (hdc == NULL)
     {
-        EngSetLastError(ERROR_INVALID_HANDLE);
         return NULL;
     }
     if (hbmp == NULL) return NULL;
@@ -458,8 +497,10 @@ NtGdiSelectBitmap(
     /* Check if there was a bitmap selected before */
     if (psurfOld)
     {
-        /* Reset hdc of the old bitmap, it isn't selected anymore */
-        psurfOld->hdc = NULL;
+        /* A SaveDC level keeps the bitmap reserved until it is restored or
+           discarded, even while another bitmap is current in the live DC. */
+        if (!DC_bIsSurfaceSaved(pdc, psurfOld))
+            psurfOld->hdc = NULL;
 
         /* Dereference the old bitmap */
         SURFACE_ShareUnlockSurface(psurfOld);

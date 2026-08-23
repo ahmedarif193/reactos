@@ -391,11 +391,16 @@ EngCreatePalette(
 {
     PPALETTE ppal;
     HPALETTE hpal;
+    ULONG ulOwner;
+
+    ulOwner = (iMode & PAL_SETPOWNER) ?
+              GDI_OBJ_HMGR_POWNED : GDI_OBJ_HMGR_PUBLIC;
+    iMode &= ~PAL_SETPOWNER;
 
     ppal = PALETTE_AllocPalette(iMode, cColors, (PPALETTEENTRY)pulColors, flRed, flGreen, flBlue);
     if (!ppal) return NULL;
 
-    hpal = GDIOBJ_hInsertObject(&ppal->BaseObject, GDI_OBJ_HMGR_PUBLIC);
+    hpal = GDIOBJ_hInsertObject(&ppal->BaseObject, ulOwner);
     if (!hpal)
     {
         DPRINT1("Could not insert palette into handle table.\n");
@@ -860,6 +865,8 @@ IntGetPaletteEntries(
             return 0;
         }
         memcpy(pe, palGDI->IndexedColors + StartIndex, Entries * sizeof(PALETTEENTRY));
+        for (UINT i = 0; i < Entries; i++)
+            pe[i].peFlags &= ~PC_SYS_USED;
     }
     else
     {
@@ -1108,11 +1115,17 @@ NtGdiDoPalette(
 
 		case GdiPalSetEntries:
 			if (pEntries)
-				ret = IntSetPaletteEntries((HPALETTE)hObj, iStart, cEntries, (CONST LPPALETTEENTRY)pEntries);
+			{
+				if (bInbound)
+					ret = IntSetPaletteEntries((HPALETTE)hObj, iStart, cEntries, (CONST LPPALETTEENTRY)pEntries);
+				else
+					ret = IntGetPaletteEntries((HPALETTE)hObj, iStart, cEntries, (LPPALETTEENTRY)pEntries);
+			}
 			break;
 
 		case GdiPalGetEntries:
-			ret = IntGetPaletteEntries((HPALETTE)hObj, iStart, cEntries, (LPPALETTEENTRY)pEntries);
+			if (!bInbound)
+				ret = IntGetPaletteEntries((HPALETTE)hObj, iStart, cEntries, (LPPALETTEENTRY)pEntries);
 			break;
 
 		case GdiPalGetSystemEntries:
@@ -1284,7 +1297,7 @@ NtGdiEngCreatePalette(
     }
     _SEH2_END;
 
-    hPal = EngCreatePalette( iMode/*|PAL_SETPOWNER*/, cColors, pulcSafe, flRed, flGreen, flBlue );
+    hPal = EngCreatePalette(iMode | PAL_SETPOWNER, cColors, pulcSafe, flRed, flGreen, flBlue);
 
     if ( cColors > WINDDI_MAXSETPALETTECOLORS ) ExFreePoolWithTag( pulcSafe, GDITAG_UMPD );
 
