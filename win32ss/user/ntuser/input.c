@@ -304,7 +304,9 @@ RawInputThreadMain(VOID)
                 }
                 else if (pSignaledObject == MasterTimer)
                 {
+                    UserEnterExclusive();
                     ProcessTimers();
+                    UserLeave();
                 }
                 else if (pSignaledObject == ShutdownEvent)
                 {
