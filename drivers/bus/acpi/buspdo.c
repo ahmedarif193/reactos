@@ -2629,9 +2629,10 @@ Bus_PDO_QueryDeviceCaps(
         (device->flags.hardware_id &&
          (strstr(device->pnp.hardware_id, ACPI_BUTTON_HID_LID) ||
           strstr(device->pnp.hardware_id, ACPI_THERMAL_HID) ||
+          strstr(device->pnp.hardware_id, ACPI_FAN_HID) ||
           strstr(device->pnp.hardware_id, ACPI_PROCESSOR_HID))))
     {
-        /* Allow ACPI to control lid, thermal zone, processor, or fixed feature button */
+        /* Allow ACPI to control lid, thermal zone, fan, processor, or fixed feature button */
         deviceCapabilities->RawDeviceOK = TRUE;
     }
 
