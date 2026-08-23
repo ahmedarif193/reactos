@@ -79,7 +79,17 @@ BASE_SEARCH_PATH_TYPE BaseProcessOrder[BaseSearchPathMax] =
     BaseSearchPathInvalid
 };
 
+BASE_SEARCH_PATH_TYPE BaseProcessOrderSafe[BaseSearchPathMax] =
+{
+    BaseSearchPathApp,
+    BaseSearchPathDefault,
+    BaseSearchPathCurrent,
+    BaseSearchPathEnv,
+    BaseSearchPathInvalid
+};
+
 BASE_CURRENT_DIR_PLACEMENT BasepDllCurrentDirPlacement = BaseCurrentDirPlacementInvalid;
+static LONG BasepSearchPathMode;
 
 extern UNICODE_STRING BasePathVariableName;
 
@@ -406,10 +416,12 @@ LPWSTR
 WINAPI
 BaseComputeProcessSearchPath(VOID)
 {
+    PBASE_SEARCH_PATH_TYPE PathOrder;
+
     DPRINT("Computing Process Search path\n");
 
-    /* Compute the path using default process order */
-    return BasepComputeProcessPath(BaseProcessOrder, NULL, NULL);
+    PathOrder = BasepSearchPathMode ? BaseProcessOrderSafe : BaseProcessOrder;
+    return BasepComputeProcessPath(PathOrder, NULL, NULL);
 }
 
 LPWSTR
@@ -1394,6 +1406,52 @@ Quickie:
     if (ExtensionString.Buffer) RtlFreeUnicodeString(&ExtensionString);
     if (PathString.Buffer) RtlFreeUnicodeString(&PathString);
     return PathSize;
+}
+
+/*
+ * @implemented
+ */
+BOOL
+WINAPI
+SetSearchPathMode(IN DWORD Flags)
+{
+    LONG Mode, PreviousMode;
+
+    switch (Flags)
+    {
+        case BASE_SEARCH_PATH_ENABLE_SAFE_SEARCHMODE:
+            Mode = 1;
+            break;
+
+        case BASE_SEARCH_PATH_DISABLE_SAFE_SEARCHMODE:
+            Mode = 0;
+            break;
+
+        case BASE_SEARCH_PATH_ENABLE_SAFE_SEARCHMODE | BASE_SEARCH_PATH_PERMANENT:
+            InterlockedExchange(&BasepSearchPathMode, 2);
+            return TRUE;
+
+        default:
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+    }
+
+    for (;;)
+    {
+        PreviousMode = BasepSearchPathMode;
+        if (PreviousMode == 2)
+        {
+            SetLastError(ERROR_ACCESS_DENIED);
+            return FALSE;
+        }
+
+        if (InterlockedCompareExchange(&BasepSearchPathMode,
+                                       Mode,
+                                       PreviousMode) == PreviousMode)
+        {
+            return TRUE;
+        }
+    }
 }
 
 /*

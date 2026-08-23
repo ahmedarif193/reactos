@@ -2872,6 +2872,7 @@ SearchPathW(
     _In_ DWORD nBufferLength,
     _Out_writes_to_opt_(nBufferLength, return +1) LPWSTR lpBuffer,
     _Out_opt_ LPWSTR *lpFilePart);
+BOOL WINAPI SetSearchPathMode(_In_ DWORD Flags);
 BOOL WINAPI SetAclInformation(PACL,PVOID,DWORD,ACL_INFORMATION_CLASS);
 BOOL WINAPI SetCommBreak(_In_ HANDLE);
 
