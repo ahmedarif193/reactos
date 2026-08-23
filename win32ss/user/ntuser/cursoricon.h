@@ -146,5 +146,8 @@ PCURICON_OBJECT IntSystemSetCursor(PCURICON_OBJECT);
 VOID FASTCALL IntSetCurrentCursorObject(_In_opt_ PCURICON_OBJECT pcur);
 VOID FASTCALL IntSetPointerShape(_In_ HDC hdcScreen, _In_ PCURICON_OBJECT pcur);
 VOID FASTCALL IntResumeCursorAnimation(VOID);
+PCURICON_OBJECT FASTCALL IntGetPhysicalCursor(_In_opt_ PCURICON_OBJECT pcur);
+VOID FASTCALL IntUpdateCursorImage(VOID);
+VOID FASTCALL IntCalcStartCursorHide(_In_opt_ PPROCESSINFO ppi, _In_ DWORD timeAdd);
 
 /* EOF */

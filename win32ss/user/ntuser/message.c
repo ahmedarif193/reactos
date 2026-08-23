@@ -598,6 +598,11 @@ IdlePing(VOID)
    }
 
    TRACE("IdlePing ppi %p\n", ppi);
+   if ( ppi && (ppi->W32PF_flags & W32PF_STARTGLASS) )
+   {
+      IntCalcStartCursorHide(ppi, 0);
+   }
+
    if ( ppi && ppi->InputIdleEvent )
    {
       TRACE("InputIdleEvent\n");

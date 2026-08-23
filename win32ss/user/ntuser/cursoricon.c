@@ -224,6 +224,103 @@ IntResumeCursorAnimation(VOID)
         IntStartCursorAnimation(pcur);
 }
 
+DWORD gtimeStartCursorHide = 0;
+static UINT_PTR gtmridStartGlass = 0;
+
+PCURICON_OBJECT
+FASTCALL
+IntGetPhysicalCursor(
+    _In_opt_ PCURICON_OBJECT pcur)
+{
+    if (gtimeStartCursorHide && pcur && pcur == SYSTEMCUR(ARROW) && SYSTEMCUR(APPSTARTING))
+        return SYSTEMCUR(APPSTARTING);
+
+    return pcur;
+}
+
+VOID
+FASTCALL
+IntUpdateCursorImage(VOID)
+{
+    PUSER_MESSAGE_QUEUE MessageQueue = gpqCursor;
+    PCURICON_OBJECT pcur;
+    HDC hdcScreen;
+
+    if (!MessageQueue || !MessageQueue->CursorObject || MessageQueue->iCursorLevel < 0)
+        return;
+
+    pcur = IntGetPhysicalCursor(MessageQueue->CursorObject);
+    if (pcur == IntGetSysCursorInfo()->CurrentCursorObject)
+        return;
+
+    hdcScreen = IntGetScreenDC();
+    if (hdcScreen)
+        IntSetPointerShape(hdcScreen, pcur);
+}
+
+static
+VOID
+CALLBACK
+IntStartGlassTimerProc(
+    HWND hwnd,
+    UINT uMsg,
+    UINT_PTR idEvent,
+    DWORD dwTime)
+{
+    IntCalcStartCursorHide(NULL, 0);
+}
+
+VOID
+FASTCALL
+IntCalcStartCursorHide(
+    _In_opt_ PPROCESSINFO ppi,
+    _In_ DWORD timeAdd)
+{
+    DWORD timeNow = EngGetTickCount32();
+    DWORD timeHide = 0;
+    PPROCESSINFO ppiCur;
+
+    if (ppi)
+    {
+        if (timeAdd)
+        {
+            ppi->StartCursorHideTime = timeNow + timeAdd;
+            ppi->W32PF_flags |= W32PF_STARTGLASS;
+        }
+        else
+        {
+            ppi->W32PF_flags &= ~W32PF_STARTGLASS;
+        }
+    }
+
+    for (ppiCur = gppiList; ppiCur; ppiCur = ppiCur->ppiNext)
+    {
+        if (!(ppiCur->W32PF_flags & W32PF_STARTGLASS))
+            continue;
+
+        if ((LONG)(ppiCur->StartCursorHideTime - timeNow) <= 0)
+        {
+            ppiCur->W32PF_flags &= ~W32PF_STARTGLASS;
+            continue;
+        }
+
+        if (!timeHide || (LONG)(ppiCur->StartCursorHideTime - timeHide) > 0)
+            timeHide = ppiCur->StartCursorHideTime;
+    }
+
+    gtimeStartCursorHide = timeHide;
+    if (timeHide)
+    {
+        gtmridStartGlass = IntSetTimer(NULL,
+                                       gtmridStartGlass,
+                                       timeHide - timeNow,
+                                       IntStartGlassTimerProc,
+                                       TMRF_RIT | TMRF_ONESHOT);
+    }
+
+    IntUpdateCursorImage();
+}
+
 static
 VOID
 IntInsertCursorIntoList(
