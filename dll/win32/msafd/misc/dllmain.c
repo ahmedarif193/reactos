@@ -1484,12 +1484,12 @@ WSPAccept(
     if (!Socket)
     {
        if (lpErrno) *lpErrno = WSAENOTSOCK;
-       return SOCKET_ERROR;
+       return INVALID_SOCKET;
     }
     if (!Socket->SharedData->Listening)
     {
        if (lpErrno) *lpErrno = WSAEINVAL;
-       return SOCKET_ERROR;
+       return INVALID_SOCKET;
     }
     if ((SocketAddress && !SocketAddressLength) ||
         (SocketAddressLength && !SocketAddress) ||
@@ -1507,7 +1507,7 @@ WSPAccept(
 
     if( !NT_SUCCESS(Status) )
     {
-        return SOCKET_ERROR;
+        return INVALID_SOCKET;
     }
 
     /* Dynamic Structure...ugh */
@@ -1524,14 +1524,14 @@ WSPAccept(
         if (WSPSelect(0, &ReadSet, NULL, NULL, &Timeout, lpErrno) == SOCKET_ERROR)
         {
             NtClose(SockEvent);
-            return SOCKET_ERROR;
+            return INVALID_SOCKET;
         }
 
         if (ReadSet.fd_array[0] != Socket->Handle)
         {
             NtClose(SockEvent);
             if (lpErrno) *lpErrno = WSAEWOULDBLOCK;
-            return SOCKET_ERROR;
+            return INVALID_SOCKET;
         }
     }
 
@@ -1557,7 +1557,8 @@ WSPAccept(
     if (!NT_SUCCESS(Status))
     {
         NtClose( SockEvent );
-        return MsafdReturnWithErrno( Status, lpErrno, 0, NULL );
+        MsafdReturnWithErrno( Status, lpErrno, 0, NULL );
+        return INVALID_SOCKET;
     }
 
     if (lpfnCondition != NULL)
@@ -1590,7 +1591,8 @@ WSPAccept(
             if (!NT_SUCCESS(Status))
             {
                 NtClose( SockEvent );
-                return MsafdReturnWithErrno( Status, lpErrno, 0, NULL );
+                MsafdReturnWithErrno( Status, lpErrno, 0, NULL );
+                return INVALID_SOCKET;
             }
 
             /* How much data to allocate */
@@ -1602,7 +1604,8 @@ WSPAccept(
                 PendingData = HeapAlloc(GlobalHeap, 0, PendingDataLength);
                 if (!PendingData)
                 {
-                    return MsafdReturnWithErrno( STATUS_INSUFFICIENT_RESOURCES, lpErrno, 0, NULL );
+                    MsafdReturnWithErrno( STATUS_INSUFFICIENT_RESOURCES, lpErrno, 0, NULL );
+                    return INVALID_SOCKET;
                 }
 
                 /* We want the data now */
@@ -1630,7 +1633,8 @@ WSPAccept(
                 if (!NT_SUCCESS(Status))
                 {
                     NtClose( SockEvent );
-                    return MsafdReturnWithErrno( Status, lpErrno, 0, NULL );
+                    MsafdReturnWithErrno( Status, lpErrno, 0, NULL );
+                    return INVALID_SOCKET;
                 }
             }
         }
@@ -1647,7 +1651,8 @@ WSPAccept(
         RemoteAddress = HeapAlloc(GlobalHeap, 0, sizeof(*RemoteAddress));
         if (!RemoteAddress)
         {
-            return MsafdReturnWithErrno(STATUS_INSUFFICIENT_RESOURCES, lpErrno, 0, NULL);
+            MsafdReturnWithErrno(STATUS_INSUFFICIENT_RESOURCES, lpErrno, 0, NULL);
+            return INVALID_SOCKET;
         }
 
         /* Set up Address in SOCKADDR Format */
@@ -1669,7 +1674,8 @@ WSPAccept(
             /* Allocate Buffer for Callee Data */
             CalleeDataBuffer = HeapAlloc(GlobalHeap, 0, 4096);
             if (!CalleeDataBuffer) {
-                return MsafdReturnWithErrno( STATUS_INSUFFICIENT_RESOURCES, lpErrno, 0, NULL );
+                MsafdReturnWithErrno( STATUS_INSUFFICIENT_RESOURCES, lpErrno, 0, NULL );
+                return INVALID_SOCKET;
             }
             CalleeData.buf = CalleeDataBuffer;
             CalleeData.len = 4096;
@@ -1736,18 +1742,19 @@ WSPAccept(
 
             if (!NT_SUCCESS(Status))
             {
-                return MsafdReturnWithErrno( Status, lpErrno, 0, NULL );
+                MsafdReturnWithErrno( Status, lpErrno, 0, NULL );
+                return INVALID_SOCKET;
             }
 
             if (CallBack == CF_REJECT )
             {
                 if (lpErrno) *lpErrno = WSAECONNREFUSED;
-                return SOCKET_ERROR;
+                return INVALID_SOCKET;
             }
             else
             {
                 if (lpErrno) *lpErrno = WSAECONNREFUSED;
-                return SOCKET_ERROR;
+                return INVALID_SOCKET;
             }
         }
     }
@@ -1761,7 +1768,7 @@ WSPAccept(
                               Socket->SharedData->CreateFlags,
                               lpErrno);
     if (AcceptSocket == INVALID_SOCKET)
-        return SOCKET_ERROR;
+        return INVALID_SOCKET;
 
     /* Set up the Accept Structure */
     AcceptData.ListenHandle = (HANDLE)AcceptSocket;
@@ -1791,7 +1798,8 @@ WSPAccept(
     {
         NtClose(SockEvent);
         WSPCloseSocket( AcceptSocket, lpErrno );
-        return MsafdReturnWithErrno( Status, lpErrno, 0, NULL );
+        MsafdReturnWithErrno( Status, lpErrno, 0, NULL );
+        return INVALID_SOCKET;
     }
 
     AcceptSocketInfo = GetSocketStructure(AcceptSocket);
@@ -1799,7 +1807,8 @@ WSPAccept(
     {
         NtClose(SockEvent);
         WSPCloseSocket( AcceptSocket, lpErrno );
-        return MsafdReturnWithErrno( STATUS_PROTOCOL_NOT_SUPPORTED, lpErrno, 0, NULL );
+        MsafdReturnWithErrno( STATUS_PROTOCOL_NOT_SUPPORTED, lpErrno, 0, NULL );
+        return INVALID_SOCKET;
     }
 
     AcceptSocketInfo->SharedData->State = SocketConnected;
@@ -1834,7 +1843,7 @@ WSPAccept(
         if (Status)
         {
             if (lpErrno) *lpErrno = Status;
-            return SOCKET_ERROR;
+            return INVALID_SOCKET;
         }
     }
 
