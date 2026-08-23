@@ -1910,8 +1910,21 @@ static LRESULT REBAR_EraseBkGnd (const REBAR_INFO *infoPtr, HDC hdc)
     UINT i;
     INT oldrow;
     RECT cr;
+#if defined(__REACTOS__) && __WINE_COMCTL32_VERSION == 6
+    HTHEME theme;
+#endif
 
     GetClientRect (infoPtr->hwndSelf, &cr);
+
+#if defined(__REACTOS__) && __WINE_COMCTL32_VERSION == 6
+    theme = GetWindowTheme(infoPtr->hwndSelf);
+    if (theme)
+    {
+        if (IsThemeBackgroundPartiallyTransparent(theme, 0, 0))
+            DrawThemeParentBackground(infoPtr->hwndSelf, hdc, &cr);
+        DrawThemeBackground(theme, hdc, 0, 0, &cr, NULL);
+    }
+#endif
 
     oldrow = -1;
     for(i=0; i<infoPtr->uNumBands; i++) {
@@ -1960,6 +1973,9 @@ static LRESULT REBAR_EraseBkGnd (const REBAR_INFO *infoPtr, HDC hdc)
 	}
 
 	/* draw the actual background */
+#if defined(__REACTOS__) && __WINE_COMCTL32_VERSION == 6
+        if (!theme)
+#endif
         REBAR_DrawBandBackground (infoPtr, lpBand, hdc, &cr, &rcBand);
     }
     return TRUE;
@@ -3398,6 +3414,9 @@ REBAR_Paint (const REBAR_INFO *infoPtr, HDC hdc)
 {
     if (hdc) {
         TRACE("painting\n");
+#ifdef __REACTOS__
+        REBAR_EraseBkGnd(infoPtr, hdc);
+#endif
         REBAR_Refresh (infoPtr, hdc);
     } else {
         PAINTSTRUCT ps;
@@ -3520,12 +3539,30 @@ REBAR_StyleChanged (REBAR_INFO *infoPtr, INT nType, const STYLESTRUCT *lpStyle)
     if (nType == GWL_STYLE)
     {
         infoPtr->orgStyle = infoPtr->dwStyle = lpStyle->styleNew;
+#if defined(__REACTOS__) && __WINE_COMCTL32_VERSION == 6
+        if (GetWindowTheme(infoPtr->hwndSelf))
+            infoPtr->dwStyle &= ~WS_BORDER;
+#endif
         /* maybe it should be COMMON_STYLES like in toolbar */
         if ((lpStyle->styleNew ^ lpStyle->styleOld) & CCS_VERT)
             REBAR_Layout(infoPtr);
     }
     return FALSE;
 }
+
+#ifdef __REACTOS__
+static LRESULT REBAR_ThemeChanged(REBAR_INFO *infoPtr)
+{
+    LRESULT result = COMCTL32_ThemeChanged(infoPtr->hwndSelf, L"Rebar", TRUE, TRUE);
+
+#if __WINE_COMCTL32_VERSION == 6
+    infoPtr->dwStyle &= ~WS_BORDER;
+    if (!GetWindowTheme(infoPtr->hwndSelf))
+        infoPtr->dwStyle |= infoPtr->orgStyle & WS_BORDER;
+#endif
+    return result;
+}
+#endif
 
 
 static LRESULT
@@ -3740,7 +3777,11 @@ REBAR_WindowProc (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	    return REBAR_StyleChanged (infoPtr, wParam, (LPSTYLESTRUCT)lParam);
 
         case WM_THEMECHANGED:
+#ifdef __REACTOS__
+            return REBAR_ThemeChanged(infoPtr);
+#else
             return COMCTL32_ThemeChanged (infoPtr->hwndSelf, L"Rebar", FALSE, FALSE);
+#endif
 
         case WM_SYSCOLORCHANGE:
             COMCTL32_RefreshSysColors();
