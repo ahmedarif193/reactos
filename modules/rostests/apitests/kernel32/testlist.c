@@ -34,6 +34,7 @@ extern void func_JobObject(void);
 extern void func_LCMapString(void);
 extern void func_LoadLibraryExW(void);
 extern void func_LockFileEx(void);
+extern void func_SandboxLaunch(void);
 extern void func_SharedMemoryTransfer(void);
 extern void func_LocaleNameToLCID(void);
 extern void func_lstrcpynW(void);
@@ -90,6 +91,7 @@ const struct test winetest_testlist[] =
     { "LCMapString",                 func_LCMapString },
     { "LoadLibraryExW",              func_LoadLibraryExW },
     { "LockFileEx",                  func_LockFileEx },
+    { "SandboxLaunch",               func_SandboxLaunch },
     { "SharedMemoryTransfer",        func_SharedMemoryTransfer },
     { "LocaleNameToLCID",            func_LocaleNameToLCID },
     { "lstrcpynW",                   func_lstrcpynW },
