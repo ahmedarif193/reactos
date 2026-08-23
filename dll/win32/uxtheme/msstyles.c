@@ -1386,7 +1386,12 @@ static BOOL MSSTYLES_GetNextLong(LPCWSTR lpStringStart, LPCWSTR lpStringEnd, LPC
     LONG total = 0;
     BOOL gotNeg = FALSE;
 
+#ifdef __REACTOS__
+    /* ReactOS themes use negative content margins for overhanging shell controls. */
+    while(cur < lpStringEnd && ((*cur < '0' || *cur > '9') && *cur != '-')) cur++;
+#else
     while(cur < lpStringEnd && (*cur < '0' || *cur > '9' || *cur == '-')) cur++;
+#endif
     if(cur >= lpStringEnd) {
         return FALSE;
     }
