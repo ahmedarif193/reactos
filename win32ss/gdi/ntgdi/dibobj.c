@@ -547,6 +547,44 @@ done:
     return Mask;
 }
 
+/* SetDIBitsToDevice maps only the destination origin and rounds fractional
+ * device coordinates to the nearest pixel. */
+static
+VOID
+IntLPtoDP_RoundOrigin(PDC pdc, PPOINTL ppt)
+{
+    PMATRIX pmx;
+    FLOATOBJ foX, foY, foTmp;
+    LONG lX, lY;
+    LONG x = ppt->x, y = ppt->y;
+
+    pmx = DC_pmxWorldToDevice(pdc);
+
+    FLOATOBJ_SetLong(&foX, x);
+    FLOATOBJ_Mul(&foX, &pmx->efM11);
+    foTmp = pmx->efM21;
+    FLOATOBJ_MulLong(&foTmp, y);
+    FLOATOBJ_Add(&foX, &foTmp);
+    FLOATOBJ_Add(&foX, &pmx->efDx);
+
+    FLOATOBJ_SetLong(&foY, y);
+    FLOATOBJ_Mul(&foY, &pmx->efM22);
+    foTmp = pmx->efM12;
+    FLOATOBJ_MulLong(&foTmp, x);
+    FLOATOBJ_Add(&foY, &foTmp);
+    FLOATOBJ_Add(&foY, &pmx->efDy);
+
+    FLOATOBJ_AddFloat(&foX, 0.5f);
+    FLOATOBJ_AddFloat(&foY, 0.5f);
+    lX = FLOATOBJ_GetLong(&foX);
+    lY = FLOATOBJ_GetLong(&foY);
+    if (FLOATOBJ_LessThanLong(&foX, lX)) lX--;
+    if (FLOATOBJ_LessThanLong(&foY, lY)) lY--;
+
+    ppt->x = lX;
+    ppt->y = lY;
+}
+
 W32KAPI
 INT
 APIENTRY
@@ -704,20 +742,30 @@ NtGdiSetDIBitsToDeviceInternal(
         goto Exit;
     }
 
-    rcDest.left = XDest;
-    rcDest.top = YDest;
-    if (bTransformCoordinates)
     {
-        IntLPtoDP(pDC, (LPPOINT)&rcDest, 1);
+        POINTL ptDest;
+
+        ptDest.x = XDest;
+        ptDest.y = YDest;
+        if (bTransformCoordinates)
+        {
+            IntLPtoDP_RoundOrigin(pDC, &ptDest);
+        }
+        ptDest.x += pDC->ptlDCOrig.x;
+        ptDest.y += pDC->ptlDCOrig.y;
+        if (bTransformCoordinates && (pDC->pdcattr->dwLayout & LAYOUT_RTL))
+        {
+            ptDest.x -= Width - 1;
+        }
+        rcDest.left = ptDest.x;
+        rcDest.top = ptDest.y;
     }
-    rcDest.left += pDC->ptlDCOrig.x;
-    rcDest.top += pDC->ptlDCOrig.y;
     rcDest.right = rcDest.left + Width;
     rcDest.bottom = rcDest.top + Height;
 
-    /* Clip the source rect to the band extents and trim the destination
-       rect by the same amounts */
     {
+        /* Clip the source rect to the band extents and trim the destination
+           rect by the same amounts */
         LONGLONG llSrcT = llSrcY;
         LONGLONG llSrcB = llSrcY + Height;
         LONGLONG llSrcL = XSrc;
@@ -958,7 +1006,7 @@ GreGetDIBitsInternal(
         goto done;
     }
 
-    if (Bits || bpp)
+    if ((Bits && ScanLines) || bpp)
     {
         if ((height == 0 || width == 0) || (compr && compr != BI_BITFIELDS && compr != BI_RGB))
         {
@@ -1359,7 +1407,7 @@ NtGdiGetDIBitsInternal(
     }
 
     /* Check if the caller provided bitmap bits */
-    if (pjBits)
+    if (pjBits && cScans)
     {
         /* Secure the user mode memory */
         hSecure = EngSecureMem(pjBits, cjMaxBits);
@@ -2135,7 +2183,7 @@ DIB_CreateDIBSection(
     // Fill BITMAP32 structure with DIB data
     CONST BITMAPINFOHEADER *bi = &bmi->bmiHeader;
     INT effHeight;
-    ULONG totalSize;
+    ULONG totalSize, cjWidthBytes;
     BITMAP bm;
     //SIZEL Size;
     HANDLE hSecure;
@@ -2151,20 +2199,33 @@ DIB_CreateDIBSection(
         return (HBITMAP)NULL;
     }
 
+    if ((bi->biWidth <= 0) || (bi->biHeight == 0) ||
+        (bi->biHeight == LONG_MIN) || (bi->biBitCount == 0))
+    {
+        return (HBITMAP)NULL;
+    }
+
+    if ((ULONG)bi->biWidth > (MAXULONG - 31) / bi->biBitCount)
+    {
+        return (HBITMAP)NULL;
+    }
+    cjWidthBytes = WIDTH_BYTES_ALIGN32(bi->biWidth, bi->biBitCount);
+
     effHeight = bi->biHeight >= 0 ? bi->biHeight : -bi->biHeight;
     bm.bmType = 0;
     bm.bmWidth = bi->biWidth;
     bm.bmHeight = effHeight;
-    bm.bmWidthBytes = ovr_pitch ? ovr_pitch : WIDTH_BYTES_ALIGN32(bm.bmWidth, bi->biBitCount);
+    bm.bmWidthBytes = ovr_pitch ? ovr_pitch : cjWidthBytes;
 
     bm.bmPlanes = bi->biPlanes;
     bm.bmBitsPixel = bi->biBitCount;
     bm.bmBits = NULL;
 
-    // Get storage location for DIB bits.  Only use biSizeImage if it's valid and
-    // we're dealing with a compressed bitmap.  Otherwise, use width * height.
-    totalSize = (bi->biSizeImage && (bi->biCompression != BI_RGB) && (bi->biCompression != BI_BITFIELDS))
-                ? bi->biSizeImage : (ULONG)(bm.bmWidthBytes * effHeight);
+    /* Calculate the backing-store size with checked arithmetic. */
+    if (!NT_SUCCESS(RtlULongMult(bm.bmWidthBytes, effHeight, &totalSize)))
+    {
+        return (HBITMAP)NULL;
+    }
 
     if (section)
     {
