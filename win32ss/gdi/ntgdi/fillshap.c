@@ -403,6 +403,35 @@ extern BOOL FillPolygon(PDC dc,
 
 #endif
 
+static
+BOOL
+IntIsMappedUserRange(const VOID *Address, SIZE_T Size)
+{
+    ULONG_PTR Start = (ULONG_PTR)Address;
+    ULONG_PTR End;
+    ULONG_PTR Page;
+
+    if (!Address || !Size ||
+        (Start > (ULONG_PTR)MmHighestUserAddress) ||
+        ((Size - 1) > ((ULONG_PTR)MmHighestUserAddress - Start)))
+    {
+        return FALSE;
+    }
+
+    End = Start + Size - 1;
+    Page = Start & ~((ULONG_PTR)PAGE_SIZE - 1);
+    for (;;)
+    {
+        if (!MmIsAddressValid((PVOID)Page))
+            return FALSE;
+        if ((Page + PAGE_SIZE - 1) >= End)
+            break;
+        Page += PAGE_SIZE;
+    }
+
+    return TRUE;
+}
+
 
 ULONG_PTR
 APIENTRY
@@ -419,12 +448,36 @@ NtGdiPolyPolyDraw( IN HDC hDC,
     NTSTATUS Status = STATUS_SUCCESS;
     BOOL Ret = TRUE;
     ULONG nPoints = 0, nMaxPoints = 0, nInvalid = 0, i;
+    BOOL bOverflow = FALSE;
 
     if (!UnsafePoints || !UnsafeCounts ||
         Count == 0 || iFunc == 0 || iFunc > GdiPolyPolyRgn)
     {
         /* Windows doesn't set last error */
         return FALSE;
+    }
+
+    /* These operation numbers are rejected before validating a DC. */
+    if ((iFunc > GdiPolyPolyLine) && (iFunc != GdiPolyPolyRgn))
+        return FALSE;
+
+    /* Reject unmapped caller buffers before touching them. */
+    if (!IntIsMappedUserRange(UnsafeCounts, Count * sizeof(ULONG)) ||
+        !IntIsMappedUserRange(UnsafePoints, Count * sizeof(POINT)))
+    {
+        return FALSE;
+    }
+
+    /* Validate drawing DCs before touching caller buffers. */
+    if (iFunc != GdiPolyPolyRgn)
+    {
+        dc = DC_LockDc(hDC);
+        if (!dc)
+        {
+            EngSetLastError(ERROR_INVALID_HANDLE);
+            return FALSE;
+        }
+        DC_UnlockDc(dc);
     }
 
     _SEH2_TRY
@@ -439,7 +492,10 @@ NtGdiPolyPolyDraw( IN HDC hDC,
             {
                 nInvalid++;
             }
-            nPoints += UnsafeCounts[i];
+            if (UnsafeCounts[i] > MAXULONG - nPoints)
+                bOverflow = TRUE;
+            else
+                nPoints += UnsafeCounts[i];
             nMaxPoints = max(nMaxPoints, UnsafeCounts[i]);
         }
     }
@@ -455,12 +511,21 @@ NtGdiPolyPolyDraw( IN HDC hDC,
         return FALSE;
     }
 
+    if (bOverflow)
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
     if (nPoints == 0 || nPoints < nMaxPoints)
     {
         /* If all polygon counts are zero, or we have overflow,
            return without setting a last error code. */
         return FALSE;
     }
+
+    if (!IntIsMappedUserRange(UnsafePoints, nPoints * sizeof(POINT)))
+        return FALSE;
 
     if (nInvalid != 0)
     {
@@ -545,7 +610,7 @@ NtGdiPolyPolyDraw( IN HDC hDC,
             break;
         case GdiPolyBezierTo:
             /* The point count must be a multiple of 3 (n curves, n >= 1) */
-            if (Count == 1 && UnsafeCounts[0] != 0 && UnsafeCounts[0] % 3 == 0)
+            if (Count == 1 && SafeCounts[0] != 0 && SafeCounts[0] % 3 == 0)
             {
                 Ret = IntGdiPolyBezierTo(dc, SafePoints, *SafeCounts);
             }
