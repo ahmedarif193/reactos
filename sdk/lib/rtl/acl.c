@@ -449,6 +449,29 @@ RtlAddAuditAccessAce(IN PACL Acl,
  */
 NTSTATUS
 NTAPI
+RtlAddMandatoryAce(IN OUT PACL Acl,
+                   IN ULONG Revision,
+                   IN ULONG Flags,
+                   IN ULONG MandatoryFlags,
+                   IN UCHAR AceType,
+                   IN PSID LabelSid)
+{
+    SID_IDENTIFIER_AUTHORITY MandatoryAuthority = {SECURITY_MANDATORY_LABEL_AUTHORITY};
+    PAGED_CODE_RTL();
+
+    if (AceType != SYSTEM_MANDATORY_LABEL_ACE_TYPE) return STATUS_INVALID_PARAMETER;
+    if (MandatoryFlags & ~SYSTEM_MANDATORY_LABEL_VALID_MASK) return STATUS_INVALID_PARAMETER;
+    if (!LabelSid || !RtlValidSid(LabelSid)) return STATUS_INVALID_SID;
+    if (!RtlEqualMemory(RtlIdentifierAuthoritySid(LabelSid), &MandatoryAuthority, sizeof(MandatoryAuthority))) return STATUS_INVALID_PARAMETER;
+
+    return RtlpAddKnownAce(Acl, Revision, Flags, MandatoryFlags, LabelSid, AceType);
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
 RtlAddAuditAccessAceEx(IN PACL Acl,
                        IN ULONG Revision,
                        IN ULONG Flags,

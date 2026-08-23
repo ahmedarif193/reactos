@@ -2,6 +2,7 @@
 #define STANDALONE
 #include <apitest.h>
 
+extern void func_AddMandatoryAce(void);
 extern void func_CreateService(void);
 extern void func_DuplicateTokenEx(void);
 extern void func_eventlog_supp(void);
@@ -24,6 +25,7 @@ extern void func_ServiceNetwork(void);
 
 const struct test winetest_testlist[] =
 {
+    { "AddMandatoryAce", func_AddMandatoryAce },
     { "CreateService", func_CreateService },
     { "DuplicateTokenEx", func_DuplicateTokenEx },
     { "eventlog_supp", func_eventlog_supp },
@@ -45,4 +47,3 @@ const struct test winetest_testlist[] =
     { "ServiceNetwork", func_ServiceNetwork },
     { 0, 0 }
 };
-
