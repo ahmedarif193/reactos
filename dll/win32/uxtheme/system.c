@@ -620,7 +620,11 @@ HRESULT WINAPI EnableTheming(BOOL fEnable)
             RegSetValueExW(hKey, L"ThemeActive", 0, REG_SZ, (BYTE *)L"0", 2 * sizeof(WCHAR));
             RegCloseKey(hKey);
         }
+#ifdef __REACTOS__
+        UXTHEME_broadcast_theme_changed(NULL, fEnable);
+#else
 	UXTHEME_broadcast_msg (NULL, WM_THEMECHANGED);
+#endif
     }
     return S_OK;
 }
@@ -1041,7 +1045,11 @@ HRESULT WINAPI ApplyTheme(HTHEMEFILE hThemeFile, char *unknown, HWND hWnd)
     TRACE("(%p,%s,%p)\n", hThemeFile, unknown, hWnd);
 #endif
     hr = UXTHEME_SetActiveTheme(hThemeFile);
+#ifdef __REACTOS__
+    UXTHEME_broadcast_theme_changed(NULL, hThemeFile != NULL);
+#else
     UXTHEME_broadcast_msg (NULL, WM_THEMECHANGED);
+#endif
     return hr;
 }
 

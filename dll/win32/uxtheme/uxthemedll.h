@@ -120,6 +120,7 @@ extern HINSTANCE hDllInst;
 extern ATOM atWndContext;
 extern DWORD gdwErrorInfoTlsIndex;
 extern BOOL g_bThemeHooksActive;
+BOOL CALLBACK UXTHEME_broadcast_theme_changed(HWND hwnd, LPARAM enable);
 void UXTHEME_DeleteParseErrorInfo(void);
 #endif
 
