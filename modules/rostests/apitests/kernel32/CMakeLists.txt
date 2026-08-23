@@ -35,6 +35,7 @@ list(APPEND SOURCE
     LCMapString.c
     LoadLibraryExW.c
     LockFileEx.c
+    SandboxLaunch.c
     SharedMemoryTransfer.c
     LocaleNameToLCID.c
     lstrcpynW.c
