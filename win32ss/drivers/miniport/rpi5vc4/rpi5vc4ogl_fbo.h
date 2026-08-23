@@ -59,8 +59,9 @@ Rpi5OglFboValidateCurrent(
     _In_z_ PCSTR Function);
 
 BOOL
-Rpi5OglFboGetColorTarget(
+Rpi5OglFboGetValidatedColorTarget(
     _In_opt_ PRPI5VC4_OGL_FBO_STATE State,
+    _In_z_ PCSTR Function,
     _Out_ PRPI5VC4_OGL_FBO_COLOR_TARGET Target);
 
 VOID

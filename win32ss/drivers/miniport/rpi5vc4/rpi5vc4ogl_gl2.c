@@ -7936,7 +7936,7 @@ Rpi5OglGl2BuildPrimitive(
     _In_ GLenum Mode,
     _In_ GLint First,
     _In_ GLsizei Count,
-    _Out_writes_(RPI5VC4_OGL_GL2_MAX_DRAW_VERTICES)
+    _Out_writes_(RPI5VC4_V3D_PRIMITIVE_MAX_VERTICES)
         RPI5VC4_OGL_GL2_VERTEX *Vertices)
 {
     PRPI5VC4_OGL_PROGRAM Program;

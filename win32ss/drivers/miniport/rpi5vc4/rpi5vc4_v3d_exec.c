@@ -12,6 +12,7 @@
 
 #include "rpi5vc4_v3d.h"
 #include "rpi5vc4_v3d_terrain_shaders.h"
+#include <reactos/unaligned.h>
 
 #define V3D_HUB_INT_STS                    0x0050
 #define V3D_HUB_INT_CLR                    0x0058
@@ -1546,7 +1547,7 @@ Rpi5V3dAlignUp(
     _In_ ULONG Value,
     _In_ ULONG Alignment)
 {
-    return (Value + Alignment - 1u) & ~(Alignment - 1u);
+    return (ULONG)ALIGN_UP_BY(Value, Alignment);
 }
 
 static ULONG
@@ -2583,10 +2584,7 @@ Rpi5V3dStoreLe32(
     _Out_writes_(4) PUCHAR Destination,
     _In_ ULONG Value)
 {
-    Destination[0] = (UCHAR)Value;
-    Destination[1] = (UCHAR)(Value >> 8);
-    Destination[2] = (UCHAR)(Value >> 16);
-    Destination[3] = (UCHAR)(Value >> 24);
+    WriteUnalignedU32((PULONG)Destination, Value);
 }
 
 static VOID
@@ -7259,28 +7257,24 @@ Rpi5V3dRestorePrimaryTextureState(
     DeviceExtension->V3dTextureGeneration = State->Generation;
 }
 
-static VOID
-Rpi5V3dSetGdiVertex(
-    _Out_ PRPI5VC4_V3D_VERTEX Vertex,
-    _In_ ULONG X,
-    _In_ ULONG Y,
-    _In_ ULONG U,
-    _In_ ULONG V)
+/* Direct-present flips clip-space Y; these vertices keep GDI row zero up. */
+static const RPI5VC4_V3D_VERTEX Rpi5V3dGdiVertices[] =
 {
-    ULONG Component;
-
-    VideoPortZeroMemory(Vertex, sizeof(*Vertex));
-    Vertex->Position[0] = X;
-    Vertex->Position[1] = Y;
-    Vertex->Position[3] = 0x3F800000u;
-    for (Component = 0; Component < RTL_NUMBER_OF(Vertex->Color);
-         Component++)
-    {
-        Vertex->Color[Component] = 0x3F800000u;
-    }
-    Vertex->TexCoord[0] = U;
-    Vertex->TexCoord[1] = V;
-}
+    {{0xBF800000u, 0x3F800000u, 0, 0x3F800000u},
+     {0x3F800000u, 0x3F800000u, 0x3F800000u, 0x3F800000u}, {0, 0}},
+    {{0xBF800000u, 0xBF800000u, 0, 0x3F800000u},
+     {0x3F800000u, 0x3F800000u, 0x3F800000u, 0x3F800000u}, {0, 0x3F800000u}},
+    {{0x3F800000u, 0xBF800000u, 0, 0x3F800000u},
+     {0x3F800000u, 0x3F800000u, 0x3F800000u, 0x3F800000u},
+     {0x3F800000u, 0x3F800000u}},
+    {{0xBF800000u, 0x3F800000u, 0, 0x3F800000u},
+     {0x3F800000u, 0x3F800000u, 0x3F800000u, 0x3F800000u}, {0, 0}},
+    {{0x3F800000u, 0xBF800000u, 0, 0x3F800000u},
+     {0x3F800000u, 0x3F800000u, 0x3F800000u, 0x3F800000u},
+     {0x3F800000u, 0x3F800000u}},
+    {{0x3F800000u, 0x3F800000u, 0, 0x3F800000u},
+     {0x3F800000u, 0x3F800000u, 0x3F800000u, 0x3F800000u}, {0x3F800000u, 0}}
+};
 
 VP_STATUS
 Rpi5V3dPresentGdi(
@@ -7297,7 +7291,6 @@ Rpi5V3dPresentGdi(
     const UCHAR *InputPixels;
     RPI5VC4_V3D_TEXTURE_SLICE Slice;
     RPI5VC4_V3D_TEXTURE_STATE SavedTexture;
-    RPI5VC4_V3D_VERTEX Vertices[6];
     RPI5VC4_V3D_SELFTEST Diagnostics;
     ULONG HeaderSize = FIELD_OFFSET(RPI5VC4_GDI_PRESENT_REQUEST, Pixels);
     ULONG ExpectedRowStride;
@@ -7417,27 +7410,13 @@ Rpi5V3dPresentGdi(
     KeMemoryBarrier();
     DeviceExtension->V3dTextureGeneration = TemporaryGeneration;
 
-    /* Direct-present flips clip-space Y; these inputs keep GDI row zero up. */
-    Rpi5V3dSetGdiVertex(&Vertices[0], 0xBF800000u, 0x3F800000u,
-                        0, 0);
-    Rpi5V3dSetGdiVertex(&Vertices[1], 0xBF800000u, 0xBF800000u,
-                        0, 0x3F800000u);
-    Rpi5V3dSetGdiVertex(&Vertices[2], 0x3F800000u, 0xBF800000u,
-                        0x3F800000u, 0x3F800000u);
-    Rpi5V3dSetGdiVertex(&Vertices[3], 0xBF800000u, 0x3F800000u,
-                        0, 0);
-    Rpi5V3dSetGdiVertex(&Vertices[4], 0x3F800000u, 0xBF800000u,
-                        0x3F800000u, 0x3F800000u);
-    Rpi5V3dSetGdiVertex(&Vertices[5], 0x3F800000u, 0x3F800000u,
-                        0x3F800000u, 0);
-
     Status = Rpi5V3dExecuteClear(DeviceExtension,
                                  Request->Width,
                                  Request->Height,
                                  0,
-                                 Vertices,
+                                 Rpi5V3dGdiVertices,
                                  RPI5VC4_V3D_PRIMITIVE_TRIANGLES,
-                                 RTL_NUMBER_OF(Vertices),
+                                 RTL_NUMBER_OF(Rpi5V3dGdiVertices),
                                  V3D71_COMPARE_ALWAYS,
                                  Rpi5V3dBlendDisabled,
                                  NULL,

@@ -1637,16 +1637,6 @@ Rpi5OglFboReadTexel(
     }
 }
 
-static ULONG
-Rpi5OglFboByteSwap32(
-    _In_ ULONG Value)
-{
-    return (Value >> 24) |
-           ((Value >> 8) & 0x0000FF00) |
-           ((Value << 8) & 0x00FF0000) |
-           (Value << 24);
-}
-
 static BOOL
 Rpi5OglFboPacked8888Type(
     _In_ GLenum Type)
@@ -1969,7 +1959,7 @@ Rpi5OglFboUnpack8888(
                            Column * sizeof(Word),
                        sizeof(Word));
             if (Unpack->SwapBytes)
-                Word = Rpi5OglFboByteSwap32(Word);
+                Word = _byteswap_ulong(Word);
             if (Type == GL_UNSIGNED_INT_8_8_8_8_REV)
             {
                 Components[0] = (GLubyte)Word;
@@ -2098,8 +2088,7 @@ Rpi5OglFboUnpackDepth(
                 CopyMemory(&ShortValue, Texel, sizeof(ShortValue));
                 if (Unpack->SwapBytes)
                 {
-                    ShortValue = (USHORT)((ShortValue >> 8) |
-                                          (ShortValue << 8));
+                    ShortValue = _byteswap_ushort(ShortValue);
                 }
                 Value = (ULONG)(((ULONGLONG)ShortValue * MAX_DEPTH +
                                  0x7FFFu) / 0xFFFFu);
@@ -2108,7 +2097,7 @@ Rpi5OglFboUnpackDepth(
             {
                 CopyMemory(&Value, Texel, sizeof(Value));
                 if (Unpack->SwapBytes)
-                    Value = Rpi5OglFboByteSwap32(Value);
+                    Value = _byteswap_ulong(Value);
                 if (Type == GL_FLOAT)
                 {
                     GLfloat FloatValue;
@@ -2510,8 +2499,9 @@ Rpi5OglFboValidateCurrent(
 }
 
 BOOL
-Rpi5OglFboGetColorTarget(
+Rpi5OglFboGetValidatedColorTarget(
     _In_opt_ PRPI5VC4_OGL_FBO_STATE State,
+    _In_z_ PCSTR Function,
     _Out_ PRPI5VC4_OGL_FBO_COLOR_TARGET Target)
 {
     PRPI5VC4_OGL_FRAMEBUFFER Framebuffer;
@@ -2524,6 +2514,8 @@ Rpi5OglFboGetColorTarget(
     if (Framebuffer == NULL || !Framebuffer->Object ||
         Rpi5OglFboStatus(State, Framebuffer) != GL_FRAMEBUFFER_COMPLETE_EXT)
     {
+        Rpi5OglFboError(State, GL_INVALID_FRAMEBUFFER_OPERATION_EXT,
+                        Function);
         return FALSE;
     }
     ZeroMemory(Target, sizeof(*Target));

@@ -75,7 +75,6 @@ Rpi5CrtcReportPv(
         if (PreferThisValve)
         {
             DeviceExtension->PixelValveValid = TRUE;
-            DeviceExtension->PixelValveIndex = Index;
             DeviceExtension->PixelValvePhysical = Range->RangeStart;
             DeviceExtension->PixelValveLength = Range->RangeLength;
             DeviceExtension->PixelValveControl = Control;

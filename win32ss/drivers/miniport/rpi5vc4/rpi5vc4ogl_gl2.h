@@ -11,8 +11,6 @@
 
 #include "rpi5vc4ogl_buffer.h"
 
-#define RPI5VC4_OGL_GL2_MAX_DRAW_VERTICES 4u
-
 typedef struct _RPI5VC4_OGL_GL2_STATE RPI5VC4_OGL_GL2_STATE;
 typedef RPI5VC4_OGL_GL2_STATE *PRPI5VC4_OGL_GL2_STATE;
 struct gl_texture_object;
@@ -165,7 +163,7 @@ Rpi5OglGl2BuildPrimitive(
     _In_ GLenum Mode,
     _In_ GLint First,
     _In_ GLsizei Count,
-    _Out_writes_(RPI5VC4_OGL_GL2_MAX_DRAW_VERTICES)
+    _Out_writes_(RPI5VC4_V3D_PRIMITIVE_MAX_VERTICES)
         RPI5VC4_OGL_GL2_VERTEX *Vertices);
 
 RPI5VC4_OGL_GL2_DRAW_RESULT
