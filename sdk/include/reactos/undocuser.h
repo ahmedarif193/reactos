@@ -401,13 +401,12 @@ typedef struct _USERAPIHOOKINFO
     LPCWSTR m_funname2;
 } USERAPIHOOKINFO,*PUSERAPIHOOKINFO;
 
+#ifndef __WINESRC__
 #if (WINVER == _WIN32_WINNT_WINXP)
 BOOL WINAPI RegisterUserApiHook(HINSTANCE hInstance, USERAPIHOOKPROC CallbackFunc);
 #elif (WINVER == _WIN32_WINNT_WS03)
 BOOL WINAPI RegisterUserApiHook(PUSERAPIHOOKINFO puah);
 #endif
-
-#ifndef __WINESRC__
 BOOL WINAPI UnregisterUserApiHook(VOID);
 #endif
 
