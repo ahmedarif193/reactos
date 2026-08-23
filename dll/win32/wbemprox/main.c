@@ -103,6 +103,7 @@ static const struct IClassFactoryVtbl wbemprox_cf_vtbl =
 
 static wbemprox_cf wbem_locator_cf = { { &wbemprox_cf_vtbl }, WbemLocator_create };
 static wbemprox_cf wbem_context_cf = { { &wbemprox_cf_vtbl }, WbemContext_create };
+static wbemprox_cf wbem_refresher_cf = { { &wbemprox_cf_vtbl }, WbemRefresher_create };
 
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 {
@@ -136,6 +137,10 @@ HRESULT WINAPI DllGetClassObject( REFCLSID rclsid, REFIID iid, LPVOID *ppv )
     else if (IsEqualGUID( rclsid, &CLSID_WbemContext ))
     {
        cf = &wbem_context_cf.IClassFactory_iface;
+    }
+    else if (IsEqualGUID( rclsid, &CLSID_WbemRefresher ))
+    {
+       cf = &wbem_refresher_cf.IClassFactory_iface;
     }
     if (!cf) return CLASS_E_CLASSNOTAVAILABLE;
     return IClassFactory_QueryInterface( cf, iid, ppv );

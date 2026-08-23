@@ -17,5 +17,9 @@ HKCR
         {
             InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
         }
+        '{C71566F2-561E-11D1-AD87-00C04FD8FDFF}' = s 'WBEM Refresher'
+        {
+            InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
+        }
     }
 }
