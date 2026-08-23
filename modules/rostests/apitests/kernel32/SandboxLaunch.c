@@ -32,6 +32,195 @@
 #define CHILD_PROCESS_TOKEN_NOT_LOW 15
 #define CHILD_LOWER_FAILED 16
 
+#define PROCESS_MITIGATION_OPTIONS_MASK_POLICY 5
+#define MITIGATION_GUARD_BYTES 8
+#define MITIGATION_MAX_QUERY_BYTES 24
+
+typedef BOOL
+(WINAPI *PGET_PROCESS_MITIGATION_POLICY)(
+    _In_ HANDLE Process,
+    _In_ DWORD Policy,
+    _Out_writes_bytes_(Length) PVOID Buffer,
+    _In_ SIZE_T Length);
+
+typedef struct _MITIGATION_QUERY_CASE
+{
+    SIZE_T Length;
+    SIZE_T Offset;
+} MITIGATION_QUERY_CASE;
+
+static BOOL
+AllBytesEqual(
+    _In_reads_bytes_(Length) const BYTE *Buffer,
+    _In_ SIZE_T Length,
+    _In_ BYTE Value)
+{
+    SIZE_T Index;
+
+    for (Index = 0; Index < Length; ++Index)
+    {
+        if (Buffer[Index] != Value)
+            return FALSE;
+    }
+    return TRUE;
+}
+
+static BOOL
+MitigationMaskIsWellFormed(
+    _In_reads_bytes_(Length) const BYTE *Buffer,
+    _In_ SIZE_T Length)
+{
+    SIZE_T Index;
+
+    /* Each mitigation occupies a nibble whose low two bits are the support mask. */
+    for (Index = 0; Index < Length; ++Index)
+    {
+        if (Buffer[Index] & 0xCC)
+            return FALSE;
+    }
+    return TRUE;
+}
+
+static void
+TestMitigationOptionsMask(void)
+{
+    static const SIZE_T InvalidLengths[] = { 0, 1, 7 };
+    static const MITIGATION_QUERY_CASE ValidCases[] =
+    {
+        { 8, MITIGATION_GUARD_BYTES },
+        { 9, MITIGATION_GUARD_BYTES },
+        { 15, MITIGATION_GUARD_BYTES },
+        { 16, MITIGATION_GUARD_BYTES },
+        { 17, MITIGATION_GUARD_BYTES },
+        { 24, MITIGATION_GUARD_BYTES },
+        { 16, MITIGATION_GUARD_BYTES + 1 },
+    };
+    PGET_PROCESS_MITIGATION_POLICY GetPolicy;
+    BYTE First[MITIGATION_GUARD_BYTES + 1 + MITIGATION_MAX_QUERY_BYTES + MITIGATION_GUARD_BYTES];
+    BYTE Second[sizeof(First)];
+    BYTE Mask8[8] = { 0 }, Mask16[16] = { 0 };
+    BYTE *FirstOutput, *SecondOutput;
+    HANDLE Self;
+    HMODULE Kernel32;
+    DWORD Error;
+    SIZE_T Index, Length, Offset;
+    BOOL FirstSuccess, SecondSuccess;
+
+    Kernel32 = GetModuleHandleW(L"kernel32.dll");
+    GetPolicy = (PGET_PROCESS_MITIGATION_POLICY)GetProcAddress(Kernel32,
+                                                               "GetProcessMitigationPolicy");
+    ok(GetPolicy != NULL, "GetProcessMitigationPolicy is unavailable, error %lu\n", GetLastError());
+    if (!GetPolicy) return;
+
+    for (Index = 0; Index < ARRAYSIZE(InvalidLengths); ++Index)
+    {
+        memset(First, 0xCC, sizeof(First));
+        SetLastError(0xDEADBEEF);
+        FirstSuccess = GetPolicy(GetCurrentProcess(),
+                                 PROCESS_MITIGATION_OPTIONS_MASK_POLICY,
+                                 First + MITIGATION_GUARD_BYTES,
+                                 InvalidLengths[Index]);
+        Error = GetLastError();
+        ok(!FirstSuccess, "length %Iu unexpectedly succeeded\n", InvalidLengths[Index]);
+        ok(Error == ERROR_INVALID_PARAMETER,
+           "length %Iu returned error %lu\n", InvalidLengths[Index], Error);
+        ok(AllBytesEqual(First, sizeof(First), 0xCC),
+           "length %Iu modified the guarded buffer\n", InvalidLengths[Index]);
+    }
+
+    for (Index = 0; Index < ARRAYSIZE(ValidCases); ++Index)
+    {
+        Length = ValidCases[Index].Length;
+        Offset = ValidCases[Index].Offset;
+        FirstOutput = First + Offset;
+        SecondOutput = Second + Offset;
+        memset(First, 0xCC, sizeof(First));
+        memset(Second, 0x55, sizeof(Second));
+
+        FirstSuccess = GetPolicy(GetCurrentProcess(),
+                                 PROCESS_MITIGATION_OPTIONS_MASK_POLICY,
+                                 FirstOutput,
+                                 Length);
+        SecondSuccess = GetPolicy(GetCurrentProcess(),
+                                  PROCESS_MITIGATION_OPTIONS_MASK_POLICY,
+                                  SecondOutput,
+                                  Length);
+        ok(FirstSuccess && SecondSuccess,
+           "length %Iu offset %Iu failed with %lu\n", Length, Offset, GetLastError());
+        if (!FirstSuccess || !SecondSuccess)
+            continue;
+
+        ok(AllBytesEqual(First, Offset, 0xCC) &&
+           AllBytesEqual(Second, Offset, 0x55),
+           "length %Iu offset %Iu wrote before the output\n", Length, Offset);
+        ok(AllBytesEqual(FirstOutput + Length, sizeof(First) - Offset - Length, 0xCC) &&
+           AllBytesEqual(SecondOutput + Length, sizeof(Second) - Offset - Length, 0x55),
+           "length %Iu offset %Iu wrote beyond the output\n", Length, Offset);
+        ok(!memcmp(FirstOutput, SecondOutput, Length),
+           "length %Iu offset %Iu left input-dependent output\n", Length, Offset);
+        ok(MitigationMaskIsWellFormed(FirstOutput, Length),
+           "length %Iu offset %Iu returned reserved mask bits\n", Length, Offset);
+
+        if (Length == sizeof(Mask8) && Offset == MITIGATION_GUARD_BYTES)
+            memcpy(Mask8, FirstOutput, sizeof(Mask8));
+        if (Length == sizeof(Mask16) && Offset == MITIGATION_GUARD_BYTES)
+            memcpy(Mask16, FirstOutput, sizeof(Mask16));
+    }
+
+    ok(!memcmp(Mask8, Mask16, sizeof(Mask8)),
+       "eight- and sixteen-byte queries disagree on the first mask\n");
+
+    Self = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, GetCurrentProcessId());
+    ok(Self != NULL, "OpenProcess(self) failed with %lu\n", GetLastError());
+    if (Self)
+    {
+        memset(First, 0xCC, sizeof(First));
+        FirstOutput = First + MITIGATION_GUARD_BYTES;
+        FirstSuccess = GetPolicy(Self,
+                                 PROCESS_MITIGATION_OPTIONS_MASK_POLICY,
+                                 FirstOutput,
+                                 sizeof(Mask16));
+        ok(FirstSuccess, "real-handle query failed with %lu\n", GetLastError());
+        ok(FirstSuccess && !memcmp(FirstOutput, Mask16, sizeof(Mask16)),
+           "real-handle query disagrees with the pseudo-handle query\n");
+        ok(AllBytesEqual(First, MITIGATION_GUARD_BYTES, 0xCC) &&
+           AllBytesEqual(FirstOutput + sizeof(Mask16),
+                         sizeof(First) - MITIGATION_GUARD_BYTES - sizeof(Mask16),
+                         0xCC),
+           "real-handle query wrote outside its output\n");
+        CloseHandle(Self);
+    }
+
+    memset(First, 0xCC, sizeof(First));
+    SetLastError(0xDEADBEEF);
+    FirstSuccess = GetPolicy(GetCurrentProcess(),
+                             0xFFFFFFFF,
+                             First + MITIGATION_GUARD_BYTES,
+                             sizeof(Mask16));
+    Error = GetLastError();
+    ok(!FirstSuccess, "invalid mitigation policy unexpectedly succeeded\n");
+    ok(Error == ERROR_INVALID_PARAMETER,
+       "invalid mitigation policy returned error %lu\n", Error);
+    ok(AllBytesEqual(First, sizeof(First), 0xCC),
+       "invalid mitigation policy modified the guarded buffer\n");
+
+    memset(First, 0xCC, sizeof(First));
+    SetLastError(0xDEADBEEF);
+    FirstSuccess = GetPolicy(INVALID_HANDLE_VALUE,
+                             PROCESS_MITIGATION_OPTIONS_MASK_POLICY,
+                             First + MITIGATION_GUARD_BYTES,
+                             sizeof(Mask16));
+    ok(FirstSuccess, "invalid-handle query failed with %lu\n", GetLastError());
+    ok(FirstSuccess &&
+       !memcmp(First + MITIGATION_GUARD_BYTES, Mask16, sizeof(Mask16)),
+       "invalid-handle query disagrees with the current-process query\n");
+    ok(AllBytesEqual(First, MITIGATION_GUARD_BYTES, 0xCC) &&
+       AllBytesEqual(First + MITIGATION_GUARD_BYTES + sizeof(Mask16),
+                     sizeof(First) - MITIGATION_GUARD_BYTES - sizeof(Mask16),
+                     0xCC),
+       "invalid-handle query wrote outside its output\n");
+}
+
 static DWORD
 GetIntegrityRid(
     _In_ HANDLE Token)
@@ -406,6 +595,8 @@ START_TEST(SandboxLaunch)
     ArgumentCount = winetest_get_mainargs(&Arguments);
     if (ArgumentCount >= 3 && !strcmp(Arguments[2], "child"))
         TerminateProcess(GetCurrentProcess(), RunChild());
+
+    TestMitigationOptionsMask();
 
     ZeroMemory(&Startup, sizeof(Startup));
 

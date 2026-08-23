@@ -38,6 +38,8 @@ typedef struct _K32_PROCESS_MITIGATION_DEP_POLICY
     BOOLEAN Permanent;
 } K32_PROCESS_MITIGATION_DEP_POLICY, *PK32_PROCESS_MITIGATION_DEP_POLICY;
 
+#define K32_MITIGATION_OPTION_DEP_ENABLE 0x1ULL
+
 BOOL
 WINAPI
 GetProcessMitigationPolicy(
@@ -47,13 +49,35 @@ GetProcessMitigationPolicy(
     _In_ SIZE_T dwLength)
 {
     PK32_PROCESS_MITIGATION_DEP_POLICY DepPolicy;
+    ULONGLONG OptionsMask = 0;
     DWORD Flags;
     BOOL Permanent;
 
-    if (MitigationPolicy >= MaxProcessMitigationPolicy || !lpBuffer)
+    if ((ULONG)MitigationPolicy >= MaxProcessMitigationPolicy || !lpBuffer)
     {
         SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
+    }
+
+    if (MitigationPolicy == ProcessMitigationOptionsMask)
+    {
+        if (dwLength < sizeof(OptionsMask))
+        {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+
+        /*
+         * Creation mitigation flags use two bits per option. Do not advertise
+         * policies that ReactOS accepts but does not enforce. DEP is mandatory
+         * on 64-bit builds and is the only creation policy reported for now.
+         */
+#ifdef _WIN64
+        OptionsMask = K32_MITIGATION_OPTION_DEP_ENABLE;
+#endif
+        RtlZeroMemory(lpBuffer, dwLength);
+        RtlCopyMemory(lpBuffer, &OptionsMask, sizeof(OptionsMask));
+        return TRUE;
     }
 
     if (MitigationPolicy != ProcessDEPPolicy || dwLength != sizeof(*DepPolicy))
