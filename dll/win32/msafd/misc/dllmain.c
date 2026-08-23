@@ -1844,58 +1844,73 @@ WSPAccept(
     return AcceptSocket;
 }
 
-static
-VOID
-NTAPI
-MsafdConnectAPC(
-    _In_ PVOID ApcContext,
-    _In_ PIO_STATUS_BLOCK IoStatusBlock,
-    _In_ ULONG Reserved)
+static VOID
+MsafdCompleteConnect(
+    _In_ PMSAFD_CONNECT_CONTEXT Context)
 {
-    PMSAFD_CONNECT_APC_CONTEXT Context = ApcContext;
+    PSOCKET_INFORMATION Socket;
+    PIO_STATUS_BLOCK IoStatusBlock = &Context->IoStatusBlock;
 
-    TRACE("MsafdConnectAPC(%p %lx %lx)\n", ApcContext, IoStatusBlock->Status, IoStatusBlock->Information);
+    TRACE("MsafdCompleteConnect(%p %lx %lx)\n",
+          Context,
+          IoStatusBlock->Status,
+          IoStatusBlock->Information);
 
-    PSOCKET_INFORMATION Socket = GetSocketStructure(Context->lpSocket);
-    if (!Socket)
+    EnterCriticalSection(&SocketListLock);
+
+    Socket = SocketListHead;
+    while (Socket && Socket->Handle != Context->lpSocket)
+        Socket = Socket->NextSocket;
+
+    if (Socket && Socket->SharedData->State != SocketClosed)
     {
-        // FIXME: Socket is closed before this APC could run
-        HeapFree(GlobalHeap, 0, ApcContext);
-        return;
+        Socket->SharedData->SocketLastError = TranslateNtStatusError(IoStatusBlock->Status);
+        if (IoStatusBlock->Status == STATUS_SUCCESS)
+        {
+            Socket->SharedData->State = SocketConnected;
+            Socket->TdiConnectionHandle = (HANDLE)IoStatusBlock->Information;
+            Socket->SharedData->ConnectTime = GetCurrentTimeInSeconds();
+        }
+
+        /* Re-enable Async Event */
+        SockReenableAsyncSelectEvent(Socket, FD_WRITE);
+
+        /* FIXME: THIS IS NOT RIGHT!!! HACK HACK HACK! */
+        SockReenableAsyncSelectEvent(Socket, FD_CONNECT);
+
+        if (IoStatusBlock->Status == STATUS_SUCCESS && (Socket->HelperEvents & WSH_NOTIFY_CONNECT))
+        {
+            Socket->HelperData->WSHNotify(Socket->HelperContext,
+                                          Socket->Handle,
+                                          Socket->TdiAddressHandle,
+                                          Socket->TdiConnectionHandle,
+                                          WSH_NOTIFY_CONNECT);
+        }
+        else if (IoStatusBlock->Status != STATUS_SUCCESS && (Socket->HelperEvents & WSH_NOTIFY_CONNECT_ERROR))
+        {
+            Socket->HelperData->WSHNotify(Socket->HelperContext,
+                                          Socket->Handle,
+                                          Socket->TdiAddressHandle,
+                                          Socket->TdiConnectionHandle,
+                                          WSH_NOTIFY_CONNECT_ERROR);
+        }
     }
 
-    Socket->SharedData->SocketLastError = TranslateNtStatusError(IoStatusBlock->Status);
-    if (IoStatusBlock->Status == STATUS_SUCCESS)
-    {
-        Socket->SharedData->State = SocketConnected;
-        Socket->TdiConnectionHandle = (HANDLE)IoStatusBlock->Information;
-        Socket->SharedData->ConnectTime = GetCurrentTimeInSeconds();
-    }
+    LeaveCriticalSection(&SocketListLock);
 
-    /* Re-enable Async Event */
-    SockReenableAsyncSelectEvent(Socket, FD_WRITE);
+    NtClose(Context->Event);
+    HeapFree(GlobalHeap, 0, Context);
+}
 
-    /* FIXME: THIS IS NOT RIGHT!!! HACK HACK HACK! */
-    SockReenableAsyncSelectEvent(Socket, FD_CONNECT);
+static DWORD WINAPI
+MsafdConnectWorker(
+    _In_ PVOID Parameter)
+{
+    PMSAFD_CONNECT_CONTEXT Context = Parameter;
 
-    if (IoStatusBlock->Status == STATUS_SUCCESS && (Socket->HelperEvents & WSH_NOTIFY_CONNECT))
-    {
-        Socket->HelperData->WSHNotify(Socket->HelperContext,
-                                      Socket->Handle,
-                                      Socket->TdiAddressHandle,
-                                      Socket->TdiConnectionHandle,
-                                      WSH_NOTIFY_CONNECT);
-    }
-    else if (IoStatusBlock->Status != STATUS_SUCCESS && (Socket->HelperEvents & WSH_NOTIFY_CONNECT_ERROR))
-    {
-        Socket->HelperData->WSHNotify(Socket->HelperContext,
-                                      Socket->Handle,
-                                      Socket->TdiAddressHandle,
-                                      Socket->TdiConnectionHandle,
-                                      WSH_NOTIFY_CONNECT_ERROR);
-    }
-
-    HeapFree(GlobalHeap, 0, ApcContext);
+    WaitForSingleObject(Context->Event, INFINITE);
+    MsafdCompleteConnect(Context);
+    return 0;
 }
 
 int
@@ -1919,9 +1934,9 @@ WSPConnect(SOCKET Handle,
     ULONG                      InConnectDataLength;
     HANDLE                     SockEvent;
     int                        SocketDataLength;
-    PMSAFD_CONNECT_APC_CONTEXT APCContext = NULL;
-    PIO_APC_ROUTINE            APCFunction = NULL;
+    PMSAFD_CONNECT_CONTEXT     ConnectContext = NULL;
     UCHAR                      Buffer[128];
+    BOOLEAN                    CompletionHandled = FALSE;
 
     TRACE("WSPConnect(%x)\n", Handle);
 
@@ -2053,20 +2068,20 @@ WSPConnect(SOCKET Handle,
     ConnectInfo->UseSAN = FALSE;
     ConnectInfo->Unknown = 0;
 
-    /* Verify if we should use APC */
+    /* Allocate persistent completion state for a nonblocking connect. */
     if (Socket->SharedData->NonBlocking)
     {
-        APCContext = HeapAlloc(GlobalHeap, 0, sizeof(*APCContext));
-        if (!APCContext)
+        ConnectContext = HeapAlloc(GlobalHeap, HEAP_ZERO_MEMORY, sizeof(*ConnectContext));
+        if (!ConnectContext)
         {
-            ERR("Not enough memory for APC Context\n");
+            ERR("Not enough memory for connect context\n");
             Status = STATUS_INSUFFICIENT_RESOURCES;
             goto Leave;
         }
-        APCContext->lpSocket = Handle;
-        APCFunction = &MsafdConnectAPC;
+        ConnectContext->lpSocket = Handle;
+        ConnectContext->Event = SockEvent;
 
-        IOSB = &APCContext->IoStatusBlock;
+        IOSB = &ConnectContext->IoStatusBlock;
     }
 
     IOSB->Status = STATUS_PENDING;
@@ -2074,9 +2089,9 @@ WSPConnect(SOCKET Handle,
 
     /* Send IOCTL */
     Status = NtDeviceIoControlFile((HANDLE)Handle,
-                                   APCFunction ? NULL : SockEvent,
-                                   APCFunction,
-                                   APCContext,
+                                   SockEvent,
+                                   NULL,
+                                   NULL,
                                    IOSB,
                                    IOCTL_AFD_CONNECT,
                                    ConnectInfo,
@@ -2087,14 +2102,26 @@ WSPConnect(SOCKET Handle,
     {
         if (Status == STATUS_PENDING)
         {
-            Status = STATUS_CANT_WAIT; // WSAEWOULDBLOCK
-            goto Leave;
+            if (QueueUserWorkItem(MsafdConnectWorker,
+                                  ConnectContext,
+                                  WT_EXECUTELONGFUNCTION))
+            {
+                CompletionHandled = TRUE;
+                ConnectContext = NULL;
+                SockEvent = NULL;
+                Status = STATUS_CANT_WAIT; // WSAEWOULDBLOCK
+                goto Leave;
+            }
+
+            /* Preserve completion ownership if the worker pool is unavailable. */
+            MsafdWaitForAlert(SockEvent);
+            Status = IOSB->Status;
         }
-        else
-        {
-            /* HACK: Allow APC to be processed */
-            SleepEx(0, TRUE);
-        }
+
+        MsafdCompleteConnect(ConnectContext);
+        CompletionHandled = TRUE;
+        ConnectContext = NULL;
+        SockEvent = NULL;
     }
     else
     {
@@ -2139,40 +2166,44 @@ WSPConnect(SOCKET Handle,
 Leave:
     TRACE("Ending %lx\n", Status);
 
-    NtClose(SockEvent);
+    if (SockEvent)
+        NtClose(SockEvent);
 
-    /* Re-enable Async Event */
-    SockReenableAsyncSelectEvent(Socket, FD_WRITE);
-
-    /* FIXME: THIS IS NOT RIGHT!!! HACK HACK HACK! */
-    SockReenableAsyncSelectEvent(Socket, FD_CONNECT);
-
-    if (Status == STATUS_SUCCESS && (Socket->HelperEvents & WSH_NOTIFY_CONNECT))
+    if (!CompletionHandled)
     {
-        Errno = Socket->HelperData->WSHNotify(Socket->HelperContext,
-                                              Socket->Handle,
-                                              Socket->TdiAddressHandle,
-                                              Socket->TdiConnectionHandle,
-                                              WSH_NOTIFY_CONNECT);
+        /* Re-enable Async Event */
+        SockReenableAsyncSelectEvent(Socket, FD_WRITE);
 
-        if (Errno)
+        /* FIXME: THIS IS NOT RIGHT!!! HACK HACK HACK! */
+        SockReenableAsyncSelectEvent(Socket, FD_CONNECT);
+
+        if (Status == STATUS_SUCCESS && (Socket->HelperEvents & WSH_NOTIFY_CONNECT))
         {
-            if (lpErrno) *lpErrno = Errno;
-            return SOCKET_ERROR;
+            Errno = Socket->HelperData->WSHNotify(Socket->HelperContext,
+                                                  Socket->Handle,
+                                                  Socket->TdiAddressHandle,
+                                                  Socket->TdiConnectionHandle,
+                                                  WSH_NOTIFY_CONNECT);
+
+            if (Errno)
+            {
+                if (lpErrno) *lpErrno = Errno;
+                return SOCKET_ERROR;
+            }
         }
-    }
-    else if (Status != STATUS_SUCCESS && (Socket->HelperEvents & WSH_NOTIFY_CONNECT_ERROR))
-    {
-        Errno = Socket->HelperData->WSHNotify(Socket->HelperContext,
-                                              Socket->Handle,
-                                              Socket->TdiAddressHandle,
-                                              Socket->TdiConnectionHandle,
-                                              WSH_NOTIFY_CONNECT_ERROR);
-
-        if (Errno)
+        else if (Status != STATUS_SUCCESS && (Socket->HelperEvents & WSH_NOTIFY_CONNECT_ERROR))
         {
-            if (lpErrno) *lpErrno = Errno;
-            return SOCKET_ERROR;
+            Errno = Socket->HelperData->WSHNotify(Socket->HelperContext,
+                                                  Socket->Handle,
+                                                  Socket->TdiAddressHandle,
+                                                  Socket->TdiConnectionHandle,
+                                                  WSH_NOTIFY_CONNECT_ERROR);
+
+            if (Errno)
+            {
+                if (lpErrno) *lpErrno = Errno;
+                return SOCKET_ERROR;
+            }
         }
     }
 
