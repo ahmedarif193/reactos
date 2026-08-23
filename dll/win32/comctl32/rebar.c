@@ -3802,6 +3802,10 @@ REBAR_WindowProc (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
         case WM_SYSCOLORCHANGE:
             COMCTL32_RefreshSysColors();
+#ifdef __REACTOS__
+            infoPtr->clrBtnText = comctl32_color.clrBtnText;
+            infoPtr->clrBtnFace = comctl32_color.clrBtnFace;
+#endif
             return 0;
 
 /*      case WM_VKEYTOITEM:     supported according to ControlSpy */
