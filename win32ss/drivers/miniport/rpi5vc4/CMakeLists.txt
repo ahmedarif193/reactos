@@ -1,3 +1,8 @@
+# PROJECT:     ReactOS Raspberry Pi 5 framebuffer miniport
+# LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+# PURPOSE:     Raspberry Pi 5 VC4 miniport build rules
+# COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
+
 list(APPEND SOURCE
     rpi5vc4.c
     rpi5vc4_hvs.c
