@@ -2945,7 +2945,7 @@
 @ stub -arch=arm64 ReadTimeStampCounter
 @ stub -arch=arm64 RtlAddAccessFilterAce
 @ stub -arch=arm64 RtlAddAtomToAtomTableEx
-@ stub -arch=arm64 RtlAddMandatoryAce
+@ stdcall -arch=arm64 RtlAddMandatoryAce(ptr long long long long ptr)
 @ stub -arch=arm64 RtlAddProcessTrustLabelAce
 @ stub -arch=arm64 RtlAddResourceAttributeAce
 @ stub -arch=arm64 RtlAreBitsClearEx

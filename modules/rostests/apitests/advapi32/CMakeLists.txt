@@ -1,5 +1,6 @@
 
 list(APPEND SOURCE
+    AddMandatoryAce.c
     CreateService.c
     DuplicateTokenEx.c
     eventlog.c
