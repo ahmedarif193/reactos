@@ -1159,6 +1159,34 @@ static void riff_find_chunk( DWORD chunk_id, DWORD chunk_type, const riff_chunk_
     }
 }
 
+static void CURSORICON_FreeCursorData(
+    _Inout_ CURSORDATA* pCurData
+)
+{
+    UINT i;
+
+    if (pCurData->CURSORF_flags & CURSORF_ACON)
+    {
+        if (pCurData->aspcur)
+        {
+            for (i = 0; i < pCurData->cpcur; i++)
+            {
+                if (pCurData->aspcur[i].hbmMask) DeleteObject(pCurData->aspcur[i].hbmMask);
+                if (pCurData->aspcur[i].hbmColor) DeleteObject(pCurData->aspcur[i].hbmColor);
+                if (pCurData->aspcur[i].hbmAlpha) DeleteObject(pCurData->aspcur[i].hbmAlpha);
+            }
+            HeapFree(GetProcessHeap(), 0, pCurData->aspcur);
+        }
+    }
+    else
+    {
+        if (pCurData->hbmMask) DeleteObject(pCurData->hbmMask);
+        if (pCurData->hbmColor) DeleteObject(pCurData->hbmColor);
+        if (pCurData->hbmAlpha) DeleteObject(pCurData->hbmAlpha);
+    }
+    ZeroMemory(pCurData, sizeof(*pCurData));
+}
+
 static BOOL CURSORICON_GetCursorDataFromANI(
     _Inout_ CURSORDATA* pCurData,
     _In_    const BYTE *pData,
@@ -1187,7 +1215,7 @@ static BOOL CURSORICON_GetCursorDataFromANI(
 
     /* Find the header chunk */
     riff_find_chunk( ANI_anih_ID, 0, &ACON_chunk, &anih_chunk );
-    if (!ACON_chunk.data)
+    if (!anih_chunk.data)
     {
         ERR("Failed to get header chunk.\n");
         return FALSE;
@@ -1262,7 +1290,7 @@ static BOOL CURSORICON_GetCursorDataFromANI(
                 chunk_size,
                 pCurData->cx,
                 pCurData->cy,
-                TRUE,
+                pCurData->rt == LOWORD(RT_ICON),
                 fuLoad);
             if(!pDirEntry)
             {
@@ -1291,7 +1319,11 @@ static BOOL CURSORICON_GetCursorDataFromANI(
         }
 
         /* Do the real work */
-        CURSORICON_GetCursorDataFromBMI(pFrameData, pbmi);
+        if (!CURSORICON_GetCursorDataFromBMI(pFrameData, pbmi))
+        {
+            ERR("Unable to load frame %d.\n", i);
+            goto error;
+        }
 
         if(pHeader->num_frames > 1)
             pFrameData->CURSORF_flags |= CURSORF_ACONFRAME;
@@ -1328,9 +1360,58 @@ static BOOL CURSORICON_GetCursorDataFromANI(
     return TRUE;
 
 error:
-    HeapFree(GetProcessHeap(), 0, pCurData->aspcur);
-    ZeroMemory(pCurData, sizeof(CURSORDATA));
+    CURSORICON_FreeCursorData(pCurData);
     return FALSE;
+}
+
+static HANDLE CURSORICON_CreateFromANI(
+    _In_ const BYTE *pData,
+    _In_ DWORD dwDataSize,
+    _In_opt_ PUNICODE_STRING pustrModule,
+    _In_opt_ PUNICODE_STRING pustrRsrc,
+    _In_ int cxDesired,
+    _In_ int cyDesired,
+    _In_ UINT fuLoad,
+    _In_ BOOL bIcon
+)
+{
+    CURSORDATA cursorData = { 0 };
+    HANDLE hCurIcon;
+
+    cursorData.cx = cxDesired;
+    cursorData.cy = cyDesired;
+    cursorData.rt = LOWORD(bIcon ? RT_ICON : RT_CURSOR);
+    if (pustrModule)
+        cursorData.CURSORF_flags = CURSORF_FROMRESOURCE;
+
+    if (!CURSORICON_GetCursorDataFromANI(&cursorData, pData, dwDataSize, fuLoad))
+    {
+        ERR("Could not get cursor data from .ani.\n");
+        return NULL;
+    }
+
+    if (fuLoad & LR_SHARED)
+        cursorData.CURSORF_flags |= CURSORF_LRSHARED;
+
+    hCurIcon = NtUserxCreateEmptyCurObject(!!(cursorData.CURSORF_flags & CURSORF_ACON));
+    if (hCurIcon && !NtUserSetCursorIconData(hCurIcon, pustrModule, pustrRsrc, &cursorData))
+    {
+        ERR("NtUserSetCursorIconData failed.\n");
+        NtUserDestroyCursor(hCurIcon, TRUE);
+        hCurIcon = NULL;
+    }
+
+    if (hCurIcon)
+    {
+        if (cursorData.CURSORF_flags & CURSORF_ACON)
+            HeapFree(GetProcessHeap(), 0, cursorData.aspcur);
+    }
+    else
+    {
+        CURSORICON_FreeCursorData(&cursorData);
+    }
+
+    return hCurIcon;
 }
 
 
@@ -1650,7 +1731,7 @@ CURSORICON_LoadFromFileW(
     /* Check for .ani. */
     if (memcmp( bits, "RIFF", 4 ) == 0)
     {
-        UNIMPLEMENTED;
+        hCurIcon = CURSORICON_CreateFromANI(bits, filesize, NULL, NULL, cxDesired, cyDesired, fuLoad, bIcon);
         goto end;
     }
 
@@ -1865,7 +1946,34 @@ CURSORICON_LoadImageW(
 
     /* We let FindResource, LoadResource, etc. call SetLastError */
     if(!hrsrc)
+    {
+        /* Fall back to an animated resource */
+        hrsrc = FindResourceW(
+            hinst,
+            lpszName,
+            bIcon ? RT_ANIICON : RT_ANICURSOR);
+        if(!hrsrc)
+            goto done;
+
+        handle = LoadResource(hinst, hrsrc);
+        if(!handle)
+            goto done;
+
+        bits = LockResource(handle);
+        if(bits)
+        {
+            hCurIcon = CURSORICON_CreateFromANI(bits,
+                                                SizeofResource(hinst, hrsrc),
+                                                hinst ? &ustrModule : NULL,
+                                                lpszName ? &ustrRsrc : NULL,
+                                                cxDesired,
+                                                cyDesired,
+                                                fuLoad,
+                                                bIcon);
+        }
+        FreeResource(handle);
         goto done;
+    }
 
     handle = LoadResource(hinst, hrsrc);
     if(!handle)
@@ -2825,7 +2933,6 @@ HICON WINAPI CreateIconFromResourceEx(
 {
     CURSORDATA cursorData;
     HICON hIcon;
-    BOOL isAnimated;
     PBYTE pbBmpIcon = NULL;
     DWORD BmpIconSize;
 
@@ -2851,12 +2958,7 @@ HICON WINAPI CreateIconFromResourceEx(
     /* Convert to win32k-ready data */
     if(!memcmp(pbIconBits, "RIFF", 4))
     {
-        if(!CURSORICON_GetCursorDataFromANI(&cursorData, pbIconBits, cbIconBits, uFlags))
-        {
-            ERR("Could not get cursor data from .ani.\n");
-            return NULL;
-        }
-        isAnimated = !!(cursorData.CURSORF_flags & CURSORF_ACON);
+        return CURSORICON_CreateFromANI(pbIconBits, cbIconBits, NULL, NULL, cxDesired, cyDesired, uFlags, fIcon);
     }
     else
     {
@@ -2917,8 +3019,6 @@ HICON WINAPI CreateIconFromResourceEx(
             pbIconBits = (PBYTE)pt;
         }
 
-        isAnimated = FALSE;
-
         /* Try to load BMP icon */
         if (!CURSORICON_GetCursorDataFromBMI(&cursorData, (PBITMAPINFO)pbIconBits))
         {
@@ -2947,7 +3047,7 @@ HICON WINAPI CreateIconFromResourceEx(
     if (uFlags & LR_SHARED)
         cursorData.CURSORF_flags |= CURSORF_LRSHARED;
 
-    hIcon = NtUserxCreateEmptyCurObject(isAnimated);
+    hIcon = NtUserxCreateEmptyCurObject(FALSE);
     if (!hIcon)
         goto end_error;
 
@@ -2958,17 +3058,12 @@ HICON WINAPI CreateIconFromResourceEx(
         goto end_error;
     }
 
-    if(isAnimated)
-        HeapFree(GetProcessHeap(), 0, cursorData.aspcur);
-
     HeapFree(GetProcessHeap(), 0, pbBmpIcon);
     return hIcon;
 
     /* Clean up */
 end_error:
     HeapFree(GetProcessHeap(), 0, pbBmpIcon);
-    if(isAnimated)
-        HeapFree(GetProcessHeap(), 0, cursorData.aspcur);
     if (cursorData.hbmMask) DeleteObject(cursorData.hbmMask);
     if (cursorData.hbmColor) DeleteObject(cursorData.hbmColor);
     if (cursorData.hbmAlpha) DeleteObject(cursorData.hbmAlpha);
