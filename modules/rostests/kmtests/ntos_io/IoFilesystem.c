@@ -711,6 +711,38 @@ TestRelativeNames(VOID)
 
 static
 VOID
+TestQueryAttributesMissing(VOID)
+{
+    static const struct
+    {
+        PCWSTR Path;
+        NTSTATUS ExpectedStatus;
+    } Tests[] =
+    {
+        { L"\\SystemRoot\\ReactOS-Kmtest-Missing", STATUS_OBJECT_NAME_NOT_FOUND },
+        { L"\\SystemRoot\\ReactOS-Kmtest-Missing\\file", STATUS_OBJECT_PATH_NOT_FOUND },
+    };
+    FILE_NETWORK_OPEN_INFORMATION Information;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    UNICODE_STRING Path;
+    NTSTATUS Status;
+    ULONG Index;
+
+    for (Index = 0; Index < RTL_NUMBER_OF(Tests); Index++)
+    {
+        RtlInitUnicodeString(&Path, Tests[Index].Path);
+        InitializeObjectAttributes(&ObjectAttributes,
+                                   &Path,
+                                   OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
+                                   NULL,
+                                   NULL);
+        Status = ZwQueryFullAttributesFile(&ObjectAttributes, &Information);
+        ok_eq_hex(Status, Tests[Index].ExpectedStatus);
+    }
+}
+
+static
+VOID
 TestSharedCacheMap(VOID)
 {
     NTSTATUS Status;
@@ -881,5 +913,6 @@ START_TEST(IoFilesystem)
              "IoFilesystem path matrix requires a FAT32 or NTFS SystemRoot backing store\n"))
         return;
     TestRelativeNames();
+    TestQueryAttributesMissing();
     TestSharedCacheMap();
 }
