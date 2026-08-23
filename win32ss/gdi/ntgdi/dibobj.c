@@ -933,7 +933,8 @@ GreGetDIBitsInternal(
 {
     BITMAPCOREINFO* pbmci = NULL;
     PSURFACE psurf = NULL;
-    PDC pDC;
+    PDC pDC = NULL;
+    HDC hdcTemp = NULL;
     LONG width, height;
     WORD planes, bpp;
     DWORD compr, size ;
@@ -950,8 +951,25 @@ GreGetDIBitsInternal(
     pDC = DC_LockDc(hDC);
     if (pDC == NULL || pDC->dctype == DCTYPE_INFO)
     {
-        ScanLines = 0;
-        goto done;
+        if (pDC)
+        {
+            DC_UnlockDc(pDC);
+            pDC = NULL;
+        }
+
+        hdcTemp = GreCreateCompatibleDC(NULL, FALSE);
+        if (!hdcTemp)
+        {
+            ScanLines = 0;
+            goto done;
+        }
+
+        pDC = DC_LockDc(hdcTemp);
+        if (!pDC)
+        {
+            ScanLines = 0;
+            goto done;
+        }
     }
 
     /* Get a pointer to the source bitmap object */
@@ -1339,6 +1357,9 @@ done:
     if (pDC)
         DC_UnlockDc(pDC);
 
+    if (hdcTemp)
+        GreDeleteObject(hdcTemp);
+
     return ScanLines;
 }
 
@@ -1361,9 +1382,38 @@ NtGdiGetDIBitsInternal(
     HANDLE hSecure = NULL;
     INT iResult = 0;
     UINT cjAlloc;
+    UINT cjHeader;
 
     /* Check for bad iUsage */
     if (iUsage > 2) return 0;
+
+    if (!pbmi)
+    {
+        return 0;
+    }
+
+    /* A zero size asks win32k to infer the structure size from its header. */
+    if (cjMaxInfo == 0)
+    {
+        _SEH2_TRY
+        {
+            ProbeForRead(pbmi, sizeof(DWORD), 1);
+            cjHeader = pbmi->bmiHeader.biSize;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            return 0;
+        }
+        _SEH2_END;
+
+        if ((cjHeader < sizeof(BITMAPCOREHEADER)) ||
+            (cjHeader > sizeof(BITMAPV5HEADER)))
+        {
+            return 0;
+        }
+
+        cjMaxInfo = cjHeader;
+    }
 
     /* Check if the size of the bitmap info is large enough */
     if (cjMaxInfo < sizeof(BITMAPCOREHEADER))
@@ -1385,6 +1435,7 @@ NtGdiGetDIBitsInternal(
         /* Fail */
         return 0;
     }
+    RtlZeroMemory(pbmiSafe, cjAlloc);
 
     /* Use SEH */
     _SEH2_TRY
@@ -2119,37 +2170,78 @@ NtGdiCreateDIBSection(
 {
     HBITMAP hbitmap = 0;
     DC *dc;
-    BOOL bDesktopDC = FALSE;
-    NTSTATUS Status = STATUS_SUCCESS;
+    BOOL bTemporaryDC = FALSE;
+    UINT cjExpected;
+    ULONG ulError = EngGetLastError();
 
     if (!bmi) return hbitmap; // Make sure.
 
-    _SEH2_TRY
+    if (!Bits)
     {
-        ProbeForRead(&bmi->bmiHeader.biSize, sizeof(DWORD), 1);
-        ProbeForRead(bmi, bmi->bmiHeader.biSize, 1);
-        ProbeForRead(bmi, DIB_BitmapInfoSize(bmi, (WORD)Usage), 1);
+        /* Header-size validation precedes output-pointer validation. */
+        if (!MmIsAddressValid(bmi))
+            return NULL;
     }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-    {
-        Status = _SEH2_GetExceptionCode();
-    }
-    _SEH2_END;
 
-    if(!NT_SUCCESS(Status))
+    if (!MmIsAddressValid(bmi) ||
+        !MmIsAddressValid((PBYTE)bmi + sizeof(DWORD) - 1))
     {
-        SetLastNtError(Status);
+        EngSetLastError(ERROR_INVALID_PARAMETER);
         return NULL;
     }
 
-    // If the reference hdc is null, take the desktop dc
-    if (hDC == 0)
+    if ((bmi->bmiHeader.biSize < sizeof(BITMAPINFOHEADER)) ||
+        (bmi->bmiHeader.biSize & (sizeof(DWORD) - 1)) ||
+        !MmIsAddressValid((PBYTE)bmi + bmi->bmiHeader.biSize - 1))
     {
-        hDC = NtGdiCreateCompatibleDC(0);
-        bDesktopDC = TRUE;
+        return NULL;
     }
 
-    if ((dc = DC_LockDc(hDC)))
+    cjExpected = bmi->bmiHeader.biSize;
+    if (bmi->bmiHeader.biBitCount <= 8)
+    {
+        UINT cColors = bmi->bmiHeader.biClrUsed;
+        if (!cColors)
+            cColors = 1U << bmi->bmiHeader.biBitCount;
+        cjExpected += min(cColors, 256U) *
+                      ((Usage == DIB_PAL_COLORS) ? sizeof(WORD) : sizeof(RGBQUAD));
+    }
+    else if ((bmi->bmiHeader.biCompression == BI_BITFIELDS) &&
+             (bmi->bmiHeader.biSize < sizeof(BITMAPV4HEADER)))
+    {
+        cjExpected += 3 * sizeof(DWORD);
+    }
+    if ((cjHeader != cjExpected) ||
+        !MmIsAddressValid((PBYTE)bmi + cjExpected - 1))
+    {
+        return NULL;
+    }
+
+    if (Usage > 2)
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        return NULL;
+    }
+
+    if (Usage == DIB_PAL_INDICES)
+        return NULL;
+
+    if (!Bits || !MmIsAddressValid(Bits) ||
+        !MmIsAddressValid((PBYTE)Bits + sizeof(*Bits) - 1))
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        return NULL;
+    }
+
+    dc = DC_LockDc(hDC);
+    if (!dc)
+    {
+        hDC = NtGdiCreateCompatibleDC(0);
+        bTemporaryDC = TRUE;
+        dc = DC_LockDc(hDC);
+    }
+
+    if (dc)
     {
         hbitmap = DIB_CreateDIBSection(dc,
                                        bmi,
@@ -2160,13 +2252,12 @@ NtGdiCreateDIBSection(
                                        0);
         DC_UnlockDc(dc);
     }
-    else
-    {
-        EngSetLastError(ERROR_INVALID_HANDLE);
-    }
 
-    if (bDesktopDC)
+    if (bTemporaryDC && hDC)
         NtGdiDeleteObjectApp(hDC);
+
+    if (hbitmap)
+        EngSetLastError(ulError);
 
     return hbitmap;
 }
@@ -2336,7 +2427,7 @@ DIB_CreateDIBSection(
         bmp->hSecure = hSecure;
         bmp->dwOffset = offset;
         bmp->flags = API_BITMAP;
-        bmp->biClrImportant = bi->biClrImportant;
+        bmp->biClrImportant = 0;
         hSecure = NULL;
     }
 
