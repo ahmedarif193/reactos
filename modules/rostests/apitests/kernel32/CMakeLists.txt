@@ -4,6 +4,7 @@ add_subdirectory(redirptest)
 add_message_headers(ANSI FormatMessage.mc)
 
 list(APPEND SOURCE
+    Arm64ThreadContext.c
     ConsoleCP.c
     ConsoleProcessInheritance.c
     ConsoleVirtualTerminal.c

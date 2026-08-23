@@ -294,20 +294,21 @@ PspGetOrSetContextKernelRoutine(
     NT_ASSERT(KeGetCurrentThread() == Thread);
 
     /*
-     * ARM64: Determine where to find the trap frame.
-     *
-     * For kernel-mode requests, we may have a trap frame pointer saved
-     * in Thread->TrapFrame if the thread was interrupted.
-     *
-     * Otherwise, we compute the trap frame location from InitialStack
-     * using the KeGetTrapFrame/KeGetExceptionFrame macros.
+     * Prefer an active user frame regardless of the requestor's mode.  An
+     * ARM64 context APC can run from a system call or from the synthesized
+     * lower-EL interrupt frame, both of which contain the target's current
+     * user register state.  A kernel frame is valid only for a kernel-mode
+     * request; user-mode requests fall back to the permanent base frame.
      */
-    if (GetSetContext->Mode == KernelMode)
+    TrapFrame = Thread->TrapFrame;
+    if ((TrapFrame != NULL) &&
+        (GetSetContext->Mode != KernelMode) &&
+        (KiGetPreviousMode(TrapFrame) != UserMode))
     {
-        TrapFrame = Thread->TrapFrame;
+        TrapFrame = NULL;
     }
 
-    /* If no trap frame found, compute from thread's initial stack */
+    /* Recover the permanent user frame when no suitable frame is active. */
     if (TrapFrame == NULL)
     {
         TrapFrame = KeGetTrapFrame(Thread);

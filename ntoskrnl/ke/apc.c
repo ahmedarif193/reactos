@@ -321,6 +321,18 @@ KiDeliverApc(IN KPROCESSOR_MODE DeliveryMode,
 
     /* Save the old trap frame and set current one */
     OldTrapFrame = Thread->TrapFrame;
+#if defined(_M_ARM64)
+    /*
+     * ARM64 can deliver a kernel APC after a wait or IRQL transition while a
+     * user-entry frame is still active.  A NULL argument means that this APC
+     * delivery did not create a replacement frame; keep the active one visible
+     * to context APCs instead of masking it for the duration of delivery.
+     */
+    if ((DeliveryMode == KernelMode) && (TrapFrame == NULL))
+    {
+        TrapFrame = OldTrapFrame;
+    }
+#endif
     Thread->TrapFrame = TrapFrame;
 
     /* Clear Kernel APC Pending */
