@@ -351,7 +351,12 @@ NtGdiSelectBitmap(
     ASSERT_NOGDILOCKS();
 
     /* Verify parameters */
-    if (hdc == NULL || hbmp == NULL) return NULL;
+    if (hdc == NULL)
+    {
+        EngSetLastError(ERROR_INVALID_HANDLE);
+        return NULL;
+    }
+    if (hbmp == NULL) return NULL;
 
     /* First lock the DC */
     pdc = DC_LockDc(hdc);

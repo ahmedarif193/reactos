@@ -898,11 +898,25 @@ GdiGradientFill(
     _In_ ULONG nCount,
     _In_ ULONG ulMode)
 {
+    ULONG hType = GDI_HANDLE_GET_TYPE(hdc);
+
+    if (hType != GDILoObjType_LO_DC_TYPE &&
+        hType != GDILoObjType_LO_METADC16_TYPE &&
+        hType != GDILoObjType_LO_ALTDC_TYPE)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
     if (GDI_HANDLE_GET_TYPE(hdc) == GDILoObjType_LO_METADC16_TYPE) return TRUE;
 
     HANDLE_EMETAFDC(BOOL, GradientFill, FALSE, hdc, pVertex, nVertex, pMesh, nCount, ulMode);
 
-    if ( GdiConvertAndCheckDC(hdc) == NULL ) return FALSE;
+    if (GdiConvertAndCheckDC(hdc) == NULL)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
 
     return NtGdiGradientFill(hdc, pVertex, nVertex, pMesh, nCount, ulMode);
 }

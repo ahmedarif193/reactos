@@ -684,6 +684,14 @@ SetDIBits(
             SetLastError(ERROR_INVALID_PARAMETER);
             return 0;
         }
+
+        if (((lpbmi->bmiHeader.biCompression == BI_RLE8) ||
+             (lpbmi->bmiHeader.biCompression == BI_RLE4)) &&
+            (lpbmi->bmiHeader.biHeight < 0))
+        {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return 0;
+        }
     }
 
     if (lpbmi->bmiHeader.biCompression == BI_BITFIELDS)
@@ -781,6 +789,15 @@ SetDIBitsToDevice(
 
     if (!ScanLines || !lpbmi || !Bits)
         return 0;
+
+    if ((lpbmi->bmiHeader.biSize >= sizeof(BITMAPINFOHEADER)) &&
+        ((lpbmi->bmiHeader.biCompression == BI_RLE8) ||
+         (lpbmi->bmiHeader.biCompression == BI_RLE4)) &&
+        (lpbmi->bmiHeader.biHeight < 0))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
 
     DPRINT("ScanLines %d Height %d Width %d biHeight %d biWidth %d\n"
            "    lpbmi '%p' ColorUse '%d' SizeImage '%d' StartScan %d\n"
@@ -1147,5 +1164,4 @@ ClearBitmapAttributes(HBITMAP hbm, DWORD dwFlags)
     }
     return NtGdiClearBitmapAttributes( hbm, dwFlags );;
 }
-
 

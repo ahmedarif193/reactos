@@ -829,6 +829,9 @@ IntRoundRect(
        INT tmp = Bottom; Bottom = Top; Top = tmp;
     }
 
+    xCurveDiameter = min(xCurveDiameter, Right - Left);
+    yCurveDiameter = min(yCurveDiameter, Bottom - Top);
+
     pdcattr = dc->pdcattr;
 
     if (pdcattr->ulDirty_ & (DIRTY_FILL | DC_BRUSH_DIRTY))
@@ -988,6 +991,15 @@ GreGradientFill(
                 pTriangle->Vertex3 >= nVertex)
             {
                 /* Windows fails this case without setting an error */
+                return FALSE;
+            }
+
+            if (((pTriangle->Vertex1 == pTriangle->Vertex2) ||
+                 (pTriangle->Vertex1 == pTriangle->Vertex3) ||
+                 (pTriangle->Vertex2 == pTriangle->Vertex3)) &&
+                !((pTriangle->Vertex1 == pTriangle->Vertex2) &&
+                  (pTriangle->Vertex2 == pTriangle->Vertex3)))
+            {
                 return FALSE;
             }
         }
