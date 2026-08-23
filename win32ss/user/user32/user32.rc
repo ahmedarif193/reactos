@@ -12,6 +12,8 @@
 
 #define IDS_MDI_MOREWINDOWS 13
 
+#define ANICURSOR 21
+
 LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 
 /* Cursors */
@@ -19,7 +21,7 @@ LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 /* New cursor resources */
 100 CURSOR "resources/ocr_normal.cur"
 101 CURSOR "resources/ocr_ibeam.cur"
-102 CURSOR "resources/ocr_wait.cur"
+102 ANICURSOR "resources/ocr_wait.ani"
 103 CURSOR "resources/ocr_cross.cur"
 104 CURSOR "resources/ocr_up.cur"
 105 CURSOR "resources/ocr_sizenwse.cur"
@@ -28,7 +30,7 @@ LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 108 CURSOR "resources/ocr_sizens.cur"
 109 CURSOR "resources/ocr_sizeall.cur"
 110 CURSOR "resources/ocr_no.cur"
-111 CURSOR "resources/ocr_appstarting.cur"
+111 ANICURSOR "resources/ocr_appstarting.ani"
 112 CURSOR "resources/ocr_help.cur"
 113 CURSOR "resources/ocr_pen.cur"
 114 CURSOR "resources/ocr_hand.cur"
@@ -38,7 +40,7 @@ LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 /* Compatible cursor resources (will be removed) */
 OCR_NORMAL CURSOR "resources/ocr_normal.cur"
 OCR_IBEAM CURSOR "resources/ocr_ibeam.cur"
-OCR_WAIT CURSOR "resources/ocr_wait.cur"
+OCR_WAIT ANICURSOR "resources/ocr_wait.ani"
 OCR_CROSS CURSOR "resources/ocr_cross.cur"
 OCR_UP CURSOR "resources/ocr_up.cur"
 OCR_SIZENWSE CURSOR "resources/ocr_sizenwse.cur"
@@ -47,7 +49,7 @@ OCR_SIZEWE CURSOR "resources/ocr_sizewe.cur"
 OCR_SIZENS CURSOR "resources/ocr_sizens.cur"
 OCR_SIZEALL CURSOR "resources/ocr_sizeall.cur"
 OCR_NO CURSOR "resources/ocr_no.cur"
-OCR_APPSTARTING CURSOR "resources/ocr_appstarting.cur"
+OCR_APPSTARTING ANICURSOR "resources/ocr_appstarting.ani"
 OCR_HELP CURSOR "resources/ocr_help.cur"
 OCR_SIZE CURSOR "resources/ocr_size.cur"
 OCR_ICON CURSOR "resources/ocr_icon.cur"
