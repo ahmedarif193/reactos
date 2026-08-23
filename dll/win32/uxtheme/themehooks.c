@@ -688,44 +688,26 @@ ThemeInitApiHook(UAPIHK State, PUSERAPIHOOK puah)
     return TRUE;
 }
 
-typedef BOOL (WINAPI * PREGISTER_UAH_WINXP)(HINSTANCE hInstance, USERAPIHOOKPROC CallbackFunc);
-typedef BOOL (WINAPI * PREGISTER_UUAH_WIN2003)(PUSERAPIHOOKINFO puah);
+typedef BOOL (WINAPI *PREGISTER_UAH)(PUSERAPIHOOKINFO puah);
 
 BOOL WINAPI
 ThemeHooksInstall()
 {
-    PVOID lpFunc;
-    OSVERSIONINFO osvi;
+    PREGISTER_UAH register_hook;
+    USERAPIHOOKINFO uah;
     BOOL ret;
 
-    lpFunc = GetProcAddress(GetModuleHandle("user32.dll"), "RegisterUserApiHook");
+    /* ReactOS exports the Server 2003-style ABI for every version persona. */
+    register_hook = (PREGISTER_UAH)GetProcAddress(GetModuleHandleW(L"user32.dll"), "RegisterUserApiHook");
+    if (!register_hook)
+        return FALSE;
 
-    ZeroMemory(&osvi, sizeof(OSVERSIONINFO));
-    osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
-    GetVersionEx(&osvi);
-
-    if ( osvi.dwMajorVersion == 5 && osvi.dwMinorVersion == 1)
-    {
-        PREGISTER_UAH_WINXP lpfuncxp = (PREGISTER_UAH_WINXP)lpFunc;
-        ret = lpfuncxp(hDllInst, ThemeInitApiHook);
-    }
-    else
-    {
-        /* Server 2003 and later (incl. the NT6/NT10 version personas): ReactOS's
-         * RegisterUserApiHook always takes the 2003-style USERAPIHOOKINFO, so
-         * route every non-XP version here. Previously anything newer than 5.2
-         * fell through to UNIMPLEMENTED, leaving visual styles inactive. */
-        PREGISTER_UUAH_WIN2003 lpfunc2003 = (PREGISTER_UUAH_WIN2003)lpFunc;
-        USERAPIHOOKINFO uah;
-
-        uah.m_size = sizeof(uah);
-        uah.m_dllname1 = L"uxtheme.dll";
-        uah.m_funname1 = L"ThemeInitApiHook";
-        uah.m_dllname2 = NULL;
-        uah.m_funname2 = NULL;
-
-        ret = lpfunc2003(&uah);
-    }
+    uah.m_size = sizeof(uah);
+    uah.m_dllname1 = L"uxtheme.dll";
+    uah.m_funname1 = L"ThemeInitApiHook";
+    uah.m_dllname2 = NULL;
+    uah.m_funname2 = NULL;
+    ret = register_hook(&uah);
 
     UXTHEME_broadcast_theme_changed (NULL, TRUE);
 
