@@ -25,13 +25,13 @@ if(NOT DEFINED SEPARATE_DBG)
     set(SEPARATE_DBG FALSE)
 endif()
 
-# Embed lightweight rsym data in Clang 64-bit debug images.
+# Use DWARF by default; embedded rsym remains an explicit opt-in.
 if(NOT WITH_DEBUG_SYMBOLS)
     set(NO_ROSSYM TRUE)
 elseif(NOT (ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64"))
     set(NO_ROSSYM TRUE)
 elseif(NOT DEFINED NO_ROSSYM)
-    set(NO_ROSSYM FALSE)
+    set(NO_ROSSYM TRUE)
 endif()
 
 set(RSYM_FLAGS "")
