@@ -37,6 +37,7 @@ KiArm64TtbrToPa(
 #define SCTLR_EL1_BT1   (1ULL << 36)
 #define KI_ARM64_ID_AA64ISAR0_ATOMIC_LSE 2
 #define KI_ARM64_CNTKCTL_EL0PCTEN (1ULL << 0)
+#define KI_ARM64_PMUSERENR_CR (1ULL << 2)
 #define KI_ARM64_QPC_BYPASS_CONFIGURATION 0x0001
 #define KI_ARM64_IMPLEMENTER_ARM 0x41
 #define KI_ARM64_PART_CORTEX_A73 0xD09
@@ -178,8 +179,18 @@ BOOLEAN
 KiArm64EnableUserPerformanceCounter(
     _Out_ PULONG64 CounterFrequency)
 {
-    ULONG64 CounterControl, Frequency, Midr;
-    ULONG Implementer, PartNumber;
+    ULONG64 CounterControl, Dfr0, Frequency, Midr, PmuUserEnable;
+    ULONG Implementer, PartNumber, PmuVersion;
+
+    __asm__ __volatile__("mrs %0, id_aa64dfr0_el1" : "=r"(Dfr0));
+    PmuVersion = (ULONG)((Dfr0 >> 8) & 0xF);
+    if ((PmuVersion != 0) && (PmuVersion != 0xF))
+    {
+        __asm__ __volatile__("mrs %0, pmuserenr_el0" : "=r"(PmuUserEnable));
+        PmuUserEnable |= KI_ARM64_PMUSERENR_CR;
+        __asm__ __volatile__("msr pmuserenr_el0, %0" :: "r"(PmuUserEnable) : "memory");
+        __asm__ __volatile__("isb" ::: "memory");
+    }
 
     __asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(Frequency));
     *CounterFrequency = Frequency;
