@@ -31,6 +31,8 @@ enum wbm_namespace
 extern IClientSecurity client_security;
 extern struct list *table_list[WBEMPROX_NAMESPACE_LAST];
 
+HRESULT WbemRefresher_create(void **obj, REFIID iid);
+
 enum param_direction
 {
     PARAM_OUT   = -1,

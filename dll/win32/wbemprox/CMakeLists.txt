@@ -8,6 +8,7 @@ list(APPEND SOURCE
     process.c
     qualifier.c
     query.c
+    refresher_ros.c
     reg.c
     security.c
     service.c
