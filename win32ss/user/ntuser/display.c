@@ -657,6 +657,9 @@ NtUserEnumDisplaySettings(
         pustrDevice = &ustrDevice;
     }
 
+    if (iModeNum == (DWORD)-3)
+        return STATUS_INVALID_PARAMETER_3;
+
     /* Acquire global USER lock */
     UserEnterShared();
 

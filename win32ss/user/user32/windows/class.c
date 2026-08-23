@@ -387,7 +387,7 @@ GetClassInfoExA(
     if (Ret)
     {
         lpwcx->lpszClassName = lpszClass;
-//       lpwcx->lpszMenuName  = pszMenuName;
+        lpwcx->lpszMenuName = pszMenuName;
     }
 
     if (!IS_ATOM(lpszClass))
@@ -496,7 +496,7 @@ GetClassInfoExW(
     if (Ret)
     {
         lpwcx->lpszClassName = lpszClass;
-//       lpwcx->lpszMenuName  = pszMenuName;
+        lpwcx->lpszMenuName = pszMenuName;
     }
 
     if (pCtx)

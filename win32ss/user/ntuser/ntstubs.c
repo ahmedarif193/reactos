@@ -499,10 +499,15 @@ NtUserProcessConnect(
                                        NULL);
     if (!NT_SUCCESS(Status)) return Status;
 
-    UserEnterShared();
+    UserEnterExclusive();
 
     /* Get Win32 process information */
     W32Process = PsGetProcessWin32Process(Process);
+    if (!W32Process || W32Process->pClientBase)
+    {
+        Status = STATUS_UNSUCCESSFUL;
+        goto Cleanup;
+    }
 
     _SEH2_TRY
     {
@@ -560,7 +565,10 @@ NtUserProcessConnect(
 
     if (!NT_SUCCESS(Status))
         SetLastNtError(Status);
+    else
+        W32Process->pClientBase = W32Process->HeapMappings.UserMapping;
 
+Cleanup:
     UserLeave();
 
     /* Dereference the process object */

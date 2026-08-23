@@ -518,6 +518,17 @@ NtUserScrollDC(
       goto Exit; // Return FALSE
    }
 
+   if (hrgnUpdate)
+   {
+      PREGION prgnUpdate = REGION_LockRgn(hrgnUpdate);
+      if (!prgnUpdate)
+      {
+         EngSetLastError(ERROR_INVALID_HANDLE);
+         goto Exit;
+      }
+      REGION_UnlockRgn(prgnUpdate);
+   }
+
    Result = UserScrollDC( hDC,
                           dx,
                           dy,

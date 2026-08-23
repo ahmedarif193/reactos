@@ -694,6 +694,9 @@ NtUserGetAsyncKeyState(INT Key)
         return 0;
     }
 
+    if (Key == 0)
+        return (SHORT)0x8000;
+
     UserEnterExclusive();
 
     if (IS_KEY_DOWN(gafAsyncKeyState, Key))

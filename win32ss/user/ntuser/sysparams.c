@@ -423,8 +423,6 @@ NtUserUpdatePerUserSystemParameters(
     DWORD dwReserved,
     BOOL bEnable)
 {
-    BOOL bResult;
-
     TRACE("Enter NtUserUpdatePerUserSystemParameters\n");
     UserEnterExclusive();
 
@@ -433,12 +431,11 @@ NtUserUpdatePerUserSystemParameters(
         g_PaintDesktopVersion = SpiLoadDWord(KEY_DESKTOP, VAL_PAINTDESKVER, 0);
     else
         g_PaintDesktopVersion = FALSE;
-    bResult = TRUE;
 
-    TRACE("Leave NtUserUpdatePerUserSystemParameters, returning %d\n", bResult);
+    TRACE("Leave NtUserUpdatePerUserSystemParameters\n");
     UserLeave();
 
-    return bResult;
+    return FALSE;
 }
 
 
