@@ -219,13 +219,13 @@ EngStretchBltROP(
            temporary bitmap and continue with that as the source. */
         if (((Mode == BLACKONWHITE) || (Mode == WHITEONBLACK)) &&
             (psoInput != NULL) &&
-            (cxSrc > 0) && (cySrc > 0) && (cxDest > 0) && (cyDest > 0) &&
-            ((cxSrc > cxDest) || (cySrc > cyDest)))
+            (cxSrc > 0) && (cySrc > 0) && (cxDest != 0) && (cyDest != 0) &&
+            ((cxSrc > abs(cxDest)) || (cySrc > abs(cyDest))))
         {
             LONG cxIn = InputRect.right - InputRect.left;
             LONG cyIn = InputRect.bottom - InputRect.top;
-            LONG cxT = min(cxIn, cxDest);
-            LONG cyT = min(cyIn, cyDest);
+            LONG cxT = min(cxIn, abs(cxDest));
+            LONG cyT = min(cyIn, abs(cyDest));
 
             if ((cxT > 0) && (cyT > 0) && (cxIn > 0) && (cyIn > 0))
             {
@@ -244,25 +244,53 @@ EngStretchBltROP(
                         DibFunctionsForBitmapFormat[psoInput->iBitmapFormat].DIB_GetPixel;
                     PFN_DIB_PutPixel fnPut =
                         DibFunctionsForBitmapFormat[psoCombined->iBitmapFormat].DIB_PutPixel;
-                    LONG x, y, sx, sy, sx0, sx1, sy0, sy1;
+                    LONG x, y, sx, sy, sx0, sx1, sy0, sy1, sxStep, syStep;
                     ULONG ulAcc;
 
                     for (y = 0; y < cyT; y++)
                     {
-                        sy0 = InputRect.top + (y * cyIn) / cyT;
-                        sy1 = InputRect.top + ((y + 1) * cyIn) / cyT;
-                        if (sy1 <= sy0) sy1 = sy0 + 1;
+                        if (bTopToBottom)
+                        {
+                            sy0 = InputRect.bottom - (y * cyIn) / cyT;
+                            sy1 = InputRect.bottom - ((y + 1) * cyIn) / cyT;
+                            if (sy1 >= sy0) sy1 = sy0 - 1;
+                            syStep = -1;
+                        }
+                        else
+                        {
+                            sy0 = InputRect.top + (y * cyIn) / cyT;
+                            sy1 = InputRect.top + ((y + 1) * cyIn) / cyT;
+                            if ((cyT == 1) && (cyIn > 1)) sy1--;
+                            if (sy1 <= sy0) sy1 = sy0 + 1;
+                            syStep = 1;
+                        }
                         for (x = 0; x < cxT; x++)
                         {
-                            sx0 = InputRect.left + (x * cxIn) / cxT;
-                            sx1 = InputRect.left + ((x + 1) * cxIn) / cxT;
-                            if (sx1 <= sx0) sx1 = sx0 + 1;
+                            if (bLeftToRight)
+                            {
+                                sx0 = InputRect.right - (x * cxIn) / cxT;
+                                sx1 = InputRect.right - ((x + 1) * cxIn) / cxT;
+                                if (sx1 >= sx0) sx1 = sx0 - 1;
+                                sxStep = -1;
+                            }
+                            else
+                            {
+                                sx0 = InputRect.left + (x * cxIn) / cxT;
+                                sx1 = InputRect.left + ((x + 1) * cxIn) / cxT;
+                                if ((cxT == 1) && (cxIn > 1)) sx1--;
+                                if (sx1 <= sx0) sx1 = sx0 + 1;
+                                sxStep = 1;
+                            }
 
                             ulAcc = (Mode == BLACKONWHITE) ? ~0ul : 0ul;
-                            for (sy = sy0; sy < sy1; sy++)
+                            for (sy = sy0; sy != sy1; sy += syStep)
                             {
-                                for (sx = sx0; sx < sx1; sx++)
+                                if (sy < 0 || sy >= psoInput->sizlBitmap.cy)
+                                    continue;
+                                for (sx = sx0; sx != sx1; sx += sxStep)
                                 {
+                                    if (sx < 0 || sx >= psoInput->sizlBitmap.cx)
+                                        continue;
                                     if (Mode == BLACKONWHITE)
                                         ulAcc &= fnGet(psoInput, sx, sy);
                                     else
@@ -279,6 +307,8 @@ EngStretchBltROP(
                     InputRect.top = 0;
                     InputRect.right = cxT;
                     InputRect.bottom = cyT;
+                    bLeftToRight = FALSE;
+                    bTopToBottom = FALSE;
                 }
                 else if (hbmCombined)
                 {
@@ -648,7 +678,8 @@ IntEngStretchBlt(SURFOBJ *psoDest,
     DPRINT("bTopToBottom is '%d' and bLeftToRight is '%d'.\n", bTopToBottom, bLeftToRight);
 
     /* Check if source and dest size are equal */
-    if ((abs(DestRect->right - DestRect->left) == abs(SourceRect->right - SourceRect->left)) &&
+    if (!Case0011 &&
+        (abs(DestRect->right - DestRect->left) == abs(SourceRect->right - SourceRect->left)) &&
         (abs(DestRect->bottom - DestRect->top) == abs(SourceRect->bottom - SourceRect->top)))
     {
         DPRINT("source and dest size are equal.\n");
@@ -793,6 +824,20 @@ IntEngStretchBlt(SURFOBJ *psoDest,
 
     }
 
+    if (UsesSource && psoSource && bLeftToRight && psoSource->sizlBitmap.cx > 0 && SourceRect->right >= psoSource->sizlBitmap.cx)
+    {
+        lTmp = SourceRect->right - (psoSource->sizlBitmap.cx - 1);
+        SourceRect->left -= lTmp;
+        SourceRect->right -= lTmp;
+    }
+
+    if (UsesSource && psoSource && bTopToBottom && psoSource->sizlBitmap.cy > 0 && SourceRect->bottom >= psoSource->sizlBitmap.cy)
+    {
+        lTmp = SourceRect->bottom - (psoSource->sizlBitmap.cy - 1);
+        SourceRect->top -= lTmp;
+        SourceRect->bottom -= lTmp;
+    }
+
     DPRINT("SourceRect: (%d,%d)-(%d,%d) and DestRect: (%d,%d)-(%d,%d)\n",
                 SourceRect->left, SourceRect->top, SourceRect->right, SourceRect->bottom,
                 DestRect->left, DestRect->top, DestRect->right, DestRect->bottom);
@@ -809,7 +854,7 @@ IntEngStretchBlt(SURFOBJ *psoDest,
         InputClippedRect.bottom = DestRect->top;
     }
 
-    if (NULL == psoSource)
+    if (UsesSource && NULL == psoSource)
     {
         DPRINT("Returning FALSE.\n");
         return FALSE;
@@ -847,10 +892,27 @@ IntEngStretchBlt(SURFOBJ *psoDest,
         InputWidth = InputRect.right - InputRect.left;
         InputHeight = InputRect.bottom - InputRect.top;
 
-        InputRect.left += (InputWidth * (OutputRect.left - InputClippedRect.left)) / InputClWidth;
-        InputRect.right -= (InputWidth * (InputClippedRect.right - OutputRect.right)) / InputClWidth;
-        InputRect.top += (InputHeight * (OutputRect.top - InputClippedRect.top)) / InputClHeight;
-        InputRect.bottom -= (InputHeight * (InputClippedRect.bottom - OutputRect.bottom)) / InputClHeight;
+        if (bLeftToRight)
+        {
+            InputRect.right -= (InputWidth * (OutputRect.left - InputClippedRect.left)) / InputClWidth;
+            InputRect.left += (InputWidth * (InputClippedRect.right - OutputRect.right)) / InputClWidth;
+        }
+        else
+        {
+            InputRect.left += (InputWidth * (OutputRect.left - InputClippedRect.left)) / InputClWidth;
+            InputRect.right -= (InputWidth * (InputClippedRect.right - OutputRect.right)) / InputClWidth;
+        }
+
+        if (bTopToBottom)
+        {
+            InputRect.bottom -= (InputHeight * (OutputRect.top - InputClippedRect.top)) / InputClHeight;
+            InputRect.top += (InputHeight * (InputClippedRect.bottom - OutputRect.bottom)) / InputClHeight;
+        }
+        else
+        {
+            InputRect.top += (InputHeight * (OutputRect.top - InputClippedRect.top)) / InputClHeight;
+            InputRect.bottom -= (InputHeight * (InputClippedRect.bottom - OutputRect.bottom)) / InputClHeight;
+        }
     }
     else
     {
