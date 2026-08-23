@@ -1475,7 +1475,6 @@ NtGdiStretchDIBitsInternal(
     IN UINT cjMaxBits,
     IN HANDLE hcmXform)
 {
-    SIZEL sizel;
     RECTL rcSrc, rcDst;
     PDC pdc;
     HBITMAP hbmTmp = 0;
@@ -1486,9 +1485,6 @@ NtGdiStretchDIBitsInternal(
 
     LPBITMAPINFO pbmiSafe;
     UINT cjAlloc;
-    HBITMAP hBitmap, hOldBitmap = NULL;
-    HDC hdcMem;
-    HPALETTE hPal = NULL;
     ULONG BmpFormat = 0;
     INT LinesCopied = 0;
 
@@ -1546,9 +1542,27 @@ NtGdiStretchDIBitsInternal(
         return 0;
     }
 
+    if ((pbmiSafe->bmiHeader.biSize >= sizeof(BITMAPINFOHEADER)) &&
+        ((pbmiSafe->bmiHeader.biWidth <= 0) ||
+         (pbmiSafe->bmiHeader.biHeight == 0)))
+    {
+        ExFreePoolWithTag(pbmiSafe, 'imBG');
+        return 0;
+    }
+
+    if (((cxSrc < 0) && (((xSrc + cxSrc) < 0) ||
+                         (xSrc > pbmiSafe->bmiHeader.biWidth))) ||
+        ((cySrc < 0) && (((ySrc + cySrc) < 0) ||
+                         (ySrc > abs(pbmiSafe->bmiHeader.biHeight)))))
+    {
+        ExFreePoolWithTag(pbmiSafe, 'imBG');
+        return 0;
+    }
+
     if (!(pdc = DC_LockDc(hdc)))
     {
         EngSetLastError(ERROR_INVALID_HANDLE);
+        ExFreePoolWithTag(pbmiSafe, 'imBG');
         return 0;
     }
 
@@ -1557,13 +1571,9 @@ NtGdiStretchDIBitsInternal(
     {
         DC_UnlockDc(pdc);
         // CHECKME
+        ExFreePoolWithTag(pbmiSafe, 'imBG');
         return TRUE;
     }
-
-    /* Transform dest size */
-    sizel.cx = cxDst;
-    sizel.cy = cyDst;
-    IntLPtoDP(pdc, (POINTL*)&sizel, 1);
     DC_UnlockDc(pdc);
 
     if (pjInit && (cjMaxBits > 0))
@@ -1571,6 +1581,7 @@ NtGdiStretchDIBitsInternal(
         pvBits = ExAllocatePoolWithTag(PagedPool, cjMaxBits, TAG_DIB);
         if (!pvBits)
         {
+            ExFreePoolWithTag(pbmiSafe, 'imBG');
             return 0;
         }
 
@@ -1582,6 +1593,7 @@ NtGdiStretchDIBitsInternal(
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
             ExFreePoolWithTag(pvBits, TAG_DIB);
+            ExFreePoolWithTag(pbmiSafe, 'imBG');
             return 0;
         }
         _SEH2_END;
@@ -1591,75 +1603,7 @@ NtGdiStretchDIBitsInternal(
         pvBits = NULL;
     }
 
-    /* Here we select between the dwRop with SRCCOPY or not. */
-    if (dwRop == SRCCOPY)
     {
-        hdcMem = NtGdiCreateCompatibleDC(hdc);
-        if (hdcMem == NULL)
-        {
-            DPRINT1("NtGdiCreateCompatibleDC failed to create hdc.\n");
-            EngSetLastError(ERROR_NO_SYSTEM_RESOURCES);
-            return 0;
-        }
-
-        hBitmap = NtGdiCreateCompatibleBitmap(hdc,
-                                              abs(pbmiSafe->bmiHeader.biWidth),
-                                              abs(pbmiSafe->bmiHeader.biHeight));
-        if (hBitmap == NULL)
-        {
-            DPRINT1("NtGdiCreateCompatibleBitmap failed to create bitmap.\n");
-            DPRINT1("hdc : 0x%08x \n", hdc);
-            DPRINT1("width : 0x%08x \n", pbmiSafe->bmiHeader.biWidth);
-            DPRINT1("height : 0x%08x \n", pbmiSafe->bmiHeader.biHeight);
-            EngSetLastError(ERROR_NO_SYSTEM_RESOURCES);
-            return 0;
-        }
-
-        /* Select the bitmap into hdcMem, and save a handle to the old bitmap */
-        hOldBitmap = NtGdiSelectBitmap(hdcMem, hBitmap);
-
-        if (dwUsage == DIB_PAL_COLORS)
-        {
-            hPal = NtGdiGetDCObject(hdc, GDI_OBJECT_TYPE_PALETTE);
-            hPal = GdiSelectPalette(hdcMem, hPal, FALSE);
-        }
-
-        pdc = DC_LockDc(hdcMem);
-        if (pdc != NULL)
-        {
-            IntSetDIBits(pdc, hBitmap, 0, abs(pbmiSafe->bmiHeader.biHeight), pvBits,
-                         cjMaxBits, pbmiSafe, dwUsage);
-            DC_UnlockDc(pdc);
-        }
-
-        /* Origin for DIBitmap may be bottom left (positive biHeight) or top
-           left (negative biHeight) */
-        if (cxSrc == cxDst && cySrc == cyDst)
-        {
-            NtGdiBitBlt(hdc, xDst, yDst, cxDst, cyDst,
-                        hdcMem, xSrc, abs(pbmiSafe->bmiHeader.biHeight) - cySrc - ySrc,
-                        dwRop, CLR_INVALID, 0);
-        }
-        else
-        {
-            NtGdiStretchBlt(hdc, xDst, yDst, cxDst, cyDst,
-                            hdcMem, xSrc, abs(pbmiSafe->bmiHeader.biHeight) - cySrc - ySrc,
-                            cxSrc, cySrc, dwRop, CLR_INVALID);
-        }
-
-        /* cleanup */
-        if (hPal)
-            GdiSelectPalette(hdcMem, hPal, FALSE);
-
-        if (hOldBitmap)
-            NtGdiSelectBitmap(hdcMem, hOldBitmap);
-
-        NtGdiDeleteObjectApp(hdcMem);
-        GreDeleteObject(hBitmap);
-
-    } /* End of dwRop == SRCCOPY */
-    else
-    { /* Start of dwRop != SRCCOPY */
         /* FIXME: Locking twice is cheesy, coord tranlation in UM will fix it */
         if (!(pdc = DC_LockDc(hdc)))
         {
@@ -1668,17 +1612,78 @@ NtGdiStretchDIBitsInternal(
             goto cleanup;
         }
 
-        /* Calculate source and destination rect */
-        rcSrc.left = xSrc;
-        rcSrc.top = ySrc;
-        rcSrc.right = xSrc + abs(cxSrc);
-        rcSrc.bottom = ySrc + abs(cySrc);
-        rcDst.left = xDst;
-        rcDst.top = yDst;
-        rcDst.right = rcDst.left + cxDst;
-        rcDst.bottom = rcDst.top + cyDst;
-        IntLPtoDP(pdc, (POINTL*)&rcDst, 2);
-        RECTL_vOffsetRect(&rcDst, pdc->ptlDCOrig.x, pdc->ptlDCOrig.y);
+        {
+            LONG dstX, dstY, dstW, dstH;
+            LONG srcX = xSrc, srcY = ySrc, srcW = cxSrc, srcH = cySrc;
+            LONG biHeight = abs(pbmiSafe->bmiHeader.biHeight);
+            BOOL bTopDown = (pbmiSafe->bmiHeader.biHeight < 0);
+            BOOL bNonStretch;
+
+            rcDst.left = xDst;
+            rcDst.top = yDst;
+            rcDst.right = xDst + cxDst;
+            rcDst.bottom = yDst + cyDst;
+            IntLPtoDP(pdc, (POINTL *)&rcDst, 2);
+            RECTL_vOffsetRect(&rcDst, pdc->ptlDCOrig.x, pdc->ptlDCOrig.y);
+
+            dstX = rcDst.left;
+            dstY = rcDst.top;
+            dstW = rcDst.right - rcDst.left;
+            dstH = rcDst.bottom - rcDst.top;
+            bNonStretch = (srcX == 0) && (srcY == 0) &&
+                          (srcW == dstW) && (srcH == dstH);
+
+            if ((dwRop != SRCCOPY) || bNonStretch)
+            {
+                if ((dstW == 1) && (srcW > 1)) srcW--;
+                if ((dstH == 1) && (srcH > 1)) srcH--;
+            }
+
+            if (!bTopDown || ((dwRop == SRCCOPY) && !bNonStretch))
+                srcY = biHeight - srcY - srcH;
+
+            if (srcW >= 0)
+            {
+                rcSrc.left = srcX;
+                rcSrc.right = srcX + srcW;
+            }
+            else
+            {
+                rcSrc.left = srcX + srcW + 1;
+                rcSrc.right = srcX + 1;
+            }
+            if (srcH >= 0)
+            {
+                rcSrc.top = srcY;
+                rcSrc.bottom = srcY + srcH;
+            }
+            else
+            {
+                rcSrc.top = srcY + srcH + 1;
+                rcSrc.bottom = srcY + 1;
+            }
+
+            if (dstW >= 0)
+            {
+                rcDst.left = dstX;
+                rcDst.right = dstX + dstW;
+            }
+            else
+            {
+                rcDst.left = dstX + dstW + 1;
+                rcDst.right = dstX + 1;
+            }
+            if (dstH >= 0)
+            {
+                rcDst.top = dstY;
+                rcDst.bottom = dstY + dstH;
+            }
+            else
+            {
+                rcDst.top = dstY + dstH + 1;
+                rcDst.bottom = dstY + 1;
+            }
+        }
 
         if (pdc->fs & (DC_ACCUM_APP|DC_ACCUM_WMGR))
         {
@@ -1741,7 +1746,8 @@ NtGdiStretchDIBitsInternal(
                          &pdc->eboFill.BrushObject,
                          NULL,
                          pdc->pdcattr->jStretchBltMode,
-                         WIN32_ROP3_TO_ENG_ROP4(dwRop));
+                         WIN32_ROP3_TO_ENG_ROP4(dwRop),
+                         TRUE);
 
         /* Cleanup */
         DC_vFinishBlit(pdc, NULL);
@@ -1761,7 +1767,8 @@ NtGdiStretchDIBitsInternal(
      * and it fixes over 100 gdi32:dib regression tests. */
     if (dwRop == SRCCOPY)
     {
-        LinesCopied = abs(pbmiSafe->bmiHeader.biHeight);
+        LinesCopied = min(max(abs(cySrc), abs(cyDst)),
+                          abs(pbmiSafe->bmiHeader.biHeight));
     }
     else
     {
