@@ -13,6 +13,7 @@ list(APPEND SOURCE
     nonblocking.c
     nostartup.c
     open_osfhandle.c
+    pollable_event.c
     recv.c
     send.c
     WSAAsync.c
