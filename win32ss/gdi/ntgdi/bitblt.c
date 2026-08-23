@@ -94,6 +94,14 @@ NtGdiAlphaBlend(
     SourceRect.right  += DCSrc->ptlDCOrig.x;
     SourceRect.bottom += DCSrc->ptlDCOrig.y;
 
+    if ((SourceRect.left > SourceRect.right) ||
+        (SourceRect.top > SourceRect.bottom))
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        bResult = FALSE;
+        goto unlock;
+    }
+
     if (!DestRect.right ||
         !DestRect.bottom ||
         !SourceRect.right ||
@@ -119,6 +127,18 @@ NtGdiAlphaBlend(
     BitmapSrc = DCSrc->dclevel.pSurface;
     if (!BitmapSrc)
     {
+        bResult = FALSE;
+        goto leave;
+    }
+
+    if ((BlendFunc.AlphaFormat & AC_SRC_ALPHA) &&
+        ((BitmapSrc->SurfObj.iBitmapFormat != BMF_32BPP) ||
+         !BitmapSrc->ppal ||
+         (BitmapSrc->ppal->RedMask != 0x00ff0000) ||
+         (BitmapSrc->ppal->GreenMask != 0x0000ff00) ||
+         (BitmapSrc->ppal->BlueMask != 0x000000ff)))
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
         bResult = FALSE;
         goto leave;
     }
@@ -162,6 +182,7 @@ NtGdiAlphaBlend(
 leave :
     TRACE("Finishing blit\n");
     DC_vFinishBlit(DCDest, DCSrc);
+unlock:
     GDIOBJ_vUnlockObject(&DCSrc->BaseObject);
     GDIOBJ_vUnlockObject(&DCDest->BaseObject);
 
