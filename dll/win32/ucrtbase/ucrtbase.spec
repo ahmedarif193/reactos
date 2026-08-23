@@ -2459,8 +2459,8 @@
 @ cdecl lgammal(double) lgamma
 @ cdecl -ret64 llabs(int64)
 @ cdecl -norelay lldiv(int64 int64)
-@ cdecl -stub -ret64 llrint(double)
-@ cdecl -stub -ret64 llrintf(float)
+@ cdecl -ret64 llrint(double)
+@ cdecl -ret64 llrintf(float)
 @ cdecl -ret64 llrintl(double) llrint
 @ cdecl -ret64 llround(double)
 @ cdecl -ret64 llroundf(float)
@@ -2545,8 +2545,8 @@
 @ cdecl remquol(double double ptr) remquo
 @ cdecl rename(str str)
 @ cdecl rewind(ptr)
-@ cdecl -stub rint(double)
-@ cdecl -stub rintf(float)
+@ cdecl rint(double)
+@ cdecl rintf(float)
 @ cdecl rintl(double) rint
 @ cdecl round(double)
 @ cdecl roundf(float)

@@ -64,14 +64,58 @@ float log2f(float x)
 
 long int lrint(double x)
 {
-    __debugbreak();
-    return 0;
+    double d;
+
+    d = rint(x);
+    if ((d < 0 && d != (double)(long int)d) ||
+        (d >= 0 && d != (double)(unsigned long int)d))
+    {
+        *_errno() = EDOM;
+        return 0;
+    }
+    return d;
 }
 
 long int lrintf(float x)
 {
-    __debugbreak();
-    return 0;
+    float f;
+
+    f = rintf(x);
+    if ((f < 0 && f != (float)(long int)f) ||
+        (f >= 0 && f != (float)(unsigned long int)f))
+    {
+        *_errno() = EDOM;
+        return 0;
+    }
+    return f;
+}
+
+long long int llrint(double x)
+{
+    double d;
+
+    d = rint(x);
+    if ((d < 0 && d != (double)(long long int)d) ||
+        (d >= 0 && d != (double)(unsigned long long int)d))
+    {
+        *_errno() = EDOM;
+        return 0;
+    }
+    return d;
+}
+
+long long int llrintf(float x)
+{
+    float f;
+
+    f = rintf(x);
+    if ((f < 0 && f != (float)(long long int)f) ||
+        (f >= 0 && f != (float)(unsigned long long int)f))
+    {
+        *_errno() = EDOM;
+        return 0;
+    }
+    return f;
 }
 
 long long int llround(double x)
