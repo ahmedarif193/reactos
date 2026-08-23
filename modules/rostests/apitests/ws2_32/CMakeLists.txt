@@ -2,6 +2,7 @@
 list(APPEND SOURCE
     bind.c
     close.c
+    connect_select.c
     getaddrinfo.c
     gethostname.c
     getnameinfo.c

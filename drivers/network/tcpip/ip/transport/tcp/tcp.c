@@ -93,6 +93,7 @@ VOID ConnectionFree(PVOID Object)
     KIRQL OldIrql;
 
     TI_DbgPrint(DEBUG_TCP, ("Freeing TCP Endpoint\n"));
+    ASSERT(IsListEmpty(&Connection->PendingAccepts));
 
     TcpipAcquireSpinLock(&ConnectionEndpointListLock, &OldIrql);
     RemoveEntryList(&Connection->ListEntry);
@@ -120,6 +121,7 @@ PCONNECTION_ENDPOINT TCPAllocateConnectionEndpoint( PVOID ClientContext )
     ExInitializeResourceLite(&Connection->Resource);
     InitializeListHead(&Connection->ConnectRequest);
     InitializeListHead(&Connection->ListenRequest);
+    InitializeListHead(&Connection->PendingAccepts);
     InitializeListHead(&Connection->ReceiveRequest);
     InitializeListHead(&Connection->SendRequest);
     InitializeListHead(&Connection->ShutdownRequest);

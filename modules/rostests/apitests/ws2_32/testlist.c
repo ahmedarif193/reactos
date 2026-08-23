@@ -4,6 +4,7 @@
 
 extern void func_bind(void);
 extern void func_close(void);
+extern void func_connect_select(void);
 extern void func_getaddrinfo(void);
 extern void func_gethostname(void);
 extern void func_getnameinfo(void);
@@ -24,6 +25,7 @@ const struct test winetest_testlist[] =
 {
     { "bind", func_bind },
     { "close", func_close },
+    { "connect_select", func_connect_select },
     { "getaddrinfo", func_getaddrinfo },
     { "gethostname", func_gethostname },
     { "getnameinfo", func_getnameinfo },

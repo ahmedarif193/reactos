@@ -31,13 +31,67 @@ static VOID PrintEvents( ULONG Events ) {
 #endif
 }
 
-static VOID CopyBackStatus( PAFD_HANDLE HandleArray,
-                            UINT HandleCount ) {
+static NTSTATUS
+AfdGetPollStatus(PAFD_FCB FCB, ULONG Events)
+{
+    static const struct
+    {
+        ULONG Event;
+        ULONG StatusIndex;
+    } EventStatusMap[] =
+    {
+        { AFD_EVENT_RECEIVE, FD_READ_BIT },
+        { AFD_EVENT_OOB_RECEIVE, FD_OOB_BIT },
+        { AFD_EVENT_SEND, FD_WRITE_BIT },
+        { AFD_EVENT_DISCONNECT, FD_CLOSE_BIT },
+        { AFD_EVENT_ABORT, FD_CLOSE_BIT },
+        { AFD_EVENT_CLOSE, FD_CLOSE_BIT },
+        { AFD_EVENT_CONNECT, FD_CONNECT_BIT },
+        { AFD_EVENT_ACCEPT, FD_ACCEPT_BIT },
+        { AFD_EVENT_CONNECT_FAIL, FD_CONNECT_BIT },
+        { AFD_EVENT_QOS, FD_QOS_BIT },
+        { AFD_EVENT_GROUP_QOS, FD_GROUP_QOS_BIT },
+        { AFD_EVENT_ROUTING_INTERFACE_CHANGE, FD_ROUTING_INTERFACE_CHANGE_BIT },
+        { AFD_EVENT_ADDRESS_LIST_CHANGE, FD_ADDRESS_LIST_CHANGE_BIT }
+    };
+    NTSTATUS EventStatus;
     UINT i;
 
-    for( i = 0; i < HandleCount; i++ ) {
-        HandleArray[i].Events = HandleArray[i].Status;
-        HandleArray[i].Status = 0;
+    for (i = 0; i < RTL_NUMBER_OF(EventStatusMap); i++)
+    {
+        if (!(Events & EventStatusMap[i].Event))
+            continue;
+
+        EventStatus = FCB->PollStatus[EventStatusMap[i].StatusIndex];
+        if (EventStatus != STATUS_SUCCESS)
+            return EventStatus;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static VOID
+CopyBackStatus(PAFD_POLL_INFO PollReq)
+{
+    PAFD_HANDLE LockedHandles = AFD_HANDLES(PollReq);
+    PFILE_OBJECT FileObject;
+    PAFD_FCB FCB;
+    ULONG Events;
+    UINT i;
+
+    for (i = 0; i < PollReq->HandleCount; i++)
+    {
+        Events = PollReq->Handles[i].Status;
+        PollReq->Handles[i].Events = Events;
+        PollReq->Handles[i].Status = STATUS_SUCCESS;
+
+        if (!Events || !LockedHandles[i].Handle)
+            continue;
+
+        FileObject = (PFILE_OBJECT)LockedHandles[i].Handle;
+        FCB = FileObject->FsContext;
+        if (FCB)
+            PollReq->Handles[i].Status = AfdGetPollStatus(FCB, Events);
     }
 }
 
@@ -129,8 +183,7 @@ BOOLEAN SignalSocket(PAFD_ACTIVE_POLL Poll OPTIONAL, PIRP _Irp OPTIONAL, PAFD_PO
     Irp->IoStatus.Status = Status;
     Irp->IoStatus.Information =
         FIELD_OFFSET(AFD_POLL_INFO, Handles) + sizeof(AFD_HANDLE) * PollReq->HandleCount;
-    CopyBackStatus( PollReq->Handles,
-                    PollReq->HandleCount );
+    CopyBackStatus(PollReq);
     for( i = 0; i < PollReq->HandleCount; i++ ) {
         AFD_DbgPrint
             (MAX_TRACE,

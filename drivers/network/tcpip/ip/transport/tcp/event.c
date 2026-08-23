@@ -227,14 +227,14 @@ TCPFinEventHandler(void *arg, const err_t err)
    UnlockObject(Connection);
 }
 
-VOID
+NTSTATUS
 TCPAcceptEventHandler(void *arg, PTCP_PCB newpcb)
 {
     PCONNECTION_ENDPOINT Connection = (PCONNECTION_ENDPOINT)arg;
     PTDI_BUCKET Bucket;
     PLIST_ENTRY Entry;
     PIRP Irp;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_PENDING;
 
     LockObject(Connection);
 
@@ -287,7 +287,15 @@ TCPAcceptEventHandler(void *arg, PTCP_PCB newpcb)
         }
     }
 
+    if (Status == STATUS_SUCCESS)
+    {
+        UnlockObject(Connection);
+        return STATUS_SUCCESS;
+    }
+
+    Status = LibTCPDeferAcceptLocked(Connection, newpcb);
     UnlockObject(Connection);
+    return Status;
 }
 
 VOID

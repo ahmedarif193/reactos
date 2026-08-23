@@ -145,6 +145,7 @@ NTSTATUS TCPAccept ( PTDI_REQUEST Request,
 {
     NTSTATUS Status;
     PTDI_BUCKET Bucket;
+    BOOLEAN DrainPending = FALSE;
 
     LockObject(Listener);
 
@@ -158,12 +159,23 @@ NTSTATUS TCPAccept ( PTDI_REQUEST Request,
         Bucket->Request.RequestNotifyObject = Complete;
         Bucket->Request.RequestContext = Context;
         InsertTailList( &Listener->ListenRequest, &Bucket->Entry );
+        if (!IsListEmpty(&Listener->PendingAccepts))
+        {
+            ReferenceObject(Listener);
+            DrainPending = TRUE;
+        }
         Status = STATUS_PENDING;
     }
     else
         Status = STATUS_NO_MEMORY;
 
     UnlockObject(Listener);
+
+    if (DrainPending)
+    {
+        LibTCPDrainPendingAccept(Listener);
+        DereferenceObject(Listener);
+    }
 
     return Status;
 }
