@@ -2475,6 +2475,10 @@ ChangePos:
             SetWindowStyle(m_hWnd, WS_THICKFRAME | WS_BORDER, WS_THICKFRAME | WS_BORDER);
         }
         SetWindowPos(NULL, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);
+        RedrawWindow(NULL, NULL, RDW_ERASE | RDW_FRAME | RDW_INVALIDATE);
+
+        /* The child controls reopen their theme data later in the synchronous broadcast. */
+        PostMessage(WM_SIZE, SIZE_RESTORED, 0);
 
         return TRUE;
     }
