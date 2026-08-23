@@ -41,6 +41,8 @@
 #include "ntddstor.h"
 #include "setupapi.h"
 #include "devguid.h"
+#include <poclass.h>
+#include <acpiioct.h>
 
 #include "wine/debug.h"
 #include "wbemprox_private.h"
@@ -507,6 +509,47 @@ static const struct column col_sounddevice[] =
     { L"ProductName",  CIM_STRING },
     { L"Status",       CIM_STRING },
     { L"StatusInfo",   CIM_UINT16 },
+};
+static const struct column col_fan[] =
+{
+    { L"ActiveCooling",              CIM_BOOLEAN },
+    { L"Availability",               CIM_UINT16 },
+    { L"Caption",                    CIM_STRING|COL_FLAG_DYNAMIC },
+    { L"ConfigManagerErrorCode",     CIM_UINT32 },
+    { L"ConfigManagerUserConfig",    CIM_BOOLEAN },
+    { L"CreationClassName",          CIM_STRING },
+    { L"Description",                CIM_STRING|COL_FLAG_DYNAMIC },
+    { L"DesiredSpeed",               CIM_UINT64 },
+    { L"DeviceID",                   CIM_STRING|COL_FLAG_DYNAMIC|COL_FLAG_KEY },
+    { L"ErrorCleared",               CIM_BOOLEAN },
+    { L"ErrorDescription",           CIM_STRING },
+    { L"InstallDate",                CIM_DATETIME },
+    { L"LastErrorCode",              CIM_UINT32 },
+    { L"Name",                       CIM_STRING|COL_FLAG_DYNAMIC },
+    { L"PNPDeviceID",                CIM_STRING|COL_FLAG_DYNAMIC },
+    { L"PowerManagementCapabilities", CIM_UINT16|CIM_FLAG_ARRAY },
+    { L"PowerManagementSupported",   CIM_BOOLEAN },
+    { L"Status",                     CIM_STRING },
+    { L"StatusInfo",                 CIM_UINT16 },
+    { L"SystemCreationClassName",    CIM_STRING },
+    { L"SystemName",                 CIM_STRING|COL_FLAG_DYNAMIC },
+    { L"VariableSpeed",              CIM_BOOLEAN },
+};
+static const struct column col_thermalzoneinformation[] =
+{
+    { L"Caption",                  CIM_STRING },
+    { L"Description",              CIM_STRING },
+    { L"Frequency_Object",         CIM_UINT64 },
+    { L"Frequency_PerfTime",       CIM_UINT64 },
+    { L"Frequency_Sys100NS",       CIM_UINT64 },
+    { L"HighPrecisionTemperature", CIM_UINT32 },
+    { L"Name",                     CIM_STRING|COL_FLAG_DYNAMIC|COL_FLAG_KEY },
+    { L"PercentPassiveLimit",      CIM_UINT32 },
+    { L"Temperature",              CIM_UINT32 },
+    { L"ThrottleReasons",          CIM_UINT32 },
+    { L"Timestamp_Object",         CIM_UINT64 },
+    { L"Timestamp_PerfTime",       CIM_UINT64 },
+    { L"Timestamp_Sys100NS",       CIM_UINT64 },
 };
 static const struct column col_stdregprov[] =
 {
@@ -1089,6 +1132,47 @@ struct record_sounddevice
     const WCHAR *productname;
     const WCHAR *status;
     UINT16       statusinfo;
+};
+struct record_fan
+{
+    int                 active_cooling;
+    UINT16              availability;
+    const WCHAR        *caption;
+    UINT32              config_errorcode;
+    int                 config_userconfig;
+    const WCHAR        *creation_class_name;
+    const WCHAR        *description;
+    UINT64              desired_speed;
+    const WCHAR        *device_id;
+    int                 error_cleared;
+    const WCHAR        *error_description;
+    const WCHAR        *install_date;
+    UINT32              last_error_code;
+    const WCHAR        *name;
+    const WCHAR        *pnp_device_id;
+    const struct array  *power_caps;
+    int                 power_supported;
+    const WCHAR        *status;
+    UINT16              status_info;
+    const WCHAR        *system_class_name;
+    const WCHAR        *system_name;
+    int                 variable_speed;
+};
+struct record_thermalzoneinformation
+{
+    const WCHAR *caption;
+    const WCHAR *description;
+    UINT64       frequency_object;
+    UINT64       frequency_perftime;
+    UINT64       frequency_sys100ns;
+    UINT32       high_precision_temperature;
+    const WCHAR *name;
+    UINT32       percent_passive_limit;
+    UINT32       temperature;
+    UINT32       throttle_reasons;
+    UINT64       timestamp_object;
+    UINT64       timestamp_perftime;
+    UINT64       timestamp_sys100ns;
 };
 struct record_stdregprov
 {
@@ -4907,6 +4991,398 @@ static enum fill_status fill_volume( struct table *table, const struct expr *con
     return status;
 }
 
+#define MAX_THERMAL_ZONE_COUNT 32
+#define MAX_FAN_COUNT          32
+
+struct thermal_zone_data
+{
+    WCHAR *name;
+    ULONG current_temperature;
+    ULONG passive_trip_point;
+};
+
+struct fan_data
+{
+    WCHAR *name;
+    WCHAR *pnp_device_id;
+    ULONG control;
+    ULONG speed;
+    BOOL status_valid;
+};
+
+static WCHAR *get_device_registry_string( HDEVINFO devices, SP_DEVINFO_DATA *device,
+                                          DWORD property )
+{
+    DWORD type = REG_NONE, size = 0;
+    WCHAR *ret;
+
+    if (SetupDiGetDeviceRegistryPropertyW( devices, device, property, &type, NULL, 0, &size ) ||
+        GetLastError() != ERROR_INSUFFICIENT_BUFFER ||
+        (type != REG_SZ && type != REG_MULTI_SZ))
+        return NULL;
+    if (!(ret = malloc( size ))) return NULL;
+    if (!SetupDiGetDeviceRegistryPropertyW( devices, device, property, &type, (BYTE *)ret, size, NULL ))
+    {
+        free( ret );
+        return NULL;
+    }
+    return ret;
+}
+
+static WCHAR *get_device_instance_id( HDEVINFO devices, SP_DEVINFO_DATA *device )
+{
+    DWORD size = 0;
+    WCHAR *ret;
+
+    SetupDiGetDeviceInstanceIdW( devices, device, NULL, 0, &size );
+    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) return NULL;
+    if (!(ret = malloc( size * sizeof(*ret) ))) return NULL;
+    if (!SetupDiGetDeviceInstanceIdW( devices, device, ret, size, NULL ))
+    {
+        free( ret );
+        return NULL;
+    }
+    return ret;
+}
+
+static WCHAR *get_device_name( HDEVINFO devices, SP_DEVINFO_DATA *device,
+                               const WCHAR *fallback, UINT index )
+{
+    WCHAR *ret, name[64];
+
+    if ((ret = get_device_registry_string( devices, device, SPDRP_FRIENDLYNAME ))) return ret;
+    if ((ret = get_device_registry_string( devices, device, SPDRP_DEVICEDESC ))) return ret;
+    swprintf( name, ARRAY_SIZE(name), L"%s %u", fallback, index );
+    return wcsdup( name );
+}
+
+static SP_DEVICE_INTERFACE_DETAIL_DATA_W *get_device_interface_detail(
+    HDEVINFO devices, SP_DEVICE_INTERFACE_DATA *interface_data, SP_DEVINFO_DATA *device_data )
+{
+    SP_DEVICE_INTERFACE_DETAIL_DATA_W *detail;
+    DWORD size;
+
+    SetupDiGetDeviceInterfaceDetailW( devices, interface_data, NULL, 0, &size, NULL );
+    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER ||
+        size < sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W))
+        return NULL;
+    if (!(detail = malloc( size ))) return NULL;
+    detail->cbSize = sizeof(*detail);
+    if (!SetupDiGetDeviceInterfaceDetailW( devices, interface_data, detail, size, NULL, device_data ))
+    {
+        free( detail );
+        return NULL;
+    }
+    return detail;
+}
+
+static UINT get_thermal_zones( struct thermal_zone_data *zones, UINT capacity )
+{
+    SP_DEVICE_INTERFACE_DATA interface_data = { .cbSize = sizeof(interface_data) };
+    HDEVINFO devices;
+    UINT count = 0, index;
+
+    devices = SetupDiGetClassDevsW( &GUID_DEVICE_THERMAL_ZONE, NULL, NULL,
+                                    DIGCF_PRESENT | DIGCF_DEVICEINTERFACE );
+    if (devices == INVALID_HANDLE_VALUE) return 0;
+
+    for (index = 0; count < capacity; index++)
+    {
+        SP_DEVINFO_DATA device_data = { .cbSize = sizeof(device_data) };
+        SP_DEVICE_INTERFACE_DETAIL_DATA_W *detail;
+        THERMAL_INFORMATION info;
+        ULONG stamp = (ULONG)-1;
+        DWORD returned;
+        HANDLE handle;
+
+        if (!SetupDiEnumDeviceInterfaces( devices, NULL, &GUID_DEVICE_THERMAL_ZONE,
+                                          index, &interface_data ))
+            break;
+        if (!(detail = get_device_interface_detail( devices, &interface_data, &device_data ))) continue;
+        handle = CreateFileW( detail->DevicePath, GENERIC_READ,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL );
+        free( detail );
+        if (handle == INVALID_HANDLE_VALUE) continue;
+
+        memset( &info, 0, sizeof(info) );
+        returned = 0;
+        if (DeviceIoControl( handle, IOCTL_THERMAL_QUERY_INFORMATION,
+                             &stamp, sizeof(stamp), &info, sizeof(info),
+                             &returned, NULL ) &&
+            returned >= FIELD_OFFSET(THERMAL_INFORMATION, ActiveTripPoint) &&
+            info.CurrentTemperature != (ULONG)-1)
+        {
+            zones[count].name = get_device_name( devices, &device_data,
+                                                 L"Thermal Zone", index );
+            zones[count].current_temperature = info.CurrentTemperature;
+            zones[count].passive_trip_point = info.PassiveTripPoint;
+            count++;
+        }
+        CloseHandle( handle );
+    }
+
+    SetupDiDestroyDeviceInfoList( devices );
+    return count;
+}
+
+static BOOL get_acpi_integer( const ACPI_EVAL_OUTPUT_BUFFER *output, DWORD returned,
+                              UINT index, ULONG *value )
+{
+    const ACPI_METHOD_ARGUMENT *argument;
+    const BYTE *end;
+    UINT current;
+
+    if (returned < FIELD_OFFSET(ACPI_EVAL_OUTPUT_BUFFER, Argument) ||
+        output->Signature != ACPI_EVAL_OUTPUT_BUFFER_SIGNATURE ||
+        output->Length < FIELD_OFFSET(ACPI_EVAL_OUTPUT_BUFFER, Argument) ||
+        output->Length > returned)
+        return FALSE;
+
+    argument = output->Argument;
+    end = (const BYTE *)output + output->Length;
+    if (output->Count == 1)
+    {
+        if ((const BYTE *)argument > end ||
+            end - (const BYTE *)argument < FIELD_OFFSET(ACPI_METHOD_ARGUMENT, Data) ||
+            argument->Type != ACPI_METHOD_ARGUMENT_PACKAGE ||
+            argument->DataLength > end - argument->Data)
+            return FALSE;
+        end = argument->Data + argument->DataLength;
+        argument = (const ACPI_METHOD_ARGUMENT *)argument->Data;
+    }
+    else if (index >= output->Count) return FALSE;
+
+    for (current = 0; current <= index; current++)
+    {
+        SIZE_T length;
+
+        if ((const BYTE *)argument > end ||
+            end - (const BYTE *)argument < FIELD_OFFSET(ACPI_METHOD_ARGUMENT, Data))
+            return FALSE;
+        length = ACPI_METHOD_ARGUMENT_LENGTH( argument->DataLength );
+        if (length > end - (const BYTE *)argument) return FALSE;
+        if (current == index)
+        {
+            if (argument->Type != ACPI_METHOD_ARGUMENT_INTEGER ||
+                argument->DataLength < sizeof(ULONG))
+                return FALSE;
+            *value = argument->Argument;
+            return TRUE;
+        }
+        argument = (const ACPI_METHOD_ARGUMENT *)((const BYTE *)argument + length);
+    }
+    return FALSE;
+}
+
+static BOOL get_fan_status( HANDLE handle, ULONG *control, ULONG *speed )
+{
+    ACPI_EVAL_INPUT_BUFFER input;
+    BYTE output_buffer[256];
+    ACPI_EVAL_OUTPUT_BUFFER *output = (ACPI_EVAL_OUTPUT_BUFFER *)output_buffer;
+    DWORD returned;
+
+    memset( &input, 0, sizeof(input) );
+    memset( output_buffer, 0, sizeof(output_buffer) );
+    input.Signature = ACPI_EVAL_INPUT_BUFFER_SIGNATURE;
+    memcpy( input.MethodName, "_FST", sizeof(input.MethodName) );
+    if (!DeviceIoControl( handle, IOCTL_ACPI_EVAL_METHOD, &input, sizeof(input),
+                          output, sizeof(output_buffer), &returned, NULL ))
+        return FALSE;
+    return get_acpi_integer( output, returned, 1, control ) &&
+           get_acpi_integer( output, returned, 2, speed );
+}
+
+static UINT get_fans( struct fan_data *fans, UINT capacity )
+{
+    SP_DEVICE_INTERFACE_DATA interface_data = { .cbSize = sizeof(interface_data) };
+    HDEVINFO devices;
+    UINT count = 0, index;
+
+    devices = SetupDiGetClassDevsW( &GUID_DEVICE_FAN, NULL, NULL,
+                                    DIGCF_PRESENT | DIGCF_DEVICEINTERFACE );
+    if (devices == INVALID_HANDLE_VALUE) return 0;
+
+    for (index = 0; count < capacity; index++)
+    {
+        SP_DEVINFO_DATA device_data = { .cbSize = sizeof(device_data) };
+        SP_DEVICE_INTERFACE_DETAIL_DATA_W *detail;
+        HANDLE handle;
+
+        if (!SetupDiEnumDeviceInterfaces( devices, NULL, &GUID_DEVICE_FAN,
+                                          index, &interface_data ))
+            break;
+        if (!(detail = get_device_interface_detail( devices, &interface_data, &device_data ))) continue;
+        handle = CreateFileW( detail->DevicePath, GENERIC_READ | GENERIC_WRITE,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL );
+        free( detail );
+
+        fans[count].name = get_device_name( devices, &device_data, L"ACPI Fan", index );
+        fans[count].pnp_device_id = get_device_instance_id( devices, &device_data );
+        if (!fans[count].name)
+        {
+            free( fans[count].pnp_device_id );
+            fans[count].pnp_device_id = NULL;
+            if (handle != INVALID_HANDLE_VALUE) CloseHandle( handle );
+            continue;
+        }
+        fans[count].control = (ULONG)-1;
+        fans[count].speed = (ULONG)-1;
+        if (handle != INVALID_HANDLE_VALUE)
+        {
+            fans[count].status_valid = get_fan_status( handle, &fans[count].control,
+                                                       &fans[count].speed );
+            CloseHandle( handle );
+        }
+        count++;
+    }
+
+    SetupDiDestroyDeviceInfoList( devices );
+    return count;
+}
+
+static enum fill_status fill_fan( struct table *table, const struct expr *cond )
+{
+    struct fan_data fans[MAX_FAN_COUNT] = {0};
+    struct record_fan *rec;
+    WCHAR text[64];
+    UINT count, i, offset = 0, row = 0;
+    enum fill_status status = FILL_STATUS_UNFILTERED;
+
+    if (!(count = get_fans( fans, ARRAY_SIZE(fans) )))
+    {
+        table->num_rows = 0;
+        return status;
+    }
+    if (!resize_table( table, count, sizeof(*rec) )) goto failed;
+
+    for (i = 0; i < count; i++)
+    {
+        rec = (struct record_fan *)(table->data + offset);
+        rec->active_cooling = -1;
+        rec->availability = 3; /* Running or Full Power */
+        rec->caption = fans[i].name;
+        fans[i].name = NULL;
+        rec->creation_class_name = L"Win32_Fan";
+        rec->description = wcsdup( rec->caption );
+        if (fans[i].status_valid && fans[i].speed != (ULONG)-1)
+            rec->desired_speed = fans[i].speed;
+        if (fans[i].pnp_device_id)
+            rec->device_id = wcsdup( fans[i].pnp_device_id );
+        else
+        {
+            swprintf( text, ARRAY_SIZE(text), L"Fan%u", i );
+            rec->device_id = wcsdup( text );
+        }
+        rec->name = wcsdup( rec->caption );
+        rec->pnp_device_id = fans[i].pnp_device_id;
+        fans[i].pnp_device_id = NULL;
+        rec->status = fans[i].status_valid ? L"OK" : L"Unknown";
+        rec->status_info = fans[i].status_valid && fans[i].control == 0 ? 4 : 3;
+        rec->system_class_name = L"Win32_ComputerSystem";
+        rec->system_name = get_computername();
+        rec->variable_speed = fans[i].status_valid && fans[i].control != (ULONG)-1;
+
+        if (!match_row( table, row, cond, &status ))
+        {
+            free_row_values( table, row );
+            continue;
+        }
+        offset += sizeof(*rec);
+        row++;
+    }
+
+    TRACE("created %u rows\n", row);
+    table->num_rows = row;
+    for (i = 0; i < count; i++)
+    {
+        free( fans[i].name );
+        free( fans[i].pnp_device_id );
+    }
+    return status;
+
+failed:
+    for (i = 0; i < count; i++)
+    {
+        free( fans[i].name );
+        free( fans[i].pnp_device_id );
+    }
+    return FILL_STATUS_FAILED;
+}
+
+static enum fill_status fill_thermalzoneinformation( struct table *table,
+                                                     const struct expr *cond )
+{
+    struct thermal_zone_data zones[MAX_THERMAL_ZONE_COUNT] = {0};
+    struct record_thermalzoneinformation *rec;
+    LARGE_INTEGER counter, frequency;
+    ULARGE_INTEGER system_time;
+    FILETIME file_time;
+    WCHAR name[32];
+    UINT count, i, offset = 0, row = 0;
+    enum fill_status status = FILL_STATUS_UNFILTERED;
+
+    if (!(count = get_thermal_zones( zones, ARRAY_SIZE(zones) )))
+    {
+        table->num_rows = 0;
+        return status;
+    }
+    if (!resize_table( table, count, sizeof(*rec) )) goto failed;
+
+    QueryPerformanceFrequency( &frequency );
+    QueryPerformanceCounter( &counter );
+    GetSystemTimeAsFileTime( &file_time );
+    system_time.LowPart = file_time.dwLowDateTime;
+    system_time.HighPart = file_time.dwHighDateTime;
+
+    for (i = 0; i < count; i++)
+    {
+        rec = (struct record_thermalzoneinformation *)(table->data + offset);
+        rec->caption = L"Thermal Zone Information";
+        rec->description = L"Thermal Zone Information";
+        rec->frequency_object = frequency.QuadPart;
+        rec->frequency_perftime = frequency.QuadPart;
+        rec->frequency_sys100ns = 10000000;
+        rec->high_precision_temperature = zones[i].current_temperature;
+        if (zones[i].name)
+        {
+            rec->name = zones[i].name;
+            zones[i].name = NULL;
+        }
+        else
+        {
+            swprintf( name, ARRAY_SIZE(name), L"ThermalZone%u", i );
+            rec->name = wcsdup( name );
+        }
+        rec->percent_passive_limit = 100;
+        rec->temperature = (zones[i].current_temperature + 5) / 10;
+        if (zones[i].passive_trip_point != (ULONG)-1 &&
+            zones[i].current_temperature >= zones[i].passive_trip_point)
+            rec->throttle_reasons = 1;
+        rec->timestamp_object = counter.QuadPart;
+        rec->timestamp_perftime = counter.QuadPart;
+        rec->timestamp_sys100ns = system_time.QuadPart;
+
+        if (!match_row( table, row, cond, &status ))
+        {
+            free_row_values( table, row );
+            continue;
+        }
+        offset += sizeof(*rec);
+        row++;
+    }
+
+    TRACE("created %u rows\n", row);
+    table->num_rows = row;
+    for (i = 0; i < count; i++) free( zones[i].name );
+    return status;
+
+failed:
+    for (i = 0; i < count; i++) free( zones[i].name );
+    return FILL_STATUS_FAILED;
+}
+
 static enum fill_status fill_sounddevice( struct table *table, const struct expr *cond )
 {
     struct record_sounddevice *rec;
@@ -4958,6 +5434,7 @@ static struct table cimv2_builtin_classes[] =
     { L"Win32_DiskDriveToDiskPartition", C(col_diskdrivetodiskpartition), 0, 0, NULL, fill_diskdrivetodiskpartition },
     { L"Win32_DiskPartition", C(col_diskpartition), 0, 0, NULL, fill_diskpartition },
     { L"Win32_DisplayControllerConfiguration", C(col_displaycontrollerconfig), 0, 0, NULL, fill_displaycontrollerconfig },
+    { L"Win32_Fan", C(col_fan), 0, 0, NULL, fill_fan },
     { L"Win32_IP4RouteTable", C(col_ip4routetable), 0, 0, NULL, fill_ip4routetable },
     { L"Win32_LocalTime", C(col_localtime), 0, 0, NULL, fill_localtime },
     { L"Win32_LogicalDisk", C(col_logicaldisk), 0, 0, NULL, fill_logicaldisk },
@@ -4966,6 +5443,7 @@ static struct table cimv2_builtin_classes[] =
     { L"Win32_NetworkAdapterConfiguration", C(col_networkadapterconfig), 0, 0, NULL, fill_networkadapterconfig },
     { L"Win32_OperatingSystem", C(col_operatingsystem), 0, 0, NULL, fill_operatingsystem },
     { L"Win32_PageFileUsage", C(col_pagefileusage), D(data_pagefileusage) },
+    { L"Win32_PerfRawData_Counters_ThermalZoneInformation", C(col_thermalzoneinformation), 0, 0, NULL, fill_thermalzoneinformation },
     { L"Win32_PhysicalMedia", C(col_physicalmedia), D(data_physicalmedia) },
     { L"Win32_PhysicalMemory", C(col_physicalmemory), 0, 0, NULL, fill_physicalmemory },
     { L"Win32_PhysicalMemoryArray", C(col_physicalmemoryarray), 0, 0, NULL, fill_physicalmemoryarray },

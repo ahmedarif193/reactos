@@ -94,6 +94,8 @@ static void test_select( IWbemServices *services )
         L"SELECT * FROM Win32_BIOS WHERE NULL = NAME",
         L"SELECT * FROM Win32_LogicalDiskToPartition",
         L"SELECT * FROM Win32_DiskDriveToDiskPartition",
+        L"SELECT * FROM Win32_Fan",
+        L"SELECT * FROM Win32_PerfRawData_Counters_ThermalZoneInformation",
         L"SELECT \x80 FROM \x80",
         L"SELECT \xC6 FROM \xC6",
         L"SELECT \xFF FROM \xFF",
