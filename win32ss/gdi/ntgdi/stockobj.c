@@ -247,6 +247,7 @@ VOID FASTCALL
 CreateStockObjects(void)
 {
     UINT Object;
+    LOGCOLORSPACEEXW lcs = {0};
 
     DPRINT("Beginning creation of stock objects\n");
 
@@ -265,7 +266,11 @@ CreateStockObjects(void)
     StockObjects[DC_PEN]    = IntCreateStockPen(BlackPen.lopnStyle, BlackPen.lopnWidth.x, BS_SOLID, BlackPen.lopnColor);
     StockObjects[NULL_PEN]  = IntCreateStockPen(NullPen.lopnStyle, NullPen.lopnWidth.x, BS_SOLID, NullPen.lopnColor);
 
-    StockObjects[20] = NULL; /* TODO: Unknown internal stock object */
+    lcs.lcsColorSpace.lcsSignature = LCS_SIGNATURE;
+    lcs.lcsColorSpace.lcsVersion = 0x400;
+    lcs.lcsColorSpace.lcsSize = sizeof(LOGCOLORSPACEW);
+    hStockColorSpace = IntGdiCreateColorSpace(&lcs);
+    StockObjects[20] = hStockColorSpace;
     StockObjects[DEFAULT_BITMAP] = GreCreateBitmap(1, 1, 1, 1, NULL);
 
     CreateStockFonts();

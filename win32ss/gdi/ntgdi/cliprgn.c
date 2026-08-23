@@ -549,7 +549,7 @@ NtGdiOffsetClipRgn(
     pdc = DC_LockDc(hdc);
     if (pdc == NULL)
     {
-        if (!hdc) EngSetLastError(ERROR_INVALID_HANDLE);
+        EngSetLastError(ERROR_INVALID_HANDLE);
         return ERROR;
     }
 

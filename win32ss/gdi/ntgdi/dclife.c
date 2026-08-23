@@ -780,7 +780,7 @@ NtGdiOpenDCW(
     hdc = GreOpenDCW(pustrDevice ? &ustrDevice : NULL,
                      pdmAllocated,
                      NULL, // FIXME: pwszLogAddress
-                     iType,
+                     iType ? DCTYPE_INFO : DCTYPE_DIRECT,
                      bDisplay,
                      hspool,
                      NULL, // FIXME: pDriverInfo2
@@ -950,19 +950,35 @@ BOOL
 APIENTRY
 NtGdiDeleteObjectApp(HANDLE hobj)
 {
-    if (GDI_HANDLE_IS_STOCKOBJ(hobj)) return TRUE;
+    BOOL bResult;
+    ULONG ulError = EngGetLastError();
+
+#ifdef _WIN64
+    /* GDI handles are 32-bit values even in 64-bit processes. */
+    hobj = UlongToHandle(HandleToUlong(hobj));
+#endif
+
+    if (GDI_HANDLE_IS_STOCKOBJ(hobj))
+    {
+        bResult = TRUE;
+        goto Exit;
+    }
 
     if (GreGetObjectOwner(hobj) != GDI_OBJ_HMGR_POWNED)
     {
-        EngSetLastError(ERROR_INVALID_HANDLE);
-        return FALSE;
+        bResult = FALSE;
+        goto Exit;
     }
 
     if (GDI_HANDLE_GET_TYPE(hobj) != GDI_OBJECT_TYPE_DC)
-        return GreDeleteObject(hobj);
+        bResult = GreDeleteObject(hobj);
+    else
+        /* FIXME: Everything should be callback based */
+        bResult = IntGdiDeleteDC(hobj, FALSE);
 
-    // FIXME: Everything should be callback based
-    return IntGdiDeleteDC(hobj, FALSE);
+Exit:
+    EngSetLastError(bResult ? ERROR_SUCCESS : ulError);
+    return bResult;
 }
 
 BOOL
@@ -1073,4 +1089,3 @@ IntGdiCreateDisplayDC(HDEV hDev, ULONG DcType, BOOL EmptyDC)
 
     return hDC;
 }
-

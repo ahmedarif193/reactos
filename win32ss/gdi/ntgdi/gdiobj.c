@@ -1204,6 +1204,14 @@ GreDeleteObject(HGDIOBJ hobj)
         return FALSE;
     }
 
+    /* Selected palettes stay alive and DeleteObject reports failure. */
+    if ((GDI_HANDLE_GET_TYPE(hobj) == GDI_OBJECT_TYPE_PALETTE) &&
+        ((gpaulRefCount[GDI_HANDLE_GET_INDEX(hobj)] & REF_MASK_COUNT) > 1))
+    {
+        GDIOBJ_vDereferenceObject(pentry->einfo.pobj);
+        return FALSE;
+    }
+
     /* Delete the object */
     GDIOBJ_vDeleteObject(pentry->einfo.pobj);
     return TRUE;
