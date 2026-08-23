@@ -485,7 +485,16 @@ KiGetLinkedTrapFrame(
     return (PKTRAP_FRAME)(TrapFrame->TrapFrame);
 }
 
-#define KeGetTrapFrame(Thread) ((PKTRAP_FRAME)((Thread)->TrapFrame))
+/*
+ * The permanent user trap frame occupies the same stack slot as the trap
+ * frame built by the lower-EL synchronous vector.  This lets a context APC
+ * recover the last user state while its target is temporarily executing in
+ * kernel mode and Thread->TrapFrame is not active.
+ */
+#define KARM64_USER_TRAP_FRAME_OFFSET 0x3E0
+#define KeGetTrapFrame(Thread) \
+    ((PKTRAP_FRAME)((ULONG_PTR)((Thread)->InitialStack) - \
+                     KARM64_USER_TRAP_FRAME_OFFSET))
 
 /*
  * KeGetExceptionFrame - Get the exception frame for a thread

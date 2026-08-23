@@ -35,10 +35,19 @@ typedef struct _KUINIT_FRAME
 {
     KSWITCH_FRAME SwitchFrame;
     KSTART_FRAME StartFrame;
+    ULONG64 ExceptionAlignment;
     KEXCEPTION_FRAME ExceptionFrame;
     KTRAP_FRAME TrapFrame;
     KARM64_VFP_STATE VfpState;
+    ULONG64 RuntimeFrameTail[16];
 } KUINIT_FRAME, *PKUINIT_FRAME;
+
+C_ASSERT(FIELD_OFFSET(KUINIT_FRAME, TrapFrame) -
+         FIELD_OFFSET(KUINIT_FRAME, ExceptionFrame) ==
+         sizeof(KEXCEPTION_FRAME));
+C_ASSERT(sizeof(KUINIT_FRAME) - FIELD_OFFSET(KUINIT_FRAME, TrapFrame) ==
+         KARM64_USER_TRAP_FRAME_OFFSET);
+C_ASSERT(sizeof(KUINIT_FRAME) == 0x550);
 
 typedef struct _KKINIT_FRAME
 {

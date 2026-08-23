@@ -102,10 +102,13 @@ C_ASSERT(sizeof(KI_ARM64_IRQ_FRAME) == 0x340);
  */
 typedef struct DECLSPEC_CACHEALIGN _KI_ARM64_FREEZE_FRAMES
 {
-    KTRAP_FRAME TrapFrame;
     KEXCEPTION_FRAME ExceptionFrame;
+    KTRAP_FRAME TrapFrame;
     KARM64_VFP_STATE VfpState;
 } KI_ARM64_FREEZE_FRAMES, *PKI_ARM64_FREEZE_FRAMES;
+
+C_ASSERT(FIELD_OFFSET(KI_ARM64_FREEZE_FRAMES, TrapFrame) ==
+         sizeof(KEXCEPTION_FRAME));
 
 static KI_ARM64_FREEZE_FRAMES KiArm64FreezeFrames[MAXIMUM_PROCESSORS];
 
@@ -169,7 +172,7 @@ KiArm64GetInterruptTrapFrame(
 
 static
 VOID
-KiArm64BuildFreezeFrames(_In_ ULONG VectorId, _In_ KIRQL PreviousIrql, _In_ PKI_ARM64_IRQ_FRAME IrqFrame, _Out_ PKTRAP_FRAME TrapFrame, _Out_ PKEXCEPTION_FRAME ExceptionFrame, _Out_ PKARM64_VFP_STATE VfpState)
+KiArm64BuildInterruptFrames(_In_ ULONG VectorId, _In_ KIRQL PreviousIrql, _In_ PKI_ARM64_IRQ_FRAME IrqFrame, _Out_ PKTRAP_FRAME TrapFrame, _Out_ PKEXCEPTION_FRAME ExceptionFrame, _Out_ PKARM64_VFP_STATE VfpState)
 {
     ULONG Index;
 
@@ -178,7 +181,7 @@ KiArm64BuildFreezeFrames(_In_ ULONG VectorId, _In_ KIRQL PreviousIrql, _In_ PKI_
     RtlZeroMemory(VfpState, sizeof(*VfpState));
 
     TrapFrame->PreviousMode = (VectorId >= 8) ? UserMode : KernelMode;
-    TrapFrame->PreviousIrql = PreviousIrql;
+    TrapFrame->SavedIrql = PreviousIrql;
     TrapFrame->VfpState = VfpState;
     TrapFrame->Spsr = (ULONG)IrqFrame->Spsr;
     TrapFrame->Sp = (VectorId >= 8) ?
@@ -203,6 +206,9 @@ KiArm64BuildFreezeFrames(_In_ ULONG VectorId, _In_ KIRQL PreviousIrql, _In_ PKI_
     ExceptionFrame->Fp = IrqFrame->Fp;
     ExceptionFrame->Lr = IrqFrame->Lr;
     ExceptionFrame->Return = IrqFrame->Elr;
+    ExceptionFrame->TrapFrame = (ULONG64)(ULONG_PTR)TrapFrame;
+    ExceptionFrame->Fpcr = IrqFrame->Fpcr;
+    ExceptionFrame->Fpsr = IrqFrame->Fpsr;
 
     VfpState->Fpcr = IrqFrame->Fpcr;
     VfpState->Fpsr = IrqFrame->Fpsr;
@@ -211,7 +217,7 @@ KiArm64BuildFreezeFrames(_In_ ULONG VectorId, _In_ KIRQL PreviousIrql, _In_ PKI_
 
 static
 VOID
-KiArm64RestoreFreezeFrames(_In_ ULONG VectorId, _Inout_ PKI_ARM64_IRQ_FRAME IrqFrame, _In_ PKTRAP_FRAME TrapFrame, _In_ PKEXCEPTION_FRAME ExceptionFrame, _In_ PKARM64_VFP_STATE VfpState)
+KiArm64RestoreInterruptFrames(_In_ ULONG VectorId, _Inout_ PKI_ARM64_IRQ_FRAME IrqFrame, _In_ PKTRAP_FRAME TrapFrame, _In_ PKEXCEPTION_FRAME ExceptionFrame, _In_ PKARM64_VFP_STATE VfpState)
 {
     ULONG Index;
 
@@ -292,6 +298,39 @@ KiDeliverApc(
     _In_ KPROCESSOR_MODE DeliveryMode,
     _In_ PKEXCEPTION_FRAME ExceptionFrame,
     _In_ PKTRAP_FRAME TrapFrame);
+
+static
+DECLSPEC_NOINLINE
+VOID
+KiArm64DeliverInterruptApc(
+    _In_ ULONG VectorId,
+    _Inout_ PKI_ARM64_IRQ_FRAME IrqFrame,
+    _In_ KIRQL PreviousIrql)
+{
+    KI_ARM64_FREEZE_FRAMES Frames;
+    PKTHREAD Thread = KeGetCurrentThread();
+
+    ASSERT(VectorId >= 8);
+    ASSERT(Thread != NULL);
+
+    KiArm64BuildInterruptFrames(VectorId,
+                               PreviousIrql,
+                               IrqFrame,
+                               &Frames.TrapFrame,
+                               &Frames.ExceptionFrame,
+                               &Frames.VfpState);
+    Frames.TrapFrame.TrapFrame = (ULONG64)(ULONG_PTR)Thread->TrapFrame;
+
+    _enable();
+    KiDeliverApc(UserMode, &Frames.ExceptionFrame, &Frames.TrapFrame);
+    _disable();
+
+    KiArm64RestoreInterruptFrames(VectorId,
+                                 IrqFrame,
+                                 &Frames.TrapFrame,
+                                 &Frames.ExceptionFrame,
+                                 &Frames.VfpState);
+}
 
 /*
  * ARM64 Generic Timer register accessors.
@@ -836,7 +875,10 @@ KiArm64SoftwareInterrupt(_In_ ULONG IntId)
 }
 
 VOID
-KiArm64InterruptDispatchExit(_In_ ULONG ExitWork)
+KiArm64InterruptDispatchExit(
+    _In_ ULONG ExitWork,
+    _In_ ULONG VectorId,
+    _Inout_ PKI_ARM64_IRQ_FRAME IrqFrame)
 {
     PKIPCR Pcr;
     PKPRCB Prcb;
@@ -844,6 +886,8 @@ KiArm64InterruptDispatchExit(_In_ ULONG ExitWork)
     KIRQL OldIrql;
 
     ASSERT((ExitWork & ~(ARM64_INTERRUPT_EXIT_APC | ARM64_INTERRUPT_EXIT_DPC)) == 0);
+    ASSERT(VectorId < 16);
+    ASSERT(IrqFrame != NULL);
 
     /*
      * A nested SGI has already been acknowledged by the GIC, but its logical
@@ -883,13 +927,21 @@ KiArm64InterruptDispatchExit(_In_ ULONG ExitWork)
         Thread = KeGetCurrentThread();
         if ((OldIrql < APC_LEVEL) &&
             (Thread != NULL) &&
-            KiIsKernelApcDeliverable(Thread, OldIrql))
+            (KiIsKernelApcDeliverable(Thread, OldIrql) ||
+             ((VectorId >= 8) && Thread->ApcState.UserApcPending)))
         {
             HalClearSoftwareInterrupt(APC_LEVEL);
             KfRaiseIrql(APC_LEVEL);
-            _enable();
-            KiDeliverApc(KernelMode, NULL, NULL);
-            _disable();
+            if (VectorId >= 8)
+            {
+                KiArm64DeliverInterruptApc(VectorId, IrqFrame, OldIrql);
+            }
+            else
+            {
+                _enable();
+                KiDeliverApc(KernelMode, NULL, Thread->TrapFrame);
+                _disable();
+            }
             KfLowerIrql(OldIrql);
         }
     }
@@ -944,10 +996,10 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId, _In_ PKI_ARM64_IRQ_FRAME IrqF
                 Cpu = Prcb->Number;
                 ASSERT(Cpu < MAXIMUM_PROCESSORS);
                 FreezeFrames = &KiArm64FreezeFrames[Cpu];
-                KiArm64BuildFreezeFrames(VectorId, OldIrql, IrqFrame, &FreezeFrames->TrapFrame, &FreezeFrames->ExceptionFrame, &FreezeFrames->VfpState);
+                KiArm64BuildInterruptFrames(VectorId, OldIrql, IrqFrame, &FreezeFrames->TrapFrame, &FreezeFrames->ExceptionFrame, &FreezeFrames->VfpState);
                 KiIpiServiceRoutine(&FreezeFrames->TrapFrame, &FreezeFrames->ExceptionFrame);
                 _disable();
-                KiArm64RestoreFreezeFrames(VectorId, IrqFrame, &FreezeFrames->TrapFrame, &FreezeFrames->ExceptionFrame, &FreezeFrames->VfpState);
+                KiArm64RestoreInterruptFrames(VectorId, IrqFrame, &FreezeFrames->TrapFrame, &FreezeFrames->ExceptionFrame, &FreezeFrames->VfpState);
             }
             else
             {
