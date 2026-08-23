@@ -5468,7 +5468,11 @@ TOOLBAR_Create (HWND hwnd, const CREATESTRUCTW *lpcs)
     infoPtr->hFont = infoPtr->hDefaultFont = CreateFontIndirectW (&logFont);
 
 #if __WINE_COMCTL32_VERSION == 6
+#ifdef __REACTOS__
+    infoPtr->hTheme = OpenThemeDataForDpi (hwnd, L"Toolbar", GetDpiForWindow (hwnd));
+#else
     infoPtr->hTheme = OpenThemeDataForDpi (NULL, L"Toolbar", GetDpiForWindow (hwnd));
+#endif
 #endif
 
     TOOLBAR_CheckStyle (infoPtr);
@@ -6739,7 +6743,11 @@ static LRESULT theme_changed (TOOLBAR_INFO *infoPtr)
 {
 #if __WINE_COMCTL32_VERSION == 6
     CloseThemeData (infoPtr->hTheme);
+#ifdef __REACTOS__
+    infoPtr->hTheme = OpenThemeDataForDpi (infoPtr->hwndSelf, L"Toolbar", GetDpiForWindow (infoPtr->hwndSelf));
+#else
     infoPtr->hTheme = OpenThemeDataForDpi (NULL, L"Toolbar", GetDpiForWindow (infoPtr->hwndSelf));
+#endif
     InvalidateRect (infoPtr->hwndSelf, NULL, TRUE);
     return 0;
 #else
