@@ -51,6 +51,7 @@ extern BOOL ClientPfnInit;
 extern HINSTANCE hModClient;
 extern HANDLE hModuleWin;    // This Win32k Instance.
 extern struct _CLS *SystemClassList;
+extern struct _PROCESSINFO *gppiList;
 extern BOOL RegisteredSysClasses;
 
 struct _TL;

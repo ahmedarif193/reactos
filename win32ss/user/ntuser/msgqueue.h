@@ -126,6 +126,7 @@ enum internal_event_message
 #define POSTEVENT_NONE 0xFFFF
 
 extern LIST_ENTRY usmList;
+extern PUSER_MESSAGE_QUEUE gpqCursor;
 
 BOOL FASTCALL MsqIsHung(PTHREADINFO pti, DWORD TimeOut);
 VOID CALLBACK HungAppSysTimerProc(HWND,UINT,UINT_PTR,DWORD);

@@ -322,6 +322,9 @@ ExitProcessCallback(PEPROCESS Process)
     TRACE_CH(UserProcess, "Destroying ppi 0x%p\n", ppiCurrent);
     ppiCurrent->W32PF_flags |= W32PF_TERMINATED;
 
+    if (ppiCurrent->W32PF_flags & W32PF_STARTGLASS)
+        IntCalcStartCursorHide(ppiCurrent, 0);
+
     /* Remove it from the list */
     pppi = &gppiList;
     while (*pppi != NULL && *pppi != ppiCurrent)
@@ -520,6 +523,32 @@ UserSyncWow64ClientInfo(PTHREADINFO pti)
 #endif
 }
 
+static
+BOOL
+IntIsGuiImage(
+    _In_ PEPROCESS Process)
+{
+    PIMAGE_NT_HEADERS pNtHeaders;
+    BOOL bGui = FALSE;
+
+    if (!Process->Peb || !Process->SectionBaseAddress)
+        return FALSE;
+
+    _SEH2_TRY
+    {
+        pNtHeaders = RtlImageNtHeader(Process->SectionBaseAddress);
+        if (pNtHeaders)
+            bGui = (pNtHeaders->OptionalHeader.Subsystem == IMAGE_SUBSYSTEM_WINDOWS_GUI);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        bGui = FALSE;
+    }
+    _SEH2_END;
+
+    return bGui;
+}
+
 NTSTATUS NTAPI
 InitThreadCallback(PETHREAD Thread)
 {
@@ -652,6 +681,13 @@ InitThreadCallback(PETHREAD Thread)
 
         if (bFirstThread)
         {
+            if (!(ProcessParams->WindowFlags & STARTF_FORCEOFFFEEDBACK) &&
+                ((ProcessParams->WindowFlags & STARTF_FORCEONFEEDBACK) ||
+                 IntIsGuiImage(Process)))
+            {
+                IntCalcStartCursorHide(ptiCurrent->ppi, 5000);
+            }
+
             /* Note: Only initialize once so it can be set back to 0 after being used */
             if (ProcessParams->WindowFlags & STARTF_USEHOTKEY)
                 ptiCurrent->ppi->dwHotkey = HandleToUlong(ProcessParams->StandardInput);

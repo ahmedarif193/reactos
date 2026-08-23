@@ -137,7 +137,7 @@ UserSetCursor(
         if (NewCursor)
         {
             /* Call GDI to set the new screen cursor */
-            IntSetPointerShape(hdcScreen, NewCursor);
+            IntSetPointerShape(hdcScreen, IntGetPhysicalCursor(NewCursor));
         }
         else /* Note: OldCursor != NewCursor so we have to hide cursor */
         {
@@ -658,11 +658,13 @@ co_MsqInsertMouseMessage(MSG* Msg, DWORD flags, ULONG_PTR dwExtraInfo, BOOL Hook
               MessageQueue->CursorObject &&
               MessageQueue->iCursorLevel >= 0)
            {
+               PCURICON_OBJECT pcur = IntGetPhysicalCursor(MessageQueue->CursorObject);
+
                /* Check if shape has changed */
-               if(CurInfo->CurrentCursorObject != MessageQueue->CursorObject)
+               if(CurInfo->CurrentCursorObject != pcur)
                {
                    /* Call GDI to set the new screen cursor */
-                   IntSetPointerShape(hdcScreen, MessageQueue->CursorObject);
+                   IntSetPointerShape(hdcScreen, pcur);
                } else
                    GreMovePointer(hdcScreen, Msg->pt.x, Msg->pt.y);
            }
@@ -672,7 +674,7 @@ co_MsqInsertMouseMessage(MSG* Msg, DWORD flags, ULONG_PTR dwExtraInfo, BOOL Hook
 
            /* Update global cursor info */
            CurInfo->ShowingCursor = MessageQueue->iCursorLevel;
-           IntSetCurrentCursorObject(MessageQueue->CursorObject);
+           IntSetCurrentCursorObject(IntGetPhysicalCursor(MessageQueue->CursorObject));
            gpqCursor = MessageQueue;
 
            /* Mouse move is a special case */
