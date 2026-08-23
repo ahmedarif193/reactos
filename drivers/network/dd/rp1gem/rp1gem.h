@@ -20,26 +20,6 @@
 #define ETH_LENGTH_OF_ADDRESS 6
 #endif
 
-#ifndef NDIS_LINK_SPEED_UNKNOWN
-#define NDIS_LINK_SPEED_UNKNOWN 0
-#endif
-
-#ifndef NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES_REVISION_2
-#define NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES_REVISION_2 2
-#endif
-
-#ifndef NDIS_MINIPORT_ATTRIBUTES_HARDWARE_DEVICE
-#define NDIS_MINIPORT_ATTRIBUTES_HARDWARE_DEVICE 0x00000001
-#endif
-
-#ifndef NDIS_MINIPORT_ATTRIBUTES_SURPRISE_REMOVE_OK
-#define NDIS_MINIPORT_ATTRIBUTES_SURPRISE_REMOVE_OK 0x00000004
-#endif
-
-#ifndef NDIS_MINIPORT_ATTRIBUTES_BUS_MASTER
-#define NDIS_MINIPORT_ATTRIBUTES_BUS_MASTER 0x00000040
-#endif
-
 #define RP1GEM_TAG 'G1PR'
 #define RP1GEM_DRIVER_VERSION 0x0100
 #define RP1GEM_PHY_ADDRESS 1
@@ -305,9 +285,6 @@ typedef struct _RP1GEM_ADAPTER
     PRP1GEM_DMA_DESCRIPTOR RxRing;
     NDIS_PHYSICAL_ADDRESS RxRingPhysical;
     ULONG RxRingLength;
-    PVOID RxBufferArea;
-    NDIS_PHYSICAL_ADDRESS RxBufferPhysical;
-    ULONG RxBufferAreaLength;
     RP1GEM_RX_BUFFER RxBuffers[RP1GEM_RX_RING_SIZE];
     ULONG RxTail;
     volatile LONG RxReturnedSinceKick;
@@ -315,9 +292,6 @@ typedef struct _RP1GEM_ADAPTER
     PRP1GEM_DMA_DESCRIPTOR TxRing;
     NDIS_PHYSICAL_ADDRESS TxRingPhysical;
     ULONG TxRingLength;
-    PVOID TxBufferArea;
-    NDIS_PHYSICAL_ADDRESS TxBufferPhysical;
-    ULONG TxBufferAreaLength;
     RP1GEM_TX_BUFFER TxBuffers[RP1GEM_TX_RING_SIZE];
     ULONG TxHead;
     ULONG TxTail;
@@ -352,13 +326,11 @@ typedef struct _RP1GEM_ADAPTER
     ULONG InterruptIsrCount;
     ULONG InterruptRecognizedCount;
     ULONG InterruptLastRawIsr;
-    ULONG InterruptLastPending;
     ULONG SpuriousInterruptCount;
 
     /* Win11-on-RPi5 init diagnostics: which step reached, what NDIS handed us. */
     ULONG DiagResCount;
     ULONG DiagResTypes;     /* packed type of first 4 CM descriptors, one byte each */
-    ULONG DiagPhyStatus;    /* last NDIS_STATUS from the MDIO/PHY path */
     ULONG DiagSubStage;     /* which datapath allocation we last attempted */
     ULONG DiagLoopIndex;    /* ring slot index at the last attempted allocation */
     NDIS_HANDLE DiagWorkItem;   /* NDIS IO work item to write diag at PASSIVE_LEVEL */
