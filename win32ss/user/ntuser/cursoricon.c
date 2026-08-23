@@ -2196,7 +2196,8 @@ NoAlpha:
                                NULL,
                                NULL,
                                COLORONCOLOR,
-                               rop4);
+                               rop4,
+                               FALSE);
 
         EXLATEOBJ_vCleanup(&exlo);
 
@@ -2227,7 +2228,8 @@ NoAlpha:
                                    NULL,
                                    NULL,
                                    COLORONCOLOR,
-                                   rop4);
+                                   rop4,
+                                   FALSE);
 
             EXLATEOBJ_vCleanup(&exlo);
 
@@ -2257,7 +2259,8 @@ NoAlpha:
                                    NULL,
                                    NULL,
                                    COLORONCOLOR,
-                                   rop4);
+                                   rop4,
+                                   FALSE);
 
             EXLATEOBJ_vCleanup(&exlo);
 

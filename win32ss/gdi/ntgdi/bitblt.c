@@ -1147,7 +1147,8 @@ GreStretchBltMask(
                               &DCDest->eboFill.BrushObject,
                               &BrushOrigin,
                               pdcattr->jStretchBltMode,
-                              rop4);
+                              rop4,
+                              FALSE);
     }
     if (UsesSource)
     {

@@ -92,9 +92,9 @@ CallDibStretchBlt(SURFOBJ* psoDest,
 /*
  * @implemented
  */
-BOOL
+static BOOL
 APIENTRY
-EngStretchBltROP(
+EngStretchBltROPInternal(
     IN SURFOBJ  *psoDest,
     IN SURFOBJ  *psoSource,
     IN SURFOBJ  *Mask,
@@ -107,7 +107,8 @@ EngStretchBltROP(
     IN POINTL  *MaskOrigin,
     IN ULONG  Mode,
     IN BRUSHOBJ *pbo,
-    IN ROP4 Rop4)
+    IN ROP4 Rop4,
+    IN BOOL bFullSource)
 {
     RECTL              InputRect;
     RECTL              OutputRect;
@@ -260,7 +261,7 @@ EngStretchBltROP(
                         {
                             sy0 = InputRect.top + (y * cyIn) / cyT;
                             sy1 = InputRect.top + ((y + 1) * cyIn) / cyT;
-                            if ((cyT == 1) && (cyIn > 1)) sy1--;
+                            if (!bFullSource && (cyT == 1) && (cyIn > 1)) sy1--;
                             if (sy1 <= sy0) sy1 = sy0 + 1;
                             syStep = 1;
                         }
@@ -277,7 +278,7 @@ EngStretchBltROP(
                             {
                                 sx0 = InputRect.left + (x * cxIn) / cxT;
                                 sx1 = InputRect.left + ((x + 1) * cxIn) / cxT;
-                                if ((cxT == 1) && (cxIn > 1)) sx1--;
+                                if (!bFullSource && (cxT == 1) && (cxIn > 1)) sx1--;
                                 if (sx1 <= sx0) sx1 = sx0 + 1;
                                 sxStep = 1;
                             }
@@ -544,6 +545,39 @@ EngStretchBltROP(
     return Ret;
 }
 
+BOOL
+APIENTRY
+EngStretchBltROP(
+    IN SURFOBJ  *psoDest,
+    IN SURFOBJ  *psoSource,
+    IN SURFOBJ  *Mask,
+    IN CLIPOBJ  *ClipRegion,
+    IN XLATEOBJ  *ColorTranslation,
+    IN COLORADJUSTMENT  *pca,
+    IN POINTL  *BrushOrigin,
+    IN RECTL  *prclDest,
+    IN RECTL  *prclSrc,
+    IN POINTL  *MaskOrigin,
+    IN ULONG  Mode,
+    IN BRUSHOBJ *pbo,
+    IN ROP4 Rop4)
+{
+    return EngStretchBltROPInternal(psoDest,
+                                    psoSource,
+                                    Mask,
+                                    ClipRegion,
+                                    ColorTranslation,
+                                    pca,
+                                    BrushOrigin,
+                                    prclDest,
+                                    prclSrc,
+                                    MaskOrigin,
+                                    Mode,
+                                    pbo,
+                                    Rop4,
+                                    FALSE);
+}
+
 /*
  * @implemented
  */
@@ -591,7 +625,8 @@ IntEngStretchBlt(SURFOBJ *psoDest,
                  BRUSHOBJ *pbo,
                  POINTL *BrushOrigin,
                  ULONG Mode,
-                 DWORD Rop4)
+                 DWORD Rop4,
+                 BOOL bFullSource)
 {
     BOOLEAN ret;
     POINTL MaskOrigin = {0, 0};
@@ -980,19 +1015,20 @@ IntEngStretchBlt(SURFOBJ *psoDest,
                InputRect.left, InputRect.top, InputRect.right, InputRect.bottom,
                OutputRect.left, OutputRect.top, OutputRect.right, OutputRect.bottom);
 
-        ret = EngStretchBltROP(psoDest,
-                               psoSource,
-                               MaskSurf,
-                               ClipRegion,
-                               ColorTranslation,
-                               pca,
-                               BrushOrigin,
-                               &OutputRect,
-                               &InputRect,
-                               &MaskOrigin,
-                               Mode,
-                               pbo,
-                               Rop4);
+        ret = EngStretchBltROPInternal(psoDest,
+                                       psoSource,
+                                       MaskSurf,
+                                       ClipRegion,
+                                       ColorTranslation,
+                                       pca,
+                                       BrushOrigin,
+                                       &OutputRect,
+                                       &InputRect,
+                                       &MaskOrigin,
+                                       Mode,
+                                       pbo,
+                                       Rop4,
+                                       bFullSource);
     }
 
     return ret;
