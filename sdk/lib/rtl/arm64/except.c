@@ -200,6 +200,8 @@ RtlDispatchException(
     ULONG_PTR StackLow;
     ULONG_PTR StackHigh;
     ULONG_PTR LookupPc;
+    ULONG64 ControlPc;
+    BOOLEAN ControlPcIsUnwound;
 
     if (RtlCallVectoredExceptionHandlers(ExceptionRecord, ContextRecord))
     {
@@ -213,7 +215,9 @@ RtlDispatchException(
     for (Frames = 0; Frames < 128; Frames++)
     {
         ImageBase = 0;
-        LookupPc = (Frames == 0) ? UnwindContext.Pc : (UnwindContext.Pc - 4);
+        ControlPc = UnwindContext.Pc;
+        ControlPcIsUnwound = !!(UnwindContext.ContextFlags & CONTEXT_UNWOUND_TO_CALL);
+        LookupPc = ControlPcIsUnwound ? (ControlPc - 4) : ControlPc;
         FunctionEntry = RtlLookupFunctionEntry(LookupPc,
                                                (PULONG_PTR)&ImageBase,
                                                NULL);
@@ -226,6 +230,7 @@ RtlDispatchException(
             }
 
             UnwindContext.Pc = UnwindContext.Lr;
+            UnwindContext.ContextFlags |= CONTEXT_UNWOUND_TO_CALL;
             continue;
         }
 
@@ -251,7 +256,7 @@ RtlDispatchException(
         if (ExceptionRoutine != NULL)
         {
             RtlZeroMemory(&DispatcherContext, sizeof(DispatcherContext));
-            DispatcherContext.ControlPc = LookupPc;
+            DispatcherContext.ControlPc = ControlPc;
             DispatcherContext.ImageBase = ImageBase;
             DispatcherContext.FunctionEntry = FunctionEntry;
             DispatcherContext.EstablisherFrame = EstablisherFrame;
@@ -259,6 +264,7 @@ RtlDispatchException(
             DispatcherContext.LanguageHandler = ExceptionRoutine;
             DispatcherContext.HandlerData = HandlerData;
             DispatcherContext.ScopeIndex = 0;
+            DispatcherContext.ControlPcIsUnwound = ControlPcIsUnwound;
             DispatcherContext.NonVolatileRegisters = NonVolatileRegisters.Buffer;
 
             Disposition = ExceptionRoutine(ExceptionRecord,
