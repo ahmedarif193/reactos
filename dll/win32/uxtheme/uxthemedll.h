@@ -119,6 +119,7 @@ extern void UXTHEME_UninitSystem(void);
 extern HINSTANCE hDllInst;
 extern ATOM atWndContext;
 extern DWORD gdwErrorInfoTlsIndex;
+extern BOOL g_bThemeHooksActive;
 void UXTHEME_DeleteParseErrorInfo(void);
 #endif
 

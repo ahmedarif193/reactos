@@ -570,7 +570,13 @@ void UXTHEME_ReloadTheme(BOOL load)
  */
 BOOL WINAPI IsAppThemed(void)
 {
+#ifdef __REACTOS__
+    TRACE("\n");
+    SetLastError(ERROR_SUCCESS);
+    return bThemeActive && g_bThemeHooksActive;
+#else
     return IsThemeActive();
+#endif
 }
 
 /***********************************************************************
@@ -668,8 +674,31 @@ static HTHEME open_theme_data(HWND hwnd, LPCWSTR pszClassList, DWORD flags, UINT
         return NULL;
     }
 
-    if(flags)
+#ifdef __REACTOS__
+    if (!g_bThemeHooksActive)
+    {
+        SetLastError(E_PROP_ID_UNSUPPORTED);
+        return NULL;
+    }
+
+    if ((flags & OTD_NONCLIENT) && !(dwThemeAppProperties & STAP_ALLOW_NONCLIENT))
+    {
+        SetLastError(E_PROP_ID_UNSUPPORTED);
+        return NULL;
+    }
+
+    if (!(flags & OTD_NONCLIENT) && !(dwThemeAppProperties & STAP_ALLOW_CONTROLS))
+    {
+        SetLastError(E_PROP_ID_UNSUPPORTED);
+        return NULL;
+    }
+
+    if (flags & ~OTD_NONCLIENT)
+        FIXME("unhandled flags: %lx\n", flags & ~OTD_NONCLIENT);
+#else
+    if (flags)
         FIXME("unhandled flags: %lx\n", flags);
+#endif
 
     if(bThemeActive)
     {
@@ -807,6 +836,9 @@ void WINAPI SetThemeAppProperties(DWORD dwFlags)
 {
     TRACE("(0x%08lx)\n", dwFlags);
     dwThemeAppProperties = dwFlags;
+#ifdef __REACTOS__
+    SetLastError(ERROR_SUCCESS);
+#endif
 }
 
 /***********************************************************************
