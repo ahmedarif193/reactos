@@ -14,6 +14,9 @@
 #define NDEBUG
 #include <debug.h>
 
+#ifndef JOB_OBJECT_UILIMIT_ALL
+#define JOB_OBJECT_UILIMIT_ALL 0x000000FF
+#endif
 #ifndef JOB_OBJECT_BASIC_LIMIT_VALID_FLAGS
 #define JOB_OBJECT_BASIC_LIMIT_VALID_FLAGS 0x000000FF
 #endif
@@ -25,7 +28,8 @@
      JOB_OBJECT_LIMIT_SCHEDULING_CLASS)
 #define JOB_OBJECT_EXTENDED_LIMIT_SUPPORTED_FLAGS \
     (JOB_OBJECT_BASIC_LIMIT_SUPPORTED_FLAGS | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | \
-     JOB_OBJECT_LIMIT_SUBSET_AFFINITY)
+     JOB_OBJECT_LIMIT_SUBSET_AFFINITY | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION | \
+     JOB_OBJECT_LIMIT_BREAKAWAY_OK | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK)
 
 /* GLOBALS *******************************************************************/
 
@@ -647,6 +651,7 @@ NtQueryInformationJobObject (
     PKTHREAD CurrentThread;
     KPROCESSOR_MODE PreviousMode;
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION ExtendedLimit;
+    JOBOBJECT_BASIC_UI_RESTRICTIONS UiRestrictions;
     JOBOBJECT_BASIC_AND_IO_ACCOUNTING_INFORMATION BasicAndIo;
     ULONG RequiredLength, RequiredAlign, SizeToCopy, NeededSize;
 
@@ -863,6 +868,16 @@ NtQueryInformationJobObject (
             GenericCopy = &ExtendedLimit;
             Status = STATUS_SUCCESS;
 
+            break;
+
+        case JobObjectBasicUIRestrictions:
+            KeEnterGuardedRegionThread(CurrentThread);
+            ExAcquireResourceSharedLite(&Job->JobLock, TRUE);
+            UiRestrictions.UIRestrictionsClass = Job->UIRestrictionsClass;
+            ExReleaseResourceLite(&Job->JobLock);
+            KeLeaveGuardedRegionThread(CurrentThread);
+            GenericCopy = &UiRestrictions;
+            Status = STATUS_SUCCESS;
             break;
 
         default:
@@ -1130,11 +1145,12 @@ NtSetInformationJobObject (
             Job->SchedulingClass = (LimitFlags & JOB_OBJECT_LIMIT_SCHEDULING_CLASS) ? ExtendedLimitInfo.BasicLimitInformation.SchedulingClass : 0;
             Job->LimitFlags = LimitFlags;
 
-            if (ApplyAffinity || UpdateScheduling)
+            if (ApplyAffinity || UpdateScheduling || (LimitFlags & JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION))
             {
                 for (NextEntry = Job->ProcessListHead.Flink; NextEntry != &Job->ProcessListHead; NextEntry = NextEntry->Flink)
                 {
                     Process = CONTAINING_RECORD(NextEntry, EPROCESS, JobLinks);
+                    if (LimitFlags & JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION) Process->DefaultHardErrorProcessing |= SEM_NOGPFAULTERRORBOX;
                     if (ApplyAffinity) KeSetAffinityProcess(&Process->Pcb, Job->Affinity);
                     if (UpdateScheduling)
                     {
@@ -1144,6 +1160,34 @@ NtSetInformationJobObject (
                 }
             }
 
+            ExReleaseResourceLite(&Job->JobLock);
+            Status = STATUS_SUCCESS;
+            break;
+        }
+
+        case JobObjectBasicUIRestrictions:
+        {
+            JOBOBJECT_BASIC_UI_RESTRICTIONS UiRestrictions;
+
+            _SEH2_TRY
+            {
+                RtlCopyMemory(&UiRestrictions, JobInformation, sizeof(UiRestrictions));
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            if (!NT_SUCCESS(Status)) break;
+
+            if (UiRestrictions.UIRestrictionsClass & ~JOB_OBJECT_UILIMIT_ALL)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            ExAcquireResourceExclusiveLite(&Job->JobLock, TRUE);
+            Job->UIRestrictionsClass = UiRestrictions.UIRestrictionsClass;
             ExReleaseResourceLite(&Job->JobLock);
             Status = STATUS_SUCCESS;
             break;
