@@ -1,6 +1,6 @@
 #
 # PROJECT:     ReactOS RP1 Ethernet Driver
-# LICENSE:     GPL-2.0+ (https://spdx.org/licenses/GPL-2.0+)
+# LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
 # FILE:        drivers/network/dd/rp1gem/CMakeLists.txt
 # PURPOSE:     RP1 Ethernet miniport build rules
 # COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>

@@ -1,5 +1,5 @@
 ; PROJECT:     ReactOS Project - RP1 (Cadence GEM) Ethernet Driver
-; LICENSE:     GPL-2.0+ (https://spdx.org/licenses/GPL-2.0+)
+; LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
 ; FILE:        drivers/network/dd/rp1gem/netrp1gem.inf
 ; PURPOSE:     RP1 (Cadence GEM) Ethernet miniport installation file
 ; COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
