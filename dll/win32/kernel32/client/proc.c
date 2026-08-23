@@ -2208,6 +2208,45 @@ BasepRestrictInheritedHandles(
 }
 
 static
+NTSTATUS
+BasepAssignJobListFromAttributes(
+    _In_ LPSTARTUPINFOW StartupInfo,
+    _In_ HANDLE ProcessHandle)
+{
+    PBASE_PROC_THREAD_ATTRIBUTE_LIST List;
+    ULONG Index;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (StartupInfo->cb < sizeof(STARTUPINFOEXW))
+        return STATUS_SUCCESS;
+
+    List = (PBASE_PROC_THREAD_ATTRIBUTE_LIST)((LPSTARTUPINFOEXW)StartupInfo)->lpAttributeList;
+    if (!List)
+        return STATUS_SUCCESS;
+
+    for (Index = 0; Index < List->Count; Index++)
+    {
+        PBASE_PROC_THREAD_ATTRIBUTE Attribute = &List->Attributes[Index];
+        SIZE_T JobIndex, JobCount;
+        PHANDLE Jobs;
+
+        if (Attribute->Attribute != PROC_THREAD_ATTRIBUTE_JOB_LIST)
+            continue;
+
+        Jobs = (PHANDLE)Attribute->Value;
+        JobCount = Attribute->Size / sizeof(HANDLE);
+        for (JobIndex = 0; JobIndex < JobCount; JobIndex++)
+        {
+            Status = NtAssignProcessToJobObject(Jobs[JobIndex], ProcessHandle);
+            if (!NT_SUCCESS(Status))
+                return Status;
+        }
+    }
+
+    return Status;
+}
+
+static
 BOOL
 BasepCaptureExtendedAttributes(
     _In_ LPSTARTUPINFOW StartupInfo,
@@ -4723,6 +4762,16 @@ StartScan:
             Result = FALSE;
             goto Quickie;
         }
+    }
+
+    Status = BasepAssignJobListFromAttributes(lpStartupInfo, ProcessHandle);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("Failed to assign process to job list: %lx\n", Status);
+        NtTerminateProcess(ProcessHandle, STATUS_ACCESS_DENIED);
+        BaseSetLastNTError(Status);
+        Result = FALSE;
+        goto Quickie;
     }
 
     /* Finally, resume the thread to actually get the process started */

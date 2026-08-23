@@ -29,7 +29,17 @@ K32ValidateAttribute(
             return Size == sizeof(HANDLE) ? ERROR_SUCCESS : ERROR_BAD_LENGTH;
 
         case PROC_THREAD_ATTRIBUTE_HANDLE_LIST:
+        case PROC_THREAD_ATTRIBUTE_JOB_LIST:
             return Size != 0 && Size % sizeof(HANDLE) == 0 ? ERROR_SUCCESS : ERROR_BAD_LENGTH;
+
+        case PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY:
+            return (Size == sizeof(DWORD) || Size == sizeof(DWORD64) || Size == 2 * sizeof(DWORD64)) ? ERROR_SUCCESS : ERROR_BAD_LENGTH;
+
+        case PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY:
+        case PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY:
+        case PROC_THREAD_ATTRIBUTE_DESKTOP_APP_POLICY:
+        case PROC_THREAD_ATTRIBUTE_PROTECTION_LEVEL:
+            return Size == sizeof(DWORD) ? ERROR_SUCCESS : ERROR_BAD_LENGTH;
 
         default:
             return ERROR_NOT_SUPPORTED;
