@@ -26,7 +26,6 @@
 
 typedef struct _CYW43455_SDIO_DEVICE_EXTENSION
 {
-    PDEVICE_OBJECT Self;
     PDEVICE_OBJECT PhysicalDevice;
     PDEVICE_OBJECT LowerDevice;
     IO_REMOVE_LOCK RemoveLock;
@@ -425,21 +424,12 @@ Cyw43455SdioSubmitTransfer(
 
     if (Transfer->Flags & CYW43455_SDIO_TRANSFER_DIRECT)
     {
-        SD_INIT_REQUEST_PACKET(&Packet, SDRF_IO_RW_DIRECT);
-        Packet.Parameters.IoDirect.Function =
-            CYW43455_SDIO_FUNCTION_CONTROL;
-        Packet.Parameters.IoDirect.Write =
-            (Transfer->Flags & CYW43455_SDIO_TRANSFER_WRITE) != 0;
-        Packet.Parameters.IoDirect.RawMode = FALSE;
-        Packet.Parameters.IoDirect.Address = Transfer->Address;
-        Packet.Parameters.IoDirect.DataIn = Transfer->Data[0];
-        Status = SdBusSubmitRequest(DeviceExtension->SdBus.Context, &Packet);
-        if (NT_SUCCESS(Status) &&
-            !(Transfer->Flags & CYW43455_SDIO_TRANSFER_WRITE))
-        {
-            Transfer->Data[0] = Packet.Parameters.IoDirect.DataOut;
-        }
-        return Status;
+        return Cyw43455SdioDirectByte(
+            DeviceExtension,
+            CYW43455_SDIO_FUNCTION_CONTROL,
+            (Transfer->Flags & CYW43455_SDIO_TRANSFER_WRITE) != 0,
+            Transfer->Address,
+            &Transfer->Data[0]);
     }
 
     Mdl = IoAllocateMdl(Transfer->Data,
@@ -784,7 +774,6 @@ Cyw43455SdioAddDevice(
 
     DeviceExtension = DeviceObject->DeviceExtension;
     RtlZeroMemory(DeviceExtension, sizeof(*DeviceExtension));
-    DeviceExtension->Self = DeviceObject;
     DeviceExtension->PhysicalDevice = PhysicalDeviceObject;
     IoInitializeRemoveLock(&DeviceExtension->RemoveLock,
                            CYW43455_SDIO_TAG,

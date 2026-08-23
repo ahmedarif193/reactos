@@ -798,6 +798,8 @@ CywSdioSetBlockSize(
     NTSTATUS Status;
     UCHAR OldLow;
     UCHAR OldHigh;
+    UCHAR NewLow;
+    UCHAR NewHigh;
     UCHAR VerifyLow;
     UCHAR VerifyHigh;
 
@@ -806,6 +808,9 @@ CywSdioSetBlockSize(
     {
         return STATUS_INVALID_PARAMETER;
     }
+
+    NewLow = (UCHAR)BlockSize;
+    NewHigh = (UCHAR)(BlockSize >> 8);
 
     Status = CywSdioReadByte(Adapter, CYW_SDIO_FUNC_BUS,
                              Fbr + 0x10, &OldLow);
@@ -819,12 +824,17 @@ CywSdioSetBlockSize(
         return Status;
     }
 
-    Status = CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BUS, Fbr + 0x10, (UCHAR)(BlockSize & 0xFF));
+    if (OldLow == NewLow && OldHigh == NewHigh)
+        return STATUS_SUCCESS;
+
+    Status = CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BUS,
+                              Fbr + 0x10, NewLow);
     if (!NT_SUCCESS(Status))
     {
         return Status;
     }
-    Status = CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BUS, Fbr + 0x11, (UCHAR)((BlockSize >> 8) & 0xFF));
+    Status = CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BUS,
+                              Fbr + 0x11, NewHigh);
     if (!NT_SUCCESS(Status))
     {
         (VOID)CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BUS,
@@ -839,8 +849,7 @@ CywSdioSetBlockSize(
         Status = CywSdioReadByte(Adapter, CYW_SDIO_FUNC_BUS,
                                  Fbr + 0x11, &VerifyHigh);
     }
-    if (!NT_SUCCESS(Status) || VerifyLow != (UCHAR)BlockSize ||
-        VerifyHigh != (UCHAR)(BlockSize >> 8))
+    if (!NT_SUCCESS(Status) || VerifyLow != NewLow || VerifyHigh != NewHigh)
     {
         (VOID)CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BUS,
                                Fbr + 0x10, OldLow);
@@ -885,25 +894,6 @@ CywBackplaneSetWindowLocked(
     {
         Adapter->CurrentBackplaneWindow = Window;
     }
-    return Status;
-}
-
-NTSTATUS
-CywBackplaneSetWindow(
-    _In_ PCYW_ADAPTER Adapter,
-    _In_ ULONG Address)
-{
-    NTSTATUS Status;
-
-    if (Adapter == NULL)
-    {
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    KeWaitForSingleObject(&Adapter->BackplaneLock, Executive,
-                          KernelMode, FALSE, NULL);
-    Status = CywBackplaneSetWindowLocked(Adapter, Address);
-    KeReleaseMutex(&Adapter->BackplaneLock, FALSE);
     return Status;
 }
 
