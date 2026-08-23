@@ -334,6 +334,42 @@ DxDdCreateDirectDrawObject(
     return retVal;
 }
 
+DWORD
+NTAPI
+DxDdDeleteDirectDrawObject(
+    HANDLE DdHandle)
+{
+    PEDD_DIRECTDRAW_LOCAL peDdL, *ppeDdL;
+    PEDD_DIRECTDRAW_GLOBAL peDdGl;
+
+    peDdL = (PEDD_DIRECTDRAW_LOCAL)DdHmgLock(DdHandle,
+                                             ObjType_DDLOCAL_TYPE,
+                                             FALSE);
+    if (!peDdL)
+        return FALSE;
+
+    peDdGl = peDdL->peDirectDrawGlobal;
+    gpEngFuncs.DxEngLockHdev(peDdGl->hDev);
+
+    for (ppeDdL = &peDdGl->peDirectDrawLocalList;
+         *ppeDdL;
+         ppeDdL = &(*ppeDdL)->peDirectDrawLocal_prev)
+    {
+        if (*ppeDdL == peDdL)
+        {
+            *ppeDdL = peDdL->peDirectDrawLocal_prev;
+            break;
+        }
+    }
+
+    gpEngFuncs.DxEngUnlockHdev(peDdGl->hDev);
+    gpEngFuncs.DxEngUnreferenceHdev(peDdGl->hDev);
+
+    InterlockedDecrement((VOID*)&peDdL->pobj.cExclusiveLock);
+    DdHmgFree(DdHandle);
+    return TRUE;
+}
+
 
 /*++
 * @name DxDdGetDriverInfo

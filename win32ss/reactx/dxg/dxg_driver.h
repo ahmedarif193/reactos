@@ -140,14 +140,6 @@ DxDdCreateMoComp(
 
 DWORD
 NTAPI
-DxDdDeleteDirectDrawObject(
-    PVOID p1)
-{
-    return 0;
-}
-
-DWORD
-NTAPI
 DxDdDeleteSurfaceObject(
     PVOID p1)
 {

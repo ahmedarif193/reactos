@@ -160,7 +160,7 @@ DdHmgLock(HANDLE DdHandle, UCHAR ObjectType, BOOLEAN LockOwned)
     {
         pEntry = (PDD_ENTRY)((PBYTE)gpentDdHmgr + (sizeof(DD_ENTRY) * Index));
 
-        if ( VerifyObjectOwner(pEntry) )
+        if ( pEntry->pobj && VerifyObjectOwner(pEntry) )
         {
             if ( ( pEntry->Objt == ObjectType ) &&
                  ( pEntry->FullUnique == (((ULONG_PTR)DdHandle >> 21) & 0x7FF) ) &&
@@ -412,7 +412,12 @@ DdHmgFree(HANDLE DdHandle)
 
     // check if we have object that should be freed
     if (pEntry->pobj)
+    {
         DdFreeObject(pEntry->pobj);
+        pEntry->pobj = NULL;
+    }
+
+    pEntry->Objt = 0;
 
     pEntry->NextFree = ghFreeDdHmgr;
 
