@@ -2936,12 +2936,25 @@ REBAR_ShowBand (REBAR_INFO *infoPtr, INT iBand, BOOL show)
 
 
 static LRESULT
+#ifdef __REACTOS__
+REBAR_SizeToRect (REBAR_INFO *infoPtr, WPARAM flags, RECT *lpRect)
+#else
 REBAR_SizeToRect (REBAR_INFO *infoPtr, const RECT *lpRect)
+#endif
 {
     if (!lpRect) return FALSE;
 
     TRACE("[%s]\n", wine_dbgstr_rect(lpRect));
     REBAR_SizeToHeight(infoPtr, get_rect_cy(infoPtr, lpRect));
+#ifdef __REACTOS__
+    if (flags & RBSTR_CHANGERECT)
+    {
+        RECT client_rect;
+
+        GetClientRect(infoPtr->hwndSelf, &client_rect);
+        lpRect->bottom = lpRect->top + (client_rect.bottom - client_rect.top);
+    }
+#endif
     return TRUE;
 }
 
@@ -3698,7 +3711,11 @@ REBAR_WindowProc (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	    return REBAR_ShowBand (infoPtr, wParam, lParam);
 
 	case RB_SIZETORECT:
+#ifdef __REACTOS__
+	    return REBAR_SizeToRect (infoPtr, wParam, (LPRECT)lParam);
+#else
 	    return REBAR_SizeToRect (infoPtr, (LPCRECT)lParam);
+#endif
 
 
 /*    Messages passed to parent */
