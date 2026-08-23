@@ -1,6 +1,7 @@
-; ReactOS CYW43xx SDIO function transport
-; Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
-; SPDX-License-Identifier: GPL-3.0-or-later
+; PROJECT:     ReactOS CYW43xx SDIO Function Transport
+; LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+; PURPOSE:     CYW43xx SDIO function transport installation file
+; COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
 
 [Version]
 Signature   = "$Windows NT$"

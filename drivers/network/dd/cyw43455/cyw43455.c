@@ -1,7 +1,7 @@
 /*
  * PROJECT:     ReactOS Broadcom/Cypress CYW43455 Native 802.11 Miniport
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
- * PURPOSE:     NDIS 6.20 miniport lifecycle and SDIO bring-up orchestration
+ * PURPOSE:     NDIS 6.30 miniport lifecycle and SDIO bring-up orchestration
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 

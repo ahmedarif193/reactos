@@ -1,8 +1,8 @@
 /*
  * PROJECT:     ReactOS CYW43455 SDIO Function Transport
- * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * PURPOSE:     Own CYW43455 SDIO control and companion function stacks
+ * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
 #include <ntddk.h>
