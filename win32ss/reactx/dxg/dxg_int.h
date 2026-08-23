@@ -170,6 +170,7 @@ NTSTATUS NTAPI GsDriverEntry(IN PVOID Context1, IN PVOID Context2);
 NTSTATUS APIENTRY DxDdCleanupDxGraphics(VOID);
 BOOL NTAPI DxDdEnableDirectDraw(HANDLE hDev, BOOL arg2);
 DWORD NTAPI DxDdCreateDirectDrawObject(HDC hDC);
+DWORD NTAPI DxDdDeleteDirectDrawObject(HANDLE DdHandle);
 
 /* Global pointers */
 extern ULONG gcSizeDdHmgr;
@@ -210,6 +211,7 @@ BOOL FASTCALL DdHmgCreate(VOID);
 BOOL FASTCALL DdHmgDestroy(VOID);
 PVOID FASTCALL DdHmgLock(HANDLE DdHandle, UCHAR ObjectType, BOOLEAN LockOwned);
 HANDLE FASTCALL DdHmgAlloc(ULONG objSize, CHAR objType, BOOLEAN objLock);
+VOID FASTCALL DdHmgFree(HANDLE DdHandle);
 PEDD_SURFACE NTAPI intDdCreateNewSurfaceObject(PEDD_DIRECTDRAW_LOCAL peDdL, HANDLE hDirectDrawLocal, 
                                                PDD_SURFACE_GLOBAL pDdSurfGlob, PDD_SURFACE_LOCAL pDdSurfLoc, PDD_SURFACE_MORE pDdSurfMore);
 
