@@ -18,6 +18,22 @@
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
+static
+ULONG
+SepFindIntegrityGroupIndex(
+    _In_ PTOKEN Token)
+{
+    ULONG i;
+
+    for (i = 1; i < Token->UserAndGroupCount; i++)
+    {
+        if (Token->UserAndGroups[i].Attributes & SE_GROUP_INTEGRITY)
+            return i;
+    }
+
+    return 0;
+}
+
 /**
  * @brief
  * Internal function responsible for access token object creation in the kernel.
@@ -128,6 +144,8 @@ SepCreateToken(
     ULONG DynamicPartSize, TotalSize;
     ULONG TokenPagedCharges;
     ULONG i;
+    ULONG ExtraGroupCount = 0;
+    SID_AND_ATTRIBUTES IntegrityGroup;
 
     PAGED_CODE();
 
@@ -149,6 +167,23 @@ SepCreateToken(
         }
     }
 
+    for (i = 0; i < GroupCount; i++)
+    {
+        if (Groups[i].Attributes & SE_GROUP_INTEGRITY)
+            break;
+    }
+    if (i == GroupCount)
+    {
+        if (SystemToken || RtlEqualSid(SeLocalSystemSid, User->Sid))
+            IntegrityGroup.Sid = SeSystemMandatorySid;
+        else if (TokenFlags & TOKEN_HAS_ADMIN_GROUP)
+            IntegrityGroup.Sid = SeHighMandatorySid;
+        else
+            IntegrityGroup.Sid = SeMediumMandatorySid;
+        IntegrityGroup.Attributes = SE_GROUP_INTEGRITY | SE_GROUP_INTEGRITY_ENABLED;
+        ExtraGroupCount = 1;
+    }
+
     /* Allocate unique IDs for the token */
     ExAllocateLocallyUniqueId(&TokenId);
     ExAllocateLocallyUniqueId(&ModifiedId);
@@ -160,11 +195,15 @@ SepCreateToken(
     PrivilegesLength = ALIGN_UP_BY(PrivilegesLength, sizeof(PVOID));
 
     /* User and groups size */
-    UserGroupsLength = (1 + GroupCount) * sizeof(SID_AND_ATTRIBUTES);
+    UserGroupsLength = (1 + GroupCount + ExtraGroupCount) * sizeof(SID_AND_ATTRIBUTES);
     UserGroupsLength += RtlLengthSid(User->Sid);
     for (i = 0; i < GroupCount; i++)
     {
         UserGroupsLength += RtlLengthSid(Groups[i].Sid);
+    }
+    if (ExtraGroupCount)
+    {
+        UserGroupsLength += RtlLengthSid(IntegrityGroup.Sid);
     }
     UserGroupsLength = ALIGN_UP_BY(UserGroupsLength, sizeof(PVOID));
 
@@ -322,7 +361,7 @@ SepCreateToken(
     SepUpdatePrivilegeFlagsToken(AccessToken);
 
     /* Copy the user and groups */
-    AccessToken->UserAndGroupCount = 1 + GroupCount;
+    AccessToken->UserAndGroupCount = 1 + GroupCount + ExtraGroupCount;
     AccessToken->UserAndGroups = EndMem;
     EndMem = &AccessToken->UserAndGroups[AccessToken->UserAndGroupCount];
     VariableLength -= ((ULONG_PTR)EndMem - (ULONG_PTR)AccessToken->UserAndGroups);
@@ -346,6 +385,22 @@ SepCreateToken(
                                           &VariableLength);
     if (!NT_SUCCESS(Status))
         goto Quit;
+
+    if (ExtraGroupCount)
+    {
+        Status = RtlCopySidAndAttributesArray(1,
+                                              &IntegrityGroup,
+                                              VariableLength,
+                                              &AccessToken->UserAndGroups[1 + GroupCount],
+                                              EndMem,
+                                              &EndMem,
+                                              &VariableLength);
+        if (!NT_SUCCESS(Status))
+            goto Quit;
+    }
+
+    AccessToken->IntegrityLevelIndex = SepFindIntegrityGroupIndex(AccessToken);
+    AccessToken->MandatoryPolicy = TOKEN_MANDATORY_POLICY_NO_WRITE_UP | TOKEN_MANDATORY_POLICY_NEW_PROCESS_MIN;
 
     /* Find the token primary group and default owner */
     Status = SepFindPrimaryGroupAndDefaultOwner(AccessToken,
@@ -642,6 +697,9 @@ SepDuplicateToken(
         DPRINT1("SepFindPrimaryGroupAndDefaultOwner failed (Status 0x%lx)\n", Status);
         goto Quit;
     }
+
+    AccessToken->IntegrityLevelIndex = SepFindIntegrityGroupIndex(AccessToken);
+    AccessToken->MandatoryPolicy = Token->MandatoryPolicy;
 
     /* Copy the restricted SIDs */
     AccessToken->RestrictedSidCount = 0;
@@ -1179,6 +1237,9 @@ SepPerformTokenFiltering(
         DPRINT1("SepPerformTokenFiltering(): Failed searching for the primary group (Status 0x%lx)\n", Status);
         goto Quit;
     }
+
+    AccessToken->IntegrityLevelIndex = SepFindIntegrityGroupIndex(AccessToken);
+    AccessToken->MandatoryPolicy = Token->MandatoryPolicy;
 
     /* Now allocate the token's dynamic information area and set the data */
     AccessToken->DynamicPart = ExAllocatePoolWithTag(PagedPool,
@@ -2257,6 +2318,7 @@ NtFilterToken(
         /* Note: ObInsertObject dereferences FilteredToken on failure */
         goto Quit;
     }
+
 
     /* And return it to the caller once we're done */
     _SEH2_TRY
