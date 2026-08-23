@@ -1032,22 +1032,25 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         return Status;
     }
 
-    if ((Status == STATUS_NOT_FOUND ||
-         Status == STATUS_OBJECT_NAME_NOT_FOUND ||
-         Status == STATUS_OBJECT_PATH_NOT_FOUND) &&
-        !(IrpSp->Parameters.Create.Options & FILE_OPEN_REPARSE_POINT))
+    if (Status == STATUS_NOT_FOUND ||
+        Status == STATUS_OBJECT_NAME_NOT_FOUND ||
+        Status == STATUS_OBJECT_PATH_NOT_FOUND)
     {
         Status = NtfsTranslateNotFoundStatus(Mft, &FileObject->FileName);
-        if (Disposition == FILE_OPEN)
+        if (!(IrpSp->Parameters.Create.Options & FILE_OPEN_REPARSE_POINT))
         {
-            NtfsRememberLookupParent(
+            if (Disposition == FILE_OPEN)
+            {
+                NtfsRememberLookupParent(
+                    VolCB,
+                    Mft,
+                    &FileObject->FileName);
+            }
+            NtfsRecordNameMissing(
                 VolCB,
-                Mft,
-                &FileObject->FileName);
+                FileObject->FileName.Buffer,
+                FileObject->FileName.Length / sizeof(WCHAR));
         }
-        NtfsRecordNameMissing(VolCB,
-                              FileObject->FileName.Buffer,
-                              FileObject->FileName.Length / sizeof(WCHAR));
     }
 
     if (NT_SUCCESS(Status) &&
