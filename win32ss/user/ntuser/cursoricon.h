@@ -143,5 +143,8 @@ BOOL UserSetCursorPos( INT x, INT y, DWORD flags, ULONG_PTR dwExtraInfo, BOOL Ho
 BOOL APIENTRY UserClipCursor(RECTL *prcl);
 PSYSTEM_CURSORINFO IntGetSysCursorInfo(VOID);
 PCURICON_OBJECT IntSystemSetCursor(PCURICON_OBJECT);
+VOID FASTCALL IntSetCurrentCursorObject(_In_opt_ PCURICON_OBJECT pcur);
+VOID FASTCALL IntSetPointerShape(_In_ HDC hdcScreen, _In_ PCURICON_OBJECT pcur);
+VOID FASTCALL IntResumeCursorAnimation(VOID);
 
 /* EOF */
