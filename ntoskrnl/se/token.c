@@ -1327,6 +1327,8 @@ SepOpenThreadToken(
         return Status;
     }
 
+    SepSetTokenObjectSecurity(NewToken);
+
     /* We're almost done, free the DACL if we got one */
     ExFreePoolWithTag(Dacl, TAG_ACL);
 
@@ -1401,6 +1403,8 @@ SeSubProcessToken(
                                 NULL);
         if (NT_SUCCESS(Status))
         {
+            SepSetTokenObjectSecurity(NewToken);
+
             /* Set the session ID */
             NewToken->SessionId = SessionId;
             NewToken->TokenInUse = InUse;
