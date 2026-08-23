@@ -74,6 +74,11 @@ __C_specific_handler(
 
     ImageBase = Arm64DispatcherContext->ImageBase;
     IpOffset = Arm64DispatcherContext->ControlPc - ImageBase;
+    if (Arm64DispatcherContext->ControlPcIsUnwound &&
+        IpOffset >= sizeof(ULONG))
+    {
+        IpOffset -= sizeof(ULONG);
+    }
     TargetIpOffset = Arm64DispatcherContext->TargetPc - ImageBase;
     ScopeTable = (PARM64_SCOPE_TABLE)Arm64DispatcherContext->HandlerData;
 

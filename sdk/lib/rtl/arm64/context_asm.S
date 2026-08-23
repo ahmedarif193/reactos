@@ -74,18 +74,16 @@ RtlCaptureContext:
     .seh_endproc
 
     /*
-     * VOID NTAPI RtlRestoreContext(PCONTEXT Context, PEXCEPTION_RECORD Record)
+     * VOID NTAPI RtlpRestoreContextInternal(PCONTEXT Context)
      *
      * Load the integer register state, stack pointer and PC from Context and
      * branch to Context->Pc. Used to resume execution at a handler-patched
      * context (e.g. an __except body) - the kernel/user equivalent of a context
-     * switch back into the unwound frame. Does NOT return. The ExceptionRecord
-     * argument (x1) is accepted for ABI compatibility and ignored here (no
-     * collided-unwind handling).
+     * switch back into the unwound frame. Does NOT return.
      */
-    .global RtlRestoreContext
-    .seh_proc RtlRestoreContext
-RtlRestoreContext:
+    .global RtlpRestoreContextInternal
+    .seh_proc RtlpRestoreContextInternal
+RtlpRestoreContextInternal:
     .seh_endprologue
 
     mov     x16, x0                 /* x16 (IP0) = Context base, scratch */
@@ -96,6 +94,16 @@ RtlRestoreContext:
     ldp     x23, x24, [x16, #CxX23]
     ldp     x25, x26, [x16, #CxX25]
     ldp     x27, x28, [x16, #CxX27]
+
+    /* Callee-saved floating-point/SIMD registers and control state */
+    ldp     q8,  q9,  [x16, #(CxV + 16 * 8)]
+    ldp     q10, q11, [x16, #(CxV + 16 * 10)]
+    ldp     q12, q13, [x16, #(CxV + 16 * 12)]
+    ldp     q14, q15, [x16, #(CxV + 16 * 14)]
+    ldr     w17, [x16, #CxFpcr]
+    msr     fpcr, x17
+    ldr     w17, [x16, #CxFpsr]
+    msr     fpsr, x17
 
     /* Frame pointer (x29) and link register (x30) */
     ldr     x29, [x16, #CxFp]
@@ -122,4 +130,41 @@ RtlRestoreContext:
     ldp     x0,  x1,  [x16, #CxX0]
 
     br      x17
+    .seh_endproc
+
+    /*
+     * Invoke an unwind-consolidation callback from a synthetic context frame.
+     * A nested unwind from the callback must start at the supplied context,
+     * after the frames already consumed by the outer unwind.
+     */
+    .global RtlpArm64ConsolidateCallback
+    .seh_proc RtlpArm64ConsolidateCallback
+RtlpArm64ConsolidateCallback:
+    stp     x29, x30, [sp, #-16]!
+    .seh_save_fplr_x 16
+    sub     sp, sp, #CONTEXT_FRAME_LENGTH
+    .seh_stackalloc CONTEXT_FRAME_LENGTH
+    .seh_endprologue
+
+    mov     x4, sp
+    mov     x5, #(CONTEXT_FRAME_LENGTH / 16)
+1:
+    ldp     x6, x7, [x0], #16
+    stp     x6, x7, [x4], #16
+    subs    x5, x5, #1
+    b.ne    1b
+
+    mov     x0, x2
+    b       RtlpArm64InvokeConsolidateCallback
+    .seh_endproc
+
+    .seh_proc RtlpArm64InvokeConsolidateCallback
+RtlpArm64InvokeConsolidateCallback:
+    .seh_context
+    .seh_endprologue
+
+    blr     x1
+    str     x0, [sp, #CxPc]
+    mov     x0, sp
+    b       RtlpRestoreContextInternal
     .seh_endproc

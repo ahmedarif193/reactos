@@ -25,7 +25,11 @@
 #define ARM64_PACKED_FUNCTION_LENGTH_MASK 0x7FFUL
 #define ARM64_XDATA_FUNCTION_LENGTH_MASK 0x3FFFFUL
 
-VOID NTAPI RtlRestoreContext(_In_ PCONTEXT ContextRecord, _In_opt_ PEXCEPTION_RECORD ExceptionRecord);
+VOID
+NTAPI
+RtlRestoreContext(
+    _In_ PCONTEXT ContextRecord,
+    _In_opt_ PEXCEPTION_RECORD ExceptionRecord);
 BOOLEAN NTAPI RtlIsEcCode(_In_ ULONG_PTR CodeAddress);
 
 PRUNTIME_FUNCTION
@@ -777,9 +781,11 @@ RtlUnwindEx(
     EXCEPTION_DISPOSITION Disposition;
     PRUNTIME_FUNCTION FunctionEntry;
     ULONG64 ImageBase, EstablisherFrame;
-    CONTEXT UnwindContext, FrameContext;
+    CONTEXT UnwindContext;
     ULONG_PTR StackLow, StackHigh;
     ULONG_PTR LookupPc;
+    ULONG64 ControlPc;
+    BOOLEAN ControlPcIsUnwound;
     ULONG FrameCount;
     BOOLEAN HaveTarget;
 
@@ -822,7 +828,9 @@ RtlUnwindEx(
             return;
         }
 
-        LookupPc = (FrameCount == 0) ? UnwindContext.Pc : (UnwindContext.Pc - 4);
+        ControlPc = UnwindContext.Pc;
+        ControlPcIsUnwound = !!(UnwindContext.ContextFlags & CONTEXT_UNWOUND_TO_CALL);
+        LookupPc = ControlPcIsUnwound ? (ControlPc - 4) : ControlPc;
         FunctionEntry = RtlLookupFunctionEntry(LookupPc, &ImageBase, NULL);
         if (FunctionEntry == NULL)
         {
@@ -833,11 +841,12 @@ RtlUnwindEx(
             }
 
             UnwindContext.Pc = UnwindContext.Lr;
+            UnwindContext.ContextFlags |= CONTEXT_UNWOUND_TO_CALL;
             continue;
         }
 
-        FrameContext = UnwindContext;
-        DispatcherContext.ControlPc = LookupPc;
+        DispatcherContext.ControlPc = ControlPc;
+        DispatcherContext.ControlPcIsUnwound = ControlPcIsUnwound;
         RtlpArm64CaptureNonVolatileRegisters(&NonVolatileRegisters, &UnwindContext);
         ExceptionRoutine = RtlVirtualUnwind(UNW_FLAG_UHANDLER,
                                             ImageBase,
@@ -901,11 +910,19 @@ RtlUnwindEx(
 
         if (HaveTarget && (EstablisherFrame == (ULONG64)(ULONG_PTR)TargetFrame))
         {
-            if (TargetIp != NULL)
-                FrameContext.Pc = (ULONG64)(ULONG_PTR)TargetIp;
+            if ((TargetIp != NULL) &&
+                (ExceptionRecord->ExceptionCode != STATUS_UNWIND_CONSOLIDATE))
+            {
+                ContextRecord->Pc = (ULONG64)(ULONG_PTR)TargetIp;
+            }
+            else if ((ExceptionRecord->ExceptionCode == STATUS_UNWIND_CONSOLIDATE) &&
+                     (ExceptionRecord->NumberParameters > 10) &&
+                     (ExceptionRecord->ExceptionInformation[10] == (ULONG_PTR)-1))
+            {
+                ExceptionRecord->ExceptionInformation[10] = (ULONG_PTR)&NonVolatileRegisters;
+            }
 
-            FrameContext.X0 = (ULONG64)(ULONG_PTR)ReturnValue;
-            *ContextRecord = FrameContext;
+            ContextRecord->X0 = (ULONG64)(ULONG_PTR)ReturnValue;
             RtlRestoreContext(ContextRecord, ExceptionRecord);
         }
 
@@ -931,9 +948,6 @@ RtlUnwind(
                 &ContextRecord,
                 NULL);
 }
-
-/* RtlRestoreContext is implemented in arm64/context_asm.S (it must load the
- * register file and branch, which cannot be expressed in C). */
 
 PRUNTIME_FUNCTION
 NTAPI
