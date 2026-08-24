@@ -6,6 +6,7 @@ device_tree_end=0x200000
 device_tree=bcm2710-rpi-3-b.dtb
 armstub=RPI3_EFI.fd
 arm_freq=1200
+arm_freq_min=1000
 
 [pi3+]
 device_tree_address=0x1f0000
@@ -13,6 +14,7 @@ device_tree_end=0x200000
 device_tree=bcm2710-rpi-3-b-plus.dtb
 armstub=RPI3_EFI.fd
 arm_freq=1400
+arm_freq_min=1000
 
 [pi4]
 enable_gic=1
