@@ -673,6 +673,13 @@ CopyFailed:
                 ExFreePoolWithTag(KernelMem, TAG_MSG);
                 return Status;
             }
+
+            if (KernelModeMsg->message == WM_COPYDATA &&
+                ((COPYDATASTRUCT *)KernelMem)->lpData)
+            {
+                ((COPYDATASTRUCT *)KernelMem)->lpData =
+                    (COPYDATASTRUCT *)KernelMem + 1;
+            }
         }
         else
         {
