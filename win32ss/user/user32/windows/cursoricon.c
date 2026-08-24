@@ -2277,8 +2277,8 @@ CURSORICON_CopyImage(
     if (fuFlags & LR_COPYFROMRESOURCE)
     {
         /* Get the icon module/resource names */
-        UNICODE_STRING ustrModule;
-        UNICODE_STRING ustrRsrc;
+        UNICODE_STRING ustrModule = {0};
+        UNICODE_STRING ustrRsrc = {0};
         HMODULE hModule;
 
         ustrModule.MaximumLength = 0;
@@ -2286,6 +2286,14 @@ CURSORICON_CopyImage(
 
         /* Get the buffer size */
         if (!NtUserGetIconInfo(hicon, NULL, &ustrModule, &ustrRsrc, NULL, FALSE))
+        {
+            return NULL;
+        }
+
+        /* A generated icon has no resource provenance. Let the caller retry
+         * without LR_COPYFROMRESOURCE instead of loading an empty module. */
+        if (!ustrModule.MaximumLength ||
+            (!ustrRsrc.MaximumLength && !ustrRsrc.Buffer))
         {
             return NULL;
         }
@@ -2314,6 +2322,12 @@ CURSORICON_CopyImage(
             if (!IS_INTRESOURCE(ustrRsrc.Buffer))
                 HeapFree(GetProcessHeap(), 0, ustrRsrc.Buffer);
             return NULL;
+        }
+
+        if (!ustrModule.Length ||
+            (!ustrRsrc.Length && !ustrRsrc.Buffer))
+        {
+            goto leave;
         }
 
         /* NULL-terminate our strings */

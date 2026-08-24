@@ -1039,9 +1039,7 @@ GreGetDIBitsInternal(
     if ((bpp != 0) && (psurf->hSecure == NULL))
     {
         ULONG cBppSurf = BitsPerFormat(psurf->SurfObj.iBitmapFormat);
-        PSURFACE psurfDC = pDC->dclevel.pSurface;
-        ULONG cBppDC = psurfDC ? BitsPerFormat(psurfDC->SurfObj.iBitmapFormat)
-                               : pDC->ppdev->gdiinfo.cBitsPixel;
+        ULONG cBppDC = pDC->ppdev->gdiinfo.cBitsPixel;
 
         if ((cBppSurf != 1) && (cBppSurf != cBppDC))
         {
