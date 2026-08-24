@@ -26,7 +26,7 @@ EnumDisplayDevicesA(
     PDISPLAY_DEVICEA lpDisplayDevice,
     DWORD dwFlags)
 {
-    BOOL rc;
+    NTSTATUS Status;
     UNICODE_STRING Device;
     DISPLAY_DEVICEW DisplayDeviceW;
 
@@ -38,11 +38,11 @@ EnumDisplayDevicesA(
 
     RtlZeroMemory(&DisplayDeviceW, sizeof(DISPLAY_DEVICEW));
     DisplayDeviceW.cb = sizeof(DISPLAY_DEVICEW);
-    rc = NtUserEnumDisplayDevices(&Device,
-                                  iDevNum,
-                                  &DisplayDeviceW,
-                                  dwFlags);
-    if (rc)
+    Status = NtUserEnumDisplayDevices(&Device,
+                                      iDevNum,
+                                      &DisplayDeviceW,
+                                      dwFlags);
+    if (NT_SUCCESS(Status))
     {
         /* Copy result from DisplayDeviceW to lpDisplayDevice. Buffers have the same size so result is always NULL terminated. */
         lpDisplayDevice->StateFlags = DisplayDeviceW.StateFlags;
@@ -66,7 +66,7 @@ EnumDisplayDevicesA(
 
     RtlFreeUnicodeString(&Device);
 
-    return rc;
+    return NT_SUCCESS(Status);
 }
 
 
@@ -82,17 +82,16 @@ EnumDisplayDevicesW(
     DWORD dwFlags)
 {
     UNICODE_STRING Device;
-    BOOL rc;
+    NTSTATUS Status;
 
     RtlInitUnicodeString(&Device, lpDevice);
 
-    rc = NtUserEnumDisplayDevices(
-             &Device,
-             iDevNum,
-             lpDisplayDevice,
-             dwFlags);
+    Status = NtUserEnumDisplayDevices(&Device,
+                                      iDevNum,
+                                      lpDisplayDevice,
+                                      dwFlags);
 
-    return rc;
+    return NT_SUCCESS(Status);
 }
 
 
