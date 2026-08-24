@@ -1391,6 +1391,11 @@ BOOL RegisterImeClass(VOID)
 /// @implemented
 VOID UnregisterImeClass(VOID)
 {
+#ifdef __REACTOS__
+    /* The class icons are shared system objects. */
+    UnregisterClassW(L"MSCTFIME UI", g_hInst);
+    UnregisterClassW(L"MSCTFIME Composition", g_hInst);
+#else
     WNDCLASSEXW wcx;
 
     GetClassInfoExW(g_hInst, L"MSCTFIME UI", &wcx);
@@ -1402,4 +1407,5 @@ VOID UnregisterImeClass(VOID)
     UnregisterClassW(L"MSCTFIME Composition", g_hInst);
     DestroyIcon(wcx.hIcon);
     DestroyIcon(wcx.hIconSm);
+#endif
 }
