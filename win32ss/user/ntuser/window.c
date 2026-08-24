@@ -1908,10 +1908,18 @@ PWND FASTCALL IntCreateWindow(CREATESTRUCTW* Cs,
    pWnd->InternalPos.MaxPos.x  = pWnd->InternalPos.MaxPos.y  = -1;
    pWnd->InternalPos.IconPos.x = pWnd->InternalPos.IconPos.y = -1;
 
-   if (pWnd->spwndParent != NULL && Cs->hwndParent != 0)
+   if (pti->pDeskInfo &&
+       pWnd->spwndParent != NULL &&
+       pWnd->spwndParent != pti->pDeskInfo->spwnd &&
+       Cs->hwndParent != 0)
    {
        pWnd->HideFocus = pWnd->spwndParent->HideFocus;
        pWnd->HideAccel = pWnd->spwndParent->HideAccel;
+   }
+   else if (pti->pDeskInfo && !pti->pDeskInfo->LastInputWasKbd)
+   {
+       pWnd->HideFocus = TRUE;
+       pWnd->HideAccel = TRUE;
    }
 
    InitializeListHead(&pWnd->ThreadListEntry);
@@ -2477,6 +2485,10 @@ co_UserCreateWindowEx(CREATESTRUCTW* Cs,
       from here the function has to succeed. */
    Window->state2 |= WNDS2_WMCREATEMSGPROCESSED;
 
+   /* Preserve the requested state for the transition below, but send the
+      initial size/move notifications for the restored window. */
+   style = IntSetStyle(Window, 0, WS_MAXIMIZE | WS_MINIMIZE);
+
    /* Send the WM_SIZE and WM_MOVE messages. */
    if (!(Window->state & WNDS_SENDSIZEMOVEMSGS))
    {
@@ -2484,15 +2496,15 @@ co_UserCreateWindowEx(CREATESTRUCTW* Cs,
    }
 
    /* Show or maybe minimize or maximize the window. */
-
-   style = IntSetStyle( Window, 0, WS_MAXIMIZE | WS_MINIMIZE );
    if (style & (WS_MINIMIZE | WS_MAXIMIZE))
    {
       RECTL NewPos;
       UINT SwFlag = (style & WS_MINIMIZE) ? SW_MINIMIZE : SW_MAXIMIZE;
 
       SwFlag = co_WinPosMinMaximize(Window, SwFlag, &NewPos);
-      SwFlag |= SWP_NOZORDER|SWP_FRAMECHANGED; /* Frame always gets changed */
+      if (!(Window->ExStyle & WS_EX_MDICHILD))
+         SwFlag |= SWP_NOZORDER;
+      SwFlag |= SWP_FRAMECHANGED; /* Frame always gets changed */
       if (!(style & WS_VISIBLE) || (style & WS_CHILD) || UserGetActiveWindow() ||
           (Window->ExStyle & WS_EX_NOACTIVATE))
       {
