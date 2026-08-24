@@ -3285,12 +3285,21 @@ static void FASTCALL MENU_HideSubPopups(PWND pWndOwner, PMENU Menu,
 
       if (Item->spSubMenu)
       {
+          PMENU SubMenu = Item->spSubMenu;
+          USER_REFERENCE_ENTRY MenuRef;
+          HMENU hSubMenu;
+          BOOL IsSystemMenu;
           PWND pWnd;
-          if (!VerifyMenu(Item->spSubMenu)) return;
-          MENU_HideSubPopups(pWndOwner, Item->spSubMenu, FALSE, wFlags);
-          MENU_SelectItem(pWndOwner, Item->spSubMenu, NO_SELECTED_ITEM, SendMenuSelect, NULL);
+          if (!VerifyMenu(SubMenu)) return;
+
+          UserRefObjectCo(SubMenu, &MenuRef);
+          hSubMenu = UserHMGetHandle(SubMenu);
+          IsSystemMenu = IS_SYSTEM_MENU(SubMenu);
+
+          MENU_HideSubPopups(pWndOwner, SubMenu, FALSE, wFlags);
+          MENU_SelectItem(pWndOwner, SubMenu, NO_SELECTED_ITEM, SendMenuSelect, NULL);
           TRACE("M_HSP top p hm %p  pWndOwner IDMenu %p\n",top_popup_hmenu,pWndOwner->IDMenu);
-          pWnd = ValidateHwndNoErr(Item->spSubMenu->hWnd);
+          pWnd = ValidateHwndNoErr(SubMenu->hWnd);
           if (pWnd != NULL)
           {
               co_UserDestroyWindow(pWnd);
@@ -3299,14 +3308,16 @@ static void FASTCALL MENU_HideSubPopups(PWND pWndOwner, PMENU Menu,
           /* Native returns handle to destroyed window */
           if (!(wFlags & TPM_NONOTIFY))
           {
-             co_IntSendMessage( UserHMGetHandle(pWndOwner), WM_UNINITMENUPOPUP, (WPARAM)UserHMGetHandle(Item->spSubMenu),
-                                 MAKELPARAM(0, IS_SYSTEM_MENU(Item->spSubMenu) ? MF_SYSMENU : 0));
+             co_IntSendMessage(UserHMGetHandle(pWndOwner), WM_UNINITMENUPOPUP,
+                               (WPARAM)hSubMenu,
+                               MAKELPARAM(0, IsSystemMenu ? MF_SYSMENU : 0));
           }
           ////
           // Call WM_UNINITMENUPOPUP FIRST before destroy!!
           // Fixes todo_wine User32 test menu.c line 2239 GetMenuBarInfo callback....
           //
-          Item->spSubMenu->hWnd = NULL;
+          SubMenu->hWnd = NULL;
+          UserDerefObjectCo(SubMenu);
           ////
       }
   }
@@ -3931,6 +3942,14 @@ static BOOL FASTCALL MENU_KeyEscape(MTRACKER *pmt, UINT Flags)
 
           MENU_HideSubPopups(pmt->OwnerWnd, MenuPrev, TRUE, Flags);
           pmt->CurrentMenu = MenuPrev;
+          if (pmt->CurrentMenu == pmt->TopMenu &&
+              !(pmt->TopMenu->fFlags & MNF_POPUP))
+          {
+              /* Escape only closes the displayed menu-bar popup. The next
+                 click on the selected menu item must reopen it, not end the
+                 still-active menu loop. */
+              pmt->TopMenu->TimeToHide = FALSE;
+          }
           EndMenu = FALSE;
       }
   }
@@ -4058,6 +4077,9 @@ static INT FASTCALL MENU_TrackMenu(PMENU pmenu, UINT wFlags, INT x, INT y,
     PMENU pmMouse;
     BOOL enterIdleSent = FALSE;
     BOOL firstClick = TRUE;
+    BOOL repostMouseDown = FALSE;
+    MSG repostMsg;
+    POINT lastMousePos = gpsi->ptCursor;
     PWND pWnd;
     PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
 
@@ -4178,7 +4200,21 @@ static INT FASTCALL MENU_TrackMenu(PMENU pmenu, UINT wFlags, INT x, INT y,
                 case WM_RBUTTONDOWN:
                      if (!(wFlags & TPM_RIGHTBUTTON))
                      {
-                        if ( msg.message == WM_RBUTTONDBLCLK ) fInsideMenuLoop = FALSE; // Must exit or loop forever!
+                        /* An outside right-click closes a popup even though
+                           right-button selection is disabled. Preserve a
+                           cross-queue click until this menu is fully gone. */
+                        if (!pmMouse)
+                        {
+                           pWnd = IntTopLevelWindowFromPoint(mt.Pt.x, mt.Pt.y);
+                           if (pWnd &&
+                               pWnd->head.pti->MessageQueue != pti->MessageQueue)
+                           {
+                              repostMsg = msg;
+                              repostMouseDown = TRUE;
+                              fRemove = TRUE;
+                           }
+                           fInsideMenuLoop = FALSE;
+                        }
                         break;
                      }
                     /* fall through */
@@ -4195,6 +4231,17 @@ static INT FASTCALL MENU_TrackMenu(PMENU pmenu, UINT wFlags, INT x, INT y,
                         fRemove = MENU_ButtonDown(&mt, pmMouse, wFlags);
 
                     fInsideMenuLoop = fRemove;
+                    if (!fInsideMenuLoop && !pmMouse)
+                    {
+                       pWnd = IntTopLevelWindowFromPoint(mt.Pt.x, mt.Pt.y);
+                       if (pWnd &&
+                           pWnd->head.pti->MessageQueue != pti->MessageQueue)
+                       {
+                          repostMsg = msg;
+                          repostMouseDown = TRUE;
+                          fRemove = TRUE;
+                       }
+                    }
                     if (msg.message == WM_RBUTTONDBLCLK)
                         fInsideMenuLoop = FALSE; // Must exit or loop forever
                     break;
@@ -4236,10 +4283,14 @@ static INT FASTCALL MENU_TrackMenu(PMENU pmenu, UINT wFlags, INT x, INT y,
                     /* the selected menu item must be changed every time */
                     /* the mouse moves. */
 
-                    if (pmMouse)
-                        fInsideMenuLoop |= MENU_MouseMove( &mt, pmMouse, wFlags );
+                    if (mt.Pt.x != lastMousePos.x || mt.Pt.y != lastMousePos.y)
+                    {
+                        lastMousePos = mt.Pt;
+                        if (pmMouse)
+                            fInsideMenuLoop |= MENU_MouseMove(&mt, pmMouse, wFlags);
+                    }
 
-	    } /* switch(msg.message) - mouse */
+		    } /* switch(msg.message) - mouse */
         }
         else if ((msg.message >= WM_KEYFIRST) && (msg.message <= WM_KEYLAST))
         {
@@ -4368,21 +4419,32 @@ static INT FASTCALL MENU_TrackMenu(PMENU pmenu, UINT wFlags, INT x, INT y,
 
            if (mt.TopMenu->fFlags & MNF_POPUP)
            {
-              PWND pwndTM = ValidateHwndNoErr(mt.TopMenu->hWnd);
+              PMENU TopMenu = mt.TopMenu;
+              USER_REFERENCE_ENTRY MenuRef;
+              HMENU hTopMenu;
+              BOOL IsSystemMenu;
+              PWND pwndTM;
+
+              UserRefObjectCo(TopMenu, &MenuRef);
+              hTopMenu = UserHMGetHandle(TopMenu);
+              IsSystemMenu = IS_SYSTEM_MENU(TopMenu);
+              pwndTM = ValidateHwndNoErr(TopMenu->hWnd);
               if (pwndTM)
               {
                  IntNotifyWinEvent(EVENT_SYSTEM_MENUPOPUPEND, pwndTM, OBJID_CLIENT, CHILDID_SELF, 0);
 
                  co_UserDestroyWindow(pwndTM);
               }
-              mt.TopMenu->hWnd = NULL;
+              TopMenu->hWnd = NULL;
 
               if (!(wFlags & TPM_NONOTIFY))
               {
-                 co_IntSendMessage( UserHMGetHandle(mt.OwnerWnd), WM_UNINITMENUPOPUP, (WPARAM)UserHMGetHandle(mt.TopMenu),
-                                 MAKELPARAM(0, IS_SYSTEM_MENU(mt.TopMenu) ? MF_SYSMENU : 0));
+                 co_IntSendMessage(UserHMGetHandle(mt.OwnerWnd), WM_UNINITMENUPOPUP,
+                                   (WPARAM)hTopMenu,
+                                   MAKELPARAM(0, IsSystemMenu ? MF_SYSMENU : 0));
               }
-            }
+              UserDerefObjectCo(TopMenu);
+           }
             MENU_SelectItem( mt.OwnerWnd, mt.TopMenu, NO_SELECTED_ITEM, FALSE, 0 );
             co_IntSendMessage( UserHMGetHandle(mt.OwnerWnd), WM_MENUSELECT, MAKEWPARAM(0, 0xffff), 0 );
        }
@@ -4390,6 +4452,11 @@ static INT FASTCALL MENU_TrackMenu(PMENU pmenu, UINT wFlags, INT x, INT y,
        /* Reset the variable for hiding menu */
        mt.TopMenu->TimeToHide = FALSE;
     }
+
+    /* Re-evaluate the target only after capture, ownership, and popup windows
+       from the old queue have been released. */
+    if (repostMouseDown)
+        co_MsqInsertMouseMessage(&repostMsg, 0, 0, FALSE);
 
     EngSetLastError( ERROR_SUCCESS );
     /* The return value is only used by TrackPopupMenu */
@@ -4414,7 +4481,7 @@ static BOOL FASTCALL MENU_InitTracking(PWND pWnd, PMENU Menu, BOOL bPopup, UINT 
      * It also enables menus to be displayed in more than one window,
      * but there are some bugs left that need to be fixed in this case.
      */
-    if (!bPopup)
+    if (!bPopup && !(Menu->fFlags & MNF_POPUP))
     {
         Menu->hWnd = UserHMGetHandle(pWnd);
     }
@@ -4608,7 +4675,7 @@ IntTrackPopupMenuEx(
 
     if (MENU_InitPopup( pWnd, menu, wFlags ))
     {
-       MENU_InitTracking(pWnd, menu, TRUE, wFlags);
+       MENU_InitTracking(pWnd, menu, !(wFlags & TPM_SYSTEM_MENU), wFlags);
 
        /* Send WM_INITMENUPOPUP message only if TPM_NONOTIFY flag is not specified */
        if (!(wFlags & TPM_NONOTIFY))
@@ -4628,7 +4695,7 @@ IntTrackPopupMenuEx(
           co_UserSetCapture(NULL); /* release the capture */
        }
 
-       MENU_ExitTracking(pWnd, TRUE, wFlags);
+       MENU_ExitTracking(pWnd, !(wFlags & TPM_SYSTEM_MENU), wFlags);
 
        if (menu->hWnd)
        {
@@ -6650,7 +6717,7 @@ NtUserTrackPopupMenuEx(
     if (fuFlags & ~VALID_TPM_FLAGS)
     {
         ERR("TPME : Invalid flags 0x%X (valid flags are 0x%X)\n", fuFlags, VALID_TPM_FLAGS);
-        EngSetLastError(ERROR_INVALID_FLAGS);
+        EngSetLastError((fuFlags == TPM_WORKAREA) ? ERROR_INVALID_PARAMETER : ERROR_INVALID_FLAGS);
         goto Exit0;
     }
 
