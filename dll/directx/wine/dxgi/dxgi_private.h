@@ -38,6 +38,9 @@
 #endif
 #include "wine/wined3d.h"
 #include "wine/winedxgi.h"
+#ifdef __REACTOS__
+#include "reactos/dxgi_dcomp.h"
+#endif
 
 enum dxgi_frame_latency
 {
@@ -117,6 +120,9 @@ struct dxgi_factory
     struct wined3d_private_store private_store;
     struct wined3d *wined3d;
     BOOL extended;
+#ifdef __REACTOS__
+    BOOL software;
+#endif
     HWND device_window;
 };
 
@@ -182,6 +188,9 @@ struct d3d11_swapchain
     IWineDXGIFactory *factory;
 
     DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreen_desc;
+#ifdef __REACTOS__
+    DXGI_ALPHA_MODE alpha_mode;
+#endif
     IDXGIOutput *target;
     LONG present_count;
     LONG in_set_fullscreen_state;

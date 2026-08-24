@@ -468,6 +468,9 @@ static HRESULT STDMETHODCALLTYPE dxgi_swapchain_factory_create_swapchain(IWineDX
         free(object);
         return hr;
     }
+#ifdef __REACTOS__
+    object->alpha_mode = desc->AlphaMode;
+#endif
 
     TRACE("Created swapchain %p.\n", object);
 

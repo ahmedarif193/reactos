@@ -2928,6 +2928,11 @@ HRESULT __cdecl wined3d_swapchain_set_gamma_ramp(const struct wined3d_swapchain 
         uint32_t flags, const struct wined3d_gamma_ramp *ramp);
 HRESULT __cdecl wined3d_swapchain_set_max_frame_latency(struct wined3d_swapchain *swapchain, unsigned int latency);
 void __cdecl wined3d_swapchain_set_palette(struct wined3d_swapchain *swapchain, struct wined3d_palette *palette);
+#ifdef __REACTOS__
+void __cdecl wined3d_swapchain_set_composition(struct wined3d_swapchain *swapchain,
+        BOOL composition, BOOL premultiplied_alpha, int offset_x, int offset_y,
+        const RECT *clip_rect);
+#endif
 void __cdecl wined3d_swapchain_set_window(struct wined3d_swapchain *swapchain, HWND window);
 
 HRESULT __cdecl wined3d_swapchain_state_create(const struct wined3d_swapchain_desc *desc,

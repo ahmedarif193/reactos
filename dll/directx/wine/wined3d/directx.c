@@ -3909,8 +3909,10 @@ static void wined3d_adapter_no3d_init_d3d_info(struct wined3d_adapter *adapter, 
     d3d_info->limits.max_rt_count = 1;
     d3d_info->limits.texture_size = 4096;
     d3d_info->limits.pointsize_max = 1.0f;
-#endif
+    d3d_info->feature_level = WINED3D_FEATURE_LEVEL_9_1;
+#else
     d3d_info->feature_level = WINED3D_FEATURE_LEVEL_5;
+#endif
 }
 
 static struct wined3d_adapter *wined3d_adapter_no3d_create(unsigned int ordinal, unsigned int wined3d_creation_flags)
