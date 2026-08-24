@@ -1506,8 +1506,8 @@ DWORD
 NTAPI
 NtUserAlterWindowStyle(
     HWND hWnd,
-    DWORD Index,
-    LONG NewValue);
+    DWORD Mask,
+    DWORD Style);
 
 BOOL
 NTAPI
@@ -2974,15 +2974,15 @@ NtUserQueryUserCounters(
     DWORD Unknown4);
 
 #define QUERY_WINDOW_UNIQUE_PROCESS_ID 0x00
-#define QUERY_WINDOW_UNIQUE_THREAD_ID  0x01
-#define QUERY_WINDOW_ACTIVE            0x02
-#define QUERY_WINDOW_FOCUS             0x03
-#define QUERY_WINDOW_ISHUNG            0x04
-#define QUERY_WINDOW_REAL_ID           0x05
-#define QUERY_WINDOW_FOREGROUND        0x06
-#define QUERY_WINDOW_DEFAULT_IME       0x07
-#define QUERY_WINDOW_DEFAULT_ICONTEXT  0x08
-#define QUERY_WINDOW_ACTIVE_IME        0x09
+#define QUERY_WINDOW_REAL_ID           0x01
+#define QUERY_WINDOW_UNIQUE_THREAD_ID  0x02
+#define QUERY_WINDOW_ACTIVE            0x03
+#define QUERY_WINDOW_FOCUS             0x04
+#define QUERY_WINDOW_ISHUNG            0x05
+#define QUERY_WINDOW_CLIENT_BASE       0x06
+#define QUERY_WINDOW_FOREGROUND        0x07
+#define QUERY_WINDOW_DEFAULT_IME       0x08
+#define QUERY_WINDOW_DEFAULT_ICONTEXT  0x09
 
 DWORD_PTR
 NTAPI

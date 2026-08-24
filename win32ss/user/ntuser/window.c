@@ -4167,21 +4167,33 @@ NtUserSetWindowLongPtr(HWND hWnd, DWORD Index, LONG_PTR NewValue, BOOL Ansi)
 #endif // _WIN64
 
 DWORD APIENTRY
-NtUserAlterWindowStyle(HWND hWnd, DWORD Index, LONG NewValue)
+NtUserAlterWindowStyle(HWND hWnd, DWORD Mask, DWORD Style)
 {
-   LONG ret;
+   PWND Window;
+   LONG NewStyle;
+   DWORD ret = FALSE;
 
    UserEnterExclusive();
 
-   if (hWnd == IntGetDesktopWindow())
+   Window = UserGetWindowObject(hWnd);
+   if (!Window || UserIsDesktopWindow(Window))
    {
-      EngSetLastError(STATUS_ACCESS_DENIED);
-      UserLeave();
-      return 0;
+      goto Quit;
    }
 
-   ret = co_IntSetWindowLongPtr(hWnd, Index, NewValue, FALSE, sizeof(LONG), TRUE);
+   /* Only the bits supported by this specialized syscall can be changed. */
+   Mask &= WS_VSCROLL | WS_HSCROLL | 0x23f;
+   NewStyle = (Window->style & ~Mask) | (Style & Mask);
 
+   co_IntSetWindowLongPtr(hWnd,
+                         GWL_STYLE,
+                         NewStyle,
+                         FALSE,
+                         sizeof(LONG),
+                         TRUE);
+   ret = TRUE;
+
+Quit:
    UserLeave();
 
    return ret;
@@ -4276,8 +4288,7 @@ NtUserQueryWindow(HWND hWnd, DWORD Index)
 #define GWLP_CONSOLE_LEADER_TID 4
 
    DWORD_PTR Result = 0;
-   PWND pWnd, pwndActive;
-   PTHREADINFO pti, ptiActive;
+   PWND pWnd;
 
    TRACE("Enter NtUserQueryWindow\n");
    UserEnterShared();
@@ -4348,20 +4359,6 @@ NtUserQueryWindow(HWND hWnd, DWORD Index)
          if (pWnd->head.pti->spDefaultImc)
             Result = (DWORD_PTR)UserHMGetHandle(pWnd->head.pti->spDefaultImc);
          break;
-
-      case QUERY_WINDOW_ACTIVE_IME:
-         if (gpqForeground && gpqForeground->spwndActive)
-         {
-             pwndActive = gpqForeground->spwndActive;
-             pti = PsGetCurrentThreadWin32Thread();
-             if (pti->rpdesk == pwndActive->head.rpdesk)
-             {
-                ptiActive = pwndActive->head.pti;
-                if (ptiActive->spwndDefaultIme)
-                   Result = (DWORD_PTR)UserHMGetHandle(ptiActive->spwndDefaultIme);
-             }
-         }
-         break;
    }
 
 Exit:
@@ -4393,6 +4390,14 @@ NtUserRegisterWindowMessage(PUNICODE_STRING MessageNameUnsafe)
    if(!NT_SUCCESS(Status))
    {
       SetLastNtError(Status);
+      goto Exit; // Return 0
+   }
+
+   if (SafeMessageName.Length == 0)
+   {
+      /* Empty names fail without disturbing the last error */
+      if (SafeMessageName.Buffer)
+         ExFreePoolWithTag(SafeMessageName.Buffer, TAG_STRING);
       goto Exit; // Return 0
    }
 

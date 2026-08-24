@@ -743,71 +743,107 @@ NtUserGetIconInfo(
     {
         ULONG BufLen = 0;
         if (!CurIcon->atomModName)
-            goto leave;
-
-        RtlQueryAtomInAtomTable(gAtomTable, CurIcon->atomModName, NULL, NULL, NULL, &BufLen);
-        /* Get the module name from the atom table */
-        _SEH2_TRY
         {
-            BufLen += sizeof(WCHAR);
-            if (BufLen > (lpModule->MaximumLength))
+            _SEH2_TRY
             {
+                ProbeForWrite(lpModule, sizeof(UNICODE_STRING), 1);
                 lpModule->Length = 0;
-                lpModule->MaximumLength = BufLen;
             }
-            else
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
             {
-                ProbeForWrite(lpModule->Buffer, lpModule->MaximumLength, 1);
-                BufLen = lpModule->MaximumLength;
-                RtlQueryAtomInAtomTable(gAtomTable, CurIcon->atomModName, NULL, NULL, lpModule->Buffer, &BufLen);
-                lpModule->Length = BufLen;
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END
+
+            if (!NT_SUCCESS(Status))
+            {
+                SetLastNtError(Status);
+                goto leave;
             }
         }
-        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        else
         {
-            Status = _SEH2_GetExceptionCode();
-        }
-        _SEH2_END
 
-        if (!NT_SUCCESS(Status))
-        {
-            SetLastNtError(Status);
-            goto leave;
+            RtlQueryAtomInAtomTable(gAtomTable, CurIcon->atomModName, NULL, NULL, NULL, &BufLen);
+            /* Get the module name from the atom table */
+            _SEH2_TRY
+            {
+                ProbeForWrite(lpModule, sizeof(UNICODE_STRING), 1);
+                BufLen += sizeof(WCHAR);
+                if (BufLen > (lpModule->MaximumLength))
+                {
+                    lpModule->Length = 0;
+                    lpModule->MaximumLength = BufLen;
+                }
+                else
+                {
+                    ProbeForWrite(lpModule->Buffer, lpModule->MaximumLength, 1);
+                    BufLen = lpModule->MaximumLength;
+                    RtlQueryAtomInAtomTable(gAtomTable, CurIcon->atomModName, NULL, NULL, lpModule->Buffer, &BufLen);
+                    lpModule->Length = BufLen;
+                }
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END
+
+            if (!NT_SUCCESS(Status))
+            {
+                SetLastNtError(Status);
+                goto leave;
+            }
         }
     }
 
     if (lpResName)
     {
         if (!CurIcon->strName.Buffer)
-            goto leave;
+        {
+            _SEH2_TRY
+            {
+                ProbeForWrite(lpResName, sizeof(UNICODE_STRING), 1);
+                lpResName->Length = 0;
+                lpResName->Buffer = NULL;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END
+        }
+        else
+        {
 
-        /* Copy it */
-        _SEH2_TRY
-        {
-            ProbeForWrite(lpResName, sizeof(UNICODE_STRING), 1);
-            if (IS_INTRESOURCE(CurIcon->strName.Buffer))
+            /* Copy it */
+            _SEH2_TRY
             {
-                lpResName->Buffer = CurIcon->strName.Buffer;
-                lpResName->Length = 0;
-                lpResName->MaximumLength = 0;
+                ProbeForWrite(lpResName, sizeof(UNICODE_STRING), 1);
+                if (IS_INTRESOURCE(CurIcon->strName.Buffer))
+                {
+                    lpResName->Buffer = CurIcon->strName.Buffer;
+                    lpResName->Length = 0;
+                    lpResName->MaximumLength = 0;
+                }
+                else if (lpResName->MaximumLength < CurIcon->strName.MaximumLength)
+                {
+                    lpResName->Length = 0;
+                    lpResName->MaximumLength = CurIcon->strName.MaximumLength;
+                }
+                else
+                {
+                    ProbeForWrite(lpResName->Buffer, lpResName->MaximumLength, 1);
+                    RtlCopyMemory(lpResName->Buffer, CurIcon->strName.Buffer, CurIcon->strName.Length);
+                    lpResName->Length = CurIcon->strName.Length;
+                }
             }
-            else if (lpResName->MaximumLength < CurIcon->strName.MaximumLength)
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
             {
-                lpResName->Length = 0;
-                lpResName->MaximumLength = CurIcon->strName.MaximumLength;
+                Status = _SEH2_GetExceptionCode();
             }
-            else
-            {
-                ProbeForWrite(lpResName->Buffer, lpResName->MaximumLength, 1);
-                RtlCopyMemory(lpResName->Buffer, CurIcon->strName.Buffer, CurIcon->strName.Length);
-                lpResName->Length = CurIcon->strName.Length;
-            }
+            _SEH2_END
         }
-        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-        {
-            Status = _SEH2_GetExceptionCode();
-        }
-        _SEH2_END
     }
 
     if (!NT_SUCCESS(Status))
@@ -865,7 +901,7 @@ NtUserGetIconSize(
         ProbeForWrite(plcx, sizeof(LONG), 1);
         *plcx = CurIcon->cx;
         ProbeForWrite(plcy, sizeof(LONG), 1);
-        *plcy = CurIcon->cy;
+        *plcy = CurIcon->cy * 2;
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {

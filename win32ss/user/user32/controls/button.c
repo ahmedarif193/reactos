@@ -309,7 +309,7 @@ LRESULT WINAPI ButtonWndProc_common(HWND hWnd, UINT uMsg,
         {
             style = (style & ~BS_TYPEMASK) | BS_PUSHBUTTON;
 #ifdef __REACTOS__
-            NtUserAlterWindowStyle(hWnd, GWL_STYLE, style );
+            NtUserAlterWindowStyle(hWnd, BS_TYPEMASK, BS_PUSHBUTTON);
 #else
             WIN_SetStyle( hWnd, style, BS_TYPEMASK & ~style );
 #endif
@@ -568,7 +568,7 @@ LRESULT WINAPI ButtonWndProc_common(HWND hWnd, UINT uMsg,
         btn_type = wParam & BS_TYPEMASK;
         style = (style & ~BS_TYPEMASK) | btn_type;
 #ifdef __REACTOS__
-        NtUserAlterWindowStyle(hWnd, GWL_STYLE, style);
+        NtUserAlterWindowStyle(hWnd, BS_TYPEMASK, btn_type);
 #else
         WIN_SetStyle( hWnd, style, BS_TYPEMASK & ~style );
 #endif
@@ -625,9 +625,10 @@ LRESULT WINAPI ButtonWndProc_common(HWND hWnd, UINT uMsg,
         if ((btn_type == BS_RADIOBUTTON) || (btn_type == BS_AUTORADIOBUTTON))
         {
 #ifdef __REACTOS__
+            style = GetWindowLongPtrW( hWnd, GWL_STYLE );
             if (wParam) style |= WS_TABSTOP;
             else style &= ~WS_TABSTOP;
-            NtUserAlterWindowStyle(hWnd, GWL_STYLE, style);
+            SetWindowLongPtrW( hWnd, GWL_STYLE, style );
 #else
             if (wParam) WIN_SetStyle( hWnd, WS_TABSTOP, 0 );
             else WIN_SetStyle( hWnd, 0, WS_TABSTOP );
