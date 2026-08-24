@@ -1249,6 +1249,8 @@ ImmSetActiveContext(
         SendMessageW(hWnd, WM_IME_SETCONTEXT, fActive, dwShowFlags);
         if (fActive)
             NtUserNotifyIMEStatus(hWnd, fOpen, dwConversion);
+        else
+            SendMessageW(hWnd, WM_IME_NOTIFY, IMN_CLOSESTATUSWINDOW, 0);
     }
     else if (!fActive)
     {
