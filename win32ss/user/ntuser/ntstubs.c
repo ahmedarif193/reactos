@@ -1081,7 +1081,8 @@ NtUserGetPointerDeviceRects(
     _Out_ PRECT prcPointerDevice,
     _Out_ PRECT prcDisplay)
 {
-    RECT rcScreen;
+    RECT rcScreen, rcHimetric;
+    ULONG Dpi;
 
     UNREFERENCED_PARAMETER(hDevice);
 
@@ -1090,12 +1091,19 @@ NtUserGetPointerDeviceRects(
     rcScreen.top = UserGetSystemMetrics(SM_YVIRTUALSCREEN);
     rcScreen.right = rcScreen.left + UserGetSystemMetrics(SM_CXVIRTUALSCREEN);
     rcScreen.bottom = rcScreen.top + UserGetSystemMetrics(SM_CYVIRTUALSCREEN);
+    Dpi = (gpsi && gpsi->dmLogPixels) ? gpsi->dmLogPixels : 96;
     UserLeave();
+
+    /* The pointer device rect is in himetric units of the physical screen */
+    rcHimetric.left = 0;
+    rcHimetric.top = 0;
+    rcHimetric.right = (LONG)(((LONGLONG)(rcScreen.right - rcScreen.left) * 2540) / Dpi);
+    rcHimetric.bottom = (LONG)(((LONGLONG)(rcScreen.bottom - rcScreen.top) * 2540) / Dpi);
 
     _SEH2_TRY
     {
         ProbeForWrite(prcPointerDevice, sizeof(RECT), sizeof(ULONG));
-        *prcPointerDevice = rcScreen;
+        *prcPointerDevice = rcHimetric;
         ProbeForWrite(prcDisplay, sizeof(RECT), sizeof(ULONG));
         *prcDisplay = rcScreen;
     }
@@ -1107,6 +1115,63 @@ NtUserGetPointerDeviceRects(
     _SEH2_END;
 
     return TRUE;
+}
+
+typedef struct _MOUSE_POINTER_FRAME
+{
+    ULONG FrameId;
+    ULONG PointerFlags;
+    POINT Pt;
+    DWORD Time;
+    LONGLONG PerformanceCount;
+    HWND hwndTarget;
+    DWORD TargetThreadId;
+} MOUSE_POINTER_FRAME;
+
+static MOUSE_POINTER_FRAME gMousePointerFrame;
+
+PWND FASTCALL IntTopLevelWindowFromPoint(INT x, INT y);
+
+VOID NTAPI
+UserRecordMousePointerInput(
+    _In_ const POINT *ppt,
+    _In_ DWORD dwEventFlags,
+    _In_ DWORD dwTime)
+{
+    PWND pwnd;
+    ULONG Flags;
+
+    if (dwEventFlags & MOUSEEVENTF_LEFTDOWN)
+    {
+        Flags = 0x10000 | POINTER_MESSAGE_FLAG_INCONTACT | POINTER_MESSAGE_FLAG_FIRSTBUTTON;
+    }
+    else if (dwEventFlags & MOUSEEVENTF_LEFTUP)
+    {
+        Flags = 0x40000;
+    }
+    else if (dwEventFlags & MOUSEEVENTF_MOVE)
+    {
+        Flags = 0x20000;
+        if (IS_KEY_DOWN(gafAsyncKeyState, VK_LBUTTON))
+            Flags |= POINTER_MESSAGE_FLAG_INCONTACT | POINTER_MESSAGE_FLAG_FIRSTBUTTON;
+    }
+    else
+    {
+        return;
+    }
+
+    Flags |= POINTER_MESSAGE_FLAG_INRANGE | POINTER_MESSAGE_FLAG_PRIMARY;
+
+    pwnd = IntTopLevelWindowFromPoint(ppt->x, ppt->y);
+
+    gMousePointerFrame.FrameId++;
+    gMousePointerFrame.PointerFlags = Flags;
+    gMousePointerFrame.Pt = *ppt;
+    gMousePointerFrame.Time = dwTime;
+    gMousePointerFrame.PerformanceCount = KeQueryPerformanceCounter(NULL).QuadPart;
+    gMousePointerFrame.hwndTarget = pwnd ? UserHMGetHandle(pwnd) : NULL;
+    gMousePointerFrame.TargetThreadId =
+        pwnd ? PtrToUlong(pwnd->head.pti->pEThread->Cid.UniqueThread) : 0;
 }
 
 BOOL
@@ -1121,8 +1186,15 @@ NtUserGetPointerInfoList(
     _Inout_ PULONG PointerCount,
     _Out_opt_ PVOID PointerInfo)
 {
-    UNREFERENCED_PARAMETER(PointerId);
-    UNREFERENCED_PARAMETER(PointerType);
+    POINTER_TOUCH_INFO Entry;
+    POINTER_INFO *Common = (POINTER_INFO *)&Entry;
+    PPROCESSINFO ppi;
+    PTHREADINFO pti;
+    PWND pwndTarget;
+    SIZE_T RequiredSize;
+    ULONG Dpi;
+    BOOL DataValid = FALSE;
+
     UNREFERENCED_PARAMETER(SourceDevice);
     UNREFERENCED_PARAMETER(hProcess);
 
@@ -1146,9 +1218,90 @@ NtUserGetPointerInfoList(
     }
     _SEH2_END;
 
-    /* No pointer input frame history is recorded yet */
-    EngSetLastError(ERROR_NO_DATA);
-    return FALSE;
+    switch (PointerType)
+    {
+        case PT_POINTER:
+            RequiredSize = sizeof(POINTER_INFO);
+            break;
+        case PT_PEN:
+            RequiredSize = sizeof(POINTER_PEN_INFO);
+            break;
+        case PT_TOUCH:
+        case PT_TOUCHPAD:
+            RequiredSize = sizeof(POINTER_TOUCH_INFO);
+            break;
+        default:
+            RequiredSize = 0;
+            break;
+    }
+
+    if (!RequiredSize || EntrySize != RequiredSize || !PointerInfo)
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    UserEnterShared();
+
+    ppi = PsGetCurrentProcessWin32Process();
+    pti = PsGetCurrentThreadWin32Thread();
+
+    if (ppi && ppi->MouseInPointerEnabled &&
+        PointerId == 1 &&
+        gMousePointerFrame.FrameId != 0 &&
+        pti &&
+        gMousePointerFrame.TargetThreadId ==
+            PtrToUlong(pti->pEThread->Cid.UniqueThread))
+    {
+        pwndTarget = UserGetWindowObject(gMousePointerFrame.hwndTarget);
+        if (pwndTarget && pwndTarget->head.pti == pti)
+        {
+            Dpi = (gpsi && gpsi->dmLogPixels) ? gpsi->dmLogPixels : 96;
+
+            RtlZeroMemory(&Entry, sizeof(Entry));
+            Common->pointerType = PT_MOUSE;
+            Common->pointerId = 1;
+            Common->frameId = gMousePointerFrame.FrameId;
+            Common->pointerFlags = gMousePointerFrame.PointerFlags;
+            Common->sourceDevice = INVALID_HANDLE_VALUE;
+            Common->hwndTarget = gMousePointerFrame.hwndTarget;
+            Common->ptPixelLocation = gMousePointerFrame.Pt;
+            Common->ptPixelLocationRaw = gMousePointerFrame.Pt;
+            Common->ptHimetricLocation.x =
+                (LONG)(((LONGLONG)gMousePointerFrame.Pt.x * 2540) / Dpi);
+            Common->ptHimetricLocation.y =
+                (LONG)(((LONGLONG)gMousePointerFrame.Pt.y * 2540) / Dpi);
+            Common->ptHimetricLocationRaw = Common->ptHimetricLocation;
+            Common->dwTime = gMousePointerFrame.Time;
+            Common->historyCount = 1;
+            Common->PerformanceCount = gMousePointerFrame.PerformanceCount;
+            Common->ButtonChangeType = POINTER_CHANGE_NONE;
+            DataValid = TRUE;
+        }
+    }
+
+    UserLeave();
+
+    if (!DataValid)
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    _SEH2_TRY
+    {
+        RtlCopyMemory(PointerInfo, &Entry, RequiredSize);
+        *EntriesCount = 1;
+        *PointerCount = 1;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        EngSetLastError(ERROR_NOACCESS);
+        _SEH2_YIELD(return FALSE);
+    }
+    _SEH2_END;
+
+    return TRUE;
 }
 
 ULONG
