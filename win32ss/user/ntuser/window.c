@@ -492,6 +492,12 @@ static void IntSendDestroyMsg(HWND hWnd)
             co_UserSetFocus(NULL);
          }
       }
+      else if (ti->MessageQueue->spwndFocus &&
+               IntIsChildWindow(Window, ti->MessageQueue->spwndFocus))
+      {
+         /* Deactivate the focused descendant before the parent gets WM_DESTROY. */
+         co_UserSetFocus(NULL);
+      }
 
       if (ti->MessageQueue->CaretInfo.hWnd == UserHMGetHandle(Window))
       {
@@ -2544,6 +2550,33 @@ co_UserCreateWindowEx(CREATESTRUCTW* Cs,
    /* Show the new window */
    if (Cs->style & WS_VISIBLE)
    {
+      if ((Window->ExStyle & WS_EX_MDICHILD) &&
+          (Window->style & WS_MAXIMIZE) &&
+          (SharedUserData->NtMajorVersion > 6 ||
+           (SharedUserData->NtMajorVersion == 6 &&
+            SharedUserData->NtMinorVersion >= 2)))
+      {
+         NCCALCSIZE_PARAMS Params;
+         WINDOWPOS WindowPos;
+
+         Params.rgrc[0] = Window->rcWindow;
+         Params.rgrc[1] = Window->rcWindow;
+         Params.rgrc[2] = Window->rcWindow;
+         WindowPos.hwnd = UserHMGetHandle(Window);
+         WindowPos.hwndInsertAfter = NULL;
+         WindowPos.x = Window->rcWindow.left;
+         WindowPos.y = Window->rcWindow.top;
+         WindowPos.cx = Window->rcWindow.right - Window->rcWindow.left;
+         WindowPos.cy = Window->rcWindow.bottom - Window->rcWindow.top;
+         WindowPos.flags = SWP_NOMOVE | SWP_NOSIZE;
+         Params.lppos = &WindowPos;
+
+         co_IntSendMessage(UserHMGetHandle(Window),
+                           WM_NCCALCSIZE,
+                           TRUE,
+                           (LPARAM)&Params);
+      }
+
       if (Window->style & WS_MAXIMIZE)
          dwShowMode = SW_SHOW;
       else if (Window->style & WS_MINIMIZE)
@@ -2556,9 +2589,9 @@ co_UserCreateWindowEx(CREATESTRUCTW* Cs,
           ASSERT(ParentWindow);
           if(!ParentWindow)
               goto cleanup;
-        co_IntSendMessage(UserHMGetHandle(ParentWindow), WM_MDIREFRESHMENU, 0, 0);
         /* ShowWindow won't activate child windows */
         co_WinPosSetWindowPos(Window, HWND_TOP, 0, 0, 0, 0, SWP_SHOWWINDOW | SWP_NOMOVE | SWP_NOSIZE);
+        co_IntSendMessage(UserHMGetHandle(ParentWindow), WM_MDIREFRESHMENU, 0, 0);
       }
    }
 

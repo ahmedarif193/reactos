@@ -1247,7 +1247,12 @@ LRESULT WINAPI MDIClientWndProc_common( HWND hwnd, UINT message, WPARAM wParam, 
           return MDISetMenu( hwnd, (HMENU)wParam, (HMENU)lParam );
 
       case WM_MDIREFRESHMENU:
-          return MDI_RefreshMenu( ci );
+      {
+          LRESULT result = MDI_RefreshMenu( ci );
+          if (ci->hwndChildMaximized)
+              MDI_UpdateFrameText(GetParent(hwnd), hwnd, TRUE, NULL);
+          return result;
+      }
 
       case WM_MDITILE:
 	ci->mdiFlags |= MDIF_NEEDUPDATE;
