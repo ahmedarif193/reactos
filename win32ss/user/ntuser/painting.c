@@ -461,9 +461,7 @@ co_IntPaintWindows(PWND Wnd, ULONG Flags, BOOL Recurse)
                   Wnd->state &= ~(WNDS_SENDERASEBACKGROUND|WNDS_ERASEBACKGROUND);
                   // Kill the loop, so Clear before we send.
                   if (!co_IntSendMessage(hWnd, WM_ERASEBKGND, (WPARAM)hDC, 0))
-                  {
-                     Wnd->state |= (WNDS_SENDERASEBACKGROUND|WNDS_ERASEBACKGROUND);
-                  }
+                     Wnd->state |= WNDS_ERASEBACKGROUND;
                   UserReleaseDC(Wnd, hDC, FALSE);
                }
             }
@@ -744,7 +742,10 @@ IntInvalidateWindows(PWND Wnd, PREGION Rgn, ULONG Flags)
          }
 
          if (Flags & RDW_FRAME)
+         {
             Wnd->state |= WNDS_SENDNCPAINT;
+            Wnd->state2 |= WNDS2_FORCEFULLNCPAINTCLIPRGN;
+         }
 
          if (Flags & RDW_ERASE)
             Wnd->state |= WNDS_SENDERASEBACKGROUND;
@@ -1449,6 +1450,7 @@ IntBeginPaint(PWND Window, PPAINTSTRUCT Ps)
    RECT Rect;
    INT type;
    BOOL Erase = FALSE;
+   BOOL ErasePending = FALSE;
 
    co_UserHideCaret(Window);
 
@@ -1498,6 +1500,11 @@ IntBeginPaint(PWND Window, PPAINTSTRUCT Ps)
       Window->state &= ~(WNDS_SENDERASEBACKGROUND|WNDS_ERASEBACKGROUND);
       Erase = TRUE;
    }
+   else if (Window->state & WNDS_ERASEBACKGROUND)
+   {
+      Window->state &= ~WNDS_ERASEBACKGROUND;
+      ErasePending = TRUE;
+   }
 
    if (Window->hrgnUpdate != NULL)
    {
@@ -1524,14 +1531,10 @@ IntBeginPaint(PWND Window, PPAINTSTRUCT Ps)
          RECTL_bIntersectRect( &Rect, &Rect, &Ps->rcPaint) ) ) // intersecting.
    {
       Ps->fErase = !co_IntSendMessage(UserHMGetHandle(Window), WM_ERASEBKGND, (WPARAM)Ps->hdc, 0);
-      if ( Ps->fErase )
-      {
-         Window->state |= (WNDS_SENDERASEBACKGROUND|WNDS_ERASEBACKGROUND);
-      }
    }
    else
    {
-      Ps->fErase = FALSE;
+      Ps->fErase = ErasePending && type != NULLREGION;
    }
 
    IntSendChildNCPaint(Window);
