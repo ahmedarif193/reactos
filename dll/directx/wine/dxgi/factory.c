@@ -21,6 +21,10 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(dxgi);
 
+#ifdef __REACTOS__
+static HRESULT dxgi_factory_create_warp_adapter(REFIID iid, void **adapter);
+#endif
+
 static inline struct dxgi_factory *impl_from_IWineDXGIFactory(IWineDXGIFactory *iface)
 {
     return CONTAINING_RECORD(iface, struct dxgi_factory, IWineDXGIFactory_iface);
@@ -399,10 +403,57 @@ static void STDMETHODCALLTYPE dxgi_factory_UnregisterOcclusionStatus(IWineDXGIFa
 static HRESULT STDMETHODCALLTYPE dxgi_factory_CreateSwapChainForComposition(IWineDXGIFactory *iface,
         IUnknown *device, const DXGI_SWAP_CHAIN_DESC1 *desc, IDXGIOutput *output, IDXGISwapChain1 **swapchain)
 {
+#ifdef __REACTOS__
+    DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreen_desc = {0};
+    IWineDXGIFactory *device_factory;
+    struct dxgi_factory *factory;
+    IDXGIDevice *dxgi_device;
+    IDXGIAdapter *adapter;
+    HWND window;
+    HRESULT hr;
+
+    TRACE("iface %p, device %p, desc %p, output %p, swapchain %p.\n",
+            iface, device, desc, output, swapchain);
+
+    if (!device || !desc || !swapchain)
+        return DXGI_ERROR_INVALID_CALL;
+    *swapchain = NULL;
+
+    if (FAILED(hr = IUnknown_QueryInterface(device, &IID_IDXGIDevice,
+            (void **)&dxgi_device)))
+        return DXGI_ERROR_UNSUPPORTED;
+    hr = IDXGIDevice_GetAdapter(dxgi_device, &adapter);
+    IDXGIDevice_Release(dxgi_device);
+    if (FAILED(hr))
+        return hr;
+
+    hr = IDXGIAdapter_GetParent(adapter, &IID_IWineDXGIFactory,
+            (void **)&device_factory);
+    IDXGIAdapter_Release(adapter);
+    if (FAILED(hr))
+        return hr;
+
+    factory = impl_from_IWineDXGIFactory(device_factory);
+    window = dxgi_factory_get_device_window(factory);
+    if (!window)
+    {
+        IWineDXGIFactory_Release(device_factory);
+        return E_FAIL;
+    }
+
+    if (output)
+        FIXME("Ignoring output %p.\n", output);
+    fullscreen_desc.Windowed = TRUE;
+    hr = dxgi_factory_CreateSwapChainForHwnd(device_factory, device, window,
+            desc, &fullscreen_desc, NULL, swapchain);
+    IWineDXGIFactory_Release(device_factory);
+    return hr;
+#else
     FIXME("iface %p, device %p, desc %p, output %p, swapchain %p stub!\n",
             iface, device, desc, output, swapchain);
 
     return E_NOTIMPL;
+#endif
 }
 
 static UINT STDMETHODCALLTYPE dxgi_factory_GetCreationFlags(IWineDXGIFactory *iface)
@@ -457,6 +508,14 @@ static HRESULT STDMETHODCALLTYPE dxgi_factory_EnumAdapterByLuid(IWineDXGIFactory
 static HRESULT STDMETHODCALLTYPE dxgi_factory_EnumWarpAdapter(IWineDXGIFactory *iface,
         REFIID iid, void **adapter)
 {
+#ifdef __REACTOS__
+    TRACE("iface %p, iid %s, adapter %p.\n", iface, debugstr_guid(iid), adapter);
+
+    if (!adapter)
+        return DXGI_ERROR_INVALID_CALL;
+
+    return dxgi_factory_create_warp_adapter(iid, adapter);
+#else
     IDXGIAdapter1 *adapter_object;
     HRESULT hr;
 
@@ -472,6 +531,7 @@ static HRESULT STDMETHODCALLTYPE dxgi_factory_EnumWarpAdapter(IWineDXGIFactory *
     hr = IDXGIAdapter1_QueryInterface(adapter_object, iid, adapter);
     IDXGIAdapter1_Release(adapter_object);
     return hr;
+#endif
 }
 
 static HRESULT STDMETHODCALLTYPE dxgi_factory_CheckFeatureSupport(IWineDXGIFactory *iface,
@@ -627,6 +687,57 @@ static HRESULT dxgi_factory_init(struct dxgi_factory *factory, BOOL extended)
 
     return S_OK;
 }
+
+#ifdef __REACTOS__
+static HRESULT dxgi_factory_init_software(struct dxgi_factory *factory)
+{
+    factory->IWineDXGIFactory_iface.lpVtbl = &dxgi_factory_vtbl;
+    factory->refcount = 1;
+    wined3d_private_store_init(&factory->private_store);
+
+    wined3d_mutex_lock();
+    factory->wined3d = wined3d_create(WINED3D_NO3D);
+    wined3d_mutex_unlock();
+    if (!factory->wined3d)
+    {
+        wined3d_private_store_cleanup(&factory->private_store);
+        return DXGI_ERROR_UNSUPPORTED;
+    }
+
+    factory->extended = TRUE;
+    factory->software = TRUE;
+    return S_OK;
+}
+
+static HRESULT dxgi_factory_create_warp_adapter(REFIID iid, void **adapter)
+{
+    struct dxgi_adapter *adapter_object;
+    struct dxgi_factory *factory;
+    HRESULT hr;
+
+    *adapter = NULL;
+    if (!(factory = calloc(1, sizeof(*factory))))
+        return E_OUTOFMEMORY;
+
+    if (FAILED(hr = dxgi_factory_init_software(factory)))
+    {
+        free(factory);
+        return hr;
+    }
+
+    if (FAILED(hr = dxgi_adapter_create(factory, 0, &adapter_object)))
+    {
+        IWineDXGIFactory_Release(&factory->IWineDXGIFactory_iface);
+        return hr;
+    }
+
+    hr = IWineDXGIAdapter_QueryInterface(&adapter_object->IWineDXGIAdapter_iface,
+            iid, adapter);
+    IWineDXGIAdapter_Release(&adapter_object->IWineDXGIAdapter_iface);
+    IWineDXGIFactory_Release(&factory->IWineDXGIFactory_iface);
+    return hr;
+}
+#endif
 
 HRESULT dxgi_factory_create(REFIID riid, void **factory, BOOL extended)
 {

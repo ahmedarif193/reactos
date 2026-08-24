@@ -193,7 +193,38 @@ static HRESULT d3d11_create_device(IDXGIAdapter *adapter, D3D_DRIVER_TYPE driver
         switch(driver_type)
         {
             case D3D_DRIVER_TYPE_WARP:
+#ifdef __REACTOS__
+            {
+                IDXGIFactory4 *factory4;
+
+                hr = IDXGIFactory_QueryInterface(factory, &IID_IDXGIFactory4,
+                        (void **)&factory4);
+                if (SUCCEEDED(hr))
+                {
+                    hr = IDXGIFactory4_EnumWarpAdapter(factory4,
+                            &IID_IDXGIAdapter, (void **)&adapter);
+                    IDXGIFactory4_Release(factory4);
+                }
+                IDXGIFactory_Release(factory);
+                if (FAILED(hr))
+                {
+                    WARN("Failed to obtain the WARP adapter, returning %#lx.\n", hr);
+                    return hr;
+                }
+
+                hr = IDXGIAdapter_GetParent(adapter, &IID_IDXGIFactory,
+                        (void **)&factory);
+                if (FAILED(hr))
+                {
+                    WARN("Failed to get the WARP factory, returning %#lx.\n", hr);
+                    IDXGIAdapter_Release(adapter);
+                    return hr;
+                }
+                break;
+            }
+#else
                 FIXME("WARP driver not implemented, falling back to hardware.\n");
+#endif
             case D3D_DRIVER_TYPE_HARDWARE:
             {
                 hr = IDXGIFactory_EnumAdapters(factory, 0, &adapter);

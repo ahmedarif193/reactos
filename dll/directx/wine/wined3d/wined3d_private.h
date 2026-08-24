@@ -4123,6 +4123,13 @@ struct wined3d_swapchain
     struct wined3d_swapchain_state state;
     HWND win_handle;
     HDC dc;
+#ifdef __REACTOS__
+    BOOL composition;
+    BOOL premultiplied_alpha;
+    POINT composition_offset;
+    RECT composition_clip;
+    BOOL composition_has_clip;
+#endif
 };
 
 void wined3d_swapchain_activate(struct wined3d_swapchain *swapchain, BOOL activate);

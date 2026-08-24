@@ -275,8 +275,31 @@ static HRESULT STDMETHODCALLTYPE d3d11_swapchain_SetPrivateData(IDXGISwapChain4 
         REFGUID guid, UINT data_size, const void *data)
 {
     struct d3d11_swapchain *swapchain = d3d11_swapchain_from_IDXGISwapChain4(iface);
+#ifdef __REACTOS__
+    struct reactos_dxgi_composition_target target;
+#endif
 
     TRACE("iface %p, guid %s, data_size %u, data %p.\n", iface, debugstr_guid(guid), data_size, data);
+
+#ifdef __REACTOS__
+    if (IsEqualGUID(guid, &GUID_ReactOSDXGICompositionWindow))
+    {
+        if (!data || data_size != sizeof(target))
+            return E_INVALIDARG;
+        memcpy(&target, data, sizeof(target));
+        if (!IsWindow(target.window))
+            return E_INVALIDARG;
+
+        wined3d_mutex_lock();
+        wined3d_swapchain_set_window(swapchain->wined3d_swapchain, target.window);
+        wined3d_swapchain_set_composition(swapchain->wined3d_swapchain, TRUE,
+                swapchain->alpha_mode == DXGI_ALPHA_MODE_PREMULTIPLIED,
+                target.offset_x, target.offset_y,
+                target.has_clip ? &target.clip : NULL);
+        wined3d_mutex_unlock();
+        return S_OK;
+    }
+#endif
 
     return dxgi_set_private_data(&swapchain->private_store, guid, data_size, data);
 }
@@ -324,7 +347,8 @@ static HRESULT STDMETHODCALLTYPE d3d11_swapchain_GetDevice(IDXGISwapChain4 *ifac
 /* IDXGISwapChain1 methods */
 
 static HRESULT d3d11_swapchain_present(struct d3d11_swapchain *swapchain,
-        unsigned int sync_interval, unsigned int flags)
+        unsigned int sync_interval, unsigned int flags, const RECT *src_rect,
+        const RECT *dst_rect)
 {
     HRESULT hr;
 
@@ -345,7 +369,8 @@ static HRESULT d3d11_swapchain_present(struct d3d11_swapchain *swapchain,
         return S_OK;
     }
 
-    if (SUCCEEDED(hr = wined3d_swapchain_present(swapchain->wined3d_swapchain, NULL, NULL, NULL, sync_interval, 0)))
+    if (SUCCEEDED(hr = wined3d_swapchain_present(swapchain->wined3d_swapchain,
+            src_rect, dst_rect, NULL, sync_interval, 0)))
         InterlockedIncrement(&swapchain->present_count);
     return hr;
 }
@@ -356,7 +381,7 @@ static HRESULT STDMETHODCALLTYPE DECLSPEC_HOTPATCH d3d11_swapchain_Present(IDXGI
 
     TRACE("iface %p, sync_interval %u, flags %#x.\n", iface, sync_interval, flags);
 
-    return d3d11_swapchain_present(swapchain, sync_interval, flags);
+    return d3d11_swapchain_present(swapchain, sync_interval, flags, NULL, NULL);
 }
 
 static HRESULT STDMETHODCALLTYPE d3d11_swapchain_GetBuffer(IDXGISwapChain4 *iface,
@@ -670,7 +695,7 @@ static HRESULT STDMETHODCALLTYPE d3d11_swapchain_GetDesc1(IDXGISwapChain4 *iface
     wined3d_swapchain_get_desc(swapchain->wined3d_swapchain, &wined3d_desc);
     wined3d_mutex_unlock();
 
-    FIXME("Ignoring Stereo, Scaling and AlphaMode.\n");
+    FIXME("Ignoring Stereo and Scaling.\n");
 
     desc->Width = wined3d_desc.backbuffer_width;
     desc->Height = wined3d_desc.backbuffer_height;
@@ -682,7 +707,11 @@ static HRESULT STDMETHODCALLTYPE d3d11_swapchain_GetDesc1(IDXGISwapChain4 *iface
     desc->BufferCount = wined3d_desc.backbuffer_count;
     desc->Scaling = DXGI_SCALING_STRETCH;
     desc->SwapEffect = dxgi_swap_effect_from_wined3d(wined3d_desc.swap_effect);
+#ifdef __REACTOS__
+    desc->AlphaMode = swapchain->alpha_mode;
+#else
     desc->AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+#endif
     desc->Flags = dxgi_swapchain_flags_from_wined3d(wined3d_desc.flags);
 
     return S_OK;
@@ -745,14 +774,33 @@ static HRESULT STDMETHODCALLTYPE d3d11_swapchain_Present1(IDXGISwapChain4 *iface
         UINT sync_interval, UINT flags, const DXGI_PRESENT_PARAMETERS *present_parameters)
 {
     struct d3d11_swapchain *swapchain = d3d11_swapchain_from_IDXGISwapChain4(iface);
+    RECT dirty_rect, rect;
+    UINT i;
 
     TRACE("iface %p, sync_interval %u, flags %#x, present_parameters %p.\n",
             iface, sync_interval, flags, present_parameters);
 
-    if (present_parameters)
-        FIXME("Ignored present parameters %p.\n", present_parameters);
+    if (!present_parameters || !present_parameters->DirtyRectsCount)
+        return d3d11_swapchain_present(swapchain, sync_interval, flags, NULL, NULL);
+    if (!present_parameters->pDirtyRects)
+        return DXGI_ERROR_INVALID_CALL;
 
-    return d3d11_swapchain_present(swapchain, sync_interval, flags);
+    dirty_rect = present_parameters->pDirtyRects[0];
+    if (dirty_rect.right < dirty_rect.left || dirty_rect.bottom < dirty_rect.top)
+        return DXGI_ERROR_INVALID_CALL;
+    for (i = 1; i < present_parameters->DirtyRectsCount; ++i)
+    {
+        rect = present_parameters->pDirtyRects[i];
+        if (rect.right < rect.left || rect.bottom < rect.top)
+            return DXGI_ERROR_INVALID_CALL;
+        UnionRect(&dirty_rect, &dirty_rect, &rect);
+    }
+
+    if (present_parameters->pScrollRect || present_parameters->pScrollOffset)
+        TRACE("Present scroll data is covered by the retained CPU buffer.\n");
+
+    return d3d11_swapchain_present(swapchain, sync_interval, flags,
+            &dirty_rect, &dirty_rect);
 }
 
 static BOOL STDMETHODCALLTYPE d3d11_swapchain_IsTemporaryMonoSupported(IDXGISwapChain4 *iface)

@@ -314,6 +314,9 @@
 @ cdecl wined3d_swapchain_set_gamma_ramp(ptr long ptr)
 @ cdecl wined3d_swapchain_set_max_frame_latency(ptr long)
 @ cdecl wined3d_swapchain_set_palette(ptr ptr)
+#ifdef __REACTOS__
+@ cdecl wined3d_swapchain_set_composition(ptr long long long long ptr)
+#endif
 @ cdecl wined3d_swapchain_set_window(ptr ptr)
 
 @ cdecl wined3d_swapchain_state_create(ptr ptr ptr ptr ptr)

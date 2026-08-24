@@ -219,6 +219,25 @@ void CDECL wined3d_swapchain_set_window(struct wined3d_swapchain *swapchain, HWN
         WARN("Failed to retrieve device context, trying swapchain backup.\n");
 }
 
+#ifdef __REACTOS__
+void CDECL wined3d_swapchain_set_composition(struct wined3d_swapchain *swapchain,
+        BOOL composition, BOOL premultiplied_alpha, int offset_x, int offset_y,
+        const RECT *clip_rect)
+{
+    TRACE("swapchain %p, composition %d, premultiplied_alpha %d, offset %d,%d, clip %s.\n",
+            swapchain, composition, premultiplied_alpha, offset_x, offset_y,
+            wine_dbgstr_rect(clip_rect));
+
+    swapchain->composition = composition;
+    swapchain->premultiplied_alpha = premultiplied_alpha;
+    swapchain->composition_offset.x = offset_x;
+    swapchain->composition_offset.y = offset_y;
+    swapchain->composition_has_clip = !!clip_rect;
+    if (clip_rect)
+        swapchain->composition_clip = *clip_rect;
+}
+#endif
+
 HRESULT CDECL wined3d_swapchain_present(struct wined3d_swapchain *swapchain,
         const RECT *src_rect, const RECT *dst_rect, HWND dst_window_override,
         unsigned int swap_interval, uint32_t flags)
@@ -1314,7 +1333,7 @@ static void swapchain_gdi_frontbuffer_updated(struct wined3d_swapchain *swapchai
 {
     struct wined3d_dc_info *front;
     POINT offset = {0, 0};
-    RECT draw_rect;
+    RECT draw_rect, source_rect;
     HWND window;
     HDC src_dc;
 
@@ -1334,7 +1353,11 @@ static void swapchain_gdi_frontbuffer_updated(struct wined3d_swapchain *swapchai
 
     /* Front buffer coordinates are screen coordinates. Map them to the
      * destination window if not fullscreened. */
-    if (swapchain->state.desc.windowed)
+    if (swapchain->state.desc.windowed
+#ifdef __REACTOS__
+            && !swapchain->composition
+#endif
+            )
         ClientToScreen(window, &offset);
 
     TRACE("offset %s.\n", wine_dbgstr_point(&offset));
@@ -1342,11 +1365,55 @@ static void swapchain_gdi_frontbuffer_updated(struct wined3d_swapchain *swapchai
     SetRect(&draw_rect, 0, 0, swapchain->front_buffer->resource.width,
             swapchain->front_buffer->resource.height);
     IntersectRect(&draw_rect, &draw_rect, &swapchain->front_buffer_update);
+    source_rect = draw_rect;
 
-    BitBlt(swapchain->dc, draw_rect.left - offset.x, draw_rect.top - offset.y,
-            draw_rect.right - draw_rect.left, draw_rect.bottom - draw_rect.top,
-            src_dc, draw_rect.left, draw_rect.top, SRCCOPY);
+#ifdef __REACTOS__
+    if (swapchain->composition)
+    {
+        OffsetRect(&draw_rect, swapchain->composition_offset.x,
+                swapchain->composition_offset.y);
+        if (swapchain->composition_has_clip)
+        {
+            RECT unclipped_rect = draw_rect;
 
+            if (!IntersectRect(&draw_rect, &draw_rect, &swapchain->composition_clip))
+                goto done;
+            source_rect.left += draw_rect.left - unclipped_rect.left;
+            source_rect.top += draw_rect.top - unclipped_rect.top;
+            source_rect.right -= unclipped_rect.right - draw_rect.right;
+            source_rect.bottom -= unclipped_rect.bottom - draw_rect.bottom;
+        }
+
+        if (swapchain->premultiplied_alpha)
+        {
+            BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+            BOOL ret;
+
+            ret = GdiAlphaBlend(swapchain->dc, draw_rect.left, draw_rect.top,
+                    draw_rect.right - draw_rect.left, draw_rect.bottom - draw_rect.top,
+                    src_dc, source_rect.left, source_rect.top,
+                    source_rect.right - source_rect.left, source_rect.bottom - source_rect.top, blend);
+            if (!ret)
+                ERR("Composition alpha present failed, error %lu.\n", GetLastError());
+        }
+        else
+        {
+            BitBlt(swapchain->dc, draw_rect.left, draw_rect.top,
+                    draw_rect.right - draw_rect.left, draw_rect.bottom - draw_rect.top,
+                    src_dc, source_rect.left, source_rect.top, SRCCOPY);
+        }
+    }
+    else
+#endif
+    {
+        BitBlt(swapchain->dc, draw_rect.left - offset.x, draw_rect.top - offset.y,
+                draw_rect.right - draw_rect.left, draw_rect.bottom - draw_rect.top,
+                src_dc, draw_rect.left, draw_rect.top, SRCCOPY);
+    }
+
+#ifdef __REACTOS__
+done:
+#endif
     SetRectEmpty(&swapchain->front_buffer_update);
 }
 
@@ -1361,6 +1428,21 @@ static void swapchain_gdi_present(struct wined3d_swapchain *swapchain,
 
     front = &swapchain->front_buffer->dc_info[0];
     back = &swapchain->back_buffers[0]->dc_info[0];
+
+#ifdef __REACTOS__
+    if (swapchain->state.desc.swap_effect == WINED3D_SWAP_EFFECT_FLIP_SEQUENTIAL)
+    {
+        /* Our CPU composition path exposes a stable buffer zero to DXGI. Keep
+         * its contents across presents, as flip-sequential clients commonly
+         * update only the damaged part of the retained frame. */
+        BitBlt(front->dc, src_rect->left, src_rect->top,
+                src_rect->right - src_rect->left,
+                src_rect->bottom - src_rect->top,
+                back->dc, src_rect->left, src_rect->top, SRCCOPY);
+        swapchain->front_buffer_update = *src_rect;
+        goto present;
+    }
+#endif
 
     /* Flip the surface data. */
     dc = front->dc;
@@ -1378,9 +1460,19 @@ static void swapchain_gdi_present(struct wined3d_swapchain *swapchain,
     swapchain->back_buffers[0]->resource.heap_pointer = heap_pointer;
     swapchain->back_buffers[0]->resource.heap_memory = heap_memory;
 
+#ifdef __REACTOS__
+present:
+#endif
+#ifndef __REACTOS__
     SetRect(&swapchain->front_buffer_update, 0, 0,
             swapchain->front_buffer->resource.width,
             swapchain->front_buffer->resource.height);
+#else
+    if (swapchain->state.desc.swap_effect != WINED3D_SWAP_EFFECT_FLIP_SEQUENTIAL)
+        SetRect(&swapchain->front_buffer_update, 0, 0,
+                swapchain->front_buffer->resource.width,
+                swapchain->front_buffer->resource.height);
+#endif
     swapchain_gdi_frontbuffer_updated(swapchain);
 }
 
@@ -1615,6 +1707,10 @@ static HRESULT wined3d_swapchain_init(struct wined3d_swapchain *swapchain, struc
 
     if (desc->swap_effect != WINED3D_SWAP_EFFECT_DISCARD
             && desc->swap_effect != WINED3D_SWAP_EFFECT_SEQUENTIAL
+#ifdef __REACTOS__
+            && desc->swap_effect != WINED3D_SWAP_EFFECT_FLIP_DISCARD
+            && desc->swap_effect != WINED3D_SWAP_EFFECT_FLIP_SEQUENTIAL
+#endif
             && desc->swap_effect != WINED3D_SWAP_EFFECT_COPY)
         FIXME("Unimplemented swap effect %#x.\n", desc->swap_effect);
 

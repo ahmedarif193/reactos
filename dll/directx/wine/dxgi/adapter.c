@@ -186,6 +186,15 @@ static HRESULT dxgi_adapter_get_desc(struct dxgi_adapter *adapter, DXGI_ADAPTER_
     desc->DedicatedSystemMemory = 0; /* FIXME */
     desc->SharedSystemMemory = adapter_id.shared_system_memory;
     desc->AdapterLuid = adapter_id.adapter_luid;
+#ifdef __REACTOS__
+    if (adapter->factory->software)
+    {
+        desc->VendorId = 0x1414;
+        desc->DeviceId = 0x008c;
+        desc->Flags = DXGI_ADAPTER_FLAG3_SOFTWARE;
+    }
+    else
+#endif
     desc->Flags = 0;
     desc->GraphicsPreemptionGranularity = 0; /* FIXME */
     desc->ComputePreemptionGranularity = 0; /* FIXME */

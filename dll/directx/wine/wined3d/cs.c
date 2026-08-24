@@ -679,6 +679,12 @@ static void wined3d_cs_exec_present(struct wined3d_cs *cs, const void *data)
     swapchain = op->swapchain;
     desc = &swapchain->state.desc;
     back_buffer = swapchain->back_buffers[0];
+#ifdef __REACTOS__
+    /* A DirectComposition target owns the destination HWND. Present packets
+     * use a NULL override for composition swapchains; interpreting that as
+     * the device window would detach every committed visual again. */
+    if (!swapchain->composition)
+#endif
     wined3d_swapchain_set_window(swapchain, op->dst_window_override);
 
     if ((logo_texture = swapchain->device->logo_texture))
