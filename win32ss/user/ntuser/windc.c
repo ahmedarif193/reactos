@@ -504,6 +504,17 @@ UserGetDCEx(PWND Wnd OPTIONAL, HANDLE ClipRegion, ULONG Flags)
           // Skip Cache DCE entries.
           if (!(Dce->DCXFlags & DCX_CACHE))
           {
+             /* A class DC does not turn into an own DC when the class style
+                is changed after the window was created. */
+             if ((Flags & DCX_USESTYLE) &&
+                 (Wnd->pcls->style & CS_OWNDC) &&
+                 !(Wnd->pcls->style & CS_CLASSDC) &&
+                 Dce == Wnd->pcls->pdce)
+             {
+                Dce = NULL;
+                continue;
+             }
+
              // Check for Window handle than HDC match for CLASS.
              if (Dce->hwndCurrent == UserHMGetHandle(Wnd))
              {
@@ -704,7 +715,16 @@ DceFreeWindowDCE(PWND Window)
      {
         if (!(pDCE->DCXFlags & DCX_CACHE)) /* Owned or Class DCE */
         {
-           if (Window->pcls->style & CS_CLASSDC) /* Test Class first */
+           if (pDCE == Window->pcls->pdce &&
+               !(Window->pcls->style & CS_CLASSDC))
+           {
+              /* Keep a class DC alive across a later class-style change. */
+              if (pDCE->DCXFlags & (DCX_INTERSECTRGN | DCX_EXCLUDERGN))
+                 DceDeleteClipRgn(pDCE);
+              pDCE->hwndCurrent = 0;
+              pDCE->pwndOrg = pDCE->pwndClip = NULL;
+           }
+           else if (Window->pcls->style & CS_CLASSDC) /* Test Class first */
            {
               if (pDCE->DCXFlags & (DCX_INTERSECTRGN | DCX_EXCLUDERGN)) /* Class DCE */
                  DceDeleteClipRgn(pDCE);
