@@ -553,6 +553,18 @@ GetThreadDesktop(
 {
     USER_API_MESSAGE ApiMessage;
     PUSER_GET_THREAD_CONSOLE_DESKTOP GetThreadConsoleDesktopRequest = &ApiMessage.Data.GetThreadConsoleDesktopRequest;
+    DWORD LastError;
+    HDESK Desktop;
+
+    /* Most threads have a desktop in win32k. Ask CONSRV only for the
+       non-Win32 console-thread fallback. */
+    LastError = GetLastError();
+    Desktop = NtUserGetThreadDesktop(dwThreadId, NULL);
+    if (Desktop)
+        return Desktop;
+
+    if (GetLastError() != ERROR_INVALID_PARAMETER)
+        return NULL;
 
     GetThreadConsoleDesktopRequest->ThreadId = dwThreadId;
 
@@ -566,6 +578,7 @@ GetThreadDesktop(
         return NULL;
     }
 
+    SetLastError(LastError);
     return NtUserGetThreadDesktop(dwThreadId,
                                   GetThreadConsoleDesktopRequest->ConsoleDesktop);
 }
