@@ -538,10 +538,20 @@ streamout(FILE *stream, const _TCHAR *format, va_list argptr)
                     flags &= ~FLAG_WIDECHAR;
                 }
 
+#ifdef _USER32_WSPRINTF
+                /* USER32 scans the complete string before applying precision. */
+                if (flags & FLAG_WIDECHAR)
+                    len = wcslen((wchar_t*)string);
+                else
+                    len = strlen((char*)string);
+                if (precision >= 0 && len > (size_t)precision)
+                    len = precision;
+#else
                 if (flags & FLAG_WIDECHAR)
                     len = wcsnlen((wchar_t*)string, (unsigned)precision);
                 else
                     len = strnlen((char*)string, (unsigned)precision);
+#endif
                 precision = 0;
                 break;
 
@@ -705,4 +715,3 @@ streamout(FILE *stream, const _TCHAR *format, va_list argptr)
 
     return written_all;
 }
-

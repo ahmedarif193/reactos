@@ -111,12 +111,17 @@ _sxprintf(
     /* Null-terminate the buffer after the string */
     buffer[result] = _T('\0');
 #else
-    /* Only zero terminate if there is enough space left */
-    if ((stream._cnt >= sizeof(_TCHAR)) && (stream._ptr))
+    /* USER32 probes the destination even when the formatted text is empty. */
+#ifdef USER32_WSPRINTF
+    if (stream._cnt >= sizeof(_TCHAR))
         *(_TCHAR*)stream._ptr = _T('\0');
+#else
+    /* Only zero terminate if there is enough space left */
+    if ((stream._cnt >= sizeof(_TCHAR)) && stream._ptr)
+        *(_TCHAR*)stream._ptr = _T('\0');
+#endif
 #endif
 
     return result;
 }
-
 
