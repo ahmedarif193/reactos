@@ -65,16 +65,16 @@ START_TEST(NtUserEnumDisplaySettings)
     Status = NtUserEnumDisplaySettings(&usDeviceName, -4, (DEVMODEW*)&data, 0);
     TEST(Status == STATUS_INVALID_PARAMETER_1);
 
-    Status = NtUserEnumDisplaySettings(NULL, 0, (DEVMODEW*)&data, 0);
-    TEST(Status == STATUS_SUCCESS);
-    Status = NtUserEnumDisplaySettings(NULL, 1, (DEVMODEW*)&data, 0);
-    TEST(Status == STATUS_SUCCESS);
-    Status = NtUserEnumDisplaySettings(NULL, 2, (DEVMODEW*)&data, 0);
-    TEST(Status == STATUS_SUCCESS);
-    Status = NtUserEnumDisplaySettings(NULL, 4, (DEVMODEW*)&data, 0);
-    TEST(Status == STATUS_SUCCESS);
-    Status = NtUserEnumDisplaySettings(NULL, 8, (DEVMODEW*)&data, 0);
-    TEST(Status == STATUS_SUCCESS);
+    /* Display modes are supplied by the active miniport. Verify that every
+       advertised index succeeds without assuming a minimum mode count. */
+    for (i = 0; i <= 8; i++)
+    {
+        Status = NtUserEnumDisplaySettings(NULL, i, (DEVMODEW*)&data, 0);
+        if (Status == STATUS_INVALID_PARAMETER_2)
+            break;
+        TEST(Status == STATUS_SUCCESS);
+    }
+    TEST(i > 0);
 
     /* iModeNum out of range */
     Status = NtUserEnumDisplaySettings(NULL, 5000, (DEVMODEW*)&data, 0);
