@@ -1273,13 +1273,14 @@ BOOL FASTCALL
 co_WinPosDoWinPosChanging(PWND Window,
                           PWINDOWPOS WinPos,
                           PRECTL WindowRect,
-                          PRECTL ClientRect)
+                          PRECTL ClientRect,
+                          BOOL SendChanging)
 {
    ASSERT_REFS_CO(Window);
 
    /* Send WM_WINDOWPOSCHANGING message */
 
-   if (!(WinPos->flags & SWP_NOSENDCHANGING)
+   if (SendChanging && !(WinPos->flags & SWP_NOSENDCHANGING)
           && !((WinPos->flags & SWP_AGG_NOCLIENTCHANGE) && (WinPos->flags & SWP_SHOWWINDOW)))
    {
       TRACE("Sending WM_WINDOWPOSCHANGING to hwnd %p flags %04x.\n", UserHMGetHandle(Window), WinPos->flags);
@@ -1554,6 +1555,25 @@ WinPosInternalMoveWindow(PWND Window, INT MoveX, INT MoveY)
  */
 static
 BOOL FASTCALL
+WinPosIsFirstVisibleInBand(PWND Wnd)
+{
+   PWND Previous;
+   BOOL Topmost = (Wnd->ExStyle & WS_EX_TOPMOST) != 0;
+
+   for (Previous = Wnd->spwndPrev; Previous; Previous = Previous->spwndPrev)
+   {
+      if (((Previous->ExStyle & WS_EX_TOPMOST) != 0) != Topmost)
+         continue;
+
+      if (IntIsWindowVisible(Previous))
+         return FALSE;
+   }
+
+   return TRUE;
+}
+
+static
+BOOL FASTCALL
 WinPosFixupFlags(WINDOWPOS *WinPos, PWND Wnd)
 {
    PWND Parent;
@@ -1629,7 +1649,7 @@ WinPosFixupFlags(WINDOWPOS *WinPos, PWND Wnd)
          if ((Wnd->ExStyle & WS_EX_TOPMOST) != 0)
             WinPos->hwndInsertAfter = HWND_TOPMOST;
 
-         if (IntGetWindow(WinPos->hwnd, GW_HWNDFIRST) == WinPos->hwnd)
+         if (WinPosIsFirstVisibleInBand(Wnd))
          {
             WinPos->flags |= SWP_NOZORDER;
          }
@@ -1641,7 +1661,7 @@ WinPosFixupFlags(WINDOWPOS *WinPos, PWND Wnd)
       }
       else if (WinPos->hwndInsertAfter == HWND_TOPMOST)
       {
-          if ((Wnd->ExStyle & WS_EX_TOPMOST) && IntGetWindow(WinPos->hwnd, GW_HWNDFIRST) == WinPos->hwnd)
+          if ((Wnd->ExStyle & WS_EX_TOPMOST) && WinPosIsFirstVisibleInBand(Wnd))
              WinPos->flags |= SWP_NOZORDER;
       }
       else if (WinPos->hwndInsertAfter == HWND_NOTOPMOST)
@@ -1788,15 +1808,19 @@ static VOID FASTCALL IntImeWindowPosChanged(VOID)
 }
 
 /* x and y are always screen relative */
+static
 BOOLEAN FASTCALL
-co_WinPosSetWindowPos(
+co_WinPosSetWindowPosInternal(
    PWND Window,
    HWND WndInsertAfter,
    INT x,
    INT y,
    INT cx,
    INT cy,
-   UINT flags
+   UINT flags,
+   BOOL SendChanging,
+   BOOL ProcessOwnedPopups,
+   BOOL ForceZOrderNotification
    )
 {
    WINDOWPOS WinPos;
@@ -1857,7 +1881,11 @@ co_WinPosSetWindowPos(
       return FALSE;
    }
 
-   co_WinPosDoWinPosChanging(Window, &WinPos, &NewWindowRect, &NewClientRect);
+   co_WinPosDoWinPosChanging(Window,
+                             &WinPos,
+                             &NewWindowRect,
+                             &NewClientRect,
+                             SendChanging);
 
    /* Does the window still exist? */
    if (!IntIsWindow(WinPos.hwnd))
@@ -1874,8 +1902,14 @@ co_WinPosSetWindowPos(
       return TRUE;
    }
 
+   /* EndDeferWindowPos reports every requested pure z-order operation,
+      even when an earlier entry in the batch already established it. */
+   if (ForceZOrderNotification && !(flags & SWP_NOZORDER))
+      WinPos.flags &= ~SWP_NOZORDER;
+
    Ancestor = UserGetAncestor(Window, GA_PARENT);
-   if ( (WinPos.flags & (SWP_NOZORDER | SWP_HIDEWINDOW | SWP_SHOWWINDOW)) != SWP_NOZORDER &&
+   if ( ProcessOwnedPopups && !(WinPos.flags & SWP_NOOWNERZORDER) &&
+         (WinPos.flags & (SWP_NOZORDER | SWP_HIDEWINDOW | SWP_SHOWWINDOW)) != SWP_NOZORDER &&
          Ancestor && UserHMGetHandle(Ancestor) == IntGetDesktopWindow() )
    {
       WinPos.hwndInsertAfter = WinPosDoOwnedPopups(Window, WinPos.hwndInsertAfter);
@@ -2286,7 +2320,8 @@ co_WinPosSetWindowPos(
    }
 
    // Fix wine msg test_SetFocus, prevents sending WM_WINDOWPOSCHANGED.
-   if ( VisBefore == NULL &&
+   if ( !ForceZOrderNotification &&
+        VisBefore == NULL &&
         VisBeforeJustClient == NULL &&
        !(Window->ExStyle & WS_EX_TOPMOST) &&
         (WinPos.flags & SWP_AGG_STATUSFLAGS) == (SWP_AGG_NOPOSCHANGE & ~SWP_NOZORDER))
@@ -2381,6 +2416,213 @@ co_WinPosSetWindowPos(
    }
 
    return TRUE;
+}
+
+/* Apply a pure HWND_TOP operation to an owner and its popups as one group.
+   The changing notifications describe the complete transaction before the
+   z-order list is modified, which is how native preserves the owner group. */
+static
+BOOLEAN FASTCALL
+co_WinPosSetOwnedPopupZOrder(PWND Window, HWND WndInsertAfter, UINT flags)
+{
+   PWND Root, Wnd;
+   PWND DesktopWindow;
+   HWND *List, *Group, *Target;
+   WINDOWPOS WinPos;
+   ULONG GroupCount = 0, i, j;
+   BOOLEAN GapAfterGroup = FALSE;
+   BOOLEAN GroupIsContiguous = TRUE;
+   BOOLEAN SameOrder;
+   BOOLEAN ChangeWholeGroup;
+
+   if (WndInsertAfter != HWND_TOP ||
+       (Window->style & WS_CHILD) ||
+       (flags & (SWP_NOZORDER | SWP_NOOWNERZORDER |
+                 SWP_SHOWWINDOW | SWP_HIDEWINDOW)) ||
+       !(flags & SWP_NOACTIVATE) ||
+       (flags & (SWP_NOMOVE | SWP_NOSIZE)) !=
+       (SWP_NOMOVE | SWP_NOSIZE))
+   {
+      return FALSE;
+   }
+
+   Root = Window;
+   while (Root->spwndOwner)
+      Root = Root->spwndOwner;
+
+   DesktopWindow = UserGetDesktopWindow();
+   if (!DesktopWindow || Root->spwndParent != DesktopWindow)
+      return FALSE;
+
+   List = IntWinListChildren(DesktopWindow);
+   if (!List)
+      return FALSE;
+
+   for (i = 0; List[i]; i++)
+   {
+      Wnd = ValidateHwndNoErr(List[i]);
+      if (Wnd == Root || (Wnd && Wnd->spwndOwner == Root))
+         GroupCount++;
+   }
+
+   if (GroupCount < 2)
+   {
+      ExFreePoolWithTag(List, USERTAG_WINDOWLIST);
+      return FALSE;
+   }
+
+   Group = ExAllocatePoolWithTag(PagedPool,
+                                 GroupCount * 2 * sizeof(*Group),
+                                 USERTAG_SWP);
+   if (!Group)
+   {
+      ExFreePoolWithTag(List, USERTAG_WINDOWLIST);
+      return FALSE;
+   }
+   Target = Group + GroupCount;
+
+   j = 0;
+   for (i = 0; List[i]; i++)
+   {
+      Wnd = ValidateHwndNoErr(List[i]);
+      if (Wnd == Root || (Wnd && Wnd->spwndOwner == Root))
+      {
+         if (GapAfterGroup)
+            GroupIsContiguous = FALSE;
+         Group[j++] = List[i];
+      }
+      else if (j != 0 && j != GroupCount)
+      {
+         GapAfterGroup = TRUE;
+      }
+   }
+
+   j = 0;
+   if (Window != Root)
+      Target[j++] = UserHMGetHandle(Window);
+
+   for (i = 0; i < GroupCount; i++)
+   {
+      if (Group[i] != UserHMGetHandle(Window) &&
+          Group[i] != UserHMGetHandle(Root))
+      {
+         Target[j++] = Group[i];
+      }
+   }
+   Target[j++] = UserHMGetHandle(Root);
+   ASSERT(j == GroupCount);
+
+   for (i = 0; i < GroupCount; i++)
+   {
+      Wnd = ValidateHwndNoErr(Target[i]);
+      if (!Wnd)
+         continue;
+
+      WinPos.hwnd = Target[i];
+      WinPos.hwndInsertAfter = (i == 0 ||
+                                (Wnd->head.pti &&
+                                 Wnd->head.pti->MessageQueue &&
+                                 Wnd->head.pti->MessageQueue->spwndActive == Wnd)) ?
+                               HWND_TOP : Target[i - 1];
+      WinPos.x = Wnd->rcWindow.left;
+      WinPos.y = Wnd->rcWindow.top;
+      WinPos.cx = Wnd->rcWindow.right - Wnd->rcWindow.left;
+      WinPos.cy = Wnd->rcWindow.bottom - Wnd->rcWindow.top;
+      WinPos.flags = flags;
+      co_IntSendMessage(Target[i], WM_WINDOWPOSCHANGING, 0, (LPARAM)&WinPos);
+   }
+
+   SameOrder = GroupIsContiguous;
+   for (i = 0; SameOrder && i < GroupCount; i++)
+      SameOrder = (Group[i] == Target[i]);
+
+   ChangeWholeGroup = !SameOrder;
+   if (Window != Root &&
+       Window->head.pti &&
+       Window->head.pti->MessageQueue &&
+       Window->head.pti->MessageQueue->spwndActive == Window)
+   {
+      ChangeWholeGroup = FALSE;
+   }
+
+   /* Link bottom-to-top so the final list has the requested popup first,
+      followed by the other popups and finally their owner. */
+   for (i = GroupCount; i > 0; i--)
+   {
+      Wnd = ValidateHwndNoErr(Target[i - 1]);
+      if (Wnd)
+         IntLinkHwnd(Wnd, HWND_TOP);
+   }
+
+   for (i = 0; i < GroupCount; i++)
+   {
+      BOOLEAN Changed = ChangeWholeGroup;
+
+      if (!Changed && !SameOrder &&
+          Window != Root && Target[i] == UserHMGetHandle(Window))
+      {
+         Changed = TRUE;
+      }
+
+      if (!Changed)
+         continue;
+
+      Wnd = ValidateHwndNoErr(Target[i]);
+      if (!Wnd)
+         continue;
+
+      WinPos.hwnd = Target[i];
+      WinPos.hwndInsertAfter = (i == 0 ||
+                                (Wnd->head.pti &&
+                                 Wnd->head.pti->MessageQueue &&
+                                 Wnd->head.pti->MessageQueue->spwndActive == Wnd)) ?
+                               HWND_TOP : Target[i - 1];
+      WinPos.x = Wnd->rcWindow.left;
+      WinPos.y = Wnd->rcWindow.top;
+      WinPos.cx = Wnd->rcWindow.right - Wnd->rcWindow.left;
+      WinPos.cy = Wnd->rcWindow.bottom - Wnd->rcWindow.top;
+      WinPos.flags = flags | SWP_NOCLIENTMOVE | SWP_NOCLIENTSIZE;
+      co_IntSendMessageNoWait(Target[i],
+                              WM_WINDOWPOSCHANGED,
+                              0,
+                              (LPARAM)&WinPos);
+      DceResetActiveDCEs(Wnd);
+      IntNotifyWinEvent(EVENT_OBJECT_REORDER,
+                        Wnd,
+                        OBJID_WINDOW,
+                        CHILDID_SELF,
+                        WEF_SETBYWNDPTI);
+   }
+
+   ExFreePoolWithTag(Group, USERTAG_SWP);
+   ExFreePoolWithTag(List, USERTAG_WINDOWLIST);
+   return TRUE;
+}
+
+/* x and y are always screen relative */
+BOOLEAN FASTCALL
+co_WinPosSetWindowPos(
+   PWND Window,
+   HWND WndInsertAfter,
+   INT x,
+   INT y,
+   INT cx,
+   INT cy,
+   UINT flags)
+{
+   if (co_WinPosSetOwnedPopupZOrder(Window, WndInsertAfter, flags))
+      return TRUE;
+
+   return co_WinPosSetWindowPosInternal(Window,
+                                        WndInsertAfter,
+                                        x,
+                                        y,
+                                        cx,
+                                        cy,
+                                        flags,
+                                        TRUE,
+                                        TRUE,
+                                        FALSE);
 }
 
 LRESULT FASTCALL
@@ -2754,13 +2996,17 @@ co_WinPosShowWindow(PWND Wnd, INT Cmd)
 
       case SW_SHOWNA:
          Swp |= SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOSIZE | SWP_NOMOVE;
-         if (style & WS_CHILD && !(Wnd->ExStyle & WS_EX_MDICHILD)) Swp |= SWP_NOZORDER;
+         if ((style & (WS_CHILD | WS_POPUP)) == WS_CHILD &&
+             !(Wnd->ExStyle & WS_EX_MDICHILD))
+            Swp |= SWP_NOZORDER;
          break;
       case SW_SHOW:
          if (WasVisible) return(TRUE); // Nothing to do!
          Swp |= SWP_SHOWWINDOW | SWP_NOSIZE | SWP_NOMOVE;
          /* Don't activate the topmost window. */
-         if (style & WS_CHILD && !(Wnd->ExStyle & WS_EX_MDICHILD)) Swp |= SWP_NOACTIVATE | SWP_NOZORDER;
+         if ((style & (WS_CHILD | WS_POPUP)) == WS_CHILD &&
+             !(Wnd->ExStyle & WS_EX_MDICHILD))
+            Swp |= SWP_NOACTIVATE | SWP_NOZORDER;
          break;
 
       case SW_SHOWNOACTIVATE:
@@ -2784,7 +3030,7 @@ co_WinPosShowWindow(PWND Wnd, INT Cmd)
             }
             Swp |= SWP_NOSIZE | SWP_NOMOVE;
          }
-         if ( style & WS_CHILD &&
+         if ((style & (WS_CHILD | WS_POPUP)) == WS_CHILD &&
              !(Wnd->ExStyle & WS_EX_MDICHILD) &&
              !(Swp & SWP_STATECHANGED))
             Swp |= SWP_NOACTIVATE | SWP_NOZORDER;
@@ -2808,7 +3054,7 @@ co_WinPosShowWindow(PWND Wnd, INT Cmd)
    }
 
    /* We can't activate a child window */
-   if ((Wnd->style & WS_CHILD) &&
+   if ((Wnd->style & (WS_CHILD | WS_POPUP)) == WS_CHILD &&
        !(Wnd->ExStyle & WS_EX_MDICHILD) &&
        Cmd != SW_SHOWNA)
    {
@@ -3218,10 +3464,38 @@ BOOL FASTCALL IntEndDeferWindowPosEx(HDWP hdwp, BOOL bAsync)
        return FALSE;
     }
 
+    /* Native batches the changing phase for all windows before applying any
+       of the requested positions. This also lets each window procedure edit
+       its stored WINDOWPOS before the commit phase. */
+    if (!bAsync)
+    {
+        for (i = 0, winpos = pDWP->acvr; i < pDWP->ccvr; i++, winpos++)
+        {
+            PWND pwnd;
+            USER_REFERENCE_ENTRY Ref;
+            RECTL WindowRect, ClientRect;
+
+            pwnd = ValidateHwndNoErr(winpos->pos.hwnd);
+            if (!pwnd)
+                continue;
+
+            UserRefObjectCo(pwnd, &Ref);
+            co_WinPosDoWinPosChanging(pwnd,
+                                      &winpos->pos,
+                                      &WindowRect,
+                                      &ClientRect,
+                                      TRUE);
+            UserDerefObjectCo(pwnd);
+        }
+    }
+
     for (i = 0, winpos = pDWP->acvr; res && i < pDWP->ccvr; i++, winpos++)
     {
         PWND pwnd;
         USER_REFERENCE_ENTRY Ref;
+        ULONG LastError;
+        BOOL NoOp;
+        BOOL ForceZOrderNotification;
 
         TRACE("hwnd %p, after %p, %d,%d (%dx%d), flags %08x\n",
                winpos->pos.hwnd, winpos->pos.hwndInsertAfter, winpos->pos.x, winpos->pos.y,
@@ -3232,6 +3506,12 @@ BOOL FASTCALL IntEndDeferWindowPosEx(HDWP hdwp, BOOL bAsync)
            continue;
 
         UserRefObjectCo(pwnd, &Ref);
+        NoOp = ((winpos->pos.flags & (SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER)) ==
+                (SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER));
+        ForceZOrderNotification =
+            ((winpos->pos.flags & (SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER)) ==
+             (SWP_NOMOVE | SWP_NOSIZE));
+        LastError = EngGetLastError();
 
         if (bAsync)
         {
@@ -3250,17 +3530,24 @@ BOOL FASTCALL IntEndDeferWindowPosEx(HDWP hdwp, BOOL bAsync)
            }
         }
         else
-           res = co_WinPosSetWindowPos( pwnd,
-                                        winpos->pos.hwndInsertAfter,
-                                        winpos->pos.x,
-                                        winpos->pos.y,
-                                        winpos->pos.cx,
-                                        winpos->pos.cy,
-                                        winpos->pos.flags);
+           res = co_WinPosSetWindowPosInternal(pwnd,
+                                               winpos->pos.hwndInsertAfter,
+                                               winpos->pos.x,
+                                               winpos->pos.y,
+                                               winpos->pos.cx,
+                                               winpos->pos.cy,
+                                               winpos->pos.flags,
+                                               FALSE,
+                                               TRUE,
+                                               ForceZOrderNotification);
 
-        // Hack to pass tests.... Must have some work to do so clear the error.
-        if (res && (winpos->pos.flags & (SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER)) == SWP_NOZORDER )
-           EngSetLastError(ERROR_SUCCESS);
+        if (res && NoOp && pDWP->bCountWasZero)
+            EngSetLastError(ERROR_SUCCESS);
+        else if (res && NoOp)
+            EngSetLastError(LastError);
+        else if (res &&
+                 (winpos->pos.flags & (SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER)) == SWP_NOZORDER)
+            EngSetLastError(ERROR_SUCCESS);
 
         UserDerefObjectCo(pwnd);
     }

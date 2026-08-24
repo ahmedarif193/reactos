@@ -494,9 +494,31 @@ DefWndGetIcon(PWND pWnd, WPARAM wParam, LPARAM lParam)
 PWND FASTCALL
 DWP_GetEnabledPopup(PWND pWnd)
 {
-    PWND pwndNode1;
+    PWND pwndNode1, pwndActive;
     PTHREADINFO pti = pWnd->head.pti, ptiNode;
     BOOL bFoundNullNode = FALSE;
+
+    /*
+     * Prefer the last active popup in the owner chain.  The z-order alone is
+     * not sufficient here: showing another owned window with
+     * SW_SHOWNOACTIVATE must not replace the popup selected by
+     * GW_ENABLEDPOPUP.  If a nested active popup is disabled or hidden, its
+     * first visible and enabled owner is the enabled popup.
+     */
+    pwndActive = pWnd->spwndLastActive;
+    while (pwndActive && pwndActive != pWnd)
+    {
+        ptiNode = pwndActive->head.pti;
+        if (((!(pti->TIF_flags & TIF_16BIT) && ptiNode->MessageQueue == pti->MessageQueue) ||
+             ((pti->TIF_flags & TIF_16BIT) && ptiNode == pti)) &&
+            (pwndActive->style & WS_VISIBLE) &&
+            !(pwndActive->style & WS_DISABLED))
+        {
+            return pwndActive;
+        }
+
+        pwndActive = pwndActive->spwndOwner;
+    }
 
     for (pwndNode1 = pWnd->spwndNext; pwndNode1 != pWnd; )
     {

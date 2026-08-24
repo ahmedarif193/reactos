@@ -538,8 +538,7 @@ co_IntSendActivateMessages(PWND WindowPrev, PWND Window, BOOL MouseActivate, BOO
          {
             if (!Async || pti->MessageQueue == gpqForeground)
             {
-               UINT flags = SWP_NOSIZE | SWP_NOMOVE;
-               if (Window == pwndTemp) flags |= SWP_NOACTIVATE;
+               UINT flags = SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE;
                //ERR("co_IntSendActivateMessages SetWindowPos! Async %d pti Q == FGQ %d\n",Async,pti->MessageQueue == gpqForeground);
                co_WinPosSetWindowPos(Window, HWND_TOP, 0, 0, 0, 0, flags);
             }

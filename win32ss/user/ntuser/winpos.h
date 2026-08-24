@@ -22,6 +22,7 @@ typedef struct _SMWP
   HEAD head;
   UINT bShellNotify:1;
   UINT bHandle:1;
+  UINT bCountWasZero:1;
   INT  ccvr;
   INT  ccvrAlloc;
   PCVR acvr;
@@ -71,4 +72,3 @@ BOOL FASTCALL IntClientToScreen(PWND,LPPOINT);
 BOOL FASTCALL IntGetWindowRect(PWND,RECTL*);
 BOOL UserHasWindowEdge(DWORD,DWORD);
 VOID UserGetWindowBorders(DWORD,DWORD,SIZE*,BOOL);
-

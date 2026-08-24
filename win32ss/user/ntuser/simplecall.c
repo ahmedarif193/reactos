@@ -240,6 +240,7 @@ NtUserCallOneParam(
 
             RtlZeroMemory(psmwp->acvr, count * sizeof(CVR));
             psmwp->bHandle = TRUE;
+            psmwp->bCountWasZero = ((INT)Param == 0);
             psmwp->ccvr = 0;          // actualCount
             psmwp->ccvrAlloc = count; // suggestedCount
             Result = (DWORD_PTR)hDwp;
