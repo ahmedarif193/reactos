@@ -1822,6 +1822,7 @@ USBPORT_SignalWorkerThread(IN PDEVICE_OBJECT FdoDevice)
 
 typedef struct _USBPORT_TT_CLEAR_CONTEXT
 {
+    LIST_ENTRY Link;
     PIO_WORKITEM WorkItem;
     PUSBPORT_ENDPOINT Endpoint;
     PUSBPORT_DEVICE_HANDLE HubDeviceHandle;
@@ -1998,47 +1999,77 @@ NTAPI
 USBPORT_TtClearWorker(IN PDEVICE_OBJECT FdoDevice,
                       IN PVOID ContextPointer)
 {
-    PUSBPORT_TT_CLEAR_CONTEXT Context = ContextPointer;
+    PUSBPORT_TT_CLEAR_CONTEXT Context;
+    PUSBPORT_TT_CLEAR_CONTEXT WorkerContext = ContextPointer;
     PUSBPORT_DEVICE_EXTENSION FdoExtension;
     PUSBPORT_REGISTRATION_PACKET Packet;
+    PUSBPORT_TT_CLEAR_RUNDOWN Rundown;
     PUSBPORT_ENDPOINT Endpoint;
+    PIO_WORKITEM WorkerItem;
+    PLIST_ENTRY Entry;
     ULONG EndpointStatus;
     NTSTATUS Status;
     KIRQL OldIrql;
 
     FdoExtension = FdoDevice->DeviceExtension;
     Packet = &FdoExtension->MiniPortInterface->Packet;
-    Endpoint = Context->Endpoint;
+    Rundown = FdoExtension->Aux.TtClearRundown;
+    ASSERT(Rundown != NULL);
+    WorkerItem = WorkerContext->WorkItem;
+    WorkerContext->WorkItem = NULL;
 
-    Status = USBPORT_SendClearTtBuffer(FdoDevice, Context);
-    if (!NT_SUCCESS(Status) && Status != STATUS_DEVICE_NOT_CONNECTED)
+    for (;;)
     {
-        DPRINT1("USBPORT: CLEAR_TT_BUFFER failed endpoint=%p hub=%u tt=%u status=%08lx\n",
-                Endpoint,
-                Endpoint->EndpointProperties.TtHubAddr,
-                Endpoint->TtExtension ? Endpoint->TtExtension->TtNumber : 0,
-                Status);
+        KeAcquireSpinLock(&Rundown->QueueLock, &OldIrql);
+        if (IsListEmpty(&Rundown->Queue))
+        {
+            Rundown->WorkerActive = FALSE;
+            KeReleaseSpinLock(&Rundown->QueueLock, OldIrql);
+            break;
+        }
+
+        Entry = RemoveHeadList(&Rundown->Queue);
+        KeReleaseSpinLock(&Rundown->QueueLock, OldIrql);
+        Context = CONTAINING_RECORD(Entry, USBPORT_TT_CLEAR_CONTEXT, Link);
+        Endpoint = Context->Endpoint;
+
+        /* Only the first context's work item runs this queue. */
+        if (Context->WorkItem)
+            IoFreeWorkItem(Context->WorkItem);
+
+        Status = USBPORT_SendClearTtBuffer(FdoDevice, Context);
+        if (!NT_SUCCESS(Status) && Status != STATUS_DEVICE_NOT_CONNECTED)
+        {
+            DPRINT1("USBPORT: CLEAR_TT_BUFFER failed endpoint=%p hub=%u tt=%u status=%08lx\n",
+                    Endpoint,
+                    Endpoint->EndpointProperties.TtHubAddr,
+                    Endpoint->TtExtension ? Endpoint->TtExtension->TtNumber : 0,
+                    Status);
+        }
+
+        /* Release the HCD queue even if the hub request failed. */
+        KeAcquireSpinLock(&FdoExtension->MiniportSpinLock, &OldIrql);
+        EndpointStatus = Packet->GetEndpointStatus(FdoExtension->MiniPortExt,
+                                                   Endpoint + 1);
+        if (EndpointStatus & USBPORT_ENDPOINT_TT_BUFFER_DIRTY)
+        {
+            Packet->SetEndpointStatus(FdoExtension->MiniPortExt,
+                                      Endpoint + 1,
+                                      USBPORT_ENDPOINT_RUN);
+        }
+        KeReleaseSpinLock(&FdoExtension->MiniportSpinLock, OldIrql);
+
+        InterlockedDecrement(&Context->HubDeviceHandle->DeviceHandleLock);
+        USBPORT_InvalidateEndpointHandler(FdoDevice,
+                                          Endpoint,
+                                          INVALIDATE_ENDPOINT_WORKER_THREAD);
+        InterlockedDecrement(&Endpoint->LockCounter);
+        ExFreePoolWithTag(Context, USB_PORT_TAG);
+        USBPORT_ReleaseTtClearRundown(FdoExtension);
     }
 
-    /* Linux releases the HCD queue even if the hub request failed. */
-    KeAcquireSpinLock(&FdoExtension->MiniportSpinLock, &OldIrql);
-    EndpointStatus = Packet->GetEndpointStatus(FdoExtension->MiniPortExt,
-                                               Endpoint + 1);
-    if (EndpointStatus & USBPORT_ENDPOINT_TT_BUFFER_DIRTY)
-    {
-        Packet->SetEndpointStatus(FdoExtension->MiniPortExt,
-                                  Endpoint + 1,
-                                  USBPORT_ENDPOINT_RUN);
-    }
-    KeReleaseSpinLock(&FdoExtension->MiniportSpinLock, OldIrql);
-
-    InterlockedDecrement(&Context->HubDeviceHandle->DeviceHandleLock);
-    USBPORT_InvalidateEndpointHandler(FdoDevice,
-                                      Endpoint,
-                                      INVALIDATE_ENDPOINT_WORKER_THREAD);
-    InterlockedDecrement(&Endpoint->LockCounter);
-    IoFreeWorkItem(Context->WorkItem);
-    ExFreePoolWithTag(Context, USB_PORT_TAG);
+    IoFreeWorkItem(WorkerItem);
+    /* Keep rundown storage alive until the queue worker has fully returned. */
     USBPORT_ReleaseTtClearRundown(FdoExtension);
 }
 
@@ -2049,7 +2080,9 @@ USBPORT_QueueTtClear(IN PUSBPORT_ENDPOINT Endpoint)
     PUSBPORT_TT_CLEAR_CONTEXT Context;
     PUSBPORT_DEVICE_EXTENSION FdoExtension;
     PUSBPORT_DEVICE_HANDLE HubDeviceHandle;
+    PUSBPORT_TT_CLEAR_RUNDOWN Rundown;
     PDEVICE_OBJECT FdoDevice;
+    BOOLEAN QueueWorker = FALSE;
 
     ASSERT(KeGetCurrentIrql() == DISPATCH_LEVEL);
 
@@ -2057,6 +2090,7 @@ USBPORT_QueueTtClear(IN PUSBPORT_ENDPOINT Endpoint)
     FdoExtension = FdoDevice->DeviceExtension;
     if (!USBPORT_AcquireTtClearRundown(FdoExtension))
         return FALSE;
+    Rundown = FdoExtension->Aux.TtClearRundown;
 
     Context = ExAllocatePoolWithTag(NonPagedPool,
                                     sizeof(*Context),
@@ -2102,10 +2136,23 @@ USBPORT_QueueTtClear(IN PUSBPORT_ENDPOINT Endpoint)
     }
 
     Context->Endpoint = Endpoint;
-    IoQueueWorkItem(Context->WorkItem,
-                    USBPORT_TtClearWorker,
-                    DelayedWorkQueue,
-                    Context);
+    KeAcquireSpinLockAtDpcLevel(&Rundown->QueueLock);
+    InsertTailList(&Rundown->Queue, &Context->Link);
+    if (!Rundown->WorkerActive)
+    {
+        Rundown->WorkerActive = TRUE;
+        InterlockedIncrement(&Rundown->State);
+        QueueWorker = TRUE;
+    }
+    KeReleaseSpinLockFromDpcLevel(&Rundown->QueueLock);
+
+    if (QueueWorker)
+    {
+        IoQueueWorkItem(Context->WorkItem,
+                        USBPORT_TtClearWorker,
+                        DelayedWorkQueue,
+                        Context);
+    }
     return TRUE;
 }
 
