@@ -19,6 +19,7 @@ DBG_DEFAULT_CHANNEL(UserSysparams);
 
 SPIVALUES gspv;
 BOOL gbSpiInitialized = FALSE;
+static BOOL gbSpiChangeNotificationActive = FALSE;
 BOOL g_PaintDesktopVersion = FALSE;
 BOOL g_bWindowSnapEnabled = TRUE;
 
@@ -936,13 +937,75 @@ SpiSetEarlyWallpaper(
 }
 #endif
 
+typedef struct _SPI_NC_METRIC_SNAPSHOT
+{
+    INT cxBorder;
+    INT cyBorder;
+    INT cxDlgFrame;
+    INT cyDlgFrame;
+    INT cxFrame;
+    INT cyFrame;
+    INT cyCaption;
+    INT cySmCaption;
+    INT cyMenu;
+    INT cxVScroll;
+    INT cyHScroll;
+} SPI_NC_METRIC_SNAPSHOT, *PSPI_NC_METRIC_SNAPSHOT;
+
+static VOID
+SpiCaptureNCMetrics(PSPI_NC_METRIC_SNAPSHOT Metrics)
+{
+    Metrics->cxBorder = UserGetSystemMetrics(SM_CXBORDER);
+    Metrics->cyBorder = UserGetSystemMetrics(SM_CYBORDER);
+    Metrics->cxDlgFrame = UserGetSystemMetrics(SM_CXDLGFRAME);
+    Metrics->cyDlgFrame = UserGetSystemMetrics(SM_CYDLGFRAME);
+    Metrics->cxFrame = UserGetSystemMetrics(SM_CXFRAME);
+    Metrics->cyFrame = UserGetSystemMetrics(SM_CYFRAME);
+    Metrics->cyCaption = UserGetSystemMetrics(SM_CYCAPTION);
+    Metrics->cySmCaption = UserGetSystemMetrics(SM_CYSMCAPTION);
+    Metrics->cyMenu = UserGetSystemMetrics(SM_CYMENU);
+    Metrics->cxVScroll = UserGetSystemMetrics(SM_CXVSCROLL);
+    Metrics->cyHScroll = UserGetSystemMetrics(SM_CYHSCROLL);
+}
+
+static VOID
+SpiGetWindowBorders(DWORD Style,
+                    DWORD ExStyle,
+                    const SPI_NC_METRIC_SNAPSHOT *Metrics,
+                    PSIZE Size)
+{
+    DWORD Border = 0;
+
+    if (UserHasWindowEdge(Style, ExStyle))
+        Border += 2;
+    else if ((ExStyle & (WS_EX_STATICEDGE | WS_EX_DLGMODALFRAME)) == WS_EX_STATICEDGE)
+        Border++;
+    if ((Style & WS_CAPTION) || (ExStyle & WS_EX_DLGMODALFRAME))
+        Border++;
+
+    Size->cx = Border;
+    Size->cy = Border;
+    if ((Style & WS_THICKFRAME) && !(Style & WS_MINIMIZE))
+    {
+        Size->cx += Metrics->cxFrame - Metrics->cxDlgFrame;
+        Size->cy += Metrics->cyFrame - Metrics->cyDlgFrame;
+    }
+    Size->cx *= Metrics->cxBorder;
+    Size->cy *= Metrics->cyBorder;
+}
+
 static BOOL
-SpiNotifyNCMetricsChanged(VOID)
+SpiNotifyNCMetricsChanged(const SPI_NC_METRIC_SNAPSHOT *OldMetrics)
 {
     PWND pwndDesktop, pwndCurrent;
     HWND *ahwnd;
     USER_REFERENCE_ENTRY Ref;
+    SPI_NC_METRIC_SNAPSHOT NewMetrics;
+    SIZE OldBorder, NewBorder;
+    LONG DeltaX, DeltaY;
     int i;
+
+    SpiCaptureNCMetrics(&NewMetrics);
 
     pwndDesktop = UserGetDesktopWindow();
     ASSERT(pwndDesktop);
@@ -957,10 +1020,49 @@ SpiNotifyNCMetricsChanged(VOID)
         if(!pwndCurrent)
             continue;
 
+        SpiGetWindowBorders(pwndCurrent->style,
+                            pwndCurrent->ExStyle,
+                            OldMetrics,
+                            &OldBorder);
+        SpiGetWindowBorders(pwndCurrent->style,
+                            pwndCurrent->ExStyle,
+                            &NewMetrics,
+                            &NewBorder);
+
+        DeltaX = 2 * (NewBorder.cx - OldBorder.cx);
+        DeltaY = 2 * (NewBorder.cy - OldBorder.cy);
+
+        if ((pwndCurrent->style & WS_CAPTION) == WS_CAPTION)
+        {
+            DeltaY += (pwndCurrent->ExStyle & WS_EX_TOOLWINDOW) ?
+                      NewMetrics.cySmCaption - OldMetrics->cySmCaption :
+                      NewMetrics.cyCaption - OldMetrics->cyCaption;
+        }
+        if (HAS_MENU(pwndCurrent, pwndCurrent->style) &&
+            !(pwndCurrent->style & WS_MINIMIZE))
+        {
+            DeltaY += NewMetrics.cyMenu - OldMetrics->cyMenu;
+        }
+        if (pwndCurrent->ExStyle & WS_EX_CLIENTEDGE)
+        {
+            DeltaX += 4 * (NewMetrics.cxBorder - OldMetrics->cxBorder);
+            DeltaY += 4 * (NewMetrics.cyBorder - OldMetrics->cyBorder);
+        }
+        if ((pwndCurrent->style & WS_VSCROLL) &&
+            (pwndCurrent->state & WNDS_HASVERTICALSCROOLLBAR))
+        {
+            DeltaX += NewMetrics.cxVScroll - OldMetrics->cxVScroll;
+        }
+        if ((pwndCurrent->style & WS_HSCROLL) &&
+            (pwndCurrent->state & WNDS_HASHORIZONTALSCROLLBAR))
+        {
+            DeltaY += NewMetrics.cyHScroll - OldMetrics->cyHScroll;
+        }
+
         UserRefObjectCo(pwndCurrent, &Ref);
         co_WinPosSetWindowPos(pwndCurrent, 0, pwndCurrent->rcWindow.left,pwndCurrent->rcWindow.top,
-                                              pwndCurrent->rcWindow.right-pwndCurrent->rcWindow.left
-                                              ,pwndCurrent->rcWindow.bottom - pwndCurrent->rcWindow.top,
+                                              pwndCurrent->rcWindow.right-pwndCurrent->rcWindow.left + DeltaX,
+                                              pwndCurrent->rcWindow.bottom - pwndCurrent->rcWindow.top + DeltaY,
                               SWP_FRAMECHANGED|SWP_NOACTIVATE|SWP_NOCOPYBITS|
                               SWP_NOMOVE|SWP_NOZORDER|SWP_NOREDRAW);
         UserDerefObjectCo(pwndCurrent);
@@ -1154,9 +1256,6 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
                 SpiStoreFont(L"StatusFont", &gspv.ncm.lfStatusFont);
                 SpiStoreFont(L"MessageFont", &gspv.ncm.lfMessageFont);
             }
-
-            if(!SpiNotifyNCMetricsChanged())
-                return 0;
 
             return (UINT_PTR)KEY_METRIC;
         }
@@ -2286,6 +2385,8 @@ UserSystemParametersInfo(
 {
     ULONG_PTR ulResult;
     PPROCESSINFO ppi = PsGetCurrentProcessWin32Process();
+    SPI_NC_METRIC_SNAPSHOT OldNCMetrics;
+    BOOL ChangeNotificationWasActive;
 
     ASSERT(ppi);
 
@@ -2310,6 +2411,9 @@ UserSystemParametersInfo(
         return FALSE;
     }
 
+    if (uiAction == SPI_SETNONCLIENTMETRICS)
+        SpiCaptureNCMetrics(&OldNCMetrics);
+
     /* Do the actual operation */
     ulResult = SpiGetSet(uiAction, uiParam, pvParam, fWinIni);
 
@@ -2321,9 +2425,28 @@ UserSystemParametersInfo(
         /* Update system metrics */
         InitMetrics();
 
-        /* Send notification to toplevel windows, if requested */
-        if (fWinIni & SPIF_SENDCHANGE)
+        /* Recalculate non-client areas only after the new metrics are live. */
+        if (uiAction == SPI_SETNONCLIENTMETRICS)
         {
+            /* Relayout sends messages to every top-level window. A recipient
+               can update another setting while handling those messages, so
+               cover the relayout as well as the final broadcast. */
+            ChangeNotificationWasActive = gbSpiChangeNotificationActive;
+            gbSpiChangeNotificationActive = TRUE;
+            if (!SpiNotifyNCMetricsChanged(&OldNCMetrics))
+            {
+                gbSpiChangeNotificationActive = ChangeNotificationWasActive;
+                return FALSE;
+            }
+            gbSpiChangeNotificationActive = ChangeNotificationWasActive;
+        }
+
+        /* Send notification to toplevel windows, if requested */
+        if ((fWinIni & SPIF_SENDCHANGE) && !gbSpiChangeNotificationActive)
+        {
+            /* A recipient can update another setting while processing this
+               message. Do not recursively broadcast that nested change. */
+            gbSpiChangeNotificationActive = TRUE;
             /* Send WM_SETTINGCHANGE to all toplevel windows */
             co_IntSendMessageTimeout(HWND_BROADCAST,
                                      WM_SETTINGCHANGE,
@@ -2332,6 +2455,7 @@ UserSystemParametersInfo(
                                      SMTO_NORMAL,
                                      100,
                                      &ulResult);
+            gbSpiChangeNotificationActive = FALSE;
         }
         ulResult = 1;
     }
