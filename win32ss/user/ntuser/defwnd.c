@@ -684,50 +684,104 @@ IntDefWindowProc(
                                                          buf,
                                                          Wnd->strName.Length)))
                 {
-                    lResult = (LRESULT) (Wnd->strName.Length / sizeof(WCHAR));
+                    lResult = Ansi ? len : Wnd->strName.Length / sizeof(WCHAR);
                 }
             }
 
             break;
       }
 
-      case WM_GETTEXT: // FIXME: Handle Ansi
+      case WM_GETTEXT:
       {
             PWSTR buf = NULL;
-            PWSTR outbuf = (PWSTR)lParam;
 
             if (Wnd != NULL && wParam != 0)
             {
                 if (Wnd->strName.Buffer != NULL)
                     buf = Wnd->strName.Buffer;
-                else
-                    outbuf[0] = L'\0';
 
-                if (buf != NULL)
+                if (Ansi)
                 {
-                    if (Wnd->strName.Length != 0)
+                    PCHAR outbuf = (PCHAR)lParam;
+                    ULONG Length = 0;
+
+                    _SEH2_TRY
+                    {
+                        if (buf && Wnd->strName.Length)
+                        {
+                            RtlUnicodeToMultiByteN(outbuf,
+                                                   wParam - 1,
+                                                   &Length,
+                                                   buf,
+                                                   Wnd->strName.Length);
+                        }
+                        outbuf[Length] = ANSI_NULL;
+                    }
+                    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                    {
+                        Length = 0;
+                    }
+                    _SEH2_END;
+                    lResult = Length;
+                }
+                else
+                {
+                    PWSTR outbuf = (PWSTR)lParam;
+
+                    if (buf && Wnd->strName.Length)
                     {
                         lResult = min(Wnd->strName.Length / sizeof(WCHAR), wParam - 1);
-                        RtlCopyMemory(outbuf,
-                                      buf,
-                                      lResult * sizeof(WCHAR));
-                        outbuf[lResult] = L'\0';
+                        RtlCopyMemory(outbuf, buf, lResult * sizeof(WCHAR));
+                        outbuf[lResult] = UNICODE_NULL;
                     }
                     else
-                        outbuf[0] = L'\0';
+                    {
+                        outbuf[0] = UNICODE_NULL;
+                    }
                 }
             }
             break;
       }
 
-      case WM_SETTEXT: // FIXME: Handle Ansi
+      case WM_SETTEXT:
       {
-            DefSetText(Wnd, (PCWSTR)lParam);
+            UNICODE_STRING UnicodeString = {0};
+            ANSI_STRING AnsiString;
+            NTSTATUS Status = STATUS_SUCCESS;
+            PCWSTR Text = (PCWSTR)lParam;
+
+            if (Ansi)
+            {
+                _SEH2_TRY
+                {
+                    RtlInitAnsiString(&AnsiString, (PCSZ)lParam);
+                    Status = RtlAnsiStringToUnicodeString(&UnicodeString,
+                                                          &AnsiString,
+                                                          TRUE);
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+                if (!NT_SUCCESS(Status))
+                {
+                    SetLastNtError(Status);
+                    break;
+                }
+                Text = UnicodeString.Buffer;
+            }
+
+            lResult = DefSetText(Wnd, Text);
+            if (UnicodeString.Buffer)
+                RtlFreeUnicodeString(&UnicodeString);
+
+            if (!lResult)
+                break;
 
             if ((Wnd->style & WS_CAPTION) == WS_CAPTION)
                 UserPaintCaption(Wnd, DC_TEXT);
             IntNotifyWinEvent(EVENT_OBJECT_NAMECHANGE, Wnd, OBJID_WINDOW, CHILDID_SELF, 0);
-            lResult = 1;
             break;
       }
 

@@ -730,37 +730,53 @@ User32CallHookProcFromKernel(PVOID Arguments, ULONG ArgumentLength)
     case WH_CALLWNDPROC:
     {
       PCWP_Struct pcwps = (PCWP_Struct)Common;
-      CWPSTRUCT *pCWPT = &pcwps->cwps;
-      pCWP = HeapAlloc(GetProcessHeap(), 0, Common->lParamSize + sizeof(CWPSTRUCT));
-      RtlCopyMemory(pCWP, pCWPT, sizeof(CWPSTRUCT));
+      DWORD WParamData = 0;
+
+      pCWP = &pcwps->cwps;
       //ERR("WH_CALLWNDPROC: Code %d, wParam %d hwnd %p msg %d\n",Common->Code,Common->wParam,pCWP->hwnd,pCWP->message);
       /* If more memory is reserved, then lParam is a pointer.
        * Size of the buffer is stocked in the lParam member, and its content
        * is at the end of the argument buffer */
       if ( Common->lParamSize )
       {
-         pCWP->lParam = (LPARAM)((PCHAR)pCWP + sizeof(CWPSTRUCT));
-         RtlCopyMemory( (PCHAR)pCWP + sizeof(CWPSTRUCT), &pcwps->Extra, Common->lParamSize );
+         pCWP->lParam = (LPARAM)((PCHAR)pcwps + HOOK_PAYLOAD_OFFSET(CWP_Struct));
+         if (pCWP->message == WM_COPYDATA)
+         {
+            COPYDATASTRUCT *CopyData = (COPYDATASTRUCT *)pCWP->lParam;
+            if (CopyData->lpData)
+               CopyData->lpData = CopyData + 1;
+         }
       }
+      if (!pCWP->wParam && (pCWP->message == EM_GETSEL ||
+                            pCWP->message == SBM_GETRANGE ||
+                            pCWP->message == CB_GETEDITSEL))
+         pCWP->wParam = (WPARAM)&WParamData;
       Result = Proc(Common->Code, Common->wParam, (LPARAM) pCWP);
-      HeapFree(GetProcessHeap(), 0, pCWP);
     }
       break;
     case WH_CALLWNDPROCRET:
       /* Almost the same as WH_CALLWNDPROC */
     {
       PCWPR_Struct pcwprs = (PCWPR_Struct)Common;
-      CWPRETSTRUCT *pCWPRT = &pcwprs->cwprs;
-      pCWPR = HeapAlloc(GetProcessHeap(), 0, Common->lParamSize + sizeof(CWPRETSTRUCT));
-      RtlCopyMemory(pCWPR, pCWPRT, sizeof(CWPRETSTRUCT));
-      //ERR("WH_CALLWNDPROCRET: Code %d, wParam %d hwnd %p msg %d\n",Common->Code,Common->wParam,pCWPRT->hwnd,pCWPRT->message);
+      DWORD WParamData = 0;
+
+      pCWPR = &pcwprs->cwprs;
+      //ERR("WH_CALLWNDPROCRET: Code %d, wParam %d hwnd %p msg %d\n",Common->Code,Common->wParam,pCWPR->hwnd,pCWPR->message);
       if ( Common->lParamSize )
       {
-         pCWPR->lParam = (LPARAM)((PCHAR)pCWPR + sizeof(CWPRETSTRUCT));
-         RtlCopyMemory( (PCHAR)pCWPR + sizeof(CWPRETSTRUCT), &pcwprs->Extra, Common->lParamSize );
+         pCWPR->lParam = (LPARAM)((PCHAR)pcwprs + HOOK_PAYLOAD_OFFSET(CWPR_Struct));
+         if (pCWPR->message == WM_COPYDATA)
+         {
+            COPYDATASTRUCT *CopyData = (COPYDATASTRUCT *)pCWPR->lParam;
+            if (CopyData->lpData)
+               CopyData->lpData = CopyData + 1;
+         }
       }
+      if (!pCWPR->wParam && (pCWPR->message == EM_GETSEL ||
+                             pCWPR->message == SBM_GETRANGE ||
+                             pCWPR->message == CB_GETEDITSEL))
+         pCWPR->wParam = (WPARAM)&WParamData;
       Result = Proc(Common->Code, Common->wParam, (LPARAM) pCWPR);
-      HeapFree(GetProcessHeap(), 0, pCWPR);
     }
       break;
     case WH_MSGFILTER: /* All SEH support */
@@ -779,7 +795,9 @@ User32CallHookProcFromKernel(PVOID Arguments, ULONG ArgumentLength)
          Hit = TRUE;
       }
       _SEH2_END;
-      if (!Hit && Common->HookId == WH_GETMESSAGE)
+      if (!Hit && (Common->HookId == WH_GETMESSAGE ||
+                   Common->HookId == WH_MSGFILTER ||
+                   Common->HookId == WH_SYSMSGFILTER))
          RtlCopyMemory(pMsg, pcMsg, sizeof(MSG));
       HeapFree( GetProcessHeap(), 0, pcMsg );
       break;
