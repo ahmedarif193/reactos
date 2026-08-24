@@ -2410,10 +2410,12 @@ User32CallCopyImageFromKernel(PVOID Arguments, ULONG ArgumentLength)
 
 /************* PUBLIC FUNCTIONS *******************/
 
+#define LR_UNKNOWN_0X10000 0x00010000
+
 #define COPYIMAGE_VALID_FLAGS ( \
     LR_SHARED | LR_COPYFROMRESOURCE | LR_CREATEDIBSECTION | LR_LOADMAP3DCOLORS | 0x800 | \
     LR_VGACOLOR | LR_LOADREALSIZE | LR_DEFAULTSIZE | LR_LOADTRANSPARENT | LR_LOADFROMFILE | \
-    LR_COPYDELETEORG | LR_COPYRETURNORG | LR_COLOR | LR_MONOCHROME \
+    LR_COPYDELETEORG | LR_COPYRETURNORG | LR_COLOR | LR_MONOCHROME | LR_UNKNOWN_0X10000 \
 )
 
 HANDLE WINAPI CopyImage(
@@ -2935,12 +2937,31 @@ HICON WINAPI CreateIconFromResourceEx(
     HICON hIcon;
     PBYTE pbBmpIcon = NULL;
     DWORD BmpIconSize;
+    DWORD dwLastError = GetLastError();
+    CURSORICONDIR *pCurIconDir;
+    PBITMAPINFOHEADER pbmih;
 
     TRACE("%p, %lu, %lu, %lu, %i, %i, %lu.\n", pbIconBits, cbIconBits, fIcon, dwVersion, cxDesired, cyDesired, uFlags);
 
     if (!pbIconBits || cbIconBits < 2 * sizeof(DWORD))
     {
         ERR("Invalid IconBits array\n");
+        return NULL;
+    }
+
+    pCurIconDir = (CURSORICONDIR *)pbIconBits;
+    if (pCurIconDir->idReserved == 0 &&
+        ((fIcon && pCurIconDir->idType == 2) || (!fIcon && pCurIconDir->idType == 1)))
+    {
+        SetLastError(dwLastError);
+        return NULL;
+    }
+
+    pbmih = (PBITMAPINFOHEADER)(pbIconBits + 2 * sizeof(WORD));
+    if (fIcon && cbIconBits >= 2 * sizeof(WORD) + sizeof(BITMAPINFOHEADER) &&
+        pbmih->biSize == sizeof(BITMAPINFOHEADER) && pbmih->biPlanes == 1)
+    {
+        SetLastError(dwLastError);
         return NULL;
     }
 
@@ -2973,8 +2994,6 @@ HICON WINAPI CreateIconFromResourceEx(
         {
             HINSTANCE hinst;
             HRSRC hrsrc;
-            CURSORICONDIR* pCurIconDir = (CURSORICONDIR*)pbIconBits;
-
             TRACE("Pointer points to a directory structure.\n");
 
             /* So this is a pointer to an icon directory structure. Find the module */
