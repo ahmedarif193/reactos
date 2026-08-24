@@ -20,6 +20,21 @@ GetC1Type(WCHAR Ch)
     return CharType;
 }
 
+static BOOL
+IsNonSpacingCharacter(WCHAR Ch)
+{
+    WORD CharType, C1Type;
+
+    C1Type = GetC1Type(Ch);
+    if (!(C1Type & C1_DEFINED) || (C1Type & C1_CNTRL))
+        return FALSE;
+
+    if (!GetStringTypeW(CT_CTYPE2, &Ch, 1, &CharType))
+        return FALSE;
+
+    return CharType == C2_NOTAPPLICABLE;
+}
+
 /*
  * @implemented
  */
@@ -102,8 +117,14 @@ LPWSTR
 WINAPI
 CharPrevW(LPCWSTR start, LPCWSTR x)
 {
-    if (x > start) return (LPWSTR)(x - 1);
-    else return (LPWSTR)x;
+    if (x <= start)
+        return (LPWSTR)x;
+
+    --x;
+    while (IsNonSpacingCharacter(*x) && x > start)
+        --x;
+
+    return (LPWSTR)x;
 }
 
 /*
@@ -137,7 +158,15 @@ LPWSTR
 WINAPI
 CharNextW(LPCWSTR x)
 {
-    if (*x) x++;
+    if (!*x)
+        return (LPWSTR)x;
+
+    do
+    {
+        ++x;
+    }
+    while (*x && IsNonSpacingCharacter(*x));
+
     return (LPWSTR)x;
 }
 
