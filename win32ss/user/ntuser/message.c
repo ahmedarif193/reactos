@@ -84,7 +84,7 @@ static const unsigned int message_pointer_flags[] =
     SET(CB_INSERTSTRING) | SET(CB_FINDSTRING) | SET(CB_SELECTSTRING) |
     SET(CB_GETDROPPEDCONTROLRECT) | SET(CB_FINDSTRINGEXACT),
     /* 0x160 - 0x17f */
-    0,
+    SET(CB_GETCOMBOBOXINFO),
     /* 0x180 - 0x19f */
     SET(LB_ADDSTRING) | SET(LB_INSERTSTRING) | SET(LB_GETTEXT) | SET(LB_SELECTSTRING) |
     SET(LB_DIR) | SET(LB_FINDSTRING) |
@@ -131,8 +131,11 @@ static inline int is_pointer_message( UINT message, WPARAM wparam )
 #define MMS_SIZE_WPARAMWCHAR -2
 #define MMS_SIZE_LPARAMSZ    -3
 #define MMS_SIZE_SPECIAL     -4
-#define MMS_FLAG_READ        0x01
-#define MMS_FLAG_WRITE       0x02
+#define MMS_SIZE_EM_GETLINE  -5
+#define MMS_SIZE_1K_WCHARS   -6
+#define MMS_SIZE_WPARAM_DWORDS -7
+#define MMS_FLAG_READ        LPARAM_MEMORY_READ
+#define MMS_FLAG_WRITE       LPARAM_MEMORY_WRITE
 #define MMS_FLAG_READWRITE   (MMS_FLAG_READ | MMS_FLAG_WRITE)
 typedef struct tagMSGMEMORY
 {
@@ -155,16 +158,42 @@ static MSGMEMORY g_MsgMemory[] =
     { WM_SETTINGCHANGE, MMS_SIZE_LPARAMSZ, MMS_FLAG_READ },
     { WM_COPYDATA, MMS_SIZE_SPECIAL, MMS_FLAG_READ },
     { WM_COPYGLOBALDATA, MMS_SIZE_WPARAM, MMS_FLAG_READ },
-    { WM_WINDOWPOSCHANGED, sizeof(WINDOWPOS), MMS_FLAG_READWRITE },
+    { WM_WINDOWPOSCHANGED, sizeof(WINDOWPOS), MMS_FLAG_READ },
     { WM_WINDOWPOSCHANGING, sizeof(WINDOWPOS), MMS_FLAG_READWRITE },
     { WM_SIZING, sizeof(RECT), MMS_FLAG_READWRITE },
     { WM_MOVING, sizeof(RECT), MMS_FLAG_READWRITE },
     { WM_MEASUREITEM, sizeof(MEASUREITEMSTRUCT), MMS_FLAG_READWRITE },
+    { WM_DELETEITEM, sizeof(DELETEITEMSTRUCT), MMS_FLAG_READ },
+    { WM_COMPAREITEM, sizeof(COMPAREITEMSTRUCT), MMS_FLAG_READ },
     { WM_DRAWITEM, sizeof(DRAWITEMSTRUCT), MMS_FLAG_READWRITE },
     { WM_HELP, sizeof(HELPINFO), MMS_FLAG_READWRITE },
     { WM_GETTITLEBARINFOEX, sizeof(TITLEBARINFOEX), MMS_FLAG_READWRITE },
     { WM_NEXTMENU, sizeof(MDINEXTMENU), MMS_FLAG_READWRITE },
+    { WM_MDIGETACTIVE, sizeof(BOOL), MMS_FLAG_WRITE },
     { WM_DEVICECHANGE, MMS_SIZE_SPECIAL, MMS_FLAG_READ },
+    { WM_GETDLGCODE, sizeof(MSG), MMS_FLAG_READ },
+    { WM_ASKCBFORMATNAME, MMS_SIZE_WPARAMWCHAR, MMS_FLAG_WRITE },
+    { EM_GETSEL, sizeof(DWORD), MMS_FLAG_READWRITE },
+    { EM_GETRECT, sizeof(RECT), MMS_FLAG_WRITE },
+    { EM_SETRECT, sizeof(RECT), MMS_FLAG_READWRITE },
+    { EM_SETRECTNP, sizeof(RECT), MMS_FLAG_READWRITE },
+    { EM_SETTABSTOPS, MMS_SIZE_WPARAM_DWORDS, MMS_FLAG_READ },
+    { SBM_GETRANGE, sizeof(DWORD), MMS_FLAG_READWRITE },
+    { SBM_SETSCROLLINFO, sizeof(SCROLLINFO), MMS_FLAG_READWRITE },
+    { SBM_GETSCROLLINFO, sizeof(SCROLLINFO), MMS_FLAG_READWRITE },
+    { SBM_GETSCROLLBARINFO, sizeof(SCROLLBARINFO), MMS_FLAG_READWRITE },
+    { CB_GETEDITSEL, sizeof(DWORD), MMS_FLAG_READWRITE },
+    { CB_FINDSTRING, MMS_SIZE_LPARAMSZ, MMS_FLAG_READ },
+    { CB_FINDSTRINGEXACT, MMS_SIZE_LPARAMSZ, MMS_FLAG_READ },
+    { CB_GETLBTEXT, MMS_SIZE_1K_WCHARS, MMS_FLAG_WRITE },
+    { CB_GETDROPPEDCONTROLRECT, sizeof(RECT), MMS_FLAG_WRITE },
+    { CB_GETCOMBOBOXINFO, sizeof(COMBOBOXINFO), MMS_FLAG_READWRITE },
+    { EM_GETLINE, MMS_SIZE_EM_GETLINE, MMS_FLAG_READWRITE },
+    { LB_GETTEXT, MMS_SIZE_1K_WCHARS, MMS_FLAG_WRITE },
+    { LB_GETSELITEMS, MMS_SIZE_WPARAM_DWORDS, MMS_FLAG_WRITE },
+    { LB_SETTABSTOPS, MMS_SIZE_WPARAM_DWORDS, MMS_FLAG_READ },
+    { LB_GETITEMRECT, sizeof(RECT), MMS_FLAG_READWRITE },
+    { WM_MDICREATE, MMS_SIZE_SPECIAL, MMS_FLAG_READ },
 };
 
 static PMSGMEMORY FASTCALL
@@ -194,6 +223,11 @@ MsgMemorySize(PMSGMEMORY MsgMemoryEntry, WPARAM wParam, LPARAM lParam)
     PUNICODE_STRING ClassName;
     UINT Size = 0;
 
+    /* A number of pointer messages explicitly permit a null lParam. Do not
+     * turn those into a callback buffer backed by address zero. */
+    if (!lParam)
+        return 0;
+
     _SEH2_TRY
     {
         if (MMS_SIZE_WPARAM == MsgMemoryEntry->Size)
@@ -214,6 +248,18 @@ MsgMemorySize(PMSGMEMORY MsgMemoryEntry, WPARAM wParam, LPARAM lParam)
             }
             else
                Size = (UINT) ((wcslen((PWSTR) lParam) + 1) * sizeof(WCHAR));
+        }
+        else if (MMS_SIZE_EM_GETLINE == MsgMemoryEntry->Size)
+        {
+            Size = lParam ? max(*(WORD *)lParam, 1) * sizeof(WCHAR) : 0;
+        }
+        else if (MMS_SIZE_1K_WCHARS == MsgMemoryEntry->Size)
+        {
+            Size = 1024 * sizeof(WCHAR);
+        }
+        else if (MMS_SIZE_WPARAM_DWORDS == MsgMemoryEntry->Size)
+        {
+            Size = (UINT)(wParam * sizeof(DWORD));
         }
         else if (MMS_SIZE_SPECIAL == MsgMemoryEntry->Size)
         {
@@ -242,7 +288,7 @@ MsgMemorySize(PMSGMEMORY MsgMemoryEntry, WPARAM wParam, LPARAM lParam)
             case WM_COPYDATA:
                 {
                 COPYDATASTRUCT *cds = (COPYDATASTRUCT *)lParam;
-                Size = sizeof(COPYDATASTRUCT) + cds->cbData;
+                Size = sizeof(COPYDATASTRUCT) + (cds->lpData ? cds->cbData : 0);
                 }
                 break;
 
@@ -253,6 +299,18 @@ MsgMemorySize(PMSGMEMORY MsgMemoryEntry, WPARAM wParam, LPARAM lParam)
                         DEV_BROADCAST_HDR *header = (DEV_BROADCAST_HDR *)lParam;
                         Size = header->dbch_size;
                     }
+                }
+                break;
+
+            case WM_MDICREATE:
+                {
+                    MDICREATESTRUCTW *Mdi = (MDICREATESTRUCTW *)lParam;
+
+                    Size = sizeof(*Mdi);
+                    if (Mdi->szClass && !IS_ATOM(Mdi->szClass))
+                        Size += (UINT)((wcslen(Mdi->szClass) + 1) * sizeof(WCHAR));
+                    if (Mdi->szTitle)
+                        Size += (UINT)((wcslen(Mdi->szTitle) + 1) * sizeof(WCHAR));
                 }
                 break;
 
@@ -283,6 +341,12 @@ UINT lParamMemorySize(UINT Msg, WPARAM wParam, LPARAM lParam)
     return MsgMemorySize(MsgMemoryEntry, wParam, lParam);
 }
 
+INT lParamMemoryFlags(UINT Msg)
+{
+    PMSGMEMORY MsgMemoryEntry = FindMsgMemory(Msg);
+    return MsgMemoryEntry ? MsgMemoryEntry->Flags : 0;
+}
+
 static NTSTATUS
 PackParam(LPARAM *lParamPacked, UINT Msg, WPARAM wParam, LPARAM lParam, BOOL NonPagedPoolNeeded)
 {
@@ -295,6 +359,8 @@ PackParam(LPARAM *lParamPacked, UINT Msg, WPARAM wParam, LPARAM lParam, BOOL Non
     POOL_TYPE PoolType;
     UINT Size;
     PCHAR CsData;
+    MDICREATESTRUCTW *UnpackedMdi;
+    MDICREATESTRUCTW *PackedMdi;
 
     *lParamPacked = lParam;
 
@@ -369,6 +435,32 @@ PackParam(LPARAM *lParamPacked, UINT Msg, WPARAM wParam, LPARAM lParam, BOOL Non
         ASSERT(CsData == (PCHAR) PackedCs + Size);
         *lParamPacked = (LPARAM) PackedCs;
     }
+    else if (WM_MDICREATE == Msg)
+    {
+        UnpackedMdi = (MDICREATESTRUCTW *)lParam;
+        Size = MsgMemorySize(FindMsgMemory(Msg), wParam, lParam);
+        PackedMdi = ExAllocatePoolWithTag(PoolType, Size, TAG_MSG);
+        if (!PackedMdi)
+            return STATUS_NO_MEMORY;
+
+        *PackedMdi = *UnpackedMdi;
+        CsData = (PCHAR)(PackedMdi + 1);
+        if (UnpackedMdi->szClass && !IS_ATOM(UnpackedMdi->szClass))
+        {
+            SIZE_T Bytes = (wcslen(UnpackedMdi->szClass) + 1) * sizeof(WCHAR);
+            PackedMdi->szClass = (LPCWSTR)(CsData - (PCHAR)PackedMdi);
+            RtlCopyMemory(CsData, UnpackedMdi->szClass, Bytes);
+            CsData += Bytes;
+        }
+        if (UnpackedMdi->szTitle)
+        {
+            SIZE_T Bytes = (wcslen(UnpackedMdi->szTitle) + 1) * sizeof(WCHAR);
+            PackedMdi->szTitle = (LPCWSTR)(CsData - (PCHAR)PackedMdi);
+            RtlCopyMemory(CsData, UnpackedMdi->szTitle, Bytes);
+            CsData += Bytes;
+        }
+        *lParamPacked = (LPARAM)PackedMdi;
+    }
     else if (PoolType == NonPagedPool)
     {
         PMSGMEMORY MsgMemoryEntry;
@@ -425,7 +517,7 @@ UnpackParam(LPARAM lParamPacked, UINT Msg, WPARAM wParam, LPARAM lParam, BOOL No
 
         return STATUS_SUCCESS;
     }
-    else if (WM_CREATE == Msg || WM_NCCREATE == Msg)
+    else if (WM_CREATE == Msg || WM_NCCREATE == Msg || WM_MDICREATE == Msg)
     {
         ExFreePool((PVOID) lParamPacked);
 
@@ -485,6 +577,62 @@ CopyMsgToKernelMem(MSG *KernelModeMsg, MSG *UserModeMsg, PMSGMEMORY MsgMemoryEnt
         if (0 != (MsgMemoryEntry->Flags & MMS_FLAG_READ))
         {
             TRACE("Copy Message %u from usermode buffer\n", KernelModeMsg->message);
+            if (KernelModeMsg->message == WM_MDICREATE)
+            {
+                MDICREATESTRUCTW Mdi;
+                MDICREATESTRUCTW *CapturedMdi = KernelMem;
+                PBYTE Data = (PBYTE)(CapturedMdi + 1);
+                SIZE_T ClassBytes = 0, TitleBytes = 0;
+
+                Status = MmCopyFromCaller(&Mdi,
+                                          (PVOID)UserModeMsg->lParam,
+                                          sizeof(Mdi));
+                if (!NT_SUCCESS(Status))
+                    goto CopyFailed;
+
+                _SEH2_TRY
+                {
+                    if (!IS_ATOM(Mdi.szClass))
+                        ClassBytes = (wcslen(Mdi.szClass) + 1) * sizeof(WCHAR);
+                    if (Mdi.szTitle)
+                        TitleBytes = (wcslen(Mdi.szTitle) + 1) * sizeof(WCHAR);
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+                if (!NT_SUCCESS(Status) ||
+                    sizeof(Mdi) + ClassBytes + TitleBytes != Size)
+                {
+                    if (NT_SUCCESS(Status))
+                        Status = STATUS_INVALID_PARAMETER;
+                    goto CopyFailed;
+                }
+
+                *CapturedMdi = Mdi;
+                if (ClassBytes)
+                {
+                    Status = MmCopyFromCaller(Data,
+                                              (PVOID)Mdi.szClass,
+                                              ClassBytes);
+                    if (!NT_SUCCESS(Status))
+                        goto CopyFailed;
+                    CapturedMdi->szClass = (LPCWSTR)Data;
+                    Data += ClassBytes;
+                }
+                if (TitleBytes)
+                {
+                    Status = MmCopyFromCaller(Data,
+                                              (PVOID)Mdi.szTitle,
+                                              TitleBytes);
+                    if (!NT_SUCCESS(Status))
+                        goto CopyFailed;
+                    CapturedMdi->szTitle = (LPCWSTR)Data;
+                }
+                return STATUS_SUCCESS;
+            }
+
             /* Don't do extra testing for 1 word messages. For examples see
              * https://wiki.winehq.org/List_Of_Windows_Messages and
              * we are just handling WM_WININICHANGE here. */
@@ -516,6 +664,7 @@ CopyMsgToKernelMem(MSG *KernelModeMsg, MSG *UserModeMsg, PMSGMEMORY MsgMemoryEnt
             Status = MmCopyFromCaller(KernelMem, (PVOID)UserModeMsg->lParam, Size);
             if (!NT_SUCCESS(Status))
             {
+CopyFailed:
                 ERR("Failed to copy message to kernel: invalid usermode lParam buffer\n");
                 ExFreePoolWithTag(KernelMem, TAG_MSG);
                 return Status;
@@ -761,18 +910,21 @@ IntMsgCreateStructW(
 }
 
 static VOID FASTCALL
-IntCallWndProc( PWND Window, HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam )
+IntCallWndProc( PWND Window, HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, INT lParamBufferSize )
 {
     BOOL SameThread = FALSE;
     CWPSTRUCT CWP;
     PVOID pszClass = NULL, pszName = NULL;
     CREATESTRUCTW Csw;
+    PTHREADINFO pti;
+    INT cbSaved;
 
     //// Check for a hook to eliminate overhead. ////
     if ( !ISITHOOKED(WH_CALLWNDPROC) && !(Window->head.rpdesk->pDeskInfo->fsHooks & HOOKID_TO_FLAG(WH_CALLWNDPROC)) )
         return;
 
-    if (Window->head.pti == ((PTHREADINFO)PsGetCurrentThreadWin32Thread()))
+    pti = PsGetCurrentThreadWin32Thread();
+    if (Window->head.pti == pti)
         SameThread = TRUE;
 
     if ( Msg == WM_CREATE || Msg == WM_NCCREATE )
@@ -788,24 +940,30 @@ IntCallWndProc( PWND Window, HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam )
     CWP.message = Msg;
     CWP.wParam  = wParam;
     CWP.lParam  = lParam;
+    cbSaved = pti->cbCwpHookLParam;
+    pti->cbCwpHookLParam = lParamBufferSize;
     co_HOOK_CallHooks( WH_CALLWNDPROC, HC_ACTION, SameThread, (LPARAM)&CWP );
+    pti->cbCwpHookLParam = cbSaved;
 
     if (pszName)  UserHeapFree(pszName);
     if (pszClass) UserHeapFree(pszClass);
 }
 
 static VOID FASTCALL
-IntCallWndProcRet( PWND Window, HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, LRESULT *uResult )
+IntCallWndProcRet( PWND Window, HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, LRESULT *uResult, INT lParamBufferSize )
 {
     BOOL SameThread = FALSE;
     CWPRETSTRUCT CWPR;
     PVOID pszClass = NULL, pszName = NULL;
     CREATESTRUCTW Csw;
+    PTHREADINFO pti;
+    INT cbSaved;
 
     if ( !ISITHOOKED(WH_CALLWNDPROCRET) && !(Window->head.rpdesk->pDeskInfo->fsHooks & HOOKID_TO_FLAG(WH_CALLWNDPROCRET)) )
         return;
 
-    if (Window->head.pti == ((PTHREADINFO)PsGetCurrentThreadWin32Thread()))
+    pti = PsGetCurrentThreadWin32Thread();
+    if (Window->head.pti == pti)
         SameThread = TRUE;
 
     if ( Msg == WM_CREATE || Msg == WM_NCCREATE )
@@ -820,7 +978,10 @@ IntCallWndProcRet( PWND Window, HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lPara
     CWPR.wParam  = wParam;
     CWPR.lParam  = lParam;
     CWPR.lResult = uResult ? (*uResult) : 0;
+    cbSaved = pti->cbCwpHookLParam;
+    pti->cbCwpHookLParam = lParamBufferSize;
     co_HOOK_CallHooks( WH_CALLWNDPROCRET, HC_ACTION, SameThread, (LPARAM)&CWPR );
+    pti->cbCwpHookLParam = cbSaved;
 
     if (pszName)  UserHeapFree(pszName);
     if (pszClass) UserHeapFree(pszClass);
@@ -1572,8 +1733,27 @@ co_IntSendMessageTimeoutSingle( HWND hWnd,
            goto Cleanup;
         }
 
+        /* See if this message type is present in the table */
+        MsgMemoryEntry = FindMsgMemory(Msg);
+        if (NULL == MsgMemoryEntry)
+        {
+           lParamBufferSize = -1;
+        }
+        else if (MsgMemoryEntry->Size == MMS_SIZE_LPARAMSZ &&
+                 lParam && (ULONG_PTR)lParam < MmUserProbeAddress)
+        {
+           /* Same-thread string sends keep the caller's pointer identity */
+           lParamBufferSize = -1;
+        }
+        else
+        {
+           lParamBufferSize = MsgMemorySize(MsgMemoryEntry, wParam, lParam);
+           // If zero, do not allow callback on client side to allocate a buffer!!!!! See CORE-7695.
+           if (!lParamBufferSize) lParamBufferSize = -1;
+        }
+
         // Only happens when calling the client!
-        IntCallWndProc( Window, hWnd, Msg, wParam, lParam);
+        IntCallWndProc( Window, hWnd, Msg, wParam, lParam, lParamBufferSize);
 
         if ( Window->state & WNDS_SERVERSIDEWINDOWPROC )
         {
@@ -1604,18 +1784,6 @@ co_IntSendMessageTimeoutSingle( HWND hWnd,
               goto Cleanup;
            }
         }
-        /* See if this message type is present in the table */
-        MsgMemoryEntry = FindMsgMemory(Msg);
-        if (NULL == MsgMemoryEntry)
-        {
-           lParamBufferSize = -1;
-        }
-        else
-        {
-           lParamBufferSize = MsgMemorySize(MsgMemoryEntry, wParam, lParam);
-           // If zero, do not allow callback on client side to allocate a buffer!!!!! See CORE-7695.
-           if (!lParamBufferSize) lParamBufferSize = -1;
-        }
 
         if (! NT_SUCCESS(PackParam(&lParamPacked, Msg, wParam, lParam, FALSE)))
         {
@@ -1643,7 +1811,7 @@ co_IntSendMessageTimeoutSingle( HWND hWnd,
         }
 
         // Only happens when calling the client!
-        IntCallWndProcRet( Window, hWnd, Msg, wParam, lParam, (LRESULT *)uResult);
+        IntCallWndProcRet( Window, hWnd, Msg, wParam, lParam, (LRESULT *)uResult, lParamBufferSize);
 
         Ret = TRUE;
         goto Cleanup;
@@ -1872,7 +2040,13 @@ co_IntSendMessageWithCallBack(HWND hWnd,
             goto Cleanup; // Return FALSE
         }
 
-        IntCallWndProc(Window, hWnd, Msg, wParam, lParam);
+        if (MsgMemoryEntry && MsgMemoryEntry->Size == MMS_SIZE_LPARAMSZ &&
+            lParam && (ULONG_PTR)lParam < MmUserProbeAddress)
+        {
+            lParamBufferSize = -1;
+        }
+
+        IntCallWndProc(Window, hWnd, Msg, wParam, lParam, lParamBufferSize);
 
         if (Window->state & WNDS_SERVERSIDEWINDOWPROC)
         {
@@ -1904,7 +2078,7 @@ co_IntSendMessageWithCallBack(HWND hWnd,
             *uResult = Result;
         }
 
-        IntCallWndProcRet(Window, hWnd, Msg, wParam, lParam, (LRESULT *)uResult);
+        IntCallWndProcRet(Window, hWnd, Msg, wParam, lParam, (LRESULT *)uResult, lParamBufferSize);
 
         if (CompletionCallback)
         {
@@ -2531,7 +2705,277 @@ NtUserTranslateMessage(LPMSG lpMsg, UINT flags)
 
 LRESULT APIENTRY ScrollBarWndProc(HWND Wnd, UINT Msg, WPARAM wParam, LPARAM lParam);
 
-BOOL APIENTRY
+static NTSTATUS
+IntCaptureAnsiString(_In_ PCSZ Source, _Out_ PUNICODE_STRING Destination)
+{
+    ANSI_STRING AnsiString;
+    NTSTATUS Status;
+
+    RtlZeroMemory(Destination, sizeof(*Destination));
+    _SEH2_TRY
+    {
+        RtlInitAnsiString(&AnsiString, Source);
+        Status = RtlAnsiStringToUnicodeString(Destination, &AnsiString, TRUE);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    return Status;
+}
+
+static NTSTATUS
+IntCopyUnicodeToAnsiCaller(
+    _In_reads_(CharacterCount) PCWSTR Source,
+    _In_ ULONG CharacterCount,
+    _Out_writes_bytes_(Capacity) PCHAR Destination,
+    _In_ ULONG Capacity,
+    _In_ BOOLEAN Terminate,
+    _Out_ PULONG BytesWritten)
+{
+    NTSTATUS Status;
+    PCHAR Buffer;
+    ULONG Maximum, Bytes = 0;
+
+    *BytesWritten = 0;
+    if (!Destination || !Capacity)
+        return STATUS_SUCCESS;
+
+    Buffer = ExAllocatePoolWithTag(PagedPool, Capacity, TAG_MSG);
+    if (!Buffer)
+        return STATUS_NO_MEMORY;
+
+    Maximum = Terminate ? Capacity - 1 : Capacity;
+    Status = RtlUnicodeToMultiByteN(Buffer,
+                                    Maximum,
+                                    &Bytes,
+                                    Source,
+                                    CharacterCount * sizeof(WCHAR));
+    if (NT_SUCCESS(Status))
+    {
+        if (Terminate)
+            Buffer[Bytes] = ANSI_NULL;
+        Status = MmCopyToCaller(Destination,
+                                Buffer,
+                                Bytes + (Terminate ? 1 : 0));
+    }
+
+    ExFreePoolWithTag(Buffer, TAG_MSG);
+    if (NT_SUCCESS(Status))
+        *BytesWritten = Bytes;
+    return Status;
+}
+
+static LRESULT
+IntSendGetLbText(
+    _In_ HWND hWnd,
+    _In_ UINT Msg,
+    _In_ WPARAM Index,
+    _In_ LPARAM lParam,
+    _In_ BOOLEAN Ansi)
+{
+    LRESULT Length, Result;
+    ULONG CopyCharacters, Bytes = 0;
+    PWSTR Buffer;
+    NTSTATUS Status;
+
+    if (!lParam)
+        return CB_ERR;
+
+    Length = co_IntSendMessage(hWnd,
+                               Msg == CB_GETLBTEXT ? CB_GETLBTEXTLEN : LB_GETTEXTLEN,
+                               Index,
+                               0);
+    if (Length == CB_ERR)
+        return CB_ERR;
+
+    Buffer = ExAllocatePoolWithTag(PagedPool, 1024 * sizeof(WCHAR), TAG_MSG);
+    if (!Buffer)
+        return CB_ERRSPACE;
+    RtlZeroMemory(Buffer, 1024 * sizeof(WCHAR));
+
+    Result = co_IntSendMessage(hWnd, Msg, Index, (LPARAM)Buffer);
+    if (Result < 0)
+    {
+        ExFreePoolWithTag(Buffer, TAG_MSG);
+        return Result;
+    }
+
+    CopyCharacters = (ULONG)wcsnlen(Buffer, 1024) + 1;
+    CopyCharacters = min(CopyCharacters, min((ULONG)Length + 1, 1024));
+
+    if (Ansi)
+    {
+        Status = IntCopyUnicodeToAnsiCaller(Buffer,
+                                            CopyCharacters,
+                                            (PCHAR)lParam,
+                                            max(CopyCharacters * 2, 1),
+                                            FALSE,
+                                            &Bytes);
+        if (NT_SUCCESS(Status))
+            CopyCharacters = Bytes;
+    }
+    else
+    {
+        Status = MmCopyToCaller((PVOID)lParam,
+                                Buffer,
+                                CopyCharacters * sizeof(WCHAR));
+    }
+
+    ExFreePoolWithTag(Buffer, TAG_MSG);
+    if (!NT_SUCCESS(Status))
+    {
+        SetLastNtError(Status);
+        return CB_ERR;
+    }
+    return min(Result, (LRESULT)CopyCharacters);
+}
+
+static LRESULT
+IntDoSendMessageAnsi(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
+{
+    UNICODE_STRING String = {0}, Class = {0}, Title = {0};
+    MDICREATESTRUCTA MdiA;
+    MDICREATESTRUCTW MdiW;
+    NTSTATUS Status;
+    LRESULT Result;
+    PWSTR Buffer;
+    WORD Capacity;
+    ULONG Bytes;
+    ULONG CharacterCount;
+
+    switch (Msg)
+    {
+        case WM_SETTEXT:
+        case CB_FINDSTRING:
+        case CB_FINDSTRINGEXACT:
+            if (!lParam)
+                return co_IntSendMessage(hWnd, Msg, wParam, 0);
+            Status = IntCaptureAnsiString((PCSZ)lParam, &String);
+            if (!NT_SUCCESS(Status))
+                break;
+            Result = co_IntSendMessage(hWnd, Msg, wParam, (LPARAM)String.Buffer);
+            RtlFreeUnicodeString(&String);
+            return Result;
+
+        case WM_GETTEXT:
+            if (!lParam || !wParam || wParam > MAXULONG / sizeof(WCHAR))
+                return 0;
+            Buffer = ExAllocatePoolWithTag(PagedPool,
+                                           wParam * sizeof(WCHAR),
+                                           TAG_MSG);
+            if (!Buffer)
+                return 0;
+            RtlZeroMemory(Buffer, wParam * sizeof(WCHAR));
+            Result = co_IntSendMessage(hWnd, Msg, wParam, (LPARAM)Buffer);
+            CharacterCount = Result > 0 ? min((ULONG_PTR)Result, wParam - 1) : 0;
+            Status = IntCopyUnicodeToAnsiCaller(Buffer,
+                                                CharacterCount,
+                                                (PCHAR)lParam,
+                                                (ULONG)wParam,
+                                                TRUE,
+                                                &Bytes);
+            ExFreePoolWithTag(Buffer, TAG_MSG);
+            if (!NT_SUCCESS(Status))
+                break;
+            return Bytes;
+
+        case CB_GETLBTEXT:
+        case LB_GETTEXT:
+            return IntSendGetLbText(hWnd, Msg, wParam, lParam, TRUE);
+
+        case EM_GETLINE:
+            Status = MmCopyFromCaller(&Capacity, (PVOID)lParam, sizeof(Capacity));
+            if (!NT_SUCCESS(Status))
+                break;
+            CharacterCount = max(Capacity, 1);
+            Buffer = ExAllocatePoolWithTag(PagedPool,
+                                           CharacterCount * sizeof(WCHAR),
+                                           TAG_MSG);
+            if (!Buffer)
+                return 0;
+            RtlZeroMemory(Buffer, CharacterCount * sizeof(WCHAR));
+            *(PWORD)Buffer = Capacity;
+            Result = co_IntSendMessage(hWnd, Msg, wParam, (LPARAM)Buffer);
+            CharacterCount = Result > 0 ? min((ULONG)Result, (ULONG)Capacity) : 0;
+            Status = IntCopyUnicodeToAnsiCaller(Buffer,
+                                                CharacterCount,
+                                                (PCHAR)lParam,
+                                                Capacity,
+                                                CharacterCount < Capacity,
+                                                &Bytes);
+            ExFreePoolWithTag(Buffer, TAG_MSG);
+            if (!NT_SUCCESS(Status))
+                break;
+            return Bytes;
+
+        case WM_GETTEXTLENGTH:
+            Result = co_IntSendMessage(hWnd, WM_GETTEXTLENGTH, 0, 0);
+            if (Result <= 0 || Result >= MAXULONG / sizeof(WCHAR))
+                return Result;
+            CharacterCount = (ULONG)Result + 1;
+            Buffer = ExAllocatePoolWithTag(PagedPool,
+                                           CharacterCount * sizeof(WCHAR),
+                                           TAG_MSG);
+            if (!Buffer)
+                return 0;
+            RtlZeroMemory(Buffer, CharacterCount * sizeof(WCHAR));
+            Result = co_IntSendMessage(hWnd,
+                                       WM_GETTEXT,
+                                       CharacterCount,
+                                       (LPARAM)Buffer);
+            if (Result > 0)
+                RtlUnicodeToMultiByteSize(&Bytes,
+                                          Buffer,
+                                          (ULONG)Result * sizeof(WCHAR));
+            else
+                Bytes = 0;
+            ExFreePoolWithTag(Buffer, TAG_MSG);
+            return Bytes;
+
+        case WM_MDICREATE:
+            Status = MmCopyFromCaller(&MdiA, (PVOID)lParam, sizeof(MdiA));
+            if (!NT_SUCCESS(Status))
+                break;
+            if (!IS_ATOM(MdiA.szClass))
+            {
+                Status = IntCaptureAnsiString(MdiA.szClass, &Class);
+                if (!NT_SUCCESS(Status))
+                    break;
+            }
+            Status = IntCaptureAnsiString(MdiA.szTitle, &Title);
+            if (!NT_SUCCESS(Status))
+            {
+                if (Class.Buffer)
+                    RtlFreeUnicodeString(&Class);
+                break;
+            }
+            MdiW.szClass = IS_ATOM(MdiA.szClass) ?
+                               (LPCWSTR)MdiA.szClass : Class.Buffer;
+            MdiW.szTitle = Title.Buffer;
+            MdiW.hOwner = MdiA.hOwner;
+            MdiW.x = MdiA.x;
+            MdiW.y = MdiA.y;
+            MdiW.cx = MdiA.cx;
+            MdiW.cy = MdiA.cy;
+            MdiW.style = MdiA.style;
+            MdiW.lParam = MdiA.lParam;
+            Result = co_IntSendMessage(hWnd, Msg, wParam, (LPARAM)&MdiW);
+            if (Class.Buffer)
+                RtlFreeUnicodeString(&Class);
+            RtlFreeUnicodeString(&Title);
+            return Result;
+
+        default:
+            return co_IntDoSendMessage(hWnd, Msg, wParam, lParam, NULL);
+    }
+
+    SetLastNtError(Status);
+    return 0;
+}
+
+LRESULT APIENTRY
 NtUserMessageCall( HWND hWnd,
                    UINT Msg,
                    WPARAM wParam,
@@ -2590,8 +3034,7 @@ NtUserMessageCall( HWND hWnd,
            Window = UserGetWindowObject(hWnd);
            if (!Window)
            {
-               UserLeave();
-               return FALSE;
+               break;
            }
            UserRefObjectCo(Window, &Ref);
         }
@@ -2602,6 +3045,7 @@ NtUserMessageCall( HWND hWnd,
         break;
     case FNID_SENDNOTIFYMESSAGE:
         Ret = UserSendNotifyMessage(hWnd, Msg, wParam, lParam);
+        lResult = Ret;
         break;
     case FNID_BROADCASTSYSTEMMESSAGE:
         {
@@ -2912,6 +3356,7 @@ NtUserMessageCall( HWND hWnd,
                   Ret = TRUE;
                }
             }
+            lResult = Ret;
         }
         break;
     case FNID_SENDMESSAGECALLBACK:
@@ -2941,11 +3386,38 @@ NtUserMessageCall( HWND hWnd,
             {
                 ERR("Callback failure!\n");
             }
+            lResult = Ret;
         }
         break;
     case FNID_SENDMESSAGE:
         {
-            lResult = co_IntDoSendMessage(hWnd, Msg, wParam, lParam, 0);
+            BOOL Allowed = TRUE;
+
+            if (Msg == WM_DRAWITEM)
+            {
+                DRAWITEMSTRUCT dis;
+
+                Allowed = FALSE;
+                _SEH2_TRY
+                {
+                    ProbeForRead((PVOID)lParam, sizeof(dis), sizeof(ULONG));
+                    RtlCopyMemory(&dis, (PVOID)lParam, sizeof(dis));
+                    Allowed = GreIsHandleValid(dis.hDC);
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                }
+                _SEH2_END;
+            }
+
+            if (!Allowed)
+                lResult = 0;
+            else if (Msg == CB_GETLBTEXT || Msg == LB_GETTEXT)
+                lResult = IntSendGetLbText(hWnd, Msg, wParam, lParam, Ansi);
+            else if (Ansi)
+                lResult = IntDoSendMessageAnsi(hWnd, Msg, wParam, lParam);
+            else
+                lResult = co_IntDoSendMessage(hWnd, Msg, wParam, lParam, NULL);
             Ret = TRUE;
 
             if (ResultInfo)
@@ -2958,6 +3430,7 @@ NtUserMessageCall( HWND hWnd,
                 _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
                 {
                     Ret = FALSE;
+                    lResult = 0;
                     _SEH2_YIELD(break);
                 }
                 _SEH2_END;
@@ -2968,6 +3441,7 @@ NtUserMessageCall( HWND hWnd,
     case FNID_SENDMESSAGEWTOOPTION:
         {
             DOSENDMESSAGE dsm, *pdsm = (PDOSENDMESSAGE)ResultInfo;
+            LRESULT MessageResult;
             if (ResultInfo)
             {
                 _SEH2_TRY
@@ -2982,7 +3456,18 @@ NtUserMessageCall( HWND hWnd,
                 _SEH2_END;
             }
 
-            Ret = co_IntDoSendMessage( hWnd, Msg, wParam, lParam, pdsm ? &dsm : NULL );
+            if (pdsm)
+            {
+                Ret = co_IntDoSendMessage(hWnd, Msg, wParam, lParam, &dsm);
+                MessageResult = dsm.Result;
+                dsm.Result = Ret;
+                lResult = MessageResult;
+            }
+            else
+            {
+                lResult = co_IntDoSendMessage(hWnd, Msg, wParam, lParam, NULL);
+                Ret = TRUE;
+            }
 
             if (pdsm)
             {
@@ -2994,6 +3479,7 @@ NtUserMessageCall( HWND hWnd,
                 _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
                 {
                     Ret = FALSE;
+                    lResult = 0;
                     _SEH2_YIELD(break);
                 }
                 _SEH2_END;
@@ -3016,6 +3502,11 @@ NtUserMessageCall( HWND hWnd,
 
             NextObj = Hook->phkNext;
             ClientInfo = pti->pClientInfo;
+
+            /* Advance both the kernel and client views of the current hook.
+             * CallNextHookEx may recurse again from NextObj, so leaving the
+             * kernel view on Hook would re-enter the first hook forever. */
+            pti->sphkCurrent = NextObj;
             _SEH2_TRY
             {
                 ClientInfo->phkCurrent = NextObj;
@@ -3030,7 +3521,7 @@ NtUserMessageCall( HWND hWnd,
 
             NextObj->phkNext = IntGetNextHook(NextObj);
 
-            if ( Hook->HookId == WH_CALLWNDPROC)
+            if (NextObj->HookId == WH_CALLWNDPROC)
             {
                 CWPSTRUCT CWP;
                 CWP.hwnd    = hWnd;
@@ -3039,15 +3530,15 @@ NtUserMessageCall( HWND hWnd,
                 CWP.lParam  = lParam;
                 TRACE("WH_CALLWNDPROC: Hook %p NextHook %p\n", Hook, NextObj);
 
-                lResult = co_IntCallHookProc( Hook->HookId,
+                lResult = co_IntCallHookProc( NextObj->HookId,
                                               HC_ACTION,
                                               ((ClientInfo->CI_flags & CI_CURTHPRHOOK) ? 1 : 0),
                                               (LPARAM)&CWP,
-                                              Hook->Proc,
-                                              Hook->ihmod,
-                                              Hook->offPfn,
-                                              Hook->Ansi,
-                                              &Hook->ModuleName);
+                                              NextObj->Proc,
+                                              NextObj->ihmod,
+                                              NextObj->offPfn,
+                                              NextObj->Ansi,
+                                              &NextObj->ModuleName);
             }
             else
             {
@@ -3058,15 +3549,15 @@ NtUserMessageCall( HWND hWnd,
                 CWPR.lParam  = lParam;
                 CWPR.lResult = ClientInfo->dwHookData;
 
-                lResult = co_IntCallHookProc( Hook->HookId,
+                lResult = co_IntCallHookProc( NextObj->HookId,
                                               HC_ACTION,
                                               ((ClientInfo->CI_flags & CI_CURTHPRHOOK) ? 1 : 0),
                                               (LPARAM)&CWPR,
-                                              Hook->Proc,
-                                              Hook->ihmod,
-                                              Hook->offPfn,
-                                              Hook->Ansi,
-                                              &Hook->ModuleName);
+                                              NextObj->Proc,
+                                              NextObj->ihmod,
+                                              NextObj->offPfn,
+                                              NextObj->Ansi,
+                                              &NextObj->ModuleName);
             }
         }
         break;
@@ -3090,6 +3581,7 @@ NtUserMessageCall( HWND hWnd,
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
             {
                 Ret = FALSE;
+                lResult = 0;
             }
             _SEH2_END;
         }
@@ -3100,7 +3592,7 @@ NtUserMessageCall( HWND hWnd,
 
     UserLeave();
 
-    return Ret;
+    return lResult;
 }
 
 #define INFINITE 0xFFFFFFFF

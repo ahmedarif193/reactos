@@ -304,6 +304,9 @@ co_IntCallWindowProc(WNDPROC Proc,
 
    if (lParamBufferSize != -1)
    {
+      PVOID CallbackLParam;
+      INT MemoryFlags = lParamMemoryFlags(Message);
+
       ArgumentLength = sizeof(WINDOWPROC_CALLBACK_ARGUMENTS) + lParamBufferSize;
       Arguments = IntCbAllocateMemory(ArgumentLength);
       if (NULL == Arguments)
@@ -311,8 +314,28 @@ co_IntCallWindowProc(WNDPROC Proc,
          ERR("Unable to allocate buffer for window proc callback\n");
          return -1;
       }
-      RtlMoveMemory((PVOID) ((char *) Arguments + sizeof(WINDOWPROC_CALLBACK_ARGUMENTS)),
-                    (PVOID) lParam, lParamBufferSize);
+      CallbackLParam = (PCHAR)Arguments + sizeof(WINDOWPROC_CALLBACK_ARGUMENTS);
+      if ((MemoryFlags & LPARAM_MEMORY_WRITE) && !(MemoryFlags & LPARAM_MEMORY_READ))
+      {
+         RtlZeroMemory(CallbackLParam, lParamBufferSize);
+      }
+      else if (Message == WM_COPYDATA)
+      {
+         COPYDATASTRUCT *Source = (COPYDATASTRUCT *)lParam;
+         COPYDATASTRUCT *Captured = CallbackLParam;
+
+         *Captured = *Source;
+         if (Source->lpData)
+         {
+            Captured->lpData = Captured + 1;
+            if (Source->cbData)
+               RtlMoveMemory(Captured + 1, Source->lpData, Source->cbData);
+         }
+      }
+      else
+      {
+         RtlMoveMemory(CallbackLParam, (PVOID)lParam, lParamBufferSize);
+      }
    }
    else
    {
@@ -375,49 +398,54 @@ co_IntCallWindowProc(WNDPROC Proc,
    if (lParamBufferSize != -1)
    {
       PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
+      PVOID CallbackLParam = (PCHAR)Arguments + sizeof(WINDOWPROC_CALLBACK_ARGUMENTS);
+      SIZE_T CopySize = lParamBufferSize;
+      INT MemoryFlags = lParamMemoryFlags(Message);
       // Is this message being processed from inside kernel space?
       BOOL InSendMessage = (pti->pcti->CTI_flags & CTI_INSENDMESSAGE);
 
-      TRACE("Copy lParam Message %u lParam %d!\n", Message, lParam);
-      switch (Message)
+      if (MemoryFlags & LPARAM_MEMORY_WRITE)
       {
-          default:
-            TRACE("Don't copy lParam, Message %u Size %d lParam %d!\n", Message, lParamBufferSize, lParam);
-            break;
-          // Write back to user/kernel space. Also see g_MsgMemory.
-          case WM_CREATE:
-          case WM_GETMINMAXINFO:
-          case WM_GETTEXT:
-          case WM_NCCALCSIZE:
-          case WM_NCCREATE:
-          case WM_STYLECHANGING:
-          case WM_WINDOWPOSCHANGING:
-          case WM_SIZING:
-          case WM_MOVING:
-          case WM_MEASUREITEM:
-          case WM_GETTITLEBARINFOEX:
-          case WM_NEXTMENU:
-            TRACE("Copy lParam, Message %u Size %d lParam %d!\n", Message, lParamBufferSize, lParam);
-            if (InSendMessage)
-               // Copy into kernel space.
-               RtlMoveMemory((PVOID) lParam,
-                             (PVOID) ((char *) Arguments + sizeof(WINDOWPROC_CALLBACK_ARGUMENTS)),
-                              lParamBufferSize);
-            else
+         if (Message == WM_GETTEXT)
+         {
+            SIZE_T MaximumChars = min((SIZE_T)wParam,
+                                      (SIZE_T)lParamBufferSize / sizeof(WCHAR));
+            SIZE_T Length;
+
+            if (!Result)
+               *(WCHAR *)CallbackLParam = UNICODE_NULL;
+            Length = Result ? wcsnlen(CallbackLParam, MaximumChars) : 0;
+            CopySize = min((Length + 1) * sizeof(WCHAR),
+                           (SIZE_T)lParamBufferSize);
+         }
+         else if (Message == WM_ASKCBFORMATNAME ||
+                  Message == CB_GETLBTEXT || Message == LB_GETTEXT ||
+                  Message == EM_GETLINE)
+         {
+            SIZE_T MaximumChars = (SIZE_T)lParamBufferSize / sizeof(WCHAR);
+            SIZE_T Length = wcsnlen(CallbackLParam, MaximumChars);
+            CopySize = min((Length + 1) * sizeof(WCHAR),
+                           (SIZE_T)lParamBufferSize);
+         }
+
+         TRACE("Copy lParam Message %u Size %Iu lParam %p!\n",
+               Message, CopySize, (PVOID)lParam);
+         if (InSendMessage)
+         {
+            RtlMoveMemory((PVOID)lParam, CallbackLParam, CopySize);
+         }
+         else
+         {
+            _SEH2_TRY
             {
-             _SEH2_TRY
-             { // Copy into user space.
-               RtlMoveMemory((PVOID) lParam,
-                             (PVOID) ((char *) Arguments + sizeof(WINDOWPROC_CALLBACK_ARGUMENTS)),
-                              lParamBufferSize);
-             }
-             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-             {
-                ERR("Failed to copy lParam to user space, Message %u!\n", Message);
-             }
-             _SEH2_END;
+               RtlMoveMemory((PVOID)lParam, CallbackLParam, CopySize);
             }
-            break;
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+               ERR("Failed to copy lParam to user space, Message %u!\n", Message);
+            }
+            _SEH2_END;
+         }
       }
       IntCbFreeMemory(Arguments);
    }
@@ -603,11 +631,13 @@ co_IntCallHookProc(INT HookId,
      case WH_CALLWNDPROC:
      {
          pCWP = (CWPSTRUCT*) lParam;
-         ArgumentLength = sizeof(CWP_Struct);
+         ArgumentLength = HOOK_PAYLOAD_OFFSET(CWP_Struct);
          if ( pCWP->message == WM_CREATE || pCWP->message == WM_NCCREATE )
          {
              lParamSize = sizeof(CREATESTRUCTW);
          }
+         else if (pti->cbCwpHookLParam)
+             lParamSize = pti->cbCwpHookLParam < 0 ? 0 : pti->cbCwpHookLParam;
          else
              lParamSize = lParamMemorySize(pCWP->message, pCWP->wParam, pCWP->lParam);
          ArgumentLength += lParamSize;
@@ -616,11 +646,13 @@ co_IntCallHookProc(INT HookId,
       case WH_CALLWNDPROCRET:
       {
          pCWPR = (CWPRETSTRUCT*) lParam;
-         ArgumentLength = sizeof(CWPR_Struct);
+         ArgumentLength = HOOK_PAYLOAD_OFFSET(CWPR_Struct);
          if ( pCWPR->message == WM_CREATE || pCWPR->message == WM_NCCREATE )
          {
              lParamSize = sizeof(CREATESTRUCTW);
          }
+         else if (pti->cbCwpHookLParam)
+             lParamSize = pti->cbCwpHookLParam < 0 ? 0 : pti->cbCwpHookLParam;
          else
              lParamSize = lParamMemorySize(pCWPR->message, pCWPR->wParam, pCWPR->lParam);
          ArgumentLength += lParamSize;
@@ -708,23 +740,69 @@ co_IntCallHookProc(INT HookId,
       case WH_CALLWNDPROC:
       {
          PCWP_Struct pcwps = (PCWP_Struct)Common;
+         PVOID Payload = (PCHAR)Common + HOOK_PAYLOAD_OFFSET(CWP_Struct);
          RtlCopyMemory( &pcwps->cwps, pCWP, sizeof(CWPSTRUCT));
          /* For CALLWNDPROC and CALLWNDPROCRET, we must be wary of the fact that
           * lParam could be a pointer to a buffer. This buffer must be exported
           * to user space too */
          if ( lParamSize )
          {
-             RtlCopyMemory( &pcwps->Extra, (PVOID)pCWP->lParam, lParamSize );
+             INT MemoryFlags = lParamMemoryFlags(pCWP->message);
+
+             if ((MemoryFlags & LPARAM_MEMORY_WRITE) && !(MemoryFlags & LPARAM_MEMORY_READ))
+             {
+                 RtlZeroMemory(Payload, lParamSize);
+             }
+             else if (pCWP->message == WM_COPYDATA)
+             {
+                 COPYDATASTRUCT *Source = (COPYDATASTRUCT *)pCWP->lParam;
+                 COPYDATASTRUCT *Captured = (COPYDATASTRUCT *)Payload;
+
+                 *Captured = *Source;
+                 if (Source->lpData)
+                 {
+                     Captured->lpData = Captured + 1;
+                     if (Source->cbData)
+                         RtlCopyMemory(Captured + 1, Source->lpData, Source->cbData);
+                 }
+             }
+             else
+             {
+                 RtlCopyMemory(Payload, (PVOID)pCWP->lParam, lParamSize);
+             }
          }
       }
          break;
       case WH_CALLWNDPROCRET:
       {
          PCWPR_Struct pcwprs = (PCWPR_Struct)Common;
+         PVOID Payload = (PCHAR)Common + HOOK_PAYLOAD_OFFSET(CWPR_Struct);
          RtlCopyMemory( &pcwprs->cwprs, pCWPR, sizeof(CWPRETSTRUCT));
          if ( lParamSize )
          {
-             RtlCopyMemory( &pcwprs->Extra, (PVOID)pCWPR->lParam, lParamSize );
+             INT MemoryFlags = lParamMemoryFlags(pCWPR->message);
+
+             if ((MemoryFlags & LPARAM_MEMORY_WRITE) && !(MemoryFlags & LPARAM_MEMORY_READ))
+             {
+                 RtlZeroMemory(Payload, lParamSize);
+             }
+             else if (pCWPR->message == WM_COPYDATA)
+             {
+                 COPYDATASTRUCT *Source = (COPYDATASTRUCT *)pCWPR->lParam;
+                 COPYDATASTRUCT *Captured = (COPYDATASTRUCT *)Payload;
+
+                 *Captured = *Source;
+                 if (Source->lpData)
+                 {
+                     Captured->lpData = Captured + 1;
+                     if (Source->cbData)
+                         RtlCopyMemory(Captured + 1, Source->lpData, Source->cbData);
+                 }
+             }
+             else
+             {
+                 RtlCopyMemory(Payload, (PVOID)pCWPR->lParam, lParamSize);
+             }
          }
       }
          break;
@@ -812,7 +890,9 @@ co_IntCallHookProc(INT HookId,
             break;
          }
       }
-      // "The GetMsgProc hook procedure can examine or modify the message."
+      // These hook procedures can examine or modify the message.
+      case WH_MSGFILTER:
+      case WH_SYSMSGFILTER:
       case WH_GETMESSAGE:
          if (pMsg)
          {

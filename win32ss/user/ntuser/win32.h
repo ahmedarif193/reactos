@@ -119,6 +119,7 @@ typedef struct _THREADINFO
     struct tagHOOK *    sphkCurrent;
     LPARAM              lParamHkCurrent;
     WPARAM              wParamHkCurrent;
+    INT                 cbCwpHookLParam;
     struct tagSBTRACK*  pSBTrack;
     /* Set if there are new messages specified by WakeMask in any of the queues. */
     HANDLE              hEventQueueClient;
