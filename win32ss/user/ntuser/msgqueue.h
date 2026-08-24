@@ -271,6 +271,9 @@ UserSetCursor(PCURICON_OBJECT NewCursor,
 DWORD APIENTRY IntGetQueueStatus(DWORD);
 
 UINT lParamMemorySize(UINT Msg, WPARAM wParam, LPARAM lParam);
+INT lParamMemoryFlags(UINT Msg);
+#define LPARAM_MEMORY_READ  0x01
+#define LPARAM_MEMORY_WRITE 0x02
 
 BOOL APIENTRY
 co_IntGetPeekMessage( PMSG pMsg,

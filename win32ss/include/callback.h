@@ -84,6 +84,11 @@ typedef struct tagCWPR_Struct
    PBYTE Extra[4];
 } CWPR_Struct, *PCWPR_Struct;
 
+/* The lParam payload must sit at the same 16-byte phase in every user-mode
+ * callout so consecutive callouts (hook, wndproc, ret hook) expose the same
+ * user stack address for it. */
+#define HOOK_PAYLOAD_OFFSET(type) ((FIELD_OFFSET(type, Extra) + 15) & ~(SIZE_T)15)
+
 typedef struct _EVENTPROC_CALLBACK_ARGUMENTS
 {
   HWINEVENTHOOK hook;

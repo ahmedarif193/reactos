@@ -4429,7 +4429,6 @@ DefSetText(PWND Wnd, PCWSTR WindowText)
 
    Ret = TRUE;
 Exit:
-   if (UnicodeString.Buffer) RtlFreeUnicodeString(&UnicodeString);
    return Ret;
 }
 

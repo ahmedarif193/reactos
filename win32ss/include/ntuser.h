@@ -2736,7 +2736,7 @@ typedef struct tagDOSENDMESSAGE
 }
 DOSENDMESSAGE, *PDOSENDMESSAGE;
 
-BOOL
+LRESULT
 NTAPI
 NtUserMessageCall(
     HWND hWnd,

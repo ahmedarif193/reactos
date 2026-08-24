@@ -62,7 +62,7 @@ static const unsigned int message_pointer_flags[] =
     SET(CB_INSERTSTRING) | SET(CB_FINDSTRING) | SET(CB_SELECTSTRING) |
     SET(CB_GETDROPPEDCONTROLRECT) | SET(CB_FINDSTRINGEXACT),
     /* 0x160 - 0x17f */
-    0,
+    SET(CB_GETCOMBOBOXINFO),
     /* 0x180 - 0x19f */
     SET(LB_ADDSTRING) | SET(LB_INSERTSTRING) | SET(LB_GETTEXT) | SET(LB_SELECTSTRING) |
     SET(LB_DIR) | SET(LB_FINDSTRING) |
@@ -378,7 +378,8 @@ MsgiUMToKMMessage(PMSG UMMsg, PMSG KMMsg, BOOL Posted)
           PCOPYDATASTRUCT pUMCopyData = (PCOPYDATASTRUCT)UMMsg->lParam;
           PCOPYDATASTRUCT pKMCopyData;
 
-          pKMCopyData = HeapAlloc(GetProcessHeap(), 0, sizeof(COPYDATASTRUCT) + pUMCopyData->cbData);
+          pKMCopyData = HeapAlloc(GetProcessHeap(), 0, sizeof(COPYDATASTRUCT) +
+                                  (pUMCopyData->lpData ? pUMCopyData->cbData : 0));
           if (!pKMCopyData)
           {
               SetLastError(ERROR_OUTOFMEMORY);
@@ -387,9 +388,10 @@ MsgiUMToKMMessage(PMSG UMMsg, PMSG KMMsg, BOOL Posted)
 
           pKMCopyData->dwData = pUMCopyData->dwData;
           pKMCopyData->cbData = pUMCopyData->cbData;
-          pKMCopyData->lpData = pKMCopyData + 1;
+          pKMCopyData->lpData = pUMCopyData->lpData ? pKMCopyData + 1 : NULL;
 
-          RtlCopyMemory(pKMCopyData + 1, pUMCopyData->lpData, pUMCopyData->cbData);
+          if (pUMCopyData->lpData && pUMCopyData->cbData)
+              RtlCopyMemory(pKMCopyData + 1, pUMCopyData->lpData, pUMCopyData->cbData);
 
           KMMsg->lParam = (LPARAM)pKMCopyData;
         }
@@ -460,10 +462,24 @@ MsgiKMToUMMessage(PMSG KMMsg, PMSG UMMsg)
         }
         break;
 
+      case WM_MDICREATE:
+        {
+          MDICREATESTRUCTW *Mdi = (MDICREATESTRUCTW *)KMMsg->lParam;
+
+          /* A packed string class starts immediately after the structure;
+             integer atoms retain their original value. */
+          if ((ULONG_PTR)Mdi->szClass == sizeof(*Mdi))
+            Mdi->szClass = (LPCWSTR)((PCHAR)Mdi + (ULONG_PTR)Mdi->szClass);
+          if (Mdi->szTitle)
+            Mdi->szTitle = (LPCWSTR)((PCHAR)Mdi + (ULONG_PTR)Mdi->szTitle);
+        }
+        break;
+
       case WM_COPYDATA:
         {
           PCOPYDATASTRUCT pKMCopyData = (PCOPYDATASTRUCT)KMMsg->lParam;
-          pKMCopyData->lpData = pKMCopyData + 1;
+          if (pKMCopyData->lpData)
+              pKMCopyData->lpData = pKMCopyData + 1;
         }
         break;
 
@@ -2664,7 +2680,7 @@ SendMessageA(HWND Wnd, UINT Msg, WPARAM wParam, LPARAM lParam)
                            KMMsg.lParam,
                           (ULONG_PTR)&Result,
                            FNID_SENDMESSAGE,
-                           TRUE);
+                           FALSE);
   if (!Ret)
   {
      ERR("SendMessageA Error\n");
@@ -2818,16 +2834,16 @@ SendMessageTimeoutA(
                               KMMsg.lParam,
                              (ULONG_PTR)&dsm,
                               FNID_SENDMESSAGEWTOOPTION,
-                              TRUE);
+                              FALSE);
 
   MsgiUMToKMCleanup(&UcMsg, &KMMsg);
   MsgiAnsiToUnicodeReply(&UcMsg, &AnsiMsg, &Result);
 
-  if (lpdwResult) *lpdwResult = dsm.Result;
+  if (lpdwResult) *lpdwResult = Result;
 
   SPY_ExitMessage(SPY_RESULT_OK, hWnd, Msg, Result, wParam, lParam);
 
-  return Result;
+  return dsm.Result;
 }
 
 
@@ -2885,11 +2901,11 @@ SendMessageTimeoutW(
 
   MsgiUMToKMCleanup(&UMMsg, &KMMsg);
 
-  if (lpdwResult) *lpdwResult = dsm.Result;
+  if (lpdwResult) *lpdwResult = Result;
 
   SPY_ExitMessage(SPY_RESULT_OK, hWnd, Msg, Result, wParam, lParam);
 
-  return Result;
+  return dsm.Result;
 }
 
 /*
@@ -3102,6 +3118,8 @@ User32CallWindowProcFromKernel(PVOID Arguments, ULONG ArgumentLength)
   PWINDOWPROC_CALLBACK_ARGUMENTS CallbackArgs;
   MSG KMMsg, UMMsg;
   PWND pWnd = NULL;
+  BOOL IsTimerCallback;
+  DWORD CallbackWParamData = 0;
   PCLIENTINFO pci = GetWin32ClientInfo();
 
   /* Make sure we don't try to access mem beyond what we were given */
@@ -3111,6 +3129,9 @@ User32CallWindowProcFromKernel(PVOID Arguments, ULONG ArgumentLength)
     }
 
   CallbackArgs = (PWINDOWPROC_CALLBACK_ARGUMENTS) Arguments;
+  IsTimerCallback = CallbackArgs->Msg == WM_TIMER &&
+                    CallbackArgs->lParamBufferSize == -1 &&
+                    NtUserValidateTimerCallback((LPARAM)CallbackArgs->Proc);
   KMMsg.hwnd = CallbackArgs->Wnd;
   KMMsg.message = CallbackArgs->Msg;
   KMMsg.wParam = CallbackArgs->wParam;
@@ -3172,16 +3193,43 @@ User32CallWindowProcFromKernel(PVOID Arguments, ULONG ArgumentLength)
     {
     }
 
+  if (!UMMsg.wParam && (UMMsg.message == EM_GETSEL ||
+                        UMMsg.message == SBM_GETRANGE ||
+                        UMMsg.message == CB_GETEDITSEL))
+      UMMsg.wParam = (WPARAM)&CallbackWParamData;
+
   if (pci->CallbackWnd.hWnd == UMMsg.hwnd)
      pWnd = pci->CallbackWnd.pWnd;
 
-  CallbackArgs->Result = IntCallWindowProcW( CallbackArgs->IsAnsiProc,
-                                             CallbackArgs->Proc,
-                                             pWnd,
-                                             UMMsg.hwnd,
-                                             UMMsg.message,
-                                             UMMsg.wParam,
-                                             UMMsg.lParam);
+  if (IsTimerCallback)
+  {
+      _SEH2_TRY
+      {
+          CallbackArgs->Result = IntCallWindowProcW(CallbackArgs->IsAnsiProc,
+                                                    CallbackArgs->Proc,
+                                                    pWnd,
+                                                    UMMsg.hwnd,
+                                                    UMMsg.message,
+                                                    UMMsg.wParam,
+                                                    UMMsg.lParam);
+      }
+      _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+      {
+          CallbackArgs->Result = 0;
+          WARN("Exception in timer callback %p\n", CallbackArgs->Proc);
+      }
+      _SEH2_END;
+  }
+  else
+  {
+      CallbackArgs->Result = IntCallWindowProcW(CallbackArgs->IsAnsiProc,
+                                                CallbackArgs->Proc,
+                                                pWnd,
+                                                UMMsg.hwnd,
+                                                UMMsg.message,
+                                                UMMsg.wParam,
+                                                UMMsg.lParam);
+  }
 
   if (! MsgiKMToUMReply(&KMMsg, &UMMsg, &CallbackArgs->Result))
     {

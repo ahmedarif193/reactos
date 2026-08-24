@@ -670,7 +670,9 @@ co_UserCallNextHookEx(PHOOK Hook,
             {
                 lResult = co_HOOK_CallHookNext(Hook, Code, wParam, (LPARAM)&Msg);
 
-                if (lParam && (Hook->HookId == WH_GETMESSAGE))
+                if (lParam && (Hook->HookId == WH_GETMESSAGE ||
+                               Hook->HookId == WH_MSGFILTER ||
+                               Hook->HookId == WH_SYSMSGFILTER))
                 {
                     _SEH2_TRY
                     {
