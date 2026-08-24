@@ -21,6 +21,9 @@ PWND_DATA ThemeGetWndData(HWND hWnd)
     pwndData = (PWND_DATA)GetPropW(hWnd, (LPCWSTR)MAKEINTATOM(atWndContext));
     if(pwndData == NULL)
     {
+        if (!IsThemeActive())
+            return NULL;
+
         pwndData = HeapAlloc(GetProcessHeap(),
                             HEAP_ZERO_MEMORY,
                             sizeof(WND_DATA));
