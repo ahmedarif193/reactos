@@ -1339,18 +1339,18 @@ ProcessKeyEvent(WORD wVk, WORD wScanCode, DWORD dwFlags, BOOL bInjected, DWORD d
         if (!bPacket)
         {
             if (bExt)
-                Msg.lParam |= KF_EXTENDED << 16;
+                Msg.lParam |= (ULONG_PTR)KF_EXTENDED << 16;
             if (IS_KEY_DOWN(gafAsyncKeyState, VK_MENU))
-                Msg.lParam |= KF_ALTDOWN << 16;
+                Msg.lParam |= (ULONG_PTR)KF_ALTDOWN << 16;
             if (bWasSimpleDown)
-                Msg.lParam |= KF_REPEAT << 16;
+                Msg.lParam |= (ULONG_PTR)KF_REPEAT << 16;
             if (!bIsDown)
-                Msg.lParam |= KF_UP << 16;
+                Msg.lParam |= (ULONG_PTR)KF_UP << 16;
             /* FIXME: Set KF_DLGMODE and KF_MENUMODE when needed */
             if (pFocusQueue->QF_flags & QF_DIALOGACTIVE)
-                Msg.lParam |= KF_DLGMODE << 16;
+                Msg.lParam |= (ULONG_PTR)KF_DLGMODE << 16;
             if (pFocusQueue->MenuOwner) // pti->pMenuState->fMenuStarted
-                Msg.lParam |= KF_MENUMODE << 16;
+                Msg.lParam |= (ULONG_PTR)KF_MENUMODE << 16;
         }
 
         // Post mouse move before posting key buttons, to keep it syned.
@@ -1660,8 +1660,8 @@ IntMapVirtualKeyEx(UINT uCode, UINT Type, PKBDTABLES pKbdTbl)
         case MAPVK_VK_TO_VSC:
             uCode = IntFixVk(uCode, FALSE);
             uRet = IntVkToVsc(uCode, pKbdTbl);
-            if (uRet > 0xFF) // Fail for scancodes with prefix (e0, e1)
-                uRet = 0;
+            /* This mapping does not distinguish extended keys. */
+            uRet &= 0xFF;
             break;
 
         case MAPVK_VSC_TO_VK:
