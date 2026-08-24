@@ -3,7 +3,6 @@
 #include <apitest.h>
 
 extern void func_NtGdiDdCreateDirectDrawObject(void);
-extern void func_NtGdiDdCreateDirectDrawObject(void);
 extern void func_NtGdiDdDeleteDirectDrawObject(void);
 extern void func_NtGdiDdQueryDirectDrawObject(void);
 
