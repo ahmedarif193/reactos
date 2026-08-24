@@ -1716,6 +1716,8 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
     }
     RtlZeroMemory(TtClearRundown, sizeof(*TtClearRundown));
     KeInitializeEvent(&TtClearRundown->Event, NotificationEvent, FALSE);
+    KeInitializeSpinLock(&TtClearRundown->QueueLock);
+    InitializeListHead(&TtClearRundown->Queue);
     FdoExtension->Aux.TtClearRundown = TtClearRundown;
     KeInitializeSpinLock(&FdoExtension->PowerWakeSpinLock);
     KeInitializeSpinLock(&FdoExtension->SetPowerD0SpinLock);
