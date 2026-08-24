@@ -125,6 +125,7 @@ NtUserGetAtomName(
             }
             else
             {
+                EngSetLastError(ERROR_INSUFFICIENT_BUFFER);
                 cjLength = 0;
             }
         }

@@ -29,14 +29,67 @@ ATOM AtomImeLevel;
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
+static const PCWSTR PredefinedGlobalAtoms[] =
+{
+    L"StdExit",
+    L"StdNewDocument",
+    L"StdOpenDocument",
+    L"StdEditDocument",
+    L"StdNewfromTemplate",
+    L"StdCloseDocument",
+    L"StdShowItem",
+    L"StdDoVerbItem",
+    L"System",
+    L"OLEsystem",
+    L"StdDocumentName",
+    L"Protocols",
+    L"Topics",
+    L"Formats",
+    L"Status",
+    L"EditEnvItems",
+    L"True",
+    L"False",
+    L"Change",
+    L"Save",
+    L"Close",
+    L"MSDraw",
+    L"CC32SubclassInfo",
+};
+
+static const PCWSTR PredefinedUserAtoms[] =
+{
+    L"USER32",
+    L"ObjectLink",
+    L"OwnerLink",
+    L"Native",
+    L"Binary",
+    L"FileName",
+    L"FileNameW",
+    L"NetworkName",
+    L"DataObject",
+    L"Embedded Object",
+    L"Embed Source",
+    L"Custom Link Source",
+    L"Link Source",
+    L"Object Descriptor",
+    L"Link Source Descriptor",
+    L"OleDraw",
+    L"PBrush",
+    L"MSDraw",
+    L"Ole Private Data",
+    L"Screen Picture",
+    L"OleClipboardPersistOnFlush",
+    L"MoreOlePrivateData",
+};
+
 static
 ATOM FASTCALL
-IntAddUserPropertyAtom(PWSTR AtomName)
+IntAddUserPropertyAtom(PCWSTR AtomName)
 {
     RTL_ATOM Atom = 0;
     NTSTATUS Status;
 
-    Status = NtAddAtom(AtomName,
+    Status = NtAddAtom((PWSTR)AtomName,
                        (ULONG)(wcslen(AtomName) * sizeof(WCHAR)),
                        &Atom);
     if (!NT_SUCCESS(Status))
@@ -51,6 +104,15 @@ static
 NTSTATUS FASTCALL
 InitUserAtoms(VOID)
 {
+    ULONG i;
+
+    /* Initialize the public and USER-private well-known atom namespaces. */
+    for (i = 0; i < RTL_NUMBER_OF(PredefinedGlobalAtoms); i++)
+        IntAddUserPropertyAtom(PredefinedGlobalAtoms[i]);
+
+    for (i = 0; i < RTL_NUMBER_OF(PredefinedUserAtoms); i++)
+        IntAddGlobalAtom((PWSTR)PredefinedUserAtoms[i], TRUE);
+
     RegisterControlAtoms();
 
     gpsi->atomSysClass[ICLS_MENU]      = 32768;

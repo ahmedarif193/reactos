@@ -108,7 +108,6 @@ RegisterClipboardFormatA(LPCSTR lpszFormat)
 
     if (*lpszFormat == ANSI_NULL)
     {
-        SetLastError(ERROR_INVALID_NAME);
         return 0;
     }
 
@@ -142,7 +141,6 @@ RegisterClipboardFormatW(LPCWSTR lpszFormat)
 
     if (*lpszFormat == UNICODE_NULL)
     {
-        SetLastError(ERROR_INVALID_NAME);
         return 0;
     }
 
