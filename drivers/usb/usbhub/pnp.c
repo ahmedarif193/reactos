@@ -1783,15 +1783,28 @@ USBH_FdoQueryBusRelations(IN PUSBHUB_FDO_EXTENSION HubExtension,
     }
     else if (HubExtension->HubFlags & USBHUB_FDO_FLAG_DO_ENUMERATION)
     {
-        /*
-         * Port state changed: run the (slow) debounce/reset/create-device
-         * sequence on a work item instead of blocking the PnP enumeration
-         * thread for hundreds of milliseconds. The worker invalidates the
-         * bus relations again once it is done and the snapshot below then
-         * reports the newly created PDOs.
-         */
-        HubExtension->HubFlags &= ~USBHUB_FDO_FLAG_DO_ENUMERATION;
-        USBH_QueueHubEnumeration(HubExtension);
+        if (USBH_IsBootDeviceDiscoveryActive())
+        {
+            /*
+             * A boot-device connection can be reported after the hub's first
+             * relations query. Keep these change-driven passes on the PnP
+             * worker until boot-volume discovery is complete, so the global
+             * PnP enumeration barrier also covers debounce, reset and PDO
+             * publication.
+             */
+            DPRINT("USBH_FdoQueryBusRelations: boot discovery enumeration\n");
+            USBH_EnumerateHubPorts(HubExtension);
+        }
+        else
+        {
+            /*
+             * After boot, run the slow debounce/reset/create-device sequence
+             * on a work item. The worker invalidates the bus relations again
+             * once it is done and the snapshot below reports the new PDOs.
+             */
+            HubExtension->HubFlags &= ~USBHUB_FDO_FLAG_DO_ENUMERATION;
+            USBH_QueueHubEnumeration(HubExtension);
+        }
     }
 
     /* Return a snapshot of the child PDOs published by the enumeration pass. */
