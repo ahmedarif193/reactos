@@ -371,6 +371,8 @@ UserSendMouseInput(MOUSEINPUT *pmi, BOOL bInjected)
         co_MsqInsertMouseMessage(&Msg, bInjected, pmi->dwExtraInfo, TRUE);
     }
 
+    UserRecordMousePointerInput(&gpsi->ptCursor, dwFlags, Msg.time);
+
     return TRUE;
 }
 
