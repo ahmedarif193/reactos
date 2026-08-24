@@ -2550,7 +2550,6 @@ SendMessageW(HWND Wnd,
 {
   MSG UMMsg, KMMsg;
   LRESULT Result;
-  BOOL Ret;
   PWND Window;
   PTHREADINFO ti = GetW32ThreadInfo();
 
@@ -2596,17 +2595,7 @@ SendMessageW(HWND Wnd,
      return FALSE;
   }
 
-  Ret = NtUserMessageCall( Wnd,
-                           KMMsg.message,
-                           KMMsg.wParam,
-                           KMMsg.lParam,
-                          (ULONG_PTR)&Result,
-                           FNID_SENDMESSAGE,
-                           FALSE);
-  if (!Ret)
-  {
-     ERR("SendMessageW Error\n");
-  }
+  Result = NtUserMessageCall(Wnd, KMMsg.message, KMMsg.wParam, KMMsg.lParam, (ULONG_PTR)&Result, FNID_SENDMESSAGE, FALSE);
 
   MsgiUMToKMCleanup(&UMMsg, &KMMsg);
 
@@ -2622,7 +2611,6 @@ SendMessageA(HWND Wnd, UINT Msg, WPARAM wParam, LPARAM lParam)
 {
   MSG AnsiMsg, UcMsg, KMMsg;
   LRESULT Result;
-  BOOL Ret;
   PWND Window;
   PTHREADINFO ti = GetW32ThreadInfo();
 
@@ -2674,17 +2662,7 @@ SendMessageA(HWND Wnd, UINT Msg, WPARAM wParam, LPARAM lParam)
       return FALSE;
   }
 
-  Ret = NtUserMessageCall( Wnd,
-                           KMMsg.message,
-                           KMMsg.wParam,
-                           KMMsg.lParam,
-                          (ULONG_PTR)&Result,
-                           FNID_SENDMESSAGE,
-                           FALSE);
-  if (!Ret)
-  {
-     ERR("SendMessageA Error\n");
-  }
+  Result = NtUserMessageCall(Wnd, KMMsg.message, KMMsg.wParam, KMMsg.lParam, (ULONG_PTR)&Result, FNID_SENDMESSAGE, FALSE);
 
   MsgiUMToKMCleanup(&UcMsg, &KMMsg);
   MsgiAnsiToUnicodeReply(&UcMsg, &AnsiMsg, &Result);
