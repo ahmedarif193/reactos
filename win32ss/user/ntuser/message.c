@@ -486,7 +486,11 @@ PackParam(LPARAM *lParamPacked, UINT Msg, WPARAM wParam, LPARAM lParam, BOOL Non
             ERR("Not enough memory to pack lParam\n");
             return STATUS_NO_MEMORY;
         }
-        RtlCopyMemory(PackedData, (PVOID)lParam, MsgMemorySize(MsgMemoryEntry, wParam, lParam));
+        RtlCopyMemory(PackedData, (PVOID)lParam, size);
+        if (Msg == WM_COPYDATA && ((COPYDATASTRUCT *)PackedData)->lpData)
+        {
+            ((COPYDATASTRUCT *)PackedData)->lpData = (COPYDATASTRUCT *)PackedData + 1;
+        }
         *lParamPacked = (LPARAM)PackedData;
     }
 
