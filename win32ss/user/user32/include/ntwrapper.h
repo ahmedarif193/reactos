@@ -277,7 +277,13 @@ SetCursor(HCURSOR hCursor)
 EXTINLINE HDC WINAPI
 GetDC(HWND hWnd)
 {
-    return NtUserGetDC(hWnd);
+    DWORD LastError = GetLastError();
+    HDC hDC = NtUserGetDC(hWnd);
+
+    if (hDC)
+        SetLastError(LastError);
+
+    return hDC;
 }
 
 EXTINLINE HDC WINAPI

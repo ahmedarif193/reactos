@@ -144,10 +144,13 @@ GetSystemMetrics(int nIndex)
 {
    BOOL Hook;
    int Ret = 0;
+   DWORD LastError = GetLastError();
 
    if (!gpsi) // Fixme! Hax! Need Timos delay load support?
    {
-      return RealGetSystemMetrics(nIndex);
+      Ret = RealGetSystemMetrics(nIndex);
+      SetLastError(LastError);
+      return Ret;
    }
 
    LoadUserApiHook();
@@ -155,7 +158,12 @@ GetSystemMetrics(int nIndex)
    Hook = BeginIfHookedUserApiHook();
 
    /* Bypass SEH and go direct. */
-   if (!Hook) return RealGetSystemMetrics(nIndex);
+   if (!Hook)
+   {
+      Ret = RealGetSystemMetrics(nIndex);
+      SetLastError(LastError);
+      return Ret;
+   }
 
    _SEH2_TRY
    {
@@ -169,6 +177,7 @@ GetSystemMetrics(int nIndex)
 
    EndUserApiHook();
 
+   SetLastError(LastError);
    return Ret;
 }
 
