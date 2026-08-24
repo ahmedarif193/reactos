@@ -887,11 +887,23 @@ static void test_NtUserBuildHwndList(void)
     NTSTATUS status;
     HDESK desktop;
     BOOL ret;
+#ifdef __REACTOS__
+    /* Ambient harness windows (e.g. OleMainThreadWndClass) may already live
+     * on this thread; snapshot and discount them instead of filtering in the
+     * kernel. */
+    ULONG base;
+#else
+    static const ULONG base = 0;
+#endif
 
     size = 0xdeadbeef;
     status = NtUserBuildHwndList( 0, 0, FALSE, FALSE, GetCurrentThreadId(), ARRAYSIZE(buf), buf, &size );
     ok( !status, "NtUserBuildHwndList failed: %#lx\n", status );
-    ok( size == 1, "size = %lu\n", size );
+#ifdef __REACTOS__
+    base = size - 1;
+    if (base) trace( "%lu ambient thread windows\n", base );
+#endif
+    ok( size == 1 + base, "size = %lu\n", size );
     ok( buf[size - 1] == HWND_BOTTOM, "buf[size - 1] = %p\n", buf[size - 1] );
 
     msg = CreateWindowExA( 0, "static", "", WS_POPUP, 0,0,0,0,HWND_MESSAGE,0,0, NULL );
@@ -905,26 +917,26 @@ static void test_NtUserBuildHwndList(void)
     size = 0xdeadbeef;
     status = NtUserBuildHwndList( 0, 0, FALSE, FALSE, GetCurrentThreadId(), ARRAYSIZE(buf), buf, &size );
     ok( !status, "NtUserBuildHwndList failed: %#lx\n", status );
-    ok( size == 3, "size = %lu\n", size );
+    ok( size == 3 + base, "size = %lu\n", size );
     ok( buf[0] == hwnd, "buf[0] = %p\n", buf[0] );
     ok( buf[size - 1] == HWND_BOTTOM, "buf[size - 1] = %p\n", buf[size - 1] );
 
     size = 0xdeadbeef;
-    status = NtUserBuildHwndList( 0, 0, FALSE, FALSE, GetCurrentThreadId(), 3, buf, &size );
+    status = NtUserBuildHwndList( 0, 0, FALSE, FALSE, GetCurrentThreadId(), 3 + base, buf, &size );
     ok( !status, "NtUserBuildHwndList failed: %#lx\n", status );
-    ok( size == 3, "size = %lu\n", size );
+    ok( size == 3 + base, "size = %lu\n", size );
 
     size = 0xdeadbeef;
     memset( buf, 0xcc, sizeof(buf) );
-    status = NtUserBuildHwndList( 0, 0, FALSE, FALSE, GetCurrentThreadId(), 2, buf, &size );
+    status = NtUserBuildHwndList( 0, 0, FALSE, FALSE, GetCurrentThreadId(), 2 + base, buf, &size );
     ok( status == STATUS_BUFFER_TOO_SMALL, "NtUserBuildHwndList failed: %#lx\n", status );
-    ok( size == 3, "size = %lu\n", size );
+    ok( size == 3 + base, "size = %lu\n", size );
     ok( HandleToUlong(buf[0]) == 0xcccccccc, "buf[0] initialized\n" );
 
     size = 0xdeadbeef;
     status = NtUserBuildHwndList( 0, 0, FALSE, FALSE, GetCurrentThreadId(), 1, buf, &size );
     ok( status == STATUS_BUFFER_TOO_SMALL, "NtUserBuildHwndList failed: %#lx\n", status );
-    ok( size == 3, "size = %lu\n", size );
+    ok( size == 3 + base, "size = %lu\n", size );
 
     desktop_windows_cnt = 0;
     EnumDesktopWindows( 0, count_win, (LPARAM)&desktop_windows_cnt );
