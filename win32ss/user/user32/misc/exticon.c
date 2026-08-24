@@ -301,7 +301,9 @@ static UINT ICO_ExtractIconExW(
 {
 	UINT		ret = 0;
 	UINT		cx1, cx2, cy1, cy2;
+#ifdef __REACTOS__
 	UINT       *allocatedIconIds = NULL;
+#endif
 	LPBYTE		pData;
 	DWORD		sig;
 	HANDLE		hFile;
@@ -429,6 +431,7 @@ static UINT ICO_ExtractIconExW(
 	if (pIconId) /* Invalidate first icon identifier */
 		*pIconId = 0xFFFFFFFF;
 
+#ifdef __REACTOS__
 	if (!pIconId && RetPtr && nIcons)
     {
         allocatedIconIds = HeapAlloc(GetProcessHeap(), 0, nIcons * sizeof(*allocatedIconIds));
@@ -436,6 +439,10 @@ static UINT ICO_ExtractIconExW(
             goto end;
         pIconId = allocatedIconIds;
     }
+#else
+	if (!pIconId) /* if no icon identifier array present use the icon handle array as intermediate storage */
+	  pIconId = (UINT*)RetPtr;
+#endif
 
 	sig = USER32_GetResourceTable(peimage, fsizel, &pData);
 
@@ -632,6 +639,9 @@ static UINT ICO_ExtractIconExW(
                             DestroyIcon(icon);
 
                         iconCount = 1;
+#ifndef __REACTOS__
+                        break;
+#endif
                     }
                 }
             }
@@ -650,8 +660,10 @@ static UINT ICO_ExtractIconExW(
         ULONG size;
         UINT i;
 
+#ifdef __REACTOS__
         if (cx2 && cy2 && (nIcons & 1))
             goto end;
+#endif
 
         rootresdir = RtlImageDirectoryEntryToData((HMODULE)peimage, FALSE, IMAGE_DIRECTORY_ENTRY_RESOURCE, &size);
         if (!rootresdir)
@@ -680,8 +692,10 @@ static UINT ICO_ExtractIconExW(
 	  /* only number of icons requested */
 	  if( !pIconId )
 	  {
+#ifdef __REACTOS__
 	    if (fIconEx && RetPtr && !nIcons)
 	      goto end;
+#endif
 	    ret = iconDirCount;
 	    goto end;		/* success */
 	  }
@@ -851,7 +865,9 @@ static UINT ICO_ExtractIconExW(
 	}			/* if(sig == IMAGE_NT_SIGNATURE) */
 
 end:
+#ifdef __REACTOS__
 	HeapFree(GetProcessHeap(), 0, allocatedIconIds);
+#endif
 	UnmapViewOfFile(peimage);	/* success */
 	return ret;
 }
