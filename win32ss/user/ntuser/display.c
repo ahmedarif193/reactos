@@ -371,8 +371,7 @@ UserEnumDisplayDevices(
     return STATUS_SUCCESS;
 }
 
-//NTSTATUS
-BOOL
+NTSTATUS
 NTAPI
 NtUserEnumDisplayDevices(
     PUNICODE_STRING pustrDevice,
@@ -406,8 +405,7 @@ NtUserEnumDisplayDevices(
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
-//            _SEH2_YIELD(return _SEH2_GetExceptionCode());
-            _SEH2_YIELD(return NT_SUCCESS(_SEH2_GetExceptionCode()));
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
         }
         _SEH2_END
 
@@ -445,18 +443,20 @@ NtUserEnumDisplayDevices(
                 /* Copy as much as the given buffer allows */
                 RtlCopyMemory(pDisplayDevice, &dispdev, pDisplayDevice->cb);
             }
+            else
+            {
+                Status = STATUS_UNSUCCESSFUL;
+            }
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
-            Status = _SEH2_GetExceptionCode();
+            Status = STATUS_UNSUCCESSFUL;
         }
         _SEH2_END
     }
 
     TRACE("Leave NtUserEnumDisplayDevices, Status = 0x%lx\n", Status);
-    /* Return the result */
-//    return Status;
-    return NT_SUCCESS(Status); // FIXME
+    return Status;
 }
 
 NTSTATUS

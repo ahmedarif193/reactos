@@ -1642,32 +1642,72 @@ NtUserUnlockWindowStation(HWINSTA hWindowStation)
     return Ret;
 }
 
+#define USER_NAME_LIST_HEADER_SIZE FIELD_OFFSET(USER_NAME_LIST, Strings[1])
+
+static NTSTATUS FASTCALL
+CopyUserNameList(
+    PUSER_NAME_LIST NameList,
+    ULONG TotalSize,
+    ULONG dwSize,
+    PUSER_NAME_LIST lpBuffer,
+    PULONG pRequiredSize)
+{
+    ULONG Available, CopyBytes = 0, NameBytes, Index, UsedSize;
+    PWCHAR Name;
+    NTSTATUS Status;
+
+    if (dwSize <= USER_NAME_LIST_HEADER_SIZE)
+        return STATUS_INVALID_HANDLE;
+
+    if (pRequiredSize)
+    {
+        Status = MmCopyToCaller(pRequiredSize, &TotalSize, sizeof(TotalSize));
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+
+    Available = dwSize - USER_NAME_LIST_HEADER_SIZE;
+    Name = NameList->Strings;
+    for (Index = 0; Index < NameList->Count; ++Index)
+    {
+        NameBytes = ((ULONG)wcslen(Name) + 1) * sizeof(WCHAR);
+        if (NameBytes > Available - CopyBytes)
+            break;
+        CopyBytes += NameBytes;
+        Name += NameBytes / sizeof(WCHAR);
+    }
+
+    UsedSize = USER_NAME_LIST_HEADER_SIZE + CopyBytes;
+    NameList->Size = UsedSize;
+    NameList->Strings[CopyBytes / sizeof(WCHAR)] = UNICODE_NULL;
+
+    Status = MmCopyToCaller(lpBuffer, NameList, UsedSize);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return dwSize < TotalSize ? STATUS_BUFFER_TOO_SMALL : STATUS_SUCCESS;
+}
+
 static NTSTATUS FASTCALL
 BuildWindowStationNameList(
     ULONG dwSize,
-    PVOID lpBuffer,
+    PUSER_NAME_LIST lpBuffer,
     PULONG pRequiredSize)
 {
     OBJECT_ATTRIBUTES ObjectAttributes;
     NTSTATUS Status;
     HANDLE DirectoryHandle;
-    char InitialBuffer[256], *Buffer;
-    ULONG Context, ReturnLength, BufferSize;
-    DWORD EntryCount;
+    PVOID Buffer = NULL;
+    ULONG Context, QueryLength, BufferSize = PAGE_SIZE;
+    ULONG ReturnLength, EntryCount, NameBytes;
     POBJECT_DIRECTORY_INFORMATION DirEntry;
-    WCHAR NullWchar;
+    PUSER_NAME_LIST NameList = NULL;
+    PWCHAR Name;
 
-    //
-    // FIXME: Fully wrong! Since, by calling NtUserCreateWindowStation
-    // with judicious parameters one can create window stations elsewhere
-    // than in Windows\WindowStations directory, Win32k definitely MUST
-    // maintain a list of window stations it has created, and not rely
-    // on the enumeration of Windows\WindowStations !!!
-    //
+    if (dwSize <= USER_NAME_LIST_HEADER_SIZE)
+        return STATUS_INVALID_HANDLE;
 
-    /*
-     * Try to open the directory.
-     */
+    /* FIXME: Win32k should maintain this list instead of querying the directory. */
     InitializeObjectAttributes(&ObjectAttributes,
                                &gustrWindowStationsDir,
                                OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
@@ -1677,189 +1717,126 @@ BuildWindowStationNameList(
     Status = ZwOpenDirectoryObject(&DirectoryHandle,
                                    DIRECTORY_QUERY,
                                    &ObjectAttributes);
-
     if (!NT_SUCCESS(Status))
-    {
         return Status;
-    }
 
-    /* First try to query the directory using a fixed-size buffer */
-    Context = 0;
-    Buffer = NULL;
-    Status = ZwQueryDirectoryObject(DirectoryHandle,
-                                    InitialBuffer,
-                                    sizeof(InitialBuffer),
-                                    FALSE,
-                                    TRUE,
-                                    &Context,
-                                    &ReturnLength);
-    if (NT_SUCCESS(Status))
+    for (;;)
     {
-        if (STATUS_NO_MORE_ENTRIES == ZwQueryDirectoryObject(DirectoryHandle, NULL, 0, FALSE,
-                                                             FALSE, &Context, NULL))
-        {
-            /* Our fixed-size buffer is large enough */
-            Buffer = InitialBuffer;
-        }
-    }
-
-    if (NULL == Buffer)
-    {
-        /* Need a larger buffer, check how large exactly */
-        Status = ZwQueryDirectoryObject(DirectoryHandle, NULL, 0, FALSE, TRUE, &Context,
-                                        &ReturnLength);
-        if (!NT_SUCCESS(Status))
-        {
-            ERR("ZwQueryDirectoryObject failed\n");
-            ZwClose(DirectoryHandle);
-            return Status;
-        }
-
-        BufferSize = ReturnLength;
         Buffer = ExAllocatePoolWithTag(PagedPool, BufferSize, TAG_WINSTA);
-        if (NULL == Buffer)
+        if (!Buffer)
         {
-            ZwClose(DirectoryHandle);
-            return STATUS_NO_MEMORY;
+            Status = STATUS_NO_MEMORY;
+            goto Quit;
         }
 
-        /* We should have a sufficiently large buffer now */
+        RtlZeroMemory(Buffer, BufferSize);
         Context = 0;
-        Status = ZwQueryDirectoryObject(DirectoryHandle, Buffer, BufferSize,
-                                        FALSE, TRUE, &Context, &ReturnLength);
-        if (! NT_SUCCESS(Status) ||
-              STATUS_NO_MORE_ENTRIES != ZwQueryDirectoryObject(DirectoryHandle, NULL, 0, FALSE,
-                                                               FALSE, &Context, NULL))
+        QueryLength = 0;
+        Status = ZwQueryDirectoryObject(DirectoryHandle,
+                                        Buffer,
+                                        BufferSize,
+                                        FALSE,
+                                        TRUE,
+                                        &Context,
+                                        &QueryLength);
+        if (Status == STATUS_NO_MORE_ENTRIES)
         {
-            /* Something went wrong, maybe someone added a directory entry? Just give up. */
-            ExFreePoolWithTag(Buffer, TAG_WINSTA);
-            ZwClose(DirectoryHandle);
-            return NT_SUCCESS(Status) ? STATUS_INTERNAL_ERROR : Status;
+            Status = STATUS_SUCCESS;
+            break;
         }
-    }
-
-    ZwClose(DirectoryHandle);
-
-    /*
-     * Count the required size of buffer.
-     */
-    ReturnLength = sizeof(DWORD);
-    EntryCount = 0;
-    for (DirEntry = (POBJECT_DIRECTORY_INFORMATION) Buffer;
-         0 != DirEntry->Name.Length;
-         DirEntry++)
-    {
-        ReturnLength += DirEntry->Name.Length + sizeof(WCHAR);
-        EntryCount++;
-    }
-    TRACE("Required size: %lu Entry count: %lu\n", ReturnLength, EntryCount);
-    if (NULL != pRequiredSize)
-    {
-        Status = MmCopyToCaller(pRequiredSize, &ReturnLength, sizeof(ULONG));
-        if (! NT_SUCCESS(Status))
+        if (Status != STATUS_MORE_ENTRIES &&
+            Status != STATUS_BUFFER_TOO_SMALL &&
+            Status != STATUS_BUFFER_OVERFLOW)
         {
-            if (Buffer != InitialBuffer)
-            {
-                ExFreePoolWithTag(Buffer, TAG_WINSTA);
-            }
-            return STATUS_BUFFER_TOO_SMALL;
+            if (NT_SUCCESS(Status))
+                break;
+            goto Quit;
         }
-    }
 
-    /*
-     * Check if the supplied buffer is large enough.
-     */
-    if (dwSize < ReturnLength)
-    {
-        if (Buffer != InitialBuffer)
-        {
-            ExFreePoolWithTag(Buffer, TAG_WINSTA);
-        }
-        return STATUS_BUFFER_TOO_SMALL;
-    }
-
-    /*
-     * Generate the resulting buffer contents.
-     */
-    Status = MmCopyToCaller(lpBuffer, &EntryCount, sizeof(DWORD));
-    if (! NT_SUCCESS(Status))
-    {
-        if (Buffer != InitialBuffer)
-        {
-            ExFreePoolWithTag(Buffer, TAG_WINSTA);
-        }
-        return Status;
-    }
-    lpBuffer = (PVOID) ((PCHAR) lpBuffer + sizeof(DWORD));
-
-    NullWchar = L'\0';
-    for (DirEntry = (POBJECT_DIRECTORY_INFORMATION) Buffer;
-         0 != DirEntry->Name.Length;
-         DirEntry++)
-    {
-        Status = MmCopyToCaller(lpBuffer, DirEntry->Name.Buffer, DirEntry->Name.Length);
-        if (! NT_SUCCESS(Status))
-        {
-            if (Buffer != InitialBuffer)
-            {
-                ExFreePoolWithTag(Buffer, TAG_WINSTA);
-            }
-            return Status;
-        }
-        lpBuffer = (PVOID) ((PCHAR) lpBuffer + DirEntry->Name.Length);
-        Status = MmCopyToCaller(lpBuffer, &NullWchar, sizeof(WCHAR));
-        if (! NT_SUCCESS(Status))
-        {
-            if (Buffer != InitialBuffer)
-            {
-                ExFreePoolWithTag(Buffer, TAG_WINSTA);
-            }
-            return Status;
-        }
-        lpBuffer = (PVOID) ((PCHAR) lpBuffer + sizeof(WCHAR));
-    }
-
-    /*
-     * Clean up
-     */
-    if (Buffer != InitialBuffer)
-    {
         ExFreePoolWithTag(Buffer, TAG_WINSTA);
+        Buffer = NULL;
+        if (BufferSize > MAXULONG / 2)
+        {
+            Status = STATUS_INTEGER_OVERFLOW;
+            goto Quit;
+        }
+        BufferSize *= 2;
     }
 
-    return STATUS_SUCCESS;
+    ReturnLength = USER_NAME_LIST_HEADER_SIZE;
+    EntryCount = 0;
+    for (DirEntry = Buffer; DirEntry->Name.Length; ++DirEntry)
+    {
+        NameBytes = DirEntry->Name.Length + sizeof(WCHAR);
+        if (ReturnLength > MAXULONG - NameBytes)
+        {
+            Status = STATUS_INTEGER_OVERFLOW;
+            goto Quit;
+        }
+        ReturnLength += NameBytes;
+        ++EntryCount;
+    }
+
+    NameList = ExAllocatePoolWithTag(PagedPool, ReturnLength, TAG_WINSTA);
+    if (!NameList)
+    {
+        Status = STATUS_NO_MEMORY;
+        goto Quit;
+    }
+
+    NameList->Count = EntryCount;
+    Name = NameList->Strings;
+    for (DirEntry = Buffer; DirEntry->Name.Length; ++DirEntry)
+    {
+        RtlCopyMemory(Name, DirEntry->Name.Buffer, DirEntry->Name.Length);
+        Name += DirEntry->Name.Length / sizeof(WCHAR);
+        *Name++ = UNICODE_NULL;
+    }
+    *Name = UNICODE_NULL;
+
+    Status = CopyUserNameList(NameList,
+                              ReturnLength,
+                              dwSize,
+                              lpBuffer,
+                              pRequiredSize);
+
+Quit:
+    if (NameList)
+        ExFreePoolWithTag(NameList, TAG_WINSTA);
+    if (Buffer)
+        ExFreePoolWithTag(Buffer, TAG_WINSTA);
+    ZwClose(DirectoryHandle);
+    return Status;
 }
 
 static NTSTATUS FASTCALL
 BuildDesktopNameList(
     HWINSTA hWindowStation,
     ULONG dwSize,
-    PVOID lpBuffer,
+    PUSER_NAME_LIST lpBuffer,
     PULONG pRequiredSize)
 {
     NTSTATUS Status;
     PWINSTATION_OBJECT WindowStation;
     PLIST_ENTRY DesktopEntry;
     PDESKTOP DesktopObject;
-    DWORD EntryCount;
-    ULONG ReturnLength;
-    WCHAR NullWchar;
+    ULONG EntryCount, ReturnLength, NameBytes;
     UNICODE_STRING DesktopName;
+    PUSER_NAME_LIST NameList;
+    PWCHAR Name;
+
+    if (dwSize <= USER_NAME_LIST_HEADER_SIZE)
+        return STATUS_INVALID_HANDLE;
 
     Status = IntValidateWindowStationHandle(hWindowStation,
                                             UserMode,
                                             0,
                                             &WindowStation,
                                             NULL);
-    if (! NT_SUCCESS(Status))
-    {
+    if (!NT_SUCCESS(Status))
         return Status;
-    }
 
-    /*
-     * Count the required size of buffer.
-     */
-    ReturnLength = sizeof(DWORD);
+    ReturnLength = USER_NAME_LIST_HEADER_SIZE;
     EntryCount = 0;
     for (DesktopEntry = WindowStation->DesktopListHead.Flink;
          DesktopEntry != &WindowStation->DesktopListHead;
@@ -1867,68 +1844,46 @@ BuildDesktopNameList(
     {
         DesktopObject = CONTAINING_RECORD(DesktopEntry, DESKTOP, ListEntry);
         RtlInitUnicodeString(&DesktopName, DesktopObject->pDeskInfo->szDesktopName);
-        ReturnLength += DesktopName.Length + sizeof(WCHAR);
-        EntryCount++;
-    }
-    TRACE("Required size: %lu Entry count: %lu\n", ReturnLength, EntryCount);
-    if (NULL != pRequiredSize)
-    {
-        Status = MmCopyToCaller(pRequiredSize, &ReturnLength, sizeof(ULONG));
-        if (! NT_SUCCESS(Status))
+        NameBytes = DesktopName.Length + sizeof(WCHAR);
+        if (ReturnLength > MAXULONG - NameBytes)
         {
             ObDereferenceObject(WindowStation);
-            return STATUS_BUFFER_TOO_SMALL;
+            return STATUS_INTEGER_OVERFLOW;
         }
+        ReturnLength += NameBytes;
+        ++EntryCount;
     }
 
-    /*
-     * Check if the supplied buffer is large enough.
-     */
-    if (dwSize < ReturnLength)
+    NameList = ExAllocatePoolWithTag(PagedPool, ReturnLength, TAG_WINSTA);
+    if (!NameList)
     {
         ObDereferenceObject(WindowStation);
-        return STATUS_BUFFER_TOO_SMALL;
+        return STATUS_NO_MEMORY;
     }
 
-    /*
-     * Generate the resulting buffer contents.
-     */
-    Status = MmCopyToCaller(lpBuffer, &EntryCount, sizeof(DWORD));
-    if (! NT_SUCCESS(Status))
-    {
-        ObDereferenceObject(WindowStation);
-        return Status;
-    }
-    lpBuffer = (PVOID) ((PCHAR) lpBuffer + sizeof(DWORD));
-
-    NullWchar = L'\0';
+    NameList->Count = EntryCount;
+    Name = NameList->Strings;
     for (DesktopEntry = WindowStation->DesktopListHead.Flink;
          DesktopEntry != &WindowStation->DesktopListHead;
          DesktopEntry = DesktopEntry->Flink)
     {
         DesktopObject = CONTAINING_RECORD(DesktopEntry, DESKTOP, ListEntry);
         RtlInitUnicodeString(&DesktopName, DesktopObject->pDeskInfo->szDesktopName);
-        Status = MmCopyToCaller(lpBuffer, DesktopName.Buffer, DesktopName.Length);
-        if (! NT_SUCCESS(Status))
-        {
-            ObDereferenceObject(WindowStation);
-            return Status;
-        }
-        lpBuffer = (PVOID) ((PCHAR)lpBuffer + DesktopName.Length);
-        Status = MmCopyToCaller(lpBuffer, &NullWchar, sizeof(WCHAR));
-        if (! NT_SUCCESS(Status))
-        {
-            ObDereferenceObject(WindowStation);
-            return Status;
-        }
-        lpBuffer = (PVOID) ((PCHAR) lpBuffer + sizeof(WCHAR));
+        RtlCopyMemory(Name, DesktopName.Buffer, DesktopName.Length);
+        Name += DesktopName.Length / sizeof(WCHAR);
+        *Name++ = UNICODE_NULL;
     }
+    *Name = UNICODE_NULL;
 
-    /*
-     * Clean up and return
-     */
+    Status = CopyUserNameList(NameList,
+                              ReturnLength,
+                              dwSize,
+                              lpBuffer,
+                              pRequiredSize);
+
+    ExFreePoolWithTag(NameList, TAG_WINSTA);
     ObDereferenceObject(WindowStation);
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 /*
@@ -1945,9 +1900,8 @@ BuildDesktopNameList(
  *       Size of buffer passed by caller.
  *
  *    lpBuffer
- *       Buffer passed by caller. If the function succeeds, the buffer is
- *       filled with window station/desktop count (in first DWORD) and
- *       NULL-terminated window station/desktop names.
+ *       Buffer passed by caller. It receives the size and count followed by
+ *       NULL-terminated window station/desktop names and a final NULL.
  *
  *    pRequiredSize
  *       If the function succeeds, this is the number of bytes copied.
@@ -1961,7 +1915,7 @@ NTSTATUS APIENTRY
 NtUserBuildNameList(
     HWINSTA hWindowStation,
     ULONG dwSize,
-    PVOID lpBuffer,
+    PUSER_NAME_LIST lpBuffer,
     PULONG pRequiredSize)
 {
     /* The WindowStation name list and desktop name list are build in completely

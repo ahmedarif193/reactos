@@ -697,6 +697,7 @@ User32EnumWindows(HDESK hDesktop,
     Status = NtUserBuildHwndList(hDesktop,
                                  hWndparent,
                                  bChildren,
+                                 TRUE,
                                  dwThreadId,
                                  dwCount,
                                  NULL,
@@ -725,6 +726,7 @@ User32EnumWindows(HDESK hDesktop,
     Status = NtUserBuildHwndList(hDesktop,
                                  hWndparent,
                                  bChildren,
+                                 TRUE,
                                  dwThreadId,
                                  dwCount,
                                  pHwnd,
@@ -738,7 +740,7 @@ User32EnumWindows(HDESK hDesktop,
 
     /* call the user's callback function until we're done or
        they tell us to quit */
-    for ( i = 0; i < dwCount; i++ )
+    for ( i = 0; i < dwCount && pHwnd[i] != HWND_BOTTOM; i++ )
     {
         /* FIXME I'm only getting NULLs from Thread Enumeration, and it's
          * probably because I'm not doing it right in NtUserBuildHwndList.

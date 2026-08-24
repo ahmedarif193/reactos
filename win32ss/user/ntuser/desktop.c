@@ -2643,6 +2643,10 @@ NtUserOpenDesktop(
     NTSTATUS Status;
     HDESK Desktop;
 
+    /* A zero-access desktop handle is still usable for enumeration. */
+    if (!dwDesiredAccess)
+        dwDesiredAccess = DESKTOP_READOBJECTS;
+
     Status = ObOpenObjectByName(
                  ObjectAttributes,
                  ExDesktopObjectType,

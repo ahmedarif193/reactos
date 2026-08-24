@@ -136,9 +136,9 @@ NTSTATUS
 APIENTRY
 NtUserBuildPropList(
     _In_ HWND hWnd,
-    _Out_writes_bytes_to_opt_(BufferSize, *Count * sizeof(PROPLISTITEM)) LPVOID Buffer,
-    _In_ DWORD BufferSize,
-    _Out_opt_ DWORD *Count)
+    _In_ DWORD BufferCount,
+    _Out_writes_to_opt_(BufferCount, *Count) PPROPLISTITEM Buffer,
+    _Out_ DWORD *Count)
 {
     PWND Window;
     PPROPERTY Property;
@@ -148,6 +148,12 @@ NtUserBuildPropList(
     DWORD Cnt = 0;
 
     TRACE("Enter NtUserBuildPropList\n");
+
+    if (!Count || (!Buffer && BufferCount) || (Buffer && !BufferCount))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     UserEnterShared();
 
     Window = UserGetWindowObject(hWnd);
@@ -159,16 +165,10 @@ NtUserBuildPropList(
 
     if (Buffer)
     {
-        if (!BufferSize || (BufferSize % sizeof(PROPLISTITEM) != 0))
-        {
-            Status = STATUS_INVALID_PARAMETER;
-            goto Exit;
-        }
-
         /* Copy list */
-        li = (PROPLISTITEM *)Buffer;
+        li = Buffer;
         ListEntry = Window->PropListHead.Flink;
-        while ((BufferSize >= sizeof(PROPLISTITEM)) &&
+        while ((BufferCount != 0) &&
                (ListEntry != &Window->PropListHead))
         {
             Property = CONTAINING_RECORD(ListEntry, PROPERTY, PropListEntry);
@@ -177,6 +177,7 @@ NtUserBuildPropList(
             {
                 listitem.Atom = Property->Atom;
                 listitem.Data = Property->Data;
+                listitem.String = (Property->Atom >= 0xc000);
 
                 Status = MmCopyToCaller(li, &listitem, sizeof(PROPLISTITEM));
                 if (!NT_SUCCESS(Status))
@@ -184,7 +185,7 @@ NtUserBuildPropList(
                     goto Exit;
                 }
 
-                BufferSize -= sizeof(PROPLISTITEM);
+                BufferCount--;
                 Cnt++;
                 li++;
             }
@@ -193,17 +194,20 @@ NtUserBuildPropList(
     }
     else
     {
-        /* FIXME: This counts user and system props */
-        Cnt = Window->PropListItems * sizeof(PROPLISTITEM);
+        ListEntry = Window->PropListHead.Flink;
+        while (ListEntry != &Window->PropListHead)
+        {
+            Property = CONTAINING_RECORD(ListEntry, PROPERTY, PropListEntry);
+            ListEntry = ListEntry->Flink;
+            if (!(Property->fs & PROPERTY_FLAG_SYSTEM))
+                Cnt++;
+        }
     }
 
-    if (Count)
+    Status = MmCopyToCaller(Count, &Cnt, sizeof(DWORD));
+    if (!NT_SUCCESS(Status))
     {
-        Status = MmCopyToCaller(Count, &Cnt, sizeof(DWORD));
-        if (!NT_SUCCESS(Status))
-        {
-            goto Exit;
-        }
+        goto Exit;
     }
 
     Status = STATUS_SUCCESS;

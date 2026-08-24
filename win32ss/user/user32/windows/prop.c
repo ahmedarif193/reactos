@@ -89,7 +89,7 @@ EnumPropsA(HWND hWnd, PROPENUMPROCA lpEnumFunc)
     return ret;
   }
 
-  Status = NtUserBuildPropList(hWnd, NULL, 0, &Count);
+  Status = NtUserBuildPropList(hWnd, 0, NULL, &Count);
   if(!NT_SUCCESS(Status))
   {
     if(Status == STATUS_INVALID_HANDLE)
@@ -101,14 +101,14 @@ EnumPropsA(HWND hWnd, PROPENUMPROCA lpEnumFunc)
 
   if(Count > 0)
   {
-    pli = RtlAllocateHeap(GetProcessHeap(), 0, Count);
+    pli = RtlAllocateHeap(GetProcessHeap(), 0, Count * sizeof(*pli));
     if (pli == NULL)
     {
       SetLastError(ERROR_OUTOFMEMORY);
       return -1;
     }
 
-    Status = NtUserBuildPropList(hWnd, (LPVOID)pli, Count, &Count);
+    Status = NtUserBuildPropList(hWnd, Count, (LPVOID)pli, &Count);
     if(!NT_SUCCESS(Status))
     {
       RtlFreeHeap(GetProcessHeap(), 0, pli);
@@ -156,7 +156,7 @@ EnumPropsExA(HWND hWnd, PROPENUMPROCEXA lpEnumFunc, LPARAM lParam)
     return ret;
   }
 
-  Status = NtUserBuildPropList(hWnd, NULL, 0, &Count);
+  Status = NtUserBuildPropList(hWnd, 0, NULL, &Count);
   if(!NT_SUCCESS(Status))
   {
     if(Status == STATUS_INVALID_HANDLE)
@@ -168,14 +168,14 @@ EnumPropsExA(HWND hWnd, PROPENUMPROCEXA lpEnumFunc, LPARAM lParam)
 
   if(Count > 0)
   {
-    pli = RtlAllocateHeap(GetProcessHeap(), 0, Count);
+    pli = RtlAllocateHeap(GetProcessHeap(), 0, Count * sizeof(*pli));
     if (pli == NULL)
     {
       SetLastError(ERROR_OUTOFMEMORY);
       return -1;
     }
 
-    Status = NtUserBuildPropList(hWnd, (LPVOID)pli, Count, &Count);
+    Status = NtUserBuildPropList(hWnd, Count, (LPVOID)pli, &Count);
     if(!NT_SUCCESS(Status))
     {
       RtlFreeHeap(GetProcessHeap(), 0, pli);
@@ -223,7 +223,7 @@ EnumPropsExW(HWND hWnd, PROPENUMPROCEXW lpEnumFunc, LPARAM lParam)
     return ret;
   }
 
-  Status = NtUserBuildPropList(hWnd, NULL, 0, &Count);
+  Status = NtUserBuildPropList(hWnd, 0, NULL, &Count);
   if(!NT_SUCCESS(Status))
   {
     if(Status == STATUS_INVALID_HANDLE)
@@ -235,14 +235,14 @@ EnumPropsExW(HWND hWnd, PROPENUMPROCEXW lpEnumFunc, LPARAM lParam)
 
   if(Count > 0)
   {
-    pli = RtlAllocateHeap(GetProcessHeap(), 0, Count);
+    pli = RtlAllocateHeap(GetProcessHeap(), 0, Count * sizeof(*pli));
     if (pli == NULL)
     {
       SetLastError(ERROR_OUTOFMEMORY);
       return -1;
     }
 
-    Status = NtUserBuildPropList(hWnd, (LPVOID)pli, Count, &Count);
+    Status = NtUserBuildPropList(hWnd, Count, (LPVOID)pli, &Count);
     if(!NT_SUCCESS(Status))
     {
       RtlFreeHeap(GetProcessHeap(), 0, pli);
@@ -290,7 +290,7 @@ EnumPropsW(HWND hWnd, PROPENUMPROCW lpEnumFunc)
     return ret;
   }
 
-  Status = NtUserBuildPropList(hWnd, NULL, 0, &Count);
+  Status = NtUserBuildPropList(hWnd, 0, NULL, &Count);
   if(!NT_SUCCESS(Status))
   {
     if(Status == STATUS_INVALID_HANDLE)
@@ -302,14 +302,14 @@ EnumPropsW(HWND hWnd, PROPENUMPROCW lpEnumFunc)
 
   if(Count > 0)
   {
-    pli = RtlAllocateHeap(GetProcessHeap(), 0, Count);
+    pli = RtlAllocateHeap(GetProcessHeap(), 0, Count * sizeof(*pli));
     if (pli == NULL)
     {
       SetLastError(ERROR_OUTOFMEMORY);
       return -1;
     }
 
-    Status = NtUserBuildPropList(hWnd, (LPVOID)pli, Count, &Count);
+    Status = NtUserBuildPropList(hWnd, Count, (LPVOID)pli, &Count);
     if(!NT_SUCCESS(Status))
     {
       RtlFreeHeap(GetProcessHeap(), 0, pli);

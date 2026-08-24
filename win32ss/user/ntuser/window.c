@@ -1497,6 +1497,29 @@ VOID FASTCALL IntFreeHwndList(PWINDOWLIST pwlTarget)
     }
 }
 
+static VOID FASTCALL
+IntRemoveImeWindowsFromList(PWINDOWLIST pwl)
+{
+    HWND *phwnd;
+
+    for (phwnd = pwl->ahwnd; phwnd < pwl->phwndLast;)
+    {
+        PWND Window = ValidateHwndNoErr(*phwnd);
+
+        if (!Window ||
+            (Window->fnid != FNID_IME && !IS_WND_IMELIKE(Window)))
+        {
+            ++phwnd;
+            continue;
+        }
+
+        RtlMoveMemory(phwnd,
+                      phwnd + 1,
+                      (SIZE_T)(pwl->phwndLast - phwnd) * sizeof(*phwnd));
+        --pwl->phwndLast;
+    }
+}
+
 /* FUNCTIONS *****************************************************************/
 
 /*
@@ -1516,171 +1539,238 @@ NtUserBuildHwndList(
    HDESK hDesktop,
    HWND hwndParent,
    BOOLEAN bChildren,
+   BOOLEAN bNonImmersive,
    ULONG dwThreadId,
    ULONG cHwnd,
    HWND* phwndList,
    ULONG* pcHwndNeeded)
 {
-   NTSTATUS Status;
-   ULONG dwCount = 0;
+   NTSTATUS Status = STATUS_SUCCESS;
+   PDESKTOP Desktop = NULL;
+   BOOLEAN DesktopReferenced = FALSE;
+   PETHREAD Thread = NULL;
+   PTHREADINFO pti = NULL;
+   PWINDOWLIST pwl = NULL, pwlMessage = NULL;
+   PWND Parent = NULL, Start = NULL;
+   BOOLEAN TopLevelThreadQuery = FALSE;
+   ULONG Count, MessageCount = 0, Required;
+   HWND Terminator = HWND_TERMINATOR;
 
    if (pcHwndNeeded == NULL)
        return STATUS_INVALID_PARAMETER;
 
    UserEnterShared();
 
-   if (hwndParent || !dwThreadId)
+   if (dwThreadId)
    {
-      PDESKTOP Desktop;
-      PWND Parent, Window;
-
-      if(!hwndParent)
-      {
-         if(hDesktop == NULL && !(Desktop = IntGetActiveDesktop()))
-         {
-            Status = STATUS_INVALID_HANDLE;
-            goto Quit;
-         }
-
-         if(hDesktop)
-         {
-            Status = IntValidateDesktopHandle(hDesktop,
-                                              UserMode,
-                                              0,
-                                              &Desktop);
-            if(!NT_SUCCESS(Status))
-            {
-                Status = STATUS_INVALID_HANDLE;
-                goto Quit;
-            }
-         }
-         hwndParent = Desktop->DesktopWindow;
-      }
-      else
-      {
-         hDesktop = 0;
-      }
-
-      if((Parent = UserGetWindowObject(hwndParent)) &&
-         (Window = Parent->spwndChild))
-      {
-         BOOL bGoDown = TRUE;
-
-         Status = STATUS_SUCCESS;
-         while(TRUE)
-         {
-            if (bGoDown)
-            {
-               if (dwCount++ < cHwnd && phwndList)
-               {
-                  _SEH2_TRY
-                  {
-                     ProbeForWrite(phwndList, sizeof(HWND), 1);
-                     *phwndList = UserHMGetHandle(Window);
-                     phwndList++;
-                  }
-                  _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-                  {
-                     Status = _SEH2_GetExceptionCode();
-                  }
-                  _SEH2_END
-                  if(!NT_SUCCESS(Status))
-                  {
-                     break;
-                  }
-               }
-               if (Window->spwndChild && bChildren)
-               {
-                  Window = Window->spwndChild;
-                  continue;
-               }
-               bGoDown = FALSE;
-            }
-            if (Window->spwndNext)
-            {
-               Window = Window->spwndNext;
-               bGoDown = TRUE;
-               continue;
-            }
-            Window = Window->spwndParent;
-            if (Window == Parent)
-            {
-               break;
-            }
-         }
-      }
-
-      if(hDesktop)
-      {
-         ObDereferenceObject(Desktop);
-      }
-   }
-   else // Build EnumThreadWindows list!
-   {
-      PETHREAD Thread;
-      PTHREADINFO W32Thread;
-      PWND Window;
-      HWND *List = NULL;
-
       Status = PsLookupThreadByThreadId(UlongToHandle(dwThreadId), &Thread);
       if (!NT_SUCCESS(Status))
       {
-         ERR("Thread Id is not valid!\n");
-         Status = STATUS_INVALID_PARAMETER;
-         goto Quit;
-      }
-      if (!(W32Thread = (PTHREADINFO)Thread->Tcb.Win32Thread))
-      {
-         ObDereferenceObject(Thread);
-         TRACE("Tried to enumerate windows of a non gui thread\n");
-         Status = STATUS_INVALID_PARAMETER;
+         Status = STATUS_INVALID_HANDLE;
          goto Quit;
       }
 
-     // Do not use Thread link list due to co_UserFreeWindow!!!
-     // Current = W32Thread->WindowListHead.Flink;
-     // Fixes Api:CreateWindowEx tests!!!
-      List = IntWinListChildren(UserGetDesktopWindow());
-      if (List)
+      pti = (PTHREADINFO)Thread->Tcb.Win32Thread;
+      if (!pti || !pti->rpdesk)
       {
-         int i;
-         for (i = 0; List[i]; i++)
-         {
-            Window = ValidateHwndNoErr(List[i]);
-            if (Window && Window->head.pti == W32Thread)
-            {
-               if (dwCount < cHwnd && phwndList)
-               {
-                  _SEH2_TRY
-                  {
-                     ProbeForWrite(phwndList, sizeof(HWND), 1);
-                     *phwndList = UserHMGetHandle(Window);
-                     phwndList++;
-                  }
-                  _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-                  {
-                     Status = _SEH2_GetExceptionCode();
-                  }
-                  _SEH2_END
-                  if (!NT_SUCCESS(Status))
-                  {
-                     ERR("Failure to build window list!\n");
-                     break;
-                  }
-               }
-               dwCount++;
-            }
-         }
-         ExFreePoolWithTag(List, USERTAG_WINDOWLIST);
+         Status = STATUS_INVALID_HANDLE;
+         goto Quit;
       }
-
-      ObDereferenceObject(Thread);
    }
 
-   *pcHwndNeeded = dwCount;
-   Status = STATUS_SUCCESS;
+   if (hDesktop)
+   {
+      Status = IntValidateDesktopHandle(hDesktop,
+                                        UserMode,
+                                        0,
+                                        &Desktop);
+      if (!NT_SUCCESS(Status))
+      {
+         Status = STATUS_INVALID_HANDLE;
+         goto Quit;
+      }
+      DesktopReferenced = TRUE;
+   }
+
+   if (hwndParent)
+   {
+      Parent = UserGetWindowObject(hwndParent);
+      if (!Parent)
+      {
+         Status = STATUS_INVALID_HANDLE;
+         goto Quit;
+      }
+   }
+
+   if (hDesktop)
+   {
+      Parent = Desktop->pDeskInfo->spwnd;
+      if (!bChildren)
+         Start = Parent ? Parent->spwndChild : NULL;
+
+      pwl = IntBuildHwndList(Start, IACE_LIST, pti);
+      if (!pwl)
+      {
+         Status = STATUS_INSUFFICIENT_RESOURCES;
+         goto Quit;
+      }
+
+      if (!bChildren && !bNonImmersive && Desktop->spwndMessage)
+      {
+         pwlMessage = IntBuildHwndList(Desktop->spwndMessage->spwndChild,
+                                       IACE_LIST,
+                                       pti);
+         if (!pwlMessage)
+         {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Quit;
+         }
+      }
+   }
+   else if (!Parent)
+   {
+      PTHREADINFO ptiCurrent = GetW32ThreadInfo();
+
+      Desktop = pti ? pti->rpdesk : (ptiCurrent ? ptiCurrent->rpdesk : NULL);
+      if (!Desktop)
+         Desktop = IntGetActiveDesktop();
+      if (!Desktop)
+      {
+         Status = STATUS_INVALID_HANDLE;
+         goto Quit;
+      }
+
+      Parent = Desktop->pDeskInfo->spwnd;
+      Start = Parent ? Parent->spwndChild : NULL;
+      pwl = IntBuildHwndList(Start, IACE_LIST, pti);
+      if (!pwl)
+      {
+         Status = STATUS_INSUFFICIENT_RESOURCES;
+         goto Quit;
+      }
+
+      if (!bNonImmersive && Desktop->spwndMessage)
+      {
+         pwlMessage = IntBuildHwndList(Desktop->spwndMessage->spwndChild,
+                                       IACE_LIST,
+                                       pti);
+         if (!pwlMessage)
+         {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Quit;
+         }
+      }
+
+      TopLevelThreadQuery = (pti != NULL);
+   }
+   else
+   {
+      Desktop = Parent->head.rpdesk;
+
+      if (UserIsDesktopWindow(Parent))
+      {
+         if (bChildren)
+         {
+            pwl = IntBuildHwndList(Parent->spwndChild,
+                                   IACE_LIST | IACE_CHILDREN,
+                                   pti);
+         }
+         else
+         {
+            pwl = IntBuildHwndList(Parent, 0, pti);
+            if (pwl && !bNonImmersive && Desktop && Desktop->spwndMessage)
+                pwlMessage = IntBuildHwndList(Desktop->spwndMessage, 0, pti);
+         }
+      }
+      else
+      {
+         Start = bChildren ? Parent->spwndChild : Parent;
+         pwl = IntBuildHwndList(Start,
+                                IACE_LIST | (bChildren ? IACE_CHILDREN : 0),
+                                pti);
+      }
+
+      if (!pwl)
+      {
+         Status = STATUS_INSUFFICIENT_RESOURCES;
+         goto Quit;
+      }
+      if (!bChildren && UserIsDesktopWindow(Parent) &&
+          !bNonImmersive && Desktop && Desktop->spwndMessage && !pwlMessage)
+      {
+         Status = STATUS_INSUFFICIENT_RESOURCES;
+         goto Quit;
+      }
+   }
+
+   /* Per-thread IME, IME UI, and their STA helper windows are implementation details. */
+   if (TopLevelThreadQuery)
+   {
+      IntRemoveImeWindowsFromList(pwl);
+      if (pwlMessage)
+      {
+         IntRemoveImeWindowsFromList(pwlMessage);
+      }
+   }
+
+   Count = (ULONG)(pwl->phwndLast - pwl->ahwnd);
+   if (pwlMessage)
+      MessageCount = (ULONG)(pwlMessage->phwndLast - pwlMessage->ahwnd);
+   Required = Count + MessageCount + 1;
+
+   Status = MmCopyToCaller(pcHwndNeeded, &Required, sizeof(Required));
+   if (!NT_SUCCESS(Status))
+      goto Quit;
+
+   /* Keep the count-only query used by the ReactOS USER32 wrappers. */
+   if (!phwndList && cHwnd == 0)
+   {
+      Status = STATUS_SUCCESS;
+      goto Quit;
+   }
+
+   if (cHwnd < Required)
+   {
+      Status = STATUS_BUFFER_TOO_SMALL;
+      goto Quit;
+   }
+
+   if (!phwndList)
+   {
+      Status = STATUS_INVALID_PARAMETER;
+      goto Quit;
+   }
+
+   if (Count)
+   {
+      Status = MmCopyToCaller(phwndList, pwl->ahwnd, Count * sizeof(HWND));
+      if (!NT_SUCCESS(Status))
+         goto Quit;
+   }
+
+   if (MessageCount)
+   {
+      Status = MmCopyToCaller(phwndList + Count,
+                              pwlMessage->ahwnd,
+                              MessageCount * sizeof(HWND));
+      if (!NT_SUCCESS(Status))
+         goto Quit;
+   }
+
+   Status = MmCopyToCaller(phwndList + Count + MessageCount,
+                           &Terminator,
+                           sizeof(Terminator));
+
 
 Quit:
+   if (pwlMessage)
+      IntFreeHwndList(pwlMessage);
+   if (pwl)
+      IntFreeHwndList(pwl);
+   if (DesktopReferenced)
+      ObDereferenceObject(Desktop);
+   if (Thread)
+      ObDereferenceObject(Thread);
    SetLastNtError(Status);
    UserLeave();
    return Status;

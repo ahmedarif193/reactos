@@ -314,7 +314,7 @@
     SVC_(UserBitBltSysBmp, 8)
     SVC_(UserBlockInput, 1)
     SVC_(UserBuildHimcList, 4)
-    SVC_(UserBuildHwndList, 7)
+    SVC_(UserBuildHwndList, 8)
     SVC_(UserBuildNameList, 4)
     SVC_(UserBuildPropList, 4)
     SVC_(UserCallHwnd, 2)

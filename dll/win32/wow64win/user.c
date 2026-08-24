@@ -1618,6 +1618,7 @@ NTSTATUS WINAPI wow64_NtUserBuildHwndList( UINT *args )
     HWND hwnd = get_handle( &args );
     BOOL children = get_ulong( &args );
 #ifdef __REACTOS__
+    BOOL non_immersive = get_ulong( &args );
     ULONG thread_id = get_ulong( &args );
 #else
     BOOL non_immersive = get_ulong( &args );
@@ -1633,7 +1634,8 @@ NTSTATUS WINAPI wow64_NtUserBuildHwndList( UINT *args )
 
 #ifdef __REACTOS__
     if (buffer32 && count && !(buffer = Wow64AllocateTemp(count * sizeof(*buffer)))) return STATUS_NO_MEMORY;
-    status = ((ROS_NTUSER_BUILD_HWND_LIST)NtUserBuildHwndList)(desktop, hwnd, children, thread_id, count, buffer, size);
+    status = ((ROS_NTUSER_BUILD_HWND_LIST)NtUserBuildHwndList)(desktop, hwnd, children, non_immersive,
+                                                               thread_id, count, buffer, size);
     if (status) return status;
     for (i = 0; buffer32 && i < min(*size, count); i++) buffer32[i] = HandleToUlong(buffer[i]);
 #else

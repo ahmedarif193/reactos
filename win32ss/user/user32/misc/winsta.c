@@ -133,7 +133,7 @@ EnumNamesW(HWINSTA WindowStation,
            BOOL Desktops)
 {
     CHAR Buffer[256];
-    PVOID NameList;
+    PUSER_NAME_LIST NameList;
     PWCHAR Name;
     NTSTATUS Status;
     ULONG RequiredSize;
@@ -147,11 +147,14 @@ EnumNamesW(HWINSTA WindowStation,
     }
 
     /* Try with fixed-size buffer */
-    Status = NtUserBuildNameList(WindowStation, sizeof(Buffer), Buffer, &RequiredSize);
+    Status = NtUserBuildNameList(WindowStation,
+                                 sizeof(Buffer),
+                                 (PUSER_NAME_LIST)Buffer,
+                                 &RequiredSize);
     if (NT_SUCCESS(Status))
     {
         /* Fixed-size buffer is large enough */
-        NameList = (PWCHAR) Buffer;
+        NameList = (PUSER_NAME_LIST)Buffer;
     }
     else if (Status == STATUS_BUFFER_TOO_SMALL)
     {
@@ -177,8 +180,8 @@ EnumNamesW(HWINSTA WindowStation,
     }
 
     /* Enum the names one by one */
-    EntryCount = *((DWORD *) NameList);
-    Name = (PWCHAR) ((PCHAR) NameList + sizeof(DWORD));
+    EntryCount = NameList->Count;
+    Name = NameList->Strings;
     Ret = TRUE;
     for (CurrentEntry = 0; CurrentEntry < EntryCount && Ret; ++CurrentEntry)
     {
@@ -187,7 +190,7 @@ EnumNamesW(HWINSTA WindowStation,
     }
 
     /* Cleanup */
-    if (NameList != Buffer)
+    if (NameList != (PUSER_NAME_LIST)Buffer)
     {
         HeapFree(GetProcessHeap(), 0, NameList);
     }
