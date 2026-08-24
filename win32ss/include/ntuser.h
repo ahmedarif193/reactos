@@ -1148,8 +1148,9 @@ C_ASSERT(sizeof(SERVERINFO) <= PAGE_SIZE);
 
 typedef struct _PROPLISTITEM
 {
-    ATOM Atom;
     HANDLE Data;
+    ATOM Atom;
+    BOOLEAN String;
 } PROPLISTITEM, *PPROPLISTITEM;
 
 #define PROPERTY_FLAG_SYSTEM 1
@@ -1543,25 +1544,33 @@ NtUserBuildHwndList(
     HDESK hDesktop,
     HWND hwndParent,
     BOOLEAN bChildren,
+    BOOLEAN bNonImmersive,
     ULONG dwThreadId,
     ULONG cHwnd,
     HWND *phwndList,
     ULONG *pcHwndNeeded);
+
+typedef struct _USER_NAME_LIST
+{
+    ULONG Size;
+    ULONG Count;
+    WCHAR Strings[ANYSIZE_ARRAY];
+} USER_NAME_LIST, *PUSER_NAME_LIST;
 
 NTSTATUS
 NTAPI
 NtUserBuildNameList(
     HWINSTA hWinSta,
     ULONG dwSize,
-    PVOID lpBuffer,
+    PUSER_NAME_LIST lpBuffer,
     PULONG pRequiredSize);
 
 NTSTATUS
 NTAPI
 NtUserBuildPropList(
     HWND hWnd,
-    LPVOID Buffer,
-    DWORD BufferSize,
+    DWORD BufferCount,
+    PPROPLISTITEM Buffer,
     DWORD *Count);
 
 /* apfnSimpleCall indices from Windows XP SP 2 */
@@ -2140,7 +2149,7 @@ NtUserEndPaint(
     HWND hWnd,
     CONST PAINTSTRUCT *lPs);
 
-BOOL
+NTSTATUS
 NTAPI
 NtUserEnumDisplayDevices(
     PUNICODE_STRING lpDevice, /* device name */

@@ -30,7 +30,7 @@
     SVC_(UserEndPaint, 2)	//	 0x1018
     SVC_(UserSetCursor, 1)	//	 0x1019
     SVC_(UserKillTimer, 2)	//	 0x101a
-    SVC_(UserBuildHwndList, 7)	//	 0x101b
+    SVC_(UserBuildHwndList, 8)	//	 0x101b
     SVC_(UserSelectPalette, 3)	//	 0x101c
     SVC_(UserCallNextHookEx, 4)	//	 0x101d
     SVC_(UserHideCaret, 1)	//	 0x101e

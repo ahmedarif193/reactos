@@ -145,7 +145,16 @@ HWND* WIN_ListChildren (HWND hWndparent)
   HANDLE hHeap;
   NTSTATUS Status;
 
+#ifdef __REACTOS__
+  HWND hWndFirst = GetWindow(hWndparent, GW_CHILD);
+
+  if (!hWndFirst)
+    return NULL;
+
+  Status = NtUserBuildHwndList(NULL, hWndFirst, FALSE, TRUE, 0, dwCount, NULL, &dwCount);
+#else
   Status = NtUserBuildHwndList(NULL, hWndparent, FALSE, 0, dwCount, NULL, &dwCount);
+#endif
 
   if ( !NT_SUCCESS( Status ) )
     return 0;
@@ -161,7 +170,11 @@ HWND* WIN_ListChildren (HWND hWndparent)
     }
 
   /* now call kernel again to fill the buffer this time */
+#ifdef __REACTOS__
+  Status = NtUserBuildHwndList(NULL, hWndFirst, FALSE, TRUE, 0, dwCount, pHwnd, &dwCount);
+#else
   Status = NtUserBuildHwndList(NULL, hWndparent, FALSE, 0, dwCount, pHwnd, &dwCount);
+#endif
 
   if ( !NT_SUCCESS( Status ) )
     {
@@ -170,7 +183,14 @@ HWND* WIN_ListChildren (HWND hWndparent)
       return 0;
     }
 
+#ifdef __REACTOS__
+  if (dwCount && pHwnd[dwCount - 1] == HWND_BOTTOM)
+    pHwnd[dwCount - 1] = NULL;
+  else
+    pHwnd[dwCount] = NULL;
+#else
   pHwnd[dwCount] = (HWND) 0;
+#endif
 
   return pHwnd;
 }
