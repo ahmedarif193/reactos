@@ -655,6 +655,15 @@ LDEVOBJ_bBuildDevmodeList(
              (pdm + 1 <= pdmEnd) && (pdm->dmSize != 0);
              pdm = (PDEVMODEW)((PCHAR)pdm + pdm->dmSize + pdm->dmDriverExtra))
         {
+            if (pdm->dmBitsPerPel)
+                pdm->dmFields |= DM_BITSPERPEL;
+            if (pdm->dmPelsWidth)
+                pdm->dmFields |= DM_PELSWIDTH;
+            if (pdm->dmPelsHeight)
+                pdm->dmFields |= DM_PELSHEIGHT;
+            if (pdm->dmDisplayFrequency)
+                pdm->dmFields |= DM_DISPLAYFREQUENCY;
+
             TRACE("    %S has mode %lux%lux%lu(%lu Hz)\n",
                   pdm->dmDeviceName,
                   pdm->dmPelsWidth,
@@ -842,7 +851,9 @@ LDEVOBJ_bProbeAndCaptureDevmode(
         }
     }
 
-    /* Now, search the exact mode to return to caller */
+    /* Now, search the exact mode to return to caller. Do not retain the
+       closest-mode candidate when an exact match was requested. */
+    pdmSelected = NULL;
     for (i = 0; i < pGraphicsDevice->cDevModes; i++)
     {
         pdmCurrent = pGraphicsDevice->pDevModeList[i].pdm;

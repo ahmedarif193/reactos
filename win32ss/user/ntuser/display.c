@@ -693,6 +693,15 @@ NtUserEnumDisplaySettings(
             /* Output what we got */
             RtlCopyMemory(lpDevMode, pdm, min(cbSize, pdm->dmSize));
 
+            if (pdm->dmBitsPerPel)
+                lpDevMode->dmFields |= DM_BITSPERPEL;
+            if (pdm->dmPelsWidth)
+                lpDevMode->dmFields |= DM_PELSWIDTH;
+            if (pdm->dmPelsHeight)
+                lpDevMode->dmFields |= DM_PELSHEIGHT;
+            if (pdm->dmDisplayFrequency)
+                lpDevMode->dmFields |= DM_DISPLAYFREQUENCY;
+
             /* Output private/extra driver data */
             if (cbExtra > 0 && pdm->dmDriverExtra > 0)
             {
@@ -775,6 +784,9 @@ UserChangeDisplaySettings(
         ERR("Failed to get PDEV\n");
         return DISP_CHANGE_BADPARAM;
     }
+
+    if (pdm && dm.dmBitsPerPel && dm.dmBitsPerPel != ppdev->pdmwDev->dmBitsPerPel)
+        dm.dmFields |= DM_BITSPERPEL;
 
     /* Fixup values */
     if (dm.dmBitsPerPel == 0 || !(dm.dmFields & DM_BITSPERPEL))
