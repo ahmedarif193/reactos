@@ -204,7 +204,8 @@ co_MsqSendMessageAsync(PTHREADINFO ptiReceiver,
 VOID FASTCALL IntCoalesceMouseMove(PTHREADINFO);
 LRESULT FASTCALL IntDispatchMessage(MSG* Msg);
 BOOL FASTCALL IntTranslateKbdMessage(LPMSG lpMsg, UINT flags);
-VOID FASTCALL co_MsqInsertMouseMessage(MSG* Msg, DWORD flags, ULONG_PTR dwExtraInfo, BOOL Hook);
+BOOL FASTCALL co_MsqInsertMouseMessage(MSG* Msg, DWORD flags, ULONG_PTR dwExtraInfo, BOOL Hook);
+PWND FASTCALL IntTopLevelWindowFromPoint(INT x, INT y);
 BOOL FASTCALL MsqIsClkLck(LPMSG Msg, BOOL Remove);
 BOOL FASTCALL MsqIsDblClk(LPMSG Msg, BOOL Remove);
 HWND FASTCALL MsqSetStateWindow(PTHREADINFO pti, ULONG Type, HWND hWnd);

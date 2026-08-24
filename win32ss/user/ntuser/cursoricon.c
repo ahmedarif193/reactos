@@ -519,7 +519,8 @@ BOOL UserSetCursorPos( INT x, INT y, DWORD flags, ULONG_PTR dwExtraInfo, BOOL Ho
     Msg.wParam = UserGetMouseButtonsState();
     Msg.lParam = MAKELPARAM(x, y);
     Msg.pt = pt;
-    co_MsqInsertMouseMessage(&Msg, flags, dwExtraInfo, Hook);
+    if (!co_MsqInsertMouseMessage(&Msg, flags, dwExtraInfo, Hook))
+        return TRUE;
 
     /* 2. Store the new cursor position */
     gpsi->ptCursor = pt;
