@@ -1689,6 +1689,72 @@ NtMakePermanentObject(IN HANDLE ObjectHandle)
     return STATUS_SUCCESS;
 }
 
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+typedef struct _OBP_CACHED_REFERENCE_QUERY
+{
+    POBJECT_HEADER ObjectHeader;
+    PHANDLE_TABLE HandleTable;
+    SIZE_T CachedReferences;
+} OBP_CACHED_REFERENCE_QUERY, *POBP_CACHED_REFERENCE_QUERY;
+
+static
+BOOLEAN
+NTAPI
+ObpCountCachedHandleReferences(
+    _In_ PHANDLE_TABLE_ENTRY HandleEntry,
+    _In_ HANDLE Handle,
+    _In_ PVOID Context)
+{
+    POBP_CACHED_REFERENCE_QUERY Query = Context;
+    PULONG CachedReferenceCount;
+
+    if (ObpGetHandleObject(HandleEntry) != Query->ObjectHeader)
+        return FALSE;
+
+    CachedReferenceCount = ExGetHandleCachedReferenceCount(Query->HandleTable,
+                                                           Handle,
+                                                           HandleEntry);
+    if (CachedReferenceCount)
+        Query->CachedReferences += *CachedReferenceCount;
+
+    return FALSE;
+}
+
+static
+SIZE_T
+ObpQueryPublicPointerCount(_In_ POBJECT_HEADER ObjectHeader)
+{
+    OBP_CACHED_REFERENCE_QUERY Query;
+    PEPROCESS Process;
+    PHANDLE_TABLE HandleTable;
+    SIZE_T PointerCount;
+
+    Query.ObjectHeader = ObjectHeader;
+    Query.CachedReferences = 0;
+
+    Process = PsGetNextProcess(NULL);
+    while (Process)
+    {
+        HandleTable = ObReferenceProcessHandleTable(Process);
+        if (HandleTable)
+        {
+            Query.HandleTable = HandleTable;
+            ExEnumHandleTable(HandleTable,
+                              ObpCountCachedHandleReferences,
+                              &Query,
+                              NULL);
+            ObDereferenceProcessHandleTable(Process);
+        }
+
+        Process = PsGetNextProcess(Process);
+    }
+
+    PointerCount = ObjectHeader->PointerCount;
+    return (PointerCount >= Query.CachedReferences) ?
+           PointerCount - Query.CachedReferences : PointerCount;
+}
+#endif
+
 /*++
 * @name NtQueryObject
 * @implemented NT4
@@ -1798,7 +1864,11 @@ NtQueryObject(IN HANDLE ObjectHandle,
                 BasicInfo->Attributes = HandleInfo.HandleAttributes;
                 BasicInfo->GrantedAccess = HandleInfo.GrantedAccess;
                 BasicInfo->HandleCount = ObjectHeader->HandleCount;
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+                BasicInfo->PointerCount = (ULONG)ObpQueryPublicPointerCount(ObjectHeader);
+#else
                 BasicInfo->PointerCount = ObjectHeader->PointerCount;
+#endif
 
                 /* Permanent/Exclusive Flags are NOT in Handle attributes! */
                 if (ObjectHeader->Flags & OB_FLAG_EXCLUSIVE)
