@@ -301,6 +301,7 @@ static UINT ICO_ExtractIconExW(
 {
 	UINT		ret = 0;
 	UINT		cx1, cx2, cy1, cy2;
+	UINT       *allocatedIconIds = NULL;
 	LPBYTE		pData;
 	DWORD		sig;
 	HANDLE		hFile;
@@ -322,7 +323,11 @@ static UINT ICO_ExtractIconExW(
 
 #ifdef __REACTOS__
     if (RetPtr)
-        *RetPtr = NULL;
+    {
+        UINT i;
+        for (i = 0; i < nIcons; ++i)
+            RetPtr[i] = NULL;
+    }
 
     if (ExpandEnvironmentStringsW(lpszExeFileName, szExpandedExePath, ARRAY_SIZE(szExpandedExePath)))
         lpszExeFileName = szExpandedExePath;
@@ -424,8 +429,13 @@ static UINT ICO_ExtractIconExW(
 	if (pIconId) /* Invalidate first icon identifier */
 		*pIconId = 0xFFFFFFFF;
 
-	if (!pIconId) /* if no icon identifier array present use the icon handle array as intermediate storage */
-	  pIconId = (UINT*)RetPtr;
+	if (!pIconId && RetPtr && nIcons)
+    {
+        allocatedIconIds = HeapAlloc(GetProcessHeap(), 0, nIcons * sizeof(*allocatedIconIds));
+        if (!allocatedIconIds)
+            goto end;
+        pIconId = allocatedIconIds;
+    }
 
 	sig = USER32_GetResourceTable(peimage, fsizel, &pData);
 
@@ -543,44 +553,33 @@ static UINT ICO_ExtractIconExW(
                     HICON icon;
                     WORD *cursorData = NULL;
 #ifdef __REACTOS__
-                    BITMAPINFOHEADER bi;
-                    DWORD cbColorTable = 0, cbTotal;
+                    LPicoICONDIR icoDir = (LPicoICONDIR)peimage;
+                    DWORD cbTotal = 0;
+                    UINT icoIndex;
 #endif
 
                     imageData = peimage + dataOffset;
 #ifdef __REACTOS__
-                    /* Calculate the size of color table */
-                    ZeroMemory(&bi, sizeof(bi));
-                    CopyMemory(&bi, imageData, sizeof(BITMAPCOREHEADER));
-                    if (bi.biBitCount <= 8)
+                    /* The directory owns the exact byte size, including PNG data. */
+                    if (fsizel >= FIELD_OFFSET(icoICONDIR, idEntries) &&
+                        icoDir->idCount <=
+                            (fsizel - FIELD_OFFSET(icoICONDIR, idEntries)) / sizeof(icoICONDIRENTRY))
                     {
-                        if (bi.biSize >= sizeof(BITMAPINFOHEADER))
+                        for (icoIndex = 0; icoIndex < icoDir->idCount; ++icoIndex)
                         {
-                            CopyMemory(&bi, imageData, sizeof(BITMAPINFOHEADER));
-                            if (bi.biClrUsed)
-                                cbColorTable = bi.biClrUsed * sizeof(RGBQUAD);
-                            else
-                                cbColorTable = (1 << bi.biBitCount) * sizeof(RGBQUAD);
-                        }
-                        else if (bi.biSize == sizeof(BITMAPCOREHEADER))
-                        {
-                            cbColorTable = (1 << bi.biBitCount) * sizeof(RGBTRIPLE);
+                            const icoICONDIRENTRY *dirEntry = &icoDir->idEntries[icoIndex];
+
+                            if (dirEntry->dwImageOffset == dataOffset &&
+                                dirEntry->dwImageOffset <= fsizel &&
+                                dirEntry->dwBytesInRes <= fsizel - dirEntry->dwImageOffset)
+                            {
+                                cbTotal = dirEntry->dwBytesInRes;
+                                break;
+                            }
                         }
                     }
-
-                    /* biSizeImage is the size of the raw bitmap data.
-                     * https://en.wikipedia.org/wiki/BMP_file_format */
-                    if (bi.biSizeImage == 0)
-                    {
-                         /* Calculate image size */
-#define WIDTHBYTES(width, bits) (((width) * (bits) + 31) / 32 * 4)
-                        bi.biSizeImage = WIDTHBYTES(bi.biWidth, bi.biBitCount) * (bi.biHeight / 2);
-                        bi.biSizeImage += WIDTHBYTES(bi.biWidth, 1) * (bi.biHeight / 2);
-#undef WIDTHBYTES
-                    }
-
-                    /* Calculate total size */
-                    cbTotal = bi.biSize + cbColorTable + bi.biSizeImage;
+                    if (!cbTotal)
+                        continue;
 #else
                     entry = (LPICONIMAGE)(imageData);
 #endif
@@ -610,7 +609,13 @@ static UINT ICO_ExtractIconExW(
                     }
 
 #ifdef __REACTOS__
-                    icon = CreateIconFromResourceEx(imageData, cbTotal, sig == 1, 0x00030000, cx[index], cy[index], flags);
+                    icon = CreateIconFromResourceEx(imageData,
+                                                    cbTotal + (sig == 2 ? 2 * sizeof(WORD) : 0),
+                                                    sig == 1,
+                                                    0x00030000,
+                                                    cx[index],
+                                                    cy[index],
+                                                    flags);
                     if (fIconEx && sig == 1)
                         iconCount = 1;
 #else
@@ -627,7 +632,6 @@ static UINT ICO_ExtractIconExW(
                             DestroyIcon(icon);
 
                         iconCount = 1;
-                        break;
                     }
                 }
             }
@@ -637,7 +641,7 @@ static UINT ICO_ExtractIconExW(
 /* end ico file */
 
 /* exe/dll */
-	else if( sig == IMAGE_NT_SIGNATURE )
+    else if( sig == IMAGE_NT_SIGNATURE )
 	{
         BYTE *idata, *igdata;
         const IMAGE_RESOURCE_DIRECTORY *rootresdir, *iconresdir, *icongroupresdir;
@@ -645,6 +649,9 @@ static UINT ICO_ExtractIconExW(
         const IMAGE_RESOURCE_DIRECTORY_ENTRY *xresent;
         ULONG size;
         UINT i;
+
+        if (cx2 && cy2 && (nIcons & 1))
+            goto end;
 
         rootresdir = RtlImageDirectoryEntryToData((HMODULE)peimage, FALSE, IMAGE_DIRECTORY_ENTRY_RESOURCE, &size);
         if (!rootresdir)
@@ -673,6 +680,8 @@ static UINT ICO_ExtractIconExW(
 	  /* only number of icons requested */
 	  if( !pIconId )
 	  {
+	    if (fIconEx && RetPtr && !nIcons)
+	      goto end;
 	    ret = iconDirCount;
 	    goto end;		/* success */
 	  }
@@ -842,6 +851,7 @@ static UINT ICO_ExtractIconExW(
 	}			/* if(sig == IMAGE_NT_SIGNATURE) */
 
 end:
+	HeapFree(GetProcessHeap(), 0, allocatedIconIds);
 	UnmapViewOfFile(peimage);	/* success */
 	return ret;
 }
