@@ -1357,6 +1357,7 @@ NtUserSetProcessDpiAwarenessContext(
 {
     PPROCESSINFO ppi;
     ULONG SystemDpi;
+    ULONG BaseContext;
     ULONG Ret = 0;
 
     UNREFERENCED_PARAMETER(Flags);
@@ -1365,12 +1366,14 @@ NtUserSetProcessDpiAwarenessContext(
 
     SystemDpi = gpsi ? gpsi->dmLogPixels : 96;
 
-    /* Only concrete NTUSER contexts are accepted, never the abstract handles */
-    if (DpiContext != NTUSER_DPI_UNAWARE &&
-        DpiContext != NTUSER_DPI_UNAWARE_GDISCALED &&
-        DpiContext != NTUSER_DPI_PER_MONITOR_AWARE &&
-        DpiContext != NTUSER_DPI_PER_MONITOR_AWARE_V2 &&
-        DpiContext != (NTUSER_DPI_SYSTEM_AWARE | (SystemDpi << 8)))
+    /* Only concrete NTUSER contexts are accepted, never the abstract handles.
+     * The 0x80000000 process-default flag composes with each of them. */
+    BaseContext = DpiContext & ~0x80000000;
+    if (BaseContext != NTUSER_DPI_UNAWARE &&
+        BaseContext != NTUSER_DPI_UNAWARE_GDISCALED &&
+        BaseContext != NTUSER_DPI_PER_MONITOR_AWARE &&
+        BaseContext != NTUSER_DPI_PER_MONITOR_AWARE_V2 &&
+        BaseContext != (NTUSER_DPI_SYSTEM_AWARE | (SystemDpi << 8)))
     {
         EngSetLastError(ERROR_INVALID_PARAMETER);
     }
