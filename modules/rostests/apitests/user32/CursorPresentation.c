@@ -314,6 +314,7 @@ static DWORD WINAPI paint_thread_proc(void *parameter)
             SetEvent(state->ready_event);
         if (!PatBlt(dc, 0, 0, rect.right, rect.bottom, (operation & 1) ? BLACKNESS : WHITENESS))
             InterlockedIncrement(&state->failures);
+        Sleep(0);
         GdiFlush();
         InterlockedExchange(&state->in_paint, 0);
         if (!(operation & 7))
