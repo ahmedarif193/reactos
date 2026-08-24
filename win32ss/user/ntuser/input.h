@@ -80,6 +80,7 @@ extern BOOL gbEnableHexNumpad;
 WORD FASTCALL UserGetMouseButtonsState(VOID);
 VOID NTAPI UserProcessMouseInput(PMOUSE_INPUT_DATA pMouseInputData);
 BOOL NTAPI UserSendMouseInput(MOUSEINPUT *pMouseInput, BOOL bInjected);
+VOID NTAPI UserRecordMousePointerInput(const POINT *ppt, DWORD dwEventFlags, DWORD dwTime);
 
 /* IMM */
 UINT FASTCALL IntImmProcessKey(
