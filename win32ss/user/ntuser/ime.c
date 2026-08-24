@@ -574,25 +574,26 @@ UserBuildHimcList(
 
     if (pti)
     {
-        for (pIMC = pti->spDefaultImc; pIMC; pIMC = pIMC->pImcNext)
+        for (pIMC = pti->spDefaultImc;
+             pIMC && dwRealCount < dwCount;
+             pIMC = pIMC->pImcNext)
         {
-            if (dwRealCount < dwCount)
-                phList[dwRealCount] = UserHMGetHandle(pIMC);
-
-            ++dwRealCount;
+            phList[dwRealCount++] = UserHMGetHandle(pIMC);
         }
     }
     else
     {
         for (pti = gptiCurrent->ppi->ptiList; pti; pti = pti->ptiSibling)
         {
-            for (pIMC = pti->spDefaultImc; pIMC; pIMC = pIMC->pImcNext)
+            for (pIMC = pti->spDefaultImc;
+                 pIMC && dwRealCount < dwCount;
+                 pIMC = pIMC->pImcNext)
             {
-                if (dwRealCount < dwCount)
-                    phList[dwRealCount] = UserHMGetHandle(pIMC);
-
-                ++dwRealCount;
+                phList[dwRealCount++] = UserHMGetHandle(pIMC);
             }
+
+            if (dwRealCount == dwCount)
+                break;
         }
     }
 
@@ -742,6 +743,9 @@ NtUserBuildHimcList(
 
     UserEnterExclusive();
 
+    if (!phList || !pdwCount)
+        goto Quit;
+
     if (!IS_IMM_MODE())
     {
         ERR("!IS_IMM_MODE()\n");
@@ -761,7 +765,10 @@ NtUserBuildHimcList(
     {
         pti = IntTID2PTI(UlongToHandle(dwThreadId));
         if (!pti || !pti->rpdesk)
+        {
+            ret = STATUS_INVALID_PARAMETER;
             goto Quit;
+        }
     }
 
     _SEH2_TRY
@@ -777,10 +784,7 @@ NtUserBuildHimcList(
     }
     _SEH2_END;
 
-    if (dwCount < dwRealCount)
-        ret = STATUS_BUFFER_TOO_SMALL;
-    else
-        ret = STATUS_SUCCESS;
+    ret = STATUS_SUCCESS;
 
 Quit:
     UserLeave();
@@ -1641,6 +1645,8 @@ NtUserDestroyInputContext(_In_ HIMC hIMC)
     pIMC = UserGetObjectNoErr(gHandleTable, hIMC, TYPE_INPUTCONTEXT);
     if (pIMC)
         ret = IntDestroyInputContext(pIMC);
+    else
+        EngSetLastError(ERROR_INVALID_HANDLE);
 
 Quit:
     UserLeave();
@@ -1837,15 +1843,15 @@ UserUpdateInputContext(_In_ PIMC pIMC, _In_ DWORD dwType, _In_ DWORD_PTR dwValue
     {
         case UIC_CLIENTIMCDATA:
             if (pIMC->dwClientImcData)
+            {
+                EngSetLastError(ERROR_ALREADY_INITIALIZED);
                 return FALSE; // Already set
+            }
 
             pIMC->dwClientImcData = dwValue;
             break;
 
         case UIC_IMEWINDOW:
-            if (!ValidateHwndNoErr((HWND)dwValue))
-                return FALSE; // Invalid HWND
-
             pIMC->hImeWnd = (HWND)dwValue;
             break;
 
@@ -1934,6 +1940,7 @@ NtUserQueryInputContext(HIMC hIMC, DWORD dwType)
         default:
         {
             FIXME("dwType: %ld\n", dwType);
+            EngSetLastError(ERROR_INVALID_PARAMETER);
             break;
         }
     }

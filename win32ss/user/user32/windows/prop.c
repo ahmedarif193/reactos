@@ -428,6 +428,8 @@ RemovePropW(HWND hWnd,
 	    LPCWSTR lpString)
 {
   ATOM Atom;
+  HANDLE Data;
+
   if (HIWORD(lpString))
     {
       Atom = GlobalFindAtomW(lpString);
@@ -436,7 +438,12 @@ RemovePropW(HWND hWnd,
     {
       Atom = LOWORD((DWORD_PTR)lpString);
     }
-  return(NtUserRemoveProp(hWnd, Atom));
+
+  Data = NtUserRemoveProp(hWnd, Atom);
+  if (Data && HIWORD(lpString))
+    GlobalDeleteAtom(Atom);
+
+  return Data;
 }
 
 
@@ -476,6 +483,8 @@ BOOL WINAPI
 SetPropW(HWND hWnd, LPCWSTR lpString, HANDLE hData)
 {
   ATOM Atom;
+  BOOL Ret;
+
   if (HIWORD(lpString))
     {
       Atom = GlobalAddAtomW(lpString);
@@ -485,5 +494,9 @@ SetPropW(HWND hWnd, LPCWSTR lpString, HANDLE hData)
       Atom = LOWORD((DWORD_PTR)lpString);
     }
 
-  return(NtUserSetProp(hWnd, Atom, hData));
+  Ret = NtUserSetProp(hWnd, Atom, hData);
+  if (!Ret && HIWORD(lpString))
+    GlobalDeleteAtom(Atom);
+
+  return Ret;
 }

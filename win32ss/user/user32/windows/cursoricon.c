@@ -1825,6 +1825,7 @@ CURSORICON_LoadImageW(
     BOOL bStatus;
     UNICODE_STRING ustrRsrc;
     UNICODE_STRING ustrModule = {0, 0, NULL};
+    LPCWSTR lpszResourceName = lpszName;
 
     /* Fix width/height */
     if(fuLoad & LR_DEFAULTSIZE)
@@ -1857,17 +1858,17 @@ CURSORICON_LoadImageW(
         }
     }
 
-    if(lpszName)
+    if(lpszResourceName)
     {
         /* Prepare the resource name string */
-        if(IS_INTRESOURCE(lpszName))
+        if(IS_INTRESOURCE(lpszResourceName))
         {
-            ustrRsrc.Buffer = (LPWSTR)lpszName;
+            ustrRsrc.Buffer = (LPWSTR)lpszResourceName;
             ustrRsrc.Length = 0;
             ustrRsrc.MaximumLength = 0;
         }
         else
-            RtlInitUnicodeString(&ustrRsrc, lpszName);
+            RtlInitUnicodeString(&ustrRsrc, lpszResourceName);
     }
 
     if(LDR_IS_RESOURCE(hinst))
@@ -1965,7 +1966,7 @@ CURSORICON_LoadImageW(
             hCurIcon = CURSORICON_CreateFromANI(bits,
                                                 SizeofResource(hinst, hrsrc),
                                                 hinst ? &ustrModule : NULL,
-                                                lpszName ? &ustrRsrc : NULL,
+                                                lpszResourceName ? &ustrRsrc : NULL,
                                                 cxDesired,
                                                 cyDesired,
                                                 fuLoad,
@@ -2045,7 +2046,8 @@ CURSORICON_LoadImageW(
     }
 
     /* Tell win32k */
-    bStatus = NtUserSetCursorIconData(hCurIcon, hinst ? &ustrModule : NULL, lpszName ? &ustrRsrc : NULL, &cursorData);
+    bStatus = NtUserSetCursorIconData(hCurIcon, hinst ? &ustrModule : NULL,
+                                      lpszResourceName ? &ustrRsrc : NULL, &cursorData);
 
     if(!bStatus)
     {
