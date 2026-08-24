@@ -454,7 +454,7 @@ if(PREINSTALL_EXTRA_FILE_LIST)
 endif()
 
 # Disk image size configuration (in MB)
-set(_preinstall_image_size_default 1024)
+set(_preinstall_image_size_default 512)
 set(PREINSTALL_IMAGE_SIZE_MB ${_preinstall_image_size_default} CACHE STRING "Boot and system area size in MB; the private crash-dump partition is additional")
 set(PREINSTALL_CRASH_DUMP_SIZE_MB 64 CACHE STRING "Private raw crash-dump partition size in MB")
 if(PREINSTALL_CRASH_DUMP_SIZE_MB LESS 1)
