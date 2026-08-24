@@ -19,6 +19,7 @@ DBG_DEFAULT_CHANNEL(UserWinsta);
  * only one interactive window station on the system.
  */
 PWINSTATION_OBJECT InputWindowStation = NULL;
+static LIST_ENTRY WindowStationListHead;
 
 /* Winlogon SAS window */
 HWND hwndSAS = NULL;
@@ -47,6 +48,7 @@ InitWindowStationImpl(VOID)
 #endif
     ExWindowStationObjectType->TypeInfo.GenericMapping = IntWindowStationMapping;
     ExWindowStationObjectType->TypeInfo.ValidAccessMask = WINSTA_ACCESS_ALL;
+    InitializeListHead(&WindowStationListHead);
 
     return STATUS_SUCCESS;
 }
@@ -107,6 +109,8 @@ IntWinStaObjectDelete(
     PWINSTATION_OBJECT WinSta = (PWINSTATION_OBJECT)DeleteParameters->Object;
 
     TRACE("Deleting window station 0x%p\n", WinSta);
+
+    ASSERT(IsListEmpty(&WinSta->ListEntry));
 
     if (WinSta == InputWindowStation)
     {
@@ -227,6 +231,25 @@ IntWinStaObjectOpen(
         (PsGetProcessSessionIdEx(OpenParameters->Process) != WinSta->dwSessionId))
     {
         return STATUS_ACCESS_DENIED;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+IntWinStaObjectClose(
+    _In_ PVOID Parameters)
+{
+    PWIN32_CLOSEMETHOD_PARAMETERS CloseParameters = Parameters;
+    PWINSTATION_OBJECT WinSta = CloseParameters->Object;
+
+    if (CloseParameters->SystemHandleCount == 1 &&
+        !IsListEmpty(&WinSta->ListEntry))
+    {
+        RemoveEntryList(&WinSta->ListEntry);
+        InitializeListHead(&WinSta->ListEntry);
+        ObDereferenceObject(WinSta);
     }
 
     return STATUS_SUCCESS;
@@ -534,6 +557,7 @@ IntCreateWindowStation(
 
     /* Initialize the window station */
     InitializeListHead(&WindowStation->DesktopListHead);
+    InitializeListHead(&WindowStation->ListEntry);
     Status = RtlCreateAtomTable(37, &WindowStation->AtomTable);
     if (!NT_SUCCESS(Status))
     {
@@ -557,7 +581,10 @@ IntCreateWindowStation(
         return Status;
     }
 
-    // FIXME! TODO: Add this new window station to a linked list
+    /* The session's window-station registry owns a reference until the last
+       handle is closed, matching the lifetime of its registry entry. */
+    ObReferenceObject(WindowStation);
+    InsertTailList(&WindowStationListHead, &WindowStation->ListEntry);
 
     if (InputWindowStation == NULL)
     {

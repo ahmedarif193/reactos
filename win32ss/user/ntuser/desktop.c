@@ -212,6 +212,11 @@ IntDesktopOkToClose(
     PWIN32_OKAYTOCLOSEMETHOD_PARAMETERS OkToCloseParameters = Parameters;
     PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
 
+    /* Desktop handles are closed through NtUserCloseDesktop, which performs
+       the USER-specific busy checks before asking Ob to close the handle. */
+    if (OkToCloseParameters->PreviousMode != KernelMode)
+        return STATUS_HANDLE_NOT_CLOSABLE;
+
     if (pti == NULL)
     {
         /* This happens when we leak desktop handles */
@@ -252,6 +257,7 @@ IntDesktopObjectClose(
 {
     NTSTATUS Ret;
     PWIN32_CLOSEMETHOD_PARAMETERS CloseParameters = Parameters;
+    PDESKTOP pdesk = CloseParameters->Object;
     PPROCESSINFO ppi = PsGetProcessWin32Process(CloseParameters->Process);
     if (ppi == NULL)
     {
@@ -261,7 +267,16 @@ IntDesktopObjectClose(
     }
 
     UserEnterExclusive();
-    Ret = IntUnmapDesktopView((PDESKTOP)CloseParameters->Object);
+    Ret = IntUnmapDesktopView(pdesk);
+
+    if (CloseParameters->SystemHandleCount == 1)
+    {
+        while (pdesk->InfrastructureReferences)
+        {
+            pdesk->InfrastructureReferences--;
+            ObDereferenceObject(pdesk);
+        }
+    }
     UserLeave();
     return Ret;
 }
@@ -594,6 +609,8 @@ IntResolveDesktop(
     PWINSTATION_OBJECT WinStaObject;
     HWINSTA hTempWinSta = NULL;
     BOOLEAN bUseDefaultWinSta = FALSE;
+    BOOLEAN bUseParentStartup = FALSE;
+    BOOLEAN bParentDesktopMismatch = FALSE;
     BOOLEAN bInteractive = FALSE;
     BOOLEAN bAccessAllowed = FALSE;
 
@@ -737,6 +754,10 @@ IntResolveDesktop(
      */
     if (WinStaName.Buffer == NULL)
     {
+        HANDLE ParentProcessId;
+        PEPROCESS ParentProcess = NULL;
+        PPROCESSINFO ParentPpi;
+
         /*
          * We want to find a suitable default window station.
          * For applications that can be interactive, i.e. that have allowed
@@ -757,7 +778,66 @@ IntResolveDesktop(
         // RtlInitUnicodeString(&WinStaName, L"WinSta0");
         WinStaName = WinSta0Name;
 
-        if (ObFindHandleForObject(Process,
+        /* The default is the parent's startup desktop, not the window
+           station that the parent may have selected later. CreateProcess
+           inherits this association even when lpDesktop is empty. */
+        ParentProcessId = PsGetProcessInheritedFromUniqueProcessId(Process);
+        if (ParentProcessId &&
+            NT_SUCCESS(PsLookupProcessByProcessId(ParentProcessId, &ParentProcess)))
+        {
+            ParentPpi = PsGetProcessWin32Process(ParentProcess);
+            if (ParentPpi && ParentPpi->rpdeskStartup)
+            {
+                Status = ObOpenObjectByPointer(ParentPpi->rpdeskStartup->rpwinstaParent,
+                                               bInherit ? OBJ_INHERIT : 0,
+                                               NULL,
+                                               MAXIMUM_ALLOWED,
+                                               ExWindowStationObjectType,
+                                               UserMode,
+                                               (PHANDLE)&hWinSta);
+                if (NT_SUCCESS(Status))
+                {
+                    bUseParentStartup = TRUE;
+
+                    if (DesktopName.Buffer == NULL)
+                    {
+                        Status = ObOpenObjectByPointer(ParentPpi->rpdeskStartup,
+                                                       bInherit ? OBJ_INHERIT : 0,
+                                                       NULL,
+                                                       MAXIMUM_ALLOWED,
+                                                       ExDesktopObjectType,
+                                                       UserMode,
+                                                       (PHANDLE)&hDesktop);
+                        if (!NT_SUCCESS(Status))
+                            hDesktop = NULL;
+                    }
+                    else
+                    {
+                        UNICODE_STRING ParentDesktopName;
+
+                        RtlInitUnicodeString(&ParentDesktopName,
+                                             ParentPpi->rpdeskStartup->pDeskInfo->szDesktopName);
+                        bParentDesktopMismatch = !RtlEqualUnicodeString(&DesktopName,
+                                                                       &ParentDesktopName,
+                                                                       TRUE);
+                    }
+                }
+                else
+                {
+                    hWinSta = NULL;
+                }
+            }
+            ObDereferenceObject(ParentProcess);
+        }
+
+        if (bParentDesktopMismatch)
+        {
+            Status = STATUS_ACCESS_DENIED;
+            goto Quit;
+        }
+
+        if (!hWinSta &&
+            ObFindHandleForObject(Process,
                                   NULL,
                                   ExWindowStationObjectType,
                                   NULL,
@@ -778,7 +858,8 @@ IntResolveDesktop(
         /* Use a default desktop name */
         RtlInitUnicodeString(&DesktopName, L"Default");
 
-        if (ObFindHandleForObject(Process,
+        if (!hDesktop &&
+            ObFindHandleForObject(Process,
                                   NULL,
                                   ExDesktopObjectType,
                                   NULL,
@@ -977,7 +1058,8 @@ IntResolveDesktop(
 
             // TODO: Check also that we compare wrt. window station WinSta0
             // which is the only one that can be interactive on the system.
-            if (((!bUseDefaultWinSta || bInherit) && RtlEqualLuid(&ProcessLuid, &SystemLuid)) ||
+            if (((!bUseDefaultWinSta || bInherit || bUseParentStartup) &&
+                 RtlEqualLuid(&ProcessLuid, &SystemLuid)) ||
                  RtlEqualLuid(&ProcessLuid, &WinStaObject->luidUser))
             {
                 /* We are interactive on this window station */
@@ -2418,6 +2500,7 @@ IntCreateDesktop(
     CREATESTRUCTW Cs;
     PTHREADINFO ptiCurrent;
     PCLS pcls;
+    ULONG ReferenceIndex;
 
     TRACE("Enter IntCreateDesktop\n");
 
@@ -2539,6 +2622,19 @@ IntCreateDesktop(
 
     /* Assign the message window to the desktop */
     pdesk->spwndMessage = pWnd;
+
+    /* Keep the desktop alive for the five persistent pieces that expose its
+       storage and USER objects: the winsta list, session heap mapping, heap
+       section, desktop window, and message window. The final handle close
+       drops these ownership references before object deletion tears them
+       down. */
+    pdesk->InfrastructureReferences = 5;
+    for (ReferenceIndex = 0;
+         ReferenceIndex < pdesk->InfrastructureReferences;
+         ReferenceIndex++)
+    {
+        ObReferenceObject(pdesk);
+    }
 
     /* Now...
        if !(WinStaObject->Flags & WSF_NOIO) is (not set) for desktop input output mode (see wiki)
@@ -2794,7 +2890,7 @@ NtUserCloseDesktop(HDESK hDesktop)
 
     ObDereferenceObject(pdesk);
 
-    Status = ObCloseHandle(hDesktop, UserMode);
+    Status = ObCloseHandle(hDesktop, KernelMode);
     if (!NT_SUCCESS(Status))
     {
         ERR("Failed to close desktop handle 0x%p\n", hDesktop);

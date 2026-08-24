@@ -41,9 +41,10 @@ typedef struct _DESKTOP
     /* Thread blocking input */
     PVOID BlockInputThread;
     LIST_ENTRY ShellHookWindows;
+    ULONG InfrastructureReferences;
 #ifdef _WIN64
     /* Keep the allocation boundary aligned with the native 64-bit object body. */
-    UCHAR NativeLayoutPadding[120];
+    UCHAR NativeLayoutPadding[116];
 #endif
 } DESKTOP, *PDESKTOP;
 

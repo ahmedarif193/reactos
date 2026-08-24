@@ -42,9 +42,10 @@ typedef struct _WINSTATION_OBJECT
     struct _DESKTOP* ActiveDesktop;
     HANDLE         ShellWindow;
     HANDLE         ShellListView;
+    LIST_ENTRY     ListEntry;
 #ifdef _WIN64
     /* Keep the allocation boundary aligned with the native 64-bit object body. */
-    UCHAR NativeLayoutPadding[80];
+    UCHAR NativeLayoutPadding[64];
 #endif
 } WINSTATION_OBJECT, *PWINSTATION_OBJECT;
 
@@ -94,6 +95,11 @@ IntWinStaOkToClose(
 NTSTATUS
 NTAPI
 IntWinStaObjectOpen(
+    _In_ PVOID Parameters);
+
+NTSTATUS
+NTAPI
+IntWinStaObjectClose(
     _In_ PVOID Parameters);
 
 NTSTATUS
