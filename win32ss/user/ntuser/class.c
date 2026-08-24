@@ -39,7 +39,7 @@ REGISTER_SYSCLASS DefaultServerClasses[] =
   { ((PWSTR)WC_DESKTOP),
     CS_GLOBALCLASS|CS_DBLCLKS,
     NULL, // Use User32 procs
-    sizeof(ULONG)*2,
+    0,
     (HICON)OCR_NORMAL,
     (HBRUSH)(COLOR_BACKGROUND),
     FNID_DESKTOP,
@@ -48,7 +48,7 @@ REGISTER_SYSCLASS DefaultServerClasses[] =
   { ((PWSTR)WC_SWITCH),
     CS_VREDRAW|CS_HREDRAW|CS_SAVEBITS,
     NULL, // Use User32 procs
-    sizeof(LONG_PTR), // See user32_apitest GetClassInfo, 0: Pointer to ALTTABINFO
+    16, // See user32_apitest GetClassInfo, ALTTABINFO storage
     (HICON)OCR_NORMAL,
     NULL,
     FNID_SWITCH,
@@ -59,7 +59,7 @@ REGISTER_SYSCLASS DefaultServerClasses[] =
     NULL, // Use User32 procs
     16, // See user32_apitest GetClassInfo, PopupMenuWndProcW
     (HICON)OCR_NORMAL,
-    (HBRUSH)(COLOR_MENU + 1),
+    NULL,
     FNID_MENU,
     ICLS_MENU
   },
@@ -2299,6 +2299,11 @@ UserGetClassInfo(IN PCLS Class,
     lpwcx->hIconSm = Class->spicnSm ? UserHMGetHandle(Class->spicnSm) : NULL;
     lpwcx->hbrBackground = Class->hbrBackground;
 
+    if (Class->fnid == FNID_DESKTOP)
+        lpwcx->hbrBackground = (HBRUSH)(COLOR_BACKGROUND + 1);
+    else if (Class->fnid == FNID_SWITCH)
+        lpwcx->lpfnWndProc = NULL;
+
     /* Copy non-string to user first. */
     if (Ansi)
        ((PWNDCLASSEXA)lpwcx)->lpszMenuName = Class->lpszClientAnsiMenuName;
@@ -2402,7 +2407,7 @@ UserRegisterSystemClasses(VOID)
         }
 
         hBrush = DefaultServerClasses[i].hBrush;
-        if (hBrush <= (HBRUSH)COLOR_MENUBAR)
+        if (hBrush && hBrush <= (HBRUSH)COLOR_MENUBAR)
         {
             hBrush = IntGetSysColorBrush(HandleToUlong(hBrush));
         }
