@@ -504,11 +504,15 @@ QueryDeviceInformation(
     if (DriveLetterAllowed && PartitionInfoValid)
     {
         if (PartitionInfo.PartitionStyle == PARTITION_STYLE_MBR)
+        {
             IsEfiSystemPartition = (PartitionInfo.Mbr.PartitionType == PARTITION_SYSTEM);
+            if (!IsRecognizedPartition(PartitionInfo.Mbr.PartitionType))
+                *DriveLetterAllowed = FALSE;
+        }
         else if (PartitionInfo.PartitionStyle == PARTITION_STYLE_GPT)
             IsEfiSystemPartition = IsEqualGUID(&PartitionInfo.Gpt.PartitionType, &MountMgrEfiSystemPartitionGuid);
 
-        /* EFI system partitions and fixed GPT volumes marked no-drive-letter stay unassigned. */
+        /* Unknown MBR types, EFI system partitions, and fixed GPT volumes marked no-drive-letter stay unassigned. */
         if (IsEfiSystemPartition || (!IsRemovable && PartitionInfo.PartitionStyle == PARTITION_STYLE_GPT && (PartitionInfo.Gpt.Attributes & MountMgrGptNoDriveLetterAttribute)))
             *DriveLetterAllowed = FALSE;
     }
@@ -1262,6 +1266,13 @@ MountMgrMountedDeviceArrival(IN PDEVICE_EXTENSION DeviceExtension,
         /* If it has a drive letter */
         else if (IsDriveLetter(&(SymLinks[i])))
         {
+            if (!DriveLetterAllowed)
+            {
+                DeleteFromLocalDatabase(&(SymLinks[i]), UniqueId);
+                FreePool(SymLinks[i].Buffer);
+                continue;
+            }
+
             if (IsDrvLetter)
             {
                 DeleteFromLocalDatabase(&(SymLinks[i]), UniqueId);
