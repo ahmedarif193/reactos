@@ -30,6 +30,24 @@ ATOM AtomImeLevel;
 /* PRIVATE FUNCTIONS **********************************************************/
 
 static
+ATOM FASTCALL
+IntAddUserPropertyAtom(PWSTR AtomName)
+{
+    RTL_ATOM Atom = 0;
+    NTSTATUS Status;
+
+    Status = NtAddAtom(AtomName,
+                       (ULONG)(wcslen(AtomName) * sizeof(WCHAR)),
+                       &Atom);
+    if (!NT_SUCCESS(Status))
+        ERR("Failed to add USER property atom %S, Status 0x%08lx\n",
+            AtomName,
+            Status);
+
+    return Atom;
+}
+
+static
 NTSTATUS FASTCALL
 InitUserAtoms(VOID)
 {
@@ -46,27 +64,22 @@ InitUserAtoms(VOID)
     AtomMessage = IntAddGlobalAtom(L"Message", TRUE);
     gpsi->atomSysClass[ICLS_HWNDMESSAGE] = AtomMessage;
 
-    /* System Context Help Id Atom */
-    gpsi->atomContextHelpIdProp = IntAddGlobalAtom(L"SysCH", TRUE);
+    /* Property names share the global atom namespace used by SetProp. */
+    gpsi->atomContextHelpIdProp = IntAddUserPropertyAtom(L"SysCH");
 
     gpsi->atomIconSmProp = IntAddGlobalAtom(L"SysICS", TRUE);
     gpsi->atomIconProp   = IntAddGlobalAtom(L"SysIC", TRUE);
 
-    gpsi->atomFrostedWindowProp = IntAddGlobalAtom(L"SysFrostedWindow", TRUE);
+    gpsi->atomFrostedWindowProp = IntAddUserPropertyAtom(L"SysFrostedWindow");
 
-    AtomDDETrack = IntAddGlobalAtom(L"SysDT", TRUE);
-    AtomQOS      = IntAddGlobalAtom(L"SysQOS", TRUE);
-    AtomImeLevel = IntAddGlobalAtom(L"SysIMEL", TRUE);
+    AtomDDETrack = IntAddUserPropertyAtom(L"SysDT");
+    AtomQOS      = IntAddUserPropertyAtom(L"SysQOS");
+    AtomImeLevel = IntAddUserPropertyAtom(L"SysIMEL");
 
-    /*
-     * FIXME: AddPropW uses the global kernel atom table, thus leading to conflicts if we use
-     * the win32k atom table for this one. What is the right thing to do ?
-     */
-    // AtomWndObj = IntAddGlobalAtom(L"SysWNDO", TRUE);
-    NtAddAtom(L"SysWNDO", 14, &AtomWndObj);
+    AtomWndObj = IntAddUserPropertyAtom(L"SysWNDO");
 
-    AtomLayer = IntAddGlobalAtom(L"SysLayer", TRUE);
-    AtomFlashWndState = IntAddGlobalAtom(L"FlashWState", TRUE);
+    AtomLayer = IntAddUserPropertyAtom(L"SysLayer");
+    AtomFlashWndState = IntAddUserPropertyAtom(L"FlashWState");
 
     return STATUS_SUCCESS;
 }
