@@ -395,9 +395,11 @@ SetUserSysColors(VOID)
 {
     HKEY hKey;
     INT i;
+    INT aiElements[ARRAYSIZE(g_RegColorNames)];
+    COLORREF acrColors[ARRAYSIZE(g_RegColorNames)];
+    INT cElements = 0;
     WCHAR szColor[25];
     DWORD Type, Size;
-    COLORREF crColor;
     LONG rc;
 
     rc = RegOpenKeyExW(HKEY_CURRENT_USER, REGSTR_PATH_COLORS,
@@ -415,8 +417,9 @@ SetUserSysColors(VOID)
                               (LPBYTE)szColor, &Size);
         if (rc == ERROR_SUCCESS && Type == REG_SZ)
         {
-            crColor = StrToColorref(szColor);
-            SetSysColors(1, &i, &crColor);
+            aiElements[cElements] = i;
+            acrColors[cElements] = StrToColorref(szColor);
+            cElements++;
         }
         else
         {
@@ -426,6 +429,9 @@ SetUserSysColors(VOID)
     }
 
     RegCloseKey(hKey);
+
+    if (cElements != 0)
+        SetSysColors(cElements, aiElements, acrColors);
 }
 
 static VOID
