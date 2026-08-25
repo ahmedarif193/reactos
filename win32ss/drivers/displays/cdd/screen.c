@@ -25,11 +25,16 @@ RcddGetAvailableModes(
    DWORD *ModeInfoSize)
 {
    ULONG ulTemp;
+   ULONG ModeBufferSize;
    VIDEO_NUM_MODES Modes;
    PVIDEO_MODE_INFORMATION ModeInfoPtr;
 
+   *ModeInfo = NULL;
+   *ModeInfoSize = 0;
+
    if (EngDeviceIoControl(hDriver, IOCTL_VIDEO_QUERY_NUM_AVAIL_MODES, NULL,
-                          0, &Modes, sizeof(VIDEO_NUM_MODES), &ulTemp))
+                          0, &Modes, sizeof(VIDEO_NUM_MODES), &ulTemp) ||
+       ulTemp < sizeof(VIDEO_NUM_MODES))
    {
       return 0;
    }
@@ -39,18 +44,23 @@ RcddGetAvailableModes(
       return 0;
    }
 
+   if (Modes.NumModes > ((ULONG)-1) / Modes.ModeInformationLength)
+   {
+      return 0;
+   }
+
+   ModeBufferSize = Modes.NumModes * Modes.ModeInformationLength;
    *ModeInfoSize = Modes.ModeInformationLength;
 
-   *ModeInfo = (PVIDEO_MODE_INFORMATION)EngAllocMem(0, Modes.NumModes *
-      Modes.ModeInformationLength, ALLOC_TAG);
+   *ModeInfo = (PVIDEO_MODE_INFORMATION)EngAllocMem(0, ModeBufferSize, ALLOC_TAG);
    if (*ModeInfo == NULL)
    {
       return 0;
    }
 
    if (EngDeviceIoControl(hDriver, IOCTL_VIDEO_QUERY_AVAIL_MODES, NULL, 0,
-                          *ModeInfo, Modes.NumModes * Modes.ModeInformationLength,
-                          &ulTemp))
+                          *ModeInfo, ModeBufferSize, &ulTemp) ||
+       ulTemp < ModeBufferSize)
    {
       EngFreeMem(*ModeInfo);
       *ModeInfo = NULL;
@@ -62,8 +72,14 @@ RcddGetAvailableModes(
 
    while (ulTemp--)
    {
-      if ((ModeInfoPtr->NumberOfPlanes != 1) ||
+      if ((ModeInfoPtr->Length < sizeof(VIDEO_MODE_INFORMATION)) ||
+          (ModeInfoPtr->NumberOfPlanes != 1) ||
           !(ModeInfoPtr->AttributeFlags & VIDEO_MODE_GRAPHICS) ||
+          ModeInfoPtr->VisScreenWidth == 0 ||
+          ModeInfoPtr->VisScreenHeight == 0 ||
+          ModeInfoPtr->VisScreenWidth > MAXLONG ||
+          ModeInfoPtr->VisScreenHeight > MAXLONG ||
+          ModeInfoPtr->ScreenStride == 0 ||
           ((ModeInfoPtr->BitsPerPlane != 8) &&
            (ModeInfoPtr->BitsPerPlane != 16) &&
            (ModeInfoPtr->BitsPerPlane != 24) &&
@@ -319,8 +335,6 @@ RcddGetModes(
    PVIDEO_MODE_INFORMATION ModeInfo, ModeInfoPtr;
    ULONG OutputSize;
 
-   UNREFERENCED_PARAMETER(cjSize);
-
    ModeCount = RcddGetAvailableModes(hDriver, &ModeInfo, &ModeInfoSize);
    if (ModeCount == 0)
    {
@@ -329,8 +343,17 @@ RcddGetModes(
 
    if (pdm == NULL)
    {
+      ULONG SupportedModes = 0;
+
+      ModeInfoPtr = ModeInfo;
+      while (ModeCount-- > 0)
+      {
+         if (ModeInfoPtr->Length != 0)
+            SupportedModes++;
+         ModeInfoPtr = (PVIDEO_MODE_INFORMATION)(((ULONG_PTR)ModeInfoPtr) + ModeInfoSize);
+      }
       EngFreeMem(ModeInfo);
-      return ModeCount * sizeof(DEVMODEW);
+      return SupportedModes * sizeof(DEVMODEW);
    }
 
    OutputSize = 0;
@@ -343,6 +366,9 @@ RcddGetModes(
          ModeInfoPtr = (PVIDEO_MODE_INFORMATION)(((ULONG_PTR)ModeInfoPtr) + ModeInfoSize);
          continue;
       }
+
+      if (cjSize - min(cjSize, OutputSize) < sizeof(DEVMODEW))
+         break;
 
       memset(pdm, 0, sizeof(DEVMODEW));
       memcpy(pdm->dmDeviceName, DEVICE_NAME, sizeof(DEVICE_NAME));

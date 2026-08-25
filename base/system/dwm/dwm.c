@@ -112,21 +112,30 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
               const BYTE *pix, const DWM_WIN *w)
 {
     LONG r, r0, r1, x0, x1, srcx0, dy, x, width;
-    LONG wx = w->x - g_originX;
-    LONG wy = w->y - g_originY;
+    LONGLONG wx = (LONGLONG)w->x - g_originX;
+    LONGLONG wy = (LONGLONG)w->y - g_originY;
+    LONGLONG right, bottom;
     BOOL useKey = (w->LayerFlags & DWM_LWA_COLORKEY) != 0;
     BOOL useAlpha = (w->LayerFlags & DWM_LWA_ALPHA) != 0 && w->Alpha < 255;
     ULONG a = w->Alpha, ia = 255 - w->Alpha, key = 0;
 
-    x0 = (wx < clipL) ? clipL : wx;
-    x1 = wx + w->cx;
-    if (x1 > clipR) x1 = clipR;
+    if (w->cx <= 0 || w->cy <= 0 ||
+        (ULONG)w->cx > ((ULONG)-1) / sizeof(ULONG) ||
+        w->Stride < (ULONG)w->cx * sizeof(ULONG))
+        return;
+
+    right = wx + w->cx;
+    bottom = wy + w->cy;
+    if (right <= clipL || wx >= clipR || bottom <= clipT || wy >= clipB)
+        return;
+    x0 = (wx < clipL) ? clipL : (LONG)wx;
+    x1 = (right > clipR) ? clipR : (LONG)right;
     if (x1 <= x0) return;
-    srcx0 = x0 - wx;
+    srcx0 = (LONG)(x0 - wx);
     width = x1 - x0;
 
-    r0 = (wy < clipT) ? clipT - wy : 0;
-    r1 = (wy + w->cy > clipB) ? clipB - wy : w->cy;
+    r0 = (wy < clipT) ? (LONG)(clipT - wy) : 0;
+    r1 = (bottom > clipB) ? (LONG)(clipB - wy) : w->cy;
     if (r1 <= r0) return;
 
     if (useKey)
@@ -140,7 +149,7 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
         const ULONG *srcrow;
         ULONG *dstrow;
 
-        dy = wy + r;
+        dy = (LONG)(wy + r);
         srcrow = (const ULONG *)(pix + (SIZE_T)r * w->Stride) + srcx0;
         dstrow = comp + (SIZE_T)dy * scrW + x0;
 
@@ -182,12 +191,16 @@ static BOOL
 DwmCreateSurfaces(HDC hdcScreen, LONG W, LONG H)
 {
     BITMAPINFO bmi;
+    HDC hdcNew;
+    HBITMAP hbmNew;
+    void *bitsNew = NULL;
 
-    if (g_hdcComp) { DeleteDC(g_hdcComp); g_hdcComp = NULL; }
-    if (g_hbmComp) { DeleteObject(g_hbmComp); g_hbmComp = NULL; g_compBits = NULL; }
+    if (W <= 0 || H <= 0 || (ULONG)W > ((ULONG)-1) / sizeof(ULONG) ||
+        (ULONG)H > ((ULONG)-1) / ((ULONG)W * sizeof(ULONG)))
+        return FALSE;
 
-    g_hdcComp = CreateCompatibleDC(hdcScreen);
-    if (g_hdcComp == NULL)
+    hdcNew = CreateCompatibleDC(hdcScreen);
+    if (hdcNew == NULL)
         return FALSE;
 
     RtlZeroMemory(&bmi, sizeof(bmi));
@@ -197,10 +210,20 @@ DwmCreateSurfaces(HDC hdcScreen, LONG W, LONG H)
     bmi.bmiHeader.biPlanes = 1;
     bmi.bmiHeader.biBitCount = 32;
     bmi.bmiHeader.biCompression = BI_RGB;
-    g_hbmComp = CreateDIBSection(hdcScreen, &bmi, DIB_RGB_COLORS, &g_compBits, NULL, 0);
-    if (g_hbmComp == NULL || g_compBits == NULL)
+    hbmNew = CreateDIBSection(hdcScreen, &bmi, DIB_RGB_COLORS, &bitsNew, NULL, 0);
+    if (hbmNew == NULL || bitsNew == NULL)
+    {
+        if (hbmNew != NULL)
+            DeleteObject(hbmNew);
+        DeleteDC(hdcNew);
         return FALSE;
-    SelectObject(g_hdcComp, g_hbmComp);
+    }
+    if (SelectObject(hdcNew, hbmNew) == NULL)
+    {
+        DeleteObject(hbmNew);
+        DeleteDC(hdcNew);
+        return FALSE;
+    }
 
     if (g_buf == NULL)
     {
@@ -208,8 +231,20 @@ DwmCreateSurfaces(HDC hdcScreen, LONG W, LONG H)
         g_buf = (BYTE *)VirtualAlloc(NULL, g_bufSize, MEM_COMMIT | MEM_RESERVE,
                                      PAGE_READWRITE);
         if (g_buf == NULL)
+        {
+            DeleteDC(hdcNew);
+            DeleteObject(hbmNew);
             return FALSE;
+        }
     }
+
+    if (g_hdcComp != NULL)
+        DeleteDC(g_hdcComp);
+    if (g_hbmComp != NULL)
+        DeleteObject(g_hbmComp);
+    g_hdcComp = hdcNew;
+    g_hbmComp = hbmNew;
+    g_compBits = bitsNew;
 
     g_W = W;
     g_H = H;
@@ -224,6 +259,12 @@ DwmComposeLoop(void)
     HANDLE hWake, hVblank;
     BOOL forceFull = TRUE;
     LONG vw, vh, primW, primH;
+
+    if (hdcScreen == NULL)
+    {
+        DwmLog("DWM: screen DC unavailable\n");
+        return;
+    }
 
     primW = GetSystemMetrics(SM_CXSCREEN);
     primH = GetSystemMetrics(SM_CYSCREEN);
@@ -246,7 +287,11 @@ DwmComposeLoop(void)
 
     RtlZeroMemory(&att, sizeof(att));
     att.Attach = 1;
-    NtUserCallOneParam((DWORD_PTR)&att, DWM_ROUTINE_ATTACH);
+    if ((LONG)NtUserCallOneParam((DWORD_PTR)&att, DWM_ROUTINE_ATTACH) < 0)
+    {
+        DwmLog("DWM: attach refused\n");
+        return;
+    }
     hWake = att.hWake;
     hVblank = att.hVblank;
     if (hWake == NULL)
@@ -269,6 +314,14 @@ DwmComposeLoop(void)
         st = (LONG)NtUserCallOneParam((DWORD_PTR)g_buf, DWM_ROUTINE_GETFRAME);
         if (st < 0)
         {
+            Sleep(50);
+            continue;
+        }
+
+        if (hdr->Magic != DWM_FRAME_MAGIC || hdr->WinArrayBase != DWM_WINARRAY_BASE ||
+            hdr->Count > DWM_MAX_WINDOWS || hdr->ScreenW > MAXLONG || hdr->ScreenH > MAXLONG)
+        {
+            DwmLog("DWM: invalid frame metadata\n");
             Sleep(50);
             continue;
         }
@@ -302,6 +355,7 @@ DwmComposeLoop(void)
 
         {
             LONG pl, pt, pr, pb, y;
+            BOOL completeFrame = TRUE;
 
             if (forceFull || hdr->FullDamage ||
                 hdr->DmgR <= hdr->DmgL || hdr->DmgB <= hdr->DmgT)
@@ -310,12 +364,14 @@ DwmComposeLoop(void)
             }
             else
             {
-                pl = hdr->DmgL - g_originX; pt = hdr->DmgT - g_originY;
-                pr = hdr->DmgR - g_originX; pb = hdr->DmgB - g_originY;
-                if (pl < 0) pl = 0;
-                if (pt < 0) pt = 0;
-                if (pr > g_W) pr = g_W;
-                if (pb > g_H) pb = g_H;
+                LONGLONG l = (LONGLONG)hdr->DmgL - g_originX;
+                LONGLONG t = (LONGLONG)hdr->DmgT - g_originY;
+                LONGLONG r = (LONGLONG)hdr->DmgR - g_originX;
+                LONGLONG b = (LONGLONG)hdr->DmgB - g_originY;
+                pl = (l < 0) ? 0 : (l > g_W ? g_W : (LONG)l);
+                pt = (t < 0) ? 0 : (t > g_H ? g_H : (LONG)t);
+                pr = (r < 0) ? 0 : (r > g_W ? g_W : (LONG)r);
+                pb = (b < 0) ? 0 : (b > g_H ? g_H : (LONG)b);
             }
             forceFull = FALSE;
 
@@ -332,15 +388,35 @@ DwmComposeLoop(void)
                 for (i = 0; i < hdr->Count; i++)
                 {
                     const BYTE *pix = DwmGetSurfaceView(&wins[i]);
-                    if (pix != NULL)
-                        DwmBlitWindow((ULONG *)g_compBits, g_W, pl, pt, pr, pb,
-                                      pix, &wins[i]);
+                    if (pix == NULL)
+                    {
+                        completeFrame = FALSE;
+                        break;
+                    }
+                    DwmBlitWindow((ULONG *)g_compBits, g_W, pl, pt, pr, pb, pix, &wins[i]);
                 }
 
-                NtUserCallOneParam(1, DWM_ROUTINE_PRESENTSYNC);
-                BitBlt(hdcScreen, g_originX + pl, g_originY + pt, pr - pl, pb - pt,
-                       g_hdcComp, pl, pt, SRCCOPY);
-                NtUserCallOneParam(0, DWM_ROUTINE_PRESENTSYNC);
+                /* Never replace the last complete scan-out with a partially
+                 * composed buffer. A surface can legitimately be recreated
+                 * between GETFRAME and OPENSURFACE; the next idle metadata
+                 * pull contains all current FRONTs and retries this frame. */
+                if (!completeFrame)
+                {
+                    forceFull = TRUE;
+                }
+                else if (NtUserCallOneParam(1, DWM_ROUTINE_PRESENTSYNC))
+                {
+                    BOOL bltResult = BitBlt(hdcScreen, g_originX + pl, g_originY + pt,
+                                            pr - pl, pb - pt, g_hdcComp, pl, pt,
+                                            SRCCOPY);
+                    BOOL endResult = NtUserCallOneParam(0, DWM_ROUTINE_PRESENTSYNC) != 0;
+                    if (!bltResult || !endResult)
+                        forceFull = TRUE;
+                }
+                else
+                {
+                    forceFull = TRUE;
+                }
             }
         }
 

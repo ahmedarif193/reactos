@@ -58,6 +58,10 @@ typedef struct _RCDD_PDEV
    BOOL HwPointerSupported;
    BOOL HwPointerShapeValid;
    BOOL HwPointerVisible;
+   BOOL SoftwarePointerActive;
+   BOOL PointerPositionValid;
+   LONG PointerX;
+   LONG PointerY;
 
    /* DWM composition state (driven by DrvEscape, see escape.c) */
    BOOL CursorSuppressed;      /* Compositor owns the cursor                  */
@@ -180,6 +184,12 @@ VOID
 RcddDisableHardwarePointer(
    PRCDD_PDEV ppdev);
 
+VOID
+RcddSetCursorSuppressed(
+   PRCDD_PDEV ppdev,
+   SURFOBJ *pso,
+   BOOL Suppressed);
+
 /* ---- present.c : draw delegation + present seam -------------------------- */
 
 BOOL APIENTRY
@@ -237,6 +247,28 @@ RcddLineTo(
    IN MIX mix);
 
 BOOL APIENTRY
+RcddPaint(
+   IN SURFOBJ *pso,
+   IN CLIPOBJ *pco,
+   IN BRUSHOBJ *pbo,
+   IN POINTL *pptlBrushOrg,
+   IN MIX mix);
+
+BOOL APIENTRY
+RcddPlgBlt(
+   IN SURFOBJ *psoDest,
+   IN SURFOBJ *psoSrc,
+   IN SURFOBJ *psoMask,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN COLORADJUSTMENT *pca,
+   IN POINTL *pptlBrushOrg,
+   IN POINTFIX *pptfx,
+   IN RECTL *prclSrc,
+   IN POINTL *pptlMask,
+   IN ULONG iMode);
+
+BOOL APIENTRY
 RcddStrokePath(
    IN SURFOBJ *pso,
    IN PATHOBJ *ppo,
@@ -283,6 +315,22 @@ RcddStretchBlt(
    IN RECTL *prclSrc,
    IN POINTL *pptlMask,
    IN ULONG iMode);
+
+BOOL APIENTRY
+RcddStretchBltROP(
+   IN SURFOBJ *psoDest,
+   IN SURFOBJ *psoSrc,
+   IN SURFOBJ *psoMask,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN COLORADJUSTMENT *pca,
+   IN POINTL *pptlHTOrg,
+   IN RECTL *prclDest,
+   IN RECTL *prclSrc,
+   IN POINTL *pptlMask,
+   IN ULONG iMode,
+   IN BRUSHOBJ *pbo,
+   IN DWORD rop4);
 
 BOOL APIENTRY
 RcddAlphaBlend(

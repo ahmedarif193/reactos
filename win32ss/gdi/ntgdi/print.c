@@ -7,6 +7,7 @@
  */
 
 #include <win32k.h>
+#include <reactos/dwmframe.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -93,6 +94,19 @@ NtGdiExtEscape(
    INT      Result = -1;
    PPDEVOBJ ppdev;
    PSURFACE psurf;
+
+   /* These escapes mutate compositor/display ownership state and are an
+    * internal win32k -> CDD channel. Letting an arbitrary ExtEscape caller
+    * issue them can hide the cursor, suppress scan-out, or replace DWM's
+    * vblank event. The compositor invokes the driver directly in
+    * composition.c, so no legitimate user-mode caller needs this path. */
+   if (Escape == CDD_ESCAPE_SUPPRESS_CURSOR ||
+       Escape == CDD_ESCAPE_COMPOSITION_SYNC ||
+       Escape == CDD_ESCAPE_REGISTER_VBLANK)
+   {
+      EngSetLastError(ERROR_ACCESS_DENIED);
+      return 0;
+   }
 
    /* Validate input parameters */
    if ((InSize < 0) || (OutSize < 0) || (UnsafeInData == NULL && InSize != 0))

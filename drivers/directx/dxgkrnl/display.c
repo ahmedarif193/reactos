@@ -120,7 +120,10 @@ static volatile LONGLONG g_LastPresentSubmit100ns = 0;
  * We treat a composition older than this threshold as abandoned and recover.
  */
 static volatile LONGLONG g_DwmCompositionBegin100ns = 0;
-#define DXGK_DWM_COMPOSITION_STALE_100NS (100ULL * 10000ULL) /* 100 ms */
+/* win32k tears down a silent compositor after two seconds. Keep this fallback
+ * comfortably beyond that watchdog: a valid full-screen CPU compose can take
+ * well over 100 ms on software-rendered or low-end display-only hardware. */
+#define DXGK_DWM_COMPOSITION_STALE_100NS (5ULL * 10000000ULL) /* 5 seconds */
 
 typedef struct _DXGK_PRESENT_LOCK_STATE
 {
@@ -173,6 +176,34 @@ DxgkpReleasePresentLock(
         KeReleaseSpinLockFromDpcLevel(&Adapter->PresentLock);
     else
         KeReleaseSpinLock(&Adapter->PresentLock, LockState->OldIrql);
+}
+
+static PKEVENT
+DxgkpReplaceDwmVblankEvent(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PKEVENT NewEvent)
+{
+    DXGK_PRESENT_LOCK_STATE LockState;
+    PKEVENT OldEvent;
+
+    DxgkpAcquirePresentLock(Adapter, &LockState);
+    OldEvent = Adapter->DwmVblankEvent;
+    Adapter->DwmVblankEvent = NewEvent;
+    DxgkpReleasePresentLock(Adapter, &LockState);
+    return OldEvent;
+}
+
+static BOOLEAN
+DxgkpHasDwmVblankEvent(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    DXGK_PRESENT_LOCK_STATE LockState;
+    BOOLEAN Present;
+
+    DxgkpAcquirePresentLock(Adapter, &LockState);
+    Present = (Adapter->DwmVblankEvent != NULL);
+    DxgkpReleasePresentLock(Adapter, &LockState);
+    return Present;
 }
 
 /* ========================================================================
@@ -1441,11 +1472,6 @@ DxgkpHasPendingDirtyRect(
     return HasDirty;
 }
 
-/* Pre-allocated work item for the present timer DPC.
- * Using a pre-allocated work item avoids pool allocation at DISPATCH_LEVEL
- * and eliminates the work item leak that was exhausting nonpaged pool. */
-static PIO_WORKITEM g_PresentWorkItem = NULL;
-
 /*
  * Serializes every scan-out copy (sync IOCTL presents, the worker fallback)
  * against each other AND lets COMPOSITION_BEGIN drain an in-flight worker
@@ -1481,13 +1507,13 @@ DxgkpQueuePresentWorkItem(
     if (Adapter == NULL || Adapter->FunctionalDeviceObject == NULL)
         return FALSE;
 
-    if (g_PresentWorkItem == NULL)
-        g_PresentWorkItem = IoAllocateWorkItem(Adapter->FunctionalDeviceObject);
+    if (Adapter->PresentWorkItem == NULL)
+        Adapter->PresentWorkItem = IoAllocateWorkItem(Adapter->FunctionalDeviceObject);
 
-    if (g_PresentWorkItem == NULL)
+    if (Adapter->PresentWorkItem == NULL)
         return FALSE;
 
-    IoQueueWorkItem(g_PresentWorkItem, DxgkpPresentWorkItemRoutineEx,
+    IoQueueWorkItem(Adapter->PresentWorkItem, DxgkpPresentWorkItemRoutineEx,
                     DelayedWorkQueue, Adapter);
     return TRUE;
 }
@@ -1662,7 +1688,7 @@ DxgkpPresentWorkItemRoutineEx(
      * present racing dwm's shadow write).
      */
     if (Adapter != NULL && Adapter->PresentTimerActive &&
-        ReadPointerNoFence((PVOID volatile *)&Adapter->DwmVblankEvent) == NULL &&
+        !DxgkpHasDwmVblankEvent(Adapter) &&
         DxgkpHasPendingDirtyRect(Adapter))
     {
         DxgkpTryDispatchPresentWork(Adapter);
@@ -1696,8 +1722,11 @@ DxgkpPresentTimerDpc(
 
     /* Scanout heartbeat for dwm: this timer IS the display path's refresh. */
     {
-        PKEVENT Vblank = (PKEVENT)ReadPointerNoFence((PVOID volatile *)&Adapter->DwmVblankEvent);
-        if (Vblank != NULL)
+        DXGK_PRESENT_LOCK_STATE LockState;
+        BOOLEAN Signaled = FALSE;
+
+        DxgkpAcquirePresentLock(Adapter, &LockState);
+        if (Adapter->DwmVblankEvent != NULL)
         {
             /*
              * WDDM/DWM parity: while dwm.exe owns the frame it presents every
@@ -1707,9 +1736,12 @@ DxgkpPresentTimerDpc(
              * presents. The direct-draw fallback resumes when dwm detaches and
              * the vblank event is cleared.
              */
-            KeSetEvent(Vblank, IO_NO_INCREMENT, FALSE);
-            return;
+            KeSetEvent(Adapter->DwmVblankEvent, IO_NO_INCREMENT, FALSE);
+            Signaled = TRUE;
         }
+        DxgkpReleasePresentLock(Adapter, &LockState);
+        if (Signaled)
+            return;
     }
 
     TimerSeq = InterlockedIncrement(&g_PresentTimerTraceCount);
@@ -1803,7 +1835,6 @@ DxgkpStartPresentTimer(
         return;
 
     DxgkpEnsurePresentMutex();
-    KeInitializeSpinLock(&Adapter->PresentLock);
     g_PresentDirtyRectValid = FALSE;
     InterlockedExchange64(&g_LastDirtyNotify100ns, 0);
     InterlockedExchange64(&g_LastPresentSubmit100ns, 0);
@@ -1846,13 +1877,16 @@ DxgkpStopPresentTimer(
          * miniport a dangling source buffer.
          */
         KeFlushQueuedDpcs();
-        DxgkpWaitForFlagClear(&g_PresentDispatchBusy);
-
-        g_PresentDirtyRectValid = FALSE;
-        InterlockedExchange64(&g_LastDirtyNotify100ns, 0);
-        InterlockedExchange64(&g_LastPresentSubmit100ns, 0);
-        DXGKRNL_TRACE("DxgkpStopPresentTimer: stopped\n");
     }
+
+    /* Explicit present requests can queue the same worker even while the
+     * periodic timer is inactive. Always drain the dispatch slot before a
+     * caller swaps the framebuffer or frees the adapter-owned work item. */
+    DxgkpWaitForFlagClear(&g_PresentDispatchBusy);
+    g_PresentDirtyRectValid = FALSE;
+    InterlockedExchange64(&g_LastDirtyNotify100ns, 0);
+    InterlockedExchange64(&g_LastPresentSubmit100ns, 0);
+    DXGKRNL_TRACE("DxgkpStopPresentTimer: stopped\n");
 }
 
 /* ========================================================================
@@ -2435,6 +2469,12 @@ DxgkpDisplayDispatch(
             PRECTL DirtyRect = (PRECTL)Irp->AssociatedIrp.SystemBuffer;
             LONG TraceSeq;
 
+            if (Irp->RequestorMode != KernelMode)
+            {
+                Status = STATUS_ACCESS_DENIED;
+                break;
+            }
+
             if (DirtyRect == NULL ||
                 Stack->Parameters.DeviceIoControl.InputBufferLength < sizeof(RECTL))
             {
@@ -2482,6 +2522,14 @@ DxgkpDisplayDispatch(
         case IOCTL_VIDEO_DXGK_REGISTER_VBLANK:
         {
             PULONGLONG pValue = (PULONGLONG)Irp->AssociatedIrp.SystemBuffer;
+            PKEVENT NewEvent = NULL;
+            PKEVENT OldEvent;
+
+            if (Irp->RequestorMode != KernelMode)
+            {
+                Status = STATUS_ACCESS_DENIED;
+                break;
+            }
 
             if (pValue == NULL ||
                 Stack->Parameters.DeviceIoControl.InputBufferLength < sizeof(ULONGLONG))
@@ -2495,10 +2543,21 @@ DxgkpDisplayDispatch(
                 break;
             }
 
-            /* Kernel-internal contract (win32k -> cdd -> here): the payload
-             * is a referenced PKEVENT owned by win32k, or 0 to unregister. */
-            InterlockedExchangePointer((PVOID volatile *)&g_DisplayAdapter->DwmVblankEvent,
-                                       (PVOID)(ULONG_PTR)*pValue);
+            if (*pValue != 0)
+            {
+                Status = ObReferenceObjectByHandle((HANDLE)(ULONG_PTR)*pValue,
+                                                   EVENT_MODIFY_STATE,
+                                                   *ExEventObjectType,
+                                                   UserMode,
+                                                   (PVOID *)&NewEvent,
+                                                   NULL);
+                if (!NT_SUCCESS(Status))
+                    break;
+            }
+
+            OldEvent = DxgkpReplaceDwmVblankEvent(g_DisplayAdapter, NewEvent);
+            if (OldEvent != NULL)
+                ObDereferenceObject(OldEvent);
             Status = STATUS_SUCCESS;
             break;
         }
@@ -2534,8 +2593,17 @@ DxgkpDisplayDispatch(
 
         case IOCTL_VIDEO_DXGK_COMPOSITION_BEGIN:
         {
+            if (Irp->RequestorMode != KernelMode)
+            {
+                Status = STATUS_ACCESS_DENIED;
+                break;
+            }
+
             if (g_DisplayAdapter != NULL)
             {
+                NTSTATUS DrainStatus;
+                LARGE_INTEGER DrainTimeout;
+
                 InterlockedExchange64(&g_DwmCompositionBegin100ns,
                                       (LONGLONG)DxgkpDisplayTraceNow100ns());
                 InterlockedExchange(&g_DisplayAdapter->DwmCompositionInProgress, 1);
@@ -2545,25 +2613,32 @@ DxgkpDisplayDispatch(
                  * rewriting the shadow framebuffer: the flag only stops future
                  * presents, not one already scanning the surface out.
                  *
-                 * TRY-acquire only (zero timeout). This escape runs under the
-                 * win32k USER lock (dwm's per-frame DWMPRESENTSYNC). A blocking
-                 * wait lets a present in-flight on another core pin the global
-                 * USER lock and freeze the whole GUI on SMP (cursor, input, all
-                 * windows). If a present is mid-flight, skip the drain: the flag
-                 * set above already blocks the worker's NEXT present, so the
-                 * worst case is a single torn frame, never a hang.
+                 * Wait for an in-flight copy, but bound the wait because this
+                 * escape runs under win32k's USER lock. Continuing without the
+                 * drain lets that copy race the compositor's shadow write and
+                 * exposes a half-composed frame. On timeout, cancel BEGIN and
+                 * make dwm retry without touching the shadow framebuffer.
                  */
-                if (KeGetCurrentIrql() == PASSIVE_LEVEL &&
-                    InterlockedCompareExchange(&g_PresentMutexInited, 0, 0) == 1)
+                DxgkpEnsurePresentMutex();
+                if (KeGetCurrentIrql() != PASSIVE_LEVEL ||
+                    InterlockedCompareExchange(&g_PresentMutexInited, 0, 0) != 1)
                 {
-                    LARGE_INTEGER NoWait;
-                    NoWait.QuadPart = 0;
-                    if (KeWaitForSingleObject(&g_PresentMutex, Executive, KernelMode,
-                                              FALSE, &NoWait) == STATUS_SUCCESS)
-                    {
-                        KeReleaseMutex(&g_PresentMutex, FALSE);
-                    }
+                    InterlockedExchange(&g_DisplayAdapter->DwmCompositionInProgress, 0);
+                    Status = STATUS_DEVICE_BUSY;
+                    break;
                 }
+
+                DrainTimeout.QuadPart = -(50LL * 10000LL); /* 50 ms */
+                DrainStatus = KeWaitForSingleObject(&g_PresentMutex, Executive,
+                                                    KernelMode, FALSE,
+                                                    &DrainTimeout);
+                if (DrainStatus != STATUS_SUCCESS)
+                {
+                    InterlockedExchange(&g_DisplayAdapter->DwmCompositionInProgress, 0);
+                    Status = STATUS_DEVICE_BUSY;
+                    break;
+                }
+                KeReleaseMutex(&g_PresentMutex, FALSE);
             }
             Status = STATUS_SUCCESS;
             break;
@@ -2571,6 +2646,12 @@ DxgkpDisplayDispatch(
 
         case IOCTL_VIDEO_DXGK_COMPOSITION_END:
         {
+            if (Irp->RequestorMode != KernelMode)
+            {
+                Status = STATUS_ACCESS_DENIED;
+                break;
+            }
+
             if (g_DisplayAdapter != NULL)
             {
                 InterlockedExchange(&g_DisplayAdapter->DwmCompositionInProgress, 0);
@@ -3179,6 +3260,7 @@ DxgkDisplayUnregister(VOID)
 {
     PDXGKRNL_ADAPTER Adapter;
     PVOID OldFb = NULL;
+    PKEVENT OldVblank = NULL;
 
     PAGED_CODE();
 
@@ -3186,6 +3268,14 @@ DxgkDisplayUnregister(VOID)
     if (Adapter != NULL)
     {
         DxgkpStopPresentTimer(Adapter);
+        OldVblank = DxgkpReplaceDwmVblankEvent(Adapter, NULL);
+        if (OldVblank != NULL)
+            ObDereferenceObject(OldVblank);
+        if (Adapter->PresentWorkItem != NULL)
+        {
+            IoFreeWorkItem(Adapter->PresentWorkItem);
+            Adapter->PresentWorkItem = NULL;
+        }
         (VOID)KeWaitForSingleObject(&Adapter->SharedPrimaryMutex, Executive, KernelMode, FALSE, NULL);
         DxgkpBeginSharedSurfaceMutationLocked(Adapter);
         if (Adapter->ShadowFbPoolOwned)

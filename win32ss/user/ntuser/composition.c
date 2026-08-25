@@ -16,26 +16,27 @@
 DBG_DEFAULT_CHANNEL(UserPainting);
 
 /* Send a CDD_ESCAPE_* to the canonical display driver via the screen DC. */
-static VOID
+static ULONG
 IntCompositionDriverEscape(_In_ ULONG iEsc, _In_ PVOID pvIn, _In_ ULONG cjIn)
 {
     PDC pdcScreen;
     PPDEVOBJ ppdev;
+    ULONG Result = 0;
 
     if (ScreenDeviceContext == NULL)
-        return;
+        return 0;
     pdcScreen = DC_LockDc(ScreenDeviceContext);
     if (pdcScreen == NULL)
-        return;
+        return 0;
 
     ppdev = pdcScreen->ppdev;
     if (ppdev != NULL && ppdev->DriverFunctions.Escape != NULL &&
         ppdev->pSurface != NULL)
     {
-        ppdev->DriverFunctions.Escape(&ppdev->pSurface->SurfObj,
-                                      iEsc, cjIn, pvIn, 0, NULL);
+        Result = ppdev->DriverFunctions.Escape(&ppdev->pSurface->SurfObj, iEsc, cjIn, pvIn, 0, NULL);
     }
     DC_UnlockDc(pdcScreen);
+    return Result;
 }
 
 /* OFF until dwm.exe attaches (Windows model: no compositor -> direct draw;
@@ -49,8 +50,8 @@ BOOL gbCompositionEnabled = FALSE;
  */
 #define COMPOSITION_MAX_WINDOWS 512
 #define COMPOSITION_COMPOSE_MAX COMPOSITION_MAX_WINDOWS
-/* A paint bracket / pending first paint older than this composes anyway
- * (hung or starved painter must not freeze its window forever). */
+/* A paint bracket older than this composes anyway
+ * (a hung painter must not freeze its window forever). */
 #define COMPOSITION_PAINT_STALE_100NS (100LL * 10000LL) /* 100 ms */
 
 typedef struct _REDIRECT_ENTRY
@@ -58,16 +59,16 @@ typedef struct _REDIRECT_ENTRY
     PWND         Wnd;
     WND_REDIRECT Redirect;
     LONG         PaintCount;   /* BeginPaint..EndPaint depth on this tree      */
-    LONGLONG     PaintStart;   /* when the bracket (or first damage) opened    */
-    LONGLONG     FirstPendingSeen; /* first-paint-pending stale clock          */
+    LONGLONG     PaintStart;   /* when the outer paint bracket opened          */
     BOOL         Damaged;      /* this window's backing changed since compose  */
-    BOOL         EverPainted;  /* completed at least one EndPaint              */
+    volatile LONG BackingDrawn;/* at least one GDI operation reached backing   */
 } REDIRECT_ENTRY;
 
 static REDIRECT_ENTRY  g_Redirects[COMPOSITION_MAX_WINDOWS];
 static ULONG           g_RedirectHighWater = 0;
-static volatile BOOL   g_CompositionDamaged = FALSE;
-static volatile BOOL   g_CompositionFullDamage = FALSE;
+static volatile LONG   g_CompositionDamaged = FALSE;
+static volatile LONG   g_CompositionFullDamage = FALSE;
+static DWM_WIN         g_DwmFrameWindows[DWM_MAX_WINDOWS];
 
 /* dwm.exe is the ONLY compositor (Windows model — win32k tracks redirection
  * and damage, never composes). Attach enables redirection; detach or a
@@ -102,9 +103,44 @@ static VOID
 IntCompositionMarkDamage(_In_ BOOL bFull)
 {
     if (bFull)
-        g_CompositionFullDamage = TRUE;
-    g_CompositionDamaged = TRUE;
+        InterlockedExchange(&g_CompositionFullDamage, TRUE);
+    InterlockedExchange(&g_CompositionDamaged, TRUE);
     IntCompositionDwmWake();
+}
+
+/* Hold the display PDEV across direct surface access. The same lock guards
+ * normal GDI draws and pointer exclusion, so BACK snapshots cannot race a
+ * writer or a software-cursor update. */
+static PPDEVOBJ
+IntCompositionLockDevice(VOID)
+{
+    PDC pdcScreen;
+    PPDEVOBJ ppdev;
+
+    if (ScreenDeviceContext == NULL)
+        return NULL;
+
+    pdcScreen = DC_LockDc(ScreenDeviceContext);
+    if (pdcScreen == NULL)
+        return NULL;
+
+    ppdev = pdcScreen->ppdev;
+    if (ppdev != NULL)
+        PDEVOBJ_vReference(ppdev);
+    DC_UnlockDc(pdcScreen);
+
+    if (ppdev != NULL)
+        EngAcquireSemaphore(ppdev->hsemDevLock);
+    return ppdev;
+}
+
+static VOID
+IntCompositionUnlockDevice(_In_opt_ PPDEVOBJ ppdev)
+{
+    if (ppdev == NULL)
+        return;
+    EngReleaseSemaphore(ppdev->hsemDevLock);
+    PDEVOBJ_vRelease(ppdev);
 }
 
 /*
@@ -256,6 +292,27 @@ IntCompositionCreateBuffer(_In_ LONG cx, _In_ LONG cy, _Out_ HBITMAP *phbmp)
     return psurf;
 }
 
+static BOOL
+IntCompositionGetBufferSize(
+    _In_ LONG cx,
+    _In_ LONG cy,
+    _Out_ PULONG pStride,
+    _Out_ PULONG pBytes)
+{
+    ULONG Stride;
+
+    if (cx <= 0 || cy <= 0 || (ULONG)cx > MAXULONG / sizeof(ULONG))
+        return FALSE;
+
+    Stride = (ULONG)cx * sizeof(ULONG);
+    if ((ULONG)cy > MAXULONG / Stride)
+        return FALSE;
+
+    *pStride = Stride;
+    *pBytes = Stride * (ULONG)cy;
+    return TRUE;
+}
+
 /* Monotonic FRONT generation: a (slot, generation) pair never repeats, so
  * dwm's mapped-view cache can never alias a recycled surface. */
 static ULONG g_FrontGeneration = 0;
@@ -275,6 +332,7 @@ IntCompositionCreateSharedFront(_In_ LONG cx, _In_ LONG cy,
     SIZE_T cbView;
     PSURFACE psurf;
     HBITMAP hbmp;
+    ULONG Stride, Bytes;
     NTSTATUS Status;
 
     *phbmp = NULL;
@@ -282,9 +340,11 @@ IntCompositionCreateSharedFront(_In_ LONG cx, _In_ LONG cy,
     *ppView = NULL;
     *pcbView = 0;
 
-    liSize.QuadPart = (LONGLONG)cx * 4 * cy;
-    Status = MmCreateSection(&pSection, SECTION_ALL_ACCESS, NULL, &liSize,
-                             PAGE_READWRITE, SEC_COMMIT, NULL, NULL);
+    if (!IntCompositionGetBufferSize(cx, cy, &Stride, &Bytes))
+        return NULL;
+
+    liSize.QuadPart = Bytes;
+    Status = MmCreateSection(&pSection, SECTION_ALL_ACCESS, NULL, &liSize, PAGE_READWRITE, SEC_COMMIT, NULL, NULL);
     if (!NT_SUCCESS(Status))
         return NULL;
 
@@ -298,9 +358,7 @@ IntCompositionCreateSharedFront(_In_ LONG cx, _In_ LONG cy,
 
     RtlZeroMemory(pView, (SIZE_T)liSize.QuadPart);
 
-    hbmp = GreCreateBitmapEx((ULONG)cx, (ULONG)cy, (ULONG)cx * 4, BMF_32BPP,
-                             BMF_TOPDOWN | BMF_NOZEROINIT,
-                             (ULONG)liSize.QuadPart, pView, 0);
+    hbmp = GreCreateBitmapEx((ULONG)cx, (ULONG)cy, Stride, BMF_32BPP, BMF_TOPDOWN | BMF_NOZEROINIT, Bytes, pView, 0);
     if (hbmp == NULL)
     {
         MmUnmapViewInSystemSpace(pView);
@@ -340,9 +398,14 @@ IntCompositionEnsureSurface(_In_ PWND Wnd, _Inout_ PWND_REDIRECT r)
     SIZE_T cbViewNew = 0;
     RECTL rcCopy;
     POINTL ptZero = {0, 0};
+    PPDEVOBJ ppdev = NULL;
+    ULONG Stride, Bytes;
 
-    if (cx <= 0 || cy <= 0)
+    if (!IntCompositionGetBufferSize(cx, cy, &Stride, &Bytes))
         return NULL;
+
+    UNREFERENCED_PARAMETER(Stride);
+    UNREFERENCED_PARAMETER(Bytes);
 
     if (r->psurf != NULL && r->cx == cx && r->cy == cy)
         return r->psurf;
@@ -367,28 +430,50 @@ IntCompositionEnsureSurface(_In_ PWND Wnd, _Inout_ PWND_REDIRECT r)
     psurfNewFront = IntCompositionCreateSharedFront(cx, cy, &hbmpNewFront,
                                                     &pSectionNew, &pViewNew,
                                                     &cbViewNew);
+    if (psurfNewFront == NULL)
+    {
+        SURFACE_ShareUnlockSurface(psurfNew);
+        EngDeleteSurface((HSURF)hbmpNew);
+        r->AllocFailTime = (LONGLONG)KeQueryInterruptTime();
+        return r->psurf;
+    }
 
     rcCopy.left = 0;
     rcCopy.top = 0;
     rcCopy.right = min(cx, r->cx);
     rcCopy.bottom = min(cy, r->cy);
 
-    if (r->psurf != NULL)
+    if (rcCopy.right > 0 && rcCopy.bottom > 0)
     {
-        IntEngBitBlt(&psurfNew->SurfObj, &r->psurf->SurfObj,
-                     NULL, NULL, NULL,
-                     &rcCopy, &ptZero, NULL, NULL, NULL, ROP4_SRCCOPY);
-    }
-    if (psurfNewFront != NULL && r->psurfFront != NULL && r->FrontValid)
-    {
-        IntEngBitBlt(&psurfNewFront->SurfObj, &r->psurfFront->SurfObj,
-                     NULL, NULL, NULL,
-                     &rcCopy, &ptZero, NULL, NULL, NULL, ROP4_SRCCOPY);
+        ppdev = IntCompositionLockDevice();
+        if (ppdev == NULL)
+        {
+            WND_REDIRECT NewRedirect;
+            RtlZeroMemory(&NewRedirect, sizeof(NewRedirect));
+            NewRedirect.psurf = psurfNew;
+            NewRedirect.hbmp = hbmpNew;
+            NewRedirect.psurfFront = psurfNewFront;
+            NewRedirect.hbmpFront = hbmpNewFront;
+            NewRedirect.FrontSection = pSectionNew;
+            NewRedirect.FrontView = pViewNew;
+            IntCompositionFreeSurface(&NewRedirect);
+            r->AllocFailTime = (LONGLONG)KeQueryInterruptTime();
+            return r->psurf;
+        }
     }
 
+    if (ppdev != NULL && r->psurf != NULL)
     {
-        BOOL bFrontValid = r->FrontValid && (psurfNewFront != NULL) &&
-                           (r->psurfFront != NULL);
+        IntEngBitBlt(&psurfNew->SurfObj, &r->psurf->SurfObj, NULL, NULL, NULL, &rcCopy, &ptZero, NULL, NULL, NULL, ROP4_SRCCOPY);
+    }
+    if (ppdev != NULL && r->psurfFront != NULL && r->FrontValid)
+    {
+        IntEngBitBlt(&psurfNewFront->SurfObj, &r->psurfFront->SurfObj, NULL, NULL, NULL, &rcCopy, &ptZero, NULL, NULL, NULL, ROP4_SRCCOPY);
+    }
+    IntCompositionUnlockDevice(ppdev);
+
+    {
+        BOOL bFrontValid = r->FrontValid && (ppdev != NULL) && (r->psurfFront != NULL);
         IntCompositionFreeSurface(r);
         r->psurf = psurfNew;
         r->hbmp = hbmpNew;
@@ -597,6 +682,7 @@ IntCompositionDamageBacking(_In_opt_ PSURFACE psurf)
         {
             if (g_Redirects[i].Redirect.psurf == psurf)
             {
+                InterlockedExchange(&g_Redirects[i].BackingDrawn, TRUE);
                 g_Redirects[i].Damaged = TRUE;
                 IntCompositionMarkDamage(FALSE);
                 return;
@@ -664,7 +750,6 @@ IntCompositionPaintEnd(_In_ PWND Wnd)
     if (Wnd->head.pti->cPaintsReady == 0)
         e->PaintCount = 0;
 
-    e->EverPainted = TRUE;
     e->Damaged = TRUE;
     IntCompositionMarkDamage(FALSE);
 }
@@ -706,6 +791,39 @@ IntCompositionDcRelease(_In_opt_ PWND Wnd)
         IntCompositionMarkDamage(FALSE);
 }
 
+/* A top-level backing is shared by its whole child tree. Do not publish its
+ * first FRONT merely because one window completed EndPaint: controls later in
+ * the tree may still have update regions, which would expose a zeroed/partial
+ * backing as a large black frame. GETFRAME also requires proof that a GDI draw
+ * reached the backing. The explicit stack bounds kernel stack use; overflow
+ * conservatively means "still pending". */
+static BOOL
+IntCompositionTreeHasPendingPaint(_In_ PWND Root)
+{
+    PWND Stack[DWM_MAX_WINDOWS];
+    ULONG Count = 0;
+
+    Stack[Count++] = Root;
+    while (Count != 0)
+    {
+        PWND Wnd = Stack[--Count];
+        PWND Child;
+
+        if (!(Wnd->style & WS_VISIBLE))
+            continue;
+        if (Wnd->hrgnUpdate != NULL || (Wnd->state & WNDS_INTERNALPAINT))
+            return TRUE;
+
+        for (Child = Wnd->spwndChild; Child != NULL; Child = Child->spwndNext)
+        {
+            if (Count == ARRAYSIZE(Stack))
+                return TRUE;
+            Stack[Count++] = Child;
+        }
+    }
+    return FALSE;
+}
+
 /*
  * NtUserDwmGetFrame (ONEPARAM_ROUTINE_DWMGETFRAME): hand the user-mode dwm.exe
  * one frame. Fills the dwm-provided buffer with [header][DWM_WIN...][pixels]:
@@ -717,16 +835,16 @@ IntCompositionDcRelease(_In_opt_ PWND Wnd)
 NTSTATUS
 IntCompositionDwmGetFrame(_In_ PVOID pUser)
 {
-    PDWM_FRAME_HEADER hdr = (PDWM_FRAME_HEADER)pUser;
-    PUCHAR base = (PUCHAR)pUser;
-    PDWM_WIN wins = (PDWM_WIN)(base + DWM_WINARRAY_BASE);
+    DWM_FRAME_HEADER Frame;
+    DWM_FRAME_HEADER Input;
     static PWND s_stack[DWM_MAX_WINDOWS];
     PWND pwndDesktop, pwndChild;
-    PDC pdcScreen;
+    PPDEVOBJ ppdev;
     SIZEL sizl = {0, 0};
-    ULONG bufBytes = 0, count = 0, n = 0, i;
+    ULONG count = 0, n = 0, i, OutputBytes;
     LONGLONG now = (LONGLONG)KeQueryInterruptTime();
-    BOOL dirty;
+    LONG dirty, fullDamage;
+    BOOL DeferredDamage = FALSE;
     RECTL rcDmg = {0, 0, 0, 0};
     NTSTATUS Status = STATUS_SUCCESS;
 
@@ -737,11 +855,8 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
 
     _SEH2_TRY
     {
-        ProbeForWrite(hdr, sizeof(*hdr), sizeof(ULONG));
-        if (hdr->Magic != DWM_FRAME_MAGIC)
-            Status = STATUS_INVALID_PARAMETER;
-        else
-            bufBytes = hdr->BufBytes;
+        ProbeForWrite(pUser, sizeof(Input), sizeof(ULONG));
+        Input = *(PDWM_FRAME_HEADER)pUser;
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -751,42 +866,33 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
 
     if (!NT_SUCCESS(Status))
         return Status;
-    if (bufBytes < DWM_FRAME_BYTES)
+    if (Input.Magic != DWM_FRAME_MAGIC)
+        return STATUS_INVALID_PARAMETER;
+    if (Input.BufBytes < DWM_FRAME_BYTES)
         return STATUS_BUFFER_TOO_SMALL;
 
     pwndDesktop = UserGetDesktopWindow();
     if (pwndDesktop == NULL || ScreenDeviceContext == NULL)
         return STATUS_DEVICE_NOT_READY;
 
-    pdcScreen = DC_LockDc(ScreenDeviceContext);
-    if (pdcScreen == NULL)
+    ppdev = IntCompositionLockDevice();
+    if (ppdev == NULL)
         return STATUS_DEVICE_NOT_READY;
-    PDEVOBJ_sizl(pdcScreen->ppdev, &sizl);
-    DC_UnlockDc(pdcScreen);
+    PDEVOBJ_sizl(ppdev, &sizl);
 
-    /* Idle fast-path: nothing changed since the last pull — tell dwm to skip
-     * compose+present entirely (no copies). Keeps the self-heal clock fed. */
-    dirty = (g_CompositionDamaged || g_CompositionFullDamage);
-    if (!dirty)
-    {
-        _SEH2_TRY
-        {
-            ProbeForWrite(hdr, sizeof(*hdr), sizeof(ULONG));
-            hdr->ScreenW = (ULONG)sizl.cx;
-            hdr->ScreenH = (ULONG)sizl.cy;
-            hdr->Count = 0;
-            hdr->FullDamage = 0;
-            hdr->Dirty = 0;
-            hdr->WinArrayBase = DWM_WINARRAY_BASE;
-        }
-        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-        {
-            Status = _SEH2_GetExceptionCode();
-        }
-        _SEH2_END;
-        g_DwmLastFrameTime = (LONGLONG)KeQueryInterruptTime();
-        return Status;
-    }
+    RtlZeroMemory(&Frame, sizeof(Frame));
+    Frame.Magic = DWM_FRAME_MAGIC;
+    Frame.BufBytes = Input.BufBytes;
+    Frame.ScreenW = (ULONG)sizl.cx;
+    Frame.ScreenH = (ULONG)sizl.cy;
+    Frame.WinArrayBase = DWM_WINARRAY_BASE;
+
+    /* Keep returning the current FRONT metadata even on an idle pull. DWM may
+     * need to retry a full compose after OPENSURFACE raced a resize or a
+     * present bracket failed; returning Count=0 here would make that retry
+     * publish a windowless frame. Idle pulls do not copy BACK->FRONT below. */
+    dirty = InterlockedCompareExchange(&g_CompositionDamaged, FALSE, FALSE);
+    fullDamage = InterlockedCompareExchange(&g_CompositionFullDamage, FALSE, FALSE);
 
     /* Top-first walk; emit bottom-first so dwm blits back-to-front. */
     for (pwndChild = pwndDesktop->spwndChild;
@@ -797,100 +903,113 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
             s_stack[n++] = pwndChild;
     }
 
-    _SEH2_TRY
+    /* Consume only the damage that existed before this snapshot. A GDI draw
+     * cannot enter while the PDEV is locked; a later draw sets the flags again
+     * after unlock and therefore cannot be lost by this frame. */
+    dirty = InterlockedExchange(&g_CompositionDamaged, FALSE);
+    fullDamage = InterlockedExchange(&g_CompositionFullDamage, FALSE);
+
+    for (i = 0; i < n && count < DWM_MAX_WINDOWS; i++)
     {
-        ProbeForWrite(base, bufBytes, sizeof(ULONG));
+        PWND w = s_stack[n - 1 - i];
+        REDIRECT_ENTRY *e = IntCompositionFind(w);
+        BOOL wasDamaged;
 
-        for (i = 0; i < n && count < DWM_MAX_WINDOWS; i++)
+        if (e == NULL || e->Redirect.cx <= 0 || e->Redirect.cy <= 0)
+            continue;
+
+        /* Sync a window's BACK->FRONT only when it is not mid-paint. The
+         * device lock held around this whole loop serializes the snapshot
+         * against redirected GDI drawing. */
         {
-            PWND w = s_stack[n - 1 - i];
-            REDIRECT_ENTRY *e = IntCompositionFind(w);
+            LONG PaintCount = e->PaintCount;
+            LONGLONG PaintAge = now - e->PaintStart;
+            BOOL bBusy = (PaintCount > 0) &&
+                         PaintAge < COMPOSITION_PAINT_STALE_100NS;
+            BOOL bBackingDrawn =
+                InterlockedCompareExchange(&e->BackingDrawn, FALSE, FALSE) != FALSE;
+            BOOL bTreePending = IntCompositionTreeHasPendingPaint(w);
+            BOOL bFirstPaintPending = !e->Redirect.FrontValid &&
+                                      (!bBackingDrawn || bTreePending);
 
-            if (e == NULL || e->Redirect.cx <= 0 || e->Redirect.cy <= 0)
-                continue;
-
-            /* Same quiescence discipline as the kernel SYNC pass: sync a
-             * window's BACK->FRONT only when it is not mid-paint, so a
-             * half-drawn backing is never presented. Busy / first-paint windows
-             * keep their last complete FRONT. dwm always receives the FRONT —
-             * never a live backing — exactly like the in-kernel compositor. */
+            if ((dirty || fullDamage) && !bBusy && !bFirstPaintPending &&
+                e->Redirect.psurf != NULL && e->Redirect.psurfFront != NULL)
             {
-                BOOL bBusy = (e->PaintCount > 0) &&
-                             (now - e->PaintStart) < COMPOSITION_PAINT_STALE_100NS;
-                BOOL bFirstPaintPending = !e->EverPainted && (w->hrgnUpdate != NULL);
-
-                if (bFirstPaintPending)
-                {
-                    if (e->FirstPendingSeen == 0)
-                        e->FirstPendingSeen = now;
-                    else if ((now - e->FirstPendingSeen) >= COMPOSITION_PAINT_STALE_100NS)
-                        bFirstPaintPending = FALSE;
-                }
-                else
-                {
-                    e->FirstPendingSeen = 0;
-                }
-
-                if (!bBusy && !bFirstPaintPending &&
-                    e->Redirect.psurf != NULL && e->Redirect.psurfFront != NULL)
-                {
-                    RECTL rcBuf;
-                    POINTL ptZero = {0, 0};
-                    rcBuf.left = 0;
-                    rcBuf.top = 0;
-                    rcBuf.right = e->Redirect.cx;
-                    rcBuf.bottom = e->Redirect.cy;
-                    IntEngBitBlt(&e->Redirect.psurfFront->SurfObj,
-                                 &e->Redirect.psurf->SurfObj,
-                                 NULL, NULL, NULL, &rcBuf, &ptZero,
-                                 NULL, NULL, NULL, ROP4_SRCCOPY);
-                    e->Redirect.FrontValid = TRUE;
-                }
+                RECTL rcBuf;
+                POINTL ptZero = {0, 0};
+                rcBuf.left = 0;
+                rcBuf.top = 0;
+                rcBuf.right = e->Redirect.cx;
+                rcBuf.bottom = e->Redirect.cy;
+                IntEngBitBlt(&e->Redirect.psurfFront->SurfObj, &e->Redirect.psurf->SurfObj, NULL, NULL, NULL, &rcBuf, &ptZero, NULL, NULL, NULL, ROP4_SRCCOPY);
+                e->Redirect.FrontValid = TRUE;
             }
-
-            /* Present the FRONT (a complete frame); skip until one exists.
-             * The pixels stay in the window's section — emit only metadata. */
-            if (!e->Redirect.FrontValid || e->Redirect.psurfFront == NULL ||
-                e->Redirect.FrontSection == NULL)
-                continue;
-
-            wins[count].x = w->rcWindow.left;
-            wins[count].y = w->rcWindow.top;
-            wins[count].cx = e->Redirect.cx;
-            wins[count].cy = e->Redirect.cy;
-            wins[count].SurfaceId = (ULONG)(e - g_Redirects);
-            wins[count].Generation = e->Redirect.Generation;
-            wins[count].Stride = (ULONG)e->Redirect.cx * 4;
-            wins[count].Damaged = e->Damaged ? 1 : 0;
+            else if (e->Damaged)
             {
-                /* Defaults hold when the window is not layered (GetLayered
-                 * leaves the outputs untouched then). */
-                BYTE alpha = 255;
-                COLORREF key = 0;
-                DWORD lf = 0;
-                IntCompositionGetLayered(w, &alpha, &key, &lf);
-                wins[count].Alpha = alpha;
-                wins[count].ColorKey = (ULONG)key;
-                wins[count].LayerFlags = lf;
+                DeferredDamage = TRUE;
             }
-            count++;
-
-            /* Union the changed windows' rects for a damage-scoped present. */
-            if (e->Damaged)
-                RECTL_bUnionRect(&rcDmg, &rcDmg, (RECTL *)&w->rcWindow);
-            e->Damaged = FALSE;
         }
 
-        hdr->ScreenW = (ULONG)sizl.cx;
-        hdr->ScreenH = (ULONG)sizl.cy;
-        hdr->Count = count;
-        hdr->FullDamage = g_CompositionFullDamage ? 1 : 0;
-        hdr->Dirty = 1;
-        hdr->WinArrayBase = DWM_WINARRAY_BASE;
-        hdr->DmgL = rcDmg.left;
-        hdr->DmgT = rcDmg.top;
-        hdr->DmgR = rcDmg.right;
-        hdr->DmgB = rcDmg.bottom;
+        /* Present the FRONT (a complete frame); skip until one exists. */
+        if (!e->Redirect.FrontValid || e->Redirect.psurfFront == NULL ||
+            e->Redirect.FrontSection == NULL)
+        {
+            if (e->Damaged)
+                DeferredDamage = TRUE;
+            continue;
+        }
+
+        if (dirty || fullDamage)
+            wasDamaged = InterlockedExchange((volatile LONG *)&e->Damaged, FALSE) != FALSE;
+        else
+            wasDamaged = FALSE;
+        g_DwmFrameWindows[count].x = w->rcWindow.left;
+        g_DwmFrameWindows[count].y = w->rcWindow.top;
+        g_DwmFrameWindows[count].cx = e->Redirect.cx;
+        g_DwmFrameWindows[count].cy = e->Redirect.cy;
+        g_DwmFrameWindows[count].SurfaceId = (ULONG)(e - g_Redirects);
+        g_DwmFrameWindows[count].Generation = e->Redirect.Generation;
+        g_DwmFrameWindows[count].Stride = (ULONG)e->Redirect.cx * sizeof(ULONG);
+        g_DwmFrameWindows[count].Damaged = wasDamaged ? 1 : 0;
+        {
+            BYTE alpha = 255;
+            COLORREF key = 0;
+            DWORD lf = 0;
+            IntCompositionGetLayered(w, &alpha, &key, &lf);
+            g_DwmFrameWindows[count].Alpha = alpha;
+            g_DwmFrameWindows[count].ColorKey = (ULONG)key;
+            g_DwmFrameWindows[count].LayerFlags = lf;
+        }
+        count++;
+
+        if (wasDamaged)
+            RECTL_bUnionRect(&rcDmg, &rcDmg, (RECTL *)&w->rcWindow);
+    }
+
+    IntCompositionUnlockDevice(ppdev);
+
+    /* A window that was mid-paint deliberately kept its last complete FRONT.
+     * Re-arm the global flag after the snapshot so the next paced pull retries
+     * it; otherwise consuming the global damage above could strand that BACK
+     * forever if no later paint notification arrived. */
+    if (DeferredDamage)
+        IntCompositionMarkDamage(FALSE);
+
+    Frame.Count = count;
+    Frame.FullDamage = fullDamage ? 1 : 0;
+    Frame.Dirty = (dirty || fullDamage) ? 1 : 0;
+    Frame.DmgL = rcDmg.left;
+    Frame.DmgT = rcDmg.top;
+    Frame.DmgR = rcDmg.right;
+    Frame.DmgB = rcDmg.bottom;
+    OutputBytes = DWM_WINARRAY_BASE + count * sizeof(DWM_WIN);
+
+    _SEH2_TRY
+    {
+        ProbeForWrite(pUser, OutputBytes, sizeof(ULONG));
+        *(PDWM_FRAME_HEADER)pUser = Frame;
+        if (count != 0)
+            RtlCopyMemory((PUCHAR)pUser + DWM_WINARRAY_BASE, g_DwmFrameWindows, count * sizeof(DWM_WIN));
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -898,9 +1017,10 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
     }
     _SEH2_END;
 
-    g_CompositionFullDamage = FALSE;
-    g_CompositionDamaged = FALSE;
-    g_DwmLastFrameTime = (LONGLONG)KeQueryInterruptTime();
+    if (!NT_SUCCESS(Status))
+        IntCompositionMarkDamage(TRUE);
+    else
+        g_DwmLastFrameTime = (LONGLONG)KeQueryInterruptTime();
     return Status;
 }
 
@@ -935,15 +1055,57 @@ IntCompositionCreateDwmEvent(_Out_ PKEVENT *ppEvent)
     return hEvent;
 }
 
-/* Register (or clear, Event == NULL) dwm's vblank event with the display
+/* Register (or clear, EventHandle == NULL) dwm's vblank event with the display
  * path: the dxgkrnl present timer — the scanout cadence — signals it. */
-static VOID
-IntCompositionRegisterVblank(_In_opt_ PKEVENT Event)
+static BOOL
+IntCompositionRegisterVblank(_In_opt_ HANDLE EventHandle)
 {
-    ULONGLONG payload = (ULONGLONG)(ULONG_PTR)Event;
+    ULONGLONG payload = (ULONGLONG)(ULONG_PTR)EventHandle;
 
-    IntCompositionDriverEscape(CDD_ESCAPE_REGISTER_VBLANK,
-                               &payload, sizeof(payload));
+    return IntCompositionDriverEscape(CDD_ESCAPE_REGISTER_VBLANK, &payload, sizeof(payload)) != 0;
+}
+
+static BOOL
+IntCompositionIsDwmProcess(VOID)
+{
+    static const UNICODE_STRING DwmSuffix = RTL_CONSTANT_STRING(L"\\System32\\dwm.exe");
+    UNICODE_STRING SystemRoot;
+    PUNICODE_STRING ImageName;
+    PVOID Buffer;
+    ULONG Length = 0;
+    NTSTATUS Status;
+    BOOL IsDwm = FALSE;
+
+    Status = ZwQueryInformationProcess(NtCurrentProcess(), ProcessImageFileNameWin32, NULL, 0, &Length);
+    if (Status != STATUS_INFO_LENGTH_MISMATCH || Length < sizeof(UNICODE_STRING) || Length > 0x10000)
+        return FALSE;
+
+    Buffer = ExAllocatePoolWithTag(PagedPool, Length, 'mwDC');
+    if (Buffer == NULL)
+        return FALSE;
+
+    Status = ZwQueryInformationProcess(NtCurrentProcess(), ProcessImageFileNameWin32, Buffer, Length, &Length);
+    if (NT_SUCCESS(Status))
+    {
+        ImageName = (PUNICODE_STRING)Buffer;
+        RtlInitUnicodeString(&SystemRoot, SharedUserData->NtSystemRoot);
+        if (ImageName->Buffer != NULL &&
+            ImageName->Length <= ImageName->MaximumLength &&
+            ImageName->Length == SystemRoot.Length + DwmSuffix.Length)
+        {
+            UNICODE_STRING RootPart;
+            UNICODE_STRING SuffixPart;
+
+            RootPart.Length = RootPart.MaximumLength = SystemRoot.Length;
+            RootPart.Buffer = ImageName->Buffer;
+            SuffixPart.Length = SuffixPart.MaximumLength = DwmSuffix.Length;
+            SuffixPart.Buffer = (PWCHAR)((PUCHAR)ImageName->Buffer + SystemRoot.Length);
+            IsDwm = RtlEqualUnicodeString(&RootPart, &SystemRoot, TRUE) &&
+                    RtlEqualUnicodeString(&SuffixPart, &DwmSuffix, TRUE);
+        }
+    }
+    ExFreePoolWithTag(Buffer, 'mwDC');
+    return IsDwm;
 }
 
 /* Release the attached dwm: unregister the vblank event from the display path
@@ -952,19 +1114,35 @@ IntCompositionRegisterVblank(_In_opt_ PKEVENT Event)
 static VOID
 IntCompositionDwmTeardown(VOID)
 {
+    LONG value = 0;
+    PEPROCESS Process;
+    PKEVENT WakeEvent;
+    PPDEVOBJ ppdev;
+
+    g_DwmAttached = FALSE;
+    InterlockedExchangePointer((PVOID volatile *)&g_DwmPresentThread, NULL);
+    IntCompositionDriverEscape(CDD_ESCAPE_COMPOSITION_SYNC, &value, sizeof(value));
     IntCompositionRegisterVblank(NULL);
+
+    /* Damage raised from the GDI finish path holds this same PDEV lock while
+     * reading/signaling g_DwmWakeEvent. Clear it before dropping the object
+     * reference so KeSetEvent can never race a freed event. */
+    ppdev = IntCompositionLockDevice();
+    WakeEvent = InterlockedExchangePointer((PVOID volatile *)&g_DwmWakeEvent, NULL);
+    IntCompositionUnlockDevice(ppdev);
+
     if (g_DwmVblankEvent != NULL)
     {
         ObDereferenceObject(g_DwmVblankEvent);
         g_DwmVblankEvent = NULL;
     }
-    if (g_DwmWakeEvent != NULL)
-    {
-        ObDereferenceObject(g_DwmWakeEvent);
-        g_DwmWakeEvent = NULL;
-    }
-    g_DwmAttached = FALSE;
+    if (WakeEvent != NULL)
+        ObDereferenceObject(WakeEvent);
+
+    Process = g_DwmProcess;
     g_DwmProcess = NULL;
+    if (Process != NULL)
+        ObDereferenceObject(Process);
 }
 
 /*
@@ -985,6 +1163,8 @@ IntCompositionDwmAttach(_In_ PVOID pUser)
 #else
     DWM_ATTACH req;
     HANDLE hWake = NULL, hVblank = NULL;
+    PKEVENT WakeEvent = NULL, VblankEvent = NULL;
+    PEPROCESS CurrentProcess = PsGetCurrentProcess();
     NTSTATUS Status = STATUS_SUCCESS;
 
     _SEH2_TRY
@@ -998,31 +1178,91 @@ IntCompositionDwmAttach(_In_ PVOID pUser)
     }
     _SEH2_END;
 
-    /* Tear down the previous attachment. */
-    IntCompositionDwmTeardown();
+    if (req.Attach > 1)
+        return STATUS_INVALID_PARAMETER;
+    if (g_DwmProcess != NULL && g_DwmProcess != CurrentProcess)
+        return STATUS_ACCESS_DENIED;
 
     if (req.Attach)
     {
-        hWake = IntCompositionCreateDwmEvent(&g_DwmWakeEvent);
-        hVblank = IntCompositionCreateDwmEvent(&g_DwmVblankEvent);
-        if (g_DwmVblankEvent != NULL)
-            IntCompositionRegisterVblank(g_DwmVblankEvent);
+        if (!IntCompositionIsDwmProcess())
+            return STATUS_ACCESS_DENIED;
 
-        g_DwmProcess = PsGetCurrentProcess();
+        /* Allocate the mandatory wake channel before disturbing an existing
+         * attachment. Re-attach is therefore failure-atomic. */
+        hWake = IntCompositionCreateDwmEvent(&WakeEvent);
+        if (hWake == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+        hVblank = IntCompositionCreateDwmEvent(&VblankEvent);
+
+        IntCompositionDwmTeardown();
+        g_DwmWakeEvent = WakeEvent;
+        g_DwmVblankEvent = VblankEvent;
+        ObReferenceObject(CurrentProcess);
+        g_DwmProcess = CurrentProcess;
         g_DwmAttached = TRUE;
         g_DwmLastFrameTime = (LONGLONG)KeQueryInterruptTime();
+
+        if (hVblank != NULL && !IntCompositionRegisterVblank(hVblank))
+        {
+            ObDereferenceObject(g_DwmVblankEvent);
+            g_DwmVblankEvent = NULL;
+            ZwClose(hVblank);
+            hVblank = NULL;
+        }
+
+        _SEH2_TRY
+        {
+            ((PDWM_ATTACH)pUser)->hWake = hWake;
+            ((PDWM_ATTACH)pUser)->hVblank = hVblank;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        if (!NT_SUCCESS(Status))
+        {
+            IntCompositionDwmTeardown();
+            ZwClose(hWake);
+            if (hVblank != NULL)
+                ZwClose(hVblank);
+            return Status;
+        }
 
         /* The compositor now owns the frame: turn redirection on, retarget
          * every live DC (held GL DCs included) into window backings, and
          * repaint the desktop so each window fills its fresh backing. */
         IntCompositionSetEnabled(TRUE);
         DceRedirectAllDCs();
+        {
+            PWND pwndDesktop = UserGetDesktopWindow();
+            if (pwndDesktop != NULL)
+            {
+                co_UserRedrawWindow(pwndDesktop, NULL, NULL,
+                                    RDW_INVALIDATE | RDW_ERASE | RDW_FRAME |
+                                    RDW_ALLCHILDREN);
+            }
+        }
         IntCompositionDamageFromGdi();
     }
     else
     {
         /* No compositor: back to classic direct drawing. */
+        IntCompositionDwmTeardown();
         IntCompositionSetEnabled(FALSE);
+
+        _SEH2_TRY
+        {
+            ((PDWM_ATTACH)pUser)->hWake = NULL;
+            ((PDWM_ATTACH)pUser)->hVblank = NULL;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
     }
 
     {
@@ -1032,17 +1272,6 @@ IntCompositionDwmAttach(_In_ PVOID pUser)
                                 RDW_INVALIDATE | RDW_ERASE | RDW_FRAME |
                                 RDW_ALLCHILDREN);
     }
-
-    _SEH2_TRY
-    {
-        ((PDWM_ATTACH)pUser)->hWake = hWake;
-        ((PDWM_ATTACH)pUser)->hVblank = hVblank;
-    }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-    {
-        Status = _SEH2_GetExceptionCode();
-    }
-    _SEH2_END;
 
     return Status;
 #endif
@@ -1114,17 +1343,21 @@ IntCompositionDwmOpenSurface(_In_ PVOID pUser)
  * the dxgkrnl present worker never scans out a half-composed primary. Same
  * CDD_ESCAPE_COMPOSITION_SYNC the in-kernel BLIT pass uses.
  */
-VOID
+BOOL
 IntCompositionDwmSync(_In_ LONG value)
 {
-    if (PsGetCurrentProcess() != g_DwmProcess)
-        return;
+    ULONG Result;
+
+    if (PsGetCurrentProcess() != g_DwmProcess || (value != 0 && value != 1))
+        return FALSE;
 
     /* Suppress self-damage from dwm's presenting thread only. */
-    g_DwmPresentThread = value ? (PVOID)KeGetCurrentThread() : NULL;
+    InterlockedExchangePointer((PVOID volatile *)&g_DwmPresentThread, value ? (PVOID)KeGetCurrentThread() : NULL);
 
-    IntCompositionDriverEscape(CDD_ESCAPE_COMPOSITION_SYNC,
-                               &value, sizeof(LONG));
+    Result = IntCompositionDriverEscape(CDD_ESCAPE_COMPOSITION_SYNC, &value, sizeof(value));
+    if (Result == 0 && value != 0)
+        InterlockedExchangePointer((PVOID volatile *)&g_DwmPresentThread, NULL);
+    return Result != 0;
 }
 
 
@@ -1257,6 +1490,10 @@ IntCompositionRestoreDC(_Inout_ PDC pdc)
         SURFACE_ShareUnlockSurface(pdc->dclevel.pSurface);
     pdc->dclevel.pSurface = PDEVOBJ_pSurface(pdc->ppdev);
     PDEVOBJ_sizl(pdc->ppdev, &pdc->dclevel.sizl);
+    pdc->dhpdev = pdc->ppdev->dhpdev;
+    pdc->flGraphicsCaps = pdc->ppdev->devinfo.flGraphicsCaps;
+    pdc->flGraphicsCaps2 = pdc->ppdev->devinfo.flGraphicsCaps2;
+    pdc->pdcattr->ulDirty_ |= DIRTY_CHARSET | DIRTY_BACKGROUND | DIRTY_TEXT | DIRTY_LINE | DIRTY_FILL;
     pdc->dctype = DCTYPE_DIRECT;
     pdc->fs &= ~DC_REDIRECTION;
 }
@@ -1354,12 +1591,9 @@ IntCompositionRedirectDC(_In_opt_ PWND Wnd, _In_ HDC hDC, _In_ ULONG DcxFlags, _
         return;
     }
 
-    DC_vSelectSurface(pdc, e->Redirect.psurf);
-    pdc->ptlDCOrig.x = rcOwn.left - ancestor->rcWindow.left;
-    pdc->ptlDCOrig.y = rcOwn.top - ancestor->rcWindow.top;
-    pdc->dclevel.sizl.cx = e->Redirect.cx;
-    pdc->dclevel.sizl.cy = e->Redirect.cy;
-    pdc->fs |= DC_REDIRECTION;
+    /* Keep the old surface+clip pair live while the replacement region is
+     * built. Installing the backing before its VisRgn opened a race where a
+     * drawing thread used screen-space clipping against backing coordinates. */
     DC_UnlockDc(pdc);
 
     /*
@@ -1443,7 +1677,29 @@ IntCompositionRedirectDC(_In_opt_ PWND Wnd, _In_ HDC hDC, _In_ ULONG DcxFlags, _
     if (IntIsLockUpdateSuppressed(Wnd, DcxFlags))
         REGION_SetRectRgn(prgn, 0, 0, 0, 0);
 
-    GdiSelectVisRgn(hDC, prgn);
+    pdc = DC_LockDc(hDC);
+    if (pdc == NULL)
+    {
+        REGION_Delete(prgn);
+        return;
+    }
+    if (pdc->dctype != DCTYPE_DIRECT)
+    {
+        DC_UnlockDc(pdc);
+        REGION_Delete(prgn);
+        return;
+    }
+
+    /* Publish surface, origin and visibility atomically under the DC lock. */
+    DC_vSelectSurface(pdc, e->Redirect.psurf);
+    pdc->ptlDCOrig.x = rcOwn.left - ancestor->rcWindow.left;
+    pdc->ptlDCOrig.y = rcOwn.top - ancestor->rcWindow.top;
+    pdc->dclevel.sizl.cx = e->Redirect.cx;
+    pdc->dclevel.sizl.cy = e->Redirect.cy;
+    pdc->fs |= DC_REDIRECTION | DC_DIRTY_RAO;
+    REGION_bCopy(pdc->prgnVis, prgn);
+    REGION_bOffsetRgn(pdc->prgnVis, -pdc->ptlDCOrig.x, -pdc->ptlDCOrig.y);
+    DC_UnlockDc(pdc);
     REGION_Delete(prgn);
 }
 
@@ -1506,8 +1762,8 @@ IntCompositionSetEnabled(_In_ BOOL bEnable)
 
     if (bEnable)
     {
-        g_CompositionFullDamage = TRUE;
-        g_CompositionDamaged = TRUE;
+        InterlockedExchange(&g_CompositionFullDamage, TRUE);
+        InterlockedExchange(&g_CompositionDamaged, TRUE);
     }
     else
     {

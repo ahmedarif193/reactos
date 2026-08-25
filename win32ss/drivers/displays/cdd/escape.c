@@ -4,9 +4,9 @@
  * PURPOSE:     DWM compositor private control channel (DrvEscape).
  * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
  *
- * A compositor and the display driver need a private channel that GDI knows
- * nothing about; the public mechanism is DrvEscape / ExtEscape with a private
- * escape code. cdd recognizes exactly two codes (our values, see cdd.h):
+ * win32k and the display driver need a private DrvEscape channel. The mutating
+ * codes are blocked from public NtGdiExtEscape callers; cdd recognizes the
+ * controls defined in dwmframe.h:
  *
  *   CDD_ESCAPE_SUPPRESS_CURSOR  - LONG in: non-zero = the compositor draws the
  *       cursor, so cdd stops drawing its own cursor; zero = resume. Returns 1.
@@ -14,10 +14,9 @@
  *       zero = end it. Either way cdd presents the current frame and acks so
  *       the compositor can pace itself. Returns 1.
  *
+ * PRESENT_STATS is read-only and remains available through ExtEscape.
  * Everything else is routed to the default handler (return 0 -> "not
- * supported"), exactly as if the driver had no DrvEscape at all. This is the
- * seam a future DWM plugs into; without a DWM these escapes never arrive and
- * cdd presents directly.
+ * supported"), exactly as if the driver had no DrvEscape at all.
  */
 
 #include "cdd.h"
@@ -84,13 +83,7 @@ RcddEscape(
          return 0;
 
       value = *(const LONG *)pvIn;
-      ppdev->CursorSuppressed = (value != 0);
-
-      /*
-       * Suppression takes effect on the next RcddMovePointer/RcddSetPointerShape
-       * (both honor CursorSuppressed). Resume restores the cursor on the next
-       * pointer update issued by GDI.
-       */
+      RcddSetCursorSuppressed(ppdev, pso, value != 0);
       return 1;
    }
 
@@ -102,13 +95,17 @@ RcddEscape(
          return 0;
 
       value = *(const LONG *)pvIn;
-      ppdev->CompositionActive = (value != 0);
 
       /* END flushes the dirty rects accumulated during the composition. */
-      EngDeviceIoControl(ppdev->hDriver,
-                         (value != 0) ? IOCTL_VIDEO_DXGK_COMPOSITION_BEGIN
-                                      : IOCTL_VIDEO_DXGK_COMPOSITION_END,
-                         NULL, 0, NULL, 0, &Ret);
+      if (EngDeviceIoControl(ppdev->hDriver,
+                             (value != 0) ? IOCTL_VIDEO_DXGK_COMPOSITION_BEGIN
+                                          : IOCTL_VIDEO_DXGK_COMPOSITION_END,
+                             NULL, 0, NULL, 0, &Ret))
+      {
+         return 0;
+      }
+
+      ppdev->CompositionActive = (value != 0);
       return 1;
    }
 
@@ -119,11 +116,14 @@ RcddEscape(
       if (pvIn == NULL || cjIn < sizeof(ULONGLONG))
          return 0;
 
-      /* Opaque kernel-side payload (win32k's referenced PKEVENT, 0 clears);
-       * forward to dxgkrnl, whose present timer paces the scanout. */
-      EngDeviceIoControl(ppdev->hDriver,
-                         IOCTL_VIDEO_DXGK_REGISTER_VBLANK,
-                         pvIn, sizeof(ULONGLONG), NULL, 0, &Ret);
+      /* Opaque event handle in the compositor process (0 clears). dxgkrnl
+       * validates and references it before the present timer can signal it. */
+      if (EngDeviceIoControl(ppdev->hDriver,
+                             IOCTL_VIDEO_DXGK_REGISTER_VBLANK,
+                             pvIn, sizeof(ULONGLONG), NULL, 0, &Ret))
+      {
+         return 0;
+      }
       return 1;
    }
 

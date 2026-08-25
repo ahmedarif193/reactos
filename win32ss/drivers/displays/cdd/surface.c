@@ -41,9 +41,13 @@ RcddEnableSurface(
    SIZEL ScreenSize;
    VIDEO_MEMORY VideoMemory;
    VIDEO_MEMORY_INFORMATION VideoMemoryInfo;
+   ULONGLONG MinimumStride;
+   ULONGLONG RequiredBytes;
    ULONG ulTemp;
    FLONG flHooks = 0;
    PVOID SurfaceBits;
+
+   RtlZeroMemory(&VideoMemoryInfo, sizeof(VideoMemoryInfo));
 
    /* Commit the requested mode on the WDDM display device. */
    if (EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_SET_CURRENT_MODE,
@@ -63,10 +67,13 @@ RcddEnableSurface(
    {
       VIDEO_MODE_INFORMATION CommittedMode;
 
+      RtlZeroMemory(&CommittedMode, sizeof(CommittedMode));
       if (!EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_QUERY_CURRENT_MODE,
                               NULL, 0, &CommittedMode, sizeof(CommittedMode),
                               &ulTemp))
       {
+         if (ulTemp < sizeof(CommittedMode))
+            return NULL;
          if (CommittedMode.VisScreenWidth != (ULONG)ppdev->ScreenWidth ||
              CommittedMode.VisScreenHeight != (ULONG)ppdev->ScreenHeight)
          {
@@ -89,14 +96,23 @@ RcddEnableSurface(
    if (EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_MAP_VIDEO_MEMORY,
                           &VideoMemory, sizeof(VIDEO_MEMORY),
                           &VideoMemoryInfo, sizeof(VIDEO_MEMORY_INFORMATION),
-                          &ulTemp))
+                          &ulTemp) ||
+       ulTemp < sizeof(VIDEO_MEMORY_INFORMATION))
    {
       return NULL;
    }
 
    ppdev->ScreenPtr = VideoMemoryInfo.FrameBufferBase;
    if (ppdev->ScreenPtr == NULL)
-      return NULL;
+      goto CleanupMapping;
+
+   MinimumStride = (((ULONGLONG)ppdev->ScreenWidth * ppdev->BitsPerPixel) + 7) / 8;
+   RequiredBytes = (ULONGLONG)ppdev->ScreenDelta * ppdev->ScreenHeight;
+   if (ppdev->ScreenDelta < MinimumStride ||
+       RequiredBytes > VideoMemoryInfo.FrameBufferLength)
+   {
+      goto CleanupMapping;
+   }
 
    switch (ppdev->BitsPerPixel)
    {
@@ -118,7 +134,7 @@ RcddEnableSurface(
          break;
 
       default:
-         return NULL;
+         goto CleanupMapping;
    }
 
    ScreenSize.cx = ppdev->ScreenWidth;
@@ -138,9 +154,11 @@ RcddEnableSurface(
     */
    SurfaceBits = ppdev->ScreenPtr;
    flHooks = HOOK_BITBLT | HOOK_COPYBITS | HOOK_SYNCHRONIZE |
-             HOOK_TEXTOUT | HOOK_LINETO | HOOK_STROKEPATH |
+             HOOK_TEXTOUT | HOOK_LINETO | HOOK_PAINT | HOOK_PLGBLT |
+             HOOK_STROKEPATH |
              HOOK_FILLPATH | HOOK_STROKEANDFILLPATH | HOOK_STRETCHBLT |
-             HOOK_ALPHABLEND | HOOK_TRANSPARENTBLT | HOOK_GRADIENTFILL;
+             HOOK_STRETCHBLTROP | HOOK_ALPHABLEND | HOOK_TRANSPARENTBLT |
+             HOOK_GRADIENTFILL;
 
    /*
     * Hand GDI a plain DIB over the draw buffer. No raster ops are implemented
@@ -151,7 +169,7 @@ RcddEnableSurface(
                                      SurfaceBits);
    if (hSurface == NULL)
    {
-      return NULL;
+      goto CleanupMapping;
    }
 
    if (!EngAssociateSurface(hSurface, ppdev->hDevEng, flHooks))
@@ -167,6 +185,13 @@ RcddEnableSurface(
    ppdev->hSurfEng = hSurface;
 
    return hSurface;
+
+CleanupMapping:
+   VideoMemory.RequestedVirtualAddress = ppdev->ScreenPtr;
+   EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_UNMAP_VIDEO_MEMORY,
+                      &VideoMemory, sizeof(VIDEO_MEMORY), NULL, 0, &ulTemp);
+   ppdev->ScreenPtr = NULL;
+   return NULL;
 }
 
 /*

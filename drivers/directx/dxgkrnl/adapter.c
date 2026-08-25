@@ -9406,6 +9406,7 @@ DxgkpAddDeviceRegistered(
     DxgkPeriodicInterruptCoreInitialize(
         &Adapter->PeriodicInterruptCore);
     KeInitializeSpinLock(&Adapter->ChildListLock);
+    KeInitializeSpinLock(&Adapter->PresentLock);
     KeInitializeSpinLock(&Adapter->SubmitDmaLock);
     KeInitializeSpinLock(&Adapter->TdrHistoryLock);
     KeInitializeEvent(&Adapter->SyncEvent, SynchronizationEvent, FALSE);

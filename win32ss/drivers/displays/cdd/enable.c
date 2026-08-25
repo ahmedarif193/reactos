@@ -34,10 +34,13 @@ static const DRVFN gaRcddDriverFunctions[] =
    {INDEX_DrvSynchronizeSurface, (PFN)RcddSynchronizeSurface},
    {INDEX_DrvTextOut, (PFN)RcddTextOut},
    {INDEX_DrvLineTo, (PFN)RcddLineTo},
+   {INDEX_DrvPaint, (PFN)RcddPaint},
+   {INDEX_DrvPlgBlt, (PFN)RcddPlgBlt},
    {INDEX_DrvStrokePath, (PFN)RcddStrokePath},
    {INDEX_DrvFillPath, (PFN)RcddFillPath},
    {INDEX_DrvStrokeAndFillPath, (PFN)RcddStrokeAndFillPath},
    {INDEX_DrvStretchBlt, (PFN)RcddStretchBlt},
+   {INDEX_DrvStretchBltROP, (PFN)RcddStretchBltROP},
    {INDEX_DrvAlphaBlend, (PFN)RcddAlphaBlend},
    {INDEX_DrvTransparentBlt, (PFN)RcddTransparentBlt},
    {INDEX_DrvGradientFill, (PFN)RcddGradientFill},
@@ -108,6 +111,9 @@ RcddEnablePDEV(
    }
 
    ppdev->hDriver = hDriver;
+
+   RtlZeroMemory(&GdiInfo, sizeof(GdiInfo));
+   RtlZeroMemory(&DevInfo, sizeof(DevInfo));
 
    if (!RcddInitScreenInfo(ppdev, pdm, &GdiInfo, &DevInfo))
    {

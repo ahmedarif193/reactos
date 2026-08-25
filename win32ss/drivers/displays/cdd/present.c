@@ -275,6 +275,44 @@ RcddLineTo(
 }
 
 BOOL APIENTRY
+RcddPaint(
+   IN SURFOBJ *pso,
+   IN CLIPOBJ *pco,
+   IN BRUSHOBJ *pbo,
+   IN POINTL *pptlBrushOrg,
+   IN MIX mix)
+{
+   BOOL Result;
+
+   Result = EngPaint(pso, pco, pbo, pptlBrushOrg, mix);
+   if (Result)
+      RcddPresentTarget(pso, pco ? &pco->rclBounds : NULL, pco);
+   return Result;
+}
+
+BOOL APIENTRY
+RcddPlgBlt(
+   IN SURFOBJ *psoDest,
+   IN SURFOBJ *psoSrc,
+   IN SURFOBJ *psoMask,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN COLORADJUSTMENT *pca,
+   IN POINTL *pptlBrushOrg,
+   IN POINTFIX *pptfx,
+   IN RECTL *prclSrc,
+   IN POINTL *pptlMask,
+   IN ULONG iMode)
+{
+   BOOL Result;
+
+   Result = EngPlgBlt(psoDest, psoSrc, psoMask, pco, pxlo, pca, pptlBrushOrg, pptfx, prclSrc, pptlMask, iMode);
+   if (Result)
+      RcddPresentTarget(psoDest, NULL, pco);
+   return Result;
+}
+
+BOOL APIENTRY
 RcddStrokePath(
    IN SURFOBJ *pso,
    IN PATHOBJ *ppo,
@@ -369,6 +407,30 @@ RcddStretchBlt(
    if (Result)
       RcddPresentTarget(psoDest, prclDest, pco);
 
+   return Result;
+}
+
+BOOL APIENTRY
+RcddStretchBltROP(
+   IN SURFOBJ *psoDest,
+   IN SURFOBJ *psoSrc,
+   IN SURFOBJ *psoMask,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN COLORADJUSTMENT *pca,
+   IN POINTL *pptlHTOrg,
+   IN RECTL *prclDest,
+   IN RECTL *prclSrc,
+   IN POINTL *pptlMask,
+   IN ULONG iMode,
+   IN BRUSHOBJ *pbo,
+   IN DWORD rop4)
+{
+   BOOL Result;
+
+   Result = EngStretchBltROP(psoDest, psoSrc, psoMask, pco, pxlo, pca, pptlHTOrg, prclDest, prclSrc, pptlMask, iMode, pbo, rop4);
+   if (Result)
+      RcddPresentTarget(psoDest, prclDest, pco);
    return Result;
 }
 

@@ -63,7 +63,7 @@ NTSTATUS IntCompositionDwmGetFrame(_In_ PVOID pUser);
 
 /* CDD present bracket for dwm (ONEPARAM_ROUTINE_DWMPRESENTSYNC): value 1 opens
  * / 0 closes the present bracket around dwm's BitBlt to the primary. */
-VOID IntCompositionDwmSync(_In_ LONG value);
+BOOL IntCompositionDwmSync(_In_ LONG value);
 
 /* Open a window FRONT section into dwm's process (ONEPARAM_ROUTINE_
  * DWMOPENSURFACE); see DWM_OPEN_SURFACE in dwmframe.h. */

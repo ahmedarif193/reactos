@@ -859,7 +859,16 @@ DceUnredirectAllDCs(VOID)
       pDCE = CONTAINING_RECORD(ListEntry, DCE, List);
       ListEntry = ListEntry->Flink;
       if (GreIsHandleValid(pDCE->hDC))
+      {
          IntCompositionUnredirectDC(pDCE->hDC);
+         if (!(pDCE->DCXFlags & (DCX_DCEEMPTY | DCX_INDESTROY)) &&
+             pDCE->hwndCurrent != NULL)
+         {
+            PWND pWnd = UserGetWindowObject(pDCE->hwndCurrent);
+            if (pWnd != NULL)
+                DceUpdateVisRgn(pDCE, pWnd, pDCE->DCXFlags);
+         }
+      }
    }
 }
 

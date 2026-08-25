@@ -872,6 +872,7 @@ struct _DXGKRNL_ADAPTER
     KTIMER                      PresentTimer;
     KDPC                        PresentDpc;
     BOOLEAN                     PresentTimerActive;
+    PIO_WORKITEM                PresentWorkItem;
 
     /*
      * Set by DWM via IOCTL while a composition BitBlt is in progress.
@@ -881,10 +882,9 @@ struct _DXGKRNL_ADAPTER
     volatile LONG               DwmCompositionInProgress;
 
     /*
-     * dwm's vblank pacing event, registered by win32k via
-     * IOCTL_VIDEO_DXGK_REGISTER_VBLANK (win32k owns the reference and
-     * unregisters before releasing it). The present timer DPC signals it
-     * every scanout period.
+     * dwm's vblank pacing event, registered by handle through
+     * IOCTL_VIDEO_DXGK_REGISTER_VBLANK. dxgkrnl owns the reference and the
+     * PresentLock serializes replacement against the timer DPC.
      */
     PKEVENT                     DwmVblankEvent;
 
