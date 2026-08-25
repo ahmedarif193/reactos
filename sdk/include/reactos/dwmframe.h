@@ -55,10 +55,17 @@
 
 /*
  * cdd -> dxgkrnl present-path IOCTLs (kernel side of the same contract).
- *   PRESENT_DIRTY_RECT - explicit dirty-rectangle present: cdd draws straight
- *                        into the mapped DOD primary and asks dxgkrnl to scan
- *                        the rectangle out through the miniport's
- *                        DxgkDdiPresentDisplayOnly. Input: one RECTL.
+ *   PRESENT_DIRTY_RECT - dirty-rectangle notification: cdd draws straight
+ *                        into the mapped DOD primary and records the rectangle
+ *                        with dxgkrnl, which scans it out through the
+ *                        miniport's DxgkDdiPresentDisplayOnly at a paced
+ *                        cadence (synchronously in the caller's context when
+ *                        the pace allows, otherwise from the present timer
+ *                        once drawing goes quiet). Input: one RECTL, or a
+ *                        DXGK_PRESENT_DIRTY_RECT_INPUT whose Flags bracket
+ *                        a cursor-hidden drawing op (HOLD: the caller is
+ *                        withholding rectangles and the timer must not scan
+ *                        out; RELEASE: the bracket closed, Rect is the union).
  *   COMPOSITION_BEGIN/END - present bracket around a composed-frame blit so
  *                        the present worker never scans out a half-composed
  *                        primary; END flushes the dirty rects accumulated
@@ -79,6 +86,15 @@
     CTL_CODE(FILE_DEVICE_VIDEO, 0x924, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #include <pshpack4.h>
+
+typedef struct _DXGK_PRESENT_DIRTY_RECT_INPUT
+{
+    RECTL Rect;
+    ULONG Flags;
+} DXGK_PRESENT_DIRTY_RECT_INPUT, *PDXGK_PRESENT_DIRTY_RECT_INPUT;
+
+#define DXGK_PRESENT_DIRTY_HOLD    0x00000001u
+#define DXGK_PRESENT_DIRTY_RELEASE 0x00000002u
 
 /*
  * Present-path counters (CDD_ESCAPE_PRESENT_STATS / IOCTL_VIDEO_DXGK_PRESENT_STATS).

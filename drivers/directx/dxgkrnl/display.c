@@ -106,10 +106,65 @@ static volatile LONG g_PresentTimerTraceCount = 0;
 static volatile LONG g_PresentDirtyTraceCount = 0;
 static volatile LONG g_ScanoutCopyCount = 0;
 static volatile LONG g_PresentDispatchBusy = 0;
-static BOOLEAN g_PresentDirtyRectValid = FALSE;
-static RECTL g_PresentDirtyRect;
 static volatile LONGLONG g_LastDirtyNotify100ns = 0;
 static volatile LONGLONG g_LastPresentSubmit100ns = 0;
+#define DXGK_DIRTY_RECT_SLOTS 8
+#define DXGK_PRESENT_PACE_100NS      (8ULL * 10000ULL)
+#define DXGK_PRESENT_SMALL_GAP_100NS (2ULL * 10000ULL)
+#define DXGK_PRESENT_QUIET_100NS     (4ULL * 10000ULL)
+#define DXGK_PRESENT_HOLD_STALE_100NS (500ULL * 10000ULL)
+static RECTL g_PresentDirtyRects[DXGK_DIRTY_RECT_SLOTS];
+static ULONG g_PresentDirtyRectCount = 0;
+static volatile LONG g_PresentHoldActive = 0;
+static volatile LONGLONG g_PresentHoldSince100ns = 0;
+
+/*
+ * cdd is inside a cursor-hidden drawing bracket and withholds its dirty
+ * rectangles; nothing may be scanned out until it releases (or the bracket
+ * went stale because the closing flush never came).
+ */
+static BOOLEAN
+DxgkpPresentHoldActive(
+    _In_ ULONGLONG Now100ns)
+{
+    ULONGLONG Since100ns;
+
+    if (InterlockedCompareExchange(&g_PresentHoldActive, 0, 0) == 0)
+        return FALSE;
+
+    Since100ns = (ULONGLONG)InterlockedCompareExchange64(&g_PresentHoldSince100ns, 0, 0);
+    if (Now100ns > Since100ns && (Now100ns - Since100ns) >= DXGK_PRESENT_HOLD_STALE_100NS)
+    {
+        InterlockedExchange(&g_PresentHoldActive, 0);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+/*
+ * Pending rectangles that missed a paced synchronous present are scanned out
+ * asynchronously only once cdd is not inside a cursor-hidden bracket, the
+ * drawing has been quiet for DXGK_PRESENT_QUIET_100NS and the last scan-out
+ * copy is at least DXGK_PRESENT_PACE_100NS old — the asynchronous copy never
+ * interleaves an in-flight GDI operation.
+ */
+static BOOLEAN
+DxgkpMayPresentPendingAsync(
+    _In_ ULONGLONG Now100ns)
+{
+    ULONGLONG LastDirty100ns = (ULONGLONG)InterlockedCompareExchange64(&g_LastDirtyNotify100ns, 0, 0);
+    ULONGLONG LastPresent100ns = (ULONGLONG)InterlockedCompareExchange64(&g_LastPresentSubmit100ns, 0, 0);
+
+    if (DxgkpPresentHoldActive(Now100ns))
+        return FALSE;
+    if (Now100ns > LastDirty100ns && (Now100ns - LastDirty100ns) < DXGK_PRESENT_QUIET_100NS)
+        return FALSE;
+    if (Now100ns > LastPresent100ns && (Now100ns - LastPresent100ns) < DXGK_PRESENT_PACE_100NS)
+        return FALSE;
+
+    return TRUE;
+}
 
 /*
  * Timestamp (100ns) of the last IOCTL_VIDEO_DXGK_COMPOSITION_BEGIN.  The present
@@ -1198,9 +1253,10 @@ DxgkpBlitShadowToGop(
  * IRQL: PASSIVE_LEVEL
  * ====================================================================== */
 static NTSTATUS
-DxgkpPresentShadowFbInternal(
+DxgkpPresentShadowFbRects(
     _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_opt_ const RECT *DirtyRectOpt,
+    _In_reads_opt_(Count) const RECTL *Rects,
+    _In_ ULONG Count,
     _In_ PCSTR TraceReason)
 {
     typedef NTSTATUS (APIENTRY *PFN_PRESENT_DISPLAY_ONLY)(
@@ -1210,7 +1266,9 @@ DxgkpPresentShadowFbInternal(
     PFN_PRESENT_DISPLAY_ONLY PfnPresent;
     DXGKARG_PRESENT_DISPLAYONLY PresentArgs;
     DXGKRNL_SHARED_SURFACE_SNAPSHOT SharedSurface;
-    RECT DirtyRect;
+    RECT DirtyRects[DXGK_DIRTY_RECT_SLOTS];
+    ULONG DirtyCount = 0;
+    ULONG i;
     ULONGLONG Start100ns;
     ULONGLONG ElapsedUs;
     LONG ShadowPitch;
@@ -1256,38 +1314,44 @@ DxgkpPresentShadowFbInternal(
     /*
      * PfnPresent is NULL for a software / WDDM 1.0 miniport (softgpu) that has
      * no DxgkDdiPresentDisplayOnly. Don't bail here — fall through to the
-     * direct shadow->GOP blit after the dirty rect is computed.
+     * direct shadow->GOP blit after the dirty rects are computed.
      */
 
-    if (DirtyRectOpt != NULL)
+    if (Count > DXGK_DIRTY_RECT_SLOTS)
+        Count = DXGK_DIRTY_RECT_SLOTS;
+
+    for (i = 0; Rects != NULL && i < Count; i++)
     {
-        DirtyRect = *DirtyRectOpt;
+        RECT Clipped;
 
-        if (DirtyRect.left < 0)
-            DirtyRect.left = 0;
-        if (DirtyRect.top < 0)
-            DirtyRect.top = 0;
-        if (DirtyRect.right > (LONG)SharedSurface.CommittedWidth)
-            DirtyRect.right = (LONG)SharedSurface.CommittedWidth;
-        if (DirtyRect.bottom > (LONG)SharedSurface.CommittedHeight)
-            DirtyRect.bottom = (LONG)SharedSurface.CommittedHeight;
+        Clipped.left   = Rects[i].left;
+        Clipped.top    = Rects[i].top;
+        Clipped.right  = Rects[i].right;
+        Clipped.bottom = Rects[i].bottom;
 
-        if (DirtyRect.left >= DirtyRect.right ||
-            DirtyRect.top >= DirtyRect.bottom)
-        {
-            DirtyRect.left   = 0;
-            DirtyRect.top    = 0;
-            DirtyRect.right  = (LONG)SharedSurface.CommittedWidth;
-            DirtyRect.bottom = (LONG)SharedSurface.CommittedHeight;
-        }
+        if (Clipped.left < 0)
+            Clipped.left = 0;
+        if (Clipped.top < 0)
+            Clipped.top = 0;
+        if (Clipped.right > (LONG)SharedSurface.CommittedWidth)
+            Clipped.right = (LONG)SharedSurface.CommittedWidth;
+        if (Clipped.bottom > (LONG)SharedSurface.CommittedHeight)
+            Clipped.bottom = (LONG)SharedSurface.CommittedHeight;
+
+        if (Clipped.left >= Clipped.right || Clipped.top >= Clipped.bottom)
+            continue;
+
+        DirtyRects[DirtyCount++] = Clipped;
     }
-    else
+
+    if (DirtyCount == 0)
     {
-        /* Periodic fallback: push the whole surface. */
-        DirtyRect.left   = 0;
-        DirtyRect.top    = 0;
-        DirtyRect.right  = (LONG)SharedSurface.CommittedWidth;
-        DirtyRect.bottom = (LONG)SharedSurface.CommittedHeight;
+        /* Periodic fallback (or nothing usable): push the whole surface. */
+        DirtyRects[0].left   = 0;
+        DirtyRects[0].top    = 0;
+        DirtyRects[0].right  = (LONG)SharedSurface.CommittedWidth;
+        DirtyRects[0].bottom = (LONG)SharedSurface.CommittedHeight;
+        DirtyCount = 1;
     }
 
     /*
@@ -1296,7 +1360,12 @@ DxgkpPresentShadowFbInternal(
      */
     if (PfnPresent == NULL)
     {
-        Status = DxgkpBlitShadowToGop(Adapter, &SharedSurface, &DirtyRect);
+        for (i = 0; i < DirtyCount; i++)
+        {
+            Status = DxgkpBlitShadowToGop(Adapter, &SharedSurface, &DirtyRects[i]);
+            if (!NT_SUCCESS(Status))
+                break;
+        }
         goto Cleanup;
     }
 
@@ -1316,8 +1385,8 @@ DxgkpPresentShadowFbInternal(
     PresentArgs.Flags.Value   = 0;
     PresentArgs.NumMoves      = 0;
     PresentArgs.pMoves        = NULL;
-    PresentArgs.NumDirtyRects = 1;
-    PresentArgs.pDirtyRect    = &DirtyRect;
+    PresentArgs.NumDirtyRects = DirtyCount;
+    PresentArgs.pDirtyRect    = DirtyRects;
     PresentArgs.pfnPresentDisplayOnlyProgress = NULL;
 
     if (!DxgkAcquireMiniportCallback(Adapter))
@@ -1337,17 +1406,18 @@ DxgkpPresentShadowFbInternal(
             ElapsedUs >= DXGK_PRESENT_TRACE_SLOW_US)
         {
             DXGKRNL_TRACE("DxgkpPresentShadowFb[%s]: seq=%ld PfnPresent=%p "
-                          "status=0x%08lX dur=%I64u us rect=(%ld,%ld)-(%ld,%ld) "
+                          "status=0x%08lX dur=%I64u us rects=%lu first=(%ld,%ld)-(%ld,%ld) "
                           "size=%ux%u pitch=%ld\n",
                           TraceReason,
                           TraceSeq,
                           PfnPresent,
                           Status,
                           ElapsedUs,
-                          DirtyRect.left,
-                          DirtyRect.top,
-                          DirtyRect.right,
-                          DirtyRect.bottom,
+                          DirtyCount,
+                          DirtyRects[0].left,
+                          DirtyRects[0].top,
+                          DirtyRects[0].right,
+                          DirtyRects[0].bottom,
                           SharedSurface.CommittedWidth,
                           SharedSurface.CommittedHeight,
                           PresentArgs.Pitch);
@@ -1359,6 +1429,24 @@ DxgkpPresentShadowFbInternal(
 Cleanup:
     DxgkpReleaseSharedSurfaceSnapshot(&SharedSurface);
     return Status;
+}
+
+static NTSTATUS
+DxgkpPresentShadowFbInternal(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ const RECT *DirtyRectOpt,
+    _In_ PCSTR TraceReason)
+{
+    RECTL Rect;
+
+    if (DirtyRectOpt == NULL)
+        return DxgkpPresentShadowFbRects(Adapter, NULL, 0, TraceReason);
+
+    Rect.left   = DirtyRectOpt->left;
+    Rect.top    = DirtyRectOpt->top;
+    Rect.right  = DirtyRectOpt->right;
+    Rect.bottom = DirtyRectOpt->bottom;
+    return DxgkpPresentShadowFbRects(Adapter, &Rect, 1, TraceReason);
 }
 
 static NTSTATUS
@@ -1382,15 +1470,42 @@ DxgkDisplayPresentRect(
     return DxgkpPresentShadowFbInternal(Adapter, DirtyRect, "dod");
 }
 
+static LONGLONG
+DxgkpRectArea(
+    _In_ const RECTL *Rect)
+{
+    return (LONGLONG)(Rect->right - Rect->left) * (Rect->bottom - Rect->top);
+}
+
+static VOID
+DxgkpRectUnion(
+    _Inout_ RECTL *Dest,
+    _In_ const RECTL *Src)
+{
+    if (Src->left < Dest->left)
+        Dest->left = Src->left;
+    if (Src->top < Dest->top)
+        Dest->top = Src->top;
+    if (Src->right > Dest->right)
+        Dest->right = Src->right;
+    if (Src->bottom > Dest->bottom)
+        Dest->bottom = Src->bottom;
+}
+
 static VOID
 DxgkpRecordDirtyRect(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ const RECTL *DirtyRect)
 {
     RECTL Clipped;
+    RECTL Union;
     DXGK_PRESENT_LOCK_STATE LockState;
     ULONG CommittedWidth;
     ULONG CommittedHeight;
+    ULONG i;
+    ULONG Best = DXGK_DIRTY_RECT_SLOTS;
+    LONGLONG BestGrowth = 0;
+    LONGLONG ClippedArea;
 
     if (Adapter == NULL || DirtyRect == NULL)
         return;
@@ -1410,49 +1525,63 @@ DxgkpRecordDirtyRect(
     if (Clipped.left >= Clipped.right || Clipped.top >= Clipped.bottom)
         return;
 
+    ClippedArea = DxgkpRectArea(&Clipped);
+
     DxgkpAcquirePresentLock(Adapter, &LockState);
 
-    if (!g_PresentDirtyRectValid)
+    for (i = 0; i < g_PresentDirtyRectCount; i++)
     {
-        g_PresentDirtyRect = Clipped;
-        g_PresentDirtyRectValid = TRUE;
+        LONGLONG Growth;
+
+        Union = g_PresentDirtyRects[i];
+        DxgkpRectUnion(&Union, &Clipped);
+        Growth = DxgkpRectArea(&Union) - DxgkpRectArea(&g_PresentDirtyRects[i]) - ClippedArea;
+        if (Growth <= (DxgkpRectArea(&g_PresentDirtyRects[i]) + ClippedArea) / 4)
+        {
+            g_PresentDirtyRects[i] = Union;
+            DxgkpReleasePresentLock(Adapter, &LockState);
+            return;
+        }
+        if (Best == DXGK_DIRTY_RECT_SLOTS || Growth < BestGrowth)
+        {
+            Best = i;
+            BestGrowth = Growth;
+        }
+    }
+
+    if (g_PresentDirtyRectCount < DXGK_DIRTY_RECT_SLOTS)
+    {
+        g_PresentDirtyRects[g_PresentDirtyRectCount++] = Clipped;
     }
     else
     {
-        if (Clipped.left < g_PresentDirtyRect.left)
-            g_PresentDirtyRect.left = Clipped.left;
-        if (Clipped.top < g_PresentDirtyRect.top)
-            g_PresentDirtyRect.top = Clipped.top;
-        if (Clipped.right > g_PresentDirtyRect.right)
-            g_PresentDirtyRect.right = Clipped.right;
-        if (Clipped.bottom > g_PresentDirtyRect.bottom)
-            g_PresentDirtyRect.bottom = Clipped.bottom;
+        DxgkpRectUnion(&g_PresentDirtyRects[Best], &Clipped);
     }
 
     DxgkpReleasePresentLock(Adapter, &LockState);
 }
 
-static BOOLEAN
-DxgkpConsumeDirtyRect(
+static ULONG
+DxgkpConsumeDirtyRects(
     _In_ PDXGKRNL_ADAPTER Adapter,
-    _Out_ PRECTL DirtyRect)
+    _Out_writes_(DXGK_DIRTY_RECT_SLOTS) PRECTL DirtyRects)
 {
-    BOOLEAN HasDirty;
+    ULONG Count;
     DXGK_PRESENT_LOCK_STATE LockState;
 
-    if (Adapter == NULL || DirtyRect == NULL)
-        return FALSE;
+    if (Adapter == NULL || DirtyRects == NULL)
+        return 0;
 
     DxgkpAcquirePresentLock(Adapter, &LockState);
-    HasDirty = g_PresentDirtyRectValid;
-    if (HasDirty)
+    Count = g_PresentDirtyRectCount;
+    if (Count != 0)
     {
-        *DirtyRect = g_PresentDirtyRect;
-        g_PresentDirtyRectValid = FALSE;
+        RtlCopyMemory(DirtyRects, g_PresentDirtyRects, Count * sizeof(RECTL));
+        g_PresentDirtyRectCount = 0;
     }
     DxgkpReleasePresentLock(Adapter, &LockState);
 
-    return HasDirty;
+    return Count;
 }
 
 static BOOLEAN
@@ -1466,10 +1595,29 @@ DxgkpHasPendingDirtyRect(
         return FALSE;
 
     DxgkpAcquirePresentLock(Adapter, &LockState);
-    HasDirty = g_PresentDirtyRectValid;
+    HasDirty = (g_PresentDirtyRectCount != 0);
     DxgkpReleasePresentLock(Adapter, &LockState);
 
     return HasDirty;
+}
+
+static LONGLONG
+DxgkpPendingDirtyArea(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    LONGLONG Area = 0;
+    ULONG i;
+    DXGK_PRESENT_LOCK_STATE LockState;
+
+    if (Adapter == NULL)
+        return 0;
+
+    DxgkpAcquirePresentLock(Adapter, &LockState);
+    for (i = 0; i < g_PresentDirtyRectCount; i++)
+        Area += DxgkpRectArea(&g_PresentDirtyRects[i]);
+    DxgkpReleasePresentLock(Adapter, &LockState);
+
+    return Area;
 }
 
 /*
@@ -1547,12 +1695,26 @@ DxgkpTryDispatchPresentWork(
  * win32k device lock — so the scan-out copy can never interleave a GDI write
  * to the shadow framebuffer. Falls back to the worker when not at PASSIVE.
  */
+static BOOLEAN
+DxgkpPresentPendingDirtyRects(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PCSTR TraceReason)
+{
+    RECTL DirtyRects[DXGK_DIRTY_RECT_SLOTS];
+    ULONG Count;
+
+    Count = DxgkpConsumeDirtyRects(Adapter, DirtyRects);
+    if (Count == 0)
+        return FALSE;
+
+    DxgkpPresentShadowFbRects(Adapter, DirtyRects, Count, TraceReason);
+    return TRUE;
+}
+
 static VOID
 DxgkpPresentSyncNow(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
-    RECTL DirtyRect;
-
     if (Adapter == NULL || InterlockedCompareExchange(&Adapter->SharedSurfaceAvailable, 0, 0) == 0)
         return;
 
@@ -1586,8 +1748,7 @@ DxgkpPresentSyncNow(
         }
     }
 
-    if (DxgkpConsumeDirtyRect(Adapter, &DirtyRect))
-        DxgkpPresentShadowFbInternal(Adapter, (const RECT *)&DirtyRect, "sync");
+    DxgkpPresentPendingDirtyRects(Adapter, "sync");
 
     KeReleaseMutex(&g_PresentMutex, FALSE);
 }
@@ -1607,7 +1768,6 @@ DxgkpPresentWorkItemRoutineEx(
     _In_opt_ PVOID          Context)
 {
     PDXGKRNL_ADAPTER Adapter = (PDXGKRNL_ADAPTER)Context;
-    RECTL DirtyRect;
     BOOLEAN HasDirty = FALSE;
 
     UNREFERENCED_PARAMETER(DeviceObject);
@@ -1647,12 +1807,8 @@ DxgkpPresentWorkItemRoutineEx(
             }
         }
 
-        HasDirty = DxgkpConsumeDirtyRect(Adapter, &DirtyRect);
-        if (HasDirty)
-        {
-            DxgkpPresentShadowFbInternal(Adapter, (const RECT *)&DirtyRect, "dirty");
-        }
-        else
+        HasDirty = DxgkpPresentPendingDirtyRects(Adapter, "dirty");
+        if (!HasDirty)
         {
             /*
              * No dirty rect left (the sync path consumed it): full-screen
@@ -1669,7 +1825,7 @@ DxgkpPresentWorkItemRoutineEx(
                 (LastPresentW != 0 && NowW > LastPresentW &&
                  (NowW - LastPresentW) < (250ULL * 10000ULL));
 
-            if (!RecentActivity)
+            if (!RecentActivity && !DxgkpPresentHoldActive(NowW))
                 DxgkpPresentShadowFb(Adapter);
         }
         KeReleaseMutex(&g_PresentMutex, FALSE);
@@ -1678,21 +1834,6 @@ DxgkpPresentWorkItemRoutineEx(
     /* The periodic present timer owns dispatch pacing. */
     InterlockedExchange(&g_PresentDispatchBusy, 0);
 
-    /*
-     * Re-check: a new dirty rect may have arrived while we were busy
-     * presenting the previous one.  Re-queue immediately so we don't
-     * wait for the next 15 ms timer tick — this eliminates dropped
-     * frames during heavy GUI activity.  Skip while dwm owns the frame:
-     * it re-presents on its own vblank tick, so only the non-composited
-     * direct-draw path chains dirty rects here (no self-sustaining async
-     * present racing dwm's shadow write).
-     */
-    if (Adapter != NULL && Adapter->PresentTimerActive &&
-        !DxgkpHasDwmVblankEvent(Adapter) &&
-        DxgkpHasPendingDirtyRect(Adapter))
-    {
-        DxgkpTryDispatchPresentWork(Adapter);
-    }
 }
 
 static VOID
@@ -1750,6 +1891,9 @@ DxgkpPresentTimerDpc(
 
     if (HasDirty)
     {
+        if (!DxgkpMayPresentPendingAsync(Now100ns))
+            return;
+
         if (DxgkpTryDispatchPresentWork(Adapter))
         {
             if (TimerSeq <= DXGK_PRESENT_TRACE_LOG_LIMIT)
@@ -1835,7 +1979,8 @@ DxgkpStartPresentTimer(
         return;
 
     DxgkpEnsurePresentMutex();
-    g_PresentDirtyRectValid = FALSE;
+    g_PresentDirtyRectCount = 0;
+    InterlockedExchange(&g_PresentHoldActive, 0);
     InterlockedExchange64(&g_LastDirtyNotify100ns, 0);
     InterlockedExchange64(&g_LastPresentSubmit100ns, 0);
     InterlockedExchange(&g_PresentDispatchBusy, 0);
@@ -1883,7 +2028,7 @@ DxgkpStopPresentTimer(
      * periodic timer is inactive. Always drain the dispatch slot before a
      * caller swaps the framebuffer or frees the adapter-owned work item. */
     DxgkpWaitForFlagClear(&g_PresentDispatchBusy);
-    g_PresentDirtyRectValid = FALSE;
+    g_PresentDirtyRectCount = 0;
     InterlockedExchange64(&g_LastDirtyNotify100ns, 0);
     InterlockedExchange64(&g_LastPresentSubmit100ns, 0);
     DXGKRNL_TRACE("DxgkpStopPresentTimer: stopped\n");
@@ -1911,7 +2056,8 @@ DxgkDisplayVsyncFlush(
 
     if (Adapter->PresentTimerActive &&
         DxgkpHasPendingDirtyRect(Adapter) &&
-        InterlockedCompareExchange(&Adapter->DwmCompositionInProgress, 0, 0) == 0)
+        InterlockedCompareExchange(&Adapter->DwmCompositionInProgress, 0, 0) == 0 &&
+        DxgkpMayPresentPendingAsync(DxgkpDisplayTraceNow100ns()))
     {
         DxgkpTryDispatchPresentWork(Adapter);
     }
@@ -2468,6 +2614,8 @@ DxgkpDisplayDispatch(
         {
             PRECTL DirtyRect = (PRECTL)Irp->AssociatedIrp.SystemBuffer;
             LONG TraceSeq;
+            ULONGLONG Now100ns;
+            ULONG Flags = 0;
 
             if (Irp->RequestorMode != KernelMode)
             {
@@ -2500,20 +2648,52 @@ DxgkpDisplayDispatch(
                               DirtyRect->bottom);
             }
 
+            if (Stack->Parameters.DeviceIoControl.InputBufferLength >= sizeof(DXGK_PRESENT_DIRTY_RECT_INPUT))
+                Flags = ((PDXGK_PRESENT_DIRTY_RECT_INPUT)Irp->AssociatedIrp.SystemBuffer)->Flags;
+
+            Now100ns = DxgkpDisplayTraceNow100ns();
+            if (Flags & DXGK_PRESENT_DIRTY_HOLD)
+            {
+                InterlockedExchange64(&g_PresentHoldSince100ns, (LONGLONG)Now100ns);
+                InterlockedExchange(&g_PresentHoldActive, 1);
+                InterlockedExchange64(&g_LastDirtyNotify100ns, (LONGLONG)Now100ns);
+                Status = STATUS_SUCCESS;
+                break;
+            }
+            if (Flags & DXGK_PRESENT_DIRTY_RELEASE)
+                InterlockedExchange(&g_PresentHoldActive, 0);
+
             DxgkpRecordDirtyRect(g_DisplayAdapter, DirtyRect);
-            InterlockedExchange64(&g_LastDirtyNotify100ns, (LONGLONG)DxgkpDisplayTraceNow100ns());
+            InterlockedExchange64(&g_LastDirtyNotify100ns, (LONGLONG)Now100ns);
 
             /*
-             * Drive the present NOW, synchronously in the caller's context —
-             * this IOCTL comes from cdd's draw hooks with the win32k device
-             * lock held, so the scan-out copy is serialized against every GDI
-             * write to the shadow framebuffer (the async worker used to race
-             * them: on rpi5vc4 a copy takes milliseconds into write-combined
-             * memory, and mid-draw states reached the panel as flicker).
-             * Mid-composition rects only accumulate; COMPOSITION_END flushes.
+             * Present synchronously in the caller's context (cdd's draw hooks,
+             * win32k device lock held, so the scan-out copy never interleaves
+             * a GDI write) but paced like a display refresh: at most one copy
+             * per DXGK_PRESENT_PACE_100NS, or per DXGK_PRESENT_SMALL_GAP_100NS
+             * when the pending area is small. Rects that miss the slot stay
+             * recorded; the next notification or the present timer (once the
+             * drawing goes quiet) scans them out. Mid-composition rects only
+             * accumulate; COMPOSITION_END flushes.
              */
-            if (InterlockedCompareExchange(&g_DisplayAdapter->DwmCompositionInProgress, 0, 0) == 0)
-                DxgkpPresentSyncNow(g_DisplayAdapter);
+            if (InterlockedCompareExchange(&g_DisplayAdapter->DwmCompositionInProgress, 0, 0) == 0 &&
+                !DxgkpPresentHoldActive(Now100ns))
+            {
+                ULONGLONG LastPresent100ns = (ULONGLONG)InterlockedCompareExchange64(&g_LastPresentSubmit100ns, 0, 0);
+                ULONGLONG Since100ns = (Now100ns > LastPresent100ns) ? (Now100ns - LastPresent100ns) : 0;
+                BOOLEAN PresentNow = (LastPresent100ns == 0 || Since100ns >= DXGK_PRESENT_PACE_100NS);
+
+                if (!PresentNow && Since100ns >= DXGK_PRESENT_SMALL_GAP_100NS)
+                {
+                    ULONG Width, Height;
+
+                    DxgkpSnapshotCommittedDisplayState(g_DisplayAdapter, &Width, &Height, NULL);
+                    PresentNow = (DxgkpPendingDirtyArea(g_DisplayAdapter) * 8 <= (LONGLONG)Width * Height);
+                }
+
+                if (PresentNow)
+                    DxgkpPresentSyncNow(g_DisplayAdapter);
+            }
 
             Status = STATUS_SUCCESS;
             break;
