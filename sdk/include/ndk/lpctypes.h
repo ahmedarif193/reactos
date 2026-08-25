@@ -86,6 +86,15 @@ typedef enum _LPC_TYPE
     LPC_MAXIMUM
 } LPC_TYPE;
 
+#define LPC_CONNECTION_REPLY                11
+#define LPC_CANCELED                        12
+
+#define LPC_CONTINUATION_REQUIRED           0x2000
+#define LPC_NO_IMPERSONATE                  0x4000
+#ifndef LPC_KERNELMODE_MESSAGE
+#define LPC_KERNELMODE_MESSAGE              (CSHORT)((USHORT)0x8000)
+#endif
+
 //
 // Information Classes for NtQueryInformationPort
 //

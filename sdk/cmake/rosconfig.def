@@ -125,6 +125,15 @@ endmenu
 
 menu "Modules"
 
+config ENABLE_ALPC
+    prompt "Advanced Local Procedure Call (ALPC)"
+    type bool
+    default y
+    help
+      Whether to build the experimental ALPC port implementation in place of
+      the classic LPC implementation. Disable this option to retain the
+      established LPC kernel path while ALPC is under development.
+
 config ENABLE_ROSAPPS
     prompt "ReactOS extra applications"
     type bool

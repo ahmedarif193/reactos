@@ -22,6 +22,7 @@
 
 #ifdef __REACTOS__
 #include <rtl_vista.h>
+#include <ndk/lpcfuncs.h>
 #define NDEBUG
 #include "wine/list.h"
 #include <debug.h>
@@ -41,6 +42,7 @@ typedef void (NTAPI *RTL_WAITORTIMERCALLBACKFUNC)(PVOID,BOOLEAN);
 typedef VOID (CALLBACK *PRTL_OVERLAPPED_COMPLETION_ROUTINE)(DWORD,DWORD,LPVOID);
 
 typedef void (CALLBACK *PTP_IO_CALLBACK)(PTP_CALLBACK_INSTANCE,void*,void*,IO_STATUS_BLOCK*,PTP_IO);
+typedef void (CALLBACK *PTP_ALPC_CALLBACK)(PTP_CALLBACK_INSTANCE,void*,PTP_ALPC);
 NTSYSAPI NTSTATUS  WINAPI TpSimpleTryPost(PTP_SIMPLE_CALLBACK,PVOID,TP_CALLBACK_ENVIRON *);
 #if defined(_M_ARM64)
 NTSYSAPI BOOLEAN NTAPI RtlIsEcCode(ULONG_PTR CodeAddress);
@@ -83,7 +85,8 @@ enum threadpool_callback_type
     THREADPOOL_CALLBACK_SIMPLE,
     THREADPOOL_CALLBACK_WORK,
     THREADPOOL_CALLBACK_TIMER,
-    THREADPOOL_CALLBACK_WAIT
+    THREADPOOL_CALLBACK_WAIT,
+    THREADPOOL_CALLBACK_ALPC
 };
 
 static PRTLP_THREADPOOL_CALLBACK_DISPATCHER volatile threadpool_callback_dispatcher;
@@ -122,6 +125,9 @@ threadpool_call_callback(enum threadpool_callback_type type, void *callback, ULO
             break;
         case THREADPOOL_CALLBACK_WAIT:
             ((PTP_WAIT_CALLBACK)callback)((TP_CALLBACK_INSTANCE *)argument0, (void *)argument1, (TP_WAIT *)argument2, (TP_WAIT_RESULT)argument3);
+            break;
+        case THREADPOOL_CALLBACK_ALPC:
+            ((PTP_ALPC_CALLBACK)callback)((TP_CALLBACK_INSTANCE *)argument0, (void *)argument1, (TP_ALPC *)argument2);
             break;
     }
 }
@@ -215,6 +221,7 @@ enum threadpool_objtype
     TP_OBJECT_TYPE_TIMER,
     TP_OBJECT_TYPE_WAIT,
     TP_OBJECT_TYPE_IO,
+    TP_OBJECT_TYPE_ALPC,
 };
 
 struct io_completion
@@ -296,6 +303,17 @@ struct threadpool_object
             BOOL            shutting_down;
             struct io_completion *completions;
         } io;
+        struct
+        {
+            PTP_ALPC_CALLBACK callback;
+            HANDLE          port;
+            BOOL            initialized;
+            BOOL            extended;
+            BOOL            shutting_down;
+            BOOL            queue_reference;
+            BOOL            completion_list_registered;
+            LONG            tracked_reference_count;
+        } alpc;
     } u;
 };
 
@@ -314,6 +332,9 @@ struct threadpool_instance
         LONG                semaphore_count;
         HANDLE              event;
         HMODULE             library;
+        HANDLE              alpc_port;
+        PORT_MESSAGE       *alpc_message;
+        ULONG               alpc_flags;
     } cleanup;
 };
 
@@ -431,6 +452,8 @@ ioqueue =
 #endif
 };
 
+#define TP_ALPC_RUNDOWN_VALUE ((ULONG_PTR)~(ULONG_PTR)0)
+
 #ifndef __REACTOS__
 static RTL_CRITICAL_SECTION_DEBUG ioqueue_debug =
 {
@@ -470,6 +493,13 @@ static inline struct threadpool_object *impl_from_TP_IO( TP_IO *io )
 {
     struct threadpool_object *object = (struct threadpool_object *)io;
     assert( object->type == TP_OBJECT_TYPE_IO );
+    return object;
+}
+
+static inline struct threadpool_object *impl_from_TP_ALPC( TP_ALPC *alpc )
+{
+    struct threadpool_object *object = (struct threadpool_object *)alpc;
+    assert( object->type == TP_OBJECT_TYPE_ALPC );
     return object;
 }
 
@@ -1850,6 +1880,23 @@ static void CALLBACK ioqueue_thread_proc( void *param )
 
         TRACE( "io %p, iosb.Status %#lx.\n", io, iosb.Status );
 
+        if (io && io->type == TP_OBJECT_TYPE_ALPC)
+        {
+            if ((ULONG_PTR)value == TP_ALPC_RUNDOWN_VALUE)
+            {
+                if (io->u.alpc.queue_reference)
+                {
+                    io->u.alpc.queue_reference = FALSE;
+                    tp_object_release( io );
+                }
+            }
+            else if (!io->shutdown && !io->u.alpc.shutting_down)
+            {
+                tp_object_submit( io, FALSE );
+            }
+            goto check_idle;
+        }
+
         if (io && (io->shutdown || io->u.io.shutting_down))
         {
             RtlEnterCriticalSection( &io->pool->cs );
@@ -1904,6 +1951,7 @@ static void CALLBACK ioqueue_thread_proc( void *param )
             RtlLeaveCriticalSection( &io->pool->cs );
         }
 
+check_idle:
         if (!ioqueue.objcount)
         {
             /* All I/O objects have been destroyed; if no new objects are
@@ -1973,6 +2021,53 @@ static NTSTATUS tp_ioqueue_lock( struct threadpool_object *io, HANDLE file )
 
     if (status == STATUS_SUCCESS)
     {
+        if (!ioqueue.objcount++)
+            RtlWakeConditionVariable( &ioqueue.update_event );
+    }
+
+    RtlLeaveCriticalSection( &ioqueue.cs );
+    return status;
+}
+
+static NTSTATUS tp_alpcqueue_lock( struct threadpool_object *alpc )
+{
+    ALPC_PORT_ASSOCIATE_COMPLETION_PORT info;
+    NTSTATUS status = STATUS_SUCCESS;
+
+    assert( alpc->type == TP_OBJECT_TYPE_ALPC );
+
+    RtlEnterCriticalSection( &ioqueue.cs );
+
+    if (!ioqueue.port && (status = NtCreateIoCompletion( &ioqueue.port, IO_COMPLETION_ALL_ACCESS, NULL, 0 )))
+    {
+        RtlLeaveCriticalSection( &ioqueue.cs );
+        return status;
+    }
+
+    if (!ioqueue.thread_running)
+    {
+        HANDLE thread;
+
+        if (!(status = RtlCreateUserThread( GetCurrentProcess(), NULL, FALSE, 0, 0, 0, ioqueue_thread_proc, NULL, &thread, NULL )))
+        {
+            ioqueue.thread_running = TRUE;
+            NtClose( thread );
+        }
+    }
+
+    if (status == STATUS_SUCCESS)
+    {
+        info.CompletionKey = alpc;
+        info.CompletionPort = ioqueue.port;
+        status = NtAlpcSetInformation( alpc->u.alpc.port, AlpcAssociateCompletionPortInformation, &info, sizeof(info) );
+    }
+
+    if (status == STATUS_SUCCESS)
+    {
+        alpc->u.alpc.initialized = TRUE;
+        alpc->u.alpc.shutting_down = FALSE;
+        alpc->u.alpc.queue_reference = TRUE;
+        InterlockedIncrement( &alpc->refcount );
         if (!ioqueue.objcount++)
             RtlWakeConditionVariable( &ioqueue.update_event );
     }
@@ -2437,6 +2532,35 @@ static void tp_ioqueue_unlock( struct threadpool_object *io )
     RtlLeaveCriticalSection( &ioqueue.cs );
 }
 
+static void tp_alpcqueue_unlock( struct threadpool_object *alpc )
+{
+    ALPC_PORT_ASSOCIATE_COMPLETION_PORT info;
+    BOOL release_reference = FALSE;
+
+    assert( alpc->type == TP_OBJECT_TYPE_ALPC );
+
+    RtlEnterCriticalSection( &ioqueue.cs );
+    if (alpc->u.alpc.initialized)
+    {
+        alpc->u.alpc.shutting_down = TRUE;
+        info.CompletionKey = NULL;
+        info.CompletionPort = NULL;
+        NtAlpcSetInformation( alpc->u.alpc.port, AlpcAssociateCompletionPortInformation, &info, sizeof(info) );
+        alpc->u.alpc.initialized = FALSE;
+
+        assert( ioqueue.objcount );
+        --ioqueue.objcount;
+        if (NtSetIoCompletion( ioqueue.port, alpc, (PVOID)TP_ALPC_RUNDOWN_VALUE, STATUS_SUCCESS, 0 ) != STATUS_SUCCESS)
+        {
+            release_reference = alpc->u.alpc.queue_reference;
+            alpc->u.alpc.queue_reference = FALSE;
+        }
+    }
+    RtlLeaveCriticalSection( &ioqueue.cs );
+
+    if (release_reference) tp_object_release( alpc );
+}
+
 /***********************************************************************
  *           tp_object_prepare_shutdown    (internal)
  *
@@ -2450,6 +2574,8 @@ static void tp_object_prepare_shutdown( struct threadpool_object *object )
         tp_waitqueue_unlock( object );
     else if (object->type == TP_OBJECT_TYPE_IO)
         tp_ioqueue_unlock( object );
+    else if (object->type == TP_OBJECT_TYPE_ALPC)
+        tp_alpcqueue_unlock( object );
 }
 
 static void tp_wait_close_duped_handle( struct threadpool_object *wait )
@@ -2570,6 +2696,9 @@ static void tp_object_execute( struct threadpool_object *object, BOOL wait_threa
     instance.cleanup.semaphore_count    = 0;
     instance.cleanup.event              = NULL;
     instance.cleanup.library            = NULL;
+    instance.cleanup.alpc_port          = NULL;
+    instance.cleanup.alpc_message       = NULL;
+    instance.cleanup.alpc_flags         = 0;
 
     switch (object->type)
     {
@@ -2620,6 +2749,12 @@ static void tp_object_execute( struct threadpool_object *object, BOOL wait_threa
             break;
         }
 
+        case TP_OBJECT_TYPE_ALPC:
+        {
+            threadpool_call_callback( THREADPOOL_CALLBACK_ALPC, object->u.alpc.callback, (ULONG_PTR)callback_instance, (ULONG_PTR)object->userdata, (ULONG_PTR)object, 0 );
+            break;
+        }
+
         default:
             assert(0);
             break;
@@ -2659,8 +2794,14 @@ static void tp_object_execute( struct threadpool_object *object, BOOL wait_threa
         status = LdrUnloadDll( instance.cleanup.library );
         if (status != STATUS_SUCCESS) goto skip_cleanup;
     }
-
 skip_cleanup:
+    if (instance.cleanup.alpc_message)
+    {
+        NtAlpcSendWaitReceivePort( instance.cleanup.alpc_port, instance.cleanup.alpc_flags | ALPC_MSGFLG_TRACK_PORT_REFERENCES, instance.cleanup.alpc_message, NULL, NULL, NULL, NULL, NULL );
+        RtlFreeHeap( GetProcessHeap(), 0, instance.cleanup.alpc_message );
+        instance.cleanup.alpc_message = NULL;
+    }
+
     if (wait_thread) RtlEnterCriticalSection( &waitqueue.cs );
     RtlEnterCriticalSection( &pool->cs );
 
@@ -2757,6 +2898,64 @@ NTSTATUS WINAPI TpAllocCleanupGroup( TP_CLEANUP_GROUP **out )
     TRACE( "%p\n", out );
 
     return tp_group_alloc( (struct threadpool_group **)out );
+}
+
+static NTSTATUS tp_alloc_alpc_completion( TP_ALPC **out, HANDLE port,
+                                          PTP_ALPC_CALLBACK callback, void *userdata,
+                                          TP_CALLBACK_ENVIRON *environment,
+                                          BOOL extended )
+{
+    struct threadpool_object *object;
+    struct threadpool *pool;
+    NTSTATUS status;
+
+    if (!out || !port || !callback) return STATUS_INVALID_PARAMETER;
+    *out = NULL;
+
+    if (!(object = RtlAllocateHeap( GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*object) )))
+        return STATUS_NO_MEMORY;
+
+    if ((status = tp_threadpool_lock( &pool, environment )))
+    {
+        RtlFreeHeap( GetProcessHeap(), 0, object );
+        return status;
+    }
+
+    object->type = TP_OBJECT_TYPE_ALPC;
+    object->u.alpc.callback = callback;
+    object->u.alpc.port = port;
+    object->u.alpc.extended = extended;
+    tp_object_initialize( object, pool, userdata, environment );
+
+    if ((status = tp_alpcqueue_lock( object )))
+    {
+        object->shutdown = TRUE;
+        tp_object_release( object );
+        return status;
+    }
+
+    *out = (TP_ALPC *)object;
+    return STATUS_SUCCESS;
+}
+
+/***********************************************************************
+ *           TpAllocAlpcCompletion    (NTDLL.@)
+ */
+NTSTATUS WINAPI TpAllocAlpcCompletion( TP_ALPC **out, HANDLE port,
+                                       PTP_ALPC_CALLBACK callback, void *userdata,
+                                       TP_CALLBACK_ENVIRON *environment )
+{
+    return tp_alloc_alpc_completion( out, port, callback, userdata, environment, FALSE );
+}
+
+/***********************************************************************
+ *           TpAllocAlpcCompletionEx    (NTDLL.@)
+ */
+NTSTATUS WINAPI TpAllocAlpcCompletionEx( TP_ALPC **out, HANDLE port,
+                                         PTP_ALPC_CALLBACK callback, void *userdata,
+                                         TP_CALLBACK_ENVIRON *environment )
+{
+    return tp_alloc_alpc_completion( out, port, callback, userdata, environment, TRUE );
 }
 
 /***********************************************************************
@@ -3066,6 +3265,52 @@ VOID WINAPI TpCallbackUnloadDllOnCompletion( TP_CALLBACK_INSTANCE *instance, HMO
 }
 
 /***********************************************************************
+ *           TpCallbackSendAlpcMessageOnCompletion    (NTDLL.@)
+ */
+NTSTATUS WINAPI TpCallbackSendAlpcMessageOnCompletion( TP_CALLBACK_INSTANCE *instance,
+                                                       HANDLE port, ULONG flags,
+                                                       PORT_MESSAGE *message )
+{
+    struct threadpool_instance *this;
+    USHORT length;
+
+    if (!instance) return STATUS_INVALID_PARAMETER;
+    this = impl_from_TP_CALLBACK_INSTANCE( instance );
+    if (!this->object || this->object->u.alpc.port != port || this->cleanup.alpc_message)
+        return STATUS_INVALID_PARAMETER;
+
+    length = message->u1.s1.TotalLength;
+    if (!(this->cleanup.alpc_message = RtlAllocateHeap( GetProcessHeap(), 0, length )))
+        return STATUS_NO_MEMORY;
+
+    memcpy( this->cleanup.alpc_message, message, length );
+    this->cleanup.alpc_port = port;
+    this->cleanup.alpc_flags = flags | ALPC_MSGFLG_TRACK_PORT_REFERENCES;
+    InterlockedIncrement( &this->object->u.alpc.tracked_reference_count );
+    return STATUS_SUCCESS;
+}
+
+/***********************************************************************
+ *           TpCallbackSendPendingAlpcMessage    (NTDLL.@)
+ */
+NTSTATUS WINAPI TpCallbackSendPendingAlpcMessage( TP_CALLBACK_INSTANCE *instance )
+{
+    struct threadpool_instance *this;
+    PORT_MESSAGE *message;
+    NTSTATUS status;
+
+    if (!instance) return STATUS_INVALID_PARAMETER;
+    this = impl_from_TP_CALLBACK_INSTANCE( instance );
+    if (!this->cleanup.alpc_message) return STATUS_INVALID_PARAMETER;
+
+    message = this->cleanup.alpc_message;
+    this->cleanup.alpc_message = NULL;
+    status = NtAlpcSendWaitReceivePort( this->cleanup.alpc_port, this->cleanup.alpc_flags, message, NULL, NULL, NULL, NULL, NULL );
+    RtlFreeHeap( GetProcessHeap(), 0, message );
+    return status;
+}
+
+/***********************************************************************
  *           TpDisassociateCallback    (NTDLL.@)
  */
 VOID WINAPI TpDisassociateCallback( TP_CALLBACK_INSTANCE *instance )
@@ -3118,6 +3363,38 @@ VOID WINAPI TpPostWork( TP_WORK *work )
     TRACE( "%p\n", work );
 
     tp_object_submit( this, FALSE );
+}
+
+/***********************************************************************
+ *           TpAlpcRegisterCompletionList    (NTDLL.@)
+ */
+void WINAPI TpAlpcRegisterCompletionList( TP_ALPC *alpc )
+{
+    struct threadpool_object *this = impl_from_TP_ALPC( alpc );
+    ULONG concurrency;
+
+    if (!this->u.alpc.extended) return;
+
+    RtlEnterCriticalSection( &this->pool->cs );
+    this->u.alpc.completion_list_registered = TRUE;
+    concurrency = max( this->pool->max_workers, 1 );
+    RtlLeaveCriticalSection( &this->pool->cs );
+
+    AlpcAdjustCompletionListConcurrencyCount( this->u.alpc.port, concurrency );
+}
+
+/***********************************************************************
+ *           TpAlpcUnregisterCompletionList    (NTDLL.@)
+ */
+void WINAPI TpAlpcUnregisterCompletionList( TP_ALPC *alpc )
+{
+    struct threadpool_object *this = impl_from_TP_ALPC( alpc );
+
+    if (!this->u.alpc.extended) return;
+
+    RtlEnterCriticalSection( &this->pool->cs );
+    this->u.alpc.completion_list_registered = FALSE;
+    RtlLeaveCriticalSection( &this->pool->cs );
 }
 
 /***********************************************************************
@@ -3204,6 +3481,18 @@ VOID WINAPI TpReleaseCleanupGroupMembers( TP_CLEANUP_GROUP *group, BOOL cancel_p
         object->shutdown = TRUE;
         tp_object_release( object );
     }
+}
+
+/***********************************************************************
+ *           TpReleaseAlpcCompletion    (NTDLL.@)
+ */
+void WINAPI TpReleaseAlpcCompletion( TP_ALPC *alpc )
+{
+    struct threadpool_object *this = impl_from_TP_ALPC( alpc );
+
+    tp_object_prepare_shutdown( this );
+    this->shutdown = TRUE;
+    tp_object_release( this );
 }
 
 /***********************************************************************
@@ -3580,6 +3869,20 @@ void WINAPI TpWaitForIoCompletion( TP_IO *io, BOOL cancel_pending )
 
     if (cancel_pending)
         tp_object_cancel( this );
+    tp_object_wait( this, FALSE );
+}
+
+/***********************************************************************
+ *           TpWaitForAlpcCompletion    (NTDLL.@)
+ */
+void WINAPI TpWaitForAlpcCompletion( TP_ALPC *alpc )
+{
+    struct threadpool_object *this = impl_from_TP_ALPC( alpc );
+    ULONG references;
+
+    references = InterlockedCompareExchange( &this->u.alpc.tracked_reference_count, 0, 0 );
+    if (references)
+        NtAlpcQueryInformation( this->u.alpc.port, AlpcWaitForPortReferences, &references, sizeof(references), NULL );
     tp_object_wait( this, FALSE );
 }
 

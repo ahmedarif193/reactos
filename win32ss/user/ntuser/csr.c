@@ -77,6 +77,7 @@ CsrClientCallServer(IN OUT PCSR_API_MESSAGE ApiMessage,
                     IN ULONG DataLength)
 {
     NTSTATUS Status;
+    SIZE_T BufferLength = sizeof(*ApiMessage);
 #if 0
     ULONG PointerCount;
     PULONG_PTR OffsetPointer;
@@ -88,6 +89,7 @@ CsrClientCallServer(IN OUT PCSR_API_MESSAGE ApiMessage,
 
     /* Fill out the Port Message Header */
     ApiMessage->Header.u2.ZeroInit = 0;
+    RtlZeroMemory(&ApiMessage->Header.ClientId, sizeof(ApiMessage->Header) - FIELD_OFFSET(PORT_MESSAGE, ClientId));
     ApiMessage->Header.u1.s1.TotalLength = FIELD_OFFSET(CSR_API_MESSAGE, Data) + DataLength;
     ApiMessage->Header.u1.s1.DataLength = ApiMessage->Header.u1.s1.TotalLength -
         sizeof(ApiMessage->Header);
@@ -148,9 +150,7 @@ CsrClientCallServer(IN OUT PCSR_API_MESSAGE ApiMessage,
     }
     else
     {
-        Status = LpcRequestWaitReplyPort(CsrApiPort,
-                                         &ApiMessage->Header,
-                                         &ApiMessage->Header);
+        Status = LpcSendWaitReceivePort(CsrApiPort, ALPC_MSGFLG_SYNC_REQUEST, &ApiMessage->Header, &ApiMessage->Header, &BufferLength, NULL);
     }
 
     UserEnterCo();
