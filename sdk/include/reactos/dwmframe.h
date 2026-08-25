@@ -26,23 +26,24 @@
 
 /* NtUserCallOneParam routine numbers of the DWM entry points (must match
  * win32ss/include/ntuser.h, which owns the routine numbering). */
-#define DWM_ROUTINE_ATTACH       0xfffe000f
-#define DWM_ROUTINE_GETFRAME     0xfffe0010
-#define DWM_ROUTINE_PRESENTSYNC  0xfffe0011
-#define DWM_ROUTINE_OPENSURFACE  0xfffe0012
+#define DWM_ROUTINE_ATTACH       0xfffe0013
+#define DWM_ROUTINE_GETFRAME     0xfffe0014
+#define DWM_ROUTINE_PRESENTSYNC  0xfffe0015
+#define DWM_ROUTINE_OPENSURFACE  0xfffe0016
 
 /*
- * DWM control channel to the canonical display driver (DrvEscape/ExtEscape).
- * The values are ours (they spell "DWM" in the high bytes) and are matched by
- * the d3dkmt dwm apitest:
+ * Internal win32k control channel to the canonical display driver (DrvEscape).
+ * NtGdiExtEscape rejects the mutating codes below; they are ReactOS-private
+ * kernel plumbing, not Windows public APIs. The values spell "DWM" in the
+ * high bytes:
  *   SUPPRESS_CURSOR  - the compositor draws the cursor itself, so cdd stops
  *                      drawing the hardware/software cursor while suppressed.
  *   COMPOSITION_SYNC - present/vblank acknowledge: cdd flushes the composed
  *                      frame to the WDDM scan-out and acks so the compositor
  *                      can pace frames.
- *   REGISTER_VBLANK  - win32k hands dxgkrnl a referenced PKEVENT (ULONGLONG
- *                      payload, 0 unregisters); the present timer signals it
- *                      every scanout period for dwm frame pacing.
+ *   REGISTER_VBLANK  - win32k hands dxgkrnl the compositor's event HANDLE
+ *                      (ULONGLONG payload, 0 unregisters); dxgkrnl validates,
+ *                      references and signals it for dwm frame pacing.
  *   PRESENT_STATS    - read-only present-path counters (DXGK_PRESENT_STATS in
  *                      the escape output buffer) so a test can measure how much
  *                      scan-out work a GDI/cursor operation costs.
@@ -62,9 +63,9 @@
  *                        the present worker never scans out a half-composed
  *                        primary; END flushes the dirty rects accumulated
  *                        during the composition.
- *   REGISTER_VBLANK    - forwards the CDD_ESCAPE_REGISTER_VBLANK payload
- *                        (ULONGLONG holding a referenced PKEVENT, 0 clears);
- *                        the present timer signals it every scanout period.
+ *   REGISTER_VBLANK    - forwards the CDD_ESCAPE_REGISTER_VBLANK event HANDLE
+ *                        payload (ULONGLONG, 0 clears); dxgkrnl owns the object
+ *                        reference while its present timer can signal it.
  */
 #define IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT \
     CTL_CODE(FILE_DEVICE_VIDEO, 0x920, METHOD_BUFFERED, FILE_ANY_ACCESS)
@@ -138,7 +139,8 @@ typedef struct _DWM_OPEN_SURFACE
 /* DWMATTACH exchange. On attach the kernel returns two events in the caller's
  * handle table: hWake signals pending damage (dwm blocks on it when idle);
  * hVblank is signaled by the display path every scanout period (dwm paces
- * composed frames on it). Either may be NULL — dwm falls back to timeouts. */
+ * composed frames on it). hWake is mandatory; hVblank may be NULL and dwm
+ * then falls back to timed pacing. */
 typedef struct _DWM_ATTACH
 {
     ULONG  Attach;       /* in  : 1 attach, 0 detach               */

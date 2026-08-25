@@ -99,7 +99,14 @@ RcddSetPaletteEntries(
    PVIDEO_CLUT pClut;
    ULONG ClutSize;
 
-   ClutSize = sizeof(VIDEO_CLUT) + (cColors * sizeof(ULONG));
+   if (dhpdev == NULL || ppalent == NULL || cColors == 0 ||
+       iStart >= 256 || cColors > 256 - iStart ||
+       cColors > ((ULONG)-1 - FIELD_OFFSET(VIDEO_CLUT, LookupTable)) / sizeof(ULONG))
+   {
+      return FALSE;
+   }
+
+   ClutSize = FIELD_OFFSET(VIDEO_CLUT, LookupTable) + (cColors * sizeof(ULONG));
    pClut = EngAllocMem(0, ClutSize, ALLOC_TAG);
    if (pClut == NULL)
       return FALSE;
@@ -155,10 +162,11 @@ RcddSetPalette(
 
    UNREFERENCED_PARAMETER(fl);
 
-   if (cColors == 0)
+   if (dhpdev == NULL || ppalo == NULL || cColors == 0 ||
+       iStart >= 256 || cColors > 256 - iStart)
       return FALSE;
 
-   PaletteEntries = EngAllocMem(0, cColors * sizeof(ULONG), ALLOC_TAG);
+   PaletteEntries = EngAllocMem(0, cColors * sizeof(PALETTEENTRY), ALLOC_TAG);
    if (PaletteEntries == NULL)
    {
       return FALSE;

@@ -183,6 +183,18 @@ RcddBuildHardwarePointerPixels(
       }
       else
       {
+         /* A monochrome AND=1/XOR=1 pixel inverts the destination. ARGB
+          * hardware cursors cannot represent it; let GDI use its exact
+          * software cursor instead of silently turning inversion pixels black. */
+         for (x = 0; x < SourceWidth; ++x)
+         {
+            if (RcddMonoMaskBit(psoMask, x, y) &&
+                RcddMonoMaskBit(psoMask, x, y + SourceHeight))
+            {
+               return FALSE;
+            }
+         }
+
          for (x = 0; x < SourceWidth; ++x)
          {
             BOOL AndMask = RcddMonoMaskBit(psoMask, x, y);
@@ -311,6 +323,37 @@ RcddClearPointerExclude(
       prcl->left = prcl->top = prcl->right = prcl->bottom = -1;
 }
 
+VOID
+RcddSetCursorSuppressed(
+   PRCDD_PDEV ppdev,
+   SURFOBJ *pso,
+   BOOL Suppressed)
+{
+   if (ppdev->CursorSuppressed == Suppressed)
+      return;
+
+   ppdev->CursorSuppressed = Suppressed;
+   if (Suppressed)
+   {
+      RcddHideHardwarePointer(ppdev);
+      if (ppdev->SoftwarePointerActive)
+         EngMovePointer(pso, -1, -1, NULL);
+      return;
+   }
+
+   if (!ppdev->PointerPositionValid)
+      return;
+
+   if (ppdev->HwPointerShapeValid)
+   {
+      RcddMoveHardwarePointer(ppdev, ppdev->PointerX, ppdev->PointerY);
+   }
+   else if (ppdev->SoftwarePointerActive)
+   {
+      EngMovePointer(pso, ppdev->PointerX, ppdev->PointerY, NULL);
+   }
+}
+
 /*
  * RcddSetPointerShape
  *
@@ -333,22 +376,35 @@ RcddSetPointerShape(
 {
    PRCDD_PDEV ppdev = pso ? (PRCDD_PDEV)pso->dhpdev : NULL;
 
-   UNREFERENCED_PARAMETER(pxlo);
+   if (ppdev != NULL)
+   {
+      ppdev->PointerPositionValid = (x != -1);
+      ppdev->PointerX = x;
+      ppdev->PointerY = y;
+   }
 
    if (ppdev != NULL && ppdev->CursorSuppressed)
    {
-      RcddHideHardwarePointer(ppdev);
-      RcddClearPointerExclude(prcl);
-      return SPS_ACCEPT_NOEXCLUDE;
+      if (RcddSetHardwarePointerShape(ppdev, psoMask, psoColor, xHot, yHot, -1, -1, fl))
+      {
+         ppdev->SoftwarePointerActive = FALSE;
+         RcddClearPointerExclude(prcl);
+         return SPS_ACCEPT_NOEXCLUDE;
+      }
+      ppdev->SoftwarePointerActive = TRUE;
+      return EngSetPointerShape(pso, psoMask, psoColor, pxlo, xHot, yHot, -1, -1, prcl, fl);
    }
 
    if (pso != NULL &&
        RcddSetHardwarePointerShape((PRCDD_PDEV)pso->dhpdev, psoMask, psoColor, xHot, yHot, x, y, fl))
    {
+      ppdev->SoftwarePointerActive = FALSE;
       RcddClearPointerExclude(prcl);
       return SPS_ACCEPT_NOEXCLUDE;
    }
 
+   if (ppdev != NULL)
+      ppdev->SoftwarePointerActive = TRUE;
    return SPS_DECLINE;
 }
 
@@ -368,6 +424,13 @@ RcddMovePointer(
 {
    PRCDD_PDEV ppdev = pso ? (PRCDD_PDEV)pso->dhpdev : NULL;
 
+   if (ppdev != NULL)
+   {
+      ppdev->PointerPositionValid = (x != -1);
+      ppdev->PointerX = x;
+      ppdev->PointerY = y;
+   }
+
    if (ppdev != NULL && ppdev->CursorSuppressed)
    {
       RcddHideHardwarePointer(ppdev);
@@ -378,9 +441,12 @@ RcddMovePointer(
    if (pso != NULL &&
        RcddMoveHardwarePointer((PRCDD_PDEV)pso->dhpdev, x, y))
    {
+      ppdev->SoftwarePointerActive = FALSE;
       RcddClearPointerExclude(prcl);
       return;
    }
 
+   if (ppdev != NULL)
+      ppdev->SoftwarePointerActive = TRUE;
    EngMovePointer(pso, x, y, prcl);
 }
