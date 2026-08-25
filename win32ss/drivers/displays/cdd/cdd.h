@@ -66,6 +66,14 @@ typedef struct _RCDD_PDEV
    /* DWM composition state (driven by DrvEscape, see escape.c) */
    BOOL CursorSuppressed;      /* Compositor owns the cursor                  */
    BOOL CompositionActive;     /* Inside a compositor frame                   */
+
+   /* Dirty-rect notification state (see present.c) */
+   BOOL SafetyHidden;          /* GDI hid the SW cursor for a drawing op      */
+   BOOL PendingValid;          /* PendingRect holds withheld dirty pixels     */
+   RECTL PendingRect;
+   ULONG DrawSeq;              /* Bumped by every draw DDI entry              */
+   ULONG SentSeq;              /* DrawSeq of the last notification sent       */
+   RECTL SentRect;             /* Rect of the last notification sent          */
 } RCDD_PDEV, *PRCDD_PDEV;
 
 #define DEVICE_NAME L"cdd"

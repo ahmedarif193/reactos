@@ -13,27 +13,62 @@
 
 #include "cdd.h"
 
+static BOOL
+RcddRectContains(
+   const RECTL *prclOuter,
+   const RECTL *prclInner)
+{
+   return prclInner->left >= prclOuter->left &&
+          prclInner->top >= prclOuter->top &&
+          prclInner->right <= prclOuter->right &&
+          prclInner->bottom <= prclOuter->bottom;
+}
+
 /*
  * RcddPresent
  *
- * Present the rectangle prcl (or the whole screen when prcl is NULL) from the
- * shadow to the mapped scan-out. Spans are rounded out to whole 64-byte lines
- * so the copy into the write-combined scan-out runs as co-aligned full-line
- * bursts.
+ * Notify dxgkrnl that the rectangle prcl (or the whole screen when prcl is
+ * NULL) of the mapped primary changed. GDI's engine drew straight into
+ * ppdev->ScreenPtr, so there is nothing to copy here; dxgkrnl records the
+ * rectangle and scans it out through the WDDM display-only present path at a
+ * paced cadence.
+ *
+ * While GDI has hidden the software cursor for a drawing operation
+ * (DSS_RESERVED bracket from win32k's mouse safety, see RcddSynchronizeSurface)
+ * the rectangle is only accumulated: the scan-out must never show the
+ * cursor-less intermediate state. The bracket's closing flush sends the union.
  */
-VOID
-RcddPresent(
+static VOID
+RcddNotifyDirty(
    PRCDD_PDEV ppdev,
-   const RECTL *prcl)
+   const RECTL *prcl,
+   ULONG Flags)
 {
-   RECTL Dirty;
+   DXGK_PRESENT_DIRTY_RECT_INPUT Input;
    ULONG Ret;
 
-   /* GDI's engine drew straight into the mapped DOD primary (ppdev->ScreenPtr),
-    * so there is nothing to copy — we only tell dxgkrnl which rectangle changed.
-    * dxgkrnl scans it out through the miniport's DxgkDdiPresentDisplayOnly (the
-    * WDDM display-only present path), driven by cdd rather than the fallback
-    * present timer. */
+   if (prcl != NULL)
+   {
+      Input.Rect = *prcl;
+   }
+   else
+   {
+      Input.Rect.left = Input.Rect.top = Input.Rect.right = Input.Rect.bottom = 0;
+   }
+   Input.Flags = Flags;
+
+   EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT,
+                      &Input, sizeof(Input), NULL, 0, &Ret);
+}
+
+static VOID
+RcddPresentEx(
+   PRCDD_PDEV ppdev,
+   const RECTL *prcl,
+   ULONG Flags)
+{
+   RECTL Dirty;
+
    if (ppdev->ScreenPtr == NULL)
       return;
 
@@ -50,24 +85,85 @@ RcddPresent(
       Dirty.bottom = min(Dirty.bottom, prcl->bottom);
    }
 
-   if (Dirty.left >= Dirty.right || Dirty.top >= Dirty.bottom)
+   if (Dirty.left < Dirty.right && Dirty.top < Dirty.bottom)
+   {
+      if (ppdev->PendingValid)
+      {
+         ppdev->PendingRect.left   = min(ppdev->PendingRect.left, Dirty.left);
+         ppdev->PendingRect.top    = min(ppdev->PendingRect.top, Dirty.top);
+         ppdev->PendingRect.right  = max(ppdev->PendingRect.right, Dirty.right);
+         ppdev->PendingRect.bottom = max(ppdev->PendingRect.bottom, Dirty.bottom);
+      }
+      else
+      {
+         ppdev->PendingRect = Dirty;
+         ppdev->PendingValid = TRUE;
+      }
+   }
+
+   if (ppdev->SafetyHidden)
       return;
 
-   EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT,
-                      &Dirty, sizeof(Dirty), NULL, 0, &Ret);
+   if (!ppdev->PendingValid)
+   {
+      if (Flags != 0)
+         RcddNotifyDirty(ppdev, NULL, Flags);
+      return;
+   }
+
+   Dirty = ppdev->PendingRect;
+   ppdev->PendingValid = FALSE;
+   ppdev->SentSeq = ppdev->DrawSeq;
+   ppdev->SentRect = Dirty;
+
+   RcddNotifyDirty(ppdev, &Dirty, Flags);
 }
 
-/* Present the target rectangle, narrowed by the clip bounding box if any. */
+VOID
+RcddPresent(
+   PRCDD_PDEV ppdev,
+   const RECTL *prcl)
+{
+   RcddPresentEx(ppdev, prcl, 0);
+}
+
+/*
+ * Every draw DDI opens a sequence before punting to the engine. The engine's
+ * own post-write flush (DrvSynchronizeSurface with DSS_FLUSH_EVENT) usually
+ * notifies the touched rectangle first; the DDI then only notifies what that
+ * flush did not already cover, so one operation costs one notification.
+ */
+static ULONG
+RcddBeginDraw(
+   SURFOBJ *pso)
+{
+   PRCDD_PDEV ppdev;
+
+   if (pso == NULL || pso->dhpdev == NULL)
+      return 0;
+
+   ppdev = (PRCDD_PDEV)pso->dhpdev;
+   if (pso->pvScan0 != ppdev->ScreenPtr)
+      return 0;
+
+   if (++ppdev->DrawSeq == 0)
+      ppdev->DrawSeq = 1;
+
+   return ppdev->DrawSeq;
+}
+
+/* Notify the target rectangle, narrowed by the clip bounding box if any. */
 static VOID
 RcddPresentTarget(
    SURFOBJ *psoTrg,
+   ULONG seq,
    const RECTL *prclTrg,
    CLIPOBJ *pco)
 {
    PRCDD_PDEV ppdev;
    RECTL rcl;
 
-   if (psoTrg == NULL || psoTrg->dhpdev == NULL)
+   if (seq == 0 || psoTrg == NULL || psoTrg->dhpdev == NULL)
       return;
 
    ppdev = (PRCDD_PDEV)psoTrg->dhpdev;
@@ -77,7 +173,7 @@ RcddPresentTarget(
    if (prclTrg == NULL)
    {
       /* No target bounds — fall back to the clip bounds; failing that,
-       * present the whole screen. */
+       * notify the whole screen. */
       if (pco != NULL && pco->iDComplexity != DC_TRIVIAL)
       {
          prclTrg = &pco->rclBounds;
@@ -109,6 +205,12 @@ RcddPresentTarget(
       rcl.bottom = min(rcl.bottom, pco->rclBounds.bottom);
    }
 
+   if (ppdev->SentSeq == seq && !ppdev->PendingValid &&
+       RcddRectContains(&ppdev->SentRect, &rcl))
+   {
+      return;
+   }
+
    RcddPresent(ppdev, &rcl);
 }
 
@@ -133,9 +235,11 @@ RcddBitBlt(
 {
    BOOL Result;
 
+   ULONG seq = RcddBeginDraw(psoTrg);
+
    Result = EngBitBlt(psoTrg, psoSrc, psoMask, pco, pxlo, prclTrg, pptlSrc, pptlMask, pbo, pptlBrush, rop4);
    if (Result)
-      RcddPresentTarget(psoTrg, prclTrg, pco);
+      RcddPresentTarget(psoTrg, seq, prclTrg, pco);
 
    return Result;
 }
@@ -156,9 +260,11 @@ RcddCopyBits(
 {
    BOOL Result;
 
+   ULONG seq = RcddBeginDraw(psoDest);
+
    Result = EngCopyBits(psoDest, psoSrc, pco, pxlo, prclDest, pptlSrc);
    if (Result)
-      RcddPresentTarget(psoDest, prclDest, pco);
+      RcddPresentTarget(psoDest, seq, prclDest, pco);
 
    return Result;
 }
@@ -166,8 +272,8 @@ RcddCopyBits(
 /*
  * RcddSynchronizeSurface
  *
- * GDI signals direct engine writes to the shadow with DSS_FLUSH_EVENT; present
- * the affected rectangle.
+ * GDI signals direct engine writes to the shadow with DSS_FLUSH_EVENT; notify
+ * the affected rectangle. DSS_RESERVED brackets a cursor-hidden drawing op.
  */
 VOID APIENTRY
 RcddSynchronizeSurface(
@@ -175,13 +281,45 @@ RcddSynchronizeSurface(
    IN RECTL *prcl,
    IN FLONG fl)
 {
-   if (!(fl & DSS_FLUSH_EVENT) || pso == NULL || pso->dhpdev == NULL)
+   PRCDD_PDEV ppdev;
+
+   if (pso == NULL || pso->dhpdev == NULL)
       return;
 
-   if (pso->pvScan0 != ((PRCDD_PDEV)pso->dhpdev)->ScreenPtr)
+   ppdev = (PRCDD_PDEV)pso->dhpdev;
+   if (pso->pvScan0 != ppdev->ScreenPtr)
       return;
 
-   RcddPresent((PRCDD_PDEV)pso->dhpdev, prcl);
+   /*
+    * win32k's mouse safety brackets a drawing op that overlaps the software
+    * cursor: DSS_RESERVED alone when it hides the cursor before the op,
+    * DSS_RESERVED | DSS_FLUSH_EVENT after it has redrawn the cursor. Nothing
+    * is notified in between, so the scan-out never shows the cursor-less
+    * intermediate state; the closing flush sends the whole accumulated area.
+    */
+   if (fl & DSS_RESERVED)
+   {
+      if (!(fl & DSS_FLUSH_EVENT))
+      {
+         if (!ppdev->SafetyHidden)
+         {
+            ppdev->SafetyHidden = TRUE;
+            RcddNotifyDirty(ppdev, NULL, DXGK_PRESENT_DIRTY_HOLD);
+         }
+         return;
+      }
+      if (ppdev->SafetyHidden)
+      {
+         ppdev->SafetyHidden = FALSE;
+         RcddPresentEx(ppdev, prcl, DXGK_PRESENT_DIRTY_RELEASE);
+         return;
+      }
+   }
+
+   if (!(fl & DSS_FLUSH_EVENT))
+      return;
+
+   RcddPresent(ppdev, prcl);
 }
 
 /* Bounding box of a path in pixels (PATHOBJ bounds are 28.4 fixed point);
@@ -202,11 +340,10 @@ RcddPathBounds(
 
 /*
  * The remaining draw DDIs. cdd implements no raster ops: every hook punts to
- * the GDI engine and then presents the touched rectangle. They are hooked
- * ONLY so no drawing primitive can reach the primary without an explicit
- * dirty-rect present — otherwise text/line/path/gradient output would sit
- * unpresented until the fallback timer, which is suppressed for tens of
- * milliseconds after any other dirty/present activity.
+ * the GDI engine and then notifies the touched rectangle. They are hooked
+ * ONLY so no drawing primitive can reach the primary without a dirty-rect
+ * notification — otherwise text/line/path/gradient output would sit
+ * unpresented until the fallback timer.
  */
 BOOL APIENTRY
 RcddTextOut(
@@ -222,6 +359,8 @@ RcddTextOut(
    IN MIX mix)
 {
    BOOL Result;
+
+   ULONG seq = RcddBeginDraw(pso);
 
    Result = EngTextOut(pso, pstro, pfo, pco, prclExtra, prclOpaque,
                        pboFore, pboOpaque, pptlOrg, mix);
@@ -247,7 +386,7 @@ RcddTextOut(
          prcl = prclOpaque;
       }
 
-      RcddPresentTarget(pso, prcl, pco);
+      RcddPresentTarget(pso, seq, prcl, pco);
    }
 
    return Result;
@@ -267,9 +406,11 @@ RcddLineTo(
 {
    BOOL Result;
 
+   ULONG seq = RcddBeginDraw(pso);
+
    Result = EngLineTo(pso, pco, pbo, x1, y1, x2, y2, prclBounds, mix);
    if (Result)
-      RcddPresentTarget(pso, prclBounds, pco);
+      RcddPresentTarget(pso, seq, prclBounds, pco);
 
    return Result;
 }
@@ -284,9 +425,11 @@ RcddPaint(
 {
    BOOL Result;
 
+   ULONG seq = RcddBeginDraw(pso);
+
    Result = EngPaint(pso, pco, pbo, pptlBrushOrg, mix);
    if (Result)
-      RcddPresentTarget(pso, pco ? &pco->rclBounds : NULL, pco);
+      RcddPresentTarget(pso, seq, pco ? &pco->rclBounds : NULL, pco);
    return Result;
 }
 
@@ -306,9 +449,11 @@ RcddPlgBlt(
 {
    BOOL Result;
 
+   ULONG seq = RcddBeginDraw(psoDest);
+
    Result = EngPlgBlt(psoDest, psoSrc, psoMask, pco, pxlo, pca, pptlBrushOrg, pptfx, prclSrc, pptlMask, iMode);
    if (Result)
-      RcddPresentTarget(psoDest, NULL, pco);
+      RcddPresentTarget(psoDest, seq, NULL, pco);
    return Result;
 }
 
@@ -325,12 +470,14 @@ RcddStrokePath(
 {
    BOOL Result;
 
+   ULONG seq = RcddBeginDraw(pso);
+
    Result = EngStrokePath(pso, ppo, pco, pxo, pbo, pptlBrushOrg, plineattrs, mix);
    if (Result)
    {
       RECTL rcl;
       RcddPathBounds(ppo, &rcl);
-      RcddPresentTarget(pso, &rcl, pco);
+      RcddPresentTarget(pso, seq, &rcl, pco);
    }
 
    return Result;
@@ -348,12 +495,14 @@ RcddFillPath(
 {
    BOOL Result;
 
+   ULONG seq = RcddBeginDraw(pso);
+
    Result = EngFillPath(pso, ppo, pco, pbo, pptlBrushOrg, mix, flOptions);
    if (Result)
    {
       RECTL rcl;
       RcddPathBounds(ppo, &rcl);
-      RcddPresentTarget(pso, &rcl, pco);
+      RcddPresentTarget(pso, seq, &rcl, pco);
    }
 
    return Result;
@@ -374,13 +523,15 @@ RcddStrokeAndFillPath(
 {
    BOOL Result;
 
+   ULONG seq = RcddBeginDraw(pso);
+
    Result = EngStrokeAndFillPath(pso, ppo, pco, pxo, pboStroke, plineattrs,
                                  pboFill, pptlBrushOrg, mixFill, flOptions);
    if (Result)
    {
       RECTL rcl;
       RcddPathBounds(ppo, &rcl);
-      RcddPresentTarget(pso, &rcl, pco);
+      RcddPresentTarget(pso, seq, &rcl, pco);
    }
 
    return Result;
@@ -402,10 +553,12 @@ RcddStretchBlt(
 {
    BOOL Result;
 
+   ULONG seq = RcddBeginDraw(psoDest);
+
    Result = EngStretchBlt(psoDest, psoSrc, psoMask, pco, pxlo, pca, pptlHTOrg,
                           prclDest, prclSrc, pptlMask, iMode);
    if (Result)
-      RcddPresentTarget(psoDest, prclDest, pco);
+      RcddPresentTarget(psoDest, seq, prclDest, pco);
 
    return Result;
 }
@@ -428,9 +581,11 @@ RcddStretchBltROP(
 {
    BOOL Result;
 
+   ULONG seq = RcddBeginDraw(psoDest);
+
    Result = EngStretchBltROP(psoDest, psoSrc, psoMask, pco, pxlo, pca, pptlHTOrg, prclDest, prclSrc, pptlMask, iMode, pbo, rop4);
    if (Result)
-      RcddPresentTarget(psoDest, prclDest, pco);
+      RcddPresentTarget(psoDest, seq, prclDest, pco);
    return Result;
 }
 
@@ -446,9 +601,11 @@ RcddAlphaBlend(
 {
    BOOL Result;
 
+   ULONG seq = RcddBeginDraw(psoDest);
+
    Result = EngAlphaBlend(psoDest, psoSrc, pco, pxlo, prclDest, prclSrc, pBlendObj);
    if (Result)
-      RcddPresentTarget(psoDest, prclDest, pco);
+      RcddPresentTarget(psoDest, seq, prclDest, pco);
 
    return Result;
 }
@@ -466,10 +623,12 @@ RcddTransparentBlt(
 {
    BOOL Result;
 
+   ULONG seq = RcddBeginDraw(psoDst);
+
    Result = EngTransparentBlt(psoDst, psoSrc, pco, pxlo, prclDst, prclSrc,
                               iTransColor, ulReserved);
    if (Result)
-      RcddPresentTarget(psoDst, prclDst, pco);
+      RcddPresentTarget(psoDst, seq, prclDst, pco);
 
    return Result;
 }
@@ -489,10 +648,12 @@ RcddGradientFill(
 {
    BOOL Result;
 
+   ULONG seq = RcddBeginDraw(psoDest);
+
    Result = EngGradientFill(psoDest, pco, pxlo, pVertex, nVertex, pMesh, nMesh,
                             prclExtents, pptlDitherOrg, ulMode);
    if (Result)
-      RcddPresentTarget(psoDest, prclExtents, pco);
+      RcddPresentTarget(psoDest, seq, prclExtents, pco);
 
    return Result;
 }
