@@ -3114,6 +3114,48 @@ DxgkpReadMaxObjectNumber(VOID)
     return MaxObj;
 }
 
+/*
+ * Remove the DEVICEMAP entry owned by a display device that is going away.
+ * This mirrors videoprt's lifetime rules and, in particular, prevents the
+ * basic-display -> hardware-miniport handover from leaving a dead Video0
+ * entry behind for win32k to enumerate.
+ */
+static VOID
+DxgkpRemoveDeviceMapEntry(
+    _In_ ULONG DeviceNumber)
+{
+    WCHAR DeviceValueName[24];
+    ULONG ExistingMax;
+    ULONG NewMax;
+
+    RtlStringCchPrintfW(DeviceValueName,
+                        RTL_NUMBER_OF(DeviceValueName),
+                        L"\\Device\\Video%lu", DeviceNumber);
+    (VOID)RtlDeleteRegistryValue(RTL_REGISTRY_DEVICEMAP,
+                                 L"VIDEO",
+                                 DeviceValueName);
+
+    ExistingMax = DxgkpReadMaxObjectNumber();
+    if (ExistingMax != DeviceNumber)
+        return;
+
+    if (DeviceNumber == 0)
+    {
+        (VOID)RtlDeleteRegistryValue(RTL_REGISTRY_DEVICEMAP,
+                                     L"VIDEO",
+                                     L"MaxObjectNumber");
+        return;
+    }
+
+    NewMax = DeviceNumber - 1;
+    (VOID)RtlWriteRegistryValue(RTL_REGISTRY_DEVICEMAP,
+                                L"VIDEO",
+                                L"MaxObjectNumber",
+                                REG_DWORD,
+                                &NewMax,
+                                sizeof(NewMax));
+}
+
 /* ========================================================================
  * DxgkDisplayRegister
  *
@@ -3145,6 +3187,7 @@ DxgkDisplayRegister(
     HANDLE          hDriverKey = NULL;
     ULONG           DeviceNumber;
     ULONG           ExistingMax;
+    BOOLEAN         DeviceMapEntryWritten = FALSE;
     WCHAR           DeviceBuffer[24];     /* L"\\Device\\Video%lu" */
     WCHAR           DeviceValueName[24];  /* L"\\Device\\Video%lu" */
     WCHAR           DriverKeyBuf[128];    /* dxgkrnl\DeviceN key path */
@@ -3175,24 +3218,13 @@ DxgkDisplayRegister(
     /* ---- Step 1: Find a free \Device\VideoN name ---- */
 
     /*
-     * Read the current MaxObjectNumber set by videoprt (or whoever
-     * registered before us).  If it is valid, start one past that so we
-     * don't collide.  If nobody has registered yet, start at 0.
+     * MaxObjectNumber is an enumeration bound, not an allocation cursor.
+     * Always probe from Video0 and let the object manager identify names
+     * that are still live.  A stopped basic-display adapter may have been
+     * Video0 even though its former MaxObjectNumber was observed earlier.
      */
     ExistingMax = DxgkpReadMaxObjectNumber();
-
-    if (ExistingMax != (ULONG)-1)
-    {
-        /* Other video devices exist -- start one past the last. */
-        DeviceNumber = ExistingMax + 1;
-        DXGKRNL_TRACE("DxgkDisplayRegister: existing MaxObjectNumber=%lu, "
-                       "starting at Video%lu\n", ExistingMax, DeviceNumber);
-    }
-    else
-    {
-        /* Nobody has registered yet -- start at Video0. */
-        DeviceNumber = 0;
-    }
+    DeviceNumber = 0;
 
     /*
      * Try to create \Device\VideoN.  If the name is already taken
@@ -3290,6 +3322,14 @@ DxgkDisplayRegister(
             goto Cleanup;
         }
 
+        /* Publish the object only after IoCreateDevice has succeeded. */
+        Status = DxgkpRegWriteString(hVideoMap,
+                                     DeviceValueName,
+                                     DriverKeyBuf);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+        DeviceMapEntryWritten = TRUE;
+
         /*
          * Update MaxObjectNumber.  It must cover ALL registered devices:
          * both any pre-existing videoprt devices AND our new device.
@@ -3298,13 +3338,14 @@ DxgkDisplayRegister(
             ULONG NewMax = DeviceNumber;
             if (ExistingMax != (ULONG)-1 && ExistingMax > NewMax)
                 NewMax = ExistingMax;
-            DxgkpRegWriteDword(hVideoMap, L"MaxObjectNumber", NewMax);
+            Status = DxgkpRegWriteDword(hVideoMap,
+                                        L"MaxObjectNumber",
+                                        NewMax);
+            if (!NT_SUCCESS(Status))
+                goto Cleanup;
             DXGKRNL_TRACE("DxgkDisplayRegister: MaxObjectNumber set to %lu\n",
                           NewMax);
         }
-
-        /* Write \Device\VideoN = <driver key path> */
-        DxgkpRegWriteString(hVideoMap, DeviceValueName, DriverKeyBuf);
 
         DXGKRNL_TRACE("DxgkDisplayRegister: DEVICEMAP\\VIDEO\\%ls -> %ls\n",
                       DeviceValueName, DriverKeyBuf);
@@ -3418,6 +3459,8 @@ Cleanup:
 
     if (!NT_SUCCESS(Status) && g_DisplayDeviceObject != NULL)
     {
+        if (DeviceMapEntryWritten)
+            DxgkpRemoveDeviceMapEntry(g_DisplayDeviceNumber);
         IoDeleteDevice(g_DisplayDeviceObject);
         g_DisplayDeviceObject = NULL;
         g_DisplayAdapter = NULL;
@@ -3475,6 +3518,7 @@ DxgkDisplayUnregister(VOID)
     if (g_DisplayDeviceObject != NULL)
     {
         DXGKRNL_TRACE("DxgkDisplayUnregister: deleting \\Device\\Video%lu\n", g_DisplayDeviceNumber);
+        DxgkpRemoveDeviceMapEntry(g_DisplayDeviceNumber);
         IoDeleteDevice(g_DisplayDeviceObject);
         g_DisplayDeviceObject = NULL;
         g_DisplayAdapter = NULL;
