@@ -47,6 +47,9 @@ typedef ULONG64 BITMAP_BUFFER, *PBITMAP_BUFFER;
 #define RtlAreBitsSet RtlAreBitsSet64
 #define RtlNumberOfSetBits RtlNumberOfSetBits64
 #define RtlNumberOfClearBits RtlNumberOfClearBits64
+#define RtlNumberOfSetBitsInRange RtlNumberOfSetBitsInRange64
+#define RtlCopyBitMap RtlCopyBitMap64
+#define RtlIntersectBitMaps RtlIntersectBitMaps64
 #define RtlFindClearBits RtlFindClearBits64
 #define RtlFindSetBits RtlFindSetBits64
 #define RtlFindClearBitsAndSet RtlFindClearBitsAndSet64
@@ -260,7 +263,7 @@ NTAPI
 RtlInitializeBitMap(
     _Out_ PRTL_BITMAP BitMapHeader,
     _In_opt_ __drv_aliasesMem PBITMAP_BUFFER BitMapBuffer,
-    _In_opt_ ULONG SizeOfBitMap)
+    _In_opt_ BITMAP_INDEX SizeOfBitMap)
 {
     /* Setup the bitmap header */
     BitMapHeader->SizeOfBitMap = SizeOfBitMap;
@@ -521,6 +524,100 @@ RtlNumberOfClearBits(
 {
     /* Do some math */
     return BitMapHeader->SizeOfBitMap - RtlNumberOfSetBits(BitMapHeader);
+}
+
+BITMAP_INDEX
+NTAPI
+RtlNumberOfSetBitsInRange(
+    _In_ PRTL_BITMAP BitMapHeader,
+    _In_ BITMAP_INDEX StartingIndex,
+    _In_ BITMAP_INDEX Length)
+{
+    BITMAP_INDEX EndIndex;
+    BITMAP_INDEX Index;
+    BITMAP_INDEX Count = 0;
+
+    if ((StartingIndex >= BitMapHeader->SizeOfBitMap) ||
+        (Length == 0) ||
+        (Length > BitMapHeader->SizeOfBitMap - StartingIndex))
+    {
+        return MAXINDEX;
+    }
+
+    EndIndex = StartingIndex + Length;
+    for (Index = StartingIndex; Index < EndIndex; ++Index)
+        Count += RtlTestBit(BitMapHeader, Index) != 0;
+
+    return Count;
+}
+
+VOID
+NTAPI
+RtlCopyBitMap(
+    _In_ PRTL_BITMAP Source,
+    _Inout_ PRTL_BITMAP Destination,
+    _In_ BITMAP_INDEX TargetBit)
+{
+    BITMAP_INDEX CopyLength;
+    BITMAP_INDEX Index;
+    PUCHAR DestinationStart;
+    PUCHAR SourceEnd;
+    PUCHAR SourceStart;
+    BOOLEAN CopyBackward;
+
+    if (TargetBit >= Destination->SizeOfBitMap)
+        return;
+
+    CopyLength = min(Source->SizeOfBitMap,
+                     Destination->SizeOfBitMap - TargetBit);
+    if (CopyLength == 0)
+        return;
+
+    SourceStart = (PUCHAR)Source->Buffer;
+    SourceEnd = SourceStart + ((CopyLength + 7) / 8);
+    DestinationStart = (PUCHAR)Destination->Buffer + (TargetBit / 8);
+    CopyBackward = ((DestinationStart > SourceStart) &&
+                    (DestinationStart < SourceEnd)) ||
+                   ((DestinationStart == SourceStart) &&
+                    ((TargetBit & 7) != 0));
+
+    if (CopyBackward)
+    {
+        for (Index = CopyLength; Index-- != 0;)
+        {
+            if (RtlTestBit(Source, Index))
+                RtlSetBit(Destination, TargetBit + Index);
+            else
+                RtlClearBit(Destination, TargetBit + Index);
+        }
+    }
+    else
+    {
+        for (Index = 0; Index < CopyLength; ++Index)
+        {
+            if (RtlTestBit(Source, Index))
+                RtlSetBit(Destination, TargetBit + Index);
+            else
+                RtlClearBit(Destination, TargetBit + Index);
+        }
+    }
+}
+
+VOID
+NTAPI
+RtlIntersectBitMaps(
+    _Inout_ PRTL_BITMAP Destination,
+    _In_ PRTL_BITMAP Source)
+{
+    BITMAP_INDEX IntersectLength;
+    BITMAP_INDEX Index;
+
+    IntersectLength = min(Destination->SizeOfBitMap, Source->SizeOfBitMap);
+    for (Index = 0; Index < IntersectLength; ++Index)
+    {
+        if (!RtlTestBit(Source, Index))
+            RtlClearBit(Destination, Index);
+    }
 }
 
 BITMAP_INDEX
@@ -986,4 +1083,3 @@ RtlFindLongestRunSet(
 
     return MaxNumberOfBits;
 }
-
