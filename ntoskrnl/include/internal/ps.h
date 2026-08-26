@@ -331,6 +331,10 @@ PspDeleteThread(
     IN PVOID ObjectBody
 );
 
+BOOLEAN
+NTAPI
+PspInitializeApiSetSchema(VOID);
+
 VOID
 NTAPI
 PspJobClose(

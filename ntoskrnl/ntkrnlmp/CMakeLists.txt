@@ -45,7 +45,7 @@ if(STACK_PROTECTOR)
     target_link_libraries(ntkrnlmp gcc_ssp_nt)
 endif()
 
-target_link_libraries(ntkrnlmp ntoskrnl_vista cportlib csq ${PSEH_LIB} arbiter cmlib ntlsalib rtl cryptlib ${ROSSYM_LIB} libcntpr setjmp wdmguid poguid ioevent)
+target_link_libraries(ntkrnlmp ntoskrnl_vista cportlib csq ${PSEH_LIB} apisets arbiter cmlib ntlsalib rtl cryptlib ${ROSSYM_LIB} libcntpr setjmp wdmguid poguid ioevent)
 if(KDBG AND (ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64"))
     target_link_libraries(ntkrnlmp kdb_zydis)
 endif()
