@@ -14,6 +14,11 @@ $if (_WDMDDK_)
 
 #define ExInitializeSListHead InitializeSListHead
 
+NTKERNELAPI
+PSLIST_ENTRY
+FirstEntrySList(
+    _In_ PSLIST_HEADER SListHead);
+
 #if defined(_NTHAL_) && defined(_X86_)
 
 NTKERNELAPI
@@ -393,6 +398,74 @@ VOID
 NTAPI
 ExInitializePushLock(
   _Out_ PEX_PUSH_LOCK PushLock);
+
+NTKERNELAPI
+KIRQL
+NTAPI
+ExAcquireSpinLockExclusive(
+  _Inout_ PEX_SPIN_LOCK SpinLock);
+
+NTKERNELAPI
+KIRQL
+NTAPI
+ExAcquireSpinLockShared(
+  _Inout_ PEX_SPIN_LOCK SpinLock);
+
+NTKERNELAPI
+VOID
+NTAPI
+ExAcquireSpinLockSharedAtDpcLevel(
+  _Inout_ PEX_SPIN_LOCK SpinLock);
+
+NTKERNELAPI
+VOID
+NTAPI
+ExAcquireSpinLockExclusiveAtDpcLevel(
+  _Inout_ PEX_SPIN_LOCK SpinLock);
+
+NTKERNELAPI
+LOGICAL
+NTAPI
+ExTryConvertSharedSpinLockExclusive(
+  _Inout_ PEX_SPIN_LOCK SpinLock);
+
+NTKERNELAPI
+LOGICAL
+NTAPI
+ExTryAcquireSpinLockSharedAtDpcLevel(
+  _Inout_ PEX_SPIN_LOCK SpinLock);
+
+NTKERNELAPI
+LOGICAL
+NTAPI
+ExTryAcquireSpinLockExclusiveAtDpcLevel(
+  _Inout_ PEX_SPIN_LOCK SpinLock);
+
+NTKERNELAPI
+VOID
+NTAPI
+ExReleaseSpinLockExclusive(
+  _Inout_ PEX_SPIN_LOCK SpinLock,
+  _In_ KIRQL OldIrql);
+
+NTKERNELAPI
+VOID
+NTAPI
+ExReleaseSpinLockExclusiveFromDpcLevel(
+  _Inout_ PEX_SPIN_LOCK SpinLock);
+
+NTKERNELAPI
+VOID
+NTAPI
+ExReleaseSpinLockShared(
+  _Inout_ PEX_SPIN_LOCK SpinLock,
+  _In_ KIRQL OldIrql);
+
+NTKERNELAPI
+VOID
+NTAPI
+ExReleaseSpinLockSharedFromDpcLevel(
+  _Inout_ PEX_SPIN_LOCK SpinLock);
 $endif (_NTIFS_)
 
 #if (NTDDI_VERSION >= NTDDI_WIN2K)

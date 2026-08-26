@@ -102,6 +102,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/rundown.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/sem.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/shutdown.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/spinlock.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/sysinfo.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/time.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/timer.c

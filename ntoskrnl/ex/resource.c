@@ -2288,3 +2288,91 @@ ExReleaseResourceAndLeaveCriticalRegion(IN PERESOURCE Resource)
     /* Leave critical region */
     KeLeaveCriticalRegion();
 }
+
+/* Fast-resource exports share the ERESOURCE state machine. */
+NTSTATUS
+NTAPI
+ExpInitializeFastResource(_Out_ PVOID FastResource)
+{
+    return ExInitializeResourceLite((PERESOURCE)FastResource);
+}
+
+VOID
+NTAPI
+ExpInitializeFastOwnerEntry(_Out_ PVOID OwnerEntry)
+{
+    RtlZeroMemory(OwnerEntry, 0x28);
+}
+
+BOOLEAN
+NTAPI
+ExpAcquireFastResourceExclusive(
+    _Inout_ PVOID FastResource,
+    _In_opt_ PVOID OwnerEntry,
+    _In_ ULONG Flags)
+{
+    UNREFERENCED_PARAMETER(OwnerEntry);
+    UNREFERENCED_PARAMETER(Flags);
+    return ExAcquireResourceExclusiveLite((PERESOURCE)FastResource, TRUE);
+}
+
+BOOLEAN
+NTAPI
+ExpAcquireFastResourceShared(
+    _Inout_ PVOID FastResource,
+    _In_opt_ PVOID OwnerEntry,
+    _In_ ULONG Flags)
+{
+    UNREFERENCED_PARAMETER(OwnerEntry);
+    UNREFERENCED_PARAMETER(Flags);
+    return ExAcquireResourceSharedLite((PERESOURCE)FastResource, TRUE);
+}
+
+VOID
+NTAPI
+ExpReleaseFastResource(
+    _Inout_ PVOID FastResource,
+    _In_opt_ PVOID OwnerEntry)
+{
+    UNREFERENCED_PARAMETER(OwnerEntry);
+    ExReleaseResourceLite((PERESOURCE)FastResource);
+}
+
+VOID
+NTAPI
+ExpDeleteFastResource(_Inout_ PVOID FastResource)
+{
+    ExDeleteResourceLite((PERESOURCE)FastResource);
+}
+
+BOOLEAN
+NTAPI
+ExpIsFastResourceHeld(_In_ PVOID FastResource)
+{
+    return ExIsResourceAcquiredSharedLite((PERESOURCE)FastResource) != 0;
+}
+
+BOOLEAN
+NTAPI
+ExpIsFastResourceHeldExclusive(_In_ PVOID FastResource)
+{
+    return ExIsResourceAcquiredExclusiveLite((PERESOURCE)FastResource);
+}
+
+BOOLEAN
+NTAPI
+ExpIsFastResourceContended(_In_ PVOID FastResource)
+{
+    PERESOURCE Resource = FastResource;
+
+    return (Resource->NumberOfExclusiveWaiters != 0 ||
+            Resource->NumberOfSharedWaiters != 0);
+}
+
+VOID
+NTAPI
+ExpEnterPriorityRegionAndAcquireResourceShared(_Inout_ PVOID FastResource)
+{
+    KeEnterCriticalRegion();
+    NT_VERIFY(ExAcquireResourceSharedLite((PERESOURCE)FastResource, TRUE));
+}
