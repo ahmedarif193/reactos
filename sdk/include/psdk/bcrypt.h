@@ -579,6 +579,9 @@ typedef PVOID BCRYPT_SECRET_HANDLE;
 /* Flags for BCryptEncrypt/BCryptDecrypt */
 #define BCRYPT_BLOCK_PADDING        0x00000001
 
+/* Flags for BCryptImportKeyPair */
+#define BCRYPT_NO_KEY_VALIDATION    0x00000008
+
 /* Flags for BCryptCreateHash */
 #define BCRYPT_HASH_REUSABLE_FLAG   0x00000020
 

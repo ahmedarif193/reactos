@@ -149,14 +149,29 @@ elseif(ARCH STREQUAL "arm64")
         lib/arm64/wipe.S)
 endif()
 
-add_library(symcrypt STATIC ${SOURCE})
+set(SYMCRYPT_USER_SOURCE ${SOURCE})
+set(SYMCRYPT_KERNEL_SOURCE ${SOURCE})
+list(REMOVE_ITEM SYMCRYPT_KERNEL_SOURCE
+    lib/env_windowsUserModeWin8_1.c
+    lib/cpuid_um.c)
+
+add_library(symcrypt STATIC ${SYMCRYPT_USER_SOURCE})
 add_dependencies(symcrypt psdk)
+add_library(symcrypt_km STATIC ${SYMCRYPT_KERNEL_SOURCE})
+add_dependencies(symcrypt_km psdk)
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     set_source_files_properties(lib/AesTables.c lib/DesTables.c PROPERTIES COMPILE_OPTIONS "-Wno-missing-braces")
 endif()
 target_compile_definitions(symcrypt PRIVATE
     __WINE_PE_BUILD
     SYMCRYPT_PLATFORM_WINE=1)
+target_compile_definitions(symcrypt_km PRIVATE
+    __WINE_PE_BUILD
+    SYMCRYPT_PLATFORM_WINE=1
+    _KERNEL_MODE=1)
 target_include_directories(symcrypt
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/lib)
+target_include_directories(symcrypt_km
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/lib)

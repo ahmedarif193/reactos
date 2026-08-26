@@ -102,6 +102,10 @@ KsecInitializeEncryptionSupport (
 
 NTSTATUS
 NTAPI
+KsecInitializeBCrypt(VOID);
+
+NTSTATUS
+NTAPI
 KsecEncryptMemory (
     _Inout_ PVOID Buffer,
     _In_ ULONG Length,

@@ -116,6 +116,7 @@ KMT_TESTFUNC Test_IoTimerKM;
 #endif
 KMT_TESTFUNC Test_IoVolume;
 KMT_TESTFUNC Test_KdSystemDebugControl;
+KMT_TESTFUNC Test_KsecBcrypt;
 KMT_TESTFUNC Test_KeApc;
 KMT_TESTFUNC Test_KeApcInject;
 #ifdef _M_ARM64
@@ -344,6 +345,7 @@ const KMT_TEST TestList[] =
     { "IoMdl",                              Test_IoMdl },
     { "IoVolume",                           Test_IoVolume },
     { "KdSystemDebugControl",               Test_KdSystemDebugControl },
+    { "KsecBcrypt",                         Test_KsecBcrypt },
     { "KeApc",                              Test_KeApc },
     { "KeApcInject",                        Test_KeApcInject },
 #ifdef _M_ARM64
