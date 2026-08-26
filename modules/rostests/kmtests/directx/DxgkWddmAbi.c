@@ -12,7 +12,7 @@
  * of the OS-wide legacy default used by unrelated kmtests.
  */
 #undef DXGKDDI_INTERFACE_VERSION
-#define DXGKDDI_INTERFACE_VERSION 0x11007
+#define DXGKDDI_INTERFACE_VERSION 0x11008
 #include <dispmprt.h>
 
 START_TEST(DxgkWddmAbi)
@@ -25,7 +25,7 @@ START_TEST(DxgkWddmAbi)
     ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM2_9, 0xE003);
     ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM3_0, 0xF003);
     ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM3_1, 0x10004);
-    ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM3_2, 0x11007);
+    ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM3_2, 0x11008);
 
     ok_eq_ulong(DXGKDDI_WDDMv2_4_ENUM, 0x2400);
     ok_eq_ulong(DXGKDDI_WDDMv2_5_ENUM, 0x2500);
@@ -36,6 +36,34 @@ START_TEST(DxgkWddmAbi)
     ok_eq_ulong(DXGKDDI_WDDMv3_0_ENUM, 0x3000);
     ok_eq_ulong(DXGKDDI_WDDMv3_1_ENUM, 0x3100);
     ok_eq_ulong(DXGKDDI_WDDMv3_2_ENUM, 0x3200);
+
+    ok_eq_ulong(DxgkServicesAgp, 0);
+    ok_eq_ulong(DxgkServicesDebugReport, 1);
+    ok_eq_ulong(DXGK_DEBUG_REPORT_INTERFACE_VERSION_1, 1);
+    ok_eq_ulong(DXGK_DEBUG_REPORT_MAX_SIZE, 0xF800);
+#ifdef _WIN64
+    ok_eq_ulong(sizeof(DXGK_DEBUG_REPORT_INTERFACE), 0x38);
+    ok_eq_ulong(FIELD_OFFSET(DXGK_DEBUG_REPORT_INTERFACE,
+                             DbgReportCreate),
+                0x20);
+    ok_eq_ulong(FIELD_OFFSET(DXGK_DEBUG_REPORT_INTERFACE,
+                             DbgReportSecondaryData),
+                0x28);
+    ok_eq_ulong(FIELD_OFFSET(DXGK_DEBUG_REPORT_INTERFACE,
+                             DbgReportComplete),
+                0x30);
+#else
+    ok_eq_ulong(sizeof(DXGK_DEBUG_REPORT_INTERFACE), 0x1C);
+    ok_eq_ulong(FIELD_OFFSET(DXGK_DEBUG_REPORT_INTERFACE,
+                             DbgReportCreate),
+                0x10);
+    ok_eq_ulong(FIELD_OFFSET(DXGK_DEBUG_REPORT_INTERFACE,
+                             DbgReportSecondaryData),
+                0x14);
+    ok_eq_ulong(FIELD_OFFSET(DXGK_DEBUG_REPORT_INTERFACE,
+                             DbgReportComplete),
+                0x18);
+#endif
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
     {
@@ -77,6 +105,20 @@ START_TEST(DxgkWddmAbi)
 #endif
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+    /* WDK 28000 changed the official selector from 0x11007 to 0x11008 but
+     * retained the WDDM 3.2 append-only initialization-table boundary. */
+#ifdef _WIN64
+    ok_eq_ulong(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA,
+                             DxgkDdiResetDisplayEngine),
+                0x600);
+    ok_eq_ulong(sizeof(DRIVER_INITIALIZATION_DATA), 0x608);
+#else
+    ok_eq_ulong(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA,
+                             DxgkDdiResetDisplayEngine),
+                0x300);
+    ok_eq_ulong(sizeof(DRIVER_INITIALIZATION_DATA), 0x304);
+#endif
+
     ok_eq_ulong(DXGK_FEATURE_INTERFACE_VERSION_1, 1);
     ok_eq_ulong(sizeof(DXGKARG_QUERYFEATURESUPPORT), 0xC);
     ok_eq_ulong(sizeof(DXGKARGCB_ISFEATUREENABLED2_FLAGS), 0x4);

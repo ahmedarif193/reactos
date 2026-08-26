@@ -183,6 +183,7 @@ typedef struct _DXGKVMM_RESOURCE DXGKVMM_RESOURCE, *PDXGKVMM_RESOURCE;
 #define TAG_DXGK_SUBMITDMA  'QxgD'   /* DXGQ - tracked submit DMA buffers */
 #define TAG_DXGK_HANDLE     'HxgD'   /* DXGH - typed D3DKMT handle entry   */
 #define TAG_DXGK_CAPTURE    'UxgD'   /* DXGU - captured user buffers       */
+#define TAG_DXGK_DEBUG      'BxgD'   /* DXGB - miniport debug reports      */
 #define DXGKP_MAX_USER_PRIVATE_DATA (1024U * 1024U)
 #define DXGKP_MAX_CAPTURE_ALLOCATIONS 4096U
 
@@ -620,10 +621,11 @@ struct _DXGKRNL_ADAPTER
     BOOLEAN                     MiniportRemoveDeviceComplete;
 
     /*
-     * Adapter LUID assigned during DxgkAdapterStart.
-     * Used by D3DKMTEnumAdapters / D3DKMTOpenAdapterFromLuid to identify
-     * adapters from user mode.
+     * Stable identities assigned once when the adapter FDO is created.
+     * DXGK_START_INFO publishes both values to the miniport, while the LUID
+     * is also used by the D3DKMT adapter-open and enumeration paths.
      */
+    GUID                        AdapterGuid;
     LUID                        AdapterLuid;
 
     /*
@@ -775,6 +777,9 @@ struct _DXGKRNL_ADAPTER
     ULONG                       PciBusNumber;
     PCI_SLOT_NUMBER             PciSlotNumber;
     BOOLEAN                     PciBusSlotCached;
+    ULONG                       PciBridgeBusNumber;
+    PCI_SLOT_NUMBER             PciBridgeSlotNumber;
+    BOOLEAN                     PciBridgeSlotCached;
 
     /*
      * Power state tracking.

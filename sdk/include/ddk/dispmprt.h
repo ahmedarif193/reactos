@@ -159,7 +159,7 @@ typedef _In_ CONST PDEVICE_OBJECT      IN_CONST_PDEVICE_OBJECT;
     (DXGKDDI_INTERFACE_VERSION_WDDM2_9 != 0xE003) || \
     (DXGKDDI_INTERFACE_VERSION_WDDM3_0 != 0xF003) || \
     (DXGKDDI_INTERFACE_VERSION_WDDM3_1 != 0x10004) || \
-    (DXGKDDI_INTERFACE_VERSION_WDDM3_2 != 0x11007)
+    (DXGKDDI_INTERFACE_VERSION_WDDM3_2 != 0x11008)
 #error d3dukmdt.h contains an unsupported WDDM interface selector set
 #endif
 
@@ -677,6 +677,13 @@ typedef enum _DXGK_SURPRISE_REMOVAL_TYPE
 #define DISPLAY_ADAPTER_HW_ID   0xFFFFFFFFUL
 #endif
 
+/* Signature used by display miniports when ACPI arguments can target child
+ * devices.  DxgkCbEvalAcpiMethod restores the ordinary complex signature
+ * before returning. */
+#ifndef DXGK_ACPI_PASS_ARGS_TO_CHILDREN
+#define DXGK_ACPI_PASS_ARGS_TO_CHILDREN 'araP'
+#endif
+
 
 /* =========================================================================
  * DxgkCb* service callback typedefs
@@ -697,6 +704,44 @@ typedef enum
     DxgkServicesIDD,
     DxgkServicesFeature,
 } DXGK_SERVICES;
+
+/* Public WDDM debug-report service returned by DxgkCbQueryServices. */
+DECLARE_HANDLE(DXGK_DEBUG_REPORT_HANDLE);
+
+#define DXGK_DEBUG_REPORT_INTERFACE_VERSION_1 0x01
+#define DXGK_DEBUG_REPORT_MAX_SIZE             0xF800
+
+typedef struct _DXGK_DEBUG_REPORT_INTERFACE
+{
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+
+    _IRQL_requires_DXGK_(PASSIVE_LEVEL)
+    DXGK_DEBUG_REPORT_HANDLE
+    (*DbgReportCreate)(
+        _In_ HANDLE DeviceHandle,
+        _In_ ULONG Code,
+        _In_ ULONG_PTR Arg1,
+        _In_ ULONG_PTR Arg2,
+        _In_ ULONG_PTR Arg3,
+        _In_ ULONG_PTR Arg4);
+
+    _IRQL_requires_DXGK_(PASSIVE_LEVEL)
+    _Success_(return != FALSE)
+    BOOLEAN
+    (*DbgReportSecondaryData)(
+        _Inout_ DXGK_DEBUG_REPORT_HANDLE Report,
+        _In_reads_bytes_(DataSize) PVOID Data,
+        _In_ ULONG DataSize);
+
+    _IRQL_requires_DXGK_(PASSIVE_LEVEL)
+    VOID
+    (*DbgReportComplete)(
+        _Inout_ DXGK_DEBUG_REPORT_HANDLE Report);
+} DXGK_DEBUG_REPORT_INTERFACE, *PDXGK_DEBUG_REPORT_INTERFACE;
 
 typedef
     _Function_class_DXGK_(DXGKCB_EVAL_ACPI_METHOD)
@@ -938,10 +983,10 @@ NTSTATUS
 
 /* DXGK_WHICHSPACE constants for Read/WriteDeviceSpace */
 #ifndef DXGK_WHICHSPACE_BRIDGE
-#define DXGK_WHICHSPACE_BRIDGE   0x00000000
-#define DXGK_WHICHSPACE_CONFIG   0x00000001
-#define DXGK_WHICHSPACE_MCH      0x00000002
-#define DXGK_WHICHSPACE_ROM      0x00000003
+#define DXGK_WHICHSPACE_CONFIG   PCI_WHICHSPACE_CONFIG
+#define DXGK_WHICHSPACE_ROM      PCI_WHICHSPACE_ROM
+#define DXGK_WHICHSPACE_MCH      0x80000000
+#define DXGK_WHICHSPACE_BRIDGE   0x80000001
 #endif
 
 

@@ -5,7 +5,7 @@
 
 spec2def(dxgkrnl.sys dxgkrnl.spec ADD_IMPORTLIB)
 
-# dxgkrnl uses Windows 7 kernel declarations while exposing a WDDM 2.0 DDI
+# dxgkrnl uses Windows 7 kernel declarations while exposing a WDDM DDI
 # surface. Replace the configured tree-wide target for the required NT APIs.
 remove_definitions(-D_WIN32_WINNT=${REACTOS_TARGET_NT})
 remove_definitions(-DWINVER=${REACTOS_TARGET_NT})
@@ -15,7 +15,7 @@ add_definitions(-DNTDDI_VERSION=0x06010000)    # NTDDI_WIN7
 # Compile the shared graphics stack against the audited WDDM 3.2 header surface
 # while runtime capability reporting remains limited to completed paths.
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
-add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11007)
+add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11008)
 
 list(APPEND SOURCE
     dxgkrnl.c

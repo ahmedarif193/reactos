@@ -453,10 +453,18 @@ DxgkpKmtIoctlMinimumConfiguredLevel(
         case IOCTL_D3DKMT_CREATEHWQUEUE:
         case IOCTL_D3DKMT_DESTROYHWQUEUE:
         case IOCTL_D3DKMT_SUBMITCOMMANDTOHWQUEUE:
+        case IOCTL_D3DKMT_SUBMITWAITFORSYNCOBJECTSTOHWQUEUE:
+        case IOCTL_D3DKMT_SUBMITSIGNALSYNCOBJECTSTOHWQUEUE:
             return DXGK_CAPS_CORE_LEVEL_WDDM_2_2;
 
         case IOCTL_D3DKMT_SETVIDPNSOURCEOWNER2:
             return DXGK_CAPS_CORE_LEVEL_WDDM_2_3;
+
+        case IOCTL_D3DKMT_SUBMITPRESENTBLTTOHWQUEUE:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_2_4;
+
+        case IOCTL_D3DKMT_SUBMITPRESENTTOHWQUEUE:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_2_5;
 
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
         /* D3DKMTIsFeatureEnabled was introduced with WDDM 3.2. */
@@ -7512,6 +7520,65 @@ DxgkSubmitCommandToHwQueue(
 
 static NTSTATUS
 NTAPI
+DxgkSubmitWaitForSyncObjectsToHwQueue(
+    _In_ CONST D3DKMT_SUBMITWAITFORSYNCOBJECTSTOHWQUEUE *pData)
+{
+    PAGED_CODE();
+
+    if (pData == NULL || pData->hHwQueue == 0 || pData->ObjectCount == 0 ||
+        pData->ObjectHandleArray == NULL || pData->FenceValueArray == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    /* No hardware queue can exist while hardware scheduling is disabled. */
+    return STATUS_INVALID_PARAMETER;
+}
+
+static NTSTATUS
+NTAPI
+DxgkSubmitSignalSyncObjectsToHwQueue(
+    _In_ CONST D3DKMT_SUBMITSIGNALSYNCOBJECTSTOHWQUEUE *pData)
+{
+    PAGED_CODE();
+
+    if (pData == NULL || pData->BroadcastHwQueueCount == 0 ||
+        pData->BroadcastHwQueueArray == NULL || pData->ObjectCount == 0 ||
+        pData->ObjectHandleArray == NULL || pData->FenceValueArray == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    /* No hardware queue can exist while hardware scheduling is disabled. */
+    return STATUS_INVALID_PARAMETER;
+}
+
+static NTSTATUS
+NTAPI
+DxgkSubmitPresentBltToHwQueue(
+    _In_ CONST D3DKMT_SUBMITPRESENTBLTTOHWQUEUE *pData)
+{
+    PAGED_CODE();
+
+    if (pData == NULL || pData->hHwQueue == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    /* No hardware queue can exist while hardware scheduling is disabled. */
+    return STATUS_INVALID_PARAMETER;
+}
+
+static NTSTATUS
+NTAPI
+DxgkSubmitPresentToHwQueue(
+    _Inout_ D3DKMT_SUBMITPRESENTTOHWQUEUE *pData)
+{
+    PAGED_CODE();
+
+    if (pData == NULL || pData->hHwQueues == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    /* No hardware queue can exist while hardware scheduling is disabled. */
+    return STATUS_INVALID_PARAMETER;
+}
+
+static NTSTATUS
+NTAPI
 DxgkSubmitCommand(
     _In_ CONST D3DKMT_SUBMITCOMMAND *SubmitCommand)
 {
@@ -9540,6 +9607,34 @@ DxgkpDispatchBufferedIoctl(
             return DxgkSubmitCommandToHwQueue((CONST D3DKMT_SUBMITCOMMANDTOHWQUEUE *)SystemBuffer);
         }
 
+        case IOCTL_D3DKMT_SUBMITWAITFORSYNCOBJECTSTOHWQUEUE:
+        {
+            if (InputLength < sizeof(D3DKMT_SUBMITWAITFORSYNCOBJECTSTOHWQUEUE) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            return DxgkSubmitWaitForSyncObjectsToHwQueue((CONST D3DKMT_SUBMITWAITFORSYNCOBJECTSTOHWQUEUE *)SystemBuffer);
+        }
+
+        case IOCTL_D3DKMT_SUBMITSIGNALSYNCOBJECTSTOHWQUEUE:
+        {
+            if (InputLength < sizeof(D3DKMT_SUBMITSIGNALSYNCOBJECTSTOHWQUEUE) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            return DxgkSubmitSignalSyncObjectsToHwQueue((CONST D3DKMT_SUBMITSIGNALSYNCOBJECTSTOHWQUEUE *)SystemBuffer);
+        }
+
+        case IOCTL_D3DKMT_SUBMITPRESENTBLTTOHWQUEUE:
+        {
+            if (InputLength < sizeof(D3DKMT_SUBMITPRESENTBLTTOHWQUEUE) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            return DxgkSubmitPresentBltToHwQueue((CONST D3DKMT_SUBMITPRESENTBLTTOHWQUEUE *)SystemBuffer);
+        }
+
+        case IOCTL_D3DKMT_SUBMITPRESENTTOHWQUEUE:
+        {
+            if (InputLength < sizeof(D3DKMT_SUBMITPRESENTTOHWQUEUE) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            return DxgkSubmitPresentToHwQueue((D3DKMT_SUBMITPRESENTTOHWQUEUE *)SystemBuffer);
+        }
+
         case IOCTL_D3DKMT_REGISTERTRIMNOTIFICATION:
         {
             if (InputLength < sizeof(D3DKMT_REGISTERTRIMNOTIFICATION) || SystemBuffer == NULL)
@@ -10564,6 +10659,10 @@ DxgkDispatchDeviceControl(
         case IOCTL_D3DKMT_CREATEHWQUEUE:
         case IOCTL_D3DKMT_DESTROYHWQUEUE:
         case IOCTL_D3DKMT_SUBMITCOMMANDTOHWQUEUE:
+        case IOCTL_D3DKMT_SUBMITWAITFORSYNCOBJECTSTOHWQUEUE:
+        case IOCTL_D3DKMT_SUBMITSIGNALSYNCOBJECTSTOHWQUEUE:
+        case IOCTL_D3DKMT_SUBMITPRESENTBLTTOHWQUEUE:
+        case IOCTL_D3DKMT_SUBMITPRESENTTOHWQUEUE:
         case IOCTL_D3DKMT_REGISTERTRIMNOTIFICATION:
         case IOCTL_D3DKMT_UNREGISTERTRIMNOTIFICATION:
         case IOCTL_D3DKMT_CREATEKEYEDMUTEX2:

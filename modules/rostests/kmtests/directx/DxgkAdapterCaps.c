@@ -156,6 +156,7 @@ static VOID TestInterfaceSelectorNormalization(VOID)
         { 0xF003, DXGK_CAPS_CORE_LEVEL_WDDM_3_0 },
         { 0x10004, DXGK_CAPS_CORE_LEVEL_WDDM_3_1 },
         { 0x11007, DXGK_CAPS_CORE_LEVEL_WDDM_3_2 },
+        { 0x11008, DXGK_CAPS_CORE_LEVEL_WDDM_3_2 },
     };
     ULONG Index;
 
@@ -169,7 +170,7 @@ static VOID TestInterfaceSelectorNormalization(VOID)
     ok_eq_ulong(DxgkCapsCoreInterfaceVersionToLevel(0x5024), 0);
     ok_eq_ulong(DxgkCapsCoreInterfaceVersionToLevel(0x7000), 0);
     ok_eq_ulong(DxgkCapsCoreInterfaceVersionToLevel(0x700B), 0);
-    ok_eq_ulong(DxgkCapsCoreInterfaceVersionToLevel(0x11008), 0);
+    ok_eq_ulong(DxgkCapsCoreInterfaceVersionToLevel(0x11009), 0);
     ok_eq_ulong(DxgkCapsCoreInterfaceVersionToLevel(0x12001), 0);
 
     ok_bool_true(DxgkCapsCoreInterfaceVersionPermitted(
@@ -185,7 +186,7 @@ static VOID TestInterfaceSelectorNormalization(VOID)
         0x7000, DXGK_CAPS_CORE_LEVEL_WDDM_3_2),
         "unknown selector inside a known family");
     ok_bool_true(DxgkCapsCoreInterfaceVersionPermitted(
-        0x11007, 0),
+        0x11008, 0),
         "zero configured level does not clamp a known selector");
 
     ok_bool_true(DxgkCapsCoreInterfaceVersionAtLeast(
