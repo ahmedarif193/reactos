@@ -52,6 +52,9 @@ RtlInitializeSListHead(
     {
         RtlpUse16ByteSLists = TRUE;
     }
+
+    /* Mark the zeroed header as the 16-byte form before it is first used. */
+    SListHead->Header16.HeaderType = 1;
 #endif
 #endif /* _WIN64 */
 
@@ -70,6 +73,10 @@ RtlFirstEntrySList(
     _In_ const SLIST_HEADER *SListHead)
 {
 #if defined(_WIN64)
+#if defined(_M_ARM64)
+    /* ARM64 has no legacy 8-byte SLIST-header form. */
+    return RTL_SLIST_DECODE_NEXT16((*SListHead));
+#else
     /* Check if the header is initialized as 16 byte header */
     if (SListHead->Header16.HeaderType)
     {
@@ -96,6 +103,7 @@ RtlFirstEntrySList(
         Pointer.Bits.NextEntry = SListHead->Header8.NextEntry;
         return (PVOID)Pointer.Region;
     }
+#endif
 #else
     return SListHead->Next.Next;
 #endif
