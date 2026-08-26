@@ -152,6 +152,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_io/IoNullDeviceKM.c
     ntos_io/IoVolume.c
     ntos_kd/KdSystemDebugControl.c
+    ksecdd/KsecBcrypt.c
     ntos_ke/KeAffinityKM.c
     ntos_ke/KeApc.c
     ntos_ke/KeApcInject.c
@@ -332,7 +333,7 @@ if(KMTEST_SOFTGPU_VSYNC_POLICY)
 endif()
 set_module_type(kmtest_drv kernelmodedriver)
 target_link_libraries(kmtest_drv kmtest_printf chkstk memcmp ntoskrnl_vista poguid ${PSEH_LIB})
-add_importlibs(kmtest_drv ntoskrnl hal)
+add_importlibs(kmtest_drv ksecdd ntoskrnl hal)
 add_dependencies(kmtest_drv bugcodes xdk)
 target_compile_definitions(kmtest_drv PRIVATE KMT_KERNEL_MODE NTDDI_VERSION=${REACTOS_TARGET_NTDDI})
 #add_pch(kmtest_drv include/kmt_test.h)
