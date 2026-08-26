@@ -109,6 +109,7 @@ KMT_TESTFUNC Test_IoEvent;
 KMT_TESTFUNC Test_IoFilesystem;
 KMT_TESTFUNC Test_IoInterrupt;
 KMT_TESTFUNC Test_IoIrp;
+KMT_TESTFUNC Test_IoWaitCompletionPacket;
 KMT_TESTFUNC Test_ExWorkItem;
 KMT_TESTFUNC Test_IoMdl;
 #if defined(_M_IX86) || defined(_M_AMD64)
@@ -335,6 +336,7 @@ const KMT_TEST TestList[] =
     { "IoFilesystem",                       Test_IoFilesystem },
     { "IoInterrupt",                        Test_IoInterrupt },
     { "IoIrp",                              Test_IoIrp },
+    { "IoWaitCompletionPacket",             Test_IoWaitCompletionPacket },
     { "ExWorkItem",                         Test_ExWorkItem },
     { "IoCancelKM",                         Test_IoCancelKM },
     { "CmKeyKM",                            Test_CmKeyKM },

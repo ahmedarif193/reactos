@@ -147,6 +147,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_io/IoFilesystem.c
     ntos_io/IoInterrupt.c
     ntos_io/IoIrp.c
+    ntos_io/IoWaitCompletionPacket.c
     ntos_io/IoStackKM.c
     ntos_io/IoMdl.c
     ntos_io/IoNullDeviceKM.c
