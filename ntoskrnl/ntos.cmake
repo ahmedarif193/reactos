@@ -273,6 +273,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/po/povolume.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/po/power.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/po/thermal.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/apiset.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/apphelp.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/debug.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/job.c

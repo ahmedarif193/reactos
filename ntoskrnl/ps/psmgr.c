@@ -457,6 +457,8 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Initialize the Active Process List */
     InitializeListHead(&PsActiveProcessHead);
     KeInitializeGuardedMutex(&PspActiveProcessMutex);
+    if (!PspInitializeApiSetSchema())
+        return FALSE;
 
     /* Get the idle process */
     PsIdleProcess = PsGetCurrentProcess();
