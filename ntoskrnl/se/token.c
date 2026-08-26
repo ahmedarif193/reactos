@@ -2651,4 +2651,34 @@ NtImpersonateAnonymousToken(
     return Status;
 }
 
+BOOLEAN
+NTAPI
+SeIsParentOfChildAppContainer(
+    _In_ ULONG SessionId,
+    _In_ ULONG ParentLowboxNumber,
+    _In_ ULONG ChildLowboxNumber)
+{
+    UNREFERENCED_PARAMETER(SessionId);
+    UNREFERENCED_PARAMETER(ParentLowboxNumber);
+    UNREFERENCED_PARAMETER(ChildLowboxNumber);
+
+    /* ReactOS does not create lowbox token hierarchies. */
+    return FALSE;
+}
+
+BOOLEAN
+NTAPI
+SeSecurityAttributePresent(
+    _In_opt_ PACCESS_TOKEN Token,
+    _In_ PCUNICODE_STRING AttributeName)
+{
+    UNREFERENCED_PARAMETER(Token);
+
+    if ((AttributeName == NULL) || (AttributeName->Buffer == NULL) || (AttributeName->Length == 0))
+        return FALSE;
+
+    /* TokenSecurityAttributes is not populated by the ReactOS token manager. */
+    return FALSE;
+}
+
 /* EOF */

@@ -11,6 +11,8 @@
 #define NDEBUG
 #include <debug.h>
 
+#undef SeDeleteClientSecurity
+
 /* PRIVATE FUNCTIONS **********************************************************/
 
 /**
@@ -326,6 +328,25 @@ SeImpersonateClient(
 
     /* Call the new API */
     SeImpersonateClientEx(ClientContext, ServerThread);
+}
+
+VOID
+NTAPI
+SeDeleteClientSecurity(
+    _Inout_ PSECURITY_CLIENT_CONTEXT ClientContext)
+{
+    PACCESS_TOKEN Token;
+
+    if (ClientContext == NULL)
+        return;
+    Token = ClientContext->ClientToken;
+    ClientContext->ClientToken = NULL;
+    if (Token == NULL)
+        return;
+    if (SeTokenType(Token) == TokenPrimary)
+        PsDereferencePrimaryToken(Token);
+    else
+        PsDereferenceImpersonationToken(Token);
 }
 
 /* EOF */
