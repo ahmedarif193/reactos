@@ -419,12 +419,14 @@ EvalConvertParameterObjects(
 static
 NTSTATUS
 EvalCreateParametersList(
-    _In_ PIRP Irp,
     _In_ PIO_STACK_LOCATION IoStack,
     _In_ PACPI_EVAL_INPUT_BUFFER EvalInputBuffer,
     _Out_ ACPI_OBJECT_LIST* ParamList)
 {
     ACPI_OBJECT* Arg;
+
+    ParamList->Count = 0;
+    ParamList->Pointer = NULL;
 
     if (!AcpiVerifyInBuffer(IoStack, RTL_SIZEOF_THROUGH_FIELD(ACPI_EVAL_INPUT_BUFFER, Signature)))
     {
@@ -463,7 +465,7 @@ EvalCreateParametersList(
             ParamList->Count = 1;
             ParamList->Pointer = Arg;
 
-            SimpleInt = Irp->AssociatedIrp.SystemBuffer;
+            SimpleInt = (PACPI_EVAL_INPUT_BUFFER_SIMPLE_INTEGER)EvalInputBuffer;
 
             Arg->Type = ACPI_TYPE_INTEGER;
             Arg->Integer.Value = (ULONG64)SimpleInt->IntegerArgument;
@@ -487,7 +489,7 @@ EvalCreateParametersList(
             ParamList->Count = 1;
             ParamList->Pointer = Arg;
 
-            SimpleStr = Irp->AssociatedIrp.SystemBuffer;
+            SimpleStr = (PACPI_EVAL_INPUT_BUFFER_SIMPLE_STRING)EvalInputBuffer;
 
             Arg->Type = ACPI_TYPE_STRING;
             Arg->String.Pointer = (PCHAR)SimpleStr->String;
@@ -508,13 +510,14 @@ EvalCreateParametersList(
                 return STATUS_INFO_LENGTH_MISMATCH;
             }
 
-            ComplexBuffer = Irp->AssociatedIrp.SystemBuffer;
+            ComplexBuffer = (PACPI_EVAL_INPUT_BUFFER_COMPLEX)EvalInputBuffer;
 
             ParamList->Count = ComplexBuffer->ArgumentCount;
             if (ParamList->Count == 0)
             {
-                DPRINT1("No arguments\n");
-                return STATUS_ACPI_INCORRECT_ARGUMENT_COUNT;
+                /* DxgkCbEvalAcpiMethod always supplies the complex form,
+                 * including for no-argument methods such as _DOD. */
+                break;
             }
 
             Status = RtlULongMult(ParamList->Count, sizeof(*Arg), &ArgumentsSize);
@@ -747,7 +750,12 @@ EvalCreateOutputArguments(
                IoStack->Parameters.DeviceIoControl.OutputBufferLength,
                OutputBufSize);
 
-        Irp->IoStatus.Information = OutputBufSize;
+        /* Only the fixed header is valid on overflow.  Returning the required
+         * size in IoStatus.Information would make METHOD_BUFFERED completion
+         * copy past the caller's smaller output buffer.  The required size is
+         * returned in OutputBuffer->Length, as required by the ACPI IOCTL
+         * contract. */
+        Irp->IoStatus.Information = FIELD_OFFSET(ACPI_EVAL_OUTPUT_BUFFER, Argument);
         return STATUS_BUFFER_OVERFLOW;
     }
 
@@ -795,7 +803,7 @@ Bus_PDO_EvalMethod(
     IoStack = IoGetCurrentIrpStackLocation(Irp);
     EvalInputBuffer = Irp->AssociatedIrp.SystemBuffer;
 
-    Status = EvalCreateParametersList(Irp, IoStack, EvalInputBuffer, &ParamList);
+    Status = EvalCreateParametersList(IoStack, EvalInputBuffer, &ParamList);
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -885,7 +893,7 @@ EvalMethodForPciDeviceInternal(
         return STATUS_NOT_FOUND;
     }
 
-    Status = EvalCreateParametersList(Irp, IoStack, EvalInputBuffer, &ParamList);
+    Status = EvalCreateParametersList(IoStack, EvalInputBuffer, &ParamList);
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -1009,26 +1017,19 @@ AcpiEvalMethodForPciDeviceIoctl(
     SyntheticIoStack.Parameters.DeviceIoControl.OutputBufferLength =
         IoStack->Parameters.DeviceIoControl.OutputBufferLength;
 
-    /*
-     * We need to temporarily replace the system buffer with the embedded buffer
-     * for the helper function to work correctly. Save and restore afterwards.
-     */
-    {
-        PVOID OriginalSystemBuffer = Irp->AssociatedIrp.SystemBuffer;
-
-        Irp->AssociatedIrp.SystemBuffer = EvalInputBuffer;
-
-        Status = EvalMethodForPciDeviceInternal(
-            PciInputBuffer->Segment,
-            PciInputBuffer->Bus,
-            PciInputBuffer->Device,
-            PciInputBuffer->Function,
-            EvalInputBuffer,
-            &SyntheticIoStack,
-            Irp);
-
-        Irp->AssociatedIrp.SystemBuffer = OriginalSystemBuffer;
-    }
+    /* Keep the original METHOD_BUFFERED system buffer installed so the ACPI
+     * result is written at offset zero and copied back to the PCI caller.
+     * Parameter decoding uses EvalInputBuffer explicitly; temporarily pointing
+     * SystemBuffer at the embedded input would write overflow metadata into the
+     * input envelope and discard it during I/O completion. */
+    Status = EvalMethodForPciDeviceInternal(
+        PciInputBuffer->Segment,
+        PciInputBuffer->Bus,
+        PciInputBuffer->Device,
+        PciInputBuffer->Function,
+        EvalInputBuffer,
+        &SyntheticIoStack,
+        Irp);
 
     return Status;
 }
