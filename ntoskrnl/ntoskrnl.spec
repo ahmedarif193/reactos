@@ -2790,8 +2790,8 @@
 @ stub -arch=arm64 ObfDereferenceObjectWithTag
 @ stub -arch=arm64 ObfReferenceObjectWithTag
 @ stdcall -arch=x86_64,arm64 PcwAddInstance(ptr ptr long long ptr)
-@ stub -arch=arm64 PcwCloseInstance
-@ stub -arch=arm64 PcwCreateInstance
+@ stdcall -arch=i386,x86_64,arm64 PcwCloseInstance(ptr)
+@ stdcall -arch=i386,x86_64,arm64 PcwCreateInstance(ptr ptr ptr long ptr)
 @ stdcall -arch=x86_64,arm64 PcwRegister(ptr ptr)
 @ stdcall -arch=x86_64,arm64 PcwUnregister(ptr)
 @ stub -arch=arm64 PfFileInfoNotify
