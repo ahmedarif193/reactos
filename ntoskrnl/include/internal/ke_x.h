@@ -1471,6 +1471,17 @@ KxCommitThreadWait(IN PKTHREAD Thread,
     WaitBlock->NextWaitBlock = WaitBlock
 #endif
 
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
+#define KxLinkQueueTimerBlock()                                             \
+    NOTHING
+#else
+#define KxLinkQueueTimerBlock()                                             \
+    Timer->Header.WaitListHead.Flink = &TimerBlock->WaitListEntry;          \
+    Timer->Header.WaitListHead.Blink = &TimerBlock->WaitListEntry;          \
+    TimerBlock->WaitListEntry.Flink = &Timer->Header.WaitListHead;          \
+    TimerBlock->WaitListEntry.Blink = &Timer->Header.WaitListHead
+#endif
+
 #define KxDelayThreadWait()                                                 \
                                                                             \
     /* Setup the Wait Block */                                              \
@@ -1629,11 +1640,9 @@ KxCommitThreadWait(IN PKTHREAD Thread,
         /* Pointer to timer block */                                        \
         KxChainSingleWithTimer();                                           \
                                                                             \
-        /* Link the timer to this Wait Block */                             \
-        Timer->Header.WaitListHead.Flink = &TimerBlock->WaitListEntry;      \
-        Timer->Header.WaitListHead.Blink = &TimerBlock->WaitListEntry;      \
-        TimerBlock->WaitListEntry.Flink = &Timer->Header.WaitListHead;      \
-        TimerBlock->WaitListEntry.Blink = &Timer->Header.WaitListHead;      \
+        /* The modern path links this under the timer object lock during    \
+         * final wait publication. The legacy path keeps its old linkage. */ \
+        KxLinkQueueTimerBlock();                                            \
     }                                                                       \
     else                                                                    \
     {                                                                       \

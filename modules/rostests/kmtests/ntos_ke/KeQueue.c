@@ -51,6 +51,27 @@ typedef struct _QUEUE_RUNDOWN_OBJECT_WAIT_CONTEXT
     NTSTATUS Status;
 } QUEUE_RUNDOWN_OBJECT_WAIT_CONTEXT, *PQUEUE_RUNDOWN_OBJECT_WAIT_CONTEXT;
 
+#define QUEUE_TIMER_REUSE_ITERATIONS 512
+#define QUEUE_TIMER_REUSE_WAITING 1
+#define QUEUE_TIMER_REUSE_UNTIMED 2
+#define QUEUE_TIMER_REUSE_DONE 3
+
+typedef struct _QUEUE_TIMER_REUSE_CONTEXT
+{
+    KQUEUE Queue;
+    LIST_ENTRY TimedEntry;
+    LIST_ENTRY ReleaseEntry;
+    KEVENT BeginIteration;
+    KEVENT TimedEntryReturned;
+    KEVENT IterationCompleted;
+    volatile LONG Phase;
+    volatile LONG Stop;
+    ULONG TimedHandoffs;
+    ULONG TimedTimeouts;
+    ULONG StaleTimeouts;
+    ULONG WrongResults;
+} QUEUE_TIMER_REUSE_CONTEXT, *PQUEUE_TIMER_REUSE_CONTEXT;
+
 static
 BOOLEAN
 WaitForQueueWaiter(
@@ -70,6 +91,48 @@ WaitForQueueWaiter(
     }
 
     return FALSE;
+}
+
+static
+BOOLEAN
+SpinForQueueWaiter(
+    _In_ PKQUEUE Queue,
+    _In_ ULONG TimeoutMicroseconds)
+{
+    ULONG Attempt;
+
+    for (Attempt = 0; Attempt < TimeoutMicroseconds / 50; Attempt++)
+    {
+        KeMemoryBarrier();
+        if (Queue->Header.WaitListHead.Flink != &Queue->Header.WaitListHead)
+            return TRUE;
+
+        KeStallExecutionProcessor(50);
+    }
+
+    return FALSE;
+}
+
+static
+NTSTATUS
+SpinForTimerReuseTransition(
+    _In_ PQUEUE_TIMER_REUSE_CONTEXT Context,
+    _In_ ULONG TimeoutMicroseconds)
+{
+    ULONG Attempt;
+
+    for (Attempt = 0; Attempt < TimeoutMicroseconds / 50; Attempt++)
+    {
+        KeMemoryBarrier();
+        if (KeReadStateEvent(&Context->IterationCompleted))
+            return STATUS_WAIT_0 + 1;
+        if (KeReadStateEvent(&Context->TimedEntryReturned))
+            return STATUS_WAIT_0;
+
+        KeStallExecutionProcessor(50);
+    }
+
+    return STATUS_TIMEOUT;
 }
 
 #ifdef _M_ARM64
@@ -142,6 +205,65 @@ QueueDirectHandoffThread(
         KeSetEvent(&Context->Completed[Index], IO_NO_INCREMENT, FALSE);
     }
 
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+static
+VOID
+NTAPI
+QueueTimerReuseThread(
+    _In_ PVOID Parameter)
+{
+    PQUEUE_TIMER_REUSE_CONTEXT Context = Parameter;
+    LARGE_INTEGER Timeout;
+    PLIST_ENTRY FirstResult;
+    PLIST_ENTRY SecondResult;
+    PLIST_ENTRY ExpectedResult;
+    ULONG Index;
+
+    KeSetSystemAffinityThread((KAFFINITY)1);
+    for (Index = 0; Index < QUEUE_TIMER_REUSE_ITERATIONS; Index++)
+    {
+        KeWaitForSingleObject(&Context->BeginIteration, Executive, KernelMode, FALSE, NULL);
+        KeMemoryBarrier();
+        if (Context->Stop)
+            break;
+
+        Timeout.QuadPart = -20LL * 10 * 1000;
+        InterlockedExchange(&Context->Phase, QUEUE_TIMER_REUSE_WAITING);
+        FirstResult = KeRemoveQueue(&Context->Queue, KernelMode, &Timeout);
+        if (FirstResult == &Context->TimedEntry)
+        {
+            Context->TimedHandoffs++;
+            ExpectedResult = &Context->ReleaseEntry;
+            InterlockedExchange(&Context->Phase, QUEUE_TIMER_REUSE_UNTIMED);
+            KeSetEvent(&Context->TimedEntryReturned, IO_NO_INCREMENT, FALSE);
+        }
+        else if (FirstResult == (PLIST_ENTRY)(ULONG_PTR)STATUS_TIMEOUT)
+        {
+            Context->TimedTimeouts++;
+            ExpectedResult = &Context->TimedEntry;
+            InterlockedExchange(&Context->Phase, QUEUE_TIMER_REUSE_UNTIMED);
+        }
+        else
+        {
+            Context->WrongResults++;
+            InterlockedExchange(&Context->Phase, QUEUE_TIMER_REUSE_DONE);
+            KeSetEvent(&Context->IterationCompleted, IO_NO_INCREMENT, FALSE);
+            continue;
+        }
+
+        SecondResult = KeRemoveQueue(&Context->Queue, KernelMode, NULL);
+        if (SecondResult == (PLIST_ENTRY)(ULONG_PTR)STATUS_TIMEOUT)
+            Context->StaleTimeouts++;
+        else if (SecondResult != ExpectedResult)
+            Context->WrongResults++;
+
+        InterlockedExchange(&Context->Phase, QUEUE_TIMER_REUSE_DONE);
+        KeSetEvent(&Context->IterationCompleted, IO_NO_INCREMENT, FALSE);
+    }
+
+    KeRevertToUserAffinityThread();
     PsTerminateSystemThread(STATUS_SUCCESS);
 }
 
@@ -299,6 +421,123 @@ TestQueueDirectHandoffAccounting(VOID)
     }
 
     KeRundownQueue(&Context.Queue);
+}
+
+static
+VOID
+TestQueueTimerReuseSmp(VOID)
+{
+    QUEUE_TIMER_REUSE_CONTEXT Context;
+    HANDLE ThreadHandle;
+    PVOID ThreadObject = NULL;
+    NTSTATUS Status;
+    BOOLEAN WaiterVisible;
+    BOOLEAN Abort = FALSE;
+    ULONG Index;
+
+    if (KeNumberProcessors < 2)
+    {
+        skip(FALSE, "Single CPU -- skipping timed queue reuse race\n");
+        return;
+    }
+
+    RtlZeroMemory(&Context, sizeof(Context));
+    KeInitializeQueue(&Context.Queue, 1);
+    KeInitializeEvent(&Context.BeginIteration, SynchronizationEvent, FALSE);
+    KeInitializeEvent(&Context.TimedEntryReturned, NotificationEvent, FALSE);
+    KeInitializeEvent(&Context.IterationCompleted, NotificationEvent, FALSE);
+
+    Status = PsCreateSystemThread(&ThreadHandle, THREAD_ALL_ACCESS, NULL, NULL, NULL, QueueTimerReuseThread, &Context);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    Status = ObReferenceObjectByHandle(ThreadHandle, SYNCHRONIZE, *PsThreadType, KernelMode, &ThreadObject, NULL);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+    {
+        InterlockedExchange(&Context.Stop, TRUE);
+        KeSetEvent(&Context.BeginIteration, IO_NO_INCREMENT, FALSE);
+        ZwWaitForSingleObject(ThreadHandle, FALSE, NULL);
+        ObCloseHandle(ThreadHandle, KernelMode);
+        return;
+    }
+    ObCloseHandle(ThreadHandle, KernelMode);
+
+    KeSetSystemAffinityThread((KAFFINITY)1 << 1);
+
+    for (Index = 0; Index < QUEUE_TIMER_REUSE_ITERATIONS; Index++)
+    {
+        KeClearEvent(&Context.TimedEntryReturned);
+        KeClearEvent(&Context.IterationCompleted);
+        InterlockedExchange(&Context.Phase, 0);
+        KeSetEvent(&Context.BeginIteration, IO_NO_INCREMENT, FALSE);
+
+        WaiterVisible = SpinForQueueWaiter(&Context.Queue, 2 * 1000 * 1000);
+        ok(WaiterVisible, "Timed queue waiter %lu was not published\n", Index);
+        if (!WaiterVisible)
+        {
+            Abort = TRUE;
+            break;
+        }
+
+        KeStallExecutionProcessor(15000 + (Index & 31) * 200);
+        KeInsertQueue(&Context.Queue, &Context.TimedEntry);
+
+        Status = SpinForTimerReuseTransition(&Context, 2 * 1000 * 1000);
+        if (Status == STATUS_WAIT_0)
+        {
+            KeClearEvent(&Context.TimedEntryReturned);
+            WaiterVisible = SpinForQueueWaiter(&Context.Queue, 2 * 1000 * 1000);
+            ok(WaiterVisible, "Untimed queue waiter %lu was not published\n", Index);
+            if (!WaiterVisible)
+            {
+                Abort = TRUE;
+                break;
+            }
+
+            KeStallExecutionProcessor(20 * 1000);
+            KeMemoryBarrier();
+            if (Context.Phase == QUEUE_TIMER_REUSE_UNTIMED)
+                KeInsertQueue(&Context.Queue, &Context.ReleaseEntry);
+        }
+        else if (Status != STATUS_WAIT_0 + 1)
+        {
+            ok(Status == STATUS_WAIT_0 || Status == STATUS_WAIT_0 + 1, "Unexpected iteration wait status 0x%08lx\n", Status);
+            Abort = TRUE;
+            break;
+        }
+
+        if (!KeReadStateEvent(&Context.IterationCompleted))
+        {
+            Status = SpinForTimerReuseTransition(&Context, 2 * 1000 * 1000);
+            ok_eq_hex(Status, STATUS_WAIT_0 + 1);
+            if (Status != STATUS_WAIT_0 + 1)
+            {
+                Abort = TRUE;
+                break;
+            }
+        }
+    }
+
+    KeRevertToUserAffinityThread();
+    if (Abort)
+    {
+        InterlockedExchange(&Context.Stop, TRUE);
+        KeRundownQueue(&Context.Queue);
+        KeSetEvent(&Context.BeginIteration, IO_NO_INCREMENT, FALSE);
+    }
+    Status = KeWaitForSingleObject(ThreadObject, Executive, KernelMode, FALSE, NULL);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ObDereferenceObject(ThreadObject);
+
+    trace("[KeQueue][TimerReuse] handoff=%lu timeout=%lu stale=%lu wrong=%lu iterations=%lu\n", Context.TimedHandoffs, Context.TimedTimeouts, Context.StaleTimeouts, Context.WrongResults, Index);
+    ok(Context.TimedHandoffs != 0, "No timed queue handoff reached the timer-reuse path\n");
+    ok_eq_ulong(Context.StaleTimeouts, 0UL);
+    ok_eq_ulong(Context.WrongResults, 0UL);
+    ok_eq_ulong(Index, QUEUE_TIMER_REUSE_ITERATIONS);
+    if (!Abort)
+        KeRundownQueue(&Context.Queue);
 }
 
 static
@@ -657,6 +896,7 @@ START_TEST(KeQueue)
     TestQueueRundownMultipleWaiter(WaitAny);
     TestQueueRundownMultipleWaiter(WaitAll);
     TestQueueDirectHandoffAccounting();
+    TestQueueTimerReuseSmp();
 #ifdef _M_ARM64
     TestQueueRemoveEx();
     {

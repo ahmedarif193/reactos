@@ -46,7 +46,13 @@ KiWaitTest(IN PVOID ObjectPointer,
 
         KiAcquireThreadLock(WaitThread);
 
-        if (WaitThread->State == Waiting)
+        if ((WaitThread->State == Waiting) &&
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
+            (WaitBlock->BlockState == WaitBlockActive)
+#else
+            TRUE
+#endif
+           )
         {
             WaitStatus = STATUS_KERNEL_APC;
             if (WaitBlock->WaitType == WaitAny)
@@ -86,8 +92,13 @@ KiUnlinkThread(IN PKTHREAD Thread,
                 InitializeListHead(&Thread->Timer.Header.WaitListHead);
                 Thread->WaitBlock[TIMER_WAIT_BLOCK].WaitListEntry.Flink = NULL;
                 Thread->WaitBlock[TIMER_WAIT_BLOCK].WaitListEntry.Blink = NULL;
-                Thread->WaitBlock[TIMER_WAIT_BLOCK].BlockState = WaitBlockInactive;
             }
+            /* Expiration may already have removed the timer from its table
+             * while still waiting for the timer object and this thread lock.
+             * In that case KxRemoveTreeTimer returns FALSE, but the timer block
+             * still belongs to the completed wait and must not wake a later
+             * wait that reuses this KTHREAD. */
+            Thread->WaitBlock[TIMER_WAIT_BLOCK].BlockState = WaitBlockInactive;
             Thread->TimerActive = FALSE;
         }
         WaitBlock = Thread->WaitBlockList;
