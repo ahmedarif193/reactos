@@ -24,8 +24,23 @@
 #undef ExInterlockedExchangeUlong
 #undef ExInterlockedCompareExchange64
 
+PSLIST_ENTRY
+NTAPI
+RtlFirstEntrySList(
+    _In_ const SLIST_HEADER *SListHead);
+
 
 /* FUNCTIONS ****************************************************************/
+
+/*
+ * @implemented
+ */
+PSLIST_ENTRY
+FirstEntrySList(
+    _In_ PSLIST_HEADER SListHead)
+{
+    return RtlFirstEntrySList(SListHead);
+}
 
 FORCEINLINE
 BOOLEAN
@@ -558,4 +573,3 @@ ExInterlockedAddLargeStatistic(
 
 
 #endif
-

@@ -221,6 +221,24 @@ ExDeletePagedLookasideList(IN PPAGED_LOOKASIDE_LIST Lookaside)
     KeReleaseSpinLock(&ExpPagedLookasideListLock, OldIrql);
 }
 
+VOID
+NTAPI
+ExpFreeToLookasideListExExport(
+    _Inout_ PLOOKASIDE_LIST_EX Lookaside,
+    _In_ PVOID Entry)
+{
+    ExFreeToLookasideListEx(Lookaside, Entry);
+}
+
+VOID
+NTAPI
+ExpFreeToNPagedLookasideListExport(
+    _Inout_ PNPAGED_LOOKASIDE_LIST Lookaside,
+    _In_ PVOID Entry)
+{
+    ExFreeToNPagedLookasideList(Lookaside, Entry);
+}
+
 /*
  * @implemented
  */

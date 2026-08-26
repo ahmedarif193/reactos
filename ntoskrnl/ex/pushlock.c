@@ -1334,13 +1334,25 @@ ExfUnblockPushLock(PEX_PUSH_LOCK PushLock,
     }
 }
 
+static
+VOID
+ExpValidatePushLockFlags(
+    _In_ PEX_PUSH_LOCK PushLock,
+    _In_ ULONG Flags)
+{
+    if (Flags & ~7UL)
+    {
+        KeBugCheckEx(0x152, Flags, (ULONG_PTR)PushLock, 0, 0);
+    }
+}
+
 VOID
 FASTCALL
 ExAcquirePushLockExclusiveEx(
     _Inout_ PEX_PUSH_LOCK PushLock,
     _In_ ULONG Flags)
 {
-    UNREFERENCED_PARAMETER(Flags);
+    ExpValidatePushLockFlags(PushLock, Flags);
     ExAcquirePushLockExclusive(PushLock);
 }
 
@@ -1350,8 +1362,68 @@ ExAcquirePushLockSharedEx(
     _Inout_ PEX_PUSH_LOCK PushLock,
     _In_ ULONG Flags)
 {
-    UNREFERENCED_PARAMETER(Flags);
+    ExpValidatePushLockFlags(PushLock, Flags);
     ExAcquirePushLockShared(PushLock);
+}
+
+BOOLEAN
+FASTCALL
+ExTryAcquirePushLockExclusiveEx(
+    _Inout_ PEX_PUSH_LOCK PushLock,
+    _In_ ULONG Flags)
+{
+    EX_PUSH_LOCK OldValue, NewValue, ActualValue;
+
+    ExpValidatePushLockFlags(PushLock, Flags);
+
+    OldValue = *PushLock;
+    for (;;)
+    {
+        if (OldValue.Locked)
+            return FALSE;
+
+        NewValue.Value = OldValue.Value | EX_PUSH_LOCK_LOCK;
+        ActualValue.Ptr = InterlockedCompareExchangePointer(&PushLock->Ptr,
+                                                            NewValue.Ptr,
+                                                            OldValue.Ptr);
+        if (ActualValue.Ptr == OldValue.Ptr)
+            return TRUE;
+
+        OldValue = ActualValue;
+    }
+}
+
+BOOLEAN
+FASTCALL
+ExTryAcquirePushLockSharedEx(
+    _Inout_ PEX_PUSH_LOCK PushLock,
+    _In_ ULONG Flags)
+{
+    EX_PUSH_LOCK OldValue, NewValue, ActualValue;
+
+    ExpValidatePushLockFlags(PushLock, Flags);
+
+    OldValue = *PushLock;
+    for (;;)
+    {
+        if (OldValue.Locked &&
+            (OldValue.Waiting || OldValue.Shared == 0))
+        {
+            return FALSE;
+        }
+
+        NewValue.Value = OldValue.Value | EX_PUSH_LOCK_LOCK;
+        if (!OldValue.Waiting)
+            NewValue.Shared++;
+
+        ActualValue.Ptr = InterlockedCompareExchangePointer(&PushLock->Ptr,
+                                                            NewValue.Ptr,
+                                                            OldValue.Ptr);
+        if (ActualValue.Ptr == OldValue.Ptr)
+            return TRUE;
+
+        OldValue = ActualValue;
+    }
 }
 
 VOID
@@ -1360,7 +1432,7 @@ ExReleasePushLockEx(
     _Inout_ PEX_PUSH_LOCK PushLock,
     _In_ ULONG Flags)
 {
-    UNREFERENCED_PARAMETER(Flags);
+    ExpValidatePushLockFlags(PushLock, Flags);
     ExReleasePushLock(PushLock);
 }
 
@@ -1370,6 +1442,16 @@ ExReleasePushLockExclusiveEx(
     _Inout_ PEX_PUSH_LOCK PushLock,
     _In_ ULONG Flags)
 {
-    UNREFERENCED_PARAMETER(Flags);
+    ExpValidatePushLockFlags(PushLock, Flags);
     ExReleasePushLockExclusive(PushLock);
+}
+
+VOID
+FASTCALL
+ExReleasePushLockSharedEx(
+    _Inout_ PEX_PUSH_LOCK PushLock,
+    _In_ ULONG Flags)
+{
+    ExpValidatePushLockFlags(PushLock, Flags);
+    ExReleasePushLockShared(PushLock);
 }
