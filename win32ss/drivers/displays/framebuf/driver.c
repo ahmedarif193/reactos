@@ -32,6 +32,7 @@ static DRVFN DrvFunctionTable[] =
    {INDEX_DrvTransparentBlt, (PFN)DrvTransparentBlt},
    {INDEX_DrvGradientFill, (PFN)DrvGradientFill},
    {INDEX_DrvSynchronizeSurface, (PFN)DrvSynchronizeSurface},
+   {INDEX_DrvEscape, (PFN)DrvEscape},
 };
 
 BOOL APIENTRY
