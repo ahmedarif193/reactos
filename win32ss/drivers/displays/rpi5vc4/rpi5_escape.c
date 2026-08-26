@@ -72,7 +72,8 @@ DrvEscape(
             RequestedEscape == RPI5VC4_ESCAPE_RENDER_BATCH ||
             RequestedEscape == RPI5VC4_ESCAPE_UPLOAD_TEXTURE ||
             RequestedEscape == RPI5VC4_ESCAPE_RENDER_GRAPH ||
-            RequestedEscape == RPI5VC4_ESCAPE_READ_GRAPH)
+            RequestedEscape == RPI5VC4_ESCAPE_READ_GRAPH ||
+            RequestedEscape == RPI5VC4_ESCAPE_READ_TEXTURE)
             return Rpi5Vc4V3dExecutionSupported(Device) ? 1 : 0;
 
         if (RequestedEscape == OPENGL_GETINFO)
@@ -80,7 +81,8 @@ DrvEscape(
 
         return RequestedEscape == RPI5VC4_ESCAPE_QUERY_PLATFORM ||
                RequestedEscape == RPI5VC4_ESCAPE_QUERY_V3D ||
-               RequestedEscape == RPI5VC4_ESCAPE_RUN_V3D_SELFTEST;
+               RequestedEscape == RPI5VC4_ESCAPE_RUN_V3D_SELFTEST ||
+               RequestedEscape == RPI5VC4_ESCAPE_WAIT_VBLANK;
     }
 
     if (pvOut == NULL)
@@ -248,6 +250,37 @@ DrvEscape(
                                IOCTL_VIDEO_RPI5VC4_READ_GRAPH,
                                pvIn,
                                cjIn,
+                               pvOut,
+                               cjOut,
+                               &Returned) == 0)
+        {
+            return Returned;
+        }
+    }
+    else if (iEsc == RPI5VC4_ESCAPE_READ_TEXTURE &&
+             pvIn != NULL &&
+             cjIn >= sizeof(RPI5VC4_V3D_READ_TEXTURE_REQUEST) &&
+             cjOut >= FIELD_OFFSET(RPI5VC4_V3D_READ_TEXTURE_RESULT,
+                                   Pixels))
+    {
+        if (EngDeviceIoControl(Device->hDriver,
+                               IOCTL_VIDEO_RPI5VC4_READ_TEXTURE,
+                               pvIn,
+                               cjIn,
+                               pvOut,
+                               cjOut,
+                               &Returned) == 0)
+        {
+            return Returned;
+        }
+    }
+    else if (iEsc == RPI5VC4_ESCAPE_WAIT_VBLANK &&
+             cjOut >= sizeof(RPI5VC4_VBLANK_RESULT))
+    {
+        if (EngDeviceIoControl(Device->hDriver,
+                               IOCTL_VIDEO_RPI5VC4_WAIT_VBLANK,
+                               NULL,
+                               0,
                                pvOut,
                                cjOut,
                                &Returned) == 0)

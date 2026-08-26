@@ -94,4 +94,13 @@ Rpi5V3dReadGraph(
     _In_ ULONG ResultBufferLength,
     _Out_ PULONG BytesReturned);
 
+VP_STATUS
+Rpi5V3dReadTexture(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ PRPI5VC4_V3D_READ_TEXTURE_REQUEST Request,
+    _Out_writes_bytes_(ResultBufferLength)
+        PRPI5VC4_V3D_READ_TEXTURE_RESULT Result,
+    _In_ ULONG ResultBufferLength,
+    _Out_ PULONG BytesReturned);
+
 #endif /* _RPI5VC4_V3D_H_ */

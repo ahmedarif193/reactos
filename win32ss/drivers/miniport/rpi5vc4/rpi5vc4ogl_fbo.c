@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <windef.h>
 #include <winbase.h>
+#include <winuser.h>
 #include <GL/gl.h>
 #include <GL/glext.h>
 
@@ -28,6 +29,7 @@
 #define RPI5VC4_OGL_FBO_MAX_FRAMEBUFFERS 16
 #define RPI5VC4_OGL_FBO_MAX_RENDERBUFFERS 32
 #define RPI5VC4_OGL_FBO_MAX_RENDERBUFFER_SIZE 1024
+#define RPI5VC4_OGL_FBO_MAX_SOFTWARE_COLOR_TEXTURE_SIZE 2048
 
 extern VOID APIENTRY
 _mesa_TexImage1D(
@@ -85,6 +87,16 @@ extern VOID APIENTRY
 _mesa_ReadBuffer(
     GLenum Mode);
 
+extern VOID APIENTRY
+_mesa_ReadPixels(
+    GLint X,
+    GLint Y,
+    GLsizei Width,
+    GLsizei Height,
+    GLenum Format,
+    GLenum Type,
+    GLvoid *Pixels);
+
 typedef struct _RPI5VC4_OGL_RENDERBUFFER
 {
     GLuint Name;
@@ -135,9 +147,13 @@ struct _RPI5VC4_OGL_FBO_STATE
     GLframebuffer *DefaultBuffer;
     GLenum DefaultDrawBuffer;
     GLenum DefaultReadBuffer;
+    PULONG DefaultColor;
+    ULONG DefaultWidth;
+    ULONG DefaultHeight;
     GLuint NextFramebufferName;
     GLuint NextRenderbufferName;
     GLuint CurrentFramebuffer;
+    GLuint CurrentReadFramebuffer;
     GLuint CurrentRenderbuffer;
     ULONG TargetGeneration;
     RPI5VC4_OGL_FRAMEBUFFER
@@ -358,10 +374,37 @@ Rpi5OglFboValidTarget(
     _In_ GLenum Target,
     _In_z_ PCSTR Function)
 {
-    if (Target == GL_FRAMEBUFFER_EXT)
+    if (Target == GL_FRAMEBUFFER_EXT ||
+        Target == GL_READ_FRAMEBUFFER_EXT ||
+        Target == GL_DRAW_FRAMEBUFFER_EXT)
         return TRUE;
     Rpi5OglFboError(State, GL_INVALID_ENUM, Function);
     return FALSE;
+}
+
+static BOOL
+Rpi5OglFboValidBindingTarget(
+    _In_ PRPI5VC4_OGL_FBO_STATE State,
+    _In_ GLenum Target,
+    _In_z_ PCSTR Function)
+{
+    if (Target == GL_FRAMEBUFFER_EXT ||
+        Target == GL_READ_FRAMEBUFFER_EXT ||
+        Target == GL_DRAW_FRAMEBUFFER_EXT)
+    {
+        return TRUE;
+    }
+    Rpi5OglFboError(State, GL_INVALID_ENUM, Function);
+    return FALSE;
+}
+
+static GLuint
+Rpi5OglFboBindingName(
+    _In_ const RPI5VC4_OGL_FBO_STATE *State,
+    _In_ GLenum Target)
+{
+    return Target == GL_READ_FRAMEBUFFER_EXT ?
+           State->CurrentReadFramebuffer : State->CurrentFramebuffer;
 }
 
 static struct gl_texture_object *
@@ -466,6 +509,20 @@ Rpi5OglFboEffectiveReadBuffer(
 }
 
 static GLenum
+Rpi5OglFboBoundReadBuffer(
+    _In_ PRPI5VC4_OGL_FBO_STATE State)
+{
+    PRPI5VC4_OGL_FRAMEBUFFER Framebuffer;
+
+    if (State->CurrentReadFramebuffer == 0)
+        return State->DefaultReadBuffer;
+    Framebuffer = Rpi5OglFboFind(State,
+                                 State->CurrentReadFramebuffer);
+    return Framebuffer != NULL && Framebuffer->Object ?
+           Rpi5OglFboEffectiveReadBuffer(Framebuffer) : GL_NONE;
+}
+
+static GLenum
 Rpi5OglFboStatus(
     _In_ PRPI5VC4_OGL_FBO_STATE State,
     _In_ PRPI5VC4_OGL_FRAMEBUFFER Framebuffer)
@@ -544,7 +601,7 @@ Rpi5OglFboApplyBinding(
         State->CurrentFramebuffer = 0;
         State->Mesa->Buffer = State->DefaultBuffer;
         State->Mesa->Color.DrawBuffer = State->DefaultDrawBuffer;
-        State->Mesa->Pixel.ReadBuffer = State->DefaultReadBuffer;
+        State->Mesa->Pixel.ReadBuffer = Rpi5OglFboBoundReadBuffer(State);
         if (State->Mesa->Driver.SetBuffer != NULL &&
             State->DefaultDrawBuffer != GL_NONE)
         {
@@ -604,8 +661,7 @@ Rpi5OglFboApplyBinding(
     State->Mesa->Buffer = &Framebuffer->MesaBuffer;
     State->Mesa->Color.DrawBuffer =
         Rpi5OglFboEffectiveDrawBuffer(Framebuffer);
-    State->Mesa->Pixel.ReadBuffer =
-        Rpi5OglFboEffectiveReadBuffer(Framebuffer);
+    State->Mesa->Pixel.ReadBuffer = Rpi5OglFboBoundReadBuffer(State);
     if (State->Mesa->Driver.SetBuffer != NULL)
     {
         (*State->Mesa->Driver.SetBuffer)(
@@ -622,40 +678,55 @@ Rpi5OglBindFramebufferEXT(
 {
     PRPI5VC4_OGL_FBO_STATE State = Rpi5OglCurrentFboState();
     PRPI5VC4_OGL_FRAMEBUFFER Entry;
+    BOOL DrawChanged;
+    BOOL ReadChanged;
 
     if (!Rpi5OglFboCanChangeState(State, "glBindFramebufferEXT") ||
-        !Rpi5OglFboValidTarget(State, Target, "glBindFramebufferEXT(target)"))
+        !Rpi5OglFboValidBindingTarget(
+            State, Target, "glBindFramebufferEXT(target)"))
     {
         return;
     }
-    if (Framebuffer == 0)
+    if (Framebuffer != 0)
     {
-        Rpi5OglFboFlushBeforeBindingChange(State, Framebuffer);
-        State->CurrentFramebuffer = 0;
-        Rpi5OglFboAdvanceGeneration(State);
-        Rpi5OglFboApplyBinding(State);
-        return;
+        Entry = Rpi5OglFboFind(State, Framebuffer);
+        if (Entry == NULL)
+            Entry = Rpi5OglFboAllocate(State, Framebuffer);
+        if (Entry == NULL)
+        {
+            Rpi5OglFboError(State, GL_OUT_OF_MEMORY,
+                            "glBindFramebufferEXT");
+            return;
+        }
+        Entry->Object = TRUE;
+        if (Framebuffer >= State->NextFramebufferName)
+        {
+            State->NextFramebufferName = Framebuffer + 1;
+            if (State->NextFramebufferName == 0)
+                State->NextFramebufferName = 1;
+        }
     }
 
-    Entry = Rpi5OglFboFind(State, Framebuffer);
-    if (Entry == NULL)
-        Entry = Rpi5OglFboAllocate(State, Framebuffer);
-    if (Entry == NULL)
+    DrawChanged = Target != GL_READ_FRAMEBUFFER_EXT &&
+                  State->CurrentFramebuffer != Framebuffer;
+    ReadChanged = Target != GL_DRAW_FRAMEBUFFER_EXT &&
+                  State->CurrentReadFramebuffer != Framebuffer;
+    if (DrawChanged)
+        Rpi5OglFboFlushBeforeBindingChange(State, Framebuffer);
+    if (Target != GL_READ_FRAMEBUFFER_EXT)
+        State->CurrentFramebuffer = Framebuffer;
+    if (Target != GL_DRAW_FRAMEBUFFER_EXT)
+        State->CurrentReadFramebuffer = Framebuffer;
+    if (DrawChanged)
     {
-        Rpi5OglFboError(State, GL_OUT_OF_MEMORY, "glBindFramebufferEXT");
-        return;
+        Rpi5OglFboAdvanceGeneration(State);
+        Rpi5OglFboApplyBinding(State);
     }
-    Entry->Object = TRUE;
-    if (Framebuffer >= State->NextFramebufferName)
+    else if (ReadChanged)
     {
-        State->NextFramebufferName = Framebuffer + 1;
-        if (State->NextFramebufferName == 0)
-            State->NextFramebufferName = 1;
+        State->Mesa->Pixel.ReadBuffer = Rpi5OglFboBoundReadBuffer(State);
+        State->Mesa->NewState |= NEW_RASTER_OPS;
     }
-    Rpi5OglFboFlushBeforeBindingChange(State, Framebuffer);
-    State->CurrentFramebuffer = Framebuffer;
-    Rpi5OglFboAdvanceGeneration(State);
-    Rpi5OglFboApplyBinding(State);
 }
 
 static VOID APIENTRY
@@ -666,7 +737,8 @@ Rpi5OglDeleteFramebuffersEXT(
     PRPI5VC4_OGL_FBO_STATE State = Rpi5OglCurrentFboState();
     PRPI5VC4_OGL_FRAMEBUFFER Entry;
     GLsizei Index;
-    BOOL BindingChanged = FALSE;
+    BOOL DrawBindingChanged = FALSE;
+    BOOL ReadBindingChanged = FALSE;
 
     if (!Rpi5OglFboCanChangeState(State, "glDeleteFramebuffersEXT"))
         return;
@@ -693,12 +765,22 @@ Rpi5OglDeleteFramebuffersEXT(
             Rpi5OglFboFlushBeforeBindingChange(State, 0);
             State->CurrentFramebuffer = 0;
             Rpi5OglFboAdvanceGeneration(State);
-            BindingChanged = TRUE;
+            DrawBindingChanged = TRUE;
+        }
+        if (State->CurrentReadFramebuffer == Entry->Name)
+        {
+            State->CurrentReadFramebuffer = 0;
+            ReadBindingChanged = TRUE;
         }
         Rpi5OglFboReleaseFramebuffer(State, Entry);
     }
-    if (BindingChanged)
+    if (DrawBindingChanged)
         Rpi5OglFboApplyBinding(State);
+    else if (ReadBindingChanged)
+    {
+        State->Mesa->Pixel.ReadBuffer = State->DefaultReadBuffer;
+        State->Mesa->NewState |= NEW_RASTER_OPS;
+    }
 }
 
 static VOID APIENTRY
@@ -781,16 +863,18 @@ Rpi5OglCheckFramebufferStatusEXT(
 {
     PRPI5VC4_OGL_FBO_STATE State = Rpi5OglCurrentFboState();
     PRPI5VC4_OGL_FRAMEBUFFER Entry;
+    GLuint Framebuffer;
 
     if (!Rpi5OglFboCanChangeState(State, "glCheckFramebufferStatusEXT") ||
-        !Rpi5OglFboValidTarget(State, Target,
-                               "glCheckFramebufferStatusEXT(target)"))
+        !Rpi5OglFboValidBindingTarget(
+            State, Target, "glCheckFramebufferStatusEXT(target)"))
     {
         return 0;
     }
-    if (State->CurrentFramebuffer == 0)
+    Framebuffer = Rpi5OglFboBindingName(State, Target);
+    if (Framebuffer == 0)
         return GL_FRAMEBUFFER_COMPLETE_EXT;
-    Entry = Rpi5OglFboFind(State, State->CurrentFramebuffer);
+    Entry = Rpi5OglFboFind(State, Framebuffer);
     if (Entry == NULL || !Entry->Object)
         return GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT_EXT;
     return Rpi5OglFboStatus(State, Entry);
@@ -811,6 +895,8 @@ Rpi5OglFboSetTextureAttachment(
     PRPI5VC4_OGL_FRAMEBUFFER Entry;
     PRPI5VC4_OGL_ATTACHMENT Destination;
     struct gl_texture_object *Texture;
+    GLuint Framebuffer;
+    BOOL CubeFace;
 
     if (!Rpi5OglFboCanChangeState(State, Function) ||
         !Rpi5OglFboValidTarget(State, Target, Function))
@@ -824,15 +910,19 @@ Rpi5OglFboSetTextureAttachment(
         Rpi5OglFboError(State, GL_INVALID_ENUM, Function);
         return;
     }
+    CubeFace = Dimensions == 2 &&
+               TextureTarget >= GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB &&
+               TextureTarget <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z_ARB;
     if ((Dimensions == 1 && TextureTarget != GL_TEXTURE_1D) ||
-        (Dimensions == 2 && TextureTarget != GL_TEXTURE_2D) ||
+        (Dimensions == 2 && TextureTarget != GL_TEXTURE_2D && !CubeFace) ||
         (Dimensions == 3 && TextureTarget != GL_TEXTURE_3D))
     {
         Rpi5OglFboError(State, GL_INVALID_ENUM, Function);
         return;
     }
-    if (State->CurrentFramebuffer == 0 ||
-        (Entry = Rpi5OglFboFind(State, State->CurrentFramebuffer)) == NULL ||
+    Framebuffer = Rpi5OglFboBindingName(State, Target);
+    if (Framebuffer == 0 ||
+        (Entry = Rpi5OglFboFind(State, Framebuffer)) == NULL ||
         !Entry->Object)
     {
         Rpi5OglFboError(State, GL_INVALID_OPERATION, Function);
@@ -845,6 +935,24 @@ Rpi5OglFboSetTextureAttachment(
         return;
     }
     Texture = Rpi5OglFboTexture(State, TextureName);
+    if (CubeFace && TextureName != 0 &&
+        (Texture == NULL || Texture->Dimensions == 0))
+    {
+        /*
+         * Mesa 3.0 has no cube-map texture object storage. Keep the named
+         * attachment so glCheckFramebufferStatus() reports the capability as
+         * incomplete instead of retaining the previous 2D attachment and
+         * giving WineD3D a false cube render-target result.
+         */
+        Rpi5OglFboReleaseAttachment(State, Destination, TRUE);
+        Destination->ObjectType = GL_TEXTURE;
+        Destination->ObjectName = TextureName;
+        Destination->TextureTarget = TextureTarget;
+        Destination->TextureLevel = Level;
+        Rpi5OglFboAdvanceGeneration(State);
+        Rpi5OglFboApplyBinding(State);
+        return;
+    }
     if (TextureName != 0 &&
         (Texture == NULL || Texture->Dimensions != Dimensions))
     {
@@ -917,6 +1025,7 @@ Rpi5OglFramebufferRenderbufferEXT(
     PRPI5VC4_OGL_FRAMEBUFFER Entry;
     PRPI5VC4_OGL_ATTACHMENT Destination;
     PRPI5VC4_OGL_RENDERBUFFER Renderbuffer;
+    GLuint Framebuffer;
 
     if (!Rpi5OglFboCanChangeState(State,
                                   "glFramebufferRenderbufferEXT") ||
@@ -931,8 +1040,9 @@ Rpi5OglFramebufferRenderbufferEXT(
                         "glFramebufferRenderbufferEXT(target)");
         return;
     }
-    if (State->CurrentFramebuffer == 0 ||
-        (Entry = Rpi5OglFboFind(State, State->CurrentFramebuffer)) == NULL ||
+    Framebuffer = Rpi5OglFboBindingName(State, Target);
+    if (Framebuffer == 0 ||
+        (Entry = Rpi5OglFboFind(State, Framebuffer)) == NULL ||
         !Entry->Object)
     {
         Rpi5OglFboError(State, GL_INVALID_OPERATION,
@@ -976,6 +1086,7 @@ Rpi5OglGetFramebufferAttachmentParameterivEXT(
     PRPI5VC4_OGL_FBO_STATE State = Rpi5OglCurrentFboState();
     PRPI5VC4_OGL_FRAMEBUFFER Entry;
     PRPI5VC4_OGL_ATTACHMENT Source;
+    GLuint Framebuffer;
 
     if (!Rpi5OglFboCanChangeState(
             State, "glGetFramebufferAttachmentParameterivEXT") ||
@@ -985,8 +1096,9 @@ Rpi5OglGetFramebufferAttachmentParameterivEXT(
     {
         return;
     }
-    if (State->CurrentFramebuffer == 0 ||
-        (Entry = Rpi5OglFboFind(State, State->CurrentFramebuffer)) == NULL ||
+    Framebuffer = Rpi5OglFboBindingName(State, Target);
+    if (Framebuffer == 0 ||
+        (Entry = Rpi5OglFboFind(State, Framebuffer)) == NULL ||
         !Entry->Object)
     {
         Rpi5OglFboError(State, GL_INVALID_OPERATION,
@@ -1524,6 +1636,23 @@ Rpi5OglFboDrawBuffer(
 }
 
 VOID APIENTRY
+Rpi5OglFboDrawBuffers(
+    _In_ GLsizei Count,
+    _In_reads_opt_(Count) const GLenum *Modes)
+{
+    PRPI5VC4_OGL_FBO_STATE State = Rpi5OglCurrentFboState();
+
+    if (!Rpi5OglFboCanChangeState(State, "glDrawBuffers"))
+        return;
+    if (Count < 0 || Count > 1 || (Count != 0 && Modes == NULL))
+    {
+        Rpi5OglFboError(State, GL_INVALID_VALUE, "glDrawBuffers(count)");
+        return;
+    }
+    Rpi5OglFboDrawBuffer(Count == 0 ? GL_NONE : Modes[0]);
+}
+
+VOID APIENTRY
 Rpi5OglFboReadBuffer(
     _In_ GLenum Mode)
 {
@@ -1532,10 +1661,25 @@ Rpi5OglFboReadBuffer(
 
     if (!Rpi5OglFboCanChangeState(State, "glReadBuffer"))
         return;
-    if (State->CurrentFramebuffer == 0)
+    if (State->CurrentReadFramebuffer == 0)
     {
-        _mesa_ReadBuffer(Mode);
-        State->DefaultReadBuffer = State->Mesa->Pixel.ReadBuffer;
+        if (State->CurrentFramebuffer == 0)
+        {
+            _mesa_ReadBuffer(Mode);
+            State->DefaultReadBuffer = State->Mesa->Pixel.ReadBuffer;
+        }
+        else if (Mode == GL_NONE || Mode == GL_FRONT ||
+                 Mode == GL_FRONT_LEFT || Mode == GL_BACK ||
+                 Mode == GL_BACK_LEFT)
+        {
+            State->DefaultReadBuffer = Mode;
+            State->Mesa->Pixel.ReadBuffer = Mode;
+            State->Mesa->NewState |= NEW_RASTER_OPS;
+        }
+        else
+        {
+            Rpi5OglFboError(State, GL_INVALID_ENUM, "glReadBuffer");
+        }
         return;
     }
     if (Mode != GL_NONE && Mode != GL_COLOR_ATTACHMENT0_EXT)
@@ -1543,7 +1687,8 @@ Rpi5OglFboReadBuffer(
         Rpi5OglFboError(State, GL_INVALID_ENUM, "glReadBuffer");
         return;
     }
-    Framebuffer = Rpi5OglFboFind(State, State->CurrentFramebuffer);
+    Framebuffer = Rpi5OglFboFind(State,
+                                 State->CurrentReadFramebuffer);
     if (Framebuffer == NULL || !Framebuffer->Object)
     {
         Rpi5OglFboError(State, GL_INVALID_OPERATION, "glReadBuffer");
@@ -1567,6 +1712,9 @@ Rpi5OglFboGetIntegerv(
     {
         case GL_FRAMEBUFFER_BINDING_EXT:
             *Parameters = State->CurrentFramebuffer;
+            break;
+        case GL_READ_FRAMEBUFFER_BINDING_EXT:
+            *Parameters = State->CurrentReadFramebuffer;
             break;
         case GL_RENDERBUFFER_BINDING_EXT:
             *Parameters = State->CurrentRenderbuffer;
@@ -1837,7 +1985,7 @@ Rpi5OglGenerateMipmapEXT(
     }
     if (Rpi5OglRecordGraphTextureMipmap(Texture))
         return;
-    Rpi5OglMaterializeTextureClear(Texture);
+    Rpi5OglMaterializeTextureStorage(Texture);
     Width = Base->Width;
     Height = Target == GL_TEXTURE_1D ? 1 : Base->Height;
     for (Level = 1;
@@ -2231,6 +2379,82 @@ Rpi5OglFboDefineDepthTexture2D(
     return TRUE;
 }
 
+static BOOL
+Rpi5OglFboDefineSoftwareColorTexture2D(
+    _Inout_ PRPI5VC4_OGL_FBO_STATE State,
+    _In_ GLint InternalFormat,
+    _In_ GLsizei Width,
+    _In_ GLsizei Height)
+{
+    struct gl_texture_object *Texture;
+    struct gl_texture_image *Image;
+    ULONGLONG Bytes;
+
+    Texture = State->Mesa->Texture.Current2D;
+    if (Texture == NULL || Texture->Dimensions != 2)
+    {
+        Rpi5OglFboError(State, GL_INVALID_OPERATION,
+                        "glTexImage2D(software color texture)");
+        return FALSE;
+    }
+
+    Bytes = (ULONGLONG)(ULONG)Width * (ULONG)Height * 3;
+    if (Bytes == 0 || Bytes > 0xFFFFFFFFULL)
+    {
+        Rpi5OglFboError(State, GL_OUT_OF_MEMORY,
+                        "glTexImage2D(software color size)");
+        return FALSE;
+    }
+    Image = gl_alloc_texture_image();
+    if (Image == NULL)
+    {
+        Rpi5OglFboError(State, GL_OUT_OF_MEMORY,
+                        "glTexImage2D(software color image)");
+        return FALSE;
+    }
+    Image->Data = calloc(1, (SIZE_T)Bytes);
+    if (Image->Data == NULL)
+    {
+        gl_free_texture_image(Image);
+        Rpi5OglFboError(State, GL_OUT_OF_MEMORY,
+                        "glTexImage2D(software color data)");
+        return FALSE;
+    }
+
+    Image->Format = GL_RGB;
+    Image->IntFormat = (GLenum)InternalFormat;
+    Image->Border = 0;
+    Image->Width = (GLuint)Width;
+    Image->Height = (GLuint)Height;
+    Image->Depth = 1;
+    Image->Width2 = (GLuint)Width;
+    Image->Height2 = (GLuint)Height;
+    Image->Depth2 = 1;
+    Image->WidthLog2 = Rpi5OglFboFloorLog2((ULONG)Width);
+    Image->HeightLog2 = Rpi5OglFboFloorLog2((ULONG)Height);
+    Image->DepthLog2 = 0;
+    Image->MaxLog2 = MAX2(Image->WidthLog2, Image->HeightLog2);
+
+    if (Texture->Image[0] != NULL)
+        gl_free_texture_image(Texture->Image[0]);
+    Texture->Image[0] = Image;
+    Texture->Dirty = GL_TRUE;
+    State->Mesa->Texture.AnyDirty = GL_TRUE;
+    State->Mesa->NewState |= NEW_TEXTURING;
+    gl_test_texture_object_completeness(Texture);
+    if (State->Mesa->Driver.TexImage != NULL)
+    {
+        (*State->Mesa->Driver.TexImage)(State->Mesa,
+                                        GL_TEXTURE_2D,
+                                        Texture,
+                                        0,
+                                        InternalFormat,
+                                        Image);
+    }
+
+    return TRUE;
+}
+
 VOID APIENTRY
 Rpi5OglFboTexImage2D(
     _In_ GLenum Target,
@@ -2245,6 +2469,26 @@ Rpi5OglFboTexImage2D(
 {
     PRPI5VC4_OGL_FBO_STATE State = Rpi5OglCurrentFboState();
     GLubyte *Converted;
+
+    if (Target == GL_TEXTURE_2D &&
+        Level == 0 && Border == 0 && Pixels == NULL &&
+        InternalFormat == GL_RGB8 &&
+        (Format == GL_RGBA || Format == GL_BGRA_EXT) &&
+        Rpi5OglFboPacked8888Type(Type) &&
+        Width > 0 && Height > 0 &&
+        (Width > RPI5VC4_OGL_FBO_MAX_RENDERBUFFER_SIZE ||
+         Height > RPI5VC4_OGL_FBO_MAX_RENDERBUFFER_SIZE) &&
+        Width <= RPI5VC4_OGL_FBO_MAX_SOFTWARE_COLOR_TEXTURE_SIZE &&
+        Height <= RPI5VC4_OGL_FBO_MAX_SOFTWARE_COLOR_TEXTURE_SIZE)
+    {
+        if (!Rpi5OglFboCanChangeState(State, "glTexImage2D"))
+            return;
+        (void)Rpi5OglFboDefineSoftwareColorTexture2D(State,
+                                                     InternalFormat,
+                                                     Width,
+                                                     Height);
+        return;
+    }
 
     if (Target == GL_TEXTURE_2D &&
         (Rpi5OglFboDepthInternalFormat(InternalFormat) ||
@@ -2314,7 +2558,7 @@ Rpi5OglFboTexSubImage2D(
         else if (Target == GL_TEXTURE_2D)
             Texture = State->Mesa->Texture.Current2D;
     }
-    Rpi5OglMaterializeTextureClear(Texture);
+    Rpi5OglMaterializeTextureStorage(Texture);
 
     if (!Rpi5OglFboPacked8888Type(Type))
     {
@@ -2377,8 +2621,312 @@ Rpi5OglFboGetTexImage(
             break;
     }
 
-    Rpi5OglMaterializeTextureClear(Texture);
+    Rpi5OglMaterializeTextureStorage(Texture);
     _mesa_GetTexImage(Target, Level, Format, Type, Pixels);
+}
+
+VOID APIENTRY
+Rpi5OglFboReadPixels(
+    _In_ GLint X,
+    _In_ GLint Y,
+    _In_ GLsizei Width,
+    _In_ GLsizei Height,
+    _In_ GLenum Format,
+    _In_ GLenum Type,
+    _Out_ GLvoid *Pixels)
+{
+    /*
+     * Mesa's color readback supports BGRA components but not the packed
+     * 8:8:8:8 REV type used by WineD3D's FBO capability probe. On the
+     * little-endian ARM64 target both forms have the same B, G, R, A byte
+     * layout in memory.
+     */
+    if (Format == GL_BGRA_EXT && Type == GL_UNSIGNED_INT_8_8_8_8_REV)
+        Type = GL_UNSIGNED_BYTE;
+    _mesa_ReadPixels(X, Y, Width, Height, Format, Type, Pixels);
+}
+
+typedef struct _RPI5VC4_OGL_FBO_BLIT_TARGET
+{
+    GLubyte *Data;
+    struct gl_texture_object *Texture;
+    struct gl_texture_image *Image;
+    ULONG Width;
+    ULONG Height;
+    GLenum Format;
+    BOOL Default;
+} RPI5VC4_OGL_FBO_BLIT_TARGET, *PRPI5VC4_OGL_FBO_BLIT_TARGET;
+
+static BOOL
+Rpi5OglFboResolveBlitColor(
+    _In_ PRPI5VC4_OGL_FBO_STATE State,
+    _In_ GLuint Name,
+    _In_ BOOL Read,
+    _Out_ PRPI5VC4_OGL_FBO_BLIT_TARGET Target)
+{
+    PRPI5VC4_OGL_FRAMEBUFFER Framebuffer;
+    PRPI5VC4_OGL_ATTACHMENT Attachment;
+
+    ZeroMemory(Target, sizeof(*Target));
+    if (Name == 0)
+    {
+        GLenum Buffer = Read ? State->DefaultReadBuffer :
+                               State->DefaultDrawBuffer;
+
+        if (State->DefaultColor == NULL || State->DefaultWidth == 0 ||
+            State->DefaultHeight == 0 || Buffer == GL_NONE)
+        {
+            return FALSE;
+        }
+        Target->Data = (GLubyte *)State->DefaultColor;
+        Target->Width = State->DefaultWidth;
+        Target->Height = State->DefaultHeight;
+        Target->Format = GL_BGRA_EXT;
+        Target->Default = TRUE;
+        return TRUE;
+    }
+
+    Framebuffer = Rpi5OglFboFind(State, Name);
+    if (Framebuffer == NULL || !Framebuffer->Object ||
+        Rpi5OglFboStatus(State, Framebuffer) !=
+            GL_FRAMEBUFFER_COMPLETE_EXT ||
+        (Read ? Rpi5OglFboEffectiveReadBuffer(Framebuffer) :
+                Rpi5OglFboEffectiveDrawBuffer(Framebuffer)) == GL_NONE)
+    {
+        return FALSE;
+    }
+    Attachment = &Framebuffer->Color;
+    if (Attachment->ObjectType == GL_TEXTURE &&
+        Attachment->Texture != NULL)
+    {
+        Target->Texture = Attachment->Texture;
+        Target->Image = Target->Texture->Image[Attachment->TextureLevel];
+        if (Target->Image == NULL || Target->Image->Data == NULL ||
+            (Target->Image->Format != GL_RGB &&
+             Target->Image->Format != GL_RGBA))
+        {
+            return FALSE;
+        }
+        Rpi5OglMaterializeTextureStorage(Target->Texture);
+        Target->Data = Target->Image->Data;
+        Target->Width = Target->Image->Width;
+        Target->Height = Target->Image->Height;
+        Target->Format = Target->Image->Format;
+        return TRUE;
+    }
+    if (Attachment->ObjectType == GL_RENDERBUFFER_EXT &&
+        Attachment->Renderbuffer != NULL &&
+        Attachment->Renderbuffer->Color != NULL)
+    {
+        Target->Data = Attachment->Renderbuffer->Color;
+        Target->Width = Attachment->Renderbuffer->Width;
+        Target->Height = Attachment->Renderbuffer->Height;
+        Target->Format = GL_RGBA;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static VOID
+Rpi5OglFboReadBlitColor(
+    _In_ const RPI5VC4_OGL_FBO_BLIT_TARGET *Target,
+    _In_ ULONG X,
+    _In_ ULONG Y,
+    _Out_writes_(4) GLubyte Color[4])
+{
+    const GLubyte *Source;
+
+    if (Target->Default)
+    {
+        ULONG Pixel;
+
+        CopyMemory(&Pixel,
+                   Target->Data + (Y * Target->Width + X) * 4,
+                   sizeof(Pixel));
+        Color[0] = (GLubyte)(Pixel >> 16);
+        Color[1] = (GLubyte)(Pixel >> 8);
+        Color[2] = (GLubyte)Pixel;
+        Color[3] = (GLubyte)(Pixel >> 24);
+        return;
+    }
+    Source = Target->Data +
+             (Y * Target->Width + X) *
+             (Target->Format == GL_RGBA ? 4 : 3);
+    Color[0] = Source[0];
+    Color[1] = Source[1];
+    Color[2] = Source[2];
+    Color[3] = Target->Format == GL_RGBA ? Source[3] : 255;
+}
+
+static VOID
+Rpi5OglFboWriteBlitColor(
+    _Inout_ PRPI5VC4_OGL_FBO_BLIT_TARGET Target,
+    _In_ ULONG X,
+    _In_ ULONG Y,
+    _In_reads_(4) const GLubyte Color[4])
+{
+    GLubyte *Destination;
+
+    if (Target->Default)
+    {
+        ULONG Pixel = ((ULONG)Color[3] << 24) |
+                      ((ULONG)Color[0] << 16) |
+                      ((ULONG)Color[1] << 8) | Color[2];
+
+        CopyMemory(Target->Data + (Y * Target->Width + X) * 4,
+                   &Pixel,
+                   sizeof(Pixel));
+        return;
+    }
+    Destination = Target->Data +
+                  (Y * Target->Width + X) *
+                  (Target->Format == GL_RGBA ? 4 : 3);
+    Destination[0] = Color[0];
+    Destination[1] = Color[1];
+    Destination[2] = Color[2];
+    if (Target->Format == GL_RGBA)
+        Destination[3] = Color[3];
+}
+
+static BOOL
+Rpi5OglFboBlitRectValid(
+    _In_ const RPI5VC4_OGL_FBO_BLIT_TARGET *Target,
+    _In_ GLint X0,
+    _In_ GLint Y0,
+    _In_ GLint X1,
+    _In_ GLint Y1)
+{
+    return X0 >= 0 && X1 >= 0 && Y0 >= 0 && Y1 >= 0 &&
+           X0 <= (GLint)Target->Width &&
+           X1 <= (GLint)Target->Width &&
+           Y0 <= (GLint)Target->Height &&
+           Y1 <= (GLint)Target->Height &&
+           X0 != X1 && Y0 != Y1;
+}
+
+static VOID APIENTRY
+Rpi5OglBlitFramebufferEXT(
+    _In_ GLint SourceX0,
+    _In_ GLint SourceY0,
+    _In_ GLint SourceX1,
+    _In_ GLint SourceY1,
+    _In_ GLint DestinationX0,
+    _In_ GLint DestinationY0,
+    _In_ GLint DestinationX1,
+    _In_ GLint DestinationY1,
+    _In_ GLbitfield Mask,
+    _In_ GLenum Filter)
+{
+    PRPI5VC4_OGL_FBO_STATE State = Rpi5OglCurrentFboState();
+    RPI5VC4_OGL_FBO_BLIT_TARGET Source;
+    RPI5VC4_OGL_FBO_BLIT_TARGET Destination;
+    GLint Width;
+    GLint Height;
+    GLint SourceXStep;
+    GLint SourceYStep;
+    GLint DestinationXStep;
+    GLint DestinationYStep;
+    GLint X;
+    GLint Y;
+    GLubyte Color[4];
+
+    if (!Rpi5OglFboCanChangeState(State, "glBlitFramebufferEXT"))
+        return;
+    if (Filter != GL_NEAREST && Filter != GL_LINEAR)
+    {
+        Rpi5OglFboError(State, GL_INVALID_ENUM,
+                        "glBlitFramebufferEXT(filter)");
+        return;
+    }
+    if (Mask != GL_COLOR_BUFFER_BIT)
+    {
+        Rpi5OglFboError(State, GL_INVALID_OPERATION,
+                        "glBlitFramebufferEXT(mask)");
+        return;
+    }
+    if (!Rpi5OglFboResolveBlitColor(State,
+                                     State->CurrentReadFramebuffer,
+                                     TRUE,
+                                     &Source) ||
+        !Rpi5OglFboResolveBlitColor(State,
+                                     State->CurrentFramebuffer,
+                                     FALSE,
+                                     &Destination) ||
+        !Rpi5OglFboBlitRectValid(&Source,
+                                  SourceX0, SourceY0,
+                                  SourceX1, SourceY1) ||
+        !Rpi5OglFboBlitRectValid(&Destination,
+                                  DestinationX0, DestinationY0,
+                                  DestinationX1, DestinationY1))
+    {
+        Rpi5OglFboError(State, GL_INVALID_OPERATION,
+                        "glBlitFramebufferEXT(framebuffer)");
+        return;
+    }
+
+    Width = abs(SourceX1 - SourceX0);
+    Height = abs(SourceY1 - SourceY0);
+    if (Width != abs(DestinationX1 - DestinationX0) ||
+        Height != abs(DestinationY1 - DestinationY0))
+    {
+        Rpi5OglFboError(State, GL_INVALID_OPERATION,
+                        "glBlitFramebufferEXT(scale)");
+        return;
+    }
+    SourceXStep = SourceX1 > SourceX0 ? 1 : -1;
+    SourceYStep = SourceY1 > SourceY0 ? 1 : -1;
+    DestinationXStep = DestinationX1 > DestinationX0 ? 1 : -1;
+    DestinationYStep = DestinationY1 > DestinationY0 ? 1 : -1;
+    for (Y = 0; Y < Height; Y++)
+    {
+        ULONG SourceY = SourceYStep > 0 ?
+                        SourceY0 + Y : SourceY0 - 1 - Y;
+        ULONG DestinationY = DestinationYStep > 0 ?
+                             DestinationY0 + Y :
+                             DestinationY0 - 1 - Y;
+
+        for (X = 0; X < Width; X++)
+        {
+            ULONG SourceX = SourceXStep > 0 ?
+                            SourceX0 + X : SourceX0 - 1 - X;
+            ULONG DestinationX = DestinationXStep > 0 ?
+                                 DestinationX0 + X :
+                                 DestinationX0 - 1 - X;
+
+            Rpi5OglFboReadBlitColor(&Source, SourceX, SourceY, Color);
+            Rpi5OglFboWriteBlitColor(&Destination,
+                                      DestinationX,
+                                      DestinationY,
+                                      Color);
+        }
+    }
+
+    if (Destination.Texture != NULL)
+    {
+        Destination.Texture->Dirty = GL_TRUE;
+        State->Mesa->Texture.AnyDirty = GL_TRUE;
+        State->Mesa->NewState |= NEW_TEXTURING;
+        if (State->Mesa->Driver.TexSubImage != NULL)
+        {
+            (*State->Mesa->Driver.TexSubImage)(
+                State->Mesa,
+                GL_TEXTURE_2D,
+                Destination.Texture,
+                0,
+                DestinationX0 < DestinationX1 ?
+                    DestinationX0 : DestinationX1,
+                DestinationY0 < DestinationY1 ?
+                    DestinationY0 : DestinationY1,
+                Width,
+                Height,
+                Destination.Image->IntFormat,
+                Destination.Image);
+        }
+    }
+    else
+    {
+        Rpi5OglFboAdvanceGeneration(State);
+    }
 }
 
 typedef struct _RPI5VC4_OGL_FBO_PROC
@@ -2389,6 +2937,8 @@ typedef struct _RPI5VC4_OGL_FBO_PROC
 
 static const RPI5VC4_OGL_FBO_PROC Rpi5OglFboProcedures[] =
 {
+    {"glDrawBuffers", (PROC)Rpi5OglFboDrawBuffers},
+    {"glBlitFramebufferEXT", (PROC)Rpi5OglBlitFramebufferEXT},
     {"glBindFramebufferEXT", (PROC)Rpi5OglBindFramebufferEXT},
     {"glBindRenderbufferEXT", (PROC)Rpi5OglBindRenderbufferEXT},
     {"glCheckFramebufferStatusEXT",
@@ -2438,6 +2988,20 @@ Rpi5OglFboInitialize(
     NewState->TargetGeneration = 1;
     *State = NewState;
     return TRUE;
+}
+
+VOID
+Rpi5OglFboSetDefaultColor(
+    _In_opt_ PRPI5VC4_OGL_FBO_STATE State,
+    _In_opt_ PULONG Pixels,
+    _In_ ULONG Width,
+    _In_ ULONG Height)
+{
+    if (State == NULL)
+        return;
+    State->DefaultColor = Pixels;
+    State->DefaultWidth = Width;
+    State->DefaultHeight = Height;
 }
 
 VOID

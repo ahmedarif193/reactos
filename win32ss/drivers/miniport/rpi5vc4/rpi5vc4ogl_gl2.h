@@ -63,6 +63,10 @@ Rpi5OglGl2DesktopProgramActive(
     _In_opt_ PRPI5VC4_OGL_GL2_STATE State);
 
 BOOL
+Rpi5OglGl2WineD3dProgramActive(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State);
+
+BOOL
 Rpi5OglGl2TerrainProgramActive(
     _In_opt_ PRPI5VC4_OGL_GL2_STATE State);
 
@@ -258,9 +262,24 @@ VOID
 Rpi5OglGl2InvalidateTextureUpload(
     _In_opt_ PRPI5VC4_OGL_GL2_STATE State);
 
+VOID
+Rpi5OglGl2AdoptTextureUpload(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_opt_ struct gl_texture_object *Texture,
+    _In_ ULONG TextureGeneration);
+
 PROC
 Rpi5OglGl2GetProcAddress(
     _In_z_ LPCSTR Name);
 
 PRPI5VC4_OGL_GL2_STATE
 Rpi5OglCurrentGl2State(VOID);
+
+INT
+Rpi5OglGpuEscape(
+    _In_ HDC Hdc,
+    _In_ ULONG Op,
+    _In_ ULONG InputSize,
+    _In_reads_bytes_opt_(InputSize) LPCVOID Input,
+    _In_ ULONG OutputSize,
+    _Out_writes_bytes_opt_(OutputSize) LPVOID Output);

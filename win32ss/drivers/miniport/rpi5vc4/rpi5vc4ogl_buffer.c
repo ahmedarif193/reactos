@@ -232,6 +232,11 @@ Rpi5OglBindBuffer(
 
     if (!Rpi5OglBufferCanChangeState(State, "glBindBuffer"))
         return;
+    if ((Target == GL_PIXEL_PACK_BUFFER ||
+         Target == GL_PIXEL_UNPACK_BUFFER) && Name == 0)
+    {
+        return;
+    }
     Binding = Rpi5OglBufferBinding(State, Target, "glBindBuffer(target)");
     if (Binding == NULL)
         return;

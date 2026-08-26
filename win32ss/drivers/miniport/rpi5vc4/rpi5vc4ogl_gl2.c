@@ -25,6 +25,20 @@
 
 #include "rpi5vc4ogl_gl2.h"
 
+BOOL
+Rpi5OglPrepareTextureUpload(
+    _In_ ULONG TextureSlot,
+    _In_opt_ struct gl_texture_object *Texture);
+
+VOID
+Rpi5OglDiscardRetainedDepthTexture(
+    _In_opt_ struct gl_texture_object *Texture);
+
+extern void APIENTRY _mesa_StencilFunc(GLenum Func, GLint Ref, GLuint Mask);
+extern void APIENTRY _mesa_StencilOp(GLenum Fail,
+                                     GLenum DepthFail,
+                                     GLenum DepthPass);
+
 #define RPI5VC4_GL2_MAX_SHADERS       32
 #define RPI5VC4_GL2_MAX_PROGRAMS      16
 #define RPI5VC4_GL2_MAX_SOURCE_BYTES   (64 * 1024)
@@ -125,7 +139,10 @@ typedef enum _RPI5VC4_OGL_SHADER_EXECUTABLE
     Rpi5OglShaderExecutableTerrainTiltVerticalFragment,
     Rpi5OglShaderExecutableTerrainFragment,
     Rpi5OglShaderExecutableDepthFragment,
-    Rpi5OglShaderExecutableShadowFragment
+    Rpi5OglShaderExecutableShadowFragment,
+    Rpi5OglShaderExecutableWineD3dXyzrhwVertex,
+    Rpi5OglShaderExecutableWineD3dXyzrhwBgraVertex,
+    Rpi5OglShaderExecutableWineD3dModulateFragment
 } RPI5VC4_OGL_SHADER_EXECUTABLE;
 
 typedef enum _RPI5VC4_OGL_PROGRAM_EXECUTABLE
@@ -169,7 +186,8 @@ typedef enum _RPI5VC4_OGL_PROGRAM_EXECUTABLE
     Rpi5OglProgramExecutableTerrainTiltVertical,
     Rpi5OglProgramExecutableTerrain,
     Rpi5OglProgramExecutableDepth,
-    Rpi5OglProgramExecutableShadow
+    Rpi5OglProgramExecutableShadow,
+    Rpi5OglProgramExecutableWineD3dXyzrhwTexture
 } RPI5VC4_OGL_PROGRAM_EXECUTABLE;
 
 static BOOL
@@ -300,6 +318,7 @@ typedef struct _RPI5VC4_OGL_PROGRAM
     BOOL ModelViewMatrixSet;
     BOOL ViewMatrixSet;
     BOOL ProjectionMatrixSet;
+    BOOL ColorSwizzle;
     BOOL ViewportSet;
     BOOL NormalMatrix3Set;
     BOOL LightPositionSet;
@@ -810,6 +829,87 @@ Rpi5OglGl2SourceHash(
     return Hash;
 }
 
+static BOOL
+Rpi5OglGl2SourceContains(
+    _In_reads_bytes_(SourceLength) PCSTR Source,
+    _In_ ULONG SourceLength,
+    _In_z_ PCSTR Needle)
+{
+    SIZE_T NeedleLength = lstrlenA(Needle);
+    ULONG Offset;
+
+    if (NeedleLength == 0 || NeedleLength > SourceLength)
+        return FALSE;
+    for (Offset = 0; Offset <= SourceLength - NeedleLength; Offset++)
+    {
+        if (memcmp(Source + Offset, Needle, NeedleLength) == 0)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static RPI5VC4_OGL_SHADER_EXECUTABLE
+Rpi5OglGl2WineD3dSourceExecutable(
+    _In_ PRPI5VC4_OGL_SHADER Shader)
+{
+    BOOL CommonVertex;
+
+    CommonVertex =
+        Shader->Type == GL_VERTEX_SHADER &&
+        Rpi5OglGl2SourceContains(Shader->Source, Shader->SourceLength,
+                                "#version 120") &&
+        Rpi5OglGl2SourceContains(Shader->Source, Shader->SourceLength,
+                                "uniform mat4 ffp_projection_matrix;") &&
+        Rpi5OglGl2SourceContains(Shader->Source, Shader->SourceLength,
+                                "vec4 ffp_attrib_position = vs_in0;") &&
+        Rpi5OglGl2SourceContains(Shader->Source, Shader->SourceLength,
+                                "vec4 ffp_attrib_texcoord0 = vs_in7;") &&
+        Rpi5OglGl2SourceContains(Shader->Source, Shader->SourceLength,
+                                "vec4 ec_pos = vec4(ffp_attrib_position.xyz, 1.0);") &&
+        Rpi5OglGl2SourceContains(Shader->Source, Shader->SourceLength,
+                                "gl_Position = ffp_projection_matrix * ec_pos;") &&
+        Rpi5OglGl2SourceContains(Shader->Source, Shader->SourceLength,
+                                "if (ffp_attrib_position.w != 0.0) gl_Position /= ffp_attrib_position.w;") &&
+        Rpi5OglGl2SourceContains(Shader->Source, Shader->SourceLength,
+                                "ffp_varying_diffuse = ffp_attrib_diffuse;") &&
+        Rpi5OglGl2SourceContains(Shader->Source, Shader->SourceLength,
+                                "ffp_varying_texcoord[0] = ffp_attrib_texcoord0;");
+    if (CommonVertex &&
+        Rpi5OglGl2SourceContains(Shader->Source, Shader->SourceLength,
+                                "vec4 ffp_attrib_diffuse = vs_in5.zyxw;"))
+    {
+        return Rpi5OglShaderExecutableWineD3dXyzrhwBgraVertex;
+    }
+    if (CommonVertex &&
+        Rpi5OglGl2SourceContains(Shader->Source, Shader->SourceLength,
+                                "vec4 ffp_attrib_diffuse = vs_in5;"))
+    {
+        return Rpi5OglShaderExecutableWineD3dXyzrhwVertex;
+    }
+
+    if (Shader->Type == GL_FRAGMENT_SHADER &&
+        Rpi5OglGl2SourceContains(Shader->Source, Shader->SourceLength,
+                                "#version 120") &&
+        Rpi5OglGl2SourceContains(Shader->Source, Shader->SourceLength,
+                                "uniform sampler2D ps_sampler0;") &&
+        !Rpi5OglGl2SourceContains(Shader->Source, Shader->SourceLength,
+                                 "ps_sampler1") &&
+        !Rpi5OglGl2SourceContains(Shader->Source, Shader->SourceLength,
+                                 "discard") &&
+        Rpi5OglGl2SourceContains(Shader->Source, Shader->SourceLength,
+                                "ffp_texcoord[0] = gl_TexCoord[0];") &&
+        Rpi5OglGl2SourceContains(Shader->Source, Shader->SourceLength,
+                                "tex0 = texture2D(ps_sampler0, ffp_texcoord[0].xy);") &&
+        Rpi5OglGl2SourceContains(Shader->Source, Shader->SourceLength,
+                                "ret.xyz = tex0.xyz * ffp_varying_diffuse.xyz;") &&
+        Rpi5OglGl2SourceContains(Shader->Source, Shader->SourceLength,
+                                "gl_FragData[0] = ffp_varying_specular * specular_enable + ret;"))
+    {
+        return Rpi5OglShaderExecutableWineD3dModulateFragment;
+    }
+    return Rpi5OglShaderExecutableNone;
+}
+
 static RPI5VC4_OGL_SHADER_EXECUTABLE
 Rpi5OglGl2SourceExecutable(
     _In_ PRPI5VC4_OGL_SHADER Shader)
@@ -838,9 +938,14 @@ Rpi5OglGl2SourceExecutable(
     PCSTR Body;
     ULONG NormalizedLength;
     ULONG SourceHash;
+    RPI5VC4_OGL_SHADER_EXECUTABLE WineD3dExecutable;
 
-    if (Shader->Source == NULL ||
-        !Rpi5OglGl2NormalizeSource(Shader->Source,
+    if (Shader->Source == NULL)
+        return Rpi5OglShaderExecutableNone;
+    WineD3dExecutable = Rpi5OglGl2WineD3dSourceExecutable(Shader);
+    if (WineD3dExecutable != Rpi5OglShaderExecutableNone)
+        return WineD3dExecutable;
+    if (!Rpi5OglGl2NormalizeSource(Shader->Source,
                                    Shader->SourceLength,
                                    Normalized,
                                    sizeof(Normalized)))
@@ -1654,6 +1759,26 @@ Rpi5OglGl2AssignGenericAttributes(
 }
 
 static BOOL
+Rpi5OglGl2AssignWineD3dAttributes(
+    _In_ PRPI5VC4_OGL_PROGRAM Program,
+    _Out_ GLint *PositionAttribute,
+    _Out_ GLint *ColorAttribute,
+    _Out_ GLint *TexCoordAttribute)
+{
+    *PositionAttribute = Program->PositionBindingSet ?
+                         Program->PositionBinding : 0;
+    *ColorAttribute = Program->ColorBindingSet ?
+                      Program->ColorBinding : 5;
+    *TexCoordAttribute = Program->TexCoordBindingSet ?
+                         Program->TexCoordBinding : 7;
+    return *PositionAttribute >= 0 && *ColorAttribute >= 0 &&
+           *TexCoordAttribute >= 0 &&
+           *PositionAttribute != *ColorAttribute &&
+           *PositionAttribute != *TexCoordAttribute &&
+           *ColorAttribute != *TexCoordAttribute;
+}
+
+static BOOL
 Rpi5OglGl2AssignPositionAttribute(
     _In_ PRPI5VC4_OGL_PROGRAM Program,
     _Out_ GLint *PositionAttribute)
@@ -2083,14 +2208,16 @@ Rpi5OglBindAttribLocation(
     if (lstrcmpA(Name, "pos") == 0 ||
         lstrcmpA(Name, "position") == 0 ||
         lstrcmpA(Name, "vertex") == 0 ||
-        lstrcmpA(Name, "aVertexPosition") == 0)
+        lstrcmpA(Name, "aVertexPosition") == 0 ||
+        lstrcmpA(Name, "vs_in0") == 0)
     {
         Program->PositionBinding = Index;
         Program->PositionBindingSet = TRUE;
     }
     else if (lstrcmpA(Name, "color") == 0 ||
              lstrcmpA(Name, "vtxcolor") == 0 ||
-             lstrcmpA(Name, "aVertexColor") == 0)
+             lstrcmpA(Name, "aVertexColor") == 0 ||
+             lstrcmpA(Name, "vs_in5") == 0)
     {
         Program->ColorBinding = Index;
         Program->ColorBindingSet = TRUE;
@@ -2104,7 +2231,8 @@ Rpi5OglBindAttribLocation(
     else if (lstrcmpA(Name, "texcoord") == 0 ||
              lstrcmpA(Name, "uv") == 0 ||
              lstrcmpA(Name, "uvIn") == 0 ||
-             lstrcmpA(Name, "aTextureCoord") == 0)
+             lstrcmpA(Name, "aTextureCoord") == 0 ||
+             lstrcmpA(Name, "vs_in7") == 0)
     {
         Program->TexCoordBinding = Index;
         Program->TexCoordBindingSet = TRUE;
@@ -2164,7 +2292,20 @@ Rpi5OglLinkProgram(
     if (VertexShader != NULL && FragmentShader != NULL &&
         VertexShader->Compiled && FragmentShader->Compiled)
     {
-        if (VertexShader->Executable ==
+        if ((VertexShader->Executable ==
+                 Rpi5OglShaderExecutableWineD3dXyzrhwVertex ||
+             VertexShader->Executable ==
+                 Rpi5OglShaderExecutableWineD3dXyzrhwBgraVertex) &&
+            FragmentShader->Executable ==
+                Rpi5OglShaderExecutableWineD3dModulateFragment &&
+            Rpi5OglGl2AssignWineD3dAttributes(Program,
+                                              &PositionAttribute,
+                                              &ColorAttribute,
+                                              &TexCoordAttribute))
+        {
+            Executable = Rpi5OglProgramExecutableWineD3dXyzrhwTexture;
+        }
+        else if (VertexShader->Executable ==
                 Rpi5OglShaderExecutableFixedVertex &&
             FragmentShader->Executable ==
                 Rpi5OglShaderExecutableFixedFragment)
@@ -2542,6 +2683,9 @@ Rpi5OglLinkProgram(
     if (Program->Linked)
     {
         Program->Executable = Executable;
+        Program->ColorSwizzle =
+            VertexShader->Executable ==
+                Rpi5OglShaderExecutableWineD3dXyzrhwBgraVertex;
         Program->PositionAttribute = PositionAttribute;
         Program->ColorAttribute = ColorAttribute;
         Program->NormalAttribute = NormalAttribute;
@@ -2696,6 +2840,9 @@ Rpi5OglGetProgramiv(
         case GL_ACTIVE_UNIFORMS:
             if (!Program->Linked)
                 *Parameters = 0;
+            else if (Program->Executable ==
+                         Rpi5OglProgramExecutableWineD3dXyzrhwTexture)
+                *Parameters = 2;
             else if (Rpi5OglGl2IsEffectExecutable(Program->Executable))
                 *Parameters = 1;
             else if (Program->Executable ==
@@ -2731,6 +2878,9 @@ Rpi5OglGetProgramiv(
         case GL_ACTIVE_UNIFORM_MAX_LENGTH:
             if (!Program->Linked)
                 *Parameters = 0;
+            else if (Program->Executable ==
+                         Rpi5OglProgramExecutableWineD3dXyzrhwTexture)
+                *Parameters = sizeof("ffp_projection_matrix");
             else if (Rpi5OglGl2IsEffectExecutable(Program->Executable))
                 *Parameters = sizeof("Texture0");
             else if (Program->Executable ==
@@ -2764,6 +2914,9 @@ Rpi5OglGetProgramiv(
         case GL_ACTIVE_ATTRIBUTES:
             if (!Program->Linked)
                 *Parameters = 0;
+            else if (Program->Executable ==
+                         Rpi5OglProgramExecutableWineD3dXyzrhwTexture)
+                *Parameters = 3;
             else if (Program->Executable ==
                          Rpi5OglProgramExecutableHeightMap ||
                      Program->Executable ==
@@ -2802,6 +2955,9 @@ Rpi5OglGetProgramiv(
         case GL_ACTIVE_ATTRIBUTE_MAX_LENGTH:
             if (!Program->Linked)
                 *Parameters = 0;
+            else if (Program->Executable ==
+                         Rpi5OglProgramExecutableWineD3dXyzrhwTexture)
+                *Parameters = sizeof("vs_in7");
             else if (Program->Executable ==
                      Rpi5OglProgramExecutableGenericColor)
                 *Parameters = sizeof("color");
@@ -2906,16 +3062,20 @@ Rpi5OglGetActiveAttrib(
          Program->Executable != Rpi5OglProgramExecutableNormalMap &&
          Program->Executable != Rpi5OglProgramExecutableHeightMap &&
          Program->Executable != Rpi5OglProgramExecutableWireframe &&
+         Program->Executable !=
+             Rpi5OglProgramExecutableWineD3dXyzrhwTexture &&
          !Rpi5OglGl2IsEffectExecutable(Program->Executable)) ||
         Index >= ((Rpi5OglGl2IsEffectExecutable(Program->Executable) ||
-                   Program->Executable ==
-                       Rpi5OglProgramExecutableShadow) ? 1u :
-                  ((Program->Executable ==
-                       Rpi5OglProgramExecutableHeightMap ||
                     Program->Executable ==
-                       Rpi5OglProgramExecutableWireframe) ? 4u :
-                  (Program->Executable ==
-                      Rpi5OglProgramExecutableBuildTexture ? 3u : 2u))))
+                        Rpi5OglProgramExecutableShadow) ? 1u :
+                   (Program->Executable ==
+                        Rpi5OglProgramExecutableHeightMap ||
+                    Program->Executable ==
+                        Rpi5OglProgramExecutableWireframe) ? 4u :
+                   (Program->Executable ==
+                        Rpi5OglProgramExecutableWineD3dXyzrhwTexture ||
+                    Program->Executable ==
+                        Rpi5OglProgramExecutableBuildTexture) ? 3u : 2u))
     {
         Rpi5OglGl2Error(State, GL_INVALID_VALUE,
                         "glGetActiveAttrib(index)");
@@ -2928,7 +3088,13 @@ Rpi5OglGetActiveAttrib(
         return;
     }
 
-    if (Rpi5OglGl2IsEffectExecutable(Program->Executable) ||
+    if (Program->Executable ==
+            Rpi5OglProgramExecutableWineD3dXyzrhwTexture)
+    {
+        AttributeName = Index == 0 ? "vs_in0" :
+                        Index == 1 ? "vs_in5" : "vs_in7";
+    }
+    else if (Rpi5OglGl2IsEffectExecutable(Program->Executable) ||
         Program->Executable == Rpi5OglProgramExecutableShadow)
     {
         AttributeName = "position";
@@ -2971,7 +3137,10 @@ Rpi5OglGetActiveAttrib(
     else
         AttributeName = Index == 0 ? "pos" : "color";
     *Size = 1;
-    if (Program->Executable == Rpi5OglProgramExecutableShadow)
+    if (Program->Executable ==
+            Rpi5OglProgramExecutableWineD3dXyzrhwTexture)
+        *Type = GL_FLOAT_VEC4;
+    else if (Program->Executable == Rpi5OglProgramExecutableShadow)
         *Type = GL_FLOAT_VEC2;
     else if ((Program->Executable == Rpi5OglProgramExecutableBuildTexture &&
          Index == 2) ||
@@ -3044,7 +3213,17 @@ Rpi5OglGetAttribLocation(
                         "glGetAttribLocation(link status)");
         return -1;
     }
-    if (Program->Executable == Rpi5OglProgramExecutableGenericColor)
+    if (Program->Executable ==
+            Rpi5OglProgramExecutableWineD3dXyzrhwTexture)
+    {
+        if (lstrcmpA(Name, "vs_in0") == 0)
+            return Program->PositionAttribute;
+        if (lstrcmpA(Name, "vs_in5") == 0)
+            return Program->ColorAttribute;
+        if (lstrcmpA(Name, "vs_in7") == 0)
+            return Program->TexCoordAttribute;
+    }
+    else if (Program->Executable == Rpi5OglProgramExecutableGenericColor)
     {
         if (lstrcmpA(Name, "pos") == 0)
             return Program->PositionAttribute;
@@ -3168,6 +3347,34 @@ Rpi5OglGetActiveUniform(
                                    "glGetActiveUniform(program)");
         return;
     }
+    if (Program->Executable ==
+            Rpi5OglProgramExecutableWineD3dXyzrhwTexture)
+    {
+        if (!Program->Linked || Index >= 2)
+        {
+            Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                            "glGetActiveUniform(index)");
+            return;
+        }
+        if (Size == NULL || Type == NULL)
+        {
+            Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                            "glGetActiveUniform(params)");
+            return;
+        }
+        UniformName = Index == 0 ?
+                      "ffp_projection_matrix" : "ps_sampler0";
+        *Size = 1;
+        *Type = Index == 0 ? GL_FLOAT_MAT4 : GL_SAMPLER_2D;
+        Rpi5OglGl2CopyTextResult(State,
+                                 "glGetActiveUniform",
+                                 UniformName,
+                                 lstrlenA(UniformName),
+                                 BufferSize,
+                                 Length,
+                                 Name);
+        return;
+    }
     if (!Program->Linked ||
         (Program->Executable != Rpi5OglProgramExecutablePulsar &&
          Program->Executable != Rpi5OglProgramExecutableDepth &&
@@ -3286,6 +3493,15 @@ Rpi5OglGetUniformLocation(
     {
         Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
                         "glGetUniformLocation(link status)");
+        return -1;
+    }
+    if (Program->Executable ==
+            Rpi5OglProgramExecutableWineD3dXyzrhwTexture)
+    {
+        if (lstrcmpA(Name, "ffp_projection_matrix") == 0)
+            return RPI5VC4_GL2_UNIFORM_PROJECTION;
+        if (lstrcmpA(Name, "ps_sampler0") == 0)
+            return RPI5VC4_GL2_UNIFORM_TEXTURE;
         return -1;
     }
     if (Program->Executable == Rpi5OglProgramExecutableShadow)
@@ -3523,6 +3739,29 @@ Rpi5OglUniformMatrix4fv(
     if (Location == -1)
         return;
     Program = Rpi5OglGl2FindProgram(State, State->CurrentProgram);
+    if (Program != NULL && Program->Executable ==
+            Rpi5OglProgramExecutableWineD3dXyzrhwTexture)
+    {
+        if (Location != RPI5VC4_GL2_UNIFORM_PROJECTION || Count > 1)
+        {
+            Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                            "glUniformMatrix4fv(WineD3D location)");
+            return;
+        }
+        if (Count == 0)
+            return;
+        if (Value == NULL)
+        {
+            Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                            "glUniformMatrix4fv(WineD3D value)");
+            return;
+        }
+        CopyMemory(Program->ProjectionMatrix,
+                   Value,
+                   sizeof(Program->ProjectionMatrix));
+        Program->ProjectionMatrixSet = TRUE;
+        return;
+    }
     if (Program != NULL &&
         Program->Executable == Rpi5OglProgramExecutableShadow)
     {
@@ -4187,6 +4426,24 @@ Rpi5OglUniform1i(
     if (Location == -1)
         return;
     Program = Rpi5OglGl2FindProgram(State, State->CurrentProgram);
+    if (Program != NULL && Program->Executable ==
+            Rpi5OglProgramExecutableWineD3dXyzrhwTexture)
+    {
+        if (Location != RPI5VC4_GL2_UNIFORM_TEXTURE)
+        {
+            Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                            "glUniform1i(WineD3D location)");
+            return;
+        }
+        if (Value != 0)
+        {
+            Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                            "glUniform1i(WineD3D texture unit)");
+            return;
+        }
+        Program->TextureUnit = Value;
+        return;
+    }
     if (Program != NULL && Rpi5OglGl2IsTerrainExecutable(
                                Program->Executable))
     {
@@ -4537,7 +4794,8 @@ Rpi5OglVertexAttribPointer(
                         "glVertexAttribPointer(size/stride)");
         return;
     }
-    if (Type != GL_FLOAT)
+    if (Type != GL_FLOAT &&
+        !(Type == GL_UNSIGNED_BYTE && Normalized == GL_TRUE))
     {
         Rpi5OglGl2Error(State, GL_INVALID_ENUM,
                         "glVertexAttribPointer(type)");
@@ -4551,6 +4809,46 @@ Rpi5OglVertexAttribPointer(
     Attribute->Pointer = Pointer;
     Attribute->BufferName = Rpi5OglBufferCurrentName(State->BufferState,
                                                       GL_ARRAY_BUFFER);
+}
+
+static VOID APIENTRY
+Rpi5OglStencilFuncSeparate(
+    _In_ GLenum Face,
+    _In_ GLenum Function,
+    _In_ GLint Reference,
+    _In_ GLuint Mask)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+    if (!Rpi5OglGl2CanChangeState(State, "glStencilFuncSeparate"))
+        return;
+    if (Face != GL_FRONT && Face != GL_BACK && Face != GL_FRONT_AND_BACK)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM,
+                        "glStencilFuncSeparate(face)");
+        return;
+    }
+    _mesa_StencilFunc(Function, Reference, Mask);
+}
+
+static VOID APIENTRY
+Rpi5OglStencilOpSeparate(
+    _In_ GLenum Face,
+    _In_ GLenum StencilFail,
+    _In_ GLenum DepthFail,
+    _In_ GLenum DepthPass)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+    if (!Rpi5OglGl2CanChangeState(State, "glStencilOpSeparate"))
+        return;
+    if (Face != GL_FRONT && Face != GL_BACK && Face != GL_FRONT_AND_BACK)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM,
+                        "glStencilOpSeparate(face)");
+        return;
+    }
+    _mesa_StencilOp(StencilFail, DepthFail, DepthPass);
 }
 
 static VOID
@@ -4766,6 +5064,61 @@ Rpi5OglGetVertexAttribPointerv(
     *Pointer = (GLvoid *)Attribute->Pointer;
 }
 
+static VOID APIENTRY
+Rpi5OglGetQueryiv(
+    _In_ GLenum Target,
+    _In_ GLenum ParameterName,
+    _Out_ GLint *Parameters)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+    if (!Rpi5OglGl2CanChangeState(State, "glGetQueryiv"))
+        return;
+    if (Target != GL_SAMPLES_PASSED)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM, "glGetQueryiv(target)");
+        return;
+    }
+    if (ParameterName != GL_QUERY_COUNTER_BITS &&
+        ParameterName != GL_CURRENT_QUERY)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM, "glGetQueryiv(pname)");
+        return;
+    }
+    if (Parameters == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, "glGetQueryiv(params)");
+        return;
+    }
+
+    /* No bounded V3D query object path exists yet. A zero counter width makes
+     * WineD3D disable the GL 1.5-promoted occlusion-query capability before
+     * any query object entry points can be used. */
+    *Parameters = 0;
+}
+
+static VOID APIENTRY
+Rpi5OglPointParameteri(
+    _In_ GLenum ParameterName,
+    _In_ GLint Parameter)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+    if (!Rpi5OglGl2CanChangeState(State, "glPointParameteri"))
+        return;
+    if (ParameterName != GL_POINT_SPRITE_COORD_ORIGIN)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM,
+                        "glPointParameteri(pname)");
+        return;
+    }
+    if (Parameter != GL_LOWER_LEFT && Parameter != GL_UPPER_LEFT)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glPointParameteri(param)");
+    }
+}
+
 typedef struct _RPI5VC4_OGL_GL2_PROC
 {
     PCSTR Name;
@@ -4795,6 +5148,8 @@ static const RPI5VC4_OGL_GL2_PROC Rpi5OglGl2Procedures[] =
     {"glGetAttribLocation", (PROC)Rpi5OglGetAttribLocation},
     {"glGetProgramInfoLog", (PROC)Rpi5OglGetProgramInfoLog},
     {"glGetProgramiv", (PROC)Rpi5OglGetProgramiv},
+    {"glGetQueryiv", (PROC)Rpi5OglGetQueryiv},
+    {"glGetQueryivARB", (PROC)Rpi5OglGetQueryiv},
     {"glGetShaderInfoLog", (PROC)Rpi5OglGetShaderInfoLog},
     {"glGetShaderiv", (PROC)Rpi5OglGetShaderiv},
     {"glGetShaderSource", (PROC)Rpi5OglGetShaderSource},
@@ -4804,7 +5159,10 @@ static const RPI5VC4_OGL_GL2_PROC Rpi5OglGl2Procedures[] =
     {"glIsProgram", (PROC)Rpi5OglIsProgram},
     {"glIsShader", (PROC)Rpi5OglIsShader},
     {"glLinkProgram", (PROC)Rpi5OglLinkProgram},
+    {"glPointParameteri", (PROC)Rpi5OglPointParameteri},
     {"glShaderSource", (PROC)Rpi5OglShaderSource},
+    {"glStencilFuncSeparate", (PROC)Rpi5OglStencilFuncSeparate},
+    {"glStencilOpSeparate", (PROC)Rpi5OglStencilOpSeparate},
     {"glUniform1f", (PROC)Rpi5OglUniform1f},
     {"glUniform1i", (PROC)Rpi5OglUniform1i},
     {"glUniform2fv", (PROC)Rpi5OglUniform2fv},
@@ -4910,6 +5268,19 @@ Rpi5OglGl2DesktopProgramActive(
     Program = Rpi5OglGl2FindProgram(State, State->CurrentProgram);
     return Program != NULL &&
            Rpi5OglGl2IsDesktopExecutable(Program->Executable);
+}
+
+BOOL
+Rpi5OglGl2WineD3dProgramActive(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State)
+{
+    PRPI5VC4_OGL_PROGRAM Program;
+
+    if (!Rpi5OglGl2ProgramActive(State))
+        return FALSE;
+    Program = Rpi5OglGl2FindProgram(State, State->CurrentProgram);
+    return Program != NULL && Program->Executable ==
+           Rpi5OglProgramExecutableWineD3dXyzrhwTexture;
 }
 
 BOOL
@@ -5457,6 +5828,54 @@ Rpi5OglGl2GetIntegerv(
 {
     ULONG Index;
 
+    if (State != NULL)
+    {
+        GLint Value;
+
+        switch (ParameterName)
+        {
+            case GL_MAX_CLIP_DISTANCES:
+                Value = 6;
+                break;
+            case GL_MAX_DRAW_BUFFERS:
+                Value = 1;
+                break;
+            case GL_MAX_TEXTURE_UNITS:
+                Value = 1;
+                break;
+            case GL_MAX_TEXTURE_IMAGE_UNITS:
+                Value = 8;
+                break;
+            case GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS:
+                Value = 2;
+                break;
+            case GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS:
+                Value = 8;
+                break;
+            case GL_MAX_VERTEX_ATTRIBS:
+                Value = RPI5VC4_GL2_MAX_VERTEX_ATTRIBS;
+                break;
+            case GL_MAX_VERTEX_UNIFORM_COMPONENTS:
+                Value = 512;
+                break;
+            case GL_MAX_FRAGMENT_UNIFORM_COMPONENTS:
+                Value = 64;
+                break;
+            case GL_MAX_VARYING_FLOATS:
+                Value = 32;
+                break;
+            default:
+                Value = -1;
+                break;
+        }
+        if (Value >= 0)
+        {
+            if (Parameters != NULL && !INSIDE_BEGIN_END(State->Mesa))
+                Parameters[0] = Value;
+            return TRUE;
+        }
+    }
+
     if (!Rpi5OglGl2BlendQueryReady(State,
                                    ParameterName,
                                    "glGetIntegerv"))
@@ -5626,6 +6045,20 @@ Rpi5OglGl2InvalidateTextureUpload(
 }
 
 VOID
+Rpi5OglGl2AdoptTextureUpload(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_opt_ struct gl_texture_object *Texture,
+    _In_ ULONG TextureGeneration)
+{
+    if (State == NULL || Texture == NULL || TextureGeneration == 0)
+        return;
+
+    State->UploadedTexture = Texture;
+    State->UploadedTextureSerial = State->TextureSerial;
+    State->TextureGeneration = TextureGeneration;
+}
+
+VOID
 Rpi5OglGl2TextureChanged(
     _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
     _In_opt_ struct gl_texture_object *Texture)
@@ -5661,6 +6094,7 @@ Rpi5OglGl2TextureDeleted(
     if (State == NULL || Texture == NULL)
         return;
 
+    Rpi5OglDiscardRetainedDepthTexture(Texture);
     Rpi5OglGl2TextureChanged(State, Texture);
     if (State->UploadedTexture == Texture)
         State->UploadedTexture = NULL;
@@ -5999,6 +6433,13 @@ Rpi5OglGl2PrepareTextureSlot(
         return TRUE;
     }
 
+    if (!Rpi5OglPrepareTextureUpload(TextureSlot, Texture))
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                        "glDrawArrays(RPi5 retained texture readback)");
+        return FALSE;
+    }
+
     HeaderSize = FIELD_OFFSET(RPI5VC4_V3D_TEXTURE_UPLOAD_REQUEST, Pixels);
     RequestSize = HeaderSize + PixelBytes;
     Request = HeapAlloc(GetProcessHeap(), 0, RequestSize);
@@ -6070,12 +6511,12 @@ Rpi5OglGl2PrepareTextureSlot(
     }
 
     ZeroMemory(&Result, sizeof(Result));
-    Returned = ExtEscape(Hdc,
-                         RPI5VC4_ESCAPE_UPLOAD_TEXTURE,
-                         RequestSize,
-                         (LPCSTR)Request,
-                         sizeof(Result),
-                         (LPSTR)&Result);
+    Returned = Rpi5OglGpuEscape(Hdc,
+                                RPI5VC4_ESCAPE_UPLOAD_TEXTURE,
+                                RequestSize,
+                                Request,
+                                sizeof(Result),
+                                &Result);
     HeapFree(GetProcessHeap(), 0, Request);
     if (Returned < (INT)sizeof(Result) ||
         Result.Size != sizeof(Result) ||
@@ -6146,6 +6587,8 @@ Rpi5OglGl2PrepareTexture(
         return TRUE;
     }
     if ((Program->Executable != Rpi5OglProgramExecutableBuildTexture &&
+         Program->Executable !=
+             Rpi5OglProgramExecutableWineD3dXyzrhwTexture &&
          Program->Executable != Rpi5OglProgramExecutableNormalMap &&
          Program->Executable != Rpi5OglProgramExecutableHeightMap &&
          !Shadow &&
@@ -6230,13 +6673,17 @@ Rpi5OglGl2GetVertexAttribSource(
         *EffectiveStride = 0;
         return TRUE;
     }
-    if ((*Attribute)->Type != GL_FLOAT ||
+    if (((*Attribute)->Type != GL_FLOAT &&
+         !((*Attribute)->Type == GL_UNSIGNED_BYTE &&
+           (*Attribute)->Normalized == GL_TRUE)) ||
         (*Attribute)->Size < 1 || (*Attribute)->Size > 4)
     {
         return FALSE;
     }
 
-    ComponentBytes = (SIZE_T)(*Attribute)->Size * sizeof(GLfloat);
+    ComponentBytes = (SIZE_T)(*Attribute)->Size *
+                     ((*Attribute)->Type == GL_FLOAT ?
+                          sizeof(GLfloat) : sizeof(GLubyte));
     *EffectiveStride = (*Attribute)->Stride != 0 ?
         (SIZE_T)(*Attribute)->Stride : ComponentBytes;
     if ((SIZE_T)LastVertex >
@@ -6289,14 +6736,28 @@ Rpi5OglGl2ReadVertexAttrib(
     Values[1] = 0.0f;
     Values[2] = 0.0f;
     Values[3] = 1.0f;
-    if (Attribute->Size >= 1)
-        Values[0] = *(const UNALIGNED GLfloat *)(Source);
-    if (Attribute->Size >= 2)
-        Values[1] = *(const UNALIGNED GLfloat *)(Source + sizeof(GLfloat));
-    if (Attribute->Size >= 3)
-        Values[2] = *(const UNALIGNED GLfloat *)(Source + 2 * sizeof(GLfloat));
-    if (Attribute->Size >= 4)
-        Values[3] = *(const UNALIGNED GLfloat *)(Source + 3 * sizeof(GLfloat));
+    if (Attribute->Type == GL_UNSIGNED_BYTE)
+    {
+        if (Attribute->Size >= 1)
+            Values[0] = Source[0] / 255.0f;
+        if (Attribute->Size >= 2)
+            Values[1] = Source[1] / 255.0f;
+        if (Attribute->Size >= 3)
+            Values[2] = Source[2] / 255.0f;
+        if (Attribute->Size >= 4)
+            Values[3] = Source[3] / 255.0f;
+    }
+    else
+    {
+        if (Attribute->Size >= 1)
+            Values[0] = *(const UNALIGNED GLfloat *)(Source);
+        if (Attribute->Size >= 2)
+            Values[1] = *(const UNALIGNED GLfloat *)(Source + sizeof(GLfloat));
+        if (Attribute->Size >= 3)
+            Values[2] = *(const UNALIGNED GLfloat *)(Source + 2 * sizeof(GLfloat));
+        if (Attribute->Size >= 4)
+            Values[3] = *(const UNALIGNED GLfloat *)(Source + 3 * sizeof(GLfloat));
+    }
     return TRUE;
 }
 
@@ -6672,14 +7133,28 @@ Rpi5OglGl2ReadBuildAttribute(
     Values[1] = 0.0f;
     Values[2] = 0.0f;
     Values[3] = 1.0f;
-    if (Attribute->Size >= 1)
-        Values[0] = *(const UNALIGNED GLfloat *)(Source);
-    if (Attribute->Size >= 2)
-        Values[1] = *(const UNALIGNED GLfloat *)(Source + sizeof(GLfloat));
-    if (Attribute->Size >= 3)
-        Values[2] = *(const UNALIGNED GLfloat *)(Source + 2 * sizeof(GLfloat));
-    if (Attribute->Size >= 4)
-        Values[3] = *(const UNALIGNED GLfloat *)(Source + 3 * sizeof(GLfloat));
+    if (Attribute->Type == GL_UNSIGNED_BYTE)
+    {
+        if (Attribute->Size >= 1)
+            Values[0] = Source[0] / 255.0f;
+        if (Attribute->Size >= 2)
+            Values[1] = Source[1] / 255.0f;
+        if (Attribute->Size >= 3)
+            Values[2] = Source[2] / 255.0f;
+        if (Attribute->Size >= 4)
+            Values[3] = Source[3] / 255.0f;
+    }
+    else
+    {
+        if (Attribute->Size >= 1)
+            Values[0] = *(const UNALIGNED GLfloat *)(Source);
+        if (Attribute->Size >= 2)
+            Values[1] = *(const UNALIGNED GLfloat *)(Source + sizeof(GLfloat));
+        if (Attribute->Size >= 3)
+            Values[2] = *(const UNALIGNED GLfloat *)(Source + 2 * sizeof(GLfloat));
+        if (Attribute->Size >= 4)
+            Values[3] = *(const UNALIGNED GLfloat *)(Source + 3 * sizeof(GLfloat));
+    }
 }
 
 static GLfloat
@@ -6992,6 +7467,8 @@ Rpi5OglGl2PrepareBatchDraw(
          Program->Executable != Rpi5OglProgramExecutableNormalMap &&
          Program->Executable != Rpi5OglProgramExecutableHeightMap &&
          Program->Executable != Rpi5OglProgramExecutableWireframe &&
+         Program->Executable !=
+             Rpi5OglProgramExecutableWineD3dXyzrhwTexture &&
          !Rpi5OglGl2IsIdeasExecutable(Program->Executable) &&
          !Rpi5OglGl2IsJellyfishExecutable(Program->Executable) &&
          !Rpi5OglGl2IsDesktopExecutable(Program->Executable) &&
@@ -7082,6 +7559,7 @@ Rpi5OglGl2BuildBatchInternal(
     BOOLEAN JellyfishMesh;
     BOOLEAN TerrainTexture;
     BOOLEAN Shadow;
+    BOOLEAN WineD3d;
     ULONG InputTriangle;
     ULONG InputTriangleCount;
     GLint LastVertex;
@@ -7101,6 +7579,8 @@ Rpi5OglGl2BuildBatchInternal(
          Program->Executable != Rpi5OglProgramExecutableNormalMap &&
          Program->Executable != Rpi5OglProgramExecutableHeightMap &&
          Program->Executable != Rpi5OglProgramExecutableWireframe &&
+         Program->Executable !=
+             Rpi5OglProgramExecutableWineD3dXyzrhwTexture &&
          !Rpi5OglGl2IsIdeasExecutable(Program->Executable) &&
          !Rpi5OglGl2IsJellyfishExecutable(Program->Executable) &&
          !Rpi5OglGl2IsDesktopExecutable(Program->Executable) &&
@@ -7128,10 +7608,12 @@ Rpi5OglGl2BuildBatchInternal(
     TerrainTexture =
         Rpi5OglGl2IsTerrainTextureExecutable(Program->Executable);
     Shadow = Program->Executable == Rpi5OglProgramExecutableShadow;
+    WineD3d = Program->Executable ==
+              Rpi5OglProgramExecutableWineD3dXyzrhwTexture;
     Textured = Program->Executable ==
                    Rpi5OglProgramExecutableBuildTexture ||
                NormalMapped || HeightMapped || Effect2D || Desktop2D || Ideas ||
-               JellyfishMesh || Shadow ||
+               JellyfishMesh || Shadow || WineD3d ||
                (TerrainTexture &&
                 Program->Executable != Rpi5OglProgramExecutableTerrainNoise);
     if (Count == 0)
@@ -7208,6 +7690,12 @@ Rpi5OglGl2BuildBatchInternal(
                         "glDrawArrays(shadow uniforms)");
         return FALSE;
     }
+    if (WineD3d && !Program->ProjectionMatrixSet)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                        "glDrawArrays(WineD3D projection uniform)");
+        return FALSE;
+    }
     if (Output == NULL || OutputCapacity < 3 ||
         ((HeightMapped || Jellyfish) && HeightTexCoords == NULL) ||
         !Rpi5OglGl2GetVertexAttribSource(State,
@@ -7216,7 +7704,7 @@ Rpi5OglGl2BuildBatchInternal(
                                          &PositionAttribute,
                                          &PositionSource,
                                          &PositionStride) ||
-        ((Pulsar || JellyfishMesh) &&
+        ((Pulsar || JellyfishMesh || WineD3d) &&
          !Rpi5OglGl2GetVertexAttribSource(State,
                                           Program->ColorAttribute,
                                           LastVertex,
@@ -7225,6 +7713,7 @@ Rpi5OglGl2BuildBatchInternal(
                                           &ColorStride)) ||
         ((JellyfishMesh ||
           (!Jellyfish && !NormalMapped && !Effect2D && !Desktop2D && !Shadow &&
+           !WineD3d &&
            !TerrainTexture && !Pulsar && !Wireframe &&
            (!Ideas || IdeasLit))) &&
          !Rpi5OglGl2GetVertexAttribSource(State,
@@ -7336,37 +7825,57 @@ Rpi5OglGl2BuildBatchInternal(
                 PositionStride,
                 InputIndex[Vertex],
                 ObjectPosition[Vertex]);
-            ObjectPosition[Vertex][3] = 1.0f;
-            if (Program->Executable ==
-                    Rpi5OglProgramExecutableJellyfishGradient)
+            if (WineD3d)
             {
-                GLfloat TexCoord[4];
+                GLfloat Rhw = ObjectPosition[Vertex][3];
+                ULONG Component;
 
-                Rpi5OglGl2ReadBuildAttribute(
-                    TexCoordAttribute,
-                    TexCoordSource,
-                    TexCoordStride,
-                    InputIndex[Vertex],
-                    TexCoord);
-                Position[Vertex][0] = ObjectPosition[Vertex][0];
-                Position[Vertex][1] = ObjectPosition[Vertex][1];
-                Position[Vertex][2] = 1.0f;
-                Position[Vertex][3] = 1.0f;
-                CopyMemory(JellyfishVertex[Vertex].Position,
-                           Position[Vertex],
-                           sizeof(JellyfishVertex[Vertex].Position));
-                *(UNALIGNED GLfloat *)&JellyfishVertex[Vertex].Color[0] =
-                    TexCoord[0];
-                *(UNALIGNED GLfloat *)&JellyfishVertex[Vertex].Color[1] =
-                    TexCoord[1];
-                JellyfishVertex[Vertex].Color[2] = 0;
-                JellyfishVertex[Vertex].Color[3] = 0;
-                JellyfishVertex[Vertex].TexCoord[0] = 0;
-                JellyfishVertex[Vertex].TexCoord[1] = 0;
-                JellyfishAuxiliary[Vertex].Component[0] = 0;
-                JellyfishAuxiliary[Vertex].Component[1] = 0;
+                if (Rhw == 0.0f)
+                {
+                    Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                                    "glDrawArrays(WineD3D RHW)");
+                    return FALSE;
+                }
+                ObjectPosition[Vertex][3] = 1.0f;
+                Rpi5OglGl2TransformVector(Program->ProjectionMatrix,
+                                          ObjectPosition[Vertex],
+                                          Position[Vertex]);
+                for (Component = 0; Component < 4; Component++)
+                    Position[Vertex][Component] /= Rhw;
             }
-            else if (JellyfishMesh)
+            else
+            {
+                ObjectPosition[Vertex][3] = 1.0f;
+                if (Program->Executable ==
+                    Rpi5OglProgramExecutableJellyfishGradient)
+                {
+                    GLfloat TexCoord[4];
+
+                    Rpi5OglGl2ReadBuildAttribute(
+                        TexCoordAttribute,
+                        TexCoordSource,
+                        TexCoordStride,
+                        InputIndex[Vertex],
+                        TexCoord);
+                    Position[Vertex][0] = ObjectPosition[Vertex][0];
+                    Position[Vertex][1] = ObjectPosition[Vertex][1];
+                    Position[Vertex][2] = 1.0f;
+                    Position[Vertex][3] = 1.0f;
+                    CopyMemory(JellyfishVertex[Vertex].Position,
+                               Position[Vertex],
+                               sizeof(JellyfishVertex[Vertex].Position));
+                    *(UNALIGNED GLfloat *)&JellyfishVertex[Vertex].Color[0] =
+                        TexCoord[0];
+                    *(UNALIGNED GLfloat *)&JellyfishVertex[Vertex].Color[1] =
+                        TexCoord[1];
+                    JellyfishVertex[Vertex].Color[2] = 0;
+                    JellyfishVertex[Vertex].Color[3] = 0;
+                    JellyfishVertex[Vertex].TexCoord[0] = 0;
+                    JellyfishVertex[Vertex].TexCoord[1] = 0;
+                    JellyfishAuxiliary[Vertex].Component[0] = 0;
+                    JellyfishAuxiliary[Vertex].Component[1] = 0;
+                }
+                else if (JellyfishMesh)
             {
                 GLfloat Normal[4];
                 GLfloat Color[4];
@@ -7425,12 +7934,13 @@ Rpi5OglGl2BuildBatchInternal(
                     EyePosition[Vertex],
                     Position[Vertex]);
             }
-            else
-            {
-                Rpi5OglGl2TransformVector(
-                    Program->ModelViewProjectionMatrix,
-                    ObjectPosition[Vertex],
-                    Position[Vertex]);
+                else
+                {
+                    Rpi5OglGl2TransformVector(
+                        Program->ModelViewProjectionMatrix,
+                        ObjectPosition[Vertex],
+                        Position[Vertex]);
+                }
             }
             if (Shadow)
             {
@@ -7535,6 +8045,43 @@ Rpi5OglGl2BuildBatchInternal(
                                             EyePosition[Vertex],
                                             Normal,
                                             OutputVertex);
+            }
+            else if (WineD3d)
+            {
+                GLfloat Color[4];
+                GLfloat TexCoord[4];
+                ULONG Component;
+
+                Rpi5OglGl2ReadBuildAttribute(
+                    ColorAttribute,
+                    ColorSource,
+                    ColorStride,
+                    InputIndex[Vertex],
+                    Color);
+                Rpi5OglGl2ReadBuildAttribute(
+                    TexCoordAttribute,
+                    TexCoordSource,
+                    TexCoordStride,
+                    InputIndex[Vertex],
+                    TexCoord);
+                if (Program->ColorSwizzle)
+                {
+                    GLfloat Swap = Color[0];
+
+                    Color[0] = Color[2];
+                    Color[2] = Swap;
+                }
+                for (Component = 0; Component < 4; Component++)
+                {
+                    *(UNALIGNED GLfloat *)&OutputVertex->Position[Component] =
+                        Position[Vertex][Component];
+                    *(UNALIGNED GLfloat *)&OutputVertex->Color[Component] =
+                        Color[Component];
+                }
+                *(UNALIGNED GLfloat *)&OutputVertex->TexCoord[0] =
+                    TexCoord[0];
+                *(UNALIGNED GLfloat *)&OutputVertex->TexCoord[1] =
+                    TexCoord[1];
             }
             else if (Shadow)
             {

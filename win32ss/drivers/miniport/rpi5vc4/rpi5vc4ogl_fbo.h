@@ -15,6 +15,10 @@ VOID
 Rpi5OglMaterializeTextureClear(
     _In_ struct gl_texture_object *Texture);
 
+VOID
+Rpi5OglMaterializeTextureStorage(
+    _In_ struct gl_texture_object *Texture);
+
 BOOL
 Rpi5OglRecordGraphTextureMipmap(
     _In_ struct gl_texture_object *Texture);
@@ -40,6 +44,13 @@ Rpi5OglFboInitialize(
     _Outptr_ PRPI5VC4_OGL_FBO_STATE *State,
     _In_ GLcontext *Mesa,
     _In_ GLframebuffer *DefaultBuffer);
+
+VOID
+Rpi5OglFboSetDefaultColor(
+    _In_opt_ PRPI5VC4_OGL_FBO_STATE State,
+    _In_opt_ PULONG Pixels,
+    _In_ ULONG Width,
+    _In_ ULONG Height);
 
 VOID
 Rpi5OglFboCleanup(
@@ -83,6 +94,11 @@ Rpi5OglFboDrawBuffer(
     _In_ GLenum Mode);
 
 VOID APIENTRY
+Rpi5OglFboDrawBuffers(
+    _In_ GLsizei Count,
+    _In_reads_opt_(Count) const GLenum *Modes);
+
+VOID APIENTRY
 Rpi5OglFboGetIntegerv(
     _In_ GLenum ParameterName,
     _Out_ GLint *Parameters);
@@ -90,6 +106,16 @@ Rpi5OglFboGetIntegerv(
 VOID APIENTRY
 Rpi5OglFboReadBuffer(
     _In_ GLenum Mode);
+
+VOID APIENTRY
+Rpi5OglFboReadPixels(
+    _In_ GLint X,
+    _In_ GLint Y,
+    _In_ GLsizei Width,
+    _In_ GLsizei Height,
+    _In_ GLenum Format,
+    _In_ GLenum Type,
+    _Out_ GLvoid *Pixels);
 
 VOID APIENTRY
 Rpi5OglFboGetTexImage(
