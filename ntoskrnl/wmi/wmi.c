@@ -457,4 +457,53 @@ NtTraceEvent(IN ULONG TraceHandle,
     return STATUS_NOT_IMPLEMENTED;
 }
 
+ULONG
+NTAPI
+EtwpDisableStackWalkApc(VOID)
+{
+    PKTHREAD Thread = KeGetCurrentThread();
+    LONG OldFlags;
+    LONG NewFlags;
+    LONG ActualFlags;
+
+    OldFlags = ReadAcquire(&Thread->ThreadFlags);
+    for (;;)
+    {
+        NewFlags = OldFlags | (LONG)0xFF800000;
+        ActualFlags = InterlockedCompareExchange(&Thread->ThreadFlags,
+                                                 NewFlags,
+                                                 OldFlags);
+        if (ActualFlags == OldFlags)
+            return ((ULONG)OldFlags >> 23);
+
+        OldFlags = ActualFlags;
+    }
+}
+
+VOID
+NTAPI
+EtwpReenableStackWalkApc(
+    _In_ ULONG PreviousState)
+{
+    PKTHREAD Thread = KeGetCurrentThread();
+    LONG OldFlags;
+    LONG NewFlags;
+    LONG ActualFlags;
+    ULONG RestoreMask;
+
+    RestoreMask = (PreviousState << 23) | 0x007FFFFF;
+    OldFlags = ReadAcquire(&Thread->ThreadFlags);
+    for (;;)
+    {
+        NewFlags = OldFlags & (LONG)RestoreMask;
+        ActualFlags = InterlockedCompareExchange(&Thread->ThreadFlags,
+                                                 NewFlags,
+                                                 OldFlags);
+        if (ActualFlags == OldFlags)
+            return;
+
+        OldFlags = ActualFlags;
+    }
+}
+
 /*Eof*/

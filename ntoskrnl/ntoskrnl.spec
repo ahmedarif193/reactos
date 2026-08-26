@@ -2116,21 +2116,21 @@
 @ stub -arch=arm64 EmProviderRegister
 @ stub -arch=arm64 EmProviderRegisterEntry
 @ stub -arch=arm64 EmpProviderRegister
-@ stub -arch=arm64 EtwActivityIdControl
+@ stdcall -arch=i386,x86_64,arm64 EtwActivityIdControl(long ptr)
 @ stub -arch=arm64 EtwEnableTrace
-@ stub -arch=arm64 EtwEventEnabled
-@ stub -arch=arm64 EtwProviderEnabled
+@ stdcall -arch=i386,x86_64,arm64 EtwEventEnabled(int64 ptr)
+@ stdcall -arch=i386,x86_64,arm64 EtwProviderEnabled(int64 long int64)
 @ stdcall EtwRegisterClassicProvider(ptr long ptr ptr ptr)
 @ stub -arch=arm64 EtwSendTraceBuffer
 @ stdcall -arch=x86_64,arm64 EtwSetInformation(int64 long ptr long)
-@ stub -arch=arm64 EtwTelemetryCoverageReport
+@ stdcall -arch=i386,x86_64,arm64 EtwTelemetryCoverageReport(ptr)
 @ stub -arch=arm64 EtwWriteEndScenario
 @ stub -arch=arm64 EtwWriteEx
 @ stub -arch=arm64 EtwWriteStartScenario
 @ stub -arch=arm64 EtwWriteString
 @ stdcall -arch=x86_64,arm64 EtwWriteTransfer(int64 ptr ptr ptr long ptr)
-@ stub -arch=arm64 EtwpDisableStackWalkApc
-@ stub -arch=arm64 EtwpReenableStackWalkApc
+@ stdcall -arch=i386,x86_64,arm64 EtwpDisableStackWalkApc()
+@ stdcall -arch=i386,x86_64,arm64 EtwpReenableStackWalkApc(long)
 @ stub -arch=arm64 ExAccessByte
 @ stub -arch=arm64 ExAcquireAutoExpandPushLockExclusive
 @ stub -arch=arm64 ExAcquireAutoExpandPushLockShared
