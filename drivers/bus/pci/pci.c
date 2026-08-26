@@ -388,7 +388,7 @@ PciAcpiEvalMethod(
 
     ExFreePoolWithTag(PciBuffer, TAG_PCI_ACPI);
 
-    if (NT_SUCCESS(Status) && BytesReturned)
+    if (BytesReturned)
     {
         *BytesReturned = (ULONG)IoStatusBlock.Information;
     }
@@ -500,10 +500,10 @@ PciDispatchDeviceControl(
                     OutputBufferSize,
                     &BytesReturned);
 
-                if (NT_SUCCESS(Status))
-                {
-                    Irp->IoStatus.Information = BytesReturned;
-                }
+                /* ACPI returns a valid fixed header on STATUS_BUFFER_OVERFLOW;
+                 * preserve its byte count so METHOD_BUFFERED completion copies
+                 * OutputBuffer->Length back to the display miniport. */
+                Irp->IoStatus.Information = BytesReturned;
                 break;
             }
 
