@@ -200,6 +200,7 @@ ExSubscribeWnfStateChange(
     PVOID *SubscriptionHandle,
     PCWNF_STATE_NAME StateName,
     WNF_CHANGE_STAMP ChangeStamp,
+    ULONG Flags,
     PWNF_KERNEL_CALLBACK Callback,
     PVOID CallbackContext);
 

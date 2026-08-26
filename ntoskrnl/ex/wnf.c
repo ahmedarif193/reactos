@@ -1136,6 +1136,7 @@ NTAPI
 ExSubscribeWnfStateChange(PVOID *SubscriptionHandle,
                           PCWNF_STATE_NAME StateName,
                           WNF_CHANGE_STAMP ChangeStamp,
+                          ULONG Flags,
                           PWNF_KERNEL_CALLBACK Callback,
                           PVOID CallbackContext)
 {
@@ -1145,6 +1146,7 @@ ExSubscribeWnfStateChange(PVOID *SubscriptionHandle,
     NTSTATUS Status;
 
     PAGED_CODE();
+    UNREFERENCED_PARAMETER(Flags);
 
     if ((SubscriptionHandle == NULL) || (Callback == NULL))
         return STATUS_INVALID_PARAMETER;

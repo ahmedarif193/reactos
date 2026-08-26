@@ -2236,7 +2236,7 @@
 @ stub -arch=arm64 ExSizeOfAutoExpandPushLock
 @ stub -arch=arm64 ExStopSharingAddressSpaceWithDevice
 @ stub -arch=arm64 ExStopSharingSystemAddressSpaceWithDevice
-@ stdcall -arch=arm64 ExSubscribeWnfStateChange(ptr ptr long ptr ptr)
+@ stdcall -arch=x86_64,arm64 ExSubscribeWnfStateChange(ptr ptr long long ptr ptr)
 @ stub -arch=arm64 ExSvmBeginDeviceReset
 @ stub -arch=arm64 ExSvmFinalizeDeviceReset
 @ stub -arch=arm64 ExTryAcquireAutoExpandPushLockExclusive
