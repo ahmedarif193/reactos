@@ -682,4 +682,23 @@ typedef struct _RPI5VC4_OGL_STATS
     ULONG LastProgramTriangleName;
 } RPI5VC4_OGL_STATS, *PRPI5VC4_OGL_STATS;
 
+/*
+ * WDDM escape wrapper. Under the WDDM stack the display driver cannot issue
+ * IOCTL_VIDEO_RPI5VC4_* directly at the miniport; instead it packs the same
+ * request behind this header and sends it through IOCTL_VIDEO_DXGK_GPU_ESCAPE,
+ * which dxgkrnl forwards to Rpi5Vc4DdiEscape. Op carries the RPI5VC4_ESCAPE_*
+ * code; the request payload starts at Payload[0] and the miniport rewrites it
+ * in place with the reply, setting OutputLength to the bytes it produced.
+ */
+#define RPI5VC4_WDDM_GPU_ESCAPE_MAGIC 0x52504745 /* "RPGE" */
+
+typedef struct _RPI5VC4_WDDM_GPU_ESCAPE
+{
+    ULONG Magic;
+    ULONG Op;
+    ULONG InputLength;
+    ULONG OutputLength;
+    UCHAR Payload[1];
+} RPI5VC4_WDDM_GPU_ESCAPE, *PRPI5VC4_WDDM_GPU_ESCAPE;
+
 #endif /* _REACTOS_RPI5VC4_XPDM_H_ */
