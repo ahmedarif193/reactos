@@ -2970,7 +2970,7 @@
 @ stdcall -arch=arm64 RtlAddMandatoryAce(ptr long long long long ptr)
 @ stub -arch=arm64 RtlAddProcessTrustLabelAce
 @ stub -arch=arm64 RtlAddResourceAttributeAce
-@ stub -arch=arm64 RtlAreBitsClearEx
+@ stdcall -arch=x86_64,arm64 RtlAreBitsClearEx(ptr int64 int64) RtlAreBitsClear64
 @ stub -arch=arm64 RtlAreBitsSetEx
 @ stdcall RtlArmFeatureUsageProviderFlushNotification(ptr)
 @ stdcall -arch=i386,x86_64,arm64 RtlAvlInsertNodeEx(ptr ptr long ptr)
@@ -2982,10 +2982,8 @@
 @ stub -arch=arm64 RtlCheckTokenCapability
 @ stub -arch=arm64 RtlCheckTokenMembership
 @ stub -arch=arm64 RtlCheckTokenMembershipEx
-@ stub -arch=arm64 RtlClearAllBitsEx
-@ stub -arch=arm64 RtlClearBitEx
-@ stdcall -arch=x86_64 RtlClearAllBitsEx(ptr) RtlClearAllBits64
-@ stdcall -arch=x86_64 RtlClearBitEx(ptr int64) RtlClearBit64
+@ stdcall -arch=x86_64,arm64 RtlClearAllBitsEx(ptr) RtlClearAllBits64
+@ stdcall -arch=x86_64,arm64 RtlClearBitEx(ptr int64) RtlClearBit64
 @ stub -arch=arm64 RtlClearBitsEx
 @ stub -arch=arm64 RtlCmDecodeMemIoResource
 @ stub -arch=arm64 RtlCmEncodeMemIoResource
@@ -2996,8 +2994,8 @@
 @ stub -arch=arm64 RtlConstructCrossVmEventPath
 @ stub -arch=arm64 RtlConstructCrossVmMutexPath
 @ stdcall -arch=i386,x86_64,arm64 RtlConvertHostPerfCounterToPerfCounter(int64 int64 ptr)
-@ stub -arch=arm64 RtlCopyBitMap
-@ stub -arch=arm64 RtlCopyBitMapEx
+@ stdcall -arch=i386,x86_64,arm64 RtlCopyBitMap(ptr ptr long)
+@ stdcall -arch=x86_64,arm64 RtlCopyBitMapEx(ptr ptr int64) RtlCopyBitMap64
 @ stub -arch=arm64 RtlCopyContext
 @ stub -arch=arm64 RtlCopyExtendedContext
 @ stdcall RtlCrc32(ptr long long)
@@ -3029,7 +3027,7 @@
 @ stub -arch=arm64 RtlFindNextForwardRunClearEx
 @ stub -arch=arm64 RtlFindNextForwardRunSetEx
 @ stub -arch=arm64 RtlFindSetBitsAndClearEx
-@ stub -arch=arm64 RtlFindSetBitsEx
+@ stdcall -arch=x86_64,arm64 RtlFindSetBitsEx(ptr int64 int64) RtlFindSetBits64
 @ stdcall -arch=i386,x86_64,arm64 RtlFindUnicodeSubstring(ptr ptr long)
 @ stub -arch=arm64 RtlFlushFeatureUsage
 @ stub -arch=arm64 RtlFlushNonVolatileMemory
@@ -3069,8 +3067,7 @@
 @ stub -arch=arm64 RtlInitStrongEnumerationHashTable
 @ stub -arch=arm64 RtlInitUTF8String
 @ stub -arch=arm64 RtlInitUTF8StringEx
-@ stub -arch=arm64 RtlInitializeBitMapEx
-@ stdcall -arch=x86_64 RtlInitializeBitMapEx(ptr ptr int64) RtlInitializeBitMap64
+@ stdcall -arch=x86_64,arm64 RtlInitializeBitMapEx(ptr ptr int64) RtlInitializeBitMap64
 @ stub -arch=arm64 RtlInitializeCorrelationVector
 @ stub -arch=arm64 RtlInitializeExtendedContext
 @ stub -arch=arm64 RtlInitializeSidEx
@@ -3079,8 +3076,8 @@
 @ stub -arch=arm64 RtlInterlockedSetBitRun
 @ stub -arch=arm64 RtlInterlockedSetBitRunEx
 @ stub -arch=arm64 RtlInterlockedSetClearRun
-@ stub -arch=arm64 RtlIntersectBitMaps
-@ stub -arch=arm64 RtlIntersectBitMapsEx
+@ stdcall -arch=i386,x86_64,arm64 RtlIntersectBitMaps(ptr ptr)
+@ stdcall -arch=x86_64,arm64 RtlIntersectBitMapsEx(ptr ptr) RtlIntersectBitMaps64
 @ stub -arch=arm64 RtlInvertRangeListEx
 @ stub -arch=arm64 RtlIoDecodeMemIoResource
 @ stub -arch=arm64 RtlIoEncodeMemIoResource
@@ -3113,8 +3110,8 @@
 @ stub -arch=arm64 RtlNumberOfClearBitsEx
 @ stub -arch=arm64 RtlNumberOfClearBitsInRange
 @ stub -arch=arm64 RtlNumberOfSetBitsEx
-@ stub -arch=arm64 RtlNumberOfSetBitsInRange
-@ stub -arch=arm64 RtlNumberOfSetBitsInRangeEx
+@ stdcall -arch=i386,x86_64,arm64 RtlNumberOfSetBitsInRange(ptr long long)
+@ stdcall -arch=x86_64,arm64 RtlNumberOfSetBitsInRangeEx(ptr int64 int64) RtlNumberOfSetBitsInRange64
 @ stdcall RtlNumberOfSetBitsUlongPtr(long)
 @ stub -arch=arm64 RtlOpenImageFileOptionsKey
 @ stub -arch=arm64 RtlOsDeploymentState
@@ -3157,8 +3154,7 @@
 @ stub -arch=arm64 RtlRunOnceInitialize
 @ stub -arch=arm64 RtlSetActiveConsoleId
 @ stub -arch=arm64 RtlSetAllBitsEx
-@ stub -arch=arm64 RtlSetBitEx
-@ stdcall -arch=x86_64 RtlSetBitEx(ptr int64) RtlSetBit64
+@ stdcall -arch=x86_64,arm64 RtlSetBitEx(ptr int64) RtlSetBit64
 @ stub -arch=arm64 RtlSetBitsEx
 @ stub -arch=arm64 RtlSetConsoleSessionForegroundProcessId
 @ stub -arch=arm64 RtlSetDynamicTimeZoneInformation

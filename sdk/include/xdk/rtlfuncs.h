@@ -783,6 +783,24 @@ NTAPI
 RtlNumberOfSetBits(
   _In_ PRTL_BITMAP BitMapHeader);
 
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+NTSYSAPI
+ULONG
+NTAPI
+RtlNumberOfSetBitsInRange(
+  _In_ PRTL_BITMAP BitMapHeader,
+  _In_ ULONG StartingIndex,
+  _In_ ULONG Length);
+
+NTSYSAPI
+VOID
+NTAPI
+RtlCopyBitMap(
+  _In_ PRTL_BITMAP Source,
+  _In_ PRTL_BITMAP Destination,
+  _In_range_(0, Destination->SizeOfBitMap - 1) ULONG TargetBit);
+#endif
+
 _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSYSAPI
 NTSTATUS

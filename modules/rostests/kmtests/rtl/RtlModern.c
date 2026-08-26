@@ -37,6 +37,104 @@ BOOLEAN NTAPI RtlIsStateSeparationEnabled(VOID);
 NTSTATUS NTAPI RtlQueryElevationFlags(_Out_ PULONG Flags);
 NTSTATUS NTAPI RtlGetAcesBufferSize(_In_ PACL Acl, _Out_ PULONG AcesBufferSize);
 NTSTATUS NTAPI RtlQueryPackageIdentity(_In_opt_ PVOID TokenObject, _Out_writes_bytes_to_opt_(*PackageSize, *PackageSize) PWSTR PackageFullName, _Inout_ PSIZE_T PackageSize, _Out_writes_bytes_to_opt_(*AppIdSize, *AppIdSize) PWSTR AppId, _Inout_opt_ PSIZE_T AppIdSize, _Out_opt_ PBOOLEAN Packaged);
+VOID NTAPI RtlIntersectBitMaps(_Inout_ PRTL_BITMAP Destination, _In_ PRTL_BITMAP Source);
+
+#if defined(_M_AMD64) || defined(_M_ARM64)
+typedef struct _RTL_BITMAP_EX
+{
+    ULONGLONG SizeOfBitMap;
+    PULONGLONG Buffer;
+} RTL_BITMAP_EX, *PRTL_BITMAP_EX;
+
+VOID NTAPI RtlInitializeBitMapEx(_Out_ PRTL_BITMAP_EX BitMapHeader, _In_opt_ PULONGLONG BitMapBuffer, _In_ ULONGLONG SizeOfBitMap);
+VOID NTAPI RtlClearAllBitsEx(_Inout_ PRTL_BITMAP_EX BitMapHeader);
+VOID NTAPI RtlClearBitEx(_Inout_ PRTL_BITMAP_EX BitMapHeader, _In_ ULONGLONG BitNumber);
+VOID NTAPI RtlSetBitEx(_Inout_ PRTL_BITMAP_EX BitMapHeader, _In_ ULONGLONG BitNumber);
+BOOLEAN NTAPI RtlAreBitsClearEx(_In_ PRTL_BITMAP_EX BitMapHeader, _In_ ULONGLONG StartingIndex, _In_ ULONGLONG Length);
+ULONGLONG NTAPI RtlFindSetBitsEx(_In_ PRTL_BITMAP_EX BitMapHeader, _In_ ULONGLONG NumberToFind, _In_ ULONGLONG HintIndex);
+ULONGLONG NTAPI RtlNumberOfSetBitsInRangeEx(_In_ PRTL_BITMAP_EX BitMapHeader, _In_ ULONGLONG StartingIndex, _In_ ULONGLONG Length);
+VOID NTAPI RtlCopyBitMapEx(_In_ PRTL_BITMAP_EX Source, _Inout_ PRTL_BITMAP_EX Destination, _In_ ULONGLONG TargetBit);
+VOID NTAPI RtlIntersectBitMapsEx(_Inout_ PRTL_BITMAP_EX Destination, _In_ PRTL_BITMAP_EX Source);
+#endif
+
+static
+VOID
+TestModernBitmaps(VOID)
+{
+    RTL_BITMAP Destination;
+    RTL_BITMAP Source;
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    RTL_BITMAP_EX DestinationEx;
+    RTL_BITMAP_EX SourceEx;
+#endif
+    ULONG DestinationBits;
+    ULONG OverlapBits;
+    ULONG SourceBits;
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    ULONGLONG DestinationBitsEx;
+    ULONGLONG SourceBitsEx;
+#endif
+
+    SourceBits = 0xB5;
+    RtlInitializeBitMap(&Source, &SourceBits, 8);
+    ok_eq_ulong(RtlNumberOfSetBitsInRange(&Source, 2, 4), 3);
+    ok_eq_ulong(RtlNumberOfSetBitsInRange(&Source, 8, 1), MAXULONG);
+    ok_eq_ulong(RtlNumberOfSetBitsInRange(&Source, 0, 0), MAXULONG);
+    ok_eq_ulong(RtlNumberOfSetBitsInRange(&Source, 7, 2), MAXULONG);
+
+    SourceBits = 0xD;
+    DestinationBits = 0xFFFF;
+    RtlInitializeBitMap(&Source, &SourceBits, 4);
+    RtlInitializeBitMap(&Destination, &DestinationBits, 16);
+    RtlCopyBitMap(&Source, &Destination, 5);
+    ok_eq_hex(DestinationBits, 0xFFBF);
+    RtlCopyBitMap(&Source, &Destination, 16);
+    ok_eq_hex(DestinationBits, 0xFFBF);
+
+    OverlapBits = 0xA5C3;
+    RtlInitializeBitMap(&Source, &OverlapBits, 8);
+    RtlInitializeBitMap(&Destination, &OverlapBits, 16);
+    RtlCopyBitMap(&Source, &Destination, 4);
+    ok_eq_hex(OverlapBits, 0xAC33);
+
+    SourceBits = 0xAA;
+    DestinationBits = 0xF0F0;
+    RtlInitializeBitMap(&Source, &SourceBits, 8);
+    RtlInitializeBitMap(&Destination, &DestinationBits, 16);
+    RtlIntersectBitMaps(&Destination, &Source);
+    ok_eq_hex(DestinationBits, 0xF0A0);
+
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    SourceBitsEx = 0xD;
+    RtlInitializeBitMapEx(&SourceEx, &SourceBitsEx, 0x100000001ULL);
+    ok_eq_ulonglong(SourceEx.SizeOfBitMap, 0x100000001ULL);
+    ok_eq_pointer(SourceEx.Buffer, &SourceBitsEx);
+
+    RtlInitializeBitMapEx(&SourceEx, &SourceBitsEx, 4);
+    DestinationBitsEx = 0xFFFF;
+    RtlInitializeBitMapEx(&DestinationEx, &DestinationBitsEx, 16);
+    RtlCopyBitMapEx(&SourceEx, &DestinationEx, 5);
+    ok_eq_hex64(DestinationBitsEx, 0xFFBF);
+    ok_eq_ulonglong(RtlNumberOfSetBitsInRangeEx(&DestinationEx, 5, 4), 3);
+    ok_eq_ulonglong(RtlNumberOfSetBitsInRangeEx(&DestinationEx, 16, 1), MAXULONGLONG);
+
+    SourceBitsEx = 0xAA;
+    DestinationBitsEx = 0xF0F0;
+    RtlInitializeBitMapEx(&SourceEx, &SourceBitsEx, 8);
+    RtlInitializeBitMapEx(&DestinationEx, &DestinationBitsEx, 16);
+    RtlIntersectBitMapsEx(&DestinationEx, &SourceEx);
+    ok_eq_hex64(DestinationBitsEx, 0xF0A0);
+
+    RtlClearAllBitsEx(&DestinationEx);
+    ok_eq_hex64(DestinationBitsEx, 0);
+    RtlSetBitEx(&DestinationEx, 6);
+    ok_eq_hex64(DestinationBitsEx, 0x40);
+    ok_eq_ulonglong(RtlFindSetBitsEx(&DestinationEx, 1, 0), 6);
+    ok(RtlAreBitsClearEx(&DestinationEx, 0, 6), "bits 0 through 5 are not clear\n");
+    RtlClearBitEx(&DestinationEx, 6);
+    ok_eq_hex64(DestinationBitsEx, 0);
+#endif
+}
 
 static
 LONG
@@ -337,5 +435,6 @@ START_TEST(ExWddmAvl)
 
 START_TEST(ExWddmRtl)
 {
+    TestModernBitmaps();
     TestModernRtlState();
 }
