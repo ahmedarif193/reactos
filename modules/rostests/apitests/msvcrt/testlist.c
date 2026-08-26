@@ -33,6 +33,7 @@ extern void func_crtdata(void);
 extern void func_exp(void);
 extern void func_fabs(void);
 extern void func_floor(void);
+extern void func_fmod(void);
 extern void func_fpcontrol(void);
 extern void func_log(void);
 extern void func_log10(void);
@@ -99,6 +100,7 @@ const struct test winetest_testlist[] =
     { "exp", func_exp },
     { "fabs", func_fabs },
     { "floor", func_floor },
+    { "fmod", func_fmod },
     { "log", func_log },
     { "log10", func_log10 },
     { "mbstowcs", func_mbstowcs },

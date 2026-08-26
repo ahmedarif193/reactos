@@ -38,6 +38,7 @@ list(APPEND SOURCE_CRT_TESTS
     ../crt/exp.c
     ../crt/fabs.c
     ../crt/floor.c
+    ../crt/fmod.c
     ../crt/log.c
     ../crt/log10.c
     ../crt/mbstowcs.c
