@@ -352,6 +352,26 @@ ObfDereferenceObject(IN PVOID Object)
     return NewCount;
 }
 
+LONG_PTR
+FASTCALL
+ObfReferenceObjectWithTag(
+    _In_ PVOID Object,
+    _In_ ULONG Tag)
+{
+    UNREFERENCED_PARAMETER(Tag);
+    return ObfReferenceObject(Object);
+}
+
+LONG_PTR
+FASTCALL
+ObfDereferenceObjectWithTag(
+    _In_ PVOID Object,
+    _In_ ULONG Tag)
+{
+    UNREFERENCED_PARAMETER(Tag);
+    return ObfDereferenceObject(Object);
+}
+
 VOID
 NTAPI
 ObDereferenceObjectDeferDelete(IN PVOID Object)
@@ -709,6 +729,26 @@ ObReferenceObjectByHandle(IN HANDLE Handle,
     KeLeaveCriticalRegion();
     *Object = NULL;
     return Status;
+}
+
+NTSTATUS
+NTAPI
+ObReferenceObjectByHandleWithTag(
+    _In_ HANDLE Handle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_opt_ POBJECT_TYPE ObjectType,
+    _In_ KPROCESSOR_MODE AccessMode,
+    _In_ ULONG Tag,
+    _Out_ PVOID *Object,
+    _Out_opt_ POBJECT_HANDLE_INFORMATION HandleInformation)
+{
+    UNREFERENCED_PARAMETER(Tag);
+    return ObReferenceObjectByHandle(Handle,
+                                     DesiredAccess,
+                                     ObjectType,
+                                     AccessMode,
+                                     Object,
+                                     HandleInformation);
 }
 
 /* EOF */

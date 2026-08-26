@@ -50,6 +50,103 @@ ObpGetObjectWaitObject(
     return (PUCHAR)Object + WaitObjectInfo - 3;
 }
 
+NTSTATUS
+NTAPI
+ObWaitForSingleObject(
+    _In_ HANDLE ObjectHandle,
+    _In_ KPROCESSOR_MODE WaitMode,
+    _In_ KWAIT_REASON WaitReason,
+    _In_ BOOLEAN Alertable,
+    _In_opt_ PLARGE_INTEGER Timeout)
+{
+    PVOID Object;
+    PVOID WaitObject;
+    NTSTATUS Status;
+
+    Status = ObReferenceObjectByHandle(ObjectHandle,
+                                       SYNCHRONIZE,
+                                       NULL,
+                                       WaitMode,
+                                       &Object,
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    WaitObject = ObpGetObjectWaitObject(ObGetObjectType(Object), Object);
+    Status = KeWaitForSingleObject(WaitObject,
+                                   WaitReason,
+                                   WaitMode,
+                                   Alertable,
+                                   Timeout);
+    ObDereferenceObject(Object);
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+ObWaitForMultipleObjects(
+    _In_ ULONG ObjectCount,
+    _In_reads_(ObjectCount) PHANDLE ObjectHandles,
+    _In_ WAIT_TYPE WaitType,
+    _In_ KWAIT_REASON WaitReason,
+    _In_ KPROCESSOR_MODE WaitMode,
+    _In_ BOOLEAN Alertable,
+    _In_opt_ PLARGE_INTEGER Timeout)
+{
+    PVOID Objects[MAXIMUM_WAIT_OBJECTS];
+    PVOID WaitObjects[MAXIMUM_WAIT_OBJECTS];
+    PKWAIT_BLOCK WaitBlocks = NULL;
+    ULONG Index;
+    NTSTATUS Status;
+
+    if ((ObjectCount == 0) || (ObjectCount > MAXIMUM_WAIT_OBJECTS) ||
+        (ObjectHandles == NULL) || ((WaitType != WaitAll) && (WaitType != WaitAny)))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    RtlZeroMemory(Objects, sizeof(Objects));
+    if (ObjectCount > THREAD_WAIT_OBJECTS)
+    {
+        WaitBlocks = ExAllocatePoolZero(NonPagedPool,
+                                        ObjectCount * sizeof(*WaitBlocks),
+                                        TAG_WAIT);
+        if (WaitBlocks == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    for (Index = 0; Index < ObjectCount; ++Index)
+    {
+        Status = ObReferenceObjectByHandle(ObjectHandles[Index],
+                                           SYNCHRONIZE,
+                                           NULL,
+                                           WaitMode,
+                                           &Objects[Index],
+                                           NULL);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+
+        WaitObjects[Index] = ObpGetObjectWaitObject(ObGetObjectType(Objects[Index]),
+                                                    Objects[Index]);
+    }
+
+    Status = KeWaitForMultipleObjects(ObjectCount,
+                                      WaitObjects,
+                                      WaitType,
+                                      WaitReason,
+                                      WaitMode,
+                                      Alertable,
+                                      Timeout,
+                                      WaitBlocks);
+
+Cleanup:
+    while (Index != 0)
+        ObDereferenceObject(Objects[--Index]);
+    if (WaitBlocks != NULL)
+        ExFreePoolWithTag(WaitBlocks, TAG_WAIT);
+    return Status;
+}
+
 /*++
 * @name NtWaitForMultipleObjects
 * @implemented NT4
