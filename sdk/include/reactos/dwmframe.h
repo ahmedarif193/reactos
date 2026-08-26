@@ -85,6 +85,16 @@
 #define IOCTL_VIDEO_DXGK_PRESENT_STATS \
     CTL_CODE(FILE_DEVICE_VIDEO, 0x924, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
+/*
+ * Generic display-driver -> miniport escape conduit. The buffered payload is
+ * handed to the WDDM miniport's DxgkDdiEscape verbatim and rewritten in place
+ * with the miniport's reply; dxgkrnl never interprets it. This is how a
+ * GDI display driver (framebuf/cdd) reaches vendor GPU services -- e.g. the
+ * OpenGL ICD render escapes -- without dxgkrnl learning vendor protocols.
+ */
+#define IOCTL_VIDEO_DXGK_GPU_ESCAPE \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x925, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
 #include <pshpack4.h>
 
 typedef struct _DXGK_PRESENT_DIRTY_RECT_INPUT
