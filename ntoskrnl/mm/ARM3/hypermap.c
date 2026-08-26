@@ -23,6 +23,74 @@ MMPTE HyperTemplatePte;
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+
+/*
+ * Keep a released slot unavailable until its stale translation has been
+ * invalidated. This is an invalid hardware PTE, but unlike zero it cannot be
+ * claimed by another processor.
+ */
+#define MI_HYPERSPACE_PTE_RELEASING ((ULONG_PTR)2)
+
+static __inline
+ULONG_PTR
+MiCompareExchangeHyperSpacePte(
+    _Inout_ PMMPTE PointerPte,
+    _In_ ULONG_PTR Exchange,
+    _In_ ULONG_PTR Comparand)
+{
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    return (ULONG_PTR)InterlockedCompareExchange64((PLONG64)PointerPte,
+                                                   (LONG64)Exchange,
+                                                   (LONG64)Comparand);
+#else
+    return (ULONG_PTR)(ULONG)InterlockedCompareExchange((PLONG)PointerPte,
+                                                        (LONG)Exchange,
+                                                        (LONG)Comparand);
+#endif
+}
+
+static __inline
+ULONG_PTR
+MiExchangeHyperSpacePte(
+    _Inout_ PMMPTE PointerPte,
+    _In_ ULONG_PTR Value)
+{
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    return (ULONG_PTR)InterlockedExchange64((PLONG64)PointerPte,
+                                            (LONG64)Value);
+#else
+    return (ULONG_PTR)(ULONG)InterlockedExchange((PLONG)PointerPte,
+                                                 (LONG)Value);
+#endif
+}
+
+static __inline
+BOOLEAN
+MiTryClaimHyperSpacePte(
+    _Inout_ PMMPTE PointerPte,
+    _In_ MMPTE TempPte)
+{
+    ASSERT(TempPte.u.Hard.Valid == 1);
+#if defined(_M_AMD64)
+    ASSERT(!MI_IS_PAGE_TABLE_ADDRESS(MiPteToAddress(PointerPte)) ||
+           (TempPte.u.Hard.NoExecute == 0));
+#endif
+#if defined(_M_ARM64)
+    TempPte = MI_ARM64_PREPARE_VALID_PTE(PointerPte, TempPte);
+#endif
+
+    if (MiCompareExchangeHyperSpacePte(PointerPte, TempPte.u.Long, 0) != 0)
+        return FALSE;
+
+#if defined(_M_ARM64)
+    MI_ARM64_FLUSH_VALID_PTE(PointerPte);
+#endif
+    return TRUE;
+}
+
+#endif
+
 PVOID
 NTAPI
 MiMapPageInHyperSpace(IN PEPROCESS Process,
@@ -32,6 +100,10 @@ MiMapPageInHyperSpace(IN PEPROCESS Process,
     MMPTE TempPte;
     PMMPTE PointerPte;
     PFN_NUMBER Offset;
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    PFN_NUMBER Index, SlotCount, StartOffset;
+    ULONG Processor;
+#endif
 
     //
     // Never accept page 0 or non-physical pages
@@ -56,25 +128,37 @@ MiMapPageInHyperSpace(IN PEPROCESS Process,
     ASSERT(Process == PsGetCurrentProcess());
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
     //
-    // Vista+: lock-free hyperspace. Raise IRQL to prevent preemption,
-    // then use interlocked operations on the FIFO counter.
+    // Vista+: raise IRQL so the mapping remains owned by this processor until
+    // MiUnmapPageInHyperSpace. The PTE itself is the interlocked slot owner;
+    // no Windows-visible process field is needed.
     //
     KeRaiseIrql(DISPATCH_LEVEL, OldIrql);
 
     //
-    // Atomically read and decrement the FIFO counter.
-    // PageFrameNumber is a bit-field so we operate on the full PTE value.
-    // At DISPATCH_LEVEL on UP, no contention is possible, so simple
-    // read-modify-write is safe. On SMP, DISPATCH prevents preemption
-    // on this CPU, and per-process hyperspace means no cross-CPU contention.
+    // Spread first choices across the range to avoid making all processors
+    // contend on one cache line. Scan the complete range so nested mappings
+    // remain supported and temporary collisions cannot cause false failure.
     //
-    Offset = PFN_FROM_PTE(PointerPte);
-    if (!Offset)
+    SlotCount = (PFN_NUMBER)(MmLastReservedMappingPte - PointerPte);
+    ASSERT(SlotCount == MI_HYPERSPACE_PTES);
+    ASSERT(SlotCount >= MAXIMUM_PROCESSORS);
+
+    Processor = KeGetCurrentProcessorNumber() % MAXIMUM_PROCESSORS;
+    StartOffset = 1 + ((SlotCount * Processor) / MAXIMUM_PROCESSORS);
+
+    for (Index = 0; Index < SlotCount; Index++)
     {
-        Offset = MI_HYPERSPACE_PTES;
-        KeFlushProcessTb();
+        Offset = StartOffset + Index;
+        if (Offset > SlotCount)
+            Offset -= SlotCount;
+
+        PointerPte = MmFirstReservedMappingPte + Offset;
+        if (MiTryClaimHyperSpacePte(PointerPte, TempPte))
+            return MiPteToAddress(PointerPte);
     }
-    PointerPte->u.Hard.PageFrameNumber = Offset - 1;
+
+    KeLowerIrql(*OldIrql);
+    return NULL;
 #else
     KeAcquireSpinLock(&Process->HyperSpaceLock, OldIrql);
 
@@ -98,7 +182,7 @@ MiMapPageInHyperSpace(IN PEPROCESS Process,
 #endif
 
     //
-    // Write the current PTE
+    // Write the current PTE. Vista+ returned from the atomic claim above.
     //
     PointerPte += Offset;
     MI_WRITE_VALID_PTE(PointerPte, TempPte);
@@ -115,12 +199,36 @@ MiUnmapPageInHyperSpace(IN PEPROCESS Process,
                         IN PVOID Address,
                         IN KIRQL OldIrql)
 {
+    PMMPTE PointerPte;
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    ULONG_PTR PreviousPte;
+#endif
+
     ASSERT(Process == PsGetCurrentProcess());
 
+    PointerPte = MiAddressToPte(Address);
+    ASSERT(PointerPte > MmFirstReservedMappingPte);
+    ASSERT(PointerPte <= MmLastReservedMappingPte);
+    ASSERT(Address == MiPteToAddress(PointerPte));
+
     //
-    // Blow away the mapping
+    // Release the mapping.
     //
-    MiAddressToPte(Address)->u.Long = 0;
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    PreviousPte = MiExchangeHyperSpacePte(PointerPte,
+                                          MI_HYPERSPACE_PTE_RELEASING);
+    ASSERT((PreviousPte & 1) != 0);
+
+#if defined(_M_ARM64)
+    MiArm64CleanEntryToPoC(PointerPte);
+#endif
+    KeInvalidateTlbEntry(Address);
+
+    PreviousPte = MiExchangeHyperSpacePte(PointerPte, 0);
+    ASSERT(PreviousPte == MI_HYPERSPACE_PTE_RELEASING);
+#else
+    PointerPte->u.Long = 0;
+#endif
 
     //
     // Release the hyperlock
