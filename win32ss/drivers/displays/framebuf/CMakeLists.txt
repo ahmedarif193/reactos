@@ -2,6 +2,7 @@
 list(APPEND SOURCE
     driver.c
     enable.c
+    escape.c
     palette.c
     pointer.c
     screen.c

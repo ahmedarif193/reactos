@@ -306,6 +306,15 @@ DrvSynchronizeSurface(
    IN RECTL *prcl,
    IN FLONG fl);
 
+ULONG APIENTRY
+DrvEscape(
+   IN SURFOBJ *pso,
+   IN ULONG iEsc,
+   IN ULONG cjIn,
+   IN PVOID pvIn,
+   IN ULONG cjOut,
+   OUT PVOID pvOut);
+
 VOID
 IntFlushShadowRect(
    PPDEV ppdev,
