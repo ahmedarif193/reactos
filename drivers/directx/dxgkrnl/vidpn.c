@@ -1845,14 +1845,19 @@ DxgkpRecommendHotPlugCandidate(
      * that reason, so a driver that only implements this DDI is not silently
      * limited to its EDID.  A refusal costs nothing: the EDID modes stand.
      */
-    if (Snapshot->Connected && DXGK_CB(Adapter, DxgkDdiRecommendMonitorModes) != NULL)
+    if (Snapshot->Connected &&
+        Snapshot->TargetId < VidPn->NumTargets &&
+        VidPn->MonitorModeSets[Snapshot->TargetId] != NULL &&
+        DXGK_CB(Adapter, DxgkDdiRecommendMonitorModes) != NULL)
     {
         DXGKARG_RECOMMENDMONITORMODES MonitorArgs;
         NTSTATUS MonitorStatus;
 
         RtlZeroMemory(&MonitorArgs, sizeof(MonitorArgs));
         MonitorArgs.VideoPresentTargetId = Snapshot->TargetId;
-        MonitorArgs.hMonitorSourceModeSet = (D3DKMDT_HMONITORSOURCEMODESET)VidPn;
+        MonitorArgs.hMonitorSourceModeSet =
+            (D3DKMDT_HMONITORSOURCEMODESET)
+                VidPn->MonitorModeSets[Snapshot->TargetId];
         MonitorArgs.pMonitorSourceModeSetInterface = &g_MonitorSourceModeSetInterface;
         if (DxgkAcquireKmdCall(Adapter))
         {
