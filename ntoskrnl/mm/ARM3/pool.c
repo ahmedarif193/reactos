@@ -1049,16 +1049,39 @@ MiFreePoolPages(IN PVOID StartingVa)
     }
 
     //
-    // Get the first PTE and its corresponding PFN entry. If this is also the
-    // last PTE, meaning that this allocation was only for one page, push it into
-    // the S-LIST instead of freeing it
+    // Serialize the allocation-boundary scan with allocation and coalescing.
+    // Reading the PFN boundary bits before taking this lock lets two adjacent
+    // frees observe stale neighbours and remove the same free-list entry.
     //
+    OldIrql = KeAcquireQueuedSpinLock(LockQueueMmNonPagedPoolLock);
+
     StartPte = PointerPte = MiAddressToPte(StartingVa);
     StartPfn = Pfn1 = MiGetPfnEntry(PointerPte->u.Hard.PageFrameNumber);
+
+    //
+    // A page returned by this allocator must still be marked as the start of
+    // an allocation. Reject duplicate or interior frees before touching any
+    // free-list links.
+    //
+    if (StartPfn->u3.e1.StartOfAllocation == 0)
+    {
+        DPRINT1("MiFreePoolPages: invalid or duplicate free of %p on processor %lu\n",
+                StartingVa,
+                KeGetCurrentProcessorNumber());
+        KeReleaseQueuedSpinLock(LockQueueMmNonPagedPoolLock, OldIrql);
+        return 0;
+    }
+
+    //
+    // If this is also the last PTE, meaning that this allocation was only for
+    // one page, push it into the S-LIST instead of freeing it. The PFN boundary
+    // markers deliberately stay set while the page is cached there.
+    //
     if ((Pfn1->u3.e1.EndOfAllocation == 1) &&
         (ExQueryDepthSList(&MiNonPagedPoolSListHead) < MiNonPagedPoolSListMaximum))
     {
         InterlockedPushEntrySList(&MiNonPagedPoolSListHead, StartingVa);
+        KeReleaseQueuedSpinLock(LockQueueMmNonPagedPoolLock, OldIrql);
         return 1;
     }
 
@@ -1078,11 +1101,6 @@ MiFreePoolPages(IN PVOID StartingVa)
     // Now we know how many pages we have
     //
     NumberOfPages = (PFN_COUNT)(PointerPte - StartPte + 1);
-
-    //
-    // Acquire the nonpaged pool lock
-    //
-    OldIrql = KeAcquireQueuedSpinLock(LockQueueMmNonPagedPoolLock);
 
     //
     // Mark the first and last PTEs as not part of an allocation anymore

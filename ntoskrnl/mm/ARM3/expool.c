@@ -2009,7 +2009,12 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
                 // Try to allocate using special pool
                 //
                 Entry = MmAllocateSpecialPool(NumberOfBytes, Tag, PoolType, 2);
-                if (Entry) return Entry;
+                if (Entry)
+                {
+                    if (PoolType & POOL_ZERO_ALLOCATION)
+                        RtlZeroMemory(Entry, NumberOfBytes);
+                    return Entry;
+                }
             }
         }
     }
@@ -2117,25 +2122,53 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
         }
 
         //
-        // Increment required counters
-        //
-        InterlockedExchangeAdd((PLONG)&PoolDesc->TotalBigPages,
-                               (LONG)BYTES_TO_PAGES(NumberOfBytes));
-        InterlockedExchangeAddSizeT(&PoolDesc->TotalBytes, NumberOfBytes);
-        InterlockedIncrement((PLONG)&PoolDesc->RunningAllocs);
-
-        //
-        // Add a tag for the big page allocation and switch to the generic "BIG"
-        // tag if we failed to do so, then insert a tracker for this alloation.
+        // Every returned big allocation must have address metadata. Without it,
+        // a later table miss is indistinguishable from a duplicate free. Give
+        // the pages back and fail this allocation if the table cannot grow.
         //
         if (!ExpAddTagForBigPages(Entry,
                                   Tag,
                                   (ULONG)BYTES_TO_PAGES(NumberOfBytes),
                                   OriginalType))
         {
-            Tag = ' GIB';
+            MiFreePoolPages(Entry);
+            ExPoolFailures++;
+
+            if (OriginalType & MUST_SUCCEED_POOL_MASK)
+            {
+                KeBugCheckEx(MUST_SUCCEED_POOL_EMPTY,
+                             NumberOfBytes,
+                             NonPagedPoolDescriptor.TotalPages,
+                             NonPagedPoolDescriptor.TotalBigPages,
+                             0);
+            }
+
+            if (ExpPoolFlags & POOL_FLAG_DBGPRINT_ON_FAILURE)
+            {
+                DPRINT1("EX: big-pool metadata allocation failed (%lu, 0x%x)\n",
+                        NumberOfBytes,
+                        OriginalType);
+                if (ExpPoolFlags & POOL_FLAG_CRASH_ON_FAILURE) DbgBreakPoint();
+            }
+
+            if (OriginalType & POOL_RAISE_IF_ALLOCATION_FAILURE)
+                ExRaiseStatus(STATUS_INSUFFICIENT_RESOURCES);
+
+            return NULL;
         }
+
+        //
+        // Increment required counters only after both the pages and their
+        // address metadata are committed.
+        //
+        InterlockedExchangeAdd((PLONG)&PoolDesc->TotalBigPages,
+                               (LONG)BYTES_TO_PAGES(NumberOfBytes));
+        InterlockedExchangeAddSizeT(&PoolDesc->TotalBytes, NumberOfBytes);
+        InterlockedIncrement((PLONG)&PoolDesc->RunningAllocs);
+
         ExpInsertPoolTracker(Tag, ROUND_TO_PAGES(NumberOfBytes), OriginalType);
+        if (OriginalType & POOL_ZERO_ALLOCATION)
+            RtlZeroMemory(Entry, NumberOfBytes);
         return Entry;
     }
 
@@ -2213,6 +2246,8 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
             Entry->PoolTag = Tag;
             (POOL_FREE_BLOCK(Entry))->Flink = NULL;
             (POOL_FREE_BLOCK(Entry))->Blink = NULL;
+            if (OriginalType & POOL_ZERO_ALLOCATION)
+                RtlZeroMemory(POOL_FREE_BLOCK(Entry), NumberOfBytes);
             return POOL_FREE_BLOCK(Entry);
         }
     }
@@ -2397,6 +2432,8 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
             Entry->PoolTag = Tag;
             (POOL_FREE_BLOCK(Entry))->Flink = NULL;
             (POOL_FREE_BLOCK(Entry))->Blink = NULL;
+            if (OriginalType & POOL_ZERO_ALLOCATION)
+                RtlZeroMemory(POOL_FREE_BLOCK(Entry), NumberOfBytes);
             return POOL_FREE_BLOCK(Entry);
         }
     } while (++ListHead != &PoolDesc->ListHeads[POOL_LISTS_PER_PAGE]);
@@ -2539,6 +2576,8 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
     // And return the pool allocation
     //
     Entry->PoolTag = Tag;
+    if (OriginalType & POOL_ZERO_ALLOCATION)
+        RtlZeroMemory(POOL_FREE_BLOCK(Entry), NumberOfBytes);
     return POOL_FREE_BLOCK(Entry);
 }
 
@@ -2664,20 +2703,23 @@ ExFreePoolWithTag(IN PVOID P,
         // ahead and try finding the tag for it. Remember to get rid of the
         // PROTECTED_POOL tag if it's found.
         //
-        // Note that if at insertion time, we failed to add the tag for a big
-        // pool allocation, we used a special tag called 'BIG' to identify the
-        // allocation, and we may get this tag back. In this scenario, we must
-        // manually get the size of the allocation by actually counting through
-        // the PFN database.
+        // A returned big-pool allocation always has address metadata. Therefore
+        // a lookup miss denotes an invalid, interior, or duplicate free.
         //
         PoolType = MmDeterminePoolType(P);
         ExpCheckPoolIrqlLevel(PoolType, 0, P);
         Tag = ExpFindAndRemoveTagBigPages(P, &PageCount, PoolType, &QuotaObject);
-        if (!Tag)
+        if (Tag == ' GIB')
         {
-            DPRINT1("We do not know the size of this allocation. This is not yet supported\n");
-            ASSERT(Tag == ' GIB');
-            PageCount = 1; // We are going to lie! This might screw up accounting?
+            DPRINT1("Rejecting untracked or duplicate big-pool free for %p on processor %lu (free tag %.4s)\n",
+                    P,
+                    KeGetCurrentProcessorNumber(),
+                    (char *)&TagToFree);
+
+            if (ExStopBadTags)
+                KeBugCheckEx(BAD_POOL_CALLER, 0x0A, (ULONG_PTR)P, 0, TagToFree);
+
+            return;
         }
         else if (Tag & PROTECTED_POOL)
         {
@@ -2689,17 +2731,41 @@ ExFreePoolWithTag(IN PVOID P,
         //
         if (TagToFree && TagToFree != Tag)
         {
-            DPRINT1("Freeing pool - invalid tag specified: %.4s != %.4s\n", (char*)&TagToFree, (char*)&Tag);
-#if DBG
-            /* Do not bugcheck in case this is a big allocation for which we didn't manage to insert the tag */
-            if (Tag != ' GIB')
+            DPRINT1("Freeing big pool %p on processor %lu - invalid tag specified: %.4s != %.4s\n",
+                    P,
+                    KeGetCurrentProcessorNumber(),
+                    (char *)&TagToFree,
+                    (char *)&Tag);
+            /*
+             * A tag mismatch does not make the allocation unsafe to free: use
+             * the recorded tag for tracking and keep the diagnostic visible.
+             * Only explicit strict tag checking turns this driver error into a
+             * bugcheck. Pool header/link corruption checks remain unconditional.
+             */
+            if (ExStopBadTags && Tag != ' GIB')
                 KeBugCheckEx(BAD_POOL_CALLER, 0x0A, (ULONG_PTR)P, Tag, TagToFree);
-#endif
         }
 
         //
-        // We have our tag and our page count, so we can go ahead and remove this
-        // tracker now
+        // Free the pages before updating accounting.
+        //
+        RealPageCount = MiFreePoolPages(P);
+        if (RealPageCount == 0)
+        {
+            DPRINT1("Rejecting invalid big-pool free for %p tag %.4s\n",
+                    P, (char *)&Tag);
+            return;
+        }
+        if (RealPageCount != PageCount)
+        {
+            DPRINT1("Big pool page-count mismatch for %p tag %.4s: tracker=%Iu allocator=%Iu\n",
+                    P, (char *)&Tag, PageCount, RealPageCount);
+            if (ExStopBadTags)
+                ASSERT(RealPageCount == PageCount);
+        }
+
+        //
+        // We now have the tag and actual page count, so remove the tracker.
         //
         ExpRemovePoolTracker(Tag, PageCount << PAGE_SHIFT, PoolType);
 
@@ -2744,12 +2810,10 @@ ExFreePoolWithTag(IN PVOID P,
                                     -(LONG_PTR)(PageCount << PAGE_SHIFT));
 
         //
-        // Do the real free now and update the last counter with the big page count
+        // Balance the count recorded when this allocation was made.
         //
-        RealPageCount = MiFreePoolPages(P);
-        ASSERT(RealPageCount == PageCount);
         InterlockedExchangeAdd((PLONG)&PoolDesc->TotalBigPages,
-                               -(LONG)RealPageCount);
+                               -(LONG)PageCount);
         return;
     }
 
@@ -2786,9 +2850,9 @@ ExFreePoolWithTag(IN PVOID P,
     if (TagToFree && TagToFree != Tag)
     {
         DPRINT1("Freeing pool - invalid tag specified: %.4s != %.4s\n", (char*)&TagToFree, (char*)&Tag);
-#if DBG
-        KeBugCheckEx(BAD_POOL_CALLER, 0x0A, (ULONG_PTR)P, Tag, TagToFree);
-#endif
+        /* See the big-pool path above: diagnose by default, stop only in strict mode. */
+        if (ExStopBadTags)
+            KeBugCheckEx(BAD_POOL_CALLER, 0x0A, (ULONG_PTR)P, Tag, TagToFree);
     }
 
     //
