@@ -3446,10 +3446,14 @@ static void wined3d_context_gl_map_stage(struct wined3d_context_gl *context_gl, 
 
 static void context_invalidate_texture_stage(struct wined3d_context *context, DWORD stage)
 {
-    DWORD i;
+    DWORD i, state;
 
     for (i = 0; i <= WINED3D_HIGHEST_TEXTURE_STATE; ++i)
-        context_invalidate_state(context, STATE_TEXTURESTAGE(stage, i));
+    {
+        state = STATE_TEXTURESTAGE(stage, i);
+        if (context->state_table[state].representative)
+            context_invalidate_state(context, state);
+    }
 }
 
 static bool use_ffp_ps(const struct wined3d_state *state)
