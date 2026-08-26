@@ -484,6 +484,7 @@ Rpi5OglGpuEscape(
     Escape.Type = D3DKMT_ESCAPE_DRIVERPRIVATE;
     Escape.pPrivateDriverData = Wrapper;
     Escape.PrivateDriverDataSize = WrapperBytes;
+    Escape.Flags.NoAdapterSynchronization = 1;
     Status = D3DKMTEscape(&Escape);
     if (!NT_SUCCESS(Status))
         return 0;
