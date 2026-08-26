@@ -1341,6 +1341,10 @@ typedef struct _RPI5VC4_V3D_FUSED_GRAPH_DRAW
     const RPI5VC4_V3D_GRAPH_RESOURCE_STATE *Source;
 } RPI5VC4_V3D_FUSED_GRAPH_DRAW, *PRPI5VC4_V3D_FUSED_GRAPH_DRAW;
 
+static ULONG
+Rpi5V3dGraphMemoryFormat(
+    _In_ ULONG Tiling);
+
 typedef struct _RPI5VC4_V3D_TERRAIN_PASS_STATE
 {
     ULONG ShaderMode;
@@ -5509,7 +5513,7 @@ Rpi5V3dExecuteClear(
             OutputSurface->MemoryFormat == V3D71_MEMORY_FORMAT_UIF_NO_XOR ||
             OutputSurface->MemoryFormat == V3D71_MEMORY_FORMAT_UIF_XOR)) ||
           OutputSurface->MemoryFormat > V3D71_MEMORY_FORMAT_UIF_XOR)) ||
-        (OutputDepth && (DirectPresent || OutputSurface != NULL)))
+        (OutputDepth && DirectPresent))
     {
         return ERROR_INVALID_PARAMETER;
     }
@@ -6651,6 +6655,9 @@ Rpi5V3dRenderBatch(
     _Out_ PULONG BytesReturned)
 {
     RPI5VC4_V3D_SELFTEST Diagnostics;
+    RPI5VC4_V3D_TEXTURE_SLICE RetainedDepthSlice;
+    RPI5VC4_V3D_OUTPUT_SURFACE RetainedDepthSurface;
+    const RPI5VC4_V3D_OUTPUT_SURFACE *OutputSurface = NULL;
     ULONG RequestHeaderSize =
         FIELD_OFFSET(RPI5VC4_V3D_BATCH_REQUEST, Vertices);
     ULONG ResultHeaderSize =
@@ -6664,6 +6671,8 @@ Rpi5V3dRenderBatch(
     ULONG VertexCount;
     ULONG DestinationX;
     ULONG DestinationY;
+    ULONG RetainedDepthStorageBytes = 0;
+    ULONG RetainedDepthGeneration = 0;
     ULONG DepthFlags = RPI5VC4_V3D_BATCH_FLAG_DEPTH_TEST |
                        RPI5VC4_V3D_BATCH_FLAG_DEPTH_WRITE;
     BOOLEAN DirectPresent;
@@ -6683,6 +6692,7 @@ Rpi5V3dRenderBatch(
     BOOLEAN Jellyfish;
     BOOLEAN Shadow;
     BOOLEAN OutputDepth;
+    BOOLEAN RetainDepth;
     const RPI5VC4_V3D_TEXCOORD *HeightTexCoords;
     VP_STATUS Status;
 
@@ -6725,6 +6735,7 @@ Rpi5V3dRenderBatch(
            RPI5VC4_V3D_BATCH_FLAG_WIREFRAME |
            RPI5VC4_V3D_BATCH_FLAG_IDEAS |
            RPI5VC4_V3D_BATCH_FLAG_JELLYFISH |
+           RPI5VC4_V3D_BATCH_FLAG_RETAIN_DEPTH_TEXTURE |
            RPI5VC4_V3D_BATCH_FLAG_BLEND_STANDARD |
            RPI5VC4_V3D_BATCH_FLAG_BLEND_PRESERVE_ALPHA)) != 0 ||
         ((Request->Flags & RPI5VC4_V3D_BATCH_FLAG_TEXTURE_LINEAR) != 0 &&
@@ -6788,7 +6799,11 @@ Rpi5V3dRenderBatch(
           (Request->Flags &
            ~(DepthFlags |
              RPI5VC4_V3D_BATCH_FLAG_DEPTH_LEQUAL |
-             RPI5VC4_V3D_BATCH_FLAG_OUTPUT_DEPTH)) != 0)) ||
+             RPI5VC4_V3D_BATCH_FLAG_OUTPUT_DEPTH |
+             RPI5VC4_V3D_BATCH_FLAG_RETAIN_DEPTH_TEXTURE)) != 0)) ||
+        ((Request->Flags &
+          RPI5VC4_V3D_BATCH_FLAG_RETAIN_DEPTH_TEXTURE) != 0 &&
+         (Request->Flags & RPI5VC4_V3D_BATCH_FLAG_OUTPUT_DEPTH) == 0) ||
         (((Request->Flags & RPI5VC4_V3D_BATCH_FLAG_BLINN_PHONG) != 0) +
          ((Request->Flags & RPI5VC4_V3D_BATCH_FLAG_BUMP_POLY) != 0) +
          ((Request->Flags & RPI5VC4_V3D_BATCH_FLAG_WIREFRAME) != 0) +
@@ -6854,6 +6869,9 @@ Rpi5V3dRenderBatch(
         (Request->Flags & RPI5VC4_V3D_BATCH_FLAG_SHADOW) != 0;
     OutputDepth =
         (Request->Flags & RPI5VC4_V3D_BATCH_FLAG_OUTPUT_DEPTH) != 0;
+    RetainDepth =
+        (Request->Flags &
+         RPI5VC4_V3D_BATCH_FLAG_RETAIN_DEPTH_TEXTURE) != 0;
     HeightTexCoords = NULL;
     if (HeightMap || Jellyfish)
     {
@@ -6919,11 +6937,52 @@ Rpi5V3dRenderBatch(
     DestinationY = Request->DestinationY;
     DirectPresent =
         (Request->Flags & RPI5VC4_V3D_BATCH_FLAG_DIRECT_PRESENT) != 0;
-    PixelBytes = DirectPresent ? 0 :
+    PixelBytes = DirectPresent || RetainDepth ? 0 :
                  Width * Height * sizeof(ULONG);
     RequiredResultSize = ResultHeaderSize + PixelBytes;
     if (ResultBufferLength < RequiredResultSize)
         return ERROR_INSUFFICIENT_BUFFER;
+
+    if (RetainDepth)
+    {
+        ULONG MemoryFormat;
+
+        if (!Rpi5V3dBuildTextureLayout(Width,
+                                       Height,
+                                       1,
+                                       &RetainedDepthSlice,
+                                       &RetainedDepthStorageBytes) ||
+            RetainedDepthStorageBytes > RPI5VC4_V3D_TEXTURE0_MAX_BYTES)
+        {
+            return ERROR_INVALID_PARAMETER;
+        }
+        MemoryFormat = Rpi5V3dGraphMemoryFormat(
+                           RetainedDepthSlice.Tiling);
+        if (MemoryFormat == MAXULONG)
+            return ERROR_INVALID_PARAMETER;
+
+        VideoPortZeroMemory(&RetainedDepthSurface,
+                            sizeof(RetainedDepthSurface));
+        RetainedDepthSurface.GpuVa = RPI5VC4_V3D_WORK_GPU_VA +
+                                     RPI5VC4_V3D_TEXTURE_OFFSET +
+                                     RetainedDepthSlice.Offset;
+        RetainedDepthSurface.HeightInUbOrStride =
+            MemoryFormat == V3D71_MEMORY_FORMAT_UIF_NO_XOR ||
+            MemoryFormat == V3D71_MEMORY_FORMAT_UIF_XOR ?
+                RetainedDepthSlice.PaddedHeight /
+                    (2u * RPI5VC4_V3D_UTILE_HEIGHT_RGBA8) : 0;
+        RetainedDepthSurface.MemoryFormat = MemoryFormat;
+        RetainedDepthSurface.MaximumX = Width;
+        RetainedDepthSurface.MaximumY = Height;
+        OutputSurface = &RetainedDepthSurface;
+
+        DeviceExtension->V3dGraphCacheId = 0;
+        DeviceExtension->V3dGraphResourceCount = 0;
+        DeviceExtension->V3dGraphReadbackResource = 0;
+        DeviceExtension->V3dGraphStorageBytes = 0;
+        DeviceExtension->V3dGraphTerrainCacheId = 0;
+        DeviceExtension->V3dGraphTerrainGpuCacheId = 0;
+    }
 
     Status = Rpi5V3dExecuteClear(DeviceExtension,
                                  Width,
@@ -6975,7 +7034,7 @@ Rpi5V3dRenderBatch(
                                  DirectPresent,
                                  DestinationX,
                                  DestinationY,
-                                 NULL,
+                                 OutputSurface,
                                  OutputDepth,
                                  NULL,
                                  NULL,
@@ -6988,12 +7047,44 @@ Rpi5V3dRenderBatch(
                                  FALSE, /* PreserveTerrainGeometry */
                                  FALSE,
                                  &Diagnostics,
-                                 DirectPresent ? NULL : Result->Pixels,
+                                 DirectPresent || RetainDepth ?
+                                     NULL : Result->Pixels,
                                  PixelBytes,
                                  NULL,
                                  FALSE);
     if (Status != NO_ERROR)
         return Status;
+
+    if (RetainDepth &&
+        Diagnostics.Status == RPI5VC4_V3D_SELFTEST_STATUS_SUCCESS)
+    {
+        RetainedDepthGeneration =
+            DeviceExtension->V3dTextureGeneration + 1u;
+        if (RetainedDepthGeneration == 0)
+            RetainedDepthGeneration = 1;
+        DeviceExtension->V3dTextureWidth = Width;
+        DeviceExtension->V3dTextureHeight = Height;
+        DeviceExtension->V3dTextureFormat =
+            RPI5VC4_V3D_TEXTURE_FORMAT_D24_X8;
+        DeviceExtension->V3dTextureLevelCount = 1;
+        DeviceExtension->V3dTextureLevel0Offset =
+            RetainedDepthSlice.Offset;
+        DeviceExtension->V3dTextureLevel0UbPad =
+            RetainedDepthSlice.UbPad;
+        DeviceExtension->V3dTextureLevel0StrictUif =
+            RetainedDepthSlice.Tiling ==
+                Rpi5V3dTextureTilingUifNoXor ||
+            RetainedDepthSlice.Tiling == Rpi5V3dTextureTilingUifXor;
+        DeviceExtension->V3dTextureLevel0Xor =
+            RetainedDepthSlice.Tiling == Rpi5V3dTextureTilingUifXor;
+        KeMemoryBarrier();
+        DeviceExtension->V3dTextureGeneration =
+            RetainedDepthGeneration;
+    }
+    else if (RetainDepth)
+    {
+        DeviceExtension->V3dTextureGeneration = 0;
+    }
 
     Result->Size = RequiredResultSize;
     Result->AbiVersion = RPI5VC4_XPDM_ABI_VERSION;
@@ -7011,6 +7102,7 @@ Rpi5V3dRenderBatch(
     Result->VertexCount = VertexCount;
     Result->DestinationX = DestinationX;
     Result->DestinationY = DestinationY;
+    Result->TextureGeneration = RetainedDepthGeneration;
     Result->Diagnostics = Diagnostics;
     *BytesReturned = Diagnostics.Status ==
                      RPI5VC4_V3D_SELFTEST_STATUS_SUCCESS ?
@@ -7203,6 +7295,109 @@ Rpi5V3dUploadTexture(
     Result->Format = Format;
     Result->LevelCount = LevelCount;
     Result->TextureSlot = TextureSlot;
+
+Done:
+    InterlockedExchange(&DeviceExtension->V3dExecutionBusy, 0);
+    return NO_ERROR;
+}
+
+VP_STATUS
+Rpi5V3dReadTexture(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ PRPI5VC4_V3D_READ_TEXTURE_REQUEST Request,
+    _Out_writes_bytes_(ResultBufferLength)
+        PRPI5VC4_V3D_READ_TEXTURE_RESULT Result,
+    _In_ ULONG ResultBufferLength,
+    _Out_ PULONG BytesReturned)
+{
+    const ULONG HeaderSize =
+        FIELD_OFFSET(RPI5VC4_V3D_READ_TEXTURE_RESULT, Pixels);
+    RPI5VC4_V3D_READ_TEXTURE_REQUEST LocalRequest;
+    RPI5VC4_V3D_TEXTURE_SLICE Slice;
+    const UCHAR *Source;
+    ULONG StorageBytes;
+    ULONG PixelBytes;
+    ULONG RequiredSize;
+    ULONG X;
+    ULONG Y;
+
+    *BytesReturned = 0;
+    if (Request->Size < sizeof(*Request) ||
+        Request->AbiVersion != RPI5VC4_XPDM_ABI_VERSION ||
+        Request->Generation == 0 ||
+        Request->TextureSlot != RPI5VC4_V3D_TEXTURE_SLOT_PRIMARY)
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
+
+    LocalRequest = *Request;
+    Request = &LocalRequest;
+    VideoPortZeroMemory(Result, HeaderSize);
+    Result->Size = HeaderSize;
+    Result->AbiVersion = RPI5VC4_XPDM_ABI_VERSION;
+    Result->Status = RPI5VC4_V3D_SELFTEST_STATUS_BUSY;
+    Result->Generation = Request->Generation;
+    *BytesReturned = HeaderSize;
+
+    if (InterlockedCompareExchange(&DeviceExtension->V3dExecutionBusy,
+                                   1,
+                                   0) != 0)
+    {
+        return NO_ERROR;
+    }
+    if (DeviceExtension->V3dWorkVa == NULL ||
+        Request->Generation != DeviceExtension->V3dTextureGeneration ||
+        DeviceExtension->V3dTextureWidth == 0 ||
+        DeviceExtension->V3dTextureHeight == 0 ||
+        DeviceExtension->V3dTextureFormat !=
+            RPI5VC4_V3D_TEXTURE_FORMAT_D24_X8 ||
+        DeviceExtension->V3dTextureLevelCount != 1 ||
+        !Rpi5V3dBuildTextureLayout(DeviceExtension->V3dTextureWidth,
+                                  DeviceExtension->V3dTextureHeight,
+                                  1,
+                                  &Slice,
+                                  &StorageBytes) ||
+        Slice.Offset != DeviceExtension->V3dTextureLevel0Offset)
+    {
+        Result->Status = RPI5VC4_V3D_SELFTEST_STATUS_TEXTURE_MISMATCH;
+        goto Done;
+    }
+
+    PixelBytes = DeviceExtension->V3dTextureWidth *
+                 DeviceExtension->V3dTextureHeight * sizeof(ULONG);
+    RequiredSize = HeaderSize + PixelBytes;
+    if (ResultBufferLength < RequiredSize)
+    {
+        InterlockedExchange(&DeviceExtension->V3dExecutionBusy, 0);
+        return ERROR_INSUFFICIENT_BUFFER;
+    }
+
+    if (DeviceExtension->V3dWorkCached)
+    {
+        DeviceExtension->V3dWorkTextureMdl->ByteCount = StorageBytes;
+        KeFlushIoBuffers(DeviceExtension->V3dWorkTextureMdl, TRUE, TRUE);
+    }
+    Source = (const UCHAR *)DeviceExtension->V3dWorkVa +
+             RPI5VC4_V3D_TEXTURE_OFFSET + Slice.Offset;
+    Slice.Offset = 0;
+    for (Y = 0; Y < DeviceExtension->V3dTextureHeight; Y++)
+    {
+        for (X = 0; X < DeviceExtension->V3dTextureWidth; X++)
+        {
+            Result->Pixels[Y * DeviceExtension->V3dTextureWidth + X] =
+                *(const ULONG *)(Source +
+                    Rpi5V3dTexturePixelOffset(&Slice, X, Y));
+        }
+    }
+
+    Result->Size = RequiredSize;
+    Result->Status = RPI5VC4_V3D_SELFTEST_STATUS_SUCCESS;
+    Result->Width = DeviceExtension->V3dTextureWidth;
+    Result->Height = DeviceExtension->V3dTextureHeight;
+    Result->Format = DeviceExtension->V3dTextureFormat;
+    Result->Stride = DeviceExtension->V3dTextureWidth * sizeof(ULONG);
+    Result->PixelBytes = PixelBytes;
+    *BytesReturned = RequiredSize;
 
 Done:
     InterlockedExchange(&DeviceExtension->V3dExecutionBusy, 0);

@@ -956,6 +956,49 @@ Rpi5Vc4StartIO(
                 RequestPacket->StatusBlock->Information = Returned;
             break;
 
+        case IOCTL_VIDEO_RPI5VC4_READ_TEXTURE:
+            if (RequestPacket->InputBufferLength <
+                    sizeof(RPI5VC4_V3D_READ_TEXTURE_REQUEST) ||
+                RequestPacket->OutputBufferLength <
+                    FIELD_OFFSET(RPI5VC4_V3D_READ_TEXTURE_RESULT, Pixels))
+            {
+                Status = ERROR_INSUFFICIENT_BUFFER;
+                break;
+            }
+            Status = Rpi5V3dReadTexture(
+                DeviceExtension,
+                (PRPI5VC4_V3D_READ_TEXTURE_REQUEST)
+                    RequestPacket->InputBuffer,
+                (PRPI5VC4_V3D_READ_TEXTURE_RESULT)
+                    RequestPacket->OutputBuffer,
+                RequestPacket->OutputBufferLength,
+                &Returned);
+            if (Status == NO_ERROR)
+                RequestPacket->StatusBlock->Information = Returned;
+            break;
+
+        case IOCTL_VIDEO_RPI5VC4_WAIT_VBLANK:
+            if (RequestPacket->OutputBufferLength <
+                    sizeof(RPI5VC4_VBLANK_RESULT))
+            {
+                Status = ERROR_INSUFFICIENT_BUFFER;
+                break;
+            }
+            {
+                PRPI5VC4_VBLANK_RESULT Result =
+                    (PRPI5VC4_VBLANK_RESULT)RequestPacket->OutputBuffer;
+
+                VideoPortZeroMemory(Result, sizeof(*Result));
+                Result->Size = sizeof(*Result);
+                Result->AbiVersion = RPI5VC4_XPDM_ABI_VERSION;
+                Result->Status = Rpi5CrtcWaitForVBlank(DeviceExtension) ?
+                    RPI5VC4_V3D_SELFTEST_STATUS_SUCCESS :
+                    RPI5VC4_V3D_SELFTEST_STATUS_NOT_SUPPORTED;
+                RequestPacket->StatusBlock->Information = sizeof(*Result);
+                Status = NO_ERROR;
+            }
+            break;
+
         default:
             Status = ERROR_INVALID_FUNCTION;
             break;
