@@ -313,6 +313,8 @@ IopCreateObjectTypes(VOID)
         IoCompletionObjectType = IoCompletionType;
     }
 
+    if (!IopInitializeWaitCompletionPacketType()) return FALSE;
+
     /* Initialize the File object type  */
     RtlInitUnicodeString(&Name, L"File");
     ObjectTypeInitializer.DefaultPagedPoolCharge = 1024;

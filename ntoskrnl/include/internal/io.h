@@ -301,6 +301,20 @@ typedef struct _IOP_MINI_COMPLETION_PACKET
     ULONG_PTR IoStatusInformation;
 } IOP_MINI_COMPLETION_PACKET, *PIOP_MINI_COMPLETION_PACKET;
 
+typedef struct _IOP_WAIT_COMPLETION_PACKET
+{
+    WORK_QUEUE_ITEM WorkItem;
+    KEVENT CancelEvent;
+    KEVENT RundownEvent;
+    volatile LONG Active;
+    PVOID CompletionPort;
+    PVOID TargetObject;
+    PVOID KeyContext;
+    PVOID ApcContext;
+    NTSTATUS IoStatus;
+    ULONG_PTR IoStatusInformation;
+} IOP_WAIT_COMPLETION_PACKET, *PIOP_WAIT_COMPLETION_PACKET;
+
 //
 // I/O Completion Context for IoSetIoCompletionRoutineEx
 //
@@ -1449,6 +1463,10 @@ IoSetIoCompletion(
     IN BOOLEAN Quota
 );
 
+BOOLEAN
+NTAPI
+IopInitializeWaitCompletionPacketType(VOID);
+
 //
 // Ramdisk Routines
 //
@@ -1563,6 +1581,7 @@ PiIrpQueryPnPDeviceState(
 // Global I/O Data
 //
 extern POBJECT_TYPE IoCompletionType;
+extern POBJECT_TYPE IopWaitCompletionPacketType;
 extern PDEVICE_NODE IopRootDeviceNode;
 extern KSPIN_LOCK IopDeviceTreeLock;
 extern ULONG IopTraceLevel;

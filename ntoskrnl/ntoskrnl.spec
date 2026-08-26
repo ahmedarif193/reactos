@@ -3349,8 +3349,8 @@
 @ stub -arch=arm64 WheaUnconfigureErrorSource
 @ stub -arch=arm64 WheaUnregisterErrorSourceOverride
 @ stdcall -arch=arm64 ZwAlertThreadByThreadId(ptr)
-@ stub -arch=arm64 ZwAssociateWaitCompletionPacket
-@ stub -arch=arm64 ZwCancelWaitCompletionPacket
+@ stdcall -arch=i386,x86_64,arm64 ZwAssociateWaitCompletionPacket(ptr ptr ptr ptr ptr long int64 ptr)
+@ stdcall -arch=i386,x86_64,arm64 ZwCancelWaitCompletionPacket(ptr long)
 @ stub -arch=arm64 ZwCommitComplete
 @ stub -arch=arm64 ZwCommitEnlistment
 @ stub -arch=arm64 ZwCommitRegistryTransaction
@@ -3366,7 +3366,7 @@
 @ stub -arch=arm64 ZwCreateSectionEx
 @ stub -arch=arm64 ZwCreateTransaction
 @ stub -arch=arm64 ZwCreateTransactionManager
-@ stub -arch=arm64 ZwCreateWaitCompletionPacket
+@ stdcall -arch=i386,x86_64,arm64 ZwCreateWaitCompletionPacket(ptr long ptr)
 @ stdcall -version=0x602+ -arch=arm64 ZwCreateWnfStateName(ptr long long long ptr long ptr)
 @ stdcall -version=0x602+ -arch=arm64 ZwDeleteWnfStateData(ptr ptr)
 @ stdcall -version=0x602+ -arch=arm64 ZwDeleteWnfStateName(ptr)

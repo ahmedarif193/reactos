@@ -16,6 +16,7 @@
 POBJECT_TYPE IoCompletionType;
 /* Windows exports the completion object type as IoCompletionObjectType. */
 POBJECT_TYPE IoCompletionObjectType = NULL;
+POBJECT_TYPE IopWaitCompletionPacketType;
 
 GENERAL_LOOKASIDE IoCompletionPacketLookaside;
 
@@ -25,6 +26,14 @@ GENERIC_MAPPING IopCompletionMapping =
     STANDARD_RIGHTS_WRITE | IO_COMPLETION_MODIFY_STATE,
     STANDARD_RIGHTS_EXECUTE | SYNCHRONIZE,
     IO_COMPLETION_ALL_ACCESS
+};
+
+static GENERIC_MAPPING IopWaitCompletionPacketMapping =
+{
+    STANDARD_RIGHTS_READ | SYNCHRONIZE,
+    STANDARD_RIGHTS_WRITE | SYNCHRONIZE,
+    STANDARD_RIGHTS_EXECUTE | SYNCHRONIZE,
+    STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE
 };
 
 static const INFORMATION_CLASS_INFO IoCompletionInfoClass[] =
@@ -41,6 +50,70 @@ typedef struct _FILE_IO_COMPLETION_INFORMATION
 } FILE_IO_COMPLETION_INFORMATION, *PFILE_IO_COMPLETION_INFORMATION;
 
 /* PRIVATE FUNCTIONS *********************************************************/
+
+static
+VOID
+NTAPI
+IopWaitCompletionPacketWorker(_In_ PVOID Parameter)
+{
+    PIOP_WAIT_COMPLETION_PACKET Packet = Parameter;
+    PVOID WaitObjects[2];
+    NTSTATUS Status;
+
+    WaitObjects[0] = Packet->TargetObject;
+    WaitObjects[1] = &Packet->CancelEvent;
+    Status = KeWaitForMultipleObjects(RTL_NUMBER_OF(WaitObjects),
+                                      WaitObjects,
+                                      WaitAny,
+                                      Executive,
+                                      KernelMode,
+                                      FALSE,
+                                      NULL,
+                                      NULL);
+
+    if (Status == STATUS_WAIT_0)
+    {
+        IoSetIoCompletion(Packet->CompletionPort,
+                          Packet->KeyContext,
+                          Packet->ApcContext,
+                          Packet->IoStatus,
+                          Packet->IoStatusInformation,
+                          TRUE);
+    }
+
+    ObDereferenceObject(Packet->TargetObject);
+    ObDereferenceObject(Packet->CompletionPort);
+    Packet->TargetObject = NULL;
+    Packet->CompletionPort = NULL;
+    InterlockedExchange(&Packet->Active, FALSE);
+    KeSetEvent(&Packet->RundownEvent, IO_NO_INCREMENT, FALSE);
+    ObDereferenceObject(Packet);
+}
+
+BOOLEAN
+NTAPI
+IopInitializeWaitCompletionPacketType(VOID)
+{
+    OBJECT_TYPE_INITIALIZER ObjectTypeInitializer;
+    UNICODE_STRING Name;
+    NTSTATUS Status;
+
+    RtlZeroMemory(&ObjectTypeInitializer, sizeof(ObjectTypeInitializer));
+    ObjectTypeInitializer.Length = sizeof(ObjectTypeInitializer);
+    ObjectTypeInitializer.DefaultNonPagedPoolCharge = sizeof(IOP_WAIT_COMPLETION_PACKET);
+    ObjectTypeInitializer.GenericMapping = IopWaitCompletionPacketMapping;
+    ObjectTypeInitializer.PoolType = NonPagedPool;
+    ObjectTypeInitializer.ValidAccessMask = STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE;
+    ObjectTypeInitializer.InvalidAttributes = OBJ_OPENLINK;
+    ObjectTypeInitializer.UseDefaultObject = TRUE;
+
+    RtlInitUnicodeString(&Name, L"WaitCompletionPacket");
+    Status = ObCreateObjectType(&Name,
+                                &ObjectTypeInitializer,
+                                NULL,
+                                &IopWaitCompletionPacketType);
+    return NT_SUCCESS(Status);
+}
 
 NTSTATUS
 NTAPI
@@ -800,4 +873,162 @@ NtSetIoCompletionEx(IN HANDLE IoCompletionPortHandle,
 
     ObDereferenceObject(Queue);
     return Status;
+}
+
+NTSTATUS
+NTAPI
+ZwCreateWaitCompletionPacket(
+    _Out_ PHANDLE WaitCompletionPacketHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_opt_ POBJECT_ATTRIBUTES ObjectAttributes)
+{
+    PIOP_WAIT_COMPLETION_PACKET Packet;
+    HANDLE Handle;
+    NTSTATUS Status;
+
+    if (WaitCompletionPacketHandle == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = ObCreateObject(KernelMode,
+                            IopWaitCompletionPacketType,
+                            ObjectAttributes,
+                            KernelMode,
+                            NULL,
+                            sizeof(*Packet),
+                            0,
+                            0,
+                            (PVOID *)&Packet);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlZeroMemory(Packet, sizeof(*Packet));
+    KeInitializeEvent(&Packet->CancelEvent, NotificationEvent, FALSE);
+    KeInitializeEvent(&Packet->RundownEvent, NotificationEvent, TRUE);
+
+    Status = ObInsertObject(Packet,
+                            NULL,
+                            DesiredAccess,
+                            0,
+                            NULL,
+                            &Handle);
+    if (NT_SUCCESS(Status))
+        *WaitCompletionPacketHandle = Handle;
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+ZwAssociateWaitCompletionPacket(
+    _In_ HANDLE WaitCompletionPacketHandle,
+    _In_ HANDLE IoCompletionHandle,
+    _In_ HANDLE TargetObjectHandle,
+    _In_opt_ PVOID KeyContext,
+    _In_opt_ PVOID ApcContext,
+    _In_ NTSTATUS IoStatus,
+    _In_ ULONG_PTR IoStatusInformation,
+    _Out_opt_ PBOOLEAN AlreadySignaled)
+{
+    PIOP_WAIT_COMPLETION_PACKET Packet;
+    PVOID CompletionPort;
+    PVOID TargetObject;
+    BOOLEAN Signaled;
+    NTSTATUS Status;
+
+    Status = ObReferenceObjectByHandle(WaitCompletionPacketHandle,
+                                       SYNCHRONIZE,
+                                       IopWaitCompletionPacketType,
+                                       KernelMode,
+                                       (PVOID *)&Packet,
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = ObReferenceObjectByHandle(IoCompletionHandle,
+                                       IO_COMPLETION_MODIFY_STATE,
+                                       IoCompletionType,
+                                       KernelMode,
+                                       &CompletionPort,
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        ObDereferenceObject(Packet);
+        return Status;
+    }
+
+    Status = ObReferenceObjectByHandle(TargetObjectHandle,
+                                       SYNCHRONIZE,
+                                       NULL,
+                                       KernelMode,
+                                       &TargetObject,
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        ObDereferenceObject(CompletionPort);
+        ObDereferenceObject(Packet);
+        return Status;
+    }
+
+    if (InterlockedCompareExchange(&Packet->Active, TRUE, FALSE) != FALSE)
+    {
+        ObDereferenceObject(TargetObject);
+        ObDereferenceObject(CompletionPort);
+        ObDereferenceObject(Packet);
+        return STATUS_OBJECT_NAME_EXISTS;
+    }
+
+    KeClearEvent(&Packet->CancelEvent);
+    KeClearEvent(&Packet->RundownEvent);
+    Packet->CompletionPort = CompletionPort;
+    Packet->TargetObject = TargetObject;
+    Packet->KeyContext = KeyContext;
+    Packet->ApcContext = ApcContext;
+    Packet->IoStatus = IoStatus;
+    Packet->IoStatusInformation = IoStatusInformation;
+    Signaled = ((PDISPATCHER_HEADER)TargetObject)->SignalState > 0;
+    if (AlreadySignaled != NULL)
+        *AlreadySignaled = Signaled;
+
+    ObReferenceObject(Packet);
+    ExInitializeWorkItem(&Packet->WorkItem,
+                         IopWaitCompletionPacketWorker,
+                         Packet);
+    ExQueueWorkItem(&Packet->WorkItem, DelayedWorkQueue);
+    ObDereferenceObject(Packet);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+ZwCancelWaitCompletionPacket(
+    _In_ HANDLE WaitCompletionPacketHandle,
+    _In_ BOOLEAN RemoveSignaledPacket)
+{
+    PIOP_WAIT_COMPLETION_PACKET Packet;
+    NTSTATUS Status;
+
+    UNREFERENCED_PARAMETER(RemoveSignaledPacket);
+
+    Status = ObReferenceObjectByHandle(WaitCompletionPacketHandle,
+                                       SYNCHRONIZE,
+                                       IopWaitCompletionPacketType,
+                                       KernelMode,
+                                       (PVOID *)&Packet,
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (InterlockedCompareExchange(&Packet->Active, TRUE, TRUE) == FALSE)
+    {
+        ObDereferenceObject(Packet);
+        return STATUS_NOT_FOUND;
+    }
+
+    KeSetEvent(&Packet->CancelEvent, IO_NO_INCREMENT, FALSE);
+    KeWaitForSingleObject(&Packet->RundownEvent,
+                          Executive,
+                          KernelMode,
+                          FALSE,
+                          NULL);
+    ObDereferenceObject(Packet);
+    return STATUS_SUCCESS;
 }
