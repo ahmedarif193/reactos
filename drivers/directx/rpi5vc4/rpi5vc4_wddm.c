@@ -88,6 +88,14 @@ Rpi5Vc4ProcessPendingLocked(
     if (DeviceExtension->StopAccepting)
         return FALSE;
 
+    /* A synchronous exec-engine escape owns the CLE: park the pipeline
+     * (jobs stay queued) until the gate is released. */
+    if (DeviceExtension->V3dExecGateActive)
+    {
+        *NeedPoll = TRUE;
+        return FALSE;
+    }
+
     /* Consume the latched completion bits once per pass. */
     if (DeviceExtension->V3dReady && !DeviceExtension->StopAccepting)
     {
@@ -2693,6 +2701,243 @@ Rpi5Vc4EscapeSubmit(
     return Rpi5Vc4QueueEscapeJob(DeviceExtension, Packet);
 }
 
+/* ========================================================================
+ * Bounded exec-engine escapes (RPI5VC4_WDDM_GPU_ESCAPE wrapper)
+ *
+ * The OpenGL ICD packs the XPDM IOCTL_VIDEO_RPI5VC4_* request bodies behind
+ * a RPI5VC4_WDDM_GPU_ESCAPE header; the matching engine entry point runs
+ * synchronously at PASSIVE_LEVEL and rewrites the payload in place (the
+ * XPDM VRP shared a single system buffer the same way).  GPU-kicking ops
+ * first park the async fence pipeline: the gate is taken only with all
+ * three node queues empty, so no CLE/TFU/CSD job is in flight, and
+ * ProcessPendingLocked defers new kicks until release.
+ * ====================================================================== */
+
+static BOOLEAN
+Rpi5Vc4GpuEscapeGateAcquire(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
+{
+    LARGE_INTEGER Interval;
+    KIRQL OldIrql;
+    BOOLEAN Taken;
+    BOOLEAN Stopping;
+    ULONG Tries;
+
+    if (!DeviceExtension->DmaPipelineInitialized)
+        return FALSE;
+
+    for (Tries = 0; Tries < 500; Tries++)
+    {
+        KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
+        Stopping = DeviceExtension->StopAccepting;
+        /* Exclusive: a concurrent escape already holding the gate must not
+         * be released from under its running job by this thread. */
+        Taken = !Stopping && !DeviceExtension->V3dExecGateActive && DeviceExtension->NodeQueue[0].Count == 0 && DeviceExtension->NodeQueue[1].Count == 0 && DeviceExtension->NodeQueue[2].Count == 0;
+        if (Taken)
+            DeviceExtension->V3dExecGateActive = TRUE;
+        KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
+        if (Stopping)
+            return FALSE;
+        if (Taken)
+            return TRUE;
+        Interval.QuadPart = -10000; /* 1 ms */
+        KeDelayExecutionThread(KernelMode, FALSE, &Interval);
+    }
+
+    return FALSE;
+}
+
+static VOID
+Rpi5Vc4GpuEscapeGateRelease(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
+{
+    BOOLEAN Pending;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
+    if (DeviceExtension->V3dReady)
+    {
+        PUCHAR Core = DeviceExtension->V3dCoreBase;
+        PUCHAR Hub = DeviceExtension->V3dHubBase;
+
+        /* The exec engine masked every interrupt source, consumed INT_STS
+         * latches and bumped the BFC/RFC flush counters; resync the poll
+         * shadows and restore the WDDM unmask state so pipeline jobs are
+         * neither falsely completed nor left without their interrupts. */
+        WRITE_REGISTER_ULONG((PULONG)(Core + V3D_CTL_INT_CLR), 0xFFFFFFFFu);
+        WRITE_REGISTER_ULONG((PULONG)(Hub + V3D_HUB_INT_CLR), 0xFFFFFFFFu);
+        DeviceExtension->V3dLastBfc = READ_REGISTER_ULONG((PULONG)(Core + V3D_CLE_BFC)) & 0xff;
+        DeviceExtension->V3dLastRfc = READ_REGISTER_ULONG((PULONG)(Core + V3D_CLE_RFC)) & 0xff;
+        if (DeviceExtension->V3dIrqConnected)
+        {
+            WRITE_REGISTER_ULONG((PULONG)(Core + V3D_CTL_INT_MSK_SET), 0xFFFFFFFFu);
+            WRITE_REGISTER_ULONG((PULONG)(Core + V3D_CTL_INT_MSK_CLR), V3D_INT_FLDONE | V3D_INT_FRDONE | V3D_INT_OUTOMEM | V3D_V7_INT_CSDDONE);
+            WRITE_REGISTER_ULONG((PULONG)(Hub + V3D_HUB_INT_MSK_SET), 0xFFFFFFFFu);
+            WRITE_REGISTER_ULONG((PULONG)(Hub + V3D_HUB_INT_MSK_CLR), V3D_HUB_INT_TFUC);
+        }
+    }
+    DeviceExtension->V3dExecGateActive = FALSE;
+    Pending = DeviceExtension->NodeQueue[0].Count != 0 ||
+              DeviceExtension->NodeQueue[1].Count != 0 ||
+              DeviceExtension->NodeQueue[2].Count != 0;
+    KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
+
+    /* Catch up jobs queued while the gate was held. */
+    if (Pending)
+        KeInsertQueueDpc(&DeviceExtension->V3dPollDpc, NULL, NULL);
+}
+
+static NTSTATUS
+Rpi5Vc4GpuEscape(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ CONST DXGKARG_ESCAPE *Escape)
+{
+    PRPI5VC4_WDDM_GPU_ESCAPE Header = Escape->pPrivateDriverData;
+    ULONG HeaderBytes = FIELD_OFFSET(RPI5VC4_WDDM_GPU_ESCAPE, Payload);
+    ULONG PayloadCapacity;
+    PUCHAR Payload;
+    ULONG InputLength;
+    ULONG OutputLength;
+    ULONG Returned = 0;
+    BOOLEAN NeedGate;
+    VP_STATUS VpStatus;
+
+    if (Escape->PrivateDriverDataSize < HeaderBytes)
+        return STATUS_BUFFER_TOO_SMALL;
+
+    PayloadCapacity = Escape->PrivateDriverDataSize - HeaderBytes;
+    InputLength = Header->InputLength;
+    OutputLength = Header->OutputLength;
+    if (InputLength > PayloadCapacity || OutputLength > PayloadCapacity)
+        return STATUS_INVALID_PARAMETER;
+
+    Payload = Header->Payload;
+
+    /* Per-op minimum sizes, copied from the XPDM StartIO dispatch. */
+    switch (Header->Op)
+    {
+        case RPI5VC4_ESCAPE_QUERY_V3D:
+            if (OutputLength < sizeof(RPI5VC4_V3D_INFO))
+                return STATUS_BUFFER_TOO_SMALL;
+            break;
+        case RPI5VC4_ESCAPE_QUERY_PLATFORM:
+            if (OutputLength < sizeof(RPI5VC4_PLATFORM_INFO))
+                return STATUS_BUFFER_TOO_SMALL;
+            break;
+        case RPI5VC4_ESCAPE_RUN_V3D_SELFTEST:
+            if (OutputLength < sizeof(RPI5VC4_V3D_SELFTEST))
+                return STATUS_BUFFER_TOO_SMALL;
+            break;
+        case RPI5VC4_ESCAPE_RENDER_CLEAR:
+            if (InputLength < sizeof(RPI5VC4_V3D_CLEAR_REQUEST) || OutputLength < FIELD_OFFSET(RPI5VC4_V3D_CLEAR_RESULT, Pixels))
+                return STATUS_BUFFER_TOO_SMALL;
+            break;
+        case RPI5VC4_ESCAPE_RENDER_TRIANGLE:
+            if (InputLength < sizeof(RPI5VC4_V3D_TRIANGLE_REQUEST) || OutputLength < FIELD_OFFSET(RPI5VC4_V3D_TRIANGLE_RESULT, Pixels))
+                return STATUS_BUFFER_TOO_SMALL;
+            break;
+        case RPI5VC4_ESCAPE_RENDER_BATCH:
+            if (InputLength < FIELD_OFFSET(RPI5VC4_V3D_BATCH_REQUEST, Vertices) || OutputLength < FIELD_OFFSET(RPI5VC4_V3D_BATCH_RESULT, Pixels))
+                return STATUS_BUFFER_TOO_SMALL;
+            break;
+        case RPI5VC4_ESCAPE_UPLOAD_TEXTURE:
+            if (InputLength < FIELD_OFFSET(RPI5VC4_V3D_TEXTURE_UPLOAD_REQUEST, Pixels) || OutputLength < sizeof(RPI5VC4_V3D_TEXTURE_UPLOAD_RESULT))
+                return STATUS_BUFFER_TOO_SMALL;
+            break;
+        case RPI5VC4_ESCAPE_RENDER_GRAPH:
+            if (InputLength < FIELD_OFFSET(RPI5VC4_V3D_RENDER_GRAPH_REQUEST, Pixels) || OutputLength < sizeof(RPI5VC4_V3D_RENDER_GRAPH_RESULT))
+                return STATUS_BUFFER_TOO_SMALL;
+            break;
+        case RPI5VC4_ESCAPE_READ_GRAPH:
+            if (InputLength < sizeof(RPI5VC4_V3D_READ_GRAPH_REQUEST) || OutputLength < FIELD_OFFSET(RPI5VC4_V3D_READ_GRAPH_RESULT, Pixels))
+                return STATUS_BUFFER_TOO_SMALL;
+            break;
+        case RPI5VC4_ESCAPE_READ_TEXTURE:
+            if (InputLength < sizeof(RPI5VC4_V3D_READ_TEXTURE_REQUEST) || OutputLength < FIELD_OFFSET(RPI5VC4_V3D_READ_TEXTURE_RESULT, Pixels))
+                return STATUS_BUFFER_TOO_SMALL;
+            break;
+        case RPI5VC4_ESCAPE_WAIT_VBLANK:
+            if (OutputLength < sizeof(RPI5VC4_VBLANK_RESULT))
+                return STATUS_BUFFER_TOO_SMALL;
+            break;
+        default:
+            return STATUS_NOT_SUPPORTED;
+    }
+
+    NeedGate = Header->Op == RPI5VC4_ESCAPE_RUN_V3D_SELFTEST || Header->Op == RPI5VC4_ESCAPE_RENDER_CLEAR || Header->Op == RPI5VC4_ESCAPE_RENDER_TRIANGLE || Header->Op == RPI5VC4_ESCAPE_RENDER_BATCH || Header->Op == RPI5VC4_ESCAPE_RENDER_GRAPH || Header->Op == RPI5VC4_ESCAPE_READ_TEXTURE;
+    if (NeedGate && !Rpi5Vc4GpuEscapeGateAcquire(DeviceExtension))
+        return STATUS_DEVICE_BUSY;
+
+    switch (Header->Op)
+    {
+        case RPI5VC4_ESCAPE_QUERY_V3D:
+            VpStatus = Rpi5V3dQuery(DeviceExtension, (PRPI5VC4_V3D_INFO)Payload);
+            Returned = sizeof(RPI5VC4_V3D_INFO);
+            break;
+        case RPI5VC4_ESCAPE_QUERY_PLATFORM:
+            VpStatus = Rpi5Vc4QueryPlatformInfo((PRPI5VC4_PLATFORM_INFO)Payload);
+            Returned = sizeof(RPI5VC4_PLATFORM_INFO);
+            break;
+        case RPI5VC4_ESCAPE_RUN_V3D_SELFTEST:
+            VpStatus = Rpi5V3dRunSelfTest(DeviceExtension, (PRPI5VC4_V3D_SELFTEST)Payload);
+            Returned = sizeof(RPI5VC4_V3D_SELFTEST);
+            break;
+        case RPI5VC4_ESCAPE_RENDER_CLEAR:
+            VpStatus = Rpi5V3dRenderClear(DeviceExtension, (PRPI5VC4_V3D_CLEAR_REQUEST)Payload, (PRPI5VC4_V3D_CLEAR_RESULT)Payload, OutputLength, &Returned);
+            break;
+        case RPI5VC4_ESCAPE_RENDER_TRIANGLE:
+            VpStatus = Rpi5V3dRenderTriangle(DeviceExtension, (PRPI5VC4_V3D_TRIANGLE_REQUEST)Payload, (PRPI5VC4_V3D_TRIANGLE_RESULT)Payload, OutputLength, &Returned);
+            break;
+        case RPI5VC4_ESCAPE_RENDER_BATCH:
+            VpStatus = Rpi5V3dRenderBatch(DeviceExtension, (PRPI5VC4_V3D_BATCH_REQUEST)Payload, InputLength, (PRPI5VC4_V3D_BATCH_RESULT)Payload, OutputLength, &Returned);
+            break;
+        case RPI5VC4_ESCAPE_UPLOAD_TEXTURE:
+            VpStatus = Rpi5V3dUploadTexture(DeviceExtension, (PRPI5VC4_V3D_TEXTURE_UPLOAD_REQUEST)Payload, InputLength, (PRPI5VC4_V3D_TEXTURE_UPLOAD_RESULT)Payload, &Returned);
+            break;
+        case RPI5VC4_ESCAPE_RENDER_GRAPH:
+            VpStatus = Rpi5V3dRenderGraph(DeviceExtension, (PRPI5VC4_V3D_RENDER_GRAPH_REQUEST)Payload, InputLength, (PRPI5VC4_V3D_RENDER_GRAPH_RESULT)Payload, &Returned);
+            break;
+        case RPI5VC4_ESCAPE_READ_GRAPH:
+            VpStatus = Rpi5V3dReadGraph(DeviceExtension, (PRPI5VC4_V3D_READ_GRAPH_REQUEST)Payload, (PRPI5VC4_V3D_READ_GRAPH_RESULT)Payload, OutputLength, &Returned);
+            break;
+        case RPI5VC4_ESCAPE_READ_TEXTURE:
+            VpStatus = Rpi5V3dReadTexture(DeviceExtension, (PRPI5VC4_V3D_READ_TEXTURE_REQUEST)Payload, (PRPI5VC4_V3D_READ_TEXTURE_RESULT)Payload, OutputLength, &Returned);
+            break;
+        case RPI5VC4_ESCAPE_WAIT_VBLANK:
+        {
+            PRPI5VC4_VBLANK_RESULT Result =
+                (PRPI5VC4_VBLANK_RESULT)Payload;
+
+            RtlZeroMemory(Result, sizeof(*Result));
+            Result->Size = sizeof(*Result);
+            Result->AbiVersion = RPI5VC4_XPDM_ABI_VERSION;
+            Result->Status = Rpi5CrtcWaitForVBlank(DeviceExtension) ?
+                RPI5VC4_V3D_SELFTEST_STATUS_SUCCESS :
+                RPI5VC4_V3D_SELFTEST_STATUS_NOT_SUPPORTED;
+            Returned = sizeof(*Result);
+            VpStatus = NO_ERROR;
+            break;
+        }
+        default:
+            VpStatus = ERROR_INVALID_FUNCTION;
+            break;
+    }
+
+    if (NeedGate)
+        Rpi5Vc4GpuEscapeGateRelease(DeviceExtension);
+
+    if (VpStatus == NO_ERROR)
+    {
+        Header->OutputLength = Returned;
+        return STATUS_SUCCESS;
+    }
+    if (VpStatus == ERROR_INSUFFICIENT_BUFFER)
+        return STATUS_BUFFER_TOO_SMALL;
+    if (VpStatus == ERROR_INVALID_PARAMETER)
+        return STATUS_INVALID_PARAMETER;
+    return STATUS_UNSUCCESSFUL;
+}
+
 NTSTATUS
 APIENTRY
 Rpi5Vc4DdiEscape(
@@ -2719,6 +2964,10 @@ Rpi5Vc4DdiEscape(
      */
     if (Escape->PrivateDriverDataSize < sizeof(ULONG))
         return STATUS_BUFFER_TOO_SMALL;
+
+    /* Third framing: the exec-engine wrapper for the OpenGL ICD. */
+    if (*(const ULONG *)Escape->pPrivateDriverData == RPI5VC4_WDDM_GPU_ESCAPE_MAGIC)
+        return Rpi5Vc4GpuEscape(DeviceExtension, Escape);
 
     if (*(const ULONG *)Escape->pPrivateDriverData != RPI5VC4_ESCAPE_MAGIC)
         return Rpi5Vc4EscapeSubmit(DeviceExtension, Escape);
