@@ -580,7 +580,8 @@ typedef struct _D3DDDI_ESCAPEFLAGS
      (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WDDM1_3))
             UINT    DeviceStatusQuery   : 1;    // 0x00000002
             UINT    ChangeFrameLatency  : 1;    // 0x00000004
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+#if ((DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0) || \
+     (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WDDM2_0))
             UINT    NoAdapterSynchronization    : 1; // 0x00000008
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
             UINT    Reserved            : 1;    // 0x00000010   Used internally by DisplayOnly present
@@ -597,7 +598,7 @@ typedef struct _D3DDDI_ESCAPEFLAGS
 #endif //  (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
 #else
             UINT    Reserved            :29;    // 0xFFFFFFF8
-#endif // (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+#endif // WDDM2_0
 #else
             UINT    Reserved            :31;    // 0xFFFFFFFE
 #endif // WDDM1_3
