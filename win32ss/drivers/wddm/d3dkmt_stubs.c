@@ -28,6 +28,9 @@
 #include <d3dkmthk.h>
 #include <reactos/rddm/rxgkinterface.h>
 #include <reactos/rddm/rxgkioctl.h>
+
+struct _D3DKMT_ISFEATUREENABLED;
+
 #define NDEBUG
 #include <debug.h>
 
@@ -5134,7 +5137,7 @@ D3DKMTGetProcessSchedulingPriorityClass(
 NTSTATUS
 APIENTRY
 D3DKMTIsFeatureEnabled(
-    _Inout_ D3DKMT_ISFEATUREENABLED *pData)
+    _Inout_ struct _D3DKMT_ISFEATUREENABLED *pData)
 {
 #if (REACTOS_WDDM_TARGET_LEVEL < 3200)
     UNREFERENCED_PARAMETER(pData);
