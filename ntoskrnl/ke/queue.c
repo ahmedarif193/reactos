@@ -439,11 +439,17 @@ KiRemoveQueueExInternal(
                     Timer->TimerListEntry.Blink = NULL;
                 }
 
+                /* Timer expiration owns the timer object while acquiring the
+                 * waiter thread lock. Take the same locks in that order so an
+                 * expiring timer block cannot be reused by this new wait. */
+                if (Timeout) KiAcquireDispatcherObject(&Timer->Header);
+
                 /* Serialize APC insertion with the final wait publication. */
                 if (!KxTryBeginThreadWait(Thread))
                 {
                     /* Not blocking after all: restore the active count and
                      * retry, exactly like the pre-wait APC check above. */
+                    if (Timeout) KiReleaseDispatcherObject(&Timer->Header);
                     KiIncrementQueueCurrentCount(Queue);
                     KiReleaseDispatcherObject(&Queue->Header);
                     KiExitDispatcher(Thread->WaitIrql);
@@ -456,12 +462,14 @@ KiRemoveQueueExInternal(
                 {
                     Timer->Header.Inserted = TRUE;
                     TimerBlock->BlockState = WaitBlockActive;
+                    InsertTailList(&Timer->Header.WaitListHead, &TimerBlock->WaitListEntry);
                 }
                 InsertTailList(&Queue->Header.WaitListHead,
                                &WaitBlock->WaitListEntry);
 
                 /* Publish the wait and release the thread lock */
                 KxCommitThreadWait(Thread, Swappable);
+                if (Timeout) KiReleaseDispatcherObject(&Timer->Header);
 
                 /* Release the queue object */
                 KiReleaseDispatcherObject(&Queue->Header);
