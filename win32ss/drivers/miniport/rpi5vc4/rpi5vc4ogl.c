@@ -15,6 +15,7 @@
 #include <winbase.h>
 #include <wingdi.h>
 #include <winuser.h>
+#include <d3dkmthk.h>
 #include <GL/gl.h>
 #include <GL/glext.h>
 #include <math.h>
@@ -37,6 +38,10 @@
 #include "rpi5vc4ogl_buffer.h"
 #include "rpi5vc4ogl_fbo.h"
 #include "rpi5vc4ogl_gl2.h"
+
+#ifndef NT_SUCCESS
+#define NT_SUCCESS(Status) ((NTSTATUS)(Status) >= 0)
+#endif
 
 extern void APIENTRY _mesa_CopyTexSubImage3D(
     GLenum Target,
@@ -79,20 +84,30 @@ extern void APIENTRY _mesa_TexSubImage3D(
 #define RPI5VC4_OPENGL_END_LIST_INDEX 1
 #define RPI5VC4_OPENGL_CALL_LIST_INDEX 2
 #define RPI5VC4_OPENGL_DELETE_LISTS_INDEX 4
+#define RPI5VC4_OPENGL_LIGHT_MODEL_I_INDEX 165
+#define RPI5VC4_OPENGL_TEX_PARAMETER_I_INDEX 180
+#define RPI5VC4_OPENGL_TEX_ENV_F_INDEX 184
+#define RPI5VC4_OPENGL_DISABLE_INDEX 214
+#define RPI5VC4_OPENGL_ENABLE_INDEX 215
 #define RPI5VC4_OPENGL_BLEND_FUNC_INDEX 241
 #define RPI5VC4_OPENGL_TEX_IMAGE_2D_INDEX 183
 #define RPI5VC4_OPENGL_DRAW_BUFFER_INDEX 202
 #define RPI5VC4_OPENGL_CLEAR_INDEX 203
 #define RPI5VC4_OPENGL_READ_BUFFER_INDEX 254
+#define RPI5VC4_OPENGL_READ_PIXELS_INDEX 256
 #define RPI5VC4_OPENGL_GET_BOOLEANV_INDEX 258
 #define RPI5VC4_OPENGL_GET_DOUBLEV_INDEX 260
 #define RPI5VC4_OPENGL_GET_FLOATV_INDEX 262
 #define RPI5VC4_OPENGL_GET_INTEGERV_INDEX 263
 #define RPI5VC4_OPENGL_GET_TEX_IMAGE_INDEX 281
+#define RPI5VC4_OPENGL_IS_ENABLED_INDEX 286
+#define RPI5VC4_OPENGL_BIND_TEXTURE_INDEX 307
 #define RPI5VC4_OPENGL_DRAW_ARRAYS_INDEX 310
 #define RPI5VC4_OPENGL_DRAW_ELEMENTS_INDEX 311
+#define RPI5VC4_OPENGL_DELETE_TEXTURES_INDEX 327
 #define RPI5VC4_OPENGL_TEX_SUB_IMAGE_2D_INDEX 333
 #define RPI5VC4_OGL_MAX_DEFERRED_CLEARS 16
+#define RPI5VC4_OGL_KMT_MAX_ESCAPE_BYTES (1024u * 1024u)
 
 DECLARE_HANDLE(DHGLRC);
 
@@ -142,7 +157,6 @@ typedef struct _RPI5VC4_OGL_CACHED_LIST
     GLfloat (*EyeNormal)[3];
     GLubyte (*VertexColor)[4];
     ULONG (*VertexColorWord)[4];
-    PRPI5VC4_V3D_VERTEX OutputVertices;
 } RPI5VC4_OGL_CACHED_LIST, *PRPI5VC4_OGL_CACHED_LIST;
 
 typedef struct _RPI5VC4_OGL_LIST_BUILDER
@@ -196,6 +210,10 @@ typedef struct _RPI5VC4_OGL_CONTEXT
 {
     ULONG Signature;
     HDC Hdc;
+    D3DKMT_HANDLE KmtAdapter;
+    D3DKMT_HANDLE KmtDevice;
+    PUCHAR KmtEscapeBuffer;
+    ULONG KmtEscapeCapacity;
     GLvisual *Visual;
     GLframebuffer *FrameBuffer;
     GLcontext *MesaContext;
@@ -212,7 +230,12 @@ typedef struct _RPI5VC4_OGL_CONTEXT
     ULONG HardwareClearGeneration;
     RPI5VC4_OGL_DEFERRED_CLEAR
         DeferredClears[RPI5VC4_OGL_MAX_DEFERRED_CLEARS];
-    ULONG DeferredClearCount;
+    struct gl_texture_object *RetainedDepthTexture;
+    GLdepth *RetainedDepthData;
+    ULONG RetainedDepthWidth;
+    ULONG RetainedDepthHeight;
+    ULONG RetainedDepthGeneration;
+    BOOL RetainedDepthActive;
     PRPI5VC4_V3D_BATCH_REQUEST BatchRequest;
     PRPI5VC4_V3D_BATCH_RESULT BatchResult;
     ULONG BatchResultSize;
@@ -250,6 +273,14 @@ typedef struct _RPI5VC4_OGL_CONTEXT
     PRPI5VC4_OGL_BUFFER_STATE BufferState;
     PRPI5VC4_OGL_FBO_STATE FboState;
     PRPI5VC4_OGL_GL2_STATE Gl2State;
+    BOOL MultisampleEnabled;
+    BOOL SampleAlphaToCoverageEnabled;
+    BOOL ProgramPointSizeEnabled;
+    GLuint DummyCubeName;
+    GLuint BoundDummyCubeName;
+    ULONG DummyCubeFaces;
+    ULONG DummyCubeColors[6];
+    LONG SwapInterval;
     RPI5VC4_OGL_STATS Stats;
 } RPI5VC4_OGL_CONTEXT, *PRPI5VC4_OGL_CONTEXT;
 
@@ -340,6 +371,129 @@ Rpi5OglCurrentContext(VOID)
         (DHGLRC)Rpi5OglGetCurrentValue());
 }
 
+static BOOL
+Rpi5OglOpenKmtTransport(
+    _Inout_ PRPI5VC4_OGL_CONTEXT Context)
+{
+    D3DKMT_OPENADAPTERFROMHDC OpenAdapter;
+    D3DKMT_CREATEDEVICE CreateDevice;
+    D3DKMT_CLOSEADAPTER CloseAdapter;
+    NTSTATUS Status;
+
+    ZeroMemory(&OpenAdapter, sizeof(OpenAdapter));
+    OpenAdapter.hDc = Context->Hdc;
+    Status = D3DKMTOpenAdapterFromHdc(&OpenAdapter);
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+
+    ZeroMemory(&CreateDevice, sizeof(CreateDevice));
+    CreateDevice.hAdapter = OpenAdapter.hAdapter;
+    Status = D3DKMTCreateDevice(&CreateDevice);
+    if (!NT_SUCCESS(Status))
+    {
+        ZeroMemory(&CloseAdapter, sizeof(CloseAdapter));
+        CloseAdapter.hAdapter = OpenAdapter.hAdapter;
+        D3DKMTCloseAdapter(&CloseAdapter);
+        return FALSE;
+    }
+
+    Context->KmtAdapter = OpenAdapter.hAdapter;
+    Context->KmtDevice = CreateDevice.hDevice;
+    return TRUE;
+}
+
+static VOID
+Rpi5OglCloseKmtTransport(
+    _Inout_ PRPI5VC4_OGL_CONTEXT Context)
+{
+    D3DKMT_DESTROYDEVICE DestroyDevice;
+    D3DKMT_CLOSEADAPTER CloseAdapter;
+
+    if (Context->KmtDevice != 0)
+    {
+        ZeroMemory(&DestroyDevice, sizeof(DestroyDevice));
+        DestroyDevice.hDevice = Context->KmtDevice;
+        D3DKMTDestroyDevice(&DestroyDevice);
+        Context->KmtDevice = 0;
+    }
+    if (Context->KmtAdapter != 0)
+    {
+        ZeroMemory(&CloseAdapter, sizeof(CloseAdapter));
+        CloseAdapter.hAdapter = Context->KmtAdapter;
+        D3DKMTCloseAdapter(&CloseAdapter);
+        Context->KmtAdapter = 0;
+    }
+    if (Context->KmtEscapeBuffer != NULL)
+    {
+        HeapFree(GetProcessHeap(), 0, Context->KmtEscapeBuffer);
+        Context->KmtEscapeBuffer = NULL;
+        Context->KmtEscapeCapacity = 0;
+    }
+}
+
+INT
+Rpi5OglGpuEscape(
+    _In_ HDC Hdc,
+    _In_ ULONG Op,
+    _In_ ULONG InputSize,
+    _In_reads_bytes_opt_(InputSize) LPCVOID Input,
+    _In_ ULONG OutputSize,
+    _Out_writes_bytes_opt_(OutputSize) LPVOID Output)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+    PRPI5VC4_WDDM_GPU_ESCAPE Wrapper;
+    D3DKMT_ESCAPE Escape;
+    ULONG PayloadBytes = max(InputSize, OutputSize);
+    ULONG HeaderBytes = FIELD_OFFSET(RPI5VC4_WDDM_GPU_ESCAPE, Payload);
+    ULONG WrapperBytes;
+    PUCHAR NewBuffer;
+    ULONG CopyBytes;
+    NTSTATUS Status;
+
+    if (Context == NULL || Context->Hdc != Hdc ||
+        Context->KmtAdapter == 0 || Context->KmtDevice == 0 ||
+        PayloadBytes > RPI5VC4_OGL_KMT_MAX_ESCAPE_BYTES - HeaderBytes)
+    {
+        return ExtEscape(Hdc, Op, InputSize, Input, OutputSize, Output);
+    }
+
+    WrapperBytes = HeaderBytes + PayloadBytes;
+    if (Context->KmtEscapeCapacity < WrapperBytes)
+    {
+        NewBuffer = HeapAlloc(GetProcessHeap(), 0, WrapperBytes);
+        if (NewBuffer == NULL)
+            return 0;
+        if (Context->KmtEscapeBuffer != NULL)
+            HeapFree(GetProcessHeap(), 0, Context->KmtEscapeBuffer);
+        Context->KmtEscapeBuffer = NewBuffer;
+        Context->KmtEscapeCapacity = WrapperBytes;
+    }
+
+    Wrapper = (PRPI5VC4_WDDM_GPU_ESCAPE)Context->KmtEscapeBuffer;
+    ZeroMemory(Wrapper, WrapperBytes);
+    Wrapper->Magic = RPI5VC4_WDDM_GPU_ESCAPE_MAGIC;
+    Wrapper->Op = Op;
+    Wrapper->InputLength = InputSize;
+    Wrapper->OutputLength = OutputSize;
+    if (InputSize != 0)
+        CopyMemory(Wrapper->Payload, Input, InputSize);
+
+    ZeroMemory(&Escape, sizeof(Escape));
+    Escape.hAdapter = Context->KmtAdapter;
+    Escape.hDevice = Context->KmtDevice;
+    Escape.Type = D3DKMT_ESCAPE_DRIVERPRIVATE;
+    Escape.pPrivateDriverData = Wrapper;
+    Escape.PrivateDriverDataSize = WrapperBytes;
+    Status = D3DKMTEscape(&Escape);
+    if (!NT_SUCCESS(Status))
+        return 0;
+
+    CopyBytes = min(Wrapper->OutputLength, OutputSize);
+    if (CopyBytes != 0 && Output != NULL)
+        CopyMemory(Output, Wrapper->Payload, CopyBytes);
+    return (INT)CopyBytes;
+}
+
 PRPI5VC4_OGL_GL2_STATE
 Rpi5OglCurrentGl2State(VOID)
 {
@@ -372,6 +526,125 @@ gl_get_thread_context(VOID)
     return Context != NULL ? Context->MesaContext : NULL;
 }
 
+static BOOL
+Rpi5OglSetCompatibilityEnable(
+    _In_ GLenum Capability,
+    _In_ BOOL Enable)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+    PBOOL State;
+
+    if (Context == NULL)
+        return FALSE;
+    switch (Capability)
+    {
+        case GL_MULTISAMPLE:
+            State = &Context->MultisampleEnabled;
+            break;
+        case GL_SAMPLE_ALPHA_TO_COVERAGE:
+            State = &Context->SampleAlphaToCoverageEnabled;
+            break;
+        case GL_PROGRAM_POINT_SIZE:
+            State = &Context->ProgramPointSizeEnabled;
+            break;
+        default:
+            return FALSE;
+    }
+    if (INSIDE_BEGIN_END(Context->MesaContext))
+    {
+        gl_error(Context->MesaContext,
+                 GL_INVALID_OPERATION,
+                 Enable ? "glEnable" : "glDisable");
+        return TRUE;
+    }
+    *State = Enable;
+    return TRUE;
+}
+
+static VOID APIENTRY
+Rpi5OglApiEnable(
+    _In_ GLenum Capability)
+{
+    if (!Rpi5OglSetCompatibilityEnable(Capability, TRUE))
+        _mesa_Enable(Capability);
+}
+
+static VOID APIENTRY
+Rpi5OglApiDisable(
+    _In_ GLenum Capability)
+{
+    if (!Rpi5OglSetCompatibilityEnable(Capability, FALSE))
+        _mesa_Disable(Capability);
+}
+
+static GLboolean APIENTRY
+Rpi5OglApiIsEnabled(
+    _In_ GLenum Capability)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+
+    if (Context != NULL)
+    {
+        switch (Capability)
+        {
+            case GL_MULTISAMPLE:
+                return Context->MultisampleEnabled;
+            case GL_SAMPLE_ALPHA_TO_COVERAGE:
+                return Context->SampleAlphaToCoverageEnabled;
+            case GL_PROGRAM_POINT_SIZE:
+                return Context->ProgramPointSizeEnabled;
+        }
+    }
+    return _mesa_IsEnabled(Capability);
+}
+
+static VOID APIENTRY
+Rpi5OglApiTexEnvf(
+    _In_ GLenum Target,
+    _In_ GLenum ParameterName,
+    _In_ GLfloat Parameter)
+{
+    if (Target == GL_TEXTURE_ENV &&
+        ParameterName == GL_TEXTURE_ENV_MODE &&
+        (GLenum)(GLint)Parameter == GL_COMBINE)
+    {
+        _mesa_TexEnvf(Target, ParameterName, (GLfloat)GL_MODULATE);
+        return;
+    }
+    _mesa_TexEnvf(Target, ParameterName, Parameter);
+}
+
+static VOID APIENTRY
+Rpi5OglApiLightModeli(
+    _In_ GLenum ParameterName,
+    _In_ GLint Parameter)
+{
+    if (ParameterName == GL_LIGHT_MODEL_COLOR_CONTROL &&
+        Parameter == GL_SEPARATE_SPECULAR_COLOR)
+    {
+        return;
+    }
+    _mesa_LightModeli(ParameterName, Parameter);
+}
+
+static VOID APIENTRY
+Rpi5OglApiTexParameteri(
+    _In_ GLenum Target,
+    _In_ GLenum ParameterName,
+    _In_ GLint Parameter)
+{
+    if ((Target == GL_TEXTURE_1D ||
+         Target == GL_TEXTURE_2D ||
+         Target == GL_TEXTURE_3D) &&
+        ((ParameterName == GL_TEXTURE_MAX_LEVEL && Parameter >= 0) ||
+         (ParameterName == GL_DEPTH_TEXTURE_MODE &&
+          Parameter == GL_INTENSITY)))
+    {
+        return;
+    }
+    _mesa_TexParameteri(Target, ParameterName, Parameter);
+}
+
 static PVOID
 Rpi5OglResizeAllocation(
     _In_opt_ PVOID Allocation,
@@ -401,7 +674,6 @@ Rpi5OglFreeCachedList(
     HeapFree(GetProcessHeap(), 0, List->EyeNormal);
     HeapFree(GetProcessHeap(), 0, List->VertexColor);
     HeapFree(GetProcessHeap(), 0, List->VertexColorWord);
-    HeapFree(GetProcessHeap(), 0, List->OutputVertices);
     HeapFree(GetProcessHeap(), 0, List);
 }
 
@@ -863,7 +1135,6 @@ Rpi5OglAllocateCachedListScratch(
 {
     ULONG PositionCount = List->PositionCount;
     ULONG NormalCount = List->NormalCount;
-    ULONG OutputVertexCount = List->TriangleCount * 3;
     ULONG Vertex;
 
     List->UnitObjectNormal = HeapAlloc(
@@ -884,17 +1155,13 @@ Rpi5OglAllocateCachedListScratch(
     List->VertexColorWord = HeapAlloc(
         GetProcessHeap(), 0,
         NormalCount * sizeof(*List->VertexColorWord));
-    List->OutputVertices = HeapAlloc(
-        GetProcessHeap(), 0,
-        OutputVertexCount * sizeof(*List->OutputVertices));
 
     if (List->UnitObjectNormal == NULL ||
         List->ClipPosition == NULL ||
         List->NdcPosition == NULL ||
         List->EyeNormal == NULL ||
         List->VertexColor == NULL ||
-        List->VertexColorWord == NULL ||
-        List->OutputVertices == NULL)
+        List->VertexColorWord == NULL)
     {
         return FALSE;
     }
@@ -916,8 +1183,7 @@ Rpi5OglAllocateCachedListScratch(
            List->NdcPosition != NULL &&
            List->EyeNormal != NULL &&
            List->VertexColor != NULL &&
-           List->VertexColorWord != NULL &&
-           List->OutputVertices != NULL;
+           List->VertexColorWord != NULL;
 }
 
 static VOID
@@ -980,12 +1246,12 @@ Rpi5OglQueryV3d(
     INT Returned;
 
     ZeroMemory(&Info, sizeof(Info));
-    Returned = ExtEscape(Hdc,
-                         RPI5VC4_ESCAPE_QUERY_V3D,
-                         0,
-                         NULL,
-                         sizeof(Info),
-                         (LPSTR)&Info);
+    Returned = Rpi5OglGpuEscape(Hdc,
+                                RPI5VC4_ESCAPE_QUERY_V3D,
+                                0,
+                                NULL,
+                                sizeof(Info),
+                                &Info);
     return Returned >= (INT)sizeof(Info) &&
            Info.AbiVersion == RPI5VC4_XPDM_ABI_VERSION &&
            Info.Version == 71 &&
@@ -1041,17 +1307,33 @@ Rpi5OglGetDirectPresentOrigin(
     _Out_opt_ PULONG VisibleHeight)
 {
     POINT Origin = {0, 0};
+    HWND Window;
+    RECT ClientRect;
+    RECT ClipRect;
     DWORD ObjectType;
+    INT ClipType;
     BOOL OriginValid;
     INT ScreenWidth;
     INT ScreenHeight;
     BOOL AllowClipping = VisibleWidth != NULL && VisibleHeight != NULL;
 
     ObjectType = GetObjectType(Context->Hdc);
+    Window = WindowFromDC(Context->Hdc);
     OriginValid = GetDCOrgEx(Context->Hdc, &Origin);
     ScreenWidth = GetDeviceCaps(Context->Hdc, HORZRES);
     ScreenHeight = GetDeviceCaps(Context->Hdc, VERTRES);
-    if (ObjectType != OBJ_DC || !OriginValid ||
+    ClipType = GetClipBox(Context->Hdc, &ClipRect);
+    if (ObjectType != OBJ_DC || Window == NULL ||
+        !IsWindowVisible(Window) || IsIconic(Window) ||
+        !GetClientRect(Window, &ClientRect) || !OriginValid ||
+        ClipType != SIMPLEREGION ||
+        ClientRect.left != 0 || ClientRect.top != 0 ||
+        ClientRect.right != (LONG)Context->Width ||
+        ClientRect.bottom != (LONG)Context->Height ||
+        ClipRect.left != ClientRect.left ||
+        ClipRect.top != ClientRect.top ||
+        ClipRect.right != ClientRect.right ||
+        ClipRect.bottom != ClientRect.bottom ||
         Origin.x < 0 || Origin.y < 0 ||
         ScreenWidth <= 0 || ScreenHeight <= 0 ||
         Origin.x >= ScreenWidth || Origin.y >= ScreenHeight ||
@@ -1174,6 +1456,10 @@ Rpi5OglResizeBackBuffer(
     Context->Width = Width;
     Context->Height = Height;
     Context->Stride = Width * sizeof(ULONG);
+    Rpi5OglFboSetDefaultColor(Context->FboState,
+                              Context->BackBuffer,
+                              Width,
+                              Height);
     Context->HardwareClearFresh = FALSE;
     Context->HardwareBatchActive = FALSE;
     Context->BatchDirectPresented = FALSE;
@@ -1414,6 +1700,7 @@ Rpi5OglDeferredClearMatchesTarget(
 
 static VOID
 Rpi5OglMaterializeDeferredClearEntry(
+    _Inout_ PRPI5VC4_OGL_CONTEXT Context,
     _Inout_ PRPI5VC4_OGL_DEFERRED_CLEAR Clear)
 {
     ULONG PixelCount;
@@ -1448,6 +1735,7 @@ Rpi5OglMaterializeDeferredClearEntry(
         for (Pixel = 0; Pixel < PixelCount; Pixel++)
             TexturePixels[Pixel] = MemoryColor;
     }
+    Context->Stats.SoftwareClearCount++;
     Clear->Active = FALSE;
 }
 
@@ -1490,7 +1778,7 @@ Rpi5OglQueueDeferredClear(
     if (Clear == NULL)
     {
         Clear = &Context->DeferredClears[0];
-        Rpi5OglMaterializeDeferredClearEntry(Clear);
+        Rpi5OglMaterializeDeferredClearEntry(Context, Clear);
     }
 
     Clear->Texture = Target->Texture;
@@ -1501,8 +1789,78 @@ Rpi5OglQueueDeferredClear(
     Clear->TextureFormat = Target->TextureFormat;
     Clear->Color = Color;
     Clear->Active = TRUE;
-    Context->DeferredClearCount++;
     return TRUE;
+}
+
+static BOOL
+Rpi5OglMaterializeRetainedDepth(
+    _Inout_ PRPI5VC4_OGL_CONTEXT Context)
+{
+    RPI5VC4_V3D_READ_TEXTURE_REQUEST Request;
+    PRPI5VC4_V3D_READ_TEXTURE_RESULT Result;
+    ULONG HeaderSize =
+        FIELD_OFFSET(RPI5VC4_V3D_READ_TEXTURE_RESULT, Pixels);
+    ULONG PixelBytes;
+    ULONG ResultSize;
+    ULONG Pixel;
+    INT Returned;
+    BOOL Success;
+
+    if (!Context->RetainedDepthActive)
+        return TRUE;
+    if (Context->RetainedDepthTexture == NULL ||
+        Context->RetainedDepthData == NULL ||
+        Context->RetainedDepthWidth == 0 ||
+        Context->RetainedDepthHeight == 0 ||
+        Context->RetainedDepthGeneration == 0)
+    {
+        return FALSE;
+    }
+
+    PixelBytes = Context->RetainedDepthWidth *
+                 Context->RetainedDepthHeight * sizeof(ULONG);
+    ResultSize = HeaderSize + PixelBytes;
+    Result = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, ResultSize);
+    if (Result == NULL)
+        return FALSE;
+
+    ZeroMemory(&Request, sizeof(Request));
+    Request.Size = sizeof(Request);
+    Request.AbiVersion = RPI5VC4_XPDM_ABI_VERSION;
+    Request.Generation = Context->RetainedDepthGeneration;
+    Request.TextureSlot = RPI5VC4_V3D_TEXTURE_SLOT_PRIMARY;
+    Returned = Rpi5OglGpuEscape(Context->Hdc,
+                                RPI5VC4_ESCAPE_READ_TEXTURE,
+                                sizeof(Request),
+                                &Request,
+                                ResultSize,
+                                Result);
+    Success = Returned >= (INT)ResultSize &&
+              Result->Size == ResultSize &&
+              Result->AbiVersion == RPI5VC4_XPDM_ABI_VERSION &&
+              Result->Status == RPI5VC4_V3D_SELFTEST_STATUS_SUCCESS &&
+              Result->Generation == Context->RetainedDepthGeneration &&
+              Result->Width == Context->RetainedDepthWidth &&
+              Result->Height == Context->RetainedDepthHeight &&
+              Result->Format == RPI5VC4_V3D_TEXTURE_FORMAT_D24_X8 &&
+              Result->Stride ==
+                  Context->RetainedDepthWidth * sizeof(ULONG) &&
+              Result->PixelBytes == PixelBytes;
+    if (Success)
+    {
+        for (Pixel = 0;
+             Pixel < Context->RetainedDepthWidth *
+                         Context->RetainedDepthHeight;
+             Pixel++)
+        {
+            Context->RetainedDepthData[Pixel] =
+                (GLdepth)(Result->Pixels[Pixel] >> 8);
+        }
+        Context->RetainedDepthActive = FALSE;
+        Rpi5OglGl2InvalidateTextureUpload(Context->Gl2State);
+    }
+    HeapFree(GetProcessHeap(), 0, Result);
+    return Success;
 }
 
 static VOID
@@ -1518,8 +1876,15 @@ Rpi5OglMaterializeDeferredTargetClear(
                 &Context->DeferredClears[Index], Target))
         {
             Rpi5OglMaterializeDeferredClearEntry(
+                Context,
                 &Context->DeferredClears[Index]);
         }
+    }
+    if (Target->DepthTexture != NULL &&
+        Context->RetainedDepthActive &&
+        Context->RetainedDepthTexture == Target->DepthTexture)
+    {
+        (void)Rpi5OglMaterializeRetainedDepth(Context);
     }
 }
 
@@ -1556,8 +1921,58 @@ Rpi5OglMaterializeTextureClear(
             Context->DeferredClears[Index].Texture == Texture)
         {
             Rpi5OglMaterializeDeferredClearEntry(
+                Context,
                 &Context->DeferredClears[Index]);
         }
+    }
+}
+
+VOID
+Rpi5OglMaterializeTextureStorage(
+    _In_ struct gl_texture_object *Texture)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+
+    Rpi5OglMaterializeTextureClear(Texture);
+    if (Context != NULL && Texture != NULL &&
+        Context->RetainedDepthActive &&
+        Context->RetainedDepthTexture == Texture)
+    {
+        (void)Rpi5OglMaterializeRetainedDepth(Context);
+    }
+}
+
+BOOL
+Rpi5OglPrepareTextureUpload(
+    _In_ ULONG TextureSlot,
+    _In_opt_ struct gl_texture_object *Texture)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+
+    UNREFERENCED_PARAMETER(Texture);
+    if (Context == NULL ||
+        TextureSlot != RPI5VC4_V3D_TEXTURE_SLOT_PRIMARY ||
+        !Context->RetainedDepthActive)
+    {
+        return TRUE;
+    }
+    return Rpi5OglMaterializeRetainedDepth(Context);
+}
+
+VOID
+Rpi5OglDiscardRetainedDepthTexture(
+    _In_opt_ struct gl_texture_object *Texture)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+
+    if (Context != NULL && Texture != NULL &&
+        Context->RetainedDepthActive &&
+        Context->RetainedDepthTexture == Texture)
+    {
+        Context->RetainedDepthActive = FALSE;
+        Context->RetainedDepthTexture = NULL;
+        Context->RetainedDepthData = NULL;
+        Context->RetainedDepthGeneration = 0;
     }
 }
 
@@ -1743,7 +2158,6 @@ Rpi5OglHardwareClear(
         Context->HardwareClearColor = Context->ClearColor;
         Context->HardwareClearFramebuffer = Target.Framebuffer;
         Context->HardwareClearGeneration = Target.Generation;
-        Context->Stats.SoftwareClearCount++;
         Context->Stats.LastWidth = Target.Width;
         Context->Stats.LastHeight = Target.Height;
         return TRUE;
@@ -1761,12 +2175,12 @@ Rpi5OglHardwareClear(
     Request.Height = Target.Height;
     Request.ClearColor = Context->ClearColor;
 
-    Returned = ExtEscape(Context->Hdc,
-                         RPI5VC4_ESCAPE_RENDER_CLEAR,
-                         sizeof(Request),
-                         (LPCSTR)&Request,
-                         ResultSize,
-                         (LPSTR)Result);
+    Returned = Rpi5OglGpuEscape(Context->Hdc,
+                                RPI5VC4_ESCAPE_RENDER_CLEAR,
+                                sizeof(Request),
+                                &Request,
+                                ResultSize,
+                                Result);
     Context->Stats.LastHardwareStatus = Returned > 0 ?
                                         Result->Status : 0xFFFFFFFFu;
     Success = Returned >= (INT)ResultSize &&
@@ -1972,6 +2386,265 @@ Rpi5OglTriangleStateSupported(
            Mesa->Viewport.Height > 0 &&
            Mesa->Viewport.Width <= RPI5VC4_V3D_CLEAR_MAX_WIDTH &&
            Mesa->Viewport.Height <= RPI5VC4_V3D_CLEAR_MAX_HEIGHT;
+}
+
+static UCHAR
+Rpi5OglBlendComponent(
+    _In_ UCHAR Source,
+    _In_ UCHAR Destination,
+    _In_ UCHAR SourceAlpha);
+
+/*
+ * WineD3D determines the fixed-point polygon-offset scale with a bounded
+ * 256-by-1 depth-tested draw. The generic GLSL recognizer exposes the exact
+ * vertices and color, but the V3D primitive escape intentionally accepts
+ * only the clear-and-draw contract used by the real Direct3D workload.
+ * Implement this capability probe against the software FBO storage so that
+ * the reported polygon-offset support is measured instead of failing over to
+ * WineD3D's guessed scale.
+ */
+static BOOL
+Rpi5OglSoftwareGenericPolygonOffsetProbe(
+    _Inout_ PRPI5VC4_OGL_CONTEXT Context,
+    _In_ GLcontext *Mesa,
+    _In_ GLenum Mode,
+    _In_ GLsizei Count,
+    _In_reads_(Count) const RPI5VC4_OGL_GL2_VERTEX *Vertices)
+{
+    static const GLfloat Positions[4][4] =
+    {
+        {-1.0f, -1.0f, -1.0f, 1.0f},
+        { 1.0f, -1.0f,  0.0f, 1.0f},
+        {-1.0f,  1.0f, -1.0f, 1.0f},
+        { 1.0f,  1.0f,  0.0f, 1.0f}
+    };
+    static const GLubyte Blue[4] = {0, 0, 255, 255};
+    RPI5VC4_OGL_RENDER_TARGET Target;
+    ULONG Source;
+    ULONG X;
+    ULONG Vertex;
+
+    if (Context == NULL || Mesa == NULL || Vertices == NULL ||
+        Mode != GL_TRIANGLE_STRIP || Count != 4 ||
+        Mesa->Visual == NULL || !Mesa->Visual->RGBAflag ||
+        Mesa->RenderMode != GL_RENDER || Mesa->Texture.Enabled != 0 ||
+        Mesa->RasterMask != DEPTH_BIT || Mesa->Color.BlendEnabled ||
+        Mesa->Color.ColorMask != 0xf || !Mesa->Depth.Test ||
+        Mesa->Depth.Func != GL_LESS || !Mesa->Depth.Mask ||
+        Mesa->Depth.Clear != 0.5f || Mesa->Stencil.Enabled ||
+        Mesa->Scissor.Enabled || Mesa->Polygon.Unfilled ||
+        !Mesa->Polygon.OffsetFill || !Mesa->Polygon.OffsetAny ||
+        Mesa->Polygon.OffsetPoint || Mesa->Polygon.OffsetLine ||
+        Mesa->Polygon.OffsetFactor != 0.0f || Mesa->Polygon.SmoothFlag ||
+        Mesa->Polygon.StippleFlag || Mesa->Polygon.CullBits != 0 ||
+        Mesa->Viewport.X != 0 || Mesa->Viewport.Y != 0 ||
+        Mesa->Viewport.Width != 256 || Mesa->Viewport.Height != 1 ||
+        Mesa->Viewport.Near != 0.0f || Mesa->Viewport.Far != 1.0f)
+    {
+        return FALSE;
+    }
+
+    for (Vertex = 0; Vertex < RTL_NUMBER_OF(Positions); Vertex++)
+    {
+        if (memcmp(Vertices[Vertex].Position,
+                   Positions[Vertex],
+                   sizeof(Positions[Vertex])) != 0 ||
+            memcmp(Vertices[Vertex].Color,
+                   Blue,
+                   sizeof(Blue)) != 0)
+        {
+            return FALSE;
+        }
+    }
+
+    if (!Rpi5OglResolveRenderTarget(Context, &Target) ||
+        Target.Framebuffer == 0 || !Target.HasColor || !Target.HasDepth ||
+        Target.Width != 256 || Target.Height != 1 ||
+        Target.DepthData == NULL ||
+        Target.DepthFormat != GL_DEPTH_COMPONENT ||
+        (Target.Pixels == NULL && Target.TextureData == NULL) ||
+        (Target.Pixels == NULL && Target.TextureFormat != GL_RGB &&
+         Target.TextureFormat != GL_RGBA))
+    {
+        return FALSE;
+    }
+
+    Source = Rpi5OglPackColor(Blue[0], Blue[1], Blue[2], Blue[3]);
+    Rpi5OglMaterializeDeferredTargetClear(Context, &Target);
+    for (X = 0; X < Target.Width; X++)
+    {
+        GLfloat WindowDepth =
+            (((GLfloat)X + 0.5f) / (2.0f * (GLfloat)Target.Width)) *
+                DEPTH_SCALE +
+            Mesa->Polygon.OffsetUnits;
+        GLdepth Depth;
+
+        if (WindowDepth <= 0.0f)
+            Depth = 0;
+        else if (WindowDepth >= DEPTH_SCALE)
+            Depth = MAX_DEPTH;
+        else
+            Depth = (GLdepth)WindowDepth;
+        if (Depth < Target.DepthData[X])
+        {
+            Target.DepthData[X] = Depth;
+            Rpi5OglWriteTargetPixel(&Target, X, 0, Source);
+        }
+    }
+
+    Context->HardwareClearFresh = FALSE;
+    Context->Stats.SoftwareTriangleCount += 2;
+    Rpi5OglGl2InvalidateTextureUpload(Context->Gl2State);
+    return TRUE;
+}
+
+/*
+ * WineD3D uses its recognized generic GLSL program to verify render-target
+ * blending. Each test draws two solid full-screen quads into a 16x16 FBO.
+ * The bounded V3D primitive escape starts from a clear color, so it cannot
+ * consume the result of the first draw as the destination of the second one.
+ * Keep that restriction and provide the exact CPU fallback needed to make the
+ * advertised software FBO contract truthful.
+ */
+static BOOL
+Rpi5OglSoftwareGenericFullscreen(
+    _Inout_ PRPI5VC4_OGL_CONTEXT Context,
+    _In_ GLcontext *Mesa,
+    _In_ GLenum Mode,
+    _In_ GLsizei Count,
+    _In_reads_(Count) const RPI5VC4_OGL_GL2_VERTEX *Vertices)
+{
+    static const GLfloat FullscreenPositions[4][4] =
+    {
+        {-1.0f, -1.0f, 0.0f, 1.0f},
+        { 1.0f, -1.0f, 0.0f, 1.0f},
+        {-1.0f,  1.0f, 0.0f, 1.0f},
+        { 1.0f,  1.0f, 0.0f, 1.0f}
+    };
+    RPI5VC4_OGL_RENDER_TARGET Target;
+    RPI5VC4_V3D_BLEND_STATE BlendState;
+    ULONG Source;
+    ULONG X;
+    ULONG Y;
+    ULONG Vertex;
+
+    if (Context == NULL || Mesa == NULL || Vertices == NULL)
+        return FALSE;
+    if (Mode != GL_TRIANGLE_STRIP || Count != 4)
+        return FALSE;
+    if (Rpi5OglSoftwareGenericPolygonOffsetProbe(Context,
+                                                  Mesa,
+                                                  Mode,
+                                                  Count,
+                                                  Vertices))
+    {
+        return TRUE;
+    }
+    if (!Rpi5OglTriangleStateSupported(Mesa))
+        return FALSE;
+    if (!Rpi5OglResolveRenderTarget(Context, &Target) ||
+        !Target.HasColor ||
+        (Target.Pixels == NULL && Target.TextureData == NULL) ||
+        (Target.TextureFormat != GL_RGB &&
+         Target.TextureFormat != GL_RGBA && Target.Pixels == NULL))
+    {
+        return FALSE;
+    }
+    if (Mesa->Color.ColorMask != 0xf)
+        return FALSE;
+    if (Mesa->Viewport.X != 0 || Mesa->Viewport.Y != 0 ||
+        Mesa->Viewport.Width != (GLsizei)Target.Width ||
+        Mesa->Viewport.Height != (GLsizei)Target.Height)
+    {
+        return FALSE;
+    }
+
+    for (Vertex = 0; Vertex < RTL_NUMBER_OF(FullscreenPositions); Vertex++)
+    {
+        if (memcmp(Vertices[Vertex].Position,
+                   FullscreenPositions[Vertex],
+                   sizeof(FullscreenPositions[Vertex])) != 0 ||
+            memcmp(Vertices[Vertex].Color,
+                   Vertices[0].Color,
+                   sizeof(Vertices[0].Color)) != 0)
+        {
+            return FALSE;
+        }
+    }
+
+    if (!Rpi5OglGl2GetBlendState(Context->Gl2State, &BlendState))
+    {
+        return FALSE;
+    }
+    if ((BlendState.Flags & RPI5VC4_V3D_BLEND_FLAG_ENABLE) != 0 &&
+        (BlendState.ColorEquation != RPI5VC4_V3D_BLEND_EQUATION_ADD ||
+         BlendState.AlphaEquation != RPI5VC4_V3D_BLEND_EQUATION_ADD ||
+         BlendState.SourceColorFactor !=
+             RPI5VC4_V3D_BLEND_FACTOR_SOURCE_ALPHA ||
+         BlendState.DestinationColorFactor !=
+             RPI5VC4_V3D_BLEND_FACTOR_ONE_MINUS_SOURCE_ALPHA ||
+         BlendState.SourceAlphaFactor !=
+             RPI5VC4_V3D_BLEND_FACTOR_SOURCE_ALPHA ||
+         BlendState.DestinationAlphaFactor !=
+             RPI5VC4_V3D_BLEND_FACTOR_ONE_MINUS_SOURCE_ALPHA))
+    {
+        return FALSE;
+    }
+
+    Source = Rpi5OglPackColor(Vertices[0].Color[0],
+                              Vertices[0].Color[1],
+                              Vertices[0].Color[2],
+                              Vertices[0].Color[3]);
+    Rpi5OglMaterializeDeferredTargetClear(Context, &Target);
+    for (Y = 0; Y < Target.Height; Y++)
+    {
+        for (X = 0; X < Target.Width; X++)
+        {
+            ULONG Output = Source;
+
+            if ((BlendState.Flags & RPI5VC4_V3D_BLEND_FLAG_ENABLE) != 0)
+            {
+                ULONG Destination = Rpi5OglReadTargetPixel(&Target, X, Y);
+                GLubyte SourceRed;
+                GLubyte SourceGreen;
+                GLubyte SourceBlue;
+                GLubyte SourceAlpha;
+                GLubyte DestinationRed;
+                GLubyte DestinationGreen;
+                GLubyte DestinationBlue;
+                GLubyte DestinationAlpha;
+
+                Rpi5OglUnpackColor(Source,
+                                   &SourceRed,
+                                   &SourceGreen,
+                                   &SourceBlue,
+                                   &SourceAlpha);
+                Rpi5OglUnpackColor(Destination,
+                                   &DestinationRed,
+                                   &DestinationGreen,
+                                   &DestinationBlue,
+                                   &DestinationAlpha);
+                Output = Rpi5OglPackColor(
+                    Rpi5OglBlendComponent(SourceRed,
+                                          DestinationRed,
+                                          SourceAlpha),
+                    Rpi5OglBlendComponent(SourceGreen,
+                                          DestinationGreen,
+                                          SourceAlpha),
+                    Rpi5OglBlendComponent(SourceBlue,
+                                          DestinationBlue,
+                                          SourceAlpha),
+                    Rpi5OglBlendComponent(SourceAlpha,
+                                          DestinationAlpha,
+                                          SourceAlpha));
+            }
+            Rpi5OglWriteTargetPixel(&Target, X, Y, Output);
+        }
+    }
+
+    Context->HardwareClearFresh = FALSE;
+    Context->Stats.SoftwareTriangleCount += 2;
+    return TRUE;
 }
 
 static BOOL
@@ -2248,6 +2921,82 @@ Rpi5OglDesktopBatchStateSupported(
 }
 
 static BOOL
+Rpi5OglWineD3dBatchStateSupported(
+    _In_ GLcontext *Mesa)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Mesa->DriverCtx;
+    RPI5VC4_OGL_RENDER_TARGET Target;
+
+    if (Context == NULL ||
+        !Rpi5OglGl2WineD3dProgramActive(Context->Gl2State) ||
+        !Rpi5OglResolveRenderTarget(Context, &Target))
+    {
+        return FALSE;
+    }
+
+    return Context->BatchRequest != NULL &&
+           Target.HasColor &&
+           Target.Width != 0 &&
+           Target.Height != 0 &&
+           Target.Width <= RPI5VC4_V3D_CLEAR_MAX_WIDTH &&
+           Target.Height <= RPI5VC4_V3D_CLEAR_MAX_HEIGHT &&
+           Mesa->Visual != NULL &&
+           Mesa->Visual->RGBAflag &&
+           Mesa->RenderMode == GL_RENDER &&
+           Mesa->Texture.Enabled == 0 &&
+           Mesa->RasterMask == 0 &&
+           !Mesa->Color.BlendEnabled &&
+           !Mesa->Depth.Test &&
+           !Mesa->Polygon.Unfilled &&
+           !Mesa->Polygon.OffsetAny &&
+           !Mesa->Polygon.SmoothFlag &&
+           !Mesa->Polygon.StippleFlag &&
+           Mesa->Polygon.CullBits == 0 &&
+           Mesa->Viewport.X == 0 &&
+           Mesa->Viewport.Y == 0 &&
+           Mesa->Viewport.Width == (GLsizei)Target.Width &&
+           Mesa->Viewport.Height == (GLsizei)Target.Height &&
+           Mesa->Viewport.Near == 0.0f &&
+           Mesa->Viewport.Far == 1.0f &&
+           Context->BufferMode != GL_NONE;
+}
+
+static BOOL
+Rpi5OglStartWineD3dBatch(
+    _Inout_ PRPI5VC4_OGL_CONTEXT Context)
+{
+    GLcontext *Mesa = Context->MesaContext;
+
+    if (Context->HardwareBatchActive ||
+        !Rpi5OglWineD3dBatchStateSupported(Mesa))
+    {
+        return FALSE;
+    }
+
+    Context->HardwareClearFresh = FALSE;
+    Context->BatchVertexCount = 0;
+    Context->BatchRequest->DrawCount = 0;
+    ZeroMemory(Context->BatchRequest->Draws,
+               sizeof(Context->BatchRequest->Draws));
+    ZeroMemory(Context->BatchRequest->ShaderUniforms,
+               sizeof(Context->BatchRequest->ShaderUniforms));
+    Context->BatchProgramTriangleCount = 0;
+    Context->BatchProgramName = 0;
+    Context->BatchProgramFlags = 0;
+    Context->BatchTextured = FALSE;
+    Context->BatchTextureLinear = FALSE;
+    Context->BatchTextureMipmap = FALSE;
+    Context->BatchTextureGeneration = 0;
+    Context->BatchTextureGeneration1 = 0;
+    Context->BatchDepthFunc = GL_ALWAYS;
+    Context->BatchBlendEnabled = FALSE;
+    Context->BatchPreserveDestinationAlphaBlend = FALSE;
+    Context->BatchDesktop2D = TRUE;
+    Context->HardwareBatchActive = TRUE;
+    return TRUE;
+}
+
+static BOOL
 Rpi5OglStartDesktopBatch(
     _Inout_ PRPI5VC4_OGL_CONTEXT Context)
 {
@@ -2462,6 +3211,7 @@ Rpi5OglExecuteCachedList(
 {
     GLcontext *Mesa = Context->MesaContext;
     GLfloat ModelViewProjection[16];
+    PRPI5VC4_V3D_VERTEX OutputVertices;
     ULONG PositionVertex;
     ULONG TriangleIndex;
     ULONG OutputCount = 0;
@@ -2469,7 +3219,10 @@ Rpi5OglExecuteCachedList(
     if (Mesa == NULL || Mesa->CompileFlag ||
         !Context->HardwareBatchActive ||
         Mesa->Light.ColorMaterialEnabled ||
-        Mesa->Transform.AnyClip)
+        Mesa->Transform.AnyClip ||
+        List->TriangleCount >
+            (RPI5VC4_V3D_BATCH_MAX_VERTICES -
+             Context->BatchVertexCount) / 3)
     {
         return FALSE;
     }
@@ -2526,6 +3279,8 @@ Rpi5OglExecuteCachedList(
                                      List->VertexColor);
     }
     Rpi5OglCacheColorWords(List);
+    OutputVertices = &Context->BatchRequest->Vertices[
+        Context->BatchVertexCount];
 
     for (PositionVertex = 0;
          PositionVertex < List->PositionCount;
@@ -2599,7 +3354,7 @@ Rpi5OglExecuteCachedList(
                 ULONG ColorIndex = List->NormalMap[LogicalColor];
 
                 Rpi5OglFillCachedTriangleVertex(
-                    &List->OutputVertices[OutputCount + Vertex],
+                    &OutputVertices[OutputCount + Vertex],
                     List->ClipPosition[PositionIndex],
                     List->VertexColorWord[ColorIndex]);
             }
@@ -2607,20 +3362,7 @@ Rpi5OglExecuteCachedList(
         }
     }
 
-    if (OutputCount >
-        RPI5VC4_V3D_BATCH_MAX_VERTICES - Context->BatchVertexCount)
-    {
-        return FALSE;
-    }
-
-    if (OutputCount != 0)
-    {
-        CopyMemory(&Context->BatchRequest->Vertices[
-                       Context->BatchVertexCount],
-                   List->OutputVertices,
-                   OutputCount * sizeof(*List->OutputVertices));
-        Context->BatchVertexCount += OutputCount;
-    }
+    Context->BatchVertexCount += OutputCount;
 
     gl_ShadeModel(Mesa, List->FinalShadeModel);
     CopyMemory(Mesa->Current.Normal,
@@ -2700,12 +3442,12 @@ Rpi5OglSubmitPrimitive(
                Vertices,
                VertexCount * sizeof(*Vertices));
 
-    Returned = ExtEscape(Context->Hdc,
-                         RPI5VC4_ESCAPE_RENDER_TRIANGLE,
-                         sizeof(Request),
-                         (LPCSTR)&Request,
-                         ResultSize,
-                         (LPSTR)Result);
+    Returned = Rpi5OglGpuEscape(Context->Hdc,
+                                RPI5VC4_ESCAPE_RENDER_TRIANGLE,
+                                sizeof(Request),
+                                &Request,
+                                ResultSize,
+                                Result);
     Context->Stats.LastTriangleStatus = Returned > 0 ?
                                         Result->Status : 0xFFFFFFFFu;
     Success = Returned >= (INT)ResultSize &&
@@ -2887,6 +3629,122 @@ Rpi5OglApiBlendFunc(
     Rpi5OglGl2BlendFunc(Context->Gl2State, Source, Destination);
 }
 
+/*
+ * Mesa 3.0 predates cube-map objects. WineD3D nevertheless creates one
+ * all-zero 1-by-1 cube as the OpenGL backing for an unbound Direct3D cube
+ * resource because cube maps are core in the reported GL 2.0 profile. Keep
+ * this compatibility path deliberately limited to that six-face dummy. A
+ * general cube texture still reaches an explicit error instead of being
+ * mistaken for a supported 2D texture.
+ */
+static VOID APIENTRY
+Rpi5OglApiBindTexture(
+    _In_ GLenum Target,
+    _In_ GLuint Texture)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+
+    if (Target != GL_TEXTURE_CUBE_MAP)
+    {
+        _mesa_BindTexture(Target, Texture);
+        return;
+    }
+    if (Context == NULL || INSIDE_BEGIN_END(Context->MesaContext))
+    {
+        if (Context != NULL)
+            gl_error(Context->MesaContext,
+                     GL_INVALID_OPERATION,
+                     "glBindTexture(cube)");
+        return;
+    }
+    if (Texture != 0 && Context->DummyCubeName != 0 &&
+        Texture != Context->DummyCubeName)
+    {
+        gl_error(Context->MesaContext,
+                 GL_INVALID_OPERATION,
+                 "glBindTexture(general cube unsupported)");
+        return;
+    }
+    if (Texture != 0 && Context->DummyCubeName == 0)
+        Context->DummyCubeName = Texture;
+    Context->BoundDummyCubeName = Texture;
+}
+
+static VOID APIENTRY
+Rpi5OglApiTexImage2D(
+    _In_ GLenum Target,
+    _In_ GLint Level,
+    _In_ GLint InternalFormat,
+    _In_ GLsizei Width,
+    _In_ GLsizei Height,
+    _In_ GLint Border,
+    _In_ GLenum Format,
+    _In_ GLenum Type,
+    _In_opt_ const GLvoid *Pixels)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+
+    if (Target < GL_TEXTURE_CUBE_MAP_POSITIVE_X ||
+        Target > GL_TEXTURE_CUBE_MAP_NEGATIVE_Z)
+    {
+        Rpi5OglFboTexImage2D(Target, Level, InternalFormat,
+                            Width, Height, Border, Format, Type, Pixels);
+        return;
+    }
+    if (Context == NULL || INSIDE_BEGIN_END(Context->MesaContext))
+    {
+        if (Context != NULL)
+            gl_error(Context->MesaContext,
+                     GL_INVALID_OPERATION,
+                     "glTexImage2D(cube)");
+        return;
+    }
+    if (Context->BoundDummyCubeName == 0 ||
+        Context->BoundDummyCubeName != Context->DummyCubeName ||
+        Level != 0 || InternalFormat != GL_RGBA8 || Width != 1 ||
+        Height != 1 || Border != 0 || Format != GL_RGBA ||
+        Type != GL_UNSIGNED_INT_8_8_8_8 || Pixels == NULL)
+    {
+        gl_error(Context->MesaContext,
+                 GL_INVALID_OPERATION,
+                 "glTexImage2D(general cube unsupported)");
+        return;
+    }
+
+    CopyMemory(&Context->DummyCubeColors[
+                   Target - GL_TEXTURE_CUBE_MAP_POSITIVE_X],
+               Pixels,
+               sizeof(Context->DummyCubeColors[0]));
+    Context->DummyCubeFaces |=
+        1u << (Target - GL_TEXTURE_CUBE_MAP_POSITIVE_X);
+}
+
+static VOID APIENTRY
+Rpi5OglApiDeleteTextures(
+    _In_ GLsizei Count,
+    _In_reads_opt_(Count) const GLuint *Textures)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+    GLsizei Index;
+
+    if (Context != NULL && Textures != NULL && Count > 0)
+    {
+        for (Index = 0; Index < Count; Index++)
+        {
+            if (Textures[Index] == Context->DummyCubeName)
+            {
+                Context->DummyCubeName = 0;
+                Context->BoundDummyCubeName = 0;
+                Context->DummyCubeFaces = 0;
+                ZeroMemory(Context->DummyCubeColors,
+                           sizeof(Context->DummyCubeColors));
+                break;
+            }
+        }
+    }
+    _mesa_DeleteTextures(Count, Textures);
+}
+
 static VOID APIENTRY
 Rpi5OglDrawArrays(
     _In_ GLenum Mode,
@@ -2913,6 +3771,7 @@ Rpi5OglDrawArrays(
     PRPI5VC4_V3D_TEXCOORD HeightTexCoords;
     ULONG OutputCapacity;
     BOOL Desktop2D;
+    BOOL WineD3d;
     RPI5VC4_OGL_GRAPH_DRAW_RESULT GraphDrawResult;
     BOOL Ideas;
     BOOL Jellyfish;
@@ -2924,6 +3783,8 @@ Rpi5OglDrawArrays(
     if (Context == NULL ||
         !Rpi5OglFboValidateCurrent(Context->FboState, "glDrawArrays"))
         return;
+    if (Context->MesaContext->NewState)
+        gl_update_state(Context->MesaContext);
     DrawResult = Rpi5OglGl2PrepareBatchDraw(Context->Gl2State,
                                             Mode,
                                             First,
@@ -2932,9 +3793,8 @@ Rpi5OglDrawArrays(
     {
         if (Count == 0)
             return;
-        if (Context->MesaContext->NewState)
-            gl_update_state(Context->MesaContext);
         Desktop2D = Rpi5OglGl2DesktopProgramActive(Context->Gl2State);
+        WineD3d = Rpi5OglGl2WineD3dProgramActive(Context->Gl2State);
         Terrain = Rpi5OglGl2TerrainProgramActive(Context->Gl2State);
         ProgramFlags = Rpi5OglGl2BatchFlags(Context->Gl2State);
         Ideas = (ProgramFlags & RPI5VC4_V3D_BATCH_FLAG_IDEAS) != 0;
@@ -2990,6 +3850,14 @@ Rpi5OglDrawArrays(
                      "glDrawArrays(RPi5 desktop batch start)");
             return;
         }
+        if (WineD3d && !Context->HardwareBatchActive &&
+            !Rpi5OglStartWineD3dBatch(Context))
+        {
+            gl_error(Context->MesaContext,
+                     GL_INVALID_OPERATION,
+                     "glDrawArrays(RPi5 WineD3D batch start)");
+            return;
+        }
         if (Jellyfish && !Context->HardwareBatchActive &&
             !Rpi5OglStartJellyfishBatch(Context))
         {
@@ -3017,6 +3885,8 @@ Rpi5OglDrawArrays(
         if (!Context->HardwareBatchActive ||
             !(Desktop2D ?
                   Rpi5OglDesktopBatchStateSupported(Context->MesaContext) :
+              WineD3d ?
+                  Rpi5OglWineD3dBatchStateSupported(Context->MesaContext) :
               Depth ?
                   Rpi5OglDepthBatchStateSupported(Context->MesaContext) :
               Shadow ?
@@ -3028,7 +3898,7 @@ Rpi5OglDrawArrays(
               Ideas ?
                   Rpi5OglIdeasBatchStateSupported(Context->MesaContext) :
                   Rpi5OglBatchStateSupported(Context->MesaContext)) ||
-            (!Desktop2D && !Ideas && !Jellyfish &&
+            (!Desktop2D && !WineD3d && !Ideas && !Jellyfish &&
              Context->BatchDepthFunc != Context->MesaContext->Depth.Func) ||
             Context->BatchBlendEnabled !=
                 Context->MesaContext->Color.BlendEnabled ||
@@ -3218,7 +4088,7 @@ Rpi5OglDrawArrays(
     {
         if (Context->TerrainGraphActive)
             Rpi5OglResetDesktopGraph(Context);
-        Rpi5OglMaterializeTextureClear(
+        Rpi5OglMaterializeTextureStorage(
             Context->MesaContext->Texture.Current2D);
         _mesa_DrawArrays(Mode, First, Count);
         return;
@@ -3244,6 +4114,14 @@ Rpi5OglDrawArrays(
             VertexCount,
             Rpi5OglGl2CurrentProgramName(Context->Gl2State)))
     {
+        if (Rpi5OglSoftwareGenericFullscreen(Context,
+                                             Context->MesaContext,
+                                             Mode,
+                                             Count,
+                                             Gl2Vertices))
+        {
+            return;
+        }
         gl_error(Context->MesaContext,
                  GL_INVALID_OPERATION,
                  "glDrawArrays(RPi5 V3D submission)");
@@ -3287,7 +4165,7 @@ Rpi5OglDrawElements(
     {
         if (Context->TerrainGraphActive)
             Rpi5OglResetDesktopGraph(Context);
-        Rpi5OglMaterializeTextureClear(
+        Rpi5OglMaterializeTextureStorage(
             Context->MesaContext->Texture.Current2D);
         _mesa_DrawElements(Mode, Count, Type, Indices);
         return;
@@ -3498,7 +4376,7 @@ Rpi5OglSoftwareTriangle(
 
     if (Rpi5OglResolveRenderTarget(Context, &Target))
         Rpi5OglMaterializeDeferredTargetClear(Context, &Target);
-    Rpi5OglMaterializeTextureClear(Mesa->Texture.Current2D);
+    Rpi5OglMaterializeTextureStorage(Mesa->Texture.Current2D);
     Context->HardwareClearFresh = FALSE;
     Context->Stats.SoftwareTriangleCount++;
     Mesa->Driver.TriangleFunc = NULL;
@@ -3950,6 +4828,12 @@ Rpi5OglSubmitDesktopGraph(
     ULONG ReadbackResource = Context->DesktopGraphReadbackResource;
     BOOL Success = FALSE;
 
+    if (Context->RetainedDepthActive &&
+        !Rpi5OglMaterializeRetainedDepth(Context))
+    {
+        return FALSE;
+    }
+
     for (Attempt = 0; Attempt < 2 && !Success; Attempt++)
     {
         PRPI5VC4_V3D_RENDER_GRAPH_REQUEST Request;
@@ -4069,12 +4953,12 @@ Rpi5OglSubmitDesktopGraph(
         }
 
         ZeroMemory(&Result, sizeof(Result));
-        Returned = ExtEscape(Context->Hdc,
-                             RPI5VC4_ESCAPE_RENDER_GRAPH,
-                             RequestSize,
-                             (LPCSTR)Request,
-                             sizeof(Result),
-                             (LPSTR)&Result);
+        Returned = Rpi5OglGpuEscape(Context->Hdc,
+                                    RPI5VC4_ESCAPE_RENDER_GRAPH,
+                                    RequestSize,
+                                    Request,
+                                    sizeof(Result),
+                                    &Result);
         HeapFree(GetProcessHeap(), 0, Request);
         if (Returned >= (INT)sizeof(Result) &&
             Result.Size == sizeof(Result) &&
@@ -4784,12 +5668,12 @@ Rpi5OglEnsureDesktopGraphReadback(
     Request.AbiVersion = RPI5VC4_XPDM_ABI_VERSION;
     Request.CacheId = Context->DesktopGraphCacheId;
     Request.Resource = Context->DesktopGraphReadbackResource;
-    Returned = ExtEscape(Context->Hdc,
-                         RPI5VC4_ESCAPE_READ_GRAPH,
-                         sizeof(Request),
-                         (LPCSTR)&Request,
-                         ResultSize,
-                         (LPSTR)Result);
+    Returned = Rpi5OglGpuEscape(Context->Hdc,
+                                RPI5VC4_ESCAPE_READ_GRAPH,
+                                sizeof(Request),
+                                &Request,
+                                ResultSize,
+                                Result);
     Success = Returned >= (INT)ResultSize &&
               Result->Size == ResultSize &&
               Result->AbiVersion == RPI5VC4_XPDM_ABI_VERSION &&
@@ -4921,6 +5805,7 @@ Rpi5OglSubmitBatch(
     BOOL Jellyfish;
     BOOL Shadow;
     BOOL OutputDepth;
+    BOOL RetainDepth;
     ULONG MinimumX = 0;
     ULONG MinimumY = 0;
     ULONG MaximumX = 0;
@@ -4948,6 +5833,7 @@ Rpi5OglSubmitBatch(
     Context->BatchDesktop2D = FALSE;
     OutputDepth =
         (ProgramFlags & RPI5VC4_V3D_BATCH_FLAG_OUTPUT_DEPTH) != 0;
+    RetainDepth = FALSE;
     if (VertexCount == 0)
         return Rpi5OglHardwareClear(Context);
     if (!Rpi5OglResolveRenderTarget(Context, &Target) ||
@@ -4975,6 +5861,19 @@ Rpi5OglSubmitBatch(
         return FALSE;
     }
 
+    RetainDepth = OutputDepth && Target.DepthTexture != NULL;
+    if (RetainDepth && Context->RetainedDepthActive)
+    {
+        if (Context->RetainedDepthTexture == Target.DepthTexture)
+        {
+            Context->RetainedDepthActive = FALSE;
+        }
+        else if (!Rpi5OglMaterializeRetainedDepth(Context))
+        {
+            return FALSE;
+        }
+    }
+
     DirectPresent = !OutputDepth && DirectPresentAllowed &&
                     Target.Framebuffer == 0 &&
                     (!Desktop2D ||
@@ -4986,7 +5885,7 @@ Rpi5OglSubmitBatch(
                                                   &DestinationY,
                                                   NULL,
                                                   NULL);
-    PixelBytes = DirectPresent ? 0 :
+    PixelBytes = DirectPresent || RetainDepth ? 0 :
                  Target.Width * Target.Height * sizeof(ULONG);
     ResultSize = ResultHeaderSize + PixelBytes;
     if (Context->BatchResult == NULL)
@@ -5062,6 +5961,11 @@ Rpi5OglSubmitBatch(
         Request->Flags |= RPI5VC4_V3D_BATCH_FLAG_BLEND_STANDARD;
     if (DirectPresent)
         Request->Flags |= RPI5VC4_V3D_BATCH_FLAG_DIRECT_PRESENT;
+    if (RetainDepth)
+    {
+        Request->Flags |=
+            RPI5VC4_V3D_BATCH_FLAG_RETAIN_DEPTH_TEXTURE;
+    }
     if (Textured)
     {
         Request->Flags |= RPI5VC4_V3D_BATCH_FLAG_TEXTURED;
@@ -5101,12 +6005,12 @@ Rpi5OglSubmitBatch(
         ZeroMemory(Request->NormalMatrix, sizeof(Request->NormalMatrix));
     }
 
-    Returned = ExtEscape(Context->Hdc,
-                         RPI5VC4_ESCAPE_RENDER_BATCH,
-                         RequestSize,
-                         (LPCSTR)Request,
-                         ResultSize,
-                         (LPSTR)Result);
+    Returned = Rpi5OglGpuEscape(Context->Hdc,
+                                RPI5VC4_ESCAPE_RENDER_BATCH,
+                                RequestSize,
+                                Request,
+                                ResultSize,
+                                Result);
     Context->Stats.LastHardwareStatus = Returned >= (INT)ResultHeaderSize ?
                                         Result->Status : 0xFFFFFFFFu;
     Context->Stats.LastTriangleStatus =
@@ -5125,7 +6029,9 @@ Rpi5OglSubmitBatch(
               Result->PixelBytes == PixelBytes &&
               Result->VertexCount == VertexCount &&
               Result->DestinationX == DestinationX &&
-              Result->DestinationY == DestinationY;
+              Result->DestinationY == DestinationY &&
+              ((!RetainDepth && Result->TextureGeneration == 0) ||
+               (RetainDepth && Result->TextureGeneration != 0));
     if (!Success)
     {
         Context->Stats.HardwareClearFailureCount++;
@@ -5145,7 +6051,21 @@ Rpi5OglSubmitBatch(
 
     if (!DirectPresent)
     {
-        if (OutputDepth)
+        if (OutputDepth && RetainDepth)
+        {
+            Context->RetainedDepthTexture = Target.DepthTexture;
+            Context->RetainedDepthData = Target.DepthData;
+            Context->RetainedDepthWidth = Target.Width;
+            Context->RetainedDepthHeight = Target.Height;
+            Context->RetainedDepthGeneration =
+                Result->TextureGeneration;
+            Context->RetainedDepthActive = TRUE;
+            Rpi5OglGl2AdoptTextureUpload(
+                Context->Gl2State,
+                Target.DepthTexture,
+                Result->TextureGeneration);
+        }
+        else if (OutputDepth)
         {
             for (Pixel = 0;
                  Pixel < Target.Width * Target.Height;
@@ -5320,12 +6240,17 @@ Rpi5OglGetString(
     _In_ GLenum Name)
 {
     static const GLubyte Version[] = "2.0 RPi5 V3D 7.1";
+    static const GLubyte ShadingLanguageVersion[] =
+        "1.20 RPi5 bounded GLSL";
     static const GLubyte Extensions[] =
         "GL_EXT_paletted_texture GL_EXT_bgra GL_WIN_swap_hint "
-        "GL_EXT_framebuffer_object GL_ARB_depth_texture";
+        "GL_EXT_framebuffer_object GL_EXT_framebuffer_blit "
+        "GL_ARB_depth_texture";
 
     if (Name == GL_VERSION && !INSIDE_BEGIN_END(Mesa))
         return Version;
+    if (Name == GL_SHADING_LANGUAGE_VERSION && !INSIDE_BEGIN_END(Mesa))
+        return ShadingLanguageVersion;
     if (Name == GL_EXTENSIONS && !INSIDE_BEGIN_END(Mesa))
         return Extensions;
     return gl_GetString(Mesa, Name);
@@ -6117,16 +7042,28 @@ Rpi5OglInitializeProcTable(VOID)
         (PROC)Rpi5OglApiCallList;
     Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_DELETE_LISTS_INDEX] =
         (PROC)Rpi5OglApiDeleteLists;
+    Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_LIGHT_MODEL_I_INDEX] =
+        (PROC)Rpi5OglApiLightModeli;
+    Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_TEX_PARAMETER_I_INDEX] =
+        (PROC)Rpi5OglApiTexParameteri;
+    Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_TEX_ENV_F_INDEX] =
+        (PROC)Rpi5OglApiTexEnvf;
+    Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_DISABLE_INDEX] =
+        (PROC)Rpi5OglApiDisable;
+    Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_ENABLE_INDEX] =
+        (PROC)Rpi5OglApiEnable;
     Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_BLEND_FUNC_INDEX] =
         (PROC)Rpi5OglApiBlendFunc;
     Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_TEX_IMAGE_2D_INDEX] =
-        (PROC)Rpi5OglFboTexImage2D;
+        (PROC)Rpi5OglApiTexImage2D;
     Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_DRAW_BUFFER_INDEX] =
         (PROC)Rpi5OglFboDrawBuffer;
     Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_CLEAR_INDEX] =
         (PROC)Rpi5OglApiClear;
     Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_READ_BUFFER_INDEX] =
         (PROC)Rpi5OglFboReadBuffer;
+    Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_READ_PIXELS_INDEX] =
+        (PROC)Rpi5OglFboReadPixels;
     Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_GET_BOOLEANV_INDEX] =
         (PROC)Rpi5OglGetBooleanv;
     Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_GET_DOUBLEV_INDEX] =
@@ -6137,10 +7074,16 @@ Rpi5OglInitializeProcTable(VOID)
         (PROC)Rpi5OglGetIntegerv;
     Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_GET_TEX_IMAGE_INDEX] =
         (PROC)Rpi5OglFboGetTexImage;
+    Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_IS_ENABLED_INDEX] =
+        (PROC)Rpi5OglApiIsEnabled;
+    Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_BIND_TEXTURE_INDEX] =
+        (PROC)Rpi5OglApiBindTexture;
     Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_DRAW_ARRAYS_INDEX] =
         (PROC)Rpi5OglDrawArrays;
     Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_DRAW_ELEMENTS_INDEX] =
         (PROC)Rpi5OglDrawElements;
+    Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_DELETE_TEXTURES_INDEX] =
+        (PROC)Rpi5OglApiDeleteTextures;
     Rpi5OglProcTable.Entries[RPI5VC4_OPENGL_TEX_SUB_IMAGE_2D_INDEX] =
         (PROC)Rpi5OglFboTexSubImage2D;
 }
@@ -6194,8 +7137,8 @@ DllMain(
     _In_opt_ LPVOID Reserved)
 {
     UNREFERENCED_PARAMETER(Instance);
-    UNREFERENCED_PARAMETER(Reason);
     UNREFERENCED_PARAMETER(Reserved);
+    UNREFERENCED_PARAMETER(Reason);
     return TRUE;
 }
 
@@ -6246,17 +7189,20 @@ DrvCreateContext(
     ULONG Width;
     ULONG Height;
 
-    if (Hdc == NULL || GetPixelFormat(Hdc) != 1 ||
-        !Rpi5OglQueryV3d(Hdc))
-    {
+    if (Hdc == NULL)
         return NULL;
-    }
+    if (GetPixelFormat(Hdc) != 1)
+        return NULL;
+    if (!Rpi5OglQueryV3d(Hdc))
+        return NULL;
 
     Context = HeapAlloc(GetProcessHeap(),
                         HEAP_ZERO_MEMORY,
                         sizeof(*Context));
     if (Context == NULL)
         return NULL;
+    Context->Hdc = Hdc;
+    Rpi5OglOpenKmtTransport(Context);
     Context->BatchRequest = HeapAlloc(
         GetProcessHeap(),
         HEAP_ZERO_MEMORY,
@@ -6267,7 +7213,6 @@ DrvCreateContext(
     if (Context->BatchRequest == NULL)
         goto Failure;
 
-    Context->Hdc = Hdc;
     Context->Visual = gl_create_visual(GL_TRUE,
                                       GL_FALSE,
                                       GL_TRUE,
@@ -6323,11 +7268,13 @@ DrvCreateContext(
     Context->ClearColor = 0;
     Context->CurrentColor = 0xFFFFFFFF;
     Context->BufferMode = GL_BACK;
+    Context->SwapInterval = 1;
     Context->Stats.Size = sizeof(Context->Stats);
     Context->Stats.Version = RPI5VC4_OGL_STATS_VERSION;
     return (DHGLRC)Context;
 
 Failure:
+    Rpi5OglCloseKmtTransport(Context);
     Rpi5OglFreeCachedLists(Context);
     Rpi5OglGl2Cleanup(Context->Gl2State);
     Rpi5OglFboCleanup(Context->FboState);
@@ -6375,6 +7322,7 @@ DrvDeleteContext(
     }
 
     Context->Signature = 0;
+    Rpi5OglCloseKmtTransport(Context);
     Rpi5OglFreeCachedLists(Context);
     Rpi5OglGl2Cleanup(Context->Gl2State);
     Rpi5OglFboCleanup(Context->FboState);
@@ -6457,7 +7405,58 @@ Rpi5OglWglGetExtensionsStringArb(
     _In_ HDC Hdc)
 {
     UNREFERENCED_PARAMETER(Hdc);
-    return "WGL_ARB_extensions_string";
+    return "WGL_ARB_extensions_string WGL_EXT_extensions_string "
+           "WGL_EXT_swap_control";
+}
+
+static LPCSTR WINAPI
+Rpi5OglWglGetExtensionsStringExt(VOID)
+{
+    return "WGL_ARB_extensions_string WGL_EXT_extensions_string "
+           "WGL_EXT_swap_control";
+}
+
+static BOOL WINAPI
+Rpi5OglWglSwapIntervalExt(
+    _In_ INT Interval)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+
+    if (Context == NULL || (Interval != 0 && Interval != 1))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    Context->SwapInterval = Interval;
+    return TRUE;
+}
+
+static INT WINAPI
+Rpi5OglWglGetSwapIntervalExt(VOID)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+
+    return Context != NULL ? Context->SwapInterval : 0;
+}
+
+static BOOL
+Rpi5OglWaitForVBlank(
+    _In_ PRPI5VC4_OGL_CONTEXT Context)
+{
+    RPI5VC4_VBLANK_RESULT Result;
+    INT Returned;
+
+    ZeroMemory(&Result, sizeof(Result));
+    Returned = Rpi5OglGpuEscape(Context->Hdc,
+                                RPI5VC4_ESCAPE_WAIT_VBLANK,
+                                0,
+                                NULL,
+                                sizeof(Result),
+                                &Result);
+    return Returned >= (INT)sizeof(Result) &&
+           Result.Size == sizeof(Result) &&
+           Result.AbiVersion == RPI5VC4_XPDM_ABI_VERSION &&
+           Result.Status == RPI5VC4_V3D_SELFTEST_STATUS_SUCCESS;
 }
 
 PROC WINAPI
@@ -6468,6 +7467,12 @@ DrvGetProcAddress(
 
     if (Name != NULL && lstrcmpA(Name, "wglGetExtensionsStringARB") == 0)
         return (PROC)Rpi5OglWglGetExtensionsStringArb;
+    if (Name != NULL && lstrcmpA(Name, "wglGetExtensionsStringEXT") == 0)
+        return (PROC)Rpi5OglWglGetExtensionsStringExt;
+    if (Name != NULL && lstrcmpA(Name, "wglSwapIntervalEXT") == 0)
+        return (PROC)Rpi5OglWglSwapIntervalExt;
+    if (Name != NULL && lstrcmpA(Name, "wglGetSwapIntervalEXT") == 0)
+        return (PROC)Rpi5OglWglGetSwapIntervalExt;
     if (Name != NULL && lstrcmpA(Name, "Rpi5Vc4GetStats") == 0)
         return (PROC)Rpi5Vc4GetStats;
     if (Name != NULL && lstrcmpA(Name, "glDrawRangeElements") == 0)
@@ -6620,6 +7625,8 @@ DrvSwapBuffers(
     PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
 
     if (Context == NULL || Context->Hdc != Hdc)
+        return FALSE;
+    if (Context->SwapInterval != 0 && !Rpi5OglWaitForVBlank(Context))
         return FALSE;
     if (!Rpi5OglSubmitBatch(Context, TRUE))
         return FALSE;
