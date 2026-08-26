@@ -10,6 +10,65 @@
 #include <pseh/pseh2.h>
 
 static DECLSPEC_ALIGN(8) volatile LONG64 EtwpNextRegistrationHandle;
+static volatile LONG EtwpTelemetryCoverageRound;
+
+_IRQL_requires_max_(HIGH_LEVEL)
+BOOLEAN
+NTAPI
+EtwEventEnabled(
+    _In_ REGHANDLE RegHandle,
+    _In_ PCEVENT_DESCRIPTOR EventDescriptor)
+{
+    UNREFERENCED_PARAMETER(RegHandle);
+    UNREFERENCED_PARAMETER(EventDescriptor);
+
+    /* ReactOS does not yet enable kernel ETW provider sessions. */
+    return FALSE;
+}
+
+_IRQL_requires_max_(HIGH_LEVEL)
+BOOLEAN
+NTAPI
+EtwProviderEnabled(
+    _In_ REGHANDLE RegHandle,
+    _In_ UCHAR Level,
+    _In_ ULONGLONG Keyword)
+{
+    UNREFERENCED_PARAMETER(RegHandle);
+    UNREFERENCED_PARAMETER(Level);
+    UNREFERENCED_PARAMETER(Keyword);
+
+    /* ReactOS does not yet enable kernel ETW provider sessions. */
+    return FALSE;
+}
+
+NTSTATUS
+NTAPI
+EtwActivityIdControl(
+    _In_ ULONG ControlCode,
+    _Inout_ LPGUID ActivityId)
+{
+    if (ActivityId == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    switch (ControlCode)
+    {
+        case EVENT_ACTIVITY_CTRL_CREATE_ID:
+        case EVENT_ACTIVITY_CTRL_CREATE_SET_ID:
+            return ExUuidCreate(ActivityId);
+
+        case EVENT_ACTIVITY_CTRL_GET_ID:
+        case EVENT_ACTIVITY_CTRL_GET_SET_ID:
+            RtlZeroMemory(ActivityId, sizeof(*ActivityId));
+            return STATUS_SUCCESS;
+
+        case EVENT_ACTIVITY_CTRL_SET_ID:
+            return STATUS_SUCCESS;
+
+        default:
+            return STATUS_INVALID_PARAMETER;
+    }
+}
 
 _IRQL_requires_max_(HIGH_LEVEL)
 NTSTATUS
@@ -141,5 +200,16 @@ EtwRegisterClassicProvider(
      * synchronously at registration). */
     if (RegHandle != NULL)
         *RegHandle = 0;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+EtwTelemetryCoverageReport(_In_ PVOID CoverageData)
+{
+    if (CoverageData == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    InterlockedIncrement(&EtwpTelemetryCoverageRound);
     return STATUS_SUCCESS;
 }
