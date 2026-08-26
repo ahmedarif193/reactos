@@ -18,6 +18,14 @@ typedef struct _PCW_REGISTRATION
     ULONG Reserved;
 } PCW_REGISTRATION, *PPCW_REGISTRATION;
 
+typedef struct _PCW_INSTANCE
+{
+    PPCW_REGISTRATION Registration;
+    UNICODE_STRING Name;
+    ULONG Count;
+    PVOID Data;
+} PCW_INSTANCE, *PPCW_INSTANCE;
+
 /* FUNCTIONS *****************************************************************/
 
 NTSTATUS
@@ -71,4 +79,50 @@ PcwAddInstance(
      * Returning success keeps optional provider registration non-fatal.
      */
     return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+PcwCreateInstance(
+    _Outptr_ PPCW_INSTANCE *Instance,
+    _In_ PPCW_REGISTRATION Registration,
+    _In_ PCUNICODE_STRING Name,
+    _In_ ULONG Count,
+    _In_reads_opt_(Count) PVOID Data)
+{
+    PPCW_INSTANCE NewInstance;
+    SIZE_T AllocationSize;
+
+    if ((Instance == NULL) || (Registration == NULL) || (Name == NULL) ||
+        ((Name->Length != 0) && (Name->Buffer == NULL)) ||
+        ((Count != 0) && (Data == NULL)))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    AllocationSize = sizeof(*NewInstance) + Name->Length + sizeof(WCHAR);
+    NewInstance = ExAllocatePoolZero(NonPagedPool, AllocationSize, 'icPP');
+    if (NewInstance == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    NewInstance->Registration = Registration;
+    NewInstance->Count = Count;
+    NewInstance->Data = Data;
+    NewInstance->Name.Buffer = (PWCHAR)(NewInstance + 1);
+    NewInstance->Name.Length = Name->Length;
+    NewInstance->Name.MaximumLength = Name->Length + sizeof(WCHAR);
+    if (Name->Length != 0)
+        RtlCopyMemory(NewInstance->Name.Buffer, Name->Buffer, Name->Length);
+
+    *Instance = NewInstance;
+    return STATUS_SUCCESS;
+}
+
+VOID
+NTAPI
+PcwCloseInstance(
+    _In_opt_ PPCW_INSTANCE Instance)
+{
+    if (Instance != NULL)
+        ExFreePoolWithTag(Instance, 'icPP');
 }
