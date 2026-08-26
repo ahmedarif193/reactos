@@ -18,6 +18,10 @@ remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
 # declares only the WDDM 2.0 callback/behavior contract it implements.
 add_definitions(-DDXGKDDI_INTERFACE_VERSION=0xF003)
 
+# rpi5vc4_v3d_exec.c reuses the offline-compiled terrain shader blobs from
+# the XPDM miniport tree (local quote-includes shadow same-named headers).
+include_directories(${REACTOS_SOURCE_DIR}/win32ss/drivers/miniport/rpi5vc4)
+
 list(APPEND SOURCE
     rpi5vc4.c
     rpi5vc4_wddm.c
@@ -26,6 +30,7 @@ list(APPEND SOURCE
     rpi5vc4_hvs.c
     rpi5vc4_crtc.c
     rpi5vc4_v3d.c
+    rpi5vc4_v3d_exec.c
     rpi5vc4_mbox.c)
 
 add_library(rpi5vc4 MODULE ${SOURCE} rpi5vc4.rc)

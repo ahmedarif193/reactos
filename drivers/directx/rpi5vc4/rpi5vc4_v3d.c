@@ -563,6 +563,10 @@ Rpi5V3dTeardown(
 {
     DeviceExtension->V3dReady = FALSE;
 
+    /* Exec-engine work buffers reference the shared page table: free them
+     * before the table itself goes away. */
+    Rpi5V3dExecRelease(DeviceExtension);
+
     if (DeviceExtension->V3dHubBase != NULL)
     {
         /* Disable the GPU MMU before its page table goes away. */
