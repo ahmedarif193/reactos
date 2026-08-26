@@ -2,3 +2,6 @@
 add_subdirectory(glu32)
 add_subdirectory(mesa)
 add_subdirectory(opengl32)
+if((ARCH STREQUAL "arm64") AND RPI_SUPPORT)
+    add_subdirectory(rpi5vc4ogl)
+endif()
