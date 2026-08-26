@@ -111,6 +111,8 @@ KMT_TESTFUNC Test_IoInterrupt;
 KMT_TESTFUNC Test_IoIrp;
 KMT_TESTFUNC Test_IoWaitCompletionPacket;
 KMT_TESTFUNC Test_ExWorkItem;
+KMT_TESTFUNC Test_ExWddmAvl;
+KMT_TESTFUNC Test_ExWddmRtl;
 KMT_TESTFUNC Test_IoMdl;
 #if defined(_M_IX86) || defined(_M_AMD64)
 KMT_TESTFUNC Test_IoTimerKM;
@@ -338,6 +340,8 @@ const KMT_TEST TestList[] =
     { "IoIrp",                              Test_IoIrp },
     { "IoWaitCompletionPacket",             Test_IoWaitCompletionPacket },
     { "ExWorkItem",                         Test_ExWorkItem },
+    { "ExWddmAvl",                          Test_ExWddmAvl },
+    { "ExWddmRtl",                          Test_ExWddmRtl },
     { "IoCancelKM",                         Test_IoCancelKM },
     { "CmKeyKM",                            Test_CmKeyKM },
     { "EtwRegisterKM",                      Test_EtwRegisterKM },

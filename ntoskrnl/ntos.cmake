@@ -285,8 +285,15 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/state.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/thread.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/win32.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/avltree.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/guid.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/libsupp.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/locale.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/misc.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/security.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/system.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/time.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/unicode.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/se/access.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/se/accesschk.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/se/acl.c

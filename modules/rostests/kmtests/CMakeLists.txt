@@ -221,6 +221,7 @@ list(APPEND KMTEST_DRV_SOURCE
     rtl/RtlHashTableKM.c
     rtl/RtlTimeKM.c
     rtl/RtlIsValidOemCharacter.c
+    rtl/RtlModern.c
     rtl/RtlRandomKM.c
     rtl/RtlRangeList.c
     rtl/RtlStringSupportKM.c

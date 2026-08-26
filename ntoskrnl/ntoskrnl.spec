@@ -2973,8 +2973,8 @@
 @ stub -arch=arm64 RtlAreBitsClearEx
 @ stub -arch=arm64 RtlAreBitsSetEx
 @ stdcall RtlArmFeatureUsageProviderFlushNotification(ptr)
-@ stub -arch=arm64 RtlAvlInsertNodeEx
-@ stub -arch=arm64 RtlAvlRemoveNode
+@ stdcall -arch=i386,x86_64,arm64 RtlAvlInsertNodeEx(ptr ptr long ptr)
+@ stdcall -arch=i386,x86_64,arm64 RtlAvlRemoveNode(ptr ptr)
 @ stub -arch=arm64 RtlCapabilityCheck
 @ stub -arch=arm64 RtlCapabilityCheckForSingleSessionSku
 @ stub -arch=arm64 RtlCheckPortableOperatingSystem
@@ -2995,7 +2995,7 @@
 @ stdcall RtlCompareUnicodeStrings(wstr long wstr long long)
 @ stub -arch=arm64 RtlConstructCrossVmEventPath
 @ stub -arch=arm64 RtlConstructCrossVmMutexPath
-@ stub -arch=arm64 RtlConvertHostPerfCounterToPerfCounter
+@ stdcall -arch=i386,x86_64,arm64 RtlConvertHostPerfCounterToPerfCounter(int64 int64 ptr)
 @ stub -arch=arm64 RtlCopyBitMap
 @ stub -arch=arm64 RtlCopyBitMapEx
 @ stub -arch=arm64 RtlCopyContext
@@ -3030,14 +3030,14 @@
 @ stub -arch=arm64 RtlFindNextForwardRunSetEx
 @ stub -arch=arm64 RtlFindSetBitsAndClearEx
 @ stub -arch=arm64 RtlFindSetBitsEx
-@ stub -arch=arm64 RtlFindUnicodeSubstring
+@ stdcall -arch=i386,x86_64,arm64 RtlFindUnicodeSubstring(ptr ptr long)
 @ stub -arch=arm64 RtlFlushFeatureUsage
 @ stub -arch=arm64 RtlFlushNonVolatileMemory
 @ stub -arch=arm64 RtlFlushNonVolatileMemoryRanges
 @ stub -arch=arm64 RtlFreeNonVolatileToken
 @ stub -arch=arm64 RtlFreeUTF8String
-@ stub -arch=arm64 RtlGenerateClass5Guid
-@ stub -arch=arm64 RtlGetAcesBufferSize
+@ stdcall -arch=i386,x86_64,arm64 RtlGenerateClass5Guid(ptr ptr long ptr)
+@ stdcall -arch=i386,x86_64,arm64 RtlGetAcesBufferSize(ptr ptr)
 @ stub -arch=arm64 RtlGetActiveConsoleId
 @ stub -arch=arm64 RtlGetAppContainerNamedObjectPath
 @ stub -arch=arm64 RtlGetAppContainerParent
@@ -3049,7 +3049,7 @@
 @ stub -arch=arm64 RtlGetExtendedContextLength
 @ stub -arch=arm64 RtlGetIntegerAtom
 @ stub -arch=arm64 RtlGetLastRange
-@ stub -arch=arm64 RtlGetMultiTimePrecise
+@ stdcall -arch=i386,x86_64,arm64 RtlGetMultiTimePrecise(ptr long ptr)
 @ stub -arch=arm64 RtlGetNonVolatileToken
 @ stub -arch=arm64 RtlGetNtSystemRoot
 @ stub -arch=arm64 RtlGetPersistedStateLocation
@@ -3058,8 +3058,8 @@
 @ stub -arch=arm64 RtlGetSuiteMask
 @ stub -arch=arm64 RtlGetSystemBootStatus
 @ stub -arch=arm64 RtlGetSystemBootStatusEx
-@ stub -arch=arm64 RtlGetSystemGlobalData
-@ stub -arch=arm64 RtlGetThreadLangIdByIndex
+@ stdcall -arch=i386,x86_64,arm64 RtlGetSystemGlobalData(long ptr long)
+@ stdcall -arch=i386,x86_64,arm64 RtlGetThreadLangIdByIndex(long long ptr ptr)
 @ stub -arch=arm64 RtlGetTokenNamedObjectPath
 @ stub -arch=arm64 RtlIdnToAscii
 @ stub -arch=arm64 RtlIdnToNameprepUnicode
@@ -3099,7 +3099,7 @@
 @ stub -arch=arm64 RtlIsProcessorFeaturePresent
 @ stub -arch=arm64 RtlIsSandboxedToken
 @ stub -arch=arm64 RtlIsServicePackVersionInstalled
-@ stub -arch=arm64 RtlIsStateSeparationEnabled
+@ stdcall -arch=i386,x86_64,arm64 RtlIsStateSeparationEnabled()
 @ stub -arch=arm64 RtlIsUntrustedObject
 @ stub -arch=arm64 RtlIsZeroMemory
 @ stub -arch=arm64 RtlLoadString
@@ -3124,13 +3124,13 @@
 @ stub -arch=arm64 RtlQueryAllFeatureConfigurations
 @ stub -arch=arm64 RtlQueryAllInternalFeatureConfigurations
 @ stub -arch=arm64 RtlQueryDynamicTimeZoneInformation
-@ stub -arch=arm64 RtlQueryElevationFlags
+@ stdcall -arch=i386,x86_64,arm64 RtlQueryElevationFlags(ptr)
 @ stdcall RtlQueryFeatureConfiguration(long long ptr ptr)
 @ stdcall RtlQueryFeatureConfigurationChangeStamp()
 @ stub -arch=arm64 RtlQueryImageFileKeyOption
 @ stdcall RtlQueryModuleInformation(ptr long ptr)
 @ stub -arch=arm64 RtlQueryPackageClaims
-@ stub -arch=arm64 RtlQueryPackageIdentity
+@ stdcall -arch=i386,x86_64,arm64 RtlQueryPackageIdentity(ptr ptr ptr ptr ptr ptr)
 @ stub -arch=arm64 RtlQueryPackageIdentityEx
 @ stub -arch=arm64 RtlQueryPointerMapping
 @ stub -arch=arm64 RtlQueryProcessPlaceholderCompatibilityMode
