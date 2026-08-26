@@ -4011,6 +4011,7 @@ DxgkpEscapeCaptured(
     CONST D3DKMT_HANDLE *ResourceHandles;
     UINT             ResourceHandleCount;
     NTSTATUS         Status;
+    BOOLEAN          MiniportCallbackAcquired = FALSE;
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3000)
     PDXGKRNL_SYNC_OBJECT CpuEventSyncObject = NULL;
     D3DDDI_DRIVERESCAPE_CPUEVENTUSAGE *CpuEventUsage = NULL;
@@ -4163,17 +4164,33 @@ DxgkpEscapeCaptured(
                     pEscape->PrivateDriverDataSize,
                     pEscape->Flags.Value);
 
-    if (!DxgkAcquireKmdCall(Adapter))
+    if (pEscape->Flags.NoAdapterSynchronization)
     {
-        Status = STATUS_DELETE_PENDING;
-        goto Cleanup;
+        if (!DxgkAcquireKmdCall(Adapter))
+        {
+            Status = STATUS_DELETE_PENDING;
+            goto Cleanup;
+        }
+    }
+    else
+    {
+        if (!DxgkAcquireMiniportCallback(Adapter))
+        {
+            Status = STATUS_DELETE_PENDING;
+            goto Cleanup;
+        }
+        MiniportCallbackAcquired = TRUE;
     }
     if (!DxgkpDeviceExecutionActive(EscDevice))
     {
-        DxgkReleaseKmdCall(Adapter);
+        if (MiniportCallbackAcquired)
+            DxgkReleaseMiniportCallback(Adapter);
+        else
+            DxgkReleaseKmdCall(Adapter);
         Status = STATUS_DEVICE_REMOVED;
         goto Cleanup;
     }
+    DxgkDisplayNotifyGpuActivity(Adapter);
     _SEH2_TRY
     {
         Status = DXGK_CB_FULL(Adapter, DxgkDdiEscape)(Adapter->MiniportDeviceContext, &EscapeArgs);
@@ -4184,7 +4201,11 @@ DxgkpEscapeCaptured(
         DXGKRNL_ERR("DxgkEscape: miniport faulted 0x%08lX\n", Status);
     }
     _SEH2_END;
-    DxgkReleaseKmdCall(Adapter);
+    DxgkDisplayNotifyGpuActivity(Adapter);
+    if (MiniportCallbackAcquired)
+        DxgkReleaseMiniportCallback(Adapter);
+    else
+        DxgkReleaseKmdCall(Adapter);
 
 Cleanup:
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3000)

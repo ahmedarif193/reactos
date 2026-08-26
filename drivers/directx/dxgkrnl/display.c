@@ -108,11 +108,13 @@ static volatile LONG g_ScanoutCopyCount = 0;
 static volatile LONG g_PresentDispatchBusy = 0;
 static volatile LONGLONG g_LastDirtyNotify100ns = 0;
 static volatile LONGLONG g_LastPresentSubmit100ns = 0;
+static volatile LONGLONG g_LastGpuActivity100ns = 0;
 #define DXGK_DIRTY_RECT_SLOTS 8
 #define DXGK_PRESENT_PACE_100NS      (8ULL * 10000ULL)
 #define DXGK_PRESENT_SMALL_GAP_100NS (2ULL * 10000ULL)
 #define DXGK_PRESENT_QUIET_100NS     (4ULL * 10000ULL)
 #define DXGK_PRESENT_HOLD_STALE_100NS (500ULL * 10000ULL)
+#define DXGK_GPU_ACTIVITY_QUIET_100NS (250ULL * 10000ULL)
 static RECTL g_PresentDirtyRects[DXGK_DIRTY_RECT_SLOTS];
 static ULONG g_PresentDirtyRectCount = 0;
 static volatile LONG g_PresentHoldActive = 0;
@@ -190,6 +192,17 @@ FORCEINLINE ULONGLONG
 DxgkpDisplayTraceNow100ns(VOID)
 {
     return KeQueryInterruptTime();
+}
+
+VOID
+DxgkDisplayNotifyGpuActivity(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (Adapter == NULL || Adapter != g_DisplayAdapter)
+        return;
+
+    InterlockedExchange64(&g_LastGpuActivity100ns,
+                          (LONGLONG)DxgkpDisplayTraceNow100ns());
 }
 
 FORCEINLINE ULONGLONG
@@ -1819,11 +1832,14 @@ DxgkpPresentWorkItemRoutineEx(
             ULONGLONG NowW = DxgkpDisplayTraceNow100ns();
             ULONGLONG LastDirtyW = (ULONGLONG)InterlockedCompareExchange64(&g_LastDirtyNotify100ns, 0, 0);
             ULONGLONG LastPresentW = (ULONGLONG)InterlockedCompareExchange64(&g_LastPresentSubmit100ns, 0, 0);
+            ULONGLONG LastGpuW = (ULONGLONG)InterlockedCompareExchange64(&g_LastGpuActivity100ns, 0, 0);
             BOOLEAN RecentActivity =
                 (LastDirtyW != 0 && NowW > LastDirtyW &&
                  (NowW - LastDirtyW) < (250ULL * 10000ULL)) ||
                 (LastPresentW != 0 && NowW > LastPresentW &&
-                 (NowW - LastPresentW) < (250ULL * 10000ULL));
+                 (NowW - LastPresentW) < (250ULL * 10000ULL)) ||
+                (LastGpuW != 0 && NowW > LastGpuW &&
+                 (NowW - LastGpuW) < DXGK_GPU_ACTIVITY_QUIET_100NS);
 
             if (!RecentActivity && !DxgkpPresentHoldActive(NowW))
                 DxgkpPresentShadowFb(Adapter);
@@ -1945,6 +1961,21 @@ DxgkpPresentTimerDpc(
         }
     }
 
+    if ((ULONGLONG)InterlockedCompareExchange64(&g_LastGpuActivity100ns, 0, 0) != 0)
+    {
+        ULONGLONG LastGpu100ns = (ULONGLONG)InterlockedCompareExchange64(&g_LastGpuActivity100ns, 0, 0);
+
+        /* A driver-private GPU escape may have rendered directly into the
+         * live scanout. Do not overwrite it with the idle GDI-shadow safety
+         * copy while that producer is active. Explicit dirty rectangles are
+         * still presented normally. */
+        if (Now100ns > LastGpu100ns &&
+            (Now100ns - LastGpu100ns) < DXGK_GPU_ACTIVITY_QUIET_100NS)
+        {
+            return;
+        }
+    }
+
     if (DxgkpTryDispatchPresentWork(Adapter))
     {
         if (TimerSeq <= DXGK_PRESENT_TRACE_LOG_LIMIT)
@@ -1983,6 +2014,7 @@ DxgkpStartPresentTimer(
     InterlockedExchange(&g_PresentHoldActive, 0);
     InterlockedExchange64(&g_LastDirtyNotify100ns, 0);
     InterlockedExchange64(&g_LastPresentSubmit100ns, 0);
+    InterlockedExchange64(&g_LastGpuActivity100ns, 0);
     InterlockedExchange(&g_PresentDispatchBusy, 0);
 
     KeInitializeTimer(&Adapter->PresentTimer);
@@ -2031,6 +2063,7 @@ DxgkpStopPresentTimer(
     g_PresentDirtyRectCount = 0;
     InterlockedExchange64(&g_LastDirtyNotify100ns, 0);
     InterlockedExchange64(&g_LastPresentSubmit100ns, 0);
+    InterlockedExchange64(&g_LastGpuActivity100ns, 0);
     DXGKRNL_TRACE("DxgkpStopPresentTimer: stopped\n");
 }
 
@@ -2768,6 +2801,66 @@ DxgkpDisplayDispatch(
 
             BytesReturned = sizeof(*Stats);
             Status = STATUS_SUCCESS;
+            break;
+        }
+
+        case IOCTL_VIDEO_DXGK_GPU_ESCAPE:
+        {
+            /* Opaque display-driver -> miniport escape conduit: the buffered
+             * payload goes to DxgkDdiEscape verbatim and is rewritten in
+             * place with the miniport's reply. dxgkrnl stays vendor-blind. */
+            PVOID Buffer = Irp->AssociatedIrp.SystemBuffer;
+            ULONG InLen = Stack->Parameters.DeviceIoControl.InputBufferLength;
+            ULONG OutLen = Stack->Parameters.DeviceIoControl.OutputBufferLength;
+            ULONG BufferBytes = (InLen > OutLen) ? InLen : OutLen;
+            PDXGKRNL_ADAPTER EscapeAdapter = g_DisplayAdapter;
+            DXGKARG_ESCAPE EscapeArgs;
+
+            if (Irp->RequestorMode != KernelMode)
+            {
+                Status = STATUS_ACCESS_DENIED;
+                break;
+            }
+            if (Buffer == NULL || BufferBytes == 0)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+            if (EscapeAdapter == NULL)
+            {
+                Status = STATUS_DEVICE_NOT_READY;
+                break;
+            }
+            if (DXGK_CB_FULL(EscapeAdapter, DxgkDdiEscape) == NULL)
+            {
+                Status = STATUS_NOT_SUPPORTED;
+                break;
+            }
+
+            RtlZeroMemory(&EscapeArgs, sizeof(EscapeArgs));
+            EscapeArgs.pPrivateDriverData = Buffer;
+            EscapeArgs.PrivateDriverDataSize = BufferBytes;
+
+            if (!DxgkAcquireMiniportCallback(EscapeAdapter))
+            {
+                Status = STATUS_DELETE_PENDING;
+                break;
+            }
+            DxgkDisplayNotifyGpuActivity(EscapeAdapter);
+            _SEH2_TRY
+            {
+                Status = DXGK_CB_FULL(EscapeAdapter, DxgkDdiEscape)(EscapeAdapter->MiniportDeviceContext, &EscapeArgs);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            DxgkDisplayNotifyGpuActivity(EscapeAdapter);
+            DxgkReleaseMiniportCallback(EscapeAdapter);
+
+            if (NT_SUCCESS(Status))
+                BytesReturned = OutLen;
             break;
         }
 

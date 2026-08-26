@@ -2731,6 +2731,10 @@ VOID
 DxgkDisplayVsyncFlush(
     _In_ PDXGKRNL_ADAPTER Adapter);
 
+VOID
+DxgkDisplayNotifyGpuActivity(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
 /*
  * DxgkDisplayRegister
  *
