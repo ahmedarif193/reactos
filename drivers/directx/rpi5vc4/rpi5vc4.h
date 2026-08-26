@@ -32,6 +32,7 @@
 #include <windef.h>
 #include <dispmprt.h>
 #include <reactos/rpi5vc4_umd.h>
+#include <reactos/rpi5vc4_xpdm.h>
 
 #ifndef DXGKDDI_INTERFACE_VERSION_WDDM2_0
 #define DXGKDDI_INTERFACE_VERSION_WDDM2_0 0x5023
@@ -50,6 +51,7 @@
 #define RPI5VC4_SEGMENT_ID          1
 #define RPI5VC4_VRAM_SIZE_PREFERRED (64 * 1024 * 1024)
 #define RPI5VC4_VRAM_SIZE_MIN       (16 * 1024 * 1024)
+#define RPI5VC4_V3D_EXEC_RESERVE_SIZE (32 * 1024 * 1024)
 
 /* In-order submission tracking ("the GPU pipeline"). */
 #define RPI5VC4_MAX_PENDING         64
@@ -171,6 +173,34 @@ typedef struct _RPI5VC4_DMA_PACKET
 
 typedef struct _RPI5VC4_DEVICE_EXTENSION RPI5VC4_DEVICE_EXTENSION,
     *PRPI5VC4_DEVICE_EXTENSION;
+
+/* Cached layout state of one bounded render-graph resource (exec engine). */
+typedef struct _RPI5VC4_V3D_GRAPH_LEVEL_STATE
+{
+    ULONG Width;
+    ULONG Height;
+    ULONG BaseOffset;
+    ULONG Stride;
+    ULONG PaddedHeight;
+    ULONG UbPad;
+    ULONG Tiling;
+} RPI5VC4_V3D_GRAPH_LEVEL_STATE, *PRPI5VC4_V3D_GRAPH_LEVEL_STATE;
+
+typedef struct _RPI5VC4_V3D_GRAPH_RESOURCE_STATE
+{
+    ULONG Width;
+    ULONG Height;
+    ULONG Format;
+    ULONG Flags;
+    ULONG LevelCount;
+    ULONG BaseOffset;
+    ULONG StorageBytes;
+    ULONG Stride;
+    ULONG PaddedHeight;
+    ULONG UbPad;
+    ULONG Tiling;
+    RPI5VC4_V3D_GRAPH_LEVEL_STATE Levels[RPI5VC4_V3D_TEXTURE_MAX_LEVELS];
+} RPI5VC4_V3D_GRAPH_RESOURCE_STATE, *PRPI5VC4_V3D_GRAPH_RESOURCE_STATE;
 
 typedef struct _RPI5VC4_WDDM_DEVICE
 {
@@ -303,7 +333,8 @@ struct _RPI5VC4_DEVICE_EXTENSION
     /* ---- Local VRAM segment (segment 1) -------------------------------- */
     PVOID VramVa;                     /* write-combined kernel mapping     */
     PHYSICAL_ADDRESS VramPhysical;
-    ULONG VramSize;
+    ULONG VramSize;                   /* bytes exposed as segment 1        */
+    ULONG VramAllocationSize;         /* includes private exec reserve     */
 
     /* ---- In-order submission/fence pipeline ---------------------------- */
     KSPIN_LOCK DmaLock;
@@ -370,6 +401,58 @@ struct _RPI5VC4_DEVICE_EXTENSION
     volatile LONG V3dDpcFromIsr;
     ULONG V3dLastBfc;
     ULONG V3dLastRfc;
+
+    /* ---- Bounded V3D exec engine (rpi5vc4_v3d_exec.c, XPDM port) --------
+     * Escape-driven synchronous render/readback jobs for the OpenGL ICD.
+     * Work buffers map into the SHARED page table above the slab/overflow;
+     * V3dExecGateActive parks the fence pipeline while a job runs. */
+    PVOID V3dWorkVa;
+    PHYSICAL_ADDRESS V3dWorkLogical;
+    PMDL V3dWorkControlMdl;
+    PMDL V3dWorkOutputMdl;
+    PMDL V3dWorkVertexMdl;
+    PMDL V3dWorkTerrainTransientMdl;
+    PMDL V3dWorkTextureMdl;
+    PMDL V3dWorkGdiTextureMdl;
+    KEVENT V3dCompletionEvent;
+    LONG V3dExecutionBusy;
+    BOOLEAN V3dExecutionPoisoned;
+    BOOLEAN V3dPageTableReady;
+    BOOLEAN V3dMmuReady;
+    BOOLEAN V3dDirectPresentReady;
+    BOOLEAN V3dWorkCached;
+    BOOLEAN V3dWorkFromVram;
+    BOOLEAN V3dInterruptAvailable;    /* stays FALSE: poll-only completion  */
+    BOOLEAN V3dInterruptValidated;
+    BOOLEAN V3dExecGateActive;        /* under DmaLock: pipeline parked     */
+    ULONG V3dFrameBufferGpuVa;
+    ULONGLONG V3dExecFbMappedPhys;    /* scanout base the FB window maps    */
+    ULONG V3dTextureGeneration;
+    ULONG V3dTextureWidth;
+    ULONG V3dTextureHeight;
+    ULONG V3dTextureFormat;
+    ULONG V3dTextureLevelCount;
+    ULONG V3dTextureLevel0Offset;
+    ULONG V3dTextureLevel0UbPad;
+    BOOLEAN V3dTextureLevel0StrictUif;
+    BOOLEAN V3dTextureLevel0Xor;
+    ULONG V3dTexture1Generation;
+    ULONG V3dTexture1Width;
+    ULONG V3dTexture1Height;
+    ULONG V3dTexture1Format;
+    ULONG V3dTexture1LevelCount;
+    ULONG V3dTexture1Level0Offset;
+    ULONG V3dTexture1Level0UbPad;
+    BOOLEAN V3dTexture1Level0StrictUif;
+    BOOLEAN V3dTexture1Level0Xor;
+    ULONG V3dGraphCacheId;
+    ULONG V3dGraphResourceCount;
+    ULONG V3dGraphReadbackResource;
+    ULONG V3dGraphStorageBytes;
+    ULONG V3dGraphTerrainCacheId;
+    ULONG V3dGraphTerrainGpuCacheId;
+    PRPI5VC4_V3D_TERRAIN_VERTEX V3dGraphTerrainVertices;
+    RPI5VC4_V3D_GRAPH_RESOURCE_STATE V3dGraphResources[RPI5VC4_V3D_GRAPH_MAX_RESOURCES];
 };
 
 /* rpi5vc4.c — lifecycle / child / adapter-info / pointer DDIs */

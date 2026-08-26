@@ -109,7 +109,11 @@ Rpi5Vc4AllocateVram(
         return FALSE;
     }
 
-    DeviceExtension->VramSize = Size;
+    DeviceExtension->VramAllocationSize = Size;
+    if (Size >= RPI5VC4_VRAM_SIZE_MIN + RPI5VC4_V3D_EXEC_RESERVE_SIZE)
+        DeviceExtension->VramSize = Size - RPI5VC4_V3D_EXEC_RESERVE_SIZE;
+    else
+        DeviceExtension->VramSize = Size;
     DeviceExtension->VramPhysical =
         MmGetPhysicalAddress(DeviceExtension->VramVa);
 
@@ -161,10 +165,11 @@ Rpi5Vc4FreeVram(
     if (DeviceExtension->VramVa != NULL)
     {
         MmFreeContiguousMemorySpecifyCache(DeviceExtension->VramVa,
-                                           DeviceExtension->VramSize,
+                                           DeviceExtension->VramAllocationSize,
                                            MmWriteCombined);
         DeviceExtension->VramVa = NULL;
         DeviceExtension->VramSize = 0;
+        DeviceExtension->VramAllocationSize = 0;
         DeviceExtension->VramPhysical.QuadPart = 0;
     }
 }
