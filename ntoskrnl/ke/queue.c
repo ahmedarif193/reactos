@@ -462,7 +462,7 @@ KiRemoveQueueExInternal(
                 {
                     Timer->Header.Inserted = TRUE;
                     TimerBlock->BlockState = WaitBlockActive;
-                    InsertTailList(&Timer->Header.WaitListHead, &TimerBlock->WaitListEntry);
+                    KxPublishTimerWaitBlock();
                 }
                 InsertTailList(&Queue->Header.WaitListHead,
                                &WaitBlock->WaitListEntry);

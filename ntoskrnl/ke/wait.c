@@ -606,6 +606,7 @@ KeDelayExecutionThread(IN KPROCESSOR_MODE WaitMode,
             /* Setup the wait information */
             Timer->Header.Inserted = TRUE;
             TimerBlock->BlockState = WaitBlockActive;
+            KxPublishTimerWaitBlock();
 
             /* Publish the wait and release the thread lock */
             KxCommitThreadWait(Thread, Swappable);
@@ -727,11 +728,9 @@ WaitStart:
         KxSetTimerForThreadWait(Timer, *Timeout, &Hand);
         DueTime.QuadPart = Timer->DueTime.QuadPart;
 
-        /* Point the (single) timer wait block at the timer */
-        Timer->Header.WaitListHead.Flink = &TimerBlock->WaitListEntry;
-        Timer->Header.WaitListHead.Blink = &TimerBlock->WaitListEntry;
-        TimerBlock->WaitListEntry.Flink = &Timer->Header.WaitListHead;
-        TimerBlock->WaitListEntry.Blink = &Timer->Header.WaitListHead;
+        /* Legacy targets link here. Modern targets publish under the timer
+         * object lock immediately before committing the wait. */
+        KxPrepareTimerWaitBlock();
     }
 
     /* Take the thread timer's dispatcher lock as the wait's commit anchor */
@@ -819,6 +818,7 @@ WaitStart:
             {
                 Timer->Header.Inserted = TRUE;
                 TimerBlock->BlockState = WaitBlockActive;
+                KxPublishTimerWaitBlock();
             }
 
             /* Publish the wait and release the thread lock */
@@ -987,9 +987,14 @@ KeWaitForSingleObject(IN PVOID Object,
                 }
             }
 
+            /* Timer expiration owns the timer object while acquiring the
+             * waiter thread lock. Own it before reusing the timer block. */
+            if (Timeout) KiAcquireDispatcherObject(&Timer->Header);
+
             /* Serialize APC insertion with the final wait publication. */
             if (!KxTryBeginThreadWait(Thread))
             {
+                if (Timeout) KiReleaseDispatcherObject(&Timer->Header);
                 KiReleaseDispatcherObject(&CurrentObject->Header);
                 KiUndoActivateWaiterQueue(Thread);
                 KiExitDispatcher(Thread->WaitIrql);
@@ -1002,12 +1007,14 @@ KeWaitForSingleObject(IN PVOID Object,
             {
                 Timer->Header.Inserted = TRUE;
                 TimerBlock->BlockState = WaitBlockActive;
+                KxPublishTimerWaitBlock();
             }
             InsertTailList(&CurrentObject->Header.WaitListHead,
                            &WaitBlock->WaitListEntry);
 
             /* Publish the wait and release the thread lock */
             KxCommitThreadWait(Thread, Swappable);
+            if (Timeout) KiReleaseDispatcherObject(&Timer->Header);
 
             /* Release the object lock */
             KiReleaseDispatcherObject(&CurrentObject->Header);
@@ -1354,8 +1361,7 @@ KeWaitForMultipleObjects(IN ULONG Count,
             if (Timeout)
             {
                 TimerBlock->BlockState = WaitBlockActive;
-                InsertTailList(&Timer->Header.WaitListHead,
-                               &TimerBlock->WaitListEntry);
+                KxPublishTimerWaitBlock();
             }
 #else
             WaitBlock = WaitBlockArray;

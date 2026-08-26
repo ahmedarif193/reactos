@@ -1472,14 +1472,23 @@ KxCommitThreadWait(IN PKTHREAD Thread,
 #endif
 
 #if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
-#define KxLinkQueueTimerBlock()                                             \
+#define KxPrepareTimerWaitBlock()                                           \
     NOTHING
+#define KxInitializeTimerWaitList()                                         \
+    NOTHING
+#define KxPublishTimerWaitBlock()                                           \
+    InsertTailList(&Timer->Header.WaitListHead,                             \
+                   &TimerBlock->WaitListEntry)
 #else
-#define KxLinkQueueTimerBlock()                                             \
+#define KxPrepareTimerWaitBlock()                                           \
     Timer->Header.WaitListHead.Flink = &TimerBlock->WaitListEntry;          \
     Timer->Header.WaitListHead.Blink = &TimerBlock->WaitListEntry;          \
     TimerBlock->WaitListEntry.Flink = &Timer->Header.WaitListHead;          \
     TimerBlock->WaitListEntry.Blink = &Timer->Header.WaitListHead
+#define KxInitializeTimerWaitList()                                         \
+    InitializeListHead(&Timer->Header.WaitListHead)
+#define KxPublishTimerWaitBlock()                                           \
+    NOTHING
 #endif
 
 #define KxDelayThreadWait()                                                 \
@@ -1495,10 +1504,7 @@ KxCommitThreadWait(IN PKTHREAD Thread,
                                                                             \
     /* Link the timer to this Wait Block */                                 \
     KxChainTimerOnly();                                                     \
-    Timer->Header.WaitListHead.Flink = &TimerBlock->WaitListEntry;          \
-    Timer->Header.WaitListHead.Blink = &TimerBlock->WaitListEntry;          \
-    TimerBlock->WaitListEntry.Flink = &Timer->Header.WaitListHead;          \
-    TimerBlock->WaitListEntry.Blink = &Timer->Header.WaitListHead;          \
+    KxPrepareTimerWaitBlock();                                              \
                                                                             \
     /* Clear wait status */                                                 \
     Thread->WaitStatus = STATUS_SUCCESS;                                    \
@@ -1555,8 +1561,9 @@ KxCommitThreadWait(IN PKTHREAD Thread,
         /* Save the due time for the caller */                              \
         DueTime.QuadPart = Timer->DueTime.QuadPart;                         \
                                                                             \
-        /* Initialize the list */                                           \
-        InitializeListHead(&Timer->Header.WaitListHead);                    \
+        /* Initialize the list on legacy targets. Modern targets publish    \
+         * it later while holding the timer object lock. */                 \
+        KxInitializeTimerWaitList();                                        \
     }                                                                       \
                                                                             \
     /* Set wait settings */                                                 \
@@ -1593,11 +1600,9 @@ KxCommitThreadWait(IN PKTHREAD Thread,
         /* Pointer to timer block */                                        \
         KxChainSingleWithTimer();                                           \
                                                                             \
-        /* Link the timer to this Wait Block */                             \
-        Timer->Header.WaitListHead.Flink = &TimerBlock->WaitListEntry;      \
-        Timer->Header.WaitListHead.Blink = &TimerBlock->WaitListEntry;      \
-        TimerBlock->WaitListEntry.Flink = &Timer->Header.WaitListHead;      \
-        TimerBlock->WaitListEntry.Blink = &Timer->Header.WaitListHead;      \
+        /* Legacy targets link here. Modern targets publish under the timer \
+         * object lock immediately before committing the wait. */          \
+        KxPrepareTimerWaitBlock();                                          \
     }                                                                       \
     else                                                                    \
     {                                                                       \
@@ -1640,9 +1645,9 @@ KxCommitThreadWait(IN PKTHREAD Thread,
         /* Pointer to timer block */                                        \
         KxChainSingleWithTimer();                                           \
                                                                             \
-        /* The modern path links this under the timer object lock during    \
-         * final wait publication. The legacy path keeps its old linkage. */ \
-        KxLinkQueueTimerBlock();                                            \
+        /* Legacy targets link here. Modern targets publish under the timer \
+         * object lock immediately before committing the wait. */          \
+        KxPrepareTimerWaitBlock();                                          \
     }                                                                       \
     else                                                                    \
     {                                                                       \
