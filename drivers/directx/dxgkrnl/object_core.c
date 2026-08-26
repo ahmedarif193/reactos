@@ -195,7 +195,10 @@ DxgkCapsCoreInterfaceVersionToLevel(
             return DXGK_CAPS_CORE_LEVEL_WDDM_3_0;
         case 0x10004:
             return DXGK_CAPS_CORE_LEVEL_WDDM_3_1;
+        /* WDK 26100 shipped 0x11007. WDK 28000 revised the official WDDM
+         * 3.2 selector to 0x11008 without extending DRIVER_INITIALIZATION_DATA. */
         case 0x11007:
+        case 0x11008:
             return DXGK_CAPS_CORE_LEVEL_WDDM_3_2;
         default:
             return 0;
