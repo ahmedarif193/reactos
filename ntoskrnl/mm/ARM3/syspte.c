@@ -24,7 +24,7 @@ MMPTE MmFirstFreeSystemPte[MaximumPtePoolTypes];
 ULONG MmTotalFreeSystemPtes[MaximumPtePoolTypes];
 ULONG MmTotalSystemPtes;
 ULONG MiNumberOfExtraSystemPdes;
-PMMPTE MiSystemPteMetadataBuffer;
+PVOID MiSystemPteMetadataBuffer;
 SIZE_T MiSystemPteMetadataSize;
 const ULONG MmSysPteIndex[5] = { 1, 2, 4, 8, 16 };
 const UCHAR MmSysPteTables[] = { 0, // 1
@@ -36,6 +36,10 @@ const UCHAR MmSysPteTables[] = { 0, // 1
                                };
 LONG MmSysPteListBySizeCount[5];
 static PMMPTE MiSystemPteListBase[MaximumPtePoolTypes];
+#if defined(_M_ARM64)
+static RTL_BITMAP MiSystemPteBitmap;
+static ULONG MiSystemPteBitmapHint;
+#endif
 static RTL_BITMAP MiNonPagedPoolExpansionPteBitmap;
 
 /* PRIVATE FUNCTIONS **********************************************************/
@@ -146,6 +150,30 @@ MiReserveAlignedSystemPtes(IN ULONG NumberOfPtes,
     // Sanity check
     //
     ASSERT(Alignment <= PAGE_SIZE);
+
+#if defined(_M_ARM64)
+    if (SystemPtePoolType == SystemPteSpace)
+    {
+        OldIrql = KeAcquireQueuedSpinLock(LockQueueSystemSpaceLock);
+        ReturnOffset = RtlFindClearBitsAndSet(&MiSystemPteBitmap,
+                                              NumberOfPtes,
+                                              MiSystemPteBitmapHint);
+        if (ReturnOffset == MAXULONG)
+        {
+            KeReleaseQueuedSpinLock(LockQueueSystemSpaceLock, OldIrql);
+            return NULL;
+        }
+
+        MmTotalFreeSystemPtes[SystemPtePoolType] -= NumberOfPtes;
+        MiSystemPteBitmapHint = ReturnOffset + NumberOfPtes;
+        if (MiSystemPteBitmapHint >= MmNumberOfSystemPtes)
+            MiSystemPteBitmapHint = 0;
+        KeReleaseQueuedSpinLock(LockQueueSystemSpaceLock, OldIrql);
+
+        ReturnPte = MiSystemPteFromOffset(SystemPtePoolType, ReturnOffset);
+        goto EnsureRangeBacked;
+    }
+#endif
 
     //
     // Acquire the System PTE lock
@@ -283,6 +311,9 @@ MiReserveAlignedSystemPtes(IN ULONG NumberOfPtes,
     //
     KeReleaseQueuedSpinLock(LockQueueSystemSpaceLock, OldIrql);
 
+#if defined(_M_ARM64)
+EnsureRangeBacked:
+#endif
     if (!MiEnsureSystemPteRangeBacked(ReturnPte, NumberOfPtes, SystemPtePoolType))
     {
         MiReleaseSystemPtesToFreeList(ReturnPte, NumberOfPtes, SystemPtePoolType);
@@ -355,6 +386,19 @@ MiReleaseSystemPtesToFreeList(
     ASSERT(StartingPte + NumberOfPtes - 1 <= MmSystemPtesEnd[SystemPtePoolType]);
 
     StartingOffset = MiSystemPteToOffset(SystemPtePoolType, StartingPte);
+
+#if defined(_M_ARM64)
+    if (SystemPtePoolType == SystemPteSpace)
+    {
+        OldIrql = KeAcquireQueuedSpinLock(LockQueueSystemSpaceLock);
+        ASSERT(RtlAreBitsSet(&MiSystemPteBitmap, StartingOffset, NumberOfPtes));
+        RtlClearBits(&MiSystemPteBitmap, StartingOffset, NumberOfPtes);
+        MmTotalFreeSystemPtes[SystemPtePoolType] += NumberOfPtes;
+        KeReleaseQueuedSpinLock(LockQueueSystemSpaceLock, OldIrql);
+        return;
+    }
+#endif
+
     StartingListPte = MiSystemPteListFromOffset(SystemPtePoolType, StartingOffset);
 
     //
@@ -550,7 +594,12 @@ SIZE_T
 NTAPI
 MiGetSystemPteMetadataSize(IN ULONG NumberOfPtes)
 {
+#if defined(_M_ARM64)
+    /* Include a set sentinel after the last allocatable PTE. */
+    return (((SIZE_T)NumberOfPtes + 1 + 31) / 32) * sizeof(ULONG);
+#else
     return NumberOfPtes * sizeof(MMPTE);
+#endif
 }
 
 CODE_SEG("INIT")
@@ -559,7 +608,7 @@ NTAPI
 MiInitializeSystemPtes(IN PMMPTE StartingPte,
                        IN ULONG NumberOfPtes,
                        IN MMSYSTEM_PTE_POOL_TYPE PoolType,
-                       IN PMMPTE MetadataBuffer)
+                       IN PVOID MetadataBuffer)
 {
     PMMPTE ListPte;
 
@@ -577,7 +626,29 @@ MiInitializeSystemPtes(IN PMMPTE StartingPte,
     DPRINT("System PTE space for %d starting at: %p and ending at: %p\n",
            PoolType, MmSystemPtesStart[PoolType], MmSystemPtesEnd[PoolType]);
 
-    MiSystemPteListBase[PoolType] = MetadataBuffer;
+#if defined(_M_ARM64)
+    if (PoolType == SystemPteSpace)
+    {
+        ASSERT(MetadataBuffer != NULL);
+        ASSERT(NumberOfPtes < MAXULONG);
+
+        RtlInitializeBitMap(&MiSystemPteBitmap,
+                            (PULONG)MetadataBuffer,
+                            NumberOfPtes + 1);
+        RtlClearAllBits(&MiSystemPteBitmap);
+        /* Terminate the active span so an exact-fit final run is searchable. */
+        RtlSetBit(&MiSystemPteBitmap, NumberOfPtes);
+        MiSystemPteBitmapHint = 0;
+
+        MmFirstFreeSystemPte[PoolType].u.Long = 0;
+        MmFirstFreeSystemPte[PoolType].u.List.NextEntry = MM_EMPTY_PTE_LIST;
+        MmTotalFreeSystemPtes[PoolType] = NumberOfPtes;
+        MmTotalSystemPtes = NumberOfPtes;
+        return;
+    }
+#endif
+
+    MiSystemPteListBase[PoolType] = (PMMPTE)MetadataBuffer;
 
     if (MetadataBuffer != NULL)
     {

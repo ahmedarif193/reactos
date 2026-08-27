@@ -2323,6 +2323,20 @@ MiMapPTEs(
 
 static
 VOID
+MiSetSystemPteCount(VOID)
+{
+    ULONGLONG RegionSize, NumberOfPtes;
+
+    RegionSize = MiSystemVaRegions[AssignedRegionSystemPtes].NumberOfBytes;
+    ASSERT((RegionSize & (PAGE_SIZE - 1)) == 0);
+
+    NumberOfPtes = RegionSize >> PAGE_SHIFT;
+    ASSERT((NumberOfPtes != 0) && (NumberOfPtes < MAXULONG));
+    MmNumberOfSystemPtes = (ULONG)NumberOfPtes;
+}
+
+static
+VOID
 MiBuildNonPagedPool(VOID)
 {
     PFN_NUMBER PoolSizingPages = MmNumberOfPhysicalPages;
@@ -2434,7 +2448,9 @@ MiBuildNonPagedPool(VOID)
 
     MiMapPTEs(MmNonPagedPoolStart, InitialNonPagedPoolEnd);
 
-    MiSystemPteMetadataSize = MiGetSystemPteMetadataSize(MI_NUMBER_SYSTEM_PTES);
+    /* Size the allocator from the assigned VA span, as modern Windows does. */
+    MiSetSystemPteCount();
+    MiSystemPteMetadataSize = MiGetSystemPteMetadataSize(MmNumberOfSystemPtes);
 
     MiInitializeNonPagedPool();
     MiInitializeNonPagedPoolThresholds();
@@ -2445,11 +2461,8 @@ VOID
 MiBuildSystemPteSpace(VOID)
 {
     PMMPTE PointerPte;
-    SIZE_T NonPagedSystemSize;
 
-    /* Use the default number of system PTEs */
-    MmNumberOfSystemPtes = MI_NUMBER_SYSTEM_PTES;
-    NonPagedSystemSize = (MmNumberOfSystemPtes + 1) * PAGE_SIZE;
+    ASSERT(MmNumberOfSystemPtes != 0);
 
     /* Put system PTEs at the start of the assigned system PTE region */
     MiSystemPteSpaceStart = MiSystemVaRegions[AssignedRegionSystemPtes].BaseAddress;
