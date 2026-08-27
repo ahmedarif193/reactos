@@ -2438,7 +2438,7 @@
 @ stub -arch=arm64 IoGetContainerInformation
 @ stub -arch=arm64 IoGetCopyInformationExtension
 @ stub -arch=arm64 IoGetDeviceDirectory
-@ stub -arch=arm64 IoGetDeviceInterfacePropertyData
+@ stdcall -arch=x86_64,arm64 IoGetDeviceInterfacePropertyData(ptr ptr long long long ptr ptr ptr)
 @ stdcall -arch=x86_64,arm64 IoGetDeviceNumaNode(ptr ptr)
 @ stub -arch=arm64 IoGetDriverDirectory
 @ stub -arch=arm64 IoGetDriverProxyEndpointWrapper
@@ -2462,7 +2462,7 @@
 @ stub -arch=arm64 IoIncrementKeepAliveCount
 @ stub -arch=arm64 IoInitializeIrpEx
 @ stub -arch=arm64 IoInitializeMiniCompletionPacket
-@ stub -arch=arm64 IoInitializeWorkItem
+@ stdcall -arch=x86_64,arm64 IoInitializeWorkItem(ptr ptr)
 @ stub -arch=arm64 IoIrpHasFsTrackOffsetExtensionType
 @ stub -arch=arm64 IoIsActivityTracingEnabled
 @ stub -arch=arm64 IoIsFileObjectIgnoringSharing
@@ -2470,11 +2470,11 @@
 @ stub -arch=arm64 IoIsValidIrpStatus
 @ stub -arch=arm64 IoMakeAssociatedIrpEx
 @ stub -arch=arm64 IoMapKsrPersistentMemoryEx
-@ stub -arch=arm64 IoOpenDriverRegistryKey
+@ stdcall -arch=x86_64,arm64 IoOpenDriverRegistryKey(ptr long long long ptr)
 @ stub -arch=arm64 IoPropagateActivityIdToThread
 @ stub -arch=arm64 IoPropagateIrpExtension
 @ stub -arch=arm64 IoPropagateIrpExtensionEx
-@ stub -arch=arm64 IoQueryFullDriverPath
+@ stdcall -arch=x86_64,arm64 IoQueryFullDriverPath(ptr ptr)
 @ stub -arch=arm64 IoQueryInformationByName
 @ stub -arch=arm64 IoQueryInterface
 @ stub -arch=arm64 IoQueryKsrPersistentMemorySize
@@ -2522,7 +2522,7 @@
 @ stub -arch=arm64 IoSetShareAccessEx
 @ stub -arch=arm64 IoSizeOfIrpEx
 @ stub -arch=arm64 IoSizeofGenericIrpExtension
-@ stub -arch=arm64 IoSizeofWorkItem
+@ stdcall -arch=x86_64,arm64 IoSizeofWorkItem()
 @ stub -arch=arm64 IoSteerInterrupt
 @ stub -arch=arm64 IoSynchronousCallDriver
 @ stub -arch=arm64 IoTestDependency

@@ -1880,6 +1880,149 @@ IopReinitializeBootDrivers(VOID)
 
 /* PUBLIC FUNCTIONS ***********************************************************/
 
+#if (NTDDI_VERSION >= NTDDI_WIN10_RS4)
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+IoOpenDriverRegistryKey(
+    _In_ PDRIVER_OBJECT DriverObject,
+    _In_ DRIVER_REGKEY_TYPE RegKeyType,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ ULONG Flags,
+    _Out_ PHANDLE DriverRegKey)
+{
+    static const UNICODE_STRING ParametersSuffix =
+        RTL_CONSTANT_STRING(L"\\Parameters");
+    static const UNICODE_STRING PersistentStateSuffix =
+        RTL_CONSTANT_STRING(L"\\PersistentState");
+    static const UNICODE_STRING SharedPersistentStateSuffix =
+        RTL_CONSTANT_STRING(L"\\SharedPersistentState");
+    const UNICODE_STRING *Suffix;
+    PUNICODE_STRING ServiceName;
+    UNICODE_STRING KeyName;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    ULONG Disposition;
+    NTSTATUS Status;
+    USHORT RequiredLength;
+
+    PAGED_CODE();
+
+    if (DriverRegKey == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    if ((DriverObject == NULL) ||
+        (DriverObject->DriverExtension == NULL) ||
+        (Flags != 0))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    switch (RegKeyType)
+    {
+        case DriverRegKeyParameters:
+            Suffix = &ParametersSuffix;
+            break;
+
+        case DriverRegKeyPersistentState:
+            Suffix = &PersistentStateSuffix;
+            break;
+
+#if (NTDDI_VERSION >= NTDDI_WIN10_FE)
+        case DriverRegKeySharedPersistentState:
+            Suffix = &SharedPersistentStateSuffix;
+            break;
+#endif
+
+        default:
+            return STATUS_INVALID_PARAMETER;
+    }
+
+    *DriverRegKey = NULL;
+
+    ServiceName = &DriverObject->DriverExtension->ServiceKeyName;
+    if ((ServiceName->Buffer == NULL) || (ServiceName->Length == 0))
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+
+    if ((ServiceName->Length > MAXUSHORT -
+                               sizeof(ServicesKeyName) +
+                               Suffix->Length) ||
+        (ServiceName->Length & (sizeof(WCHAR) - 1)))
+    {
+        return STATUS_NAME_TOO_LONG;
+    }
+
+    RequiredLength = (USHORT)(sizeof(ServicesKeyName) - sizeof(UNICODE_NULL) +
+                              ServiceName->Length +
+                              Suffix->Length);
+    KeyName.Buffer = ExAllocatePoolWithTag(PagedPool,
+                                           RequiredLength + sizeof(UNICODE_NULL),
+                                           TAG_IO);
+    if (KeyName.Buffer == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    KeyName.Length = 0;
+    KeyName.MaximumLength = RequiredLength + sizeof(UNICODE_NULL);
+    RtlAppendUnicodeToString(&KeyName, ServicesKeyName);
+    RtlAppendUnicodeStringToString(&KeyName, ServiceName);
+    RtlAppendUnicodeStringToString(&KeyName, Suffix);
+    KeyName.Buffer[KeyName.Length / sizeof(WCHAR)] = UNICODE_NULL;
+
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &KeyName,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+
+    if (RegKeyType == DriverRegKeyParameters)
+    {
+        Status = ZwOpenKey(DriverRegKey, DesiredAccess, &ObjectAttributes);
+    }
+    else
+    {
+        Status = ZwCreateKey(DriverRegKey,
+                             DesiredAccess,
+                             &ObjectAttributes,
+                             0,
+                             NULL,
+                             REG_OPTION_NON_VOLATILE,
+                             &Disposition);
+    }
+
+    ExFreePoolWithTag(KeyName.Buffer, TAG_IO);
+    return Status;
+}
+
+#endif /* NTDDI_VERSION >= NTDDI_WIN10_RS4 */
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+IoQueryFullDriverPath(
+    _In_ PDRIVER_OBJECT DriverObject,
+    _Out_ PUNICODE_STRING FullPath)
+{
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+
+    LdrEntry = (PLDR_DATA_TABLE_ENTRY)DriverObject->DriverSection;
+    if (!LdrEntry)
+        return STATUS_NOT_FOUND;
+
+    FullPath->Buffer = ExAllocatePool2(POOL_FLAG_PAGED,
+                                       LdrEntry->FullDllName.MaximumLength,
+                                       TAG_IO_FULL_DRIVER_PATH);
+    if (!FullPath->Buffer)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    FullPath->MaximumLength = LdrEntry->FullDllName.MaximumLength;
+    RtlCopyUnicodeString(FullPath, &LdrEntry->FullDllName);
+    return STATUS_SUCCESS;
+}
+
 /*
  * @implemented
  */
