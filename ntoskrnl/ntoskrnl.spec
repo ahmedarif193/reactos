@@ -2718,11 +2718,11 @@
 @ stdcall -arch=x86_64,arm64 MmMapIoSpaceEx(long long long long)
 @ stub -arch=arm64 MmMapMdl
 @ stub -arch=arm64 MmMapMemoryDumpMdlEx
-@ stub -arch=arm64 MmMapViewInSessionSpaceEx
+@ stdcall -arch=i386,x86_64,arm64 MmMapViewInSessionSpaceEx(ptr ptr ptr ptr ptr) MmpMapViewInSessionSpaceEx
 @ stub -arch=arm64 MmMdlPageContentsState
 @ stub -arch=arm64 MmMdlPagesAreZero
 @ stub -arch=arm64 MmObtainChargesToLockPagedPool
-@ stub -arch=arm64 MmPrefetchVirtualAddresses
+@ stdcall -arch=i386,x86_64,arm64 MmPrefetchVirtualAddresses(ptr)
 @ stub -arch=arm64 MmProtectDriverSection
 @ stub -arch=arm64 MmQueryMemoryRanges
 @ stub -arch=arm64 MmReturnChargesToLockPagedPool

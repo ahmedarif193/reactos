@@ -492,6 +492,27 @@ MmMapViewInSessionSpace(
   _Outptr_result_bytebuffer_(*ViewSize) PVOID *MappedBase,
   _Inout_ PSIZE_T ViewSize);
 
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+_Must_inspect_result_
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+MmMapViewInSessionSpaceEx(
+  _In_ PVOID Section,
+  _Outptr_result_bytebuffer_(*ViewSize) PVOID *MappedBase,
+  _Inout_ PSIZE_T ViewSize,
+  _Inout_ PLARGE_INTEGER SectionOffset,
+  _In_ ULONG_PTR Flags);
+
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+MmPrefetchVirtualAddresses(
+  _In_ PPREFETCH_VIRTUAL_ADDRESS_LIST ParameterBlock);
+#endif
+
 _Must_inspect_result_
 _IRQL_requires_max_(APC_LEVEL)
 NTKERNELAPI
@@ -811,4 +832,3 @@ NtFreeVirtualMemory(
 
 $endif (_NTIFS_)
 #endif /* (NTDDI_VERSION >= NTDDI_VISTA) */
-

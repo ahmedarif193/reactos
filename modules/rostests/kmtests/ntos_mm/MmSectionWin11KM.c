@@ -432,6 +432,101 @@ TestMapViewInSystemSpace(VOID)
     ZwClose(SectionHandle);
 }
 
+static
+VOID
+TestMapViewInSessionSpaceEx(VOID)
+{
+    HANDLE SectionHandle = NULL;
+    LARGE_INTEGER SectionOffset;
+    PVOID SectionObject = NULL;
+    PVOID MappedBase = NULL;
+    SIZE_T ViewSize = PAGE_SIZE;
+    NTSTATUS Status;
+
+    Status = CreatePagefileSection(&SectionHandle, PAGE_SIZE, PAGE_READWRITE);
+    if (skip(NT_SUCCESS(Status) && SectionHandle != NULL, "No section\n"))
+        return;
+
+    Status = ObReferenceObjectByHandle(SectionHandle,
+                                       SECTION_MAP_READ | SECTION_MAP_WRITE,
+                                       MmSectionObjectType,
+                                       KernelMode,
+                                       &SectionObject,
+                                       NULL);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    SectionOffset.QuadPart = 0;
+    trace("MmMapViewInSessionSpaceEx(section=%p, offset=%I64d, flags=0)\n",
+          SectionObject,
+          SectionOffset.QuadPart);
+    Status = MmMapViewInSessionSpaceEx(SectionObject,
+                                       &MappedBase,
+                                       &ViewSize,
+                                       &SectionOffset,
+                                       0);
+    trace("MmMapViewInSessionSpaceEx returned 0x%08lx, base=%p, size=%Iu, offset=%I64d\n",
+          Status,
+          MappedBase,
+          ViewSize,
+          SectionOffset.QuadPart);
+    if (Status == STATUS_NOT_MAPPED_VIEW)
+    {
+        skip(FALSE, "test process has no session space\n");
+        goto Cleanup;
+    }
+
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        ok(MappedBase != NULL, "session-space base was NULL\n");
+        Status = MmUnmapViewInSessionSpace(MappedBase);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+    }
+
+Cleanup:
+    if (SectionObject != NULL)
+        ObDereferenceObject(SectionObject);
+    ZwClose(SectionHandle);
+}
+
+static
+VOID
+TestPrefetchVirtualAddresses(VOID)
+{
+    PREFETCH_VIRTUAL_ADDRESS_ENTRY Entry;
+    PREFETCH_VIRTUAL_ADDRESS_LIST List;
+    PUCHAR Buffer;
+    NTSTATUS Status;
+
+    Buffer = ExAllocatePoolZero(PagedPool, PAGE_SIZE * 2, 'fPmK');
+    if (skip(Buffer != NULL, "could not allocate prefetch buffer\n"))
+        return;
+
+    Buffer[0] = 0x31;
+    Buffer[PAGE_SIZE] = 0x73;
+    Entry.VirtualAddress = Buffer;
+    Entry.NumberOfBytes = PAGE_SIZE * 2;
+    RtlZeroMemory(&List, sizeof(List));
+    List.Version = PREFETCH_VIRTUAL_ADDRESS_LIST_VERSION_1;
+    List.AddressSpaceHandle = ZwCurrentProcess();
+    List.NumberOfEntries = 1;
+    List.VirtualAddresses = &Entry;
+
+    trace("MmPrefetchVirtualAddresses(handle=%p, address=%p, length=%Iu)\n",
+          List.AddressSpaceHandle,
+          Entry.VirtualAddress,
+          Entry.NumberOfBytes);
+    Status = MmPrefetchVirtualAddresses(&List);
+    trace("MmPrefetchVirtualAddresses returned 0x%08lx\n", Status);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_uint(Buffer[0], 0x31);
+    ok_eq_uint(Buffer[PAGE_SIZE], 0x73);
+
+    ExFreePoolWithTag(Buffer, 'fPmK');
+}
+
 /*
  * Section object type sanity (without ObGetObjectType, which is a stub on ARM64):
  * a section handle references successfully as MmSectionObjectType, and references
@@ -743,6 +838,8 @@ START_TEST(MmSectionWin11KM)
     TestMapViewIntoCurrentProcess();
     TestRemapSharedCoherency();
     TestMapViewInSystemSpace();
+    TestMapViewInSessionSpaceEx();
+    TestPrefetchVirtualAddresses();
     TestSectionObjectType();
 
     /* Still-stubbed exports (file-backed SECTION_OBJECT_POINTERS, defensive). */

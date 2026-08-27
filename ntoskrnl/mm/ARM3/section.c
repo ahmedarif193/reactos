@@ -2997,21 +2997,25 @@ MmForceSectionClosed(IN PSECTION_OBJECT_POINTERS SectionObjectPointer,
     return Result;
 }
 
-/*
- * @implemented
- */
 NTSTATUS
 NTAPI
-MmMapViewInSessionSpace(IN PVOID Section,
-                        OUT PVOID *MappedBase,
-                        IN OUT PSIZE_T ViewSize)
+MmpMapViewInSessionSpaceEx(
+    _In_ PVOID Section,
+    _Out_ PVOID *MappedBase,
+    _Inout_ PSIZE_T ViewSize,
+    _Inout_ PLARGE_INTEGER SectionOffset,
+    _In_ ULONG_PTR Flags)
 {
     PAGED_CODE();
-    LARGE_INTEGER SectionOffset;
+
+    if (Flags != 0)
+        return STATUS_NOT_SUPPORTED;
 
     // HACK
     if (MiIsRosSectionObject(Section))
     {
+        if (SectionOffset->QuadPart != 0)
+            return STATUS_NOT_SUPPORTED;
         return MmMapViewInSystemSpace(Section, MappedBase, ViewSize);
     }
 
@@ -3024,12 +3028,112 @@ MmMapViewInSessionSpace(IN PVOID Section,
 
     /* Use the system space API, but with the session view instead */
     ASSERT(MmIsAddressValid(MmSessionSpace) == TRUE);
-    SectionOffset.QuadPart = 0;
     return MiMapViewInSystemSpace(Section,
                                   &MmSessionSpace->Session,
                                   MappedBase,
                                   ViewSize,
-                                  &SectionOffset);
+                                  SectionOffset);
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+MmMapViewInSessionSpace(IN PVOID Section,
+                        OUT PVOID *MappedBase,
+                        IN OUT PSIZE_T ViewSize)
+{
+    LARGE_INTEGER SectionOffset;
+
+    SectionOffset.QuadPart = 0;
+    return MmpMapViewInSessionSpaceEx(Section,
+                                      MappedBase,
+                                      ViewSize,
+                                      &SectionOffset,
+                                      0);
+}
+
+NTSTATUS
+NTAPI
+MmPrefetchVirtualAddresses(
+    _In_ PPREFETCH_VIRTUAL_ADDRESS_LIST ParameterBlock)
+{
+    KAPC_STATE ApcState;
+    PEPROCESS Process;
+    ULONG_PTR EntryIndex;
+    BOOLEAN Attached;
+    NTSTATUS Status;
+
+    if ((ParameterBlock == NULL) ||
+        (ParameterBlock->Version != PREFETCH_VIRTUAL_ADDRESS_LIST_VERSION_1) ||
+        (ParameterBlock->u1.Flags.MustBeZero != 0) ||
+        (ParameterBlock->u1.Flags.PagePriority == PrefetchPagePriorityReserved) ||
+        ((ParameterBlock->NumberOfEntries != 0) &&
+         (ParameterBlock->VirtualAddresses == NULL)))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = ObReferenceObjectByHandle(ParameterBlock->AddressSpaceHandle,
+                                       PROCESS_VM_READ,
+                                       PsProcessType,
+                                       KernelMode,
+                                       (PVOID *)&Process,
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Attached = Process != PsGetCurrentProcess();
+    if (Attached)
+        KeStackAttachProcess(&Process->Pcb, &ApcState);
+
+    Status = STATUS_SUCCESS;
+    for (EntryIndex = 0;
+         EntryIndex < ParameterBlock->NumberOfEntries;
+         ++EntryIndex)
+    {
+        PPREFETCH_VIRTUAL_ADDRESS_ENTRY Entry;
+        ULONG_PTR Address, EndAddress, NextAddress;
+        volatile UCHAR Value;
+
+        Entry = &ParameterBlock->VirtualAddresses[EntryIndex];
+        Address = (ULONG_PTR)Entry->VirtualAddress;
+        if (Entry->NumberOfBytes == 0)
+            continue;
+        if ((Address == 0) || (Entry->NumberOfBytes > MAXULONG_PTR - Address))
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+
+        EndAddress = Address + Entry->NumberOfBytes;
+        _SEH2_TRY
+        {
+            do
+            {
+                Value = *(volatile UCHAR *)Address;
+                NextAddress = (Address & ~((ULONG_PTR)PAGE_SIZE - 1)) + PAGE_SIZE;
+                if (NextAddress <= Address)
+                    break;
+                Address = NextAddress;
+            } while (Address < EndAddress);
+            UNREFERENCED_PARAMETER(Value);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        if (!NT_SUCCESS(Status))
+            break;
+    }
+
+    if (Attached)
+        KeUnstackDetachProcess(&ApcState);
+    ObDereferenceObject(Process);
+    return Status;
 }
 
 static
