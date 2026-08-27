@@ -167,11 +167,42 @@ TestMissingInterfaceProperty(VOID)
     ok_eq_ulong(Type, MAXULONG);
 }
 
+static
+VOID
+TestDeviceNumaNode(VOID)
+{
+    PDEVICE_OBJECT DeviceObject;
+    USHORT NodeNumber;
+    NTSTATUS Status;
+
+    NodeNumber = MAXUSHORT;
+    Status = IoGetDeviceNumaNode(NULL, &NodeNumber);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    ok_eq_ulong(NodeNumber, MAXUSHORT);
+
+    DeviceObject = KmtDriverObject->DeviceObject;
+    ok(DeviceObject != NULL, "kmtest driver had no device object\n");
+    if (DeviceObject == NULL)
+        return;
+
+    Status = IoGetDeviceNumaNode(DeviceObject, NULL);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+
+    NodeNumber = MAXUSHORT;
+    Status = IoGetDeviceNumaNode(DeviceObject, &NodeNumber);
+    trace("IoGetDeviceNumaNode returned 0x%08lx, node %u\n",
+          Status,
+          NodeNumber);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_ulong(NodeNumber, 0);
+}
+
 START_TEST(IoModern)
 {
     TestCallerOwnedWorkItem();
     TestDriverMetadata();
     TestMissingInterfaceProperty();
+    TestDeviceNumaNode();
 }
 
 START_TEST(IoReportRootDevice)
