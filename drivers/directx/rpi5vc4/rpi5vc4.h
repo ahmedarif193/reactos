@@ -288,6 +288,11 @@ struct _RPI5VC4_DEVICE_EXTENSION
     ULONG HvsCursorHead;
     BOOLEAN HvsCursorFastValid;
 
+    /* HVS list and cursor writes are short, but pointer-position callbacks
+     * are intentionally allowed to run alongside long GPU escapes. */
+    FAST_MUTEX HvsMutex;
+    FAST_MUTEX PointerMutex;
+
     /* Active private display-list slot (0 = scanning the firmware head). */
     ULONG HvsActivePrivateSlot;
 
