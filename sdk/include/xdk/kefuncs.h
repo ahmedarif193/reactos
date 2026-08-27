@@ -47,6 +47,21 @@ FASTCALL
 KeInvalidateRangeAllCaches(
   _In_ PVOID BaseAddress,
   _In_ ULONG Length);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+KeInitializeTriageDumpDataArray(
+  _Out_writes_bytes_(Size) PKTRIAGE_DUMP_DATA_ARRAY TriageDumpDataArray,
+  _In_ ULONG Size);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+KeAddTriageDumpDataBlock(
+  _Inout_ PKTRIAGE_DUMP_DATA_ARRAY TriageDumpDataArray,
+  _In_ PVOID Address,
+  _In_ SIZE_T Size);
 $endif (_NTDDK_)
 
 #if (NTDDI_VERSION >= NTDDI_WIN2K)

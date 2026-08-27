@@ -2551,7 +2551,7 @@
 @ stdcall -arch=arm64 KeAddGroupAffinityEx(ptr long int64)
 @ stdcall -arch=arm64 KeAddProcessorAffinityEx(ptr long)
 @ stdcall -arch=x86_64,arm64 KeAddProcessorGroupAffinity(ptr long)
-@ stub -arch=arm64 KeAddTriageDumpDataBlock
+@ stdcall -arch=x86_64,arm64 KeAddTriageDumpDataBlock(ptr ptr int64)
 @ stub -arch=arm64 KeAllocateCalloutStack
 @ stub -arch=arm64 KeAllocateCalloutStackEx
 @ stub -arch=arm64 KeAllocateProcessorProfileStructures
@@ -2593,7 +2593,7 @@
 @ stdcall -arch=x86_64,arm64 KeInitializeEnumerationContextFromGroup(ptr ptr)
 @ stub -arch=arm64 KeInitializeSecondaryInterruptServices
 @ stub -arch=arm64 KeInitializeTimer2
-@ stub -arch=arm64 KeInitializeTriageDumpDataArray
+@ stdcall -arch=x86_64,arm64 KeInitializeTriageDumpDataArray(ptr long)
 @ stdcall -arch=x86_64,arm64 KeInterlockedClearProcessorAffinityEx(ptr long)
 @ stdcall -arch=x86_64,arm64 KeInterlockedSetProcessorAffinityEx(ptr long)
 @ stub -arch=arm64 KeInvalidateRangeAllCaches

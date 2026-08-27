@@ -123,6 +123,7 @@ KMT_TESTFUNC Test_KdSystemDebugControl;
 KMT_TESTFUNC Test_KsecBcrypt;
 KMT_TESTFUNC Test_KeApc;
 KMT_TESTFUNC Test_KeApcInject;
+KMT_TESTFUNC Test_KeModern;
 #ifdef _M_ARM64
 KMT_TESTFUNC Test_HalArm64Ipi;
 KMT_TESTFUNC Test_HalArm64Layout;
@@ -356,6 +357,7 @@ const KMT_TEST TestList[] =
     { "KsecBcrypt",                         Test_KsecBcrypt },
     { "KeApc",                              Test_KeApc },
     { "KeApcInject",                        Test_KeApcInject },
+    { "KeModern",                           Test_KeModern },
 #ifdef _M_ARM64
     { "HalArm64Ipi",                        Test_HalArm64Ipi },
     { "HalArm64Layout",                     Test_HalArm64Layout },

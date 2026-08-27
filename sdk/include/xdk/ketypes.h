@@ -302,6 +302,29 @@ $if(_WDMDDK_)
 #define EXCEPTION_NPX_ERROR             0x010
 #define EXCEPTION_ALIGNMENT_CHECK       0x011
 
+typedef struct _KADDRESS_RANGE {
+  _Field_size_bytes_(Size) PVOID Address;
+  SIZE_T Size;
+} KADDRESS_RANGE, *PKADDRESS_RANGE;
+
+typedef struct _KADDRESS_RANGE_DESCRIPTOR {
+  _Field_size_(AddressRangeCount) CONST KADDRESS_RANGE *AddressRanges;
+  SIZE_T AddressRangeCount;
+} KADDRESS_RANGE_DESCRIPTOR, *PKADDRESS_RANGE_DESCRIPTOR;
+
+#define KE_MAX_TRIAGE_DUMP_DATA_MEMORY_SIZE 0x02000000
+
+typedef struct _KTRIAGE_DUMP_DATA_ARRAY {
+  LIST_ENTRY List;
+  ULONG NumBlocksUsed;
+  ULONG NumBlocksTotal;
+  ULONG DataSize;
+  ULONG MaxDataSize;
+  ULONG ComponentNameBufferLength;
+  PUCHAR ComponentName;
+  KADDRESS_RANGE Blocks[ANYSIZE_ARRAY];
+} KTRIAGE_DUMP_DATA_ARRAY, *PKTRIAGE_DUMP_DATA_ARRAY;
+
 typedef enum _KBUGCHECK_CALLBACK_REASON {
   KbCallbackInvalid,
   KbCallbackReserved1,
