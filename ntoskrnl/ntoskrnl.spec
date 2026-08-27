@@ -2966,7 +2966,7 @@
 @ stub -arch=arm64 PsWow64IsMachineSupported
 @ stub -arch=arm64 ReadTimeStampCounter
 @ stub -arch=arm64 RtlAddAccessFilterAce
-@ stub -arch=arm64 RtlAddAtomToAtomTableEx
+@ stdcall -arch=x86_64,arm64 RtlAddAtomToAtomTableEx(ptr wstr ptr long)
 @ stdcall -arch=arm64 RtlAddMandatoryAce(ptr long long long long ptr)
 @ stub -arch=arm64 RtlAddProcessTrustLabelAce
 @ stub -arch=arm64 RtlAddResourceAttributeAce
@@ -3000,7 +3000,7 @@
 @ stub -arch=arm64 RtlCopyExtendedContext
 @ stdcall RtlCrc32(ptr long long)
 @ stdcall RtlCrc64(ptr long int64)
-@ stub -arch=arm64 RtlCreateAtomTableEx
+@ stdcall -arch=x86_64,arm64 RtlCreateAtomTableEx(long long ptr)
 @ stub -arch=arm64 RtlCreateHashTableEx
 @ stub -arch=arm64 RtlDecompressBufferEx
 @ stub -arch=arm64 RtlDecompressBufferEx2
