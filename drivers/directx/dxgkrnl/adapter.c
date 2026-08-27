@@ -3987,6 +3987,15 @@ DxgkpFillInterface(
         Interface->DxgkCbReleaseHandleData = DxgkCbReleaseHandleData; /* 0x128 */
     }
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Interface->Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_2))
+    {
+        Interface->DxgkCbAcquirePostDisplayOwnership2 =
+            DxgkCbAcquirePostDisplayOwnership2; /* 0x160 */
+    }
+#endif
+
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
     if (DxgkCapsCoreInterfaceVersionAtLeast(
             Interface->Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_4))
@@ -6682,6 +6691,32 @@ Complete:
     KeReleaseMutex(&g_PostDisplayOwnershipMutex, FALSE);
     return Status;
 }
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
+NTSTATUS
+APIENTRY
+DxgkCbAcquirePostDisplayOwnership2(
+    _In_ HANDLE DeviceHandle,
+    _Out_ PDXGK_DISPLAY_INFORMATION DisplayInformation,
+    _Out_ PDXGK_DISPLAY_OWNERSHIP_FLAGS Flags)
+{
+    NTSTATUS Status;
+
+    if (DisplayInformation == NULL || Flags == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    RtlZeroMemory(Flags, sizeof(*Flags));
+    Status = DxgkCbAcquirePostDisplayOwnership(DeviceHandle,
+                                               DisplayInformation);
+    if (NT_SUCCESS(Status) &&
+        DisplayInformation->PhysicAddress.QuadPart != 0)
+    {
+        Flags->FrameBufferState = FrameBufferStateInitializedByFirmware;
+    }
+
+    return Status;
+}
+#endif
 
 static BOOLEAN
 DxgkpInvokeMiniportInterrupt(

@@ -1854,6 +1854,15 @@ DxgkCbAcquirePostDisplayOwnership(
     _In_ HANDLE DeviceHandle,
     _Out_ PDXGK_DISPLAY_INFORMATION DisplayInformation);
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
+NTSTATUS
+APIENTRY
+DxgkCbAcquirePostDisplayOwnership2(
+    _In_ HANDLE DeviceHandle,
+    _Out_ PDXGK_DISPLAY_INFORMATION DisplayInformation,
+    _Out_ PDXGK_DISPLAY_OWNERSHIP_FLAGS Flags);
+#endif
+
 /* ========================================================================
  * Function prototypes — adapter.c
  * ====================================================================== */
