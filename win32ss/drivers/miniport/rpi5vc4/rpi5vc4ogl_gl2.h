@@ -54,6 +54,10 @@ VOID
 Rpi5OglGl2Cleanup(
     _In_opt_ PRPI5VC4_OGL_GL2_STATE State);
 
+VOID
+Rpi5OglGl2BufferDeleted(
+    _In_ GLuint Name);
+
 BOOL
 Rpi5OglGl2ProgramActive(
     _In_opt_ PRPI5VC4_OGL_GL2_STATE State);

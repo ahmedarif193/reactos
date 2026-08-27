@@ -24,6 +24,11 @@ Rpi5OglBufferCurrentName(
     _In_opt_ PRPI5VC4_OGL_BUFFER_STATE State,
     _In_ GLenum Target);
 
+VOID
+Rpi5OglBufferRestoreElementArrayBinding(
+    _In_opt_ PRPI5VC4_OGL_BUFFER_STATE State,
+    _In_ GLuint Name);
+
 BOOL
 Rpi5OglBufferResolveRange(
     _In_opt_ PRPI5VC4_OGL_BUFFER_STATE State,
