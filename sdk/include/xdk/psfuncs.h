@@ -377,4 +377,15 @@ PsSetCreateProcessNotifyRoutineEx(
   IN PCREATE_PROCESS_NOTIFY_ROUTINE_EX NotifyRoutine,
   IN BOOLEAN Remove);
 #endif /* (NTDDI_VERSION >= NTDDI_VISTASP1) */
+
+#if (NTDDI_VERSION >= NTDDI_WIN10_RS2)
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsSetCreateProcessNotifyRoutineEx2(
+  IN PSCREATEPROCESSNOTIFYTYPE NotifyType,
+  IN PVOID NotifyInformation,
+  IN BOOLEAN Remove);
+#endif /* (NTDDI_VERSION >= NTDDI_WIN10_RS2) */
 $endif (_NTDDK_)

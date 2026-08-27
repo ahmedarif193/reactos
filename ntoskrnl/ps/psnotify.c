@@ -152,6 +152,31 @@ PsSetCreateProcessNotifyRoutineEx(IN PCREATE_PROCESS_NOTIFY_ROUTINE_EX NotifyRou
 
 /*
  * @implemented
+ *
+ * Windows currently defines one Ex2 notification class. It uses the extended
+ * callback signature and includes processes from every subsystem. ReactOS has
+ * no non-Win32 process subsystem to distinguish here, so it shares the Ex
+ * callback registry and dispatcher.
+ */
+NTSTATUS
+NTAPI
+PsSetCreateProcessNotifyRoutineEx2(
+    IN PSCREATEPROCESSNOTIFYTYPE NotifyType,
+    IN PVOID NotifyInformation,
+    IN BOOLEAN Remove)
+{
+    PAGED_CODE();
+
+    if ((NotifyType != PsCreateProcessNotifySubsystems) || !NotifyInformation)
+        return STATUS_INVALID_PARAMETER;
+
+    return PsSetCreateProcessNotifyRoutineEx(
+        (PCREATE_PROCESS_NOTIFY_ROUTINE_EX)NotifyInformation,
+        Remove);
+}
+
+/*
+ * @implemented
  */
 ULONG
 NTAPI

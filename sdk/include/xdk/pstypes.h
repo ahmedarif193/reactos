@@ -186,6 +186,12 @@ typedef VOID
   _In_ HANDLE ProcessId,
   _Inout_opt_ PPS_CREATE_NOTIFY_INFO CreateInfo);
 
+#if (NTDDI_VERSION >= NTDDI_WIN10_RS2)
+typedef enum _PSCREATEPROCESSNOTIFYTYPE {
+  PsCreateProcessNotifySubsystems = 0
+} PSCREATEPROCESSNOTIFYTYPE;
+#endif
+
 typedef VOID
 (NTAPI *PCREATE_THREAD_NOTIFY_ROUTINE)(
   _In_ HANDLE ProcessId,

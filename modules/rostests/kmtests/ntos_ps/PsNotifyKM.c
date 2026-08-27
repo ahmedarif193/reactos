@@ -10,6 +10,7 @@
 #include <debug.h>
 
 static volatile LONG ProcessNotifications;
+static volatile LONG ProcessNotificationsEx;
 static volatile LONG ThreadNotifications;
 static volatile LONG ImageNotifications;
 
@@ -26,6 +27,47 @@ ProcessNotify(
     UNREFERENCED_PARAMETER(Create);
     InterlockedIncrement(&ProcessNotifications);
 }
+
+#if (NTDDI_VERSION >= NTDDI_WIN10_RS2)
+static
+VOID
+NTAPI
+ProcessNotifyEx(
+    _Inout_ PEPROCESS Process,
+    _In_ HANDLE ProcessId,
+    _Inout_opt_ PPS_CREATE_NOTIFY_INFO CreateInfo)
+{
+    UNREFERENCED_PARAMETER(Process);
+    UNREFERENCED_PARAMETER(ProcessId);
+    UNREFERENCED_PARAMETER(CreateInfo);
+    InterlockedIncrement(&ProcessNotificationsEx);
+}
+
+static
+VOID
+TestCreateProcessNotifyEx2(VOID)
+{
+    NTSTATUS Status;
+
+    Status = PsSetCreateProcessNotifyRoutineEx2((PSCREATEPROCESSNOTIFYTYPE)1, ProcessNotifyEx, FALSE);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+
+    Status = PsSetCreateProcessNotifyRoutineEx2(PsCreateProcessNotifySubsystems, NULL, FALSE);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+
+    Status = PsSetCreateProcessNotifyRoutineEx2(PsCreateProcessNotifySubsystems, ProcessNotifyEx, TRUE);
+    ok_eq_hex(Status, STATUS_PROCEDURE_NOT_FOUND);
+
+    Status = PsSetCreateProcessNotifyRoutineEx2(PsCreateProcessNotifySubsystems, ProcessNotifyEx, FALSE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+
+    Status = PsSetCreateProcessNotifyRoutineEx2(PsCreateProcessNotifySubsystems, ProcessNotifyEx, TRUE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+
+    Status = PsSetCreateProcessNotifyRoutineEx2(PsCreateProcessNotifySubsystems, ProcessNotifyEx, TRUE);
+    ok_eq_hex(Status, STATUS_PROCEDURE_NOT_FOUND);
+}
+#endif
 
 static
 VOID
@@ -76,8 +118,13 @@ START_TEST(PsNotifyKM)
     LARGE_INTEGER Timeout;
 
     ProcessNotifications = 0;
+    ProcessNotificationsEx = 0;
     ThreadNotifications = 0;
     ImageNotifications = 0;
+
+#if (NTDDI_VERSION >= NTDDI_WIN10_RS2)
+    TestCreateProcessNotifyEx2();
+#endif
 
     Status = PsSetCreateProcessNotifyRoutine(ProcessNotify, FALSE);
     ok_eq_hex(Status, STATUS_SUCCESS);
