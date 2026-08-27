@@ -1015,6 +1015,19 @@ Rpi5OglFramebufferTexture3DEXT(
 }
 
 static VOID APIENTRY
+Rpi5OglFramebufferTextureLayer(
+    _In_ GLenum Target,
+    _In_ GLenum Attachment,
+    _In_ GLuint TextureName,
+    _In_ GLint Level,
+    _In_ GLint Layer)
+{
+    Rpi5OglFboSetTextureAttachment("glFramebufferTextureLayer",
+                                   Target, Attachment, GL_TEXTURE_3D,
+                                   TextureName, Level, Layer, 3);
+}
+
+static VOID APIENTRY
 Rpi5OglFramebufferRenderbufferEXT(
     _In_ GLenum Target,
     _In_ GLenum Attachment,
@@ -1536,6 +1549,30 @@ Rpi5OglRenderbufferStorageEXT(
 }
 
 static VOID APIENTRY
+Rpi5OglRenderbufferStorageMultisample(
+    _In_ GLenum Target,
+    _In_ GLsizei Samples,
+    _In_ GLenum InternalFormat,
+    _In_ GLsizei Width,
+    _In_ GLsizei Height)
+{
+    PRPI5VC4_OGL_FBO_STATE State = Rpi5OglCurrentFboState();
+
+    if (!Rpi5OglFboCanChangeState(
+            State, "glRenderbufferStorageMultisample"))
+    {
+        return;
+    }
+    if (Samples != 0)
+    {
+        Rpi5OglFboError(State, GL_INVALID_VALUE,
+                        "glRenderbufferStorageMultisample(samples)");
+        return;
+    }
+    Rpi5OglRenderbufferStorageEXT(Target, InternalFormat, Width, Height);
+}
+
+static VOID APIENTRY
 Rpi5OglGetRenderbufferParameterivEXT(
     _In_ GLenum Target,
     _In_ GLenum ParameterName,
@@ -1575,6 +1612,9 @@ Rpi5OglGetRenderbufferParameterivEXT(
             break;
         case GL_RENDERBUFFER_INTERNAL_FORMAT_EXT:
             *Parameters = Renderbuffer->InternalFormat;
+            break;
+        case GL_RENDERBUFFER_SAMPLES:
+            *Parameters = 0;
             break;
         case GL_RENDERBUFFER_RED_SIZE_EXT:
             *Parameters = Renderbuffer->RedBits;
@@ -1724,6 +1764,9 @@ Rpi5OglFboGetIntegerv(
             break;
         case GL_MAX_RENDERBUFFER_SIZE_EXT:
             *Parameters = RPI5VC4_OGL_FBO_MAX_RENDERBUFFER_SIZE;
+            break;
+        case GL_MAX_SAMPLES:
+            *Parameters = 0;
             break;
         default:
             _mesa_GetIntegerv(ParameterName, Parameters);
@@ -2938,31 +2981,56 @@ typedef struct _RPI5VC4_OGL_FBO_PROC
 static const RPI5VC4_OGL_FBO_PROC Rpi5OglFboProcedures[] =
 {
     {"glDrawBuffers", (PROC)Rpi5OglFboDrawBuffers},
+    {"glBlitFramebuffer", (PROC)Rpi5OglBlitFramebufferEXT},
     {"glBlitFramebufferEXT", (PROC)Rpi5OglBlitFramebufferEXT},
+    {"glBindFramebuffer", (PROC)Rpi5OglBindFramebufferEXT},
     {"glBindFramebufferEXT", (PROC)Rpi5OglBindFramebufferEXT},
+    {"glBindRenderbuffer", (PROC)Rpi5OglBindRenderbufferEXT},
     {"glBindRenderbufferEXT", (PROC)Rpi5OglBindRenderbufferEXT},
+    {"glCheckFramebufferStatus",
+     (PROC)Rpi5OglCheckFramebufferStatusEXT},
     {"glCheckFramebufferStatusEXT",
      (PROC)Rpi5OglCheckFramebufferStatusEXT},
+    {"glDeleteFramebuffers", (PROC)Rpi5OglDeleteFramebuffersEXT},
     {"glDeleteFramebuffersEXT", (PROC)Rpi5OglDeleteFramebuffersEXT},
+    {"glDeleteRenderbuffers", (PROC)Rpi5OglDeleteRenderbuffersEXT},
     {"glDeleteRenderbuffersEXT", (PROC)Rpi5OglDeleteRenderbuffersEXT},
+    {"glFramebufferRenderbuffer",
+     (PROC)Rpi5OglFramebufferRenderbufferEXT},
     {"glFramebufferRenderbufferEXT",
      (PROC)Rpi5OglFramebufferRenderbufferEXT},
+    {"glFramebufferTexture1D", (PROC)Rpi5OglFramebufferTexture1DEXT},
     {"glFramebufferTexture1DEXT",
      (PROC)Rpi5OglFramebufferTexture1DEXT},
+    {"glFramebufferTexture2D", (PROC)Rpi5OglFramebufferTexture2DEXT},
     {"glFramebufferTexture2DEXT",
      (PROC)Rpi5OglFramebufferTexture2DEXT},
+    {"glFramebufferTexture3D", (PROC)Rpi5OglFramebufferTexture3DEXT},
     {"glFramebufferTexture3DEXT",
      (PROC)Rpi5OglFramebufferTexture3DEXT},
+    {"glFramebufferTextureLayer", (PROC)Rpi5OglFramebufferTextureLayer},
+    {"glGenFramebuffers", (PROC)Rpi5OglGenFramebuffersEXT},
     {"glGenFramebuffersEXT", (PROC)Rpi5OglGenFramebuffersEXT},
+    {"glGenerateMipmap", (PROC)Rpi5OglGenerateMipmapEXT},
     {"glGenerateMipmapEXT", (PROC)Rpi5OglGenerateMipmapEXT},
+    {"glGenRenderbuffers", (PROC)Rpi5OglGenRenderbuffersEXT},
     {"glGenRenderbuffersEXT", (PROC)Rpi5OglGenRenderbuffersEXT},
+    {"glGetFramebufferAttachmentParameteriv",
+     (PROC)Rpi5OglGetFramebufferAttachmentParameterivEXT},
     {"glGetFramebufferAttachmentParameterivEXT",
      (PROC)Rpi5OglGetFramebufferAttachmentParameterivEXT},
+    {"glGetRenderbufferParameteriv",
+     (PROC)Rpi5OglGetRenderbufferParameterivEXT},
     {"glGetRenderbufferParameterivEXT",
      (PROC)Rpi5OglGetRenderbufferParameterivEXT},
+    {"glIsFramebuffer", (PROC)Rpi5OglIsFramebufferEXT},
     {"glIsFramebufferEXT", (PROC)Rpi5OglIsFramebufferEXT},
+    {"glIsRenderbuffer", (PROC)Rpi5OglIsRenderbufferEXT},
     {"glIsRenderbufferEXT", (PROC)Rpi5OglIsRenderbufferEXT},
+    {"glRenderbufferStorage", (PROC)Rpi5OglRenderbufferStorageEXT},
     {"glRenderbufferStorageEXT", (PROC)Rpi5OglRenderbufferStorageEXT},
+    {"glRenderbufferStorageMultisample",
+     (PROC)Rpi5OglRenderbufferStorageMultisample},
 };
 
 BOOL

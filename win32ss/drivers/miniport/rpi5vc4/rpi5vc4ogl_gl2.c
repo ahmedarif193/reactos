@@ -45,6 +45,7 @@ extern void APIENTRY _mesa_StencilOp(GLenum Fail,
 #define RPI5VC4_GL2_MAX_NORMALIZED     4096
 #define RPI5VC4_GL2_INFO_LOG_BYTES      192
 #define RPI5VC4_GL2_MAX_VERTEX_ATTRIBS    16
+#define RPI5VC4_GL2_MAX_VERTEX_ARRAYS     32
 #define RPI5VC4_GL2_UNIFORM_MVP            0
 #define RPI5VC4_GL2_UNIFORM_NORMAL_MATRIX  1
 #define RPI5VC4_GL2_UNIFORM_TEXTURE         2
@@ -359,6 +360,15 @@ typedef struct _RPI5VC4_OGL_VERTEX_ATTRIB
     GLfloat Current[4];
 } RPI5VC4_OGL_VERTEX_ATTRIB, *PRPI5VC4_OGL_VERTEX_ATTRIB;
 
+typedef struct _RPI5VC4_OGL_VERTEX_ARRAY
+{
+    GLuint Name;
+    BOOL Object;
+    GLuint ElementArrayBuffer;
+    RPI5VC4_OGL_VERTEX_ATTRIB
+        VertexAttribs[RPI5VC4_GL2_MAX_VERTEX_ATTRIBS];
+} RPI5VC4_OGL_VERTEX_ARRAY, *PRPI5VC4_OGL_VERTEX_ARRAY;
+
 struct _RPI5VC4_OGL_GL2_STATE
 {
     GLcontext *Mesa;
@@ -368,7 +378,11 @@ struct _RPI5VC4_OGL_GL2_STATE
     BOOL CurrentExecutableReady;
     RPI5VC4_OGL_SHADER Shaders[RPI5VC4_GL2_MAX_SHADERS];
     RPI5VC4_OGL_PROGRAM Programs[RPI5VC4_GL2_MAX_PROGRAMS];
-    RPI5VC4_OGL_VERTEX_ATTRIB VertexAttribs[RPI5VC4_GL2_MAX_VERTEX_ATTRIBS];
+    GLuint NextVertexArrayName;
+    RPI5VC4_OGL_VERTEX_ARRAY DefaultVertexArray;
+    RPI5VC4_OGL_VERTEX_ARRAY
+        VertexArrays[RPI5VC4_GL2_MAX_VERTEX_ARRAYS];
+    PRPI5VC4_OGL_VERTEX_ARRAY CurrentVertexArray;
     ULONG TextureSerial;
     ULONG UploadedTextureSerial;
     struct gl_texture_object *UploadedTexture;
@@ -403,6 +417,42 @@ Rpi5OglGl2FindShader(
     {
         if (State->Shaders[Index].Name == Name)
             return &State->Shaders[Index];
+    }
+    return NULL;
+}
+
+static VOID
+Rpi5OglGl2InitializeVertexArray(
+    _Out_ PRPI5VC4_OGL_VERTEX_ARRAY VertexArray,
+    _In_ GLuint Name)
+{
+    ULONG Index;
+
+    ZeroMemory(VertexArray, sizeof(*VertexArray));
+    VertexArray->Name = Name;
+    for (Index = 0;
+         Index < RTL_NUMBER_OF(VertexArray->VertexAttribs);
+         Index++)
+    {
+        VertexArray->VertexAttribs[Index].Size = 4;
+        VertexArray->VertexAttribs[Index].Type = GL_FLOAT;
+        VertexArray->VertexAttribs[Index].Current[3] = 1.0f;
+    }
+}
+
+static PRPI5VC4_OGL_VERTEX_ARRAY
+Rpi5OglGl2FindVertexArray(
+    _In_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLuint Name)
+{
+    ULONG Index;
+
+    if (Name == 0)
+        return &State->DefaultVertexArray;
+    for (Index = 0; Index < RTL_NUMBER_OF(State->VertexArrays); Index++)
+    {
+        if (State->VertexArrays[Index].Name == Name)
+            return &State->VertexArrays[Index];
     }
     return NULL;
 }
@@ -4737,7 +4787,7 @@ Rpi5OglGl2VertexAttrib(
         Rpi5OglGl2Error(State, GL_INVALID_VALUE, Function);
         return NULL;
     }
-    return &State->VertexAttribs[Index];
+    return &State->CurrentVertexArray->VertexAttribs[Index];
 }
 
 static VOID APIENTRY
@@ -5064,6 +5114,197 @@ Rpi5OglGetVertexAttribPointerv(
     *Pointer = (GLvoid *)Attribute->Pointer;
 }
 
+static GLuint
+Rpi5OglGl2AllocateVertexArrayName(
+    _Inout_ PRPI5VC4_OGL_GL2_STATE State)
+{
+    ULONG Attempts;
+    GLuint Name;
+
+    for (Attempts = 0;
+         Attempts <= RTL_NUMBER_OF(State->VertexArrays);
+         Attempts++)
+    {
+        Name = State->NextVertexArrayName++;
+        if (Name != 0 && Rpi5OglGl2FindVertexArray(State, Name) == NULL)
+            return Name;
+    }
+    return 0;
+}
+
+static VOID APIENTRY
+Rpi5OglGenVertexArrays(
+    _In_ GLsizei Count,
+    _Out_writes_(Count) GLuint *Arrays)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_VERTEX_ARRAY VertexArray;
+    ULONG FreeCount = 0;
+    ULONG Record;
+    GLsizei Index;
+    GLuint Name;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glGenVertexArrays"))
+        return;
+    if (Count < 0 || (Count != 0 && Arrays == NULL))
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glGenVertexArrays(count/arrays)");
+        return;
+    }
+    for (Record = 0; Record < RTL_NUMBER_OF(State->VertexArrays); Record++)
+    {
+        if (State->VertexArrays[Record].Name == 0)
+            FreeCount++;
+    }
+    if ((ULONG)Count > FreeCount)
+    {
+        Rpi5OglGl2Error(State, GL_OUT_OF_MEMORY, "glGenVertexArrays");
+        return;
+    }
+
+    for (Index = 0; Index < Count; Index++)
+    {
+        Name = Rpi5OglGl2AllocateVertexArrayName(State);
+        VertexArray = NULL;
+        for (Record = 0;
+             Record < RTL_NUMBER_OF(State->VertexArrays);
+             Record++)
+        {
+            if (State->VertexArrays[Record].Name == 0)
+            {
+                VertexArray = &State->VertexArrays[Record];
+                break;
+            }
+        }
+        if (Name == 0 || VertexArray == NULL)
+        {
+            Rpi5OglGl2Error(State, GL_OUT_OF_MEMORY, "glGenVertexArrays");
+            return;
+        }
+        Rpi5OglGl2InitializeVertexArray(VertexArray, Name);
+        Arrays[Index] = Name;
+    }
+}
+
+static VOID
+Rpi5OglGl2SelectVertexArray(
+    _Inout_ PRPI5VC4_OGL_GL2_STATE State,
+    _Inout_ PRPI5VC4_OGL_VERTEX_ARRAY VertexArray)
+{
+    ULONG Index;
+
+    State->CurrentVertexArray->ElementArrayBuffer =
+        Rpi5OglBufferCurrentName(State->BufferState,
+                                 GL_ELEMENT_ARRAY_BUFFER);
+    for (Index = 0;
+         Index < RTL_NUMBER_OF(VertexArray->VertexAttribs);
+         Index++)
+    {
+        CopyMemory(VertexArray->VertexAttribs[Index].Current,
+                   State->CurrentVertexArray->VertexAttribs[Index].Current,
+                   sizeof(VertexArray->VertexAttribs[Index].Current));
+    }
+    State->CurrentVertexArray = VertexArray;
+    Rpi5OglBufferRestoreElementArrayBinding(
+        State->BufferState, VertexArray->ElementArrayBuffer);
+}
+
+static VOID APIENTRY
+Rpi5OglBindVertexArray(
+    _In_ GLuint Name)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_VERTEX_ARRAY VertexArray;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glBindVertexArray"))
+        return;
+    VertexArray = Rpi5OglGl2FindVertexArray(State, Name);
+    if (VertexArray == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                        "glBindVertexArray(array)");
+        return;
+    }
+    VertexArray->Object = TRUE;
+    Rpi5OglGl2SelectVertexArray(State, VertexArray);
+}
+
+static VOID APIENTRY
+Rpi5OglDeleteVertexArrays(
+    _In_ GLsizei Count,
+    _In_reads_(Count) const GLuint *Arrays)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_VERTEX_ARRAY VertexArray;
+    GLsizei Index;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glDeleteVertexArrays"))
+        return;
+    if (Count < 0 || (Count != 0 && Arrays == NULL))
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glDeleteVertexArrays(count/arrays)");
+        return;
+    }
+    for (Index = 0; Index < Count; Index++)
+    {
+        VertexArray = Rpi5OglGl2FindVertexArray(State, Arrays[Index]);
+        if (VertexArray == NULL || VertexArray == &State->DefaultVertexArray)
+            continue;
+        if (State->CurrentVertexArray == VertexArray)
+        {
+            Rpi5OglGl2SelectVertexArray(State,
+                                        &State->DefaultVertexArray);
+        }
+        ZeroMemory(VertexArray, sizeof(*VertexArray));
+    }
+}
+
+static GLboolean APIENTRY
+Rpi5OglIsVertexArray(
+    _In_ GLuint Name)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_VERTEX_ARRAY VertexArray;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glIsVertexArray"))
+        return GL_FALSE;
+    VertexArray = Rpi5OglGl2FindVertexArray(State, Name);
+    return VertexArray != NULL && VertexArray != &State->DefaultVertexArray &&
+           VertexArray->Object ? GL_TRUE : GL_FALSE;
+}
+
+VOID
+Rpi5OglGl2BufferDeleted(
+    _In_ GLuint Name)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_VERTEX_ARRAY VertexArray;
+    ULONG ArrayIndex;
+    ULONG AttributeIndex;
+
+    if (State == NULL || Name == 0)
+        return;
+    for (ArrayIndex = 0;
+         ArrayIndex <= RTL_NUMBER_OF(State->VertexArrays);
+         ArrayIndex++)
+    {
+        VertexArray = ArrayIndex == 0 ?
+            &State->DefaultVertexArray :
+            &State->VertexArrays[ArrayIndex - 1];
+        if (VertexArray->ElementArrayBuffer == Name)
+            VertexArray->ElementArrayBuffer = 0;
+        for (AttributeIndex = 0;
+             AttributeIndex < RTL_NUMBER_OF(VertexArray->VertexAttribs);
+             AttributeIndex++)
+        {
+            if (VertexArray->VertexAttribs[AttributeIndex].BufferName == Name)
+                VertexArray->VertexAttribs[AttributeIndex].BufferName = 0;
+        }
+    }
+}
+
 static VOID APIENTRY
 Rpi5OglGetQueryiv(
     _In_ GLenum Target,
@@ -5130,6 +5371,7 @@ static const RPI5VC4_OGL_GL2_PROC Rpi5OglGl2Procedures[] =
     {"glActiveTexture", (PROC)Rpi5OglActiveTexture},
     {"glAttachShader", (PROC)Rpi5OglAttachShader},
     {"glBindAttribLocation", (PROC)Rpi5OglBindAttribLocation},
+    {"glBindVertexArray", (PROC)Rpi5OglBindVertexArray},
     {"glBlendColor", (PROC)Rpi5OglBlendColor},
     {"glBlendEquation", (PROC)Rpi5OglBlendEquation},
     {"glBlendEquationSeparate", (PROC)Rpi5OglBlendEquationSeparate},
@@ -5139,6 +5381,7 @@ static const RPI5VC4_OGL_GL2_PROC Rpi5OglGl2Procedures[] =
     {"glCreateShader", (PROC)Rpi5OglCreateShader},
     {"glDeleteProgram", (PROC)Rpi5OglDeleteProgram},
     {"glDeleteShader", (PROC)Rpi5OglDeleteShader},
+    {"glDeleteVertexArrays", (PROC)Rpi5OglDeleteVertexArrays},
     {"glDetachShader", (PROC)Rpi5OglDetachShader},
     {"glDisableVertexAttribArray", (PROC)Rpi5OglDisableVertexAttribArray},
     {"glEnableVertexAttribArray", (PROC)Rpi5OglEnableVertexAttribArray},
@@ -5156,8 +5399,10 @@ static const RPI5VC4_OGL_GL2_PROC Rpi5OglGl2Procedures[] =
     {"glGetUniformLocation", (PROC)Rpi5OglGetUniformLocation},
     {"glGetVertexAttribfv", (PROC)Rpi5OglGetVertexAttribfv},
     {"glGetVertexAttribPointerv", (PROC)Rpi5OglGetVertexAttribPointerv},
+    {"glGenVertexArrays", (PROC)Rpi5OglGenVertexArrays},
     {"glIsProgram", (PROC)Rpi5OglIsProgram},
     {"glIsShader", (PROC)Rpi5OglIsShader},
+    {"glIsVertexArray", (PROC)Rpi5OglIsVertexArray},
     {"glLinkProgram", (PROC)Rpi5OglLinkProgram},
     {"glPointParameteri", (PROC)Rpi5OglPointParameteri},
     {"glShaderSource", (PROC)Rpi5OglShaderSource},
@@ -5201,6 +5446,7 @@ Rpi5OglGl2Initialize(
     NewState->Mesa = Mesa;
     NewState->BufferState = BufferState;
     NewState->NextName = 1;
+    NewState->NextVertexArrayName = 1;
     NewState->TextureSerial = 1;
     NewState->BlendEquationRgb = GL_FUNC_ADD;
     NewState->BlendEquationAlpha = GL_FUNC_ADD;
@@ -5215,12 +5461,9 @@ Rpi5OglGl2Initialize(
         Mesa->Shared->Default2D;
     for (Index = 2; Index < RTL_NUMBER_OF(NewState->TextureUnits); Index++)
         NewState->TextureUnits[Index] = Mesa->Shared->Default2D;
-    for (Index = 0; Index < RTL_NUMBER_OF(NewState->VertexAttribs); Index++)
-    {
-        NewState->VertexAttribs[Index].Size = 4;
-        NewState->VertexAttribs[Index].Type = GL_FLOAT;
-        NewState->VertexAttribs[Index].Current[3] = 1.0f;
-    }
+    Rpi5OglGl2InitializeVertexArray(&NewState->DefaultVertexArray, 0);
+    NewState->DefaultVertexArray.Object = TRUE;
+    NewState->CurrentVertexArray = &NewState->DefaultVertexArray;
     *State = NewState;
     return TRUE;
 }
@@ -5854,6 +6097,10 @@ Rpi5OglGl2GetIntegerv(
                 break;
             case GL_MAX_VERTEX_ATTRIBS:
                 Value = RPI5VC4_GL2_MAX_VERTEX_ATTRIBS;
+                break;
+            case GL_VERTEX_ARRAY_BINDING:
+                Value = State->CurrentVertexArray != NULL ?
+                    (GLint)State->CurrentVertexArray->Name : 0;
                 break;
             case GL_MAX_VERTEX_UNIFORM_COMPONENTS:
                 Value = 512;
@@ -6666,7 +6913,8 @@ Rpi5OglGl2GetVertexAttribSource(
     {
         return FALSE;
     }
-    *Attribute = &State->VertexAttribs[AttributeIndex];
+    *Attribute =
+        &State->CurrentVertexArray->VertexAttribs[AttributeIndex];
     *Source = NULL;
     if (!(*Attribute)->Enabled)
     {
