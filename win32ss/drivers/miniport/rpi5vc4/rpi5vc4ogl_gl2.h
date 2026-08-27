@@ -146,6 +146,34 @@ Rpi5OglGl2GetIntegerv(
     _Out_ GLint *Parameters);
 
 BOOL
+Rpi5OglGl2SetCompatibilityEnable(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum Capability,
+    _In_ BOOL Enable);
+
+BOOL
+Rpi5OglGl2CompatibilityEnabled(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum Capability,
+    _Out_ GLboolean *Enabled);
+
+BOOL
+Rpi5OglGl2TransformFeedbackActive(VOID);
+
+BOOL
+Rpi5OglGl2ConditionalRenderAllowsDraw(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State);
+
+VOID
+Rpi5OglGl2RecordSamplesPassed(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ ULONG Samples);
+
+BOOL
+Rpi5OglGl2SamplesQueryActive(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State);
+
+BOOL
 Rpi5OglGl2GetNormalMatrix(
     _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
     _Out_writes_(RPI5VC4_V3D_NORMAL_MATRIX_WORDS) PULONG Matrix);
@@ -173,6 +201,20 @@ Rpi5OglGl2BuildPrimitive(
     _In_ GLsizei Count,
     _Out_writes_(RPI5VC4_V3D_PRIMITIVE_MAX_VERTICES)
         RPI5VC4_OGL_GL2_VERTEX *Vertices);
+
+BOOL
+Rpi5OglGl2CaptureArrays(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum Mode,
+    _In_ GLint First,
+    _In_ GLsizei Count);
+
+BOOL
+Rpi5OglGl2CaptureElements(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum Mode,
+    _In_reads_(Count) const GLuint *Indices,
+    _In_ GLsizei Count);
 
 RPI5VC4_OGL_GL2_DRAW_RESULT
 Rpi5OglGl2PrepareBatchDraw(
@@ -209,8 +251,12 @@ Rpi5OglGl2BuildIndexedBatch(
     _Out_writes_opt_(OutputCapacity)
         PRPI5VC4_V3D_TEXCOORD HeightTexCoords,
     _In_ ULONG OutputCapacity,
+    _Out_writes_opt_(IndexCapacity) PUSHORT OutputIndices,
+    _In_ ULONG IndexCapacity,
+    _In_ ULONG BaseVertex,
     _Out_ PULONG OutputVertexCount,
-    _Out_ PULONG OutputTriangleCount);
+    _Out_ PULONG OutputTriangleCount,
+    _Out_opt_ PULONG OutputIndexCount);
 
 BOOL
 Rpi5OglGl2PrepareTexture(
@@ -258,6 +304,12 @@ Rpi5OglGl2TextureChanged(
     _In_opt_ struct gl_texture_object *Texture);
 
 VOID
+Rpi5OglGl2TextureParameterChanged(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_opt_ struct gl_texture_object *Texture,
+    _In_ GLenum ParameterName);
+
+VOID
 Rpi5OglGl2TextureDeleted(
     _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
     _In_opt_ struct gl_texture_object *Texture);
@@ -278,6 +330,13 @@ Rpi5OglGl2GetProcAddress(
 
 PRPI5VC4_OGL_GL2_STATE
 Rpi5OglCurrentGl2State(VOID);
+
+VOID
+Rpi5OglClearBufferValues(
+    _In_ GLbitfield Mask,
+    _In_reads_opt_(4) const GLfloat *Color,
+    _In_opt_ const GLfloat *Depth,
+    _In_opt_ const GLint *Stencil);
 
 INT
 Rpi5OglGpuEscape(

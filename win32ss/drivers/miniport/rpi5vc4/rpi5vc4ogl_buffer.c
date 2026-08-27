@@ -32,12 +32,25 @@ typedef struct _RPI5VC4_OGL_BUFFER
     BOOL Mapped;
 } RPI5VC4_OGL_BUFFER, *PRPI5VC4_OGL_BUFFER;
 
+typedef struct _RPI5VC4_OGL_INDEXED_BUFFER
+{
+    GLuint Name;
+    SIZE_T Offset;
+    SIZE_T Size;
+    BOOL WholeBuffer;
+} RPI5VC4_OGL_INDEXED_BUFFER, *PRPI5VC4_OGL_INDEXED_BUFFER;
+
 struct _RPI5VC4_OGL_BUFFER_STATE
 {
     GLcontext *Mesa;
     GLuint NextName;
     GLuint ArrayBuffer;
     GLuint ElementArrayBuffer;
+    GLuint PixelPackBuffer;
+    GLuint PixelUnpackBuffer;
+    GLuint TransformFeedbackBuffer;
+    RPI5VC4_OGL_INDEXED_BUFFER TransformFeedbackBuffers[
+        RPI5VC4_OGL_MAX_TRANSFORM_FEEDBACK_BUFFERS];
     RPI5VC4_OGL_BUFFER Buffers[RPI5VC4_OGL_MAX_BUFFERS];
 };
 
@@ -134,6 +147,12 @@ Rpi5OglBufferBinding(
             return &State->ArrayBuffer;
         case GL_ELEMENT_ARRAY_BUFFER:
             return &State->ElementArrayBuffer;
+        case GL_PIXEL_PACK_BUFFER:
+            return &State->PixelPackBuffer;
+        case GL_PIXEL_UNPACK_BUFFER:
+            return &State->PixelUnpackBuffer;
+        case GL_TRANSFORM_FEEDBACK_BUFFER:
+            return &State->TransformFeedbackBuffer;
         default:
             Rpi5OglBufferError(State, GL_INVALID_ENUM, Function);
             return NULL;
@@ -235,11 +254,6 @@ Rpi5OglBindBuffer(
 
     if (!Rpi5OglBufferCanChangeState(State, "glBindBuffer"))
         return;
-    if ((Target == GL_PIXEL_PACK_BUFFER ||
-         Target == GL_PIXEL_UNPACK_BUFFER) && Name == 0)
-    {
-        return;
-    }
     Binding = Rpi5OglBufferBinding(State, Target, "glBindBuffer(target)");
     if (Binding == NULL)
         return;
@@ -280,6 +294,8 @@ Rpi5OglDeleteBuffers(
 
     for (Index = 0; Index < Count; Index++)
     {
+        ULONG BindingIndex;
+
         Buffer = Rpi5OglBufferFind(State, Buffers[Index]);
         if (Buffer == NULL)
             continue;
@@ -287,11 +303,160 @@ Rpi5OglDeleteBuffers(
             State->ArrayBuffer = 0;
         if (State->ElementArrayBuffer == Buffer->Name)
             State->ElementArrayBuffer = 0;
+        if (State->PixelPackBuffer == Buffer->Name)
+            State->PixelPackBuffer = 0;
+        if (State->PixelUnpackBuffer == Buffer->Name)
+            State->PixelUnpackBuffer = 0;
+        if (State->TransformFeedbackBuffer == Buffer->Name)
+            State->TransformFeedbackBuffer = 0;
+        for (BindingIndex = 0;
+             BindingIndex < RTL_NUMBER_OF(State->TransformFeedbackBuffers);
+             BindingIndex++)
+        {
+            if (State->TransformFeedbackBuffers[BindingIndex].Name ==
+                    Buffer->Name)
+            {
+                ZeroMemory(&State->TransformFeedbackBuffers[BindingIndex],
+                           sizeof(State->TransformFeedbackBuffers[BindingIndex]));
+            }
+        }
         Rpi5OglGl2BufferDeleted(Buffer->Name);
         if (Buffer->Data != NULL)
             HeapFree(GetProcessHeap(), 0, Buffer->Data);
         ZeroMemory(Buffer, sizeof(*Buffer));
     }
+}
+
+static PRPI5VC4_OGL_INDEXED_BUFFER
+Rpi5OglBufferIndexedBinding(
+    _Inout_ PRPI5VC4_OGL_BUFFER_STATE State,
+    _In_ GLenum Target,
+    _In_ GLuint Index,
+    _In_z_ PCSTR Function)
+{
+    if (Target != GL_TRANSFORM_FEEDBACK_BUFFER)
+    {
+        Rpi5OglBufferError(State, GL_INVALID_ENUM, Function);
+        return NULL;
+    }
+    if (Index >= RTL_NUMBER_OF(State->TransformFeedbackBuffers))
+    {
+        Rpi5OglBufferError(State, GL_INVALID_VALUE, Function);
+        return NULL;
+    }
+    return &State->TransformFeedbackBuffers[Index];
+}
+
+static PRPI5VC4_OGL_BUFFER
+Rpi5OglBufferBindIndexedObject(
+    _Inout_ PRPI5VC4_OGL_BUFFER_STATE State,
+    _In_ GLuint Name,
+    _In_z_ PCSTR Function)
+{
+    PRPI5VC4_OGL_BUFFER Buffer;
+
+    if (Name == 0)
+        return NULL;
+    Buffer = Rpi5OglBufferFind(State, Name);
+    if (Buffer == NULL)
+        Buffer = Rpi5OglBufferAllocateRecord(State, Name);
+    if (Buffer == NULL)
+    {
+        Rpi5OglBufferError(State, GL_OUT_OF_MEMORY, Function);
+        return NULL;
+    }
+    Buffer->Created = TRUE;
+    return Buffer;
+}
+
+static VOID APIENTRY
+Rpi5OglBindBufferBase(
+    _In_ GLenum Target,
+    _In_ GLuint Index,
+    _In_ GLuint Name)
+{
+    PRPI5VC4_OGL_BUFFER_STATE State = Rpi5OglCurrentBufferState();
+    PRPI5VC4_OGL_INDEXED_BUFFER Binding;
+    PRPI5VC4_OGL_BUFFER Buffer;
+
+    if (!Rpi5OglBufferCanChangeState(State, "glBindBufferBase"))
+        return;
+    if (Rpi5OglGl2TransformFeedbackActive())
+    {
+        Rpi5OglBufferError(State, GL_INVALID_OPERATION,
+                           "glBindBufferBase(transform feedback active)");
+        return;
+    }
+    Binding = Rpi5OglBufferIndexedBinding(State, Target, Index,
+                                           "glBindBufferBase(target/index)");
+    if (Binding == NULL)
+        return;
+    Buffer = Rpi5OglBufferBindIndexedObject(State, Name,
+                                             "glBindBufferBase(buffer)");
+    if (Name != 0 && Buffer == NULL)
+        return;
+
+    State->TransformFeedbackBuffer = Name;
+    Binding->Name = Name;
+    Binding->Offset = 0;
+    Binding->Size = Buffer != NULL ? Buffer->Size : 0;
+    Binding->WholeBuffer = Name != 0;
+}
+
+static VOID APIENTRY
+Rpi5OglBindBufferRange(
+    _In_ GLenum Target,
+    _In_ GLuint Index,
+    _In_ GLuint Name,
+    _In_ GLintptr Offset,
+    _In_ GLsizeiptr Size)
+{
+    PRPI5VC4_OGL_BUFFER_STATE State = Rpi5OglCurrentBufferState();
+    PRPI5VC4_OGL_INDEXED_BUFFER Binding;
+    PRPI5VC4_OGL_BUFFER Buffer;
+
+    if (!Rpi5OglBufferCanChangeState(State, "glBindBufferRange"))
+        return;
+    if (Rpi5OglGl2TransformFeedbackActive())
+    {
+        Rpi5OglBufferError(State, GL_INVALID_OPERATION,
+                           "glBindBufferRange(transform feedback active)");
+        return;
+    }
+    Binding = Rpi5OglBufferIndexedBinding(State, Target, Index,
+                                           "glBindBufferRange(target/index)");
+    if (Binding == NULL)
+        return;
+    if (Name == 0)
+    {
+        State->TransformFeedbackBuffer = 0;
+        ZeroMemory(Binding, sizeof(*Binding));
+        return;
+    }
+    if (Offset < 0 || Size <= 0 ||
+        ((SIZE_T)Offset % RPI5VC4_OGL_TRANSFORM_FEEDBACK_ALIGNMENT) != 0)
+    {
+        Rpi5OglBufferError(State, GL_INVALID_VALUE,
+                           "glBindBufferRange(offset/size)");
+        return;
+    }
+    Buffer = Rpi5OglBufferBindIndexedObject(State, Name,
+                                             "glBindBufferRange(buffer)");
+    if (Buffer == NULL)
+        return;
+    if ((SIZE_T)Offset > Buffer->Size ||
+        (SIZE_T)Size > Buffer->Size - (SIZE_T)Offset)
+    {
+        Rpi5OglBufferError(State, GL_INVALID_VALUE,
+                           "glBindBufferRange(range)");
+        return;
+    }
+
+    State->TransformFeedbackBuffer = Name;
+    Binding->Name = Name;
+    Binding->Offset = (SIZE_T)Offset;
+    Binding->Size = (SIZE_T)Size;
+    Binding->WholeBuffer = FALSE;
 }
 
 static GLboolean APIENTRY
@@ -680,6 +845,8 @@ typedef struct _RPI5VC4_OGL_BUFFER_PROC
 static const RPI5VC4_OGL_BUFFER_PROC Rpi5OglBufferProcedures[] =
 {
     RPI5VC4_OGL_BUFFER_PROC_PAIR("glBindBuffer", Rpi5OglBindBuffer),
+    {"glBindBufferBase", (PROC)Rpi5OglBindBufferBase},
+    {"glBindBufferRange", (PROC)Rpi5OglBindBufferRange},
     RPI5VC4_OGL_BUFFER_PROC_PAIR("glBufferData", Rpi5OglBufferData),
     RPI5VC4_OGL_BUFFER_PROC_PAIR("glBufferSubData", Rpi5OglBufferSubData),
     RPI5VC4_OGL_BUFFER_PROC_PAIR("glDeleteBuffers", Rpi5OglDeleteBuffers),
@@ -889,6 +1056,12 @@ Rpi5OglBufferGetIntegerv(
         Name = State != NULL ? State->ArrayBuffer : 0;
     else if (ParameterName == GL_ELEMENT_ARRAY_BUFFER_BINDING)
         Name = State != NULL ? State->ElementArrayBuffer : 0;
+    else if (ParameterName == GL_PIXEL_PACK_BUFFER_BINDING)
+        Name = State != NULL ? State->PixelPackBuffer : 0;
+    else if (ParameterName == GL_PIXEL_UNPACK_BUFFER_BINDING)
+        Name = State != NULL ? State->PixelUnpackBuffer : 0;
+    else if (ParameterName == GL_TRANSFORM_FEEDBACK_BUFFER_BINDING)
+        Name = State != NULL ? State->TransformFeedbackBuffer : 0;
     else
         return FALSE;
 
@@ -898,6 +1071,115 @@ Rpi5OglBufferGetIntegerv(
         return TRUE;
     }
     *Parameters = (GLint)Name;
+    return TRUE;
+}
+
+BOOL
+Rpi5OglBufferGetIntegeri(
+    _In_opt_ PRPI5VC4_OGL_BUFFER_STATE State,
+    _In_ GLenum ParameterName,
+    _In_ GLuint Index,
+    _Out_ GLint *Parameters)
+{
+    PRPI5VC4_OGL_INDEXED_BUFFER Binding;
+    PRPI5VC4_OGL_BUFFER Buffer;
+    SIZE_T Value;
+
+    if (ParameterName != GL_TRANSFORM_FEEDBACK_BUFFER_BINDING &&
+        ParameterName != GL_TRANSFORM_FEEDBACK_BUFFER_START &&
+        ParameterName != GL_TRANSFORM_FEEDBACK_BUFFER_SIZE)
+    {
+        return FALSE;
+    }
+    if (State == NULL)
+        return TRUE;
+    Binding = Rpi5OglBufferIndexedBinding(State,
+                                           GL_TRANSFORM_FEEDBACK_BUFFER,
+                                           Index,
+                                           "glGetIntegeri_v(index)");
+    if (Binding == NULL)
+        return TRUE;
+    if (Parameters == NULL)
+    {
+        Rpi5OglBufferError(State, GL_INVALID_VALUE,
+                           "glGetIntegeri_v(data)");
+        return TRUE;
+    }
+
+    if (ParameterName == GL_TRANSFORM_FEEDBACK_BUFFER_BINDING)
+        Value = Binding->Name;
+    else if (ParameterName == GL_TRANSFORM_FEEDBACK_BUFFER_START)
+        Value = Binding->Offset;
+    else
+    {
+        Buffer = Rpi5OglBufferFind(State, Binding->Name);
+        Value = Binding->WholeBuffer && Buffer != NULL ?
+            Buffer->Size : Binding->Size;
+    }
+    if (Value > 0x7fffffffu)
+        Value = 0x7fffffffu;
+    *Parameters = (GLint)Value;
+    return TRUE;
+}
+
+BOOL
+Rpi5OglBufferCanWriteTransformFeedback(
+    _In_opt_ PRPI5VC4_OGL_BUFFER_STATE State,
+    _In_ GLuint Index,
+    _In_ SIZE_T Bytes,
+    _In_ SIZE_T Position)
+{
+    PRPI5VC4_OGL_INDEXED_BUFFER Binding;
+    PRPI5VC4_OGL_BUFFER Buffer;
+    SIZE_T Capacity;
+
+    if (State == NULL ||
+        Index >= RTL_NUMBER_OF(State->TransformFeedbackBuffers))
+    {
+        return FALSE;
+    }
+    Binding = &State->TransformFeedbackBuffers[Index];
+    Buffer = Rpi5OglBufferFind(State, Binding->Name);
+    if (Buffer == NULL || !Buffer->Created || Buffer->Mapped ||
+        Buffer->Data == NULL)
+        return FALSE;
+    Capacity = Binding->WholeBuffer ? Buffer->Size : Binding->Size;
+    if (Position > Capacity || Bytes > Capacity - Position ||
+        Binding->Offset > Buffer->Size ||
+        Position > Buffer->Size - Binding->Offset ||
+        Bytes > Buffer->Size - Binding->Offset - Position)
+    {
+        return FALSE;
+    }
+    return TRUE;
+}
+
+BOOL
+Rpi5OglBufferWriteTransformFeedback(
+    _In_opt_ PRPI5VC4_OGL_BUFFER_STATE State,
+    _In_ GLuint Index,
+    _In_reads_bytes_(Bytes) const VOID *Data,
+    _In_ SIZE_T Bytes,
+    _Inout_ PSIZE_T Position)
+{
+    PRPI5VC4_OGL_INDEXED_BUFFER Binding;
+    PRPI5VC4_OGL_BUFFER Buffer;
+
+    if (Data == NULL || Position == NULL ||
+        !Rpi5OglBufferCanWriteTransformFeedback(State,
+                                                Index,
+                                                Bytes,
+                                                *Position))
+    {
+        return FALSE;
+    }
+    Binding = &State->TransformFeedbackBuffers[Index];
+    Buffer = Rpi5OglBufferFind(State, Binding->Name);
+    if (Bytes != 0)
+    {
+        CopyMemory(Buffer->Data + Binding->Offset + *Position, Data, Bytes);
+        *Position += Bytes;
+    }
     return TRUE;
 }
 
