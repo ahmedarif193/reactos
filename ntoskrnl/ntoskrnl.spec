@@ -3402,7 +3402,7 @@
 @ stub -arch=arm64 ZwQueryInformationResourceManager
 @ stub -arch=arm64 ZwQueryInformationTransaction
 @ stub -arch=arm64 ZwQueryInformationTransactionManager
-@ stdcall -arch=x86_64,arm64 ZwQueryLicenseValue(ptr ptr ptr long ptr)
+@ stdcall -arch=i386,x86_64,arm64 ZwQueryLicenseValue(ptr ptr ptr long ptr)
 @ stub -arch=arm64 ZwQuerySecurityAttributesToken
 @ stub -arch=arm64 ZwQuerySecurityPolicy
 @ stdcall -version=0x601+ -arch=arm64 ZwQuerySystemInformationEx(long ptr long ptr long ptr)
