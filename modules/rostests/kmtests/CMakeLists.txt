@@ -167,6 +167,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ke/KeGuardedMutex.c
     ntos_ke/KeIpiKM.c
     ntos_ke/KeIrql.c
+    ntos_ke/KeModern.c
     ntos_ke/KeMutex.c
     ntos_ke/KePcr.c
     ntos_ke/KeQueue.c
