@@ -323,7 +323,7 @@ PiAssignContainerId(
     }
 
     /* Integrated functions inherit the physical container of their parent. */
-    if (!(DeviceNode->CapabilityFlags & CM_DEVCAP_REMOVABLE) &&
+    if (!(DeviceNode->CapabilityFlags & 0x00000004) && /* CM_DEVCAP_REMOVABLE */
         DeviceNode->Parent != NULL &&
         DeviceNode->Parent->PhysicalDeviceObject != NULL)
     {
