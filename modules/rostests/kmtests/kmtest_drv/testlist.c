@@ -218,6 +218,7 @@ KMT_TESTFUNC Test_SeLogonSession;
 KMT_TESTFUNC Test_SeQueryInfoToken;
 KMT_TESTFUNC Test_SeTokenFiltering;
 KMT_TESTFUNC Test_RtlAvlTree;
+KMT_TESTFUNC Test_RtlAtomEx;
 KMT_TESTFUNC Test_RtlCaptureContext;
 KMT_TESTFUNC Test_RtlException;
 KMT_TESTFUNC Test_RtlGetVersion;
@@ -451,6 +452,7 @@ const KMT_TEST TestList[] =
     { "PsQuota",                            Test_PsQuota },
     { "SeAccessCheckKM",                    Test_SeAccessCheckKM },
     { "RtlAvlTreeKM",                       Test_RtlAvlTree },
+    { "RtlAtomEx",                          Test_RtlAtomEx },
     { "RtlExceptionKM",                     Test_RtlException },
     { "RtlGetVersion",                      Test_RtlGetVersion },
     { "RtlIntSafeKM",                       Test_RtlIntSafe },
