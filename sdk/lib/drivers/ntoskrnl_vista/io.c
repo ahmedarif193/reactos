@@ -864,6 +864,57 @@ IoSetDeviceInterfacePropertyData(
     return Status;
 }
 
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_Must_inspect_result_
+NTKRNLVISTAAPI
+NTSTATUS
+NTAPI
+IoGetDeviceInterfacePropertyData(
+    _In_ PUNICODE_STRING SymbolicLinkName,
+    _In_ CONST DEVPROPKEY *PropertyKey,
+    _In_ LCID Lcid,
+    _Reserved_ ULONG Flags,
+    _In_ ULONG Size,
+    _Out_writes_bytes_to_(Size, *RequiredSize) PVOID Data,
+    _Out_ PULONG RequiredSize,
+    _Out_ PDEVPROPTYPE Type)
+{
+    HANDLE PropertyDataKey;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(Flags);
+
+    if ((SymbolicLinkName == NULL) ||
+        (SymbolicLinkName->Buffer == NULL) ||
+        (SymbolicLinkName->Length == 0) ||
+        (PropertyKey == NULL) ||
+        (RequiredSize == NULL) || (Type == NULL))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = IopOpenInterfacePropertyDataKey(SymbolicLinkName,
+                                             PropertyKey,
+                                             Lcid,
+                                             FALSE,
+                                             &PropertyDataKey);
+    if (Status == STATUS_INVALID_PARAMETER)
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    *RequiredSize = 0;
+    *Type = DEVPROP_TYPE_EMPTY;
+    Status = IopReadPropertyData(PropertyDataKey,
+                                 Size,
+                                 Data,
+                                 RequiredSize,
+                                 Type);
+    ZwClose(PropertyDataKey);
+    return Status;
+}
+
 NTKRNLVISTAAPI
 IO_PRIORITY_HINT
 NTAPI

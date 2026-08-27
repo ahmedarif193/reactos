@@ -1300,6 +1300,20 @@ IoOpenDeviceRegistryKey(
   _In_ ACCESS_MASK DesiredAccess,
   _Out_ PHANDLE DevInstRegKey);
 
+#if (NTDDI_VERSION >= NTDDI_WIN10_RS4)
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_Must_inspect_result_
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoOpenDriverRegistryKey(
+  _In_ PDRIVER_OBJECT DriverObject,
+  _In_ DRIVER_REGKEY_TYPE RegKeyType,
+  _In_ ACCESS_MASK DesiredAccess,
+  _In_ ULONG Flags,
+  _Out_ PHANDLE DriverRegKey);
+#endif
+
 _IRQL_requires_max_(PASSIVE_LEVEL)
 _Must_inspect_result_
 NTKERNELAPI
@@ -2831,6 +2845,7 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 _Must_inspect_result_
 NTKERNELAPI
 NTSTATUS
+NTAPI
 IoGetDeviceInterfacePropertyData (
   _In_ PUNICODE_STRING SymbolicLinkName,
   _In_ CONST DEVPROPKEY *PropertyKey,
@@ -2852,6 +2867,17 @@ IoSetMasterIrpStatus(
 $endif (_NTDDK_)
 
 #endif /* (NTDDI_VERSION >= NTDDI_WIN8) */
+
+#if (NTDDI_VERSION >= NTDDI_WINBLUE)
+$if (_NTDDK_)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoQueryFullDriverPath(
+  _In_ PDRIVER_OBJECT DriverObject,
+  _Out_ PUNICODE_STRING FullPath);
+$endif (_NTDDK_)
+#endif /* (NTDDI_VERSION >= NTDDI_WINBLUE) */
 
 $if (_WDMDDK_)
 #if defined(_WIN64)

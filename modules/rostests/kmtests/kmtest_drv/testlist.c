@@ -114,6 +114,7 @@ KMT_TESTFUNC Test_ExWorkItem;
 KMT_TESTFUNC Test_ExWddmAvl;
 KMT_TESTFUNC Test_ExWddmRtl;
 KMT_TESTFUNC Test_IoMdl;
+KMT_TESTFUNC Test_IoModern;
 #if defined(_M_IX86) || defined(_M_AMD64)
 KMT_TESTFUNC Test_IoTimerKM;
 #endif
@@ -349,6 +350,7 @@ const KMT_TEST TestList[] =
     { "IoCsqKM",                            Test_IoCsqKM },
     { "IoNullDeviceKM",                     Test_IoNullDeviceKM },
     { "IoMdl",                              Test_IoMdl },
+    { "IoModern",                           Test_IoModern },
     { "IoVolume",                           Test_IoVolume },
     { "KdSystemDebugControl",               Test_KdSystemDebugControl },
     { "KsecBcrypt",                         Test_KsecBcrypt },
