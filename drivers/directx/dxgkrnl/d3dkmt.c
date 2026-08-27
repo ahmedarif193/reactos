@@ -3394,6 +3394,12 @@ typedef struct _DXGK_VIRTGPU_RESOURCE_LIST_HEADER
     UINT ResourceCount;
 } DXGK_VIRTGPU_RESOURCE_LIST_HEADER, *PDXGK_VIRTGPU_RESOURCE_LIST_HEADER;
 
+typedef struct _DXGK_VIRTGPU_RESOURCE_ENTRY
+{
+    D3DKMT_HANDLE hAllocation;
+    ULONG Flags;
+} DXGK_VIRTGPU_RESOURCE_ENTRY, *PDXGK_VIRTGPU_RESOURCE_ENTRY;
+
 #include <pshpack1.h>
 typedef struct _DXGK_VIRTGPU_SIGNAL_BLOCK
 {
@@ -3402,15 +3408,18 @@ typedef struct _DXGK_VIRTGPU_SIGNAL_BLOCK
 } DXGK_VIRTGPU_SIGNAL_BLOCK, *PDXGK_VIRTGPU_SIGNAL_BLOCK;
 #include <poppack.h>
 
-#define DXGK_VIRTGPU_RESOURCE_LIST_MAGIC 0x5652474cUL
+#define DXGK_VIRTGPU_RESOURCE_LIST_MAGIC_V1 0x5652474cUL
+#define DXGK_VIRTGPU_RESOURCE_LIST_MAGIC_V2 0x3252474cUL
+#define DXGK_VIRTGPU_RESOURCE_CPU_DIRTY     0x00000001UL
 
 static BOOLEAN
 DxgkpIsVirtGpuCommandEscape(
     _In_ CONST D3DKMT_ESCAPE *pEscape,
     _Outptr_result_bytebuffer_(*CommandBytes) CONST VOID **CommandBuffer,
     _Out_ UINT *CommandBytes,
-    _Outptr_result_buffer_maybenull_(*ResourceHandleCount) CONST D3DKMT_HANDLE **ResourceHandles,
+    _Outptr_result_maybenull_ CONST VOID **ResourceEntries,
     _Out_ UINT *ResourceHandleCount,
+    _Out_ UINT *ResourceEntrySize,
     _Out_opt_ D3DKMT_HANDLE *SignalSyncObject,
     _Out_opt_ ULONG64 *SignalFenceValue)
 {
@@ -3424,8 +3433,9 @@ DxgkpIsVirtGpuCommandEscape(
 
     if (CommandBuffer == NULL ||
         CommandBytes == NULL ||
-        ResourceHandles == NULL ||
+        ResourceEntries == NULL ||
         ResourceHandleCount == NULL ||
+        ResourceEntrySize == NULL ||
         pEscape == NULL)
     {
         return FALSE;
@@ -3433,8 +3443,9 @@ DxgkpIsVirtGpuCommandEscape(
 
     *CommandBuffer = NULL;
     *CommandBytes = 0;
-    *ResourceHandles = NULL;
+    *ResourceEntries = NULL;
     *ResourceHandleCount = 0;
+    *ResourceEntrySize = 0;
     if (SignalSyncObject != NULL)
         *SignalSyncObject = 0;
     if (SignalFenceValue != NULL)
@@ -3463,10 +3474,18 @@ DxgkpIsVirtGpuCommandEscape(
     if (PacketHeader->PayloadBytes >= sizeof(*ResourceHeader) + sizeof(*CommandHeader))
     {
         ResourceHeader = (const DXGK_VIRTGPU_RESOURCE_LIST_HEADER *)Cursor;
-        if (ResourceHeader->Magic == DXGK_VIRTGPU_RESOURCE_LIST_MAGIC)
+        if (ResourceHeader->Magic == DXGK_VIRTGPU_RESOURCE_LIST_MAGIC_V1 ||
+            ResourceHeader->Magic == DXGK_VIRTGPU_RESOURCE_LIST_MAGIC_V2)
         {
-            SIZE_T HandleBytes = (SIZE_T)ResourceHeader->ResourceCount *
-                                 sizeof(D3DKMT_HANDLE);
+            SIZE_T EntrySize = ResourceHeader->Magic ==
+                                   DXGK_VIRTGPU_RESOURCE_LIST_MAGIC_V2
+                                   ? sizeof(DXGK_VIRTGPU_RESOURCE_ENTRY)
+                                   : sizeof(D3DKMT_HANDLE);
+            SIZE_T HandleBytes;
+
+            if (ResourceHeader->ResourceCount > MAXULONG_PTR / EntrySize)
+                return FALSE;
+            HandleBytes = (SIZE_T)ResourceHeader->ResourceCount * EntrySize;
 
             if (PacketHeader->PayloadBytes <
                 sizeof(*ResourceHeader) + HandleBytes + sizeof(*CommandHeader))
@@ -3474,8 +3493,9 @@ DxgkpIsVirtGpuCommandEscape(
                 return FALSE;
             }
 
-            *ResourceHandles = (const D3DKMT_HANDLE *)(Cursor + sizeof(*ResourceHeader));
+            *ResourceEntries = Cursor + sizeof(*ResourceHeader);
             *ResourceHandleCount = ResourceHeader->ResourceCount;
+            *ResourceEntrySize = (UINT)EntrySize;
             MetadataBytes = sizeof(*ResourceHeader) + HandleBytes;
             Cursor += MetadataBytes;
         }
@@ -3548,7 +3568,10 @@ DxgkpReferenceRenderAllocation(
     Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)AllocationHandle, Adapter, Device, AllocationReference);
     if (!NT_SUCCESS(Status))
         return Status;
-    Status = DxgkVidMmAcquireSubmissionResidencyPin(*AllocationReference, Adapter, AllocationListEntry);
+    Status = DxgkVidMmAcquireSubmissionResidencyPinEx(*AllocationReference,
+                                                       Adapter,
+                                                       AllocationListEntry,
+                                                       FALSE);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
     Status = DxgkVidMmReferenceOpenBinding((HANDLE)(ULONG_PTR)AllocationHandle, Adapter, Device, &AllocationListEntry->hDeviceSpecificAllocation, OpenBindingReference);
@@ -3570,10 +3593,12 @@ static NTSTATUS
 DxgkpSubmitVirtGpuCommandEscape(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PDXGKRNL_DEVICE Device,
+    _In_opt_ PDXGKRNL_CONTEXT Context,
     _In_reads_bytes_(CommandBytes) CONST VOID *CommandBuffer,
     _In_ UINT CommandBytes,
-    _In_reads_opt_(ResourceHandleCount) CONST D3DKMT_HANDLE *ResourceHandles,
+    _In_reads_bytes_opt_(ResourceHandleCount * ResourceEntrySize) CONST VOID *ResourceEntries,
     _In_ UINT ResourceHandleCount,
+    _In_ UINT ResourceEntrySize,
     _In_ D3DKMT_HANDLE SignalSyncObject,
     _In_ ULONG64 SignalFenceValue)
 {
@@ -3582,6 +3607,7 @@ DxgkpSubmitVirtGpuCommandEscape(
     DXGK_ALLOCATIONLIST *AllocationList = NULL;
     PDXGKVMM_ALLOCATION *OpenBindingReferenceList = NULL;
     PDXGKVMM_ALLOCATION *AllocationReferenceList = NULL;
+    BOOLEAN *AllocationCpuDirtyList = NULL;
     PDXGKRNL_DMA_BUFFER DmaBuffer = NULL;
     PDXGKRNL_SUBMIT_DMA_BUFFER Reservation = NULL;
     DXGKRNL_TRACK_DMA_ARGS TrackArgs;
@@ -3593,13 +3619,22 @@ DxgkpSubmitVirtGpuCommandEscape(
     UINT EscapePatchCount = 0;
     UINT OpenBindingReferenceCount = 0;
     UINT AllocationReferenceCount = 0;
+    ULONG NodeOrdinal;
     UINT i;
     NTSTATUS Status;
     BOOLEAN KmdTransaction = FALSE;
 
-    if (Adapter == NULL || Device == NULL || CommandBuffer == NULL || CommandBytes == 0)
+    if (Adapter == NULL || Device == NULL || CommandBuffer == NULL || CommandBytes == 0 ||
+        (Context != NULL && Context->Device != Device) ||
+        (ResourceHandleCount != 0 && ResourceEntries == NULL) ||
+        (ResourceHandleCount != 0 &&
+         ResourceEntrySize != sizeof(D3DKMT_HANDLE) &&
+         ResourceEntrySize != sizeof(DXGK_VIRTGPU_RESOURCE_ENTRY)))
         return STATUS_INVALID_PARAMETER;
-    if ((SIZE_T)ResourceHandleCount > MAXULONG_PTR / sizeof(*AllocationList) || (SIZE_T)ResourceHandleCount > MAXULONG_PTR / sizeof(*OpenBindingReferenceList) || (SIZE_T)ResourceHandleCount > MAXULONG_PTR / sizeof(*AllocationReferenceList))
+    if (ResourceHandleCount > DXGKP_MAX_D3DKMT_LIST_COUNT ||
+        (SIZE_T)ResourceHandleCount > MAXULONG_PTR / sizeof(*AllocationList) ||
+        (SIZE_T)ResourceHandleCount > MAXULONG_PTR / sizeof(*OpenBindingReferenceList) ||
+        (SIZE_T)ResourceHandleCount > MAXULONG_PTR / sizeof(*AllocationReferenceList))
         return STATUS_INVALID_PARAMETER;
 
     if (DXGK_CB_FULL(Adapter, DxgkDdiRender) == NULL ||
@@ -3608,8 +3643,12 @@ DxgkpSubmitVirtGpuCommandEscape(
         return STATUS_NOT_SUPPORTED;
     }
 
-    if (Adapter->SchedulingCaps.MultiEngineAware)
-        return STATUS_NOT_SUPPORTED;
+    if (Adapter->SchedulingCaps.MultiEngineAware && Context == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    NodeOrdinal = Context != NULL ? Context->NodeOrdinal : 0;
+    if (NodeOrdinal >= Adapter->NodeCount)
+        return STATUS_INVALID_PARAMETER;
 
     Status = DxgkAllocateDmaBuffer(Adapter, CommandBytes, &DmaBuffer);
     if (!NT_SUCCESS(Status))
@@ -3631,7 +3670,8 @@ DxgkpSubmitVirtGpuCommandEscape(
         AllocationList = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)ResourceHandleCount * sizeof(*AllocationList), TAG_DXGK_SUBMITDMA);
         OpenBindingReferenceList = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)ResourceHandleCount * sizeof(*OpenBindingReferenceList), TAG_DXGK_SUBMITDMA);
         AllocationReferenceList = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)ResourceHandleCount * sizeof(*AllocationReferenceList), TAG_DXGK_SUBMITDMA);
-        if (AllocationList == NULL || OpenBindingReferenceList == NULL || AllocationReferenceList == NULL)
+        AllocationCpuDirtyList = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)ResourceHandleCount * sizeof(*AllocationCpuDirtyList), TAG_DXGK_SUBMITDMA);
+        if (AllocationList == NULL || OpenBindingReferenceList == NULL || AllocationReferenceList == NULL || AllocationCpuDirtyList == NULL)
         {
             Status = STATUS_INSUFFICIENT_RESOURCES;
             goto Cleanup;
@@ -3640,12 +3680,45 @@ DxgkpSubmitVirtGpuCommandEscape(
         RtlZeroMemory(AllocationList, (SIZE_T)ResourceHandleCount * sizeof(*AllocationList));
         RtlZeroMemory(OpenBindingReferenceList, (SIZE_T)ResourceHandleCount * sizeof(*OpenBindingReferenceList));
         RtlZeroMemory(AllocationReferenceList, (SIZE_T)ResourceHandleCount * sizeof(*AllocationReferenceList));
+        RtlZeroMemory(AllocationCpuDirtyList, (SIZE_T)ResourceHandleCount * sizeof(*AllocationCpuDirtyList));
 
         for (i = 0; i < ResourceHandleCount; ++i)
         {
-            Status = DxgkpReferenceRenderAllocation(Adapter, Device, ResourceHandles[i], &AllocationReferenceList[i], &OpenBindingReferenceList[i], &AllocationList[i]);
+            const UCHAR *EntryBytes = (const UCHAR *)ResourceEntries +
+                                      (SIZE_T)i * ResourceEntrySize;
+            D3DKMT_HANDLE AllocationHandle;
+            ULONG ResourceFlags = 0;
+
+            if (ResourceEntrySize == sizeof(DXGK_VIRTGPU_RESOURCE_ENTRY))
+            {
+                const DXGK_VIRTGPU_RESOURCE_ENTRY *Entry =
+                    (const DXGK_VIRTGPU_RESOURCE_ENTRY *)EntryBytes;
+
+                AllocationHandle = Entry->hAllocation;
+                ResourceFlags = Entry->Flags;
+                if (ResourceFlags & ~DXGK_VIRTGPU_RESOURCE_CPU_DIRTY)
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                    goto Cleanup;
+                }
+            }
+            else
+            {
+                AllocationHandle = *(const D3DKMT_HANDLE *)EntryBytes;
+                ResourceFlags = DXGK_VIRTGPU_RESOURCE_CPU_DIRTY;
+            }
+
+            Status = DxgkpReferenceRenderAllocation(
+                         Adapter,
+                         Device,
+                         AllocationHandle,
+                         &AllocationReferenceList[i],
+                         &OpenBindingReferenceList[i],
+                         &AllocationList[i]);
             if (!NT_SUCCESS(Status))
                 goto Cleanup;
+            AllocationCpuDirtyList[i] =
+                (ResourceFlags & DXGK_VIRTGPU_RESOURCE_CPU_DIRTY) != 0;
             AllocationReferenceCount++;
             OpenBindingReferenceCount++;
         }
@@ -3670,7 +3743,11 @@ DxgkpSubmitVirtGpuCommandEscape(
         Status = STATUS_DELETE_PENDING;
         goto Cleanup;
     }
-    Status = DXGK_CB_FULL(Adapter, DxgkDdiRender)(Device->hMiniportDevice, &RenderArgs);
+    Status = DXGK_CB_FULL(Adapter, DxgkDdiRender)(
+                 Adapter->SchedulingCaps.MultiEngineAware
+                     ? Context->hMiniportContext
+                     : Device->hMiniportDevice,
+                 &RenderArgs);
     DxgkReleaseKmdCall(Adapter);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
@@ -3702,13 +3779,15 @@ DxgkpSubmitVirtGpuCommandEscape(
     TrackArgs.hSignalSyncObject = SignalSyncObject;
     TrackArgs.SignalFenceValue = SignalFenceValue;
     TrackArgs.Device = Device;
+    TrackArgs.Context = Context;
     TrackArgs.EnforceSubmissionQuota = TRUE;
     TrackArgs.OpenBindingReferences = OpenBindingReferenceList;
     TrackArgs.OpenBindingReferenceCount = OpenBindingReferenceCount;
     TrackArgs.AllocationReferences = AllocationReferenceList;
     TrackArgs.AllocationReferenceCount = AllocationReferenceCount;
+    TrackArgs.AllocationCpuDirty = AllocationCpuDirtyList;
 
-    Status = VidSchSubmitCommandTracked(Adapter, 0, 0, DmaBuffer, &DmaBufferPrivateData, sizeof(DmaBufferPrivateData), AllocationList, ResourceHandleCount, EscapePatchList, EscapePatchCount, Device->hMiniportDevice, NULL, 0, &TrackArgs, 0, 0, &VidSchFence);
+    Status = VidSchSubmitCommandTracked(Adapter, NodeOrdinal, 0, DmaBuffer, &DmaBufferPrivateData, sizeof(DmaBufferPrivateData), AllocationList, ResourceHandleCount, EscapePatchList, EscapePatchCount, Adapter->SchedulingCaps.MultiEngineAware ? NULL : Device->hMiniportDevice, Adapter->SchedulingCaps.MultiEngineAware ? Context->hMiniportContext : NULL, 0, &TrackArgs, 0, 0, &VidSchFence);
     if (NT_SUCCESS(Status))
     {
         DmaBuffer = NULL;
@@ -3725,7 +3804,7 @@ DxgkpSubmitVirtGpuCommandEscape(
     }
 
     TrackArgs.SubmissionFenceId = SubmissionFenceId;
-    TrackArgs.NodeOrdinal = 0;
+    TrackArgs.NodeOrdinal = NodeOrdinal;
     TrackArgs.DmaBuffer = DmaBuffer;
     Status = DxgkPrepareTrackedDmaBuffer(Adapter, &TrackArgs, &Reservation);
     if (!NT_SUCCESS(Status))
@@ -3738,7 +3817,10 @@ DxgkpSubmitVirtGpuCommandEscape(
         NTSTATUS PatchStatus;
 
         RtlZeroMemory(&PatchArgs, sizeof(PatchArgs));
-        PatchArgs.hDevice = Device->hMiniportDevice;
+        if (Adapter->SchedulingCaps.MultiEngineAware)
+            PatchArgs.hContext = Context->hMiniportContext;
+        else
+            PatchArgs.hDevice = Device->hMiniportDevice;
         PatchArgs.DmaBufferSegmentId = DmaBuffer->SegmentId;
         PatchArgs.DmaBufferPhysicalAddress = DmaBuffer->SegmentAddress;
         PatchArgs.pDmaBuffer = DmaBuffer->VirtualAddress;
@@ -3782,8 +3864,15 @@ DxgkpSubmitVirtGpuCommandEscape(
         }
     }
 
+    Status = DxgkFlushDmaBufferForSubmission(DmaBuffer);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
     RtlZeroMemory(&SubmitArgs, sizeof(SubmitArgs));
-    SubmitArgs.hDevice = Device->hMiniportDevice;
+    if (Adapter->SchedulingCaps.MultiEngineAware)
+        SubmitArgs.hContext = Context->hMiniportContext;
+    else
+        SubmitArgs.hDevice = Device->hMiniportDevice;
     SubmitArgs.DmaBufferSegmentId = DmaBuffer->SegmentId;
     SubmitArgs.DmaBufferPhysicalAddress = DmaBuffer->SegmentAddress;
     SubmitArgs.DmaBufferSize = DmaBuffer->Capacity;
@@ -3796,7 +3885,7 @@ DxgkpSubmitVirtGpuCommandEscape(
     SubmitArgs.SubmissionFenceId = SubmissionFenceId;
     SubmitArgs.VidPnSourceId = 0;
     SubmitArgs.FlipInterval = D3DDDI_FLIPINTERVAL_IMMEDIATE;
-    SubmitArgs.NodeOrdinal = 0;
+    SubmitArgs.NodeOrdinal = NodeOrdinal;
     SubmitArgs.EngineOrdinal = 0;
     SubmitArgs.Flags.Value = 0;
 
@@ -3805,7 +3894,7 @@ DxgkpSubmitVirtGpuCommandEscape(
         Status = STATUS_DELETE_PENDING;
         goto Cleanup;
     }
-    if (!DxgkReserveSubmissionFenceIdentity(Adapter, 0, SubmissionFenceId))
+    if (!DxgkReserveSubmissionFenceIdentity(Adapter, NodeOrdinal, SubmissionFenceId))
     {
         DxgkReleaseKmdCall(Adapter);
         Status = STATUS_DEVICE_BUSY;
@@ -3818,7 +3907,7 @@ DxgkpSubmitVirtGpuCommandEscape(
         DxgkReleaseKmdCall(Adapter);
         goto Cleanup;
     }
-    DxgkPublishSubmittedFence(Adapter, 0, SubmissionFenceId);
+    DxgkPublishSubmittedFence(Adapter, NodeOrdinal, SubmissionFenceId);
     Status = DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommand)(Adapter->MiniportDeviceContext, &SubmitArgs);
     DxgkReleaseKmdCall(Adapter);
 
@@ -3856,6 +3945,8 @@ Cleanup:
         }
         ExFreePoolWithTag(AllocationReferenceList, TAG_DXGK_SUBMITDMA);
     }
+    if (AllocationCpuDirtyList != NULL)
+        ExFreePoolWithTag(AllocationCpuDirtyList, TAG_DXGK_SUBMITDMA);
     if (DmaBuffer != NULL)
         DxgkFreeDmaBuffer(DmaBuffer);
 
@@ -4008,8 +4099,9 @@ DxgkpEscapeCaptured(
     DXGKARG_ESCAPE   EscapeArgs;
     CONST VOID       *CommandBuffer;
     UINT             CommandBytes;
-    CONST D3DKMT_HANDLE *ResourceHandles;
+    CONST VOID       *ResourceEntries;
     UINT             ResourceHandleCount;
+    UINT             ResourceEntrySize;
     NTSTATUS         Status;
     BOOLEAN          MiniportCallbackAcquired = FALSE;
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3000)
@@ -4124,7 +4216,12 @@ DxgkpEscapeCaptured(
         D3DKMT_HANDLE SignalSyncObject = 0;
         ULONG64 SignalFenceValue = 0;
 
-        if (DxgkpIsVirtGpuCommandEscape(pEscape, &CommandBuffer, &CommandBytes, &ResourceHandles, &ResourceHandleCount, &SignalSyncObject, &SignalFenceValue))
+        if (DxgkpIsVirtGpuCommandEscape(pEscape, &CommandBuffer,
+                                        &CommandBytes, &ResourceEntries,
+                                        &ResourceHandleCount,
+                                        &ResourceEntrySize,
+                                        &SignalSyncObject,
+                                        &SignalFenceValue))
         {
             if (EscDevice == NULL)
             {
@@ -4134,7 +4231,11 @@ DxgkpEscapeCaptured(
                 goto Cleanup;
             }
 
-            Status = DxgkpSubmitVirtGpuCommandEscape(Adapter, EscDevice, CommandBuffer, CommandBytes, ResourceHandles, ResourceHandleCount, SignalSyncObject, SignalFenceValue);
+            Status = DxgkpSubmitVirtGpuCommandEscape(
+                         Adapter, EscDevice, EscContext, CommandBuffer,
+                         CommandBytes, ResourceEntries, ResourceHandleCount,
+                         ResourceEntrySize, SignalSyncObject,
+                         SignalFenceValue);
             goto Cleanup;
         }
     }
