@@ -491,6 +491,28 @@ if "%VS_SOLUTION%" == "1" (
     goto quit
 )
 
+if not exist "%REACTOS_SOURCE_DIR%base/applications/cmdutils/glmark2/src/benchmark-collection.cpp" (
+    where git > NUL 2>&1
+    if not !ERRORLEVEL! == 0 (
+        echo Error: git is required to initialize the glmark2 submodule.
+        goto quit
+    )
+    git -C "%REACTOS_SOURCE_DIR%" rev-parse --is-inside-work-tree > NUL 2>&1
+    if not !ERRORLEVEL! == 0 (
+        echo Error: glmark2 sources are missing; configure from a recursive Git checkout.
+        goto quit
+    )
+    echo Syncing glmark2 submodule...
+    git -C "%REACTOS_SOURCE_DIR%" submodule sync -- base/applications/cmdutils/glmark2
+    if not !ERRORLEVEL! == 0 goto quit
+    git -C "%REACTOS_SOURCE_DIR%" submodule update --init --depth 1 -- base/applications/cmdutils/glmark2
+    if not !ERRORLEVEL! == 0 goto quit
+)
+if not exist "%REACTOS_SOURCE_DIR%base/applications/cmdutils/glmark2/src/zlib/adler32.c" (
+    echo Error: glmark2 submodule is incomplete after synchronization.
+    goto quit
+)
+
 
 if EXIST CMakeCache.txt (
     del /q CMakeCache.txt

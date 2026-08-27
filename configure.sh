@@ -146,6 +146,23 @@ optional_fex_warning() {
 	echo "configure.sh: warning: $*. FEX ARM64EC is optional; configuration will continue." >&2
 }
 
+sync_glmark2_submodule() {
+	GLMARK2_DIR="$REACTOS_SOURCE_DIR/base/applications/cmdutils/glmark2"
+	if [ -f "$GLMARK2_DIR/src/benchmark-collection.cpp" ] &&
+	   [ -f "$GLMARK2_DIR/src/zlib/adler32.c" ]; then
+		return 0
+	fi
+
+	command -v git >/dev/null 2>&1 || fail "git is required to initialize the glmark2 submodule"
+	git -C "$REACTOS_SOURCE_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "glmark2 sources are missing; configure from a recursive Git checkout"
+
+	echo "Syncing glmark2 submodule..."
+	git -C "$REACTOS_SOURCE_DIR" submodule sync -- base/applications/cmdutils/glmark2 || fail "failed to sync glmark2 submodule metadata"
+	git -C "$REACTOS_SOURCE_DIR" submodule update --init --depth 1 -- base/applications/cmdutils/glmark2 || fail "failed to initialize the glmark2 submodule"
+	[ -f "$GLMARK2_DIR/src/benchmark-collection.cpp" ] &&
+	[ -f "$GLMARK2_DIR/src/zlib/adler32.c" ] || fail "glmark2 submodule is incomplete after synchronization"
+}
+
 # KDBG on x86 uses the Zydis and Zycore revisions nested in FEX. Fetch only
 # that dependency chain here; recursively fetching FEX would also download its
 # large test-binary submodules.
@@ -573,6 +590,7 @@ if [ "$ROSCONFIG_OK" = "1" ]; then
 fi
 echo
 
+sync_glmark2_submodule
 sync_kdb_submodules
 sync_arm64_submodules
 prepare_arm64_fex_source
