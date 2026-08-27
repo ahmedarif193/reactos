@@ -1936,7 +1936,16 @@ SdBusEnumerateCard(
         case SdCardTypeSdxc:
         case SdCardTypeCombo:
         {
-            ULONG PresentState = SdBusReadReg32(FdoExtension, SDHCI_PRESENT_STATE);
+            ULONG PresentState;
+
+            /* Only SDHCI controllers expose SDHCI_PRESENT_STATE. */
+            if (FdoExtension->HostType != SdBusHostSdhci)
+            {
+                PdoExtension->WriteProtected = FALSE;
+                break;
+            }
+
+            PresentState = SdBusReadReg32(FdoExtension, SDHCI_PRESENT_STATE);
 
             /*
              * SDHCI reports the mechanical write-protect pin as 1 when writes
