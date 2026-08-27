@@ -82,6 +82,7 @@
 #else
 #define TAG_IO_DRIVER_NAME      TAG_IO
 #endif
+#define TAG_IO_FULL_DRIVER_PATH '2NoI'
 #define TAG_ERROR_LOG           'rEoI'
 #define TAG_EA                  'aEoI'
 #define TAG_IO_NAME             'mNoI'
