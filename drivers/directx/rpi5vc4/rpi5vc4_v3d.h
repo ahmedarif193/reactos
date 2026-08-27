@@ -50,6 +50,10 @@
 #define V3D_HUB_INT_MSK_STS             0x005c
 #define V3D_HUB_INT_MSK_SET             0x0060
 #define V3D_HUB_INT_MSK_CLR             0x0064
+#define V3D_V7_HUB_INT_GMPV             (1u << 6)
+#define V3D_HUB_INT_MMU_WRV             (1u << 5)
+#define V3D_HUB_INT_MMU_PTI             (1u << 4)
+#define V3D_HUB_INT_MMU_CAP             (1u << 3)
 
 /* ---- Hub MMU cache + MMU ----------------------------------------------- */
 #define V3D_MMUC_CONTROL                0x1000
@@ -72,6 +76,7 @@
 #define V3D_MMU_CTL_ENABLE              (1u << 0)
 
 #define V3D_MMU_PT_PA_BASE              0x1204
+#define V3D_MMU_VIO_ID                  0x122c
 #define V3D_MMU_VIO_ADDR                0x1234
 #define V3D_MMU_CTL_TLB_STATS_ENABLE    (1u << 1)
 #define V3D_MMU_ILLEGAL_ADDR            0x1230
@@ -83,13 +88,14 @@
 #define V3D_PTE_SUPERPAGE               (1u << 31)
 #define V3D_PTE_WRITEABLE               (1u << 29)
 #define V3D_PTE_VALID                   (1u << 28)
+#define V3D_PTE_PAGE_NUMBER_MASK        (V3D_PTE_VALID - 1u)
 
 /* ---- Core (CTL/CLE) registers ------------------------------------------ */
 #define V3D_CTL_IDENT0                  0x0000
 #define V3D_CTL_IDENT1                  0x0004
 #define V3D_CTL_IDENT2                  0x0008
 #define V3D_CTL_MISCCFG                 0x0018
-#define V3D_CTL_SLCACTL                 0x0024
+#define V3D_CTL_SLCACTL                 0x0024  /* write-only cache command */
 #define V3D_SLCACTL_INVALIDATE_ALL      0x0F0F0F0Fu /* TVC+TDC+UC+IC, all slices */
 #define V3D_CTL_L2TCACTL                0x0030
 #define V3D_L2TCACTL_TMUWCF             (1u << 8)
@@ -268,6 +274,10 @@ BOOLEAN
 Rpi5V3dConnectInterrupt(
     _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension);
 
+BOOLEAN
+Rpi5V3dInterrupt(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension);
+
 VOID
 Rpi5V3dDisconnectInterrupt(
     _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension);
@@ -276,6 +286,11 @@ Rpi5V3dDisconnectInterrupt(
 BOOLEAN
 Rpi5V3dMmucFlushBounded(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension);
+
+BOOLEAN
+Rpi5V3dMmuProgramPageTableBounded(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ PHYSICAL_ADDRESS PageTablePhysical);
 
 /* ========================================================================
  * rpi5vc4_v3d_exec.c — bounded render/execution engine (XPDM port).
