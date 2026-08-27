@@ -2946,8 +2946,8 @@
 @ stub -arch=arm64 PsSetJobProperty
 @ stub -arch=arm64 PsSetLoadImageNotifyRoutineEx
 @ stdcall -arch=i386,x86_64,arm64 PsSetProcessDxgProcess(ptr ptr)
-@ stub -arch=arm64 PsSetProcessFaultInformation
-@ stub -arch=arm64 PsSetProcessesWindowState
+@ stdcall -arch=i386,x86_64,arm64 PsSetProcessFaultInformation(ptr ptr)
+@ stdcall -arch=i386,x86_64,arm64 PsSetProcessesWindowState(long ptr)
 @ stub -arch=arm64 PsSetSystemMultipleGroupAffinityThread
 @ stub -arch=arm64 PsSetThreadProperty
 @ stub -arch=arm64 PsStartSiloMonitor

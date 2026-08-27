@@ -1874,6 +1874,11 @@ typedef struct _EPROCESS
     PVOID DxgProcess;
     ULONGLONG SequenceNumber;
     CHAR Win32kPriorityFloor;
+    UCHAR ProcessFaultCounts;
+    USHORT ProcessStateSpare;
+    volatile ULONG ProcessFaultFlags;
+    ULONG ProcessWindowState;
+    PVOID ProcessWindowStateContext;
     PROCESS_ENERGY_VALUES EnergyValues;
 #endif
 } EPROCESS;

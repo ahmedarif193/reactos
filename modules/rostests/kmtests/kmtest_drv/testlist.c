@@ -86,6 +86,8 @@ KMT_TESTFUNC Test_PsModern;
 KMT_TESTFUNC Test_PsModernIdentity;
 KMT_TESTFUNC Test_PsModernPolicy;
 KMT_TESTFUNC Test_PsModernPriority;
+KMT_TESTFUNC Test_PsWddmFault;
+KMT_TESTFUNC Test_PsWddmWindow;
 KMT_TESTFUNC Test_RtlStringSupportKM;
 #ifdef _M_ARM64
 KMT_TESTFUNC Test_Win11NewKM;
@@ -459,6 +461,8 @@ const KMT_TEST TestList[] =
     { "PsModernIdentity",                   Test_PsModernIdentity },
     { "PsModernPolicy",                     Test_PsModernPolicy },
     { "PsModernPriority",                   Test_PsModernPriority },
+    { "PsWddmFault",                        Test_PsWddmFault },
+    { "PsWddmWindow",                       Test_PsWddmWindow },
     { "PsQuota",                            Test_PsQuota },
     { "SeAccessCheckKM",                    Test_SeAccessCheckKM },
     { "RtlAvlTreeKM",                       Test_RtlAvlTree },

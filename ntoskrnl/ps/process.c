@@ -2978,4 +2978,54 @@ VOID NTAPI PsDereferenceKernelStack(_Inout_ PKTHREAD Thread)
     UNREFERENCED_PARAMETER(Thread);
 }
 
+VOID
+NTAPI
+PsSetProcessFaultInformation(
+    _Inout_ PEPROCESS Process,
+    _In_ PVOID FaultInformation)
+{
+    ULONG Information = *(volatile ULONG *)FaultInformation;
+    UCHAR Counts;
+    UCHAR Count;
+
+    ExAcquirePushLockExclusive(&Process->ProcessLock);
+    Counts = Process->ProcessFaultCounts;
+    if (Information & 0x1)
+        Process->ProcessFaultFlags |= 0x4;
+    if (Information & 0x2)
+    {
+        Count = Counts & 0x7;
+        if (Count != 0x7)
+            Counts = (Counts & ~0x7) | (Count + 1);
+    }
+    if (Information & 0x4)
+    {
+        Count = (Counts >> 3) & 0x7;
+        if (Count != 0x7)
+            Counts = (Counts & ~0x38) | ((Count + 1) << 3);
+    }
+    if (Information & 0x8)
+        Counts |= 0x40;
+    Process->ProcessFaultCounts = Counts;
+    ExReleasePushLockExclusive(&Process->ProcessLock);
+}
+
+NTSTATUS
+NTAPI
+PsSetProcessesWindowState(
+    _In_ ULONG WindowState,
+    _In_opt_ PVOID Context)
+{
+    PEPROCESS Process = NULL;
+
+    while ((Process = PsGetNextProcess(Process)) != NULL)
+    {
+        ExAcquirePushLockExclusive(&Process->ProcessLock);
+        Process->ProcessWindowState = WindowState;
+        Process->ProcessWindowStateContext = Context;
+        ExReleasePushLockExclusive(&Process->ProcessLock);
+    }
+    return STATUS_SUCCESS;
+}
+
 /* EOF */
