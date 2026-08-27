@@ -26,6 +26,10 @@ Rpi5CrtcMapPv(
 }
 
 static BOOLEAN
+Rpi5CrtcProbeVfpLatch(
+    _In_ PVOID Base);
+
+static BOOLEAN
 Rpi5CrtcReportPv(
     _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
     _In_ ULONGLONG PvPhys,
@@ -34,7 +38,7 @@ Rpi5CrtcReportPv(
     PHYSICAL_ADDRESS Phys;
     PVOID Base;
     ULONG Control, VControl, HorzA, HorzB, VertA, VertB;
-    BOOLEAN Enabled;
+    BOOLEAN Enabled, VBlankLive;
 
     Phys.QuadPart = PvPhys;
     Base = MmMapIoSpace(Phys, RPI5_PV_LENGTH, MmNonCached);
@@ -54,13 +58,29 @@ Rpi5CrtcReportPv(
 
     if (Enabled)
     {
+        BOOLEAN MatchesMode;
+        BOOLEAN CurrentMatchesMode;
         BOOLEAN PreferThisValve =
-            !DeviceExtension->PixelValveValid ||
-            RPI5_PV_LO16(VertB) == DeviceExtension->ScreenHeight;
+            !DeviceExtension->PixelValveValid;
+
+        VBlankLive = Rpi5CrtcProbeVfpLatch(Base);
+        MatchesMode = RPI5_PV_LO16(VertB) == DeviceExtension->ScreenHeight;
+        CurrentMatchesMode =
+            DeviceExtension->PixelValveValid &&
+            RPI5_PV_LO16(DeviceExtension->PixelValveVertB) ==
+                DeviceExtension->ScreenHeight;
+        if (!PreferThisValve &&
+            ((VBlankLive && !DeviceExtension->PixelValveVBlankLive) ||
+             (VBlankLive == DeviceExtension->PixelValveVBlankLive &&
+              MatchesMode && !CurrentMatchesMode)))
+        {
+            PreferThisValve = TRUE;
+        }
 
         if (PreferThisValve)
         {
             DeviceExtension->PixelValveValid = TRUE;
+            DeviceExtension->PixelValveVBlankLive = VBlankLive;
             DeviceExtension->PixelValveIndex = Index;
             DeviceExtension->PixelValvePhysical.QuadPart = PvPhys;
             DeviceExtension->PixelValveControl = Control;
@@ -90,9 +110,12 @@ Rpi5CrtcReportTiming(
         return FALSE;
 
     DeviceExtension->PixelValveValid = FALSE;
+    DeviceExtension->PixelValveVBlankLive = FALSE;
 
     Found  = Rpi5CrtcReportPv(DeviceExtension, RPI5_PV0_PHYS, 0);
     Found |= Rpi5CrtcReportPv(DeviceExtension, RPI5_PV1_PHYS, 1);
+    DeviceExtension->PvVBlankBroken =
+        !DeviceExtension->PixelValveVBlankLive;
     if (!Found)
         DbgPrint("RPI5VC4: no enabled PixelValve found (firmware HDMI off?)\n");
     return Found;
@@ -179,6 +202,34 @@ Rpi5CrtcArmVfpLatch(
     }
 }
 
+static BOOLEAN
+Rpi5CrtcProbeVfpLatch(
+    _In_ PVOID Base)
+{
+    ULONG ElapsedUs;
+
+    Rpi5CrtcArmVfpLatch(Base);
+    WRITE_REGISTER_ULONG((PULONG)((PUCHAR)Base + RPI5_PV_INTSTAT),
+                         RPI5_PV_INT_VFP_START);
+
+    for (ElapsedUs = 0;
+         ElapsedUs < RPI5_PV_VBLANK_TIMEOUT_US;
+         ElapsedUs += RPI5_PV_VBLANK_POLL_US)
+    {
+        if (READ_REGISTER_ULONG((PULONG)((PUCHAR)Base + RPI5_PV_INTSTAT)) &
+            RPI5_PV_INT_VFP_START)
+        {
+            WRITE_REGISTER_ULONG((PULONG)((PUCHAR)Base + RPI5_PV_INTSTAT),
+                                 RPI5_PV_INT_VFP_START);
+            return TRUE;
+        }
+
+        KeStallExecutionProcessor(RPI5_PV_VBLANK_POLL_US);
+    }
+
+    return FALSE;
+}
+
 BOOLEAN
 Rpi5CrtcVBlankSeen(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
@@ -211,7 +262,7 @@ Rpi5CrtcWaitForVBlank(
 {
     PVOID Base;
     ULONG Control, VControl;
-    ULONG Tries;
+    ULONG ElapsedUs;
 
     if (DeviceExtension->PvVBlankBroken)
         return FALSE;
@@ -233,7 +284,9 @@ Rpi5CrtcWaitForVBlank(
     WRITE_REGISTER_ULONG((PULONG)((PUCHAR)Base + RPI5_PV_INTSTAT),
                          RPI5_PV_INT_VFP_START);
 
-    for (Tries = 0; Tries < 400; Tries++)
+    for (ElapsedUs = 0;
+         ElapsedUs < RPI5_PV_VBLANK_TIMEOUT_US;
+         ElapsedUs += RPI5_PV_VBLANK_POLL_US)
     {
         if (READ_REGISTER_ULONG((PULONG)((PUCHAR)Base + RPI5_PV_INTSTAT)) &
             RPI5_PV_INT_VFP_START)
@@ -243,13 +296,11 @@ Rpi5CrtcWaitForVBlank(
             return TRUE;
         }
 
-        KeStallExecutionProcessor(50);
+        KeStallExecutionProcessor(RPI5_PV_VBLANK_POLL_US);
     }
 
-    /* VFP latch never fired: latch the wait off so every future flip
-     * doesn't burn 20 ms (tear-avoidance only; flips still proceed). */
+    /* VFP latch never fired. Keep future flips from repeating the timeout;
+     * tear avoidance is optional and presentation still proceeds. */
     DeviceExtension->PvVBlankBroken = TRUE;
-    DbgPrint("RPI5VC4: PV vblank latch timeout (INTSTAT semantics differ "
-             "on silicon?) — disabling flip vblank waits\n");
     return FALSE;
 }
