@@ -155,6 +155,9 @@
 #define SOFTGPU_GPUMMU_END_TO_END 1
 #define SOFTGPU_DIAGNOSTIC_PAYLOAD_VERSION 1
 
+static const GUID g_RxgkShadowPresentInterfaceGuid =
+    RXGK_SHADOW_PRESENT_INTERFACE_GUID_INIT;
+
 C_ASSERT((ULONG)DXGK_VSYNC_ENABLE == (ULONG)SoftGpuVsyncEnable);
 C_ASSERT((ULONG)DXGK_VSYNC_DISABLE_KEEP_PHASE ==
          (ULONG)SoftGpuVsyncDisableKeepPhase);
@@ -332,10 +335,8 @@ DriverEntry(
     InitData.DxgkDdiRemoveDevice                    = SoftGpuDdiRemoveDevice;
     InitData.DxgkDdiResetDevice                     = SoftGpuDdiResetDevice;
     InitData.DxgkDdiSetPowerState                   = SoftGpuDdiSetPowerState;
-#if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
     InitData.DxgkDdiQueryInterface                  =
         SoftGpuDdiQueryInterface;
-#endif
 
     /* --- Adapter information --------------------------------------------- */
     InitData.DxgkDdiQueryAdapterInfo                = SoftGpuDdiQueryAdapterInfo;
@@ -512,6 +513,10 @@ SoftGpuDdiAddDevice(
     Device->PhysicalDeviceObject = PhysicalDeviceObject;
 
     KeInitializeSpinLock(&Device->FenceLock);
+    KeInitializeSpinLock(&Device->ShadowPresentInterfaceLock);
+    KeInitializeEvent(&Device->ShadowPresentInterfaceZeroEvent,
+                      NotificationEvent,
+                      TRUE);
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
     KeInitializeEvent(&Device->FeatureInterfaceZeroEvent,
                       NotificationEvent,
@@ -522,6 +527,80 @@ SoftGpuDdiAddDevice(
     *MiniportDeviceContext = Device;
     DPRINT("SOFTGPU: AddDevice success Device=%p\n", Device);
     return STATUS_SUCCESS;
+}
+
+static BOOLEAN
+SoftGpuAcquireShadowPresentInterface(
+    _Inout_ PSOFTGPU_DEVICE Device)
+{
+    KIRQL OldIrql;
+    BOOLEAN Acquired = FALSE;
+
+    KeAcquireSpinLock(&Device->ShadowPresentInterfaceLock, &OldIrql);
+    if (Device->ShadowPresentInterfaceQueriesOpen != 0 &&
+        InterlockedCompareExchange(&Device->Stopped, 0, 0) == 0)
+    {
+        if (InterlockedIncrement(
+                &Device->ShadowPresentInterfaceReferences) == 1)
+        {
+            KeClearEvent(&Device->ShadowPresentInterfaceZeroEvent);
+        }
+        Acquired = TRUE;
+    }
+    KeReleaseSpinLock(&Device->ShadowPresentInterfaceLock, OldIrql);
+
+    return Acquired;
+}
+
+static VOID
+NTAPI
+SoftGpuShadowPresentInterfaceReference(
+    _In_ PVOID Context)
+{
+    PSOFTGPU_DEVICE Device = (PSOFTGPU_DEVICE)Context;
+    KIRQL OldIrql;
+
+    if (Device == NULL || Device->Magic != SOFTGPU_DEVICE_MAGIC)
+    {
+        ASSERT(FALSE);
+        return;
+    }
+
+    KeAcquireSpinLock(&Device->ShadowPresentInterfaceLock, &OldIrql);
+    if (Device->ShadowPresentInterfaceReferences <= 0)
+        ASSERT(FALSE);
+    else
+        InterlockedIncrement(&Device->ShadowPresentInterfaceReferences);
+    KeReleaseSpinLock(&Device->ShadowPresentInterfaceLock, OldIrql);
+}
+
+static VOID
+NTAPI
+SoftGpuShadowPresentInterfaceDereference(
+    _In_ PVOID Context)
+{
+    PSOFTGPU_DEVICE Device = (PSOFTGPU_DEVICE)Context;
+    KIRQL OldIrql;
+
+    if (Device == NULL || Device->Magic != SOFTGPU_DEVICE_MAGIC)
+    {
+        ASSERT(FALSE);
+        return;
+    }
+
+    KeAcquireSpinLock(&Device->ShadowPresentInterfaceLock, &OldIrql);
+    if (Device->ShadowPresentInterfaceReferences <= 0)
+    {
+        ASSERT(FALSE);
+    }
+    else if (InterlockedDecrement(
+                 &Device->ShadowPresentInterfaceReferences) == 0)
+    {
+        KeSetEvent(&Device->ShadowPresentInterfaceZeroEvent,
+                   IO_NO_INCREMENT,
+                   FALSE);
+    }
+    KeReleaseSpinLock(&Device->ShadowPresentInterfaceLock, OldIrql);
 }
 
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
@@ -692,6 +771,8 @@ SoftGpuQueryFeatureInterface(
     return STATUS_NOT_SUPPORTED;
 }
 
+#endif
+
 NTSTATUS
 APIENTRY
 SoftGpuDdiQueryInterface(
@@ -700,7 +781,6 @@ SoftGpuDdiQueryInterface(
 {
     PSOFTGPU_DEVICE Device =
         (PSOFTGPU_DEVICE)MiniportDeviceContext;
-    DXGKDDI_FEATURE_INTERFACE FeatureInterface;
 
     PAGED_CODE();
 
@@ -713,39 +793,68 @@ SoftGpuDdiQueryInterface(
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (!RtlEqualMemory(QueryInterface->InterfaceType,
-                        &SoftGpuWddmFeatureInterfaceGuid,
-                        sizeof(SoftGpuWddmFeatureInterfaceGuid)) ||
-        QueryInterface->DeviceUid != DISPLAY_ADAPTER_HW_ID)
-    {
+    if (QueryInterface->DeviceUid != DISPLAY_ADAPTER_HW_ID)
         return STATUS_NOT_SUPPORTED;
+
+    if (RtlEqualMemory(QueryInterface->InterfaceType,
+                       &g_RxgkShadowPresentInterfaceGuid,
+                       sizeof(g_RxgkShadowPresentInterfaceGuid)))
+    {
+        RXGK_SHADOW_PRESENT_INTERFACE Interface;
+
+        if (QueryInterface->Version !=
+                RXGK_SHADOW_PRESENT_INTERFACE_VERSION_1)
+        {
+            return STATUS_NOT_SUPPORTED;
+        }
+        if (QueryInterface->Size < sizeof(Interface))
+            return STATUS_BUFFER_TOO_SMALL;
+        if (!SoftGpuAcquireShadowPresentInterface(Device))
+            return STATUS_DEVICE_NOT_READY;
+
+        RtlZeroMemory(&Interface, sizeof(Interface));
+        Interface.Size = sizeof(Interface);
+        Interface.Version = RXGK_SHADOW_PRESENT_INTERFACE_VERSION_1;
+        Interface.Context = Device;
+        Interface.InterfaceReference =
+            SoftGpuShadowPresentInterfaceReference;
+        Interface.InterfaceDereference =
+            SoftGpuShadowPresentInterfaceDereference;
+        Interface.Present = SoftGpuDdiPresentDisplayOnly;
+        *(PRXGK_SHADOW_PRESENT_INTERFACE)QueryInterface->Interface =
+            Interface;
+        return STATUS_SUCCESS;
     }
 
-    if (QueryInterface->Version < DXGK_FEATURE_INTERFACE_VERSION_1)
-        return STATUS_NOT_SUPPORTED;
-    if (QueryInterface->Size < sizeof(FeatureInterface))
-        return STATUS_BUFFER_TOO_SMALL;
-    if (!SoftGpuAcquireFeatureInterface(Device))
-        return STATUS_DEVICE_NOT_READY;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
+    if (RtlEqualMemory(QueryInterface->InterfaceType,
+                       &SoftGpuWddmFeatureInterfaceGuid,
+                       sizeof(SoftGpuWddmFeatureInterfaceGuid)))
+    {
+        DXGKDDI_FEATURE_INTERFACE Interface;
 
-    RtlZeroMemory(&FeatureInterface, sizeof(FeatureInterface));
-    FeatureInterface.Size = sizeof(FeatureInterface);
-    FeatureInterface.Version = DXGK_FEATURE_INTERFACE_VERSION_1;
-    FeatureInterface.Context = Device;
-    FeatureInterface.InterfaceReference =
-        SoftGpuFeatureInterfaceReference;
-    FeatureInterface.InterfaceDereference =
-        SoftGpuFeatureInterfaceDereference;
-    FeatureInterface.QueryFeatureSupport =
-        SoftGpuQueryFeatureSupport;
-    FeatureInterface.QueryFeatureInterface =
-        SoftGpuQueryFeatureInterface;
-    *(PDXGKDDI_FEATURE_INTERFACE)QueryInterface->Interface =
-        FeatureInterface;
+        if (QueryInterface->Version < DXGK_FEATURE_INTERFACE_VERSION_1)
+            return STATUS_NOT_SUPPORTED;
+        if (QueryInterface->Size < sizeof(Interface))
+            return STATUS_BUFFER_TOO_SMALL;
+        if (!SoftGpuAcquireFeatureInterface(Device))
+            return STATUS_DEVICE_NOT_READY;
 
-    return STATUS_SUCCESS;
-}
+        RtlZeroMemory(&Interface, sizeof(Interface));
+        Interface.Size = sizeof(Interface);
+        Interface.Version = DXGK_FEATURE_INTERFACE_VERSION_1;
+        Interface.Context = Device;
+        Interface.InterfaceReference = SoftGpuFeatureInterfaceReference;
+        Interface.InterfaceDereference = SoftGpuFeatureInterfaceDereference;
+        Interface.QueryFeatureSupport = SoftGpuQueryFeatureSupport;
+        Interface.QueryFeatureInterface = SoftGpuQueryFeatureInterface;
+        *(PDXGKDDI_FEATURE_INTERFACE)QueryInterface->Interface = Interface;
+        return STATUS_SUCCESS;
+    }
 #endif
+
+    return STATUS_NOT_SUPPORTED;
+}
 
 
 /* =========================================================================
@@ -1022,6 +1131,9 @@ SoftGpuDdiStartDevice(
     KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
     Device->Stopped = 0;
     KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+    KeAcquireSpinLock(&Device->ShadowPresentInterfaceLock, &OldIrql);
+    Device->ShadowPresentInterfaceQueriesOpen = 1;
+    KeReleaseSpinLock(&Device->ShadowPresentInterfaceLock, OldIrql);
 
     DPRINT("SOFTGPU: StartDevice success: %lu source(s), %lu child(ren)\n",
            Device->NumSources, Device->NumChildren);
@@ -1056,6 +1168,19 @@ SoftGpuDdiStopDevice(
     Device->FeatureNegotiationActive = 0;
 #endif
     KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+    KeAcquireSpinLock(&Device->ShadowPresentInterfaceLock, &OldIrql);
+    Device->ShadowPresentInterfaceQueriesOpen = 0;
+    KeReleaseSpinLock(&Device->ShadowPresentInterfaceLock, OldIrql);
+    if (InterlockedCompareExchange(
+            &Device->ShadowPresentInterfaceReferences, 0, 0) != 0)
+    {
+        (VOID)KeWaitForSingleObject(
+                  &Device->ShadowPresentInterfaceZeroEvent,
+                  Executive,
+                  KernelMode,
+                  FALSE,
+                  NULL);
+    }
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
     if (InterlockedCompareExchange(
             &Device->FeatureInterfaceReferences, 0, 0) != 0)
