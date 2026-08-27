@@ -502,6 +502,18 @@ NTSTATUS NTAPI TdrResetFromTimeout(_In_ PVOID RecoveryContext);
 /* Aggregate initial admission cap across all devices of one process/adapter. */
 #define DXGK_PROCESS_MAX_INFLIGHT 512
 
+#define DXGKP_PRESENT_SNAPSHOT_COUNT 2
+
+typedef struct _DXGKRNL_PRESENT_SNAPSHOT
+{
+    PVOID Buffer;
+    SIZE_T BufferSize;
+    RECTL SyncRect;
+    RECTL PresentRect;
+    BOOLEAN SyncValid;
+    BOOLEAN PresentValid;
+} DXGKRNL_PRESENT_SNAPSHOT, *PDXGKRNL_PRESENT_SNAPSHOT;
+
 /* ========================================================================
  * DXGKRNL_ADAPTER
  *
@@ -871,13 +883,14 @@ struct _DXGKRNL_ADAPTER
     SIZE_T                      PostDisplayMappingSize;
 
     /*
-     * Periodic present timer.  Fires a DPC that calls
-     * DxgkDdiPresentDisplayOnly to push the shadow framebuffer to the GPU.
+     * Periodic present timer.  Fires a DPC that queues completed-frame
+     * snapshots for DxgkDdiPresentDisplayOnly.
      */
     KTIMER                      PresentTimer;
     KDPC                        PresentDpc;
     BOOLEAN                     PresentTimerActive;
     PIO_WORKITEM                PresentWorkItem;
+    KMUTEX                      PresentLifecycleMutex;
 
     /*
      * Set by DWM via IOCTL while a composition BitBlt is in progress.
@@ -963,6 +976,16 @@ struct _DXGKRNL_ADAPTER
      * IOCTL path, present timer DPC, and present work item.
      */
     KSPIN_LOCK                  PresentLock;
+    EX_RUNDOWN_REF              PresentPathRundown;
+    volatile LONG               PresentPathOpen;
+    DXGKRNL_PRESENT_SNAPSHOT    PresentSnapshots[DXGKP_PRESENT_SNAPSHOT_COUNT];
+    ULONG                       PresentSnapshotWidth;
+    ULONG                       PresentSnapshotHeight;
+    ULONG                       PresentSnapshotPitch;
+    LONG                        PresentSnapshotReady;
+    LONG                        PresentSnapshotReading;
+    LONG                        PresentSnapshotWriting;
+    ULONG                       PresentSnapshotNext;
 
     /*
      * Tracks DMA buffers that remain owned by the miniport until it signals
