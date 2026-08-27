@@ -10985,7 +10985,7 @@ DxgkpInitializeMiniport(
     MpCtx->RegistryPath.MaximumLength = RegistryPath->Length + sizeof(WCHAR);
 
     /*
-     * Recognize the in-box basic-display fallback (softgpu) by its service
+     * Recognize the in-box Basic Display fallback by its service
      * key name, the same way Windows dxgkrnl special-cases MSBDD.  The
      * fallback yields the boot display to any real miniport that acquires
      * POST display ownership.
@@ -11001,7 +11001,7 @@ DxgkpInitializeMiniport(
 
         if (ServiceName.Length > 0)
         {
-            UNICODE_STRING FallbackName = RTL_CONSTANT_STRING(L"softgpu");
+            UNICODE_STRING FallbackName = RTL_CONSTANT_STRING(L"BasicDisplay");
 
             if (RtlEqualUnicodeString(&ServiceName, &FallbackName, TRUE))
             {

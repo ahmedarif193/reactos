@@ -1,6 +1,6 @@
 # PROJECT:  ReactOS WDDM Null/Software GPU Miniport
 # LICENSE:  GPL-2.0+ (https://spdx.org/licenses/GPL-2.0+)
-# PURPOSE:  Build file for softgpu.sys — configurable WDDM software miniport
+# PURPOSE:  Build file for BasicDisplay.sys — configurable WDDM software miniport
 #           with a physical scanout provider and software command engine.
 # COPYRIGHT: Copyright 2024 ReactOS WDDM Team
 #
@@ -9,7 +9,7 @@
 #   2. dxgkrnl   — imports ntoskrnl/hal; owns the internal resolver device
 #   3. softgpu   — resolves DxgkInitialize through the static displib wrapper
 
-spec2def(softgpu.sys softgpu.spec ADD_IMPORTLIB)
+spec2def(BasicDisplay.sys softgpu.spec ADD_IMPORTLIB)
 
 # softgpu MUST compile with the same current header version as dxgkrnl so
 # DRIVER_INITIALIZATION_DATA, DXGK_INTERFACE and every DXGKARG_* structure are
@@ -36,7 +36,9 @@ list(APPEND SOURCE
 add_library(softgpu MODULE
     ${SOURCE}
     softgpu.rc
-    ${CMAKE_CURRENT_BINARY_DIR}/softgpu.def)
+    ${CMAKE_CURRENT_BINARY_DIR}/BasicDisplay.def)
+
+set_target_properties(softgpu PROPERTIES OUTPUT_NAME "BasicDisplay")
 
 target_compile_definitions(softgpu PRIVATE
     REACTOS_WDDM_TARGET_LEVEL=${REACTOS_WDDM_TARGET_LEVEL}
