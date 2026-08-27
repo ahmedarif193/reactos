@@ -183,6 +183,7 @@ User32CreateWindowEx(DWORD dwExStyle,
     HWND Handle = NULL;
     LPCWSTR lpszClsVersion;
     LPCWSTR lpLibFileName = NULL;
+    LPCWSTR RegistrationClass;
     HANDLE pCtx = NULL;
     DWORD dwFlagsVer;
 
@@ -204,6 +205,7 @@ User32CreateWindowEx(DWORD dwExStyle,
     if (IS_ATOM(lpClassName))
     {
         plstrClassName = (PVOID)lpClassName;
+        RegistrationClass = (LPCWSTR)(ULONG_PTR)lpClassName;
     }
     else
     {
@@ -225,6 +227,7 @@ User32CreateWindowEx(DWORD dwExStyle,
         lstrClassName.Length = ClassName.Length;
         lstrClassName.MaximumLength = ClassName.MaximumLength;
         plstrClassName = &lstrClassName;
+        RegistrationClass = ClassName.Buffer;
     }
 
     /* Initialize a LARGE_STRING */
@@ -307,7 +310,7 @@ User32CreateWindowEx(DWORD dwExStyle,
     if (lpLibFileName)
     {
         wceW.cbSize = sizeof(wceW);
-        ClassFound = GetClassInfoExW(hInstance, ClassName.Buffer, &wceW);
+        ClassFound = GetClassInfoExW(hInstance, RegistrationClass, &wceW);
     }
 
     for (;;)
@@ -334,7 +337,7 @@ User32CreateWindowEx(DWORD dwExStyle,
             dwLastError = GetLastError();
             if (dwLastError == ERROR_CANNOT_FIND_WND_CLASS)
             {
-                ClassFound = VersionRegisterClass(ClassName.Buffer, lpLibFileName, pCtx, &hLibModule);
+                ClassFound = VersionRegisterClass(RegistrationClass, lpLibFileName, pCtx, &hLibModule);
                 if (ClassFound) continue;
             }
         }

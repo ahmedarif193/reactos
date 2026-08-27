@@ -162,6 +162,7 @@ VOID TestVersionedClasses(VOID)
     HANDLE h1, h2;
     ULONG_PTR cookie1, cookie2;
     ATOM a,b,c,d;
+    HWND hwnd;
     WNDPROC proc1,proc2,proc3, proc4, proc5;
     WCHAR buffer[50];
 
@@ -215,6 +216,22 @@ VOID TestVersionedClasses(VOID)
     ok( proc1 != DefWindowProcA, "Got 0x%p, expected not 0x%p\n", proc1, DefWindowProcA);
     ok( proc2 == DefWindowProcA, "Got 0x%p, expected 0x%p\n", proc2, DefWindowProcA);
     ok( proc3 == DefWindowProcA, "Got 0x%p, expected 0x%p\n", proc3, DefWindowProcA);
+
+    hwnd = CreateWindowExW(0,
+                           (LPCWSTR)(ULONG_PTR)c,
+                           L"Versioned atom window",
+                           WS_POPUP,
+                           0, 0, 10, 10,
+                           NULL,
+                           NULL,
+                           hmod,
+                           NULL);
+    ok(hwnd != NULL,
+       "CreateWindowExW failed for versioned class atom %u, error %lu\n",
+       c,
+       GetLastError());
+    if (hwnd)
+        DestroyWindow(hwnd);
 
     a = _RegisterClass(L"VersionTestClass2", hmod, CS_GLOBALCLASS, DefWindowProcW);
     proc1 = _GetWndproc(L"VersionTestClass2", (HMODULE)0xdead);
