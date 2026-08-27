@@ -3223,6 +3223,11 @@ NTSTATUS
 DxgkGpuVaFlushPageTableUpdates(
     _In_ PDXGKRNL_PROCESS Process);
 
+NTSTATUS
+DxgkGpuVaFlushPageTableUpdatesForDevice(
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ PDXGKRNL_DEVICE Device);
+
 BOOLEAN
 DxgkSyncHasPeriodicFences(VOID);
 
