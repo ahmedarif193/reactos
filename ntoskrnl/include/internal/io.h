@@ -1601,6 +1601,23 @@ extern LIST_ENTRY IopDeviceActionRequestList;
 extern RESERVE_IRP_ALLOCATOR IopReserveIrpAllocator;
 extern BOOLEAN IoRemoteBootClient;
 
+typedef NTSTATUS
+(NTAPI *PIOP_DIF_REGISTER_CLASS_DRIVER_PLUGIN)(
+    _In_ ULONG Version,
+    _In_opt_ PVOID Plugin,
+    _In_ ULONG Flags,
+    _In_opt_ PDRIVER_OBJECT DriverObject);
+
+typedef struct _IOP_DIF_PROVIDER
+{
+    PIOP_DIF_REGISTER_CLASS_DRIVER_PLUGIN RegisterClassDriverPlugin;
+} IOP_DIF_PROVIDER, *PIOP_DIF_PROVIDER;
+
+NTSTATUS
+NTAPI
+IopRegisterDifProvider(
+    _In_ const IOP_DIF_PROVIDER *Provider);
+
 //
 // Inlined Functions
 //
