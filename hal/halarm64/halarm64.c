@@ -1048,6 +1048,9 @@ HaliQuerySystemInformation(
     _Inout_ PVOID Buffer,
     _Out_ PULONG ReturnedLength)
 {
+    if (ReturnedLength)
+        *ReturnedLength = 0;
+
     switch (InformationClass)
     {
         case HalAcpiAuditInformation:
@@ -1057,41 +1060,26 @@ HaliQuerySystemInformation(
             BOOLEAN HasAcpi;
 
             if (BufferSize < sizeof(*Info))
-            {
-                if (ReturnedLength) *ReturnedLength = sizeof(*Info);
                 return STATUS_INFO_LENGTH_MISMATCH;
-            }
 
             Info = (HAL_ACPI_ROOT_POINTER_INFORMATION *)Buffer;
             HasAcpi = HalpQueryAcpiRootPointer(&RsdpAddress);
 
             Info->RsdpPhysicalAddress = RsdpAddress;
-            if (ReturnedLength) *ReturnedLength = sizeof(*Info);
-
-            DbgPrint("[arm64][HAL] HaliQuerySystemInformation(HalAcpiAuditInformation): RSDP=0x%llx HasAcpi=%d\n",
-                     RsdpAddress.QuadPart, HasAcpi);
+            if (ReturnedLength)
+                *ReturnedLength = sizeof(*Info);
 
             return HasAcpi ? STATUS_SUCCESS : STATUS_NOT_FOUND;
         }
 
         case HalFrameBufferCachingInformation:
-            /* Not supported on ARM64 */
-            return STATUS_NOT_IMPLEMENTED;
-
+        case HalDisplayBiosInformation:
         case HalQueryAMLIIllegalIOPortAddresses:
-            /*
-             * ARM64 does not have legacy x86 I/O ports (PIC, DMA, PIT, etc.)
-             * that need AMLI protection. Return empty list.
-             */
-            if (ReturnedLength) *ReturnedLength = 0;
-            return STATUS_SUCCESS;
+            return STATUS_INVALID_LEVEL;
 
         default:
-            DPRINT1("[arm64][HAL] HaliQuerySystemInformation: Unhandled class %d\n", InformationClass);
-            break;
+            return STATUS_INVALID_LEVEL;
     }
-
-    return STATUS_NOT_IMPLEMENTED;
 }
 
 NTSTATUS

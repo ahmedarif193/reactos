@@ -148,11 +148,50 @@ TestAMLIllegalIOPortAddresses(void)
     ExFreePoolWithTag(AddressList, 'OImK');
 }
 
+#if defined(_M_ARM64)
+static
+void
+TestArm64SystemInformation(void)
+{
+    static const HAL_QUERY_INFORMATION_CLASS UnsupportedClasses[] =
+    {
+        HalFrameBufferCachingInformation,
+        HalDisplayBiosInformation,
+        HalQueryAMLIIllegalIOPortAddresses,
+        (HAL_QUERY_INFORMATION_CLASS)MAXULONG
+    };
+    HAL_ACPI_ROOT_POINTER_INFORMATION AcpiInformation;
+    ULONG Output;
+    ULONG ReturnedLength;
+    NTSTATUS Status;
+    ULONG Index;
+
+    for (Index = 0; Index < RTL_NUMBER_OF(UnsupportedClasses); Index++)
+    {
+        Output = 0x55555555;
+        ReturnedLength = 0x55555555;
+        Status = HalQuerySystemInformation(UnsupportedClasses[Index], sizeof(Output), &Output, &ReturnedLength);
+        ok_eq_hex(Status, STATUS_INVALID_LEVEL);
+        ok_eq_ulong(ReturnedLength, 0);
+        ok_eq_hex(Output, 0x55555555);
+    }
+
+    RtlFillMemory(&AcpiInformation, sizeof(AcpiInformation), 0x55);
+    ReturnedLength = 0x55555555;
+    Status = HalQuerySystemInformation(HalAcpiAuditInformation, 0, &AcpiInformation, &ReturnedLength);
+    ok_eq_hex(Status, STATUS_INFO_LENGTH_MISMATCH);
+    ok_eq_ulong(ReturnedLength, 0);
+    ok_eq_ulonglong(AcpiInformation.RsdpPhysicalAddress.QuadPart, 0x5555555555555555ULL);
+}
+#endif
+
 START_TEST(HalSystemInfo)
 {
 #if defined(_M_IX86) || defined(_M_AMD64)
     TestAMLIllegalIOPortAddresses();
+#elif defined(_M_ARM64)
+    TestArm64SystemInformation();
 #else
-    skip(FALSE, "HalSystemInfo IO-port info classes are x86-only\n");
+    skip(FALSE, "HalSystemInfo is not implemented for this architecture\n");
 #endif
 }
