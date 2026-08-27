@@ -1945,7 +1945,18 @@ DxgkpEndGdiPresentBatch(
         return;
 
     InterlockedExchange64(&g_GdiPresentBatchSince100ns, 0);
-    DxgkpPresentSyncNow(Adapter);
+
+    /* A window-state transition may use several adjacent DC transactions.
+     * For example, showing a popup first draws its frame and then dispatches
+     * WM_PAINT for the menu contents. Publishing at each ReleaseDC exposes the
+     * empty popup between those transactions. Restart the existing quiet-time
+     * window at the outermost release and let the present timer publish their
+     * accumulated damage as one frame. */
+    if (DxgkpHasPendingDirtyRect(Adapter))
+    {
+        InterlockedExchange64(&g_LastDirtyNotify100ns,
+                              (LONGLONG)DxgkpDisplayTraceNow100ns());
+    }
 }
 
 /* ========================================================================
@@ -2135,9 +2146,10 @@ DxgkpPresentTimerDpc(
     {
         ULONGLONG LastPresent100ns = (ULONGLONG)InterlockedCompareExchange64(&g_LastPresentSubmit100ns, 0, 0);
 
-        /* Pure safety net: completed GDI batches present synchronously, so an idle
-         * desktop needs no periodic full-screen scan-out copy (a constant
-         * ~500 MB/s of write-combined traffic on rpi5vc4). */
+        /* Pure safety net: completed GDI batches leave explicit dirty damage
+         * for the quiet-time path, so an idle desktop needs no periodic
+         * full-screen scan-out copy (a constant ~500 MB/s of write-combined
+         * traffic on rpi5vc4). */
         if (Now100ns > LastPresent100ns &&
             (Now100ns - LastPresent100ns) < (250ULL * 10000ULL))
         {
@@ -2183,8 +2195,8 @@ DxgkpPresentTimerDpc(
 /* ========================================================================
  * DxgkpStartPresentTimer
  *
- * Starts a periodic timer that fires every 33ms (~30 fps) to push the
- * shadow framebuffer to the GPU via DxgkDdiPresentDisplayOnly.
+ * Starts the periodic timer that paces dirty presents and the idle scan-out
+ * safety net through DxgkDdiPresentDisplayOnly.
  *
  * IRQL: PASSIVE_LEVEL
  * ====================================================================== */
