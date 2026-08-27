@@ -36,5 +36,8 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Rpi5Vc4","Dll",
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Rpi5Vc4","Version",0x00010001,0x00000001
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Rpi5Vc4","DriverVersion",0x00010001,0x00000001
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Rpi5Vc4","Flags",0x00010001,0x00000000
+; Ask the startup launcher to run the focused Direct3D 7 and 8 diagnostics
+; synchronously, keeping automated shutdown behind the visible result prompt.
+HKLM,"SOFTWARE\ReactOS\BootDiagnostics","Direct3D78",0x00010001,0x00000001
 ; No synthetic Root devnode: PnP enumerates the real ACPI\BCM2712 GPU node and
 ; the CriticalDeviceDatabase seed (hivesys_rpi5.inf) binds it to this service.

@@ -16,7 +16,7 @@
 #define WIDTH   800
 #define HEIGHT  600
 
-BOOL D3D7Test(GUID *lpDevice, HWND hWnd);
+BOOL D3D7Test(GUID *lpDevice, HWND hWnd, BOOL HardwareOnly);
 BOOL D3D8Test(GUID *lpDevice, HWND hWnd);
 BOOL D3D9Test(GUID *lpDevice, HWND hWnd);
 
@@ -255,7 +255,23 @@ BOOL D3DTestPumpMessages(VOID)
     return TRUE;
 }
 
-BOOL StartD3DTest(GUID *lpDevice, HWND hWnd, HINSTANCE hInstance, WCHAR* pszCaption, INT TestNr)
+VOID D3DTestTraceFailure(INT TestNr, PCSTR Stage, HRESULT Result)
+{
+    CHAR Message[160];
+
+    if (SUCCEEDED(StringCchPrintfA(Message, ARRAYSIZE(Message), "DXDIAG_D3D%d_FAIL stage=%s hr=0x%08lx\n", TestNr, Stage, (ULONG)Result)))
+        OutputDebugStringA(Message);
+}
+
+static VOID D3DBootMarker(INT TestNr, PCSTR Phase)
+{
+    CHAR Marker[64];
+
+    if (SUCCEEDED(StringCchPrintfA(Marker, ARRAYSIZE(Marker), "DXDIAG_D3D%dBOOT_%s\n", TestNr, Phase)))
+        OutputDebugStringA(Marker);
+}
+
+BOOL StartD3DTest(GUID *lpDevice, HWND hWnd, HINSTANCE hInstance, WCHAR* pszCaption, INT TestNr, BOOL BootMode)
 {
     WCHAR szTestDescriptionRaw[256];
     WCHAR szTestDescription[256];
@@ -263,6 +279,7 @@ BOOL StartD3DTest(GUID *lpDevice, HWND hWnd, HINSTANCE hInstance, WCHAR* pszCapt
     WCHAR szResult[256];
     WCHAR szError[256];
     BOOL Result;
+    INT Response;
 
     LoadStringW(hInstance, IDS_DDTEST_ERROR, szError, sizeof(szError) / sizeof(WCHAR));
     LoadStringW(hInstance, IDS_D3DTEST_D3Dx, szTestDescriptionRaw, sizeof(szTestDescriptionRaw) / sizeof(WCHAR));
@@ -270,15 +287,21 @@ BOOL StartD3DTest(GUID *lpDevice, HWND hWnd, HINSTANCE hInstance, WCHAR* pszCapt
     StringCchPrintfW(szResult, ARRAYSIZE(szResult), szResultRaw, TestNr);
 
     _swprintf(szTestDescription, szTestDescriptionRaw, TestNr);
-    if (MessageBox(NULL, szTestDescription, pszCaption, MB_YESNO | MB_ICONQUESTION) == IDNO)
+    if (!BootMode && MessageBox(NULL, szTestDescription, pszCaption, MB_YESNO | MB_ICONQUESTION) == IDNO)
         return FALSE;
 
     ShowWindow(hWnd, SW_SHOW);
+    if (BootMode)
+    {
+        SetForegroundWindow(hWnd);
+        UpdateWindow(hWnd);
+        D3DBootMarker(TestNr, "RENDER_BEGIN");
+    }
 
     switch (TestNr)
     {
         case 7:
-            Result = D3D7Test(lpDevice, hWnd);
+            Result = D3D7Test(lpDevice, hWnd, BootMode);
             break;
 
         case 8:
@@ -293,15 +316,26 @@ BOOL StartD3DTest(GUID *lpDevice, HWND hWnd, HINSTANCE hInstance, WCHAR* pszCapt
             Result = FALSE;
     }
 
-    ShowWindow(hWnd, SW_HIDE);
+    if (!BootMode)
+        ShowWindow(hWnd, SW_HIDE);
 
     if (!Result)
     {
-        MessageBox(NULL, szError, pszCaption, MB_OK | MB_ICONERROR);
+        if (BootMode)
+            D3DBootMarker(TestNr, "RENDER_FAILED");
+        MessageBox(BootMode ? hWnd : NULL, szError, pszCaption, MB_OK | MB_ICONERROR | (BootMode ? MB_SETFOREGROUND : 0));
         return FALSE;
     }
 
-    if (MessageBox(NULL, szResult, pszCaption, MB_YESNO | MB_ICONQUESTION) == IDYES)
+    if (BootMode)
+    {
+        D3DBootMarker(TestNr, "RENDER_END");
+        D3DBootMarker(TestNr, "CAPTURE_READY");
+        return TRUE;
+    }
+
+    Response = MessageBox(NULL, szResult, pszCaption, MB_YESNO | MB_ICONQUESTION);
+    if (Response == IDYES)
         return TRUE;
 
     return FALSE;
@@ -312,13 +346,15 @@ static LRESULT CALLBACK WindowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
     return DefWindowProc(hWnd, msg, wParam, lParam);
 }
 
-VOID D3DTests(GUID *lpDevice)
+static BOOL D3DTestsInternal(GUID *lpDevice, BOOL BootMode)
 {
     WNDCLASSEX winClass;
     HWND hWnd;
     HINSTANCE hInstance = GetModuleHandle(NULL);
     WCHAR szDescription[256];
     WCHAR szCaption[256];
+    BOOL D3D7Result = FALSE;
+    BOOL D3D8Result = FALSE;
 
     winClass.cbSize = sizeof(WNDCLASSEX);
     winClass.style = CS_DBLCLKS | CS_OWNDC | CS_HREDRAW | CS_VREDRAW;
@@ -334,10 +370,10 @@ VOID D3DTests(GUID *lpDevice)
     winClass.hIconSm = LoadIcon(NULL, IDI_APPLICATION);
 
     if (!RegisterClassEx(&winClass))
-        return;
+        return FALSE;
 
     hWnd = CreateWindowEx(
-        0,
+        BootMode ? WS_EX_TOPMOST : 0,
         winClass.lpszClassName,
         NULL,
         WS_POPUP,
@@ -353,16 +389,33 @@ VOID D3DTests(GUID *lpDevice)
     if (!hWnd)
         goto cleanup;
 
-    LoadStringW(hInstance, IDS_D3DTEST_DESCRIPTION, szDescription, sizeof(szDescription) / sizeof(WCHAR));
     LoadStringW(hInstance, IDS_MAIN_DIALOG, szCaption, sizeof(szCaption) / sizeof(WCHAR));
-    if(MessageBox(NULL, szDescription, szCaption, MB_YESNO | MB_ICONQUESTION) == IDNO)
-        goto cleanup;
+    if (!BootMode)
+    {
+        LoadStringW(hInstance, IDS_D3DTEST_DESCRIPTION, szDescription, sizeof(szDescription) / sizeof(WCHAR));
+        if (MessageBox(NULL, szDescription, szCaption, MB_YESNO | MB_ICONQUESTION) == IDNO)
+            goto cleanup;
+    }
 
-    StartD3DTest(lpDevice, hWnd, hInstance, szCaption, 7);
-    StartD3DTest(lpDevice, hWnd, hInstance, szCaption, 8);
-    StartD3DTest(lpDevice, hWnd, hInstance, szCaption, 9);
+    D3D7Result = StartD3DTest(lpDevice, hWnd, hInstance, szCaption, 7, BootMode);
+    D3D8Result = StartD3DTest(lpDevice, hWnd, hInstance, szCaption, 8, BootMode);
+    if (!BootMode)
+    {
+        StartD3DTest(lpDevice, hWnd, hInstance, szCaption, 9, FALSE);
+    }
 
 cleanup:
     DestroyWindow(hWnd);
     UnregisterClass(winClass.lpszClassName, hInstance);
+    return D3D7Result && D3D8Result;
+}
+
+VOID D3DTests(GUID *lpDevice)
+{
+    (VOID)D3DTestsInternal(lpDevice, FALSE);
+}
+
+BOOL D3D78BootTests(VOID)
+{
+    return D3DTestsInternal(NULL, TRUE);
 }
