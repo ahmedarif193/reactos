@@ -259,6 +259,11 @@ add_library(win32k MODULE
 set_module_type(win32k kernelmodedriver)
 target_link_libraries(win32k ${PSEH_LIB} dxguid libcntpr wddm_bridge)
 
+if(REACTOS_USE_WDDM)
+    target_compile_definitions(win32k PRIVATE
+        REACTOS_WDDM_TARGET_LEVEL=${REACTOS_WDDM_TARGET_LEVEL})
+endif()
+
 if(ENABLE_EXPERIMENTAL_EARLY_SPLASH)
     target_compile_definitions(win32k PRIVATE ENABLE_EXPERIMENTAL_EARLY_SPLASH)
 endif()
