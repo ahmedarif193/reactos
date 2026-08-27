@@ -855,3 +855,7 @@
     SVC_(GdiDdDDISignalSynchronizationObjectFromGpu2, 1)
     SVC_(GdiDdDDIIsFeatureEnabled, 1)
     SVC_(GdiDdDDIReclaimAllocations2, 1)
+    SVC_(GdiDdDDISubmitWaitForSyncObjectsToHwQueue, 1)
+    SVC_(GdiDdDDISubmitSignalSyncObjectsToHwQueue, 1)
+    SVC_(GdiDdDDISubmitPresentBltToHwQueue, 1)
+    SVC_(GdiDdDDISubmitPresentToHwQueue, 1)

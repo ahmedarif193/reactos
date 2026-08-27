@@ -45,6 +45,34 @@ static void Test_SubmitCommandToHwQueue_NullArg(void)
     EXPECT_NULL_REJECTED(p, "D3DKMTSubmitCommandToHwQueue");
 }
 
+static void Test_SubmitWaitForSyncObjectsToHwQueue_NullArg(void)
+{
+    LOADFN(PFND3DKMT_SUBMITWAITFORSYNCOBJECTSTOHWQUEUE, p,
+           "D3DKMTSubmitWaitForSyncObjectsToHwQueue");
+    EXPECT_NULL_REJECTED(p, "D3DKMTSubmitWaitForSyncObjectsToHwQueue");
+}
+
+static void Test_SubmitSignalSyncObjectsToHwQueue_NullArg(void)
+{
+    LOADFN(PFND3DKMT_SUBMITSIGNALSYNCOBJECTSTOHWQUEUE, p,
+           "D3DKMTSubmitSignalSyncObjectsToHwQueue");
+    EXPECT_NULL_REJECTED(p, "D3DKMTSubmitSignalSyncObjectsToHwQueue");
+}
+
+static void Test_SubmitPresentBltToHwQueue_NullArg(void)
+{
+    LOADFN(PFND3DKMT_SUBMITPRESENTBLTTOHWQUEUE, p,
+           "D3DKMTSubmitPresentBltToHwQueue");
+    EXPECT_NULL_REJECTED(p, "D3DKMTSubmitPresentBltToHwQueue");
+}
+
+static void Test_SubmitPresentToHwQueue_NullArg(void)
+{
+    LOADFN(PFND3DKMT_SUBMITPRESENTTOHWQUEUE, p,
+           "D3DKMTSubmitPresentToHwQueue");
+    EXPECT_NULL_REJECTED(p, "D3DKMTSubmitPresentToHwQueue");
+}
+
 /* ---- CreateHwQueue on a bogus hardware context must fail ---- */
 static void Test_CreateHwQueue_BadHandle(void)
 {
@@ -68,5 +96,9 @@ START_TEST(hwqueue)
     Test_DestroyHwQueue_NullArg();
     Test_SubmitCommand_NullArg();
     Test_SubmitCommandToHwQueue_NullArg();
+    Test_SubmitWaitForSyncObjectsToHwQueue_NullArg();
+    Test_SubmitSignalSyncObjectsToHwQueue_NullArg();
+    Test_SubmitPresentBltToHwQueue_NullArg();
+    Test_SubmitPresentToHwQueue_NullArg();
     Test_CreateHwQueue_BadHandle();
 }
