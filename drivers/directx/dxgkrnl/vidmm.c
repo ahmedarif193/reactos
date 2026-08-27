@@ -227,6 +227,7 @@ typedef struct _DXGKVMM_DESTROY_BATCH
 {
     WORK_QUEUE_ITEM WorkItem;
     KEVENT WorkerIdleEvent;
+    KEVENT WorkerCompletionEvent;
     KEVENT CompletionEvent;
     LIST_ENTRY QuarantineEntry;
     PDXGKRNL_ADAPTER Adapter;
@@ -727,6 +728,7 @@ DxgkpVidMmNotifyDestroyBatchAllocationDrained(
             if (WorkerAdmitted)
             {
                 InterlockedExchange(&Batch->AdmissionDeferred, 0);
+                KeResetEvent(&Batch->WorkerCompletionEvent);
                 InterlockedExchange(&Batch->WorkQueued, 1);
                 if (ResetDrainedEvent)
                     KeResetEvent(&Adapter->VidMmDestroyWorkersDrainedEvent);
@@ -3555,6 +3557,7 @@ DxgkVidMmKickDeferredDestroyBatches(
             }
             InterlockedExchange(&Candidate->AdmissionDeferred, 0);
             InterlockedExchange(&Candidate->Quarantined, 0);
+            KeResetEvent(&Candidate->WorkerCompletionEvent);
             InterlockedExchange(&Candidate->WorkQueued, 1);
             InterlockedExchange(&Candidate->WorkerCounted, 1);
             InterlockedExchange(&Candidate->KmdAdmissionReserved, 1);
@@ -4488,6 +4491,7 @@ DxgkpVidMmAllocateDestroyBatch(
     Batch->PendingAllocationCount = (LONG)AllocationCount;
     Batch->CompletionStatus = STATUS_PENDING;
     KeInitializeEvent(&Batch->WorkerIdleEvent, NotificationEvent, TRUE);
+    KeInitializeEvent(&Batch->WorkerCompletionEvent, NotificationEvent, FALSE);
     KeInitializeEvent(&Batch->CompletionEvent, NotificationEvent, FALSE);
     InitializeListHead(&Batch->QuarantineEntry);
     ExInitializeWorkItem(&Batch->WorkItem, DxgkpVidMmDestroyBatchWorker, Batch);
@@ -4561,6 +4565,7 @@ DxgkpVidMmRetireFailedDestroyBatchWorker(
         ASSERT(Retired);
         if (Retired && SetDrainedEvent)
             KeSetEvent(&Adapter->VidMmDestroyWorkersDrainedEvent, IO_NO_INCREMENT, FALSE);
+        KeSetEvent(&Batch->WorkerCompletionEvent, IO_NO_INCREMENT, FALSE);
     }
     ExReleaseFastMutex(&DxgkVidMmDestroyBatchListLock);
 }
@@ -4580,6 +4585,8 @@ DxgkpVidMmReleaseActiveDestroyBatch(
     }
     ReleaseReference = InterlockedExchange(&Batch->ActiveReferenceHeld, 0) != 0;
     WorkerCounted = InterlockedExchange(&Batch->WorkerCounted, 0) != 0;
+    if (WorkerCounted)
+        KeSetEvent(&Batch->WorkerCompletionEvent, IO_NO_INCREMENT, FALSE);
     ExReleaseFastMutex(&DxgkVidMmDestroyBatchListLock);
     if (ReleaseReference)
         DxgkpVidMmFreeDestroyBatch(Batch);
@@ -11251,6 +11258,54 @@ DxgkpVidMmReleaseDeviceResidencyReferencesForCleanup(
     return STATUS_SUCCESS;
 }
 
+static VOID
+DxgkpVidMmWaitForDeviceDestroyWorkers(
+    _In_ PDXGKRNL_DEVICE Device)
+{
+    PDXGKRNL_ADAPTER Adapter = Device->Adapter;
+    HANDLE MiniportDeviceHandle = Device->hMiniportDevice;
+
+    for (;;)
+    {
+        PDXGKVMM_DESTROY_BATCH Batch = NULL;
+        PLIST_ENTRY Entry;
+        LONG References;
+
+        ExAcquireFastMutex(&DxgkVidMmDestroyBatchListLock);
+        for (Entry = DxgkVidMmDestroyBatchListHead.Flink;
+             Entry != &DxgkVidMmDestroyBatchListHead;
+             Entry = Entry->Flink)
+        {
+            PDXGKVMM_DESTROY_BATCH Candidate =
+                CONTAINING_RECORD(Entry, DXGKVMM_DESTROY_BATCH, QuarantineEntry);
+
+            if (Candidate->Adapter != Adapter ||
+                Candidate->MiniportDeviceHandle != MiniportDeviceHandle ||
+                InterlockedCompareExchange(&Candidate->Listed, 0, 0) == 0 ||
+                InterlockedCompareExchange(&Candidate->WorkerCounted, 0, 0) == 0)
+            {
+                continue;
+            }
+
+            References = InterlockedIncrement(&Candidate->LifetimeReferenceCount);
+            ASSERT(References > 1);
+            Batch = Candidate;
+            break;
+        }
+        ExReleaseFastMutex(&DxgkVidMmDestroyBatchListLock);
+
+        if (Batch == NULL)
+            return;
+
+        KeWaitForSingleObject(&Batch->WorkerCompletionEvent,
+                              Executive,
+                              KernelMode,
+                              FALSE,
+                              NULL);
+        DxgkpVidMmFreeDestroyBatch(Batch);
+    }
+}
+
 NTSTATUS
 DxgkVidMmCleanupDeviceAllocations(
     _In_ PDXGKRNL_DEVICE Device)
@@ -11324,6 +11379,7 @@ DxgkVidMmCleanupDeviceAllocations(
         return STATUS_SUCCESS;
     }
     DxgkpVidMmCleanupAllocations(NULL, Device);
+    DxgkpVidMmWaitForDeviceDestroyWorkers(Device);
     if (InterlockedCompareExchange(&Adapter->VidMmDestroyQueuesBlocked, 0, 0) != 0)
     {
         while (DxgkpVidMmForceQuarantinedDestroyBatches(Adapter) != 0)
