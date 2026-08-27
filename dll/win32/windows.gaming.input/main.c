@@ -42,6 +42,16 @@ HINSTANCE windows_gaming_input;
 
 DEFINE_GUID( GUID_DEVINTERFACE_WINEXINPUT,0x6c53d5fd,0x6480,0x440f,0xb6,0x18,0x47,0x67,0x50,0xc5,0xe1,0xa6 );
 
+static void set_current_thread_description( const WCHAR *description )
+{
+    HRESULT (WINAPI *set_thread_description)(HANDLE, PCWSTR);
+    HMODULE kernel32 = GetModuleHandleW( L"kernel32.dll" );
+
+    if (!kernel32) return;
+    set_thread_description = (void *)GetProcAddress( kernel32, "SetThreadDescription" );
+    if (set_thread_description) set_thread_description( GetCurrentThread(), description );
+}
+
 static LRESULT CALLBACK devnotify_wndproc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam )
 {
     DEV_BROADCAST_DEVICEINTERFACE_W *iface;
@@ -116,7 +126,7 @@ static DWORD WINAPI monitor_thread_proc( void *param )
     HWND hwnd;
     MSG msg;
 
-    SetThreadDescription( GetCurrentThread(), L"wine_wginput_worker" );
+    set_current_thread_description( L"wine_wginput_worker" );
 
     GetModuleHandleExW( GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (void *)windows_gaming_input, &module );
     RegisterClassExW( &wndclass );

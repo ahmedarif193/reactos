@@ -25,6 +25,13 @@
 #define PS_KILL_DEBUG                                   0x100
 #define PS_REF_DEBUG                                    0x200
 
+#if (NTDDI_VERSION < NTDDI_WIN10_RS2)
+ULONGLONG
+NTAPI
+PsGetProcessStartKey(
+    _In_ PEPROCESS Process);
+#endif
+
 //
 // Debug/Tracing support
 //

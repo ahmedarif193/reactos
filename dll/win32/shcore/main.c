@@ -42,6 +42,15 @@ static IUnknown *process_ref;
 static SRWLOCK explicit_appid_lock = SRWLOCK_INIT;
 static WCHAR *explicit_appid;
 
+#if (NTDDI_VERSION < NTDDI_WINTHRESHOLD)
+typedef enum
+{
+    SHELL_UI_COMPONENT_TASKBARS,
+    SHELL_UI_COMPONENT_NOTIFICATIONAREA,
+    SHELL_UI_COMPONENT_DESKBAND,
+} SHELL_UI_COMPONENT;
+#endif
+
 static FARPROC get_user32_proc(const char *name)
 {
     HMODULE module = GetModuleHandleW(L"user32.dll");

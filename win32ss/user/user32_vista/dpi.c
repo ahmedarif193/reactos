@@ -47,6 +47,9 @@ NtUserSetProcessDpiAwarenessContext(ULONG DpiContext, ULONG Flags);
 ULONG APIENTRY
 NtUserSetThreadDpiAwarenessContext(ULONG DpiContext);
 
+BOOL WINAPI
+SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT DpiContext);
+
 #define NDEBUG
 #include <debug.h>
 

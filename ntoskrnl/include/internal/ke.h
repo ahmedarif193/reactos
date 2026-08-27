@@ -100,6 +100,12 @@ extern PVOID KeUserExceptionDispatcher;
 extern PVOID KeUserExceptionDispatcherWorker;
 #endif
 extern PVOID KeRaiseUserExceptionDispatcher;
+#if (NTDDI_VERSION < NTDDI_WIN8)
+VOID
+NTAPI
+KeQuerySystemTimePrecise(
+    _Out_ PLARGE_INTEGER CurrentTime);
+#endif
 extern LARGE_INTEGER KeBootTime;
 extern ULONGLONG KeBootTimeBias;
 extern BOOLEAN ExCmosClockIsSane;

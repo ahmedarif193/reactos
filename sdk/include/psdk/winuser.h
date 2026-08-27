@@ -4193,7 +4193,7 @@ typedef struct tagINPUT_MESSAGE_SOURCE {
 
 #endif /* WINVER >= 0x0601 */
 
-#if(WINVER >= 0x0602)
+#if (WINVER >= 0x0602) || defined(_WIN32K_)
 
 enum tagPOINTER_INPUT_TYPE {
   PT_POINTER = 1,
@@ -4346,7 +4346,7 @@ typedef struct tagPOINTER_TYPE_INFO {
     } DUMMYUNIONNAME;
 } POINTER_TYPE_INFO, *PPOINTER_TYPE_INFO;
 
-#endif /* WINVER >= 0x0602 */
+#endif /* WINVER >= 0x0602 || _WIN32K_ */
 
 HKL WINAPI ActivateKeyboardLayout(_In_ HKL, _In_ UINT);
 BOOL WINAPI AdjustWindowRect(_Inout_ LPRECT, _In_ DWORD, _In_ BOOL);

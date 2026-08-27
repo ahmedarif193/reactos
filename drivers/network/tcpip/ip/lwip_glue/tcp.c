@@ -1,5 +1,6 @@
 #include <debug.h>
 #include <lwip/tcpip.h>
+#include <tags.h>
 
 #include "lwip_glue.h"
 

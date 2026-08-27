@@ -27,6 +27,16 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(speech);
 
+static void set_current_thread_description( const WCHAR *description )
+{
+    HRESULT (WINAPI *set_thread_description)(HANDLE, PCWSTR);
+    HMODULE kernel32 = GetModuleHandleW( L"kernel32.dll" );
+
+    if (!kernel32) return;
+    set_thread_description = (void *)GetProcAddress( kernel32, "SetThreadDescription" );
+    if (set_thread_description) set_thread_description( GetCurrentThread(), description );
+}
+
 /*
  *
  * ISpeechRecognitionCompilationResult
@@ -198,7 +208,7 @@ static DWORD CALLBACK session_worker_thread_cb( void *args )
     HANDLE events[2];
     HRESULT hr;
 
-    SetThreadDescription(GetCurrentThread(), L"wine_speech_recognition_session_worker");
+    set_current_thread_description( L"wine_speech_recognition_session_worker" );
 
     if (FAILED(hr = IAudioClient_Start(impl->audio_client)))
         goto error;

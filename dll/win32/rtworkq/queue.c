@@ -169,6 +169,11 @@ static const TP_CALLBACK_PRIORITY priorities[] =
     TP_CALLBACK_PRIORITY_LOW,
 };
 
+/* Vista exposes the version 1 callback environment. Version 3 adds callback
+ * priorities on Windows 7, but RTWorkQ can still use the Vista environment
+ * when the compatibility tree is built for an NT 6.0 target. */
+typedef TP_CALLBACK_ENVIRON RTWQ_CALLBACK_ENVIRON;
+
 struct queue;
 struct queue_desc;
 
@@ -191,7 +196,7 @@ struct queue
     IRtwqAsyncCallback IRtwqAsyncCallback_iface;
     const struct queue_ops *ops;
     TP_POOL *pool;
-    TP_CALLBACK_ENVIRON_V3 envs[ARRAY_SIZE(priorities)];
+    RTWQ_CALLBACK_ENVIRON envs[ARRAY_SIZE(priorities)];
     CRITICAL_SECTION cs;
     struct list pending_items;
     DWORD id;
@@ -334,22 +339,30 @@ static void CALLBACK standard_queue_cleanup_callback(void *object_data, void *gr
 
 static HRESULT pool_queue_init(const struct queue_desc *desc, struct queue *queue)
 {
-    TP_CALLBACK_ENVIRON_V3 env;
+    RTWQ_CALLBACK_ENVIRON env;
     unsigned int max_thread, i;
 
     queue->pool = CreateThreadpool(NULL);
 
     memset(&env, 0, sizeof(env));
+#if (_WIN32_WINNT >= _WIN32_WINNT_WIN7)
     env.Version = 3;
     env.Size = sizeof(env);
+#else
+    env.Version = 1;
+#endif
     env.Pool = queue->pool;
     env.CleanupGroup = CreateThreadpoolCleanupGroup();
     env.CleanupGroupCancelCallback = standard_queue_cleanup_callback;
+#if (_WIN32_WINNT >= _WIN32_WINNT_WIN7)
     env.CallbackPriority = TP_CALLBACK_PRIORITY_NORMAL;
+#endif
     for (i = 0; i < ARRAY_SIZE(queue->envs); ++i)
     {
         queue->envs[i] = env;
+#if (_WIN32_WINNT >= _WIN32_WINNT_WIN7)
         queue->envs[i].CallbackPriority = priorities[i];
+#endif
     }
     list_init(&queue->pending_items);
     InitializeCriticalSection(&queue->cs);
@@ -396,7 +409,7 @@ static void CALLBACK standard_queue_worker(TP_CALLBACK_INSTANCE *instance, void 
 static void pool_queue_submit(struct queue *queue, struct work_item *item)
 {
     TP_CALLBACK_PRIORITY callback_priority;
-    TP_CALLBACK_ENVIRON_V3 env;
+    RTWQ_CALLBACK_ENVIRON env;
 
     if (item->priority == 0)
         callback_priority = TP_CALLBACK_PRIORITY_NORMAL;

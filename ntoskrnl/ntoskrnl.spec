@@ -693,7 +693,7 @@
 @ stdcall KeQueryRuntimeThread(ptr ptr)
 @ stdcall -arch=arm64 KeQueryPerformanceCounter(ptr) hal.KeQueryPerformanceCounter
 @ stdcall -arch=i386,arm,arm64 KeQuerySystemTime(ptr)
-@ stdcall KeQuerySystemTimePrecise(ptr)
+@ stdcall -version=0x602+ KeQuerySystemTimePrecise(ptr)
 @ stdcall -arch=i386,arm,arm64 KeQueryTickCount(ptr)
 @ stdcall KeQueryTimeIncrement()
 @ cdecl -arch=x86_64,arm64 KeRaiseIrqlToDpcLevel() KxRaiseIrqlToDpcLevel
@@ -2724,7 +2724,7 @@
 @ stub -arch=arm64 MmMdlPageContentsState
 @ stub -arch=arm64 MmMdlPagesAreZero
 @ stub -arch=arm64 MmObtainChargesToLockPagedPool
-@ stdcall -arch=i386,x86_64,arm64 MmPrefetchVirtualAddresses(ptr)
+@ stdcall -version=0x602+ -arch=i386,x86_64,arm64 MmPrefetchVirtualAddresses(ptr)
 @ stub -arch=arm64 MmProtectDriverSection
 @ stub -arch=arm64 MmQueryMemoryRanges
 @ stub -arch=arm64 MmReturnChargesToLockPagedPool
@@ -2892,7 +2892,7 @@
 @ stdcall -arch=i386,x86_64,arm64 PsGetProcessServerSilo(ptr)
 @ stub -arch=arm64 PsGetProcessSignatureLevel
 @ stub -arch=arm64 PsGetProcessSilo
-@ stdcall -arch=i386,x86_64,arm64 PsGetProcessStartKey(ptr)
+@ stdcall -version=0xA00+ -arch=i386,x86_64,arm64 PsGetProcessStartKey(ptr)
 @ stdcall -arch=i386,x86_64,arm64 PsGetServerSiloServiceSessionId(ptr)
 @ stub -arch=arm64 PsGetSiloContainerId
 @ stub -arch=arm64 PsGetSiloContext
@@ -2943,7 +2943,7 @@
 @ stub -arch=arm64 PsRemoveSiloContext
 @ stub -arch=arm64 PsReplaceSiloContext
 @ stub -arch=arm64 PsRevertToUserMultipleGroupAffinityThread
-@ stdcall -arch=i386,x86_64,arm64 PsSetCreateProcessNotifyRoutineEx2(long ptr long)
+@ stdcall -version=0xA00+ -arch=i386,x86_64,arm64 PsSetCreateProcessNotifyRoutineEx2(long ptr long)
 @ stub -arch=arm64 PsSetCreateThreadNotifyRoutineEx
 @ stub -arch=arm64 PsSetCurrentThreadPrefetching
 @ stub -arch=arm64 PsSetJobProperty
@@ -3050,7 +3050,7 @@
 @ stub -arch=arm64 RtlGetExtendedContextLength
 @ stdcall -arch=i386,x86_64,arm64 RtlGetIntegerAtom(wstr ptr)
 @ stub -arch=arm64 RtlGetLastRange
-@ stdcall -arch=i386,x86_64,arm64 RtlGetMultiTimePrecise(ptr long ptr)
+@ stdcall -version=0xA00+ -arch=i386,x86_64,arm64 RtlGetMultiTimePrecise(ptr long ptr)
 @ stub -arch=arm64 RtlGetNonVolatileToken
 @ stdcall -arch=i386,x86_64,arm64 RtlGetNtSystemRoot()
 @ stub -arch=arm64 RtlGetPersistedStateLocation

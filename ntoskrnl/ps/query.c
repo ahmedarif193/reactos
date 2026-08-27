@@ -275,7 +275,7 @@ PspQueryProcessTelemetryIdInformation(
         Information->CreateTime = Process->CreateTime.QuadPart;
         Information->ProcessSequenceNumber = Process->SequenceNumber;
         Information->SessionId = PsGetProcessSessionId(Process);
-        Information->BootId = SharedUserData->BootId;
+        Information->BootId = (ULONG)(Information->ProcessStartKey >> 48);
 
         if (BufferLength < TotalLength)
         {
