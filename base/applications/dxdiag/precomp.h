@@ -78,9 +78,11 @@ VOID DDTests(GUID *lpDevice);
 
 /* Direct3D tests */
 VOID D3DTests(GUID *lpDevice);
+BOOL D3D78BootTests(VOID);
 VOID D3DTestBuildCube(PD3DTEST_VERTEX Vertices, DWORD Elapsed, UINT Width, UINT Height);
 BOOL D3DTestLoadTexture(PVOID Bits, LONG Pitch);
 BOOL D3DTestPumpMessages(VOID);
+VOID D3DTestTraceFailure(INT TestNr, PCSTR Stage, HRESULT Result);
 
 /* DirectSound initialization */
 void InitializeDirectSoundPage(PDXDIAG_CONTEXT pContext);
