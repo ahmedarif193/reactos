@@ -1601,6 +1601,17 @@ extern LIST_ENTRY IopDeviceActionRequestList;
 extern RESERVE_IRP_ALLOCATOR IopReserveIrpAllocator;
 extern BOOLEAN IoRemoteBootClient;
 
+typedef struct _IOP_IOMMU_PROVIDER
+{
+    DMA_IOMMU_INTERFACE_V1 Legacy;
+    DMA_IOMMU_INTERFACE_V3 Extended;
+} IOP_IOMMU_PROVIDER, *PIOP_IOMMU_PROVIDER;
+
+NTSTATUS
+NTAPI
+IopRegisterIommuProvider(
+    _In_ const IOP_IOMMU_PROVIDER *Provider);
+
 typedef NTSTATUS
 (NTAPI *PIOP_DIF_REGISTER_CLASS_DRIVER_PLUGIN)(
     _In_ ULONG Version,

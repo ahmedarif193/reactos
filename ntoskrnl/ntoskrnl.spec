@@ -2448,8 +2448,8 @@
 @ stub -arch=arm64 IoGetGenericIrpExtension
 @ stub -arch=arm64 IoGetInitiatorProcess
 @ stub -arch=arm64 IoGetIoAttributionHandle
-@ stub -arch=arm64 IoGetIommuInterface
-@ stub -arch=arm64 IoGetIommuInterfaceEx
+@ stdcall -arch=x86_64,arm64 IoGetIommuInterface(long ptr)
+@ stdcall -arch=x86_64,arm64 IoGetIommuInterfaceEx(long int64 ptr)
 @ stub -arch=arm64 IoGetKsrPersistentMemoryBuffer
 @ stub -arch=arm64 IoGetOplockKeyContext
 @ stub -arch=arm64 IoGetOplockKeyContextEx
