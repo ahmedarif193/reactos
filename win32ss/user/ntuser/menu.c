@@ -2945,6 +2945,7 @@ static BOOL FASTCALL MENU_ShowPopup(PWND pwndOwner, PMENU menu, UINT id, UINT fl
     PWND pWnd;
     USER_REFERENCE_ENTRY Ref;
     BOOL bIsPopup = (flags & TPM_POPUPMENU) != 0;
+    BOOL PresentBatch;
 
     TRACE("owner=%p menu=%p id=0x%04x x=0x%04x y=0x%04x\n",
           pwndOwner, menu, id, x, y);
@@ -3084,7 +3085,9 @@ static BOOL FASTCALL MENU_ShowPopup(PWND pwndOwner, PMENU menu, UINT id, UINT fl
         top_popup_hmenu = UserHMGetHandle(menu);
     }
 
-    /* Display the window */
+    /* Showing the frame and dispatching its synchronous paint is one visible
+     * state. CDD must not scan out the empty popup between those operations. */
+    PresentBatch = IntCompositionPresentBatchBegin();
     UserRefObjectCo(pWnd, &Ref);
     co_WinPosSetWindowPos( pWnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW | SWP_NOACTIVATE);
 
@@ -3092,6 +3095,7 @@ static BOOL FASTCALL MENU_ShowPopup(PWND pwndOwner, PMENU menu, UINT id, UINT fl
 
     IntNotifyWinEvent(EVENT_SYSTEM_MENUPOPUPSTART, pWnd, OBJID_CLIENT, CHILDID_SELF, 0);
     UserDerefObjectCo(pWnd);
+    IntCompositionPresentBatchEnd(PresentBatch);
 
     return TRUE;
 }
@@ -3563,6 +3567,7 @@ static BOOL FASTCALL MENU_ButtonDown(MTRACKER* pmt, PMENU PtMenu, UINT Flags)
   {
       UINT id = 0;
       PITEM item;
+      BOOL PresentBatch;
       
       // Special check for the icon system menu
       if (IS_SYSTEM_MENU(PtMenu) && !(PtMenu->fFlags & MNF_POPUP))
@@ -3576,6 +3581,8 @@ static BOOL FASTCALL MENU_ButtonDown(MTRACKER* pmt, PMENU PtMenu, UINT Flags)
 
       if (item)
       {
+          PresentBatch = IntCompositionPresentBatchBegin();
+
           if (PtMenu->iItem != id)
               MENU_SwitchTracking(pmt, PtMenu, id, Flags);
 
@@ -3585,6 +3592,7 @@ static BOOL FASTCALL MENU_ButtonDown(MTRACKER* pmt, PMENU PtMenu, UINT Flags)
               pmt->CurrentMenu = MENU_ShowSubPopup(pmt->OwnerWnd, PtMenu, FALSE, Flags);
           }
 
+          IntCompositionPresentBatchEnd(PresentBatch);
           return TRUE;
       }
       /* Else the click was on the menu bar, finish the tracking */
@@ -3692,18 +3700,27 @@ static PMENU FASTCALL MENU_PtMenu(PMENU menu, POINT pt)
 static BOOL FASTCALL MENU_MouseMove(MTRACKER *pmt, PMENU PtMenu, UINT Flags)
 {
   UINT Index = NO_SELECTED_ITEM;
+  BOOL PresentBatch;
 
   if ( PtMenu )
       MENU_FindItemByCoords( PtMenu, pmt->Pt, &Index );
 
   if (Index == NO_SELECTED_ITEM)
   {
-      MENU_SelectItem(pmt->OwnerWnd, pmt->CurrentMenu, NO_SELECTED_ITEM, TRUE, pmt->TopMenu);
+      if (pmt->CurrentMenu != NULL &&
+          pmt->CurrentMenu->iItem != NO_SELECTED_ITEM)
+      {
+          PresentBatch = IntCompositionPresentBatchBegin();
+          MENU_SelectItem(pmt->OwnerWnd, pmt->CurrentMenu, NO_SELECTED_ITEM, TRUE, pmt->TopMenu);
+          IntCompositionPresentBatchEnd(PresentBatch);
+      }
   }
   else if (PtMenu->iItem != Index)
   {
+      PresentBatch = IntCompositionPresentBatchBegin();
       MENU_SwitchTracking(pmt, PtMenu, Index, Flags);
       pmt->CurrentMenu = MENU_ShowSubPopup(pmt->OwnerWnd, PtMenu, FALSE, Flags);
+      IntCompositionPresentBatchEnd(PresentBatch);
   }
   return TRUE;
 }
@@ -4058,6 +4075,7 @@ static INT FASTCALL MENU_TrackMenu(PMENU pmenu, UINT wFlags, INT x, INT y,
     PMENU pmMouse;
     BOOL enterIdleSent = FALSE;
     BOOL firstClick = TRUE;
+    BOOL PresentBatch;
     PWND pWnd;
     PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
 
@@ -4248,6 +4266,7 @@ static INT FASTCALL MENU_TrackMenu(PMENU pmenu, UINT wFlags, INT x, INT y,
             {
                 case WM_KEYDOWN:
                 case WM_SYSKEYDOWN:
+                PresentBatch = IntCompositionPresentBatchBegin();
                 switch(msg.wParam)
                 {
                     case VK_MENU:
@@ -4301,6 +4320,7 @@ static INT FASTCALL MENU_TrackMenu(PMENU pmenu, UINT wFlags, INT x, INT y,
                         IntTranslateKbdMessage(&msg, 0);
                         break;
                 }
+                IntCompositionPresentBatchEnd(PresentBatch);
                 break;  /* WM_KEYDOWN */
 
                 case WM_CHAR:
@@ -4309,17 +4329,24 @@ static INT FASTCALL MENU_TrackMenu(PMENU pmenu, UINT wFlags, INT x, INT y,
                     UINT pos;
                     BOOL fEndMenu;
 
+                    PresentBatch = IntCompositionPresentBatchBegin();
+
                     if (msg.wParam == L'\r' || msg.wParam == L' ')
                     {
                         executedMenuId = MENU_ExecFocusedItem(&mt, mt.CurrentMenu, wFlags);
                         fEndMenu = (executedMenuId != -2);
                         fInsideMenuLoop = !fEndMenu;
+                        IntCompositionPresentBatchEnd(PresentBatch);
                         break;
                     }
 
                     /* Hack to avoid control chars. */
                     /* We will find a better way real soon... */
-                    if (msg.wParam < 32) break;
+                    if (msg.wParam < 32)
+                    {
+                        IntCompositionPresentBatchEnd(PresentBatch);
+                        break;
+                    }
 
                     pos = MENU_FindItemByKey(mt.OwnerWnd, mt.CurrentMenu, LOWORD(msg.wParam), FALSE);
 
@@ -4332,6 +4359,7 @@ static INT FASTCALL MENU_TrackMenu(PMENU pmenu, UINT wFlags, INT x, INT y,
                         fEndMenu = (executedMenuId != -2);
                         fInsideMenuLoop = !fEndMenu;
                     }
+                    IntCompositionPresentBatchEnd(PresentBatch);
                 }
                 break;
             }  /* switch(msg.message) - kbd */
@@ -4355,6 +4383,8 @@ static INT FASTCALL MENU_TrackMenu(PMENU pmenu, UINT wFlags, INT x, INT y,
     MsqSetStateWindow(pti, MSQ_STATE_MENUOWNER, NULL);
     pti->MessageQueue->QF_flags &= ~QF_CAPTURELOCKED;
     co_UserSetCapture(NULL); /* release the capture */
+
+    PresentBatch = IntCompositionPresentBatchBegin();
 
     /* If dropdown is still painted and the close box is clicked on
        then the menu will be destroyed as part of the DispatchMessage above.
@@ -4390,6 +4420,8 @@ static INT FASTCALL MENU_TrackMenu(PMENU pmenu, UINT wFlags, INT x, INT y,
        /* Reset the variable for hiding menu */
        mt.TopMenu->TimeToHide = FALSE;
     }
+
+    IntCompositionPresentBatchEnd(PresentBatch);
 
     EngSetLastError( ERROR_SUCCESS );
     /* The return value is only used by TrackPopupMenu */
