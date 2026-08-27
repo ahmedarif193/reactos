@@ -26,6 +26,9 @@ typedef struct _RPI5VC4_OGL_BUFFER
     SIZE_T Size;
     GLenum Usage;
     GLenum Access;
+    GLbitfield AccessFlags;
+    SIZE_T MapOffset;
+    SIZE_T MapLength;
     BOOL Mapped;
 } RPI5VC4_OGL_BUFFER, *PRPI5VC4_OGL_BUFFER;
 
@@ -351,6 +354,11 @@ Rpi5OglBufferData(
     Buffer->Data = NewData;
     Buffer->Size = (SIZE_T)Size;
     Buffer->Usage = Usage;
+    Buffer->Access = GL_READ_WRITE;
+    Buffer->AccessFlags = 0;
+    Buffer->MapOffset = 0;
+    Buffer->MapLength = 0;
+    Buffer->Mapped = FALSE;
 }
 
 static VOID APIENTRY
@@ -457,7 +465,98 @@ Rpi5OglMapBuffer(
     }
     Buffer->Mapped = TRUE;
     Buffer->Access = Access;
+    Buffer->AccessFlags = Access == GL_READ_ONLY ? GL_MAP_READ_BIT :
+                          Access == GL_WRITE_ONLY ? GL_MAP_WRITE_BIT :
+                          GL_MAP_READ_BIT | GL_MAP_WRITE_BIT;
+    Buffer->MapOffset = 0;
+    Buffer->MapLength = Buffer->Size;
     return Buffer->Data;
+}
+
+static GLvoid * APIENTRY
+Rpi5OglMapBufferRange(
+    _In_ GLenum Target,
+    _In_ GLintptr Offset,
+    _In_ GLsizeiptr Length,
+    _In_ GLbitfield Access)
+{
+    static const GLbitfield AllowedAccess =
+        GL_MAP_READ_BIT |
+        GL_MAP_WRITE_BIT |
+        GL_MAP_INVALIDATE_RANGE_BIT |
+        GL_MAP_INVALIDATE_BUFFER_BIT |
+        GL_MAP_FLUSH_EXPLICIT_BIT |
+        GL_MAP_UNSYNCHRONIZED_BIT;
+    PRPI5VC4_OGL_BUFFER_STATE State = Rpi5OglCurrentBufferState();
+    PRPI5VC4_OGL_BUFFER Buffer;
+
+    if (!Rpi5OglBufferCanChangeState(State, "glMapBufferRange"))
+        return NULL;
+    Buffer = Rpi5OglBufferBoundObject(State, Target,
+                                      "glMapBufferRange(target)");
+    if (Buffer == NULL)
+        return NULL;
+    if (Offset < 0 || Length < 0 || (Access & ~AllowedAccess) != 0 ||
+        (SIZE_T)Offset > Buffer->Size ||
+        (SIZE_T)Length > Buffer->Size - (SIZE_T)Offset)
+    {
+        Rpi5OglBufferError(State, GL_INVALID_VALUE,
+                           "glMapBufferRange(offset/length/access)");
+        return NULL;
+    }
+    if (Length == 0 || Buffer->Mapped ||
+        (Access & (GL_MAP_READ_BIT | GL_MAP_WRITE_BIT)) == 0 ||
+        ((Access & GL_MAP_READ_BIT) != 0 &&
+         (Access & (GL_MAP_INVALIDATE_RANGE_BIT |
+                    GL_MAP_INVALIDATE_BUFFER_BIT |
+                    GL_MAP_UNSYNCHRONIZED_BIT)) != 0) ||
+        ((Access & GL_MAP_FLUSH_EXPLICIT_BIT) != 0 &&
+         (Access & GL_MAP_WRITE_BIT) == 0))
+    {
+        Rpi5OglBufferError(State, GL_INVALID_OPERATION,
+                           "glMapBufferRange(access/state)");
+        return NULL;
+    }
+
+    Buffer->Mapped = TRUE;
+    Buffer->Access = (Access & GL_MAP_READ_BIT) == 0 ? GL_WRITE_ONLY :
+                     (Access & GL_MAP_WRITE_BIT) == 0 ? GL_READ_ONLY :
+                     GL_READ_WRITE;
+    Buffer->AccessFlags = Access;
+    Buffer->MapOffset = (SIZE_T)Offset;
+    Buffer->MapLength = (SIZE_T)Length;
+    return Buffer->Data + Buffer->MapOffset;
+}
+
+static VOID APIENTRY
+Rpi5OglFlushMappedBufferRange(
+    _In_ GLenum Target,
+    _In_ GLintptr Offset,
+    _In_ GLsizeiptr Length)
+{
+    PRPI5VC4_OGL_BUFFER_STATE State = Rpi5OglCurrentBufferState();
+    PRPI5VC4_OGL_BUFFER Buffer;
+
+    if (!Rpi5OglBufferCanChangeState(State, "glFlushMappedBufferRange"))
+        return;
+    Buffer = Rpi5OglBufferBoundObject(State, Target,
+                                      "glFlushMappedBufferRange(target)");
+    if (Buffer == NULL)
+        return;
+    if (!Buffer->Mapped ||
+        (Buffer->AccessFlags & GL_MAP_FLUSH_EXPLICIT_BIT) == 0)
+    {
+        Rpi5OglBufferError(State, GL_INVALID_OPERATION,
+                           "glFlushMappedBufferRange(state)");
+        return;
+    }
+    if (Offset < 0 || Length < 0 ||
+        (SIZE_T)Offset > Buffer->MapLength ||
+        (SIZE_T)Length > Buffer->MapLength - (SIZE_T)Offset)
+    {
+        Rpi5OglBufferError(State, GL_INVALID_VALUE,
+                           "glFlushMappedBufferRange(offset/length)");
+    }
 }
 
 static GLboolean APIENTRY
@@ -480,6 +579,9 @@ Rpi5OglUnmapBuffer(
         return GL_FALSE;
     }
     Buffer->Mapped = FALSE;
+    Buffer->AccessFlags = 0;
+    Buffer->MapOffset = 0;
+    Buffer->MapLength = 0;
     return GL_TRUE;
 }
 
@@ -516,8 +618,17 @@ Rpi5OglGetBufferParameteriv(
         case GL_BUFFER_ACCESS:
             *Parameters = (GLint)Buffer->Access;
             break;
+        case GL_BUFFER_ACCESS_FLAGS:
+            *Parameters = (GLint)Buffer->AccessFlags;
+            break;
         case GL_BUFFER_MAPPED:
             *Parameters = Buffer->Mapped ? GL_TRUE : GL_FALSE;
+            break;
+        case GL_BUFFER_MAP_OFFSET:
+            *Parameters = (GLint)Buffer->MapOffset;
+            break;
+        case GL_BUFFER_MAP_LENGTH:
+            *Parameters = (GLint)Buffer->MapLength;
             break;
         default:
             Rpi5OglBufferError(State, GL_INVALID_ENUM,
@@ -553,7 +664,7 @@ Rpi5OglGetBufferPointerv(
                                       "glGetBufferPointerv(target)");
     if (Buffer == NULL)
         return;
-    *Parameters = Buffer->Mapped ? Buffer->Data : NULL;
+    *Parameters = Buffer->Mapped ? Buffer->Data + Buffer->MapOffset : NULL;
 }
 
 typedef struct _RPI5VC4_OGL_BUFFER_PROC
@@ -580,6 +691,8 @@ static const RPI5VC4_OGL_BUFFER_PROC Rpi5OglBufferProcedures[] =
                                  Rpi5OglGetBufferSubData),
     RPI5VC4_OGL_BUFFER_PROC_PAIR("glIsBuffer", Rpi5OglIsBuffer),
     RPI5VC4_OGL_BUFFER_PROC_PAIR("glMapBuffer", Rpi5OglMapBuffer),
+    {"glMapBufferRange", (PROC)Rpi5OglMapBufferRange},
+    {"glFlushMappedBufferRange", (PROC)Rpi5OglFlushMappedBufferRange},
     RPI5VC4_OGL_BUFFER_PROC_PAIR("glUnmapBuffer", Rpi5OglUnmapBuffer),
 };
 
