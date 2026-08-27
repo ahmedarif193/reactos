@@ -2105,7 +2105,7 @@
 @ stub -arch=arm64 DifPluginSimplePerfControl
 @ stub -arch=arm64 DifPopThreadContextData
 @ stub -arch=arm64 DifPushThreadContextData
-@ stub -arch=arm64 DifRegisterClassDriverPlugin
+@ stdcall -arch=x86_64,arm64 DifRegisterClassDriverPlugin(long ptr long ptr)
 @ stub -arch=arm64 DifRegisterObjectTracking
 @ stub -arch=arm64 DifRegisterPlugin
 @ stub -arch=arm64 DifUtilDbgPrint
@@ -3400,7 +3400,7 @@
 @ stub -arch=arm64 ZwQueryInformationResourceManager
 @ stub -arch=arm64 ZwQueryInformationTransaction
 @ stub -arch=arm64 ZwQueryInformationTransactionManager
-@ stub -arch=arm64 ZwQueryLicenseValue
+@ stdcall -arch=x86_64,arm64 ZwQueryLicenseValue(ptr ptr ptr long ptr)
 @ stub -arch=arm64 ZwQuerySecurityAttributesToken
 @ stub -arch=arm64 ZwQuerySecurityPolicy
 @ stdcall -version=0x601+ -arch=arm64 ZwQuerySystemInformationEx(long ptr long ptr long ptr)
