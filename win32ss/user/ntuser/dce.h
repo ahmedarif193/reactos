@@ -55,6 +55,7 @@ void FASTCALL DceFreeThreadDCE(PTHREADINFO);
 VOID FASTCALL DceUpdateVisRgn(DCE *Dce, PWND Window, ULONG Flags);
 DCE* FASTCALL DceGetDceFromDC(HDC hdc);
 VOID FASTCALL DceReleaseCompositionDc(HDC hdc);
+VOID FASTCALL DceBeginPaintPresentBatch(HDC hdc);
 
 /* LockWindowUpdate state (windc.c). */
 extern PWND gspwndLockUpdate;

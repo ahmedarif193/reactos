@@ -1492,6 +1492,8 @@ IntBeginPaint(PWND Window, PPAINTSTRUCT Ps)
       return NULL;
    }
 
+   DceBeginPaintPresentBatch(Ps->hdc);
+
    /* Open the composition paint bracket (covers the WM_ERASEBKGND below and
     * the whole WM_PAINT body): the compositor won't present this window's
     * half-painted backing until the matching EndPaint. */

@@ -86,6 +86,22 @@ DceReleaseCompositionDc(HDC hdc)
     IntCompositionDcRelease(dce->pwndOrg, State);
 }
 
+/* BeginPaint is a bounded classic visual transaction, unlike an arbitrary
+ * common-DC lifetime. Store the token on its DCE so EndPaint, teardown, and
+ * error cleanup all close the exact batch that was opened. */
+VOID
+FASTCALL
+DceBeginPaintPresentBatch(HDC hdc)
+{
+    DCE *dce = DceGetDceFromDC(hdc);
+
+    if (dce == NULL || dce->CompositionDcState != COMPOSITION_DC_NONE)
+        return;
+
+    if (IntCompositionPresentBatchBegin())
+        dce->CompositionDcState = COMPOSITION_DC_CLASSIC;
+}
+
 static
 PREGION FASTCALL
 DceGetVisRgn(PWND Window, ULONG Flags, HWND hWndChild, ULONG CFlags)
@@ -328,6 +344,13 @@ DceReleaseDC(DCE* dce, BOOL EndPaint)
       return 0;
    }
 
+   if (dce->CompositionDcState != COMPOSITION_DC_NONE)
+   {
+      UCHAR State = dce->CompositionDcState;
+      dce->CompositionDcState = COMPOSITION_DC_NONE;
+      IntCompositionDcRelease(dce->pwndOrg, State);
+   }
+
    /* Undo any compositor redirect before a CACHE DC is cleaned/cached, so the
     * backing-surface ref is released and does not outlive the window. GL windows
     * are the exception: they hold this DC handle (fb->Hdc) across frames and
@@ -335,12 +358,6 @@ DceReleaseDC(DCE* dce, BOOL EndPaint)
     * their SwapBuffers output in the backing. */
    if (dce->DCXFlags & DCX_CACHE)
    {
-      if (dce->CompositionDcState != COMPOSITION_DC_NONE)
-      {
-         UCHAR State = dce->CompositionDcState;
-         dce->CompositionDcState = COMPOSITION_DC_NONE;
-         IntCompositionDcRelease(dce->pwndOrg, State);
-      }
       if (!IntCompositionIsGLWindow(dce->pwndOrg))
          IntCompositionUnredirectDC(dce->hDC);
    }

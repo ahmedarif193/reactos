@@ -39,18 +39,30 @@ IntCompositionDriverEscape(_In_ ULONG iEsc, _In_ PVOID pvIn, _In_ ULONG cjIn)
     return Result;
 }
 
-/* Bracket direct-to-primary CDD drawing while DWM redirection is disabled.
- * The desktop screen DC is the transport for the escape itself, so exclude
- * desktop paints to avoid recursively acquiring that DC. */
-static VOID
-IntCompositionClassicPresentBatch(_In_opt_ PWND Wnd, _In_ BOOL Begin)
+/* Bracket one bounded direct-to-primary CDD visual transaction while DWM
+ * redirection is disabled. Return a token so the matching END is still sent
+ * if composition state changes during a callback. */
+BOOL
+IntCompositionPresentBatchBegin(VOID)
 {
-    LONG Value;
+    LONG Value = 1;
 
-    if (Wnd == NULL || Wnd == UserGetDesktopWindow())
+    if (gbCompositionEnabled)
+        return FALSE;
+
+    return IntCompositionDriverEscape(CDD_ESCAPE_PRESENT_BATCH,
+                                      &Value,
+                                      sizeof(Value)) != 0;
+}
+
+VOID
+IntCompositionPresentBatchEnd(_In_ BOOL Active)
+{
+    LONG Value = 0;
+
+    if (!Active)
         return;
 
-    Value = Begin ? 1 : 0;
     IntCompositionDriverEscape(CDD_ESCAPE_PRESENT_BATCH,
                                &Value,
                                sizeof(Value));
@@ -771,12 +783,10 @@ IntCompositionPaintEnd(_In_ PWND Wnd)
     IntCompositionMarkDamage(FALSE);
 }
 
-/*
- * Cache-DC hold bracket: GetDC..ReleaseDC draw sequences (button states,
- * status bars, carets, NC paints) share the paint bracket so their
- * intermediate states never sync into the front buffer. GL windows are
- * exempt — their DC is held for the window's lifetime.
- */
+/* Cache-DC hold bracket for redirected windows. A classic common DC may be
+ * retained indefinitely by an application, so its lifetime is not a valid
+ * global scan-out transaction. Classic BeginPaint and multi-window USER
+ * operations establish their own bounded present batches instead. */
 UCHAR
 IntCompositionDcAcquire(_In_opt_ PWND Wnd)
 {
@@ -784,10 +794,7 @@ IntCompositionDcAcquire(_In_opt_ PWND Wnd)
         return COMPOSITION_DC_NONE;
 
     if (!gbCompositionEnabled)
-    {
-        IntCompositionClassicPresentBatch(Wnd, TRUE);
-        return COMPOSITION_DC_CLASSIC;
-    }
+        return COMPOSITION_DC_NONE;
 
     IntCompositionPaintBegin(Wnd);
     return COMPOSITION_DC_REDIRECTED;
@@ -798,16 +805,16 @@ IntCompositionDcRelease(_In_opt_ PWND Wnd, _In_ UCHAR State)
 {
     REDIRECT_ENTRY *e;
 
-    if (Wnd == NULL || State == COMPOSITION_DC_NONE)
+    if (State == COMPOSITION_DC_NONE)
         return;
 
     if (State == COMPOSITION_DC_CLASSIC)
     {
-        IntCompositionClassicPresentBatch(Wnd, FALSE);
+        IntCompositionPresentBatchEnd(TRUE);
         return;
     }
 
-    if (State != COMPOSITION_DC_REDIRECTED)
+    if (Wnd == NULL || State != COMPOSITION_DC_REDIRECTED)
         return;
 
     e = IntCompositionFind(IntCompositionTopLevel(Wnd));
