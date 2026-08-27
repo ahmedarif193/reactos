@@ -81,6 +81,7 @@ START_TEST(IoWaitCompletionPacket)
                                   IO_COMPLETION_ALL_ACCESS,
                                   &ObjectAttributes,
                                   1);
+    trace("ZwCreateIoCompletion returned 0x%08lx, handle %p\n", Status, CompletionHandle);
     ok_eq_hex(Status, STATUS_SUCCESS);
     if (!NT_SUCCESS(Status))
         return;
@@ -109,6 +110,7 @@ START_TEST(IoWaitCompletionPacket)
                                              ExpectedStatus,
                                              ExpectedInformation,
                                              &AlreadySignaled);
+    trace("ZwAssociateWaitCompletionPacket returned 0x%08lx, already-signaled %u\n", Status, AlreadySignaled);
     ok_eq_hex(Status, STATUS_SUCCESS);
     ok(AlreadySignaled == FALSE,
        "unsignaled event reported AlreadySignaled=%u\n",
@@ -118,11 +120,14 @@ START_TEST(IoWaitCompletionPacket)
     ok_eq_hex(Status, STATUS_SUCCESS);
 
     Timeout.QuadPart = -10LL * 1000 * 1000;
+    RtlZeroMemory(&IoStatusBlock, sizeof(IoStatusBlock));
     Status = ZwRemoveIoCompletion(CompletionHandle,
                                   &CompletionKey,
                                   &CompletionContext,
                                   &IoStatusBlock,
                                   &Timeout);
+    trace("ZwRemoveIoCompletion returned 0x%08lx, key %p, context %p, packet status 0x%08lx, information %Ix\n",
+          Status, CompletionKey, CompletionContext, IoStatusBlock.Status, IoStatusBlock.Information);
     ok_eq_hex(Status, STATUS_SUCCESS);
     if (NT_SUCCESS(Status))
     {
@@ -164,6 +169,7 @@ START_TEST(IoWaitCompletionPacket)
                                   &CompletionContext,
                                   &IoStatusBlock,
                                   &Timeout);
+    trace("ZwRemoveIoCompletion(empty) returned 0x%08lx\n", Status);
     ok_eq_hex(Status, STATUS_TIMEOUT);
 
 Cleanup:
