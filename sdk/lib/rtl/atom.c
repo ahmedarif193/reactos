@@ -195,6 +195,55 @@ RtlCreateAtomTable(
     return STATUS_SUCCESS;
 }
 
+BOOLEAN
+NTAPI
+RtlGetIntegerAtom(
+    _In_ PCWSTR AtomName,
+    _Out_opt_ PRTL_ATOM Atom)
+{
+    UNICODE_STRING NumberString;
+    ULONG Value;
+    PCWSTR Cursor;
+
+    if (((ULONG_PTR)AtomName & ~(ULONG_PTR)0xFFFF) == 0)
+    {
+        Value = (ULONG)(ULONG_PTR)AtomName;
+        if (Value >= 0xC000)
+            return FALSE;
+        if (Value == 0)
+            Value = 0xC000;
+    }
+    else
+    {
+        if ((AtomName == NULL) || (*AtomName != L'#'))
+            return FALSE;
+
+        Cursor = AtomName + 1;
+        if (*Cursor == UNICODE_NULL)
+            return FALSE;
+
+        while (*Cursor != UNICODE_NULL)
+        {
+            if ((*Cursor < L'0') || (*Cursor > L'9'))
+                return FALSE;
+            ++Cursor;
+        }
+
+        NumberString.Buffer = (PWCHAR)(AtomName + 1);
+        NumberString.Length = (USHORT)((Cursor - AtomName - 1) * sizeof(WCHAR));
+        NumberString.MaximumLength = NumberString.Length;
+        if (!NT_SUCCESS(RtlUnicodeStringToInteger(&NumberString, 10, &Value)))
+            return FALSE;
+
+        if ((Value == 0) || (Value >= 0xC000))
+            Value = 0xC000;
+    }
+
+    if (Atom != NULL)
+        *Atom = (RTL_ATOM)Value;
+    return TRUE;
+}
+
 
 /*
  * @implemented
