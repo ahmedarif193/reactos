@@ -12,9 +12,22 @@
 
 START_TEST(ExUuid)
 {
+    LUID FirstLuid;
+    LUID SecondLuid;
     UUID Uuid;
     NTSTATUS Status;
     ULONG i;
+
+    Status = ZwAllocateLocallyUniqueId(&FirstLuid);
+    trace("first ZwAllocateLocallyUniqueId returned 0x%08lx, LUID %08lx:%08lx\n",
+          Status, (ULONG)FirstLuid.HighPart, FirstLuid.LowPart);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = ZwAllocateLocallyUniqueId(&SecondLuid);
+    trace("second ZwAllocateLocallyUniqueId returned 0x%08lx, LUID %08lx:%08lx\n",
+          Status, (ULONG)SecondLuid.HighPart, SecondLuid.LowPart);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok(FirstLuid.HighPart != SecondLuid.HighPart || FirstLuid.LowPart != SecondLuid.LowPart,
+       "successive LUID allocations were identical\n");
 
     for (i = 0; i < 1000; i++)
     {

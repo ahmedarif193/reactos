@@ -1944,7 +1944,7 @@
 @ stdcall -arch=arm64 SeCreateAccessStateEx()
 @ stdcall -arch=arm64 SeLocateProcessImageName()
 @ stdcall -arch=arm64 SeTokenIsWriteRestricted()
-@ stdcall ZwAllocateLocallyUniqueId()
+@ stdcall ZwAllocateLocallyUniqueId(ptr)
 @ stdcall -arch=arm64 ZwCompareTokens()
 @ stdcall -arch=i386,x86_64,arm64 ZwCreateIoCompletion(ptr long ptr long)
 @ stdcall -arch=arm64 ZwCreateProcessEx()
