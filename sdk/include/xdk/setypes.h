@@ -484,6 +484,7 @@ typedef struct _SID {
 
 #ifndef MIDL_PASS
 #define SECURITY_MAX_SID_SIZE (sizeof(SID) - sizeof($ULONG) + (SID_MAX_SUB_AUTHORITIES * sizeof($ULONG)))
+#define SECURITY_SID_SIZE(SubAuthorityCount_) (sizeof(SID) - sizeof($ULONG) + ((SubAuthorityCount_) * sizeof($ULONG)))
 #endif
 
 typedef enum _SID_NAME_USE {

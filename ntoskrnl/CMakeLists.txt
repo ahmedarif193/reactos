@@ -85,9 +85,7 @@ if(KDBG AND (ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64"))
     target_link_libraries(ntoskrnl kdb_zydis)
 endif()
 
-if(ARCH STREQUAL "amd64")
-    target_link_libraries(ntoskrnl rtl_vista)
-endif()
+target_link_libraries(ntoskrnl rtl_vista)
 
 if(STACK_PROTECTOR)
     target_link_libraries(ntoskrnl gcc_ssp_nt)

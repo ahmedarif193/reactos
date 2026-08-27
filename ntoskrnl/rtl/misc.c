@@ -36,6 +36,169 @@ RtlGetNtGlobalFlags(VOID)
 /*
  * @implemented
  */
+ULONG
+NTAPI
+RtlGetSuiteMask(VOID)
+{
+    return SharedUserData->SuiteMask;
+}
+
+PCWSTR
+NTAPI
+RtlGetNtSystemRoot(VOID)
+{
+    return SharedUserData->NtSystemRoot;
+}
+
+ULONG
+NTAPI
+RtlGetActiveConsoleId(VOID)
+{
+    return ReadAcquire((PLONG)&SharedUserData->ActiveConsoleId);
+}
+
+VOID
+NTAPI
+RtlSetActiveConsoleId(_In_ ULONG ActiveConsoleId)
+{
+    InterlockedExchange((PLONG)&SharedUserData->ActiveConsoleId, (LONG)ActiveConsoleId);
+}
+
+ULONGLONG
+NTAPI
+RtlGetConsoleSessionForegroundProcessId(VOID)
+{
+    return ReadAcquire64((PLONG64)&SharedUserData->ConsoleSessionForegroundProcessId);
+}
+
+VOID
+NTAPI
+RtlSetConsoleSessionForegroundProcessId(_In_ ULONGLONG ProcessId)
+{
+    InterlockedExchange64((PLONG64)&SharedUserData->ConsoleSessionForegroundProcessId, (LONG64)ProcessId);
+}
+
+ULONG
+NTAPI
+RtlGetCurrentServiceSessionId(VOID)
+{
+    return 0;
+}
+
+BOOLEAN
+NTAPI
+RtlIsMultiSessionSku(VOID)
+{
+    return SharedUserData->DbgMultiSessionSku != 0;
+}
+
+BOOLEAN
+NTAPI
+RtlIsZeroMemory(
+    _In_reads_bytes_(Length) PVOID Buffer,
+    _In_ SIZE_T Length)
+{
+    const UCHAR *Bytes = Buffer;
+
+    while (Length-- != 0)
+    {
+        if (*Bytes++ != 0)
+            return FALSE;
+    }
+
+    return TRUE;
+}
+
+NTSTATUS
+NTAPI
+RtlInitializeSidEx(
+    _Out_writes_bytes_(SECURITY_SID_SIZE(SubAuthorityCount)) PSID Sid,
+    _In_ PSID_IDENTIFIER_AUTHORITY IdentifierAuthority,
+    _In_ UCHAR SubAuthorityCount,
+    ...)
+{
+    NTSTATUS Status;
+    ULONG Index;
+    va_list Arguments;
+
+    if (SubAuthorityCount > SID_MAX_SUB_AUTHORITIES)
+        return STATUS_INVALID_SID;
+
+    Status = RtlInitializeSid(Sid, IdentifierAuthority, SubAuthorityCount);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /* The published ABI uses UCHAR as the final named parameter. Clang warns
+     * about its default promotion even though the Windows ABI va-list builtin
+     * handles the promoted register or stack slot. */
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wvarargs"
+#endif
+    va_start(Arguments, SubAuthorityCount);
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+    for (Index = 0; Index < SubAuthorityCount; ++Index)
+        *RtlSubAuthoritySid(Sid, Index) = va_arg(Arguments, ULONG);
+    va_end(Arguments);
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+RtlCheckTokenMembership(
+    _In_opt_ HANDLE TokenHandle,
+    _In_ PSID SidToCheck,
+    _Out_ PBOOLEAN IsMember)
+{
+    SECURITY_SUBJECT_CONTEXT SubjectContext;
+    PACCESS_TOKEN Token;
+    BOOLEAN CapturedSubject = FALSE;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (IsMember == NULL || SidToCheck == NULL || !RtlValidSid(SidToCheck))
+        return STATUS_INVALID_PARAMETER;
+
+    *IsMember = FALSE;
+
+    if (TokenHandle != NULL)
+    {
+        Status = ObReferenceObjectByHandle(TokenHandle, TOKEN_QUERY, SeTokenObjectType, ExGetPreviousMode(), (PVOID *)&Token, NULL);
+        if (!NT_SUCCESS(Status))
+            return Status;
+
+        SepAcquireTokenLockShared((PTOKEN)Token);
+    }
+    else
+    {
+        SeCaptureSubjectContext(&SubjectContext);
+        SeLockSubjectContext(&SubjectContext);
+        CapturedSubject = TRUE;
+        Token = SubjectContext.ClientToken != NULL ?
+                    SubjectContext.ClientToken : SubjectContext.PrimaryToken;
+    }
+
+    *IsMember = SepSidInToken((PTOKEN)Token, SidToCheck);
+
+    if (CapturedSubject)
+    {
+        SeUnlockSubjectContext(&SubjectContext);
+        SeReleaseSubjectContext(&SubjectContext);
+    }
+    else
+    {
+        SepReleaseTokenLock((PTOKEN)Token);
+        ObDereferenceObject(Token);
+    }
+
+    return STATUS_SUCCESS;
+}
+
+/*
+ * @implemented
+ */
 NTSTATUS
 NTAPI
 RtlGetVersion(IN OUT PRTL_OSVERSIONINFOW lpVersionInformation)
