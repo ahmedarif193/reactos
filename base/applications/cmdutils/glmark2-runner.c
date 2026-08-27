@@ -17,6 +17,15 @@
 #define GLMARK2_JELLYFISH_STRONG_FPS 1500
 #define GLMARK2_JELLYFISH_DIRECTIONAL_TARGET_FPS 2000
 
+typedef enum _RUNNER_SCENE
+{
+    RunnerSceneNone,
+    RunnerSceneIdeas,
+    RunnerSceneJellyfish,
+    RunnerSceneTerrain,
+    RunnerSceneShadow
+} RUNNER_SCENE;
+
 typedef struct _RUNNER_OUTPUT_SCAN
 {
     ULONG UnsupportedMatchLength;
@@ -24,6 +33,7 @@ typedef struct _RUNNER_OUTPUT_SCAN
     CHAR Line[GLMARK2_OUTPUT_LINE_LENGTH];
     ULONG LineLength;
     BOOL LineOverflow;
+    RUNNER_SCENE PendingScene;
     ULONG IdeasFps;
     ULONG JellyfishFps;
     ULONG TerrainFps;
@@ -55,8 +65,10 @@ RunnerPrint(
 
 static VOID
 ScanSceneFps(
+    _Inout_ PRUNNER_OUTPUT_SCAN Scan,
     _In_z_ PCSTR Line,
     _In_z_ PCSTR Prefix,
+    _In_ RUNNER_SCENE Scene,
     _Out_ ULONG *Fps,
     _Out_ BOOL *Seen)
 {
@@ -64,7 +76,9 @@ ScanSceneFps(
     PCHAR End;
     ULONG Value;
 
-    if (strncmp(Line, Prefix, strlen(Prefix)) != 0)
+    if (strncmp(Line, Prefix, strlen(Prefix)) == 0)
+        Scan->PendingScene = Scene;
+    if (Scan->PendingScene != Scene)
         return;
     Marker = strstr(Line, " FPS: ");
     if (Marker == NULL)
@@ -75,6 +89,7 @@ ScanSceneFps(
         return;
     *Fps = Value;
     *Seen = TRUE;
+    Scan->PendingScene = RunnerSceneNone;
 }
 
 static VOID
@@ -88,13 +103,17 @@ ScanChildOutputLine(
     if (Scan->LineOverflow)
         return;
     Scan->Line[Scan->LineLength] = '\0';
-    ScanSceneFps(Scan->Line, "[ideas]", &Scan->IdeasFps,
+    ScanSceneFps(Scan, Scan->Line, "[ideas]", RunnerSceneIdeas,
+                 &Scan->IdeasFps,
                  &Scan->IdeasSeen);
-    ScanSceneFps(Scan->Line, "[jellyfish]", &Scan->JellyfishFps,
+    ScanSceneFps(Scan, Scan->Line, "[jellyfish]", RunnerSceneJellyfish,
+                 &Scan->JellyfishFps,
                  &Scan->JellyfishSeen);
-    ScanSceneFps(Scan->Line, "[terrain]", &Scan->TerrainFps,
+    ScanSceneFps(Scan, Scan->Line, "[terrain]", RunnerSceneTerrain,
+                 &Scan->TerrainFps,
                  &Scan->TerrainSeen);
-    ScanSceneFps(Scan->Line, "[shadow]", &Scan->ShadowFps,
+    ScanSceneFps(Scan, Scan->Line, "[shadow]", RunnerSceneShadow,
+                 &Scan->ShadowFps,
                  &Scan->ShadowSeen);
 
     Marker = strstr(Scan->Line, "glmark2 Score:");
