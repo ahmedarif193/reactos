@@ -29,8 +29,12 @@ MiFindContiguousPages(IN PFN_NUMBER LowestPfn,
     ULONG i = 0;
     PMMPFN Pfn1, EndPfn;
     KIRQL OldIrql;
+    MI_PFN_CACHE_ATTRIBUTE CacheAttribute;
     PAGED_CODE();
     ASSERT(SizeInPages != 0);
+    ASSERT(CacheType <= MmWriteCombined);
+
+    CacheAttribute = MiPlatformCacheAttributes[FALSE][CacheType];
 
     //
     // Convert the boundary PFN into an alignment mask
@@ -142,6 +146,7 @@ MiFindContiguousPages(IN PFN_NUMBER LowestPfn,
                             Pfn1->u3.e2.ReferenceCount = 1;
                             Pfn1->u2.ShareCount = 1;
                             Pfn1->u3.e1.PageLocation = ActiveAndValid;
+                            Pfn1->u3.e1.CacheAttribute = CacheAttribute;
                             Pfn1->u3.e1.StartOfAllocation = 0;
                             Pfn1->u3.e1.EndOfAllocation = 0;
                             Pfn1->u3.e1.PrototypePte = 0;
