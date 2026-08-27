@@ -339,7 +339,6 @@ struct _RPI5VC4_DEVICE_EXTENSION
     ULONG FlipBufSize;                /* bytes of ONE buffer                */
     ULONG FlipBufCount;               /* ring depth (3/2) or 0 = disabled   */
     ULONG FlipBufIndex;               /* buffer the HVS currently scans     */
-    ULONG FlipsSinceVBlank;           /* pending unlatched flips            */
     BOOLEAN FlipPresentBroken;
     RECT FlipStale[3];                /* per-buffer catch-up bounding box   */
 
