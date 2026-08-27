@@ -14,7 +14,7 @@
 #include <context.h>
 #include <macros.h>
 
-#include "rpi5vc4ogl_buffer.h"
+#include "rpi5vc4ogl_gl2.h"
 
 #define RPI5VC4_OGL_MAX_BUFFERS 64
 
@@ -287,6 +287,7 @@ Rpi5OglDeleteBuffers(
             State->ArrayBuffer = 0;
         if (State->ElementArrayBuffer == Buffer->Name)
             State->ElementArrayBuffer = 0;
+        Rpi5OglGl2BufferDeleted(Buffer->Name);
         if (Buffer->Data != NULL)
             HeapFree(GetProcessHeap(), 0, Buffer->Data);
         ZeroMemory(Buffer, sizeof(*Buffer));
@@ -744,6 +745,15 @@ Rpi5OglBufferCurrentName(
     if (Target == GL_ELEMENT_ARRAY_BUFFER)
         return State->ElementArrayBuffer;
     return 0;
+}
+
+VOID
+Rpi5OglBufferRestoreElementArrayBinding(
+    _In_opt_ PRPI5VC4_OGL_BUFFER_STATE State,
+    _In_ GLuint Name)
+{
+    if (State != NULL)
+        State->ElementArrayBuffer = Name;
 }
 
 BOOL
