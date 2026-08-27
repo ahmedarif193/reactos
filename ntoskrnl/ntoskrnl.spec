@@ -2960,7 +2960,7 @@
 @ stub -arch=arm64 PsUnregisterAvailableCpusChangeNotification
 @ stub -arch=arm64 PsUnregisterSiloMonitor
 @ stub -arch=arm64 PsUnregisterSyscallProvider
-@ stub -arch=arm64 PsUpdateComponentPower
+@ stdcall -arch=x86_64,arm64 PsUpdateComponentPower(ptr long int64)
 @ stub -arch=arm64 PsUpdateNetworkCounters
 @ stub -arch=arm64 PsWow64GetProcessMachine
 @ stub -arch=arm64 PsWow64IsMachineSupported
