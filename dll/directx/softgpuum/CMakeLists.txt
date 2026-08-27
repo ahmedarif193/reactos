@@ -6,7 +6,7 @@
 # selector remains at the audited current layout so shared KMT types are
 # available without making the UMD advertise a newer table.
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
-add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11007)
+add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11008)
 
 spec2def(softgpuum.dll softgpuum.spec)
 
