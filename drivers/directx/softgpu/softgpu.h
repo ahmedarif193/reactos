@@ -138,6 +138,9 @@ InbvGetGopFrameBufferInfo(
 #define SOFTGPU_DEFAULT_WIDTH           1024UL
 #define SOFTGPU_DEFAULT_HEIGHT          768UL
 #define SOFTGPU_DEFAULT_FORMAT          D3DDDIFMT_A8R8G8B8
+#define SOFTGPU_POINTER_MAX_WIDTH       64UL
+#define SOFTGPU_POINTER_MAX_HEIGHT      64UL
+#define SOFTGPU_POINTER_PIXEL_COUNT     (SOFTGPU_POINTER_MAX_WIDTH * SOFTGPU_POINTER_MAX_HEIGHT)
 
 /* GPU virtual-memory geometry this device declares: a 4-level radix of 9
  * index bits per level over 4 KB pages, i.e. a 48-bit address space. */
@@ -218,6 +221,21 @@ typedef struct _SOFTGPU_DEVICE
     BOOLEAN             ScanoutVisible;
     BOOLEAN             TimingActive;
     volatile LONG       ScanoutVBlankAvailable;
+
+    /* Software-emulated WDDM color-pointer plane. ScanoutMutex serializes
+     * these fields with every write to the firmware scanout. */
+    ULONG               PointerPixels[SOFTGPU_POINTER_PIXEL_COUNT];
+    ULONG               PointerBacking[SOFTGPU_POINTER_PIXEL_COUNT];
+    ULONG               PointerWidth;
+    ULONG               PointerHeight;
+    ULONG               PointerHotX;
+    ULONG               PointerHotY;
+    LONG                PointerX;
+    LONG                PointerY;
+    RECT                PointerSavedRect;
+    BOOLEAN             PointerShapeValid;
+    BOOLEAN             PointerVisible;
+    BOOLEAN             PointerBackingValid;
 
     /* Optional ReactOS full-WDDM shadow-present interface. */
     KSPIN_LOCK          ShadowPresentInterfaceLock;
@@ -361,6 +379,14 @@ SoftGpuScanoutStart(
 
 VOID
 SoftGpuScanoutStop(
+    _Inout_ PSOFTGPU_DEVICE Device);
+
+VOID
+SoftGpuPointerRestoreLocked(
+    _Inout_ PSOFTGPU_DEVICE Device);
+
+VOID
+SoftGpuPointerDrawLocked(
     _Inout_ PSOFTGPU_DEVICE Device);
 
 NTSTATUS

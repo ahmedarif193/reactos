@@ -74,7 +74,7 @@ RcddFlushOutstanding(
    PRCDD_PDEV ppdev)
 {
    if (ppdev->ScreenPtr == NULL ||
-       ppdev->SafetyHidden ||
+       ppdev->SafetyHoldDepth != 0 ||
        !ppdev->DirtyOutstanding)
    {
       return;
@@ -124,7 +124,7 @@ RcddPresentEx(
       }
    }
 
-   if (ppdev->SafetyHidden)
+   if (ppdev->SafetyHoldDepth != 0)
       return;
 
    if (!ppdev->PendingValid)
@@ -325,27 +325,25 @@ RcddSynchronizeSurface(
    }
 
    /*
-    * win32k's mouse safety brackets a drawing op that overlaps the software
-    * cursor: DSS_RESERVED alone when it hides the cursor before the op,
-    * DSS_RESERVED | DSS_FLUSH_EVENT after it has redrawn the cursor. Nothing
-    * is notified in between, so the scan-out never shows the cursor-less
-    * intermediate state; the closing flush sends the whole accumulated area.
+    * Win32k brackets both software-cursor motion and drawing which overlaps
+    * the cursor. These transactions can nest: mouse safety hides the cursor,
+    * performs a cursor move internally, draws, and restores it. Publish only
+    * when the outermost bracket closes so scanout never observes a hidden or
+    * partially redrawn sprite.
     */
    if (fl & DSS_RESERVED)
    {
       if (!(fl & DSS_FLUSH_EVENT))
       {
-         if (!ppdev->SafetyHidden)
-         {
-            ppdev->SafetyHidden = TRUE;
+         if (ppdev->SafetyHoldDepth++ == 0)
             RcddNotifyDirty(ppdev, NULL, DXGK_PRESENT_DIRTY_HOLD);
-         }
          return;
       }
-      if (ppdev->SafetyHidden)
+      if (ppdev->SafetyHoldDepth != 0)
       {
-         ppdev->SafetyHidden = FALSE;
-         RcddPresentEx(ppdev, prcl, DXGK_PRESENT_DIRTY_RELEASE);
+         RcddPresentEx(ppdev, prcl, 0);
+         if (--ppdev->SafetyHoldDepth == 0)
+            RcddPresentEx(ppdev, NULL, DXGK_PRESENT_DIRTY_RELEASE);
          return;
       }
    }
