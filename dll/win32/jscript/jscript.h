@@ -342,6 +342,7 @@ HRESULT decode_source(WCHAR*);
 
 HRESULT double_to_string(double,jsstr_t**);
 WCHAR *idx_to_str(DWORD,WCHAR*);
+int hex_to_int(WCHAR);
 
 static inline BOOL is_digit(WCHAR c)
 {
