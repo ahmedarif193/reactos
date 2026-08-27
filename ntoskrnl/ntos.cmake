@@ -91,6 +91,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/init.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/interlocked.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/keyedevt.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/license.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/locale.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/lookas.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/mutant.c
@@ -167,6 +168,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/pnpmgr/arb/arbirq.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/pnpmgr/arb/arbmem.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/pnpmgr/arb/arbport.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/io/pnpmgr/dif.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/pnpmgr/devaction.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/pnpmgr/devnode.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/pnpmgr/plugplay.c

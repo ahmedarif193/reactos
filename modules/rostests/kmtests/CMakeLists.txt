@@ -133,6 +133,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ex/ExTimerExtra.c
     ntos_ex/ExUuid.c
     ntos_ex/ExWorkItem.c
+    ntos_ex/ExLicenseDif.c
     ntos_fsrtl/FsRtlDissect.c
     ntos_fsrtl/FsRtlExpression.c
     ntos_fsrtl/FsRtlLegal.c

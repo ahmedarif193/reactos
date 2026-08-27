@@ -76,6 +76,7 @@ KMT_TESTFUNC Test_ExPushLock;
 KMT_TESTFUNC Test_ExResourceExtra;
 KMT_TESTFUNC Test_ExTimerExtra;
 KMT_TESTFUNC Test_ExTimeZone;
+KMT_TESTFUNC Test_ExLicenseDif;
 KMT_TESTFUNC Test_IoCancelKM;
 KMT_TESTFUNC Test_PsProcessInfo;
 KMT_TESTFUNC Test_PsEnergy;
@@ -317,6 +318,7 @@ const KMT_TEST TestList[] =
     { "ExResourceExtra",                    Test_ExResourceExtra },
     { "ExTimerExtra",                       Test_ExTimerExtra },
     { "ExTimeZone",                         Test_ExTimeZone },
+    { "ExLicenseDif",                       Test_ExLicenseDif },
     { "ExResource",                         Test_ExResource },
     { "ExRundown",                          Test_ExRundown },
     { "ExSequencedList",                    Test_ExSequencedList },
