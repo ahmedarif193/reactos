@@ -1006,12 +1006,19 @@
 @ stdcall -version=0xA00+ PoCreateThermalRequest(ptr ptr ptr ptr long)
 @ stdcall -version=0xA00+ PoDeleteThermalRequest(ptr)
 @ stdcall -version=0x602+ PoFxActivateComponent(ptr long long)
+@ stdcall -version=0x602+ PoFxAddComponentRelation(ptr long ptr ptr)
 @ stdcall -version=0x602+ PoFxCompleteDevicePowerNotRequired(ptr)
+@ stdcall -version=0x602+ PoFxCompleteDirectedPowerDown(ptr)
 @ stdcall -version=0x602+ PoFxCompleteIdleCondition(ptr long)
 @ stdcall -version=0x602+ PoFxCompleteIdleState(ptr long)
-@ stdcall -version=0x602+ PoFxIdleComponent(ptr ptr long)
+@ stdcall -version=0x602+ PoFxIdleComponent(ptr long long)
+@ stdcall -version=0x602+ -arch=i386 PoFxPowerControl(ptr ptr ptr long ptr long ptr)
+@ stdcall -version=0x602+ -arch=x86_64,arm64 PoFxPowerControl(ptr ptr ptr ptr ptr ptr ptr)
 @ stdcall -version=0x602+ PoFxRegisterDevice(ptr ptr ptr)
+@ stdcall -version=0x602+ PoFxRemoveComponentRelation(ptr long ptr ptr)
 @ stdcall -version=0x602+ PoFxReportDevicePoweredOn(ptr)
+@ stdcall -version=0x602+ PoFxSetComponentLatency(ptr long int64)
+@ stdcall -version=0x602+ PoFxSetComponentResidency(ptr long int64)
 @ stdcall -version=0x602+ PoFxSetDeviceIdleTimeout(ptr int64)
 @ stdcall -version=0x602+ PoFxStartDevicePowerManagement(ptr)
 @ stdcall -version=0x602+ PoFxUnregisterDevice(ptr)
@@ -2806,14 +2813,11 @@
 @ stub -arch=arm64 PoDisableSleepStates
 @ stub -arch=arm64 PoEndDeviceBusy
 @ stub -arch=arm64 PoEnergyEstimationEnabled
-@ stub -arch=arm64 PoFxAddComponentRelation
 @ stub -arch=arm64 PoFxAddDeviceRelation
-@ stub -arch=arm64 PoFxCompleteDirectedPowerDown
 @ stub -arch=arm64 PoFxEnableDStateReporting
 @ stub -arch=arm64 PoFxIssueComponentPerfStateChange
 @ stub -arch=arm64 PoFxIssueComponentPerfStateChangeMultiple
 @ stub -arch=arm64 PoFxNotifySurprisePowerOn
-@ stub -arch=arm64 PoFxPowerControl
 @ stub -arch=arm64 PoFxPowerOnCrashdumpDevice
 @ stub -arch=arm64 PoFxProcessorNotification
 @ stub -arch=arm64 PoFxQueryCurrentComponentPerfState
@@ -2824,10 +2828,7 @@
 @ stub -arch=arm64 PoFxRegisterPlugin
 @ stub -arch=arm64 PoFxRegisterPluginEx
 @ stub -arch=arm64 PoFxRegisterPrimaryDevice
-@ stub -arch=arm64 PoFxRemoveComponentRelation
 @ stub -arch=arm64 PoFxRemoveDeviceRelation
-@ stub -arch=arm64 PoFxSetComponentLatency
-@ stub -arch=arm64 PoFxSetComponentResidency
 @ stub -arch=arm64 PoFxSetComponentWake
 @ stub -arch=arm64 PoFxSetTargetDripsDevicePowerState
 @ stub -arch=arm64 PoGetProcessorIdleAccounting

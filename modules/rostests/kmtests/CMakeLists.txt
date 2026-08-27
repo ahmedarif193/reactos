@@ -209,6 +209,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ob/ObType.cpp
     ntos_ob/ObTypes.cpp
     ntos_ob/ObWait.c
+    ntos_po/PoFxState.c
     ntos_po/PoPowerSettings.c
     ntos_ps/PsNotify.c
     ntos_ps/PsNotifyKM.c
