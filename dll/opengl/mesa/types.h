@@ -900,6 +900,14 @@ struct gl_stencil_attrib {
 	GLstencil	ValueMask;	/* Value mask */
 	GLstencil	Clear;		/* Clear value */
 	GLstencil	WriteMask;	/* Write mask */
+	GLenum		BackFunction;	/* Back-face stencil function */
+	GLenum		BackFailFunc;	/* Back-face stencil fail function */
+	GLenum		BackZPassFunc;	/* Back-face depth pass function */
+	GLenum		BackZFailFunc;	/* Back-face depth fail function */
+	GLstencil	BackRef;	/* Back-face reference value */
+	GLstencil	BackValueMask;	/* Back-face value mask */
+	GLstencil	BackWriteMask;	/* Back-face write mask */
+	GLboolean	Facing;		/* 0 for front-facing, 1 for back-facing */
 };
 
 

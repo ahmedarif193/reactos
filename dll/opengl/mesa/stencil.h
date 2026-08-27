@@ -42,12 +42,21 @@ extern void gl_ClearStencil( GLcontext *ctx, GLint s );
 extern void gl_StencilFunc( GLcontext *ctx, GLenum func,
                             GLint ref, GLuint mask );
 
+extern void gl_StencilFuncSeparate( GLcontext *ctx, GLenum face,
+                                    GLenum func, GLint ref, GLuint mask );
+
 
 extern void gl_StencilMask( GLcontext *ctx, GLuint mask );
+
+extern void gl_StencilMaskSeparate( GLcontext *ctx, GLenum face,
+                                    GLuint mask );
 
 
 extern void gl_StencilOp( GLcontext *ctx, GLenum fail,
                           GLenum zfail, GLenum zpass );
+
+extern void gl_StencilOpSeparate( GLcontext *ctx, GLenum face,
+                                  GLenum fail, GLenum zfail, GLenum zpass );
 
 
 
