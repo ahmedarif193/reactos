@@ -219,6 +219,89 @@ DxgkpStopPostDisplayOwner(
     return Status;
 }
 
+/* Complete the claimant-bound handoff after the complete start state has been
+ * published. A successful or non-restartable claimant commits the handoff.
+ * A restartable failure starts the retained BasicDisplay FDO again while the
+ * ownership mutex excludes a second claimant. KMUTEX recursion permits the
+ * fallback's AcquirePostDisplayOwnership callback on this same thread. */
+static VOID
+DxgkpCompletePostDisplayHandoff(
+    _In_ PDXGKRNL_ADAPTER Claimant,
+    _In_ NTSTATUS StartStatus,
+    _In_ BOOLEAN Restartable)
+{
+    DXGK_POST_DISPLAY_COMPLETION_ACTION Action;
+    PDXGKRNL_ADAPTER FallbackAdapter;
+    PDEVICE_OBJECT FallbackDeviceObject;
+    PDEVICE_OBJECT OwnerDeviceObject;
+    PDXGKRNL_ADAPTER Owner;
+    BOOLEAN FallbackRemoveRundownHeld;
+    NTSTATUS RollbackStatus;
+
+    (VOID)KeWaitForSingleObject(&g_PostDisplayOwnershipMutex,
+                                Executive,
+                                KernelMode,
+                                FALSE,
+                                NULL);
+    Action = DxgkPostDisplayCoreComplete(&Claimant->PostDisplayHandoffCore,
+                                         StartStatus,
+                                         Restartable);
+    if (Action == DxgkPostDisplayCompletionNone)
+    {
+        KeReleaseMutex(&g_PostDisplayOwnershipMutex, FALSE);
+        return;
+    }
+
+    FallbackAdapter = Claimant->PostDisplayFallbackAdapter;
+    FallbackDeviceObject = Claimant->PostDisplayFallbackDeviceObject;
+    FallbackRemoveRundownHeld = Claimant->PostDisplayFallbackRemoveRundownHeld;
+    Claimant->PostDisplayFallbackAdapter = NULL;
+    Claimant->PostDisplayFallbackDeviceObject = NULL;
+    Claimant->PostDisplayFallbackRemoveRundownHeld = FALSE;
+    ASSERT(FallbackAdapter != NULL);
+    ASSERT(FallbackDeviceObject != NULL);
+    ASSERT(FallbackRemoveRundownHeld);
+
+    if (Action == DxgkPostDisplayCompletionRollback && FallbackAdapter != NULL)
+    {
+        Owner = DxgkpReferencePostDisplayOwner(&OwnerDeviceObject);
+        if (Owner == NULL)
+        {
+            DXGKRNL_WARN("POSTDISPLAY_ROLLBACK: claimant %p failed "
+                         "0x%08lX; restarting BasicDisplay adapter %p\n",
+                         Claimant,
+                         StartStatus,
+                         FallbackAdapter);
+            RollbackStatus = DxgkAdapterStart(FallbackAdapter, NULL, NULL);
+            if (NT_SUCCESS(RollbackStatus))
+                DXGKRNL_WARN("POSTDISPLAY_ROLLBACK: BasicDisplay adapter %p "
+                             "restored GOP display ownership\n",
+                             FallbackAdapter);
+            else
+                DXGKRNL_ERR("POSTDISPLAY_ROLLBACK: BasicDisplay adapter %p "
+                            "restart failed 0x%08lX\n",
+                            FallbackAdapter,
+                            RollbackStatus);
+        }
+        else
+        {
+            DXGKRNL_WARN("POSTDISPLAY_ROLLBACK: claimant %p failed but "
+                         "adapter %p already owns the boot display; "
+                         "fallback remains stopped\n",
+                         Claimant,
+                         Owner);
+        }
+        if (OwnerDeviceObject != NULL)
+            ObDereferenceObject(OwnerDeviceObject);
+    }
+
+    KeReleaseMutex(&g_PostDisplayOwnershipMutex, FALSE);
+    if (FallbackRemoveRundownHeld && FallbackAdapter != NULL)
+        ExReleaseRundownProtection(&FallbackAdapter->RemoveRundownRef);
+    if (FallbackDeviceObject != NULL)
+        ObDereferenceObject(FallbackDeviceObject);
+}
+
 static NTSTATUS
 DxgkpRemoveMiniportDevice(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -6300,6 +6383,8 @@ DxgkCbAcquirePostDisplayOwnership(
         PDXGKRNL_ADAPTER Claimant = (PDXGKRNL_ADAPTER)DeviceHandle;
         PDEVICE_OBJECT OwnerDeviceObject;
         PDXGKRNL_ADAPTER Owner = DxgkpReferencePostDisplayOwner(&OwnerDeviceObject);
+        BOOLEAN RetainFallback = FALSE;
+        BOOLEAN FallbackRemoveRundownHeld = FALSE;
 
         if (Claimant != NULL && Owner != NULL && Owner != Claimant)
         {
@@ -6315,12 +6400,79 @@ DxgkCbAcquirePostDisplayOwnership(
                 goto Complete;
             }
 
+            RetainFallback =
+                Claimant->MiniportContext != NULL &&
+                !Claimant->MiniportContext->IsBasicDisplayFallback &&
+                Owner->MiniportContext != NULL &&
+                Owner->MiniportContext->IsBasicDisplayFallback;
+            if (RetainFallback &&
+                (Claimant->PostDisplayHandoffCore.FallbackStopped ||
+                 Claimant->PostDisplayFallbackAdapter != NULL ||
+                 Claimant->PostDisplayFallbackDeviceObject != NULL ||
+                 Claimant->PostDisplayFallbackRemoveRundownHeld))
+            {
+                DXGKRNL_ERR("DxgkCbAcquirePostDisplayOwnership: claimant %p "
+                            "already has a pending fallback handoff\n",
+                            Claimant);
+                Status = STATUS_DEVICE_BUSY;
+                ObDereferenceObject(OwnerDeviceObject);
+                goto Complete;
+            }
+            if (RetainFallback)
+            {
+                FallbackRemoveRundownHeld =
+                    ExAcquireRundownProtection(&Owner->RemoveRundownRef);
+                if (!FallbackRemoveRundownHeld)
+                {
+                    DXGKRNL_WARN("DxgkCbAcquirePostDisplayOwnership: "
+                                 "BasicDisplay adapter %p is being removed; "
+                                 "claimant %p cannot take ownership\n",
+                                 Owner,
+                                 Claimant);
+                    Status = STATUS_DELETE_PENDING;
+                    ObDereferenceObject(OwnerDeviceObject);
+                    goto Complete;
+                }
+            }
+
             Status = DxgkpStopPostDisplayOwner(Owner);
             if (!NT_SUCCESS(Status))
             {
                 DXGKRNL_ERR("DxgkCbAcquirePostDisplayOwnership: old owner %p could not be stopped 0x%08lX\n", Owner, Status);
+                if (FallbackRemoveRundownHeld)
+                    ExReleaseRundownProtection(&Owner->RemoveRundownRef);
                 ObDereferenceObject(OwnerDeviceObject);
                 goto Complete;
+            }
+
+            if (RetainFallback)
+            {
+                BOOLEAN Armed;
+
+                Armed = DxgkPostDisplayCoreArm(
+                            &Claimant->PostDisplayHandoffCore);
+
+                ASSERT(Armed);
+                if (!Armed)
+                {
+                    NTSTATUS RestoreStatus;
+
+                    RestoreStatus = DxgkAdapterStart(Owner, NULL, NULL);
+
+                    DXGKRNL_ERR("DxgkCbAcquirePostDisplayOwnership: could not "
+                                "arm claimant %p handoff; BasicDisplay restore "
+                                "returned 0x%08lX\n",
+                                Claimant,
+                                RestoreStatus);
+                    Status = STATUS_INVALID_DEVICE_STATE;
+                    ExReleaseRundownProtection(&Owner->RemoveRundownRef);
+                    ObDereferenceObject(OwnerDeviceObject);
+                    goto Complete;
+                }
+                Claimant->PostDisplayFallbackAdapter = Owner;
+                Claimant->PostDisplayFallbackDeviceObject = OwnerDeviceObject;
+                Claimant->PostDisplayFallbackRemoveRundownHeld = TRUE;
+                OwnerDeviceObject = NULL;
             }
         }
         if (OwnerDeviceObject != NULL)
@@ -7274,6 +7426,7 @@ DxgkpCompleteAdapterStart(
         KeSetEvent(&Adapter->AdapterStartCompletedEvent, IO_NO_INCREMENT, FALSE);
     }
     KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
+    DxgkpCompletePostDisplayHandoff(Adapter, Status, Restartable);
     if (QueueHotPlug)
         (VOID)DxgkVidPnQueueHotPlugRebuild(Adapter);
 }
