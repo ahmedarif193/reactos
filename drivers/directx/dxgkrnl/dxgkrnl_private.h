@@ -536,6 +536,14 @@ struct _DXGKRNL_ADAPTER
     PDEVICE_OBJECT              LowerDeviceObject;
 
     /*
+     * Full registry path of the display adapter's PnP software key
+     * (Control\\Class\\{ClassGuid}\\NNNN).  DXGK_DEVICE_INFO requires this
+     * per-adapter path; the RegistryPath passed to the miniport DriverEntry
+     * names the service key and is a different registry namespace.
+     */
+    UNICODE_STRING              DeviceRegistryPath;
+
+    /*
      * Opaque per-device context returned by DxgkDdiAddDevice and passed
      * back as the first argument to every subsequent miniport DDI call.
      */
@@ -1768,15 +1776,57 @@ DxgkCbFreePagesFromMdl(
     IN_CONST_PDXGKARGCB_FREEPAGESFROMMDL pFreePagesFromMdl);
 #endif
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+NTSTATUS
+APIENTRY
+DxgkCbCreatePhysicalMemoryObject(
+    IN_OUT_PDXGKARGCB_CREATE_PHYSICAL_MEMORY_OBJECT pArgs);
+
+VOID
+APIENTRY
+DxgkCbDestroyPhysicalMemoryObject(
+    IN_CONST_PDXGKARGCB_DESTROY_PHYSICAL_MEMORY_OBJECT pArgs);
+
 NTSTATUS
 APIENTRY
 DxgkCbMapPhysicalMemory(
+    IN_OUT_PDXGKARGCB_MAP_PHYSICAL_MEMORY pArgs);
+
+VOID
+APIENTRY
+DxgkCbUnmapPhysicalMemory(
+    IN_CONST_PDXGKARGCB_UNMAP_PHYSICAL_MEMORY pArgs);
+
+NTSTATUS
+APIENTRY
+DxgkCbAllocateAdl(
+    IN_OUT_PDXGKARGCB_ALLOCATE_ADL pArgs);
+
+VOID
+APIENTRY
+DxgkCbFreeAdl(
+    IN_CONST_PDXGKARGCB_FREE_ADL pArgs);
+
+NTSTATUS
+APIENTRY
+DxgkCbOpenPhysicalMemoryObject(
+    IN_OUT_PDXGKARGCB_OPEN_PHYSICAL_MEMORY_OBJECT pArgs);
+
+VOID
+APIENTRY
+DxgkCbClosePhysicalMemoryObject(
+    IN_CONST_PDXGKARGCB_CLOSE_PHYSICAL_MEMORY_OBJECT pArgs);
+#endif
+
+NTSTATUS
+APIENTRY
+DxgkCbMapPhysicalMemoryLegacy(
     _In_    HANDLE  DeviceHandle,
     _Inout_ PVOID   MapPhysicalMemory);
 
 NTSTATUS
 APIENTRY
-DxgkCbUnmapPhysicalMemory(
+DxgkCbUnmapPhysicalMemoryLegacy(
     _In_ HANDLE  DeviceHandle,
     _In_ PVOID   UnmapPhysicalMemory);
 

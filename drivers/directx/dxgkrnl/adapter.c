@@ -1013,6 +1013,10 @@ static LIST_ENTRY DxgkpMapMemoryList;
 static FAST_MUTEX DxgkpCallbackMemoryMutex;
 static LIST_ENTRY DxgkpCallbackMemoryList;
 #endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+static FAST_MUTEX DxgkpPhysicalMemoryMutex;
+static LIST_ENTRY DxgkpPhysicalMemoryList;
+#endif
 static volatile LONG DxgkpTrackedRefreshTraceCount = 0;
 static volatile LONG DxgkpRetireTraceCount = 0;
 static volatile LONG DxgkpTrackedSampleTraceCount = 0;
@@ -1025,12 +1029,24 @@ static volatile LONG DxgkpTrackedSampleTraceCount = 0;
 #define DXGKP_FIELD_END(Type, Field) \
     (FIELD_OFFSET(Type, Field) + sizeof(((Type *)0)->Field))
 
+typedef enum _DXGK_MAPMEM_KIND
+{
+    DxgkMapMemoryMdl,
+    DxgkMapMemoryIoSpace,
+    DxgkMapMemoryPortSpace
+} DXGK_MAPMEM_KIND;
+
 typedef struct _DXGK_MAPMEM_ENTRY
 {
-    LIST_ENTRY ListEntry;
-    PVOID      VirtualAddress;
-    PVOID      BaseAddress;
-    PMDL       Mdl;
+    LIST_ENTRY       ListEntry;
+    HANDLE           DeviceHandle;
+    PVOID            VirtualAddress;
+    PVOID            BaseAddress;
+    PMDL             Mdl;
+    PHYSICAL_ADDRESS PhysicalAddress;
+    SIZE_T           Length;
+    PCSTR            MapMethod;
+    DXGK_MAPMEM_KIND Kind;
 } DXGK_MAPMEM_ENTRY, *PDXGK_MAPMEM_ENTRY;
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
@@ -1057,6 +1073,63 @@ typedef struct _DXGKP_CALLBACK_MEMORY_ENTRY
         } ContiguousMdl;
     } Memory;
 } DXGKP_CALLBACK_MEMORY_ENTRY, *PDXGKP_CALLBACK_MEMORY_ENTRY;
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+typedef enum _DXGKP_PHYSICAL_MEMORY_BACKING
+{
+    DxgkpPhysicalBackingMdl,
+    DxgkpPhysicalBackingContiguousMdl,
+    DxgkpPhysicalBackingContiguous,
+    DxgkpPhysicalBackingIoSpace
+} DXGKP_PHYSICAL_MEMORY_BACKING;
+
+typedef enum _DXGKP_PHYSICAL_MAPPING_KIND
+{
+    DxgkpPhysicalMappingDirect,
+    DxgkpPhysicalMappingMdl,
+    DxgkpPhysicalMappingIoSpace
+} DXGKP_PHYSICAL_MAPPING_KIND;
+
+typedef struct _DXGKP_PHYSICAL_MEMORY_OBJECT
+{
+    LIST_ENTRY ListEntry;
+    LIST_ENTRY AdapterMemoryList;
+    LIST_ENTRY MappingList;
+    LIST_ENTRY AdlList;
+    PDXGKRNL_ADAPTER CreatorAdapter;
+    DXGK_PHYSICAL_MEMORY_TYPE Type;
+    DXGK_MEMORY_CACHING_TYPE CacheType;
+    DXGKP_PHYSICAL_MEMORY_BACKING Backing;
+    SIZE_T Size;
+    ULONG_PTR Context;
+    PMDL Mdl;
+    PVOID VirtualAddress;
+    PHYSICAL_ADDRESS IoBaseAddress;
+} DXGKP_PHYSICAL_MEMORY_OBJECT, *PDXGKP_PHYSICAL_MEMORY_OBJECT;
+
+typedef struct _DXGKP_ADAPTER_MEMORY_OBJECT
+{
+    LIST_ENTRY ListEntry;
+    PDXGKP_PHYSICAL_MEMORY_OBJECT PhysicalObject;
+    PDXGKRNL_ADAPTER Adapter;
+} DXGKP_ADAPTER_MEMORY_OBJECT, *PDXGKP_ADAPTER_MEMORY_OBJECT;
+
+typedef struct _DXGKP_PHYSICAL_MAPPING
+{
+    LIST_ENTRY ListEntry;
+    DXGKP_PHYSICAL_MAPPING_KIND Kind;
+    PVOID BaseAddress;
+    SIZE_T Size;
+    PMDL MappingMdl;
+} DXGKP_PHYSICAL_MAPPING, *PDXGKP_PHYSICAL_MAPPING;
+
+typedef struct _DXGKP_ADL_ENTRY
+{
+    LIST_ENTRY ListEntry;
+    PDXGKP_ADAPTER_MEMORY_OBJECT AdapterMemoryObject;
+    DXGK_ADL Adl;
+} DXGKP_ADL_ENTRY, *PDXGKP_ADL_ENTRY;
 #endif
 
 /*
@@ -2901,6 +2974,10 @@ DxgkpEnsureGlobalInitialization(VOID)
     ExInitializeFastMutex(&DxgkpCallbackMemoryMutex);
     InitializeListHead(&DxgkpCallbackMemoryList);
 #endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+    ExInitializeFastMutex(&DxgkpPhysicalMemoryMutex);
+    InitializeListHead(&DxgkpPhysicalMemoryList);
+#endif
 
     DxgkpInitializeCoreInterface();
 
@@ -4042,15 +4119,20 @@ DxgkpFillInterface(
             Interface->Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_9))
     {
         Interface->DxgkCbQueryFeatureSupport = DxgkCbQueryFeatureSupport;
+        Interface->DxgkCbCreatePhysicalMemoryObject =
+            DxgkCbCreatePhysicalMemoryObject;
+        Interface->DxgkCbDestroyPhysicalMemoryObject =
+            DxgkCbDestroyPhysicalMemoryObject;
+        Interface->DxgkCbMapPhysicalMemory = DxgkCbMapPhysicalMemory;
+        Interface->DxgkCbUnmapPhysicalMemory = DxgkCbUnmapPhysicalMemory;
+        Interface->DxgkCbAllocateAdl = DxgkCbAllocateAdl;
+        Interface->DxgkCbFreeAdl = DxgkCbFreeAdl;
+        Interface->DxgkCbOpenPhysicalMemoryObject =
+            DxgkCbOpenPhysicalMemoryObject;
+        Interface->DxgkCbClosePhysicalMemoryObject =
+            DxgkCbClosePhysicalMemoryObject;
     }
 #endif
-
-    /*
-     * Keep the WDDM 2.9 physical-memory-object callbacks NULL until dxgkrnl
-     * owns the corresponding object lifecycle.  The legacy raw-physical
-     * mapping helpers below have a different ABI and must not be published
-     * through these typed slots.
-     */
 
 }
 
@@ -4245,6 +4327,125 @@ DxgkCbNotifyDpc(
     DxgkpReleaseVidSchCallback(Adapter);
 }
 
+static VOID
+DxgkpFreeAdapterRegistryPath(
+    _Inout_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (Adapter->DeviceRegistryPath.Buffer != NULL)
+    {
+        ExFreePoolWithTag(Adapter->DeviceRegistryPath.Buffer,
+                          TAG_DXGK_REGISTRY);
+    }
+    RtlZeroMemory(&Adapter->DeviceRegistryPath,
+                  sizeof(Adapter->DeviceRegistryPath));
+}
+
+/*
+ * Cache the full name of the PDO's software key for
+ * DXGK_DEVICE_INFO.DeviceRegistryPath.  The miniport DriverEntry registry
+ * path names Services\\<service>; WDDM requires the distinct PnP software
+ * key at Control\\Class\\{ClassGuid}\\NNNN.
+ */
+static NTSTATUS
+DxgkpInitializeAdapterRegistryPath(
+    _Inout_ PDXGKRNL_ADAPTER Adapter)
+{
+    HANDLE KeyHandle = NULL;
+    PKEY_NAME_INFORMATION KeyName = NULL;
+    PWCHAR PathBuffer = NULL;
+    ULONG RequiredLength = 0;
+    ULONG PathBytes;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (Adapter == NULL || Adapter->PhysicalDeviceObject == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = IoOpenDeviceRegistryKey(Adapter->PhysicalDeviceObject,
+                                     PLUGPLAY_REGKEY_DRIVER,
+                                     KEY_READ,
+                                     &KeyHandle);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    Status = ZwQueryKey(KeyHandle,
+                        KeyNameInformation,
+                        NULL,
+                        0,
+                        &RequiredLength);
+    if (Status != STATUS_BUFFER_TOO_SMALL &&
+        Status != STATUS_BUFFER_OVERFLOW)
+    {
+        if (NT_SUCCESS(Status))
+            Status = STATUS_DATA_ERROR;
+        goto Cleanup;
+    }
+
+    if (RequiredLength < FIELD_OFFSET(KEY_NAME_INFORMATION, Name))
+    {
+        Status = STATUS_DATA_ERROR;
+        goto Cleanup;
+    }
+
+    KeyName = ExAllocatePoolWithTag(PagedPool,
+                                    RequiredLength,
+                                    TAG_DXGK_REGISTRY);
+    if (KeyName == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Cleanup;
+    }
+
+    Status = ZwQueryKey(KeyHandle,
+                        KeyNameInformation,
+                        KeyName,
+                        RequiredLength,
+                        &RequiredLength);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    if ((KeyName->NameLength & (sizeof(WCHAR) - 1)) != 0 ||
+        KeyName->NameLength > UNICODE_STRING_MAX_BYTES - sizeof(WCHAR))
+    {
+        Status = STATUS_NAME_TOO_LONG;
+        goto Cleanup;
+    }
+
+    PathBytes = KeyName->NameLength + sizeof(WCHAR);
+    PathBuffer = ExAllocatePoolWithTag(NonPagedPool,
+                                       PathBytes,
+                                       TAG_DXGK_REGISTRY);
+    if (PathBuffer == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Cleanup;
+    }
+
+    if (KeyName->NameLength != 0)
+    {
+        RtlCopyMemory(PathBuffer,
+                      KeyName->Name,
+                      KeyName->NameLength);
+    }
+    PathBuffer[KeyName->NameLength / sizeof(WCHAR)] = UNICODE_NULL;
+
+    Adapter->DeviceRegistryPath.Buffer = PathBuffer;
+    Adapter->DeviceRegistryPath.Length = (USHORT)KeyName->NameLength;
+    Adapter->DeviceRegistryPath.MaximumLength = (USHORT)PathBytes;
+    PathBuffer = NULL;
+    Status = STATUS_SUCCESS;
+
+Cleanup:
+    if (PathBuffer != NULL)
+        ExFreePoolWithTag(PathBuffer, TAG_DXGK_REGISTRY);
+    if (KeyName != NULL)
+        ExFreePoolWithTag(KeyName, TAG_DXGK_REGISTRY);
+    if (KeyHandle != NULL)
+        ZwClose(KeyHandle);
+    return Status;
+}
+
 /*
  * DxgkCbGetDeviceInformation
  *
@@ -4289,7 +4490,7 @@ DxgkCbGetDeviceInformation(
 
     DeviceInformation->MiniportDeviceContext = Adapter->MiniportDeviceContext;
     DeviceInformation->PhysicalDeviceObject = Adapter->PhysicalDeviceObject;
-    DeviceInformation->DeviceRegistryPath = Adapter->MiniportContext->RegistryPath;
+    DeviceInformation->DeviceRegistryPath = Adapter->DeviceRegistryPath;
     DeviceInformation->TranslatedResourceList = Adapter->TranslatedResources;
     DeviceInformation->SystemMemorySize.QuadPart =
         (LONGLONG)SharedUserData->NumberOfPhysicalPages << PAGE_SHIFT;
@@ -4326,9 +4527,10 @@ DxgkCbGetDeviceInformation(
             DeviceInformation->SystemMemorySize.QuadPart - 1;
     }
 
-    DXGKRNL_TRACE("DxgkCbGetDeviceInformation: PDO %p SysMem=%I64u "
-                  "HighestPA=0x%I64X TransRes=%p\n",
+    DXGKRNL_TRACE("DxgkCbGetDeviceInformation: PDO %p SoftwareKey=%wZ "
+                  "SysMem=%I64u HighestPA=0x%I64X TransRes=%p\n",
                   Adapter->PhysicalDeviceObject,
+                  &DeviceInformation->DeviceRegistryPath,
                   DeviceInformation->SystemMemorySize.QuadPart,
                   DeviceInformation->HighestPhysicalAddress.QuadPart,
                   DeviceInformation->TranslatedResourceList);
@@ -4978,6 +5180,980 @@ DxgkCbFreePagesFromMdl(
 }
 #endif
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+static NTSTATUS
+DxgkpConvertPhysicalCacheType(
+    _In_ DXGK_MEMORY_CACHING_TYPE DxgkCacheType,
+    _Out_ MEMORY_CACHING_TYPE *MmCacheType)
+{
+    switch (DxgkCacheType)
+    {
+        case DXGK_MEMORY_CACHING_TYPE_NON_CACHED:
+            *MmCacheType = MmNonCached;
+            return STATUS_SUCCESS;
+        case DXGK_MEMORY_CACHING_TYPE_CACHED:
+            *MmCacheType = MmCached;
+            return STATUS_SUCCESS;
+        case DXGK_MEMORY_CACHING_TYPE_WRITE_COMBINED:
+            *MmCacheType = MmWriteCombined;
+            return STATUS_SUCCESS;
+        default:
+            return STATUS_INVALID_PARAMETER;
+    }
+}
+
+static PDXGKP_PHYSICAL_MEMORY_OBJECT
+DxgkpFindPhysicalMemoryObjectLocked(
+    _In_ HANDLE Handle)
+{
+    PLIST_ENTRY Link;
+
+    for (Link = DxgkpPhysicalMemoryList.Flink;
+         Link != &DxgkpPhysicalMemoryList;
+         Link = Link->Flink)
+    {
+        PDXGKP_PHYSICAL_MEMORY_OBJECT Object =
+            CONTAINING_RECORD(Link,
+                              DXGKP_PHYSICAL_MEMORY_OBJECT,
+                              ListEntry);
+
+        if ((HANDLE)Object == Handle)
+            return Object;
+    }
+
+    return NULL;
+}
+
+static PDXGKP_ADAPTER_MEMORY_OBJECT
+DxgkpFindAdapterMemoryObjectLocked(
+    _In_ HANDLE Handle)
+{
+    PLIST_ENTRY ObjectLink;
+
+    for (ObjectLink = DxgkpPhysicalMemoryList.Flink;
+         ObjectLink != &DxgkpPhysicalMemoryList;
+         ObjectLink = ObjectLink->Flink)
+    {
+        PDXGKP_PHYSICAL_MEMORY_OBJECT Object =
+            CONTAINING_RECORD(ObjectLink,
+                              DXGKP_PHYSICAL_MEMORY_OBJECT,
+                              ListEntry);
+        PLIST_ENTRY AdapterLink;
+
+        for (AdapterLink = Object->AdapterMemoryList.Flink;
+             AdapterLink != &Object->AdapterMemoryList;
+             AdapterLink = AdapterLink->Flink)
+        {
+            PDXGKP_ADAPTER_MEMORY_OBJECT AdapterObject =
+                CONTAINING_RECORD(AdapterLink,
+                                  DXGKP_ADAPTER_MEMORY_OBJECT,
+                                  ListEntry);
+
+            if ((HANDLE)AdapterObject == Handle)
+                return AdapterObject;
+        }
+    }
+
+    return NULL;
+}
+
+static VOID
+DxgkpFreePhysicalMapping(
+    _In_ PDXGKP_PHYSICAL_MAPPING Mapping)
+{
+    if (Mapping->Kind == DxgkpPhysicalMappingMdl)
+    {
+        MmUnmapLockedPages(Mapping->BaseAddress, Mapping->MappingMdl);
+        IoFreeMdl(Mapping->MappingMdl);
+    }
+    else if (Mapping->Kind == DxgkpPhysicalMappingIoSpace)
+    {
+        MmUnmapIoSpace(Mapping->BaseAddress, Mapping->Size);
+    }
+
+    ExFreePoolWithTag(Mapping, TAG_DXGK_RESOURCES);
+}
+
+static VOID
+DxgkpDestroyPhysicalMemoryObjectLocked(
+    _In_ PDXGKP_PHYSICAL_MEMORY_OBJECT Object)
+{
+    PLIST_ENTRY Link;
+
+    RemoveEntryList(&Object->ListEntry);
+
+    while (!IsListEmpty(&Object->MappingList))
+    {
+        Link = RemoveHeadList(&Object->MappingList);
+        DxgkpFreePhysicalMapping(
+            CONTAINING_RECORD(Link,
+                              DXGKP_PHYSICAL_MAPPING,
+                              ListEntry));
+    }
+
+    while (!IsListEmpty(&Object->AdlList))
+    {
+        Link = RemoveHeadList(&Object->AdlList);
+        ExFreePoolWithTag(
+            CONTAINING_RECORD(Link, DXGKP_ADL_ENTRY, ListEntry),
+            TAG_DXGK_RESOURCES);
+    }
+
+    while (!IsListEmpty(&Object->AdapterMemoryList))
+    {
+        Link = RemoveHeadList(&Object->AdapterMemoryList);
+        ExFreePoolWithTag(
+            CONTAINING_RECORD(Link,
+                              DXGKP_ADAPTER_MEMORY_OBJECT,
+                              ListEntry),
+            TAG_DXGK_RESOURCES);
+    }
+
+    if (Object->Backing == DxgkpPhysicalBackingMdl)
+    {
+        MmFreePagesFromMdl(Object->Mdl);
+        ExFreePool(Object->Mdl);
+    }
+    else if (Object->Backing == DxgkpPhysicalBackingContiguousMdl ||
+             Object->Backing == DxgkpPhysicalBackingContiguous)
+    {
+        if (Object->Mdl != NULL)
+            IoFreeMdl(Object->Mdl);
+        MmFreeContiguousMemory(Object->VirtualAddress);
+    }
+
+    ExFreePoolWithTag(Object, TAG_DXGK_RESOURCES);
+}
+
+static VOID
+DxgkpReleasePhysicalMemoryObjects(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PLIST_ENTRY ObjectLink;
+    ULONG Reclaimed = 0;
+
+    ExAcquireFastMutex(&DxgkpPhysicalMemoryMutex);
+    ObjectLink = DxgkpPhysicalMemoryList.Flink;
+    while (ObjectLink != &DxgkpPhysicalMemoryList)
+    {
+        PLIST_ENTRY NextObjectLink = ObjectLink->Flink;
+        PDXGKP_PHYSICAL_MEMORY_OBJECT Object =
+            CONTAINING_RECORD(ObjectLink,
+                              DXGKP_PHYSICAL_MEMORY_OBJECT,
+                              ListEntry);
+        PLIST_ENTRY AdapterLink;
+        BOOLEAN Owned = (Object->CreatorAdapter == Adapter);
+
+        for (AdapterLink = Object->AdapterMemoryList.Flink;
+             !Owned && AdapterLink != &Object->AdapterMemoryList;
+             AdapterLink = AdapterLink->Flink)
+        {
+            PDXGKP_ADAPTER_MEMORY_OBJECT AdapterObject =
+                CONTAINING_RECORD(AdapterLink,
+                                  DXGKP_ADAPTER_MEMORY_OBJECT,
+                                  ListEntry);
+            Owned = (AdapterObject->Adapter == Adapter);
+        }
+
+        if (Owned)
+        {
+            DxgkpDestroyPhysicalMemoryObjectLocked(Object);
+            Reclaimed++;
+        }
+
+        ObjectLink = NextObjectLink;
+    }
+    ExReleaseFastMutex(&DxgkpPhysicalMemoryMutex);
+
+    if (Reclaimed != 0)
+    {
+        DXGKRNL_WARN("DxgkpReleasePhysicalMemoryObjects: reclaimed %lu "
+                     "WDDM physical memory object(s) for adapter %p\n",
+                     Reclaimed,
+                     Adapter);
+    }
+}
+
+NTSTATUS
+APIENTRY
+DxgkCbCreatePhysicalMemoryObject(
+    IN_OUT_PDXGKARGCB_CREATE_PHYSICAL_MEMORY_OBJECT pArgs)
+{
+    PDXGKP_PHYSICAL_MEMORY_OBJECT Object = NULL;
+    PDXGKP_ADAPTER_MEMORY_OBJECT AdapterObject = NULL;
+    PDXGKRNL_ADAPTER Adapter = NULL;
+    MEMORY_CACHING_TYPE CacheType;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (pArgs == NULL || pArgs->Size == 0 || pArgs->Size > MAXULONG)
+        return STATUS_INVALID_PARAMETER;
+
+    pArgs->hPhysicalMemoryObject = NULL;
+    pArgs->hAdapterMemoryObject = NULL;
+
+    Status = DxgkpConvertPhysicalCacheType(pArgs->CacheType, &CacheType);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (pArgs->hAdapter != NULL)
+    {
+        Adapter = DxgkpHandleToAdapter(pArgs->hAdapter);
+        if (Adapter == NULL)
+            return STATUS_INVALID_HANDLE;
+    }
+
+    Object = ExAllocatePoolWithTag(NonPagedPool,
+                                   sizeof(*Object),
+                                   TAG_DXGK_RESOURCES);
+    if (Object == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Failure;
+    }
+
+    RtlZeroMemory(Object, sizeof(*Object));
+    InitializeListHead(&Object->AdapterMemoryList);
+    InitializeListHead(&Object->MappingList);
+    InitializeListHead(&Object->AdlList);
+    Object->CreatorAdapter = Adapter;
+    Object->Type = pArgs->Type;
+    Object->CacheType = pArgs->CacheType;
+    Object->Size = pArgs->Size;
+    Object->Context = pArgs->Context;
+
+    if (Adapter != NULL)
+    {
+        AdapterObject = ExAllocatePoolWithTag(NonPagedPool,
+                                              sizeof(*AdapterObject),
+                                              TAG_DXGK_RESOURCES);
+        if (AdapterObject == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Failure;
+        }
+
+        AdapterObject->PhysicalObject = Object;
+        AdapterObject->Adapter = Adapter;
+    }
+
+    switch (pArgs->Type)
+    {
+        case DXGK_PHYSICAL_MEMORY_TYPE_MDL:
+        {
+            ULONG AllowedFlags =
+                MM_DONT_ZERO_ALLOCATION |
+                MM_ALLOCATE_FROM_LOCAL_NODE_ONLY |
+                MM_ALLOCATE_FULLY_REQUIRED |
+                MM_ALLOCATE_NO_WAIT |
+                MM_ALLOCATE_PREFER_CONTIGUOUS |
+                MM_ALLOCATE_REQUIRE_CONTIGUOUS_CHUNKS |
+                MM_ALLOCATE_FAST_LARGE_PAGES |
+                MM_ALLOCATE_TRIM_IF_NECESSARY |
+                MM_ALLOCATE_AND_HOT_REMOVE;
+
+            if (pArgs->Mdl.LowAddress.QuadPart < 0 ||
+                (ULONGLONG)pArgs->Mdl.LowAddress.QuadPart >
+                    (ULONGLONG)pArgs->Mdl.HighAddress.QuadPart ||
+                (pArgs->Mdl.Flags & ~AllowedFlags) != 0)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                goto Failure;
+            }
+
+            if (pArgs->Mdl.Flags &
+                (MM_ALLOCATE_FAST_LARGE_PAGES |
+                 MM_ALLOCATE_AND_HOT_REMOVE))
+            {
+                Status = STATUS_NOT_SUPPORTED;
+                goto Failure;
+            }
+
+            if (pArgs->Mdl.Flags & MM_ALLOCATE_REQUIRE_CONTIGUOUS_CHUNKS)
+            {
+                ULONGLONG ChunkSize =
+                    (ULONGLONG)pArgs->Mdl.SkipBytes.QuadPart;
+                PHYSICAL_ADDRESS Boundary;
+
+                if (ChunkSize != 0 &&
+                    (ChunkSize < PAGE_SIZE ||
+                     (ChunkSize & (ChunkSize - 1)) != 0 ||
+                     (pArgs->Size % (SIZE_T)ChunkSize) != 0))
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                    goto Failure;
+                }
+
+                /*
+                 * Mm currently has no scatter/gather chunk allocator.  A
+                 * single requested chunk has exact equivalent semantics when
+                 * backed by its contiguous allocator.  Multi-chunk requests
+                 * remain unsupported rather than returning a false contract.
+                 */
+                if (ChunkSize != 0 && pArgs->Size != (SIZE_T)ChunkSize)
+                {
+                    Status = STATUS_NOT_SUPPORTED;
+                    goto Failure;
+                }
+
+                Boundary.QuadPart = (LONGLONG)ChunkSize;
+                Object->VirtualAddress =
+                    MmAllocateContiguousMemorySpecifyCache(
+                        pArgs->Size,
+                        pArgs->Mdl.LowAddress,
+                        pArgs->Mdl.HighAddress,
+                        Boundary,
+                        CacheType);
+                if (Object->VirtualAddress == NULL)
+                {
+                    Status = STATUS_INSUFFICIENT_RESOURCES;
+                    goto Failure;
+                }
+
+                Status = DxgkpBuildMdlForContiguousAllocation(
+                             Object->VirtualAddress,
+                             Object->Size,
+                             &Object->Mdl);
+                if (!NT_SUCCESS(Status))
+                    goto Failure;
+
+                Object->Backing = DxgkpPhysicalBackingContiguousMdl;
+            }
+            else
+            {
+                ULONG MmFlags = pArgs->Mdl.Flags &
+                    (MM_DONT_ZERO_ALLOCATION |
+                     MM_ALLOCATE_FROM_LOCAL_NODE_ONLY);
+                SIZE_T RequiredBytes =
+                    (pArgs->Size + PAGE_SIZE - 1) &
+                    ~((SIZE_T)PAGE_SIZE - 1);
+
+                Object->Mdl = MmAllocatePagesForMdlEx(
+                                  pArgs->Mdl.LowAddress,
+                                  pArgs->Mdl.HighAddress,
+                                  pArgs->Mdl.SkipBytes,
+                                  pArgs->Size,
+                                  CacheType,
+                                  MmFlags);
+                if (Object->Mdl == NULL ||
+                    (SIZE_T)Object->Mdl->ByteCount < RequiredBytes)
+                {
+                    Status = STATUS_INSUFFICIENT_RESOURCES;
+                    goto Failure;
+                }
+
+                Object->Backing = DxgkpPhysicalBackingMdl;
+            }
+            break;
+        }
+
+        case DXGK_PHYSICAL_MEMORY_TYPE_CONTIGUOUS_MEMORY:
+            if (pArgs->ContiguousMemory.LowestAcceptableAddress.QuadPart < 0 ||
+                (ULONGLONG)pArgs->ContiguousMemory.LowestAcceptableAddress.QuadPart >
+                    (ULONGLONG)pArgs->ContiguousMemory.HighestAcceptableAddress.QuadPart)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                goto Failure;
+            }
+
+            Object->VirtualAddress =
+                MmAllocateContiguousMemorySpecifyCache(
+                    pArgs->Size,
+                    pArgs->ContiguousMemory.LowestAcceptableAddress,
+                    pArgs->ContiguousMemory.HighestAcceptableAddress,
+                    pArgs->ContiguousMemory.BoundaryAddressMultiple,
+                    CacheType);
+            if (Object->VirtualAddress == NULL)
+            {
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                goto Failure;
+            }
+
+            Status = DxgkpBuildMdlForContiguousAllocation(
+                         Object->VirtualAddress,
+                         Object->Size,
+                         &Object->Mdl);
+            if (!NT_SUCCESS(Status))
+                goto Failure;
+
+            Object->Backing = DxgkpPhysicalBackingContiguous;
+            break;
+
+        case DXGK_PHYSICAL_MEMORY_TYPE_IO_SPACE:
+            if ((pArgs->IOSpace.BaseAddress.QuadPart & (PAGE_SIZE - 1)) != 0)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                goto Failure;
+            }
+            Object->IoBaseAddress = pArgs->IOSpace.BaseAddress;
+            Object->Backing = DxgkpPhysicalBackingIoSpace;
+            break;
+
+        case DXGK_PHYSICAL_MEMORY_TYPE_SECTION:
+            Status = STATUS_NOT_SUPPORTED;
+            goto Failure;
+
+        default:
+            Status = STATUS_INVALID_PARAMETER;
+            goto Failure;
+    }
+
+    ExAcquireFastMutex(&DxgkpPhysicalMemoryMutex);
+    InsertTailList(&DxgkpPhysicalMemoryList, &Object->ListEntry);
+    if (AdapterObject != NULL)
+    {
+        InsertTailList(&Object->AdapterMemoryList,
+                       &AdapterObject->ListEntry);
+    }
+    ExReleaseFastMutex(&DxgkpPhysicalMemoryMutex);
+
+    pArgs->hPhysicalMemoryObject = (HANDLE)Object;
+    pArgs->hAdapterMemoryObject = (HANDLE)AdapterObject;
+
+    if (Adapter != NULL)
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+    return STATUS_SUCCESS;
+
+Failure:
+    if (Object != NULL)
+    {
+        if (Object->Backing == DxgkpPhysicalBackingMdl &&
+            Object->Mdl != NULL)
+        {
+            MmFreePagesFromMdl(Object->Mdl);
+            ExFreePool(Object->Mdl);
+        }
+        else if (Object->VirtualAddress != NULL)
+        {
+            if (Object->Mdl != NULL)
+                IoFreeMdl(Object->Mdl);
+            MmFreeContiguousMemory(Object->VirtualAddress);
+        }
+        ExFreePoolWithTag(Object, TAG_DXGK_RESOURCES);
+    }
+    if (AdapterObject != NULL)
+        ExFreePoolWithTag(AdapterObject, TAG_DXGK_RESOURCES);
+    if (Adapter != NULL)
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+
+    return Status;
+}
+
+VOID
+APIENTRY
+DxgkCbDestroyPhysicalMemoryObject(
+    IN_CONST_PDXGKARGCB_DESTROY_PHYSICAL_MEMORY_OBJECT pArgs)
+{
+    PDXGKP_PHYSICAL_MEMORY_OBJECT Object;
+
+    PAGED_CODE();
+
+    if (pArgs == NULL || pArgs->hPhysicalMemoryObject == NULL)
+        return;
+
+    ExAcquireFastMutex(&DxgkpPhysicalMemoryMutex);
+    Object = DxgkpFindPhysicalMemoryObjectLocked(
+                 pArgs->hPhysicalMemoryObject);
+    if (Object != NULL)
+    {
+        if (pArgs->hAdapterMemoryObject != NULL)
+        {
+            PDXGKP_ADAPTER_MEMORY_OBJECT AdapterObject =
+                DxgkpFindAdapterMemoryObjectLocked(
+                    pArgs->hAdapterMemoryObject);
+
+            if (AdapterObject == NULL ||
+                AdapterObject->PhysicalObject != Object)
+            {
+                ExReleaseFastMutex(&DxgkpPhysicalMemoryMutex);
+                return;
+            }
+        }
+
+        DxgkpDestroyPhysicalMemoryObjectLocked(Object);
+    }
+    ExReleaseFastMutex(&DxgkpPhysicalMemoryMutex);
+}
+
+NTSTATUS
+APIENTRY
+DxgkCbMapPhysicalMemory(
+    IN_OUT_PDXGKARGCB_MAP_PHYSICAL_MEMORY pArgs)
+{
+    PDXGKP_PHYSICAL_MEMORY_OBJECT Object;
+    PDXGKP_PHYSICAL_MAPPING Mapping;
+    MEMORY_CACHING_TYPE CacheType;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (pArgs == NULL || pArgs->hPhysicalMemoryObject == NULL ||
+        pArgs->Size == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    pArgs->pMappedAddress = NULL;
+    if (pArgs->AccessMode != DXGK_ACCESS_MODE_KERNEL_MODE &&
+        pArgs->AccessMode != DXGK_ACCESS_MODE_USER_MODE)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Mapping = ExAllocatePoolWithTag(NonPagedPool,
+                                    sizeof(*Mapping),
+                                    TAG_DXGK_RESOURCES);
+    if (Mapping == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlZeroMemory(Mapping, sizeof(*Mapping));
+
+    ExAcquireFastMutex(&DxgkpPhysicalMemoryMutex);
+    Object = DxgkpFindPhysicalMemoryObjectLocked(
+                 pArgs->hPhysicalMemoryObject);
+    if (Object == NULL || pArgs->Offset > Object->Size ||
+        pArgs->Size > Object->Size - pArgs->Offset ||
+        (Object->Backing == DxgkpPhysicalBackingIoSpace &&
+         pArgs->AccessMode != DXGK_ACCESS_MODE_KERNEL_MODE))
+    {
+        Status = Object == NULL ? STATUS_INVALID_HANDLE :
+                                  STATUS_INVALID_PARAMETER;
+        goto Failure;
+    }
+
+    Status = DxgkpConvertPhysicalCacheType(Object->CacheType, &CacheType);
+    if (!NT_SUCCESS(Status))
+        goto Failure;
+
+    Mapping->Size = pArgs->Size;
+    if ((Object->Backing == DxgkpPhysicalBackingContiguousMdl ||
+         Object->Backing == DxgkpPhysicalBackingContiguous) &&
+        pArgs->AccessMode == DXGK_ACCESS_MODE_KERNEL_MODE)
+    {
+        Mapping->Kind = DxgkpPhysicalMappingDirect;
+        Mapping->BaseAddress =
+            (PVOID)((PUCHAR)Object->VirtualAddress + pArgs->Offset);
+    }
+    else if (Object->Backing == DxgkpPhysicalBackingIoSpace)
+    {
+        PHYSICAL_ADDRESS Address = Object->IoBaseAddress;
+
+        Address.QuadPart += pArgs->Offset;
+        Mapping->Kind = DxgkpPhysicalMappingIoSpace;
+        Mapping->BaseAddress = MmMapIoSpace(Address,
+                                            pArgs->Size,
+                                            CacheType);
+        if (Mapping->BaseAddress == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Failure;
+        }
+    }
+    else
+    {
+        PVOID SourceAddress =
+            (PVOID)((PUCHAR)MmGetMdlVirtualAddress(Object->Mdl) +
+                    pArgs->Offset);
+
+        Mapping->MappingMdl = IoAllocateMdl(SourceAddress,
+                                            (ULONG)pArgs->Size,
+                                            FALSE,
+                                            FALSE,
+                                            NULL);
+        if (Mapping->MappingMdl == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Failure;
+        }
+
+        IoBuildPartialMdl(Object->Mdl,
+                          Mapping->MappingMdl,
+                          SourceAddress,
+                          (ULONG)pArgs->Size);
+        Mapping->Kind = DxgkpPhysicalMappingMdl;
+        Mapping->BaseAddress = MmMapLockedPagesSpecifyCache(
+                                   Mapping->MappingMdl,
+                                   pArgs->AccessMode ==
+                                       DXGK_ACCESS_MODE_KERNEL_MODE ?
+                                           KernelMode : UserMode,
+                                   CacheType,
+                                   NULL,
+                                   FALSE,
+                                   NormalPagePriority);
+        if (Mapping->BaseAddress == NULL)
+        {
+            IoFreeMdl(Mapping->MappingMdl);
+            Mapping->MappingMdl = NULL;
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Failure;
+        }
+    }
+
+    InsertTailList(&Object->MappingList, &Mapping->ListEntry);
+    pArgs->pMappedAddress = Mapping->BaseAddress;
+    ExReleaseFastMutex(&DxgkpPhysicalMemoryMutex);
+    return STATUS_SUCCESS;
+
+Failure:
+    ExReleaseFastMutex(&DxgkpPhysicalMemoryMutex);
+    ExFreePoolWithTag(Mapping, TAG_DXGK_RESOURCES);
+    return Status;
+}
+
+VOID
+APIENTRY
+DxgkCbUnmapPhysicalMemory(
+    IN_CONST_PDXGKARGCB_UNMAP_PHYSICAL_MEMORY pArgs)
+{
+    PDXGKP_PHYSICAL_MEMORY_OBJECT Object;
+    PLIST_ENTRY Link;
+    PDXGKP_PHYSICAL_MAPPING Mapping = NULL;
+
+    PAGED_CODE();
+
+    if (pArgs == NULL || pArgs->hPhysicalMemoryObject == NULL ||
+        pArgs->pBaseAddress == NULL || pArgs->Size == 0)
+    {
+        return;
+    }
+
+    ExAcquireFastMutex(&DxgkpPhysicalMemoryMutex);
+    Object = DxgkpFindPhysicalMemoryObjectLocked(
+                 pArgs->hPhysicalMemoryObject);
+    if (Object != NULL)
+    {
+        for (Link = Object->MappingList.Flink;
+             Link != &Object->MappingList;
+             Link = Link->Flink)
+        {
+            PDXGKP_PHYSICAL_MAPPING Candidate =
+                CONTAINING_RECORD(Link,
+                                  DXGKP_PHYSICAL_MAPPING,
+                                  ListEntry);
+
+            if (Candidate->BaseAddress == pArgs->pBaseAddress &&
+                Candidate->Size == pArgs->Size)
+            {
+                RemoveEntryList(Link);
+                Mapping = Candidate;
+                break;
+            }
+        }
+    }
+
+    if (Mapping != NULL)
+        DxgkpFreePhysicalMapping(Mapping);
+    ExReleaseFastMutex(&DxgkpPhysicalMemoryMutex);
+}
+
+NTSTATUS
+APIENTRY
+DxgkCbAllocateAdl(
+    IN_OUT_PDXGKARGCB_ALLOCATE_ADL pArgs)
+{
+    PDXGKP_ADAPTER_MEMORY_OBJECT AdapterObject;
+    PDXGKP_PHYSICAL_MEMORY_OBJECT Object;
+    PDXGKP_ADL_ENTRY Entry;
+    PPFN_NUMBER MdlPages = NULL;
+    DXGK_PAGE_NUMBER *Pages;
+    DXGK_PAGE_NUMBER BasePage;
+    ULONG PageCount;
+    ULONG Index;
+    BOOLEAN IsContiguous = TRUE;
+    SIZE_T AllocationSize;
+
+    PAGED_CODE();
+
+    if (pArgs == NULL || pArgs->hAdapterMemoryObject == NULL ||
+        pArgs->Size == 0 ||
+        (pArgs->Offset & (PAGE_SIZE - 1)) != 0 ||
+        (pArgs->Size & (PAGE_SIZE - 1)) != 0 ||
+        (pArgs->Flags.Value & ~3U) != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    pArgs->pAdl = NULL;
+
+    ExAcquireFastMutex(&DxgkpPhysicalMemoryMutex);
+    AdapterObject = DxgkpFindAdapterMemoryObjectLocked(
+                        pArgs->hAdapterMemoryObject);
+    if (AdapterObject == NULL)
+    {
+        ExReleaseFastMutex(&DxgkpPhysicalMemoryMutex);
+        return STATUS_INVALID_HANDLE;
+    }
+
+    Object = AdapterObject->PhysicalObject;
+    if (pArgs->Offset > Object->Size ||
+        pArgs->Size > Object->Size - pArgs->Offset ||
+        (pArgs->Flags.RequireContiguous &&
+         Object->Type != DXGK_PHYSICAL_MEMORY_TYPE_CONTIGUOUS_MEMORY &&
+         Object->Type != DXGK_PHYSICAL_MEMORY_TYPE_IO_SPACE))
+    {
+        ExReleaseFastMutex(&DxgkpPhysicalMemoryMutex);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    PageCount = (ULONG)(pArgs->Size >> PAGE_SHIFT);
+    if (Object->Backing == DxgkpPhysicalBackingIoSpace)
+    {
+        BasePage = (DXGK_PAGE_NUMBER)
+            ((Object->IoBaseAddress.QuadPart + pArgs->Offset) >> PAGE_SHIFT);
+    }
+    else
+    {
+        MdlPages = MmGetMdlPfnArray(Object->Mdl) +
+                   (pArgs->Offset >> PAGE_SHIFT);
+        BasePage = (DXGK_PAGE_NUMBER)MdlPages[0];
+        for (Index = 1; Index < PageCount; Index++)
+        {
+            if ((DXGK_PAGE_NUMBER)MdlPages[Index] != BasePage + Index)
+            {
+                IsContiguous = FALSE;
+                break;
+            }
+        }
+    }
+
+    AllocationSize = sizeof(*Entry);
+    if (!(IsContiguous &&
+          (pArgs->Flags.RequireContiguous ||
+           pArgs->Flags.PreferContiguous)))
+    {
+        if (PageCount >
+            (MAXULONG_PTR - AllocationSize) / sizeof(DXGK_PAGE_NUMBER))
+        {
+            ExReleaseFastMutex(&DxgkpPhysicalMemoryMutex);
+            return STATUS_INTEGER_OVERFLOW;
+        }
+        AllocationSize +=
+            (SIZE_T)PageCount * sizeof(DXGK_PAGE_NUMBER);
+    }
+
+    Entry = ExAllocatePoolWithTag(NonPagedPool,
+                                  AllocationSize,
+                                  TAG_DXGK_RESOURCES);
+    if (Entry == NULL)
+    {
+        ExReleaseFastMutex(&DxgkpPhysicalMemoryMutex);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RtlZeroMemory(Entry, sizeof(*Entry));
+    Entry->AdapterMemoryObject = AdapterObject;
+    Entry->Adl.PageCount = PageCount;
+    if (IsContiguous &&
+        (pArgs->Flags.RequireContiguous || pArgs->Flags.PreferContiguous))
+    {
+        Entry->Adl.Flags.Contiguous = 1;
+        Entry->Adl.BasePageNumber = BasePage;
+    }
+    else
+    {
+        Pages = (DXGK_PAGE_NUMBER *)(Entry + 1);
+        Entry->Adl.Pages = Pages;
+        if (Object->Backing == DxgkpPhysicalBackingIoSpace)
+        {
+            for (Index = 0; Index < PageCount; Index++)
+                Pages[Index] = BasePage + Index;
+        }
+        else
+        {
+            for (Index = 0; Index < PageCount; Index++)
+                Pages[Index] = (DXGK_PAGE_NUMBER)MdlPages[Index];
+        }
+    }
+
+    InsertTailList(&Object->AdlList, &Entry->ListEntry);
+    pArgs->pAdl = &Entry->Adl;
+    ExReleaseFastMutex(&DxgkpPhysicalMemoryMutex);
+    return STATUS_SUCCESS;
+}
+
+VOID
+APIENTRY
+DxgkCbFreeAdl(
+    IN_CONST_PDXGKARGCB_FREE_ADL pArgs)
+{
+    PDXGKP_ADAPTER_MEMORY_OBJECT AdapterObject;
+    PLIST_ENTRY Link;
+
+    PAGED_CODE();
+
+    if (pArgs == NULL || pArgs->hAdapterMemoryObject == NULL ||
+        pArgs->pAdl == NULL)
+    {
+        return;
+    }
+
+    ExAcquireFastMutex(&DxgkpPhysicalMemoryMutex);
+    AdapterObject = DxgkpFindAdapterMemoryObjectLocked(
+                        pArgs->hAdapterMemoryObject);
+    if (AdapterObject != NULL)
+    {
+        for (Link = AdapterObject->PhysicalObject->AdlList.Flink;
+             Link != &AdapterObject->PhysicalObject->AdlList;
+             Link = Link->Flink)
+        {
+            PDXGKP_ADL_ENTRY Entry =
+                CONTAINING_RECORD(Link, DXGKP_ADL_ENTRY, ListEntry);
+
+            if (Entry->AdapterMemoryObject == AdapterObject &&
+                &Entry->Adl == pArgs->pAdl)
+            {
+                RemoveEntryList(Link);
+                ExFreePoolWithTag(Entry, TAG_DXGK_RESOURCES);
+                break;
+            }
+        }
+    }
+    ExReleaseFastMutex(&DxgkpPhysicalMemoryMutex);
+}
+
+NTSTATUS
+APIENTRY
+DxgkCbOpenPhysicalMemoryObject(
+    IN_OUT_PDXGKARGCB_OPEN_PHYSICAL_MEMORY_OBJECT pArgs)
+{
+    PDXGKRNL_ADAPTER Adapter;
+    PDXGKP_PHYSICAL_MEMORY_OBJECT Object;
+    PDXGKP_ADAPTER_MEMORY_OBJECT AdapterObject;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    PAGED_CODE();
+
+    if (pArgs == NULL || pArgs->hPhysicalMemoryObject == NULL ||
+        pArgs->hAdapter == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    pArgs->hAdapterMemoryObject = NULL;
+
+    Adapter = DxgkpHandleToAdapter(pArgs->hAdapter);
+    if (Adapter == NULL)
+        return STATUS_INVALID_HANDLE;
+
+    AdapterObject = ExAllocatePoolWithTag(NonPagedPool,
+                                          sizeof(*AdapterObject),
+                                          TAG_DXGK_RESOURCES);
+    if (AdapterObject == NULL)
+    {
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    ExAcquireFastMutex(&DxgkpPhysicalMemoryMutex);
+    Object = DxgkpFindPhysicalMemoryObjectLocked(
+                 pArgs->hPhysicalMemoryObject);
+    if (Object == NULL)
+    {
+        Status = STATUS_INVALID_HANDLE;
+    }
+    else if (!IsListEmpty(&Object->AdapterMemoryList))
+    {
+        Status = STATUS_SHARING_VIOLATION;
+    }
+    else
+    {
+        AdapterObject->PhysicalObject = Object;
+        AdapterObject->Adapter = Adapter;
+        InsertTailList(&Object->AdapterMemoryList,
+                       &AdapterObject->ListEntry);
+        pArgs->hAdapterMemoryObject = (HANDLE)AdapterObject;
+    }
+    ExReleaseFastMutex(&DxgkpPhysicalMemoryMutex);
+
+    if (!NT_SUCCESS(Status))
+        ExFreePoolWithTag(AdapterObject, TAG_DXGK_RESOURCES);
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+    return Status;
+}
+
+VOID
+APIENTRY
+DxgkCbClosePhysicalMemoryObject(
+    IN_CONST_PDXGKARGCB_CLOSE_PHYSICAL_MEMORY_OBJECT pArgs)
+{
+    PDXGKP_ADAPTER_MEMORY_OBJECT AdapterObject;
+
+    PAGED_CODE();
+
+    if (pArgs == NULL || pArgs->hAdapterMemoryObject == NULL)
+        return;
+
+    ExAcquireFastMutex(&DxgkpPhysicalMemoryMutex);
+    AdapterObject = DxgkpFindAdapterMemoryObjectLocked(
+                        pArgs->hAdapterMemoryObject);
+    if (AdapterObject != NULL)
+    {
+        RemoveEntryList(&AdapterObject->ListEntry);
+        ExFreePoolWithTag(AdapterObject, TAG_DXGK_RESOURCES);
+    }
+    ExReleaseFastMutex(&DxgkpPhysicalMemoryMutex);
+}
+#endif
+
+static VOID
+DxgkpFreeMapMemoryEntry(
+    _In_ PDXGK_MAPMEM_ENTRY Entry)
+{
+    if (Entry->Kind == DxgkMapMemoryMdl)
+    {
+        MmUnmapLockedPages(Entry->BaseAddress, Entry->Mdl);
+        IoFreeMdl(Entry->Mdl);
+    }
+    else if (Entry->Kind == DxgkMapMemoryIoSpace)
+    {
+        MmUnmapIoSpace(Entry->BaseAddress, Entry->Length);
+    }
+
+    ExFreePoolWithTag(Entry, TAG_DXGK_RESOURCES);
+}
+
+static VOID
+DxgkpReleaseMapMemory(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    LIST_ENTRY ReclaimList;
+    PLIST_ENTRY Link;
+    ULONG Reclaimed = 0;
+
+    InitializeListHead(&ReclaimList);
+
+    ExAcquireFastMutex(&DxgkpMapMemoryMutex);
+    Link = DxgkpMapMemoryList.Flink;
+    while (Link != &DxgkpMapMemoryList)
+    {
+        PLIST_ENTRY NextLink = Link->Flink;
+        PDXGK_MAPMEM_ENTRY Entry =
+            CONTAINING_RECORD(Link, DXGK_MAPMEM_ENTRY, ListEntry);
+
+        if (Entry->DeviceHandle == (HANDLE)Adapter)
+        {
+            RemoveEntryList(Link);
+            InsertTailList(&ReclaimList, Link);
+        }
+        Link = NextLink;
+    }
+    ExReleaseFastMutex(&DxgkpMapMemoryMutex);
+
+    while (!IsListEmpty(&ReclaimList))
+    {
+        Link = RemoveHeadList(&ReclaimList);
+        DxgkpFreeMapMemoryEntry(
+            CONTAINING_RECORD(Link, DXGK_MAPMEM_ENTRY, ListEntry));
+        Reclaimed++;
+    }
+
+    if (Reclaimed != 0)
+    {
+        DXGKRNL_WARN("DxgkpReleaseMapMemory: reclaimed %lu mapping(s) "
+                     "left by adapter %p\n",
+                     Reclaimed,
+                     Adapter);
+    }
+}
+
 /*
  * DxgkCbMapMemory
  *
@@ -4986,15 +6162,12 @@ DxgkCbFreePagesFromMdl(
  * space.  This is the primary memory-mapping callback used by WDDM 1.x
  * miniport drivers to access GPU MMIO registers and frame buffers.
  *
- * CRITICAL (ReactOS amd64): MmMapIoSpace system PTEs share the same VA
- * range as kernel thread stacks.  When called from the PnP thread during
- * DxgkDdiStartDevice, the allocated VA can land WITHIN the calling
- * thread's stack.  The miniport's deep init code then overwrites the
- * BAR mapping with stack frames, causing a page fault.
- *
- * Fix: call MmMapIoSpace from a system worker thread whose stack is
- * in a different VA region, so the returned VA is away from the
- * StartDevice thread's stack.
+ * Device-memory resources are normally mapped with MmMapIoSpace.  The
+ * amd64 viogpudo path below retains an MDL-based compatibility workaround
+ * for an existing ReactOS system-PTE collision, but a physical Intel BAR
+ * must use the device-memory path.  In particular, manufacturing an MDL
+ * from BAR PFNs does not use a separate PTE allocator and omits the cache
+ * and TLB synchronization performed by MmMapIoSpace.
  *
  * Unlike DxgkCbMapPhysicalMemory (WDDM 2.9), this callback takes
  * individual parameters rather than a structure pointer.
@@ -5013,21 +6186,47 @@ DxgkCbMapMemory(
     _Out_ PVOID              *VirtualAddress)
 {
     PVOID Va;
+    PDXGKRNL_ADAPTER ProbeAdapter;
+    PDXGK_MAPMEM_ENTRY MapEntry;
     ULONGLONG TotalStart100ns;
     ULONGLONG MapStart100ns;
     ULONGLONG MapUs = 0;
     PCSTR     MapMethod = "mmmapiospace";
+    BOOLEAN   MappingTracked = FALSE;
+    BOOLEAN   DirectPortSpace = FALSE;
+    BOOLEAN   IntelN100 = FALSE;
 
     PAGED_CODE();
 
     TotalStart100ns = DxgkpTraceNow100ns();
 
-    UNREFERENCED_PARAMETER(DeviceHandle);
-
     if (VirtualAddress == NULL || Length == 0)
         return STATUS_INVALID_PARAMETER;
 
     *VirtualAddress = NULL;
+
+    ProbeAdapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (ProbeAdapter != NULL)
+    {
+        PCI_COMMON_CONFIG PciConfig;
+        ULONG BytesRead;
+
+        RtlZeroMemory(&PciConfig, sizeof(PciConfig));
+        BytesRead = HalGetBusDataByOffset(
+            PCIConfiguration,
+            ProbeAdapter->PciBusNumber,
+            ProbeAdapter->PciSlotNumber.u.AsULONG,
+            &PciConfig,
+            0,
+            PCI_COMMON_HDR_LENGTH);
+        IntelN100 =
+            (BytesRead >= sizeof(ULONG) &&
+             PciConfig.VendorID == 0x8086 &&
+             PciConfig.DeviceID == 0x46D1);
+
+        ExReleaseRundownProtection(
+            &ProbeAdapter->ReverseCallbackRundownRef);
+    }
 
     DXGKRNL_TRACE("DxgkCbMapMemory: enter PA=0x%I64X Len=0x%lX IoSpace=%d UserMode=%d Cache=%d\n",
                   TranslatedAddress.QuadPart, Length, InIoSpace, MapToUserMode, CacheType);
@@ -5035,14 +6234,21 @@ DxgkCbMapMemory(
     if (InIoSpace)
     {
         /*
-         * I/O port mapping: not typical for modern GPU devices but must
-         * be handled.  On amd64 I/O ports are accessed directly, but
-         * MmMapIoSpace still works for the mapping.
+         * DXGKCB_MAP_MEMORY requires I/O-space ranges to be returned as a
+         * port address suitable for the READ_PORT and WRITE_PORT families on
+         * x86.  This is observable on the N100's I/O BAR4.  Architectures
+         * whose port accessors dereference memory still need an MMIO mapping.
          */
+#if defined(_M_AMD64) || defined(_M_IX86)
+        Va = (PVOID)(ULONG_PTR)TranslatedAddress.QuadPart;
+        MapMethod = "port-space";
+        DirectPortSpace = TRUE;
+#else
         MapStart100ns = DxgkpTraceNow100ns();
         Va = MmMapIoSpace(TranslatedAddress, Length, MmNonCached);
         MapUs = DxgkpTraceElapsedUs(MapStart100ns);
-        MapMethod = "iospace";
+        MapMethod = "iospace-port";
+#endif
     }
     else if (MapToUserMode)
     {
@@ -5075,22 +6281,35 @@ DxgkCbMapMemory(
         MapMethod = "iospace-device";
 #else
         /*
-         * On amd64/UEFI, MmMapIoSpace can return a system-PTE VA in the
-         * same FFFFF880... range that the current kernel stack expands into.
-         * For viogpudo StartDevice this can place the BAR mapping directly
-         * in the path of deeper stack growth and trigger recursive faults.
+         * Use the native device-memory mapping path for the physical
+         * Alder Lake-N BAR.  DXGKCB_MAP_MEMORY describes this as a translated
+         * memory-space resource, and Windows maps such device-register ranges
+         * with MmMapIoSpace.  Keep the MDL path below only as the existing
+         * viogpudo compatibility workaround.
+         */
+        if (IntelN100)
+        {
+            MapStart100ns = DxgkpTraceNow100ns();
+            Va = MmMapIoSpace(TranslatedAddress, Length, CacheType);
+            MapUs = DxgkpTraceElapsedUs(MapStart100ns);
+            MapMethod = "iospace-intel";
+        }
+        else
+        {
+        /*
+         * On amd64/UEFI, the existing viogpudo workaround constructs an MDL
+         * over the BAR PFNs.  Both this and MmMapIoSpace reserve system PTEs;
+         * this path is retained solely to avoid changing the validated QEMU
+         * adapter while the underlying collision is investigated separately.
          *
          * Build an MDL over the device PFNs and map it through
-         * MmMapLockedPagesSpecifyCache instead. That uses a different
-         * allocator and keeps the returned BAR VA out of the colliding
-         * system-PTE window.
+         * MmMapLockedPagesSpecifyCache.
          */
         PMDL                Mdl;
         PVOID               BaseVa;
         ULONG               Offset;
         ULONG               PageCount;
         PFN_NUMBER          FirstPfn;
-        PDXGK_MAPMEM_ENTRY  Entry;
 
         Va = NULL;
         Offset = BYTE_OFFSET(TranslatedAddress.LowPart);
@@ -5122,20 +6341,26 @@ DxgkCbMapMemory(
                                                   NormalPagePriority);
             if (BaseVa != NULL)
             {
-                Entry = ExAllocatePoolWithTag(NonPagedPool,
-                                              sizeof(*Entry),
-                                              TAG_DXGK_RESOURCES);
-                if (Entry != NULL)
+                MapEntry = ExAllocatePoolWithTag(NonPagedPool,
+                                                 sizeof(*MapEntry),
+                                                 TAG_DXGK_RESOURCES);
+                if (MapEntry != NULL)
                 {
                     Va = (PVOID)((ULONG_PTR)BaseVa + Offset);
-                    Entry->VirtualAddress = Va;
-                    Entry->BaseAddress = BaseVa;
-                    Entry->Mdl = Mdl;
-
+                    MapEntry->DeviceHandle = DeviceHandle;
+                    MapEntry->VirtualAddress = Va;
+                    MapEntry->BaseAddress = BaseVa;
+                    MapEntry->Mdl = Mdl;
+                    MapEntry->PhysicalAddress = TranslatedAddress;
+                    MapEntry->Length = Length;
+                    MapEntry->MapMethod = "mdl";
+                    MapEntry->Kind = DxgkMapMemoryMdl;
                     ExAcquireFastMutex(&DxgkpMapMemoryMutex);
-                    InsertTailList(&DxgkpMapMemoryList, &Entry->ListEntry);
+                    InsertTailList(&DxgkpMapMemoryList,
+                                   &MapEntry->ListEntry);
                     ExReleaseFastMutex(&DxgkpMapMemoryMutex);
                     MapMethod = "mdl";
+                    MappingTracked = TRUE;
                 }
                 else
                 {
@@ -5156,6 +6381,7 @@ DxgkCbMapMemory(
         }
 
         MapUs = DxgkpTraceElapsedUs(MapStart100ns);
+        }
 #endif /* _M_ARM64 */
     }
 
@@ -5164,6 +6390,33 @@ DxgkCbMapMemory(
         DXGKRNL_ERR("DxgkCbMapMemory: MmMapIoSpace failed PA=0x%I64X Len=0x%lX\n",
                      TranslatedAddress.QuadPart, Length);
         return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    if (!MappingTracked)
+    {
+        MapEntry = ExAllocatePoolWithTag(NonPagedPool,
+                                         sizeof(*MapEntry),
+                                         TAG_DXGK_RESOURCES);
+        if (MapEntry == NULL)
+        {
+            if (!DirectPortSpace)
+                MmUnmapIoSpace(Va, Length);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        MapEntry->DeviceHandle = DeviceHandle;
+        MapEntry->VirtualAddress = Va;
+        MapEntry->BaseAddress = Va;
+        MapEntry->Mdl = NULL;
+        MapEntry->PhysicalAddress = TranslatedAddress;
+        MapEntry->Length = Length;
+        MapEntry->MapMethod = MapMethod;
+        MapEntry->Kind = DirectPortSpace ?
+            DxgkMapMemoryPortSpace : DxgkMapMemoryIoSpace;
+        ExAcquireFastMutex(&DxgkpMapMemoryMutex);
+        InsertTailList(&DxgkpMapMemoryList, &MapEntry->ListEntry);
+        ExReleaseFastMutex(&DxgkpMapMemoryMutex);
+        MappingTracked = TRUE;
     }
 
     *VirtualAddress = Va;
@@ -5189,50 +6442,45 @@ DxgkCbUnmapMemory(
     _In_ HANDLE DeviceHandle,
     _In_ PVOID  VirtualAddress)
 {
-    PLIST_ENTRY Entry;
+    PLIST_ENTRY Link;
 
     PAGED_CODE();
-
-    UNREFERENCED_PARAMETER(DeviceHandle);
 
     if (VirtualAddress == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    DXGKRNL_TRACE("DxgkCbUnmapMemory: VA=%p\n", VirtualAddress);
-
     ExAcquireFastMutex(&DxgkpMapMemoryMutex);
-    for (Entry = DxgkpMapMemoryList.Flink;
-         Entry != &DxgkpMapMemoryList;
-         Entry = Entry->Flink)
+    for (Link = DxgkpMapMemoryList.Flink;
+         Link != &DxgkpMapMemoryList;
+         Link = Link->Flink)
     {
         PDXGK_MAPMEM_ENTRY MapEntry =
-            CONTAINING_RECORD(Entry, DXGK_MAPMEM_ENTRY, ListEntry);
+            CONTAINING_RECORD(Link, DXGK_MAPMEM_ENTRY, ListEntry);
 
         if (MapEntry->VirtualAddress == VirtualAddress)
         {
             RemoveEntryList(&MapEntry->ListEntry);
             ExReleaseFastMutex(&DxgkpMapMemoryMutex);
 
-            MmUnmapLockedPages(MapEntry->BaseAddress, MapEntry->Mdl);
-            IoFreeMdl(MapEntry->Mdl);
-            ExFreePoolWithTag(MapEntry, TAG_DXGK_RESOURCES);
+            if (MapEntry->DeviceHandle != DeviceHandle)
+            {
+                DXGKRNL_WARN("DxgkCbUnmapMemory: mapping owner %p differs "
+                             "from caller %p for VA=%p\n",
+                             MapEntry->DeviceHandle,
+                             DeviceHandle,
+                             VirtualAddress);
+            }
+
+            DxgkpFreeMapMemoryEntry(MapEntry);
             return STATUS_SUCCESS;
         }
     }
     ExReleaseFastMutex(&DxgkpMapMemoryMutex);
 
-    /*
-     * MmUnmapIoSpace requires the byte count, but the WDDM 1.0
-     * DxgkCbUnmapMemory callback does not receive it.  Windows dxgkrnl
-     * maintains an internal tracking table for this purpose.
-     *
-     * As a practical workaround we pass 0 to MmUnmapIoSpace.  On ReactOS
-     * the implementation will look up the mapping size from the PTE range.
-     * This matches the behavior of videoprt's VideoPortUnmapMemory.
-     */
-    MmUnmapIoSpace(VirtualAddress, 0);
-
-    return STATUS_SUCCESS;
+    DXGKRNL_WARN("DxgkCbUnmapMemory: unknown mapping VA=%p handle=%p\n",
+                 VirtualAddress,
+                 DeviceHandle);
+    return STATUS_INVALID_PARAMETER;
 }
 
 /*
@@ -5601,7 +6849,7 @@ DxgkCbWriteDeviceSpace(
 }
 
 /*
- * DxgkCbMapPhysicalMemory (legacy internal helper)
+ * DxgkCbMapPhysicalMemoryLegacy
  *
  * Maps a physical address range into kernel virtual address space.
  * Uses MmNonCached because GPU MMIO registers must not be cached.
@@ -5612,18 +6860,15 @@ DxgkCbWriteDeviceSpace(
  */
 NTSTATUS
 APIENTRY
-DxgkCbMapPhysicalMemory(
+DxgkCbMapPhysicalMemoryLegacy(
     _In_    HANDLE  DeviceHandle,
     _Inout_ PVOID   MapPhysicalMemoryArg)
 {
     PDXGKARGCB_MAPPHYSICALMEMORY MapPhysicalMemory =
         (PDXGKARGCB_MAPPHYSICALMEMORY)MapPhysicalMemoryArg;
     PVOID Va;
-    ULONGLONG TotalStart100ns;
 
     PAGED_CODE();
-
-    TotalStart100ns = DxgkpTraceNow100ns();
 
     UNREFERENCED_PARAMETER(DeviceHandle);
 
@@ -5635,7 +6880,7 @@ DxgkCbMapPhysicalMemory(
                       MmNonCached);
     if (Va == NULL)
     {
-        DXGKRNL_ERR("DxgkCbMapPhysicalMemory: MmMapIoSpace failed "
+        DXGKRNL_ERR("DxgkCbMapPhysicalMemoryLegacy: MmMapIoSpace failed "
                     "PA=0x%I64X Len=%Iu\n",
                     MapPhysicalMemory->PhysicalAddress.QuadPart,
                     MapPhysicalMemory->NumberOfBytes);
@@ -5644,18 +6889,13 @@ DxgkCbMapPhysicalMemory(
 
     MapPhysicalMemory->pVirtualAddress = Va;
 
-    DXGKRNL_TRACE("DxgkCbMapPhysicalMemory: PA=0x%I64X -> VA=%p Len=%Iu total=%I64u us\n",
-                  MapPhysicalMemory->PhysicalAddress.QuadPart, Va,
-                  MapPhysicalMemory->NumberOfBytes,
-                  DxgkpTraceElapsedUs(TotalStart100ns));
-
     return STATUS_SUCCESS;
 }
 
 /*
- * DxgkCbUnmapPhysicalMemory (legacy internal helper)
+ * DxgkCbUnmapPhysicalMemoryLegacy
  *
- * Unmaps a range mapped by DxgkCbMapPhysicalMemory.
+ * Unmaps a range mapped by DxgkCbMapPhysicalMemoryLegacy.
  * This two-argument helper is not the WDDM 2.9 physical-memory-object
  * callback and is deliberately not published in DXGKRNL_INTERFACE.
  *
@@ -5663,7 +6903,7 @@ DxgkCbMapPhysicalMemory(
  */
 NTSTATUS
 APIENTRY
-DxgkCbUnmapPhysicalMemory(
+DxgkCbUnmapPhysicalMemoryLegacy(
     _In_ HANDLE  DeviceHandle,
     _In_ PVOID   UnmapPhysicalMemoryArg)
 {
@@ -5679,10 +6919,6 @@ DxgkCbUnmapPhysicalMemory(
     {
         return STATUS_INVALID_PARAMETER;
     }
-
-    DXGKRNL_TRACE("DxgkCbUnmapPhysicalMemory: VA=%p Len=%Iu\n",
-                  UnmapPhysicalMemory->pVirtualAddress,
-                  UnmapPhysicalMemory->NumberOfBytes);
 
     MmUnmapIoSpace(UnmapPhysicalMemory->pVirtualAddress,
                    UnmapPhysicalMemory->NumberOfBytes);
@@ -9098,9 +10334,14 @@ DxgkAdapterRemove(
     if (InterlockedCompareExchange(&Adapter->ReverseCallbackRundownStarted, 1, 0) == 0)
         ExWaitForRundownProtectionRelease(&Adapter->ReverseCallbackRundownRef);
     KeReleaseMutex(&Adapter->MiniportCallbackMutex, FALSE);
+    DxgkpReleaseMapMemory(Adapter);
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
     DxgkpReleaseCallbackMemory(Adapter);
 #endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+    DxgkpReleasePhysicalMemoryObjects(Adapter);
+#endif
+    DxgkpFreeAdapterRegistryPath(Adapter);
     DxgkEndKmdExclusive(Adapter, FALSE);
 
     /* RemoveDevice is the final hardware-ownership boundary when StopDevice
@@ -10264,10 +11505,19 @@ DxgkpAddDeviceRegistered(
     InitializeListHead(&Adapter->MiniportAdapterListEntry);
     InitializeListHead(&Adapter->GlobalAdapterListEntry);
 
+    Status = DxgkpInitializeAdapterRegistryPath(Adapter);
+    if (!NT_SUCCESS(Status))
+    {
+        DXGKRNL_ERR("DxgkpAddDevice: display software-key lookup failed "
+                    "0x%08lX\n", Status);
+        IoDeleteDevice(Fdo);
+        return Status;
+    }
     Status = DxgkpMms2CreateAdapter(Adapter, DxgkpMms2GetAdapterFlags(Adapter), &Adapter->Mms2Adapter);
     if (!NT_SUCCESS(Status))
     {
         DXGKRNL_ERR("DxgkpAddDevice: dxgmms2 adapter creation failed 0x%08lX\n", Status);
+        DxgkpFreeAdapterRegistryPath(Adapter);
         IoDeleteDevice(Fdo);
         return Status;
     }
@@ -10287,6 +11537,7 @@ DxgkpAddDeviceRegistered(
         Mms2Status = DxgkpMms2DestroyAdministrativeAdapter(Adapter);
         if (!NT_SUCCESS(Mms2Status))
             DxgkpBugCheckMms2Lifecycle(Adapter, Mms2Status, DXGKP_MMS2_FAILURE_ADD_ROLLBACK);
+        DxgkpFreeAdapterRegistryPath(Adapter);
         IoDeleteDevice(Fdo);
         return Status;
     }
@@ -10312,9 +11563,11 @@ DxgkpAddDeviceRegistered(
         if (InterlockedCompareExchange(&Adapter->ReverseCallbackRundownStarted, 1, 0) == 0)
             ExWaitForRundownProtectionRelease(&Adapter->ReverseCallbackRundownRef);
         KeReleaseMutex(&Adapter->MiniportCallbackMutex, FALSE);
+        DxgkpReleaseMapMemory(Adapter);
         Mms2Status = DxgkpMms2DestroyAdministrativeAdapter(Adapter);
         if (!NT_SUCCESS(Mms2Status))
             DxgkpBugCheckMms2Lifecycle(Adapter, Mms2Status, DXGKP_MMS2_FAILURE_ATTACH_ROLLBACK);
+        DxgkpFreeAdapterRegistryPath(Adapter);
         IoDeleteDevice(Fdo);
         return STATUS_NO_SUCH_DEVICE;
     }
