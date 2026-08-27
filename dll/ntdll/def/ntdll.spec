@@ -963,7 +963,7 @@
 @ stdcall RtlGetFullPathName_UstrEx(ptr ptr ptr ptr ptr ptr ptr ptr)
 @ stdcall -arch=x86_64,arm64 RtlGetFunctionTableListHead()
 @ stdcall RtlGetGroupSecurityDescriptor(ptr ptr ptr)
-@ stub -version=0x600+ RtlGetIntegerAtom
+@ stdcall -version=0x600+ RtlGetIntegerAtom(wstr ptr)
 @ stdcall RtlGetLastNtStatus()
 @ stdcall RtlGetLastWin32Error()
 @ stdcall -version=0x600+ RtlGetLocaleFileMappingAddress(ptr ptr ptr)

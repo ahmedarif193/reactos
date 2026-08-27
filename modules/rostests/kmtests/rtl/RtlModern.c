@@ -38,6 +38,7 @@ NTSTATUS NTAPI RtlQueryElevationFlags(_Out_ PULONG Flags);
 NTSTATUS NTAPI RtlGetAcesBufferSize(_In_ PACL Acl, _Out_ PULONG AcesBufferSize);
 NTSTATUS NTAPI RtlQueryPackageIdentity(_In_opt_ PVOID TokenObject, _Out_writes_bytes_to_opt_(*PackageSize, *PackageSize) PWSTR PackageFullName, _Inout_ PSIZE_T PackageSize, _Out_writes_bytes_to_opt_(*AppIdSize, *AppIdSize) PWSTR AppId, _Inout_opt_ PSIZE_T AppIdSize, _Out_opt_ PBOOLEAN Packaged);
 VOID NTAPI RtlIntersectBitMaps(_Inout_ PRTL_BITMAP Destination, _In_ PRTL_BITMAP Source);
+BOOLEAN NTAPI RtlGetIntegerAtom(_In_ PCWSTR AtomName, _Out_opt_ PRTL_ATOM Atom);
 
 #if defined(_M_AMD64) || defined(_M_ARM64)
 typedef struct _RTL_BITMAP_EX
@@ -134,6 +135,55 @@ TestModernBitmaps(VOID)
     RtlClearBitEx(&DestinationEx, 6);
     ok_eq_hex64(DestinationBitsEx, 0);
 #endif
+}
+
+static
+VOID
+TestIntegerAtoms(VOID)
+{
+    RTL_ATOM Atom;
+
+    Atom = 0xDEAD;
+    ok(RtlGetIntegerAtom(NULL, &Atom), "NULL integer atom was rejected\n");
+    ok_eq_hex(Atom, 0xC000);
+
+    Atom = 0xDEAD;
+    ok(RtlGetIntegerAtom((PCWSTR)(ULONG_PTR)1, &Atom), "integer atom 1 was rejected\n");
+    ok_eq_hex(Atom, 1);
+
+    Atom = 0xDEAD;
+    ok(RtlGetIntegerAtom((PCWSTR)(ULONG_PTR)0xBFFF, &Atom), "integer atom 0xBFFF was rejected\n");
+    ok_eq_hex(Atom, 0xBFFF);
+
+    Atom = 0xDEAD;
+    ok(!RtlGetIntegerAtom((PCWSTR)(ULONG_PTR)0xC000, &Atom), "integer atom 0xC000 was accepted\n");
+    ok_eq_hex(Atom, 0xDEAD);
+
+    Atom = 0xDEAD;
+    ok(RtlGetIntegerAtom(L"#1", &Atom), "string atom #1 was rejected\n");
+    ok_eq_hex(Atom, 1);
+
+    Atom = 0xDEAD;
+    ok(RtlGetIntegerAtom(L"#49152", &Atom), "string atom #49152 was rejected\n");
+    ok_eq_hex(Atom, 0xC000);
+
+    Atom = 0xDEAD;
+    ok(RtlGetIntegerAtom(L"#0", &Atom), "string atom #0 was rejected with output\n");
+    ok_eq_hex(Atom, 0xC000);
+    ok(RtlGetIntegerAtom(L"#0", NULL), "string atom #0 was rejected without output\n");
+    ok(RtlGetIntegerAtom(L"#49153", NULL), "out-of-range string was rejected without output\n");
+
+    Atom = 0xDEAD;
+    ok(RtlGetIntegerAtom(L"#49153", &Atom), "string atom #49153 was rejected\n");
+    ok_eq_hex(Atom, 0xC000);
+
+    Atom = 0xDEAD;
+    ok(RtlGetIntegerAtom(L"#4294967296", &Atom), "overflowing string atom was rejected\n");
+    ok_eq_hex(Atom, 0xC000);
+
+    ok(!RtlGetIntegerAtom(L"#", &Atom), "empty string atom was accepted\n");
+    ok(!RtlGetIntegerAtom(L"#12x", &Atom), "malformed string atom was accepted\n");
+    ok(!RtlGetIntegerAtom(L"name", &Atom), "named atom was accepted as integer\n");
 }
 
 static
@@ -436,5 +486,6 @@ START_TEST(ExWddmAvl)
 START_TEST(ExWddmRtl)
 {
     TestModernBitmaps();
+    TestIntegerAtoms();
     TestModernRtlState();
 }
