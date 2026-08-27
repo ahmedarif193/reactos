@@ -1,3 +1,4 @@
+#if defined(__clang__)
 /*
  * PROJECT:     ReactOS Raspberry Pi 5 graphics validation
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
@@ -7,7 +8,7 @@
 
 #pragma once
 
-#if defined(__cplusplus) && __cplusplus >= 201103L
+#if defined(__clang__) && defined(__cplusplus) && __cplusplus >= 201103L
 #if !defined(_GCC_MAX_ALIGN_T) && !defined(__CLANG_MAX_ALIGN_T_DEFINED)
 #define _GCC_MAX_ALIGN_T
 #define __CLANG_MAX_ALIGN_T_DEFINED
@@ -28,3 +29,4 @@ typedef struct
 #undef __MINGW_NOTHROW
 #define __MINGW_NOTHROW
 #include <float.h>
+#endif

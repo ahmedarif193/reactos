@@ -3054,6 +3054,7 @@ MmMapViewInSessionSpace(IN PVOID Section,
                                       0);
 }
 
+#if (NTDDI_VERSION >= NTDDI_WIN8)
 NTSTATUS
 NTAPI
 MmPrefetchVirtualAddresses(
@@ -3135,6 +3136,7 @@ MmPrefetchVirtualAddresses(
     ObDereferenceObject(Process);
     return Status;
 }
+#endif
 
 static
 NTSTATUS

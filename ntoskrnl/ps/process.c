@@ -2912,8 +2912,14 @@ ULONGLONG NTAPI PsGetProcessSequenceNumber(_In_ PEPROCESS Process)
 
 ULONGLONG NTAPI PsGetProcessStartKey(_In_ PEPROCESS Process)
 {
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    ULONG BootId = SharedUserData->BootId;
+#else
+    ULONG BootId = 0;
+#endif
+
     return (Process->SequenceNumber & 0x0000FFFFFFFFFFFFULL) |
-           ((ULONGLONG)SharedUserData->BootId << 48);
+           ((ULONGLONG)BootId << 48);
 }
 
 BOOLEAN NTAPI PsIsProcessCommitRelinquished(_In_ PEPROCESS Process)

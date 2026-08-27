@@ -158,6 +158,7 @@ PsSetCreateProcessNotifyRoutineEx(IN PCREATE_PROCESS_NOTIFY_ROUTINE_EX NotifyRou
  * no non-Win32 process subsystem to distinguish here, so it shares the Ex
  * callback registry and dispatcher.
  */
+#if (NTDDI_VERSION >= NTDDI_WIN10_RS2)
 NTSTATUS
 NTAPI
 PsSetCreateProcessNotifyRoutineEx2(
@@ -174,6 +175,7 @@ PsSetCreateProcessNotifyRoutineEx2(
         (PCREATE_PROCESS_NOTIFY_ROUTINE_EX)NotifyInformation,
         Remove);
 }
+#endif
 
 /*
  * @implemented

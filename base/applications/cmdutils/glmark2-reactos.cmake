@@ -145,7 +145,8 @@ add_executable(glmark2-win32 ${GLMARK2_SOURCES})
 set_property(TARGET glmark2-win32 PROPERTY CXX_STANDARD 17)
 set_property(TARGET glmark2-win32 PROPERTY CXX_STANDARD_REQUIRED ON)
 target_include_directories(glmark2-win32 BEFORE PRIVATE
-    ${REACTOS_SOURCE_DIR}/sdk/include/ucrt
+    "$<$<COMPILE_LANGUAGE:C>:${REACTOS_SOURCE_DIR}/sdk/include/ucrt>"
+    "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:${REACTOS_SOURCE_DIR}/sdk/include/ucrt>"
     ${GLMARK2_SOURCE_DIR}/src
     ${GLMARK2_SOURCE_DIR}/src/libmatrix
     ${GLMARK2_SOURCE_DIR}/src/scene-ideas
@@ -176,7 +177,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
 endif()
 # The target-local startup bridge exposes LLVM's .ctors to the normal UCRT
 # startup path, keeping every FILE operation and the process startup in UCRT.
-target_link_libraries(glmark2-win32 cpprt getopt glmark2-png glmark2-zlib)
+target_link_libraries(glmark2-win32 cppstl cpprt getopt glmark2-png glmark2-zlib)
 set_module_type(glmark2-win32 win32cui)
 add_importlibs(glmark2-win32 libjpeg opengl32 gdi32 user32 ucrtbase kernel32 ntdll)
 add_cd_file(TARGET glmark2-win32 DESTINATION reactos/system32 FOR all)
