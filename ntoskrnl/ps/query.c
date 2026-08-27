@@ -155,6 +155,30 @@ PspCopyThreadWow64Context(IN PETHREAD Thread,
 /* Debugging Level */
 ULONG PspTraceLevel = 0;
 
+typedef struct _PSP_PROCESS_TELEMETRY_ID_INFORMATION
+{
+    ULONG HeaderSize;
+    ULONG ProcessId;
+    ULONGLONG ProcessStartKey;
+    ULONGLONG CreateTime;
+    ULONGLONG CreateInterruptTime;
+    ULONGLONG CreateUnbiasedInterruptTime;
+    ULONGLONG ProcessSequenceNumber;
+    ULONGLONG SessionCreateTime;
+    ULONG SessionId;
+    ULONG BootId;
+    ULONG ImageChecksum;
+    ULONG ImageTimeDateStamp;
+    ULONG UserSidOffset;
+    ULONG ImagePathOffset;
+    ULONG PackageNameOffset;
+    ULONG RelativeAppNameOffset;
+    ULONG CommandLineOffset;
+} PSP_PROCESS_TELEMETRY_ID_INFORMATION,
+ *PPSP_PROCESS_TELEMETRY_ID_INFORMATION;
+
+C_ASSERT(sizeof(PSP_PROCESS_TELEMETRY_ID_INFORMATION) == 0x60);
+
 /* PRIVATE FUNCTIONS *********************************************************/
 
 NTSTATUS
@@ -186,6 +210,105 @@ PsReferenceProcessFilePointer(
 
     /* Return status */
     return Section ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
+}
+
+static
+NTSTATUS
+PspQueryProcessTelemetryIdInformation(
+    _In_ PEPROCESS Process,
+    _Out_writes_bytes_to_opt_(BufferLength, *ReturnLength) PVOID Buffer,
+    _In_ ULONG BufferLength,
+    _Out_ PULONG ReturnLength)
+{
+    static const UNICODE_STRING EmptyImageName = RTL_CONSTANT_STRING(L"");
+    PPSP_PROCESS_TELEMETRY_ID_INFORMATION Information;
+    PCUNICODE_STRING ImageName;
+    PUNICODE_STRING AllocatedImageName;
+    PACCESS_TOKEN Token;
+    PTOKEN_USER TokenUserInformation;
+    ULONG SidLength;
+    ULONG TotalLength;
+    ULONG Offset;
+    ULONG WriteLength;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    TokenUserInformation = NULL;
+    AllocatedImageName = NULL;
+    Token = PsReferencePrimaryToken(Process);
+    Status = SeQueryInformationToken(Token, TokenUser, (PVOID *)&TokenUserInformation);
+    PsDereferencePrimaryToken(Token);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    SidLength = RtlLengthSid(TokenUserInformation->User.Sid);
+    Status = SeLocateProcessImageName(Process, &AllocatedImageName);
+    ImageName = NT_SUCCESS(Status) ? AllocatedImageName : &EmptyImageName;
+
+    if ((SidLength > MAXULONG - 0x64) ||
+        (ImageName->Length > MAXULONG - 0x64 - SidLength))
+    {
+        Status = STATUS_INTEGER_OVERFLOW;
+        goto Cleanup;
+    }
+
+    TotalLength = 0x64 + SidLength + ImageName->Length;
+    *ReturnLength = TotalLength;
+    WriteLength = min(BufferLength, TotalLength);
+
+    _SEH2_TRY
+    {
+        if (WriteLength != 0)
+            RtlZeroMemory(Buffer, WriteLength);
+
+        if (BufferLength < sizeof(*Information))
+        {
+            Status = STATUS_INFO_LENGTH_MISMATCH;
+            _SEH2_LEAVE;
+        }
+
+        Information = Buffer;
+        Information->HeaderSize = sizeof(*Information);
+        Information->ProcessId = HandleToUlong(Process->UniqueProcessId);
+        Information->ProcessStartKey = PsGetProcessStartKey(Process);
+        Information->CreateTime = Process->CreateTime.QuadPart;
+        Information->ProcessSequenceNumber = Process->SequenceNumber;
+        Information->SessionId = PsGetProcessSessionId(Process);
+        Information->BootId = SharedUserData->BootId;
+
+        if (BufferLength < TotalLength)
+        {
+            Status = STATUS_BUFFER_OVERFLOW;
+            _SEH2_LEAVE;
+        }
+
+        Offset = sizeof(*Information);
+        Information->UserSidOffset = Offset;
+        RtlCopyMemory((PUCHAR)Buffer + Offset, TokenUserInformation->User.Sid, SidLength);
+        Offset += SidLength;
+
+        Information->ImagePathOffset = Offset;
+        if (ImageName->Length != 0)
+            RtlCopyMemory((PUCHAR)Buffer + Offset, ImageName->Buffer, ImageName->Length);
+        Offset += ImageName->Length + sizeof(WCHAR);
+
+        Information->PackageNameOffset = Offset;
+        Information->RelativeAppNameOffset = Offset;
+        Information->CommandLineOffset = Offset;
+        Status = STATUS_SUCCESS;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+Cleanup:
+    if (AllocatedImageName != NULL)
+        ExFreePoolWithTag(AllocatedImageName, TAG_SEPA);
+    ExFreePoolWithTag(TokenUserInformation, TAG_SE);
+    return Status;
 }
 
 #if DBG
@@ -1641,6 +1764,36 @@ NtQueryInformationProcess(
             break;
         }
 
+        case ProcessSubsystemInformation:
+        {
+            /* ReactOS currently has only the native Win32 subsystem. */
+            Length = sizeof(ULONG);
+            if (ProcessInformationLength != Length)
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            Status = PspReferenceProcessForLimitedQuery(ProcessHandle,
+                                                        PreviousMode,
+                                                        &Process);
+            if (!NT_SUCCESS(Status)) break;
+
+            _SEH2_TRY
+            {
+                *(PULONG)ProcessInformation = 0; /* SubsystemInformationTypeWin32 */
+                Status = STATUS_SUCCESS;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+
+            ObDereferenceObject(Process);
+            break;
+        }
+
         case ProcessEnergyValues:
         {
             Length = sizeof(PROCESS_ENERGY_VALUES);
@@ -1664,6 +1817,17 @@ NtQueryInformationProcess(
             }
             _SEH2_END;
 
+            ObDereferenceObject(Process);
+            break;
+        }
+
+        case ProcessTelemetryIdInformation:
+        {
+            Status = PspReferenceProcessForLimitedQuery(ProcessHandle, PreviousMode, &Process);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            Status = PspQueryProcessTelemetryIdInformation(Process, ProcessInformation, ProcessInformationLength, &Length);
             ObDereferenceObject(Process);
             break;
         }
