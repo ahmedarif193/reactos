@@ -37,6 +37,10 @@ typedef struct _POWER_SETTING_TEST_CONTEXT
 
 C_ASSERT(FIELD_OFFSET(POWER_SETTING_ULONG_BUFFER, Value) == FIELD_OFFSET(SET_POWER_SETTING_VALUE, Data));
 
+#ifdef KMT_PERSISTENT_POWER_TESTS
+static POWER_SETTING_TEST_CONTEXT PersistentContext;
+#endif
+
 static
 NTSTATUS
 NTAPI
@@ -258,4 +262,14 @@ START_TEST(PoPowerSettings)
     ok_eq_long(SelfContext.CallbackCount, 2);
     Status = PoUnregisterPowerSettingCallback(SelfHandle);
     ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+
+#ifdef KMT_PERSISTENT_POWER_TESTS
+    RtlZeroMemory(&PersistentContext, sizeof(PersistentContext));
+    Status = PoRegisterPowerSettingCallback(KmtDriverObject->DeviceObject, &GUID_PROCESSOR_PERF_ENERGY_PERFORMANCE_PREFERENCE, PowerSettingCallback, &PersistentContext, NULL);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_long(PersistentContext.CallbackCount, 1);
+    trace("The no-handle callback remains registered; do not unload kmtest_drv\n");
+#else
+    skip(1, "Enable KMT_PERSISTENT_POWER_TESTS to exercise no-handle registration\n");
+#endif
 }
