@@ -273,30 +273,15 @@ KdbpOverwriteInstruction(
     OUT KD_BREAKPOINT_TYPE *OldInst  OPTIONAL)
 {
     NTSTATUS Status;
-    ULONG Protect;
     PEPROCESS CurrentProcess = PsGetCurrentProcess();
     KAPC_STATE ApcState;
+    BOOLEAN Attached = FALSE;
 
-    /* Get the protection for the address. */
-    Protect = MmGetPageProtect(Process, (PVOID)PAGE_ROUND_DOWN(Address));
-
-    /* Return if that page isn't present. */
-    if (Protect & PAGE_NOACCESS)
-    {
-        return STATUS_MEMORY_NOT_ALLOCATED;
-    }
-
-    /* Attach to the process */
-    if (CurrentProcess != Process)
+    /* User addresses must be accessed in the address space that owns them. */
+    if (Address < (ULONG_PTR)MmSystemRangeStart && CurrentProcess != Process)
     {
         KeStackAttachProcess(&Process->Pcb, &ApcState);
-    }
-
-    /* Make the page writeable if it is read only. */
-    if (Protect & (PAGE_READONLY|PAGE_EXECUTE|PAGE_EXECUTE_READ))
-    {
-        MmSetPageProtect(Process, (PVOID)PAGE_ROUND_DOWN(Address),
-                         (Protect & ~(PAGE_READONLY|PAGE_EXECUTE|PAGE_EXECUTE_READ)) | PAGE_READWRITE);
+        Attached = TRUE;
     }
 
     /* Copy the old instruction back to the caller. */
@@ -305,42 +290,17 @@ KdbpOverwriteInstruction(
         Status = KdbpSafeReadMemory(OldInst, (PVOID)Address, sizeof(*OldInst));
         if (!NT_SUCCESS(Status))
         {
-            if (Protect & (PAGE_READONLY|PAGE_EXECUTE|PAGE_EXECUTE_READ))
-            {
-                MmSetPageProtect(Process, (PVOID)PAGE_ROUND_DOWN(Address), Protect);
-            }
-
-            /* Detach from process */
-            if (CurrentProcess != Process)
-            {
+            if (Attached)
                 KeUnstackDetachProcess(&ApcState);
-            }
-
             return Status;
         }
     }
 
     /* Copy the new instruction in its place. */
     Status = KdbpSafeWriteMemory((PVOID)Address, &NewInst, sizeof(NewInst));
-#if defined(_M_ARM64)
-    if (NT_SUCCESS(Status))
-    {
-        /* Ranged, SMP-broadcast maintenance for exactly the patched instruction */
-        KeSweepICache((PVOID)Address, sizeof(NewInst));
-    }
-#endif
 
-    /* Restore the page protection. */
-    if (Protect & (PAGE_READONLY|PAGE_EXECUTE|PAGE_EXECUTE_READ))
-    {
-        MmSetPageProtect(Process, (PVOID)PAGE_ROUND_DOWN(Address), Protect);
-    }
-
-    /* Detach from process */
-    if (CurrentProcess != Process)
-    {
+    if (Attached)
         KeUnstackDetachProcess(&ApcState);
-    }
 
     return Status;
 }
@@ -805,7 +765,7 @@ KdbpIsBreakPointOurs(IN NTSTATUS ExceptionCode, IN PCONTEXT Context, IN PEXCEPTI
 
     if (ExceptionCode == STATUS_BREAKPOINT) /* Software interrupt */
     {
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_AMD64)
         ULONG_PTR BpPc = KeGetContextPc(Context);
 #else
         ULONG_PTR BpPc = KeGetContextPc(Context) - 1; /* Get EIP of INT3 instruction */
@@ -1233,6 +1193,21 @@ KdbpDisableBreakPoint(
     }
 
     BreakPoint->Enabled = FALSE;
+
+#if !defined(_M_ARM64)
+    /*
+     * Disabling the breakpoint whose restored instruction was waiting for a
+     * single step must also cancel that step. Otherwise the next instruction
+     * raises an unexpected #DB and the stale array entry may be reused.
+     */
+    if (BreakPoint == KdbBreakPointToReenable)
+    {
+        KdbBreakPointToReenable = NULL;
+        if (KdbNumSingleSteps == 0)
+            KdbTrapFrame.EFlags &= ~EFLAGS_TF;
+    }
+#endif
+
     if (BreakPoint->Type != KdbBreakPointTemporary)
         KdbPrintf("Breakpoint %d disabled.\n", BreakPointNr);
 
@@ -1816,7 +1791,7 @@ KdbEnterDebuggerException(
                 KeBugCheck(0); // FIXME: Proper bugcode!
             }
 
-#if !defined(_M_ARM64)
+#if !defined(_M_ARM64) && !defined(_M_AMD64)
             /* Also since we are past the int3 now, decrement EIP in the
                TrapFrame. This is only needed because KDBG insists on working
                with the TrapFrame instead of with the Context, as it is supposed
@@ -2181,18 +2156,40 @@ EnterKdbg:;
     }
 
 continue_execution:
-    /* Clear debug status */
-    if (ExceptionCode == STATUS_BREAKPOINT) /* FIXME: Why clear DR6 on INT3? */
-    {
 #if !defined(_M_ARM64)
-        /* Set the RF flag so we don't trigger the same breakpoint again. */
-        if (Resume)
-        {
-            Context->EFlags |= EFLAGS_RF;
-        }
+    /*
+     * An x86/x64 hardware execution breakpoint raises #DB, which arrives as
+     * STATUS_SINGLE_STEP.  Set RF before resuming so the faulting instruction
+     * can execute once without immediately retriggering the same breakpoint.
+     */
+    if (Resume)
+    {
+        Context->EFlags |= EFLAGS_RF;
+    }
 
+    if (ExceptionCode == STATUS_BREAKPOINT ||
+        ExceptionCode == STATUS_SINGLE_STEP)
+    {
         /* Clear dr6 status flags. */
         Context->Dr6 &= ~0x0000e00f;
+    }
+#endif
+
+    /* Advance only past an INT3, never past the instruction selected by #DB. */
+    if (ExceptionCode == STATUS_BREAKPOINT)
+    {
+#if defined(_M_AMD64)
+        /*
+         * KiDispatchException has already backed RIP up to the INT3 address.
+         * For a KDBG software breakpoint the original opcode was restored
+         * above and must execute at that same address.  Only an embedded INT3
+         * (DbgBreakPoint, ASSERT, and friends) needs to be skipped.
+         */
+        if (KdbLastBreakPointNr < 0)
+        {
+            KeSetContextPc(Context, KeGetContextPc(Context) + KD_BREAKPOINT_SIZE);
+        }
+#elif !defined(_M_ARM64)
 
         if (!(KdbEnteredOnSingleStep && KdbSingleStepOver))
         {

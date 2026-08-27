@@ -130,6 +130,22 @@ KdpReport(IN PKTRAP_FRAME TrapFrame,
     KdpMoveMemory(ContextRecord,
                   &Prcb->ProcessorState.ContextFrame,
                   sizeof(CONTEXT));
+
+#if defined(_M_IX86) || defined(_M_AMD64)
+    /*
+     * KiRestoreProcessorControlState reloads the hardware debug registers
+     * from SpecialRegisters, not from ContextFrame.  Propagate debugger edits
+     * made through the reported CONTEXT; otherwise BPM commands only update
+     * the software copy and are discarded as the debugger exits.
+     */
+    Prcb->ProcessorState.SpecialRegisters.KernelDr0 = ContextRecord->Dr0;
+    Prcb->ProcessorState.SpecialRegisters.KernelDr1 = ContextRecord->Dr1;
+    Prcb->ProcessorState.SpecialRegisters.KernelDr2 = ContextRecord->Dr2;
+    Prcb->ProcessorState.SpecialRegisters.KernelDr3 = ContextRecord->Dr3;
+    Prcb->ProcessorState.SpecialRegisters.KernelDr6 = ContextRecord->Dr6;
+    Prcb->ProcessorState.SpecialRegisters.KernelDr7 = ContextRecord->Dr7;
+#endif
+
     KiRestoreProcessorControlState(&Prcb->ProcessorState);
 
     /* Exit the debugger and clear the CTRL-C state */
