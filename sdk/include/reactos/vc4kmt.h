@@ -40,6 +40,21 @@ typedef struct _VC4KMT_FENCE
     volatile const UINT64 *CpuValue;
 } VC4KMT_FENCE;
 
+#define VC4KMT_RESOURCE_CPU_DIRTY 0x00000001u
+
+typedef struct _VC4KMT_RESOURCE
+{
+    D3DKMT_HANDLE hAllocation;
+    ULONG Flags;
+} VC4KMT_RESOURCE;
+
+typedef enum _VC4KMT_ENGINE
+{
+    Vc4KmtEngine3d = RPI5VC4_NODE_3D,
+    Vc4KmtEngineTfu = RPI5VC4_NODE_TFU,
+    Vc4KmtEngineCsd = RPI5VC4_NODE_CSD
+} VC4KMT_ENGINE;
+
 /*
  * Control-list submission, expressed in absolute V3D GPU virtual addresses
  * (into the always-resident VRAM slab).  The kernel executes it directly —
@@ -93,9 +108,32 @@ vc4kmt_bo_map(
     _Inout_ VC4KMT_BO *Bo,
     _Outptr_ PVOID *CpuVaOut);
 
+NTSTATUS
+vc4kmt_bo_invalidate(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ const VC4KMT_BO *Bo,
+    _In_ UINT Offset,
+    _In_ UINT Length);
+
 ULONG
 vc4kmt_bo_gpuva(
     _In_ const VC4KMT_BO *Bo);
+
+NTSTATUS
+vc4kmt_primary_gpuva(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ UINT Width,
+    _In_ UINT Height,
+    _In_ UINT Pitch,
+    _Out_ ULONG *GpuVaOut);
+
+D3DKMT_HANDLE
+vc4kmt_primary_allocation(
+    _In_ const VC4KMT_DEVICE *Device);
+
+VOID
+vc4kmt_primary_invalidate(
+    _In_opt_ VC4KMT_DEVICE *Device);
 
 NTSTATUS
 vc4kmt_bo_destroy(
@@ -109,9 +147,25 @@ vc4kmt_submit_cl(
     _Out_ VC4KMT_FENCE *FenceOut);
 
 NTSTATUS
+vc4kmt_submit_cl_resources(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ const VC4KMT_CL_SUBMIT *Submit,
+    _In_reads_opt_(ResourceCount) const VC4KMT_RESOURCE *Resources,
+    _In_ UINT ResourceCount,
+    _Out_ VC4KMT_FENCE *FenceOut);
+
+NTSTATUS
 vc4kmt_submit_tfu(
     _In_ VC4KMT_DEVICE *Device,
     _In_ const VC4KMT_TFU_SUBMIT *Submit,
+    _Out_ VC4KMT_FENCE *FenceOut);
+
+NTSTATUS
+vc4kmt_submit_tfu_resources(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ const VC4KMT_TFU_SUBMIT *Submit,
+    _In_reads_opt_(ResourceCount) const VC4KMT_RESOURCE *Resources,
+    _In_ UINT ResourceCount,
     _Out_ VC4KMT_FENCE *FenceOut);
 
 NTSTATUS
@@ -121,10 +175,24 @@ vc4kmt_submit_csd(
     _Out_ VC4KMT_FENCE *FenceOut);
 
 NTSTATUS
+vc4kmt_submit_csd_resources(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ const VC4KMT_CSD_SUBMIT *Submit,
+    _In_reads_opt_(ResourceCount) const VC4KMT_RESOURCE *Resources,
+    _In_ UINT ResourceCount,
+    _Out_ VC4KMT_FENCE *FenceOut);
+
+NTSTATUS
 vc4kmt_wait(
     _In_ VC4KMT_DEVICE *Device,
     _In_ const VC4KMT_FENCE *Fence,
     _In_ DWORD TimeoutMs);
+
+NTSTATUS
+vc4kmt_wait_gpu(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ VC4KMT_ENGINE Engine,
+    _In_ const VC4KMT_FENCE *Fence);
 
 VOID
 vc4kmt_fence_destroy(
