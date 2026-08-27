@@ -219,6 +219,7 @@ KMT_TESTFUNC Test_ObType;
 KMT_TESTFUNC Test_ObTypeClean;
 KMT_TESTFUNC Test_ObTypeNoClean;
 KMT_TESTFUNC Test_ObTypes;
+KMT_TESTFUNC Test_PoFxState;
 KMT_TESTFUNC Test_PoPowerSettings;
 KMT_TESTFUNC Test_PsNotify;
 KMT_TESTFUNC Test_PsQuota;
@@ -461,6 +462,7 @@ const KMT_TEST TestList[] =
     { "ObTypeClean",                        Test_ObTypeClean },
     { "ObTypeNoClean",                      Test_ObTypeNoClean },
     { "ObTypes",                            Test_ObTypes },
+    { "PoFxState",                          Test_PoFxState },
     { "PoPowerSettings",                    Test_PoPowerSettings },
     { "PsNotify",                           Test_PsNotify },
     { "PsEnergy",                           Test_PsEnergy },

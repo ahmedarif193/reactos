@@ -698,6 +698,9 @@ typedef PO_FX_DEVICE_V3 PO_FX_DEVICE, *PPO_FX_DEVICE;
 #endif
 
 #define PO_FX_UNKNOWN_POWER                         0xFFFFFFFF
+#define PO_FX_UNKNOWN_TIME                          0xFFFFFFFFFFFFFFFFULL
+#define PO_FX_FLAG_BLOCKING                         0x01
+#define PO_FX_FLAG_ASYNC_ONLY                       0x02
 
 #endif // NTDDI_WIN8
 
