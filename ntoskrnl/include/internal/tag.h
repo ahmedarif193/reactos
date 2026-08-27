@@ -144,6 +144,7 @@
 #define TAG_SHIM                'MIHS'
 #define TAG_QUOTA_BLOCK         'bQsP'
 #define TAG_THREAD_NAME         'mNhT'
+#define TAG_PS_TLS              'slTP'
 #define TAG_PS_API_SET          'sApP'
 #define TAG_WOW64_PROCESS       '46WP'
 

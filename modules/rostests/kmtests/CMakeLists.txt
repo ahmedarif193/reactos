@@ -210,6 +210,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ps/PsNotify.c
     ntos_ps/PsNotifyKM.c
     ntos_ps/PsEnergy.c
+    ntos_ps/PsTls.c
     ntos_ps/PsProcessInfo.c
     ntos_ps/PsQuota.c
     ntos_ps/PsSystemThread.c
