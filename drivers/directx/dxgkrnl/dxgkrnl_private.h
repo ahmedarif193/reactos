@@ -3124,6 +3124,7 @@ typedef struct _DXGKRNL_TRACK_DMA_ARGS
     UINT                            OpenBindingReferenceCount;
     PDXGKVMM_ALLOCATION const      *AllocationReferences;
     UINT                            AllocationReferenceCount;
+    const BOOLEAN                  *AllocationCpuDirty;
     PDXGKVMM_ALLOCATION const      *LifetimeAllocationReferences;
     UINT                            LifetimeAllocationReferenceCount;
 } DXGKRNL_TRACK_DMA_ARGS, *PDXGKRNL_TRACK_DMA_ARGS;
@@ -3373,6 +3374,11 @@ VOID
 NTAPI
 DxgkFreeDmaBuffer(
     _In_opt_ PDXGKRNL_DMA_BUFFER DmaBuffer);
+
+NTSTATUS
+NTAPI
+DxgkFlushDmaBufferForSubmission(
+    _In_ PDXGKRNL_DMA_BUFFER DmaBuffer);
 
 NTSTATUS
 NTAPI

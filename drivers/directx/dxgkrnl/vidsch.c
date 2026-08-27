@@ -2539,6 +2539,19 @@ VidSchSubmitCommandTracked(
         }
     }
 
+    /* Render, BuildPagingBuffer, and Patch write a cached CPU mapping while
+     * the adapter consumes the physical DMA buffer directly.  Publish the
+     * final byte range itself instead of relying on an unrelated allocation
+     * cache clean to evict these writes as a side effect. */
+    Status = DxgkFlushDmaBufferForSubmission(DmaBuffer);
+    if (!NT_SUCCESS(Status))
+    {
+        DxgkCancelTrackedDmaBuffer(Reservation);
+        VidSchpDereferencePacket(Packet);
+        VidSchpReleaseCall(Adapter);
+        return Status;
+    }
+
     Ctx = (PVIDSCH_CONTEXT)Adapter->VidSchContext;
     ExAcquireFastMutex(&Ctx->LifecycleMutex);
     if (VidSchpReadSchedulerState(Ctx) != VidSchSchedulerRunning)
