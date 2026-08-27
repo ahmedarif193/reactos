@@ -302,7 +302,6 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
     INITCOMMONCONTROLSEX InitControls;
 
     UNREFERENCED_PARAMETER(hPrevInstance);
-    UNREFERENCED_PARAMETER(lpCmdLine);
     UNREFERENCED_PARAMETER(nCmdShow);
 
     InitControls.dwSize = sizeof(INITCOMMONCONTROLSEX);
@@ -310,6 +309,18 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
     InitCommonControlsEx(&InitControls);
 
     hInst = hInstance;
+
+    if (!_wcsicmp(lpCmdLine, L"/d3d78boot"))
+    {
+        BOOL Result;
+
+        OutputDebugStringA("DXDIAG_D3D78BOOT_PROCESS_START\n");
+        Result = D3D78BootTests();
+        OutputDebugStringA(Result ?
+                           "DXDIAG_D3D78BOOT_PROCESS_PASS\n" :
+                           "DXDIAG_D3D78BOOT_PROCESS_FAIL\n");
+        return Result ? 0 : 1;
+    }
 
     DialogBox(hInst, MAKEINTRESOURCE(IDD_MAIN_DIALOG), NULL, DxDiagWndProc);
 

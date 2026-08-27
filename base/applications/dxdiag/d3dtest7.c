@@ -10,7 +10,18 @@
 
 #include <d3d.h>
 
-BOOL D3D7Test(GUID *lpDevice, HWND hWnd)
+#define D3D7_CHECK(stage, expression) \
+    do \
+    { \
+        hr = (expression); \
+        if (FAILED(hr)) \
+        { \
+            D3DTestTraceFailure(7, stage, hr); \
+            goto cleanup; \
+        } \
+    } while (0)
+
+BOOL D3D7Test(GUID *lpDevice, HWND hWnd, BOOL HardwareOnly)
 {
     D3DTEST_VERTEX Vertices[D3DTEST_VERTEX_COUNT];
     IDirect3DDevice7 *Device = NULL;
@@ -29,28 +40,19 @@ BOOL D3D7Test(GUID *lpDevice, HWND hWnd)
     BOOL Result = FALSE;
     HRESULT hr;
 
-    hr = DirectDrawCreateEx(lpDevice, (void **)&DirectDraw, &IID_IDirectDraw7, NULL);
-    if (FAILED(hr))
-        goto cleanup;
-
-    if (FAILED(IDirectDraw7_SetCooperativeLevel(DirectDraw, hWnd, DDSCL_NORMAL)))
-        goto cleanup;
-    if (FAILED(IDirectDraw7_QueryInterface(DirectDraw, &IID_IDirect3D7, (void **)&Direct3D)))
-        goto cleanup;
+    D3D7_CHECK("create-ddraw", DirectDrawCreateEx(lpDevice, (void **)&DirectDraw, &IID_IDirectDraw7, NULL));
+    D3D7_CHECK("set-cooperative-level", IDirectDraw7_SetCooperativeLevel(DirectDraw, hWnd, DDSCL_NORMAL));
+    D3D7_CHECK("query-d3d7", IDirectDraw7_QueryInterface(DirectDraw, &IID_IDirect3D7, (void **)&Direct3D));
 
     ZeroMemory(&SurfaceDesc, sizeof(SurfaceDesc));
     SurfaceDesc.dwSize = sizeof(SurfaceDesc);
     SurfaceDesc.dwFlags = DDSD_CAPS;
     SurfaceDesc.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE;
-    if (FAILED(IDirectDraw7_CreateSurface(DirectDraw, &SurfaceDesc, &Primary, NULL)))
-        goto cleanup;
+    D3D7_CHECK("create-primary", IDirectDraw7_CreateSurface(DirectDraw, &SurfaceDesc, &Primary, NULL));
 
-    if (FAILED(IDirectDraw7_CreateClipper(DirectDraw, 0, &Clipper, NULL)))
-        goto cleanup;
-    if (FAILED(IDirectDrawClipper_SetHWnd(Clipper, 0, hWnd)))
-        goto cleanup;
-    if (FAILED(IDirectDrawSurface7_SetClipper(Primary, Clipper)))
-        goto cleanup;
+    D3D7_CHECK("create-clipper", IDirectDraw7_CreateClipper(DirectDraw, 0, &Clipper, NULL));
+    D3D7_CHECK("set-clipper-window", IDirectDrawClipper_SetHWnd(Clipper, 0, hWnd));
+    D3D7_CHECK("set-primary-clipper", IDirectDrawSurface7_SetClipper(Primary, Clipper));
 
     GetClientRect(hWnd, &ClientRect);
     ZeroMemory(&SurfaceDesc, sizeof(SurfaceDesc));
@@ -61,24 +63,25 @@ BOOL D3D7Test(GUID *lpDevice, HWND hWnd)
     SurfaceDesc.dwWidth = Width;
     SurfaceDesc.dwHeight = Height;
     SurfaceDesc.ddsCaps.dwCaps = DDSCAPS_3DDEVICE | DDSCAPS_OFFSCREENPLAIN;
-    if (FAILED(IDirectDraw7_CreateSurface(DirectDraw, &SurfaceDesc, &Target, NULL)))
-        goto cleanup;
+    D3D7_CHECK("create-target", IDirectDraw7_CreateSurface(DirectDraw, &SurfaceDesc, &Target, NULL));
 
     hr = IDirect3D7_CreateDevice(Direct3D, &IID_IDirect3DHALDevice, Target, &Device);
-    if (FAILED(hr))
+    if (FAILED(hr) && !HardwareOnly)
         hr = IDirect3D7_CreateDevice(Direct3D, &IID_IDirect3DRGBDevice, Target, &Device);
     if (FAILED(hr))
+    {
+        D3DTestTraceFailure(7, "create-device", hr);
         goto cleanup;
+    }
 
     ZeroMemory(&Viewport, sizeof(Viewport));
     Viewport.dwWidth = SurfaceDesc.dwWidth;
     Viewport.dwHeight = SurfaceDesc.dwHeight;
     Viewport.dvMaxZ = 1.0f;
-    if (FAILED(IDirect3DDevice7_SetViewport(Device, &Viewport)))
-        goto cleanup;
-    IDirect3DDevice7_SetRenderState(Device, D3DRENDERSTATE_LIGHTING, FALSE);
-    IDirect3DDevice7_SetRenderState(Device, D3DRENDERSTATE_ZENABLE, FALSE);
-    IDirect3DDevice7_SetRenderState(Device, D3DRENDERSTATE_CULLMODE, D3DCULL_NONE);
+    D3D7_CHECK("set-viewport", IDirect3DDevice7_SetViewport(Device, &Viewport));
+    D3D7_CHECK("disable-lighting", IDirect3DDevice7_SetRenderState(Device, D3DRENDERSTATE_LIGHTING, FALSE));
+    D3D7_CHECK("disable-z", IDirect3DDevice7_SetRenderState(Device, D3DRENDERSTATE_ZENABLE, FALSE));
+    D3D7_CHECK("disable-culling", IDirect3DDevice7_SetRenderState(Device, D3DRENDERSTATE_CULLMODE, D3DCULL_NONE));
 
     ZeroMemory(&SurfaceDesc, sizeof(SurfaceDesc));
     SurfaceDesc.dwSize = sizeof(SurfaceDesc);
@@ -93,51 +96,54 @@ BOOL D3D7Test(GUID *lpDevice, HWND hWnd)
     SurfaceDesc.ddpfPixelFormat.dwGBitMask = 0x0000ff00;
     SurfaceDesc.ddpfPixelFormat.dwBBitMask = 0x000000ff;
     SurfaceDesc.ddpfPixelFormat.dwRGBAlphaBitMask = 0xff000000;
-    if (FAILED(IDirectDraw7_CreateSurface(DirectDraw, &SurfaceDesc, &Texture, NULL)))
-        goto cleanup;
+    D3D7_CHECK("create-texture", IDirectDraw7_CreateSurface(DirectDraw, &SurfaceDesc, &Texture, NULL));
 
     ZeroMemory(&SurfaceDesc, sizeof(SurfaceDesc));
     SurfaceDesc.dwSize = sizeof(SurfaceDesc);
-    if (FAILED(IDirectDrawSurface7_Lock(Texture, NULL, &SurfaceDesc, DDLOCK_WAIT | DDLOCK_WRITEONLY, NULL)))
-        goto cleanup;
+    D3D7_CHECK("lock-texture", IDirectDrawSurface7_Lock(Texture, NULL, &SurfaceDesc, DDLOCK_WAIT | DDLOCK_WRITEONLY, NULL));
     if (!D3DTestLoadTexture(SurfaceDesc.lpSurface, SurfaceDesc.lPitch))
     {
         IDirectDrawSurface7_Unlock(Texture, NULL);
+        D3DTestTraceFailure(7, "load-texture", E_FAIL);
         goto cleanup;
     }
-    if (FAILED(IDirectDrawSurface7_Unlock(Texture, NULL)))
-        goto cleanup;
+    D3D7_CHECK("unlock-texture", IDirectDrawSurface7_Unlock(Texture, NULL));
 
-    if (FAILED(IDirect3DDevice7_SetTexture(Device, 0, Texture)))
-        goto cleanup;
-    IDirect3DDevice7_SetTextureStageState(Device, 0, D3DTSS_COLOROP, D3DTOP_MODULATE);
-    IDirect3DDevice7_SetTextureStageState(Device, 0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
-    IDirect3DDevice7_SetTextureStageState(Device, 0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
-    IDirect3DDevice7_SetTextureStageState(Device, 0, D3DTSS_ADDRESSU, D3DTADDRESS_CLAMP);
-    IDirect3DDevice7_SetTextureStageState(Device, 0, D3DTSS_ADDRESSV, D3DTADDRESS_CLAMP);
-    IDirect3DDevice7_SetTextureStageState(Device, 0, D3DTSS_MAGFILTER, D3DTFG_LINEAR);
-    IDirect3DDevice7_SetTextureStageState(Device, 0, D3DTSS_MINFILTER, D3DTFN_LINEAR);
-    IDirect3DDevice7_SetTextureStageState(Device, 1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+    D3D7_CHECK("set-texture", IDirect3DDevice7_SetTexture(Device, 0, Texture));
+    D3D7_CHECK("set-color-op", IDirect3DDevice7_SetTextureStageState(Device, 0, D3DTSS_COLOROP, D3DTOP_MODULATE));
+    D3D7_CHECK("set-color-arg1", IDirect3DDevice7_SetTextureStageState(Device, 0, D3DTSS_COLORARG1, D3DTA_TEXTURE));
+    D3D7_CHECK("set-color-arg2", IDirect3DDevice7_SetTextureStageState(Device, 0, D3DTSS_COLORARG2, D3DTA_DIFFUSE));
+    D3D7_CHECK("set-address-u", IDirect3DDevice7_SetTextureStageState(Device, 0, D3DTSS_ADDRESSU, D3DTADDRESS_CLAMP));
+    D3D7_CHECK("set-address-v", IDirect3DDevice7_SetTextureStageState(Device, 0, D3DTSS_ADDRESSV, D3DTADDRESS_CLAMP));
+    D3D7_CHECK("set-mag-filter", IDirect3DDevice7_SetTextureStageState(Device, 0, D3DTSS_MAGFILTER, D3DTFG_LINEAR));
+    D3D7_CHECK("set-min-filter", IDirect3DDevice7_SetTextureStageState(Device, 0, D3DTSS_MINFILTER, D3DTFN_LINEAR));
+    D3D7_CHECK("disable-stage-1", IDirect3DDevice7_SetTextureStageState(Device, 1, D3DTSS_COLOROP, D3DTOP_DISABLE));
 
     Start = GetTickCount();
     do
     {
         D3DTestBuildCube(Vertices, GetTickCount() - Start, Width, Height);
-        if (FAILED(IDirect3DDevice7_Clear(Device, 0, NULL, D3DCLEAR_TARGET, 0xff000000, 1.0f, 0)))
-            goto cleanup;
-        if (FAILED(IDirect3DDevice7_BeginScene(Device)))
-            goto cleanup;
+        D3D7_CHECK("clear", IDirect3DDevice7_Clear(Device, 0, NULL, D3DCLEAR_TARGET, 0xff000000, 1.0f, 0));
+        D3D7_CHECK("begin-scene", IDirect3DDevice7_BeginScene(Device));
         hr = IDirect3DDevice7_DrawPrimitive(Device, D3DPT_TRIANGLELIST, D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1, Vertices, D3DTEST_VERTEX_COUNT, 0);
-        IDirect3DDevice7_EndScene(Device);
         if (FAILED(hr))
+        {
+            D3DTestTraceFailure(7, "draw", hr);
+            IDirect3DDevice7_EndScene(Device);
             goto cleanup;
+        }
+        D3D7_CHECK("end-scene", IDirect3DDevice7_EndScene(Device));
 
         GetClientRect(hWnd, &ScreenRect);
         MapWindowPoints(hWnd, NULL, (POINT *)&ScreenRect, 2);
-        if (FAILED(IDirectDrawSurface7_Blt(Primary, &ScreenRect, Target, NULL, DDBLT_WAIT, NULL)))
+        D3D7_CHECK("present", IDirectDrawSurface7_Blt(Primary, &ScreenRect, Target, NULL, DDBLT_WAIT, NULL));
+        if (!D3DTestPumpMessages())
+        {
+            D3DTestTraceFailure(7, "message-pump", E_ABORT);
             goto cleanup;
+        }
         Sleep(16);
-    } while (GetTickCount() - Start < D3DTEST_DURATION_MS && D3DTestPumpMessages());
+    } while (GetTickCount() - Start < D3DTEST_DURATION_MS);
 
     Result = TRUE;
 
@@ -158,3 +164,5 @@ cleanup:
         IDirectDraw7_Release(DirectDraw);
     return Result;
 }
+
+#undef D3D7_CHECK
