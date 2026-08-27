@@ -437,7 +437,12 @@ static const INFORMATION_CLASS_INFO PsProcessInfoClass[] =
     /* ProcessSubsystemInformation */
     IQS_NONE,
     /* ProcessEnergyValues */
-    IQS_NONE,
+    IQS_SAME
+    (
+        PROCESS_ENERGY_VALUES,
+        ULONG,
+        ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE
+    ),
     /* ProcessPowerThrottlingState */
     IQS_NONE,
     /* ProcessReserved3Information */

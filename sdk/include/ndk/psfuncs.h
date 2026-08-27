@@ -56,6 +56,15 @@ PsGetProcessWin32Process(
 );
 
 NTKERNELAPI
+VOID
+NTAPI
+PsUpdateComponentPower(
+    _In_opt_ PEPROCESS Process,
+    _In_ ULONG Component,
+    _In_ ULONGLONG Value
+);
+
+NTKERNELAPI
 NTSTATUS
 NTAPI
 PsSetProcessWin32Process(

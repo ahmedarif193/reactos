@@ -1369,6 +1369,38 @@ typedef struct _PROCESS_CYCLE_TIME_INFORMATION
     ULONGLONG CurrentCycleCount;
 } PROCESS_CYCLE_TIME_INFORMATION, *PPROCESS_CYCLE_TIME_INFORMATION;
 
+typedef union _ENERGY_STATE_DURATION
+{
+    ULONGLONG Value;
+    struct
+    {
+        ULONG LastChangeTime;
+        ULONG Duration:31;
+        ULONG IsInState:1;
+    } State;
+} ENERGY_STATE_DURATION, *PENERGY_STATE_DURATION;
+
+typedef struct _PROCESS_ENERGY_VALUES
+{
+    ULONGLONG Cycles[4][2];
+    volatile ULONGLONG DiskEnergy;
+    volatile ULONGLONG NetworkTailEnergy;
+    volatile ULONGLONG MbbTailEnergy;
+    volatile ULONGLONG NetworkTxRxBytes;
+    volatile ULONGLONG MbbTxRxBytes;
+    ENERGY_STATE_DURATION Durations[3];
+    ULONG CompositionRendered;
+    ULONG CompositionDirtyGenerated;
+    ULONG CompositionDirtyPropagated;
+    ULONG Reserved;
+    ULONGLONG AttributedCycles[4][2];
+    ULONGLONG WorkOnBehalfCycles[4][2];
+    ULONGLONG Timelines[14];
+    ENERGY_STATE_DURATION ExtendedDurations[5];
+    ULONG KeyboardInput;
+    ULONG MouseInput;
+} PROCESS_ENERGY_VALUES, *PPROCESS_ENERGY_VALUES;
+
 typedef struct _THREAD_CYCLE_TIME_INFORMATION
 {
     ULONGLONG AccumulatedCycles;
@@ -1837,6 +1869,9 @@ typedef struct _EPROCESS
     ULONG Cookie;
 #if defined(_M_ARM64)
     volatile LONG ExecutableWriteExceptions;
+#endif
+#if defined(__REACTOS__)
+    PROCESS_ENERGY_VALUES EnergyValues;
 #endif
 } EPROCESS;
 
