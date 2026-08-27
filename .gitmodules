@@ -2,3 +2,6 @@
 	path = submodules/fex-arm64ec
 	url = https://github.com/eotics-com/FEX.git
 	branch = main-ros
+[submodule "base/applications/cmdutils/glmark2"]
+	path = base/applications/cmdutils/glmark2
+	url = https://github.com/glmark2/glmark2.git
