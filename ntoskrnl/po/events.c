@@ -229,9 +229,10 @@ PoRegisterPowerSettingCallback(
 
     if (KeGetCurrentIrql() > APC_LEVEL)
         return STATUS_INVALID_DEVICE_STATE;
-    if (!SettingGuid || !Callback || !Handle)
+    if (!SettingGuid || !Callback)
         return STATUS_INVALID_PARAMETER;
-    *Handle = NULL;
+    if (Handle)
+        *Handle = NULL;
 
     Registration = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Registration), POP_POWER_CALLBACK_TAG);
     if (!Registration)
@@ -265,7 +266,8 @@ PoRegisterPowerSettingCallback(
         }
     }
     InsertTailList(&PopPowerSettingCallbacks, &Registration->Link);
-    *Handle = Registration;
+    if (Handle)
+        *Handle = Registration;
     KeReleaseGuardedMutex(&PopPowerSettingLock);
 
     if (InvokeInitialCallback)
