@@ -183,10 +183,10 @@ DxgkpGdiPresentBatchActive(
 }
 
 /*
- * Pending rectangles that could not be committed at a synchronized GDI flush
- * are scanned out asynchronously only once cdd is not inside a cursor-hidden
- * bracket, drawing has been quiet for DXGK_PRESENT_QUIET_100NS and the last
- * scan-out copy is at least DXGK_PRESENT_PACE_100NS old.
+ * Pending rectangles are scanned out asynchronously only once cdd is not
+ * inside a cursor-hidden bracket, drawing has been quiet for
+ * DXGK_PRESENT_QUIET_100NS and the last scan-out copy is at least
+ * DXGK_PRESENT_PACE_100NS old.
  */
 static BOOLEAN
 DxgkpMayPresentPendingAsync(
@@ -1734,8 +1734,8 @@ DxgkpHasPendingDirtyRect(
 }
 
 /*
- * Serializes every scan-out copy (sync IOCTL presents, the worker fallback)
- * against each other AND lets COMPOSITION_BEGIN drain an in-flight worker
+ * Serializes worker scan-out copies against each other AND lets
+ * COMPOSITION_BEGIN drain an in-flight worker
  * copy before the compositor starts rewriting the shadow framebuffer — the
  * copy takes milliseconds into a write-combined scan-out on real hardware,
  * so an undrained overlap scans out a half-composed frame (visible as other
@@ -1843,15 +1843,6 @@ DxgkpTryDispatchPresentWork(
     return TRUE;
 }
 
-/*
- * DxgkpPresentSyncNow
- *
- * Present the accumulated dirty rect NOW, in the caller's context, under the
- * present mutex. The caller is cdd's synchronized flush/escape path, which
- * already holds the win32k device lock, so the scan-out copy cannot interleave
- * a GDI write to the shadow framebuffer. Falls back to the worker when not at
- * PASSIVE_LEVEL.
- */
 static BOOLEAN
 DxgkpPresentPendingDirtyRects(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -1877,48 +1868,19 @@ DxgkpPresentPendingDirtyRects(
     return TRUE;
 }
 
+/* Queue an explicit completed frame without running a miniport callback in
+ * the caller. COMPOSITION_END arrives under win32k's device/USER lock; the
+ * worker performs the potentially blocking scan-out copy after that lock is
+ * released. Classic CDD GDI flushes use the periodic quiet-time path instead. */
 static VOID
-DxgkpPresentSyncNow(
+DxgkpQueueCompletedPresent(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
     if (Adapter == NULL || InterlockedCompareExchange(&Adapter->SharedSurfaceAvailable, 0, 0) == 0)
         return;
     if (DxgkpGdiPresentBatchActive(DxgkpDisplayTraceNow100ns()))
         return;
-
-    if (KeGetCurrentIrql() != PASSIVE_LEVEL ||
-        InterlockedCompareExchange(&g_PresentMutexInited, 0, 0) != 1)
-    {
-        DxgkpTryDispatchPresentWork(Adapter);
-        return;
-    }
-
-    /*
-     * TRY-acquire only (zero timeout). The caller is win32k's escape path
-     * holding the USER lock; blocking on the present mutex (held by the worker
-     * across a potentially-long miniport present) would pin the USER lock and
-     * freeze the GUI on SMP. If a present is in-flight, leave the dirty rect
-     * pending — COMPOSITION_END has already cleared the composition flag, so
-     * the periodic worker presents it on the next tick.
-     */
-    {
-        LARGE_INTEGER NoWait;
-        NoWait.QuadPart = 0;
-        if (KeWaitForSingleObject(&g_PresentMutex, Executive, KernelMode,
-                                  FALSE, &NoWait) != STATUS_SUCCESS)
-        {
-            /* A present is in-flight; the dirty rect stays pending. Kick the
-             * async worker so it is still presented even when the periodic
-             * present timer is not running (otherwise the newly-dirtied region
-             * could stay unpainted). */
-            DxgkpTryDispatchPresentWork(Adapter);
-            return;
-        }
-    }
-
-    DxgkpPresentPendingDirtyRects(Adapter, "sync");
-
-    KeReleaseMutex(&g_PresentMutex, FALSE);
+    DxgkpTryDispatchPresentWork(Adapter);
 }
 
 static VOID
@@ -2024,7 +1986,7 @@ DxgkpPresentWorkItemRoutineEx(
         if (!HasDirty)
         {
             /*
-             * No dirty rect left (the sync path consumed it): full-screen
+             * No dirty rect left: full-screen
              * refresh ONLY when the display has been quiet — a GDI writer may
              * be mid-draw on the shadow FB and the worker holds no devlock,
              * so presenting here during activity is the last tear window.
@@ -2086,8 +2048,8 @@ DxgkpPresentTimerDpc(
         if (Adapter->DwmVblankEvent != NULL)
         {
             /*
-             * WDDM/DWM parity: while dwm.exe owns the frame it presents every
-             * composed frame itself via the COMPOSITION_END sync present. A
+             * WDDM/DWM parity: while dwm.exe owns the frame it queues every
+             * composed frame itself at COMPOSITION_END. A
              * periodic scanout copy racing dwm's shadow write is the tearing
              * source, so this timer only PACES dwm (signals vblank) and never
              * presents. The direct-draw fallback resumes when dwm detaches and
@@ -2920,9 +2882,13 @@ DxgkpDisplayDispatch(
             }
             else if ((Flags & DXGK_PRESENT_DIRTY_FLUSH) &&
                      InterlockedCompareExchange(&g_DisplayAdapter->DwmCompositionInProgress, 0, 0) == 0 &&
-                     !DxgkpPresentHoldActive(Now100ns))
+                     !DxgkpPresentHoldActive(Now100ns) &&
+                     !g_DisplayAdapter->PresentTimerActive)
             {
-                DxgkpPresentSyncNow(g_DisplayAdapter);
+                /* Normal CDD presents remain pending until the timer observes
+                 * a quiet frame boundary. If no timer is available, retain a
+                 * worker fallback so damage cannot remain stranded. */
+                DxgkpQueueCompletedPresent(g_DisplayAdapter);
             }
 
             Status = STATUS_SUCCESS;
@@ -3168,9 +3134,7 @@ DxgkpDisplayDispatch(
             if (g_DisplayAdapter != NULL)
             {
                 InterlockedExchange(&g_DisplayAdapter->DwmCompositionInProgress, 0);
-                /* Flush the dirty rects the composition accumulated —
-                 * synchronously, still under the caller's device lock. */
-                DxgkpPresentSyncNow(g_DisplayAdapter);
+                DxgkpQueueCompletedPresent(g_DisplayAdapter);
             }
             Status = STATUS_SUCCESS;
             break;
