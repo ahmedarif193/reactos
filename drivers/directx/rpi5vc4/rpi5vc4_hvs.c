@@ -691,6 +691,7 @@ Rpi5HvsFlipScanoutExUnlocked(
     volatile ULONG *Dlist;
     PVOID HvsBase;
     ULONG LptrsD, LptrsReg, LptrsVal, Head, Control, Ctl0, Ptr0, Ptr1;
+    ULONG CurrentHigh, TargetHigh;
     ULONGLONG Phys = (ULONGLONG)FrameBufferPhysical.QuadPart;
     ULONGLONG CurrentPhys = (ULONGLONG)DeviceExtension->FrameBufferPhysical.QuadPart;
 
@@ -706,12 +707,22 @@ Rpi5HvsFlipScanoutExUnlocked(
     if (DeviceExtension->HvsFlipBroken)
         return FALSE;
 
-    /* The pointer words are latched at frame start, so a flip within one
-     * 4GB window (single PTR1 write) is atomic without any wait — the
-     * triple-buffered present path relies on that. Callers replacing the
-     * buffer wholesale (park, MPO base) still serialize on the vblank. */
-    if (WaitVBlank)
+    CurrentHigh = (ULONG)((CurrentPhys >> 32) & 0xff);
+    TargetHigh = (ULONG)((Phys >> 32) & 0xff);
+
+    /* The HVS latches a display-list pointer at frame start. A flip within
+     * one 4 GB window therefore consists of one atomic PTR1 write and needs
+     * no scan-beam wait. Crossing a window changes both pointer words and is
+     * allowed only after a real vblank has been observed. */
+    if (CurrentHigh != TargetHigh)
+    {
+        if (!WaitVBlank || !Rpi5CrtcWaitForVBlank(DeviceExtension))
+            return FALSE;
+    }
+    else if (WaitVBlank)
+    {
         Rpi5CrtcWaitForVBlank(DeviceExtension);
+    }
 
     HvsBase = (PVOID)Rpi5HvsMap(DeviceExtension);
     if (HvsBase == NULL)
@@ -753,8 +764,11 @@ Rpi5HvsFlipScanoutExUnlocked(
         goto FlipFailed;
     }
 
-    Ptr0 = (Ptr0 & ~0xffu) | (ULONG)((Phys >> 32) & 0xff);
-    WRITE_REGISTER_ULONG((PULONG)&Dlist[Head + 5], Ptr0);
+    if ((Ptr0 & 0xff) != TargetHigh)
+    {
+        Ptr0 = (Ptr0 & ~0xffu) | TargetHigh;
+        WRITE_REGISTER_ULONG((PULONG)&Dlist[Head + 5], Ptr0);
+    }
     WRITE_REGISTER_ULONG((PULONG)&Dlist[Head + 6], (ULONG)(Phys & 0xffffffff));
 
 #if defined(_M_ARM64)

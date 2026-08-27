@@ -248,8 +248,6 @@ Rpi5Vc4EnsureFlipRing(
     DeviceExtension->FlipBufSize = BufSize;
     DeviceExtension->FlipBufCount = Count;
     DeviceExtension->FlipBufIndex = Count - 1; /* first present flips to 0 */
-    DeviceExtension->FlipsSinceVBlank = 0;
-
     /* Every buffer starts stale: its first present full-blits from pSource. */
     for (i = 0; i < Count; i++)
     {
@@ -296,76 +294,10 @@ Rpi5Vc4FlipPresent(
     RECT Stale;
     ULONG i;
 
-    /* Small updates blit straight into the live buffer: a flip pays the
-     * catch-up amplification (~3x the WC writes) to avoid a tear no one can
-     * see on a small rect. Only large updates (drags, window paints, video)
-     * take the tear-free flip. The live buffer is by definition current, so
-     * only the other ring buffers get stale-marked. */
-    {
-        ULONGLONG Area = 0, ScreenArea;
-
-        for (i = 0; i < PresentDisplayOnly->NumMoves; i++)
-        {
-            const RECT *r = &PresentDisplayOnly->pMoves[i].DestRect;
-            Area += (ULONGLONG)(r->right - r->left) * (r->bottom - r->top);
-        }
-        for (i = 0; i < PresentDisplayOnly->NumDirtyRects; i++)
-        {
-            const RECT *r = &PresentDisplayOnly->pDirtyRect[i];
-            Area += (ULONGLONG)(r->right - r->left) * (r->bottom - r->top);
-        }
-
-        ScreenArea = (ULONGLONG)DeviceExtension->ScreenWidth *
-                     DeviceExtension->ScreenHeight;
-
-        if (Area != 0 && ScreenArea != 0 && Area * 8 < ScreenArea)
-        {
-            for (i = 0; i < PresentDisplayOnly->NumMoves; i++)
-            {
-                Rpi5Vc4BlitRect(DeviceExtension,
-                                PresentDisplayOnly->pSource,
-                                PresentDisplayOnly->Pitch,
-                                &PresentDisplayOnly->pMoves[i].DestRect);
-                Rpi5Vc4RectUnion(&Union, &PresentDisplayOnly->pMoves[i].DestRect);
-            }
-            for (i = 0; i < PresentDisplayOnly->NumDirtyRects; i++)
-            {
-                Rpi5Vc4BlitRect(DeviceExtension,
-                                PresentDisplayOnly->pSource,
-                                PresentDisplayOnly->Pitch,
-                                &PresentDisplayOnly->pDirtyRect[i]);
-                Rpi5Vc4RectUnion(&Union, &PresentDisplayOnly->pDirtyRect[i]);
-            }
-
-#if defined(_M_ARM64)
-            __dsb(_ARM64_BARRIER_SY);
-#endif
-            KeMemoryBarrier();
-
-            for (i = 0; i < Count; i++)
-            {
-                ULONGLONG BufPhys = (ULONGLONG)DeviceExtension->FlipBufPhys.QuadPart +
-                                    (ULONGLONG)i * DeviceExtension->FlipBufSize;
-                if (BufPhys != (ULONGLONG)DeviceExtension->FrameBufferPhysical.QuadPart)
-                    Rpi5Vc4RectUnion(&DeviceExtension->FlipStale[i], &Union);
-            }
-            return TRUE;
-        }
-    }
-
-    /* The current scanout must be one of our ring buffers or the takeover
-     * frame — FlipScanoutEx validates the head against FrameBufferPhysical
-     * anyway, so just track vblank latches here. */
-    if (Rpi5CrtcVBlankSeen(DeviceExtension))
-        DeviceExtension->FlipsSinceVBlank = 0;
-
-    /* With a ring of N, up to N-2 pending flips keep the back buffer
-     * off-screen. A burst beyond that waits one vblank to resync (rare). */
-    if (DeviceExtension->FlipsSinceVBlank + 2 > Count)
-    {
-        Rpi5CrtcWaitForVBlank(DeviceExtension);
-        DeviceExtension->FlipsSinceVBlank = 0;
-    }
+    /* Every update, including a menu-sized highlight/text change, is built in
+     * an off-screen ring buffer. Writing a small rectangle into the live HVS
+     * surface races the scan beam and is precisely visible on high-contrast
+     * popup-menu glyphs, so update area is not a correctness exemption. */
 
     /* Catch this buffer up (it missed the frames flipped since it was last
      * on screen), then apply this present's rects. */
@@ -404,6 +336,9 @@ Rpi5Vc4FlipPresent(
 
     BackPhys.QuadPart = DeviceExtension->FlipBufPhys.QuadPart +
                         (LONGLONG)Back * DeviceExtension->FlipBufSize;
+    /* The ring is allocated inside one 4 GB window. Switching its scanout
+     * address is consequently one atomic PTR1 write which the HVS latches at
+     * frame start; no unreliable PixelValve polling is involved. */
     if (!Rpi5HvsFlipScanoutEx(DeviceExtension, BackPhys, FALSE))
     {
         /* Screen still shows the old buffer, which missed this present:
@@ -414,8 +349,6 @@ Rpi5Vc4FlipPresent(
     }
 
     DeviceExtension->FlipBufIndex = Back;
-    DeviceExtension->FlipsSinceVBlank++;
-
     DeviceExtension->FlipStale[Back].left = 0;
     DeviceExtension->FlipStale[Back].top = 0;
     DeviceExtension->FlipStale[Back].right = 0;
