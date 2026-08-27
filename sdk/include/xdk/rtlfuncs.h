@@ -2612,8 +2612,57 @@ RtlGetProductInfo(
   _In_ ULONG SpMinorVersion,
   _Out_ PULONG ReturnedProductType);
 
+#if (NTDDI_VERSION >= NTDDI_WIN10_RS1)
+NTSYSAPI
+ULONG
+NTAPI
+RtlGetActiveConsoleId(
+  VOID);
+
+NTSYSAPI
+ULONGLONG
+NTAPI
+RtlGetConsoleSessionForegroundProcessId(
+  VOID);
+
+NTSYSAPI
+ULONG
+NTAPI
+RtlGetSuiteMask(
+  VOID);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_Must_inspect_result_
+NTSYSAPI
+BOOLEAN
+NTAPI
+RtlIsMultiSessionSku(
+  VOID);
+#endif /* (NTDDI_VERSION >= NTDDI_WIN10_RS1) */
+
+#if (NTDDI_VERSION >= NTDDI_WIN10_RS2)
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSYSAPI
+PCWSTR
+NTAPI
+RtlGetNtSystemRoot(
+  VOID);
+#endif /* (NTDDI_VERSION >= NTDDI_WIN10_RS2) */
+
 $endif (_NTDDK_)
 $if (_NTIFS_)
+#if (NTDDI_VERSION >= NTDDI_WINTHRESHOLD)
+_IRQL_requires_max_(APC_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlInitializeSidEx(
+  _Out_writes_bytes_(SECURITY_SID_SIZE(SubAuthorityCount)) PSID Sid,
+  _In_ PSID_IDENTIFIER_AUTHORITY IdentifierAuthority,
+  _In_ UCHAR SubAuthorityCount,
+  ...);
+#endif /* (NTDDI_VERSION >= NTDDI_WINTHRESHOLD) */
+
 NTSYSAPI
 NTSTATUS
 NTAPI

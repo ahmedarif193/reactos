@@ -39,6 +39,11 @@ NTSTATUS NTAPI RtlGetAcesBufferSize(_In_ PACL Acl, _Out_ PULONG AcesBufferSize);
 NTSTATUS NTAPI RtlQueryPackageIdentity(_In_opt_ PVOID TokenObject, _Out_writes_bytes_to_opt_(*PackageSize, *PackageSize) PWSTR PackageFullName, _Inout_ PSIZE_T PackageSize, _Out_writes_bytes_to_opt_(*AppIdSize, *AppIdSize) PWSTR AppId, _Inout_opt_ PSIZE_T AppIdSize, _Out_opt_ PBOOLEAN Packaged);
 VOID NTAPI RtlIntersectBitMaps(_Inout_ PRTL_BITMAP Destination, _In_ PRTL_BITMAP Source);
 BOOLEAN NTAPI RtlGetIntegerAtom(_In_ PCWSTR AtomName, _Out_opt_ PRTL_ATOM Atom);
+NTSTATUS NTAPI RtlCheckTokenMembership(_In_opt_ HANDLE TokenHandle, _In_ PSID SidToCheck, _Out_ PBOOLEAN IsMember);
+ULONG NTAPI RtlGetCurrentServiceSessionId(VOID);
+BOOLEAN NTAPI RtlIsZeroMemory(_In_reads_bytes_(Length) PVOID Buffer, _In_ SIZE_T Length);
+VOID NTAPI RtlSetActiveConsoleId(_In_ ULONG ActiveConsoleId);
+VOID NTAPI RtlSetConsoleSessionForegroundProcessId(_In_ ULONGLONG ProcessId);
 
 #if defined(_M_AMD64) || defined(_M_ARM64)
 typedef struct _RTL_BITMAP_EX
@@ -477,6 +482,127 @@ TestModernRtlState(VOID)
     ok_eq_bool(Packaged, TRUE);
 }
 
+typedef struct _TEST_RUN_ONCE_CONTEXT
+{
+    LONG Calls;
+    PVOID Result;
+} TEST_RUN_ONCE_CONTEXT, *PTEST_RUN_ONCE_CONTEXT;
+
+static
+ULONG
+NTAPI
+TestRunOnceCallback(
+    _Inout_ PRTL_RUN_ONCE RunOnce,
+    _Inout_opt_ PVOID Parameter,
+    _Inout_opt_ PVOID *Context)
+{
+    PTEST_RUN_ONCE_CONTEXT TestContext = Parameter;
+
+    UNREFERENCED_PARAMETER(RunOnce);
+
+    InterlockedIncrement(&TestContext->Calls);
+    *Context = TestContext->Result;
+    trace("RtlRunOnce callback %ld returned context %p\n", TestContext->Calls, *Context);
+    return TRUE;
+}
+
+static
+VOID
+TestModernKernelExports(VOID)
+{
+    SID_IDENTIFIER_AUTHORITY Authority = SECURITY_NT_AUTHORITY;
+    UCHAR SidBuffer[SECURITY_MAX_SID_SIZE];
+    TEST_RUN_ONCE_CONTEXT RunContext;
+    RTL_RUN_ONCE RunOnce = RTL_RUN_ONCE_INIT;
+    ULONGLONG ForegroundProcessId;
+    ULONGLONG TestForegroundProcessId;
+    ULONG ActiveConsoleId;
+    ULONG TestActiveConsoleId;
+    ULONG ProductType;
+    ULONG ServiceSessionId;
+    PVOID Context;
+    BOOLEAN Member;
+    BOOLEAN Result;
+    NTSTATUS Status;
+
+    trace("RTL shared state: suite=0x%lx console=%lu foreground=%I64u multisession=%u root=%S\n",
+          RtlGetSuiteMask(), RtlGetActiveConsoleId(), RtlGetConsoleSessionForegroundProcessId(),
+          RtlIsMultiSessionSku(), RtlGetNtSystemRoot());
+    ok_eq_ulong(RtlGetSuiteMask(), SharedUserData->SuiteMask);
+    ok_eq_ulong(RtlGetActiveConsoleId(), SharedUserData->ActiveConsoleId);
+    ok_eq_ulonglong(RtlGetConsoleSessionForegroundProcessId(), (ULONGLONG)SharedUserData->ConsoleSessionForegroundProcessId);
+    ok_eq_bool(RtlIsMultiSessionSku(), SharedUserData->DbgMultiSessionSku != 0);
+    ok(RtlGetNtSystemRoot() != NULL, "RtlGetNtSystemRoot returned NULL\n");
+    if (RtlGetNtSystemRoot() != NULL)
+        ok_eq_wstr(RtlGetNtSystemRoot(), SharedUserData->NtSystemRoot);
+
+    ServiceSessionId = RtlGetCurrentServiceSessionId();
+    trace("RtlGetCurrentServiceSessionId returned %lu\n", ServiceSessionId);
+    ok_eq_ulong(ServiceSessionId, 0);
+
+    ActiveConsoleId = RtlGetActiveConsoleId();
+    TestActiveConsoleId = ActiveConsoleId ^ 0x5A5A5A5A;
+    RtlSetActiveConsoleId(TestActiveConsoleId);
+    ok_eq_ulong(RtlGetActiveConsoleId(), TestActiveConsoleId);
+    RtlSetActiveConsoleId(ActiveConsoleId);
+    ok_eq_ulong(RtlGetActiveConsoleId(), ActiveConsoleId);
+
+    ForegroundProcessId = RtlGetConsoleSessionForegroundProcessId();
+    TestForegroundProcessId = ForegroundProcessId ^ 0x5A5A5A5AA5A5A5A5ULL;
+    RtlSetConsoleSessionForegroundProcessId(TestForegroundProcessId);
+    ok_eq_ulonglong(RtlGetConsoleSessionForegroundProcessId(), TestForegroundProcessId);
+    RtlSetConsoleSessionForegroundProcessId(ForegroundProcessId);
+    ok_eq_ulonglong(RtlGetConsoleSessionForegroundProcessId(), ForegroundProcessId);
+
+    RtlZeroMemory(SidBuffer, sizeof(SidBuffer));
+    Status = RtlInitializeSidEx((PSID)SidBuffer, &Authority, 3, SECURITY_NT_NON_UNIQUE, 42UL, 84UL);
+    trace("RtlInitializeSidEx returned 0x%08lx, sid length %lu\n", Status,
+          NT_SUCCESS(Status) ? RtlLengthSid((PSID)SidBuffer) : 0);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok(RtlValidSid((PSID)SidBuffer), "RtlInitializeSidEx produced an invalid SID\n");
+    ok_eq_ulong(*RtlSubAuthoritySid((PSID)SidBuffer, 0), SECURITY_NT_NON_UNIQUE);
+    ok_eq_ulong(*RtlSubAuthoritySid((PSID)SidBuffer, 1), 42);
+    ok_eq_ulong(*RtlSubAuthoritySid((PSID)SidBuffer, 2), 84);
+    Status = RtlInitializeSidEx((PSID)SidBuffer, &Authority, SID_MAX_SUB_AUTHORITIES + 1);
+    trace("RtlInitializeSidEx excessive-count status 0x%08lx\n", Status);
+    ok_eq_hex(Status, STATUS_INVALID_SID);
+
+    Member = FALSE;
+    Status = RtlCheckTokenMembership(NULL, SeExports->SeWorldSid, &Member);
+    trace("RtlCheckTokenMembership(world) returned 0x%08lx, member %u\n", Status, Member);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_bool(Member, TRUE);
+
+    RtlZeroMemory(SidBuffer, sizeof(SidBuffer));
+    Result = RtlIsZeroMemory(SidBuffer, sizeof(SidBuffer));
+    trace("RtlIsZeroMemory(zero) returned %u\n", Result);
+    ok_eq_bool(Result, TRUE);
+    SidBuffer[RTL_NUMBER_OF(SidBuffer) / 2] = 1;
+    ok_eq_bool(RtlIsZeroMemory(SidBuffer, sizeof(SidBuffer)), FALSE);
+    ok_eq_bool(RtlIsZeroMemory(SidBuffer, 0), TRUE);
+
+    RunContext.Calls = 0;
+    RunContext.Result = (PVOID)(ULONG_PTR)0x1000;
+    Context = NULL;
+    Status = RtlRunOnceExecuteOnce(&RunOnce, TestRunOnceCallback, &RunContext, &Context);
+    trace("first RtlRunOnceExecuteOnce returned 0x%08lx, calls %ld, context %p\n", Status, RunContext.Calls, Context);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_long(RunContext.Calls, 1);
+    ok_eq_pointer(Context, RunContext.Result);
+    Context = NULL;
+    Status = RtlRunOnceExecuteOnce(&RunOnce, TestRunOnceCallback, &RunContext, &Context);
+    trace("second RtlRunOnceExecuteOnce returned 0x%08lx, calls %ld, context %p\n", Status, RunContext.Calls, Context);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_long(RunContext.Calls, 1);
+    ok_eq_pointer(Context, RunContext.Result);
+
+    ProductType = PRODUCT_UNDEFINED;
+    Result = RtlGetProductInfo(SharedUserData->NtMajorVersion, SharedUserData->NtMinorVersion, 0, 0, &ProductType);
+    trace("RtlGetProductInfo returned %u, product 0x%lx\n", Result, ProductType);
+    ok_eq_bool(Result, TRUE);
+    ok(ProductType != PRODUCT_UNDEFINED, "RtlGetProductInfo returned PRODUCT_UNDEFINED\n");
+}
+
 START_TEST(ExWddmAvl)
 {
     TestModernAvlState();
@@ -488,4 +614,5 @@ START_TEST(ExWddmRtl)
     TestModernBitmaps();
     TestIntegerAtoms();
     TestModernRtlState();
+    TestModernKernelExports();
 }
