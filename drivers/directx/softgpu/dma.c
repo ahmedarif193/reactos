@@ -39,7 +39,6 @@
 
 static volatile LONG g_SoftGpuSubmitTraceCount = 0;
 static volatile LONG g_SoftGpuDpcTraceCount = 0;
-static volatile LONG g_SoftGpuPointerTraceCount = 0;
 
 FORCEINLINE ULONGLONG
 SoftGpuTraceNow100ns(VOID)
@@ -2542,67 +2541,6 @@ SoftGpuDdiPresent(
     return STATUS_SUCCESS;
 }
 
-
-/* =========================================================================
- * Cursor / palette stubs
- * =========================================================================
- */
-
-NTSTATUS
-APIENTRY
-SoftGpuDdiSetPointerPosition(
-    _In_ PVOID                            MiniportDeviceContext,
-    _In_ CONST DXGKARG_SETPOINTERPOSITION *SetPointerPosition)
-{
-    LONG TraceSeq = InterlockedIncrement(&g_SoftGpuPointerTraceCount);
-
-    UNREFERENCED_PARAMETER(MiniportDeviceContext);
-
-    if (SetPointerPosition == NULL)
-        return STATUS_INVALID_PARAMETER;
-
-    if (TraceSeq <= SOFTGPU_TRACE_LOG_LIMIT)
-    {
-        DPRINT("SOFTGPU: SetPointerPosition seq=%ld src=%u visible=%u procedural=%u x=%d y=%d\n",
-               TraceSeq,
-               SetPointerPosition->VidPnSourceId,
-               SetPointerPosition->Flags.Visible,
-               SetPointerPosition->Flags.Procedural,
-               SetPointerPosition->X,
-               SetPointerPosition->Y);
-    }
-
-    /* No hardware cursor; dxgkrnl should use a software cursor path. */
-    return STATUS_NOT_SUPPORTED;
-}
-
-NTSTATUS
-APIENTRY
-SoftGpuDdiSetPointerShape(
-    _In_ PVOID                         MiniportDeviceContext,
-    _In_ CONST DXGKARG_SETPOINTERSHAPE *SetPointerShape)
-{
-    LONG TraceSeq = InterlockedIncrement(&g_SoftGpuPointerTraceCount);
-
-    UNREFERENCED_PARAMETER(MiniportDeviceContext);
-
-    if (SetPointerShape == NULL)
-        return STATUS_INVALID_PARAMETER;
-
-    if (TraceSeq <= SOFTGPU_TRACE_LOG_LIMIT)
-    {
-        DPRINT("SOFTGPU: SetPointerShape seq=%ld src=%u width=%u height=%u pitch=%u flags=0x%lx\n",
-               TraceSeq,
-               SetPointerShape->VidPnSourceId,
-               SetPointerShape->Width,
-               SetPointerShape->Height,
-               SetPointerShape->Pitch,
-               SetPointerShape->Flags.Value);
-    }
-
-    /* No hardware cursor; dxgkrnl should use a software cursor path. */
-    return STATUS_NOT_SUPPORTED;
-}
 
 NTSTATUS
 APIENTRY

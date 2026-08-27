@@ -126,6 +126,7 @@ static volatile LONG g_GdiPresentBatchBeginCount = 0;
 static volatile LONG g_GdiPresentBatchEndCount = 0;
 static volatile LONG g_GdiPresentBatchFlushDeferrals = 0;
 static volatile LONG g_GdiPresentBatchMaxDepth = 0;
+static volatile LONG g_PointerReleasePresentPending = 0;
 static const GUID g_RxgkShadowPresentInterfaceGuid =
     RXGK_SHADOW_PRESENT_INTERFACE_GUID_INIT;
 
@@ -2344,6 +2345,7 @@ static VOID
 DxgkpEndGdiPresentBatch(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
+    BOOLEAN PointerReleasePending;
     LONG Depth;
 
     for (;;)
@@ -2364,6 +2366,8 @@ DxgkpEndGdiPresentBatch(
         return;
 
     InterlockedExchange64(&g_GdiPresentBatchSince100ns, 0);
+    PointerReleasePending =
+        InterlockedExchange(&g_PointerReleasePresentPending, 0) != 0;
 
     /* Copy the completed transaction while its caller still serializes direct
      * primary drawing. The asynchronous worker must never read CDD's mutable
@@ -2373,7 +2377,7 @@ DxgkpEndGdiPresentBatch(
         DxgkpCapturePendingPresent(Adapter);
         InterlockedExchange64(&g_LastDirtyNotify100ns,
                               (LONGLONG)DxgkpDisplayTraceNow100ns());
-        if (!Adapter->PresentTimerActive)
+        if (!Adapter->PresentTimerActive || PointerReleasePending)
             DxgkpQueueCompletedPresent(Adapter);
     }
 }
@@ -2672,6 +2676,7 @@ DxgkpStartPresentTimer(
     DxgkpClearPendingDirtyRects(Adapter);
     InterlockedExchange(&g_PresentHoldActive, 0);
     InterlockedExchange(&g_GdiPresentBatchDepth, 0);
+    InterlockedExchange(&g_PointerReleasePresentPending, 0);
     InterlockedExchange64(&g_GdiPresentBatchSince100ns, 0);
     InterlockedExchange64(&g_LastDirtyNotify100ns, 0);
     InterlockedExchange64(&g_LastPresentSubmit100ns, 0);
@@ -2734,6 +2739,7 @@ DxgkpStopPresentTimer(
     DxgkpWaitForFlagClear(&g_PresentDispatchBusy);
     DxgkpClearPendingDirtyRects(Adapter);
     InterlockedExchange(&g_GdiPresentBatchDepth, 0);
+    InterlockedExchange(&g_PointerReleasePresentPending, 0);
     InterlockedExchange64(&g_GdiPresentBatchSince100ns, 0);
     InterlockedExchange64(&g_LastDirtyNotify100ns, 0);
     InterlockedExchange64(&g_LastPresentSubmit100ns, 0);
@@ -3391,6 +3397,8 @@ DxgkpDisplayDispatch(
                 InterlockedCompareExchange(&g_DisplayAdapter->DwmCompositionInProgress, 0, 0) == 0 &&
                 DxgkpGdiPresentBatchActive(Now100ns))
             {
+                if ((Flags & DXGK_PRESENT_DIRTY_RELEASE) && DxgkpHasPendingDirtyRect(g_DisplayAdapter))
+                    InterlockedExchange(&g_PointerReleasePresentPending, 1);
                 InterlockedIncrement(&g_GdiPresentBatchFlushDeferrals);
             }
             else if ((Flags & (DXGK_PRESENT_DIRTY_FLUSH |
@@ -3402,7 +3410,8 @@ DxgkpDisplayDispatch(
                  * the drawing serialization. The timer may defer scanout for
                  * pacing, but the worker never reads the mutable primary. */
                 DxgkpCapturePendingPresent(g_DisplayAdapter);
-                if (!g_DisplayAdapter->PresentTimerActive)
+                if (!g_DisplayAdapter->PresentTimerActive ||
+                    (Flags & DXGK_PRESENT_DIRTY_RELEASE))
                     DxgkpQueueCompletedPresent(g_DisplayAdapter);
             }
 

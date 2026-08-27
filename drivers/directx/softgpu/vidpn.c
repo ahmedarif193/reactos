@@ -1087,6 +1087,7 @@ SoftGpuCopyCurrentPrimaryToScanout(
     SOFTGPU_SCANOUT_SNAPSHOT Snapshot;
     KIRQL OldIrql;
     RECT FrameRect;
+    BOOLEAN PointerRestored = FALSE;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -1157,6 +1158,8 @@ SoftGpuCopyCurrentPrimaryToScanout(
     if (Snapshot.Visible)
     {
         (VOID)SoftGpuPlatformWaitForVerticalBlank(Device);
+        SoftGpuPointerRestoreLocked(Device);
+        PointerRestored = TRUE;
         Status = SoftGpu2dCopyRect(
                      Snapshot.Source,
                      Snapshot.SourceSize,
@@ -1170,6 +1173,8 @@ SoftGpuCopyCurrentPrimaryToScanout(
     else
     {
         (VOID)SoftGpuPlatformWaitForVerticalBlank(Device);
+        SoftGpuPointerRestoreLocked(Device);
+        PointerRestored = TRUE;
         Status = SoftGpu2dFillRect(
                      Snapshot.Destination,
                      Snapshot.DestinationSize,
@@ -1180,9 +1185,12 @@ SoftGpuCopyCurrentPrimaryToScanout(
     if (!NT_SUCCESS(Status))
         goto Complete;
 
-    KeMemoryBarrier();
-
 Complete:
+    if (PointerRestored)
+    {
+        SoftGpuPointerDrawLocked(Device);
+        KeMemoryBarrier();
+    }
     if (NT_SUCCESS(Status))
     {
         KeAcquireSpinLock(&Device->ScanoutLock, &OldIrql);
@@ -1316,6 +1324,7 @@ SoftGpuScanoutStart(
     Device->CurrentPrimaryValid = FALSE;
     Device->ScanoutVisible = TRUE;
     Device->TimingActive = TRUE;
+    Device->PointerBackingValid = FALSE;
     Device->ScanoutGeneration = 1;
     Device->ScanoutPresentedGeneration = 0;
     KeReleaseSpinLock(&Device->ScanoutLock, OldIrql);
@@ -1340,6 +1349,17 @@ SoftGpuScanoutStop(
     {
         ExWaitForRundownProtectionRelease(&Device->ScanoutRundown);
         Device->ScanoutRundownCompleted = TRUE;
+    }
+
+    if (NT_SUCCESS(KeWaitForSingleObject(&Device->ScanoutMutex,
+                                         Executive,
+                                         KernelMode,
+                                         FALSE,
+                                         NULL)))
+    {
+        SoftGpuPointerRestoreLocked(Device);
+        KeMemoryBarrier();
+        KeReleaseMutex(&Device->ScanoutMutex, FALSE);
     }
 
     KeAcquireSpinLock(&Device->ScanoutLock, &OldIrql);
@@ -1477,6 +1497,7 @@ SoftGpuDdiPresentDisplayOnly(
     }
 
     (VOID)SoftGpuPlatformWaitForVerticalBlank(Device);
+    SoftGpuPointerRestoreLocked(Device);
     Status = SoftGpu2dCopyRect(PresentDisplayOnly->pSource,
                                SourceSize,
                                (ULONG)PresentDisplayOnly->Pitch,
@@ -1485,8 +1506,8 @@ SoftGpuDdiPresentDisplayOnly(
                                Device->ScanoutSize,
                                Device->ScanoutPitch,
                                &Union);
-    if (NT_SUCCESS(Status))
-        KeMemoryBarrier();
+    SoftGpuPointerDrawLocked(Device);
+    KeMemoryBarrier();
 
 CleanupMutex:
     KeReleaseMutex(&Device->ScanoutMutex, FALSE);

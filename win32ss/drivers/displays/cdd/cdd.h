@@ -68,7 +68,7 @@ typedef struct _RCDD_PDEV
    BOOL CompositionActive;     /* Inside a compositor frame                   */
 
    /* Dirty-rect notification state (see present.c) */
-   BOOL SafetyHidden;          /* GDI hid the SW cursor for a drawing op      */
+   ULONG SafetyHoldDepth;      /* nested atomic software-cursor transactions */
    BOOL PendingValid;          /* PendingRect holds withheld dirty pixels     */
    RECTL PendingRect;
    BOOL DirtyOutstanding;      /* dxgkrnl has dirty pixels awaiting a flush   */

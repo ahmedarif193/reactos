@@ -274,7 +274,7 @@ SoftGpuAllocateFrameBuffer(
  *
  * Statically-initialised DXGK_DRIVERCAPS advertised to dxgkrnl.
  * All capability fields left at zero except what softgpu actually supports:
- *   - MaxPointerWidth/Height: 64x64 hardware-cursor placeholder (unused)
+ *   - PointerCaps.Color: 64x64 cursor composited directly into scanout
  *   - MaxAllocationListSlotId: 255
  *   - GpuEngineTopology: 1 (one 3D engine node)
  *   - WDDMVersion: the highest completed tier, matching the registered table
@@ -283,9 +283,9 @@ static const DXGK_DRIVERCAPS SOFTGPU_DRIVER_CAPS =
 {
     /* HighestAcceptableAddress: accept any physical address (64-bit clean) */
     .HighestAcceptableAddress.QuadPart   = (LONGLONG)(-1),
-    .MaxPointerWidth            = 64,
-    .MaxPointerHeight           = 64,
-    /* PointerCaps.Value = 0: no hardware cursor */
+    .MaxPointerWidth            = SOFTGPU_POINTER_MAX_WIDTH,
+    .MaxPointerHeight           = SOFTGPU_POINTER_MAX_HEIGHT,
+    .PointerCaps.Color          = 1,
     .MaxAllocationListSlotId    = 255,
     .ApertureSegmentCommitLimit = 0,
     /* PresentationCaps.Value = 0 */

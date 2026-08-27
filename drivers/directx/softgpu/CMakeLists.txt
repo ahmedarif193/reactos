@@ -30,6 +30,7 @@ list(APPEND SOURCE
     platform_common.c
     platform_root.c
     vidpn.c
+    pointer.c
     dma.c
     wddm2.c)
 

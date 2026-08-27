@@ -249,7 +249,7 @@ IntBeginMousePointerBatch(
     _In_ const RECTL *prclNew,
     _In_ BOOL bNew)
 {
-    IntSynchronizeMousePointerRects(pso, prclOld, bOld, prclNew, bNew, 0);
+    IntSynchronizeMousePointerRects(pso, prclOld, bOld, prclNew, bNew, DSS_RESERVED);
     ppdev->Pointer.psoCursorBatch = pso;
 }
 
@@ -263,7 +263,7 @@ IntEndMousePointerBatch(
     _In_ BOOL bNew)
 {
     ppdev->Pointer.psoCursorBatch = NULL;
-    IntSynchronizeMousePointerRects(pso, prclOld, bOld, prclNew, bNew, DSS_FLUSH_EVENT);
+    IntSynchronizeMousePointerRects(pso, prclOld, bOld, prclNew, bNew, DSS_RESERVED | DSS_FLUSH_EVENT);
 }
 
 static BOOL
