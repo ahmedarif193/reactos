@@ -8,8 +8,9 @@
  * Display path: dxgkrnl hands the firmware GOP framebuffer over in
  * StartDevice (DxgkCbAcquirePostDisplayOwnership); this driver installs its
  * own HVS display list scanning that framebuffer and afterwards receives the
- * desktop through DxgkDdiPresentDisplayOnly dirty-rect blits.  The mouse
- * cursor is a second, per-pixel-alpha HVS plane driven by the pointer DDIs.
+ * desktop through the private shadow-present interface queried from the full
+ * WDDM DxgkDdiQueryInterface DDI.  The mouse cursor is a second,
+ * per-pixel-alpha HVS plane driven by the pointer DDIs.
  */
 
 #include "rpi5vc4.h"
@@ -26,6 +27,9 @@
     ((ULONG)(a) | ((ULONG)(b) << 8) | ((ULONG)(c) << 16) | ((ULONG)(d) << 24))
 
 #define RPI5VC4_ACPI_FADT RPI5VC4_ACPI_SIGNATURE('F', 'A', 'C', 'P')
+
+static const GUID g_RxgkShadowPresentInterfaceGuid =
+    RXGK_SHADOW_PRESENT_INTERFACE_GUID_INIT;
 
 BOOLEAN
 Rpi5Vc4IsRpi5Platform(VOID)
@@ -233,6 +237,7 @@ DriverEntry(
     InitData.DxgkDdiQueryChildRelations   = Rpi5Vc4DdiQueryChildRelations;
     InitData.DxgkDdiQueryChildStatus      = Rpi5Vc4DdiQueryChildStatus;
     InitData.DxgkDdiQueryDeviceDescriptor = Rpi5Vc4DdiQueryDeviceDescriptor;
+    InitData.DxgkDdiQueryInterface        = Rpi5Vc4DdiQueryInterface;
     InitData.DxgkDdiSetPowerState         = Rpi5Vc4DdiSetPowerState;
     InitData.DxgkDdiResetDevice           = Rpi5Vc4DdiResetDevice;
     InitData.DxgkDdiUnload                = Rpi5Vc4DdiUnload;
@@ -320,8 +325,131 @@ Rpi5Vc4DdiAddDevice(
 
     RtlZeroMemory(DeviceExtension, sizeof(*DeviceExtension));
     DeviceExtension->PhysicalDeviceObject = PhysicalDeviceObject;
+    KeInitializeSpinLock(&DeviceExtension->ShadowPresentInterfaceLock);
+    KeInitializeEvent(&DeviceExtension->ShadowPresentInterfaceZeroEvent,
+                      NotificationEvent,
+                      TRUE);
 
     *MiniportDeviceContext = DeviceExtension;
+    return STATUS_SUCCESS;
+}
+
+static BOOLEAN
+Rpi5Vc4AcquireShadowPresentInterface(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
+{
+    KIRQL OldIrql;
+    BOOLEAN Acquired = FALSE;
+
+    KeAcquireSpinLock(&DeviceExtension->ShadowPresentInterfaceLock, &OldIrql);
+    if (DeviceExtension->ShadowPresentInterfaceQueriesOpen != 0 &&
+        DeviceExtension->Started)
+    {
+        if (InterlockedIncrement(
+                &DeviceExtension->ShadowPresentInterfaceReferences) == 1)
+        {
+            KeClearEvent(&DeviceExtension->ShadowPresentInterfaceZeroEvent);
+        }
+        Acquired = TRUE;
+    }
+    KeReleaseSpinLock(&DeviceExtension->ShadowPresentInterfaceLock, OldIrql);
+    return Acquired;
+}
+
+static VOID
+NTAPI
+Rpi5Vc4ShadowPresentInterfaceReference(
+    _In_ PVOID Context)
+{
+    PRPI5VC4_DEVICE_EXTENSION DeviceExtension = Context;
+    KIRQL OldIrql;
+
+    if (DeviceExtension == NULL)
+    {
+        ASSERT(FALSE);
+        return;
+    }
+
+    KeAcquireSpinLock(&DeviceExtension->ShadowPresentInterfaceLock, &OldIrql);
+    if (DeviceExtension->ShadowPresentInterfaceReferences <= 0)
+        ASSERT(FALSE);
+    else
+        InterlockedIncrement(&DeviceExtension->ShadowPresentInterfaceReferences);
+    KeReleaseSpinLock(&DeviceExtension->ShadowPresentInterfaceLock, OldIrql);
+}
+
+static VOID
+NTAPI
+Rpi5Vc4ShadowPresentInterfaceDereference(
+    _In_ PVOID Context)
+{
+    PRPI5VC4_DEVICE_EXTENSION DeviceExtension = Context;
+    KIRQL OldIrql;
+
+    if (DeviceExtension == NULL)
+    {
+        ASSERT(FALSE);
+        return;
+    }
+
+    KeAcquireSpinLock(&DeviceExtension->ShadowPresentInterfaceLock, &OldIrql);
+    if (DeviceExtension->ShadowPresentInterfaceReferences <= 0)
+    {
+        ASSERT(FALSE);
+    }
+    else if (InterlockedDecrement(
+                 &DeviceExtension->ShadowPresentInterfaceReferences) == 0)
+    {
+        KeSetEvent(&DeviceExtension->ShadowPresentInterfaceZeroEvent,
+                   IO_NO_INCREMENT,
+                   FALSE);
+    }
+    KeReleaseSpinLock(&DeviceExtension->ShadowPresentInterfaceLock, OldIrql);
+}
+
+NTSTATUS
+APIENTRY
+Rpi5Vc4DdiQueryInterface(
+    _In_ PVOID MiniportDeviceContext,
+    _In_ PQUERY_INTERFACE QueryInterface)
+{
+    PRPI5VC4_DEVICE_EXTENSION DeviceExtension = MiniportDeviceContext;
+    RXGK_SHADOW_PRESENT_INTERFACE Interface;
+
+    PAGED_CODE();
+
+    if (DeviceExtension == NULL ||
+        QueryInterface == NULL ||
+        QueryInterface->InterfaceType == NULL ||
+        QueryInterface->Interface == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (!RtlEqualMemory(QueryInterface->InterfaceType,
+                        &g_RxgkShadowPresentInterfaceGuid,
+                        sizeof(g_RxgkShadowPresentInterfaceGuid)) ||
+        QueryInterface->DeviceUid != DISPLAY_ADAPTER_HW_ID)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    if (QueryInterface->Version != RXGK_SHADOW_PRESENT_INTERFACE_VERSION_1)
+        return STATUS_NOT_SUPPORTED;
+    if (QueryInterface->Size < sizeof(Interface))
+        return STATUS_BUFFER_TOO_SMALL;
+    if (!Rpi5Vc4AcquireShadowPresentInterface(DeviceExtension))
+        return STATUS_DEVICE_NOT_READY;
+
+    RtlZeroMemory(&Interface, sizeof(Interface));
+    Interface.Size = sizeof(Interface);
+    Interface.Version = RXGK_SHADOW_PRESENT_INTERFACE_VERSION_1;
+    Interface.Context = DeviceExtension;
+    Interface.InterfaceReference = Rpi5Vc4ShadowPresentInterfaceReference;
+    Interface.InterfaceDereference = Rpi5Vc4ShadowPresentInterfaceDereference;
+    Interface.Present = Rpi5Vc4DdiPresentDisplayOnly;
+    *(PRXGK_SHADOW_PRESENT_INTERFACE)QueryInterface->Interface = Interface;
+
     return STATUS_SUCCESS;
 }
 
@@ -542,6 +670,7 @@ Rpi5Vc4DdiStartDevice(
 
     DeviceExtension->SourceVisible = TRUE;
     DeviceExtension->Started = TRUE;
+    InterlockedExchange(&DeviceExtension->ShadowPresentInterfaceQueriesOpen, 1);
 
     /* Headless boot: start polling for an HDMI hotplug now that the pipeline
      * is fully started, so StopDevice's drain always tears the poll down. */
@@ -568,6 +697,25 @@ Rpi5Vc4DdiStopDevice(
 
     if (DeviceExtension == NULL)
         return STATUS_INVALID_PARAMETER;
+
+    {
+        KIRQL OldIrql;
+
+        KeAcquireSpinLock(&DeviceExtension->ShadowPresentInterfaceLock,
+                          &OldIrql);
+        DeviceExtension->ShadowPresentInterfaceQueriesOpen = 0;
+        KeReleaseSpinLock(&DeviceExtension->ShadowPresentInterfaceLock,
+                          OldIrql);
+    }
+    if (InterlockedCompareExchange(
+            &DeviceExtension->ShadowPresentInterfaceReferences, 0, 0) != 0)
+    {
+        KeWaitForSingleObject(&DeviceExtension->ShadowPresentInterfaceZeroEvent,
+                              Executive,
+                              KernelMode,
+                              FALSE,
+                              NULL);
+    }
 
     /* Close every producer before any timer, DPC, worker, MMIO mapping, or
      * backing allocation can be released. This is idempotent for RemoveDevice. */

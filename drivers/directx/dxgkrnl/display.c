@@ -41,6 +41,7 @@
 #include <ntstrsafe.h>
 /* IOCTL_VIDEO_DXGK_* present-path contract, shared with cdd/win32k. */
 #include <reactos/dwmframe.h>
+#include <reactos/rddm/rxgkpresent.h>
 
 /* TAG_DXGK_DISPLAY is now in dxgkrnl_private.h */
 
@@ -119,6 +120,8 @@ static RECTL g_PresentDirtyRects[DXGK_DIRTY_RECT_SLOTS];
 static ULONG g_PresentDirtyRectCount = 0;
 static volatile LONG g_PresentHoldActive = 0;
 static volatile LONGLONG g_PresentHoldSince100ns = 0;
+static const GUID g_RxgkShadowPresentInterfaceGuid =
+    RXGK_SHADOW_PRESENT_INTERFACE_GUID_INIT;
 
 /*
  * cdd is inside a cursor-hidden drawing bracket and withholds its dirty
@@ -1255,6 +1258,124 @@ DxgkpBlitShadowToGop(
     return STATUS_SUCCESS;
 }
 
+/*
+ * Invoke the Windows KMDOD present slot or the equivalent optional interface
+ * exposed by a full WDDM miniport.  The latter is queried through the standard
+ * DxgkDdiQueryInterface callback; DRIVER_INITIALIZATION_DATA is never treated
+ * as KMDDOD_INITIALIZATION_DATA and its ABI stays unchanged.
+ */
+static NTSTATUS
+DxgkpCallMiniportShadowPresent(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ const DXGKARG_PRESENT_DISPLAYONLY *PresentArgs,
+    _Out_ PBOOLEAN Handled)
+{
+    PRXGKDDI_PRESENT_SHADOW Present = NULL;
+    PVOID PresentContext = NULL;
+    RXGK_SHADOW_PRESENT_INTERFACE PresentInterface;
+    PDXGKDDI_QUERY_INTERFACE QueryInterfaceCallback;
+    QUERY_INTERFACE QueryInterface;
+    BOOLEAN InterfaceAcquired = FALSE;
+    NTSTATUS Status;
+
+    *Handled = FALSE;
+    RtlZeroMemory(&PresentInterface, sizeof(PresentInterface));
+
+    if (Adapter->MiniportContext->UseDodLayout)
+    {
+        SIZE_T Offset = FIELD_OFFSET(KMDDOD_INITIALIZATION_DATA,
+                                     DxgkDdiPresentDisplayOnly);
+
+        if (Adapter->MiniportContext->InitDataSize >= Offset + sizeof(PVOID))
+        {
+            Present = *(PRXGKDDI_PRESENT_SHADOW *)
+                ((PUCHAR)&Adapter->MiniportContext->InitData + Offset);
+        }
+        if (Present == NULL)
+            return STATUS_NOT_SUPPORTED;
+
+        PresentContext = Adapter->MiniportDeviceContext;
+    }
+    else
+    {
+        QueryInterfaceCallback =
+            DXGK_CB_FULL(Adapter, DxgkDdiQueryInterface);
+        if (QueryInterfaceCallback == NULL)
+            return STATUS_NOT_SUPPORTED;
+    }
+
+    if (!DxgkAcquireMiniportCallback(Adapter))
+        return STATUS_DELETE_PENDING;
+
+    if (!Adapter->MiniportContext->UseDodLayout)
+    {
+        RtlZeroMemory(&QueryInterface, sizeof(QueryInterface));
+        QueryInterface.InterfaceType = &g_RxgkShadowPresentInterfaceGuid;
+        QueryInterface.Size = sizeof(PresentInterface);
+        QueryInterface.Version = RXGK_SHADOW_PRESENT_INTERFACE_VERSION_1;
+        QueryInterface.Interface = (PINTERFACE)&PresentInterface;
+        QueryInterface.DeviceUid = DISPLAY_ADAPTER_HW_ID;
+
+        _SEH2_TRY
+        {
+            Status = QueryInterfaceCallback(Adapter->MiniportDeviceContext,
+                                            &QueryInterface);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+
+        InterfaceAcquired = TRUE;
+        if (PresentInterface.Size != sizeof(PresentInterface) ||
+            PresentInterface.Version !=
+                RXGK_SHADOW_PRESENT_INTERFACE_VERSION_1 ||
+            PresentInterface.Context == NULL ||
+            PresentInterface.InterfaceReference == NULL ||
+            PresentInterface.InterfaceDereference == NULL ||
+            PresentInterface.Present == NULL)
+        {
+            Status = STATUS_INVALID_DEVICE_STATE;
+            goto Cleanup;
+        }
+
+        Present = PresentInterface.Present;
+        PresentContext = PresentInterface.Context;
+    }
+
+    *Handled = TRUE;
+    _SEH2_TRY
+    {
+        Status = Present(PresentContext, PresentArgs);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+Cleanup:
+    if (InterfaceAcquired &&
+        PresentInterface.InterfaceDereference != NULL)
+    {
+        _SEH2_TRY
+        {
+            PresentInterface.InterfaceDereference(PresentInterface.Context);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            if (NT_SUCCESS(Status))
+                Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+    }
+    DxgkReleaseMiniportCallback(Adapter);
+    return Status;
+}
+
 /* ========================================================================
  * DxgkpPresentShadowFb
  *
@@ -1272,11 +1393,6 @@ DxgkpPresentShadowFbRects(
     _In_ ULONG Count,
     _In_ PCSTR TraceReason)
 {
-    typedef NTSTATUS (APIENTRY *PFN_PRESENT_DISPLAY_ONLY)(
-        _In_ PVOID MiniportDeviceContext,
-        _In_ CONST DXGKARG_PRESENT_DISPLAYONLY *PresentDisplayOnly);
-
-    PFN_PRESENT_DISPLAY_ONLY PfnPresent;
     DXGKARG_PRESENT_DISPLAYONLY PresentArgs;
     DXGKRNL_SHARED_SURFACE_SNAPSHOT SharedSurface;
     RECT DirtyRects[DXGK_DIRTY_RECT_SLOTS];
@@ -1286,6 +1402,7 @@ DxgkpPresentShadowFbRects(
     ULONGLONG ElapsedUs;
     LONG ShadowPitch;
     LONG TraceSeq;
+    BOOLEAN Handled;
     NTSTATUS Status;
 
     if (Adapter == NULL)
@@ -1298,37 +1415,6 @@ DxgkpPresentShadowFbRects(
         Status = STATUS_UNSUCCESSFUL;
         goto Cleanup;
     }
-
-    /*
-     * DxgkDdiPresentDisplayOnly belongs only to the Win8+ display-only
-     * driver registration table. Full WDDM miniports present through
-     * DxgkDdiPresent and must never be interpreted with the KMDOD layout.
-     */
-    if (Adapter->MiniportContext->UseDodLayout)
-    {
-        /* DOD drivers: DxgkDdiPresentDisplayOnly is in the KMDDOD struct. */
-        SIZE_T Offset = FIELD_OFFSET(KMDDOD_INITIALIZATION_DATA,
-                                     DxgkDdiPresentDisplayOnly);
-        if (Adapter->MiniportContext->InitDataSize >= Offset + sizeof(PVOID))
-        {
-            PfnPresent = *(PFN_PRESENT_DISPLAY_ONLY *)
-                ((PUCHAR)&Adapter->MiniportContext->InitData + Offset);
-        }
-        else
-        {
-            PfnPresent = NULL;
-        }
-    }
-    else
-    {
-        PfnPresent = NULL;
-    }
-
-    /*
-     * PfnPresent is NULL for a software / WDDM 1.0 miniport (softgpu) that has
-     * no DxgkDdiPresentDisplayOnly. Don't bail here — fall through to the
-     * direct shadow->GOP blit after the dirty rects are computed.
-     */
 
     if (Count > DXGK_DIRTY_RECT_SLOTS)
         Count = DXGK_DIRTY_RECT_SLOTS;
@@ -1367,21 +1453,6 @@ DxgkpPresentShadowFbRects(
         DirtyCount = 1;
     }
 
-    /*
-     * No miniport present DDI (software/WDDM 1.0 miniport): copy the shadow
-     * framebuffer straight to the firmware GOP ourselves.
-     */
-    if (PfnPresent == NULL)
-    {
-        for (i = 0; i < DirtyCount; i++)
-        {
-            Status = DxgkpBlitShadowToGop(Adapter, &SharedSurface, &DirtyRects[i]);
-            if (!NT_SUCCESS(Status))
-                break;
-        }
-        goto Cleanup;
-    }
-
     ASSERT(SharedSurface.ShadowFbPitch != 0);
     ShadowPitch = (LONG)(SharedSurface.ShadowFbPitch != 0 ? SharedSurface.ShadowFbPitch : (SharedSurface.CommittedWidth * 4));
     if (SharedSurface.CommittedWidth == 0 || SharedSurface.CommittedHeight == 0 || ShadowPitch < (LONG)(SharedSurface.CommittedWidth * 4) || SharedSurface.ShadowFbSize < ((SIZE_T)(SharedSurface.CommittedHeight - 1) * (ULONG)ShadowPitch) + ((SIZE_T)SharedSurface.CommittedWidth * 4))
@@ -1402,15 +1473,26 @@ DxgkpPresentShadowFbRects(
     PresentArgs.pDirtyRect    = DirtyRects;
     PresentArgs.pfnPresentDisplayOnlyProgress = NULL;
 
-    if (!DxgkAcquireMiniportCallback(Adapter))
+    Start100ns = DxgkpDisplayTraceNow100ns();
+    Status = DxgkpCallMiniportShadowPresent(Adapter,
+                                            &PresentArgs,
+                                            &Handled);
+    if (Status == STATUS_NOT_SUPPORTED && !Handled)
     {
-        Status = STATUS_DELETE_PENDING;
+        /* A full miniport without the private extension (or a DOD without
+         * PresentDisplayOnly) retains the generic firmware-GOP fallback. */
+        for (i = 0; i < DirtyCount; i++)
+        {
+            Status = DxgkpBlitShadowToGop(Adapter,
+                                          &SharedSurface,
+                                          &DirtyRects[i]);
+            if (!NT_SUCCESS(Status))
+                break;
+        }
         goto Cleanup;
     }
+    if (Handled)
     {
-        Start100ns = DxgkpDisplayTraceNow100ns();
-        Status = PfnPresent(Adapter->MiniportDeviceContext, &PresentArgs);
-        DxgkReleaseMiniportCallback(Adapter);
         InterlockedIncrement(&g_ScanoutCopyCount);
         DxgkPresentAccountFrame(Adapter, PresentArgs.VidPnSourceId);
         ElapsedUs = DxgkpDisplayTraceElapsedUs(Start100ns);
@@ -1418,12 +1500,13 @@ DxgkpPresentShadowFbRects(
         if (TraceSeq <= DXGK_PRESENT_TRACE_LOG_LIMIT ||
             ElapsedUs >= DXGK_PRESENT_TRACE_SLOW_US)
         {
-            DXGKRNL_TRACE("DxgkpPresentShadowFb[%s]: seq=%ld PfnPresent=%p "
+            DXGKRNL_TRACE("DxgkpPresentShadowFb[%s]: seq=%ld path=%s "
                           "status=0x%08lX dur=%I64u us rects=%lu first=(%ld,%ld)-(%ld,%ld) "
                           "size=%ux%u pitch=%ld\n",
                           TraceReason,
                           TraceSeq,
-                          PfnPresent,
+                          Adapter->MiniportContext->UseDodLayout
+                              ? "dod" : "full-query-interface",
                           Status,
                           ElapsedUs,
                           DirtyCount,
