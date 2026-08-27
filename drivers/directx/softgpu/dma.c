@@ -2622,26 +2622,18 @@ SoftGpuDdiSetPalette(
  * =========================================================================
  */
 
-/*
- * SoftGpuDdiGetScanLine
- *
- * Simulates a display that is always in vertical blank.  Returns ScanLine=0
- * and InVerticalBlank=TRUE so that any vblank wait completes immediately.
- */
 NTSTATUS
 APIENTRY
 SoftGpuDdiGetScanLine(
     _In_    PVOID                  MiniportDeviceContext,
     _Inout_ PDXGKARG_GETSCANLINE   GetScanLine)
 {
-    UNREFERENCED_PARAMETER(MiniportDeviceContext);
+    PSOFTGPU_DEVICE Device = (PSOFTGPU_DEVICE)MiniportDeviceContext;
 
-    if (GetScanLine == NULL || GetScanLine->VidPnSourceId != 0)
+    if (Device == NULL || Device->Magic != SOFTGPU_DEVICE_MAGIC)
         return STATUS_INVALID_PARAMETER;
 
-    GetScanLine->ScanLine       = 0;
-    GetScanLine->InVerticalBlank= TRUE;
-    return STATUS_SUCCESS;
+    return SoftGpuPlatformQueryScanLine(Device, GetScanLine);
 }
 
 

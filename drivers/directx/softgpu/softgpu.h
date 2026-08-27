@@ -82,6 +82,7 @@
  * argument struct, the WDDM2 DDI typedefs and the DxgkInitialize prototype.
  * It is the same header dxgkrnl is built against, guaranteeing matching ABI. */
 #include <dispmprt.h>
+#include <reactos/rddm/rxgkpresent.h>
 
 /* ---- Debug helpers ------------------------------------------------------- */
 #define NDEBUG
@@ -216,6 +217,13 @@ typedef struct _SOFTGPU_DEVICE
     BOOLEAN             CurrentPrimaryValid;
     BOOLEAN             ScanoutVisible;
     BOOLEAN             TimingActive;
+    volatile LONG       ScanoutVBlankAvailable;
+
+    /* Optional ReactOS full-WDDM shadow-present interface. */
+    KSPIN_LOCK          ShadowPresentInterfaceLock;
+    volatile LONG       ShadowPresentInterfaceQueriesOpen;
+    volatile LONG       ShadowPresentInterfaceReferences;
+    KEVENT              ShadowPresentInterfaceZeroEvent;
 
     /* Currently committed display mode */
     ULONG               Width;
@@ -312,6 +320,19 @@ VOID
 SoftGpuPlatformFillNodeMetadata(
     _Out_ DXGKARG_GETNODEMETADATA *GetNodeMetadata);
 
+VOID
+SoftGpuPlatformInitializeTiming(
+    _Inout_ PSOFTGPU_DEVICE Device);
+
+BOOLEAN
+SoftGpuPlatformWaitForVerticalBlank(
+    _Inout_ PSOFTGPU_DEVICE Device);
+
+NTSTATUS
+SoftGpuPlatformQueryScanLine(
+    _In_ PSOFTGPU_DEVICE Device,
+    _Inout_ PDXGKARG_GETSCANLINE GetScanLine);
+
 BOOLEAN
 SoftGpuDecodeLoaderGop(
     _In_ const SOFTGPU_LOADER_FRAMEBUFFER *FrameBuffer,
@@ -341,6 +362,12 @@ SoftGpuScanoutStart(
 VOID
 SoftGpuScanoutStop(
     _Inout_ PSOFTGPU_DEVICE Device);
+
+NTSTATUS
+APIENTRY
+SoftGpuDdiPresentDisplayOnly(
+    _In_ PVOID MiniportDeviceContext,
+    _In_ const DXGKARG_PRESENT_DISPLAYONLY *PresentDisplayOnly);
 
 
 /* =========================================================================
@@ -498,13 +525,11 @@ APIENTRY
 SoftGpuDdiRemoveDevice(
     _In_ PVOID MiniportDeviceContext);
 
-#if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
 NTSTATUS
 APIENTRY
 SoftGpuDdiQueryInterface(
     _In_ PVOID MiniportDeviceContext,
     _In_ PQUERY_INTERFACE QueryInterface);
-#endif
 
 NTSTATUS
 APIENTRY
