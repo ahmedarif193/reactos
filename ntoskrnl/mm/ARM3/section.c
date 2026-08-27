@@ -3032,6 +3032,320 @@ MmMapViewInSessionSpace(IN PVOID Section,
                                   &SectionOffset);
 }
 
+static
+NTSTATUS
+MiCaptureRotateVad(
+    _In_ PVOID VirtualAddress,
+    _In_ SIZE_T NumberOfBytes,
+    _Out_ PULONG Protect,
+    _Out_ PMDL *MappedMdl)
+{
+    PEPROCESS Process = PsGetCurrentProcess();
+    PMMVAD Vad;
+    ULONG_PTR EndAddress;
+    NTSTATUS Status;
+
+    EndAddress = (ULONG_PTR)VirtualAddress + NumberOfBytes - 1;
+    MmLockAddressSpace(&Process->Vm);
+    if (Process->VmDeleted)
+    {
+        Status = STATUS_PROCESS_IS_TERMINATING;
+        goto Exit;
+    }
+
+    Vad = MiLocateAddress(VirtualAddress);
+    if (Vad == NULL)
+    {
+        Status = STATUS_ACCESS_VIOLATION;
+        goto Exit;
+    }
+    if ((Vad->u.VadFlags.VadType != VadRotatePhysical) ||
+        (Vad->EndingVpn < (EndAddress >> PAGE_SHIFT)))
+    {
+        Status = STATUS_CONFLICTING_ADDRESSES;
+        goto Exit;
+    }
+    if ((Vad->StartingVpn != ((ULONG_PTR)VirtualAddress >> PAGE_SHIFT)) || (Vad->EndingVpn != (EndAddress >> PAGE_SHIFT)))
+    {
+        Status = STATUS_NOT_SUPPORTED;
+        goto Exit;
+    }
+
+    *Protect = Vad->FirstPrototypePte != NULL ? (ULONG)(ULONG_PTR)Vad->FirstPrototypePte : MmProtectToValue[Vad->u.VadFlags.Protection];
+    *MappedMdl = (PMDL)Vad->ControlArea;
+    Status = STATUS_SUCCESS;
+
+Exit:
+    MmUnlockAddressSpace(&Process->Vm);
+    return Status;
+}
+
+static
+NTSTATUS
+MiLockRotateMdl(
+    _In_ PVOID VirtualAddress,
+    _In_ SIZE_T NumberOfBytes,
+    _In_ LOCK_OPERATION Operation,
+    _Out_ PMDL *MdlOut)
+{
+    PMDL Mdl;
+    NTSTATUS Status;
+
+    Mdl = IoAllocateMdl(VirtualAddress, (ULONG)NumberOfBytes, FALSE, FALSE, NULL);
+    if (Mdl == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Status = STATUS_SUCCESS;
+    _SEH2_TRY
+    {
+        MmProbeAndLockPages(Mdl, KernelMode, Operation);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    if (!NT_SUCCESS(Status))
+    {
+        IoFreeMdl(Mdl);
+        return Status;
+    }
+
+    *MdlOut = Mdl;
+    return STATUS_SUCCESS;
+}
+
+static
+VOID
+MiUnlockRotateMdl(
+    _In_opt_ PMDL Mdl)
+{
+    if (Mdl != NULL)
+    {
+        MmUnlockPages(Mdl);
+        IoFreeMdl(Mdl);
+    }
+}
+
+static
+MEMORY_CACHING_TYPE
+MiRotateCachingType(
+    _In_ ULONG Protect)
+{
+    if (Protect & PAGE_NOCACHE)
+        return MmNonCached;
+    if (Protect & PAGE_WRITECOMBINE)
+        return MmWriteCombined;
+    return MmCached;
+}
+
+static
+NTSTATUS
+MiCreateRotateReservation(
+    _In_ PVOID VirtualAddress,
+    _In_ SIZE_T NumberOfBytes,
+    _In_ ULONG Protect,
+    _In_ BOOLEAN Commit)
+{
+    PVOID BaseAddress = VirtualAddress;
+    SIZE_T RegionSize = NumberOfBytes;
+
+    return ZwAllocateVirtualMemory(NtCurrentProcess(), &BaseAddress, 0, &RegionSize, MEM_RESERVE | MEM_ROTATE | (Commit ? MEM_COMMIT : 0), Protect);
+}
+
+static
+NTSTATUS
+MiRotateToFrameBuffer(
+    _In_ PVOID VirtualAddress,
+    _In_ SIZE_T NumberOfBytes,
+    _In_ PMDL NewMdl,
+    _In_ BOOLEAN Copy,
+    _In_opt_ PMM_ROTATE_COPY_CALLBACK_FUNCTION CopyFunction,
+    _In_opt_ PVOID Context)
+{
+    PEPROCESS Process = PsGetCurrentProcess();
+    MEMORY_CACHING_TYPE CacheType;
+    PVOID FreeBase;
+    PVOID MappedAddress;
+    SIZE_T FreeSize;
+    PMMVAD Vad;
+    PMDL CurrentMdl;
+    PMDL SourceMdl = NULL;
+    ULONG Protect;
+    NTSTATUS Status;
+
+    if ((NewMdl == NULL) || (MmGetMdlByteCount(NewMdl) < NumberOfBytes))
+        return STATUS_INVALID_BUFFER_SIZE;
+    if (Copy && (CopyFunction == NULL))
+        return STATUS_INVALID_PARAMETER_5;
+
+    Status = MiCaptureRotateVad(VirtualAddress, NumberOfBytes, &Protect, &CurrentMdl);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (CurrentMdl != NULL)
+        return STATUS_ALREADY_COMMITTED;
+
+    if (Copy)
+    {
+        Status = MiLockRotateMdl(VirtualAddress, NumberOfBytes, IoReadAccess, &SourceMdl);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        Status = CopyFunction(NewMdl, SourceMdl, Context);
+        if (!NT_SUCCESS(Status))
+        {
+            MiUnlockRotateMdl(SourceMdl);
+            return Status;
+        }
+    }
+
+    FreeBase = VirtualAddress;
+    FreeSize = 0;
+    Status = ZwFreeVirtualMemory(NtCurrentProcess(), &FreeBase, &FreeSize, MEM_RELEASE);
+    if (!NT_SUCCESS(Status))
+    {
+        MiUnlockRotateMdl(SourceMdl);
+        return Status;
+    }
+
+    CacheType = MiRotateCachingType(Protect);
+    MappedAddress = NULL;
+    _SEH2_TRY
+    {
+        MappedAddress = MmMapLockedPagesSpecifyCache(NewMdl, UserMode, CacheType, VirtualAddress, FALSE, NormalPagePriority);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    MiUnlockRotateMdl(SourceMdl);
+    if ((MappedAddress == NULL) || (PAGE_ALIGN(MappedAddress) != VirtualAddress))
+    {
+        if (NT_SUCCESS(Status))
+            Status = STATUS_CONFLICTING_ADDRESSES;
+        MiCreateRotateReservation(VirtualAddress, NumberOfBytes, Protect, FALSE);
+        return Status;
+    }
+
+    MmLockAddressSpace(&Process->Vm);
+    Vad = MiLocateAddress(VirtualAddress);
+    if ((Vad == NULL) || (Vad->u.VadFlags.VadType != VadDevicePhysicalMemory))
+    {
+        MmUnlockAddressSpace(&Process->Vm);
+        MmUnmapLockedPages(MappedAddress, NewMdl);
+        MiCreateRotateReservation(VirtualAddress, NumberOfBytes, Protect, FALSE);
+        return STATUS_CONFLICTING_ADDRESSES;
+    }
+    Vad->u.VadFlags.VadType = VadRotatePhysical;
+    Vad->ControlArea = (PCONTROL_AREA)NewMdl;
+    Vad->FirstPrototypePte = (PMMPTE)(ULONG_PTR)Protect;
+    MmUnlockAddressSpace(&Process->Vm);
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+MiRotateToRegularMemory(
+    _In_ PVOID VirtualAddress,
+    _In_ SIZE_T NumberOfBytes,
+    _In_ BOOLEAN Copy,
+    _In_opt_ PMM_ROTATE_COPY_CALLBACK_FUNCTION CopyFunction,
+    _In_opt_ PVOID Context)
+{
+    PEPROCESS Process = PsGetCurrentProcess();
+    PMMVAD Vad;
+    PMDL DestinationMdl = NULL;
+    PMDL SourceMdl;
+    ULONG Protect;
+    NTSTATUS Status;
+
+    if (Copy && (CopyFunction == NULL))
+        return STATUS_INVALID_PARAMETER_5;
+
+    Status = MiCaptureRotateVad(VirtualAddress, NumberOfBytes, &Protect, &SourceMdl);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (SourceMdl == NULL)
+        return STATUS_NOT_MAPPED_VIEW;
+
+    MmLockAddressSpace(&Process->Vm);
+    Vad = MiLocateAddress(VirtualAddress);
+    if ((Vad == NULL) || (Vad->u.VadFlags.VadType != VadRotatePhysical) || ((PMDL)Vad->ControlArea != SourceMdl))
+    {
+        MmUnlockAddressSpace(&Process->Vm);
+        return STATUS_CONFLICTING_ADDRESSES;
+    }
+    Vad->u.VadFlags.VadType = VadDevicePhysicalMemory;
+    Vad->ControlArea = NULL;
+    Vad->FirstPrototypePte = NULL;
+    MmUnlockAddressSpace(&Process->Vm);
+
+    MmUnmapLockedPages(VirtualAddress, SourceMdl);
+    Status = MiCreateRotateReservation(VirtualAddress, NumberOfBytes, Protect, TRUE);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (Copy)
+    {
+        Status = MiLockRotateMdl(VirtualAddress, NumberOfBytes, IoWriteAccess, &DestinationMdl);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        Status = CopyFunction(DestinationMdl, SourceMdl, Context);
+        MiUnlockRotateMdl(DestinationMdl);
+    }
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+MmRotatePhysicalView(
+    _In_ PVOID VirtualAddress,
+    _Inout_ PSIZE_T NumberOfBytes,
+    _In_opt_ PMDL NewMdl,
+    _In_ MM_ROTATE_DIRECTION Direction,
+    _In_ PMM_ROTATE_COPY_CALLBACK_FUNCTION CopyFunction,
+    _In_opt_ PVOID Context)
+{
+    SIZE_T RequestedBytes;
+    NTSTATUS Status;
+
+    if (((ULONG_PTR)VirtualAddress & (PAGE_SIZE - 1)) != 0)
+    {
+        *NumberOfBytes = 0;
+        return STATUS_INVALID_PARAMETER_1;
+    }
+
+    if ((*NumberOfBytes == 0) ||
+        ((*NumberOfBytes & (PAGE_SIZE - 1)) != 0) ||
+        (((ULONG_PTR)VirtualAddress + *NumberOfBytes - 1) <=
+         (ULONG_PTR)VirtualAddress))
+    {
+        *NumberOfBytes = 0;
+        return STATUS_INVALID_PARAMETER_2;
+    }
+
+    if ((LONG)Direction >= MmMaximumRotateDirection)
+    {
+        *NumberOfBytes = 0;
+        return STATUS_INVALID_PARAMETER_3;
+    }
+
+    RequestedBytes = *NumberOfBytes;
+    *NumberOfBytes = 0;
+    if (Direction == MmToFrameBuffer)
+        Status = MiRotateToFrameBuffer(VirtualAddress, RequestedBytes, NewMdl, TRUE, CopyFunction, Context);
+    else if (Direction == MmToFrameBufferNoCopy)
+        Status = MiRotateToFrameBuffer(VirtualAddress, RequestedBytes, NewMdl, FALSE, CopyFunction, Context);
+    else if (Direction == MmToRegularMemory)
+        Status = MiRotateToRegularMemory(VirtualAddress, RequestedBytes, TRUE, CopyFunction, Context);
+    else
+        Status = MiRotateToRegularMemory(VirtualAddress, RequestedBytes, FALSE, CopyFunction, Context);
+
+    if (NT_SUCCESS(Status))
+        *NumberOfBytes = RequestedBytes;
+    return Status;
+}
+
 /*
  * @implemented
  */

@@ -124,3 +124,14 @@ MmGetPhysicalMemoryRanges(VOID)
     MiReleasePfnLock(OldIrql);
     return Buffer;
 }
+
+PPHYSICAL_MEMORY_RANGE
+NTAPI
+MmGetPhysicalMemoryRangesEx(
+    _In_opt_ PVOID PartitionObject)
+{
+    /* ReactOS currently exposes only the host memory partition. */
+    if (PartitionObject)
+        return NULL;
+    return MmGetPhysicalMemoryRanges();
+}

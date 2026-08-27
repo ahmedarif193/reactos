@@ -2701,7 +2701,7 @@
 @ stub -arch=arm64 MmGetCacheAttributeEx
 @ stub -arch=arm64 MmGetMaximumFileSectionSize
 @ stub -arch=arm64 MmGetPageBadStatus
-@ stub -arch=arm64 MmGetPhysicalMemoryRangesEx
+@ stdcall -arch=i386,x86_64,arm64 MmGetPhysicalMemoryRangesEx(ptr)
 @ stub -arch=arm64 MmGetPhysicalMemoryRangesEx2
 @ stub -arch=arm64 MmGetSectionInformation
 @ stub -arch=arm64 MmIsDriverSuspectForVerifier
@@ -2719,7 +2719,7 @@
 @ stub -arch=arm64 MmProtectDriverSection
 @ stub -arch=arm64 MmQueryMemoryRanges
 @ stub -arch=arm64 MmReturnChargesToLockPagedPool
-@ stub -arch=arm64 MmRotatePhysicalView
+@ stdcall -arch=i386,x86_64,arm64 MmRotatePhysicalView(ptr ptr ptr long ptr ptr)
 @ stub -arch=arm64 MmSecureVirtualMemoryEx
 @ stub -arch=arm64 MmSetGraphicsPtes
 @ stub -arch=arm64 MmSetPermanentCacheAttribute

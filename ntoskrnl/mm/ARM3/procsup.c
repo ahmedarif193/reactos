@@ -1511,6 +1511,29 @@ MmCleanProcessAddressSpace(IN PEPROCESS Process)
             continue;
         }
 
+        /*
+         * A rotated framebuffer view is an MDL mapping whose VAD carries the
+         * source MDL until the view is rotated back.  Convert it to the MDL
+         * mapper's native VAD type and let MmUnmapLockedPages tear down the
+         * PTEs and VAD before continuing the normal process cleanup.  The MDL
+         * remains owned by the caller.
+         */
+        if ((Vad->u.VadFlags.VadType == VadRotatePhysical) &&
+            (Vad->ControlArea != NULL))
+        {
+            PVOID MappedAddress = (PVOID)(Vad->StartingVpn << PAGE_SHIFT);
+            PMDL MappedMdl = (PMDL)Vad->ControlArea;
+
+            ASSERT(Process == PsGetCurrentProcess());
+            Vad->u.VadFlags.VadType = VadDevicePhysicalMemory;
+            Vad->ControlArea = NULL;
+            Vad->FirstPrototypePte = NULL;
+            MmUnlockAddressSpace(&Process->Vm);
+            MmUnmapLockedPages(MappedAddress, MappedMdl);
+            MmLockAddressSpace(&Process->Vm);
+            continue;
+        }
+
         /* Lock the working set */
         MiLockProcessWorkingSetUnsafe(Process, Thread);
 
@@ -1518,9 +1541,10 @@ MmCleanProcessAddressSpace(IN PEPROCESS Process)
         ASSERT(VadTree->NumberGenericTableElements >= 1);
         MiRemoveNode((PMMADDRESS_NODE)Vad, VadTree);
 
-        /* Only regular and AWE VADs supported for now */
+        /* Only regular, AWE, and unbacked rotate reservations remain here */
         ASSERT((Vad->u.VadFlags.VadType == VadNone) ||
-               (Vad->u.VadFlags.VadType == VadAwe));
+               (Vad->u.VadFlags.VadType == VadAwe) ||
+               (Vad->u.VadFlags.VadType == VadRotatePhysical));
 
         /* Check if this is a section VAD */
         if (!(Vad->u.VadFlags.PrivateMemory) && (Vad->ControlArea))
