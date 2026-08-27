@@ -6,9 +6,10 @@
  *
  * cdd implements NO raster ops of its own. GDI's engine paints into the cached
  * shadow surface; the BitBlt/CopyBits/SynchronizeSurface hooks below exist only
- * to learn which rectangles changed, then call RcddPresent to push those
- * rectangles to the WDDM scan-out. RcddPresent is the single seam an Option-B
- * upgrade (D3DKMTPresent / SetVidPnSourceAddress) replaces; see surface.c.
+ * to learn which rectangles changed. Individual primitives accumulate damage;
+ * a synchronized GDI flush publishes the completed batch to the WDDM scan-out.
+ * RcddPresent is the single seam an Option-B upgrade (D3DKMTPresent /
+ * SetVidPnSourceAddress) replaces; see surface.c.
  */
 
 #include "cdd.h"
@@ -30,15 +31,15 @@ RcddRectContains(
  * Notify dxgkrnl that the rectangle prcl (or the whole screen when prcl is
  * NULL) of the mapped primary changed. GDI's engine drew straight into
  * ppdev->ScreenPtr, so there is nothing to copy here; dxgkrnl records the
- * rectangle and scans it out through the WDDM display-only present path at a
- * paced cadence.
+ * rectangle. A later synchronized flush scans the accumulated batch out
+ * through the WDDM display-only present path.
  *
  * While GDI has hidden the software cursor for a drawing operation
  * (DSS_RESERVED bracket from win32k's mouse safety, see RcddSynchronizeSurface)
  * the rectangle is only accumulated: the scan-out must never show the
  * cursor-less intermediate state. The bracket's closing flush sends the union.
  */
-static VOID
+static BOOL
 RcddNotifyDirty(
    PRCDD_PDEV ppdev,
    const RECTL *prcl,
@@ -57,8 +58,30 @@ RcddNotifyDirty(
    }
    Input.Flags = Flags;
 
-   EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT,
-                      &Input, sizeof(Input), NULL, 0, &Ret);
+   return EngDeviceIoControl(ppdev->hDriver,
+                             IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT,
+                             &Input,
+                             sizeof(Input),
+                             NULL,
+                             0,
+                             &Ret) == 0;
+}
+
+/* Publish the completed GDI batch. GDI calls this path with the device lock
+ * held for both programmatic flushes and its periodic synchronization timer. */
+static VOID
+RcddFlushOutstanding(
+   PRCDD_PDEV ppdev)
+{
+   if (ppdev->ScreenPtr == NULL ||
+       ppdev->SafetyHidden ||
+       !ppdev->DirtyOutstanding)
+   {
+      return;
+   }
+
+   if (RcddNotifyDirty(ppdev, NULL, DXGK_PRESENT_DIRTY_FLUSH))
+      ppdev->DirtyOutstanding = FALSE;
 }
 
 static VOID
@@ -116,7 +139,8 @@ RcddPresentEx(
    ppdev->SentSeq = ppdev->DrawSeq;
    ppdev->SentRect = Dirty;
 
-   RcddNotifyDirty(ppdev, &Dirty, Flags);
+   if (RcddNotifyDirty(ppdev, &Dirty, Flags))
+      ppdev->DirtyOutstanding = TRUE;
 }
 
 VOID
@@ -289,6 +313,16 @@ RcddSynchronizeSurface(
    ppdev = (PRCDD_PDEV)pso->dhpdev;
    if (pso->pvScan0 != ppdev->ScreenPtr)
       return;
+
+   /* These are GDI's native completed-batch boundaries. Unlike a per-primitive
+    * flush with a rectangle, publishing here cannot expose a menu highlight
+    * after its background paint but before its text paint. */
+   if ((fl & DSS_TIMER_EVENT) ||
+       ((fl & DSS_FLUSH_EVENT) && prcl == NULL))
+   {
+      RcddFlushOutstanding(ppdev);
+      return;
+   }
 
    /*
     * win32k's mouse safety brackets a drawing op that overlaps the software

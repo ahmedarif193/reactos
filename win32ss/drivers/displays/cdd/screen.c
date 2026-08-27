@@ -279,7 +279,7 @@ RcddInitScreenInfo(
    pDevInfo->cxDither = 0;
    pDevInfo->cyDither = 0;
    pDevInfo->hpalDefault = 0;
-   pDevInfo->flGraphicsCaps2 = 0;
+   pDevInfo->flGraphicsCaps2 = GCAPS2_SYNCFLUSH | GCAPS2_SYNCTIMER;
 
    if (ppdev->BitsPerPixel == 8)
    {

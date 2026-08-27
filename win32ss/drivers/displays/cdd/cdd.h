@@ -71,6 +71,7 @@ typedef struct _RCDD_PDEV
    BOOL SafetyHidden;          /* GDI hid the SW cursor for a drawing op      */
    BOOL PendingValid;          /* PendingRect holds withheld dirty pixels     */
    RECTL PendingRect;
+   BOOL DirtyOutstanding;      /* dxgkrnl has dirty pixels awaiting a flush   */
    ULONG DrawSeq;              /* Bumped by every draw DDI entry              */
    ULONG SentSeq;              /* DrawSeq of the last notification sent       */
    RECTL SentRect;             /* Rect of the last notification sent          */

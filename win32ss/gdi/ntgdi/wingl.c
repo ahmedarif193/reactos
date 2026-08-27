@@ -162,7 +162,10 @@ NtGdiSetPixelFormat(
          * yet the ICD still creates a real GL context on this window. */
         PWND pWnd = UserGetWindowObject(hWnd);
         if (pWnd != NULL)
+        {
             IntCompositionMarkOpenGL(pWnd);
+            DceReleaseCompositionDc(hdc);
+        }
     }
     UserLeave();
 

@@ -26,6 +26,7 @@ typedef struct tagDCE
     HRGN         hrgnClipPublic;
     HRGN         hrgnSavedVis;
     DWORD        DCXFlags;
+    UCHAR        CompositionDcState;
     PTHREADINFO  ptiOwner;
     PPROCESSINFO ppiOwner;
     struct _MONITOR* pMonitor;
@@ -53,6 +54,7 @@ void FASTCALL DceFreeWindowDCE(PWND);
 void FASTCALL DceFreeThreadDCE(PTHREADINFO);
 VOID FASTCALL DceUpdateVisRgn(DCE *Dce, PWND Window, ULONG Flags);
 DCE* FASTCALL DceGetDceFromDC(HDC hdc);
+VOID FASTCALL DceReleaseCompositionDc(HDC hdc);
 
 /* LockWindowUpdate state (windc.c). */
 extern PWND gspwndLockUpdate;
