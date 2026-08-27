@@ -168,6 +168,7 @@ typedef struct _RPI5VC4_DEVICE_EXTENSION
     BOOLEAN HvsCursorFastValid;
 
     BOOLEAN PixelValveValid;
+    BOOLEAN PixelValveVBlankLive;
     PHYSICAL_ADDRESS PixelValvePhysical;
     ULONG PixelValveLength;
     ULONG PixelValveControl;

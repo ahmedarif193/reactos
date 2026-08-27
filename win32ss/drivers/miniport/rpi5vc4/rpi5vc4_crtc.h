@@ -30,6 +30,7 @@
 #define RPI5_PV_VERTA                   0x14    /* VBP:31..16  VSYNC:15..0  */
 #define RPI5_PV_VERTB                   0x18    /* VFP:31..16  VACTIVE:15..0 */
 #define RPI5_PV_HACT_ACT                0x30
+#define RPI5_PV_INTEN                   0x24
 #define RPI5_PV_INTSTAT                 0x28
 #define RPI5_PV_STAT                    0x2c
 
@@ -38,6 +39,9 @@
 #define RPI5_PV_VCONTROL_VIDEN          (1u << 0)
 #define RPI5_PV_VCONTROL_INTERLACE      (1u << 4)
 #define RPI5_PV_INT_VFP_START           (1u << 7)
+
+#define RPI5_PV_VBLANK_POLL_US          50
+#define RPI5_PV_VBLANK_TIMEOUT_US       50000
 
 /* Extract the 16-bit low/high halves shared by the HORZ/VERT timing words. */
 #define RPI5_PV_LO16(v)                 ((v) & 0xffff)
