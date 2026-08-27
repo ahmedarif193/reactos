@@ -28,6 +28,7 @@ LARGE_INTEGER ShortPsLockDelay;
 ULONG PsRawPrioritySeparation;
 ULONG PsPrioritySeparation;
 CHAR PspForegroundQuantum[3];
+volatile LONG64 PspProcessSequenceNumber;
 
 /* Fixed quantum table */
 CHAR PspFixedQuantums[6] =
@@ -439,6 +440,8 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
 
     /* Clean up the Object */
     RtlZeroMemory(Process, sizeof(EPROCESS));
+    Process->SequenceNumber =
+        (ULONGLONG)InterlockedIncrement64(&PspProcessSequenceNumber);
 
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
     Process->DefaultPagePriority = Parent ? Parent->DefaultPagePriority : PSP_PAGE_PRIORITY_NORMAL;
@@ -1246,6 +1249,132 @@ NTAPI
 PsGetProcessWin32Process(PEPROCESS Process)
 {
     return Process->Win32Process;
+}
+
+/*
+ * @implemented
+ */
+PVOID
+NTAPI
+PsGetProcessDxgProcess(_In_ PEPROCESS Process)
+{
+    return Process->DxgProcess;
+}
+
+/*
+ * @implemented
+ */
+PESILO
+NTAPI
+PsGetProcessServerSilo(_In_ PEPROCESS Process)
+{
+    UNREFERENCED_PARAMETER(Process);
+
+    /* ReactOS does not create server silos; the host silo is represented by NULL. */
+    return NULL;
+}
+
+PESILO
+NTAPI
+PsAttachSiloToCurrentThread(_In_opt_ PESILO Silo)
+{
+    /* The only supported silo is the host, represented by NULL on Windows. */
+    ASSERT(Silo == NULL);
+    return NULL;
+}
+
+VOID
+NTAPI
+PsDetachSiloFromCurrentThread(_In_opt_ PESILO PreviousSilo)
+{
+    ASSERT(PreviousSilo == NULL);
+}
+
+PESILO
+NTAPI
+PsGetCurrentServerSilo(VOID)
+{
+    return NULL;
+}
+
+PESILO
+NTAPI
+PsGetHostSilo(VOID)
+{
+    return NULL;
+}
+
+BOOLEAN
+NTAPI
+PsIsCurrentThreadInServerSilo(VOID)
+{
+    return FALSE;
+}
+
+BOOLEAN
+NTAPI
+PsIsHostSilo(_In_opt_ PESILO Silo)
+{
+    return (Silo == NULL);
+}
+
+ULONG
+NTAPI
+PsGetServerSiloServiceSessionId(_In_opt_ PESILO Silo)
+{
+    ASSERT(Silo == NULL);
+    return 0;
+}
+
+USHORT
+NTAPI
+PsGetProcessMachine(_In_ PEPROCESS Process)
+{
+    if (Process->Wow64Process != NULL)
+        return Process->Wow64Process->Machine;
+#if defined(_M_ARM64)
+    return IMAGE_FILE_MACHINE_ARM64;
+#elif defined(_M_AMD64)
+    return IMAGE_FILE_MACHINE_AMD64;
+#elif defined(_M_IX86)
+    return IMAGE_FILE_MACHINE_I386;
+#else
+    return IMAGE_FILE_MACHINE_UNKNOWN;
+#endif
+}
+
+USHORT
+NTAPI
+PsWow64GetProcessMachine(_In_ PEPROCESS Process)
+{
+    return PsGetProcessMachine(Process);
+}
+
+LOGICAL
+NTAPI
+PsIsProtectedProcess(_In_ PEPROCESS Process)
+{
+    return Process->ProtectedProcess != 0;
+}
+
+LOGICAL
+NTAPI
+PsIsProtectedProcessLight(_In_ PEPROCESS Process)
+{
+    UNREFERENCED_PARAMETER(Process);
+    return FALSE;
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+PsSetProcessDxgProcess(
+    _Inout_ PEPROCESS Process,
+    _In_opt_ PVOID DxgProcess)
+{
+    Process->DxgProcess = DxgProcess;
 }
 
 /*
@@ -2744,6 +2873,109 @@ NtOpenProcess(OUT PHANDLE ProcessHandle,
 
     /* Return status */
     return Status;
+}
+
+NTSTATUS
+NTAPI
+PsAcquireProcessExitSynchronization(
+    _Inout_ PEPROCESS Process)
+{
+    return ExAcquireRundownProtection(&Process->RundownProtect) ?
+           STATUS_SUCCESS : STATUS_PROCESS_IS_TERMINATING;
+}
+
+VOID
+NTAPI
+PsReleaseProcessExitSynchronization(
+    _Inout_ PEPROCESS Process)
+{
+    ExReleaseRundownProtection(&Process->RundownProtect);
+}
+
+VOID NTAPI PsEnterPriorityRegion(VOID) { KeEnterCriticalRegion(); }
+VOID NTAPI PsLeavePriorityRegion(VOID) { KeLeaveCriticalRegion(); }
+
+PEJOB
+NTAPI
+PsGetProcessCommonJob(
+    _In_ PEPROCESS FirstProcess,
+    _In_ PEPROCESS SecondProcess)
+{
+    PEJOB Job = FirstProcess->Job;
+    return (Job && Job == SecondProcess->Job) ? Job : NULL;
+}
+
+ULONGLONG NTAPI PsGetProcessSequenceNumber(_In_ PEPROCESS Process)
+{
+    return Process->SequenceNumber;
+}
+
+ULONGLONG NTAPI PsGetProcessStartKey(_In_ PEPROCESS Process)
+{
+    return (Process->SequenceNumber & 0x0000FFFFFFFFFFFFULL) |
+           ((ULONGLONG)SharedUserData->BootId << 48);
+}
+
+BOOLEAN NTAPI PsIsProcessCommitRelinquished(_In_ PEPROCESS Process)
+{
+    UNREFERENCED_PARAMETER(Process);
+    return FALSE;
+}
+
+ULONG NTAPI PsGetWin32KFilterSet(VOID) { return 0; }
+BOOLEAN NTAPI PsIsWin32KFilterEnabled(VOID) { return FALSE; }
+BOOLEAN NTAPI PsIsWin32KFilterAuditEnabled(VOID) { return FALSE; }
+
+BOOLEAN
+NTAPI
+PsIsWin32KFilterEnabledForProcess(_In_ PEPROCESS Process)
+{
+    UNREFERENCED_PARAMETER(Process);
+    return FALSE;
+}
+
+BOOLEAN
+NTAPI
+PsIsWin32KFilterAuditEnabledForProcess(_In_ PEPROCESS Process)
+{
+    UNREFERENCED_PARAMETER(Process);
+    return FALSE;
+}
+
+CHAR
+NTAPI
+PsAdjustWin32kPriorityFloor(
+    _Inout_ PEPROCESS Process,
+    _In_ CHAR PriorityFloor)
+{
+    CHAR Previous = Process->Win32kPriorityFloor;
+
+    if ((UCHAR)PriorityFloor <= 16)
+        Process->Win32kPriorityFloor = PriorityFloor;
+    return Previous;
+}
+
+VOID
+NTAPI
+PsQueryProcessAttributesByToken(
+    _In_opt_ PACCESS_TOKEN Token,
+    _Out_opt_ PBOOLEAN AttributeOne,
+    _Out_opt_ PBOOLEAN AttributeTwo)
+{
+    UNREFERENCED_PARAMETER(Token);
+    if (AttributeOne) *AttributeOne = FALSE;
+    if (AttributeTwo) *AttributeTwo = FALSE;
+}
+
+VOID NTAPI PsReferenceKernelStack(_Inout_ PKTHREAD Thread)
+{
+    UNREFERENCED_PARAMETER(Thread);
+    /* ReactOS never swaps a kernel stack out, so no pin is required. */
+}
+
+VOID NTAPI PsDereferenceKernelStack(_Inout_ PKTHREAD Thread)
+{
+    UNREFERENCED_PARAMETER(Thread);
 }
 
 /* EOF */

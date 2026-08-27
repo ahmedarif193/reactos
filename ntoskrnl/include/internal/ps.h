@@ -87,6 +87,8 @@ typedef struct _GET_SET_CTX_CONTEXT
     CONTEXT Context;
 } GET_SET_CTX_CONTEXT, *PGET_SET_CTX_CONTEXT;
 
+extern volatile LONG64 PspProcessSequenceNumber;
+
 //
 // ETHREAD/EPROCESS field compatibility macros for Vista+ (NTDDI_LONGHORN)
 //

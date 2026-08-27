@@ -1871,6 +1871,9 @@ typedef struct _EPROCESS
     volatile LONG ExecutableWriteExceptions;
 #endif
 #if defined(__REACTOS__)
+    PVOID DxgProcess;
+    ULONGLONG SequenceNumber;
+    CHAR Win32kPriorityFloor;
     PROCESS_ENERGY_VALUES EnergyValues;
 #endif
 } EPROCESS;

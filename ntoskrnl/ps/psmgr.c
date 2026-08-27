@@ -467,6 +467,8 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Setup the locks */
     PsIdleProcess->ProcessLock.Value = 0;
     ExInitializeRundownProtection(&PsIdleProcess->RundownProtect);
+    PsIdleProcess->SequenceNumber =
+        (ULONGLONG)InterlockedIncrement64(&PspProcessSequenceNumber);
 
     /* Initialize the thread list */
     InitializeListHead(&PsIdleProcess->ThreadListHead);
