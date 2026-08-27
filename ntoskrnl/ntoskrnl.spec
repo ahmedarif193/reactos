@@ -3045,7 +3045,7 @@
 @ stub -arch=arm64 RtlGetEnabledExtendedAndSupervisorFeatures
 @ stdcall -arch=arm64 RtlGetEnabledExtendedFeatures(int64)
 @ stub -arch=arm64 RtlGetExtendedContextLength
-@ stub -arch=arm64 RtlGetIntegerAtom
+@ stdcall -arch=i386,x86_64,arm64 RtlGetIntegerAtom(wstr ptr)
 @ stub -arch=arm64 RtlGetLastRange
 @ stdcall -arch=i386,x86_64,arm64 RtlGetMultiTimePrecise(ptr long ptr)
 @ stub -arch=arm64 RtlGetNonVolatileToken
