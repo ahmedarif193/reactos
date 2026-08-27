@@ -1,11 +1,11 @@
-# WDDM D3DKMT test surface: pin struct layouts to WDDM 3.2 (0x11007, the header
+# WDDM D3DKMT test surface: pin struct layouts to WDDM 3.2 (0x11008, the header
 # maximum) so the selected WDDM 2.x/3.x structure surface is visible -- paging
 # queues & GPU virtual addressing (2.0), HW queues (2.2), EnumAdapters3 (2.7),
 # etc. -- and so tests can compare the visible Windows 11-era surface. Entry
 # points are still resolved dynamically via GetProcAddress, so the same binary
 # degrades gracefully on hosts (e.g. WDDM 2.0 ReactOS) that lack newer exports.
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
-add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11007)
+add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11008)
 
 # Keep the ABI-freeze test on the in-tree UMD implementation ceiling while
 # separately telling runtime-load tests which lower version this image must
