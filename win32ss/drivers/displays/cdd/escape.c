@@ -14,6 +14,8 @@
  *   CDD_ESCAPE_COMPOSITION_SYNC - LONG in: non-zero = begin a composed frame,
  *       zero = end it. Either way cdd presents the current frame and acks so
  *       the compositor can pace itself. Returns 1.
+ *   CDD_ESCAPE_PRESENT_BATCH - LONG in: non-zero = begin a classic-GDI paint
+ *       batch, zero = end it. The outermost END publishes accumulated damage.
  *
  * Unknown escapes return 0 ("not supported").
  */
@@ -137,7 +139,8 @@ RcddEscape(
       if (RequestedEscape == CDD_ESCAPE_SUPPRESS_CURSOR ||
           RequestedEscape == CDD_ESCAPE_COMPOSITION_SYNC ||
           RequestedEscape == CDD_ESCAPE_REGISTER_VBLANK ||
-          RequestedEscape == CDD_ESCAPE_PRESENT_STATS)
+          RequestedEscape == CDD_ESCAPE_PRESENT_STATS ||
+          RequestedEscape == CDD_ESCAPE_PRESENT_BATCH)
       {
          return 1;
       }
@@ -304,6 +307,25 @@ RcddEscape(
       }
 
       ppdev->CompositionActive = (value != 0);
+      return 1;
+   }
+
+   if (iEsc == CDD_ESCAPE_PRESENT_BATCH)
+   {
+      ULONG Ret;
+
+      if (pvIn == NULL || cjIn < sizeof(LONG))
+         return 0;
+
+      value = *(const LONG *)pvIn;
+      if (EngDeviceIoControl(ppdev->hDriver,
+                             value != 0
+                                 ? IOCTL_VIDEO_DXGK_PRESENT_BATCH_BEGIN
+                                 : IOCTL_VIDEO_DXGK_PRESENT_BATCH_END,
+                             NULL, 0, NULL, 0, &Ret))
+      {
+         return 0;
+      }
       return 1;
    }
 

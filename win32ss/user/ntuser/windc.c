@@ -67,6 +67,25 @@ DceGetDceFromDC(HDC hdc)
     return NULL;
 }
 
+/* SetPixelFormat turns a normal cached window DC into a persistent OpenGL DC.
+ * Close the exact present/composition token recorded at GetDC time before the
+ * ICD starts retaining the handle; ReleaseDC may otherwise be delayed until
+ * context teardown. The caller holds the USER lock. */
+VOID
+FASTCALL
+DceReleaseCompositionDc(HDC hdc)
+{
+    DCE *dce = DceGetDceFromDC(hdc);
+    UCHAR State;
+
+    if (dce == NULL || dce->CompositionDcState == COMPOSITION_DC_NONE)
+        return;
+
+    State = dce->CompositionDcState;
+    dce->CompositionDcState = COMPOSITION_DC_NONE;
+    IntCompositionDcRelease(dce->pwndOrg, State);
+}
+
 static
 PREGION FASTCALL
 DceGetVisRgn(PWND Window, ULONG Flags, HWND hWndChild, ULONG CFlags)
@@ -106,6 +125,7 @@ DceAllocDCE(PWND Window OPTIONAL, DCE_TYPE Type)
   pDce->hrgnClipPublic = NULL;
   pDce->hrgnSavedVis = NULL;
   pDce->ppiOwner = NULL;
+  pDce->CompositionDcState = COMPOSITION_DC_NONE;
 
   InsertTailList(&LEDce, &pDce->List);
 
@@ -315,7 +335,12 @@ DceReleaseDC(DCE* dce, BOOL EndPaint)
     * their SwapBuffers output in the backing. */
    if (dce->DCXFlags & DCX_CACHE)
    {
-      IntCompositionDcRelease(dce->pwndOrg);
+      if (dce->CompositionDcState != COMPOSITION_DC_NONE)
+      {
+         UCHAR State = dce->CompositionDcState;
+         dce->CompositionDcState = COMPOSITION_DC_NONE;
+         IntCompositionDcRelease(dce->pwndOrg, State);
+      }
       if (!IntCompositionIsGLWindow(dce->pwndOrg))
          IntCompositionUnredirectDC(dce->hDC);
    }
@@ -578,6 +603,7 @@ UserGetDCEx(PWND Wnd OPTIONAL, HANDLE ClipRegion, ULONG Flags)
    }
 
    Dce->DCXFlags = Flags | DCX_DCEBUSY;
+   Dce->CompositionDcState = COMPOSITION_DC_NONE;
 
    /*
     * Bump it up! This prevents the random errors in wine dce tests and with
@@ -641,7 +667,7 @@ UserGetDCEx(PWND Wnd OPTIONAL, HANDLE ClipRegion, ULONG Flags)
     * ancestor's backing surface (no-op otherwise). */
    IntCompositionRedirectDC(Wnd, Dce->hDC, Dce->DCXFlags, Dce->hrgnClip, bUpdateVisRgn);
    if (Dce->DCXFlags & DCX_CACHE)
-      IntCompositionDcAcquire(Wnd);
+      Dce->CompositionDcState = IntCompositionDcAcquire(Wnd);
 
    if (Dce->DCXFlags & DCX_CACHE)
    {
@@ -679,6 +705,13 @@ DceFreeDCE(PDCE pdce, BOOLEAN Force)
 
   ASSERT(pdce != NULL);
   if (NULL == pdce) return;
+
+  if (pdce->CompositionDcState != COMPOSITION_DC_NONE)
+  {
+     UCHAR State = pdce->CompositionDcState;
+     pdce->CompositionDcState = COMPOSITION_DC_NONE;
+     IntCompositionDcRelease(pdce->pwndOrg, State);
+  }
 
   pdce->DCXFlags |= DCX_INDESTROY;
 
