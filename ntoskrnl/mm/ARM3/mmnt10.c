@@ -197,6 +197,42 @@ MiCopyFromSystemVirtual(
 
 static
 SIZE_T
+MiCopyFromProcessVirtual(
+    _Out_writes_bytes_(NumberOfBytes) PVOID TargetAddress,
+    _In_ PVOID SourceAddress,
+    _In_ SIZE_T NumberOfBytes)
+{
+    PUCHAR Target = TargetAddress;
+    PUCHAR Source = SourceAddress;
+    SIZE_T BytesCopied = 0;
+    SIZE_T ChunkSize;
+
+    while (BytesCopied < NumberOfBytes)
+    {
+        ChunkSize = PAGE_SIZE - BYTE_OFFSET(Source);
+        if (ChunkSize > NumberOfBytes - BytesCopied)
+            ChunkSize = NumberOfBytes - BytesCopied;
+
+        _SEH2_TRY
+        {
+            RtlCopyMemory(Target, Source, ChunkSize);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return BytesCopied);
+        }
+        _SEH2_END;
+
+        BytesCopied += ChunkSize;
+        Target += ChunkSize;
+        Source += ChunkSize;
+    }
+
+    return BytesCopied;
+}
+
+static
+SIZE_T
 MiCopyFromPhysical(
     _Out_writes_bytes_(NumberOfBytes) PVOID TargetAddress,
     _In_ PHYSICAL_ADDRESS SourceAddress,
@@ -450,20 +486,20 @@ MmCopyMemory(IN PVOID TargetAddress,
 
     if (Flags & MM_COPY_MEMORY_VIRTUAL)
     {
-        //
-        // The virtual source must be entirely in system space; copying
-        // from user space is not supported by this interface
-        //
-        if (((ULONG_PTR)SourceAddress.VirtualAddress < (ULONG_PTR)MmSystemRangeStart) ||
-            (((ULONG_PTR)SourceAddress.VirtualAddress + NumberOfBytes) <
-             (ULONG_PTR)SourceAddress.VirtualAddress))
+        if (((ULONG_PTR)SourceAddress.VirtualAddress + NumberOfBytes) <
+            (ULONG_PTR)SourceAddress.VirtualAddress)
         {
             return STATUS_INVALID_ADDRESS;
         }
 
-        BytesCopied = MiCopyFromSystemVirtual(TargetAddress,
-                                              SourceAddress.VirtualAddress,
-                                              NumberOfBytes);
+        if ((ULONG_PTR)SourceAddress.VirtualAddress >= (ULONG_PTR)MmSystemRangeStart)
+        {
+            BytesCopied = MiCopyFromSystemVirtual(TargetAddress, SourceAddress.VirtualAddress, NumberOfBytes);
+        }
+        else
+        {
+            BytesCopied = MiCopyFromProcessVirtual(TargetAddress, SourceAddress.VirtualAddress, NumberOfBytes);
+        }
     }
     else
     {

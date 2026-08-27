@@ -2700,7 +2700,8 @@
 @ stub -arch=arm64 MmAreMdlPagesCached
 @ stub -arch=arm64 MmChangeImageProtection
 @ stub -arch=arm64 MmConfigureGraphicsPtes
-@ stdcall -arch=arm64 MmCopyMemory(ptr long long long long ptr)
+@ stdcall -arch=i386 MmCopyMemory(ptr int64 long long ptr)
+@ stdcall -arch=x86_64,arm64 MmCopyMemory(ptr int64 int64 long ptr)
 @ stub -arch=arm64 MmForceSectionClosedEx
 @ stub -arch=arm64 MmFreeMemoryRanges
 @ stub -arch=arm64 MmFreePagesFromMdlEx
