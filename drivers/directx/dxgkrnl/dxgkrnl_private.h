@@ -73,6 +73,7 @@
 #include "process_device_core.h"
 #include "process_lifetime_core.h"
 #include "caps_core.h"
+#include "postdisplay_core.h"
 
 /* ---- WDDM DDI interface version selection ------------------------------ */
 /*
@@ -601,6 +602,17 @@ struct _DXGKRNL_ADAPTER
     ULONG                       AdapterStartGeneration;
     ULONG                       AdapterStartCompletedGeneration;
     NTSTATUS                    AdapterStartStatus;
+
+    /*
+     * A real miniport can stop BasicDisplay while acquiring the firmware
+     * framebuffer, then fail later in StartDevice. Retain the stopped
+     * fallback FDO until the claimant either commits or rolls back that
+     * handoff. The referenced device object pins PostDisplayFallbackAdapter.
+     */
+    DXGK_POST_DISPLAY_HANDOFF_CORE PostDisplayHandoffCore;
+    PDXGKRNL_ADAPTER           PostDisplayFallbackAdapter;
+    PDEVICE_OBJECT             PostDisplayFallbackDeviceObject;
+    BOOLEAN                    PostDisplayFallbackRemoveRundownHeld;
 
     /* Serializes concurrent PnP and boot-display handover stop requests. */
     KEVENT                      AdapterStopCompletedEvent;
