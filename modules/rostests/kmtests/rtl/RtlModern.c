@@ -70,6 +70,43 @@ VOID NTAPI RtlCopyBitMapEx(_In_ PRTL_BITMAP_EX Source, _Inout_ PRTL_BITMAP_EX De
 VOID NTAPI RtlIntersectBitMapsEx(_Inout_ PRTL_BITMAP_EX Destination, _In_ PRTL_BITMAP_EX Source);
 #endif
 
+#if defined(_M_AMD64)
+typedef double (*PTEST_SQRT)(_In_ double Value);
+
+static
+VOID
+TestKernelSqrtExport(VOID)
+{
+    union
+    {
+        double Value;
+        ULONGLONG Bits;
+    } Result;
+    UNICODE_STRING ExportName;
+    PTEST_SQRT TestSqrt;
+    KFLOATING_SAVE FloatingSave;
+    NTSTATUS Status;
+
+    RtlInitUnicodeString(&ExportName, L"sqrt");
+    TestSqrt = (PTEST_SQRT)MmGetSystemRoutineAddress(&ExportName);
+    trace("sqrt resolved to %p\n", TestSqrt);
+    ok(TestSqrt != NULL, "sqrt is not exported by ntoskrnl\n");
+    if (TestSqrt == NULL)
+        return;
+
+    Status = KeSaveFloatingPointState(&FloatingSave);
+    trace("KeSaveFloatingPointState returned 0x%08lx\n", Status);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    Result.Value = TestSqrt(4.0);
+    KeRestoreFloatingPointState(&FloatingSave);
+    trace("sqrt(4) returned bits 0x%I64x\n", Result.Bits);
+    ok_eq_ulonglong(Result.Bits, 0x4000000000000000ULL);
+}
+#endif
+
 #if defined(_M_AMD64) || defined(_M_ARM64)
 static
 PVOID
@@ -697,5 +734,8 @@ START_TEST(ExWddmRtl)
     TestModernKernelExports();
 #if defined(_M_AMD64) || defined(_M_ARM64)
     TestKernelCrtStringExports();
+#endif
+#if defined(_M_AMD64)
+    TestKernelSqrtExport();
 #endif
 }

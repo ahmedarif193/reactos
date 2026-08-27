@@ -2008,6 +2008,7 @@
 @ cdecl -arch=x86_64,arm64 wcsncat_s(ptr int64 ptr int64)
 @ cdecl -arch=x86_64,arm64 wcsncpy_s(ptr int64 ptr int64)
 @ cdecl -arch=x86_64,arm64 wcsnlen(ptr int64)
+@ cdecl -arch=x86_64 sqrt(double)
 @ cdecl -arch=arm64 wcstoul()
 # --- Data exports (already defined in the kernel) ---
 @ extern -arch=arm64 NtBuildLab
