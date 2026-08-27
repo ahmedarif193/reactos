@@ -119,6 +119,8 @@ static VOID DxgkpContextOrderPublishMarker(_Inout_ PDXGK_CONTEXT_ORDER_OPERATION
     ASSERT(Marker->Context == Context && Marker->Sequence == 0 && Sequence != 0 && IsListEmpty(&Marker->ContextEntry));
     Marker->Sequence = Sequence;
     KeAcquireSpinLock(&Context->StreamLock, &OldIrql);
+    if (Operation->Type == DXGK_CONTEXT_ORDER_TYPE_WAIT)
+        InterlockedIncrement(&Context->StreamWaitOperationCount);
     InsertTailList(&Context->StreamOperationList, &Marker->ContextEntry);
     KeReleaseSpinLock(&Context->StreamLock, OldIrql);
 }
@@ -187,7 +189,8 @@ VOID DxgkContextOrderWakeDevice(_Inout_ PDXGKRNL_DEVICE Device)
     {
         PDXGKRNL_CONTEXT Context = CONTAINING_RECORD(Entry, DXGKRNL_CONTEXT, ContextListEntry);
 
-        DxgkContextOrderScheduleReferenced(Context);
+        if (InterlockedCompareExchange(&Context->StreamWaitOperationCount, 0, 0) != 0)
+            DxgkContextOrderScheduleReferenced(Context);
     }
     ExReleaseFastMutex(&Device->DeviceMutex);
 }
@@ -817,6 +820,12 @@ DxgkContextOrderRetire(
             Operation = Candidate->Operation;
             RemoveEntryList(&Marker->ContextEntry);
             InitializeListHead(&Marker->ContextEntry);
+            if (Operation->Type == DXGK_CONTEXT_ORDER_TYPE_WAIT)
+            {
+                LONG WaitCount = InterlockedDecrement(&Context->StreamWaitOperationCount);
+
+                ASSERT(WaitCount >= 0);
+            }
             break;
         }
     }
