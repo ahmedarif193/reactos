@@ -66,6 +66,9 @@ target_compile_definitions(glmark2-png PRIVATE
     _WIN32
     _WINDOWS
     __USE_CRTIMP)
+if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+    target_compile_options(glmark2-png PRIVATE -Wno-self-assign)
+endif()
 target_link_libraries(glmark2-png glmark2-zlib)
 
 set(GLMARK2_SOURCES
