@@ -47,7 +47,7 @@
 #define RPI5VC4_ESCAPE_READ_TEXTURE 0x52505444 /* "RPTD" */
 #define RPI5VC4_ESCAPE_WAIT_VBLANK 0x52505642 /* "RPVB" */
 
-#define RPI5VC4_XPDM_ABI_VERSION 10
+#define RPI5VC4_XPDM_ABI_VERSION 12
 
 #define RPI5VC4_PLATFORM_MAX_THERMAL_ZONES 8u
 #define RPI5VC4_PLATFORM_MAX_FANS          8u
@@ -335,9 +335,11 @@ typedef struct _RPI5VC4_V3D_TRIANGLE_RESULT
 #define RPI5VC4_V3D_BATCH_FLAG_IDEAS                    (1u << 22)
 #define RPI5VC4_V3D_BATCH_FLAG_JELLYFISH                (1u << 23)
 #define RPI5VC4_V3D_BATCH_FLAG_RETAIN_DEPTH_TEXTURE     (1u << 24)
+#define RPI5VC4_V3D_BATCH_FLAG_OCCLUSION_QUERY           (1u << 25)
 #define RPI5VC4_V3D_NORMAL_MATRIX_WORDS 9u
 #define RPI5VC4_V3D_HEIGHT_MAX_VERTICES 4096u
 #define RPI5VC4_V3D_JELLYFISH_MAX_VERTICES 65536u
+#define RPI5VC4_V3D_JELLYFISH_MAX_INDICES 65536u
 #define RPI5VC4_V3D_BATCH_MAX_DRAWS 8u
 #define RPI5VC4_V3D_IDEAS_UNIFORM_WORDS 16u
 #define RPI5VC4_V3D_IDEAS_MODE_COLOR  0u
@@ -352,6 +354,9 @@ typedef struct _RPI5VC4_V3D_TRIANGLE_RESULT
 #define RPI5VC4_V3D_SHADOW_MODE_GROUND       0u
 #define RPI5VC4_V3D_SHADOW_MODE_COLOR        1u
 #define RPI5VC4_V3D_SHADOW_MODE_COUNT        2u
+
+/* FirstVertex addresses the packed 16-bit index tail for indexed draws. */
+#define RPI5VC4_V3D_BATCH_DRAW_FLAG_INDEXED_16 (1u << 31)
 
 typedef struct _RPI5VC4_V3D_BATCH_DRAW
 {
@@ -422,7 +427,10 @@ typedef struct _RPI5VC4_V3D_BATCH_REQUEST
     ULONG DrawCount;
     RPI5VC4_V3D_BATCH_DRAW Draws[RPI5VC4_V3D_BATCH_MAX_DRAWS];
     ULONG ShaderUniforms[RPI5VC4_V3D_IDEAS_UNIFORM_WORDS];
-    /* Height-map UVs, when present, immediately follow VertexCount vertices. */
+    /*
+     * Height-map or Jellyfish auxiliary coordinates immediately follow the
+     * vertices. Indexed Jellyfish draws append their packed 16-bit indices.
+     */
     RPI5VC4_V3D_VERTEX Vertices[1];
 } RPI5VC4_V3D_BATCH_REQUEST, *PRPI5VC4_V3D_BATCH_REQUEST;
 
@@ -437,6 +445,7 @@ typedef struct _RPI5VC4_V3D_BATCH_RESULT
     ULONG Stride;
     ULONG ClearColor;
     ULONG PixelBytes;
+    ULONG CoveredPixelCount;
     ULONG VertexCount;
     ULONG DestinationX;
     ULONG DestinationY;
