@@ -2532,6 +2532,9 @@ Rpi5V3dBuildPrimitiveData(
     ULONG XyScaleY = Rpi5V3dUnsignedFloatWord(Height << 5);
     ULONG Index;
 
+    if (FlipY)
+        XyScaleY ^= 0x80000000u;
+
     RtlZeroMemory(Data, RPI5VC4_V3D_PAGE_SIZE);
     RtlMoveMemory(Data + RPI5VC4_V3D_BIN_SHADER_OFFSET,
                         (PVOID)Rpi5V3dBinShader,
@@ -2641,15 +2644,6 @@ Rpi5V3dBuildPrimitiveData(
                         RPI5VC4_V3D_VERTEX_BUFFER_OFFSET,
                         (PVOID)Vertices,
                         VertexCount * sizeof(*Vertices));
-    if (FlipY)
-    {
-        PRPI5VC4_V3D_VERTEX VertexBuffer =
-            (PRPI5VC4_V3D_VERTEX)((PUCHAR)DeviceExtension->V3dWorkVa +
-                                  RPI5VC4_V3D_VERTEX_BUFFER_OFFSET);
-
-        for (Index = 0; Index < VertexCount; Index++)
-            VertexBuffer[Index].Position[1] ^= 0x80000000u;
-    }
 }
 
 static VOID
@@ -3260,6 +3254,9 @@ Rpi5V3dBuildSixVaryingPrimitiveData(
     ULONG XyScaleY = Rpi5V3dUnsignedFloatWord(Height << 5);
     ULONG Index;
 
+    if (FlipY)
+        XyScaleY ^= 0x80000000u;
+
     if (Shadow)
     {
         FragmentShaderOffset = RPI5VC4_V3D_TEXTURE_FRAGMENT_SHADER_OFFSET;
@@ -3537,15 +3534,6 @@ Rpi5V3dBuildSixVaryingPrimitiveData(
                         VertexBufferOffset,
                         (PVOID)Vertices,
                         VertexCount * sizeof(*Vertices));
-    if (FlipY)
-    {
-        PRPI5VC4_V3D_VERTEX VertexBuffer =
-            (PRPI5VC4_V3D_VERTEX)((PUCHAR)DeviceExtension->V3dWorkVa +
-                                  VertexBufferOffset);
-
-        for (Index = 0; Index < VertexCount; Index++)
-            VertexBuffer[Index].Position[1] ^= 0x80000000u;
-    }
 }
 
 static VOID
@@ -3621,6 +3609,9 @@ Rpi5V3dBuildIdeasPrimitiveData(
     ULONG XyScaleY = Rpi5V3dUnsignedFloatWord(Height << 5);
     ULONG Mode;
     ULONG Index;
+
+    if (FlipY)
+        XyScaleY ^= 0x80000000u;
 
     RtlZeroMemory(Data, RPI5VC4_V3D_PAGE_SIZE);
     RtlMoveMemory(Data + RPI5VC4_V3D_IDEAS_BIN_SHADER_OFFSET,
@@ -3769,15 +3760,6 @@ Rpi5V3dBuildIdeasPrimitiveData(
                         RPI5VC4_V3D_VERTEX_BUFFER_OFFSET,
                         (PVOID)Vertices,
                         VertexCount * sizeof(*Vertices));
-    if (FlipY)
-    {
-        PRPI5VC4_V3D_VERTEX VertexBuffer =
-            (PRPI5VC4_V3D_VERTEX)((PUCHAR)DeviceExtension->V3dWorkVa +
-                                  RPI5VC4_V3D_VERTEX_BUFFER_OFFSET);
-
-        for (Index = 0; Index < VertexCount; Index++)
-            VertexBuffer[Index].Position[1] ^= 0x80000000u;
-    }
 }
 
 static VOID
@@ -3816,6 +3798,9 @@ Rpi5V3dBuildJellyfishPrimitiveData(
     ULONG XyScaleY = Rpi5V3dUnsignedFloatWord(Height << 5);
     ULONG Mode;
     ULONG Index;
+
+    if (FlipY)
+        XyScaleY ^= 0x80000000u;
 
     RtlZeroMemory(Data, RPI5VC4_V3D_PAGE_SIZE);
     RtlMoveMemory(Data + RPI5VC4_V3D_JELLYFISH_BIN_SHADER_OFFSET,
@@ -3979,15 +3964,6 @@ Rpi5V3dBuildJellyfishPrimitiveData(
                         VertexCount * sizeof(*Vertices),
                         (PVOID)Auxiliary,
                         VertexCount * sizeof(*Auxiliary));
-    if (FlipY)
-    {
-        PRPI5VC4_V3D_VERTEX VertexBuffer =
-            (PRPI5VC4_V3D_VERTEX)((PUCHAR)DeviceExtension->V3dWorkVa +
-                                  RPI5VC4_V3D_VERTEX_BUFFER_OFFSET);
-
-        for (Index = 0; Index < VertexCount; Index++)
-            VertexBuffer[Index].Position[1] ^= 0x80000000u;
-    }
 }
 
 static VOID
@@ -4027,6 +4003,9 @@ Rpi5V3dBuildHeightPrimitiveData(
     ULONG XyScaleX = Rpi5V3dUnsignedFloatWord(Width << 5);
     ULONG XyScaleY = Rpi5V3dUnsignedFloatWord(Height << 5);
     ULONG Index;
+
+    if (FlipY)
+        XyScaleY ^= 0x80000000u;
 
     RtlZeroMemory(Data, RPI5VC4_V3D_PAGE_SIZE);
     RtlMoveMemory(Data + RPI5VC4_V3D_HEIGHT_BIN_SHADER_OFFSET,
@@ -4152,15 +4131,6 @@ Rpi5V3dBuildHeightPrimitiveData(
                         VertexCount * sizeof(*Vertices),
                         (PVOID)HeightTexCoords,
                         VertexCount * sizeof(*HeightTexCoords));
-    if (FlipY)
-    {
-        PRPI5VC4_V3D_VERTEX VertexBuffer =
-            (PRPI5VC4_V3D_VERTEX)((PUCHAR)DeviceExtension->V3dWorkVa +
-                                  RPI5VC4_V3D_VERTEX_BUFFER_OFFSET);
-
-        for (Index = 0; Index < VertexCount; Index++)
-            VertexBuffer[Index].Position[1] ^= 0x80000000u;
-    }
 }
 
 static VOID
