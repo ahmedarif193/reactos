@@ -27,6 +27,7 @@
     (BackBuffer + (ULONG_PTR)(y) * VidpDisplayWidth + (x))
 
 static ULONG_PTR FrameBufferStart = 0;
+static ULONG_PTR PhysicalFrameBufferStart = 0;
 static ULONG FrameBufferSize;
 static ULONG ScreenWidth, ScreenHeight, BytesPerScanLine;
 static UCHAR BytesPerPixel;
@@ -36,6 +37,18 @@ static SIZE_T BackBufferSize;
 static RGBQUAD CachedPalette[BV_MAX_COLORS];
 static UCHAR CachedBlendPalette[BV_MAX_COLORS][BV_MAX_COLORS][MAXUCHAR + 1];
 static BOOT_FONT_RENDERER BootVidFont;
+
+NTSTATUS
+NTAPI
+VidSetVirtualFrameBuffer(
+    _In_opt_ PVOID VirtualFrameBuffer)
+{
+    InterlockedExchangePointer((PVOID volatile *)&FrameBufferStart,
+                               VirtualFrameBuffer != NULL ?
+                                   VirtualFrameBuffer :
+                                   (PVOID)PhysicalFrameBufferStart);
+    return STATUS_SUCCESS;
+}
 
 
 /* PRIVATE FUNCTIONS *********************************************************/
@@ -414,6 +427,7 @@ VidInitialize(
         /* The base is the translated address, no need to map */
         FrameBufferStart = (ULONG_PTR)TranslatedAddress.QuadPart;
     }
+    PhysicalFrameBufferStart = FrameBufferStart;
 
 
     /*

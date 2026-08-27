@@ -19,6 +19,14 @@
 static ULONG_PTR PegcControl = 0;
 ULONG_PTR FrameBuffer = 0;
 
+NTSTATUS
+NTAPI
+VidSetVirtualFrameBuffer(
+    _In_opt_ PVOID VirtualFrameBuffer)
+{
+    return VirtualFrameBuffer == NULL ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
+}
+
 /* PRIVATE FUNCTIONS **********************************************************/
 
 static BOOLEAN
