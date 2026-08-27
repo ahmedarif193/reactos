@@ -23,7 +23,7 @@ add_definitions(-DNTDDI_VERSION=0x06010000)    # NTDDI_WIN7
 # The global default selector gates out newer ABI fields. Compile the audited
 # declaration surface; runtime capability claims remain separately gated.
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
-add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11007)
+add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11008)
 
 list(APPEND SOURCE
     softgpu.c

@@ -13,7 +13,7 @@
 
 if(REACTOS_USE_WDDM)
     remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
-    add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11007)
+    add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11008)
     add_definitions(
         -DREACTOS_WDDM_TARGET_LEVEL=${REACTOS_WDDM_TARGET_LEVEL})
 
