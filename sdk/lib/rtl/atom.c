@@ -175,6 +175,7 @@ RtlCreateAtomTable(
 
     /* initialize atom table */
     Table->Signature = 'motA';
+    Table->Flags = 0;
     Table->NumberOfBuckets = TableSize;
 
     Status = RtlpInitAtomTableLock(Table);
@@ -193,6 +194,24 @@ RtlCreateAtomTable(
 
     *AtomTable = Table;
     return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+RtlCreateAtomTableEx(
+    _In_ ULONG TableSize,
+    _In_ ULONG Flags,
+    _Inout_ PRTL_ATOM_TABLE *AtomTable)
+{
+    PRTL_ATOM_TABLE PreviousTable;
+    NTSTATUS Status;
+
+    PreviousTable = *AtomTable;
+    Status = RtlCreateAtomTable(TableSize, AtomTable);
+    if (NT_SUCCESS(Status) && (PreviousTable == NULL) && (*AtomTable != NULL))
+        (*AtomTable)->Flags = Flags;
+
+    return Status;
 }
 
 BOOLEAN
@@ -354,10 +373,13 @@ RtlEmptyAtomTable(
 /*
  * @implemented
  */
-NTSTATUS NTAPI
-RtlAddAtomToAtomTable(IN PRTL_ATOM_TABLE AtomTable,
-                      IN PWSTR AtomName,
-                      OUT PRTL_ATOM Atom)
+static
+NTSTATUS
+RtlpAddAtomToAtomTable(
+    _In_ PRTL_ATOM_TABLE AtomTable,
+    _In_ PWSTR AtomName,
+    _Out_opt_ PRTL_ATOM Atom,
+    _In_ ULONG Flags)
 {
     USHORT AtomValue;
     PRTL_ATOM_TABLE_ENTRY *HashLink;
@@ -427,7 +449,7 @@ RtlAddAtomToAtomTable(IN PRTL_ATOM_TABLE AtomTable,
             {
                 Entry->HashLink = NULL;
                 Entry->ReferenceCount = 1;
-                Entry->Flags = 0x0;
+                Entry->Flags = (UCHAR)(Flags & 2);
 
                 Entry->NameLength = (UCHAR)AtomNameLen;
                 RtlCopyMemory(Entry->Name,
@@ -465,6 +487,30 @@ end:
     RtlpUnlockAtomTable(AtomTable);
 
     return Status;
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+RtlAddAtomToAtomTable(
+    _In_ PRTL_ATOM_TABLE AtomTable,
+    _In_ PWSTR AtomName,
+    _Out_opt_ PRTL_ATOM Atom)
+{
+    return RtlpAddAtomToAtomTable(AtomTable, AtomName, Atom, 0);
+}
+
+NTSTATUS
+NTAPI
+RtlAddAtomToAtomTableEx(
+    _In_ PRTL_ATOM_TABLE AtomTable,
+    _In_ PWSTR AtomName,
+    _Out_opt_ PRTL_ATOM Atom,
+    _In_ ULONG Flags)
+{
+    return RtlpAddAtomToAtomTable(AtomTable, AtomName, Atom, Flags);
 }
 
 
@@ -698,7 +744,7 @@ RtlQueryAtomInAtomTable(
 
         if (PinCount != NULL)
         {
-            *PinCount = ((Entry->Flags & RTL_ATOM_IS_PINNED) != 0);
+            *PinCount = Entry->Flags;
         }
 
         if (NULL != NameLength)
@@ -796,4 +842,3 @@ RtlQueryAtomListInAtomTable(
 
     return Status;
 }
-

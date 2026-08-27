@@ -1758,6 +1758,7 @@ typedef struct _RTL_ATOM_TABLE
         PHANDLE_TABLE ExHandleTable;
 #endif
     };
+    ULONG Flags;
     ULONG NumberOfBuckets;
     PRTL_ATOM_TABLE_ENTRY Buckets[1];
 } RTL_ATOM_TABLE, *PRTL_ATOM_TABLE;
