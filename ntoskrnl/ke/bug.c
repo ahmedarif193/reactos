@@ -2284,4 +2284,100 @@ KeEnterKernelDebugger(VOID)
     KiBugCheckDebugBreak(DBG_STATUS_FATAL);
 }
 
+NTSTATUS
+NTAPI
+KeInitializeTriageDumpDataArray(
+    _Out_writes_bytes_(Size) PKTRIAGE_DUMP_DATA_ARRAY TriageDumpDataArray,
+    _In_ ULONG Size)
+{
+    ULONG MinimumSize = FIELD_OFFSET(KTRIAGE_DUMP_DATA_ARRAY, Blocks) +
+                        sizeof(KADDRESS_RANGE);
+
+    if (!TriageDumpDataArray)
+        return STATUS_INVALID_PARAMETER;
+    if (Size < MinimumSize)
+        return STATUS_BUFFER_TOO_SMALL;
+
+    RtlZeroMemory(TriageDumpDataArray,
+                  FIELD_OFFSET(KTRIAGE_DUMP_DATA_ARRAY, Blocks));
+    InitializeListHead(&TriageDumpDataArray->List);
+    TriageDumpDataArray->NumBlocksTotal =
+        (Size - FIELD_OFFSET(KTRIAGE_DUMP_DATA_ARRAY, Blocks)) /
+        sizeof(KADDRESS_RANGE);
+    TriageDumpDataArray->MaxDataSize =
+        KE_MAX_TRIAGE_DUMP_DATA_MEMORY_SIZE;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+KeAddTriageDumpDataBlock(
+    _Inout_ PKTRIAGE_DUMP_DATA_ARRAY TriageDumpDataArray,
+    _In_ PVOID Address,
+    _In_ SIZE_T Size)
+{
+    ULONG Index;
+    ULONG_PTR Start, End;
+    SIZE_T AddedSize;
+
+    if (!TriageDumpDataArray || !Address || !Size ||
+        Size > MAXULONG || (ULONG_PTR)Address + Size < (ULONG_PTR)Address)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Start = (ULONG_PTR)Address;
+    End = Start + Size;
+
+    /* Native coalesces overlapping ranges but preserves adjacent ranges. */
+    for (Index = 0; Index < TriageDumpDataArray->NumBlocksUsed; Index++)
+    {
+        ULONG_PTR BlockStart =
+            (ULONG_PTR)TriageDumpDataArray->Blocks[Index].Address;
+        ULONG_PTR BlockEnd = BlockStart +
+            TriageDumpDataArray->Blocks[Index].Size;
+
+        if (Start >= BlockEnd || End <= BlockStart)
+            continue;
+        if (Start >= BlockStart && End <= BlockEnd)
+            return STATUS_SUCCESS;
+
+        if (BlockStart < Start)
+            Start = BlockStart;
+        if (BlockEnd > End)
+            End = BlockEnd;
+
+        TriageDumpDataArray->DataSize -=
+            (ULONG)TriageDumpDataArray->Blocks[Index].Size;
+        if (Index + 1 < TriageDumpDataArray->NumBlocksUsed)
+        {
+            RtlMoveMemory(&TriageDumpDataArray->Blocks[Index],
+                          &TriageDumpDataArray->Blocks[Index + 1],
+                          (TriageDumpDataArray->NumBlocksUsed - Index - 1) *
+                          sizeof(KADDRESS_RANGE));
+        }
+        TriageDumpDataArray->NumBlocksUsed--;
+        Index--;
+    }
+
+    if (TriageDumpDataArray->NumBlocksUsed ==
+        TriageDumpDataArray->NumBlocksTotal)
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    AddedSize = End - Start;
+    if (AddedSize > TriageDumpDataArray->MaxDataSize -
+                    TriageDumpDataArray->DataSize)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Index = TriageDumpDataArray->NumBlocksUsed++;
+    TriageDumpDataArray->Blocks[Index].Address = (PVOID)Start;
+    TriageDumpDataArray->Blocks[Index].Size = AddedSize;
+    TriageDumpDataArray->DataSize += (ULONG)AddedSize;
+    return STATUS_SUCCESS;
+}
+
 /* EOF */
