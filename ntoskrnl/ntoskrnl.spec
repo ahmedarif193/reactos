@@ -2162,10 +2162,10 @@
 @ stdcall -arch=arm64 ExAllocateFromNPagedLookasideList(ptr) ExiAllocateFromNPagedLookasideList
 @ stdcall -arch=x86_64,arm64 ExAllocatePool2(int64 int64 long)
 @ stdcall -arch=arm64 ExAllocatePool3(int64 long long ptr long)
-@ stdcall -version=0x603+ -arch=arm64 ExAllocateTimer(ptr ptr long)
+@ stdcall -version=0x603+ -arch=i386,x86_64,arm64 ExAllocateTimer(ptr ptr long)
 @ fastcall -arch=arm64 ExBlockOnAddressPushLock(ptr ptr ptr int64 ptr)
 @ stub -arch=arm64 ExCancelDpcEventWait
-@ stdcall -version=0x603+ -arch=arm64 ExCancelTimer(ptr ptr)
+@ stdcall -version=0x603+ -arch=i386,x86_64,arm64 ExCancelTimer(ptr ptr)
 @ stub -arch=arm64 ExCleanupAutoExpandPushLock
 @ stub -arch=arm64 ExCleanupRundownProtectionCacheAware
 @ stub -arch=arm64 ExConvertFastResourceExclusiveToShared
@@ -2174,7 +2174,7 @@
 @ stub -arch=arm64 ExCreatePool
 @ stub -arch=arm64 ExDeleteDpcEvent
 @ stdcall -arch=i386,x86_64,arm64 ExDeleteFastResource(ptr) ExpDeleteFastResource
-@ stdcall -version=0x603+ -arch=x86_64,arm64 ExDeleteTimer(ptr long long ptr)
+@ stdcall -version=0x603+ -arch=i386,x86_64,arm64 ExDeleteTimer(ptr long long ptr)
 @ stub -arch=arm64 ExDestroyPool
 @ stub -arch=arm64 ExDisownFastResource
 @ stub -arch=arm64 ExEnterPriorityRegionAndAcquireResourceExclusive
@@ -2239,7 +2239,7 @@
 @ stub -arch=arm64 ExSetFirmwareEnvironmentVariable
 @ stub -arch=arm64 ExSetLicenseTamperState
 @ stub -arch=arm64 ExSetResourceOwnerPointerEx
-@ stdcall -version=0x603+ -arch=arm64 ExSetTimer(ptr int64 int64 ptr)
+@ stdcall -version=0x603+ -arch=i386,x86_64,arm64 ExSetTimer(ptr int64 int64 ptr)
 @ stdcall -version=0x603+ -arch=arm64 ExShareAddressSpaceWithDevice(ptr ptr)
 @ stub -arch=arm64 ExShareSystemAddressSpaceWithDevice
 @ stub -arch=arm64 ExSizeOfAutoExpandPushLock
