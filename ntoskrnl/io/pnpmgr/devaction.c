@@ -215,6 +215,163 @@ ErrorExit:
 }
 
 static
+BOOLEAN
+PiValidateContainerId(
+    _In_reads_bytes_(Length) PCWSTR Buffer,
+    _In_ ULONG Length)
+{
+    UNICODE_STRING String;
+    GUID Guid;
+
+    if (Buffer == NULL ||
+        Length < sizeof(WCHAR) ||
+        Length > UNICODE_STRING_MAX_BYTES ||
+        (Length & (sizeof(WCHAR) - 1)) != 0 ||
+        Buffer[Length / sizeof(WCHAR) - 1] != UNICODE_NULL)
+    {
+        return FALSE;
+    }
+
+    String.Buffer = (PWSTR)Buffer;
+    String.MaximumLength = (USHORT)Length;
+    String.Length = (USHORT)(Length - sizeof(UNICODE_NULL));
+    return NT_SUCCESS(RtlGUIDFromString(&String, &Guid));
+}
+
+static
+NTSTATUS
+PiSetContainerId(
+    _In_ HANDLE InstanceKey,
+    _In_reads_bytes_(Length) PCWSTR Buffer,
+    _In_ ULONG Length)
+{
+    UNICODE_STRING ValueName = RTL_CONSTANT_STRING(REGSTR_VAL_CONTAINERID);
+
+    if (!PiValidateContainerId(Buffer, Length))
+        return STATUS_INVALID_PARAMETER;
+
+    return ZwSetValueKey(InstanceKey,
+                         &ValueName,
+                         0,
+                         REG_SZ,
+                         (PVOID)Buffer,
+                         Length);
+}
+
+/*
+ * Windows assigns every devnode a container ID before function drivers are
+ * attached.  Prefer the bus-provided ID; otherwise non-removable devnodes
+ * inherit their parent's ID and a new stable registry value starts a container
+ * when no parent value is available.
+ */
+static
+NTSTATUS
+PiAssignContainerId(
+    _In_ PDEVICE_NODE DeviceNode,
+    _In_ HANDLE InstanceKey)
+{
+    UNICODE_STRING ValueName = RTL_CONSTANT_STRING(REGSTR_VAL_CONTAINERID);
+    PKEY_VALUE_FULL_INFORMATION ValueInfo = NULL;
+    IO_STATUS_BLOCK IoStatusBlock;
+    IO_STACK_LOCATION Stack;
+    PWSTR ContainerId = NULL;
+    UNICODE_STRING GuidString;
+    ULONG Length = 0;
+    GUID Guid;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    /* Preserve a valid value from an earlier enumeration or installer. */
+    Status = IopGetRegistryValue(InstanceKey,
+                                 REGSTR_VAL_CONTAINERID,
+                                 &ValueInfo);
+    if (NT_SUCCESS(Status))
+    {
+        if (ValueInfo->Type == REG_SZ &&
+            PiValidateContainerId((PCWSTR)((PUCHAR)ValueInfo + ValueInfo->DataOffset),
+                                  ValueInfo->DataLength))
+        {
+            ExFreePool(ValueInfo);
+            return STATUS_SUCCESS;
+        }
+
+        ExFreePool(ValueInfo);
+    }
+
+    /* First choice: a bus-specific container identifier. */
+    RtlZeroMemory(&Stack, sizeof(Stack));
+    RtlZeroMemory(&IoStatusBlock, sizeof(IoStatusBlock));
+    Stack.Parameters.QueryId.IdType = BusQueryContainerID;
+    Status = IopInitiatePnpIrp(DeviceNode->PhysicalDeviceObject,
+                               &IoStatusBlock,
+                               IRP_MN_QUERY_ID,
+                               &Stack);
+    if (NT_SUCCESS(Status) && IoStatusBlock.Information != 0)
+    {
+        ContainerId = (PWSTR)IoStatusBlock.Information;
+        RtlInitUnicodeString(&GuidString, ContainerId);
+        Length = GuidString.Length + sizeof(UNICODE_NULL);
+        Status = PiSetContainerId(InstanceKey, ContainerId, Length);
+        ExFreePool(ContainerId);
+        if (NT_SUCCESS(Status))
+            return Status;
+    }
+    else if (IoStatusBlock.Information != 0)
+    {
+        ExFreePool((PVOID)IoStatusBlock.Information);
+    }
+
+    /* Integrated functions inherit the physical container of their parent. */
+    if (!(DeviceNode->CapabilityFlags & CM_DEVCAP_REMOVABLE) &&
+        DeviceNode->Parent != NULL &&
+        DeviceNode->Parent->PhysicalDeviceObject != NULL)
+    {
+        Status = IoGetDeviceProperty(DeviceNode->Parent->PhysicalDeviceObject,
+                                     DevicePropertyContainerID,
+                                     0,
+                                     NULL,
+                                     &Length);
+        if (Status == STATUS_BUFFER_TOO_SMALL && Length != 0)
+        {
+            ContainerId = ExAllocatePoolWithTag(PagedPool, Length, TAG_IO);
+            if (ContainerId == NULL)
+                return STATUS_INSUFFICIENT_RESOURCES;
+
+            Status = IoGetDeviceProperty(DeviceNode->Parent->PhysicalDeviceObject,
+                                         DevicePropertyContainerID,
+                                         Length,
+                                         ContainerId,
+                                         &Length);
+            if (NT_SUCCESS(Status))
+                Status = PiSetContainerId(InstanceKey, ContainerId, Length);
+
+            ExFreePoolWithTag(ContainerId, TAG_IO);
+            if (NT_SUCCESS(Status))
+                return Status;
+        }
+    }
+
+    /* Start a new container. The registry value keeps the generated ID stable. */
+    Status = ExUuidCreate(&Guid);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = RtlStringFromGUID(&Guid, &GuidString);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = ZwSetValueKey(InstanceKey,
+                           &ValueName,
+                           0,
+                           REG_SZ,
+                           GuidString.Buffer,
+                           GuidString.Length + sizeof(UNICODE_NULL));
+    RtlFreeUnicodeString(&GuidString);
+    return Status;
+}
+
+static
 NTSTATUS
 IopCreateDeviceInstancePath(
     _In_ PDEVICE_NODE DeviceNode,
@@ -1362,6 +1519,7 @@ PiInitializeDevNode(
     if (InstanceKey != NULL)
     {
         IopSetDeviceInstanceData(InstanceKey, DeviceNode);
+        PiAssignContainerId(DeviceNode, InstanceKey);
     }
 
     // Try installing a critical device, so its Service key is populated

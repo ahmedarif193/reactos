@@ -113,6 +113,7 @@ KMT_TESTFUNC Test_FsRtlTunnel;
 KMT_TESTFUNC Test_HalPortIo;
 #endif
 KMT_TESTFUNC Test_HalSystemInfo;
+KMT_TESTFUNC Test_IoContainerId;
 KMT_TESTFUNC Test_IoCreateFile;
 KMT_TESTFUNC Test_IoDeviceInterface;
 KMT_TESTFUNC Test_IoEvent;
@@ -353,6 +354,7 @@ const KMT_TEST TestList[] =
     { "HalPortIo",                          Test_HalPortIo },
 #endif
     { "HalSystemInfo",                      Test_HalSystemInfo },
+    { "IoContainerId",                      Test_IoContainerId },
     { "IoCreateFile",                       Test_IoCreateFile },
     { "IoDeviceInterface",                  Test_IoDeviceInterface },
     { "IoEvent",                            Test_IoEvent },

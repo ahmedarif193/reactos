@@ -143,6 +143,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_fsrtl/FsRtlTunnel.c
     ntos_io/IoBuildIoctlKM.c
     ntos_io/IoCancelKM.c
+    ntos_io/IoContainerId.c
     ntos_io/IoCreateFile.c
     ntos_io/IoCsqKM.c
     ntos_io/IoDeviceInterface.c

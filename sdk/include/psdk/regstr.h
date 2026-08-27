@@ -290,6 +290,7 @@ extern "C" {
 #define REGSTR_VAL_CRASHFUNCS	TEXT("CrashFuncs")
 #define REGSTR_VAL_CLASS	TEXT("Class")
 #define REGSTR_VAL_DEVDESC	TEXT("DeviceDesc")
+#define REGSTR_VAL_CONTAINERID TEXT("ContainerID")
 #define REGSTR_VAL_BOOTCONFIG	TEXT("BootConfig")
 #define REGSTR_VAL_DETFUNC	TEXT("DetFunc")
 #define REGSTR_VAL_DETFLAGS	TEXT("DetFlags")
