@@ -1674,6 +1674,43 @@ DxgkFreeDmaBuffer(
     ExFreePoolWithTag(DmaBuffer, TAG_DXGK_SUBMITDMA);
 }
 
+NTSTATUS
+NTAPI
+DxgkFlushDmaBufferForSubmission(
+    _In_ PDXGKRNL_DMA_BUFFER DmaBuffer)
+{
+    PVOID StartAddress;
+    ULONG Length;
+    PMDL Mdl;
+
+    if (DmaBuffer == NULL || DmaBuffer->VirtualAddress == NULL ||
+        DmaBuffer->BackingKind != DxgkDmaBackingContiguousMemory ||
+        DmaBuffer->SubmissionStartOffset > DmaBuffer->SubmissionEndOffset ||
+        DmaBuffer->SubmissionEndOffset > DmaBuffer->Capacity)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Length = DmaBuffer->SubmissionEndOffset -
+             DmaBuffer->SubmissionStartOffset;
+    if (Length == 0)
+        return STATUS_SUCCESS;
+    if (KeGetCurrentIrql() > DISPATCH_LEVEL)
+        return STATUS_INVALID_DEVICE_STATE;
+
+    StartAddress = (PUCHAR)DmaBuffer->VirtualAddress +
+                   DmaBuffer->SubmissionStartOffset;
+    Mdl = IoAllocateMdl(StartAddress, Length, FALSE, FALSE, NULL);
+    if (Mdl == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    MmBuildMdlForNonPagedPool(Mdl);
+    KeFlushIoBuffers(Mdl, FALSE, TRUE);
+    IoFreeMdl(Mdl);
+    KeMemoryBarrier();
+    return STATUS_SUCCESS;
+}
+
 static VOID DxgkpAssertSubmitDmaReservationInvariantLocked(_In_ PDXGKRNL_ADAPTER Adapter)
 {
     ASSERT(Adapter->SubmitDmaActiveReservations >= 0);
@@ -2104,7 +2141,16 @@ DxgkPrepareTrackedDmaBuffer(
                 DxgkCancelTrackedDmaBuffer(Entry);
                 return Status;
             }
-            Status = DxgkVidMmAcquireSubmissionResidencyPin(Entry->AllocationReferenceList[Index], Adapter, NULL);
+            /* Render may update allocation-backed command data.  Clean once,
+             * after Render and immediately before the tracker owns the final
+             * residency pin.  A supplied dirty vector lets V2 escapes avoid
+             * walking read-only resources. */
+            Status = DxgkVidMmAcquireSubmissionResidencyPinEx(
+                         Entry->AllocationReferenceList[Index],
+                         Adapter,
+                         NULL,
+                         Args->AllocationCpuDirty == NULL ||
+                             Args->AllocationCpuDirty[Index]);
             if (!NT_SUCCESS(Status))
             {
                 DxgkVidMmDereferenceAllocation(Entry->AllocationReferenceList[Index]);

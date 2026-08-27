@@ -2306,6 +2306,10 @@ DxgkpExecuteFullPresent(
                 goto PresentSubmissionDone;
         }
 
+        Status = DxgkFlushDmaBufferForSubmission(DmaBuffer);
+        if (!NT_SUCCESS(Status))
+            goto PresentSubmissionDone;
+
         RtlZeroMemory(&SubmitArgs, sizeof(SubmitArgs));
         if (Adapter->SchedulingCaps.MultiEngineAware)
             SubmitArgs.hContext = MiniportContextHandle;

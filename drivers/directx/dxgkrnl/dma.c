@@ -362,7 +362,12 @@ DxgkRender(
             Status = STATUS_INVALID_PARAMETER;
             goto Cleanup;
         }
-        Status = DxgkVidMmAcquireSubmissionResidencyPin(Reference, Adapter, &KernelAllocations[Index]);
+        /* Cache maintenance belongs at the final tracked-submission boundary,
+         * after DxgkDdiRender has finished updating allocation-backed data. */
+        Status = DxgkVidMmAcquireSubmissionResidencyPinEx(Reference,
+                                                          Adapter,
+                                                          &KernelAllocations[Index],
+                                                          FALSE);
         if (!NT_SUCCESS(Status))
         {
             DxgkVidMmDereferenceAllocation(Reference);

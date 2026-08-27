@@ -10524,11 +10524,96 @@ DxgkVidMmFillAllocationListEntry(
     DxgkVidMmDereferenceAllocation(Allocation);
 }
 
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+static NTSTATUS
+DxgkpVidMmCleanAllocationForSubmissionLocked(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PDXGKRNL_SEGMENT Segment;
+    ULONGLONG Offset;
+
+    if (Allocation->SystemMemory == NULL)
+        return STATUS_SUCCESS;
+    if (!Allocation->Resident || Allocation->SegmentId == 0 ||
+        Allocation->SegmentId > Adapter->SegmentCount)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    Segment = &ADAPTER_SEGMENTS(Adapter)[Allocation->SegmentId - 1];
+    if (!VidMmSegmentIsAperture(Segment))
+        return STATUS_SUCCESS;
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return STATUS_INVALID_DEVICE_STATE;
+
+    for (Offset = 0; Offset < Allocation->Size;)
+    {
+        ULONG ChunkLength =
+            Allocation->Size - Offset > DXGKP_VIDMM_CACHE_FLUSH_CHUNK_MAX
+                ? DXGKP_VIDMM_CACHE_FLUSH_CHUNK_MAX
+                : (ULONG)(Allocation->Size - Offset);
+        PVOID MdlAddress;
+        PMDL Mdl;
+
+        if (Allocation->SysMemMdl != NULL)
+        {
+            PVOID SourceAddress =
+                MmGetMdlVirtualAddress(Allocation->SysMemMdl);
+
+            if (SourceAddress == NULL ||
+                Offset > MmGetMdlByteCount(Allocation->SysMemMdl) ||
+                ChunkLength >
+                    MmGetMdlByteCount(Allocation->SysMemMdl) - (ULONG)Offset)
+            {
+                return STATUS_INVALID_DEVICE_STATE;
+            }
+
+            MdlAddress = (PUCHAR)SourceAddress + (SIZE_T)Offset;
+            Mdl = IoAllocateMdl(MdlAddress,
+                                ChunkLength,
+                                FALSE,
+                                FALSE,
+                                NULL);
+            if (Mdl != NULL)
+            {
+                IoBuildPartialMdl(Allocation->SysMemMdl,
+                                  Mdl,
+                                  MdlAddress,
+                                  ChunkLength);
+            }
+        }
+        else
+        {
+            MdlAddress = (PUCHAR)Allocation->SystemMemory + (SIZE_T)Offset;
+            Mdl = IoAllocateMdl(MdlAddress,
+                                ChunkLength,
+                                FALSE,
+                                FALSE,
+                                NULL);
+            if (Mdl != NULL)
+                MmBuildMdlForNonPagedPool(Mdl);
+        }
+
+        if (Mdl == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        KeFlushIoBuffers(Mdl, FALSE, TRUE);
+        IoFreeMdl(Mdl);
+        Offset += ChunkLength;
+    }
+
+    KeMemoryBarrier();
+    return STATUS_SUCCESS;
+}
+#endif
+
 NTSTATUS
-DxgkVidMmAcquireSubmissionResidencyPin(
+DxgkVidMmAcquireSubmissionResidencyPinEx(
     _In_ PDXGKVMM_ALLOCATION Allocation,
     _In_ PDXGKRNL_ADAPTER ExpectedAdapter,
-    _Out_opt_ DXGK_ALLOCATIONLIST *ListEntry)
+    _Out_opt_ DXGK_ALLOCATIONLIST *ListEntry,
+    _In_ BOOLEAN CpuDirty)
 {
     NTSTATUS Status = STATUS_SUCCESS;
 
@@ -10551,11 +10636,23 @@ DxgkVidMmAcquireSubmissionResidencyPin(
         Status = STATUS_GRAPHICS_ALLOCATION_BUSY;
     else if (!Allocation->Resident || ExpectedAdapter->Segments == NULL || Allocation->SegmentId == 0 || Allocation->SegmentId > ExpectedAdapter->SegmentCount || Allocation->SegmentId > 31)
         Status = STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
-    else if (!DxgkSubmissionResidencyPinTryAcquire(&Allocation->SubmissionResidencyPinCount))
-        Status = STATUS_INTEGER_OVERFLOW;
     else
     {
-        if (ListEntry != NULL)
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+        if (CpuDirty)
+        {
+            Status = DxgkpVidMmCleanAllocationForSubmissionLocked(
+                         Allocation,
+                         ExpectedAdapter);
+        }
+#endif
+        if (NT_SUCCESS(Status) &&
+            !DxgkSubmissionResidencyPinTryAcquire(
+                &Allocation->SubmissionResidencyPinCount))
+        {
+            Status = STATUS_INTEGER_OVERFLOW;
+        }
+        else if (NT_SUCCESS(Status) && ListEntry != NULL)
         {
             ListEntry->Value = 0;
             ListEntry->SegmentId = Allocation->SegmentId;
@@ -10564,6 +10661,18 @@ DxgkVidMmAcquireSubmissionResidencyPin(
     }
     KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
     return Status;
+}
+
+NTSTATUS
+DxgkVidMmAcquireSubmissionResidencyPin(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ PDXGKRNL_ADAPTER ExpectedAdapter,
+    _Out_opt_ DXGK_ALLOCATIONLIST *ListEntry)
+{
+    return DxgkVidMmAcquireSubmissionResidencyPinEx(Allocation,
+                                                     ExpectedAdapter,
+                                                     ListEntry,
+                                                     TRUE);
 }
 
 VOID

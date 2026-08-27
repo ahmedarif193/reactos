@@ -710,6 +710,13 @@ DxgkVidMmAcquireSubmissionResidencyPin(
     _In_ PDXGKRNL_ADAPTER ExpectedAdapter,
     _Out_opt_ DXGK_ALLOCATIONLIST *ListEntry);
 
+NTSTATUS
+DxgkVidMmAcquireSubmissionResidencyPinEx(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ PDXGKRNL_ADAPTER ExpectedAdapter,
+    _Out_opt_ DXGK_ALLOCATIONLIST *ListEntry,
+    _In_ BOOLEAN CpuDirty);
+
 VOID
 DxgkVidMmReleaseSubmissionResidencyPin(
     _In_ PDXGKVMM_ALLOCATION Allocation);
