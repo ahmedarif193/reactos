@@ -32,6 +32,29 @@ IopWorkItemCallback(IN PVOID Parameter)
 
 /* PUBLIC FUNCTIONS **********************************************************/
 
+ULONG
+NTAPI
+IoSizeofWorkItem(VOID)
+{
+#if defined(_M_ARM64)
+    /* Windows 11 ARM64 exposes an 0x58-byte caller-owned work item. */
+    return 0x58;
+#else
+    return sizeof(IO_WORKITEM);
+#endif
+}
+
+VOID
+NTAPI
+IoInitializeWorkItem(
+    _In_ PVOID IoObject,
+    _Out_ PIO_WORKITEM IoWorkItem)
+{
+    RtlZeroMemory(IoWorkItem, sizeof(IO_WORKITEM));
+    IoWorkItem->DeviceObject = (PDEVICE_OBJECT)IoObject;
+    ExInitializeWorkItem(&IoWorkItem->Item, IopWorkItemCallback, IoWorkItem);
+}
+
 /*
  * @implemented
  */

@@ -2253,6 +2253,16 @@ typedef struct _DRIVER_EXTENSION {
   UNICODE_STRING ServiceKeyName;
 } DRIVER_EXTENSION, *PDRIVER_EXTENSION;
 
+#if (NTDDI_VERSION >= NTDDI_WIN10_RS4)
+typedef enum _DRIVER_REGKEY_TYPE {
+  DriverRegKeyParameters = 0,
+  DriverRegKeyPersistentState,
+#if (NTDDI_VERSION >= NTDDI_WIN10_FE)
+  DriverRegKeySharedPersistentState,
+#endif
+} DRIVER_REGKEY_TYPE, *PDRIVER_REGKEY_TYPE;
+#endif
+
 #define DRVO_UNLOAD_INVOKED               0x00000001
 #define DRVO_LEGACY_DRIVER                0x00000002
 #define DRVO_BUILTIN_DRIVER               0x00000004
