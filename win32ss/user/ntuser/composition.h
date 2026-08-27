@@ -117,17 +117,18 @@ VOID IntCompositionDamageBacking(_In_opt_ PSURFACE psurf);
  * paint): the whole frame is re-asserted on the next compose. */
 VOID IntCompositionDamageFromGdi(VOID);
 
-/* BeginPaint/EndPaint bracket for redirected composition. Classic CDD output
- * is bracketed by the cached DC acquired by BeginPaint, which gives that path
- * a release token that window teardown can also close safely. */
+/* BeginPaint/EndPaint bracket for redirected composition. */
 VOID IntCompositionPaintBegin(_In_ PWND Wnd);
 VOID IntCompositionPaintEnd(_In_ PWND Wnd);
 
-/* Cache-DC hold bracket: draw sequences done via GetDC..ReleaseDC (button
- * states, status bars, carets, NC paints) are treated like paint brackets so
- * their intermediate states never present. GL windows are exempt (their DC is
- * held for the window's lifetime). Called from UserGetDCEx / DceReleaseDC for
- * DCX_CACHE DCs. */
+/* Bounded classic-GDI visual transaction. Begin returns a token consumed by
+ * End; unsupported and redirected displays return FALSE. Used by BeginPaint
+ * and USER operations which update multiple windows as one visible state. */
+BOOL IntCompositionPresentBatchBegin(VOID);
+VOID IntCompositionPresentBatchEnd(_In_ BOOL Active);
+
+/* Cache-DC hold bracket for redirected windows. Classic common DCs are not
+ * bracketed because applications may retain them indefinitely. */
 #define COMPOSITION_DC_NONE       0
 #define COMPOSITION_DC_CLASSIC    1
 #define COMPOSITION_DC_REDIRECTED 2

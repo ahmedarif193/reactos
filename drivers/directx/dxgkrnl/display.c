@@ -153,9 +153,9 @@ DxgkpPresentHoldActive(
     return TRUE;
 }
 
-/* Direct CDD drawing is bracketed at Win32k's BeginPaint/EndPaint and
- * GetDC/ReleaseDC seams. A stale bracket is abandoned so a dead painter cannot
- * leave the display permanently frozen. */
+/* Direct CDD drawing is bracketed at Win32k's bounded BeginPaint/EndPaint and
+ * multi-window USER transaction seams. A stale bracket is abandoned so a dead
+ * painter cannot leave the display permanently frozen. */
 static BOOLEAN
 DxgkpGdiPresentBatchActive(
     _In_ ULONGLONG Now100ns)
