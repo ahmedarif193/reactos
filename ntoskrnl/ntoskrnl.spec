@@ -2940,7 +2940,7 @@
 @ stub -arch=arm64 PsRemoveSiloContext
 @ stub -arch=arm64 PsReplaceSiloContext
 @ stub -arch=arm64 PsRevertToUserMultipleGroupAffinityThread
-@ stub -arch=arm64 PsSetCreateProcessNotifyRoutineEx2
+@ stdcall -arch=i386,x86_64,arm64 PsSetCreateProcessNotifyRoutineEx2(long ptr long)
 @ stub -arch=arm64 PsSetCreateThreadNotifyRoutineEx
 @ stub -arch=arm64 PsSetCurrentThreadPrefetching
 @ stub -arch=arm64 PsSetJobProperty
