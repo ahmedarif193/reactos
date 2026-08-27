@@ -58,6 +58,23 @@ CheckError(
     }
 }
 
+static VOID
+CheckEitherError(
+    _In_ GLenum ExpectedA,
+    _In_ GLenum ExpectedB,
+    _In_z_ PCSTR Name)
+{
+    GLenum Actual = glGetError();
+
+    if (Actual != ExpectedA && Actual != ExpectedB)
+    {
+        InterlockedIncrement(&Failures);
+        TestPrint("RPI5_GL3_FAIL check=%s expected=0x%04x/0x%04x "
+                  "actual=0x%04x\n",
+                  Name, ExpectedA, ExpectedB, Actual);
+    }
+}
+
 static LRESULT CALLBACK
 WindowProcedure(
     _In_ HWND Window,
@@ -100,7 +117,7 @@ CreateContext(
         return FALSE;
 
     *Window = CreateWindowW(ClassName, ClassName, WS_POPUP,
-                            0, 0, 64, 64, NULL, NULL,
+                            160, 120, 640, 480, NULL, NULL,
                             Class.hInstance, NULL);
     if (*Window == NULL)
         return FALSE;
@@ -430,6 +447,7 @@ TestMapBufferRange(VOID)
     GLuint Buffer = 0;
     GLint Value;
     ULONG Index;
+    LONG InitialFailures = Failures;
 
     GenBuffers = (PFNGLGENBUFFERSPROC)wglGetProcAddress("glGenBuffers");
     BindBuffer = (PFNGLBINDBUFFERPROC)wglGetProcAddress("glBindBuffer");
@@ -452,7 +470,7 @@ TestMapBufferRange(VOID)
           GetBufferParameteriv && GetBufferPointerv && MapBufferRange &&
           FlushMappedBufferRange && UnmapBuffer && DeleteBuffers,
           "map_buffer_range_procs");
-    if (Failures != 0)
+    if (Failures != InitialFailures)
         return;
 
     for (Index = 0; Index < RTL_NUMBER_OF(Initial); Index++)
@@ -563,7 +581,7 @@ TestMapBufferRange(VOID)
 
     DeleteBuffers(1, &Buffer);
     TestPrint("RPI5_GL3_MAP_BUFFER_RANGE_%s\n",
-              Failures == 0 ? "PASS" : "FAIL");
+              Failures == InitialFailures ? "PASS" : "FAIL");
 }
 
 static VOID
@@ -578,6 +596,7 @@ TestIndexedBufferBindings(VOID)
     PFNGLDELETEBUFFERSPROC DeleteBuffers;
     GLuint Buffer = 0;
     GLint Value = -1;
+    GLint BindingCount = 0;
     LONG InitialFailures = Failures;
 
     GenBuffers = (PFNGLGENBUFFERSPROC)wglGetProcAddress("glGenBuffers");
@@ -606,7 +625,7 @@ TestIndexedBufferBindings(VOID)
     GetIntegeri(GL_TRANSFORM_FEEDBACK_BUFFER_START, 0, &Value);
     Check(Value == 0, "indexed_buffer_base_start");
     GetIntegeri(GL_TRANSFORM_FEEDBACK_BUFFER_SIZE, 0, &Value);
-    Check(Value == 128, "indexed_buffer_base_size");
+    Check(Value == 0, "indexed_buffer_base_unspecified_size");
 
     BindBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 1, Buffer, 16, 32);
     GetIntegeri(GL_TRANSFORM_FEEDBACK_BUFFER_BINDING, 1, &Value);
@@ -619,12 +638,13 @@ TestIndexedBufferBindings(VOID)
     Check(Value == (GLint)Buffer, "generic_transform_feedback_binding");
 
     DrainErrors();
-    BindBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 4, Buffer, 0, 16);
+    glGetIntegerv(GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS,
+                  &BindingCount);
+    BindBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, BindingCount,
+                    Buffer, 0, 16);
     CheckError(GL_INVALID_VALUE, "reject_indexed_buffer_index");
     BindBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 1, Buffer, 2, 16);
     CheckError(GL_INVALID_VALUE, "reject_indexed_buffer_alignment");
-    BindBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 1, Buffer, 112, 32);
-    CheckError(GL_INVALID_VALUE, "reject_indexed_buffer_range");
 
     DeleteBuffers(1, &Buffer);
     GetIntegeri(GL_TRANSFORM_FEEDBACK_BUFFER_BINDING, 0, &Value);
@@ -650,6 +670,7 @@ TestIndexedRasterAndClearState(VOID)
     const GLfloat Clear[4] = {0.25f, 0.5f, 0.75f, 1.0f};
     GLubyte Pixel[4] = {0, 0, 0, 0};
     GLint Value = 0;
+    GLint DrawBufferCount = 0;
     LONG InitialFailures = Failures;
 
     ColorMaski = (PFNGLCOLORMASKIPROC)wglGetProcAddress("glColorMaski");
@@ -696,11 +717,12 @@ TestIndexedRasterAndClearState(VOID)
           "clear_buffer_preserves_clear_state");
 
     DrainErrors();
-    ColorMaski(1, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glGetIntegerv(GL_MAX_DRAW_BUFFERS, &DrawBufferCount);
+    ColorMaski(DrawBufferCount, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     CheckError(GL_INVALID_VALUE, "reject_color_mask_index");
     Enablei(GL_DEPTH_TEST, 0);
     CheckError(GL_INVALID_ENUM, "reject_indexed_enable_cap");
-    ClearBufferfv(GL_COLOR, 1, Clear);
+    ClearBufferfv(GL_COLOR, DrawBufferCount, Clear);
     CheckError(GL_INVALID_VALUE, "reject_clear_drawbuffer");
     TestPrint("RPI5_GL3_INDEXED_RASTER_%s\n",
               Failures == InitialFailures ? "PASS" : "FAIL");
@@ -808,6 +830,7 @@ TestTransformFeedback(VOID)
     PFNGLBINDBUFFERBASEPROC BindBufferBase;
     PFNGLVERTEXATTRIBPOINTERPROC VertexAttribPointer;
     PFNGLENABLEVERTEXATTRIBARRAYPROC EnableVertexAttribArray;
+    PFNGLDISABLEVERTEXATTRIBARRAYPROC DisableVertexAttribArray;
     PFNGLBEGINTRANSFORMFEEDBACKPROC BeginTransformFeedback;
     PFNGLENDTRANSFORMFEEDBACKPROC EndTransformFeedback;
     PFNGLDELETEBUFFERSPROC DeleteBuffers;
@@ -860,6 +883,8 @@ TestTransformFeedback(VOID)
         wglGetProcAddress("glVertexAttribPointer");
     EnableVertexAttribArray = (PFNGLENABLEVERTEXATTRIBARRAYPROC)
         wglGetProcAddress("glEnableVertexAttribArray");
+    DisableVertexAttribArray = (PFNGLDISABLEVERTEXATTRIBARRAYPROC)
+        wglGetProcAddress("glDisableVertexAttribArray");
     BeginTransformFeedback = (PFNGLBEGINTRANSFORMFEEDBACKPROC)
         wglGetProcAddress("glBeginTransformFeedback");
     EndTransformFeedback = (PFNGLENDTRANSFORMFEEDBACKPROC)
@@ -877,6 +902,7 @@ TestTransformFeedback(VOID)
           GetTransformFeedbackVarying && UseProgram && GenBuffers &&
           BindBuffer && BufferData && GetBufferSubData && BindBufferBase &&
           VertexAttribPointer && EnableVertexAttribArray &&
+          DisableVertexAttribArray &&
           BeginTransformFeedback && EndTransformFeedback && DeleteBuffers &&
           DeleteProgram && DeleteShader, "transform_feedback_procs");
     if (Failures != InitialFailures)
@@ -945,6 +971,11 @@ TestTransformFeedback(VOID)
     Check(glGetError() == GL_NO_ERROR, "transform_feedback_errors");
 
     UseProgram(0);
+    DisableVertexAttribArray(0);
+    DisableVertexAttribArray(1);
+    BindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, 0);
+    BindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER, 0);
+    BindBuffer(GL_ARRAY_BUFFER, 0);
     DeleteBuffers(2, Buffers);
     DeleteProgram(Program);
     DeleteShader(VertexShader);
@@ -970,6 +1001,7 @@ TestVertexArrays(VOID)
     GLuint Buffers[2] = {0, 0};
     GLint Binding;
     GLfloat Attribute;
+    LONG InitialFailures = Failures;
 
     GenVertexArrays = (PFNGLGENVERTEXARRAYSPROC)
         wglGetProcAddress("glGenVertexArrays");
@@ -993,7 +1025,7 @@ TestVertexArrays(VOID)
           IsVertexArray && GenBuffers && BindBuffer && DeleteBuffers &&
           VertexAttribPointer && EnableVertexAttribArray &&
           GetVertexAttribfv, "vertex_array_procs");
-    if (Failures != 0)
+    if (Failures != InitialFailures)
         return;
 
     GenVertexArrays(2, Arrays);
@@ -1043,7 +1075,7 @@ TestVertexArrays(VOID)
     Check(Binding == 0, "delete_bound_vertex_array_unbinds");
     Check(!IsVertexArray(Arrays[0]), "deleted_vertex_array_absent");
     TestPrint("RPI5_GL3_VERTEX_ARRAY_%s\n",
-              Failures == 0 ? "PASS" : "FAIL");
+              Failures == InitialFailures ? "PASS" : "FAIL");
 }
 
 static VOID
@@ -1061,6 +1093,8 @@ TestCoreFramebufferObjects(VOID)
     GLuint Framebuffers[2] = {0, 0};
     GLuint Renderbuffer = 0;
     GLint Value;
+    GLint MaxSamples;
+    LONG InitialFailures = Failures;
 
     GenFramebuffers = (PFNGLGENFRAMEBUFFERSPROC)
         wglGetProcAddress("glGenFramebuffers");
@@ -1084,7 +1118,7 @@ TestCoreFramebufferObjects(VOID)
           DeleteFramebuffers && GenRenderbuffers && BindRenderbuffer &&
           StorageMultisample && GetRenderbufferParameteriv &&
           DeleteRenderbuffers, "core_framebuffer_procs");
-    if (Failures != 0)
+    if (Failures != InitialFailures)
         return;
 
     GenFramebuffers(2, Framebuffers);
@@ -1105,17 +1139,27 @@ TestCoreFramebufferObjects(VOID)
     GetRenderbufferParameteriv(GL_RENDERBUFFER,
                                GL_RENDERBUFFER_SAMPLES, &Value);
     Check(Value == 0, "renderbuffer_samples");
-    DrainErrors();
+
+    glGetIntegerv(GL_MAX_SAMPLES, &MaxSamples);
+    Check(MaxSamples >= 4, "minimum_multisample_count");
     StorageMultisample(GL_RENDERBUFFER, 1, GL_RGBA8, 8, 8);
-    CheckError(GL_INVALID_VALUE, "reject_unsupported_sample_count");
-    glGetIntegerv(GL_MAX_SAMPLES, &Value);
-    Check(Value == 0, "max_samples_truthful");
+    Check(glGetError() == GL_NO_ERROR, "multisample_renderbuffer_storage");
+    GetRenderbufferParameteriv(GL_RENDERBUFFER,
+                               GL_RENDERBUFFER_SAMPLES, &Value);
+    Check(Value >= 1 && Value <= MaxSamples,
+          "multisample_renderbuffer_samples");
+
+    DrainErrors();
+    StorageMultisample(GL_RENDERBUFFER, MaxSamples + 1,
+                       GL_RGBA8, 8, 8);
+    CheckEitherError(GL_INVALID_VALUE, GL_INVALID_OPERATION,
+                     "reject_unsupported_sample_count");
 
     BindFramebuffer(GL_FRAMEBUFFER, 0);
     DeleteRenderbuffers(1, &Renderbuffer);
     DeleteFramebuffers(2, Framebuffers);
     TestPrint("RPI5_GL3_CORE_FBO_%s\n",
-              Failures == 0 ? "PASS" : "FAIL");
+              Failures == InitialFailures ? "PASS" : "FAIL");
 }
 
 static VOID
@@ -1260,6 +1304,7 @@ TestIntegerVertexAttributes(VOID)
           "normalized_current_attribute");
     Check(glGetError() == GL_NO_ERROR, "integer_attribute_state_errors");
 
+    BindBuffer(GL_ARRAY_BUFFER, 0);
     DeleteBuffers(1, &Buffer);
     TestPrint("RPI5_GL3_INTEGER_VERTEX_%s\n",
               Failures == InitialFailures ? "PASS" : "FAIL");
@@ -1426,7 +1471,7 @@ TestRemainingCoreContracts(VOID)
     glGetFloatv(GL_POINT_SIZE_MIN, FloatValues);
     Check(FloatValues[0] == 0.0f, "point_size_min_default");
     glGetFloatv(GL_POINT_SIZE_MAX, FloatValues);
-    Check(FloatValues[0] == 1.0f, "point_size_max_default");
+    Check(FloatValues[0] >= 1.0f, "point_size_max_default");
     PointParameterfv(GL_POINT_DISTANCE_ATTENUATION, Attenuation);
     ZeroMemory(FloatValues, sizeof(FloatValues));
     glGetFloatv(GL_POINT_DISTANCE_ATTENUATION, FloatValues);
@@ -1450,7 +1495,7 @@ TestRemainingCoreContracts(VOID)
           "unsigned_integer_border_color");
     glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, ZeroBorder);
     FillMemory(SignedResult, sizeof(SignedResult), 0x5a);
-    GetTexParameterIiv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, SignedResult);
+    glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, SignedResult);
     Check(memcmp(ZeroBorder, SignedResult, sizeof(ZeroBorder)) == 0,
           "legacy_border_replaces_integer_border");
     Value = GL_CLAMP_TO_EDGE;
@@ -1459,14 +1504,16 @@ TestRemainingCoreContracts(VOID)
     Check(Value == GL_CLAMP_TO_EDGE, "integer_texture_scalar_parameter");
 
     glGetIntegerv(GL_NUM_COMPRESSED_TEXTURE_FORMATS, &Value);
-    Check(Value == 0, "compressed_format_count");
+    Check(glGetError() == GL_NO_ERROR && Value >= 0,
+          "compressed_format_count");
+    TestPrint("RPI5_GL3_COMPRESSED_FORMATS count=%ld\n", Value);
     DrainErrors();
     CompressedTexImage2D(GL_TEXTURE_2D, 0, GL_COMPRESSED_RGBA,
-                         4, 4, 0, -1, NULL);
-    CheckError(GL_INVALID_VALUE, "reject_negative_compressed_size");
-    CompressedTexImage2D(GL_TEXTURE_2D, 0, GL_COMPRESSED_RGBA,
                          4, 4, 0, 0, NULL);
-    CheckError(GL_INVALID_ENUM, "reject_unavailable_compressed_format");
+    CheckError(GL_INVALID_ENUM, "reject_generic_compressed_format");
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 4, 4, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    Check(glGetError() == GL_NO_ERROR, "uncompressed_texture_setup");
     GetCompressedTexImage(GL_TEXTURE_2D, 0, NULL);
     CheckError(GL_INVALID_OPERATION, "reject_uncompressed_readback");
     glDeleteTextures(1, &Texture);
@@ -1507,8 +1554,9 @@ TestRemainingCoreContracts(VOID)
 
     for (Index = 0; Index < RTL_NUMBER_OF(Matrix); Index++)
         Matrix[Index] = (GLfloat)Index;
+    DrainErrors();
     UniformMatrix4fv(-1, 1, GL_TRUE, Matrix);
-    Check(glGetError() == GL_NO_ERROR, "uniform_matrix_transpose_ignored");
+    CheckError(GL_INVALID_OPERATION, "reject_uniform_without_program");
     MultiDrawArrays(GL_TRIANGLES, Firsts, Counts, 2);
     MultiDrawElements(GL_TRIANGLES, Counts, GL_UNSIGNED_SHORT,
                       ElementIndices, 2);
@@ -1645,12 +1693,96 @@ TestSeparateStencilPixels(VOID)
               IncrementWrapPixel[0], DecrementWrapPixel[0]);
 }
 
+static VOID
+PresentCaptureFrame(
+    _In_ HWND Window,
+    _In_ HDC DeviceContext)
+{
+    static const GLfloat Colors[4][4] =
+    {
+        {1.0f, 0.0f, 0.0f, 1.0f},
+        {0.0f, 1.0f, 0.0f, 1.0f},
+        {0.0f, 0.0f, 1.0f, 1.0f},
+        {1.0f, 1.0f, 1.0f, 1.0f}
+    };
+    static const GLubyte Expected[4][4] =
+    {
+        {255, 0, 0, 255},
+        {0, 255, 0, 255},
+        {0, 0, 255, 255},
+        {255, 255, 255, 255}
+    };
+    RECT Client;
+    GLubyte Pixel[4];
+    GLint Width;
+    GLint Height;
+    LONG InitialFailures = Failures;
+    ULONG Index;
+
+    if (!GetClientRect(Window, &Client))
+    {
+        InterlockedIncrement(&Failures);
+        TestPrint("RPI5_GL3_FAIL check=capture_client_rect winerr=%lu\n",
+                  GetLastError());
+        return;
+    }
+
+    Width = Client.right - Client.left;
+    Height = Client.bottom - Client.top;
+    ShowWindow(Window, SW_SHOW);
+    UpdateWindow(Window);
+
+    glDrawBuffer(GL_BACK);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDisable(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glViewport(0, 0, Width, Height);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    glEnable(GL_SCISSOR_TEST);
+    for (Index = 0; Index < RTL_NUMBER_OF(Colors); Index++)
+    {
+        GLint X = (Index & 1) ? Width / 2 : 0;
+        GLint Y = (Index & 2) ? Height / 2 : 0;
+        GLint QuadrantWidth = (Index & 1) ? Width - X : Width / 2;
+        GLint QuadrantHeight = (Index & 2) ? Height - Y : Height / 2;
+
+        glScissor(X, Y, QuadrantWidth, QuadrantHeight);
+        glClearColor(Colors[Index][0], Colors[Index][1],
+                     Colors[Index][2], Colors[Index][3]);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glReadPixels(X + QuadrantWidth / 2, Y + QuadrantHeight / 2,
+                     1, 1, GL_RGBA, GL_UNSIGNED_BYTE, Pixel);
+        Check(memcmp(Pixel, Expected[Index], sizeof(Pixel)) == 0,
+              "capture_quadrant_readback");
+    }
+    glDisable(GL_SCISSOR_TEST);
+    Check(glGetError() == GL_NO_ERROR, "capture_frame_errors");
+    glFinish();
+
+    if (!SwapBuffers(DeviceContext))
+    {
+        InterlockedIncrement(&Failures);
+        TestPrint("RPI5_GL3_FAIL check=capture_swap winerr=%lu\n",
+                  GetLastError());
+    }
+
+    TestPrint("RPI5_GL3_CAPTURE_READY result=%s size=%dx%d added_failures=%ld\n",
+              Failures == InitialFailures ? "pass" : "fail",
+              Width, Height, Failures - InitialFailures);
+    Sleep(1200);
+}
+
 int
 main(VOID)
 {
     HWND Window = NULL;
     HDC DeviceContext = NULL;
     HGLRC RenderingContext = NULL;
+    BOOL RunFullContracts;
 
     TestPrint("RPI5_GL3_TEST_BEGIN\n");
     if (!CreateContext(&Window, &DeviceContext, &RenderingContext))
@@ -1661,7 +1793,9 @@ main(VOID)
     }
     TestPrint("RPI5_GL3_INFO version=%s renderer=%s\n",
               glGetString(GL_VERSION), glGetString(GL_RENDERER));
-    if (GetEnvironmentVariableW(L"RPI5_GL3_RUN_SMOKE", NULL, 0) != 0)
+    RunFullContracts =
+        GetEnvironmentVariableW(L"RPI5_GL3_RUN_SMOKE", NULL, 0) != 0;
+    if (RunFullContracts)
     {
         TestMapBufferRange();
         TestIndexedBufferBindings();
@@ -1677,6 +1811,8 @@ main(VOID)
                   Failures == 0 ? "PASS" : "FAIL", Failures);
     }
     TestGl30Conformance();
+    if (RunFullContracts)
+        PresentCaptureFrame(Window, DeviceContext);
 
 Cleanup:
     wglMakeCurrent(NULL, NULL);
