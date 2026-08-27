@@ -7,6 +7,7 @@
 
 #include "opengl32.h"
 
+#include <d3dkmthk.h>
 #include <winreg.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(opengl32);
@@ -53,6 +54,61 @@ static DHGLRC APIENTRY wglGetDHGLRC(struct wgl_context* context)
     return context->dhglrc;
 }
 
+/*
+ * WDDM display miniports publish their OpenGL ICD through the adapter's
+ * software key.  Querying it through D3DKMT keeps the choice tied to the HDC
+ * instead of applying a process-wide registry override, which is important
+ * when a hardware miniport fails and BasicDisplay owns the desktop instead.
+ */
+static BOOL
+IntGetWddmIcdInfo(
+    HDC hdc,
+    Drv_Opengl_Info *DrvInfo,
+    WCHAR DllName[MAX_PATH],
+    DWORD *Flags)
+{
+    D3DKMT_OPENADAPTERFROMHDC OpenAdapter;
+    D3DKMT_QUERYADAPTERINFO QueryInfo;
+    D3DKMT_OPENGLINFO OpenGlInfo;
+    D3DKMT_CLOSEADAPTER CloseAdapter;
+    NTSTATUS Status;
+
+    if (!hdc || !DrvInfo || !DllName || !Flags)
+        return FALSE;
+
+    memset(&OpenAdapter, 0, sizeof(OpenAdapter));
+    OpenAdapter.hDc = hdc;
+    Status = D3DKMTOpenAdapterFromHdc(&OpenAdapter);
+    if (!NT_SUCCESS(Status) || !OpenAdapter.hAdapter)
+        return FALSE;
+
+    memset(&OpenGlInfo, 0, sizeof(OpenGlInfo));
+    memset(&QueryInfo, 0, sizeof(QueryInfo));
+    QueryInfo.hAdapter = OpenAdapter.hAdapter;
+    QueryInfo.Type = KMTQAITYPE_UMOPENGLINFO;
+    QueryInfo.pPrivateDriverData = &OpenGlInfo;
+    QueryInfo.PrivateDriverDataSize = sizeof(OpenGlInfo);
+    Status = D3DKMTQueryAdapterInfo(&QueryInfo);
+
+    memset(&CloseAdapter, 0, sizeof(CloseAdapter));
+    CloseAdapter.hAdapter = OpenAdapter.hAdapter;
+    D3DKMTCloseAdapter(&CloseAdapter);
+
+    OpenGlInfo.UmdOpenGlIcdFileName[ARRAYSIZE(OpenGlInfo.UmdOpenGlIcdFileName) - 1] = UNICODE_NULL;
+    if (!NT_SUCCESS(Status) || !OpenGlInfo.UmdOpenGlIcdFileName[0])
+        return FALSE;
+
+    lstrcpynW(DllName, OpenGlInfo.UmdOpenGlIcdFileName, MAX_PATH);
+    DrvInfo->Version = OpenGlInfo.Version;
+    /* WDDM's query returns one ICD interface version.  The legacy loader's
+     * validation callback consumes that value through DriverVersion. */
+    DrvInfo->DriverVersion = OpenGlInfo.Version;
+    lstrcpynW(DrvInfo->DriverName, OpenGlInfo.UmdOpenGlIcdFileName,
+              ARRAYSIZE(DrvInfo->DriverName));
+    *Flags = OpenGlInfo.Flags;
+    return TRUE;
+}
+
 /* GDI entry points (win32k) */
 extern INT APIENTRY GdiDescribePixelFormat(HDC hdc, INT ipfd, UINT cjpfd, PPIXELFORMATDESCRIPTOR ppfd);
 extern BOOL APIENTRY GdiSetPixelFormat(HDC hdc, INT ipfd);
@@ -67,8 +123,11 @@ struct ICD_Data* IntGetIcdData(HDC hdc)
     pDrv_Opengl_Info pDrvInfo;
     struct ICD_Data* data;
     HKEY OglKey = NULL;
-    HKEY DrvKey, CustomKey;
+    HKEY DrvKey = NULL, CustomKey = NULL;
     WCHAR DllName[MAX_PATH];
+    WCHAR WddmDllName[MAX_PATH];
+    DWORD WddmFlags = 0;
+    BOOL WddmIcd = FALSE;
     BOOL (WINAPI *DrvValidateVersion)(DWORD);
     void (WINAPI *DrvSetCallbackProcs)(int nProcs, PROC* pProcs);
 
@@ -124,7 +183,8 @@ struct ICD_Data* IntGetIcdData(HDC hdc)
 custom_end:
         if(OglKey)
             RegCloseKey(OglKey);
-        RegCloseKey(CustomKey);
+        if(CustomKey)
+            RegCloseKey(CustomKey);
     }
 
     /* If there's a custom ICD or ROSSWI was requested use it, otherwise proceed as usual */
@@ -138,22 +198,28 @@ custom_end:
     }
     else
     {
-        /* First, see if the driver supports this */
-        dwInput = OPENGL_GETINFO;
-        ret = ExtEscape(hdc, QUERYESCSUPPORT, sizeof(DWORD), (LPCSTR)&dwInput, 0, NULL);
-
-        /* Driver doesn't support opengl */
-        if(ret <= 0)
-            return NULL;
-
-        /* Query for the ICD DLL name and version */
-        dwInput = OPENGL_GETINFO_DRVNAME;
-        ret = ExtEscape(hdc, OPENGL_GETINFO, sizeof(DWORD), (LPCSTR)&dwInput, sizeof(DrvInfo), (LPSTR)&DrvInfo);
-
-        if(ret <= 0)
+        memset(&DrvInfo, 0, sizeof(DrvInfo));
+        memset(WddmDllName, 0, sizeof(WddmDllName));
+        WddmIcd = IntGetWddmIcdInfo(hdc, &DrvInfo, WddmDllName, &WddmFlags);
+        if (!WddmIcd)
         {
-            ERR("Driver claims to support OPENGL_GETINFO escape code, but doesn't. ret: %X\n", ret);
-            return NULL;
+            /* XPDM ICD discovery through the display driver's escape. */
+            dwInput = OPENGL_GETINFO;
+            ret = ExtEscape(hdc, QUERYESCSUPPORT, sizeof(DWORD), (LPCSTR)&dwInput, 0, NULL);
+
+            /* Driver doesn't support opengl */
+            if(ret <= 0)
+                return NULL;
+
+            /* Query for the ICD DLL name and version */
+            dwInput = OPENGL_GETINFO_DRVNAME;
+            ret = ExtEscape(hdc, OPENGL_GETINFO, sizeof(DWORD), (LPCSTR)&dwInput, sizeof(DrvInfo), (LPSTR)&DrvInfo);
+
+            if(ret <= 0)
+            {
+                ERR("Driver claims to support OPENGL_GETINFO escape code, but doesn't. ret: %X\n", ret);
+                return NULL;
+            }
         }
 
         pDrvInfo = &DrvInfo;
@@ -176,85 +242,96 @@ custom_end:
         data = data->next;
     }
 
-    /* It was still not loaded, look for it in the registry */
-    ret = RegOpenKeyExW(HKEY_LOCAL_MACHINE, OpenGLDrivers_Key, 0, KEY_READ, &OglKey);
-    if(ret != ERROR_SUCCESS)
+    if (WddmIcd)
     {
-        ERR("Failed to open the OpenGLDrivers key.\n");
-        goto end;
-    }
-    ret = RegOpenKeyExW(OglKey, pDrvInfo->DriverName, 0, KEY_READ, &DrvKey);
-    if(ret != ERROR_SUCCESS)
-    {
-        /* Some driver installer just provide the DLL name, like the Matrox G400 */
-        TRACE("No driver subkey for %S, trying to get DLL name directly.\n", pDrvInfo->DriverName);
-        dwInput = sizeof(DllName);
-        ret = RegQueryValueExW(OglKey, pDrvInfo->DriverName, 0, &dwValueType, (LPBYTE)DllName, &dwInput);
-        if((ret != ERROR_SUCCESS) || (dwValueType != REG_SZ))
-        {
-            ERR("Unable to get ICD DLL name!\n");
-            RegCloseKey(OglKey);
-            goto end;
-        }
-        Version = DriverVersion = Flags = 0;
-        TRACE("DLL name is %S.\n", DllName);
+        lstrcpynW(DllName, WddmDllName, ARRAYSIZE(DllName));
+        Version = DriverVersion = pDrvInfo->Version;
+        Flags = WddmFlags;
+        TRACE("WDDM ICD is %S, Version %lx, Flags %lx.\n",
+              DllName, Version, Flags);
     }
     else
     {
-        /* The driver have a subkey for the ICD */
-        TRACE("Querying details from registry for %S.\n", pDrvInfo->DriverName);
-        dwInput = sizeof(DllName);
-        ret = RegQueryValueExW(DrvKey, L"Dll", 0, &dwValueType, (LPBYTE)DllName, &dwInput);
-        if((ret != ERROR_SUCCESS) || (dwValueType != REG_SZ))
+        /* It was still not loaded, look for it in the legacy ICD registry. */
+        ret = RegOpenKeyExW(HKEY_LOCAL_MACHINE, OpenGLDrivers_Key, 0, KEY_READ, &OglKey);
+        if(ret != ERROR_SUCCESS)
         {
-            ERR("Unable to get ICD DLL name!.\n");
-            RegCloseKey(DrvKey);
-            RegCloseKey(OglKey);
+            ERR("Failed to open the OpenGLDrivers key.\n");
             goto end;
         }
-
-        dwInput = sizeof(Version);
-        ret = RegQueryValueExW(DrvKey, L"Version", 0, &dwValueType, (LPBYTE)&Version, &dwInput);
-        if((ret != ERROR_SUCCESS) || (dwValueType != REG_DWORD))
+        ret = RegOpenKeyExW(OglKey, pDrvInfo->DriverName, 0, KEY_READ, &DrvKey);
+        if(ret != ERROR_SUCCESS)
         {
-            WARN("No version in driver subkey\n");
+            /* Some driver installer just provide the DLL name, like the Matrox G400 */
+            TRACE("No driver subkey for %S, trying to get DLL name directly.\n", pDrvInfo->DriverName);
+            dwInput = sizeof(DllName);
+            ret = RegQueryValueExW(OglKey, pDrvInfo->DriverName, 0, &dwValueType, (LPBYTE)DllName, &dwInput);
+            if((ret != ERROR_SUCCESS) || (dwValueType != REG_SZ))
+            {
+                ERR("Unable to get ICD DLL name!\n");
+                RegCloseKey(OglKey);
+                goto end;
+            }
+            Version = DriverVersion = Flags = 0;
+            TRACE("DLL name is %S.\n", DllName);
         }
-        else if(Version != pDrvInfo->Version)
+        else
         {
-            ERR("Version mismatch between registry (%lu) and display driver (%lu).\n", Version, pDrvInfo->Version);
+            /* The driver have a subkey for the ICD */
+            TRACE("Querying details from registry for %S.\n", pDrvInfo->DriverName);
+            dwInput = sizeof(DllName);
+            ret = RegQueryValueExW(DrvKey, L"Dll", 0, &dwValueType, (LPBYTE)DllName, &dwInput);
+            if((ret != ERROR_SUCCESS) || (dwValueType != REG_SZ))
+            {
+                ERR("Unable to get ICD DLL name!.\n");
+                RegCloseKey(DrvKey);
+                RegCloseKey(OglKey);
+                goto end;
+            }
+
+            dwInput = sizeof(Version);
+            ret = RegQueryValueExW(DrvKey, L"Version", 0, &dwValueType, (LPBYTE)&Version, &dwInput);
+            if((ret != ERROR_SUCCESS) || (dwValueType != REG_DWORD))
+            {
+                WARN("No version in driver subkey\n");
+            }
+            else if(Version != pDrvInfo->Version)
+            {
+                ERR("Version mismatch between registry (%lu) and display driver (%lu).\n", Version, pDrvInfo->Version);
+                RegCloseKey(DrvKey);
+                RegCloseKey(OglKey);
+                goto end;
+            }
+
+            dwInput = sizeof(DriverVersion);
+            ret = RegQueryValueExW(DrvKey, L"DriverVersion", 0, &dwValueType, (LPBYTE)&DriverVersion, &dwInput);
+            if((ret != ERROR_SUCCESS) || (dwValueType != REG_DWORD))
+            {
+                WARN("No driver version in driver subkey\n");
+            }
+            else if(DriverVersion != pDrvInfo->DriverVersion)
+            {
+                ERR("Driver version mismatch between registry (%lu) and display driver (%lu).\n", DriverVersion, pDrvInfo->DriverVersion);
+                RegCloseKey(DrvKey);
+                RegCloseKey(OglKey);
+                goto end;
+            }
+
+            dwInput = sizeof(Flags);
+            ret = RegQueryValueExW(DrvKey, L"Flags", 0, &dwValueType, (LPBYTE)&Flags, &dwInput);
+            if((ret != ERROR_SUCCESS) || (dwValueType != REG_DWORD))
+            {
+                WARN("No driver version in driver subkey\n");
+                Flags = 0;
+            }
+
+            /* We're done */
             RegCloseKey(DrvKey);
-            RegCloseKey(OglKey);
-            goto end;
+            TRACE("DLL name is %S, Version %lx, DriverVersion %lx, Flags %lx.\n", DllName, Version, DriverVersion, Flags);
         }
-
-        dwInput = sizeof(DriverVersion);
-        ret = RegQueryValueExW(DrvKey, L"DriverVersion", 0, &dwValueType, (LPBYTE)&DriverVersion, &dwInput);
-        if((ret != ERROR_SUCCESS) || (dwValueType != REG_DWORD))
-        {
-            WARN("No driver version in driver subkey\n");
-        }
-        else if(DriverVersion != pDrvInfo->DriverVersion)
-        {
-            ERR("Driver version mismatch between registry (%lu) and display driver (%lu).\n", DriverVersion, pDrvInfo->DriverVersion);
-            RegCloseKey(DrvKey);
-            RegCloseKey(OglKey);
-            goto end;
-        }
-
-        dwInput = sizeof(Flags);
-        ret = RegQueryValueExW(DrvKey, L"Flags", 0, &dwValueType, (LPBYTE)&Flags, &dwInput);
-        if((ret != ERROR_SUCCESS) || (dwValueType != REG_DWORD))
-        {
-            WARN("No driver version in driver subkey\n");
-            Flags = 0;
-        }
-
-        /* We're done */
-        RegCloseKey(DrvKey);
-        TRACE("DLL name is %S, Version %lx, DriverVersion %lx, Flags %lx.\n", DllName, Version, DriverVersion, Flags);
+        /* No need for this anymore */
+        RegCloseKey(OglKey);
     }
-    /* No need for this anymore */
-    RegCloseKey(OglKey);
 
     /* So far so good, allocate data */
     data = HeapAlloc(GetProcessHeap(), 0, sizeof(*data));
