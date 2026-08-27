@@ -3,7 +3,7 @@
 # shorter callback table; higher configurations retain the honest WDDM 2.1
 # implementation ceiling instead of exposing zero-filled newer tails.
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
-add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11007)
+add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11008)
 
 spec2def(d3dumdrt.dll d3dumdrt.spec)
 
