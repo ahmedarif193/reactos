@@ -117,10 +117,9 @@ VOID IntCompositionDamageBacking(_In_opt_ PSURFACE psurf);
  * paint): the whole frame is re-asserted on the next compose. */
 VOID IntCompositionDamageFromGdi(VOID);
 
-/* BeginPaint/EndPaint bracket: while open, the compositor won't sync the
- * window's front buffer from its (inconsistent) backing; the closing EndPaint
- * recomposes (and self-heals the bracket counter once the thread's paint
- * batch drains). Called from IntBeginPaint / IntEndPaint. */
+/* BeginPaint/EndPaint bracket for redirected composition. Classic CDD output
+ * is bracketed by the cached DC acquired by BeginPaint, which gives that path
+ * a release token that window teardown can also close safely. */
 VOID IntCompositionPaintBegin(_In_ PWND Wnd);
 VOID IntCompositionPaintEnd(_In_ PWND Wnd);
 
@@ -129,8 +128,11 @@ VOID IntCompositionPaintEnd(_In_ PWND Wnd);
  * their intermediate states never present. GL windows are exempt (their DC is
  * held for the window's lifetime). Called from UserGetDCEx / DceReleaseDC for
  * DCX_CACHE DCs. */
-VOID IntCompositionDcAcquire(_In_opt_ PWND Wnd);
-VOID IntCompositionDcRelease(_In_opt_ PWND Wnd);
+#define COMPOSITION_DC_NONE       0
+#define COMPOSITION_DC_CLASSIC    1
+#define COMPOSITION_DC_REDIRECTED 2
+UCHAR IntCompositionDcAcquire(_In_opt_ PWND Wnd);
+VOID IntCompositionDcRelease(_In_opt_ PWND Wnd, _In_ UCHAR State);
 
 /* Compositor liveness watchdog, called from the message pump: a silent dwm
  * tears composition down and the desktop reverts to direct drawing. */

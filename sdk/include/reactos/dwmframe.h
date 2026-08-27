@@ -47,11 +47,15 @@
  *   PRESENT_STATS    - read-only present-path counters (DXGK_PRESENT_STATS in
  *                      the escape output buffer) so a test can measure how much
  *                      scan-out work a GDI/cursor operation costs.
+ *   PRESENT_BATCH    - LONG in: non-zero opens a classic-GDI paint batch,
+ *                      zero closes it. CDD defers scanout until the outermost
+ *                      GetDC/ReleaseDC or BeginPaint/EndPaint pair completes.
  */
 #define CDD_ESCAPE_SUPPRESS_CURSOR  0x44574D01
 #define CDD_ESCAPE_COMPOSITION_SYNC 0x44574D02
 #define CDD_ESCAPE_REGISTER_VBLANK  0x44574D03
 #define CDD_ESCAPE_PRESENT_STATS    0x44574D04
+#define CDD_ESCAPE_PRESENT_BATCH    0x44574D05
 
 /*
  * cdd -> dxgkrnl present-path IOCTLs (kernel side of the same contract).
@@ -59,13 +63,13 @@
  *                        into the mapped DOD primary and records the rectangle
  *                        with dxgkrnl, which scans it out through the
  *                        miniport's DxgkDdiPresentDisplayOnly at a paced
- *                        cadence (synchronously in the caller's context when
- *                        the pace allows, otherwise from the present timer
- *                        once drawing goes quiet). Input: one RECTL, or a
+ *                        cadence. Input: one RECTL, or a
  *                        DXGK_PRESENT_DIRTY_RECT_INPUT whose Flags bracket
  *                        a cursor-hidden drawing op (HOLD: the caller is
  *                        withholding rectangles and the timer must not scan
- *                        out; RELEASE: the bracket closed, Rect is the union).
+ *                        out; RELEASE: the bracket closed, Rect is the union;
+ *                        FLUSH: GDI completed a batch and dxgkrnl may present
+ *                        all accumulated rectangles synchronously).
  *   COMPOSITION_BEGIN/END - present bracket around a composed-frame blit so
  *                        the present worker never scans out a half-composed
  *                        primary; END flushes the dirty rects accumulated
@@ -73,6 +77,9 @@
  *   REGISTER_VBLANK    - forwards the CDD_ESCAPE_REGISTER_VBLANK event HANDLE
  *                        payload (ULONGLONG, 0 clears); dxgkrnl owns the object
  *                        reference while its present timer can signal it.
+ *   PRESENT_BATCH_BEGIN/END - nested classic-GDI paint transaction. BEGIN
+ *                        blocks new scanout and drains any copy already in
+ *                        flight; END publishes on the outermost close.
  */
 #define IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT \
     CTL_CODE(FILE_DEVICE_VIDEO, 0x920, METHOD_BUFFERED, FILE_ANY_ACCESS)
@@ -94,6 +101,10 @@
  */
 #define IOCTL_VIDEO_DXGK_GPU_ESCAPE \
     CTL_CODE(FILE_DEVICE_VIDEO, 0x925, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_VIDEO_DXGK_PRESENT_BATCH_BEGIN \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x926, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_VIDEO_DXGK_PRESENT_BATCH_END \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x927, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #include <pshpack4.h>
 
@@ -105,6 +116,7 @@ typedef struct _DXGK_PRESENT_DIRTY_RECT_INPUT
 
 #define DXGK_PRESENT_DIRTY_HOLD    0x00000001u
 #define DXGK_PRESENT_DIRTY_RELEASE 0x00000002u
+#define DXGK_PRESENT_DIRTY_FLUSH   0x00000004u
 
 /*
  * Present-path counters (CDD_ESCAPE_PRESENT_STATS / IOCTL_VIDEO_DXGK_PRESENT_STATS).
@@ -119,7 +131,11 @@ typedef struct _DXGK_PRESENT_STATS
     ULONG ScanoutCopies;
     ULONG PendingDirtyRect;    /* 1 = a recorded rect is not scanned out yet */
     ULONG CompositionActive;   /* 1 = inside a compositor present bracket    */
-    ULONG Reserved;
+    ULONG PresentBatchDepth;
+    ULONG PresentBatchBegins;
+    ULONG PresentBatchEnds;
+    ULONG PresentBatchFlushDeferrals;
+    ULONG PresentBatchMaxDepth;
 } DXGK_PRESENT_STATS, *PDXGK_PRESENT_STATS;
 
 /* LayerFlags bits (match winuser LWA_*). */

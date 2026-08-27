@@ -112,14 +112,20 @@ static volatile LONGLONG g_LastPresentSubmit100ns = 0;
 static volatile LONGLONG g_LastGpuActivity100ns = 0;
 #define DXGK_DIRTY_RECT_SLOTS 8
 #define DXGK_PRESENT_PACE_100NS      (8ULL * 10000ULL)
-#define DXGK_PRESENT_SMALL_GAP_100NS (2ULL * 10000ULL)
 #define DXGK_PRESENT_QUIET_100NS     (4ULL * 10000ULL)
 #define DXGK_PRESENT_HOLD_STALE_100NS (500ULL * 10000ULL)
+#define DXGK_GDI_BATCH_STALE_100NS   (1000ULL * 10000ULL)
 #define DXGK_GPU_ACTIVITY_QUIET_100NS (250ULL * 10000ULL)
 static RECTL g_PresentDirtyRects[DXGK_DIRTY_RECT_SLOTS];
 static ULONG g_PresentDirtyRectCount = 0;
 static volatile LONG g_PresentHoldActive = 0;
 static volatile LONGLONG g_PresentHoldSince100ns = 0;
+static volatile LONG g_GdiPresentBatchDepth = 0;
+static volatile LONGLONG g_GdiPresentBatchSince100ns = 0;
+static volatile LONG g_GdiPresentBatchBeginCount = 0;
+static volatile LONG g_GdiPresentBatchEndCount = 0;
+static volatile LONG g_GdiPresentBatchFlushDeferrals = 0;
+static volatile LONG g_GdiPresentBatchMaxDepth = 0;
 static const GUID g_RxgkShadowPresentInterfaceGuid =
     RXGK_SHADOW_PRESENT_INTERFACE_GUID_INIT;
 
@@ -147,12 +153,40 @@ DxgkpPresentHoldActive(
     return TRUE;
 }
 
+/* Direct CDD drawing is bracketed at Win32k's BeginPaint/EndPaint and
+ * GetDC/ReleaseDC seams. A stale bracket is abandoned so a dead painter cannot
+ * leave the display permanently frozen. */
+static BOOLEAN
+DxgkpGdiPresentBatchActive(
+    _In_ ULONGLONG Now100ns)
+{
+    LONG Depth;
+    ULONGLONG Since100ns;
+
+    Depth = InterlockedCompareExchange(&g_GdiPresentBatchDepth, 0, 0);
+    if (Depth <= 0)
+        return FALSE;
+
+    Since100ns = (ULONGLONG)InterlockedCompareExchange64(
+        &g_GdiPresentBatchSince100ns, 0, 0);
+    if (Since100ns != 0 && Now100ns > Since100ns &&
+        (Now100ns - Since100ns) >= DXGK_GDI_BATCH_STALE_100NS &&
+        Since100ns == (ULONGLONG)InterlockedCompareExchange64(
+            &g_GdiPresentBatchSince100ns, 0, 0) &&
+        InterlockedCompareExchange(&g_GdiPresentBatchDepth, 0, Depth) == Depth)
+    {
+        InterlockedExchange64(&g_GdiPresentBatchSince100ns, 0);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 /*
- * Pending rectangles that missed a paced synchronous present are scanned out
- * asynchronously only once cdd is not inside a cursor-hidden bracket, the
- * drawing has been quiet for DXGK_PRESENT_QUIET_100NS and the last scan-out
- * copy is at least DXGK_PRESENT_PACE_100NS old — the asynchronous copy never
- * interleaves an in-flight GDI operation.
+ * Pending rectangles that could not be committed at a synchronized GDI flush
+ * are scanned out asynchronously only once cdd is not inside a cursor-hidden
+ * bracket, drawing has been quiet for DXGK_PRESENT_QUIET_100NS and the last
+ * scan-out copy is at least DXGK_PRESENT_PACE_100NS old.
  */
 static BOOLEAN
 DxgkpMayPresentPendingAsync(
@@ -162,6 +196,8 @@ DxgkpMayPresentPendingAsync(
     ULONGLONG LastPresent100ns = (ULONGLONG)InterlockedCompareExchange64(&g_LastPresentSubmit100ns, 0, 0);
 
     if (DxgkpPresentHoldActive(Now100ns))
+        return FALSE;
+    if (DxgkpGdiPresentBatchActive(Now100ns))
         return FALSE;
     if (Now100ns > LastDirty100ns && (Now100ns - LastDirty100ns) < DXGK_PRESENT_QUIET_100NS)
         return FALSE;
@@ -1697,25 +1733,6 @@ DxgkpHasPendingDirtyRect(
     return HasDirty;
 }
 
-static LONGLONG
-DxgkpPendingDirtyArea(
-    _In_ PDXGKRNL_ADAPTER Adapter)
-{
-    LONGLONG Area = 0;
-    ULONG i;
-    DXGK_PRESENT_LOCK_STATE LockState;
-
-    if (Adapter == NULL)
-        return 0;
-
-    DxgkpAcquirePresentLock(Adapter, &LockState);
-    for (i = 0; i < g_PresentDirtyRectCount; i++)
-        Area += DxgkpRectArea(&g_PresentDirtyRects[i]);
-    DxgkpReleasePresentLock(Adapter, &LockState);
-
-    return Area;
-}
-
 /*
  * Serializes every scan-out copy (sync IOCTL presents, the worker fallback)
  * against each other AND lets COMPOSITION_BEGIN drain an in-flight worker
@@ -1736,6 +1753,49 @@ DxgkpEnsurePresentMutex(VOID)
         KeInitializeMutex(&g_PresentMutex, 0);
         InterlockedExchange(&g_PresentMutexInited, 1);
     }
+}
+
+static VOID
+DxgkpBeginGdiPresentBatch(VOID)
+{
+    LARGE_INTEGER DrainTimeout;
+    NTSTATUS DrainStatus;
+    LONG Depth;
+    LONG Maximum;
+
+    Depth = InterlockedIncrement(&g_GdiPresentBatchDepth);
+    InterlockedIncrement(&g_GdiPresentBatchBeginCount);
+    Maximum = InterlockedCompareExchange(&g_GdiPresentBatchMaxDepth, 0, 0);
+    while (Depth > Maximum &&
+           InterlockedCompareExchange(&g_GdiPresentBatchMaxDepth,
+                                      Depth,
+                                      Maximum) != Maximum)
+    {
+        Maximum = InterlockedCompareExchange(&g_GdiPresentBatchMaxDepth, 0, 0);
+    }
+    if (Depth == 1)
+    {
+        InterlockedExchange64(&g_GdiPresentBatchSince100ns,
+                              (LONGLONG)DxgkpDisplayTraceNow100ns());
+    }
+
+    /* Set the hold before draining. A worker that reaches the mutex after us
+     * observes the batch and leaves without scanning the primary. */
+    DxgkpEnsurePresentMutex();
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL ||
+        InterlockedCompareExchange(&g_PresentMutexInited, 0, 0) != 1)
+    {
+        return;
+    }
+
+    DrainTimeout.QuadPart = -(50LL * 10000LL);
+    DrainStatus = KeWaitForSingleObject(&g_PresentMutex,
+                                        Executive,
+                                        KernelMode,
+                                        FALSE,
+                                        &DrainTimeout);
+    if (DrainStatus == STATUS_SUCCESS)
+        KeReleaseMutex(&g_PresentMutex, FALSE);
 }
 
 static VOID
@@ -1787,9 +1847,10 @@ DxgkpTryDispatchPresentWork(
  * DxgkpPresentSyncNow
  *
  * Present the accumulated dirty rect NOW, in the caller's context, under the
- * present mutex. The caller is cdd's draw/escape path, which already holds the
- * win32k device lock — so the scan-out copy can never interleave a GDI write
- * to the shadow framebuffer. Falls back to the worker when not at PASSIVE.
+ * present mutex. The caller is cdd's synchronized flush/escape path, which
+ * already holds the win32k device lock, so the scan-out copy cannot interleave
+ * a GDI write to the shadow framebuffer. Falls back to the worker when not at
+ * PASSIVE_LEVEL.
  */
 static BOOLEAN
 DxgkpPresentPendingDirtyRects(
@@ -1798,10 +1859,19 @@ DxgkpPresentPendingDirtyRects(
 {
     RECTL DirtyRects[DXGK_DIRTY_RECT_SLOTS];
     ULONG Count;
+    ULONG i;
 
     Count = DxgkpConsumeDirtyRects(Adapter, DirtyRects);
     if (Count == 0)
         return FALSE;
+
+    /* A completed GDI transaction is one visual state. Presenting its
+     * background, glyph, and focus rectangles separately lets a live scanout
+     * observe an intermediate state even though all pixels are final in the
+     * shadow surface. Collapse the batch to one bounding copy. */
+    for (i = 1; i < Count; i++)
+        DxgkpRectUnion(&DirtyRects[0], &DirtyRects[i]);
+    Count = 1;
 
     DxgkpPresentShadowFbRects(Adapter, DirtyRects, Count, TraceReason);
     return TRUE;
@@ -1812,6 +1882,8 @@ DxgkpPresentSyncNow(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
     if (Adapter == NULL || InterlockedCompareExchange(&Adapter->SharedSurfaceAvailable, 0, 0) == 0)
+        return;
+    if (DxgkpGdiPresentBatchActive(DxgkpDisplayTraceNow100ns()))
         return;
 
     if (KeGetCurrentIrql() != PASSIVE_LEVEL ||
@@ -1849,6 +1921,33 @@ DxgkpPresentSyncNow(
     KeReleaseMutex(&g_PresentMutex, FALSE);
 }
 
+static VOID
+DxgkpEndGdiPresentBatch(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    LONG Depth;
+
+    for (;;)
+    {
+        Depth = InterlockedCompareExchange(&g_GdiPresentBatchDepth, 0, 0);
+        if (Depth <= 0)
+            break;
+        if (InterlockedCompareExchange(&g_GdiPresentBatchDepth,
+                                       Depth - 1,
+                                       Depth) == Depth)
+        {
+            InterlockedIncrement(&g_GdiPresentBatchEndCount);
+            break;
+        }
+    }
+
+    if (Depth <= 0 || Depth > 1)
+        return;
+
+    InterlockedExchange64(&g_GdiPresentBatchSince100ns, 0);
+    DxgkpPresentSyncNow(Adapter);
+}
+
 /* ========================================================================
  * DxgkpPresentTimerDpc
  *
@@ -1872,6 +1971,13 @@ DxgkpPresentWorkItemRoutineEx(
     {
         DxgkpEnsurePresentMutex();
         KeWaitForSingleObject(&g_PresentMutex, Executive, KernelMode, FALSE, NULL);
+
+        if (DxgkpGdiPresentBatchActive(DxgkpDisplayTraceNow100ns()))
+        {
+            KeReleaseMutex(&g_PresentMutex, FALSE);
+            InterlockedExchange(&g_PresentDispatchBusy, 0);
+            return;
+        }
 
         /*
          * Composition check UNDER the mutex: a COMPOSITION_BEGIN racing in
@@ -2029,7 +2135,7 @@ DxgkpPresentTimerDpc(
     {
         ULONGLONG LastPresent100ns = (ULONGLONG)InterlockedCompareExchange64(&g_LastPresentSubmit100ns, 0, 0);
 
-        /* Pure safety net: draws now present synchronously, so an idle
+        /* Pure safety net: completed GDI batches present synchronously, so an idle
          * desktop needs no periodic full-screen scan-out copy (a constant
          * ~500 MB/s of write-combined traffic on rpi5vc4). */
         if (Now100ns > LastPresent100ns &&
@@ -2095,6 +2201,8 @@ DxgkpStartPresentTimer(
     DxgkpEnsurePresentMutex();
     g_PresentDirtyRectCount = 0;
     InterlockedExchange(&g_PresentHoldActive, 0);
+    InterlockedExchange(&g_GdiPresentBatchDepth, 0);
+    InterlockedExchange64(&g_GdiPresentBatchSince100ns, 0);
     InterlockedExchange64(&g_LastDirtyNotify100ns, 0);
     InterlockedExchange64(&g_LastPresentSubmit100ns, 0);
     InterlockedExchange64(&g_LastGpuActivity100ns, 0);
@@ -2144,6 +2252,8 @@ DxgkpStopPresentTimer(
      * caller swaps the framebuffer or frees the adapter-owned work item. */
     DxgkpWaitForFlagClear(&g_PresentDispatchBusy);
     g_PresentDirtyRectCount = 0;
+    InterlockedExchange(&g_GdiPresentBatchDepth, 0);
+    InterlockedExchange64(&g_GdiPresentBatchSince100ns, 0);
     InterlockedExchange64(&g_LastDirtyNotify100ns, 0);
     InterlockedExchange64(&g_LastPresentSubmit100ns, 0);
     InterlockedExchange64(&g_LastGpuActivity100ns, 0);
@@ -2782,33 +2892,22 @@ DxgkpDisplayDispatch(
             DxgkpRecordDirtyRect(g_DisplayAdapter, DirtyRect);
             InterlockedExchange64(&g_LastDirtyNotify100ns, (LONGLONG)Now100ns);
 
-            /*
-             * Present synchronously in the caller's context (cdd's draw hooks,
-             * win32k device lock held, so the scan-out copy never interleaves
-             * a GDI write) but paced like a display refresh: at most one copy
-             * per DXGK_PRESENT_PACE_100NS, or per DXGK_PRESENT_SMALL_GAP_100NS
-             * when the pending area is small. Rects that miss the slot stay
-             * recorded; the next notification or the present timer (once the
-             * drawing goes quiet) scans them out. Mid-composition rects only
-             * accumulate; COMPOSITION_END flushes.
-             */
-            if (InterlockedCompareExchange(&g_DisplayAdapter->DwmCompositionInProgress, 0, 0) == 0 &&
-                !DxgkpPresentHoldActive(Now100ns))
+            /* Individual GDI primitives only accumulate damage. Publishing a
+             * background/highlight primitive here can expose it before the
+             * following text primitive, which is visible as menu hover flicker.
+             * CDD sets FLUSH only from GDI's completed-batch callbacks, both of
+             * which run with the win32k device lock held. */
+            if ((Flags & DXGK_PRESENT_DIRTY_FLUSH) &&
+                InterlockedCompareExchange(&g_DisplayAdapter->DwmCompositionInProgress, 0, 0) == 0 &&
+                DxgkpGdiPresentBatchActive(Now100ns))
             {
-                ULONGLONG LastPresent100ns = (ULONGLONG)InterlockedCompareExchange64(&g_LastPresentSubmit100ns, 0, 0);
-                ULONGLONG Since100ns = (Now100ns > LastPresent100ns) ? (Now100ns - LastPresent100ns) : 0;
-                BOOLEAN PresentNow = (LastPresent100ns == 0 || Since100ns >= DXGK_PRESENT_PACE_100NS);
-
-                if (!PresentNow && Since100ns >= DXGK_PRESENT_SMALL_GAP_100NS)
-                {
-                    ULONG Width, Height;
-
-                    DxgkpSnapshotCommittedDisplayState(g_DisplayAdapter, &Width, &Height, NULL);
-                    PresentNow = (DxgkpPendingDirtyArea(g_DisplayAdapter) * 8 <= (LONGLONG)Width * Height);
-                }
-
-                if (PresentNow)
-                    DxgkpPresentSyncNow(g_DisplayAdapter);
+                InterlockedIncrement(&g_GdiPresentBatchFlushDeferrals);
+            }
+            else if ((Flags & DXGK_PRESENT_DIRTY_FLUSH) &&
+                     InterlockedCompareExchange(&g_DisplayAdapter->DwmCompositionInProgress, 0, 0) == 0 &&
+                     !DxgkpPresentHoldActive(Now100ns))
+            {
+                DxgkpPresentSyncNow(g_DisplayAdapter);
             }
 
             Status = STATUS_SUCCESS;
@@ -2861,6 +2960,7 @@ DxgkpDisplayDispatch(
         case IOCTL_VIDEO_DXGK_PRESENT_STATS:
         {
             PDXGK_PRESENT_STATS Stats = (PDXGK_PRESENT_STATS)Irp->AssociatedIrp.SystemBuffer;
+            LONG BatchDepth;
 
             if (Stats == NULL ||
                 Stack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(*Stats))
@@ -2881,8 +2981,50 @@ DxgkpDisplayDispatch(
             Stats->PendingDirtyRect  = DxgkpHasPendingDirtyRect(g_DisplayAdapter) ? 1 : 0;
             Stats->CompositionActive =
                 InterlockedCompareExchange(&g_DisplayAdapter->DwmCompositionInProgress, 0, 0) != 0 ? 1 : 0;
+            BatchDepth = InterlockedCompareExchange(&g_GdiPresentBatchDepth, 0, 0);
+            Stats->PresentBatchDepth = BatchDepth > 0 ? (ULONG)BatchDepth : 0;
+            Stats->PresentBatchBegins = (ULONG)InterlockedCompareExchange(&g_GdiPresentBatchBeginCount, 0, 0);
+            Stats->PresentBatchEnds = (ULONG)InterlockedCompareExchange(&g_GdiPresentBatchEndCount, 0, 0);
+            Stats->PresentBatchFlushDeferrals = (ULONG)InterlockedCompareExchange(&g_GdiPresentBatchFlushDeferrals, 0, 0);
+            Stats->PresentBatchMaxDepth = (ULONG)InterlockedCompareExchange(&g_GdiPresentBatchMaxDepth, 0, 0);
 
             BytesReturned = sizeof(*Stats);
+            Status = STATUS_SUCCESS;
+            break;
+        }
+
+        case IOCTL_VIDEO_DXGK_PRESENT_BATCH_BEGIN:
+        {
+            if (Irp->RequestorMode != KernelMode)
+            {
+                Status = STATUS_ACCESS_DENIED;
+                break;
+            }
+            if (g_DisplayAdapter == NULL)
+            {
+                Status = STATUS_DEVICE_NOT_READY;
+                break;
+            }
+
+            DxgkpBeginGdiPresentBatch();
+            Status = STATUS_SUCCESS;
+            break;
+        }
+
+        case IOCTL_VIDEO_DXGK_PRESENT_BATCH_END:
+        {
+            if (Irp->RequestorMode != KernelMode)
+            {
+                Status = STATUS_ACCESS_DENIED;
+                break;
+            }
+            if (g_DisplayAdapter == NULL)
+            {
+                Status = STATUS_DEVICE_NOT_READY;
+                break;
+            }
+
+            DxgkpEndGdiPresentBatch(g_DisplayAdapter);
             Status = STATUS_SUCCESS;
             break;
         }
