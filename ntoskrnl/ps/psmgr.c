@@ -457,6 +457,7 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Initialize the Active Process List */
     InitializeListHead(&PsActiveProcessHead);
     KeInitializeGuardedMutex(&PspActiveProcessMutex);
+    PspInitializeTls();
     if (!PspInitializeApiSetSchema())
         return FALSE;
 

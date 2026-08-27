@@ -80,6 +80,7 @@ KMT_TESTFUNC Test_ExLicenseDif;
 KMT_TESTFUNC Test_IoCancelKM;
 KMT_TESTFUNC Test_PsProcessInfo;
 KMT_TESTFUNC Test_PsEnergy;
+KMT_TESTFUNC Test_PsTls;
 KMT_TESTFUNC Test_RtlStringSupportKM;
 #ifdef _M_ARM64
 KMT_TESTFUNC Test_Win11NewKM;
@@ -446,6 +447,7 @@ const KMT_TEST TestList[] =
     { "PoPowerSettings",                    Test_PoPowerSettings },
     { "PsNotify",                           Test_PsNotify },
     { "PsEnergy",                           Test_PsEnergy },
+    { "PsTls",                              Test_PsTls },
     { "PsQuota",                            Test_PsQuota },
     { "SeAccessCheckKM",                    Test_SeAccessCheckKM },
     { "RtlAvlTreeKM",                       Test_RtlAvlTree },

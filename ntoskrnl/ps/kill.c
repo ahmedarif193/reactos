@@ -556,6 +556,9 @@ PspExitThread(IN NTSTATUS ExitStatus)
     /* Run Thread Notify Routines before we desintegrate the thread */
     PspRunCreateThreadNotifyRoutines(Thread, FALSE);
 
+    /* Run down kernel thread-local storage while the thread is still valid. */
+    PspTlsThreadCleanup(Thread);
+
     /* Lock the Process before we modify its thread entries */
     KeEnterCriticalRegion();
     ExAcquirePushLockExclusive(&CurrentProcess->ProcessLock);
