@@ -305,6 +305,7 @@ struct _RPI5VC4_DEVICE_EXTENSION
     LONG HvsDiagPrints;              /* budget for first-N diagnostics  */
 
     BOOLEAN PixelValveValid;
+    BOOLEAN PixelValveVBlankLive;
     ULONG PixelValveIndex;
     PHYSICAL_ADDRESS PixelValvePhysical;
     ULONG PixelValveControl;
