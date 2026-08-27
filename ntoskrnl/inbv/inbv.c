@@ -508,6 +508,34 @@ InbvNotifyDisplayOwnershipLost(
     }
 }
 
+NTSTATUS
+NTAPI
+InbvNotifyDisplayOwnershipChange(
+    _In_ BOOLEAN DisplayOwned)
+{
+    if (DisplayOwned)
+        InbvAcquireDisplayOwnership();
+    else
+        InbvNotifyDisplayOwnershipLost(NULL);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+InbvSetVirtualFrameBuffer(
+    _In_opt_ PVOID VirtualFrameBuffer)
+{
+    NTSTATUS Status;
+
+    if (!InbvBootDriverInstalled)
+        return STATUS_NOT_IMPLEMENTED;
+
+    InbvAcquireLock();
+    Status = VidSetVirtualFrameBuffer(VirtualFrameBuffer);
+    InbvReleaseLock();
+    return Status;
+}
+
 BOOLEAN
 NTAPI
 InbvResetDisplay(VOID)

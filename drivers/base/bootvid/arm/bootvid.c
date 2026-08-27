@@ -29,6 +29,14 @@
 static PUSHORT VgaArmBase;
 static PHYSICAL_ADDRESS VgaPhysical;
 
+NTSTATUS
+NTAPI
+VidSetVirtualFrameBuffer(
+    _In_opt_ PVOID VirtualFrameBuffer)
+{
+    return VirtualFrameBuffer == NULL ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
+}
+
 /* PRIVATE FUNCTIONS *********************************************************/
 
 FORCEINLINE

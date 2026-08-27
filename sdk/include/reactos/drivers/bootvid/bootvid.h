@@ -37,6 +37,11 @@ BOOLEAN
 NTAPI
 VidQueryDisplayInfo(_Out_ PVID_DISPLAY_INFO DisplayInfo);
 
+NTSTATUS
+NTAPI
+VidSetVirtualFrameBuffer(
+    _In_opt_ PVOID VirtualFrameBuffer);
+
 VOID
 NTAPI
 VidResetDisplay(

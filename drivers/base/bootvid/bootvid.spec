@@ -9,4 +9,5 @@
 @ stdcall VidScreenToBufferBlt(ptr long long long long long)
 @ stdcall VidSetScrollRegion(long long long long)
 @ stdcall VidSetTextColor(long)
+@ stdcall VidSetVirtualFrameBuffer(ptr)
 @ stdcall VidSolidColorFill(long long long long long)

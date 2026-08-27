@@ -8,6 +8,14 @@
 
 #include "precomp.h"
 
+NTSTATUS
+NTAPI
+VidSetVirtualFrameBuffer(
+    _In_opt_ PVOID VirtualFrameBuffer)
+{
+    return VirtualFrameBuffer == NULL ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
+}
+
 /* PRIVATE FUNCTIONS *********************************************************/
 
 static BOOLEAN
