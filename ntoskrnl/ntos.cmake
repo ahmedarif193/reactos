@@ -150,6 +150,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/iocomp.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/ioevent.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/iofunc.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/iommu.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/iomdl.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/iomgr.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/iorsrce.c

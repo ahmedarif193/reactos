@@ -110,6 +110,7 @@ KMT_TESTFUNC Test_IoDeviceInterface;
 KMT_TESTFUNC Test_IoEvent;
 KMT_TESTFUNC Test_IoFilesystem;
 KMT_TESTFUNC Test_IoInterrupt;
+KMT_TESTFUNC Test_IoIommu;
 KMT_TESTFUNC Test_IoIrp;
 KMT_TESTFUNC Test_IoWaitCompletionPacket;
 KMT_TESTFUNC Test_ExWorkItem;
@@ -342,6 +343,7 @@ const KMT_TEST TestList[] =
     { "IoEvent",                            Test_IoEvent },
     { "IoFilesystem",                       Test_IoFilesystem },
     { "IoInterrupt",                        Test_IoInterrupt },
+    { "IoIommu",                            Test_IoIommu },
     { "IoIrp",                              Test_IoIrp },
     { "IoWaitCompletionPacket",             Test_IoWaitCompletionPacket },
     { "ExWorkItem",                         Test_ExWorkItem },

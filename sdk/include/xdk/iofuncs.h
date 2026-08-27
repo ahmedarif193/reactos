@@ -1192,6 +1192,25 @@ IoGetDmaAdapter(
   _Out_ _When_(return!=0, _Kernel_IoGetDmaAdapter_ _At_(*NumberOfMapRegisters, _Must_inspect_result_))
     PULONG NumberOfMapRegisters);
 
+_Must_inspect_result_
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoGetIommuInterface(
+  _In_ ULONG Version,
+  _Out_ PDMA_IOMMU_INTERFACE InterfaceOut);
+
+_Must_inspect_result_
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoGetIommuInterfaceEx(
+  _In_ ULONG Version,
+  _In_ ULONGLONG Flags,
+  _Out_ PDMA_IOMMU_INTERFACE_EX InterfaceOut);
+
 __drv_aliasesMem
 _IRQL_requires_max_(DISPATCH_LEVEL)
 NTKERNELAPI
