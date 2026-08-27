@@ -2363,7 +2363,10 @@ DxgkpPointerBridgeSetPosition(
     PfnSetPosition = DXGK_CB(Adapter, DxgkDdiSetPointerPosition);
     if (PfnSetPosition == NULL)
         return STATUS_NOT_SUPPORTED;
-    if (!DxgkAcquireMiniportCallback(Adapter))
+    /* Pointer motion must not queue behind multi-millisecond render escapes.
+     * KmdCall admission still pins the callback table across stop/remove; the
+     * miniport serializes its short HVS list update independently. */
+    if (!DxgkAcquireKmdCall(Adapter))
         return STATUS_DELETE_PENDING;
 
     RtlZeroMemory(&PositionArgs, sizeof(PositionArgs));
@@ -2382,7 +2385,7 @@ DxgkpPointerBridgeSetPosition(
         Status = _SEH2_GetExceptionCode();
     }
     _SEH2_END;
-    DxgkReleaseMiniportCallback(Adapter);
+    DxgkReleaseKmdCall(Adapter);
 
     return Status;
 }
