@@ -69,13 +69,18 @@ MiMapLockedPagesInUserSpace(
     PMMVAD_LONG Vad;
     ULONG NumberOfPages;
     PMMPTE PointerPte;
+#if !defined(_M_ARM64)
     PMMPDE PointerPde;
+#endif
     MMPTE TempPte;
     PPFN_NUMBER MdlPages;
     PMMPFN Pfn1;
     PMMPFN Pfn2;
     BOOLEAN AddressSpaceLocked = FALSE;
 #if defined(_M_ARM64)
+    MI_ARM64_USER_PTE_WALK Arm64Walk;
+    PFN_NUMBER PageTablePage;
+    ULONG_PTR PrepareVa;
     ULONG MappedPages = 0;
 #endif
 
@@ -192,19 +197,85 @@ MiMapLockedPagesInUserSpace(
         KeInvalidateAllCaches();
     }
 
+#if defined(_M_ARM64)
+    /*
+     * Allocate every L3 table before publishing the first MDL leaf.  The
+     * generic recursive-map helper does not maintain the ARM64 table-PFN
+     * hierarchy accounting used by normal user mappings, and a late table
+     * allocation failure would otherwise leave a partially visible mapping.
+     */
+    PrepareVa = StartingVa;
+    for (;;)
+    {
+        Status = MiArm64EnsureUserPte(Process,
+                                      (PVOID)PrepareVa,
+                                      &PointerPte,
+                                      &PageTablePage);
+        if (!NT_SUCCESS(Status))
+        {
+            ULONG_PTR CleanupVa = StartingVa;
+
+            for (;;)
+            {
+                MiArm64PruneEmptyUserPageTables(Process, (PVOID)CleanupVa);
+                if (CleanupVa >= PrepareVa)
+                    break;
+                CleanupVa = ALIGN_DOWN_BY(CleanupVa, PDE_MAPPED_VA) +
+                            PDE_MAPPED_VA;
+            }
+
+            MiRemoveNode((PMMADDRESS_NODE)Vad, &Process->VadRoot);
+            PsReturnProcessNonPagedPoolQuota(Process, sizeof(MMVAD_LONG));
+            MiUnlockProcessWorkingSetUnsafe(Process, Thread);
+            MmUnlockAddressSpace(&Process->Vm);
+            AddressSpaceLocked = FALSE;
+            ExFreePoolWithTag(Vad, 'ldaV');
+            Vad = NULL;
+            goto Error;
+        }
+
+        if (PrepareVa >= EndingVa ||
+            ALIGN_DOWN_BY(PrepareVa, PDE_MAPPED_VA) ==
+                ALIGN_DOWN_BY(EndingVa, PDE_MAPPED_VA))
+        {
+            break;
+        }
+        PrepareVa = ALIGN_DOWN_BY(PrepareVa, PDE_MAPPED_VA) + PDE_MAPPED_VA;
+    }
+#endif
+
     PointerPte = MiAddressToPte(BaseAddress);
     while (NumberOfPages != 0 &&
            *MdlPages != LIST_HEAD)
     {
+#if defined(_M_ARM64)
+        PMMPTE MappingPte = MiAddressToPte(BaseAddress);
+
+        ASSERT(MiArm64GetUserPteAddressForProcess(Process,
+                                                  BaseAddress,
+                                                  &Arm64Walk));
+        ASSERT(Arm64Walk.Depth >= 3);
+        PointerPte = (PMMPTE)Arm64Walk.PointerPte;
+        PageTablePage = Arm64Walk.LevelPfn[3];
+        ASSERT(PointerPte->u.Hard.Valid == 0);
+#else
         PointerPde = MiPteToPde(PointerPte);
         MiMakePdeExistAndMakeValid(PointerPde, Process, MM_NOIRQL);
         ASSERT(PointerPte->u.Hard.Valid == 0);
 
         /* Add a PDE reference for each page */
         MiIncrementPageTableReferences(BaseAddress);
+#endif
 
         /* Set up our basic user PTE */
-        MI_MAKE_HARDWARE_PTE_USER(&TempPte, PointerPte, ProtectionMask, *MdlPages);
+        MI_MAKE_HARDWARE_PTE_USER(&TempPte,
+#if defined(_M_ARM64)
+                                  MappingPte,
+#else
+                                  PointerPte,
+#endif
+                                  ProtectionMask,
+                                  *MdlPages);
 
         EffectiveCacheAttribute = CacheAttribute;
 
@@ -266,6 +337,17 @@ MiMapLockedPagesInUserSpace(
                 break;
         }
 
+#if defined(_M_ARM64)
+        /* Account the leaf completely before the hardware walker sees it. */
+        OldIrql = MiAcquirePfnLock();
+        Pfn1 = MiGetPfnEntry(PageTablePage);
+        ASSERT(Pfn1 != NULL);
+        Pfn1->u2.ShareCount++;
+        Pfn1->OriginalPte.u.Soft.UsedPageTableEntries++;
+        ASSERT(Pfn1->OriginalPte.u.Soft.UsedPageTableEntries <= PTE_PER_PAGE);
+        MiReleasePfnLock(OldIrql);
+#endif
+
         /* Make the page valid */
 #if defined(_M_ARM64)
         MI_WRITE_VALID_PTE_NO_FLUSH(PointerPte, TempPte);
@@ -275,11 +357,13 @@ MiMapLockedPagesInUserSpace(
 #endif
 
         /* Acquire a share count */
+#if !defined(_M_ARM64)
         Pfn1 = MI_PFN_ELEMENT(PointerPde->u.Hard.PageFrameNumber);
         DPRINT("Incrementing %p from %p\n", Pfn1, _ReturnAddress());
         OldIrql = MiAcquirePfnLock();
         Pfn1->u2.ShareCount++;
         MiReleasePfnLock(OldIrql);
+#endif
 
         /* Next page */
         MdlPages++;
@@ -289,7 +373,7 @@ MiMapLockedPagesInUserSpace(
     }
 
 #if defined(_M_ARM64)
-    MiFlushSystemTbRange((PVOID)StartingVa, MappedPages);
+    MiFlushProcessTbRange((PVOID)StartingVa, MappedPages);
 #endif
 
     MiUnlockProcessWorkingSetUnsafe(Process, Thread);
@@ -323,11 +407,17 @@ MiUnmapLockedPagesInUserSpace(
     PETHREAD Thread = PsGetCurrentThread();
     PMMVAD Vad;
     PMMPTE PointerPte;
+#if defined(_M_ARM64)
+    MI_ARM64_USER_PTE_WALK Arm64Walk;
+#else
     PMMPDE PointerPde;
+#endif
     KIRQL OldIrql;
     ULONG NumberOfPages;
     PPFN_NUMBER MdlPages;
+#if !defined(_M_ARM64)
     PFN_NUMBER PageTablePage;
+#endif
 #if defined(_M_AMD64) || defined(_M_ARM64)
     PVOID FlushBase;
     ULONG FlushPages = 0;
@@ -361,7 +451,9 @@ MiUnmapLockedPagesInUserSpace(
     /* MiRemoveNode should have removed us if we were the hint */
     ASSERT(Process->VadRoot.NodeHint != Vad);
 
+#if !defined(_M_ARM64)
     PointerPte = MiAddressToPte(BaseAddress);
+#endif
 #if defined(_M_AMD64) || defined(_M_ARM64)
     FlushBase = BaseAddress;
 #endif
@@ -369,7 +461,15 @@ MiUnmapLockedPagesInUserSpace(
     while (NumberOfPages != 0 &&
            *MdlPages != LIST_HEAD)
     {
+#if defined(_M_ARM64)
+        ASSERT(MiArm64GetUserPteAddressForProcess(Process,
+                                                  BaseAddress,
+                                                  &Arm64Walk));
+        ASSERT(Arm64Walk.Depth == 4);
+        PointerPte = (PMMPTE)Arm64Walk.PointerPte;
+#else
         ASSERT(MiAddressToPte(PointerPte)->u.Hard.Valid == 1);
+#endif
         ASSERT(PointerPte->u.Hard.Valid == 1);
 
         /* Invalidate it */
@@ -378,6 +478,12 @@ MiUnmapLockedPagesInUserSpace(
         FlushPages++;
 #endif
 
+#if defined(_M_ARM64)
+        (VOID)MiArm64ReleaseUserPageTableReferenceLocked(Process,
+                                                         BaseAddress,
+                                                         TRUE,
+                                                         &Arm64Walk);
+#else
         /* We invalidated this PTE, so dereference the PDE */
         PointerPde = MiAddressToPde(BaseAddress);
         PageTablePage = PointerPde->u.Hard.PageFrameNumber;
@@ -389,9 +495,12 @@ MiUnmapLockedPagesInUserSpace(
             /* Flush recursive aliases before the page-table page can be reused. */
             MiDeletePde(PointerPde, Process, TRUE);
         }
+#endif
 
         /* Next page */
+#if !defined(_M_ARM64)
         PointerPte++;
+#endif
         NumberOfPages--;
         BaseAddress = (PVOID)((ULONG_PTR)BaseAddress + PAGE_SIZE);
         MdlPages++;
