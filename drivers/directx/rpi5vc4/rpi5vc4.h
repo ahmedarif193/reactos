@@ -31,6 +31,7 @@
 #include <wdm.h>
 #include <windef.h>
 #include <dispmprt.h>
+#include <reactos/rddm/rxgkpresent.h>
 #include <reactos/rpi5vc4_umd.h>
 #include <reactos/rpi5vc4_xpdm.h>
 
@@ -240,6 +241,13 @@ struct _RPI5VC4_DEVICE_EXTENSION
     DXGK_INTERFACE DxgkInterface;
     PDEVICE_OBJECT PhysicalDeviceObject;
     BOOLEAN Started;
+
+    /* Optional ReactOS shadow-present interface, acquired through the
+     * standard DxgkDdiQueryInterface DDI without changing the WDDM table. */
+    KSPIN_LOCK ShadowPresentInterfaceLock;
+    volatile LONG ShadowPresentInterfaceQueriesOpen;
+    volatile LONG ShadowPresentInterfaceReferences;
+    KEVENT ShadowPresentInterfaceZeroEvent;
 
     /* No firmware display (headless boot): the driver owns a RAM scanout
      * and reports a phantom monitor; HVS/PV stay untouched. */
@@ -467,6 +475,10 @@ NTSTATUS APIENTRY Rpi5Vc4DdiStartDevice(
     _In_  PDXGK_INTERFACE DxgkInterface,
     _Out_ PULONG NumberOfVideoPresentSources,
     _Out_ PULONG NumberOfChildren);
+
+NTSTATUS APIENTRY Rpi5Vc4DdiQueryInterface(
+    _In_ PVOID MiniportDeviceContext,
+    _In_ PQUERY_INTERFACE QueryInterface);
 
 NTSTATUS APIENTRY Rpi5Vc4DdiStopDevice(
     _In_ PVOID MiniportDeviceContext);
