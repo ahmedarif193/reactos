@@ -749,6 +749,10 @@
 @ stdcall -version=0x600+ D3DKMTCreateHwQueue(ptr) NtGdiDdDDICreateHwQueue
 @ stdcall -version=0x600+ D3DKMTDestroyHwQueue(ptr) NtGdiDdDDIDestroyHwQueue
 @ stdcall -version=0x600+ D3DKMTSubmitCommandToHwQueue(ptr) NtGdiDdDDISubmitCommandToHwQueue
+@ stdcall -version=0xA00+ D3DKMTSubmitWaitForSyncObjectsToHwQueue(ptr) NtGdiDdDDISubmitWaitForSyncObjectsToHwQueue
+@ stdcall -version=0xA00+ D3DKMTSubmitSignalSyncObjectsToHwQueue(ptr) NtGdiDdDDISubmitSignalSyncObjectsToHwQueue
+@ stdcall -version=0xA00+ D3DKMTSubmitPresentBltToHwQueue(ptr) NtGdiDdDDISubmitPresentBltToHwQueue
+@ stdcall -version=0xA00+ D3DKMTSubmitPresentToHwQueue(ptr) NtGdiDdDDISubmitPresentToHwQueue
 @ stdcall -version=0x600+ D3DKMTSubmitCommand(ptr) NtGdiDdDDISubmitCommand
 @ stdcall -version=0x600+ D3DKMTGetAllocationPriority(ptr) NtGdiDdDDIGetAllocationPriority
 @ stdcall -version=0x600+ D3DKMTUpdateAllocationProperty(ptr) NtGdiDdDDIUpdateAllocationProperty

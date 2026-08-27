@@ -227,6 +227,10 @@ NTSTATUS APIENTRY D3DKMTGetContextInProcessSchedulingPriority(_Inout_ D3DKMT_GET
 NTSTATUS APIENTRY D3DKMTCreateHwQueue(_Inout_ struct _D3DKMT_CREATEHWQUEUE *pData);
 NTSTATUS APIENTRY D3DKMTDestroyHwQueue(_In_ CONST struct _D3DKMT_DESTROYHWQUEUE *pData);
 NTSTATUS APIENTRY D3DKMTSubmitCommandToHwQueue(_In_ CONST struct _D3DKMT_SUBMITCOMMANDTOHWQUEUE *pData);
+NTSTATUS APIENTRY D3DKMTSubmitWaitForSyncObjectsToHwQueue(_In_ CONST struct _D3DKMT_SUBMITWAITFORSYNCOBJECTSTOHWQUEUE *pData);
+NTSTATUS APIENTRY D3DKMTSubmitSignalSyncObjectsToHwQueue(_In_ CONST struct _D3DKMT_SUBMITSIGNALSYNCOBJECTSTOHWQUEUE *pData);
+NTSTATUS APIENTRY D3DKMTSubmitPresentBltToHwQueue(_In_ CONST struct _D3DKMT_SUBMITPRESENTBLTTOHWQUEUE *pData);
+NTSTATUS APIENTRY D3DKMTSubmitPresentToHwQueue(_Inout_ struct _D3DKMT_SUBMITPRESENTTOHWQUEUE *pData);
 NTSTATUS APIENTRY D3DKMTRegisterTrimNotification(_Inout_ struct _D3DKMT_REGISTERTRIMNOTIFICATION *pData);
 NTSTATUS APIENTRY D3DKMTUnregisterTrimNotification(_Inout_ struct _D3DKMT_UNREGISTERTRIMNOTIFICATION *pData);
 NTSTATUS APIENTRY D3DKMTIsFeatureEnabled(_Inout_ struct _D3DKMT_ISFEATUREENABLED *pData);
@@ -1471,6 +1475,54 @@ NtGdiDdDDISubmitCommandToHwQueue(_In_ const struct _D3DKMT_SUBMITCOMMANDTOHWQUEU
         return Status;
 
     return D3DKMTSubmitCommandToHwQueue(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDISubmitWaitForSyncObjectsToHwQueue(
+    _In_ const struct _D3DKMT_SUBMITWAITFORSYNCOBJECTSTOHWQUEUE* unnamedParam1)
+{
+    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return D3DKMTSubmitWaitForSyncObjectsToHwQueue(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDISubmitSignalSyncObjectsToHwQueue(
+    _In_ const struct _D3DKMT_SUBMITSIGNALSYNCOBJECTSTOHWQUEUE* unnamedParam1)
+{
+    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return D3DKMTSubmitSignalSyncObjectsToHwQueue(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDISubmitPresentBltToHwQueue(
+    _In_ const struct _D3DKMT_SUBMITPRESENTBLTTOHWQUEUE* unnamedParam1)
+{
+    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return D3DKMTSubmitPresentBltToHwQueue(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDISubmitPresentToHwQueue(
+    _Inout_ struct _D3DKMT_SUBMITPRESENTTOHWQUEUE* unnamedParam1)
+{
+    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return D3DKMTSubmitPresentToHwQueue(unnamedParam1);
 }
 
 NTSTATUS
