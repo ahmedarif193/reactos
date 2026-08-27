@@ -2739,15 +2739,26 @@ DxgkpRetireSubmittedDmaBuffersWorker(
         while (!IsListEmpty(&FreeList))
         {
             PDXGKRNL_SUBMIT_DMA_BUFFER Entry = CONTAINING_RECORD(RemoveHeadList(&FreeList), DXGKRNL_SUBMIT_DMA_BUFFER, ListEntry);
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+            BOOLEAN Completed = Entry->CleanupAsCompleted;
+#else
+            BOOLEAN Completed = TRUE;
+#endif
+
+            /*
+             * A signal-on-completion operation may satisfy a wait parked in
+             * another context stream. Fence publication happens while the
+             * tracked work is retired at DISPATCH_LEVEL, where context-order
+             * streams cannot be scheduled. Wake them here at PASSIVE_LEVEL,
+             * before releasing the submission's device reference.
+             */
+            if (Completed && Entry->SignalSyncObjectReference != NULL)
+                DxgkContextOrderWakeDevice(Entry->Device);
 
             DxgkpFreeTrackedDmaBufferEntry(
                 Adapter,
                 Entry,
-#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
-                Entry->CleanupAsCompleted,
-#else
-                TRUE,
-#endif
+                Completed,
                 TRUE,
                 Adapter->MiniportDeviceContext != NULL &&
                     (Adapter->State == DxgkAdapterStateStarted ||

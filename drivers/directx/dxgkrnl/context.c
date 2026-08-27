@@ -771,6 +771,7 @@ DxgkpInitializeContextStreamState(_Inout_ PDXGKRNL_CONTEXT Context)
     KeInitializeSpinLock(&Context->StreamLock);
     InitializeListHead(&Context->StreamOperationList);
     Context->StreamWorkerQueued = 0;
+    Context->StreamWaitOperationCount = 0;
     Context->StreamStopping = 0;
     KeInitializeEvent(&Context->StreamDrainedEvent, NotificationEvent, TRUE);
     /* StreamWorkItem remains zeroed until the ordered-operation worker is installed. */
@@ -1098,6 +1099,7 @@ DxgkpDestroyContextNoLock(
     ASSERT(Context->Mms2ContextStream == NULL);
     ASSERT(IsListEmpty(&Context->StreamOperationList));
     ASSERT(InterlockedCompareExchange(&Context->StreamWorkerQueued, 0, 0) == 0);
+    ASSERT(InterlockedCompareExchange(&Context->StreamWaitOperationCount, 0, 0) == 0);
 
     DxgkContextRenderTeardown(Context);
 

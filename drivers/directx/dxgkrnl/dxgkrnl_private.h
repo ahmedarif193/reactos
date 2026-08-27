@@ -1226,6 +1226,7 @@ struct _DXGKRNL_CONTEXT
     LIST_ENTRY                  StreamOperationList;
     WORK_QUEUE_ITEM             StreamWorkItem;
     volatile LONG               StreamWorkerQueued;
+    volatile LONG               StreamWaitOperationCount;
     volatile LONG               StreamStopping;
     KEVENT                      StreamDrainedEvent;
 
