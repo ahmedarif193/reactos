@@ -216,6 +216,18 @@ typedef struct _PREFETCH_VIRTUAL_ADDRESS_LIST {
 #define PREFETCH_VIRTUAL_ADDRESS_LIST_VERSION_1 1
 #endif
 
+#if (NTDDI_VERSION >= NTDDI_WINBLUE)
+typedef struct _MM_COPY_ADDRESS {
+  _ANONYMOUS_UNION union {
+    PVOID VirtualAddress;
+    PHYSICAL_ADDRESS PhysicalAddress;
+  } DUMMYUNIONNAME;
+} MM_COPY_ADDRESS, *PMMCOPY_ADDRESS;
+
+#define MM_COPY_MEMORY_PHYSICAL 0x1
+#define MM_COPY_MEMORY_VIRTUAL  0x2
+#endif
+
 $endif (_NTDDK_)
 $if (_NTIFS_)
 typedef enum _MMFLUSH_TYPE {

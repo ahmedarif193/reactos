@@ -432,6 +432,19 @@ NTAPI
 MmGetPhysicalAddress(
   _In_ PVOID BaseAddress);
 
+#if (NTDDI_VERSION >= NTDDI_WINBLUE)
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+MmCopyMemory(
+  _Out_writes_bytes_(NumberOfBytes) PVOID TargetAddress,
+  _In_ MM_COPY_ADDRESS SourceAddress,
+  _In_ SIZE_T NumberOfBytes,
+  _In_ ULONG Flags,
+  _Out_ PSIZE_T NumberOfBytesTransferred);
+#endif
+
 NTKERNELAPI
 BOOLEAN
 NTAPI

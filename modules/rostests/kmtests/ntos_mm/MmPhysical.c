@@ -116,10 +116,60 @@ TestAllocatePagesForMdl(VOID)
     ExFreePool(Mdl);
 }
 
+static
+VOID
+TestCopyMemory(VOID)
+{
+    UCHAR SystemSource[64];
+    UCHAR Target[64];
+    MM_COPY_ADDRESS SourceAddress;
+    PVOID UserSource;
+    PVOID FreeBase;
+    SIZE_T BytesTransferred;
+    SIZE_T RegionSize;
+    ULONG Index;
+    NTSTATUS Status;
+
+    for (Index = 0; Index < RTL_NUMBER_OF(SystemSource); ++Index)
+        SystemSource[Index] = (UCHAR)(Index ^ 0xA5);
+
+    RtlZeroMemory(Target, sizeof(Target));
+    SourceAddress.VirtualAddress = SystemSource;
+    BytesTransferred = 0;
+    Status = MmCopyMemory(Target, SourceAddress, sizeof(Target), MM_COPY_MEMORY_VIRTUAL, &BytesTransferred);
+    trace("MmCopyMemory(system virtual) returned 0x%08lx, bytes %Iu\n", Status, BytesTransferred);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_size(BytesTransferred, sizeof(Target));
+    ok(RtlEqualMemory(Target, SystemSource, sizeof(Target)), "system virtual copy contents differed\n");
+
+    UserSource = NULL;
+    RegionSize = PAGE_SIZE;
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &UserSource, 0, &RegionSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    trace("user source allocation returned 0x%08lx, base %p, size %Iu\n", Status, UserSource, RegionSize);
+    if (skip(NT_SUCCESS(Status), "could not allocate the user source page\n"))
+        return;
+
+    RtlCopyMemory(UserSource, SystemSource, sizeof(SystemSource));
+    RtlZeroMemory(Target, sizeof(Target));
+    SourceAddress.VirtualAddress = UserSource;
+    BytesTransferred = 0;
+    Status = MmCopyMemory(Target, SourceAddress, sizeof(Target), MM_COPY_MEMORY_VIRTUAL, &BytesTransferred);
+    trace("MmCopyMemory(user virtual) returned 0x%08lx, bytes %Iu\n", Status, BytesTransferred);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_size(BytesTransferred, sizeof(Target));
+    ok(RtlEqualMemory(Target, SystemSource, sizeof(Target)), "user virtual copy contents differed\n");
+
+    FreeBase = UserSource;
+    RegionSize = 0;
+    Status = ZwFreeVirtualMemory(NtCurrentProcess(), &FreeBase, &RegionSize, MEM_RELEASE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+}
+
 START_TEST(MmPhysical)
 {
     TestPhysicalAddress();
     TestAddressValidity();
     TestMdlForNonPagedPool();
     TestAllocatePagesForMdl();
+    TestCopyMemory();
 }
