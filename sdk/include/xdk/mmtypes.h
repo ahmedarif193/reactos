@@ -183,6 +183,39 @@ typedef enum _MM_ROTATE_DIRECTION {
   MmMaximumRotateDirection
 } MM_ROTATE_DIRECTION, *PMM_ROTATE_DIRECTION;
 
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+typedef struct _PREFETCH_VIRTUAL_ADDRESS_ENTRY {
+  PVOID VirtualAddress;
+  SIZE_T NumberOfBytes;
+} PREFETCH_VIRTUAL_ADDRESS_ENTRY, *PPREFETCH_VIRTUAL_ADDRESS_ENTRY;
+
+typedef enum _PREFETCH_VIRTUAL_ADDRESS_PRIORITY_TYPE {
+  PrefetchPagePriorityDefault,
+  PrefetchPagePriorityLow,
+  PrefetchPagePriorityUseThreadDefault,
+  PrefetchPagePriorityReserved
+} PREFETCH_VIRTUAL_ADDRESS_PRIORITY_TYPE, *PPREFETCH_VIRTUAL_ADDRESS_PRIORITY_TYPE;
+
+typedef union _PREFETCH_VIRTUAL_ADDRESS_FLAGS {
+  struct {
+    ULONG ConsumeOnlySamePriorityOrLowerPages : 1;
+    ULONG PagePriority : 2;
+    ULONG MustBeZero : 29;
+  } Flags;
+  ULONG AllFlags;
+} PREFETCH_VIRTUAL_ADDRESS_FLAGS, *PPREFETCH_VIRTUAL_ADDRESS_FLAGS;
+
+typedef struct _PREFETCH_VIRTUAL_ADDRESS_LIST {
+  ULONG Version;
+  PREFETCH_VIRTUAL_ADDRESS_FLAGS u1;
+  HANDLE AddressSpaceHandle;
+  ULONG_PTR NumberOfEntries;
+  PPREFETCH_VIRTUAL_ADDRESS_ENTRY VirtualAddresses;
+} PREFETCH_VIRTUAL_ADDRESS_LIST, *PPREFETCH_VIRTUAL_ADDRESS_LIST;
+
+#define PREFETCH_VIRTUAL_ADDRESS_LIST_VERSION_1 1
+#endif
+
 $endif (_NTDDK_)
 $if (_NTIFS_)
 typedef enum _MMFLUSH_TYPE {
