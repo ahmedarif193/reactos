@@ -754,6 +754,12 @@ ExpInitSystemPhase1(VOID)
         return FALSE;
     }
 
+    if (ExpInitializePartitionImplementation() == FALSE)
+    {
+        DPRINT1("Executive: Partition object initialization failed\n");
+        return FALSE;
+    }
+
     /* Initialize mutants */
     if (ExpInitializeMutantImplementation() == FALSE)
     {

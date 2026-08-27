@@ -13,6 +13,23 @@
 #define NDEBUG
 #include <debug.h>
 
+/* TYPES *********************************************************************/
+
+typedef struct _PSP_LKMD_CALLBACK
+{
+    LIST_ENTRY ListEntry;
+    PVOID CallbackRoutine;
+    PVOID CallbackContext;
+    ULONG Flags;
+} PSP_LKMD_CALLBACK, *PPSP_LKMD_CALLBACK;
+
+/* GLOBALS *******************************************************************/
+
+static LIST_ENTRY PspLkmdCallbackList =
+    { &PspLkmdCallbackList, &PspLkmdCallbackList };
+static EX_PUSH_LOCK PspLkmdCallbackLock;
+static ULONG PspLkmdCallbackCount;
+
 /* PRIVATE FUNCTIONS *********************************************************/
 
 #if DBG
@@ -415,6 +432,92 @@ NtSetContextThread(IN HANDLE ThreadHandle,
     /* Dereference it and return */
     ObDereferenceObject(Thread);
     return Status;
+}
+
+NTSTATUS
+NTAPI
+DbgkLkmdRegisterCallback(
+    _In_ PVOID Callback,
+    _In_opt_ PVOID Context,
+    _In_ ULONG Flags)
+{
+    PPSP_LKMD_CALLBACK Entry;
+    PPSP_LKMD_CALLBACK NewEntry;
+    PLIST_ENTRY ListEntry;
+
+    if ((Flags & 3UL) == 3UL)
+        return STATUS_INVALID_PARAMETER;
+
+    NewEntry = ExAllocatePoolZero(NonPagedPool,
+                                  sizeof(*NewEntry),
+                                  'DmkL');
+    if (NewEntry == NULL)
+        return STATUS_NO_MEMORY;
+
+    NewEntry->CallbackRoutine = Callback;
+    NewEntry->CallbackContext = Context;
+    NewEntry->Flags = Flags;
+
+    KeEnterCriticalRegion();
+    ExAcquirePushLockExclusive(&PspLkmdCallbackLock);
+    for (ListEntry = PspLkmdCallbackList.Flink;
+         ListEntry != &PspLkmdCallbackList;
+         ListEntry = ListEntry->Flink)
+    {
+        Entry = CONTAINING_RECORD(ListEntry, PSP_LKMD_CALLBACK, ListEntry);
+        if (Entry->CallbackRoutine == Callback)
+        {
+            ExReleasePushLockExclusive(&PspLkmdCallbackLock);
+            KeLeaveCriticalRegion();
+            ExFreePoolWithTag(NewEntry, 'DmkL');
+            return STATUS_ALREADY_REGISTERED;
+        }
+    }
+
+    if (PspLkmdCallbackCount == 8)
+    {
+        ExReleasePushLockExclusive(&PspLkmdCallbackLock);
+        KeLeaveCriticalRegion();
+        ExFreePoolWithTag(NewEntry, 'DmkL');
+        return STATUS_IMPLEMENTATION_LIMIT;
+    }
+
+    InsertTailList(&PspLkmdCallbackList, &NewEntry->ListEntry);
+    PspLkmdCallbackCount++;
+    ExReleasePushLockExclusive(&PspLkmdCallbackLock);
+    KeLeaveCriticalRegion();
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+DbgkLkmdUnregisterCallback(
+    _In_ PVOID Callback)
+{
+    PPSP_LKMD_CALLBACK Entry;
+    PLIST_ENTRY ListEntry;
+
+    KeEnterCriticalRegion();
+    ExAcquirePushLockExclusive(&PspLkmdCallbackLock);
+    for (ListEntry = PspLkmdCallbackList.Flink;
+         ListEntry != &PspLkmdCallbackList;
+         ListEntry = ListEntry->Flink)
+    {
+        Entry = CONTAINING_RECORD(ListEntry, PSP_LKMD_CALLBACK, ListEntry);
+        if (Entry->CallbackRoutine == Callback)
+        {
+            RemoveEntryList(&Entry->ListEntry);
+            PspLkmdCallbackCount--;
+            ExReleasePushLockExclusive(&PspLkmdCallbackLock);
+            KeLeaveCriticalRegion();
+            ExFreePoolWithTag(Entry, 'DmkL');
+            return STATUS_SUCCESS;
+        }
+    }
+
+    ExReleasePushLockExclusive(&PspLkmdCallbackLock);
+    KeLeaveCriticalRegion();
+    return STATUS_NOT_FOUND;
 }
 
 /* EOF */

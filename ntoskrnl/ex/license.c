@@ -14,6 +14,27 @@
 
 /* PUBLIC FUNCTIONS **********************************************************/
 
+BOOLEAN
+NTAPI
+ExIsManufacturingModeEnabled(VOID)
+{
+    return FALSE;
+}
+
+BOOLEAN
+NTAPI
+ExIsSoftBoot(VOID)
+{
+    return FALSE;
+}
+
+BOOLEAN
+NTAPI
+ExQueryFastCacheDevLicense(VOID)
+{
+    return FALSE;
+}
+
 NTSTATUS
 NTAPI
 ZwQueryLicenseValue(
