@@ -291,14 +291,14 @@ void gl_Clear( GLcontext *ctx, GLbitfield mask )
                                                x, y, width, height );
             (*ctx->Driver.SetBuffer)( ctx, GL_FRONT );
          }
+         mask &= ~(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
       }
-      else {
-         /* normal procedure for clearing buffers */
-         if (mask & GL_COLOR_BUFFER_BIT)  clear_color_buffers( ctx );
-         if (mask & GL_DEPTH_BUFFER_BIT)  (*ctx->Driver.ClearDepthBuffer)(ctx);
-         if (mask & GL_ACCUM_BUFFER_BIT)   gl_clear_accum_buffer( ctx );
-         if (mask & GL_STENCIL_BUFFER_BIT) gl_clear_stencil_buffer( ctx );
-      }
+
+      /* Clear any buffers not handled by the combined driver callback. */
+      if (mask & GL_COLOR_BUFFER_BIT)  clear_color_buffers( ctx );
+      if (mask & GL_DEPTH_BUFFER_BIT)  (*ctx->Driver.ClearDepthBuffer)(ctx);
+      if (mask & GL_ACCUM_BUFFER_BIT)   gl_clear_accum_buffer( ctx );
+      if (mask & GL_STENCIL_BUFFER_BIT) gl_clear_stencil_buffer( ctx );
 
 #ifdef PROFILE
       ctx->ClearTime += gl_time() - t0;
