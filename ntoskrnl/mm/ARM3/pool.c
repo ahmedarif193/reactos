@@ -336,7 +336,7 @@ MiInitializeNonPagedPool(VOID)
         SystemPteMetadataPages = (PFN_COUNT)BYTES_TO_PAGES(MiSystemPteMetadataSize);
         ASSERT(PoolPages > SystemPteMetadataPages);
         PoolPages -= SystemPteMetadataPages;
-        MiSystemPteMetadataBuffer = (PMMPTE)((ULONG_PTR)MmNonPagedPoolStart + (PoolPages << PAGE_SHIFT));
+        MiSystemPteMetadataBuffer = (PVOID)((ULONG_PTR)MmNonPagedPoolStart + (PoolPages << PAGE_SHIFT));
         RtlZeroMemory(MiSystemPteMetadataBuffer, SystemPteMetadataPages << PAGE_SHIFT);
     }
 

@@ -264,8 +264,13 @@ MiDbgDumpAddressSpace(VOID)
 #ifndef _M_IX86
     DPRINT1("          0x%p - 0x%p\t%s\n",
             MmSystemPteSpaceStart,
+#ifdef _M_ARM64
+            (PVOID)((ULONG_PTR)MmSystemPteSpaceStart +
+                    ((ULONG_PTR)MmNumberOfSystemPtes << PAGE_SHIFT)),
+#else
             (PVOID)((ULONG_PTR)MmSystemPteSpaceStart +
                     ((MmNumberOfSystemPtes + 1) * PAGE_SIZE)),
+#endif
             "System PTE Space");
 #endif
     DPRINT1("          0x%p - 0x%p\t%s\n",
