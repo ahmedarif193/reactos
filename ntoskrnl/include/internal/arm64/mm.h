@@ -195,7 +195,9 @@ C_ASSERT(ARM64_PTE_TABLE_DESCRIPTOR_ATTRS == 0x00E0000000000F03ULL);
 #define MI_SECONDARY_COLORS                     64
 #define MI_MAX_SECONDARY_COLORS                 1024
 C_ASSERT(MI_SECONDARY_COLORS == 64);
-#define MI_NUMBER_SYSTEM_PTES                   50000
+/* Windows grows this region dynamically. Until ARM3 does, use the amd64
+ * allocator capacity instead of the undersized ARM64 bootstrap value. */
+#define MI_NUMBER_SYSTEM_PTES                   (22000 * 22)
 #define MI_MAX_FREE_PAGE_LISTS                  4
 #define MI_HYPERSPACE_PTES                     256
 #define MI_ZERO_PTES                           (32)
