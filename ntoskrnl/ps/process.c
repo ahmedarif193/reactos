@@ -3028,4 +3028,12 @@ PsSetProcessesWindowState(
     return STATUS_SUCCESS;
 }
 
+DECLSPEC_NORETURN
+VOID
+NTAPI
+PsUnEstablishWin32Callouts(VOID)
+{
+    KeBugCheckEx(0x1FC, 0, 0, 0, 0);
+}
+
 /* EOF */

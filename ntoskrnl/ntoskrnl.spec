@@ -2958,7 +2958,7 @@
 @ stdcall -arch=x86_64,arm64 PsTlsFree(long)
 @ stdcall -arch=x86_64,arm64 PsTlsGetValue(long ptr)
 @ stdcall -arch=x86_64,arm64 PsTlsSetValue(long ptr)
-@ stub -arch=arm64 PsUnEstablishWin32Callouts
+@ stdcall -arch=i386,x86_64,arm64 PsUnEstablishWin32Callouts()
 @ stub -arch=arm64 PsUnregisterAvailableCpusChangeNotification
 @ stub -arch=arm64 PsUnregisterSiloMonitor
 @ stub -arch=arm64 PsUnregisterSyscallProvider

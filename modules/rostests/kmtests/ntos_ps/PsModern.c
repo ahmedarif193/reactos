@@ -108,6 +108,12 @@ NTAPI
 PsDereferenceKernelStack(
     _Inout_ PETHREAD Thread);
 
+DECLSPEC_NORETURN
+NTKERNELAPI
+VOID
+NTAPI
+PsUnEstablishWin32Callouts(VOID);
+
 static
 VOID
 TestProcessIdentity(VOID)
@@ -251,4 +257,19 @@ START_TEST(PsModernPriority)
 START_TEST(PsModernPolicy)
 {
     TestProcessPolicyState();
+}
+
+START_TEST(PsUnEstablishWin32Callouts)
+{
+    trace("PsUnEstablishWin32Callouts resolved to %p\n",
+          PsUnEstablishWin32Callouts);
+
+#ifdef KMT_DESTRUCTIVE_BUGCHECK_TESTS
+    trace("calling PsUnEstablishWin32Callouts; expected bugcheck is 0x1FC\n");
+    PsUnEstablishWin32Callouts();
+#else
+    skip(FALSE,
+         "destructive call disabled; rebuild with "
+         "KMT_DESTRUCTIVE_BUGCHECK_TESTS to expect bugcheck 0x1FC\n");
+#endif
 }
