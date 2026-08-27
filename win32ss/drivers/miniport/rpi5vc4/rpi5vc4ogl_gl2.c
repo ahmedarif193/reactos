@@ -351,6 +351,9 @@ typedef struct _RPI5VC4_OGL_PROGRAM
 typedef struct _RPI5VC4_OGL_VERTEX_ATTRIB
 {
     BOOL Enabled;
+    BOOL Integer;
+    BOOL CurrentIsInteger;
+    BOOL CurrentIsUnsigned;
     GLint Size;
     GLenum Type;
     GLboolean Normalized;
@@ -358,6 +361,8 @@ typedef struct _RPI5VC4_OGL_VERTEX_ATTRIB
     const GLvoid *Pointer;
     GLuint BufferName;
     GLfloat Current[4];
+    GLint CurrentInteger[4];
+    GLuint CurrentUnsigned[4];
 } RPI5VC4_OGL_VERTEX_ATTRIB, *PRPI5VC4_OGL_VERTEX_ATTRIB;
 
 typedef struct _RPI5VC4_OGL_VERTEX_ARRAY
@@ -437,6 +442,8 @@ Rpi5OglGl2InitializeVertexArray(
         VertexArray->VertexAttribs[Index].Size = 4;
         VertexArray->VertexAttribs[Index].Type = GL_FLOAT;
         VertexArray->VertexAttribs[Index].Current[3] = 1.0f;
+        VertexArray->VertexAttribs[Index].CurrentInteger[3] = 1;
+        VertexArray->VertexAttribs[Index].CurrentUnsigned[3] = 1;
     }
 }
 
@@ -4820,6 +4827,151 @@ Rpi5OglDisableVertexAttribArray(
         Attribute->Enabled = FALSE;
 }
 
+static SIZE_T
+Rpi5OglGl2VertexAttribComponentSize(
+    _In_ GLenum Type)
+{
+    switch (Type)
+    {
+        case GL_BYTE:
+        case GL_UNSIGNED_BYTE:
+            return sizeof(GLbyte);
+        case GL_SHORT:
+        case GL_UNSIGNED_SHORT:
+        case GL_HALF_FLOAT:
+            return sizeof(GLshort);
+        case GL_INT:
+        case GL_UNSIGNED_INT:
+        case GL_FLOAT:
+            return sizeof(GLint);
+        case GL_DOUBLE:
+            return sizeof(GLdouble);
+        default:
+            return 0;
+    }
+}
+
+static BOOL
+Rpi5OglGl2ValidVertexAttribType(
+    _In_ GLenum Type,
+    _In_ BOOL Integer)
+{
+    if (Integer)
+    {
+        return Type == GL_BYTE || Type == GL_UNSIGNED_BYTE ||
+               Type == GL_SHORT || Type == GL_UNSIGNED_SHORT ||
+               Type == GL_INT || Type == GL_UNSIGNED_INT;
+    }
+    return Rpi5OglGl2VertexAttribComponentSize(Type) != 0;
+}
+
+static GLfloat
+Rpi5OglGl2HalfToFloat(
+    _In_ GLushort Half)
+{
+    union
+    {
+        ULONG Bits;
+        GLfloat Value;
+    } Result;
+    ULONG Sign = ((ULONG)Half & 0x8000u) << 16;
+    LONG Exponent = ((ULONG)Half >> 10) & 0x1fu;
+    ULONG Fraction = (ULONG)Half & 0x3ffu;
+
+    if (Exponent == 0)
+    {
+        if (Fraction == 0)
+        {
+            Result.Bits = Sign;
+            return Result.Value;
+        }
+        while ((Fraction & 0x400u) == 0)
+        {
+            Fraction <<= 1;
+            Exponent--;
+        }
+        Exponent++;
+        Fraction &= 0x3ffu;
+    }
+    else if (Exponent == 0x1fu)
+    {
+        Result.Bits = Sign | 0x7f800000u | (Fraction << 13);
+        return Result.Value;
+    }
+
+    Result.Bits = Sign | ((ULONG)(Exponent + 112) << 23) | (Fraction << 13);
+    return Result.Value;
+}
+
+static GLfloat
+Rpi5OglGl2ReadVertexAttribComponent(
+    _In_reads_bytes_(Rpi5OglGl2VertexAttribComponentSize(Type))
+        const BYTE *Source,
+    _In_ GLenum Type,
+    _In_ GLboolean Normalized,
+    _In_ BOOL Integer)
+{
+    switch (Type)
+    {
+        case GL_BYTE:
+        {
+            GLbyte Value = *(const GLbyte *)Source;
+
+            if (!Normalized || Integer)
+                return (GLfloat)Value;
+            return Value == -128 ? -1.0f : (GLfloat)Value / 127.0f;
+        }
+        case GL_UNSIGNED_BYTE:
+        {
+            GLubyte Value = *Source;
+
+            return Normalized && !Integer ?
+                (GLfloat)Value / 255.0f : (GLfloat)Value;
+        }
+        case GL_SHORT:
+        {
+            GLshort Value = *(const UNALIGNED GLshort *)Source;
+
+            if (!Normalized || Integer)
+                return (GLfloat)Value;
+            return Value == -32768 ? -1.0f : (GLfloat)Value / 32767.0f;
+        }
+        case GL_UNSIGNED_SHORT:
+        {
+            GLushort Value = *(const UNALIGNED GLushort *)Source;
+
+            return Normalized && !Integer ?
+                (GLfloat)Value / 65535.0f : (GLfloat)Value;
+        }
+        case GL_INT:
+        {
+            GLint Value = *(const UNALIGNED GLint *)Source;
+
+            if (!Normalized || Integer)
+                return (GLfloat)Value;
+            return Value == (-2147483647 - 1) ?
+                -1.0f : (GLfloat)((GLdouble)Value / 2147483647.0);
+        }
+        case GL_UNSIGNED_INT:
+        {
+            GLuint Value = *(const UNALIGNED GLuint *)Source;
+
+            return Normalized && !Integer ?
+                (GLfloat)((GLdouble)Value / 4294967295.0) :
+                (GLfloat)Value;
+        }
+        case GL_HALF_FLOAT:
+            return Rpi5OglGl2HalfToFloat(
+                *(const UNALIGNED GLushort *)Source);
+        case GL_FLOAT:
+            return *(const UNALIGNED GLfloat *)Source;
+        case GL_DOUBLE:
+            return (GLfloat)*(const UNALIGNED GLdouble *)Source;
+        default:
+            return 0.0f;
+    }
+}
+
 static VOID APIENTRY
 Rpi5OglVertexAttribPointer(
     _In_ GLuint Index,
@@ -4844,17 +4996,57 @@ Rpi5OglVertexAttribPointer(
                         "glVertexAttribPointer(size/stride)");
         return;
     }
-    if (Type != GL_FLOAT &&
-        !(Type == GL_UNSIGNED_BYTE && Normalized == GL_TRUE))
+    if (!Rpi5OglGl2ValidVertexAttribType(Type, FALSE))
     {
         Rpi5OglGl2Error(State, GL_INVALID_ENUM,
                         "glVertexAttribPointer(type)");
         return;
     }
 
+    Attribute->Integer = FALSE;
     Attribute->Size = Size;
     Attribute->Type = Type;
     Attribute->Normalized = Normalized;
+    Attribute->Stride = Stride;
+    Attribute->Pointer = Pointer;
+    Attribute->BufferName = Rpi5OglBufferCurrentName(State->BufferState,
+                                                      GL_ARRAY_BUFFER);
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttribIPointer(
+    _In_ GLuint Index,
+    _In_ GLint Size,
+    _In_ GLenum Type,
+    _In_ GLsizei Stride,
+    _In_opt_ const GLvoid *Pointer)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_VERTEX_ATTRIB Attribute;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glVertexAttribIPointer"))
+        return;
+    Attribute = Rpi5OglGl2VertexAttrib(
+        State, Index, "glVertexAttribIPointer(index)");
+    if (Attribute == NULL)
+        return;
+    if (Size < 1 || Size > 4 || Stride < 0)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glVertexAttribIPointer(size/stride)");
+        return;
+    }
+    if (!Rpi5OglGl2ValidVertexAttribType(Type, TRUE))
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM,
+                        "glVertexAttribIPointer(type)");
+        return;
+    }
+
+    Attribute->Integer = TRUE;
+    Attribute->Size = Size;
+    Attribute->Type = Type;
+    Attribute->Normalized = GL_FALSE;
     Attribute->Stride = Stride;
     Attribute->Pointer = Pointer;
     Attribute->BufferName = Rpi5OglBufferCurrentName(State->BufferState,
@@ -4918,10 +5110,20 @@ Rpi5OglGl2SetCurrentAttrib(
     Attribute = Rpi5OglGl2VertexAttrib(State, Index, Function);
     if (Attribute == NULL)
         return;
+    Attribute->CurrentIsInteger = FALSE;
+    Attribute->CurrentIsUnsigned = FALSE;
     Attribute->Current[0] = X;
     Attribute->Current[1] = Y;
     Attribute->Current[2] = Z;
     Attribute->Current[3] = W;
+    Attribute->CurrentInteger[0] = (GLint)X;
+    Attribute->CurrentInteger[1] = (GLint)Y;
+    Attribute->CurrentInteger[2] = (GLint)Z;
+    Attribute->CurrentInteger[3] = (GLint)W;
+    Attribute->CurrentUnsigned[0] = X > 0.0f ? (GLuint)X : 0;
+    Attribute->CurrentUnsigned[1] = Y > 0.0f ? (GLuint)Y : 0;
+    Attribute->CurrentUnsigned[2] = Z > 0.0f ? (GLuint)Z : 0;
+    Attribute->CurrentUnsigned[3] = W > 0.0f ? (GLuint)W : 0;
 }
 
 static VOID APIENTRY
@@ -5031,6 +5233,559 @@ Rpi5OglVertexAttrib4fv(
                           Values[2], Values[3]);
 }
 
+static VOID
+Rpi5OglGl2SetCurrentAttribVector(
+    _In_ GLuint Index,
+    _In_reads_bytes_(Components *
+        Rpi5OglGl2VertexAttribComponentSize(Type)) const GLvoid *Values,
+    _In_ ULONG Components,
+    _In_ GLenum Type,
+    _In_ GLboolean Normalized,
+    _In_z_ PCSTR Function)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    const BYTE *Source = Values;
+    SIZE_T ComponentSize;
+    GLfloat Expanded[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    ULONG Component;
+
+    if (Values == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, Function);
+        return;
+    }
+    ComponentSize = Rpi5OglGl2VertexAttribComponentSize(Type);
+    for (Component = 0; Component < Components; Component++)
+    {
+        Expanded[Component] = Rpi5OglGl2ReadVertexAttribComponent(
+            Source + Component * ComponentSize, Type, Normalized, FALSE);
+    }
+    Rpi5OglGl2SetCurrentAttrib(State, Index,
+                               Expanded[0], Expanded[1],
+                               Expanded[2], Expanded[3], Function);
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttrib1d(_In_ GLuint Index, _In_ GLdouble X)
+{
+    Rpi5OglGl2SetCurrentAttrib(Rpi5OglCurrentGl2State(), Index,
+                               (GLfloat)X, 0.0f, 0.0f, 1.0f,
+                               "glVertexAttrib1d");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttrib1dv(
+    _In_ GLuint Index,
+    _In_reads_(1) const GLdouble *Values)
+{
+    Rpi5OglGl2SetCurrentAttribVector(Index, Values, 1, GL_DOUBLE, GL_FALSE,
+                                     "glVertexAttrib1dv");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttrib1s(_In_ GLuint Index, _In_ GLshort X)
+{
+    Rpi5OglGl2SetCurrentAttrib(Rpi5OglCurrentGl2State(), Index,
+                               (GLfloat)X, 0.0f, 0.0f, 1.0f,
+                               "glVertexAttrib1s");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttrib1sv(
+    _In_ GLuint Index,
+    _In_reads_(1) const GLshort *Values)
+{
+    Rpi5OglGl2SetCurrentAttribVector(Index, Values, 1, GL_SHORT, GL_FALSE,
+                                     "glVertexAttrib1sv");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttrib2d(
+    _In_ GLuint Index,
+    _In_ GLdouble X,
+    _In_ GLdouble Y)
+{
+    Rpi5OglGl2SetCurrentAttrib(Rpi5OglCurrentGl2State(), Index,
+                               (GLfloat)X, (GLfloat)Y, 0.0f, 1.0f,
+                               "glVertexAttrib2d");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttrib2dv(
+    _In_ GLuint Index,
+    _In_reads_(2) const GLdouble *Values)
+{
+    Rpi5OglGl2SetCurrentAttribVector(Index, Values, 2, GL_DOUBLE, GL_FALSE,
+                                     "glVertexAttrib2dv");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttrib2s(
+    _In_ GLuint Index,
+    _In_ GLshort X,
+    _In_ GLshort Y)
+{
+    Rpi5OglGl2SetCurrentAttrib(Rpi5OglCurrentGl2State(), Index,
+                               (GLfloat)X, (GLfloat)Y, 0.0f, 1.0f,
+                               "glVertexAttrib2s");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttrib2sv(
+    _In_ GLuint Index,
+    _In_reads_(2) const GLshort *Values)
+{
+    Rpi5OglGl2SetCurrentAttribVector(Index, Values, 2, GL_SHORT, GL_FALSE,
+                                     "glVertexAttrib2sv");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttrib3d(
+    _In_ GLuint Index,
+    _In_ GLdouble X,
+    _In_ GLdouble Y,
+    _In_ GLdouble Z)
+{
+    Rpi5OglGl2SetCurrentAttrib(Rpi5OglCurrentGl2State(), Index,
+                               (GLfloat)X, (GLfloat)Y, (GLfloat)Z, 1.0f,
+                               "glVertexAttrib3d");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttrib3dv(
+    _In_ GLuint Index,
+    _In_reads_(3) const GLdouble *Values)
+{
+    Rpi5OglGl2SetCurrentAttribVector(Index, Values, 3, GL_DOUBLE, GL_FALSE,
+                                     "glVertexAttrib3dv");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttrib3s(
+    _In_ GLuint Index,
+    _In_ GLshort X,
+    _In_ GLshort Y,
+    _In_ GLshort Z)
+{
+    Rpi5OglGl2SetCurrentAttrib(Rpi5OglCurrentGl2State(), Index,
+                               (GLfloat)X, (GLfloat)Y, (GLfloat)Z, 1.0f,
+                               "glVertexAttrib3s");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttrib3sv(
+    _In_ GLuint Index,
+    _In_reads_(3) const GLshort *Values)
+{
+    Rpi5OglGl2SetCurrentAttribVector(Index, Values, 3, GL_SHORT, GL_FALSE,
+                                     "glVertexAttrib3sv");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttrib4d(
+    _In_ GLuint Index,
+    _In_ GLdouble X,
+    _In_ GLdouble Y,
+    _In_ GLdouble Z,
+    _In_ GLdouble W)
+{
+    Rpi5OglGl2SetCurrentAttrib(Rpi5OglCurrentGl2State(), Index,
+                               (GLfloat)X, (GLfloat)Y,
+                               (GLfloat)Z, (GLfloat)W,
+                               "glVertexAttrib4d");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttrib4s(
+    _In_ GLuint Index,
+    _In_ GLshort X,
+    _In_ GLshort Y,
+    _In_ GLshort Z,
+    _In_ GLshort W)
+{
+    Rpi5OglGl2SetCurrentAttrib(Rpi5OglCurrentGl2State(), Index,
+                               (GLfloat)X, (GLfloat)Y,
+                               (GLfloat)Z, (GLfloat)W,
+                               "glVertexAttrib4s");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttrib4Nub(
+    _In_ GLuint Index,
+    _In_ GLubyte X,
+    _In_ GLubyte Y,
+    _In_ GLubyte Z,
+    _In_ GLubyte W)
+{
+    Rpi5OglGl2SetCurrentAttrib(Rpi5OglCurrentGl2State(), Index,
+                               X / 255.0f, Y / 255.0f,
+                               Z / 255.0f, W / 255.0f,
+                               "glVertexAttrib4Nub");
+}
+
+#define RPI5OGL_VERTEX_ATTRIB4_VECTOR(Name, TypeName, GlType, Normalize) \
+static VOID APIENTRY                                                   \
+Rpi5OglVertexAttrib4##Name(                                            \
+    _In_ GLuint Index,                                                 \
+    _In_reads_(4) const TypeName *Values)                              \
+{                                                                      \
+    Rpi5OglGl2SetCurrentAttribVector(Index, Values, 4, GlType,          \
+                                     Normalize,                        \
+                                     "glVertexAttrib4" #Name);         \
+}
+
+RPI5OGL_VERTEX_ATTRIB4_VECTOR(Nbv, GLbyte, GL_BYTE, GL_TRUE)
+RPI5OGL_VERTEX_ATTRIB4_VECTOR(Niv, GLint, GL_INT, GL_TRUE)
+RPI5OGL_VERTEX_ATTRIB4_VECTOR(Nsv, GLshort, GL_SHORT, GL_TRUE)
+RPI5OGL_VERTEX_ATTRIB4_VECTOR(Nubv, GLubyte, GL_UNSIGNED_BYTE, GL_TRUE)
+RPI5OGL_VERTEX_ATTRIB4_VECTOR(Nuiv, GLuint, GL_UNSIGNED_INT, GL_TRUE)
+RPI5OGL_VERTEX_ATTRIB4_VECTOR(Nusv, GLushort, GL_UNSIGNED_SHORT, GL_TRUE)
+RPI5OGL_VERTEX_ATTRIB4_VECTOR(bv, GLbyte, GL_BYTE, GL_FALSE)
+RPI5OGL_VERTEX_ATTRIB4_VECTOR(dv, GLdouble, GL_DOUBLE, GL_FALSE)
+RPI5OGL_VERTEX_ATTRIB4_VECTOR(iv, GLint, GL_INT, GL_FALSE)
+RPI5OGL_VERTEX_ATTRIB4_VECTOR(sv, GLshort, GL_SHORT, GL_FALSE)
+RPI5OGL_VERTEX_ATTRIB4_VECTOR(ubv, GLubyte, GL_UNSIGNED_BYTE, GL_FALSE)
+RPI5OGL_VERTEX_ATTRIB4_VECTOR(uiv, GLuint, GL_UNSIGNED_INT, GL_FALSE)
+RPI5OGL_VERTEX_ATTRIB4_VECTOR(usv, GLushort, GL_UNSIGNED_SHORT, GL_FALSE)
+
+#undef RPI5OGL_VERTEX_ATTRIB4_VECTOR
+
+static VOID
+Rpi5OglGl2SetCurrentAttribI(
+    _In_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLuint Index,
+    _In_reads_(4) const GLint Values[4],
+    _In_z_ PCSTR Function)
+{
+    PRPI5VC4_OGL_VERTEX_ATTRIB Attribute;
+    ULONG Component;
+
+    if (!Rpi5OglGl2CanChangeState(State, Function))
+        return;
+    Attribute = Rpi5OglGl2VertexAttrib(State, Index, Function);
+    if (Attribute == NULL)
+        return;
+    Attribute->CurrentIsInteger = TRUE;
+    Attribute->CurrentIsUnsigned = FALSE;
+    for (Component = 0; Component < 4; Component++)
+    {
+        Attribute->CurrentInteger[Component] = Values[Component];
+        Attribute->CurrentUnsigned[Component] = (GLuint)Values[Component];
+        Attribute->Current[Component] = (GLfloat)Values[Component];
+    }
+}
+
+static VOID
+Rpi5OglGl2SetCurrentAttribUI(
+    _In_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLuint Index,
+    _In_reads_(4) const GLuint Values[4],
+    _In_z_ PCSTR Function)
+{
+    PRPI5VC4_OGL_VERTEX_ATTRIB Attribute;
+    ULONG Component;
+
+    if (!Rpi5OglGl2CanChangeState(State, Function))
+        return;
+    Attribute = Rpi5OglGl2VertexAttrib(State, Index, Function);
+    if (Attribute == NULL)
+        return;
+    Attribute->CurrentIsInteger = TRUE;
+    Attribute->CurrentIsUnsigned = TRUE;
+    for (Component = 0; Component < 4; Component++)
+    {
+        Attribute->CurrentUnsigned[Component] = Values[Component];
+        Attribute->CurrentInteger[Component] = (GLint)Values[Component];
+        Attribute->Current[Component] = (GLfloat)Values[Component];
+    }
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttribI1i(
+    _In_ GLuint Index,
+    _In_ GLint X)
+{
+    const GLint Values[4] = {X, 0, 0, 1};
+
+    Rpi5OglGl2SetCurrentAttribI(Rpi5OglCurrentGl2State(), Index, Values,
+                                "glVertexAttribI1i");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttribI2i(
+    _In_ GLuint Index,
+    _In_ GLint X,
+    _In_ GLint Y)
+{
+    const GLint Values[4] = {X, Y, 0, 1};
+
+    Rpi5OglGl2SetCurrentAttribI(Rpi5OglCurrentGl2State(), Index, Values,
+                                "glVertexAttribI2i");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttribI3i(
+    _In_ GLuint Index,
+    _In_ GLint X,
+    _In_ GLint Y,
+    _In_ GLint Z)
+{
+    const GLint Values[4] = {X, Y, Z, 1};
+
+    Rpi5OglGl2SetCurrentAttribI(Rpi5OglCurrentGl2State(), Index, Values,
+                                "glVertexAttribI3i");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttribI4i(
+    _In_ GLuint Index,
+    _In_ GLint X,
+    _In_ GLint Y,
+    _In_ GLint Z,
+    _In_ GLint W)
+{
+    const GLint Values[4] = {X, Y, Z, W};
+
+    Rpi5OglGl2SetCurrentAttribI(Rpi5OglCurrentGl2State(), Index, Values,
+                                "glVertexAttribI4i");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttribI1ui(
+    _In_ GLuint Index,
+    _In_ GLuint X)
+{
+    const GLuint Values[4] = {X, 0, 0, 1};
+
+    Rpi5OglGl2SetCurrentAttribUI(Rpi5OglCurrentGl2State(), Index, Values,
+                                 "glVertexAttribI1ui");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttribI2ui(
+    _In_ GLuint Index,
+    _In_ GLuint X,
+    _In_ GLuint Y)
+{
+    const GLuint Values[4] = {X, Y, 0, 1};
+
+    Rpi5OglGl2SetCurrentAttribUI(Rpi5OglCurrentGl2State(), Index, Values,
+                                 "glVertexAttribI2ui");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttribI3ui(
+    _In_ GLuint Index,
+    _In_ GLuint X,
+    _In_ GLuint Y,
+    _In_ GLuint Z)
+{
+    const GLuint Values[4] = {X, Y, Z, 1};
+
+    Rpi5OglGl2SetCurrentAttribUI(Rpi5OglCurrentGl2State(), Index, Values,
+                                 "glVertexAttribI3ui");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttribI4ui(
+    _In_ GLuint Index,
+    _In_ GLuint X,
+    _In_ GLuint Y,
+    _In_ GLuint Z,
+    _In_ GLuint W)
+{
+    const GLuint Values[4] = {X, Y, Z, W};
+
+    Rpi5OglGl2SetCurrentAttribUI(Rpi5OglCurrentGl2State(), Index, Values,
+                                 "glVertexAttribI4ui");
+}
+
+static VOID
+Rpi5OglGl2VertexAttribIiv(
+    _In_ GLuint Index,
+    _In_reads_(4) const GLint *Values,
+    _In_ ULONG Components,
+    _In_z_ PCSTR Function)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    GLint Expanded[4] = {0, 0, 0, 1};
+    ULONG Component;
+
+    if (Values == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, Function);
+        return;
+    }
+    for (Component = 0; Component < Components; Component++)
+        Expanded[Component] = Values[Component];
+    Rpi5OglGl2SetCurrentAttribI(State, Index, Expanded, Function);
+}
+
+static VOID
+Rpi5OglGl2VertexAttribIuiv(
+    _In_ GLuint Index,
+    _In_reads_(4) const GLuint *Values,
+    _In_ ULONG Components,
+    _In_z_ PCSTR Function)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    GLuint Expanded[4] = {0, 0, 0, 1};
+    ULONG Component;
+
+    if (Values == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, Function);
+        return;
+    }
+    for (Component = 0; Component < Components; Component++)
+        Expanded[Component] = Values[Component];
+    Rpi5OglGl2SetCurrentAttribUI(State, Index, Expanded, Function);
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttribI1iv(
+    _In_ GLuint Index,
+    _In_reads_(1) const GLint *Values)
+{
+    Rpi5OglGl2VertexAttribIiv(Index, Values, 1, "glVertexAttribI1iv");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttribI2iv(
+    _In_ GLuint Index,
+    _In_reads_(2) const GLint *Values)
+{
+    Rpi5OglGl2VertexAttribIiv(Index, Values, 2, "glVertexAttribI2iv");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttribI3iv(
+    _In_ GLuint Index,
+    _In_reads_(3) const GLint *Values)
+{
+    Rpi5OglGl2VertexAttribIiv(Index, Values, 3, "glVertexAttribI3iv");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttribI4iv(
+    _In_ GLuint Index,
+    _In_reads_(4) const GLint *Values)
+{
+    Rpi5OglGl2VertexAttribIiv(Index, Values, 4, "glVertexAttribI4iv");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttribI1uiv(
+    _In_ GLuint Index,
+    _In_reads_(1) const GLuint *Values)
+{
+    Rpi5OglGl2VertexAttribIuiv(Index, Values, 1, "glVertexAttribI1uiv");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttribI2uiv(
+    _In_ GLuint Index,
+    _In_reads_(2) const GLuint *Values)
+{
+    Rpi5OglGl2VertexAttribIuiv(Index, Values, 2, "glVertexAttribI2uiv");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttribI3uiv(
+    _In_ GLuint Index,
+    _In_reads_(3) const GLuint *Values)
+{
+    Rpi5OglGl2VertexAttribIuiv(Index, Values, 3, "glVertexAttribI3uiv");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttribI4uiv(
+    _In_ GLuint Index,
+    _In_reads_(4) const GLuint *Values)
+{
+    Rpi5OglGl2VertexAttribIuiv(Index, Values, 4, "glVertexAttribI4uiv");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttribI4bv(
+    _In_ GLuint Index,
+    _In_reads_(4) const GLbyte *Values)
+{
+    GLint Expanded[4];
+    ULONG Component;
+
+    if (Values == NULL)
+    {
+        Rpi5OglGl2Error(Rpi5OglCurrentGl2State(), GL_INVALID_VALUE,
+                        "glVertexAttribI4bv");
+        return;
+    }
+    for (Component = 0; Component < 4; Component++)
+        Expanded[Component] = Values[Component];
+    Rpi5OglGl2SetCurrentAttribI(Rpi5OglCurrentGl2State(), Index, Expanded,
+                                "glVertexAttribI4bv");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttribI4sv(
+    _In_ GLuint Index,
+    _In_reads_(4) const GLshort *Values)
+{
+    GLint Expanded[4];
+    ULONG Component;
+
+    if (Values == NULL)
+    {
+        Rpi5OglGl2Error(Rpi5OglCurrentGl2State(), GL_INVALID_VALUE,
+                        "glVertexAttribI4sv");
+        return;
+    }
+    for (Component = 0; Component < 4; Component++)
+        Expanded[Component] = Values[Component];
+    Rpi5OglGl2SetCurrentAttribI(Rpi5OglCurrentGl2State(), Index, Expanded,
+                                "glVertexAttribI4sv");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttribI4ubv(
+    _In_ GLuint Index,
+    _In_reads_(4) const GLubyte *Values)
+{
+    GLuint Expanded[4];
+    ULONG Component;
+
+    if (Values == NULL)
+    {
+        Rpi5OglGl2Error(Rpi5OglCurrentGl2State(), GL_INVALID_VALUE,
+                        "glVertexAttribI4ubv");
+        return;
+    }
+    for (Component = 0; Component < 4; Component++)
+        Expanded[Component] = Values[Component];
+    Rpi5OglGl2SetCurrentAttribUI(Rpi5OglCurrentGl2State(), Index, Expanded,
+                                 "glVertexAttribI4ubv");
+}
+
+static VOID APIENTRY
+Rpi5OglVertexAttribI4usv(
+    _In_ GLuint Index,
+    _In_reads_(4) const GLushort *Values)
+{
+    GLuint Expanded[4];
+    ULONG Component;
+
+    if (Values == NULL)
+    {
+        Rpi5OglGl2Error(Rpi5OglCurrentGl2State(), GL_INVALID_VALUE,
+                        "glVertexAttribI4usv");
+        return;
+    }
+    for (Component = 0; Component < 4; Component++)
+        Expanded[Component] = Values[Component];
+    Rpi5OglGl2SetCurrentAttribUI(Rpi5OglCurrentGl2State(), Index, Expanded,
+                                 "glVertexAttribI4usv");
+}
+
 static VOID APIENTRY
 Rpi5OglGetVertexAttribfv(
     _In_ GLuint Index,
@@ -5074,6 +5829,9 @@ Rpi5OglGetVertexAttribfv(
         case GL_VERTEX_ATTRIB_ARRAY_NORMALIZED:
             *Parameters = Attribute->Normalized;
             break;
+        case GL_VERTEX_ATTRIB_ARRAY_INTEGER:
+            *Parameters = Attribute->Integer;
+            break;
         case GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING:
             *Parameters = (GLfloat)Attribute->BufferName;
             break;
@@ -5082,6 +5840,190 @@ Rpi5OglGetVertexAttribfv(
                             "glGetVertexAttribfv(pname)");
             break;
     }
+}
+
+static VOID APIENTRY
+Rpi5OglGetVertexAttribdv(
+    _In_ GLuint Index,
+    _In_ GLenum ParameterName,
+    _Out_ GLdouble *Parameters)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_VERTEX_ATTRIB Attribute;
+    ULONG Component;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glGetVertexAttribdv"))
+        return;
+    Attribute = Rpi5OglGl2VertexAttrib(
+        State, Index, "glGetVertexAttribdv(index)");
+    if (Attribute == NULL)
+        return;
+    if (Parameters == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glGetVertexAttribdv(params)");
+        return;
+    }
+
+    if (ParameterName == GL_CURRENT_VERTEX_ATTRIB)
+    {
+        for (Component = 0; Component < 4; Component++)
+            Parameters[Component] = Attribute->Current[Component];
+        return;
+    }
+    switch (ParameterName)
+    {
+        case GL_VERTEX_ATTRIB_ARRAY_ENABLED:
+            *Parameters = Attribute->Enabled;
+            break;
+        case GL_VERTEX_ATTRIB_ARRAY_SIZE:
+            *Parameters = Attribute->Size;
+            break;
+        case GL_VERTEX_ATTRIB_ARRAY_STRIDE:
+            *Parameters = Attribute->Stride;
+            break;
+        case GL_VERTEX_ATTRIB_ARRAY_TYPE:
+            *Parameters = Attribute->Type;
+            break;
+        case GL_VERTEX_ATTRIB_ARRAY_NORMALIZED:
+            *Parameters = Attribute->Normalized;
+            break;
+        case GL_VERTEX_ATTRIB_ARRAY_INTEGER:
+            *Parameters = Attribute->Integer;
+            break;
+        case GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING:
+            *Parameters = Attribute->BufferName;
+            break;
+        default:
+            Rpi5OglGl2Error(State, GL_INVALID_ENUM,
+                            "glGetVertexAttribdv(pname)");
+            break;
+    }
+}
+
+static VOID APIENTRY
+Rpi5OglGetVertexAttribiv(
+    _In_ GLuint Index,
+    _In_ GLenum ParameterName,
+    _Out_ GLint *Parameters)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_VERTEX_ATTRIB Attribute;
+    ULONG Component;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glGetVertexAttribiv"))
+        return;
+    Attribute = Rpi5OglGl2VertexAttrib(
+        State, Index, "glGetVertexAttribiv(index)");
+    if (Attribute == NULL)
+        return;
+    if (Parameters == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glGetVertexAttribiv(params)");
+        return;
+    }
+
+    if (ParameterName == GL_CURRENT_VERTEX_ATTRIB)
+    {
+        for (Component = 0; Component < 4; Component++)
+        {
+            Parameters[Component] = Attribute->CurrentIsInteger ?
+                Attribute->CurrentInteger[Component] :
+                (GLint)Attribute->Current[Component];
+        }
+        return;
+    }
+    switch (ParameterName)
+    {
+        case GL_VERTEX_ATTRIB_ARRAY_ENABLED:
+            *Parameters = Attribute->Enabled;
+            break;
+        case GL_VERTEX_ATTRIB_ARRAY_SIZE:
+            *Parameters = Attribute->Size;
+            break;
+        case GL_VERTEX_ATTRIB_ARRAY_STRIDE:
+            *Parameters = Attribute->Stride;
+            break;
+        case GL_VERTEX_ATTRIB_ARRAY_TYPE:
+            *Parameters = Attribute->Type;
+            break;
+        case GL_VERTEX_ATTRIB_ARRAY_NORMALIZED:
+            *Parameters = Attribute->Normalized;
+            break;
+        case GL_VERTEX_ATTRIB_ARRAY_INTEGER:
+            *Parameters = Attribute->Integer;
+            break;
+        case GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING:
+            *Parameters = Attribute->BufferName;
+            break;
+        default:
+            Rpi5OglGl2Error(State, GL_INVALID_ENUM,
+                            "glGetVertexAttribiv(pname)");
+            break;
+    }
+}
+
+static VOID APIENTRY
+Rpi5OglGetVertexAttribIiv(
+    _In_ GLuint Index,
+    _In_ GLenum ParameterName,
+    _Out_ GLint *Parameters)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_VERTEX_ATTRIB Attribute;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glGetVertexAttribIiv"))
+        return;
+    Attribute = Rpi5OglGl2VertexAttrib(
+        State, Index, "glGetVertexAttribIiv(index)");
+    if (Attribute == NULL)
+        return;
+    if (Parameters == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glGetVertexAttribIiv(params)");
+        return;
+    }
+    if (ParameterName != GL_CURRENT_VERTEX_ATTRIB)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM,
+                        "glGetVertexAttribIiv(pname)");
+        return;
+    }
+    CopyMemory(Parameters, Attribute->CurrentInteger,
+               sizeof(Attribute->CurrentInteger));
+}
+
+static VOID APIENTRY
+Rpi5OglGetVertexAttribIuiv(
+    _In_ GLuint Index,
+    _In_ GLenum ParameterName,
+    _Out_ GLuint *Parameters)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_VERTEX_ATTRIB Attribute;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glGetVertexAttribIuiv"))
+        return;
+    Attribute = Rpi5OglGl2VertexAttrib(
+        State, Index, "glGetVertexAttribIuiv(index)");
+    if (Attribute == NULL)
+        return;
+    if (Parameters == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glGetVertexAttribIuiv(params)");
+        return;
+    }
+    if (ParameterName != GL_CURRENT_VERTEX_ATTRIB)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM,
+                        "glGetVertexAttribIuiv(pname)");
+        return;
+    }
+    CopyMemory(Parameters, Attribute->CurrentUnsigned,
+               sizeof(Attribute->CurrentUnsigned));
 }
 
 static VOID APIENTRY
@@ -5204,6 +6146,16 @@ Rpi5OglGl2SelectVertexArray(
         CopyMemory(VertexArray->VertexAttribs[Index].Current,
                    State->CurrentVertexArray->VertexAttribs[Index].Current,
                    sizeof(VertexArray->VertexAttribs[Index].Current));
+        CopyMemory(VertexArray->VertexAttribs[Index].CurrentInteger,
+                   State->CurrentVertexArray->VertexAttribs[Index].CurrentInteger,
+                   sizeof(VertexArray->VertexAttribs[Index].CurrentInteger));
+        CopyMemory(VertexArray->VertexAttribs[Index].CurrentUnsigned,
+                   State->CurrentVertexArray->VertexAttribs[Index].CurrentUnsigned,
+                   sizeof(VertexArray->VertexAttribs[Index].CurrentUnsigned));
+        VertexArray->VertexAttribs[Index].CurrentIsInteger =
+            State->CurrentVertexArray->VertexAttribs[Index].CurrentIsInteger;
+        VertexArray->VertexAttribs[Index].CurrentIsUnsigned =
+            State->CurrentVertexArray->VertexAttribs[Index].CurrentIsUnsigned;
     }
     State->CurrentVertexArray = VertexArray;
     Rpi5OglBufferRestoreElementArrayBinding(
@@ -5397,7 +6349,11 @@ static const RPI5VC4_OGL_GL2_PROC Rpi5OglGl2Procedures[] =
     {"glGetShaderiv", (PROC)Rpi5OglGetShaderiv},
     {"glGetShaderSource", (PROC)Rpi5OglGetShaderSource},
     {"glGetUniformLocation", (PROC)Rpi5OglGetUniformLocation},
+    {"glGetVertexAttribdv", (PROC)Rpi5OglGetVertexAttribdv},
     {"glGetVertexAttribfv", (PROC)Rpi5OglGetVertexAttribfv},
+    {"glGetVertexAttribIiv", (PROC)Rpi5OglGetVertexAttribIiv},
+    {"glGetVertexAttribIuiv", (PROC)Rpi5OglGetVertexAttribIuiv},
+    {"glGetVertexAttribiv", (PROC)Rpi5OglGetVertexAttribiv},
     {"glGetVertexAttribPointerv", (PROC)Rpi5OglGetVertexAttribPointerv},
     {"glGenVertexArrays", (PROC)Rpi5OglGenVertexArrays},
     {"glIsProgram", (PROC)Rpi5OglIsProgram},
@@ -5417,14 +6373,63 @@ static const RPI5VC4_OGL_GL2_PROC Rpi5OglGl2Procedures[] =
     {"glUniformMatrix4fv", (PROC)Rpi5OglUniformMatrix4fv},
     {"glUseProgram", (PROC)Rpi5OglUseProgram},
     {"glValidateProgram", (PROC)Rpi5OglValidateProgram},
+    {"glVertexAttrib1d", (PROC)Rpi5OglVertexAttrib1d},
+    {"glVertexAttrib1dv", (PROC)Rpi5OglVertexAttrib1dv},
     {"glVertexAttrib1f", (PROC)Rpi5OglVertexAttrib1f},
     {"glVertexAttrib1fv", (PROC)Rpi5OglVertexAttrib1fv},
+    {"glVertexAttrib1s", (PROC)Rpi5OglVertexAttrib1s},
+    {"glVertexAttrib1sv", (PROC)Rpi5OglVertexAttrib1sv},
+    {"glVertexAttrib2d", (PROC)Rpi5OglVertexAttrib2d},
+    {"glVertexAttrib2dv", (PROC)Rpi5OglVertexAttrib2dv},
     {"glVertexAttrib2f", (PROC)Rpi5OglVertexAttrib2f},
     {"glVertexAttrib2fv", (PROC)Rpi5OglVertexAttrib2fv},
+    {"glVertexAttrib2s", (PROC)Rpi5OglVertexAttrib2s},
+    {"glVertexAttrib2sv", (PROC)Rpi5OglVertexAttrib2sv},
+    {"glVertexAttrib3d", (PROC)Rpi5OglVertexAttrib3d},
+    {"glVertexAttrib3dv", (PROC)Rpi5OglVertexAttrib3dv},
     {"glVertexAttrib3f", (PROC)Rpi5OglVertexAttrib3f},
     {"glVertexAttrib3fv", (PROC)Rpi5OglVertexAttrib3fv},
+    {"glVertexAttrib3s", (PROC)Rpi5OglVertexAttrib3s},
+    {"glVertexAttrib3sv", (PROC)Rpi5OglVertexAttrib3sv},
+    {"glVertexAttrib4bv", (PROC)Rpi5OglVertexAttrib4bv},
+    {"glVertexAttrib4d", (PROC)Rpi5OglVertexAttrib4d},
+    {"glVertexAttrib4dv", (PROC)Rpi5OglVertexAttrib4dv},
     {"glVertexAttrib4f", (PROC)Rpi5OglVertexAttrib4f},
     {"glVertexAttrib4fv", (PROC)Rpi5OglVertexAttrib4fv},
+    {"glVertexAttrib4iv", (PROC)Rpi5OglVertexAttrib4iv},
+    {"glVertexAttrib4Nbv", (PROC)Rpi5OglVertexAttrib4Nbv},
+    {"glVertexAttrib4Niv", (PROC)Rpi5OglVertexAttrib4Niv},
+    {"glVertexAttrib4Nsv", (PROC)Rpi5OglVertexAttrib4Nsv},
+    {"glVertexAttrib4Nub", (PROC)Rpi5OglVertexAttrib4Nub},
+    {"glVertexAttrib4Nubv", (PROC)Rpi5OglVertexAttrib4Nubv},
+    {"glVertexAttrib4Nuiv", (PROC)Rpi5OglVertexAttrib4Nuiv},
+    {"glVertexAttrib4Nusv", (PROC)Rpi5OglVertexAttrib4Nusv},
+    {"glVertexAttrib4s", (PROC)Rpi5OglVertexAttrib4s},
+    {"glVertexAttrib4sv", (PROC)Rpi5OglVertexAttrib4sv},
+    {"glVertexAttrib4ubv", (PROC)Rpi5OglVertexAttrib4ubv},
+    {"glVertexAttrib4uiv", (PROC)Rpi5OglVertexAttrib4uiv},
+    {"glVertexAttrib4usv", (PROC)Rpi5OglVertexAttrib4usv},
+    {"glVertexAttribI1i", (PROC)Rpi5OglVertexAttribI1i},
+    {"glVertexAttribI1iv", (PROC)Rpi5OglVertexAttribI1iv},
+    {"glVertexAttribI1ui", (PROC)Rpi5OglVertexAttribI1ui},
+    {"glVertexAttribI1uiv", (PROC)Rpi5OglVertexAttribI1uiv},
+    {"glVertexAttribI2i", (PROC)Rpi5OglVertexAttribI2i},
+    {"glVertexAttribI2iv", (PROC)Rpi5OglVertexAttribI2iv},
+    {"glVertexAttribI2ui", (PROC)Rpi5OglVertexAttribI2ui},
+    {"glVertexAttribI2uiv", (PROC)Rpi5OglVertexAttribI2uiv},
+    {"glVertexAttribI3i", (PROC)Rpi5OglVertexAttribI3i},
+    {"glVertexAttribI3iv", (PROC)Rpi5OglVertexAttribI3iv},
+    {"glVertexAttribI3ui", (PROC)Rpi5OglVertexAttribI3ui},
+    {"glVertexAttribI3uiv", (PROC)Rpi5OglVertexAttribI3uiv},
+    {"glVertexAttribI4bv", (PROC)Rpi5OglVertexAttribI4bv},
+    {"glVertexAttribI4i", (PROC)Rpi5OglVertexAttribI4i},
+    {"glVertexAttribI4iv", (PROC)Rpi5OglVertexAttribI4iv},
+    {"glVertexAttribI4sv", (PROC)Rpi5OglVertexAttribI4sv},
+    {"glVertexAttribI4ubv", (PROC)Rpi5OglVertexAttribI4ubv},
+    {"glVertexAttribI4ui", (PROC)Rpi5OglVertexAttribI4ui},
+    {"glVertexAttribI4uiv", (PROC)Rpi5OglVertexAttribI4uiv},
+    {"glVertexAttribI4usv", (PROC)Rpi5OglVertexAttribI4usv},
+    {"glVertexAttribIPointer", (PROC)Rpi5OglVertexAttribIPointer},
     {"glVertexAttribPointer", (PROC)Rpi5OglVertexAttribPointer},
 };
 
@@ -6921,17 +7926,16 @@ Rpi5OglGl2GetVertexAttribSource(
         *EffectiveStride = 0;
         return TRUE;
     }
-    if (((*Attribute)->Type != GL_FLOAT &&
-         !((*Attribute)->Type == GL_UNSIGNED_BYTE &&
-           (*Attribute)->Normalized == GL_TRUE)) ||
+    if (!Rpi5OglGl2ValidVertexAttribType((*Attribute)->Type,
+                                         (*Attribute)->Integer) ||
         (*Attribute)->Size < 1 || (*Attribute)->Size > 4)
     {
         return FALSE;
     }
 
     ComponentBytes = (SIZE_T)(*Attribute)->Size *
-                     ((*Attribute)->Type == GL_FLOAT ?
-                          sizeof(GLfloat) : sizeof(GLubyte));
+                     Rpi5OglGl2VertexAttribComponentSize(
+                         (*Attribute)->Type);
     *EffectiveStride = (*Attribute)->Stride != 0 ?
         (SIZE_T)(*Attribute)->Stride : ComponentBytes;
     if ((SIZE_T)LastVertex >
@@ -6964,6 +7968,8 @@ Rpi5OglGl2ReadVertexAttrib(
     PRPI5VC4_OGL_VERTEX_ATTRIB Attribute;
     const BYTE *Source;
     SIZE_T EffectiveStride;
+    SIZE_T ComponentSize;
+    ULONG Component;
 
     if (!Rpi5OglGl2GetVertexAttribSource(State,
                                          AttributeIndex,
@@ -6984,27 +7990,16 @@ Rpi5OglGl2ReadVertexAttrib(
     Values[1] = 0.0f;
     Values[2] = 0.0f;
     Values[3] = 1.0f;
-    if (Attribute->Type == GL_UNSIGNED_BYTE)
+    ComponentSize = Rpi5OglGl2VertexAttribComponentSize(Attribute->Type);
+    for (Component = 0;
+         Component < (ULONG)Attribute->Size;
+         Component++)
     {
-        if (Attribute->Size >= 1)
-            Values[0] = Source[0] / 255.0f;
-        if (Attribute->Size >= 2)
-            Values[1] = Source[1] / 255.0f;
-        if (Attribute->Size >= 3)
-            Values[2] = Source[2] / 255.0f;
-        if (Attribute->Size >= 4)
-            Values[3] = Source[3] / 255.0f;
-    }
-    else
-    {
-        if (Attribute->Size >= 1)
-            Values[0] = *(const UNALIGNED GLfloat *)(Source);
-        if (Attribute->Size >= 2)
-            Values[1] = *(const UNALIGNED GLfloat *)(Source + sizeof(GLfloat));
-        if (Attribute->Size >= 3)
-            Values[2] = *(const UNALIGNED GLfloat *)(Source + 2 * sizeof(GLfloat));
-        if (Attribute->Size >= 4)
-            Values[3] = *(const UNALIGNED GLfloat *)(Source + 3 * sizeof(GLfloat));
+        Values[Component] = Rpi5OglGl2ReadVertexAttribComponent(
+            Source + Component * ComponentSize,
+            Attribute->Type,
+            Attribute->Normalized,
+            Attribute->Integer);
     }
     return TRUE;
 }
@@ -7365,6 +8360,8 @@ Rpi5OglGl2ReadBuildAttribute(
     _Out_writes_(4) GLfloat Values[4])
 {
     const BYTE *Source;
+    SIZE_T ComponentSize;
+    ULONG Component;
 
     if (!Attribute->Enabled)
     {
@@ -7381,27 +8378,16 @@ Rpi5OglGl2ReadBuildAttribute(
     Values[1] = 0.0f;
     Values[2] = 0.0f;
     Values[3] = 1.0f;
-    if (Attribute->Type == GL_UNSIGNED_BYTE)
+    ComponentSize = Rpi5OglGl2VertexAttribComponentSize(Attribute->Type);
+    for (Component = 0;
+         Component < (ULONG)Attribute->Size;
+         Component++)
     {
-        if (Attribute->Size >= 1)
-            Values[0] = Source[0] / 255.0f;
-        if (Attribute->Size >= 2)
-            Values[1] = Source[1] / 255.0f;
-        if (Attribute->Size >= 3)
-            Values[2] = Source[2] / 255.0f;
-        if (Attribute->Size >= 4)
-            Values[3] = Source[3] / 255.0f;
-    }
-    else
-    {
-        if (Attribute->Size >= 1)
-            Values[0] = *(const UNALIGNED GLfloat *)(Source);
-        if (Attribute->Size >= 2)
-            Values[1] = *(const UNALIGNED GLfloat *)(Source + sizeof(GLfloat));
-        if (Attribute->Size >= 3)
-            Values[2] = *(const UNALIGNED GLfloat *)(Source + 2 * sizeof(GLfloat));
-        if (Attribute->Size >= 4)
-            Values[3] = *(const UNALIGNED GLfloat *)(Source + 3 * sizeof(GLfloat));
+        Values[Component] = Rpi5OglGl2ReadVertexAttribComponent(
+            Source + Component * ComponentSize,
+            Attribute->Type,
+            Attribute->Normalized,
+            Attribute->Integer);
     }
 }
 
