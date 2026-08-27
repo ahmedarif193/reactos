@@ -31,6 +31,51 @@
 static const GUID g_RxgkShadowPresentInterfaceGuid =
     RXGK_SHADOW_PRESENT_INTERFACE_GUID_INIT;
 
+static BOOLEAN
+Rpi5Vc4DxgkOwnsCoreInterrupt(
+    _In_ PDXGK_INTERFACE DxgkInterface)
+{
+    DXGK_DEVICE_INFO DeviceInfo;
+    PCM_RESOURCE_LIST Resources;
+    ULONG ListIndex;
+
+    if (DxgkInterface->DxgkCbGetDeviceInformation == NULL)
+        return FALSE;
+
+    RtlZeroMemory(&DeviceInfo, sizeof(DeviceInfo));
+    if (!NT_SUCCESS(DxgkInterface->DxgkCbGetDeviceInformation(
+                        DxgkInterface->DeviceHandle, &DeviceInfo)))
+    {
+        return FALSE;
+    }
+
+    Resources = DeviceInfo.TranslatedResourceList;
+    if (Resources == NULL)
+        return FALSE;
+
+    /* Dxgkrnl connects the first translated interrupt descriptor. */
+    for (ListIndex = 0; ListIndex < Resources->Count; ++ListIndex)
+    {
+        PCM_PARTIAL_RESOURCE_LIST Partial =
+            &Resources->List[ListIndex].PartialResourceList;
+        ULONG DescriptorIndex;
+
+        for (DescriptorIndex = 0;
+             DescriptorIndex < Partial->Count;
+             ++DescriptorIndex)
+        {
+            PCM_PARTIAL_RESOURCE_DESCRIPTOR Descriptor =
+                &Partial->PartialDescriptors[DescriptorIndex];
+
+            if (Descriptor->Type != CmResourceTypeInterrupt)
+                continue;
+            return Descriptor->u.Interrupt.Vector == RPI5_V3D_CORE_INTID;
+        }
+    }
+
+    return FALSE;
+}
+
 BOOLEAN
 Rpi5Vc4IsRpi5Platform(VOID)
 {
@@ -269,6 +314,11 @@ DriverEntry(
     InitData.DxgkDdiDestroyDevice         = Rpi5Vc4DdiDestroyDevice;
     InitData.DxgkDdiCreateContext         = Rpi5Vc4DdiCreateContext;
     InitData.DxgkDdiDestroyContext        = Rpi5Vc4DdiDestroyContext;
+    InitData.DxgkDdiCreateProcess         = Rpi5Vc4DdiCreateProcess;
+    InitData.DxgkDdiDestroyProcess        = Rpi5Vc4DdiDestroyProcess;
+    InitData.DxgkDdiGetRootPageTableSize  =
+        Rpi5Vc4DdiGetRootPageTableSize;
+    InitData.DxgkDdiSetRootPageTable      = Rpi5Vc4DdiSetRootPageTable;
 
     /* Hardware cursor (HVS overlay plane) */
     InitData.DxgkDdiSetPointerPosition    = Rpi5Vc4DdiSetPointerPosition;
@@ -491,6 +541,8 @@ Rpi5Vc4DdiStartDevice(
     RtlCopyMemory(&DeviceExtension->DxgkInterface,
                   DxgkInterface,
                   min(DxgkInterface->Size, sizeof(DXGK_INTERFACE)));
+    DeviceExtension->V3dCoreInterruptOwnedByDxgk =
+        Rpi5Vc4DxgkOwnsCoreInterrupt(DxgkInterface);
 
     /*
      * Take over the firmware GOP framebuffer.  dxgkrnl reads the loader
@@ -655,7 +707,6 @@ Rpi5Vc4DdiStartDevice(
     else
     {
         Rpi5V3dConnectInterrupt(DeviceExtension);
-        Rpi5Vc4QueueWarmupV3dJob(DeviceExtension);
     }
 
     /* Record the live PixelValve raster timing and re-assert it. */

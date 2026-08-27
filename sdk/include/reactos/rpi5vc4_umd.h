@@ -38,6 +38,19 @@
 #define RPI5VC4_CAP_WIN32_PRESENT         (1u << 9)
 #define RPI5VC4_CAP_LINEAR_SCANOUT        (1u << 10)
 
+/* GPU nodes shared by the VC4 KMD and its user-mode submission library. */
+#define RPI5VC4_NODE_3D                    0u
+#define RPI5VC4_NODE_TFU                   1u
+#define RPI5VC4_NODE_CSD                   2u
+#define RPI5VC4_GPU_NODE_COUNT             3u
+
+/*
+ * The low GPU virtual-address space is inherited from the kernel page table
+ * and contains the slab, binner overflow, and legacy execution windows.
+ * Keep allocations made through the matching UMD above that fixed region.
+ */
+#define RPI5VC4_DYNAMIC_GPUVA_START 0x20000000ULL
+
 #define RPI5VC4_LINEAR_FORMAT_X8R8G8B8    (1u << 0)
 #define RPI5VC4_LINEAR_FORMAT_A8R8G8B8    (1u << 1)
 

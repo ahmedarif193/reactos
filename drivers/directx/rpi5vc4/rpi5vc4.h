@@ -49,7 +49,12 @@
 
 /* Local VRAM segment: a contiguous write-combined slab the HVS can scan
  * out of and the V3D can DMA to/from.  Sized best-effort at StartDevice. */
-#define RPI5VC4_SEGMENT_ID          1
+#define RPI5VC4_LOCAL_SEGMENT_ID    1
+#define RPI5VC4_APERTURE_SEGMENT_ID 2
+#define RPI5VC4_SEGMENT_COUNT       2
+#define RPI5VC4_SEGMENT_ID          RPI5VC4_LOCAL_SEGMENT_ID
+#define RPI5VC4_APERTURE_SIZE       (4ULL * 1024ULL * 1024ULL * 1024ULL)
+#define RPI5VC4_APERTURE_COMMIT_LIMIT (2ULL * 1024ULL * 1024ULL * 1024ULL)
 #define RPI5VC4_VRAM_SIZE_PREFERRED (64 * 1024 * 1024)
 #define RPI5VC4_VRAM_SIZE_MIN       (16 * 1024 * 1024)
 #define RPI5VC4_V3D_EXEC_RESERVE_SIZE (32 * 1024 * 1024)
@@ -58,19 +63,16 @@
 #define RPI5VC4_MAX_PENDING         64
 #define RPI5VC4_DMA_MAPPING_COUNT   256
 
-/* GPU nodes exposed via GpuEngineTopology: 0 = CLE (3D bin/render),
- * 1 = TFU (conversion/blit), 2 = CSD (compute).  One shared hardware
- * ring serialises execution, so completions stay in global fence order;
- * fences are tracked and reported per node for the scheduler. */
-#define RPI5VC4_GPU_NODE_COUNT      3
-#define RPI5VC4_NODE_3D             0
-#define RPI5VC4_NODE_TFU            1
-#define RPI5VC4_NODE_CSD            2
+/* V3D exposes a 32-bit GPU VA space through one flat native page table.
+ * dxgkrnl keeps its portable DXGK_PTE representation as a two-level 10+10
+ * radix and sends leaf updates to the miniport for native encoding. */
+#define RPI5VC4_GPUVA_BITS          32
+#define RPI5VC4_GPUVA_LEVELS        2
+#define RPI5VC4_GPUVA_INDEX_BITS    10
 /* Gears-scale CLs retire in <20ms; the vertex-pipe wedge is unrecoverable
  * below core reset, so a long timeout only stretches every park.  Revisit
  * per-job-class when heavier workloads land. */
 #define RPI5VC4_V3D_JOB_TIMEOUT_100NS (300 * 10 * 1000) /* 300 ms */
-#define RPI5VC4_V3D_BIN_FLUSH_TIMEOUT_100NS (50 * 10 * 1000) /* 50 ms */
 
 typedef struct _RPI5VC4_PENDING_SUBMIT
 {
@@ -80,11 +82,9 @@ typedef struct _RPI5VC4_PENDING_SUBMIT
     UCHAR RenderKicks;
     UCHAR RenderKickRfc;              /* RFC&0xff snapshot at render kick   */
     UCHAR BinKickBfc;                 /* BFC&0xff snapshot at bin kick      */
-    ULONGLONG BinDeferStart100ns;     /* first pass the pre-bin gate deferred */
     BOOLEAN IsV3dJob;
     BOOLEAN IsTfuJob;
     BOOLEAN IsCsdJob;
-    BOOLEAN IsWarmup;
     BOOLEAN BinSubmitted;             /* BCL queued to CLE thread 0        */
     BOOLEAN BinDone;                  /* FLDONE consumed for this job      */
     BOOLEAN RenderSubmitted;          /* RCL/TFU/CSD kicked                */
@@ -98,6 +98,7 @@ typedef struct _RPI5VC4_PENDING_SUBMIT
     ULONG TfuRegs[12];
     ULONG CsdCfg[8];
     ULONGLONG QueuedTime100ns;
+    struct _RPI5VC4_PROCESS *Process;
 } RPI5VC4_PENDING_SUBMIT, *PRPI5VC4_PENDING_SUBMIT;
 
 /* ========================================================================
@@ -171,6 +172,9 @@ typedef struct _RPI5VC4_DMA_PACKET
 #define RPI5VC4_CONTEXT_MAGIC       0x52564431u
 #define RPI5VC4_ALLOCATION_MAGIC    0x52564432u
 #define RPI5VC4_OPENALLOC_MAGIC     0x52564433u
+#define RPI5VC4_PROCESS_MAGIC       0x52564434u
+#define RPI5VC4_STANDARD_ALLOCATION_MAGIC   0x52565341u
+#define RPI5VC4_STANDARD_ALLOCATION_VERSION 1u
 
 typedef struct _RPI5VC4_DEVICE_EXTENSION RPI5VC4_DEVICE_EXTENSION,
     *PRPI5VC4_DEVICE_EXTENSION;
@@ -207,7 +211,19 @@ typedef struct _RPI5VC4_WDDM_DEVICE
 {
     ULONG Magic;
     PRPI5VC4_DEVICE_EXTENSION Adapter;
+    struct _RPI5VC4_PROCESS *Process;
 } RPI5VC4_WDDM_DEVICE, *PRPI5VC4_WDDM_DEVICE;
+
+typedef struct _RPI5VC4_PROCESS
+{
+    ULONG Magic;
+    PRPI5VC4_DEVICE_EXTENSION Adapter;
+    HANDLE hDxgkProcess;
+    PULONG V3dPageTable;
+    PHYSICAL_ADDRESS V3dPageTablePhys;
+    D3DGPU_PHYSICAL_ADDRESS RootPageTableAddress;
+    UINT RootPageTableEntries;
+} RPI5VC4_PROCESS, *PRPI5VC4_PROCESS;
 
 typedef struct _RPI5VC4_CONTEXT
 {
@@ -220,6 +236,14 @@ typedef struct _RPI5VC4_ALLOCATION
     ULONG Magic;
     SIZE_T Size;
 } RPI5VC4_ALLOCATION, *PRPI5VC4_ALLOCATION;
+
+typedef struct _RPI5VC4_STANDARD_ALLOCATION_DATA
+{
+    ULONG Magic;
+    ULONG Version;
+    ULONG Type;
+} RPI5VC4_STANDARD_ALLOCATION_DATA,
+ *PRPI5VC4_STANDARD_ALLOCATION_DATA;
 
 typedef struct _RPI5VC4_OPENALLOCATION
 {
@@ -378,7 +402,6 @@ struct _RPI5VC4_DEVICE_EXTENSION
 
     /* ---- V3D 7.1 (3D engine) state -------------------------------------- */
     BOOLEAN V3dReady;
-    BOOLEAN V3dNeedsSmsPulse;
     ULONG V3dVersion;
     ULONG V3dHubIdent[4];
     ULONG V3dCoreIdent[3];
@@ -387,6 +410,8 @@ struct _RPI5VC4_DEVICE_EXTENSION
     PVOID V3dCoreBase;
     PULONG V3dPageTable;
     PHYSICAL_ADDRESS V3dPageTablePhys;
+    PHYSICAL_ADDRESS V3dActivePageTablePhys;
+    PRPI5VC4_PROCESS V3dActiveProcess;
     PVOID V3dScratchPage;
     PHYSICAL_ADDRESS V3dScratchPagePhys;
     PVOID V3dOverflowVa;              /* binner overflow memory pool       */
@@ -399,10 +424,13 @@ struct _RPI5VC4_DEVICE_EXTENSION
     PHYSICAL_ADDRESS MboxBufferPhys;
     ULONG FirmwareRevision;
 
-    /* ---- V3D interrupt (SPI 250, DTB) — poll timer remains the backstop
-     * because the ARM64 root IRQ arbiter may not grant the SPI. ---------- */
+    /* ---- V3D interrupts.  Dxgkrnl owns the core resource; the miniport
+     * connects the separate hub line.  The poll timer remains a backstop. */
     PKINTERRUPT V3dInterrupt;
     PKINTERRUPT V3dInterrupt2;
+    BOOLEAN V3dCoreInterruptOwnedByDxgk;
+    BOOLEAN V3dCoreIrqConnected;
+    BOOLEAN V3dHubIrqConnected;
     BOOLEAN V3dIrqConnected;
     volatile LONG V3dIsrCount;
     volatile LONG V3dIsrMasked;
@@ -545,6 +573,22 @@ NTSTATUS APIENTRY Rpi5Vc4DdiCreateContext(
 NTSTATUS APIENTRY Rpi5Vc4DdiDestroyContext(
     _In_ PVOID MiniportDeviceContext);
 
+NTSTATUS APIENTRY Rpi5Vc4DdiCreateProcess(
+    _In_ CONST HANDLE hAdapter,
+    _Inout_ DXGKARG_CREATEPROCESS *CreateProcess);
+
+NTSTATUS APIENTRY Rpi5Vc4DdiDestroyProcess(
+    _In_ CONST HANDLE hAdapter,
+    _In_ CONST HANDLE hKmdProcess);
+
+SIZE_T APIENTRY Rpi5Vc4DdiGetRootPageTableSize(
+    _In_ CONST HANDLE hAdapter,
+    _Inout_ DXGKARG_GETROOTPAGETABLESIZE *Args);
+
+VOID APIENTRY Rpi5Vc4DdiSetRootPageTable(
+    _In_ CONST HANDLE hAdapter,
+    _In_ CONST DXGKARG_SETROOTPAGETABLE *SetPageTable);
+
 NTSTATUS APIENTRY Rpi5Vc4DdiCreateAllocation(
     _In_    PVOID MiniportDeviceContext,
     _Inout_ PDXGKARG_CREATEALLOCATION CreateAllocation);
@@ -621,8 +665,6 @@ VOID APIENTRY Rpi5Vc4DdiDpcRoutine(
     _In_ PVOID MiniportDeviceContext);
 
 /* Fence pipeline (rpi5vc4_wddm.c), shared with rpi5vc4.c lifecycle. */
-VOID Rpi5Vc4QueueWarmupV3dJob(
-    _Inout_ struct _RPI5VC4_DEVICE_EXTENSION *DeviceExtension);
 /* Headless hotplug poll timer (armed by StartDevice once started + headless). */
 VOID Rpi5Vc4ArmHpdTimer(
     _Inout_ struct _RPI5VC4_DEVICE_EXTENSION *DeviceExtension);

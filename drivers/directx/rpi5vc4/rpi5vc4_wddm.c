@@ -59,6 +59,69 @@ Rpi5V3dSmsPowerUpBounded(
     _Out_ PULONG TeeUs,
     _Out_ PULONG ReeUs);
 
+static BOOLEAN
+Rpi5Vc4GpuJobActiveLocked(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
+{
+    ULONG Node;
+
+    for (Node = 0; Node < RPI5VC4_GPU_NODE_COUNT; ++Node)
+    {
+        ULONG Offset;
+
+        for (Offset = 0;
+             Offset < DeviceExtension->NodeQueue[Node].Count;
+             ++Offset)
+        {
+            ULONG Index =
+                (DeviceExtension->NodeQueue[Node].Head + Offset) %
+                RPI5VC4_MAX_PENDING;
+            PRPI5VC4_PENDING_SUBMIT Entry =
+                &DeviceExtension->NodeQueue[Node].Pending[Index];
+
+            if (Entry->BinSubmitted || Entry->RenderSubmitted)
+                return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static BOOLEAN
+Rpi5Vc4SelectAddressSpaceLocked(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_opt_ PRPI5VC4_PROCESS Process)
+{
+    PHYSICAL_ADDRESS PageTablePhysical;
+
+    if (DeviceExtension->V3dActiveProcess == Process)
+        return TRUE;
+    if (Rpi5Vc4GpuJobActiveLocked(DeviceExtension))
+        return FALSE;
+
+    if (Process != NULL)
+    {
+        if (Process->Magic != RPI5VC4_PROCESS_MAGIC ||
+            Process->Adapter != DeviceExtension ||
+            Process->V3dPageTable == NULL)
+        {
+            return FALSE;
+        }
+        PageTablePhysical = Process->V3dPageTablePhys;
+    }
+    else
+    {
+        PageTablePhysical = DeviceExtension->V3dPageTablePhys;
+    }
+
+    if (!Rpi5V3dMmuProgramPageTableBounded(DeviceExtension,
+                                            PageTablePhysical))
+    {
+        return FALSE;
+    }
+    DeviceExtension->V3dActiveProcess = Process;
+    return TRUE;
+}
+
 /*
  * Advance the pipeline.  Called with DmaLock held at DISPATCH_LEVEL.
  * Returns TRUE when at least one fence completed (caller queues FenceDpc).
@@ -116,14 +179,31 @@ Rpi5Vc4ProcessPendingLocked(
         if ((Head->IsTfuJob || Head->IsCsdJob || Head->IsV3dJob) && !DeviceExtension->V3dReady)
             goto AbortPipeline;
 
+        if (Head->IsTfuJob || Head->IsCsdJob || Head->IsV3dJob)
+        {
+            if (DeviceExtension->V3dActiveProcess != Head->Process &&
+                Rpi5Vc4GpuJobActiveLocked(DeviceExtension))
+            {
+                *NeedPoll = TRUE;
+                goto NextNode;
+            }
+            if (!Rpi5Vc4SelectAddressSpaceLocked(DeviceExtension,
+                                                  Head->Process))
+            {
+                goto AbortPipeline;
+            }
+        }
+
         if ((Head->IsTfuJob || Head->IsCsdJob) && DeviceExtension->V3dReady &&
             !DeviceExtension->StopAccepting)
         {
             /* Single-phase TFU conversion / CSD compute job. */
             /* Unpatched/non-slab addresses are invalid and never retire. */
             if (Head->IsTfuJob &&
-                (Head->TfuRegs[1] < RPI5VC4_V3D_SLAB_GPUVA ||
-                 Head->TfuRegs[6] < RPI5VC4_V3D_SLAB_GPUVA))
+                ((Head->TfuRegs[1] == 0 || Head->TfuRegs[6] == 0) ||
+                 (Head->Process == NULL &&
+                  (Head->TfuRegs[1] < RPI5VC4_V3D_SLAB_GPUVA ||
+                   Head->TfuRegs[6] < RPI5VC4_V3D_SLAB_GPUVA))))
             {
                 goto AbortPipeline;
             }
@@ -155,12 +235,7 @@ Rpi5Vc4ProcessPendingLocked(
                         for (Spin = 0; Spin < 400; Spin++)
                         {
                             if (Rpi5V3dTfuDone(DeviceExtension))
-                            {
-                                /* Round-16: any hardware engine retirement
-                                 * arms the pre-bin pulse. */
-                                DeviceExtension->V3dNeedsSmsPulse = TRUE;
                                 goto CompleteHead;
-                            }
                             KeStallExecutionProcessor(5);
                         }
                     }
@@ -182,10 +257,7 @@ Rpi5Vc4ProcessPendingLocked(
             if (Head->RenderSubmitted &&
                 (Head->IsTfuJob ? Rpi5V3dTfuDone(DeviceExtension)
                                 : Rpi5V3dCsdDone(DeviceExtension)))
-            {
-                DeviceExtension->V3dNeedsSmsPulse = TRUE;
                 goto CompleteHead;
-            }
 
             if (Now - Head->QueuedTime100ns < RPI5VC4_V3D_JOB_TIMEOUT_100NS)
             {
@@ -201,129 +273,12 @@ Rpi5Vc4ProcessPendingLocked(
         if (Head->IsV3dJob && DeviceExtension->V3dReady &&
             !DeviceExtension->StopAccepting)
         {
-            BOOLEAN HasBin = (Head->BclEnd > Head->BclStart);
+            BOOLEAN HasBin = (Head->BclEnd != Head->BclStart);
             BOOLEAN BinPhaseOver;
 
             /* Phase 1: kick binning. */
             if (HasBin && !Head->BinSubmitted)
             {
-                /* Pre-bin serialization workaround:
-                 * our bin kick fires exactly at the previous render's RFC
-                 * edge, inside its thread-tail window, and that timing
-                 * deterministically wedges the PTB (BFC freezes, only a
-                 * core reset recovers).  Defer the CT0 doorbell until CT1
-                 * reads fully idle, bounded so an unproven CS decode can
-                 * never strand the queue. */
-                ULONG Ct1Cs = READ_REGISTER_ULONG((PULONG)
-                    ((PUCHAR)DeviceExtension->V3dCoreBase + V3D_CLE_CT1CS));
-
-                if (Ct1Cs != 0)
-                {
-                    if (Head->BinDeferStart100ns == 0)
-                        Head->BinDeferStart100ns = Now;
-
-                    if (Now - Head->BinDeferStart100ns <
-                        (ULONGLONG)(50 * 10 * 1000))
-                    {
-                        *NeedPoll = TRUE;
-                        goto NextNode;
-                    }
-                    /* gate expired: kick once anyway */
-                }
-
-                /* BCM2712 silicon-quirk workaround: the
-                 * V3D core wedges the NEXT bin's final PTB flush after any
-                 * completed render; no register-level recovery releases it —
-                 * only an SMS-class reset.  Pulse proactively: bounded SMS
-                 * reset + invariants + MMU reprogram (no PTE rebuild), gated
-                 * on every V3D engine idle.  Pi5-specific driver code. */
-                if (DeviceExtension->V3dNeedsSmsPulse)
-                {
-                    BOOLEAN TfuBusy = FALSE;
-                    ULONG n;
-
-                    for (n = RPI5VC4_NODE_TFU; n <= RPI5VC4_NODE_CSD; n++)
-                    {
-                        if (DeviceExtension->NodeQueue[n].Count != 0 &&
-                            DeviceExtension->NodeQueue[n].Pending[
-                                DeviceExtension->NodeQueue[n].Head].RenderSubmitted)
-                        {
-                            TfuBusy = TRUE;
-                        }
-                    }
-                    if (!TfuBusy && DeviceExtension->V3dHubBase != NULL &&
-                        (READ_REGISTER_ULONG((PULONG)
-                            ((PUCHAR)DeviceExtension->V3dHubBase + V3D_V7_TFU_CS))
-                         & 0x1))
-                    {
-                        TfuBusy = TRUE;
-                    }
-
-                    if (TfuBusy)
-                    {
-                        *NeedPoll = TRUE;
-                        goto NextNode;
-                    }
-
-                    {
-                        PUCHAR CoreP = (PUCHAR)DeviceExtension->V3dCoreBase;
-                        BOOLEAN SmsOk, MmuOk;
-                        ULONG TeeUs, ReeUs;
-                        ULONG Ct1CsPre;
-
-                        /* Round-14 hardening: never SMS-pulse a core whose
-                         * CT1 thread is still finishing the retired render's
-                         * epilogue (RFC edges before thread idle).  Defer a
-                         * tick instead. */
-                        Ct1CsPre = READ_REGISTER_ULONG((PULONG)(CoreP + V3D_CLE_CT1CS));
-                        if (Ct1CsPre != 0)
-                        {
-                            *NeedPoll = TRUE;
-                            goto NextNode;
-                        }
-
-                        SmsOk = Rpi5V3dSmsPowerUpBounded(DeviceExtension,
-                                                         &TeeUs, &ReeUs);
-                        WRITE_REGISTER_ULONG((PULONG)(CoreP + V3D_CTL_L2TFLSTA), 0);
-                        WRITE_REGISTER_ULONG((PULONG)(CoreP + V3D_CTL_L2TFLEND), ~0u);
-                        WRITE_REGISTER_ULONG((PULONG)(CoreP + V3D_CTL_INT_MSK_SET), ~0u);
-                        WRITE_REGISTER_ULONG((PULONG)(CoreP + V3D_CTL_INT_CLR), ~0u);
-                        if (DeviceExtension->V3dHubBase != NULL)
-                        {
-                            WRITE_REGISTER_ULONG((PULONG)
-                                ((PUCHAR)DeviceExtension->V3dHubBase + V3D_HUB_INT_MSK_SET), ~0u);
-                            WRITE_REGISTER_ULONG((PULONG)
-                                ((PUCHAR)DeviceExtension->V3dHubBase + V3D_HUB_INT_CLR), ~0u);
-                        }
-                        if (DeviceExtension->V3dIrqConnected)
-                        {
-                            WRITE_REGISTER_ULONG((PULONG)(CoreP + V3D_CTL_INT_MSK_CLR),
-                                V3D_INT_FLDONE | V3D_INT_FRDONE | V3D_INT_OUTOMEM |
-                                V3D_V7_INT_CSDDONE);
-                            if (DeviceExtension->V3dHubBase != NULL)
-                            {
-                                WRITE_REGISTER_ULONG((PULONG)
-                                    ((PUCHAR)DeviceExtension->V3dHubBase + V3D_HUB_INT_MSK_CLR),
-                                    V3D_HUB_INT_TFUC);
-                            }
-                        }
-                        MmuOk = Rpi5V3dMmuProgramBounded(DeviceExtension);
-
-                        if (!SmsOk || !MmuOk)
-                        {
-                            /* Failed pulse stage: do NOT run the bin on bad
-                             * state — retry next tick; the 50ms backstop
-                             * escalates if it never succeeds. */
-                            *NeedPoll = TRUE;
-                            goto NextNode;
-                        }
-
-                        DeviceExtension->V3dNeedsSmsPulse = FALSE;
-                        DeviceExtension->V3dLastBfc = 0;
-                        DeviceExtension->V3dLastRfc = 0;
-                    }
-                }
-
                 /* Completion baseline BEFORE the doorbell (same construction
                  * as RenderKickRfc): per-job ownership of the BFC edge. */
                 Head->BinKickBfc = (UCHAR)
@@ -344,12 +299,10 @@ Rpi5Vc4ProcessPendingLocked(
                 }
             }
 
-            /* Per-job bin completion: the BFC edge past this job's own
-             * pre-kick baseline, with the CA==EA fallback for BCLs that
-             * end without a BFC bump.  Replaces the global FLDONE/delta
-             * attribution, which loses completions when its single global
-             * consumption misses (the sub=0 park: BinDone never set, the
-             * render never kicked, hardware idle and healthy). */
+            /* Per-job bin completion is the BFC edge past this job's own
+             * pre-kick baseline.  CT0 reaching EA is not completion: the
+             * FLUSH packet still has to cap the tile lists and retire the
+             * binner before CT1 may consume them. */
             if (HasBin && Head->BinSubmitted && !Head->BinDone)
             {
                 PUCHAR CoreB = (PUCHAR)DeviceExtension->V3dCoreBase;
@@ -357,52 +310,11 @@ Rpi5Vc4ProcessPendingLocked(
                                 (CoreB + V3D_CLE_BFC)) & 0xff;
 
                 if ((UCHAR)Bfc != Head->BinKickBfc)
-                {
                     Head->BinDone = TRUE;
-                }
-                else
-                {
-                    ULONG Ct0Ea = READ_REGISTER_ULONG((PULONG)(CoreB + V3D_CLE_CT0EA));
-                    ULONG Ct0Ca = READ_REGISTER_ULONG((PULONG)(CoreB + V3D_CLE_CT0CA));
-                    ULONG Pcs = READ_REGISTER_ULONG((PULONG)(CoreB + V3D_CLE_PCS));
 
-                    if (Ct0Ea == Head->BclEnd &&
-                        (Ct0Ca & ~1ul) >= Ct0Ea &&
-                        !(Pcs & 1))
-                    {
-                        Head->BinDone = TRUE;
-                    }
-                }
-
-                if (Head->BinDone)
-                {
-                    /* One-tick handoff slack: kicking CT1 in the same pass
-                     * that observed the bin edge wedges the FIRST job's
-                     * PTB flush (variant testing, rounds 13-14: configs
-                     * without this slack wedge fence-2 every boot). */
-                    Head->QueuedTime100ns = Now;
-                    *NeedPoll = TRUE;
-                    goto NextNode;
-                }
             }
-
-            /* Internal warm-up job: bin-only by construction; retire the
-             * moment the bin completes (never enters the render phase). */
-            if (Head->IsWarmup && Head->BinDone)
-                goto CompleteHead;
 
             BinPhaseOver = !HasBin || Head->BinDone;
-
-            /* PCS&1 pre-render gate: bit semantics undocumented, but variant
-             * testing (round 13) shows the FIRST job's handoff wedges without
-             * it — it stays as the cold-start protector. */
-            if (BinPhaseOver && HasBin && !Head->RenderSubmitted &&
-                (READ_REGISTER_ULONG((PULONG)
-                     ((PUCHAR)DeviceExtension->V3dCoreBase + V3D_CLE_PCS)) & 1))
-            {
-                *NeedPoll = TRUE;
-                goto NextNode;
-            }
 
             /* Phase 2: kick rendering once binning finished. */
             if (BinPhaseOver && !Head->RenderSubmitted)
@@ -441,50 +353,7 @@ Rpi5Vc4ProcessPendingLocked(
                 (UCHAR)(READ_REGISTER_ULONG((PULONG)
                     ((PUCHAR)DeviceExtension->V3dCoreBase + V3D_CLE_RFC)) & 0xff)
                     != Head->RenderKickRfc)
-            {
-                DeviceExtension->V3dNeedsSmsPulse = TRUE;
                 goto CompleteHead;
-            }
-
-            /* Known wedge signature: BCL fully consumed, BFC frozen in the
-             * final PTB flush.  Only a core reset recovers; take it at 50 ms
-             * instead of 300 ms (the stall the user sees). */
-            if (Head->BinSubmitted && !Head->BinDone && !Head->RenderSubmitted &&
-                Now - Head->QueuedTime100ns >
-                    (ULONGLONG)RPI5VC4_V3D_BIN_FLUSH_TIMEOUT_100NS)
-            {
-                PUCHAR CoreT = (PUCHAR)DeviceExtension->V3dCoreBase;
-                ULONG Ct0EaT = READ_REGISTER_ULONG((PULONG)(CoreT + V3D_CLE_CT0EA));
-                ULONG Ct0CaT = READ_REGISTER_ULONG((PULONG)(CoreT + V3D_CLE_CT0CA));
-
-                if (Ct0EaT == Head->BclEnd && (Ct0CaT & ~1ul) >= Ct0EaT)
-                {
-                    /* BCM2712 V3D quirk: the bin's final PTB flush can wedge
-                     * after a completed render (BFC frozen, all engines and
-                     * fault registers clean).  Only an SMS-class reset
-                     * recovers; the proactive pulse above prevents most
-                     * occurrences.  See v3d-render-park notes. */
-                    DPRINT1("RPI5VC4: bin final-flush wedge fence=%lu — reset: %s\n", Head->Fence, Rpi5V3dResetCore(DeviceExtension) ? "ok" : "FAILED");
-                    goto AbortPipeline;
-                }
-            }
-
-            /* Render-park recovery (WDDM TDR parity): the RCL was kicked but
-             * CT1 never began executing it (CT1CFG stays 0) and RFC has not
-             * advanced past the kick snapshot.  Windows recovers a stuck engine
-             * by RESET (DxgkDdiResetFromTimeout), never by re-submitting the
-             * packet — a re-kick can double-execute a render that quietly did
-             * start.  Reset + drop at the bin-flush bound instead of the 300 ms
-             * full timeout; the app re-renders the dropped frame. */
-            if (Head->RenderSubmitted && !Head->IsTfuJob && !Head->IsCsdJob &&
-                Now - Head->QueuedTime100ns >
-                    (ULONGLONG)RPI5VC4_V3D_BIN_FLUSH_TIMEOUT_100NS &&
-                READ_REGISTER_ULONG((PULONG)
-                    ((PUCHAR)DeviceExtension->V3dCoreBase + V3D_CLE_CT1CFG)) == 0)
-            {
-                DPRINT1("RPI5VC4: render-park fence=%lu (CT1 idle) — reset: %s\n", Head->Fence, Rpi5V3dResetCore(DeviceExtension) ? "ok" : "FAILED");
-                goto AbortPipeline;
-            }
 
             /* Still in flight: enforce the per-phase timeout. */
             if (Now - Head->QueuedTime100ns < RPI5VC4_V3D_JOB_TIMEOUT_100NS)
@@ -495,7 +364,6 @@ Rpi5Vc4ProcessPendingLocked(
 
             {
                 PVOID Core = DeviceExtension->V3dCoreBase;
-                PVOID Hub = DeviceExtension->V3dHubBase;
 
                 /* Last-chance completion recheck before the destructive reset:
                  * if RFC advanced past the kick snapshot the render actually
@@ -548,12 +416,6 @@ CompleteHead:
 AbortPipeline:
         *PipelineAborted = TRUE;
         *NeedPoll = FALSE;
-        if (Head->IsWarmup)
-        {
-            Queue(Node)->Head = (Queue(Node)->Head + 1) % RPI5VC4_MAX_PENDING;
-            Queue(Node)->Count--;
-            goto NextNode;
-        }
         DeviceExtension->StopAccepting = TRUE;
         RtlZeroMemory(DeviceExtension->NodeQueue, sizeof(DeviceExtension->NodeQueue));
         goto Finished;
@@ -664,6 +526,7 @@ Rpi5Vc4V3dPollDpcRoutine(
     BOOLEAN Completed;
     BOOLEAN NeedPoll;
     BOOLEAN PipelineAborted;
+    BOOLEAN InterruptWasMasked;
 
     UNREFERENCED_PARAMETER(Dpc);
     UNREFERENCED_PARAMETER(SystemArgument1);
@@ -676,17 +539,22 @@ Rpi5Vc4V3dPollDpcRoutine(
     Completed = Rpi5Vc4ProcessPendingLocked(DeviceExtension, &NeedPoll, &PipelineAborted);
     KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
 
-    if (InterlockedExchange(&DeviceExtension->V3dIsrMasked, 0) != 0 &&
-        DeviceExtension->V3dIrqConnected &&
+    InterruptWasMasked =
+        InterlockedExchange(&DeviceExtension->V3dIsrMasked, 0) != 0;
+    if (InterruptWasMasked &&
         DeviceExtension->V3dCoreBase != NULL &&
         !DeviceExtension->StopAccepting)
     {
         InterlockedIncrement(&DeviceExtension->V3dDpcFromIsr);
-        WRITE_REGISTER_ULONG(
-            (PULONG)((PUCHAR)DeviceExtension->V3dCoreBase + V3D_CTL_INT_MSK_CLR),
-            V3D_INT_FLDONE | V3D_INT_FRDONE | V3D_INT_OUTOMEM |
-            V3D_V7_INT_CSDDONE);
-        if (DeviceExtension->V3dHubBase != NULL)
+        if (DeviceExtension->V3dCoreIrqConnected)
+        {
+            WRITE_REGISTER_ULONG(
+                (PULONG)((PUCHAR)DeviceExtension->V3dCoreBase + V3D_CTL_INT_MSK_CLR),
+                V3D_INT_FLDONE | V3D_INT_FRDONE | V3D_INT_OUTOMEM |
+                V3D_V7_INT_CSDDONE);
+        }
+        if (DeviceExtension->V3dHubIrqConnected &&
+            DeviceExtension->V3dHubBase != NULL)
         {
             WRITE_REGISTER_ULONG(
                 (PULONG)((PUCHAR)DeviceExtension->V3dHubBase + V3D_HUB_INT_MSK_CLR),
@@ -939,100 +807,6 @@ Rpi5Vc4VsyncControl(
     }
 }
 
-/* Cold-core warm-up: submit one Mesa-shaped bin-only job through the normal
- * queue so the first-job PTB final-flush wedge fires (and is absorbed by the
- * 50ms reset) at boot instead of on the user's first frame. */
-VOID
-Rpi5Vc4QueueWarmupV3dJob(
-    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
-{
-    static const UCHAR WarmupBcl[] =
-    {
-        0x77, 0x00,
-        0x78, 0x04, 0x1b, 0x00, 0x00, 0x3f, 0x00, 0x3f, 0x00,
-        0x13,
-        0x06,
-        0x04
-    };
-    PRPI5VC4_PENDING_SUBMIT Entry;
-    KIRQL OldIrql;
-    BOOLEAN NeedPoll = FALSE;
-    BOOLEAN PipelineAborted = FALSE;
-    ULONG Waited;
-
-    if (!DeviceExtension->V3dReady ||
-        DeviceExtension->V3dOverflowVa == NULL)
-    {
-        return;
-    }
-
-    RtlCopyMemory((PUCHAR)DeviceExtension->V3dOverflowVa + 0x6100,
-                  WarmupBcl, sizeof(WarmupBcl));
-    KeMemoryBarrier();
-
-    KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
-    if (DeviceExtension->NodeQueue[RPI5VC4_NODE_3D].Count <
-        RPI5VC4_MAX_PENDING)
-    {
-        ULONG Tail = (DeviceExtension->NodeQueue[RPI5VC4_NODE_3D].Head +
-                      DeviceExtension->NodeQueue[RPI5VC4_NODE_3D].Count) %
-                     RPI5VC4_MAX_PENDING;
-
-        Entry = &DeviceExtension->NodeQueue[RPI5VC4_NODE_3D].Pending[Tail];
-        RtlZeroMemory(Entry, sizeof(*Entry));
-        Entry->IsV3dJob = TRUE;
-        Entry->IsWarmup = TRUE;
-        Entry->BclStart = (ULONG)DeviceExtension->V3dOverflowGpuVa + 0x6100;
-        Entry->BclEnd = Entry->BclStart + sizeof(WarmupBcl);
-        Entry->Qma = (ULONG)DeviceExtension->V3dOverflowGpuVa + 0x3000;
-        Entry->Qms = 0x3000;
-        Entry->Qts = (ULONG)DeviceExtension->V3dOverflowGpuVa + 0x6000;
-        DeviceExtension->NodeQueue[RPI5VC4_NODE_3D].Count++;
-        Rpi5Vc4ProcessPendingLocked(DeviceExtension, &NeedPoll, &PipelineAborted);
-    }
-    KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
-    if (NeedPoll)
-        Rpi5Vc4ArmV3dPollTimer(DeviceExtension);
-
-    for (Waited = 0; Waited < 100; Waited++)
-    {
-        LARGE_INTEGER WarmWait;
-
-        if (DeviceExtension->NodeQueue[RPI5VC4_NODE_3D].Count == 0)
-            break;
-        WarmWait.QuadPart = -10000; /* 1 ms; yields the CPU (PASSIVE) */
-        KeDelayExecutionThread(KernelMode, FALSE, &WarmWait);
-    }
-
-    if (PipelineAborted)
-    {
-        DPRINT1("RPI5VC4: warm-up job aborted without fence completion\n");
-    }
-    else if (DeviceExtension->NodeQueue[RPI5VC4_NODE_3D].Count != 0)
-    {
-        DPRINT1("RPI5VC4: warm-up bin stuck beyond 100 ms — reset+drop\n");
-        Rpi5V3dResetCore(DeviceExtension);
-        KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
-        while (DeviceExtension->NodeQueue[RPI5VC4_NODE_3D].Count != 0)
-        {
-            DeviceExtension->NodeQueue[RPI5VC4_NODE_3D].Head =
-                (DeviceExtension->NodeQueue[RPI5VC4_NODE_3D].Head + 1) %
-                RPI5VC4_MAX_PENDING;
-            DeviceExtension->NodeQueue[RPI5VC4_NODE_3D].Count--;
-        }
-        KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
-    }
-    else
-    {
-        /* Round-17: fresh-init state wedges the first UMD bin's final
-         * flush; post-ResetCore state never does (27-iteration
-         * discriminator, never contradicted).  Normalize to the proven
-         * state before any real work. */
-        DPRINT1("RPI5VC4: warm-up bin retired — normalization reset: %s\n",
-                Rpi5V3dResetCore(DeviceExtension) ? "ok" : "FAILED");
-    }
-}
-
 VOID
 Rpi5Vc4DmaPipelineInit(
     _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
@@ -1195,23 +969,73 @@ Rpi5Vc4DdiQueryAdapterInfo(
     PRPI5VC4_DEVICE_EXTENSION DeviceExtension = MiniportDeviceContext;
 
     if (DeviceExtension == NULL || QueryAdapterInfo == NULL)
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
 
     switch (QueryAdapterInfo->Type)
     {
         case DXGKQAITYPE_UMDRIVERPRIVATE:
             if (QueryAdapterInfo->pOutputData == NULL)
-                do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+                return STATUS_INVALID_PARAMETER;
             RtlZeroMemory(QueryAdapterInfo->pOutputData,
                           QueryAdapterInfo->OutputDataSize);
             return STATUS_SUCCESS;
+
+        case DXGKQAITYPE_GPUMMUCAPS:
+        {
+            DXGK_GPUMMUCAPS *Caps = QueryAdapterInfo->pOutputData;
+
+            if (Caps == NULL)
+                return STATUS_INVALID_PARAMETER;
+            if (QueryAdapterInfo->OutputDataSize < sizeof(*Caps))
+                return STATUS_BUFFER_TOO_SMALL;
+
+            RtlZeroMemory(Caps, sizeof(*Caps));
+            Caps->ReadOnlyMemorySupported = 1;
+            Caps->ExplicitPageTableInvalidation = 1;
+            Caps->PageTableUpdateRequireAddressSpaceIdle = 1;
+            Caps->PageTableUpdateMode = DXGK_PAGETABLEUPDATE_CPU_VIRTUAL;
+            Caps->VirtualAddressBitCount = RPI5VC4_GPUVA_BITS;
+            Caps->PageTableLevelCount = RPI5VC4_GPUVA_LEVELS;
+            return STATUS_SUCCESS;
+        }
+
+        case DXGKQAITYPE_PAGETABLELEVELDESC:
+        {
+            const DXGK_QUERYPAGETABLELEVELDESCIN *Input =
+                QueryAdapterInfo->pInputData;
+            DXGK_PAGE_TABLE_LEVEL_DESC *Desc =
+                QueryAdapterInfo->pOutputData;
+
+            if (Input == NULL ||
+                QueryAdapterInfo->InputDataSize < sizeof(*Input) ||
+                Desc == NULL)
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+            if (QueryAdapterInfo->OutputDataSize < sizeof(*Desc))
+                return STATUS_BUFFER_TOO_SMALL;
+            if (Input->PhysicalAdapterIndex != 0 ||
+                Input->LevelIndex >= RPI5VC4_GPUVA_LEVELS)
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            RtlZeroMemory(Desc, sizeof(*Desc));
+            Desc->PageTableIndexBitCount = RPI5VC4_GPUVA_INDEX_BITS;
+            Desc->PageTableSegmentId = 0;
+            Desc->PagingProcessPageTableSegmentId = 0;
+            Desc->PageTableSizeInBytes =
+                (1u << RPI5VC4_GPUVA_INDEX_BITS) * sizeof(DXGK_PTE);
+            Desc->PageTableAlignmentInBytes = PAGE_SIZE;
+            return STATUS_SUCCESS;
+        }
 
         case DXGKQAITYPE_DRIVERCAPS:
         {
             PDXGK_DRIVERCAPS Caps = QueryAdapterInfo->pOutputData;
 
             if (Caps == NULL)
-                do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+                return STATUS_INVALID_PARAMETER;
             if (QueryAdapterInfo->OutputDataSize < sizeof(DXGK_DRIVERCAPS))
                 return STATUS_BUFFER_TOO_SMALL;
 
@@ -1227,7 +1051,8 @@ Rpi5Vc4DdiQueryAdapterInfo(
             }
 
             Caps->MaxAllocationListSlotId = 255;
-            Caps->ApertureSegmentCommitLimit = DeviceExtension->VramSize;
+            Caps->ApertureSegmentCommitLimit =
+                RPI5VC4_APERTURE_COMMIT_LIMIT;
             Caps->GpuEngineTopology.NbAsymetricProcessingNodes =
                 RPI5VC4_GPU_NODE_COUNT;
             Caps->WDDMVersion = DXGKDDI_WDDMv2_ENUM;
@@ -1241,21 +1066,21 @@ Rpi5Vc4DdiQueryAdapterInfo(
             PDXGK_SEGMENTDESCRIPTOR Desc;
 
             if (SegOut == NULL)
-                do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+                return STATUS_INVALID_PARAMETER;
             if (QueryAdapterInfo->OutputDataSize < sizeof(DXGK_QUERYSEGMENTOUT))
                 return STATUS_BUFFER_TOO_SMALL;
 
             if (SegOut->pSegmentDescriptor == NULL)
             {
                 /* Phase 1: report the segment count. */
-                SegOut->NbSegment = 1;
+                SegOut->NbSegment = RPI5VC4_SEGMENT_COUNT;
                 SegOut->PagingBufferSegmentId = RPI5VC4_SEGMENT_ID;
                 SegOut->PagingBufferSize = 64 * 1024;
                 return STATUS_SUCCESS;
             }
 
-            if (SegOut->NbSegment < 1)
-                do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+            if (SegOut->NbSegment < RPI5VC4_SEGMENT_COUNT)
+                return STATUS_INVALID_PARAMETER;
 
             /*
              * Phase 2: one CPU-visible local VRAM segment — the contiguous
@@ -1270,6 +1095,16 @@ Rpi5Vc4DdiQueryAdapterInfo(
             Desc->CommitLimit = DeviceExtension->VramSize;
             Desc->Flags.CpuVisible = 1;
             Desc->Flags.LocalBudgetGroup = 1;
+
+            Desc = &SegOut->pSegmentDescriptor[1];
+            RtlZeroMemory(Desc, sizeof(*Desc));
+            Desc->Size = (SIZE_T)RPI5VC4_APERTURE_SIZE;
+            Desc->CommitLimit =
+                (SIZE_T)RPI5VC4_APERTURE_COMMIT_LIMIT;
+            Desc->Flags.Aperture = 1;
+            Desc->Flags.CpuVisible = 1;
+            Desc->Flags.ApplicationTarget = 1;
+            Desc->Flags.NonLocalBudgetGroup = 1;
             return STATUS_SUCCESS;
         }
 
@@ -1280,23 +1115,23 @@ Rpi5Vc4DdiQueryAdapterInfo(
             PDXGK_SEGMENTDESCRIPTOR4 Desc;
 
             if (SegOut == NULL)
-                do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+                return STATUS_INVALID_PARAMETER;
             if (QueryAdapterInfo->OutputDataSize < sizeof(DXGK_QUERYSEGMENTOUT4))
                 return STATUS_BUFFER_TOO_SMALL;
 
             if (SegOut->pSegmentDescriptor == NULL)
             {
-                SegOut->NbSegment = 1;
+                SegOut->NbSegment = RPI5VC4_SEGMENT_COUNT;
                 SegOut->PagingBufferSegmentId = RPI5VC4_SEGMENT_ID;
                 SegOut->PagingBufferSize = 64 * 1024;
                 SegOut->PagingBufferPrivateDataSize = 0;
                 return STATUS_SUCCESS;
             }
 
-            if (SegOut->NbSegment < 1 ||
+            if (SegOut->NbSegment < RPI5VC4_SEGMENT_COUNT ||
                 SegOut->SegmentDescriptorStride < sizeof(DXGK_SEGMENTDESCRIPTOR4))
             {
-                do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+                return STATUS_INVALID_PARAMETER;
             }
 
             Desc = (PDXGK_SEGMENTDESCRIPTOR4)SegOut->pSegmentDescriptor;
@@ -1307,6 +1142,18 @@ Rpi5Vc4DdiQueryAdapterInfo(
             Desc->CpuTranslatedAddress = DeviceExtension->VramPhysical;
             Desc->Size = DeviceExtension->VramSize;
             Desc->CommitLimit = DeviceExtension->VramSize;
+
+            Desc = (PDXGK_SEGMENTDESCRIPTOR4)
+                ((PUCHAR)SegOut->pSegmentDescriptor +
+                 SegOut->SegmentDescriptorStride);
+            RtlZeroMemory(Desc, sizeof(*Desc));
+            Desc->Flags.Aperture = 1;
+            Desc->Flags.CpuVisible = 1;
+            Desc->Flags.ApplicationTarget = 1;
+            Desc->Flags.NonLocalBudgetGroup = 1;
+            Desc->Size = (SIZE_T)RPI5VC4_APERTURE_SIZE;
+            Desc->CommitLimit =
+                (SIZE_T)RPI5VC4_APERTURE_COMMIT_LIMIT;
             return STATUS_SUCCESS;
         }
 
@@ -1317,21 +1164,21 @@ Rpi5Vc4DdiQueryAdapterInfo(
             PDXGK_SEGMENTDESCRIPTOR3 Desc;
 
             if (SegOut == NULL)
-                do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+                return STATUS_INVALID_PARAMETER;
             if (QueryAdapterInfo->OutputDataSize < sizeof(DXGK_QUERYSEGMENTOUT3))
                 return STATUS_BUFFER_TOO_SMALL;
 
             if (SegOut->pSegmentDescriptor == NULL)
             {
-                SegOut->NbSegment = 1;
+                SegOut->NbSegment = RPI5VC4_SEGMENT_COUNT;
                 SegOut->PagingBufferSegmentId = RPI5VC4_SEGMENT_ID;
                 SegOut->PagingBufferSize = 64 * 1024;
                 SegOut->PagingBufferPrivateDataSize = 0;
                 return STATUS_SUCCESS;
             }
 
-            if (SegOut->NbSegment < 1)
-                do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+            if (SegOut->NbSegment < RPI5VC4_SEGMENT_COUNT)
+                return STATUS_INVALID_PARAMETER;
 
             Desc = &SegOut->pSegmentDescriptor[0];
             RtlZeroMemory(Desc, sizeof(*Desc));
@@ -1341,6 +1188,16 @@ Rpi5Vc4DdiQueryAdapterInfo(
             Desc->CpuTranslatedAddress = DeviceExtension->VramPhysical;
             Desc->Size = DeviceExtension->VramSize;
             Desc->CommitLimit = DeviceExtension->VramSize;
+
+            Desc = &SegOut->pSegmentDescriptor[1];
+            RtlZeroMemory(Desc, sizeof(*Desc));
+            Desc->Flags.Aperture = 1;
+            Desc->Flags.CpuVisible = 1;
+            Desc->Flags.ApplicationTarget = 1;
+            Desc->Flags.NonLocalBudgetGroup = 1;
+            Desc->Size = (SIZE_T)RPI5VC4_APERTURE_SIZE;
+            Desc->CommitLimit =
+                (SIZE_T)RPI5VC4_APERTURE_COMMIT_LIMIT;
             return STATUS_SUCCESS;
         }
 
@@ -1356,17 +1213,11 @@ Rpi5Vc4DdiGetStandardAllocationDriverData(
     _Inout_ PDXGKARG_GETSTANDARDALLOCATIONDRIVERDATA GetStandardAllocationDriverData)
 {
     PRPI5VC4_DEVICE_EXTENSION DeviceExtension = MiniportDeviceContext;
+    RPI5VC4_STANDARD_ALLOCATION_DATA PrivateData;
+    UINT SuppliedPrivateSize;
 
     if (DeviceExtension == NULL || GetStandardAllocationDriverData == NULL)
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
-
-    /*
-     * No private data accompanies standard allocations: the HVS scans
-     * plain linear surfaces, so pitch = width * 4 is already what the
-     * callers pre-computed.  Report zero-sized private data blobs.
-     */
-    GetStandardAllocationDriverData->AllocationPrivateDriverDataSize = 0;
-    GetStandardAllocationDriverData->ResourcePrivateDriverDataSize = 0;
+        return STATUS_INVALID_PARAMETER;
 
     switch (GetStandardAllocationDriverData->StandardAllocationType)
     {
@@ -1374,16 +1225,291 @@ Rpi5Vc4DdiGetStandardAllocationDriverData(
         case DXGK_STDALLOCATION_SHADOWSURFACE:
         case DXGK_STDALLOCATION_STAGINGSURFACE:
         case DXGK_STDALLOCATION_GDISURFACE:
-            return STATUS_SUCCESS;
+            break;
 
         default:
             return STATUS_NOT_SUPPORTED;
     }
+
+    RtlZeroMemory(&PrivateData, sizeof(PrivateData));
+    PrivateData.Magic = RPI5VC4_STANDARD_ALLOCATION_MAGIC;
+    PrivateData.Version = RPI5VC4_STANDARD_ALLOCATION_VERSION;
+    PrivateData.Type =
+        GetStandardAllocationDriverData->StandardAllocationType;
+
+    SuppliedPrivateSize =
+        GetStandardAllocationDriverData->AllocationPrivateDriverDataSize;
+    GetStandardAllocationDriverData->AllocationPrivateDriverDataSize =
+        sizeof(PrivateData);
+    GetStandardAllocationDriverData->ResourcePrivateDriverDataSize = 0;
+
+    if (GetStandardAllocationDriverData->pAllocationPrivateDriverData == NULL)
+        return STATUS_SUCCESS;
+    if (SuppliedPrivateSize < sizeof(PrivateData))
+        return STATUS_BUFFER_TOO_SMALL;
+
+    RtlCopyMemory(
+        GetStandardAllocationDriverData->pAllocationPrivateDriverData,
+        &PrivateData,
+        sizeof(PrivateData));
+    return STATUS_SUCCESS;
 }
 
 /* ========================================================================
  * Device / context / allocation objects
  * ====================================================================== */
+
+NTSTATUS
+APIENTRY
+Rpi5Vc4DdiCreateProcess(
+    _In_ CONST HANDLE hAdapter,
+    _Inout_ DXGKARG_CREATEPROCESS *CreateProcess)
+{
+    PRPI5VC4_DEVICE_EXTENSION DeviceExtension =
+        (PRPI5VC4_DEVICE_EXTENSION)hAdapter;
+    PRPI5VC4_PROCESS Process;
+    PHYSICAL_ADDRESS Low;
+    PHYSICAL_ADDRESS High;
+    PHYSICAL_ADDRESS Boundary;
+
+    if (DeviceExtension == NULL || CreateProcess == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Process = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Process),
+                                    RPI5VC4_POOL_TAG);
+    if (Process == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlZeroMemory(Process, sizeof(*Process));
+
+    Low.QuadPart = 0;
+    High.QuadPart = 0xFFFFFFFFFFULL;
+    Boundary.QuadPart = 0;
+    Process->V3dPageTable = MmAllocateContiguousMemorySpecifyCache(
+        RPI5VC4_V3D_PT_SIZE, Low, High, Boundary, MmWriteCombined);
+    if (Process->V3dPageTable == NULL)
+    {
+        ExFreePoolWithTag(Process, RPI5VC4_POOL_TAG);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    if (DeviceExtension->V3dPageTable != NULL)
+    {
+        RtlCopyMemory(Process->V3dPageTable,
+                      DeviceExtension->V3dPageTable,
+                      RPI5VC4_V3D_PT_SIZE);
+    }
+    else
+    {
+        RtlZeroMemory(Process->V3dPageTable, RPI5VC4_V3D_PT_SIZE);
+    }
+    __dsb(_ARM64_BARRIER_SY);
+    KeMemoryBarrier();
+
+    Process->Magic = RPI5VC4_PROCESS_MAGIC;
+    Process->Adapter = DeviceExtension;
+    Process->hDxgkProcess = CreateProcess->hDxgkProcess;
+    Process->V3dPageTablePhys = MmGetPhysicalAddress(Process->V3dPageTable);
+    CreateProcess->hKmdProcess = (HANDLE)Process;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+APIENTRY
+Rpi5Vc4DdiDestroyProcess(
+    _In_ CONST HANDLE hAdapter,
+    _In_ CONST HANDLE hKmdProcess)
+{
+    PRPI5VC4_DEVICE_EXTENSION DeviceExtension =
+        (PRPI5VC4_DEVICE_EXTENSION)hAdapter;
+    PRPI5VC4_PROCESS Process = (PRPI5VC4_PROCESS)hKmdProcess;
+    KIRQL OldIrql;
+    ULONG Node;
+    ULONG TeeUs = 0;
+    ULONG ReeUs = 0;
+    BOOLEAN SmsOk = TRUE;
+    BOOLEAN MmuOk = TRUE;
+    ULONG HardwarePageTable = 0;
+
+    if (Process == NULL)
+        return STATUS_SUCCESS;
+    if (DeviceExtension == NULL ||
+        Process->Magic != RPI5VC4_PROCESS_MAGIC ||
+        Process->Adapter != DeviceExtension)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
+    for (Node = 0; Node < RPI5VC4_GPU_NODE_COUNT; ++Node)
+    {
+        ULONG Offset;
+
+        for (Offset = 0;
+             Offset < DeviceExtension->NodeQueue[Node].Count;
+             ++Offset)
+        {
+            ULONG Index =
+                (DeviceExtension->NodeQueue[Node].Head + Offset) %
+                RPI5VC4_MAX_PENDING;
+
+            if (DeviceExtension->NodeQueue[Node].Pending[Index].Process ==
+                Process)
+            {
+                KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
+                return STATUS_DEVICE_BUSY;
+            }
+        }
+    }
+
+    if (DeviceExtension->V3dActiveProcess == Process)
+    {
+        if (InterlockedCompareExchange(
+                &DeviceExtension->V3dExecutionBusy, 0, 0) != 0 ||
+            DeviceExtension->V3dExecGateActive ||
+            Rpi5Vc4GpuJobActiveLocked(DeviceExtension))
+        {
+            KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
+            return STATUS_DEVICE_BUSY;
+        }
+
+        /*
+         * The V3D MMU is a single hardware address space.  A completed fence
+         * proves command retirement, but the hub may still retain page-walk
+         * or cache state for the process table.  Reset the already-idle core,
+         * restore the invariant registers, then bind and flush the permanent
+         * adapter table before the process table can return to the page
+         * allocator.  This is the normal final-context-switch boundary, not a
+         * delay-based lifetime workaround.
+         */
+        if (DeviceExtension->V3dReady)
+        {
+            SmsOk = Rpi5V3dSmsPowerUpBounded(DeviceExtension,
+                                             &TeeUs,
+                                             &ReeUs);
+            if (SmsOk)
+            {
+                PUCHAR Core = (PUCHAR)DeviceExtension->V3dCoreBase;
+                PUCHAR Hub = (PUCHAR)DeviceExtension->V3dHubBase;
+
+                WRITE_REGISTER_ULONG((PULONG)(Core + V3D_CTL_L2TFLSTA), 0);
+                WRITE_REGISTER_ULONG((PULONG)(Core + V3D_CTL_L2TFLEND), ~0u);
+                WRITE_REGISTER_ULONG((PULONG)(Core + V3D_CTL_INT_MSK_SET), ~0u);
+                WRITE_REGISTER_ULONG((PULONG)(Core + V3D_CTL_INT_CLR), ~0u);
+                WRITE_REGISTER_ULONG((PULONG)(Hub + V3D_HUB_INT_MSK_SET), ~0u);
+                WRITE_REGISTER_ULONG((PULONG)(Hub + V3D_HUB_INT_CLR), ~0u);
+                if (DeviceExtension->V3dCoreIrqConnected)
+                {
+                    WRITE_REGISTER_ULONG(
+                        (PULONG)(Core + V3D_CTL_INT_MSK_CLR),
+                        V3D_INT_FLDONE | V3D_INT_FRDONE |
+                            V3D_INT_OUTOMEM | V3D_V7_INT_CSDDONE);
+                }
+                if (DeviceExtension->V3dHubIrqConnected)
+                {
+                    WRITE_REGISTER_ULONG(
+                        (PULONG)(Hub + V3D_HUB_INT_MSK_CLR),
+                        V3D_HUB_INT_TFUC);
+                }
+
+                MmuOk = Rpi5V3dMmuProgramPageTableBounded(
+                    DeviceExtension,
+                    DeviceExtension->V3dPageTablePhys);
+                HardwarePageTable = READ_REGISTER_ULONG(
+                    (PULONG)(Hub + V3D_MMU_PT_PA_BASE));
+                MmuOk = MmuOk &&
+                    HardwarePageTable ==
+                        (ULONG)(DeviceExtension->V3dPageTablePhys.QuadPart >>
+                                V3D_MMU_PAGE_SHIFT);
+            }
+        }
+
+        if (!SmsOk || !MmuOk)
+        {
+            KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
+            return STATUS_DEVICE_HARDWARE_ERROR;
+        }
+
+        DeviceExtension->V3dActiveProcess = NULL;
+    }
+    KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
+
+    __dsb(_ARM64_BARRIER_SY);
+    KeMemoryBarrier();
+    Process->Magic = 0;
+    Process->Adapter = NULL;
+    if (Process->V3dPageTable != NULL)
+    {
+        MmFreeContiguousMemorySpecifyCache(Process->V3dPageTable,
+                                           RPI5VC4_V3D_PT_SIZE,
+                                           MmWriteCombined);
+    }
+    __dsb(_ARM64_BARRIER_SY);
+    KeMemoryBarrier();
+    Process->V3dPageTable = NULL;
+    Process->V3dPageTablePhys.QuadPart = 0;
+    ExFreePoolWithTag(Process, RPI5VC4_POOL_TAG);
+    return STATUS_SUCCESS;
+}
+
+SIZE_T
+APIENTRY
+Rpi5Vc4DdiGetRootPageTableSize(
+    _In_ CONST HANDLE hAdapter,
+    _Inout_ DXGKARG_GETROOTPAGETABLESIZE *Args)
+{
+    PRPI5VC4_DEVICE_EXTENSION DeviceExtension =
+        (PRPI5VC4_DEVICE_EXTENSION)hAdapter;
+
+    if (DeviceExtension == NULL || Args == NULL ||
+        Args->PhysicalAdapterIndex != 0 ||
+        Args->NumberOfPte == 0 ||
+        Args->NumberOfPte > (1u << RPI5VC4_GPUVA_INDEX_BITS))
+    {
+        return 0;
+    }
+
+    return (SIZE_T)Args->NumberOfPte * sizeof(DXGK_PTE);
+}
+
+VOID
+APIENTRY
+Rpi5Vc4DdiSetRootPageTable(
+    _In_ CONST HANDLE hAdapter,
+    _In_ CONST DXGKARG_SETROOTPAGETABLE *SetPageTable)
+{
+    PRPI5VC4_DEVICE_EXTENSION DeviceExtension =
+        (PRPI5VC4_DEVICE_EXTENSION)hAdapter;
+    PRPI5VC4_CONTEXT Context;
+    PRPI5VC4_PROCESS Process;
+
+    if (DeviceExtension == NULL || SetPageTable == NULL ||
+        SetPageTable->Address.SegmentId != 0 ||
+        SetPageTable->Address.SegmentOffset == 0 ||
+        SetPageTable->NumEntries == 0 ||
+        SetPageTable->NumEntries >
+            (1u << RPI5VC4_GPUVA_INDEX_BITS))
+    {
+        return;
+    }
+
+    Context = (PRPI5VC4_CONTEXT)SetPageTable->hContext;
+    if (Context == NULL || Context->Magic != RPI5VC4_CONTEXT_MAGIC ||
+        Context->Device == NULL ||
+        Context->Device->Magic != RPI5VC4_DEVICE_MAGIC)
+    {
+        return;
+    }
+
+    Process = Context->Device->Process;
+    if (Process == NULL || Process->Magic != RPI5VC4_PROCESS_MAGIC ||
+        Process->Adapter != DeviceExtension)
+    {
+        return;
+    }
+
+    Process->RootPageTableAddress = SetPageTable->Address;
+    Process->RootPageTableEntries = SetPageTable->NumEntries;
+}
 
 NTSTATUS
 APIENTRY
@@ -1395,7 +1521,7 @@ Rpi5Vc4DdiCreateDevice(
     PRPI5VC4_WDDM_DEVICE Device;
 
     if (DeviceExtension == NULL || CreateDevice == NULL)
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
 
     Device = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Device),
                                    RPI5VC4_POOL_TAG);
@@ -1405,6 +1531,14 @@ Rpi5Vc4DdiCreateDevice(
     RtlZeroMemory(Device, sizeof(*Device));
     Device->Magic = RPI5VC4_DEVICE_MAGIC;
     Device->Adapter = DeviceExtension;
+    Device->Process = (PRPI5VC4_PROCESS)CreateDevice->hKmdProcess;
+    if (Device->Process == NULL ||
+        Device->Process->Magic != RPI5VC4_PROCESS_MAGIC ||
+        Device->Process->Adapter != DeviceExtension)
+    {
+        ExFreePoolWithTag(Device, RPI5VC4_POOL_TAG);
+        return STATUS_INVALID_PARAMETER;
+    }
 
     CreateDevice->hDevice = (HANDLE)Device;
     return STATUS_SUCCESS;
@@ -1420,7 +1554,7 @@ Rpi5Vc4DdiDestroyDevice(
     if (Device == NULL)
         return STATUS_SUCCESS;
     if (Device->Magic != RPI5VC4_DEVICE_MAGIC)
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
 
     Device->Magic = 0;
     ExFreePoolWithTag(Device, RPI5VC4_POOL_TAG);
@@ -1439,11 +1573,11 @@ Rpi5Vc4DdiCreateContext(
     if (Device == NULL || Device->Magic != RPI5VC4_DEVICE_MAGIC ||
         CreateContext == NULL)
     {
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
     }
 
     if (CreateContext->NodeOrdinal >= RPI5VC4_GPU_NODE_COUNT)
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
 
     Context = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Context),
                                     RPI5VC4_POOL_TAG);
@@ -1474,7 +1608,7 @@ Rpi5Vc4DdiDestroyContext(
     if (Context == NULL)
         return STATUS_SUCCESS;
     if (Context->Magic != RPI5VC4_CONTEXT_MAGIC)
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
 
     Context->Magic = 0;
     ExFreePoolWithTag(Context, RPI5VC4_POOL_TAG);
@@ -1494,14 +1628,31 @@ Rpi5Vc4DdiCreateAllocation(
         (CreateAllocation->NumAllocations != 0 &&
          CreateAllocation->pAllocationInfo == NULL))
     {
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
     }
 
     for (i = 0; i < CreateAllocation->NumAllocations; i++)
     {
         DXGK_ALLOCATIONINFO *Info = &CreateAllocation->pAllocationInfo[i];
         PRPI5VC4_ALLOCATION Allocation;
+        CONST RPI5VC4_STANDARD_ALLOCATION_DATA *PrivateData;
+        BOOLEAN StandardAllocation;
+        ULONG SegmentId;
         SIZE_T Size = (Info->Size != 0) ? Info->Size : PAGE_SIZE;
+
+        PrivateData = (CONST RPI5VC4_STANDARD_ALLOCATION_DATA *)
+            Info->pPrivateDriverData;
+        StandardAllocation =
+            Info->PrivateDriverDataSize >= sizeof(*PrivateData) &&
+            PrivateData != NULL &&
+            PrivateData->Magic == RPI5VC4_STANDARD_ALLOCATION_MAGIC &&
+            PrivateData->Version == RPI5VC4_STANDARD_ALLOCATION_VERSION &&
+            (PrivateData->Type == DXGK_STDALLOCATION_SHAREDPRIMARYSURFACE ||
+             PrivateData->Type == DXGK_STDALLOCATION_SHADOWSURFACE ||
+             PrivateData->Type == DXGK_STDALLOCATION_STAGINGSURFACE ||
+             PrivateData->Type == DXGK_STDALLOCATION_GDISURFACE);
+        SegmentId = StandardAllocation ? RPI5VC4_LOCAL_SEGMENT_ID :
+                                         RPI5VC4_APERTURE_SEGMENT_ID;
 
         if (Size > MAXULONG_PTR - (PAGE_SIZE - 1))
         {
@@ -1514,7 +1665,9 @@ Rpi5Vc4DdiCreateAllocation(
             return STATUS_INTEGER_OVERFLOW;
         }
         Size = (Size + PAGE_SIZE - 1) & ~(SIZE_T)(PAGE_SIZE - 1);
-        if (Size > DeviceExtension->VramSize)
+        if ((StandardAllocation && Size > DeviceExtension->VramSize) ||
+            (!StandardAllocation &&
+             (ULONGLONG)Size > RPI5VC4_APERTURE_COMMIT_LIMIT))
         {
             while (i > 0)
             {
@@ -1548,11 +1701,13 @@ Rpi5Vc4DdiCreateAllocation(
 
         Info->Size = Size;
         Info->Alignment = PAGE_SIZE;
-        Info->SupportedReadSegmentSet = (1 << (RPI5VC4_SEGMENT_ID - 1));
-        Info->SupportedWriteSegmentSet = (1 << (RPI5VC4_SEGMENT_ID - 1));
+        Info->SupportedReadSegmentSet = (1 << (SegmentId - 1));
+        Info->SupportedWriteSegmentSet = (1 << (SegmentId - 1));
         Info->EvictionSegmentSet = 0;
+        Info->PreferredSegment.Value = 0;
+        Info->PreferredSegment.SegmentId0 = SegmentId;
         Info->Flags.CpuVisible = 1;
-        Info->Flags.AccessedPhysically = 1;
+        Info->Flags.AccessedPhysically = StandardAllocation;
         Info->hAllocation = (HANDLE)Allocation;
     }
 
@@ -1573,7 +1728,7 @@ Rpi5Vc4DdiDestroyAllocation(
         (DestroyAllocation->NumAllocations != 0 &&
          DestroyAllocation->phAllocation == NULL))
     {
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
     }
 
     for (i = 0; i < DestroyAllocation->NumAllocations; i++)
@@ -1583,7 +1738,7 @@ Rpi5Vc4DdiDestroyAllocation(
         if (Allocation == NULL)
             continue;
         if (Allocation->Magic != RPI5VC4_ALLOCATION_MAGIC)
-            do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+            return STATUS_INVALID_PARAMETER;
     }
 
     for (i = 0; i < DestroyAllocation->NumAllocations; i++)
@@ -1613,7 +1768,7 @@ Rpi5Vc4DdiOpenAllocation(
         (OpenAllocation->NumAllocations != 0 &&
          OpenAllocation->pOpenAllocation == NULL))
     {
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
     }
 
     for (i = 0; i < OpenAllocation->NumAllocations; i++)
@@ -1660,7 +1815,7 @@ Rpi5Vc4DdiCloseAllocation(
         (CloseAllocation->NumAllocations != 0 &&
          CloseAllocation->pOpenHandleList == NULL))
     {
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
     }
 
     for (i = 0; i < CloseAllocation->NumAllocations; i++)
@@ -1670,7 +1825,7 @@ Rpi5Vc4DdiCloseAllocation(
         if (Open == NULL)
             continue;
         if (Open->Magic != RPI5VC4_OPENALLOC_MAGIC)
-            do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+            return STATUS_INVALID_PARAMETER;
     }
 
     for (i = 0; i < CloseAllocation->NumAllocations; i++)
@@ -1703,13 +1858,13 @@ Rpi5Vc4DdiRender(
          Context->Magic != RPI5VC4_DEVICE_MAGIC) ||
         Render == NULL)
     {
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
     }
 
     if (Render->pCommand == NULL || Render->CommandLength == 0 ||
         Render->pDmaBuffer == NULL)
     {
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
     }
 
     if (Render->DmaSize < Render->CommandLength)
@@ -1722,7 +1877,7 @@ Rpi5Vc4DdiRender(
     if (!Rpi5Vc4ParseDmaStream(Render->pCommand, Render->CommandLength,
                                NULL, NULL, NULL))
     {
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
     }
 
     RtlCopyMemory(Render->pDmaBuffer, Render->pCommand,
@@ -1768,7 +1923,7 @@ Rpi5Vc4DdiRender(
                         continue;
 
                     if (IndexPlusOne - 1 >= Render->AllocationListSize)
-                        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+                        return STATUS_INVALID_PARAMETER;
                     if (Out == NULL || OutSpace < 2)
                         return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
 
@@ -1810,7 +1965,7 @@ Rpi5Vc4DdiPresent(
     PRPI5VC4_DMA_PACKET Packet;
 
     if (MiniportDeviceContext == NULL || Present == NULL)
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
 
     Context = MiniportDeviceContext;
     if (Context->Magic == RPI5VC4_CONTEXT_MAGIC)
@@ -1991,7 +2146,7 @@ Rpi5Vc4DdiPatch(
     UINT i;
 
     if (DeviceExtension == NULL || Patch == NULL)
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
 
     if (Patch->pDmaBuffer == NULL || Patch->DmaBufferSize == 0 || Patch->DmaBufferSubmissionStartOffset > Patch->DmaBufferSubmissionEndOffset || Patch->DmaBufferSubmissionEndOffset > Patch->DmaBufferSize || Patch->PatchLocationListSubmissionStart > Patch->PatchLocationListSize || Patch->PatchLocationListSubmissionLength > Patch->PatchLocationListSize - Patch->PatchLocationListSubmissionStart || (Patch->PatchLocationListSize != 0 && Patch->pPatchLocationList == NULL) || (Patch->AllocationListSize != 0 && Patch->pAllocationList == NULL))
         return STATUS_INVALID_PARAMETER;
@@ -2022,12 +2177,12 @@ Rpi5Vc4DdiPatch(
         if (Loc->AllocationIndex >= Patch->AllocationListSize ||
             Patch->pAllocationList == NULL)
         {
-            do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+            return STATUS_INVALID_PARAMETER;
         }
 
         if (Loc->PatchOffset < Patch->DmaBufferSubmissionStartOffset || Loc->PatchOffset > Patch->DmaBufferSubmissionEndOffset || sizeof(ULONG) > Patch->DmaBufferSubmissionEndOffset - Loc->PatchOffset)
         {
-            do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+            return STATUS_INVALID_PARAMETER;
         }
 
         Alloc = &Patch->pAllocationList[Loc->AllocationIndex];
@@ -2077,11 +2232,25 @@ Rpi5Vc4DdiSubmitCommand(
     BOOLEAN MappingFound;
     BOOLEAN Stopping;
     RPI5VC4_DMA_MAPPING DmaMapping;
+    PRPI5VC4_WDDM_DEVICE KmdDevice;
+    PRPI5VC4_PROCESS Process;
     PVOID DmaBuffer;
     ULONG ExpectedNode;
 
     if (DeviceExtension == NULL || SubmitCommand == NULL)
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
+
+    KmdDevice = (PRPI5VC4_WDDM_DEVICE)SubmitCommand->hDevice;
+    if (KmdDevice == NULL ||
+        KmdDevice->Magic != RPI5VC4_DEVICE_MAGIC ||
+        KmdDevice->Adapter != DeviceExtension ||
+        KmdDevice->Process == NULL ||
+        KmdDevice->Process->Magic != RPI5VC4_PROCESS_MAGIC ||
+        KmdDevice->Process->Adapter != DeviceExtension)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    Process = KmdDevice->Process;
 
     RtlZeroMemory(&DmaMapping, sizeof(DmaMapping));
     KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
@@ -2096,7 +2265,7 @@ Rpi5Vc4DdiSubmitCommand(
     if (SubmitCommand->NodeOrdinal >= RPI5VC4_GPU_NODE_COUNT ||
         SubmitCommand->EngineOrdinal != 0)
     {
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
     }
 
     if ((MappingFound && DmaMapping.Size != SubmitCommand->DmaBufferSize) || SubmitCommand->DmaBufferSubmissionStartOffset > SubmitCommand->DmaBufferSubmissionEndOffset || SubmitCommand->DmaBufferSubmissionEndOffset > SubmitCommand->DmaBufferSize)
@@ -2138,7 +2307,8 @@ Rpi5Vc4DdiSubmitCommand(
     {
         if (!DeviceExtension->V3dReady)
             return STATUS_DEVICE_NOT_READY;
-        if (Job.Op == RPI5VC4_DMA_OP_TFU_JOB && (Job.TfuJob.Regs[1] < RPI5VC4_V3D_SLAB_GPUVA || Job.TfuJob.Regs[6] < RPI5VC4_V3D_SLAB_GPUVA))
+        if (Job.Op == RPI5VC4_DMA_OP_TFU_JOB &&
+            (Job.TfuJob.Regs[1] == 0 || Job.TfuJob.Regs[6] == 0))
             return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
         if (Job.Op == RPI5VC4_DMA_OP_TFU_JOB)
             ExpectedNode = RPI5VC4_NODE_TFU;
@@ -2175,6 +2345,7 @@ Rpi5Vc4DdiSubmitCommand(
         Entry->NodeOrdinal = QueueIndex;
         Entry->ReportNode = SubmitCommand->NodeOrdinal;
         Entry->RenderKicks = 0;
+        Entry->Process = Process;
         if (HasJob && DeviceExtension->V3dReady)
         {
             if (Job.Op == RPI5VC4_DMA_OP_TFU_JOB)
@@ -2228,7 +2399,7 @@ Rpi5Vc4DdiPreemptCommand(
     PRPI5VC4_DEVICE_EXTENSION DeviceExtension = MiniportDeviceContext;
 
     if (DeviceExtension == NULL || PreemptCommand == NULL)
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
 
     return STATUS_NOT_SUPPORTED;
 }
@@ -2243,7 +2414,7 @@ Rpi5Vc4DdiQueryCurrentFence(
     KIRQL OldIrql;
 
     if (DeviceExtension == NULL || CurrentFence == NULL)
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
 
     if (CurrentFence->NodeOrdinal >= RPI5VC4_GPU_NODE_COUNT || CurrentFence->EngineOrdinal != 0)
         return STATUS_INVALID_PARAMETER;
@@ -2319,6 +2490,154 @@ Rpi5Vc4SegmentAddressToVa(
     return (PUCHAR)DeviceExtension->VramVa + Offset;
 }
 
+static PRPI5VC4_PROCESS
+Rpi5Vc4PagingProcess(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ HANDLE ProcessHandle)
+{
+    PRPI5VC4_PROCESS Process = (PRPI5VC4_PROCESS)ProcessHandle;
+
+    if (Process == NULL ||
+        Process->Magic != RPI5VC4_PROCESS_MAGIC ||
+        Process->Adapter != DeviceExtension ||
+        Process->V3dPageTable == NULL)
+    {
+        return NULL;
+    }
+    return Process;
+}
+
+static NTSTATUS
+Rpi5Vc4EncodeNativePte(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ CONST DXGK_PTE *Pte,
+    _Out_ PULONG NativePte)
+{
+    ULONGLONG Physical;
+    ULONGLONG PageNumber;
+
+    *NativePte = 0;
+    if (Pte->Valid && Pte->Zero)
+        return STATUS_INVALID_PARAMETER;
+    if (Pte->LargePage ||
+        Pte->PageTablePageSize != DXGK_PTE_PAGE_TABLE_PAGE_4KB ||
+        Pte->PhysicalAdapterIndex != 0)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    if (Pte->Valid)
+    {
+        Physical = Pte->PageAddress;
+    }
+    else if (Pte->Zero)
+    {
+        if (DeviceExtension->V3dScratchPage == NULL)
+            return STATUS_DEVICE_NOT_READY;
+        Physical = (ULONGLONG)
+            DeviceExtension->V3dScratchPagePhys.QuadPart;
+    }
+    else
+    {
+        return STATUS_SUCCESS;
+    }
+
+    if ((Physical & (PAGE_SIZE - 1)) != 0)
+        return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+    PageNumber = Physical >> V3D_MMU_PAGE_SHIFT;
+    if (PageNumber > V3D_PTE_PAGE_NUMBER_MASK)
+        return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+
+    *NativePte = (ULONG)PageNumber | V3D_PTE_VALID;
+    if (Pte->Valid && !Pte->ReadOnly)
+        *NativePte |= V3D_PTE_WRITEABLE;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+Rpi5Vc4UpdateNativePageTable(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ CONST DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE *Update)
+{
+    PRPI5VC4_PROCESS Process;
+    ULONGLONG FirstPage;
+    ULONGLONG EndPage;
+    ULONG Index;
+    NTSTATUS Status;
+    KIRQL OldIrql;
+
+    Process = Rpi5Vc4PagingProcess(DeviceExtension, Update->hProcess);
+    if (Process == NULL ||
+        Update->UpdateMode != DXGK_PAGETABLEUPDATE_CPU_VIRTUAL ||
+        Update->PageTableLevel >= RPI5VC4_GPUVA_LEVELS ||
+        Update->PageTableAddress.CpuVirtual == NULL ||
+        Update->pPageTableEntries == NULL ||
+        Update->NumPageTableEntries == 0 ||
+        Update->StartIndex >= (1u << RPI5VC4_GPUVA_INDEX_BITS) ||
+        Update->NumPageTableEntries >
+            (1u << RPI5VC4_GPUVA_INDEX_BITS) - Update->StartIndex ||
+        Update->Flags.Repeat || Update->Flags.Use64KBPages ||
+        (Update->FirstPteVirtualAddress & (PAGE_SIZE - 1)) != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /* The portable upper level links dxgkrnl's radix tables.  V3D has a
+     * single flat hardware table, so only leaf descriptors need encoding. */
+    if (Update->PageTableLevel != 0)
+        return STATUS_SUCCESS;
+
+    FirstPage = Update->FirstPteVirtualAddress >> V3D_MMU_PAGE_SHIFT;
+    EndPage = FirstPage + Update->NumPageTableEntries;
+    if (EndPage < FirstPage ||
+        EndPage > (RPI5VC4_V3D_PT_SIZE / sizeof(ULONG)))
+    {
+        return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+    }
+
+    /* Validate the complete span before changing the hardware table. */
+    for (Index = 0; Index < Update->NumPageTableEntries; ++Index)
+    {
+        ULONG NativePte;
+
+        Status = Rpi5Vc4EncodeNativePte(
+            DeviceExtension,
+            &Update->pPageTableEntries[Index],
+            &NativePte);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+
+    /* PageTableUpdateRequireAddressSpaceIdle requires the live native table
+     * to remain unchanged until the address space is actually idle. */
+    KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
+    if (DeviceExtension->V3dActiveProcess == Process &&
+        (InterlockedCompareExchange(
+             &DeviceExtension->V3dExecutionBusy, 0, 0) != 0 ||
+         DeviceExtension->V3dExecGateActive ||
+         Rpi5Vc4GpuJobActiveLocked(DeviceExtension)))
+    {
+        KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
+        return STATUS_DEVICE_BUSY;
+    }
+
+    for (Index = 0; Index < Update->NumPageTableEntries; ++Index)
+    {
+        ULONG NativePte;
+
+        Status = Rpi5Vc4EncodeNativePte(
+            DeviceExtension,
+            &Update->pPageTableEntries[Index],
+            &NativePte);
+        ASSERT(NT_SUCCESS(Status));
+        Process->V3dPageTable[FirstPage + Index] = NativePte;
+    }
+    __dsb(_ARM64_BARRIER_SY);
+    KeMemoryBarrier();
+    KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 APIENTRY
 Rpi5Vc4DdiBuildPagingBuffer(
@@ -2328,7 +2647,7 @@ Rpi5Vc4DdiBuildPagingBuffer(
     PRPI5VC4_DEVICE_EXTENSION DeviceExtension = MiniportDeviceContext;
 
     if (DeviceExtension == NULL || BuildPagingBuffer == NULL)
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
 
     switch (BuildPagingBuffer->Operation)
     {
@@ -2372,7 +2691,7 @@ Rpi5Vc4DdiBuildPagingBuffer(
             }
 
             if (SourceVa == NULL || DestinationVa == NULL)
-                do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+                return STATUS_INVALID_PARAMETER;
 
             RtlCopyMemory(DestinationVa, SourceVa, Bytes);
             return STATUS_SUCCESS;
@@ -2389,7 +2708,7 @@ Rpi5Vc4DdiBuildPagingBuffer(
 
             DestinationVa = Rpi5Vc4SegmentAddressToVa(DeviceExtension, BuildPagingBuffer->Fill.Destination.SegmentAddress, Bytes);
             if (DestinationVa == NULL)
-                do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+                return STATUS_INVALID_PARAMETER;
 
             for (i = 0; i + sizeof(ULONG) <= Bytes; i += sizeof(ULONG))
             {
@@ -2402,6 +2721,46 @@ Rpi5Vc4DdiBuildPagingBuffer(
         case DXGK_OPERATION_DISCARD_CONTENT:
         case DXGK_OPERATION_MAP_APERTURE_SEGMENT:
         case DXGK_OPERATION_UNMAP_APERTURE_SEGMENT:
+            return STATUS_SUCCESS;
+
+        case DXGK_OPERATION_UPDATE_PAGE_TABLE:
+            return Rpi5Vc4UpdateNativePageTable(
+                DeviceExtension,
+                &BuildPagingBuffer->UpdatePageTable);
+
+        case DXGK_OPERATION_FLUSH_TLB:
+        {
+            PRPI5VC4_PROCESS Process = Rpi5Vc4PagingProcess(
+                DeviceExtension,
+                BuildPagingBuffer->FlushTlb.hProcess);
+            KIRQL OldIrql;
+            BOOLEAN Flushed = TRUE;
+
+            if (Process == NULL ||
+                BuildPagingBuffer->FlushTlb.StartVirtualAddress >=
+                    BuildPagingBuffer->FlushTlb.EndVirtualAddress ||
+                BuildPagingBuffer->FlushTlb.EndVirtualAddress >
+                    (1ULL << RPI5VC4_GPUVA_BITS))
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
+            if (DeviceExtension->V3dActiveProcess == Process)
+            {
+                if (Rpi5Vc4GpuJobActiveLocked(DeviceExtension))
+                {
+                    KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
+                    return STATUS_DEVICE_BUSY;
+                }
+                Flushed = Rpi5V3dMmucFlushBounded(DeviceExtension);
+            }
+            KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
+            return Flushed ? STATUS_SUCCESS :
+                             STATUS_DEVICE_HARDWARE_ERROR;
+        }
+
+        case DXGK_OPERATION_NOTIFY_RESIDENCY:
             return STATUS_SUCCESS;
 
         default:
@@ -2423,7 +2782,7 @@ Rpi5Vc4DdiResetFromTimeout(
     BOOLEAN ResetSucceeded;
 
     if (DeviceExtension == NULL)
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
 
     if (!DeviceExtension->DmaPipelineInitialized)
         return STATUS_DEVICE_NOT_READY;
@@ -2475,7 +2834,7 @@ Rpi5Vc4DdiControlInterrupt(
     PRPI5VC4_DEVICE_EXTENSION DeviceExtension = MiniportDeviceContext;
 
     if (DeviceExtension == NULL)
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
 
     switch (InterruptType)
     {
@@ -2501,11 +2860,8 @@ Rpi5Vc4DdiInterruptRoutine(
     _In_ PVOID MiniportDeviceContext,
     _In_ ULONG MessageNumber)
 {
-    UNREFERENCED_PARAMETER(MiniportDeviceContext);
     UNREFERENCED_PARAMETER(MessageNumber);
-
-    /* No interrupt line is connected (root-enumerated devnode). */
-    return FALSE;
+    return Rpi5V3dInterrupt(MiniportDeviceContext);
 }
 
 VOID
@@ -2524,7 +2880,8 @@ Rpi5Vc4DdiDpcRoutine(
 
 #define RPI5VC4_SUBMIT_PACKET_TYPE   2u
 #define RPI5VC4_SUBMIT_COMMAND_TYPE  2u
-#define RPI5VC4_RESOURCE_LIST_MAGIC  0x5652474cUL  /* 'LGRV' */
+#define RPI5VC4_RESOURCE_LIST_MAGIC_V1 0x5652474cUL
+#define RPI5VC4_RESOURCE_LIST_MAGIC_V2 0x3252474cUL
 
 typedef struct _RPI5VC4_ESC_HDR
 {
@@ -2646,6 +3003,7 @@ Rpi5Vc4EscapeSubmit(
     const RPI5VC4_ESC_CMD *Command;
     const RPI5VC4_DMA_PACKET *Packet;
     ULONG ResourceCount;
+    ULONG ResourceEntrySize;
 
     /*
      * Walk the cursor layout: HDR, RESLIST, hResource[], CMD, [SIGNAL], PACKET.
@@ -2657,23 +3015,28 @@ Rpi5Vc4EscapeSubmit(
      */
     Cursor = sizeof(RPI5VC4_ESC_HDR);
     if (Cursor + sizeof(RPI5VC4_ESC_RESLIST) > Size)
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
 
     Resources = (const RPI5VC4_ESC_RESLIST *)(Base + Cursor);
-    if (Resources->Magic != RPI5VC4_RESOURCE_LIST_MAGIC)
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+    if (Resources->Magic != RPI5VC4_RESOURCE_LIST_MAGIC_V1 &&
+        Resources->Magic != RPI5VC4_RESOURCE_LIST_MAGIC_V2)
+        return STATUS_INVALID_PARAMETER;
     ResourceCount = Resources->ResourceCount;
+    ResourceEntrySize = Resources->Magic == RPI5VC4_RESOURCE_LIST_MAGIC_V2
+                            ? 2 * sizeof(ULONG)
+                            : sizeof(ULONG);
     if (ResourceCount > 4096)
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
     Cursor += sizeof(RPI5VC4_ESC_RESLIST);
 
     /* Skip the residency handle list — the slab is always resident. */
-    if (Cursor + ResourceCount * sizeof(ULONG) < Cursor) /* overflow */
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
-    Cursor += ResourceCount * sizeof(ULONG);
+    if (ResourceCount > ((ULONG)-1) / ResourceEntrySize ||
+        Cursor + ResourceCount * ResourceEntrySize < Cursor) /* overflow */
+        return STATUS_INVALID_PARAMETER;
+    Cursor += ResourceCount * ResourceEntrySize;
 
     if (Cursor + sizeof(RPI5VC4_ESC_CMD) > Size)
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
     Command = (const RPI5VC4_ESC_CMD *)(Base + Cursor);
     (VOID)Command; /* CommandType 1 (smoke) or 2 (vc4kmt): both are submits */
     Cursor += sizeof(RPI5VC4_ESC_CMD);
@@ -2683,13 +3046,13 @@ Rpi5Vc4EscapeSubmit(
         Cursor += sizeof(RPI5VC4_ESC_SIGNAL);
 
     if (Cursor + sizeof(RPI5VC4_DMA_PACKET) > Size)
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
 
     Packet = (const RPI5VC4_DMA_PACKET *)(Base + Cursor);
     DPRINT1("RPI5VC4: esc submit packet op=%d magic=%08lx\n",
             (int)Packet->Op, (ULONG)Packet->Magic);
     if (Packet->Magic != RPI5VC4_DMA_PACKET_MAGIC)
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
 
     /* Present packets are descriptive only (dxgkrnl blit moved the pixels). */
     if (Packet->Op == RPI5VC4_DMA_OP_NOP ||
@@ -2768,10 +3131,13 @@ Rpi5Vc4GpuEscapeGateRelease(
         WRITE_REGISTER_ULONG((PULONG)(Hub + V3D_HUB_INT_CLR), 0xFFFFFFFFu);
         DeviceExtension->V3dLastBfc = READ_REGISTER_ULONG((PULONG)(Core + V3D_CLE_BFC)) & 0xff;
         DeviceExtension->V3dLastRfc = READ_REGISTER_ULONG((PULONG)(Core + V3D_CLE_RFC)) & 0xff;
-        if (DeviceExtension->V3dIrqConnected)
+        if (DeviceExtension->V3dCoreIrqConnected)
         {
             WRITE_REGISTER_ULONG((PULONG)(Core + V3D_CTL_INT_MSK_SET), 0xFFFFFFFFu);
             WRITE_REGISTER_ULONG((PULONG)(Core + V3D_CTL_INT_MSK_CLR), V3D_INT_FLDONE | V3D_INT_FRDONE | V3D_INT_OUTOMEM | V3D_V7_INT_CSDDONE);
+        }
+        if (DeviceExtension->V3dHubIrqConnected)
+        {
             WRITE_REGISTER_ULONG((PULONG)(Hub + V3D_HUB_INT_MSK_SET), 0xFFFFFFFFu);
             WRITE_REGISTER_ULONG((PULONG)(Hub + V3D_HUB_INT_MSK_CLR), V3D_HUB_INT_TFUC);
         }
@@ -2951,7 +3317,7 @@ Rpi5Vc4DdiEscape(
     if (DeviceExtension == NULL || Escape == NULL ||
         Escape->pPrivateDriverData == NULL)
     {
-        do { DPRINT1("RPI5VC4: EJ reject L%d\n", __LINE__); return STATUS_INVALID_PARAMETER; } while (0);
+        return STATUS_INVALID_PARAMETER;
     }
 
     /*

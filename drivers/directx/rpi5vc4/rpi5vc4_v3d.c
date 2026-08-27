@@ -197,6 +197,9 @@ Rpi5V3dMmuSetup(
         }
         DeviceExtension->V3dPageTablePhys =
             MmGetPhysicalAddress(DeviceExtension->V3dPageTable);
+        if (DeviceExtension->V3dActivePageTablePhys.QuadPart == 0)
+            DeviceExtension->V3dActivePageTablePhys =
+                DeviceExtension->V3dPageTablePhys;
     }
 
     if (DeviceExtension->V3dScratchPage == NULL)
@@ -274,8 +277,14 @@ static VOID
 Rpi5V3dMmuWriteRegistersNoFlush(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
+    PHYSICAL_ADDRESS PageTablePhysical =
+        DeviceExtension->V3dActivePageTablePhys;
+
+    if (PageTablePhysical.QuadPart == 0)
+        PageTablePhysical = DeviceExtension->V3dPageTablePhys;
+
     Rpi5V3dWrite(DeviceExtension->V3dHubBase, V3D_MMU_PT_PA_BASE,
-                 (ULONG)(DeviceExtension->V3dPageTablePhys.QuadPart >>
+                 (ULONG)(PageTablePhysical.QuadPart >>
                          V3D_MMU_PAGE_SHIFT));
     Rpi5V3dWrite(DeviceExtension->V3dHubBase, V3D_MMU_CTL,
                  V3D_MMU_CTL_ENABLE |
@@ -309,6 +318,41 @@ Rpi5V3dMmuProgramBounded(
 {
     Rpi5V3dMmuWriteRegistersNoFlush(DeviceExtension);
     return Rpi5V3dMmucFlushBounded(DeviceExtension);
+}
+
+BOOLEAN
+Rpi5V3dMmuProgramPageTableBounded(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ PHYSICAL_ADDRESS PageTablePhysical)
+{
+    ULONG HardwarePageTable;
+    BOOLEAN Flushed;
+
+    if (DeviceExtension == NULL ||
+        DeviceExtension->V3dHubBase == NULL ||
+        PageTablePhysical.QuadPart == 0 ||
+        (PageTablePhysical.QuadPart & (PAGE_SIZE - 1)) != 0)
+    {
+        return FALSE;
+    }
+
+    DeviceExtension->V3dActivePageTablePhys = PageTablePhysical;
+    Rpi5V3dMmuWriteRegistersNoFlush(DeviceExtension);
+    Flushed = Rpi5V3dMmucFlushBounded(DeviceExtension);
+    __dsb(_ARM64_BARRIER_SY);
+    HardwarePageTable = Rpi5V3dRead(DeviceExtension->V3dHubBase,
+                                    V3D_MMU_PT_PA_BASE);
+    Flushed = Flushed &&
+        HardwarePageTable ==
+            (ULONG)(PageTablePhysical.QuadPart >> V3D_MMU_PAGE_SHIFT);
+    if (!Flushed)
+    {
+        /* The hardware and cached software owner can no longer be assumed
+         * to agree.  Force the next submission through a full rebind. */
+        DeviceExtension->V3dActivePageTablePhys.QuadPart = 0;
+        DeviceExtension->V3dActiveProcess = NULL;
+    }
+    return Flushed;
 }
 
 /* Bounded FULL SMS power-up front half (TEE handshake + REE pulse), the
@@ -404,11 +448,14 @@ Rpi5V3dResetCore(
     Rpi5V3dWrite(Hub, V3D_HUB_INT_MSK_SET, ~0u);
     Rpi5V3dWrite(Hub, V3D_HUB_INT_CLR, ~0u);
 
-    if (DeviceExtension->V3dIrqConnected)
+    if (DeviceExtension->V3dCoreIrqConnected)
     {
         Rpi5V3dWrite(Core, V3D_CTL_INT_MSK_CLR,
                      V3D_INT_FLDONE | V3D_INT_FRDONE | V3D_INT_OUTOMEM |
                      V3D_V7_INT_CSDDONE);
+    }
+    if (DeviceExtension->V3dHubIrqConnected)
+    {
         Rpi5V3dWrite(Hub, V3D_HUB_INT_MSK_CLR, V3D_HUB_INT_TFUC);
     }
 
@@ -581,6 +628,9 @@ Rpi5V3dTeardown(
                                            MmWriteCombined);
         DeviceExtension->V3dPageTable = NULL;
     }
+    DeviceExtension->V3dPageTablePhys.QuadPart = 0;
+    DeviceExtension->V3dActivePageTablePhys.QuadPart = 0;
+    DeviceExtension->V3dActiveProcess = NULL;
 
     if (DeviceExtension->V3dScratchPage != NULL)
     {
@@ -618,25 +668,18 @@ Rpi5V3dTeardown(
 }
 
 /* ========================================================================
- * Interrupt delivery (best effort)
+ * Interrupt delivery
  *
- * The devnode is root-enumerated with no interrupt resource, so the SPI is
- * connected fully-specified from the DTB fact (SPI 250).  On this ARM64
- * HAL the root IRQ arbiter may refuse or misroute the vector — the ISR is
- * therefore purely an accelerator: it queues the same completion DPC the
- * poll timer drives, and the poll timer stays armed as the backstop.
+ * Dxgkrnl owns the translated core interrupt and calls the miniport ISR.
+ * The separate hub interrupt is connected below.  Both feed the same
+ * completion DPC, while the poll timer remains the lost-interrupt backstop.
  * ====================================================================== */
 
-static BOOLEAN
-NTAPI
-Rpi5V3dInterruptService(
-    _In_ PKINTERRUPT Interrupt,
-    _In_opt_ PVOID ServiceContext)
+BOOLEAN
+Rpi5V3dInterrupt(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
-    PRPI5VC4_DEVICE_EXTENSION DeviceExtension = ServiceContext;
     ULONG Status;
-
-    UNREFERENCED_PARAMETER(Interrupt);
 
     if (DeviceExtension == NULL || !DeviceExtension->V3dReady)
         return FALSE;
@@ -659,21 +702,24 @@ Rpi5V3dInterruptService(
         return FALSE;
     }
 
-    /*
-     * Level-triggered SPI: quiesce the source BEFORE EOI or the line
-     * re-asserts forever and storms this core at DIRQL (observed: poll
-     * DPC + both TDR paths starved while the rest of the system ran).
-     * Mask the completion sources here; the DPC consumes INT_STS with
-     * job attribution and unmasks on the way out.
-     */
+    /* Quiesce the level-triggered source before EOI. */
     Rpi5V3dWrite(DeviceExtension->V3dCoreBase, V3D_CTL_INT_MSK_SET,
                  V3D_INT_FLDONE | V3D_INT_FRDONE | V3D_INT_OUTOMEM |
                  V3D_V7_INT_CSDDONE);
     InterlockedExchange(&DeviceExtension->V3dIsrMasked, 1);
     InterlockedIncrement(&DeviceExtension->V3dIsrCount);
-
     KeInsertQueueDpc(&DeviceExtension->V3dPollDpc, NULL, NULL);
     return TRUE;
+}
+
+static BOOLEAN
+NTAPI
+Rpi5V3dInterruptService(
+    _In_ PKINTERRUPT Interrupt,
+    _In_opt_ PVOID ServiceContext)
+{
+    UNREFERENCED_PARAMETER(Interrupt);
+    return Rpi5V3dInterrupt(ServiceContext);
 }
 
 BOOLEAN
@@ -704,51 +750,49 @@ Rpi5V3dConnectInterrupt(
     Params.FullySpecified.InterruptMode = LevelSensitive;
     Params.FullySpecified.ProcessorEnableMask = 1;
 
-    /*
-     * The v3d node lists two SPIs (250, 249); which one carries the core
-     * completions (FLDONE/FRDONE) vs the hub events (TFUC/MMU) is not proven
-     * on silicon, and the single shared ServiceRoutine reads BOTH status
-     * registers.  So connect both lines and require only that ONE succeeds:
-     * making either line fatal-then-optional (as before) meant a boot where
-     * the core-carrying line failed to connect lost every core completion to
-     * the 1 ms poll (isr=0), which starves the bin->render kick and parks.
-     */
-    Status = IoConnectInterruptEx(&Params);
-    if (!NT_SUCCESS(Status))
+    if (DeviceExtension->V3dCoreInterruptOwnedByDxgk)
     {
-        DPRINT("RPI5VC4: V3D SPI %u connect failed 0x%08lx\n",
-               RPI5_V3D_CORE_SPI, Status);
-        DeviceExtension->V3dInterrupt = NULL;
+        DeviceExtension->V3dCoreIrqConnected = TRUE;
+    }
+    else
+    {
+        Status = IoConnectInterruptEx(&Params);
+        if (NT_SUCCESS(Status))
+            DeviceExtension->V3dCoreIrqConnected = TRUE;
+        else
+            DeviceExtension->V3dInterrupt = NULL;
     }
 
     Params.FullySpecified.InterruptObject = &DeviceExtension->V3dInterrupt2;
     Params.FullySpecified.Vector = RPI5_V3D_INTID2;
     Status = IoConnectInterruptEx(&Params);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT("RPI5VC4: V3D SPI %u connect failed 0x%08lx\n",
-               RPI5_V3D_SPI2, Status);
+    if (NT_SUCCESS(Status))
+        DeviceExtension->V3dHubIrqConnected = TRUE;
+    else
         DeviceExtension->V3dInterrupt2 = NULL;
-    }
 
-    if (DeviceExtension->V3dInterrupt == NULL &&
-        DeviceExtension->V3dInterrupt2 == NULL)
+    DeviceExtension->V3dIrqConnected =
+        DeviceExtension->V3dCoreIrqConnected ||
+        DeviceExtension->V3dHubIrqConnected;
+    if (!DeviceExtension->V3dIrqConnected)
     {
         DPRINT1("RPI5VC4: V3D both interrupt lines failed — polling only\n");
         return FALSE;
     }
 
     /* Unmask the completion interrupts now that a handler exists. */
-    Rpi5V3dWrite(DeviceExtension->V3dCoreBase, V3D_CTL_INT_MSK_CLR,
-                 V3D_INT_FLDONE | V3D_INT_FRDONE | V3D_INT_OUTOMEM |
-                 V3D_V7_INT_CSDDONE);
-    Rpi5V3dWrite(DeviceExtension->V3dHubBase, V3D_HUB_INT_MSK_CLR,
-                 V3D_HUB_INT_TFUC);
+    if (DeviceExtension->V3dCoreIrqConnected)
+    {
+        Rpi5V3dWrite(DeviceExtension->V3dCoreBase, V3D_CTL_INT_MSK_CLR,
+                     V3D_INT_FLDONE | V3D_INT_FRDONE | V3D_INT_OUTOMEM |
+                     V3D_V7_INT_CSDDONE);
+    }
+    if (DeviceExtension->V3dHubIrqConnected)
+    {
+        Rpi5V3dWrite(DeviceExtension->V3dHubBase, V3D_HUB_INT_MSK_CLR,
+                     V3D_HUB_INT_TFUC);
+    }
 
-    DeviceExtension->V3dIrqConnected = TRUE;
-    DPRINT1("RPI5VC4: V3D interrupt connected (core=%u/INTID%u hub=%u/INTID%u)\n",
-            DeviceExtension->V3dInterrupt != NULL, RPI5_V3D_CORE_INTID,
-            DeviceExtension->V3dInterrupt2 != NULL, RPI5_V3D_INTID2);
     return TRUE;
 }
 
@@ -756,15 +800,25 @@ VOID
 Rpi5V3dDisconnectInterrupt(
     _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
+    /* Quiesce the level sources before either dxgkrnl or this miniport
+     * disconnects the interrupt object.  Object ownership does not change
+     * who must mask the hardware during StopDevice. */
+    if (DeviceExtension->V3dCoreIrqConnected &&
+        DeviceExtension->V3dCoreBase != NULL)
+    {
+        Rpi5V3dWrite(DeviceExtension->V3dCoreBase, V3D_CTL_INT_MSK_SET,
+                     ~0u);
+    }
+    if (DeviceExtension->V3dHubIrqConnected &&
+        DeviceExtension->V3dHubBase != NULL)
+    {
+        Rpi5V3dWrite(DeviceExtension->V3dHubBase, V3D_HUB_INT_MSK_SET,
+                     ~0u);
+    }
+
     if (DeviceExtension->V3dInterrupt != NULL)
     {
         IO_DISCONNECT_INTERRUPT_PARAMETERS Params;
-
-        if (DeviceExtension->V3dCoreBase != NULL)
-        {
-            Rpi5V3dWrite(DeviceExtension->V3dCoreBase, V3D_CTL_INT_MSK_SET,
-                         ~0u);
-        }
 
         RtlZeroMemory(&Params, sizeof(Params));
         Params.Version = CONNECT_FULLY_SPECIFIED;
@@ -786,6 +840,8 @@ Rpi5V3dDisconnectInterrupt(
 
         DeviceExtension->V3dInterrupt2 = NULL;
     }
+    DeviceExtension->V3dCoreIrqConnected = FALSE;
+    DeviceExtension->V3dHubIrqConnected = FALSE;
     DeviceExtension->V3dIrqConnected = FALSE;
 }
 
@@ -812,6 +868,8 @@ Rpi5V3dInvalidateCaches(
      * with no CL active); doing them here raced the concurrent binner
      * and parked the queued render (enqueue latched, never armed).
      */
+    Rpi5V3dWrite(Core, V3D_CTL_L2TFLSTA, 0);
+    Rpi5V3dWrite(Core, V3D_CTL_L2TFLEND, ~0u);
     Rpi5V3dWrite(Core, V3D_CTL_L2TCACTL,
                  V3D_L2TCACTL_L2TFLS | V3D_L2TCACTL_FLM_FLUSH);
 
@@ -871,7 +929,7 @@ Rpi5V3dSubmitBin(
 {
     PVOID Core = DeviceExtension->V3dCoreBase;
 
-    if (!DeviceExtension->V3dReady || BclEnd <= BclStart)
+    if (!DeviceExtension->V3dReady || BclEnd == BclStart)
         return FALSE;
 
     Rpi5V3dWrite(Core, V3D_CTL_INT_CLR, V3D_INT_FLDONE | V3D_INT_OUTOMEM);
@@ -913,7 +971,7 @@ Rpi5V3dSubmitRender(
 {
     PVOID Core = DeviceExtension->V3dCoreBase;
 
-    if (!DeviceExtension->V3dReady || RclEnd <= RclStart)
+    if (!DeviceExtension->V3dReady || RclEnd == RclStart)
         return FALSE;
 
     Rpi5V3dWrite(Core, V3D_CTL_INT_CLR, V3D_INT_FRDONE);
@@ -992,7 +1050,6 @@ Rpi5V3dPollDone(
     _Out_ PBOOLEAN RenderDone)
 {
     ULONG Status;
-    ULONG Clear = 0;
     ULONG Bfc, Rfc;
 
     *BinDone = FALSE;
@@ -1003,15 +1060,20 @@ Rpi5V3dPollDone(
 
     Status = Rpi5V3dRead(DeviceExtension->V3dCoreBase, V3D_CTL_INT_STS);
 
+    /* Match the upstream V3D IRQ contract: acknowledge the complete status
+     * snapshot, including the per-QPU interrupt latches.  Leaving those
+     * masked latches set eventually parks every QPU even though the CLE and
+     * MMU remain fault-free. */
+    if (Status != 0)
+        Rpi5V3dWrite(DeviceExtension->V3dCoreBase, V3D_CTL_INT_CLR, Status);
+
     if (Status & V3D_INT_FLDONE)
     {
         *BinDone = TRUE;
-        Clear |= V3D_INT_FLDONE;
     }
     if (Status & V3D_INT_FRDONE)
     {
         *RenderDone = TRUE;
-        Clear |= V3D_INT_FRDONE;
     }
     if (Status & V3D_INT_OUTOMEM)
     {
@@ -1022,11 +1084,7 @@ Rpi5V3dPollDone(
                      (ULONG)DeviceExtension->V3dOverflowGpuVa);
         Rpi5V3dWrite(DeviceExtension->V3dCoreBase, V3D_PTB_BPOS,
                      RPI5VC4_V3D_OVERFLOW_SIZE);
-        Clear |= V3D_INT_OUTOMEM;
     }
-
-    if (Clear != 0)
-        Rpi5V3dWrite(DeviceExtension->V3dCoreBase, V3D_CTL_INT_CLR, Clear);
 
     /* Flush counters are the ground truth: a lost/uncaptured INT latch
      * must not strand a finished job (poll-driven completion). */
