@@ -2445,7 +2445,7 @@
 @ stub -arch=arm64 IoGetContainerInformation
 @ stub -arch=arm64 IoGetCopyInformationExtension
 @ stub -arch=arm64 IoGetDeviceDirectory
-@ stdcall -arch=x86_64,arm64 IoGetDeviceInterfacePropertyData(ptr ptr long long long ptr ptr ptr)
+@ stdcall -arch=i386,x86_64,arm64 IoGetDeviceInterfacePropertyData(ptr ptr long long long ptr ptr ptr)
 @ stdcall -arch=x86_64,arm64 IoGetDeviceNumaNode(ptr ptr)
 @ stub -arch=arm64 IoGetDriverDirectory
 @ stub -arch=arm64 IoGetDriverProxyEndpointWrapper
@@ -2469,7 +2469,7 @@
 @ stub -arch=arm64 IoIncrementKeepAliveCount
 @ stub -arch=arm64 IoInitializeIrpEx
 @ stub -arch=arm64 IoInitializeMiniCompletionPacket
-@ stdcall -arch=x86_64,arm64 IoInitializeWorkItem(ptr ptr)
+@ stdcall -arch=i386,x86_64,arm64 IoInitializeWorkItem(ptr ptr)
 @ stub -arch=arm64 IoIrpHasFsTrackOffsetExtensionType
 @ stub -arch=arm64 IoIsActivityTracingEnabled
 @ stub -arch=arm64 IoIsFileObjectIgnoringSharing
@@ -2477,11 +2477,11 @@
 @ stub -arch=arm64 IoIsValidIrpStatus
 @ stub -arch=arm64 IoMakeAssociatedIrpEx
 @ stub -arch=arm64 IoMapKsrPersistentMemoryEx
-@ stdcall -arch=x86_64,arm64 IoOpenDriverRegistryKey(ptr long long long ptr)
+@ stdcall -arch=i386,x86_64,arm64 IoOpenDriverRegistryKey(ptr long long long ptr)
 @ stub -arch=arm64 IoPropagateActivityIdToThread
 @ stub -arch=arm64 IoPropagateIrpExtension
 @ stub -arch=arm64 IoPropagateIrpExtensionEx
-@ stdcall -arch=x86_64,arm64 IoQueryFullDriverPath(ptr ptr)
+@ stdcall -arch=i386,x86_64,arm64 IoQueryFullDriverPath(ptr ptr)
 @ stub -arch=arm64 IoQueryInformationByName
 @ stub -arch=arm64 IoQueryInterface
 @ stub -arch=arm64 IoQueryKsrPersistentMemorySize
@@ -2529,7 +2529,7 @@
 @ stub -arch=arm64 IoSetShareAccessEx
 @ stub -arch=arm64 IoSizeOfIrpEx
 @ stub -arch=arm64 IoSizeofGenericIrpExtension
-@ stdcall -arch=x86_64,arm64 IoSizeofWorkItem()
+@ stdcall -arch=i386,x86_64,arm64 IoSizeofWorkItem()
 @ stub -arch=arm64 IoSteerInterrupt
 @ stub -arch=arm64 IoSynchronousCallDriver
 @ stub -arch=arm64 IoTestDependency
@@ -2558,6 +2558,7 @@
 @ stdcall -arch=arm64 KeAddGroupAffinityEx(ptr long int64)
 @ stdcall -arch=arm64 KeAddProcessorAffinityEx(ptr long)
 @ stdcall -arch=x86_64,arm64 KeAddProcessorGroupAffinity(ptr long)
+@ stdcall -arch=i386 KeAddTriageDumpDataBlock(ptr ptr long)
 @ stdcall -arch=x86_64,arm64 KeAddTriageDumpDataBlock(ptr ptr int64)
 @ stub -arch=arm64 KeAllocateCalloutStack
 @ stub -arch=arm64 KeAllocateCalloutStackEx
@@ -2600,7 +2601,7 @@
 @ stdcall -arch=x86_64,arm64 KeInitializeEnumerationContextFromGroup(ptr ptr)
 @ stub -arch=arm64 KeInitializeSecondaryInterruptServices
 @ stub -arch=arm64 KeInitializeTimer2
-@ stdcall -arch=x86_64,arm64 KeInitializeTriageDumpDataArray(ptr long)
+@ stdcall -arch=i386,x86_64,arm64 KeInitializeTriageDumpDataArray(ptr long)
 @ stdcall -arch=x86_64,arm64 KeInterlockedClearProcessorAffinityEx(ptr long)
 @ stdcall -arch=x86_64,arm64 KeInterlockedSetProcessorAffinityEx(ptr long)
 @ fastcall -arch=i386,x86_64,arm64 KeInvalidateRangeAllCaches(ptr long)
