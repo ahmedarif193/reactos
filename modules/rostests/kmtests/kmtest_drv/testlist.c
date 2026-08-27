@@ -10,6 +10,7 @@ KMT_TESTFUNC Test_CddDisplay;
 KMT_TESTFUNC Test_CmSecurity;
 KMT_TESTFUNC Test_DxgkDeviceWork;
 KMT_TESTFUNC Test_DxgkHotPlugWork;
+KMT_TESTFUNC Test_DxgkPostDisplayHandoff;
 KMT_TESTFUNC Test_DxgkGpuVaAddress;
 KMT_TESTFUNC Test_DxgkGpuVaPageTable;
 KMT_TESTFUNC Test_DxgkGpuVaPte;
@@ -255,6 +256,7 @@ const KMT_TEST TestList[] =
     { "CmSecurity",                         Test_CmSecurity },
     { "DxgkDeviceWork",                    Test_DxgkDeviceWork },
     { "DxgkHotPlugWork",                   Test_DxgkHotPlugWork },
+    { "DxgkPostDisplayHandoff",            Test_DxgkPostDisplayHandoff },
     { "DxgkGpuVaAddress",                   Test_DxgkGpuVaAddress },
     { "DxgkGpuVaPageTable",                 Test_DxgkGpuVaPageTable },
     { "DxgkGpuVaPte",                       Test_DxgkGpuVaPte },
