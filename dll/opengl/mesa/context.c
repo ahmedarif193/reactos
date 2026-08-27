@@ -790,6 +790,14 @@ static void initialize_context( GLcontext *ctx )
       ctx->Stencil.ValueMask = 0xff;
       ctx->Stencil.Clear = 0;
       ctx->Stencil.WriteMask = 0xff;
+      ctx->Stencil.BackFunction = GL_ALWAYS;
+      ctx->Stencil.BackFailFunc = GL_KEEP;
+      ctx->Stencil.BackZPassFunc = GL_KEEP;
+      ctx->Stencil.BackZFailFunc = GL_KEEP;
+      ctx->Stencil.BackRef = 0;
+      ctx->Stencil.BackValueMask = 0xff;
+      ctx->Stencil.BackWriteMask = 0xff;
+      ctx->Stencil.Facing = GL_FALSE;
 
       /* Texture group */
       ctx->Texture.Enabled = 0;
@@ -1863,12 +1871,13 @@ void gl_update_state( GLcontext *ctx )
       ctx->PolygonZoffset = 0.0;
    }
 
-   if (ctx->NewState & (NEW_POLYGON | NEW_LIGHTING)) {
+   if (ctx->NewState & (NEW_POLYGON | NEW_LIGHTING | NEW_RASTER_OPS)) {
       /* Determine if we can directly call the triangle rasterizer */
       if (   ctx->Polygon.Unfilled
           || ctx->Polygon.OffsetAny
           || ctx->Polygon.CullFlag
           || ctx->Light.Model.TwoSide
+          || ctx->Stencil.Enabled
           || ctx->RenderMode!=GL_RENDER) {
          ctx->DirectTriangles = GL_FALSE;
       }

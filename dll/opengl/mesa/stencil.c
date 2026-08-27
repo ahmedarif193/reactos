@@ -63,11 +63,30 @@
 #include "types.h"
 #endif
 
+#ifndef GL_INCR_WRAP
+#define GL_INCR_WRAP 0x8507
+#define GL_DECR_WRAP 0x8508
+#endif
+
 
 /*
  * Return the address of a stencil buffer value given the window coords:
  */
 #define STENCIL_ADDRESS(X,Y)  (ctx->Buffer->Stencil + ctx->Buffer->Width * (Y) + (X))
+#define STENCIL_FUNCTION(C) \
+   ((C)->Stencil.Facing ? (C)->Stencil.BackFunction : (C)->Stencil.Function)
+#define STENCIL_FAIL_FUNC(C) \
+   ((C)->Stencil.Facing ? (C)->Stencil.BackFailFunc : (C)->Stencil.FailFunc)
+#define STENCIL_ZPASS_FUNC(C) \
+   ((C)->Stencil.Facing ? (C)->Stencil.BackZPassFunc : (C)->Stencil.ZPassFunc)
+#define STENCIL_ZFAIL_FUNC(C) \
+   ((C)->Stencil.Facing ? (C)->Stencil.BackZFailFunc : (C)->Stencil.ZFailFunc)
+#define STENCIL_REF(C) \
+   ((C)->Stencil.Facing ? (C)->Stencil.BackRef : (C)->Stencil.Ref)
+#define STENCIL_VALUE_MASK(C) \
+   ((C)->Stencil.Facing ? (C)->Stencil.BackValueMask : (C)->Stencil.ValueMask)
+#define STENCIL_WRITE_MASK(C) \
+   ((C)->Stencil.Facing ? (C)->Stencil.BackWriteMask : (C)->Stencil.WriteMask)
 
 
 void gl_ClearStencil( GLcontext *ctx, GLint s )
@@ -81,94 +100,141 @@ void gl_ClearStencil( GLcontext *ctx, GLint s )
 
 
 
-void gl_StencilFunc( GLcontext *ctx, GLenum func, GLint ref, GLuint mask )
+static GLboolean valid_stencil_face( GLenum face )
 {
+   return face==GL_FRONT || face==GL_BACK || face==GL_FRONT_AND_BACK;
+}
+
+
+static GLboolean valid_stencil_function( GLenum func )
+{
+   return func==GL_NEVER || func==GL_LESS || func==GL_LEQUAL
+       || func==GL_GREATER || func==GL_GEQUAL || func==GL_EQUAL
+       || func==GL_NOTEQUAL || func==GL_ALWAYS;
+}
+
+
+static GLboolean valid_stencil_operation( GLenum oper )
+{
+   return oper==GL_KEEP || oper==GL_ZERO || oper==GL_REPLACE
+       || oper==GL_INCR || oper==GL_DECR || oper==GL_INVERT
+       || oper==GL_INCR_WRAP || oper==GL_DECR_WRAP;
+}
+
+
+static void set_stencil_func( GLcontext *ctx, GLenum face, GLenum func,
+                              GLint ref, GLuint mask, const char *name )
+{
+   GLstencil clamped_ref;
    GLint maxref;
 
    if (INSIDE_BEGIN_END(ctx)) {
-      gl_error( ctx, GL_INVALID_OPERATION, "glStencilFunc" );
+      gl_error( ctx, GL_INVALID_OPERATION, name );
+      return;
+   }
+   if (!valid_stencil_face(face) || !valid_stencil_function(func)) {
+      gl_error( ctx, GL_INVALID_ENUM, name );
       return;
    }
 
-   switch (func) {
-      case GL_NEVER:
-      case GL_LESS:
-      case GL_LEQUAL:
-      case GL_GREATER:
-      case GL_GEQUAL:
-      case GL_EQUAL:
-      case GL_NOTEQUAL:
-      case GL_ALWAYS:
-         ctx->Stencil.Function = func;
-         break;
-      default:
-         gl_error( ctx, GL_INVALID_ENUM, "glStencilFunc" );
-         return;
-   }
-
    maxref = (1 << STENCIL_BITS) - 1;
-   ctx->Stencil.Ref = CLAMP( ref, 0, maxref );
-   ctx->Stencil.ValueMask = mask;
+   clamped_ref = (GLstencil) CLAMP( ref, 0, maxref );
+   if (face==GL_FRONT || face==GL_FRONT_AND_BACK) {
+      ctx->Stencil.Function = func;
+      ctx->Stencil.Ref = clamped_ref;
+      ctx->Stencil.ValueMask = (GLstencil) mask;
+   }
+   if (face==GL_BACK || face==GL_FRONT_AND_BACK) {
+      ctx->Stencil.BackFunction = func;
+      ctx->Stencil.BackRef = clamped_ref;
+      ctx->Stencil.BackValueMask = (GLstencil) mask;
+   }
 }
 
+
+void gl_StencilFunc( GLcontext *ctx, GLenum func, GLint ref, GLuint mask )
+{
+   set_stencil_func( ctx, GL_FRONT_AND_BACK, func, ref, mask,
+                     "glStencilFunc" );
+}
+
+
+void gl_StencilFuncSeparate( GLcontext *ctx, GLenum face, GLenum func,
+                             GLint ref, GLuint mask )
+{
+   set_stencil_func( ctx, face, func, ref, mask,
+                     "glStencilFuncSeparate" );
+}
+
+
+static void set_stencil_mask( GLcontext *ctx, GLenum face, GLuint mask,
+                              const char *name )
+{
+   if (INSIDE_BEGIN_END(ctx)) {
+      gl_error( ctx, GL_INVALID_OPERATION, name );
+      return;
+   }
+   if (!valid_stencil_face(face)) {
+      gl_error( ctx, GL_INVALID_ENUM, name );
+      return;
+   }
+   if (face==GL_FRONT || face==GL_FRONT_AND_BACK)
+      ctx->Stencil.WriteMask = (GLstencil) mask;
+   if (face==GL_BACK || face==GL_FRONT_AND_BACK)
+      ctx->Stencil.BackWriteMask = (GLstencil) mask;
+}
 
 
 void gl_StencilMask( GLcontext *ctx, GLuint mask )
 {
-   if (INSIDE_BEGIN_END(ctx)) {
-      gl_error( ctx, GL_INVALID_OPERATION, "glStencilMask" );
-      return;
-   }
-   ctx->Stencil.WriteMask = (GLstencil) mask;
+   set_stencil_mask( ctx, GL_FRONT_AND_BACK, mask, "glStencilMask" );
 }
 
+
+void gl_StencilMaskSeparate( GLcontext *ctx, GLenum face, GLuint mask )
+{
+   set_stencil_mask( ctx, face, mask, "glStencilMaskSeparate" );
+}
+
+
+static void set_stencil_op( GLcontext *ctx, GLenum face, GLenum fail,
+                            GLenum zfail, GLenum zpass, const char *name )
+{
+   if (INSIDE_BEGIN_END(ctx)) {
+      gl_error( ctx, GL_INVALID_OPERATION, name );
+      return;
+   }
+   if (!valid_stencil_face(face) || !valid_stencil_operation(fail)
+       || !valid_stencil_operation(zfail)
+       || !valid_stencil_operation(zpass)) {
+      gl_error( ctx, GL_INVALID_ENUM, name );
+      return;
+   }
+   if (face==GL_FRONT || face==GL_FRONT_AND_BACK) {
+      ctx->Stencil.FailFunc = fail;
+      ctx->Stencil.ZFailFunc = zfail;
+      ctx->Stencil.ZPassFunc = zpass;
+   }
+   if (face==GL_BACK || face==GL_FRONT_AND_BACK) {
+      ctx->Stencil.BackFailFunc = fail;
+      ctx->Stencil.BackZFailFunc = zfail;
+      ctx->Stencil.BackZPassFunc = zpass;
+   }
+}
 
 
 void gl_StencilOp( GLcontext *ctx, GLenum fail, GLenum zfail, GLenum zpass )
 {
-   if (INSIDE_BEGIN_END(ctx)) {
-      gl_error( ctx, GL_INVALID_OPERATION, "glStencilOp" );
-      return;
-   }
-   switch (fail) {
-      case GL_KEEP:
-      case GL_ZERO:
-      case GL_REPLACE:
-      case GL_INCR:
-      case GL_DECR:
-      case GL_INVERT:
-         ctx->Stencil.FailFunc = fail;
-         break;
-      default:
-         gl_error( ctx, GL_INVALID_ENUM, "glStencilOp" );
-         return;
-   }
-   switch (zfail) {
-      case GL_KEEP:
-      case GL_ZERO:
-      case GL_REPLACE:
-      case GL_INCR:
-      case GL_DECR:
-      case GL_INVERT:
-         ctx->Stencil.ZFailFunc = zfail;
-         break;
-      default:
-         gl_error( ctx, GL_INVALID_ENUM, "glStencilOp" );
-         return;
-   }
-   switch (zpass) {
-      case GL_KEEP:
-      case GL_ZERO:
-      case GL_REPLACE:
-      case GL_INCR:
-      case GL_DECR:
-      case GL_INVERT:
-         ctx->Stencil.ZPassFunc = zpass;
-         break;
-      default:
-         gl_error( ctx, GL_INVALID_ENUM, "glStencilOp" );
-         return;
-   }
+   set_stencil_op( ctx, GL_FRONT_AND_BACK, fail, zfail, zpass,
+                   "glStencilOp" );
+}
+
+
+void gl_StencilOpSeparate( GLcontext *ctx, GLenum face, GLenum fail,
+                           GLenum zfail, GLenum zpass )
+{
+   set_stencil_op( ctx, face, fail, zfail, zpass,
+                   "glStencilOpSeparate" );
 }
 
 
@@ -213,9 +279,9 @@ static void apply_stencil_op_to_span( GLcontext *ctx,
    GLstencil wrtmask, invmask;
    GLstencil *stencil;
 
-   wrtmask = ctx->Stencil.WriteMask;
-   invmask = ~ctx->Stencil.WriteMask;
-   ref = ctx->Stencil.Ref;
+   wrtmask = STENCIL_WRITE_MASK(ctx);
+   invmask = ~STENCIL_WRITE_MASK(ctx);
+   ref = STENCIL_REF(ctx);
    stencil = STENCIL_ADDRESS( x, y );
 
    switch (oper) {
@@ -301,6 +367,24 @@ static void apply_stencil_op_to_span( GLcontext *ctx,
 	    }
 	 }
 	 break;
+      case GL_INCR_WRAP:
+	 for (i=0;i<n;i++) {
+	    if (mask[i]) {
+	       s = stencil[i];
+	       stencil[i] = (invmask & s)
+	                  | (wrtmask & (GLstencil) (s+1));
+	    }
+	 }
+	 break;
+      case GL_DECR_WRAP:
+	 for (i=0;i<n;i++) {
+	    if (mask[i]) {
+	       s = stencil[i];
+	       stencil[i] = (invmask & s)
+	                  | (wrtmask & (GLstencil) (s-1));
+	    }
+	 }
+	 break;
       case GL_INVERT:
 	 if (invmask==0) {
 	    for (i=0;i<n;i++) {
@@ -356,7 +440,7 @@ GLint gl_stencil_span( GLcontext *ctx,
     *       the stencil fail operator is not to be applied
     *   ENDIF
     */
-   switch (ctx->Stencil.Function) {
+   switch (STENCIL_FUNCTION(ctx)) {
       case GL_NEVER:
          /* always fail */
          for (i=0;i<n;i++) {
@@ -371,10 +455,10 @@ GLint gl_stencil_span( GLcontext *ctx,
 	 allfail = 1;
 	 break;
       case GL_LESS:
-	 r = ctx->Stencil.Ref & ctx->Stencil.ValueMask;
+	 r = STENCIL_REF(ctx) & STENCIL_VALUE_MASK(ctx);
 	 for (i=0;i<n;i++) {
 	    if (mask[i]) {
-	       s = stencil[i] & ctx->Stencil.ValueMask;
+	       s = stencil[i] & STENCIL_VALUE_MASK(ctx);
 	       if (r < s) {
 		  /* passed */
 		  fail[i] = 0;
@@ -390,10 +474,10 @@ GLint gl_stencil_span( GLcontext *ctx,
 	 }
 	 break;
       case GL_LEQUAL:
-	 r = ctx->Stencil.Ref & ctx->Stencil.ValueMask;
+	 r = STENCIL_REF(ctx) & STENCIL_VALUE_MASK(ctx);
 	 for (i=0;i<n;i++) {
 	    if (mask[i]) {
-	       s = stencil[i] & ctx->Stencil.ValueMask;
+	       s = stencil[i] & STENCIL_VALUE_MASK(ctx);
 	       if (r <= s) {
 		  /* pass */
 		  fail[i] = 0;
@@ -409,10 +493,10 @@ GLint gl_stencil_span( GLcontext *ctx,
 	 }
 	 break;
       case GL_GREATER:
-	 r = ctx->Stencil.Ref & ctx->Stencil.ValueMask;
+	 r = STENCIL_REF(ctx) & STENCIL_VALUE_MASK(ctx);
 	 for (i=0;i<n;i++) {
 	    if (mask[i]) {
-	       s = stencil[i] & ctx->Stencil.ValueMask;
+	       s = stencil[i] & STENCIL_VALUE_MASK(ctx);
 	       if (r > s) {
 		  /* passed */
 		  fail[i] = 0;
@@ -428,10 +512,10 @@ GLint gl_stencil_span( GLcontext *ctx,
 	 }
 	 break;
       case GL_GEQUAL:
-	 r = ctx->Stencil.Ref & ctx->Stencil.ValueMask;
+	 r = STENCIL_REF(ctx) & STENCIL_VALUE_MASK(ctx);
 	 for (i=0;i<n;i++) {
 	    if (mask[i]) {
-	       s = stencil[i] & ctx->Stencil.ValueMask;
+	       s = stencil[i] & STENCIL_VALUE_MASK(ctx);
 	       if (r >= s) {
 		  /* passed */
 		  fail[i] = 0;
@@ -447,10 +531,10 @@ GLint gl_stencil_span( GLcontext *ctx,
 	 }
 	 break;
       case GL_EQUAL:
-	 r = ctx->Stencil.Ref & ctx->Stencil.ValueMask;
+	 r = STENCIL_REF(ctx) & STENCIL_VALUE_MASK(ctx);
 	 for (i=0;i<n;i++) {
 	    if (mask[i]) {
-	       s = stencil[i] & ctx->Stencil.ValueMask;
+	       s = stencil[i] & STENCIL_VALUE_MASK(ctx);
 	       if (r == s) {
 		  /* passed */
 		  fail[i] = 0;
@@ -466,10 +550,10 @@ GLint gl_stencil_span( GLcontext *ctx,
 	 }
 	 break;
       case GL_NOTEQUAL:
-	 r = ctx->Stencil.Ref & ctx->Stencil.ValueMask;
+	 r = STENCIL_REF(ctx) & STENCIL_VALUE_MASK(ctx);
 	 for (i=0;i<n;i++) {
 	    if (mask[i]) {
-	       s = stencil[i] & ctx->Stencil.ValueMask;
+	       s = stencil[i] & STENCIL_VALUE_MASK(ctx);
 	       if (r != s) {
 		  /* passed */
 		  fail[i] = 0;
@@ -495,7 +579,7 @@ GLint gl_stencil_span( GLcontext *ctx,
          return 0;
    }
 
-   apply_stencil_op_to_span( ctx, n, x, y, ctx->Stencil.FailFunc, fail );
+   apply_stencil_op_to_span( ctx, n, x, y, STENCIL_FAIL_FUNC(ctx), fail );
 
    return (allfail) ? 0 : 1;
 }
@@ -519,7 +603,7 @@ void gl_depth_stencil_span( GLcontext *ctx,
       /*
        * No depth buffer, just apply zpass stencil function to active pixels.
        */
-      apply_stencil_op_to_span( ctx, n, x, y, ctx->Stencil.ZPassFunc, mask );
+      apply_stencil_op_to_span( ctx, n, x, y, STENCIL_ZPASS_FUNC(ctx), mask );
    }
    else {
       /*
@@ -551,8 +635,8 @@ void gl_depth_stencil_span( GLcontext *ctx,
       }
 
       /* apply the pass and fail operations */
-      apply_stencil_op_to_span( ctx, n, x, y, ctx->Stencil.ZFailFunc, failmask );
-      apply_stencil_op_to_span( ctx, n, x, y, ctx->Stencil.ZPassFunc, passmask );
+      apply_stencil_op_to_span( ctx, n, x, y, STENCIL_ZFAIL_FUNC(ctx), failmask );
+      apply_stencil_op_to_span( ctx, n, x, y, STENCIL_ZPASS_FUNC(ctx), passmask );
    }
 }
 
@@ -576,10 +660,10 @@ static void apply_stencil_op_to_pixels( GLcontext *ctx,
    GLstencil ref;
    GLstencil wrtmask, invmask;
 
-   wrtmask = ctx->Stencil.WriteMask;
-   invmask = ~ctx->Stencil.WriteMask;
+   wrtmask = STENCIL_WRITE_MASK(ctx);
+   invmask = ~STENCIL_WRITE_MASK(ctx);
 
-   ref = ctx->Stencil.Ref;
+   ref = STENCIL_REF(ctx);
 
    switch (oper) {
       case GL_KEEP:
@@ -665,6 +749,26 @@ static void apply_stencil_op_to_pixels( GLcontext *ctx,
 	    }
 	 }
 	 break;
+      case GL_INCR_WRAP:
+	 for (i=0;i<n;i++) {
+	    if (mask[i]) {
+               GLstencil *sptr = STENCIL_ADDRESS( x[i], y[i] );
+               GLstencil s = *sptr;
+               *sptr = (invmask & s)
+                     | (wrtmask & (GLstencil) (s+1));
+	    }
+	 }
+	 break;
+      case GL_DECR_WRAP:
+	 for (i=0;i<n;i++) {
+	    if (mask[i]) {
+               GLstencil *sptr = STENCIL_ADDRESS( x[i], y[i] );
+               GLstencil s = *sptr;
+               *sptr = (invmask & s)
+                     | (wrtmask & (GLstencil) (s-1));
+	    }
+	 }
+	 break;
       case GL_INVERT:
 	 if (invmask==0) {
 	    for (i=0;i<n;i++) {
@@ -718,7 +822,7 @@ GLint gl_stencil_pixels( GLcontext *ctx,
     *   ENDIF
     */
 
-   switch (ctx->Stencil.Function) {
+   switch (STENCIL_FUNCTION(ctx)) {
       case GL_NEVER:
          /* always fail */
          for (i=0;i<n;i++) {
@@ -733,11 +837,11 @@ GLint gl_stencil_pixels( GLcontext *ctx,
 	 allfail = 1;
 	 break;
       case GL_LESS:
-	 r = ctx->Stencil.Ref & ctx->Stencil.ValueMask;
+	 r = STENCIL_REF(ctx) & STENCIL_VALUE_MASK(ctx);
 	 for (i=0;i<n;i++) {
 	    if (mask[i]) {
                GLstencil *sptr = STENCIL_ADDRESS(x[i],y[i]);
-	       s = *sptr & ctx->Stencil.ValueMask;
+	       s = *sptr & STENCIL_VALUE_MASK(ctx);
 	       if (r < s) {
 		  /* passed */
 		  fail[i] = 0;
@@ -753,11 +857,11 @@ GLint gl_stencil_pixels( GLcontext *ctx,
 	 }
 	 break;
       case GL_LEQUAL:
-	 r = ctx->Stencil.Ref & ctx->Stencil.ValueMask;
+	 r = STENCIL_REF(ctx) & STENCIL_VALUE_MASK(ctx);
 	 for (i=0;i<n;i++) {
 	    if (mask[i]) {
                GLstencil *sptr = STENCIL_ADDRESS(x[i],y[i]);
-	       s = *sptr & ctx->Stencil.ValueMask;
+	       s = *sptr & STENCIL_VALUE_MASK(ctx);
 	       if (r <= s) {
 		  /* pass */
 		  fail[i] = 0;
@@ -773,11 +877,11 @@ GLint gl_stencil_pixels( GLcontext *ctx,
 	 }
 	 break;
       case GL_GREATER:
-	 r = ctx->Stencil.Ref & ctx->Stencil.ValueMask;
+	 r = STENCIL_REF(ctx) & STENCIL_VALUE_MASK(ctx);
 	 for (i=0;i<n;i++) {
 	    if (mask[i]) {
                GLstencil *sptr = STENCIL_ADDRESS(x[i],y[i]);
-	       s = *sptr & ctx->Stencil.ValueMask;
+	       s = *sptr & STENCIL_VALUE_MASK(ctx);
 	       if (r > s) {
 		  /* passed */
 		  fail[i] = 0;
@@ -793,11 +897,11 @@ GLint gl_stencil_pixels( GLcontext *ctx,
 	 }
 	 break;
       case GL_GEQUAL:
-	 r = ctx->Stencil.Ref & ctx->Stencil.ValueMask;
+	 r = STENCIL_REF(ctx) & STENCIL_VALUE_MASK(ctx);
 	 for (i=0;i<n;i++) {
 	    if (mask[i]) {
                GLstencil *sptr = STENCIL_ADDRESS(x[i],y[i]);
-	       s = *sptr & ctx->Stencil.ValueMask;
+	       s = *sptr & STENCIL_VALUE_MASK(ctx);
 	       if (r >= s) {
 		  /* passed */
 		  fail[i] = 0;
@@ -813,11 +917,11 @@ GLint gl_stencil_pixels( GLcontext *ctx,
 	 }
 	 break;
       case GL_EQUAL:
-	 r = ctx->Stencil.Ref & ctx->Stencil.ValueMask;
+	 r = STENCIL_REF(ctx) & STENCIL_VALUE_MASK(ctx);
 	 for (i=0;i<n;i++) {
 	    if (mask[i]) {
                GLstencil *sptr = STENCIL_ADDRESS(x[i],y[i]);
-	       s = *sptr & ctx->Stencil.ValueMask;
+	       s = *sptr & STENCIL_VALUE_MASK(ctx);
 	       if (r == s) {
 		  /* passed */
 		  fail[i] = 0;
@@ -833,11 +937,11 @@ GLint gl_stencil_pixels( GLcontext *ctx,
 	 }
 	 break;
       case GL_NOTEQUAL:
-	 r = ctx->Stencil.Ref & ctx->Stencil.ValueMask;
+	 r = STENCIL_REF(ctx) & STENCIL_VALUE_MASK(ctx);
 	 for (i=0;i<n;i++) {
 	    if (mask[i]) {
                GLstencil *sptr = STENCIL_ADDRESS(x[i],y[i]);
-	       s = *sptr & ctx->Stencil.ValueMask;
+	       s = *sptr & STENCIL_VALUE_MASK(ctx);
 	       if (r != s) {
 		  /* passed */
 		  fail[i] = 0;
@@ -863,7 +967,7 @@ GLint gl_stencil_pixels( GLcontext *ctx,
          return 0;
    }
 
-   apply_stencil_op_to_pixels( ctx, n, x, y, ctx->Stencil.FailFunc, fail );
+   apply_stencil_op_to_pixels( ctx, n, x, y, STENCIL_FAIL_FUNC(ctx), fail );
 
    return (allfail) ? 0 : 1;
 }
@@ -887,7 +991,7 @@ void gl_depth_stencil_pixels( GLcontext *ctx,
       /*
        * No depth buffer, just apply zpass stencil function to active pixels.
        */
-      apply_stencil_op_to_pixels( ctx, n, x, y, ctx->Stencil.ZPassFunc, mask );
+      apply_stencil_op_to_pixels( ctx, n, x, y, STENCIL_ZPASS_FUNC(ctx), mask );
    }
    else {
       /*
@@ -920,9 +1024,9 @@ void gl_depth_stencil_pixels( GLcontext *ctx,
 
       /* apply the pass and fail operations */
       apply_stencil_op_to_pixels( ctx, n, x, y,
-                                  ctx->Stencil.ZFailFunc, failmask );
+                                  STENCIL_ZFAIL_FUNC(ctx), failmask );
       apply_stencil_op_to_pixels( ctx, n, x, y,
-                                  ctx->Stencil.ZPassFunc, passmask );
+                                  STENCIL_ZPASS_FUNC(ctx), passmask );
    }
 
 }

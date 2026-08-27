@@ -383,6 +383,8 @@ static void render_polygon( GLcontext *ctx, GLuint n, GLuint vlist[] )
          return;   /* culled */
       }
 
+      ctx->Stencil.Facing = (GLboolean) facing;
+
       if (ctx->Polygon.OffsetAny) {
          /* compute plane equation of polygon, apply offset */
          GLuint j0 = vlist[0];
@@ -543,6 +545,8 @@ static void render_clipped_polygon( GLcontext *ctx, GLuint n, GLuint vlist[] )
          return;   /* culled */
       }
 
+      ctx->Stencil.Facing = (GLboolean) facing;
+
       if (ctx->Polygon.OffsetAny) {
          /* compute plane equation of polygon, apply offset */
          GLuint j0 = vlist[0];
@@ -624,6 +628,8 @@ static void render_triangle( GLcontext *ctx,
       return;   /* culled */
    }
 
+   ctx->Stencil.Facing = (GLboolean) facing;
+
    if (ctx->Polygon.OffsetAny) {
       /* finish computing plane equation of polygon, compute offset */
       GLfloat fz = win[v2][2] - win[v0][2];
@@ -692,6 +698,8 @@ static void render_quad( GLcontext *ctx, GLuint v0, GLuint v1,
    if ((facing+1) & ctx->Polygon.CullBits) {
       return;   /* culled */
    }
+
+   ctx->Stencil.Facing = (GLboolean) facing;
 
    if (ctx->Polygon.OffsetAny) {
       /* finish computing plane equation of polygon, compute offset */
@@ -775,6 +783,8 @@ void gl_render_vb( GLcontext *ctx, GLboolean allDone )
 {
    struct vertex_buffer *VB = ctx->VB;
    GLuint vlist[VB_SIZE];
+
+   ctx->Stencil.Facing = GL_FALSE;
 
    switch (ctx->Primitive) {
       case GL_POINTS:
