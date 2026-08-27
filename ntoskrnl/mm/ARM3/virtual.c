@@ -2204,9 +2204,8 @@ MiQueryAddressState(IN PVOID Va,
                 /* This means it's committed */
                 State = MEM_COMMIT;
 
-                /* We don't support these */
+                /* Device/AWE mappings do not use private committed PTEs. */
                 ASSERT(Vad->u.VadFlags.VadType != VadDevicePhysicalMemory);
-                ASSERT(Vad->u.VadFlags.VadType != VadRotatePhysical);
                 ASSERT(Vad->u.VadFlags.VadType != VadAwe);
 
                 /* Get protection state of this page */
@@ -6197,7 +6196,7 @@ MiAllocateVirtualMemory(IN HANDLE ProcessHandle,
     }
 
     /* Check for valid Allocation Types */
-    if ((AllocationType & ~(MEM_COMMIT | MEM_RESERVE | MEM_RESET | MEM_PHYSICAL |
+    if ((AllocationType & ~(MEM_COMMIT | MEM_RESERVE | MEM_RESET | MEM_PHYSICAL | MEM_ROTATE |
                     MEM_TOP_DOWN | MEM_WRITE_WATCH | MEM_LARGE_PAGES)))
     {
         DPRINT1("Invalid Allocation Type\n");
@@ -6264,6 +6263,23 @@ MiAllocateVirtualMemory(IN HANDLE ProcessHandle,
         if (Protect != PAGE_READWRITE)
         {
             DPRINT1("MEM_PHYSICAL used without PAGE_READWRITE\n");
+            return STATUS_INVALID_PARAMETER_6;
+        }
+    }
+
+    /* A rotate VAD is reserved for physical substitution; commit is used
+       internally when MmRotatePhysicalView restores regular memory. */
+    if (AllocationType & MEM_ROTATE)
+    {
+        if (((AllocationType & MEM_RESERVE) == 0) ||
+            ((AllocationType & ~(MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN | MEM_ROTATE)) != 0))
+        {
+            DPRINT1("MEM_ROTATE must reserve the complete range\n");
+            return STATUS_INVALID_PARAMETER_5;
+        }
+        if (Protect & (PAGE_WRITECOPY | PAGE_EXECUTE_WRITECOPY | PAGE_NOACCESS | PAGE_GUARD))
+        {
+            DPRINT1("MEM_ROTATE used with an invalid protection\n");
             return STATUS_INVALID_PARAMETER_6;
         }
     }
@@ -6518,6 +6534,7 @@ MiAllocateVirtualMemory(IN HANDLE ProcessHandle,
         RtlZeroMemory(Vad, sizeof(MMVAD_LONG));
         if (AllocationType & MEM_COMMIT) Vad->u.VadFlags.MemCommit = 1;
         if (AllocationType & MEM_PHYSICAL) Vad->u.VadFlags.VadType = VadAwe;
+        if (AllocationType & MEM_ROTATE) Vad->u.VadFlags.VadType = VadRotatePhysical;
         Vad->u.VadFlags.Protection = ProtectionMask;
         Vad->u.VadFlags.PrivateMemory = 1;
         Vad->ControlArea = NULL; // For Memory-Area hack
@@ -6772,14 +6789,10 @@ MiAllocateVirtualMemory(IN HANDLE ProcessHandle,
     }
 
     //
-    // This is a specific ReactOS check because we only use normal VADs
+    // Private commits are supported for normal and restored rotate VADs.
     //
-    ASSERT(FoundVad->u.VadFlags.VadType == VadNone);
-
-    //
-    // While this is an actual Windows check
-    //
-    ASSERT(FoundVad->u.VadFlags.VadType != VadRotatePhysical);
+    ASSERT((FoundVad->u.VadFlags.VadType == VadNone) ||
+           (FoundVad->u.VadFlags.VadType == VadRotatePhysical));
 
     //
     // Throw out attempts to use copy-on-write through this API path
@@ -7270,7 +7283,8 @@ NtFreeVirtualMemory(IN HANDLE ProcessHandle,
         // ARM3 only supports these VADs in this path
         //
         ASSERT((Vad->u.VadFlags.VadType == VadNone) ||
-               (Vad->u.VadFlags.VadType == VadAwe));
+               (Vad->u.VadFlags.VadType == VadAwe) ||
+               (Vad->u.VadFlags.VadType == VadRotatePhysical));
 
         //
         // An AWE region can only be released as a whole
@@ -7283,6 +7297,24 @@ NtFreeVirtualMemory(IN HANDLE ProcessHandle,
                  ((EndingAddress >> PAGE_SHIFT) != Vad->EndingVpn)))
             {
                 DPRINT1("Partial release of an AWE region\n");
+                Status = STATUS_FREE_VM_NOT_AT_BASE;
+                goto FailPath;
+            }
+        }
+
+        if (Vad->u.VadFlags.VadType == VadRotatePhysical)
+        {
+            if (Vad->ControlArea != NULL)
+            {
+                DPRINT1("Attempt to free a mapped rotate VAD\n");
+                Status = STATUS_UNABLE_TO_DELETE_SECTION;
+                goto FailPath;
+            }
+            if ((PRegionSize != 0) &&
+                (((StartingAddress >> PAGE_SHIFT) != Vad->StartingVpn) ||
+                 ((EndingAddress >> PAGE_SHIFT) != Vad->EndingVpn)))
+            {
+                DPRINT1("Partial release of a rotate VAD\n");
                 Status = STATUS_FREE_VM_NOT_AT_BASE;
                 goto FailPath;
             }

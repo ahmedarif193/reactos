@@ -199,6 +199,9 @@ KMT_TESTFUNC Test_KernelType;
 KMT_TESTFUNC Test_MmAllocateContiguousNode;
 KMT_TESTFUNC Test_MmMdl;
 KMT_TESTFUNC Test_MmSection;
+KMT_TESTFUNC Test_MmWddmRanges;
+KMT_TESTFUNC Test_MmWddmRotate;
+KMT_TESTFUNC Test_MmWddmRotateValid;
 KMT_TESTFUNC Test_MmReservedMapping;
 KMT_TESTFUNC Test_MmSelfMap;
 KMT_TESTFUNC Test_NpfsConnect;
@@ -432,6 +435,9 @@ const KMT_TEST TestList[] =
     { "MmMdl",                              Test_MmMdl },
     { "MmSecureKM",                         Test_MmSecureKM },
     { "MmSection",                          Test_MmSection },
+    { "MmWddmRanges",                       Test_MmWddmRanges },
+    { "MmWddmRotate",                       Test_MmWddmRotate },
+    { "MmWddmRotateValid",                  Test_MmWddmRotateValid },
     { "MmMapReserve",                       Test_MmMapReserve },
     { "MmPhysical",                         Test_MmPhysical },
     { "MmPrefetchPages",                    Test_MmPrefetchPages },
