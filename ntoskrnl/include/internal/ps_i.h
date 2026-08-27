@@ -413,7 +413,12 @@ static const INFORMATION_CLASS_INFO PsProcessInfoClass[] =
     /* ProcessFaultInformation */
     IQS_NONE,
     /* ProcessTelemetryIdInformation */
-    IQS_NONE,
+    IQS_SAME
+    (
+        UCHAR,
+        ULONG,
+        ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE
+    ),
     /* ProcessCommitReleaseInformation */
     IQS_NONE,
     /* ProcessDefaultCpuSetsInformation */
@@ -435,7 +440,12 @@ static const INFORMATION_CLASS_INFO PsProcessInfoClass[] =
     /* ProcessHighGraphicsPriorityInformation */
     IQS_NONE,
     /* ProcessSubsystemInformation */
-    IQS_NONE,
+    IQS_SAME
+    (
+        ULONG,
+        ULONG,
+        ICIF_QUERY
+    ),
     /* ProcessEnergyValues */
     IQS_SAME
     (

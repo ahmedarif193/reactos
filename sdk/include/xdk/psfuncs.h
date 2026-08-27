@@ -300,6 +300,15 @@ LONGLONG
 NTAPI
 PsGetProcessCreateTimeQuadPart(
   _In_ PEPROCESS Process);
+
+#if (NTDDI_VERSION >= NTDDI_WIN10_RS2)
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTKERNELAPI
+ULONGLONG
+NTAPI
+PsGetProcessStartKey(
+  _In_ PEPROCESS Process);
+#endif /* (NTDDI_VERSION >= NTDDI_WIN10_RS2) */
 $endif (_NTDDK_)
 $if (_NTIFS_)
 
