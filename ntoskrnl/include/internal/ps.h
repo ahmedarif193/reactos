@@ -331,9 +331,19 @@ PspDeleteThread(
     IN PVOID ObjectBody
 );
 
+VOID
+NTAPI
+PspInitializeTls(VOID);
+
 BOOLEAN
 NTAPI
 PspInitializeApiSetSchema(VOID);
+
+VOID
+NTAPI
+PspTlsThreadCleanup(
+    IN PETHREAD Thread
+);
 
 VOID
 NTAPI

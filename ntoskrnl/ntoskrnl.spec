@@ -2952,10 +2952,10 @@
 @ stub -arch=arm64 PsSetThreadProperty
 @ stub -arch=arm64 PsStartSiloMonitor
 @ stub -arch=arm64 PsTerminateServerSilo
-@ stub -arch=arm64 PsTlsAlloc
-@ stub -arch=arm64 PsTlsFree
-@ stub -arch=arm64 PsTlsGetValue
-@ stub -arch=arm64 PsTlsSetValue
+@ stdcall -arch=x86_64,arm64 PsTlsAlloc(ptr long ptr)
+@ stdcall -arch=x86_64,arm64 PsTlsFree(long)
+@ stdcall -arch=x86_64,arm64 PsTlsGetValue(long ptr)
+@ stdcall -arch=x86_64,arm64 PsTlsSetValue(long ptr)
 @ stub -arch=arm64 PsUnEstablishWin32Callouts
 @ stub -arch=arm64 PsUnregisterAvailableCpusChangeNotification
 @ stub -arch=arm64 PsUnregisterSiloMonitor

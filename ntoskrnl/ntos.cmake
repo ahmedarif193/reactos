@@ -290,6 +290,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/security.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/state.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/thread.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/tls.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/win32.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/avltree.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/guid.c
