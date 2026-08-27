@@ -270,8 +270,8 @@ Rpi5HvsSelectHead(
     return TRUE;
 }
 
-VOID
-Rpi5HvsInstallScanout(
+static VOID
+Rpi5HvsInstallScanoutUnlocked(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
     if (DeviceExtension->Headless)
@@ -437,8 +437,17 @@ Rpi5HvsInstallScanout(
     }
 }
 
-BOOLEAN
-Rpi5HvsMoveCursor(
+VOID
+Rpi5HvsInstallScanout(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
+{
+    ExAcquireFastMutex(&DeviceExtension->HvsMutex);
+    Rpi5HvsInstallScanoutUnlocked(DeviceExtension);
+    ExReleaseFastMutex(&DeviceExtension->HvsMutex);
+}
+
+static BOOLEAN
+Rpi5HvsMoveCursorUnlocked(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
     if (DeviceExtension->Headless)
@@ -498,7 +507,19 @@ Rpi5HvsMoveCursor(
 }
 
 BOOLEAN
-Rpi5HvsInstallPlaneList(
+Rpi5HvsMoveCursor(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
+{
+    BOOLEAN Result;
+
+    ExAcquireFastMutex(&DeviceExtension->HvsMutex);
+    Result = Rpi5HvsMoveCursorUnlocked(DeviceExtension);
+    ExReleaseFastMutex(&DeviceExtension->HvsMutex);
+    return Result;
+}
+
+static BOOLEAN
+Rpi5HvsInstallPlaneListUnlocked(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
     _In_reads_(Count) CONST RPI5VC4_HVS_PLANE *Planes,
     _In_ ULONG Count)
@@ -645,7 +666,21 @@ Rpi5HvsInstallPlaneList(
 }
 
 BOOLEAN
-Rpi5HvsFlipScanoutEx(
+Rpi5HvsInstallPlaneList(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_reads_(Count) CONST RPI5VC4_HVS_PLANE *Planes,
+    _In_ ULONG Count)
+{
+    BOOLEAN Result;
+
+    ExAcquireFastMutex(&DeviceExtension->HvsMutex);
+    Result = Rpi5HvsInstallPlaneListUnlocked(DeviceExtension, Planes, Count);
+    ExReleaseFastMutex(&DeviceExtension->HvsMutex);
+    return Result;
+}
+
+static BOOLEAN
+Rpi5HvsFlipScanoutExUnlocked(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
     _In_ PHYSICAL_ADDRESS FrameBufferPhysical,
     _In_ BOOLEAN WaitVBlank)
@@ -748,6 +783,22 @@ FlipFailed:
                  "see serial diagnostics above for the hardware state)\n");
     }
     return FALSE;
+}
+
+BOOLEAN
+Rpi5HvsFlipScanoutEx(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ PHYSICAL_ADDRESS FrameBufferPhysical,
+    _In_ BOOLEAN WaitVBlank)
+{
+    BOOLEAN Result;
+
+    ExAcquireFastMutex(&DeviceExtension->HvsMutex);
+    Result = Rpi5HvsFlipScanoutExUnlocked(DeviceExtension,
+                                          FrameBufferPhysical,
+                                          WaitVBlank);
+    ExReleaseFastMutex(&DeviceExtension->HvsMutex);
+    return Result;
 }
 
 BOOLEAN

@@ -325,6 +325,8 @@ Rpi5Vc4DdiAddDevice(
 
     RtlZeroMemory(DeviceExtension, sizeof(*DeviceExtension));
     DeviceExtension->PhysicalDeviceObject = PhysicalDeviceObject;
+    ExInitializeFastMutex(&DeviceExtension->HvsMutex);
+    ExInitializeFastMutex(&DeviceExtension->PointerMutex);
     KeInitializeSpinLock(&DeviceExtension->ShadowPresentInterfaceLock);
     KeInitializeEvent(&DeviceExtension->ShadowPresentInterfaceZeroEvent,
                       NotificationEvent,
@@ -1110,6 +1112,8 @@ Rpi5Vc4DdiSetPointerShape(
         return STATUS_NOT_SUPPORTED;
     }
 
+    ExAcquireFastMutex(&DeviceExtension->PointerMutex);
+
     RtlZeroMemory(DeviceExtension->CursorVa,
                   RPI5VC4_CURSOR_WIDTH * RPI5VC4_CURSOR_HEIGHT * sizeof(ULONG));
 
@@ -1147,6 +1151,7 @@ Rpi5Vc4DdiSetPointerShape(
 
         if (!Rpi5HvsMoveCursor(DeviceExtension))
             Rpi5HvsInstallScanout(DeviceExtension);
+        ExReleaseFastMutex(&DeviceExtension->PointerMutex);
         return STATUS_SUCCESS;
     }
 
@@ -1159,10 +1164,12 @@ Rpi5Vc4DdiSetPointerShape(
     {
         DeviceExtension->CursorShapeValid = TRUE;
         Rpi5HvsInstallScanout(DeviceExtension);
+        ExReleaseFastMutex(&DeviceExtension->PointerMutex);
         return STATUS_SUCCESS;
     }
 
     DeviceExtension->CursorShapeValid = TRUE;
+    ExReleaseFastMutex(&DeviceExtension->PointerMutex);
     return STATUS_SUCCESS;
 }
 
@@ -1184,6 +1191,7 @@ Rpi5Vc4DdiSetPointerPosition(
     if (DeviceExtension->CursorVa == NULL)
         return STATUS_NOT_SUPPORTED;
 
+    ExAcquireFastMutex(&DeviceExtension->PointerMutex);
     WasVisible = DeviceExtension->CursorVisible;
 
     /* X/Y locate the hot spot; the HVS plane wants the top-left corner. */
@@ -1203,5 +1211,6 @@ Rpi5Vc4DdiSetPointerPosition(
         Rpi5HvsInstallScanout(DeviceExtension);
     }
 
+    ExReleaseFastMutex(&DeviceExtension->PointerMutex);
     return STATUS_SUCCESS;
 }
