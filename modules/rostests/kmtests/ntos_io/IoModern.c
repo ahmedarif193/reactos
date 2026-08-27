@@ -20,6 +20,12 @@ static const DEVPROPKEY TestMissingInterfacePropertyKey =
     2
 };
 
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoReportRootDevice(
+    _In_ PDRIVER_OBJECT DriverObject);
+
 static
 VOID
 NTAPI
@@ -166,4 +172,32 @@ START_TEST(IoModern)
     TestCallerOwnedWorkItem();
     TestDriverMetadata();
     TestMissingInterfaceProperty();
+}
+
+START_TEST(IoReportRootDevice)
+{
+    NTSTATUS Status;
+
+    trace("IoReportRootDevice resolved to %p\n", IoReportRootDevice);
+
+#ifdef KMT_PERSISTENT_PNP_TESTS
+    Status = IoReportRootDevice(KmtDriverObject);
+    trace("first IoReportRootDevice returned 0x%08lx, flags 0x%lx\n",
+          Status,
+          KmtDriverObject->Flags);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok((KmtDriverObject->Flags & 0x00000800) != 0,
+       "root-device-reported flag was not set\n");
+
+    Status = IoReportRootDevice(KmtDriverObject);
+    trace("second IoReportRootDevice returned 0x%08lx, flags 0x%lx\n",
+          Status,
+          KmtDriverObject->Flags);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+#else
+    UNREFERENCED_PARAMETER(Status);
+    skip(FALSE,
+         "persistent root-device test disabled; rebuild with "
+         "KMT_PERSISTENT_PNP_TESTS to create ROOT\\kmtest_drv\\0000\n");
+#endif
 }

@@ -24,6 +24,10 @@ typedef struct _INTERNAL_WORK_QUEUE_ITEM
     TARGET_DEVICE_CUSTOM_NOTIFICATION NotificationStructure;
 } INTERNAL_WORK_QUEUE_ITEM, *PINTERNAL_WORK_QUEUE_ITEM;
 
+#define DRVO_ROOT_DEVICE_REPORTED 0x00000800
+
+static EX_PUSH_LOCK IopRootDeviceReportLock;
+
 NTSTATUS
 IopSetDeviceInstanceData(HANDLE InstanceKey,
                          PDEVICE_NODE DeviceNode);
@@ -35,6 +39,200 @@ PpSetCustomTargetEvent(IN PDEVICE_OBJECT DeviceObject,
                        IN PDEVICE_CHANGE_COMPLETE_CALLBACK Callback OPTIONAL,
                        IN PVOID Context OPTIONAL,
                        IN PTARGET_DEVICE_CUSTOM_NOTIFICATION NotificationStructure);
+
+static
+NTSTATUS
+IopGetReportedDeviceServiceName(
+    _In_ PDRIVER_OBJECT DriverObject,
+    _Out_ PUNICODE_STRING ServiceName)
+{
+    PUNICODE_STRING ServiceKeyName;
+    PWCHAR Separator;
+
+    if ((DriverObject == NULL) || (DriverObject->DriverExtension == NULL))
+        return STATUS_INVALID_PARAMETER;
+
+    ServiceKeyName = &DriverObject->DriverExtension->ServiceKeyName;
+    if ((ServiceKeyName->Buffer == NULL) || (ServiceKeyName->Length == 0))
+        return STATUS_INVALID_PARAMETER;
+
+    *ServiceName = *ServiceKeyName;
+    if (!(DriverObject->Flags & DRVO_BUILTIN_DRIVER))
+        return STATUS_SUCCESS;
+
+    Separator = ServiceName->Buffer + ServiceName->Length / sizeof(WCHAR);
+    while ((Separator > ServiceName->Buffer) && (Separator[-1] != L'\\'))
+        --Separator;
+    if (Separator == ServiceName->Buffer)
+        return STATUS_SUCCESS;
+
+    ServiceName->Length -= (USHORT)((PUCHAR)Separator -
+                                    (PUCHAR)ServiceName->Buffer);
+    ServiceName->MaximumLength = ServiceName->Length;
+    ServiceName->Buffer = Separator;
+    return ServiceName->Length != 0 ? STATUS_SUCCESS : STATUS_INVALID_PARAMETER;
+}
+
+static
+NTSTATUS
+IopOpenReportedRootDeviceKey(
+    _In_ PCUNICODE_STRING ServiceName,
+    _Out_ PHANDLE InstanceKey)
+{
+    static const UNICODE_STRING Prefix =
+        RTL_CONSTANT_STRING(L"\\Registry\\Machine\\" REGSTR_PATH_SYSTEMENUM
+                            L"\\" REGSTR_KEY_ROOTENUM L"\\");
+    static const UNICODE_STRING Suffix = RTL_CONSTANT_STRING(L"\\0000");
+    UNICODE_STRING KeyPath;
+    ULONG Length;
+    NTSTATUS Status;
+
+    Length = Prefix.Length + ServiceName->Length + Suffix.Length;
+    if (Length > MAXUSHORT)
+        return STATUS_NAME_TOO_LONG;
+
+    KeyPath.Length = 0;
+    KeyPath.MaximumLength = (USHORT)Length;
+    KeyPath.Buffer = ExAllocatePoolWithTag(PagedPool,
+                                           KeyPath.MaximumLength,
+                                           TAG_PNP_ROOT);
+    if (KeyPath.Buffer == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlAppendUnicodeStringToString(&KeyPath, &Prefix);
+    RtlAppendUnicodeStringToString(&KeyPath, ServiceName);
+    RtlAppendUnicodeStringToString(&KeyPath, &Suffix);
+    Status = IopOpenRegistryKeyEx(InstanceKey,
+                                  NULL,
+                                  &KeyPath,
+                                  KEY_SET_VALUE);
+    ExFreePoolWithTag(KeyPath.Buffer, TAG_PNP_ROOT);
+    return Status;
+}
+
+static
+NTSTATUS
+IopNormalizeReportedRootDeviceKey(
+    _In_ HANDLE InstanceKey,
+    _In_ PCUNICODE_STRING ServiceName)
+{
+    static const UNICODE_STRING HardwareIdName =
+        RTL_CONSTANT_STRING(L"HardwareID");
+    static const UNICODE_STRING CompatibleIdsName =
+        RTL_CONSTANT_STRING(L"CompatibleIDs");
+    static const UNICODE_STRING RootPrefix = RTL_CONSTANT_STRING(L"ROOT\\");
+    PWCHAR HardwareId;
+    ULONG Length;
+    NTSTATUS Status;
+
+    Length = RootPrefix.Length + ServiceName->Length + 2 * sizeof(WCHAR);
+    HardwareId = ExAllocatePoolWithTag(PagedPool, Length, TAG_PNP_ROOT);
+    if (HardwareId == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlCopyMemory(HardwareId, RootPrefix.Buffer, RootPrefix.Length);
+    RtlCopyMemory((PUCHAR)HardwareId + RootPrefix.Length,
+                  ServiceName->Buffer,
+                  ServiceName->Length);
+    HardwareId[(RootPrefix.Length + ServiceName->Length) / sizeof(WCHAR)] =
+        UNICODE_NULL;
+    HardwareId[(RootPrefix.Length + ServiceName->Length) / sizeof(WCHAR) + 1] =
+        UNICODE_NULL;
+
+    Status = ZwSetValueKey(InstanceKey,
+                           (PUNICODE_STRING)&HardwareIdName,
+                           0,
+                           REG_MULTI_SZ,
+                           HardwareId,
+                           Length);
+    ExFreePoolWithTag(HardwareId, TAG_PNP_ROOT);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = ZwDeleteValueKey(InstanceKey,
+                              (PUNICODE_STRING)&CompatibleIdsName);
+    if (Status == STATUS_OBJECT_NAME_NOT_FOUND)
+        Status = STATUS_SUCCESS;
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+IoReportRootDevice(
+    _In_ PDRIVER_OBJECT DriverObject)
+{
+    PDEVICE_NODE DeviceNode;
+    PDEVICE_OBJECT DeviceObject;
+    UNICODE_STRING ServiceName;
+    HANDLE InstanceKey;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return STATUS_INVALID_DEVICE_STATE;
+
+    Status = IopGetReportedDeviceServiceName(DriverObject, &ServiceName);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    KeEnterCriticalRegion();
+    ExAcquirePushLockExclusive(&IopRootDeviceReportLock);
+    if (DriverObject->Flags & DRVO_ROOT_DEVICE_REPORTED)
+    {
+        Status = STATUS_SUCCESS;
+        goto Exit;
+    }
+
+    InstanceKey = NULL;
+    Status = IopOpenReportedRootDeviceKey(&ServiceName, &InstanceKey);
+    if (NT_SUCCESS(Status))
+    {
+        Status = IopNormalizeReportedRootDeviceKey(InstanceKey, &ServiceName);
+        ZwClose(InstanceKey);
+        if (NT_SUCCESS(Status))
+            DriverObject->Flags |= DRVO_ROOT_DEVICE_REPORTED;
+        goto Exit;
+    }
+    if ((Status != STATUS_OBJECT_NAME_NOT_FOUND) &&
+        (Status != STATUS_OBJECT_PATH_NOT_FOUND))
+        goto Exit;
+
+    DeviceObject = NULL;
+    Status = IoReportDetectedDevice(DriverObject,
+                                    Internal,
+                                    0,
+                                    0,
+                                    NULL,
+                                    NULL,
+                                    FALSE,
+                                    &DeviceObject);
+    if (!NT_SUCCESS(Status))
+        goto Exit;
+
+    DeviceNode = IopGetDeviceNode(DeviceObject);
+    if (DeviceNode == NULL)
+    {
+        Status = STATUS_NO_SUCH_DEVICE;
+        goto Exit;
+    }
+
+    Status = IopCreateDeviceKeyPath(&DeviceNode->InstancePath,
+                                    REG_OPTION_NON_VOLATILE,
+                                    &InstanceKey);
+    if (NT_SUCCESS(Status))
+    {
+        Status = IopNormalizeReportedRootDeviceKey(InstanceKey, &ServiceName);
+        ZwClose(InstanceKey);
+    }
+    if (NT_SUCCESS(Status))
+        DriverObject->Flags |= DRVO_ROOT_DEVICE_REPORTED;
+
+Exit:
+    ExReleasePushLockExclusive(&IopRootDeviceReportLock);
+    KeLeaveCriticalRegion();
+    return Status;
+}
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
