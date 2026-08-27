@@ -1969,7 +1969,6 @@ IoStartPacket(IN PDEVICE_OBJECT DeviceObject,
     KeLowerIrql(OldIrql);
 }
 
-#if defined (_WIN64)
 NTSTATUS
 NTAPI
 IoGetDeviceNumaNode(
@@ -1984,6 +1983,7 @@ IoGetDeviceNumaNode(
     return STATUS_SUCCESS;
 }
 
+#if defined (_WIN64)
 ULONG
 NTAPI
 IoWMIDeviceObjectToProviderId(
