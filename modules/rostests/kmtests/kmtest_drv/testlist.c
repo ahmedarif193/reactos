@@ -152,6 +152,7 @@ KMT_TESTFUNC Test_KdSystemDebugControl;
 KMT_TESTFUNC Test_KsecBcrypt;
 KMT_TESTFUNC Test_KeApc;
 KMT_TESTFUNC Test_KeApcInject;
+KMT_TESTFUNC Test_KeCacheInvalidation;
 KMT_TESTFUNC Test_KeModern;
 #ifdef _M_ARM64
 KMT_TESTFUNC Test_HalArm64Ipi;
@@ -412,6 +413,7 @@ const KMT_TEST TestList[] =
     { "KsecBcrypt",                         Test_KsecBcrypt },
     { "KeApc",                              Test_KeApc },
     { "KeApcInject",                        Test_KeApcInject },
+    { "KeCacheInvalidation",                Test_KeCacheInvalidation },
     { "KeModern",                           Test_KeModern },
 #ifdef _M_ARM64
     { "HalArm64Ipi",                        Test_HalArm64Ipi },

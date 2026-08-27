@@ -461,6 +461,33 @@ KeInvalidateAllCaches(VOID)
     return TRUE;
 }
 
+VOID
+FASTCALL
+KeInvalidateRangeAllCaches(
+    _In_ PVOID BaseAddress,
+    _In_ ULONG Length)
+{
+    ULONG_PTR Address, EndAddress;
+    ULONG CacheLineSize;
+
+    if (!Length)
+        return;
+
+    CacheLineSize = KeLargestCacheLine ? KeLargestCacheLine : 64;
+    Address = (ULONG_PTR)BaseAddress & ~((ULONG_PTR)CacheLineSize - 1);
+    EndAddress = (ULONG_PTR)BaseAddress + Length;
+
+    __asm__ __volatile__("dsb sy" ::: "memory");
+    do
+    {
+        __asm__ __volatile__("dc civac, %0" :: "r"(Address) : "memory");
+        __asm__ __volatile__("ic ivau, %0" :: "r"(Address) : "memory");
+        Address += CacheLineSize;
+    } while ((Address < EndAddress) && (Address != 0));
+    __asm__ __volatile__("dsb sy" ::: "memory");
+    __asm__ __volatile__("isb" ::: "memory");
+}
+
 ULONG
 NTAPI
 KeGetRecommendedSharedDataAlignment(VOID)

@@ -840,6 +840,39 @@ KeInvalidateAllCaches(VOID)
     return TRUE;
 }
 
+VOID
+FASTCALL
+KeInvalidateRangeAllCaches(
+    _In_ PVOID BaseAddress,
+    _In_ ULONG Length)
+{
+    CPU_INFO CpuInfo;
+    ULONG_PTR Address, EndAddress;
+    ULONG CacheLineSize;
+
+    if (Length == 0)
+        return;
+
+    CacheLineSize = KeLargestCacheLine ? KeLargestCacheLine : 64;
+    Address = (ULONG_PTR)BaseAddress & ~((ULONG_PTR)CacheLineSize - 1);
+    EndAddress = (ULONG_PTR)BaseAddress + Length;
+
+    KiCpuId(&CpuInfo, 1);
+    if (!(CpuInfo.Edx & (1UL << 19)))
+    {
+        __wbinvd();
+        return;
+    }
+
+    _mm_mfence();
+    do
+    {
+        _mm_clflush((PVOID)Address);
+        Address += CacheLineSize;
+    } while ((Address < EndAddress) && (Address != 0));
+    _mm_mfence();
+}
+
 /*
  * @implemented
  */
