@@ -82,6 +82,10 @@ KMT_TESTFUNC Test_IoCancelKM;
 KMT_TESTFUNC Test_PsProcessInfo;
 KMT_TESTFUNC Test_PsEnergy;
 KMT_TESTFUNC Test_PsTls;
+KMT_TESTFUNC Test_PsModern;
+KMT_TESTFUNC Test_PsModernIdentity;
+KMT_TESTFUNC Test_PsModernPolicy;
+KMT_TESTFUNC Test_PsModernPriority;
 KMT_TESTFUNC Test_RtlStringSupportKM;
 #ifdef _M_ARM64
 KMT_TESTFUNC Test_Win11NewKM;
@@ -451,6 +455,10 @@ const KMT_TEST TestList[] =
     { "PsNotify",                           Test_PsNotify },
     { "PsEnergy",                           Test_PsEnergy },
     { "PsTls",                              Test_PsTls },
+    { "PsModern",                           Test_PsModern },
+    { "PsModernIdentity",                   Test_PsModernIdentity },
+    { "PsModernPolicy",                     Test_PsModernPolicy },
+    { "PsModernPriority",                   Test_PsModernPriority },
     { "PsQuota",                            Test_PsQuota },
     { "SeAccessCheckKM",                    Test_SeAccessCheckKM },
     { "RtlAvlTreeKM",                       Test_RtlAvlTree },

@@ -65,6 +65,71 @@ PsUpdateComponentPower(
 );
 
 NTKERNELAPI
+PVOID
+NTAPI
+PsGetProcessDxgProcess(
+    _In_ PEPROCESS Process
+);
+
+NTKERNELAPI
+PESILO
+NTAPI
+PsGetProcessServerSilo(
+    _In_ PEPROCESS Process
+);
+
+NTKERNELAPI
+PESILO
+NTAPI
+PsAttachSiloToCurrentThread(
+    _In_opt_ PESILO Silo
+);
+
+NTKERNELAPI
+VOID
+NTAPI
+PsDetachSiloFromCurrentThread(
+    _In_opt_ PESILO PreviousSilo
+);
+
+NTKERNELAPI
+PESILO
+NTAPI
+PsGetCurrentServerSilo(VOID);
+
+NTKERNELAPI
+PESILO
+NTAPI
+PsGetHostSilo(VOID);
+
+NTKERNELAPI
+BOOLEAN
+NTAPI
+PsIsCurrentThreadInServerSilo(VOID);
+
+NTKERNELAPI
+BOOLEAN
+NTAPI
+PsIsHostSilo(
+    _In_opt_ PESILO Silo
+);
+
+NTKERNELAPI
+ULONG
+NTAPI
+PsGetServerSiloServiceSessionId(
+    _In_opt_ PESILO Silo
+);
+
+NTKERNELAPI
+VOID
+NTAPI
+PsSetProcessDxgProcess(
+    _Inout_ PEPROCESS Process,
+    _In_opt_ PVOID DxgProcess
+);
+
+NTKERNELAPI
 NTSTATUS
 NTAPI
 PsSetProcessWin32Process(
@@ -198,9 +263,27 @@ PsLookupProcessThreadByCid(
     _Out_ PETHREAD *Thread
 );
 
-BOOLEAN
+LOGICAL
 NTAPI
 PsIsProtectedProcess(
+    _In_ PEPROCESS Process
+);
+
+LOGICAL
+NTAPI
+PsIsProtectedProcessLight(
+    _In_ PEPROCESS Process
+);
+
+USHORT
+NTAPI
+PsGetProcessMachine(
+    _In_ PEPROCESS Process
+);
+
+USHORT
+NTAPI
+PsWow64GetProcessMachine(
     _In_ PEPROCESS Process
 );
 

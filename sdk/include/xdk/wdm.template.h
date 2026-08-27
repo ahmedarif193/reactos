@@ -196,6 +196,7 @@ typedef struct _OBJECT_TYPE *POBJECT_TYPE;
 typedef struct _CALLBACK_OBJECT *PCALLBACK_OBJECT;
 typedef struct _EPROCESS *PEPROCESS;
 typedef struct _ETHREAD *PETHREAD;
+typedef struct _EJOB *PESILO;
 typedef struct _IO_TIMER *PIO_TIMER;
 typedef struct _KINTERRUPT *PKINTERRUPT;
 typedef struct _KPROCESS *PKPROCESS;
