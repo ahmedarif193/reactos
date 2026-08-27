@@ -365,6 +365,10 @@ if(KMT_DESTRUCTIVE_BUGCHECK_TESTS)
     target_compile_definitions(kmtest_drv PRIVATE
         KMT_DESTRUCTIVE_BUGCHECK_TESTS)
 endif()
+if(KMT_PERSISTENT_PNP_TESTS)
+    target_compile_definitions(kmtest_drv PRIVATE
+        KMT_PERSISTENT_PNP_TESTS)
+endif()
 add_dependencies(kmtest_drv bugcodes xdk)
 target_compile_definitions(kmtest_drv PRIVATE KMT_KERNEL_MODE NTDDI_VERSION=${REACTOS_TARGET_NTDDI})
 #add_pch(kmtest_drv include/kmt_test.h)
