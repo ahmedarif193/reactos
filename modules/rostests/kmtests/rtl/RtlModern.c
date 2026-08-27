@@ -46,6 +46,13 @@ VOID NTAPI RtlSetActiveConsoleId(_In_ ULONG ActiveConsoleId);
 VOID NTAPI RtlSetConsoleSessionForegroundProcessId(_In_ ULONGLONG ProcessId);
 
 #if defined(_M_AMD64) || defined(_M_ARM64)
+typedef SIZE_T (*PTEST_STRNLEN)(_In_reads_or_z_(MaximumLength) PCSTR String, _In_ SIZE_T MaximumLength);
+typedef SIZE_T (*PTEST_WCSNLEN)(_In_reads_or_z_(MaximumLength) PCWSTR String, _In_ SIZE_T MaximumLength);
+typedef INT (*PTEST_WCSCAT_S)(_Inout_updates_z_(DestinationCount) PWCHAR Destination, _In_ SIZE_T DestinationCount, _In_z_ PCWSTR Source);
+typedef INT (*PTEST_WCSCPY_S)(_Out_writes_z_(DestinationCount) PWCHAR Destination, _In_ SIZE_T DestinationCount, _In_z_ PCWSTR Source);
+typedef INT (*PTEST_WCSNCAT_S)(_Inout_updates_z_(DestinationCount) PWCHAR Destination, _In_ SIZE_T DestinationCount, _In_z_ PCWSTR Source, _In_ SIZE_T MaximumCount);
+typedef INT (*PTEST_WCSNCPY_S)(_Out_writes_z_(DestinationCount) PWCHAR Destination, _In_ SIZE_T DestinationCount, _In_z_ PCWSTR Source, _In_ SIZE_T MaximumCount);
+
 typedef struct _RTL_BITMAP_EX
 {
     ULONGLONG SizeOfBitMap;
@@ -61,6 +68,79 @@ ULONGLONG NTAPI RtlFindSetBitsEx(_In_ PRTL_BITMAP_EX BitMapHeader, _In_ ULONGLON
 ULONGLONG NTAPI RtlNumberOfSetBitsInRangeEx(_In_ PRTL_BITMAP_EX BitMapHeader, _In_ ULONGLONG StartingIndex, _In_ ULONGLONG Length);
 VOID NTAPI RtlCopyBitMapEx(_In_ PRTL_BITMAP_EX Source, _Inout_ PRTL_BITMAP_EX Destination, _In_ ULONGLONG TargetBit);
 VOID NTAPI RtlIntersectBitMapsEx(_Inout_ PRTL_BITMAP_EX Destination, _In_ PRTL_BITMAP_EX Source);
+#endif
+
+#if defined(_M_AMD64) || defined(_M_ARM64)
+static
+PVOID
+TestResolveKernelExport(
+    _In_ PCWSTR Name)
+{
+    UNICODE_STRING ExportName;
+    PVOID Address;
+
+    RtlInitUnicodeString(&ExportName, Name);
+    Address = MmGetSystemRoutineAddress(&ExportName);
+    trace("%S resolved to %p\n", Name, Address);
+    ok(Address != NULL, "%S is not exported by ntoskrnl\n", Name);
+    return Address;
+}
+
+static
+VOID
+TestKernelCrtStringExports(VOID)
+{
+    PTEST_STRNLEN TestStrnlen;
+    PTEST_WCSNLEN TestWcsnlen;
+    PTEST_WCSCAT_S TestWcscatS;
+    PTEST_WCSCPY_S TestWcscpyS;
+    PTEST_WCSNCAT_S TestWcsncatS;
+    PTEST_WCSNCPY_S TestWcsncpyS;
+    WCHAR Buffer[16];
+    INT Error;
+
+    TestStrnlen = (PTEST_STRNLEN)TestResolveKernelExport(L"strnlen");
+    TestWcsnlen = (PTEST_WCSNLEN)TestResolveKernelExport(L"wcsnlen");
+    TestWcscatS = (PTEST_WCSCAT_S)TestResolveKernelExport(L"wcscat_s");
+    TestWcscpyS = (PTEST_WCSCPY_S)TestResolveKernelExport(L"wcscpy_s");
+    TestWcsncatS = (PTEST_WCSNCAT_S)TestResolveKernelExport(L"wcsncat_s");
+    TestWcsncpyS = (PTEST_WCSNCPY_S)TestResolveKernelExport(L"wcsncpy_s");
+    if ((TestStrnlen == NULL) || (TestWcsnlen == NULL) ||
+        (TestWcscatS == NULL) || (TestWcscpyS == NULL) ||
+        (TestWcsncatS == NULL) || (TestWcsncpyS == NULL))
+    {
+        return;
+    }
+
+    trace("bounded lengths: ansi=%Iu wide=%Iu\n",
+          TestStrnlen("abcdef", 3), TestWcsnlen(L"abcdef", 4));
+    ok_eq_size(TestStrnlen("abcdef", 3), 3);
+    ok_eq_size(TestStrnlen("abcdef", 16), 6);
+    ok_eq_size(TestWcsnlen(L"abcdef", 4), 4);
+    ok_eq_size(TestWcsnlen(L"abcdef", 16), 6);
+
+    RtlFillMemory(Buffer, sizeof(Buffer), 0xA5);
+    Error = TestWcscpyS(Buffer, RTL_NUMBER_OF(Buffer), L"one");
+    trace("wcscpy_s returned %d and produced %S\n", Error, Buffer);
+    ok_eq_long(Error, 0);
+    ok_eq_wstr(Buffer, L"one");
+
+    Error = TestWcscatS(Buffer, RTL_NUMBER_OF(Buffer), L"-two");
+    trace("wcscat_s returned %d and produced %S\n", Error, Buffer);
+    ok_eq_long(Error, 0);
+    ok_eq_wstr(Buffer, L"one-two");
+
+    Error = TestWcsncatS(Buffer, RTL_NUMBER_OF(Buffer), L"-three", 3);
+    trace("wcsncat_s returned %d and produced %S\n", Error, Buffer);
+    ok_eq_long(Error, 0);
+    ok_eq_wstr(Buffer, L"one-two-th");
+
+    RtlFillMemory(Buffer, sizeof(Buffer), 0xA5);
+    Error = TestWcsncpyS(Buffer, RTL_NUMBER_OF(Buffer), L"abcdef", 3);
+    trace("wcsncpy_s returned %d and produced %S\n", Error, Buffer);
+    ok_eq_long(Error, 0);
+    ok_eq_wstr(Buffer, L"abc");
+}
 #endif
 
 static
@@ -615,4 +695,7 @@ START_TEST(ExWddmRtl)
     TestIntegerAtoms();
     TestModernRtlState();
     TestModernKernelExports();
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    TestKernelCrtStringExports();
+#endif
 }
