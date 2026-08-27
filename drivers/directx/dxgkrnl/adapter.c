@@ -9990,6 +9990,12 @@ DxgkpAddDeviceRegistered(
         &Adapter->PeriodicInterruptCore);
     KeInitializeSpinLock(&Adapter->ChildListLock);
     KeInitializeSpinLock(&Adapter->PresentLock);
+    ExInitializeRundownProtection(&Adapter->PresentPathRundown);
+    Adapter->PresentPathOpen = 1;
+    Adapter->PresentSnapshotReady = -1;
+    Adapter->PresentSnapshotReading = -1;
+    Adapter->PresentSnapshotWriting = -1;
+    KeInitializeMutex(&Adapter->PresentLifecycleMutex, 0);
     KeInitializeSpinLock(&Adapter->SubmitDmaLock);
     KeInitializeSpinLock(&Adapter->TdrHistoryLock);
     KeInitializeEvent(&Adapter->SyncEvent, SynchronizationEvent, FALSE);
