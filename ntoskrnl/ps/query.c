@@ -1641,6 +1641,33 @@ NtQueryInformationProcess(
             break;
         }
 
+        case ProcessEnergyValues:
+        {
+            Length = sizeof(PROCESS_ENERGY_VALUES);
+            if (ProcessInformationLength < Length)
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            Status = PspReferenceProcessForLimitedQuery(ProcessHandle, PreviousMode, &Process);
+            if (!NT_SUCCESS(Status)) break;
+
+            _SEH2_TRY
+            {
+                RtlCopyMemory(ProcessInformation, &Process->EnergyValues, Length);
+                Status = STATUS_SUCCESS;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+
+            ObDereferenceObject(Process);
+            break;
+        }
+
         case ProcessLdtInformation:
             DPRINT1("VDM/16-bit not implemented: %lu\n", ProcessInformationClass);
             Status = STATUS_NOT_IMPLEMENTED;
