@@ -281,6 +281,7 @@ typedef struct _RPI5VC4_OGL_CONTEXT
     ULONG DummyCubeFaces;
     ULONG DummyCubeColors[6];
     LONG SwapInterval;
+    BOOL SwapVBlankUnavailable;
     RPI5VC4_OGL_STATS Stats;
 } RPI5VC4_OGL_CONTEXT, *PRPI5VC4_OGL_CONTEXT;
 
@@ -7428,6 +7429,11 @@ Rpi5OglWglSwapIntervalExt(
         SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
+    if (Interval != 0 && Context->SwapVBlankUnavailable)
+    {
+        SetLastError(ERROR_NOT_SUPPORTED);
+        return FALSE;
+    }
     Context->SwapInterval = Interval;
     return TRUE;
 }
@@ -7628,7 +7634,13 @@ DrvSwapBuffers(
     if (Context == NULL || Context->Hdc != Hdc)
         return FALSE;
     if (Context->SwapInterval != 0 && !Rpi5OglWaitForVBlank(Context))
-        return FALSE;
+    {
+        /* Loss of the optional pacing source must not fail a valid buffer
+         * swap. Fall back to immediate mode for this context and accurately
+         * reject later attempts to re-enable swap control. */
+        Context->SwapVBlankUnavailable = TRUE;
+        Context->SwapInterval = 0;
+    }
     if (!Rpi5OglSubmitBatch(Context, TRUE))
         return FALSE;
     if (Context->BatchDirectPresented)
