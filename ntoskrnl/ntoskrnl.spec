@@ -797,6 +797,8 @@
 @ stdcall LdrEnumResources(ptr ptr long ptr ptr)
 @ stdcall LdrFindResourceDirectory_U(ptr ptr long ptr)
 @ stdcall LdrFindResource_U(ptr ptr long ptr)
+@ stdcall LdrResFindResource(ptr long long long ptr ptr ptr ptr long)
+@ stdcall LdrResFindResourceDirectory(ptr long long ptr ptr ptr long ptr)
 @ extern LpcPortObjectType
 @ stdcall LpcReplyWaitReplyPort(ptr long ptr)
 @ stdcall LpcRequestPort(ptr ptr)
@@ -2678,8 +2680,6 @@
 @ stub -arch=arm64 KseSetDeviceFlags
 @ stub -arch=arm64 KseUnregisterShim
 @ stub -arch=arm64 LdrFindResourceEx_U
-@ stub -arch=arm64 LdrResFindResource
-@ stub -arch=arm64 LdrResFindResourceDirectory
 @ stub -arch=arm64 LdrResSearchResource
 @ stub -arch=arm64 MmAddVerifierSpecialThunks
 @ stub -arch=arm64 MmAllocateContiguousMemoryEx
