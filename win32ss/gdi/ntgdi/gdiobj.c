@@ -351,6 +351,12 @@ IncrementGdiHandleCount(ULONG ulProcessId)
     PPROCESSINFO ppi;
     NTSTATUS Status;
 
+    if (ulProcessId == HandleToUlong(PsGetCurrentProcessId()))
+    {
+        IncrementCurrentProcessGdiHandleCount();
+        return;
+    }
+
     Status = PsLookupProcessByProcessId(ULongToHandle(ulProcessId), &pep);
     if (!NT_SUCCESS(Status))
     {
@@ -372,6 +378,12 @@ DecrementGdiHandleCount(ULONG ulProcessId)
     PEPROCESS pep;
     PPROCESSINFO ppi;
     NTSTATUS Status;
+
+    if (ulProcessId == HandleToUlong(PsGetCurrentProcessId()))
+    {
+        DecrementCurrentProcessGdiHandleCount();
+        return;
+    }
 
     Status = PsLookupProcessByProcessId(ULongToHandle(ulProcessId), &pep);
     if (!NT_SUCCESS(Status))
