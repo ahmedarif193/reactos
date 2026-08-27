@@ -5228,7 +5228,9 @@ DxgkpVidMmDestroyAllocationList(
             }
             if (OtherIndex == Index)
             {
-                Status = DxgkGpuVaFlushPageTableUpdates(Process);
+                Status = Device != NULL ?
+                    DxgkGpuVaFlushPageTableUpdatesForDevice(Process, Device) :
+                    DxgkGpuVaFlushPageTableUpdates(Process);
                 if (!NT_SUCCESS(Status))
                     break;
             }
