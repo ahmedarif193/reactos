@@ -1,0 +1,7 @@
+@ stdcall -arch=x86_64,arm64 KsrClaimPersistedMemory(ptr int64 ptr long long ptr)
+@ stdcall -arch=x86_64,arm64 KsrQueryMetadata(ptr int64 ptr long ptr)
+@ stdcall -arch=x86_64,arm64 KsrFreePersistedMemory(ptr long)
+@ stdcall -arch=x86_64,arm64 KsrPersistMemoryWithMetadata(ptr ptr long ptr long ptr)
+@ stdcall -arch=x86_64,arm64 KsrGetFirmwareInformation(ptr)
+@ stdcall -arch=x86_64,arm64 KsrEnumeratePersistedMemory(ptr ptr ptr)
+@ stdcall -arch=x86_64,arm64 KsrMdlToMemoryRuns(ptr ptr long ptr)

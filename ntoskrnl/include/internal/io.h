@@ -1629,6 +1629,40 @@ NTAPI
 IopRegisterDifProvider(
     _In_ const IOP_DIF_PROVIDER *Provider);
 
+typedef NTSTATUS
+(NTAPI *PIOP_KSR_ENUMERATE_CALLBACK)(
+    _In_ const GUID *MemoryId,
+    _In_ ULONGLONG MemoryLength,
+    _In_opt_ PVOID Context);
+
+typedef struct _IOP_KSR_FIRMWARE_INFORMATION IOP_KSR_FIRMWARE_INFORMATION;
+typedef const IOP_KSR_FIRMWARE_INFORMATION *PCIOP_KSR_FIRMWARE_INFORMATION;
+
+typedef struct _IOP_KSR_PROVIDER
+{
+    ULONG Size;
+    ULONG Version;
+    NTSTATUS (NTAPI *ClaimPersistedMemory)(const GUID *, ULONGLONG, PULONGLONG, ULONG, BOOLEAN, PULONG);
+    NTSTATUS (NTAPI *QueryMetadata)(const GUID *, ULONGLONG, PVOID, ULONG, PULONG);
+    VOID (NTAPI *FreePersistedMemory)(const GUID *, BOOLEAN);
+    NTSTATUS (NTAPI *PersistMemoryWithMetadata)(const GUID *, PULONGLONG, ULONG, PVOID, ULONG, PULONGLONG);
+    NTSTATUS (NTAPI *GetFirmwareInformation)(PCIOP_KSR_FIRMWARE_INFORMATION *);
+    NTSTATUS (NTAPI *EnumeratePersistedMemory)(const GUID *, PIOP_KSR_ENUMERATE_CALLBACK, PVOID);
+    NTSTATUS (NTAPI *MdlToMemoryRuns)(PMDL, PULONGLONG, ULONG, PULONG);
+} IOP_KSR_PROVIDER, *PIOP_KSR_PROVIDER;
+
+#define IOP_KSR_PROVIDER_VERSION 1
+
+NTSTATUS
+NTAPI
+IopRegisterKsrProvider(
+    _In_ const IOP_KSR_PROVIDER *Provider);
+
+PVOID
+NTAPI
+IopResolveKsrApiSetRoutine(
+    _In_ PCSTR RoutineName);
+
 //
 // Inlined Functions
 //

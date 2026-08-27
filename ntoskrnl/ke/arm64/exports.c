@@ -28,7 +28,6 @@ void *ExActivationObjectType = 0;
 void *ExCompositionObjectType = 0;
 void *ExCoreMessagingObjectType = 0;
 void *ExRawInputManagerObjectType = 0;
-void *PsPartitionType = 0;
 void *PsSiloContextNonPagedType = 0;
 void *PsSiloContextPagedType = 0;
 void *TmEnlistmentObjectType = 0;

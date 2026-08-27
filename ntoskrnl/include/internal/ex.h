@@ -315,6 +315,42 @@ VOID
 NTAPI
 ExShutdownSystem(VOID);
 
+typedef NTSTATUS
+(NTAPI *PEXP_SHARE_DEVICE_ADDRESS_SPACE)(
+    _In_ PDEVICE_OBJECT PhysicalDeviceObject,
+    _Out_ PULONG ReturnedAsid);
+
+typedef struct _EXP_DEVICE_ADDRESS_SPACE_PROVIDER
+{
+    PEXP_SHARE_DEVICE_ADDRESS_SPACE ShareAddressSpace;
+} EXP_DEVICE_ADDRESS_SPACE_PROVIDER, *PEXP_DEVICE_ADDRESS_SPACE_PROVIDER;
+
+NTSTATUS
+NTAPI
+ExpRegisterDeviceAddressSpaceProvider(
+    _In_ const EXP_DEVICE_ADDRESS_SPACE_PROVIDER *Provider);
+
+typedef NTSTATUS
+(NTAPI *PEXP_MANAGE_MEMORY_PARTITION)(
+    _In_opt_ PVOID ProviderContext,
+    _In_opt_ HANDLE SourceHandle,
+    _In_ ULONG PartitionInformationClass,
+    _Inout_updates_bytes_opt_(PartitionInformationLength) PVOID PartitionInformation,
+    _In_ ULONG PartitionInformationLength);
+
+BOOLEAN
+NTAPI
+ExpInitializePartitionImplementation(VOID);
+
+NTSTATUS
+NTAPI
+ExpCreateMemoryPartition(
+    _In_opt_ POBJECT_ATTRIBUTES ObjectAttributes,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ PEXP_MANAGE_MEMORY_PARTITION ManagePartition,
+    _In_opt_ PVOID ProviderContext,
+    _Out_ PHANDLE PartitionHandle);
+
 CODE_SEG("INIT")
 BOOLEAN
 NTAPI

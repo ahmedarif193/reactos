@@ -368,6 +368,33 @@ PopApplyProcessorPowerSetting(
 
 VOID NTAPI PopInitializeThermalRequests(VOID);
 
+typedef struct _POP_TTM_PROVIDER
+{
+    NTSTATUS
+    (NTAPI *NotifyDeviceArrival)(
+        _In_ ULONG DeviceType,
+        _In_opt_ PVOID DeviceId,
+        _In_ PVOID DeviceInformation,
+        _In_ ULONG Flags,
+        _In_opt_ PVOID ArrivalInformation);
+
+    VOID
+    (NTAPI *NotifyDeviceDeparture)(
+        _In_ ULONG DeviceType,
+        _In_opt_ PVOID DeviceId);
+
+    VOID
+    (NTAPI *NotifyDeviceInput)(
+        _In_ ULONG DeviceType,
+        _In_opt_ PVOID DeviceId,
+        _In_ ULONG Flags);
+} POP_TTM_PROVIDER, *PPOP_TTM_PROVIDER;
+
+NTSTATUS
+NTAPI
+PopRegisterTtmProvider(
+    _In_ const POP_TTM_PROVIDER *Provider);
+
 //
 // Notifications
 //

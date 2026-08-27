@@ -95,6 +95,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/locale.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/lookas.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/mutant.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/partition.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/pool2.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/profile.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/pushlock.c
@@ -108,6 +109,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/time.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/timer.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/uuid.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/wddm.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/win32k.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/wnf.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/work.c
@@ -151,6 +153,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/ioevent.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/iofunc.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/iommu.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/ksr.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/iomdl.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/iomgr.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/iorsrce.c
@@ -276,6 +279,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/po/povolume.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/po/power.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/po/thermal.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/po/ttm.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/apiset.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/apphelp.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/debug.c
@@ -301,6 +305,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/system.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/time.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/unicode.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/wddm.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/se/access.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/se/accesschk.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/se/acl.c
@@ -472,6 +477,7 @@ elseif(ARCH STREQUAL "arm64")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/context.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/cpu.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/early_uart.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/hypervisor.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/exceptinit.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/exp.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/floatstubs.c

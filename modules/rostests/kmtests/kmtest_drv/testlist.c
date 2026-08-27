@@ -124,8 +124,24 @@ KMT_TESTFUNC Test_InbvVirtualFrameBuffer;
 KMT_TESTFUNC Test_IoIrp;
 KMT_TESTFUNC Test_IoWaitCompletionPacket;
 KMT_TESTFUNC Test_ExWorkItem;
+KMT_TESTFUNC Test_ExWddm;
 KMT_TESTFUNC Test_ExWddmAvl;
+KMT_TESTFUNC Test_ExWddmEnergy;
+KMT_TESTFUNC Test_ExWddmFault;
+KMT_TESTFUNC Test_ExWddmInbv;
+#ifdef KMT_KSR_APISET
+KMT_TESTFUNC Test_ExWddmKsr;
+KMT_TESTFUNC Test_ExWddmKsrLoad;
+#endif
+KMT_TESTFUNC Test_ExWddmPower;
+KMT_TESTFUNC Test_ExWddmPoFx;
+KMT_TESTFUNC Test_ExWddmPlatform;
+KMT_TESTFUNC Test_ExWddmProviders;
+KMT_TESTFUNC Test_ExWddmRotate;
+KMT_TESTFUNC Test_ExWddmRotateValid;
 KMT_TESTFUNC Test_ExWddmRtl;
+KMT_TESTFUNC Test_ExWddmTls;
+KMT_TESTFUNC Test_ExWddmWindow;
 KMT_TESTFUNC Test_IoMdl;
 KMT_TESTFUNC Test_IoModern;
 #if defined(_M_IX86) || defined(_M_AMD64)
@@ -365,8 +381,24 @@ const KMT_TEST TestList[] =
     { "IoIrp",                              Test_IoIrp },
     { "IoWaitCompletionPacket",             Test_IoWaitCompletionPacket },
     { "ExWorkItem",                         Test_ExWorkItem },
-    { "ExWddmAvl",                          Test_ExWddmAvl },
-    { "ExWddmRtl",                          Test_ExWddmRtl },
+    { "ExWddm",                            Test_ExWddm },
+    { "ExWddmAvl",                         Test_ExWddmAvl },
+    { "ExWddmEnergy",                      Test_ExWddmEnergy },
+    { "ExWddmFault",                       Test_ExWddmFault },
+    { "ExWddmInbv",                        Test_ExWddmInbv },
+#ifdef KMT_KSR_APISET
+    { "ExWddmKsr",                         Test_ExWddmKsr },
+    { "ExWddmKsrLoad",                     Test_ExWddmKsrLoad },
+#endif
+    { "ExWddmPower",                       Test_ExWddmPower },
+    { "ExWddmPoFx",                        Test_ExWddmPoFx },
+    { "ExWddmPlatform",                    Test_ExWddmPlatform },
+    { "ExWddmProviders",                   Test_ExWddmProviders },
+    { "ExWddmRotate",                      Test_ExWddmRotate },
+    { "ExWddmRotateValid",                 Test_ExWddmRotateValid },
+    { "ExWddmRtl",                         Test_ExWddmRtl },
+    { "ExWddmTls",                         Test_ExWddmTls },
+    { "ExWddmWindow",                      Test_ExWddmWindow },
     { "IoCancelKM",                         Test_IoCancelKM },
     { "CmKeyKM",                            Test_CmKeyKM },
     { "EtwRegisterKM",                      Test_EtwRegisterKM },

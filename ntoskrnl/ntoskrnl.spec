@@ -2030,7 +2030,7 @@
 @ extern -arch=arm64 MmBadPointer
 @ extern -arch=arm64 NtBuildGUID
 @ extern -arch=arm64 POGOBuffer
-@ extern -arch=arm64 PsPartitionType
+@ extern -arch=i386,x86_64,arm64 PsPartitionType
 @ extern -arch=arm64 PsSiloContextNonPagedType
 @ extern -arch=arm64 PsSiloContextPagedType
 @ extern -arch=arm64 PsUILanguageComitted
@@ -2099,8 +2099,8 @@
 @ stub -arch=arm64 CmSetCallbackObjectContext
 @ stub -arch=arm64 CmUnregisterMachineHiveLoadedNotification
 @ stub -arch=arm64 DbgSetDebugPrintCallback
-@ stub -arch=arm64 DbgkLkmdRegisterCallback
-@ stub -arch=arm64 DbgkLkmdUnregisterCallback
+@ stdcall -arch=i386,x86_64,arm64 DbgkLkmdRegisterCallback(ptr ptr long)
+@ stdcall -arch=i386,x86_64,arm64 DbgkLkmdUnregisterCallback(ptr)
 @ stdcall -arch=x86_64,arm64 DbgkWerCaptureLiveKernelDump(ptr long ptr ptr ptr ptr ptr ptr long)
 @ stub -arch=arm64 DbgkWerCaptureLiveKernelDump2
 @ stub -arch=arm64 DifEnumeratePluginData
@@ -2202,11 +2202,11 @@
 @ stdcall -arch=i386,x86_64,arm64 ExIsFastResourceContended(ptr) ExpIsFastResourceContended
 @ stdcall -arch=i386,x86_64,arm64 ExIsFastResourceHeld(ptr) ExpIsFastResourceHeld
 @ stdcall -arch=i386,x86_64,arm64 ExIsFastResourceHeldExclusive(ptr) ExpIsFastResourceHeldExclusive
-@ stub -arch=arm64 ExIsManufacturingModeEnabled
-@ stub -arch=arm64 ExIsSoftBoot
+@ stdcall -arch=i386,x86_64,arm64 ExIsManufacturingModeEnabled()
+@ stdcall -arch=i386,x86_64,arm64 ExIsSoftBoot()
 @ stub -arch=arm64 ExMoveFastResourceOwnershipWithFlags
 @ stub -arch=arm64 ExNotifyBootDeviceRemoval
-@ stub -arch=arm64 ExQueryFastCacheDevLicense
+@ stdcall -arch=i386,x86_64,arm64 ExQueryFastCacheDevLicense()
 @ stdcall -arch=arm64 ExQueryTimerResolution(ptr ptr ptr)
 @ stdcall -arch=arm64 ExQueryWnfStateData(ptr ptr ptr ptr)
 @ stub -arch=arm64 ExQueueDpcEventWait
@@ -2240,7 +2240,7 @@
 @ stub -arch=arm64 ExSetLicenseTamperState
 @ stub -arch=arm64 ExSetResourceOwnerPointerEx
 @ stdcall -version=0x603+ -arch=arm64 ExSetTimer(ptr int64 int64 ptr)
-@ stub -arch=arm64 ExShareAddressSpaceWithDevice
+@ stdcall -version=0x603+ -arch=arm64 ExShareAddressSpaceWithDevice(ptr ptr)
 @ stub -arch=arm64 ExShareSystemAddressSpaceWithDevice
 @ stub -arch=arm64 ExSizeOfAutoExpandPushLock
 @ stub -arch=arm64 ExStopSharingAddressSpaceWithDevice
@@ -2372,7 +2372,7 @@
 @ stub -arch=arm64 HviIsAnyHypervisorPresent
 @ stub -arch=arm64 HviIsHypervisorVendorMicrosoft
 @ stub -arch=arm64 HvlGetApicIdFromLpIndex
-@ stub -arch=arm64 HvlGetHypervisorVendorId
+@ stdcall -arch=arm64 HvlGetHypervisorVendorId()
 @ stub -arch=arm64 HvlGetLpIndexFromApicId
 @ stub -arch=arm64 HvlGetLpIndexFromProcessorIndex
 @ stub -arch=arm64 HvlInvokeFastExtendedHypercall
@@ -2833,9 +2833,9 @@
 @ stub -arch=arm64 PoFxSetTargetDripsDevicePowerState
 @ stub -arch=arm64 PoGetProcessorIdleAccounting
 @ stub -arch=arm64 PoInitiateProcessorWake
-@ stub -arch=arm64 PoLatencySensitivityHint
+@ stdcall -arch=i386,x86_64,arm64 PoLatencySensitivityHint(long)
 @ stub -arch=arm64 PoNotifyMediaBuffering
-@ stub -arch=arm64 PoNotifyVSyncChange
+@ stdcall -arch=i386,x86_64,arm64 PoNotifyVSyncChange(long)
 @ stub -arch=arm64 PoQueryPowerLimitAttributes
 @ stub -arch=arm64 PoQueryPowerLimitValue
 @ stub -arch=arm64 PoReenableSleepStates
@@ -2847,7 +2847,7 @@
 @ stub -arch=arm64 PoSetPowerLimitValue
 @ stub -arch=arm64 PoSetPowerRequest
 @ stub -arch=arm64 PoSetSystemWakeDevice
-@ stub -arch=arm64 PoSetUserPresent
+@ stdcall -arch=i386,x86_64,arm64 PoSetUserPresent(long)
 @ stub -arch=arm64 PoStartDeviceBusy
 @ stub -arch=arm64 PoUnregisterCoalescingCallback
 @ stub -arch=arm64 PoUnregisterFromEffectivePowerModeNotifications
@@ -2976,8 +2976,8 @@
 @ stdcall RtlArmFeatureUsageProviderFlushNotification(ptr)
 @ stdcall -arch=i386,x86_64,arm64 RtlAvlInsertNodeEx(ptr ptr long ptr)
 @ stdcall -arch=i386,x86_64,arm64 RtlAvlRemoveNode(ptr ptr)
-@ stub -arch=arm64 RtlCapabilityCheck
-@ stub -arch=arm64 RtlCapabilityCheckForSingleSessionSku
+@ stdcall -arch=i386,x86_64,arm64 RtlCapabilityCheck(ptr ptr ptr)
+@ stdcall -arch=i386,x86_64,arm64 RtlCapabilityCheckForSingleSessionSku(ptr ptr ptr)
 @ stub -arch=arm64 RtlCheckPortableOperatingSystem
 @ stub -arch=arm64 RtlCheckSystemBootStatusIntegrity
 @ stub -arch=arm64 RtlCheckTokenCapability
@@ -3040,7 +3040,7 @@
 @ stub -arch=arm64 RtlGetActiveConsoleId
 @ stub -arch=arm64 RtlGetAppContainerNamedObjectPath
 @ stub -arch=arm64 RtlGetAppContainerParent
-@ stub -arch=arm64 RtlGetAppContainerSidType
+@ stdcall -arch=i386,x86_64,arm64 RtlGetAppContainerSidType(ptr ptr)
 @ stub -arch=arm64 RtlGetConsoleSessionForegroundProcessId
 @ stub -arch=arm64 RtlGetCurrentServiceSessionId
 @ stub -arch=arm64 RtlGetEnabledExtendedAndSupervisorFeatures
@@ -3082,7 +3082,7 @@
 @ stub -arch=arm64 RtlInvertRangeListEx
 @ stub -arch=arm64 RtlIoDecodeMemIoResource
 @ stub -arch=arm64 RtlIoEncodeMemIoResource
-@ stub -arch=arm64 RtlIsApiSetImplemented
+@ stdcall -arch=i386,x86_64,arm64 RtlIsApiSetImplemented(str)
 @ stub -arch=arm64 RtlIsCloudFilesPlaceholder
 @ stub -arch=arm64 RtlIsElevatedRid
 @ stub -arch=arm64 RtlIsFunctionalityAvailable
@@ -3102,7 +3102,7 @@
 @ stub -arch=arm64 RtlIsZeroMemory
 @ stub -arch=arm64 RtlLoadString
 @ stub -arch=arm64 RtlLocateSupervisorFeature
-@ stub -arch=arm64 RtlLogUnexpectedCodepath
+@ stdcall -arch=i386,x86_64,arm64 RtlLogUnexpectedCodepath()
 @ stub -arch=arm64 RtlMergeBitMaps
 @ stub -arch=arm64 RtlMergeBitMapsEx
 @ stub -arch=arm64 RtlNormalizeSecurityDescriptor
@@ -3127,7 +3127,7 @@
 @ stdcall RtlQueryFeatureConfigurationChangeStamp()
 @ stub -arch=arm64 RtlQueryImageFileKeyOption
 @ stdcall RtlQueryModuleInformation(ptr long ptr)
-@ stub -arch=arm64 RtlQueryPackageClaims
+@ stdcall -arch=i386,x86_64,arm64 RtlQueryPackageClaims(ptr ptr ptr ptr ptr ptr ptr)
 @ stdcall -arch=i386,x86_64,arm64 RtlQueryPackageIdentity(ptr ptr ptr ptr ptr ptr)
 @ stub -arch=arm64 RtlQueryPackageIdentityEx
 @ stub -arch=arm64 RtlQueryPointerMapping
@@ -3281,9 +3281,9 @@
 @ stub -arch=arm64 TmSetCurrentTransaction
 @ stub -arch=arm64 TmSinglePhaseReject
 @ stub -arch=arm64 TmThawTransactions
-@ stub -arch=arm64 TtmNotifyDeviceArrival
-@ stub -arch=arm64 TtmNotifyDeviceDeparture
-@ stub -arch=arm64 TtmNotifyDeviceInput
+@ stdcall -arch=i386,x86_64,arm64 TtmNotifyDeviceArrival(long ptr ptr long ptr)
+@ stdcall -arch=i386,x86_64,arm64 TtmNotifyDeviceDeparture(long ptr)
+@ stdcall -arch=i386,x86_64,arm64 TtmNotifyDeviceInput(long ptr long)
 @ stub -arch=arm64 VfInsertContext
 @ stub -arch=arm64 VfQueryDeviceContext
 @ stub -arch=arm64 VfQueryDispatchTable
@@ -3373,7 +3373,7 @@
 @ stub -arch=arm64 ZwGetNextProcess
 @ stub -arch=arm64 ZwGetNextThread
 @ stub -arch=arm64 ZwGetNotificationResourceManager
-@ stub -arch=arm64 ZwManagePartition
+@ stdcall -arch=i386,x86_64,arm64 ZwManagePartition(ptr ptr long ptr long)
 @ stub -arch=arm64 ZwMapViewOfSectionEx
 @ stdcall -arch=arm64 ZwNotifyChangeDirectoryFileEx(ptr ptr ptr ptr ptr ptr long long long long)
 @ stub -arch=arm64 ZwNotifyChangeSession
@@ -3382,7 +3382,7 @@
 @ stub -arch=arm64 ZwOpenKeyEx
 @ stub -arch=arm64 ZwOpenKeyTransacted
 @ stub -arch=arm64 ZwOpenKeyTransactedEx
-@ stub -arch=arm64 ZwOpenPartition
+@ stdcall -arch=i386,x86_64,arm64 ZwOpenPartition(ptr long ptr)
 @ stub -arch=arm64 ZwOpenRegistryTransaction
 @ stub -arch=arm64 ZwOpenResourceManager
 @ stub -arch=arm64 ZwOpenSession

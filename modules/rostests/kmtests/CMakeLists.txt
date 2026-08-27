@@ -136,6 +136,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ex/ExUuid.c
     ntos_ex/ExWorkItem.c
     ntos_ex/ExLicenseDif.c
+    ntos_ex/ExWddm.c
     ntos_fsrtl/FsRtlDissect.c
     ntos_fsrtl/FsRtlExpression.c
     ntos_fsrtl/FsRtlLegal.c
@@ -322,6 +323,11 @@ if(ARCH STREQUAL "arm64")
         ntos_mm/MmPteWin11KM.c)
 endif()
 
+if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64")
+    spec2def(ext-ms-win-ntos-ksr-l1-1-5.dll ntos_ex/ksr.spec ADD_IMPORTLIB)
+    set(KMTEST_KSR_APISET TRUE)
+endif()
+
 add_library(kmtest_drv MODULE ${KMTEST_DRV_SOURCE})
 target_include_directories(kmtest_drv PRIVATE
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl
@@ -350,6 +356,10 @@ endif()
 set_module_type(kmtest_drv kernelmodedriver)
 target_link_libraries(kmtest_drv kmtest_printf chkstk memcmp poguid ${PSEH_LIB})
 add_importlibs(kmtest_drv ksecdd ntoskrnl hal)
+if(KMTEST_KSR_APISET)
+    add_importlibs(kmtest_drv ext-ms-win-ntos-ksr-l1-1-5)
+    target_compile_definitions(kmtest_drv PRIVATE KMT_KSR_APISET)
+endif()
 add_dependencies(kmtest_drv bugcodes xdk)
 target_compile_definitions(kmtest_drv PRIVATE KMT_KERNEL_MODE NTDDI_VERSION=${REACTOS_TARGET_NTDDI})
 #add_pch(kmtest_drv include/kmt_test.h)

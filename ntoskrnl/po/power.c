@@ -57,6 +57,13 @@ static GENERIC_MAPPING PopPowerRequestMapping =
 
 static volatile LONG PopProcessorPolicyMinimum = 5;
 static volatile LONG PopProcessorPolicyMaximum = 100;
+volatile LONG PopLatencySensitivityState;
+volatile LONG PopVSyncState;
+volatile LONG PopUserPresentReason;
+volatile LONG PopUserPresentSequence;
+volatile LONG64 PopLatencySensitivityTime;
+volatile LONG64 PopUserPresentTime;
+extern PKWIN32_POWEREVENT_CALLOUT PopEventCallout;
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
@@ -1375,6 +1382,42 @@ PopQueryBatteryState(
 Exit:
     ZwClose(CompBattHandle);
     return Status;
+}
+
+VOID
+NTAPI
+PoLatencySensitivityHint(
+    _In_ ULONG Hint)
+{
+    InterlockedExchange(&PopLatencySensitivityState, (LONG)Hint);
+    InterlockedExchange64(&PopLatencySensitivityTime, (LONG64)KeQueryInterruptTime());
+}
+
+VOID
+NTAPI
+PoNotifyVSyncChange(
+    _In_ BOOLEAN VSyncEnabled)
+{
+    InterlockedExchange(&PopVSyncState, VSyncEnabled != FALSE);
+}
+
+VOID
+NTAPI
+PoSetUserPresent(
+    _In_ ULONG RequestReason)
+{
+    WIN32_POWEREVENT_PARAMETERS Parameters;
+
+    InterlockedExchange(&PopUserPresentReason, (LONG)RequestReason);
+    InterlockedIncrement(&PopUserPresentSequence);
+    InterlockedExchange64(&PopUserPresentTime, (LONG64)KeQueryInterruptTime());
+
+    if (PopEventCallout != NULL)
+    {
+        Parameters.EventNumber = PsW32FullWake;
+        Parameters.Code = RequestReason;
+        (VOID)PopEventCallout(&Parameters);
+    }
 }
     
 

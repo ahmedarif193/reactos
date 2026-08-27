@@ -10,6 +10,7 @@
 /* INCLUDES *******************************************************************/
 
 #include <ntoskrnl.h>
+#include <apisets.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -790,9 +791,16 @@ MiSnapThunk(IN PVOID DllBase,
     }
     else
     {
-        /* Get the VA if we don't have to snap */
-        if (!SnapForwarder) Name->u1.AddressOfData += (ULONG_PTR)ImageBase;
-        NameImport = (PIMAGE_IMPORT_BY_NAME)Name->u1.AddressOfData;
+        /* Resolve the name without modifying the original import thunk. */
+        if (SnapForwarder)
+        {
+            NameImport = (PIMAGE_IMPORT_BY_NAME)Name->u1.AddressOfData;
+        }
+        else
+        {
+            NameImport = (PIMAGE_IMPORT_BY_NAME)((ULONG_PTR)ImageBase +
+                                                 Name->u1.AddressOfData);
+        }
 
         /* Copy the procedure name */
         RtlStringCbCopyA(*MissingApi,
@@ -1118,7 +1126,6 @@ MiResolveImageReferences(IN PVOID ImageBase,
     {
         /* Get the name */
         ImportName = (PCHAR)((ULONG_PTR)ImageBase + ImportDescriptor->Name);
-
         /* Check if this is a GDI driver */
         GdiLink = GdiLink ||
                   !(_strnicmp(ImportName, "win32k", sizeof("win32k") - 1));
@@ -1172,6 +1179,103 @@ MiResolveImageReferences(IN PVOID ImageBase,
         {
             /* Failed */
             goto Failure;
+        }
+
+        /*
+         * Kernel API-set contracts are logical import names. Resolve them to
+         * their host system modules before scanning or loading dependencies.
+         * Accept only the kernel ntos and core-win32k namespaces here; the
+         * general API-set table also contains user-mode contracts which are
+         * invalid imports for a kernel image.
+         */
+        {
+            static UNICODE_STRING ApiNtosPrefix = RTL_CONSTANT_STRING(L"api-ms-win-ntos-");
+            static UNICODE_STRING ExtNtosPrefix = RTL_CONSTANT_STRING(L"ext-ms-win-ntos-");
+            static UNICODE_STRING ApiWin32kPrefix = RTL_CONSTANT_STRING(L"api-ms-win-core-win32k-");
+            static UNICODE_STRING ExtWin32kPrefix = RTL_CONSTANT_STRING(L"ext-ms-win-core-win32k-");
+            UNICODE_STRING ApiSetHost;
+            BOOLEAN ApiSetResolved = FALSE;
+
+            if (RtlPrefixUnicodeString(&ApiNtosPrefix, &NameString, TRUE) ||
+                RtlPrefixUnicodeString(&ExtNtosPrefix, &NameString, TRUE) ||
+                RtlPrefixUnicodeString(&ApiWin32kPrefix, &NameString, TRUE) ||
+                RtlPrefixUnicodeString(&ExtWin32kPrefix, &NameString, TRUE))
+            {
+                Status = ApiSetResolveToHost(APISET_WIN10, &NameString, &ApiSetResolved, &ApiSetHost);
+                if (!NT_SUCCESS(Status))
+                {
+                    RtlFreeUnicodeString(&NameString);
+                    NameString.Buffer = NULL;
+                    goto Failure;
+                }
+
+                if (ApiSetResolved)
+                {
+                    if (!ApiSetHost.Length)
+                    {
+                        if (!_stricmp(ImportName,
+                                     "ext-ms-win-ntos-ksr-l1-1-5.dll") ||
+                            !_stricmp(ImportName,
+                                     "ext-ms-win-ntos-ksr-l1-1-5"))
+                        {
+                            OrigThunk = (PVOID)((ULONG_PTR)ImageBase +
+                                                ImportDescriptor->OriginalFirstThunk);
+                            FirstThunk = (PVOID)((ULONG_PTR)ImageBase +
+                                                 ImportDescriptor->FirstThunk);
+
+                            while (OrigThunk->u1.AddressOfData)
+                            {
+                                PIMAGE_IMPORT_BY_NAME NameImport;
+                                PVOID Routine;
+
+                                if (IMAGE_SNAP_BY_ORDINAL(OrigThunk->u1.Ordinal))
+                                {
+                                    *MissingApi = (PCHAR)(ULONG_PTR)
+                                                  IMAGE_ORDINAL(OrigThunk->u1.Ordinal);
+                                    Status = STATUS_DRIVER_ORDINAL_NOT_FOUND;
+                                    goto Failure;
+                                }
+
+                                NameImport = (PVOID)((ULONG_PTR)ImageBase +
+                                                     OrigThunk->u1.AddressOfData);
+                                RtlStringCbCopyA(*MissingApi,
+                                                 MAXIMUM_FILENAME_LENGTH,
+                                                 (PCHAR)NameImport->Name);
+                                Routine = IopResolveKsrApiSetRoutine(
+                                              (PCHAR)NameImport->Name);
+                                if (Routine == NULL)
+                                {
+                                    Status = STATUS_DRIVER_ENTRYPOINT_NOT_FOUND;
+                                    goto Failure;
+                                }
+
+                                FirstThunk->u1.Function = (ULONG_PTR)Routine;
+                                OrigThunk++;
+                                FirstThunk++;
+                                *MissingApi = MissingApiBuffer;
+                            }
+
+                            RtlFreeUnicodeString(&NameString);
+                            NameString.Buffer = NULL;
+                            ImportDescriptor++;
+                            continue;
+                        }
+
+                        Status = STATUS_PROCEDURE_NOT_FOUND;
+                        goto Failure;
+                    }
+                    else
+                    {
+                        RtlFreeUnicodeString(&NameString);
+                        NameString.Buffer = NULL;
+                        Status = RtlDuplicateUnicodeString(RTL_DUPLICATE_UNICODE_STRING_NULL_TERMINATE, &ApiSetHost, &NameString);
+                        if (!NT_SUCCESS(Status))
+                            goto Failure;
+
+                        DPRINT("Resolved kernel API set '%s' to '%wZ'\n", ImportName, &NameString);
+                    }
+                }
+            }
         }
 
         /* We don't support name prefixes yet */
