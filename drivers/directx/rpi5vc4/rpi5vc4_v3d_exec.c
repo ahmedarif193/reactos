@@ -80,8 +80,10 @@
     (RPI5VC4_V3D_DRAW_DATA_OFFSET + RPI5VC4_V3D_PAGE_SIZE)
 #define RPI5VC4_V3D_SINGLE_DRAW_CONTROL_BYTES \
     RPI5VC4_V3D_SECOND_DRAW_DATA_OFFSET
-#define RPI5VC4_V3D_MAX_CONTROL_BYTES      \
+#define RPI5VC4_V3D_OCCLUSION_QUERY_OFFSET \
     (RPI5VC4_V3D_SECOND_DRAW_DATA_OFFSET + RPI5VC4_V3D_PAGE_SIZE)
+#define RPI5VC4_V3D_MAX_CONTROL_BYTES      \
+    (RPI5VC4_V3D_OCCLUSION_QUERY_OFFSET + sizeof(ULONG))
 #define RPI5VC4_V3D_TILE_ALLOC_OFFSET      0x4000u
 #define RPI5VC4_V3D_TILE_ALLOC_MAX_SIZE    0x88000u
 #define RPI5VC4_V3D_TILE_STATE_OFFSET      0x8C000u
@@ -1196,6 +1198,8 @@ C_ASSERT(RPI5VC4_V3D_HEIGHT_FRAGMENT_UNIFORMS_OFFSET +
          RPI5VC4_V3D_HEIGHT_TEXTURE_STATE_OFFSET);
 C_ASSERT(RPI5VC4_V3D_HEIGHT_SAMPLER_STATE_OFFSET + 24u <=
          RPI5VC4_V3D_PAGE_SIZE);
+C_ASSERT(RPI5VC4_V3D_MAX_CONTROL_BYTES <=
+         RPI5VC4_V3D_TILE_ALLOC_OFFSET);
 C_ASSERT(RPI5VC4_V3D_TILE_ALLOC_OFFSET +
          RPI5VC4_V3D_TILE_ALLOC_MAX_SIZE <=
          RPI5VC4_V3D_TILE_STATE_OFFSET);
@@ -1215,6 +1219,9 @@ C_ASSERT(RPI5VC4_V3D_VERTEX_BUFFER_OFFSET +
          RPI5VC4_V3D_TERRAIN_INDEX_BUFFER_OFFSET);
 C_ASSERT(RPI5VC4_V3D_TERRAIN_INDEX_BUFFER_OFFSET +
          (RPI5VC4_V3D_TERRAIN_INDEX_COUNT * sizeof(ULONG)) <=
+         RPI5VC4_V3D_TERRAIN_TRANSIENT_VERTEX_OFFSET);
+C_ASSERT(RPI5VC4_V3D_TERRAIN_INDEX_BUFFER_OFFSET +
+         (RPI5VC4_V3D_JELLYFISH_MAX_INDICES * sizeof(USHORT)) <=
          RPI5VC4_V3D_TERRAIN_TRANSIENT_VERTEX_OFFSET);
 C_ASSERT(RPI5VC4_V3D_TERRAIN_TRANSIENT_VERTEX_OFFSET +
          (RPI5VC4_V3D_GRAPH_MAX_VERTICES *
@@ -1978,32 +1985,70 @@ Rpi5V3dJellyfishUniformsValid(
 }
 
 static BOOLEAN
+Rpi5V3dJellyfishIndexCount(
+    _In_reads_(DrawCount) const RPI5VC4_V3D_BATCH_DRAW *Draws,
+    _In_ ULONG DrawCount,
+    _Out_ PULONG IndexCount)
+{
+    const RPI5VC4_V3D_BATCH_DRAW *MeshDraw;
+
+    *IndexCount = 0;
+    if (Draws == NULL ||
+        DrawCount != RPI5VC4_V3D_JELLYFISH_MODE_COUNT)
+        return FALSE;
+    MeshDraw = &Draws[RPI5VC4_V3D_JELLYFISH_MODE_MESH];
+    if (MeshDraw->FirstVertex != 0 || MeshDraw->VertexCount == 0 ||
+        MeshDraw->VertexCount > RPI5VC4_V3D_JELLYFISH_MAX_INDICES ||
+        (MeshDraw->VertexCount % 3u) != 0 ||
+        MeshDraw->ShaderMode != RPI5VC4_V3D_JELLYFISH_MODE_MESH ||
+        MeshDraw->Flags !=
+            (RPI5VC4_V3D_BATCH_FLAG_BLEND_STANDARD |
+             RPI5VC4_V3D_BATCH_DRAW_FLAG_INDEXED_16))
+    {
+        return FALSE;
+    }
+    *IndexCount = MeshDraw->VertexCount;
+    return TRUE;
+}
+
+static BOOLEAN
 Rpi5V3dJellyfishDrawsValid(
     _In_reads_(DrawCount) const RPI5VC4_V3D_BATCH_DRAW *Draws,
     _In_ ULONG DrawCount,
-    _In_ ULONG VertexCount)
+    _In_ ULONG VertexCount,
+    _In_reads_(IndexCount) const USHORT *Indices,
+    _In_ ULONG IndexCount)
 {
-    ULONG ExpectedFirstVertex = 0;
-    ULONG DrawIndex;
+    const RPI5VC4_V3D_BATCH_DRAW *GradientDraw;
+    ULONG ExpectedIndexCount;
+    ULONG Index;
 
-    if (DrawCount != RPI5VC4_V3D_JELLYFISH_MODE_COUNT)
-        return FALSE;
-    for (DrawIndex = 0; DrawIndex < DrawCount; DrawIndex++)
+    if (!Rpi5V3dJellyfishIndexCount(Draws,
+                                    DrawCount,
+                                    &ExpectedIndexCount) ||
+        Indices == NULL || IndexCount != ExpectedIndexCount)
     {
-        const RPI5VC4_V3D_BATCH_DRAW *Draw = &Draws[DrawIndex];
-
-        if (Draw->FirstVertex != ExpectedFirstVertex ||
-            Draw->VertexCount == 0 ||
-            (Draw->VertexCount % 3u) != 0 ||
-            Draw->VertexCount > VertexCount - ExpectedFirstVertex ||
-            Draw->ShaderMode != DrawIndex ||
-            Draw->Flags != RPI5VC4_V3D_BATCH_FLAG_BLEND_STANDARD)
+        return FALSE;
+    }
+    GradientDraw = &Draws[RPI5VC4_V3D_JELLYFISH_MODE_GRADIENT];
+    if (GradientDraw->FirstVertex != 0 ||
+        GradientDraw->VertexCount == 0 ||
+        (GradientDraw->VertexCount % 3u) != 0 ||
+        GradientDraw->VertexCount >= VertexCount ||
+        GradientDraw->ShaderMode != RPI5VC4_V3D_JELLYFISH_MODE_GRADIENT ||
+        GradientDraw->Flags != RPI5VC4_V3D_BATCH_FLAG_BLEND_STANDARD)
+    {
+        return FALSE;
+    }
+    for (Index = 0; Index < IndexCount; Index++)
+    {
+        if (Indices[Index] < GradientDraw->VertexCount ||
+            Indices[Index] >= VertexCount)
         {
             return FALSE;
         }
-        ExpectedFirstVertex += Draw->VertexCount;
     }
-    return ExpectedFirstVertex == VertexCount;
+    return TRUE;
 }
 
 static BOOLEAN
@@ -3770,6 +3815,8 @@ Rpi5V3dBuildJellyfishPrimitiveData(
     _In_reads_(VertexCount) const RPI5VC4_V3D_VERTEX *Vertices,
     _In_reads_(VertexCount) const RPI5VC4_V3D_TEXCOORD *Auxiliary,
     _In_ ULONG VertexCount,
+    _In_reads_(IndexCount) const USHORT *Indices,
+    _In_ ULONG IndexCount,
     _In_ BOOLEAN FlipY,
     _In_reads_(RPI5VC4_V3D_JELLYFISH_UNIFORM_WORDS)
         const ULONG *ShaderUniforms)
@@ -3964,6 +4011,10 @@ Rpi5V3dBuildJellyfishPrimitiveData(
                         VertexCount * sizeof(*Vertices),
                         (PVOID)Auxiliary,
                         VertexCount * sizeof(*Auxiliary));
+    RtlMoveMemory((PUCHAR)DeviceExtension->V3dWorkVa +
+                        RPI5VC4_V3D_TERRAIN_INDEX_BUFFER_OFFSET,
+                        (PVOID)Indices,
+                        IndexCount * sizeof(*Indices));
 }
 
 static VOID
@@ -4295,7 +4346,8 @@ Rpi5V3dBuildBinningList(
     _In_ ULONG Width,
     _In_ ULONG Height,
     _In_reads_opt_(DrawCount) const RPI5VC4_V3D_BINNING_DRAW *Draws,
-    _In_ ULONG DrawCount)
+    _In_ ULONG DrawCount,
+    _In_ ULONG OcclusionQueryAddress)
 {
     ULONG DrawIndex;
     BOOLEAN DrawPrimitive = DrawCount != 0;
@@ -4316,7 +4368,7 @@ Rpi5V3dBuildBinningList(
     if (DrawPrimitive)
     {
         Rpi5V3dClByte(Bcl, V3D71_CL_OCCLUSION_QUERY_COUNTER);
-        Rpi5V3dClLe32(Bcl, 0);
+        Rpi5V3dClLe32(Bcl, OcclusionQueryAddress);
     }
     Rpi5V3dClByte(Bcl, V3D71_CL_START_TILE_BINNING);
     for (DrawIndex = 0; DrawIndex < DrawCount; DrawIndex++)
@@ -4353,6 +4405,7 @@ Rpi5V3dBuildControlLists(
     _In_ ULONG ClearColor,
     _In_reads_opt_(DrawCount) const RPI5VC4_V3D_BINNING_DRAW *Draws,
     _In_ ULONG DrawCount,
+    _In_ ULONG OcclusionQueryAddress,
     _In_ ULONG OutputGpuVa,
     _In_ ULONG OutputHeightInUbOrStride,
     _In_ ULONG OutputMemoryFormat,
@@ -4417,7 +4470,8 @@ Rpi5V3dBuildControlLists(
         Width,
         Height,
         Draws,
-        DrawCount);
+        DrawCount,
+        OcclusionQueryAddress);
 
     /* Generic per-tile list used by the one 64x64 supertile. */
     Rpi5V3dClByte(&Generic, V3D71_CL_TILE_COORDINATES_IMPLICIT);
@@ -4989,6 +5043,8 @@ Rpi5V3dExecuteClear(
         const ULONG *NormalMatrix,
     _In_reads_opt_(VertexCount)
         const RPI5VC4_V3D_TEXCOORD *HeightTexCoords,
+    _In_reads_opt_(JellyfishIndexCount) const USHORT *JellyfishIndices,
+    _In_ ULONG JellyfishIndexCount,
     _In_ ULONG TextureGeneration,
     _In_ ULONG TextureGeneration1,
     _In_ BOOLEAN DirectPresent,
@@ -5012,6 +5068,7 @@ Rpi5V3dExecuteClear(
     _In_ BOOLEAN DiagnosticLog)
 {
     PULONG Output;
+    PULONG OcclusionQueryCounter = NULL;
     ULONG OutputStride;
     ULONG OutputSize;
     ULONG OutputGpuVa;
@@ -5188,7 +5245,9 @@ Rpi5V3dExecuteClear(
           IdeasDraws == NULL || IdeasUniforms == NULL ||
           !Rpi5V3dJellyfishDrawsValid(IdeasDraws,
                                       IdeasDrawCount,
-                                      VertexCount) ||
+                                      VertexCount,
+                                      JellyfishIndices,
+                                      JellyfishIndexCount) ||
           !Rpi5V3dJellyfishUniformsValid(IdeasUniforms))) ||
         (Shadow &&
          (!DrawPrimitive || !Textured || LinearTextureFilter ||
@@ -5210,6 +5269,8 @@ Rpi5V3dExecuteClear(
            (DepthFunction == V3D71_COMPARE_LEQUAL)))) ||
         (!Ideas && !Jellyfish && !Shadow &&
          (IdeasDrawCount != 0 || IdeasUniforms != NULL)) ||
+        (!Jellyfish &&
+         (JellyfishIndices != NULL || JellyfishIndexCount != 0)) ||
         ((BlinnPhong != FALSE) + (BumpPoly != FALSE) +
          (Wireframe != FALSE) +
          (Phong != FALSE) + (Cel != FALSE) +
@@ -5269,7 +5330,7 @@ Rpi5V3dExecuteClear(
           EffectEdge || EffectBlur || DesktopBlurHorizontal ||
           DesktopBlurVertical)) ||
         (OutputSurface != NULL &&
-         (DirectPresent || Readback != NULL || CoveredPixelCount != NULL ||
+         (DirectPresent || Readback != NULL ||
           OutputSurface->GpuVa == 0 ||
           OutputSurface->MinimumX >= OutputSurface->MaximumX ||
           OutputSurface->MinimumY >= OutputSurface->MaximumY ||
@@ -5431,8 +5492,7 @@ Rpi5V3dExecuteClear(
         OutputGpuVa = RPI5VC4_V3D_WORK_GPU_VA +
                       RPI5VC4_V3D_OUTPUT_OFFSET;
     }
-    if (!DirectPresent &&
-        (!DrawPrimitive || CoveredPixelCount != NULL || DiagnosticLog))
+    if (!DirectPresent && (!DrawPrimitive || DiagnosticLog))
     {
         for (Poll = 0;
              Poll < OutputSize / sizeof(ULONG);
@@ -5541,6 +5601,8 @@ Rpi5V3dExecuteClear(
                                                Vertices,
                                                HeightTexCoords,
                                                VertexCount,
+                                               JellyfishIndices,
+                                               JellyfishIndexCount,
                                                DirectPresent,
                                                IdeasUniforms);
             for (DrawIndex = 0;
@@ -5560,11 +5622,26 @@ Rpi5V3dExecuteClear(
                         RPI5VC4_V3D_JELLYFISH_SHADER_RECORD_STRIDE;
                 Destination->PrimitiveType =
                     RPI5VC4_V3D_PRIMITIVE_TRIANGLES;
-                Destination->FirstVertex = Source->FirstVertex;
+                Destination->Indexed =
+                    (Source->Flags &
+                     RPI5VC4_V3D_BATCH_DRAW_FLAG_INDEXED_16) != 0;
+                Destination->FirstVertex = Destination->Indexed ?
+                    0 : Source->FirstVertex;
                 Destination->VertexCount = Source->VertexCount;
                 Destination->DepthFunction = V3D71_COMPARE_ALWAYS;
                 Destination->BlendMode = Rpi5V3dBlendStandardAlpha;
                 Destination->AttributeCount = 4;
+                if (Destination->Indexed)
+                {
+                    Destination->IndexBufferAddress =
+                        RPI5VC4_V3D_WORK_GPU_VA +
+                        RPI5VC4_V3D_TERRAIN_INDEX_BUFFER_OFFSET;
+                    Destination->IndexBufferSize =
+                        JellyfishIndexCount * sizeof(USHORT);
+                    Destination->IndexOffset =
+                        Source->FirstVertex * sizeof(USHORT);
+                    Destination->IndexType = 1u; /* 16-bit indices */
+                }
             }
             DrawCount = IdeasDrawCount;
             VertexBytes = VertexCount *
@@ -5765,12 +5842,24 @@ Rpi5V3dExecuteClear(
         ControlBytes = RPI5VC4_V3D_MAX_CONTROL_BYTES;
     }
 
+    if (CoveredPixelCount != NULL)
+    {
+        OcclusionQueryCounter =
+            (PULONG)((PUCHAR)DeviceExtension->V3dWorkVa +
+                     RPI5VC4_V3D_OCCLUSION_QUERY_OFFSET);
+        *OcclusionQueryCounter = 0;
+        ControlBytes = RPI5VC4_V3D_MAX_CONTROL_BYTES;
+    }
+
     if (!Rpi5V3dBuildControlLists(DeviceExtension,
                                   Width,
                                   Height,
                                   ClearColor,
                                   Draws,
                                   DrawCount,
+                                  CoveredPixelCount != NULL ?
+                                      RPI5VC4_V3D_WORK_GPU_VA +
+                                      RPI5VC4_V3D_OCCLUSION_QUERY_OFFSET : 0,
                                   OutputGpuVa,
                                   OutputHeightInUbOrStride,
                                   OutputMemoryFormat,
@@ -6058,6 +6147,19 @@ Rpi5V3dExecuteClear(
     Result->Flags |= RPI5VC4_V3D_SELFTEST_FLAG_JOB_COMPLETED;
 
     KeMemoryBarrier();
+    if (OcclusionQueryCounter != NULL)
+    {
+        if (DeviceExtension->V3dWorkCached)
+        {
+            DeviceExtension->V3dWorkControlMdl->ByteCount =
+                RPI5VC4_V3D_MAX_CONTROL_BYTES;
+            KeFlushIoBuffers(DeviceExtension->V3dWorkControlMdl,
+                             TRUE,
+                             TRUE);
+        }
+        KeMemoryBarrier();
+        *CoveredPixelCount = *OcclusionQueryCounter;
+    }
     if (DirectPresent || OutputSurface != NULL)
     {
         Result->Status = RPI5VC4_V3D_SELFTEST_STATUS_SUCCESS;
@@ -6072,16 +6174,10 @@ Rpi5V3dExecuteClear(
     Result->LastPixel =
         Output[Width * Height - 1];
     for (Poll = 0;
-         (!DrawPrimitive || CoveredPixelCount != NULL) &&
-         Poll < OutputSize / sizeof(ULONG);
+         !DrawPrimitive && Poll < OutputSize / sizeof(ULONG);
          Poll++)
     {
-        if (DrawPrimitive)
-        {
-            if (CoveredPixelCount != NULL && Output[Poll] != ClearColor)
-                (*CoveredPixelCount)++;
-        }
-        else if (Output[Poll] != ClearColor)
+        if (Output[Poll] != ClearColor)
         {
             Result->MismatchCount++;
         }
@@ -6168,6 +6264,8 @@ Rpi5V3dRunSelfTest(
                                FALSE, /* DesktopBlurVertical */
                                NULL,
                                NULL,
+                               NULL,
+                               0,
                                0,
                                0, /* TextureGeneration1 */
                                FALSE,
@@ -6253,6 +6351,8 @@ Rpi5V3dRenderClear(
                                  FALSE, /* DesktopBlurVertical */
                                  NULL,
                                  NULL,
+                                 NULL,
+                                 0,
                                  0,
                                  0, /* TextureGeneration1 */
                                  FALSE,
@@ -6369,6 +6469,8 @@ Rpi5V3dRenderTriangle(
                                  FALSE, /* DesktopBlurVertical */
                                  NULL,
                                  NULL,
+                                 NULL,
+                                 0,
                                  0,
                                  0, /* TextureGeneration1 */
                                  FALSE,
@@ -6438,6 +6540,7 @@ Rpi5V3dRenderBatch(
     ULONG VertexCount;
     ULONG DestinationX;
     ULONG DestinationY;
+    ULONG JellyfishIndexCount = 0;
     ULONG RetainedDepthStorageBytes = 0;
     ULONG RetainedDepthGeneration = 0;
     ULONG DepthFlags = RPI5VC4_V3D_BATCH_FLAG_DEPTH_TEST |
@@ -6460,7 +6563,10 @@ Rpi5V3dRenderBatch(
     BOOLEAN Shadow;
     BOOLEAN OutputDepth;
     BOOLEAN RetainDepth;
+    BOOLEAN OcclusionQuery;
+    ULONG CoveredPixelCount = 0;
     const RPI5VC4_V3D_TEXCOORD *HeightTexCoords;
+    const USHORT *JellyfishIndices;
     VP_STATUS Status;
 
     *BytesReturned = 0;
@@ -6503,6 +6609,7 @@ Rpi5V3dRenderBatch(
            RPI5VC4_V3D_BATCH_FLAG_IDEAS |
            RPI5VC4_V3D_BATCH_FLAG_JELLYFISH |
            RPI5VC4_V3D_BATCH_FLAG_RETAIN_DEPTH_TEXTURE |
+           RPI5VC4_V3D_BATCH_FLAG_OCCLUSION_QUERY |
            RPI5VC4_V3D_BATCH_FLAG_BLEND_STANDARD |
            RPI5VC4_V3D_BATCH_FLAG_BLEND_PRESERVE_ALPHA)) != 0 ||
         ((Request->Flags & RPI5VC4_V3D_BATCH_FLAG_TEXTURE_LINEAR) != 0 &&
@@ -6558,7 +6665,8 @@ Rpi5V3dRenderBatch(
              RPI5VC4_V3D_BATCH_FLAG_DIRECT_PRESENT |
              RPI5VC4_V3D_BATCH_FLAG_DEPTH_LEQUAL |
              RPI5VC4_V3D_BATCH_FLAG_TEXTURED |
-             RPI5VC4_V3D_BATCH_FLAG_SHADOW)) != 0)) ||
+             RPI5VC4_V3D_BATCH_FLAG_SHADOW |
+             RPI5VC4_V3D_BATCH_FLAG_OCCLUSION_QUERY)) != 0)) ||
         ((Request->Flags & RPI5VC4_V3D_BATCH_FLAG_BLEND_STANDARD) != 0 &&
          (Request->Flags & RPI5VC4_V3D_BATCH_FLAG_JELLYFISH) == 0) ||
         ((Request->Flags & RPI5VC4_V3D_BATCH_FLAG_OUTPUT_DEPTH) != 0 &&
@@ -6567,7 +6675,8 @@ Rpi5V3dRenderBatch(
            ~(DepthFlags |
              RPI5VC4_V3D_BATCH_FLAG_DEPTH_LEQUAL |
              RPI5VC4_V3D_BATCH_FLAG_OUTPUT_DEPTH |
-             RPI5VC4_V3D_BATCH_FLAG_RETAIN_DEPTH_TEXTURE)) != 0)) ||
+             RPI5VC4_V3D_BATCH_FLAG_RETAIN_DEPTH_TEXTURE |
+             RPI5VC4_V3D_BATCH_FLAG_OCCLUSION_QUERY)) != 0)) ||
         ((Request->Flags &
           RPI5VC4_V3D_BATCH_FLAG_RETAIN_DEPTH_TEXTURE) != 0 &&
          (Request->Flags & RPI5VC4_V3D_BATCH_FLAG_OUTPUT_DEPTH) == 0) ||
@@ -6597,7 +6706,8 @@ Rpi5V3dRenderBatch(
          Request->VertexCount > RPI5VC4_V3D_HEIGHT_MAX_VERTICES) ||
         (((Request->Flags & RPI5VC4_V3D_BATCH_FLAG_JELLYFISH) != 0) &&
          Request->VertexCount > RPI5VC4_V3D_JELLYFISH_MAX_VERTICES) ||
-        (Request->VertexCount % 3) != 0)
+        ((Request->VertexCount % 3) != 0 &&
+         (Request->Flags & RPI5VC4_V3D_BATCH_FLAG_JELLYFISH) == 0))
     {
         return ERROR_INVALID_PARAMETER;
     }
@@ -6639,6 +6749,17 @@ Rpi5V3dRenderBatch(
     RetainDepth =
         (Request->Flags &
          RPI5VC4_V3D_BATCH_FLAG_RETAIN_DEPTH_TEXTURE) != 0;
+    OcclusionQuery =
+        (Request->Flags &
+         RPI5VC4_V3D_BATCH_FLAG_OCCLUSION_QUERY) != 0;
+    JellyfishIndices = NULL;
+    if (Jellyfish &&
+        !Rpi5V3dJellyfishIndexCount(Request->Draws,
+                                    Request->DrawCount,
+                                    &JellyfishIndexCount))
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
     HeightTexCoords = NULL;
     if (HeightMap || Jellyfish)
     {
@@ -6646,6 +6767,13 @@ Rpi5V3dRenderBatch(
             &Request->Vertices[Request->VertexCount];
         RequiredRequestSize += Request->VertexCount *
                                sizeof(*HeightTexCoords);
+    }
+    if (JellyfishIndexCount != 0)
+    {
+        JellyfishIndices = (const USHORT *)((const UCHAR *)HeightTexCoords +
+            Request->VertexCount * sizeof(*HeightTexCoords));
+        RequiredRequestSize += JellyfishIndexCount *
+                               sizeof(*JellyfishIndices);
     }
     if (Request->Size < RequiredRequestSize ||
         RequestBufferLength < RequiredRequestSize ||
@@ -6667,7 +6795,9 @@ Rpi5V3dRenderBatch(
          (Jellyfish ?
               (!Rpi5V3dJellyfishDrawsValid(Request->Draws,
                                            Request->DrawCount,
-                                           Request->VertexCount) ||
+                                           Request->VertexCount,
+                                           JellyfishIndices,
+                                           JellyfishIndexCount) ||
                !Rpi5V3dJellyfishUniformsValid(
                     Request->ShaderUniforms)) :
               !Rpi5V3dIdeasStateZero(Request)))) ||
@@ -6796,6 +6926,8 @@ Rpi5V3dRenderBatch(
                                  (NormalMap || HeightMap) ?
                                      Request->NormalMatrix : NULL,
                                  HeightTexCoords,
+                                 JellyfishIndices,
+                                 JellyfishIndexCount,
                                  Request->TextureGeneration,
                                  Request->TextureGeneration1,
                                  DirectPresent,
@@ -6817,7 +6949,7 @@ Rpi5V3dRenderBatch(
                                  DirectPresent || RetainDepth ?
                                      NULL : Result->Pixels,
                                  PixelBytes,
-                                 NULL,
+                                 OcclusionQuery ? &CoveredPixelCount : NULL,
                                  FALSE);
     if (Status != NO_ERROR)
         return Status;
@@ -6866,6 +6998,7 @@ Rpi5V3dRenderBatch(
     Result->PixelBytes = Diagnostics.Status ==
                          RPI5VC4_V3D_SELFTEST_STATUS_SUCCESS ?
                          PixelBytes : 0;
+    Result->CoveredPixelCount = CoveredPixelCount;
     Result->VertexCount = VertexCount;
     Result->DestinationX = DestinationX;
     Result->DestinationY = DestinationY;
@@ -7400,6 +7533,8 @@ Rpi5V3dPresentGdi(
                                  FALSE,
                                  NULL,
                                  NULL,
+                                 NULL,
+                                 0,
                                  TemporaryGeneration,
                                  0,
                                  TRUE,
@@ -8602,6 +8737,8 @@ Rpi5V3dRenderGraph(
              RPI5VC4_V3D_BATCH_FLAG_DESKTOP_BLUR_VERTICAL) != 0,
             NULL,
             NULL,
+            NULL,
+            0,
             Fixed ? CacheId : 0,
             0, /* TextureGeneration1 */
             DirectPresent,
