@@ -239,7 +239,10 @@ typedef struct _RPI5VC4_OGL_CONTEXT
     PRPI5VC4_V3D_BATCH_REQUEST BatchRequest;
     PRPI5VC4_V3D_BATCH_RESULT BatchResult;
     ULONG BatchResultSize;
+    GLuint *IndexScratch;
+    ULONG IndexScratchCapacity;
     ULONG BatchVertexCount;
+    ULONG BatchIndexCount;
     ULONG BatchProgramTriangleCount;
     GLuint BatchProgramName;
     ULONG BatchProgramFlags;
@@ -275,6 +278,10 @@ typedef struct _RPI5VC4_OGL_CONTEXT
     PRPI5VC4_OGL_GL2_STATE Gl2State;
     BOOL MultisampleEnabled;
     BOOL SampleAlphaToCoverageEnabled;
+    BOOL SampleAlphaToOneEnabled;
+    BOOL SampleCoverageEnabled;
+    GLfloat SampleCoverageValue;
+    BOOL SampleCoverageInvert;
     BOOL ProgramPointSizeEnabled;
     GLuint DummyCubeName;
     GLuint BoundDummyCubeName;
@@ -288,6 +295,42 @@ typedef struct _RPI5VC4_OGL_CONTEXT
 static PFN_SET_CURRENT_VALUE Rpi5OglSetCurrentValue;
 static PFN_GET_CURRENT_VALUE Rpi5OglGetCurrentValue;
 static RPI5VC4_OGL_PROC_TABLE Rpi5OglProcTable;
+
+static BOOL
+Rpi5OglEnsureIndexScratch(
+    _Inout_ PRPI5VC4_OGL_CONTEXT Context,
+    _In_ ULONG Count)
+{
+    GLuint *NewScratch;
+    SIZE_T Bytes;
+
+    if (Count <= Context->IndexScratchCapacity)
+        return TRUE;
+    if ((SIZE_T)Count > (SIZE_T)-1 / sizeof(Context->IndexScratch[0]))
+        return FALSE;
+    Bytes = (SIZE_T)Count * sizeof(Context->IndexScratch[0]);
+    if (Context->IndexScratch == NULL)
+        NewScratch = HeapAlloc(GetProcessHeap(), 0, Bytes);
+    else
+        NewScratch = HeapReAlloc(GetProcessHeap(), 0,
+                                 Context->IndexScratch, Bytes);
+    if (NewScratch == NULL)
+        return FALSE;
+    Context->IndexScratch = NewScratch;
+    Context->IndexScratchCapacity = Count;
+    return TRUE;
+}
+
+static PUSHORT
+Rpi5OglBatchIndexStorage(
+    _In_ PRPI5VC4_OGL_CONTEXT Context)
+{
+    return (PUSHORT)((PUCHAR)Context->BatchRequest->Vertices +
+        RPI5VC4_V3D_BATCH_MAX_VERTICES *
+            sizeof(RPI5VC4_V3D_VERTEX) +
+        RPI5VC4_V3D_JELLYFISH_MAX_VERTICES *
+            sizeof(RPI5VC4_V3D_TEXCOORD));
+}
 
 #define USE_GL_FUNC(Name, Prototype, Arguments, Offset, Stack) \
     extern void APIENTRY _mesa_##Name Prototype;
@@ -538,6 +581,12 @@ Rpi5OglSetCompatibilityEnable(
 
     if (Context == NULL)
         return FALSE;
+    if (Rpi5OglGl2SetCompatibilityEnable(Context->Gl2State,
+                                          Capability,
+                                          Enable))
+    {
+        return TRUE;
+    }
     switch (Capability)
     {
         case GL_MULTISAMPLE:
@@ -545,6 +594,12 @@ Rpi5OglSetCompatibilityEnable(
             break;
         case GL_SAMPLE_ALPHA_TO_COVERAGE:
             State = &Context->SampleAlphaToCoverageEnabled;
+            break;
+        case GL_SAMPLE_ALPHA_TO_ONE:
+            State = &Context->SampleAlphaToOneEnabled;
+            break;
+        case GL_SAMPLE_COVERAGE:
+            State = &Context->SampleCoverageEnabled;
             break;
         case GL_PROGRAM_POINT_SIZE:
             State = &Context->ProgramPointSizeEnabled;
@@ -584,20 +639,98 @@ Rpi5OglApiIsEnabled(
     _In_ GLenum Capability)
 {
     PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+    GLboolean Enabled;
 
     if (Context != NULL)
     {
+        if (Rpi5OglGl2CompatibilityEnabled(Context->Gl2State,
+                                            Capability,
+                                            &Enabled))
+        {
+            return Enabled;
+        }
         switch (Capability)
         {
             case GL_MULTISAMPLE:
                 return Context->MultisampleEnabled;
             case GL_SAMPLE_ALPHA_TO_COVERAGE:
                 return Context->SampleAlphaToCoverageEnabled;
+            case GL_SAMPLE_ALPHA_TO_ONE:
+                return Context->SampleAlphaToOneEnabled;
+            case GL_SAMPLE_COVERAGE:
+                return Context->SampleCoverageEnabled;
             case GL_PROGRAM_POINT_SIZE:
                 return Context->ProgramPointSizeEnabled;
         }
     }
     return _mesa_IsEnabled(Capability);
+}
+
+static VOID APIENTRY
+Rpi5OglSampleCoverage(
+    _In_ GLclampf Value,
+    _In_ GLboolean Invert)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+
+    if (Context == NULL)
+        return;
+    if (INSIDE_BEGIN_END(Context->MesaContext))
+    {
+        gl_error(Context->MesaContext,
+                 GL_INVALID_OPERATION,
+                 "glSampleCoverage");
+        return;
+    }
+    if (!(Value > 0.0f))
+        Value = 0.0f;
+    else if (Value > 1.0f)
+        Value = 1.0f;
+    Invert = Invert ? GL_TRUE : GL_FALSE;
+    if (Context->SampleCoverageValue == Value &&
+        Context->SampleCoverageInvert == (BOOL)Invert)
+    {
+        return;
+    }
+
+    gl_Flush(Context->MesaContext);
+    Context->SampleCoverageValue = Value;
+    Context->SampleCoverageInvert = Invert;
+}
+
+static BOOL
+Rpi5OglGetSampleState(
+    _In_ PRPI5VC4_OGL_CONTEXT Context,
+    _In_ GLenum ParameterName,
+    _Out_ GLdouble *Value,
+    _In_z_ PCSTR Function)
+{
+    switch (ParameterName)
+    {
+        case GL_MULTISAMPLE:
+            *Value = Context->MultisampleEnabled;
+            break;
+        case GL_SAMPLE_ALPHA_TO_COVERAGE:
+            *Value = Context->SampleAlphaToCoverageEnabled;
+            break;
+        case GL_SAMPLE_ALPHA_TO_ONE:
+            *Value = Context->SampleAlphaToOneEnabled;
+            break;
+        case GL_SAMPLE_COVERAGE:
+            *Value = Context->SampleCoverageEnabled;
+            break;
+        case GL_SAMPLE_COVERAGE_VALUE:
+            *Value = Context->SampleCoverageValue;
+            break;
+        case GL_SAMPLE_COVERAGE_INVERT:
+            *Value = Context->SampleCoverageInvert;
+            break;
+        default:
+            return FALSE;
+    }
+    if (INSIDE_BEGIN_END(Context->MesaContext))
+        gl_error(Context->MesaContext, GL_INVALID_OPERATION, Function);
+    return TRUE;
 }
 
 static VOID APIENTRY
@@ -1466,6 +1599,7 @@ Rpi5OglResizeBackBuffer(
     Context->HardwareBatchActive = FALSE;
     Context->BatchDirectPresented = FALSE;
     Context->BatchVertexCount = 0;
+    Context->BatchIndexCount = 0;
     Context->BatchRequest->DrawCount = 0;
     ZeroMemory(Context->BatchRequest->Draws,
                sizeof(Context->BatchRequest->Draws));
@@ -2839,7 +2973,8 @@ Rpi5OglRecordBatchDraw(
     _Inout_ PRPI5VC4_OGL_CONTEXT Context,
     _In_ ULONG FirstVertex,
     _In_ ULONG VertexCount,
-    _In_ ULONG ShaderMode)
+    _In_ ULONG ShaderMode,
+    _In_ BOOL Indexed)
 {
     PRPI5VC4_V3D_BATCH_REQUEST Request = Context->BatchRequest;
     PRPI5VC4_V3D_BATCH_DRAW Draw;
@@ -2856,6 +2991,8 @@ Rpi5OglRecordBatchDraw(
     }
     if (Context->MesaContext->Color.BlendEnabled)
         Flags |= RPI5VC4_V3D_BATCH_FLAG_BLEND_STANDARD;
+    if (Indexed)
+        Flags |= RPI5VC4_V3D_BATCH_DRAW_FLAG_INDEXED_16;
     if (Request->DrawCount != 0)
     {
         Draw = &Request->Draws[Request->DrawCount - 1];
@@ -2977,6 +3114,7 @@ Rpi5OglStartWineD3dBatch(
 
     Context->HardwareClearFresh = FALSE;
     Context->BatchVertexCount = 0;
+    Context->BatchIndexCount = 0;
     Context->BatchRequest->DrawCount = 0;
     ZeroMemory(Context->BatchRequest->Draws,
                sizeof(Context->BatchRequest->Draws));
@@ -3012,6 +3150,7 @@ Rpi5OglStartDesktopBatch(
 
     Context->HardwareClearFresh = FALSE;
     Context->BatchVertexCount = 0;
+    Context->BatchIndexCount = 0;
     Context->BatchRequest->DrawCount = 0;
     ZeroMemory(Context->BatchRequest->Draws,
                sizeof(Context->BatchRequest->Draws));
@@ -3048,6 +3187,7 @@ Rpi5OglStartJellyfishBatch(
 
     Context->HardwareClearFresh = FALSE;
     Context->BatchVertexCount = 0;
+    Context->BatchIndexCount = 0;
     Context->BatchRequest->DrawCount = 0;
     ZeroMemory(Context->BatchRequest->Draws,
                sizeof(Context->BatchRequest->Draws));
@@ -3082,6 +3222,7 @@ Rpi5OglStartDepthBatch(
     }
 
     Context->BatchVertexCount = 0;
+    Context->BatchIndexCount = 0;
     Context->BatchRequest->DrawCount = 0;
     ZeroMemory(Context->BatchRequest->Draws,
                sizeof(Context->BatchRequest->Draws));
@@ -3117,6 +3258,7 @@ Rpi5OglStartShadowBatch(
 
     Context->HardwareClearFresh = FALSE;
     Context->BatchVertexCount = 0;
+    Context->BatchIndexCount = 0;
     Context->BatchRequest->DrawCount = 0;
     ZeroMemory(Context->BatchRequest->Draws,
                sizeof(Context->BatchRequest->Draws));
@@ -3483,6 +3625,8 @@ Rpi5OglSubmitPrimitive(
         Context->Stats.LastTriangleHeight = Height;
         Context->Stats.LastTriangleCoveredPixels =
             Result->CoveredPixelCount;
+        Rpi5OglGl2RecordSamplesPassed(Context->Gl2State,
+                                      Result->CoveredPixelCount);
     }
     else
     {
@@ -3597,6 +3741,8 @@ Rpi5OglApiClear(
     {
         return;
     }
+    if (!Rpi5OglGl2ConditionalRenderAllowsDraw(Context->Gl2State))
+        return;
     _mesa_Clear(Mask);
     if ((Mask & GL_DEPTH_BUFFER_BIT) != 0)
     {
@@ -3617,6 +3763,44 @@ Rpi5OglApiClear(
             Context->HardwareClearGeneration = Target.Generation;
         }
     }
+}
+
+VOID
+Rpi5OglClearBufferValues(
+    _In_ GLbitfield Mask,
+    _In_reads_opt_(4) const GLfloat *Color,
+    _In_opt_ const GLfloat *Depth,
+    _In_opt_ const GLint *Stencil)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+    GLfloat SavedColor[4];
+    GLfloat SavedDepth;
+    GLint SavedStencil;
+
+    if (Context == NULL)
+        return;
+    CopyMemory(SavedColor, Context->MesaContext->Color.ClearColor,
+               sizeof(SavedColor));
+    SavedDepth = Context->MesaContext->Depth.Clear;
+    SavedStencil = Context->MesaContext->Stencil.Clear;
+
+    if (Color != NULL)
+        _mesa_ClearColor(Color[0], Color[1], Color[2], Color[3]);
+    if (Depth != NULL)
+        _mesa_ClearDepth(*Depth);
+    if (Stencil != NULL)
+        _mesa_ClearStencil(*Stencil);
+    Rpi5OglApiClear(Mask);
+
+    if (Color != NULL)
+    {
+        _mesa_ClearColor(SavedColor[0], SavedColor[1],
+                         SavedColor[2], SavedColor[3]);
+    }
+    if (Depth != NULL)
+        _mesa_ClearDepth(SavedDepth);
+    if (Stencil != NULL)
+        _mesa_ClearStencil(SavedStencil);
 }
 
 static VOID APIENTRY
@@ -3775,6 +3959,7 @@ Rpi5OglDrawArrays(
     BOOL Desktop2D;
     BOOL WineD3d;
     RPI5VC4_OGL_GRAPH_DRAW_RESULT GraphDrawResult;
+    GLboolean RasterizerDiscard;
     BOOL Ideas;
     BOOL Jellyfish;
     BOOL Terrain;
@@ -3785,12 +3970,24 @@ Rpi5OglDrawArrays(
     if (Context == NULL ||
         !Rpi5OglFboValidateCurrent(Context->FboState, "glDrawArrays"))
         return;
+    if (!Rpi5OglGl2ConditionalRenderAllowsDraw(Context->Gl2State))
+        return;
     if (Context->MesaContext->NewState)
         gl_update_state(Context->MesaContext);
     DrawResult = Rpi5OglGl2PrepareBatchDraw(Context->Gl2State,
                                             Mode,
                                             First,
                                             Count);
+    if (DrawResult == Rpi5OglGl2DrawRejected)
+        return;
+    if (!Rpi5OglGl2CaptureArrays(Context->Gl2State, Mode, First, Count))
+        return;
+    RasterizerDiscard = GL_FALSE;
+    (void)Rpi5OglGl2CompatibilityEnabled(Context->Gl2State,
+                                          GL_RASTERIZER_DISCARD,
+                                          &RasterizerDiscard);
+    if (RasterizerDiscard)
+        return;
     if (DrawResult == Rpi5OglGl2DrawReady)
     {
         if (Count == 0)
@@ -4042,7 +4239,8 @@ Rpi5OglDrawArrays(
                                         Rpi5OglGl2JellyfishMode(
                                             Context->Gl2State) :
                                         Rpi5OglGl2IdeasMode(
-                                            Context->Gl2State)))
+                                            Context->Gl2State),
+                                    FALSE))
         {
             gl_error(Context->MesaContext,
                      GL_INVALID_OPERATION,
@@ -4141,7 +4339,6 @@ Rpi5OglDrawElements(
     RPI5VC4_OGL_GL2_DRAW_RESULT DrawResult;
     GLuint *IndexValues = NULL;
     GLuint MaximumIndex = 0;
-    SIZE_T IndexBytes;
     ULONG ProgramFlags;
     BOOL Textured;
     BOOL LinearTextureFilter;
@@ -4150,19 +4347,61 @@ Rpi5OglDrawElements(
     ULONG TextureGeneration1;
     ULONG OutputVertexCount;
     ULONG OutputTriangleCount;
+    ULONG OutputIndexCount = 0;
     ULONG OutputCapacity;
+    ULONG OutputIndexCapacity = 0;
     PRPI5VC4_V3D_TEXCOORD AuxiliaryTexCoords = NULL;
+    PUSHORT OutputIndices = NULL;
     BOOL Jellyfish;
+    GLboolean RasterizerDiscard = GL_FALSE;
+    BOOL TransformFeedback;
 
     if (Context == NULL ||
         !Rpi5OglFboValidateCurrent(Context->FboState, "glDrawElements"))
     {
         return;
     }
+    if (!Rpi5OglGl2ConditionalRenderAllowsDraw(Context->Gl2State))
+        return;
     DrawResult = Rpi5OglGl2PrepareBatchDraw(Context->Gl2State,
                                             Mode,
                                             0,
                                             Count);
+    TransformFeedback = Rpi5OglGl2TransformFeedbackActive();
+    if (TransformFeedback)
+    {
+        if (Count < 0 ||
+            !Rpi5OglEnsureIndexScratch(Context, (ULONG)Count))
+        {
+            gl_error(Context->MesaContext,
+                     Count < 0 ? GL_INVALID_VALUE : GL_OUT_OF_MEMORY,
+                     "glDrawElements(transform feedback indices)");
+            return;
+        }
+        IndexValues = Context->IndexScratch;
+        if (!Rpi5OglBufferReadElementIndices(Context->BufferState,
+                                             Type,
+                                             Indices,
+                                             Count,
+                                             IndexValues,
+                                             &MaximumIndex) ||
+            !Rpi5OglGl2CaptureElements(Context->Gl2State,
+                                       Mode,
+                                       IndexValues,
+                                       Count))
+        {
+            goto Done;
+        }
+    }
+    else if (!Rpi5OglGl2CaptureArrays(Context->Gl2State, Mode, 0, Count))
+    {
+        return;
+    }
+    (void)Rpi5OglGl2CompatibilityEnabled(Context->Gl2State,
+                                          GL_RASTERIZER_DISCARD,
+                                          &RasterizerDiscard);
+    if (RasterizerDiscard)
+        goto Done;
     if (DrawResult == Rpi5OglGl2DrawNotApplicable)
     {
         if (Context->TerrainGraphActive)
@@ -4170,10 +4409,10 @@ Rpi5OglDrawElements(
         Rpi5OglMaterializeTextureStorage(
             Context->MesaContext->Texture.Current2D);
         _mesa_DrawElements(Mode, Count, Type, Indices);
-        return;
+        goto Done;
     }
     if (DrawResult == Rpi5OglGl2DrawRejected || Count == 0)
-        return;
+        goto Done;
     if (Context->MesaContext->NewState)
         gl_update_state(Context->MesaContext);
 
@@ -4183,7 +4422,7 @@ Rpi5OglDrawElements(
         gl_error(Context->MesaContext,
                  GL_INVALID_OPERATION,
                  "glDrawElements(RPi5 terrain topology)");
-        return;
+        goto Done;
     }
     if (Context->TerrainGraphActive)
         Rpi5OglResetDesktopGraph(Context);
@@ -4197,7 +4436,7 @@ Rpi5OglDrawElements(
         gl_error(Context->MesaContext,
                  GL_INVALID_OPERATION,
                  "glDrawElements(RPi5 jellyfish batch start)");
-        return;
+        goto Done;
     }
     if ((ProgramFlags != RPI5VC4_V3D_BATCH_FLAG_IDEAS && !Jellyfish) ||
         !Context->HardwareBatchActive ||
@@ -4213,25 +4452,22 @@ Rpi5OglDrawElements(
         gl_error(Context->MesaContext,
                  GL_INVALID_OPERATION,
                  "glDrawElements(RPi5 shader batch state)");
-        return;
+        goto Done;
     }
-    if ((SIZE_T)Count > (SIZE_T)-1 / sizeof(*IndexValues))
-    {
-        gl_error(Context->MesaContext,
-                 GL_OUT_OF_MEMORY,
-                 "glDrawElements(RPi5 index allocation)");
-        return;
-    }
-    IndexBytes = (SIZE_T)Count * sizeof(*IndexValues);
-    IndexValues = HeapAlloc(GetProcessHeap(), 0, IndexBytes);
     if (IndexValues == NULL)
     {
-        gl_error(Context->MesaContext,
-                 GL_OUT_OF_MEMORY,
-                 "glDrawElements(RPi5 index allocation)");
-        return;
+        if (Count < 0 ||
+            !Rpi5OglEnsureIndexScratch(Context, (ULONG)Count))
+        {
+            gl_error(Context->MesaContext,
+                     Count < 0 ? GL_INVALID_VALUE : GL_OUT_OF_MEMORY,
+                     "glDrawElements(RPi5 index allocation)");
+            goto Done;
+        }
+        IndexValues = Context->IndexScratch;
     }
-    if (!Rpi5OglBufferReadElementIndices(Context->BufferState,
+    if (!TransformFeedback &&
+        !Rpi5OglBufferReadElementIndices(Context->BufferState,
                                          Type,
                                          Indices,
                                          Count,
@@ -4278,7 +4514,9 @@ Rpi5OglDrawElements(
     if (Jellyfish)
     {
         if (Context->BatchVertexCount >=
-            RPI5VC4_V3D_JELLYFISH_MAX_VERTICES)
+                RPI5VC4_V3D_JELLYFISH_MAX_VERTICES ||
+            (ULONG)Count > RPI5VC4_V3D_JELLYFISH_MAX_INDICES -
+                               Context->BatchIndexCount)
         {
             gl_error(Context->MesaContext,
                      GL_INVALID_OPERATION,
@@ -4293,6 +4531,10 @@ Rpi5OglDrawElements(
                 RPI5VC4_V3D_BATCH_MAX_VERTICES *
                 sizeof(RPI5VC4_V3D_VERTEX)) +
             Context->BatchVertexCount;
+        OutputIndices = Rpi5OglBatchIndexStorage(Context) +
+                        Context->BatchIndexCount;
+        OutputIndexCapacity = RPI5VC4_V3D_JELLYFISH_MAX_INDICES -
+                              Context->BatchIndexCount;
     }
     if (!Rpi5OglGl2BuildIndexedBatch(
             Context->Gl2State,
@@ -4305,18 +4547,26 @@ Rpi5OglDrawElements(
             &Context->BatchRequest->Vertices[Context->BatchVertexCount],
             AuxiliaryTexCoords,
             OutputCapacity,
+            OutputIndices,
+            OutputIndexCapacity,
+            Context->BatchVertexCount,
             &OutputVertexCount,
-            &OutputTriangleCount))
+            &OutputTriangleCount,
+            &OutputIndexCount))
     {
         goto Done;
     }
     if (!Rpi5OglRecordBatchDraw(Context,
-                                Context->BatchVertexCount,
-                                OutputVertexCount,
+                                OutputIndexCount != 0 ?
+                                    Context->BatchIndexCount :
+                                    Context->BatchVertexCount,
+                                OutputIndexCount != 0 ?
+                                    OutputIndexCount : OutputVertexCount,
                                 Jellyfish ?
                                     Rpi5OglGl2JellyfishMode(
                                         Context->Gl2State) :
-                                    Rpi5OglGl2IdeasMode(Context->Gl2State)))
+                                    Rpi5OglGl2IdeasMode(Context->Gl2State),
+                                OutputIndexCount != 0))
     {
         gl_error(Context->MesaContext,
                  GL_INVALID_OPERATION,
@@ -4325,6 +4575,7 @@ Rpi5OglDrawElements(
     }
 
     Context->BatchVertexCount += OutputVertexCount;
+    Context->BatchIndexCount += OutputIndexCount;
     Context->BatchProgramTriangleCount += OutputTriangleCount;
     Context->BatchProgramName =
         Rpi5OglGl2CurrentProgramName(Context->Gl2State);
@@ -4336,7 +4587,7 @@ Rpi5OglDrawElements(
     Context->BatchTextureGeneration1 = TextureGeneration1;
 
 Done:
-    HeapFree(GetProcessHeap(), 0, IndexValues);
+    return;
 }
 
 static VOID APIENTRY
@@ -4361,6 +4612,86 @@ Rpi5OglDrawRangeElements(
     }
 
     Rpi5OglDrawElements(Mode, Count, Type, Indices);
+}
+
+static VOID APIENTRY
+Rpi5OglMultiDrawArrays(
+    _In_ GLenum Mode,
+    _In_reads_(PrimitiveCount) const GLint *First,
+    _In_reads_(PrimitiveCount) const GLsizei *Count,
+    _In_ GLsizei PrimitiveCount)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+    GLsizei Primitive;
+
+    if (Context == NULL)
+        return;
+    if (PrimitiveCount < 0)
+    {
+        gl_error(Context->MesaContext,
+                 GL_INVALID_VALUE,
+                 "glMultiDrawArrays(primcount)");
+        return;
+    }
+    if (INSIDE_BEGIN_END(Context->MesaContext))
+    {
+        gl_error(Context->MesaContext,
+                 GL_INVALID_OPERATION,
+                 "glMultiDrawArrays");
+        return;
+    }
+    if (PrimitiveCount != 0 && (First == NULL || Count == NULL))
+    {
+        gl_error(Context->MesaContext,
+                 GL_INVALID_VALUE,
+                 "glMultiDrawArrays(arrays)");
+        return;
+    }
+    for (Primitive = 0; Primitive < PrimitiveCount; Primitive++)
+        Rpi5OglDrawArrays(Mode, First[Primitive], Count[Primitive]);
+}
+
+static VOID APIENTRY
+Rpi5OglMultiDrawElements(
+    _In_ GLenum Mode,
+    _In_reads_(PrimitiveCount) const GLsizei *Count,
+    _In_ GLenum Type,
+    _In_reads_(PrimitiveCount) const GLvoid *const *Indices,
+    _In_ GLsizei PrimitiveCount)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+    GLsizei Primitive;
+
+    if (Context == NULL)
+        return;
+    if (PrimitiveCount < 0)
+    {
+        gl_error(Context->MesaContext,
+                 GL_INVALID_VALUE,
+                 "glMultiDrawElements(primcount)");
+        return;
+    }
+    if (INSIDE_BEGIN_END(Context->MesaContext))
+    {
+        gl_error(Context->MesaContext,
+                 GL_INVALID_OPERATION,
+                 "glMultiDrawElements");
+        return;
+    }
+    if (PrimitiveCount != 0 && (Count == NULL || Indices == NULL))
+    {
+        gl_error(Context->MesaContext,
+                 GL_INVALID_VALUE,
+                 "glMultiDrawElements(arrays)");
+        return;
+    }
+    for (Primitive = 0; Primitive < PrimitiveCount; Primitive++)
+    {
+        Rpi5OglDrawElements(Mode,
+                            Count[Primitive],
+                            Type,
+                            Indices[Primitive]);
+    }
 }
 
 static VOID
@@ -5024,6 +5355,7 @@ Rpi5OglSubmitDesktopGraph(
          * DrvSwapBuffers or cancel the graph's direct-present indication.
         */
         Context->HardwareBatchActive = FALSE;
+        Context->BatchIndexCount = 0;
         Context->BatchRequest->DrawCount = 0;
     }
     for (ResourceIndex = 0;
@@ -5788,6 +6120,7 @@ Rpi5OglSubmitBatch(
     ULONG DestinationY = 0;
     PVOID NewResult;
     ULONG VertexCount = Context->BatchVertexCount;
+    ULONG IndexCount = Context->BatchIndexCount;
     ULONG ProgramTriangleCount = Context->BatchProgramTriangleCount;
     GLuint ProgramName = Context->BatchProgramName;
     ULONG ProgramFlags = Context->BatchProgramFlags;
@@ -5822,6 +6155,7 @@ Rpi5OglSubmitBatch(
     Context->HardwareBatchActive = FALSE;
     Context->BatchDirectPresented = FALSE;
     Context->BatchVertexCount = 0;
+    Context->BatchIndexCount = 0;
     Context->BatchProgramTriangleCount = 0;
     Context->BatchProgramName = 0;
     Context->BatchProgramFlags = 0;
@@ -5921,6 +6255,11 @@ Rpi5OglSubmitBatch(
         (ProgramFlags & RPI5VC4_V3D_BATCH_FLAG_JELLYFISH) != 0;
     Shadow =
         (ProgramFlags & RPI5VC4_V3D_BATCH_FLAG_SHADOW) != 0;
+    if ((!Jellyfish && IndexCount != 0) ||
+        IndexCount > RPI5VC4_V3D_JELLYFISH_MAX_INDICES)
+    {
+        return FALSE;
+    }
     if (HeightMapped || Jellyfish)
     {
         PRPI5VC4_V3D_TEXCOORD Source =
@@ -5940,12 +6279,26 @@ Rpi5OglSubmitBatch(
                    VertexCount * sizeof(*Source));
         RequestSize += VertexCount * sizeof(*Source);
     }
+    if (IndexCount != 0)
+    {
+        PUSHORT Source = Rpi5OglBatchIndexStorage(Context);
+        PUSHORT Destination = (PUSHORT)((PUCHAR)Request->Vertices +
+            VertexCount * sizeof(RPI5VC4_V3D_VERTEX) +
+            VertexCount * sizeof(RPI5VC4_V3D_TEXCOORD));
+
+        MoveMemory(Destination,
+                   Source,
+                   IndexCount * sizeof(*Source));
+        RequestSize += IndexCount * sizeof(*Source);
+    }
     Request->Size = RequestSize;
     Request->AbiVersion = RPI5VC4_XPDM_ABI_VERSION;
     Request->Width = Target.Width;
     Request->Height = Target.Height;
     Request->ClearColor = Context->ClearColor;
     Request->Flags = ProgramFlags;
+    if (Rpi5OglGl2SamplesQueryActive(Context->Gl2State))
+        Request->Flags |= RPI5VC4_V3D_BATCH_FLAG_OCCLUSION_QUERY;
     Ideas = (ProgramFlags & RPI5VC4_V3D_BATCH_FLAG_IDEAS) != 0;
     if (Shadow && Request->DrawCount == 0)
         return FALSE;
@@ -6107,7 +6460,8 @@ Rpi5OglSubmitBatch(
     }
     Context->HardwareClearFresh = FALSE;
     Context->Stats.HardwareClearCount++;
-    Context->Stats.HardwareTriangleCount += VertexCount / 3;
+    Context->Stats.HardwareTriangleCount +=
+        Jellyfish ? ProgramTriangleCount : VertexCount / 3;
     Context->Stats.HardwareProgramTriangleCount += ProgramTriangleCount;
     if (ProgramTriangleCount != 0)
         Context->Stats.LastProgramTriangleName = ProgramName;
@@ -6115,6 +6469,8 @@ Rpi5OglSubmitBatch(
     Context->Stats.LastHeight = Target.Height;
     Context->Stats.LastTriangleWidth = Target.Width;
     Context->Stats.LastTriangleHeight = Target.Height;
+    Rpi5OglGl2RecordSamplesPassed(Context->Gl2State,
+                                  Result->CoveredPixelCount);
     return TRUE;
 }
 
@@ -6236,6 +6592,16 @@ Rpi5OglRendererString(VOID)
     return "RPi5-V3D-7.1-Hybrid-GL2";
 }
 
+static const GLubyte *const Rpi5OglExtensionNames[] =
+{
+    (const GLubyte *)"GL_EXT_paletted_texture",
+    (const GLubyte *)"GL_EXT_bgra",
+    (const GLubyte *)"GL_WIN_swap_hint",
+    (const GLubyte *)"GL_EXT_framebuffer_object",
+    (const GLubyte *)"GL_EXT_framebuffer_blit",
+    (const GLubyte *)"GL_ARB_depth_texture",
+};
+
 static const GLubyte *
 Rpi5OglGetString(
     _In_ GLcontext *Mesa,
@@ -6258,12 +6624,55 @@ Rpi5OglGetString(
     return gl_GetString(Mesa, Name);
 }
 
+static const GLubyte *APIENTRY
+Rpi5OglGetStringi(
+    _In_ GLenum Name,
+    _In_ GLuint Index)
+{
+    PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+
+    if (Context == NULL)
+        return NULL;
+    if (INSIDE_BEGIN_END(Context->MesaContext))
+    {
+        gl_error(Context->MesaContext, GL_INVALID_OPERATION, "glGetStringi");
+        return NULL;
+    }
+    if (Name != GL_EXTENSIONS)
+    {
+        gl_error(Context->MesaContext,
+                 GL_INVALID_ENUM,
+                 "glGetStringi(name)");
+        return NULL;
+    }
+    if (Index >= RTL_NUMBER_OF(Rpi5OglExtensionNames))
+    {
+        gl_error(Context->MesaContext,
+                 GL_INVALID_VALUE,
+                 "glGetStringi(index)");
+        return NULL;
+    }
+    return Rpi5OglExtensionNames[Index];
+}
+
 static VOID APIENTRY
 Rpi5OglGetBooleanv(
     _In_ GLenum ParameterName,
     _Out_ GLboolean *Parameters)
 {
     PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+    GLdouble Value;
+
+    if (Context != NULL &&
+        Rpi5OglGetSampleState(Context,
+                              ParameterName,
+                              &Value,
+                              "glGetBooleanv"))
+    {
+        if (Parameters != NULL && !INSIDE_BEGIN_END(Context->MesaContext))
+            Parameters[0] = Value != 0.0;
+        return;
+    }
 
     if (Context != NULL &&
         Rpi5OglGl2GetBooleanv(Context->Gl2State,
@@ -6281,6 +6690,18 @@ Rpi5OglGetDoublev(
     _Out_ GLdouble *Parameters)
 {
     PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+    GLdouble Value;
+
+    if (Context != NULL &&
+        Rpi5OglGetSampleState(Context,
+                              ParameterName,
+                              &Value,
+                              "glGetDoublev"))
+    {
+        if (Parameters != NULL && !INSIDE_BEGIN_END(Context->MesaContext))
+            Parameters[0] = Value;
+        return;
+    }
 
     if (Context != NULL &&
         Rpi5OglGl2GetDoublev(Context->Gl2State,
@@ -6298,6 +6719,18 @@ Rpi5OglGetFloatv(
     _Out_ GLfloat *Parameters)
 {
     PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+    GLdouble Value;
+
+    if (Context != NULL &&
+        Rpi5OglGetSampleState(Context,
+                              ParameterName,
+                              &Value,
+                              "glGetFloatv"))
+    {
+        if (Parameters != NULL && !INSIDE_BEGIN_END(Context->MesaContext))
+            Parameters[0] = (GLfloat)Value;
+        return;
+    }
 
     if (Context != NULL &&
         Rpi5OglGl2GetFloatv(Context->Gl2State,
@@ -6315,6 +6748,32 @@ Rpi5OglGetIntegerv(
     _Out_ GLint *Parameters)
 {
     PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+    GLdouble Value;
+
+    if (Context != NULL && ParameterName == GL_NUM_EXTENSIONS)
+    {
+        if (INSIDE_BEGIN_END(Context->MesaContext))
+        {
+            gl_error(Context->MesaContext,
+                     GL_INVALID_OPERATION,
+                     "glGetIntegerv");
+        }
+        else if (Parameters != NULL)
+        {
+            Parameters[0] = RTL_NUMBER_OF(Rpi5OglExtensionNames);
+        }
+        return;
+    }
+    if (Context != NULL &&
+        Rpi5OglGetSampleState(Context,
+                              ParameterName,
+                              &Value,
+                              "glGetIntegerv"))
+    {
+        if (Parameters != NULL && !INSIDE_BEGIN_END(Context->MesaContext))
+            Parameters[0] = (GLint)Value;
+        return;
+    }
 
     if (Context != NULL &&
         Rpi5OglGl2GetIntegerv(Context->Gl2State,
@@ -6468,6 +6927,7 @@ Rpi5OglBatchClearColorAndDepth(
         Rpi5OglDiscardDeferredTargetClear(Context, &Target);
     Context->HardwareClearFresh = FALSE;
     Context->BatchVertexCount = 0;
+    Context->BatchIndexCount = 0;
     Context->BatchRequest->DrawCount = 0;
     ZeroMemory(Context->BatchRequest->Draws,
                sizeof(Context->BatchRequest->Draws));
@@ -6939,9 +7399,8 @@ Rpi5OglTextureParameterChanged(
     PRPI5VC4_OGL_CONTEXT Context = Mesa->DriverCtx;
 
     UNREFERENCED_PARAMETER(Target);
-    UNREFERENCED_PARAMETER(Name);
     UNREFERENCED_PARAMETER(Parameters);
-    Rpi5OglGl2TextureChanged(Context->Gl2State, Texture);
+    Rpi5OglGl2TextureParameterChanged(Context->Gl2State, Texture, Name);
 }
 
 static VOID
@@ -7211,7 +7670,8 @@ DrvCreateContext(
         FIELD_OFFSET(RPI5VC4_V3D_BATCH_REQUEST, Vertices) +
         RPI5VC4_V3D_BATCH_MAX_VERTICES * sizeof(RPI5VC4_V3D_VERTEX) +
         RPI5VC4_V3D_JELLYFISH_MAX_VERTICES *
-        sizeof(RPI5VC4_V3D_TEXCOORD));
+            sizeof(RPI5VC4_V3D_TEXCOORD) +
+        RPI5VC4_V3D_JELLYFISH_MAX_INDICES * sizeof(USHORT));
     if (Context->BatchRequest == NULL)
         goto Failure;
 
@@ -7271,6 +7731,8 @@ DrvCreateContext(
     Context->CurrentColor = 0xFFFFFFFF;
     Context->BufferMode = GL_BACK;
     Context->SwapInterval = 1;
+    Context->MultisampleEnabled = TRUE;
+    Context->SampleCoverageValue = 1.0f;
     Context->Stats.Size = sizeof(Context->Stats);
     Context->Stats.Version = RPI5VC4_OGL_STATS_VERSION;
     return (DHGLRC)Context;
@@ -7291,6 +7753,8 @@ Failure:
         HeapFree(GetProcessHeap(), 0, Context->BackBuffer);
     if (Context->BatchResult != NULL)
         HeapFree(GetProcessHeap(), 0, Context->BatchResult);
+    if (Context->IndexScratch != NULL)
+        HeapFree(GetProcessHeap(), 0, Context->IndexScratch);
     if (Context->BatchRequest != NULL)
         HeapFree(GetProcessHeap(), 0, Context->BatchRequest);
     if (Context->TerrainVertices != NULL)
@@ -7335,6 +7799,8 @@ DrvDeleteContext(
     HeapFree(GetProcessHeap(), 0, Context->BackBuffer);
     if (Context->BatchResult != NULL)
         HeapFree(GetProcessHeap(), 0, Context->BatchResult);
+    if (Context->IndexScratch != NULL)
+        HeapFree(GetProcessHeap(), 0, Context->IndexScratch);
     if (Context->TerrainVertices != NULL)
         HeapFree(GetProcessHeap(), 0, Context->TerrainVertices);
     HeapFree(GetProcessHeap(), 0, Context->BatchRequest);
@@ -7482,6 +7948,14 @@ DrvGetProcAddress(
         return (PROC)Rpi5OglWglGetSwapIntervalExt;
     if (Name != NULL && lstrcmpA(Name, "Rpi5Vc4GetStats") == 0)
         return (PROC)Rpi5Vc4GetStats;
+    if (Name != NULL && lstrcmpA(Name, "glGetStringi") == 0)
+        return (PROC)Rpi5OglGetStringi;
+    if (Name != NULL && lstrcmpA(Name, "glMultiDrawArrays") == 0)
+        return (PROC)Rpi5OglMultiDrawArrays;
+    if (Name != NULL && lstrcmpA(Name, "glMultiDrawElements") == 0)
+        return (PROC)Rpi5OglMultiDrawElements;
+    if (Name != NULL && lstrcmpA(Name, "glSampleCoverage") == 0)
+        return (PROC)Rpi5OglSampleCoverage;
     if (Name != NULL && lstrcmpA(Name, "glDrawRangeElements") == 0)
         return (PROC)Rpi5OglDrawRangeElements;
     if (Name != NULL &&
@@ -7630,6 +8104,7 @@ DrvSwapBuffers(
     _In_ HDC Hdc)
 {
     PRPI5VC4_OGL_CONTEXT Context = Rpi5OglCurrentContext();
+    BOOL Success;
 
     if (Context == NULL || Context->Hdc != Hdc)
         return FALSE;
@@ -7642,13 +8117,19 @@ DrvSwapBuffers(
         Context->SwapInterval = 0;
     }
     if (!Rpi5OglSubmitBatch(Context, TRUE))
-        return FALSE;
-    if (Context->BatchDirectPresented)
+    {
+        Success = FALSE;
+    }
+    else if (Context->BatchDirectPresented)
     {
         Context->BatchDirectPresented = FALSE;
-        return TRUE;
+        Success = TRUE;
     }
-    return Rpi5OglPresent(Context);
+    else
+    {
+        Success = Rpi5OglPresent(Context);
+    }
+    return Success;
 }
 
 BOOL WINAPI

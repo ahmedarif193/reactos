@@ -22,6 +22,7 @@
 #include <blend.h>
 #include <macros.h>
 #include <misc.h>
+#include <stencil.h>
 
 #include "rpi5vc4ogl_gl2.h"
 
@@ -34,10 +35,20 @@ VOID
 Rpi5OglDiscardRetainedDepthTexture(
     _In_opt_ struct gl_texture_object *Texture);
 
-extern void APIENTRY _mesa_StencilFunc(GLenum Func, GLint Ref, GLuint Mask);
-extern void APIENTRY _mesa_StencilOp(GLenum Fail,
-                                     GLenum DepthFail,
-                                     GLenum DepthPass);
+extern void APIENTRY _mesa_TexParameteriv(GLenum Target,
+                                          GLenum ParameterName,
+                                          const GLint *Parameters);
+extern void APIENTRY _mesa_GetTexParameteriv(GLenum Target,
+                                             GLenum ParameterName,
+                                             GLint *Parameters);
+extern void APIENTRY _mesa_ColorMask(GLboolean Red,
+                                     GLboolean Green,
+                                     GLboolean Blue,
+                                     GLboolean Alpha);
+extern void APIENTRY _mesa_Enable(GLenum Capability);
+extern void APIENTRY _mesa_Disable(GLenum Capability);
+extern GLboolean APIENTRY _mesa_IsEnabled(GLenum Capability);
+extern void APIENTRY _mesa_Finish(VOID);
 
 #define RPI5VC4_GL2_MAX_SHADERS       32
 #define RPI5VC4_GL2_MAX_PROGRAMS      16
@@ -46,6 +57,9 @@ extern void APIENTRY _mesa_StencilOp(GLenum Fail,
 #define RPI5VC4_GL2_INFO_LOG_BYTES      192
 #define RPI5VC4_GL2_MAX_VERTEX_ATTRIBS    16
 #define RPI5VC4_GL2_MAX_VERTEX_ARRAYS     32
+#define RPI5VC4_GL3_MAX_TRANSFORM_FEEDBACK_VARYINGS 4
+#define RPI5VC4_GL3_MAX_VARYING_NAME              64
+#define RPI5VC4_GL3_MAX_QUERIES                    32
 #define RPI5VC4_GL2_UNIFORM_MVP            0
 #define RPI5VC4_GL2_UNIFORM_NORMAL_MATRIX  1
 #define RPI5VC4_GL2_UNIFORM_TEXTURE         2
@@ -85,6 +99,8 @@ typedef enum _RPI5VC4_OGL_SHADER_EXECUTABLE
     Rpi5OglShaderExecutableFixedFragment,
     Rpi5OglShaderExecutableGenericVertex,
     Rpi5OglShaderExecutableGenericFragment,
+    Rpi5OglShaderExecutableGeneric130Vertex,
+    Rpi5OglShaderExecutableGeneric130Fragment,
     Rpi5OglShaderExecutableBuildVertex,
     Rpi5OglShaderExecutableShadowHorseVertex,
     Rpi5OglShaderExecutableGouraudVertex,
@@ -288,6 +304,14 @@ typedef struct _RPI5VC4_OGL_PROGRAM
     GLint TexCoordAttribute;
     GLint TangentAttribute;
     GLint TriangleVertexAttribute[3];
+    GLint FragmentColorBinding;
+    BOOL FragmentColorBindingSet;
+    BOOL Version130;
+    GLenum TransformFeedbackBufferMode;
+    ULONG TransformFeedbackVaryingCount;
+    CHAR TransformFeedbackVaryings[
+        RPI5VC4_GL3_MAX_TRANSFORM_FEEDBACK_VARYINGS]
+        [RPI5VC4_GL3_MAX_VARYING_NAME];
     GLfloat ModelViewProjectionMatrix[16];
     GLfloat LightMatrix[16];
     GLfloat NormalMatrix[16];
@@ -374,6 +398,42 @@ typedef struct _RPI5VC4_OGL_VERTEX_ARRAY
         VertexAttribs[RPI5VC4_GL2_MAX_VERTEX_ATTRIBS];
 } RPI5VC4_OGL_VERTEX_ARRAY, *PRPI5VC4_OGL_VERTEX_ARRAY;
 
+typedef struct _RPI5VC4_OGL_QUERY
+{
+    GLuint Name;
+    GLenum Target;
+    BOOL Object;
+    BOOL Active;
+    BOOL Available;
+    BOOL DeletePending;
+    GLuint Result;
+} RPI5VC4_OGL_QUERY, *PRPI5VC4_OGL_QUERY;
+
+typedef struct _RPI5VC4_OGL_JELLYFISH_VERTEX_CACHE_ENTRY
+{
+    ULONG Generation;
+    ULONG OutputIndex;
+    BOOL AnimationTermsValid;
+    GLfloat ObjectY;
+    GLfloat AnimationScale;
+    GLfloat HalfY;
+    GLfloat DoubleY;
+    GLfloat SinHalfY;
+    GLfloat CosHalfY;
+    GLfloat SinDoubleY;
+    GLfloat CosDoubleY;
+    RPI5VC4_V3D_VERTEX Vertex;
+    RPI5VC4_V3D_TEXCOORD Auxiliary;
+} RPI5VC4_OGL_JELLYFISH_VERTEX_CACHE_ENTRY,
+  *PRPI5VC4_OGL_JELLYFISH_VERTEX_CACHE_ENTRY;
+
+typedef struct _RPI5VC4_OGL_TEXTURE_METADATA
+{
+    struct gl_texture_object *Texture;
+    GLuint IntegerBorderColor[4];
+    struct _RPI5VC4_OGL_TEXTURE_METADATA *Next;
+} RPI5VC4_OGL_TEXTURE_METADATA, *PRPI5VC4_OGL_TEXTURE_METADATA;
+
 struct _RPI5VC4_OGL_GL2_STATE
 {
     GLcontext *Mesa;
@@ -397,6 +457,7 @@ struct _RPI5VC4_OGL_GL2_STATE
     ULONG TextureGeneration1;
     ULONG ActiveTextureUnit;
     struct gl_texture_object *TextureUnits[RPI5VC4_OGL_TEXTURE_UNIT_COUNT];
+    PRPI5VC4_OGL_TEXTURE_METADATA TextureMetadata;
     GLenum BlendEquationRgb;
     GLenum BlendEquationAlpha;
     GLenum BlendSourceRgb;
@@ -404,9 +465,34 @@ struct _RPI5VC4_OGL_GL2_STATE
     GLenum BlendSourceAlpha;
     GLenum BlendDestinationAlpha;
     GLfloat BlendColor[4];
+    GLenum ClampVertexColor;
+    GLenum ClampFragmentColor;
+    GLenum ClampReadColor;
+    GLfloat PointSizeMinimum;
+    GLfloat PointSizeMaximum;
+    GLfloat PointFadeThreshold;
+    GLfloat PointDistanceAttenuation[3];
+    GLenum PointSpriteCoordOrigin;
+    BOOL RasterizerDiscard;
+    BOOL TransformFeedbackActive;
+    GLenum TransformFeedbackPrimitiveMode;
+    SIZE_T TransformFeedbackPositions[
+        RPI5VC4_OGL_MAX_TRANSFORM_FEEDBACK_BUFFERS];
+    ULONG TransformFeedbackPrimitivesWritten;
+    GLuint NextQueryName;
+    GLuint ActiveSamplesQuery;
+    GLuint ActivePrimitivesGeneratedQuery;
+    GLuint ActiveTransformFeedbackQuery;
+    RPI5VC4_OGL_QUERY Queries[RPI5VC4_GL3_MAX_QUERIES];
+    BOOL ConditionalRenderActive;
+    BOOL ConditionalRenderPass;
+    GLuint ConditionalRenderQuery;
     GLfloat IdeasLampLights[12];
     GLfloat IdeasLogoLight[4];
     GLfloat JellyfishGradientColors[RPI5VC4_V3D_JELLYFISH_UNIFORM_WORDS];
+    PRPI5VC4_OGL_JELLYFISH_VERTEX_CACHE_ENTRY JellyfishVertexCache;
+    ULONG JellyfishVertexCacheCapacity;
+    ULONG JellyfishVertexCacheGeneration;
 };
 
 static PRPI5VC4_OGL_SHADER
@@ -991,6 +1077,18 @@ Rpi5OglGl2SourceExecutable(
     static const CHAR GenericFragmentMainVoid[] =
         "varyingvec4out_color;"
         "voidmain(void){gl_FragData[0]=out_color;}";
+    static const CHAR Generic130VertexMain[] =
+        "invec4pos;invec4color;outvec4out_color;"
+        "voidmain(){gl_Position=pos;out_color=color;}";
+    static const CHAR Generic130VertexMainVoid[] =
+        "invec4pos;invec4color;outvec4out_color;"
+        "voidmain(void){gl_Position=pos;out_color=color;}";
+    static const CHAR Generic130FragmentMain[] =
+        "invec4out_color;outvec4frag_color;"
+        "voidmain(){frag_color=out_color;}";
+    static const CHAR Generic130FragmentMainVoid[] =
+        "invec4out_color;outvec4frag_color;"
+        "voidmain(void){frag_color=out_color;}";
     CHAR Normalized[RPI5VC4_GL2_MAX_NORMALIZED];
     PCSTR Body;
     ULONG NormalizedLength;
@@ -1296,6 +1394,8 @@ Rpi5OglGl2SourceExecutable(
     Body = Normalized;
     if (strncmp(Body, "#version120", sizeof("#version120") - 1) == 0)
         Body += sizeof("#version120") - 1;
+    else if (strncmp(Body, "#version130", sizeof("#version130") - 1) == 0)
+        Body += sizeof("#version130") - 1;
 
     if (Shader->Type == GL_VERTEX_SHADER)
     {
@@ -1309,6 +1409,11 @@ Rpi5OglGl2SourceExecutable(
         {
             return Rpi5OglShaderExecutableGenericVertex;
         }
+        if (lstrcmpA(Body, Generic130VertexMain) == 0 ||
+            lstrcmpA(Body, Generic130VertexMainVoid) == 0)
+        {
+            return Rpi5OglShaderExecutableGeneric130Vertex;
+        }
         return Rpi5OglShaderExecutableNone;
     }
     if (lstrcmpA(Body, FragmentMain) == 0 ||
@@ -1320,6 +1425,11 @@ Rpi5OglGl2SourceExecutable(
         lstrcmpA(Body, GenericFragmentMainVoid) == 0)
     {
         return Rpi5OglShaderExecutableGenericFragment;
+    }
+    if (lstrcmpA(Body, Generic130FragmentMain) == 0 ||
+        lstrcmpA(Body, Generic130FragmentMainVoid) == 0)
+    {
+        return Rpi5OglShaderExecutableGeneric130Fragment;
     }
     return Rpi5OglShaderExecutableNone;
 }
@@ -1678,6 +1788,8 @@ Rpi5OglCreateProgram(VOID)
     Program->NormalAttribute = -1;
     Program->TexCoordAttribute = -1;
     Program->TangentAttribute = -1;
+    Program->FragmentColorBinding = -1;
+    Program->TransformFeedbackBufferMode = GL_INTERLEAVED_ATTRIBS;
     for (TriangleVertex = 0;
          TriangleVertex < RTL_NUMBER_OF(Program->TriangleVertexBinding);
          TriangleVertex++)
@@ -1768,6 +1880,215 @@ Rpi5OglDetachShader(
         Rpi5OglGl2ReleaseShader(Shader);
 }
 
+static VOID APIENTRY
+Rpi5OglBindFragDataLocation(
+    _In_ GLuint ProgramName,
+    _In_ GLuint Color,
+    _In_z_ const GLchar *Name)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_PROGRAM Program;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glBindFragDataLocation"))
+        return;
+    Program = Rpi5OglGl2FindProgram(State, ProgramName);
+    if (Program == NULL)
+    {
+        Rpi5OglGl2ProgramNameError(State, ProgramName,
+                                   "glBindFragDataLocation(program)");
+        return;
+    }
+    if (Color >= 1)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glBindFragDataLocation(color)");
+        return;
+    }
+    if (Name == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glBindFragDataLocation(name)");
+        return;
+    }
+    if (lstrlenA(Name) >= 3 &&
+        Name[0] == 'g' && Name[1] == 'l' && Name[2] == '_')
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                        "glBindFragDataLocation(reserved name)");
+        return;
+    }
+    if (lstrcmpA(Name, "frag_color") == 0)
+    {
+        Program->FragmentColorBinding = (GLint)Color;
+        Program->FragmentColorBindingSet = TRUE;
+    }
+}
+
+static GLint APIENTRY
+Rpi5OglGetFragDataLocation(
+    _In_ GLuint ProgramName,
+    _In_z_ const GLchar *Name)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_PROGRAM Program;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glGetFragDataLocation"))
+        return -1;
+    Program = Rpi5OglGl2FindProgram(State, ProgramName);
+    if (Program == NULL)
+    {
+        Rpi5OglGl2ProgramNameError(State, ProgramName,
+                                   "glGetFragDataLocation(program)");
+        return -1;
+    }
+    if (Name == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glGetFragDataLocation(name)");
+        return -1;
+    }
+    if (!Program->Linked)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                        "glGetFragDataLocation(link status)");
+        return -1;
+    }
+    if (!Program->Version130 || lstrcmpA(Name, "frag_color") != 0)
+        return -1;
+    return Program->FragmentColorBindingSet ?
+        Program->FragmentColorBinding : 0;
+}
+
+static VOID APIENTRY
+Rpi5OglTransformFeedbackVaryings(
+    _In_ GLuint ProgramName,
+    _In_ GLsizei Count,
+    _In_reads_(Count) const GLchar *const *Varyings,
+    _In_ GLenum BufferMode)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_PROGRAM Program;
+    SIZE_T Length;
+    GLsizei Index;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glTransformFeedbackVaryings"))
+        return;
+    Program = Rpi5OglGl2FindProgram(State, ProgramName);
+    if (Program == NULL)
+    {
+        Rpi5OglGl2ProgramNameError(State, ProgramName,
+                                   "glTransformFeedbackVaryings(program)");
+        return;
+    }
+    if (Count < 0 ||
+        (Count != 0 && Varyings == NULL) ||
+        (ULONG)Count > RPI5VC4_GL3_MAX_TRANSFORM_FEEDBACK_VARYINGS)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glTransformFeedbackVaryings(count)");
+        return;
+    }
+    if (BufferMode != GL_INTERLEAVED_ATTRIBS &&
+        BufferMode != GL_SEPARATE_ATTRIBS)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM,
+                        "glTransformFeedbackVaryings(bufferMode)");
+        return;
+    }
+    if (State->TransformFeedbackActive &&
+        State->CurrentProgram == ProgramName)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                        "glTransformFeedbackVaryings(active)");
+        return;
+    }
+    for (Index = 0; Index < Count; Index++)
+    {
+        if (Varyings[Index] == NULL)
+        {
+            Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                            "glTransformFeedbackVaryings(varying)");
+            return;
+        }
+        Length = lstrlenA(Varyings[Index]);
+        if (Length == 0 || Length >= RPI5VC4_GL3_MAX_VARYING_NAME)
+        {
+            Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                            "glTransformFeedbackVaryings(name length)");
+            return;
+        }
+    }
+
+    ZeroMemory(Program->TransformFeedbackVaryings,
+               sizeof(Program->TransformFeedbackVaryings));
+    for (Index = 0; Index < Count; Index++)
+    {
+        lstrcpynA(Program->TransformFeedbackVaryings[Index],
+                  Varyings[Index],
+                  RPI5VC4_GL3_MAX_VARYING_NAME);
+    }
+    Program->TransformFeedbackVaryingCount = Count;
+    Program->TransformFeedbackBufferMode = BufferMode;
+    Program->Linked = FALSE;
+    Program->Validated = FALSE;
+    Program->Executable = Rpi5OglProgramExecutableNone;
+}
+
+static VOID APIENTRY
+Rpi5OglGetTransformFeedbackVarying(
+    _In_ GLuint ProgramName,
+    _In_ GLuint Index,
+    _In_ GLsizei BufferSize,
+    _Out_opt_ GLsizei *Length,
+    _Out_opt_ GLsizei *Size,
+    _Out_opt_ GLenum *Type,
+    _Out_writes_bytes_opt_(BufferSize) GLchar *Name)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_PROGRAM Program;
+
+    if (!Rpi5OglGl2CanChangeState(State,
+                                  "glGetTransformFeedbackVarying"))
+    {
+        return;
+    }
+    Program = Rpi5OglGl2FindProgram(State, ProgramName);
+    if (Program == NULL)
+    {
+        Rpi5OglGl2ProgramNameError(State, ProgramName,
+                                   "glGetTransformFeedbackVarying(program)");
+        return;
+    }
+    if (!Program->Linked)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                        "glGetTransformFeedbackVarying(link status)");
+        return;
+    }
+    if (Index >= Program->TransformFeedbackVaryingCount)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glGetTransformFeedbackVarying(index)");
+        return;
+    }
+    if (Size == NULL || Type == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glGetTransformFeedbackVarying(params)");
+        return;
+    }
+    *Size = 1;
+    *Type = GL_FLOAT_VEC4;
+    Rpi5OglGl2CopyTextResult(
+        State,
+        "glGetTransformFeedbackVarying",
+        Program->TransformFeedbackVaryings[Index],
+        lstrlenA(Program->TransformFeedbackVaryings[Index]),
+        BufferSize,
+        Length,
+        Name);
+}
+
 static BOOL
 Rpi5OglGl2AssignGenericAttributes(
     _In_ PRPI5VC4_OGL_PROGRAM Program,
@@ -1813,6 +2134,41 @@ Rpi5OglGl2AssignGenericAttributes(
         }
     }
     return *PositionAttribute >= 0 && *ColorAttribute >= 0;
+}
+
+static BOOL
+Rpi5OglGl2ValidateTransformFeedbackVaryings(
+    _In_ PRPI5VC4_OGL_PROGRAM Program,
+    _In_ RPI5VC4_OGL_PROGRAM_EXECUTABLE Executable)
+{
+    ULONG Index;
+    ULONG Other;
+
+    if (Program->TransformFeedbackVaryingCount == 0)
+        return TRUE;
+    if (Executable != Rpi5OglProgramExecutableGenericColor)
+        return FALSE;
+    for (Index = 0;
+         Index < Program->TransformFeedbackVaryingCount;
+         Index++)
+    {
+        if (lstrcmpA(Program->TransformFeedbackVaryings[Index],
+                     "out_color") != 0 &&
+            lstrcmpA(Program->TransformFeedbackVaryings[Index],
+                     "gl_Position") != 0)
+        {
+            return FALSE;
+        }
+        for (Other = 0; Other < Index; Other++)
+        {
+            if (lstrcmpA(Program->TransformFeedbackVaryings[Index],
+                         Program->TransformFeedbackVaryings[Other]) == 0)
+            {
+                return FALSE;
+            }
+        }
+    }
+    return TRUE;
 }
 
 static BOOL
@@ -2332,9 +2688,17 @@ Rpi5OglLinkProgram(
     GLint TexCoordAttribute = -1;
     GLint TangentAttribute = -1;
     GLint TriangleVertexAttributes[3] = {-1, -1, -1};
+    BOOL Version130 = FALSE;
 
     if (!Rpi5OglGl2CanChangeState(State, "glLinkProgram"))
         return;
+    if (State->TransformFeedbackActive &&
+        State->CurrentProgram == ProgramName)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                        "glLinkProgram(transform feedback active)");
+        return;
+    }
     Program = Rpi5OglGl2FindProgram(State, ProgramName);
     if (Program == NULL)
     {
@@ -2379,6 +2743,18 @@ Rpi5OglLinkProgram(
                      &ColorAttribute))
         {
             Executable = Rpi5OglProgramExecutableGenericColor;
+        }
+        else if (VertexShader->Executable ==
+                     Rpi5OglShaderExecutableGeneric130Vertex &&
+                 FragmentShader->Executable ==
+                     Rpi5OglShaderExecutableGeneric130Fragment &&
+                 Rpi5OglGl2AssignGenericAttributes(
+                     Program,
+                     &PositionAttribute,
+                     &ColorAttribute))
+        {
+            Executable = Rpi5OglProgramExecutableGenericColor;
+            Version130 = TRUE;
         }
         else if (VertexShader->Executable ==
                      Rpi5OglShaderExecutableDepthVertex &&
@@ -2736,10 +3112,13 @@ Rpi5OglLinkProgram(
             Executable = Rpi5OglProgramExecutableIdeasLampLit;
         }
     }
+    if (!Rpi5OglGl2ValidateTransformFeedbackVaryings(Program, Executable))
+        Executable = Rpi5OglProgramExecutableNone;
     Program->Linked = Executable != Rpi5OglProgramExecutableNone;
     if (Program->Linked)
     {
         Program->Executable = Executable;
+        Program->Version130 = Version130;
         Program->ColorSwizzle =
             VertexShader->Executable ==
                 Rpi5OglShaderExecutableWineD3dXyzrhwBgraVertex;
@@ -2847,7 +3226,7 @@ Rpi5OglLinkProgram(
     {
         Rpi5OglGl2SetLog(
             Program->InfoLog,
-            "program requires a matching compiled bounded vertex/fragment pair with distinct active attributes");
+            "program requires a matching bounded shader pair, distinct attributes, and supported transform-feedback varyings");
     }
 }
 
@@ -2894,6 +3273,34 @@ Rpi5OglGetProgramiv(
             *Parameters = (Program->VertexShader != 0) +
                           (Program->FragmentShader != 0);
             break;
+        case GL_TRANSFORM_FEEDBACK_BUFFER_MODE:
+            *Parameters = Program->TransformFeedbackBufferMode;
+            break;
+        case GL_TRANSFORM_FEEDBACK_VARYINGS:
+            *Parameters = Program->Linked ?
+                Program->TransformFeedbackVaryingCount : 0;
+            break;
+        case GL_TRANSFORM_FEEDBACK_VARYING_MAX_LENGTH:
+        {
+            ULONG Varying;
+            SIZE_T Maximum = 0;
+
+            if (Program->Linked)
+            {
+                for (Varying = 0;
+                     Varying < Program->TransformFeedbackVaryingCount;
+                     Varying++)
+                {
+                    SIZE_T Current = lstrlenA(
+                        Program->TransformFeedbackVaryings[Varying]) + 1;
+
+                    if (Current > Maximum)
+                        Maximum = Current;
+                }
+            }
+            *Parameters = (GLint)Maximum;
+            break;
+        }
         case GL_ACTIVE_UNIFORMS:
             if (!Program->Linked)
                 *Parameters = 0;
@@ -3775,6 +4182,429 @@ Rpi5OglGetUniformLocation(
     return -1;
 }
 
+typedef struct _RPI5VC4_OGL_UNIFORM_VALUE
+{
+    const GLfloat *FloatValues;
+    const GLint *IntegerValues;
+    ULONG ComponentCount;
+    BOOL PackedMatrix3;
+} RPI5VC4_OGL_UNIFORM_VALUE, *PRPI5VC4_OGL_UNIFORM_VALUE;
+
+static BOOL
+Rpi5OglGl2DescribeUniform(
+    _In_ PRPI5VC4_OGL_PROGRAM Program,
+    _In_ GLint Location,
+    _Out_ PRPI5VC4_OGL_UNIFORM_VALUE Value)
+{
+    ZeroMemory(Value, sizeof(*Value));
+
+#define RPI5OGL_FLOAT_UNIFORM(Member, Components) \
+    do \
+    { \
+        Value->FloatValues = Program->Member; \
+        Value->ComponentCount = Components; \
+        return TRUE; \
+    } while (0)
+#define RPI5OGL_FLOAT_SCALAR(Member) \
+    do \
+    { \
+        Value->FloatValues = &Program->Member; \
+        Value->ComponentCount = 1; \
+        return TRUE; \
+    } while (0)
+#define RPI5OGL_INTEGER_SCALAR(Member) \
+    do \
+    { \
+        Value->IntegerValues = &Program->Member; \
+        Value->ComponentCount = 1; \
+        return TRUE; \
+    } while (0)
+
+    if (Program->Executable == Rpi5OglProgramExecutableWineD3dXyzrhwTexture)
+    {
+        if (Location == RPI5VC4_GL2_UNIFORM_PROJECTION)
+            RPI5OGL_FLOAT_UNIFORM(ProjectionMatrix, 16);
+        if (Location == RPI5VC4_GL2_UNIFORM_TEXTURE)
+            RPI5OGL_INTEGER_SCALAR(TextureUnit);
+        return FALSE;
+    }
+    if (Program->Executable == Rpi5OglProgramExecutableShadow)
+    {
+        if (Location == RPI5VC4_GL2_UNIFORM_MVP)
+            RPI5OGL_FLOAT_UNIFORM(ModelViewProjectionMatrix, 16);
+        if (Location == RPI5VC4_GL2_UNIFORM_LIGHT_MATRIX)
+            RPI5OGL_FLOAT_UNIFORM(LightMatrix, 16);
+        if (Location == RPI5VC4_GL2_UNIFORM_TEXTURE)
+            RPI5OGL_INTEGER_SCALAR(TextureUnit);
+        return FALSE;
+    }
+    if (Program->Executable == Rpi5OglProgramExecutableJellyfishGradient)
+    {
+        if (Location == RPI5VC4_GL2_UNIFORM_GRADIENT_COLOR1)
+            RPI5OGL_FLOAT_UNIFORM(GradientColor1, 3);
+        if (Location == RPI5VC4_GL2_UNIFORM_GRADIENT_COLOR2)
+            RPI5OGL_FLOAT_UNIFORM(GradientColor2, 3);
+        return FALSE;
+    }
+    if (Program->Executable == Rpi5OglProgramExecutableJellyfishMesh)
+    {
+        switch (Location)
+        {
+            case RPI5VC4_GL2_UNIFORM_MODELVIEW:
+                RPI5OGL_FLOAT_UNIFORM(ModelViewMatrix, 16);
+            case RPI5VC4_GL2_UNIFORM_MVP:
+                RPI5OGL_FLOAT_UNIFORM(ModelViewProjectionMatrix, 16);
+            case RPI5VC4_GL2_UNIFORM_NORMAL_MATRIX:
+                RPI5OGL_FLOAT_UNIFORM(NormalMatrix, 16);
+            case RPI5VC4_GL2_UNIFORM_LIGHT0:
+                RPI5OGL_FLOAT_UNIFORM(LightPosition, 3);
+            case RPI5VC4_GL2_UNIFORM_LIGHT_RADIUS:
+                RPI5OGL_FLOAT_SCALAR(LightRadius);
+            case RPI5VC4_GL2_UNIFORM_LIGHT_COLOR:
+                RPI5OGL_FLOAT_UNIFORM(LightColor, 4);
+            case RPI5VC4_GL2_UNIFORM_AMBIENT_COLOR:
+                RPI5OGL_FLOAT_UNIFORM(AmbientColor, 4);
+            case RPI5VC4_GL2_UNIFORM_FRESNEL_COLOR:
+                RPI5OGL_FLOAT_UNIFORM(FresnelColor, 4);
+            case RPI5VC4_GL2_UNIFORM_FRESNEL_POWER:
+                RPI5OGL_FLOAT_SCALAR(FresnelPower);
+            case RPI5VC4_GL2_UNIFORM_CURRENT_TIME:
+                RPI5OGL_FLOAT_SCALAR(CurrentTime);
+            case RPI5VC4_GL2_UNIFORM_TEXTURE:
+                RPI5OGL_INTEGER_SCALAR(TextureUnit);
+            case RPI5VC4_GL2_UNIFORM_TEXTURE1:
+                RPI5OGL_INTEGER_SCALAR(TextureUnit1);
+            default:
+                return FALSE;
+        }
+    }
+    if (Rpi5OglGl2IsIdeasExecutable(Program->Executable))
+    {
+        if (Location == RPI5VC4_GL2_UNIFORM_PROJECTION)
+            RPI5OGL_FLOAT_UNIFORM(ProjectionMatrix, 16);
+        if (Location == RPI5VC4_GL2_UNIFORM_MODELVIEW)
+            RPI5OGL_FLOAT_UNIFORM(ModelViewMatrix, 16);
+        if (Rpi5OglGl2IsIdeasLitExecutable(Program->Executable) &&
+            Location == RPI5VC4_GL2_UNIFORM_NORMAL_MATRIX)
+        {
+            Value->FloatValues = Program->NormalMatrix;
+            Value->ComponentCount = 9;
+            Value->PackedMatrix3 = TRUE;
+            return TRUE;
+        }
+        if ((Program->Executable == Rpi5OglProgramExecutableIdeasTable ||
+             Program->Executable == Rpi5OglProgramExecutableIdeasPaper) &&
+            Location == RPI5VC4_GL2_UNIFORM_LIGHT0)
+        {
+            RPI5OGL_FLOAT_UNIFORM(LightPosition, 3);
+        }
+        if ((Program->Executable == Rpi5OglProgramExecutableIdeasTable ||
+             Program->Executable == Rpi5OglProgramExecutableIdeasPaper) &&
+            Location == RPI5VC4_GL2_UNIFORM_LOGO_DIRECTION)
+        {
+            RPI5OGL_FLOAT_UNIFORM(LogoDirection, 3);
+        }
+        if ((Program->Executable == Rpi5OglProgramExecutableIdeasTable ||
+             Program->Executable == Rpi5OglProgramExecutableIdeasPaper ||
+             Program->Executable == Rpi5OglProgramExecutableIdeasText) &&
+            Location == RPI5VC4_GL2_UNIFORM_CURRENT_TIME)
+        {
+            RPI5OGL_FLOAT_SCALAR(CurrentTime);
+        }
+        if (Program->Executable == Rpi5OglProgramExecutableIdeasFlat &&
+            Location == RPI5VC4_GL2_UNIFORM_LOGO_COLOR)
+        {
+            RPI5OGL_FLOAT_UNIFORM(LogoColor, 4);
+        }
+        if ((Program->Executable == Rpi5OglProgramExecutableIdeasLogo ||
+             Program->Executable == Rpi5OglProgramExecutableIdeasLampLit) &&
+            Location == RPI5VC4_GL2_UNIFORM_LIGHT0)
+        {
+            RPI5OGL_FLOAT_UNIFORM(LightPosition, 4);
+        }
+        if (Program->Executable == Rpi5OglProgramExecutableIdeasLampLit &&
+            Location == RPI5VC4_GL2_UNIFORM_LIGHT1)
+        {
+            RPI5OGL_FLOAT_UNIFORM(Light1Position, 4);
+        }
+        if (Program->Executable == Rpi5OglProgramExecutableIdeasLampLit &&
+            Location == RPI5VC4_GL2_UNIFORM_LIGHT2)
+        {
+            RPI5OGL_FLOAT_UNIFORM(Light2Position, 4);
+        }
+        if (Program->Executable == Rpi5OglProgramExecutableIdeasShadow &&
+            Location == RPI5VC4_GL2_UNIFORM_TEXTURE)
+        {
+            RPI5OGL_INTEGER_SCALAR(TextureUnit);
+        }
+        return FALSE;
+    }
+    if (Rpi5OglGl2IsTerrainTextureExecutable(Program->Executable))
+    {
+        if (Location == RPI5VC4_GL2_UNIFORM_UV_OFFSET)
+            RPI5OGL_FLOAT_UNIFORM(UvOffset, 2);
+        if (Location == RPI5VC4_GL2_UNIFORM_UV_SCALE)
+            RPI5OGL_FLOAT_UNIFORM(UvScale, 2);
+        if (Program->Executable == Rpi5OglProgramExecutableTerrainNoise &&
+            Location == RPI5VC4_GL2_UNIFORM_CURRENT_TIME)
+        {
+            RPI5OGL_FLOAT_SCALAR(CurrentTime);
+        }
+        if (Program->Executable == Rpi5OglProgramExecutableTerrainOverlay &&
+            Location == RPI5VC4_GL2_UNIFORM_OPACITY)
+        {
+            RPI5OGL_FLOAT_SCALAR(Opacity);
+        }
+        if (Location == RPI5VC4_GL2_UNIFORM_TEXTURE &&
+            (Program->Executable == Rpi5OglProgramExecutableTerrainNormal ||
+             Program->Executable == Rpi5OglProgramExecutableTerrainLuminance ||
+             Program->Executable == Rpi5OglProgramExecutableTerrainOverlay ||
+             Program->Executable >=
+                 Rpi5OglProgramExecutableTerrainBloomHorizontal))
+        {
+            RPI5OGL_INTEGER_SCALAR(TextureUnit);
+        }
+        return FALSE;
+    }
+    if (Program->Executable == Rpi5OglProgramExecutableTerrain)
+    {
+        switch (Location)
+        {
+            case RPI5VC4_GL2_UNIFORM_MODELVIEW:
+                RPI5OGL_FLOAT_UNIFORM(ModelViewMatrix, 16);
+            case RPI5VC4_GL2_UNIFORM_NORMAL_MATRIX:
+                RPI5OGL_FLOAT_UNIFORM(NormalMatrix, 16);
+            case RPI5VC4_GL2_UNIFORM_PROJECTION:
+                RPI5OGL_FLOAT_UNIFORM(ProjectionMatrix, 16);
+            case RPI5VC4_GL2_UNIFORM_VIEW_MATRIX:
+                RPI5OGL_FLOAT_UNIFORM(ViewMatrix, 16);
+            case RPI5VC4_GL2_UNIFORM_TERRAIN_OFFSET:
+                RPI5OGL_FLOAT_UNIFORM(TerrainOffset, 2);
+            case RPI5VC4_GL2_UNIFORM_LIGHT0:
+                RPI5OGL_FLOAT_UNIFORM(LightPosition, 3);
+            case RPI5VC4_GL2_UNIFORM_TEXTURE:
+                RPI5OGL_INTEGER_SCALAR(TextureUnit);
+            case RPI5VC4_GL2_UNIFORM_TEXTURE1:
+                RPI5OGL_INTEGER_SCALAR(TextureUnit1);
+            case RPI5VC4_GL2_UNIFORM_TEXTURE2:
+                RPI5OGL_INTEGER_SCALAR(TextureUnit2);
+            case RPI5VC4_GL2_UNIFORM_TEXTURE3:
+                RPI5OGL_INTEGER_SCALAR(TextureUnit3);
+            case RPI5VC4_GL2_UNIFORM_TEXTURE4:
+                RPI5OGL_INTEGER_SCALAR(TextureUnit4);
+            case RPI5VC4_GL2_UNIFORM_TEXTURE5:
+                RPI5OGL_INTEGER_SCALAR(TextureUnit5);
+            default:
+                return FALSE;
+        }
+    }
+
+    if (Location == RPI5VC4_GL2_UNIFORM_MVP &&
+        (Program->Executable == Rpi5OglProgramExecutablePulsar ||
+         Program->Executable == Rpi5OglProgramExecutableDepth ||
+         Program->Executable == Rpi5OglProgramExecutableBuildDiffuse ||
+         Program->Executable == Rpi5OglProgramExecutableBuildTexture ||
+         Program->Executable == Rpi5OglProgramExecutableBlinnPhong ||
+         Program->Executable == Rpi5OglProgramExecutableBumpPoly ||
+         Program->Executable == Rpi5OglProgramExecutablePhong ||
+         Program->Executable == Rpi5OglProgramExecutableCel ||
+         Program->Executable == Rpi5OglProgramExecutableNormalMap ||
+         Program->Executable == Rpi5OglProgramExecutableHeightMap ||
+         Program->Executable == Rpi5OglProgramExecutableWireframe))
+    {
+        RPI5OGL_FLOAT_UNIFORM(ModelViewProjectionMatrix, 16);
+    }
+    if (Location == RPI5VC4_GL2_UNIFORM_NORMAL_MATRIX &&
+        (Program->Executable == Rpi5OglProgramExecutablePulsar ||
+         Program->Executable == Rpi5OglProgramExecutableBuildDiffuse ||
+         Program->Executable == Rpi5OglProgramExecutableBuildTexture ||
+         Program->Executable == Rpi5OglProgramExecutableBlinnPhong ||
+         Program->Executable == Rpi5OglProgramExecutableBumpPoly ||
+         Program->Executable == Rpi5OglProgramExecutablePhong ||
+         Program->Executable == Rpi5OglProgramExecutableCel ||
+         Program->Executable == Rpi5OglProgramExecutableNormalMap ||
+         Program->Executable == Rpi5OglProgramExecutableHeightMap))
+    {
+        RPI5OGL_FLOAT_UNIFORM(NormalMatrix, 16);
+    }
+    if ((Program->Executable == Rpi5OglProgramExecutablePhong ||
+         Program->Executable == Rpi5OglProgramExecutableCel) &&
+        Location == RPI5VC4_GL2_UNIFORM_MODELVIEW)
+    {
+        RPI5OGL_FLOAT_UNIFORM(ModelViewMatrix, 16);
+    }
+    if (Program->Executable == Rpi5OglProgramExecutableWireframe &&
+        Location == RPI5VC4_GL2_UNIFORM_VIEWPORT)
+    {
+        RPI5OGL_FLOAT_UNIFORM(Viewport, 2);
+    }
+    if (Location == RPI5VC4_GL2_UNIFORM_TEXTURE &&
+        (Program->Executable == Rpi5OglProgramExecutableBuildTexture ||
+         Program->Executable == Rpi5OglProgramExecutableNormalMap ||
+         Program->Executable == Rpi5OglProgramExecutableHeightMap ||
+         Program->Executable == Rpi5OglProgramExecutableIdeasShadow ||
+         Rpi5OglGl2IsDesktopExecutable(Program->Executable) ||
+         Rpi5OglGl2IsEffectExecutable(Program->Executable)))
+    {
+        RPI5OGL_INTEGER_SCALAR(TextureUnit);
+    }
+    return FALSE;
+
+#undef RPI5OGL_INTEGER_SCALAR
+#undef RPI5OGL_FLOAT_SCALAR
+#undef RPI5OGL_FLOAT_UNIFORM
+}
+
+static BOOL
+Rpi5OglGl2GetUniformValue(
+    _In_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLuint ProgramName,
+    _In_ GLint Location,
+    _Out_ PRPI5VC4_OGL_UNIFORM_VALUE Value,
+    _In_z_ PCSTR Function)
+{
+    PRPI5VC4_OGL_PROGRAM Program;
+
+    if (!Rpi5OglGl2CanChangeState(State, Function))
+        return FALSE;
+    Program = Rpi5OglGl2FindProgram(State, ProgramName);
+    if (Program == NULL)
+    {
+        Rpi5OglGl2ProgramNameError(State, ProgramName, Function);
+        return FALSE;
+    }
+    if (!Program->Linked ||
+        !Rpi5OglGl2DescribeUniform(Program, Location, Value))
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION, Function);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static ULONG
+Rpi5OglGl2UniformSourceIndex(
+    _In_ PRPI5VC4_OGL_UNIFORM_VALUE Value,
+    _In_ ULONG Index)
+{
+    static const ULONG Matrix3SourceIndex[9] =
+    {
+        0, 1, 2,
+        4, 5, 6,
+        8, 9, 10
+    };
+
+    return Value->PackedMatrix3 ? Matrix3SourceIndex[Index] : Index;
+}
+
+static VOID APIENTRY
+Rpi5OglGetUniformfv(
+    _In_ GLuint ProgramName,
+    _In_ GLint Location,
+    _Out_ GLfloat *Parameters)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    RPI5VC4_OGL_UNIFORM_VALUE Value;
+    ULONG Index;
+
+    if (!Rpi5OglGl2GetUniformValue(State,
+                                   ProgramName,
+                                   Location,
+                                   &Value,
+                                   "glGetUniformfv"))
+    {
+        return;
+    }
+    if (Parameters == NULL)
+        return;
+    for (Index = 0; Index < Value.ComponentCount; Index++)
+    {
+        Parameters[Index] = Value.IntegerValues != NULL ?
+            (GLfloat)Value.IntegerValues[Index] :
+            Value.FloatValues[Rpi5OglGl2UniformSourceIndex(&Value, Index)];
+    }
+}
+
+static VOID APIENTRY
+Rpi5OglGetUniformiv(
+    _In_ GLuint ProgramName,
+    _In_ GLint Location,
+    _Out_ GLint *Parameters)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    RPI5VC4_OGL_UNIFORM_VALUE Value;
+    ULONG Index;
+
+    if (!Rpi5OglGl2GetUniformValue(State,
+                                   ProgramName,
+                                   Location,
+                                   &Value,
+                                   "glGetUniformiv"))
+    {
+        return;
+    }
+    if (Parameters == NULL)
+        return;
+    for (Index = 0; Index < Value.ComponentCount; Index++)
+    {
+        Parameters[Index] = Value.IntegerValues != NULL ?
+            Value.IntegerValues[Index] :
+            (GLint)Value.FloatValues[
+                Rpi5OglGl2UniformSourceIndex(&Value, Index)];
+    }
+}
+
+static VOID APIENTRY
+Rpi5OglGetUniformuiv(
+    _In_ GLuint ProgramName,
+    _In_ GLint Location,
+    _Out_ GLuint *Parameters)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    RPI5VC4_OGL_UNIFORM_VALUE Value;
+    ULONG Index;
+
+    if (!Rpi5OglGl2GetUniformValue(State,
+                                   ProgramName,
+                                   Location,
+                                   &Value,
+                                   "glGetUniformuiv"))
+    {
+        return;
+    }
+    if (Parameters == NULL)
+        return;
+    for (Index = 0; Index < Value.ComponentCount; Index++)
+    {
+        Parameters[Index] = Value.IntegerValues != NULL ?
+            (GLuint)Value.IntegerValues[Index] :
+            (GLuint)Value.FloatValues[
+                Rpi5OglGl2UniformSourceIndex(&Value, Index)];
+    }
+}
+
+static VOID APIENTRY
+Rpi5OglGl2StoreMatrix4(
+    _Out_writes_(16) GLfloat *Destination,
+    _In_reads_(16) const GLfloat *Source,
+    _In_ GLboolean Transpose)
+{
+    ULONG Column;
+    ULONG Row;
+
+    if (Transpose == GL_FALSE)
+    {
+        CopyMemory(Destination, Source, 16 * sizeof(*Destination));
+        return;
+    }
+
+    for (Column = 0; Column < 4; Column++)
+    {
+        for (Row = 0; Row < 4; Row++)
+            Destination[Column * 4 + Row] = Source[Row * 4 + Column];
+    }
+}
+
 static VOID APIENTRY
 Rpi5OglUniformMatrix4fv(
     _In_ GLint Location,
@@ -3787,10 +4617,10 @@ Rpi5OglUniformMatrix4fv(
 
     if (!Rpi5OglGl2CanChangeState(State, "glUniformMatrix4fv"))
         return;
-    if (Count < 0 || Transpose != GL_FALSE)
+    if (Count < 0)
     {
         Rpi5OglGl2Error(State, GL_INVALID_VALUE,
-                        "glUniformMatrix4fv(count/transpose)");
+                        "glUniformMatrix4fv(count)");
         return;
     }
     if (Location == -1)
@@ -3813,9 +4643,9 @@ Rpi5OglUniformMatrix4fv(
                             "glUniformMatrix4fv(WineD3D value)");
             return;
         }
-        CopyMemory(Program->ProjectionMatrix,
-                   Value,
-                   sizeof(Program->ProjectionMatrix));
+        Rpi5OglGl2StoreMatrix4(Program->ProjectionMatrix,
+                              Value,
+                              Transpose);
         Program->ProjectionMatrixSet = TRUE;
         return;
     }
@@ -3840,16 +4670,16 @@ Rpi5OglUniformMatrix4fv(
         }
         if (Location == RPI5VC4_GL2_UNIFORM_MVP)
         {
-            CopyMemory(Program->ModelViewProjectionMatrix,
-                       Value,
-                       sizeof(Program->ModelViewProjectionMatrix));
+            Rpi5OglGl2StoreMatrix4(Program->ModelViewProjectionMatrix,
+                                  Value,
+                                  Transpose);
             Program->ModelViewProjectionMatrixSet = TRUE;
         }
         else
         {
-            CopyMemory(Program->LightMatrix,
-                       Value,
-                       sizeof(Program->LightMatrix));
+            Rpi5OglGl2StoreMatrix4(Program->LightMatrix,
+                                  Value,
+                                  Transpose);
             Program->LightMatrixSet = TRUE;
         }
         return;
@@ -3877,26 +4707,30 @@ Rpi5OglUniformMatrix4fv(
         }
         if (Location == RPI5VC4_GL2_UNIFORM_MODELVIEW)
         {
-            CopyMemory(Program->ModelViewMatrix, Value,
-                       sizeof(Program->ModelViewMatrix));
+            Rpi5OglGl2StoreMatrix4(Program->ModelViewMatrix,
+                                  Value,
+                                  Transpose);
             Program->ModelViewMatrixSet = TRUE;
         }
         else if (Location == RPI5VC4_GL2_UNIFORM_NORMAL_MATRIX)
         {
-            CopyMemory(Program->NormalMatrix, Value,
-                       sizeof(Program->NormalMatrix));
+            Rpi5OglGl2StoreMatrix4(Program->NormalMatrix,
+                                  Value,
+                                  Transpose);
             Program->NormalMatrixSet = TRUE;
         }
         else if (Location == RPI5VC4_GL2_UNIFORM_PROJECTION)
         {
-            CopyMemory(Program->ProjectionMatrix, Value,
-                       sizeof(Program->ProjectionMatrix));
+            Rpi5OglGl2StoreMatrix4(Program->ProjectionMatrix,
+                                  Value,
+                                  Transpose);
             Program->ProjectionMatrixSet = TRUE;
         }
         else
         {
-            CopyMemory(Program->ViewMatrix, Value,
-                       sizeof(Program->ViewMatrix));
+            Rpi5OglGl2StoreMatrix4(Program->ViewMatrix,
+                                  Value,
+                                  Transpose);
             Program->ViewMatrixSet = TRUE;
         }
         return;
@@ -3923,23 +4757,23 @@ Rpi5OglUniformMatrix4fv(
         }
         if (Location == RPI5VC4_GL2_UNIFORM_MVP)
         {
-            CopyMemory(Program->ModelViewProjectionMatrix,
-                       Value,
-                       sizeof(Program->ModelViewProjectionMatrix));
+            Rpi5OglGl2StoreMatrix4(Program->ModelViewProjectionMatrix,
+                                  Value,
+                                  Transpose);
             Program->ModelViewProjectionMatrixSet = TRUE;
         }
         else if (Location == RPI5VC4_GL2_UNIFORM_MODELVIEW)
         {
-            CopyMemory(Program->ModelViewMatrix,
-                       Value,
-                       sizeof(Program->ModelViewMatrix));
+            Rpi5OglGl2StoreMatrix4(Program->ModelViewMatrix,
+                                  Value,
+                                  Transpose);
             Program->ModelViewMatrixSet = TRUE;
         }
         else
         {
-            CopyMemory(Program->NormalMatrix,
-                       Value,
-                       sizeof(Program->NormalMatrix));
+            Rpi5OglGl2StoreMatrix4(Program->NormalMatrix,
+                                  Value,
+                                  Transpose);
             Program->NormalMatrixSet = TRUE;
         }
         return;
@@ -3964,16 +4798,16 @@ Rpi5OglUniformMatrix4fv(
         }
         if (Location == RPI5VC4_GL2_UNIFORM_PROJECTION)
         {
-            CopyMemory(Program->ProjectionMatrix,
-                       Value,
-                       sizeof(Program->ProjectionMatrix));
+            Rpi5OglGl2StoreMatrix4(Program->ProjectionMatrix,
+                                  Value,
+                                  Transpose);
             Program->ProjectionMatrixSet = TRUE;
         }
         else
         {
-            CopyMemory(Program->ModelViewMatrix,
-                       Value,
-                       sizeof(Program->ModelViewMatrix));
+            Rpi5OglGl2StoreMatrix4(Program->ModelViewMatrix,
+                                  Value,
+                                  Transpose);
             Program->ModelViewMatrixSet = TRUE;
         }
         return;
@@ -4015,23 +4849,23 @@ Rpi5OglUniformMatrix4fv(
 
     if (Location == RPI5VC4_GL2_UNIFORM_MVP)
     {
-        CopyMemory(Program->ModelViewProjectionMatrix,
-                   Value,
-                   sizeof(Program->ModelViewProjectionMatrix));
+        Rpi5OglGl2StoreMatrix4(Program->ModelViewProjectionMatrix,
+                              Value,
+                              Transpose);
         Program->ModelViewProjectionMatrixSet = TRUE;
     }
     else if (Location == RPI5VC4_GL2_UNIFORM_NORMAL_MATRIX)
     {
-        CopyMemory(Program->NormalMatrix,
-                   Value,
-                   sizeof(Program->NormalMatrix));
+        Rpi5OglGl2StoreMatrix4(Program->NormalMatrix,
+                              Value,
+                              Transpose);
         Program->NormalMatrixSet = TRUE;
     }
     else
     {
-        CopyMemory(Program->ModelViewMatrix,
-                   Value,
-                   sizeof(Program->ModelViewMatrix));
+        Rpi5OglGl2StoreMatrix4(Program->ModelViewMatrix,
+                              Value,
+                              Transpose);
         Program->ModelViewMatrixSet = TRUE;
     }
 }
@@ -4055,10 +4889,10 @@ Rpi5OglUniformMatrix3fv(
 
     if (!Rpi5OglGl2CanChangeState(State, "glUniformMatrix3fv"))
         return;
-    if (Count < 0 || Transpose != GL_FALSE)
+    if (Count < 0)
     {
         Rpi5OglGl2Error(State, GL_INVALID_VALUE,
-                        "glUniformMatrix3fv(count/transpose)");
+                        "glUniformMatrix3fv(count)");
         return;
     }
     if (Location == -1)
@@ -4084,7 +4918,14 @@ Rpi5OglUniformMatrix3fv(
 
     ZeroMemory(Program->NormalMatrix, sizeof(Program->NormalMatrix));
     for (Index = 0; Index < RTL_NUMBER_OF(DestinationIndex); Index++)
-        Program->NormalMatrix[DestinationIndex[Index]] = Value[Index];
+    {
+        ULONG Column = Index / 3;
+        ULONG Row = Index % 3;
+        ULONG SourceIndex = Transpose == GL_FALSE ?
+            Index : Row * 3 + Column;
+
+        Program->NormalMatrix[DestinationIndex[Index]] = Value[SourceIndex];
+    }
     Program->NormalMatrix[15] = 1.0f;
     Program->NormalMatrix3Set = TRUE;
 }
@@ -4235,6 +5076,20 @@ Rpi5OglUniform4fv(
          (Program->Executable == Rpi5OglProgramExecutableTerrainOverlay &&
           Location == RPI5VC4_GL2_UNIFORM_OPACITY)))
     {
+        if (Count > 1)
+        {
+            Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                            "glUniform4fv(terrain count)");
+            return;
+        }
+        if (Count == 0)
+            return;
+        if (Value == NULL)
+        {
+            Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                            "glUniform4fv(terrain value)");
+            return;
+        }
         if (Location == RPI5VC4_GL2_UNIFORM_CURRENT_TIME)
         {
             Program->CurrentTime = Value[0];
@@ -4615,6 +5470,231 @@ Rpi5OglUniform1i(
 }
 
 static VOID APIENTRY
+Rpi5OglUniform1fv(
+    _In_ GLint Location,
+    _In_ GLsizei Count,
+    _In_reads_opt_(Count) const GLfloat *Value)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+    if (!Rpi5OglGl2CanChangeState(State, "glUniform1fv"))
+        return;
+    if (Count < 0)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, "glUniform1fv(count)");
+        return;
+    }
+    if (Location == -1)
+        return;
+    if (Count > 1)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                        "glUniform1fv(array)");
+        return;
+    }
+    if (Count == 0)
+        return;
+    if (Value == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, "glUniform1fv(value)");
+        return;
+    }
+    Rpi5OglUniform1f(Location, Value[0]);
+}
+
+static VOID APIENTRY
+Rpi5OglUniform2f(
+    _In_ GLint Location,
+    _In_ GLfloat X,
+    _In_ GLfloat Y)
+{
+    const GLfloat Value[2] = {X, Y};
+
+    Rpi5OglUniform2fv(Location, 1, Value);
+}
+
+static VOID APIENTRY
+Rpi5OglUniform3f(
+    _In_ GLint Location,
+    _In_ GLfloat X,
+    _In_ GLfloat Y,
+    _In_ GLfloat Z)
+{
+    const GLfloat Value[3] = {X, Y, Z};
+
+    Rpi5OglUniform3fv(Location, 1, Value);
+}
+
+static VOID APIENTRY
+Rpi5OglUniform4f(
+    _In_ GLint Location,
+    _In_ GLfloat X,
+    _In_ GLfloat Y,
+    _In_ GLfloat Z,
+    _In_ GLfloat W)
+{
+    const GLfloat Value[4] = {X, Y, Z, W};
+
+    Rpi5OglUniform4fv(Location, 1, Value);
+}
+
+static VOID APIENTRY
+Rpi5OglUniform1iv(
+    _In_ GLint Location,
+    _In_ GLsizei Count,
+    _In_reads_opt_(Count) const GLint *Value)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_PROGRAM Program;
+    RPI5VC4_OGL_UNIFORM_VALUE Description;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glUniform1iv"))
+        return;
+    if (Count < 0)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, "glUniform1iv(count)");
+        return;
+    }
+    if (Location == -1)
+        return;
+    Program = Rpi5OglGl2FindProgram(State, State->CurrentProgram);
+    if (Program == NULL ||
+        !Rpi5OglGl2DescribeUniform(Program, Location, &Description) ||
+        Description.IntegerValues == NULL ||
+        Description.ComponentCount != 1 || Count > 1)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION, "glUniform1iv");
+        return;
+    }
+    if (Count == 0)
+        return;
+    if (Value == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, "glUniform1iv(value)");
+        return;
+    }
+    Rpi5OglUniform1i(Location, Value[0]);
+}
+
+static VOID
+Rpi5OglRejectUniform(
+    _In_ GLint Location,
+    _In_ GLsizei Count,
+    _In_z_ PCSTR Function)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+    if (!Rpi5OglGl2CanChangeState(State, Function))
+        return;
+    if (Count < 0)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, Function);
+        return;
+    }
+    if (Location != -1)
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION, Function);
+}
+
+#define RPI5OGL_UNSUPPORTED_UNIFORM_VECTOR(Suffix, Type)                  \
+    static VOID APIENTRY Rpi5OglUniform##Suffix(                         \
+        GLint Location, GLsizei Count, const Type *Value)                \
+    {                                                                    \
+        UNREFERENCED_PARAMETER(Value);                                   \
+        Rpi5OglRejectUniform(Location, Count, "glUniform" #Suffix);      \
+    }
+
+#define RPI5OGL_UNSUPPORTED_UNIFORM2(Suffix, Type)                        \
+    static VOID APIENTRY Rpi5OglUniform##Suffix(                         \
+        GLint Location, Type X, Type Y)                                  \
+    {                                                                    \
+        UNREFERENCED_PARAMETER(X);                                       \
+        UNREFERENCED_PARAMETER(Y);                                       \
+        Rpi5OglRejectUniform(Location, 1, "glUniform" #Suffix);          \
+    }
+
+#define RPI5OGL_UNSUPPORTED_UNIFORM3(Suffix, Type)                        \
+    static VOID APIENTRY Rpi5OglUniform##Suffix(                         \
+        GLint Location, Type X, Type Y, Type Z)                          \
+    {                                                                    \
+        UNREFERENCED_PARAMETER(X);                                       \
+        UNREFERENCED_PARAMETER(Y);                                       \
+        UNREFERENCED_PARAMETER(Z);                                       \
+        Rpi5OglRejectUniform(Location, 1, "glUniform" #Suffix);          \
+    }
+
+#define RPI5OGL_UNSUPPORTED_UNIFORM4(Suffix, Type)                        \
+    static VOID APIENTRY Rpi5OglUniform##Suffix(                         \
+        GLint Location, Type X, Type Y, Type Z, Type W)                  \
+    {                                                                    \
+        UNREFERENCED_PARAMETER(X);                                       \
+        UNREFERENCED_PARAMETER(Y);                                       \
+        UNREFERENCED_PARAMETER(Z);                                       \
+        UNREFERENCED_PARAMETER(W);                                       \
+        Rpi5OglRejectUniform(Location, 1, "glUniform" #Suffix);          \
+    }
+
+RPI5OGL_UNSUPPORTED_UNIFORM2(2i, GLint)
+RPI5OGL_UNSUPPORTED_UNIFORM3(3i, GLint)
+RPI5OGL_UNSUPPORTED_UNIFORM4(4i, GLint)
+RPI5OGL_UNSUPPORTED_UNIFORM_VECTOR(2iv, GLint)
+RPI5OGL_UNSUPPORTED_UNIFORM_VECTOR(3iv, GLint)
+RPI5OGL_UNSUPPORTED_UNIFORM_VECTOR(4iv, GLint)
+RPI5OGL_UNSUPPORTED_UNIFORM2(2ui, GLuint)
+RPI5OGL_UNSUPPORTED_UNIFORM3(3ui, GLuint)
+RPI5OGL_UNSUPPORTED_UNIFORM4(4ui, GLuint)
+RPI5OGL_UNSUPPORTED_UNIFORM_VECTOR(1uiv, GLuint)
+RPI5OGL_UNSUPPORTED_UNIFORM_VECTOR(2uiv, GLuint)
+RPI5OGL_UNSUPPORTED_UNIFORM_VECTOR(3uiv, GLuint)
+RPI5OGL_UNSUPPORTED_UNIFORM_VECTOR(4uiv, GLuint)
+
+static VOID APIENTRY
+Rpi5OglUniform1ui(
+    _In_ GLint Location,
+    _In_ GLuint X)
+{
+    UNREFERENCED_PARAMETER(X);
+    Rpi5OglRejectUniform(Location, 1, "glUniform1ui");
+}
+
+#undef RPI5OGL_UNSUPPORTED_UNIFORM4
+#undef RPI5OGL_UNSUPPORTED_UNIFORM3
+#undef RPI5OGL_UNSUPPORTED_UNIFORM2
+#undef RPI5OGL_UNSUPPORTED_UNIFORM_VECTOR
+
+#define RPI5OGL_UNSUPPORTED_UNIFORM_MATRIX(Columns, Rows)                 \
+    static VOID APIENTRY Rpi5OglUniformMatrix##Columns##x##Rows##fv(      \
+        GLint Location, GLsizei Count, GLboolean Transpose,              \
+        const GLfloat *Value)                                            \
+    {                                                                    \
+        UNREFERENCED_PARAMETER(Transpose);                               \
+        UNREFERENCED_PARAMETER(Value);                                   \
+        Rpi5OglRejectUniform(                                             \
+            Location, Count,                                             \
+            "glUniformMatrix" #Columns "x" #Rows "fv");               \
+    }
+
+static VOID APIENTRY
+Rpi5OglUniformMatrix2fv(
+    _In_ GLint Location,
+    _In_ GLsizei Count,
+    _In_ GLboolean Transpose,
+    _In_reads_opt_(Count * 4) const GLfloat *Value)
+{
+    UNREFERENCED_PARAMETER(Transpose);
+    UNREFERENCED_PARAMETER(Value);
+    Rpi5OglRejectUniform(Location, Count, "glUniformMatrix2fv");
+}
+
+RPI5OGL_UNSUPPORTED_UNIFORM_MATRIX(2, 3)
+RPI5OGL_UNSUPPORTED_UNIFORM_MATRIX(2, 4)
+RPI5OGL_UNSUPPORTED_UNIFORM_MATRIX(3, 2)
+RPI5OGL_UNSUPPORTED_UNIFORM_MATRIX(3, 4)
+RPI5OGL_UNSUPPORTED_UNIFORM_MATRIX(4, 2)
+RPI5OGL_UNSUPPORTED_UNIFORM_MATRIX(4, 3)
+
+#undef RPI5OGL_UNSUPPORTED_UNIFORM_MATRIX
+
+static VOID APIENTRY
 Rpi5OglActiveTexture(
     _In_ GLenum Texture)
 {
@@ -4732,6 +5812,13 @@ Rpi5OglUseProgram(
 
     if (!Rpi5OglGl2CanChangeState(State, "glUseProgram"))
         return;
+    if (State->TransformFeedbackActive &&
+        ProgramName != State->CurrentProgram)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                        "glUseProgram(transform feedback active)");
+        return;
+    }
     Program = ProgramName != 0 ?
               Rpi5OglGl2FindProgram(State, ProgramName) : NULL;
     if (ProgramName != 0 && Program == NULL)
@@ -5064,13 +6151,7 @@ Rpi5OglStencilFuncSeparate(
 
     if (!Rpi5OglGl2CanChangeState(State, "glStencilFuncSeparate"))
         return;
-    if (Face != GL_FRONT && Face != GL_BACK && Face != GL_FRONT_AND_BACK)
-    {
-        Rpi5OglGl2Error(State, GL_INVALID_ENUM,
-                        "glStencilFuncSeparate(face)");
-        return;
-    }
-    _mesa_StencilFunc(Function, Reference, Mask);
+    gl_StencilFuncSeparate(State->Mesa, Face, Function, Reference, Mask);
 }
 
 static VOID APIENTRY
@@ -5084,13 +6165,20 @@ Rpi5OglStencilOpSeparate(
 
     if (!Rpi5OglGl2CanChangeState(State, "glStencilOpSeparate"))
         return;
-    if (Face != GL_FRONT && Face != GL_BACK && Face != GL_FRONT_AND_BACK)
-    {
-        Rpi5OglGl2Error(State, GL_INVALID_ENUM,
-                        "glStencilOpSeparate(face)");
+    gl_StencilOpSeparate(State->Mesa, Face,
+                         StencilFail, DepthFail, DepthPass);
+}
+
+static VOID APIENTRY
+Rpi5OglStencilMaskSeparate(
+    _In_ GLenum Face,
+    _In_ GLuint Mask)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+    if (!Rpi5OglGl2CanChangeState(State, "glStencilMaskSeparate"))
         return;
-    }
-    _mesa_StencilOp(StencilFail, DepthFail, DepthPass);
+    gl_StencilMaskSeparate(State->Mesa, Face, Mask);
 }
 
 static VOID
@@ -6257,6 +7345,656 @@ Rpi5OglGl2BufferDeleted(
     }
 }
 
+static BOOL
+Rpi5OglGl2ValidateDrawBufferIndex(
+    _In_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLuint Index,
+    _In_z_ PCSTR Function)
+{
+    if (Index == 0)
+        return TRUE;
+    Rpi5OglGl2Error(State, GL_INVALID_VALUE, Function);
+    return FALSE;
+}
+
+static VOID APIENTRY
+Rpi5OglColorMaski(
+    _In_ GLuint Index,
+    _In_ GLboolean Red,
+    _In_ GLboolean Green,
+    _In_ GLboolean Blue,
+    _In_ GLboolean Alpha)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+    if (!Rpi5OglGl2CanChangeState(State, "glColorMaski") ||
+        !Rpi5OglGl2ValidateDrawBufferIndex(State, Index,
+                                            "glColorMaski(index)"))
+    {
+        return;
+    }
+    _mesa_ColorMask(Red, Green, Blue, Alpha);
+}
+
+static BOOL
+Rpi5OglGl2ValidateIndexedEnable(
+    _In_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum Capability,
+    _In_ GLuint Index,
+    _In_z_ PCSTR Function)
+{
+    if (Capability != GL_BLEND)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM, Function);
+        return FALSE;
+    }
+    return Rpi5OglGl2ValidateDrawBufferIndex(State, Index, Function);
+}
+
+static VOID APIENTRY
+Rpi5OglEnablei(
+    _In_ GLenum Capability,
+    _In_ GLuint Index)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+    if (!Rpi5OglGl2CanChangeState(State, "glEnablei") ||
+        !Rpi5OglGl2ValidateIndexedEnable(State, Capability, Index,
+                                          "glEnablei(cap/index)"))
+    {
+        return;
+    }
+    _mesa_Enable(GL_BLEND);
+}
+
+static VOID APIENTRY
+Rpi5OglDisablei(
+    _In_ GLenum Capability,
+    _In_ GLuint Index)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+    if (!Rpi5OglGl2CanChangeState(State, "glDisablei") ||
+        !Rpi5OglGl2ValidateIndexedEnable(State, Capability, Index,
+                                          "glDisablei(cap/index)"))
+    {
+        return;
+    }
+    _mesa_Disable(GL_BLEND);
+}
+
+static GLboolean APIENTRY
+Rpi5OglIsEnabledi(
+    _In_ GLenum Capability,
+    _In_ GLuint Index)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+    if (!Rpi5OglGl2CanChangeState(State, "glIsEnabledi") ||
+        !Rpi5OglGl2ValidateIndexedEnable(State, Capability, Index,
+                                          "glIsEnabledi(cap/index)"))
+    {
+        return GL_FALSE;
+    }
+    return _mesa_IsEnabled(GL_BLEND);
+}
+
+static BOOL
+Rpi5OglGl2GetIndexedRasterState(
+    _In_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum ParameterName,
+    _In_ GLuint Index,
+    _Out_writes_(4) GLint *Parameters,
+    _In_z_ PCSTR Function)
+{
+    GLuint Mask;
+
+    if (ParameterName != GL_BLEND && ParameterName != GL_COLOR_WRITEMASK)
+        return FALSE;
+    if (!Rpi5OglGl2ValidateDrawBufferIndex(State, Index, Function))
+        return TRUE;
+    if (Parameters == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, Function);
+        return TRUE;
+    }
+    if (ParameterName == GL_BLEND)
+    {
+        Parameters[0] = _mesa_IsEnabled(GL_BLEND);
+        return TRUE;
+    }
+
+    Mask = State->Mesa->Color.ColorMask;
+    Parameters[0] = (Mask & 0x8u) != 0;
+    Parameters[1] = (Mask & 0x4u) != 0;
+    Parameters[2] = (Mask & 0x2u) != 0;
+    Parameters[3] = (Mask & 0x1u) != 0;
+    return TRUE;
+}
+
+static VOID APIENTRY
+Rpi5OglGetBooleani(
+    _In_ GLenum ParameterName,
+    _In_ GLuint Index,
+    _Out_ GLboolean *Parameters)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    GLint Values[4];
+    ULONG Count;
+    ULONG ValueIndex;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glGetBooleani_v"))
+        return;
+    if (Rpi5OglGl2GetIndexedRasterState(State, ParameterName, Index,
+                                         Values, "glGetBooleani_v"))
+    {
+        if (Parameters == NULL)
+            return;
+        Count = ParameterName == GL_COLOR_WRITEMASK ? 4 : 1;
+        for (ValueIndex = 0; ValueIndex < Count; ValueIndex++)
+            Parameters[ValueIndex] = Values[ValueIndex] != 0;
+        return;
+    }
+    if (Rpi5OglBufferGetIntegeri(State->BufferState,
+                                 ParameterName,
+                                 Index,
+                                 Values))
+    {
+        if (Parameters != NULL)
+            Parameters[0] = Values[0] != 0;
+        return;
+    }
+    Rpi5OglGl2Error(State, GL_INVALID_ENUM, "glGetBooleani_v(target)");
+}
+
+static VOID APIENTRY
+Rpi5OglClampColor(
+    _In_ GLenum Target,
+    _In_ GLenum Clamp)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    GLenum *Value;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glClampColor"))
+        return;
+    if (Clamp != GL_TRUE && Clamp != GL_FALSE && Clamp != GL_FIXED_ONLY)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM, "glClampColor(clamp)");
+        return;
+    }
+    switch (Target)
+    {
+        case GL_CLAMP_VERTEX_COLOR:
+            Value = &State->ClampVertexColor;
+            break;
+        case GL_CLAMP_FRAGMENT_COLOR:
+            Value = &State->ClampFragmentColor;
+            break;
+        case GL_CLAMP_READ_COLOR:
+            Value = &State->ClampReadColor;
+            break;
+        default:
+            Rpi5OglGl2Error(State, GL_INVALID_ENUM, "glClampColor(target)");
+            return;
+    }
+    *Value = Clamp;
+}
+
+static BOOL
+Rpi5OglGl2ValidateClearBuffer(
+    _In_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum Buffer,
+    _In_ GLint DrawBuffer,
+    _In_z_ PCSTR Function)
+{
+    if (DrawBuffer < 0 ||
+        (Buffer == GL_COLOR && DrawBuffer != 0) ||
+        (Buffer != GL_COLOR && DrawBuffer != 0))
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, Function);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static VOID APIENTRY
+Rpi5OglClearBufferfv(
+    _In_ GLenum Buffer,
+    _In_ GLint DrawBuffer,
+    _In_reads_(Buffer == GL_COLOR ? 4 : 1) const GLfloat *Value)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+    if (!Rpi5OglGl2CanChangeState(State, "glClearBufferfv") ||
+        !Rpi5OglGl2ValidateClearBuffer(State, Buffer, DrawBuffer,
+                                       "glClearBufferfv(drawbuffer)"))
+    {
+        return;
+    }
+    if (Value == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, "glClearBufferfv(value)");
+        return;
+    }
+    if (Buffer == GL_COLOR)
+        Rpi5OglClearBufferValues(GL_COLOR_BUFFER_BIT, Value, NULL, NULL);
+    else if (Buffer == GL_DEPTH)
+        Rpi5OglClearBufferValues(GL_DEPTH_BUFFER_BIT, NULL, Value, NULL);
+    else
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM, "glClearBufferfv(buffer)");
+}
+
+static VOID APIENTRY
+Rpi5OglClearBufferiv(
+    _In_ GLenum Buffer,
+    _In_ GLint DrawBuffer,
+    _In_reads_(Buffer == GL_COLOR ? 4 : 1) const GLint *Value)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    GLfloat Color[4];
+    ULONG Index;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glClearBufferiv") ||
+        !Rpi5OglGl2ValidateClearBuffer(State, Buffer, DrawBuffer,
+                                       "glClearBufferiv(drawbuffer)"))
+    {
+        return;
+    }
+    if (Value == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, "glClearBufferiv(value)");
+        return;
+    }
+    if (Buffer == GL_COLOR)
+    {
+        for (Index = 0; Index < RTL_NUMBER_OF(Color); Index++)
+            Color[Index] = INT_TO_FLOAT(Value[Index]);
+        Rpi5OglClearBufferValues(GL_COLOR_BUFFER_BIT, Color, NULL, NULL);
+    }
+    else if (Buffer == GL_STENCIL)
+    {
+        Rpi5OglClearBufferValues(GL_STENCIL_BUFFER_BIT, NULL, NULL, Value);
+    }
+    else
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM, "glClearBufferiv(buffer)");
+}
+
+static VOID APIENTRY
+Rpi5OglClearBufferuiv(
+    _In_ GLenum Buffer,
+    _In_ GLint DrawBuffer,
+    _In_reads_(4) const GLuint *Value)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    GLfloat Color[4];
+    ULONG Index;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glClearBufferuiv") ||
+        !Rpi5OglGl2ValidateClearBuffer(State, Buffer, DrawBuffer,
+                                       "glClearBufferuiv(drawbuffer)"))
+    {
+        return;
+    }
+    if (Value == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, "glClearBufferuiv(value)");
+        return;
+    }
+    if (Buffer != GL_COLOR)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM, "glClearBufferuiv(buffer)");
+        return;
+    }
+    for (Index = 0; Index < RTL_NUMBER_OF(Color); Index++)
+        Color[Index] = UINT_TO_FLOAT(Value[Index]);
+    Rpi5OglClearBufferValues(GL_COLOR_BUFFER_BIT, Color, NULL, NULL);
+}
+
+static VOID APIENTRY
+Rpi5OglClearBufferfi(
+    _In_ GLenum Buffer,
+    _In_ GLint DrawBuffer,
+    _In_ GLfloat Depth,
+    _In_ GLint Stencil)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+    if (!Rpi5OglGl2CanChangeState(State, "glClearBufferfi") ||
+        !Rpi5OglGl2ValidateClearBuffer(State, Buffer, DrawBuffer,
+                                       "glClearBufferfi(drawbuffer)"))
+    {
+        return;
+    }
+    if (Buffer != GL_DEPTH_STENCIL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM, "glClearBufferfi(buffer)");
+        return;
+    }
+    Rpi5OglClearBufferValues(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT,
+                             NULL, &Depth, &Stencil);
+}
+
+static VOID APIENTRY
+Rpi5OglBeginTransformFeedback(
+    _In_ GLenum PrimitiveMode)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_PROGRAM Program;
+    ULONG BindingCount;
+    ULONG Binding;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glBeginTransformFeedback"))
+        return;
+    if (PrimitiveMode != GL_POINTS && PrimitiveMode != GL_LINES &&
+        PrimitiveMode != GL_TRIANGLES)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM,
+                        "glBeginTransformFeedback(primitiveMode)");
+        return;
+    }
+    if (State->TransformFeedbackActive)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                        "glBeginTransformFeedback(active)");
+        return;
+    }
+    Program = Rpi5OglGl2FindProgram(State, State->CurrentProgram);
+    if (Program == NULL || !Program->Linked ||
+        Program->TransformFeedbackVaryingCount == 0)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                        "glBeginTransformFeedback(program)");
+        return;
+    }
+    BindingCount = Program->TransformFeedbackBufferMode ==
+        GL_SEPARATE_ATTRIBS ? Program->TransformFeedbackVaryingCount : 1;
+    for (Binding = 0; Binding < BindingCount; Binding++)
+    {
+        if (!Rpi5OglBufferCanWriteTransformFeedback(State->BufferState,
+                                                     Binding,
+                                                     0,
+                                                     0))
+        {
+            Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                            "glBeginTransformFeedback(buffer)");
+            return;
+        }
+    }
+
+    State->TransformFeedbackActive = TRUE;
+    State->TransformFeedbackPrimitiveMode = PrimitiveMode;
+    State->TransformFeedbackPrimitivesWritten = 0;
+    ZeroMemory(State->TransformFeedbackPositions,
+               sizeof(State->TransformFeedbackPositions));
+}
+
+static VOID APIENTRY
+Rpi5OglEndTransformFeedback(VOID)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+    if (!Rpi5OglGl2CanChangeState(State, "glEndTransformFeedback"))
+        return;
+    if (!State->TransformFeedbackActive)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                        "glEndTransformFeedback(inactive)");
+        return;
+    }
+    State->TransformFeedbackActive = FALSE;
+}
+
+static BOOL
+Rpi5OglGl2QueryTargetValid(
+    _In_ GLenum Target)
+{
+    return Target == GL_SAMPLES_PASSED ||
+           Target == GL_PRIMITIVES_GENERATED ||
+           Target == GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN;
+}
+
+static GLuint *
+Rpi5OglGl2ActiveQueryName(
+    _Inout_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum Target)
+{
+    switch (Target)
+    {
+        case GL_SAMPLES_PASSED:
+            return &State->ActiveSamplesQuery;
+        case GL_PRIMITIVES_GENERATED:
+            return &State->ActivePrimitivesGeneratedQuery;
+        case GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN:
+            return &State->ActiveTransformFeedbackQuery;
+        default:
+            return NULL;
+    }
+}
+
+static PRPI5VC4_OGL_QUERY
+Rpi5OglGl2FindQuery(
+    _In_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLuint Name)
+{
+    ULONG Index;
+
+    if (Name == 0)
+        return NULL;
+    for (Index = 0; Index < RTL_NUMBER_OF(State->Queries); Index++)
+    {
+        if (State->Queries[Index].Name == Name)
+            return &State->Queries[Index];
+    }
+    return NULL;
+}
+
+static PRPI5VC4_OGL_QUERY
+Rpi5OglGl2FreeQuery(
+    _In_ PRPI5VC4_OGL_GL2_STATE State)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < RTL_NUMBER_OF(State->Queries); Index++)
+    {
+        if (State->Queries[Index].Name == 0)
+            return &State->Queries[Index];
+    }
+    return NULL;
+}
+
+static GLuint
+Rpi5OglGl2NextQueryName(
+    _Inout_ PRPI5VC4_OGL_GL2_STATE State)
+{
+    GLuint Candidate = State->NextQueryName;
+
+    do
+    {
+        if (Candidate == 0)
+            Candidate = 1;
+        if (Rpi5OglGl2FindQuery(State, Candidate) == NULL)
+        {
+            State->NextQueryName = Candidate + 1;
+            if (State->NextQueryName == 0)
+                State->NextQueryName = 1;
+            return Candidate;
+        }
+        Candidate++;
+    } while (Candidate != State->NextQueryName);
+    return 0;
+}
+
+static VOID APIENTRY
+Rpi5OglGenQueries(
+    _In_ GLsizei Count,
+    _Out_writes_opt_(Count) GLuint *Names)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_QUERY Query;
+    GLsizei Index;
+    ULONG FreeCount = 0;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glGenQueries"))
+        return;
+    if (Count < 0)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, "glGenQueries(n)");
+        return;
+    }
+    if (Count == 0)
+        return;
+    if (Names == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, "glGenQueries(ids)");
+        return;
+    }
+    for (Index = 0; Index < (GLsizei)RTL_NUMBER_OF(State->Queries); Index++)
+    {
+        if (State->Queries[Index].Name == 0)
+            FreeCount++;
+    }
+    if ((ULONG)Count > FreeCount)
+    {
+        Rpi5OglGl2Error(State, GL_OUT_OF_MEMORY, "glGenQueries(storage)");
+        return;
+    }
+
+    for (Index = 0; Index < Count; Index++)
+    {
+        Query = Rpi5OglGl2FreeQuery(State);
+        Query->Name = Rpi5OglGl2NextQueryName(State);
+        Query->Available = TRUE;
+        Names[Index] = Query->Name;
+    }
+}
+
+static VOID
+Rpi5OglGl2DeleteQueryRecord(
+    _Inout_ PRPI5VC4_OGL_GL2_STATE State,
+    _Inout_ PRPI5VC4_OGL_QUERY Query)
+{
+    if (Query->Active ||
+        (State->ConditionalRenderActive &&
+         State->ConditionalRenderQuery == Query->Name))
+    {
+        Query->DeletePending = TRUE;
+        return;
+    }
+    ZeroMemory(Query, sizeof(*Query));
+}
+
+static VOID APIENTRY
+Rpi5OglDeleteQueries(
+    _In_ GLsizei Count,
+    _In_reads_opt_(Count) const GLuint *Names)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_QUERY Query;
+    GLsizei Index;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glDeleteQueries"))
+        return;
+    if (Count < 0)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, "glDeleteQueries(n)");
+        return;
+    }
+    if (Count != 0 && Names == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, "glDeleteQueries(ids)");
+        return;
+    }
+    for (Index = 0; Index < Count; Index++)
+    {
+        Query = Rpi5OglGl2FindQuery(State, Names[Index]);
+        if (Query != NULL)
+            Rpi5OglGl2DeleteQueryRecord(State, Query);
+    }
+}
+
+static GLboolean APIENTRY
+Rpi5OglIsQuery(
+    _In_ GLuint Name)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_QUERY Query;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glIsQuery"))
+        return GL_FALSE;
+    Query = Rpi5OglGl2FindQuery(State, Name);
+    return Query != NULL && Query->Object ? GL_TRUE : GL_FALSE;
+}
+
+static VOID APIENTRY
+Rpi5OglBeginQuery(
+    _In_ GLenum Target,
+    _In_ GLuint Name)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_QUERY Query;
+    GLuint *ActiveName;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glBeginQuery"))
+        return;
+    ActiveName = Rpi5OglGl2ActiveQueryName(State, Target);
+    if (ActiveName == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM, "glBeginQuery(target)");
+        return;
+    }
+    Query = Rpi5OglGl2FindQuery(State, Name);
+    if (Query == NULL || Name == 0 || *ActiveName != 0 || Query->Active ||
+        (State->ConditionalRenderActive &&
+         State->ConditionalRenderQuery == Name) ||
+        (Query->Object && Query->Target != Target))
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION, "glBeginQuery(id)");
+        return;
+    }
+
+    /* A pending hardware batch may contain draws issued before this query. */
+    _mesa_Finish();
+    Query->Object = TRUE;
+    Query->Target = Target;
+    Query->Active = TRUE;
+    Query->Available = FALSE;
+    Query->DeletePending = FALSE;
+    Query->Result = 0;
+    *ActiveName = Name;
+}
+
+static VOID APIENTRY
+Rpi5OglEndQuery(
+    _In_ GLenum Target)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_QUERY Query;
+    GLuint *ActiveName;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glEndQuery"))
+        return;
+    ActiveName = Rpi5OglGl2ActiveQueryName(State, Target);
+    if (ActiveName == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM, "glEndQuery(target)");
+        return;
+    }
+    Query = Rpi5OglGl2FindQuery(State, *ActiveName);
+    if (*ActiveName == 0 || Query == NULL || !Query->Active)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION, "glEndQuery(active)");
+        return;
+    }
+
+    /* This bounded implementation completes the result synchronously. */
+    _mesa_Finish();
+    Query->Active = FALSE;
+    Query->Available = TRUE;
+    *ActiveName = 0;
+    if (Query->DeletePending)
+        ZeroMemory(Query, sizeof(*Query));
+}
+
 static VOID APIENTRY
 Rpi5OglGetQueryiv(
     _In_ GLenum Target,
@@ -6264,10 +8002,12 @@ Rpi5OglGetQueryiv(
     _Out_ GLint *Parameters)
 {
     PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    GLuint *ActiveName;
 
     if (!Rpi5OglGl2CanChangeState(State, "glGetQueryiv"))
         return;
-    if (Target != GL_SAMPLES_PASSED)
+    ActiveName = Rpi5OglGl2ActiveQueryName(State, Target);
+    if (ActiveName == NULL)
     {
         Rpi5OglGl2Error(State, GL_INVALID_ENUM, "glGetQueryiv(target)");
         return;
@@ -6283,11 +8023,290 @@ Rpi5OglGetQueryiv(
         Rpi5OglGl2Error(State, GL_INVALID_VALUE, "glGetQueryiv(params)");
         return;
     }
+    *Parameters = ParameterName == GL_QUERY_COUNTER_BITS ?
+        32 : (GLint)*ActiveName;
+}
 
-    /* No bounded V3D query object path exists yet. A zero counter width makes
-     * WineD3D disable the GL 1.5-promoted occlusion-query capability before
-     * any query object entry points can be used. */
-    *Parameters = 0;
+static BOOL
+Rpi5OglGl2GetQueryObject(
+    _In_ GLuint Name,
+    _In_ GLenum ParameterName,
+    _Out_ GLuint *Value,
+    _In_z_ PCSTR Function)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_QUERY Query;
+
+    if (!Rpi5OglGl2CanChangeState(State, Function))
+        return FALSE;
+    Query = Rpi5OglGl2FindQuery(State, Name);
+    if (Query == NULL || !Query->Object)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION, Function);
+        return FALSE;
+    }
+    if (ParameterName != GL_QUERY_RESULT &&
+        ParameterName != GL_QUERY_RESULT_AVAILABLE)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM, Function);
+        return FALSE;
+    }
+    if (Value == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, Function);
+        return FALSE;
+    }
+    if (Query->Active)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION, Function);
+        return FALSE;
+    }
+    *Value = ParameterName == GL_QUERY_RESULT_AVAILABLE ?
+        (Query->Available ? GL_TRUE : GL_FALSE) : Query->Result;
+    return TRUE;
+}
+
+static VOID APIENTRY
+Rpi5OglGetQueryObjectuiv(
+    _In_ GLuint Name,
+    _In_ GLenum ParameterName,
+    _Out_ GLuint *Parameters)
+{
+    (void)Rpi5OglGl2GetQueryObject(Name,
+                                   ParameterName,
+                                   Parameters,
+                                   "glGetQueryObjectuiv");
+}
+
+static VOID APIENTRY
+Rpi5OglGetQueryObjectiv(
+    _In_ GLuint Name,
+    _In_ GLenum ParameterName,
+    _Out_ GLint *Parameters)
+{
+    GLuint Value;
+
+    if (!Rpi5OglGl2GetQueryObject(Name,
+                                  ParameterName,
+                                  &Value,
+                                  "glGetQueryObjectiv"))
+    {
+        return;
+    }
+    *Parameters = Value > 0x7fffffffu ? 0x7fffffff : (GLint)Value;
+}
+
+static VOID APIENTRY
+Rpi5OglBeginConditionalRender(
+    _In_ GLuint Name,
+    _In_ GLenum Mode)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_QUERY Query;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glBeginConditionalRender"))
+        return;
+    if (Mode != GL_QUERY_WAIT && Mode != GL_QUERY_NO_WAIT &&
+        Mode != GL_QUERY_BY_REGION_WAIT &&
+        Mode != GL_QUERY_BY_REGION_NO_WAIT)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM,
+                        "glBeginConditionalRender(mode)");
+        return;
+    }
+    Query = Rpi5OglGl2FindQuery(State, Name);
+    if (Query == NULL || !Query->Object)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glBeginConditionalRender(id)");
+        return;
+    }
+    if (State->ConditionalRenderActive || Query->Active ||
+        Query->Target != GL_SAMPLES_PASSED)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                        "glBeginConditionalRender(query)");
+        return;
+    }
+
+    State->ConditionalRenderActive = TRUE;
+    State->ConditionalRenderQuery = Name;
+    State->ConditionalRenderPass = !Query->Available &&
+        (Mode == GL_QUERY_NO_WAIT ||
+         Mode == GL_QUERY_BY_REGION_NO_WAIT) ? TRUE : Query->Result != 0;
+}
+
+static VOID APIENTRY
+Rpi5OglEndConditionalRender(VOID)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    PRPI5VC4_OGL_QUERY Query;
+
+    if (!Rpi5OglGl2CanChangeState(State, "glEndConditionalRender"))
+        return;
+    if (!State->ConditionalRenderActive)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                        "glEndConditionalRender(active)");
+        return;
+    }
+    Query = Rpi5OglGl2FindQuery(State, State->ConditionalRenderQuery);
+    State->ConditionalRenderActive = FALSE;
+    State->ConditionalRenderPass = TRUE;
+    State->ConditionalRenderQuery = 0;
+    if (Query != NULL && Query->DeletePending && !Query->Active)
+        ZeroMemory(Query, sizeof(*Query));
+}
+
+static VOID APIENTRY
+Rpi5OglGetIntegeri(
+    _In_ GLenum ParameterName,
+    _In_ GLuint Index,
+    _Out_ GLint *Parameters)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+    if (!Rpi5OglGl2CanChangeState(State, "glGetIntegeri_v"))
+        return;
+    if (Rpi5OglGl2GetIndexedRasterState(State, ParameterName, Index,
+                                         Parameters, "glGetIntegeri_v") ||
+        Rpi5OglBufferGetIntegeri(State->BufferState,
+                                 ParameterName,
+                                 Index,
+                                 Parameters))
+    {
+        return;
+    }
+    Rpi5OglGl2Error(State, GL_INVALID_ENUM, "glGetIntegeri_v(target)");
+}
+
+static VOID
+Rpi5OglSetPointParameters(
+    _In_ GLenum ParameterName,
+    _In_reads_(ParameterName == GL_POINT_DISTANCE_ATTENUATION ? 3 : 1)
+        const GLfloat *Parameters,
+    _In_z_ PCSTR Function)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    GLfloat *Destination;
+    ULONG Count;
+
+    if (!Rpi5OglGl2CanChangeState(State, Function))
+        return;
+    if (Parameters == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, Function);
+        return;
+    }
+
+    Count = 1;
+    switch (ParameterName)
+    {
+        case GL_POINT_SIZE_MIN:
+            Destination = &State->PointSizeMinimum;
+            break;
+        case GL_POINT_SIZE_MAX:
+            Destination = &State->PointSizeMaximum;
+            break;
+        case GL_POINT_FADE_THRESHOLD_SIZE:
+            Destination = &State->PointFadeThreshold;
+            break;
+        case GL_POINT_DISTANCE_ATTENUATION:
+            Destination = State->PointDistanceAttenuation;
+            Count = 3;
+            break;
+        case GL_POINT_SPRITE_COORD_ORIGIN:
+            if ((GLenum)(GLint)Parameters[0] != GL_LOWER_LEFT &&
+                (GLenum)(GLint)Parameters[0] != GL_UPPER_LEFT)
+            {
+                Rpi5OglGl2Error(State, GL_INVALID_ENUM,
+                                Function);
+                return;
+            }
+            if (State->PointSpriteCoordOrigin ==
+                (GLenum)(GLint)Parameters[0])
+            {
+                return;
+            }
+            gl_Flush(State->Mesa);
+            State->PointSpriteCoordOrigin = (GLenum)(GLint)Parameters[0];
+            return;
+        default:
+            Rpi5OglGl2Error(State, GL_INVALID_ENUM,
+                            Function);
+            return;
+    }
+    if (ParameterName != GL_POINT_DISTANCE_ATTENUATION &&
+        Parameters[0] < 0.0f)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        Function);
+        return;
+    }
+    if (memcmp(Destination, Parameters, Count * sizeof(*Parameters)) == 0)
+        return;
+
+    gl_Flush(State->Mesa);
+    CopyMemory(Destination, Parameters, Count * sizeof(*Parameters));
+}
+
+static VOID APIENTRY
+Rpi5OglPointParameterfv(
+    _In_ GLenum ParameterName,
+    _In_reads_(ParameterName == GL_POINT_DISTANCE_ATTENUATION ? 3 : 1)
+        const GLfloat *Parameters)
+{
+    Rpi5OglSetPointParameters(ParameterName,
+                              Parameters,
+                              "glPointParameterfv");
+}
+
+static VOID APIENTRY
+Rpi5OglPointParameterf(
+    _In_ GLenum ParameterName,
+    _In_ GLfloat Parameter)
+{
+    if (ParameterName == GL_POINT_DISTANCE_ATTENUATION)
+    {
+        PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+        if (!Rpi5OglGl2CanChangeState(State, "glPointParameterf"))
+            return;
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM,
+                        "glPointParameterf(pname)");
+        return;
+    }
+    Rpi5OglSetPointParameters(ParameterName,
+                              &Parameter,
+                              "glPointParameterf");
+}
+
+static VOID APIENTRY
+Rpi5OglPointParameteriv(
+    _In_ GLenum ParameterName,
+    _In_reads_(ParameterName == GL_POINT_DISTANCE_ATTENUATION ? 3 : 1)
+        const GLint *Parameters)
+{
+    GLfloat Values[3];
+    ULONG Count;
+    ULONG Index;
+
+    if (Parameters == NULL)
+    {
+        PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+        if (!Rpi5OglGl2CanChangeState(State, "glPointParameteriv"))
+            return;
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE,
+                        "glPointParameteriv(params)");
+        return;
+    }
+    Count = ParameterName == GL_POINT_DISTANCE_ATTENUATION ? 3 : 1;
+    for (Index = 0; Index < Count; Index++)
+        Values[Index] = (GLfloat)Parameters[Index];
+    Rpi5OglSetPointParameters(ParameterName,
+                              Values,
+                              "glPointParameteriv");
 }
 
 static VOID APIENTRY
@@ -6295,21 +8314,445 @@ Rpi5OglPointParameteri(
     _In_ GLenum ParameterName,
     _In_ GLint Parameter)
 {
-    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
-
-    if (!Rpi5OglGl2CanChangeState(State, "glPointParameteri"))
-        return;
-    if (ParameterName != GL_POINT_SPRITE_COORD_ORIGIN)
+    if (ParameterName == GL_POINT_DISTANCE_ATTENUATION)
     {
+        PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+        if (!Rpi5OglGl2CanChangeState(State, "glPointParameteri"))
+            return;
         Rpi5OglGl2Error(State, GL_INVALID_ENUM,
                         "glPointParameteri(pname)");
         return;
     }
-    if (Parameter != GL_LOWER_LEFT && Parameter != GL_UPPER_LEFT)
+    {
+        GLfloat Value = (GLfloat)Parameter;
+
+        Rpi5OglSetPointParameters(ParameterName,
+                                  &Value,
+                                  "glPointParameteri");
+    }
+}
+
+static struct gl_texture_object *
+Rpi5OglGl2TextureForParameterTarget(
+    _In_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum Target,
+    _In_z_ PCSTR Function)
+{
+    switch (Target)
+    {
+        case GL_TEXTURE_1D:
+            return State->Mesa->Texture.Current1D;
+        case GL_TEXTURE_2D:
+            return State->Mesa->Texture.Current2D;
+        case GL_TEXTURE_3D:
+            return State->Mesa->Texture.Current3D;
+        default:
+            Rpi5OglGl2Error(State, GL_INVALID_ENUM, Function);
+            return NULL;
+    }
+}
+
+static PRPI5VC4_OGL_TEXTURE_METADATA
+Rpi5OglGl2TextureMetadata(
+    _In_ PRPI5VC4_OGL_GL2_STATE State,
+    _Inout_ struct gl_texture_object *Texture,
+    _In_ BOOL Create,
+    _In_z_ PCSTR Function)
+{
+    PRPI5VC4_OGL_TEXTURE_METADATA Metadata;
+
+    for (Metadata = State->TextureMetadata;
+         Metadata != NULL;
+         Metadata = Metadata->Next)
+    {
+        if (Metadata->Texture == Texture)
+            return Metadata;
+    }
+    if (!Create)
+        return NULL;
+    Metadata = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                         sizeof(*Metadata));
+    if (Metadata == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_OUT_OF_MEMORY, Function);
+        return NULL;
+    }
+    Metadata->Texture = Texture;
+    Metadata->Next = State->TextureMetadata;
+    State->TextureMetadata = Metadata;
+    return Metadata;
+}
+
+static VOID
+Rpi5OglGl2RemoveTextureMetadata(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_opt_ struct gl_texture_object *Texture)
+{
+    PRPI5VC4_OGL_TEXTURE_METADATA *Link;
+    PRPI5VC4_OGL_TEXTURE_METADATA Metadata;
+
+    if (State == NULL || Texture == NULL)
+        return;
+    for (Link = &State->TextureMetadata;
+         (Metadata = *Link) != NULL;
+         Link = &Metadata->Next)
+    {
+        if (Metadata->Texture != Texture)
+            continue;
+        *Link = Metadata->Next;
+        HeapFree(GetProcessHeap(), 0, Metadata);
+        return;
+    }
+}
+
+static VOID
+Rpi5OglSetIntegerTextureParameter(
+    _In_ GLenum Target,
+    _In_ GLenum ParameterName,
+    _In_reads_(ParameterName == GL_TEXTURE_BORDER_COLOR ? 4 : 1)
+        const GLuint *Parameters,
+    _In_z_ PCSTR Function)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    struct gl_texture_object *Texture;
+    PRPI5VC4_OGL_TEXTURE_METADATA Metadata;
+
+    if (!Rpi5OglGl2CanChangeState(State, Function))
+        return;
+    if (Parameters == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, Function);
+        return;
+    }
+    Texture = Rpi5OglGl2TextureForParameterTarget(State, Target, Function);
+    if (Texture == NULL)
+        return;
+    if (ParameterName != GL_TEXTURE_BORDER_COLOR)
+    {
+        GLint Parameter = (GLint)Parameters[0];
+
+        _mesa_TexParameteriv(Target, ParameterName, &Parameter);
+        return;
+    }
+    Metadata = Rpi5OglGl2TextureMetadata(State, Texture, TRUE, Function);
+    if (Metadata == NULL)
+        return;
+    if (memcmp(Metadata->IntegerBorderColor,
+               Parameters,
+               sizeof(Metadata->IntegerBorderColor)) == 0)
+    {
+        return;
+    }
+
+    gl_Flush(State->Mesa);
+    CopyMemory(Metadata->IntegerBorderColor,
+               Parameters,
+               sizeof(Metadata->IntegerBorderColor));
+    Texture->Dirty = GL_TRUE;
+    State->Mesa->Texture.AnyDirty = GL_TRUE;
+    Rpi5OglGl2TextureChanged(State, Texture);
+}
+
+static VOID APIENTRY
+Rpi5OglTexParameterIiv(
+    _In_ GLenum Target,
+    _In_ GLenum ParameterName,
+    _In_reads_(ParameterName == GL_TEXTURE_BORDER_COLOR ? 4 : 1)
+        const GLint *Parameters)
+{
+    Rpi5OglSetIntegerTextureParameter(Target,
+                                      ParameterName,
+                                      (const GLuint *)Parameters,
+                                      "glTexParameterIiv");
+}
+
+static VOID APIENTRY
+Rpi5OglTexParameterIuiv(
+    _In_ GLenum Target,
+    _In_ GLenum ParameterName,
+    _In_reads_(ParameterName == GL_TEXTURE_BORDER_COLOR ? 4 : 1)
+        const GLuint *Parameters)
+{
+    Rpi5OglSetIntegerTextureParameter(Target,
+                                      ParameterName,
+                                      Parameters,
+                                      "glTexParameterIuiv");
+}
+
+static VOID
+Rpi5OglGetIntegerTextureParameter(
+    _In_ GLenum Target,
+    _In_ GLenum ParameterName,
+    _Out_writes_(ParameterName == GL_TEXTURE_BORDER_COLOR ? 4 : 1)
+        GLuint *Parameters,
+    _In_z_ PCSTR Function)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+    struct gl_texture_object *Texture;
+    PRPI5VC4_OGL_TEXTURE_METADATA Metadata;
+
+    if (!Rpi5OglGl2CanChangeState(State, Function))
+        return;
+    if (Parameters == NULL)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, Function);
+        return;
+    }
+    Texture = Rpi5OglGl2TextureForParameterTarget(State, Target, Function);
+    if (Texture == NULL)
+        return;
+    Metadata = Rpi5OglGl2TextureMetadata(State, Texture, FALSE, Function);
+    if (ParameterName == GL_TEXTURE_BORDER_COLOR && Metadata != NULL)
+    {
+        CopyMemory(Parameters,
+                   Metadata->IntegerBorderColor,
+                   sizeof(Metadata->IntegerBorderColor));
+        return;
+    }
+    if (ParameterName == GL_TEXTURE_BORDER_COLOR)
+    {
+        GLint Values[4];
+
+        _mesa_GetTexParameteriv(Target, ParameterName, Values);
+        CopyMemory(Parameters, Values, sizeof(Values));
+    }
+    else
+    {
+        GLint Value;
+
+        _mesa_GetTexParameteriv(Target, ParameterName, &Value);
+        Parameters[0] = (GLuint)Value;
+    }
+}
+
+static VOID APIENTRY
+Rpi5OglGetTexParameterIiv(
+    _In_ GLenum Target,
+    _In_ GLenum ParameterName,
+    _Out_writes_(ParameterName == GL_TEXTURE_BORDER_COLOR ? 4 : 1)
+        GLint *Parameters)
+{
+    Rpi5OglGetIntegerTextureParameter(Target,
+                                      ParameterName,
+                                      (GLuint *)Parameters,
+                                      "glGetTexParameterIiv");
+}
+
+static VOID APIENTRY
+Rpi5OglGetTexParameterIuiv(
+    _In_ GLenum Target,
+    _In_ GLenum ParameterName,
+    _Out_writes_(ParameterName == GL_TEXTURE_BORDER_COLOR ? 4 : 1)
+        GLuint *Parameters)
+{
+    Rpi5OglGetIntegerTextureParameter(Target,
+                                      ParameterName,
+                                      Parameters,
+                                      "glGetTexParameterIuiv");
+}
+
+static BOOL
+Rpi5OglRejectCompressedUpload(
+    _In_ GLsizei ImageSize,
+    _In_z_ PCSTR Function)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+    if (!Rpi5OglGl2CanChangeState(State, Function))
+        return FALSE;
+    if (ImageSize < 0)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, Function);
+        return FALSE;
+    }
+    Rpi5OglGl2Error(State, GL_INVALID_ENUM, Function);
+    return FALSE;
+}
+
+static VOID APIENTRY
+Rpi5OglCompressedTexImage1D(
+    _In_ GLenum Target,
+    _In_ GLint Level,
+    _In_ GLenum InternalFormat,
+    _In_ GLsizei Width,
+    _In_ GLint Border,
+    _In_ GLsizei ImageSize,
+    _In_opt_ const GLvoid *Data)
+{
+    UNREFERENCED_PARAMETER(Target);
+    UNREFERENCED_PARAMETER(Level);
+    UNREFERENCED_PARAMETER(InternalFormat);
+    UNREFERENCED_PARAMETER(Width);
+    UNREFERENCED_PARAMETER(Border);
+    UNREFERENCED_PARAMETER(Data);
+    Rpi5OglRejectCompressedUpload(ImageSize, "glCompressedTexImage1D");
+}
+
+static VOID APIENTRY
+Rpi5OglCompressedTexImage2D(
+    _In_ GLenum Target,
+    _In_ GLint Level,
+    _In_ GLenum InternalFormat,
+    _In_ GLsizei Width,
+    _In_ GLsizei Height,
+    _In_ GLint Border,
+    _In_ GLsizei ImageSize,
+    _In_opt_ const GLvoid *Data)
+{
+    UNREFERENCED_PARAMETER(Target);
+    UNREFERENCED_PARAMETER(Level);
+    UNREFERENCED_PARAMETER(InternalFormat);
+    UNREFERENCED_PARAMETER(Width);
+    UNREFERENCED_PARAMETER(Height);
+    UNREFERENCED_PARAMETER(Border);
+    UNREFERENCED_PARAMETER(Data);
+    Rpi5OglRejectCompressedUpload(ImageSize, "glCompressedTexImage2D");
+}
+
+static VOID APIENTRY
+Rpi5OglCompressedTexImage3D(
+    _In_ GLenum Target,
+    _In_ GLint Level,
+    _In_ GLenum InternalFormat,
+    _In_ GLsizei Width,
+    _In_ GLsizei Height,
+    _In_ GLsizei Depth,
+    _In_ GLint Border,
+    _In_ GLsizei ImageSize,
+    _In_opt_ const GLvoid *Data)
+{
+    UNREFERENCED_PARAMETER(Target);
+    UNREFERENCED_PARAMETER(Level);
+    UNREFERENCED_PARAMETER(InternalFormat);
+    UNREFERENCED_PARAMETER(Width);
+    UNREFERENCED_PARAMETER(Height);
+    UNREFERENCED_PARAMETER(Depth);
+    UNREFERENCED_PARAMETER(Border);
+    UNREFERENCED_PARAMETER(Data);
+    Rpi5OglRejectCompressedUpload(ImageSize, "glCompressedTexImage3D");
+}
+
+static VOID APIENTRY
+Rpi5OglCompressedTexSubImage1D(
+    _In_ GLenum Target,
+    _In_ GLint Level,
+    _In_ GLint XOffset,
+    _In_ GLsizei Width,
+    _In_ GLenum Format,
+    _In_ GLsizei ImageSize,
+    _In_opt_ const GLvoid *Data)
+{
+    UNREFERENCED_PARAMETER(Target);
+    UNREFERENCED_PARAMETER(Level);
+    UNREFERENCED_PARAMETER(XOffset);
+    UNREFERENCED_PARAMETER(Width);
+    UNREFERENCED_PARAMETER(Format);
+    UNREFERENCED_PARAMETER(Data);
+    Rpi5OglRejectCompressedUpload(ImageSize,
+                                  "glCompressedTexSubImage1D");
+}
+
+static VOID APIENTRY
+Rpi5OglCompressedTexSubImage2D(
+    _In_ GLenum Target,
+    _In_ GLint Level,
+    _In_ GLint XOffset,
+    _In_ GLint YOffset,
+    _In_ GLsizei Width,
+    _In_ GLsizei Height,
+    _In_ GLenum Format,
+    _In_ GLsizei ImageSize,
+    _In_opt_ const GLvoid *Data)
+{
+    UNREFERENCED_PARAMETER(Target);
+    UNREFERENCED_PARAMETER(Level);
+    UNREFERENCED_PARAMETER(XOffset);
+    UNREFERENCED_PARAMETER(YOffset);
+    UNREFERENCED_PARAMETER(Width);
+    UNREFERENCED_PARAMETER(Height);
+    UNREFERENCED_PARAMETER(Format);
+    UNREFERENCED_PARAMETER(Data);
+    Rpi5OglRejectCompressedUpload(ImageSize,
+                                  "glCompressedTexSubImage2D");
+}
+
+static VOID APIENTRY
+Rpi5OglCompressedTexSubImage3D(
+    _In_ GLenum Target,
+    _In_ GLint Level,
+    _In_ GLint XOffset,
+    _In_ GLint YOffset,
+    _In_ GLint ZOffset,
+    _In_ GLsizei Width,
+    _In_ GLsizei Height,
+    _In_ GLsizei Depth,
+    _In_ GLenum Format,
+    _In_ GLsizei ImageSize,
+    _In_opt_ const GLvoid *Data)
+{
+    UNREFERENCED_PARAMETER(Target);
+    UNREFERENCED_PARAMETER(Level);
+    UNREFERENCED_PARAMETER(XOffset);
+    UNREFERENCED_PARAMETER(YOffset);
+    UNREFERENCED_PARAMETER(ZOffset);
+    UNREFERENCED_PARAMETER(Width);
+    UNREFERENCED_PARAMETER(Height);
+    UNREFERENCED_PARAMETER(Depth);
+    UNREFERENCED_PARAMETER(Format);
+    UNREFERENCED_PARAMETER(Data);
+    Rpi5OglRejectCompressedUpload(ImageSize,
+                                  "glCompressedTexSubImage3D");
+}
+
+static BOOL
+Rpi5OglValidCompressedTextureTarget(
+    _In_ GLenum Target)
+{
+    switch (Target)
+    {
+        case GL_TEXTURE_1D:
+        case GL_TEXTURE_2D:
+        case GL_TEXTURE_3D:
+        case GL_TEXTURE_1D_ARRAY:
+        case GL_TEXTURE_2D_ARRAY:
+        case GL_TEXTURE_CUBE_MAP_POSITIVE_X:
+        case GL_TEXTURE_CUBE_MAP_NEGATIVE_X:
+        case GL_TEXTURE_CUBE_MAP_POSITIVE_Y:
+        case GL_TEXTURE_CUBE_MAP_NEGATIVE_Y:
+        case GL_TEXTURE_CUBE_MAP_POSITIVE_Z:
+        case GL_TEXTURE_CUBE_MAP_NEGATIVE_Z:
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+
+static VOID APIENTRY
+Rpi5OglGetCompressedTexImage(
+    _In_ GLenum Target,
+    _In_ GLint Level,
+    _Out_ GLvoid *Image)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+    UNREFERENCED_PARAMETER(Image);
+    if (!Rpi5OglGl2CanChangeState(State, "glGetCompressedTexImage"))
+        return;
+    if (!Rpi5OglValidCompressedTextureTarget(Target))
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_ENUM,
+                        "glGetCompressedTexImage(target)");
+        return;
+    }
+    if (Level < 0 || Level >= MAX_TEXTURE_LEVELS)
     {
         Rpi5OglGl2Error(State, GL_INVALID_VALUE,
-                        "glPointParameteri(param)");
+                        "glGetCompressedTexImage(level)");
+        return;
     }
+    Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
+                    "glGetCompressedTexImage(uncompressed texture)");
 }
 
 typedef struct _RPI5VC4_OGL_GL2_PROC
@@ -6321,56 +8764,138 @@ typedef struct _RPI5VC4_OGL_GL2_PROC
 static const RPI5VC4_OGL_GL2_PROC Rpi5OglGl2Procedures[] =
 {
     {"glActiveTexture", (PROC)Rpi5OglActiveTexture},
+    {"glBeginConditionalRender", (PROC)Rpi5OglBeginConditionalRender},
+    {"glBeginQuery", (PROC)Rpi5OglBeginQuery},
+    {"glBeginQueryARB", (PROC)Rpi5OglBeginQuery},
     {"glAttachShader", (PROC)Rpi5OglAttachShader},
+    {"glBeginTransformFeedback", (PROC)Rpi5OglBeginTransformFeedback},
     {"glBindAttribLocation", (PROC)Rpi5OglBindAttribLocation},
+    {"glBindFragDataLocation", (PROC)Rpi5OglBindFragDataLocation},
     {"glBindVertexArray", (PROC)Rpi5OglBindVertexArray},
     {"glBlendColor", (PROC)Rpi5OglBlendColor},
     {"glBlendEquation", (PROC)Rpi5OglBlendEquation},
     {"glBlendEquationSeparate", (PROC)Rpi5OglBlendEquationSeparate},
     {"glBlendFuncSeparate", (PROC)Rpi5OglBlendFuncSeparate},
+    {"glClampColor", (PROC)Rpi5OglClampColor},
+    {"glClearBufferfi", (PROC)Rpi5OglClearBufferfi},
+    {"glClearBufferfv", (PROC)Rpi5OglClearBufferfv},
+    {"glClearBufferiv", (PROC)Rpi5OglClearBufferiv},
+    {"glClearBufferuiv", (PROC)Rpi5OglClearBufferuiv},
+    {"glColorMaski", (PROC)Rpi5OglColorMaski},
+    {"glCompressedTexImage1D", (PROC)Rpi5OglCompressedTexImage1D},
+    {"glCompressedTexImage2D", (PROC)Rpi5OglCompressedTexImage2D},
+    {"glCompressedTexImage3D", (PROC)Rpi5OglCompressedTexImage3D},
+    {"glCompressedTexSubImage1D",
+     (PROC)Rpi5OglCompressedTexSubImage1D},
+    {"glCompressedTexSubImage2D",
+     (PROC)Rpi5OglCompressedTexSubImage2D},
+    {"glCompressedTexSubImage3D",
+     (PROC)Rpi5OglCompressedTexSubImage3D},
     {"glCompileShader", (PROC)Rpi5OglCompileShader},
     {"glCreateProgram", (PROC)Rpi5OglCreateProgram},
     {"glCreateShader", (PROC)Rpi5OglCreateShader},
     {"glDeleteProgram", (PROC)Rpi5OglDeleteProgram},
+    {"glDeleteQueries", (PROC)Rpi5OglDeleteQueries},
+    {"glDeleteQueriesARB", (PROC)Rpi5OglDeleteQueries},
     {"glDeleteShader", (PROC)Rpi5OglDeleteShader},
     {"glDeleteVertexArrays", (PROC)Rpi5OglDeleteVertexArrays},
     {"glDetachShader", (PROC)Rpi5OglDetachShader},
+    {"glDisablei", (PROC)Rpi5OglDisablei},
     {"glDisableVertexAttribArray", (PROC)Rpi5OglDisableVertexAttribArray},
+    {"glEnablei", (PROC)Rpi5OglEnablei},
     {"glEnableVertexAttribArray", (PROC)Rpi5OglEnableVertexAttribArray},
+    {"glEndConditionalRender", (PROC)Rpi5OglEndConditionalRender},
+    {"glEndQuery", (PROC)Rpi5OglEndQuery},
+    {"glEndQueryARB", (PROC)Rpi5OglEndQuery},
+    {"glEndTransformFeedback", (PROC)Rpi5OglEndTransformFeedback},
     {"glGetActiveAttrib", (PROC)Rpi5OglGetActiveAttrib},
     {"glGetActiveUniform", (PROC)Rpi5OglGetActiveUniform},
     {"glGetAttachedShaders", (PROC)Rpi5OglGetAttachedShaders},
     {"glGetAttribLocation", (PROC)Rpi5OglGetAttribLocation},
+    {"glGetBooleani_v", (PROC)Rpi5OglGetBooleani},
+    {"glGetCompressedTexImage", (PROC)Rpi5OglGetCompressedTexImage},
+    {"glGetFragDataLocation", (PROC)Rpi5OglGetFragDataLocation},
+    {"glGetIntegeri_v", (PROC)Rpi5OglGetIntegeri},
     {"glGetProgramInfoLog", (PROC)Rpi5OglGetProgramInfoLog},
     {"glGetProgramiv", (PROC)Rpi5OglGetProgramiv},
+    {"glGetQueryObjectiv", (PROC)Rpi5OglGetQueryObjectiv},
+    {"glGetQueryObjectivARB", (PROC)Rpi5OglGetQueryObjectiv},
+    {"glGetQueryObjectuiv", (PROC)Rpi5OglGetQueryObjectuiv},
+    {"glGetQueryObjectuivARB", (PROC)Rpi5OglGetQueryObjectuiv},
     {"glGetQueryiv", (PROC)Rpi5OglGetQueryiv},
     {"glGetQueryivARB", (PROC)Rpi5OglGetQueryiv},
     {"glGetShaderInfoLog", (PROC)Rpi5OglGetShaderInfoLog},
     {"glGetShaderiv", (PROC)Rpi5OglGetShaderiv},
     {"glGetShaderSource", (PROC)Rpi5OglGetShaderSource},
+    {"glGetTexParameterIiv", (PROC)Rpi5OglGetTexParameterIiv},
+    {"glGetTexParameterIuiv", (PROC)Rpi5OglGetTexParameterIuiv},
+    {"glGetTransformFeedbackVarying",
+     (PROC)Rpi5OglGetTransformFeedbackVarying},
+    {"glGetUniformfv", (PROC)Rpi5OglGetUniformfv},
+    {"glGetUniformiv", (PROC)Rpi5OglGetUniformiv},
     {"glGetUniformLocation", (PROC)Rpi5OglGetUniformLocation},
+    {"glGetUniformuiv", (PROC)Rpi5OglGetUniformuiv},
     {"glGetVertexAttribdv", (PROC)Rpi5OglGetVertexAttribdv},
     {"glGetVertexAttribfv", (PROC)Rpi5OglGetVertexAttribfv},
     {"glGetVertexAttribIiv", (PROC)Rpi5OglGetVertexAttribIiv},
     {"glGetVertexAttribIuiv", (PROC)Rpi5OglGetVertexAttribIuiv},
     {"glGetVertexAttribiv", (PROC)Rpi5OglGetVertexAttribiv},
     {"glGetVertexAttribPointerv", (PROC)Rpi5OglGetVertexAttribPointerv},
+    {"glGenQueries", (PROC)Rpi5OglGenQueries},
+    {"glGenQueriesARB", (PROC)Rpi5OglGenQueries},
     {"glGenVertexArrays", (PROC)Rpi5OglGenVertexArrays},
     {"glIsProgram", (PROC)Rpi5OglIsProgram},
+    {"glIsQuery", (PROC)Rpi5OglIsQuery},
+    {"glIsQueryARB", (PROC)Rpi5OglIsQuery},
+    {"glIsEnabledi", (PROC)Rpi5OglIsEnabledi},
     {"glIsShader", (PROC)Rpi5OglIsShader},
     {"glIsVertexArray", (PROC)Rpi5OglIsVertexArray},
     {"glLinkProgram", (PROC)Rpi5OglLinkProgram},
+    {"glPointParameterf", (PROC)Rpi5OglPointParameterf},
+    {"glPointParameterfv", (PROC)Rpi5OglPointParameterfv},
     {"glPointParameteri", (PROC)Rpi5OglPointParameteri},
+    {"glPointParameteriv", (PROC)Rpi5OglPointParameteriv},
     {"glShaderSource", (PROC)Rpi5OglShaderSource},
     {"glStencilFuncSeparate", (PROC)Rpi5OglStencilFuncSeparate},
+    {"glStencilMaskSeparate", (PROC)Rpi5OglStencilMaskSeparate},
     {"glStencilOpSeparate", (PROC)Rpi5OglStencilOpSeparate},
+    {"glTexParameterIiv", (PROC)Rpi5OglTexParameterIiv},
+    {"glTexParameterIuiv", (PROC)Rpi5OglTexParameterIuiv},
+    {"glTransformFeedbackVaryings",
+     (PROC)Rpi5OglTransformFeedbackVaryings},
     {"glUniform1f", (PROC)Rpi5OglUniform1f},
+    {"glUniform1fv", (PROC)Rpi5OglUniform1fv},
     {"glUniform1i", (PROC)Rpi5OglUniform1i},
+    {"glUniform1iv", (PROC)Rpi5OglUniform1iv},
+    {"glUniform1ui", (PROC)Rpi5OglUniform1ui},
+    {"glUniform1uiv", (PROC)Rpi5OglUniform1uiv},
+    {"glUniform2f", (PROC)Rpi5OglUniform2f},
     {"glUniform2fv", (PROC)Rpi5OglUniform2fv},
+    {"glUniform2i", (PROC)Rpi5OglUniform2i},
+    {"glUniform2iv", (PROC)Rpi5OglUniform2iv},
+    {"glUniform2ui", (PROC)Rpi5OglUniform2ui},
+    {"glUniform2uiv", (PROC)Rpi5OglUniform2uiv},
+    {"glUniform3f", (PROC)Rpi5OglUniform3f},
     {"glUniform3fv", (PROC)Rpi5OglUniform3fv},
+    {"glUniform3i", (PROC)Rpi5OglUniform3i},
+    {"glUniform3iv", (PROC)Rpi5OglUniform3iv},
+    {"glUniform3ui", (PROC)Rpi5OglUniform3ui},
+    {"glUniform3uiv", (PROC)Rpi5OglUniform3uiv},
+    {"glUniform4f", (PROC)Rpi5OglUniform4f},
     {"glUniform4fv", (PROC)Rpi5OglUniform4fv},
+    {"glUniform4i", (PROC)Rpi5OglUniform4i},
+    {"glUniform4iv", (PROC)Rpi5OglUniform4iv},
+    {"glUniform4ui", (PROC)Rpi5OglUniform4ui},
+    {"glUniform4uiv", (PROC)Rpi5OglUniform4uiv},
+    {"glUniformMatrix2fv", (PROC)Rpi5OglUniformMatrix2fv},
+    {"glUniformMatrix2x3fv", (PROC)Rpi5OglUniformMatrix2x3fv},
+    {"glUniformMatrix2x4fv", (PROC)Rpi5OglUniformMatrix2x4fv},
     {"glUniformMatrix3fv", (PROC)Rpi5OglUniformMatrix3fv},
+    {"glUniformMatrix3x2fv", (PROC)Rpi5OglUniformMatrix3x2fv},
+    {"glUniformMatrix3x4fv", (PROC)Rpi5OglUniformMatrix3x4fv},
     {"glUniformMatrix4fv", (PROC)Rpi5OglUniformMatrix4fv},
+    {"glUniformMatrix4x2fv", (PROC)Rpi5OglUniformMatrix4x2fv},
+    {"glUniformMatrix4x3fv", (PROC)Rpi5OglUniformMatrix4x3fv},
     {"glUseProgram", (PROC)Rpi5OglUseProgram},
     {"glValidateProgram", (PROC)Rpi5OglValidateProgram},
     {"glVertexAttrib1d", (PROC)Rpi5OglVertexAttrib1d},
@@ -6452,6 +8977,8 @@ Rpi5OglGl2Initialize(
     NewState->BufferState = BufferState;
     NewState->NextName = 1;
     NewState->NextVertexArrayName = 1;
+    NewState->NextQueryName = 1;
+    NewState->ConditionalRenderPass = TRUE;
     NewState->TextureSerial = 1;
     NewState->BlendEquationRgb = GL_FUNC_ADD;
     NewState->BlendEquationAlpha = GL_FUNC_ADD;
@@ -6459,6 +8986,13 @@ Rpi5OglGl2Initialize(
     NewState->BlendDestinationRgb = GL_ZERO;
     NewState->BlendSourceAlpha = GL_ONE;
     NewState->BlendDestinationAlpha = GL_ZERO;
+    NewState->ClampVertexColor = GL_TRUE;
+    NewState->ClampFragmentColor = GL_FIXED_ONLY;
+    NewState->ClampReadColor = GL_FIXED_ONLY;
+    NewState->PointSizeMaximum = 1.0f;
+    NewState->PointFadeThreshold = 1.0f;
+    NewState->PointDistanceAttenuation[0] = 1.0f;
+    NewState->PointSpriteCoordOrigin = GL_UPPER_LEFT;
     NewState->ActiveTextureUnit = RPI5VC4_V3D_TEXTURE_SLOT_PRIMARY;
     NewState->TextureUnits[RPI5VC4_V3D_TEXTURE_SLOT_PRIMARY] =
         Mesa->Texture.Current2D;
@@ -6478,6 +9012,7 @@ Rpi5OglGl2Cleanup(
     _In_opt_ PRPI5VC4_OGL_GL2_STATE State)
 {
     ULONG Index;
+    PRPI5VC4_OGL_TEXTURE_METADATA Metadata;
 
     if (State == NULL)
         return;
@@ -6492,6 +9027,13 @@ Rpi5OglGl2Cleanup(
 
         if (Texture != NULL && Texture->Name != 0 && Texture->RefCount > 0)
             Texture->RefCount--;
+    }
+    if (State->JellyfishVertexCache != NULL)
+        HeapFree(GetProcessHeap(), 0, State->JellyfishVertexCache);
+    while ((Metadata = State->TextureMetadata) != NULL)
+    {
+        State->TextureMetadata = Metadata->Next;
+        HeapFree(GetProcessHeap(), 0, Metadata);
     }
     HeapFree(GetProcessHeap(), 0, State);
 }
@@ -6973,14 +9515,158 @@ Rpi5OglGl2BlendQueryReady(
     return TRUE;
 }
 
+static BOOL
+Rpi5OglGl2PointQuery(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum ParameterName,
+    _Out_writes_(3) GLfloat Values[3],
+    _Out_ PULONG Count,
+    _In_z_ PCSTR Function)
+{
+    ZeroMemory(Values, 3 * sizeof(Values[0]));
+    *Count = 1;
+    switch (ParameterName)
+    {
+        case GL_POINT_SIZE_MIN:
+            Values[0] = State != NULL ? State->PointSizeMinimum : 0.0f;
+            break;
+        case GL_POINT_SIZE_MAX:
+            Values[0] = State != NULL ? State->PointSizeMaximum : 0.0f;
+            break;
+        case GL_POINT_FADE_THRESHOLD_SIZE:
+            Values[0] = State != NULL ? State->PointFadeThreshold : 0.0f;
+            break;
+        case GL_POINT_DISTANCE_ATTENUATION:
+            *Count = 3;
+            if (State != NULL)
+            {
+                CopyMemory(Values,
+                           State->PointDistanceAttenuation,
+                           sizeof(State->PointDistanceAttenuation));
+            }
+            break;
+        case GL_POINT_SPRITE_COORD_ORIGIN:
+            Values[0] = State != NULL ?
+                (GLfloat)State->PointSpriteCoordOrigin : 0.0f;
+            break;
+        default:
+            return FALSE;
+    }
+    if (State != NULL && State->Mesa != NULL &&
+        INSIDE_BEGIN_END(State->Mesa))
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION, Function);
+    }
+    return TRUE;
+}
+
+static BOOL
+Rpi5OglGl2CompressedFormatQuery(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum ParameterName,
+    _Out_ PBOOL HasValue,
+    _In_z_ PCSTR Function)
+{
+    if (ParameterName != GL_NUM_COMPRESSED_TEXTURE_FORMATS &&
+        ParameterName != GL_COMPRESSED_TEXTURE_FORMATS)
+    {
+        return FALSE;
+    }
+    *HasValue = ParameterName == GL_NUM_COMPRESSED_TEXTURE_FORMATS;
+    if (State != NULL && State->Mesa != NULL &&
+        INSIDE_BEGIN_END(State->Mesa))
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION, Function);
+    }
+    return TRUE;
+}
+
+static BOOL
+Rpi5OglGl2BackStencilQuery(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum ParameterName,
+    _Out_ GLint *Value,
+    _In_z_ PCSTR Function)
+{
+    if (State == NULL || State->Mesa == NULL)
+        return FALSE;
+    switch (ParameterName)
+    {
+        case GL_STENCIL_BACK_FUNC:
+            *Value = (GLint)State->Mesa->Stencil.BackFunction;
+            break;
+        case GL_STENCIL_BACK_FAIL:
+            *Value = (GLint)State->Mesa->Stencil.BackFailFunc;
+            break;
+        case GL_STENCIL_BACK_PASS_DEPTH_FAIL:
+            *Value = (GLint)State->Mesa->Stencil.BackZFailFunc;
+            break;
+        case GL_STENCIL_BACK_PASS_DEPTH_PASS:
+            *Value = (GLint)State->Mesa->Stencil.BackZPassFunc;
+            break;
+        case GL_STENCIL_BACK_REF:
+            *Value = (GLint)State->Mesa->Stencil.BackRef;
+            break;
+        case GL_STENCIL_BACK_VALUE_MASK:
+            *Value = (GLint)State->Mesa->Stencil.BackValueMask;
+            break;
+        case GL_STENCIL_BACK_WRITEMASK:
+            *Value = (GLint)State->Mesa->Stencil.BackWriteMask;
+            break;
+        default:
+            return FALSE;
+    }
+    if (INSIDE_BEGIN_END(State->Mesa))
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION, Function);
+    return TRUE;
+}
+
 BOOL
 Rpi5OglGl2GetBooleanv(
     _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
     _In_ GLenum ParameterName,
     _Out_ GLboolean *Parameters)
 {
+    GLfloat Values[3];
+    BOOL HasValue;
+    GLint IntegerValue;
+    ULONG Count;
     ULONG Index;
 
+    if (Rpi5OglGl2CompressedFormatQuery(State,
+                                         ParameterName,
+                                         &HasValue,
+                                         "glGetBooleanv"))
+    {
+        if (State != NULL && Parameters != NULL && HasValue &&
+            !INSIDE_BEGIN_END(State->Mesa))
+            Parameters[0] = GL_FALSE;
+        return TRUE;
+    }
+    if (Rpi5OglGl2BackStencilQuery(State,
+                                    ParameterName,
+                                    &IntegerValue,
+                                    "glGetBooleanv"))
+    {
+        if (Parameters != NULL && !INSIDE_BEGIN_END(State->Mesa))
+            Parameters[0] = IntegerValue != 0;
+        return TRUE;
+    }
+
+    if (Rpi5OglGl2PointQuery(State,
+                              ParameterName,
+                              Values,
+                              &Count,
+                              "glGetBooleanv"))
+    {
+        if (State != NULL && Parameters != NULL &&
+            !INSIDE_BEGIN_END(State->Mesa))
+        {
+            for (Index = 0; Index < Count; Index++)
+                Parameters[Index] = Values[Index] != 0.0f;
+        }
+        return TRUE;
+    }
     if (!Rpi5OglGl2BlendQueryReady(State,
                                    ParameterName,
                                    "glGetBooleanv"))
@@ -7011,8 +9697,46 @@ Rpi5OglGl2GetDoublev(
     _In_ GLenum ParameterName,
     _Out_ GLdouble *Parameters)
 {
+    GLfloat Values[3];
+    BOOL HasValue;
+    GLint IntegerValue;
+    ULONG Count;
     ULONG Index;
 
+    if (Rpi5OglGl2CompressedFormatQuery(State,
+                                         ParameterName,
+                                         &HasValue,
+                                         "glGetDoublev"))
+    {
+        if (State != NULL && Parameters != NULL && HasValue &&
+            !INSIDE_BEGIN_END(State->Mesa))
+            Parameters[0] = 0.0;
+        return TRUE;
+    }
+    if (Rpi5OglGl2BackStencilQuery(State,
+                                    ParameterName,
+                                    &IntegerValue,
+                                    "glGetDoublev"))
+    {
+        if (Parameters != NULL && !INSIDE_BEGIN_END(State->Mesa))
+            Parameters[0] = (GLdouble)IntegerValue;
+        return TRUE;
+    }
+
+    if (Rpi5OglGl2PointQuery(State,
+                              ParameterName,
+                              Values,
+                              &Count,
+                              "glGetDoublev"))
+    {
+        if (State != NULL && Parameters != NULL &&
+            !INSIDE_BEGIN_END(State->Mesa))
+        {
+            for (Index = 0; Index < Count; Index++)
+                Parameters[Index] = (GLdouble)Values[Index];
+        }
+        return TRUE;
+    }
     if (!Rpi5OglGl2BlendQueryReady(State,
                                    ParameterName,
                                    "glGetDoublev"))
@@ -7043,6 +9767,44 @@ Rpi5OglGl2GetFloatv(
     _In_ GLenum ParameterName,
     _Out_ GLfloat *Parameters)
 {
+    GLfloat Values[3];
+    BOOL HasValue;
+    GLint IntegerValue;
+    ULONG Count;
+
+    if (Rpi5OglGl2CompressedFormatQuery(State,
+                                         ParameterName,
+                                         &HasValue,
+                                         "glGetFloatv"))
+    {
+        if (State != NULL && Parameters != NULL && HasValue &&
+            !INSIDE_BEGIN_END(State->Mesa))
+            Parameters[0] = 0.0f;
+        return TRUE;
+    }
+    if (Rpi5OglGl2BackStencilQuery(State,
+                                    ParameterName,
+                                    &IntegerValue,
+                                    "glGetFloatv"))
+    {
+        if (Parameters != NULL && !INSIDE_BEGIN_END(State->Mesa))
+            Parameters[0] = (GLfloat)IntegerValue;
+        return TRUE;
+    }
+
+    if (Rpi5OglGl2PointQuery(State,
+                              ParameterName,
+                              Values,
+                              &Count,
+                              "glGetFloatv"))
+    {
+        if (State != NULL && Parameters != NULL &&
+            !INSIDE_BEGIN_END(State->Mesa))
+        {
+            CopyMemory(Parameters, Values, Count * sizeof(Values[0]));
+        }
+        return TRUE;
+    }
     if (!Rpi5OglGl2BlendQueryReady(State,
                                    ParameterName,
                                    "glGetFloatv"))
@@ -7074,14 +9836,61 @@ Rpi5OglGl2GetIntegerv(
     _In_ GLenum ParameterName,
     _Out_ GLint *Parameters)
 {
+    GLfloat Values[3];
+    BOOL HasValue;
+    GLint IntegerValue;
+    ULONG Count;
     ULONG Index;
 
+    if (Rpi5OglGl2CompressedFormatQuery(State,
+                                         ParameterName,
+                                         &HasValue,
+                                         "glGetIntegerv"))
+    {
+        if (State != NULL && Parameters != NULL && HasValue &&
+            !INSIDE_BEGIN_END(State->Mesa))
+            Parameters[0] = 0;
+        return TRUE;
+    }
+    if (Rpi5OglGl2BackStencilQuery(State,
+                                    ParameterName,
+                                    &IntegerValue,
+                                    "glGetIntegerv"))
+    {
+        if (Parameters != NULL && !INSIDE_BEGIN_END(State->Mesa))
+            Parameters[0] = IntegerValue;
+        return TRUE;
+    }
+
+    if (Rpi5OglGl2PointQuery(State,
+                              ParameterName,
+                              Values,
+                              &Count,
+                              "glGetIntegerv"))
+    {
+        if (State != NULL && Parameters != NULL &&
+            !INSIDE_BEGIN_END(State->Mesa))
+        {
+            for (Index = 0; Index < Count; Index++)
+                Parameters[Index] = (GLint)Values[Index];
+        }
+        return TRUE;
+    }
     if (State != NULL)
     {
         GLint Value;
 
         switch (ParameterName)
         {
+            case GL_CLAMP_VERTEX_COLOR:
+                Value = State->ClampVertexColor;
+                break;
+            case GL_CLAMP_FRAGMENT_COLOR:
+                Value = State->ClampFragmentColor;
+                break;
+            case GL_CLAMP_READ_COLOR:
+                Value = State->ClampReadColor;
+                break;
             case GL_MAX_CLIP_DISTANCES:
                 Value = 6;
                 break;
@@ -7102,6 +9911,15 @@ Rpi5OglGl2GetIntegerv(
                 break;
             case GL_MAX_VERTEX_ATTRIBS:
                 Value = RPI5VC4_GL2_MAX_VERTEX_ATTRIBS;
+                break;
+            case GL_MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS:
+                Value = 64;
+                break;
+            case GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS:
+                Value = RPI5VC4_OGL_MAX_TRANSFORM_FEEDBACK_BUFFERS;
+                break;
+            case GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS:
+                Value = 4;
                 break;
             case GL_VERTEX_ARRAY_BINDING:
                 Value = State->CurrentVertexArray != NULL ?
@@ -7150,6 +9968,51 @@ Rpi5OglGl2GetIntegerv(
             (GLint)Rpi5OglGl2BlendQueryEnum(State, ParameterName);
     }
     return TRUE;
+}
+
+BOOL
+Rpi5OglGl2SetCompatibilityEnable(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum Capability,
+    _In_ BOOL Enable)
+{
+    if (Capability != GL_RASTERIZER_DISCARD)
+        return FALSE;
+    if (!Rpi5OglGl2CanChangeState(State,
+                                   Enable ? "glEnable" : "glDisable"))
+    {
+        return TRUE;
+    }
+    State->RasterizerDiscard = Enable;
+    return TRUE;
+}
+
+BOOL
+Rpi5OglGl2CompatibilityEnabled(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum Capability,
+    _Out_ GLboolean *Enabled)
+{
+    if (Capability != GL_RASTERIZER_DISCARD)
+        return FALSE;
+    if (State == NULL || Enabled == NULL)
+        return TRUE;
+    if (INSIDE_BEGIN_END(State->Mesa))
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION, "glIsEnabled");
+        *Enabled = GL_FALSE;
+        return TRUE;
+    }
+    *Enabled = State->RasterizerDiscard;
+    return TRUE;
+}
+
+BOOL
+Rpi5OglGl2TransformFeedbackActive(VOID)
+{
+    PRPI5VC4_OGL_GL2_STATE State = Rpi5OglCurrentGl2State();
+
+    return State != NULL && State->TransformFeedbackActive;
 }
 
 BOOL
@@ -7346,6 +10209,7 @@ Rpi5OglGl2TextureDeleted(
     if (State == NULL || Texture == NULL)
         return;
 
+    Rpi5OglGl2RemoveTextureMetadata(State, Texture);
     Rpi5OglDiscardRetainedDepthTexture(Texture);
     Rpi5OglGl2TextureChanged(State, Texture);
     if (State->UploadedTexture == Texture)
@@ -7368,6 +10232,19 @@ Rpi5OglGl2TextureDeleted(
         if (Texture->Name != 0 && Texture->RefCount > 0)
             Texture->RefCount--;
     }
+}
+
+VOID
+Rpi5OglGl2TextureParameterChanged(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_opt_ struct gl_texture_object *Texture,
+    _In_ GLenum ParameterName)
+{
+    if (State == NULL || Texture == NULL)
+        return;
+    if (ParameterName == GL_TEXTURE_BORDER_COLOR)
+        Rpi5OglGl2RemoveTextureMetadata(State, Texture);
+    Rpi5OglGl2TextureChanged(State, Texture);
 }
 
 BOOL
@@ -8059,7 +10936,7 @@ Rpi5OglGl2Normalize3(
 
     if (!(LengthSquared > 0.0f))
         return FALSE;
-    InverseLength = 1.0f / (GLfloat)sqrt((double)LengthSquared);
+    InverseLength = 1.0f / sqrtf(LengthSquared);
     Vector[0] *= InverseLength;
     Vector[1] *= InverseLength;
     Vector[2] *= InverseLength;
@@ -8130,13 +11007,38 @@ Rpi5OglGl2SmoothStep(
     return Value * Value * (3.0f - 2.0f * Value);
 }
 
+static GLfloat
+Rpi5OglGl2ComposeSine(
+    _In_ GLfloat A,
+    _In_ GLfloat SinA,
+    _In_ GLfloat CosA,
+    _In_ GLfloat B,
+    _In_ GLfloat SinB,
+    _In_ GLfloat CosB)
+{
+    GLfloat Rounded = A + B;
+    GLfloat Delta = (GLfloat)((double)Rounded - ((double)A + (double)B));
+    GLfloat DeltaSquared = Delta * Delta;
+    GLfloat SinExact = SinA * CosB + CosA * SinB;
+    GLfloat CosExact = CosA * CosB - SinA * SinB;
+
+    /* Correct the angle-addition result for the float rounding performed by
+     * the original GLSL addition.  The maximum correction is half an ulp of
+     * A + B, so the cubic expansion is well inside highp-float precision. */
+    return SinExact * (1.0f - 0.5f * DeltaSquared) +
+           CosExact * Delta * (1.0f - DeltaSquared / 6.0f);
+}
+
 static BOOL
-Rpi5OglGl2StoreJellyfishMeshVertex(
+Rpi5OglGl2StoreAnimatedJellyfishMeshVertex(
     _In_ PRPI5VC4_OGL_PROGRAM Program,
     _In_reads_(4) const GLfloat ObjectPosition[4],
     _In_reads_(4) const GLfloat ObjectNormal[4],
     _In_reads_(4) const GLfloat ObjectColor[4],
     _In_reads_(4) const GLfloat ObjectTexCoord[4],
+    _In_ GLfloat AnimationScale,
+    _In_ GLfloat Animation0,
+    _In_ GLfloat Animation1,
     _Out_writes_(4) GLfloat ClipPosition[4],
     _Out_ PRPI5VC4_V3D_VERTEX Output,
     _Out_ PRPI5VC4_V3D_TEXCOORD Auxiliary)
@@ -8149,25 +11051,13 @@ Rpi5OglGl2StoreJellyfishMeshVertex(
     GLfloat Diffuse[3];
     GLfloat Ambient[3];
     GLfloat LightDistance;
+    GLfloat InverseLightDistance;
     GLfloat DiffuseProduct;
     GLfloat LightFalloff;
     GLfloat FresnelProduct;
-    GLfloat Offset;
-    GLfloat AnimationScale;
-    GLfloat Animation0;
-    GLfloat Animation1;
     GLfloat Dot;
     ULONG Component;
 
-    Offset = (-ObjectPosition[1] - 0.8f) / 10.0f;
-    if (Offset < 0.0f)
-        Offset = 0.0f;
-    Offset = Rpi5OglGl2SmoothStep(Offset);
-    AnimationScale = 1.0f - Offset;
-    Animation0 = (GLfloat)sin((double)(
-        Program->CurrentTime + ObjectPosition[1] / 2.0f));
-    Animation1 = (GLfloat)sin((double)(
-        Program->CurrentTime * 2.0f + ObjectPosition[1] / 0.5f));
     for (Component = 0; Component < 3; Component++)
     {
         AnimatedPosition[Component] = ObjectPosition[Component] +
@@ -8193,15 +11083,16 @@ Rpi5OglGl2StoreJellyfishMeshVertex(
     LightDirection[0] = Program->LightPosition[0] - WorldPosition[0];
     LightDirection[1] = Program->LightPosition[1] - WorldPosition[1];
     LightDirection[2] = Program->LightPosition[2] - WorldPosition[2];
-    LightDistance = (GLfloat)sqrt((double)(
+    LightDistance = sqrtf(
         LightDirection[0] * LightDirection[0] +
         LightDirection[1] * LightDirection[1] +
-        LightDirection[2] * LightDirection[2]));
+        LightDirection[2] * LightDirection[2]);
     if (!(LightDistance > 0.0f))
         return FALSE;
-    LightDirection[0] /= LightDistance;
-    LightDirection[1] /= LightDistance;
-    LightDirection[2] /= LightDistance;
+    InverseLightDistance = 1.0f / LightDistance;
+    LightDirection[0] *= InverseLightDistance;
+    LightDirection[1] *= InverseLightDistance;
+    LightDirection[2] *= InverseLightDistance;
     DiffuseProduct = TransformedNormal[0] * LightDirection[0] +
                      TransformedNormal[1] * LightDirection[1] +
                      TransformedNormal[2] * LightDirection[2];
@@ -8221,19 +11112,29 @@ Rpi5OglGl2StoreJellyfishMeshVertex(
 
     if (WorldPosition[3] == 0.0f)
         return FALSE;
-    WorldEyeVector[0] = WorldPosition[0] / WorldPosition[3];
-    WorldEyeVector[1] = WorldPosition[1] / WorldPosition[3];
-    WorldEyeVector[2] = WorldPosition[2] / WorldPosition[3];
+    WorldEyeVector[0] = WorldPosition[0];
+    WorldEyeVector[1] = WorldPosition[1];
+    WorldEyeVector[2] = WorldPosition[2];
+    if (WorldPosition[3] < 0.0f)
+    {
+        WorldEyeVector[0] = -WorldEyeVector[0];
+        WorldEyeVector[1] = -WorldEyeVector[1];
+        WorldEyeVector[2] = -WorldEyeVector[2];
+    }
     if (!Rpi5OglGl2Normalize3(WorldEyeVector))
         return FALSE;
     Dot = TransformedNormal[0] * -WorldEyeVector[0] +
           TransformedNormal[1] * -WorldEyeVector[1] +
           TransformedNormal[2] * -WorldEyeVector[2];
-    Dot = (GLfloat)fabs((double)Dot);
+    Dot = fabsf(Dot);
     if (Dot > 1.0f)
         Dot = 1.0f;
-    FresnelProduct = (GLfloat)pow((double)(1.0f - Dot),
-                                  (double)Program->FresnelPower);
+    if (Program->FresnelPower == 1.0f)
+        FresnelProduct = 1.0f - Dot;
+    else if (Program->FresnelPower == 2.0f)
+        FresnelProduct = (1.0f - Dot) * (1.0f - Dot);
+    else
+        FresnelProduct = powf(1.0f - Dot, Program->FresnelPower);
 
     for (Component = 0; Component < 4; Component++)
     {
@@ -8257,6 +11158,42 @@ Rpi5OglGl2StoreJellyfishMeshVertex(
         Program->FresnelColor[0] * Program->FresnelColor[3] *
         FresnelProduct;
     return TRUE;
+}
+
+static BOOL
+Rpi5OglGl2StoreJellyfishMeshVertex(
+    _In_ PRPI5VC4_OGL_PROGRAM Program,
+    _In_reads_(4) const GLfloat ObjectPosition[4],
+    _In_reads_(4) const GLfloat ObjectNormal[4],
+    _In_reads_(4) const GLfloat ObjectColor[4],
+    _In_reads_(4) const GLfloat ObjectTexCoord[4],
+    _Out_writes_(4) GLfloat ClipPosition[4],
+    _Out_ PRPI5VC4_V3D_VERTEX Output,
+    _Out_ PRPI5VC4_V3D_TEXCOORD Auxiliary)
+{
+    GLfloat Offset;
+    GLfloat AnimationScale;
+    GLfloat Animation0;
+    GLfloat Animation1;
+
+    Offset = (-ObjectPosition[1] - 0.8f) / 10.0f;
+    if (Offset < 0.0f)
+        Offset = 0.0f;
+    AnimationScale = 1.0f - Rpi5OglGl2SmoothStep(Offset);
+    Animation0 = sinf(Program->CurrentTime + ObjectPosition[1] / 2.0f);
+    Animation1 = sinf(Program->CurrentTime * 2.0f +
+                      ObjectPosition[1] / 0.5f);
+    return Rpi5OglGl2StoreAnimatedJellyfishMeshVertex(Program,
+                                                      ObjectPosition,
+                                                      ObjectNormal,
+                                                      ObjectColor,
+                                                      ObjectTexCoord,
+                                                      AnimationScale,
+                                                      Animation0,
+                                                      Animation1,
+                                                      ClipPosition,
+                                                      Output,
+                                                      Auxiliary);
 }
 
 static VOID
@@ -8389,6 +11326,213 @@ Rpi5OglGl2ReadBuildAttribute(
             Attribute->Normalized,
             Attribute->Integer);
     }
+}
+
+static BOOL
+Rpi5OglGl2EnsureJellyfishVertexCache(
+    _Inout_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ ULONG EntryCount)
+{
+    PRPI5VC4_OGL_JELLYFISH_VERTEX_CACHE_ENTRY NewCache;
+    SIZE_T Size;
+
+    if (EntryCount <= State->JellyfishVertexCacheCapacity)
+        return TRUE;
+    if ((SIZE_T)EntryCount >
+        (SIZE_T)-1 / sizeof(State->JellyfishVertexCache[0]))
+    {
+        return FALSE;
+    }
+
+    Size = (SIZE_T)EntryCount * sizeof(State->JellyfishVertexCache[0]);
+    if (State->JellyfishVertexCache == NULL)
+    {
+        NewCache = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, Size);
+    }
+    else
+    {
+        NewCache = HeapReAlloc(GetProcessHeap(),
+                               HEAP_ZERO_MEMORY,
+                               State->JellyfishVertexCache,
+                               Size);
+    }
+    if (NewCache == NULL)
+        return FALSE;
+
+    State->JellyfishVertexCache = NewCache;
+    State->JellyfishVertexCacheCapacity = EntryCount;
+    return TRUE;
+}
+
+static BOOL
+Rpi5OglGl2BuildIndexedJellyfishMesh(
+    _Inout_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ PRPI5VC4_OGL_PROGRAM Program,
+    _In_ PRPI5VC4_OGL_VERTEX_ATTRIB PositionAttribute,
+    _In_opt_ const BYTE *PositionSource,
+    _In_ SIZE_T PositionStride,
+    _In_ PRPI5VC4_OGL_VERTEX_ATTRIB NormalAttribute,
+    _In_opt_ const BYTE *NormalSource,
+    _In_ SIZE_T NormalStride,
+    _In_ PRPI5VC4_OGL_VERTEX_ATTRIB ColorAttribute,
+    _In_opt_ const BYTE *ColorSource,
+    _In_ SIZE_T ColorStride,
+    _In_ PRPI5VC4_OGL_VERTEX_ATTRIB TexCoordAttribute,
+    _In_opt_ const BYTE *TexCoordSource,
+    _In_ SIZE_T TexCoordStride,
+    _In_reads_(Count) const GLuint *Indices,
+    _In_ ULONG Count,
+    _In_ ULONG MaximumIndex,
+    _Out_writes_(OutputCapacity) PRPI5VC4_V3D_VERTEX Output,
+    _Out_writes_(OutputCapacity) PRPI5VC4_V3D_TEXCOORD Auxiliary,
+    _In_ ULONG OutputCapacity,
+    _Out_writes_(IndexCapacity) PUSHORT OutputIndices,
+    _In_ ULONG IndexCapacity,
+    _In_ ULONG BaseVertex,
+    _Out_ PULONG OutputVertexCount,
+    _Out_ PULONG OutputTriangleCount,
+    _Out_ PULONG OutputIndexCount)
+{
+    ULONG Generation;
+    ULONG Element;
+    ULONG UniqueVertexCount = 0;
+    GLfloat SinTime;
+    GLfloat CosTime;
+    GLfloat DoubleTime;
+    GLfloat SinDoubleTime;
+    GLfloat CosDoubleTime;
+
+    if (Count > IndexCapacity || BaseVertex > 0xffffu ||
+        MaximumIndex >= State->JellyfishVertexCacheCapacity)
+        return FALSE;
+
+    SinTime = sinf(Program->CurrentTime);
+    CosTime = cosf(Program->CurrentTime);
+    DoubleTime = Program->CurrentTime * 2.0f;
+    SinDoubleTime = sinf(DoubleTime);
+    CosDoubleTime = cosf(DoubleTime);
+
+    Generation = ++State->JellyfishVertexCacheGeneration;
+    if (Generation == 0)
+    {
+        ZeroMemory(State->JellyfishVertexCache,
+                   (SIZE_T)State->JellyfishVertexCacheCapacity *
+                       sizeof(State->JellyfishVertexCache[0]));
+        Generation = ++State->JellyfishVertexCacheGeneration;
+    }
+
+    for (Element = 0; Element < Count; Element++)
+    {
+        ULONG VertexIndex = Indices[Element];
+        PRPI5VC4_OGL_JELLYFISH_VERTEX_CACHE_ENTRY Entry =
+            &State->JellyfishVertexCache[VertexIndex];
+
+        if (Entry->Generation != Generation)
+        {
+            GLfloat Position[4];
+            GLfloat Normal[4];
+            GLfloat Color[4];
+            GLfloat TexCoord[4];
+            GLfloat ClipPosition[4];
+            GLfloat Animation0;
+            GLfloat Animation1;
+
+            Rpi5OglGl2ReadBuildAttribute(PositionAttribute,
+                                         PositionSource,
+                                         PositionStride,
+                                         (GLint)VertexIndex,
+                                         Position);
+            Rpi5OglGl2ReadBuildAttribute(NormalAttribute,
+                                         NormalSource,
+                                         NormalStride,
+                                         (GLint)VertexIndex,
+                                         Normal);
+            Rpi5OglGl2ReadBuildAttribute(ColorAttribute,
+                                         ColorSource,
+                                         ColorStride,
+                                         (GLint)VertexIndex,
+                                         Color);
+            Rpi5OglGl2ReadBuildAttribute(TexCoordAttribute,
+                                         TexCoordSource,
+                                         TexCoordStride,
+                                         (GLint)VertexIndex,
+                                         TexCoord);
+            Position[3] = 1.0f;
+            Normal[3] = 1.0f;
+            if (!Entry->AnimationTermsValid || Entry->ObjectY != Position[1])
+            {
+                GLfloat Offset = (-Position[1] - 0.8f) / 10.0f;
+
+                if (Offset < 0.0f)
+                    Offset = 0.0f;
+                Entry->ObjectY = Position[1];
+                Entry->AnimationScale =
+                    1.0f - Rpi5OglGl2SmoothStep(Offset);
+                Entry->HalfY = Position[1] / 2.0f;
+                Entry->DoubleY = Position[1] / 0.5f;
+                Entry->SinHalfY = sinf(Entry->HalfY);
+                Entry->CosHalfY = cosf(Entry->HalfY);
+                Entry->SinDoubleY = sinf(Entry->DoubleY);
+                Entry->CosDoubleY = cosf(Entry->DoubleY);
+                Entry->AnimationTermsValid = TRUE;
+            }
+            Animation0 = Rpi5OglGl2ComposeSine(Program->CurrentTime,
+                                               SinTime,
+                                               CosTime,
+                                               Entry->HalfY,
+                                               Entry->SinHalfY,
+                                               Entry->CosHalfY);
+            Animation1 = Rpi5OglGl2ComposeSine(DoubleTime,
+                                               SinDoubleTime,
+                                               CosDoubleTime,
+                                               Entry->DoubleY,
+                                               Entry->SinDoubleY,
+                                               Entry->CosDoubleY);
+            if (!Rpi5OglGl2StoreAnimatedJellyfishMeshVertex(
+                    Program,
+                    Position,
+                    Normal,
+                    Color,
+                    TexCoord,
+                    Entry->AnimationScale,
+                    Animation0,
+                    Animation1,
+                    ClipPosition,
+                    &Entry->Vertex,
+                    &Entry->Auxiliary) ||
+                ClipPosition[3] <= 0.0f)
+            {
+                Rpi5OglGl2Error(State,
+                                GL_INVALID_OPERATION,
+                                "glDrawElements(jellyfish vertex input)");
+                return FALSE;
+            }
+            if (UniqueVertexCount >= OutputCapacity ||
+                BaseVertex + UniqueVertexCount > 0xffffu)
+            {
+                Rpi5OglGl2Error(State,
+                                GL_INVALID_OPERATION,
+                                "glDrawElements(jellyfish index range)");
+                return FALSE;
+            }
+            Entry->OutputIndex = UniqueVertexCount;
+            CopyMemory(&Output[UniqueVertexCount],
+                       &Entry->Vertex,
+                       sizeof(Output[UniqueVertexCount]));
+            CopyMemory(&Auxiliary[UniqueVertexCount],
+                       &Entry->Auxiliary,
+                       sizeof(Auxiliary[UniqueVertexCount]));
+            UniqueVertexCount++;
+            Entry->Generation = Generation;
+        }
+        OutputIndices[Element] =
+            (USHORT)(BaseVertex + Entry->OutputIndex);
+    }
+
+    *OutputVertexCount = UniqueVertexCount;
+    *OutputTriangleCount = Count / 3;
+    *OutputIndexCount = Count;
+    return TRUE;
 }
 
 static GLfloat
@@ -8758,8 +11902,12 @@ Rpi5OglGl2BuildBatchInternal(
     _Out_writes_opt_(OutputCapacity)
         PRPI5VC4_V3D_TEXCOORD HeightTexCoords,
     _In_ ULONG OutputCapacity,
+    _Out_writes_opt_(IndexCapacity) PUSHORT OutputIndices,
+    _In_ ULONG IndexCapacity,
+    _In_ ULONG BaseVertex,
     _Out_ PULONG OutputVertexCount,
-    _Out_ PULONG OutputTriangleCount)
+    _Out_ PULONG OutputTriangleCount,
+    _Out_opt_ PULONG OutputIndexCount)
 {
     PRPI5VC4_OGL_PROGRAM Program;
     PRPI5VC4_OGL_VERTEX_ATTRIB PositionAttribute;
@@ -8800,6 +11948,8 @@ Rpi5OglGl2BuildBatchInternal(
 
     *OutputVertexCount = 0;
     *OutputTriangleCount = 0;
+    if (OutputIndexCount != NULL)
+        *OutputIndexCount = 0;
     Program = Rpi5OglGl2FindProgram(State, State->CurrentProgram);
     if (Program == NULL ||
         (Program->Executable != Rpi5OglProgramExecutablePulsar &&
@@ -8999,6 +12149,40 @@ Rpi5OglGl2BuildBatchInternal(
         Rpi5OglGl2Error(State, GL_INVALID_OPERATION,
                         "glDrawArrays(build shader arrays)");
         return FALSE;
+    }
+
+    if (JellyfishMesh && Indices != NULL && CullBits == 0 &&
+        OutputIndices != NULL && OutputIndexCount != NULL &&
+        MaximumIndex < RPI5VC4_V3D_JELLYFISH_MAX_VERTICES &&
+        Rpi5OglGl2EnsureJellyfishVertexCache(State, MaximumIndex + 1))
+    {
+        return Rpi5OglGl2BuildIndexedJellyfishMesh(
+            State,
+            Program,
+            PositionAttribute,
+            PositionSource,
+            PositionStride,
+            NormalAttribute,
+            NormalSource,
+            NormalStride,
+            ColorAttribute,
+            ColorSource,
+            ColorStride,
+            TexCoordAttribute,
+            TexCoordSource,
+            TexCoordStride,
+            Indices,
+            (ULONG)Count,
+            MaximumIndex,
+            Output,
+            HeightTexCoords,
+            OutputCapacity,
+            OutputIndices,
+            IndexCapacity,
+            BaseVertex,
+            OutputVertexCount,
+            OutputTriangleCount,
+            OutputIndexCount);
     }
 
     InputTriangleCount =
@@ -9510,8 +12694,12 @@ Rpi5OglGl2BuildBatch(
                                         Output,
                                         HeightTexCoords,
                                         OutputCapacity,
+                                        NULL,
+                                        0,
+                                        0,
                                         OutputVertexCount,
-                                        OutputTriangleCount);
+                                        OutputTriangleCount,
+                                        NULL);
 }
 
 BOOL
@@ -9527,8 +12715,12 @@ Rpi5OglGl2BuildIndexedBatch(
     _Out_writes_opt_(OutputCapacity)
         PRPI5VC4_V3D_TEXCOORD HeightTexCoords,
     _In_ ULONG OutputCapacity,
+    _Out_writes_opt_(IndexCapacity) PUSHORT OutputIndices,
+    _In_ ULONG IndexCapacity,
+    _In_ ULONG BaseVertex,
     _Out_ PULONG OutputVertexCount,
-    _Out_ PULONG OutputTriangleCount)
+    _Out_ PULONG OutputTriangleCount,
+    _Out_opt_ PULONG OutputIndexCount)
 {
     if (Count != 0 && Indices == NULL)
         return FALSE;
@@ -9543,8 +12735,12 @@ Rpi5OglGl2BuildIndexedBatch(
                                         Output,
                                         HeightTexCoords,
                                         OutputCapacity,
+                                        OutputIndices,
+                                        IndexCapacity,
+                                        BaseVertex,
                                         OutputVertexCount,
-                                        OutputTriangleCount);
+                                        OutputTriangleCount,
+                                        OutputIndexCount);
 }
 
 static VOID
@@ -9781,6 +12977,337 @@ Rpi5OglGl2BuildPrimitive(
         }
     }
     return Rpi5OglGl2DrawReady;
+}
+
+static BOOL
+Rpi5OglGl2TransformFeedbackModeCompatible(
+    _In_ GLenum FeedbackMode,
+    _In_ GLenum DrawMode)
+{
+    switch (FeedbackMode)
+    {
+        case GL_POINTS:
+            return DrawMode == GL_POINTS;
+        case GL_LINES:
+            return DrawMode == GL_LINES ||
+                   DrawMode == GL_LINE_STRIP ||
+                   DrawMode == GL_LINE_LOOP;
+        case GL_TRIANGLES:
+            return DrawMode == GL_TRIANGLES ||
+                   DrawMode == GL_TRIANGLE_STRIP ||
+                   DrawMode == GL_TRIANGLE_FAN;
+        default:
+            return FALSE;
+    }
+}
+
+static ULONG
+Rpi5OglGl2TransformFeedbackPrimitiveCount(
+    _In_ GLenum DrawMode,
+    _In_ GLsizei Count)
+{
+    switch (DrawMode)
+    {
+        case GL_POINTS:
+            return Count;
+        case GL_LINES:
+            return Count / 2;
+        case GL_LINE_STRIP:
+            return Count >= 2 ? Count - 1 : 0;
+        case GL_LINE_LOOP:
+            return Count >= 2 ? Count : 0;
+        case GL_TRIANGLES:
+            return Count / 3;
+        case GL_TRIANGLE_STRIP:
+        case GL_TRIANGLE_FAN:
+            return Count >= 3 ? Count - 2 : 0;
+        default:
+            return 0;
+    }
+}
+
+static VOID
+Rpi5OglGl2AddQueryResult(
+    _Inout_ PRPI5VC4_OGL_QUERY Query,
+    _In_ ULONG Value)
+{
+    if (Value > 0xffffffffu - Query->Result)
+        Query->Result = 0xffffffffu;
+    else
+        Query->Result += Value;
+}
+
+static VOID
+Rpi5OglGl2RecordPrimitiveCount(
+    _Inout_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLuint QueryName,
+    _In_ ULONG PrimitiveCount)
+{
+    PRPI5VC4_OGL_QUERY Query;
+
+    if (QueryName == 0 || PrimitiveCount == 0)
+        return;
+    Query = Rpi5OglGl2FindQuery(State, QueryName);
+    if (Query != NULL && Query->Active)
+        Rpi5OglGl2AddQueryResult(Query, PrimitiveCount);
+}
+
+VOID
+Rpi5OglGl2RecordSamplesPassed(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ ULONG Samples)
+{
+    PRPI5VC4_OGL_QUERY Query;
+
+    if (State == NULL || State->ActiveSamplesQuery == 0)
+        return;
+    Query = Rpi5OglGl2FindQuery(State, State->ActiveSamplesQuery);
+    if (Query != NULL && Query->Active)
+        Rpi5OglGl2AddQueryResult(Query, Samples);
+}
+
+BOOL
+Rpi5OglGl2SamplesQueryActive(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State)
+{
+    return State != NULL && State->ActiveSamplesQuery != 0;
+}
+
+BOOL
+Rpi5OglGl2ConditionalRenderAllowsDraw(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State)
+{
+    return State == NULL || !State->ConditionalRenderActive ||
+           State->ConditionalRenderPass;
+}
+
+static ULONG
+Rpi5OglGl2TransformFeedbackVerticesPerPrimitive(
+    _In_ GLenum DrawMode)
+{
+    switch (DrawMode)
+    {
+        case GL_POINTS:
+            return 1;
+        case GL_LINES:
+        case GL_LINE_STRIP:
+        case GL_LINE_LOOP:
+            return 2;
+        case GL_TRIANGLES:
+        case GL_TRIANGLE_STRIP:
+        case GL_TRIANGLE_FAN:
+            return 3;
+        default:
+            return 0;
+    }
+}
+
+static GLuint
+Rpi5OglGl2TransformFeedbackInputVertex(
+    _In_ GLenum DrawMode,
+    _In_ ULONG Primitive,
+    _In_ ULONG Vertex,
+    _In_ ULONG Count)
+{
+    switch (DrawMode)
+    {
+        case GL_POINTS:
+            return Primitive;
+        case GL_LINES:
+            return Primitive * 2 + Vertex;
+        case GL_LINE_STRIP:
+            return Primitive + Vertex;
+        case GL_LINE_LOOP:
+            return Vertex == 0 ? Primitive : (Primitive + 1) % Count;
+        case GL_TRIANGLES:
+            return Primitive * 3 + Vertex;
+        case GL_TRIANGLE_STRIP:
+            if ((Primitive & 1u) != 0 && Vertex < 2)
+                return Primitive + (1u - Vertex);
+            return Primitive + Vertex;
+        case GL_TRIANGLE_FAN:
+            return Vertex == 0 ? 0 : Primitive + Vertex;
+        default:
+            return 0;
+    }
+}
+
+static BOOL
+Rpi5OglGl2TransformFeedbackPrimitiveFits(
+    _In_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ PRPI5VC4_OGL_PROGRAM Program,
+    _In_ ULONG VertexCount)
+{
+    SIZE_T Bytes;
+    ULONG Varying;
+
+    if (Program->TransformFeedbackBufferMode == GL_INTERLEAVED_ATTRIBS)
+    {
+        Bytes = (SIZE_T)VertexCount *
+                Program->TransformFeedbackVaryingCount *
+                4 * sizeof(GLfloat);
+        return Rpi5OglBufferCanWriteTransformFeedback(
+            State->BufferState,
+            0,
+            Bytes,
+            State->TransformFeedbackPositions[0]);
+    }
+    Bytes = (SIZE_T)VertexCount * 4 * sizeof(GLfloat);
+    for (Varying = 0;
+         Varying < Program->TransformFeedbackVaryingCount;
+         Varying++)
+    {
+        if (!Rpi5OglBufferCanWriteTransformFeedback(
+                State->BufferState,
+                Varying,
+                Bytes,
+                State->TransformFeedbackPositions[Varying]))
+        {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+static BOOL
+Rpi5OglGl2CapturePrimitives(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum Mode,
+    _In_ GLint First,
+    _In_reads_opt_(Count) const GLuint *Indices,
+    _In_ GLsizei Count,
+    _In_z_ PCSTR Function)
+{
+    PRPI5VC4_OGL_PROGRAM Program;
+    GLfloat Position[4];
+    GLfloat Color[4];
+    const GLfloat *Value;
+    ULONG BufferIndex;
+    ULONG InputVertex;
+    ULONG SourceVertex;
+    ULONG Primitive;
+    ULONG Vertex;
+    ULONG Varying;
+    ULONG PrimitiveCount;
+    ULONG VerticesPerPrimitive;
+    ULONG WrittenPrimitiveCount = 0;
+
+    if (State == NULL)
+        return TRUE;
+    if (Count < 0 || First < 0 || First > 0x7fffffff - Count)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_VALUE, Function);
+        return FALSE;
+    }
+    PrimitiveCount =
+        Rpi5OglGl2TransformFeedbackPrimitiveCount(Mode, Count);
+    Rpi5OglGl2RecordPrimitiveCount(
+        State, State->ActivePrimitivesGeneratedQuery, PrimitiveCount);
+    if (!State->TransformFeedbackActive)
+        return TRUE;
+    Program = Rpi5OglGl2FindProgram(State, State->CurrentProgram);
+    if (Program == NULL || !Program->Linked ||
+        Program->Executable != Rpi5OglProgramExecutableGenericColor)
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION, Function);
+        return FALSE;
+    }
+    if (!Rpi5OglGl2TransformFeedbackModeCompatible(
+            State->TransformFeedbackPrimitiveMode, Mode))
+    {
+        Rpi5OglGl2Error(State, GL_INVALID_OPERATION, Function);
+        return FALSE;
+    }
+    VerticesPerPrimitive =
+        Rpi5OglGl2TransformFeedbackVerticesPerPrimitive(Mode);
+
+    for (Primitive = 0; Primitive < PrimitiveCount; Primitive++)
+    {
+        /* Transform feedback overflow drops the complete primitive. */
+        if (!Rpi5OglGl2TransformFeedbackPrimitiveFits(
+                State, Program, VerticesPerPrimitive))
+        {
+            break;
+        }
+        for (Vertex = 0; Vertex < VerticesPerPrimitive; Vertex++)
+        {
+            InputVertex = Rpi5OglGl2TransformFeedbackInputVertex(
+                Mode, Primitive, Vertex, Count);
+            SourceVertex = Indices != NULL ?
+                Indices[InputVertex] : (GLuint)First + InputVertex;
+            if (!Rpi5OglGl2ReadVertexAttrib(State,
+                                            Program->PositionAttribute,
+                                            SourceVertex,
+                                            Position) ||
+                !Rpi5OglGl2ReadVertexAttrib(State,
+                                            Program->ColorAttribute,
+                                            SourceVertex,
+                                            Color))
+            {
+                Rpi5OglGl2Error(State, GL_INVALID_OPERATION, Function);
+                return FALSE;
+            }
+            for (Varying = 0;
+                 Varying < Program->TransformFeedbackVaryingCount;
+                 Varying++)
+            {
+                Value = lstrcmpA(
+                    Program->TransformFeedbackVaryings[Varying],
+                    "gl_Position") == 0 ? Position : Color;
+                BufferIndex = Program->TransformFeedbackBufferMode ==
+                    GL_SEPARATE_ATTRIBS ? Varying : 0;
+                if (!Rpi5OglBufferWriteTransformFeedback(
+                        State->BufferState,
+                        BufferIndex,
+                        Value,
+                        4 * sizeof(GLfloat),
+                        &State->TransformFeedbackPositions[BufferIndex]))
+                {
+                    Rpi5OglGl2Error(State, GL_INVALID_OPERATION, Function);
+                    return FALSE;
+                }
+            }
+        }
+        WrittenPrimitiveCount++;
+    }
+    State->TransformFeedbackPrimitivesWritten += WrittenPrimitiveCount;
+    Rpi5OglGl2RecordPrimitiveCount(
+        State,
+        State->ActiveTransformFeedbackQuery,
+        WrittenPrimitiveCount);
+    return TRUE;
+}
+
+BOOL
+Rpi5OglGl2CaptureArrays(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum Mode,
+    _In_ GLint First,
+    _In_ GLsizei Count)
+{
+    return Rpi5OglGl2CapturePrimitives(State,
+                                       Mode,
+                                       First,
+                                       NULL,
+                                       Count,
+                                       "glDrawArrays(transform feedback)");
+}
+
+BOOL
+Rpi5OglGl2CaptureElements(
+    _In_opt_ PRPI5VC4_OGL_GL2_STATE State,
+    _In_ GLenum Mode,
+    _In_reads_(Count) const GLuint *Indices,
+    _In_ GLsizei Count)
+{
+    if (Count != 0 && Indices == NULL)
+        return FALSE;
+    return Rpi5OglGl2CapturePrimitives(State,
+                                       Mode,
+                                       0,
+                                       Indices,
+                                       Count,
+                                       "glDrawElements(transform feedback)");
 }
 
 PROC
