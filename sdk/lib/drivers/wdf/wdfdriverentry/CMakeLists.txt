@@ -11,7 +11,7 @@ target_compile_definitions(wdfdriverentry
     PUBLIC WDF_DEVICE_NO_WDMSEC_H
     PRIVATE __WDF_MAJOR_VERSION=1 __WDF_MINOR_VERSION=17 __WDF_BUILD_NUMBER=7600
 )
-target_compile_options(wdfdriverentry PUBLIC
+target_compile_options(wdfdriverentry PRIVATE
     -U_WIN32_WINNT -D_WIN32_WINNT=0x603
     -UNTDDI_VERSION -DNTDDI_VERSION=0x06030000)
 

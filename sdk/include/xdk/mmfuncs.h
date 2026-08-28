@@ -299,6 +299,19 @@ MmMapIoSpace(
   _In_ SIZE_T NumberOfBytes,
   _In_ MEMORY_CACHING_TYPE CacheType);
 
+#if (NTDDI_VERSION >= NTDDI_WINTHRESHOLD)
+_Must_inspect_result_
+_IRQL_requires_max_(DISPATCH_LEVEL)
+_Out_writes_bytes_opt_(NumberOfBytes)
+NTKERNELAPI
+PVOID
+NTAPI
+MmMapIoSpaceEx(
+  _In_ PHYSICAL_ADDRESS PhysicalAddress,
+  _In_ SIZE_T NumberOfBytes,
+  _In_ ULONG Protect);
+#endif
+
 _Must_inspect_result_
 _When_(AccessMode==KernelMode, _IRQL_requires_max_(DISPATCH_LEVEL))
 _When_(AccessMode==UserMode, _Maybe_raises_SEH_exception_ _IRQL_requires_max_(APC_LEVEL))
@@ -417,6 +430,22 @@ MmAllocateContiguousMemorySpecifyCacheNode(
   _In_opt_ PHYSICAL_ADDRESS BoundaryAddressMultiple,
   _In_ MEMORY_CACHING_TYPE CacheType,
   _In_ NODE_REQUIREMENT PreferredNode);
+
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+_Must_inspect_result_
+_IRQL_requires_max_(DISPATCH_LEVEL)
+_When_ (return != NULL, _Post_writable_byte_size_ (NumberOfBytes))
+NTKERNELAPI
+PVOID
+NTAPI
+MmAllocateContiguousNodeMemory(
+  _In_ SIZE_T NumberOfBytes,
+  _In_ PHYSICAL_ADDRESS LowestAcceptableAddress,
+  _In_ PHYSICAL_ADDRESS HighestAcceptableAddress,
+  _In_opt_ PHYSICAL_ADDRESS BoundaryAddressMultiple,
+  _In_ ULONG Protect,
+  _In_ NODE_REQUIREMENT PreferredNode);
+#endif
 $endif (_WDMDDK_)
 $if (_NTDDK_)
 

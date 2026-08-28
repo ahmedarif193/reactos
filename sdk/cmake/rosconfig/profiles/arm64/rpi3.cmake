@@ -6,6 +6,9 @@ set(ROSCONFIG_PROFILE_PACKAGES
     smsc95xx
     cyw43455sdio
     cyw43455
+    rpiq
+    bcm2836pwm
+    pi_miniuart
     rpi3winsync)
 set(ROSCONFIG_PROFILE_CONFIGS
     "RPI_SUPPORT:BOOL=ON"

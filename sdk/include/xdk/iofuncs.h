@@ -220,6 +220,194 @@ WRITE_REGISTER_USHORT(
 #if (defined(_M_ARM64) || defined(_M_ARM64EC)) && !defined(NO_PORT_MACROS)
 FORCEINLINE
 UCHAR
+READ_REGISTER_NOFENCE_UCHAR(
+  IN volatile UCHAR *Register)
+{
+  Register = (volatile UCHAR *)ReadPointerNoFence((PVOID const volatile *)&Register);
+  return ReadUCharNoFence(Register);
+}
+
+FORCEINLINE
+USHORT
+READ_REGISTER_NOFENCE_USHORT(
+  IN volatile USHORT *Register)
+{
+  Register = (volatile USHORT *)ReadPointerNoFence((PVOID const volatile *)&Register);
+  return ReadUShortNoFence(Register);
+}
+
+FORCEINLINE
+ULONG
+READ_REGISTER_NOFENCE_ULONG(
+  IN volatile ULONG *Register)
+{
+  Register = (volatile ULONG *)ReadPointerNoFence((PVOID const volatile *)&Register);
+  return ReadULongNoFence(Register);
+}
+
+FORCEINLINE
+ULONG64
+READ_REGISTER_NOFENCE_ULONG64(
+  IN volatile ULONG64 *Register)
+{
+  Register = (volatile ULONG64 *)ReadPointerNoFence((PVOID const volatile *)&Register);
+  return ReadULong64NoFence(Register);
+}
+
+FORCEINLINE
+VOID
+READ_REGISTER_NOFENCE_BUFFER_UCHAR(
+  IN volatile UCHAR *Register,
+  OUT PUCHAR Buffer,
+  IN ULONG Count)
+{
+  while (Count--)
+  {
+    Register = (volatile UCHAR *)ReadPointerNoFence((PVOID const volatile *)&Register);
+    *Buffer++ = ReadUCharNoFence(Register++);
+  }
+}
+
+FORCEINLINE
+VOID
+READ_REGISTER_NOFENCE_BUFFER_USHORT(
+  IN volatile USHORT *Register,
+  OUT PUSHORT Buffer,
+  IN ULONG Count)
+{
+  while (Count--)
+  {
+    Register = (volatile USHORT *)ReadPointerNoFence((PVOID const volatile *)&Register);
+    *Buffer++ = ReadUShortNoFence(Register++);
+  }
+}
+
+FORCEINLINE
+VOID
+READ_REGISTER_NOFENCE_BUFFER_ULONG(
+  IN volatile ULONG *Register,
+  OUT PULONG Buffer,
+  IN ULONG Count)
+{
+  while (Count--)
+  {
+    Register = (volatile ULONG *)ReadPointerNoFence((PVOID const volatile *)&Register);
+    *Buffer++ = ReadULongNoFence(Register++);
+  }
+}
+
+FORCEINLINE
+VOID
+READ_REGISTER_NOFENCE_BUFFER_ULONG64(
+  IN volatile ULONG64 *Register,
+  OUT PULONG64 Buffer,
+  IN ULONG Count)
+{
+  while (Count--)
+  {
+    Register = (volatile ULONG64 *)ReadPointerNoFence((PVOID const volatile *)&Register);
+    *Buffer++ = ReadULong64NoFence(Register++);
+  }
+}
+
+FORCEINLINE
+VOID
+WRITE_REGISTER_NOFENCE_UCHAR(
+  OUT volatile UCHAR *Register,
+  IN UCHAR Value)
+{
+  Register = (volatile UCHAR *)ReadPointerNoFence((PVOID const volatile *)&Register);
+  WriteUCharNoFence(Register, Value);
+}
+
+FORCEINLINE
+VOID
+WRITE_REGISTER_NOFENCE_USHORT(
+  OUT volatile USHORT *Register,
+  IN USHORT Value)
+{
+  Register = (volatile USHORT *)ReadPointerNoFence((PVOID const volatile *)&Register);
+  WriteUShortNoFence(Register, Value);
+}
+
+FORCEINLINE
+VOID
+WRITE_REGISTER_NOFENCE_ULONG(
+  OUT volatile ULONG *Register,
+  IN ULONG Value)
+{
+  Register = (volatile ULONG *)ReadPointerNoFence((PVOID const volatile *)&Register);
+  WriteULongNoFence(Register, Value);
+}
+
+FORCEINLINE
+VOID
+WRITE_REGISTER_NOFENCE_ULONG64(
+  OUT volatile ULONG64 *Register,
+  IN ULONG64 Value)
+{
+  Register = (volatile ULONG64 *)ReadPointerNoFence((PVOID const volatile *)&Register);
+  WriteULong64NoFence(Register, Value);
+}
+
+FORCEINLINE
+VOID
+WRITE_REGISTER_NOFENCE_BUFFER_UCHAR(
+  OUT volatile UCHAR *Register,
+  IN PUCHAR Buffer,
+  IN ULONG Count)
+{
+  while (Count--)
+  {
+    Register = (volatile UCHAR *)ReadPointerNoFence((PVOID const volatile *)&Register);
+    WriteUCharNoFence(Register++, *Buffer++);
+  }
+}
+
+FORCEINLINE
+VOID
+WRITE_REGISTER_NOFENCE_BUFFER_USHORT(
+  OUT volatile USHORT *Register,
+  IN PUSHORT Buffer,
+  IN ULONG Count)
+{
+  while (Count--)
+  {
+    Register = (volatile USHORT *)ReadPointerNoFence((PVOID const volatile *)&Register);
+    WriteUShortNoFence(Register++, *Buffer++);
+  }
+}
+
+FORCEINLINE
+VOID
+WRITE_REGISTER_NOFENCE_BUFFER_ULONG(
+  OUT volatile ULONG *Register,
+  IN PULONG Buffer,
+  IN ULONG Count)
+{
+  while (Count--)
+  {
+    Register = (volatile ULONG *)ReadPointerNoFence((PVOID const volatile *)&Register);
+    WriteULongNoFence(Register++, *Buffer++);
+  }
+}
+
+FORCEINLINE
+VOID
+WRITE_REGISTER_NOFENCE_BUFFER_ULONG64(
+  OUT volatile ULONG64 *Register,
+  IN PULONG64 Buffer,
+  IN ULONG Count)
+{
+  while (Count--)
+  {
+    Register = (volatile ULONG64 *)ReadPointerNoFence((PVOID const volatile *)&Register);
+    WriteULong64NoFence(Register++, *Buffer++);
+  }
+}
+
+FORCEINLINE
+UCHAR
 READ_REGISTER_UCHAR(
   IN PUCHAR Register)
 {
