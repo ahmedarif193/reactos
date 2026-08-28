@@ -1,0 +1,88 @@
+; PROJECT:     ReactOS Raspberry Pi 5 HDMI Audio Driver
+; LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+; COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
+
+[Version]
+Signature="$Windows NT$"
+Class=MEDIA
+ClassGuid={4d36e96c-e325-11ce-bfc1-08002be10318}
+Provider=%ReactOS%
+DriverVer=08/28/2026,1.0.0.0
+
+[DestinationDirs]
+DefaultDestDir=12
+Rpi5Hdmi.CopyFiles=12
+
+[Manufacturer]
+%ReactOS%=Rpi5HdmiModels,NTARM64
+
+[Rpi5HdmiModels.NTARM64]
+%Rpi5Hdmi.DeviceDesc%=Rpi5Hdmi_Install,ACPI\RPI0006
+
+[Rpi5Hdmi_Install]
+Include=ks.inf,wdmaudio.inf
+Needs=KS.Registration,WDMAUDIO.Registration
+CopyFiles=Rpi5Hdmi.CopyFiles
+AddReg=Rpi5Hdmi.AddReg
+
+[Rpi5Hdmi_Install.Services]
+AddService=rpi5hdmi,0x00000002,Rpi5Hdmi_Service
+
+[Rpi5Hdmi_Service]
+DisplayName=%Rpi5Hdmi.ServiceDesc%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\rpi5hdmi.sys
+
+[Rpi5Hdmi.CopyFiles]
+rpi5hdmi.sys
+
+[Rpi5Hdmi.AddReg]
+HKR,,AssociatedFilters,,"wdmaud"
+HKR,,Driver,,rpi5hdmi.sys
+HKR,Drivers,SubClasses,,"wave,mixer"
+HKR,Drivers\wave\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\wave\wdmaud.drv,Description,,%Rpi5Hdmi.DeviceDesc%
+HKR,Drivers\mixer\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\mixer\wdmaud.drv,Description,,%Rpi5Hdmi.DeviceDesc%
+
+[Rpi5Hdmi_Install.Interfaces]
+AddInterface=%KSCATEGORY_AUDIO%,Wave,Rpi5Hdmi.WaveInterface
+AddInterface=%KSCATEGORY_RENDER%,Wave,Rpi5Hdmi.WaveInterface
+AddInterface=%KSCATEGORY_REALTIME%,Wave,Rpi5Hdmi.WaveInterface
+AddInterface=%KSCATEGORY_AUDIO%,Topology,Rpi5Hdmi.TopologyInterface
+AddInterface=%KSCATEGORY_TOPOLOGY%,Topology,Rpi5Hdmi.TopologyInterface
+
+[Rpi5Hdmi.WaveInterface]
+AddReg=Rpi5Hdmi.WaveInterface.AddReg
+
+[Rpi5Hdmi.WaveInterface.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%Rpi5Hdmi.WaveName%
+
+[Rpi5Hdmi.TopologyInterface]
+AddReg=Rpi5Hdmi.TopologyInterface.AddReg
+
+[Rpi5Hdmi.TopologyInterface.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%Rpi5Hdmi.TopologyName%
+
+[SourceDisksNames]
+1=%DiskName%
+
+[SourceDisksFiles]
+rpi5hdmi.sys=1
+
+[Strings]
+ReactOS="ReactOS"
+Rpi5Hdmi.DeviceDesc="Raspberry Pi 5 HDMI Audio"
+Rpi5Hdmi.ServiceDesc="ReactOS Raspberry Pi 5 HDMI Audio Driver"
+Rpi5Hdmi.WaveName="Raspberry Pi 5 HDMI Audio Wave"
+Rpi5Hdmi.TopologyName="Raspberry Pi 5 HDMI Audio Topology"
+DiskName="ReactOS Installation Media"
+Proxy.CLSID="{17CCA71B-ECD7-11D0-B908-00A0C9223196}"
+KSCATEGORY_AUDIO="{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
+KSCATEGORY_RENDER="{65E8773E-8F56-11D0-A3B9-00A0C9223196}"
+KSCATEGORY_REALTIME="{EB115FFC-10C8-4964-831D-6DCB02E6F23F}"
+KSCATEGORY_TOPOLOGY="{DDA54A40-1E4C-11D1-A050-405705C10000}"
