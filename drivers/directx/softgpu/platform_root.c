@@ -98,9 +98,10 @@ SoftGpuPlatformQueryStart(
         NTSTATUS Status;
 
         /*
-         * This root adapter is a Basic Display fallback. It starts only when
-         * dxgkrnl transfers a valid firmware framebuffer to it; otherwise a
-         * hardware miniport already owns the boot display or no display exists.
+         * This root adapter is a Basic Display fallback. Use the firmware
+         * framebuffer when dxgkrnl transfers one. A successful zero-width
+         * descriptor means no POST display information is available, so keep
+         * the default software-only output and start in headless mode.
          */
         Status = SoftGpuAcquirePostDisplay(DxgkInterface,
                                            &PostDisplayInfo,
@@ -108,13 +109,23 @@ SoftGpuPlatformQueryStart(
         if (!NT_SUCCESS(Status))
             return Status;
 
-        Config->Width = PostDisplayInfo.Width;
-        Config->Height = PostDisplayInfo.Height;
-        Config->Format = PostDisplayInfo.ColorFormat;
-        Config->ScanoutPhysicalAddress =
-            PostDisplayInfo.PhysicAddress;
-        Config->ScanoutPitch = PostDisplayInfo.Pitch;
-        Config->ScanoutSize = PostVisibleLength;
+        if (PostDisplayInfo.Width != 0)
+        {
+            Config->Width = PostDisplayInfo.Width;
+            Config->Height = PostDisplayInfo.Height;
+            Config->Format = PostDisplayInfo.ColorFormat;
+            Config->ScanoutPhysicalAddress =
+                PostDisplayInfo.PhysicAddress;
+            Config->ScanoutPitch = PostDisplayInfo.Pitch;
+            Config->ScanoutSize = PostVisibleLength;
+        }
+        else
+        {
+            DPRINT1("SOFTGPU: no POST framebuffer; starting headless "
+                    "%lux%lu software output\n",
+                    Config->Width,
+                    Config->Height);
+        }
     }
 #endif
 

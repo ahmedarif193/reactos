@@ -85,9 +85,20 @@ SoftGpuValidatePostDisplayInfo(
     ULONG MinimumPitch;
     ULONGLONG Base;
 
-    if (DisplayInfo == NULL || VisibleLength == NULL ||
-        DisplayInfo->PhysicAddress.QuadPart == 0 ||
-        DisplayInfo->Width == 0 ||
+    if (DisplayInfo == NULL || VisibleLength == NULL)
+        return FALSE;
+
+    *VisibleLength = 0;
+
+    /*
+     * DxgkCbAcquirePostDisplayOwnership can successfully return Width == 0
+     * when the OS has no current POST display information. BasicDisplay must
+     * still start its software-only headless output in that case.
+     */
+    if (DisplayInfo->Width == 0)
+        return TRUE;
+
+    if (DisplayInfo->PhysicAddress.QuadPart == 0 ||
         DisplayInfo->Height == 0 ||
         DisplayInfo->Width > SOFTGPU_MAX_DISPLAY_WIDTH ||
         DisplayInfo->Height > SOFTGPU_MAX_DISPLAY_HEIGHT ||
