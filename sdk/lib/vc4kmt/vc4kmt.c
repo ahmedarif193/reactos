@@ -1719,6 +1719,40 @@ vc4kmt_wait(
 }
 
 NTSTATUS
+vc4kmt_wait_async(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ const VC4KMT_FENCE *Fence,
+    _In_ HANDLE CompletionEvent)
+{
+    D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU Wait;
+    D3DKMT_HANDLE Handle;
+    UINT64 Value;
+
+    if (Device == NULL || Fence == NULL || CompletionEvent == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    if (Device->Fake ||
+        (Fence->CpuValue != NULL && *Fence->CpuValue >= Fence->Value) ||
+        (Fence->hSyncObject == 0 && Fence->CpuValue == NULL))
+    {
+        return SetEvent(CompletionEvent) ? STATUS_SUCCESS :
+                                          STATUS_UNSUCCESSFUL;
+    }
+    if (Device->hDevice == 0 || Fence->hSyncObject == 0)
+        return STATUS_INVALID_DEVICE_STATE;
+
+    Handle = Fence->hSyncObject;
+    Value = Fence->Value;
+    RtlZeroMemory(&Wait, sizeof(Wait));
+    Wait.hDevice = Device->hDevice;
+    Wait.ObjectCount = 1;
+    Wait.ObjectHandleArray = &Handle;
+    Wait.FenceValueArray = &Value;
+    Wait.hAsyncEvent = CompletionEvent;
+    return D3DKMTWaitForSynchronizationObjectFromCpu(&Wait);
+}
+
+NTSTATUS
 vc4kmt_wait_gpu(
     _In_ VC4KMT_DEVICE *Device,
     _In_ VC4KMT_ENGINE Engine,
