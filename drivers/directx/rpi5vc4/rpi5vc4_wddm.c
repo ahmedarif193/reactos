@@ -24,8 +24,9 @@
  * Every SubmitCommand appends one entry.  Entries complete strictly in
  * submission order: CPU-executed packets complete as soon as they reach
  * the queue head; V3D jobs are programmed to the CLE when they reach the
- * head and complete when the core signals FLDONE/FRDONE (polled from a
- * 1 ms timer DPC — the root-enumerated devnode has no interrupt line).
+ * head and complete when the core signals FLDONE/FRDONE. Hardware IRQs
+ * drive the normal completion path, with a 1 ms completion poll as a
+ * lost-interrupt backstop.
  * Completion raises DXGK_INTERRUPT_TYPE_DMA_COMPLETED through
  * DxgkCbNotifyInterrupt followed by DxgkCbNotifyDpc, exactly like a real
  * ISR/DPC pair would.
@@ -138,8 +139,8 @@ Rpi5Vc4ProcessPendingLocked(
     _Out_ PBOOLEAN PipelineAborted)
 {
     BOOLEAN Completed = FALSE;
-    BOOLEAN FlDone = FALSE;   /* latch bookkeeping only (OUTOMEM service) */
-    BOOLEAN FrDone = FALSE;
+    BOOLEAN BinComplete = FALSE;
+    BOOLEAN RenderComplete = FALSE;
     ULONGLONG Now = KeQueryInterruptTime();
     ULONG Node;
 
@@ -159,13 +160,12 @@ Rpi5Vc4ProcessPendingLocked(
         return FALSE;
     }
 
-    /* Consume the latched completion bits once per pass. */
+    /* Consume the pipeline-drained completion latches once per pass. */
     if (DeviceExtension->V3dReady && !DeviceExtension->StopAccepting)
     {
-        ULONG i;
-
-        Rpi5V3dPollDone(DeviceExtension, &FlDone, &FrDone);
-
+        Rpi5V3dConsumeCompletions(DeviceExtension,
+                                  &BinComplete,
+                                  &RenderComplete);
     }
 
     for (Node = 0; Node < RPI5VC4_GPU_NODE_COUNT; Node++)
@@ -216,7 +216,8 @@ Rpi5Vc4ProcessPendingLocked(
                     Head->QueuedTime100ns = Now;
 
                 if (Head->IsTfuJob)
-                    Kicked = Rpi5V3dSubmitTfu(DeviceExtension, Head->TfuRegs);
+                    Kicked = Rpi5V3dSubmitTfu(DeviceExtension, Head->TfuRegs,
+                                             &Head->TfuKickCvtct);
                 else
                     Kicked = Rpi5V3dSubmitCsd(DeviceExtension, Head->CsdCfg);
 
@@ -234,7 +235,8 @@ Rpi5Vc4ProcessPendingLocked(
 
                         for (Spin = 0; Spin < 400; Spin++)
                         {
-                            if (Rpi5V3dTfuDone(DeviceExtension))
+                            if (Rpi5V3dTfuDone(DeviceExtension,
+                                              Head->TfuKickCvtct))
                                 goto CompleteHead;
                             KeStallExecutionProcessor(5);
                         }
@@ -255,7 +257,8 @@ Rpi5Vc4ProcessPendingLocked(
             }
 
             if (Head->RenderSubmitted &&
-                (Head->IsTfuJob ? Rpi5V3dTfuDone(DeviceExtension)
+                (Head->IsTfuJob ? Rpi5V3dTfuDone(DeviceExtension,
+                                                Head->TfuKickCvtct)
                                 : Rpi5V3dCsdDone(DeviceExtension)))
                 goto CompleteHead;
 
@@ -299,19 +302,13 @@ Rpi5Vc4ProcessPendingLocked(
                 }
             }
 
-            /* Per-job bin completion is the BFC edge past this job's own
-             * pre-kick baseline.  CT0 reaching EA is not completion: the
-             * FLUSH packet still has to cap the tile lists and retire the
-             * binner before CT1 may consume them. */
+            /* FLDONE means the binner has drained and its tile lists are
+             * ready for CT1. BFC only counts the FLUSH command and can move
+             * before the final QMA writes become visible. */
             if (HasBin && Head->BinSubmitted && !Head->BinDone)
             {
-                PUCHAR CoreB = (PUCHAR)DeviceExtension->V3dCoreBase;
-                ULONG Bfc = READ_REGISTER_ULONG((PULONG)
-                                (CoreB + V3D_CLE_BFC)) & 0xff;
-
-                if ((UCHAR)Bfc != Head->BinKickBfc)
+                if (BinComplete)
                     Head->BinDone = TRUE;
-
             }
 
             BinPhaseOver = !HasBin || Head->BinDone;
@@ -343,16 +340,10 @@ Rpi5Vc4ProcessPendingLocked(
                 }
             }
 
-            /* Phase 3: retire on render completion — RFC advancing past the
-             * per-job kick snapshot.  Rendering is sequential (overlap off,
-             * only Head is render-kicked), so RFC past the snapshot uniquely
-             * means THIS render finished.  Replaces the global FrDone test,
-             * which double-counts vs the FRDONE latch and mis-retires the
-             * wrong Head — the root of the spurious TDR + reset cascade. */
-            if (Head->RenderSubmitted &&
-                (UCHAR)(READ_REGISTER_ULONG((PULONG)
-                    ((PUCHAR)DeviceExtension->V3dCoreBase + V3D_CLE_RFC)) & 0xff)
-                    != Head->RenderKickRfc)
+            /* FRDONE is the render pipeline-drained boundary. Keeping this
+             * job current until its latch is consumed also makes a late IRQ
+             * unambiguous; no newer render can be submitted in between. */
+            if (Head->RenderSubmitted && RenderComplete)
                 goto CompleteHead;
 
             /* Still in flight: enforce the per-phase timeout. */
@@ -539,13 +530,28 @@ Rpi5Vc4V3dPollDpcRoutine(
     Completed = Rpi5Vc4ProcessPendingLocked(DeviceExtension, &NeedPoll, &PipelineAborted);
     KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
 
+    /* A TFU conversion may advance CVTCT just before its level interrupt
+     * latch becomes visible.  The queue can therefore retire by counter
+     * while TFUC arrives after the head was removed.  Always acknowledge a
+     * latched TFUC before unmasking the hub line; an in-flight job that was
+     * not serviced in this pass still has its per-job CVTCT baseline. */
+    if (DeviceExtension->V3dHubBase != NULL &&
+        (READ_REGISTER_ULONG(
+             (PULONG)((PUCHAR)DeviceExtension->V3dHubBase +
+                      V3D_HUB_INT_STS)) & V3D_HUB_INT_TFUC) != 0)
+    {
+        WRITE_REGISTER_ULONG(
+            (PULONG)((PUCHAR)DeviceExtension->V3dHubBase +
+                     V3D_HUB_INT_CLR),
+            V3D_HUB_INT_TFUC);
+    }
+
     InterruptWasMasked =
         InterlockedExchange(&DeviceExtension->V3dIsrMasked, 0) != 0;
     if (InterruptWasMasked &&
         DeviceExtension->V3dCoreBase != NULL &&
         !DeviceExtension->StopAccepting)
     {
-        InterlockedIncrement(&DeviceExtension->V3dDpcFromIsr);
         if (DeviceExtension->V3dCoreIrqConnected)
         {
             WRITE_REGISTER_ULONG(
@@ -3123,14 +3129,10 @@ Rpi5Vc4GpuEscapeGateRelease(
         PUCHAR Core = DeviceExtension->V3dCoreBase;
         PUCHAR Hub = DeviceExtension->V3dHubBase;
 
-        /* The exec engine masked every interrupt source, consumed INT_STS
-         * latches and bumped the BFC/RFC flush counters; resync the poll
-         * shadows and restore the WDDM unmask state so pipeline jobs are
-         * neither falsely completed nor left without their interrupts. */
+        /* The exec engine masked every interrupt source and consumed INT_STS
+         * latches. Restore the WDDM unmask state before resuming the queue. */
         WRITE_REGISTER_ULONG((PULONG)(Core + V3D_CTL_INT_CLR), 0xFFFFFFFFu);
         WRITE_REGISTER_ULONG((PULONG)(Hub + V3D_HUB_INT_CLR), 0xFFFFFFFFu);
-        DeviceExtension->V3dLastBfc = READ_REGISTER_ULONG((PULONG)(Core + V3D_CLE_BFC)) & 0xff;
-        DeviceExtension->V3dLastRfc = READ_REGISTER_ULONG((PULONG)(Core + V3D_CLE_RFC)) & 0xff;
         if (DeviceExtension->V3dCoreIrqConnected)
         {
             WRITE_REGISTER_ULONG((PULONG)(Core + V3D_CTL_INT_MSK_SET), 0xFFFFFFFFu);

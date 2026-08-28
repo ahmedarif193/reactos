@@ -82,6 +82,7 @@ typedef struct _RPI5VC4_PENDING_SUBMIT
     UCHAR RenderKicks;
     UCHAR RenderKickRfc;              /* RFC&0xff snapshot at render kick   */
     UCHAR BinKickBfc;                 /* BFC&0xff snapshot at bin kick      */
+    UCHAR TfuKickCvtct;               /* CVTCT snapshot before TFU kick     */
     BOOLEAN IsV3dJob;
     BOOLEAN IsTfuJob;
     BOOLEAN IsCsdJob;
@@ -432,16 +433,12 @@ struct _RPI5VC4_DEVICE_EXTENSION
     BOOLEAN V3dCoreIrqConnected;
     BOOLEAN V3dHubIrqConnected;
     BOOLEAN V3dIrqConnected;
-    volatile LONG V3dIsrCount;
     volatile LONG V3dIsrMasked;
     LONG V3dTdrPrints;
     LONG V3dQmaPrints;
     UCHAR HvsLptrsDead[2];
     LONG V3dOomPrints;
     ULONG V3dResetCount;
-    volatile LONG V3dDpcFromIsr;
-    ULONG V3dLastBfc;
-    ULONG V3dLastRfc;
 
     /* ---- Bounded V3D exec engine (rpi5vc4_v3d_exec.c, XPDM port) --------
      * Escape-driven synchronous render/readback jobs for the OpenGL ICD.

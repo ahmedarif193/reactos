@@ -29,7 +29,6 @@
 
 
 #define V3D_TFU_CS                         0x0700
-#define V3D_TFU_CS_CVTCT_MASK              (0xFFu << 16)
 #define V3D_TFU_ICFG                       0x0708
 #define V3D_TFU_IIA                        0x070C
 #define V3D_TFU_ICA                        0x0710

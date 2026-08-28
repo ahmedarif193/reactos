@@ -153,6 +153,8 @@
 /* ---- TFU (texture formatting unit) — hub block, v7 register set -------- */
 #define V3D_V7_TFU_CS                   0x0700
 #define V3D_TFU_CS_BUSY                 (1u << 0)
+#define V3D_TFU_CS_CVTCT_SHIFT          16
+#define V3D_TFU_CS_CVTCT_MASK           (0xffu << V3D_TFU_CS_CVTCT_SHIFT)
 #define V3D_V7_TFU_SU                   0x0704
 #define V3D_V7_TFU_ICFG                 0x0708
 #define V3D_TFU_ICFG_IOC                (1u << 0)
@@ -231,10 +233,10 @@ Rpi5V3dSubmitRender(
 
 /* Consume (read + W1C) the latched bin/render completion bits. */
 VOID
-Rpi5V3dPollDone(
+Rpi5V3dConsumeCompletions(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
-    _Out_ PBOOLEAN BinDone,
-    _Out_ PBOOLEAN RenderDone);
+    _Out_ PBOOLEAN BinComplete,
+    _Out_ PBOOLEAN RenderComplete);
 
 /*
  * V3D core interrupt: GIC SPI 250 per the RPi5 DTB (v3d node
@@ -251,7 +253,8 @@ Rpi5V3dPollDone(
 BOOLEAN
 Rpi5V3dSubmitTfu(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
-    _In_ CONST ULONG *TfuRegs);      /* [Icfg Iia Ica Iis Iua Ioc Ioa Ios C0..C3] */
+    _In_ CONST ULONG *TfuRegs,       /* [Icfg Iia Ica Iis Iua Ioc Ioa Ios C0..C3] */
+    _Out_ PUCHAR CompletionBefore);
 
 /* Kick one UMD-encoded compute dispatch (CFG0..CFG7 register image). */
 BOOLEAN
@@ -267,7 +270,8 @@ Rpi5V3dCsdDone(
 /* Consume (read + W1C) the hub TFU-complete latch. */
 BOOLEAN
 Rpi5V3dTfuDone(
-    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension);
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ UCHAR CompletionBefore);
 
 /* Best-effort SPI connect; FALSE leaves the poll timer as sole driver. */
 BOOLEAN
