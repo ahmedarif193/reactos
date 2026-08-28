@@ -310,8 +310,11 @@ PcRegisterSubdevice(
         }
     }
 
-    // release SubDevice reference
-    SubDevice->Release();
+    /*
+     * The create item stores SubDevice as its dispatch context.  Transfer the
+     * QueryInterface reference to that item so the port remains alive until
+     * PcUnregisterSubdevice removes the item.
+     */
 
     return STATUS_SUCCESS;
 }
