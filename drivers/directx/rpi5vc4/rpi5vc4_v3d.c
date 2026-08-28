@@ -469,9 +469,6 @@ Rpi5V3dResetCore(
     if (!Rpi5V3dMmuSetup(DeviceExtension))
         return FALSE;
 
-    DeviceExtension->V3dLastBfc = 0;
-    DeviceExtension->V3dLastRfc = 0;
-
     Rpi5V3dWrite(Core, V3D_ERR_STAT, 0xFFFFFFFFu);
     DPRINT1("RPI5VC4: reset ERR_STAT after clear=%08lx\n",
             Rpi5V3dRead(Core, V3D_ERR_STAT));
@@ -566,11 +563,10 @@ Rpi5V3dInitialize(
     Rpi5V3dWrite(DeviceExtension->V3dCoreBase, V3D_CTL_L2TFLSTA, 0);
     Rpi5V3dWrite(DeviceExtension->V3dCoreBase, V3D_CTL_L2TFLEND, ~0u);
 
-    /*
-     * Completion is polled from the fence queue (root-enumerated devnode:
-     * no interrupt resource), so mask every interrupt line and clear any
-     * stale status.  INT_STS still latches FLDONE/FRDONE for the poll.
-     */
+    /* Keep completion sources masked while the core and page table are being
+     * initialized. Rpi5V3dConnectInterrupt clears the masks after both the
+     * dxgkrnl-owned core handler and the miniport-owned hub handler are ready.
+     * INT_STS still latches completions for the degraded polling path. */
     Rpi5V3dWrite(DeviceExtension->V3dCoreBase, V3D_CTL_INT_MSK_SET, ~0u);
     Rpi5V3dWrite(DeviceExtension->V3dCoreBase, V3D_CTL_INT_CLR, ~0u);
     Rpi5V3dWrite(DeviceExtension->V3dHubBase, V3D_HUB_INT_MSK_SET, ~0u);
@@ -579,10 +575,9 @@ Rpi5V3dInitialize(
     if (!Rpi5V3dMmuSetup(DeviceExtension))
         goto Fail;
 
-    /* Poll-driven completion: the fence poll timer needs real 1ms ticks,
-     * not the default 10-15ms clock granularity. */
-    DPRINT1("RPI5VC4: timer resolution granted %lu\n",
-            ExSetTimerResolution(10000, TRUE));
+    /* Poll-driven completion needs real 1 ms ticks, not the default
+     * 10-15 ms clock granularity. */
+    ExSetTimerResolution(10000, TRUE);
 
     Rpi5V3dWrite(DeviceExtension->V3dCoreBase, V3D_ERR_STAT, 0xFFFFFFFFu);
     DPRINT1("RPI5VC4: init ERR_STAT after clear=%08lx\n",
@@ -679,35 +674,39 @@ BOOLEAN
 Rpi5V3dInterrupt(
     _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
-    ULONG Status;
+    ULONG CoreStatus;
+    ULONG HubStatus = 0;
 
     if (DeviceExtension == NULL || !DeviceExtension->V3dReady)
         return FALSE;
 
-    Status = Rpi5V3dRead(DeviceExtension->V3dCoreBase, V3D_CTL_INT_STS);
-    if ((Status & (V3D_INT_FLDONE | V3D_INT_FRDONE | V3D_INT_OUTOMEM |
-                   V3D_V7_INT_CSDDONE)) == 0)
-    {
-        if (DeviceExtension->V3dHubBase != NULL &&
-            (Rpi5V3dRead(DeviceExtension->V3dHubBase, V3D_HUB_INT_STS) &
-             V3D_HUB_INT_TFUC) != 0)
-        {
-            Rpi5V3dWrite(DeviceExtension->V3dHubBase, V3D_HUB_INT_MSK_SET,
-                         V3D_HUB_INT_TFUC);
-            InterlockedExchange(&DeviceExtension->V3dIsrMasked, 1);
-            InterlockedIncrement(&DeviceExtension->V3dIsrCount);
-            KeInsertQueueDpc(&DeviceExtension->V3dPollDpc, NULL, NULL);
-            return TRUE;
-        }
-        return FALSE;
-    }
+    CoreStatus = Rpi5V3dRead(DeviceExtension->V3dCoreBase,
+                             V3D_CTL_INT_STS);
+    if (DeviceExtension->V3dHubBase != NULL)
+        HubStatus = Rpi5V3dRead(DeviceExtension->V3dHubBase,
+                                V3D_HUB_INT_STS);
 
-    /* Quiesce the level-triggered source before EOI. */
-    Rpi5V3dWrite(DeviceExtension->V3dCoreBase, V3D_CTL_INT_MSK_SET,
-                 V3D_INT_FLDONE | V3D_INT_FRDONE | V3D_INT_OUTOMEM |
-                 V3D_V7_INT_CSDDONE);
+    if ((CoreStatus & (V3D_INT_FLDONE | V3D_INT_FRDONE |
+                       V3D_INT_OUTOMEM | V3D_V7_INT_CSDDONE)) == 0 &&
+        (HubStatus & V3D_HUB_INT_TFUC) == 0)
+        return FALSE;
+
+    /* Quiesce every asserted level source before EOI.  The two interrupt
+     * objects share this handler, so core and hub status may be visible in
+     * the same invocation. */
+    if (CoreStatus & (V3D_INT_FLDONE | V3D_INT_FRDONE |
+                      V3D_INT_OUTOMEM | V3D_V7_INT_CSDDONE))
+    {
+        Rpi5V3dWrite(DeviceExtension->V3dCoreBase, V3D_CTL_INT_MSK_SET,
+                     V3D_INT_FLDONE | V3D_INT_FRDONE |
+                     V3D_INT_OUTOMEM | V3D_V7_INT_CSDDONE);
+    }
+    if (HubStatus & V3D_HUB_INT_TFUC)
+    {
+        Rpi5V3dWrite(DeviceExtension->V3dHubBase, V3D_HUB_INT_MSK_SET,
+                     V3D_HUB_INT_TFUC);
+    }
     InterlockedExchange(&DeviceExtension->V3dIsrMasked, 1);
-    InterlockedIncrement(&DeviceExtension->V3dIsrCount);
     KeInsertQueueDpc(&DeviceExtension->V3dPollDpc, NULL, NULL);
     return TRUE;
 }
@@ -993,16 +992,23 @@ Rpi5V3dSubmitRender(
 BOOLEAN
 Rpi5V3dSubmitTfu(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
-    _In_ CONST ULONG *TfuRegs)
+    _In_ CONST ULONG *TfuRegs,
+    _Out_ PUCHAR CompletionBefore)
 {
     PVOID Hub = DeviceExtension->V3dHubBase;
+    ULONG Control;
 
-    if (!DeviceExtension->V3dReady || TfuRegs == NULL)
+    if (!DeviceExtension->V3dReady || TfuRegs == NULL ||
+        CompletionBefore == NULL)
         return FALSE;
 
     /* Reject a kick while the unit is busy (single job in flight). */
-    if (Rpi5V3dRead(Hub, V3D_V7_TFU_CS) & V3D_TFU_CS_BUSY)
+    Control = Rpi5V3dRead(Hub, V3D_V7_TFU_CS);
+    if (Control & V3D_TFU_CS_BUSY)
         return FALSE;
+
+    *CompletionBefore = (UCHAR)((Control & V3D_TFU_CS_CVTCT_MASK) >>
+                                V3D_TFU_CS_CVTCT_SHIFT);
 
     Rpi5V3dWrite(Hub, V3D_HUB_INT_CLR, V3D_HUB_INT_TFUC);
 
@@ -1027,33 +1033,38 @@ Rpi5V3dSubmitTfu(
 
 BOOLEAN
 Rpi5V3dTfuDone(
-    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ UCHAR CompletionBefore)
 {
     PVOID Hub = DeviceExtension->V3dHubBase;
+    ULONG InterruptStatus;
+    UCHAR CompletionAfter;
 
     if (!DeviceExtension->V3dReady)
         return TRUE;
 
-    if (Rpi5V3dRead(Hub, V3D_HUB_INT_STS) & V3D_HUB_INT_TFUC)
-    {
-        Rpi5V3dWrite(Hub, V3D_HUB_INT_CLR, V3D_HUB_INT_TFUC);
-        return TRUE;
-    }
+    InterruptStatus = Rpi5V3dRead(Hub, V3D_HUB_INT_STS);
+    CompletionAfter = (UCHAR)
+        ((Rpi5V3dRead(Hub, V3D_V7_TFU_CS) & V3D_TFU_CS_CVTCT_MASK) >>
+         V3D_TFU_CS_CVTCT_SHIFT);
 
-    return FALSE;
+    if (InterruptStatus & V3D_HUB_INT_TFUC)
+        Rpi5V3dWrite(Hub, V3D_HUB_INT_CLR, V3D_HUB_INT_TFUC);
+
+    return (InterruptStatus & V3D_HUB_INT_TFUC) != 0 ||
+           CompletionAfter != CompletionBefore;
 }
 
 VOID
-Rpi5V3dPollDone(
+Rpi5V3dConsumeCompletions(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
-    _Out_ PBOOLEAN BinDone,
-    _Out_ PBOOLEAN RenderDone)
+    _Out_ PBOOLEAN BinComplete,
+    _Out_ PBOOLEAN RenderComplete)
 {
     ULONG Status;
-    ULONG Bfc, Rfc;
 
-    *BinDone = FALSE;
-    *RenderDone = FALSE;
+    *BinComplete = FALSE;
+    *RenderComplete = FALSE;
 
     if (!DeviceExtension->V3dReady)
         return;
@@ -1067,14 +1078,9 @@ Rpi5V3dPollDone(
     if (Status != 0)
         Rpi5V3dWrite(DeviceExtension->V3dCoreBase, V3D_CTL_INT_CLR, Status);
 
-    if (Status & V3D_INT_FLDONE)
-    {
-        *BinDone = TRUE;
-    }
-    if (Status & V3D_INT_FRDONE)
-    {
-        *RenderDone = TRUE;
-    }
+    *BinComplete = (Status & V3D_INT_FLDONE) != 0;
+    *RenderComplete = (Status & V3D_INT_FRDONE) != 0;
+
     if (Status & V3D_INT_OUTOMEM)
     {
         /* Binner ran out of tile-list memory: hand it the overflow region
@@ -1086,18 +1092,4 @@ Rpi5V3dPollDone(
                      RPI5VC4_V3D_OVERFLOW_SIZE);
     }
 
-    /* Flush counters are the ground truth: a lost/uncaptured INT latch
-     * must not strand a finished job (poll-driven completion). */
-    Bfc = Rpi5V3dRead(DeviceExtension->V3dCoreBase, V3D_CLE_BFC) & 0xff;
-    Rfc = Rpi5V3dRead(DeviceExtension->V3dCoreBase, V3D_CLE_RFC) & 0xff;
-    if (Bfc != DeviceExtension->V3dLastBfc)
-    {
-        DeviceExtension->V3dLastBfc = Bfc;
-        *BinDone = TRUE;
-    }
-    if (Rfc != DeviceExtension->V3dLastRfc)
-    {
-        DeviceExtension->V3dLastRfc = Rfc;
-        *RenderDone = TRUE;
-    }
 }
