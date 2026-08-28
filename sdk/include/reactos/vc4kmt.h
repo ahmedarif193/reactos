@@ -120,6 +120,29 @@ vc4kmt_bo_gpuva(
     _In_ const VC4KMT_BO *Bo);
 
 NTSTATUS
+vc4kmt_shared_resource_info(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ D3DKMT_HANDLE hGlobalShare,
+    _Out_writes_bytes_to_opt_(RuntimeDataCapacity, *RuntimeDataSize)
+        PVOID RuntimeData,
+    _In_ UINT RuntimeDataCapacity,
+    _Out_ UINT *RuntimeDataSize);
+
+NTSTATUS
+vc4kmt_bo_open_shared(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ D3DKMT_HANDLE hGlobalShare,
+    _In_ UINT Size,
+    _Out_ VC4KMT_BO *Bo,
+    _Out_ D3DKMT_HANDLE *hResource);
+
+NTSTATUS
+vc4kmt_bo_close_shared(
+    _In_ VC4KMT_DEVICE *Device,
+    _Inout_ VC4KMT_BO *Bo,
+    _In_ D3DKMT_HANDLE hResource);
+
+NTSTATUS
 vc4kmt_primary_gpuva(
     _In_ VC4KMT_DEVICE *Device,
     _In_ UINT Width,
