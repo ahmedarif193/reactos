@@ -251,10 +251,17 @@ MiMapLockedPagesInUserSpace(
 #if defined(_M_ARM64)
         PMMPTE MappingPte = MiAddressToPte(BaseAddress);
 
-        ASSERT(MiArm64GetUserPteAddressForProcess(Process,
-                                                  BaseAddress,
-                                                  &Arm64Walk));
-        ASSERT(Arm64Walk.Depth >= 3);
+        if (!MiArm64GetUserPteAddressForProcess(Process,
+                                                BaseAddress,
+                                                &Arm64Walk) ||
+            Arm64Walk.Depth < 3)
+        {
+            KeBugCheckEx(MEMORY_MANAGEMENT,
+                         0xA646,
+                         (ULONG_PTR)BaseAddress,
+                         Arm64Walk.Depth,
+                         0);
+        }
         PointerPte = (PMMPTE)Arm64Walk.PointerPte;
         PageTablePage = Arm64Walk.LevelPfn[3];
         ASSERT(PointerPte->u.Hard.Valid == 0);
@@ -462,10 +469,17 @@ MiUnmapLockedPagesInUserSpace(
            *MdlPages != LIST_HEAD)
     {
 #if defined(_M_ARM64)
-        ASSERT(MiArm64GetUserPteAddressForProcess(Process,
-                                                  BaseAddress,
-                                                  &Arm64Walk));
-        ASSERT(Arm64Walk.Depth == 4);
+        if (!MiArm64GetUserPteAddressForProcess(Process,
+                                                BaseAddress,
+                                                &Arm64Walk) ||
+            Arm64Walk.Depth != 4)
+        {
+            KeBugCheckEx(MEMORY_MANAGEMENT,
+                         0xA647,
+                         (ULONG_PTR)BaseAddress,
+                         Arm64Walk.Depth,
+                         0);
+        }
         PointerPte = (PMMPTE)Arm64Walk.PointerPte;
 #else
         ASSERT(MiAddressToPte(PointerPte)->u.Hard.Valid == 1);
