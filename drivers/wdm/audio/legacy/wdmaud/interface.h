@@ -62,6 +62,7 @@ typedef struct
         ULONG Volume;
         ULONG FrameSize;
         HANDLE hNotifyEvent;
+        HANDLE hUserDevice;
     }u;
 
 }WDMAUD_DEVICE_INFO, *PWDMAUD_DEVICE_INFO;
@@ -374,5 +375,20 @@ typedef struct
 #define IOCTL_RESET_STREAM \
     CTL_CODE(FILE_DEVICE_SOUND, \
              17, \
+             METHOD_BUFFERED, \
+             FILE_CREATE_TREE_CONNECTION | FILE_ANY_ACCESS)
+
+/// IOCTL_DUPLICATE_WDMAUD_PIN
+///
+/// Description: This IOCTL creates a user-mode handle for an opened KS pin.
+///
+/// Arguments:  InputBuffer is a pointer to a WDMAUD_DEVICE_INFO structure.
+///             The hDevice member must identify a pin opened by the caller.
+/// Result:     The duplicated handle is returned in u.hUserDevice.
+/// ReturnCode: STATUS_SUCCESS indicates success.
+
+#define IOCTL_DUPLICATE_WDMAUD_PIN \
+    CTL_CODE(FILE_DEVICE_SOUND, \
+             18, \
              METHOD_BUFFERED, \
              FILE_CREATE_TREE_CONNECTION | FILE_ANY_ACCESS)
