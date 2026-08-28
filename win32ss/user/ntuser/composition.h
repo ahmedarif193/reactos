@@ -61,6 +61,7 @@ typedef struct _WND_REDIRECT
     ULONGLONG DxIssuedUpdateId;
     ULONGLONG DxPublishedUpdateId;
     ULONGLONG DxConsumedUpdateId;
+    PKEVENT   DxReadyEvent;
     DWM_DX_SHARED_SURFACE_INFO DxInfo;
 } WND_REDIRECT, *PWND_REDIRECT;
 

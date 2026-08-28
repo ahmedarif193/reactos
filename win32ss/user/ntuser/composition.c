@@ -253,6 +253,12 @@ IntCompositionIsCompositable(_In_ PWND Wnd)
 static VOID
 IntCompositionFreeSurface(_Inout_ PWND_REDIRECT r)
 {
+    if (r->DxReadyEvent != NULL)
+    {
+        KeSetEvent(r->DxReadyEvent, IO_NO_INCREMENT, FALSE);
+        ObDereferenceObject(r->DxReadyEvent);
+        r->DxReadyEvent = NULL;
+    }
     if (r->psurf != NULL)
     {
         SURFACE_ShareUnlockSurface(r->psurf);
@@ -1565,6 +1571,8 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
 
         if (Request.UpdateId > Entry->Redirect.DxConsumedUpdateId)
             Entry->Redirect.DxConsumedUpdateId = Request.UpdateId;
+        if (Entry->Redirect.DxReadyEvent != NULL)
+            KeSetEvent(Entry->Redirect.DxReadyEvent, IO_NO_INCREMENT, FALSE);
         goto CopyOutput;
     }
 
@@ -1599,8 +1607,10 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
         {
             ULONG ClientWidth = Wnd->rcClient.right - Wnd->rcClient.left;
             ULONG ClientHeight = Wnd->rcClient.bottom - Wnd->rcClient.top;
+            PKEVENT ReadyEvent;
 
-            if (Request.GlobalShare == 0 ||
+            if (Request.GlobalShare == 0 || Request.ReadyEvent == 0 ||
+                Request.ReadyEvent > (ULONGLONG)MAXULONG_PTR ||
                 Request.Info.Magic != DWM_DX_SURFACE_INFO_MAGIC ||
                 Request.Info.Version != DWM_DX_SURFACE_INFO_VERSION ||
                 Request.Info.Width == 0 || Request.Info.Height == 0 ||
@@ -1614,12 +1624,31 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
                 return STATUS_INVALID_PARAMETER;
             }
 
+            Status = ObReferenceObjectByHandle(
+                (HANDLE)(ULONG_PTR)Request.ReadyEvent,
+                EVENT_MODIFY_STATE,
+                *ExEventObjectType,
+                UserMode,
+                (PVOID *)&ReadyEvent,
+                NULL);
+            if (!NT_SUCCESS(Status))
+                return Status;
+
+            if (Entry->Redirect.DxReadyEvent != NULL)
+            {
+                KeSetEvent(Entry->Redirect.DxReadyEvent,
+                           IO_NO_INCREMENT,
+                           FALSE);
+                ObDereferenceObject(Entry->Redirect.DxReadyEvent);
+            }
+
             Entry->Redirect.DxGlobalShare = Request.GlobalShare;
             Entry->Redirect.DxAdapterLuid = Request.AdapterLuid;
             Entry->Redirect.DxInfo = Request.Info;
             Entry->Redirect.DxIssuedUpdateId = 0;
             Entry->Redirect.DxPublishedUpdateId = 0;
             Entry->Redirect.DxConsumedUpdateId = 0;
+            Entry->Redirect.DxReadyEvent = ReadyEvent;
             Entry->Redirect.DxGeneration = ++g_FrontGeneration;
             if (Entry->Redirect.DxGeneration == 0)
                 Entry->Redirect.DxGeneration = ++g_FrontGeneration;
@@ -1642,10 +1671,13 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
             {
                 return STATUS_DEVICE_BUSY;
             }
+            if (Entry->Redirect.DxReadyEvent == NULL)
+                return STATUS_INVALID_DEVICE_STATE;
 
             if (++g_DxUpdateSequence == 0)
                 ++g_DxUpdateSequence;
             Entry->Redirect.DxIssuedUpdateId = g_DxUpdateSequence;
+            KeClearEvent(Entry->Redirect.DxReadyEvent);
             Request.SurfaceId = (ULONG)(Entry - g_Redirects);
             Request.Generation = Entry->Redirect.DxGeneration;
             Request.UpdateId = g_DxUpdateSequence;
@@ -1661,6 +1693,10 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
             if (Request.Flags & DWM_DX_UPDATE_CANCEL)
             {
                 Entry->Redirect.DxConsumedUpdateId = Request.UpdateId;
+                if (Entry->Redirect.DxReadyEvent != NULL)
+                    KeSetEvent(Entry->Redirect.DxReadyEvent,
+                               IO_NO_INCREMENT,
+                               FALSE);
                 break;
             }
             if ((Request.Flags & ~1u) != 0 ||

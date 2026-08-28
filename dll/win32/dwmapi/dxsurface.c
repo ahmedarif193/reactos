@@ -50,6 +50,7 @@ typedef struct _DWM_DX_SURFACE
     D3DKMT_HANDLE hResource;
     D3DKMT_HANDLE hAllocation;
     D3DKMT_HANDLE hGlobalShare;
+    HANDLE ReadyEvent;
 } DWM_DX_SURFACE;
 
 static INIT_ONCE g_DxInitOnce = INIT_ONCE_STATIC_INIT;
@@ -107,6 +108,8 @@ DwmDxDestroySurface(DWM_DX_SURFACE *Surface)
         Destroy.hResource = Surface->hResource;
         (void)D3DKMTDestroyAllocation(&Destroy);
     }
+    if (Surface->ReadyEvent != NULL)
+        CloseHandle(Surface->ReadyEvent);
     RtlZeroMemory(Surface, sizeof(*Surface));
 }
 
@@ -192,6 +195,7 @@ DwmDxRegisterSurface(HWND Window,
     D3DDDI_ALLOCATIONINFO Allocation;
     UINT Dimensions[3];
     ULONG DeviceIndex;
+    HANDLE ReadyEvent;
     NTSTATUS Status;
 
     Status = DwmDxGetDevice(Luid, &DeviceIndex);
@@ -243,6 +247,18 @@ DwmDxRegisterSurface(HWND Window,
         return STATUS_INVALID_DEVICE_STATE;
     }
 
+    ReadyEvent = CreateEventW(NULL, TRUE, TRUE, NULL);
+    if (ReadyEvent == NULL)
+    {
+        D3DKMT_DESTROYALLOCATION Destroy;
+
+        RtlZeroMemory(&Destroy, sizeof(Destroy));
+        Destroy.hDevice = g_DxDevices[DeviceIndex].hDevice;
+        Destroy.hResource = Create.hResource;
+        (void)D3DKMTDestroyAllocation(&Destroy);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
     RtlZeroMemory(&Exchange, sizeof(Exchange));
     Exchange.StructSize = sizeof(Exchange);
     Exchange.Action = DWM_DX_SURFACE_REGISTER;
@@ -250,6 +266,7 @@ DwmDxRegisterSurface(HWND Window,
     Exchange.AdapterLuid = *Luid;
     Exchange.GlobalShare = Create.hGlobalShare;
     Exchange.Info = RuntimeInfo;
+    Exchange.ReadyEvent = (ULONGLONG)(ULONG_PTR)ReadyEvent;
     Status = (NTSTATUS)NtUserCallOneParam((DWORD_PTR)&Exchange,
                                           DWM_ROUTINE_DXSURFACE);
     if (!NT_SUCCESS(Status))
@@ -260,6 +277,7 @@ DwmDxRegisterSurface(HWND Window,
         Destroy.hDevice = g_DxDevices[DeviceIndex].hDevice;
         Destroy.hResource = Create.hResource;
         (void)D3DKMTDestroyAllocation(&Destroy);
+        CloseHandle(ReadyEvent);
         DwmDxReportFailure("register", Status);
         return Status;
     }
@@ -271,6 +289,7 @@ DwmDxRegisterSurface(HWND Window,
     Surface->hResource = Create.hResource;
     Surface->hAllocation = Allocation.hAllocation;
     Surface->hGlobalShare = Create.hGlobalShare;
+    Surface->ReadyEvent = ReadyEvent;
     return STATUS_SUCCESS;
 }
 
@@ -315,8 +334,35 @@ DwmpDxGetWindowSharedSurface(HWND Window,
     UNREFERENCED_PARAMETER(Monitor);
 
     if (Format == NULL || SharedSurface == NULL || UpdateId == NULL ||
-        !IsWindow(Window) || (Flags & ~1u) != 0 ||
-        !GetClientRect(Window, &ClientRect) ||
+        Window == NULL || (Flags & ~1u) != 0)
+    {
+        return E_INVALIDARG;
+    }
+
+    *Format = 0;
+    *SharedSurface = NULL;
+    *UpdateId = 0;
+    if (!InitOnceExecuteOnce(&g_DxInitOnce, DwmDxInitialize, NULL, NULL))
+        return E_FAIL;
+
+    EnterCriticalSection(&g_DxLock);
+    for (Index = 0; Index < DWM_DX_MAX_SURFACES; ++Index)
+    {
+        if (g_DxSurfaces[Index].Window == Window)
+        {
+            Surface = &g_DxSurfaces[Index];
+            break;
+        }
+    }
+    if (Surface != NULL && Surface->ReadyEvent != NULL &&
+        WaitForSingleObject(Surface->ReadyEvent, 0) == WAIT_TIMEOUT)
+    {
+        LeaveCriticalSection(&g_DxLock);
+        return S_FALSE;
+    }
+    LeaveCriticalSection(&g_DxLock);
+
+    if (!IsWindow(Window) || !GetClientRect(Window, &ClientRect) ||
         ClientRect.right <= ClientRect.left ||
         ClientRect.bottom <= ClientRect.top)
     {
@@ -331,12 +377,7 @@ DwmpDxGetWindowSharedSurface(HWND Window,
         return E_INVALIDARG;
     }
 
-    *Format = 0;
-    *SharedSurface = NULL;
-    *UpdateId = 0;
-    if (!InitOnceExecuteOnce(&g_DxInitOnce, DwmDxInitialize, NULL, NULL))
-        return E_FAIL;
-
+    Surface = NULL;
     EnterCriticalSection(&g_DxLock);
     for (Index = 0; Index < DWM_DX_MAX_SURFACES; ++Index)
     {
@@ -354,6 +395,13 @@ DwmpDxGetWindowSharedSurface(HWND Window,
     if (Surface != NULL)
     {
         DWM_DX_DEVICE *Device = &g_DxDevices[Surface->DeviceIndex];
+
+        if (Surface->ReadyEvent != NULL &&
+            WaitForSingleObject(Surface->ReadyEvent, 0) == WAIT_TIMEOUT)
+        {
+            LeaveCriticalSection(&g_DxLock);
+            return S_FALSE;
+        }
 
         if (Surface->Width != Width || Surface->Height != Height ||
             !DwmDxLuidEqual(&Device->Luid, &AdapterLuid))

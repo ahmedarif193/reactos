@@ -240,6 +240,7 @@ typedef struct _DWM_DX_SURFACE_EXCHANGE
     ULONG Generation;
     ULONG Flags;
     DWM_DX_SHARED_SURFACE_INFO Info;
+    ULONGLONG ReadyEvent;
     ULONGLONG UpdateId;
     RECTL UpdateRect;
 } DWM_DX_SURFACE_EXCHANGE, *PDWM_DX_SURFACE_EXCHANGE;
