@@ -3894,7 +3894,7 @@ DxgkpSubmitVirtGpuCommandEscape(
         Status = STATUS_DELETE_PENDING;
         goto Cleanup;
     }
-    if (!DxgkReserveSubmissionFenceIdentity(Adapter, NodeOrdinal, SubmissionFenceId))
+    if (!DxgkReserveSubmissionFenceIdentity(Adapter, NodeOrdinal, SubmissionFenceId, &Reservation->FenceIdentityEpoch))
     {
         DxgkReleaseKmdCall(Adapter);
         Status = STATUS_DEVICE_BUSY;

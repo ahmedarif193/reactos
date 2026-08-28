@@ -1496,16 +1496,56 @@ ULONG NTAPI DxgkAllocateSubmissionFenceId(_In_ PDXGKRNL_ADAPTER Adapter)
     return ProviderFence;
 }
 
-BOOLEAN NTAPI DxgkReserveSubmissionFenceIdentity(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG NodeOrdinal, _In_ ULONG SubmissionFenceId)
+BOOLEAN NTAPI DxgkReserveSubmissionFenceIdentity(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG NodeOrdinal,
+    _In_ ULONG SubmissionFenceId,
+    _Out_ PULONG FenceIdentityEpoch)
 {
     DXGMMS2_SCHEDULER_TIMELINE_INTERFACE_V1 Timeline;
+    ULONG Epoch;
     BOOLEAN ProviderReserved;
 
+    if (FenceIdentityEpoch == NULL)
+        return FALSE;
+    *FenceIdentityEpoch = 0;
     if (Adapter == NULL)
         return FALSE;
     if (!DxgkpAcquireMms2TimelineCall(Adapter, &Timeline))
-        return InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) == 0 ? DxgkpShadowReserveSubmissionFenceIdentity(Adapter, NodeOrdinal, SubmissionFenceId) : FALSE;
+    {
+        if (InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) != 0 ||
+            InterlockedCompareExchange(&Adapter->SubmittedFenceIdentityResetting, 0, 0) != 0)
+        {
+            return FALSE;
+        }
+
+        Epoch = (ULONG)InterlockedCompareExchange(&Adapter->SubmittedFenceIdentityEpoch, 0, 0);
+        if (Epoch == 0 || !DxgkpShadowReserveSubmissionFenceIdentity(Adapter, NodeOrdinal, SubmissionFenceId))
+            return FALSE;
+        KeMemoryBarrier();
+        if (InterlockedCompareExchange(&Adapter->SubmittedFenceIdentityResetting, 0, 0) != 0 ||
+            (ULONG)InterlockedCompareExchange(&Adapter->SubmittedFenceIdentityEpoch, 0, 0) != Epoch)
+        {
+            (VOID)DxgkpShadowReleaseSubmittedFenceIdentity(Adapter, NodeOrdinal, SubmissionFenceId);
+            return FALSE;
+        }
+        *FenceIdentityEpoch = Epoch;
+        return TRUE;
+    }
+    if (InterlockedCompareExchange(&Adapter->SubmittedFenceIdentityResetting, 0, 0) != 0)
+    {
+        DxgkpReleaseMms2TimelineCall(Adapter);
+        return FALSE;
+    }
+    Epoch = (ULONG)InterlockedCompareExchange(&Adapter->SubmittedFenceIdentityEpoch, 0, 0);
+    if (Epoch == 0)
+    {
+        DxgkpReleaseMms2TimelineCall(Adapter);
+        return FALSE;
+    }
     ProviderReserved = Timeline.ReserveFence(Timeline.TimelineHandle, Timeline.Generation, NodeOrdinal, SubmissionFenceId);
+    if (ProviderReserved)
+        *FenceIdentityEpoch = Epoch;
     DxgkpReleaseMms2TimelineCall(Adapter);
     return ProviderReserved;
 }
@@ -1544,14 +1584,30 @@ BOOLEAN NTAPI DxgkIsSubmittedFenceIdentity(_In_ PDXGKRNL_ADAPTER Adapter, _In_ U
     return ProviderPublished;
 }
 
-VOID NTAPI DxgkReleaseSubmittedFenceIdentity(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG NodeOrdinal, _In_ ULONG SubmissionFenceId)
+VOID NTAPI DxgkReleaseSubmittedFenceIdentity(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG NodeOrdinal,
+    _In_ ULONG SubmissionFenceId,
+    _In_ ULONG FenceIdentityEpoch)
 {
     DXGMMS2_SCHEDULER_TIMELINE_INTERFACE_V1 Timeline;
 
     if (Adapter == NULL)
         return;
+    if (FenceIdentityEpoch == 0)
+        DxgkpBugCheckMms2Timeline(Adapter, NodeOrdinal, SubmissionFenceId);
+    if ((ULONG)InterlockedCompareExchange(&Adapter->SubmittedFenceIdentityEpoch, 0, 0) != FenceIdentityEpoch ||
+        InterlockedCompareExchange(&Adapter->SubmittedFenceIdentityResetting, 0, 0) != 0)
+    {
+        return;
+    }
     if (!DxgkpAcquireMms2TimelineCall(Adapter, &Timeline))
     {
+        if ((ULONG)InterlockedCompareExchange(&Adapter->SubmittedFenceIdentityEpoch, 0, 0) != FenceIdentityEpoch ||
+            InterlockedCompareExchange(&Adapter->SubmittedFenceIdentityResetting, 0, 0) != 0)
+        {
+            return;
+        }
         if (InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) == 0)
             (VOID)DxgkpShadowReleaseSubmittedFenceIdentity(Adapter, NodeOrdinal, SubmissionFenceId);
         else
@@ -1572,9 +1628,15 @@ VOID NTAPI DxgkResetSubmittedFenceIdentities(_In_ PDXGKRNL_ADAPTER Adapter)
     PAGED_CODE();
     if (Adapter == NULL)
         return;
+    InterlockedExchange(&Adapter->SubmittedFenceIdentityResetting, 1);
+    KeMemoryBarrier();
     if (InterlockedCompareExchange(&Adapter->Mms2TimelineValid, 0, 0) == 0)
     {
         DxgkpShadowResetSubmittedFenceIdentities(Adapter);
+        if (InterlockedIncrement(&Adapter->SubmittedFenceIdentityEpoch) == 0)
+            InterlockedIncrement(&Adapter->SubmittedFenceIdentityEpoch);
+        KeMemoryBarrier();
+        InterlockedExchange(&Adapter->SubmittedFenceIdentityResetting, 0);
         return;
     }
     TimelineWasPublished = DxgkpCloseMms2TimelineCalls(Adapter);
@@ -1585,6 +1647,10 @@ VOID NTAPI DxgkResetSubmittedFenceIdentities(_In_ PDXGKRNL_ADAPTER Adapter)
     if (!NT_SUCCESS(Status))
         DxgkpBugCheckMms2Timeline(Adapter, 0, 0);
     DxgkpShadowResetSubmittedFenceIdentities(Adapter);
+    if (InterlockedIncrement(&Adapter->SubmittedFenceIdentityEpoch) == 0)
+        InterlockedIncrement(&Adapter->SubmittedFenceIdentityEpoch);
+    KeMemoryBarrier();
+    InterlockedExchange(&Adapter->SubmittedFenceIdentityResetting, 0);
     DxgkpReopenMms2TimelineCalls(Adapter);
 }
 
@@ -2667,7 +2733,7 @@ DxgkpFreeTrackedDmaBufferEntry(
     DeviceWorkOwned = DxgkTrackedWorkCoreOwnsDeviceWork(&Entry->TrackedWork);
     ExternalCleanupOwned = DxgkTrackedWorkCoreOwnsExternalCleanup(&Entry->TrackedWork);
     if (Entry->FenceIdentityOwned && Adapter != NULL)
-        DxgkReleaseSubmittedFenceIdentity(Adapter, Entry->NodeOrdinal, Entry->SubmissionFenceId);
+        DxgkReleaseSubmittedFenceIdentity(Adapter, Entry->NodeOrdinal, Entry->SubmissionFenceId, Entry->FenceIdentityEpoch);
     if (Completed &&
         MiniportCallbacksValid &&
         (Entry->RefreshSharedPrimaryOnRetire ||
@@ -11500,6 +11566,8 @@ DxgkpAddDeviceRegistered(
     Adapter->Mms2ContextStreamValid = 0;
     Adapter->Mms2TimelineCallsOpen = 0;
     Adapter->Mms2TimelineActiveCalls = 0;
+    Adapter->SubmittedFenceIdentityEpoch = 1;
+    Adapter->SubmittedFenceIdentityResetting = 0;
     KeInitializeMutex(&Adapter->MiniportCallbackMutex, 0);
     KeInitializeMutex(&Adapter->KmdExclusiveMutex, 0);
     KeInitializeMutex(&Adapter->KmdTransactionMutex, 0);

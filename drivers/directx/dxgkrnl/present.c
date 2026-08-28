@@ -2335,7 +2335,7 @@ DxgkpExecuteFullPresent(
             Status = STATUS_DELETE_PENDING;
             goto PresentSubmissionDone;
         }
-        if (!DxgkReserveSubmissionFenceIdentity(Adapter, PresentNode, SubmissionFenceId))
+        if (!DxgkReserveSubmissionFenceIdentity(Adapter, PresentNode, SubmissionFenceId, &Reservation->FenceIdentityEpoch))
         {
             DxgkReleaseKmdCall(Adapter);
             Status = STATUS_DEVICE_BUSY;

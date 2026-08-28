@@ -432,7 +432,9 @@ typedef struct _DXGKRNL_SUBMIT_DMA_BUFFER
     ULONG                       EngineOrdinal;
     PDXGKRNL_ADAPTER            Adapter;
     volatile LONG               ReservationActive;
+    /* ResetFenceIdentities invalidates ownership from older epochs. */
     BOOLEAN                     FenceIdentityOwned;
+    ULONG                       FenceIdentityEpoch;
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
     /* PASSIVE retire worker outcome; failed GPU work must never publish. */
     BOOLEAN                     CleanupAsCompleted;
@@ -589,6 +591,9 @@ struct _DXGKRNL_ADAPTER
     volatile LONG               Mms2TimelineValid;
     volatile LONG               Mms2TimelineCallsOpen;
     volatile LONG               Mms2TimelineActiveCalls;
+    /* Serializes fence-table resets with reservations and late releases. */
+    volatile LONG               SubmittedFenceIdentityEpoch;
+    volatile LONG               SubmittedFenceIdentityResetting;
     DXGMMS2_CONTEXT_STREAM_INTERFACE_V1 Mms2ContextStreamInterface;
 
     /* dxgmms2 owns the scheduler run queues; this is the typed contract
@@ -3055,11 +3060,12 @@ NTAPI
 DxgkReserveSubmissionFenceIdentity(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ ULONG NodeOrdinal,
-    _In_ ULONG SubmissionFenceId);
+    _In_ ULONG SubmissionFenceId,
+    _Out_ PULONG FenceIdentityEpoch);
 
 VOID NTAPI DxgkPublishSubmittedFence(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG NodeOrdinal, _In_ ULONG SubmissionFenceId);
 BOOLEAN NTAPI DxgkIsSubmittedFenceIdentity(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG NodeOrdinal, _In_ ULONG SubmissionFenceId);
-VOID NTAPI DxgkReleaseSubmittedFenceIdentity(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG NodeOrdinal, _In_ ULONG SubmissionFenceId);
+VOID NTAPI DxgkReleaseSubmittedFenceIdentity(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG NodeOrdinal, _In_ ULONG SubmissionFenceId, _In_ ULONG FenceIdentityEpoch);
 VOID NTAPI DxgkResetSubmittedFenceIdentities(_In_ PDXGKRNL_ADAPTER Adapter);
 NTSTATUS NTAPI DxgkNotifySubmissionFenceCompletion(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG NodeOrdinal, _In_ ULONG FenceId, _In_ BOOLEAN Preempted, _Out_ DXGMMS2_FENCE_SNAPSHOT_V1 *Snapshot);
 VOID NTAPI DxgkDrainVidSchCallbacks(_In_ PDXGKRNL_ADAPTER Adapter);
