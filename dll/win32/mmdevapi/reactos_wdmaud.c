@@ -43,6 +43,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(mmdevapi);
 #define REACTOS_DEFAULT_PERIOD 100000
 #define REACTOS_MIN_PERIOD 30000
 #define REACTOS_DEFAULT_BUFFER_FRAMES 4096
+#define REACTOS_RT_NOTIFICATION_COUNT 2
 
 struct reactos_stream
 {
@@ -52,8 +53,10 @@ struct reactos_stream
     SOUND_DEVICE_TYPE type;
     DWORD index;
     HANDLE pin;
+    HANDLE user_pin;
     HANDLE io_handle;
     HANDLE event;
+    HANDLE rt_event;
     HANDLE stop_event;
     HANDLE timer_thread;
     CRITICAL_SECTION lock;
@@ -68,12 +71,21 @@ struct reactos_stream
     UINT32 capture_frames;
     UINT64 position;
     UINT64 resample_offset;
+    BYTE *rt_buffer;
+    UINT32 rt_buffer_frames;
+    UINT32 rt_period_frames;
+    UINT32 rt_read_frame;
+    UINT32 rt_write_frame;
     BYTE *buffer;
     BYTE *device_buffer;
     UINT32 buffer_alloc_frames;
     UINT32 device_buffer_alloc_frames;
     BOOL capture_conversion;
     BOOL capture_locked;
+    BOOL render_locked;
+    UINT32 render_locked_frames;
+    BOOL rt_enabled;
+    BOOL rt_event_registered;
     BOOL started;
 };
 
@@ -83,6 +95,7 @@ static WCHAR wdmaud_path[MAX_PATH];
 static DWORD WINAPI reactos_timer_thread(void *param);
 
 static const GUID wdmaud_category = {STATIC_KSCATEGORY_WDMAUD};
+static const GUID rt_audio_property_set = {STATIC_KSPROPSETID_RtAudio};
 
 static struct reactos_stream *stream_from_handle(stream_handle handle)
 {
@@ -505,6 +518,144 @@ static void normalize_wdmaud_format(WAVEFORMATEX *dst, const WAVEFORMATEX *src)
 
 static void close_stream_pin(struct reactos_stream *stream);
 
+static BOOL pin_ioctl(HANDLE pin, DWORD ioctl, void *input, DWORD input_size,
+                      void *output, DWORD output_size, DWORD *bytes_returned)
+{
+    OVERLAPPED overlapped;
+    DWORD error = ERROR_SUCCESS, transferred = 0;
+    BOOL ret;
+
+    ZeroMemory(&overlapped, sizeof(overlapped));
+    overlapped.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!overlapped.hEvent)
+        return FALSE;
+
+    ret = DeviceIoControl(pin, ioctl, input, input_size, output, output_size,
+                          &transferred, &overlapped);
+    if (!ret)
+    {
+        error = GetLastError();
+        if (error == ERROR_IO_PENDING)
+        {
+            if (WaitForSingleObject(overlapped.hEvent, INFINITE) == WAIT_OBJECT_0)
+                ret = GetOverlappedResult(pin, &overlapped, &transferred, FALSE);
+            if (!ret)
+                error = GetLastError();
+        }
+    }
+
+    CloseHandle(overlapped.hEvent);
+    if (bytes_returned)
+        *bytes_returned = transferred;
+    if (!ret)
+        SetLastError(error);
+    return ret;
+}
+
+static BOOL duplicate_stream_pin(struct reactos_stream *stream)
+{
+    WDMAUD_DEVICE_INFO info;
+
+    ZeroMemory(&info, sizeof(info));
+    info.DeviceType = stream->type;
+    info.DeviceIndex = stream->index;
+    info.hDevice = stream->pin;
+    if (!wdmaud_ioctl(IOCTL_DUPLICATE_WDMAUD_PIN, &info))
+        return FALSE;
+
+    stream->user_pin = info.u.hUserDevice;
+    return stream->user_pin && stream->user_pin != INVALID_HANDLE_VALUE;
+}
+
+static BOOL initialize_wavert(struct reactos_stream *stream)
+{
+    KSRTAUDIO_BUFFER_PROPERTY_WITH_NOTIFICATION property;
+    KSRTAUDIO_NOTIFICATION_EVENT_PROPERTY event_property;
+    KSRTAUDIO_BUFFER buffer;
+    DWORD returned;
+
+    ZeroMemory(&property, sizeof(property));
+    property.Property.Set = rt_audio_property_set;
+    property.Property.Id = KSPROPERTY_RTAUDIO_BUFFER_WITH_NOTIFICATION;
+    property.Property.Flags = KSPROPERTY_TYPE_GET;
+    property.RequestedBufferSize = stream->buffer_frames * stream->device_frame_size;
+    property.NotificationCount = REACTOS_RT_NOTIFICATION_COUNT;
+    ZeroMemory(&buffer, sizeof(buffer));
+
+    if (!pin_ioctl(stream->user_pin, IOCTL_KS_PROPERTY,
+                   &property, sizeof(property), &buffer, sizeof(buffer), &returned))
+    {
+        return FALSE;
+    }
+    if (returned < sizeof(buffer) || !buffer.BufferAddress ||
+        !buffer.ActualBufferSize ||
+        buffer.ActualBufferSize %
+            (stream->device_frame_size * REACTOS_RT_NOTIFICATION_COUNT))
+    {
+        SetLastError(ERROR_INVALID_DATA);
+        return FALSE;
+    }
+
+    stream->rt_buffer = buffer.BufferAddress;
+    stream->rt_buffer_frames = buffer.ActualBufferSize / stream->device_frame_size;
+    stream->rt_period_frames = stream->rt_buffer_frames / REACTOS_RT_NOTIFICATION_COUNT;
+    stream->buffer_frames = stream->rt_buffer_frames;
+    ZeroMemory(stream->rt_buffer, buffer.ActualBufferSize);
+    MemoryBarrier();
+
+    stream->rt_event = CreateEventW(NULL, FALSE, FALSE, NULL);
+    if (!stream->rt_event)
+        return FALSE;
+
+    ZeroMemory(&event_property, sizeof(event_property));
+    event_property.Property.Set = rt_audio_property_set;
+    event_property.Property.Id = KSPROPERTY_RTAUDIO_REGISTER_NOTIFICATION_EVENT;
+    event_property.Property.Flags = KSPROPERTY_TYPE_GET;
+    event_property.NotificationEvent = stream->rt_event;
+    if (!pin_ioctl(stream->user_pin, IOCTL_KS_PROPERTY,
+                   &event_property, sizeof(event_property), NULL, 0, &returned))
+    {
+        return FALSE;
+    }
+
+    stream->rt_event_registered = TRUE;
+    stream->rt_enabled = TRUE;
+    return TRUE;
+}
+
+static void cleanup_wavert(struct reactos_stream *stream)
+{
+    KSRTAUDIO_NOTIFICATION_EVENT_PROPERTY property;
+    DWORD returned;
+
+    if (stream->rt_event_registered && stream->user_pin != INVALID_HANDLE_VALUE)
+    {
+        ZeroMemory(&property, sizeof(property));
+        property.Property.Set = rt_audio_property_set;
+        property.Property.Id = KSPROPERTY_RTAUDIO_UNREGISTER_NOTIFICATION_EVENT;
+        property.Property.Flags = KSPROPERTY_TYPE_GET;
+        property.NotificationEvent = stream->rt_event;
+        pin_ioctl(stream->user_pin, IOCTL_KS_PROPERTY,
+                  &property, sizeof(property), NULL, 0, &returned);
+    }
+
+    stream->rt_event_registered = FALSE;
+    stream->rt_enabled = FALSE;
+    stream->rt_buffer = NULL;
+    stream->rt_buffer_frames = 0;
+    stream->rt_period_frames = 0;
+    if (stream->rt_event)
+    {
+        CloseHandle(stream->rt_event);
+        stream->rt_event = NULL;
+    }
+    if (stream->user_pin != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(stream->user_pin);
+        stream->user_pin = INVALID_HANDLE_VALUE;
+    }
+}
+
 static HRESULT open_stream_pin(struct reactos_stream *stream)
 {
     WDMAUD_DEVICE_INFO info;
@@ -522,6 +673,25 @@ static HRESULT open_stream_pin(struct reactos_stream *stream)
     }
 
     stream->pin = info.hDevice;
+    if (stream->flow == eRender && duplicate_stream_pin(stream))
+    {
+        if (initialize_wavert(stream))
+            return S_OK;
+
+        if (!stream->rt_buffer)
+        {
+            CloseHandle(stream->user_pin);
+            stream->user_pin = INVALID_HANDLE_VALUE;
+        }
+        else
+        {
+            WARN("Failed to initialize WaveRT stream for flow %u index %lu, error %lu.\n",
+                 stream->flow, stream->index, GetLastError());
+            close_stream_pin(stream);
+            return AUDCLNT_E_ENDPOINT_CREATE_FAILED;
+        }
+    }
+
     stream->io_handle = CreateFileW(wdmaud_path, GENERIC_READ | GENERIC_WRITE,
                                     0, NULL, OPEN_EXISTING,
                                     FILE_FLAG_OVERLAPPED, NULL);
@@ -539,6 +709,8 @@ static HRESULT open_stream_pin(struct reactos_stream *stream)
 static void close_stream_pin(struct reactos_stream *stream)
 {
     WDMAUD_DEVICE_INFO info;
+
+    cleanup_wavert(stream);
 
     if (stream->io_handle != INVALID_HANDLE_VALUE)
     {
@@ -600,6 +772,9 @@ static void reset_stream_pin(struct reactos_stream *stream)
 static UINT64 query_stream_position(struct reactos_stream *stream)
 {
     WDMAUD_DEVICE_INFO info;
+
+    if (stream->rt_enabled)
+        return stream->position;
 
     if (stream->capture_conversion)
         return stream->position;
@@ -729,6 +904,7 @@ static NTSTATUS reactos_create_stream(struct create_stream_params *params)
     stream->type = device_type_from_flow(flow);
     stream->index = index;
     stream->pin = NULL;
+    stream->user_pin = INVALID_HANDLE_VALUE;
     stream->io_handle = INVALID_HANDLE_VALUE;
     stream->stop_event = CreateEventW(NULL, TRUE, FALSE, NULL);
     if (!stream->stop_event)
@@ -774,6 +950,20 @@ static NTSTATUS reactos_create_stream(struct create_stream_params *params)
         free(stream);
         params->result = hr;
         return STATUS_SUCCESS;
+    }
+
+    if (stream->rt_enabled)
+    {
+        if (FAILED(hr = set_stream_state(stream, KSSTATE_ACQUIRE)) ||
+            FAILED(hr = set_stream_state(stream, KSSTATE_PAUSE)))
+        {
+            close_stream_pin(stream);
+            DeleteCriticalSection(&stream->lock);
+            CloseHandle(stream->stop_event);
+            free(stream);
+            params->result = hr;
+            return STATUS_SUCCESS;
+        }
     }
 
     *params->channel_count = params->fmt->nChannels;
@@ -828,10 +1018,45 @@ static NTSTATUS reactos_start(struct start_params *params)
         return STATUS_SUCCESS;
     }
 
+    ResetEvent(stream->stop_event);
+    if (stream->rt_event)
+        ResetEvent(stream->rt_event);
+
+    if (stream->rt_enabled)
+    {
+        EnterCriticalSection(&stream->lock);
+        stream->started = TRUE;
+        LeaveCriticalSection(&stream->lock);
+        stream->timer_thread = CreateThread(NULL, 0, reactos_timer_thread, stream, 0, NULL);
+        if (!stream->timer_thread)
+        {
+            EnterCriticalSection(&stream->lock);
+            stream->started = FALSE;
+            LeaveCriticalSection(&stream->lock);
+            params->result = E_FAIL;
+            return STATUS_SUCCESS;
+        }
+        SetThreadPriority(stream->timer_thread, THREAD_PRIORITY_TIME_CRITICAL);
+        params->result = set_stream_state(stream, KSSTATE_RUN);
+        if (FAILED(params->result))
+        {
+            EnterCriticalSection(&stream->lock);
+            stream->started = FALSE;
+            LeaveCriticalSection(&stream->lock);
+            SetEvent(stream->stop_event);
+            WaitForSingleObject(stream->timer_thread, 1000);
+            CloseHandle(stream->timer_thread);
+            stream->timer_thread = NULL;
+            return STATUS_SUCCESS;
+        }
+        if (stream->event && stream->flow != eCapture)
+            SetEvent(stream->event);
+        return STATUS_SUCCESS;
+    }
+
     params->result = set_stream_state(stream, KSSTATE_RUN);
     if (SUCCEEDED(params->result))
     {
-        ResetEvent(stream->stop_event);
         EnterCriticalSection(&stream->lock);
         stream->capture_frames = 0;
         stream->capture_locked = FALSE;
@@ -899,6 +1124,16 @@ static NTSTATUS reactos_reset(struct reset_params *params)
     stream->capture_locked = FALSE;
     stream->position = 0;
     stream->resample_offset = 0;
+    stream->render_locked = FALSE;
+    stream->render_locked_frames = 0;
+    stream->rt_read_frame = 0;
+    stream->rt_write_frame = 0;
+    if (stream->rt_buffer)
+    {
+        ZeroMemory(stream->rt_buffer,
+                   stream->rt_buffer_frames * stream->device_frame_size);
+        MemoryBarrier();
+    }
     LeaveCriticalSection(&stream->lock);
     params->result = S_OK;
     return STATUS_SUCCESS;
@@ -915,8 +1150,16 @@ static NTSTATUS reactos_get_render_buffer(struct get_render_buffer_params *param
         return STATUS_SUCCESS;
     }
 
-    if (!params->frames || params->frames > stream->buffer_frames)
+    EnterCriticalSection(&stream->lock);
+    if (stream->render_locked)
     {
+        LeaveCriticalSection(&stream->lock);
+        params->result = AUDCLNT_E_OUT_OF_ORDER;
+        return STATUS_SUCCESS;
+    }
+    if (!params->frames || params->frames > stream->buffer_frames - stream->padding)
+    {
+        LeaveCriticalSection(&stream->lock);
         params->result = AUDCLNT_E_BUFFER_TOO_LARGE;
         return STATUS_SUCCESS;
     }
@@ -927,6 +1170,7 @@ static NTSTATUS reactos_get_render_buffer(struct get_render_buffer_params *param
         BYTE *buffer = realloc(stream->buffer, bytes);
         if (!buffer)
         {
+            LeaveCriticalSection(&stream->lock);
             params->result = E_OUTOFMEMORY;
             return STATUS_SUCCESS;
         }
@@ -934,7 +1178,10 @@ static NTSTATUS reactos_get_render_buffer(struct get_render_buffer_params *param
         stream->buffer_alloc_frames = params->frames;
     }
 
+    stream->render_locked = TRUE;
+    stream->render_locked_frames = params->frames;
     *params->data = stream->buffer;
+    LeaveCriticalSection(&stream->lock);
     params->result = S_OK;
     return STATUS_SUCCESS;
 }
@@ -949,8 +1196,56 @@ static NTSTATUS reactos_release_render_buffer(struct release_render_buffer_param
         return STATUS_SUCCESS;
     }
 
+    EnterCriticalSection(&stream->lock);
+    if (!stream->render_locked)
+    {
+        LeaveCriticalSection(&stream->lock);
+        params->result = AUDCLNT_E_OUT_OF_ORDER;
+        return STATUS_SUCCESS;
+    }
+    if (params->written_frames > stream->render_locked_frames)
+    {
+        LeaveCriticalSection(&stream->lock);
+        params->result = AUDCLNT_E_INVALID_SIZE;
+        return STATUS_SUCCESS;
+    }
+
     if (params->flags & AUDCLNT_BUFFERFLAGS_SILENT)
         ZeroMemory(stream->buffer, params->written_frames * stream->frame_size);
+
+    if (stream->rt_enabled)
+    {
+        UINT32 first_frames;
+
+        first_frames = min(params->written_frames,
+                           stream->rt_buffer_frames - stream->rt_write_frame);
+        if (first_frames)
+        {
+            CopyMemory(stream->rt_buffer + stream->rt_write_frame * stream->frame_size,
+                       stream->buffer,
+                       first_frames * stream->frame_size);
+        }
+        if (params->written_frames > first_frames)
+        {
+            CopyMemory(stream->rt_buffer,
+                       stream->buffer + first_frames * stream->frame_size,
+                       (params->written_frames - first_frames) * stream->frame_size);
+        }
+
+        MemoryBarrier();
+        stream->rt_write_frame = (stream->rt_write_frame + params->written_frames) %
+                                 stream->rt_buffer_frames;
+        stream->padding += params->written_frames;
+        stream->render_locked = FALSE;
+        stream->render_locked_frames = 0;
+        LeaveCriticalSection(&stream->lock);
+        params->result = S_OK;
+        return STATUS_SUCCESS;
+    }
+
+    stream->render_locked = FALSE;
+    stream->render_locked_frames = 0;
+    LeaveCriticalSection(&stream->lock);
 
     if (params->written_frames)
     {
@@ -967,7 +1262,9 @@ static NTSTATUS reactos_release_render_buffer(struct release_render_buffer_param
         stream->position += used / stream->frame_size;
     }
 
+    EnterCriticalSection(&stream->lock);
     stream->padding = 0;
+    LeaveCriticalSection(&stream->lock);
     if (stream->event)
         SetEvent(stream->event);
     params->result = S_OK;
@@ -1243,6 +1540,46 @@ static void reactos_capture_timer_loop(struct reactos_stream *stream)
     }
 }
 
+static void reactos_render_rt_timer_loop(struct reactos_stream *stream)
+{
+    HANDLE wait_handles[2];
+    DWORD wait;
+
+    wait_handles[0] = stream->stop_event;
+    wait_handles[1] = stream->rt_event;
+    while (!stream->closing)
+    {
+        wait = WaitForMultipleObjects(2, wait_handles, FALSE, INFINITE);
+        if (wait != WAIT_OBJECT_0 + 1)
+            break;
+
+        EnterCriticalSection(&stream->lock);
+        if (!stream->started)
+        {
+            LeaveCriticalSection(&stream->lock);
+            break;
+        }
+
+        ZeroMemory(stream->rt_buffer + stream->rt_read_frame * stream->frame_size,
+                   stream->rt_period_frames * stream->frame_size);
+        stream->rt_read_frame = (stream->rt_read_frame + stream->rt_period_frames) %
+                                stream->rt_buffer_frames;
+        if (stream->padding > stream->rt_period_frames)
+            stream->padding -= stream->rt_period_frames;
+        else
+        {
+            stream->padding = 0;
+            stream->rt_write_frame = stream->rt_read_frame;
+        }
+        stream->position += stream->rt_period_frames;
+        MemoryBarrier();
+        LeaveCriticalSection(&stream->lock);
+
+        if (stream->event)
+            SetEvent(stream->event);
+    }
+}
+
 static DWORD WINAPI reactos_timer_thread(void *param)
 {
     struct reactos_stream *stream = param;
@@ -1252,6 +1589,12 @@ static DWORD WINAPI reactos_timer_thread(void *param)
     if (stream->flow == eCapture)
     {
         reactos_capture_timer_loop(stream);
+        return 0;
+    }
+
+    if (stream->rt_enabled)
+    {
+        reactos_render_rt_timer_loop(stream);
         return 0;
     }
 
@@ -1327,7 +1670,9 @@ static NTSTATUS reactos_get_current_padding(struct get_current_padding_params *p
         return STATUS_SUCCESS;
     }
 
+    EnterCriticalSection(&stream->lock);
     *params->padding = stream->padding;
+    LeaveCriticalSection(&stream->lock);
     params->result = S_OK;
     return STATUS_SUCCESS;
 }
