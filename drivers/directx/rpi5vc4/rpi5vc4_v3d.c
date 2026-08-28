@@ -876,6 +876,47 @@ Rpi5V3dInvalidateCaches(
 }
 
 BOOLEAN
+Rpi5V3dCleanCaches(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
+{
+    PVOID Core = DeviceExtension->V3dCoreBase;
+    ULONG Tries;
+
+    if (!DeviceExtension->V3dReady || Core == NULL)
+        return FALSE;
+
+    /* TMU writes are not visible outside the texture hierarchy until both
+     * the write combiner and dirty L2T lines have drained. Completion of a
+     * flagged CL includes this sequence, matching v3d_clean_caches(). */
+    Rpi5V3dWrite(Core, V3D_CTL_L2TCACTL, V3D_L2TCACTL_TMUWCF);
+    for (Tries = 0; Tries < 2000; Tries++)
+    {
+        if ((Rpi5V3dRead(Core, V3D_CTL_L2TCACTL) &
+             V3D_L2TCACTL_TMUWCF) == 0)
+        {
+            break;
+        }
+        KeStallExecutionProcessor(1);
+    }
+    if (Tries == 2000)
+        return FALSE;
+
+    Rpi5V3dWrite(Core, V3D_CTL_L2TCACTL,
+                 V3D_L2TCACTL_L2TFLS | V3D_L2TCACTL_FLM_CLEAN);
+    for (Tries = 0; Tries < 2000; Tries++)
+    {
+        if ((Rpi5V3dRead(Core, V3D_CTL_L2TCACTL) &
+             V3D_L2TCACTL_L2TFLS) == 0)
+        {
+            return TRUE;
+        }
+        KeStallExecutionProcessor(1);
+    }
+
+    return FALSE;
+}
+
+BOOLEAN
 Rpi5V3dSubmitCsd(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
     _In_ CONST ULONG *CsdCfg)

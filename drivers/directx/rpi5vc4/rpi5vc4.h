@@ -89,6 +89,7 @@ typedef struct _RPI5VC4_PENDING_SUBMIT
     BOOLEAN BinSubmitted;             /* BCL queued to CLE thread 0        */
     BOOLEAN BinDone;                  /* FLDONE consumed for this job      */
     BOOLEAN RenderSubmitted;          /* RCL/TFU/CSD kicked                */
+    ULONG V3dFlags;
     ULONG BclStart;
     ULONG BclEnd;
     ULONG RclStart;
@@ -118,6 +119,7 @@ typedef struct _RPI5VC4_PENDING_SUBMIT
 #define RPI5VC4_DMA_OP_V3D_JOB      2
 #define RPI5VC4_DMA_OP_TFU_JOB      3
 #define RPI5VC4_DMA_OP_CSD_JOB      4
+#define RPI5VC4_DMA_V3D_FLUSH_CACHE 0x00000001u
 
 typedef struct _RPI5VC4_DMA_PACKET
 {
@@ -147,6 +149,7 @@ typedef struct _RPI5VC4_DMA_PACKET
             ULONG Qma;               /* tile allocation memory address    */
             ULONG Qms;               /* tile allocation memory size       */
             ULONG Qts;               /* tile state data array address     */
+            ULONG Flags;
         } V3dJob;
         struct
         {

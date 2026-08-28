@@ -41,6 +41,7 @@ typedef struct _VC4KMT_FENCE
 } VC4KMT_FENCE;
 
 #define VC4KMT_RESOURCE_CPU_DIRTY 0x00000001u
+#define VC4KMT_CL_FLAG_FLUSH_CACHE 0x00000001u
 
 typedef struct _VC4KMT_RESOURCE
 {
@@ -173,6 +174,15 @@ NTSTATUS
 vc4kmt_submit_cl_resources(
     _In_ VC4KMT_DEVICE *Device,
     _In_ const VC4KMT_CL_SUBMIT *Submit,
+    _In_reads_opt_(ResourceCount) const VC4KMT_RESOURCE *Resources,
+    _In_ UINT ResourceCount,
+    _Out_ VC4KMT_FENCE *FenceOut);
+
+NTSTATUS
+vc4kmt_submit_cl_resources_ex(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ const VC4KMT_CL_SUBMIT *Submit,
+    _In_ ULONG Flags,
     _In_reads_opt_(ResourceCount) const VC4KMT_RESOURCE *Resources,
     _In_ UINT ResourceCount,
     _Out_ VC4KMT_FENCE *FenceOut);

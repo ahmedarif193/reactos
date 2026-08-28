@@ -25,6 +25,7 @@
 #define VC4KMT_DMA_OP_V3D_JOB         2
 #define VC4KMT_DMA_OP_TFU_JOB         3
 #define VC4KMT_DMA_OP_CSD_JOB         4
+#define VC4KMT_DMA_V3D_FLUSH_CACHE    0x00000001u
 #define VC4KMT_RESOURCE_LIST_MAGIC_V2 0x3252474cUL
 #define VC4KMT_MAX_SUBMIT_RESOURCES   4096u
 #define VC4KMT_MAX_PRIMARY_PRIVATE_DATA (1024u * 1024u)
@@ -55,6 +56,7 @@ typedef struct _VC4KMT_DMA_PACKET
             ULONG Qma;
             ULONG Qms;
             ULONG Qts;
+            ULONG Flags;
         } V3dJob;
         struct
         {
@@ -1482,16 +1484,18 @@ Vc4KmtSubmitPacket(
 }
 
 NTSTATUS
-vc4kmt_submit_cl_resources(
+vc4kmt_submit_cl_resources_ex(
     _In_ VC4KMT_DEVICE *Device,
     _In_ const VC4KMT_CL_SUBMIT *Submit,
+    _In_ ULONG Flags,
     _In_reads_opt_(ResourceCount) const VC4KMT_RESOURCE *Resources,
     _In_ UINT ResourceCount,
     _Out_ VC4KMT_FENCE *FenceOut)
 {
     VC4KMT_DMA_PACKET Packet;
 
-    if (Device == NULL || Submit == NULL || FenceOut == NULL)
+    if (Device == NULL || Submit == NULL || FenceOut == NULL ||
+        (Flags & ~VC4KMT_CL_FLAG_FLUSH_CACHE) != 0)
         return STATUS_INVALID_PARAMETER;
 
     RtlZeroMemory(FenceOut, sizeof(*FenceOut));
@@ -1510,9 +1514,24 @@ vc4kmt_submit_cl_resources(
     Packet.V3dJob.Qma = Submit->Qma;
     Packet.V3dJob.Qms = Submit->Qms;
     Packet.V3dJob.Qts = Submit->Qts;
+    if (Flags & VC4KMT_CL_FLAG_FLUSH_CACHE)
+        Packet.V3dJob.Flags |= VC4KMT_DMA_V3D_FLUSH_CACHE;
 
     return Vc4KmtSubmitPacket(Device, &Packet, Resources,
                               ResourceCount, FenceOut);
+}
+
+NTSTATUS
+vc4kmt_submit_cl_resources(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ const VC4KMT_CL_SUBMIT *Submit,
+    _In_reads_opt_(ResourceCount) const VC4KMT_RESOURCE *Resources,
+    _In_ UINT ResourceCount,
+    _Out_ VC4KMT_FENCE *FenceOut)
+{
+    return vc4kmt_submit_cl_resources_ex(Device, Submit, 0,
+                                          Resources, ResourceCount,
+                                          FenceOut);
 }
 
 NTSTATUS
