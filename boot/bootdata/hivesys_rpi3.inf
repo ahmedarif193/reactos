@@ -1,0 +1,26 @@
+; PROJECT:     ReactOS Raspberry Pi 3 boot hive
+; LICENSE:     GPL-2.0+ (https://spdx.org/licenses/GPL-2.0+)
+; COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
+; FILE:        boot/bootdata/hivesys_rpi3.inf
+; PURPOSE:     Raspberry Pi 3 profile-specific boot driver bindings
+
+[AddReg]
+
+; The RPi3 UEFI ACPI tables expose the Arasan SDHCI controller as BCM2847.
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2847","Service",0x00000000,"sdbus"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2847","ClassGUID",0x00000000,"{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}"
+
+; The RPi3 firmware can route the boot SD slot to the BCM2835 SDHost.
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2855","Service",0x00000000,"sdbus"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2855","ClassGUID",0x00000000,"{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}"
+
+; Start DWC2 early enough for USB mass storage and the onboard LAN951x path.
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2848","Service",0x00000000,"usbdwc2"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2848","ClassGUID",0x00000000,"{36FC9E60-C465-11CF-8056-444553540000}"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#DWC_OTG","Service",0x00000000,"usbdwc2"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#DWC_OTG","ClassGUID",0x00000000,"{36FC9E60-C465-11CF-8056-444553540000}"
+HKLM,"SYSTEM\CurrentControlSet\Services\usbdwc2","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\usbdwc2","Group",0x00000000,"Boot Bus Extender"
+HKLM,"SYSTEM\CurrentControlSet\Services\usbdwc2","ImagePath",0x00020000,"system32\drivers\usbdwc2.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\usbdwc2","Start",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\usbdwc2","Type",0x00010001,0x00000001

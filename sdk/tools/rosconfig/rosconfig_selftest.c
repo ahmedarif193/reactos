@@ -253,6 +253,7 @@ int rosconfig_self_test(void)
         "    type choice\n"
         "    var ROSCONFIG_PROFILE\n"
         "    value generic \"Generic ARM64\"\n"
+        "    value rpi3 \"Raspberry Pi 3\"\n"
         "    value rpi5 \"Raspberry Pi 5\"\n"
         "    default generic\n"
         "    depends ARCH=arm64\n";
@@ -369,6 +370,8 @@ int rosconfig_self_test(void)
            "alternative dependency terms are parsed as one group");
     set_value(profile_arm64, "rpi5");
     expect(&test, opt_visible(http_boot), "the second alternative also exposes HTTP boot");
+    set_value(profile_arm64, "rpi3");
+    expect(&test, !opt_visible(http_boot), "the Raspberry Pi 3 profile keeps unverified HTTP boot hidden");
     set_value(profile_arm64, "generic");
     expect(&test, !opt_visible(http_boot), "HTTP boot is hidden when no alternative holds");
     expect(&test, label->ndeps == 1 && label->deps[0].negate, "negated option dependency is parsed");
@@ -433,7 +436,7 @@ int rosconfig_self_test(void)
     expect(&test, file_contains(generated_path, "set(LABEL \"quoted \\\"path\\\\tail\" CACHE STRING \"Display label\")"), "string values are escaped for CMake");
     expect(&test, file_contains(generated_path, "set(ROSCONFIG_PROFILE \"generic\" CACHE STRING \"Target profile\")"), "the selected architecture's generic profile is emitted");
     expect(&test, file_contains(generated_path, "set(ENABLE_ROSTESTS TRUE CACHE BOOL \"ReactOS test suite and RosAutoTest\")"), "the RosAutoTest module is emitted independently of the profile");
-    expect(&test, !file_contains(generated_path, "rpi5"), "a hidden architecture profile is not emitted");
+    expect(&test, !file_contains(generated_path, "rpi3") && !file_contains(generated_path, "rpi5"), "a hidden architecture profile is not emitted");
 
     set_value(profile_amd64, "lattepandamu");
     set_value(http_boot, "y");
@@ -450,6 +453,10 @@ int rosconfig_self_test(void)
     expect(&test, !file_contains(generated_path, "set(LEVEL ") && !file_contains(generated_path, "set(LABEL "), "dependency-hidden options are not emitted");
 
     set_value(arch, "arm64");
+    set_value(profile_arm64, "rpi3");
+    expect(&test, generate_cmake(generated_path) == 0, "CMake fragment regenerates for the Raspberry Pi 3 profile");
+    expect(&test, file_contains(generated_path, "set(ROSCONFIG_PROFILE \"rpi3\" CACHE STRING \"Target profile\")"), "the ARM64 Raspberry Pi 3 profile is emitted");
+    expect(&test, !file_contains(generated_path, "set(FREELDR_HTTP_BOOT "), "the hidden Raspberry Pi 3 HTTP boot option is not emitted");
     set_value(profile_arm64, "rpi5");
     set_value(http_boot, "n");
     expect(&test, !opt_visible(enable), "changed target hides an incompatible menu");

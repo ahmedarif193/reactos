@@ -4,7 +4,7 @@ if(REACTOS_USE_WDDM)
     add_subdirectory(d3dumdrt)
     add_subdirectory(softgpuum)
     if((REACTOS_WDDM_TARGET_LEVEL GREATER_EQUAL 2000) AND
-       (ARCH STREQUAL "arm64") AND RPI_SUPPORT)
+       (ARCH STREQUAL "arm64") AND RPI5_SUPPORT)
         add_subdirectory(rpi5vc4um)
     endif()
 endif()
