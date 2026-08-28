@@ -20,6 +20,7 @@ typedef struct
 {
     HANDLE Handle;
     SOUND_DEVICE_TYPE Type;
+    ULONG DeviceIndex;
     ULONG FilterId;
     ULONG PinId;
     PRKEVENT NotifyEvent;
@@ -138,8 +139,7 @@ WdmAudControlCloseMixer(
     IN  ULONG Index);
 
 VOID
-WdmAudCloseAllMixers(
-    IN PDEVICE_OBJECT DeviceObject,
+WdmAudCloseMixer(
     IN PWDMAUD_CLIENT ClientInfo,
     IN ULONG Index);
 
