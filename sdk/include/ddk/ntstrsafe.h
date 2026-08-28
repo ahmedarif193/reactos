@@ -59,6 +59,7 @@ typedef _Null_terminated_ wchar_t *NTSTRSAFE_PWSTR;
 typedef _Null_terminated_ const wchar_t *NTSTRSAFE_PCWSTR;
 
 typedef ULONG STRSAFE_DWORD;
+typedef ULONG DWORD;
 
 NTSTRSAFEAPI RtlStringCopyWorkerA(STRSAFE_LPSTR pszDest, size_t cchDest, STRSAFE_LPCSTR pszSrc);
 NTSTRSAFEAPI RtlStringCopyWorkerW(STRSAFE_LPWSTR pszDest, size_t cchDest, STRSAFE_LPCWSTR pszSrc);
@@ -3190,6 +3191,37 @@ RtlStringLengthWorkerW(
             *pcchLength = cchMaxPrev - cchMax;
         else
             *pcchLength = 0;
+    }
+
+    return Status;
+}
+
+NTSTRSAFEAPI
+RtlUnicodeStringInit(
+    _Out_ PUNICODE_STRING DestinationString,
+    _In_opt_ NTSTRSAFE_PCWSTR pszSrc)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+    size_t cchSrcLength;
+
+    if (DestinationString == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    DestinationString->Length = 0;
+    DestinationString->MaximumLength = 0;
+    DestinationString->Buffer = NULL;
+
+    if (pszSrc == NULL)
+        return STATUS_SUCCESS;
+
+    Status = RtlStringLengthWorkerW(pszSrc,
+                                   NTSTRSAFE_UNICODE_STRING_MAX_CCH,
+                                   &cchSrcLength);
+    if (NT_SUCCESS(Status))
+    {
+        DestinationString->Length = (USHORT)(cchSrcLength * sizeof(WCHAR));
+        DestinationString->MaximumLength = (USHORT)(DestinationString->Length + sizeof(WCHAR));
+        DestinationString->Buffer = (PWSTR)pszSrc;
     }
 
     return Status;

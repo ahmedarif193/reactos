@@ -647,6 +647,26 @@ ExAllocatePoolWithTagPriority(
   _In_ ULONG Tag,
   _In_ __drv_strictTypeMatch(__drv_typeExpr) EX_POOL_PRIORITY Priority);
 
+typedef enum _DRIVER_RUNTIME_INIT_FLAGS {
+  DrvRtPoolNxOptIn = 0x00000001,
+  LastDrvRtFlag
+} DRIVER_RUNTIME_INIT_FLAGS, *PDRIVER_RUNTIME_INIT_FLAGS;
+
+typedef const enum _DRIVER_RUNTIME_INIT_FLAGS *PCDRIVER_RUNTIME_INIT_FLAGS;
+
+FORCEINLINE
+VOID
+ExInitializeDriverRuntime(
+  _In_ ULONG RuntimeFlags)
+{
+  /*
+   * ReactOS's ExAllocatePoolZero fallback always clears allocations itself.
+   * The current pool implementation does not yet expose the per-image NX
+   * opt-in variables used by the down-level Windows WDK inline.
+   */
+  UNREFERENCED_PARAMETER(RuntimeFlags);
+}
+
 #if (NTDDI_VERSION >= NTDDI_WIN10_VB) || defined(_NTOSKRNL_)
 
 __drv_allocatesMem(Mem)

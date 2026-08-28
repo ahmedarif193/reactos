@@ -22,11 +22,13 @@ typedef int CM_RESOURCE_TYPE;
 
 #define CM_RESOURCE_CONNECTION_CLASS_GPIO       0x01
 #define CM_RESOURCE_CONNECTION_CLASS_SERIAL     0x02
+#define CM_RESOURCE_CONNECTION_CLASS_FUNCTION_CONFIG 0x03
 
 #define CM_RESOURCE_CONNECTION_TYPE_GPIO_IO     0x02
 #define CM_RESOURCE_CONNECTION_TYPE_SERIAL_I2C  0x01
 #define CM_RESOURCE_CONNECTION_TYPE_SERIAL_SPI  0x02
 #define CM_RESOURCE_CONNECTION_TYPE_SERIAL_UART 0x03
+#define CM_RESOURCE_CONNECTION_TYPE_FUNCTION_CONFIG 0x01
 
 /* KEY_VALUE_Xxx.Type */
 #define REG_NONE                           0
@@ -198,6 +200,14 @@ typedef struct _CM_PARTIAL_RESOURCE_DESCRIPTOR {
       ULONG Port;
       ULONG Reserved1;
     } Dma;
+    struct {
+      ULONG Channel;
+      ULONG RequestLine;
+      UCHAR TransferWidth;
+      UCHAR Reserved1;
+      UCHAR Reserved2;
+      UCHAR Reserved3;
+    } DmaV3;
     struct {
       ULONG Data[3];
     } DevicePrivate;
