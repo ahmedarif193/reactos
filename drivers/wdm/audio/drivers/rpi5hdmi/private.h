@@ -128,6 +128,10 @@ class CRpi5HdmiAdapter : public CUnknownImpl<IUnknown>
     ULONG m_DmaRequestLine;
     PVOID m_DvpRegisters;
     ULONG m_DvpRegistersLength;
+    PVOID m_PhyRegisters;
+    ULONG m_PhyRegistersLength;
+    PVOID m_RateManagerRegisters;
+    ULONG m_RateManagerRegistersLength;
     BOOLEAN m_AudioClockOwned;
     PHYSICAL_ADDRESS m_HdPhysicalAddress;
 
