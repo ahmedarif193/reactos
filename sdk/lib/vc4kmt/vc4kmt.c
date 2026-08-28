@@ -1670,6 +1670,13 @@ vc4kmt_wait(
     if (Fence->CpuValue != NULL && *Fence->CpuValue >= Fence->Value)
         return STATUS_SUCCESS;
 
+    /* A zero-time monitored-fence wait is a poll.  The shared fence page was
+     * already sampled above, so avoid GetTickCount and the timed wait loop.
+     * A concurrent signal after that sample belongs to the next poll, which
+     * is the same boundary exposed by a zero-duration kernel wait. */
+    if (Fence->CpuValue != NULL && TimeoutMs == 0)
+        return STATUS_IO_TIMEOUT;
+
     if (Fence->CpuValue != NULL && TimeoutMs != INFINITE)
     {
         Start = GetTickCount();
