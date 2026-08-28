@@ -109,6 +109,9 @@ BOOLEAN UiInitialize(BOOLEAN ShowUi)
         return TRUE;
     }
 
+    /* The menu UI must not inherit progress state from a failed OS load. */
+    UiProgressBar.Show = FALSE;
+
     TRACE("Initializing User Interface.\n");
     TRACE("Reading UI settings from [Display] section.\n");
 
