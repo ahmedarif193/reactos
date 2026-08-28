@@ -3,11 +3,16 @@ config PROFILE_ARM64
     type choice
     var ROSCONFIG_PROFILE
     value generic "Generic ARM64"
+    value rpi3    "Raspberry Pi 3"
     value rpi5    "Raspberry Pi 5"
     default generic
     depends ARCH=arm64
     help
       Generic builds the architecture-independent ARM64 target.
+
+      Raspberry Pi 3 adds the Pi firmware and device trees, the native
+      SD/SDIO, DWC2, SMSC95xx Ethernet, and CYW43xx Wi-Fi drivers, plus the
+      pinned Windows 10 BSP source snapshot used for driver-contract parity.
 
       Raspberry Pi 5 adds the Pi boot firmware and device trees together
       with the RP1 Ethernet, CYW43455 Wi-Fi, and VC4 display drivers.
