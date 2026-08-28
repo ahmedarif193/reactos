@@ -308,9 +308,11 @@ int _mm_comilt_sd(__m128d, __m128d);
 int _mm_comilt_ss(__m128, __m128);
 int _mm_comineq_sd(__m128d, __m128d);
 int _mm_comineq_ss(__m128, __m128);
+#ifndef __clang__
 unsigned int _mm_crc32_u16(unsigned int, unsigned short);
 unsigned int _mm_crc32_u32(unsigned int, unsigned int);
 unsigned int _mm_crc32_u8(unsigned int, unsigned char);
+#endif
 __m128 _mm_cvt_si2ss(__m128, int);
 int _mm_cvt_ss2si(__m128);
 __m128i _mm_cvtepi16_epi32(__m128i);
@@ -858,7 +860,9 @@ unsigned char _bittestandreset64(__int64 *, __int64);
 unsigned char _bittestandset64(__int64 *, __int64);
 unsigned char _interlockedbittestandreset64(__int64 volatile *, __int64);
 unsigned char _interlockedbittestandset64(__int64 volatile *, __int64);
+#ifndef __clang__
 unsigned __int64 _mm_crc32_u64(unsigned __int64, unsigned __int64);
+#endif
 #if 0
 __int64 _mm_cvtsd_si64(__m128d);
 __int64 _mm_cvtsd_si64x(__m128d);
