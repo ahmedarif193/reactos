@@ -953,7 +953,7 @@ ProbeMdl:
         }
 
         /* mark irp as buffered so that changes the stream headers are propagated back */
-        Irp->Flags = IRP_DEALLOCATE_BUFFER | IRP_BUFFERED_IO;
+        Irp->Flags |= IRP_DEALLOCATE_BUFFER | IRP_BUFFERED_IO;
 
         _SEH2_TRY
         {
