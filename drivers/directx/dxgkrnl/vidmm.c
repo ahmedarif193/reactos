@@ -11159,6 +11159,7 @@ DxgkpVidMmUnmapAllocationUserProcess(
     PVOID UserVa;
     KAPC_STATE ApcState;
     BOOLEAN Attached = FALSE;
+    LONG MappingCount;
 
     ASSERT(Allocation != NULL);
     ASSERT(Process != NULL);
@@ -11178,7 +11179,8 @@ DxgkpVidMmUnmapAllocationUserProcess(
     }
 
     RemoveEntryList(&Mapping->Entry);
-    ASSERT(InterlockedDecrement(&Allocation->UserModeMappingCount) >= 0);
+    MappingCount = InterlockedDecrement(&Allocation->UserModeMappingCount);
+    ASSERT(MappingCount >= 0);
     UserMapBase = Mapping->MapBase;
     UserVa = Mapping->Address;
     Mdl = Mapping->Mdl;
