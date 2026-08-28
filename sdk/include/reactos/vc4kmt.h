@@ -212,6 +212,12 @@ vc4kmt_wait(
     _In_ DWORD TimeoutMs);
 
 NTSTATUS
+vc4kmt_wait_async(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ const VC4KMT_FENCE *Fence,
+    _In_ HANDLE CompletionEvent);
+
+NTSTATUS
 vc4kmt_wait_gpu(
     _In_ VC4KMT_DEVICE *Device,
     _In_ VC4KMT_ENGINE Engine,
