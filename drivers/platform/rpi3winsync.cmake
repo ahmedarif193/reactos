@@ -1,8 +1,8 @@
 # Copyright 2026 Ahmed Arif <arif193@gmail.com>
 
-# rpi3winsync is an exact, directly tracked Windows 10 BSP source snapshot. It
-# is a contract reference and is not compiled until its Windows framework
-# dependencies have compatible ReactOS implementations.
+# rpi3winsync is an exact, directly tracked Windows 10 BSP source snapshot.
+# Projects are enabled individually as their Windows framework dependencies
+# gain compatible ReactOS implementations.
 set(_rpi3winsync_root "${CMAKE_CURRENT_LIST_DIR}/rpi3winsync")
 
 set(_rpi3winsync_required_files
@@ -27,10 +27,12 @@ foreach(_rpi3winsync_file IN LISTS _rpi3winsync_required_files)
     endif()
 endforeach()
 
-# Keep the already-developed upstream driver projects visible to generators and
-# IDEs, but do not compile them yet. Each entry remains disabled for a concrete
-# ReactOS framework dependency; adding a target before that contract exists
-# would only produce an unusable binary.
+# The mailbox, PWM, and mini-UART drivers are enabled through adjacent
+# ReactOS CMakeLists.txt files.
+# Keep the remaining upstream projects visible to generators and IDEs, but do
+# not compile them yet. Each entry remains disabled for a concrete ReactOS
+# framework dependency; adding a target before that contract exists would only
+# produce an unusable binary.
 set(_rpi3winsync_disabled_projects
     # Disabled: requires KMDF plus PortCls/WaveRT and mailbox/VCHIQ parity.
     drivers/audio/bcm2836/rpiwav/rpiwav.vcxproj
@@ -38,20 +40,14 @@ set(_rpi3winsync_disabled_projects
     drivers/gpio/bcm2836/bcmgpio.vcxproj
     # Disabled: requires KMDF and SpbCx compatibility.
     drivers/i2c/bcm2836/bcmi2c.vcxproj
-    # Disabled: requires compatible KMDF and mailbox IOCTL contracts.
-    drivers/mailbox/bcm2836/rpiq.vcxproj
     # Disabled: requires KMDF and a validated VCHIQ user/kernel ABI.
     drivers/misc/vchiq/vchiq.vcxproj
-    # Disabled: requires compatible KMDF and DMA contracts.
-    drivers/pwm/bcm2836/bcm2836pwm.vcxproj
     # Disabled: require KMDF and SDPORT parity; native sdbus backends are used.
     drivers/sd/bcm2836/bcm2836sdhc/bcm2836sdhc.vcxproj
     drivers/sd/bcm2836/rpisdhc/rpisdhc.vcxproj
     # Disabled: require KMDF and SpbCx compatibility.
     drivers/spi/bcm2836/bcmspi.vcxproj
     drivers/spi/bcmauxspi/bcmauxspi.vcxproj
-    # Disabled: requires compatible KMDF and serial contracts.
-    drivers/uart/bcm2836/miniUart/pi_miniuart.vcxproj
     # Disabled: requires KMDF and SerCx2 compatibility.
     drivers/uart/bcm2836/serPL011/SerPL011.vcxproj)
 

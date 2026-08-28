@@ -2,11 +2,14 @@
 
 # Raspberry Pi 3 Windows 10 driver parity
 
-`rpi3winsync/` is the unmodified
+`rpi3winsync/` preserves the files and directory layout from the
 [`raspberrypi/windows-drivers`](https://github.com/raspberrypi/windows-drivers)
 source snapshot from commit `88ee238c9debecce810d208cac1e5f36add3d2a1`,
 tracked directly in the ReactOS repository.
 That commit was upstream `master` when the snapshot was imported.
+ReactOS may add adjacent `CMakeLists.txt` files that compile those synchronized
+sources in place and headers below `reactos-compat/`, but must not modify the
+synchronized files themselves.
 
 Select `Target platform -> Raspberry Pi 3` in `menuconfig` or configure with
 `-DROSCONFIG_PROFILE=rpi3`. The profile enables the common Pi boot payload,
@@ -20,14 +23,16 @@ naming the ReactOS framework contract that must be implemented first.
 
 ## Sync policy
 
-- Never edit files below `rpi3winsync/` as part of a ReactOS compatibility
-  change.
+- Never edit a synchronized upstream file below `rpi3winsync/` as part of a
+  ReactOS compatibility change. ReactOS-owned `CMakeLists.txt` additions and
+  headers below `reactos-compat/` are the only in-tree build overlays.
 - Update the directly tracked snapshot from a reviewed upstream commit and
   record that commit in `media/doc/3rd Party Files.txt`. Review a snapshot
   update separately from the ReactOS compatibility delta.
 - Put reusable Windows-contract work in ReactOS WDM, KMDF, PortCls, SDPORT, or
-  future class-extension layers. Keep unavoidable device-specific adaptation
-  in ReactOS-owned files outside `rpi3winsync/`.
+  future class-extension layers. Keep sync-wide compatibility declarations in
+  `reactos-compat/` and driver-specific generated-header substitutes in its
+  matching subdirectory.
 - A source listed here is a compatibility reference, not a claim that its
   Windows binary can run on ReactOS unchanged.
 
@@ -48,9 +53,9 @@ authoritative for the synced source.
 | I2C | `drivers/i2c/bcm2836` | Reference pending ReactOS `SpbCx` compatibility |
 | SPI and AUX SPI | `drivers/spi/bcm2836`, `drivers/spi/bcmauxspi` | Reference pending ReactOS `SpbCx` compatibility |
 | PL011 UART | `drivers/uart/bcm2836/serPL011` | Reference pending ReactOS `SerCx2` compatibility |
-| Mini UART | `drivers/uart/bcm2836/miniUart` | Reference; KMDF/serial contract audit pending |
-| PWM | `drivers/pwm/bcm2836` | Reference; KMDF/DMA contract audit pending |
-| Mailbox | `drivers/mailbox/bcm2836` | Reference; KMDF and IOCTL contract audit pending |
+| Mini UART | `drivers/uart/bcm2836/miniUart` | Build adapter present; ReactOS source guards and hardware validation pending |
+| PWM | `drivers/pwm/bcm2836` | Built as `bcm2836pwm`; DMA/interrupt hardware validation pending |
+| Mailbox | `drivers/mailbox/bcm2836` | Built unchanged as `rpiq`; hardware/runtime validation pending |
 | VCHIQ | `drivers/misc/vchiq` | Reference; KMDF and user/kernel ABI audit pending |
 | WaveRT audio | `drivers/audio/bcm2836` | Reference pending PortCls/WaveRT and mailbox/VCHIQ parity |
 

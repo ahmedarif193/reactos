@@ -131,8 +131,12 @@
 
 #ifdef __cplusplus
  #define EXTERN_C extern "C"
+ #define EXTERN_C_START extern "C" {
+ #define EXTERN_C_END }
 #else
  #define EXTERN_C extern
+ #define EXTERN_C_START
+ #define EXTERN_C_END
 #endif /* __cplusplus */
 
 #define NTAPI __stdcall
