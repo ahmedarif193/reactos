@@ -893,6 +893,214 @@ vc4kmt_bo_gpuva(
 }
 
 NTSTATUS
+vc4kmt_shared_resource_info(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ D3DKMT_HANDLE hGlobalShare,
+    _Out_writes_bytes_to_opt_(RuntimeDataCapacity, *RuntimeDataSize)
+        PVOID RuntimeData,
+    _In_ UINT RuntimeDataCapacity,
+    _Out_ UINT *RuntimeDataSize)
+{
+    D3DKMT_QUERYRESOURCEINFO Query;
+    NTSTATUS Status;
+
+    if (Device == NULL || hGlobalShare == 0 || RuntimeDataSize == NULL ||
+        (RuntimeDataCapacity != 0 && RuntimeData == NULL) || Device->Fake)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    RtlZeroMemory(&Query, sizeof(Query));
+    Query.hDevice = Device->hDevice;
+    Query.hGlobalShare = hGlobalShare;
+    Query.pPrivateRuntimeData = RuntimeData;
+    Query.PrivateRuntimeDataSize = RuntimeDataCapacity;
+    Status = D3DKMTQueryResourceInfo(&Query);
+    *RuntimeDataSize = Query.PrivateRuntimeDataSize;
+    return Status;
+}
+
+NTSTATUS
+vc4kmt_bo_open_shared(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ D3DKMT_HANDLE hGlobalShare,
+    _In_ UINT Size,
+    _Out_ VC4KMT_BO *Bo,
+    _Out_ D3DKMT_HANDLE *hResource)
+{
+    D3DKMT_QUERYRESOURCEINFO Query;
+    D3DKMT_OPENRESOURCE OpenResource;
+    D3DDDI_OPENALLOCATIONINFO *OpenAllocations = NULL;
+    D3DDDI_MAPGPUVIRTUALADDRESS MapGpuVa;
+    PVOID PrivateRuntimeData = NULL;
+    PVOID ResourcePrivateData = NULL;
+    PVOID TotalPrivateData = NULL;
+    UINT64 MappedSize;
+    NTSTATUS Status;
+
+    if (Device == NULL || hGlobalShare == 0 || Size == 0 ||
+        Bo == NULL || hResource == NULL || Device->Fake)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    RtlZeroMemory(Bo, sizeof(*Bo));
+    *hResource = 0;
+
+    RtlZeroMemory(&Query, sizeof(Query));
+    Query.hDevice = Device->hDevice;
+    Query.hGlobalShare = hGlobalShare;
+    Status = D3DKMTQueryResourceInfo(&Query);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Query.NumAllocations != 1 ||
+        Query.PrivateRuntimeDataSize > VC4KMT_MAX_PRIMARY_PRIVATE_DATA ||
+        Query.ResourcePrivateDriverDataSize > VC4KMT_MAX_PRIMARY_PRIVATE_DATA ||
+        Query.TotalPrivateDriverDataSize > VC4KMT_MAX_PRIMARY_PRIVATE_DATA)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    OpenAllocations = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                                sizeof(*OpenAllocations));
+    if (OpenAllocations == NULL)
+        return STATUS_NO_MEMORY;
+    if (Query.PrivateRuntimeDataSize != 0)
+        PrivateRuntimeData = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                                       Query.PrivateRuntimeDataSize);
+    if (Query.ResourcePrivateDriverDataSize != 0)
+        ResourcePrivateData = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                                        Query.ResourcePrivateDriverDataSize);
+    if (Query.TotalPrivateDriverDataSize != 0)
+        TotalPrivateData = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                                     Query.TotalPrivateDriverDataSize);
+    if ((Query.PrivateRuntimeDataSize != 0 && PrivateRuntimeData == NULL) ||
+        (Query.ResourcePrivateDriverDataSize != 0 && ResourcePrivateData == NULL) ||
+        (Query.TotalPrivateDriverDataSize != 0 && TotalPrivateData == NULL))
+    {
+        Status = STATUS_NO_MEMORY;
+        goto Cleanup;
+    }
+
+    RtlZeroMemory(&OpenResource, sizeof(OpenResource));
+    OpenResource.hDevice = Device->hDevice;
+    OpenResource.hGlobalShare = hGlobalShare;
+    OpenResource.NumAllocations = 1;
+    OpenResource.pOpenAllocationInfo = OpenAllocations;
+    OpenResource.pPrivateRuntimeData = PrivateRuntimeData;
+    OpenResource.PrivateRuntimeDataSize = Query.PrivateRuntimeDataSize;
+    OpenResource.pResourcePrivateDriverData = ResourcePrivateData;
+    OpenResource.ResourcePrivateDriverDataSize =
+        Query.ResourcePrivateDriverDataSize;
+    OpenResource.pTotalPrivateDriverDataBuffer = TotalPrivateData;
+    OpenResource.TotalPrivateDriverDataBufferSize =
+        Query.TotalPrivateDriverDataSize;
+    Status = D3DKMTOpenResource(&OpenResource);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    *hResource = OpenResource.hResource;
+    Bo->hAllocation = OpenAllocations[0].hAllocation;
+    if (OpenResource.hResource == 0 ||
+        OpenAllocations[0].hAllocation == 0)
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+        goto Cleanup;
+    }
+
+    Bo->Size = Size;
+
+    MappedSize = ((UINT64)Size + 4095u) & ~4095ULL;
+    RtlZeroMemory(&MapGpuVa, sizeof(MapGpuVa));
+    MapGpuVa.hAllocation = Bo->hAllocation;
+    MapGpuVa.MinimumAddress = RPI5VC4_DYNAMIC_GPUVA_START;
+    MapGpuVa.MaximumAddress = 1ULL << 32;
+    MapGpuVa.SizeInPages = (UINT)(MappedSize / 4096u);
+    MapGpuVa.hPagingQueue = Device->hPagingQueue;
+    MapGpuVa.Protection.Write = 1;
+    Status = D3DKMTMapGpuVirtualAddress(&MapGpuVa);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    if (MapGpuVa.VirtualAddress == 0 ||
+        MapGpuVa.VirtualAddress > 0xffffffffULL ||
+        MappedSize > (1ULL << 32) - MapGpuVa.VirtualAddress)
+    {
+        (void)Vc4KmtFreeGpuVaRange(Device, MapGpuVa.VirtualAddress,
+                                   MappedSize);
+        Status = STATUS_INVALID_DEVICE_REQUEST;
+        goto Cleanup;
+    }
+
+    Bo->GpuVa = (ULONG)MapGpuVa.VirtualAddress;
+    Status = Vc4KmtTrackBo(Device, Bo->hAllocation);
+
+Cleanup:
+    if (!NT_SUCCESS(Status) && *hResource != 0)
+    {
+        D3DKMT_DESTROYALLOCATION Destroy;
+
+        if (Bo->GpuVa != 0)
+            (void)Vc4KmtFreeGpuVaRange(Device, Bo->GpuVa,
+                                       ((UINT64)Bo->Size + 4095u) & ~4095ULL);
+        RtlZeroMemory(&Destroy, sizeof(Destroy));
+        Destroy.hDevice = Device->hDevice;
+        Destroy.hResource = *hResource;
+        (void)D3DKMTDestroyAllocation(&Destroy);
+        RtlZeroMemory(Bo, sizeof(*Bo));
+        *hResource = 0;
+    }
+    if (TotalPrivateData != NULL)
+        HeapFree(GetProcessHeap(), 0, TotalPrivateData);
+    if (ResourcePrivateData != NULL)
+        HeapFree(GetProcessHeap(), 0, ResourcePrivateData);
+    if (PrivateRuntimeData != NULL)
+        HeapFree(GetProcessHeap(), 0, PrivateRuntimeData);
+    if (OpenAllocations != NULL)
+        HeapFree(GetProcessHeap(), 0, OpenAllocations);
+    return Status;
+}
+
+NTSTATUS
+vc4kmt_bo_close_shared(
+    _In_ VC4KMT_DEVICE *Device,
+    _Inout_ VC4KMT_BO *Bo,
+    _In_ D3DKMT_HANDLE hResource)
+{
+    D3DKMT_DESTROYALLOCATION Destroy;
+    NTSTATUS Status = STATUS_SUCCESS;
+    NTSTATUS CleanupStatus;
+
+    if (Device == NULL || Bo == NULL || hResource == 0 || Device->Fake)
+        return STATUS_INVALID_PARAMETER;
+
+    Vc4KmtUntrackBo(Device, Bo->hAllocation);
+    if (Bo->CpuVa != NULL && Bo->hAllocation != 0)
+    {
+        D3DKMT_UNLOCK Unlock;
+        D3DKMT_HANDLE Allocation = Bo->hAllocation;
+
+        RtlZeroMemory(&Unlock, sizeof(Unlock));
+        Unlock.hDevice = Device->hDevice;
+        Unlock.NumAllocations = 1;
+        Unlock.phAllocations = &Allocation;
+        Status = D3DKMTUnlock(&Unlock);
+    }
+
+    CleanupStatus = Vc4KmtFreeGpuVaRange(
+        Device, Bo->GpuVa, ((UINT64)Bo->Size + 4095u) & ~4095ULL);
+    if (NT_SUCCESS(Status))
+        Status = CleanupStatus;
+
+    RtlZeroMemory(&Destroy, sizeof(Destroy));
+    Destroy.hDevice = Device->hDevice;
+    Destroy.hResource = hResource;
+    CleanupStatus = D3DKMTDestroyAllocation(&Destroy);
+    if (NT_SUCCESS(Status))
+        Status = CleanupStatus;
+
+    RtlZeroMemory(Bo, sizeof(*Bo));
+    return Status;
+}
+
+NTSTATUS
 vc4kmt_primary_gpuva(
     _In_ VC4KMT_DEVICE *Device,
     _In_ UINT Width,
