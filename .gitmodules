@@ -5,3 +5,7 @@
 [submodule "base/applications/cmdutils/glmark2"]
 	path = base/applications/cmdutils/glmark2
 	url = https://github.com/glmark2/glmark2.git
+[submodule "drivers/platform/rpi3winsync"]
+	path = drivers/platform/rpi3winsync
+	url = https://github.com/raspberrypi/windows-drivers.git
+	branch = master
