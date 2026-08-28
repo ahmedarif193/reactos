@@ -127,12 +127,43 @@ def test_duplicate_stubs(cmd):
         if len(anonymous) != 2:
             print('Expected two anonymous ordinal definitions, got:', len(anonymous))
 
+def test_constant_import(cmd):
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        spec = os.path.join(tmpdirname, 'constant.spec')
+        with open(spec, 'w') as content:
+            content.write('@ extern DataExport\n@ extern -constant ConstantImportExport\n')
+
+        cases = [
+            (['-n=testdll.dll', '-a=arm64', '--implib'], 'CONSTANT'),
+            (['--ms', '-n=testdll.dll', '-a=arm64', '--implib'], 'CONSTANT'),
+            (['-n=testdll.dll', '-a=arm64'], 'DATA'),
+            (['--ms', '-n=testdll.dll', '-a=arm64'], 'DATA'),
+        ]
+
+        for index, (args, expected_kind) in enumerate(cases):
+            deffile = os.path.join(tmpdirname, 'constant-{0}.def'.format(index))
+            command = [cmd] + args + ['-d=' + deffile]
+            if '--ms' in args and '--implib' in args:
+                command.append('-l=' + os.path.join(tmpdirname, 'constant-{0}.asm'.format(index)))
+            command.append(spec)
+            proc = subprocess.run(command)
+            if proc.returncode:
+                print('Failed constant import return code', proc.returncode, 'for', args)
+                continue
+
+            with open(deffile, 'r') as content:
+                lines = [line.strip() for line in content]
+            matches = [line for line in lines if line.startswith('ConstantImportExport')]
+            if len(matches) != 1 or not matches[0].endswith(expected_kind):
+                print('Expected ConstantImportExport', expected_kind, 'for', args, 'got:', matches)
+
 def main(args):
     cmd = args[0] if args else 'spec2def'
     all_files = os.listdir(DATA_DIR)
     for testcase in TEST_CASES:
         run_test(testcase, cmd, all_files)
     test_duplicate_stubs(cmd)
+    test_constant_import(cmd)
 
 if __name__ == '__main__':
     main(sys.argv[1:])
