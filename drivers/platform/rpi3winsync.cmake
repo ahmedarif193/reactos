@@ -1,10 +1,9 @@
 # Copyright 2026 Ahmed Arif <arif193@gmail.com>
 
-# rpi3winsync is an exact Windows 10 BSP source snapshot. It is a contract
-# reference and is not compiled until its Windows framework dependencies have
-# compatible ReactOS implementations.
+# rpi3winsync is an exact, directly tracked Windows 10 BSP source snapshot. It
+# is a contract reference and is not compiled until its Windows framework
+# dependencies have compatible ReactOS implementations.
 set(_rpi3winsync_root "${CMAKE_CURRENT_LIST_DIR}/rpi3winsync")
-set(_rpi3winsync_commit "88ee238c9debecce810d208cac1e5f36add3d2a1")
 
 set(_rpi3winsync_required_files
     LICENSE
@@ -24,29 +23,45 @@ set(_rpi3winsync_required_files
 foreach(_rpi3winsync_file IN LISTS _rpi3winsync_required_files)
     if(NOT EXISTS "${_rpi3winsync_root}/${_rpi3winsync_file}")
         message(FATAL_ERROR
-            "RPi3: rpi3winsync is incomplete; run: git submodule update --init "
-            "drivers/platform/rpi3winsync")
+            "RPi3: the tracked rpi3winsync source snapshot is incomplete")
     endif()
 endforeach()
 
-# A Git checkout can prove that the populated submodule matches the parent
-# gitlink. Exported source archives have no Git metadata and use the required
-# file check above.
-if(EXISTS "${_rpi3winsync_root}/.git")
-    find_package(Git QUIET)
-    if(Git_FOUND)
-        execute_process(
-            COMMAND "${GIT_EXECUTABLE}" -C "${_rpi3winsync_root}" rev-parse HEAD
-            OUTPUT_VARIABLE _rpi3winsync_head
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-            RESULT_VARIABLE _rpi3winsync_git_result)
-        if(NOT _rpi3winsync_git_result EQUAL 0 OR
-           NOT _rpi3winsync_head STREQUAL _rpi3winsync_commit)
-            message(FATAL_ERROR
-                "RPi3: rpi3winsync must be pinned to ${_rpi3winsync_commit}")
-        endif()
-    endif()
-endif()
+# Keep the already-developed upstream driver projects visible to generators and
+# IDEs, but do not compile them yet. Each entry remains disabled for a concrete
+# ReactOS framework dependency; adding a target before that contract exists
+# would only produce an unusable binary.
+set(_rpi3winsync_disabled_projects
+    # Disabled: requires KMDF plus PortCls/WaveRT and mailbox/VCHIQ parity.
+    drivers/audio/bcm2836/rpiwav/rpiwav.vcxproj
+    # Disabled: requires KMDF and GpioClx compatibility.
+    drivers/gpio/bcm2836/bcmgpio.vcxproj
+    # Disabled: requires KMDF and SpbCx compatibility.
+    drivers/i2c/bcm2836/bcmi2c.vcxproj
+    # Disabled: requires compatible KMDF and mailbox IOCTL contracts.
+    drivers/mailbox/bcm2836/rpiq.vcxproj
+    # Disabled: requires KMDF and a validated VCHIQ user/kernel ABI.
+    drivers/misc/vchiq/vchiq.vcxproj
+    # Disabled: requires compatible KMDF and DMA contracts.
+    drivers/pwm/bcm2836/bcm2836pwm.vcxproj
+    # Disabled: require KMDF and SDPORT parity; native sdbus backends are used.
+    drivers/sd/bcm2836/bcm2836sdhc/bcm2836sdhc.vcxproj
+    drivers/sd/bcm2836/rpisdhc/rpisdhc.vcxproj
+    # Disabled: require KMDF and SpbCx compatibility.
+    drivers/spi/bcm2836/bcmspi.vcxproj
+    drivers/spi/bcmauxspi/bcmauxspi.vcxproj
+    # Disabled: requires compatible KMDF and serial contracts.
+    drivers/uart/bcm2836/miniUart/pi_miniuart.vcxproj
+    # Disabled: requires KMDF and SerCx2 compatibility.
+    drivers/uart/bcm2836/serPL011/SerPL011.vcxproj)
 
-add_custom_target(rpi3winsync SOURCES rpi3winsync.md)
+set(_rpi3winsync_disabled_project_sources)
+foreach(_rpi3winsync_project IN LISTS _rpi3winsync_disabled_projects)
+    list(APPEND _rpi3winsync_disabled_project_sources
+        "${_rpi3winsync_root}/${_rpi3winsync_project}")
+endforeach()
+
+add_custom_target(rpi3winsync SOURCES
+    rpi3winsync.md
+    ${_rpi3winsync_disabled_project_sources})
 set_target_properties(rpi3winsync PROPERTIES FOLDER "Drivers/Platform/Raspberry Pi 3")

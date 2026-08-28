@@ -4,7 +4,8 @@
 
 `rpi3winsync/` is the unmodified
 [`raspberrypi/windows-drivers`](https://github.com/raspberrypi/windows-drivers)
-submodule pinned to commit `88ee238c9debecce810d208cac1e5f36add3d2a1`.
+source snapshot from commit `88ee238c9debecce810d208cac1e5f36add3d2a1`,
+tracked directly in the ReactOS repository.
 That commit was upstream `master` when the snapshot was imported.
 
 Select `Target platform -> Raspberry Pi 3` in `menuconfig` or configure with
@@ -12,11 +13,18 @@ Select `Target platform -> Raspberry Pi 3` in `menuconfig` or configure with
 Pi 3-specific boot bindings, current native Pi 3 targets, and validates this
 source snapshot.
 
+The existing upstream Pi 3 driver projects are exposed by the
+`rpi3winsync` source target, with their prospective build entries kept
+disabled in `rpi3winsync.cmake`. Each disabled project has an adjacent comment
+naming the ReactOS framework contract that must be implemented first.
+
 ## Sync policy
 
-- Never edit files below `rpi3winsync/` locally.
-- Update the submodule gitlink as the upstream baseline. Review that gitlink
-  change separately from the ReactOS compatibility delta.
+- Never edit files below `rpi3winsync/` as part of a ReactOS compatibility
+  change.
+- Update the directly tracked snapshot from a reviewed upstream commit and
+  record that commit in `media/doc/3rd Party Files.txt`. Review a snapshot
+  update separately from the ReactOS compatibility delta.
 - Put reusable Windows-contract work in ReactOS WDM, KMDF, PortCls, SDPORT, or
   future class-extension layers. Keep unavoidable device-specific adaptation
   in ReactOS-owned files outside `rpi3winsync/`.
@@ -49,7 +57,7 @@ authoritative for the synced source.
 `drivers/RpiLanPropertyChange/bcm2836` is a user-mode configuration service,
 not the Raspberry Pi 3 Ethernet driver. Pi 4-only `bcm2711` sources are also
 outside this profile's parity scope even though they remain in the exact
-upstream submodule.
+upstream snapshot.
 
 The porting loop is contract-first: build one selected upstream driver, record
 the first missing or incompatible Windows contract, improve that ReactOS

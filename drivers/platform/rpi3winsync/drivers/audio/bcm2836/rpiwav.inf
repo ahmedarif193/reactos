@@ -1,0 +1,147 @@
+[Version]
+Signature="$Windows NT$"
+Class=MEDIA
+ClassGUID={4d36e96c-e325-11ce-bfc1-08002be10318}
+DriverVer = WILL_BE_FIXED_UP_BY_STAMPINF
+Provider=%ProviderString%
+CatalogFile=rpiwav.cat
+PnpLockdown=1
+
+[SourceDisksNames]
+222="RPIWAV Driver Disk","",222
+
+[SourceDisksFiles]
+rpiwav.sys=222
+
+[Manufacturer]
+%MfgName%=MicrosoftDS,NT$ARCH$
+
+[MicrosoftDS.NT$ARCH$]
+%RPIWAV_SA.DeviceDesc%=RPIWAV_SA, Root\rpiwav
+
+[DestinationDirs]
+RPIWAV_SA.CopyList=12 ; windows\system32\drivers
+
+;======================================================
+; RPIWAV_SA
+;======================================================
+[RPIWAV_SA.CopyList]
+rpiwav.sys
+
+[RPIWAV_SA.AddReg]
+HKR,,AssociatedFilters,,"wdmaud"
+HKR,,Driver,,rpiwav.sys
+
+HKR,Drivers,SubClasses,,"wave"
+
+HKR,Drivers\wave\wdmaud.drv,Driver,,wdmaud.drv
+
+HKR,Drivers\wave\wdmaud.drv,Description,,%RPIWAV_SA.DeviceDesc%
+
+;======================================================
+; render interfaces: speaker (external: headphone)
+;======================================================
+[RPIWAV.I.WaveSpeakerHeadphone]
+AddReg=RPIWAV.I.WaveSpeakerHeadphone.AddReg
+[RPIWAV.I.WaveSpeakerHeadphone.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%RPIWAV.WaveSpeakerHeadphone.szPname%
+
+[RPIWAV.I.TopologySpeakerHeadphone]
+AddReg=RPIWAV.I.TopologySpeakerHeadphone.AddReg
+[RPIWAV.I.TopologySpeakerHeadphone.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%RPIWAV.TopologySpeakerHeadphone.szPname%
+; The following lines opt-in to pull mode.
+HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+HKR,EP\0,%PKEY_AudioEndpoint_Supports_EventDriven_Mode%,0x00010001,0x1
+
+
+;======================================================
+; RPIWAV_SA
+;======================================================
+[RPIWAV_SA.NT]
+Include=ks.inf,wdmaudio.inf
+Needs=KS.Registration, WDMAUDIO.Registration
+CopyFiles=RPIWAV_SA.CopyList
+AddReg=RPIWAV_SA.AddReg
+
+[RPIWAV_SA.NT.Interfaces]
+;
+; Interfaces for speaker (external: headphone) render endpoint.
+;
+AddInterface=%KSCATEGORY_AUDIO%, %KSNAME_WaveSpeakerHeadphone%, RPIWAV.I.WaveSpeakerHeadphone
+AddInterface=%KSCATEGORY_RENDER%, %KSNAME_WaveSpeakerHeadphone%, RPIWAV.I.WaveSpeakerHeadphone
+AddInterface=%KSCATEGORY_REALTIME%, %KSNAME_WaveSpeakerHeadphone%, RPIWAV.I.WaveSpeakerHeadphone
+AddInterface=%KSCATEGORY_AUDIO%, %KSNAME_TopologySpeakerHeadphone%, RPIWAV.I.TopologySpeakerHeadphone
+AddInterface=%KSCATEGORY_TOPOLOGY%, %KSNAME_TopologySpeakerHeadphone%, RPIWAV.I.TopologySpeakerHeadphone
+
+
+[RPIWAV_SA.NT.Services]
+AddService=rpiwav,0x00000002,rpiwav_Service_Inst
+
+[rpiwav_Service_Inst]
+DisplayName=%RPIWAV.SvcDesc%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%10%\system32\drivers\rpiwav.sys
+
+[RPIWAV_SA.NT.HW]
+AddReg = AUDIOHW.AddReg
+
+[AUDIOHW.AddReg]
+; FILE_DEVICE_SOUND
+HKR,,DeviceType,0x10001,0x0000001D
+; SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RWX_RES_RWX
+HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GRGWGX;;;BA)(A;;GRGWGX;;;WD)(A;;GRGWGX;;;RC)"
+
+[DeviceInstall32]
+AddDevice = ROOT\rpiwav\0000,,rpiwav_RootDevice_Inst
+
+[rpiwav_RootDevice_Inst]
+HardwareIds = ROOT\rpiwav
+
+;======================================================
+; WDF
+;======================================================
+[RPIWAV_SA.NT.Wdf]
+KmdfService = rpiwav, RPIWAV_SA_WdfSect
+[RPIWAV_SA_WdfSect]
+KmdfLibraryVersion = $KMDFVERSION$
+
+;======================================================
+; COMMON
+;======================================================
+[Strings]
+
+;Non-localizable
+
+MSFT="Microsoft"
+
+KSNAME_WaveSpeakerHeadphone="WaveSpeakerHeadphone"
+KSNAME_TopologySpeakerHeadphone="TopologySpeakerHeadphone"
+
+Proxy.CLSID="{17CCA71B-ECD7-11D0-B908-00A0C9223196}"
+KSCATEGORY_AUDIO="{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
+KSCATEGORY_RENDER="{65E8773E-8F56-11D0-A3B9-00A0C9223196}"
+KSCATEGORY_CAPTURE="{65E8773D-8F56-11D0-A3B9-00A0C9223196}"
+KSCATEGORY_REALTIME ="{EB115FFC-10C8-4964-831D-6DCB02E6F23F}"
+KSCATEGORY_TOPOLOGY = "{DDA54A40-1E4C-11D1-A050-405705C10000}"
+
+KSNODETYPE_ANY   = "{00000000-0000-0000-0000-000000000000}"
+
+PKEY_AudioEndpoint_Association               = "{1DA5D803-D492-4EDD-8C23-E0C0FFEE7F0E},2"
+PKEY_AudioEndpoint_Supports_EventDriven_Mode = "{1DA5D803-D492-4EDD-8C23-E0C0FFEE7F0E},7"
+
+;Localizable
+ProviderString="MS-IOT"
+MfgName="Microsoft"
+MsCopyRight="Copyright (c) Microsoft Corporation All Rights Reserved"
+
+RPIWAV_SA.DeviceDesc="Raspberry Pi Audio"
+RPIWAV.SvcDesc="Raspberry Pi Audio Driver"
+
+;; friendly names
+RPIWAV.WaveSpeakerHeadphone.szPname="Raspberry Pi Speaker Headphone"
+RPIWAV.TopologySpeakerHeadphone.szPname="Raspberry Pi Speaker Headphone"

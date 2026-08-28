@@ -1,0 +1,76 @@
+;/*++
+;
+;Copyright (c) Microsoft Corporation.  All rights reserved.
+;
+;Module Name:
+;    bcmi2c.inf
+;
+;Abstract:
+;    INF file for installing the Driver Frameworks bcmi2c Driver
+;
+;Installation Notes: 
+;    Using Devcon: Type "devcon update bcmi2c.inf ACPI\BCM2841" to install
+;
+;--*/
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=System
+ClassGuid={4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider=%ProviderString%
+DriverVer=03/16/2015,10.0.10016.0
+CatalogFile = bcmi2c.cat
+PnpLockdown=1
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+; ================= Class section =====================
+
+[SourceDisksNames]
+1 = %DiskId1%,,,""
+
+[SourceDisksFiles]
+bcmi2c.sys  = 1,,
+
+;*****************************************
+; bcmi2c  Install Section
+;*****************************************
+
+[Manufacturer]
+%StdMfg%=Standard,NT$ARCH$
+
+; Decorated model section take precedence over undecorated 
+; ones on XP and later.
+[Standard.NT$ARCH$]
+%bcmi2c.DeviceDesc%=bcmi2c_Device, ACPI\BCM2841
+
+[bcmi2c_Device.NT]
+CopyFiles=Drivers_Dir
+
+[Drivers_Dir]
+bcmi2c.sys
+
+
+;-------------- Service installation
+[bcmi2c_Device.NT.Services]
+AddService = bcmi2c,%SPSVCINST_ASSOCSERVICE%, bcmi2c_Service_Inst
+
+; -------------- bcmi2c driver install sections
+[bcmi2c_Service_Inst]
+DisplayName    = %bcmi2c.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START 
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\bcmi2c.sys
+LoadOrderGroup = Base
+Dependencies   = SpbCx
+
+[Strings]
+ProviderString="MS-IOT"
+SPSVCINST_ASSOCSERVICE= 0x00000002
+StdMfg = "(Standard system devices)"
+DiskId1 = "Broadcom I2C Controller Installation Disk #1"
+bcmi2c.DeviceDesc = "Broadcom I2C Controller Driver"
+bcmi2c.SVCDESC = "Broadcom I2C Controller Service"
+

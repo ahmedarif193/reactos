@@ -1,0 +1,67 @@
+; Copyright (c) Microsoft Corporation All Rights Reserved
+;
+; Abstract:
+;    INF file for installing the BCM2836 PWM Driver
+;
+
+[Version]
+Signature="$Windows NT$"
+Class=SYSTEM
+ClassGUID={4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider=%ProviderString%
+CatalogFile=bcm2836pwm.cat
+PnpLockdown=1
+
+[SourceDisksNames]
+1=%DiskDescription%
+
+[SourceDisksFiles]
+bcm2836pwm.sys=1
+bcm2836pwm.inf=1
+
+[DestinationDirs]
+bcm2836pwm.CopyList = 10,system32\drivers
+
+[Manufacturer]
+%MfgName%=bcm2836pwm_Driver,NT$ARCH$
+
+; Excluding drivers from the "Add New Hardware" list.
+[ControlFlags]
+ExcludeFromSelect = *
+
+[bcm2836pwm_Driver.NT$ARCH$]
+%bcm2836pwm.DeviceDesc%=bcm2836pwm, ACPI\BCM2844
+
+[bcm2836pwm]
+CopyFiles=bcm2836pwm.CopyList
+AddReg=bcm2836pwm.AddReg
+
+[bcm2836pwm.CopyList]
+bcm2836pwm.sys
+
+[bcm2836pwm.AddReg]
+;HKR,,Driver,,bcm2836pwm.sys
+
+[bcm2836pwm.Services]
+AddService = bcm2836pwm, 0x00000002, bcm2836pwm_Service_Inst
+
+[bcm2836pwm_Service_Inst]
+DisplayName   = %bcm2836pwm.SvcDesc%
+ServiceType   = %SERVICE_KERNEL_DRIVER%
+StartType     = %SERVICE_SYSTEM_START%
+ErrorControl  = %SERVICE_ERROR_NORMAL%
+ServiceBinary = %10%\system32\drivers\bcm2836pwm.sys
+
+[Strings]
+ProviderString="MS-IOT"
+MfgName="Microsoft"
+DiskDescription="BCM2836 PWM Driver Disk"
+bcm2836pwm.DeviceDesc="BCM2836 PWM Controller"
+
+bcm2836pwm.SvcDesc = "BCM2836 PWM Controller Driver"
+
+SERVICE_KERNEL_DRIVER   = 1
+SERVICE_SYSTEM_START    = 1
+SERVICE_DEMAND_START    = 3
+SERVICE_ERROR_NORMAL    = 1
+

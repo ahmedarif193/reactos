@@ -1,0 +1,152 @@
+;/*++
+;
+;Copyright (c) 2021 Windows on Raspberry Project. All Rights Reserved.
+;Copyright (c) 2002 Microsoft Corporation. All rights Reserved.
+;
+;Module Name:
+;
+;    bcmemmc2.inf
+;
+;Abstract:
+;
+;    INF file for installing the Broadcom eMMC2 SD Host controller driver
+;
+;--*/
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = SDHost
+ClassGUID   = {a0a588a4-c46f-4b37-b7ea-c82fe89870c6}
+Provider    = %ProviderString%
+CatalogFile = bcmemmc2.cat
+PnpLockdown = 1
+
+; ///////////////////////////////////////////////////////////
+;
+;   List of manufacturers and devices
+;
+; ///////////////////////////////////////////////////////////
+
+[Manufacturer]
+%Broadcom% = Broadcom, NT$ARCH$
+
+[Broadcom.NT$ARCH$]
+%ACPI\BRCME88C.DeviceDesc% = SDHostEMMC2, ACPI\BRCME88C
+
+; ///////////////////////////////////////////////////////////
+;
+; Service install
+;
+
+[sdbus_Service_Inst]
+ServiceType    = %SERVICE_KERNEL_DRIVER%
+StartType      = %SERVICE_DEMAND_START%
+ErrorControl   = %SERVICE_ERROR_NORMAL%
+ServiceBinary  = %12%\sdbus.sys
+LoadOrderGroup = System Bus Extender
+AddReg         = SDBUSServiceReg
+
+; ///////////////////////////////////////////////////////////
+;
+; Registry keys
+;
+
+[SDBUSLocationReg]
+HKR,,UINumberDescFormat,,%SDBUSSlot%
+
+[SDBUSReg]
+HKR,,Driver,,"sdbus.sys"
+
+[SDBUSServiceReg]
+HKR,,BootFlags,0x00010003,0x00000008
+HKR,Parameters,SdCmdFlags,1,    05,01, 06,01, 08,11, 09,19, 0A,19, 0D,11, \
+                                10,01, 11,01, 12,01, 17,01, 18,05, 19,05, \
+                                1A,01, 1B,01, 1C,01, \
+                                20,05, 21,05, 26,05, \
+                                2A,01, \
+                                34,02, 35,02, \
+                                37,01, 38,01, \
+                                22,01, 23,05, 24,01, 25,01
+
+HKR,Parameters,SdAppCmdFlags,1, 06,01, 0D,01, 16,01, 17,01, 33,01, \
+                                12,01, 19,01, 1A,01, 26,01, 2B,01, \
+                                2C,01, 2D,01, 2E,01, 2F,01, 30,01, 31,01, 33,01
+
+; //////////////////////////////////////////////////////////
+;
+; Controller Specific Sections
+;
+
+;
+; Broadcom eMMC2 SD host controller
+;
+
+[SDHostEMMC2.HW.addreg]
+;
+; DmaMethod possible values:
+;       1 -> PIO mode
+;       2 -> SDMA mode
+;       3 -> ADMA mode
+;       4 -> System DMA (Texas Instruments OMAP specific)
+;
+; TODO: Needed only for B0 stepping. C0 and later should enable DMA.
+HKR,, DmaMethod ,%REG_DWORD%, 1 ; PIO mode for now (we'll need a filter driver similar to rpiuxflt for DMA)
+;
+; OverrideFlags:
+;       0x10000000 -> Disable UHS (UHS requires voltage regulator control)
+;       0x00008000 -> Disable 8BIT (capabilities wrongly claim 8-bit bus support)
+;
+HKR,, OverrideFlags, %REG_DWORD%, 0x10008000
+
+[SDHostEMMC2]
+AddReg    = SDBUSReg
+
+[SDHostEMMC2.Services]
+AddService = sdbus, 2, sdbus_Service_Inst
+
+[SDHostEMMC2.HW]
+AddReg = SDBUSLocationReg
+AddReg = SDHostEMMC2.HW.addreg
+
+; ///////////////////////////////////////////////////////////
+[Strings]
+; ///////////////////////////////////////////////////////////
+
+; ///////////////////////////////////////////////////////////
+;
+; Localizable strings below
+;
+
+;
+; Device Decription strings
+;
+
+ACPI\BRCME88C.DeviceDesc = "Broadcom eMMC2 SD Host Controller"
+
+;
+; Slot description string
+;
+
+SDBUSSlot = "SD Host Slot %1!u!"
+
+; ///////////////////////////////////////////////////////////
+;
+; Non-localizable strings below
+;
+
+SERVICE_KERNEL_DRIVER = 1
+SERVICE_BOOT_START    = 0
+SERVICE_SYSTEM_START  = 1
+SERVICE_DEMAND_START  = 3
+SERVICE_ERROR_NORMAL  = 1
+SERVICE_ERROR_IGNORE  = 0
+REG_EXPAND_SZ         = 0x00020000
+REG_DWORD             = 0x00010001
+REG_SZ                = 0x00000000
+
+;
+; Manufacturer name strings
+;
+
+ProviderString = "Windows on Raspberry Project"
+Broadcom       = "Broadcom"

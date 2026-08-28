@@ -1,0 +1,164 @@
+;Copyright (c) 2015 Microsoft Corporation
+
+[Version]
+Signature="$Windows NT$"
+Class=SDHost
+ClassGUID={a0a588a4-c46f-4b37-b7ea-c82fe89870c6}
+Provider=%ProviderString%
+CatalogFile=rpisdhc.cat
+BootCritical=1
+PnpLockdown=1
+
+[SourceDisksNames]
+3426=windows cd
+
+[SourceDisksFiles]
+rpisdhc.sys = 3426
+
+; ///////////////////////////////////////////////////////////
+;
+;   List of manufacturers and devices
+;
+; ///////////////////////////////////////////////////////////
+
+[Manufacturer]
+%Generic%=Generic,NT$ARCH$
+
+[ControlFlags]
+BasicDriverOk=*
+ExcludeFromSelect=*
+
+; ///////////////////////////////////////////////////////////
+;
+; Generic Device
+;
+
+[Generic.NT$ARCH$]
+%ACPI\SDHST.DeviceDesc%=SDHost, ACPI\BCM2855, ACPI\SDHST
+; ///////////////////////////////////////////////////////////
+;
+; Non-Generic Devices
+;
+; Use Generic Device Description (%PCI\CC_080501.DeviceDesc%)to
+; minimize localization.
+;
+; Otherwise, instances of %PCI\CC_080501.DeviceDesc% should be replaced by
+; %<SpecificID...>%
+;
+
+; ///////////////////////////////////////////////////////////
+;
+; Service install
+;
+
+[sdhc_Service_Inst]
+ServiceType    = %SERVICE_KERNEL_DRIVER%
+StartType      = %SERVICE_DEMAND_START%
+ErrorControl   = %SERVICE_ERROR_NORMAL%
+ServiceBinary  = %12%\rpisdhc.sys
+LoadOrderGroup = System Bus Extender
+AddReg         = SDHCServiceReg
+
+; ///////////////////////////////////////////////////////////
+;
+; Registry keys
+;
+
+[SDHCLocationReg]
+HKR,,UINumberDescFormat,,%SDHCSlot%
+
+[SDHCReg]
+HKR,,Driver,,"rpisdhc.sys"
+
+[SDHCServiceReg]
+HKR,,BootFlags,0x00010003,0x00000008
+HKR,Parameters,SdCmdFlags,1,    05,01, 06,01, 08,11, 09,19, 0A,19, 0D,11, \
+                                10,01, 11,01, 12,01, 17,01, 18,05, 19,05, \
+                                1A,01, 1B,01, 1C,01, \
+                                20,05, 21,05, 26,05, \
+                                2A,01, \
+                                34,02, 35,02, \
+                                37,01, 38,01, \
+                                22,01, 23,05, 24,01, 25,01
+
+HKR,Parameters,SdAppCmdFlags,1, 06,01, 0D,01, 16,01, 17,01, 33,01, \
+                                12,01, 19,01, 1A,01, 26,01, 2B,01, \
+                                2C,01, 2D,01, 2E,01, 2F,01, 30,01, 31,01
+
+; ///////////////////////////////////////////////////////////
+;
+; Copy Files
+;
+
+[CSCopyFiles]
+rpisdhc.sys,,,0x100
+
+[DestinationDirs]
+CSCopyFiles=12
+
+; //////////////////////////////////////////////////////////
+;
+; Controller Specific Sections
+;
+
+;
+; Standard host controller
+;
+
+[SDHost]
+CopyFiles=CSCopyFiles
+AddReg=SDHCReg
+
+[SDHost.Services]
+AddService = rpisdhc, 2, sdhc_Service_Inst
+
+[SDHost.HW]
+AddReg=SDHCLocationReg
+
+; ///////////////////////////////////////////////////////////
+[Strings]
+; ///////////////////////////////////////////////////////////
+
+; ///////////////////////////////////////////////////////////
+;
+; Localizable strings below
+;
+
+Generic="SDA Standard Compliant SD Host Controller Vendor"
+
+;
+; Device Decription strings
+;
+
+;
+; SoC
+;
+
+ACPI\SDHST.DeviceDesc="Raspberry Pi SD Host Controller"
+
+;
+; Slot description string
+;
+
+SDHCSlot="SD Host Slot %1!u!"
+
+; ///////////////////////////////////////////////////////////
+;
+; Non-localizable strings below
+;
+
+SERVICE_KERNEL_DRIVER = 1
+SERVICE_BOOT_START    = 0
+SERVICE_SYSTEM_START  = 1
+SERVICE_DEMAND_START  = 3
+SERVICE_ERROR_NORMAL  = 1
+SERVICE_ERROR_IGNORE  = 0
+REG_EXPAND_SZ         = 0x00020000
+REG_DWORD             = 0x00010001
+REG_SZ                = 0x00000000
+
+;
+; Manufacturer name strings
+;
+ProviderString="MS-IOT"
+Msft="Microsoft"

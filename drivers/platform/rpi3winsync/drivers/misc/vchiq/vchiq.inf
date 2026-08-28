@@ -1,0 +1,82 @@
+;
+; Copyright (c) Microsoft Corporation.  All rights reserved.  
+;
+; Module Name:
+;
+;      vchiq.inf
+;
+; Abstract:
+;
+;      INF for vchiq driver
+;
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=System
+ClassGuid={4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider=%ProviderString%
+CatalogFile=vchiq.cat
+PnpLockdown=1
+
+[DestinationDirs]
+Drivers_Dir = 12
+VCFramework_Dir = 12
+
+[SourceDisksNames]
+3426=windows cd
+
+[SourceDisksFiles]
+vchiq.sys = 3426
+vchiq_arm_kern.dll = 3426
+vcos_win32_kern.dll = 3426
+
+;*****************************************
+; Install Section
+;*****************************************
+
+[Manufacturer]
+%MSFT%=Standard,NT$ARCH$
+
+[Standard.NT$ARCH$]
+%vchiq.DeviceDesc%=vchiq_Device, ACPI\BCM2835  ; vchiq Acpi entry
+%vchiq.DeviceDesc%=vchiq_Device, ACPI\VCIQ  ; vchiq Acpi entry
+
+[vchiq_Device.NT]
+CopyFiles=Drivers_Dir,VCFramework_Dir
+
+[vchiq_Device.NT.HW]
+AddReg=vchiq_Device.NT.AddReg
+
+[vchiq_Device.NT.AddReg]
+
+[Drivers_Dir]
+vchiq.sys
+
+[VCFramework_Dir]
+vchiq_arm_kern.dll
+vcos_win32_kern.dll
+
+;-------------- Service installation
+[vchiq_Device.NT.Services]
+AddService = vchiq,%SPSVCINST_ASSOCSERVICE%, vchiq_Service_Inst
+
+; -------------- vchiq driver install sections
+[vchiq_Service_Inst]
+DisplayName     = %vchiq.SVCDESC%
+ServiceType     = 1                    ; SERVICE_KERNEL_DRIVER
+StartType       = 3                    ; SERVICE_DEMAND_START
+ErrorControl    = 1                    ; SERVICE_ERROR_NORMAL
+ServiceBinary   = %12%\vchiq.sys
+LoadOrderGroup  = Extended Base
+
+; -------------- string section
+[Strings]
+; localizable strings
+ProviderString      = "MS-IOT"
+MSFT="Microsoft"
+vchiq.DeviceDesc = "VCHIQ Driver"
+vchiq.SVCDESC = "VCHIQ Service"
+
+; non-localizable strings
+SPSVCINST_ASSOCSERVICE= 0x00000002
+
