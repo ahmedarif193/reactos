@@ -91,8 +91,9 @@
 #define DMA40_TI_WAIT_RESPONSE (1u << 2)
 #define DMA40_TI_PERIPHERAL_MAP(Value) (((Value) & 0x1fu) << 9)
 #define DMA40_TI_DESTINATION_DREQ (1u << 15)
-#define DMA40_TI_HDMI_AUDIO (DMA40_TI_INTERRUPT | DMA40_TI_WAIT_RESPONSE | \
-                             DMA40_TI_PERIPHERAL_MAP(10) | DMA40_TI_DESTINATION_DREQ)
+#define DMA40_TI_HDMI_AUDIO(RequestLine) \
+    (DMA40_TI_INTERRUPT | DMA40_TI_WAIT_RESPONSE | \
+     DMA40_TI_PERIPHERAL_MAP(RequestLine) | DMA40_TI_DESTINATION_DREQ)
 #define DMA40_ADDRESS_BURST_LENGTH(Value) (((Value) & 0xfu) << 8)
 #define DMA40_ADDRESS_INCREMENT (1u << 12)
 #define DMA40_ADDRESS_SIZE_128 (2u << 13)
@@ -138,6 +139,7 @@ CRpi5HdmiAdapter::CRpi5HdmiAdapter()
       m_HdRegistersLength(0),
       m_DmaRegisters(NULL),
       m_DmaRegistersLength(0),
+      m_DmaRequestLine(0),
       m_DvpRegisters(NULL),
       m_DvpRegistersLength(0),
       m_AudioClockOwned(FALSE),
@@ -233,10 +235,22 @@ CRpi5HdmiAdapter::MapResources(PRESOURCELIST ResourceList)
     const ULONG MinimumLengths[] = {0x300, 0x200, 0x100, 0x100, 0x10};
 
     if (ResourceList->NumberOfMemories() < RTL_NUMBER_OF(Mappings) ||
-        ResourceList->NumberOfInterrupts() < 1)
+        ResourceList->NumberOfInterrupts() < 1 ||
+        ResourceList->NumberOfDmas() != 1)
     {
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
+
+    Descriptor = ResourceList->FindTranslatedDma(0);
+    if (!Descriptor ||
+        !(Descriptor->Flags & CM_RESOURCE_DMA_V3) ||
+        Descriptor->u.DmaV3.Channel != 6 ||
+        Descriptor->u.DmaV3.RequestLine > 31 ||
+        Descriptor->u.DmaV3.TransferWidth != 32)
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+    m_DmaRequestLine = Descriptor->u.DmaV3.RequestLine;
 
     for (ULONG Index = 0; Index < RTL_NUMBER_OF(Mappings); ++Index)
     {
@@ -290,6 +304,7 @@ CRpi5HdmiAdapter::UnmapResources()
         MmUnmapIoSpace(m_CoreRegisters, m_CoreRegistersLength);
         m_CoreRegisters = NULL;
     }
+    m_DmaRequestLine = 0;
 }
 
 BOOLEAN
@@ -523,7 +538,7 @@ CRpi5HdmiAdapter::BuildControlBlocks()
                                     sizeof(RPI5HDMI_DMA_CONTROL_BLOCK);
         PRPI5HDMI_DMA_CONTROL_BLOCK ControlBlock = &m_ControlBlocks[Index];
 
-        ControlBlock->TransferInformation = DMA40_TI_HDMI_AUDIO;
+        ControlBlock->TransferInformation = DMA40_TI_HDMI_AUDIO(m_DmaRequestLine);
         ControlBlock->SourceAddress = static_cast<ULONG>(SourceAddress);
         ControlBlock->SourceInformation = static_cast<ULONG>(SourceAddress >> 32) |
                                           DMA40_ADDRESS_BURST_LENGTH(3) |
