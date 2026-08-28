@@ -21,7 +21,7 @@
  */
 #pragma once
 
-#define DWM_FRAME_MAGIC   0x324d5744u   /* 'DWM2' (metadata-only frames) */
+#define DWM_FRAME_MAGIC   0x334d5744u   /* 'DWM3' (CPU + DX surfaces) */
 #define DWM_MAX_WINDOWS    256
 
 /* NtUserCallOneParam routine numbers of the DWM entry points (must match
@@ -30,6 +30,7 @@
 #define DWM_ROUTINE_GETFRAME     0xfffe0014
 #define DWM_ROUTINE_PRESENTSYNC  0xfffe0015
 #define DWM_ROUTINE_OPENSURFACE  0xfffe0016
+#define DWM_ROUTINE_DXSURFACE    0xfffe0017
 
 /*
  * Internal win32k control channel to the canonical display driver (DrvEscape).
@@ -153,6 +154,16 @@ typedef struct _DWM_WIN
     ULONG Alpha;         /* constant alpha 0-255 (255 = opaque) */
     ULONG ColorKey;      /* BGRX colorkey when LWA_COLORKEY set */
     ULONG LayerFlags;    /* DWM_LWA_* (0 = fully opaque)         */
+    ULONG DxGlobalShare; /* D3DKMT shared client surface, or 0   */
+    ULONG DxGeneration;  /* changes when the shared resource does */
+    LUID  DxAdapterLuid;
+    ULONGLONG DxUpdateId;/* latest completed GPU update          */
+    LONG  DxClientX;     /* client origin inside window backing  */
+    LONG  DxClientY;
+    ULONG DxWidth;
+    ULONG DxHeight;
+    ULONG DxPitch;
+    ULONG DxFormat;
 } DWM_WIN, *PDWM_WIN;
 
 typedef struct _DWM_FRAME_HEADER
@@ -189,6 +200,49 @@ typedef struct _DWM_ATTACH
     HANDLE hWake;        /* out : damage wake event                */
     HANDLE hVblank;      /* out : scanout pacing event             */
 } DWM_ATTACH, *PDWM_ATTACH;
+
+/* Runtime-private metadata stored in the D3DKMT shared resource. This is an
+ * OS presentation contract, not miniport-private data: DWM and any OpenGL ICD
+ * can validate the same linear client-surface description after OpenResource. */
+#define DWM_DX_SURFACE_INFO_MAGIC   0x53585744u /* 'DWXS' */
+#define DWM_DX_SURFACE_INFO_VERSION 1u
+#define DWM_DX_FORMAT_B8G8R8A8_UNORM 87u
+
+typedef struct _DWM_DX_SHARED_SURFACE_INFO
+{
+    ULONG Magic;
+    ULONG Version;
+    ULONG Width;
+    ULONG Height;
+    ULONG Pitch;
+    ULONG Format;
+} DWM_DX_SHARED_SURFACE_INFO, *PDWM_DX_SHARED_SURFACE_INFO;
+
+#define DWM_DX_SURFACE_REGISTER  1u
+#define DWM_DX_SURFACE_ISSUE     2u
+#define DWM_DX_SURFACE_UPDATE    3u
+#define DWM_DX_SURFACE_CONSUMED  4u
+
+#define DWM_DX_UPDATE_CANCEL     0x80000000u
+
+/* Fixed-width NtUser exchange used by dwmapi, OpenGL32 and dwm.exe. Window is
+ * a zero-extended HWND so the structure has one layout for native and WOW64
+ * clients. REGISTER/ISSUE/UPDATE are restricted to the window owner;
+ * CONSUMED is restricted to the attached compositor. */
+typedef struct _DWM_DX_SURFACE_EXCHANGE
+{
+    ULONG StructSize;
+    ULONG Action;
+    ULONGLONG Window;
+    LUID AdapterLuid;
+    ULONG GlobalShare;
+    ULONG SurfaceId;
+    ULONG Generation;
+    ULONG Flags;
+    DWM_DX_SHARED_SURFACE_INFO Info;
+    ULONGLONG UpdateId;
+    RECTL UpdateRect;
+} DWM_DX_SURFACE_EXCHANGE, *PDWM_DX_SURFACE_EXCHANGE;
 
 #include <poppack.h>
 

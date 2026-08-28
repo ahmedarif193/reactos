@@ -24,6 +24,8 @@
 
 #pragma once
 
+#include <reactos/dwmframe.h>
+
 extern BOOL gbCompositionEnabled;
 
 /* Per-top-level-window composition state (kept in a side table, not in WND).
@@ -41,11 +43,25 @@ typedef struct _WND_REDIRECT
     LONG      cx;           /* buffer dimensions                              */
     LONG      cy;
     LONGLONG  AllocFailTime;/* last backing-alloc failure (backoff, 100ns)    */
-    /* FRONT is section-backed so dwm.exe maps it read-only (zero-copy):      */
+    /* Both buffers are section-backed. DWM maps FRONT read-only, while GL
+     * frame commits exchange the backing views without changing the SURFACE
+     * objects held by persistent window DCs. */
+    PVOID     BackSection;
+    PVOID     BackView;
+    SIZE_T    BackViewSize;
+    ULONG     BackGeneration;
     PVOID     FrontSection; /* referenced section object                      */
     PVOID     FrontView;    /* kernel view the FRONT surface wraps            */
     SIZE_T    FrontViewSize;
-    ULONG     Generation;   /* bumped per FRONT (re)create — dwm remap key    */
+    ULONG     Generation;   /* stable token for the current FRONT section     */
+    RECTL     rcClient;     /* client rectangle in backing coordinates         */
+    ULONG     DxGlobalShare;
+    ULONG     DxGeneration;
+    LUID      DxAdapterLuid;
+    ULONGLONG DxIssuedUpdateId;
+    ULONGLONG DxPublishedUpdateId;
+    ULONGLONG DxConsumedUpdateId;
+    DWM_DX_SHARED_SURFACE_INFO DxInfo;
 } WND_REDIRECT, *PWND_REDIRECT;
 
 /* Engine lifecycle. */
@@ -68,6 +84,9 @@ BOOL IntCompositionDwmSync(_In_ LONG value);
 /* Open a window FRONT section into dwm's process (ONEPARAM_ROUTINE_
  * DWMOPENSURFACE); see DWM_OPEN_SURFACE in dwmframe.h. */
 NTSTATUS IntCompositionDwmOpenSurface(_In_ PVOID pUser);
+
+/* Register, publish and retire a D3DKMT window redirection surface. */
+NTSTATUS IntCompositionDwmDxSurface(_In_ PVOID pUser);
 
 /* Layered-window alpha/colorkey for the dwm frame descriptor (layered.c). */
 BOOL FASTCALL IntCompositionGetLayered(PWND pWnd, BYTE *pAlpha, COLORREF *pKey, DWORD *pFlags);
@@ -112,6 +131,12 @@ VOID IntCompositionDamageWindow(_In_opt_ PWND Wnd);
  * into outside a paint cycle (e.g. an OpenGL present) — psurf resolves to its
  * window. Only flags the damage — the compose runs on the next tick. */
 VOID IntCompositionDamageBacking(_In_opt_ PSURFACE psurf);
+
+/* Mark a completed full-client OpenGL DIB present. The buffer exchange is
+ * deferred until DWM's next frame pull, after it has finished reading the
+ * previous FRONT. */
+VOID IntCompositionCommitOpenGLFrame(_In_opt_ PSURFACE psurf,
+                                     _In_ const RECTL *prcDest);
 
 /* Damage from a direct write to the primary (drag/focus artists, desktop
  * paint): the whole frame is re-asserted on the next compose. */

@@ -362,6 +362,25 @@ typedef VOID (APIENTRY * PFN_SETPROCTABLE)(const GLCLTPROCTABLE*);
 /* This doesn't seem to be anywhere in ddk or psdk */
 DECLARE_HANDLE(DHGLRC);
 
+typedef struct _WGL_PRESENTBUFFERS_CB
+{
+    UINT Version;
+    UINT SyncType;
+    LUID AdapterLuid;
+    PVOID PrivateData;
+    RECT UpdateRect;
+} WGL_PRESENTBUFFERS_CB, *PWGL_PRESENTBUFFERS_CB;
+
+typedef struct _WGL_PRESENTBUFFERS
+{
+    HANDLE hSurface;
+    LUID AdapterLuid;
+    ULONGLONG PresentToken;
+    PVOID PrivateData;
+    UINT Version;
+    HANDLE CompletionEvent;
+} WGL_PRESENTBUFFERS, *PWGL_PRESENTBUFFERS;
+
 struct ICD_Data
 {
     /* The Name returned with OPENGL_GETINFO escape code */
@@ -386,10 +405,10 @@ struct ICD_Data
     BOOL      (WINAPI *DrvShareLists)( DHGLRC, DHGLRC );
     BOOL      (WINAPI *DrvSwapBuffers)( HDC );
     BOOL      (WINAPI *DrvSwapLayerBuffers)( HDC, UINT );
+    BOOL      (WINAPI *DrvPresentBuffers)( HDC, PWGL_PRESENTBUFFERS );
 
     /* Make this a linked list */
     struct ICD_Data* next;
 };
 
 struct ICD_Data* IntGetIcdData(HDC hdc);
-

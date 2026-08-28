@@ -16,6 +16,7 @@ C_ASSERT(DWM_ROUTINE_ATTACH == ONEPARAM_ROUTINE_DWMATTACH);
 C_ASSERT(DWM_ROUTINE_GETFRAME == ONEPARAM_ROUTINE_DWMGETFRAME);
 C_ASSERT(DWM_ROUTINE_PRESENTSYNC == ONEPARAM_ROUTINE_DWMPRESENTSYNC);
 C_ASSERT(DWM_ROUTINE_OPENSURFACE == ONEPARAM_ROUTINE_DWMOPENSURFACE);
+C_ASSERT(DWM_ROUTINE_DXSURFACE == ONEPARAM_ROUTINE_DWMDXSURFACE);
 
 /* Registered logon process ID */
 HANDLE gpidLogon = 0;
@@ -376,6 +377,12 @@ NtUserCallOneParam(
             /* Open a window FRONT section into dwm's process; Param points at
              * a DWM_OPEN_SURFACE. Returns an NTSTATUS in Result. */
             Result = (DWORD_PTR)IntCompositionDwmOpenSurface((PVOID)Param);
+            break;
+        }
+
+        case ONEPARAM_ROUTINE_DWMDXSURFACE:
+        {
+            Result = (DWORD_PTR)IntCompositionDwmDxSurface((PVOID)Param);
             break;
         }
 
