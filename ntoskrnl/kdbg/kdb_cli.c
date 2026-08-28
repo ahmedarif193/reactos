@@ -129,6 +129,7 @@ static BOOLEAN KdbpCmdRepeat(ULONG Argc, PCHAR Argv[]);
 static BOOLEAN KdbpCmdSelfTest(ULONG Argc, PCHAR Argv[]);
 static BOOLEAN KdbpDoCommand(PCHAR Command);
 
+#if DBG
 BOOLEAN ExpKdbgExtPool(ULONG Argc, PCHAR Argv[]);
 BOOLEAN ExpKdbgExtPoolUsed(ULONG Argc, PCHAR Argv[]);
 BOOLEAN ExpKdbgExtPoolFind(ULONG Argc, PCHAR Argv[]);
@@ -141,6 +142,7 @@ BOOLEAN ExpKdbgExtPfn(ULONG Argc, PCHAR Argv[]);
 BOOLEAN ExpKdbgExtVad(ULONG Argc, PCHAR Argv[]);
 BOOLEAN ExpKdbgExtAddress(ULONG Argc, PCHAR Argv[]);
 BOOLEAN ExpKdbgExtVm(ULONG Argc, PCHAR Argv[]);
+#endif
 
 extern char __ImageBase;
 
@@ -588,6 +590,7 @@ static const struct
     { "repeat", "repeat count command", "Execute one debugger command repeatedly.", KdbpCmdRepeat },
     { "selftest", "selftest", "Run non-destructive KDB command-engine and decoder tests.", KdbpCmdSelfTest },
     { "help", "help [command]", "Display all commands or detailed help for one command.", KdbpCmdHelp },
+#if DBG
     { "!pool", "!pool [Address [Flags]]", "Display information about pool allocations.", ExpKdbgExtPool },
     { "!poolused", "!poolused [Flags [Tag]]", "Display pool usage.", ExpKdbgExtPoolUsed },
     { "!poolfind", "!poolfind Tag [Pool]", "Search for pool tag allocations.", ExpKdbgExtPoolFind },
@@ -600,6 +603,7 @@ static const struct
     { "!vad", "!vad [address]", "List VADs or display the VAD containing an address.", ExpKdbgExtVad },
     { "!address", "!address address", "Describe an address, its VAD and page-table translation.", ExpKdbgExtAddress },
     { "!vm", "!vm", "Display global virtual-memory state.", ExpKdbgExtVm },
+#endif
 
     /* Scheduler and hardware */
     { NULL, NULL, "Scheduler and hardware", NULL },
