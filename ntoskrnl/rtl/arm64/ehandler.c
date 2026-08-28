@@ -98,6 +98,11 @@ __C_specific_handler(
     ImageBase = (ULONG64)DispatcherContext->ImageBase;
 
     IpOffset = DispatcherContext->ControlPc - ImageBase;
+    if (DispatcherContext->ControlPcIsUnwound &&
+        IpOffset >= sizeof(ULONG))
+    {
+        IpOffset -= sizeof(ULONG);
+    }
     TargetIpOffset = DispatcherContext->TargetPc - ImageBase;
     ScopeTable = (PSCOPE_TABLE)DispatcherContext->HandlerData;
 

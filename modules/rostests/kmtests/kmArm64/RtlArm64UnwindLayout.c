@@ -1,7 +1,7 @@
 /*
  * PROJECT:     ReactOS kernel-mode tests
  * LICENSE:     LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
- * PURPOSE:     ARM64 unwind / SEH layout
+ * PURPOSE:     ARM64 unwind / SEH layout and scope dispatch
  *
  * Validates IMAGE_ARM64_RUNTIME_FUNCTION_ENTRY (= RUNTIME_FUNCTION),
  * RUNTIME_FUNCTION_INDIRECT, DISPATCHER_CONTEXT layout, scope-table
@@ -82,6 +82,17 @@ typedef struct _ARM64_DISPATCHER_CONTEXT {
     PUCHAR NonVolatileRegisters;
 } ARM64_DISPATCHER_CONTEXT;
 
+typedef struct _ARM64_SCOPE_TABLE {
+    ULONG Count;
+    struct
+    {
+        ULONG BeginAddress;
+        ULONG EndAddress;
+        ULONG HandlerAddress;
+        ULONG JumpTarget;
+    } ScopeRecord[1];
+} ARM64_SCOPE_TABLE;
+
 #endif /* _M_ARM64 */
 
 VOID Test_RtlArm64UnwindLayout(VOID);
@@ -95,6 +106,22 @@ C_ASSERT(sizeof(ARM64_RUNTIME_FN_ENTRY) == 8);
 C_ASSERT(sizeof(ARM64_RUNTIME_FN_XDATA) == 4);
 C_ASSERT(sizeof(MACHINE_FRAME) == 0x10);
 C_ASSERT(sizeof(ARM64_UNWIND_HISTORY_TABLE_ENTRY) == 0x10);
+
+static BOOLEAN RtlArm64ScopeFilterCalled;
+
+static
+LONG
+__cdecl
+RtlArm64ScopeFilter(
+    _In_ PEXCEPTION_POINTERS ExceptionPointers,
+    _In_ PVOID EstablisherFrame)
+{
+    UNREFERENCED_PARAMETER(ExceptionPointers);
+    UNREFERENCED_PARAMETER(EstablisherFrame);
+
+    RtlArm64ScopeFilterCalled = TRUE;
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
 
 static VOID RtlArm64UnwindLayoutCheck(VOID)
 {
@@ -174,6 +201,52 @@ static VOID RtlArm64UnwindLayoutCheck(VOID)
                (SIZE_T)sizeof(ARM64_DISPATCHER_CONTEXT));
 }
 
+static VOID RtlArm64ScopeDispatchCheck(VOID)
+{
+    ARM64_DISPATCHER_CONTEXT DispatcherContext = { 0 };
+    ARM64_SCOPE_TABLE ScopeTable = { 0 };
+    EXCEPTION_RECORD ExceptionRecord = { 0 };
+    CONTEXT ContextRecord = { 0 };
+    EXCEPTION_DISPOSITION Disposition;
+    ULONG_PTR ImageBase;
+
+    /* Model one ARM64 instruction with its return PC at the exclusive end. */
+    ImageBase = (ULONG_PTR)RtlArm64ScopeFilter & ~((ULONG_PTR)0xFFFF);
+    ScopeTable.Count = 1;
+    ScopeTable.ScopeRecord[0].BeginAddress = 0x100;
+    ScopeTable.ScopeRecord[0].EndAddress = 0x104;
+    ScopeTable.ScopeRecord[0].HandlerAddress =
+        (ULONG)((ULONG_PTR)RtlArm64ScopeFilter - ImageBase);
+    ScopeTable.ScopeRecord[0].JumpTarget = 1;
+
+    ExceptionRecord.ExceptionCode = STATUS_MEDIA_WRITE_PROTECTED;
+    DispatcherContext.ControlPc = ImageBase + ScopeTable.ScopeRecord[0].EndAddress;
+    DispatcherContext.ImageBase = ImageBase;
+    DispatcherContext.ContextRecord = &ContextRecord;
+    DispatcherContext.HandlerData = &ScopeTable;
+
+    DispatcherContext.ControlPcIsUnwound = TRUE;
+    RtlArm64ScopeFilterCalled = FALSE;
+    Disposition = __C_specific_handler(&ExceptionRecord,
+                                       NULL,
+                                       &ContextRecord,
+                                       (struct _DISPATCHER_CONTEXT *)&DispatcherContext);
+    ok_eq_int(Disposition, ExceptionContinueExecution);
+    ok(RtlArm64ScopeFilterCalled,
+       "Filter was not called for an unwound return PC at scope end\n");
+
+    DispatcherContext.ScopeIndex = 0;
+    DispatcherContext.ControlPcIsUnwound = FALSE;
+    RtlArm64ScopeFilterCalled = FALSE;
+    Disposition = __C_specific_handler(&ExceptionRecord,
+                                       NULL,
+                                       &ContextRecord,
+                                       (struct _DISPATCHER_CONTEXT *)&DispatcherContext);
+    ok_eq_int(Disposition, ExceptionContinueSearch);
+    ok(!RtlArm64ScopeFilterCalled,
+       "Filter was called for a current PC outside the scope\n");
+}
+
 #endif /* _M_ARM64 */
 
 START_TEST(RtlArm64UnwindLayout)
@@ -183,5 +256,6 @@ START_TEST(RtlArm64UnwindLayout)
 #else
     dump_trace("[arm64][RtlArm64UnwindLayout] enter\n");
     RtlArm64UnwindLayoutCheck();
+    RtlArm64ScopeDispatchCheck();
 #endif
 }
