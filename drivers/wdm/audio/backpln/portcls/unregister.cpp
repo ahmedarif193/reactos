@@ -59,6 +59,7 @@ CUnregisterSubdevice::UnregisterSubdevice(
     PSYMBOLICLINK_ENTRY SymLinkEntry;
     PSUBDEVICE_DESCRIPTOR SubDeviceDescriptor;
     ISubdevice *SubDevice;
+    ISubdevice *RegisteredSubDevice = NULL;
     ULONG Index;
     NTSTATUS Status;
 
@@ -81,6 +82,7 @@ CUnregisterSubdevice::UnregisterSubdevice(
     {
         DPRINT("Failed to retrieve subdevice descriptor %x\n", Status);
         // the provided port driver doesnt support ISubdevice
+        SubDevice->Release();
         return STATUS_INVALID_PARAMETER;
     }
 
@@ -89,6 +91,8 @@ CUnregisterSubdevice::UnregisterSubdevice(
     {
         if (!RtlCompareUnicodeString(&SubDeviceDescriptor->RefString, &DeviceExtension->CreateItems[Index].ObjectClass, TRUE))
         {
+            RegisteredSubDevice = (ISubdevice *)DeviceExtension->CreateItems[Index].Context;
+            DeviceExtension->CreateItems[Index].Context = NULL;
             DeviceExtension->CreateItems[Index].Create = NULL;
             RtlInitUnicodeString(&DeviceExtension->CreateItems[Index].ObjectClass, NULL);
             break;
@@ -110,6 +114,10 @@ CUnregisterSubdevice::UnregisterSubdevice(
         // free sym entry
         FreeItem(SymLinkEntry, TAG_PORTCLASS);
     }
+
+    if (RegisteredSubDevice)
+        RegisteredSubDevice->Release();
+    SubDevice->Release();
 
     return STATUS_SUCCESS;
 }
