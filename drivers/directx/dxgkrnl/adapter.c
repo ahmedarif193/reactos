@@ -2725,11 +2725,23 @@ DxgkpFreeTrackedDmaBufferEntry(
 {
     BOOLEAN DeviceWorkOwned;
     BOOLEAN ExternalCleanupOwned;
+    BOOLEAN WakeOrderedWaits;
 
+    WakeOrderedWaits = Completed && Entry->SignalSyncObjectReference != NULL;
     if (Completed)
         DxgkTrackedWorkCoreRetire(&Entry->TrackedWork);
     else
         DxgkTrackedWorkCoreCancel(&Entry->TrackedWork);
+
+    /*
+     * Retirement publishes CPU-backed monitored fences.  Wake ordered waits
+     * only after that publication, while this entry still owns its device
+     * reference, so a retried wait cannot observe the old fence value and
+     * park without another wakeup.
+     */
+    if (WakeOrderedWaits)
+        DxgkContextOrderWakeDevice(Entry->Device);
+
     DeviceWorkOwned = DxgkTrackedWorkCoreOwnsDeviceWork(&Entry->TrackedWork);
     ExternalCleanupOwned = DxgkTrackedWorkCoreOwnsExternalCleanup(&Entry->TrackedWork);
     if (Entry->FenceIdentityOwned && Adapter != NULL)
@@ -2856,16 +2868,6 @@ DxgkpRetireSubmittedDmaBuffersWorker(
 #else
             BOOLEAN Completed = TRUE;
 #endif
-
-            /*
-             * A signal-on-completion operation may satisfy a wait parked in
-             * another context stream. Fence publication happens while the
-             * tracked work is retired at DISPATCH_LEVEL, where context-order
-             * streams cannot be scheduled. Wake them here at PASSIVE_LEVEL,
-             * before releasing the submission's device reference.
-             */
-            if (Completed && Entry->SignalSyncObjectReference != NULL)
-                DxgkContextOrderWakeDevice(Entry->Device);
 
             DxgkpFreeTrackedDmaBufferEntry(
                 Adapter,
