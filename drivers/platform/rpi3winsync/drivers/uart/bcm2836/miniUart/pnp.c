@@ -1420,7 +1420,7 @@ SerialInitController(
 
         // allow pi firmware some time to perform enabling of mini Uart hardware
 
-        liTimeout.QuadPart = (LONGLONG)10*IDLETIMEµs * (LONGLONG)(-10);
+        liTimeout.QuadPart = (LONGLONG)10*IDLETIME_US * (LONGLONG)(-10);
 
         for(i=0;i<ciMaxIter;i++)
         {
@@ -1859,7 +1859,11 @@ SerialMapHWResources(
 
         PHYSICAL_ADDRESS  KdComPhysical;
 
+#ifndef __REACTOS__
         KdComPhysical = MmGetPhysicalAddress(*KdComPortInUse);
+#else
+        KdComPhysical = MmGetPhysicalAddress(KdComPortInUse);
+#endif
 
         if(KdComPhysical.LowPart == PConfig->Controller.LowPart) {
             pDevExt->DebugPortInUse = TRUE;
@@ -1870,7 +1874,11 @@ SerialMapHWResources(
         // This compare is done using **untranslated** values since that is what
         // the kernel shoves in regardless of the architecture.
 
+#ifndef __REACTOS__
         if ((*KdComPortInUse) == (ULongToPtr(PConfig->Controller.LowPart)))    {
+#else
+        if (KdComPortInUse == (ULongToPtr(PConfig->Controller.LowPart)))    {
+#endif
             pDevExt->DebugPortInUse = TRUE;
         }
     }
@@ -1880,7 +1888,11 @@ SerialMapHWResources(
 
         TraceEvents(TRACE_LEVEL_ERROR, DBG_INIT,
                     "Kernel debugger is using port at address %p\r\n",
+#ifndef __REACTOS__
                     *KdComPortInUse);
+#else
+                    KdComPortInUse);
+#endif
 
         // If the kernel debugger is in use, and the platforms supports 
         // alternate GPIO settings, reserve it, so no application/device driver

@@ -4,6 +4,7 @@
 # Projects are enabled individually as their Windows framework dependencies
 # gain compatible ReactOS implementations.
 set(_rpi3winsync_root "${CMAKE_CURRENT_LIST_DIR}/rpi3winsync")
+set(_vchiq_userland_root "${_rpi3winsync_root}/drivers/misc/userland")
 
 set(_rpi3winsync_required_files
     LICENSE
@@ -27,8 +28,9 @@ foreach(_rpi3winsync_file IN LISTS _rpi3winsync_required_files)
     endif()
 endforeach()
 
-# The mailbox, PWM, and mini-UART drivers are enabled through adjacent
-# ReactOS CMakeLists.txt files.
+# The mailbox, PWM, mini-UART, and VCHIQ drivers, plus the VCOS and VCHIQ
+# kernel client DLLs, are enabled through adjacent ReactOS CMakeLists.txt
+# files.
 # Keep the remaining upstream projects visible to generators and IDEs, but do
 # not compile them yet. Each entry remains disabled for a concrete ReactOS
 # framework dependency; adding a target before that contract exists would only
@@ -40,8 +42,6 @@ set(_rpi3winsync_disabled_projects
     drivers/gpio/bcm2836/bcmgpio.vcxproj
     # Disabled: requires KMDF and SpbCx compatibility.
     drivers/i2c/bcm2836/bcmi2c.vcxproj
-    # Disabled: requires KMDF and a validated VCHIQ user/kernel ABI.
-    drivers/misc/vchiq/vchiq.vcxproj
     # Disabled: require KMDF and SDPORT parity; native sdbus backends are used.
     drivers/sd/bcm2836/bcm2836sdhc/bcm2836sdhc.vcxproj
     drivers/sd/bcm2836/rpisdhc/rpisdhc.vcxproj

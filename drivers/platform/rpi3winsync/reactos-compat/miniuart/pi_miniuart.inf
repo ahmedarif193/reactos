@@ -1,0 +1,49 @@
+[Version]
+Signature="$Windows NT$"
+Class=Ports
+ClassGuid={4d36e978-e325-11ce-bfc1-08002be10318}
+Provider=%ProviderString%
+
+[ControlFlags]
+ExcludeFromSelect=*
+
+[DestinationDirs]
+DefaultDestDir=12
+
+[Manufacturer]
+%MSFT%=Standard,NTarm64
+
+[Standard.NTarm64]
+%Serial.DeviceDesc%=Serial_Inst,ACPI\BCM2836
+
+[Serial_Inst.NT]
+CopyFiles=Serial_CopyFiles
+
+[Serial_CopyFiles]
+pi_miniuart.sys
+
+[Serial_Inst.NT.Services]
+AddService=Serial,0x00000002,Serial_Service
+
+[Serial_Service]
+DisplayName=%Serial.SvcDesc%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\pi_miniuart.sys
+
+[Serial_Inst.NT.HW]
+AddReg=Serial_Hardware
+
+[Serial_Hardware]
+HKR,,DeviceCharacteristics,0x10001,0x100
+HKR,,SerialSkipExternalNaming,0x10001,0x1
+HKR,,RxFIFO,0x10001,0x8
+HKR,,TxFIFO,0x10001,0x8
+HKR,,Share System Interrupt,0x10001,0x1
+
+[Strings]
+ProviderString="MS-IOT"
+MSFT="Microsoft"
+Serial.SvcDesc="BCM283x Mini UART Serial Driver"
+Serial.DeviceDesc="BCM283x Mini UART Serial Device"

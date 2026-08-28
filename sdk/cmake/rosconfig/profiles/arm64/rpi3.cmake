@@ -9,6 +9,9 @@ set(ROSCONFIG_PROFILE_PACKAGES
     rpiq
     bcm2836pwm
     pi_miniuart
+    vcos_win32_kern
+    vchiq_arm_kern
+    vchiq
     rpi3winsync)
 set(ROSCONFIG_PROFILE_CONFIGS
     "RPI_SUPPORT:BOOL=ON"

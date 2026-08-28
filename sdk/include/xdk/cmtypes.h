@@ -355,6 +355,7 @@ typedef enum _INTERFACE_TYPE {
   PNPISABus,
   PNPBus,
   Vmcs,
+  ACPIBus,
   MaximumInterfaceType
 } INTERFACE_TYPE, *PINTERFACE_TYPE;
 

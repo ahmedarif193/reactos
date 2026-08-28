@@ -1,0 +1,6 @@
+###############################################################################
+# ReactOS-authored overlay files. Unlike the synchronized upstream sources
+# above, these are plain text in the repository and are converted to UTF-16LE
+# at build time by add_driver_inf().
+###############################################################################
+*.inf text eol=crlf -working-tree-encoding

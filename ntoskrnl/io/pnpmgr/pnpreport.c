@@ -289,6 +289,9 @@ IopGetInterfaceTypeString(INTERFACE_TYPE IfType)
         case Vmcs:
             return L"Vmcs";
 
+        case ACPIBus:
+            return L"ACPIBus";
+
         default:
             DPRINT1("Invalid bus type: %d\n", IfType);
             return NULL;

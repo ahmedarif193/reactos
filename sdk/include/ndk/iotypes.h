@@ -270,6 +270,8 @@ typedef enum _INTERFACE_TYPE
     InternalPowerBus,
     PNPISABus,
     PNPBus,
+    Vmcs,
+    ACPIBus,
     MaximumInterfaceType
 }INTERFACE_TYPE, *PINTERFACE_TYPE;
 
