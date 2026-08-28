@@ -361,6 +361,17 @@ IopFindDmaResource(IN PIO_RESOURCE_DESCRIPTOR IoDesc, IN OPTIONAL PCM_RESOURCE_L
     ASSERT(IoDesc->Type == CmDesc->Type);
     ASSERT(IoDesc->Type == CmResourceTypeDma);
 
+    if (IoDesc->Flags & CM_RESOURCE_DMA_V3)
+    {
+        CmDesc->u.DmaV3.Channel = IoDesc->u.DmaV3.Channel;
+        CmDesc->u.DmaV3.RequestLine = IoDesc->u.DmaV3.RequestLine;
+        CmDesc->u.DmaV3.TransferWidth = (UCHAR)IoDesc->u.DmaV3.TransferWidth;
+        CmDesc->u.DmaV3.Reserved1 = 0;
+        CmDesc->u.DmaV3.Reserved2 = 0;
+        CmDesc->u.DmaV3.Reserved3 = 0;
+        return !IopCheckDescriptorForConflict(CmDesc, PendingList, NULL, DeviceNode);
+    }
+
     for (Channel = IoDesc->u.Dma.MinimumChannel;
          Channel <= IoDesc->u.Dma.MaximumChannel;
          Channel++)
@@ -721,11 +732,30 @@ IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST Requireme
                         break;
 
                     case CmResourceTypeDma:
-                        /* Make sure it fits in our channel range */
-                        if (CmDesc->u.Dma.Channel >= IoDesc->u.Dma.MinimumChannel &&
-                            CmDesc->u.Dma.Channel <= IoDesc->u.Dma.MaximumChannel)
+                        if (!!(CmDesc->Flags & CM_RESOURCE_DMA_V3) !=
+                            !!(IoDesc->Flags & CM_RESOURCE_DMA_V3))
                         {
-                            /* Found it */
+                            DPRINT("DMA descriptor versions do not match\n");
+                        }
+                        else if (IoDesc->Flags & CM_RESOURCE_DMA_V3)
+                        {
+                            if (CmDesc->u.DmaV3.Channel == IoDesc->u.DmaV3.Channel &&
+                                CmDesc->u.DmaV3.RequestLine == IoDesc->u.DmaV3.RequestLine &&
+                                CmDesc->u.DmaV3.TransferWidth == IoDesc->u.DmaV3.TransferWidth)
+                            {
+                                Matched = TRUE;
+                            }
+                            else
+                            {
+                                DPRINT("DMA v3 - Not a match! channel %u request %u width %u\n",
+                                       CmDesc->u.DmaV3.Channel,
+                                       CmDesc->u.DmaV3.RequestLine,
+                                       CmDesc->u.DmaV3.TransferWidth);
+                            }
+                        }
+                        else if (CmDesc->u.Dma.Channel >= IoDesc->u.Dma.MinimumChannel &&
+                                 CmDesc->u.Dma.Channel <= IoDesc->u.Dma.MaximumChannel)
+                        {
                             Matched = TRUE;
                         }
                         else
@@ -814,11 +844,20 @@ IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST Requireme
                         break;
 
                     case CmResourceTypeDma:
-                        /* Find an available DMA channel */
                         if (!IopFindDmaResource(IoDesc, *ResourceList, &NewDesc, DeviceNode))
                         {
-                            DPRINT1("Failed to find an available dma resource (0x%x to 0x%x)\n",
-                                    IoDesc->u.Dma.MinimumChannel, IoDesc->u.Dma.MaximumChannel);
+                            if (IoDesc->Flags & CM_RESOURCE_DMA_V3)
+                            {
+                                DPRINT1("Failed to reserve DMA v3 channel %u request %u\n",
+                                        IoDesc->u.DmaV3.Channel,
+                                        IoDesc->u.DmaV3.RequestLine);
+                            }
+                            else
+                            {
+                                DPRINT1("Failed to find an available dma resource (0x%x to 0x%x)\n",
+                                        IoDesc->u.Dma.MinimumChannel,
+                                        IoDesc->u.Dma.MaximumChannel);
+                            }
 
                             FoundResource = FALSE;
                         }
@@ -1090,13 +1129,39 @@ IopCheckResourceDescriptor(IN PCM_PARTIAL_RESOURCE_DESCRIPTOR ResDesc, IN PCM_RE
                 }
                 case CmResourceTypeDma:
                 {
-                    if (ResDesc->u.Dma.Channel == ResDesc2->u.Dma.Channel)
+                    BOOLEAN DmaConflict;
+
+                    if ((ResDesc->Flags & CM_RESOURCE_DMA_V3) &&
+                        (ResDesc2->Flags & CM_RESOURCE_DMA_V3))
+                    {
+                        DmaConflict = ResDesc->u.DmaV3.RequestLine ==
+                                      ResDesc2->u.DmaV3.RequestLine;
+                    }
+                    else if (!(ResDesc->Flags & CM_RESOURCE_DMA_V3) &&
+                             !(ResDesc2->Flags & CM_RESOURCE_DMA_V3))
+                    {
+                        DmaConflict = ResDesc->u.Dma.Channel == ResDesc2->u.Dma.Channel;
+                    }
+                    else
+                    {
+                        DmaConflict = FALSE;
+                    }
+
+                    if (DmaConflict)
                     {
                         if (!Silent)
                         {
-                            DPRINT1("Resource conflict: Dma (0x%x 0x%x vs. 0x%x 0x%x)\n",
-                                    ResDesc->u.Dma.Channel, ResDesc->u.Dma.Port,
-                                    ResDesc2->u.Dma.Channel, ResDesc2->u.Dma.Port);
+                            if (ResDesc->Flags & CM_RESOURCE_DMA_V3)
+                            {
+                                DPRINT1("Resource conflict: DMA v3 request line %u\n",
+                                        ResDesc->u.DmaV3.RequestLine);
+                            }
+                            else
+                            {
+                                DPRINT1("Resource conflict: Dma (0x%x 0x%x vs. 0x%x 0x%x)\n",
+                                        ResDesc->u.Dma.Channel, ResDesc->u.Dma.Port,
+                                        ResDesc2->u.Dma.Channel, ResDesc2->u.Dma.Port);
+                            }
                         }
 
                         Result = TRUE;
