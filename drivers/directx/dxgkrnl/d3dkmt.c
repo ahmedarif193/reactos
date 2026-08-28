@@ -8181,13 +8181,8 @@ DxgkpDispatchBufferedIoctl(
 
                     if (UserMappingCaller)
                     {
-                        (VOID)KeWaitForSingleObject(&UnlockAlloc->UserModeLock, Executive, KernelMode, FALSE, NULL);
-                        Locked = UnlockAlloc->UserModeAddress != NULL && UnlockAlloc->UserModeMdl != NULL && UnlockAlloc->UserModeProcess == PsGetCurrentProcess() && UnlockAlloc->UserModeLockCount != 0;
-                        KeReleaseMutex(&UnlockAlloc->UserModeLock, FALSE);
-                        if (!Locked)
-                            Status = STATUS_INVALID_PARAMETER;
-                        else
-                            DxgkVidMmUnmapAllocationUser(UnlockAlloc);
+                        Locked = DxgkVidMmUnmapAllocationUser(UnlockAlloc);
+                        Status = Locked ? STATUS_SUCCESS : STATUS_INVALID_PARAMETER;
                     }
                     else if (UnlockAlloc->CpuAddress == NULL)
                         Status = STATUS_INVALID_PARAMETER;
