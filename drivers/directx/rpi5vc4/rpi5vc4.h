@@ -69,10 +69,10 @@
 #define RPI5VC4_GPUVA_BITS          32
 #define RPI5VC4_GPUVA_LEVELS        2
 #define RPI5VC4_GPUVA_INDEX_BITS    10
-/* Gears-scale CLs retire in <20ms; the vertex-pipe wedge is unrecoverable
- * below core reset, so a long timeout only stretches every park.  Revisit
- * per-job-class when heavier workloads land. */
-#define RPI5VC4_V3D_JOB_TIMEOUT_100NS (300 * 10 * 1000) /* 300 ms */
+/* Match the upstream V3D scheduler timeout.  At expiry the current and
+ * return addresses are checked before declaring a hang, so long command
+ * lists that continue to make progress are allowed to finish. */
+#define RPI5VC4_V3D_JOB_TIMEOUT_100NS (500 * 10 * 1000) /* 500 ms */
 
 typedef struct _RPI5VC4_PENDING_SUBMIT
 {
@@ -80,8 +80,6 @@ typedef struct _RPI5VC4_PENDING_SUBMIT
     ULONG NodeOrdinal;
     ULONG ReportNode;
     UCHAR RenderKicks;
-    UCHAR RenderKickRfc;              /* RFC&0xff snapshot at render kick   */
-    UCHAR BinKickBfc;                 /* BFC&0xff snapshot at bin kick      */
     UCHAR TfuKickCvtct;               /* CVTCT snapshot before TFU kick     */
     BOOLEAN IsV3dJob;
     BOOLEAN IsTfuJob;
@@ -97,6 +95,8 @@ typedef struct _RPI5VC4_PENDING_SUBMIT
     ULONG Qma;
     ULONG Qms;
     ULONG Qts;
+    ULONG TimedoutCtCa;
+    ULONG TimedoutCtRa;
     ULONG TfuRegs[12];
     ULONG CsdCfg[8];
     ULONGLONG QueuedTime100ns;

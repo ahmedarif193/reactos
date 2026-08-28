@@ -282,17 +282,13 @@ Rpi5Vc4ProcessPendingLocked(
             /* Phase 1: kick binning. */
             if (HasBin && !Head->BinSubmitted)
             {
-                /* Completion baseline BEFORE the doorbell (same construction
-                 * as RenderKickRfc): per-job ownership of the BFC edge. */
-                Head->BinKickBfc = (UCHAR)
-                    (READ_REGISTER_ULONG((PULONG)
-                        ((PUCHAR)DeviceExtension->V3dCoreBase +
-                         V3D_CLE_BFC)) & 0xff);
                 if (Rpi5V3dSubmitBin(DeviceExtension,
                                      Head->BclStart, Head->BclEnd,
                                      Head->Qma, Head->Qms, Head->Qts))
                 {
                     Head->BinSubmitted = TRUE;
+                    Head->TimedoutCtCa = 0;
+                    Head->TimedoutCtRa = 0;
                     Head->QueuedTime100ns = Now;
                 }
                 else
@@ -316,21 +312,13 @@ Rpi5Vc4ProcessPendingLocked(
             /* Phase 2: kick rendering once binning finished. */
             if (BinPhaseOver && !Head->RenderSubmitted)
             {
-                /* Completion baseline BEFORE the doorbell (simulator reads
-                 * last_rfc before CT1QBA): a fast render can retire before
-                 * a post-kick read, and a baseline taken after swallows the
-                 * completion — the fence never retires and TDRs (the
-                 * "render-park"). Renders are serialized, so RFC moving
-                 * past this snapshot uniquely means THIS render finished. */
-                Head->RenderKickRfc = (UCHAR)
-                    (READ_REGISTER_ULONG((PULONG)
-                        ((PUCHAR)DeviceExtension->V3dCoreBase +
-                         V3D_CLE_RFC)) & 0xff);
                 if (Rpi5V3dSubmitRender(DeviceExtension,
                                         Head->RclStart, Head->RclEnd,
                                         !HasBin))
                 {
                     Head->RenderSubmitted = TRUE;
+                    Head->TimedoutCtCa = 0;
+                    Head->TimedoutCtRa = 0;
                     Head->QueuedTime100ns = Now;
                 }
                 else
@@ -355,18 +343,54 @@ Rpi5Vc4ProcessPendingLocked(
 
             {
                 PVOID Core = DeviceExtension->V3dCoreBase;
+                ULONG CtCa;
+                ULONG CtRa;
 
-                /* Last-chance completion recheck before the destructive reset:
-                 * if RFC advanced past the kick snapshot the render actually
-                 * finished (lost/late completion) — retire it and SKIP the core
-                 * reset, which would otherwise wedge the next in-flight job and
-                 * cascade every subsequent job into a TDR. */
-                if (Head->RenderSubmitted &&
-                    (UCHAR)(READ_REGISTER_ULONG((PULONG)
-                        ((PUCHAR)Core + V3D_CLE_RFC)) & 0xff)
-                        != Head->RenderKickRfc)
+                /* A long command list is not hung while either its current
+                 * address or sub-list return address is advancing. */
+                if (Head->RenderSubmitted)
                 {
-                    goto CompleteHead;
+                    CtCa = READ_REGISTER_ULONG((PULONG)
+                        ((PUCHAR)Core + V3D_CLE_CT1CA));
+                    CtRa = READ_REGISTER_ULONG((PULONG)
+                        ((PUCHAR)Core + V3D_CLE_CT01RA0));
+                }
+                else
+                {
+                    CtCa = READ_REGISTER_ULONG((PULONG)
+                        ((PUCHAR)Core + V3D_CLE_CT0CA));
+                    CtRa = READ_REGISTER_ULONG((PULONG)
+                        ((PUCHAR)Core + V3D_CLE_CT00RA0));
+                }
+
+                if (CtCa != Head->TimedoutCtCa ||
+                    CtRa != Head->TimedoutCtRa)
+                {
+                    Head->TimedoutCtCa = CtCa;
+                    Head->TimedoutCtRa = CtRa;
+                    Head->QueuedTime100ns = Now;
+                    *NeedPoll = TRUE;
+                    goto NextNode;
+                }
+
+                /* Re-read the W1C completion latches immediately before a
+                 * destructive reset in case completion raced this check. */
+                {
+                    BOOLEAN LateBinComplete;
+                    BOOLEAN LateRenderComplete;
+
+                    Rpi5V3dConsumeCompletions(DeviceExtension,
+                                              &LateBinComplete,
+                                              &LateRenderComplete);
+                    if (Head->RenderSubmitted && LateRenderComplete)
+                        goto CompleteHead;
+                    if (!Head->RenderSubmitted && LateBinComplete)
+                    {
+                        Head->BinDone = TRUE;
+                        Head->QueuedTime100ns = Now;
+                        *NeedPoll = TRUE;
+                        goto NextNode;
+                    }
                 }
 
                 DPRINT1("RPI5VC4: V3D job fence=%lu timed out — aborting (TDR)\n", Head->Fence);
