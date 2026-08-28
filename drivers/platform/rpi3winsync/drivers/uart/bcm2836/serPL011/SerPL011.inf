@@ -1,0 +1,78 @@
+;
+; Copyright (c) Microsoft Corporation.  All rights reserved.
+;
+; Module Name:
+;    SerPL011.inf
+;
+; Abstract:
+;    INF file for installing ARM PL011 UART driver using the SerCx2
+;
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=System
+ClassGuid={4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider=%ProviderString%
+CatalogFile=SerPL011.cat
+PnpLockdown=1
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[SourceDisksNames]
+1 = %DiskId1%,,,""
+
+[SourceDisksFiles]
+SerPL011.sys  = 1,,
+
+[ControlFlags]
+ExcludeFromSelect=*
+
+;*****************************************
+; SerPL011 Install Section
+;*****************************************
+
+[Manufacturer]
+%MSFT%=MSFT,NT$ARCH$
+
+[MSFT.NT$ARCH$]
+; DisplayName            Section       DeviceId
+; -----------            -------       --------
+%SerPL011.DeviceDesc%= BCM2837_Inst, ACPI\BCM2837
+
+[BCM2837_Inst.NT]
+CopyFiles=Drivers_Dir
+
+[Drivers_Dir]
+SerPL011.sys
+
+;-------------- Service installation
+[BCM2837_Inst.NT.Services]
+AddService = SerPL011, %SPSVCINST_ASSOCSERVICE%, BCM2837_Service_Inst
+
+; -------------- SerPL011 driver install sections
+[BCM2837_Service_Inst]
+DisplayName    = %SerPL011.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START 
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\SerPL011.sys
+LoadOrderGroup = Extended Base
+Dependencies   = SerCx2
+AddReg         = BCM2837_Service_Reg
+
+[BCM2837_Service_Reg]
+HKR,Parameters,UartFlowControl,0x00010001,0x00000000; 0:None, 1:HW, 2:SW
+HKR,Parameters,UartControlLines,0x00010001,0x00000000; 0x0200:OUT2, 0x0100:OUT1, 0x0080:RTS, 0x0040:CTS, 0x0020:DTR
+
+[Strings]
+; localizable strings
+ProviderString="MS-IOT"
+MSFT = "Microsoft"
+DiskId1 = "ARM PL011 UART Driver Installation Disk #1"
+SerPL011.DeviceDesc = "ARM PL011 UART Device Driver"
+SerPL011.SVCDESC = "ARM PL011 UART Device Driver"
+
+; non-localizable strings
+SPSVCINST_ASSOCSERVICE= 0x00000002
+
