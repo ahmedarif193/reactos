@@ -1069,10 +1069,8 @@ Ndis6CallMiniportRestartEx(
     Ext->RestartStatus = NDIS_STATUS_PENDING;
     KeClearEvent(&Ext->RestartEvent);
 
-    DbgPrint("NDIS6: Restart → driver\n");
     Status = Ext->DriverBlock->Characteristics.RestartHandler(
         Ext->MiniportAdapterContext, &RestartParams);
-    DbgPrint("NDIS6: RestartHandler returned 0x%08lx\n", (ULONG)Status);
 
     if (Status == NDIS_STATUS_PENDING)
     {
