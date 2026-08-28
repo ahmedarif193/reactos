@@ -5,8 +5,8 @@
  *              multi-plane display-list generation and scanout ownership.
  * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
  *
- * Inspired by the only available driver out there, which is the Linux
- * equivalent (drm/vc4).
+ * BCM2712 register definitions follow Linux drm/vc4 at
+ * 95d9c0c7f20ab1b49ac88773a6138b16d2b8f061.
  *
  * The registers and display-list element layout below are the BCM2712 "HVS" -
  * the SCALER6 / SCALER6D display compositor.
@@ -24,6 +24,7 @@
 
 /* Global / per-channel registers (byte offsets into the register block). */
 #define RPI5_HVS_REG_CONTROL            0x20    /* SCALER6_CONTROL */
+#define RPI5_HVS_REG_CXM_SIZE           0x04    /* dwords of display-list RAM */
 #define RPI5_HVS_CONTROL_PF_LINES_SHIFT 18      /* field 22:18 */
 #define RPI5_HVS_CONTROL_PF_LINES_MASK  (0x1Fu << 18)
 #define RPI5_HVS_CONTROL_MAX_REQS_SHIFT 4       /* field 7:4 */
@@ -92,14 +93,13 @@
 #define RPI5_HVS_CONTEXT_INIT           0xc0c0c0c0u
 
 /*
- * Private display-list slots for multi-plane composition.  The SCALER6
- * dlist RAM spans (RPI5_HVS_LENGTH - RPI5_HVS_DLIST_OFFSET) bytes =
- * 0x5800 dwords; the firmware allocates from the bottom, so two
- * double-buffered slots near the top stay clear of it.  Each slot holds
- * RPI5_HVS_MPO_MAX_PLANES planes + the cursor overlay + a terminator.
- * The region bounds remain unverified on silicon.
+ * Private display-list slots for multi-plane composition.  SCALER6 exposes
+ * the list capacity through CXM_SIZE, while LPTRS addresses at most 4096
+ * dwords.  Keep two double-buffered slots near the top of that addressable
+ * window, away from the firmware's low entries.  The runtime paths validate
+ * CXM_SIZE before using either slot.
  */
-#define RPI5_HVS_DLIST_DWORDS           ((RPI5_HVS_LENGTH - RPI5_HVS_DLIST_OFFSET) / 4)
+#define RPI5_HVS_DLIST_DWORDS           (RPI5_HVS_LPTRS_HEAD_MASK + 1)
 #define RPI5_HVS_MPO_MAX_PLANES         3
 #define RPI5_HVS_PRIVATE_SLOT_DWORDS    ((RPI5_HVS_MPO_MAX_PLANES + 1) * RPI5_HVS_PLANE_DWORDS + 1)
 #define RPI5_HVS_PRIVATE_SLOT_A         (RPI5_HVS_DLIST_DWORDS - 0x100)

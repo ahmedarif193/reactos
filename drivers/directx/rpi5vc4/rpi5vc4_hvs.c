@@ -5,8 +5,8 @@
  *              multi-plane display-list generation and scanout ownership.
  * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
  *
- * Inspired by the only available driver out there, which is the Linux
- * equivalent (drm/vc4).
+ * BCM2712 register definitions and programming sequences are adapted from
+ * Linux drm/vc4 at 95d9c0c7f20ab1b49ac88773a6138b16d2b8f061.
  *
  * The HVS scans out by walking a per-channel "display list" in a small on-chip
  * RAM.  Each plane is a run of control dwords chained by CTL0.NEXT; the channel
@@ -35,6 +35,20 @@ Rpi5HvsMap(
     }
 
     return (volatile ULONG *)DeviceExtension->HvsBase;
+}
+
+static ULONG
+Rpi5HvsGetDlistDwords(
+    _In_ PVOID HvsBase)
+{
+    ULONG DlistDwords;
+
+    DlistDwords = READ_REGISTER_ULONG(
+        (PULONG)((PUCHAR)HvsBase + RPI5_HVS_REG_CXM_SIZE));
+    if (DlistDwords > RPI5_HVS_DLIST_DWORDS)
+        DlistDwords = RPI5_HVS_DLIST_DWORDS;
+
+    return DlistDwords;
 }
 
 static BOOLEAN
@@ -200,6 +214,7 @@ Rpi5HvsSelectHead(
         (volatile ULONG *)((PUCHAR)HvsBase + RPI5_HVS_DLIST_OFFSET);
     ULONG Regs[2] = { RPI5_HVS_LPTRS_D, RPI5_HVS_LPTRS_C };
     ULONG Control;
+    ULONG DlistDwords;
     ULONG BestReg = 0, BestVal = 0, BestHead = 0;
     BOOLEAN BestMatches = FALSE, HaveValid = FALSE;
     ULONG i;
@@ -211,6 +226,8 @@ Rpi5HvsSelectHead(
                       "RPI5VC4: HVS disabled (CTRL=%08lx)\n", Control);
         return FALSE;
     }
+
+    DlistDwords = Rpi5HvsGetDlistDwords(HvsBase);
 
     for (i = 0; i < 2; i++)
     {
@@ -227,7 +244,7 @@ Rpi5HvsSelectHead(
         Head = Val & RPI5_HVS_LPTRS_HEAD_MASK;
 
         if (Val == 0xffffffff || Head == 0 ||
-            Head + RPI5_HVS_PLANE_DWORDS >= RPI5_HVS_DLIST_DWORDS)
+            Head + RPI5_HVS_PLANE_DWORDS >= DlistDwords)
         {
             if (Val == 0xffffffff &&
                 DeviceExtension->HvsLptrsDead[i] < 8)
@@ -636,6 +653,12 @@ Rpi5HvsInstallPlaneListUnlocked(
     }
 
     List[Used++] = RPI5_HVS_CTL0_END;
+
+    if (Rpi5HvsGetDlistDwords(HvsBase) <
+        RPI5_HVS_PRIVATE_SLOT_A + Used)
+    {
+        return FALSE;
+    }
 
     /* Double-buffer between the two private slots, then re-point the head. */
     Slot = (DeviceExtension->HvsActivePrivateSlot == RPI5_HVS_PRIVATE_SLOT_A)
