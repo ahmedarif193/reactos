@@ -2113,11 +2113,6 @@ Rpi5Vc4RememberDmaMapping(
         ULONG Index = (DeviceExtension->DmaMappingNext + i) % RPI5VC4_DMA_MAPPING_COUNT;
         PRPI5VC4_DMA_MAPPING Mapping = &DeviceExtension->DmaMappings[Index];
 
-        if (Mapping->VirtualAddress != NULL && Mapping->SegmentId == Patch->DmaBufferSegmentId && Mapping->PhysicalAddress.QuadPart == Patch->DmaBufferPhysicalAddress.QuadPart)
-        {
-            KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
-            return STATUS_DEVICE_BUSY;
-        }
         if (FreeIndex == MAXULONG && Mapping->VirtualAddress == NULL)
             FreeIndex = Index;
     }
@@ -2130,6 +2125,10 @@ Rpi5Vc4RememberDmaMapping(
     DeviceExtension->DmaMappings[FreeIndex].PhysicalAddress = Patch->DmaBufferPhysicalAddress;
     DeviceExtension->DmaMappings[FreeIndex].VirtualAddress = Patch->pDmaBuffer;
     DeviceExtension->DmaMappings[FreeIndex].Size = Patch->DmaBufferSize;
+    if (++DeviceExtension->DmaMappingSequence == 0)
+        ++DeviceExtension->DmaMappingSequence;
+    DeviceExtension->DmaMappings[FreeIndex].Sequence =
+        DeviceExtension->DmaMappingSequence;
     DeviceExtension->DmaMappingNext = (FreeIndex + 1) % RPI5VC4_DMA_MAPPING_COUNT;
     KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
     return STATUS_SUCCESS;
@@ -2142,20 +2141,27 @@ Rpi5Vc4TakeDmaMappingLocked(
     _In_ PHYSICAL_ADDRESS PhysicalAddress,
     _Out_ PRPI5VC4_DMA_MAPPING OutMapping)
 {
+    PRPI5VC4_DMA_MAPPING Oldest = NULL;
     ULONG i;
 
     for (i = 0; i < RPI5VC4_DMA_MAPPING_COUNT; ++i)
     {
         PRPI5VC4_DMA_MAPPING Mapping = &DeviceExtension->DmaMappings[i];
 
-        if (Mapping->SegmentId == SegmentId && Mapping->PhysicalAddress.QuadPart == PhysicalAddress.QuadPart && Mapping->VirtualAddress != NULL)
+        if (Mapping->SegmentId == SegmentId &&
+            Mapping->PhysicalAddress.QuadPart == PhysicalAddress.QuadPart &&
+            Mapping->VirtualAddress != NULL &&
+            (Oldest == NULL || Mapping->Sequence < Oldest->Sequence))
         {
-            *OutMapping = *Mapping;
-            RtlZeroMemory(Mapping, sizeof(*Mapping));
-            return TRUE;
+            Oldest = Mapping;
         }
     }
-    return FALSE;
+    if (Oldest == NULL)
+        return FALSE;
+
+    *OutMapping = *Oldest;
+    RtlZeroMemory(Oldest, sizeof(*Oldest));
+    return TRUE;
 }
 
 NTSTATUS
