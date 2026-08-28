@@ -681,7 +681,7 @@ VidSchpDereferencePacket(
         return;
 
     if (Packet->FenceIdentityReserved && Packet->OwnerEngine != NULL)
-        DxgkReleaseSubmittedFenceIdentity(Packet->OwnerEngine->Adapter, Packet->NodeOrdinal, Packet->SubmissionFenceId);
+        DxgkReleaseSubmittedFenceIdentity(Packet->OwnerEngine->Adapter, Packet->NodeOrdinal, Packet->SubmissionFenceId, Packet->FenceIdentityEpoch);
     if (Packet->TrackerReservation != NULL && !Packet->TrackerOwnsDmaBuffer)
         DxgkCancelTrackedDmaBuffer(Packet->TrackerReservation);
     if (Packet->DmaBuffer != NULL && !Packet->TrackerOwnsDmaBuffer)
@@ -1666,6 +1666,7 @@ VidSchpKickEngine(
                 Reservation = Packet->TrackerReservation;
                 Packet->TrackerOwnsDmaBuffer = TRUE;
                 Reservation->FenceIdentityOwned = TRUE;
+                Reservation->FenceIdentityEpoch = Packet->FenceIdentityEpoch;
                 Packet->FenceIdentityReserved = FALSE;
             }
             KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
@@ -2094,7 +2095,7 @@ VidSchSubmitCommand(
         Packet->SubmissionFenceId = SubmissionFenceId;
     else
         Packet->SubmissionFenceId = DxgkAllocateSubmissionFenceId(Adapter);
-    if (Packet->SubmissionFenceId == 0 || !DxgkReserveSubmissionFenceIdentity(Adapter, NodeOrdinal, Packet->SubmissionFenceId))
+    if (Packet->SubmissionFenceId == 0 || !DxgkReserveSubmissionFenceIdentity(Adapter, NodeOrdinal, Packet->SubmissionFenceId, &Packet->FenceIdentityEpoch))
     {
         VidSchpDereferencePacket(Packet);
         VidSchpReleaseCall(Adapter);
@@ -2223,7 +2224,7 @@ VidSchSubmitCommandVirtual(
     ExInitializeWorkItem(&Work->WorkItem, VidSchpVirtualSubmitWorker, Work);
     Packet->VirtualSubmitWorkItem = Work;
     Packet->SubmissionFenceId = DxgkAllocateSubmissionFenceId(Adapter);
-    if (Packet->SubmissionFenceId == 0 || !DxgkReserveSubmissionFenceIdentity(Adapter, Context->NodeOrdinal, Packet->SubmissionFenceId))
+    if (Packet->SubmissionFenceId == 0 || !DxgkReserveSubmissionFenceIdentity(Adapter, Context->NodeOrdinal, Packet->SubmissionFenceId, &Packet->FenceIdentityEpoch))
     {
         VidSchpDereferencePacket(Packet);
         VidSchpReleaseCall(Adapter);
@@ -2385,7 +2386,7 @@ VidSchSubmitCommandTracked(
         VidSchpReleaseCall(Adapter);
         return STATUS_INTEGER_OVERFLOW;
     }
-    if (!DxgkReserveSubmissionFenceIdentity(Adapter, NodeOrdinal, Packet->SubmissionFenceId))
+    if (!DxgkReserveSubmissionFenceIdentity(Adapter, NodeOrdinal, Packet->SubmissionFenceId, &Packet->FenceIdentityEpoch))
     {
         VidSchpDereferencePacket(Packet);
         VidSchpReleaseCall(Adapter);

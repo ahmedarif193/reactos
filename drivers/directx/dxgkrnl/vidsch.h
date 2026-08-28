@@ -177,7 +177,9 @@ typedef struct _VIDSCH_DMA_PACKET
      */
     LONG                        Priority;
     BOOLEAN                     Kicked;
+    /* Ownership is valid only until the adapter resets this epoch. */
     BOOLEAN                     FenceIdentityReserved;
+    ULONG                       FenceIdentityEpoch;
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
     /* Set before the provider retires a faulted packet as a fence watermark. */
     volatile LONG               Faulted;
