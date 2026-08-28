@@ -260,7 +260,8 @@ PinWaveRTAudioRegisterNotificationEvent(IN PIRP Irp, IN PKSIDENTIFIER Request, I
     Status = Pin->m_StreamNotification->RegisterNotificationEvent(Pin->m_UserEvent);
     if (!NT_SUCCESS(Status))
     {
-        // Failed to reference event
+        ObDereferenceObject(Pin->m_UserEvent);
+        Pin->m_UserEvent = NULL;
         DPRINT1("RegisterNotificationEvent failed with %x\n", Status);
         return Status;
     }
@@ -314,6 +315,7 @@ PinWaveRTAudioUnregisterNotificationEvent(IN PIRP Irp, IN PKSIDENTIFIER Request,
         DPRINT1("RegisterNotificationEvent failed with %x\n", Status);
         return Status;
     }
+    ObDereferenceObject(Pin->m_UserEvent);
     Pin->m_UserEvent = NULL;
 
     // Done
