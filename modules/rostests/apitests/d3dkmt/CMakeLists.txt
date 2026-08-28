@@ -63,6 +63,7 @@ list(APPEND SOURCE
     vidmm_test.c
     present_test.c
     dwm_test.c
+    dwmdx_test.c
     cursor_test.c
     display_test.c)
 
@@ -85,6 +86,6 @@ if(REACTOS_USE_WDDM AND (REACTOS_WDDM_TARGET_LEVEL GREATER_EQUAL 2000))
     target_compile_definitions(d3dkmt_apitest PRIVATE REACTOS_D3DKMT_VC4KMT_TEST)
 endif()
 set_module_type(d3dkmt_apitest win32cui)
-add_importlibs(d3dkmt_apitest gdi32 user32 msvcrt kernel32 ntdll)
+add_importlibs(d3dkmt_apitest gdi32 user32 advapi32 msvcrt kernel32 ntdll)
 add_pch(d3dkmt_apitest precomp.h "${PCH_SKIP_SOURCE}")
 add_rostests_file(TARGET d3dkmt_apitest)

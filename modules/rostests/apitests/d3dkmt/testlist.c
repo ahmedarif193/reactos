@@ -53,6 +53,12 @@ extern void func_modelistsize(void);
 extern void func_vidmm(void);
 extern void func_present(void);
 extern void func_dwm(void);
+extern void func_dwmdxexport(void);
+extern void func_dwmdxabi(void);
+extern void func_dwmdxarg(void);
+extern void func_dwmdxsurface(void);
+extern void func_dwmdxluid(void);
+extern void func_dwmdxntuser(void);
 extern void func_cursor(void);
 extern void func_display(void);
 extern void func_pipeline(void);
@@ -118,6 +124,12 @@ const struct test winetest_testlist[] =
     { "vidmm",         func_vidmm },
     { "present",       func_present },
     { "dwm",           func_dwm },
+    { "dwmdxexport",   func_dwmdxexport },
+    { "dwmdxabi",      func_dwmdxabi },
+    { "dwmdxarg",      func_dwmdxarg },
+    { "dwmdxsurface",  func_dwmdxsurface },
+    { "dwmdxluid",     func_dwmdxluid },
+    { "dwmdxntuser",   func_dwmdxntuser },
     { "cursor",        func_cursor },
     { "display",       func_display },
     { "pipeline",      func_pipeline },
