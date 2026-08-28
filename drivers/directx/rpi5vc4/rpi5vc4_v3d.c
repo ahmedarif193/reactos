@@ -965,13 +965,17 @@ Rpi5V3dSubmitBin(
     _In_ ULONG BclEnd,
     _In_ ULONG Qma,
     _In_ ULONG Qms,
-    _In_ ULONG Qts)
+    _In_ ULONG Qts,
+    _Out_ PUCHAR CompletionBefore)
 {
     PVOID Core = DeviceExtension->V3dCoreBase;
 
-    if (!DeviceExtension->V3dReady || BclEnd == BclStart)
+    if (!DeviceExtension->V3dReady || BclEnd == BclStart ||
+        CompletionBefore == NULL)
         return FALSE;
 
+    *CompletionBefore =
+        (UCHAR)(Rpi5V3dRead(Core, V3D_CLE_BFC) & 0xff);
     Rpi5V3dWrite(Core, V3D_CTL_INT_CLR, V3D_INT_FLDONE | V3D_INT_OUTOMEM);
 
     /* Linux v3d_bin_job_run: clear leftover overflow bookkeeping from the
@@ -1007,13 +1011,17 @@ Rpi5V3dSubmitRender(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
     _In_ ULONG RclStart,
     _In_ ULONG RclEnd,
-    _In_ BOOLEAN InvalidateCaches)
+    _In_ BOOLEAN InvalidateCaches,
+    _Out_ PUCHAR CompletionBefore)
 {
     PVOID Core = DeviceExtension->V3dCoreBase;
 
-    if (!DeviceExtension->V3dReady || RclEnd == RclStart)
+    if (!DeviceExtension->V3dReady || RclEnd == RclStart ||
+        CompletionBefore == NULL)
         return FALSE;
 
+    *CompletionBefore =
+        (UCHAR)(Rpi5V3dRead(Core, V3D_CLE_RFC) & 0xff);
     Rpi5V3dWrite(Core, V3D_CTL_INT_CLR, V3D_INT_FRDONE);
 
     /* Linux v3d_render_job_run invalidates before EVERY render kick: the
@@ -1028,6 +1036,30 @@ Rpi5V3dSubmitRender(
     Rpi5V3dWrite(Core, V3D_CLE_CT1QEA, RclEnd);
 
     return TRUE;
+}
+
+BOOLEAN
+Rpi5V3dBinDone(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ UCHAR CompletionBefore)
+{
+    if (!DeviceExtension->V3dReady)
+        return TRUE;
+
+    return (UCHAR)(Rpi5V3dRead(DeviceExtension->V3dCoreBase,
+                               V3D_CLE_BFC) & 0xff) != CompletionBefore;
+}
+
+BOOLEAN
+Rpi5V3dRenderDone(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ UCHAR CompletionBefore)
+{
+    if (!DeviceExtension->V3dReady)
+        return TRUE;
+
+    return (UCHAR)(Rpi5V3dRead(DeviceExtension->V3dCoreBase,
+                               V3D_CLE_RFC) & 0xff) != CompletionBefore;
 }
 
 BOOLEAN
@@ -1100,12 +1132,14 @@ VOID
 Rpi5V3dConsumeCompletions(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
     _Out_ PBOOLEAN BinComplete,
-    _Out_ PBOOLEAN RenderComplete)
+    _Out_ PBOOLEAN RenderComplete,
+    _Out_ PBOOLEAN CsdComplete)
 {
     ULONG Status;
 
     *BinComplete = FALSE;
     *RenderComplete = FALSE;
+    *CsdComplete = FALSE;
 
     if (!DeviceExtension->V3dReady)
         return;
@@ -1121,6 +1155,7 @@ Rpi5V3dConsumeCompletions(
 
     *BinComplete = (Status & V3D_INT_FLDONE) != 0;
     *RenderComplete = (Status & V3D_INT_FRDONE) != 0;
+    *CsdComplete = (Status & V3D_V7_INT_CSDDONE) != 0;
 
     if (Status & V3D_INT_OUTOMEM)
     {
