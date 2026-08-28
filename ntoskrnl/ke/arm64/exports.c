@@ -46,8 +46,7 @@ void *psMUITest = 0;
  */
 void *MmBadPointer = (void *)~(unsigned long long)0;
 
-/* Debugger port cells. */
-void *KdComPortInUse = 0;
+/* Hyper-V debugger port cell. */
 void *KdHvComPortInUse = 0;
 
 /* BOOLEAN flags. */

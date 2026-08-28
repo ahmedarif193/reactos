@@ -2015,7 +2015,7 @@
 @ extern -arch=arm64 PsLoadedModuleList
 @ extern -arch=arm64 PsLoadedModuleResource
 @ extern -arch=arm64 SeSystemDefaultSd
-# --- Data exports (ARM64 parity stub variables, defined in arm64_export_stubs.c) ---
+# --- Data exports (ARM64 parity stubs and forwarded variables) ---
 @ extern CmKeyObjectType
 @ extern -arch=arm64 ExActivationObjectType
 @ extern -arch=arm64 ExCompositionObjectType
@@ -2023,7 +2023,8 @@
 @ extern -arch=arm64 ExRawInputManagerObjectType
 @ extern ExTimerObjectType
 @ extern IoCompletionObjectType
-@ extern -arch=arm64 KdComPortInUse
+# Keep the kernel export on the live HAL-owned cell instead of a private stub.
+@ extern -arch=arm64 KdComPortInUse hal.KdComPortInUse
 @ extern -arch=arm64 KdEventLoggingEnabled
 @ extern -arch=arm64 KdHvComPortInUse
 @ extern -arch=arm64 KeDynamicPartitioningSupported
