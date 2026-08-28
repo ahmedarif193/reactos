@@ -369,12 +369,15 @@ WdmAudCleanup(
     for (Index = 0; Index < pClient->NumPins; Index++)
     {
        DPRINT("Index %u Pin %p Type %x\n", Index, pClient->hPins[Index].Handle, pClient->hPins[Index].Type);
-       if (pClient->hPins[Index].Handle && pClient->hPins[Index].Type != MIXER_DEVICE_TYPE)
+       if (pClient->hPins[Index].Type == MIXER_DEVICE_TYPE)
+       {
+           WdmAudCloseMixer(pClient, Index);
+       }
+       else if (pClient->hPins[Index].Handle)
        {
            /* found an still open audio pin */
            ZwClose(pClient->hPins[Index].Handle);
        }
-       WdmAudCloseAllMixers(DeviceObject, pClient, Index);
     }
 
     /* free pin array */
