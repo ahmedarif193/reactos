@@ -141,6 +141,7 @@ Rpi5Vc4ProcessPendingLocked(
     BOOLEAN Completed = FALSE;
     BOOLEAN BinComplete = FALSE;
     BOOLEAN RenderComplete = FALSE;
+    BOOLEAN CsdComplete = FALSE;
     ULONGLONG Now = KeQueryInterruptTime();
     ULONG Node;
 
@@ -165,7 +166,8 @@ Rpi5Vc4ProcessPendingLocked(
     {
         Rpi5V3dConsumeCompletions(DeviceExtension,
                                   &BinComplete,
-                                  &RenderComplete);
+                                  &RenderComplete,
+                                  &CsdComplete);
     }
 
     for (Node = 0; Node < RPI5VC4_GPU_NODE_COUNT; Node++)
@@ -225,6 +227,8 @@ Rpi5Vc4ProcessPendingLocked(
                 {
                     Head->RenderSubmitted = TRUE;
                     Head->QueuedTime100ns = Now;
+                    if (Head->IsCsdJob)
+                        CsdComplete = FALSE;
 
                     /* A 300x300 TFU conversion should retire in ~50us yet
                      * measures ~15ms.  Spin up to 2ms and log CS to split
@@ -259,8 +263,13 @@ Rpi5Vc4ProcessPendingLocked(
             if (Head->RenderSubmitted &&
                 (Head->IsTfuJob ? Rpi5V3dTfuDone(DeviceExtension,
                                                 Head->TfuKickCvtct)
-                                : Rpi5V3dCsdDone(DeviceExtension)))
+                                : (CsdComplete ||
+                                   Rpi5V3dCsdDone(DeviceExtension))))
+            {
+                if (Head->IsCsdJob)
+                    CsdComplete = FALSE;
                 goto CompleteHead;
+            }
 
             if (Now - Head->QueuedTime100ns < RPI5VC4_V3D_JOB_TIMEOUT_100NS)
             {
@@ -284,9 +293,12 @@ Rpi5Vc4ProcessPendingLocked(
             {
                 if (Rpi5V3dSubmitBin(DeviceExtension,
                                      Head->BclStart, Head->BclEnd,
-                                     Head->Qma, Head->Qms, Head->Qts))
+                                     Head->Qma, Head->Qms, Head->Qts,
+                                     &Head->BinCompletionBefore))
                 {
                     Head->BinSubmitted = TRUE;
+                    Head->BinCompletionSeen = FALSE;
+                    BinComplete = FALSE;
                     Head->TimedoutCtCa = 0;
                     Head->TimedoutCtRa = 0;
                     Head->QueuedTime100ns = Now;
@@ -304,6 +316,13 @@ Rpi5Vc4ProcessPendingLocked(
             if (HasBin && Head->BinSubmitted && !Head->BinDone)
             {
                 if (BinComplete)
+                {
+                    Head->BinCompletionSeen = TRUE;
+                    BinComplete = FALSE;
+                }
+                if (Head->BinCompletionSeen &&
+                    Rpi5V3dBinDone(DeviceExtension,
+                                   Head->BinCompletionBefore))
                     Head->BinDone = TRUE;
             }
 
@@ -314,9 +333,12 @@ Rpi5Vc4ProcessPendingLocked(
             {
                 if (Rpi5V3dSubmitRender(DeviceExtension,
                                         Head->RclStart, Head->RclEnd,
-                                        !HasBin))
+                                        !HasBin,
+                                        &Head->RenderCompletionBefore))
                 {
                     Head->RenderSubmitted = TRUE;
+                    Head->RenderCompletionSeen = FALSE;
+                    RenderComplete = FALSE;
                     Head->TimedoutCtCa = 0;
                     Head->TimedoutCtRa = 0;
                     Head->QueuedTime100ns = Now;
@@ -332,6 +354,13 @@ Rpi5Vc4ProcessPendingLocked(
              * job current until its latch is consumed also makes a late IRQ
              * unambiguous; no newer render can be submitted in between. */
             if (Head->RenderSubmitted && RenderComplete)
+            {
+                Head->RenderCompletionSeen = TRUE;
+                RenderComplete = FALSE;
+            }
+            if (Head->RenderSubmitted && Head->RenderCompletionSeen &&
+                Rpi5V3dRenderDone(DeviceExtension,
+                                  Head->RenderCompletionBefore))
                 goto CompleteHead;
 
             /* Still in flight: enforce the per-phase timeout. */
@@ -378,13 +407,27 @@ Rpi5Vc4ProcessPendingLocked(
                 {
                     BOOLEAN LateBinComplete;
                     BOOLEAN LateRenderComplete;
+                    BOOLEAN LateCsdComplete;
 
                     Rpi5V3dConsumeCompletions(DeviceExtension,
                                               &LateBinComplete,
-                                              &LateRenderComplete);
-                    if (Head->RenderSubmitted && LateRenderComplete)
+                                              &LateRenderComplete,
+                                              &LateCsdComplete);
+                    CsdComplete |= LateCsdComplete;
+                    if (LateRenderComplete)
+                        Head->RenderCompletionSeen = TRUE;
+                    if (Head->RenderSubmitted &&
+                        Head->RenderCompletionSeen &&
+                        Rpi5V3dRenderDone(
+                            DeviceExtension,
+                            Head->RenderCompletionBefore))
                         goto CompleteHead;
-                    if (!Head->RenderSubmitted && LateBinComplete)
+                    if (LateBinComplete)
+                        Head->BinCompletionSeen = TRUE;
+                    if (!Head->RenderSubmitted &&
+                        Head->BinCompletionSeen &&
+                        Rpi5V3dBinDone(DeviceExtension,
+                                      Head->BinCompletionBefore))
                     {
                         Head->BinDone = TRUE;
                         Head->QueuedTime100ns = Now;
@@ -2398,7 +2441,6 @@ Rpi5Vc4DdiSubmitCommand(
         Entry->Fence = SubmitCommand->SubmissionFenceId;
         Entry->NodeOrdinal = QueueIndex;
         Entry->ReportNode = SubmitCommand->NodeOrdinal;
-        Entry->RenderKicks = 0;
         Entry->Process = Process;
         if (HasJob && DeviceExtension->V3dReady)
         {

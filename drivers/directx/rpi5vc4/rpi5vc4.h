@@ -79,7 +79,8 @@ typedef struct _RPI5VC4_PENDING_SUBMIT
     ULONG Fence;
     ULONG NodeOrdinal;
     ULONG ReportNode;
-    UCHAR RenderKicks;
+    UCHAR BinCompletionBefore;        /* BFC snapshot before BCL kick       */
+    UCHAR RenderCompletionBefore;     /* RFC snapshot before RCL kick       */
     UCHAR TfuKickCvtct;               /* CVTCT snapshot before TFU kick     */
     BOOLEAN IsV3dJob;
     BOOLEAN IsTfuJob;
@@ -87,6 +88,8 @@ typedef struct _RPI5VC4_PENDING_SUBMIT
     BOOLEAN BinSubmitted;             /* BCL queued to CLE thread 0        */
     BOOLEAN BinDone;                  /* FLDONE consumed for this job      */
     BOOLEAN RenderSubmitted;          /* RCL/TFU/CSD kicked                */
+    BOOLEAN BinCompletionSeen;        /* FLDONE observed for current BCL    */
+    BOOLEAN RenderCompletionSeen;     /* FRDONE observed for current RCL    */
     ULONG V3dFlags;
     ULONG BclStart;
     ULONG BclEnd;

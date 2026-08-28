@@ -222,14 +222,26 @@ Rpi5V3dSubmitBin(
     _In_ ULONG BclEnd,
     _In_ ULONG Qma,
     _In_ ULONG Qms,
-    _In_ ULONG Qts);
+    _In_ ULONG Qts,
+    _Out_ PUCHAR CompletionBefore);
 
 BOOLEAN
 Rpi5V3dSubmitRender(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
     _In_ ULONG RclStart,
     _In_ ULONG RclEnd,
-    _In_ BOOLEAN InvalidateCaches);
+    _In_ BOOLEAN InvalidateCaches,
+    _Out_ PUCHAR CompletionBefore);
+
+BOOLEAN
+Rpi5V3dBinDone(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ UCHAR CompletionBefore);
+
+BOOLEAN
+Rpi5V3dRenderDone(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ UCHAR CompletionBefore);
 
 BOOLEAN
 Rpi5V3dCleanCaches(
@@ -240,7 +252,8 @@ VOID
 Rpi5V3dConsumeCompletions(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
     _Out_ PBOOLEAN BinComplete,
-    _Out_ PBOOLEAN RenderComplete);
+    _Out_ PBOOLEAN RenderComplete,
+    _Out_ PBOOLEAN CsdComplete);
 
 /*
  * V3D core interrupt: GIC SPI 250 per the RPi5 DTB (v3d node
