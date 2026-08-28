@@ -7822,6 +7822,7 @@ DxgkVidMmInvalidateAllocationCache(
     PDXGKRNL_SEGMENT Segment = NULL;
     ULONGLONG CurrentOffset;
     ULONGLONG Remaining;
+    ULONG PagingFenceId;
     BOOLEAN CachedBacking = FALSE;
     NTSTATUS Status;
 
@@ -7838,19 +7839,35 @@ DxgkVidMmInvalidateAllocationCache(
     if (!NT_SUCCESS(Status))
         return STATUS_INVALID_HANDLE;
 
-    Status = DxgkpVidMmLockResidencyForExternalOperation(Allocation);
-    if (!NT_SUCCESS(Status))
-        goto CleanupReference;
-
     /*
      * A queued paging transfer leaves the old placement authoritative until
-     * its fence retires.  Do not clean one backing while the GPU is switching
-     * to another one.
+     * its fence retires.  Cache invalidation is synchronous from the caller's
+     * perspective, so wait for that transfer instead of exposing a transient
+     * STATUS_GRAPHICS_ALLOCATION_BUSY to a CPU read immediately after a GPU
+     * fence completed.  Drop ResidencyLock while waiting because paging
+     * retirement may need to run on this thread; reacquiring it closes the
+     * race with a newly started placement transaction.
      */
-    if (!DxgkPagingSyncPlacement(Allocation))
+    for (;;)
     {
-        Status = STATUS_GRAPHICS_ALLOCATION_BUSY;
-        goto CleanupLock;
+        Status = DxgkpVidMmLockResidencyForExternalOperation(Allocation);
+        if (!NT_SUCCESS(Status))
+            goto CleanupReference;
+        if (DxgkPagingSyncPlacement(Allocation))
+            break;
+
+        PagingFenceId = Allocation->PagingFenceId;
+        KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+        Status = DxgkPagingWaitForFence(
+                     Adapter,
+                     PagingFenceId,
+                     DXGKP_VIDMM_PAGING_ADMISSION_TIMEOUT_MS);
+        if (!NT_SUCCESS(Status))
+        {
+            if (Status == STATUS_TIMEOUT)
+                Status = STATUS_GRAPHICS_ALLOCATION_BUSY;
+            goto CleanupReference;
+        }
     }
     if (Allocation->ContentLost)
     {
