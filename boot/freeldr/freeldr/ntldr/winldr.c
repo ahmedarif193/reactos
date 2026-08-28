@@ -1517,9 +1517,14 @@ LoadAndBootWindows(
     ArgValue = GetArgumentValue(Argc, Argv, "HttpBootUrl");
     if (ArgValue && *ArgValue)
     {
-        if (!UefiHttpBootDownload(ArgValue))
+        BOOLEAN Cancelled;
+
+        if (!UefiHttpBootDownload(ArgValue, &Cancelled))
         {
             PCSTR RamDiskPathEnd = strrchr(BootPath, ')');
+
+            if (Cancelled)
+                return ENOEXEC;
 
             if (_strnicmp(BootPath, "ramdisk(", 8) == 0 && RamDiskPathEnd)
             {

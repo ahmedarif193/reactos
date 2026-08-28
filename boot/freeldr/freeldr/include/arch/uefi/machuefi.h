@@ -140,5 +140,6 @@ UefiInitializeFileSystemSupport(_In_ EFI_HANDLE ImageHandle,
 #ifdef FREELDR_HTTP_BOOT
 BOOLEAN
 UefiHttpBootDownload(
-    _In_ PCSTR Url);
+    _In_ PCSTR Url,
+    _Out_opt_ PBOOLEAN Cancelled);
 #endif

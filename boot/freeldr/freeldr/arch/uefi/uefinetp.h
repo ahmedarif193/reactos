@@ -40,7 +40,8 @@ UefiNetGetProtocol(
 
 BOOLEAN
 UefiNetPrepare(
-    _Out_ PUEFI_NET_CONTEXT Context);
+    _Out_ PUEFI_NET_CONTEXT Context,
+    _Out_opt_ PBOOLEAN Cancelled);
 
 BOOLEAN
 UefiNetMediaPresent(

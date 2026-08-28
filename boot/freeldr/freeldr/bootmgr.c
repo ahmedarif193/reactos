@@ -476,6 +476,7 @@ VOID RunLoader(VOID)
 
         /* If we get there, the OS loader failed. As it may have
          * messed up the display, re-initialize the UI. */
+        UiProgressBar.Show = FALSE;
 #ifndef _M_ARM
         UiUnInitialize("");
 #endif

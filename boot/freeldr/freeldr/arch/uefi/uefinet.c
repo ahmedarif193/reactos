@@ -20,6 +20,8 @@
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(WARNING);
 
+#define UEFI_NETWORK_INPUT_POLL_DELAY_US 100000
+
 #define NET_STAGE_NII   0x0001
 #define NET_STAGE_SNP   0x0002
 #define NET_STAGE_MNP   0x0004
@@ -494,6 +496,42 @@ UefiNetAnyDriverLoaded(VOID)
 }
 
 static BOOLEAN
+UefiNetEscapePressed(VOID)
+{
+    int Key;
+
+    if (!MachConsKbHit())
+        return FALSE;
+
+    Key = MachConsGetCh();
+    if (Key == KEY_EXTENDED)
+    {
+        MachConsGetCh();
+        return FALSE;
+    }
+
+    return Key == KEY_ESC;
+}
+
+static BOOLEAN
+UefiNetWaitForRetry(VOID)
+{
+    UINTN Elapsed = 0;
+
+    while (Elapsed < UEFI_NETWORK_RETRY_DELAY_US)
+    {
+        if (UefiNetEscapePressed())
+            return FALSE;
+
+        GlobalSystemTable->BootServices->Stall(
+            UEFI_NETWORK_INPUT_POLL_DELAY_US);
+        Elapsed += UEFI_NETWORK_INPUT_POLL_DELAY_US;
+    }
+
+    return TRUE;
+}
+
+static BOOLEAN
 UefiNetUpperDriversBlockedByRng(VOID)
 {
     UINTN Index;
@@ -764,13 +802,17 @@ UefiNetForceRebindHttp(
 
 BOOLEAN
 UefiNetPrepare(
-    _Out_ PUEFI_NET_CONTEXT Context)
+    _Out_ PUEFI_NET_CONTEXT Context,
+    _Out_opt_ PBOOLEAN Cancelled)
 {
     EFI_HANDLE HttpController = NULL;
     EFI_SIMPLE_NETWORK_PROTOCOL *Snp = NULL;
     UINT32 Mask;
     UINT32 PreviousMask = (UINT32)-1;
     UINTN Attempts = 0;
+
+    if (Cancelled)
+        *Cancelled = FALSE;
 
     if (!Context ||
         !GlobalSystemTable ||
@@ -862,6 +904,19 @@ UefiNetPrepare(
             UefiConnectHttpPriority();
         UefiConnectAllControllers(Snp != NULL);
 
+        if (UefiNetEscapePressed())
+            goto Cancelled;
+
+        if (!Snp && !(Mask & (NET_STAGE_NII | NET_STAGE_SNP)))
+        {
+            Mask = UefiGetNetworkStageMask(NULL);
+            if (!(Mask & (NET_STAGE_NII | NET_STAGE_SNP)))
+            {
+                TRACE("UEFI Network: no network interface available, giving up\n");
+                return FALSE;
+            }
+        }
+
         if (++Attempts >= UEFI_NETWORK_MAX_WAIT_ATTEMPTS)
         {
             TRACE("UEFI Network: stack incomplete after %lu attempts (mask %08lx snp=%s), giving up\n", (unsigned long)Attempts, (unsigned long)Mask, Snp ? "yes" : "no");
@@ -884,8 +939,15 @@ UefiNetPrepare(
             return FALSE;
         }
 
-        GlobalSystemTable->BootServices->Stall(UEFI_NETWORK_RETRY_DELAY_US);
+        if (!UefiNetWaitForRetry())
+            goto Cancelled;
     }
+
+Cancelled:
+    TRACE("UEFI Network: cancelled by user\n");
+    if (Cancelled)
+        *Cancelled = TRUE;
+    return FALSE;
 }
 
 EFI_HANDLE

@@ -759,7 +759,8 @@ Cleanup:
 
 BOOLEAN
 UefiHttpBootDownload(
-    _In_ PCSTR Url)
+    _In_ PCSTR Url,
+    _Out_opt_ PBOOLEAN Cancelled)
 {
     EFI_STATUS Status;
     UEFI_NET_CONTEXT Context;
@@ -774,6 +775,9 @@ UefiHttpBootDownload(
     BOOLEAN LeaseAcquired = FALSE;
     BOOLEAN ForcedRebind = FALSE;
 
+    if (Cancelled)
+        *Cancelled = FALSE;
+
     if (!Url ||
         !UefiConvertUrl(Url, WideUrl, Host))
     {
@@ -783,7 +787,8 @@ UefiHttpBootDownload(
     }
 
     TRACE("UEFI HttpBoot: starting download from %s\n", Url);
-    if (!UefiNetPrepare(&Context))
+    UiDrawStatusText("Waiting for network... Press ESC to return to the boot menu.");
+    if (!UefiNetPrepare(&Context, Cancelled))
     {
         return FALSE;
     }
