@@ -676,9 +676,9 @@ add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:$<IF:$<BOOL:$<TARGET_PROPERTY:WIT
 # Clang/LLVM runtime libraries
 
 if(NOT REACTOS_CLANG_LLVM_MINGW_ROOT OR
-   NOT EXISTS "${REACTOS_CLANG_LLVM_MINGW_ROOT}/${_target_tool_triplet}/lib/libc++.a")
+   NOT IS_DIRECTORY "${REACTOS_CLANG_LLVM_MINGW_ROOT}")
     message(FATAL_ERROR
-        "The llvm-mingw runtime for ${_target_tool_triplet} was not found under REACTOS_CLANG_LLVM_MINGW_ROOT.")
+        "REACTOS_CLANG_LLVM_MINGW_ROOT does not name an llvm-mingw toolchain directory.")
 endif()
 
 set(_mingw_toolchain_root "${REACTOS_CLANG_LLVM_MINGW_ROOT}")
@@ -823,8 +823,11 @@ endfunction()
     add_library(libstdc++ STATIC IMPORTED GLOBAL)
     set_target_properties(libstdc++ PROPERTIES IMPORTED_LOCATION ${_llvm_libcxx})
     target_link_libraries(libstdc++ INTERFACE libsupc++ libmingwex oldnames libucrtbase)
+    get_filename_component(_llvm_libcxx_lib_dir "${_llvm_libcxx}" DIRECTORY)
+    get_filename_component(_llvm_libcxx_prefix "${_llvm_libcxx_lib_dir}" DIRECTORY)
     foreach(_include_dir
             "${_mingw_toolchain_root}/${_target_tool_triplet}/include/c++/v1"
+            "${_llvm_libcxx_prefix}/include/c++/v1"
             "${_mingw_toolchain_root}/include/c++/v1")
         if(EXISTS "${_include_dir}")
             list(APPEND _reactos_libcxx_include_dirs "${_include_dir}")
