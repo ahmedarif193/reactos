@@ -1,0 +1,77 @@
+;/*++
+;
+;Copyright (c) Microsoft Corporation.  All rights reserved.
+;
+;Module Name:
+;    bcmspi.inf
+;
+;Abstract:
+;    INF file for installing the Driver Frameworks bcmspi Driver
+;
+;Installation Notes: 
+;    Using Devcon: Type "devcon update bcmspi.inf ACPI\BCMSPI0" to install
+;
+;--*/
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=System
+ClassGuid={4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider=%ProviderString%
+DriverVer=02/11/2015,10.0.10016.0
+CatalogFile = bcmspi.cat
+PnpLockdown=1
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+; ================= Class section =====================
+
+[SourceDisksNames]
+1 = %DiskId1%,,,""
+
+[SourceDisksFiles]
+bcmspi.sys  = 1,,
+
+;*****************************************
+; bcmspi  Install Section
+;*****************************************
+
+[Manufacturer]
+%StdMfg%=Standard,NT$ARCH$
+
+; Decorated model section take precedence over undecorated 
+; ones on XP and later.
+[Standard.NT$ARCH$]
+%bcmspi.DeviceDesc%=bcmspi_Device,ACPI\BCM2838,ACPI\BCMSPI0
+
+[bcmspi_Device.NT]
+CopyFiles=Drivers_Dir
+
+[Drivers_Dir]
+bcmspi.sys
+
+
+;-------------- Service installation
+[bcmspi_Device.NT.Services]
+AddService = bcmspi,%SPSVCINST_ASSOCSERVICE%, bcmspi_Service_Inst
+
+; -------------- bcmspi driver install sections
+[bcmspi_Service_Inst]
+DisplayName    = %bcmspi.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START 
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\bcmspi.sys
+LoadOrderGroup = Base
+Dependencies   = SpbCx
+
+[Strings]
+SPSVCINST_ASSOCSERVICE= 0x00000002
+ProviderString="MS-IOT"
+MSFT = "Microsoft"
+StdMfg = "(Standard system devices)"
+DiskId1 = "Broadcom SPI Controller Installation Disk #1"
+bcmspi.DeviceDesc = "Broadcom SPI Controller Driver"
+bcmspi.SVCDESC = "Broadcom SPI Controller Service"
+

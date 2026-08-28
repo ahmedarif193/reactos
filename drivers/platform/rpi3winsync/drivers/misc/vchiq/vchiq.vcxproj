@@ -1,0 +1,174 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="12.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|ARM">
+      <Configuration>Debug</Configuration>
+      <Platform>ARM</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|ARM64">
+      <Configuration>Debug</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM">
+      <Configuration>Release</Configuration>
+      <Platform>ARM</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM64">
+      <Configuration>Release</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="PropertySheets">
+    <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
+    <ConfigurationType>Driver</ConfigurationType>
+    <DriverType>KMDF</DriverType>
+    <TARGETNAME>vchiq</TARGETNAME>
+    <DriverTargetPlatform>Universal</DriverTargetPlatform>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="PropertySheets">
+    <ConversionToolVersion>1.0</ConversionToolVersion>
+    <BUILD_ALT_DIR>$(Configuration.Replace(' ',''))</BUILD_ALT_DIR>
+  </PropertyGroup>
+  <ImportGroup Label="PreConfiguration">
+    <Import Project="$(VCTargetsPath)\WDKConversion\PreConfiguration.props" />
+  </ImportGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{7FED7DE7-D8AE-448B-A7D9-ED99DCDB1F79}</ProjectGuid>
+    <RootNamespace>$(MSBuildProjectName)</RootNamespace>
+    <WindowsTargetPlatformVersion>$(LatestTargetPlatformVersion)</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'" Label="Configuration">
+    <TargetVersion>Windows10</TargetVersion>
+    <UseDebugLibraries>True</UseDebugLibraries>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'" Label="Configuration">
+    <TargetVersion>Windows10</TargetVersion>
+    <UseDebugLibraries>True</UseDebugLibraries>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM'" Label="Configuration">
+    <TargetVersion>Windows10</TargetVersion>
+    <UseDebugLibraries>False</UseDebugLibraries>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'" Label="Configuration">
+    <TargetVersion>Windows10</TargetVersion>
+    <UseDebugLibraries>False</UseDebugLibraries>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" />
+    <Import Project="$(SolutionDir)\..\bsp.props" />
+  </ImportGroup>
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" />
+    <Import Project="$(SolutionDir)\..\bsp.props" />
+  </ImportGroup>
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" />
+    <Import Project="$(SolutionDir)\..\bsp.props" />
+  </ImportGroup>
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" />
+    <Import Project="$(SolutionDir)\..\bsp.props" />
+  </ImportGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">
+    <ClCompile>
+      <WppKernelMode>true</WppKernelMode>
+      <WppPreprocessorDefinitions>ENABLE_WPP_RECORDER=1;WPP_EMIT_FUNC_NAME</WppPreprocessorDefinitions>
+      <WppAddAlternateNameToMessageGUID>vchiq</WppAddAlternateNameToMessageGUID>
+      <WppScanConfigurationData>trace.h</WppScanConfigurationData>
+      <EnablePREfast>false</EnablePREfast>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">
+    <ClCompile>
+      <WppKernelMode>true</WppKernelMode>
+      <WppPreprocessorDefinitions>ENABLE_WPP_RECORDER=1;WPP_EMIT_FUNC_NAME</WppPreprocessorDefinitions>
+      <WppAddAlternateNameToMessageGUID>vchiq</WppAddAlternateNameToMessageGUID>
+      <WppScanConfigurationData>trace.h</WppScanConfigurationData>
+      <EnablePREfast>false</EnablePREfast>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">
+    <ClCompile>
+      <WppKernelMode>true</WppKernelMode>
+      <WppPreprocessorDefinitions>ENABLE_WPP_RECORDER=1;WPP_EMIT_FUNC_NAME</WppPreprocessorDefinitions>
+      <WppAddAlternateNameToMessageGUID>vchiq</WppAddAlternateNameToMessageGUID>
+      <WppScanConfigurationData>trace.h</WppScanConfigurationData>
+      <EnablePREfast>false</EnablePREfast>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
+    <ClCompile>
+      <WppKernelMode>true</WppKernelMode>
+      <WppPreprocessorDefinitions>ENABLE_WPP_RECORDER=1;WPP_EMIT_FUNC_NAME</WppPreprocessorDefinitions>
+      <WppAddAlternateNameToMessageGUID>vchiq</WppAddAlternateNameToMessageGUID>
+      <WppScanConfigurationData>trace.h</WppScanConfigurationData>
+      <EnablePREfast>false</EnablePREfast>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <FilesToPackage Include="$(TargetPath)" Condition="'$(ConfigurationType)'=='Driver' or '$(ConfigurationType)'=='DynamicLibrary'" />
+  </ItemGroup>
+  <ItemGroup>
+    <PkgGen Include="vchiq.pkg.xml" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="device.c" />
+    <ClCompile Include="driver.c" />
+    <ClCompile Include="file.c" />
+    <ClCompile Include="init.c" />
+    <ClCompile Include="interrupt.c" />
+    <ClCompile Include="ioctl.c" />
+    <ClCompile Include="memory.c" />
+    <ClCompile Include="slots.c" />
+    <ClCompile Include="trace.c" />
+    <ClCompile Include="transfer.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="device.h" />
+    <ClInclude Include="driver.h" />
+    <ClInclude Include="file.h" />
+    <ClInclude Include="init.h" />
+    <ClInclude Include="interrupt.h" />
+    <ClInclude Include="ioctl.h" />
+    <ClInclude Include="memory.h" />
+    <ClInclude Include="precomp.h" />
+    <ClInclude Include="slots.h" />
+    <ClInclude Include="slotscommon.h" />
+    <ClInclude Include="trace.h" />
+    <ClInclude Include="transfer.h" />
+    <ClInclude Include="vchiq.h" />
+    <ClInclude Include="vchiq_2835.h" />
+    <ClInclude Include="vchiq_cfg.h" />
+    <ClInclude Include="vchiq_common.h" />
+    <ClInclude Include="vchiq_core.h" />
+    <ClInclude Include="vchiq_if.h" />
+    <ClInclude Include="vchiq_ioctl.h" />
+    <ClInclude Include="vchiq_pagelist.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="License.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" />
+  </ItemGroup>
+  <ItemGroup>
+    <Inf Include="vchiq.inf" />
+  </ItemGroup>
+  <ItemGroup>
+    <Xml Include="vchiq.pkg.xml" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\userland\interface\vchiq_arm\vchiq_arm_kern.vcxproj">
+      <Project>{9db72b9a-642b-4b27-a118-91deebf5a073}</Project>
+    </ProjectReference>
+    <ProjectReference Include="..\userland\interface\vcos\generic\vcos_win32_kern_generic.vcxproj">
+      <Project>{824bae1c-53bc-4137-a07f-af6582316a7c}</Project>
+    </ProjectReference>
+    <ProjectReference Include="..\userland\interface\vcos\win32\vcos_win32_kern.vcxproj">
+      <Project>{2df1927e-bbd9-40fd-9658-88c9fb1c9340}</Project>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

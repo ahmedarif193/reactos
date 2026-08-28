@@ -1,0 +1,70 @@
+;
+; Copyright (c) Microsoft Corporation.  All rights reserved.  
+;
+; Module Name:
+;
+;     rpiq.inf
+;
+; Abstract:
+;
+;     INF for rpiq driver
+;
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=System
+ClassGuid={4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider=%ProviderString%
+CatalogFile=rpiq.cat
+PnpLockdown=1
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[SourceDisksNames]
+3426=windows cd
+
+[SourceDisksFiles]
+rpiq.sys = 3426
+
+;*****************************************
+; Install Section
+;*****************************************
+
+[Manufacturer]
+%MSFT%=Standard,NT$ARCH$
+
+[Standard.NT$ARCH$]
+%rpiq.DeviceDesc%=rpiq_Device, ACPI\BCM2849  ; RPIQ Acpi entry
+%rpiq.DeviceDesc%=rpiq_Device, ACPI\RPIQ  ; RPIQ Acpi entry
+
+[rpiq_Device.NT]
+CopyFiles=Drivers_Dir
+
+[Drivers_Dir]
+rpiq.sys
+
+;-------------- Service installation
+[rpiq_Device.NT.Services]
+AddService = rpiq,%SPSVCINST_ASSOCSERVICE%, rpiq_Service_Inst
+
+; -------------- rpiq driver install sections
+[rpiq_Service_Inst]
+DisplayName    = %rpiq.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 0               ; SERVICE_BOOT_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\rpiq.sys
+LoadOrderGroup = Boot Bus Extender
+
+; -------------- string section
+[Strings]
+; localizable strings
+MSFT="Microsoft"
+ProviderString="MS-IOT"
+rpiq.DeviceDesc = "RPIQ Driver"
+rpiq.SVCDESC = "RPIQ Service"
+
+; non-localizable strings
+SPSVCINST_ASSOCSERVICE= 0x00000002
+

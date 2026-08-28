@@ -126,6 +126,12 @@ Used Version: git commit 5e01b36
 License: BSD-3-Clause (https://spdx.org/licenses/BSD-3-Clause.html)
 URL: https://github.com/virtio-win/kvm-guest-drivers-windows/tree/03ca1696b9474d62b90fda5be06d91c8c34f6413/NetKVM/NDIS5
 
+Title: Raspberry Pi Windows drivers
+Path: drivers/platform/rpi3winsync
+Used Version: git commit 88ee238c9debecce810d208cac1e5f36add3d2a1
+License: MIT (https://spdx.org/licenses/MIT.html)
+URL: https://github.com/raspberrypi/windows-drivers
+
 Title: Microsoft CDROM Storage Class Driver
 Path: drivers/storage/class/cdrom
 Used Version: git commit 96eb96d

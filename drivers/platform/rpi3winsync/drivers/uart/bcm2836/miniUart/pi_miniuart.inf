@@ -1,0 +1,92 @@
+;/*++
+;
+;Copyright (c) Microsoft Corporation.  All rights reserved.
+;
+;   THIS CODE AND INFORMATION IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY
+;   KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+;   IMPLIED WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR
+;   PURPOSE.
+;
+;Module Name:
+;
+; pi_miniuart.inx
+;
+;Abstract:
+;    INF file for the BCM283x Mini UART driver (derived from WDF serial driver sample)
+;
+;--*/
+
+[version]
+Signature="$WINDOWS NT$"
+Class=Ports
+ClassGuid={4D36E978-E325-11CE-BFC1-08002BE10318}
+CatalogFile=pi_miniuart.cat
+Provider=%ProviderString%
+PnpLockdown=1
+
+; ================= Device Install section =====================
+
+[ControlFlags]
+ExcludeFromSelect=*
+
+[Manufacturer]
+%MSFT%=MSFT,NT$ARCH$
+
+[SourceDisksFiles]
+pi_miniuart.sys  = 1
+
+[SourceDisksNames]
+1=%DISK_NAME%,
+
+[DestinationDirs]
+DefaultDestDir  = 12
+
+; For XP and later
+[MSFT.NT$ARCH$]
+; DisplayName           Section           DeviceId
+; -----------           -------           --------
+%Serial.DevDesc%=       Serial_Inst,      ACPI\BCM2836	; BCM283x Mini UART
+
+[Serial_Inst.NT]
+CopyFiles=Serial.CopyFiles
+
+[Serial.CopyFiles]
+pi_miniuart.sys
+
+[Serial_Inst.NT.Services]
+AddService=Serial,0x00000002,Serial_Service 
+
+[Serial_Service]
+DisplayName    = %Serial.SVCDESC%                            
+ServiceType    = 1                  ; SERVICE_KERNEL_DRIVER
+StartType      = 3                  ; SERVICE_DEMAND_START
+ErrorControl   = 1                  ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\pi_miniuart.sys
+
+[Serial_Inst.NT.HW]
+Addreg=Serial_Inst.NT.HW.AddReg
+
+[Serial_Inst.NT.HW.AddReg]
+;
+; By default, WDF device is protected with SDDL_DEVOBJ_SYS_ALL_ADM_ALL which means
+; only operating system and administrators can access the COM1 device. Let's change
+; it to allow built-in users to have read/write access to it. Please refer to WDK section 
+; "SDDL for Device Objects" for detailed description on this.
+; 
+HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;BU)"
+;
+; apply FILE_DEVICE_SECURE_OPEN to the whole devnode: Use same security checks on relative opens
+;
+HKR,,DeviceCharacteristics,0x10001,0x100
+HKR,,SerialSkipExternalNaming,0x10001,0x1
+HKR,,RxFIFO,0x10001,0x8
+HKR,,TxFIFO,0x10001,0x8
+HKR,,Share System Interrupt,0x10001,0x1
+
+[Strings]
+ProviderString="MS-IOT"
+MSFT = "Microsoft"
+Serial.SVCDESC = "BCM283x Mini UART Serial Driver"
+Serial.DevDesc = "BCM283x Mini UART Serial Device"
+DISK_NAME = "BCM283x Mini UART Serial Driver Installation Disk #1"
+

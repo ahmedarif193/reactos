@@ -1,0 +1,79 @@
+;/*++
+;
+;Copyright (c) Microsoft Corporation.  All rights reserved.
+;
+;Module Name:
+;    bcmauxspi.inf
+;
+;Abstract:
+;    INF file for installing the Driver Frameworks bcmauxspi Driver
+;
+;Installation Notes: 
+;    Using Devcon: Type "devcon update bcmauxspi.inf ACPI\BCMSPI1" to install
+;
+;--*/
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=System
+ClassGuid={4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider=%ProviderString%
+DriverVer=02/11/2015,10.0.10016.0
+CatalogFile=bcmauxspi.cat
+PnpLockdown=1
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+; ================= Class section =====================
+
+[SourceDisksNames]
+1 = %DiskId1%,,,""
+
+[SourceDisksFiles]
+bcmauxspi.sys  = 1,,
+
+;*****************************************
+; bcmauxspi  Install Section
+;*****************************************
+
+[Manufacturer]
+%ProviderString%=Standard,NT$ARCH$
+
+; Decorated model section take precedence over undecorated 
+; ones on XP and later.
+[Standard.NT$ARCH$]
+%bcmauxspi.DeviceDesc%=bcmauxspi_Device,ACPI\BCM2839,ACPI\BCMSPI1
+
+[bcmauxspi_Device.NT]
+CopyFiles=Drivers_Dir
+
+[Drivers_Dir]
+bcmauxspi.sys
+
+;-------------- Service installation
+[bcmauxspi_Device.NT.Services]
+AddService = bcmauxspi,%SPSVCINST_ASSOCSERVICE%, bcmauxspi_Service_Inst
+
+; -------------- bcmauxspi driver install sections
+[bcmauxspi_Service_Inst]
+DisplayName    = %bcmauxspi.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START 
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\bcmauxspi.sys
+LoadOrderGroup = Extended Base
+Dependencies   = SpbCx
+AddReg         = bcmauxspi_Service_AddReg
+
+[bcmauxspi_Service_AddReg]
+HKR, "Parameters", "ForceEnable", %REG_DWORD%, 1
+
+[Strings]
+REG_DWORD             = 0x00010001
+SPSVCINST_ASSOCSERVICE= 0x00000002
+ProviderString = "MS-IOT"
+DiskId1 = "Broadcom AUXSPI Controller Installation Disk #1"
+bcmauxspi.DeviceDesc = "Broadcom AUXSPI Controller"
+bcmauxspi.SVCDESC = "Broadcom AUXSPI Controller Driver"
+
