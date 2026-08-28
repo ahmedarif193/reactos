@@ -141,5 +141,6 @@ UefiInitializeFileSystemSupport(_In_ EFI_HANDLE ImageHandle,
 BOOLEAN
 UefiHttpBootDownload(
     _In_ PCSTR Url,
+    _In_opt_ PCSTR StaticIp,
     _Out_opt_ PBOOLEAN Cancelled);
 #endif

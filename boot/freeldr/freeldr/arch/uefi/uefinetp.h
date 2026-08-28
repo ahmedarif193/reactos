@@ -64,3 +64,8 @@ UefiLattePandaFixMac(
 BOOLEAN
 UefiDhcpAcquire(
     _Inout_ PUEFI_NET_CONTEXT Context);
+
+BOOLEAN
+UefiStaticIpConfigure(
+    _Inout_ PUEFI_NET_CONTEXT Context,
+    _In_ PCSTR Configuration);

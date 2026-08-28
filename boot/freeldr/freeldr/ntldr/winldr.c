@@ -1518,8 +1518,9 @@ LoadAndBootWindows(
     if (ArgValue && *ArgValue)
     {
         BOOLEAN Cancelled;
+        PCSTR StaticIp = GetArgumentValue(Argc, Argv, "HttpBootIp");
 
-        if (!UefiHttpBootDownload(ArgValue, &Cancelled))
+        if (!UefiHttpBootDownload(ArgValue, StaticIp, &Cancelled))
         {
             PCSTR RamDiskPathEnd = strrchr(BootPath, ')');
 

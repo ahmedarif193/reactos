@@ -15,7 +15,7 @@ endif()
 # DEFAULT_OS names the entry to boot unattended, or is empty to keep the menu's
 # own selection (the flashed image keeps whichever entry the harness chose).
 #
-function(freeldr_ini_add_http_boot SOURCE OUTPUT URL DEFAULT_OS)
+function(freeldr_ini_add_http_boot SOURCE OUTPUT URL STATIC_IP DEFAULT_OS)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${SOURCE}")
     file(READ "${SOURCE}" _contents)
 
@@ -35,8 +35,12 @@ function(freeldr_ini_add_http_boot SOURCE OUTPUT URL DEFAULT_OS)
     string(REPLACE "${_os_marker}"
                    "HttpBoot=\"ReactOS HTTP Boot - Debug\""
                    _contents "${_contents}")
+    set(_http_boot_entry "[HttpBoot]\nBootType=Windows2003\nSystemPath=ramdisk(0)\\reactos\nOptions=/KERNEL=ntkrnlmp.exe /DEBUG /DEBUGPORT=COM1 /BAUDRATE=115200 /SOS /FASTDETECT /MININT /LOADSYMBOLS\nHttpBootUrl=${URL}")
+    if(STATIC_IP)
+        string(APPEND _http_boot_entry "\nHttpBootIp=${STATIC_IP}")
+    endif()
     string(REPLACE "${_boot_marker}"
-                   "[HttpBoot]\nBootType=Windows2003\nSystemPath=ramdisk(0)\\reactos\nOptions=/KERNEL=ntkrnlmp.exe /DEBUG /DEBUGPORT=COM1 /BAUDRATE=115200 /SOS /FASTDETECT /MININT /LOADSYMBOLS\nHttpBootUrl=${URL}"
+                   "${_http_boot_entry}"
                    _contents "${_contents}")
     file(WRITE "${OUTPUT}" "${_contents}")
 endfunction()
@@ -73,17 +77,21 @@ if(FREELDR_HTTP_BOOT)
     endif()
     set(FREELDR_HTTP_BOOT_URL "${_freeldr_http_boot_default_url}" CACHE STRING
         "URL FreeLdr downloads the live image from")
+    set(FREELDR_HTTP_BOOT_IP "10.42.0.172/24,10.42.0.1" CACHE STRING
+        "Static IPv4 address/prefix[,gateway] for FreeLdr HTTP boot; empty uses DHCP")
 
     set(FREELDR_BOOTCD_INI "${CMAKE_CURRENT_BINARY_DIR}/bootdata/bootcd_httpboot.ini")
     freeldr_ini_add_http_boot("${REACTOS_SOURCE_DIR}/boot/bootdata/bootcd.ini"
                               "${FREELDR_BOOTCD_INI}"
                               "${FREELDR_HTTP_BOOT_URL}"
+                              "${FREELDR_HTTP_BOOT_IP}"
                               "HttpBoot")
 
     set(FREELDR_PREINSTALL_INI "${CMAKE_CURRENT_BINARY_DIR}/bootdata/preinstall_httpboot.ini")
     freeldr_ini_add_http_boot("${REACTOS_SOURCE_DIR}/boot/bootdata/preinstall.ini"
                               "${FREELDR_PREINSTALL_INI}"
                               "${FREELDR_HTTP_BOOT_URL}"
+                              "${FREELDR_HTTP_BOOT_IP}"
                               "HttpBoot")
 endif()
 

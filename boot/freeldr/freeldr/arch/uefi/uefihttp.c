@@ -760,6 +760,7 @@ Cleanup:
 BOOLEAN
 UefiHttpBootDownload(
     _In_ PCSTR Url,
+    _In_opt_ PCSTR StaticIp,
     _Out_opt_ PBOOLEAN Cancelled)
 {
     EFI_STATUS Status;
@@ -772,7 +773,7 @@ UefiHttpBootDownload(
     UINTN ContentLength;
     UINTN FailedAttempts = 0;
     PVOID RamDisk;
-    BOOLEAN LeaseAcquired = FALSE;
+    BOOLEAN AddressConfigured = FALSE;
     BOOLEAN ForcedRebind = FALSE;
 
     if (Cancelled)
@@ -799,14 +800,22 @@ UefiHttpBootDownload(
     {
         BOOLEAN MediaPresent;
 
-        if (!LeaseAcquired)
+        if (!AddressConfigured)
         {
             /*
-             * Do not gate DHCP on SNP's MediaPresent bit. Some UNDI drivers
-             * report it stale until EDK2's DHCP media check reinitializes SNP.
-             * Retrying DHCP here waits indefinitely for both link and a lease.
+             * Do not gate address configuration on SNP's MediaPresent bit.
+             * Some UNDI drivers report it stale until EDK2 initializes the
+             * network stack. Retrying here waits for both link and an address.
              */
-            if (!UefiDhcpAcquire(&Context))
+            if (StaticIp && *StaticIp)
+            {
+                if (!UefiStaticIpConfigure(&Context, StaticIp))
+                {
+                    TRACE("UEFI HttpBoot: static IPv4 configuration failed\n");
+                    return FALSE;
+                }
+            }
+            else if (!UefiDhcpAcquire(&Context))
             {
                 if (++FailedAttempts >= HTTP_BOOT_MAX_FAILURES)
                 {
@@ -817,7 +826,7 @@ UefiHttpBootDownload(
                     UEFI_NETWORK_RETRY_DELAY_US);
                 continue;
             }
-            LeaseAcquired = TRUE;
+            AddressConfigured = TRUE;
         }
 
         if (!UefiHttpOpen(&Context, &Session))
@@ -849,7 +858,7 @@ UefiHttpBootDownload(
                 if (UefiNetForceRebindHttp(&Context))
                 {
                     UefiHttpEnsureOwnProvider(&Context);
-                    LeaseAcquired = FALSE;
+                    AddressConfigured = FALSE;
                 }
             }
             if (++FailedAttempts >= HTTP_BOOT_MAX_FAILURES)
@@ -859,7 +868,7 @@ UefiHttpBootDownload(
             }
             MediaPresent = UefiNetMediaPresent(&Context);
             if (!MediaPresent)
-                LeaseAcquired = FALSE;
+                AddressConfigured = FALSE;
             GlobalSystemTable->BootServices->Stall(
                 UEFI_NETWORK_RETRY_DELAY_US);
             continue;
@@ -890,7 +899,7 @@ UefiHttpBootDownload(
             }
             MediaPresent = UefiNetMediaPresent(&Context);
             if (!MediaPresent)
-                LeaseAcquired = FALSE;
+                AddressConfigured = FALSE;
             GlobalSystemTable->BootServices->Stall(
                 UEFI_NETWORK_RETRY_DELAY_US);
             continue;
