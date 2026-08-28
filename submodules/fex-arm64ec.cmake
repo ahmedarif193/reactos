@@ -57,6 +57,11 @@ set(FEX_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/fex-arm64ec-build")
 set(FEX_DLL_SOURCE "${FEX_BINARY_DIR}/Bin/libarm64ecfex.dll")
 set(FEX_DLL_DEST   "${CMAKE_CURRENT_BINARY_DIR}/arm64ecfex.dll")
 set(FEX_DLL_SYMBOLS "${REACTOS_BINARY_DIR}/symbols/arm64ecfex.dll")
+set(FEX_ARM64EC_INCLUDE_DIR
+    "${REACTOS_CLANG_LLVM_MINGW_ROOT}/aarch64-w64-mingw32/include")
+set(FEX_ARM64EC_CXX_INCLUDE_DIR "${FEX_ARM64EC_INCLUDE_DIR}/c++/v1")
+set(FEX_ARM64EC_LIBRARY_DIR
+    "${REACTOS_CLANG_LLVM_MINGW_ROOT}/aarch64-w64-mingw32/lib")
 
 ExternalProject_Add(fex-arm64ec-build
     SOURCE_DIR "${FEX_SOURCE_DIR}"
@@ -68,22 +73,27 @@ ExternalProject_Add(fex-arm64ec-build
         -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
         # FEX's ARM64EC Module.cpp needs CONTEXT with AMD64 fields (Rax etc).
         # Only the arm64ec-w64-mingw32 target provides this hybrid CONTEXT.
-        # The ARM64EC target is selected explicitly to expose hybrid CONTEXT.
+        # Let the target-prefixed compiler wrappers select it. Passing the
+        # target explicitly bypasses llvm-mingw's mapped C/C++ include paths
+        # when Clang 23 scans module dependencies.
         -DCMAKE_C_COMPILER=${REACTOS_CLANG_LLVM_MINGW_ROOT}/bin/arm64ec-w64-mingw32-clang
         -DCMAKE_CXX_COMPILER=${REACTOS_CLANG_LLVM_MINGW_ROOT}/bin/arm64ec-w64-mingw32-clang++
         -DCMAKE_ASM_COMPILER=${REACTOS_CLANG_LLVM_MINGW_ROOT}/bin/arm64ec-w64-mingw32-clang
-        -DCMAKE_C_COMPILER_TARGET=arm64ec-w64-mingw32
-        -DCMAKE_CXX_COMPILER_TARGET=arm64ec-w64-mingw32
-        -DCMAKE_ASM_COMPILER_TARGET=arm64ec-w64-mingw32
         -DCMAKE_AR=${CMAKE_AR}
         -DCMAKE_DLLTOOL=${CMAKE_DLLTOOL}
         -DCMAKE_LINKER=${CMAKE_LINKER}
         -DCMAKE_RC_COMPILER=${CMAKE_RC_COMPILER}
         -DCMAKE_SYSROOT=${CMAKE_SYSROOT}
         -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY
-        -DCMAKE_C_FLAGS=-D__REACTOS__
-        -DCMAKE_CXX_FLAGS=-D__REACTOS__
+        # clang-scan-deps does not retain the target-prefixed wrapper's mapped
+        # include paths in Clang 23, so provide the llvm-mingw target headers.
+        "-DCMAKE_C_FLAGS=-D__REACTOS__ -isystem${FEX_ARM64EC_INCLUDE_DIR}"
+        "-DCMAKE_CXX_FLAGS=-D__REACTOS__ -isystem${FEX_ARM64EC_CXX_INCLUDE_DIR} -isystem${FEX_ARM64EC_INCLUDE_DIR}"
         -DCMAKE_ASM_FLAGS=-D__REACTOS__
+        # llvm-mingw shares ARM64 headers and import libraries with ARM64EC,
+        # but Clang 23's ARM64EC driver no longer maps the library directory
+        # when FEX links with -nostdlib.
+        "-DCMAKE_SHARED_LINKER_FLAGS=-L${FEX_ARM64EC_LIBRARY_DIR}"
         # This is a Windows ARM64EC cross-build. FEX's default native tuning
         # probes Linux /proc/cpuinfo from the build host, which is not useful.
         -DTUNE_CPU=none

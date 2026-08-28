@@ -61,7 +61,7 @@ list(APPEND SOURCE
 add_library(libtiff MODULE ${SOURCE} ${CMAKE_CURRENT_BINARY_DIR}/libtiff.def)
 
 set_module_type(libtiff win32dll)
-target_link_libraries(libtiff zlib getopt ${PSEH_LIB})
+target_link_libraries(libtiff zlib getopt crtmath ${PSEH_LIB})
 add_importlibs(libtiff libjpeg user32 msvcrt kernel32 ntdll)
 add_pch(libtiff precomp.h SOURCE)
 add_cd_file(TARGET libtiff DESTINATION reactos/system32 FOR all)
