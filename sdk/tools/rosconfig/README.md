@@ -115,7 +115,7 @@ profiles/
   apply.cmake
   amd64/{profiles.def,generic.cmake,lattepandamu.cmake}
   i386/{profiles.def,generic.cmake}
-  arm64/{profiles.def,generic.cmake,rpi5.cmake}
+  arm64/{profiles.def,generic.cmake,rpi3.cmake,rpi5.cmake}
 ```
 
 Each `<variant>.cmake` declares `ROSCONFIG_PROFILE_PACKAGES`, a list of CMake
@@ -125,15 +125,16 @@ normal ReactOS subdirectories have been configured, so an incomplete or
 incompatible profile fails during configuration instead of producing a
 partially populated image.
 
-Every supported architecture has a `generic` default profile. ARM64
-additionally provides `rpi5`, which enables the firmware/device-tree payload
-and builds the RP1 Ethernet, CYW43455 Wi-Fi, and Raspberry Pi 5 VC4 display
-drivers. AMD64 additionally provides `lattepandamu`. Both board profiles expose
-the HTTP boot option. Enabling it from the `Boot options` menu builds the
-FreeLdr HTTP path, makes it the zero-timeout default boot entry, and packages
-the board's external UEFI network stack. Both board profiles leave this choice
-to the user. Generic builds exclude
-these board-only payloads and targets.
+Every supported architecture has a `generic` default profile. ARM64 provides
+`rpi3`, which enables the native SD/SDIO, DWC2, SMSC95xx Ethernet, and
+CYW43xx Wi-Fi path together with the pinned `rpi3winsync` Windows 10 BSP
+snapshot, and `rpi5`, which enables the RP1 Ethernet, CYW43455 Wi-Fi, and
+Raspberry Pi 5 VC4 display drivers. AMD64 additionally provides
+`lattepandamu`. The Pi 5 and LattePanda Mu profiles expose the HTTP boot
+option. Enabling it from the `Boot options` menu builds the FreeLdr HTTP path,
+makes it the zero-timeout default boot entry, and packages the board's external
+UEFI network stack. Generic builds exclude these board-only payloads and
+targets.
 
 Profile-owned config values are enforced when the profile is applied, so an
 existing tree can switch profiles without retaining stale values from the old
@@ -144,7 +145,7 @@ architecture's `generic` profile.
 Modules are independent switches, not profiles. The `Modules` submenu exposes
 the existing RosApps, RosTests, and wallpapers build options. Enabling
 `ENABLE_ROSTESTS` builds and packages the test suite and `rosautotest` runner,
-and can be combined with either the generic or Raspberry Pi 5 profile.
+and can be combined with any target profile.
 
 ## Option definitions
 

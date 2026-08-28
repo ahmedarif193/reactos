@@ -234,11 +234,11 @@ cmake_dependent_option(ENABLE_KMTEST_BOOT_RUN
 
 cmake_dependent_option(ENABLE_RP1GEM_BENCHMARK
                        "Whether to run the single-stream RP1 GEM benchmark from ARM64 HTTP boot." OFF
-                       "ARCH STREQUAL arm64 AND CMAKE_BUILD_TYPE STREQUAL Debug AND RPI_SUPPORT AND FREELDR_HTTP_BOOT" OFF)
+                       "ARCH STREQUAL arm64 AND CMAKE_BUILD_TYPE STREQUAL Debug AND RPI5_SUPPORT AND FREELDR_HTTP_BOOT" OFF)
 
 cmake_dependent_option(ENABLE_RPI5_WIFI_BOOT_RUN
                        "Whether to run the RPi5 Wi-Fi scan automatically at boot." OFF
-                       "ARCH STREQUAL arm64 AND CMAKE_BUILD_TYPE STREQUAL Debug AND RPI_SUPPORT" OFF)
+                       "ARCH STREQUAL arm64 AND CMAKE_BUILD_TYPE STREQUAL Debug AND RPI5_SUPPORT" OFF)
 
 set(PREINSTALL_BOOT_TEST_NETWORK_CONFIG "" CACHE FILEPATH
     "Optional private network configuration to include in the preinstall test image")
