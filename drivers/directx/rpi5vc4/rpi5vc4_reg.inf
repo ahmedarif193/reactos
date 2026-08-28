@@ -22,6 +22,9 @@ HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Video","Service",0x00000000,"rpi
 ; the runtime still has nothing to load.
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","UserModeDriverName",0x00010000,"rpi5vc4um.dll","rpi5vc4um.dll","rpi5vc4um.dll","rpi5vc4um.dll"
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","UserModeDriverNameWow",0x00010000,"rpi5vc4um.dll","rpi5vc4um.dll","rpi5vc4um.dll","rpi5vc4um.dll"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","OpenGLDriverName",0x00000000,"rpi5vc4ogl.dll"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","OpenGLVersion",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","OpenGLFlags",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Device0","InstalledDisplayDrivers",0x00010000,"framebuf"
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Device0","DefaultSettings.VRefresh",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Device0","DefaultSettings.BitsPerPel",0x00010001,0x00000020
