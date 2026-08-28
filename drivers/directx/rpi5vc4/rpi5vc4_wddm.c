@@ -379,6 +379,18 @@ Rpi5Vc4ProcessPendingLocked(
         }
 
 CompleteHead:
+        if ((Head->IsV3dJob &&
+             (Head->V3dFlags & RPI5VC4_DMA_V3D_FLUSH_CACHE)) ||
+            Head->IsCsdJob)
+        {
+            if (!Rpi5V3dCleanCaches(DeviceExtension))
+            {
+                DPRINT1("RPI5VC4: V3D cache clean timed out for fence=%lu\n",
+                        Head->Fence);
+                Rpi5V3dResetCore(DeviceExtension);
+                goto AbortPipeline;
+            }
+        }
         if (Head->Fence != 0)
         {
             /* Report on the node dxgkrnl SUBMITTED on (vidsch retires
@@ -934,6 +946,12 @@ Rpi5Vc4ParseDmaStream(
             Packet->Op == RPI5VC4_DMA_OP_TFU_JOB ||
             Packet->Op == RPI5VC4_DMA_OP_CSD_JOB)
         {
+            if (Packet->Op == RPI5VC4_DMA_OP_V3D_JOB &&
+                (Packet->V3dJob.Flags &
+                 ~RPI5VC4_DMA_V3D_FLUSH_CACHE) != 0)
+            {
+                return FALSE;
+            }
             if (FoundJob)
                 return FALSE;
             FoundJob = TRUE;
@@ -2376,20 +2394,19 @@ Rpi5Vc4DdiSubmitCommand(
                 Entry->Qma = Job.V3dJob.Qma;
                 Entry->Qms = Job.V3dJob.Qms;
                 Entry->Qts = Job.V3dJob.Qts;
+                Entry->V3dFlags = Job.V3dJob.Flags;
             }
         }
         DeviceExtension->NodeQueue[QueueIndex].Count++;
     }
 
     Completed = Rpi5Vc4ProcessPendingLocked(DeviceExtension, &NeedPoll, &PipelineAborted);
-
     KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
 
     if (Completed)
         KeInsertQueueDpc(&DeviceExtension->FenceDpc, NULL, NULL);
     if (NeedPoll)
         Rpi5Vc4ArmV3dPollTimer(DeviceExtension);
-
     if (PipelineAborted)
         return STATUS_DEVICE_HARDWARE_ERROR;
 
@@ -2930,6 +2947,12 @@ Rpi5Vc4QueueEscapeJob(
     if (!DeviceExtension->V3dReady)
         return STATUS_DEVICE_NOT_READY;
 
+    if (Packet->Op == RPI5VC4_DMA_OP_V3D_JOB &&
+        (Packet->V3dJob.Flags & ~RPI5VC4_DMA_V3D_FLUSH_CACHE) != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     if (Packet->Op == RPI5VC4_DMA_OP_TFU_JOB && (Packet->TfuJob.Regs[1] < RPI5VC4_V3D_SLAB_GPUVA || Packet->TfuJob.Regs[6] < RPI5VC4_V3D_SLAB_GPUVA))
         return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
 
@@ -2978,18 +3001,17 @@ Rpi5Vc4QueueEscapeJob(
         Entry->Qma = Packet->V3dJob.Qma;
         Entry->Qms = Packet->V3dJob.Qms;
         Entry->Qts = Packet->V3dJob.Qts;
+        Entry->V3dFlags = Packet->V3dJob.Flags;
     }
     DeviceExtension->NodeQueue[QueueIndex].Count++;
 
     Completed = Rpi5Vc4ProcessPendingLocked(DeviceExtension, &NeedPoll, &PipelineAborted);
-
     KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
 
     if (Completed)
         KeInsertQueueDpc(&DeviceExtension->FenceDpc, NULL, NULL);
     if (NeedPoll)
         Rpi5Vc4ArmV3dPollTimer(DeviceExtension);
-
     if (PipelineAborted)
         return STATUS_DEVICE_HARDWARE_ERROR;
 

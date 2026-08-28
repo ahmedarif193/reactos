@@ -231,7 +231,11 @@ Rpi5V3dSubmitRender(
     _In_ ULONG RclEnd,
     _In_ BOOLEAN InvalidateCaches);
 
-/* Consume (read + W1C) the latched bin/render completion bits. */
+BOOLEAN
+Rpi5V3dCleanCaches(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension);
+
+/* Consume the pipeline-drained completion latches and service OOM. */
 VOID
 Rpi5V3dConsumeCompletions(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
