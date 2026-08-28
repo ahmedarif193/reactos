@@ -209,10 +209,3 @@ NTSTATUS NTAPI HalRegisterErrataCallbacks(PVOID Callbacks)
     UNREFERENCED_PARAMETER(Callbacks);
     return STATUS_NOT_SUPPORTED;
 }
-
-/*
- * Hyper-V KD COM-port-in-use data export. Mirrors the existing
- * KdComPortInUse (PUCHAR) data export in halarm64.c; Win11 forwards this name
- * to ntoskrnl.KdHvComPortInUse as DATA. NT type is BOOLEAN; no ReactOS consumer.
- */
-BOOLEAN KdHvComPortInUse = FALSE;

@@ -14,8 +14,6 @@
 
 /* GLOBALS ********************************************************************/
 
-PUCHAR KdComPortInUse;
-
 IDTUsageFlags HalpIDTUsageFlags[256];
 IDTUsage HalpIDTUsage[256];
 

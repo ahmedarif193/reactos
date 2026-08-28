@@ -40,6 +40,8 @@ ANSI_STRING KdpLogFileName = RTL_CONSTANT_STRING("\\SystemRoot\\debug.log");
 static KSPIN_LOCK KdpSerialSpinLock;
 ULONG  SerialPortNumber = DEFAULT_DEBUG_PORT;
 CPPORT SerialPortInfo   = {0, DEFAULT_DEBUG_BAUD_RATE, 0};
+PUCHAR KdComPortInUse;
+PUCHAR KdHvComPortInUse;
 
 #define KdpScreenLineLengthDefault 80
 #define KdpScreenLineLengthMaximum 2048
