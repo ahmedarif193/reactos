@@ -18,6 +18,41 @@ const GUID KSCATEGORY_WDMAUD   = {0x3E227E76L, 0x690D, 0x11D2, {0x81, 0x61, 0x00
 IO_WORKITEM_ROUTINE WdmAudInitWorkerRoutine;
 IO_TIMER_ROUTINE WdmAudTimerRoutine;
 
+static
+BOOLEAN
+WdmAudAcquireInitialization(
+    IN PWDMAUD_DEVICE_EXTENSION DeviceExtension)
+{
+    KIRQL OldIrql;
+    BOOLEAN Acquired = FALSE;
+
+    KeAcquireSpinLock(&DeviceExtension->Lock, &OldIrql);
+    if (!DeviceExtension->WorkItemActive)
+    {
+        DeviceExtension->WorkItemActive = 1;
+        KeClearEvent(&DeviceExtension->InitializationCompletionEvent);
+        Acquired = TRUE;
+    }
+    KeReleaseSpinLock(&DeviceExtension->Lock, OldIrql);
+
+    return Acquired;
+}
+
+static
+VOID
+WdmAudReleaseInitialization(
+    IN PWDMAUD_DEVICE_EXTENSION DeviceExtension)
+{
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&DeviceExtension->Lock, &OldIrql);
+    DeviceExtension->WorkItemActive = 0;
+    KeSetEvent(&DeviceExtension->InitializationCompletionEvent,
+               IO_NO_INCREMENT,
+               FALSE);
+    KeReleaseSpinLock(&DeviceExtension->Lock, OldIrql);
+}
+
 VOID
 NTAPI
 WdmAudInitWorkerRoutine(
@@ -67,11 +102,7 @@ WdmAudInitWorkerRoutine(
     }
 
 done:
-    /* signal completion */
-    KeSetEvent(&DeviceExtension->InitializationCompletionEvent, IO_NO_INCREMENT, FALSE);
-
-    /* reset work item status indicator */
-    InterlockedDecrement((volatile long *)&DeviceExtension->WorkItemActive);
+    WdmAudReleaseInitialization(DeviceExtension);
 }
 
 VOID
@@ -85,7 +116,7 @@ WdmAudTimerRoutine(
     /* get device extension */
     DeviceExtension = (PWDMAUD_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
 
-    if (InterlockedCompareExchange((volatile long *)&DeviceExtension->WorkItemActive, 1, 0) == 0)
+    if (WdmAudAcquireInitialization(DeviceExtension))
     {
         /* queue work item */
         IoQueueWorkItem(DeviceExtension->WorkItem, WdmAudInitWorkerRoutine, DelayedWorkQueue, (PVOID)DeviceExtension);
@@ -232,8 +263,18 @@ WdmAudCreate(
 
     if (DeviceExtension->FileObject == NULL)
     {
-        /* initialize */
-        WdmAudInitWorkerRoutine(DeviceObject, NULL);
+        if (WdmAudAcquireInitialization(DeviceExtension))
+        {
+            WdmAudInitWorkerRoutine(DeviceObject, NULL);
+        }
+        else
+        {
+            KeWaitForSingleObject(&DeviceExtension->InitializationCompletionEvent,
+                                  Executive,
+                                  KernelMode,
+                                  FALSE,
+                                  NULL);
+        }
     }
 
 
