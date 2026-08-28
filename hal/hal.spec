@@ -102,7 +102,7 @@
 @ stdcall -arch=i386,x86_64 IoReadPartitionTable(ptr long long ptr) HalpReadPartitionTable
 @ stdcall -arch=i386,x86_64 IoSetPartitionInformation(ptr long long long) HalpSetPartitionInformation
 @ stdcall -arch=i386,x86_64 IoWritePartitionTable(ptr long long long ptr) HalpWritePartitionTable
-@ extern KdComPortInUse
+@ extern -constant KdComPortInUse ntoskrnl.KdComPortInUse
 @ fastcall -arch=i386,arm KeAcquireInStackQueuedSpinLock(ptr ptr)
 @ fastcall -arch=i386,arm KeAcquireInStackQueuedSpinLockRaiseToSynch(ptr ptr)
 @ fastcall -arch=i386,arm KeAcquireQueuedSpinLock(ptr)
@@ -209,7 +209,7 @@
 @ stdcall -arch=arm64 HalWheaHandleSea(ptr)
 @ stdcall -arch=arm64 HalWheaHandleSei(ptr)
 @ stdcall -arch=arm64 HalWheaUpdateCmciPolicy(ptr)
-@ extern -arch=arm64 KdHvComPortInUse
+@ extern -constant KdHvComPortInUse ntoskrnl.KdHvComPortInUse
 
 ; Internal kernel entry points needed by early ARM64 HAL code.
 @ stdcall -arch=arm64 KxSaveFloatingPointState(ptr) ntoskrnl.KxSaveFloatingPointState

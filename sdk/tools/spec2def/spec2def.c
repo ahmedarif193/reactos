@@ -89,6 +89,7 @@ enum
     FL_RET64 = 32,
     FL_REGISTER = 64,
     FL_IMPSYM = 128,
+    FL_CONSTANT = 256,
 };
 
 enum
@@ -871,14 +872,17 @@ OutputLine_def(FILE *fileDest, EXPORT *pexp)
         fprintf(fileDest, " NONAME");
     }
 
-    /* Either PRIVATE or DATA */
+    /* Either PRIVATE, DATA, or an import-library-only CONSTANT */
     if (pexp->uFlags & FL_PRIVATE)
     {
         fprintf(fileDest, " PRIVATE");
     }
     else if (pexp->nCallingConvention == CC_EXTERN)
     {
-        fprintf(fileDest, " DATA");
+        if (gbImportLib && (pexp->uFlags & FL_CONSTANT))
+            fprintf(fileDest, " CONSTANT");
+        else
+            fprintf(fileDest, " DATA");
     }
 
     fprintf(fileDest, "\n");
@@ -1286,6 +1290,10 @@ ParseFile(char* pcStart, FILE *fileDest, unsigned *cExports)
             else if (CompareToken(pc, "-register"))
             {
                 exp.uFlags |= FL_REGISTER;
+            }
+            else if (CompareToken(pc, "-constant"))
+            {
+                exp.uFlags |= FL_CONSTANT;
             }
             else if (CompareToken(pc, "-import"))
             {

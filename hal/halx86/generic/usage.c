@@ -13,7 +13,6 @@
 
 BOOLEAN HalpGetInfoFromACPI;
 BOOLEAN HalpNMIDumpFlag;
-PUCHAR KdComPortInUse;
 PADDRESS_USAGE HalpAddressUsageList;
 IDTUsageFlags HalpIDTUsageFlags[MAXIMUM_IDTVECTOR+1];
 IDTUsage HalpIDTUsage[MAXIMUM_IDTVECTOR+1];

@@ -2023,10 +2023,9 @@
 @ extern -arch=arm64 ExRawInputManagerObjectType
 @ extern ExTimerObjectType
 @ extern IoCompletionObjectType
-# Keep the kernel export on the live HAL-owned cell instead of a private stub.
-@ extern -arch=arm64 KdComPortInUse hal.KdComPortInUse
+@ extern KdComPortInUse
 @ extern -arch=arm64 KdEventLoggingEnabled
-@ extern -arch=arm64 KdHvComPortInUse
+@ extern KdHvComPortInUse
 @ extern -arch=arm64 KeDynamicPartitioningSupported
 @ extern -arch=arm64 MmBadPointer
 @ extern -arch=arm64 NtBuildGUID
