@@ -2171,7 +2171,7 @@ VOID
 DxgkVidMmUnmapAllocationCpu(
     _In_ PDXGKVMM_ALLOCATION Allocation);
 
-VOID
+BOOLEAN
 DxgkVidMmUnmapAllocationUser(
     _In_ PDXGKVMM_ALLOCATION Allocation);
 

@@ -175,6 +175,16 @@ typedef struct _DXGKVMM_RESOURCE
  */
 #define DXGKVMM_ALLOCATION_MAGIC  0xD3DAAC10UL
 
+typedef struct _DXGKVMM_USER_MAPPING
+{
+    LIST_ENTRY          Entry;
+    PVOID               MapBase;
+    PVOID               Address;
+    PMDL                Mdl;
+    PEPROCESS           Process;
+    ULONG               LockCount;
+} DXGKVMM_USER_MAPPING, *PDXGKVMM_USER_MAPPING;
+
 typedef struct _DXGKVMM_ALLOCATION
 {
     /* Magic word for use-after-free detection (debug builds). */
@@ -343,17 +353,9 @@ typedef struct _DXGKVMM_ALLOCATION
      */
     PVOID               CpuAddress;
 
-    /*
-     * User-mode mapping state for D3DKMTLock/D3DKMTUnlock.
-     * UserModeMapBase is the exact base returned by MmMapLockedPagesSpecifyCache.
-     * UserModeAddress is the caller-visible VA after applying any allocation
-     * offset within the first mapped page.
-     */
-    PVOID               UserModeMapBase;
-    PVOID               UserModeAddress;
-    PMDL                UserModeMdl;
-    PEPROCESS           UserModeProcess;
-    ULONG               UserModeLockCount;
+    /* One D3DKMTLock mapping per process, shared by nested locks there. */
+    LIST_ENTRY          UserModeMappingList;
+    volatile LONG       UserModeMappingCount;
     KMUTEX              UserModeLock;
 
     /* Miniport-side allocation handle (from DxgkDdiCreateAllocation). */
@@ -568,7 +570,7 @@ VOID
 DxgkVidMmUnmapAllocationCpu(
     _In_ PDXGKVMM_ALLOCATION Allocation);
 
-VOID
+BOOLEAN
 DxgkVidMmUnmapAllocationUser(
     _In_ PDXGKVMM_ALLOCATION Allocation);
 
