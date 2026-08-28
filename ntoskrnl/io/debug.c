@@ -61,7 +61,10 @@ PipDumpCmResourceDescriptor(
             break;
 
         case CmResourceTypeDma:
-            DPRINT1("[%p:%X:%X] DMA: Channel %X Port %X\n", Descriptor, Descriptor->ShareDisposition, Descriptor->Flags, Descriptor->u.Dma.Channel, Descriptor->u.Dma.Port);
+            if (Descriptor->Flags & CM_RESOURCE_DMA_V3)
+                DPRINT1("[%p:%X:%X] DMA v3: Channel %X Request %X Width %u\n", Descriptor, Descriptor->ShareDisposition, Descriptor->Flags, Descriptor->u.DmaV3.Channel, Descriptor->u.DmaV3.RequestLine, Descriptor->u.DmaV3.TransferWidth);
+            else
+                DPRINT1("[%p:%X:%X] DMA: Channel %X Port %X\n", Descriptor, Descriptor->ShareDisposition, Descriptor->Flags, Descriptor->u.Dma.Channel, Descriptor->u.Dma.Port);
             break;
 
         case CmResourceTypeDeviceSpecific:
@@ -218,7 +221,10 @@ PipDumpIoResourceDescriptor(
             break;
 
         case CmResourceTypeDma:
-            DPRINT1("[%p:%X:%X] DMA: Min %X Max %X\n", Descriptor, Descriptor->Option, Descriptor->ShareDisposition, Descriptor->u.Dma.MinimumChannel, Descriptor->u.Dma.MaximumChannel);
+            if (Descriptor->Flags & CM_RESOURCE_DMA_V3)
+                DPRINT1("[%p:%X:%X] DMA v3: Channel %X Request %X Width %u\n", Descriptor, Descriptor->Option, Descriptor->ShareDisposition, Descriptor->u.DmaV3.Channel, Descriptor->u.DmaV3.RequestLine, Descriptor->u.DmaV3.TransferWidth);
+            else
+                DPRINT1("[%p:%X:%X] DMA: Min %X Max %X\n", Descriptor, Descriptor->Option, Descriptor->ShareDisposition, Descriptor->u.Dma.MinimumChannel, Descriptor->u.Dma.MaximumChannel);
             break;
 
         case CmResourceTypeBusNumber:

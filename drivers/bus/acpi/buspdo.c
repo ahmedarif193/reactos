@@ -708,6 +708,11 @@ BuspCountRequirementsFromAcpiResources(
                 break;
             }
 
+            case ACPI_RESOURCE_TYPE_FIXED_DMA:
+                if (resource->Data.FixedDma.Width <= ACPI_DMA_WIDTH256)
+                    NumberOfResources++;
+                break;
+
             case ACPI_RESOURCE_TYPE_ADDRESS16:
             {
                 ACPI_RESOURCE_ADDRESS16 *addr16 = &resource->Data.Address16;
@@ -993,6 +998,24 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->u.Dma.MaximumChannel = dma->Channels[i];
                     RequirementDescriptor++;
                 }
+                break;
+            }
+
+            case ACPI_RESOURCE_TYPE_FIXED_DMA:
+            {
+                ACPI_RESOURCE_FIXED_DMA *dma = &resource->Data.FixedDma;
+
+                if (dma->Width > ACPI_DMA_WIDTH256)
+                    break;
+
+                RequirementDescriptor->Option = 0;
+                RequirementDescriptor->Type = CmResourceTypeDma;
+                RequirementDescriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+                RequirementDescriptor->Flags = CM_RESOURCE_DMA_V3;
+                RequirementDescriptor->u.DmaV3.RequestLine = dma->RequestLines;
+                RequirementDescriptor->u.DmaV3.Channel = dma->Channels;
+                RequirementDescriptor->u.DmaV3.TransferWidth = 8u << dma->Width;
+                RequirementDescriptor++;
                 break;
             }
 
@@ -1655,6 +1678,23 @@ BuspCreateResourceListFromAcpiResources(
                     ResourceDescriptor->u.Dma.Channel = dma->Channels[i];
                     ResourceDescriptor++;
                 }
+                break;
+            }
+
+            case ACPI_RESOURCE_TYPE_FIXED_DMA:
+            {
+                ACPI_RESOURCE_FIXED_DMA *dma = &resource->Data.FixedDma;
+
+                if (dma->Width > ACPI_DMA_WIDTH256)
+                    break;
+
+                ResourceDescriptor->Type = CmResourceTypeDma;
+                ResourceDescriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+                ResourceDescriptor->Flags = CM_RESOURCE_DMA_V3;
+                ResourceDescriptor->u.DmaV3.Channel = dma->Channels;
+                ResourceDescriptor->u.DmaV3.RequestLine = dma->RequestLines;
+                ResourceDescriptor->u.DmaV3.TransferWidth = 8u << dma->Width;
+                ResourceDescriptor++;
                 break;
             }
 

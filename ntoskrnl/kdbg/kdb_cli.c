@@ -6109,7 +6109,10 @@ static VOID KdbpPrintCmResourceDescriptor(_In_ ULONG Index, _In_ const CM_PARTIA
             KdbpPrint("%s vector %lu level %lu affinity 0x%Ix\n", Descriptor->Flags & CM_RESOURCE_INTERRUPT_MESSAGE ? "message" : "line", Descriptor->u.Interrupt.Vector, Descriptor->u.Interrupt.Level, Descriptor->u.Interrupt.Affinity);
             break;
         case CmResourceTypeDma:
-            KdbpPrint("DMA channel %lu port %lu\n", Descriptor->u.Dma.Channel, Descriptor->u.Dma.Port);
+            if (Descriptor->Flags & CM_RESOURCE_DMA_V3)
+                KdbpPrint("DMA v3 channel %lu request %lu width %u\n", Descriptor->u.DmaV3.Channel, Descriptor->u.DmaV3.RequestLine, Descriptor->u.DmaV3.TransferWidth);
+            else
+                KdbpPrint("DMA channel %lu port %lu\n", Descriptor->u.Dma.Channel, Descriptor->u.Dma.Port);
             break;
         case CmResourceTypeBusNumber:
             Start = Descriptor->u.BusNumber.Start;
