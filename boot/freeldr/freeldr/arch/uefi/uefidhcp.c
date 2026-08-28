@@ -84,7 +84,12 @@ UefiSetIp4Data(
             return EFI_SUCCESS;
 
         if (Status == EFI_NOT_READY)
-            return UefiWaitForIp4Data(Ip4Config, DataType);
+        {
+            Status = UefiWaitForIp4Data(Ip4Config, DataType);
+            if (EFI_ERROR(Status))
+                return Status;
+            continue;
+        }
 
         if (Status != EFI_ACCESS_DENIED)
             return Status;
@@ -93,6 +98,108 @@ UefiSetIp4Data(
     }
 
     return Status;
+}
+
+static BOOLEAN
+UefiParseIpv4Address(
+    _Inout_ PCSTR *Text,
+    _Out_ EFI_IPv4_ADDRESS *Address)
+{
+    PCSTR Cursor = *Text;
+    ULONG Component;
+    ULONG Index;
+
+    for (Index = 0; Index < RTL_NUMBER_OF(Address->Addr); Index++)
+    {
+        if (*Cursor < '0' || *Cursor > '9')
+            return FALSE;
+
+        Component = 0;
+        do
+        {
+            Component = Component * 10 + (*Cursor++ - '0');
+            if (Component > 255)
+                return FALSE;
+        } while (*Cursor >= '0' && *Cursor <= '9');
+
+        Address->Addr[Index] = (UINT8)Component;
+        if (Index + 1 < RTL_NUMBER_OF(Address->Addr))
+        {
+            if (*Cursor++ != '.')
+                return FALSE;
+        }
+    }
+
+    *Text = Cursor;
+    return TRUE;
+}
+
+static BOOLEAN
+UefiParseStaticIpConfiguration(
+    _In_ PCSTR Configuration,
+    _Out_ PUEFI_NET_CONTEXT Context)
+{
+    EFI_IPv4_ADDRESS LocalAddress;
+    EFI_IPv4_ADDRESS SubnetMask;
+    EFI_IPv4_ADDRESS Gateway;
+    PCSTR Cursor = Configuration;
+    ULONG PrefixLength = 24;
+    ULONG Index;
+
+    RtlZeroMemory(&LocalAddress, sizeof(LocalAddress));
+    RtlZeroMemory(&SubnetMask, sizeof(SubnetMask));
+    RtlZeroMemory(&Gateway, sizeof(Gateway));
+
+    if (!UefiParseIpv4Address(&Cursor, &LocalAddress))
+        return FALSE;
+
+    if (*Cursor == '/')
+    {
+        Cursor++;
+        if (*Cursor < '0' || *Cursor > '9')
+            return FALSE;
+
+        PrefixLength = 0;
+        do
+        {
+            PrefixLength = PrefixLength * 10 + (*Cursor++ - '0');
+            if (PrefixLength > 32)
+                return FALSE;
+        } while (*Cursor >= '0' && *Cursor <= '9');
+    }
+
+    if (*Cursor == ',')
+    {
+        Cursor++;
+        if (!UefiParseIpv4Address(&Cursor, &Gateway))
+            return FALSE;
+    }
+
+    if (*Cursor != '\0' ||
+        UefiIpv4IsZero(&LocalAddress) ||
+        LocalAddress.Addr[0] >= 224)
+    {
+        return FALSE;
+    }
+
+    for (Index = 0; Index < RTL_NUMBER_OF(SubnetMask.Addr); Index++)
+    {
+        if (PrefixLength >= 8)
+        {
+            SubnetMask.Addr[Index] = 0xff;
+            PrefixLength -= 8;
+        }
+        else if (PrefixLength != 0)
+        {
+            SubnetMask.Addr[Index] = (UINT8)(0xff << (8 - PrefixLength));
+            PrefixLength = 0;
+        }
+    }
+
+    RtlCopyMemory(&Context->LocalAddress, &LocalAddress, sizeof(LocalAddress));
+    RtlCopyMemory(&Context->SubnetMask, &SubnetMask, sizeof(SubnetMask));
+    RtlCopyMemory(&Context->Gateway, &Gateway, sizeof(Gateway));
+    return TRUE;
 }
 
 static EFI_STATUS
@@ -354,4 +461,91 @@ UefiDhcpAcquire(
 Cleanup:
     UefiDhcpClose(&Session);
     return Success;
+}
+
+BOOLEAN
+UefiStaticIpConfigure(
+    _Inout_ PUEFI_NET_CONTEXT Context,
+    _In_ PCSTR Configuration)
+{
+    EFI_STATUS Status;
+    EFI_IP4_CONFIG2_PROTOCOL *Ip4Config = NULL;
+    EFI_IP4_CONFIG2_MANUAL_ADDRESS ManualAddress;
+
+    if (!Configuration ||
+        !UefiParseStaticIpConfiguration(Configuration, Context))
+    {
+        TRACE("UEFI HttpBoot: invalid static IPv4 configuration '%s'\n",
+              Configuration ? Configuration : "(null)");
+        return FALSE;
+    }
+
+    Status = UefiConfigureIp4(Context, FALSE);
+    if (EFI_ERROR(Status))
+    {
+        TRACE("UEFI HttpBoot: cannot select static IP4 policy (Status %llx)\n",
+              (unsigned long long)Status);
+        return FALSE;
+    }
+
+    Status = UefiNetGetProtocol(
+        Context->ControllerHandle,
+        &EfiIp4Config2Guid,
+        (VOID **)&Ip4Config,
+        NULL);
+    if (EFI_ERROR(Status) || !Ip4Config)
+        return FALSE;
+
+    RtlZeroMemory(&ManualAddress, sizeof(ManualAddress));
+    RtlCopyMemory(
+        &ManualAddress.Address,
+        &Context->LocalAddress,
+        sizeof(ManualAddress.Address));
+    RtlCopyMemory(
+        &ManualAddress.SubnetMask,
+        &Context->SubnetMask,
+        sizeof(ManualAddress.SubnetMask));
+    Status = UefiSetIp4Data(
+        Ip4Config,
+        Ip4Config2DataTypeManualAddress,
+        sizeof(ManualAddress),
+        &ManualAddress);
+    if (EFI_ERROR(Status))
+    {
+        TRACE("UEFI HttpBoot: cannot set static IPv4 address (Status %llx)\n",
+              (unsigned long long)Status);
+        return FALSE;
+    }
+
+    Status = UefiWaitForIp4Data(
+        Ip4Config, Ip4Config2DataTypeManualAddress);
+    if (EFI_ERROR(Status))
+    {
+        TRACE("UEFI HttpBoot: static IPv4 address is not ready (Status %llx)\n",
+              (unsigned long long)Status);
+        return FALSE;
+    }
+
+    Status = UefiConfigureIp4(Context, TRUE);
+    if (EFI_ERROR(Status))
+    {
+        TRACE("UEFI HttpBoot: cannot set static IPv4 gateway (Status %llx)\n",
+              (unsigned long long)Status);
+        return FALSE;
+    }
+
+    TRACE("UEFI HttpBoot: static IP=%u.%u.%u.%u mask=%u.%u.%u.%u gateway=%u.%u.%u.%u\n",
+          Context->LocalAddress.Addr[0],
+          Context->LocalAddress.Addr[1],
+          Context->LocalAddress.Addr[2],
+          Context->LocalAddress.Addr[3],
+          Context->SubnetMask.Addr[0],
+          Context->SubnetMask.Addr[1],
+          Context->SubnetMask.Addr[2],
+          Context->SubnetMask.Addr[3],
+          Context->Gateway.Addr[0],
+          Context->Gateway.Addr[1],
+          Context->Gateway.Addr[2],
+          Context->Gateway.Addr[3]);
+    return TRUE;
 }
