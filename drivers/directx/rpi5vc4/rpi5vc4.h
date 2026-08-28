@@ -261,6 +261,7 @@ typedef struct _RPI5VC4_DMA_MAPPING
     PHYSICAL_ADDRESS PhysicalAddress;
     PVOID            VirtualAddress;
     ULONG            Size;
+    ULONGLONG        Sequence;
 } RPI5VC4_DMA_MAPPING, *PRPI5VC4_DMA_MAPPING;
 
 struct _RPI5VC4_DEVICE_EXTENSION
@@ -381,6 +382,7 @@ struct _RPI5VC4_DEVICE_EXTENSION
     KSPIN_LOCK DmaLock;
     RPI5VC4_DMA_MAPPING DmaMappings[RPI5VC4_DMA_MAPPING_COUNT];
     ULONG DmaMappingNext;
+    ULONGLONG DmaMappingSequence;
     LONG V3dKickPrints;
     /* One in-order queue per GPU node; the engines run in parallel. */
     struct
