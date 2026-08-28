@@ -896,6 +896,9 @@ NtGdiSetDIBitsToDeviceInternal(
                           NULL,
                           pMaskSurf ? ROP4_MASK : ROP4_FROM_INDEX(R3_OPINDEX_SRCCOPY));
 
+    if (bResult && pMaskSurf == NULL)
+        IntCompositionCommitOpenGLFrame(pSurf, &rcDest);
+
     /* Cleanup EXLATEOBJ */
     EXLATEOBJ_vCleanup(&exlo);
 

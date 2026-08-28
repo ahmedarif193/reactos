@@ -9,6 +9,8 @@
 #include <windows.h>
 #include <reactos/dwmframe.h>
 
+#include "dxsurface.h"
+
 DWORD_PTR NTAPI NtUserCallOneParam(DWORD_PTR Param, DWORD Routine);
 
 #define DWM_BG_COLOR  0x003A6EA5u
@@ -26,7 +28,8 @@ typedef struct _DWM_SURFACE
     ULONG  LastSeenFrame;
     BOOL   Used;
 } DWM_SURFACE;
-static DWM_SURFACE g_views[DWM_MAX_WINDOWS];
+#define DWM_VIEW_CACHE_SIZE (DWM_MAX_WINDOWS * 2)
+static DWM_SURFACE g_views[DWM_VIEW_CACHE_SIZE];
 static ULONG g_frameSeq;
 
 static void
@@ -41,38 +44,37 @@ static const BYTE *
 DwmGetSurfaceView(const DWM_WIN *w)
 {
     DWM_SURFACE *slot = NULL;
+    DWM_SURFACE *sameIdOldest = NULL;
     DWM_OPEN_SURFACE req;
     ULONG i;
 
-    for (i = 0; i < DWM_MAX_WINDOWS; i++)
+    for (i = 0; i < DWM_VIEW_CACHE_SIZE; i++)
     {
-        if (g_views[i].Used && g_views[i].Id == w->SurfaceId)
+        if (g_views[i].Used && g_views[i].Id == w->SurfaceId &&
+            g_views[i].Generation == w->Generation)
         {
             slot = &g_views[i];
             break;
         }
+        if (!g_views[i].Used && slot == NULL)
+            slot = &g_views[i];
+        else if (g_views[i].Used && g_views[i].Id == w->SurfaceId &&
+                 (sameIdOldest == NULL ||
+                  g_views[i].LastSeenFrame < sameIdOldest->LastSeenFrame))
+            sameIdOldest = &g_views[i];
     }
-    if (slot != NULL && slot->Generation == w->Generation)
+    if (slot != NULL && slot->Used)
     {
         slot->LastSeenFrame = g_frameSeq;
         return slot->View;
     }
-    if (slot != NULL)
-        DwmDropView(slot);
 
     if (slot == NULL)
-    {
-        for (i = 0; i < DWM_MAX_WINDOWS; i++)
-        {
-            if (!g_views[i].Used)
-            {
-                slot = &g_views[i];
-                break;
-            }
-        }
-    }
+        slot = sameIdOldest;
     if (slot == NULL)
         return NULL;
+    if (slot->Used)
+        DwmDropView(slot);
 
     req.SurfaceId = w->SurfaceId;
     req.Generation = w->Generation;
@@ -99,7 +101,7 @@ static void
 DwmSweepViews(void)
 {
     ULONG i;
-    for (i = 0; i < DWM_MAX_WINDOWS; i++)
+    for (i = 0; i < DWM_VIEW_CACHE_SIZE; i++)
     {
         if (g_views[i].Used && (g_frameSeq - g_views[i].LastSeenFrame) > 256)
             DwmDropView(&g_views[i]);
@@ -388,12 +390,27 @@ DwmComposeLoop(void)
                 for (i = 0; i < hdr->Count; i++)
                 {
                     const BYTE *pix = DwmGetSurfaceView(&wins[i]);
+                    const BYTE *dxpix;
                     if (pix == NULL)
                     {
                         completeFrame = FALSE;
                         break;
                     }
                     DwmBlitWindow((ULONG *)g_compBits, g_W, pl, pt, pr, pb, pix, &wins[i]);
+
+                    dxpix = DwmDxGetSurfaceSnapshot(&wins[i]);
+                    if (dxpix != NULL)
+                    {
+                        DWM_WIN client = wins[i];
+
+                        client.x += wins[i].DxClientX;
+                        client.y += wins[i].DxClientY;
+                        client.cx = (LONG)wins[i].DxWidth;
+                        client.cy = (LONG)wins[i].DxHeight;
+                        client.Stride = wins[i].DxPitch;
+                        DwmBlitWindow((ULONG *)g_compBits, g_W,
+                                      pl, pt, pr, pb, dxpix, &client);
+                    }
                 }
 
                 /* Never replace the last complete scan-out with a partially
@@ -412,6 +429,11 @@ DwmComposeLoop(void)
                     BOOL endResult = NtUserCallOneParam(0, DWM_ROUTINE_PRESENTSYNC) != 0;
                     if (!bltResult || !endResult)
                         forceFull = TRUE;
+                    else
+                    {
+                        for (i = 0; i < hdr->Count; ++i)
+                            DwmDxAcknowledgeSurface(&wins[i]);
+                    }
                 }
                 else
                 {
@@ -422,7 +444,10 @@ DwmComposeLoop(void)
 
         g_frameSeq++;
         if ((g_frameSeq & 255) == 0)
+        {
             DwmSweepViews();
+            DwmDxSweepSurfaces(g_frameSeq);
+        }
 
         if (hVblank != NULL)
             WaitForSingleObject(hVblank, 50);

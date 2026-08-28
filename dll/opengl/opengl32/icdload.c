@@ -8,6 +8,7 @@
 #include "opengl32.h"
 
 #include <d3dkmthk.h>
+#include <reactos/dwmframe.h>
 #include <winreg.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(opengl32);
@@ -54,6 +55,307 @@ static DHGLRC APIENTRY wglGetDHGLRC(struct wgl_context* context)
     return context->dhglrc;
 }
 
+typedef HRESULT (WINAPI *PFN_DWM_DX_GET_WINDOW_SHARED_SURFACE)(
+    HWND, LUID, HMONITOR, DWORD, UINT *, HANDLE *, ULONGLONG *);
+typedef HRESULT (WINAPI *PFN_DWM_DX_UPDATE_WINDOW_SHARED_SURFACE)(
+    HWND, ULONGLONG, DWORD, HMONITOR, const RECT *);
+
+static INIT_ONCE DwmDxInitOnce = INIT_ONCE_STATIC_INIT;
+static PFN_DWM_DX_GET_WINDOW_SHARED_SURFACE DwmDxGetWindowSharedSurface;
+static PFN_DWM_DX_UPDATE_WINDOW_SHARED_SURFACE DwmDxUpdateWindowSharedSurface;
+static LONG DwmDxPresentFailureLogged;
+
+typedef struct _WGL_ASYNC_PRESENT
+{
+    HWND Window;
+    HANDLE CompletionEvent;
+    ULONGLONG UpdateId;
+    DWORD Flags;
+    RECT UpdateRect;
+} WGL_ASYNC_PRESENT, *PWGL_ASYNC_PRESENT;
+
+static VOID
+IntReportDwmDxPresentFailure(const char *Stage, HRESULT Result)
+{
+    if (InterlockedCompareExchange(&DwmDxPresentFailureLogged, 1, 0) == 0)
+    {
+        ERR("DWM shared-surface present failed at %s, hr=%#lx, error=%lu\n",
+            Stage, (ULONG)Result, GetLastError());
+    }
+}
+
+static BOOL
+IntPublishDwmDxPresent(PWGL_ASYNC_PRESENT Present)
+{
+    HRESULT Result;
+    DWORD WaitResult;
+
+    WaitResult = WaitForSingleObject(Present->CompletionEvent, INFINITE);
+    if (WaitResult != WAIT_OBJECT_0)
+    {
+        IntReportDwmDxPresentFailure("completion_wait",
+                                     HRESULT_FROM_WIN32(GetLastError()));
+        Result = E_FAIL;
+    }
+    else
+    {
+        Result = DwmDxUpdateWindowSharedSurface(Present->Window,
+                                                 Present->UpdateId,
+                                                 Present->Flags,
+                                                 NULL,
+                                                 &Present->UpdateRect);
+        if (FAILED(Result))
+            IntReportDwmDxPresentFailure("publish", Result);
+    }
+
+    if (FAILED(Result))
+    {
+        (void)DwmDxUpdateWindowSharedSurface(Present->Window,
+                                             Present->UpdateId,
+                                             DWM_DX_UPDATE_CANCEL,
+                                             NULL,
+                                             NULL);
+    }
+    CloseHandle(Present->CompletionEvent);
+    HeapFree(GetProcessHeap(), 0, Present);
+    return SUCCEEDED(Result);
+}
+
+static DWORD WINAPI
+IntPublishDwmDxPresentWorker(PVOID Parameter)
+{
+    (void)IntPublishDwmDxPresent((PWGL_ASYNC_PRESENT)Parameter);
+    return 0;
+}
+
+static NTSTATUS
+IntOpenAdapterFromWindowMonitor(
+    HDC hdc,
+    D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME *OpenAdapter)
+{
+    MONITORINFOEXW MonitorInfo;
+    HMONITOR Monitor;
+    HWND Window;
+
+    Window = WindowFromDC(hdc);
+    if (Window == NULL)
+        return STATUS_INVALID_HANDLE;
+
+    Monitor = MonitorFromWindow(Window, MONITOR_DEFAULTTONEAREST);
+    if (Monitor == NULL)
+        return STATUS_NOT_FOUND;
+
+    RtlZeroMemory(&MonitorInfo, sizeof(MonitorInfo));
+    MonitorInfo.cbSize = sizeof(MonitorInfo);
+    if (!GetMonitorInfoW(Monitor, (MONITORINFO *)&MonitorInfo) ||
+        MonitorInfo.szDevice[0] == UNICODE_NULL)
+    {
+        return STATUS_NOT_FOUND;
+    }
+
+    RtlZeroMemory(OpenAdapter, sizeof(*OpenAdapter));
+    lstrcpynW(OpenAdapter->DeviceName, MonitorInfo.szDevice,
+              ARRAYSIZE(OpenAdapter->DeviceName));
+    return D3DKMTOpenAdapterFromGdiDisplayName(OpenAdapter);
+}
+
+static VOID
+IntCloseAdapter(D3DKMT_HANDLE Adapter)
+{
+    D3DKMT_CLOSEADAPTER CloseAdapter;
+
+    if (Adapter == 0)
+        return;
+
+    RtlZeroMemory(&CloseAdapter, sizeof(CloseAdapter));
+    CloseAdapter.hAdapter = Adapter;
+    (void)D3DKMTCloseAdapter(&CloseAdapter);
+}
+
+static BOOL CALLBACK
+IntLoadDwmDxCallbacks(PINIT_ONCE InitOnce, PVOID Parameter, PVOID *Context)
+{
+    HMODULE Module;
+
+    UNREFERENCED_PARAMETER(InitOnce);
+    UNREFERENCED_PARAMETER(Parameter);
+    UNREFERENCED_PARAMETER(Context);
+
+    Module = LoadLibraryW(L"dwmapi.dll");
+    if (Module == NULL)
+        return TRUE;
+
+    DwmDxGetWindowSharedSurface =
+        (PFN_DWM_DX_GET_WINDOW_SHARED_SURFACE)
+            GetProcAddress(Module, (LPCSTR)(ULONG_PTR)100);
+    DwmDxUpdateWindowSharedSurface =
+        (PFN_DWM_DX_UPDATE_WINDOW_SHARED_SURFACE)
+            GetProcAddress(Module, (LPCSTR)(ULONG_PTR)101);
+    return TRUE;
+}
+
+static VOID APIENTRY
+wglGetAdapterLuid(HDC hdc, LUID *AdapterLuid)
+{
+    D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME OpenDisplayAdapter;
+    D3DKMT_OPENADAPTERFROMHDC OpenAdapter;
+    NTSTATUS Status;
+
+    if (AdapterLuid == NULL)
+        return;
+    AdapterLuid->LowPart = 0;
+    AdapterLuid->HighPart = 0;
+    if (hdc == NULL)
+        return;
+
+    Status = IntOpenAdapterFromWindowMonitor(hdc, &OpenDisplayAdapter);
+    if (NT_SUCCESS(Status) && OpenDisplayAdapter.hAdapter != 0)
+    {
+        *AdapterLuid = OpenDisplayAdapter.AdapterLuid;
+        IntCloseAdapter(OpenDisplayAdapter.hAdapter);
+        return;
+    }
+
+    RtlZeroMemory(&OpenAdapter, sizeof(OpenAdapter));
+    OpenAdapter.hDc = hdc;
+    if (NT_SUCCESS(D3DKMTOpenAdapterFromHdc(&OpenAdapter)) &&
+        OpenAdapter.hAdapter != 0)
+    {
+        *AdapterLuid = OpenAdapter.AdapterLuid;
+        IntCloseAdapter(OpenAdapter.hAdapter);
+    }
+}
+
+static BOOL APIENTRY
+wglPresentBuffers(HDC hdc, WGL_PRESENTBUFFERS_CB *CallbackData)
+{
+    struct ICD_Data *IcdData;
+    PWGL_ASYNC_PRESENT AsyncPresent = NULL;
+    WGL_PRESENTBUFFERS PresentData;
+    HWND Window;
+    HANDLE SharedSurface = NULL;
+    ULONGLONG UpdateId = 0;
+    UINT Format = 0;
+    HRESULT Result;
+
+    if (hdc == NULL || CallbackData == NULL ||
+        (CallbackData->Version != 2 && CallbackData->Version != 3) ||
+        CallbackData->SyncType > 1)
+    {
+        return FALSE;
+    }
+
+    Window = WindowFromDC(hdc);
+    if (Window == NULL)
+        return FALSE;
+
+    (void)InitOnceExecuteOnce(&DwmDxInitOnce, IntLoadDwmDxCallbacks,
+                              NULL, NULL);
+    if (DwmDxGetWindowSharedSurface == NULL ||
+        DwmDxUpdateWindowSharedSurface == NULL)
+    {
+        IntReportDwmDxPresentFailure("load_callbacks", E_NOINTERFACE);
+        return FALSE;
+    }
+
+    Result = DwmDxGetWindowSharedSurface(Window,
+                                         CallbackData->AdapterLuid,
+                                         NULL,
+                                         CallbackData->SyncType,
+                                         &Format,
+                                         &SharedSurface,
+                                         &UpdateId);
+    if (Result == S_FALSE)
+        return TRUE; /* compositor intentionally dropped this immediate frame */
+    if (FAILED(Result))
+    {
+        IntReportDwmDxPresentFailure("get_surface", Result);
+        return FALSE;
+    }
+    if (SharedSurface == NULL || UpdateId == 0)
+    {
+        IntReportDwmDxPresentFailure("get_surface_contract", E_UNEXPECTED);
+        return FALSE;
+    }
+
+    IcdData = IntGetIcdData(hdc);
+    if (IcdData == NULL || IcdData->DrvPresentBuffers == NULL)
+    {
+        IntReportDwmDxPresentFailure("icd_callback", E_NOINTERFACE);
+        goto Cancel;
+    }
+
+    RtlZeroMemory(&PresentData, sizeof(PresentData));
+    PresentData.hSurface = SharedSurface;
+    PresentData.AdapterLuid = CallbackData->AdapterLuid;
+    PresentData.PresentToken = UpdateId;
+    PresentData.PrivateData = CallbackData->PrivateData;
+    PresentData.Version = CallbackData->Version;
+    if (CallbackData->Version >= 3)
+    {
+        AsyncPresent = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                                 sizeof(*AsyncPresent));
+        if (AsyncPresent == NULL)
+        {
+            IntReportDwmDxPresentFailure("completion_alloc", E_OUTOFMEMORY);
+            goto Cancel;
+        }
+        AsyncPresent->CompletionEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+        if (AsyncPresent->CompletionEvent == NULL)
+        {
+            IntReportDwmDxPresentFailure("completion_event",
+                                         HRESULT_FROM_WIN32(GetLastError()));
+            HeapFree(GetProcessHeap(), 0, AsyncPresent);
+            AsyncPresent = NULL;
+            goto Cancel;
+        }
+        AsyncPresent->Window = Window;
+        AsyncPresent->UpdateId = UpdateId;
+        AsyncPresent->Flags = CallbackData->SyncType;
+        AsyncPresent->UpdateRect = CallbackData->UpdateRect;
+        PresentData.CompletionEvent = AsyncPresent->CompletionEvent;
+    }
+    if (!IcdData->DrvPresentBuffers(hdc, &PresentData))
+    {
+        IntReportDwmDxPresentFailure("icd_present", E_FAIL);
+        goto Cancel;
+    }
+
+    if (AsyncPresent != NULL)
+    {
+        if (!QueueUserWorkItem(IntPublishDwmDxPresentWorker, AsyncPresent,
+                               WT_EXECUTELONGFUNCTION))
+        {
+            return IntPublishDwmDxPresent(AsyncPresent);
+        }
+        return TRUE;
+    }
+
+    Result = DwmDxUpdateWindowSharedSurface(Window,
+                                             UpdateId,
+                                             CallbackData->SyncType,
+                                             NULL,
+                                             &CallbackData->UpdateRect);
+    if (SUCCEEDED(Result))
+        return TRUE;
+
+    IntReportDwmDxPresentFailure("publish", Result);
+
+Cancel:
+    if (AsyncPresent != NULL)
+    {
+        if (AsyncPresent->CompletionEvent != NULL)
+            CloseHandle(AsyncPresent->CompletionEvent);
+        HeapFree(GetProcessHeap(), 0, AsyncPresent);
+    }
+    (void)DwmDxUpdateWindowSharedSurface(Window,
+                                         UpdateId,
+                                         DWM_DX_UPDATE_CANCEL,
+                                         NULL,
+                                         NULL);
+    return FALSE;
+}
+
 /*
  * WDDM display miniports publish their OpenGL ICD through the adapter's
  * software key.  Querying it through D3DKMT keeps the choice tied to the HDC
@@ -67,10 +369,11 @@ IntGetWddmIcdInfo(
     WCHAR DllName[MAX_PATH],
     DWORD *Flags)
 {
+    D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME OpenDisplayAdapter;
     D3DKMT_OPENADAPTERFROMHDC OpenAdapter;
     D3DKMT_QUERYADAPTERINFO QueryInfo;
     D3DKMT_OPENGLINFO OpenGlInfo;
-    D3DKMT_CLOSEADAPTER CloseAdapter;
+    D3DKMT_HANDLE Adapter = 0;
     NTSTATUS Status;
 
     if (!hdc || !DrvInfo || !DllName || !Flags)
@@ -79,20 +382,34 @@ IntGetWddmIcdInfo(
     memset(&OpenAdapter, 0, sizeof(OpenAdapter));
     OpenAdapter.hDc = hdc;
     Status = D3DKMTOpenAdapterFromHdc(&OpenAdapter);
-    if (!NT_SUCCESS(Status) || !OpenAdapter.hAdapter)
-        return FALSE;
+    if (NT_SUCCESS(Status) && OpenAdapter.hAdapter != 0)
+        Adapter = OpenAdapter.hAdapter;
 
     memset(&OpenGlInfo, 0, sizeof(OpenGlInfo));
     memset(&QueryInfo, 0, sizeof(QueryInfo));
-    QueryInfo.hAdapter = OpenAdapter.hAdapter;
+    QueryInfo.hAdapter = Adapter;
     QueryInfo.Type = KMTQAITYPE_UMOPENGLINFO;
     QueryInfo.pPrivateDriverData = &OpenGlInfo;
     QueryInfo.PrivateDriverDataSize = sizeof(OpenGlInfo);
-    Status = D3DKMTQueryAdapterInfo(&QueryInfo);
+    Status = Adapter != 0 ?
+        D3DKMTQueryAdapterInfo(&QueryInfo) : STATUS_INVALID_HANDLE;
 
-    memset(&CloseAdapter, 0, sizeof(CloseAdapter));
-    CloseAdapter.hAdapter = OpenAdapter.hAdapter;
-    D3DKMTCloseAdapter(&CloseAdapter);
+    IntCloseAdapter(Adapter);
+
+    /* A redirected window DC is backed by a DIB, not by the scan-out PDEV.
+     * Resolve that window's monitor when the HDC-selected adapter does not
+     * publish an ICD, preserving the normal HDC path for direct display DCs. */
+    if (!NT_SUCCESS(Status) || !OpenGlInfo.UmdOpenGlIcdFileName[0])
+    {
+        Status = IntOpenAdapterFromWindowMonitor(hdc, &OpenDisplayAdapter);
+        if (!NT_SUCCESS(Status) || OpenDisplayAdapter.hAdapter == 0)
+            return FALSE;
+
+        memset(&OpenGlInfo, 0, sizeof(OpenGlInfo));
+        QueryInfo.hAdapter = OpenDisplayAdapter.hAdapter;
+        Status = D3DKMTQueryAdapterInfo(&QueryInfo);
+        IntCloseAdapter(OpenDisplayAdapter.hAdapter);
+    }
 
     OpenGlInfo.UmdOpenGlIcdFileName[ARRAYSIZE(OpenGlInfo.UmdOpenGlIcdFileName) - 1] = UNICODE_NULL;
     if (!NT_SUCCESS(Status) || !OpenGlInfo.UmdOpenGlIcdFileName[0])
@@ -372,7 +689,10 @@ custom_end:
         PROC callbacks[] = {
             (PROC)wglSetCurrentValue,
             (PROC)wglGetCurrentValue,
-            (PROC)wglGetDHGLRC};
+            (PROC)wglGetDHGLRC,
+            NULL,
+            (PROC)wglPresentBuffers,
+            (PROC)wglGetAdapterLuid};
         DrvSetCallbackProcs(ARRAYSIZE(callbacks), callbacks);
     }
 
@@ -401,6 +721,8 @@ custom_end:
     DRV_LOAD(DrvShareLists);
     DRV_LOAD(DrvSwapBuffers);
     DRV_LOAD(DrvSwapLayerBuffers);
+    data->DrvPresentBuffers =
+        (void *)GetProcAddress(data->hModule, "DrvPresentBuffers");
 #undef DRV_LOAD
 
     /* Let's see if GDI should handle this instead of the ICD DLL */
