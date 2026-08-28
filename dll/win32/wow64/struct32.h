@@ -850,6 +850,7 @@ typedef struct
     ULONG CallbackId;
 } ALPC_CONTEXT_ATTR32, *PALPC_CONTEXT_ATTR32;
 
+#ifndef __REACTOS__
 typedef struct
 {
     ULONG Flags;
@@ -857,6 +858,7 @@ typedef struct
     ULONG ObjectType;
     ULONG DesiredAccess;
 } ALPC_HANDLE_ATTR32, *PALPC_HANDLE_ATTR32;
+#endif
 
 typedef struct
 {
