@@ -1404,7 +1404,12 @@ WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(SERIAL_INTERRUPT_CONTEXT,
 // even if only actually one BYTE (lower 8 bits) is needed to read or written
 // 
 
-__inline UCHAR SerialReadRegisterUChar(_In_ UCHAR* x)
+#ifndef __REACTOS__
+__inline
+#else
+static __inline
+#endif
+UCHAR SerialReadRegisterUChar(_In_ UCHAR* x)
 {
     volatile UCHAR uchReturnValue=0x00;
     volatile ULONG* pulReg=(volatile ULONG*)x;
@@ -1412,7 +1417,12 @@ __inline UCHAR SerialReadRegisterUChar(_In_ UCHAR* x)
     return uchReturnValue;
 }
 
-__inline VOID SerialWriteRegisterUChar(_In_ UCHAR* x, _In_ UCHAR y)
+#ifndef __REACTOS__
+__inline
+#else
+static __inline
+#endif
+VOID SerialWriteRegisterUChar(_In_ UCHAR* x, _In_ UCHAR y)
 {
     ULONG ulTemp=(ULONG)y;
     volatile ULONG* pulReg=(volatile ULONG*)x;
@@ -1427,7 +1437,7 @@ __inline VOID SerialWriteRegisterUChar(_In_ UCHAR* x, _In_ UCHAR y)
 // idle time delay, in microseconds
 //
 
-#define IDLETIMEµs  1000 
+#define IDLETIME_US  1000
 
 //
 // mini Uart register access macros for features not found in 16550 UART
@@ -1815,7 +1825,11 @@ extern SERIAL_FIRMWARE_DATA DriverDefaults;
 // to the address that the kernel debugger is using.
 //
 
+#ifndef __REACTOS__
 extern PUCHAR* KdComPortInUse;
+#else
+extern NTHALAPI PUCHAR KdComPortInUse;
+#endif
 
 
 typedef enum _SERIAL_MEM_COMPARES {
@@ -1830,4 +1844,3 @@ typedef struct   _SUPPORTED_BAUD_RATES {
     UINT32 BaudRate;
     ULONG Mask;
 } SUPPORTED_BAUD_RATES;
-

@@ -41,7 +41,10 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
 endif()
 
 target_link_libraries(pi_miniuart ntoskrnl_vista rtlver libcntpr ${PSEH_LIB})
-add_importlibs(pi_miniuart ntoskrnl hal wmilib)
+add_importlibs(pi_miniuart hal ntoskrnl wmilib)
 
 add_cd_file(TARGET pi_miniuart DESTINATION reactos/system32/drivers FOR all)
+
+add_driver_inf(pi_miniuart "${_rpi3winsync_root}/reactos-compat/miniuart/pi_miniuart.inf")
+
 set_target_properties(pi_miniuart PROPERTIES FOLDER "Drivers/Platform/Raspberry Pi 3")
