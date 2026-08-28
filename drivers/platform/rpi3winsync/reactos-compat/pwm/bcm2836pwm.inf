@@ -1,0 +1,36 @@
+[Version]
+Signature="$Windows NT$"
+Class=System
+ClassGuid={4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider=%ProviderString%
+
+[DestinationDirs]
+DefaultDestDir=12
+
+[Manufacturer]
+%MSFT%=Standard,NTarm64
+
+[Standard.NTarm64]
+%bcm2836pwm.DeviceDesc%=bcm2836pwm_Device,ACPI\BCM2844
+
+[bcm2836pwm_Device.NT]
+CopyFiles=Drivers_Dir
+
+[Drivers_Dir]
+bcm2836pwm.sys
+
+[bcm2836pwm_Device.NT.Services]
+AddService=bcm2836pwm,0x00000002,bcm2836pwm_Service
+
+[bcm2836pwm_Service]
+DisplayName=%bcm2836pwm.SvcDesc%
+ServiceType=1
+StartType=1
+ErrorControl=1
+ServiceBinary=%12%\bcm2836pwm.sys
+
+[Strings]
+ProviderString="MS-IOT"
+MSFT="Microsoft"
+bcm2836pwm.DeviceDesc="BCM2836 PWM Controller"
+bcm2836pwm.SvcDesc="BCM2836 PWM Controller Driver"

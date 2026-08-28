@@ -135,11 +135,13 @@ extern "C" {
 
 RTL_RUN_ONCE_INIT_FN  InitHandleFunction;
 
+#ifndef __REACTOS__
 struct timespec
 {
     time_t tv_sec;  // Seconds - >= 0
     long   tv_nsec; // Nanoseconds - [0, 999999999]
 };
+#endif
 
 #else
 
@@ -297,7 +299,11 @@ typedef struct {
    uint32_t flags;
 } VCOS_ATOMIC_FLAGS_T;
 
+#ifndef __REACTOS__
 WIN32DLL_VCOS_API int vcos_use_android_log;
+#else
+extern WIN32DLL_VCOS_API int vcos_use_android_log;
+#endif
 
 #if defined(VCOS_INLINE_BODIES)
 
@@ -446,7 +452,11 @@ VCOS_STATUS_T vcos_semaphore_post(VCOS_SEMAPHORE_T *sem) {
 
 WIN32DLL_VCOS_API VCOS_THREAD_T *vcos_dummy_thread_create(void);
 
+#ifndef __REACTOS__
 WIN32DLL_VCOS_API DWORD _vcos_thread_current_key;
+#else
+extern WIN32DLL_VCOS_API DWORD _vcos_thread_current_key;
+#endif
 
 WIN32DLL_VCOS_API uint64_t vcos_getmicrosecs64_internal(void);
 
@@ -814,6 +824,9 @@ VCOS_STATUS_T vcos_tls_create(VCOS_TLS_KEY_T *key)
 #ifdef WIN32_KERN
     UNREFERENCED_PARAMETER(key);
     vcos_assert(0);
+#ifdef __REACTOS__
+    return VCOS_ENOSYS;
+#endif
 #else
     *key = TlsAlloc();
     return VCOS_SUCCESS;

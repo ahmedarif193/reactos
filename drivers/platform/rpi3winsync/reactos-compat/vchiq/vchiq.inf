@@ -1,0 +1,40 @@
+[Version]
+Signature="$Windows NT$"
+Class=System
+ClassGuid={4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider=%ProviderString%
+
+[DestinationDirs]
+DefaultDestDir=12
+
+[Manufacturer]
+%MSFT%=Standard,NTarm64
+
+[Standard.NTarm64]
+%vchiq.DeviceDesc%=vchiq_Device,ACPI\BCM2835
+%vchiq.DeviceDesc%=vchiq_Device,ACPI\VCIQ
+
+[vchiq_Device.NT]
+CopyFiles=Vchiq_Files
+
+[Vchiq_Files]
+vchiq.sys
+vchiq_arm_kern.dll
+vcos_win32_kern.dll
+
+[vchiq_Device.NT.Services]
+AddService=vchiq,0x00000002,vchiq_Service
+
+[vchiq_Service]
+DisplayName=%vchiq.SvcDesc%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\vchiq.sys
+LoadOrderGroup=Extended Base
+
+[Strings]
+ProviderString="MS-IOT"
+MSFT="Microsoft"
+vchiq.DeviceDesc="VCHIQ Driver"
+vchiq.SvcDesc="VCHIQ Service"

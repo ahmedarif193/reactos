@@ -31,4 +31,7 @@ target_link_libraries(bcm2836pwm ntoskrnl_vista libcntpr ${PSEH_LIB})
 add_importlibs(bcm2836pwm ntoskrnl hal)
 
 add_cd_file(TARGET bcm2836pwm DESTINATION reactos/system32/drivers FOR all)
+
+add_driver_inf(bcm2836pwm "${_rpi3winsync_root}/reactos-compat/pwm/bcm2836pwm.inf")
+
 set_target_properties(bcm2836pwm PROPERTIES FOLDER "Drivers/Platform/Raspberry Pi 3")

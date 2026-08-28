@@ -25,7 +25,11 @@ SERIAL_FIRMWARE_DATA DriverDefaults;
 // This is exported from the kernel.  It is used to point
 // to the address that the kernel debugger is using.
 //
+#ifndef __REACTOS__
 extern PUCHAR* KdComPortInUse;
+#else
+extern NTHALAPI PUCHAR KdComPortInUse;
+#endif
 //
 // INIT - only needed during init and then can be disposed
 // PAGESRP0 - always paged / never locked
@@ -169,6 +173,5 @@ SerialEvtDriverContextCleanup(
     // Stop WPP Tracing
     WPP_CLEANUP( WdfDriverWdmGetDriverObject(Driver) );
 }
-
 
 
