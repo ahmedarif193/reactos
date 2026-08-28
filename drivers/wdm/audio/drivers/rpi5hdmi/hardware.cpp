@@ -16,8 +16,13 @@
 #define HDMI_CTS_0 0x0d4
 #define HDMI_CTS_1 0x0d8
 #define HDMI_SCHEDULER_CONTROL 0x0e8
+#define HDMI_MISC_CONTROL 0x114
+#define HDMI_DEEP_COLOR_CONFIG_1 0x18c
 #define HDMI_SCHEDULER_CONTROL_HDMI_ACTIVE (1u << 1)
 #define HDMI_SCHEDULER_CONTROL_MODE_HDMI (1u << 0)
+#define HDMI_MISC_CONTROL_PIXEL_REP_MASK 0x0fu
+#define HDMI_DEEP_COLOR_CONFIG_1_COLOR_DEPTH_MASK 0x0fu
+#define HDMI_COLOR_DEPTH_24BPP 4u
 
 #define HDMI_INFOFRAME_AUDIO_ENABLE (1u << 4)
 #define HDMI_INFOFRAME_RAM_ENABLE (1u << 16)
@@ -64,9 +69,20 @@
                                  (0x1cu << 7) | 0x1cu)
 #define RPI5_HDMI_MAI_SAMPLE_108MHZ_48KHZ (2250u << 8)
 #define RPI5_HDMI_ACR_N_48KHZ 6144u
-#define RPI5_HDMI_ACR_CTS_65MHZ 65000u
+#define RPI5_HDMI_PIXEL_CLOCK_MIN 1000000u
+#define RPI5_HDMI_PIXEL_CLOCK_MAX 600000000u
 #define HDMI0_VIDEO_CONTROL 0x044
 #define HDMI_VIDEO_CONTROL_ENABLE (1u << 31)
+
+#define HDMI_TX_PHY_PLL_VCOCLK_DIV 0x02c
+#define HDMI_TX_PHY_PLL_VCOCLK_DIV_ENABLE (1u << 10)
+#define HDMI_TX_PHY_PLL_VCOCLK_DIV_MASK 0x3ffu
+#define HDMI_RM_OFFSET 0x018
+#define HDMI_RM_OFFSET_ONLY (1u << 31)
+#define HDMI_RM_OFFSET_MASK 0x7fffffffu
+#define RPI5_HDMI_OSCILLATOR_FREQUENCY 54000000u
+#define RPI5_HDMI_RM_FRACTION_BITS 21u
+#define RPI5_HDMI_VCO_CLOCK_MULTIPLIER 10u
 
 #define DVP_MISC_CONFIG 0x008
 #define DVP_HDMI0_AUDIO_CLOCK_DISABLE (1u << 3)
@@ -108,6 +124,60 @@ ReadRegister(PVOID Base, ULONG Offset)
     return READ_REGISTER_ULONG(reinterpret_cast<PULONG>(reinterpret_cast<PUCHAR>(Base) + Offset));
 }
 
+static BOOLEAN
+Rpi5HdmiGetPixelClock(
+    PVOID CoreRegisters,
+    PVOID PhyRegisters,
+    PVOID RateManagerRegisters,
+    PULONG PixelClock)
+{
+    ULONG DeepColorConfig;
+    ULONG Divider;
+    ULONG DividerRegister;
+    ULONG MiscControl;
+    ULONG RateManagerOffset;
+    ULONG RateManagerRegister;
+    ULONG Scale;
+    ULONGLONG PixelClock64;
+
+    DeepColorConfig = ReadRegister(CoreRegisters, HDMI_DEEP_COLOR_CONFIG_1);
+    MiscControl = ReadRegister(CoreRegisters, HDMI_MISC_CONTROL);
+    DividerRegister = ReadRegister(PhyRegisters, HDMI_TX_PHY_PLL_VCOCLK_DIV);
+    RateManagerRegister = ReadRegister(RateManagerRegisters, HDMI_RM_OFFSET);
+    /* Supported RGB8 modes use zero (implicit) or four (explicit 24-bit). */
+    DeepColorConfig &= HDMI_DEEP_COLOR_CONFIG_1_COLOR_DEPTH_MASK;
+    if ((DeepColorConfig && DeepColorConfig != HDMI_COLOR_DEPTH_24BPP) ||
+        (MiscControl & HDMI_MISC_CONTROL_PIXEL_REP_MASK))
+    {
+        return FALSE;
+    }
+
+    Divider = DividerRegister & HDMI_TX_PHY_PLL_VCOCLK_DIV_MASK;
+    if (!(DividerRegister & HDMI_TX_PHY_PLL_VCOCLK_DIV_ENABLE) || !Divider)
+        return FALSE;
+
+    RateManagerOffset = RateManagerRegister & HDMI_RM_OFFSET_MASK;
+    if (!(RateManagerRegister & HDMI_RM_OFFSET_ONLY) || !RateManagerOffset)
+        return FALSE;
+
+    Scale = Divider * RPI5_HDMI_VCO_CLOCK_MULTIPLIER;
+    /* Undo the VC6 rate-manager fixed-point encoding and PHY VCO divider. */
+    PixelClock64 = static_cast<ULONGLONG>(RateManagerOffset) *
+                   RPI5_HDMI_OSCILLATOR_FREQUENCY;
+    PixelClock64 = (PixelClock64 +
+                    (1u << (RPI5_HDMI_RM_FRACTION_BITS - 1))) >>
+                   RPI5_HDMI_RM_FRACTION_BITS;
+    PixelClock64 = (PixelClock64 + Scale / 2) / Scale;
+    if (PixelClock64 < RPI5_HDMI_PIXEL_CLOCK_MIN ||
+        PixelClock64 > RPI5_HDMI_PIXEL_CLOCK_MAX)
+    {
+        return FALSE;
+    }
+
+    *PixelClock = static_cast<ULONG>(PixelClock64);
+    return TRUE;
+}
+
 static VOID
 WriteRegister(PVOID Base, ULONG Offset, ULONG Value)
 {
@@ -142,6 +212,10 @@ CRpi5HdmiAdapter::CRpi5HdmiAdapter()
       m_DmaRequestLine(0),
       m_DvpRegisters(NULL),
       m_DvpRegistersLength(0),
+      m_PhyRegisters(NULL),
+      m_PhyRegistersLength(0),
+      m_RateManagerRegisters(NULL),
+      m_RateManagerRegistersLength(0),
       m_AudioClockOwned(FALSE),
       m_InterruptSync(NULL),
       m_PendingInterrupts(0),
@@ -230,9 +304,15 @@ NTSTATUS
 CRpi5HdmiAdapter::MapResources(PRESOURCELIST ResourceList)
 {
     PCM_PARTIAL_RESOURCE_DESCRIPTOR Descriptor;
-    PVOID *Mappings[] = {&m_CoreRegisters, &m_PacketRegisters, &m_HdRegisters, &m_DmaRegisters, &m_DvpRegisters};
-    PULONG Lengths[] = {&m_CoreRegistersLength, &m_PacketRegistersLength, &m_HdRegistersLength, &m_DmaRegistersLength, &m_DvpRegistersLength};
-    const ULONG MinimumLengths[] = {0x300, 0x200, 0x100, 0x100, 0x10};
+    PVOID *Mappings[] = {&m_CoreRegisters, &m_PacketRegisters, &m_HdRegisters,
+                         &m_DmaRegisters, &m_DvpRegisters, &m_PhyRegisters,
+                         &m_RateManagerRegisters};
+    PULONG Lengths[] = {&m_CoreRegistersLength, &m_PacketRegistersLength,
+                        &m_HdRegistersLength, &m_DmaRegistersLength,
+                        &m_DvpRegistersLength, &m_PhyRegistersLength,
+                        &m_RateManagerRegistersLength};
+    const ULONG MinimumLengths[] = {0x300, 0x200, 0x100, 0x100,
+                                    0x10, 0x300, 0x80};
 
     if (ResourceList->NumberOfMemories() < RTL_NUMBER_OF(Mappings) ||
         ResourceList->NumberOfInterrupts() < 1 ||
@@ -279,6 +359,16 @@ CRpi5HdmiAdapter::MapResources(PRESOURCELIST ResourceList)
 VOID
 CRpi5HdmiAdapter::UnmapResources()
 {
+    if (m_RateManagerRegisters)
+    {
+        MmUnmapIoSpace(m_RateManagerRegisters, m_RateManagerRegistersLength);
+        m_RateManagerRegisters = NULL;
+    }
+    if (m_PhyRegisters)
+    {
+        MmUnmapIoSpace(m_PhyRegisters, m_PhyRegistersLength);
+        m_PhyRegisters = NULL;
+    }
     if (m_DvpRegisters)
     {
         MmUnmapIoSpace(m_DvpRegisters, m_DvpRegistersLength);
@@ -622,13 +712,31 @@ NTSTATUS
 CRpi5HdmiAdapter::ProgramHdmiAudio()
 {
     UCHAR InfoFrame[HDMI_PACKET_STRIDE] = {0};
+    ULONGLONG Cts64;
+    ULONG Cts;
     ULONG InfoFrameConfig;
     ULONG InfoFrameOffset = (HDMI_AUDIO_INFOFRAME_TYPE - 0x80) *
                             HDMI_PACKET_STRIDE;
     ULONG InfoFrameEnd = InfoFrameOffset + HDMI_PACKET_STRIDE;
     ULONG InfoFrameLength = HDMI_INFOFRAME_HEADER_SIZE +
                             HDMI_AUDIO_INFOFRAME_PAYLOAD_SIZE;
+    ULONG PixelClock;
     UCHAR Checksum = 0;
+
+    if (!Rpi5HdmiGetPixelClock(m_CoreRegisters,
+                               m_PhyRegisters,
+                               m_RateManagerRegisters,
+                               &PixelClock))
+    {
+        return STATUS_DEVICE_HARDWARE_ERROR;
+    }
+
+    Cts64 = static_cast<ULONGLONG>(PixelClock) *
+            RPI5_HDMI_ACR_N_48KHZ /
+            (128u * RPI5HDMI_SAMPLE_RATE);
+    if (!Cts64 || Cts64 > 0xfffffu)
+        return STATUS_DEVICE_HARDWARE_ERROR;
+    Cts = static_cast<ULONG>(Cts64);
 
     WriteRegister(m_HdRegisters,
                   HDMI_MAI_CONTROL,
@@ -667,8 +775,8 @@ CRpi5HdmiAdapter::ProgramHdmiAudio()
                   HDMI_CRP_CONFIG,
                   HDMI_CRP_EXTERNAL_CTS_ENABLE |
                       RPI5_HDMI_ACR_N_48KHZ);
-    WriteRegister(m_CoreRegisters, HDMI_CTS_0, RPI5_HDMI_ACR_CTS_65MHZ);
-    WriteRegister(m_CoreRegisters, HDMI_CTS_1, RPI5_HDMI_ACR_CTS_65MHZ);
+    WriteRegister(m_CoreRegisters, HDMI_CTS_0, Cts);
+    WriteRegister(m_CoreRegisters, HDMI_CTS_1, Cts);
 
     InfoFrameConfig = ReadRegister(m_CoreRegisters, HDMI_INFOFRAME_CONFIG);
     WriteRegister(m_CoreRegisters,
