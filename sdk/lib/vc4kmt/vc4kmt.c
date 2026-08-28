@@ -149,10 +149,10 @@ struct _VC4KMT_DEVICE
     D3DKMT_HANDLE hDevice;
     D3DKMT_HANDLE hContext[RPI5VC4_GPU_NODE_COUNT];
     D3DKMT_HANDLE hPagingQueue;
-    D3DKMT_HANDLE hFence;
-    volatile UINT64 *FenceCpuValue;
+    D3DKMT_HANDLE hFence[RPI5VC4_GPU_NODE_COUNT];
+    volatile UINT64 *FenceCpuValue[RPI5VC4_GPU_NODE_COUNT];
     RPI5VC4_ESCAPE_INFO Info;
-    UINT64 NextFenceValue;
+    UINT64 NextFenceValue[RPI5VC4_GPU_NODE_COUNT];
     D3DKMT_HANDLE hPrimaryResource;
     D3DKMT_HANDLE hPrimaryGlobalShare;
     D3DKMT_HANDLE hPrimaryAllocation;
@@ -332,7 +332,7 @@ Vc4KmtOpenFake(VC4KMT_DEVICE *Device)
                                     RPI5VC4_LINEAR_FORMAT_A8R8G8B8;
     Device->Fake = TRUE;
     Device->FakeNextGpuVa = (ULONG)RPI5VC4_DYNAMIC_GPUVA_START;
-    Device->NextFenceValue = 0;
+    RtlZeroMemory(Device->NextFenceValue, sizeof(Device->NextFenceValue));
     return STATUS_SUCCESS;
 }
 
@@ -491,6 +491,7 @@ vc4kmt_open(
     D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME OpenAdapter;
     D3DKMT_ESCAPE Escape;
     NTSTATUS Status;
+    UINT NodeOrdinal;
 
     if (DeviceOut == NULL)
         return STATUS_INVALID_PARAMETER;
@@ -575,15 +576,20 @@ vc4kmt_open(
     }
 
     /*
-     * Per-device monitored fence: submits are executed asynchronously by
-     * the kernel fence pipeline; each submit signals this fence with its
-     * own value on GPU retire, and vc4kmt_wait blocks on the CPU-visible
-     * value page.  This is part of the required ABI, so adapter open must
-     * fail rather than turn every later fence into an already-complete lie.
+     * Hardware nodes retire independently.  A shared monitored timeline
+     * would let a later TFU/CSD signal satisfy an older 3D fence and expose
+     * the latter's BOs for reuse while its control list is still running.
+     * Give each node its own monotonically increasing timeline instead.
      */
+    for (NodeOrdinal = 0;
+         NodeOrdinal < RPI5VC4_GPU_NODE_COUNT;
+         ++NodeOrdinal)
     {
         D3DKMT_CREATESYNCHRONIZATIONOBJECT2 CreateSync;
         NTSTATUS SyncStatus;
+
+        if (Device->hContext[NodeOrdinal] == 0)
+            continue;
 
         RtlZeroMemory(&CreateSync, sizeof(CreateSync));
         CreateSync.hDevice = Device->hDevice;
@@ -609,11 +615,13 @@ vc4kmt_open(
             Status = STATUS_INVALID_DEVICE_STATE;
             goto fail;
         }
-        Device->hFence = CreateSync.hSyncObject;
-        Device->FenceCpuValue = (volatile UINT64 *)CreateSync.Info.MonitoredFence.FenceValueCPUVirtualAddress;
+        Device->hFence[NodeOrdinal] = CreateSync.hSyncObject;
+        Device->FenceCpuValue[NodeOrdinal] =
+            (volatile UINT64 *)
+                CreateSync.Info.MonitoredFence.FenceValueCPUVirtualAddress;
     }
 
-    Device->NextFenceValue = 0;
+    RtlZeroMemory(Device->NextFenceValue, sizeof(Device->NextFenceValue));
     *DeviceOut = Device;
     return STATUS_SUCCESS;
 
@@ -646,13 +654,18 @@ vc4kmt_close(
         Device->hContext[NodeOrdinal] = 0;
     }
 
-    if (Device->hFence != 0)
+    for (NodeOrdinal = RPI5VC4_GPU_NODE_COUNT; NodeOrdinal != 0; )
     {
         D3DKMT_DESTROYSYNCHRONIZATIONOBJECT DestroySync;
 
+        NodeOrdinal--;
+        if (Device->hFence[NodeOrdinal] == 0)
+            continue;
         RtlZeroMemory(&DestroySync, sizeof(DestroySync));
-        DestroySync.hSyncObject = Device->hFence;
+        DestroySync.hSyncObject = Device->hFence[NodeOrdinal];
         (void)D3DKMTDestroySynchronizationObject(&DestroySync);
+        Device->hFence[NodeOrdinal] = 0;
+        Device->FenceCpuValue[NodeOrdinal] = NULL;
     }
 
     if (Device->hPagingQueue != 0)
@@ -1167,14 +1180,6 @@ Vc4KmtSubmitPacket(
 
     RtlZeroMemory(FenceOut, sizeof(*FenceOut));
 
-    if (Device->Fake)
-    {
-        FenceOut->hSyncObject = 0;
-        FenceOut->Value = ++Device->NextFenceValue;
-        FenceOut->CpuValue = NULL;
-        return STATUS_SUCCESS;
-    }
-
     if (Packet->Op == VC4KMT_DMA_OP_TFU_JOB)
         NodeOrdinal = RPI5VC4_NODE_TFU;
     else if (Packet->Op == VC4KMT_DMA_OP_CSD_JOB)
@@ -1183,8 +1188,18 @@ Vc4KmtSubmitPacket(
         NodeOrdinal = RPI5VC4_NODE_3D;
     else
         return STATUS_INVALID_PARAMETER;
-    if (NodeOrdinal >= RPI5VC4_GPU_NODE_COUNT ||
-        Device->hContext[NodeOrdinal] == 0)
+    if (NodeOrdinal >= RPI5VC4_GPU_NODE_COUNT)
+        return STATUS_INVALID_DEVICE_STATE;
+
+    if (Device->Fake)
+    {
+        FenceOut->hSyncObject = 0;
+        FenceOut->Value = ++Device->NextFenceValue[NodeOrdinal];
+        FenceOut->CpuValue = NULL;
+        return STATUS_SUCCESS;
+    }
+
+    if (Device->hContext[NodeOrdinal] == 0)
     {
         return STATUS_INVALID_DEVICE_STATE;
     }
@@ -1215,8 +1230,8 @@ Vc4KmtSubmitPacket(
     SubmitView.Command->CommandType = 2;
     SubmitView.Command->PayloadBytes = sizeof(*SubmitView.Signal) +
                                        sizeof(*SubmitView.Packet);
-    SubmitView.Signal->hSyncObject = Device->hFence;
-    SubmitView.Signal->FenceValue = Device->NextFenceValue + 1;
+    SubmitView.Signal->hSyncObject = Device->hFence[NodeOrdinal];
+    SubmitView.Signal->FenceValue = Device->NextFenceValue[NodeOrdinal] + 1;
     *SubmitView.Packet = *Packet;
 
     /* Publish every WC store (the CL/BO bytes this process wrote through
@@ -1250,9 +1265,9 @@ Vc4KmtSubmitPacket(
     }
     if (NT_SUCCESS(Status))
     {
-        FenceOut->hSyncObject = Device->hFence;
-        FenceOut->Value = ++Device->NextFenceValue;
-        FenceOut->CpuValue = Device->FenceCpuValue;
+        FenceOut->hSyncObject = Device->hFence[NodeOrdinal];
+        FenceOut->Value = ++Device->NextFenceValue[NodeOrdinal];
+        FenceOut->CpuValue = Device->FenceCpuValue[NodeOrdinal];
     }
     HeapFree(GetProcessHeap(), 0, SubmitBytes);
     return Status;
