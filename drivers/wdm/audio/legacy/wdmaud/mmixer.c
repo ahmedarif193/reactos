@@ -466,6 +466,7 @@ WdmAudControlOpenMixer(
         ClientInfo->hPins = Handles;
         ClientInfo->hPins[ClientInfo->NumPins].Handle = hMixer;
         ClientInfo->hPins[ClientInfo->NumPins].Type = MIXER_DEVICE_TYPE;
+        ClientInfo->hPins[ClientInfo->NumPins].DeviceIndex = DeviceInfo->DeviceIndex;
         ClientInfo->hPins[ClientInfo->NumPins].NotifyEvent = EventObject;
         ClientInfo->NumPins++;
     }
@@ -489,7 +490,10 @@ WdmAudControlCloseMixer(
     IN  ULONG Index)
 {
     /* Remove event associated to this client */
-    if (MMixerClose(&MixerContext, DeviceInfo->DeviceIndex, ClientInfo, EventCallback) != MM_STATUS_SUCCESS)
+    if (MMixerClose(&MixerContext,
+                    ClientInfo->hPins[Index].DeviceIndex,
+                    ClientInfo,
+                    EventCallback) != MM_STATUS_SUCCESS)
     {
         DPRINT1("Failed to close mixer\n");
         return SetIrpIoStatus(Irp, STATUS_UNSUCCESSFUL, sizeof(WDMAUD_DEVICE_INFO));
@@ -502,27 +506,26 @@ WdmAudControlCloseMixer(
         ClientInfo->hPins[Index].NotifyEvent = NULL;
     }
 
+    ClientInfo->hPins[Index].Handle = NULL;
+
     /* FIXME: do we need to free ClientInfo->hPins ? */
     return SetIrpIoStatus(Irp, STATUS_SUCCESS, sizeof(WDMAUD_DEVICE_INFO));
 }
 
 VOID
-WdmAudCloseAllMixers(
-    IN PDEVICE_OBJECT DeviceObject,
+WdmAudCloseMixer(
     IN PWDMAUD_CLIENT ClientInfo,
     IN ULONG Index)
 {
-    ULONG DeviceCount, DeviceIndex;
-
-    /* Get all mixers */
-    DeviceCount = GetSysAudioDeviceCount(DeviceObject);
-
-    /* Close every mixer attached to the device */
-    for (DeviceIndex = 0; DeviceIndex < DeviceCount; DeviceIndex++)
+    if (ClientInfo->hPins[Index].Handle)
     {
-        if (MMixerClose(&MixerContext, DeviceIndex, ClientInfo, EventCallback) != MM_STATUS_SUCCESS)
+        if (MMixerClose(&MixerContext,
+                        ClientInfo->hPins[Index].DeviceIndex,
+                        ClientInfo,
+                        EventCallback) != MM_STATUS_SUCCESS)
         {
-            DPRINT1("Failed to close mixer for device %lu\n", DeviceIndex);
+            DPRINT1("Failed to close mixer %lu\n",
+                    ClientInfo->hPins[Index].DeviceIndex);
         }
     }
 
