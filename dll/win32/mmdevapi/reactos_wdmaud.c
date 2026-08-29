@@ -85,6 +85,7 @@ struct reactos_stream
     UINT32 padding;
     UINT32 capture_frames;
     UINT64 position;
+    UINT64 completed_render_frames;
     UINT64 resample_offset;
     BYTE *rt_buffer;
     UINT32 rt_buffer_frames;
@@ -1640,7 +1641,11 @@ static void complete_render_packet(struct reactos_stream *stream,
 
     EnterCriticalSection(&stream->lock);
     if (ret)
+    {
         stream->position += completed_client_frames;
+        stream->completed_render_frames += completed_client_frames;
+        stream->position_qpc_100ns = query_performance_time_100ns();
+    }
     else if (error != ERROR_OPERATION_ABORTED)
     {
         ERR("Render completion failed, stream %p, packet %p, event %p, error %lu, transferred %lu, data used %lu, client frames %u, device frames %u.\n",
@@ -2073,6 +2078,22 @@ static UINT32 shared_render_transport_period_frames(void *transport)
                                 stream->period_frames;
 }
 
+static BOOL shared_render_transport_completed_frames(
+    void *transport, UINT64 *frames, UINT64 *qpc_time)
+{
+    struct reactos_stream *stream = transport;
+
+    if (!stream || !frames)
+        return FALSE;
+
+    EnterCriticalSection(&stream->lock);
+    *frames = stream->completed_render_frames;
+    if (qpc_time)
+        *qpc_time = stream->position_qpc_100ns;
+    LeaveCriticalSection(&stream->lock);
+    return TRUE;
+}
+
 static BOOL shared_render_transport_queue_frames(void *transport,
                                                  const BYTE *data,
                                                  UINT32 frames)
@@ -2122,6 +2143,7 @@ static const struct reactos_render_transport_ops shared_render_transport_ops =
     stop_shared_render_transport,
     shared_render_transport_writable_frames,
     shared_render_transport_period_frames,
+    shared_render_transport_completed_frames,
     shared_render_transport_queue_frames,
 };
 
@@ -3004,6 +3026,7 @@ static void reactos_render_rt_timer_loop(struct reactos_stream *stream)
                 stream->rt_period_queued_frames[stream->rt_period_index];
 
             stream->position += stream->rt_period_frames;
+            stream->completed_render_frames += completed_frames;
             stream->position_qpc_100ns = query_performance_time_100ns();
             if (stream->padding > completed_frames)
                 stream->padding -= completed_frames;
