@@ -346,10 +346,14 @@ typedef struct _SOUND_DEVICE_INSTANCE
     ULONG RTStreamingBufferLength;
     volatile LONG RTStreamingBufferOffset;
     volatile LONG RTStreamingBufferBytesWritten;
+    volatile LONG RTStreamingUnderrunCount;
+    volatile LONG RTStreamingUnderrunBytes;
 
     PUCHAR RTStreamingShadowBuffer;
     ULONG RTStreamingShadowBufferLength;
-    volatile LONG RTStreamingShadowBufferOffset;
+    volatile LONG RTStreamingShadowBufferBytesUsed;
+    ULONG RTStreamingShadowBufferReadOffset;
+    ULONG RTStreamingShadowBufferWriteOffset;
 
     BOOL ResetInProgress;
     BOOL bPaused;
