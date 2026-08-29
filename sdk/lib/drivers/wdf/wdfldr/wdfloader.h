@@ -130,7 +130,7 @@ typedef
 NTSTATUS
 (NTAPI *PWDF_CLASS_BIND)(
     PWDF_BIND_INFO BindInfo,
-    PWDF_COMPONENT_GLOBALS* Globals,
+    PWDF_COMPONENT_GLOBALS Globals,
     PWDF_CLASS_BIND_INFO ClassBindInfo);
 
 typedef

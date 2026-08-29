@@ -1,6 +1,7 @@
 
 add_subdirectory(wdfldr)
 add_subdirectory(wdfdriverentry)
+add_subdirectory(cx)
 
 remove_definitions(-D_WIN32_WINNT=${REACTOS_TARGET_NT} -DWINVER=${REACTOS_TARGET_NT})
 

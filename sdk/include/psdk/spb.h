@@ -18,6 +18,8 @@ typedef enum _SPB_IOCTL
     IOCTL_SPB_FULL_DUPLEX = CTL_CODE(FILE_DEVICE_CONTROLLER, 0x605, METHOD_BUFFERED, FILE_ANY_ACCESS)
 } SPB_IOCTL, *PSPB_IOCTL;
 
+typedef SPB_IOCTL SpbIoctl, *PSpbIoctl;
+
 typedef enum _SPB_TRANSFER_DIRECTION
 {
     SpbTransferDirectionNone,
