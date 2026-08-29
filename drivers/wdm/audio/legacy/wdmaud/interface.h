@@ -39,6 +39,7 @@ typedef struct
         MIXERLINECONTROLSW MixControls;
         MIXERLINEW MixLine;
         WAVEFORMATEX WaveFormatEx;
+        WAVEFORMATEXTENSIBLE WaveFormatExtensible;
         WAVEOUTCAPSW WaveOutCaps;
         AUXCAPSW     AuxCaps;
         WAVEINCAPSW  WaveInCaps;
@@ -390,5 +391,20 @@ typedef struct
 #define IOCTL_DUPLICATE_WDMAUD_PIN \
     CTL_CODE(FILE_DEVICE_SOUND, \
              18, \
+             METHOD_BUFFERED, \
+             FILE_CREATE_TREE_CONNECTION | FILE_ANY_ACCESS)
+
+/// IOCTL_GETPREFERRED_WAVE_FORMAT
+///
+/// Description: This IOCTL returns the preferred native PCM format of a wave
+///              endpoint, including formats not represented by WAVEOUTCAPS.
+///
+/// Arguments:  InputBuffer is a pointer to a WDMAUD_DEVICE_INFO structure.
+///             DeviceType and DeviceIndex must identify a wave endpoint.
+/// Result:     The format is returned in u.WaveFormatExtensible.
+
+#define IOCTL_GETPREFERRED_WAVE_FORMAT \
+    CTL_CODE(FILE_DEVICE_SOUND, \
+             19, \
              METHOD_BUFFERED, \
              FILE_CREATE_TREE_CONNECTION | FILE_ANY_ACCESS)
