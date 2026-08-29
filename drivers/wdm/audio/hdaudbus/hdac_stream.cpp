@@ -104,6 +104,9 @@ UINT16 hdac_format(PHDAC_STREAM stream) {
 	case 192000:
 		format = HDA_RATE(48, 4, 1);
 		break;
+	case 384000:
+		format = HDA_RATE(48, 8, 1);
+		break;
 	}
 
 	{
