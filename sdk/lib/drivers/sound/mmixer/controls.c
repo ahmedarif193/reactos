@@ -31,6 +31,67 @@ const GUID KSNODETYPE_SYNTHESIZER = {0xDFF220F3, 0xF70F, 0x11D0, {0xB9, 0x17, 0x
 const GUID KSNODETYPE_LINE_CONNECTOR = {0xDFF21FE3, 0xF70F, 0x11D0, {0xB9, 0x17, 0x00, 0xA0,0xC9, 0x22, 0x31, 0x96}};
 const GUID PINNAME_VIDEO_CAPTURE  = {0xfb6c4281, 0x353, 0x11d1, {0x90, 0x5f, 0x0, 0x0, 0xc0, 0xcc, 0x16, 0xba}};
 
+static
+MIXER_STATUS
+MMixerGetPropertyDescription(
+    IN PMIXER_CONTEXT MixerContext,
+    IN HANDLE hMixer,
+    IN ULONG NodeId,
+    IN ULONG PropertyId,
+    OUT PKSPROPERTY_DESCRIPTION *OutDescription)
+{
+    KSNODEPROPERTY_AUDIO_CHANNEL Property;
+    KSPROPERTY_DESCRIPTION Description;
+    PKSPROPERTY_DESCRIPTION FullDescription;
+    ULONG BytesReturned;
+    MIXER_STATUS Status;
+
+    *OutDescription = NULL;
+    RtlZeroMemory(&Property, sizeof(Property));
+    Property.NodeProperty.NodeId = NodeId;
+    Property.NodeProperty.Property.Set = KSPROPSETID_Audio;
+    Property.NodeProperty.Property.Id = PropertyId;
+    Property.NodeProperty.Property.Flags =
+        KSPROPERTY_TYPE_BASICSUPPORT | KSPROPERTY_TYPE_TOPOLOGY;
+
+    RtlZeroMemory(&Description, sizeof(Description));
+    Status = MixerContext->Control(hMixer,
+                                   IOCTL_KS_PROPERTY,
+                                   &Property,
+                                   sizeof(Property),
+                                   &Description,
+                                   sizeof(Description),
+                                   &BytesReturned);
+    if (Status != MM_STATUS_SUCCESS ||
+        Description.DescriptionSize < sizeof(Description))
+    {
+        return MM_STATUS_UNSUCCESSFUL;
+    }
+
+    FullDescription = MixerContext->Alloc(Description.DescriptionSize);
+    if (!FullDescription)
+        return MM_STATUS_NO_MEMORY;
+
+    RtlZeroMemory(FullDescription, Description.DescriptionSize);
+    Status = MixerContext->Control(hMixer,
+                                   IOCTL_KS_PROPERTY,
+                                   &Property,
+                                   sizeof(Property),
+                                   FullDescription,
+                                   Description.DescriptionSize,
+                                   &BytesReturned);
+    if (Status != MM_STATUS_SUCCESS ||
+        FullDescription->DescriptionSize < sizeof(*FullDescription) ||
+        FullDescription->DescriptionSize > Description.DescriptionSize)
+    {
+        MixerContext->Free(FullDescription);
+        return MM_STATUS_UNSUCCESSFUL;
+    }
+
+    *OutDescription = FullDescription;
+    return MM_STATUS_SUCCESS;
+}
+
 MIXER_STATUS
 MMixerAddMixerControl(
     IN PMIXER_CONTEXT MixerContext,
@@ -39,7 +100,8 @@ MMixerAddMixerControl(
     IN PTOPOLOGY Topology,
     IN ULONG NodeIndex,
     IN LPMIXERLINE_EXT MixerLine,
-    IN ULONG MaxChannels)
+    IN ULONG MaxChannels,
+    IN ULONG MemberFlags)
 {
     LPGUID NodeType;
     KSP_NODE Node;
@@ -60,6 +122,8 @@ MMixerAddMixerControl(
     MixerControl->hDevice = hMixer;
     MixerControl->NodeID = NodeIndex;
     MixerControl->ExtraData = NULL;
+    MixerControl->ChannelCount = max(MaxChannels, 1);
+    MixerControl->MemberFlags = MemberFlags;
 
     MixerControl->Control.cbStruct = sizeof(MIXERCONTROLW);
     MixerControl->Control.dwControlID = MixerInfo->ControlId;
@@ -69,7 +133,9 @@ MMixerAddMixerControl(
     /* store control type */
     MixerControl->Control.dwControlType = MMixerGetControlTypeFromTopologyNode(NodeType);
 
-    MixerControl->Control.fdwControl = (MaxChannels > 1 ? 0 : MIXERCONTROL_CONTROLF_UNIFORM);
+    MixerControl->Control.fdwControl =
+        ((MemberFlags & KSPROPERTY_MEMBER_FLAG_BASICSUPPORT_UNIFORM) ||
+         MaxChannels <= 1) ? MIXERCONTROL_CONTROLF_UNIFORM : 0;
     MixerControl->Control.cMultipleItems = 0;
 
     /* setup request to retrieve name */
@@ -154,64 +220,95 @@ MMixerAddMixerControl(
     }
     else if (MixerControl->Control.dwControlType == MIXERCONTROL_CONTROLTYPE_VOLUME)
     {
-        KSNODEPROPERTY_AUDIO_CHANNEL Property;
-        ULONG Length;
-        PKSPROPERTY_DESCRIPTION Desc;
+        PKSPROPERTY_DESCRIPTION Desc = NULL;
         PKSPROPERTY_MEMBERSHEADER Members;
         PKSPROPERTY_STEPPING_LONG Range;
         LPMIXERVOLUME_DATA VolumeData;
+        ULONG AvailableBytes;
+        ULONG AllocationSize;
+        ULONG RangeCount = 1;
+        ULONG RangeIndex;
+        LONGLONG StepCount;
 
         MixerControl->Control.Bounds.dwMinimum = 0;
         MixerControl->Control.Bounds.dwMaximum = 0xFFFF;
-        MixerControl->Control.Metrics.cSteps = 0xC0; /* FIXME */
+        Status = MMixerGetPropertyDescription(MixerContext,
+                                              hMixer,
+                                              NodeIndex,
+                                              KSPROPERTY_AUDIO_VOLUMELEVEL,
+                                              &Desc);
+        if (Status == MM_STATUS_SUCCESS &&
+            Desc->MembersListCount != 0 &&
+            Desc->DescriptionSize >= sizeof(*Desc) + sizeof(*Members))
+        {
+            Members = (PKSPROPERTY_MEMBERSHEADER)(Desc + 1);
+            AvailableBytes = Desc->DescriptionSize - sizeof(*Desc) - sizeof(*Members);
+            if (Members->MembersFlags == KSPROPERTY_MEMBER_STEPPEDRANGES &&
+                Members->MembersSize >= sizeof(*Range) &&
+                Members->MembersCount != 0 &&
+                Members->MembersCount <= AvailableBytes / Members->MembersSize &&
+                Members->MembersCount <=
+                    (MAXULONG - FIELD_OFFSET(MIXERVOLUME_DATA, Ranges)) /
+                    sizeof(VolumeData->Ranges[0]))
+            {
+                RangeCount = Members->MembersCount;
+                MixerControl->MemberFlags = Members->Flags;
+                if (Members->Flags & KSPROPERTY_MEMBER_FLAG_BASICSUPPORT_UNIFORM)
+                    MixerControl->Control.fdwControl |= MIXERCONTROL_CONTROLF_UNIFORM;
+                else if (MixerControl->ChannelCount > 1)
+                    MixerControl->Control.fdwControl &= ~MIXERCONTROL_CONTROLF_UNIFORM;
+            }
+            else
+            {
+                Status = MM_STATUS_UNSUCCESSFUL;
+            }
+        }
 
-        Length = sizeof(KSPROPERTY_DESCRIPTION) + sizeof(KSPROPERTY_MEMBERSHEADER) + sizeof(KSPROPERTY_STEPPING_LONG);
-        Desc = (PKSPROPERTY_DESCRIPTION)MixerContext->Alloc(Length);
-        ASSERT(Desc);
-
-        /* setup the request */
-        RtlZeroMemory(&Property, sizeof(KSNODEPROPERTY_AUDIO_CHANNEL));
-
-        Property.NodeProperty.NodeId = NodeIndex;
-        Property.NodeProperty.Property.Id = KSPROPERTY_AUDIO_VOLUMELEVEL;
-        Property.NodeProperty.Property.Flags = KSPROPERTY_TYPE_BASICSUPPORT | KSPROPERTY_TYPE_TOPOLOGY;
-        Property.NodeProperty.Property.Set = KSPROPSETID_Audio;
-
-        /* get node volume level info */
-        Status = MixerContext->Control(hMixer, IOCTL_KS_PROPERTY, (PVOID)&Property, sizeof(KSNODEPROPERTY_AUDIO_CHANNEL), Desc, Length, &BytesReturned);
-
-        VolumeData = (LPMIXERVOLUME_DATA)MixerContext->Alloc(sizeof(*VolumeData));
+        AllocationSize = FIELD_OFFSET(MIXERVOLUME_DATA, Ranges) +
+                         RangeCount * sizeof(VolumeData->Ranges[0]);
+        VolumeData = (LPMIXERVOLUME_DATA)MixerContext->Alloc(AllocationSize);
         if (!VolumeData)
+        {
+            if (Desc)
+                MixerContext->Free(Desc);
             return MM_STATUS_NO_MEMORY;
+        }
 
+        RtlZeroMemory(VolumeData, AllocationSize);
+        VolumeData->Header.dwControlID = MixerControl->Control.dwControlID;
+        VolumeData->RangeCount = RangeCount;
         if (Status == MM_STATUS_SUCCESS)
         {
             Members = (PKSPROPERTY_MEMBERSHEADER)(Desc + 1);
-            Range = (PKSPROPERTY_STEPPING_LONG)(Members + 1);
-
-            DPRINT("NodeIndex %u Range Min %d Max %d Steps %x UMin %x UMax %x\n", NodeIndex, Range->Bounds.SignedMinimum, Range->Bounds.SignedMaximum, Range->SteppingDelta, Range->Bounds.UnsignedMinimum, Range->Bounds.UnsignedMaximum);
-
-            /* Store mixer control info there */
-            VolumeData->Header.dwControlID = MixerControl->Control.dwControlID;
-            VolumeData->SignedMinimum = Range->Bounds.SignedMinimum;
-            VolumeData->SignedMaximum = Range->Bounds.SignedMaximum;
-
-            /* Fallback to defaults if: 1) the range is not defined (typically is 0) */
-            if (VolumeData->SignedMinimum == VolumeData->SignedMaximum)
+            for (RangeIndex = 0; RangeIndex < RangeCount; ++RangeIndex)
             {
-                VolumeData->SignedMinimum = -96 * 0x10000; // -96 DB
-                VolumeData->SignedMaximum = 0; // 0 DB
+                Range = (PKSPROPERTY_STEPPING_LONG)
+                    ((PUCHAR)(Members + 1) + RangeIndex * Members->MembersSize);
+                VolumeData->Ranges[RangeIndex] = *Range;
+                if (Range->Bounds.SignedMinimum >= Range->Bounds.SignedMaximum ||
+                    Range->SteppingDelta == 0)
+                {
+                    VolumeData->Ranges[RangeIndex].SteppingDelta = 0x10000;
+                    VolumeData->Ranges[RangeIndex].Bounds.SignedMinimum = -96 * 0x10000;
+                    VolumeData->Ranges[RangeIndex].Bounds.SignedMaximum = 0;
+                }
             }
         }
         else
         {
-            /* or 2) when some failure occurs */
-            VolumeData->Header.dwControlID = MixerControl->Control.dwControlID;
-            VolumeData->SignedMinimum = -96 * 0x10000; // -96 DB
-            VolumeData->SignedMaximum = 0; // 0 DB
+            VolumeData->Ranges[0].SteppingDelta = 0x10000;
+            VolumeData->Ranges[0].Bounds.SignedMinimum = -96 * 0x10000;
+            VolumeData->Ranges[0].Bounds.SignedMaximum = 0;
         }
+
+        StepCount = ((LONGLONG)VolumeData->Ranges[0].Bounds.SignedMaximum -
+                     VolumeData->Ranges[0].Bounds.SignedMinimum) /
+                    VolumeData->Ranges[0].SteppingDelta + 1;
+        MixerControl->Control.Metrics.cSteps =
+            StepCount > MAXULONG ? MAXULONG : (ULONG)StepCount;
         MixerControl->ExtraData = VolumeData;
-        MixerContext->Free(Desc);
+        if (Desc)
+            MixerContext->Free(Desc);
     }
 
     DPRINT("Status %x Name %S\n", Status, MixerControl->Control.szName);
@@ -558,66 +655,44 @@ MMixerGetChannelCountEnhanced(
     IN LPMIXER_INFO MixerInfo,
     IN HANDLE hMixer,
     IN ULONG NodeId,
-    OUT PULONG MaxChannels)
+    IN ULONG PropertyId,
+    OUT PULONG MaxChannels,
+    OUT PULONG MemberFlags)
 {
-    KSPROPERTY_DESCRIPTION Description;
-    PKSPROPERTY_DESCRIPTION NewDescription;
+    PKSPROPERTY_DESCRIPTION Description;
     PKSPROPERTY_MEMBERSHEADER Header;
-    ULONG BytesReturned;
-    KSP_NODE Request;
     MIXER_STATUS Status;
+    ULONG MembersBytes;
 
-    /* try #1 obtain it via description */
-    Request.NodeId = NodeId;
-    Request.Reserved = 0;
-    Request.Property.Set = KSPROPSETID_Audio;
-    Request.Property.Flags = KSPROPERTY_TYPE_BASICSUPPORT | KSPROPERTY_TYPE_TOPOLOGY;
-    Request.Property.Id = KSPROPERTY_AUDIO_VOLUMELEVEL;
+    UNREFERENCED_PARAMETER(MixerInfo);
+    Status = MMixerGetPropertyDescription(MixerContext,
+                                          hMixer,
+                                          NodeId,
+                                          PropertyId,
+                                          &Description);
+    if (Status != MM_STATUS_SUCCESS)
+        return Status;
 
-    /* get description */
-    Status = MixerContext->Control(hMixer, IOCTL_KS_PROPERTY, (PVOID)&Request, sizeof(KSP_NODE), (PVOID)&Description, sizeof(KSPROPERTY_DESCRIPTION), &BytesReturned);
-    if (Status == MM_STATUS_SUCCESS)
+    if (Description->DescriptionSize >= sizeof(*Description) + sizeof(*Header) &&
+        Description->MembersListCount != 0)
     {
-        if (Description.DescriptionSize >= sizeof(KSPROPERTY_DESCRIPTION) + sizeof(KSPROPERTY_MEMBERSHEADER) && (Description.MembersListCount > 0))
+        Header = (PKSPROPERTY_MEMBERSHEADER)(Description + 1);
+        MembersBytes = Description->DescriptionSize -
+                       sizeof(*Description) -
+                       sizeof(*Header);
+        if (Header->MembersFlags == KSPROPERTY_MEMBER_STEPPEDRANGES &&
+            Header->MembersCount != 0 &&
+            Header->MembersSize != 0 &&
+            Header->MembersCount <= MembersBytes / Header->MembersSize)
         {
-            /* allocate new description */
-            NewDescription = MixerContext->Alloc(Description.DescriptionSize);
-
-            if (!NewDescription)
-            {
-                /* not enough memory */
-                return MM_STATUS_NO_MEMORY;
-            }
-
-            /* get description */
-            Status = MixerContext->Control(hMixer, IOCTL_KS_PROPERTY, (PVOID)&Request, sizeof(KSP_NODE), (PVOID)NewDescription, Description.DescriptionSize, &BytesReturned);
-            if (Status == MM_STATUS_SUCCESS)
-            {
-                /* get header */
-                Header = (PKSPROPERTY_MEMBERSHEADER)(NewDescription + 1);
-
-                if (Header->Flags & KSPROPERTY_MEMBER_FLAG_BASICSUPPORT_MULTICHANNEL)
-                {
-                    /* found enhanced flag */
-                    ASSERT(Header->MembersCount > 1);
-
-                    /* store channel count */
-                    *MaxChannels = Header->MembersCount;
-
-                    /* free description */
-                    MixerContext->Free(NewDescription);
-
-                    /* done */
-                    return MM_STATUS_SUCCESS;
-                }
-            }
-
-            /* free description */
-            MixerContext->Free(NewDescription);
+            *MaxChannels = Header->MembersCount;
+            *MemberFlags = Header->Flags;
+            MixerContext->Free(Description);
+            return MM_STATUS_SUCCESS;
         }
     }
 
-    /* failed to get channel count enhanced */
+    MixerContext->Free(Description);
     return MM_STATUS_UNSUCCESSFUL;
 }
 
@@ -627,37 +702,36 @@ MMixerGetChannelCountLegacy(
     IN LPMIXER_INFO MixerInfo,
     IN HANDLE hMixer,
     IN ULONG NodeId,
-    OUT PULONG MaxChannels)
+    IN ULONG PropertyId,
+    OUT PULONG MaxChannels,
+    OUT PULONG MemberFlags)
 {
     ULONG BytesReturned;
     MIXER_STATUS Status;
     KSNODEPROPERTY_AUDIO_CHANNEL Channel;
     LONG Volume;
 
-    /* setup request */
-    Channel.Reserved = 0;
+    UNREFERENCED_PARAMETER(MixerInfo);
+    RtlZeroMemory(&Channel, sizeof(Channel));
     Channel.NodeProperty.NodeId = NodeId;
-    Channel.NodeProperty.Reserved = 0;
     Channel.NodeProperty.Property.Flags = KSPROPERTY_TYPE_GET | KSPROPERTY_TYPE_TOPOLOGY;
     Channel.NodeProperty.Property.Set = KSPROPSETID_Audio;
     Channel.Channel = 0;
-    Channel.NodeProperty.Property.Id = KSPROPERTY_AUDIO_VOLUMELEVEL;
+    Channel.NodeProperty.Property.Id = PropertyId;
 
-    do
+    while (Channel.Channel < 256)
     {
-        /* get channel volume */
         Status = MixerContext->Control(hMixer, IOCTL_KS_PROPERTY, (PVOID)&Channel, sizeof(KSNODEPROPERTY_AUDIO_CHANNEL), (PVOID)&Volume, sizeof(LONG), &BytesReturned);
         if (Status != MM_STATUS_SUCCESS)
             break;
 
-        /* increment channel count */
         Channel.Channel++;
+    }
 
-    }while(TRUE);
-
-    /* store channel count */
-    *MaxChannels = Channel.Channel;
-
+    *MaxChannels = max(Channel.Channel, 1);
+    *MemberFlags = *MaxChannels > 1 ?
+        KSPROPERTY_MEMBER_FLAG_BASICSUPPORT_MULTICHANNEL :
+        KSPROPERTY_MEMBER_FLAG_BASICSUPPORT_UNIFORM;
 }
 
 VOID
@@ -666,17 +740,31 @@ MMixerGetMaxChannelsForNode(
     IN LPMIXER_INFO MixerInfo,
     IN HANDLE hMixer,
     IN ULONG NodeId,
-    OUT PULONG MaxChannels)
+    IN ULONG PropertyId,
+    OUT PULONG MaxChannels,
+    OUT PULONG MemberFlags)
 {
     MIXER_STATUS Status;
 
-    /* try to get it enhanced */
-    Status = MMixerGetChannelCountEnhanced(MixerContext, MixerInfo, hMixer, NodeId, MaxChannels);
+    *MaxChannels = 1;
+    *MemberFlags = KSPROPERTY_MEMBER_FLAG_BASICSUPPORT_UNIFORM;
+    Status = MMixerGetChannelCountEnhanced(MixerContext,
+                                           MixerInfo,
+                                           hMixer,
+                                           NodeId,
+                                           PropertyId,
+                                           MaxChannels,
+                                           MemberFlags);
 
     if (Status != MM_STATUS_SUCCESS)
     {
-        /* get it old-fashioned way */
-        MMixerGetChannelCountLegacy(MixerContext, MixerInfo, hMixer, NodeId, MaxChannels);
+        MMixerGetChannelCountLegacy(MixerContext,
+                                    MixerInfo,
+                                    hMixer,
+                                    NodeId,
+                                    PropertyId,
+                                    MaxChannels,
+                                    MemberFlags);
     }
 }
 
@@ -693,7 +781,7 @@ MMixerAddMixerControlsToMixerLineByNodeIndexArray(
     ULONG Index, Count, bReserved;
     MIXER_STATUS Status;
     LPGUID NodeType;
-    ULONG ControlType, MaxChannels;
+    ULONG ControlType, MaxChannels, MemberFlags, PropertyId;
 
     /* initialize control count */
     Count = 0;
@@ -724,23 +812,38 @@ MMixerAddMixerControlsToMixerLineByNodeIndexArray(
             continue;
         }
 
-        if (IsEqualGUIDAligned(NodeType, &KSNODETYPE_VOLUME))
+        if (IsEqualGUIDAligned(NodeType, &KSNODETYPE_VOLUME) ||
+            IsEqualGUIDAligned(NodeType, &KSNODETYPE_MUTE))
         {
-            /* calculate maximum channel count for node */
-            MMixerGetMaxChannelsForNode(MixerContext, MixerInfo, hMixer, Nodes[Index], &MaxChannels);
+            PropertyId = IsEqualGUIDAligned(NodeType, &KSNODETYPE_VOLUME) ?
+                         KSPROPERTY_AUDIO_VOLUMELEVEL : KSPROPERTY_AUDIO_MUTE;
+            MMixerGetMaxChannelsForNode(MixerContext,
+                                        MixerInfo,
+                                        hMixer,
+                                        Nodes[Index],
+                                        PropertyId,
+                                        &MaxChannels,
+                                        &MemberFlags);
 
             DPRINT("NodeId %lu MaxChannels %lu Line %S Id %lu\n", Nodes[Index], MaxChannels, DstLine->Line.szName, DstLine->Line.dwLineID);
-            /* calculate maximum channels */
             DstLine->Line.cChannels = min(DstLine->Line.cChannels, MaxChannels);
+            MaxChannels = max(DstLine->Line.cChannels, 1);
         }
         else
         {
-            /* use default of one channel */
             MaxChannels = 1;
+            MemberFlags = KSPROPERTY_MEMBER_FLAG_BASICSUPPORT_UNIFORM;
         }
 
         /* now add the mixer control */
-        Status = MMixerAddMixerControl(MixerContext, MixerInfo, hMixer, Topology, Nodes[Index], DstLine, MaxChannels);
+        Status = MMixerAddMixerControl(MixerContext,
+                                       MixerInfo,
+                                       hMixer,
+                                       Topology,
+                                       Nodes[Index],
+                                       DstLine,
+                                       MaxChannels,
+                                       MemberFlags);
 
         if (Status == MM_STATUS_SUCCESS)
         {
@@ -1745,11 +1848,23 @@ MMixerInitializeFilter(
             PinsFound,
             PinsFound ? Pins[0] : MAXULONG);
 
-    /* if there is no pin found, we have a broken topology */
-    ASSERT(PinsFound != 0);
+    /*
+     * A wave pin does not require a topology bridge.  In particular, USB
+     * Audio filters may expose a valid streaming pin while omitting the
+     * optional mixer-control path on the other side of the ADC / DAC node.
+     * Keep the wave endpoint that was initialized above instead of indexing
+     * an empty pin array (or asserting in a debug build).
+     */
+    if (PinsFound == 0)
+    {
+        MixerContext->Free(Pins);
+        Status = MM_STATUS_SUCCESS;
+        goto Complete;
+    }
 
-    /* there should be exactly one bridge pin */
-    ASSERT(PinsFound == 1);
+    /* Use the first bridge pin, as the existing release-build path did. */
+    if (PinsFound != 1)
+        DPRINT1("MMixerInitializeFilter expected one bridge pin, got %lu\n", PinsFound);
 
     DPRINT("BridgePin %lu bInputMixer %lu\n", Pins[0], bInputMixer);
 
@@ -1789,6 +1904,7 @@ MMixerInitializeFilter(
     /* free pins */
     MixerContext->Free(Pins);
 
+Complete:
     if (NewMixerInfo)
     {
         /* insert mixer */
