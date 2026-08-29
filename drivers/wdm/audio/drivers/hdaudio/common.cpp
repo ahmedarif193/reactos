@@ -576,9 +576,13 @@ NTAPI
 CAdapterCommon::BuildWaveFormat(
     IN PVOID Node,
     IN ULONG NodeCount,
-    IN PULONG TargetWidgets)
+    IN PULONG TargetWidgets,
+    IN BOOLEAN Capture)
 {
     CFunctionGroupNode *OutNode = (CFunctionGroupNode *)Node;
+    PKSDATARANGE_AUDIO DataRange;
+    PKSDATARANGE *DataRanges;
+    PPCPIN_DESCRIPTOR WavePins;
 
     ULONG MaximumChannels = 0;
     ULONG MinimumBitsPerSample = (ULONG)-1;
@@ -590,6 +594,25 @@ CAdapterCommon::BuildWaveFormat(
     UCHAR FormatFloatSupported = 0;
     UCHAR FormatAC3Supported = 0;
     NTSTATUS Status;
+
+    if (Capture)
+    {
+        DataRange = m_WaveInDataRange;
+        DataRanges = m_WaveInDataRanges;
+        WavePins = m_WaveInPins;
+    }
+    else
+    {
+        DataRange = m_WaveOutDataRange;
+        DataRanges = m_WaveOutDataRanges;
+        WavePins = m_WaveOutPins;
+    }
+
+    RtlZeroMemory(DataRange,
+                  sizeof(KSDATARANGE_AUDIO) * HDAUDIO_MAX_FORMAT_RANGES);
+    RtlZeroMemory(DataRanges,
+                  sizeof(PKSDATARANGE) * HDAUDIO_MAX_FORMAT_RANGES);
+    WavePins[0].KsPinDescriptor.DataRangesCount = 0;
 
     for (ULONG NodeIndex = 0; NodeIndex < NodeCount; NodeIndex++)
     {
@@ -746,6 +769,8 @@ CAdapterCommon::BuildWaveFormat(
         DPRINT1("HDAUDIO: NO Formats supported\n");
         return STATUS_UNSUCCESSFUL;
     }
+    if (FormatsSupported > HDAUDIO_MAX_FORMAT_RANGES)
+        return STATUS_INTERNAL_ERROR;
 
     for (AudioFormatIndex = 0; AudioFormatIndex < FormatsSupported; AudioFormatIndex++)
     {
@@ -785,6 +810,8 @@ CAdapterCommon::BuildWaveFormat(
         DataRanges[AudioFormatIndex] = (PKSDATARANGE)&DataRange[AudioFormatIndex];
     }
 
+    WavePins[0].KsPinDescriptor.DataRangesCount = FormatsSupported;
+
     return STATUS_SUCCESS;
 }
 
@@ -795,7 +822,7 @@ CAdapterCommon::BuildWaveInFormat(
     IN PULONG AssociatedPins,
     IN PVOID Node)
 {
-    return BuildWaveFormat(Node, AssociatedPinCount, AssociatedPins);
+    return BuildWaveFormat(Node, AssociatedPinCount, AssociatedPins, TRUE);
 }
 
 NTSTATUS
@@ -841,11 +868,11 @@ CAdapterCommon::BuildWaveOutFormat(
     NTSTATUS Result;
     if (SubNodeCount == 0)
     {
-        Result = BuildWaveFormat(Node, AssociatedPinCount, AssociatedPins);
+        Result = BuildWaveFormat(Node, AssociatedPinCount, AssociatedPins, FALSE);
     }
     else
     {
-        Result = BuildWaveFormat(Node, SubNodeCount, TargetWidgets);
+        Result = BuildWaveFormat(Node, SubNodeCount, TargetWidgets, FALSE);
     }
     ExFreePoolWithTag(TargetWidgets, TAG_HDAUDIO);
     return Result;
@@ -1063,7 +1090,7 @@ CAdapterCommon::ProcessDacNodes(
     DPRINT1("HDAUDIO: SubdeviceName %S\n", SubdeviceWave);
     Status = InstallDevice(
         DeviceObject, Irp, SubdeviceWave, FALSE, CLSID_PortWaveRT, ResourceList, DacNodeCount, DacNodes, (PVOID)OutNode,
-        WaveOutFilterDescription, &m_WaveRTOutPortUnknown);
+        &m_WaveOutFilterDescription, &m_WaveRTOutPortUnknown);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("HDAUDIO: InstallDevice failed with %x\n", Status);
@@ -1118,7 +1145,7 @@ CAdapterCommon::ProcessAdcNodes(
     DPRINT1("HDAUDIO: SubdeviceName %S\n", SubdeviceWave);
     Status = InstallDevice(
         DeviceObject, Irp, SubdeviceWave, FALSE, CLSID_PortWaveRT, ResourceList, AdcNodeCount, AdcNodes, (PVOID)OutNode,
-        WaveInFilterDescription, &m_WaveRTInPortUnknown);
+        &m_WaveInFilterDescription, &m_WaveRTInPortUnknown);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("HDAUDIO: InstallDevice failed with %x\n", Status);

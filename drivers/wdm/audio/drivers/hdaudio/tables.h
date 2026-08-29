@@ -125,10 +125,6 @@ static PCCONNECTION_DESCRIPTOR TopoInConnections[] = {{KSFILTER_NODE, 1, 0, 1}, 
 
 static PCCONNECTION_DESCRIPTOR TopoOutConnections[] = {{KSFILTER_NODE, 0, 0, 1}, {1, 0, KSFILTER_NODE, 1}, {0, 0, 1, 1}};
 
-static KSDATARANGE_AUDIO DataRange[1];
-
-static PKSDATARANGE DataRanges[1];
-
 static KSDATARANGE DataRangeBridge[] =
 {
    {
@@ -155,8 +151,8 @@ static PCPIN_DESCRIPTOR WaveInPins[] =
             NULL,                                       // Interfaces
             0,                                          // MediumsCount
             NULL,                                       // Mediums
-            1,                                          // DataRangesCount
-            DataRanges,                                 // DataRanges
+            0,                                          // DataRangesCount
+            NULL,                                       // DataRanges
             KSPIN_DATAFLOW_OUT,                         // DataFlow
             KSPIN_COMMUNICATION_SINK,                   // Communication
             &PINNAME_CAPTURE,                           // Category
@@ -193,8 +189,8 @@ static PCPIN_DESCRIPTOR WaveOutPins[] =
             NULL,                                       // Interfaces
             0,                                          // MediumsCount
             NULL,                                       // Mediums
-            1,                                          // DataRangesCount
-            DataRanges,                                 // DataRanges
+            0,                                          // DataRangesCount
+            NULL,                                       // DataRanges
             KSPIN_DATAFLOW_IN,                          // DataFlow
             KSPIN_COMMUNICATION_SINK,                   // Communication
             &KSCATEGORY_AUDIO,                          // Category
