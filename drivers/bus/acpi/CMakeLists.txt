@@ -215,6 +215,7 @@ list(APPEND ACPI_SOURCE
 # PCI uses device interface and IOCTL for ACPI method evaluation.
 
 add_library(acpi MODULE
+    gpioint.c
     ${ACPI_SOURCE}
     ${CMAKE_CURRENT_BINARY_DIR}/acpi.def
     acpi.rc)
@@ -226,5 +227,6 @@ endif()
 target_link_libraries(acpi wdmguid acpica memcmp strtol ${PSEH_LIB})
 add_importlibs(acpi ntoskrnl hal)
 add_pch(acpi precomp.h ACPI_SOURCE)
+set_source_files_properties(gpioint.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 add_cd_file(TARGET acpi DESTINATION reactos/system32/drivers NO_CAB FOR all)
 add_driver_inf(acpi acpi.inf)

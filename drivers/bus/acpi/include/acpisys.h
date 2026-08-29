@@ -73,6 +73,9 @@ typedef struct _PDO_DEVICE_DATA
     KSPIN_LOCK NotificationLock;
     ULONG NotificationRegistrationCount;
     BOOLEAN NotificationHandlersInstalled;
+#define ACPI_GPIO_INT_MAX 64
+    ULONG GpioIntCount;
+    struct { ULONG ResourceIndex; ULONG PinIndex; ULONG Gsiv; } GpioInts[ACPI_GPIO_INT_MAX];
     BOOLEAN PciRootLogged;
     volatile LONG ThermalStamp;
     UCHAR ThermalCoolingPolicy;

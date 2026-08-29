@@ -48,7 +48,7 @@ authoritative for the synced source.
 | DWC2 USB host | Not published in this repository | Native `usbdwc2`; active and boot-start only in the Pi 3 profile |
 | LAN951x Ethernet | No NIC miniport in this repository | Native USB `smsc95xx` behind DWC2; active in the profile |
 | CYW43430 Wi-Fi | Firmware/BSP integration, not a matching driver source here | Native `cyw43455sdio` plus `cyw43455`; active in the profile |
-| GPIO | `drivers/gpio/bcm2836` | Built as `bcmgpio` on the ReactOS `msgpioclx` class extension (controller PnP/power, bank interrupts, IO-pin connections); GpioInt consumers get virtual GSIVs (`HalAllocateSecondaryInterrupt`, INTID 4096+) that `msgpioclx` registers with the HAL and dispatches from the bank ISR |
+| GPIO | `drivers/gpio/bcm2836` | Built as `bcmgpio` on the ReactOS `msgpioclx` class extension (controller PnP/power, bank interrupts, IO-pin connections); GpioInt consumers get secondary GSIVs from `HalPrivateDispatchTable.HalAllocateGsivForSecondaryInterrupt`; `msgpioclx` registers through `HalSetSystemInformation(HalRegisterSecondaryInterruptInterface)`, resolves pins through the resource hub and dispatches via `KeDispatchSecondaryInterrupt` |
 | I2C | `drivers/i2c/bcm2836` | Built as `bcmi2c` on the ReactOS `spbcx` class extension; hardware validation pending |
 | SPI and AUX SPI | `drivers/spi/bcm2836`, `drivers/spi/bcmauxspi` | Built as `bcmspi` and `bcmauxspi` on the ReactOS `spbcx` class extension; hardware validation pending |
 | PL011 UART | `drivers/uart/bcm2836/serPL011` | Built as `SerPL011` on the ReactOS `sercx2` class extension (PIO transmit/receive, wait mask, timeouts, purge); hardware validation pending |
