@@ -1814,7 +1814,17 @@ __INTRIN_INLINE_SSE2 void _mm_stream_si64(long long *p, long long a)
 }
 #endif
 
-void _mm_clflush(void const *p);
+#ifdef _M_IX86
+__INTRIN_INLINE void _mm_clflush(void const *p)
+{
+    __asm__ __volatile__("clflush %0" : : "m" (*(const char *)p));
+}
+#else
+__INTRIN_INLINE_SSE2 void _mm_clflush(void const *p)
+{
+    __builtin_ia32_clflush(p);
+}
+#endif
 
 void _mm_lfence(void);
 

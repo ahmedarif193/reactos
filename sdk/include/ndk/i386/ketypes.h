@@ -782,10 +782,8 @@ typedef struct _KPRCB
     ULONG CoreProcessorSet;
 #endif
 #ifdef __REACTOS__
-#if  (NTDDI_VERSION < NTDDI_WIN10)
-    // On Win 10+ the FeatureBits field is extended to 64 bits
+    /* ReactOS stores the upper half separately on i386. */
     ULONG FeatureBitsHigh;
-#endif
 #endif
 } KPRCB, *PKPRCB;
 

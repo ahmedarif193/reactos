@@ -2013,7 +2013,7 @@ Return Value:
         //  oplock that may have been granted.
         //
 
-        if ((AbnormalTermination() ||
+        if ((_SEH2_AbnormalTermination() ||
              !NT_SUCCESS( Iosb.Status )) &&
             OpenRequiringOplock &&
             (Iosb.Status != STATUS_CANNOT_BREAK_OPLOCK) &&

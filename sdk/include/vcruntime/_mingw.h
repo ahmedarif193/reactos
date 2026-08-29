@@ -24,6 +24,9 @@
 #undef __stdcall
 #endif
 #define __stdcall
+#ifndef _cdecl
+#define _cdecl __cdecl
+#endif
 #endif
 
 #ifdef __GNUC__

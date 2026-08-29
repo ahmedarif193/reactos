@@ -388,5 +388,19 @@ typedef __WCHAR_TYPE__ wchar_t;
 
 #endif /* !offsetof */
 
+#if (defined(__GNUC__) || defined(__clang__)) && \
+    ((defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L) || \
+     (defined(__cplusplus) && __cplusplus >= 201103L))
+#if !defined(_GCC_MAX_ALIGN_T) && !defined(__CLANG_MAX_ALIGN_T_DEFINED)
+#define _GCC_MAX_ALIGN_T
+#define __CLANG_MAX_ALIGN_T_DEFINED
+typedef struct
+{
+    long long __max_align_ll __attribute__((__aligned__(__alignof__(long long))));
+    long double __max_align_ld __attribute__((__aligned__(__alignof__(long double))));
+} max_align_t;
+#endif
+#endif /* GCC or Clang in C11 or C++11 mode */
+
 #endif /* !_STDDEF_H && !_STDDEF_H_ && !_ANSI_STDDEF_H && !__STDDEF_H__
 	  || __need_XXX was not defined before */

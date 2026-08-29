@@ -1741,7 +1741,7 @@
 @ cdecl mbstowcs()
 @ cdecl mbtowc()
 @ cdecl memchr()
-@ cdecl -arch=x86_64,arm64 memcmp()
+@ cdecl -arch=i386,x86_64,arm64 memcmp()
 @ cdecl memcpy()
 @ cdecl memmove()
 @ cdecl memset()
@@ -2659,7 +2659,7 @@
 @ stdcall -arch=arm64 KeSetHeteroCpuPolicyThread(ptr long long)
 @ stdcall -arch=arm64 KeSetSelectedCpuSetsThread(ptr long ptr)
 @ stdcall -arch=x86_64,arm64 KeSetSystemGroupAffinityThread(ptr ptr)
-@ stdcall -arch=x86_64,arm64 KeSetTargetProcessorDpcEx(ptr ptr)
+@ stdcall -arch=i386,x86_64,arm64 KeSetTargetProcessorDpcEx(ptr ptr)
 @ stdcall -version=0x603+ -arch=arm64 KeSetTimer2(ptr int64 int64 ptr)
 @ stdcall -arch=x86_64,arm64 KeShouldYieldProcessor()
 @ stdcall -arch=arm64 KeSizeOfAffinityEx(long)
@@ -3101,7 +3101,7 @@
 @ stdcall RtlIsServicePackVersionInstalled(long)
 @ stdcall -arch=i386,x86_64,arm64 RtlIsStateSeparationEnabled()
 @ stub -arch=arm64 RtlIsUntrustedObject
-@ stdcall -arch=i386,x86_64,arm64 RtlIsZeroMemory(ptr int64)
+@ stdcall -arch=i386,x86_64,arm64 RtlIsZeroMemory(ptr ptr)
 @ stub -arch=arm64 RtlLoadString
 @ stub -arch=arm64 RtlLocateSupervisorFeature
 @ stdcall -arch=i386,x86_64,arm64 RtlLogUnexpectedCodepath()
@@ -3347,7 +3347,7 @@
 @ stub -arch=arm64 WheaUnconfigureErrorSource
 @ stub -arch=arm64 WheaUnregisterErrorSourceOverride
 @ stdcall -arch=arm64 ZwAlertThreadByThreadId(ptr)
-@ stdcall -arch=i386,x86_64,arm64 ZwAssociateWaitCompletionPacket(ptr ptr ptr ptr ptr long int64 ptr)
+@ stdcall -arch=i386,x86_64,arm64 ZwAssociateWaitCompletionPacket(ptr ptr ptr ptr ptr long ptr ptr)
 @ stdcall -arch=i386,x86_64,arm64 ZwCancelWaitCompletionPacket(ptr long)
 @ stub -arch=arm64 ZwCommitComplete
 @ stub -arch=arm64 ZwCommitEnlistment

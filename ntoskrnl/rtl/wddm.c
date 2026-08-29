@@ -79,7 +79,7 @@ RtlGetAppContainerSidType(
     _In_ PSID Sid,
     _Out_ PULONG SidType)
 {
-    SID_IDENTIFIER_AUTHORITY AppPackageAuthority = SECURITY_APP_PACKAGE_AUTHORITY;
+    SID_IDENTIFIER_AUTHORITY AppPackageAuthority = {SECURITY_APP_PACKAGE_AUTHORITY};
     UCHAR Count;
 
     if (SidType == NULL)

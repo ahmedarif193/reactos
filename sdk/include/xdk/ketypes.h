@@ -1640,13 +1640,16 @@ typedef struct _KUSER_SHARED_DATA
 
     ULONG DataFlagsPad[1];                                  // 0x2f4
     ULONGLONG TestRetInstruction;                           // 0x2f8
-#if (NTDDI_VERSION >= NTDDI_WIN8)
+#if defined(_M_IX86)
+    ULONG SystemCall;                                       // 0x300
+    ULONG SystemCallReturn;                                 // 0x304
+#elif (NTDDI_VERSION >= NTDDI_WIN8)
     ULONGLONG QpcFrequency;                                 // 0x300
 #else
     ULONG SystemCall;                                       // 0x300
     ULONG SystemCallReturn;                                 // 0x304
 #endif
-#if (NTDDI_VERSION >= NTDDI_WIN10_TH2)
+#if (NTDDI_VERSION >= NTDDI_WIN10_TH2) && !defined(_M_IX86)
     ULONG SystemCall;                                       // 0x308
     ULONG SystemCallPad0;                                   // 0x30c Renamed to Reserved2 in Vibranium R3
     ULONGLONG SystemCallPad[2];                             // 0x310

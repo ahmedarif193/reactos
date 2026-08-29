@@ -668,7 +668,7 @@ SymCryptGHashAppendDataPclmulqdq(
 #pragma clang attribute push (__attribute__((target("aes"))), apply_to=function)
 #else
 #pragma GCC push_options
-#pragma GCC target("aes")
+#pragma GCC target("+aes")
 #endif
 
 VOID

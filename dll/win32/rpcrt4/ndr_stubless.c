@@ -991,8 +991,8 @@ LONG_PTR WINAPI NdrpClientCall2( PMIDL_STUB_DESC pStubDesc, PFORMAT_STRING pForm
 #ifdef __aarch64__
 __ASM_GLOBAL_FUNC( NdrClientCall2,
                    "stp x29, x30, [sp, #-0x40]!\n\t"
-                   ".seh_save_fplr_x 0x40\n\t"
-                   ".seh_endprologue\n\t"
+                   __ASM_SEH(".seh_save_fplr_x 0x40\n\t")
+                   __ASM_SEH(".seh_endprologue\n\t")
                    "stp x2, x3, [sp, #0x10]\n\t"
                    "stp x4, x5, [sp, #0x20]\n\t"
                    "stp x6, x7, [sp, #0x30]\n\t"
@@ -1833,8 +1833,8 @@ cleanup:
 #ifdef __aarch64__
 __ASM_GLOBAL_FUNC( NdrAsyncClientCall,
                    "stp x29, x30, [sp, #-0x40]!\n\t"
-                   ".seh_save_fplr_x 0x40\n\t"
-                   ".seh_endprologue\n\t"
+                   __ASM_SEH(".seh_save_fplr_x 0x40\n\t")
+                   __ASM_SEH(".seh_endprologue\n\t")
                    "stp x2, x3, [sp, #0x10]\n\t"
                    "stp x4, x5, [sp, #0x20]\n\t"
                    "stp x6, x7, [sp, #0x30]\n\t"
@@ -2212,8 +2212,8 @@ LONG_PTR CDECL ndr64_client_call( MIDL_STUBLESS_PROXY_INFO *info,
 #ifdef __aarch64__
 __ASM_GLOBAL_FUNC( NdrClientCall3,
                    "stp x29, x30, [sp, #-0x40]!\n\t"
-                   ".seh_save_fplr_x 0x40\n\t"
-                   ".seh_endprologue\n\t"
+                   __ASM_SEH(".seh_save_fplr_x 0x40\n\t")
+                   __ASM_SEH(".seh_endprologue\n\t")
                    "str x3, [sp, #0x18]\n\t"
                    "stp x4, x5, [sp, #0x20]\n\t"
                    "stp x6, x7, [sp, #0x30]\n\t"
@@ -2281,8 +2281,8 @@ LONG_PTR CDECL ndr64_async_client_call( MIDL_STUBLESS_PROXY_INFO *info,
 #ifdef __aarch64__
 __ASM_GLOBAL_FUNC( Ndr64AsyncClientCall,
                    "stp x29, x30, [sp, #-0x40]!\n\t"
-                   ".seh_save_fplr_x 0x40\n\t"
-                   ".seh_endprologue\n\t"
+                   __ASM_SEH(".seh_save_fplr_x 0x40\n\t")
+                   __ASM_SEH(".seh_endprologue\n\t")
                    "str x3, [sp, #0x18]\n\t"
                    "stp x4, x5, [sp, #0x20]\n\t"
                    "stp x6, x7, [sp, #0x30]\n\t"

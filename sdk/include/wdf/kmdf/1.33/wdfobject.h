@@ -320,7 +320,7 @@ typedef _contexttype* WDF_TYPE_NAME_POINTER_TYPE(_contexttype);         \
 WDF_EXTERN_C                                                            \
 __declspec(allocate( _section ))                                        \
 __declspec(selectany)                                                   \
-extern const WDF_OBJECT_CONTEXT_TYPE_INFO                               \
+const WDF_OBJECT_CONTEXT_TYPE_INFO                                      \
 WDF_TYPE_NAME_TO_TYPE_INFO(_contexttype) =                              \
 {                                                                       \
     sizeof(WDF_OBJECT_CONTEXT_TYPE_INFO),                               \
