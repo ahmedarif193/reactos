@@ -772,6 +772,29 @@ WdmAudGetPreferredWaveFormat(
 }
 
 NTSTATUS
+WdmAudGetWaveMixerId(
+    IN PIRP Irp,
+    IN PWDMAUD_DEVICE_INFO DeviceInfo)
+{
+    MIXER_STATUS Status;
+
+    if (DeviceInfo->DeviceType != WAVE_IN_DEVICE_TYPE &&
+        DeviceInfo->DeviceType != WAVE_OUT_DEVICE_TYPE)
+    {
+        return SetIrpIoStatus(Irp, STATUS_INVALID_PARAMETER, 0);
+    }
+
+    Status = MMixerGetWaveMixerId(&MixerContext,
+                                  DeviceInfo->DeviceIndex,
+                                  DeviceInfo->DeviceType == WAVE_IN_DEVICE_TYPE,
+                                  &DeviceInfo->u.MixerId);
+    if (Status != MM_STATUS_SUCCESS)
+        return SetIrpIoStatus(Irp, STATUS_NOT_SUPPORTED, 0);
+
+    return SetIrpIoStatus(Irp, STATUS_SUCCESS, sizeof(WDMAUD_DEVICE_INFO));
+}
+
+NTSTATUS
 WdmAudMidiCapabilities(
     IN PDEVICE_OBJECT DeviceObject,
     IN PWDMAUD_DEVICE_INFO DeviceInfo,
