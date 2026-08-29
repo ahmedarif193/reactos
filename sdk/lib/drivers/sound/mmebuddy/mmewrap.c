@@ -146,6 +146,7 @@ MmeOpenDevice(
     PSOUND_DEVICE SoundDevice;
     PSOUND_DEVICE_INSTANCE SoundDeviceInstance;
     LPWAVEFORMATEX Format = NULL;
+    DWORD FormatSize = sizeof(WAVEFORMATEX);
 
     SND_TRACE(L"Opening device\n");
 
@@ -159,9 +160,13 @@ MmeOpenDevice(
     if (DeviceType == WAVE_IN_DEVICE_TYPE || DeviceType == WAVE_OUT_DEVICE_TYPE)
     {
         Format = OpenParameters->lpFormat;
+        VALIDATE_MMSYS_PARAMETER( Format );
+
+        if (Format->wFormatTag != WAVE_FORMAT_PCM)
+            FormatSize += Format->cbSize;
 
         /* Does this device support the format? */
-        Result = QueryWaveDeviceFormatSupport(SoundDevice, Format, sizeof(WAVEFORMATEX));
+        Result = QueryWaveDeviceFormatSupport(SoundDevice, Format, FormatSize);
         if ( ! MMSUCCESS(Result) )
         {
             SND_ERR(L"Format not supported\n");
@@ -181,10 +186,10 @@ MmeOpenDevice(
     if ( ! MMSUCCESS(Result) )
         return TranslateInternalMmResult(Result);
 
-    Result = SetWaveDeviceFormat(SoundDeviceInstance, DeviceId, Format, sizeof(WAVEFORMATEX));
+    Result = SetWaveDeviceFormat(SoundDeviceInstance, DeviceId, Format, FormatSize);
     if ( ! MMSUCCESS(Result) )
     {
-        /* TODO: Destroy sound instance */
+        DestroySoundDeviceInstance(SoundDeviceInstance);
         return TranslateInternalMmResult(Result);
     }
 

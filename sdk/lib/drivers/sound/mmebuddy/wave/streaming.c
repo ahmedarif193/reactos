@@ -53,17 +53,6 @@ DoWaveStreaming(
         return;
     }
 
-    if (SoundDeviceInstance->RTStreamingEnabled && !SoundDeviceInstance->bStarted)
-    {
-        /* Do a kickstart for an audio device, in case it isn't started yet */
-        Result = FunctionTable->SetState(SoundDeviceInstance, TRUE);
-        if (!MMSUCCESS(Result))
-        {
-            SND_ERR(L"DoWaveStreaming: Failed to kickstart audio device for streaming\n");
-            return;
-        }
-    }
-
     /* Do we need to loop a header? */
     if (DeviceType == WAVE_OUT_DEVICE_TYPE && (Header->dwFlags & WHDR_BEGINLOOP))
     {
