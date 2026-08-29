@@ -4,13 +4,14 @@
  * PURPOSE:     Broker firmware connection properties by connection ID
  */
 
-#include <ntddk.h>
+#include <ntifs.h>
 #include <initguid.h>
 #include <gpio.h>
 #include <spb.h>
 #include <reactos/drivers/reshubio.h>
 #include <reactos/drivers/intelgpio.h>
 #include <reactos/drivers/inteli2c.h>
+#include <ntstrsafe.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -48,6 +49,7 @@ typedef struct _RH_CONNECTION_ENTRY
     UCHAR Class;
     UCHAR Type;
     UCHAR Reserved;
+    PDEVICE_OBJECT ControllerDevice;
     ULONG PropertiesLength;
     UCHAR Properties[ANYSIZE_ARRAY];
 } RH_CONNECTION_ENTRY, *PRH_CONNECTION_ENTRY;
@@ -159,6 +161,96 @@ RhParseConnectionId(
     return TRUE;
 }
 
+
+static
+BOOLEAN
+RhHasLegacyInterface(
+    _In_ PDEVICE_OBJECT Pdo,
+    _In_ const GUID *InterfaceGuid)
+{
+    PWCHAR InterfaceList = NULL;
+    BOOLEAN Present;
+
+    if (!NT_SUCCESS(IoGetDeviceInterfaces(InterfaceGuid, Pdo, 0, &InterfaceList)))
+        return FALSE;
+    Present = InterfaceList[0] != UNICODE_NULL;
+    ExFreePool(InterfaceList);
+    return Present;
+}
+
+static
+BOOLEAN
+RhShouldReparse(
+    _In_ PRH_CONNECTION_ENTRY Entry)
+{
+    PDEVICE_OBJECT Pdo = Entry->ControllerDevice;
+    PDEVICE_OBJECT Top;
+    BOOLEAN Attached;
+
+    if (!Pdo)
+        return FALSE;
+    Top = IoGetAttachedDeviceReference(Pdo);
+    Attached = Top != Pdo;
+    ObDereferenceObject(Top);
+    if (!Attached)
+        return FALSE;
+    if (RhHasLegacyInterface(Pdo, &GUID_DEVINTERFACE_INTEL_GPIO) ||
+        RhHasLegacyInterface(Pdo, &GUID_DEVINTERFACE_INTEL_I2C))
+    {
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static
+NTSTATUS
+RhReparseToController(
+    _In_ PFILE_OBJECT FileObject,
+    _In_ PRH_CONNECTION_ENTRY Entry)
+{
+    POBJECT_NAME_INFORMATION NameInfo;
+    ULONG NameLength = 0;
+    USHORT NewLength;
+    PWCHAR NewBuffer;
+    NTSTATUS Status;
+
+    Status = ObQueryNameString(Entry->ControllerDevice, NULL, 0, &NameLength);
+    if (Status != STATUS_INFO_LENGTH_MISMATCH || !NameLength)
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+    NameInfo = ExAllocatePoolWithTag(PagedPool, NameLength, RH_TAG);
+    if (!NameInfo)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    Status = ObQueryNameString(Entry->ControllerDevice, NameInfo, NameLength, &NameLength);
+    if (!NT_SUCCESS(Status) || !NameInfo->Name.Length)
+    {
+        ExFreePoolWithTag(NameInfo, RH_TAG);
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+    }
+
+    NewLength = NameInfo->Name.Length + RESOURCE_HUB_CONNECTION_FILE_SIZE;
+    NewBuffer = ExAllocatePoolWithTag(PagedPool, NewLength, RH_TAG);
+    if (!NewBuffer)
+    {
+        ExFreePoolWithTag(NameInfo, RH_TAG);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    RtlCopyMemory(NewBuffer, NameInfo->Name.Buffer, NameInfo->Name.Length);
+    NewBuffer[NameInfo->Name.Length / sizeof(WCHAR)] = L'\\';
+    RtlStringCchPrintfW(NewBuffer + NameInfo->Name.Length / sizeof(WCHAR) + 1,
+                        RESOURCE_HUB_CONNECTION_FILE_CHARS,
+                        L"%08lx%08lx",
+                        Entry->ConnectionId.HighPart,
+                        Entry->ConnectionId.LowPart);
+    ExFreePoolWithTag(NameInfo, RH_TAG);
+
+    if (FileObject->FileName.Buffer)
+        ExFreePoolWithTag(FileObject->FileName.Buffer, 0);
+    FileObject->FileName.Buffer = NewBuffer;
+    FileObject->FileName.MaximumLength = NewLength;
+    FileObject->FileName.Length = NewLength - sizeof(UNICODE_NULL);
+    return STATUS_REPARSE;
+}
+
 static
 NTSTATUS
 NTAPI
@@ -191,18 +283,35 @@ RhCreateClose(
             ExAcquireFastMutex(&RhConnectionLock);
             Entry = RhFindConnectionLocked(ConnectionId);
             if (Entry)
-            {
                 InterlockedIncrement(&Entry->ReferenceCount);
+            ExReleaseFastMutex(&RhConnectionLock);
+            if (Entry && RhShouldReparse(Entry))
+            {
+                Status = RhReparseToController(FileObject, Entry);
+                ExAcquireFastMutex(&RhConnectionLock);
+                if (InterlockedDecrement(&Entry->ReferenceCount) == 0 && Entry->Deleted)
+                    ExFreePoolWithTag(Entry, RH_TAG);
+                ExReleaseFastMutex(&RhConnectionLock);
+                ExFreePoolWithTag(Context, RH_TAG);
+                if (Status == STATUS_REPARSE)
+                {
+                    Irp->IoStatus.Status = STATUS_REPARSE;
+                    Irp->IoStatus.Information = IO_REPARSE;
+                    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                    return STATUS_REPARSE;
+                }
+                goto Complete;
+            }
+            if (Entry)
+            {
                 Context->Connection = Entry;
                 FileObject->FsContext = Context;
             }
             else
             {
                 Status = STATUS_OBJECT_NAME_NOT_FOUND;
-            }
-            ExReleaseFastMutex(&RhConnectionLock);
-            if (!Entry)
                 ExFreePoolWithTag(Context, RH_TAG);
+            }
         }
     }
     else if (IrpStack->MajorFunction == IRP_MJ_CLOSE && FileObject->FsContext)
@@ -241,7 +350,7 @@ RhRegisterConnection(
 
     if (InputLength < FIELD_OFFSET(RH_REGISTER_CONNECTION_INPUT, Properties) || !Input)
         return STATUS_BUFFER_TOO_SMALL;
-    if (Input->Version != RH_REGISTER_CONNECTION_VERSION || !Input->ConnectionId.QuadPart || !Input->PropertiesLength)
+    if ((Input->Version != 1 && Input->Version != RH_REGISTER_CONNECTION_VERSION) || !Input->ConnectionId.QuadPart || !Input->PropertiesLength)
         return STATUS_INVALID_PARAMETER;
     if (Input->PropertiesLength > MAXULONG - FIELD_OFFSET(RH_REGISTER_CONNECTION_INPUT, Properties))
         return STATUS_INTEGER_OVERFLOW;
@@ -259,12 +368,13 @@ RhRegisterConnection(
     NewEntry->ConnectionId = Input->ConnectionId;
     NewEntry->Class = Input->Class;
     NewEntry->Type = Input->Type;
+    NewEntry->ControllerDevice = Input->Version >= 2 ? Input->ControllerDevice : NULL;
     NewEntry->PropertiesLength = Input->PropertiesLength;
     RtlCopyMemory(NewEntry->Properties, Input->Properties, Input->PropertiesLength);
 
     ExAcquireFastMutex(&RhConnectionLock);
     OldEntry = RhFindConnectionLocked(Input->ConnectionId);
-    if (OldEntry && OldEntry->Class == Input->Class && OldEntry->Type == Input->Type && OldEntry->PropertiesLength == Input->PropertiesLength && RtlCompareMemory(OldEntry->Properties, Input->Properties, Input->PropertiesLength) == Input->PropertiesLength)
+    if (OldEntry && OldEntry->Class == Input->Class && OldEntry->Type == Input->Type && OldEntry->ControllerDevice == NewEntry->ControllerDevice && OldEntry->PropertiesLength == Input->PropertiesLength && RtlCompareMemory(OldEntry->Properties, Input->Properties, Input->PropertiesLength) == Input->PropertiesLength)
     {
         ExReleaseFastMutex(&RhConnectionLock);
         ExFreePoolWithTag(NewEntry, RH_TAG);
