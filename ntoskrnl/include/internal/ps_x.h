@@ -98,11 +98,9 @@ PspRunCreateProcessNotifyRoutines(IN PEPROCESS CurrentProcess,
         if (!CallBack) continue;
 
         Routine = ExGetCallBackBlockRoutine(CallBack);
-        if ((ULONG_PTR)Routine & 1)
+        if (ExGetCallBackBlockContext(CallBack))
         {
-            /* Extended (Ex) callback: untag and pass PS_CREATE_NOTIFY_INFO. */
-            PCREATE_PROCESS_NOTIFY_ROUTINE_EX ExRoutine =
-                (PCREATE_PROCESS_NOTIFY_ROUTINE_EX)((ULONG_PTR)Routine & ~(ULONG_PTR)1);
+            PCREATE_PROCESS_NOTIFY_ROUTINE_EX ExRoutine = (PCREATE_PROCESS_NOTIFY_ROUTINE_EX)Routine;
             ExRoutine(CurrentProcess, CurrentProcess->UniqueProcessId, pCreateInfo);
         }
         else
