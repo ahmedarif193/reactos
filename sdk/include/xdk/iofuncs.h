@@ -409,7 +409,7 @@ WRITE_REGISTER_NOFENCE_BUFFER_ULONG64(
 FORCEINLINE
 UCHAR
 READ_REGISTER_UCHAR(
-  IN PUCHAR Register)
+  IN volatile UCHAR *Register)
 {
   UCHAR Value = *(volatile UCHAR * const)Register;
   __asm__ __volatile__("dsb ld" ::: "memory");
@@ -419,7 +419,7 @@ READ_REGISTER_UCHAR(
 FORCEINLINE
 USHORT
 READ_REGISTER_USHORT(
-  IN PUSHORT Register)
+  IN volatile USHORT *Register)
 {
   USHORT Value = *(volatile USHORT * const)Register;
   __asm__ __volatile__("dsb ld" ::: "memory");
@@ -429,7 +429,7 @@ READ_REGISTER_USHORT(
 FORCEINLINE
 ULONG
 READ_REGISTER_ULONG(
-  IN PULONG Register)
+  IN volatile ULONG *Register)
 {
   ULONG Value = *(volatile ULONG * const)Register;
   __asm__ __volatile__("dsb ld" ::: "memory");
@@ -478,7 +478,7 @@ READ_REGISTER_BUFFER_ULONG(
 FORCEINLINE
 VOID
 WRITE_REGISTER_UCHAR(
-  IN PUCHAR Register,
+  IN volatile UCHAR *Register,
   IN UCHAR Value)
 {
   *(volatile UCHAR *)Register = Value;
@@ -488,7 +488,7 @@ WRITE_REGISTER_UCHAR(
 FORCEINLINE
 VOID
 WRITE_REGISTER_USHORT(
-  IN PUSHORT Register,
+  IN volatile USHORT *Register,
   IN USHORT Value)
 {
   *(volatile USHORT *)Register = Value;
@@ -498,7 +498,7 @@ WRITE_REGISTER_USHORT(
 FORCEINLINE
 VOID
 WRITE_REGISTER_ULONG(
-  IN PULONG Register,
+  IN volatile ULONG *Register,
   IN ULONG Value)
 {
   *(volatile ULONG *)Register = Value;
@@ -2334,6 +2334,15 @@ IoForwardIrpSynchronously(
   _In_ PIRP Irp);
 
 #define IoForwardAndCatchIrp IoForwardIrpSynchronously
+
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoSynchronousCallDriver(
+  _In_ PDEVICE_OBJECT DeviceObject,
+  _In_ PIRP Irp);
+#endif
 
 NTKERNELAPI
 VOID

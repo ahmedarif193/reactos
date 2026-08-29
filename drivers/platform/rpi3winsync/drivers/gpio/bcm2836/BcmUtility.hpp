@@ -79,6 +79,18 @@ class BITFIELD_ARRAY {
 
 public:
 
+#ifdef __REACTOS__
+    template <unsigned int U_BITS_PER_ELEMENT, unsigned int U_ELEMS_PER_STORAGE>
+    struct _ELEM_INDEX {
+        explicit _ELEM_INDEX (unsigned int Index) :
+            StorageIndex(Index / U_ELEMS_PER_STORAGE),
+            BitPosition((Index % U_ELEMS_PER_STORAGE) * U_BITS_PER_ELEMENT)
+        { }
+
+        unsigned int StorageIndex;
+        unsigned int BitPosition;
+    };
+#else
     template <unsigned int T_BITS_PER_ELEMENT, unsigned int T_ELEMS_PER_STORAGE>
     struct _ELEM_INDEX {
         explicit _ELEM_INDEX (unsigned int Index) :
@@ -89,6 +101,7 @@ public:
         unsigned int StorageIndex;
         unsigned int BitPosition;
     };
+#endif
 
     typedef _ELEM_INDEX<T_BITS_PER_ELEMENT, _ELEMS_PER_STORAGE> INDEX_TYPE;
 

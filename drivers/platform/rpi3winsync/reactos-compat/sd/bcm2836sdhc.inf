@@ -1,0 +1,36 @@
+[Version]
+Signature="$Windows NT$"
+Class=SDHost
+ClassGuid={a0a588a4-c46f-4b37-b7ea-c82fe89870c6}
+Provider=%ProviderString%
+
+[DestinationDirs]
+DefaultDestDir=12
+
+[Manufacturer]
+%MSFT%=Generic,NTarm64
+
+[Generic.NTarm64]
+%bcm2836sdhc.DeviceDesc%=SDHost,ACPI\BCM2847,ACPI\ARASAN
+
+[SDHost]
+CopyFiles=Drivers_Dir
+
+[Drivers_Dir]
+bcm2836sdhc.sys
+
+[SDHost.Services]
+AddService=bcm2836sdhc,0x00000002,sdhc_Service_Inst
+
+[sdhc_Service_Inst]
+DisplayName=%bcm2836sdhc.DeviceDesc%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\bcm2836sdhc.sys
+LoadOrderGroup=System Bus Extender
+
+[Strings]
+ProviderString="MS-IOT"
+MSFT="Microsoft"
+bcm2836sdhc.DeviceDesc="Broadcom 2836 Arasan SD Host Controller"
