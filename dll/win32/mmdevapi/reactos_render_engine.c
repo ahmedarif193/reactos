@@ -24,10 +24,11 @@
 #endif
 
 #define RENDER_REGION_MAGIC 0x52415352 /* RSAR */
-#define RENDER_REGION_VERSION 1
+#define RENDER_REGION_VERSION 2
 #define RENDER_CLIENT_CAPACITY 16
 #define RENDER_RING_FRAMES 8192
 #define RENDER_MAX_FRAME_SIZE 32
+#define RENDER_PENDING_CHUNK_CAPACITY 64
 #define RENDER_WORKER_INTERVAL_MS 5
 #define RENDER_OWNER_RETRY_MS 100
 
@@ -42,6 +43,7 @@ struct shared_render_slot
     UINT32 read_frame;
     UINT32 write_frame;
     UINT32 queued_frames;
+    UINT32 pending_frames;
     UINT64 position;
     UINT64 qpc_time;
     BYTE data[RENDER_RING_FRAMES * RENDER_MAX_FRAME_SIZE];
@@ -79,6 +81,10 @@ struct local_render_endpoint
     BOOL transport_started;
     BYTE *mix_buffer;
     UINT32 mix_buffer_frames;
+    UINT64 completed_frames;
+    UINT32 pending_chunk_head;
+    UINT32 pending_chunk_count;
+    struct pending_render_chunk *pending_chunks;
 };
 
 struct reactos_shared_render_client
@@ -93,6 +99,13 @@ struct pending_consumption
     DWORD token;
     UINT32 read_frame;
     UINT32 frames;
+};
+
+struct pending_render_chunk
+{
+    UINT32 frames;
+    UINT32 played_frames;
+    struct pending_consumption clients[RENDER_CLIENT_CAPACITY];
 };
 
 static INIT_ONCE endpoint_list_init_once = INIT_ONCE_STATIC_INIT;
@@ -258,6 +271,20 @@ clear_slot(struct shared_render_slot *slot)
 }
 
 static void
+discard_pending_chunks_locked(struct local_render_endpoint *endpoint)
+{
+    UINT32 i;
+
+    endpoint->pending_chunk_head = 0;
+    endpoint->pending_chunk_count = 0;
+    ZeroMemory(endpoint->pending_chunks,
+               RENDER_PENDING_CHUNK_CAPACITY * sizeof(*endpoint->pending_chunks));
+
+    for (i = 0; i < RENDER_CLIENT_CAPACITY; ++i)
+        endpoint->region->clients[i].pending_frames = 0;
+}
+
+static void
 remove_stale_clients_locked(struct local_render_endpoint *endpoint)
 {
     UINT32 i;
@@ -403,10 +430,12 @@ create_transport(struct local_render_endpoint *endpoint, BOOL require_success)
         endpoint->region->owner_process_id = GetCurrentProcessId();
         endpoint->region->owner_process_start_time = endpoint->process_start_time;
         endpoint->region->owner_ready = FALSE;
+        discard_pending_chunks_locked(endpoint);
         create_here = TRUE;
     }
     else if (owner_is_current_process_locked(endpoint) && !endpoint->transport)
     {
+        discard_pending_chunks_locked(endpoint);
         create_here = TRUE;
     }
     unlock_endpoint(endpoint);
@@ -415,6 +444,12 @@ create_transport(struct local_render_endpoint *endpoint, BOOL require_success)
         return S_OK;
 
     hr = endpoint->transport_ops.create(endpoint->endpoint_index, &endpoint->format, &transport);
+    if (SUCCEEDED(hr) && !endpoint->transport_ops.completed_frames(transport, &endpoint->completed_frames, NULL))
+    {
+        endpoint->transport_ops.destroy(transport);
+        transport = NULL;
+        hr = E_FAIL;
+    }
 
     if (!lock_endpoint(endpoint))
     {
@@ -563,6 +598,80 @@ ensure_mix_buffer(struct local_render_endpoint *endpoint, UINT32 frames)
     return TRUE;
 }
 
+static void
+retire_completed_chunks(struct local_render_endpoint *endpoint)
+{
+    UINT64 completed_frames, completed_qpc, remaining;
+
+    if (!endpoint->transport ||
+        !endpoint->transport_ops.completed_frames(endpoint->transport, &completed_frames, &completed_qpc))
+    {
+        return;
+    }
+
+    if (completed_frames <= endpoint->completed_frames)
+    {
+        if (completed_frames < endpoint->completed_frames)
+        {
+            if (lock_endpoint(endpoint))
+            {
+                discard_pending_chunks_locked(endpoint);
+                endpoint->completed_frames = completed_frames;
+                unlock_endpoint(endpoint);
+            }
+        }
+        return;
+    }
+
+    remaining = completed_frames - endpoint->completed_frames;
+    if (!lock_endpoint(endpoint))
+        return;
+
+    while (remaining && endpoint->pending_chunk_count)
+    {
+        struct pending_render_chunk *chunk =
+            &endpoint->pending_chunks[endpoint->pending_chunk_head];
+        UINT32 old_played = chunk->played_frames;
+        UINT32 advance = (UINT32)min(remaining, chunk->frames - old_played);
+        UINT32 new_played = old_played + advance;
+        UINT32 client_index;
+
+        for (client_index = 0; client_index < RENDER_CLIENT_CAPACITY; ++client_index)
+        {
+            const struct pending_consumption *entry = &chunk->clients[client_index];
+            struct shared_render_slot *slot = &endpoint->region->clients[client_index];
+            UINT32 old_client_played, new_client_played, client_advance;
+
+            if (!entry->frames || !slot->occupied || slot->token != entry->token)
+                continue;
+
+            old_client_played = min(old_played, entry->frames);
+            new_client_played = min(new_played, entry->frames);
+            client_advance = new_client_played - old_client_played;
+            if (!client_advance)
+                continue;
+
+            slot->pending_frames = slot->pending_frames > client_advance ?
+                                       slot->pending_frames - client_advance : 0;
+            slot->position += client_advance;
+            slot->qpc_time = completed_qpc;
+        }
+
+        chunk->played_frames = new_played;
+        remaining -= advance;
+        if (new_played == chunk->frames)
+        {
+            ZeroMemory(chunk, sizeof(*chunk));
+            endpoint->pending_chunk_head =
+                (endpoint->pending_chunk_head + 1) % RENDER_PENDING_CHUNK_CAPACITY;
+            --endpoint->pending_chunk_count;
+        }
+    }
+
+    endpoint->completed_frames = completed_frames;
+    unlock_endpoint(endpoint);
+}
+
 static BOOL
 mix_one_chunk(struct local_render_endpoint *endpoint)
 {
@@ -581,7 +690,8 @@ mix_one_chunk(struct local_render_endpoint *endpoint)
 
     if (!lock_endpoint(endpoint))
         return FALSE;
-    if (!owner_is_current_process_locked(endpoint) || !endpoint->region->owner_ready)
+    if (!owner_is_current_process_locked(endpoint) || !endpoint->region->owner_ready ||
+        endpoint->pending_chunk_count == RENDER_PENDING_CHUNK_CAPACITY)
     {
         unlock_endpoint(endpoint);
         return FALSE;
@@ -644,11 +754,23 @@ mix_one_chunk(struct local_render_endpoint *endpoint)
         consumed[client_index].read_frame = slot->read_frame;
         consumed[client_index].frames = min(frames, slot->queued_frames);
     }
-    unlock_endpoint(endpoint);
-
     queued = endpoint->transport_ops.queue_frames(endpoint->transport, endpoint->mix_buffer, frames);
-    if (!queued || !lock_endpoint(endpoint))
+    if (!queued)
+    {
+        unlock_endpoint(endpoint);
         return FALSE;
+    }
+
+    {
+        UINT32 pending_index =
+            (endpoint->pending_chunk_head + endpoint->pending_chunk_count) % RENDER_PENDING_CHUNK_CAPACITY;
+        struct pending_render_chunk *chunk = &endpoint->pending_chunks[pending_index];
+
+        ZeroMemory(chunk, sizeof(*chunk));
+        chunk->frames = frames;
+        CopyMemory(chunk->clients, consumed, sizeof(consumed));
+        ++endpoint->pending_chunk_count;
+    }
 
     for (client_index = 0; client_index < RENDER_CLIENT_CAPACITY; ++client_index)
     {
@@ -660,8 +782,7 @@ mix_one_chunk(struct local_render_endpoint *endpoint)
 
         slot->read_frame = (slot->read_frame + entry->frames) % slot->capacity_frames;
         slot->queued_frames -= entry->frames;
-        slot->position += entry->frames;
-        slot->qpc_time = query_performance_time_100ns();
+        slot->pending_frames += entry->frames;
     }
     unlock_endpoint(endpoint);
     SetEvent(endpoint->wake_event);
@@ -673,16 +794,24 @@ stop_and_destroy_transport(struct local_render_endpoint *endpoint)
 {
     void *transport = endpoint->transport;
 
-    endpoint->transport = NULL;
     if (!transport)
         return;
 
+    retire_completed_chunks(endpoint);
     if (endpoint->transport_started)
     {
         endpoint->transport_ops.stop(transport);
         endpoint->transport_started = FALSE;
+        retire_completed_chunks(endpoint);
     }
+
+    endpoint->transport = NULL;
     endpoint->transport_ops.destroy(transport);
+    if (lock_endpoint(endpoint))
+    {
+        discard_pending_chunks_locked(endpoint);
+        unlock_endpoint(endpoint);
+    }
 }
 
 static DWORD WINAPI
@@ -711,10 +840,12 @@ render_worker(void *parameter)
         if (!endpoint->transport)
             continue;
 
+        retire_completed_chunks(endpoint);
+
         if (lock_endpoint(endpoint))
         {
             active = owner_is_current_process_locked(endpoint) && endpoint->region->owner_ready &&
-                     any_started_clients_locked(endpoint);
+                     (any_started_clients_locked(endpoint) || endpoint->pending_chunk_count);
             unlock_endpoint(endpoint);
         }
 
@@ -737,6 +868,7 @@ render_worker(void *parameter)
         {
             endpoint->transport_ops.stop(endpoint->transport);
             endpoint->transport_started = FALSE;
+            retire_completed_chunks(endpoint);
         }
 
         if (!endpoint->transport_started)
@@ -790,6 +922,7 @@ destroy_local_endpoint(struct local_render_endpoint *endpoint)
     if (endpoint->stop_event)
         CloseHandle(endpoint->stop_event);
     free(endpoint->mix_buffer);
+    free(endpoint->pending_chunks);
     free(endpoint);
 }
 
@@ -807,6 +940,12 @@ create_local_endpoint(
     endpoint = calloc(1, sizeof(*endpoint));
     if (!endpoint)
         return E_OUTOFMEMORY;
+    endpoint->pending_chunks = calloc(RENDER_PENDING_CHUNK_CAPACITY, sizeof(*endpoint->pending_chunks));
+    if (!endpoint->pending_chunks)
+    {
+        free(endpoint);
+        return E_OUTOFMEMORY;
+    }
 
     endpoint->endpoint_index = endpoint_index;
     endpoint->format = *format;
@@ -814,7 +953,7 @@ create_local_endpoint(
     if (!get_current_process_start_time(&endpoint->process_start_time))
         ZeroMemory(&endpoint->process_start_time, sizeof(endpoint->process_start_time));
 
-    swprintf(mapping_name, ARRAY_SIZE(mapping_name), L"Local\\ReactOS.CoreAudio.Render.%lu.v1", endpoint_index);
+    swprintf(mapping_name, ARRAY_SIZE(mapping_name), L"Local\\ReactOS.CoreAudio.Render.%lu.v2", endpoint_index);
     swprintf(mutex_name, ARRAY_SIZE(mutex_name), L"%s.Lock", mapping_name);
     swprintf(wake_name, ARRAY_SIZE(wake_name), L"%s.Wake", mapping_name);
 
@@ -883,7 +1022,8 @@ reactos_shared_render_create(
 
     if (!format || !transport_ops || !transport_ops->create || !transport_ops->destroy || !transport_ops->start ||
         !transport_ops->stop || !transport_ops->writable_frames || !transport_ops->period_frames ||
-        !transport_ops->queue_frames || !client || !buffer_frames || !format->Format.nBlockAlign ||
+        !transport_ops->completed_frames || !transport_ops->queue_frames || !client || !buffer_frames ||
+        !format->Format.nBlockAlign ||
         format->Format.nBlockAlign > RENDER_MAX_FRAME_SIZE || !requested_buffer_frames)
         return E_INVALIDARG;
 
@@ -1083,8 +1223,13 @@ reactos_shared_render_reset(struct reactos_shared_render_client *client)
     slot->read_frame = 0;
     slot->write_frame = 0;
     slot->queued_frames = 0;
+    slot->pending_frames = 0;
     slot->position = 0;
     slot->qpc_time = query_performance_time_100ns();
+    if (!++client->endpoint->region->token_seed)
+        ++client->endpoint->region->token_seed;
+    slot->token = client->endpoint->region->token_seed;
+    client->token = slot->token;
     unlock_endpoint(client->endpoint);
     SetEvent(client->endpoint->wake_event);
     return S_OK;
@@ -1105,7 +1250,9 @@ reactos_shared_render_write(struct reactos_shared_render_client *client, const B
         unlock_endpoint(client->endpoint);
         return AUDCLNT_E_DEVICE_INVALIDATED;
     }
-    if (frames > slot->capacity_frames - slot->queued_frames)
+    if (slot->queued_frames > slot->capacity_frames ||
+        slot->pending_frames > slot->capacity_frames - slot->queued_frames ||
+        frames > slot->capacity_frames - slot->queued_frames - slot->pending_frames)
     {
         unlock_endpoint(client->endpoint);
         return AUDCLNT_E_BUFFER_TOO_LARGE;
@@ -1145,7 +1292,7 @@ reactos_shared_render_get_padding(struct reactos_shared_render_client *client, U
         unlock_endpoint(client->endpoint);
         return AUDCLNT_E_DEVICE_INVALIDATED;
     }
-    *padding = slot->queued_frames;
+    *padding = slot->queued_frames + slot->pending_frames;
     unlock_endpoint(client->endpoint);
     return S_OK;
 }
