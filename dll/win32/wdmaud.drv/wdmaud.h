@@ -106,6 +106,12 @@ WdmAudSetWaveDeviceFormatByMMixer(
     IN  DWORD WaveFormatSize);
 
 MMRESULT
+WdmAudQueryWaveFormatSupportByMMixer(
+    IN  PSOUND_DEVICE SoundDevice,
+    IN  PWAVEFORMATEX WaveFormat,
+    IN  DWORD WaveFormatSize);
+
+MMRESULT
 WdmAudGetDeviceInterfaceStringByMMixer(
     IN  MMDEVICE_TYPE DeviceType,
     IN  DWORD DeviceId,

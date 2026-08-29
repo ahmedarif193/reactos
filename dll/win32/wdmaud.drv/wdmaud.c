@@ -31,8 +31,9 @@ QueryWdmWaveDeviceFormatSupport(
     IN  PWAVEFORMATEX WaveFormat,
     IN  DWORD WaveFormatSize)
 {
-    /* Whatever... */
-    return MMSYSERR_NOERROR;
+    return WdmAudQueryWaveFormatSupportByMMixer(Device,
+                                                WaveFormat,
+                                                WaveFormatSize);
 }
 
 MMRESULT
@@ -71,7 +72,7 @@ PopulateWdmDeviceList(
         /* Set up our function table */
         ZeroMemory(&FuncTable, sizeof(MMFUNCTION_TABLE));
         FuncTable.GetCapabilities = FUNC_NAME(WdmAudGetCapabilities);
-        FuncTable.QueryWaveFormatSupport = QueryWdmWaveDeviceFormatSupport; //FIXME
+        FuncTable.QueryWaveFormatSupport = QueryWdmWaveDeviceFormatSupport;
         FuncTable.Open = FUNC_NAME(WdmAudOpenSoundDevice);
         FuncTable.Close = FUNC_NAME(WdmAudCloseSoundDevice);
         FuncTable.GetDeviceInterfaceString = FUNC_NAME(WdmAudGetDeviceInterfaceString);
