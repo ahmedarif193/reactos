@@ -1894,8 +1894,11 @@ FxInterrupt::AcquireLock(
         //
         // DIRQL interrupt handling.
         //
-        ASSERTMSG("Can't synchronize when the interrupt isn't connected: ",
-                  kinterrupt != NULL);
+        if (kinterrupt == NULL) {
+            DoTraceLevelMessage(GetDriverGlobals(), TRACE_LEVEL_WARNING, TRACINGPNP,
+                                "WDFINTERRUPT %p lock used before the interrupt is connected",
+                                GetHandle());
+        }
 
         if (NULL != kinterrupt) {
             m_OldIrql = Mx::MxAcquireInterruptSpinLock(kinterrupt);
@@ -1949,8 +1952,11 @@ FxInterrupt::ReleaseLock(
         //
         // DIRQL interrupt handling.
         //
-        ASSERTMSG("Can't synchronize when the interrupt isn't connected: ",
-                  kinterrupt != NULL);
+        if (kinterrupt == NULL) {
+            DoTraceLevelMessage(GetDriverGlobals(), TRACE_LEVEL_WARNING, TRACINGPNP,
+                                "WDFINTERRUPT %p lock used before the interrupt is connected",
+                                GetHandle());
+        }
 
         if (NULL != kinterrupt) {
 #pragma prefast(suppress:__WARNING_CALLER_FAILING_TO_HOLD, "Unable to annotate ReleaseLock for this case.");
@@ -2013,8 +2019,11 @@ FxInterrupt::Synchronize(
     kinterrupt = GetInterruptPtr();
 
 #if (FX_CORE_MODE == FX_CORE_KERNEL_MODE)
-    ASSERTMSG("Can't synchronize when the interrupt isn't connected: ",
-              kinterrupt != NULL);
+    if (kinterrupt == NULL) {
+        DoTraceLevelMessage(GetDriverGlobals(), TRACE_LEVEL_WARNING, TRACINGPNP,
+                            "WDFINTERRUPT %p synchronized before the interrupt is connected",
+                            GetHandle());
+    }
 #endif
 
     return _SynchronizeExecution(kinterrupt,

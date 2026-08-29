@@ -765,7 +765,8 @@ WDFEXPORT(WdfDeviceGetDeviceState)(
 
     FxPointerNotNull(pFxDriverGlobals, DeviceState);
 
-    if (DeviceState->Size != sizeof(WDF_DEVICE_STATE)) {
+    if (DeviceState->Size != sizeof(WDF_DEVICE_STATE) &&
+        DeviceState->Size != FIELD_OFFSET(WDF_DEVICE_STATE, AssignedToGuest)) {
         DoTraceLevelMessage(
             pFxDriverGlobals, TRACE_LEVEL_ERROR, TRACINGDEVICE,
             "WDFDEVICE 0x%p DeviceState Size %d, expected %d",
@@ -776,7 +777,16 @@ WDFEXPORT(WdfDeviceGetDeviceState)(
         return; // STATUS_INFO_LENGTH_MISMATCH;
     }
 
-    pDevice->m_PkgPnp->GetPnpState(DeviceState);
+    {
+        WDF_DEVICE_STATE state;
+        ULONG size = DeviceState->Size;
+
+        RtlZeroMemory(&state, sizeof(state));
+        state.Size = sizeof(state);
+        pDevice->m_PkgPnp->GetPnpState(&state);
+        RtlCopyMemory(DeviceState, &state, size);
+        DeviceState->Size = size;
+    }
 }
 
 __drv_maxIRQL(DISPATCH_LEVEL)
@@ -796,6 +806,7 @@ WDFEXPORT(WdfDeviceSetDeviceState)(
     FxDevice *pDevice;
     PFX_DRIVER_GLOBALS pFxDriverGlobals;
     ULONG i;
+    WDF_DEVICE_STATE state;
 
     const static FxOffsetAndName offsets[] = {
         OFFSET_AND_NAME(WDF_DEVICE_STATE, Disabled),
@@ -814,7 +825,8 @@ WDFEXPORT(WdfDeviceSetDeviceState)(
 
     FxPointerNotNull(pFxDriverGlobals, DeviceState);
 
-    if (DeviceState->Size != sizeof(WDF_DEVICE_STATE)) {
+    if (DeviceState->Size != sizeof(WDF_DEVICE_STATE) &&
+        DeviceState->Size != FIELD_OFFSET(WDF_DEVICE_STATE, AssignedToGuest)) {
         DoTraceLevelMessage(
             pFxDriverGlobals, TRACE_LEVEL_ERROR, TRACINGDEVICE,
             "WDFDEVICE 0x%p, DeviceState Size %d, expected %d",
@@ -824,17 +836,24 @@ WDFEXPORT(WdfDeviceSetDeviceState)(
         return; // STATUS_INFO_LENGTH_MISMATCH;
     }
 
+    RtlZeroMemory(&state, sizeof(state));
+    RtlCopyMemory(&state, DeviceState, DeviceState->Size);
+    state.Size = sizeof(state);
+    if (DeviceState->Size < sizeof(state)) {
+        state.AssignedToGuest = WdfUseDefault;
+    }
+
     for (i = 0; i < ARRAY_SIZE(offsets); i++) {
         WDF_TRI_STATE value;
 
         //
         // This check makes prefast happy
         //
-        if (offsets[i].Offset + sizeof(WDF_TRI_STATE) > sizeof(*DeviceState)) {
+        if (offsets[i].Offset + sizeof(WDF_TRI_STATE) > sizeof(state)) {
             return;
         }
 
-        value = *(WDF_TRI_STATE*) WDF_PTR_ADD_OFFSET(DeviceState,
+        value = *(WDF_TRI_STATE*) WDF_PTR_ADD_OFFSET(&state,
                                                      offsets[i].Offset);
 
         switch (value) {
@@ -854,7 +873,7 @@ WDFEXPORT(WdfDeviceSetDeviceState)(
         }
     }
 
-    pDevice->m_PkgPnp->SetPnpState(DeviceState);
+    pDevice->m_PkgPnp->SetPnpState(&state);
 
     pDevice->InvalidateDeviceState();
 }

@@ -723,34 +723,33 @@ ClassUnlinkClient(
     _In_ PWDF_CLASS_BIND_INFO ClassBindInfo)
 {
     PCLASS_CLIENT_MODULE client;
-    BOOLEAN isUnlinked;
     PLIST_ENTRY entry;
 
     client = NULL;
-    isUnlinked = FALSE;
     ClassAcquireClientLock(&ClassModule->ClientsListLock);
 
     for (entry = ClassModule->ClientsListHead.Flink;
         entry != &ClassModule->ClientsListHead;
         entry = entry->Flink)
     {
-        client = CONTAINING_RECORD(entry, CLASS_CLIENT_MODULE, ClassLinkage);
-        if (CONTAINING_RECORD(entry, CLASS_CLIENT_MODULE, ClassLinkage)->ClientClassBindInfo == ClassBindInfo)
+        client = CONTAINING_RECORD(entry, CLASS_CLIENT_MODULE, ClientLinkage);
+        if (client->ClientClassBindInfo == ClassBindInfo)
         {
-            isUnlinked = TRUE;
+            RemoveEntryList(&client->ClientLinkage);
+            InitializeListHead(&client->ClientLinkage);
             break;
         }
+
+        client = NULL;
     }
 
     ClassReleaseClientLock(&ClassModule->ClientsListLock);
 
-    if (isUnlinked)
+    if (client != NULL)
     {
-        RemoveEntryList(entry);
-        InitializeListHead(entry);
         LibraryAcquireClientLock(ClassModule->Library);
-        InitializeListHead(&client->ClientLinkage);
-        RemoveEntryList(&client->ClientLinkage);
+        RemoveEntryList(&client->ClassLinkage);
+        InitializeListHead(&client->ClassLinkage);
         LibraryReleaseClientLock(ClassModule->Library);
         ExFreePoolWithTag(client, WDFLDR_TAG);
     }

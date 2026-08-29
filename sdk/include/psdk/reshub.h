@@ -56,6 +56,23 @@ typedef struct _RH_QUERY_CONNECTION_PROPERTIES_OUTPUT_BUFFER
     UCHAR ConnectionProperties[ANYSIZE_ARRAY];
 } RH_QUERY_CONNECTION_PROPERTIES_OUTPUT_BUFFER, *PRH_QUERY_CONNECTION_PROPERTIES_OUTPUT_BUFFER;
 
+#include <pshpack1.h>
+typedef struct _PNP_SERIAL_BUS_DESCRIPTOR
+{
+    UCHAR Tag;
+    USHORT Length;
+    UCHAR RevisionId;
+    UCHAR ResourceSourceIndex;
+    UCHAR SerialBusType;
+    UCHAR GeneralFlags;
+    USHORT TypeSpecificFlags;
+    UCHAR TypeSpecificRevisionId;
+    USHORT TypeDataLength;
+} PNP_SERIAL_BUS_DESCRIPTOR, *PPNP_SERIAL_BUS_DESCRIPTOR;
+#include <poppack.h>
+
+#define PNP_SERIAL_BUS_DESCRIPTOR_LENGTH sizeof(PNP_SERIAL_BUS_DESCRIPTOR)
+
 #ifdef RESHUB_USE_HELPER_ROUTINES
 #include <ntstrsafe.h>
 

@@ -793,7 +793,7 @@ NTSTATUS
 NTAPI
 WdfVersionBindClass(
     _In_ PWDF_BIND_INFO BindInfo,
-    _Inout_ PWDF_COMPONENT_GLOBALS* ClientGlobals,
+    _In_ PWDF_COMPONENT_GLOBALS ClientGlobals,
     _In_ PWDF_CLASS_BIND_INFO ClassBindInfo)
 {
     PCLASS_CLIENT_MODULE pClassClientModule = NULL;
@@ -825,7 +825,7 @@ WdfVersionBindClass(
     {
         // Success - clear pClassClientModule so we don't free it
         pClassClientModule = NULL;
-        status = pClassModule->ClassLibraryInfo->ClassLibraryBindClient(ClassBindInfo, ClientGlobals);
+        status = pClassModule->ClassLibraryInfo->ClassLibraryBindClient(ClassBindInfo, &ClientGlobals);
         if (NT_SUCCESS(status))
         {
             DPRINT_TRACE_EXIT();
@@ -836,7 +836,7 @@ WdfVersionBindClass(
     }
 
     if (pClassModule != NULL)
-        DereferenceClassVersion(ClassBindInfo, BindInfo, *ClientGlobals);
+        DereferenceClassVersion(ClassBindInfo, BindInfo, ClientGlobals);
     if (pClassClientModule != NULL)
         ExFreePoolWithTag(pClassClientModule, WDFLDR_TAG);
 

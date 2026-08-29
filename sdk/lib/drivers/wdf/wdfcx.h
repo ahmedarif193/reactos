@@ -336,16 +336,6 @@ typedef VOID (NTAPI *PFN_WDF_CLIENT_UNBIND_CLASS)(
     _In_ PWDF_CLASS_BIND_INFO ClassBindInfo,
     _In_ PWDF_COMPONENT_GLOBALS ComponentGlobals);
 
-typedef struct _WDF_CLASS_BIND_INFO2
-{
-    WDF_CLASS_BIND_INFO V1;
-    PULONG MinimumVersionRequired;
-    PBOOLEAN ClientVersionHigherThanFramework;
-    PULONG FuncCountPtr;
-    PULONG StructCountPtr;
-    size_t *StructTable;
-} WDF_CLASS_BIND_INFO2, *PWDF_CLASS_BIND_INFO2;
-
 typedef struct _WDF_CLASS_EXTENSION_DESCRIPTOR
 {
     const struct _WDF_CLASS_EXTENSION_DESCRIPTOR *Next;
