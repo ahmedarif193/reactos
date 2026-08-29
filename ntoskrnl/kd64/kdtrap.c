@@ -120,6 +120,16 @@ KdpReport(IN PKTRAP_FRAME TrapFrame,
                   ContextRecord,
                   sizeof(CONTEXT));
 
+#if defined(_M_IX86) || defined(_M_AMD64)
+    /* The generic trap context does not always contain valid debug slots. */
+    Prcb->ProcessorState.ContextFrame.Dr0 = Prcb->ProcessorState.SpecialRegisters.KernelDr0;
+    Prcb->ProcessorState.ContextFrame.Dr1 = Prcb->ProcessorState.SpecialRegisters.KernelDr1;
+    Prcb->ProcessorState.ContextFrame.Dr2 = Prcb->ProcessorState.SpecialRegisters.KernelDr2;
+    Prcb->ProcessorState.ContextFrame.Dr3 = Prcb->ProcessorState.SpecialRegisters.KernelDr3;
+    Prcb->ProcessorState.ContextFrame.Dr6 = Prcb->ProcessorState.SpecialRegisters.KernelDr6;
+    Prcb->ProcessorState.ContextFrame.Dr7 = Prcb->ProcessorState.SpecialRegisters.KernelDr7;
+#endif
+
     /* Report the new state */
     Handled = KdpReportExceptionStateChange(ExceptionRecord,
                                             &Prcb->ProcessorState.
