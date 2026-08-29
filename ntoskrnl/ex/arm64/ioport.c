@@ -24,7 +24,7 @@
 UCHAR
 NTAPI
 READ_REGISTER_UCHAR(
-    _In_ PUCHAR Register)
+    _In_ volatile UCHAR *Register)
 {
     UCHAR Value = *(volatile UCHAR const *)Register;
     __asm__ __volatile__("dsb ld" ::: "memory");
@@ -34,7 +34,7 @@ READ_REGISTER_UCHAR(
 USHORT
 NTAPI
 READ_REGISTER_USHORT(
-    _In_ PUSHORT Register)
+    _In_ volatile USHORT *Register)
 {
     USHORT Value = *(volatile USHORT const *)Register;
     __asm__ __volatile__("dsb ld" ::: "memory");
@@ -44,7 +44,7 @@ READ_REGISTER_USHORT(
 ULONG
 NTAPI
 READ_REGISTER_ULONG(
-    _In_ PULONG Register)
+    _In_ volatile ULONG *Register)
 {
     ULONG Value = *(volatile ULONG const *)Register;
     __asm__ __volatile__("dsb ld" ::: "memory");
@@ -54,7 +54,7 @@ READ_REGISTER_ULONG(
 VOID
 NTAPI
 WRITE_REGISTER_UCHAR(
-    _In_ PUCHAR Register,
+    _In_ volatile UCHAR *Register,
     _In_ UCHAR Value)
 {
     *(volatile UCHAR *)Register = Value;
@@ -64,7 +64,7 @@ WRITE_REGISTER_UCHAR(
 VOID
 NTAPI
 WRITE_REGISTER_USHORT(
-    _In_ PUSHORT Register,
+    _In_ volatile USHORT *Register,
     _In_ USHORT Value)
 {
     *(volatile USHORT *)Register = Value;
@@ -74,7 +74,7 @@ WRITE_REGISTER_USHORT(
 VOID
 NTAPI
 WRITE_REGISTER_ULONG(
-    _In_ PULONG Register,
+    _In_ volatile ULONG *Register,
     _In_ ULONG Value)
 {
     *(volatile ULONG *)Register = Value;

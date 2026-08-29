@@ -1683,6 +1683,39 @@ IoForwardIrpSynchronously(IN PDEVICE_OBJECT DeviceObject,
 /*
  * @implemented
  */
+NTSTATUS
+NTAPI
+IoSynchronousCallDriver(IN PDEVICE_OBJECT DeviceObject,
+                        IN PIRP Irp)
+{
+    KEVENT Event;
+    NTSTATUS Status;
+
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+    IoSetCompletionRoutine(Irp,
+                           IopSynchronousCompletion,
+                           &Event,
+                           TRUE,
+                           TRUE,
+                           TRUE);
+
+    Status = IoCallDriver(DeviceObject, Irp);
+    if (Status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&Event,
+                              Executive,
+                              KernelMode,
+                              FALSE,
+                              NULL);
+        Status = Irp->IoStatus.Status;
+    }
+
+    return Status;
+}
+
+/*
+ * @implemented
+ */
 VOID
 NTAPI
 IoFreeIrp(IN PIRP Irp)
