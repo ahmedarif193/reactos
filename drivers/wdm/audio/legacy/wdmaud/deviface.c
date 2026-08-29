@@ -213,15 +213,6 @@ WdmAudOpenSysaudio(
     /* get device extension */
     DeviceExtension = (PWDMAUD_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
 
-    if (!DeviceExtension->NumSysAudioDevices)
-    {
-        /* wdmaud failed to open sysaudio */
-        return STATUS_UNSUCCESSFUL;
-    }
-
-    /* sanity check */
-    ASSERT(!IsListEmpty(&DeviceExtension->SysAudioDeviceList));
-
     /* allocate client context struct */
     Client = AllocateItem(NonPagedPool, sizeof(WDMAUD_CLIENT));
 
