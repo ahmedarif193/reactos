@@ -481,51 +481,19 @@ WdmAudControlOpenMixer(
     return SetIrpIoStatus(Irp, STATUS_SUCCESS, sizeof(WDMAUD_DEVICE_INFO));
 }
 
-NTSTATUS
-WdmAudControlCloseMixer(
-    IN  PDEVICE_OBJECT DeviceObject,
-    IN  PIRP Irp,
-    IN  PWDMAUD_DEVICE_INFO DeviceInfo,
-    IN  PWDMAUD_CLIENT ClientInfo,
-    IN  ULONG Index)
-{
-    /* Remove event associated to this client */
-    if (MMixerClose(&MixerContext,
-                    ClientInfo->hPins[Index].DeviceIndex,
-                    ClientInfo,
-                    EventCallback) != MM_STATUS_SUCCESS)
-    {
-        DPRINT1("Failed to close mixer\n");
-        return SetIrpIoStatus(Irp, STATUS_UNSUCCESSFUL, sizeof(WDMAUD_DEVICE_INFO));
-    }
-
-    /* Dereference event */
-    if (ClientInfo->hPins[Index].NotifyEvent)
-    {
-        ObDereferenceObject(ClientInfo->hPins[Index].NotifyEvent);
-        ClientInfo->hPins[Index].NotifyEvent = NULL;
-    }
-
-    ClientInfo->hPins[Index].Handle = NULL;
-
-    /* FIXME: do we need to free ClientInfo->hPins ? */
-    return SetIrpIoStatus(Irp, STATUS_SUCCESS, sizeof(WDMAUD_DEVICE_INFO));
-}
-
-VOID
+BOOLEAN
 WdmAudCloseMixer(
     IN PWDMAUD_CLIENT ClientInfo,
     IN ULONG Index)
 {
+    BOOLEAN Closed = TRUE;
+
     if (ClientInfo->hPins[Index].Handle)
     {
-        if (MMixerClose(&MixerContext,
-                        ClientInfo->hPins[Index].DeviceIndex,
-                        ClientInfo,
-                        EventCallback) != MM_STATUS_SUCCESS)
+        if (MMixerClose(&MixerContext, ClientInfo->hPins[Index].DeviceIndex, ClientInfo, EventCallback) != MM_STATUS_SUCCESS)
         {
-            DPRINT1("Failed to close mixer %lu\n",
-                    ClientInfo->hPins[Index].DeviceIndex);
+            DPRINT1("Failed to close mixer %lu\n", ClientInfo->hPins[Index].DeviceIndex);
+            Closed = FALSE;
         }
     }
 
@@ -535,6 +503,23 @@ WdmAudCloseMixer(
         ObDereferenceObject(ClientInfo->hPins[Index].NotifyEvent);
         ClientInfo->hPins[Index].NotifyEvent = NULL;
     }
+
+    return Closed;
+}
+
+NTSTATUS
+WdmAudControlCloseMixer(
+    IN  PIRP Irp,
+    IN  PWDMAUD_CLIENT ClientInfo,
+    IN  ULONG Index)
+{
+    if (!WdmAudCloseMixer(ClientInfo, Index))
+        return SetIrpIoStatus(Irp, STATUS_UNSUCCESSFUL, sizeof(WDMAUD_DEVICE_INFO));
+
+    ClientInfo->hPins[Index].Handle = NULL;
+
+    /* FIXME: do we need to free ClientInfo->hPins ? */
+    return SetIrpIoStatus(Irp, STATUS_SUCCESS, sizeof(WDMAUD_DEVICE_INFO));
 }
 
 NTSTATUS
@@ -756,6 +741,37 @@ WdmAudWaveCapabilities(
 }
 
 NTSTATUS
+WdmAudGetPreferredWaveFormat(
+    IN PIRP Irp,
+    IN PWDMAUD_DEVICE_INFO DeviceInfo)
+{
+    PIO_STACK_LOCATION IoStack;
+    MIXER_STATUS Status;
+
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    if (IoStack->Parameters.DeviceIoControl.OutputBufferLength <
+        sizeof(WDMAUD_DEVICE_INFO))
+    {
+        return SetIrpIoStatus(Irp, STATUS_BUFFER_TOO_SMALL, 0);
+    }
+
+    if (DeviceInfo->DeviceType != WAVE_IN_DEVICE_TYPE &&
+        DeviceInfo->DeviceType != WAVE_OUT_DEVICE_TYPE)
+    {
+        return SetIrpIoStatus(Irp, STATUS_INVALID_PARAMETER, 0);
+    }
+
+    Status = MMixerGetWaveFormat(&MixerContext,
+                                 DeviceInfo->DeviceIndex,
+                                 DeviceInfo->DeviceType == WAVE_IN_DEVICE_TYPE,
+                                 &DeviceInfo->u.WaveFormatExtensible);
+    if (Status != MM_STATUS_SUCCESS)
+        return SetIrpIoStatus(Irp, STATUS_NOT_SUPPORTED, 0);
+
+    return SetIrpIoStatus(Irp, STATUS_SUCCESS, sizeof(WDMAUD_DEVICE_INFO));
+}
+
+NTSTATUS
 WdmAudMidiCapabilities(
     IN PDEVICE_OBJECT DeviceObject,
     IN PWDMAUD_DEVICE_INFO DeviceInfo,
@@ -864,12 +880,24 @@ WdmAudControlOpenWave(
 {
     MIXER_STATUS Status;
     PIN_CREATE_CONTEXT Context;
+    LPWAVEFORMATEX WaveFormat;
+
+    WaveFormat = &DeviceInfo->u.WaveFormatEx;
+    if ((WaveFormat->wFormatTag == WAVE_FORMAT_PCM && WaveFormat->cbSize != 0) ||
+        (WaveFormat->wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
+         WaveFormat->cbSize !=
+             sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)) ||
+        (WaveFormat->wFormatTag != WAVE_FORMAT_PCM &&
+         WaveFormat->wFormatTag != WAVE_FORMAT_EXTENSIBLE))
+    {
+        return SetIrpIoStatus(Irp, STATUS_INVALID_PARAMETER, 0);
+    }
 
     Context.ClientInfo = ClientInfo;
     Context.DeviceExtension = (PWDMAUD_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
     Context.DeviceType = DeviceInfo->DeviceType;
 
-    Status = MMixerOpenWave(&MixerContext, DeviceInfo->DeviceIndex, DeviceInfo->DeviceType == WAVE_IN_DEVICE_TYPE, &DeviceInfo->u.WaveFormatEx, CreatePinCallback, &Context, &DeviceInfo->hDevice);
+    Status = MMixerOpenWave(&MixerContext, DeviceInfo->DeviceIndex, DeviceInfo->DeviceType == WAVE_IN_DEVICE_TYPE, WaveFormat, CreatePinCallback, &Context, &DeviceInfo->hDevice);
 
     if (Status == MM_STATUS_SUCCESS)
         return SetIrpIoStatus(Irp, STATUS_SUCCESS, sizeof(WDMAUD_DEVICE_INFO));
