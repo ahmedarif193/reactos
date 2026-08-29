@@ -820,77 +820,112 @@ KspHandleDataIntersection(
 {
     PKSMULTIPLE_ITEM MultipleItem;
     PKSDATARANGE DataRange;
+    PKSDATARANGE MatchingDataRange;
+    const KSPIN_DESCRIPTOR_EX *PinDescriptor;
     NTSTATUS Status = STATUS_NO_MATCH;
-    ULONG Index, Length;
+    ULONG Index, MatchingIndex, Length, RangeSize, Remaining, RequestLength;
     PIO_STACK_LOCATION IoStack;
     KSP_PIN * Pin = (KSP_PIN*)Request;
 
     /* get stack location */
     IoStack = IoGetCurrentIrpStackLocation(Irp);
 
-    /* sanity check */
-    ASSERT(DataLength == IoStack->Parameters.DeviceIoControl.OutputBufferLength);
+    IoStatus->Information = 0;
+    RequestLength = IoStack->Parameters.DeviceIoControl.InputBufferLength;
+    if (!Request ||
+        RequestLength < sizeof(KSP_PIN) + sizeof(KSMULTIPLE_ITEM))
+    {
+        IoStatus->Status = STATUS_INVALID_PARAMETER;
+        return STATUS_INVALID_PARAMETER;
+    }
 
-    /* Access parameters */
-    MultipleItem = (PKSMULTIPLE_ITEM)(Pin + 1);
-    DataRange = (PKSDATARANGE)(MultipleItem + 1);
-
-    /* FIXME make sure its 64 bit aligned */
-    ASSERT(((ULONG_PTR)DataRange & 0x7) == 0);
-
-    if (!This->Filter.Descriptor || !This->Filter.Descriptor->PinDescriptorsCount)
+    if (!This->Filter.Descriptor ||
+        !This->Filter.Descriptor->PinDescriptorsCount)
     {
         /* no filter / pin descriptor */
         IoStatus->Status = STATUS_NOT_IMPLEMENTED;
         return STATUS_NOT_IMPLEMENTED;
     }
 
-    /* ignore custom structs for now */
-    ASSERT(This->Filter.Descriptor->PinDescriptorSize == sizeof(KSPIN_DESCRIPTOR_EX));
-    ASSERT(This->Filter.Descriptor->PinDescriptorsCount > Pin->PinId);
+    if (This->Filter.Descriptor->PinDescriptorSize !=
+            sizeof(KSPIN_DESCRIPTOR_EX) ||
+        Pin->PinId >= This->Filter.Descriptor->PinDescriptorsCount)
+    {
+        IoStatus->Status = STATUS_INVALID_PARAMETER;
+        return STATUS_INVALID_PARAMETER;
+    }
 
-    if (This->Filter.Descriptor->PinDescriptors[Pin->PinId].IntersectHandler == NULL ||
-        This->Filter.Descriptor->PinDescriptors[Pin->PinId].PinDescriptor.DataRanges == NULL ||
-        This->Filter.Descriptor->PinDescriptors[Pin->PinId].PinDescriptor.DataRangesCount == 0)
+    PinDescriptor = &This->Filter.Descriptor->PinDescriptors[Pin->PinId];
+
+    if (!PinDescriptor->IntersectHandler ||
+        !PinDescriptor->PinDescriptor.DataRanges ||
+        !PinDescriptor->PinDescriptor.DataRangesCount)
     {
         /* no driver supported intersect handler / no provided data ranges */
         IoStatus->Status = STATUS_NOT_IMPLEMENTED;
         return STATUS_NOT_IMPLEMENTED;
     }
 
+    MultipleItem = (PKSMULTIPLE_ITEM)(Pin + 1);
+    DataRange = (PKSDATARANGE)(MultipleItem + 1);
+    Remaining = RequestLength - sizeof(KSP_PIN) - sizeof(KSMULTIPLE_ITEM);
+
     for(Index = 0; Index < MultipleItem->Count; Index++)
     {
-        UNICODE_STRING MajorFormat, SubFormat, Specifier;
-        /* convert the guid to string */
-        RtlStringFromGUID(&DataRange->MajorFormat, &MajorFormat);
-        RtlStringFromGUID(&DataRange->SubFormat, &SubFormat);
-        RtlStringFromGUID(&DataRange->Specifier, &Specifier);
-
-        DPRINT("KspHandleDataIntersection Index %lu PinId %lu MajorFormat %S SubFormat %S Specifier %S FormatSize %lu SampleSize %lu Align %lu Flags %lx Reserved %lx DataLength %lu\n", Index, Pin->PinId, MajorFormat.Buffer, SubFormat.Buffer, Specifier.Buffer,
-               DataRange->FormatSize, DataRange->SampleSize, DataRange->Alignment, DataRange->Flags, DataRange->Reserved, DataLength);
-
-        /* FIXME implement KsPinDataIntersectionEx */
-        /* Call miniport's proprietary handler */
-        Status = This->Filter.Descriptor->PinDescriptors[Pin->PinId].IntersectHandler(&This->Filter,
-                                                                                      Irp,
-                                                                                      Pin,
-                                                                                      DataRange,
-                                                                                      This->Filter.Descriptor->PinDescriptors[Pin->PinId].PinDescriptor.DataRanges[0], /* HACK */
-                                                                                      DataLength,
-                                                                                      Data,
-                                                                                      &Length);
-        DPRINT("KspHandleDataIntersection Status %lx\n", Status);
-
-        if (Status == STATUS_SUCCESS || Status == STATUS_BUFFER_OVERFLOW || Status == STATUS_BUFFER_TOO_SMALL)
+        if (Remaining < sizeof(KSDATARANGE) ||
+            DataRange->FormatSize < sizeof(KSDATARANGE) ||
+            DataRange->FormatSize > Remaining)
         {
-            ASSERT(Length);
-            IoStatus->Information = Length;
+            Status = STATUS_INVALID_PARAMETER;
             break;
         }
 
-        DataRange = (PKSDATARANGE)((PUCHAR)DataRange + DataRange->FormatSize);
-        /* FIXME make sure its 64 bit aligned */
-        ASSERT(((ULONG_PTR)DataRange & 0x7) == 0);
+        for (MatchingIndex = 0;
+             MatchingIndex < PinDescriptor->PinDescriptor.DataRangesCount;
+             MatchingIndex++)
+        {
+            MatchingDataRange = (PKSDATARANGE)
+                PinDescriptor->PinDescriptor.DataRanges[MatchingIndex];
+            if (!MatchingDataRange)
+                continue;
+
+            Length = 0;
+            Status = PinDescriptor->IntersectHandler(&This->Filter,
+                                                      Irp,
+                                                      Pin,
+                                                      DataRange,
+                                                      MatchingDataRange,
+                                                      DataLength,
+                                                      Data,
+                                                      &Length);
+            if (Status == STATUS_SUCCESS ||
+                Status == STATUS_BUFFER_OVERFLOW ||
+                Status == STATUS_BUFFER_TOO_SMALL)
+            {
+                IoStatus->Information = Length;
+                IoStatus->Status = Status;
+                return Status;
+            }
+        }
+
+        if (Index + 1 < MultipleItem->Count)
+        {
+            if (DataRange->FormatSize > MAXULONG - 7)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            RangeSize = (DataRange->FormatSize + 7) & ~7UL;
+            if (RangeSize > Remaining)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            Remaining -= RangeSize;
+            DataRange = (PKSDATARANGE)((PUCHAR)DataRange + RangeSize);
+        }
     }
     IoStatus->Status = Status;
     return Status;
