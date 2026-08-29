@@ -427,6 +427,8 @@ WdmAudDeviceControl(
             return WdmAudDuplicatePinHandle(Irp, DeviceInfo, ClientInfo);
         case IOCTL_GETPREFERRED_WAVE_FORMAT:
             return WdmAudGetPreferredWaveFormat(Irp, DeviceInfo);
+        case IOCTL_GETWAVEMIXERID:
+            return WdmAudGetWaveMixerId(Irp, DeviceInfo);
         case IOCTL_GETPOS:
             return WdmAudGetPosition(DeviceObject, Irp, DeviceInfo);
         case IOCTL_GETDEVID:
