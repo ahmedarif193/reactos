@@ -177,10 +177,10 @@ __ASM_GLOBAL_FUNC( call_stubless_func,
 
 __ASM_GLOBAL_FUNC( call_stubless_func,
                    "stp x29, x30, [sp, #-0x90]!\n\t"
-                   ".seh_save_fplr_x 0x90\n\t"
+                   __ASM_SEH(".seh_save_fplr_x 0x90\n\t")
                    "mov x29, sp\n\t"
-                   ".seh_set_fp\n\t"
-                   ".seh_endprologue\n\t"
+                   __ASM_SEH(".seh_set_fp\n\t")
+                   __ASM_SEH(".seh_endprologue\n\t")
                    "stp d0, d1, [sp, #0x10]\n\t"
                    "stp d2, d3, [sp, #0x20]\n\t"
                    "stp d4, d5, [sp, #0x30]\n\t"
@@ -513,12 +513,12 @@ __ASM_GLOBAL_FUNC( call_server_func,
 #elif defined __aarch64__
 __ASM_GLOBAL_FUNC( call_server_func,
                    "stp x29, x30, [sp, #-0x20]!\n\t"
-                   ".seh_save_fplr_x 0x20\n\t"
+                   __ASM_SEH(".seh_save_fplr_x 0x20\n\t")
                    "stp x19, x20, [sp, #0x10]\n\t"
-                   ".seh_save_regp x19, 0x10\n\t"
+                   __ASM_SEH(".seh_save_regp x19, 0x10\n\t")
                    "mov x29, sp\n\t"
-                   ".seh_set_fp\n\t"
-                   ".seh_endprologue\n\t"
+                   __ASM_SEH(".seh_set_fp\n\t")
+                   __ASM_SEH(".seh_endprologue\n\t")
                    "add x9, x2, #16*8+15\n\t"
                    "lsr x9, x9, #4\n\t"
                    "sub sp, sp, x9, lsl #4\n\t"

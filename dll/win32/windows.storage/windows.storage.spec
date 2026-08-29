@@ -201,9 +201,9 @@
 @ stub RebaseOnDriveLetter
 @ stub RebaseOnVolumeID
 @ stub RegistryVerbs_GetHandlerMultiSelectModel
-@ stdcall SHAssocEnumHandlers(wstr long ptr)
+@ stub SHAssocEnumHandlers
 @ stdcall SHAssocEnumHandlersForProtocolByApplication(wstr ptr ptr)
-@ stdcall SHBindToFolderIDListParent(ptr ptr ptr ptr ptr)
+@ stub SHBindToFolderIDListParent
 @ stub SHBindToFolderIDListParentEx
 @ stdcall SHBindToObject(ptr ptr ptr ptr ptr)
 @ stdcall SHBindToParent(ptr ptr ptr ptr)
@@ -220,13 +220,13 @@
 @ stdcall SHCreateItemFromIDList(ptr ptr ptr)
 @ stdcall SHCreateItemFromParsingName(wstr ptr ptr ptr)
 @ stdcall SHCreateItemFromRelativeName(ptr wstr ptr ptr ptr)
-@ stdcall SHCreateItemInKnownFolder(ptr long wstr ptr ptr)
-@ stdcall SHCreateItemWithParent(ptr ptr ptr ptr ptr)
+@ stub SHCreateItemInKnownFolder
+@ stub SHCreateItemWithParent
 @ stub SHCreateItemWithParentAndChildId
 @ stdcall SHCreateShellItemArray(ptr ptr long ptr ptr)
 @ stdcall SHCreateShellItemArrayFromDataObject(ptr ptr ptr)
-@ stdcall SHCreateShellItemArrayFromIDLists(long ptr ptr)
-@ stdcall SHCreateShellItemArrayFromShellItem(ptr ptr ptr)
+@ stub SHCreateShellItemArrayFromIDLists
+@ stub SHCreateShellItemArrayFromShellItem
 @ stub SHCreateShellItemArrayWithFolderParent
 @ stub SHFileOperationWithAdditionalFlags
 @ stdcall SHFlushSFCache()
@@ -236,7 +236,7 @@
 @ stdcall SHGetFolderPathA(long long long long ptr)
 @ stdcall SHGetFolderPathAndSubDirA(long long long long str ptr)
 @ stdcall SHGetFolderPathAndSubDirW(long long long long wstr ptr)
-@ stdcall SHGetFolderPathEx(ptr long ptr ptr long)
+@ stub SHGetFolderPathEx
 @ stdcall SHGetFolderPathW(long long long long ptr)
 @ stdcall SHGetIDListFromObject(ptr ptr)
 @ stdcall SHGetInstanceExplorer(ptr)
@@ -246,7 +246,7 @@
 @ stdcall SHGetKnownFolderItem(ptr long long ptr ptr)
 @ stdcall SHGetKnownFolderPath(ptr long ptr ptr)
 @ stdcall SHGetNameFromIDList(ptr long ptr)
-@ stdcall SHGetPathFromIDListEx(ptr ptr long long)
+@ stub SHGetPathFromIDListEx
 @ stdcall SHGetPathFromIDListW(ptr ptr)
 @ stdcall SHGetSpecialFolderLocation(long long ptr)
 @ stdcall SHGetSpecialFolderPathA(long ptr long long)
@@ -265,7 +265,7 @@
 @ stub SHSetFolderPathW
 @ stub SHSetKnownFolderPath
 @ stdcall SHSetLocalizedName(wstr wstr long)
-@ stdcall SHSetTemporaryPropertyForItem(ptr ptr ptr)
+@ stub SHSetTemporaryPropertyForItem
 @ stub SHSysErrorMessageBox
 @ stdcall SHUpdateImageA(str long long long)
 @ stdcall SHUpdateImageW(wstr long long long)

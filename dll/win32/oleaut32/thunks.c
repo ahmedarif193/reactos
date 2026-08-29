@@ -122,10 +122,10 @@ __ASM_GLOBAL_FUNC( call_double_method,
 
 __ASM_GLOBAL_FUNC( call_method,
                    "stp x29, x30, [sp, #-16]!\n\t"
-                   ".seh_save_fplr_x 16\n\t"
+                   __ASM_SEH(".seh_save_fplr_x 16\n\t")
                    "mov x29, sp\n\t"
-                   ".seh_set_fp\n\t"
-                   ".seh_endprologue\n\t"
+                   __ASM_SEH(".seh_set_fp\n\t")
+                   __ASM_SEH(".seh_endprologue\n\t")
                    "sub sp, sp, x1, lsl #3\n\t"
                    "cbz x1, 2f\n"
                    "1:\tsub x1, x1, #1\n\t"

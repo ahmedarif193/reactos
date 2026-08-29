@@ -10,7 +10,12 @@
 
 #if SYMCRYPT_CPU_ARM64
 
+#ifdef __clang__
 #pragma clang attribute push (__attribute__((target("aes"))), apply_to=function)
+#else
+#pragma GCC push_options
+#pragma GCC target("+aes")
+#endif
 
 #define vzeroq()    vdupq_n_u64(0)
 
@@ -1884,6 +1889,10 @@ SymCryptAesGcmDecryptStitchedNeon(
 }
 #pragma runtime_checks( "u", restore )
 #pragma warning(pop)
+#ifdef __clang__
 #pragma clang attribute pop
+#else
+#pragma GCC pop_options
+#endif
 
 #endif

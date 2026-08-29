@@ -107,14 +107,14 @@ static NTSTATUS VidSchpTransitionEngineEx(_In_ PVIDSCH_ENGINE Engine, _In_ VIDSC
 static VIDSCH_ENGINE_STATE VidSchpEngineState(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG EngineOrdinal);
 
 /* The engine state machine is dxgmms2's; read it through the contract. */
-FORCEINLINE VIDSCH_ENGINE_STATE
+static __inline VIDSCH_ENGINE_STATE
 VidSchpReadState(
     _In_ PVIDSCH_ENGINE Engine)
 {
     return VidSchpEngineState(Engine->Adapter, Engine->SchedulerOrdinal);
 }
 
-FORCEINLINE VIDSCH_SCHEDULER_STATE
+static __inline VIDSCH_SCHEDULER_STATE
 VidSchpReadSchedulerState(
     _In_ PVIDSCH_CONTEXT Context)
 {
