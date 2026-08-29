@@ -21,6 +21,7 @@
 #define RPI5HDMI_VOLUME_MINIMUM (-96 * 0x10000)
 #define RPI5HDMI_VOLUME_MAXIMUM 0
 #define RPI5HDMI_VOLUME_STEP (6 * 0x10000)
+#define RPI5HDMI_REGISTER_BLOCK_COUNT 7
 
 PVOID
 __cdecl
@@ -105,6 +106,7 @@ class CRpi5HdmiAdapter : public CUnknownImpl<IUnknown>
     static NTSTATUS NTAPI StopSynchronized(PINTERRUPTSYNC InterruptSync, PVOID Context);
     static VOID NTAPI DpcRoutine(PRKDPC Dpc, PVOID DeferredContext, PVOID SystemArgument1, PVOID SystemArgument2);
 
+    VOID CollectRegisterBlocks(PVOID **Mappings, PULONG *Lengths);
     NTSTATUS MapResources(PRESOURCELIST ResourceList);
     VOID UnmapResources();
     BOOLEAN EnableAudioClock();

@@ -46,52 +46,64 @@ static PKSDATARANGE Rpi5HdmiBridgeDataRanges[] =
     &Rpi5HdmiBridgeDataRange
 };
 
+/*
+ * Emits the KSPROPERTY_TYPE_BASICSUPPORT reply shared by the volume and mute
+ * handlers. Returns STATUS_MORE_ENTRIES when the caller's buffer is large
+ * enough for a members list, so the caller can append its own.
+ */
+static NTSTATUS
+Rpi5HdmiBasicSupport(PPCPROPERTY_REQUEST PropertyRequest, ULONG PropertyType, ULONG DescriptionSize, ULONG MembersListCount)
+{
+    PKSPROPERTY_DESCRIPTION Description;
+    ULONG ValueSize = PropertyRequest->ValueSize;
+
+    if (ValueSize < sizeof(ULONG))
+    {
+        PropertyRequest->ValueSize = sizeof(ULONG);
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    if (ValueSize < sizeof(KSPROPERTY_DESCRIPTION))
+    {
+        *static_cast<PULONG>(PropertyRequest->Value) = KSPROPERTY_TYPE_BASICSUPPORT | KSPROPERTY_TYPE_GET | KSPROPERTY_TYPE_SET;
+        PropertyRequest->ValueSize = sizeof(ULONG);
+        return STATUS_SUCCESS;
+    }
+
+    Description = static_cast<PKSPROPERTY_DESCRIPTION>(PropertyRequest->Value);
+    RtlZeroMemory(Description, ValueSize);
+    Description->AccessFlags = KSPROPERTY_TYPE_BASICSUPPORT | KSPROPERTY_TYPE_GET | KSPROPERTY_TYPE_SET;
+    Description->DescriptionSize = DescriptionSize;
+    Description->PropTypeSet.Set = KSPROPTYPESETID_General;
+    Description->PropTypeSet.Id = PropertyType;
+    Description->MembersListCount = MembersListCount;
+    PropertyRequest->ValueSize = sizeof(KSPROPERTY_DESCRIPTION);
+
+    return ValueSize < DescriptionSize ? STATUS_SUCCESS : STATUS_MORE_ENTRIES;
+}
+
 static NTSTATUS NTAPI
 Rpi5HdmiVolumePropertyHandler(PPCPROPERTY_REQUEST PropertyRequest)
 {
     const ULONG DescriptionSize = sizeof(KSPROPERTY_DESCRIPTION) +
                                   sizeof(KSPROPERTY_MEMBERSHEADER) +
-                                  sizeof(KSPROPERTY_STEPPING_LONG);
+                                  RPI5HDMI_CHANNELS * sizeof(KSPROPERTY_STEPPING_LONG);
     CRpi5HdmiTopology *Topology;
     CRpi5HdmiAdapter *Adapter;
     ULONG Channel;
-    ULONG ValueSize;
 
     if (!PropertyRequest || PropertyRequest->Node != 0 || !PropertyRequest->MajorTarget)
         return STATUS_INVALID_PARAMETER;
 
     if (PropertyRequest->Verb & KSPROPERTY_TYPE_BASICSUPPORT)
     {
-        ValueSize = PropertyRequest->ValueSize;
-        if (ValueSize < sizeof(ULONG))
-        {
-            PropertyRequest->ValueSize = sizeof(ULONG);
-            return STATUS_BUFFER_TOO_SMALL;
-        }
+        NTSTATUS Status = Rpi5HdmiBasicSupport(PropertyRequest, VT_I4, DescriptionSize, 1);
 
-        if (ValueSize < sizeof(KSPROPERTY_DESCRIPTION))
-        {
-            *static_cast<PULONG>(PropertyRequest->Value) = KSPROPERTY_TYPE_BASICSUPPORT |
-                                                           KSPROPERTY_TYPE_GET |
-                                                           KSPROPERTY_TYPE_SET;
-            PropertyRequest->ValueSize = sizeof(ULONG);
-            return STATUS_SUCCESS;
-        }
+        if (Status != STATUS_MORE_ENTRIES)
+            return Status;
 
         PKSPROPERTY_DESCRIPTION Description =
             static_cast<PKSPROPERTY_DESCRIPTION>(PropertyRequest->Value);
-        RtlZeroMemory(Description, ValueSize);
-        Description->AccessFlags = KSPROPERTY_TYPE_BASICSUPPORT |
-                                   KSPROPERTY_TYPE_GET |
-                                   KSPROPERTY_TYPE_SET;
-        Description->DescriptionSize = DescriptionSize;
-        Description->PropTypeSet.Set = KSPROPTYPESETID_General;
-        Description->PropTypeSet.Id = VT_I4;
-        Description->MembersListCount = 1;
-        PropertyRequest->ValueSize = sizeof(KSPROPERTY_DESCRIPTION);
-
-        if (ValueSize < DescriptionSize)
-            return STATUS_SUCCESS;
 
         PKSPROPERTY_MEMBERSHEADER Members =
             reinterpret_cast<PKSPROPERTY_MEMBERSHEADER>(Description + 1);
@@ -102,9 +114,12 @@ Rpi5HdmiVolumePropertyHandler(PPCPROPERTY_REQUEST PropertyRequest)
 
         PKSPROPERTY_STEPPING_LONG Range =
             reinterpret_cast<PKSPROPERTY_STEPPING_LONG>(Members + 1);
-        Range->SteppingDelta = RPI5HDMI_VOLUME_STEP;
-        Range->Bounds.SignedMinimum = RPI5HDMI_VOLUME_MINIMUM;
-        Range->Bounds.SignedMaximum = RPI5HDMI_VOLUME_MAXIMUM;
+        for (ULONG Index = 0; Index < RPI5HDMI_CHANNELS; ++Index)
+        {
+            Range[Index].SteppingDelta = RPI5HDMI_VOLUME_STEP;
+            Range[Index].Bounds.SignedMinimum = RPI5HDMI_VOLUME_MINIMUM;
+            Range[Index].Bounds.SignedMaximum = RPI5HDMI_VOLUME_MAXIMUM;
+        }
         PropertyRequest->ValueSize = DescriptionSize;
         return STATUS_SUCCESS;
     }
@@ -137,6 +152,9 @@ Rpi5HdmiVolumePropertyHandler(PPCPROPERTY_REQUEST PropertyRequest)
 static NTSTATUS NTAPI
 Rpi5HdmiMutePropertyHandler(PPCPROPERTY_REQUEST PropertyRequest)
 {
+    const ULONG DescriptionSize = sizeof(KSPROPERTY_DESCRIPTION) +
+                                  sizeof(KSPROPERTY_MEMBERSHEADER) +
+                                  RPI5HDMI_CHANNELS * sizeof(KSPROPERTY_STEPPING_LONG);
     CRpi5HdmiTopology *Topology;
     CRpi5HdmiAdapter *Adapter;
 
@@ -145,30 +163,31 @@ Rpi5HdmiMutePropertyHandler(PPCPROPERTY_REQUEST PropertyRequest)
 
     if (PropertyRequest->Verb & KSPROPERTY_TYPE_BASICSUPPORT)
     {
-        if (PropertyRequest->ValueSize < sizeof(ULONG))
-        {
-            PropertyRequest->ValueSize = sizeof(ULONG);
-            return STATUS_BUFFER_TOO_SMALL;
-        }
-        if (PropertyRequest->ValueSize < sizeof(KSPROPERTY_DESCRIPTION))
-        {
-            *static_cast<PULONG>(PropertyRequest->Value) = KSPROPERTY_TYPE_BASICSUPPORT |
-                                                           KSPROPERTY_TYPE_GET |
-                                                           KSPROPERTY_TYPE_SET;
-            PropertyRequest->ValueSize = sizeof(ULONG);
-            return STATUS_SUCCESS;
-        }
+        NTSTATUS Status = Rpi5HdmiBasicSupport(PropertyRequest, VT_BOOL, DescriptionSize, 1);
+
+        if (Status != STATUS_MORE_ENTRIES)
+            return Status;
 
         PKSPROPERTY_DESCRIPTION Description =
             static_cast<PKSPROPERTY_DESCRIPTION>(PropertyRequest->Value);
-        RtlZeroMemory(Description, PropertyRequest->ValueSize);
-        Description->AccessFlags = KSPROPERTY_TYPE_BASICSUPPORT |
-                                   KSPROPERTY_TYPE_GET |
-                                   KSPROPERTY_TYPE_SET;
-        Description->DescriptionSize = sizeof(KSPROPERTY_DESCRIPTION);
-        Description->PropTypeSet.Set = KSPROPTYPESETID_General;
-        Description->PropTypeSet.Id = VT_BOOL;
-        PropertyRequest->ValueSize = sizeof(KSPROPERTY_DESCRIPTION);
+        PKSPROPERTY_MEMBERSHEADER Members =
+            reinterpret_cast<PKSPROPERTY_MEMBERSHEADER>(Description + 1);
+        Members->MembersFlags = KSPROPERTY_MEMBER_STEPPEDRANGES;
+        Members->MembersSize = sizeof(KSPROPERTY_STEPPING_LONG);
+        Members->MembersCount = RPI5HDMI_CHANNELS;
+        Members->Flags = KSPROPERTY_MEMBER_FLAG_BASICSUPPORT_MULTICHANNEL |
+                         KSPROPERTY_MEMBER_FLAG_BASICSUPPORT_UNIFORM;
+
+        PKSPROPERTY_STEPPING_LONG Range =
+            reinterpret_cast<PKSPROPERTY_STEPPING_LONG>(Members + 1);
+        for (ULONG Index = 0; Index < RPI5HDMI_CHANNELS; ++Index)
+        {
+            Range[Index].SteppingDelta = 1;
+            Range[Index].Bounds.SignedMinimum = FALSE;
+            Range[Index].Bounds.SignedMaximum = TRUE;
+        }
+
+        PropertyRequest->ValueSize = DescriptionSize;
         return STATUS_SUCCESS;
     }
 
@@ -364,6 +383,7 @@ BOOLEAN
 Rpi5HdmiIsFormatSupported(PKSDATAFORMAT DataFormat)
 {
     PKSDATAFORMAT_WAVEFORMATEX WaveFormat;
+    PWAVEFORMATEXTENSIBLE Extensible;
 
     if (!DataFormat || DataFormat->FormatSize < sizeof(KSDATAFORMAT_WAVEFORMATEX))
         return FALSE;
@@ -376,12 +396,40 @@ Rpi5HdmiIsFormatSupported(PKSDATAFORMAT DataFormat)
     }
 
     WaveFormat = reinterpret_cast<PKSDATAFORMAT_WAVEFORMATEX>(DataFormat);
-    return (WaveFormat->WaveFormatEx.wFormatTag == WAVE_FORMAT_PCM ||
-            WaveFormat->WaveFormatEx.wFormatTag == WAVE_FORMAT_EXTENSIBLE) &&
-           WaveFormat->WaveFormatEx.nChannels == RPI5HDMI_CHANNELS &&
+    if (WaveFormat->WaveFormatEx.wFormatTag == WAVE_FORMAT_EXTENSIBLE)
+    {
+        if (DataFormat->FormatSize !=
+                sizeof(KSDATAFORMAT) + sizeof(WAVEFORMATEXTENSIBLE) ||
+            WaveFormat->WaveFormatEx.cbSize !=
+                sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX))
+        {
+            return FALSE;
+        }
+
+        Extensible = reinterpret_cast<PWAVEFORMATEXTENSIBLE>(
+            &WaveFormat->WaveFormatEx);
+        if (!IsEqualGUIDAligned(Extensible->SubFormat,
+                                KSDATAFORMAT_SUBTYPE_PCM) ||
+            Extensible->Samples.wValidBitsPerSample !=
+                RPI5HDMI_BITS_PER_SAMPLE)
+        {
+            return FALSE;
+        }
+    }
+    else if (WaveFormat->WaveFormatEx.wFormatTag != WAVE_FORMAT_PCM ||
+             DataFormat->FormatSize != sizeof(KSDATAFORMAT_WAVEFORMATEX) ||
+             WaveFormat->WaveFormatEx.cbSize)
+    {
+        return FALSE;
+    }
+
+    return WaveFormat->WaveFormatEx.nChannels == RPI5HDMI_CHANNELS &&
            WaveFormat->WaveFormatEx.nSamplesPerSec == RPI5HDMI_SAMPLE_RATE &&
+           WaveFormat->WaveFormatEx.nAvgBytesPerSec ==
+               RPI5HDMI_SAMPLE_RATE * RPI5HDMI_BLOCK_ALIGN &&
            WaveFormat->WaveFormatEx.wBitsPerSample == RPI5HDMI_BITS_PER_SAMPLE &&
-           WaveFormat->WaveFormatEx.nBlockAlign == RPI5HDMI_BLOCK_ALIGN;
+           WaveFormat->WaveFormatEx.nBlockAlign == RPI5HDMI_BLOCK_ALIGN &&
+           DataFormat->SampleSize == RPI5HDMI_BLOCK_ALIGN;
 }
 
 CRpi5HdmiTopology::CRpi5HdmiTopology(CRpi5HdmiAdapter *Adapter) : m_Adapter(Adapter)
@@ -503,16 +551,8 @@ CRpi5HdmiWave::DataRangeIntersection(
     PVOID ResultantFormat,
     PULONG ResultantFormatLength)
 {
-    PKSDATAFORMAT_WAVEFORMATEX Format;
-
     if (!ResultantFormatLength || PinId != 0 || !DataRange || !MatchingDataRange)
         return STATUS_INVALID_PARAMETER;
-
-    *ResultantFormatLength = sizeof(KSDATAFORMAT_WAVEFORMATEX);
-    if (!OutputBufferLength || !ResultantFormat)
-        return STATUS_BUFFER_OVERFLOW;
-    if (OutputBufferLength < sizeof(KSDATAFORMAT_WAVEFORMATEX))
-        return STATUS_BUFFER_TOO_SMALL;
 
     if (!IsEqualGUIDAligned(DataRange->MajorFormat, KSDATAFORMAT_TYPE_AUDIO) ||
         !IsEqualGUIDAligned(DataRange->SubFormat, KSDATAFORMAT_SUBTYPE_PCM) ||
@@ -524,20 +564,16 @@ CRpi5HdmiWave::DataRangeIntersection(
         return STATUS_NO_MATCH;
     }
 
-    Format = reinterpret_cast<PKSDATAFORMAT_WAVEFORMATEX>(ResultantFormat);
-    RtlZeroMemory(Format, sizeof(*Format));
-    Format->DataFormat.FormatSize = sizeof(*Format);
-    Format->DataFormat.SampleSize = RPI5HDMI_BLOCK_ALIGN;
-    Format->DataFormat.MajorFormat = KSDATAFORMAT_TYPE_AUDIO;
-    Format->DataFormat.SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
-    Format->DataFormat.Specifier = KSDATAFORMAT_SPECIFIER_WAVEFORMATEX;
-    Format->WaveFormatEx.wFormatTag = WAVE_FORMAT_PCM;
-    Format->WaveFormatEx.nChannels = RPI5HDMI_CHANNELS;
-    Format->WaveFormatEx.nSamplesPerSec = RPI5HDMI_SAMPLE_RATE;
-    Format->WaveFormatEx.nAvgBytesPerSec = RPI5HDMI_SAMPLE_RATE * RPI5HDMI_BLOCK_ALIGN;
-    Format->WaveFormatEx.nBlockAlign = RPI5HDMI_BLOCK_ALIGN;
-    Format->WaveFormatEx.wBitsPerSample = RPI5HDMI_BITS_PER_SAMPLE;
-    Format->WaveFormatEx.cbSize = 0;
+    if (!Rpi5HdmiIsFormatSupported(reinterpret_cast<PKSDATAFORMAT>(DataRange)))
+        return STATUS_NO_MATCH;
+
+    *ResultantFormatLength = DataRange->FormatSize;
+    if (!OutputBufferLength || !ResultantFormat)
+        return STATUS_BUFFER_OVERFLOW;
+    if (OutputBufferLength < DataRange->FormatSize)
+        return STATUS_BUFFER_TOO_SMALL;
+
+    RtlCopyMemory(ResultantFormat, DataRange, DataRange->FormatSize);
     return STATUS_SUCCESS;
 }
 
