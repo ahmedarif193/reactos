@@ -10,6 +10,11 @@
 #include "usbaudio.h"
 
 #define PACKET_COUNT 10
+#define CAPTURE_IRP_COUNT 8
+#define RENDER_IRP_COUNT 12
+#define MAX_PIN_IRP_COUNT RENDER_IRP_COUNT
+#define MAXIMUM_ISO_PACKET_COUNT 1024
+#define USB_AUDIO_PACKETS_PER_SECOND 1000
 
 typedef struct
 {
@@ -754,11 +759,31 @@ RenderInitializeUrbAndIrp(
     IN OUT PIRP Irp,
     IN PVOID TransferBuffer,
     IN ULONG TransferBufferSize,
-    IN ULONG PacketSize)
+    IN ULONG PacketCount,
+    IN PWAVEFORMATEX WaveFormat,
+    IN ULONG InitialRemainder,
+    OUT PULONG FinalRemainder)
 {
-    ULONG Index, PacketCount;
+    ULONG BlockAlign;
+    ULONG Frames;
+    ULONG Index;
+    ULONG Offset;
+    ULONG PacketSize;
+    ULONG Remainder;
     PURB Urb;
     PIO_STACK_LOCATION IoStack;
+
+    if (!TransferBufferSize || !PacketCount ||
+        PacketCount > MAXIMUM_ISO_PACKET_COUNT ||
+        !WaveFormat || !WaveFormat->nBlockAlign ||
+        !WaveFormat->nSamplesPerSec || !FinalRemainder)
+    {
+        return STATUS_INVALID_BUFFER_SIZE;
+    }
+
+    BlockAlign = WaveFormat->nBlockAlign;
+    Remainder = InitialRemainder;
+    Offset = 0;
 
     /* initialize irp */
     IoInitializeIrp(Irp, IoSizeOfIrp(PinContext->DeviceExtension->LowerDevice->StackSize), PinContext->DeviceExtension->LowerDevice->StackSize);
@@ -768,6 +793,9 @@ RenderInitializeUrbAndIrp(
     Irp->IoStatus.Information = 0;
     Irp->Flags = 0;
     Irp->UserBuffer = NULL;
+    Irp->Tail.Overlay.DriverContext[0] = NULL;
+    Irp->Tail.Overlay.DriverContext[1] = NULL;
+    Irp->Tail.Overlay.DriverContext[2] = NULL;
 
     /* init stack location */
     IoStack = IoGetNextIrpStackLocation(Irp);
@@ -778,10 +806,6 @@ RenderInitializeUrbAndIrp(
 
     /* set completion routine */
     IoSetCompletionRoutine(Irp, UsbAudioRenderComplete, Pin, TRUE, TRUE, TRUE);
-
-    /* calculate packet count */
-    PacketCount = TransferBufferSize / PacketSize;
-    ASSERT(TransferBufferSize % PacketSize == 0);
 
     /* lets allocate urb */
     Urb = (PURB)AllocFunction(GET_ISO_URB_SIZE(PacketCount));
@@ -803,8 +827,42 @@ RenderInitializeUrbAndIrp(
 
     for (Index = 0; Index < PacketCount; Index++)
     {
-        Urb->UrbIsochronousTransfer.IsoPacket[Index].Offset = Index * PacketSize;
+        Frames = WaveFormat->nSamplesPerSec / USB_AUDIO_PACKETS_PER_SECOND;
+        Remainder += WaveFormat->nSamplesPerSec % USB_AUDIO_PACKETS_PER_SECOND;
+        if (Remainder >= USB_AUDIO_PACKETS_PER_SECOND)
+        {
+            Frames++;
+            Remainder -= USB_AUDIO_PACKETS_PER_SECOND;
+        }
+
+        if (!Frames || Frames > MAXULONG / BlockAlign)
+        {
+            FreeFunction(Urb);
+            Irp->Tail.Overlay.DriverContext[0] = NULL;
+            return STATUS_INVALID_BUFFER_SIZE;
+        }
+
+        PacketSize = Frames * BlockAlign;
+        if (PacketSize > PinContext->MaxPacketSize ||
+            PacketSize > TransferBufferSize - Offset)
+        {
+            FreeFunction(Urb);
+            Irp->Tail.Overlay.DriverContext[0] = NULL;
+            return STATUS_INVALID_BUFFER_SIZE;
+        }
+
+        Urb->UrbIsochronousTransfer.IsoPacket[Index].Offset = Offset;
+        Offset += PacketSize;
     }
+
+    if (Offset != TransferBufferSize)
+    {
+        FreeFunction(Urb);
+        Irp->Tail.Overlay.DriverContext[0] = NULL;
+        return STATUS_INVALID_BUFFER_SIZE;
+    }
+
+    *FinalRemainder = Remainder;
 
     /* store urb */
     IoStack->Parameters.Others.Argument1 = Urb;
@@ -813,6 +871,241 @@ RenderInitializeUrbAndIrp(
 
     /* done */
     return STATUS_SUCCESS;
+}
+
+static
+ULONG
+UsbAudioGetRenderPacketSize(
+    IN PWAVEFORMATEX WaveFormat,
+    IN ULONG InitialRemainder,
+    OUT PULONG FinalRemainder)
+{
+    ULONG Frames;
+    ULONG Remainder;
+
+    Frames = WaveFormat->nSamplesPerSec / USB_AUDIO_PACKETS_PER_SECOND;
+    Remainder = InitialRemainder +
+                WaveFormat->nSamplesPerSec % USB_AUDIO_PACKETS_PER_SECOND;
+    if (Remainder >= USB_AUDIO_PACKETS_PER_SECOND)
+    {
+        Frames++;
+        Remainder -= USB_AUDIO_PACKETS_PER_SECOND;
+    }
+
+    *FinalRemainder = Remainder;
+    if (!Frames || Frames > MAXULONG / WaveFormat->nBlockAlign)
+        return 0;
+
+    return Frames * WaveFormat->nBlockAlign;
+}
+
+static
+ULONG
+UsbAudioGetRenderTransferSize(
+    IN PWAVEFORMATEX WaveFormat,
+    IN ULONG InitialRemainder,
+    IN ULONG AvailableBytes,
+    IN ULONG MaximumPacketSize,
+    IN ULONG MaximumPacketCount,
+    OUT PULONG PacketCount,
+    OUT PULONG FinalRemainder)
+{
+    ULONG Count = 0;
+    ULONG PacketSize;
+    ULONG Remainder = InitialRemainder;
+    ULONG TotalSize = 0;
+
+    while (Count < MaximumPacketCount)
+    {
+        PacketSize = UsbAudioGetRenderPacketSize(WaveFormat,
+                                                 Remainder,
+                                                 &Remainder);
+        if (!PacketSize || PacketSize > MaximumPacketSize ||
+            PacketSize > AvailableBytes - TotalSize)
+        {
+            break;
+        }
+
+        TotalSize += PacketSize;
+        Count++;
+    }
+
+    *PacketCount = Count;
+    *FinalRemainder = Remainder;
+    return TotalSize;
+}
+
+static
+BOOLEAN
+PinMarkIrpPending(
+    IN PPIN_CONTEXT PinContext,
+    IN PIRP Irp)
+{
+    KIRQL OldLevel;
+    BOOLEAN Queued = FALSE;
+
+    KeAcquireSpinLock(&PinContext->IrpListLock, &OldLevel);
+    if (!PinContext->Closing && PinContext->Streaming)
+    {
+        if (PinContext->PendingIrpCount++ == 0)
+            KeClearEvent(&PinContext->NoPendingIrpsEvent);
+        InsertTailList(&PinContext->PendingIrpListHead,
+                       &Irp->Tail.Overlay.ListEntry);
+        Queued = TRUE;
+    }
+    KeReleaseSpinLock(&PinContext->IrpListLock, OldLevel);
+    return Queued;
+}
+
+static
+BOOLEAN
+PinCompletePendingIrp(
+    IN PPIN_CONTEXT PinContext,
+    IN PIRP Irp,
+    IN BOOLEAN Done)
+{
+    KIRQL OldLevel;
+    BOOLEAN Active;
+    BOOLEAN ProcessMore;
+
+    KeAcquireSpinLock(&PinContext->IrpListLock, &OldLevel);
+    RemoveEntryList(&Irp->Tail.Overlay.ListEntry);
+    ASSERT(PinContext->PendingIrpCount != 0);
+    PinContext->PendingIrpCount--;
+
+    Active = !PinContext->Closing;
+    ProcessMore = Active && PinContext->Streaming;
+    if (Active)
+    {
+        InsertTailList(Done ? &PinContext->DoneIrpListHead :
+                              &PinContext->IrpListHead,
+                       &Irp->Tail.Overlay.ListEntry);
+    }
+
+    if (PinContext->PendingIrpCount == 0)
+        KeSetEvent(&PinContext->NoPendingIrpsEvent, IO_NO_INCREMENT, FALSE);
+    KeReleaseSpinLock(&PinContext->IrpListLock, OldLevel);
+    return ProcessMore;
+}
+
+static
+VOID
+PinReturnIrpToReadyList(
+    IN PPIN_CONTEXT PinContext,
+    IN PIRP Irp)
+{
+    KIRQL OldLevel;
+
+    KeAcquireSpinLock(&PinContext->IrpListLock, &OldLevel);
+    if (!PinContext->Closing)
+    {
+        InsertTailList(&PinContext->IrpListHead,
+                       &Irp->Tail.Overlay.ListEntry);
+    }
+    KeReleaseSpinLock(&PinContext->IrpListLock, OldLevel);
+}
+
+static
+VOID
+PinSetStreaming(
+    IN PPIN_CONTEXT PinContext,
+    IN BOOLEAN Streaming)
+{
+    KIRQL OldLevel;
+
+    KeAcquireSpinLock(&PinContext->IrpListLock, &OldLevel);
+    PinContext->Streaming = Streaming;
+    KeReleaseSpinLock(&PinContext->IrpListLock, OldLevel);
+}
+
+static
+NTSTATUS
+PinSubmitIrp(
+    IN PPIN_CONTEXT PinContext,
+    IN PIRP Irp)
+{
+    if (!PinMarkIrpPending(PinContext, Irp))
+        return STATUS_DELETE_PENDING;
+
+    return IoCallDriver(PinContext->LowerDevice, Irp);
+}
+
+static
+VOID
+PinDiscardPreparedRenderIrp(
+    IN PPIN_CONTEXT PinContext,
+    IN PIRP Irp)
+{
+    PKSSTREAM_POINTER StreamPointerClone;
+    PURB Urb;
+    PVOID TransferBuffer;
+
+    Urb = Irp->Tail.Overlay.DriverContext[0];
+    StreamPointerClone = Irp->Tail.Overlay.DriverContext[1];
+    TransferBuffer = Irp->Tail.Overlay.DriverContext[2];
+    Irp->Tail.Overlay.DriverContext[0] = NULL;
+    Irp->Tail.Overlay.DriverContext[1] = NULL;
+    Irp->Tail.Overlay.DriverContext[2] = NULL;
+
+    if (Urb)
+        FreeFunction(Urb);
+    if (TransferBuffer)
+        FreeFunction(TransferBuffer);
+    if (StreamPointerClone)
+        KsStreamPointerDelete(StreamPointerClone);
+
+    PinReturnIrpToReadyList(PinContext, Irp);
+}
+
+static
+VOID
+PinCancelPendingIrps(
+    IN PPIN_CONTEXT PinContext)
+{
+    PIRP PendingIrps[MAX_PIN_IRP_COUNT];
+    PLIST_ENTRY Entry;
+    KIRQL OldLevel;
+    ULONG Count = 0;
+    ULONG Index;
+
+    KeAcquireSpinLock(&PinContext->IrpListLock, &OldLevel);
+    for (Entry = PinContext->PendingIrpListHead.Flink;
+         Entry != &PinContext->PendingIrpListHead;
+         Entry = Entry->Flink)
+    {
+        ASSERT(Count < RTL_NUMBER_OF(PendingIrps));
+        if (Count == RTL_NUMBER_OF(PendingIrps))
+            break;
+        PendingIrps[Count++] =
+            CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
+    }
+    KeReleaseSpinLock(&PinContext->IrpListLock, OldLevel);
+
+    for (Index = 0; Index < Count; Index++)
+        IoCancelIrp(PendingIrps[Index]);
+
+    KeWaitForSingleObject(&PinContext->NoPendingIrpsEvent,
+                          Executive,
+                          KernelMode,
+                          FALSE,
+                          NULL);
+}
+
+static
+VOID
+PinReturnCompletedCaptureIrps(
+    IN PPIN_CONTEXT PinContext)
+{
+    PLIST_ENTRY Entry;
+    KIRQL OldLevel;
+
+    KeAcquireSpinLock(&PinContext->IrpListLock, &OldLevel);
+    while (!IsListEmpty(&PinContext->DoneIrpListHead))
+    {
+        Entry = RemoveHeadList(&PinContext->DoneIrpListHead);
+        InsertTailList(&PinContext->IrpListHead, Entry);
+    }
+    KeReleaseSpinLock(&PinContext->IrpListLock, OldLevel);
 }
 
 VOID
@@ -912,7 +1205,8 @@ CaptureAvoidPipeStarvationWorker(
         KsDecrementCountedWorker(PinContext->StarvationWorker);
 
         /* call driver */
-        IoCallDriver(PinContext->DeviceExtension->LowerDevice, Irp);
+        if (PinSubmitIrp(PinContext, Irp) == STATUS_DELETE_PENDING)
+            PinReturnIrpToReadyList(PinContext, Irp);
     }
     else
     {
@@ -974,8 +1268,9 @@ InitCapturePin(
     Status = KsRegisterCountedWorker(CriticalWorkQueue, &PinContext->StarvationWorkItem, &PinContext->StarvationWorker);
     if (!NT_SUCCESS(Status))
     {
-        /* failed */
         KsUnregisterWorker(PinContext->CaptureWorker);
+        PinContext->CaptureWorker = NULL;
+        return Status;
     }
 
     /* lets edit framing struct */
@@ -987,7 +1282,7 @@ InitCapturePin(
     MaximumPacketSize;
 
     /* calculate buffer size 8 irps * 10 iso packets * max packet size */
-    BufferSize = 8 * PACKET_COUNT * MaximumPacketSize;
+    BufferSize = CAPTURE_IRP_COUNT * PACKET_COUNT * MaximumPacketSize;
 
     /* allocate pin capture buffer */
     PinContext->BufferSize = BufferSize;
@@ -1000,7 +1295,7 @@ InitCapturePin(
     KsAddItemToObjectBag(Pin->Bag, PinContext->Buffer, ExFreePool);
 
     /* init irps */
-    for (Index = 0; Index < 8; Index++)
+    for (Index = 0; Index < CAPTURE_IRP_COUNT; Index++)
     {
         /* allocate irp */
         Irp = AllocFunction(IoSizeOfIrp(PinContext->DeviceExtension->LowerDevice->StackSize));
@@ -1110,6 +1405,8 @@ InitStreamPin(
     PinContext->BufferSize = WaveFormatEx->WaveFormatEx.nAvgBytesPerSec;
     PinContext->BufferOffset = 0;
     PinContext->BufferLength = 0;
+    PinContext->RenderPacketRemainder = 0;
+    PinContext->RenderPendingPacketSize = 0;
 
     /* Select the correct isochronous OUT pipe for render */
     {
@@ -1140,7 +1437,7 @@ InitStreamPin(
     }
 
     /* init irps */
-    for (Index = 0; Index < 12; Index++)
+    for (Index = 0; Index < RENDER_IRP_COUNT; Index++)
     {
         /* allocate irp */
         Irp = AllocFunction(IoSizeOfIrp(PinContext->DeviceExtension->LowerDevice->StackSize));
@@ -1235,18 +1532,12 @@ GetDataRangeIndexForFormat(
              continue;
          }
 
-         /* Verify bit-depth matches the data range */
-         if (CurrentAudioDataRange->MaximumBitsPerSample != PcmFormat.ValidBitsPerSample)
+         if ((CurrentAudioDataRange->MinimumBitsPerSample != 0 &&
+              CurrentAudioDataRange->MinimumBitsPerSample > PcmFormat.ValidBitsPerSample) ||
+             (CurrentAudioDataRange->MaximumBitsPerSample != 0 &&
+              CurrentAudioDataRange->MaximumBitsPerSample < PcmFormat.ValidBitsPerSample))
          {
-             /* bit depth mismatch */
-             continue;
-         }
-
-         /* Verify sample size matches */
-         if (CurrentAudioDataRange->MinimumBitsPerSample != 0 &&
-             CurrentAudioDataRange->MinimumBitsPerSample > PcmFormat.ValidBitsPerSample)
-         {
-             /* bit depth too low for this range */
+             /* requested precision is outside this alternate setting's range */
              continue;
          }
 
@@ -1299,7 +1590,11 @@ USBAudioPinCreate(
     PinContext->LowerDevice = FilterContext->LowerDevice;
     InitializeListHead(&PinContext->IrpListHead);
     InitializeListHead(&PinContext->DoneIrpListHead);
+    InitializeListHead(&PinContext->PendingIrpListHead);
     KeInitializeSpinLock(&PinContext->IrpListLock);
+    KeInitializeEvent(&PinContext->NoPendingIrpsEvent,
+                      NotificationEvent,
+                      TRUE);
 
     /* store pin context*/
     Pin->Context = PinContext;
@@ -1364,29 +1659,15 @@ USBAudioPinClose(
 
     UNREFERENCED_PARAMETER(Irp);
 
-    /* Stop any in-flight IRPs by draining the ready list */
     if (PinContext)
     {
         KIRQL OldLevel;
-        PLIST_ENTRY Entry;
-        PIRP PendingIrp;
 
         KeAcquireSpinLock(&PinContext->IrpListLock, &OldLevel);
-        while (!IsListEmpty(&PinContext->IrpListHead))
-        {
-            Entry = RemoveHeadList(&PinContext->IrpListHead);
-            PendingIrp = CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
-            /* Cancel the IRP if still active */
-            if (PendingIrp->Cancel)
-                IoCancelIrp(PendingIrp);
-        }
-        while (!IsListEmpty(&PinContext->DoneIrpListHead))
-        {
-            Entry = RemoveHeadList(&PinContext->DoneIrpListHead);
-        }
+        PinContext->Closing = TRUE;
+        PinContext->Streaming = FALSE;
         KeReleaseSpinLock(&PinContext->IrpListLock, OldLevel);
 
-        /* Unregister workers */
         if (PinContext->CaptureWorker)
         {
             KsUnregisterWorker(PinContext->CaptureWorker);
@@ -1397,6 +1678,8 @@ USBAudioPinClose(
             KsUnregisterWorker(PinContext->StarvationWorker);
             PinContext->StarvationWorker = NULL;
         }
+
+        PinCancelPendingIrps(PinContext);
     }
 
     return STATUS_SUCCESS;
@@ -1411,10 +1694,12 @@ UsbAudioRenderComplete(
 {
     PKSPIN Pin;
     PPIN_CONTEXT PinContext;
-    KIRQL OldLevel;
     PKSSTREAM_POINTER StreamPointerClone;
     NTSTATUS Status;
     PURB Urb;
+    PVOID TransferBuffer;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
 
     /* get pin context */
     Pin = Context;
@@ -1428,18 +1713,15 @@ UsbAudioRenderComplete(
 
     /* get urb */
     Urb = Irp->Tail.Overlay.DriverContext[0];
+    TransferBuffer = Irp->Tail.Overlay.DriverContext[2];
+    Irp->Tail.Overlay.DriverContext[0] = NULL;
+    Irp->Tail.Overlay.DriverContext[1] = NULL;
+    Irp->Tail.Overlay.DriverContext[2] = NULL;
 
     /* and free it */
     FreeFunction(Urb);
-
-    /* acquire lock */
-    KeAcquireSpinLock(&PinContext->IrpListLock, &OldLevel);
-
-    /* insert entry into ready list */
-    InsertTailList(&PinContext->IrpListHead, &Irp->Tail.Overlay.ListEntry);
-
-    /* release lock */
-    KeReleaseSpinLock(&PinContext->IrpListLock, OldLevel);
+    if (TransferBuffer)
+        FreeFunction(TransferBuffer);
 
     if (!NT_SUCCESS(Status) && StreamPointerClone)
     {
@@ -1454,6 +1736,9 @@ UsbAudioRenderComplete(
         KsStreamPointerDelete(StreamPointerClone);
     }
 
+    if (PinCompletePendingIrp(PinContext, Irp, FALSE))
+        KsPinAttemptProcessing(Pin, TRUE);
+
     /* done */
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
@@ -1467,8 +1752,9 @@ UsbAudioCaptureComplete(
 {
     PKSPIN Pin;
     PPIN_CONTEXT PinContext;
-    KIRQL OldLevel;
     PURB Urb;
+    BOOLEAN Active;
+    BOOLEAN Done;
 
     /* get pin context */
     Pin = Context;
@@ -1477,30 +1763,19 @@ UsbAudioCaptureComplete(
     /* get urb */
     Urb = Irp->Tail.Overlay.DriverContext[0];
 
-    /* acquire lock */
-    KeAcquireSpinLock(&PinContext->IrpListLock, &OldLevel);
-
-    if (!NT_SUCCESS(Urb->UrbIsochronousTransfer.Hdr.Status))
+    Done = NT_SUCCESS(Urb->UrbIsochronousTransfer.Hdr.Status);
+    Active = PinCompletePendingIrp(PinContext, Irp, Done);
+    if (!Done)
     {
         //DPRINT("UsbAudioCaptureComplete Irp %p Urb %p Status %x Packet Status %x\n", Irp, Urb, Urb->UrbIsochronousTransfer.Hdr.Status, Urb->UrbIsochronousTransfer.IsoPacket[0].Status);
 
-        /* insert entry into ready list */
-        InsertTailList(&PinContext->IrpListHead, &Irp->Tail.Overlay.ListEntry);
-
-        /* release lock */
-        KeReleaseSpinLock(&PinContext->IrpListLock, OldLevel);
-
-        KsIncrementCountedWorker(PinContext->StarvationWorker);
+        if (Active)
+            KsIncrementCountedWorker(PinContext->StarvationWorker);
     }
     else
     {
-        /* insert entry into done list */
-        InsertTailList(&PinContext->DoneIrpListHead, &Irp->Tail.Overlay.ListEntry);
-
-        /* release lock */
-        KeReleaseSpinLock(&PinContext->IrpListLock, OldLevel);
-
-        KsIncrementCountedWorker(PinContext->CaptureWorker);
+        if (Active)
+            KsIncrementCountedWorker(PinContext->CaptureWorker);
     }
 
     /* done */
@@ -1522,7 +1797,7 @@ PinGetIrpFromReadyList(
     /* acquire spin lock */
     KeAcquireSpinLock(&PinContext->IrpListLock, &OldLevel);
 
-    if (!IsListEmpty(&PinContext->IrpListHead))
+    if (!PinContext->Closing && !IsListEmpty(&PinContext->IrpListHead))
     {
         /* remove entry from list */
         CurEntry = RemoveHeadList(&PinContext->IrpListHead);
@@ -1613,131 +1888,221 @@ NTSTATUS
 PinRenderProcess(
     IN PKSPIN Pin)
 {
-    PKSSTREAM_POINTER LeadingStreamPointer;
+    PKSSTREAM_POINTER LeadingStreamPointer = NULL;
     PKSSTREAM_POINTER CloneStreamPointer;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PPIN_CONTEXT PinContext;
-    ULONG PacketCount, TotalPacketSize, Offset;
+    ULONG CopyLength, FinalRemainder, PacketCount, Remaining, TransferSize;
     PKSDATAFORMAT_WAVEFORMATEX WaveFormatEx;
-    PUCHAR TransferBuffer;
+    PUCHAR OwnedBuffer;
     PIRP Irp = NULL;
+    BOOLEAN Submitted = FALSE;
 
-            //DPRINT("PinRenderProcess\n");
-
-    LeadingStreamPointer = KsPinGetLeadingEdgeStreamPointer(Pin, KSSTREAM_POINTER_STATE_LOCKED);
-    if (LeadingStreamPointer == NULL)
-    {
-        return STATUS_SUCCESS;
-    }
-
-    if (NULL == LeadingStreamPointer->StreamHeader->Data)
-    {
-        Status = KsStreamPointerAdvance(LeadingStreamPointer);
-    }
-
-
-    /* get pin context */
     PinContext = Pin->Context;
-
-    /* get irp from ready list */
-    Irp = PinGetIrpFromReadyList(Pin);
-
-    if (!Irp)
-    {
-        /* no irps available — normal back-pressure, stream will retry */
-        KsStreamPointerUnlock(LeadingStreamPointer, TRUE);
-        return STATUS_SUCCESS;
-    }
-
-    /* clone stream pointer */
-    Status = KsStreamPointerClone(LeadingStreamPointer, NULL, 0, &CloneStreamPointer);
-    if (!NT_SUCCESS(Status))
-    {
-        /* failed */
-        KsStreamPointerUnlock(LeadingStreamPointer, TRUE);
-        DPRINT1("PinRenderProcess: stream clone failed, IRP dropped %p\n", Irp);
-        return STATUS_SUCCESS;
-    }
-
-    /* calculate packet count based on sample rate */
     WaveFormatEx = (PKSDATAFORMAT_WAVEFORMATEX)Pin->ConnectionFormat;
-    TotalPacketSize = WaveFormatEx->WaveFormatEx.nAvgBytesPerSec / 1000;
 
-    /* init transfer buffer*/
-    TransferBuffer = CloneStreamPointer->StreamHeader->Data;
-
-    Offset = 0;
-
-    /* are there bytes from previous request*/
-    if (PinContext->BufferLength)
+    if (!WaveFormatEx->WaveFormatEx.nBlockAlign)
     {
-        ASSERT(PinContext->BufferLength < TotalPacketSize);
-
-        /* calculate offset*/
-        Offset = TotalPacketSize - PinContext->BufferLength;
-
-        if (PinContext->BufferOffset + TotalPacketSize >= PinContext->BufferSize)
-        {
-            RtlMoveMemory(PinContext->Buffer, &PinContext->Buffer[PinContext->BufferOffset - PinContext->BufferLength], PinContext->BufferLength);
-            PinContext->BufferOffset = PinContext->BufferLength;
-        }
-
-        /* copy audio bytes */
-        RtlCopyMemory(&PinContext->Buffer[PinContext->BufferOffset], TransferBuffer, Offset);
-
-        /* init irp*/
-        Status = RenderInitializeUrbAndIrp(Pin, PinContext, Irp, &PinContext->Buffer[PinContext->BufferOffset-PinContext->BufferLength], TotalPacketSize, TotalPacketSize);
-        if (NT_SUCCESS(Status))
-        {
-            /* render audio bytes */
-            Status = IoCallDriver(PinContext->LowerDevice, Irp);
-        }
-        else
-        {
-            ASSERT(FALSE);
-        }
-
-        PinContext->BufferLength = 0;
-        PinContext->BufferOffset += Offset;
-
-        /* get new irp from ready list */
-        Irp = PinGetIrpFromReadyList(Pin);
-        ASSERT(Irp);
-
+        return STATUS_INVALID_PARAMETER;
     }
 
-    /* calculate full packet count for the remaining buffer */
-    PacketCount = (CloneStreamPointer->OffsetIn.Remaining - Offset) / TotalPacketSize;
-
-    Status = RenderInitializeUrbAndIrp(Pin, PinContext, Irp, &TransferBuffer[Offset], PacketCount * TotalPacketSize, TotalPacketSize);
-    if (NT_SUCCESS(Status))
+    for (;;)
     {
-        /* store in irp context */
-        Irp->Tail.Overlay.DriverContext[1] = CloneStreamPointer;
-
-        if ((PacketCount * TotalPacketSize) + Offset < CloneStreamPointer->OffsetIn.Remaining)
+        if (!PinContext->RenderPendingPacketSize)
         {
-            /* calculate remaining buffer bytes */
-            PinContext->BufferLength = CloneStreamPointer->OffsetIn.Remaining - ((PacketCount * TotalPacketSize) + Offset);
-
-            /* check for overflow */
-            if (PinContext->BufferOffset + TotalPacketSize >= PinContext->BufferSize)
+            PinContext->RenderPendingPacketSize =
+                UsbAudioGetRenderPacketSize(&WaveFormatEx->WaveFormatEx,
+                                            PinContext->RenderPacketRemainder,
+                                            &FinalRemainder);
+            if (!PinContext->RenderPendingPacketSize ||
+                PinContext->RenderPendingPacketSize > PinContext->MaxPacketSize)
             {
-                /* reset buffer offset*/
-                PinContext->BufferOffset = 0;
+                return STATUS_INVALID_BUFFER_SIZE;
             }
-            RtlCopyMemory(&PinContext->Buffer[PinContext->BufferOffset], &TransferBuffer[(PacketCount * TotalPacketSize) + Offset], PinContext->BufferLength);
-            PinContext->BufferOffset += PinContext->BufferLength;
         }
 
-        /* render audio bytes */
-        Status = IoCallDriver(PinContext->LowerDevice, Irp);
+        if (PinContext->BufferLength == PinContext->RenderPendingPacketSize)
+        {
+            Irp = PinGetIrpFromReadyList(Pin);
+            if (!Irp)
+                break;
+
+            OwnedBuffer = AllocFunction(PinContext->RenderPendingPacketSize);
+            if (!OwnedBuffer)
+            {
+                PinReturnIrpToReadyList(PinContext, Irp);
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                break;
+            }
+
+            RtlCopyMemory(OwnedBuffer,
+                          PinContext->Buffer,
+                          PinContext->RenderPendingPacketSize);
+            Status = RenderInitializeUrbAndIrp(Pin,
+                                               PinContext,
+                                               Irp,
+                                               OwnedBuffer,
+                                               PinContext->RenderPendingPacketSize,
+                                               1,
+                                               &WaveFormatEx->WaveFormatEx,
+                                               PinContext->RenderPacketRemainder,
+                                               &FinalRemainder);
+            if (!NT_SUCCESS(Status))
+            {
+                FreeFunction(OwnedBuffer);
+                PinReturnIrpToReadyList(PinContext, Irp);
+                break;
+            }
+
+            PinContext->BufferLength = 0;
+            PinContext->RenderPendingPacketSize = 0;
+            PinContext->RenderPacketRemainder = FinalRemainder;
+            Irp->Tail.Overlay.DriverContext[2] = OwnedBuffer;
+            Status = PinSubmitIrp(PinContext, Irp);
+            if (Status == STATUS_DELETE_PENDING)
+            {
+                PinDiscardPreparedRenderIrp(PinContext, Irp);
+                break;
+            }
+            Submitted = TRUE;
+            continue;
+        }
+
+        if (!LeadingStreamPointer)
+        {
+            LeadingStreamPointer = KsPinGetLeadingEdgeStreamPointer(Pin,
+                                             KSSTREAM_POINTER_STATE_LOCKED);
+            if (!LeadingStreamPointer)
+                break;
+
+            if (!LeadingStreamPointer->StreamHeader ||
+                !LeadingStreamPointer->Offset ||
+                !LeadingStreamPointer->Offset->Data)
+            {
+                KsStreamPointerUnlock(LeadingStreamPointer, TRUE);
+                LeadingStreamPointer = NULL;
+                Status = STATUS_INVALID_BUFFER_SIZE;
+                break;
+            }
+        }
+
+        Remaining = LeadingStreamPointer->Offset->Remaining;
+        if (!Remaining)
+        {
+            KsStreamPointerUnlock(LeadingStreamPointer, TRUE);
+            LeadingStreamPointer = NULL;
+            continue;
+        }
+
+        if (PinContext->BufferLength ||
+            Remaining < PinContext->RenderPendingPacketSize)
+        {
+            CopyLength = min(PinContext->RenderPendingPacketSize -
+                             PinContext->BufferLength,
+                             Remaining);
+            RtlCopyMemory(PinContext->Buffer + PinContext->BufferLength,
+                          LeadingStreamPointer->Offset->Data,
+                          CopyLength);
+
+            Status = KsStreamPointerAdvanceOffsets(LeadingStreamPointer,
+                                                   CopyLength,
+                                                   0,
+                                                   FALSE);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            PinContext->BufferLength += CopyLength;
+            if (!LeadingStreamPointer->Offset->Remaining)
+            {
+                KsStreamPointerUnlock(LeadingStreamPointer, TRUE);
+                LeadingStreamPointer = NULL;
+            }
+            continue;
+        }
+
+        Irp = PinGetIrpFromReadyList(Pin);
+        if (!Irp)
+            break;
+
+        TransferSize = UsbAudioGetRenderTransferSize(
+            &WaveFormatEx->WaveFormatEx,
+            PinContext->RenderPacketRemainder,
+            Remaining,
+            PinContext->MaxPacketSize,
+            PACKET_COUNT,
+            &PacketCount,
+            &FinalRemainder);
+        if (!TransferSize)
+        {
+            PinReturnIrpToReadyList(PinContext, Irp);
+            Status = STATUS_INVALID_BUFFER_SIZE;
+            break;
+        }
+
+        Status = KsStreamPointerClone(LeadingStreamPointer,
+                                      NULL,
+                                      0,
+                                      &CloneStreamPointer);
+        if (!NT_SUCCESS(Status))
+        {
+            PinReturnIrpToReadyList(PinContext, Irp);
+            break;
+        }
+
+        CloneStreamPointer->Offset->Count = TransferSize;
+        CloneStreamPointer->Offset->Remaining = TransferSize;
+
+        Status = RenderInitializeUrbAndIrp(Pin,
+                                           PinContext,
+                                           Irp,
+                                           CloneStreamPointer->Offset->Data,
+                                           TransferSize,
+                                           PacketCount,
+                                           &WaveFormatEx->WaveFormatEx,
+                                           PinContext->RenderPacketRemainder,
+                                           &FinalRemainder);
+        if (!NT_SUCCESS(Status))
+        {
+            KsStreamPointerDelete(CloneStreamPointer);
+            PinReturnIrpToReadyList(PinContext, Irp);
+            break;
+        }
+
+        Status = KsStreamPointerAdvanceOffsets(LeadingStreamPointer,
+                                               TransferSize,
+                                               0,
+                                               FALSE);
+        if (!NT_SUCCESS(Status))
+        {
+            FreeFunction(Irp->Tail.Overlay.DriverContext[0]);
+            Irp->Tail.Overlay.DriverContext[0] = NULL;
+            KsStreamPointerDelete(CloneStreamPointer);
+            PinReturnIrpToReadyList(PinContext, Irp);
+            break;
+        }
+
+        Irp->Tail.Overlay.DriverContext[1] = CloneStreamPointer;
+        PinContext->RenderPacketRemainder = FinalRemainder;
+        PinContext->RenderPendingPacketSize = 0;
+        if (!LeadingStreamPointer->Offset->Remaining)
+        {
+            KsStreamPointerUnlock(LeadingStreamPointer, TRUE);
+            LeadingStreamPointer = NULL;
+        }
+
+        Status = PinSubmitIrp(PinContext, Irp);
+        if (Status == STATUS_DELETE_PENDING)
+        {
+            PinDiscardPreparedRenderIrp(PinContext, Irp);
+            break;
+        }
+        Submitted = TRUE;
     }
 
+    if (LeadingStreamPointer)
+        KsStreamPointerUnlock(LeadingStreamPointer, FALSE);
 
-    /* unlock stream pointer and finish*/
-    KsStreamPointerUnlock(LeadingStreamPointer, TRUE);
-    return STATUS_PENDING;
+    return Submitted ? STATUS_PENDING : Status;
 }
 
 NTSTATUS
@@ -1894,7 +2259,8 @@ PinCaptureProcess(
         /* reinitialize irp and urb */
         CaptureInitializeUrbAndIrp(Pin, Irp);
 
-        IoCallDriver(PinContext->DeviceExtension->LowerDevice, Irp);
+        if (PinSubmitIrp(PinContext, Irp) == STATUS_DELETE_PENDING)
+            PinReturnIrpToReadyList(PinContext, Irp);
 
         /* acquire spin lock */
         KeAcquireSpinLock(&PinContext->IrpListLock, &OldLevel);
@@ -1946,32 +2312,21 @@ USBAudioPinReset(
 
     if (PinContext)
     {
-        /* Reset buffer tracking state */
+        KIRQL OldLevel;
+
+        /* A reset reclaims every lower-stack transfer before AVStream
+         * releases the corresponding stream frames. */
+        PinSetStreaming(PinContext, FALSE);
+        PinCancelPendingIrps(PinContext);
+        if (Pin->DataFlow == KSPIN_DATAFLOW_OUT)
+            PinReturnCompletedCaptureIrps(PinContext);
+
+        KeAcquireSpinLock(&PinContext->IrpListLock, &OldLevel);
         PinContext->BufferOffset = 0;
         PinContext->BufferLength = 0;
-
-        /* Reinitialize all IRPs in the ready list */
-        if (Pin->DataFlow == KSPIN_DATAFLOW_OUT)
-        {
-            KIRQL OldLevel;
-            PLIST_ENTRY Entry;
-            PIRP Irp;
-
-            KeAcquireSpinLock(&PinContext->IrpListLock, &OldLevel);
-            while (!IsListEmpty(&PinContext->IrpListHead))
-            {
-                Entry = RemoveHeadList(&PinContext->IrpListHead);
-                KeReleaseSpinLock(&PinContext->IrpListLock, OldLevel);
-
-                Irp = CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
-                CaptureInitializeUrbAndIrp(Pin, Irp);
-
-                IoCallDriver(PinContext->DeviceExtension->LowerDevice, Irp);
-
-                KeAcquireSpinLock(&PinContext->IrpListLock, &OldLevel);
-            }
-            KeReleaseSpinLock(&PinContext->IrpListLock, OldLevel);
-        }
+        PinContext->RenderPacketRemainder = 0;
+        PinContext->RenderPendingPacketSize = 0;
+        KeReleaseSpinLock(&PinContext->IrpListLock, OldLevel);
     }
 }
 
@@ -2024,7 +2379,11 @@ StartCaptureIsocTransfer(
         CaptureInitializeUrbAndIrp(Pin, Irp);
 
         DPRINT("StartCaptureIsocTransfer Irp %p\n", Irp);
-        IoCallDriver(PinContext->DeviceExtension->LowerDevice, Irp);
+        if (PinSubmitIrp(PinContext, Irp) == STATUS_DELETE_PENDING)
+        {
+            PinReturnIrpToReadyList(PinContext, Irp);
+            break;
+        }
 
         /* acquire spin lock */
         KeAcquireSpinLock(&PinContext->IrpListLock, &OldLevel);
@@ -2078,9 +2437,6 @@ USBAudioPinSetDeviceState(
 {
     NTSTATUS Status = STATUS_SUCCESS;
     PPIN_CONTEXT PinContext;
-    PLIST_ENTRY Entry;
-    PIRP Irp;
-    KIRQL OldLevel;
 
     if (FromState == ToState)
         return STATUS_SUCCESS;
@@ -2092,37 +2448,16 @@ USBAudioPinSetDeviceState(
         /* Capture pin state transitions */
         if (ToState == KSSTATE_RUN)
         {
+            PinSetStreaming(PinContext, TRUE);
             Status = StartCaptureIsocTransfer(Pin);
+            if (!NT_SUCCESS(Status))
+                PinSetStreaming(PinContext, FALSE);
         }
-        else if (ToState == KSSTATE_PAUSE)
+        else if (ToState == KSSTATE_PAUSE || ToState == KSSTATE_STOP)
         {
-            /* Flush pending ISOC URBs and stop the pipe */
-            KeAcquireSpinLock(&PinContext->IrpListLock, &OldLevel);
-            while (!IsListEmpty(&PinContext->DoneIrpListHead))
-            {
-                Entry = RemoveHeadList(&PinContext->DoneIrpListHead);
-            }
-            while (!IsListEmpty(&PinContext->IrpListHead))
-            {
-                Entry = RemoveHeadList(&PinContext->IrpListHead);
-            }
-            KeReleaseSpinLock(&PinContext->IrpListLock, OldLevel);
-        }
-        else if (ToState == KSSTATE_STOP)
-        {
-            /* Stop all ISOC transfers */
-            KeAcquireSpinLock(&PinContext->IrpListLock, &OldLevel);
-            while (!IsListEmpty(&PinContext->IrpListHead))
-            {
-                Entry = RemoveHeadList(&PinContext->IrpListHead);
-                Irp = CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
-                IoCancelIrp(Irp);
-            }
-            while (!IsListEmpty(&PinContext->DoneIrpListHead))
-            {
-                Entry = RemoveHeadList(&PinContext->DoneIrpListHead);
-            }
-            KeReleaseSpinLock(&PinContext->IrpListLock, OldLevel);
+            PinSetStreaming(PinContext, FALSE);
+            PinCancelPendingIrps(PinContext);
+            PinReturnCompletedCaptureIrps(PinContext);
         }
     }
     else
@@ -2133,11 +2468,18 @@ USBAudioPinSetDeviceState(
             /* Start streaming — buffer will be consumed in PinRenderProcess */
             PinContext->BufferOffset = 0;
             PinContext->BufferLength = 0;
+            PinContext->RenderPacketRemainder = 0;
+            PinContext->RenderPendingPacketSize = 0;
+            PinSetStreaming(PinContext, TRUE);
         }
         else if (ToState == KSSTATE_PAUSE || ToState == KSSTATE_STOP)
         {
+            PinSetStreaming(PinContext, FALSE);
+            PinCancelPendingIrps(PinContext);
             /* Flush remaining buffer */
             PinContext->BufferLength = 0;
+            PinContext->RenderPacketRemainder = 0;
+            PinContext->RenderPendingPacketSize = 0;
         }
     }
 

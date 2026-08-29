@@ -119,6 +119,10 @@
 #define USB_AUDIO_PROCESSING_UNIT                        (0x08)
 #define USB_AUDIO_EXTENSION_UNIT                         (0x09)
 
+/* UAC1 has no Effect Unit, so its last two entity subtype values differ. */
+#define USB_AUDIO1_PROCESSING_UNIT                       (0x07)
+#define USB_AUDIO1_EXTENSION_UNIT                        (0x08)
+
 /* ── UAC2 descriptor subtype IDs ────────────────────────────────── */
 #define USB_AUDIO_CS_INTERFACE                           0x24
 #define USB_AUDIO_CS_ENDPOINT                            0x25
@@ -508,11 +512,20 @@ typedef struct _USBAUDIO_DEVICE_QUIRK
     const CHAR *Description;
 } USBAUDIO_DEVICE_QUIRK, *PUSBAUDIO_DEVICE_QUIRK;
 
+typedef struct _USBAUDIO_VOLUME_RANGE_CACHE
+{
+    BOOLEAN Valid;
+    UCHAR UsbChannel;
+    KSPROPERTY_STEPPING_LONG Range;
+} USBAUDIO_VOLUME_RANGE_CACHE, *PUSBAUDIO_VOLUME_RANGE_CACHE;
+
 typedef struct _NODE_CONTEXT
 {
     PUSB_COMMON_DESCRIPTOR Descriptor;
     ULONG NodeCount;
     ULONG Nodes[USBAUDIO_MAX_NODES_PER_CONTEXT];
+    ULONG FeatureChannelCount;
+    PUSBAUDIO_VOLUME_RANGE_CACHE VolumeRanges;
 } NODE_CONTEXT, *PNODE_CONTEXT;
 
 typedef struct _DEVICE_EXTENSION
@@ -522,6 +535,7 @@ typedef struct _DEVICE_EXTENSION
     PUSB_DEVICE_DESCRIPTOR DeviceDescriptor;
     PUSBD_INTERFACE_INFORMATION InterfaceInfo;
     USBD_CONFIGURATION_HANDLE ConfigurationHandle;
+    UCHAR AudioControlInterfaceNumber;
     PNODE_CONTEXT NodeContext;
     ULONG NodeContextCount;
     ULONG AudioVersion;                         /* USB Audio 1.0, 2.0, or 3.0 */
@@ -544,11 +558,18 @@ typedef struct _PIN_CONTEXT
     PDEVICE_OBJECT LowerDevice;
     LIST_ENTRY IrpListHead;
     LIST_ENTRY DoneIrpListHead;
+    LIST_ENTRY PendingIrpListHead;
     KSPIN_LOCK IrpListLock;
+    KEVENT NoPendingIrpsEvent;
+    ULONG PendingIrpCount;
+    BOOLEAN Closing;
+    BOOLEAN Streaming;
     PUCHAR Buffer;
     ULONG BufferSize;
     ULONG BufferOffset;
     ULONG BufferLength;
+    ULONG RenderPacketRemainder;
+    ULONG RenderPendingPacketSize;
     PUSB_INTERFACE_DESCRIPTOR InterfaceDescriptor;
     WORK_QUEUE_ITEM CaptureWorkItem;
     PKSWORKER       CaptureWorker;
