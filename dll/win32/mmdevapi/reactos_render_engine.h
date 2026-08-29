@@ -17,6 +17,7 @@ struct reactos_render_transport_ops
     HRESULT (*stop)(void *transport);
     UINT32 (*writable_frames)(void *transport);
     UINT32 (*period_frames)(void *transport);
+    BOOL (*completed_frames)(void *transport, UINT64 *frames, UINT64 *qpc_time);
     BOOL (*queue_frames)(void *transport, const BYTE *data, UINT32 frames);
 };
 
