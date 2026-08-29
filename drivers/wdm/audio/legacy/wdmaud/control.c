@@ -168,7 +168,7 @@ WdmAudIoctlClose(
         else if (ClientInfo->hPins[Index].Handle == DeviceInfo->hDevice && ClientInfo->hPins[Index].Type == MIXER_DEVICE_TYPE)
         {
             DPRINT1("Closing mixer %p\n", DeviceInfo->hDevice);
-            return WdmAudControlCloseMixer(DeviceObject, Irp, DeviceInfo, ClientInfo, Index);
+            return WdmAudControlCloseMixer(Irp, ClientInfo, Index);
         }
     }
 
@@ -425,6 +425,8 @@ WdmAudDeviceControl(
             return WdmAudResetStream(DeviceObject, Irp, DeviceInfo);
         case IOCTL_DUPLICATE_WDMAUD_PIN:
             return WdmAudDuplicatePinHandle(Irp, DeviceInfo, ClientInfo);
+        case IOCTL_GETPREFERRED_WAVE_FORMAT:
+            return WdmAudGetPreferredWaveFormat(Irp, DeviceInfo);
         case IOCTL_GETPOS:
             return WdmAudGetPosition(DeviceObject, Irp, DeviceInfo);
         case IOCTL_GETDEVID:
@@ -482,6 +484,9 @@ IoCompletion (
         /* failed */
         Irp->IoStatus.Information = 0;
     }
+
+    if (Irp->PendingReturned)
+        IoMarkIrpPending(Irp);
 
     /* dereference file object */
     ObDereferenceObject(Context->FileObject);
