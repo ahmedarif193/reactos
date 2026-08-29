@@ -109,6 +109,31 @@ RtlIsZeroMemory(
     return TRUE;
 }
 
+#undef RtlIsNtDdiVersionAvailable
+#undef RtlIsServicePackVersionInstalled
+
+BOOLEAN
+NTAPI
+RtlIsNtDdiVersionAvailable(
+    _In_ ULONG Version)
+{
+    if (Version & 0x0000FFFF)
+        return FALSE;
+
+    return ((NtMajorVersion << 24) | (NtMinorVersion << 16)) >= Version;
+}
+
+BOOLEAN
+NTAPI
+RtlIsServicePackVersionInstalled(
+    _In_ ULONG Version)
+{
+    if ((Version >> 24) != NtMajorVersion || ((Version >> 16) & 0xFF) != NtMinorVersion)
+        return FALSE;
+
+    return ((Version >> 8) & 0xFF) <= ((CmNtCSDVersion >> 8) & 0xFF);
+}
+
 NTSTATUS
 NTAPI
 RtlInitializeSidEx(

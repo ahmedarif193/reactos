@@ -537,11 +537,10 @@ MiDereferenceImports(IN PLOAD_IMPORTS ImportList)
     PAGED_CODE();
 
     /* Check if there's no imports or if we're a boot driver */
-    if ((ImportList == MM_SYSLDR_NO_IMPORTS) ||
-        (ImportList == MM_SYSLDR_BOOT_LOADED) ||
-        (ImportList->Count == 0))
+    if ((ImportList == NULL) ||
+        (ImportList == MM_SYSLDR_NO_IMPORTS) ||
+        (ImportList == MM_SYSLDR_BOOT_LOADED))
     {
-        /* Then there's nothing to do */
         return STATUS_SUCCESS;
     }
 
@@ -554,6 +553,11 @@ MiDereferenceImports(IN PLOAD_IMPORTS ImportList)
 
         /* Use this as the import list */
         ImportList = &SingleEntry;
+    }
+    else if (ImportList->Count == 0)
+    {
+        /* Then there's nothing to do */
+        return STATUS_SUCCESS;
     }
 
     /* Loop the import list */
