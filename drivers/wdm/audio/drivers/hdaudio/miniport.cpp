@@ -52,80 +52,48 @@ CMiniportWaveRT::DataRangeIntersection(
     OUT PVOID ResultantFormat OPTIONAL,
     OUT PULONG ResultantFormatLength)
 {
-#if 0
+    HDAUDIO_STREAM_FORMAT StreamFormat;
+    NTSTATUS Status;
+
+    if (!ResultantFormatLength || PinId != 0 ||
+        !DataRange || !MatchingDataRange ||
+        MatchingDataRange->FormatSize < sizeof(KSDATARANGE_AUDIO))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (!IsEqualGUIDAligned(DataRange->MajorFormat,
+                            MatchingDataRange->MajorFormat) ||
+        !IsEqualGUIDAligned(DataRange->SubFormat,
+                            MatchingDataRange->SubFormat) ||
+        !IsEqualGUIDAligned(DataRange->Specifier,
+                            MatchingDataRange->Specifier))
+    {
+        return STATUS_NO_MATCH;
+    }
+
+    Status = HDAUDIO_ValidateDataFormat(
+        (PKSDATAFORMAT)DataRange,
+        (PKSDATARANGE_AUDIO)MatchingDataRange,
+        &StreamFormat);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = HDAUDIO_ValidateNodeFormats(m_Node,
+                                         m_AssociatedPinCount,
+                                         m_AssociatedPins,
+                                         &StreamFormat);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    *ResultantFormatLength = DataRange->FormatSize;
     if (!OutputBufferLength || !ResultantFormat)
-    {
-        *ResultantFormatLength = sizeof(KSDATAFORMAT) + sizeof(WAVEFORMATEXTENSIBLE);
         return STATUS_BUFFER_OVERFLOW;
-    }
-
-    if (OutputBufferLength < (sizeof(KSDATAFORMAT) + sizeof(WAVEFORMATEXTENSIBLE)))
-    {
+    if (OutputBufferLength < DataRange->FormatSize)
         return STATUS_BUFFER_TOO_SMALL;
-    }
 
-    *(PKSDATAFORMAT)ResultantFormat = *DataRange;
-
-    ((PKSDATAFORMAT)ResultantFormat)->FormatSize = sizeof(KSDATAFORMAT) + sizeof(WAVEFORMATEXTENSIBLE);
-
-    PWAVEFORMATEXTENSIBLE WaveFormat = (PWAVEFORMATEXTENSIBLE)((PKSDATAFORMAT)ResultantFormat + 1);
-
-    WaveFormat->Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
-
-    PKSDATARANGE_AUDIO TargetRange = (PKSDATARANGE_AUDIO)DataRange;
-    PKSDATARANGE_AUDIO MatchingRange = (PKSDATARANGE_AUDIO)MatchingDataRange;
-
-    WaveFormat->Format.nChannels = (WORD)TargetRange->MaximumChannels;
-    if (WaveFormat->Format.nChannels > MatchingRange->MaximumChannels)
-        WaveFormat->Format.nChannels = (WORD)MatchingRange->MaximumChannels;
-    WaveFormat->Format.nSamplesPerSec = TargetRange->MaximumSampleFrequency;
-    if (WaveFormat->Format.nSamplesPerSec > MatchingRange->MaximumSampleFrequency)
-        WaveFormat->Format.nSamplesPerSec = MatchingRange->MaximumSampleFrequency;
-    WaveFormat->Format.wBitsPerSample = (WORD)TargetRange->MaximumBitsPerSample;
-    if (WaveFormat->Format.wBitsPerSample > MatchingRange->MaximumBitsPerSample)
-        WaveFormat->Format.wBitsPerSample = (WORD)MatchingRange->MaximumBitsPerSample;
-    WaveFormat->Format.nBlockAlign = (WaveFormat->Format.wBitsPerSample * WaveFormat->Format.nChannels) / 8;
-    WaveFormat->Format.nAvgBytesPerSec = WaveFormat->Format.nSamplesPerSec * WaveFormat->Format.nBlockAlign;
-    WaveFormat->Format.cbSize = 22;
-    WaveFormat->Samples.wValidBitsPerSample = WaveFormat->Format.wBitsPerSample;
-
-    switch (WaveFormat->Format.nChannels)
-    {
-        case 1:
-            WaveFormat->dwChannelMask = KSAUDIO_SPEAKER_MONO;
-            break;
-        case 2:
-            WaveFormat->dwChannelMask = KSAUDIO_SPEAKER_STEREO;
-            break;
-        case 4:
-            WaveFormat->dwChannelMask = KSAUDIO_SPEAKER_QUAD;
-            break;
-        case 6:
-            WaveFormat->dwChannelMask = KSAUDIO_SPEAKER_5POINT1;
-            break;
-        case 8:
-            WaveFormat->dwChannelMask = KSAUDIO_SPEAKER_7POINT1;
-            break;
-        default:
-            DPRINT1("Unhandled dwChannelMask for %u nChannels\n", WaveFormat->Format.nChannels);
-            WaveFormat->dwChannelMask = KSAUDIO_SPEAKER_STEREO;
-            break;
-    }
-
-    WaveFormat->SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
-
-    ((PKSDATAFORMAT)ResultantFormat)->SampleSize = WaveFormat->Format.nBlockAlign;
-
-    *ResultantFormatLength = sizeof(KSDATAFORMAT) + sizeof(WAVEFORMATEXTENSIBLE);
-
-    DPRINT1("DataRangeIntersection Frequency: %u, Channels: %u, bps: %u, ChannelMask: %x\n",
-            WaveFormat->Format.nSamplesPerSec, WaveFormat->Format.nChannels,
-            WaveFormat->Format.wBitsPerSample, WaveFormat->dwChannelMask);
-
+    RtlCopyMemory(ResultantFormat, DataRange, DataRange->FormatSize);
     return STATUS_SUCCESS;
-#else
-    return STATUS_NOT_IMPLEMENTED;
-#endif
 }
 
 NTSTATUS
