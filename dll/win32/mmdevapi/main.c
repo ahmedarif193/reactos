@@ -235,6 +235,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 
             wine_unix_call( main_loop_stop, NULL );
             reactos_audio_driver_deinit();
+            reactos_audio_sessions_shutdown();
 #else
             if (drvs.module_unixlib)
             {
