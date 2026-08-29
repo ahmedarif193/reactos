@@ -352,6 +352,9 @@ AcpiSendIoctlSynchronously(
 
     NTSTATUS status;
     VOID* intermediateBufferPtr = nullptr;
+#ifdef __REACTOS__
+    IO_STACK_LOCATION* irpStackPtr;
+#endif
 
     IRP* irpPtr = IoAllocateIrp(PdoPtr->StackSize, FALSE);
     if (irpPtr == nullptr) {
@@ -377,7 +380,11 @@ AcpiSendIoctlSynchronously(
     irpPtr->IoStatus.Information = 0;
     irpPtr->UserBuffer = nullptr;
 
+#ifdef __REACTOS__
+    irpStackPtr = IoGetNextIrpStackLocation(irpPtr);
+#else
     IO_STACK_LOCATION* irpStackPtr = IoGetNextIrpStackLocation(irpPtr);
+#endif
     NT_ASSERT(irpStackPtr != nullptr);
     irpStackPtr->MajorFunction = IRP_MJ_DEVICE_CONTROL;
     irpStackPtr->Parameters.DeviceIoControl.IoControlCode = IoControlCode;
@@ -750,6 +757,9 @@ AcpiFormatDsmFunctionNoParamsInputBuffer(
 
     NTSTATUS status;
     ACPI_EVAL_INPUT_BUFFER_COMPLEX* inputBufferPtr;
+#ifdef __REACTOS__
+    ACPI_METHOD_ARGUMENT UNALIGNED* argumentPtr;
+#endif
 
     //
     // Device Specific Method (_DSM) takes 4 args:
@@ -784,7 +794,11 @@ AcpiFormatDsmFunctionNoParamsInputBuffer(
     //
     // Argument 0: UUID
     //
+#ifdef __REACTOS__
+    argumentPtr = &inputBufferPtr->Argument[0];
+#else
     ACPI_METHOD_ARGUMENT UNALIGNED* argumentPtr = &inputBufferPtr->Argument[0];
+#endif
     ACPI_METHOD_SET_ARGUMENT_BUFFER(argumentPtr, GuidPtr, sizeof(GUID));
 
     //

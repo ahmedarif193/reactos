@@ -330,6 +330,9 @@ PL011EvtSerCx2SetWaitMask(
 {
     NTSTATUS status;
     PL011_DEVICE_EXTENSION* devExtPtr = PL011DeviceGetExtension(WdfDevice);
+#ifdef __REACTOS__
+    ULONG eventsToEnable;
+#endif
 
     //
     // The supported event mask.
@@ -368,7 +371,11 @@ PL011EvtSerCx2SetWaitMask(
     }
 
     // The events to enable
+#ifdef __REACTOS__
+    eventsToEnable = 0;
+#else
     ULONG eventsToEnable = 0;
+#endif
 
     if ((WaitMask & SERIAL_EV_BREAK) != 0) {
 

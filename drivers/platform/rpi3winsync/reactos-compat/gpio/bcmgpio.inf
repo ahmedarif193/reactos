@@ -1,0 +1,43 @@
+[Version]
+Signature="$Windows NT$"
+Class=System
+ClassGuid={4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider=%ProviderString%
+
+[ControlFlags]
+ExcludeFromSelect=*
+
+[DestinationDirs]
+DefaultDestDir=12
+
+[Manufacturer]
+%MSFT%=Microsoft,NTarm64
+
+[Microsoft.NTarm64]
+%GPIO.DeviceDesc%=GPIO_Inst,ACPI\BCM2845,ACPI\BCMGPIO
+
+[GPIO_Inst.NT]
+CopyFiles=GPIOCopyFiles
+
+[GPIOCopyFiles]
+bcmgpio.sys
+
+[GPIO_Inst.NT.Services]
+AddService=bcmgpio,0x00000002,GPIO_Service_Inst
+
+[GPIO_Service_Inst]
+DisplayName=%GPIO.SvcDesc%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\bcmgpio.sys
+AddReg=GPIO_Service_Inst.AddReg
+
+[GPIO_Service_Inst.AddReg]
+HKR,"Parameters","StormMitigationEnabled",0x00010001,0
+
+[Strings]
+ProviderString="MS-IOT"
+MSFT="Microsoft"
+GPIO.DeviceDesc="BCM2836 GPIO Controller"
+GPIO.SvcDesc="BCM2836 GPIO Controller Driver"

@@ -848,6 +848,9 @@ PL011IoctlGetDtrRts(
 {
     NTSTATUS status;
     ULONG_PTR reqStatusInfo = 0;
+#ifdef __REACTOS__
+    ULONG regUARTCR;
+#endif
 
     ULONG* dtrRtsPtr;
     status = WdfRequestRetrieveOutputBuffer(
@@ -867,7 +870,11 @@ PL011IoctlGetDtrRts(
     //
     // Get current UART control
     //
+#ifdef __REACTOS__
+    regUARTCR = 0;
+#else
     ULONG regUARTCR = 0;
+#endif
     PL011HwUartControl(
         WdfDevice,
         0,
@@ -921,6 +928,9 @@ PL011IoctlGetProperties(
 {
     NTSTATUS status;
     ULONG_PTR reqStatusInfo = 0;
+#ifdef __REACTOS__
+    const PL011_DEVICE_EXTENSION* devExtPtr;
+#endif
 
     PSERIAL_COMMPROP serialCommPropertiesPtr;
     status = WdfRequestRetrieveOutputBuffer(
@@ -938,8 +948,12 @@ PL011IoctlGetProperties(
     }
     RtlZeroMemory(serialCommPropertiesPtr, sizeof(SERIAL_COMMPROP));
 
-    const PL011_DEVICE_EXTENSION* devExtPtr = 
+#ifdef __REACTOS__
+    devExtPtr = PL011DeviceGetExtension(WdfDevice);
+#else
+    const PL011_DEVICE_EXTENSION* devExtPtr =
         PL011DeviceGetExtension(WdfDevice);
+#endif
 
     //
     // Set the comm properties.
@@ -1120,6 +1134,9 @@ PL011IoctlGetCommStatus(
 {
     NTSTATUS status;
     ULONG_PTR reqStatusInfo = 0;
+#ifdef __REACTOS__
+    PL011_DEVICE_EXTENSION* devExtPtr;
+#endif
 
     PSERIAL_STATUS serialStatusPtr;
     status = WdfRequestRetrieveOutputBuffer(
@@ -1137,7 +1154,11 @@ PL011IoctlGetCommStatus(
     }
     RtlZeroMemory(serialStatusPtr, sizeof(SERIAL_STATUS));
 
+#ifdef __REACTOS__
+    devExtPtr = PL011DeviceGetExtension(WdfDevice);
+#else
     PL011_DEVICE_EXTENSION* devExtPtr = PL011DeviceGetExtension(WdfDevice);
+#endif
 
     serialStatusPtr->AmountInInQueue = PL011RxGetInQueue(WdfDevice);
     serialStatusPtr->AmountInOutQueue = PL011TxGetOutQueue(WdfDevice);
@@ -1192,6 +1213,9 @@ PL011IoctlGetModemStatus(
     NTSTATUS status;
     ULONG_PTR reqStatusInfo = 0;
     ULONG modemStatus = 0;
+#ifdef __REACTOS__
+    ULONG regUARTCR;
+#endif
 
     UNREFERENCED_PARAMETER(WdfDevice);
 
@@ -1225,7 +1249,11 @@ PL011IoctlGetModemStatus(
     // and translate PL011 to 16550.
     //
 
+#ifdef __REACTOS__
+    regUARTCR = 0;
+#else
     ULONG regUARTCR = 0;
+#endif
     PL011HwUartControl(
         WdfDevice,
         0,
@@ -1298,6 +1326,11 @@ PL011IoctlSetFifoControl(
     )
 {
     NTSTATUS status;
+#ifdef __REACTOS__
+    BOOLEAN isFifoOn;
+    UARTIFLS_TXIFLSEL txFifoLevel;
+    UARTIFLS_RXIFLSEL rxFifoLevel;
+#endif
 
     ULONG fifoControl;
     status = WdfRequestRetrieveInputBuffer(
@@ -1329,12 +1362,20 @@ PL011IoctlSetFifoControl(
         goto done;
     }
 
+#ifdef __REACTOS__
+    isFifoOn = (fifoControl & SERIAL_FCR_ENABLE) != 0;
+#else
     BOOLEAN isFifoOn = (fifoControl & SERIAL_FCR_ENABLE) != 0;
+#endif
 
     //
     // Select TX FIFO level
     //
+#ifdef __REACTOS__
+    txFifoLevel = UARTIFLS_TXIFLSEL::TXIFLSEL_1_8;
+#else
     UARTIFLS_TXIFLSEL txFifoLevel = UARTIFLS_TXIFLSEL::TXIFLSEL_1_8;
+#endif
     switch (fifoControl & SERIAL_TX_FIFO_MASK) {
 
     case SERIAL_TX_1_BYTE_TRIG:
@@ -1358,7 +1399,11 @@ PL011IoctlSetFifoControl(
     //
     // Select RX FIFO level
     //
+#ifdef __REACTOS__
+    rxFifoLevel = UARTIFLS_RXIFLSEL::RXIFLSEL_7_8;
+#else
     UARTIFLS_RXIFLSEL rxFifoLevel = UARTIFLS_RXIFLSEL::RXIFLSEL_7_8;
+#endif
     switch (fifoControl & SERIAL_RX_FIFO_MASK) {
 
     case SERIAL_1_BYTE_HIGH_WATER:

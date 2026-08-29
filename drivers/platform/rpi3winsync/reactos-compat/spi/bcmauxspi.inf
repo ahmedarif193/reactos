@@ -1,0 +1,41 @@
+[Version]
+Signature="$Windows NT$"
+Class=System
+ClassGuid={4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider=%ProviderString%
+
+[DestinationDirs]
+DefaultDestDir=12
+
+[Manufacturer]
+%ProviderString%=Standard,NTarm64
+
+[Standard.NTarm64]
+%bcmauxspi.DeviceDesc%=bcmauxspi_Device,ACPI\BCM2839,ACPI\BCMSPI1
+
+[bcmauxspi_Device.NT]
+CopyFiles=Drivers_Dir
+
+[Drivers_Dir]
+bcmauxspi.sys
+
+[bcmauxspi_Device.NT.Services]
+AddService=bcmauxspi,0x00000002,bcmauxspi_Service_Inst
+
+[bcmauxspi_Service_Inst]
+DisplayName=%bcmauxspi.SVCDESC%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\bcmauxspi.sys
+LoadOrderGroup=Extended Base
+Dependencies=spbcx
+AddReg=bcmauxspi_Service_AddReg
+
+[bcmauxspi_Service_AddReg]
+HKR,"Parameters","ForceEnable",0x00010001,1
+
+[Strings]
+ProviderString="MS-IOT"
+bcmauxspi.DeviceDesc="Broadcom AUXSPI Controller"
+bcmauxspi.SVCDESC="Broadcom AUXSPI Controller Driver"

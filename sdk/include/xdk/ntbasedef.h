@@ -705,7 +705,7 @@ typedef struct _GROUP_AFFINITY {
 #if defined(__cplusplus)
 extern "C++" {
  template <typename T, size_t N>
- static char (& SAFE_RTL_NUMBER_OF(T (&)[N]))[N];
+ char (& SAFE_RTL_NUMBER_OF(T (&)[N]))[N];
 }
  #define RTL_NUMBER_OF_V2(A) sizeof(SAFE_RTL_NUMBER_OF(A))
 #elif defined(__GNUC__)

@@ -1,0 +1,46 @@
+[Version]
+Signature="$Windows NT$"
+Class=System
+ClassGuid={4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider=%ProviderString%
+
+[DestinationDirs]
+DefaultDestDir=12
+
+[ControlFlags]
+ExcludeFromSelect=*
+
+[Manufacturer]
+%MSFT%=MSFT,NTarm64
+
+[MSFT.NTarm64]
+%SerPL011.DeviceDesc%=BCM2837_Inst,ACPI\BCM2837
+
+[BCM2837_Inst.NT]
+CopyFiles=Drivers_Dir
+
+[Drivers_Dir]
+SerPL011.sys
+
+[BCM2837_Inst.NT.Services]
+AddService=SerPL011,0x00000002,BCM2837_Service_Inst
+
+[BCM2837_Service_Inst]
+DisplayName=%SerPL011.SVCDESC%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\SerPL011.sys
+LoadOrderGroup=Extended Base
+Dependencies=sercx2
+AddReg=BCM2837_Service_Reg
+
+[BCM2837_Service_Reg]
+HKR,Parameters,UartFlowControl,0x00010001,0x00000000
+HKR,Parameters,UartControlLines,0x00010001,0x00000000
+
+[Strings]
+ProviderString="MS-IOT"
+MSFT="Microsoft"
+SerPL011.DeviceDesc="ARM PL011 UART Device Driver"
+SerPL011.SVCDESC="ARM PL011 UART Device Driver"

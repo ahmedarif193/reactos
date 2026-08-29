@@ -28,36 +28,6 @@ foreach(_rpi3winsync_file IN LISTS _rpi3winsync_required_files)
     endif()
 endforeach()
 
-# The mailbox, PWM, mini-UART, and VCHIQ drivers, plus the VCOS and VCHIQ
-# kernel client DLLs, are enabled through adjacent ReactOS CMakeLists.txt
-# files.
-# Keep the remaining upstream projects visible to generators and IDEs, but do
-# not compile them yet. Each entry remains disabled for a concrete ReactOS
-# framework dependency; adding a target before that contract exists would only
-# produce an unusable binary.
-set(_rpi3winsync_disabled_projects
-    # Disabled: requires KMDF plus PortCls/WaveRT and mailbox/VCHIQ parity.
-    drivers/audio/bcm2836/rpiwav/rpiwav.vcxproj
-    # Disabled: requires KMDF and GpioClx compatibility.
-    drivers/gpio/bcm2836/bcmgpio.vcxproj
-    # Disabled: requires KMDF and SpbCx compatibility.
-    drivers/i2c/bcm2836/bcmi2c.vcxproj
-    # Disabled: require KMDF and SDPORT parity; native sdbus backends are used.
-    drivers/sd/bcm2836/bcm2836sdhc/bcm2836sdhc.vcxproj
-    drivers/sd/bcm2836/rpisdhc/rpisdhc.vcxproj
-    # Disabled: require KMDF and SpbCx compatibility.
-    drivers/spi/bcm2836/bcmspi.vcxproj
-    drivers/spi/bcmauxspi/bcmauxspi.vcxproj
-    # Disabled: requires KMDF and SerCx2 compatibility.
-    drivers/uart/bcm2836/serPL011/SerPL011.vcxproj)
-
-set(_rpi3winsync_disabled_project_sources)
-foreach(_rpi3winsync_project IN LISTS _rpi3winsync_disabled_projects)
-    list(APPEND _rpi3winsync_disabled_project_sources
-        "${_rpi3winsync_root}/${_rpi3winsync_project}")
-endforeach()
-
 add_custom_target(rpi3winsync SOURCES
-    rpi3winsync.md
-    ${_rpi3winsync_disabled_project_sources})
+    rpi3winsync.md)
 set_target_properties(rpi3winsync PROPERTIES FOLDER "Drivers/Platform/Raspberry Pi 3")

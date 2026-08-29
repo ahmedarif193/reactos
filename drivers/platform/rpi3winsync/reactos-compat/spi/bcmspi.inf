@@ -1,0 +1,38 @@
+[Version]
+Signature="$Windows NT$"
+Class=System
+ClassGuid={4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider=%ProviderString%
+
+[DestinationDirs]
+DefaultDestDir=12
+
+[Manufacturer]
+%StdMfg%=Standard,NTarm64
+
+[Standard.NTarm64]
+%bcmspi.DeviceDesc%=bcmspi_Device,ACPI\BCM2838,ACPI\BCMSPI0
+
+[bcmspi_Device.NT]
+CopyFiles=Drivers_Dir
+
+[Drivers_Dir]
+bcmspi.sys
+
+[bcmspi_Device.NT.Services]
+AddService=bcmspi,0x00000002,bcmspi_Service_Inst
+
+[bcmspi_Service_Inst]
+DisplayName=%bcmspi.SVCDESC%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\bcmspi.sys
+LoadOrderGroup=Base
+Dependencies=spbcx
+
+[Strings]
+ProviderString="MS-IOT"
+StdMfg="(Standard system devices)"
+bcmspi.DeviceDesc="Broadcom SPI Controller Driver"
+bcmspi.SVCDESC="Broadcom SPI Controller Service"

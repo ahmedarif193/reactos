@@ -176,6 +176,17 @@ typedef ACPI_ENUM_CHILDREN_OUTPUT_BUFFER UNALIGNED *PACPI_ENUM_CHILDREN_OUTPUT_B
     Argument->DataLength = BuffLength;                                      \
     RtlCopyMemory(&Argument->Data[0],(PUCHAR)BuffData,Argument->DataLength); }
 
+#define ACPI_EVAL_OUTPUT_BUFFER_ARGUMENT_LENGTH(EvalOutputBuffer)           \
+  ((EvalOutputBuffer)->Length -                                             \
+   FIELD_OFFSET(ACPI_EVAL_OUTPUT_BUFFER, Argument))
+
+#define ACPI_EVAL_OUTPUT_BUFFER_ARGUMENTS_BEGIN(EvalOutputBuffer)           \
+  ((PACPI_METHOD_ARGUMENT)(EvalOutputBuffer)->Argument)
+
+#define ACPI_EVAL_OUTPUT_BUFFER_ARGUMENTS_END(EvalOutputBuffer)             \
+  ((PACPI_METHOD_ARGUMENT)((PUCHAR)(EvalOutputBuffer)->Argument +           \
+    ACPI_EVAL_OUTPUT_BUFFER_ARGUMENT_LENGTH(EvalOutputBuffer)))
+
 #define ACPI_ENUM_CHILD_LENGTH_FROM_CHILD( Child ) \
   ( (2* sizeof (ULONG)) + Child->NameLength )
 

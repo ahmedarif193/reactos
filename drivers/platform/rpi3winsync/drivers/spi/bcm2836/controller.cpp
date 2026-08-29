@@ -168,6 +168,16 @@ ControllerDoOneTransferPollMode(
     size_t bytesToWrite = 0;
     size_t bytesToRead = 0;
     NTSTATUS status = STATUS_SUCCESS;
+#ifdef __REACTOS__
+    size_t readByteIndex;
+    size_t writeByteIndex;
+    size_t transferByteLength;
+    size_t zeroBytesToWrite;
+    size_t readBytesToDiscard;
+#ifdef DBG
+    ULONGLONG numPolls;
+#endif
+#endif
 
     if (pRequest->CurrentTransferDelayInUs > 0)
     {
@@ -228,11 +238,19 @@ ControllerDoOneTransferPollMode(
             pDevice->pCurrentTarget->Settings.DeviceSelection);
     }
 
+#ifdef __REACTOS__
+    readByteIndex = 0;
+    writeByteIndex = 0;
+    transferByteLength = max(bytesToWrite, bytesToRead);
+    zeroBytesToWrite = transferByteLength - bytesToWrite;
+    readBytesToDiscard = transferByteLength - bytesToRead;
+#else
     size_t readByteIndex = 0;
     size_t writeByteIndex = 0;
     size_t transferByteLength = max(bytesToWrite, bytesToRead);
     size_t zeroBytesToWrite = transferByteLength - bytesToWrite;
     size_t readBytesToDiscard = transferByteLength - bytesToRead;
+#endif
     UCHAR nextByte;
     ULONG CS;
 
@@ -241,7 +259,11 @@ ControllerDoOneTransferPollMode(
         (transferByteLength * 2));
 
 #ifdef DBG
+#ifdef __REACTOS__
+    numPolls = 0;
+#else
     ULONGLONG numPolls = 0;
+#endif
 #endif
 
     // As long as there are bytes to transfer and request has not been canceled
