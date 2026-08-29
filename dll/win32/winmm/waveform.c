@@ -42,6 +42,9 @@
 #include "mmdeviceapi.h"
 #include "audioclient.h"
 #include "audiopolicy.h"
+#ifdef __REACTOS__
+#include "endpointvolume.h"
+#endif
 
 #include "wine/debug.h"
 
@@ -118,6 +121,9 @@ struct _WINMM_MMDevice {
     EDataFlow dataflow;
 
     ISimpleAudioVolume *volume;
+#ifdef __REACTOS__
+    IAudioEndpointVolume *endpoint_volume;
+#endif
 
     GUID session;
 
@@ -216,6 +222,10 @@ void WINMM_DeleteWaveform(void)
 
         if(mmdevice->volume)
             ISimpleAudioVolume_Release(mmdevice->volume);
+#ifdef __REACTOS__
+        if(mmdevice->endpoint_volume)
+            IAudioEndpointVolume_Release(mmdevice->endpoint_volume);
+#endif
         CoTaskMemFree(mmdevice->dev_id);
         mmdevice->lock.DebugInfo->Spare[0] = 0;
         DeleteCriticalSection(&mmdevice->lock);
@@ -234,6 +244,10 @@ void WINMM_DeleteWaveform(void)
 
         if(mmdevice->volume)
             ISimpleAudioVolume_Release(mmdevice->volume);
+#ifdef __REACTOS__
+        if(mmdevice->endpoint_volume)
+            IAudioEndpointVolume_Release(mmdevice->endpoint_volume);
+#endif
         CoTaskMemFree(mmdevice->dev_id);
         mmdevice->lock.DebugInfo->Spare[0] = 0;
         DeleteCriticalSection(&mmdevice->lock);
@@ -1986,6 +2000,90 @@ static MMRESULT WINMM_SetupMMDeviceVolume(WINMM_MMDevice *mmdevice)
     return MMSYSERR_NOERROR;
 }
 
+#ifdef __REACTOS__
+static MMRESULT WINMM_SetupMMDeviceEndpointVolume(WINMM_MMDevice *mmdevice)
+{
+    IMMDevice *device;
+    HRESULT hr;
+
+    hr = IMMDeviceEnumerator_GetDevice(g_devenum, mmdevice->dev_id, &device);
+    if (FAILED(hr))
+    {
+        WARN("Device %s (%s) unavailable: %08lx\n",
+                wine_dbgstr_w(mmdevice->dev_id),
+                wine_dbgstr_w(mmdevice->out_caps.szPname), hr);
+        return MMSYSERR_ERROR;
+    }
+
+    /* A legacy render mixer exposes the endpoint master controls.  A
+     * per-session volume would only change the silent WINMM mixer session. */
+    hr = IMMDevice_Activate(device, &IID_IAudioEndpointVolume,
+            CLSCTX_INPROC_SERVER, NULL, (void **)&mmdevice->endpoint_volume);
+    IMMDevice_Release(device);
+    if (FAILED(hr))
+    {
+        WARN("Endpoint volume activation failed: %08lx\n", hr);
+        return MMSYSERR_ERROR;
+    }
+
+    return MMSYSERR_NOERROR;
+}
+#endif
+
+static BOOL WINMM_MMDeviceVolumeReady(WINMM_MMDevice *mmdevice)
+{
+#ifdef __REACTOS__
+    if (mmdevice->dataflow == eRender)
+        return mmdevice->endpoint_volume != NULL;
+#endif
+    return mmdevice->volume != NULL;
+}
+
+static MMRESULT WINMM_SetupMMDeviceMixerVolume(WINMM_MMDevice *mmdevice)
+{
+#ifdef __REACTOS__
+    if (mmdevice->dataflow == eRender)
+        return WINMM_SetupMMDeviceEndpointVolume(mmdevice);
+#endif
+    return WINMM_SetupMMDeviceVolume(mmdevice);
+}
+
+static HRESULT WINMM_GetMMDeviceMasterVolume(WINMM_MMDevice *mmdevice, float *volume)
+{
+#ifdef __REACTOS__
+    if (mmdevice->dataflow == eRender)
+        return IAudioEndpointVolume_GetMasterVolumeLevelScalar(mmdevice->endpoint_volume, volume);
+#endif
+    return ISimpleAudioVolume_GetMasterVolume(mmdevice->volume, volume);
+}
+
+static HRESULT WINMM_SetMMDeviceMasterVolume(WINMM_MMDevice *mmdevice, float volume)
+{
+#ifdef __REACTOS__
+    if (mmdevice->dataflow == eRender)
+        return IAudioEndpointVolume_SetMasterVolumeLevelScalar(mmdevice->endpoint_volume, volume, NULL);
+#endif
+    return ISimpleAudioVolume_SetMasterVolume(mmdevice->volume, volume, NULL);
+}
+
+static HRESULT WINMM_GetMMDeviceMute(WINMM_MMDevice *mmdevice, BOOL *mute)
+{
+#ifdef __REACTOS__
+    if (mmdevice->dataflow == eRender)
+        return IAudioEndpointVolume_GetMute(mmdevice->endpoint_volume, mute);
+#endif
+    return ISimpleAudioVolume_GetMute(mmdevice->volume, mute);
+}
+
+static HRESULT WINMM_SetMMDeviceMute(WINMM_MMDevice *mmdevice, BOOL mute)
+{
+#ifdef __REACTOS__
+    if (mmdevice->dataflow == eRender)
+        return IAudioEndpointVolume_SetMute(mmdevice->endpoint_volume, mute, NULL);
+#endif
+    return ISimpleAudioVolume_SetMute(mmdevice->volume, mute, NULL);
+}
+
 static LRESULT MXD_GetControlDetails(WINMM_ControlDetails *details)
 {
     WINMM_MMDevice *mmdevice;
@@ -2000,10 +2098,10 @@ static LRESULT MXD_GetControlDetails(WINMM_ControlDetails *details)
 
     EnterCriticalSection(&mmdevice->lock);
 
-    if(!mmdevice->volume){
+    if(!WINMM_MMDeviceVolumeReady(mmdevice)){
         MMRESULT mr;
 
-        mr = WINMM_SetupMMDeviceVolume(mmdevice);
+        mr = WINMM_SetupMMDeviceMixerVolume(mmdevice);
         if(mr != MMSYSERR_NOERROR){
             LeaveCriticalSection(&mmdevice->lock);
             return mr;
@@ -2013,14 +2111,16 @@ static LRESULT MXD_GetControlDetails(WINMM_ControlDetails *details)
     if(control->dwControlID == 0){
         float vol;
         MIXERCONTROLDETAILS_UNSIGNED *udet;
+        DWORD i;
 
         if(!control->paDetails ||
+                !control->cChannels ||
                 control->cbDetails < sizeof(MIXERCONTROLDETAILS_UNSIGNED)){
             LeaveCriticalSection(&mmdevice->lock);
             return MMSYSERR_INVALPARAM;
         }
 
-        hr = ISimpleAudioVolume_GetMasterVolume(mmdevice->volume, &vol);
+        hr = WINMM_GetMMDeviceMasterVolume(mmdevice, &vol);
         if(FAILED(hr)){
             WARN("GetMasterVolume failed: %08lx\n", hr);
             LeaveCriticalSection(&mmdevice->lock);
@@ -2028,7 +2128,8 @@ static LRESULT MXD_GetControlDetails(WINMM_ControlDetails *details)
         }
 
         udet = (MIXERCONTROLDETAILS_UNSIGNED*)control->paDetails;
-        udet->dwValue = vol * ((unsigned int)0xFFFF);
+        for (i = 0; i < control->cChannels; ++i)
+            udet[i].dwValue = vol * ((unsigned int)0xFFFF);
     }else if(control->dwControlID == 1){
         BOOL mute;
         MIXERCONTROLDETAILS_BOOLEAN *bdet;
@@ -2039,7 +2140,7 @@ static LRESULT MXD_GetControlDetails(WINMM_ControlDetails *details)
             return MMSYSERR_INVALPARAM;
         }
 
-        hr = ISimpleAudioVolume_GetMute(mmdevice->volume, &mute);
+        hr = WINMM_GetMMDeviceMute(mmdevice, &mute);
         if(FAILED(hr)){
             WARN("GetMute failed: %08lx\n", hr);
             LeaveCriticalSection(&mmdevice->lock);
@@ -2074,10 +2175,10 @@ static LRESULT MXD_SetControlDetails(WINMM_ControlDetails *details)
 
     EnterCriticalSection(&mmdevice->lock);
 
-    if(!mmdevice->volume){
+    if(!WINMM_MMDeviceVolumeReady(mmdevice)){
         MMRESULT mr;
 
-        mr = WINMM_SetupMMDeviceVolume(mmdevice);
+        mr = WINMM_SetupMMDeviceMixerVolume(mmdevice);
         if(mr != MMSYSERR_NOERROR){
             LeaveCriticalSection(&mmdevice->lock);
             return mr;
@@ -2103,7 +2204,7 @@ static LRESULT MXD_SetControlDetails(WINMM_ControlDetails *details)
 
         vol = udet->dwValue / 65535.f;
 
-        hr = ISimpleAudioVolume_SetMasterVolume(mmdevice->volume, vol, NULL);
+        hr = WINMM_SetMMDeviceMasterVolume(mmdevice, vol);
         if(FAILED(hr)){
             WARN("SetMasterVolume failed: %08lx\n", hr);
             LeaveCriticalSection(&mmdevice->lock);
@@ -2122,7 +2223,7 @@ static LRESULT MXD_SetControlDetails(WINMM_ControlDetails *details)
         bdet = (MIXERCONTROLDETAILS_BOOLEAN*)control->paDetails;
         mute = bdet->fValue;
 
-        hr = ISimpleAudioVolume_SetMute(mmdevice->volume, mute, NULL);
+        hr = WINMM_SetMMDeviceMute(mmdevice, mute);
         if(FAILED(hr)){
             WARN("SetMute failed: %08lx\n", hr);
             LeaveCriticalSection(&mmdevice->lock);
