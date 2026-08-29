@@ -191,6 +191,8 @@ USBAudioDetectVersion(
     if (!InterfaceDesc)
         return USB_AUDIO_VERSION_1;
 
+    DeviceExtension->AudioControlInterfaceNumber = InterfaceDesc->bInterfaceNumber;
+
     Header = (PUSB_AUDIO_CONTROL_INTERFACE_HEADER_DESCRIPTOR)
         USBD_ParseDescriptors(
             DeviceExtension->ConfigurationDescriptor,
