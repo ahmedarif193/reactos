@@ -19,6 +19,7 @@
 #include "tables.h"
 
 #define TAG_HDAUDIO 'UADH'
+#define HDAUDIO_MAX_FORMAT_RANGES 3
 
 PVOID
 __cdecl
@@ -165,7 +166,8 @@ class CAdapterCommon : public CUnknownImpl<IAdapterPowerManagement>
     BuildWaveFormat(
         IN PVOID Node,
         IN ULONG NodeCount,
-        IN PULONG TargetWidgets);
+        IN PULONG TargetWidgets,
+        IN BOOLEAN Capture);
     NTSTATUS NTAPI
     BuildInstallFilter(
         IN PDEVICE_OBJECT DeviceObject,
@@ -278,6 +280,18 @@ class CAdapterCommon : public CUnknownImpl<IAdapterPowerManagement>
     IMP_IAdapterPowerManagement;
     CAdapterCommon(IUnknown* OuterUnknown)
     {
+        RtlCopyMemory(m_WaveInPins, WaveInPins, sizeof(m_WaveInPins));
+        RtlCopyMemory(m_WaveOutPins, WaveOutPins, sizeof(m_WaveOutPins));
+
+        m_WaveInFilterDescription = WaveInFilterDescription[0];
+        m_WaveInFilterDescription.Pins = m_WaveInPins;
+        m_WaveInPins[0].KsPinDescriptor.DataRanges = m_WaveInDataRanges;
+        m_WaveInPins[0].KsPinDescriptor.DataRangesCount = 0;
+
+        m_WaveOutFilterDescription = WaveOutFilterDescription[0];
+        m_WaveOutFilterDescription.Pins = m_WaveOutPins;
+        m_WaveOutPins[0].KsPinDescriptor.DataRanges = m_WaveOutDataRanges;
+        m_WaveOutPins[0].KsPinDescriptor.DataRangesCount = 0;
     }
     virtual ~CAdapterCommon()
     {
@@ -302,6 +316,14 @@ class CAdapterCommon : public CUnknownImpl<IAdapterPowerManagement>
     PUNKNOWN m_WaveRTInPortUnknown;
     PUNKNOWN m_TopoOutPortUnknown;
     PUNKNOWN m_TopoInPortUnknown;
+    KSDATARANGE_AUDIO m_WaveInDataRange[HDAUDIO_MAX_FORMAT_RANGES];
+    PKSDATARANGE m_WaveInDataRanges[HDAUDIO_MAX_FORMAT_RANGES];
+    PCPIN_DESCRIPTOR m_WaveInPins[RTL_NUMBER_OF(WaveInPins)];
+    PCFILTER_DESCRIPTOR m_WaveInFilterDescription;
+    KSDATARANGE_AUDIO m_WaveOutDataRange[HDAUDIO_MAX_FORMAT_RANGES];
+    PKSDATARANGE m_WaveOutDataRanges[HDAUDIO_MAX_FORMAT_RANGES];
+    PCPIN_DESCRIPTOR m_WaveOutPins[RTL_NUMBER_OF(WaveOutPins)];
+    PCFILTER_DESCRIPTOR m_WaveOutFilterDescription;
 };
 
 class CFunctionGroupNode
@@ -582,3 +604,16 @@ HDAUDIO_AllocateStream(
     IN ULONG NodeCount,
     IN PULONG Nodes,
     IN PPCFILTER_DESCRIPTOR FilterDescription);
+
+NTSTATUS
+HDAUDIO_ValidateDataFormat(
+    IN PKSDATAFORMAT DataFormat,
+    IN PKSDATARANGE_AUDIO PinRange,
+    OUT PHDAUDIO_STREAM_FORMAT StreamFormat OPTIONAL);
+
+NTSTATUS
+HDAUDIO_ValidateNodeFormats(
+    IN CFunctionGroupNode *Node,
+    IN ULONG NodeCount,
+    IN PULONG Nodes,
+    IN PHDAUDIO_STREAM_FORMAT StreamFormat);
