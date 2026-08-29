@@ -530,6 +530,9 @@ exit:
         client->stream = stream;
         client->channel_count = channel_count;
         set_stream_volumes(client);
+#ifdef __REACTOS__
+        publish_audio_session_state(client->session);
+#endif
     }
 
     sessions_unlock();
@@ -704,6 +707,9 @@ static ULONG WINAPI client_Release(IAudioClient3 *iface)
         if (This->session) {
             sessions_lock();
             list_remove(&This->entry);
+#ifdef __REACTOS__
+            publish_audio_session_state(This->session);
+#endif
             sessions_unlock();
         }
 
@@ -924,6 +930,11 @@ static HRESULT WINAPI client_Start(IAudioClient3 *iface)
     params.stream = This->stream;
     wine_unix_call(start, &params);
 
+#ifdef __REACTOS__
+    if (SUCCEEDED(params.result))
+        publish_audio_session_state(This->session);
+#endif
+
     sessions_unlock();
 
     return params.result;
@@ -941,7 +952,14 @@ static HRESULT WINAPI client_Stop(IAudioClient3 *iface)
 
     params.stream = This->stream;
 
+#ifdef __REACTOS__
+    sessions_lock();
+#endif
     wine_unix_call(stop, &params);
+#ifdef __REACTOS__
+    publish_audio_session_state(This->session);
+    sessions_unlock();
+#endif
 
     return params.result;
 }
@@ -1477,6 +1495,12 @@ static HRESULT WINAPI render_ReleaseBuffer(IAudioRenderClient *iface, UINT32 wri
     params.written_frames = written_frames;
     params.flags          = flags;
 
+#ifdef __REACTOS__
+    sessions_lock();
+    if (This->session && sync_audio_session(This->session))
+        set_stream_volumes(This);
+    sessions_unlock();
+#endif
     wine_unix_call(release_render_buffer, &params);
 
     return params.result;

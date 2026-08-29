@@ -49,7 +49,11 @@ struct session_enum
 {
     IAudioSessionEnumerator IAudioSessionEnumerator_iface;
     IMMDevice *device;
+#ifdef __REACTOS__
+    struct reactos_audio_session_id *sessions;
+#else
     GUID *sessions;
+#endif
     int session_count;
     LONG ref;
 };
@@ -131,7 +135,13 @@ static HRESULT WINAPI enumerator_GetSession(IAudioSessionEnumerator *iface, int 
 
     *session = NULL;
     sessions_lock();
+#ifdef __REACTOS__
+    hr = get_audio_session_wrapper_by_id(&enumerator->sessions[index],
+                                         enumerator->device,
+                                         &session_wrapper);
+#else
     hr = get_audio_session_wrapper(&enumerator->sessions[index], enumerator->device, &session_wrapper);
+#endif
     sessions_unlock();
     if (FAILED(hr))
         return hr;
@@ -157,7 +167,12 @@ static HRESULT create_session_enumerator(IMMDevice *device, IAudioSessionEnumera
         return E_OUTOFMEMORY;
 
     sessions_lock();
+#ifdef __REACTOS__
+    hr = reactos_audio_session_enumerate(device, &enumerator->sessions,
+                                         &enumerator->session_count);
+#else
     hr = get_audio_sessions(device, &enumerator->sessions, &enumerator->session_count);
+#endif
     sessions_unlock();
     if (FAILED(hr))
     {
