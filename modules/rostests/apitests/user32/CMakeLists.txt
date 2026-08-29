@@ -80,6 +80,7 @@ list(APPEND SOURCE
     TrackMouseEvent.c
     TrackPopupMenuEx.c
     UpdateRegion.c
+    UserHandleGrantAccess.c
     VirtualKey.c
     WindowBand.c
     WndProc.c

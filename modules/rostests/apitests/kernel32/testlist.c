@@ -36,6 +36,7 @@ extern void func_IoCompletion(void);
 extern void func_IsDBCSLeadByteEx(void);
 extern void func_JapaneseCalendar(void);
 extern void func_JobObject(void);
+extern void func_JobObjectUI(void);
 extern void func_LCMapString(void);
 extern void func_LoadLibraryExW(void);
 extern void func_LockFileEx(void);
@@ -101,6 +102,7 @@ const struct test winetest_testlist[] =
     { "IsDBCSLeadByteEx",            func_IsDBCSLeadByteEx },
     { "JapaneseCalendar",            func_JapaneseCalendar },
     { "JobObject",                   func_JobObject },
+    { "JobObjectUI",                 func_JobObjectUI },
     { "LCMapString",                 func_LCMapString },
     { "LoadLibraryExW",              func_LoadLibraryExW },
     { "LockFileEx",                  func_LockFileEx },
