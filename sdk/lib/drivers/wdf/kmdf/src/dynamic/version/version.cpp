@@ -456,6 +456,54 @@ WDF_LIBRARY_DECOMMISSION(
 #define RAW_DATA_SIZE 4
 
 extern "C"
+NTSTATUS
+WdfBindClientHelper(
+    _Inout_ PWDF_BIND_INFO BindInfo,
+    _In_ WDF_MAJOR_VERSION FxMajorVersion,
+    _In_ WDF_MINOR_VERSION FxMinorVersion)
+{
+    PWDF_BIND_INFO2 bindInfo2;
+
+    if (BindInfo == NULL || BindInfo->Size < sizeof(WDF_BIND_INFO)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (BindInfo->Version.Major != FxMajorVersion) {
+        return STATUS_OBJECT_TYPE_MISMATCH;
+    }
+
+    if (BindInfo->Version.Minor <= FxMinorVersion) {
+        return STATUS_SUCCESS;
+    }
+
+    if (BindInfo->Size < sizeof(WDF_BIND_INFO2)) {
+        return STATUS_OBJECT_TYPE_MISMATCH;
+    }
+
+    bindInfo2 = (PWDF_BIND_INFO2)BindInfo;
+    if (bindInfo2->MinimumVersionRequired == NULL ||
+        bindInfo2->ClientVersionHigherThanFramework == NULL ||
+        bindInfo2->FuncCountPtr == NULL ||
+        bindInfo2->StructCountPtr == NULL ||
+        bindInfo2->StructTable == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (*bindInfo2->MinimumVersionRequired > FxMinorVersion ||
+        *bindInfo2->MinimumVersionRequired > BindInfo->Version.Minor) {
+        return STATUS_OBJECT_TYPE_MISMATCH;
+    }
+
+    *bindInfo2->ClientVersionHigherThanFramework = TRUE;
+    BindInfo->FuncCount = WdfVersion.FuncCount;
+    *bindInfo2->FuncCountPtr = WdfVersion.FuncCount;
+    *bindInfo2->StructCountPtr = WdfVersion.StructCount;
+    *bindInfo2->StructTable = (size_t *)&WdfVersion.Structures;
+
+    return STATUS_SUCCESS;
+}
+
+extern "C"
 _Must_inspect_result_
 NTSTATUS
 NTAPI
@@ -476,25 +524,22 @@ WDF_LIBRARY_REGISTER_CLIENT(
     clientInfo = (PCLIENT_INFO)*Context;
     *Context = NULL;
 
-    ASSERT(Info->Version.Major == WdfLibraryInfo.Version.Major);
+    status = WdfBindClientHelper(Info,
+                                 WdfLibraryInfo.Version.Major,
+                                 WdfLibraryInfo.Version.Minor);
 
-    //
-    // NOTE: If the currently loaded  library < drivers minor version fail the load
-    // instead of binding to a lower minor version. The reason for that if there
-    // is a newer API or new contract change made the driver shouldn't be using older
-    // API than it was compiled with.
-    //
+    if (!NT_SUCCESS(status)) {
+        NTSTATUS status2;
 
-    if (Info->Version.Minor > WdfLibraryInfo.Version.Minor) {
-        status = RtlStringCchPrintfW(insertString,
+        status2 = RtlStringCchPrintfW(insertString,
                                      RTL_NUMBER_OF(insertString),
                                      L"Driver Version: %d.%d Kmdf Lib. Version: %d.%d",
                                      Info->Version.Major,
                                      Info->Version.Minor,
                                      WdfLibraryInfo.Version.Major,
                                      WdfLibraryInfo.Version.Minor);
-        if (!NT_SUCCESS(status)) {
-            __Print(("ERROR: RtlStringCchPrintfW failed with Status 0x%x\n", status));
+        if (!NT_SUCCESS(status2)) {
+            __Print(("ERROR: RtlStringCchPrintfW failed with Status 0x%x\n", status2));
             return status;
         }
         rawData[0] = Info->Version.Major;
@@ -504,15 +549,11 @@ WDF_LIBRARY_REGISTER_CLIENT(
 
         LibraryLogEvent(FxLibraryGlobals.DriverObject,
                        WDFVER_MINOR_VERSION_NOT_SUPPORTED,
-                       STATUS_OBJECT_TYPE_MISMATCH,
+                       status,
                        insertString,
                        rawData,
                        sizeof(rawData) );
-        //
-        // this looks like the best status to return
-        //
-        return STATUS_OBJECT_TYPE_MISMATCH;
-
+        return status;
     }
 
     status = FxLibraryCommonRegisterClient(Info,

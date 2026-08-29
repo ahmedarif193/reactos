@@ -673,7 +673,7 @@ endfunction()
 # sign_driver_if_needed(my_driver)
 
 function(set_module_type MODULE TYPE)
-    cmake_parse_arguments(__module "UNICODE" "IMAGEBASE" "ENTRYPOINT" ${ARGN})
+    cmake_parse_arguments(__module "UNICODE" "IMAGEBASE;KMDF_VERSION;KMDF_MINIMUM_VERSION" "ENTRYPOINT" ${ARGN})
 
     if(__module_UNPARSED_ARGUMENTS)
         message(STATUS "set_module_type : unparsed arguments ${__module_UNPARSED_ARGUMENTS}, module : ${MODULE}")
@@ -781,9 +781,49 @@ function(set_module_type MODULE TYPE)
     endif()
 
     if(TYPE STREQUAL kmdfdriver)
-        target_include_directories(${MODULE} PUBLIC ${REACTOS_SOURCE_DIR}/sdk/include/wdf/kmdf/1.17)
+        if(NOT __module_KMDF_VERSION)
+            set(__module_KMDF_VERSION "1.17")
+        endif()
+
+        if(NOT __module_KMDF_VERSION MATCHES "^1\\.([0-9]+)$")
+            message(FATAL_ERROR "Invalid KMDF version '${__module_KMDF_VERSION}' for ${MODULE}")
+        endif()
+
+        set(_kmdf_minor ${CMAKE_MATCH_1})
+        set(_kmdf_include_dir ${REACTOS_SOURCE_DIR}/sdk/include/wdf/kmdf/${__module_KMDF_VERSION})
+        if(NOT EXISTS ${_kmdf_include_dir}/wdf.h)
+            message(FATAL_ERROR "KMDF ${__module_KMDF_VERSION} headers are not available for ${MODULE}")
+        endif()
+
+        if(__module_KMDF_VERSION STREQUAL "1.17")
+            set(_wdfdriverentry_target wdfdriverentry)
+        else()
+            string(REPLACE "." "_" _kmdf_version_suffix ${__module_KMDF_VERSION})
+            set(_wdfdriverentry_target wdfdriverentry_${_kmdf_version_suffix})
+        endif()
+
+        target_include_directories(${MODULE} PUBLIC ${_kmdf_include_dir})
+        target_compile_definitions(${MODULE} PRIVATE
+            KMDF_VERSION_MAJOR=1
+            KMDF_VERSION_MINOR=${_kmdf_minor})
+
+        if(__module_KMDF_MINIMUM_VERSION)
+            if(NOT __module_KMDF_MINIMUM_VERSION MATCHES "^1\\.([0-9]+)$")
+                message(FATAL_ERROR "Invalid minimum KMDF version '${__module_KMDF_MINIMUM_VERSION}' for ${MODULE}")
+            endif()
+            set(_kmdf_minimum_minor ${CMAKE_MATCH_1})
+            if(_kmdf_minor LESS 25 OR
+               _kmdf_minimum_minor LESS 25 OR
+               _kmdf_minimum_minor GREATER _kmdf_minor)
+                message(FATAL_ERROR
+                    "KMDF minimum version ${__module_KMDF_MINIMUM_VERSION} is invalid for target ${__module_KMDF_VERSION}")
+            endif()
+            target_compile_definitions(${MODULE} PRIVATE
+                KMDF_MINIMUM_VERSION_REQUIRED=${_kmdf_minimum_minor})
+        endif()
+
         add_importlibs(${MODULE} wdfldr)
-        target_link_libraries(${MODULE} wdfdriverentry)
+        target_link_libraries(${MODULE} ${_wdfdriverentry_target})
     endif()
 
     if(${TYPE} STREQUAL win32ocx)

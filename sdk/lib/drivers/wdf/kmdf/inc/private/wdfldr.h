@@ -21,7 +21,8 @@ typedef ULONG WDF_BUILD_NUMBER;
 typedef struct _WDF_BIND_INFO* PWDF_BIND_INFO;
 typedef struct _WDF_CLASS_BIND_INFO* PWDF_CLASS_BIND_INFO;
 typedef struct _WDF_LIBRARY_INFO* PWDF_LIBRARY_INFO;
-typedef PVOID WDF_COMPONENT_GLOBALS, *PWDF_COMPONENT_GLOBALS;
+typedef PVOID WDF_COMPONENT_GLOBALS;
+typedef PVOID PWDF_COMPONENT_GLOBALS;
 
 typedef
 NTSTATUS
@@ -104,6 +105,19 @@ typedef struct _WDF_CLASS_BIND_INFO {
     PVOID ClassModule;
 } WDF_CLASS_BIND_INFO, *PWDF_CLASS_BIND_INFO;
 
+#if (!defined(WDF_STUB_VERSION)) || (WDF_STUB_VERSION >= 25)
+
+typedef struct _WDF_CLASS_BIND_INFO2 {
+    WDF_CLASS_BIND_INFO V1;
+    PULONG MinimumVersionRequired;
+    PBOOLEAN ClientVersionHigherThanFramework;
+    PULONG FuncCountPtr;
+    PULONG StructCountPtr;
+    size_t *StructTable;
+} WDF_CLASS_BIND_INFO2, *PWDF_CLASS_BIND_INFO2;
+
+#endif
+
 typedef struct _WDF_CLASS_LIBRARY_INFO {
     ULONG Size;
     WDF_CLASS_VERSION Version;
@@ -164,7 +178,7 @@ NTSTATUS
 NTAPI
 WdfVersionBindClass(
     _In_ PWDF_BIND_INFO BindInfo,
-    _Inout_ PWDF_COMPONENT_GLOBALS* Globals,
+    _In_ PWDF_COMPONENT_GLOBALS Globals,
     _In_ PWDF_CLASS_BIND_INFO ClassBindInfo);
 
 

@@ -7,11 +7,9 @@
 
 #include <ntddk.h>
 #include <windef.h>
-#include <fxldr.h>
 #include "wdf.h"
+#include <fxldr.h>
 
-
-#define WDFENTRY_TAG 'EFDW'
 
 // supplied by the driver this library is linked into
 extern
@@ -23,24 +21,99 @@ DriverEntry(
 
 const WDFFUNC *WdfFunctions;
 PWDF_DRIVER_GLOBALS WdfDriverGlobals;
-WDF_BIND_INFO BindInfo =
+WDFFUNC WdfDriverMiniportUnloadOverride;
+
+NTSTATUS
+FxStubBindClasses(
+    _In_ PWDF_BIND_INFO BindInfo);
+
+BOOLEAN
+FxStubIsClassBound(VOID);
+
+VOID
+FxStubUnbindClasses(
+    _In_ PWDF_BIND_INFO BindInfo);
+
+NTSTATUS
+FxStubInitTypes(VOID);
+
+#if WDF_STUB_VERSION >= 25
+
+extern ULONG WdfMinimumVersionRequired;
+
+BOOLEAN WdfClientVersionHigherThanFramework;
+ULONG WdfFunctionCount = WdfFunctionTableNumEntries;
+ULONG WdfStructureCount = Wdf_STRUCTURE_TABLE_NUM_ENTRIES;
+WDF_STRUCT_INFO WdfStructures;
+
+WDF_BIND_INFO2 WdfBindInfo =
 {
-    .Size = sizeof(BindInfo),
-    .Component = L"KmdfLibrary", 
+    .V1 =
+    {
+        .Size = sizeof(WdfBindInfo),
+        .Component = L"KmdfLibrary",
+        .Version.Major = __WDF_MAJOR_VERSION,
+        .Version.Minor = __WDF_MINOR_VERSION,
+        .Version.Build = __WDF_BUILD_NUMBER,
+        .FuncCount = WdfFunctionTableNumEntries,
+        .FuncTable = (WDFFUNC *)&WdfFunctions
+    },
+    .MinimumVersionRequired = &WdfMinimumVersionRequired,
+    .ClientVersionHigherThanFramework = &WdfClientVersionHigherThanFramework,
+    .FuncCountPtr = &WdfFunctionCount,
+    .StructCountPtr = &WdfStructureCount,
+    .StructTable = &WdfStructures
+};
+
+#define WDF_BIND_INFO_V1 WdfBindInfo.V1
+
+#else
+
+WDF_BIND_INFO WdfBindInfo =
+{
+    .Size = sizeof(WdfBindInfo),
+    .Component = L"KmdfLibrary",
     .Version.Major = __WDF_MAJOR_VERSION,
     .Version.Minor = __WDF_MINOR_VERSION,
     .Version.Build = __WDF_BUILD_NUMBER,
     .FuncCount = WdfFunctionTableNumEntries,
     .FuncTable = (WDFFUNC *)&WdfFunctions
 };
-PDRIVER_UNLOAD pOriginalUnload = NULL;
-UNICODE_STRING gRegistryPath;
+
+#define WDF_BIND_INFO_V1 WdfBindInfo
+
+#endif
+
+static PDRIVER_UNLOAD pOriginalUnload;
+static WCHAR gRegistryPathBuffer[MAX_PATH];
+static UNICODE_STRING gRegistryPath =
+{
+    0,
+    sizeof(gRegistryPathBuffer),
+    gRegistryPathBuffer
+};
 
 static
 VOID
 FxDriverUnloadCommon(VOID)
 {
-    WdfVersionUnbind(&gRegistryPath, &BindInfo, (PWDF_COMPONENT_GLOBALS)WdfDriverGlobals);
+    FxStubUnbindClasses(&WDF_BIND_INFO_V1);
+    WdfVersionUnbind(&gRegistryPath,
+                     &WDF_BIND_INFO_V1,
+                     (PWDF_COMPONENT_GLOBALS)WdfDriverGlobals);
+}
+
+static
+VOID
+NTAPI
+FxDriverMiniportUnload(
+    _In_ PWDF_DRIVER_GLOBALS DriverGlobals,
+    _In_ WDFDRIVER Driver)
+{
+    UNREFERENCED_PARAMETER(DriverGlobals);
+    UNREFERENCED_PARAMETER(Driver);
+
+    FxDriverUnloadCommon();
 }
 
 VOID
@@ -68,27 +141,35 @@ FxDriverEntry(
         return DriverEntry(DriverObject, RegistryPath);
     }
 
-    // Copy registry path
-    gRegistryPath.MaximumLength = RegistryPath->Length + sizeof(UNICODE_NULL);
-    gRegistryPath.Buffer = ExAllocatePoolWithTag(PagedPool,
-                                                 gRegistryPath.MaximumLength,
-                                                 WDFENTRY_TAG);
-
-    if (gRegistryPath.Buffer == NULL)
-    {
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
+    // Preserve the service path for the matching unbind operation.
+    gRegistryPath.Length = 0;
     RtlCopyUnicodeString(&gRegistryPath, RegistryPath);
 
     // Bind wdf driver to framework
     status = WdfVersionBind(DriverObject,
                             RegistryPath,
-                            &BindInfo,
+                            &WDF_BIND_INFO_V1,
                             (PWDF_COMPONENT_GLOBALS*)(&WdfDriverGlobals));
 
     if (!NT_SUCCESS(status))
     {
+        return status;
+    }
+
+    WdfDriverMiniportUnloadOverride =
+        WdfFunctions[WdfDriverMiniportUnloadTableIndex];
+
+    status = FxStubBindClasses(&WDF_BIND_INFO_V1);
+    if (!NT_SUCCESS(status))
+    {
+        FxDriverUnloadCommon();
+        return status;
+    }
+
+    status = FxStubInitTypes();
+    if (!NT_SUCCESS(status))
+    {
+        FxDriverUnloadCommon();
         return status;
     }
 
@@ -102,8 +183,16 @@ FxDriverEntry(
 
     if (WdfDriverGlobals->DisplaceDriverUnload)
     {
-        pOriginalUnload = DriverObject->DriverUnload;
+        if (DriverObject->DriverUnload != NULL)
+        {
+            pOriginalUnload = DriverObject->DriverUnload;
+        }
         DriverObject->DriverUnload = FxDriverUnload;
     }
+    else if (WdfDriverGlobals->DriverFlags & WdfDriverInitNoDispatchOverride)
+    {
+        WdfDriverMiniportUnloadOverride = (WDFFUNC)FxDriverMiniportUnload;
+    }
+
     return STATUS_SUCCESS;
 }

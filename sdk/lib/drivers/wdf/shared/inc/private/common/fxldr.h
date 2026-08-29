@@ -136,6 +136,29 @@ typedef struct _WDF_BIND_INFO {
     PLIBRARY_MODULE    Module;     // Mgmt and diagnostic use only
 } WDF_BIND_INFO, * PWDF_BIND_INFO;
 
+#if (!defined(WDF_STUB_VERSION)) || (WDF_STUB_VERSION >= 25)
+
+//
+// Version 2 separates the framework version targeted by a client from the
+// minimum framework version on which that client can run.
+//
+typedef struct _WDF_BIND_INFO2 {
+    WDF_BIND_INFO       V1;
+    WDF_MINOR_VERSION * MinimumVersionRequired;
+    BOOLEAN           * ClientVersionHigherThanFramework;
+    ULONG             * FuncCountPtr;
+    ULONG             * StructCountPtr;
+    size_t            ** StructTable;
+} WDF_BIND_INFO2, *PWDF_BIND_INFO2;
+
+#endif
+
+NTSTATUS
+WdfBindClientHelper(
+    _Inout_ PWDF_BIND_INFO BindInfo,
+    _In_ WDF_MAJOR_VERSION FxMajorVersion,
+    _In_ WDF_MINOR_VERSION FxMinorVersion);
+
 typedef struct _WDF_LIBRARY_INFO {
     ULONG                             Size;
     PFNLIBRARYCOMMISSION              LibraryCommission;
