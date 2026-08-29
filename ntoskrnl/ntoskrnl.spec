@@ -537,6 +537,7 @@
 @ stdcall IoStartTimer(ptr)
 @ extern IoStatisticsLock
 @ stdcall IoStopTimer(ptr)
+@ stdcall -version=0x602+ IoSynchronousCallDriver(ptr ptr)
 @ stdcall IoSynchronousInvalidateDeviceRelations(ptr long)
 @ stdcall IoSynchronousPageWrite(ptr ptr ptr ptr ptr)
 @ stdcall IoThreadToProcess(ptr)
@@ -2531,7 +2532,6 @@
 @ stub -arch=arm64 IoSizeofGenericIrpExtension
 @ stdcall -arch=i386,x86_64,arm64 IoSizeofWorkItem()
 @ stub -arch=arm64 IoSteerInterrupt
-@ stub -arch=arm64 IoSynchronousCallDriver
 @ stub -arch=arm64 IoTestDependency
 @ stub -arch=arm64 IoTransferActivityId
 @ stub -arch=arm64 IoTryQueueWorkItem
@@ -3092,13 +3092,13 @@
 @ stub -arch=arm64 RtlIsMultiUsersInSessionSku
 @ stub -arch=arm64 RtlIsNonEmptyDirectoryReparsePointAllowed
 @ stub -arch=arm64 RtlIsNormalizedString
-@ stub -arch=arm64 RtlIsNtDdiVersionAvailable
+@ stdcall RtlIsNtDdiVersionAvailable(long)
 @ stub -arch=arm64 RtlIsPartialPlaceholder
 @ stub -arch=arm64 RtlIsPartialPlaceholderFileHandle
 @ stub -arch=arm64 RtlIsPartialPlaceholderFileInfo
 @ stub -arch=arm64 RtlIsProcessorFeaturePresent
 @ stub -arch=arm64 RtlIsSandboxedToken
-@ stub -arch=arm64 RtlIsServicePackVersionInstalled
+@ stdcall RtlIsServicePackVersionInstalled(long)
 @ stdcall -arch=i386,x86_64,arm64 RtlIsStateSeparationEnabled()
 @ stub -arch=arm64 RtlIsUntrustedObject
 @ stdcall -arch=i386,x86_64,arm64 RtlIsZeroMemory(ptr int64)
