@@ -60,7 +60,7 @@ static NTSTATUS SdPortInitializeSlots(_In_ PSDPORT_FDO_EXTENSION FdoExtension);
  */
 NTSTATUS
 NTAPI
-SdPortInitialize(
+SdPortInitializeLegacy(
     _In_ PDRIVER_OBJECT DriverObject,
     _In_ PUNICODE_STRING RegistryPath,
     _In_ PSDPORT_INITIALIZATION_DATA InitializationData)
@@ -147,6 +147,131 @@ SdPortInitialize(
     DriverObject->MajorFunction[IRP_MJ_POWER] = SdPortDispatchPower;
 
     return STATUS_SUCCESS;
+}
+
+
+static BOOLEAN SdPortWindowsAbi;
+
+static
+VOID
+SdPortWinThunkGetSlotCapabilities(
+    _In_ PVOID PrivateExtension,
+    _In_ UCHAR SlotIndex,
+    _Out_ PVOID Capabilities)
+{
+    SDPORT_WIN_CAPABILITIES WinCaps;
+    PSDPORT_CAPABILITIES Caps = Capabilities;
+
+    UNREFERENCED_PARAMETER(SlotIndex);
+    SdPortWinQueryCapabilities(PrivateExtension, &WinCaps);
+    RtlZeroMemory(Caps, sizeof(*Caps));
+    Caps->MaximumBlockSize = WinCaps.MaximumBlockSize;
+    Caps->MaximumBlockCount = WinCaps.MaximumBlockCount;
+    Caps->HighSpeedSupported = WinCaps.HighSpeed;
+    Caps->Sdr50Supported = WinCaps.Sdr50;
+    Caps->Sdr104Supported = WinCaps.Sdr104;
+    Caps->Ddr50Supported = WinCaps.Ddr50;
+    Caps->Hs200Supported = WinCaps.Hs200;
+    Caps->Hs400Supported = WinCaps.Hs400;
+    Caps->V18Supported = WinCaps.Voltage18;
+    Caps->V30Supported = WinCaps.Voltage30;
+    Caps->V33Supported = WinCaps.Voltage33;
+    Caps->EightBitSupported = WinCaps.BusWidth8Bit;
+    Caps->BaseClockFrequencyKhz = WinCaps.BaseClockFrequencyKhz;
+}
+
+static
+NTSTATUS
+SdPortWinThunkIssueBusOperation(
+    _In_ PVOID PrivateExtension,
+    _In_ PVOID Operation)
+{
+    PSDPORT_BUS_OPERATION BusOp = Operation;
+
+    switch (BusOp->Type)
+    {
+        case SdResetHost:
+            return SdPortWinIssueBusOperation(PrivateExtension, SdPortWinResetHost, 0);
+        case SdSetClock:
+            return SdPortWinIssueBusOperation(PrivateExtension, SdPortWinSetClock, BusOp->Parameters.FrequencyKhz);
+        case SdSetVoltage:
+            return SdPortWinIssueBusOperation(PrivateExtension, SdPortWinSetVoltage, BusOp->Parameters.Voltage);
+        case SdSetBusWidth:
+            return SdPortWinIssueBusOperation(PrivateExtension, SdPortWinSetBusWidth, BusOp->Parameters.BusWidth);
+        case SdSetBusSpeed:
+            return SdPortWinIssueBusOperation(PrivateExtension, SdPortWinSetBusSpeed, BusOp->Parameters.SpeedMode);
+        case SdSetSignalingVoltage:
+            return SdPortWinIssueBusOperation(PrivateExtension, SdPortWinSetSignalingVoltage, BusOp->Parameters.SignalingVoltage);
+        case SdExecuteTuning:
+            return SdPortWinIssueBusOperation(PrivateExtension, SdPortWinExecuteTuning, BusOp->Parameters.TuningCommand);
+        default:
+            return STATUS_NOT_SUPPORTED;
+    }
+}
+
+static
+NTSTATUS
+SdPortWinThunkIssueRequest(
+    _In_ PVOID PrivateExtension,
+    _In_ PVOID Request)
+{
+    PSDPORT_REQUEST Private = Request;
+    SDPORT_WIN_REQUEST Descriptor;
+
+    RtlZeroMemory(&Descriptor, sizeof(Descriptor));
+    Descriptor.Cmd = Private->Command.Cmd;
+    Descriptor.AppCmd = Private->Command.CmdClass == SDCC_APP_CMD;
+    Descriptor.ResponseType = (UCHAR)Private->Command.ResponseType;
+    Descriptor.TransferType = (UCHAR)Private->Command.TransferType;
+    Descriptor.TransferDirection = (UCHAR)Private->Command.TransferDirection;
+    Descriptor.Argument = Private->Argument;
+    Descriptor.BlockSize = Private->BlockSize;
+    Descriptor.BlockCount = Private->BlockCount;
+    Descriptor.DataBuffer = Private->DataBuffer;
+    Descriptor.DataMdl = Private->DataMdl;
+    Descriptor.Response = Private->Response;
+    Descriptor.BytesTransferred = &Private->BytesTransferred;
+    return SdPortWinIssueRequest(PrivateExtension, &Descriptor);
+}
+
+static
+VOID
+SdPortWinThunkRequestDpc(
+    _In_ PVOID PrivateExtension,
+    _In_ PVOID Request,
+    _In_ ULONG Events,
+    _In_ ULONG Errors)
+{
+    UNREFERENCED_PARAMETER(Request);
+    SdPortWinRequestDpc(PrivateExtension, Events, Errors);
+}
+
+NTSTATUS
+SdPortInitializeWindowsMiniport(
+    _In_ PDRIVER_OBJECT DriverObject,
+    _In_ PUNICODE_STRING RegistryPath,
+    _In_ const SDPORT_WIN_LEGACY_TABLE *Table)
+{
+    SDPORT_INITIALIZATION_DATA InitData;
+
+    RtlZeroMemory(&InitData, sizeof(InitData));
+    InitData.StructureSize = sizeof(InitData);
+    InitData.GetSlotCount = Table->GetSlotCount;
+    InitData.GetSlotCapabilities = SdPortWinThunkGetSlotCapabilities;
+    InitData.Initialize = Table->Initialize;
+    InitData.IssueBusOperation = SdPortWinThunkIssueBusOperation;
+    InitData.GetCardDetectState = Table->GetCardDetectState;
+    InitData.Interrupt = Table->Interrupt;
+    InitData.IssueRequest = SdPortWinThunkIssueRequest;
+    InitData.RequestDpc = SdPortWinThunkRequestDpc;
+    InitData.SaveContext = Table->SaveContext;
+    InitData.RestoreContext = Table->RestoreContext;
+    InitData.ToggleEvents = Table->ToggleEvents;
+    InitData.ClearEvents = Table->ClearEvents;
+    InitData.Cleanup = Table->Cleanup;
+    InitData.PrivateExtensionSize = 0;
+    SdPortWindowsAbi = TRUE;
+    return SdPortInitializeLegacy(DriverObject, RegistryPath, &InitData);
 }
 
 /**
@@ -254,6 +379,18 @@ SdPortAddDevice(
     {
         FdoExtension->MiniportPrivateExtension =
             (PUCHAR)FdoExtension + sizeof(SDPORT_FDO_EXTENSION);
+    }
+    if (SdPortWindowsAbi)
+    {
+        Status = SdPortWinAllocateExtension(Fdo,
+                                            PhysicalDeviceObject,
+                                            &FdoExtension->MiniportPrivateExtension);
+        if (!NT_SUCCESS(Status))
+        {
+            IoDeleteDevice(Fdo);
+            return Status;
+        }
+        FdoExtension->WindowsMiniport = TRUE;
     }
 
     /* Initialize per-slot structures */
@@ -701,6 +838,11 @@ SdPortPnpRemoveDevice(
 
     /* Detach and delete our device */
     IoDetachDevice(LowerDevice);
+    if (FdoExtension->WindowsMiniport && FdoExtension->MiniportPrivateExtension != NULL)
+    {
+        SdPortWinFreeExtension(FdoExtension->MiniportPrivateExtension);
+        FdoExtension->MiniportPrivateExtension = NULL;
+    }
     IoDeleteDevice(FdoExtension->DeviceObject);
 
     return Status;
@@ -1244,6 +1386,119 @@ SdPortPumpManagedPio(
  *
  *
  */
+VOID
+SdPortCompleteSlotRequest(
+    _In_ PSDPORT_FDO_EXTENSION FdoExtension,
+    _In_ PSDPORT_SLOT_EXTENSION SlotExtension)
+{
+    PSDPORT_REQUEST Request = SlotExtension->CurrentRequest;
+
+    KeSetEvent(&SlotExtension->RequestEvent, IO_NO_INCREMENT, FALSE);
+
+    if (Request != NULL && Request->CompletionRoutine != NULL)
+    {
+        KIRQL OldIrql;
+        PSDPORT_REQUEST Next = NULL;
+
+        PSDPORT_REQUEST_COMPLETION_ROUTINE Routine = Request->CompletionRoutine;
+        PVOID Ctx = Request->CompletionContext;
+
+        Request->Status = SlotExtension->RequestStatus;
+
+        KeAcquireSpinLock(&SlotExtension->RequestLock, &OldIrql);
+        SlotExtension->ActiveRequest = NULL;
+        if (!IsListEmpty(&SlotExtension->PendingRequests))
+        {
+            PLIST_ENTRY Entry =
+                RemoveHeadList(&SlotExtension->PendingRequests);
+            Next = CONTAINING_RECORD(Entry, SDPORT_REQUEST, QueueLink);
+            SlotExtension->ActiveRequest = Next;
+        }
+        else
+        {
+            SlotExtension->CurrentRequest = NULL;
+            SlotExtension->RequestHasData = FALSE;
+            SlotExtension->State = SdPortRequestStateIdle;
+        }
+        KeReleaseSpinLock(&SlotExtension->RequestLock, OldIrql);
+
+        Routine(FdoExtension, Request, Ctx);
+
+        if (Next != NULL)
+        {
+            SlotExtension->CurrentRequest = Next;
+            SlotExtension->RequestHasData =
+                (Next->Command.TransferType != SDTT_CMD_ONLY &&
+                 Next->Command.TransferType != SDTT_UNSPECIFIED);
+            SlotExtension->State = SdPortRequestStateCommand;
+            Next->State = SdPortRequestStateCommand;
+            Next->PioBytesDone = 0;
+            Next->PioBytesPerBlock = Next->BlockSize;
+
+            Next->Status = FdoExtension->MiniportInitData.IssueRequest(
+                FdoExtension->MiniportPrivateExtension,
+                Next);
+            if (!NT_SUCCESS(Next->Status))
+            {
+                PSDPORT_REQUEST_COMPLETION_ROUTINE NextRoutine =
+                    Next->CompletionRoutine;
+                PVOID NextCtx = Next->CompletionContext;
+
+                KeAcquireSpinLock(&SlotExtension->RequestLock, &OldIrql);
+                SlotExtension->ActiveRequest = NULL;
+                SlotExtension->CurrentRequest = NULL;
+                KeReleaseSpinLock(&SlotExtension->RequestLock, OldIrql);
+
+                if (NextRoutine != NULL)
+                {
+                    NextRoutine(FdoExtension, Next, NextCtx);
+                }
+            }
+        }
+    }
+}
+
+VOID
+SdPortWinRequestCompleted(
+    _In_ PDEVICE_OBJECT Fdo,
+    _In_ NTSTATUS Status,
+    _In_ ULONG Errors)
+{
+    PSDPORT_FDO_EXTENSION FdoExtension = Fdo->DeviceExtension;
+    PSDPORT_SLOT_EXTENSION SlotExtension = &FdoExtension->Slots[0];
+    UCHAR Index;
+
+    for (Index = 0; Index < FdoExtension->SlotCount; Index++)
+    {
+        if (FdoExtension->Slots[Index].CurrentRequest != NULL)
+        {
+            SlotExtension = &FdoExtension->Slots[Index];
+            break;
+        }
+    }
+
+    if (!NT_SUCCESS(Status))
+    {
+        if (Errors != 0)
+            Status = SdPortErrorsToStatus(Errors);
+        else if (Status == STATUS_IO_TIMEOUT)
+            Status = STATUS_SD_CMD_TIMEOUT;
+        else if (Status == STATUS_CRC_ERROR)
+            Status = STATUS_SD_CMD_CRC_ERROR;
+        else
+            Status = STATUS_SD_IO_ERROR;
+        SlotExtension->State = SdPortRequestStateErrorRecovery;
+    }
+    else
+    {
+        Status = STATUS_SUCCESS;
+        SlotExtension->State = SdPortRequestStateCompleted;
+    }
+
+    SlotExtension->RequestStatus = Status;
+    SdPortCompleteSlotRequest(FdoExtension, SlotExtension);
+}
+
 static
 VOID
 NTAPI
@@ -1283,6 +1538,11 @@ SdPortInterruptDpc(
 
         Request = SlotExtension->CurrentRequest;
 
+        if (FdoExtension->WindowsMiniport)
+        {
+            SdPortWinRequestDpc(FdoExtension->MiniportPrivateExtension, Events, Errors);
+            continue;
+        }
         if (FdoExtension->MiniportInitData.RequestDpc != NULL && Request != NULL)
         {
             FdoExtension->MiniportInitData.RequestDpc(
@@ -1374,69 +1634,7 @@ SdPortInterruptDpc(
 
         if (SignalCompletion)
         {
-            KeSetEvent(&SlotExtension->RequestEvent, IO_NO_INCREMENT, FALSE);
-
-            if (Request != NULL && Request->CompletionRoutine != NULL)
-            {
-                KIRQL OldIrql;
-                PSDPORT_REQUEST Next = NULL;
-
-                PSDPORT_REQUEST_COMPLETION_ROUTINE Routine = Request->CompletionRoutine;
-                PVOID Ctx = Request->CompletionContext;
-
-                Request->Status = SlotExtension->RequestStatus;
-
-                KeAcquireSpinLock(&SlotExtension->RequestLock, &OldIrql);
-                SlotExtension->ActiveRequest = NULL;
-                if (!IsListEmpty(&SlotExtension->PendingRequests))
-                {
-                    PLIST_ENTRY Entry =
-                        RemoveHeadList(&SlotExtension->PendingRequests);
-                    Next = CONTAINING_RECORD(Entry, SDPORT_REQUEST, QueueLink);
-                    SlotExtension->ActiveRequest = Next;
-                }
-                else
-                {
-                    SlotExtension->CurrentRequest = NULL;
-                    SlotExtension->RequestHasData = FALSE;
-                    SlotExtension->State = SdPortRequestStateIdle;
-                }
-                KeReleaseSpinLock(&SlotExtension->RequestLock, OldIrql);
-
-                Routine(FdoExtension, Request, Ctx);
-
-                if (Next != NULL)
-                {
-                    SlotExtension->CurrentRequest = Next;
-                    SlotExtension->RequestHasData =
-                        (Next->Command.TransferType != SDTT_CMD_ONLY &&
-                         Next->Command.TransferType != SDTT_UNSPECIFIED);
-                    SlotExtension->State = SdPortRequestStateCommand;
-                    Next->State = SdPortRequestStateCommand;
-                    Next->PioBytesDone = 0;
-                    Next->PioBytesPerBlock = Next->BlockSize;
-
-                    Next->Status = FdoExtension->MiniportInitData.IssueRequest(
-                        FdoExtension->MiniportPrivateExtension,
-                        Next);
-                    if (!NT_SUCCESS(Next->Status))
-                    {
-                        PSDPORT_REQUEST_COMPLETION_ROUTINE NextRoutine =
-                            Next->CompletionRoutine;
-                        PVOID NextCtx = Next->CompletionContext;
-
-                        KeAcquireSpinLock(&SlotExtension->RequestLock, &OldIrql);
-                        SlotExtension->ActiveRequest = NULL;
-                        SlotExtension->CurrentRequest = NULL;
-                        KeReleaseSpinLock(&SlotExtension->RequestLock, OldIrql);
-
-                        if (NextRoutine != NULL)
-                        {
-                            NextRoutine(FdoExtension, Next, NextCtx);
-                        }
-                    }
-                }
-            }
+            SdPortCompleteSlotRequest(FdoExtension, SlotExtension);
         }
     }
 }

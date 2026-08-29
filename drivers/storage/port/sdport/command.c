@@ -85,6 +85,7 @@ SdPortRecoverFromError(
                    FailureStatus == STATUS_SD_ADMA_ERROR);
 
     if (IsDataError &&
+        !FdoExtension->WindowsMiniport &&
         Request->Command.TransferType == SDTT_MULTI_BLOCK_NO_CMD12)
     {
         SDPORT_REQUEST StopRequest;

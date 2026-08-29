@@ -2097,12 +2097,12 @@ SdhcRegisterBusCallbacks(
  * @brief Entry point for the SDHCI miniport driver.
  *
  * Fills an SDPORT_INITIALIZATION_DATA structure with callback pointers
- * and calls SdPortInitialize() to register with the SD port driver.
+ * and calls SdPortInitializeLegacy() to register with the SD port driver.
  *
  * @param DriverObject  The driver object created by the I/O manager.
  * @param RegistryPath  Registry path to the driver's service key.
  *
- * @return NTSTATUS from SdPortInitialize.
+ * @return NTSTATUS from SdPortInitializeLegacy.
  */
 
 NTSTATUS
@@ -2130,5 +2130,5 @@ DriverEntry(
     InitData.Cleanup = (PSDPORT_CLEANUP)SdhcSlotCleanup;
     InitData.PrivateExtensionSize = sizeof(SDHC_EXTENSION);
 
-    return SdPortInitialize(DriverObject, RegistryPath, &InitData);
+    return SdPortInitializeLegacy(DriverObject, RegistryPath, &InitData);
 }

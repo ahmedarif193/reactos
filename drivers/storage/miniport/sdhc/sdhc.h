@@ -169,7 +169,7 @@ typedef struct _SDHC_EXTENSION {
 /*
  * SD port driver callback typedefs and initialization structure.
  * These mirror the definitions in sdport.h so the miniport can
- * call SdPortInitialize without including the port driver's internal header.
+ * call SdPortInitializeLegacy without including the port driver's internal header.
  */
 
 typedef NTSTATUS (*PSDPORT_GET_SLOT_COUNT)(_In_ PVOID, _Out_ PUCHAR);
@@ -207,7 +207,7 @@ typedef struct _SDPORT_INITIALIZATION_DATA {
 /** @brief Imported from sdport.sys -- register miniport with port driver. */
 NTSTATUS
 NTAPI
-SdPortInitialize(
+SdPortInitializeLegacy(
     _In_ PDRIVER_OBJECT DriverObject,
     _In_ PUNICODE_STRING RegistryPath,
     _In_ PSDPORT_INITIALIZATION_DATA InitializationData);
