@@ -25,6 +25,7 @@ ACPI_STATUS AcpiRsCreateAmlResources(ACPI_BUFFER *ResourceList, ACPI_BUFFER *Out
 #endif
 #endif /* !UNIT_TEST */
 
+
 #ifdef UNIT_TEST
 #include <wchar.h>
 ACPI_TABLE_FADT AcpiGbl_FADT;
@@ -433,8 +434,51 @@ BuspGetConnectionId(
 
 #ifndef UNIT_TEST
 static
+PDEVICE_OBJECT
+BuspFindControllerPdo(
+    _In_ PPDO_DEVICE_DATA DeviceData,
+    _In_opt_ PCSTR SourcePath)
+{
+    ACPI_HANDLE Handle;
+    PFDO_DEVICE_DATA FdoData;
+    PLIST_ENTRY Entry;
+
+    if (!SourcePath || !SourcePath[0] || !DeviceData->ParentFdo)
+        return NULL;
+    if (ACPI_FAILURE(AcpiGetHandle(NULL, (ACPI_STRING)SourcePath, &Handle)))
+        return NULL;
+
+    FdoData = DeviceData->ParentFdo->DeviceExtension;
+    for (Entry = FdoData->ListOfPDOs.Flink; Entry != &FdoData->ListOfPDOs; Entry = Entry->Flink)
+    {
+        PPDO_DEVICE_DATA Candidate = CONTAINING_RECORD(Entry, PDO_DEVICE_DATA, Link);
+
+        if (Candidate->AcpiHandle == Handle)
+            return Candidate->Common.Self;
+    }
+
+    return NULL;
+}
+
+static
+PDEVICE_OBJECT
+BuspGetConnectionController(
+    _In_ PPDO_DEVICE_DATA DeviceData,
+    _In_ ACPI_RESOURCE *Resource)
+{
+    if (Resource->Type == ACPI_RESOURCE_TYPE_GPIO)
+        return BuspFindControllerPdo(DeviceData, Resource->Data.Gpio.ResourceSource.StringPtr);
+    if (Resource->Type == ACPI_RESOURCE_TYPE_SERIAL_BUS)
+        return BuspFindControllerPdo(DeviceData, Resource->Data.CommonSerialBus.ResourceSource.StringPtr);
+    return NULL;
+}
+
+
+
+static
 VOID
 BuspRegisterConnectionResource(
+    _In_ PPDO_DEVICE_DATA DeviceData,
     _In_ ACPI_RESOURCE *Resource,
     _In_ ULONGLONG ConnectionId,
     _In_ UCHAR ConnectionClass,
@@ -500,6 +544,7 @@ BuspRegisterConnectionResource(
     Input->ConnectionId.QuadPart = ConnectionId;
     Input->Class = ConnectionClass;
     Input->Type = ConnectionType;
+    Input->ControllerDevice = BuspGetConnectionController(DeviceData, Resource);
     Input->PropertiesLength = PropertiesLength;
     RtlCopyMemory(Input->Properties, AmlBuffer.Pointer, PropertiesLength);
     ACPI_FREE(AmlBuffer.Pointer);
@@ -529,7 +574,7 @@ BuspRegisterConnectionResource(
     ExFreePoolWithTag(Input, 'iRhA');
 }
 #else
-#define BuspRegisterConnectionResource(Resource, ConnectionId, ConnectionClass, ConnectionType) ((void)0)
+#define BuspRegisterConnectionResource(DeviceData, Resource, ConnectionId, ConnectionClass, ConnectionType) ((void)0)
 #endif
 
 static
@@ -1320,7 +1365,7 @@ BuspCreateRequirementsListFromAcpiResources(
                 RequirementDescriptor->u.Connection.Type = ConnectionType;
                 RequirementDescriptor->u.Connection.IdLowPart = (ULONG)ConnectionId;
                 RequirementDescriptor->u.Connection.IdHighPart = (ULONG)(ConnectionId >> 32);
-                BuspRegisterConnectionResource(resource, ConnectionId, ConnectionClass, ConnectionType);
+                BuspRegisterConnectionResource(DeviceData, resource, ConnectionId, ConnectionClass, ConnectionType);
                 RequirementDescriptor++;
                 break;
             }
@@ -1937,7 +1982,7 @@ BuspCreateResourceListFromAcpiResources(
                 ResourceDescriptor->u.Connection.Type = ConnectionType;
                 ResourceDescriptor->u.Connection.IdLowPart = (ULONG)ConnectionId;
                 ResourceDescriptor->u.Connection.IdHighPart = (ULONG)(ConnectionId >> 32);
-                BuspRegisterConnectionResource(resource, ConnectionId, ConnectionClass, ConnectionType);
+                BuspRegisterConnectionResource(DeviceData, resource, ConnectionId, ConnectionClass, ConnectionType);
                 ResourceDescriptor++;
                 break;
             }
