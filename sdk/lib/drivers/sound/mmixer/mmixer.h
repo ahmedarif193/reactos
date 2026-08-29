@@ -198,6 +198,21 @@ MMixerWaveInCapabilities(
     OUT LPWAVEINCAPSW Caps);
 
 MIXER_STATUS
+MMixerGetWaveFormat(
+    IN PMIXER_CONTEXT MixerContext,
+    IN ULONG DeviceIndex,
+    IN ULONG bWaveIn,
+    OUT PWAVEFORMATEXTENSIBLE Format);
+
+MIXER_STATUS
+MMixerQueryWaveFormatSupport(
+    IN PMIXER_CONTEXT MixerContext,
+    IN ULONG DeviceIndex,
+    IN ULONG bWaveIn,
+    IN LPWAVEFORMATEX WaveFormat,
+    IN ULONG WaveFormatSize);
+
+MIXER_STATUS
 MMixerOpenWave(
     IN PMIXER_CONTEXT MixerContext,
     IN ULONG DeviceIndex,
