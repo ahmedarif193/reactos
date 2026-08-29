@@ -122,6 +122,13 @@ ULONG
 MMixerGetWaveOutCount(
     IN PMIXER_CONTEXT MixerContext);
 
+MIXER_STATUS
+MMixerGetWaveMixerId(
+    IN PMIXER_CONTEXT MixerContext,
+    IN ULONG DeviceIndex,
+    IN ULONG bWaveIn,
+    OUT PULONG MixerId);
+
 ULONG
 MMixerGetMidiInCount(
     IN PMIXER_CONTEXT MixerContext);

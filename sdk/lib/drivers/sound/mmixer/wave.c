@@ -507,6 +507,58 @@ MMixerGetWaveFormat(
 }
 
 MIXER_STATUS
+MMixerGetWaveMixerId(
+    IN PMIXER_CONTEXT MixerContext,
+    IN ULONG DeviceIndex,
+    IN ULONG bWaveIn,
+    OUT PULONG MixerId)
+{
+    PMIXER_LIST MixerList;
+    LPMIXER_DATA MixerData;
+    LPMIXER_INFO MixerInfo;
+    LPWAVE_INFO WaveInfo;
+    PLIST_ENTRY Entry;
+    MIXER_STATUS Status;
+    ULONG Index;
+
+    if (!MixerId)
+        return MM_STATUS_INVALID_PARAMETER;
+
+    Status = MMixerVerifyContext(MixerContext);
+    if (Status != MM_STATUS_SUCCESS)
+        return Status;
+
+    MixerList = (PMIXER_LIST)MixerContext->MixerContext;
+    Status = MMixerGetWaveInfoByIndexAndType(MixerList,
+                                             DeviceIndex,
+                                             bWaveIn,
+                                             &WaveInfo);
+    if (Status != MM_STATUS_SUCCESS)
+        return Status;
+
+    MixerData = MMixerGetDataByDeviceId(MixerList, WaveInfo->DeviceId);
+    if (!MixerData || !MixerData->MixerInfo)
+        return MM_STATUS_UNSUCCESSFUL;
+
+    Index = 0;
+    Entry = MixerList->MixerList.Flink;
+    while (Entry != &MixerList->MixerList)
+    {
+        MixerInfo = CONTAINING_RECORD(Entry, MIXER_INFO, Entry);
+        if (MixerInfo == MixerData->MixerInfo)
+        {
+            *MixerId = Index;
+            return MM_STATUS_SUCCESS;
+        }
+
+        ++Index;
+        Entry = Entry->Flink;
+    }
+
+    return MM_STATUS_UNSUCCESSFUL;
+}
+
+MIXER_STATUS
 MMixerQueryWaveFormatSupport(
     IN PMIXER_CONTEXT MixerContext,
     IN ULONG DeviceIndex,
