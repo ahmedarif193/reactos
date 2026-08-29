@@ -2079,11 +2079,15 @@ USBPORT_DmaEndpointActive(IN PDEVICE_OBJECT FdoDevice,
     PUSBPORT_TRANSFER Transfer;
     LARGE_INTEGER TimeOut;
     MPSTATUS MpStatus;
+    BOOLEAN IsochronousInFlight = FALSE;
+    BOOLEAN QueueIsochronous;
     KIRQL OldIrql;
 
     DPRINT_CORE("USBPORT_DmaEndpointActive \n");
 
     FdoExtension = FdoDevice->DeviceExtension;
+    QueueIsochronous =
+        Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_ISOCHRONOUS;
 
     Entry = Endpoint->TransferList.Flink;
 
@@ -2108,7 +2112,12 @@ USBPORT_DmaEndpointActive(IN PDEVICE_OBJECT FdoDevice,
 
         if (Transfer->Flags & TRANSFER_FLAG_SUBMITED)
         {
-            return USBPORT_ENDPOINT_ACTIVE;
+            if (!QueueIsochronous)
+                return USBPORT_ENDPOINT_ACTIVE;
+
+            IsochronousInFlight = TRUE;
+            Entry = Transfer->TransferLink.Flink;
+            continue;
         }
 
         if (Endpoint &&
@@ -2161,6 +2170,14 @@ USBPORT_DmaEndpointActive(IN PDEVICE_OBJECT FdoDevice,
             {
                 USBD_STATUS USBDStatus;
 
+                if (QueueIsochronous && IsochronousInFlight &&
+                    MpStatus == MP_STATUS_NO_RESOURCES)
+                {
+                    /* A completed earlier TD will invalidate this endpoint
+                     * and retry the transfer after ring space is reclaimed. */
+                    return USBPORT_ENDPOINT_ACTIVE;
+                }
+
                 USBDStatus = USBPORT_MpStatusToUsbdStatus(MpStatus);
 
                 DPRINT1("USBPORT_DmaEndpointActive: SubmitTransfer FAILED MpStatus=%lu USBDStatus=%x\n",
@@ -2176,12 +2193,15 @@ USBPORT_DmaEndpointActive(IN PDEVICE_OBJECT FdoDevice,
             }
 
             Transfer->Flags |= TRANSFER_FLAG_SUBMITED;
+            if (QueueIsochronous)
+                IsochronousInFlight = TRUE;
             KeQuerySystemTime(&Transfer->Time);
 
             TimeOut.QuadPart = 10000 * Transfer->TimeOut;
             Transfer->Time.QuadPart += TimeOut.QuadPart;
 
-            return USBPORT_ENDPOINT_ACTIVE;
+            if (!QueueIsochronous)
+                return USBPORT_ENDPOINT_ACTIVE;
         }
 
         Entry = Transfer->TransferLink.Flink;

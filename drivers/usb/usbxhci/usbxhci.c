@@ -834,6 +834,124 @@ XHCI_SubmitSgTransfer(
     _Inout_ PXHCI_TRANSFER Transfer,
     _In_ ULONG TrbType,
     _In_ BOOLEAN IsIsochronous);
+static
+BOOLEAN
+XHCI_CountIsoTransferTrbs(
+    _In_ PUSBPORT_TRANSFER_PARAMETERS TransferParameters,
+    _In_opt_ PUSBPORT_SCATTER_GATHER_LIST SgList,
+    _In_ PUSBPORT_ISO_BLOCK IsoBlock,
+    _In_ BOOLEAN UseBounce,
+    _In_ PHYSICAL_ADDRESS BouncePhysicalAddress,
+    _In_ ULONG IsoPayloadLimit,
+    _Out_ PULONG TrbCount)
+{
+    ULONG Count = 0;
+    ULONG PacketIndex;
+
+    if (!TransferParameters || !IsoBlock || !TrbCount)
+        return FALSE;
+
+    for (PacketIndex = 0;
+         PacketIndex < IsoBlock->NumberOfPackets;
+         PacketIndex++)
+    {
+        PUSBPORT_ISO_BLOCK_PACKET Packet = &IsoBlock->Packets[PacketIndex];
+        ULONG PacketRemaining = Packet->Length;
+        ULONG PacketOffset = Packet->Offset;
+        ULONG PacketEnd = PacketOffset + Packet->Length;
+
+        if (PacketEnd < PacketOffset ||
+            PacketEnd > TransferParameters->TransferBufferLength)
+        {
+            return FALSE;
+        }
+
+        if (!PacketRemaining)
+        {
+            if (Count == MAXULONG)
+                return FALSE;
+            Count++;
+            continue;
+        }
+
+        if (UseBounce)
+        {
+            ULONGLONG ElementAddress =
+                BouncePhysicalAddress.QuadPart + PacketOffset;
+
+            while (PacketRemaining)
+            {
+                ULONG Chunk = XHCI_CalcTrbTransferChunk(ElementAddress,
+                                                        PacketRemaining,
+                                                        PacketRemaining,
+                                                        IsoPayloadLimit);
+
+                if (Count == MAXULONG)
+                    return FALSE;
+                Count++;
+                ElementAddress += Chunk;
+                PacketRemaining -= Chunk;
+            }
+        }
+        else
+        {
+            ULONG SgIndex;
+
+            if (!SgList)
+                return FALSE;
+
+            for (SgIndex = 0;
+                 PacketRemaining && SgIndex < SgList->SgElementCount;
+                 SgIndex++)
+            {
+                PUSBPORT_SCATTER_GATHER_ELEMENT Element =
+                    &SgList->SgElement[SgIndex];
+                ULONG ElementStart = Element->SgOffset;
+                ULONG ElementEnd = ElementStart + Element->SgTransferLength;
+                ULONG OverlapStart;
+                ULONG OverlapEnd;
+                ULONGLONG ElementAddress;
+                ULONG ElementRemaining;
+
+                if (ElementEnd < ElementStart || ElementEnd <= PacketOffset)
+                    continue;
+                if (ElementStart >= PacketEnd)
+                    break;
+
+                OverlapStart = max(ElementStart, PacketOffset);
+                OverlapEnd = min(ElementEnd, PacketEnd);
+                if (OverlapEnd <= OverlapStart)
+                    continue;
+
+                ElementAddress = Element->SgPhysicalAddress.QuadPart +
+                                 (OverlapStart - ElementStart);
+                ElementRemaining = OverlapEnd - OverlapStart;
+
+                while (ElementRemaining && PacketRemaining)
+                {
+                    ULONG Chunk = XHCI_CalcTrbTransferChunk(ElementAddress,
+                                                            ElementRemaining,
+                                                            PacketRemaining,
+                                                            IsoPayloadLimit);
+
+                    if (Count == MAXULONG)
+                        return FALSE;
+                    Count++;
+                    ElementAddress += Chunk;
+                    ElementRemaining -= Chunk;
+                    PacketRemaining -= Chunk;
+                }
+            }
+
+            if (PacketRemaining)
+                return FALSE;
+        }
+    }
+
+    *TrbCount = Count;
+    return Count != 0;
+}
+
 static MPSTATUS
 XHCI_SubmitIsochronousTransfer(
     _In_ PXHCI_EXTENSION Extension,
@@ -13526,10 +13644,12 @@ XHCI_SubmitIsochronousTransfer(
     ULONGLONG PhysicalAddress = 0;
     ULONG IsoPayloadLimit;
     ULONG PacketIndex;
+    ULONG TrbsNeeded;
     ULONG Control;
     KIRQL OldIrql;
     MPSTATUS Status = MP_STATUS_SUCCESS;
     BOOLEAN ProgrammedRing = FALSE;
+    BOOLEAN RingLockHeld = FALSE;
     BOOLEAN DataIn = FALSE;
     BOOLEAN UseBounce = FALSE;
     ULONGLONG HighAddress = 0;
@@ -13629,6 +13749,26 @@ XHCI_SubmitIsochronousTransfer(
     Transfer->IsoPacketCount = IsoBlock->NumberOfPackets;
     Transfer->IsoPacketsCompleted = 0;
     Transfer->IsoCompletedLength = 0;
+
+    if (!XHCI_CountIsoTransferTrbs(TransferParameters,
+                                   SgList,
+                                   IsoBlock,
+                                   UseBounce,
+                                   Transfer->BouncePhysicalAddress,
+                                   IsoPayloadLimit,
+                                   &TrbsNeeded))
+    {
+        Status = MP_STATUS_ERROR;
+        goto Failure;
+    }
+
+    KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
+    RingLockHeld = TRUE;
+    if (!XHCI_RingHasSpace(Ring, TrbsNeeded))
+    {
+        Status = MP_STATUS_NO_RESOURCES;
+        goto Failure;
+    }
 
     for (PacketIndex = 0; PacketIndex < IsoBlock->NumberOfPackets; PacketIndex++)
     {
@@ -13829,9 +13969,9 @@ XHCI_SubmitIsochronousTransfer(
     {
         USHORT DoorbellStreamId = XHCI_SelectDoorbellStreamId(Endpoint, Transfer);
 
-        KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
         XHCI_InsertActiveTransferLocked(Endpoint, Transfer);
         KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
+        RingLockHeld = FALSE;
 
         XHCI_ArmTransferPoll(Extension, Transfer);
         KeMemoryBarrier();
@@ -13844,12 +13984,17 @@ XHCI_SubmitIsochronousTransfer(
     return MP_STATUS_SUCCESS;
 
 Failure:
+    if (RingLockHeld)
+    {
+        KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
+        RingLockHeld = FALSE;
+    }
     XHCI_FreeIsoTransferContext(Transfer);
     XHCI_ReleaseBounceBuffer(Transfer);
     XHCI_DisarmTransferPoll(Extension, Transfer);
     Transfer->UsbdStatus = USBD_STATUS_REQUEST_FAILED;
-    if (ProgrammedRing)
-        XHCI_ResetEndpointRing(Endpoint);
+    /* The exact reservation above makes a partial ring write impossible. */
+    ASSERT(!ProgrammedRing);
 
     KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
     XHCI_RemoveActiveTransferLocked(Endpoint, Transfer);
@@ -13888,18 +14033,6 @@ XHCI_SubmitIsoTransfer(PVOID MiniPortExtension,
     {
         if (TransferParameters->TransferBufferLength != 0)
             return MP_STATUS_NO_RESOURCES;
-    }
-
-    {
-        KIRQL OldIrql;
-
-        KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
-        if (XHCI_HasActiveTransfersLocked(Endpoint))
-        {
-            KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
-            return MP_STATUS_FAILURE;
-        }
-        KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
     }
 
     XHCI_InitTransferForSubmit(Transfer);
