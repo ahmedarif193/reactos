@@ -734,13 +734,16 @@ typedef struct _KUSER_SHARED_DATA
 
     ULONG DataFlagsPad[1];                                  // 0x2f4
     ULONGLONG TestRetInstruction;                           // 0x2f8
-#if (NTDDI_VERSION >= NTDDI_WIN8)
+#if defined(_M_IX86)
+    ULONG SystemCall;                                       // 0x300
+    ULONG SystemCallReturn;                                 // 0x304
+#elif (NTDDI_VERSION >= NTDDI_WIN8)
     ULONGLONG QpcFrequency;                                 // 0x300
 #else
     ULONG SystemCall;                                       // 0x300
     ULONG SystemCallReturn;                                 // 0x304
 #endif
-#if (NTDDI_VERSION >= NTDDI_WIN10_TH2)
+#if (NTDDI_VERSION >= NTDDI_WIN10_TH2) && !defined(_M_IX86)
     ULONG SystemCall;                                       // 0x308
     ULONG SystemCallPad0;                                   // 0x30c Renamed to Reserved2 in Vibranium R3
     ULONGLONG SystemCallPad[2];                             // 0x310
@@ -2969,7 +2972,7 @@ typedef struct _KTHREAD
     PVOID SListFaultAddress;
     ULONG64 QuantumTarget;
     PVOID InitialStack;
-    volatile VOID *StackLimit;
+    ULONG_PTR StackLimit;
     PVOID StackBase;
     KSPIN_LOCK ThreadLock;
     volatile ULONG64 CycleTime;
@@ -3114,7 +3117,7 @@ typedef struct _KTHREAD
         SINGLE_LIST_ENTRY SwapListEntry;
     };
     PKQUEUE Queue;
-    PVOID Teb;
+    struct _TEB *Teb;
 #if (NTDDI_VERSION >= NTDDI_WIN8 /* 0x060223F0 */) // since 6.2.9200.16384
     ULONG64 RelativeTimerBias;
 #endif
@@ -3281,6 +3284,9 @@ typedef struct _KTHREAD
     union
     {
         KAPC SchedulerApc;
+#if defined(__REACTOS__) && defined(_M_IX86)
+        KAPC SuspendApc;
+#endif
         struct
         {
             UCHAR SchedulerApcFill0[FIELD_OFFSET(KAPC, SpareByte0)]; // 32bit:  1/0x01, 64bit: 1/0x01
@@ -3314,7 +3320,13 @@ typedef struct _KTHREAD
         };
     };
 
-    KEVENT SuspendEvent;
+    union
+    {
+        KEVENT SuspendEvent;
+#if defined(__REACTOS__) && defined(_M_IX86)
+        KEVENT SuspendSemaphore;
+#endif
+    };
     LIST_ENTRY ThreadListEntry;
     LIST_ENTRY MutantListHead;
 
@@ -3377,6 +3389,14 @@ typedef struct _KTHREAD
 #ifndef _WIN64
     ULONG64 NpxState;
 #endif
+#endif
+#if defined(__REACTOS__) && defined(_M_IX86)
+    /* ReactOS-private state absent from the public NT10 x86 layout. */
+    KSPIN_LOCK ApcQueueLock;
+    PKAPC_STATE ApcStatePointer[2];
+    PVOID CallbackStack;
+    UCHAR LargeStack;
+    UCHAR Iopl;
 #endif
 } KTHREAD;
 

@@ -1641,7 +1641,7 @@ Input 3: [W_{t-4+i}]
 #pragma clang attribute push (__attribute__((target("sha2"))), apply_to=function)
 #else
 #pragma GCC push_options
-#pragma GCC target("sha2")
+#pragma GCC target("+sha2")
 #endif
 
 #define vldq(_p)     (*(__n128 *)(_p))

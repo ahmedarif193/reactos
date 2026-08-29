@@ -1871,6 +1871,11 @@ typedef struct _EPROCESS
     volatile LONG ExecutableWriteExceptions;
 #endif
 #if defined(__REACTOS__)
+#if defined(_M_IX86)
+    /* There is no native WoW64 process on i386; keep a private NULL slot for
+       architecture-neutral process bookkeeping. */
+    struct _WOW64_PROCESS *Wow64Process;
+#endif
     PVOID DxgProcess;
     ULONGLONG SequenceNumber;
     CHAR Win32kPriorityFloor;

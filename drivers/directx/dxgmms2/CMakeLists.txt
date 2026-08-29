@@ -27,6 +27,6 @@ add_library(dxgmms2 MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/dxgmms2.def)
 
 set_module_type(dxgmms2 kernelmodedriver)
-add_importlibs(dxgmms2 ntoskrnl)
+add_importlibs(dxgmms2 ntoskrnl hal)
 add_pch(dxgmms2 dxgmms2_private.h "${SOURCE}")
 add_cd_file(TARGET dxgmms2 DESTINATION reactos/system32/drivers FOR all)

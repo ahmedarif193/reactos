@@ -203,6 +203,7 @@ struct DEFFOLDERSETTINGS
 #endif
     UINT Statusbar : 1; // "StatusBarOther" is the new location for this
     UINT Toolbar : 1; // Not used when Explorer uses ReBar
+    UINT : 0; // End the bitfield allocation unit before the serialized fields
     FOLDERSETTINGS FolderSettings;
     SHELLVIEWID vid;
     UINT Version;

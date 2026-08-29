@@ -11,15 +11,15 @@
 #include "../include/stdlib.h"
 #include "../include/errno.h"
 
-extern "C" int _cdecl _access_s(const char* filename, int mode);
-extern "C" int _cdecl _waccess_s(const wchar_t* filename, int mode);
+extern "C" int __cdecl _access_s(const char* filename, int mode);
+extern "C" int __cdecl _waccess_s(const wchar_t* filename, int mode);
 
-int _cdecl _taccess_s(const char* filename, int mode)
+int __cdecl _taccess_s(const char* filename, int mode)
 {
     return _access_s(filename, mode);
 }
 
-int _cdecl _taccess_s(const wchar_t* filename, int mode)
+int __cdecl _taccess_s(const wchar_t* filename, int mode)
 {
     return _waccess_s(filename, mode);
 }

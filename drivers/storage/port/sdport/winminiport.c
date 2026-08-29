@@ -865,7 +865,7 @@ SdPortWriteRegisterUlong(
     _In_ ULONG Register,
     _In_ ULONG Data)
 {
-    WRITE_REGISTER_ULONG((volatile ULONG *)((PUCHAR)BaseAddress + Register), Data);
+    WRITE_REGISTER_ULONG((PULONG)((PUCHAR)BaseAddress + Register), Data);
 }
 
 VOID
@@ -875,7 +875,7 @@ SdPortWriteRegisterUshort(
     _In_ ULONG Register,
     _In_ USHORT Data)
 {
-    WRITE_REGISTER_USHORT((volatile USHORT *)((PUCHAR)BaseAddress + Register), Data);
+    WRITE_REGISTER_USHORT((PUSHORT)((PUCHAR)BaseAddress + Register), Data);
 }
 
 VOID
@@ -885,7 +885,7 @@ SdPortWriteRegisterUchar(
     _In_ ULONG Register,
     _In_ UCHAR Data)
 {
-    WRITE_REGISTER_UCHAR((volatile UCHAR *)((PUCHAR)BaseAddress + Register), Data);
+    WRITE_REGISTER_UCHAR((PUCHAR)BaseAddress + Register, Data);
 }
 
 ULONG
@@ -894,7 +894,7 @@ SdPortReadRegisterUlong(
     _In_ PVOID BaseAddress,
     _In_ ULONG Register)
 {
-    return READ_REGISTER_ULONG((volatile ULONG *)((PUCHAR)BaseAddress + Register));
+    return READ_REGISTER_ULONG((PULONG)((PUCHAR)BaseAddress + Register));
 }
 
 USHORT
@@ -903,7 +903,7 @@ SdPortReadRegisterUshort(
     _In_ PVOID BaseAddress,
     _In_ ULONG Register)
 {
-    return READ_REGISTER_USHORT((volatile USHORT *)((PUCHAR)BaseAddress + Register));
+    return READ_REGISTER_USHORT((PUSHORT)((PUCHAR)BaseAddress + Register));
 }
 
 UCHAR
@@ -912,7 +912,7 @@ SdPortReadRegisterUchar(
     _In_ PVOID BaseAddress,
     _In_ ULONG Register)
 {
-    return READ_REGISTER_UCHAR((volatile UCHAR *)((PUCHAR)BaseAddress + Register));
+    return READ_REGISTER_UCHAR((PUCHAR)BaseAddress + Register);
 }
 
 VOID

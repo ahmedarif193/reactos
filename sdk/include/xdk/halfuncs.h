@@ -193,6 +193,15 @@ HalGetBusData(
   _Out_writes_bytes_(Length) PVOID Buffer,
   _In_ ULONG Length);
 
+#if defined(_ARM64_)
+NTHALAPI
+BOOLEAN
+NTAPI
+HalQueryPciBusRange(
+  _Out_opt_ PULONG MinBus,
+  _Out_opt_ PULONG MaxBus);
+#endif
+
 NTHALAPI
 BOOLEAN
 NTAPI

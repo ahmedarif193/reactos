@@ -51,7 +51,7 @@ Verb* MatchVerb(LPCWSTR arg)
     return NULL;
 }
 
-int wmain(int argc, WCHAR *argv[])
+EXTERN_C int wmain(int argc, WCHAR *argv[])
 {
     int n;
 

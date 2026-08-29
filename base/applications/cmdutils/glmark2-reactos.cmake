@@ -172,8 +172,11 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         -DWIN32
         -include ${CMAKE_CURRENT_SOURCE_DIR}/glmark2-reactos-compat.h
         -fexceptions
-        -frtti
+        "$<$<COMPILE_LANGUAGE:CXX>:-frtti>"
         -O2)
+endif()
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 16)
+    target_compile_options(glmark2-win32 PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-Wno-template-body>")
 endif()
 # The target-local startup bridge exposes LLVM's .ctors to the normal UCRT
 # startup path, keeping every FILE operation and the process startup in UCRT.

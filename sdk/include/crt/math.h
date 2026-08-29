@@ -366,6 +366,14 @@ _CRT_NONSTDC_DEPRECATE(_yn) _CRTIMP double __cdecl yn(_In_ int x, _In_ double y)
 
 #ifdef __cplusplus
 }
+#if defined(__GNUC__) && !defined(__clang__)
+#define __CORRECT_ISO_CPP_MATH_H_PROTO 1
+#undef _GLIBCXX_USE_C99_MATH
+#define _GLIBCXX_USE_C99_MATH 0
+#undef _GLIBCXX_USE_C99_MATH_FUNCS
+#undef _GLIBCXX_USE_STD_SPEC_FUNCS
+#define _GLIBCXX_USE_STD_SPEC_FUNCS 0
+#endif
 #if !defined(_CMATH_) && !defined(_LIBCPP_CMATH) && !defined(_LIBCPP_MATH_H)
 extern "C++" {
 

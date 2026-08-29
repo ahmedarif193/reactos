@@ -20,7 +20,12 @@ elseif(NOT DEFINED NO_ROSSYM)
     set(NO_ROSSYM TRUE)
 endif()
 
-if(NOT DEFINED USE_PSEH3)
+if(ARCH STREQUAL "arm64")
+    # GCC has no native SEH support on AArch64, and the PSEH implementations
+    # contain i386 assembly. Keep ARM64 on the dummy implementation.
+    set(USE_PSEH3 0)
+    set(USE_DUMMY_PSEH 1)
+elseif(NOT DEFINED USE_PSEH3)
     set(USE_PSEH3 1)
 endif()
 
@@ -44,8 +49,21 @@ endif()
 # note: -fno-common is default since GCC 10
 add_compile_options(-pipe -fms-extensions -fno-strict-aliasing -fno-common)
 
-# A long double is 64 bits
-add_compile_options(-mlong-double-64)
+# A long double is already 64 bits in the Windows ARM64 ABI. The AArch64
+# compiler does not accept the x86-only option.
+if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
+    add_compile_options(-mlong-double-64)
+endif()
+
+if(ARCH STREQUAL "arm64")
+    # -nostdinc also hides GCC's target intrinsic headers. Keep the compiler
+    # resource directory available for arm_neon.h and related built-ins.
+    execute_process(
+        COMMAND ${CMAKE_C_COMPILER} -print-file-name=include
+        OUTPUT_VARIABLE GCC_INTERNAL_INCLUDE_DIR
+        OUTPUT_STRIP_TRAILING_WHITESPACE)
+    add_compile_options(-isystem "${GCC_INTERNAL_INCLUDE_DIR}")
+endif()
 
 # Prevent GCC from searching any of the default directories.
 # The case for C++ is handled through the reactos_c++ INTERFACE library
@@ -197,6 +215,18 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     add_compile_options(
         -Wno-unknown-pragmas
     )
+    if((ARCH STREQUAL "i386" OR ARCH STREQUAL "arm64") AND CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 16)
+        # GCC 16 diagnoses dead compatibility paths that are intentionally
+        # retained in the 32-bit build and MS-style declarations in headers.
+        add_compile_options(
+            -Wno-attributes
+            -Wno-dangling-pointer
+            "$<$<COMPILE_LANGUAGE:C>:-Wno-old-style-declaration>"
+            -Wno-switch
+            -Wno-unused-but-set-variable
+            -Wno-unused-function
+            -Wno-unused-variable)
+    endif()
 elseif(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     add_compile_options("$<$<COMPILE_LANGUAGE:C>:-Wno-microsoft>")
     add_compile_options(
@@ -256,7 +286,7 @@ elseif(ARCH STREQUAL "amd64")
     endif()
     add_compile_options(-Wno-error)
 elseif(ARCH STREQUAL "arm64")
-    add_compile_options(-fno-optimize-sibling-calls -fno-omit-frame-pointer -mstrict-align)
+    add_compile_options(-fno-optimize-sibling-calls -fno-omit-frame-pointer -mstrict-align -mno-outline-atomics -flax-vector-conversions -Wno-error)
 endif()
 
 # Other
@@ -362,7 +392,12 @@ set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS_INIT} -Wl,--disable-s
 set(CMAKE_C_COMPILE_OBJECT "<CMAKE_C_COMPILER> <DEFINES> ${_compress_debug_sections_flag} <INCLUDES> <FLAGS> -o <OBJECT> -c <SOURCE>")
 # FIXME: Once the GCC toolchain bugs are fixed, add _compress_debug_sections_flag to CXX too
 set(CMAKE_CXX_COMPILE_OBJECT "<CMAKE_CXX_COMPILER> <DEFINES> <INCLUDES> <FLAGS> -o <OBJECT> -c <SOURCE>")
-set(CMAKE_ASM_COMPILE_OBJECT "<CMAKE_ASM_COMPILER> ${_compress_debug_sections_flag} -x assembler-with-cpp -o <OBJECT> -I${REACTOS_SOURCE_DIR}/sdk/include/asm -I${REACTOS_BINARY_DIR}/sdk/include/asm <INCLUDES> <FLAGS> <DEFINES> -D__ASM__ -c <SOURCE>")
+if(ARCH STREQUAL "arm64")
+    set(_arm64_asm_compat_include "-include ${REACTOS_SOURCE_DIR}/sdk/include/ndk/asm.h")
+else()
+    set(_arm64_asm_compat_include "")
+endif()
+set(CMAKE_ASM_COMPILE_OBJECT "<CMAKE_ASM_COMPILER> ${_compress_debug_sections_flag} -x assembler-with-cpp -o <OBJECT> -I${REACTOS_SOURCE_DIR}/sdk/include/asm -I${REACTOS_BINARY_DIR}/sdk/include/asm ${_arm64_asm_compat_include} <INCLUDES> <FLAGS> <DEFINES> -D__ASM__ -c <SOURCE>")
 
 set(CMAKE_RC_COMPILE_OBJECT "<CMAKE_RC_COMPILER> -O coff <INCLUDES> <DEFINES> -DRC_INVOKED -D__WIN32__=1 -D__FLAT__=1 ${I18N_DEFS} <FLAGS> <SOURCE> <OBJECT>")
 
@@ -445,9 +480,18 @@ function(add_delay_importlibs _module)
     endif()
     foreach(_lib ${ARGN})
         get_filename_component(_basename "${_lib}" NAME_WE)
-        target_link_libraries(${_module} lib${_basename}_delayed)
+        # GNU dlltool has no ARM64 delay-import backend and exits successfully
+        # without creating the requested archive. Use a regular import library
+        # until the GNU ARM64 PE toolchain supports delay imports.
+        if(ARCH STREQUAL "arm64")
+            target_link_libraries(${_module} lib${_basename})
+        else()
+            target_link_libraries(${_module} lib${_basename}_delayed)
+        endif()
     endforeach()
-    target_link_libraries(${_module} delayimp)
+    if(NOT ARCH STREQUAL "arm64")
+        target_link_libraries(${_module} delayimp)
+    endif()
 endfunction()
 
 if(NOT ARCH STREQUAL "i386")
@@ -568,7 +612,7 @@ function(CreateBootSectorTarget _target_name _asm_file _binary_file _base_addres
 
     add_custom_command(
         OUTPUT ${_object_file}
-        COMMAND ${CMAKE_ASM_COMPILER} -x assembler-with-cpp -o ${_object_file} -I${REACTOS_SOURCE_DIR}/sdk/include/asm -I${REACTOS_BINARY_DIR}/sdk/include/asm ${_includes} ${_defines} -D__ASM__ -c ${_asm_file}
+        COMMAND ${CMAKE_ASM_COMPILER} -x assembler-with-cpp -o ${_object_file} -I${REACTOS_SOURCE_DIR}/sdk/include/asm -I${REACTOS_BINARY_DIR}/sdk/include/asm ${_arm64_asm_compat_include} ${_includes} ${_defines} -D__ASM__ -c ${_asm_file}
         DEPENDS ${_asm_file})
 
     add_custom_command(
@@ -692,8 +736,10 @@ string(STRIP ${LIBSTDCCXX_LOCATION} LIBSTDCCXX_LOCATION)
 set_target_properties(libstdc++ PROPERTIES IMPORTED_LOCATION ${LIBSTDCCXX_LOCATION})
 # libstdc++ requires libsupc++ and mingwex provided by GCC
 target_link_libraries(libstdc++ INTERFACE libsupc++ libmingwex oldnames)
-# this is for our SAL annotations
-target_compile_definitions(libstdc++ INTERFACE "$<$<COMPILE_LANGUAGE:CXX>:PAL_STDCPP_COMPAT>")
+# These match the CRT types used to build libstdc++ and enable our SAL annotations.
+target_compile_definitions(libstdc++ INTERFACE
+    "$<$<COMPILE_LANGUAGE:CXX>:__LARGE_MBSTATE_T>"
+    "$<$<COMPILE_LANGUAGE:CXX>:PAL_STDCPP_COMPAT>")
 
 # Create our alias libraries
 add_library(cppstl ALIAS libstdc++)

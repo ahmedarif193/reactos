@@ -37,4 +37,10 @@ wctype_t wctype(const char *property)
     return 0;
 }
 
+#ifdef _M_IX86
+void *_imp__wctype = wctype;
+#else
+void *__imp_wctype = wctype;
+#endif
+
 #endif

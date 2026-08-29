@@ -39,7 +39,7 @@
 # define __ASM_CFI(str)
 #endif
 
-#ifdef __SEH__
+#if defined(__SEH__) && !(defined(__GNUC__) && !defined(__clang__) && defined(__aarch64__) && defined(_WIN32))
 # define __ASM_SEH(str) str
 #else
 # define __ASM_SEH(str)

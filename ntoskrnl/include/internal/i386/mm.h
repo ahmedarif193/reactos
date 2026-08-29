@@ -6,9 +6,11 @@
 #ifdef _X86PAE_
 #define _MI_PAGING_LEVELS 3
 #define _MI_HAS_NO_EXECUTE 1
+#define PDI_SHIFT 21
 #else
 #define _MI_PAGING_LEVELS 2
 #define _MI_HAS_NO_EXECUTE 0
+#define PDI_SHIFT 22
 #endif
 
 /* Memory layout base addresses */
