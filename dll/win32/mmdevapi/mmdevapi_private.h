@@ -124,9 +124,31 @@ typedef struct MMDevice {
 } MMDevice;
 
 #ifdef __REACTOS__
+struct reactos_endpoint_volume_state
+{
+    DWORD mixer_index;
+    DWORD volume_control_id;
+    DWORD mute_control_id;
+    UINT channel_count;
+    UINT volume_control_channels;
+    UINT mute_control_channels;
+    UINT step_count;
+    BOOL mute_supported;
+};
+
 extern BOOL reactos_audio_driver_init(DriverFuncs *driver);
 extern void reactos_audio_driver_deinit(void);
 extern NTSTATUS reactos_mmdevapi_call(unsigned int code, void *args);
+extern HRESULT reactos_endpoint_volume_initialize(const GUID *guid,
+                                                  struct reactos_endpoint_volume_state *state);
+extern HRESULT reactos_endpoint_volume_get(const struct reactos_endpoint_volume_state *state,
+                                           float *levels, UINT count);
+extern HRESULT reactos_endpoint_volume_set(const struct reactos_endpoint_volume_state *state,
+                                           const float *levels, UINT count);
+extern HRESULT reactos_endpoint_mute_get(const struct reactos_endpoint_volume_state *state,
+                                         BOOL *mute);
+extern HRESULT reactos_endpoint_mute_set(const struct reactos_endpoint_volume_state *state,
+                                         BOOL mute);
 #endif
 
 static inline void wine_unix_call(const unsigned int code, void *args)

@@ -257,6 +257,321 @@ static BOOL parse_device_name(const char *device, EDataFlow *flow, DWORD *index)
     return TRUE;
 }
 
+static HRESULT wdmaud_error_hresult(void)
+{
+    DWORD error = GetLastError();
+
+    return HRESULT_FROM_WIN32(error ? error : ERROR_GEN_FAILURE);
+}
+
+static BOOL query_wave_mixer_id(EDataFlow flow, DWORD index, DWORD *mixer_index)
+{
+    WDMAUD_DEVICE_INFO info;
+
+    ZeroMemory(&info, sizeof(info));
+    info.DeviceType = device_type_from_flow(flow);
+    info.DeviceIndex = index;
+    if (!wdmaud_ioctl(IOCTL_GETWAVEMIXERID, &info))
+        return FALSE;
+
+    *mixer_index = info.u.MixerId;
+    return TRUE;
+}
+
+static BOOL query_mixer_line(DWORD mixer_index, DWORD component_type,
+                             MIXERLINEW *line)
+{
+    WDMAUD_DEVICE_INFO info;
+
+    ZeroMemory(line, sizeof(*line));
+    line->cbStruct = sizeof(*line);
+    line->dwComponentType = component_type;
+
+    ZeroMemory(&info, sizeof(info));
+    info.DeviceType = MIXER_DEVICE_TYPE;
+    info.DeviceIndex = mixer_index;
+    info.Flags = MIXER_OBJECTF_MIXER | MIXER_GETLINEINFOF_COMPONENTTYPE;
+    info.u.MixLine = *line;
+    if (!wdmaud_ioctl(IOCTL_GETLINEINFO, &info))
+        return FALSE;
+
+    *line = info.u.MixLine;
+    return TRUE;
+}
+
+static BOOL query_render_mixer_line(DWORD mixer_index, MIXERLINEW *line)
+{
+    static const DWORD component_types[] =
+    {
+        MIXERLINE_COMPONENTTYPE_DST_SPEAKERS,
+        MIXERLINE_COMPONENTTYPE_DST_HEADPHONES,
+        MIXERLINE_COMPONENTTYPE_DST_DIGITAL,
+        MIXERLINE_COMPONENTTYPE_DST_LINE
+    };
+    UINT i;
+
+    for (i = 0; i < ARRAY_SIZE(component_types); ++i)
+    {
+        if (query_mixer_line(mixer_index, component_types[i], line))
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+static BOOL query_mixer_control(DWORD mixer_index, DWORD line_id,
+                                DWORD control_type, MIXERCONTROLW *control)
+{
+    MIXERLINECONTROLSW controls;
+    WDMAUD_DEVICE_INFO info;
+
+    ZeroMemory(control, sizeof(*control));
+    control->cbStruct = sizeof(*control);
+
+    ZeroMemory(&controls, sizeof(controls));
+    controls.cbStruct = sizeof(controls);
+    controls.dwLineID = line_id;
+    controls.dwControlType = control_type;
+    controls.cControls = 1;
+    controls.cbmxctrl = sizeof(*control);
+    controls.pamxctrl = control;
+
+    ZeroMemory(&info, sizeof(info));
+    info.DeviceType = MIXER_DEVICE_TYPE;
+    info.DeviceIndex = mixer_index;
+    info.Flags = MIXER_OBJECTF_MIXER | MIXER_GETLINECONTROLSF_ONEBYTYPE;
+    info.u.MixControls = controls;
+    return wdmaud_ioctl(IOCTL_GETLINECONTROLS, &info);
+}
+
+static HRESULT endpoint_volume_details(
+    const struct reactos_endpoint_volume_state *state, BOOL set,
+    MIXERCONTROLDETAILS_UNSIGNED *values)
+{
+    MIXERCONTROLDETAILS details;
+    WDMAUD_DEVICE_INFO info;
+
+    ZeroMemory(&details, sizeof(details));
+    details.cbStruct = sizeof(details);
+    details.dwControlID = state->volume_control_id;
+    details.cChannels = state->volume_control_channels;
+    details.cbDetails = sizeof(*values);
+    details.paDetails = values;
+
+    ZeroMemory(&info, sizeof(info));
+    info.DeviceType = MIXER_DEVICE_TYPE;
+    info.DeviceIndex = state->mixer_index;
+    info.Flags = MIXER_OBJECTF_MIXER;
+    info.u.MixDetails = details;
+    if (!wdmaud_ioctl(set ? IOCTL_SETCONTROLDETAILS : IOCTL_GETCONTROLDETAILS,
+                      &info))
+    {
+        return wdmaud_error_hresult();
+    }
+
+    return S_OK;
+}
+
+static HRESULT endpoint_mute_details(
+    const struct reactos_endpoint_volume_state *state, BOOL set,
+    MIXERCONTROLDETAILS_BOOLEAN *values)
+{
+    MIXERCONTROLDETAILS details;
+    WDMAUD_DEVICE_INFO info;
+
+    ZeroMemory(&details, sizeof(details));
+    details.cbStruct = sizeof(details);
+    details.dwControlID = state->mute_control_id;
+    details.cChannels = state->mute_control_channels;
+    details.cbDetails = sizeof(*values);
+    details.paDetails = values;
+
+    ZeroMemory(&info, sizeof(info));
+    info.DeviceType = MIXER_DEVICE_TYPE;
+    info.DeviceIndex = state->mixer_index;
+    info.Flags = MIXER_OBJECTF_MIXER;
+    info.u.MixDetails = details;
+    if (!wdmaud_ioctl(set ? IOCTL_SETCONTROLDETAILS : IOCTL_GETCONTROLDETAILS,
+                      &info))
+    {
+        return wdmaud_error_hresult();
+    }
+
+    return S_OK;
+}
+
+HRESULT reactos_endpoint_volume_initialize(
+    const GUID *guid, struct reactos_endpoint_volume_state *state)
+{
+    MIXERCONTROLW volume_control;
+    MIXERCONTROLW mute_control;
+    MIXERLINEW line;
+    EDataFlow flow;
+    DWORD wave_index;
+    char *device;
+
+    if (!guid || !state)
+        return E_POINTER;
+
+    ZeroMemory(state, sizeof(*state));
+    if (!get_device_name_from_guid(guid, &device, &flow))
+        return AUDCLNT_E_DEVICE_INVALIDATED;
+
+    if (!parse_device_name(device, &flow, &wave_index) || flow != eRender)
+    {
+        free(device);
+        return E_NOINTERFACE;
+    }
+    free(device);
+
+    if (!open_wdmaud())
+        return AUDCLNT_E_DEVICE_INVALIDATED;
+    if (!query_wave_mixer_id(flow, wave_index, &state->mixer_index))
+        return wdmaud_error_hresult();
+    if (!query_render_mixer_line(state->mixer_index, &line))
+        return wdmaud_error_hresult();
+    if (!query_mixer_control(state->mixer_index, line.dwLineID,
+                             MIXERCONTROL_CONTROLTYPE_VOLUME,
+                             &volume_control))
+    {
+        return wdmaud_error_hresult();
+    }
+
+    state->channel_count = max(line.cChannels, 1);
+    state->volume_control_channels =
+        (volume_control.fdwControl & MIXERCONTROL_CONTROLF_UNIFORM) ?
+        1 : state->channel_count;
+    state->volume_control_id = volume_control.dwControlID;
+    state->step_count = max(volume_control.Metrics.cSteps, 2);
+
+    if (query_mixer_control(state->mixer_index, line.dwLineID,
+                            MIXERCONTROL_CONTROLTYPE_MUTE,
+                            &mute_control))
+    {
+        state->mute_control_id = mute_control.dwControlID;
+        state->mute_control_channels =
+            (mute_control.fdwControl & MIXERCONTROL_CONTROLF_UNIFORM) ?
+            1 : state->channel_count;
+        state->mute_supported = TRUE;
+    }
+
+    return S_OK;
+}
+
+HRESULT reactos_endpoint_volume_get(
+    const struct reactos_endpoint_volume_state *state, float *levels,
+    UINT count)
+{
+    MIXERCONTROLDETAILS_UNSIGNED *values;
+    HRESULT hr;
+    UINT i;
+
+    if (!state || !levels)
+        return E_POINTER;
+    if (count != state->channel_count)
+        return E_INVALIDARG;
+
+    values = calloc(state->volume_control_channels, sizeof(*values));
+    if (!values)
+        return E_OUTOFMEMORY;
+
+    hr = endpoint_volume_details(state, FALSE, values);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < count; ++i)
+        {
+            levels[i] = min(values[state->volume_control_channels == 1 ? 0 : i].dwValue,
+                            0xffff) / 65535.0f;
+        }
+    }
+
+    free(values);
+    return hr;
+}
+
+HRESULT reactos_endpoint_volume_set(
+    const struct reactos_endpoint_volume_state *state, const float *levels,
+    UINT count)
+{
+    MIXERCONTROLDETAILS_UNSIGNED *values;
+    HRESULT hr;
+    UINT i;
+
+    if (!state || !levels)
+        return E_POINTER;
+    if (count != state->channel_count)
+        return E_INVALIDARG;
+
+    for (i = 0; i < count; ++i)
+    {
+        if (levels[i] < 0.0f || levels[i] > 1.0f)
+            return E_INVALIDARG;
+    }
+
+    values = calloc(state->volume_control_channels, sizeof(*values));
+    if (!values)
+        return E_OUTOFMEMORY;
+
+    for (i = 0; i < state->volume_control_channels; ++i)
+        values[i].dwValue = (DWORD)(levels[i] * 65535.0f + 0.5f);
+
+    hr = endpoint_volume_details(state, TRUE, values);
+    free(values);
+    return hr;
+}
+
+HRESULT reactos_endpoint_mute_get(
+    const struct reactos_endpoint_volume_state *state, BOOL *mute)
+{
+    MIXERCONTROLDETAILS_BOOLEAN *values;
+    HRESULT hr;
+    UINT i;
+
+    if (!state || !mute)
+        return E_POINTER;
+    if (!state->mute_supported)
+        return E_NOTIMPL;
+
+    values = calloc(state->mute_control_channels, sizeof(*values));
+    if (!values)
+        return E_OUTOFMEMORY;
+
+    hr = endpoint_mute_details(state, FALSE, values);
+    if (SUCCEEDED(hr))
+    {
+        *mute = FALSE;
+        for (i = 0; i < state->mute_control_channels; ++i)
+            *mute = *mute || values[i].fValue;
+    }
+
+    free(values);
+    return hr;
+}
+
+HRESULT reactos_endpoint_mute_set(
+    const struct reactos_endpoint_volume_state *state, BOOL mute)
+{
+    MIXERCONTROLDETAILS_BOOLEAN *values;
+    HRESULT hr;
+    UINT i;
+
+    if (!state)
+        return E_POINTER;
+    if (!state->mute_supported)
+        return E_NOTIMPL;
+
+    values = calloc(state->mute_control_channels, sizeof(*values));
+    if (!values)
+        return E_OUTOFMEMORY;
+
+    for (i = 0; i < state->mute_control_channels; ++i)
+        values[i].fValue = mute;
+
+    hr = endpoint_mute_details(state, TRUE, values);
+    free(values);
+    return hr;
+}
+
 static void format_device_name(EDataFlow flow, DWORD index, char *buffer, size_t size)
 {
     const char *kind = flow == eCapture ? REACTOS_DEVICE_CAPTURE : REACTOS_DEVICE_RENDER;
