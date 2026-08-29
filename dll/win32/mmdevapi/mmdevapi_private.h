@@ -38,6 +38,32 @@ typedef ULONG_PTR unixlib_handle_t;
 
 #include "unixlib.h"
 
+#ifdef __REACTOS__
+#define REACTOS_AUDIO_SESSION_MAX_CHANNELS 32
+
+struct reactos_audio_session_id
+{
+    UINT32 slot;
+    GUID instance_guid;
+};
+
+struct reactos_audio_session_snapshot
+{
+    GUID session_guid;
+    GUID grouping_param;
+    DWORD process_id;
+    AudioSessionState state;
+    UINT32 channel_count;
+    LONG generation;
+    float master_volume;
+    BOOL mute;
+    float channel_volumes[REACTOS_AUDIO_SESSION_MAX_CHANNELS];
+    WCHAR process_path[MAX_PATH];
+    WCHAR display_name[128];
+    WCHAR icon_path[MAX_PATH];
+};
+#endif
+
 struct audio_session {
     GUID guid;
     struct list clients;
@@ -52,6 +78,17 @@ struct audio_session {
     WCHAR *display_name;
     WCHAR *icon_path;
     GUID grouping_param;
+
+#ifdef __REACTOS__
+    struct reactos_audio_session_id shared_id;
+    LONG shared_generation;
+    DWORD process_id;
+    AudioSessionState shared_state;
+    WCHAR *process_path;
+    LONG proxy_wrapper_count;
+    BOOL shared_valid;
+    BOOL shared_proxy;
+#endif
 
     struct list entry;
 };
@@ -149,6 +186,27 @@ extern HRESULT reactos_endpoint_mute_get(const struct reactos_endpoint_volume_st
                                          BOOL *mute);
 extern HRESULT reactos_endpoint_mute_set(const struct reactos_endpoint_volume_state *state,
                                          BOOL mute);
+extern HRESULT reactos_audio_session_register(IMMDevice *device, const GUID *session_guid,
+                                              UINT32 channels,
+                                              struct reactos_audio_session_id *id,
+                                              struct reactos_audio_session_snapshot *snapshot);
+extern HRESULT reactos_audio_session_enumerate(IMMDevice *device,
+                                               struct reactos_audio_session_id **ids,
+                                               int *count);
+extern HRESULT reactos_audio_session_read(const struct reactos_audio_session_id *id,
+                                          LONG known_generation,
+                                          struct reactos_audio_session_snapshot *snapshot);
+extern HRESULT reactos_audio_session_set_master(const struct reactos_audio_session_id *id,
+                                                float level);
+extern HRESULT reactos_audio_session_set_mute(const struct reactos_audio_session_id *id,
+                                              BOOL mute);
+extern HRESULT reactos_audio_session_set_channel(const struct reactos_audio_session_id *id,
+                                                 UINT32 channel, float level);
+extern HRESULT reactos_audio_session_set_channels(const struct reactos_audio_session_id *id,
+                                                  UINT32 count, const float *levels);
+extern HRESULT reactos_audio_session_set_state(const struct reactos_audio_session_id *id,
+                                               AudioSessionState state);
+extern void reactos_audio_sessions_shutdown(void);
 #endif
 
 static inline void wine_unix_call(const unsigned int code, void *args)
@@ -177,6 +235,13 @@ extern HRESULT get_audio_session(const GUID *sessionguid, IMMDevice *device, UIN
 extern HRESULT get_audio_session_wrapper(const GUID *guid, IMMDevice *device,
                                          struct audio_session_wrapper **out);
 extern HRESULT get_audio_sessions(IMMDevice *device, GUID **ret, int *ret_count);
+#ifdef __REACTOS__
+extern HRESULT get_audio_session_wrapper_by_id(const struct reactos_audio_session_id *id,
+                                               IMMDevice *device,
+                                               struct audio_session_wrapper **out);
+extern BOOL sync_audio_session(struct audio_session *session);
+extern void publish_audio_session_state(struct audio_session *session);
+#endif
 
 extern struct audio_session_wrapper *session_wrapper_create(struct audio_client *client);
 
