@@ -734,6 +734,21 @@ KiWriteSystemTime(
 
 #ifdef _WIN64
 #if defined(_M_ARM64)
+NTSYSAPI
+NTSTATUS
+NTAPI
+KeInitializeSecondaryInterruptServices(VOID);
+
+NTSYSAPI
+BOOLEAN
+NTAPI
+KeDispatchSecondaryInterrupt(
+    _In_ ULONG Vector,
+    _In_ ULONG_PTR Flags,
+    _In_opt_ PVOID Reserved);
+#endif
+
+#if defined(_M_ARM64)
     __dmb(_ARM64_BARRIER_ISHST);
 #endif
     /* Do a single 'atomic' write. This isn't actually guaranteed to be atomic,

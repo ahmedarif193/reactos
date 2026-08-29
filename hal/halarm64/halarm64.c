@@ -18,6 +18,14 @@
 #include <halacpi_arm64.h>
 #include <bugcodes.h>
 #include "halext.h"
+
+BOOLEAN HalpSecondaryIsIntId(_In_ ULONG IntId);
+KIRQL HalpSecondaryIrql(_In_ ULONG IntId);
+BOOLEAN HalpSecondaryEnable(_In_ ULONG IntId, _In_ KINTERRUPT_MODE InterruptMode);
+VOID HalpSecondaryDisable(_In_ ULONG IntId);
+VOID HalpSecondaryInitializeDispatch(VOID);
+NTSTATUS HalpSecondaryRegisterInterface(_In_ ULONG BufferSize, _In_ PVOID Buffer);
+NTSTATUS HalpSecondaryQueryInformation(_In_ ULONG BufferSize, _Out_ PVOID Buffer, _Out_opt_ PULONG ReturnedLength);
 #define NDEBUG
 #include <debug.h>
 
@@ -1072,6 +1080,9 @@ HaliQuerySystemInformation(
             return HasAcpi ? STATUS_SUCCESS : STATUS_NOT_FOUND;
         }
 
+        case HalSecondaryInterruptInformation:
+            return HalpSecondaryQueryInformation(BufferSize, Buffer, ReturnedLength);
+
         case HalFrameBufferCachingInformation:
         case HalDisplayBiosInformation:
         case HalQueryAMLIIllegalIOPortAddresses:
@@ -1092,6 +1103,8 @@ HaliSetSystemInformation(
     UNREFERENCED_PARAMETER(BufferSize);
     UNREFERENCED_PARAMETER(Buffer);
 
+    if (InformationClass == HalRegisterSecondaryInterruptInterface)
+        return HalpSecondaryRegisterInterface(BufferSize, Buffer);
     DPRINT1("[arm64][HAL] HaliSetSystemInformation: Unhandled class %d\n", InformationClass);
     return STATUS_NOT_IMPLEMENTED;
 }
@@ -3084,6 +3097,7 @@ HalInitSystem(
     {
         return TRUE;
     }
+    HalpSecondaryInitializeDispatch();
 
     if (BootPhase != 0)
     {
@@ -3999,6 +4013,11 @@ HalDisableSystemInterrupt(
         /* SGI: no-op, cannot be disabled */
         return;
     }
+    if (HalpSecondaryIsIntId(Vector))
+    {
+        HalpSecondaryDisable(Vector);
+        return;
+    }
 
     if (Vector >= HAL_ARM64_LPI_BASE)
     {
@@ -4104,6 +4123,9 @@ HalEnableSystemInterrupt(
         HalpGicEnableInterrupt(Vector);
         return TRUE;
     }
+
+    if (HalpSecondaryIsIntId(Vector))
+        return HalpSecondaryEnable(Vector, InterruptMode);
 
     /* Calculate GIC priority from IRQL */
     priority = HalpIrqlToGicPriority(Irql);
@@ -5557,6 +5579,14 @@ HalGetInterruptVector(
         if (Irql) *Irql = PASSIVE_LEVEL;
         if (Affinity) *Affinity = 0;
         return 0;
+    }
+
+    if (HalpSecondaryIsIntId(Vector))
+    {
+        DeviceIrql = HalpSecondaryIrql(Vector);
+        if (Irql) *Irql = DeviceIrql;
+        if (Affinity) *Affinity = 1;
+        return Vector;
     }
 
     /* Check if this is an NMI source */

@@ -473,6 +473,78 @@ BuspGetConnectionController(
     return NULL;
 }
 
+static
+VOID
+BuspRegisterConnectionResource(
+    _In_ PPDO_DEVICE_DATA DeviceData,
+    _In_ ACPI_RESOURCE *Resource,
+    _In_ ULONGLONG ConnectionId,
+    _In_ UCHAR ConnectionClass,
+    _In_ UCHAR ConnectionType);
+
+#ifdef _M_ARM64
+static
+ULONG
+BuspGpioInterruptCount(
+    _In_ PPDO_DEVICE_DATA DeviceData,
+    _In_ ACPI_RESOURCE *Resource)
+{
+    if (Resource->Data.Gpio.ConnectionType != ACPI_RESOURCE_GPIO_TYPE_INT ||
+        Resource->Data.Gpio.ProducerConsumer == ACPI_PRODUCER ||
+        BuspGetConnectionController(DeviceData, Resource) == NULL)
+    {
+        return 0;
+    }
+    return Resource->Data.Gpio.PinTableLength;
+}
+
+NTSTATUS
+BuspAllocateSecondaryGsiv(
+    _In_ PDEVICE_OBJECT Controller,
+    _Out_ PULONG Gsiv);
+
+static
+BOOLEAN
+BuspGpioInterruptVector(
+    _In_ PPDO_DEVICE_DATA DeviceData,
+    _In_ ACPI_RESOURCE *Resource,
+    _In_ ULONG ResourceIndex,
+    _In_ ULONG PinIndex,
+    _Out_ PULONG Gsiv)
+{
+    PDEVICE_OBJECT Controller = BuspGetConnectionController(DeviceData, Resource);
+    ULONG Index;
+    NTSTATUS Status;
+
+    *Gsiv = 0;
+    if (Controller == NULL || PinIndex >= Resource->Data.Gpio.PinTableLength)
+        return FALSE;
+    for (Index = 0; Index < DeviceData->GpioIntCount; Index++)
+    {
+        if (DeviceData->GpioInts[Index].ResourceIndex == ResourceIndex &&
+            DeviceData->GpioInts[Index].PinIndex == PinIndex)
+        {
+            *Gsiv = DeviceData->GpioInts[Index].Gsiv;
+            return TRUE;
+        }
+    }
+    if (DeviceData->GpioIntCount >= ACPI_GPIO_INT_MAX)
+        return FALSE;
+    Status = BuspAllocateSecondaryGsiv(Controller, Gsiv);
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+    Index = DeviceData->GpioIntCount++;
+    DeviceData->GpioInts[Index].ResourceIndex = ResourceIndex;
+    DeviceData->GpioInts[Index].PinIndex = PinIndex;
+    DeviceData->GpioInts[Index].Gsiv = *Gsiv;
+    BuspRegisterConnectionResource(DeviceData, Resource, RH_SECONDARY_INTERRUPT_CONNECTION_ID(*Gsiv),
+                                   CM_RESOURCE_CONNECTION_CLASS_GPIO, CM_RESOURCE_CONNECTION_TYPE_GPIO_IO);
+    return TRUE;
+}
+#else
+#define BuspGpioInterruptCount(DeviceData, Resource) 0
+#define BuspGpioInterruptVector(DeviceData, Resource, ResourceIndex, PinIndex, Gsiv) FALSE
+#endif
 
 
 static
@@ -721,6 +793,12 @@ BuspCountRequirementsFromAcpiResources(
                 UCHAR ConnectionType;
                 UCHAR ShareDisposition;
 
+                if (resource->Type == ACPI_RESOURCE_TYPE_GPIO &&
+                    resource->Data.Gpio.ConnectionType == ACPI_RESOURCE_GPIO_TYPE_INT)
+                {
+                    NumberOfResources += BuspGpioInterruptCount(DeviceData, resource);
+                    break;
+                }
                 if (BuspGetConnectionResourceInfo(resource, &ConnectionClass, &ConnectionType, &ShareDisposition))
                     NumberOfResources++;
                 break;
@@ -1353,6 +1431,29 @@ BuspCreateRequirementsListFromAcpiResources(
                 UCHAR ShareDisposition;
                 ULONGLONG ConnectionId;
 
+                if (resource->Type == ACPI_RESOURCE_TYPE_GPIO &&
+                    resource->Data.Gpio.ConnectionType == ACPI_RESOURCE_GPIO_TYPE_INT)
+                {
+                    ULONG PinCount = BuspGpioInterruptCount(DeviceData, resource);
+                    for (i = 0; i < PinCount; i++)
+                    {
+                        ULONG Gsiv;
+                        if (!BuspGpioInterruptVector(DeviceData, resource, CurrentResourceIndex, i, &Gsiv))
+                            continue;
+                        RequirementDescriptor->Option = 0;
+                        RequirementDescriptor->Type = CmResourceTypeInterrupt;
+                        RequirementDescriptor->ShareDisposition =
+                            resource->Data.Gpio.Shareable == ACPI_SHARED ?
+                            CmResourceShareShared : CmResourceShareDeviceExclusive;
+                        RequirementDescriptor->Flags =
+                            resource->Data.Gpio.Triggering == ACPI_LEVEL_SENSITIVE ?
+                            CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE : CM_RESOURCE_INTERRUPT_LATCHED;
+                        RequirementDescriptor->u.Interrupt.MinimumVector =
+                        RequirementDescriptor->u.Interrupt.MaximumVector = Gsiv;
+                        RequirementDescriptor++;
+                    }
+                    break;
+                }
                 if (!BuspGetConnectionResourceInfo(resource, &ConnectionClass, &ConnectionType, &ShareDisposition))
                     break;
 
@@ -1971,6 +2072,29 @@ BuspCreateResourceListFromAcpiResources(
                 UCHAR ShareDisposition;
                 ULONGLONG ConnectionId;
 
+                if (resource->Type == ACPI_RESOURCE_TYPE_GPIO &&
+                    resource->Data.Gpio.ConnectionType == ACPI_RESOURCE_GPIO_TYPE_INT)
+                {
+                    ULONG PinCount = BuspGpioInterruptCount(DeviceData, resource);
+                    for (i = 0; i < PinCount; i++)
+                    {
+                        ULONG Gsiv;
+                        if (!BuspGpioInterruptVector(DeviceData, resource, CurrentResourceIndex, i, &Gsiv))
+                            continue;
+                        ResourceDescriptor->Type = CmResourceTypeInterrupt;
+                        ResourceDescriptor->ShareDisposition =
+                            resource->Data.Gpio.Shareable == ACPI_SHARED ?
+                            CmResourceShareShared : CmResourceShareDeviceExclusive;
+                        ResourceDescriptor->Flags =
+                            resource->Data.Gpio.Triggering == ACPI_LEVEL_SENSITIVE ?
+                            CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE : CM_RESOURCE_INTERRUPT_LATCHED;
+                        ResourceDescriptor->u.Interrupt.Level =
+                        ResourceDescriptor->u.Interrupt.Vector = Gsiv;
+                        ResourceDescriptor->u.Interrupt.Affinity = (KAFFINITY)(-1);
+                        ResourceDescriptor++;
+                    }
+                    break;
+                }
                 if (!BuspGetConnectionResourceInfo(resource, &ConnectionClass, &ConnectionType, &ShareDisposition))
                     break;
 

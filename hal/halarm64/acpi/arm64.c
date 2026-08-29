@@ -739,6 +739,8 @@ HalpAcpiDiscoverArm64Tables(
  *   1020-1023: Special INTIDs (spurious, etc.)
  *   8192+:    LPIs (Locality-specific Peripheral Interrupts for MSI)
  */
+ULONG HalpSecondaryTranslateGsi(_In_ ULONG Gsi);
+
 ULONG
 NTAPI
 HalpArm64TranslateGsiToIntId(
@@ -750,6 +752,13 @@ HalpArm64TranslateGsiToIntId(
     ULONG IntId;
     UCHAR Pol = 0;   /* 0 = conforms to bus spec (default active-high for GIC) */
     UCHAR Trig = 0;  /* 0 = conforms to bus spec (default level for SPIs) */
+
+    if (HalpSecondaryTranslateGsi(Gsi) != (ULONG)-1)
+    {
+        if (Polarity) *Polarity = 0;
+        if (TriggerMode) *TriggerMode = 0;
+        return HalpSecondaryTranslateGsi(Gsi);
+    }
 
     /*
      * First, check if there's an interrupt source override that maps
