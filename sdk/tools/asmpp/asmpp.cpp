@@ -1215,15 +1215,24 @@ translate_construct(TokenList& tokens, size_t index, const vector<string> &macro
         }
 
         case TOKEN_TYPE::KW_if:
-            printf(".");
-            return translate_expression(tokens, index, macro_params);
+            printf(".if");
+            return translate_expression(tokens, index + 1, macro_params);
 
         case TOKEN_TYPE::KW_ifdef:
+            printf(".ifdef");
+            return complete_line(tokens, index + 1, macro_params);
+
         case TOKEN_TYPE::KW_ifndef:
+            printf(".ifndef");
+            return complete_line(tokens, index + 1, macro_params);
+
         case TOKEN_TYPE::KW_else:
+            printf(".else");
+            return complete_line(tokens, index + 1, macro_params);
+
         case TOKEN_TYPE::KW_endif:
-            printf(".");
-            return complete_line(tokens, index, macro_params);
+            printf(".endif");
+            return complete_line(tokens, index + 1, macro_params);
 
         case TOKEN_TYPE::KW_include:
         {
