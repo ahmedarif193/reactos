@@ -37,6 +37,7 @@ list(APPEND SOURCE
     IsDBCSLeadByteEx.c
     JapaneseCalendar.c
     JobObject.c
+    JobObjectUI.c
     LCMapString.c
     LoadLibraryExW.c
     LockFileEx.c
