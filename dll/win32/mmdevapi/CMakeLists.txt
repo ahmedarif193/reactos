@@ -20,7 +20,10 @@ list(APPEND SOURCE
     ${CMAKE_CURRENT_BINARY_DIR}/mmdevapi_stubs.c)
 
 if(ARCH STREQUAL "arm64" OR ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386")
-    list(APPEND SOURCE reactos_wdmaud.c)
+    list(APPEND SOURCE
+        reactos_render_engine.c
+        reactos_render_engine.h
+        reactos_wdmaud.c)
 endif()
 
 list(APPEND PCH_SKIP_SOURCE
