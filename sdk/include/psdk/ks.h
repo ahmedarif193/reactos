@@ -3824,6 +3824,13 @@ KsPinGetLeadingEdgeStreamPointer(
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
 KSDDKAPI
+PKSSTREAM_POINTER
+NTAPI
+KsPinGetFirstCloneStreamPointer(
+  _In_ PKSPIN Pin);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+KSDDKAPI
 NTSTATUS
 NTAPI
 KsStreamPointerSetStatusCode(
@@ -3849,6 +3856,52 @@ KsStreamPointerClone(
     _In_ ULONG ContextSize,
     _Out_ PKSSTREAM_POINTER* CloneStreamPointer
 );
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+KSDDKAPI
+PKSSTREAM_POINTER
+NTAPI
+KsStreamPointerGetNextClone(
+  _In_ PKSSTREAM_POINTER StreamPointer);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+KSDDKAPI
+NTSTATUS
+NTAPI
+KsStreamPointerLock(
+  _In_ PKSSTREAM_POINTER StreamPointer);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+KSDDKAPI
+PIRP
+NTAPI
+KsStreamPointerGetIrp(
+  _In_ PKSSTREAM_POINTER StreamPointer,
+  _Out_opt_ PBOOLEAN FirstFrameInIrp,
+  _Out_opt_ PBOOLEAN LastFrameInIrp);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+KSDDKAPI
+PMDL
+NTAPI
+KsStreamPointerGetMdl(
+  _In_ PKSSTREAM_POINTER StreamPointer);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+KSDDKAPI
+VOID
+NTAPI
+KsStreamPointerScheduleTimeout(
+  _In_ PKSSTREAM_POINTER StreamPointer,
+  _In_ PFNKSSTREAMPOINTER Callback,
+  _In_ ULONGLONG Interval);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+KSDDKAPI
+VOID
+NTAPI
+KsStreamPointerCancelTimeout(
+  _In_ PKSSTREAM_POINTER StreamPointer);
 
 
 /* Does this belong here? */
