@@ -52,7 +52,11 @@ typedef enum _HAL_QUERY_INFORMATION_CLASS {
   HalProcessorBrandString,
   HalHypervisorInformation,
   HalPlatformTimerInformation,
-  HalAcpiAuditInformation
+  HalAcpiAuditInformation,
+  HalIrtInformation,
+  HalSecondaryInterruptInformation,
+  HalParkingPageInformation,
+  HalNumaRangeTableInformation
 } HAL_QUERY_INFORMATION_CLASS, *PHAL_QUERY_INFORMATION_CLASS;
 
 typedef enum _HAL_SET_INFORMATION_CLASS {
@@ -68,7 +72,11 @@ typedef enum _HAL_SET_INFORMATION_CLASS {
   HalGenerateCmcInterrupt,
   HalProfileSourceTimerHandler,
   HalEnlightenment,
-  HalProfileDpgoSourceInterruptHandler
+  HalProfileDpgoSourceInterruptHandler,
+  HalRegisterSecondaryInterruptInterface,
+  HalSetChannelPowerInformation,
+  HalI386ExceptionChainTerminatorInformation,
+  HalSetResetParkDisposition
 } HAL_SET_INFORMATION_CLASS, *PHAL_SET_INFORMATION_CLASS;
 
 typedef NTSTATUS

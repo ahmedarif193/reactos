@@ -853,6 +853,35 @@ KiArm64DispatchChain(_In_ ULONG IntId)
     }
 }
 
+static BOOLEAN KiSecondaryInterruptServicesEnabled;
+
+NTSTATUS
+NTAPI
+KeInitializeSecondaryInterruptServices(VOID)
+{
+    KiSecondaryInterruptServicesEnabled = TRUE;
+    return STATUS_SUCCESS;
+}
+
+BOOLEAN
+NTAPI
+KeDispatchSecondaryInterrupt(
+    _In_ ULONG Vector,
+    _In_ ULONG_PTR Flags,
+    _In_opt_ PVOID Reserved)
+{
+    UNREFERENCED_PARAMETER(Flags);
+    UNREFERENCED_PARAMETER(Reserved);
+
+    if (!KiSecondaryInterruptServicesEnabled || Vector >= ARM64_MAX_INTID ||
+        !KiArm64LoadInterruptHeadNoFence(Vector))
+    {
+        return FALSE;
+    }
+    KiArm64DispatchChain(Vector);
+    return TRUE;
+}
+
 static
 ULONG
 KiArm64SoftwareInterrupt(_In_ ULONG IntId)

@@ -2579,7 +2579,7 @@
 @ stdcall -arch=arm64 KeCountSetBitsAffinityEx(ptr)
 @ stdcall -arch=x86_64,arm64 KeCountSetBitsGroupAffinity(ptr)
 @ stdcall -arch=x86_64,arm64 KeDeregisterProcessorChangeCallback(ptr)
-@ stub -arch=arm64 KeDispatchSecondaryInterrupt
+@ stdcall -arch=arm64 KeDispatchSecondaryInterrupt(long long ptr)
 @ stdcall -arch=x86_64,arm64 KeEnumerateNextProcessor(ptr ptr)
 @ stdcall -arch=x86_64,arm64 KeFindFirstSetLeftAffinityEx(ptr)
 @ stdcall -arch=x86_64,arm64 KeFindFirstSetLeftGroupAffinity(ptr)
@@ -2599,7 +2599,7 @@
 @ stdcall -arch=x86_64,arm64 KeInitializeEnumerationContext(ptr ptr)
 @ stdcall -arch=x86_64,arm64 KeInitializeEnumerationContextFromAffinity(ptr long int64)
 @ stdcall -arch=x86_64,arm64 KeInitializeEnumerationContextFromGroup(ptr ptr)
-@ stub -arch=arm64 KeInitializeSecondaryInterruptServices
+@ stdcall -arch=arm64 KeInitializeSecondaryInterruptServices()
 @ stub -arch=arm64 KeInitializeTimer2
 @ stdcall -arch=i386,x86_64,arm64 KeInitializeTriageDumpDataArray(ptr long)
 @ stdcall -arch=x86_64,arm64 KeInterlockedClearProcessorAffinityEx(ptr long)
