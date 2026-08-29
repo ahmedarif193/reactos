@@ -196,6 +196,11 @@ WdmAudGetPreferredWaveFormat(
     IN PWDMAUD_DEVICE_INFO DeviceInfo);
 
 NTSTATUS
+WdmAudGetWaveMixerId(
+    IN PIRP Irp,
+    IN PWDMAUD_DEVICE_INFO DeviceInfo);
+
+NTSTATUS
 WdmAudMidiCapabilities(
     IN PDEVICE_OBJECT DeviceObject,
     IN PWDMAUD_DEVICE_INFO DeviceInfo,

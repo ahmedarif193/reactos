@@ -60,6 +60,7 @@ typedef struct
         }MixerEvent;
         KSSTATE State;
         KSRESET ResetStream;
+        ULONG MixerId;
         ULONG Volume;
         ULONG FrameSize;
         HANDLE hNotifyEvent;
@@ -406,5 +407,19 @@ typedef struct
 #define IOCTL_GETPREFERRED_WAVE_FORMAT \
     CTL_CODE(FILE_DEVICE_SOUND, \
              19, \
+             METHOD_BUFFERED, \
+             FILE_CREATE_TREE_CONNECTION | FILE_ANY_ACCESS)
+
+/// IOCTL_GETWAVEMIXERID
+///
+/// Description: This IOCTL maps a wave endpoint to the mixer which owns its
+///              topology controls.
+///
+/// Arguments:  DeviceType and DeviceIndex must identify a wave endpoint.
+/// Result:     The mixer index is returned in u.MixerId.
+
+#define IOCTL_GETWAVEMIXERID \
+    CTL_CODE(FILE_DEVICE_SOUND, \
+             20, \
              METHOD_BUFFERED, \
              FILE_CREATE_TREE_CONNECTION | FILE_ANY_ACCESS)
