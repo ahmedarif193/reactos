@@ -399,6 +399,9 @@ NTAPI
 ExInitializePushLock(
   _Out_ PEX_PUSH_LOCK PushLock);
 
+$endif (_NTIFS_)
+
+$if (_NTIFS_ || _WDMDDK_)
 NTKERNELAPI
 KIRQL
 NTAPI
@@ -466,7 +469,7 @@ VOID
 NTAPI
 ExReleaseSpinLockSharedFromDpcLevel(
   _Inout_ PEX_SPIN_LOCK SpinLock);
-$endif (_NTIFS_)
+$endif (_NTIFS_ || _WDMDDK_)
 
 #if (NTDDI_VERSION >= NTDDI_WIN2K)
 $if (_WDMDDK_)

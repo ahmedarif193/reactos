@@ -2440,7 +2440,7 @@ $endif (_NTIFS_)
 
 #endif /* (NTDDI_VERSION >= NTDDI_WINXP) */
 
-$if (_NTIFS_)
+$if (_NTIFS_ || _WDMDDK_)
 #if (NTDDI_VERSION >= NTDDI_WS03)
 _IRQL_requires_max_(DISPATCH_LEVEL)
 NTSYSAPI
@@ -2450,7 +2450,9 @@ RtlInitAnsiStringEx(
   _Out_ PANSI_STRING DestinationString,
   _In_opt_z_ __drv_aliasesMem PCSZ SourceString);
 #endif
+$endif (_NTIFS_ || _WDMDDK_)
 
+$if (_NTIFS_)
 #if (NTDDI_VERSION >= NTDDI_WS03SP1)
 
 _IRQL_requires_max_(APC_LEVEL)

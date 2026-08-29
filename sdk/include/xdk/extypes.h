@@ -422,9 +422,12 @@ $if (_NTIFS_)
 #define EX_PUSH_LOCK ULONG_PTR
 #define PEX_PUSH_LOCK PULONG_PTR
 
+$endif (_NTIFS_)
+
+$if (_NTIFS_ || _WDMDDK_)
 typedef volatile LONG EX_SPIN_LOCK, *PEX_SPIN_LOCK;
 #define ALIGNED_EX_SPINLOCK DECLSPEC_CACHEALIGN EX_SPIN_LOCK
-$endif (_NTIFS_)
+$endif (_NTIFS_ || _WDMDDK_)
 
 $if (_WINNT_ || _WDMDDK_)
 #ifndef _FIRMWARE_TYPE_DEFINED

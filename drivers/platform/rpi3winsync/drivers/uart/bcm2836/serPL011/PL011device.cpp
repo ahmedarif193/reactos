@@ -502,6 +502,10 @@ PL011pReadDeviceSpecificData(
     ACPI_EVAL_OUTPUT_BUFFER UNALIGNED* clckObjOutputBufferPtr = nullptr;
     UINT32 clockFrequency = 0;
     NTSTATUS status;
+#ifdef __REACTOS__
+    const ACPI_METHOD_ARGUMENT UNALIGNED* devicePropertiesPkgPtr;
+    const ACPI_METHOD_ARGUMENT UNALIGNED* currentPairEntryPtr;
+#endif
 
     status = AcpiQueryDsd(pdoPtr, &dsdBufferPtr);
     if (!NT_SUCCESS(status)) {
@@ -511,7 +515,11 @@ PL011pReadDeviceSpecificData(
         goto done;
     }
 
+#ifdef __REACTOS__
+    devicePropertiesPkgPtr = nullptr;
+#else
     const ACPI_METHOD_ARGUMENT UNALIGNED* devicePropertiesPkgPtr = nullptr;
+#endif
     status = AcpiParseDsdAsDeviceProperties(dsdBufferPtr, &devicePropertiesPkgPtr);
     if (!NT_SUCCESS(status)) {
         PL011_LOG_ERROR(
@@ -520,7 +528,11 @@ PL011pReadDeviceSpecificData(
         goto done;
     }
 
+#ifdef __REACTOS__
+    currentPairEntryPtr = nullptr;
+#else
     const ACPI_METHOD_ARGUMENT UNALIGNED* currentPairEntryPtr = nullptr;
+#endif
     status = AcpiDevicePropertiesQueryValue(
         devicePropertiesPkgPtr,
         "clock-frequency",

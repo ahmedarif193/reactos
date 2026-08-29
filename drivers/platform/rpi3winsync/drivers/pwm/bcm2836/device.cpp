@@ -502,14 +502,23 @@ Return Value:
     if (deviceContext->dmaChannelRegs)
     {
         MmUnmapIoSpace(deviceContext->dmaChannelRegs, sizeof(DMA_CHANNEL_REGS));
+#ifdef __REACTOS__
+        deviceContext->dmaChannelRegs = NULL;
+#endif
     }
     if (deviceContext->pwmRegs)
     {
         MmUnmapIoSpace(deviceContext->pwmRegs, sizeof(PWM_REGS));
+#ifdef __REACTOS__
+        deviceContext->pwmRegs = NULL;
+#endif
     }
     if (deviceContext->cmPwmRegs)
     {
         MmUnmapIoSpace(deviceContext->cmPwmRegs, sizeof(CM_PWM_REGS));
+#ifdef __REACTOS__
+        deviceContext->cmPwmRegs = NULL;
+#endif
     }
     return STATUS_SUCCESS;
 }
