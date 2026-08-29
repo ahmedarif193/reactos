@@ -11,6 +11,7 @@ list(APPEND SOURCE
     client.c
     devenum.c
     main.c
+    reactos_session.c
     session.c
     spatialaudio.c
     mmdevapi_private.h
