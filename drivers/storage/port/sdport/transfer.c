@@ -373,7 +373,8 @@ VOID
 SdPortEnableManagedPio(
     _In_ PSDPORT_SLOT_EXTENSION SlotExtension)
 {
-    if (SlotExtension != NULL)
+    if (SlotExtension != NULL &&
+        !((PSDPORT_FDO_EXTENSION)SlotExtension->FdoExtension)->WindowsMiniport)
     {
         SlotExtension->UsePortPio = TRUE;
     }

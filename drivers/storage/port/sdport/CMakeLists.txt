@@ -7,6 +7,7 @@ add_library(sdport MODULE
     command.c
     transfer.c
     power.c
+    winminiport.c
     sdport.rc
     ${CMAKE_CURRENT_BINARY_DIR}/sdport.def)
 

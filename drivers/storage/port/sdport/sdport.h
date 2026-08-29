@@ -14,6 +14,7 @@
 #include <ntddsd.h>
 #include <reactos/drivers/sd/sdhci.h>
 #include <reactos/drivers/sd/sddef.h>
+#include "sdport_win.h"
 
 /* Pool tags */
 #define SDPORT_TAG_FDO      'FdpS'    /* SdpF - FDO extension */
@@ -351,6 +352,7 @@ typedef struct _SDPORT_FDO_EXTENSION {
     /* Miniport private extension (allocated after FDO extension) */
     PVOID                   MiniportPrivateExtension;
     ULONG                   MiniportPrivateSize;
+    BOOLEAN                 WindowsMiniport;
 
     /* Resource information from PnP START_DEVICE */
     PHYSICAL_ADDRESS        MappedPhysicalBase;
@@ -401,10 +403,14 @@ extern ULONG SdPortNumber;
  */
 NTSTATUS
 NTAPI
-SdPortInitialize(
+SdPortInitializeLegacy(
     _In_ PDRIVER_OBJECT DriverObject,
     _In_ PUNICODE_STRING RegistryPath,
     _In_ PSDPORT_INITIALIZATION_DATA InitializationData);
+VOID
+SdPortCompleteSlotRequest(
+    _In_ PSDPORT_FDO_EXTENSION FdoExtension,
+    _In_ PSDPORT_SLOT_EXTENSION SlotExtension);
 
 /**
  * @brief PnP AddDevice routine that creates the FDO and attaches to the stack.
