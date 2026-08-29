@@ -184,19 +184,19 @@ WriteRegister(PVOID Base, ULONG Offset, ULONG Value)
     WRITE_REGISTER_ULONG(reinterpret_cast<PULONG>(reinterpret_cast<PUCHAR>(Base) + Offset), Value);
 }
 
+/* Even parity over subframe bits 4..30. XOR-folded rather than bit-walked:
+   this runs once per sample from the DMA completion DPC. */
 static ULONG
 Rpi5HdmiIec958Parity(ULONG Subframe)
 {
-    ULONG Parity = 0;
+    Subframe = (Subframe >> 4) & 0x07ffffffu;
+    Subframe ^= Subframe >> 16;
+    Subframe ^= Subframe >> 8;
+    Subframe ^= Subframe >> 4;
+    Subframe ^= Subframe >> 2;
+    Subframe ^= Subframe >> 1;
 
-    Subframe >>= 4;
-    for (ULONG Bit = 4; Bit <= 30; ++Bit)
-    {
-        Parity += Subframe & 1;
-        Subframe >>= 1;
-    }
-
-    return Parity & 1;
+    return Subframe & 1;
 }
 
 CRpi5HdmiAdapter::CRpi5HdmiAdapter()
@@ -300,19 +300,37 @@ CRpi5HdmiAdapter::Initialize(PDEVICE_OBJECT DeviceObject, PRESOURCELIST Resource
     return m_InterruptSync->Connect();
 }
 
+/* Single definition of the register block order shared by map and unmap. */
+VOID
+CRpi5HdmiAdapter::CollectRegisterBlocks(PVOID **Mappings, PULONG *Lengths)
+{
+    Mappings[0] = &m_CoreRegisters;
+    Mappings[1] = &m_PacketRegisters;
+    Mappings[2] = &m_HdRegisters;
+    Mappings[3] = &m_DmaRegisters;
+    Mappings[4] = &m_DvpRegisters;
+    Mappings[5] = &m_PhyRegisters;
+    Mappings[6] = &m_RateManagerRegisters;
+
+    Lengths[0] = &m_CoreRegistersLength;
+    Lengths[1] = &m_PacketRegistersLength;
+    Lengths[2] = &m_HdRegistersLength;
+    Lengths[3] = &m_DmaRegistersLength;
+    Lengths[4] = &m_DvpRegistersLength;
+    Lengths[5] = &m_PhyRegistersLength;
+    Lengths[6] = &m_RateManagerRegistersLength;
+}
+
 NTSTATUS
 CRpi5HdmiAdapter::MapResources(PRESOURCELIST ResourceList)
 {
     PCM_PARTIAL_RESOURCE_DESCRIPTOR Descriptor;
-    PVOID *Mappings[] = {&m_CoreRegisters, &m_PacketRegisters, &m_HdRegisters,
-                         &m_DmaRegisters, &m_DvpRegisters, &m_PhyRegisters,
-                         &m_RateManagerRegisters};
-    PULONG Lengths[] = {&m_CoreRegistersLength, &m_PacketRegistersLength,
-                        &m_HdRegistersLength, &m_DmaRegistersLength,
-                        &m_DvpRegistersLength, &m_PhyRegistersLength,
-                        &m_RateManagerRegistersLength};
+    PVOID *Mappings[RPI5HDMI_REGISTER_BLOCK_COUNT];
+    PULONG Lengths[RPI5HDMI_REGISTER_BLOCK_COUNT];
     const ULONG MinimumLengths[] = {0x300, 0x200, 0x100, 0x100,
                                     0x10, 0x300, 0x80};
+
+    CollectRegisterBlocks(Mappings, Lengths);
 
     if (ResourceList->NumberOfMemories() < RTL_NUMBER_OF(Mappings) ||
         ResourceList->NumberOfInterrupts() < 1 ||
@@ -321,10 +339,12 @@ CRpi5HdmiAdapter::MapResources(PRESOURCELIST ResourceList)
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
 
+    /* Only the request line and transfer width are consumed here; the channel
+       register window arrives as its own memory resource, so the firmware is
+       free to place HDMI audio on any DMA40 channel. */
     Descriptor = ResourceList->FindTranslatedDma(0);
     if (!Descriptor ||
         !(Descriptor->Flags & CM_RESOURCE_DMA_V3) ||
-        Descriptor->u.DmaV3.Channel != 6 ||
         Descriptor->u.DmaV3.RequestLine > 31 ||
         Descriptor->u.DmaV3.TransferWidth != 32)
     {
@@ -359,41 +379,21 @@ CRpi5HdmiAdapter::MapResources(PRESOURCELIST ResourceList)
 VOID
 CRpi5HdmiAdapter::UnmapResources()
 {
-    if (m_RateManagerRegisters)
+    PVOID *Mappings[RPI5HDMI_REGISTER_BLOCK_COUNT];
+    PULONG Lengths[RPI5HDMI_REGISTER_BLOCK_COUNT];
+
+    CollectRegisterBlocks(Mappings, Lengths);
+
+    /* Release in reverse mapping order. */
+    for (ULONG Index = RTL_NUMBER_OF(Mappings); Index-- > 0;)
     {
-        MmUnmapIoSpace(m_RateManagerRegisters, m_RateManagerRegistersLength);
-        m_RateManagerRegisters = NULL;
+        if (*Mappings[Index])
+        {
+            MmUnmapIoSpace(*Mappings[Index], *Lengths[Index]);
+            *Mappings[Index] = NULL;
+        }
     }
-    if (m_PhyRegisters)
-    {
-        MmUnmapIoSpace(m_PhyRegisters, m_PhyRegistersLength);
-        m_PhyRegisters = NULL;
-    }
-    if (m_DvpRegisters)
-    {
-        MmUnmapIoSpace(m_DvpRegisters, m_DvpRegistersLength);
-        m_DvpRegisters = NULL;
-    }
-    if (m_DmaRegisters)
-    {
-        MmUnmapIoSpace(m_DmaRegisters, m_DmaRegistersLength);
-        m_DmaRegisters = NULL;
-    }
-    if (m_HdRegisters)
-    {
-        MmUnmapIoSpace(m_HdRegisters, m_HdRegistersLength);
-        m_HdRegisters = NULL;
-    }
-    if (m_PacketRegisters)
-    {
-        MmUnmapIoSpace(m_PacketRegisters, m_PacketRegistersLength);
-        m_PacketRegisters = NULL;
-    }
-    if (m_CoreRegisters)
-    {
-        MmUnmapIoSpace(m_CoreRegisters, m_CoreRegistersLength);
-        m_CoreRegisters = NULL;
-    }
+
     m_DmaRequestLine = 0;
 }
 
@@ -783,15 +783,17 @@ CRpi5HdmiAdapter::ProgramHdmiAudio()
                   HDMI_INFOFRAME_CONFIG,
                   (InfoFrameConfig | HDMI_INFOFRAME_RAM_ENABLE) &
                       ~HDMI_INFOFRAME_AUDIO_ENABLE);
-    for (ULONG Retry = 0; Retry < 1000; ++Retry)
+    ULONG Retry;
+
+    for (Retry = 0; Retry < 1000; ++Retry)
     {
-        if (!(ReadRegister(m_CoreRegisters, HDMI_INFOFRAME_STATUS) &
-              HDMI_INFOFRAME_AUDIO_ENABLE))
+        if (!(ReadRegister(m_CoreRegisters, HDMI_INFOFRAME_STATUS) & HDMI_INFOFRAME_AUDIO_ENABLE))
             break;
-        if (Retry == 999)
-            return STATUS_IO_TIMEOUT;
         KeStallExecutionProcessor(100);
     }
+
+    if (Retry == 1000)
+        return STATUS_IO_TIMEOUT;
 
     /*
      * Match Linux hdmi_audio_infoframe_pack_only() and
@@ -831,23 +833,14 @@ CRpi5HdmiAdapter::ProgramHdmiAudio()
                   HDMI_INFOFRAME_CONFIG,
                   InfoFrameConfig | HDMI_INFOFRAME_RAM_ENABLE |
                       HDMI_INFOFRAME_AUDIO_ENABLE);
-    for (ULONG Retry = 0; Retry < 1000; ++Retry)
+    for (Retry = 0; Retry < 1000; ++Retry)
     {
-        if (ReadRegister(m_CoreRegisters, HDMI_INFOFRAME_STATUS) &
-            HDMI_INFOFRAME_AUDIO_ENABLE)
-        {
+        if (ReadRegister(m_CoreRegisters, HDMI_INFOFRAME_STATUS) & HDMI_INFOFRAME_AUDIO_ENABLE)
             return STATUS_SUCCESS;
-        }
-        if (Retry == 999)
-        {
-            WriteRegister(m_CoreRegisters,
-                          HDMI_INFOFRAME_CONFIG,
-                          InfoFrameConfig | HDMI_INFOFRAME_RAM_ENABLE);
-            return STATUS_IO_TIMEOUT;
-        }
         KeStallExecutionProcessor(100);
     }
 
+    WriteRegister(m_CoreRegisters, HDMI_INFOFRAME_CONFIG, InfoFrameConfig | HDMI_INFOFRAME_RAM_ENABLE);
     return STATUS_IO_TIMEOUT;
 }
 
@@ -1143,11 +1136,9 @@ CRpi5HdmiAdapter::UnregisterNotificationEvent(PKEVENT NotificationEvent)
     NTSTATUS Status = STATUS_SUCCESS;
 
     KeAcquireSpinLock(&m_EventLock, &OldIrql);
-    if (!m_NotificationEvent)
-        Status = STATUS_SUCCESS;
-    else if (m_NotificationEvent == NotificationEvent)
+    if (m_NotificationEvent == NotificationEvent)
         m_NotificationEvent = NULL;
-    else
+    else if (m_NotificationEvent)
         Status = STATUS_NOT_FOUND;
     KeReleaseSpinLock(&m_EventLock, OldIrql);
     return Status;
