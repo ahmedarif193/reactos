@@ -108,6 +108,7 @@ NTSTATUS
 HandleDataIntersection(
     IN PIO_STATUS_BLOCK IoStatus,
     IN PKSIDENTIFIER Request,
+    IN ULONG RequestLength,
     IN OUT PVOID  Data,
     IN ULONG DataLength,
     IN PSUBDEVICE_DESCRIPTOR Descriptor,
@@ -116,27 +117,78 @@ HandleDataIntersection(
     KSP_PIN * Pin = (KSP_PIN*)Request;
     PKSMULTIPLE_ITEM MultipleItem;
     PKSDATARANGE DataRange;
+    PKSDATARANGE MatchingDataRange;
     NTSTATUS Status = STATUS_NO_MATCH;
-    ULONG Index, Length;
+    ULONG Index, MatchingIndex, Length, RangeSize, Remaining;
+
+    IoStatus->Information = 0;
+    if (!Request || !Descriptor || !SubDevice ||
+        RequestLength < sizeof(KSP_PIN) + sizeof(KSMULTIPLE_ITEM) ||
+        Pin->PinId >= Descriptor->Factory.PinDescriptorCount)
+    {
+        IoStatus->Status = STATUS_INVALID_PARAMETER;
+        return STATUS_INVALID_PARAMETER;
+    }
 
     // Access parameters
     MultipleItem = (PKSMULTIPLE_ITEM)(Pin + 1);
     DataRange = (PKSDATARANGE)(MultipleItem + 1);
+    Remaining = RequestLength - sizeof(KSP_PIN) - sizeof(KSMULTIPLE_ITEM);
 
     for(Index = 0; Index < MultipleItem->Count; Index++)
     {
-        // Call miniport's proprietary handler
-        PC_ASSERT(Descriptor->Factory.KsPinDescriptor[Pin->PinId].DataRangesCount);
-        PC_ASSERT(Descriptor->Factory.KsPinDescriptor[Pin->PinId].DataRanges[0]);
-        Status = SubDevice->DataRangeIntersection(Pin->PinId, DataRange, (PKSDATARANGE)Descriptor->Factory.KsPinDescriptor[Pin->PinId].DataRanges[0],
-                                                  DataLength, Data, &Length);
-
-        if (Status == STATUS_SUCCESS)
+        if (Remaining < sizeof(KSDATARANGE) ||
+            DataRange->FormatSize < sizeof(KSDATARANGE) ||
+            DataRange->FormatSize > Remaining)
         {
-            IoStatus->Information = Length;
+            Status = STATUS_INVALID_PARAMETER;
             break;
         }
-        DataRange = (PKSDATARANGE)((PUCHAR)DataRange + DataRange->FormatSize);
+
+        for (MatchingIndex = 0;
+             MatchingIndex < Descriptor->Factory.KsPinDescriptor[Pin->PinId].DataRangesCount;
+             MatchingIndex++)
+        {
+            MatchingDataRange = (PKSDATARANGE)
+                Descriptor->Factory.KsPinDescriptor[Pin->PinId].DataRanges[MatchingIndex];
+            if (!MatchingDataRange)
+                continue;
+
+            Length = 0;
+            Status = SubDevice->DataRangeIntersection(Pin->PinId,
+                                                       DataRange,
+                                                       MatchingDataRange,
+                                                       DataLength,
+                                                       Data,
+                                                       &Length);
+            if (Status == STATUS_SUCCESS ||
+                Status == STATUS_BUFFER_OVERFLOW ||
+                Status == STATUS_BUFFER_TOO_SMALL)
+            {
+                IoStatus->Information = Length;
+                IoStatus->Status = Status;
+                return Status;
+            }
+        }
+
+        if (Index + 1 < MultipleItem->Count)
+        {
+            if (DataRange->FormatSize > MAXULONG - 7)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            RangeSize = (DataRange->FormatSize + 7) & ~7UL;
+            if (RangeSize > Remaining)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            Remaining -= RangeSize;
+            DataRange = (PKSDATARANGE)((PUCHAR)DataRange + RangeSize);
+        }
     }
 
     IoStatus->Status = Status;
@@ -286,7 +338,7 @@ PinPropertyHandler(
             break;
 
         case KSPROPERTY_PIN_DATAINTERSECTION:
-            Status = HandleDataIntersection(&Irp->IoStatus, Request, Data, IoStack->Parameters.DeviceIoControl.OutputBufferLength, Descriptor, SubDevice);
+            Status = HandleDataIntersection(&Irp->IoStatus, Request, IoStack->Parameters.DeviceIoControl.InputBufferLength, Data, IoStack->Parameters.DeviceIoControl.OutputBufferLength, Descriptor, SubDevice);
             break;
         case KSPROPERTY_PIN_PHYSICALCONNECTION:
             Status = HandlePhysicalConnection(&Irp->IoStatus, Request, IoStack->Parameters.DeviceIoControl.InputBufferLength, Data, IoStack->Parameters.DeviceIoControl.OutputBufferLength, Descriptor);
