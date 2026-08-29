@@ -132,13 +132,11 @@ WdmAudControlOpenMixer(
 
 NTSTATUS
 WdmAudControlCloseMixer(
-    IN  PDEVICE_OBJECT DeviceObject,
     IN  PIRP Irp,
-    IN  PWDMAUD_DEVICE_INFO DeviceInfo,
     IN  PWDMAUD_CLIENT ClientInfo,
     IN  ULONG Index);
 
-VOID
+BOOLEAN
 WdmAudCloseMixer(
     IN PWDMAUD_CLIENT ClientInfo,
     IN ULONG Index);
@@ -191,6 +189,11 @@ WdmAudWaveCapabilities(
     IN  PWDMAUD_DEVICE_INFO DeviceInfo,
     IN  PWDMAUD_CLIENT ClientInfo,
     IN PWDMAUD_DEVICE_EXTENSION DeviceExtension);
+
+NTSTATUS
+WdmAudGetPreferredWaveFormat(
+    IN PIRP Irp,
+    IN PWDMAUD_DEVICE_INFO DeviceInfo);
 
 NTSTATUS
 WdmAudMidiCapabilities(
