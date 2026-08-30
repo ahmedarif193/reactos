@@ -13,7 +13,11 @@ extern "C" {
 // Defining control guids, including this is required to happen before
 // including the tmh file (if the WppRecorder API is used)
 //
+#ifdef __REACTOS__
+#include <wpprecorder.h>
+#else
 #include <WppRecorder.h>
+#endif
 
 _IRQL_requires_same_ _IRQL_requires_(PASSIVE_LEVEL)
 void SDHC_LOG_INIT (
@@ -117,4 +121,3 @@ extern int _SdhcLogDebug (ULONG Level);
 #endif // __cplusplus
 
 #endif // _SDHCLOGGING_H_
-

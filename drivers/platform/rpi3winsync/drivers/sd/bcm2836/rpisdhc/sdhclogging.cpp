@@ -5,7 +5,11 @@
 #include "precomp.hpp"
 #pragma hdrstop
 
+#ifdef __REACTOS__
+#include "sdhclogging.h"
+#else
 #include "SdhcLogging.h"
+#endif
 #include "SdhcLogging.tmh"
 
 namespace { // static
@@ -136,4 +140,3 @@ int _SdhcLogDebug (
 
     return 1;
 } // _SdhcLogDebug (...)
-

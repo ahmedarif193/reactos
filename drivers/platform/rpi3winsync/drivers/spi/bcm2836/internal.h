@@ -40,7 +40,11 @@ Revision History:
 #include <wdf.h>
 #include <ntstrsafe.h>
 
-#include "SPBCx.h"
+#ifdef __REACTOS__
+#include <spbcx.h>
+#else
+#include <SPBCx.h>
+#endif
 #include "spitrace.h"
 
 
