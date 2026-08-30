@@ -921,22 +921,6 @@ NtUserQuerySendMessage(DWORD Unknown0)
     return 0;
 }
 
-BOOL APIENTRY NtUserAddClipboardFormatListener(
-    HWND hwnd
-)
-{
-    STUB;
-    return FALSE;
-}
-
-BOOL APIENTRY NtUserRemoveClipboardFormatListener(
-    HWND hwnd
-)
-{
-    STUB;
-    return FALSE;
-}
-
 BOOL APIENTRY NtUserGetUpdatedClipboardFormats(
     PUINT lpuiFormats,
     UINT cFormats,

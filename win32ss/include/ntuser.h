@@ -1878,6 +1878,11 @@ NtUserCloseClipboard(VOID);
 
 BOOL
 NTAPI
+NtUserAddClipboardFormatListener(
+    HWND hWnd);
+
+BOOL
+NTAPI
 NtUserCloseDesktop(
     HDESK hDesktop);
 
@@ -3211,6 +3216,11 @@ HWND
 NTAPI
 NtUserSetClipboardViewer(
     HWND hWndNewViewer);
+
+BOOL
+NTAPI
+NtUserRemoveClipboardFormatListener(
+    HWND hWnd);
 
 HPALETTE
 NTAPI
