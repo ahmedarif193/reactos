@@ -46,7 +46,11 @@ SOFTWARE.
 #ifdef WIN32
 
     #ifdef WIN32_KERN
+    #ifdef __REACTOS__
+    #include <ntifs.h>
+    #else
     #include <Ntifs.h>
+    #endif
     #include <wdf.h>
     #include <wdm.h>
     #else

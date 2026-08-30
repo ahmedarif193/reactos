@@ -47,7 +47,11 @@ Environment:
 // Defining control guids, including this is required to happen before
 // including the tmh file (if the WppRecorder API is used)
 //
+#ifdef __REACTOS__
+#include <wpprecorder.h>
+#else
 #include <WppRecorder.h>
+#endif
 
 
 #define WPP_CONTROL_GUIDS                                                                \

@@ -67,7 +67,9 @@ extern "C" {
 #include <wdf.h>
 #include <ntstrsafe.h>
 #include <wdm.h>
+#ifndef __REACTOS__
 #include <Ntstrsafe.h>
+#endif
 #else
 #include <Windows.h>
 #endif
