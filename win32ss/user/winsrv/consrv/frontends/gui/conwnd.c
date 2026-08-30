@@ -2203,6 +2203,7 @@ OnMove(PGUI_CONSOLE_DATA GuiData)
 static VOID
 OnDropFiles(PCONSRV_CONSOLE Console, HDROP hDrop)
 {
+    PTEXTMODE_SCREEN_BUFFER Buffer;
     LPWSTR pszPath;
     WCHAR szPath[MAX_PATH + 2];
 
@@ -2221,7 +2222,14 @@ OnDropFiles(PCONSRV_CONSOLE Console, HDROP hDrop)
         pszPath = &szPath[1];
     }
 
-    PasteText(Console, pszPath, wcslen(pszPath));
+    if (!Console->ActiveBuffer ||
+        GetType(Console->ActiveBuffer) != TEXTMODE_BUFFER)
+    {
+        return;
+    }
+
+    Buffer = (PTEXTMODE_SCREEN_BUFFER)Console->ActiveBuffer;
+    PasteText(Buffer, pszPath, wcslen(pszPath));
 }
 
 /*

@@ -120,7 +120,7 @@ GuiPaintGraphicsBuffer(PGRAPHICS_SCREEN_BUFFER Buffer,
 
 VOID
 PasteText(
-    IN PCONSRV_CONSOLE Console,
+    IN PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
     IN PWCHAR Buffer,
     IN SIZE_T cchSize);
 

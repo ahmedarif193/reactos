@@ -1006,6 +1006,14 @@ ConSrvTermSetCursorInfo(IN OUT PTERMINAL This,
                    PCONSOLE_SCREEN_BUFFER ScreenBuffer)
 {
     PFRONTEND FrontEnd = This->Context;
+
+    if (GetType(ScreenBuffer) == TEXTMODE_BUFFER &&
+        (((PTEXTMODE_SCREEN_BUFFER)ScreenBuffer)->VtState.PrivateModes &
+         VT_PRIVMODE_SYNCHRONIZED_OUTPUT))
+    {
+        return TRUE;
+    }
+
     return FrontEnd->Vtbl->SetCursorInfo(FrontEnd, ScreenBuffer);
 }
 
@@ -1016,6 +1024,14 @@ ConSrvTermSetScreenInfo(IN OUT PTERMINAL This,
                    SHORT OldCursorY)
 {
     PFRONTEND FrontEnd = This->Context;
+
+    if (GetType(ScreenBuffer) == TEXTMODE_BUFFER &&
+        (((PTEXTMODE_SCREEN_BUFFER)ScreenBuffer)->VtState.PrivateModes &
+         VT_PRIVMODE_SYNCHRONIZED_OUTPUT))
+    {
+        return TRUE;
+    }
+
     return FrontEnd->Vtbl->SetScreenInfo(FrontEnd,
                                          ScreenBuffer,
                                          OldCursorX,

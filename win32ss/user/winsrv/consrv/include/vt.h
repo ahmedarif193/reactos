@@ -2,7 +2,7 @@
  * COPYRIGHT:       See COPYING in the top level directory
  * PROJECT:         ReactOS Console Server DLL
  * FILE:            win32ss/user/winsrv/consrv/include/vt.h
- * PURPOSE:         Virtual Terminal processing stubs
+ * PURPOSE:         Virtual Terminal processing
  */
 
 #pragma once
@@ -23,6 +23,12 @@
 #define VT_PRIVMODE_MOUSE_X10                0x00000400
 #define VT_PRIVMODE_MOUSE_ANY_EVENT          0x00000800
 #define VT_PRIVMODE_DELAYED_EOL_WRAP         0x00001000
+#define VT_PRIVMODE_SYNCHRONIZED_OUTPUT       0x00002000
+#define VT_PRIVMODE_MOUSE_NORMAL_TRACKING     0x00004000
+
+#define VT_PRIVMODE_MOUSE_TRACKING_MASK \
+    (VT_PRIVMODE_MOUSE_X10 | VT_PRIVMODE_MOUSE_NORMAL_TRACKING | \
+     VT_PRIVMODE_MOUSE_BUTTON_TRACKING | VT_PRIVMODE_MOUSE_ANY_EVENT)
 
 VOID
 NTAPI
