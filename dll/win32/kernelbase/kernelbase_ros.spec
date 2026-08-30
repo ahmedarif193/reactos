@@ -828,12 +828,12 @@
 @ stdcall ImpersonateNamedPipeClient(long)
 @ stdcall ImpersonateSelf(long)
 # #@ stub IncrementPackageStatusVersion
-#@ stdcall InitOnceBeginInitialize(ptr long ptr ptr)
-#@ stdcall InitOnceComplete(ptr long ptr)
-#@ stdcall InitOnceExecuteOnce(ptr ptr ptr ptr)
+@ stdcall InitOnceBeginInitialize(ptr long ptr ptr)
+@ stdcall InitOnceComplete(ptr long ptr)
+@ stdcall InitOnceExecuteOnce(ptr ptr ptr ptr)
 #@ stdcall InitOnceInitialize(ptr) ntdll.RtlRunOnceInitialize
 @ stdcall InitializeAcl(ptr long long)
-#@ stdcall InitializeConditionVariable(ptr) ntdll.RtlInitializeConditionVariable
+@ stdcall InitializeConditionVariable(ptr) ntdll.RtlInitializeConditionVariable
 #@ stdcall InitializeContext(ptr long ptr ptr)
 #@ stdcall InitializeContext2(ptr long ptr ptr int64)
 #@ stdcall InitializeCriticalSection(ptr) ntdll.RtlInitializeCriticalSection
@@ -1555,10 +1555,10 @@
 # #@ stub SharedLocalIsEnabled
 #@ stdcall SignalObjectAndWait(long long long long)
 #@ stdcall SizeofResource(long long)
-#@ stdcall Sleep(long)
-#@ stdcall SleepConditionVariableCS(ptr ptr long)
-#@ stdcall SleepConditionVariableSRW(ptr ptr long long)
-#@ stdcall SleepEx(long long)
+@ stdcall Sleep(long)
+@ stdcall SleepConditionVariableCS(ptr ptr long)
+@ stdcall SleepConditionVariableSRW(ptr ptr long long)
+@ stdcall SleepEx(long long)
 #@ stub SpecialMBToWC
 @ stdcall StartThreadpoolIo(ptr) ntdll.TpStartAsyncIoOperation
 # #@ stub StmAlignSize
@@ -1744,7 +1744,7 @@
 @ stdcall WaitForThreadpoolWorkCallbacks(ptr long) ntdll.TpWaitForWork
 # #@ stub WaitForUserPolicyForegroundProcessingInternal
 #@ stdcall WaitNamedPipeW(wstr long)
-@ stdcall WaitOnAddress(ptr ptr long long) kernel32.WaitOnAddress
+@ stdcall WaitOnAddress(ptr ptr long long)
 @ stdcall WakeAllConditionVariable(ptr) ntdll.RtlWakeAllConditionVariable
 @ stdcall WakeByAddressAll(ptr) ntdll.RtlWakeAddressAll
 @ stdcall WakeByAddressSingle(ptr) ntdll.RtlWakeAddressSingle
