@@ -192,7 +192,11 @@ PspTerminateJobObject(PEJOB Job,
 
     while ((Process = PsGetNextProcess(Process)) != NULL)
     {
-        if (Process->Job != Job) continue;
+        if ((Process->Job != Job) ||
+            (Process->Flags & PSF_PROCESS_DELETE_BIT))
+        {
+            continue;
+        }
 
         TerminateStatus = PsTerminateProcess(Process, ExitStatus);
         if (!NT_SUCCESS(TerminateStatus) &&
