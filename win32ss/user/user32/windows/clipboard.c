@@ -373,24 +373,22 @@ SetClipboardData(UINT uFormat, HANDLE hMem)
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 BOOL
 WINAPI
 AddClipboardFormatListener(HWND hwnd)
 {
-    UNIMPLEMENTED;
-    return FALSE;
+    return NtUserAddClipboardFormatListener(hwnd);
 }
 /*
- * @unimplemented
+ * @implemented
  */
 BOOL
 WINAPI
 RemoveClipboardFormatListener(HWND hwnd)
 {
-    UNIMPLEMENTED;
-    return FALSE;
+    return NtUserRemoveClipboardFormatListener(hwnd);
 }
 
 /*
