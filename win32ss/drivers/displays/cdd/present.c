@@ -95,17 +95,31 @@ RcddPresentEx(
    if (ppdev->ScreenPtr == NULL)
       return;
 
-   Dirty.left   = 0;
-   Dirty.top    = 0;
-   Dirty.right  = ppdev->ScreenWidth;
-   Dirty.bottom = ppdev->ScreenHeight;
-
    if (prcl != NULL)
    {
+      Dirty.left   = 0;
+      Dirty.top    = 0;
+      Dirty.right  = ppdev->ScreenWidth;
+      Dirty.bottom = ppdev->ScreenHeight;
       Dirty.left   = max(Dirty.left, prcl->left);
       Dirty.top    = max(Dirty.top, prcl->top);
       Dirty.right  = min(Dirty.right, prcl->right);
       Dirty.bottom = min(Dirty.bottom, prcl->bottom);
+   }
+   else if (Flags == 0)
+   {
+      /* A rectangle-less ordinary present means the whole surface. Control
+       * notifications such as RELEASE carry no new damage; treating those as
+       * full-screen invalidations turns every cursor-safety transaction into
+       * a complete framebuffer copy. */
+      Dirty.left   = 0;
+      Dirty.top    = 0;
+      Dirty.right  = ppdev->ScreenWidth;
+      Dirty.bottom = ppdev->ScreenHeight;
+   }
+   else
+   {
+      Dirty.left = Dirty.top = Dirty.right = Dirty.bottom = 0;
    }
 
    if (Dirty.left < Dirty.right && Dirty.top < Dirty.bottom)
