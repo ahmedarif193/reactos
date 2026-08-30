@@ -480,6 +480,60 @@ IopMarkBootPartition(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 }
 
 CODE_SEG("INIT")
+static
+NTSTATUS
+IopWaitForBootDevice(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    PCONFIGURATION_INFORMATION ConfigurationInformation;
+    const ULONG AttemptCount = 50;
+    LARGE_INTEGER Delay;
+    BOOLEAN CdRomBoot;
+    ULONG Attempt;
+    NTSTATUS Status;
+
+    if (IoRemoteBootClient ||
+        !_strnicmp(LoaderBlock->ArcBootDeviceName, "ramdisk(0)", 10) ||
+        strstr(LoaderBlock->ArcBootDeviceName, "net("))
+    {
+        return STATUS_SUCCESS;
+    }
+
+    ConfigurationInformation = IoGetConfigurationInformation();
+    CdRomBoot = (strstr(LoaderBlock->ArcBootDeviceName, "cdrom(") != NULL);
+    Delay.QuadPart = -2000000LL; /* 200 ms */
+
+    /*
+     * A synchronous device-tree walk does not cover children reported later
+     * by an asynchronous bus driver. In particular, USB hub debounce can
+     * complete after the action queue has drained. Wait for the required
+     * storage class to appear, draining newly queued PnP work each time.
+     */
+    for (Attempt = 0; Attempt < AttemptCount; Attempt++)
+    {
+        if ((CdRomBoot && ConfigurationInformation->CdRomCount) ||
+            (!CdRomBoot && ConfigurationInformation->DiskCount))
+        {
+            return PiPerformSyncDeviceAction(IopRootDeviceNode->PhysicalDeviceObject,
+                                             PiActionEnumDeviceTree);
+        }
+
+        Status = PiPerformSyncDeviceAction(IopRootDeviceNode->PhysicalDeviceObject,
+                                           PiActionEnumDeviceTree);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+
+        if (Attempt + 1 < AttemptCount)
+        {
+            KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+        }
+    }
+
+    return STATUS_IO_TIMEOUT;
+}
+
+CODE_SEG("INIT")
 BOOLEAN
 NTAPI
 IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
@@ -592,6 +646,16 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Boot PnP device-tree enumeration failed: %lx\n", Status);
+        return FALSE;
+    }
+
+    Status = IopWaitForBootDevice(LoaderBlock);
+    /* On timeout, keep the ARC resolver's INACCESSIBLE_BOOT_DEVICE path. */
+    if (!NT_SUCCESS(Status) && Status != STATUS_IO_TIMEOUT)
+    {
+        DPRINT1("Boot-device PnP processing failed for %s: %lx\n",
+                LoaderBlock->ArcBootDeviceName,
+                Status);
         return FALSE;
     }
 
