@@ -20,6 +20,7 @@ extern void func_FormatMessage(void);
 extern void func_GetComputerNameEx(void);
 extern void func_GetCPInfo(void);
 extern void func_GetCurrentDirectory(void);
+extern void func_GetCurrentThreadStackLimits(void);
 extern void func_GetDriveType(void);
 extern void func_GetEnvironmentVariable(void);
 extern void func_GetFinalPathNameByHandle(void);
@@ -80,6 +81,7 @@ const struct test winetest_testlist[] =
     { "GetComputerNameEx",           func_GetComputerNameEx },
     { "GetCPInfo",                   func_GetCPInfo },
     { "GetCurrentDirectory",         func_GetCurrentDirectory },
+    { "GetCurrentThreadStackLimits", func_GetCurrentThreadStackLimits },
     { "GetDriveType",                func_GetDriveType },
     { "GetEnvironmentVariable",      func_GetEnvironmentVariable },
     { "GetFinalPathNameByHandle",    func_GetFinalPathNameByHandle },
