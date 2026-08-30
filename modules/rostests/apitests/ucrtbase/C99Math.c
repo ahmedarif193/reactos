@@ -152,6 +152,7 @@ START_TEST(C99Math)
     static const char *const CbrtNames[] = {"cbrt", "cbrtl"};
     static const char *const ErfNames[] = {"erf", "erfl"};
     static const char *const ErfcNames[] = {"erfc", "erfcl"};
+    static const char *const Exp2Names[] = {"exp2", "exp2l"};
     static const char *const Expm1Names[] = {"expm1", "expm1l"};
     static const char *const Log1pNames[] = {"log1p", "log1pl"};
     PBINARY_DOUBLE CopySign;
@@ -175,6 +176,8 @@ START_TEST(C99Math)
     CheckFloat(Module, "erff", 1.0f, 0.842700779f, 2e-7f);
     CheckDoubleAliases(Module, ErfcNames, _countof(ErfcNames), 1.0, 0.15729920705028513, 2e-15);
     CheckFloat(Module, "erfcf", 1.0f, 0.157299206f, 2e-7f);
+    CheckDoubleAliases(Module, Exp2Names, _countof(Exp2Names), -15.0, 3.0517578125e-5, 0.0);
+    CheckFloat(Module, "exp2f", -15.0f, 3.0517578125e-5f, 0.0f);
     CheckDoubleAliases(Module, Expm1Names, _countof(Expm1Names), 1e-8, 1.0000000050000001e-8, 2e-24);
     CheckFloat(Module, "expm1f", 1e-4f, 1.00004996e-4f, 2e-11f);
     CheckDoubleAliases(Module, Log1pNames, _countof(Log1pNames), 1e-16, 1e-16, 1e-31);
