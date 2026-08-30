@@ -11,7 +11,7 @@
 #define NDEBUG
 #include <debug.h>
 
-class CPortWaveRT : public CUnknownImpl<IPortWaveRT, IPortEvents, ISubdevice>
+class CPortWaveRT : public CUnknownImpl<IPortWaveRT, IPortEvents, ISubdevice, IPortClsPower, IPortClsEtwHelper>
 {
 public:
     STDMETHODIMP QueryInterface( REFIID InterfaceId, PVOID* Interface);
@@ -19,6 +19,20 @@ public:
     IMP_IPortWaveRT;
     IMP_ISubdevice;
     IMP_IPortEvents;
+    STDMETHODIMP_(NTSTATUS) RegisterAdapterPowerManagement(
+        IN PUNKNOWN Unknown,
+        IN PDEVICE_OBJECT DeviceObject);
+    STDMETHODIMP_(NTSTATUS) UnregisterAdapterPowerManagement(
+        IN PDEVICE_OBJECT DeviceObject);
+    STDMETHODIMP_(NTSTATUS) SetIdlePowerManagement(
+        IN PDEVICE_OBJECT DeviceObject,
+        IN BOOLEAN Enabled);
+    STDMETHODIMP_(NTSTATUS) MiniportWriteEtwEvent(
+        IN EPcMiniportEngineEvent MiniportEventType,
+        IN ULONGLONG Data1,
+        IN ULONGLONG Data2,
+        IN ULONGLONG Data3,
+        IN ULONGLONG Data4);
     CPortWaveRT(IUnknown *OuterUnknown) {}
     virtual ~CPortWaveRT() {}
 
@@ -152,6 +166,18 @@ CPortWaveRT::QueryInterface(
     {
         return NewIUnregisterPhysicalConnection((PUNREGISTERPHYSICALCONNECTION*)Output);
     }
+    else if (IsEqualGUIDAligned(refiid, IID_IPortClsPower))
+    {
+        *Output = PVOID(PPORTCLSPOWER(this));
+        PUNKNOWN(*Output)->AddRef();
+        return STATUS_SUCCESS;
+    }
+    else if (IsEqualGUIDAligned(refiid, IID_IPortClsEtwHelper))
+    {
+        *Output = PVOID(PPORTCLSETWHELPER(this));
+        PUNKNOWN(*Output)->AddRef();
+        return STATUS_SUCCESS;
+    }
 
     if (RtlStringFromGUID(refiid, &GuidString) == STATUS_SUCCESS)
     {
@@ -160,6 +186,57 @@ CPortWaveRT::QueryInterface(
     }
 
     return STATUS_UNSUCCESSFUL;
+}
+
+NTSTATUS
+NTAPI
+CPortWaveRT::RegisterAdapterPowerManagement(
+    IN PUNKNOWN Unknown,
+    IN PDEVICE_OBJECT DeviceObject)
+{
+    return PcRegisterAdapterPowerManagement(Unknown, DeviceObject);
+}
+
+NTSTATUS
+NTAPI
+CPortWaveRT::UnregisterAdapterPowerManagement(
+    IN PDEVICE_OBJECT DeviceObject)
+{
+    return PcUnregisterAdapterPowerManagement(DeviceObject);
+}
+
+NTSTATUS
+NTAPI
+CPortWaveRT::SetIdlePowerManagement(
+    IN PDEVICE_OBJECT DeviceObject,
+    IN BOOLEAN Enabled)
+{
+    UNREFERENCED_PARAMETER(Enabled);
+
+    if (!DeviceObject || DeviceObject != m_pDeviceObject)
+        return STATUS_INVALID_PARAMETER;
+
+    /* PortCls does not initiate runtime-idle power transitions yet. */
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+CPortWaveRT::MiniportWriteEtwEvent(
+    IN EPcMiniportEngineEvent MiniportEventType,
+    IN ULONGLONG Data1,
+    IN ULONGLONG Data2,
+    IN ULONGLONG Data3,
+    IN ULONGLONG Data4)
+{
+    UNREFERENCED_PARAMETER(MiniportEventType);
+    UNREFERENCED_PARAMETER(Data1);
+    UNREFERENCED_PARAMETER(Data2);
+    UNREFERENCED_PARAMETER(Data3);
+    UNREFERENCED_PARAMETER(Data4);
+
+    /* ReactOS does not currently publish the PortCls miniport ETW provider. */
+    return STATUS_SUCCESS;
 }
 //---------------------------------------------------------------
 // IPort interface functions

@@ -13,6 +13,27 @@
 
 NTSTATUS
 NTAPI
+PcGetPhysicalDeviceObject(
+    IN PDEVICE_OBJECT DeviceObject,
+    OUT PDEVICE_OBJECT *PhysicalDeviceObject)
+{
+    PPCLASS_DEVICE_EXTENSION DeviceExtension;
+
+    PC_ASSERT_IRQL_EQUAL(PASSIVE_LEVEL);
+
+    if (!DeviceObject || !DeviceObject->DeviceExtension || !PhysicalDeviceObject)
+        return STATUS_INVALID_PARAMETER;
+
+    DeviceExtension = (PPCLASS_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
+    if (!DeviceExtension->PhysicalDeviceObject)
+        return STATUS_INVALID_DEVICE_STATE;
+
+    *PhysicalDeviceObject = DeviceExtension->PhysicalDeviceObject;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
 PcGetDeviceProperty(
     IN  PVOID DeviceObject,
     IN  DEVICE_REGISTRY_PROPERTY DeviceProperty,
