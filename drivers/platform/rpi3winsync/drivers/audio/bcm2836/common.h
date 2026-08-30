@@ -252,6 +252,12 @@ DECLARE_INTERFACE_(IAdapterCommon, IUnknown)
         THIS_
         PPORTCLSETWHELPER PortClsEtwHelper
     ) PURE;
+
+#ifdef __REACTOS__
+#define RPI3_REACTOS_PURE PURE
+#else
+#define RPI3_REACTOS_PURE
+#endif
     
     STDMETHOD_(NTSTATUS,        InstallSubdevice)
     ( 
@@ -267,13 +273,13 @@ DECLARE_INTERFACE_(IAdapterCommon, IUnknown)
         _Out_opt_       PUNKNOWN                              * OutPortInterface,
         _Out_opt_       PUNKNOWN                              * OutPortUnknown,
         _Out_opt_       PUNKNOWN                              * OutMiniportUnknown
-    );    
+    ) RPI3_REACTOS_PURE;
 
     STDMETHOD_(NTSTATUS,        UnregisterSubdevice)
     (
         THIS_
         _In_opt_   PUNKNOWN     UnknownPort
-    );
+    ) RPI3_REACTOS_PURE;
 
     STDMETHOD_(NTSTATUS,        ConnectTopologies)
     (
@@ -282,7 +288,7 @@ DECLARE_INTERFACE_(IAdapterCommon, IUnknown)
         _In_ PUNKNOWN                   UnknownWave,
         _In_ PHYSICALCONNECTIONTABLE*   PhysicalConnections,
         _In_ ULONG                      PhysicalConnectionCount
-    );
+    ) RPI3_REACTOS_PURE;
 
     STDMETHOD_(NTSTATUS,        DisconnectTopologies)
     (
@@ -291,7 +297,7 @@ DECLARE_INTERFACE_(IAdapterCommon, IUnknown)
         _In_ PUNKNOWN                   UnknownWave,
         _In_ PHYSICALCONNECTIONTABLE*   PhysicalConnections,
         _In_ ULONG                      PhysicalConnectionCount
-    );
+    ) RPI3_REACTOS_PURE;
 
     STDMETHOD_(NTSTATUS,        InstallEndpointFilters)
     (
@@ -301,7 +307,7 @@ DECLARE_INTERFACE_(IAdapterCommon, IUnknown)
         _In_opt_    PVOID               DeviceContext,
         _Out_opt_   PUNKNOWN *          UnknownTopology,
         _Out_opt_   PUNKNOWN *          UnknownWave
-    );
+    ) RPI3_REACTOS_PURE;
 
     STDMETHOD_(NTSTATUS,        RemoveEndpointFilters)
     (
@@ -309,7 +315,7 @@ DECLARE_INTERFACE_(IAdapterCommon, IUnknown)
         _In_        PENDPOINT_MINIPAIR  MiniportPair,
         _In_opt_    PUNKNOWN            UnknownTopology,
         _In_opt_    PUNKNOWN            UnknownWave
-    );
+    ) RPI3_REACTOS_PURE;
 
     STDMETHOD_(NTSTATUS,        GetFilters)
     (
@@ -319,15 +325,17 @@ DECLARE_INTERFACE_(IAdapterCommon, IUnknown)
         _Out_opt_   PUNKNOWN            *UnknownTopologyMiniport,
         _Out_opt_   PUNKNOWN            *UnknownWavePort,
         _Out_opt_   PUNKNOWN            *UnknownWaveMiniport
-    );
+    ) RPI3_REACTOS_PURE;
 
     STDMETHOD_(NTSTATUS,        SetIdlePowerManagement)
     (
         THIS_
         _In_        PENDPOINT_MINIPAIR  MiniportPair,
         _In_        BOOL                Enable
-    );
+    ) RPI3_REACTOS_PURE;
 };
+
+#undef RPI3_REACTOS_PURE
 
 typedef IAdapterCommon *PADAPTERCOMMON;
 
