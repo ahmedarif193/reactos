@@ -658,7 +658,7 @@
 @ stdcall GetThreadContext(long ptr)
 @ stdcall -version=0xA00+ GetThreadDescription(ptr ptr)
 @ stdcall -version=0x602+ GetThreadInformation(long long ptr long) kernelbase.GetThreadInformation
-@ stdcall -stub -version=0x600+ GetThreadErrorMode()
+@ stdcall -version=0x600+ GetThreadErrorMode() kernelbase.GetThreadErrorMode
 @ stdcall -version=0x601+ GetThreadGroupAffinity(long ptr)
 @ stdcall GetThreadIOPendingFlag(long ptr)
 @ stdcall GetThreadId(ptr)
@@ -1168,7 +1168,7 @@
 @ stdcall -version=0x601+ SetThreadGroupAffinity(long ptr ptr)
 @ stdcall SetThreadContext(long ptr)
 @ stdcall -version=0xA00+ SetThreadDescription(ptr wstr)
-@ stdcall -stub -version=0x600+ SetThreadErrorMode(long ptr)
+@ stdcall -version=0x600+ SetThreadErrorMode(long ptr) kernelbase.SetThreadErrorMode
 @ stdcall SetThreadExecutionState(long)
 @ stdcall SetThreadIdealProcessor(long long)
 @ stdcall -version=0x602+ SetThreadInformation(long long ptr long) kernelbase.SetThreadInformation
