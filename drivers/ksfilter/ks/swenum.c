@@ -1187,8 +1187,7 @@ KspBusWorkerRoutine(
     PBUS_ENUM_DEVICE_EXTENSION BusDeviceExtension;
     PBUS_DEVICE_ENTRY DeviceEntry;
     PLIST_ENTRY Entry;
-    LARGE_INTEGER Time, Diff;
-    BOOLEAN DoInvalidate = FALSE;
+    LARGE_INTEGER Time;
     KIRQL OldLevel;
 
     /* get device extension */
@@ -1212,49 +1211,16 @@ KspBusWorkerRoutine(
 
         //DPRINT1("DeviceEntry %p PDO %p State %x\n", DeviceEntry, DeviceEntry->PDO, DeviceEntry->DeviceState);
 
-        if (DeviceEntry->PDO)
+        if (DeviceEntry->PDO && DeviceEntry->DeviceState == Started)
         {
-            if (DeviceEntry->DeviceState == NotStarted)
-            {
-                Diff.QuadPart = (Time.QuadPart - DeviceEntry->TimeCreated.QuadPart) * KeQueryTimeIncrement();
+            /* release spin lock */
+            KeReleaseSpinLock(&BusDeviceExtension->Lock, OldLevel);
 
-                /* wait for 15 sec */
-                if (Diff.QuadPart > Int32x32To64(15000, 10000))
-                {
-                     /* release spin lock */
-                     KeReleaseSpinLock(&BusDeviceExtension->Lock, OldLevel);
+            /* found pending irps */
+            KspCompletePendingIrps(DeviceEntry, STATUS_REPARSE);
 
-                     DPRINT1("DeviceID %S Instance %S TimeCreated %I64u Now %I64u Diff %I64u hung\n",
-                        DeviceEntry->DeviceName,
-                        DeviceEntry->Instance,
-                        DeviceEntry->TimeCreated.QuadPart * KeQueryTimeIncrement(),
-                        Time.QuadPart * KeQueryTimeIncrement(),
-                        Diff.QuadPart);
-
-                     /* deactivate interfaces */
-                     //KspEnableBusDeviceInterface(DeviceEntry, FALSE);
-
-                     /* re-acquire lock */
-                     KeAcquireSpinLock(&BusDeviceExtension->Lock, &OldLevel);
-
-                     /* pending remove device object */
-                     DeviceEntry->DeviceState = StopPending;
-
-                     /* perform invalidation */
-                     DoInvalidate = TRUE;
-                }
-            }
-            else if (DeviceEntry->DeviceState == Started)
-            {
-                /* release spin lock */
-                KeReleaseSpinLock(&BusDeviceExtension->Lock, OldLevel);
-
-                /* found pending irps */
-                KspCompletePendingIrps(DeviceEntry, STATUS_REPARSE);
-
-                /* re-acquire lock */
-                KeAcquireSpinLock(&BusDeviceExtension->Lock, &OldLevel);
-            }
+            /* re-acquire lock */
+            KeAcquireSpinLock(&BusDeviceExtension->Lock, &OldLevel);
         }
 
 
@@ -1264,12 +1230,6 @@ KspBusWorkerRoutine(
 
    /* release lock */
     KeReleaseSpinLock(&BusDeviceExtension->Lock, OldLevel);
-
-    if (DoInvalidate)
-    {
-        /* invalidate device relations */
-        IoInvalidateDeviceRelations(BusDeviceExtension->PhysicalDeviceObject, BusRelations);
-    }
 
     Time.QuadPart = Int32x32To64(5000, -10000);
     KeSetTimer(&BusDeviceExtension->Timer, Time, &BusDeviceExtension->Dpc);
