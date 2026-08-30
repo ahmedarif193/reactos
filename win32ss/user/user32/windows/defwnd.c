@@ -83,6 +83,73 @@ DefSetText(HWND hWnd, PCWSTR String, BOOL Ansi)
   return Ret;
 }
 
+static LRESULT
+DefWndHandleWindowPosChanging(HWND hWnd, WINDOWPOS *Position)
+{
+    POINT MaxTrack, MinTrack;
+    LONG Style = GetWindowLongW(hWnd, GWL_STYLE);
+
+    if (!Position || (Position->flags & SWP_NOSIZE))
+        return 0;
+
+    if ((Style & WS_THICKFRAME) || !(Style & (WS_POPUP | WS_CHILD)))
+    {
+        WinPosGetMinMaxInfo(hWnd, NULL, NULL, &MinTrack, &MaxTrack);
+        Position->cx = min(Position->cx, MaxTrack.x);
+        Position->cy = min(Position->cy, MaxTrack.y);
+        if (!(Style & WS_MINIMIZE))
+        {
+            Position->cx = max(Position->cx, MinTrack.x);
+            Position->cy = max(Position->cy, MinTrack.y);
+        }
+    }
+    else
+    {
+        Position->cx = max(Position->cx, 0);
+        Position->cy = max(Position->cy, 0);
+    }
+
+    return 0;
+}
+
+static LRESULT
+DefWndHandleWindowPosChanged(HWND hWnd, const WINDOWPOS *Position)
+{
+    RECT Rect;
+    LONG Style;
+
+    if (!Position || !GetClientRect(hWnd, &Rect))
+        return 0;
+
+    Style = GetWindowLongW(hWnd, GWL_STYLE);
+    MapWindowPoints(hWnd,
+                    (Style & WS_CHILD) ? GetParent(hWnd) : NULL,
+                    (LPPOINT)&Rect,
+                    2);
+
+    if (!(Position->flags & SWP_NOCLIENTMOVE))
+        SendMessageW(hWnd, WM_MOVE, 0, MAKELONG(Rect.left, Rect.top));
+
+    if (!(Position->flags & SWP_NOCLIENTSIZE) ||
+        (Position->flags & SWP_STATECHANGED))
+    {
+        if (Style & WS_MINIMIZE)
+        {
+            SendMessageW(hWnd, WM_SIZE, SIZE_MINIMIZED, 0);
+        }
+        else
+        {
+            WPARAM State = (Style & WS_MAXIMIZE) ? SIZE_MAXIMIZED : SIZE_RESTORED;
+            SendMessageW(hWnd,
+                         WM_SIZE,
+                         State,
+                         MAKELONG(Rect.right - Rect.left, Rect.bottom - Rect.top));
+        }
+    }
+
+    return 0;
+}
+
 HWND FASTCALL
 IntFindChildWindowToOwner(HWND hRoot, HWND hOwner)
 {
@@ -884,6 +951,12 @@ User32DefWindowProc(HWND hWnd,
             return lParam;
         }
 
+        case WM_WINDOWPOSCHANGING:
+            return DefWndHandleWindowPosChanging(hWnd, (WINDOWPOS *)lParam);
+
+        case WM_WINDOWPOSCHANGED:
+            return DefWndHandleWindowPosChanged(hWnd, (const WINDOWPOS *)lParam);
+
 /* Move to Win32k !*/
         case WM_SHOWWINDOW:
             if (!lParam) break; // Call when it is necessary.
@@ -917,8 +990,6 @@ User32DefWindowProc(HWND hWnd,
         case WM_CLIENTSHUTDOWN:
         case WM_GETHOTKEY:
         case WM_SETHOTKEY:
-        case WM_WINDOWPOSCHANGING:
-        case WM_WINDOWPOSCHANGED:
         case WM_APPCOMMAND:
         case WM_SETCURSOR:
         case WM_POPUPSYSTEMMENU:
