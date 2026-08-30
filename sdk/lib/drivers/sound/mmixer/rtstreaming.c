@@ -103,3 +103,38 @@ MMixerUnregisterRTStreamingEvent(
     Status = MixerContext->Control(PinHandle, IOCTL_KS_PROPERTY, &Property, sizeof(Property), NULL, 0, &Length);
     return Status;
 }
+
+MIXER_STATUS
+MMixerSetRTStreamingWritePacket(
+    IN PMIXER_CONTEXT MixerContext,
+    IN HANDLE PinHandle,
+    IN ULONG PacketNumber,
+    IN DWORD Flags,
+    IN ULONG EosPacketLength)
+{
+    KSPROPERTY Property;
+    KSRTAUDIO_SETWRITEPACKET_INFO Packet;
+    MIXER_STATUS Status;
+    ULONG Length;
+
+    Status = MMixerVerifyContext(MixerContext);
+    if (Status != MM_STATUS_SUCCESS)
+        return Status;
+
+    Property.Set = KSPROPSETID_RTAudio;
+    Property.Id = KSPROPERTY_RTAUDIO_SETWRITEPACKET;
+    Property.Flags = KSPROPERTY_TYPE_SET;
+
+    Packet.PacketNumber = PacketNumber;
+    Packet.Flags = Flags;
+    Packet.EosPacketLength = EosPacketLength;
+
+    return MixerContext->Control(
+        PinHandle,
+        IOCTL_KS_PROPERTY,
+        &Property,
+        sizeof(Property),
+        &Packet,
+        sizeof(Packet),
+        &Length);
+}
