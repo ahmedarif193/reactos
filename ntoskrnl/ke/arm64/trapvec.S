@@ -220,13 +220,14 @@ KiArm64InterruptDispatchOnIsrStack:
     ldr x2, [sp, #ARM64_EARLY_STATE_TRAP_PTR]
     ldr x3, [sp, #ARM64_EARLY_STATE_EXC_PTR]
 
-    /* The embedded frames become invalid as soon as this stack is released. */
+    /*
+     * Keep the embedded frames allocated until KiTrapReturn has consumed
+     * them.  KiTrapReturn restores IRQL through a C/HAL call before loading
+     * the saved GPR and SIMD state, so releasing this block here would leave
+     * it reading from active call-stack storage.
+     */
     msr daifset, #0xF
     isb
-
-    add sp, sp, #ARM64_EARLY_STATE_SIZE
-    ldp x29, x30, [sp], #16
-    add sp, sp, #ARM64_SYNC_ENTRY_FRAME_SIZE
 
     mov x0, x2
     mov x1, x3
