@@ -699,6 +699,9 @@ Rpi5Vc4DdiStartDevice(
         DPRINT1("RPI5VC4: firmware mailbox unavailable\n");
     }
 
+    if (DeviceExtension->Headless)
+        Rpi5CrtcColdStartHeadless(DeviceExtension);
+
     /* Bring up the V3D 3D engine (2D-only when unavailable). */
     if (!Rpi5V3dInitialize(DeviceExtension))
     {

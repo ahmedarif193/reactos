@@ -4,8 +4,8 @@
  * PURPOSE:     BCM2712 CRTC / PixelValve (timing generator) access.
  * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
  *
- * Inspired by the only available driver out there, which is the Linux
- * equivalent (drm/vc4).
+ * BCM2712 register definitions follow Linux drm/vc4 at
+ * 95d9c0c7f20ab1b49ac88773a6138b16d2b8f061.
  *
  * The PixelValve (PV) is the per-output timing generator that drives an HDMI
  * controller from an HVS output FIFO: it produces the HSYNC/VSYNC and active /
@@ -24,6 +24,21 @@
 #define RPI5_PV1_PHYS                   0x107C411000ULL
 #define RPI5_PV_LENGTH                  0x100
 
+#define RPI5_DVP_PHYS                   0x107C700000ULL
+#define RPI5_DVP_LENGTH                 0x10
+#define RPI5_DVP_SW_INIT                0x04
+#define RPI5_DVP_MISC_CONFIG            0x08
+
+/* BCM2712 HDMI0 register blocks. */
+#define RPI5_HDMI0_CORE_PHYS            0x107C701400ULL
+#define RPI5_HDMI0_CORE_LENGTH          0x300
+#define RPI5_HDMI0_DVP_PHYS             0x107C701000ULL
+#define RPI5_HDMI0_DVP_LENGTH           0x200
+#define RPI5_HDMI0_CSC_PHYS             0x107C700100ULL
+#define RPI5_HDMI0_CSC_LENGTH           0x80
+#define RPI5_HDMI_HD_PHYS               0x107C720000ULL
+#define RPI5_HDMI_HD_LENGTH             0x100
+
 /* PixelValve register offsets. */
 #define RPI5_PV_CONTROL                 0x00
 #define RPI5_PV_V_CONTROL               0x04
@@ -33,14 +48,23 @@
 #define RPI5_PV_VERTA                   0x14    /* VBP:31..16  VSYNC:15..0  */
 #define RPI5_PV_VERTB                   0x18    /* VFP:31..16  VACTIVE:15..0 */
 #define RPI5_PV_HACT_ACT                0x30
+#define RPI5_PV_MUX_CFG                 0x34
+#define RPI5_PV_PIPE_INIT_CTRL          0x94
 #define RPI5_PV_INTEN                   0x24
 #define RPI5_PV_INTSTAT                 0x28
 #define RPI5_PV_STAT                    0x2c
 
 /* PV_CONTROL / PV_V_CONTROL bits we care about. */
 #define RPI5_PV_CONTROL_EN              (1u << 0)
+#define RPI5_PV_CONTROL_FIFO_CLR        (1u << 1)
+#define RPI5_PV_CONTROL_WAIT_HSTART     (1u << 12)
+#define RPI5_PV_CONTROL_TRIGGER_UFLOW   (1u << 13)
+#define RPI5_PV_CONTROL_CLR_AT_START    (1u << 14)
+#define RPI5_PV_CONTROL_FIFO_SHIFT      15
 #define RPI5_PV_VCONTROL_VIDEN          (1u << 0)
+#define RPI5_PV_VCONTROL_CONTINUOUS     (1u << 1)
 #define RPI5_PV_VCONTROL_INTERLACE      (1u << 4)
+#define RPI5_PV_VCONTROL_ODD_TIMING     (1u << 29)
 #define RPI5_PV_INT_VFP_START           (1u << 7)
 
 #define RPI5_PV_VBLANK_POLL_US          50
@@ -58,6 +82,10 @@
 BOOLEAN
 Rpi5CrtcReportTiming(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension);
+
+BOOLEAN
+Rpi5CrtcColdStartHeadless(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension);
 
 BOOLEAN
 Rpi5CrtcProgramCurrentTiming(

@@ -45,7 +45,11 @@
 #define RPI5_MBOX_TAG_FB_SET_DEPTH      0x00048005u
 #define RPI5_MBOX_TAG_FB_GET_PITCH      0x00040008u
 
+#define RPI5_MBOX_CLOCK_CORE            4u
 #define RPI5_MBOX_CLOCK_V3D             5u
+#define RPI5_MBOX_CLOCK_HDMI            13u
+#define RPI5_MBOX_CLOCK_PIXEL_BVB       14u
+#define RPI5_MBOX_CLOCK_DISPLAY         16u
 #define RPI5_MBOX_DOMAIN_V3D            10u
 
 BOOLEAN
@@ -66,6 +70,12 @@ Rpi5MboxSetClockState(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
     _In_ ULONG ClockId,
     _In_ BOOLEAN Enable);
+
+BOOLEAN
+Rpi5MboxGetClockState(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG ClockId,
+    _Out_ PULONG State);
 
 BOOLEAN
 Rpi5MboxGetEdidBlock(
