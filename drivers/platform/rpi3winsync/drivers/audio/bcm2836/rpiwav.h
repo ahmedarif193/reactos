@@ -10,7 +10,9 @@ Abstract:
 #pragma once
 
 // Fix warning from stdunk.h by disabling back-compat hack.
+#ifndef __REACTOS__
 #define _NEW_DELETE_OPERATORS_
+#endif
 
 #include <portcls.h>
 #include <stdunk.h>
@@ -19,7 +21,11 @@ Abstract:
 #include <wdf.h>
 #include <wdfminiport.h>
 #include <MsApoFxProxy.h>
+#ifdef __REACTOS__
+#include <ntstrsafe.h>
+#else
 #include <Ntstrsafe.h>
+#endif
 #include <bcm2836pwm.h>
 
 //=============================================================================
@@ -195,5 +201,4 @@ NTSTATUS PropertyHandler_OffloadPin
 // common.h uses some of the above definitions.
 #include "common.h"
 #include "kshelper.h"
-
 

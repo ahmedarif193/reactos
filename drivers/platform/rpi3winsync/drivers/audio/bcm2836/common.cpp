@@ -1880,6 +1880,7 @@ Return Value:
     return ntStatus;
 }
 
+#ifndef __REACTOS__
 void* __cdecl operator new
 (
     size_t          iSize,
@@ -1911,3 +1912,4 @@ void __cdecl operator delete
         ExFreePool(pVoid);
     }
 }
+#endif

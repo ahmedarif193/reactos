@@ -338,7 +338,14 @@ Return Value:
                     // has two control blocks), check next packet.
                     //
 
+#ifdef __REACTOS__
+                    ULONG currentPacketFirstCbAddress =
+                        FIRST_CB_ADDRESS_OF_PACKET(currentPacket,
+                            deviceContext->dmaCbPa.LowPart) +
+                        deviceContext->memUncachedOffset;
+#else
                     ULONG currentPacketFirstCbAddress = FIRST_CB_ADDRESS_OF_PACKET(currentPacket, deviceContext->dmaCbPa.LowPart);
+#endif
                     if (conblk_ad > currentPacketFirstCbAddress)
                     {
                         continue;
