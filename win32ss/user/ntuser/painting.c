@@ -1097,7 +1097,14 @@ UpdateThreadWindows(PWND pWnd, PTHREADINFO pti, HRGN hRgn)
              UpdateTheadChildren(pwndTemp, hRgn);
           }
           else
-             UserUpdateWindows(pwndTemp, RDW_ALLCHILDREN);
+          {
+             /* Do not synchronously run another GUI thread's WM_PAINT from
+              * the modal move/size loop. The invalidated window already has
+              * paint work queued; WM_SYNCPAINT provides the required
+              * non-client/erase synchronization without blocking pointer
+              * tracking on the target thread. */
+             IntSendSyncPaint(pwndTemp, RDW_ALLCHILDREN);
+          }
       }
    }
 }
