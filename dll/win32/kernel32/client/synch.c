@@ -982,12 +982,7 @@ UnregisterWaitEx(IN HANDLE WaitHandle,
  */
 DWORD WINAPI timeGetTime(void)
 {
-    LARGE_INTEGER now, freq;
-
-    QueryPerformanceCounter(&now);
-    QueryPerformanceFrequency(&freq);
-
-    return (now.QuadPart * 1000) / freq.QuadPart;
+    return GetTickCount();
 }
 
 /******************************************************************************
