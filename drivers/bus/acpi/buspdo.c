@@ -1014,7 +1014,7 @@ BuspCreateRequirementsListFromAcpiResources(
                 RequirementDescriptor->Flags = CM_RESOURCE_DMA_V3;
                 RequirementDescriptor->u.DmaV3.RequestLine = dma->RequestLines;
                 RequirementDescriptor->u.DmaV3.Channel = dma->Channels;
-                RequirementDescriptor->u.DmaV3.TransferWidth = 8u << dma->Width;
+                RequirementDescriptor->u.DmaV3.TransferWidth = dma->Width;
                 RequirementDescriptor++;
                 break;
             }
@@ -1693,7 +1693,7 @@ BuspCreateResourceListFromAcpiResources(
                 ResourceDescriptor->Flags = CM_RESOURCE_DMA_V3;
                 ResourceDescriptor->u.DmaV3.Channel = dma->Channels;
                 ResourceDescriptor->u.DmaV3.RequestLine = dma->RequestLines;
-                ResourceDescriptor->u.DmaV3.TransferWidth = 8u << dma->Width;
+                ResourceDescriptor->u.DmaV3.TransferWidth = dma->Width;
                 ResourceDescriptor++;
                 break;
             }

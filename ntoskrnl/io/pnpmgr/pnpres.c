@@ -352,6 +352,29 @@ IopFindPortResource(IN PIO_RESOURCE_DESCRIPTOR IoDesc, IN OPTIONAL PCM_RESOURCE_
     return FALSE;
 }
 
+/*
+ * A version 3 DMA request line is system-unique. Its channel number is local
+ * to the DMA controller and cannot be used as a global arbitration key because
+ * CM_PARTIAL_RESOURCE_DESCRIPTOR does not carry the controller identifier.
+ * Legacy and version 3 descriptors use different namespaces.
+ */
+BOOLEAN
+IopDmaDescriptorsConflict(
+    _In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR First,
+    _In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR Second)
+{
+    BOOLEAN FirstIsV3 = (First->Flags & CM_RESOURCE_DMA_V3) != 0;
+    BOOLEAN SecondIsV3 = (Second->Flags & CM_RESOURCE_DMA_V3) != 0;
+
+    if (FirstIsV3 != SecondIsV3)
+        return FALSE;
+
+    if (!FirstIsV3)
+        return First->u.Dma.Channel == Second->u.Dma.Channel;
+
+    return First->u.DmaV3.RequestLine == Second->u.DmaV3.RequestLine;
+}
+
 static
 BOOLEAN
 IopFindDmaResource(IN PIO_RESOURCE_DESCRIPTOR IoDesc, IN OPTIONAL PCM_RESOURCE_LIST PendingList, OUT PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc, _In_opt_ PDEVICE_NODE DeviceNode)
@@ -1129,25 +1152,7 @@ IopCheckResourceDescriptor(IN PCM_PARTIAL_RESOURCE_DESCRIPTOR ResDesc, IN PCM_RE
                 }
                 case CmResourceTypeDma:
                 {
-                    BOOLEAN DmaConflict;
-
-                    if ((ResDesc->Flags & CM_RESOURCE_DMA_V3) &&
-                        (ResDesc2->Flags & CM_RESOURCE_DMA_V3))
-                    {
-                        DmaConflict = ResDesc->u.DmaV3.RequestLine ==
-                                      ResDesc2->u.DmaV3.RequestLine;
-                    }
-                    else if (!(ResDesc->Flags & CM_RESOURCE_DMA_V3) &&
-                             !(ResDesc2->Flags & CM_RESOURCE_DMA_V3))
-                    {
-                        DmaConflict = ResDesc->u.Dma.Channel == ResDesc2->u.Dma.Channel;
-                    }
-                    else
-                    {
-                        DmaConflict = FALSE;
-                    }
-
-                    if (DmaConflict)
+                    if (IopDmaDescriptorsConflict(ResDesc, ResDesc2))
                     {
                         if (!Silent)
                         {
