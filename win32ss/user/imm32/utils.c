@@ -206,12 +206,6 @@ LPVOID FASTCALL ValidateHandleNoErr(HANDLE hObject, UINT uType)
     WORD generation;
     LPVOID ptr;
 
-    if (!NtUserValidateHandleSecure(hObject))
-    {
-        WARN("Not a handle\n");
-        return NULL;
-    }
-
     ht = gSharedInfo.aheList; /* handle table */
     ASSERT(ht);
     /* ReactOS-Specific! */
@@ -232,6 +226,19 @@ LPVOID FASTCALL ValidateHandleNoErr(HANDLE hObject, UINT uType)
     ptr = he[index].ptr;
     if (ptr)
         ptr = DesktopPtrToUser(ptr);
+
+    /* A current-thread input context cannot cross a process or job boundary. */
+    if (ptr && uType == TYPE_INPUTCONTEXT &&
+        ((PIMC)ptr)->head.pti == Imm32CurrentPti())
+    {
+        return ptr;
+    }
+
+    if (!NtUserValidateHandleSecure(hObject))
+    {
+        WARN("Not a handle\n");
+        return NULL;
+    }
 
     return ptr;
 }
