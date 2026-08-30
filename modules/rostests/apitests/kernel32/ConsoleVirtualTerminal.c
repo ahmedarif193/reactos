@@ -31,6 +31,9 @@
      ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN)
 
 #define INPUT_RECORD_COUNT 4096
+#ifndef ID_SYSTEM_EDIT_PASTE
+#define ID_SYSTEM_EDIT_PASTE 0xFFF2
+#endif
 
 typedef BOOL
 (WINAPI *PREAD_CONSOLE_INPUT_EX_W)(
@@ -321,6 +324,55 @@ TestEditStartup(HANDLE Input,
            MarkerPosition.X + 1,
            MarkerPosition.Y);
     }
+
+    WRITE_VT(Output, "\x1b[?1047h");
+    ok(ReadCell(Output, MarkerPosition.X, MarkerPosition.Y) == L' ',
+       "Primary-screen marker remained visible in DECSET 1047\n");
+    WRITE_VT(Output, "A\x1b[?1047l");
+    ok(ReadCell(Output, MarkerPosition.X, MarkerPosition.Y) == L'P',
+       "DECSET 1047 did not restore the primary screen\n");
+}
+
+static VOID
+TestSynchronizedOutputAndLogoGlyphs(HANDLE Output)
+{
+    static const char Sequence[] =
+        "\x1b[?2026h"
+        "\xe2\x96\x88\xe2\x96\x91\xe2\x96\xa0\xe2\x96\xa1"
+        "\x1b[?2026l";
+    static const WCHAR Expected[] = {0x2588, 0x2591, 0x25A0, 0x25A1};
+    CONSOLE_SCREEN_BUFFER_INFO Info;
+    WCHAR Character;
+    DWORD Index;
+
+    if (!ClearScreen(Output, &Info))
+        return;
+
+    WriteVt(Output, Sequence, sizeof(Sequence) - 1);
+
+    for (Index = 0; Index < ARRAYSIZE(Expected); ++Index)
+    {
+        Character = ReadCell(Output, (SHORT)Index, 0);
+        ok(Character == Expected[Index],
+           "Synchronized output cell %lu is %#x, expected %#x\n",
+           Index, Character, Expected[Index]);
+    }
+
+    Character = ReadCell(Output, ARRAYSIZE(Expected), 0);
+    ok(Character == L' ',
+       "Synchronized output escape sequence leaked as character %#x\n",
+       Character);
+
+    if (!ClearScreen(Output, &Info))
+        return;
+
+    WRITE_VT(Output, "\x1b[?9999hX\x1b[9999zY");
+    ok(ReadCell(Output, 0, 0) == L'X',
+       "Unknown private CSI sequence was rendered as text\n");
+    ok(ReadCell(Output, 1, 0) == L'Y',
+       "Unknown standard CSI sequence was rendered as text\n");
+    ok(ReadCell(Output, 2, 0) == L' ',
+       "Unknown CSI sequence leaked past its following text\n");
 }
 
 static VOID
@@ -341,6 +393,10 @@ TestEditRendering(HANDLE Output)
         skip("Console screen buffer is too small for the rendering tests\n");
         return;
     }
+
+    TestSynchronizedOutputAndLogoGlyphs(Output);
+    if (!ClearScreen(Output, &Info))
+        return;
 
     WRITE_VT(Output, "\x1b[3;");
     ok(ReadCell(Output, 0, 0) == L' ',
@@ -472,10 +528,56 @@ SendConsoleMessage(HWND Window,
     return Success;
 }
 
+static BOOL
+SetClipboardText(HWND Window,
+                 const WCHAR *Text)
+{
+    HGLOBAL Data;
+    WCHAR *Destination;
+    SIZE_T Bytes;
+    BOOL Success = FALSE;
+
+    Bytes = (wcslen(Text) + 1) * sizeof(*Text);
+    Data = GlobalAlloc(GMEM_MOVEABLE, Bytes);
+    ok(Data != NULL, "GlobalAlloc for clipboard text failed\n");
+    if (Data == NULL)
+        return FALSE;
+
+    Destination = GlobalLock(Data);
+    ok(Destination != NULL, "GlobalLock for clipboard text failed\n");
+    if (Destination == NULL)
+    {
+        GlobalFree(Data);
+        return FALSE;
+    }
+
+    memcpy(Destination, Text, Bytes);
+    GlobalUnlock(Data);
+
+    Success = OpenClipboard(Window);
+    ok(Success, "OpenClipboard failed with error %lu\n", GetLastError());
+    if (Success)
+    {
+        Success = EmptyClipboard();
+        ok(Success, "EmptyClipboard failed with error %lu\n", GetLastError());
+        if (Success)
+        {
+            Success = SetClipboardData(CF_UNICODETEXT, Data) != NULL;
+            ok(Success, "SetClipboardData failed with error %lu\n", GetLastError());
+        }
+        CloseClipboard();
+    }
+
+    if (!Success)
+        GlobalFree(Data);
+    return Success;
+}
+
 static VOID
 TestEditFrontendInput(HANDLE Input,
                       HANDLE Output,
-                      PREAD_CONSOLE_INPUT_EX_W ReadConsoleInputExW_)
+                      PREAD_CONSOLE_INPUT_EX_W ReadConsoleInputExW_,
+                      BOOL RunningOnReactOS)
 {
     WCHAR Characters[128];
     HWND Window;
@@ -541,6 +643,30 @@ TestEditFrontendInput(HANDLE Input,
             ok(CharacterCount != 0 && Characters[CharacterCount - 1] == L'm',
                "Mouse release did not end in the SGR release marker\n");
         }
+    }
+
+    WRITE_VT(Output, "\x1b[?1002;1006l");
+    Success = FlushConsoleInputBuffer(Input);
+    ok(Success, "FlushConsoleInputBuffer failed with error %lu\n", GetLastError());
+
+    /* ID_SYSTEM_EDIT_PASTE is a ReactOS frontend-private command identifier. */
+    if (RunningOnReactOS &&
+        SetClipboardText(Window, L"paste") &&
+        SendConsoleMessage(Window, WM_COMMAND, ID_SYSTEM_EDIT_PASTE, 0))
+    {
+        CharacterCount = ReadVtCharacters(ReadConsoleInputExW_,
+                                          Input,
+                                          Characters,
+                                          ARRAYSIZE(Characters),
+                                          NULL);
+        ok(CharacterCount == 17,
+           "Bracketed paste produced %lu characters, expected 17\n",
+           CharacterCount);
+        ok(CharacterCount == 17 &&
+           memcmp(Characters,
+                  L"\x1b[200~paste\x1b[201~",
+                  17 * sizeof(WCHAR)) == 0,
+           "Paste was not enclosed by the bracketed-paste markers\n");
     }
 
     WRITE_VT(Output, "\x1b[?1002;1006;2004l");
@@ -774,7 +900,10 @@ START_TEST(ConsoleVirtualTerminal)
     {
         TestEditRendering(Output);
         if (ReadConsoleInputExW_ != NULL)
-            TestEditFrontendInput(Input, Output, ReadConsoleInputExW_);
+            TestEditFrontendInput(Input,
+                                  Output,
+                                  ReadConsoleInputExW_,
+                                  RunningOnReactOS);
     }
 
 Cleanup:

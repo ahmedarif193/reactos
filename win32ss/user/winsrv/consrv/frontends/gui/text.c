@@ -12,6 +12,7 @@
 /* INCLUDES *******************************************************************/
 
 #include <consrv.h>
+#include "../../include/vt.h"
 
 #define NDEBUG
 #include <debug.h>
@@ -287,8 +288,8 @@ CopyLines(PTEXTMODE_SCREEN_BUFFER Buffer,
 }
 
 
-VOID
-PasteText(
+static VOID
+PasteTextEvents(
     IN PCONSRV_CONSOLE Console,
     IN PWCHAR Buffer,
     IN SIZE_T cchSize)
@@ -306,9 +307,10 @@ PasteText(
     while (cchSize--)
     {
         /* \r or \n characters. Go to the line only if we get "\r\n" sequence. */
-        if (CurChar == L'\r' && *Buffer == L'\n')
+        if (CurChar == L'\r' && cchSize > 0 && *Buffer == L'\n')
         {
             ++Buffer;
+            --cchSize;
             continue;
         }
         CurChar = *Buffer++;
@@ -325,6 +327,7 @@ PasteText(
              * convert the character to OEM / multibyte and use MapVirtualKey()
              * on each byte (simulating an Alt-0xxx OEM keyboard press).
              */
+            VkKey = 0;
         }
 
         /* Pressing some control keys */
@@ -347,6 +350,44 @@ PasteText(
         /* Up all the character and control keys */
         er.Event.KeyEvent.bKeyDown = FALSE;
         ConioProcessInputEvent(Console, &er);
+    }
+}
+
+VOID
+PasteText(
+    IN PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
+    IN PWCHAR Buffer,
+    IN SIZE_T cchSize)
+{
+    static WCHAR BracketedPasteBegin[] = L"\x1b[200~";
+    static WCHAR BracketedPasteEnd[] = L"\x1b[201~";
+    PCONSRV_CONSOLE Console;
+    BOOLEAN Bracketed;
+
+    if (!ScreenBuffer)
+        return;
+
+    Console = (PCONSRV_CONSOLE)ScreenBuffer->Header.Console;
+    if (!Console)
+        return;
+
+    Bracketed = !!(ScreenBuffer->VtState.PrivateModes &
+                    VT_PRIVMODE_BRACKETED_PASTE);
+
+    if (Bracketed)
+    {
+        PasteTextEvents(Console,
+                        BracketedPasteBegin,
+                        ARRAYSIZE(BracketedPasteBegin) - 1);
+    }
+
+    PasteTextEvents(Console, Buffer, cchSize);
+
+    if (Bracketed)
+    {
+        PasteTextEvents(Console,
+                        BracketedPasteEnd,
+                        ARRAYSIZE(BracketedPasteEnd) - 1);
     }
 }
 
@@ -396,10 +437,10 @@ GuiPasteToTextModeBuffer(PTEXTMODE_SCREEN_BUFFER Buffer,
      * This function supposes that the system clipboard was opened.
      */
 
-    PCONSRV_CONSOLE Console = (PCONSRV_CONSOLE)Buffer->Header.Console;
-
     HANDLE hData;
     LPWSTR pszText;
+
+    UNREFERENCED_PARAMETER(GuiData);
 
     hData = GetClipboardData(CF_UNICODETEXT);
     if (hData == NULL) return;
@@ -408,7 +449,7 @@ GuiPasteToTextModeBuffer(PTEXTMODE_SCREEN_BUFFER Buffer,
     if (pszText == NULL) return;
 
     DPRINT("Got data <%S> from clipboard\n", pszText);
-    PasteText(Console, pszText, wcslen(pszText));
+    PasteText(Buffer, pszText, wcslen(pszText));
 
     GlobalUnlock(hData);
 }
