@@ -1619,6 +1619,10 @@ LONG WINAPI /* DECLSPEC_HOTPATCH */ GetPackageFullName( HANDLE process, UINT32 *
 LONG WINAPI /* DECLSPEC_HOTPATCH */ GetPackageFamilyName( HANDLE process, UINT32 *length, WCHAR *name )
 {
     FIXME( "(%p %p %p): stub\n", process, length, name );
+
+    if (!process || !length)
+        return ERROR_INVALID_PARAMETER;
+
     return APPMODEL_ERROR_NO_PACKAGE;
 }
 

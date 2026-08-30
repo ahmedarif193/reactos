@@ -377,7 +377,7 @@
 #@ stdcall FindNextFileW(long ptr)
 #@ stdcall FindNextStreamW(long ptr)
 #@ stdcall FindNextVolumeW(long ptr long)
-# #@ stub FindPackagesByPackageFamily
+@ stdcall FindPackagesByPackageFamily(wstr long ptr ptr ptr ptr ptr)
 #@ stdcall FindResourceExW(long wstr wstr long)
 #@ stdcall FindResourceW(long wstr wstr)
 @ stdcall FindStringOrdinal(long wstr long wstr long long)
@@ -623,7 +623,7 @@
 # #@ stub GetPackageApplicationPropertyString
 # #@ stub GetPackageApplicationResourcesContext
 # #@ stub GetPackageContext
-#@ stdcall GetPackageFamilyName(long ptr ptr)
+@ stdcall GetPackageFamilyName(long ptr ptr)
 # #@ stub GetPackageFamilyNameFromToken
 #@ stdcall GetPackageFullName(long ptr ptr)
 # #@ stub GetPackageFullNameFromToken
@@ -1382,7 +1382,7 @@
 #@ stdcall ResetEvent(long)
 # #@ stub ResetState
 #@ stdcall ResetWriteWatch(ptr long)
-#@ stdcall ResizePseudoConsole(ptr long)
+@ stdcall ResizePseudoConsole(ptr long)
 #@ stdcall -import ResolveDelayLoadedAPI(ptr ptr ptr ptr ptr long) LdrResolveDelayLoadedAPI
 # #@ stub ResolveDelayLoadsFromDll
 #@ stdcall ResolveLocaleName(wstr ptr long)

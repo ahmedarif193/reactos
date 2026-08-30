@@ -94,7 +94,12 @@ GetComputerNameFromRegistry(LPWSTR RegistryKey,
 
     if (!NT_SUCCESS(Status))
     {
-        *nSize = (ReturnSize - FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data)) / sizeof(WCHAR);
+        if ((Status == STATUS_BUFFER_TOO_SMALL ||
+             Status == STATUS_BUFFER_OVERFLOW) &&
+            ReturnSize >= FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data))
+        {
+            *nSize = (ReturnSize - FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data)) / sizeof(WCHAR);
+        }
         goto failed;
     }
 
@@ -336,9 +341,17 @@ GetComputerNameExW(COMPUTER_NAME_FORMAT NameType,
                                                nSize);
 
         case ComputerNamePhysicalDnsDomain:
+            ret = GetComputerNameFromRegistry(L"\\Registry\\Machine\\System\\CurrentControlSet"
+                                              L"\\Services\\Tcpip\\Parameters",
+                                              L"NV Domain",
+                                              lpBuffer,
+                                              nSize);
+            if (ret || GetLastError() == ERROR_MORE_DATA)
+                return ret;
+
             return GetComputerNameFromRegistry(L"\\Registry\\Machine\\System\\CurrentControlSet"
                                                L"\\Services\\Tcpip\\Parameters",
-                                               L"NV Domain",
+                                               L"Domain",
                                                lpBuffer,
                                                nSize);
 
@@ -349,9 +362,17 @@ GetComputerNameExW(COMPUTER_NAME_FORMAT NameType,
                                       nSize);
 
         case ComputerNamePhysicalDnsHostname:
+            ret = GetComputerNameFromRegistry(L"\\Registry\\Machine\\System\\CurrentControlSet"
+                                              L"\\Services\\Tcpip\\Parameters",
+                                              L"NV Hostname",
+                                              lpBuffer,
+                                              nSize);
+            if (ret || GetLastError() == ERROR_MORE_DATA)
+                return ret;
+
             return GetComputerNameFromRegistry(L"\\Registry\\Machine\\System\\CurrentControlSet"
                                                L"\\Services\\Tcpip\\Parameters",
-                                               L"NV Hostname",
+                                               L"Hostname",
                                                lpBuffer,
                                                nSize);
 
