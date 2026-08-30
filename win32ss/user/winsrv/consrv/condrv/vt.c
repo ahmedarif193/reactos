@@ -1107,6 +1107,7 @@ ConDrvVtInvalidateBufferRgb(PTEXTMODE_SCREEN_BUFFER ScreenBuffer)
     ScreenBuffer->VtState.ScrollTop = 0;
     ScreenBuffer->VtState.ScrollBottom = max(0, ScreenBuffer->ScreenBufferSize.Y - 1);
     ScreenBuffer->VtState.PendingSequenceLength = 0;
+    ScreenBuffer->VtState.SynchronizedCursorValid = FALSE;
     VtClearHyperlink(ScreenBuffer);
 
     Console = ScreenBuffer->Header.Console;
@@ -1750,6 +1751,10 @@ static VOID
 VtFlushDirty(PCONSOLE Console, PTEXTMODE_SCREEN_BUFFER ScreenBuffer)
 {
     if (!ScreenBuffer || !ScreenBuffer->VtState.DirtyValid)
+        return;
+
+    /* DECSET 2026 keeps updating the grid but publishes one frame on DECRST. */
+    if (ScreenBuffer->VtState.PrivateModes & VT_PRIVMODE_SYNCHRONIZED_OUTPUT)
         return;
 
     ScreenBuffer->VtState.DirtyValid = FALSE;
@@ -3477,6 +3482,8 @@ ConDrvVtInitializeBuffer(PTEXTMODE_SCREEN_BUFFER ScreenBuffer)
     ScreenBuffer->VtState.SavedActiveCharset = ScreenBuffer->VtState.ActiveCharset;
     ScreenBuffer->VtState.MouseButtonState = 0;
     ScreenBuffer->VtState.PendingSequenceLength = 0;
+    ScreenBuffer->VtState.SynchronizedCursorStart = Zero;
+    ScreenBuffer->VtState.SynchronizedCursorValid = FALSE;
 
     /* VtEnsureTabStops reuses an existing bitmap of the right width, so there is
      * no need to free and immediately re-allocate one here */
@@ -3664,8 +3671,12 @@ VtHandleDecPrivateMode(PCONSOLE Console,
             return TRUE;
         }
 
-        case 1000:
+        case 9: /* X10 mouse reporting: button presses only */
             Mask = VT_PRIVMODE_MOUSE_X10;
+            break;
+
+        case 1000: /* VT200 mouse reporting: button presses and releases */
+            Mask = VT_PRIVMODE_MOUSE_NORMAL_TRACKING;
             break;
 
         case 1003:
@@ -3688,6 +3699,41 @@ VtHandleDecPrivateMode(PCONSOLE Console,
             Mask = VT_PRIVMODE_BRACKETED_PASTE;
             break;
 
+        case 2026: /* Synchronized output (BSU/ESU) */
+            if (Enable)
+            {
+                if (!(ScreenBuffer->VtState.PrivateModes &
+                      VT_PRIVMODE_SYNCHRONIZED_OUTPUT))
+                {
+                    ScreenBuffer->VtState.SynchronizedCursorStart =
+                        ScreenBuffer->CursorPosition;
+                    ScreenBuffer->VtState.SynchronizedCursorValid = TRUE;
+                }
+
+                ScreenBuffer->VtState.PrivateModes |=
+                    VT_PRIVMODE_SYNCHRONIZED_OUTPUT;
+            }
+            else
+            {
+                if (ScreenBuffer->VtState.SynchronizedCursorValid)
+                {
+                    COORD Start = ScreenBuffer->VtState.SynchronizedCursorStart;
+
+                    VtMarkDirty(ScreenBuffer,
+                                Start.X, Start.Y, Start.X, Start.Y);
+                    VtMarkDirty(ScreenBuffer,
+                                ScreenBuffer->CursorPosition.X,
+                                ScreenBuffer->CursorPosition.Y,
+                                ScreenBuffer->CursorPosition.X,
+                                ScreenBuffer->CursorPosition.Y);
+                }
+
+                ScreenBuffer->VtState.SynchronizedCursorValid = FALSE;
+                ScreenBuffer->VtState.PrivateModes &=
+                    ~VT_PRIVMODE_SYNCHRONIZED_OUTPUT;
+            }
+            return TRUE;
+
         case 1036:
             Mask = VT_PRIVMODE_META_SENDS_ESCAPE;
             break;
@@ -3697,10 +3743,36 @@ VtHandleDecPrivateMode(PCONSOLE Console,
             Handled = TRUE;
             break;
 
-        case 1049:
+        case 47:
+        case 1047:
             if (Enable)
                 return VtEnableAlternateScreen(Console, ScreenBuffer);
             return VtDisableAlternateScreen(Console, ScreenBuffer);
+
+        case 1048:
+            if (Enable)
+                VtSaveCursorState(ScreenBuffer);
+            else
+                VtRestoreCursorState(Console, ScreenBuffer);
+            return TRUE;
+
+        case 1049:
+            if (Enable)
+            {
+                if (ScreenBuffer->VtState.AlternateActive)
+                    return TRUE;
+
+                VtSaveCursorState(ScreenBuffer);
+                return VtEnableAlternateScreen(Console, ScreenBuffer);
+            }
+
+            if (!ScreenBuffer->VtState.AlternateActive)
+                return TRUE;
+
+            if (!VtDisableAlternateScreen(Console, ScreenBuffer))
+                return FALSE;
+            VtRestoreCursorState(Console, ScreenBuffer);
+            return TRUE;
 
         default:
             return FALSE;
@@ -3730,6 +3802,23 @@ VtHandleDecPrivateMode(PCONSOLE Console,
             COORD Home = {0, 0};
             ConDrvSetConsoleCursorPosition(Console, ScreenBuffer, &Home);
         }
+    }
+
+    if (Mask & VT_PRIVMODE_MOUSE_TRACKING_MASK)
+    {
+        /* The DEC/Xterm mouse tracking modes are mutually exclusive. */
+        if (Enable)
+        {
+            ScreenBuffer->VtState.PrivateModes &= ~VT_PRIVMODE_MOUSE_TRACKING_MASK;
+            ScreenBuffer->VtState.PrivateModes |= Mask;
+        }
+        else
+        {
+            ScreenBuffer->VtState.PrivateModes &= ~Mask;
+        }
+
+        ScreenBuffer->VtState.MouseButtonState = 0;
+        return TRUE;
     }
 
     if (Enable)
@@ -3844,6 +3933,9 @@ VtHandlePrivateCsiSequence(PCONSOLE Console,
             BOOLEAN Enable = (Final == L'h');
             BOOLEAN Handled = FALSE;
             ULONG i;
+
+            if (PrivateIndicator != L'?')
+                return FALSE;
 
             for (i = 0; i < Count; ++i)
             {
@@ -4165,6 +4257,14 @@ VtHandleEscapeSequence(PCONSOLE Console,
             VtSetTabStopAtCursor(ScreenBuffer);
             return TRUE;
 
+        case L'=': /* DECKPAM - application keypad */
+            ScreenBuffer->VtState.PrivateModes |= VT_PRIVMODE_KEYPAD_APPLICATION;
+            return TRUE;
+
+        case L'>': /* DECKPNM - numeric keypad */
+            ScreenBuffer->VtState.PrivateModes &= ~VT_PRIVMODE_KEYPAD_APPLICATION;
+            return TRUE;
+
         case L'#':
         {
             WCHAR Selector;
@@ -4469,11 +4569,14 @@ ConDrvVtWriteConsole(PCONSOLE Console,
                     continue;
                 }
 
-                /* Unsupported CSI sequence, emit literally */
-                Status = VtFlushText(Console,
-                                     ScreenBuffer,
-                                     WorkingBuffer + EscStart,
-                                     Pos - EscStart);
+                /*
+                 * A completed CSI is a control sequence even when this host
+                 * does not implement its operation. Terminals ignore unknown
+                 * controls; replaying them as text exposes the private-mode
+                 * bytes (for example "[?2026h") and can make a repaint loop
+                 * spam the console indefinitely.
+                 */
+                AnyHandled = TRUE;
                 SegmentStart = Pos;
                 continue;
             }
@@ -4569,11 +4672,9 @@ ConDrvVtWriteConsole(PCONSOLE Console,
                     break;
                 }
 
-                /* Unsupported ESC sequence, emit literally */
-                Status = VtFlushText(Console,
-                                     ScreenBuffer,
-                                     WorkingBuffer + EscStart,
-                                     Pos - EscStart);
+                /* Unknown completed escape controls are ignored, not printed. */
+                VtTraceUnhandledEscape(Ch);
+                AnyHandled = TRUE;
                 SegmentStart = Pos;
                 continue;
             }
@@ -4905,6 +5006,7 @@ VtTranslateMouseEvent(PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
     BOOLEAN UseSgr;
     ULONG Modifiers;
     BOOLEAN TrackX10;
+    BOOLEAN TrackNormal;
     BOOLEAN TrackButtons;
     BOOLEAN TrackAny;
 
@@ -4913,10 +5015,11 @@ VtTranslateMouseEvent(PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
 
     PrivateModes = ScreenBuffer->VtState.PrivateModes;
     TrackX10 = (PrivateModes & VT_PRIVMODE_MOUSE_X10) != 0;
+    TrackNormal = (PrivateModes & VT_PRIVMODE_MOUSE_NORMAL_TRACKING) != 0;
     TrackButtons = (PrivateModes & VT_PRIVMODE_MOUSE_BUTTON_TRACKING) != 0;
     TrackAny = (PrivateModes & VT_PRIVMODE_MOUSE_ANY_EVENT) != 0;
 
-    if (!TrackX10 && !TrackButtons && !TrackAny)
+    if (!TrackX10 && !TrackNormal && !TrackButtons && !TrackAny)
         return FALSE;
 
     PreviousState = ScreenBuffer->VtState.MouseButtonState;
@@ -4931,7 +5034,7 @@ VtTranslateMouseEvent(PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
     {
         SHORT Delta = (SHORT)HIWORD(MouseEvent->dwButtonState);
 
-        if (Delta == 0)
+        if (TrackX10 || Delta == 0)
             return FALSE;
 
         if (MouseEvent->dwEventFlags == MOUSE_WHEELED)
@@ -5009,6 +5112,12 @@ VtTranslateMouseEvent(PTEXTMODE_SCREEN_BUFFER ScreenBuffer,
 
             ButtonCode = (ULONG)ButtonIndex;
             Released = TRUE;
+
+            if (TrackX10)
+            {
+                ScreenBuffer->VtState.MouseButtonState = CurrentState;
+                return FALSE;
+            }
         }
         else
         {
@@ -5118,9 +5227,7 @@ ConDrvVtIsMouseTrackingEnabled(PCONSOLE Console)
 
     ScreenBuffer = (PTEXTMODE_SCREEN_BUFFER)Console->ActiveBuffer;
     PrivateModes = ScreenBuffer->VtState.PrivateModes;
-    return !!(PrivateModes & (VT_PRIVMODE_MOUSE_X10 |
-                              VT_PRIVMODE_MOUSE_BUTTON_TRACKING |
-                              VT_PRIVMODE_MOUSE_ANY_EVENT));
+    return !!(PrivateModes & VT_PRIVMODE_MOUSE_TRACKING_MASK);
 }
 
 NTSTATUS

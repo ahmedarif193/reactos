@@ -198,6 +198,8 @@ typedef struct _TEXTMODE_SCREEN_BUFFER
         USHORT  TabStopLength;                   /* Number of columns represented in TabStops */
         SMALL_RECT DirtyRect;                    /* Region invalidated so far by this write */
         BOOLEAN DirtyValid;                      /* TRUE when DirtyRect holds anything */
+        COORD   SynchronizedCursorStart;          /* Cursor cell visible before DECSET 2026 */
+        BOOLEAN SynchronizedCursorValid;          /* Whether SynchronizedCursorStart is valid */
         WCHAR   PendingSequence[VT_PENDING_SEQUENCE_MAX]; /* Unterminated VT sequence kept across writes */
         USHORT  PendingSequenceLength;           /* Number of valid WCHARs in PendingSequence */
     } VtState;
