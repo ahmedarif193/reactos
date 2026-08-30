@@ -45,18 +45,17 @@ RcddNotifyDirty(
    const RECTL *prcl,
    ULONG Flags)
 {
-   DXGK_PRESENT_DIRTY_RECT_INPUT Input;
+   DXGK_PRESENT_DIRTY_RECTS_INPUT Input;
    ULONG Ret;
 
+   RtlZeroMemory(&Input, sizeof(Input));
+   Input.StructSize = sizeof(Input);
+   Input.Flags = Flags;
    if (prcl != NULL)
    {
-      Input.Rect = *prcl;
+      Input.RectCount = 1;
+      Input.Rects[0] = *prcl;
    }
-   else
-   {
-      Input.Rect.left = Input.Rect.top = Input.Rect.right = Input.Rect.bottom = 0;
-   }
-   Input.Flags = Flags;
 
    return EngDeviceIoControl(ppdev->hDriver,
                              IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT,
@@ -67,6 +66,92 @@ RcddNotifyDirty(
                              &Ret) == 0;
 }
 
+static BOOL
+RcddNotifyDirtyRects(
+   PRCDD_PDEV ppdev,
+   const RECTL *prcl,
+   ULONG Count,
+   ULONG Flags)
+{
+   DXGK_PRESENT_DIRTY_RECTS_INPUT Input;
+   ULONG Ret;
+
+   if (Count > DXGK_PRESENT_MAX_DIRTY_RECTS)
+      return FALSE;
+
+   RtlZeroMemory(&Input, sizeof(Input));
+   Input.StructSize = sizeof(Input);
+   Input.Flags = Flags;
+   Input.RectCount = Count;
+   if (Count != 0)
+      RtlCopyMemory(Input.Rects, prcl, Count * sizeof(Input.Rects[0]));
+
+   return EngDeviceIoControl(ppdev->hDriver,
+                             IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT,
+                             &Input,
+                             sizeof(Input),
+                             NULL,
+                             0,
+                             &Ret) == 0;
+}
+
+static LONGLONG
+RcddRectArea(
+   const RECTL *prcl)
+{
+   return (LONGLONG)(prcl->right - prcl->left) *
+          (prcl->bottom - prcl->top);
+}
+
+static VOID
+RcddRectUnion(
+   RECTL *prclDest,
+   const RECTL *prclSource)
+{
+   prclDest->left = min(prclDest->left, prclSource->left);
+   prclDest->top = min(prclDest->top, prclSource->top);
+   prclDest->right = max(prclDest->right, prclSource->right);
+   prclDest->bottom = max(prclDest->bottom, prclSource->bottom);
+}
+
+static VOID
+RcddAccumulateDirtyRect(
+   PRCDD_PDEV ppdev,
+   const RECTL *prcl)
+{
+   RECTL Union;
+   ULONG Best = DXGK_PRESENT_MAX_DIRTY_RECTS;
+   LONGLONG BestGrowth = 0;
+   LONGLONG Area = RcddRectArea(prcl);
+   ULONG Index;
+
+   for (Index = 0; Index < ppdev->PendingRectCount; Index++)
+   {
+      LONGLONG ExistingArea;
+      LONGLONG Growth;
+
+      Union = ppdev->PendingRects[Index];
+      RcddRectUnion(&Union, prcl);
+      ExistingArea = RcddRectArea(&ppdev->PendingRects[Index]);
+      Growth = RcddRectArea(&Union) - ExistingArea - Area;
+      if (Growth <= (ExistingArea + Area) / 4)
+      {
+         ppdev->PendingRects[Index] = Union;
+         return;
+      }
+      if (Best == DXGK_PRESENT_MAX_DIRTY_RECTS || Growth < BestGrowth)
+      {
+         Best = Index;
+         BestGrowth = Growth;
+      }
+   }
+
+   if (ppdev->PendingRectCount < DXGK_PRESENT_MAX_DIRTY_RECTS)
+      ppdev->PendingRects[ppdev->PendingRectCount++] = *prcl;
+   else
+      RcddRectUnion(&ppdev->PendingRects[Best], prcl);
+}
+
 /* Publish the completed GDI batch. GDI calls this path with the device lock
  * held for both programmatic flushes and its periodic synchronization timer. */
 static VOID
@@ -75,6 +160,7 @@ RcddFlushOutstanding(
 {
    if (ppdev->ScreenPtr == NULL ||
        ppdev->SafetyHoldDepth != 0 ||
+       ppdev->PresentBatchDepth != 0 ||
        !ppdev->DirtyOutstanding)
    {
       return;
@@ -84,13 +170,15 @@ RcddFlushOutstanding(
       ppdev->DirtyOutstanding = FALSE;
 }
 
-static VOID
+VOID
 RcddPresentEx(
    PRCDD_PDEV ppdev,
    const RECTL *prcl,
    ULONG Flags)
 {
    RECTL Dirty;
+   RECTL SentRect;
+   ULONG Index;
 
    if (ppdev->ScreenPtr == NULL)
       return;
@@ -123,38 +211,39 @@ RcddPresentEx(
    }
 
    if (Dirty.left < Dirty.right && Dirty.top < Dirty.bottom)
-   {
-      if (ppdev->PendingValid)
-      {
-         ppdev->PendingRect.left   = min(ppdev->PendingRect.left, Dirty.left);
-         ppdev->PendingRect.top    = min(ppdev->PendingRect.top, Dirty.top);
-         ppdev->PendingRect.right  = max(ppdev->PendingRect.right, Dirty.right);
-         ppdev->PendingRect.bottom = max(ppdev->PendingRect.bottom, Dirty.bottom);
-      }
-      else
-      {
-         ppdev->PendingRect = Dirty;
-         ppdev->PendingValid = TRUE;
-      }
-   }
+      RcddAccumulateDirtyRect(ppdev, &Dirty);
 
    if (ppdev->SafetyHoldDepth != 0)
       return;
 
-   if (!ppdev->PendingValid)
+   if (ppdev->PresentBatchDepth != 0)
+      return;
+
+   if (ppdev->PendingRectCount == 0)
    {
       if (Flags != 0)
          RcddNotifyDirty(ppdev, NULL, Flags);
       return;
    }
 
-   Dirty = ppdev->PendingRect;
-   ppdev->PendingValid = FALSE;
-   ppdev->SentSeq = ppdev->DrawSeq;
-   ppdev->SentRect = Dirty;
+   SentRect = ppdev->PendingRects[0];
+   for (Index = 1; Index < ppdev->PendingRectCount; Index++)
+      RcddRectUnion(&SentRect, &ppdev->PendingRects[Index]);
 
-   if (RcddNotifyDirty(ppdev, &Dirty, Flags))
-      ppdev->DirtyOutstanding = TRUE;
+   if (!RcddNotifyDirtyRects(ppdev,
+                             ppdev->PendingRects,
+                             ppdev->PendingRectCount,
+                             Flags))
+   {
+      return;
+   }
+
+   ppdev->PendingRectCount = 0;
+   ppdev->SentSeq = ppdev->DrawSeq;
+   ppdev->SentRect = SentRect;
+   ppdev->DirtyOutstanding =
+      (Flags & (DXGK_PRESENT_DIRTY_FLUSH |
+                DXGK_PRESENT_DIRTY_RELEASE)) == 0;
 }
 
 VOID
@@ -243,7 +332,7 @@ RcddPresentTarget(
       rcl.bottom = min(rcl.bottom, pco->rclBounds.bottom);
    }
 
-   if (ppdev->SentSeq == seq && !ppdev->PendingValid &&
+   if (ppdev->SentSeq == seq && ppdev->PendingRectCount == 0 &&
        RcddRectContains(&ppdev->SentRect, &rcl))
    {
       return;
@@ -350,14 +439,24 @@ RcddSynchronizeSurface(
       if (!(fl & DSS_FLUSH_EVENT))
       {
          if (ppdev->SafetyHoldDepth++ == 0)
-            RcddNotifyDirty(ppdev, NULL, DXGK_PRESENT_DIRTY_HOLD);
+         {
+            ppdev->SafetyHoldNotified =
+               ppdev->PresentBatchDepth == 0 &&
+               RcddNotifyDirty(ppdev, NULL, DXGK_PRESENT_DIRTY_HOLD);
+         }
          return;
       }
       if (ppdev->SafetyHoldDepth != 0)
       {
          RcddPresentEx(ppdev, prcl, 0);
          if (--ppdev->SafetyHoldDepth == 0)
-            RcddPresentEx(ppdev, NULL, DXGK_PRESENT_DIRTY_RELEASE);
+         {
+            if (ppdev->SafetyHoldNotified)
+               RcddPresentEx(ppdev, NULL, DXGK_PRESENT_DIRTY_RELEASE);
+            else if (ppdev->PresentBatchDepth == 0)
+               RcddPresentEx(ppdev, NULL, DXGK_PRESENT_DIRTY_FLUSH);
+            ppdev->SafetyHoldNotified = FALSE;
+         }
          return;
       }
    }

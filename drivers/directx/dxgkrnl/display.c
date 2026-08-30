@@ -110,7 +110,8 @@ static volatile LONG g_PresentDispatchBusy = 0;
 static volatile LONGLONG g_LastDirtyNotify100ns = 0;
 static volatile LONGLONG g_LastPresentSubmit100ns = 0;
 static volatile LONGLONG g_LastGpuActivity100ns = 0;
-#define DXGK_DIRTY_RECT_SLOTS 8
+#define DXGK_DIRTY_RECT_SLOTS DXGKP_PRESENT_RECT_COUNT
+C_ASSERT(DXGKP_PRESENT_RECT_COUNT == DXGK_PRESENT_MAX_DIRTY_RECTS);
 #define DXGK_PRESENT_PACE_100NS      (8ULL * 10000ULL)
 #define DXGK_PRESENT_QUIET_100NS     (4ULL * 10000ULL)
 #define DXGK_PRESENT_HOLD_STALE_100NS (500ULL * 10000ULL)
@@ -1652,19 +1653,69 @@ DxgkpRectUnion(
 }
 
 static VOID
+DxgkpAccumulateRectList(
+    _Inout_updates_(DXGK_DIRTY_RECT_SLOTS) PRECTL Rects,
+    _Inout_ PULONG Count,
+    _In_ const RECTL *Rect)
+{
+    RECTL Union;
+    ULONG i;
+    ULONG Best = DXGK_DIRTY_RECT_SLOTS;
+    LONGLONG BestGrowth = 0;
+    LONGLONG RectArea = DxgkpRectArea(Rect);
+
+    for (i = 0; i < *Count; i++)
+    {
+        LONGLONG Growth;
+
+        Union = Rects[i];
+        DxgkpRectUnion(&Union, Rect);
+        Growth = DxgkpRectArea(&Union) -
+                 DxgkpRectArea(&Rects[i]) - RectArea;
+        if (Growth <= (DxgkpRectArea(&Rects[i]) + RectArea) / 4)
+        {
+            Rects[i] = Union;
+            return;
+        }
+        if (Best == DXGK_DIRTY_RECT_SLOTS || Growth < BestGrowth)
+        {
+            Best = i;
+            BestGrowth = Growth;
+        }
+    }
+
+    if (*Count < DXGK_DIRTY_RECT_SLOTS)
+    {
+        Rects[(*Count)++] = *Rect;
+    }
+    else
+    {
+        DxgkpRectUnion(&Rects[Best], Rect);
+    }
+}
+
+static VOID
+DxgkpAccumulateRectLists(
+    _Inout_updates_(DXGK_DIRTY_RECT_SLOTS) PRECTL Destination,
+    _Inout_ PULONG DestinationCount,
+    _In_reads_(SourceCount) const RECTL *Source,
+    _In_ ULONG SourceCount)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < SourceCount; Index++)
+        DxgkpAccumulateRectList(Destination, DestinationCount, &Source[Index]);
+}
+
+static VOID
 DxgkpRecordDirtyRect(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ const RECTL *DirtyRect)
 {
     RECTL Clipped;
-    RECTL Union;
     DXGK_PRESENT_LOCK_STATE LockState;
     ULONG CommittedWidth;
     ULONG CommittedHeight;
-    ULONG i;
-    ULONG Best = DXGK_DIRTY_RECT_SLOTS;
-    LONGLONG BestGrowth = 0;
-    LONGLONG ClippedArea;
 
     if (Adapter == NULL || DirtyRect == NULL)
         return;
@@ -1684,38 +1735,10 @@ DxgkpRecordDirtyRect(
     if (Clipped.left >= Clipped.right || Clipped.top >= Clipped.bottom)
         return;
 
-    ClippedArea = DxgkpRectArea(&Clipped);
-
     DxgkpAcquirePresentLock(Adapter, &LockState);
-
-    for (i = 0; i < g_PresentDirtyRectCount; i++)
-    {
-        LONGLONG Growth;
-
-        Union = g_PresentDirtyRects[i];
-        DxgkpRectUnion(&Union, &Clipped);
-        Growth = DxgkpRectArea(&Union) - DxgkpRectArea(&g_PresentDirtyRects[i]) - ClippedArea;
-        if (Growth <= (DxgkpRectArea(&g_PresentDirtyRects[i]) + ClippedArea) / 4)
-        {
-            g_PresentDirtyRects[i] = Union;
-            DxgkpReleasePresentLock(Adapter, &LockState);
-            return;
-        }
-        if (Best == DXGK_DIRTY_RECT_SLOTS || Growth < BestGrowth)
-        {
-            Best = i;
-            BestGrowth = Growth;
-        }
-    }
-
-    if (g_PresentDirtyRectCount < DXGK_DIRTY_RECT_SLOTS)
-    {
-        g_PresentDirtyRects[g_PresentDirtyRectCount++] = Clipped;
-    }
-    else
-    {
-        DxgkpRectUnion(&g_PresentDirtyRects[Best], &Clipped);
-    }
+    DxgkpAccumulateRectList(g_PresentDirtyRects,
+                            &g_PresentDirtyRectCount,
+                            &Clipped);
 
     DxgkpReleasePresentLock(Adapter, &LockState);
 }
@@ -1769,21 +1792,6 @@ DxgkpClearPendingDirtyRects(
     DxgkpAcquirePresentLock(Adapter, &LockState);
     g_PresentDirtyRectCount = 0;
     DxgkpReleasePresentLock(Adapter, &LockState);
-}
-
-static VOID
-DxgkpAccumulateSnapshotRect(
-    _Inout_ PRECTL Destination,
-    _Inout_ PBOOLEAN Valid,
-    _In_ const RECTL *Source)
-{
-    if (*Valid)
-        DxgkpRectUnion(Destination, Source);
-    else
-    {
-        *Destination = *Source;
-        *Valid = TRUE;
-    }
 }
 
 static BOOLEAN
@@ -1856,8 +1864,8 @@ DxgkpInitializePresentSnapshots(
     {
         Adapter->PresentSnapshots[Index].Buffer = Buffers[Index];
         Adapter->PresentSnapshots[Index].BufferSize = SnapshotSize;
-        Adapter->PresentSnapshots[Index].SyncValid = FALSE;
-        Adapter->PresentSnapshots[Index].PresentValid = FALSE;
+        Adapter->PresentSnapshots[Index].SyncRectCount = 0;
+        Adapter->PresentSnapshots[Index].PresentRectCount = 0;
         Buffers[Index] = NULL;
     }
     Adapter->PresentSnapshotWidth = SharedSurface.CommittedWidth;
@@ -1957,13 +1965,14 @@ DxgkpCapturePendingPresent(
 {
     DXGKRNL_SHARED_SURFACE_SNAPSHOT SharedSurface;
     RECTL DirtyRects[DXGK_DIRTY_RECT_SLOTS];
-    RECTL Damage;
-    RECTL CopyRect;
-    RECTL PresentRect;
+    RECTL CopyRects[DXGK_DIRTY_RECT_SLOTS];
+    RECTL PresentRects[DXGK_DIRTY_RECT_SLOTS];
     DXGK_PRESENT_LOCK_STATE LockState;
     PVOID Destination = NULL;
     ULONG DestinationPitch = 0;
-    ULONG Count;
+    ULONG Count = 0;
+    ULONG CopyCount = 0;
+    ULONG PresentCount = 0;
     ULONG Index;
     ULONG SlotIndex = 0;
     LONG ReadyIndex;
@@ -1979,9 +1988,6 @@ DxgkpCapturePendingPresent(
     Count = DxgkpConsumeDirtyRects(Adapter, DirtyRects);
     if (Count == 0)
         goto ReleasePath;
-    Damage = DirtyRects[0];
-    for (Index = 1; Index < Count; Index++)
-        DxgkpRectUnion(&Damage, &DirtyRects[Index]);
 
     Status = DxgkpAcquireSharedSurfaceSnapshot(Adapter, &SharedSurface);
     if (!NT_SUCCESS(Status))
@@ -2004,10 +2010,11 @@ DxgkpCapturePendingPresent(
 
     for (Index = 0; Index < DXGKP_PRESENT_SNAPSHOT_COUNT; Index++)
     {
-        DxgkpAccumulateSnapshotRect(
-            &Adapter->PresentSnapshots[Index].SyncRect,
-            &Adapter->PresentSnapshots[Index].SyncValid,
-            &Damage);
+        DxgkpAccumulateRectLists(
+            Adapter->PresentSnapshots[Index].SyncRects,
+            &Adapter->PresentSnapshots[Index].SyncRectCount,
+            DirtyRects,
+            Count);
     }
 
     ReadyIndex = Adapter->PresentSnapshotReady;
@@ -2015,13 +2022,14 @@ DxgkpCapturePendingPresent(
     if (ReadyIndex >= 0)
     {
         SlotIndex = (ULONG)ReadyIndex;
-        if (Adapter->PresentSnapshots[SlotIndex].PresentValid)
-        {
-            PresentRect = Adapter->PresentSnapshots[SlotIndex].PresentRect;
-            DxgkpRectUnion(&PresentRect, &Damage);
-        }
-        else
-            PresentRect = Damage;
+        PresentCount = Adapter->PresentSnapshots[SlotIndex].PresentRectCount;
+        RtlCopyMemory(PresentRects,
+                      Adapter->PresentSnapshots[SlotIndex].PresentRects,
+                      PresentCount * sizeof(PresentRects[0]));
+        DxgkpAccumulateRectLists(PresentRects,
+                                 &PresentCount,
+                                 DirtyRects,
+                                 Count);
         Adapter->PresentSnapshotReady = -1;
     }
     else
@@ -2030,35 +2038,47 @@ DxgkpCapturePendingPresent(
                     DXGKP_PRESENT_SNAPSHOT_COUNT;
         if ((LONG)SlotIndex == ReadingIndex)
             SlotIndex = (SlotIndex + 1) % DXGKP_PRESENT_SNAPSHOT_COUNT;
-        PresentRect = Damage;
+        DxgkpAccumulateRectLists(PresentRects,
+                                 &PresentCount,
+                                 DirtyRects,
+                                 Count);
     }
 
-    CopyRect = Adapter->PresentSnapshots[SlotIndex].SyncRect;
-    Adapter->PresentSnapshots[SlotIndex].SyncValid = FALSE;
-    Adapter->PresentSnapshots[SlotIndex].PresentValid = FALSE;
+    CopyCount = Adapter->PresentSnapshots[SlotIndex].SyncRectCount;
+    RtlCopyMemory(CopyRects,
+                  Adapter->PresentSnapshots[SlotIndex].SyncRects,
+                  CopyCount * sizeof(CopyRects[0]));
+    Adapter->PresentSnapshots[SlotIndex].SyncRectCount = 0;
+    Adapter->PresentSnapshots[SlotIndex].PresentRectCount = 0;
     Adapter->PresentSnapshotWriting = (LONG)SlotIndex;
     Destination = Adapter->PresentSnapshots[SlotIndex].Buffer;
     DestinationPitch = Adapter->PresentSnapshotPitch;
     DxgkpReleasePresentLock(Adapter, &LockState);
 
-    BytesPerRow = (SIZE_T)(CopyRect.right - CopyRect.left) * sizeof(ULONG);
-    for (Y = CopyRect.top; Y < CopyRect.bottom; Y++)
+    for (Index = 0; Index < CopyCount; Index++)
     {
-        RtlCopyMemory((PUCHAR)Destination +
-                          (SIZE_T)Y * DestinationPitch +
-                          (SIZE_T)CopyRect.left * sizeof(ULONG),
-                      (PUCHAR)SharedSurface.ShadowFb +
-                          (SIZE_T)Y * SharedSurface.ShadowFbPitch +
-                          (SIZE_T)CopyRect.left * sizeof(ULONG),
-                      BytesPerRow);
+        BytesPerRow = (SIZE_T)(CopyRects[Index].right -
+                               CopyRects[Index].left) * sizeof(ULONG);
+        for (Y = CopyRects[Index].top; Y < CopyRects[Index].bottom; Y++)
+        {
+            RtlCopyMemory((PUCHAR)Destination +
+                              (SIZE_T)Y * DestinationPitch +
+                              (SIZE_T)CopyRects[Index].left * sizeof(ULONG),
+                          (PUCHAR)SharedSurface.ShadowFb +
+                              (SIZE_T)Y * SharedSurface.ShadowFbPitch +
+                              (SIZE_T)CopyRects[Index].left * sizeof(ULONG),
+                          BytesPerRow);
+        }
     }
 
     DxgkpAcquirePresentLock(Adapter, &LockState);
     if (Adapter->PresentSnapshotWriting == (LONG)SlotIndex &&
         Adapter->PresentSnapshots[SlotIndex].Buffer == Destination)
     {
-        Adapter->PresentSnapshots[SlotIndex].PresentRect = PresentRect;
-        Adapter->PresentSnapshots[SlotIndex].PresentValid = TRUE;
+        RtlCopyMemory(Adapter->PresentSnapshots[SlotIndex].PresentRects,
+                      PresentRects,
+                      PresentCount * sizeof(PresentRects[0]));
+        Adapter->PresentSnapshots[SlotIndex].PresentRectCount = PresentCount;
         Adapter->PresentSnapshotReady = (LONG)SlotIndex;
         Adapter->PresentSnapshotNext =
             (SlotIndex + 1) % DXGKP_PRESENT_SNAPSHOT_COUNT;
@@ -2071,7 +2091,18 @@ ReleaseSurface:
     DxgkpReleaseSharedSurfaceSnapshot(&SharedSurface);
 RestoreDamage:
     if (!Captured)
-        DxgkpRecordDirtyRect(Adapter, &Damage);
+    {
+        if (PresentCount != 0)
+        {
+            for (Index = 0; Index < PresentCount; Index++)
+                DxgkpRecordDirtyRect(Adapter, &PresentRects[Index]);
+        }
+        else
+        {
+            for (Index = 0; Index < Count; Index++)
+                DxgkpRecordDirtyRect(Adapter, &DirtyRects[Index]);
+        }
+    }
 ReleasePath:
     DxgkpReleasePresentPath(Adapter);
     return Captured;
@@ -2084,10 +2115,12 @@ DxgkpPresentCapturedSnapshot(
 {
     DXGK_PRESENT_LOCK_STATE LockState;
     PDXGKRNL_PRESENT_SNAPSHOT Snapshot;
-    RECTL PresentRect;
+    RECTL PresentRects[DXGK_DIRTY_RECT_SLOTS];
     PVOID Source;
     SIZE_T SourceSize;
     ULONG SourcePitch;
+    ULONG PresentCount;
+    ULONG Index;
     LONG SlotIndex;
     LONG ReadyIndex;
     BOOLEAN Presented = FALSE;
@@ -2108,7 +2141,7 @@ DxgkpPresentCapturedSnapshot(
     }
 
     Snapshot = &Adapter->PresentSnapshots[SlotIndex];
-    if (Snapshot->Buffer == NULL || !Snapshot->PresentValid)
+    if (Snapshot->Buffer == NULL || Snapshot->PresentRectCount == 0)
     {
         Adapter->PresentSnapshotReady = -1;
         DxgkpReleasePresentLock(Adapter, &LockState);
@@ -2119,15 +2152,18 @@ DxgkpPresentCapturedSnapshot(
     Source = Snapshot->Buffer;
     SourceSize = Snapshot->BufferSize;
     SourcePitch = Adapter->PresentSnapshotPitch;
-    PresentRect = Snapshot->PresentRect;
+    PresentCount = Snapshot->PresentRectCount;
+    RtlCopyMemory(PresentRects,
+                  Snapshot->PresentRects,
+                  PresentCount * sizeof(PresentRects[0]));
     DxgkpReleasePresentLock(Adapter, &LockState);
 
     Status = DxgkpPresentSourceRects(Adapter,
                                      Source,
                                      SourcePitch,
                                      SourceSize,
-                                     &PresentRect,
-                                     1,
+                                     PresentRects,
+                                     PresentCount,
                                      TraceReason);
     Presented = TRUE;
 
@@ -2137,17 +2173,20 @@ DxgkpPresentCapturedSnapshot(
         Adapter->PresentSnapshotReading = -1;
     if (NT_SUCCESS(Status))
     {
-        Snapshot->PresentValid = FALSE;
+        Snapshot->PresentRectCount = 0;
     }
     else
     {
         ReadyIndex = Adapter->PresentSnapshotReady;
         if (ReadyIndex >= 0)
         {
-            DxgkpAccumulateSnapshotRect(
-                &Adapter->PresentSnapshots[ReadyIndex].PresentRect,
-                &Adapter->PresentSnapshots[ReadyIndex].PresentValid,
-                &PresentRect);
+            for (Index = 0; Index < PresentCount; Index++)
+            {
+                DxgkpAccumulateRectList(
+                    Adapter->PresentSnapshots[ReadyIndex].PresentRects,
+                    &Adapter->PresentSnapshots[ReadyIndex].PresentRectCount,
+                    &PresentRects[Index]);
+            }
         }
         else
         {
@@ -2318,8 +2357,6 @@ static VOID
 DxgkpQueueCompletedPresent(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
-    BOOLEAN SnapshotsAvailable;
-
     if (Adapter == NULL || InterlockedCompareExchange(&Adapter->SharedSurfaceAvailable, 0, 0) == 0)
         return;
     if (InterlockedCompareExchange(&Adapter->PresentPathOpen, 0, 0) == 0)
@@ -2327,15 +2364,8 @@ DxgkpQueueCompletedPresent(
     if (DxgkpGdiPresentBatchActive(DxgkpDisplayTraceNow100ns()))
         return;
 
-    SnapshotsAvailable = DxgkpPresentSnapshotsAvailable(Adapter);
-    if (SnapshotsAvailable && DxgkpHasPendingDirtyRect(Adapter))
-        DxgkpCapturePendingPresent(Adapter);
-    if (SnapshotsAvailable)
-    {
-        if (!DxgkpPresentSnapshotReady(Adapter))
-            return;
-    }
-    else if (!DxgkpHasPendingDirtyRect(Adapter))
+    if (!DxgkpPresentSnapshotReady(Adapter) &&
+        !DxgkpHasPendingDirtyRect(Adapter))
         return;
 
     DxgkpTryDispatchPresentWork(Adapter);
@@ -2345,7 +2375,6 @@ static VOID
 DxgkpEndGdiPresentBatch(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
-    BOOLEAN PointerReleasePending;
     LONG Depth;
 
     for (;;)
@@ -2365,20 +2394,20 @@ DxgkpEndGdiPresentBatch(
     if (Depth <= 0 || Depth > 1)
         return;
 
+    KeMemoryBarrier();
     InterlockedExchange64(&g_GdiPresentBatchSince100ns, 0);
-    PointerReleasePending =
-        InterlockedExchange(&g_PointerReleasePresentPending, 0) != 0;
+    InterlockedExchange(&g_PointerReleasePresentPending, 0);
 
-    /* Copy the completed transaction while its caller still serializes direct
-     * primary drawing. The asynchronous worker must never read CDD's mutable
-     * shadow framebuffer after that serialization has been released. */
+    /* Freeze the completed transaction before releasing win32k's drawing
+     * serialization. Copy only its bounded damage list; the present worker
+     * must never sample the mutable CDD primary after another transaction has
+     * started writing it. */
     if (DxgkpHasPendingDirtyRect(Adapter))
     {
         DxgkpCapturePendingPresent(Adapter);
         InterlockedExchange64(&g_LastDirtyNotify100ns,
                               (LONGLONG)DxgkpDisplayTraceNow100ns());
-        if (!Adapter->PresentTimerActive || PointerReleasePending)
-            DxgkpQueueCompletedPresent(Adapter);
+        DxgkpQueueCompletedPresent(Adapter);
     }
 }
 
@@ -2476,18 +2505,6 @@ DxgkpPresentWorkItemRoutineEx(
 
 Complete:
     InterlockedExchange(&g_PresentDispatchBusy, 0);
-
-    /* A capture can publish the alternate slot while this worker is scanning
-     * out. Closing the dispatch hand-off this way prevents that frame from
-     * waiting for a later timer tick or being stranded when DWM owns vblank. */
-    if (Adapter != NULL &&
-        Adapter->PresentTimerActive &&
-        DxgkpPresentSnapshotReady(Adapter) &&
-        InterlockedCompareExchange(&Adapter->DwmCompositionInProgress, 0, 0) == 0 &&
-        DxgkpMayPresentPendingAsync(DxgkpDisplayTraceNow100ns()))
-    {
-        DxgkpTryDispatchPresentWork(Adapter);
-    }
     if (Adapter != NULL)
         DxgkpReleasePresentPath(Adapter);
 }
@@ -2545,9 +2562,9 @@ DxgkpPresentTimerDpc(
     TimerSeq = InterlockedIncrement(&g_PresentTimerTraceCount);
     Now100ns = DxgkpDisplayTraceNow100ns();
     SnapshotsAvailable = DxgkpPresentSnapshotsAvailable(Adapter);
-    HasPendingFrame = SnapshotsAvailable
-                          ? DxgkpPresentSnapshotReady(Adapter)
-                          : DxgkpHasPendingDirtyRect(Adapter);
+    HasPendingFrame = DxgkpHasPendingDirtyRect(Adapter) ||
+                      (SnapshotsAvailable &&
+                       DxgkpPresentSnapshotReady(Adapter));
 
     if (HasPendingFrame)
     {
@@ -2770,8 +2787,7 @@ DxgkDisplayVsyncFlush(
 
     if (Adapter->PresentTimerActive &&
         (DxgkpPresentSnapshotReady(Adapter) ||
-         (!DxgkpPresentSnapshotsAvailable(Adapter) &&
-          DxgkpHasPendingDirtyRect(Adapter))) &&
+         DxgkpHasPendingDirtyRect(Adapter)) &&
         InterlockedCompareExchange(&Adapter->DwmCompositionInProgress, 0, 0) == 0 &&
         DxgkpMayPresentPendingAsync(DxgkpDisplayTraceNow100ns()))
     {
@@ -3331,10 +3347,14 @@ DxgkpDisplayDispatch(
 
         case IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT:
         {
-            PRECTL DirtyRect = (PRECTL)Irp->AssociatedIrp.SystemBuffer;
+            PVOID InputBuffer = Irp->AssociatedIrp.SystemBuffer;
+            const RECTL *DirtyRects;
+            RECTL LegacyRect;
             LONG TraceSeq;
             ULONGLONG Now100ns;
             ULONG Flags = 0;
+            ULONG RectCount = 0;
+            ULONG Index;
 
             if (Irp->RequestorMode != KernelMode)
             {
@@ -3342,7 +3362,7 @@ DxgkpDisplayDispatch(
                 break;
             }
 
-            if (DirtyRect == NULL ||
+            if (InputBuffer == NULL ||
                 Stack->Parameters.DeviceIoControl.InputBufferLength < sizeof(RECTL))
             {
                 Status = STATUS_BUFFER_TOO_SMALL;
@@ -3357,20 +3377,44 @@ DxgkpDisplayDispatch(
                 break;
             }
 
+            if (Stack->Parameters.DeviceIoControl.InputBufferLength >=
+                    sizeof(DXGK_PRESENT_DIRTY_RECTS_INPUT) &&
+                ((PDXGK_PRESENT_DIRTY_RECTS_INPUT)InputBuffer)->StructSize ==
+                    sizeof(DXGK_PRESENT_DIRTY_RECTS_INPUT) &&
+                ((PDXGK_PRESENT_DIRTY_RECTS_INPUT)InputBuffer)->RectCount <=
+                    DXGK_PRESENT_MAX_DIRTY_RECTS)
+            {
+                PDXGK_PRESENT_DIRTY_RECTS_INPUT Input =
+                    (PDXGK_PRESENT_DIRTY_RECTS_INPUT)InputBuffer;
+
+                Flags = Input->Flags;
+                RectCount = Input->RectCount;
+                DirtyRects = Input->Rects;
+            }
+            else
+            {
+                LegacyRect = *(PRECTL)InputBuffer;
+                DirtyRects = &LegacyRect;
+                RectCount = 1;
+                if (Stack->Parameters.DeviceIoControl.InputBufferLength >=
+                        sizeof(DXGK_PRESENT_DIRTY_RECT_INPUT))
+                {
+                    Flags = ((PDXGK_PRESENT_DIRTY_RECT_INPUT)InputBuffer)->Flags;
+                }
+            }
+
             TraceSeq = InterlockedIncrement(&g_PresentDirtyTraceCount);
             if (TraceSeq <= DXGK_PRESENT_TRACE_LOG_LIMIT)
             {
                 DXGKRNL_TRACE("DxgkpDisplayDispatch: IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT "
-                              "seq=%ld rect=(%ld,%ld)-(%ld,%ld)\n",
+                              "seq=%ld rects=%lu first=(%ld,%ld)-(%ld,%ld)\n",
                               TraceSeq,
-                              DirtyRect->left,
-                              DirtyRect->top,
-                              DirtyRect->right,
-                              DirtyRect->bottom);
+                              RectCount,
+                              RectCount != 0 ? DirtyRects[0].left : 0,
+                              RectCount != 0 ? DirtyRects[0].top : 0,
+                              RectCount != 0 ? DirtyRects[0].right : 0,
+                              RectCount != 0 ? DirtyRects[0].bottom : 0);
             }
-
-            if (Stack->Parameters.DeviceIoControl.InputBufferLength >= sizeof(DXGK_PRESENT_DIRTY_RECT_INPUT))
-                Flags = ((PDXGK_PRESENT_DIRTY_RECT_INPUT)Irp->AssociatedIrp.SystemBuffer)->Flags;
 
             Now100ns = DxgkpDisplayTraceNow100ns();
             if (Flags & DXGK_PRESENT_DIRTY_HOLD)
@@ -3381,10 +3425,13 @@ DxgkpDisplayDispatch(
                 Status = STATUS_SUCCESS;
                 break;
             }
+            if ((Flags & DXGK_PRESENT_DIRTY_RELEASE) || RectCount != 0)
+                KeMemoryBarrier();
             if (Flags & DXGK_PRESENT_DIRTY_RELEASE)
                 InterlockedExchange(&g_PresentHoldActive, 0);
 
-            DxgkpRecordDirtyRect(g_DisplayAdapter, DirtyRect);
+            for (Index = 0; Index < RectCount; Index++)
+                DxgkpRecordDirtyRect(g_DisplayAdapter, &DirtyRects[Index]);
             InterlockedExchange64(&g_LastDirtyNotify100ns, (LONGLONG)Now100ns);
 
             /* Individual GDI primitives only accumulate damage. Publishing a
@@ -3665,6 +3712,7 @@ DxgkpDisplayDispatch(
 
             if (g_DisplayAdapter != NULL)
             {
+                KeMemoryBarrier();
                 InterlockedExchange(&g_DisplayAdapter->DwmCompositionInProgress, 0);
                 DxgkpQueueCompletedPresent(g_DisplayAdapter);
             }

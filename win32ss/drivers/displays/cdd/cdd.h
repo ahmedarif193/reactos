@@ -69,8 +69,10 @@ typedef struct _RCDD_PDEV
 
    /* Dirty-rect notification state (see present.c) */
    ULONG SafetyHoldDepth;      /* nested atomic software-cursor transactions */
-   BOOL PendingValid;          /* PendingRect holds withheld dirty pixels     */
-   RECTL PendingRect;
+   BOOL SafetyHoldNotified;    /* dxgkrnl owns a matching HOLD notification  */
+   ULONG PresentBatchDepth;    /* nested completed-paint transaction depth    */
+   ULONG PendingRectCount;
+   RECTL PendingRects[DXGK_PRESENT_MAX_DIRTY_RECTS];
    BOOL DirtyOutstanding;      /* dxgkrnl has dirty pixels awaiting a flush   */
    ULONG DrawSeq;              /* Bumped by every draw DDI entry              */
    ULONG SentSeq;              /* DrawSeq of the last notification sent       */
@@ -389,6 +391,12 @@ VOID
 RcddPresent(
    PRCDD_PDEV ppdev,
    const RECTL *prcl);
+
+VOID
+RcddPresentEx(
+   PRCDD_PDEV ppdev,
+   const RECTL *prcl,
+   ULONG Flags);
 
 /* ---- escape.c : DWM composition contract -------------------------------- */
 
