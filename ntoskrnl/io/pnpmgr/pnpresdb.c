@@ -159,17 +159,7 @@ IopResDbConflict(_In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR a, _In_opt_ PDEVICE_NODE a
             return TRUE;
         }
         case CmResourceTypeDma:
-            if ((a->Flags & CM_RESOURCE_DMA_V3) &&
-                (b->Flags & CM_RESOURCE_DMA_V3))
-            {
-                return a->u.DmaV3.RequestLine == b->u.DmaV3.RequestLine;
-            }
-            if (!(a->Flags & CM_RESOURCE_DMA_V3) &&
-                !(b->Flags & CM_RESOURCE_DMA_V3))
-            {
-                return a->u.Dma.Channel == b->u.Dma.Channel;
-            }
-            return FALSE;
+            return IopDmaDescriptorsConflict(a, b);
         default:
             return FALSE;
     }
