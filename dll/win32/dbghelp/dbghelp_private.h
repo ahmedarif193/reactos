@@ -929,7 +929,7 @@ extern DWORD64      sw_module_base(struct cpu_stack_walk* csw, DWORD64 addr);
 extern const char*  symt_get_name(const struct symt* sym);
 extern WCHAR*       symt_get_nameW(const struct symt* sym);
 extern BOOL         symt_get_address(const struct symt* type, ULONG64* addr);
-extern int __cdecl  symt_cmp_addr(const void* p1, const void* p2);
+extern int CDECL    symt_cmp_addr(const void* p1, const void* p2);
 extern void         copy_symbolW(SYMBOL_INFOW* siw, const SYMBOL_INFO* si);
 extern void         symbol_setname(SYMBOL_INFO* si, const char* name);
 extern BOOL         symt_match_stringAW(const char *string, const WCHAR *re, BOOL _case);

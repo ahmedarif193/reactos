@@ -7,7 +7,7 @@
 
 #pragma once
 
-template<class H> static int ErrorBox(H hWnd, int Error)
+template<class H> inline int ErrorBox(H hWnd, int Error)
 {
     SHELL_ErrorBox(hWnd, Error);
     return Error;

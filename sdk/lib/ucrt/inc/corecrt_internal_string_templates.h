@@ -16,7 +16,7 @@
 // _strcat_s() and _wcscat_s()
 template <typename Character>
 _Success_(return == 0)
-static errno_t __cdecl common_tcscat_s(
+inline errno_t __cdecl common_tcscat_s(
     _Inout_updates_z_(size_in_elements) Character* const destination,
     size_t                                         const size_in_elements,
     _In_z_  Character const*                       const source
@@ -58,7 +58,7 @@ static errno_t __cdecl common_tcscat_s(
 // _strcpy_s() and _wcscpy_s()
 template <typename Character>
 _Success_(return == 0)
-static errno_t __cdecl common_tcscpy_s(
+inline errno_t __cdecl common_tcscpy_s(
     _Out_writes_z_(size_in_elements) Character* const destination,
     _In_                                 size_t const size_in_elements,
     _In_z_                     Character const* const source
@@ -89,7 +89,7 @@ static errno_t __cdecl common_tcscpy_s(
 // _strncat_s() and _wcsncat_s()
 template <typename Character>
 _Success_(return == 0)
-static errno_t __cdecl common_tcsncat_s(
+inline errno_t __cdecl common_tcsncat_s(
     _Inout_updates_z_(size_in_elements) Character* const destination,
     _In_                                    size_t const size_in_elements,
     _In_reads_or_z_(count)        Character const* const source,
@@ -163,7 +163,7 @@ static errno_t __cdecl common_tcsncat_s(
 // _strncpy_s() and _wcsncpy_s()
 template <typename Character>
 _Success_(return == 0)
-static errno_t __cdecl common_tcsncpy_s(
+inline errno_t __cdecl common_tcsncpy_s(
     _Out_writes_z_(size_in_elements) Character* const destination,
     _In_                                 size_t const size_in_elements,
     _In_reads_or_z_(count)     Character const* const source,
@@ -226,7 +226,7 @@ static errno_t __cdecl common_tcsncpy_s(
 // _strnset_s() and _wcsnset_s()
 template <typename Character>
 _Success_(return == 0)
-static errno_t __cdecl common_tcsnset_s(
+inline errno_t __cdecl common_tcsnset_s(
     _Inout_updates_z_(size_in_elements) Character* const destination,
     _In_                                    size_t const size_in_elements,
     _In_                                 Character const value,
@@ -273,7 +273,7 @@ static errno_t __cdecl common_tcsnset_s(
 // _strset_s() and _wcsset_s()
 template <typename Character>
 _Success_(return == 0)
-static errno_t __cdecl common_tcsset_s(
+inline errno_t __cdecl common_tcsset_s(
     _Inout_updates_z_(size_in_elements) Character* const destination,
     _In_                                    size_t const size_in_elements,
     _In_                                 Character const value

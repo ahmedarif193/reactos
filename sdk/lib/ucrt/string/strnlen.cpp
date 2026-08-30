@@ -34,7 +34,7 @@
 // searched for a terminator.  For the bounded strnlen functions, we must
 // test to see whether
 template <strnlen_mode Mode>
-static __forceinline bool __cdecl last_reached(
+__forceinline bool __cdecl last_reached(
     void const* const it,
     void const* const last
     ) throw()
@@ -61,7 +61,7 @@ template <strnlen_mode Mode, typename Element>
 _Check_return_
 _When_(maximum_count > _String_length_(string), _Post_satisfies_(return == _String_length_(string)))
 _When_(maximum_count <= _String_length_(string), _Post_satisfies_(return == maximum_count))
-static __forceinline size_t __cdecl common_strnlen_c(
+__forceinline size_t __cdecl common_strnlen_c(
     Element const* const string,
     size_t         const maximum_count
     ) throw()
@@ -182,7 +182,7 @@ template <strnlen_mode Mode, typename Element>
 _Check_return_
 _When_(maximum_count > _String_length_(string), _Post_satisfies_(return == _String_length_(string)))
 _When_(maximum_count <= _String_length_(string), _Post_satisfies_(return == maximum_count))
-static __forceinline size_t __cdecl common_strnlen(
+__forceinline size_t __cdecl common_strnlen(
     Element const* const string,
     size_t         const maximum_count
     ) throw()
