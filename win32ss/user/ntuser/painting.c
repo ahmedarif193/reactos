@@ -131,12 +131,8 @@ IntValidateParents(PWND Child, BOOL Recurse)
 VOID FASTCALL
 IntSendSyncPaint(PWND Wnd, ULONG Flags)
 {
-   PTHREADINFO ptiCur, ptiWnd;
-   PUSER_SENT_MESSAGE Message;
-   PLIST_ENTRY Entry;
-   BOOL bSend = TRUE;
+   PTHREADINFO ptiCur;
 
-   ptiWnd = Wnd->head.pti;
    ptiCur = PsGetCurrentThreadWin32Thread();
    /*
       Not the current thread, Wnd is in send Nonclient paint also in send erase background and it is visiable.
@@ -144,37 +140,16 @@ IntSendSyncPaint(PWND Wnd, ULONG Flags)
    if ( Wnd->head.pti != ptiCur &&
         Wnd->state & WNDS_SENDNCPAINT &&
         Wnd->state & WNDS_SENDERASEBACKGROUND &&
-        Wnd->style & WS_VISIBLE)
+        Wnd->style & WS_VISIBLE &&
+       !(Wnd->state & WNDS_SYNCPAINTPENDING))
    {
-      // For testing, if you see this, break out the Champagne and have a party!
       TRACE("SendSyncPaint Wnd in State!\n");
-      if (!IsListEmpty(&ptiWnd->SentMessagesListHead))
-      {
-         // Scan sent queue messages to see if we received sync paint messages.
-         Entry = ptiWnd->SentMessagesListHead.Flink;
-         Message = CONTAINING_RECORD(Entry, USER_SENT_MESSAGE, ListEntry);
-         do
-         {
-            TRACE("LOOP it\n");
-            if (Message->Msg.message == WM_SYNCPAINT &&
-                Message->Msg.hwnd == UserHMGetHandle(Wnd))
-            {  // Already received so exit out.
-                ERR("SendSyncPaint Found one in the Sent Msg Queue!\n");
-                bSend = FALSE;
-                break;
-            }
-            Entry = Message->ListEntry.Flink;
-            Message = CONTAINING_RECORD(Entry, USER_SENT_MESSAGE, ListEntry);
-         }
-         while (Entry != &ptiWnd->SentMessagesListHead);
-      }
-      if (bSend)
-      {
-         TRACE("Sending WM_SYNCPAINT\n");
-         // This message has no parameters. But it does! Pass Flags along.
-         co_IntSendMessageNoWait(UserHMGetHandle(Wnd), WM_SYNCPAINT, Flags, 0);
-         Wnd->state |= WNDS_SYNCPAINTPENDING;
-      }
+      TRACE("Sending WM_SYNCPAINT\n");
+      /* The pending bit is cleared by DefWindowProc when it handles the
+       * message. Use it as the queue invariant instead of walking another
+       * thread's sent-message list for every repaint request. */
+      Wnd->state |= WNDS_SYNCPAINTPENDING;
+      co_IntSendMessageNoWait(UserHMGetHandle(Wnd), WM_SYNCPAINT, Flags, 0);
    }
 
    // Send to all the children if this is the desktop window.
