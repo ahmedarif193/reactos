@@ -622,13 +622,17 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
 
                     //// This causes the mdi child window to jump up when it is moved.
                     //IntMapWindowPoints( 0, pWndParent, (POINT *)&rect, 2 );
+                    /* The exposed-region update below owns erasure for this
+                     * move. Do not synchronously erase and paint once inside
+                     * SetWindowPos and then repeat it in UpdateThreadWindows. */
                     co_WinPosSetWindowPos(pwnd,
                                           NULL,
                                           newRect.left,
                                           newRect.top,
                                           newRect.right - newRect.left,
                                           newRect.bottom - newRect.top,
-                                          SWP_NOACTIVATE | ((hittest == HTCAPTION) ? SWP_NOSIZE : 0));
+                                          SWP_NOACTIVATE | SWP_DEFERERASE |
+                                          ((hittest == HTCAPTION) ? SWP_NOSIZE : 0));
 
                     hrgnNew = GreCreateRectRgnIndirect(&pwnd->rcWindow);
                     if (pwnd->hrgnClip != NULL)
