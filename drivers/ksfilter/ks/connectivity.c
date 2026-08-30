@@ -332,7 +332,7 @@ KspPinPropertyHandler(
     KSP_PIN * Pin;
     KSMULTIPLE_ITEM * Item;
     PIO_STACK_LOCATION IoStack;
-    ULONG Size, Index;
+    ULONG Size, Index, RangeSize, Padding, AttributeIndex, AttributeSize;
     PVOID Buffer;
     PKSDATARANGE_AUDIO *WaveFormatOut;
     PKSDATAFORMAT_WAVEFORMATEX WaveFormatIn;
@@ -341,6 +341,9 @@ KspPinPropertyHandler(
     NTSTATUS Status = STATUS_NOT_SUPPORTED;
     ULONG Count;
     const PKSDATARANGE* DataRanges;
+    const KSATTRIBUTE_LIST *AttributeList;
+    const KSATTRIBUTE *Attribute;
+    PKSMULTIPLE_ITEM AttributeItem;
     LPGUID Guid;
 
     IoStack = IoGetCurrentIrpStackLocation(Irp);
@@ -412,9 +415,78 @@ KspPinPropertyHandler(
                 Count = Descriptor->ConstrainedDataRangesCount;
             }
 
+            if (Count && !DataRanges)
+            {
+                Irp->IoStatus.Information = 0;
+                return STATUS_INVALID_PARAMETER;
+            }
+
             for (Index = 0; Index < Count; Index++)
             {
-                Size += ((DataRanges[Index]->FormatSize + 0x7) & ~0x7);
+                if (!DataRanges[Index] ||
+                    DataRanges[Index]->FormatSize < sizeof(KSDATARANGE) ||
+                    Size > MAXULONG - DataRanges[Index]->FormatSize)
+                {
+                    Irp->IoStatus.Information = 0;
+                    return STATUS_INVALID_PARAMETER;
+                }
+
+                Size += DataRanges[Index]->FormatSize;
+
+                if (DataRanges[Index]->Flags & KSDATARANGE_ATTRIBUTES)
+                {
+                    if (Size > MAXULONG - 7 || Index + 1 >= Count)
+                    {
+                        Irp->IoStatus.Information = 0;
+                        return STATUS_INVALID_PARAMETER;
+                    }
+
+                    Size = (Size + 7) & ~7UL;
+                    AttributeList = (const KSATTRIBUTE_LIST *)DataRanges[++Index];
+                    if (!AttributeList ||
+                        (AttributeList->Count && !AttributeList->Attributes) ||
+                        Size > MAXULONG - sizeof(KSMULTIPLE_ITEM))
+                    {
+                        Irp->IoStatus.Information = 0;
+                        return STATUS_INVALID_PARAMETER;
+                    }
+
+                    Size += sizeof(KSMULTIPLE_ITEM);
+                    for (AttributeIndex = 0;
+                         AttributeIndex < AttributeList->Count;
+                         AttributeIndex++)
+                    {
+                        Attribute = AttributeList->Attributes[AttributeIndex];
+                        if (!Attribute ||
+                            Attribute->Size < sizeof(KSATTRIBUTE) ||
+                            Size > MAXULONG - Attribute->Size)
+                        {
+                            Irp->IoStatus.Information = 0;
+                            return STATUS_INVALID_PARAMETER;
+                        }
+
+                        Size += Attribute->Size;
+                        if (AttributeIndex + 1 < AttributeList->Count)
+                        {
+                            if (Size > MAXULONG - 7)
+                            {
+                                Irp->IoStatus.Information = 0;
+                                return STATUS_INVALID_PARAMETER;
+                            }
+                            Size = (Size + 7) & ~7UL;
+                        }
+                    }
+                }
+
+                if (Index + 1 < Count)
+                {
+                    if (Size > MAXULONG - 7)
+                    {
+                        Irp->IoStatus.Information = 0;
+                        return STATUS_INVALID_PARAMETER;
+                    }
+                    Size = (Size + 7) & ~7UL;
+                }
             }
 
             if (IoStack->Parameters.DeviceIoControl.OutputBufferLength == 0)
@@ -422,6 +494,13 @@ KspPinPropertyHandler(
                 /* buffer too small */
                 Irp->IoStatus.Information = Size;
                 Status = STATUS_BUFFER_OVERFLOW;
+                break;
+            }
+
+            if (IoStack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(ULONG))
+            {
+                Irp->IoStatus.Information = 0;
+                Status = STATUS_BUFFER_TOO_SMALL;
                 break;
             }
 
@@ -436,6 +515,13 @@ KspPinPropertyHandler(
                 break;
             }
 
+            if (IoStack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(KSMULTIPLE_ITEM))
+            {
+                Irp->IoStatus.Information = 0;
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
             /* store descriptor size */
             Item->Size = Size;
             Item->Count = Count;
@@ -444,6 +530,13 @@ KspPinPropertyHandler(
             {
                 Irp->IoStatus.Information = sizeof(KSMULTIPLE_ITEM);
                 Status = STATUS_SUCCESS;
+                break;
+            }
+
+            if (IoStack->Parameters.DeviceIoControl.OutputBufferLength < Size)
+            {
+                Irp->IoStatus.Information = 0;
+                Status = STATUS_BUFFER_TOO_SMALL;
                 break;
             }
 
@@ -468,10 +561,58 @@ KspPinPropertyHandler(
                        DataRanges[Index]->FormatSize, DataRanges[Index]->Flags, DataRanges[Index]->SampleSize, DataRanges[Index]->Reserved, sizeof(KSDATAFORMAT));
 
                 RtlMoveMemory(Data, DataRanges[Index], DataRanges[Index]->FormatSize);
-                Data = ((PUCHAR)Data + DataRanges[Index]->FormatSize);
-                /* alignment assert */
+                RangeSize = (DataRanges[Index]->FormatSize + 7) & ~7UL;
+                Padding = RangeSize - DataRanges[Index]->FormatSize;
+                if (Padding &&
+                    ((DataRanges[Index]->Flags & KSDATARANGE_ATTRIBUTES) ||
+                     Index + 1 < Count))
+                {
+                    RtlZeroMemory((PUCHAR)Data + DataRanges[Index]->FormatSize, Padding);
+                }
+
+                Data = (PUCHAR)Data + RangeSize;
                 ASSERT(((ULONG_PTR)Data & 0x7) == 0);
-                Data = (PVOID)(((ULONG_PTR)Data + 0x7) & ~0x7);
+
+                if (DataRanges[Index]->Flags & KSDATARANGE_ATTRIBUTES)
+                {
+                    AttributeList = (const KSATTRIBUTE_LIST *)DataRanges[++Index];
+                    AttributeItem = (PKSMULTIPLE_ITEM)Data;
+                    AttributeItem->Size = sizeof(KSMULTIPLE_ITEM);
+                    AttributeItem->Count = AttributeList->Count;
+
+                    for (AttributeIndex = 0;
+                         AttributeIndex < AttributeList->Count;
+                         AttributeIndex++)
+                    {
+                        Attribute = AttributeList->Attributes[AttributeIndex];
+                        RtlMoveMemory((PUCHAR)AttributeItem + AttributeItem->Size,
+                                      Attribute,
+                                      Attribute->Size);
+                        AttributeItem->Size += Attribute->Size;
+
+                        if (AttributeIndex + 1 < AttributeList->Count)
+                        {
+                            AttributeSize = (AttributeItem->Size + 7) & ~7UL;
+                            Padding = AttributeSize - AttributeItem->Size;
+                            if (Padding)
+                            {
+                                RtlZeroMemory((PUCHAR)AttributeItem + AttributeItem->Size,
+                                              Padding);
+                            }
+                            AttributeItem->Size = AttributeSize;
+                        }
+                    }
+
+                    AttributeSize = (AttributeItem->Size + 7) & ~7UL;
+                    Padding = AttributeSize - AttributeItem->Size;
+                    if (Padding && Index + 1 < Count)
+                    {
+                        RtlZeroMemory((PUCHAR)AttributeItem + AttributeItem->Size,
+                                      Padding);
+                    }
+                    Data = (PUCHAR)AttributeItem + AttributeSize;
+                    ASSERT(((ULONG_PTR)Data & 0x7) == 0);
+                }
             }
 
             Status = STATUS_SUCCESS;

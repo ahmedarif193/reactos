@@ -125,10 +125,16 @@ MMixerCheckFilterPinMidiSupport(
     IN PKSMULTIPLE_ITEM MultipleItem,
     IN LPWSTR szPname)
 {
-    ULONG Index;
+    ULONG Index, RangeSize, AttributeSize, RangeFlags, Remaining;
     PKSDATARANGE DataRange;
+    PKSMULTIPLE_ITEM AttributeItem;
     KSPIN_COMMUNICATION Communication;
     KSPIN_DATAFLOW DataFlow;
+
+    if (!MultipleItem || MultipleItem->Size < sizeof(KSMULTIPLE_ITEM))
+        return;
+
+    Remaining = MultipleItem->Size - sizeof(KSMULTIPLE_ITEM);
 
     /* get first datarange */
     DataRange = (PKSDATARANGE)(MultipleItem + 1);
@@ -139,6 +145,17 @@ MMixerCheckFilterPinMidiSupport(
     /* iterate through all data ranges */
     for(Index = 0; Index < MultipleItem->Count; Index++)
     {
+        if (Remaining < sizeof(KSDATARANGE) ||
+            DataRange->FormatSize < sizeof(KSDATARANGE) ||
+            DataRange->FormatSize > MAXULONG - 7)
+        {
+            return;
+        }
+
+        RangeSize = (DataRange->FormatSize + 7) & ~7UL;
+        if (RangeSize > Remaining)
+            return;
+
         if (IsEqualGUIDAligned(&DataRange->MajorFormat, &KSDATAFORMAT_TYPE_MUSIC) &&
             IsEqualGUIDAligned(&DataRange->SubFormat, &KSDATAFORMAT_SUBTYPE_MIDI) &&
             IsEqualGUIDAligned(&DataRange->Specifier, &KSDATAFORMAT_SPECIFIER_NONE))
@@ -157,14 +174,43 @@ MMixerCheckFilterPinMidiSupport(
             }
         }
 
-        /* move to next datarange */
-        DataRange = (PKSDATARANGE)((ULONG_PTR)DataRange + DataRange->FormatSize);
+        RangeFlags = DataRange->Flags;
+        Remaining -= RangeSize;
+        DataRange = (PKSDATARANGE)((PUCHAR)DataRange + RangeSize);
 
-        /* alignment assert */
-        ASSERT(((ULONG_PTR)DataRange & 0x7) == 0);
+        if (RangeFlags & KSDATARANGE_ATTRIBUTES)
+        {
+            if (Index + 1 >= MultipleItem->Count ||
+                Remaining < sizeof(KSMULTIPLE_ITEM))
+            {
+                return;
+            }
 
-        /* data ranges are 64-bit aligned */
-        DataRange = (PVOID)(((ULONG_PTR)DataRange + 0x7) & ~0x7);
+            AttributeItem = (PKSMULTIPLE_ITEM)DataRange;
+            if (AttributeItem->Size < sizeof(KSMULTIPLE_ITEM) ||
+                AttributeItem->Size > Remaining)
+            {
+                return;
+            }
+
+            AttributeSize = AttributeItem->Size;
+            if (Index + 2 < MultipleItem->Count)
+            {
+                if (AttributeSize > MAXULONG - 7)
+                    return;
+
+                AttributeSize = (AttributeSize + 7) & ~7UL;
+                if (AttributeSize > Remaining)
+                    return;
+            }
+
+            Remaining -= AttributeSize;
+            DataRange = (PKSDATARANGE)((PUCHAR)DataRange + AttributeSize);
+            Index++;
+        }
+
+        ASSERT(((ULONG_PTR)DataRange & 0x7) == 0 ||
+               Index + 1 == MultipleItem->Count);
     }
 }
 

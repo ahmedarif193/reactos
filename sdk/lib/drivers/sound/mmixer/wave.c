@@ -189,14 +189,34 @@ MMixerFindAudioDataRange(
     PKSMULTIPLE_ITEM MultipleItem,
     PKSDATARANGE_AUDIO * OutDataRangeAudio)
 {
-    ULONG Index;
+    ULONG Index, RangeSize, AttributeSize, RangeFlags, Remaining;
     PKSDATARANGE_AUDIO DataRangeAudio;
     PKSDATARANGE DataRange;
+    PKSMULTIPLE_ITEM AttributeItem;
 
+    if (!MultipleItem || !OutDataRangeAudio ||
+        MultipleItem->Size < sizeof(KSMULTIPLE_ITEM))
+    {
+        return MM_STATUS_INVALID_PARAMETER;
+    }
+
+    *OutDataRangeAudio = NULL;
+    Remaining = MultipleItem->Size - sizeof(KSMULTIPLE_ITEM);
     DataRange = (PKSDATARANGE) (MultipleItem + 1);
     for(Index = 0; Index < MultipleItem->Count; Index++)
     {
-        if (DataRange->FormatSize >= sizeof(KSDATARANGE))
+        if (Remaining < sizeof(KSDATARANGE) ||
+            DataRange->FormatSize < sizeof(KSDATARANGE) ||
+            DataRange->FormatSize > MAXULONG - 7)
+        {
+            return MM_STATUS_INVALID_PARAMETER;
+        }
+
+        RangeSize = (DataRange->FormatSize + 7) & ~7UL;
+        if (RangeSize > Remaining)
+            return MM_STATUS_INVALID_PARAMETER;
+
+        if (DataRange->FormatSize >= sizeof(KSDATARANGE_AUDIO))
         {
             DataRangeAudio = (PKSDATARANGE_AUDIO)DataRange;
             if (IsEqualGUIDAligned(&DataRange->MajorFormat, &KSDATAFORMAT_TYPE_AUDIO) &&
@@ -209,7 +229,41 @@ MMixerFindAudioDataRange(
                 return MM_STATUS_SUCCESS;
             }
         }
-        DataRange = (PKSDATARANGE)((ULONG_PTR)DataRange + DataRange->FormatSize);
+
+        RangeFlags = DataRange->Flags;
+        Remaining -= RangeSize;
+        DataRange = (PKSDATARANGE)((PUCHAR)DataRange + RangeSize);
+
+        if (RangeFlags & KSDATARANGE_ATTRIBUTES)
+        {
+            if (Index + 1 >= MultipleItem->Count ||
+                Remaining < sizeof(KSMULTIPLE_ITEM))
+            {
+                return MM_STATUS_INVALID_PARAMETER;
+            }
+
+            AttributeItem = (PKSMULTIPLE_ITEM)DataRange;
+            if (AttributeItem->Size < sizeof(KSMULTIPLE_ITEM) ||
+                AttributeItem->Size > Remaining)
+            {
+                return MM_STATUS_INVALID_PARAMETER;
+            }
+
+            AttributeSize = AttributeItem->Size;
+            if (Index + 2 < MultipleItem->Count)
+            {
+                if (AttributeSize > MAXULONG - 7)
+                    return MM_STATUS_INVALID_PARAMETER;
+
+                AttributeSize = (AttributeSize + 7) & ~7UL;
+                if (AttributeSize > Remaining)
+                    return MM_STATUS_INVALID_PARAMETER;
+            }
+
+            Remaining -= AttributeSize;
+            DataRange = (PKSDATARANGE)((PUCHAR)DataRange + AttributeSize);
+            Index++;
+        }
     }
     return MM_STATUS_UNSUCCESSFUL;
 }
