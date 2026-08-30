@@ -832,7 +832,12 @@ KspQueryBusDeviceCapabilities(
     /* get capabilities */
     Capabilities = IoStack->Parameters.DeviceCapabilities.Capabilities;
 
-    RtlZeroMemory(Capabilities, sizeof(DEVICE_CAPABILITIES));
+    if (!Capabilities ||
+        Capabilities->Size < sizeof(DEVICE_CAPABILITIES) ||
+        Capabilities->Version != 1)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
     /* setup capabilities */
     Capabilities->UniqueID = TRUE;
