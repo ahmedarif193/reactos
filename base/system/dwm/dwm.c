@@ -258,7 +258,7 @@ DwmComposeLoop(void)
 {
     HDC hdcScreen = GetDC(NULL);
     DWM_ATTACH att;
-    HANDLE hWake, hVblank;
+    HANDLE hWake;
     BOOL forceFull = TRUE;
     LONG vw, vh, primW, primH;
 
@@ -295,7 +295,9 @@ DwmComposeLoop(void)
         return;
     }
     hWake = att.hWake;
-    hVblank = att.hVblank;
+    /* PRESENTSYNC queues immutable frames through the paced display path. */
+    if (att.hVblank != NULL)
+        CloseHandle(att.hVblank);
     if (hWake == NULL)
     {
         DwmLog("DWM: attach refused (no composition on this display stack)\n");
@@ -448,11 +450,6 @@ DwmComposeLoop(void)
             DwmSweepViews();
             DwmDxSweepSurfaces(g_frameSeq);
         }
-
-        if (hVblank != NULL)
-            WaitForSingleObject(hVblank, 50);
-        else
-            Sleep(15);
     }
 }
 
