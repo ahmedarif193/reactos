@@ -3,12 +3,14 @@
  * LICENSE:         GPL - See COPYING in the top level directory
  * PURPOSE:         Test for WSHIoctl:
  *                  - SIO_GET_INTERFACE_LIST
+ *                  - SIO_BASE_HANDLE
  * PROGRAMMERS:     Andreas Maier
  */
 
 #include "ws2_32.h"
 
 #include <iphlpapi.h>
+#include <mswsock.h>
 
 void traceaddr(char* txt, sockaddr_gen a)
 {
@@ -224,7 +226,42 @@ cleanup:
     WSACleanup();
 }
 
+static
+void
+Test_WSAIoctl_BaseHandle(void)
+{
+    WSADATA WsaData;
+    SOCKET Socket, BaseSocket;
+    DWORD BytesReturned;
+    INT Result;
+
+    Result = WSAStartup(MAKEWORD(2, 2), &WsaData);
+    ok(Result == 0, "WSAStartup failed with %d\n", Result);
+    if (Result != 0)
+        return;
+
+    Socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    ok(Socket != INVALID_SOCKET, "socket failed with %d\n", WSAGetLastError());
+    if (Socket == INVALID_SOCKET)
+    {
+        WSACleanup();
+        return;
+    }
+
+    BaseSocket = INVALID_SOCKET;
+    BytesReturned = 0;
+    WSASetLastError(0xdeadbeef);
+    Result = WSAIoctl(Socket, SIO_BASE_HANDLE, NULL, 0, &BaseSocket, sizeof(BaseSocket), &BytesReturned, NULL, NULL);
+    ok(Result == 0, "SIO_BASE_HANDLE failed with %d\n", WSAGetLastError());
+    ok(BaseSocket == Socket, "expected base socket %p, got %p\n", (PVOID)(ULONG_PTR)Socket, (PVOID)(ULONG_PTR)BaseSocket);
+    ok(BytesReturned == sizeof(BaseSocket), "expected %u returned bytes, got %lu\n", (UINT)sizeof(BaseSocket), BytesReturned);
+
+    closesocket(Socket);
+    WSACleanup();
+}
+
 START_TEST(WSAIoctl)
 {
     Test_WSAIoctl_GetInterfaceList();
+    Test_WSAIoctl_BaseHandle();
 }

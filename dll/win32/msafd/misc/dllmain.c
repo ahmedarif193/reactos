@@ -2779,6 +2779,30 @@ WSPIoctl(IN  SOCKET Handle,
             }
 
             break;
+        case SIO_BASE_HANDLE:
+            /*
+             * This provider is the base service provider, so its socket is
+             * already the handle requested by SIO_BASE_HANDLE.  Successful
+             * base-handle queries are synchronous; this provider cannot queue
+             * the unsupported overlapped form yet.
+             */
+            NeedsCompletion = FALSE;
+            if (lpOverlapped)
+            {
+                Errno = WSAEOPNOTSUPP;
+                break;
+            }
+            if (IS_INTRESOURCE(lpvOutBuffer) || cbOutBuffer < sizeof(SOCKET))
+            {
+                Errno = WSAEFAULT;
+                break;
+            }
+
+            *(SOCKET *)lpvOutBuffer = Handle;
+            cbRet = sizeof(SOCKET);
+            Errno = NO_ERROR;
+            Ret = NO_ERROR;
+            break;
         case SIO_ADDRESS_LIST_QUERY:
             if (IS_INTRESOURCE(lpvOutBuffer) || cbOutBuffer == 0)
             {
