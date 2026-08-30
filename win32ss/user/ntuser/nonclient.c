@@ -256,6 +256,7 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
    BOOL iconic;
    BOOL moved = FALSE;
    BOOL DragFullWindows = FALSE;
+   BOOL ImeUiUpdatePending = FALSE;
    SNAP_PREVIEW_STATE snapPreview;
    PWND pWndParent = NULL;
    WPARAM syscommand = (wParam & 0xfff0);
@@ -446,6 +447,7 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
                 {
                     SnapPreviewHide(hdc, &snapPreview);
                     co_IntSnapWindow(pwnd, snapTo);
+                    ImeUiUpdatePending = TRUE;
                     if (!wasSnap)
                         pwnd->InternalPos.NormalRect = origRect;
                 }
@@ -625,14 +627,17 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
                     /* The exposed-region update below owns erasure for this
                      * move. Do not synchronously erase and paint once inside
                      * SetWindowPos and then repeat it in UpdateThreadWindows. */
-                    co_WinPosSetWindowPos(pwnd,
-                                          NULL,
-                                          newRect.left,
-                                          newRect.top,
-                                          newRect.right - newRect.left,
-                                          newRect.bottom - newRect.top,
-                                          SWP_NOACTIVATE | SWP_DEFERERASE |
-                                          ((hittest == HTCAPTION) ? SWP_NOSIZE : 0));
+                    if (co_WinPosSetWindowPos(pwnd,
+                                              NULL,
+                                              newRect.left,
+                                              newRect.top,
+                                              newRect.right - newRect.left,
+                                              newRect.bottom - newRect.top,
+                                              SWP_NOACTIVATE | SWP_DEFERERASE |
+                                              ((hittest == HTCAPTION) ? SWP_NOSIZE : 0)))
+                    {
+                       ImeUiUpdatePending = TRUE;
+                    }
 
                     hrgnNew = GreCreateRectRgnIndirect(&pwnd->rcWindow);
                     if (pwnd->hrgnClip != NULL)
@@ -751,12 +756,20 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
          }
          else if (DragFullWindows)
          {
-            co_WinPosSetWindowPos(pwnd, HWND_TOP, origRect.left, origRect.top,
-                                  origRect.right - origRect.left,
-                                  origRect.bottom - origRect.top, swp);
+            if (co_WinPosSetWindowPos(pwnd, HWND_TOP, origRect.left, origRect.top,
+                                      origRect.right - origRect.left,
+                                      origRect.bottom - origRect.top, swp))
+            {
+               ImeUiUpdatePending = FALSE;
+            }
          }
       }
    }
+
+   /* The live SetWindowPos calls defer their synchronous IME callback until
+    * snapping and Escape restoration have selected the final position. */
+   if (ImeUiUpdatePending && IS_IMM_MODE())
+      IntImeWindowPosChanged();
 
    if (IntIsWindow(UserHMGetHandle(pwnd)))
    {

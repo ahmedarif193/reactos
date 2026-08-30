@@ -71,4 +71,4 @@ BOOL FASTCALL IntClientToScreen(PWND,LPPOINT);
 BOOL FASTCALL IntGetWindowRect(PWND,RECTL*);
 BOOL UserHasWindowEdge(DWORD,DWORD);
 VOID UserGetWindowBorders(DWORD,DWORD,SIZE*,BOOL);
-
+VOID FASTCALL IntImeWindowPosChanged(VOID);
