@@ -2288,6 +2288,175 @@ typedef IPortClsVersion *PPORTCLSVERSION;
 
 #undef INTERFACE
 
+typedef enum {
+    eMINIPORT_IHV_DEFINED = 0,
+    eMINIPORT_BUFFER_COMPLETE,
+    eMINIPORT_PIN_STATE,
+    eMINIPORT_GET_STREAM_POSITION,
+    eMINIPORT_SET_WAVERT_BUFFER_WRITE_POSITION,
+    eMINIPORT_GET_PRESENTATION_POSITION,
+    eMINIPORT_PROGRAM_DMA,
+    eMINIPORT_GLITCH_REPORT,
+    eMINIPORT_LAST_BUFFER_RENDERED,
+    eMINIPORT_PROCESSING_MODE,
+    eMINIPORT_FX_CLSID,
+    eMINIPORT_MaxValue
+} EPcMiniportEngineEvent;
+
+/* PortCls ETW helper exposed to audio miniports through QueryInterface. */
+#define INTERFACE IPortClsEtwHelper
+
+DEFINE_GUID(IID_IPortClsEtwHelper,
+    0x80ef6667, 0xe8b1, 0x4252, 0xab, 0x09, 0x8f, 0x6d, 0x5e, 0xbb, 0xd1, 0x9f);
+
+DECLARE_INTERFACE_(IPortClsEtwHelper, IUnknown)
+{
+    DEFINE_ABSTRACT_UNKNOWN()
+
+    STDMETHOD_(NTSTATUS, MiniportWriteEtwEvent)(THIS_
+        IN EPcMiniportEngineEvent MiniportEventType,
+        IN ULONGLONG Data1,
+        IN ULONGLONG Data2,
+        IN ULONGLONG Data3,
+        IN ULONGLONG Data4) PURE;
+};
+
+typedef IPortClsEtwHelper *PPORTCLSETWHELPER;
+
+#undef INTERFACE
+
+typedef enum {
+    eMixFormat,
+    eDeviceFormat,
+    eSupportedDeviceFormats,
+} eEngineFormatType;
+
+typedef enum {
+    eVolumeAttribute,
+    eMuteAttribute,
+    ePeakMeterAttribute,
+} eChannelTargetType;
+
+#define INTERFACE IMiniportAudioEngineNode
+
+DEFINE_GUID(IID_IMiniportAudioEngineNode,
+    0x2ebf536c, 0xef57, 0x4c64, 0xbe, 0xdc, 0x25, 0xc1, 0xa6, 0xd6, 0x68, 0xe6);
+
+DECLARE_INTERFACE_(IMiniportAudioEngineNode, IUnknown)
+{
+    DEFINE_ABSTRACT_UNKNOWN()
+
+    STDMETHOD_(NTSTATUS, GetAudioEngineDescriptor)(THIS_
+        IN ULONG NodeId,
+        OUT KSAUDIOENGINE_DESCRIPTOR *AudioEngineDescriptor) PURE;
+    STDMETHOD_(NTSTATUS, GetGfxState)(THIS_
+        IN ULONG NodeId,
+        OUT BOOL *Enabled) PURE;
+    STDMETHOD_(NTSTATUS, SetGfxState)(THIS_
+        IN ULONG NodeId,
+        IN BOOL Enabled) PURE;
+    STDMETHOD_(NTSTATUS, GetEngineFormatSize)(THIS_
+        IN ULONG NodeId,
+        IN eEngineFormatType FormatType,
+        OUT ULONG *FormatSize) PURE;
+    STDMETHOD_(NTSTATUS, GetMixFormat)(THIS_
+        IN ULONG NodeId,
+        OUT KSDATAFORMAT_WAVEFORMATEX *Format,
+        IN ULONG BufferSize) PURE;
+    STDMETHOD_(NTSTATUS, GetDeviceFormat)(THIS_
+        IN ULONG NodeId,
+        OUT KSDATAFORMAT_WAVEFORMATEX *Format,
+        IN ULONG BufferSize) PURE;
+    STDMETHOD_(NTSTATUS, SetDeviceFormat)(THIS_
+        IN ULONG NodeId,
+        IN KSDATAFORMAT_WAVEFORMATEX *Format,
+        IN ULONG BufferSize) PURE;
+    STDMETHOD_(NTSTATUS, GetSupportedDeviceFormats)(THIS_
+        IN ULONG NodeId,
+        OUT KSMULTIPLE_ITEM *Formats,
+        IN ULONG BufferSize) PURE;
+    STDMETHOD_(NTSTATUS, GetDeviceChannelCount)(THIS_
+        IN ULONG NodeId,
+        IN eChannelTargetType TargetType,
+        OUT UINT32 *ChannelCount) PURE;
+    STDMETHOD_(NTSTATUS, GetDeviceAttributeSteppings)(THIS_
+        IN ULONG NodeId,
+        IN eChannelTargetType TargetType,
+        OUT PKSPROPERTY_STEPPING_LONG Stepping,
+        IN UINT32 DataSize) PURE;
+    STDMETHOD_(NTSTATUS, GetDeviceChannelVolume)(THIS_
+        IN ULONG NodeId,
+        IN UINT32 Channel,
+        OUT LONG *Volume) PURE;
+    STDMETHOD_(NTSTATUS, SetDeviceChannelVolume)(THIS_
+        IN ULONG NodeId,
+        IN UINT32 Channel,
+        IN LONG Volume) PURE;
+    STDMETHOD_(NTSTATUS, GetDeviceChannelMute)(THIS_
+        IN ULONG NodeId,
+        IN UINT32 Channel,
+        OUT BOOL *Mute) PURE;
+    STDMETHOD_(NTSTATUS, SetDeviceChannelMute)(THIS_
+        IN ULONG NodeId,
+        IN UINT32 Channel,
+        IN BOOL Mute) PURE;
+    STDMETHOD_(NTSTATUS, GetDeviceChannelPeakMeter)(THIS_
+        IN ULONG NodeId,
+        IN UINT32 Channel,
+        OUT LONG *PeakMeter) PURE;
+    STDMETHOD_(NTSTATUS, GetBufferSizeRange)(THIS_
+        IN ULONG NodeId,
+        IN KSDATAFORMAT_WAVEFORMATEX *Format,
+        OUT KSAUDIOENGINE_BUFFER_SIZE_RANGE *BufferSizeRange) PURE;
+};
+
+typedef IMiniportAudioEngineNode *PIMINIPORTAudioEngineNode;
+
+#define IMP_IMiniportAudioEngineNode \
+    STDMETHODIMP_(NTSTATUS) GetAudioEngineDescriptor(IN ULONG NodeId, OUT KSAUDIOENGINE_DESCRIPTOR *AudioEngineDescriptor); \
+    STDMETHODIMP_(NTSTATUS) GetGfxState(IN ULONG NodeId, OUT BOOL *Enabled); \
+    STDMETHODIMP_(NTSTATUS) SetGfxState(IN ULONG NodeId, IN BOOL Enabled); \
+    STDMETHODIMP_(NTSTATUS) GetEngineFormatSize(IN ULONG NodeId, IN eEngineFormatType FormatType, OUT ULONG *FormatSize); \
+    STDMETHODIMP_(NTSTATUS) GetMixFormat(IN ULONG NodeId, OUT KSDATAFORMAT_WAVEFORMATEX *Format, IN ULONG BufferSize); \
+    STDMETHODIMP_(NTSTATUS) GetDeviceFormat(IN ULONG NodeId, OUT KSDATAFORMAT_WAVEFORMATEX *Format, IN ULONG BufferSize); \
+    STDMETHODIMP_(NTSTATUS) SetDeviceFormat(IN ULONG NodeId, IN KSDATAFORMAT_WAVEFORMATEX *Format, IN ULONG BufferSize); \
+    STDMETHODIMP_(NTSTATUS) GetSupportedDeviceFormats(IN ULONG NodeId, OUT KSMULTIPLE_ITEM *Formats, IN ULONG BufferSize); \
+    STDMETHODIMP_(NTSTATUS) GetDeviceChannelCount(IN ULONG NodeId, IN eChannelTargetType TargetType, OUT UINT32 *ChannelCount); \
+    STDMETHODIMP_(NTSTATUS) GetDeviceAttributeSteppings(IN ULONG NodeId, IN eChannelTargetType TargetType, OUT PKSPROPERTY_STEPPING_LONG Stepping, IN UINT32 DataSize); \
+    STDMETHODIMP_(NTSTATUS) GetDeviceChannelVolume(IN ULONG NodeId, IN UINT32 Channel, OUT LONG *Volume); \
+    STDMETHODIMP_(NTSTATUS) SetDeviceChannelVolume(IN ULONG NodeId, IN UINT32 Channel, IN LONG Volume); \
+    STDMETHODIMP_(NTSTATUS) GetDeviceChannelMute(IN ULONG NodeId, IN UINT32 Channel, OUT BOOL *Mute); \
+    STDMETHODIMP_(NTSTATUS) SetDeviceChannelMute(IN ULONG NodeId, IN UINT32 Channel, IN BOOL Mute); \
+    STDMETHODIMP_(NTSTATUS) GetDeviceChannelPeakMeter(IN ULONG NodeId, IN UINT32 Channel, OUT LONG *PeakMeter); \
+    STDMETHODIMP_(NTSTATUS) GetBufferSizeRange(IN ULONG NodeId, IN KSDATAFORMAT_WAVEFORMATEX *Format, OUT KSAUDIOENGINE_BUFFER_SIZE_RANGE *BufferSizeRange)
+
+#undef INTERFACE
+
+#define INTERFACE IPortClsPower
+
+DEFINE_GUID(IID_IPortClsPower,
+    0x47ba0351, 0xbc4b, 0x4869, 0x81, 0x34, 0xb7, 0x4f, 0xe1, 0x78, 0x52, 0xd8);
+
+DECLARE_INTERFACE_(IPortClsPower, IUnknown)
+{
+    DEFINE_ABSTRACT_UNKNOWN()
+
+    STDMETHOD_(NTSTATUS, RegisterAdapterPowerManagement)(THIS_
+        IN PUNKNOWN Unknown,
+        IN PDEVICE_OBJECT DeviceObject) PURE;
+
+    STDMETHOD_(NTSTATUS, UnregisterAdapterPowerManagement)(THIS_
+        IN PDEVICE_OBJECT DeviceObject) PURE;
+
+    STDMETHOD_(NTSTATUS, SetIdlePowerManagement)(THIS_
+        IN PDEVICE_OBJECT DeviceObject,
+        IN BOOLEAN Enabled) PURE;
+};
+
+typedef IPortClsPower *PPORTCLSPOWER;
+
+#undef INTERFACE
+
 #if (NTDDI_VERSION >= NTDDI_WINXP)
 DEFINE_GUID(IID_IMusicTechnology,
 0x80396C3CL, 0xCBCB, 0x409B, 0x9F, 0x65, 0x4F, 0x1E, 0x74, 0x67, 0xCD, 0xAF);
@@ -2350,6 +2519,11 @@ PcInitializeAdapterDriver(
   IN PDRIVER_OBJECT DriverObject,
   IN PUNICODE_STRING RegistryPathName,
   IN PDRIVER_ADD_DEVICE AddDevice);
+
+PORTCLASSAPI NTSTATUS NTAPI
+PcGetPhysicalDeviceObject(
+  IN PDEVICE_OBJECT DeviceObject,
+  OUT PDEVICE_OBJECT *PhysicalDeviceObject);
 
 /* ===============================================================
     Factories (TODO: Move elsewhere)
