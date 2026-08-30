@@ -224,7 +224,9 @@ KeSetEventBoostPriority(IN PKEVENT Event,
                         IN PKTHREAD *WaitingThread OPTIONAL)
 {
     KIRQL OldIrql;
+    KPRIORITY Priority;
     PKWAIT_BLOCK WaitBlock;
+    PKTHREAD FirstThread, SecondThread;
     PKTHREAD Thread = KeGetCurrentThread(), WaitThread;
     ASSERT((Event->Header.Type & KOBJECT_TYPE_MASK) == EventSynchronizationObject);
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
@@ -255,23 +257,46 @@ KeSetEventBoostPriority(IN PKEVENT Event,
         RemoveEntryList(&WaitBlock->WaitListEntry);
         WaitBlock->WaitListEntry.Flink = NULL;
 
-        KiAcquireThreadLock(WaitThread);
+        ASSERT(Thread != WaitThread);
+
+        /*
+         * The dispatcher database lock used to serialize both the priority
+         * decay and the waiter transition. With per-object locking, protect
+         * both KTHREADs explicitly and use a stable order so that concurrent
+         * priority operations cannot observe a partially updated thread.
+         */
+        if ((ULONG_PTR)Thread < (ULONG_PTR)WaitThread)
+        {
+            FirstThread = Thread;
+            SecondThread = WaitThread;
+        }
+        else
+        {
+            FirstThread = WaitThread;
+            SecondThread = Thread;
+        }
+
+        KiAcquireThreadLock(FirstThread);
+        KiAcquireThreadLock(SecondThread);
         if (WaitThread->State == Waiting)
         {
             if (WaitingThread) *WaitingThread = WaitThread;
-            Thread->Priority = KiComputeNewPriority(Thread, 0);
+            Priority = KiComputeNewPriority(Thread, 0);
+            KiSetPriorityThread(Thread, Priority);
             WaitBlock->BlockState = WaitBlockInactive;
             KiUnlinkThread(WaitThread, STATUS_SUCCESS);
-            WaitThread->AdjustIncrement = Thread->Priority;
+            WaitThread->AdjustIncrement = Priority;
             WaitThread->AdjustReason = AdjustBoost;
             KiReadyThread(WaitThread);
-            KiReleaseThreadLock(WaitThread);
+            KiReleaseThreadLock(SecondThread);
+            KiReleaseThreadLock(FirstThread);
             break;
         }
 
         /* A timeout may have made this wait block stale. Try the next one. */
         WaitBlock->BlockState = WaitBlockInactive;
-        KiReleaseThreadLock(WaitThread);
+        KiReleaseThreadLock(SecondThread);
+        KiReleaseThreadLock(FirstThread);
     }
 
     KiReleaseDispatcherObject(&Event->Header);
