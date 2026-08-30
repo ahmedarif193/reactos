@@ -1094,7 +1094,8 @@ DevInstallInternal(
     IN HWND hWndParent,
     IN HINSTANCE hInstance,
     IN LPCWSTR InstanceId,
-    IN INT Show)
+    IN INT Show,
+    IN BOOL RetryFailedInstall)
 {
     PDEVINSTDATA DevInstData = NULL;
     PWSTR HardwareIds = NULL;
@@ -1199,10 +1200,21 @@ DevInstallInternal(
     {
         if (config_flags & CONFIGFLAG_FAILEDINSTALL)
         {
-            /* The device is disabled */
-            TRACE("Device is disabled\n");
-            retval = TRUE;
-            goto cleanup;
+            if (!RetryFailedInstall)
+            {
+                TRACE("Device installation previously failed\n");
+                retval = TRUE;
+                goto cleanup;
+            }
+
+            if (!NewDevSetFailedInstall(DevInstData->hDevInfo,
+                                        &DevInstData->devInfoData,
+                                        FALSE))
+            {
+                TRACE("NewDevSetFailedInstall() failed with error 0x%lx\n",
+                      GetLastError());
+                goto cleanup;
+            }
         }
     }
 
@@ -1359,7 +1371,11 @@ DevInstallW(
     IN LPCWSTR InstanceId,
     IN INT Show)
 {
-    return DevInstallInternal(hWndParent, hInstance, InstanceId, Show);
+    return DevInstallInternal(hWndParent,
+                              hInstance,
+                              InstanceId,
+                              Show,
+                              FALSE);
 }
 
 BOOL
@@ -1590,6 +1606,14 @@ ClientSideInstallW(
         }
 
         ReturnValue = DevInstallW(NULL, NULL, DeviceInstance, ShowWizard ? SW_SHOWNOACTIVATE : SW_HIDE);
+        if (!ReturnValue)
+        {
+            ReturnValue = DevInstallInternal(NULL,
+                                             NULL,
+                                             DeviceInstance,
+                                             ShowWizard ? SW_SHOWNOACTIVATE : SW_HIDE,
+                                             TRUE);
+        }
     }
 
     if (!ReturnValue)
@@ -1688,13 +1712,41 @@ InstallDevicesFromBatchPipe(
         }
 
         TRACE("ClientSideInstallW: installing [%lu/%lu] %ls\n", i + 1, DeviceCount, DeviceInstance);
-        if (!DevInstallW(NULL, NULL, DeviceInstance, SW_HIDE))
-            TRACE("DevInstallW failed for %ls (error %lu)\n", DeviceInstance, GetLastError());
+        if (!DevInstallW(NULL, NULL, DeviceInstance, SW_HIDE) &&
+            !_wcsnicmp(DeviceInstance, L"SW\\", 3))
+        {
+            TRACE("DevInstallW failed for %ls (error %lu); retrying without the batch cache\n",
+                  DeviceInstance,
+                  GetLastError());
+
+            /* A failed discovery may have published a negative cache entry
+             * and CONFIGFLAG_FAILEDINSTALL. Drop the batch cache before the
+             * retry so a transient miss cannot become the final device
+             * state for the rest of this boot. */
+            if (CacheBatchActive)
+            {
+                NewDevDriverCacheEndBatch();
+                CacheBatchActive = FALSE;
+            }
+
+            if (!DevInstallInternal(NULL,
+                                    NULL,
+                                    DeviceInstance,
+                                    SW_HIDE,
+                                    TRUE))
+            {
+                TRACE("Uncached DevInstallW retry failed for %ls (error %lu)\n",
+                      DeviceInstance,
+                      GetLastError());
+            }
+        }
 
         HeapFree(GetProcessHeap(), 0, DeviceInstance);
         DeviceInstance = NULL;
     }
 
+    /* Match the legacy per-device loop: completing the batch protocol is
+     * independent of whether every device has a matching driver. */
     ReturnValue = TRUE;
 
 cleanup:

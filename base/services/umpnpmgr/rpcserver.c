@@ -3443,9 +3443,11 @@ SetupDeviceInstance(
         goto done;
     }
 
-    GetDeviceStatus(pszDeviceInstance,
-                    &ulStatus,
-                    &ulProblem);
+    ret = GetDeviceStatus(pszDeviceInstance,
+                          &ulStatus,
+                          &ulProblem);
+    if (ret != CR_SUCCESS)
+        goto done;
 
     if (ulStatus & DN_STARTED)
     {

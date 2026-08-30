@@ -2180,14 +2180,16 @@ CONFIGRET WINAPI CM_Request_Device_EjectW( DEVINST node, PNP_VETO_TYPE *type, WC
  */
 DWORD WINAPI CMP_WaitNoPendingInstallEvents( DWORD timeout )
 {
-    static BOOL warned = FALSE;
+    HANDLE event;
+    DWORD result;
 
-    if (!warned)
-    {
-        FIXME( "%ld\n", timeout );
-        warned = TRUE;
-    }
-    return WAIT_OBJECT_0;
+    event = OpenEventW(SYNCHRONIZE, FALSE, L"Global\\PnP_No_Pending_Install_Events");
+    if (!event)
+        return WAIT_FAILED;
+
+    result = WaitForSingleObject(event, timeout);
+    CloseHandle(event);
+    return result;
 }
 
 /***********************************************************************
