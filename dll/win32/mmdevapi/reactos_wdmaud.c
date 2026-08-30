@@ -2628,6 +2628,12 @@ static NTSTATUS reactos_release_render_buffer(struct release_render_buffer_param
     EnterCriticalSection(&stream->lock);
     if (!stream->render_locked)
     {
+        if (!params->written_frames)
+        {
+            LeaveCriticalSection(&stream->lock);
+            params->result = S_OK;
+            return STATUS_SUCCESS;
+        }
         LeaveCriticalSection(&stream->lock);
         params->result = AUDCLNT_E_OUT_OF_ORDER;
         return STATUS_SUCCESS;
