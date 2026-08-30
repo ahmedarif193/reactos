@@ -532,6 +532,7 @@ class CMiniportWaveRTStream : public CUnknownImpl<IMiniportWaveRTStreamNotificat
         m_Interface.FreeDmaEngine(m_Interface.Context, m_DmaEngine);
     }
 
+    IMP_IMiniportWaveRTStream;
     IMP_IMiniportWaveRTStreamNotification;
 
   private:
