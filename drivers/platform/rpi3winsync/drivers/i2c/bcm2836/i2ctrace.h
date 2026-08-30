@@ -13,7 +13,11 @@ extern "C" {
 // Defining control guids, including this is required to happen before
 // including the tmh file (if the WppRecorder API is used)
 //
+#ifdef __REACTOS__
+#include <wpprecorder.h>
+#else
 #include <WppRecorder.h>
+#endif
 
 //
 // Tracing GUID - 2C6CF78D-93D0-4A18-A3A5-49C67BCBF820
@@ -50,4 +54,3 @@ extern "C" {
 #endif // __cplusplus
 
 #endif // _I2CTRACE_H_
-

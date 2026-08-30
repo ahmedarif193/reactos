@@ -16,7 +16,11 @@
 //  Kernel mode only
 //
 
+#ifdef __REACTOS__
+#include <ntddk.h>
+#else
 #include <Ntddk.h>
+#endif
 
 extern "C" {
     #include <acpiioct.h>

@@ -13,7 +13,11 @@ extern "C" {
 // Defining control guids, including this is required to happen before
 // including the tmh file (if the WppRecorder API is used)
 //
+#ifdef __REACTOS__
+#include <wpprecorder.h>
+#else
 #include <WppRecorder.h>
+#endif
 
 //
 // Tracing GUID - F40BAF8A-C1D6-457F-8AB1-04E29BA7DB0B
@@ -47,4 +51,3 @@ extern "C" {
 #endif // __cplusplus
 
 #endif // _BCM_AUXSPI_TRACE_H_
-

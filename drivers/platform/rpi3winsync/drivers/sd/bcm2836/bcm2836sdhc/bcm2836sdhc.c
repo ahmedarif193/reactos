@@ -18,7 +18,11 @@ Environment:
 
 --*/
 
+#ifdef __REACTOS__
+#include <ntddk.h>
+#else
 #include <Ntddk.h>
+#endif
 
 #include <sdport.h>
 #include <sddef.h>

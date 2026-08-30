@@ -16,7 +16,11 @@
 #include "precomp.hpp"
 #pragma hdrstop
 
+#ifdef __REACTOS__
+#include "sdhclogging.h"
+#else
 #include "SdhcLogging.h"
+#endif
 #include "rpisdhc.tmh"
 
 #include "rpisdhc.hpp"
