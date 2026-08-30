@@ -68,6 +68,50 @@ typedef struct PACKAGE_ID
     PWSTR publisherId;
 } PACKAGE_ID;
 
+#define PACKAGE_PROPERTY_FRAMEWORK          0x00000001
+#define PACKAGE_PROPERTY_RESOURCE           0x00000002
+#define PACKAGE_PROPERTY_BUNDLE             0x00000004
+#define PACKAGE_PROPERTY_OPTIONAL           0x00000008
+#define PACKAGE_FILTER_HEAD                 0x00000010
+#define PACKAGE_FILTER_DIRECT               0x00000020
+#define PACKAGE_FILTER_RESOURCE             0x00000040
+#define PACKAGE_FILTER_BUNDLE               0x00000080
+#define PACKAGE_INFORMATION_BASIC           0x00000000
+#define PACKAGE_INFORMATION_FULL            0x00000100
+#define PACKAGE_PROPERTY_DEVELOPMENT_MODE   0x00010000
+#define PACKAGE_FILTER_OPTIONAL             0x00020000
+#define PACKAGE_PROPERTY_IS_IN_RELATED_SET  0x00040000
+#define PACKAGE_FILTER_IS_IN_RELATED_SET    PACKAGE_PROPERTY_IS_IN_RELATED_SET
+#define PACKAGE_PROPERTY_STATIC             0x00080000
+#define PACKAGE_FILTER_STATIC               PACKAGE_PROPERTY_STATIC
+#define PACKAGE_PROPERTY_DYNAMIC            0x00100000
+#define PACKAGE_FILTER_DYNAMIC              PACKAGE_PROPERTY_DYNAMIC
+
+WINBASEAPI
+_Success_(return == ERROR_SUCCESS)
+LONG
+WINAPI
+GetPackageFamilyName(
+    _In_ HANDLE hProcess,
+    _Inout_ UINT32* packageFamilyNameLength,
+    _Out_writes_opt_(*packageFamilyNameLength) PWSTR packageFamilyName);
+
+WINBASEAPI
+_Check_return_
+_Success_(return == ERROR_SUCCESS)
+_On_failure_(_Unchanged_(*count))
+_On_failure_(_Unchanged_(*bufferLength))
+LONG
+WINAPI
+FindPackagesByPackageFamily(
+    _In_ PCWSTR packageFamilyName,
+    _In_ UINT32 packageFilters,
+    _Inout_ UINT32* count,
+    _Out_writes_opt_(*count) PWSTR* packageFullNames,
+    _Inout_ UINT32* bufferLength,
+    _Out_writes_opt_(*bufferLength) WCHAR* buffer,
+    _Out_writes_opt_(*count) UINT32* packageProperties);
+
 WINBASEAPI
 _Check_return_
 _Success_(return == ERROR_SUCCESS)

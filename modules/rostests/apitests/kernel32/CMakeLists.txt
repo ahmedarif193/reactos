@@ -15,6 +15,7 @@ list(APPEND SOURCE
     EnumSystemCodePages.c
     FindActCtxSectionStringW.c
     FindFiles.c
+    FindPackagesByPackageFamily.c
     FLS.c
     FormatMessage.c
     GetComputerNameEx.c
@@ -25,6 +26,7 @@ list(APPEND SOURCE
     GetFinalPathNameByHandle.c
     GetLocaleInfo.c
     GetModuleFileName.c
+    GetPackageFamilyName.c
     GetVolumeInformation.c
     InitOnce.c
     interlck.c
@@ -48,6 +50,7 @@ list(APPEND SOURCE
     PrivMoveFileIdentityW.c
     QueueUserAPC.c
     ReadFile.c
+    ResizePseudoConsole.c
     SetComputerNameExW.c
     SetConsoleWindowInfo.c
     SetCurrentDirectory.c

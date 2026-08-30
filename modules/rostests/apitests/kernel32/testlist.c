@@ -14,6 +14,7 @@ extern void func_dosdev(void);
 extern void func_EnumSystemCodePages(void);
 extern void func_FindActCtxSectionStringW(void);
 extern void func_FindFiles(void);
+extern void func_FindPackagesByPackageFamily(void);
 extern void func_FLS(void);
 extern void func_FormatMessage(void);
 extern void func_GetComputerNameEx(void);
@@ -24,6 +25,7 @@ extern void func_GetEnvironmentVariable(void);
 extern void func_GetFinalPathNameByHandle(void);
 extern void func_GetLocaleInfo(void);
 extern void func_GetModuleFileName(void);
+extern void func_GetPackageFamilyName(void);
 extern void func_GetVolumeInformation(void);
 extern void func_InitOnce(void);
 extern void func_interlck(void);
@@ -46,6 +48,7 @@ extern void func_PixeloramaCompat(void);
 extern void func_ProcessPreferredUILanguages(void);
 extern void func_PrivMoveFileIdentityW(void);
 extern void func_QueueUserAPC(void);
+extern void func_ResizePseudoConsole(void);
 extern void func_SetComputerNameExW(void);
 extern void func_SetConsoleWindowInfo(void);
 extern void func_SetCurrentDirectory(void);
@@ -71,6 +74,7 @@ const struct test winetest_testlist[] =
     { "EnumSystemCodePages",         func_EnumSystemCodePages },
     { "FindActCtxSectionStringW",    func_FindActCtxSectionStringW },
     { "FindFiles",                   func_FindFiles },
+    { "FindPackagesByPackageFamily", func_FindPackagesByPackageFamily },
     { "FLS",                         func_FLS },
     { "FormatMessage",               func_FormatMessage },
     { "GetComputerNameEx",           func_GetComputerNameEx },
@@ -81,6 +85,7 @@ const struct test winetest_testlist[] =
     { "GetFinalPathNameByHandle",    func_GetFinalPathNameByHandle },
     { "GetLocaleInfo",               func_GetLocaleInfo },
     { "GetModuleFileName",           func_GetModuleFileName },
+    { "GetPackageFamilyName",        func_GetPackageFamilyName },
     { "GetVolumeInformation",        func_GetVolumeInformation },
     { "InitOnce",                    func_InitOnce },
     { "interlck",                    func_interlck },
@@ -103,6 +108,7 @@ const struct test winetest_testlist[] =
     { "ProcessPreferredUILanguages", func_ProcessPreferredUILanguages },
     { "PrivMoveFileIdentityW",       func_PrivMoveFileIdentityW },
     { "QueueUserAPC",                func_QueueUserAPC },
+    { "ResizePseudoConsole",         func_ResizePseudoConsole },
     { "SetComputerNameExW",          func_SetComputerNameExW },
     { "SetConsoleWindowInfo",        func_SetConsoleWindowInfo },
     { "SetCurrentDirectory",         func_SetCurrentDirectory },
