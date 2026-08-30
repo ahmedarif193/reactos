@@ -332,6 +332,7 @@
 @ stdcall FindNextVolumeMountPointA(long str long)
 @ stdcall FindNextVolumeMountPointW(long wstr long)
 @ stdcall FindNextVolumeW(long ptr long)
+@ stdcall -version=0x602+ FindPackagesByPackageFamily(wstr long ptr ptr ptr ptr ptr) kernelbase.FindPackagesByPackageFamily
 @ stdcall FindResourceA(long str str)
 @ stdcall FindResourceExA(long str str long)
 @ stdcall FindResourceExW(long wstr wstr long)
@@ -573,6 +574,7 @@
 @ stdcall GetOEMCP()
 @ stdcall GetOverlappedResult(long ptr ptr long)
 @ stdcall -version=0x602+ GetOverlappedResultEx(long ptr ptr long long)
+@ stdcall -version=0x602+ GetPackageFamilyName(long ptr ptr) kernelbase.GetPackageFamilyName
 @ stdcall -version=0x602+ GetPackagePathByFullName(wstr ptr wstr)
 @ stdcall -version=0x602+ GetPackagesByPackageFamily(wstr ptr ptr ptr ptr)
 @ stdcall -stub -version=0x600+ GetPhysicallyInstalledSystemMemory(ptr)
@@ -1020,6 +1022,7 @@
 @ stdcall -version=0x602+ ResolveDelayLoadsFromDll(ptr str long) ntdll.LdrResolveDelayLoadsFromDll
 @ stdcall ResetEvent(long)
 @ stdcall ResetWriteWatch(ptr long)
+@ stdcall -version=0xA00+ ResizePseudoConsole(ptr long) kernelbase.ResizePseudoConsole
 @ stdcall -version=0x601+ ResolveLocaleName(wstr ptr long)
 @ stdcall RestoreLastError(long) ntdll.RtlRestoreLastWin32Error
 @ stdcall ResumeThread(long)

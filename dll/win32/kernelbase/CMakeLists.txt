@@ -16,6 +16,8 @@ add_library(kernelbase_ros MODULE
     CancelSynchronousIo.c
     CpuSets.c
     DllMain.c
+    PackageFamily.c
+    PseudoConsole.c
     PssSnapshot.c
     SyncObjects.c
     VolumeInformation.c

@@ -9,6 +9,22 @@
 
 static
 VOID
+TestPhysicalDnsHostnameSizeQuery(VOID)
+{
+    DWORD Size = 0;
+    DWORD Error;
+    BOOL Ret;
+
+    SetLastError(0xdeadbeef);
+    Ret = GetComputerNameExW(ComputerNamePhysicalDnsHostname, NULL, &Size);
+    Error = GetLastError();
+    ok(Ret == FALSE, "GetComputerNameExW returned %d\n", Ret);
+    ok(Error == ERROR_MORE_DATA, "GetComputerNameExW returned error %lu\n", Error);
+    ok(Size > 1 && Size <= 256, "GetComputerNameExW returned invalid size %lu\n", Size);
+}
+
+static
+VOID
 TestGetComputerNameEx(
     _In_ COMPUTER_NAME_FORMAT NameType)
 {
@@ -583,6 +599,7 @@ TestReturnValues()
 
 START_TEST(GetComputerNameEx)
 {
+    TestPhysicalDnsHostnameSizeQuery();
     TestGetComputerNameEx(ComputerNameNetBIOS);
     TestGetComputerNameEx(ComputerNameDnsHostname);
     TestGetComputerNameEx(ComputerNameDnsDomain);
