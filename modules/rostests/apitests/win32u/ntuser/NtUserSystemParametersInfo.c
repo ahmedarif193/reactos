@@ -773,6 +773,29 @@ Test_SPI_SETDRAGFULLWINDOWS(void)
 }
 
 void
+Test_SPI_GETNONCLIENTMETRICS(void)
+{
+    enum
+    {
+        LegacySize = FIELD_OFFSET(NONCLIENTMETRICSW, iPaddedBorderWidth)
+    };
+    struct
+    {
+        ULONG Data[LegacySize / sizeof(ULONG)];
+        ULONG Redzone;
+    } Buffer;
+    PNONCLIENTMETRICSW Metrics = (PNONCLIENTMETRICSW)Buffer.Data;
+
+    memset(&Buffer, 0, sizeof(Buffer));
+    Metrics->cbSize = LegacySize;
+    Buffer.Redzone = 0xdeadbeef;
+
+    TEST(NtUserSystemParametersInfo(SPI_GETNONCLIENTMETRICS, LegacySize, Metrics, 0) == 1);
+    ok(Metrics->cbSize == LegacySize, "Expected legacy size: %lu, got %lu\n", (ULONG)LegacySize, Metrics->cbSize);
+    ok(Buffer.Redzone == 0xdeadbeef, "SPI_GETNONCLIENTMETRICS overwrote the legacy buffer: 0x%08lx\n", Buffer.Redzone);
+}
+
+void
 Test_SPI_SETNONCLIENTMETRICS(void)
 {
     NONCLIENTMETRICSW metrics;
@@ -1174,6 +1197,7 @@ START_TEST(NtUserSystemParametersInfo)
     Test_SPI_SETICONTITLELOGFONT();
 //  Test_SPI_SETFASTTASKSWITCH();
     Test_SPI_SETDRAGFULLWINDOWS();
+    Test_SPI_GETNONCLIENTMETRICS();
 //  Test_SPI_SETNONCLIENTMETRICS();
 //  Test_SPI_SETMINIMIZEDMETRICS();
 //  Test_SPI_SETICONMETRICS();
