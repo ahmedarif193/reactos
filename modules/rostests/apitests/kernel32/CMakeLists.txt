@@ -21,6 +21,7 @@ list(APPEND SOURCE
     GetComputerNameEx.c
     GetCPInfo.c
     GetCurrentDirectory.c
+    GetCurrentThreadStackLimits.c
     GetDriveType.c
     GetEnvironmentVariable.c
     GetFinalPathNameByHandle.c

@@ -459,6 +459,7 @@
 @ stdcall -version=0x601+ GetCurrentProcessorNumberEx(ptr) ntdll.RtlGetCurrentProcessorNumberEx
 @ stdcall -norelay GetCurrentThread()
 @ stdcall -norelay GetCurrentThreadId()
+@ stdcall -version=0x602+ GetCurrentThreadStackLimits(ptr ptr) kernelbase.GetCurrentThreadStackLimits
 @ stdcall GetDateFormatA(long long ptr str ptr long)
 @ stdcall -version=0x600+ GetDateFormatEx(wstr long ptr wstr wstr long wstr)
 @ stdcall GetDateFormatW(long long ptr wstr ptr long)
