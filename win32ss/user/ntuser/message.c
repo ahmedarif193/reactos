@@ -461,7 +461,7 @@ PackParam(LPARAM *lParamPacked, UINT Msg, WPARAM wParam, LPARAM lParam, BOOL Non
         }
         *lParamPacked = (LPARAM)PackedMdi;
     }
-    else if (PoolType == NonPagedPool)
+    else if (PoolType == NonPagedPool && is_pointer_message(Msg, wParam))
     {
         PMSGMEMORY MsgMemoryEntry;
         PVOID PackedData;
