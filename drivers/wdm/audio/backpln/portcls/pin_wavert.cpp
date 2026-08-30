@@ -212,7 +212,7 @@ PinWaveRTAudioGetBufferWithNotification(IN PIRP Irp, IN PKSIDENTIFIER Request, I
     }
 
     // Return result
-    Buffer->BufferAddress = Pin->m_UserAddress;
+    Buffer->BufferAddress = (PUCHAR)Pin->m_UserAddress + Pin->m_CommonBufferOffset;
     Buffer->ActualBufferSize = Pin->m_CommonBufferSize;
     Buffer->CallMemoryBarrier = Pin->m_CacheType == MmWriteCombined;
 
