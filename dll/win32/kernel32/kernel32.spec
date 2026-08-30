@@ -72,6 +72,7 @@
 @ stdcall ClearCommError(long ptr ptr)
 @ stdcall CloseConsoleHandle(long)
 @ stdcall CloseHandle(long)
+@ stdcall -version=0xA00+ ClosePseudoConsole(ptr) kernelbase.ClosePseudoConsole
 @ stdcall -stub -version=0x600+ ClosePrivateNamespace(ptr long)
 @ stdcall CloseProfileUserMapping()
 @ stdcall -version=0x600+ CloseThreadpool(ptr) ntdll.TpReleasePool
@@ -161,6 +162,7 @@
 @ stdcall CreateProcessInternalA(ptr str str ptr ptr long long ptr str ptr ptr long)
 @ stdcall CreateProcessInternalW(ptr wstr wstr ptr ptr long long ptr wstr ptr ptr long)
 @ stdcall CreateProcessW(wstr wstr ptr ptr long long ptr wstr ptr ptr)
+@ stdcall -version=0xA00+ CreatePseudoConsole(long long long long ptr) kernelbase.CreatePseudoConsole
 @ stdcall CreateRemoteThread(long ptr long ptr long long ptr)
 @ stdcall CreateRemoteThreadEx(long ptr long ptr long long ptr ptr)
 @ stdcall CreateSemaphoreA(ptr long long str)
