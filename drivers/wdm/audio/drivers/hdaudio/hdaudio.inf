@@ -20,7 +20,7 @@ HdAudModel.CopyList =10,system32\drivers
 HdAudShortCut.CopyList =10,system^32
 
 [Manufacturer]
-ReactOS = ReactOS, ntx86
+ReactOS = ReactOS, NTx86, NTarm64
 
 [SignatureAttributes]
 drmk.sys=SignatureAttributes.DRM
@@ -33,7 +33,10 @@ DRMLevel=1200
 [ControlFlags]
 ExcludeFromSelect = *
 
-[ReactOS.ntx86]
+[ReactOS.NTx86]
+%HdAudioFunctionDriver.Generic.DeviceDesc%  = HdAudModel, ,HDAUDIO\FUNC_01
+
+[ReactOS.NTarm64]
 %HdAudioFunctionDriver.Generic.DeviceDesc%  = HdAudModel, ,HDAUDIO\FUNC_01
 
 
