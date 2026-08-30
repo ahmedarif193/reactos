@@ -786,7 +786,8 @@ CFunctionGroupNode::SetConverterStream(
     ULONG Response = 0;
     NTSTATUS Status;
 
-    Verb = (m_CodecAddress << 28) | (NodeId << 20) | (AC_VERB_SET_CHANNEL_STREAMID << 8) | StreamId;
+    Verb = (m_CodecAddress << 28) | (NodeId << 20) | (AC_VERB_SET_CHANNEL_STREAMID << 8) |
+           (StreamId << AC_CONV_STREAM_SHIFT);
     Status = m_Adapter->TransferVerb(Verb, &Response);
     if (!NT_SUCCESS(Status))
     {
