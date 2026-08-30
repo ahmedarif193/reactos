@@ -321,6 +321,28 @@ Rpi5MboxSetClockState(
 }
 
 BOOLEAN
+Rpi5MboxGetClockState(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG ClockId,
+    _Out_ PULONG State)
+{
+    ULONG Values[2];
+
+    Values[0] = ClockId;
+    Values[1] = 0;
+    *State = 0;
+
+    if (!Rpi5MboxSingleTag(DeviceExtension, RPI5_MBOX_TAG_GET_CLOCK_STATE,
+                           Values, 2))
+    {
+        return FALSE;
+    }
+
+    *State = Values[1];
+    return !(Values[1] & 0x2u);
+}
+
+BOOLEAN
 Rpi5MboxSetDomainState(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
     _In_ ULONG DomainId,

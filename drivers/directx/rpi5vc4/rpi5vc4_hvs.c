@@ -192,6 +192,100 @@ Rpi5HvsBuildPlane(
  * real error prints around them stay intact. */
 #define RPI5_HVS_DIAG(Dev, ...) ((void)(Dev))
 
+BOOLEAN
+Rpi5HvsColdStartChannel(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG Width,
+    _In_ ULONG Height)
+{
+    PVOID HvsBase;
+    volatile ULONG *Dlist;
+    ULONG Plane[RPI5_HVS_PLANE_DWORDS + 1];
+    ULONG Control1;
+    ULONG Count;
+    ULONG DlistDwords;
+    ULONG Index;
+    ULONGLONG Phys;
+
+    if (!DeviceExtension->Headless ||
+        Width == 0 || Height == 0 ||
+        Width > 0x2000 || Height > 0x2000 ||
+        DeviceExtension->BytesPerScanLine == 0)
+    {
+        return FALSE;
+    }
+
+    Phys = (ULONGLONG)DeviceExtension->FrameBufferPhysical.QuadPart;
+    if (Phys == 0)
+        return FALSE;
+
+    HvsBase = (PVOID)Rpi5HvsMap(DeviceExtension);
+    if (HvsBase == NULL)
+        return FALSE;
+
+    WRITE_REGISTER_ULONG(
+        (PULONG)((PUCHAR)HvsBase + RPI5_HVS_REG_CONTROL),
+        RPI5_HVS_CONTROL_HVS_EN |
+            (8u << RPI5_HVS_CONTROL_PF_LINES_SHIFT) |
+            (15u << RPI5_HVS_CONTROL_MAX_REQS_SHIFT));
+    WRITE_REGISTER_ULONG(
+        (PULONG)((PUCHAR)HvsBase + RPI5_HVS_PRI_MAP0_D), 0xffffffffu);
+    WRITE_REGISTER_ULONG(
+        (PULONG)((PUCHAR)HvsBase + RPI5_HVS_PRI_MAP1_D), 0xffffffffu);
+
+    Count = Rpi5HvsBuildPlane(Plane,
+                              TRUE,
+                              Phys,
+                              0,
+                              0,
+                              Width,
+                              Height,
+                              DeviceExtension->BytesPerScanLine,
+                              RPI5_HVS_PIXEL_FORMAT_RGBA8888,
+                              RPI5_HVS_PIXEL_ORDER_BGRA);
+    Plane[Count++] = RPI5_HVS_CTL0_END;
+
+    DlistDwords = Rpi5HvsGetDlistDwords(HvsBase);
+    if (DlistDwords < RPI5_HVS_PRIVATE_SLOT_A + Count)
+        return FALSE;
+
+    Dlist = (volatile ULONG *)((PUCHAR)HvsBase + RPI5_HVS_DLIST_OFFSET);
+    for (Index = 0; Index < Count; ++Index)
+    {
+        WRITE_REGISTER_ULONG(
+            (PULONG)&Dlist[RPI5_HVS_PRIVATE_SLOT_A + Index], Plane[Index]);
+    }
+
+#if defined(_M_ARM64)
+    __dsb(_ARM64_BARRIER_SY);
+#endif
+    KeMemoryBarrier();
+
+    WRITE_REGISTER_ULONG(
+        (PULONG)((PUCHAR)HvsBase + RPI5_HVS_LPTRS_D),
+        RPI5_HVS_PRIVATE_SLOT_A);
+
+    Control1 = READ_REGISTER_ULONG(
+        (PULONG)((PUCHAR)HvsBase + RPI5_HVS_D0_CTRL1));
+    WRITE_REGISTER_ULONG(
+        (PULONG)((PUCHAR)HvsBase + RPI5_HVS_D0_CTRL0),
+        RPI5_HVS_D0_CTRL0_RESET);
+    WRITE_REGISTER_ULONG(
+        (PULONG)((PUCHAR)HvsBase + RPI5_HVS_D0_CTRL1),
+        Control1 & ~RPI5_HVS_D0_CTRL1_INTERLACE);
+    WRITE_REGISTER_ULONG(
+        (PULONG)((PUCHAR)HvsBase + RPI5_HVS_D0_CTRL0),
+        RPI5_HVS_D0_CTRL0_EN |
+        ((Width - 1) << RPI5_HVS_D0_CTRL0_WIDTH_SHIFT) |
+        (Height - 1));
+
+    DeviceExtension->HvsActivePrivateSlot = RPI5_HVS_PRIVATE_SLOT_A;
+    DeviceExtension->HvsLptrsReg = RPI5_HVS_LPTRS_D;
+    DeviceExtension->HvsLptrsVal = RPI5_HVS_PRIVATE_SLOT_A;
+    DeviceExtension->HvsCursorFastValid = FALSE;
+    return TRUE;
+}
+
 /*
  * Select the live display-list head.  The C-step vs D-step LPTRS register
  * guess (D nonzero/non-FF) proved too naive for silicon: validate BOTH

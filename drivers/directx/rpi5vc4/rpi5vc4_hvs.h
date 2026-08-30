@@ -38,6 +38,17 @@
 #define RPI5_HVS_LPTRS_D                0x110   /* SCALER6D_DISP0_LPTRS (D-step) */
 #define RPI5_HVS_LPTRS_HEAD_MASK        0xfffu  /* HEADE: dword index of list head */
 
+/* SCALER6D channel 0 registers and control fields. */
+#define RPI5_HVS_D0_CTRL0               0x100
+#define RPI5_HVS_D0_CTRL1               0x104
+#define RPI5_HVS_D0_STATUS              0x118
+#define RPI5_HVS_D0_CTRL0_EN            (1u << 31)
+#define RPI5_HVS_D0_CTRL0_RESET         (1u << 30)
+#define RPI5_HVS_D0_CTRL0_WIDTH_SHIFT   16
+#define RPI5_HVS_D0_CTRL1_INTERLACE     (1u << 0)
+#define RPI5_HVS_D0_STATUS_MODE_MASK    (3u << 13)
+#define RPI5_HVS_D0_STATUS_MODE_RUN     (2u << 13)
+
 /*
  * Display-list control word 0 (CTL0).
  *   END        bit 31      list terminator
@@ -145,6 +156,12 @@ Rpi5HvsBuildPlane(
 VOID
 Rpi5HvsInstallScanout(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension);
+
+BOOLEAN
+Rpi5HvsColdStartChannel(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG Width,
+    _In_ ULONG Height);
 
 BOOLEAN
 Rpi5HvsMoveCursor(
