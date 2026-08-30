@@ -951,7 +951,8 @@ CAdapterCommon::Initialize(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp, IN PRESO
     {
         DPRINT1("HDAUDIO: GetNodesWithType failed for input node with %x\n", Status);
         delete OutNode;
-        ExFreePool(OutputNodes);
+        if (OutputNodes)
+            ExFreePool(OutputNodes);
         return Status;
     }
     ULONG PinNodeCount = 0;
@@ -961,8 +962,10 @@ CAdapterCommon::Initialize(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp, IN PRESO
     {
         DPRINT1("HDAUDIO: GetNodesWithType failed for pin node with %x\n", Status);
         delete OutNode;
-        ExFreePool(InputNodes);
-        ExFreePool(OutputNodes);
+        if (InputNodes)
+            ExFreePool(InputNodes);
+        if (OutputNodes)
+            ExFreePool(OutputNodes);
         return Status;
     }
     DPRINT1(
@@ -976,9 +979,12 @@ CAdapterCommon::Initialize(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp, IN PRESO
     {
         DPRINT1("HDAUDIO: ProcessOutputNodes failed for input node with %x\n", Status);
         delete OutNode;
-        ExFreePool(InputNodes);
-        ExFreePool(OutputNodes);
-        ExFreePool(PinNodes);
+        if (InputNodes)
+            ExFreePool(InputNodes);
+        if (OutputNodes)
+            ExFreePool(OutputNodes);
+        if (PinNodes)
+            ExFreePool(PinNodes);
         return Status;
     }
 
@@ -988,46 +994,66 @@ CAdapterCommon::Initialize(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp, IN PRESO
     {
         DPRINT1("HDAUDIO: PcRegisterPhysicalConnection failed with %x\n", Status);
         delete OutNode;
-        ExFreePool(InputNodes);
-        ExFreePool(OutputNodes);
-        ExFreePool(PinNodes);
+        if (InputNodes)
+            ExFreePool(InputNodes);
+        if (OutputNodes)
+            ExFreePool(OutputNodes);
+        if (PinNodes)
+            ExFreePool(PinNodes);
         return Status;
     }
 
-    ExFreePool(PinNodes);
-    Status = OutNode->GetNodesWithType(0x04, &PinNodeCount, &PinNodes);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("HDAUDIO: GetNodesWithType failed for pin node with %x\n", Status);
-        delete OutNode;
-        ExFreePool(InputNodes);
-        ExFreePool(OutputNodes);
-        return Status;
-    }
-
-    OutNode->ClearVisitedState();
-    DPRINT1("ProcessInputNodes----------------------------------\n");
-    Status = ProcessInputNodes(DeviceObject, Irp, ResourceList, PinNodeCount, PinNodes, (PVOID)OutNode, InputNodeCount, InputNodes);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("HDAUDIO: ProcessInputNodes failed for input node with %x\n", Status);
-        delete OutNode;
-        ExFreePool(InputNodes);
-        ExFreePool(OutputNodes);
+    if (PinNodes)
         ExFreePool(PinNodes);
-        return Status;
-    }
+    PinNodes = NULL;
 
-    // register wavein connection
-	Status = PcRegisterPhysicalConnection(DeviceObject, m_TopoInPortUnknown, 0, m_WaveRTInPortUnknown, 1);
-    if (!NT_SUCCESS(Status))
+    if (InputNodeCount)
     {
-        DPRINT1("HDAUDIO: PcRegisterPhysicalConnection failed with %x\n", Status);
-        delete OutNode;
-        ExFreePool(InputNodes);
-        ExFreePool(OutputNodes);
-        ExFreePool(PinNodes);
-        return Status;
+        Status = OutNode->GetNodesWithType(0x04, &PinNodeCount, &PinNodes);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("HDAUDIO: GetNodesWithType failed for pin node with %x\n", Status);
+            delete OutNode;
+            if (InputNodes)
+                ExFreePool(InputNodes);
+            if (OutputNodes)
+                ExFreePool(OutputNodes);
+            return Status;
+        }
+
+        OutNode->ClearVisitedState();
+        DPRINT1("ProcessInputNodes----------------------------------\n");
+        Status = ProcessInputNodes(DeviceObject, Irp, ResourceList, PinNodeCount, PinNodes, (PVOID)OutNode, InputNodeCount, InputNodes);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("HDAUDIO: ProcessInputNodes failed for input node with %x\n", Status);
+            delete OutNode;
+            if (InputNodes)
+                ExFreePool(InputNodes);
+            if (OutputNodes)
+                ExFreePool(OutputNodes);
+            if (PinNodes)
+                ExFreePool(PinNodes);
+            return Status;
+        }
+
+        // register wavein connection when the codec exposes a capture path
+        if (m_TopoInPortUnknown && m_WaveRTInPortUnknown)
+        {
+            Status = PcRegisterPhysicalConnection(DeviceObject, m_TopoInPortUnknown, 0, m_WaveRTInPortUnknown, 1);
+            if (!NT_SUCCESS(Status))
+            {
+                DPRINT1("HDAUDIO: PcRegisterPhysicalConnection failed with %x\n", Status);
+                delete OutNode;
+                if (InputNodes)
+                    ExFreePool(InputNodes);
+                if (OutputNodes)
+                    ExFreePool(OutputNodes);
+                if (PinNodes)
+                    ExFreePool(PinNodes);
+                return Status;
+            }
+        }
     }
 
     if (m_WaveRTOutPortUnknown)
