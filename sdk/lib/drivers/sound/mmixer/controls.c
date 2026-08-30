@@ -1608,6 +1608,15 @@ MMixerHandlePhysicalConnection(
     /* mark pin as consumed */
     MMixerSetTopologyPinReserved(Topology, OutConnection->Pin);
 
+    /*
+     * A topology miniport may connect its bridge pins directly and expose no
+     * processing nodes. Such a filter contributes no legacy mixer controls,
+     * but the wave endpoint on the other side of the physical connection is
+     * still valid.
+     */
+    if (Topology->TopologyNodesCount == 0)
+        return MM_STATUS_SUCCESS;
+
     if (!bInput)
     {
         /* allocate pin index array which will hold all referenced pins */
@@ -1938,6 +1947,10 @@ MMixerHandleAlternativeMixers(
 
     DPRINT("DeviceName %S\n", MixerData->DeviceName);
 
+    /* A pin-to-pin topology without processing nodes has no mixer controls. */
+    if (Topology->TopologyNodesCount == 0)
+        return;
+
     /* get topology pin count */
     MMixerGetTopologyPinCount(Topology, &PinCount);
 
@@ -2032,6 +2045,13 @@ MMixerSetupFilter(
 
     /* check if the filter has an wave out node */
     NodeIndex = MMixerGetNodeIndexFromGuid(Topology, &KSNODETYPE_DAC);
+    if (NodeIndex == MAXULONG)
+    {
+        /* Modern WaveRT render filters use an audio-engine node instead of a
+         * legacy DAC node.  Both nodes have the same render-side topology
+         * direction for the purposes of endpoint enumeration. */
+        NodeIndex = MMixerGetNodeIndexFromGuid(Topology, &KSNODETYPE_AUDIO_ENGINE);
+    }
     DPRINT1("MMIXER: DAC node index %lu\n", NodeIndex);
     if (NodeIndex != MAXULONG)
     {
