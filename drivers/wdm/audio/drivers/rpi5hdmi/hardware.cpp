@@ -346,7 +346,7 @@ CRpi5HdmiAdapter::MapResources(PRESOURCELIST ResourceList)
     if (!Descriptor ||
         !(Descriptor->Flags & CM_RESOURCE_DMA_V3) ||
         Descriptor->u.DmaV3.RequestLine > 31 ||
-        Descriptor->u.DmaV3.TransferWidth != 32)
+        Descriptor->u.DmaV3.TransferWidth != Width32Bits)
     {
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
