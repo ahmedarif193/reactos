@@ -318,10 +318,32 @@ RcddEscape(
          return 0;
 
       value = *(const LONG *)pvIn;
+      if (value != 0)
+      {
+         if (ppdev->PresentBatchDepth++ != 0)
+            return 1;
+
+         if (EngDeviceIoControl(ppdev->hDriver,
+                                IOCTL_VIDEO_DXGK_PRESENT_BATCH_BEGIN,
+                                NULL, 0, NULL, 0, &Ret))
+         {
+            ppdev->PresentBatchDepth = 0;
+            return 0;
+         }
+         return 1;
+      }
+
+      if (ppdev->PresentBatchDepth == 0)
+         return 0;
+      if (--ppdev->PresentBatchDepth != 0)
+         return 1;
+
+      /* Publish every primitive in the completed paint as one damage-list
+       * transaction while dxgkrnl still holds the outer batch. END then
+       * captures that completed state once. */
+      RcddPresentEx(ppdev, NULL, DXGK_PRESENT_DIRTY_FLUSH);
       if (EngDeviceIoControl(ppdev->hDriver,
-                             value != 0
-                                 ? IOCTL_VIDEO_DXGK_PRESENT_BATCH_BEGIN
-                                 : IOCTL_VIDEO_DXGK_PRESENT_BATCH_END,
+                             IOCTL_VIDEO_DXGK_PRESENT_BATCH_END,
                              NULL, 0, NULL, 0, &Ret))
       {
          return 0;

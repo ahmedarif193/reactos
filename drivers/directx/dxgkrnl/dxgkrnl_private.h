@@ -506,15 +506,16 @@ NTSTATUS NTAPI TdrResetFromTimeout(_In_ PVOID RecoveryContext);
 #define DXGK_PROCESS_MAX_INFLIGHT 512
 
 #define DXGKP_PRESENT_SNAPSHOT_COUNT 2
+#define DXGKP_PRESENT_RECT_COUNT 8
 
 typedef struct _DXGKRNL_PRESENT_SNAPSHOT
 {
     PVOID Buffer;
     SIZE_T BufferSize;
-    RECTL SyncRect;
-    RECTL PresentRect;
-    BOOLEAN SyncValid;
-    BOOLEAN PresentValid;
+    RECTL SyncRects[DXGKP_PRESENT_RECT_COUNT];
+    RECTL PresentRects[DXGKP_PRESENT_RECT_COUNT];
+    ULONG SyncRectCount;
+    ULONG PresentRectCount;
 } DXGKRNL_PRESENT_SNAPSHOT, *PDXGKRNL_PRESENT_SNAPSHOT;
 
 /* ========================================================================
