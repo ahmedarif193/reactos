@@ -30,6 +30,7 @@ static BOOLEAN TestSizing = FALSE;
 static BOOLEAN TestDirtying = FALSE;
 static BOOLEAN TestUncaching = FALSE;
 static BOOLEAN TestWritten = FALSE;
+static BOOLEAN TestBackingChanged = FALSE;
 
 NTSTATUS
 TestEntry(
@@ -160,6 +161,7 @@ PerformTest(
     ok_eq_ulong(TestTestId, -1);
 
     TestWritten = FALSE;
+    TestBackingChanged = FALSE;
     TestDeviceObject = DeviceObject;
     TestTestId = TestId;
     TestFileObject = IoCreateStreamFileObject(NULL, DeviceObject);
@@ -334,6 +336,57 @@ PerformTest(
                     if (Ret == TRUE)
                         CcUnpinData(Bcb);
                 }
+                else if (TestId == 7)
+                {
+                    Buffer = ExAllocatePool(NonPagedPool, PAGE_SIZE);
+                    if (!skip(Buffer != NULL, "ExAllocatePool failed\n"))
+                    {
+                        Offset.QuadPart = PAGE_SIZE;
+                        KmtStartSeh();
+                        Ret = CcCopyRead(TestFileObject,
+                                         &Offset,
+                                         PAGE_SIZE,
+                                         TRUE,
+                                         Buffer,
+                                         &IoStatus);
+                        KmtEndSeh(STATUS_SUCCESS);
+                        ok_bool_true(Ret, "CcCopyRead failed\n");
+                        if (Ret)
+                        {
+                            ok_eq_ulong(Buffer[0], 0xBABABABA);
+                            ok_eq_ulong(Buffer[(PAGE_SIZE - sizeof(ULONG)) / sizeof(ULONG)],
+                                        0xBABABABA);
+                        }
+
+                        TestBackingChanged = TRUE;
+                        KmtStartSeh();
+                        Ret = CcPurgeCacheSection(TestFileObject->SectionObjectPointer,
+                                                  &Offset,
+                                                  PAGE_SIZE,
+                                                  FALSE);
+                        KmtEndSeh(STATUS_SUCCESS);
+                        ok_bool_true(Ret, "CcPurgeCacheSection failed for a partial VACB range\n");
+
+                        RtlZeroMemory(Buffer, PAGE_SIZE);
+                        KmtStartSeh();
+                        Ret = CcCopyRead(TestFileObject,
+                                         &Offset,
+                                         PAGE_SIZE,
+                                         TRUE,
+                                         Buffer,
+                                         &IoStatus);
+                        KmtEndSeh(STATUS_SUCCESS);
+                        ok_bool_true(Ret, "CcCopyRead after purge failed\n");
+                        if (Ret)
+                        {
+                            ok_eq_ulong(Buffer[0], 0xACACACAC);
+                            ok_eq_ulong(Buffer[(PAGE_SIZE - sizeof(ULONG)) / sizeof(ULONG)],
+                                        0xACACACAC);
+                        }
+
+                        ExFreePool(Buffer);
+                    }
+                }
             }
         }
     }
@@ -467,7 +520,9 @@ TestIrpHandler(
 
         if (Offset.QuadPart < Fcb->Header.FileSize.QuadPart)
         {
-            RtlFillMemory(Buffer, min(Length, Fcb->Header.FileSize.QuadPart - Offset.QuadPart), 0xBA);
+            RtlFillMemory(Buffer,
+                          min(Length, Fcb->Header.FileSize.QuadPart - Offset.QuadPart),
+                          TestTestId == 7 && TestBackingChanged ? 0xAC : 0xBA);
             Buffer = (PVOID)((ULONG_PTR)Buffer + (ULONG_PTR)min(Length, Fcb->Header.FileSize.QuadPart - Offset.QuadPart));
 
             if (Length > (Fcb->Header.FileSize.QuadPart - Offset.QuadPart))

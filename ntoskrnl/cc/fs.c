@@ -243,14 +243,15 @@ CcPurgeCacheSection (
         Vacb = CONTAINING_RECORD(ListEntry, ROS_VACB, CacheMapVacbListEntry);
         ListEntry = ListEntry->Flink;
 
-        /* Skip VACBs outside the range, or only partially in range */
-        if (Vacb->FileOffset.QuadPart < StartOffset)
+        ViewEnd = min(Vacb->FileOffset.QuadPart + VACB_MAPPING_GRANULARITY,
+                      SharedCacheMap->SectionSize.QuadPart);
+
+        /* A VACB must be removed if any part of it overlaps the purge. */
+        if (ViewEnd <= StartOffset)
         {
             continue;
         }
-        ViewEnd = min(Vacb->FileOffset.QuadPart + VACB_MAPPING_GRANULARITY,
-                      SharedCacheMap->SectionSize.QuadPart);
-        if (ViewEnd >= EndOffset)
+        if (Vacb->FileOffset.QuadPart >= EndOffset)
         {
             break;
         }
