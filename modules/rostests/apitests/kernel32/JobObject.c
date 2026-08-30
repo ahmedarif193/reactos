@@ -6,6 +6,8 @@
 
 #include "precomp.h"
 
+#define SELF_JOB_EXIT_CODE 42
+
 static BOOL expect_completion(HANDLE port, DWORD expected_message, ULONG_PTR expected_key, DWORD expected_pid)
 {
     OVERLAPPED *overlapped = NULL;
@@ -94,6 +96,60 @@ cleanup:
     CloseHandle(process_info.hThread);
 }
 
+static VOID test_self_job_close_on_exit(PCWSTR application)
+{
+    PROCESS_INFORMATION process_info;
+    STARTUPINFOW startup_info;
+    WCHAR command_line[MAX_PATH * 2];
+    DWORD exit_code = STILL_ACTIVE;
+    DWORD result;
+    BOOL ret;
+
+    RtlZeroMemory(&process_info, sizeof(process_info));
+    RtlZeroMemory(&startup_info, sizeof(startup_info));
+    startup_info.cb = sizeof(startup_info);
+    StringCchPrintfW(command_line, _countof(command_line), L"\"%s\" JobObject self-job-exit", application);
+
+    ret = CreateProcessW(application, command_line, NULL, NULL, FALSE, 0, NULL, NULL, &startup_info, &process_info);
+    ok(ret, "CreateProcessW failed with %lu\n", GetLastError());
+    if (!ret)
+        return;
+
+    result = WaitForSingleObject(process_info.hProcess, 5000);
+    ok(result == WAIT_OBJECT_0, "Self-job child wait returned %#lx\n", result);
+    ret = GetExitCodeProcess(process_info.hProcess, &exit_code);
+    ok(ret, "GetExitCodeProcess failed with %lu\n", GetLastError());
+    ok(exit_code == SELF_JOB_EXIT_CODE, "Expected self-job exit code %u, got %#lx\n", SELF_JOB_EXIT_CODE, exit_code);
+
+    if (result != WAIT_OBJECT_0)
+        TerminateProcess(process_info.hProcess, 0);
+    CloseHandle(process_info.hProcess);
+    CloseHandle(process_info.hThread);
+}
+
+static DECLSPEC_NORETURN VOID run_self_job_exit_child(void)
+{
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limit_info;
+    HANDLE job;
+
+    RtlZeroMemory(&limit_info, sizeof(limit_info));
+    job = CreateJobObjectW(NULL, NULL);
+    if (!job)
+        ExitProcess(40);
+
+    limit_info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limit_info, sizeof(limit_info)))
+    {
+        ExitProcess(41);
+    }
+
+    if (!AssignProcessToJobObject(job, GetCurrentProcess()))
+        ExitProcess(43);
+
+    /* Keep the final job handle open so process handle rundown closes it. */
+    ExitProcess(SELF_JOB_EXIT_CODE);
+}
+
 START_TEST(JobObject)
 {
     JOBOBJECT_ASSOCIATE_COMPLETION_PORT port_info;
@@ -113,6 +169,8 @@ START_TEST(JobObject)
         Sleep(INFINITE);
         return;
     }
+    if (argc >= 3 && !strcmp(argv[2], "self-job-exit"))
+        run_self_job_exit_child();
 
     RtlZeroMemory(&startup_info, sizeof(startup_info));
     RtlZeroMemory(&process_info, sizeof(process_info));
@@ -166,4 +224,5 @@ cleanup:
     if (port) CloseHandle(port);
     if (job) CloseHandle(job);
     test_kill_on_close(application);
+    test_self_job_close_on_exit(application);
 }
