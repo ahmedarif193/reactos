@@ -239,8 +239,9 @@ Control(
     PULONG lpBytesReturned)
 {
     OVERLAPPED Overlapped;
-    BOOLEAN IoResult;
+    BOOL IoResult;
     DWORD Transferred = 0;
+    DWORD Error;
 
     /* Overlapped I/O is done here - this is used for waiting for completion */
     ZeroMemory(&Overlapped, sizeof(OVERLAPPED));
@@ -258,17 +259,26 @@ Control(
                                nOutBufferSize,
                                &Transferred,
                                &Overlapped);
-
-    /* If failure occurs, make sure it's not just due to the overlapped I/O */
-    if ( ! IoResult )
+    Error = IoResult ? ERROR_SUCCESS : GetLastError();
+    if (!IoResult)
     {
-        if ( GetLastError() != ERROR_IO_PENDING )
+        if (Error == ERROR_IO_PENDING)
+        {
+            IoResult = GetOverlappedResult(hMixer,
+                                           &Overlapped,
+                                           &Transferred,
+                                           TRUE);
+            if (!IoResult)
+                Error = GetLastError();
+        }
+
+        if (!IoResult)
         {
             CloseHandle(Overlapped.hEvent);
 
-            if (GetLastError() == ERROR_MORE_DATA || GetLastError() == ERROR_INSUFFICIENT_BUFFER)
+            if (Error == ERROR_MORE_DATA || Error == ERROR_INSUFFICIENT_BUFFER)
             {
-                if ( lpBytesReturned )
+                if (lpBytesReturned)
                     *lpBytesReturned = Transferred;
                 return MM_STATUS_MORE_ENTRIES;
             }
@@ -277,15 +287,8 @@ Control(
         }
     }
 
-    /* Wait for the I/O to complete */
-    WaitForSingleObjectEx(Overlapped.hEvent, INFINITE, TRUE);
-
-    /* Don't need this any more */
     CloseHandle(Overlapped.hEvent);
-
-    if (!IoResult)
-        return MM_STATUS_UNSUCCESSFUL;
-    if ( lpBytesReturned )
+    if (lpBytesReturned)
         *lpBytesReturned = Transferred;
     return MM_STATUS_SUCCESS;
 }
