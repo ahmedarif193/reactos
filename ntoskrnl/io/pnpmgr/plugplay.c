@@ -28,6 +28,9 @@ typedef struct _IOP_FIND_DEVICE_INSTANCE_TRAVERSE_CONTEXT
 /* GLOBALS *******************************************************************/
 
 static LIST_ENTRY IopPnpEventQueueHead;
+static KSPIN_LOCK IopPnpEventQueueLock;
+/* Keeps the tail entry alive while a consumer copies it to user mode */
+static KGUARDED_MUTEX IopPnpEventConsumerLock;
 static KEVENT IopPnpNotifyEvent;
 
 /* FUNCTIONS *****************************************************************/
@@ -35,11 +38,26 @@ static KEVENT IopPnpNotifyEvent;
 NTSTATUS
 IopSetDeviceInstanceData(HANDLE InstanceKey, PDEVICE_NODE DeviceNode);
 
+static
+VOID
+IopInsertPlugPlayEvent(
+    _In_ PPNP_EVENT_ENTRY EventEntry)
+{
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&IopPnpEventQueueLock, &OldIrql);
+    InsertHeadList(&IopPnpEventQueueHead, &EventEntry->ListEntry);
+    KeSetEvent(&IopPnpNotifyEvent, IO_NO_INCREMENT, FALSE);
+    KeReleaseSpinLock(&IopPnpEventQueueLock, OldIrql);
+}
+
 CODE_SEG("INIT")
 NTSTATUS
 IopInitPlugPlayEvents(VOID)
 {
     InitializeListHead(&IopPnpEventQueueHead);
+    KeInitializeSpinLock(&IopPnpEventQueueLock);
+    KeInitializeGuardedMutex(&IopPnpEventConsumerLock);
 
     KeInitializeEvent(&IopPnpNotifyEvent,
                       SynchronizationEvent,
@@ -84,11 +102,7 @@ IopQueueDeviceChangeEvent(
                   SymbolicLinkName->Buffer, SymbolicLinkName->Length);
     EventEntry->Event.DeviceClass.SymbolicLinkName[SymbolicLinkName->Length / sizeof(WCHAR)] = UNICODE_NULL;
 
-    InsertHeadList(&IopPnpEventQueueHead,
-                   &EventEntry->ListEntry);
-    KeSetEvent(&IopPnpNotifyEvent,
-               0,
-               FALSE);
+    IopInsertPlugPlayEvent(EventEntry);
 
     return STATUS_SUCCESS;
 }
@@ -125,9 +139,7 @@ IopQueueDeviceInstallEvent(
                   DeviceId->Buffer, DeviceId->Length);
     EventEntry->Event.InstallDevice.DeviceId[DeviceId->Length / sizeof(WCHAR)] = UNICODE_NULL;
 
-    InsertHeadList(&IopPnpEventQueueHead, &EventEntry->ListEntry);
-
-    KeSetEvent(&IopPnpNotifyEvent, 0, FALSE);
+    IopInsertPlugPlayEvent(EventEntry);
 
     return STATUS_SUCCESS;
 }
@@ -173,11 +185,7 @@ IopQueueTargetDeviceEvent(const GUID *Guid,
         return Status;
     }
 
-    InsertHeadList(&IopPnpEventQueueHead,
-                   &EventEntry->ListEntry);
-    KeSetEvent(&IopPnpNotifyEvent,
-               0,
-               FALSE);
+    IopInsertPlugPlayEvent(EventEntry);
 
     return STATUS_SUCCESS;
 }
@@ -391,19 +399,36 @@ NTSTATUS
 IopRemovePlugPlayEvent(
     _In_ PPLUGPLAY_CONTROL_USER_RESPONSE_DATA ResponseData)
 {
+    PPNP_EVENT_ENTRY EventEntry = NULL;
+    KIRQL OldIrql;
+
+    UNREFERENCED_PARAMETER(ResponseData);
+
+    /* NtGetPlugPlayEvent copies the tail entry under the consumer lock */
+    KeAcquireGuardedMutex(&IopPnpEventConsumerLock);
+    KeAcquireSpinLock(&IopPnpEventQueueLock, &OldIrql);
+
     /* Remove a pnp event entry from the tail of the queue */
     if (!IsListEmpty(&IopPnpEventQueueHead))
     {
-        ExFreePool(CONTAINING_RECORD(RemoveTailList(&IopPnpEventQueueHead), PNP_EVENT_ENTRY, ListEntry));
+        EventEntry = CONTAINING_RECORD(RemoveTailList(&IopPnpEventQueueHead),
+                                       PNP_EVENT_ENTRY,
+                                       ListEntry);
     }
 
     /* Signal the next pnp event in the queue */
     if (!IsListEmpty(&IopPnpEventQueueHead))
     {
         KeSetEvent(&IopPnpNotifyEvent,
-                   0,
+                   IO_NO_INCREMENT,
                    FALSE);
     }
+
+    KeReleaseSpinLock(&IopPnpEventQueueLock, OldIrql);
+    KeReleaseGuardedMutex(&IopPnpEventConsumerLock);
+
+    if (EventEntry != NULL)
+        ExFreePool(EventEntry);
 
     return STATUS_SUCCESS;
 }
@@ -1479,6 +1504,8 @@ NtGetPlugPlayEvent(IN ULONG Reserved1,
                    IN ULONG BufferSize)
 {
     PPNP_EVENT_ENTRY Entry;
+    ULONG TotalSize;
+    KIRQL OldIrql;
     NTSTATUS Status;
 
     DPRINT("NtGetPlugPlayEvent() called\n");
@@ -1512,14 +1539,32 @@ NtGetPlugPlayEvent(IN ULONG Reserved1,
         return Status;
     }
 
-    /* Get entry from the tail of the queue */
+    /*
+     * Producers only insert at the head under the spin lock. The tail entry is
+     * removed and freed by the user-response consumer under the consumer lock,
+     * so holding it keeps the entry valid while it is copied at PASSIVE_LEVEL.
+     */
+    KeAcquireGuardedMutex(&IopPnpEventConsumerLock);
+    KeAcquireSpinLock(&IopPnpEventQueueLock, &OldIrql);
+    if (IsListEmpty(&IopPnpEventQueueHead))
+    {
+        KeReleaseSpinLock(&IopPnpEventQueueLock, OldIrql);
+        KeReleaseGuardedMutex(&IopPnpEventConsumerLock);
+        return STATUS_UNSUCCESSFUL;
+    }
+
     Entry = CONTAINING_RECORD(IopPnpEventQueueHead.Blink,
                               PNP_EVENT_ENTRY,
                               ListEntry);
+    TotalSize = Entry->Event.TotalSize;
+    KeReleaseSpinLock(&IopPnpEventQueueLock, OldIrql);
 
     /* Check the buffer size */
-    if (BufferSize < Entry->Event.TotalSize)
+    if (BufferSize < TotalSize)
     {
+        /* The event stays queued. Make the resized retry observable. */
+        KeSetEvent(&IopPnpNotifyEvent, IO_NO_INCREMENT, FALSE);
+        KeReleaseGuardedMutex(&IopPnpEventConsumerLock);
         DPRINT1("Buffer is too small for the pnp-event\n");
         return STATUS_BUFFER_TOO_SMALL;
     }
@@ -1528,21 +1573,25 @@ NtGetPlugPlayEvent(IN ULONG Reserved1,
     _SEH2_TRY
     {
         ProbeForWrite(Buffer,
-                      Entry->Event.TotalSize,
+                      TotalSize,
                       sizeof(UCHAR));
         RtlCopyMemory(Buffer,
                       &Entry->Event,
-                      Entry->Event.TotalSize);
+                      TotalSize);
+        Status = STATUS_SUCCESS;
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
-        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        KeSetEvent(&IopPnpNotifyEvent, IO_NO_INCREMENT, FALSE);
+        Status = _SEH2_GetExceptionCode();
     }
     _SEH2_END;
 
+    KeReleaseGuardedMutex(&IopPnpEventConsumerLock);
+
     DPRINT("NtGetPlugPlayEvent() done\n");
 
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 /*
