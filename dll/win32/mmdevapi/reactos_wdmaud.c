@@ -91,6 +91,7 @@ struct reactos_stream
     UINT32 rt_buffer_frames;
     UINT32 rt_period_frames;
     UINT32 rt_period_index;
+    ULONG rt_next_packet_number;
     UINT32 rt_period_queued_frames[REACTOS_RT_NOTIFICATION_COUNT];
     UINT64 position_qpc_100ns;
     BYTE *render_ring;
@@ -1091,6 +1092,7 @@ static void cleanup_wavert(struct reactos_stream *stream)
     stream->rt_buffer_frames = 0;
     stream->rt_period_frames = 0;
     stream->rt_period_index = 0;
+    stream->rt_next_packet_number = 0;
     ZeroMemory(stream->rt_period_queued_frames, sizeof(stream->rt_period_queued_frames));
     if (stream->rt_event)
     {
@@ -1613,6 +1615,44 @@ static BOOL prime_wavert_buffer(struct reactos_stream *stream)
     }
 
     stream->rt_period_index = 0;
+    stream->rt_next_packet_number = 0;
+    return TRUE;
+}
+
+static BOOL set_wavert_write_packet(struct reactos_stream *stream,
+                                    ULONG packet_number)
+{
+    KSPROPERTY property;
+    KSRTAUDIO_SETWRITEPACKET_INFO packet;
+    DWORD returned;
+
+    ZeroMemory(&property, sizeof(property));
+    property.Set = rt_audio_property_set;
+    property.Id = KSPROPERTY_RTAUDIO_SETWRITEPACKET;
+    property.Flags = KSPROPERTY_TYPE_SET;
+
+    ZeroMemory(&packet, sizeof(packet));
+    packet.PacketNumber = packet_number;
+
+    return pin_ioctl(stream->user_pin, IOCTL_KS_PROPERTY,
+                     &property, sizeof(property),
+                     &packet, sizeof(packet), &returned);
+}
+
+static BOOL submit_primed_wavert_buffer(struct reactos_stream *stream)
+{
+    /*
+     * WaveRT output miniports receive packet 1 first.  The miniport queues
+     * silence for packet 0 and packet 1's valid data before starting DMA,
+     * leaving period 0 as the first period returned by the notification
+     * event.
+     */
+    stream->rt_next_packet_number = 1;
+    if (!set_wavert_write_packet(stream, stream->rt_next_packet_number))
+        return FALSE;
+
+    ++stream->rt_next_packet_number;
+
     return TRUE;
 }
 
@@ -1882,28 +1922,36 @@ static HRESULT start_physical_stream(struct reactos_stream *stream)
         stream->position_qpc_100ns = query_performance_time_100ns();
         LeaveCriticalSection(&stream->lock);
 
-        stream->timer_thread = CreateThread(NULL, 0, reactos_timer_thread,
-                                            stream, 0, NULL);
-        if (!stream->timer_thread)
-        {
-            EnterCriticalSection(&stream->lock);
-            stream->started = FALSE;
-            LeaveCriticalSection(&stream->lock);
-            return E_FAIL;
-        }
-        SetThreadPriority(stream->timer_thread, THREAD_PRIORITY_TIME_CRITICAL);
         hr = set_stream_state(stream, KSSTATE_RUN);
         if (FAILED(hr))
         {
             EnterCriticalSection(&stream->lock);
             stream->started = FALSE;
             LeaveCriticalSection(&stream->lock);
-            SetEvent(stream->stop_event);
-            WaitForSingleObject(stream->timer_thread, INFINITE);
-            CloseHandle(stream->timer_thread);
-            stream->timer_thread = NULL;
             return hr;
         }
+
+        if (!submit_primed_wavert_buffer(stream))
+        {
+            hr = wdmaud_error_hresult();
+            set_stream_state(stream, KSSTATE_PAUSE);
+            EnterCriticalSection(&stream->lock);
+            stream->started = FALSE;
+            LeaveCriticalSection(&stream->lock);
+            return hr;
+        }
+
+        stream->timer_thread = CreateThread(NULL, 0, reactos_timer_thread,
+                                            stream, 0, NULL);
+        if (!stream->timer_thread)
+        {
+            set_stream_state(stream, KSSTATE_PAUSE);
+            EnterCriticalSection(&stream->lock);
+            stream->started = FALSE;
+            LeaveCriticalSection(&stream->lock);
+            return E_FAIL;
+        }
+        SetThreadPriority(stream->timer_thread, THREAD_PRIORITY_TIME_CRITICAL);
         if (stream->event && stream->flow != eCapture)
             SetEvent(stream->event);
         return S_OK;
@@ -3011,6 +3059,9 @@ static void reactos_render_rt_timer_loop(struct reactos_stream *stream)
 {
     HANDLE wait_handles[2];
     DWORD wait;
+    DWORD packet_error;
+    ULONG packet_number;
+    BOOL period_ready;
 
     wait_handles[0] = stream->stop_event;
     wait_handles[1] = stream->rt_event;
@@ -3039,7 +3090,9 @@ static void reactos_render_rt_timer_loop(struct reactos_stream *stream)
             else
                 stream->padding = 0;
 
-            if (!fill_wavert_period(stream, stream->rt_period_index))
+            period_ready = fill_wavert_period(stream,
+                                              stream->rt_period_index);
+            if (!period_ready)
             {
                 stream->render_error = ERROR_NOT_ENOUGH_MEMORY;
                 ZeroMemory(stream->rt_buffer +
@@ -3051,11 +3104,25 @@ static void reactos_render_rt_timer_loop(struct reactos_stream *stream)
                 MemoryBarrier();
             }
 
+            packet_number = stream->rt_next_packet_number++;
             stream->rt_period_index =
                 (stream->rt_period_index + 1) %
                     REACTOS_RT_NOTIFICATION_COUNT;
         }
         LeaveCriticalSection(&stream->lock);
+
+        if (period_ready &&
+            !set_wavert_write_packet(stream, packet_number))
+        {
+            packet_error = GetLastError();
+            EnterCriticalSection(&stream->lock);
+            stream->render_error = packet_error ? packet_error :
+                                                  ERROR_GEN_FAILURE;
+            LeaveCriticalSection(&stream->lock);
+            if (stream->event)
+                SetEvent(stream->event);
+            break;
+        }
 
         if (stream->event)
             SetEvent(stream->event);
