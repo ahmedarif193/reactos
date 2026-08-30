@@ -660,10 +660,13 @@ WdmAudSetWaveDeviceFormatByMMixer(
             }
 
             Instance->RTStreamingShadowBufferLength = Instance->RTStreamingBufferLength;
+            Instance->RTStreamingNotificationCount = 2;
             Instance->RTStreamingShadowBufferBytesUsed = 0;
             Instance->RTStreamingShadowBufferReadOffset = 0;
             Instance->RTStreamingShadowBufferWriteOffset = 0;
             Instance->RTStreamingBufferBytesWritten = 0;
+            Instance->RTStreamingNextPacketNumber = 0;
+            Instance->RTStreamingPacketError = 0;
             Instance->RTStreamingUnderrunCount = 0;
             Instance->RTStreamingUnderrunBytes = 0;
             Instance->LegacyStreaming = FALSE;
@@ -695,6 +698,7 @@ FailedRTStreamingSetup:
         Instance->RTStreamingShadowBufferLength = 0;
         Instance->RTStreamingBuffer = NULL;
         Instance->RTStreamingBufferLength = 0;
+        Instance->RTStreamingNotificationCount = 0;
         return MMSYSERR_ERROR;
     }
     return MMSYSERR_ERROR;
@@ -784,6 +788,7 @@ WdmAudCloseSoundDeviceByMMixer(
             DPRINT("closing device handling\n");
             SoundDeviceInstance->RTStreamingBuffer = NULL;
             SoundDeviceInstance->RTStreamingBufferLength = 0;
+            SoundDeviceInstance->RTStreamingNotificationCount = 0;
             SoundDeviceInstance->RTStreamingBufferOffset = 0;
             MMixerUnregisterRTStreamingEvent(&MixerContext,
                                              SoundDeviceInstance->Handle,
@@ -930,12 +935,6 @@ WdmAudSetWaveStateByMMixer(
     {
         if (bStart)
         {
-            if (SoundDeviceInstance->RTStreamingEnabled)
-            {
-                if (!WdmAudStartRTStreamingThreads(SoundDeviceInstance))
-                    return MMSYSERR_NOMEM;
-            }
-
             MixerStatus = MMixerSetWaveStatus(&MixerContext, SoundDeviceInstance->Handle, KSSTATE_ACQUIRE);
             if (MixerStatus == MM_STATUS_SUCCESS)
                 MixerStatus = MMixerSetWaveStatus(&MixerContext, SoundDeviceInstance->Handle, KSSTATE_PAUSE);
@@ -945,7 +944,52 @@ WdmAudSetWaveStateByMMixer(
                 return MMSYSERR_ERROR;
 
             if (SoundDeviceInstance->RTStreamingEnabled)
+            {
+                if (DeviceType == WAVE_OUT_DEVICE_TYPE)
+                {
+                    ULONG PacketNumber;
+
+                    if (!SoundDeviceInstance->RTStreamingNotificationCount)
+                        return MMSYSERR_ERROR;
+
+                    MemoryBarrier();
+                    InterlockedExchange(
+                        &SoundDeviceInstance->RTStreamingNextPacketNumber,
+                        SoundDeviceInstance->RTStreamingNotificationCount);
+                    InterlockedExchange(&SoundDeviceInstance->RTStreamingPacketError, 0);
+
+                    for (PacketNumber = 0;
+                         PacketNumber < SoundDeviceInstance->RTStreamingNotificationCount;
+                         ++PacketNumber)
+                    {
+                        MixerStatus = MMixerSetRTStreamingWritePacket(
+                            &MixerContext,
+                            SoundDeviceInstance->Handle,
+                            PacketNumber,
+                            0,
+                            0);
+                        if (MixerStatus != MM_STATUS_SUCCESS)
+                        {
+                            InterlockedExchange(&SoundDeviceInstance->RTStreamingPacketError, 1);
+                            MMixerSetWaveStatus(&MixerContext, SoundDeviceInstance->Handle, KSSTATE_PAUSE);
+                            MMixerSetWaveStatus(&MixerContext, SoundDeviceInstance->Handle, KSSTATE_ACQUIRE);
+                            MMixerSetWaveStatus(&MixerContext, SoundDeviceInstance->Handle, KSSTATE_STOP);
+                            return MMSYSERR_ERROR;
+                        }
+                    }
+                }
+
+                if (!WdmAudStartRTStreamingThreads(SoundDeviceInstance))
+                {
+                    InterlockedExchange(&SoundDeviceInstance->RTStreamingPacketError, 1);
+                    MMixerSetWaveStatus(&MixerContext, SoundDeviceInstance->Handle, KSSTATE_PAUSE);
+                    MMixerSetWaveStatus(&MixerContext, SoundDeviceInstance->Handle, KSSTATE_ACQUIRE);
+                    MMixerSetWaveStatus(&MixerContext, SoundDeviceInstance->Handle, KSSTATE_STOP);
+                    return MMSYSERR_NOMEM;
+                }
+
                 SoundDeviceInstance->bStarted = TRUE;
+            }
         }
         else
         {
@@ -1001,6 +1045,8 @@ WdmAudResetStreamByMMixer(
             SoundDeviceInstance->RTStreamingShadowBufferWriteOffset = 0;
             InterlockedExchange(&SoundDeviceInstance->RTStreamingBufferBytesWritten, 0);
             InterlockedExchange(&SoundDeviceInstance->RTStreamingShadowBufferBytesUsed, 0);
+            InterlockedExchange(&SoundDeviceInstance->RTStreamingNextPacketNumber, 0);
+            InterlockedExchange(&SoundDeviceInstance->RTStreamingPacketError, 0);
             InterlockedExchange(&SoundDeviceInstance->RTStreamingUnderrunCount, 0);
             InterlockedExchange(&SoundDeviceInstance->RTStreamingUnderrunBytes, 0);
             RtlZeroMemory(SoundDeviceInstance->RTStreamingBuffer,
@@ -1366,12 +1412,30 @@ RTStreamingThreadProc(
         }
         else if (WaitStatus == WAIT_OBJECT_0 + 1)
         {
-            DWORD Length = SoundDeviceInstance->RTStreamingBufferLength / 2;
+            DWORD Length;
             DWORD BytesCopied;
+
+            if (!SoundDeviceInstance->RTStreamingNotificationCount)
+            {
+                InterlockedExchange(&SoundDeviceInstance->RTStreamingPacketError, 1);
+                break;
+            }
+
+            Length = SoundDeviceInstance->RTStreamingBufferLength /
+                SoundDeviceInstance->RTStreamingNotificationCount;
             if (DeviceType == WAVE_OUT_DEVICE_TYPE)
             {
+                LONG PacketNumber;
+                ULONG PacketIndex;
+                MIXER_STATUS MixerStatus;
                 UCHAR *PeriodBuffer =
-                    &SoundDeviceInstance->RTStreamingBuffer[SoundDeviceInstance->RTStreamingBufferOffset];
+                    SoundDeviceInstance->RTStreamingBuffer;
+
+                PacketNumber = InterlockedIncrement(
+                    &SoundDeviceInstance->RTStreamingNextPacketNumber) - 1;
+                PacketIndex = (ULONG)PacketNumber %
+                    SoundDeviceInstance->RTStreamingNotificationCount;
+                PeriodBuffer += PacketIndex * Length;
 
                 BytesCopied = RTStreamingRingRead(SoundDeviceInstance,
                                                   PeriodBuffer,
@@ -1387,8 +1451,21 @@ RTStreamingThreadProc(
                 InterlockedExchangeAdd(&SoundDeviceInstance->RTStreamingBufferBytesWritten,
                                        BytesCopied);
                 SoundDeviceInstance->RTStreamingBufferOffset =
-                    (SoundDeviceInstance->RTStreamingBufferOffset + Length) %
+                    ((PacketIndex + 1) * Length) %
                     SoundDeviceInstance->RTStreamingBufferLength;
+
+                MemoryBarrier();
+                MixerStatus = MMixerSetRTStreamingWritePacket(
+                    &MixerContext,
+                    SoundDeviceInstance->Handle,
+                    (ULONG)PacketNumber,
+                    0,
+                    0);
+                if (MixerStatus != MM_STATUS_SUCCESS)
+                {
+                    InterlockedExchange(&SoundDeviceInstance->RTStreamingPacketError, 1);
+                    break;
+                }
             }
             else if (DeviceType == WAVE_IN_DEVICE_TYPE)
             {
@@ -1484,9 +1561,6 @@ WdmAudCommitWaveBufferByMMixer(
 
     if (SoundDeviceInstance->RTStreamingEnabled)
     {
-        if (!WdmAudStartRTStreamingThreads(SoundDeviceInstance))
-            return MMSYSERR_NOMEM;
-
         Context = AllocateMemory(sizeof(*Context));
         if (!Context)
             return MMSYSERR_NOMEM;
@@ -1522,7 +1596,11 @@ WdmAudCommitWaveBufferByMMixer(
 
         while(NT_SUCCESS(Status) && Offset < Length)
         {
-            if (SoundDeviceInstance->ResetInProgress || !SoundDeviceInstance->RTStreamingEnabled || SoundDeviceInstance->bClosed)
+            if (SoundDeviceInstance->ResetInProgress ||
+                !SoundDeviceInstance->RTStreamingEnabled ||
+                SoundDeviceInstance->bClosed ||
+                InterlockedCompareExchange(
+                    &SoundDeviceInstance->RTStreamingPacketError, 0, 0))
             {
                 Status = STATUS_CANCELLED;
                 break;

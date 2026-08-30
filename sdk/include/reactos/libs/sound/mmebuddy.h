@@ -344,8 +344,11 @@ typedef struct _SOUND_DEVICE_INSTANCE
 
     PUCHAR RTStreamingBuffer;
     ULONG RTStreamingBufferLength;
+    ULONG RTStreamingNotificationCount;
     volatile LONG RTStreamingBufferOffset;
     volatile LONG RTStreamingBufferBytesWritten;
+    volatile LONG RTStreamingNextPacketNumber;
+    volatile LONG RTStreamingPacketError;
     volatile LONG RTStreamingUnderrunCount;
     volatile LONG RTStreamingUnderrunBytes;
 
