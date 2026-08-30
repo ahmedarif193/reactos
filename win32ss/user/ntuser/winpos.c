@@ -1750,7 +1750,7 @@ ForceNCPaintErase(PWND Wnd, HRGN hRgn, PREGION pRgn)
    }
 }
 
-static VOID FASTCALL IntImeWindowPosChanged(VOID)
+VOID FASTCALL IntImeWindowPosChanged(VOID)
 {
     HWND *phwnd;
     PWND pwndNode, pwndDesktop = UserGetDesktopWindow();
@@ -2429,7 +2429,9 @@ co_WinPosSetWindowPos(
    /* Send WM_IME_SYSTEM:IMS_UPDATEIMEUI to the IME windows if necessary */
    if ((WinPos.flags & (SWP_NOMOVE | SWP_NOSIZE)) != (SWP_NOMOVE | SWP_NOSIZE))
    {
-      if (IS_IMM_MODE())
+      /* A live move can produce hundreds of position changes. The tracking
+       * loop sends one update after the final position has been selected. */
+      if (IS_IMM_MODE() && !(gptiCurrent->TIF_flags & TIF_MOVESIZETRACKING))
           IntImeWindowPosChanged();
    }
 
