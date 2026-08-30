@@ -115,7 +115,7 @@ static const PCHAR IrpMjFuncDesc[] = {
   #define _DbgPrintF(lvl, strings) { \
     if (((lvl)==DEBUG_VARIABLE) || (lvl < DEBUG_VARIABLE)) { \
       DbgPrint(STR_MODULENAME); \
-      DbgPrint##strings; \
+      DbgPrint strings; \
       DbgPrint("\n"); \
       if ((lvl) == DEBUGLVL_ERROR) { \
         DbgBreakPoint(); \
