@@ -308,3 +308,11 @@ MMixerUnregisterRTStreamingEvent(
     IN PMIXER_CONTEXT MixerContext,
     IN HANDLE DeviceHandle,
     IN HANDLE StreamingEvent);
+
+MIXER_STATUS
+MMixerSetRTStreamingWritePacket(
+    IN PMIXER_CONTEXT MixerContext,
+    IN HANDLE DeviceHandle,
+    IN ULONG PacketNumber,
+    IN DWORD Flags,
+    IN ULONG EosPacketLength);
