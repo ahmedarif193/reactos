@@ -23,6 +23,88 @@
 #include "wine/kernelbase.h"
 #include "wine/exception.h"
 
+static PLARGE_INTEGER
+GetNtTimeout(
+    _Out_ PLARGE_INTEGER Time,
+    _In_ DWORD Timeout)
+{
+    if (Timeout == INFINITE)
+        return NULL;
+
+    Time->QuadPart = (LONGLONG)Timeout * -10000;
+    return Time;
+}
+
+BOOL
+WINAPI
+WaitOnAddress(
+    _In_ volatile VOID *Address,
+    _In_ PVOID CompareAddress,
+    _In_ SIZE_T AddressSize,
+    _In_ DWORD Timeout)
+{
+    LARGE_INTEGER Time;
+    NTSTATUS Status;
+
+    Status = RtlWaitOnAddress((const VOID *)Address,
+                              CompareAddress,
+                              AddressSize,
+                              GetNtTimeout(&Time, Timeout));
+    if (Status == STATUS_TIMEOUT || !NT_SUCCESS(Status))
+    {
+        SetLastError(RtlNtStatusToDosError(Status));
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+BOOL
+WINAPI
+SleepConditionVariableCS(
+    _Inout_ PCONDITION_VARIABLE ConditionVariable,
+    _Inout_ PCRITICAL_SECTION CriticalSection,
+    _In_ DWORD Timeout)
+{
+    LARGE_INTEGER Time;
+    NTSTATUS Status;
+
+    Status = RtlSleepConditionVariableCS((PRTL_CONDITION_VARIABLE)ConditionVariable,
+                                         (PRTL_CRITICAL_SECTION)CriticalSection,
+                                         GetNtTimeout(&Time, Timeout));
+    if (Status == STATUS_TIMEOUT || !NT_SUCCESS(Status))
+    {
+        SetLastError(RtlNtStatusToDosError(Status));
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+BOOL
+WINAPI
+SleepConditionVariableSRW(
+    _Inout_ PCONDITION_VARIABLE ConditionVariable,
+    _Inout_ PSRWLOCK Lock,
+    _In_ DWORD Timeout,
+    _In_ ULONG Flags)
+{
+    LARGE_INTEGER Time;
+    NTSTATUS Status;
+
+    Status = RtlSleepConditionVariableSRW((PRTL_CONDITION_VARIABLE)ConditionVariable,
+                                          (PRTL_SRWLOCK)Lock,
+                                          GetNtTimeout(&Time, Timeout),
+                                          Flags);
+    if (Status == STATUS_TIMEOUT || !NT_SUCCESS(Status))
+    {
+        SetLastError(RtlNtStatusToDosError(Status));
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 static NTSTATUS
 BaseGetNamedObjectDirectory(
     _Out_ HANDLE *Directory)
