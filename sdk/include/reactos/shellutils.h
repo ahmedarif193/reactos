@@ -127,7 +127,7 @@ SHELL_ErrorBoxHelper(HWND hwndOwner, UINT Error)
     return Error;
 }
 #ifdef __cplusplus
-template<class H> static UINT
+template<class H> inline UINT
 SHELL_ErrorBox(H hwndOwner, UINT Error = GetLastError())
 {
     return SHELL_ErrorBoxHelper(const_cast<HWND>(hwndOwner), Error);
