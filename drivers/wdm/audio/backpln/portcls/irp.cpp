@@ -93,6 +93,7 @@ PortClsPnp(
             if (!NT_SUCCESS(Status))
             {
                 DPRINT("StartDevice returned a failure code [0x%8x]\n", Status);
+                resource_list->Release();
                 Irp->IoStatus.Status = Status;
                 IoCompleteRequest(Irp, IO_NO_INCREMENT);
                 return Status;
@@ -131,10 +132,40 @@ PortClsPnp(
                 DeviceExt->resources = NULL;
             }
 
-            // Forward request
+            IoUnregisterShutdownNotification(DeviceExt->PhysicalDeviceObject);
+
+            // Forward the request before tearing down our attachment.
+            Irp->IoStatus.Status = STATUS_SUCCESS;
             Status = PcForwardIrpSynchronous(DeviceObject, Irp);
 
-            return PcCompleteIrp(DeviceObject, Irp, Status);
+            Irp->IoStatus.Status = Status;
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+
+            IoDetachDevice(DeviceExt->PrevDeviceObject);
+
+            if (DeviceExt->KsDeviceHeader)
+                KsFreeDeviceHeader(DeviceExt->KsDeviceHeader);
+
+            if (DeviceExt->CreateItems)
+                FreeItem(DeviceExt->CreateItems, TAG_PORTCLASS);
+
+            IoDeleteDevice(DeviceObject);
+            return Status;
+
+        case IRP_MN_QUERY_REMOVE_DEVICE:
+        case IRP_MN_CANCEL_REMOVE_DEVICE:
+        case IRP_MN_QUERY_STOP_DEVICE:
+        case IRP_MN_CANCEL_STOP_DEVICE:
+        case IRP_MN_STOP_DEVICE:
+        case IRP_MN_SURPRISE_REMOVAL:
+            /*
+             * PortCls does not own policy for these requests.  Preserve the
+             * status and stack contract established by the bus driver rather
+             * than completing an unhandled query with STATUS_NOT_SUPPORTED.
+             */
+            Irp->IoStatus.Status = STATUS_SUCCESS;
+            IoSkipCurrentIrpStackLocation(Irp);
+            return IoCallDriver(DeviceExt->PrevDeviceObject, Irp);
 
         case IRP_MN_QUERY_INTERFACE:
             DPRINT("IRP_MN_QUERY_INTERFACE\n");
@@ -172,17 +203,11 @@ PortClsPnp(
             DPRINT("IRP_MN_QUERY_PNP_DEVICE_STATE\n");
             Status = PcForwardIrpSynchronous(DeviceObject, Irp);
             return PcCompleteIrp(DeviceObject, Irp, Status);
-      case IRP_MN_CANCEL_REMOVE_DEVICE:
-            DPRINT1("IRP_MN_CANCEL_REMOVE_DEVICE");
-            Irp->IoStatus.Status = STATUS_SUCCESS;
-            IoCompleteRequest(Irp, IO_NO_INCREMENT);
-            return STATUS_SUCCESS;
     }
 
     DPRINT("unhandled function %u\n", IoStack->MinorFunction);
-    Status = Irp->IoStatus.Status;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
-    return Status;
+    IoSkipCurrentIrpStackLocation(Irp);
+    return IoCallDriver(DeviceExt->PrevDeviceObject, Irp);
 }
 
 VOID
