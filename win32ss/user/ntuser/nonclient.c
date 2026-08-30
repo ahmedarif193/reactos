@@ -607,8 +607,15 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
                      UserDrawMovingFrame( hdc, &newRect, thickframe );
                  else
                  {  // Moving the whole window now!
+                    BOOL PresentBatch;
                     HRGN hrgnNew;
                     HRGN hrgnOrig = GreCreateRectRgnIndirect(&pwnd->rcWindow);
+
+                    /* A full-window move repaints the exposed background,
+                     * non-client area, client area, and related windows as
+                     * one visual state. Keep CDD from publishing those
+                     * primitives individually while the move is assembled. */
+                    PresentBatch = IntCompositionPresentBatchBegin();
 
                     if (pwnd->hrgnClip != NULL)
                        NtGdiCombineRgn(hrgnOrig, hrgnOrig, pwnd->hrgnClip, RGN_AND);
@@ -646,6 +653,7 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
 
                     if (hrgnOrig) GreDeleteObject(hrgnOrig);
                     if (hrgnNew) GreDeleteObject(hrgnNew);
+                    IntCompositionPresentBatchEnd(PresentBatch);
                  }
               }
               sizingRect = newRect;
