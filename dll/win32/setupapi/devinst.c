@@ -6091,6 +6091,7 @@ SetupDiInstallDevice(
     LPWSTR lpGuidString = NULL, lpFullGuidString = NULL;
     BOOL RebootRequired = FALSE;
     HKEY hKey = INVALID_HANDLE_VALUE;
+    HKEY hHwKey = INVALID_HANDLE_VALUE;
     BOOL NeedtoCopyFile;
     LARGE_INTEGER fullVersion;
     LONG rc;
@@ -6335,6 +6336,25 @@ SetupDiInstallDevice(
     if (hKey == INVALID_HANDLE_VALUE)
         goto cleanup;
 
+    rc = RegCreateKeyExW(hKey,
+                         L"Device Parameters",
+                         0,
+                         NULL,
+                         REG_OPTION_NON_VOLATILE,
+#if _WIN32_WINNT >= 0x502
+                         KEY_READ | KEY_WRITE,
+#else
+                         KEY_ALL_ACCESS,
+#endif
+                         NULL,
+                         &hHwKey,
+                         NULL);
+    if (rc != ERROR_SUCCESS)
+    {
+        SetLastError(rc);
+        goto cleanup;
+    }
+
     /* Install .HW section */
     DoAction = 0;
     if (!(InstallParams.FlagsEx & DI_FLAGSEX_NO_DRVREG_MODIFY))
@@ -6342,11 +6362,13 @@ SetupDiInstallDevice(
     strcpyW(pSectionName, DotHW);
     Result = SetupInstallFromInfSectionW(InstallParams.hwndParent,
         SelectedDriver->InfFileDetails->hInf, SectionName,
-        DoAction, hKey, NULL, 0,
+        DoAction, hHwKey, NULL, 0,
         NULL, NULL,
         DeviceInfoSet, DeviceInfoData);
     if (!Result)
         goto cleanup;
+    RegCloseKey(hHwKey);
+    hHwKey = INVALID_HANDLE_VALUE;
 
     /* Write information to enum key */
     TRACE("Write information to enum key\n");
@@ -6381,6 +6403,8 @@ SetupDiInstallDevice(
 
 cleanup:
     /* End of installation */
+    if (hHwKey != INVALID_HANDLE_VALUE)
+        RegCloseKey(hHwKey);
     if (hKey != INVALID_HANDLE_VALUE)
         RegCloseKey(hKey);
     if (lpGuidString)
