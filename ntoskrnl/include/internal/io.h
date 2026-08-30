@@ -577,6 +577,12 @@ IopDetectResourceConflict(
      OUT OPTIONAL PCM_PARTIAL_RESOURCE_DESCRIPTOR ConflictingDescriptor
 );
 
+BOOLEAN
+IopDmaDescriptorsConflict(
+     _In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR First,
+     _In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR Second
+);
+
 //
 // PNP Routines
 //
