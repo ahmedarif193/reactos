@@ -683,6 +683,33 @@ SpiGetEx(PVOID pvParam, PVOID pvData, ULONG cbSize, FLONG fl)
     return SpiGet(pvParam, pvData, cbSize, fl);
 }
 
+static
+UINT_PTR
+SpiGetNonClientMetrics(PVOID pvParam, FLONG fl)
+{
+    NONCLIENTMETRICSW Metrics;
+    ULONG cbSize;
+
+    /*
+     * NONCLIENTMETRICS gained iPaddedBorderWidth in Vista. Applications built
+     * against older headers still pass the structure size that ends before
+     * that member, and Windows continues to accept that form.
+     */
+    if (!SpiSet(&cbSize, pvParam, sizeof(cbSize), fl))
+        return 0;
+
+    if (cbSize != sizeof(Metrics) &&
+        cbSize != FIELD_OFFSET(NONCLIENTMETRICSW, iPaddedBorderWidth))
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+
+    Metrics = gspv.ncm;
+    Metrics.cbSize = cbSize;
+    return SpiGet(pvParam, &Metrics, cbSize, fl);
+}
+
 static inline
 UINT_PTR
 SpiGetInt(PVOID pvParam, PVOID piValue, FLONG fl)
@@ -1243,7 +1270,7 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
 
         case SPI_GETNONCLIENTMETRICS:
         {
-            return SpiGet(pvParam, &gspv.ncm, sizeof(NONCLIENTMETRICSW), fl);
+            return SpiGetNonClientMetrics(pvParam, fl);
         }
 
         case SPI_SETNONCLIENTMETRICS:
@@ -2228,8 +2255,29 @@ SpiGetSetProbeBuffer(UINT uiAction, UINT uiParam, PVOID pvParam)
             break;
 
         case SPI_GETNONCLIENTMETRICS:
-            cbSize = sizeof(NONCLIENTMETRICSW);
-            break;
+        {
+            ULONG cbMetrics;
+
+            _SEH2_TRY
+            {
+                ProbeForRead(pvParam, sizeof(cbMetrics), sizeof(UCHAR));
+                cbMetrics = *(PULONG)pvParam;
+                if (cbMetrics != sizeof(NONCLIENTMETRICSW) &&
+                    cbMetrics != FIELD_OFFSET(NONCLIENTMETRICSW, iPaddedBorderWidth))
+                {
+                    EngSetLastError(ERROR_INVALID_PARAMETER);
+                    _SEH2_YIELD(return FALSE);
+                }
+                ProbeForWrite(pvParam, cbMetrics, sizeof(UCHAR));
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                _SEH2_YIELD(return FALSE);
+            }
+            _SEH2_END;
+
+            return TRUE;
+        }
 
         case SPI_GETMINIMIZEDMETRICS:
             cbSize = sizeof(MINIMIZEDMETRICS);
