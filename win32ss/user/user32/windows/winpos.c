@@ -22,7 +22,6 @@ void mirror_rect( const RECT *window_rect, RECT *rect )
 
 /* FUNCTIONS *****************************************************************/
 
-#if 0 // Keep legacy code. Moved to Win32k:NtUser:WinPos.c.
 #define EMPTYPOINT(pt) ((pt).x == -1 && (pt).y == -1)
 
 UINT WINAPI
@@ -36,7 +35,7 @@ WinPosGetMinMaxInfo(HWND hwnd, POINT* maxSize, POINT* maxPos,
     LONG adjustedStyle;
     LONG exstyle = GetWindowLongW( hwnd, GWL_EXSTYLE );
     RECT rc;
-    WND *win;
+    PWND win;
 
     /* Compute default values */
 
@@ -72,7 +71,7 @@ WinPosGetMinMaxInfo(HWND hwnd, POINT* maxSize, POINT* maxPos,
     MinMax.ptMaxPosition.x = -xinc;
     MinMax.ptMaxPosition.y = -yinc;
 
-    if ((win = ValidateHwnd( hwnd )) )//&& win != WND_DESKTOP && win != WND_OTHER_PROCESS)
+    if ((win = ValidateHwnd(hwnd)))
     {
         if (!EMPTYPOINT(win->InternalPos.MaxPos)) MinMax.ptMaxPosition = win->InternalPos.MaxPos;
     }
@@ -127,9 +126,8 @@ WinPosGetMinMaxInfo(HWND hwnd, POINT* maxSize, POINT* maxPos,
     if (minTrack) *minTrack = MinMax.ptMinTrackSize;
     if (maxTrack) *maxTrack = MinMax.ptMaxTrackSize;
 
-  return 0; //FIXME: what does it return? Wine returns MINMAXINFO.
+    return 0;
 }
-#endif
 
 /*
  * @implemented
