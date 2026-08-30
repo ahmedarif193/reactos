@@ -9,6 +9,118 @@
 
 #include <ndk/obfuncs.h>
 
+#define BLOCKED_WAITERS_EXIT_CODE 789
+
+typedef struct _BLOCKED_WAITER_CONTEXT
+{
+    HANDLE ReadyEvent;
+    HANDLE CompletionPort;
+} BLOCKED_WAITER_CONTEXT, *PBLOCKED_WAITER_CONTEXT;
+
+typedef NTSTATUS
+(NTAPI *PRTL_WAIT_ON_ADDRESS)(
+    _In_ volatile VOID *Address,
+    _In_ PVOID CompareAddress,
+    _In_ SIZE_T AddressSize,
+    _In_opt_ PLARGE_INTEGER Timeout);
+
+static volatile LONG BlockedWaitAddress;
+static PRTL_WAIT_ON_ADDRESS RtlWaitOnAddressFunction;
+
+static
+DWORD
+WINAPI
+WaitOnAddressThread(
+    _In_ PVOID Parameter)
+{
+    PBLOCKED_WAITER_CONTEXT Context = Parameter;
+    LONG Compare = 0;
+
+    SetEvent(Context->ReadyEvent);
+    RtlWaitOnAddressFunction((volatile VOID *)&BlockedWaitAddress,
+                             &Compare,
+                             sizeof(Compare),
+                             NULL);
+    return 1;
+}
+
+static
+DWORD
+WINAPI
+CompletionPortThread(
+    _In_ PVOID Parameter)
+{
+    PBLOCKED_WAITER_CONTEXT Context = Parameter;
+    LPOVERLAPPED Overlapped;
+    ULONG_PTR CompletionKey;
+    DWORD BytesTransferred;
+
+    SetEvent(Context->ReadyEvent);
+    GetQueuedCompletionStatus(Context->CompletionPort,
+                              &BytesTransferred,
+                              &CompletionKey,
+                              &Overlapped,
+                              INFINITE);
+    return 2;
+}
+
+static
+DECLSPEC_NORETURN
+VOID
+ExitWithBlockedWaiters(VOID)
+{
+    BLOCKED_WAITER_CONTEXT Contexts[2];
+    HANDLE ReadyEvents[2];
+    HANDLE Threads[2];
+    DWORD WaitResult;
+    HMODULE Ntdll;
+
+    RtlZeroMemory(Contexts, sizeof(Contexts));
+    Ntdll = GetModuleHandleW(L"ntdll.dll");
+    RtlWaitOnAddressFunction = (PRTL_WAIT_ON_ADDRESS)(PVOID)GetProcAddress(Ntdll,
+                                                                          "RtlWaitOnAddress");
+    ReadyEvents[0] = CreateEventW(NULL, TRUE, FALSE, NULL);
+    ReadyEvents[1] = CreateEventW(NULL, TRUE, FALSE, NULL);
+    Contexts[0].ReadyEvent = ReadyEvents[0];
+    Contexts[1].ReadyEvent = ReadyEvents[1];
+    Contexts[1].CompletionPort = CreateIoCompletionPort(INVALID_HANDLE_VALUE,
+                                                        NULL,
+                                                        0,
+                                                        1);
+    if (!ReadyEvents[0] ||
+        !ReadyEvents[1] ||
+        !Contexts[1].CompletionPort ||
+        !RtlWaitOnAddressFunction)
+    {
+        ExitProcess(780);
+    }
+
+    Threads[0] = CreateThread(NULL,
+                              0,
+                              WaitOnAddressThread,
+                              &Contexts[0],
+                              0,
+                              NULL);
+    Threads[1] = CreateThread(NULL,
+                              0,
+                              CompletionPortThread,
+                              &Contexts[1],
+                              0,
+                              NULL);
+    if (!Threads[0] || !Threads[1])
+        ExitProcess(781);
+
+    WaitResult = WaitForMultipleObjects(_countof(ReadyEvents),
+                                        ReadyEvents,
+                                        TRUE,
+                                        5000);
+    if (WaitResult != WAIT_OBJECT_0)
+        ExitProcess(782);
+
+    Sleep(50);
+    ExitProcess(BLOCKED_WAITERS_EXIT_CODE);
+}
+
 static
 HANDLE
 StartChild(
@@ -184,6 +296,13 @@ TestTerminateProcess(
     WaitExpectSuccess(hProcess, 5000);
     CloseProcessAndVerify(hProcess, ProcessId, 456);
 
+    /* ExitProcess terminates workers in non-alertable address and queue waits */
+    hProcess = StartChild(L"waiters", 0, &ProcessId);
+    WaitExpectSuccess(hProcess, 5000);
+    CloseProcessAndVerify(hProcess,
+                          ProcessId,
+                          BLOCKED_WAITERS_EXIT_CODE);
+
     /* Process calls TerminateProcess with GetCurrentProcess */
     ResetEvent(hEvent);
     hProcess = StartChild(L"child terminate 456", 0, &ProcessId);
@@ -218,7 +337,11 @@ START_TEST(TerminateProcess)
     if (argc >= 3)
     {
         ok(Error == ERROR_ALREADY_EXISTS, "Error = %lu\n", Error);
-        if (!strcmp(argv[2], "wait"))
+        if (!strcmp(argv[2], "waiters"))
+        {
+            ExitWithBlockedWaiters();
+        }
+        else if (!strcmp(argv[2], "wait"))
         {
             WaitExpectSuccess(hEvent, 30000);
         }
