@@ -444,7 +444,14 @@ Return Value:
                     // Finally we set all NEXTCONBK values in the packet list to 0.
                     //
 
+#ifdef __REACTOS__
+                    deviceContext->dmaPacketLinkInfo[packetIndex].LinkValue =
+                        deviceContext->dmaCbPa.LowPart +
+                        packetIndex * 2 * sizeof(DMA_CB) +
+                        deviceContext->memUncachedOffset;
+#else
                     deviceContext->dmaPacketLinkInfo[packetIndex].LinkValue = (UINT_PTR)((PCHAR)(deviceContext->dmaCbPa.LowPart) + packetIndex * 2 * sizeof(DMA_CB));;
+#endif
                     if (packetIndex == 0)
                     {
                         deviceContext->dmaPacketLinkInfo[packetIndex].LinkPtr = &(deviceContext->dmaCb[2 * (deviceContext->dmaNumPackets - 1) + 1].NEXTCONBK);;

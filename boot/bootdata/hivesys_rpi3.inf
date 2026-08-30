@@ -24,3 +24,9 @@ HKLM,"SYSTEM\CurrentControlSet\Services\usbdwc2","Group",0x00000000,"Boot Bus Ex
 HKLM,"SYSTEM\CurrentControlSet\Services\usbdwc2","ImagePath",0x00020000,"system32\drivers\usbdwc2.sys"
 HKLM,"SYSTEM\CurrentControlSet\Services\usbdwc2","Start",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\usbdwc2","Type",0x00010001,0x00000001
+
+; Windows installs the PWM-backed WaveRT adapter as a software root device.
+; Keep the devnode profile-owned while SetupAPI applies rpiwav.inf normally.
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\RPIWAV\0000","DeviceDesc",0x00000000,"Raspberry Pi Audio"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\RPIWAV\0000","HardwareID",0x00010000,"ROOT\RPIWAV"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\RPIWAV\0000","ConfigFlags",0x00010001,0x00000000

@@ -1,0 +1,94 @@
+; PROJECT:     ReactOS
+; LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+; PURPOSE:     Install metadata for the synchronized Raspberry Pi WaveRT driver
+; COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
+
+[Version]
+Signature="$Windows NT$"
+Class=MEDIA
+ClassGUID={4d36e96c-e325-11ce-bfc1-08002be10318}
+DriverVer=08/30/2026,1.0.0.0
+Provider=%ProviderString%
+
+[DestinationDirs]
+RPIWAV.CopyList=12
+
+[Manufacturer]
+%MfgName%=MicrosoftDS,NTarm64
+
+[MicrosoftDS.NTarm64]
+%RPIWAV.DeviceDesc%=RPIWAV,ROOT\RPIWAV
+
+[RPIWAV.NT]
+Include=ks.inf,wdmaudio.inf
+Needs=KS.Registration,WDMAUDIO.Registration
+CopyFiles=RPIWAV.CopyList
+AddReg=RPIWAV.AddReg
+
+[RPIWAV.CopyList]
+rpiwav.sys
+
+[RPIWAV.AddReg]
+HKR,,AssociatedFilters,,"wdmaud"
+HKR,,Driver,,"rpiwav.sys"
+HKR,Drivers,SubClasses,,"wave"
+HKR,Drivers\wave\wdmaud.drv,Driver,,"wdmaud.drv"
+HKR,Drivers\wave\wdmaud.drv,Description,,%RPIWAV.DeviceDesc%
+
+[RPIWAV.NT.Interfaces]
+AddInterface=%KSCATEGORY_AUDIO%,%KSNAME_WaveSpeakerHeadphone%,RPIWAV.I.WaveSpeakerHeadphone
+AddInterface=%KSCATEGORY_RENDER%,%KSNAME_WaveSpeakerHeadphone%,RPIWAV.I.WaveSpeakerHeadphone
+AddInterface=%KSCATEGORY_REALTIME%,%KSNAME_WaveSpeakerHeadphone%,RPIWAV.I.WaveSpeakerHeadphone
+AddInterface=%KSCATEGORY_AUDIO%,%KSNAME_TopologySpeakerHeadphone%,RPIWAV.I.TopologySpeakerHeadphone
+AddInterface=%KSCATEGORY_TOPOLOGY%,%KSNAME_TopologySpeakerHeadphone%,RPIWAV.I.TopologySpeakerHeadphone
+
+[RPIWAV.I.WaveSpeakerHeadphone]
+AddReg=RPIWAV.I.WaveSpeakerHeadphone.AddReg
+
+[RPIWAV.I.WaveSpeakerHeadphone.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%RPIWAV.WaveSpeakerHeadphone.Name%
+
+[RPIWAV.I.TopologySpeakerHeadphone]
+AddReg=RPIWAV.I.TopologySpeakerHeadphone.AddReg
+
+[RPIWAV.I.TopologySpeakerHeadphone.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%RPIWAV.TopologySpeakerHeadphone.Name%
+HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+HKR,EP\0,%PKEY_AudioEndpoint_Supports_EventDriven_Mode%,0x00010001,0x1
+
+[RPIWAV.NT.Services]
+AddService=rpiwav,0x00000002,RPIWAV.Service
+
+[RPIWAV.Service]
+DisplayName=%RPIWAV.ServiceDesc%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\rpiwav.sys
+
+[RPIWAV.NT.HW]
+AddReg=RPIWAV.HW.AddReg
+
+[RPIWAV.HW.AddReg]
+HKR,,DeviceType,0x00010001,0x0000001d
+HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GRGWGX;;;BA)(A;;GRGWGX;;;WD)(A;;GRGWGX;;;RC)"
+
+[Strings]
+ProviderString="MS-IOT"
+MfgName="Microsoft"
+RPIWAV.DeviceDesc="Raspberry Pi Audio"
+RPIWAV.ServiceDesc="Raspberry Pi Audio Driver"
+RPIWAV.WaveSpeakerHeadphone.Name="Raspberry Pi Speaker Headphone"
+RPIWAV.TopologySpeakerHeadphone.Name="Raspberry Pi Speaker Headphone"
+Proxy.CLSID="{17CCA71B-ECD7-11D0-B908-00A0C9223196}"
+KSCATEGORY_AUDIO="{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
+KSCATEGORY_RENDER="{65E8773E-8F56-11D0-A3B9-00A0C9223196}"
+KSCATEGORY_REALTIME="{EB115FFC-10C8-4964-831D-6DCB02E6F23F}"
+KSCATEGORY_TOPOLOGY="{DDA54A40-1E4C-11D1-A050-405705C10000}"
+KSNAME_WaveSpeakerHeadphone="WaveSpeakerHeadphone"
+KSNAME_TopologySpeakerHeadphone="TopologySpeakerHeadphone"
+KSNODETYPE_ANY="{00000000-0000-0000-0000-000000000000}"
+PKEY_AudioEndpoint_Association="{1DA5D803-D492-4EDD-8C23-E0C0FFEE7F0E},2"
+PKEY_AudioEndpoint_Supports_EventDriven_Mode="{1DA5D803-D492-4EDD-8C23-E0C0FFEE7F0E},7"
