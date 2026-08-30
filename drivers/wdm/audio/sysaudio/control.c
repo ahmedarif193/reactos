@@ -145,7 +145,9 @@ ComputeCompatibleFormat(
     PKSMULTIPLE_ITEM MultipleItem;
     ULONG Length;
     PKSDATARANGE_AUDIO AudioRange;
-    ULONG Index;
+    PKSDATARANGE DataRange;
+    PKSMULTIPLE_ITEM AttributeItem;
+    ULONG Index, Remaining, RangeSize, RangeFlags, AttributeSize;
 
     Length = sizeof(KSP_PIN) + sizeof(KSMULTIPLE_ITEM) + ClientFormat->DataFormat.FormatSize;
     PinRequest = AllocateItem(NonPagedPool, Length);
@@ -200,16 +202,38 @@ ComputeCompatibleFormat(
         return STATUS_UNSUCCESSFUL;
     }
 
-    AudioRange = (PKSDATARANGE_AUDIO)(MultipleItem + 1);
+    if (MultipleItem->Size < sizeof(KSMULTIPLE_ITEM))
+    {
+        FreeItem(MultipleItem);
+        FreeItem(PinRequest);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Remaining = MultipleItem->Size - sizeof(KSMULTIPLE_ITEM);
+    DataRange = (PKSDATARANGE)(MultipleItem + 1);
     bFound = FALSE;
     for(Index = 0; Index < MultipleItem->Count; Index++)
     {
-        if (AudioRange->DataRange.FormatSize != sizeof(KSDATARANGE_AUDIO))
+        if (Remaining < sizeof(KSDATARANGE) ||
+            DataRange->FormatSize < sizeof(KSDATARANGE) ||
+            DataRange->FormatSize > MAXULONG - 7)
         {
-            UNIMPLEMENTED;
-            AudioRange = (PKSDATARANGE_AUDIO)((PUCHAR)AudioRange + AudioRange->DataRange.FormatSize);
-            continue;
+            break;
         }
+
+        RangeSize = (DataRange->FormatSize + 7) & ~7UL;
+        if (RangeSize > Remaining)
+            break;
+
+        if (DataRange->FormatSize != sizeof(KSDATARANGE_AUDIO) ||
+            !IsEqualGUIDAligned(&DataRange->MajorFormat, &KSDATAFORMAT_TYPE_AUDIO) ||
+            !IsEqualGUIDAligned(&DataRange->SubFormat, &KSDATAFORMAT_SUBTYPE_PCM) ||
+            !IsEqualGUIDAligned(&DataRange->Specifier, &KSDATAFORMAT_SPECIFIER_WAVEFORMATEX))
+        {
+            goto NextRange;
+        }
+
+        AudioRange = (PKSDATARANGE_AUDIO)DataRange;
         /* Select best quality available */
 
         MixerFormat->DataFormat.FormatSize = sizeof(KSDATAFORMAT) + sizeof(WAVEFORMATEX);
@@ -244,7 +268,41 @@ ComputeCompatibleFormat(
         bFound = TRUE;
         break;
 
-        AudioRange = (PKSDATARANGE_AUDIO)((PUCHAR)AudioRange + AudioRange->DataRange.FormatSize);
+NextRange:
+        RangeFlags = DataRange->Flags;
+        Remaining -= RangeSize;
+        DataRange = (PKSDATARANGE)((PUCHAR)DataRange + RangeSize);
+
+        if (RangeFlags & KSDATARANGE_ATTRIBUTES)
+        {
+            if (Index + 1 >= MultipleItem->Count ||
+                Remaining < sizeof(KSMULTIPLE_ITEM))
+            {
+                break;
+            }
+
+            AttributeItem = (PKSMULTIPLE_ITEM)DataRange;
+            if (AttributeItem->Size < sizeof(KSMULTIPLE_ITEM) ||
+                AttributeItem->Size > Remaining)
+            {
+                break;
+            }
+
+            AttributeSize = AttributeItem->Size;
+            if (Index + 2 < MultipleItem->Count)
+            {
+                if (AttributeSize > MAXULONG - 7)
+                    break;
+
+                AttributeSize = (AttributeSize + 7) & ~7UL;
+                if (AttributeSize > Remaining)
+                    break;
+            }
+
+            Remaining -= AttributeSize;
+            DataRange = (PKSDATARANGE)((PUCHAR)DataRange + AttributeSize);
+            Index++;
+        }
     }
 
 #if 0
