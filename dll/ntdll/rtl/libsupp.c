@@ -11,7 +11,6 @@
 
 #include <ntdll.h>
 #include <apisets.h>
-#include <compat_undoc.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -1042,37 +1041,32 @@ LdrpApisetVersion(VOID)
 
     if (CachedApisetVersion == ~0u)
     {
-        DWORD CompatVersion = RosGetProcessCompatVersion();
+        PPEB Peb = NtCurrentPeb();
+        DWORD OsVersion = (Peb->OSMajorVersion << 8) | Peb->OSMinorVersion;
 
-        switch (CompatVersion)
+        if (OsVersion >= _WIN32_WINNT_WIN10)
         {
-            case 0:
-                break;
-            case _WIN32_WINNT_VISTA:
-                /* No apisets in vista yet*/
-                CachedApisetVersion = 0;
-                break;
-            case _WIN32_WINNT_WIN7:
-                CachedApisetVersion = APISET_WIN7;
-                DPRINT1("Activating apisets for Win7\n");
-                break;
-            case _WIN32_WINNT_WIN8:
-                CachedApisetVersion = APISET_WIN8;
-                DPRINT1("Activating apisets for Win8\n");
-                break;
-            case _WIN32_WINNT_WINBLUE:
-                CachedApisetVersion = APISET_WIN81;
-                DPRINT1("Activating apisets for Win8.1\n");
-                break;
-            case _WIN32_WINNT_WIN10:
-                CachedApisetVersion = APISET_WIN10;
-                DPRINT1("Activating apisets for Win10\n");
-                break;
-            default:
-                DPRINT1("Unknown version 0x%x\n", CompatVersion);
-                CachedApisetVersion = 0;
-                break;
+            CachedApisetVersion = APISET_WIN10;
         }
+        else if (OsVersion >= _WIN32_WINNT_WINBLUE)
+        {
+            CachedApisetVersion = APISET_WIN81;
+        }
+        else if (OsVersion >= _WIN32_WINNT_WIN8)
+        {
+            CachedApisetVersion = APISET_WIN8;
+        }
+        else if (OsVersion >= _WIN32_WINNT_WIN7)
+        {
+            CachedApisetVersion = APISET_WIN7;
+        }
+        else
+        {
+            CachedApisetVersion = 0;
+        }
+
+        DPRINT1("API-set schema 0x%lx selected for host version 0x%lx\n",
+                CachedApisetVersion, OsVersion);
     }
 
     return CachedApisetVersion;
