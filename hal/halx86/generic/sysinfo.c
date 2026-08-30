@@ -157,6 +157,10 @@ HaliQuerySystemInformation(IN HAL_QUERY_INFORMATION_CLASS InformationClass,
         REPORT_THIS_CASE(HalHypervisorInformation);
         REPORT_THIS_CASE(HalPlatformTimerInformation);
         REPORT_THIS_CASE(HalAcpiAuditInformation);
+        REPORT_THIS_CASE(HalIrtInformation);
+        REPORT_THIS_CASE(HalSecondaryInterruptInformation);
+        REPORT_THIS_CASE(HalParkingPageInformation);
+        REPORT_THIS_CASE(HalNumaRangeTableInformation);
     }
 #undef REPORT_THIS_CASE
 

@@ -135,7 +135,7 @@ RtlIsServicePackVersionInstalled(
 }
 
 NTSTATUS
-NTAPI
+__cdecl
 RtlInitializeSidEx(
     _Out_writes_bytes_(SECURITY_SID_SIZE(SubAuthorityCount)) PSID Sid,
     _In_ PSID_IDENTIFIER_AUTHORITY IdentifierAuthority,

@@ -2657,7 +2657,7 @@ $if (_NTIFS_)
 _IRQL_requires_max_(APC_LEVEL)
 NTSYSAPI
 NTSTATUS
-NTAPI
+__cdecl
 RtlInitializeSidEx(
   _Out_writes_bytes_(SECURITY_SID_SIZE(SubAuthorityCount)) PSID Sid,
   _In_ PSID_IDENTIFIER_AUTHORITY IdentifierAuthority,
