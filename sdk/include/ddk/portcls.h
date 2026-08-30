@@ -1946,7 +1946,6 @@ DECLARE_INTERFACE_(IMiniportWaveRTStreamNotification, IMiniportWaveRTStream)
 typedef IMiniportWaveRTStreamNotification *PMINIPORTWAVERTSTREAMNOTIFICATION;
 
 #define IMP_IMiniportWaveRTStreamNotification\
-    IMP_IMiniportWaveRTStream;\
     STDMETHODIMP_(NTSTATUS) AllocateBufferWithNotification\
      (\
                IN ULONG NotificationCount,\
@@ -1966,6 +1965,39 @@ typedef IMiniportWaveRTStreamNotification *PMINIPORTWAVERTSTREAMNOTIFICATION;
     STDMETHODIMP_(NTSTATUS) UnregisterNotificationEvent(\
                 IN PKEVENT NotificationEvent\
     )
+
+/* ===============================================================
+    IMiniportWaveRTOutputStream Interface
+*/
+
+#undef INTERFACE
+#define INTERFACE IMiniportWaveRTOutputStream
+
+DEFINE_GUID(IID_IMiniportWaveRTOutputStream,
+    0x831fc7bc, 0x6347, 0x44bc, 0xb4, 0x7b, 0xc0, 0xc6, 0x57, 0xb5, 0xbf, 0x73);
+
+DECLARE_INTERFACE_(IMiniportWaveRTOutputStream, IUnknown)
+{
+    DEFINE_ABSTRACT_UNKNOWN()
+
+    STDMETHOD_(NTSTATUS, SetWritePacket)(THIS_
+        IN ULONG PacketNumber,
+        IN DWORD Flags,
+        IN ULONG EosPacketLength) PURE;
+
+    STDMETHOD_(NTSTATUS, GetOutputStreamPresentationPosition)(THIS_
+        OUT KSAUDIO_PRESENTATION_POSITION *PresentationPosition) PURE;
+
+    STDMETHOD_(NTSTATUS, GetPacketCount)(THIS_
+        OUT ULONG *PacketCount) PURE;
+};
+
+typedef IMiniportWaveRTOutputStream *PMINIPORTWAVERTOUTPUTSTREAM;
+
+#define IMP_IMiniportWaveRTOutputStream \
+    STDMETHODIMP_(NTSTATUS) SetWritePacket(IN ULONG PacketNumber, IN DWORD Flags, IN ULONG EosPacketLength); \
+    STDMETHODIMP_(NTSTATUS) GetOutputStreamPresentationPosition(OUT KSAUDIO_PRESENTATION_POSITION *PresentationPosition); \
+    STDMETHODIMP_(NTSTATUS) GetPacketCount(OUT ULONG *PacketCount)
 
 /* ===============================================================
     IMiniportWaveRT Interface

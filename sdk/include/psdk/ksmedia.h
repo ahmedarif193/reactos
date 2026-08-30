@@ -1314,6 +1314,11 @@ typedef struct {
 #endif
 } KSAUDIO_POSITION, *PKSAUDIO_POSITION;
 
+typedef struct {
+    UINT64 u64PositionInBlocks;
+    UINT64 u64QPCPosition;
+} KSAUDIO_PRESENTATION_POSITION, *PKSAUDIO_PRESENTATION_POSITION;
+
 //===========================================================================
 
 #if (NTDDI_VERSION >= NTDDI_WINXP)

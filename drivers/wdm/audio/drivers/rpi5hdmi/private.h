@@ -202,6 +202,7 @@ class CRpi5HdmiStream : public CUnknownImpl<IMiniportWaveRTStreamNotification>
     virtual ~CRpi5HdmiStream();
 
     STDMETHODIMP QueryInterface(REFIID InterfaceId, PVOID *Interface);
+    IMP_IMiniportWaveRTStream;
     IMP_IMiniportWaveRTStreamNotification;
 
   private:
