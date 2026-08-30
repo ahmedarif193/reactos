@@ -461,13 +461,10 @@ if(PREINSTALL_EXTRA_FILE_LIST)
     list(APPEND _preinstall_overlay_deps "${_preinstall_extra_file_list}")
 endif()
 
-# Disk image size configuration (in MB)
-set(_preinstall_image_size_default 712)
-set(PREINSTALL_IMAGE_SIZE_MB ${_preinstall_image_size_default} CACHE STRING "Boot and system area size in MB; the private crash-dump partition is additional")
-set(PREINSTALL_CRASH_DUMP_SIZE_MB 64 CACHE STRING "Private raw crash-dump partition size in MB")
-if(PREINSTALL_CRASH_DUMP_SIZE_MB LESS 1)
-    message(FATAL_ERROR "PREINSTALL_CRASH_DUMP_SIZE_MB must be at least 1 MB")
-endif()
+# Disk image size configuration (in MB). The default provides a 400-MB NTFS
+# partition after the 1-MB alignment gap and 64-MB FAT boot partition.
+set(_preinstall_image_size_default 465)
+set(PREINSTALL_IMAGE_SIZE_MB ${_preinstall_image_size_default} CACHE STRING "Disk image size in MB, including the alignment gap, boot partition, and system partition")
 set(_rosprofiler_package_pdbs_default OFF)
 if(MSVC AND (CMAKE_BUILD_TYPE MATCHES "^[Dd]ebug$" OR
              CMAKE_CONFIGURATION_TYPES))
@@ -508,8 +505,6 @@ if(_preinstall_system_partition_size_mb LESS 1)
     message(FATAL_ERROR "PREINSTALL_IMAGE_SIZE_MB must leave room for the 1-MB alignment gap, the ${_preinstall_boot_partition_size_mb}-MB boot partition, and the NTFS system partition")
 endif()
 math(EXPR _preinstall_system_partition_sectors "${_preinstall_system_partition_size_mb} * 2048")
-math(EXPR _preinstall_crash_dump_partition_start "${PREINSTALL_IMAGE_SIZE_MB} * 2048")
-math(EXPR _preinstall_crash_dump_partition_sectors "${PREINSTALL_CRASH_DUMP_SIZE_MB} * 2048")
 
 # BIOS boot-sector binaries are available on x86/x64. UEFI platforms also put
 # their removable-media loader in the FAT boot partition.
@@ -537,7 +532,8 @@ if(_preinstall_rpi_overlays)
         endif()
     endforeach()
 endif()
-set(_preinstall_partition_deps native-fatten native-ntfsimg ${_preinstall_overlay_deps})
+set(_preinstall_partition_deps native-fatten native-ntfsimg
+    ${_preinstall_overlay_deps} ${ARM64_BOOT_FILE_DEPS})
 set(_reactosimg_mbr_args)
 set(_reactosimg_deps native-mkdiskimg)
 if(FREELDR_HAS_BIOS_BOOT)
@@ -613,9 +609,6 @@ add_custom_target(reactosimg
         -partition ${_preinstall_system_partition_file}
         -start ${_preinstall_system_partition_start}
         -type 07
-        -blank ${_preinstall_crash_dump_partition_sectors}
-        -start ${_preinstall_crash_dump_partition_start}
-        -type 7f
     DEPENDS ${_reactosimg_deps}
     VERBATIM)
 add_dependencies(reactosimg preinstall_partition)
@@ -631,9 +624,6 @@ add_custom_target(reactosvhd
         -partition ${_preinstall_system_partition_file}
         -start ${_preinstall_system_partition_start}
         -type 07
-        -blank ${_preinstall_crash_dump_partition_sectors}
-        -start ${_preinstall_crash_dump_partition_start}
-        -type 7f
         -vhd
     DEPENDS ${_reactosimg_deps}
     VERBATIM)
