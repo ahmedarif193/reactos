@@ -117,6 +117,14 @@ typedef struct _RCDD_PDEV
    RCDD_PRESENT_SLOT PresentSlots[RCDD_PRESENT_SLOT_COUNT];
 } RCDD_PDEV, *PRCDD_PDEV;
 
+typedef struct _RCDD_BITMAP
+{
+   PRCDD_PDEV Pdev;
+   ULONGLONG AllocationHandle;
+   ULONG ResourceHandle;
+   ULONG GlobalShare;
+} RCDD_BITMAP, *PRCDD_BITMAP;
+
 #define DEVICE_NAME L"cdd"
 #define ALLOC_TAG ' DDC'        /* Pool tag displays as "CDD "                */
 
@@ -160,6 +168,23 @@ RcddEnableSurface(
 VOID APIENTRY
 RcddDisableSurface(
    IN DHPDEV dhpdev);
+
+HBITMAP APIENTRY
+RcddCreateDeviceBitmapEx(
+   IN DHPDEV dhpdev,
+   IN SIZEL sizl,
+   IN ULONG iFormat,
+   IN DWORD Flags,
+   IN DHSURF dhsurfGroup,
+   IN DWORD DxFormat,
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+   IN DWORD SubresourceIndex,
+#endif
+   OUT HANDLE *phSharedSurface);
+
+VOID APIENTRY
+RcddDeleteDeviceBitmapEx(
+   IN OUT DHSURF dhsurf);
 
 /* ---- screen.c : modes + assert-mode ------------------------------------- */
 

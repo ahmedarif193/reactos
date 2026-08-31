@@ -4,12 +4,12 @@
  * PURPOSE:     Shared ABI between win32k (NtUserDwm* via NtUserCallOneParam)
  *              and the user-mode dwm.exe compositor.
  *
- * Zero-copy design: each window's FRONT buffer lives in a pageable section.
- * The frame pull returns METADATA only — Z-ordered DWM_WIN descriptors naming
- * each window's surface by (SurfaceId, Generation). dwm opens the section
- * (DWMOPENSURFACE), maps it read-only, and composes straight from the mapped
- * views; a Generation change (resize/recreate) tells dwm to remap. The kernel
- * never copies pixels into the pull buffer and never composites once attached.
+ * Zero-copy design: each full-WDDM window FRONT is a CDD-owned shareable
+ * allocation. Display-only adapters retain a pageable-section fallback. The
+ * frame pull returns METADATA only — Z-ordered DWM_WIN descriptors naming the
+ * current resource. dwm opens either the shared allocation or section and a
+ * generation change (resize/recreate) tells it to remap. The kernel never
+ * copies pixels into the pull buffer and never composites once attached.
  *
  * Every entry is rejected for processes other than the attached compositor.
  * Win10 equivalents of this contract (ours ride NtUserCallOneParam until the
@@ -20,7 +20,7 @@
  */
 #pragma once
 
-#define DWM_FRAME_MAGIC   0x334d5744u   /* 'DWM3' (CPU + DX surfaces) */
+#define DWM_FRAME_MAGIC   0x344d5744u   /* 'DWM4' (CDD + app DX surfaces) */
 #define DWM_MAX_WINDOWS    256
 
 /* NtUserCallOneParam routine numbers of the DWM entry points (must match
@@ -68,6 +68,10 @@
  */
 #define IOCTL_VIDEO_DXGK_GPU_ESCAPE \
     CTL_CODE(FILE_DEVICE_VIDEO, 0x925, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_VIDEO_DXGK_CREATE_REDIRECTION_SURFACE \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x926, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_VIDEO_DXGK_DESTROY_REDIRECTION_SURFACE \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x927, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #include <pshpack4.h>
 
 typedef struct _DXGK_PRESENT_DIRTY_RECTS_INPUT
@@ -114,6 +118,33 @@ typedef struct _DXGK_PRESENT_STATS
     ULONG PresentSynchronous;
 } DXGK_PRESENT_STATS, *PDXGK_PRESENT_STATS;
 
+/* Kernel-only cdd/dxgkrnl contract for a shareable, CPU-visible window
+ * redirection allocation. The allocation and resource handles are opaque to
+ * cdd; dxgkrnl validates both again when the surface is destroyed. */
+typedef struct _DXGK_REDIRECTION_SURFACE_CREATE
+{
+    ULONG StructSize;
+    ULONG Flags;
+    ULONG Width;
+    ULONG Height;
+    ULONG Format;
+    ULONG Pitch;
+    ULONGLONG AllocationBytes;
+    ULONGLONG AllocationHandle;
+    ULONG ResourceHandle;
+    ULONG GlobalShare;
+    ULONGLONG CpuAddress;
+} DXGK_REDIRECTION_SURFACE_CREATE, *PDXGK_REDIRECTION_SURFACE_CREATE;
+
+typedef struct _DXGK_REDIRECTION_SURFACE_DESTROY
+{
+    ULONG StructSize;
+    ULONG Flags;
+    ULONGLONG AllocationHandle;
+    ULONG ResourceHandle;
+    ULONG GlobalShare;
+} DXGK_REDIRECTION_SURFACE_DESTROY, *PDXGK_REDIRECTION_SURFACE_DESTROY;
+
 /* LayerFlags bits (match winuser LWA_*). */
 #define DWM_LWA_COLORKEY 0x00000001u
 #define DWM_LWA_ALPHA    0x00000002u
@@ -139,6 +170,13 @@ typedef struct _DWM_WIN
     ULONG DxHeight;
     ULONG DxPitch;
     ULONG DxFormat;
+    ULONG BaseGlobalShare; /* CDD-owned window FRONT, or 0 for section fallback */
+    ULONG BaseGeneration;  /* changes when the CDD resource is recreated        */
+    ULONGLONG BaseUpdateId;/* changes after each completed BACK->FRONT copy     */
+    ULONG BaseWidth;
+    ULONG BaseHeight;
+    ULONG BasePitch;
+    ULONG BaseFormat;
 } DWM_WIN, *PDWM_WIN;
 
 typedef struct _DWM_FRAME_HEADER

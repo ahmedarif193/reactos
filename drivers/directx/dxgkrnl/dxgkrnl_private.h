@@ -112,6 +112,9 @@
 /* ---- ReactOS WDDM private adapter-level interface ---------------------- */
 #include <reactos/rddm/rxgkinterface.h>
 
+struct _DXGK_REDIRECTION_SURFACE_CREATE;
+struct _DXGK_REDIRECTION_SURFACE_DESTROY;
+
 /* MmSystemRangeStart is a kernel global (user/kernel VA split boundary). It is
  * declared in the XDK arch mm.h, which the WDM include subset used here does not
  * pull in; re-declare it (used in user-VA range ASSERTs in vidmm.c/d3dkmt.c). */
@@ -2740,6 +2743,16 @@ NTSTATUS
 NTAPI
 DxgkGetShadowSurface(
     _Inout_ DXGKMT_GETSHADOWSURFACE *pGetShadowSurface);
+
+NTSTATUS
+DxgkCreateRedirectionSurface(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Inout_ struct _DXGK_REDIRECTION_SURFACE_CREATE *Create);
+
+NTSTATUS
+DxgkDestroyRedirectionSurface(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ CONST struct _DXGK_REDIRECTION_SURFACE_DESTROY *Destroy);
 
 NTSTATUS
 NTAPI

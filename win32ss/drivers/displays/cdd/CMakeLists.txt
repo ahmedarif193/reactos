@@ -5,6 +5,7 @@ list(APPEND SOURCE
     palette.c
     pointer.c
     present.c
+    redirection.c
     screen.c
     surface.c
     cdd.h)

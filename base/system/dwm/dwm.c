@@ -48,6 +48,9 @@ DwmGetSurfaceView(const DWM_WIN *w)
     DWM_OPEN_SURFACE req;
     ULONG i;
 
+    if (w->BaseGlobalShare != 0)
+        return DwmDxGetRedirectionSnapshot(w);
+
     for (i = 0; i < DWM_VIEW_CACHE_SIZE; i++)
     {
         if (g_views[i].Used && g_views[i].Id == w->SurfaceId &&

@@ -38,6 +38,7 @@
 #include "present.h"
 #include "pnp.h"
 #include "hotplug_work_core.h"
+#include <reactos/dwmframe.h>
 
 /* ========================================================================
  * Forward declarations for all interface functions
@@ -3694,6 +3695,261 @@ DxgkpDestroySharedPrimaryLocked(
     Adapter->SharedShadowPitch = 0;
     Adapter->SharedShadowFormat = 0;
     DxgkpEndSharedSurfaceMutationLocked(Adapter);
+}
+
+NTSTATUS
+DxgkCreateRedirectionSurface(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Inout_ PDXGK_REDIRECTION_SURFACE_CREATE Create)
+{
+    DXGKARG_GETSTANDARDALLOCATIONDRIVERDATA QueryArgs;
+    D3DKMDT_GDISURFACEDATA SurfaceData;
+    DWM_DX_SHARED_SURFACE_INFO RuntimeInfo;
+    DXGK_ALLOCATIONINFO AllocInfo;
+    DXGK_CREATEALLOCATIONFLAGS CreateFlags;
+    HANDLE AllocationHandle = NULL;
+    HANDLE MiniportResourceHandle = NULL;
+    PDXGKVMM_ALLOCATION Allocation = NULL;
+    PDXGKVMM_RESOURCE Resource = NULL;
+    PVOID AllocationPrivateData = NULL;
+    PVOID ResourcePrivateData = NULL;
+    UINT AllocationPrivateDataSize = 0;
+    UINT ResourcePrivateDataSize = 0;
+    PVOID CpuAddress = NULL;
+    ULONGLONG RequiredBytes;
+    NTSTATUS Status;
+
+    if (Adapter == NULL || Create == NULL ||
+        Create->StructSize != sizeof(*Create) || Create->Flags != 0 ||
+        Create->Width == 0 || Create->Height == 0 ||
+        Create->Format != DWM_DX_FORMAT_B8G8R8A8_UNORM ||
+        Create->Width > MAXULONG / sizeof(ULONG))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    RequiredBytes = (ULONGLONG)Create->Width * sizeof(ULONG) * Create->Height;
+    if (RequiredBytes > MAXULONG)
+        return STATUS_INTEGER_OVERFLOW;
+
+    Create->Pitch = 0;
+    Create->AllocationBytes = 0;
+    Create->AllocationHandle = 0;
+    Create->ResourceHandle = 0;
+    Create->GlobalShare = 0;
+    Create->CpuAddress = 0;
+
+    if (Adapter->MiniportContext == NULL ||
+        Adapter->MiniportContext->IsDisplayOnlyDriver ||
+        DXGK_CB_FULL(Adapter, DxgkDdiGetStandardAllocationDriverData) == NULL)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    RtlZeroMemory(&SurfaceData, sizeof(SurfaceData));
+    SurfaceData.Width = Create->Width;
+    SurfaceData.Height = Create->Height;
+    SurfaceData.Format = D3DDDIFMT_X8R8G8B8;
+    SurfaceData.Type = D3DKMDT_GDISURFACE_TEXTURE;
+    SurfaceData.Pitch = Create->Width * sizeof(ULONG);
+
+    RtlZeroMemory(&QueryArgs, sizeof(QueryArgs));
+    QueryArgs.StandardAllocationType = DXGK_STDALLOCATION_GDISURFACE;
+    QueryArgs.pCreateGdiSurfaceData = &SurfaceData;
+
+    if (!DxgkAcquireKmdCall(Adapter))
+        return STATUS_DELETE_PENDING;
+    Status = DXGK_CB_FULL(Adapter, DxgkDdiGetStandardAllocationDriverData)(
+        Adapter->MiniportDeviceContext, &QueryArgs);
+    DxgkReleaseKmdCall(Adapter);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    AllocationPrivateDataSize = QueryArgs.AllocationPrivateDriverDataSize;
+    ResourcePrivateDataSize = QueryArgs.ResourcePrivateDriverDataSize;
+    if (AllocationPrivateDataSize > DXGKP_STDALLOC_MAX_PRIVATE_SIZE ||
+        ResourcePrivateDataSize > DXGKP_STDALLOC_MAX_PRIVATE_SIZE)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (AllocationPrivateDataSize != 0)
+    {
+        AllocationPrivateData = ExAllocatePoolWithTag(
+            PagedPool, AllocationPrivateDataSize, TAG_DXGK_DISPLAY);
+        if (AllocationPrivateData == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
+        }
+    }
+    if (ResourcePrivateDataSize != 0)
+    {
+        ResourcePrivateData = ExAllocatePoolWithTag(
+            PagedPool, ResourcePrivateDataSize, TAG_DXGK_DISPLAY);
+        if (ResourcePrivateData == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
+        }
+    }
+
+    QueryArgs.pAllocationPrivateDriverData = AllocationPrivateData;
+    QueryArgs.AllocationPrivateDriverDataSize = AllocationPrivateDataSize;
+    QueryArgs.pResourcePrivateDriverData = ResourcePrivateData;
+    QueryArgs.ResourcePrivateDriverDataSize = ResourcePrivateDataSize;
+    if (!DxgkAcquireKmdCall(Adapter))
+    {
+        Status = STATUS_DELETE_PENDING;
+        goto Cleanup;
+    }
+    Status = DXGK_CB_FULL(Adapter, DxgkDdiGetStandardAllocationDriverData)(
+        Adapter->MiniportDeviceContext, &QueryArgs);
+    DxgkReleaseKmdCall(Adapter);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    if (QueryArgs.AllocationPrivateDriverDataSize != AllocationPrivateDataSize ||
+        QueryArgs.ResourcePrivateDriverDataSize != ResourcePrivateDataSize ||
+        SurfaceData.Pitch < Create->Width * sizeof(ULONG) ||
+        SurfaceData.Pitch > MAXULONG / Create->Height)
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Cleanup;
+    }
+
+    RtlZeroMemory(&AllocInfo, sizeof(AllocInfo));
+    AllocInfo.pPrivateDriverData = AllocationPrivateData;
+    AllocInfo.PrivateDriverDataSize = AllocationPrivateDataSize;
+    AllocInfo.Size = (SIZE_T)SurfaceData.Pitch * SurfaceData.Height;
+
+    RtlZeroMemory(&CreateFlags, sizeof(CreateFlags));
+    CreateFlags.Resource = 1;
+    Status = DxgkVidMmCreateAllocation(
+        Adapter, NULL, &AllocInfo, ResourcePrivateData,
+        ResourcePrivateDataSize, NULL, CreateFlags,
+        &AllocationHandle, &MiniportResourceHandle);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    Status = DxgkVidMmReferenceAllocation(
+        AllocationHandle, Adapter, NULL, &Allocation);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    /*
+     * A CDD redirection bitmap is a pageable GDI texture, not a permanently
+     * resident CPU-visible primary.  Keep its authoritative contents in the
+     * VidMm system backing while GDI and the software compositor access it;
+     * a later GPU consumer can make the allocation resident through the
+     * normal paging path.  Besides matching the native type-1 allocation,
+     * this avoids pinning every window surface in the scan-out segment.
+     */
+    if (Allocation->Resident)
+    {
+        Status = DxgkVidMmEvict(Allocation);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+    }
+
+    RtlZeroMemory(&RuntimeInfo, sizeof(RuntimeInfo));
+    RuntimeInfo.Magic = DWM_DX_SURFACE_INFO_MAGIC;
+    RuntimeInfo.Version = DWM_DX_SURFACE_INFO_VERSION;
+    RuntimeInfo.Width = Create->Width;
+    RuntimeInfo.Height = Create->Height;
+    RuntimeInfo.Pitch = SurfaceData.Pitch;
+    RuntimeInfo.Format = Create->Format;
+    Resource = DxgkVidMmCreateResourceWrapper(
+        Adapter, NULL, MiniportResourceHandle, 0, TRUE,
+        &RuntimeInfo, sizeof(RuntimeInfo),
+        ResourcePrivateData, ResourcePrivateDataSize);
+    if (Resource == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Cleanup;
+    }
+
+    Status = DxgkVidMmAttachAllocationToResource(Resource, Allocation);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    Allocation->MiniportResourceHandle = NULL;
+    Allocation->DestroyMiniportResource = FALSE;
+
+    Status = DxgkVidMmMapAllocationCpu(Allocation, &CpuAddress);
+    if (!NT_SUCCESS(Status) || CpuAddress == NULL)
+    {
+        if (NT_SUCCESS(Status))
+            Status = STATUS_UNSUCCESSFUL;
+        goto Cleanup;
+    }
+
+    Create->Pitch = SurfaceData.Pitch;
+    Create->AllocationBytes = AllocInfo.Size;
+    Create->AllocationHandle = (ULONGLONG)(ULONG_PTR)AllocationHandle;
+    Create->ResourceHandle = Resource->Handle;
+    Create->GlobalShare = Resource->GlobalShareHandle;
+    Create->CpuAddress = (ULONGLONG)(ULONG_PTR)CpuAddress;
+    Status = STATUS_SUCCESS;
+
+Cleanup:
+    if (Allocation != NULL)
+        DxgkVidMmDereferenceAllocation(Allocation);
+    if (!NT_SUCCESS(Status))
+    {
+        if (AllocationHandle != NULL)
+            (VOID)DxgkVidMmDestroyAllocation(Adapter, AllocationHandle);
+        if (Resource != NULL)
+            (VOID)DxgkpVidMmDestroyResourceWrapper(Adapter, Resource);
+    }
+    if (AllocationPrivateData != NULL)
+        ExFreePoolWithTag(AllocationPrivateData, TAG_DXGK_DISPLAY);
+    if (ResourcePrivateData != NULL)
+        ExFreePoolWithTag(ResourcePrivateData, TAG_DXGK_DISPLAY);
+    return Status;
+}
+
+NTSTATUS
+DxgkDestroyRedirectionSurface(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ CONST DXGK_REDIRECTION_SURFACE_DESTROY *Destroy)
+{
+    PDXGKVMM_ALLOCATION Allocation = NULL;
+    PDXGKVMM_RESOURCE Resource = NULL;
+    NTSTATUS Status;
+
+    if (Adapter == NULL || Destroy == NULL ||
+        Destroy->StructSize != sizeof(*Destroy) || Destroy->Flags != 0 ||
+        Destroy->AllocationHandle == 0 || Destroy->ResourceHandle == 0 ||
+        Destroy->GlobalShare == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = DxgkVidMmReferenceResource(
+        Destroy->ResourceHandle, FALSE, NULL, &Resource);
+    if (!NT_SUCCESS(Status))
+        return STATUS_INVALID_PARAMETER;
+    Status = DxgkVidMmReferenceAllocation(
+        (HANDLE)(ULONG_PTR)Destroy->AllocationHandle,
+        Adapter, NULL, &Allocation);
+    if (!NT_SUCCESS(Status))
+    {
+        DxgkVidMmDereferenceResource(Resource);
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (Resource->Adapter != Adapter ||
+        Resource->GlobalShareHandle != Destroy->GlobalShare ||
+        Resource->AllocationCount != 1 || Allocation->Resource != Resource)
+    {
+        Status = STATUS_INVALID_PARAMETER;
+    }
+    else
+    {
+        Status = STATUS_SUCCESS;
+    }
+    DxgkVidMmDereferenceAllocation(Allocation);
+    if (NT_SUCCESS(Status))
+        Status = DxgkpVidMmDestroyResourceWrapper(Adapter, Resource);
+    DxgkVidMmDereferenceResource(Resource);
+    return Status;
 }
 
 static NTSTATUS
