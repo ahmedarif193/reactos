@@ -378,6 +378,12 @@ VOID
 DxgkpReleaseSharedSurfaceSnapshot(
     _Inout_ PDXGKRNL_SHARED_SURFACE_SNAPSHOT Snapshot);
 
+NTSTATUS
+DxgkpPresentDisplayOnlyToSharedPrimary(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter,
+    _In_ const DXGKRNL_SHARED_SURFACE_SNAPSHOT *SharedSurface,
+    _In_ const DXGKARG_PRESENT_DISPLAYONLY *PresentDisplayOnly);
+
 VOID
 DxgkpBeginSharedSurfaceMutationLocked(
     _In_ struct _DXGKRNL_ADAPTER *Adapter);

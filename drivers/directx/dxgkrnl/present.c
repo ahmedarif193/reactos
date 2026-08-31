@@ -1140,6 +1140,128 @@ Cleanup:
     return Status;
 }
 
+NTSTATUS
+DxgkpPresentDisplayOnlyToSharedPrimary(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ const DXGKRNL_SHARED_SURFACE_SNAPSHOT *SharedSurface,
+    _In_ const DXGKARG_PRESENT_DISPLAYONLY *PresentDisplayOnly)
+{
+    PDXGKVMM_ALLOCATION Allocation;
+    PBYTE DestinationVa;
+    PBYTE SourceVa;
+    ULONG Width;
+    ULONG Height;
+    ULONG SourcePitch;
+    ULONG DestinationPitch;
+    ULONG Index;
+    NTSTATUS Status;
+
+    if (Adapter == NULL ||
+        SharedSurface == NULL ||
+        PresentDisplayOnly == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Adapter->MiniportContext == NULL ||
+        Adapter->MiniportContext->IsDisplayOnlyDriver ||
+        DXGK_CB_FULL(Adapter, DxgkDdiSetVidPnSourceAddress) == NULL ||
+        SharedSurface->PrimaryAllocation == NULL ||
+        SharedSurface->PrimaryHandle == NULL)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    if (PresentDisplayOnly->pSource == NULL ||
+        PresentDisplayOnly->BytesPerPixel != sizeof(ULONG) ||
+        PresentDisplayOnly->Pitch <= 0 ||
+        PresentDisplayOnly->Flags.Value != 0 ||
+        PresentDisplayOnly->NumMoves != 0 ||
+        PresentDisplayOnly->NumDirtyRects == 0 ||
+        PresentDisplayOnly->pDirtyRect == NULL)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    Width = SharedSurface->CommittedWidth;
+    Height = SharedSurface->CommittedHeight;
+    Allocation = SharedSurface->PrimaryAllocation;
+    SourcePitch = (ULONG)PresentDisplayOnly->Pitch;
+    if (Width == 0 || Height == 0 ||
+        SharedSurface->PrimaryWidth < Width ||
+        SharedSurface->PrimaryHeight < Height ||
+        Width > MAXULONG / sizeof(ULONG) ||
+        SourcePitch < Width * sizeof(ULONG) ||
+        SharedSurface->ShadowFbSize <
+            ((SIZE_T)(Height - 1) * SourcePitch) +
+            ((SIZE_T)Width * sizeof(ULONG)))
+    {
+        return STATUS_INVALID_BUFFER_SIZE;
+    }
+
+    Status = DxgkVidMmMapAllocationCpu(Allocation,
+                                       (PVOID *)&DestinationVa);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    DestinationPitch = DxgkpSurfaceCopyPitch(
+                           Allocation,
+                           SharedSurface->PrimaryWidth,
+                           SharedSurface->PrimaryHeight,
+                           0);
+    if (DestinationPitch < Width * sizeof(ULONG) ||
+        Allocation->Size <
+            ((SIZE_T)(Height - 1) * DestinationPitch) +
+            ((SIZE_T)Width * sizeof(ULONG)))
+    {
+        return STATUS_INVALID_BUFFER_SIZE;
+    }
+
+    SourceVa = (PBYTE)PresentDisplayOnly->pSource;
+    for (Index = 0;
+         Index < PresentDisplayOnly->NumDirtyRects;
+         ++Index)
+    {
+        RECT Rect = PresentDisplayOnly->pDirtyRect[Index];
+        SIZE_T RowBytes;
+        ULONG Row;
+
+        if (Rect.left < 0)
+            Rect.left = 0;
+        if (Rect.top < 0)
+            Rect.top = 0;
+        if (Rect.right > (LONG)Width)
+            Rect.right = (LONG)Width;
+        if (Rect.bottom > (LONG)Height)
+            Rect.bottom = (LONG)Height;
+        if (Rect.left >= Rect.right || Rect.top >= Rect.bottom)
+            continue;
+
+        RowBytes = (SIZE_T)(Rect.right - Rect.left) * sizeof(ULONG);
+        for (Row = (ULONG)Rect.top;
+             Row < (ULONG)Rect.bottom;
+             ++Row)
+        {
+            RtlCopyMemory(
+                DestinationVa +
+                    ((SIZE_T)Row * DestinationPitch) +
+                    ((SIZE_T)Rect.left * sizeof(ULONG)),
+                SourceVa +
+                    ((SIZE_T)Row * SourcePitch) +
+                    ((SIZE_T)Rect.left * sizeof(ULONG)),
+                RowBytes);
+        }
+    }
+
+    KeMemoryBarrier();
+    return DxgkpProgramSharedPrimaryScanout(
+               Adapter,
+               Allocation,
+               SharedSurface->VidPnSourceId,
+               (D3DKMT_HANDLE)(ULONG_PTR)SharedSurface->PrimaryHandle,
+               0);
+}
+
 static NTSTATUS
 DxgkpRefreshSharedPrimaryScanout(
     _In_ PDXGKRNL_ADAPTER Adapter,
