@@ -238,6 +238,11 @@ typedef struct _DXGKVMM_ALLOCATION
     /* Optional parent resource wrapper. */
     PDXGKVMM_RESOURCE   Resource;
 
+    /* CDD redirection identity and the newest GPU write on each scheduler
+     * node. ResidencyLock serializes association and fence snapshots. */
+    ULONG_PTR           RedirectionSurfaceHandle;
+    ULONG               RedirectionSubmittedFenceId[DXGK_MAX_TRACKED_NODES];
+
     /* Allocation size in bytes (may be rounded up by the miniport). */
     SIZE_T              Size;
 
@@ -764,6 +769,12 @@ DxgkVidMmAttachAllocationToResource(
 VOID
 DxgkVidMmDereferenceResource(
     _In_ PDXGKVMM_RESOURCE Resource);
+
+NTSTATUS
+DxgkVidMmInvalidateReferencedAllocationCache(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ ULONGLONG Offset,
+    _In_ ULONGLONG Length);
 
 #if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
 NTSTATUS

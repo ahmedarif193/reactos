@@ -1359,6 +1359,7 @@ DriverEntry(
     }
     GDxgControlDeviceStatus = STATUS_PENDING;
     DxgkpLoadTdrConfig();
+    DxgkRedirectionInitialize();
 
     /* --- Create the control device object ------------------------------- */
 

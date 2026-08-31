@@ -202,6 +202,122 @@ GreSynchronizeRedirectionBitmaps(
     return Result;
 }
 
+BOOLEAN
+NTAPI
+DxgkEngAddRedirBitmapD3DDirtyRgn(
+    _In_ ULONG_PTR SurfaceHandle,
+    _In_reads_(DirtyRectCount) const RECT *DirtyRects,
+    _In_ UINT DirtyRectCount,
+    _In_reads_(ContextCount) const HANDLE *Contexts,
+    _In_ UINT ContextCount)
+{
+    CDDDXGK_REDIRBITMAPPRESENTINFO DirtyInfo;
+    PPDEVOBJ ppdev;
+    PSURFACE psurf;
+    BOOLEAN Result = FALSE;
+
+    if (SurfaceHandle == 0 ||
+        (DirtyRectCount != 0 && DirtyRects == NULL) ||
+        (ContextCount != 0 && Contexts == NULL) ||
+        ContextCount > WINDDI_MAX_BROADCAST_CONTEXT + 1)
+    {
+        return FALSE;
+    }
+
+    psurf = SURFACE_ShareLockSurface((HBITMAP)SurfaceHandle);
+    if (psurf == NULL)
+        return FALSE;
+
+    ppdev = (PPDEVOBJ)psurf->SurfObj.hdev;
+    if ((psurf->flags & REDIRECTION_SURFACE) != 0 &&
+        ppdev != NULL && !(ppdev->flFlags & PDEV_DISABLED) &&
+        ppdev->DriverFunctions.AccumulateD3DDirtyRect != NULL)
+    {
+        RtlZeroMemory(&DirtyInfo, sizeof(DirtyInfo));
+        DirtyInfo.NumDirtyRects = DirtyRectCount;
+        DirtyInfo.DirtyRect = (PRECT)DirtyRects;
+        DirtyInfo.NumContexts = ContextCount;
+        if (ContextCount != 0)
+        {
+            RtlCopyMemory(DirtyInfo.hContext,
+                          Contexts,
+                          ContextCount * sizeof(Contexts[0]));
+        }
+        Result = ppdev->DriverFunctions.AccumulateD3DDirtyRect(
+                     &psurf->SurfObj, &DirtyInfo);
+    }
+
+    SURFACE_ShareUnlockSurface(psurf);
+    return Result;
+}
+
+NTSTATUS
+NTAPI
+DxgkEngAdmitRedirectedBltPresent(
+    _In_ const DXGKRNL_REDIRECTED_BLT_PRESENT *Present)
+{
+    NTSTATUS Status;
+
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return STATUS_INVALID_DEVICE_STATE;
+
+    UserEnterExclusive();
+    Status = IntCompositionAdmitRedirectedBltPresent(Present);
+    UserLeave();
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+DxgkEngCancelRedirectedBltPresent(
+    _In_ const DXGKRNL_REDIRECTED_BLT_PRESENT *Present)
+{
+    NTSTATUS Status;
+
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return STATUS_INVALID_DEVICE_STATE;
+
+    UserEnterExclusive();
+    Status = IntCompositionCancelRedirectedBltPresent(Present);
+    UserLeave();
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+DxgkEngCompleteRedirectedBltPresent(
+    _In_ const DXGKRNL_REDIRECTED_BLT_PRESENT *Present,
+    _In_reads_(DirtyRectCount) const RECT *DirtyRects,
+    _In_ UINT DirtyRectCount,
+    _In_reads_(ContextCount) const HANDLE *Contexts,
+    _In_ UINT ContextCount)
+{
+    NTSTATUS Status;
+
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return STATUS_INVALID_DEVICE_STATE;
+
+    UserEnterExclusive();
+    Status = IntCompositionValidateRedirectedBltPresent(Present);
+    if (NT_SUCCESS(Status) &&
+        !DxgkEngAddRedirBitmapD3DDirtyRgn(Present->SurfaceHandle,
+                                          DirtyRects,
+                                          DirtyRectCount,
+                                          Contexts,
+                                          ContextCount))
+    {
+        Status = STATUS_UNSUCCESSFUL;
+    }
+    if (NT_SUCCESS(Status))
+    {
+        Status = IntCompositionCompleteRedirectedBltPresent(
+                     Present, DirtyRects, DirtyRectCount,
+                     Contexts, ContextCount);
+    }
+    UserLeave();
+    return Status;
+}
+
 //
 // Process the batch.
 //

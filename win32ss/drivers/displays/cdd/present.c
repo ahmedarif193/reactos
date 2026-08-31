@@ -915,11 +915,98 @@ RcddSynchronizeRedirectionBitmaps(
    IN DHPDEV dhpdev,
    OUT UINT64 *puiFenceID)
 {
+   PRCDD_PDEV ppdev = (PRCDD_PDEV)dhpdev;
+   PDXGK_REDIRECTION_SURFACES_SYNC Sync;
+   PRCDD_BITMAP Bitmap;
+   PLIST_ENTRY Entry;
+   SIZE_T HeaderSize;
+   SIZE_T SyncSize;
+   ULONG DirtyCount = 0;
+   ULONG Index = 0;
+   ULONG BytesReturned;
+   ULONG ControlStatus;
+
    if (dhpdev == NULL || puiFenceID == NULL)
       return -1;
 
-   /* Native CDD leaves the output untouched when redirection is disabled. */
-   return 0;
+   EngAcquireSemaphore(ppdev->RedirectionLock);
+   for (Entry = ppdev->RedirectionBitmapList.Flink;
+        Entry != &ppdev->RedirectionBitmapList;
+        Entry = Entry->Flink)
+   {
+      Bitmap = CONTAINING_RECORD(Entry, RCDD_BITMAP, ListEntry);
+      if (Bitmap->Dirty)
+         DirtyCount++;
+   }
+
+   /* Native CDD leaves the output untouched when redirection is idle. */
+   if (DirtyCount == 0)
+   {
+      EngReleaseSemaphore(ppdev->RedirectionLock);
+      return 0;
+   }
+
+   HeaderSize = FIELD_OFFSET(DXGK_REDIRECTION_SURFACES_SYNC, Surfaces);
+   if (DirtyCount > (MAXULONG - HeaderSize) / sizeof(Sync->Surfaces[0]))
+   {
+      EngReleaseSemaphore(ppdev->RedirectionLock);
+      return -1;
+   }
+   SyncSize = HeaderSize + DirtyCount * sizeof(Sync->Surfaces[0]);
+   Sync = EngAllocMem(FL_ZERO_MEMORY, SyncSize, ALLOC_TAG);
+   if (Sync == NULL)
+   {
+      EngReleaseSemaphore(ppdev->RedirectionLock);
+      return -1;
+   }
+
+   Sync->StructSize = (ULONG)SyncSize;
+   Sync->SurfaceCount = DirtyCount;
+   for (Entry = ppdev->RedirectionBitmapList.Flink;
+        Entry != &ppdev->RedirectionBitmapList;
+        Entry = Entry->Flink)
+   {
+      Bitmap = CONTAINING_RECORD(Entry, RCDD_BITMAP, ListEntry);
+      if (!Bitmap->Dirty)
+         continue;
+
+      ASSERT(Index < DirtyCount);
+      Sync->Surfaces[Index].AllocationHandle = Bitmap->AllocationHandle;
+      Sync->Surfaces[Index].ResourceHandle = Bitmap->ResourceHandle;
+      Sync->Surfaces[Index].GlobalShare = Bitmap->GlobalShare;
+      Sync->Surfaces[Index].Pitch = Bitmap->Pitch;
+      Sync->Surfaces[Index].DirtyRect = Bitmap->DirtyRect;
+      Index++;
+   }
+   ASSERT(Index == DirtyCount);
+
+   ControlStatus = EngDeviceIoControl(
+                      ppdev->hDriver,
+                      IOCTL_VIDEO_DXGK_SYNCHRONIZE_REDIRECTION_SURFACES,
+                      Sync, (ULONG)SyncSize,
+                      Sync, (ULONG)SyncSize,
+                      &BytesReturned);
+   if (ControlStatus == 0 && BytesReturned >= HeaderSize &&
+       Sync->FenceId != 0)
+   {
+      for (Entry = ppdev->RedirectionBitmapList.Flink;
+           Entry != &ppdev->RedirectionBitmapList;
+           Entry = Entry->Flink)
+      {
+         Bitmap = CONTAINING_RECORD(Entry, RCDD_BITMAP, ListEntry);
+         Bitmap->Dirty = FALSE;
+         RtlZeroMemory(&Bitmap->DirtyRect, sizeof(Bitmap->DirtyRect));
+      }
+      *puiFenceID = Sync->FenceId;
+   }
+   else if (ControlStatus == 0)
+   {
+      ControlStatus = (ULONG)-1;
+   }
+
+   EngFreeMem(Sync);
+   EngReleaseSemaphore(ppdev->RedirectionLock);
+   return (LONG)ControlStatus;
 }
 
 BOOL APIENTRY
@@ -927,14 +1014,68 @@ RcddAccumulateD3DDirtyRect(
    IN SURFOBJ *psoSurf,
    IN CDDDXGK_REDIRBITMAPPRESENTINFO *pDirty)
 {
+   PRCDD_BITMAP Bitmap;
+   RECTL Bounds;
+   UINT Index;
+
    if (psoSurf == NULL || pDirty == NULL ||
-       (pDirty->NumDirtyRects != 0 && pDirty->DirtyRect == NULL))
+       (pDirty->NumDirtyRects != 0 && pDirty->DirtyRect == NULL) ||
+       pDirty->NumContexts > WINDDI_MAX_BROADCAST_CONTEXT + 1)
    {
       return FALSE;
    }
 
-   /* Native CDD dispatches only STYPE_DEVBITMAP objects to its redirection
-    * bitmap implementation and succeeds as a no-op for every other surface. */
+   Bitmap = (PRCDD_BITMAP)psoSurf->dhsurf;
+   if (Bitmap == NULL || Bitmap->Pdev == NULL ||
+       Bitmap->Pdev->RedirectionLock == NULL ||
+       (DHPDEV)Bitmap->Pdev != psoSurf->dhpdev ||
+       (psoSurf->iType != STYPE_DEVBITMAP &&
+        psoSurf->iType != STYPE_BITMAP))
+   {
+      return FALSE;
+   }
+
+   Bounds.left = 0;
+   Bounds.top = 0;
+   Bounds.right = Bitmap->Width;
+   Bounds.bottom = Bitmap->Height;
+
+   EngAcquireSemaphore(Bitmap->Pdev->RedirectionLock);
+   if (pDirty->NumDirtyRects == 0)
+   {
+      Bitmap->DirtyRect = Bounds;
+      Bitmap->Dirty = TRUE;
+   }
+   else
+   {
+      for (Index = 0; Index < pDirty->NumDirtyRects; ++Index)
+      {
+         RECTL Rect;
+
+         Rect.left = pDirty->DirtyRect[Index].left;
+         Rect.top = pDirty->DirtyRect[Index].top;
+         Rect.right = pDirty->DirtyRect[Index].right;
+         Rect.bottom = pDirty->DirtyRect[Index].bottom;
+
+         Rect.left = max(Rect.left, Bounds.left);
+         Rect.top = max(Rect.top, Bounds.top);
+         Rect.right = min(Rect.right, Bounds.right);
+         Rect.bottom = min(Rect.bottom, Bounds.bottom);
+         if (Rect.left >= Rect.right || Rect.top >= Rect.bottom)
+            continue;
+
+         if (!Bitmap->Dirty)
+         {
+            Bitmap->DirtyRect = Rect;
+            Bitmap->Dirty = TRUE;
+         }
+         else
+         {
+            RcddRectUnion(&Bitmap->DirtyRect, &Rect);
+         }
+      }
+   }
+   EngReleaseSemaphore(Bitmap->Pdev->RedirectionLock);
    return TRUE;
 }
 

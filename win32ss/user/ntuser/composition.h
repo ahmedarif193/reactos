@@ -66,6 +66,10 @@ typedef struct _WND_REDIRECT
     ULONGLONG DxIssuedUpdateId;
     ULONGLONG DxPublishedUpdateId;
     ULONGLONG DxConsumedUpdateId;
+    ULONGLONG GdiIssuedUpdateId;
+    ULONGLONG GdiAdmittedUpdateId;
+    ULONGLONG GdiPublishedUpdateId;
+    ULONGLONG GdiConsumedUpdateId;
     PKEVENT   DxReadyEvent;
     DWM_DX_SHARED_SURFACE_INFO DxInfo;
 } WND_REDIRECT, *PWND_REDIRECT;
@@ -139,6 +143,26 @@ VOID IntCompositionDamageBacking(_In_opt_ PSURFACE psurf);
  * previous FRONT. */
 VOID IntCompositionCommitOpenGLFrame(_In_opt_ PSURFACE psurf,
                                      _In_ const RECTL *prcDest);
+
+NTSTATUS
+IntCompositionAdmitRedirectedBltPresent(
+    _In_ const DXGKRNL_REDIRECTED_BLT_PRESENT *Present);
+
+NTSTATUS
+IntCompositionValidateRedirectedBltPresent(
+    _In_ const DXGKRNL_REDIRECTED_BLT_PRESENT *Present);
+
+NTSTATUS
+IntCompositionCancelRedirectedBltPresent(
+    _In_ const DXGKRNL_REDIRECTED_BLT_PRESENT *Present);
+
+NTSTATUS
+IntCompositionCompleteRedirectedBltPresent(
+    _In_ const DXGKRNL_REDIRECTED_BLT_PRESENT *Present,
+    _In_reads_(DirtyRectCount) const RECT *DirtyRects,
+    _In_ UINT DirtyRectCount,
+    _In_reads_(ContextCount) const HANDLE *Contexts,
+    _In_ UINT ContextCount);
 
 /* Damage from a direct write to the primary (drag/focus artists, desktop
  * paint): the whole frame is re-asserted on the next compose. */
