@@ -1298,7 +1298,39 @@ DxgkpPresentSourceRects(
     }
 
     if (Count > DXGK_DIRTY_RECT_SLOTS)
-        Count = DXGK_DIRTY_RECT_SLOTS;
+    {
+        /* Never drop damage: an oversized batch degrades to one union rect */
+        RECTL Union = Rects != NULL ? Rects[0] : (RECTL){0, 0, 0, 0};
+
+        for (i = 1; Rects != NULL && i < Count; i++)
+        {
+            if (Rects[i].left < Union.left)
+                Union.left = Rects[i].left;
+            if (Rects[i].top < Union.top)
+                Union.top = Rects[i].top;
+            if (Rects[i].right > Union.right)
+                Union.right = Rects[i].right;
+            if (Rects[i].bottom > Union.bottom)
+                Union.bottom = Rects[i].bottom;
+        }
+        DirtyRects[0].left   = Union.left;
+        DirtyRects[0].top    = Union.top;
+        DirtyRects[0].right  = Union.right;
+        DirtyRects[0].bottom = Union.bottom;
+        Rects = NULL;
+        Count = 0;
+        if (DirtyRects[0].left < 0)
+            DirtyRects[0].left = 0;
+        if (DirtyRects[0].top < 0)
+            DirtyRects[0].top = 0;
+        if (DirtyRects[0].right > (LONG)SharedSurface.CommittedWidth)
+            DirtyRects[0].right = (LONG)SharedSurface.CommittedWidth;
+        if (DirtyRects[0].bottom > (LONG)SharedSurface.CommittedHeight)
+            DirtyRects[0].bottom = (LONG)SharedSurface.CommittedHeight;
+        if (DirtyRects[0].left < DirtyRects[0].right &&
+            DirtyRects[0].top < DirtyRects[0].bottom)
+            DirtyCount = 1;
+    }
 
     for (i = 0; Rects != NULL && i < Count; i++)
     {

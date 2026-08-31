@@ -162,6 +162,7 @@ RcddAccumulateDirtyRect(
    RcddAccumulateRect(ppdev->PendingRects,
                       &ppdev->PendingRectCount,
                       prcl);
+   ppdev->PendingSeq = ppdev->DrawSeq;
 }
 
 static BOOL
@@ -214,7 +215,7 @@ RcddPublishPending(
       return FALSE;
 
    ppdev->PendingRectCount = 0;
-   ppdev->SentSeq = ppdev->DrawSeq;
+   ppdev->SentSeq = ppdev->PendingSeq;
    ppdev->SentRect = SentRect;
    return TRUE;
 }
@@ -287,10 +288,11 @@ RcddBeginDraw(
    if (pso->pvScan0 != ppdev->ScreenPtr)
       return 0;
 
-   if (++ppdev->DrawSeq == 0)
-      ppdev->DrawSeq = 1;
+   ULONG seq = (ULONG)InterlockedIncrement((volatile LONG *)&ppdev->DrawSeq);
+   if (seq == 0)
+      seq = (ULONG)InterlockedIncrement((volatile LONG *)&ppdev->DrawSeq);
 
-   return ppdev->DrawSeq;
+   return seq;
 }
 
 /* Notify the target rectangle, narrowed by the clip bounding box if any. */
