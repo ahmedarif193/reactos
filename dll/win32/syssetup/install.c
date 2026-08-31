@@ -1051,9 +1051,11 @@ PreprocessUnattend(
 
     if (!bDefaultThemesOff)
     {
-        /* Retrieve the complete path to a .theme (or for ReactOS, a .msstyles) file */
-        if (!GetPrivateProfileStringW(L"Shell", L"CustomDefaultThemeFile", NULL, szValue, _countof(szValue), szPath) || !*szValue)
-            bDefaultThemesOff = TRUE; // None specified, fall back to the classic theme.
+        /* Retrieve an optional .theme (or .msstyles) override, defaulting to Aero */
+        if (!GetPrivateProfileStringW(L"Shell", L"CustomDefaultThemeFile",
+                                      L"%WINDIR%\\Resources\\Themes\\Win8\\win8.msstyles",
+                                      szValue, _countof(szValue), szPath) || !*szValue)
+            bDefaultThemesOff = TRUE; // Invalid override: fall back to the classic theme.
     }
 
     /* Enable the chosen theme, or use the classic theme */
