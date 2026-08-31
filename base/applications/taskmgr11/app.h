@@ -30,6 +30,7 @@
 #include <iphlpapi.h>
 #include <ntddstor.h>
 #include <strsafe.h>
+#include <dwmapi.h>
 
 extern "C" {
 #define NTOS_MODE_USER
