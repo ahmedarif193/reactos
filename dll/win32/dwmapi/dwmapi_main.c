@@ -49,6 +49,10 @@ static HRESULT (WINAPI * volatile dcomp_create_device3_import)(IUnknown *, REFII
         = DCompositionCreateDevice3;
 #endif
 
+/* Shared with the themed non-client renderer in uxtheme.dll. */
+static const WCHAR immersive_dark_mode_propW[] = L"ReactOS.Dwm.ImmersiveDarkMode";
+
+
 /**********************************************************************
  *           DwmIsCompositionEnabled         (DWMAPI.@)
  */
@@ -147,6 +151,22 @@ HRESULT WINAPI DwmSetWindowAttribute(HWND hwnd, DWORD attributenum, LPCVOID attr
 
     switch (attributenum)
     {
+        case DWMWA_USE_IMMERSIVE_DARK_MODE:
+        case 26: /* pre-release immersive-dark-mode attribute used by Chromium */
+            if (size != sizeof(BOOL))
+                return E_INVALIDARG;
+            if (*(const BOOL *)attribute)
+            {
+                if (!SetPropW(hwnd, immersive_dark_mode_propW, UlongToHandle(TRUE)))
+                    return HRESULT_FROM_WIN32(GetLastError());
+            }
+            else
+            {
+                RemovePropW(hwnd, immersive_dark_mode_propW);
+            }
+            RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN);
+            return S_OK;
+
         case DWMWA_NCRENDERING_POLICY:
         case DWMWA_TRANSITIONS_FORCEDISABLED:
         case DWMWA_ALLOW_NCPAINT:
@@ -160,8 +180,6 @@ HRESULT WINAPI DwmSetWindowAttribute(HWND hwnd, DWORD attributenum, LPCVOID attr
         case DWMWA_FREEZE_REPRESENTATION:
         case DWMWA_PASSIVE_UPDATE_MODE:
         case DWMWA_USE_HOSTBACKDROPBRUSH:
-        case DWMWA_USE_IMMERSIVE_DARK_MODE:
-        case 26: /* pre-release immersive-dark-mode attribute used by Chromium */
         case DWMWA_WINDOW_CORNER_PREFERENCE:
         case DWMWA_BORDER_COLOR:
         case DWMWA_CAPTION_COLOR:
@@ -183,7 +201,34 @@ HRESULT WINAPI DwmSetWindowAttribute(HWND hwnd, DWORD attributenum, LPCVOID attr
 #else
     static BOOL once;
 
-    if (!once++) FIXME("(%p, %lx, %p, %lx) stub\n", hwnd, attributenum, attribute, size);
+    TRACE("(%p, %lx, %p, %lx)\n", hwnd, attributenum, attribute, size);
+
+    if (!IsWindow(hwnd))
+        return E_HANDLE;
+
+    if (attributenum == DWMWA_USE_IMMERSIVE_DARK_MODE)
+    {
+        BOOL enabled;
+
+        if (!attribute || size != sizeof(enabled))
+            return E_INVALIDARG;
+
+        enabled = *(const BOOL *)attribute;
+        if (enabled)
+        {
+            if (!SetPropW(hwnd, immersive_dark_mode_propW, UlongToHandle(TRUE)))
+                return HRESULT_FROM_WIN32(GetLastError());
+        }
+        else
+        {
+            RemovePropW(hwnd, immersive_dark_mode_propW);
+        }
+
+        RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN);
+        return S_OK;
+    }
+
+    if (!once++) FIXME("attribute %lu is not implemented\n", attributenum);
 
     return S_OK;
 #endif
@@ -277,6 +322,19 @@ HRESULT WINAPI DwmGetWindowAttribute(HWND hwnd, DWORD attribute, PVOID pv_attrib
         return E_HANDLE;
 
     switch (attribute) {
+    case DWMWA_USE_IMMERSIVE_DARK_MODE:
+    {
+        BOOL *enabled = (BOOL *)pv_attribute;
+
+        if (!enabled)
+            return E_INVALIDARG;
+        if (size < sizeof(*enabled))
+            return E_NOT_SUFFICIENT_BUFFER;
+
+        *enabled = GetPropW(hwnd, immersive_dark_mode_propW) != NULL;
+        hr = S_OK;
+        break;
+    }
     case DWMWA_EXTENDED_FRAME_BOUNDS:
     {
         RECT *rect = (RECT *)pv_attribute;
