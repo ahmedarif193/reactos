@@ -1239,9 +1239,33 @@ static INT TAB_SetItemBounds (TAB_INFO *infoPtr)
     {
       int tabwidth;
       SIZE size;
-      /* Calculate how wide the tab is depending on the text it contains */
-      GetTextExtentPoint32W(hdc, curr->pszText,
-                            lstrlenW(curr->pszText), &size);
+      HRESULT hr = E_FAIL;
+
+#ifdef __REACTOS__
+      if (!(infoPtr->dwStyle & TCS_BUTTONS))
+      {
+        HTHEME theme = GetWindowTheme(infoPtr->hwnd);
+
+        if (theme)
+        {
+          RECT rcExtent = {0};
+          int part = curItem == infoPtr->iSelected ? TABP_TABITEM : TABP_TOPTABITEM;
+          int state = curItem == infoPtr->iSelected ? TIS_SELECTED : TIS_NORMAL;
+
+          hr = GetThemeTextExtent(theme, hdc, part, state,
+                                  curr->pszText, lstrlenW(curr->pszText),
+                                  DT_SINGLELINE, NULL, &rcExtent);
+          if (SUCCEEDED(hr))
+          {
+            size.cx = rcExtent.right - rcExtent.left;
+            size.cy = rcExtent.bottom - rcExtent.top;
+          }
+        }
+      }
+#endif
+      if (FAILED(hr))
+        GetTextExtentPoint32W(hdc, curr->pszText,
+                              lstrlenW(curr->pszText), &size);
 
       tabwidth = size.cx + icon_width + 2 * infoPtr->uHItemPadding;
 
@@ -1783,6 +1807,22 @@ HTHEME    theme = GetWindowTheme (infoPtr->hwnd);
     /* get the rectangle that the text fits in */
     if (item->pszText)
     {
+#ifdef __REACTOS__
+      HRESULT hr = E_FAIL;
+      HTHEME textTheme = GetWindowTheme(infoPtr->hwnd);
+
+      if (textTheme && !(infoPtr->dwStyle & TCS_BUTTONS))
+      {
+        int part = iItem == infoPtr->iSelected ? TABP_TABITEM : TABP_TOPTABITEM;
+        int state = iItem == infoPtr->iSelected ? TIS_SELECTED : TIS_NORMAL;
+
+        hr = GetThemeTextExtent(textTheme, hdc, part, state,
+                                item->pszText, -1, DT_SINGLELINE,
+                                NULL, &rcText);
+      }
+
+      if (FAILED(hr))
+#endif
       DrawTextW(hdc, item->pszText, -1, &rcText, DT_CALCRECT);
     }
     /*
@@ -1948,7 +1988,9 @@ HTHEME    theme = GetWindowTheme (infoPtr->hwnd);
           int partIndex = iItem == infoPtr->iSelected ? TABP_TABITEM : TABP_TOPTABITEM;
           int stateId = TIS_NORMAL;
 
-          if (iItem == infoPtr->iSelected)
+          if (!IsWindowEnabled(infoPtr->hwnd))
+              stateId = TIS_DISABLED;
+          else if (iItem == infoPtr->iSelected)
               stateId = TIS_SELECTED;
           else if (iItem == infoPtr->iHotTracked)
               stateId = TIS_HOT;
@@ -2022,6 +2064,11 @@ static void TAB_DrawItemThemeBackground(const TAB_INFO *infoPtr, HDC hdc, INT iI
     if (selectedRect->right == rect.right)
         partIndex += 2;
 
+#ifdef __REACTOS__
+    if (!IsWindowEnabled(infoPtr->hwnd))
+        stateId = TIS_DISABLED;
+    else
+#endif
     if (iItem == infoPtr->iSelected)
         stateId = TIS_SELECTED;
     else if (iItem == infoPtr->iHotTracked)

@@ -139,6 +139,7 @@ typedef struct
 #ifdef __REACTOS__
     SIZE     szBarPadding;    /* padding values around the toolbar */
     SIZE     szSpacing;       /* spacing values between buttons */
+    BOOL     bHotArrow;
 #endif
     INT      iTopMargin;      /* the top margin */
     INT      iListGap;        /* default gap between text and image for toolbar with list style */
@@ -966,6 +967,36 @@ TOOLBAR_DrawSeparator (const TOOLBAR_INFO *infoPtr, TBUTTON_INFO *btnPtr, HDC hd
     }
 }
 
+#ifdef __REACTOS__
+static BOOL TOOLBAR_HotOverDropDownArrow(const TOOLBAR_INFO *infoPtr, const TBUTTON_INFO *btnPtr, const POINT *pt)
+{
+    int right;
+
+    if (infoPtr->dwStyle & TBSTYLE_FLAT)
+        right = max(btnPtr->rect.left, btnPtr->rect.right - DDARROW_WIDTH);
+    else
+        right = max(btnPtr->rect.left, btnPtr->rect.right - DDARROW_WIDTH - 2);
+
+    return pt->x >= right;
+}
+
+#if __WINE_COMCTL32_VERSION == 6
+static BOOL TOOLBAR_ThemeHasSplitHotStates(const TOOLBAR_INFO *infoPtr)
+{
+    int count = 0;
+
+    if (FAILED(GetThemeInt(infoPtr->hTheme, TP_SPLITBUTTON, TS_HOT,
+                           TMT_IMAGECOUNT, &count)) ||
+        count < TS_OTHERSIDEHOT)
+        return FALSE;
+
+    return SUCCEEDED(GetThemeInt(infoPtr->hTheme, TP_SPLITBUTTONDROPDOWN, TS_HOT,
+                                 TMT_IMAGECOUNT, &count)) &&
+           count >= TS_OTHERSIDEHOT;
+}
+#endif
+#endif
+
 static void TOOLBAR_DrawButtonFrame (const TOOLBAR_INFO *infoPtr, TBUTTON_INFO *btnPtr,
                                      const NMTBCUSTOMDRAW *tbcd, HDC hdc, const RECT *rect,
                                      DWORD dwItemCDFlag, BOOL drawSepDropDownArrow)
@@ -986,7 +1017,18 @@ static void TOOLBAR_DrawButtonFrame (const TOOLBAR_INFO *infoPtr, TBUTTON_INFO *
                 stateId = (tbcd->nmcd.uItemState & CDIS_HOT) ? TS_HOTCHECKED : TS_CHECKED;
             else if ((tbcd->nmcd.uItemState & CDIS_HOT)
                      || (drawSepDropDownArrow && btnPtr->bDropDownPressed))
+#ifdef __REACTOS__
+            {
+                if (drawSepDropDownArrow &&
+                    (btnPtr->bDropDownPressed || infoPtr->bHotArrow) &&
+                    TOOLBAR_ThemeHasSplitHotStates(infoPtr))
+                    stateId = TS_OTHERSIDEHOT;
+                else
+                    stateId = TS_HOT;
+            }
+#else
                 stateId = TS_HOT;
+#endif
 
             DrawThemeBackground(infoPtr->hTheme, hdc, partId, stateId, rect, NULL);
         }
@@ -1014,7 +1056,16 @@ static void TOOLBAR_DrawSepDropDownArrow (const TOOLBAR_INFO *infoPtr, TBUTTON_I
         else if (tbcd->nmcd.uItemState & CDIS_CHECKED)
             stateId = (tbcd->nmcd.uItemState & CDIS_HOT) ? TS_HOTCHECKED : TS_CHECKED;
         else if (tbcd->nmcd.uItemState & CDIS_HOT)
+#ifdef __REACTOS__
+        {
+            if (!infoPtr->bHotArrow && TOOLBAR_ThemeHasSplitHotStates(infoPtr))
+                stateId = TS_NEARHOT;
+            else
+                stateId = TS_HOT;
+        }
+#else
             stateId = TS_HOT;
+#endif
 
         DrawThemeBackground(infoPtr->hTheme, hdc, TP_DROPDOWNBUTTON, stateId, rect, NULL);
         DrawThemeBackground(infoPtr->hTheme, hdc, TP_SPLITBUTTONDROPDOWN, stateId, rect, NULL);
@@ -1826,7 +1877,13 @@ TOOLBAR_LayoutToolbar(TOOLBAR_INFO *infoPtr)
 	{
             if (btnPtr->cx)
               cx = btnPtr->cx;
+#ifdef __REACTOS__
+            /* Keep mixed toolbars compact. See CORE-9970. */
+            else if ((infoPtr->dwExStyle & TBSTYLE_EX_MIXEDBUTTONS) ||
+                     (btnPtr->fsStyle & BTNS_AUTOSIZE))
+#else
             else if (btnPtr->fsStyle & BTNS_AUTOSIZE)
+#endif
             {
               SIZE sz;
 	      HDC hdc;
@@ -6159,6 +6216,26 @@ TOOLBAR_MouseMove (TOOLBAR_INFO *infoPtr, WPARAM wParam, LPARAM lParam)
 
     if (((infoPtr->dwStyle & TBSTYLE_FLAT) || TOOLBAR_IsThemed(infoPtr)) && (!infoPtr->bAnchor || button))
         TOOLBAR_SetHotItemEx(infoPtr, button ? nHit : TOOLBAR_NOWHERE, HICF_MOUSE);
+
+#ifdef __REACTOS__
+    if (infoPtr->nHotItem >= 0)
+    {
+        TBUTTON_INFO *hotPtr = &infoPtr->buttons[infoPtr->nHotItem];
+        BOOL hotArrow = FALSE;
+
+        if (button_has_ddarrow(infoPtr, hotPtr) &&
+            !(hotPtr->fsStyle & BTNS_WHOLEDROPDOWN))
+            hotArrow = TOOLBAR_HotOverDropDownArrow(infoPtr, hotPtr, &pt);
+
+        if (hotArrow != infoPtr->bHotArrow)
+        {
+            infoPtr->bHotArrow = hotArrow;
+            InvalidateRect(infoPtr->hwndSelf, &hotPtr->rect, TRUE);
+        }
+    }
+    else
+        infoPtr->bHotArrow = FALSE;
+#endif
 
     if (infoPtr->nOldHit != nHit)
     {

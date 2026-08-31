@@ -75,6 +75,10 @@ static UINT	CBitHeight, CBitWidth;
 #define ID_CB_LISTBOX           1000
 #define ID_CB_EDIT              1001
 
+#ifdef __REACTOS__
+#define CBF_COMBOHOT            0x00010000
+#endif
+
 static void CBCalcPlacement(HEADCOMBO *combo);
 static void CBResetPos(HEADCOMBO *combo);
 
@@ -657,6 +661,11 @@ static void CBPaintText(HEADCOMBO *lphc, HDC hdc_paint)
      UINT itemState = ODS_COMBOBOXEDIT;
      HFONT hPrevFont = (lphc->hFont) ? SelectObject(hdc, lphc->hFont) : 0;
      HBRUSH hPrevBrush, hBkgBrush;
+#ifdef __REACTOS__
+     HTHEME theme = GetWindowTheme(lphc->self);
+     BOOL themedFace = theme && !CB_OWNERDRAWN(lphc) &&
+                       IsThemePartDefined(theme, CP_READONLY, 0);
+#endif
 
      /*
       * Give ourselves some space.
@@ -665,6 +674,9 @@ static void CBPaintText(HEADCOMBO *lphc, HDC hdc_paint)
 
      hBkgBrush = COMBO_PrepareColors( lphc, hdc );
      hPrevBrush = SelectObject( hdc, hBkgBrush );
+#ifdef __REACTOS__
+     if (!themedFace)
+#endif
      FillRect( hdc, &rectEdit, hBkgBrush );
 
      if( CB_OWNERDRAWN(lphc) )
@@ -702,6 +714,30 @@ static void CBPaintText(HEADCOMBO *lphc, HDC hdc_paint)
      }
      else
      {
+#ifdef __REACTOS__
+       if (themedFace)
+       {
+	   COLORREF color;
+
+	   SetBkMode( hdc, TRANSPARENT );
+	   if (SUCCEEDED(GetThemeColor(theme, CP_READONLY,
+				       IsWindowEnabled(lphc->self) ? CBRO_NORMAL : CBRO_DISABLED,
+				       TMT_TEXTCOLOR, &color)))
+	       SetTextColor( hdc, color );
+	   else
+	       SetTextColor( hdc, GetSysColor(IsWindowEnabled(lphc->self) ?
+					      COLOR_WINDOWTEXT : COLOR_GRAYTEXT) );
+
+	   ExtTextOutW( hdc,
+			rectEdit.left + 1,
+			rectEdit.top + 1,
+			ETO_CLIPPED,
+			&rectEdit,
+			pText ? pText : L"" , size, NULL );
+       }
+       else
+       {
+#endif
        if ( (lphc->wState & CBF_FOCUSED) &&
 	    !(lphc->wState & CBF_DROPPED) ) {
 
@@ -717,6 +753,9 @@ static void CBPaintText(HEADCOMBO *lphc, HDC hdc_paint)
 		    ETO_OPAQUE | ETO_CLIPPED,
 		    &rectEdit,
 		    pText ? pText : L"" , size, NULL );
+#ifdef __REACTOS__
+       }
+#endif
 
        if(lphc->wState & CBF_FOCUSED && !(lphc->wState & CBF_DROPPED))
 	 DrawFocusRect( hdc, &rectEdit );
@@ -761,6 +800,14 @@ static LRESULT COMBO_ThemedPaint(HTHEME theme, HEADCOMBO *lphc, HDC hdc)
 {
     int button_state;
     RECT frame;
+#ifdef __REACTOS__
+    BOOL readonly = !(lphc->wState & CBF_EDIT);
+    BOOL hot = (lphc->wState & (CBF_HOT | CBF_COMBOHOT)) != 0;
+    BOOL pressed = (lphc->wState & CBF_BUTTONDOWN) ||
+                   (readonly && (lphc->wState & CBF_DROPPED));
+    int frame_state;
+    int button_part;
+#endif
 
     /* paint border */
     if (CB_GETTYPE(lphc) != CBS_SIMPLE)
@@ -772,13 +819,62 @@ static LRESULT COMBO_ThemedPaint(HTHEME theme, HEADCOMBO *lphc, HDC hdc)
         InflateRect(&frame, COMBO_XBORDERSIZE(), COMBO_YBORDERSIZE());
     }
 
+#ifdef __REACTOS__
+    if (readonly && IsThemePartDefined(theme, CP_READONLY, 0))
+    {
+        if (!IsWindowEnabled(lphc->self))
+            frame_state = CBRO_DISABLED;
+        else if (pressed)
+            frame_state = CBRO_PRESSED;
+        else if (hot)
+            frame_state = CBRO_HOT;
+        else
+            frame_state = CBRO_NORMAL;
+        if (IsThemeBackgroundPartiallyTransparent(theme, CP_READONLY, frame_state))
+            DrawThemeParentBackground(lphc->self, hdc, &frame);
+        DrawThemeBackground(theme, hdc, CP_READONLY, frame_state, &frame, NULL);
+    }
+    else if (!readonly && IsThemePartDefined(theme, CP_BORDER, 0))
+    {
+        DrawThemeBackground(theme, hdc, 0,
+                            IsWindowEnabled(lphc->self) ? CBXS_NORMAL : CBXS_DISABLED,
+                            &frame, NULL);
+        if (!IsWindowEnabled(lphc->self))
+            frame_state = CBB_DISABLED;
+        else if (lphc->wState & CBF_FOCUSED)
+            frame_state = CBB_FOCUSED;
+        else if (hot)
+            frame_state = CBB_HOT;
+        else
+            frame_state = CBB_NORMAL;
+        DrawThemeBackground(theme, hdc, CP_BORDER, frame_state, &frame, NULL);
+    }
+    else
+        DrawThemeBackground(theme, hdc, 0,
+                            IsWindowEnabled(lphc->self) ? CBXS_NORMAL : CBXS_DISABLED,
+                            &frame, NULL);
+#else
     DrawThemeBackground(theme, hdc, 0, IsWindowEnabled(lphc->self) ? CBXS_NORMAL : CBXS_DISABLED, &frame, NULL);
+#endif
 
     /* Paint button */
     if (!IsRectEmpty(&lphc->buttonRect))
     {
         if (!IsWindowEnabled(lphc->self))
             button_state = CBXS_DISABLED;
+#ifdef __REACTOS__
+        else if (pressed)
+            button_state = CBXS_PRESSED;
+        else if ((lphc->wState & CBF_HOT) || (readonly && hot))
+            button_state = CBXS_HOT;
+        else
+            button_state = CBXS_NORMAL;
+        button_part = (GetWindowLongW(lphc->self, GWL_EXSTYLE) & WS_EX_LAYOUTRTL)
+            ? CP_DROPDOWNBUTTONLEFT : CP_DROPDOWNBUTTONRIGHT;
+        if (!IsThemePartDefined(theme, button_part, 0))
+            button_part = CP_DROPDOWNBUTTON;
+        DrawThemeBackground(theme, hdc, button_part, button_state, &lphc->buttonRect, NULL);
+#else
         else if (lphc->wState & CBF_BUTTONDOWN)
             button_state = CBXS_PRESSED;
         else if (lphc->wState & CBF_HOT)
@@ -786,6 +882,7 @@ static LRESULT COMBO_ThemedPaint(HTHEME theme, HEADCOMBO *lphc, HDC hdc)
         else
             button_state = CBXS_NORMAL;
         DrawThemeBackground(theme, hdc, CP_DROPDOWNBUTTON, button_state, &lphc->buttonRect, NULL);
+#endif
     }
 
     if ((lphc->dwStyle & CBS_DROPDOWNLIST) == CBS_DROPDOWNLIST)
@@ -1088,6 +1185,11 @@ BOOL COMBO_FlipListbox( LPHEADCOMBO lphc, BOOL ok, BOOL bRedrawButton )
  */
 static void CBRepaintButton( LPHEADCOMBO lphc )
    {
+#ifdef __REACTOS__
+  if (GetWindowTheme(lphc->self) && !(lphc->wState & CBF_EDIT))
+    InvalidateRect(lphc->self, NULL, TRUE);
+  else
+#endif
   InvalidateRect(lphc->self, &lphc->buttonRect, TRUE);
   UpdateWindow(lphc->self);
 }
@@ -1108,6 +1210,10 @@ static void COMBO_SetFocus( LPHEADCOMBO lphc )
 
        if( !(lphc->wState & CBF_EDIT) )
 	 InvalidateRect(lphc->self, &lphc->textRect, TRUE);
+#ifdef __REACTOS__
+       else if (GetWindowTheme(lphc->self))
+	 InvalidateRect(lphc->self, NULL, TRUE);
+#endif
 
        CB_NOTIFY( lphc, CBN_SETFOCUS );
        lphc->wState |= CBF_FOCUSED;
@@ -1134,6 +1240,10 @@ static void COMBO_KillFocus( LPHEADCOMBO lphc )
            /* redraw text */
 	   if( !(lphc->wState & CBF_EDIT) )
 	     InvalidateRect(lphc->self, &lphc->textRect, TRUE);
+#ifdef __REACTOS__
+	   else if (GetWindowTheme(lphc->self))
+	     InvalidateRect(lphc->self, NULL, TRUE);
+#endif
 
            CB_NOTIFY( lphc, CBN_KILLFOCUS );
        }
@@ -1637,6 +1747,13 @@ static void COMBO_MouseMove( LPHEADCOMBO lphc, WPARAM wParam, LPARAM lParam )
 
 static LRESULT COMBO_MouseLeave(LPHEADCOMBO lphc)
 {
+#ifdef __REACTOS__
+    if (lphc->wState & CBF_COMBOHOT)
+    {
+        lphc->wState &= ~CBF_COMBOHOT;
+        RedrawWindow(lphc->self, NULL, 0, RDW_INVALIDATE | RDW_UPDATENOW);
+    }
+#endif
     lphc->wState &= ~CBF_HOT;
     RedrawWindow(lphc->self, &lphc->buttonRect, 0, RDW_INVALIDATE | RDW_UPDATENOW);
     return 0;
@@ -1879,6 +1996,26 @@ static LRESULT CALLBACK COMBO_WindowProc( HWND hwnd, UINT message, WPARAM wParam
         return  TRUE;
 
     case WM_MOUSEMOVE:
+#ifdef __REACTOS__
+        if (GetWindowTheme(hwnd))
+        {
+            TRACKMOUSEEVENT event;
+
+            if (!(lphc->wState & CBF_COMBOHOT))
+            {
+                lphc->wState |= CBF_COMBOHOT;
+                RedrawWindow(hwnd, NULL, 0, RDW_INVALIDATE | RDW_UPDATENOW);
+            }
+            event.cbSize = sizeof(TRACKMOUSEEVENT);
+            event.dwFlags = TME_QUERY;
+            if (!TrackMouseEvent(&event) || event.hwndTrack != hwnd || !(event.dwFlags & TME_LEAVE))
+            {
+                event.hwndTrack = hwnd;
+                event.dwFlags = TME_LEAVE;
+                TrackMouseEvent(&event);
+            }
+        }
+#endif
         if (!IsRectEmpty(&lphc->buttonRect))
         {
             TRACKMOUSEEVENT event;

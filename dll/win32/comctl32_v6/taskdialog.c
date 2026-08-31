@@ -85,6 +85,8 @@ struct taskdialog_info
     WCHAR *expanded_text;
     WCHAR *collapsed_text;
     BOOL had_first_layout;
+    HTHEME theme;
+    BOOL expando_hovered;
 };
 
 struct button_layout_info
@@ -425,6 +427,55 @@ static void taskdialog_get_button_size(const struct taskdialog_info *dialog_info
     size->cx = min(max_width, size->cx + dialog_info->m.h_spacing * 4);
 }
 
+static void taskdialog_get_expando_icon_size(struct taskdialog_info *dialog_info, HDC hdc, LONG *width, LONG *height)
+{
+    SIZE size;
+
+    if (dialog_info->theme && IsThemePartDefined(dialog_info->theme, TDLG_EXPANDOBUTTON, 0)
+        && SUCCEEDED(GetThemePartSize(dialog_info->theme, hdc, TDLG_EXPANDOBUTTON, TDLGEBS_NORMAL, NULL, TS_TRUE,
+                                      &size)))
+    {
+        *width = size.cx;
+        *height = size.cy;
+        return;
+    }
+
+    *width = DIALOG_EXPANDO_ICON_WIDTH;
+    *height = DIALOG_EXPANDO_ICON_HEIGHT;
+    taskdialog_du_to_px(dialog_info, width, height);
+}
+
+static LRESULT CALLBACK taskdialog_expando_subclass_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam,
+                                                         UINT_PTR id, DWORD_PTR ref)
+{
+    struct taskdialog_info *dialog_info = (struct taskdialog_info *)ref;
+
+    switch (msg)
+    {
+        case WM_MOUSEMOVE:
+            if (!dialog_info->expando_hovered)
+            {
+                TRACKMOUSEEVENT tme = {sizeof(tme), TME_LEAVE, hwnd, 0};
+
+                dialog_info->expando_hovered = TRUE;
+                TrackMouseEvent(&tme);
+                InvalidateRect(hwnd, NULL, TRUE);
+            }
+            break;
+        case WM_MOUSELEAVE:
+            if (dialog_info->expando_hovered)
+            {
+                dialog_info->expando_hovered = FALSE;
+                InvalidateRect(hwnd, NULL, TRUE);
+            }
+            break;
+        case WM_NCDESTROY:
+            RemoveWindowSubclass(hwnd, taskdialog_expando_subclass_proc, id);
+            break;
+    }
+    return DefSubclassProc(hwnd, msg, wparam, lparam);
+}
+
 static void taskdialog_get_expando_size(struct taskdialog_info *dialog_info, HWND hwnd, SIZE *size)
 {
     DWORD style = DT_EXPANDTABS | DT_CALCRECT | DT_WORDBREAK;
@@ -439,9 +490,7 @@ static void taskdialog_get_expando_size(struct taskdialog_info *dialog_info, HWN
     hfont = (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
     old_hfont = SelectObject(hdc, hfont);
 
-    icon_width = DIALOG_EXPANDO_ICON_WIDTH;
-    icon_height = DIALOG_EXPANDO_ICON_HEIGHT;
-    taskdialog_du_to_px(dialog_info, &icon_width, &icon_height);
+    taskdialog_get_expando_icon_size(dialog_info, hdc, &icon_width, &icon_height);
 
     GetCharWidthW(hdc, '0', '0', &text_offset);
     text_offset /= 2;
@@ -715,6 +764,7 @@ static void taskdialog_add_expando_button(struct taskdialog_info *dialog_info)
 
     dialog_info->expando_button = CreateWindowW(WC_BUTTONW, textW, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0,
                                                 0, 0, 0, dialog_info->hwnd, 0, 0, 0);
+    SetWindowSubclass(dialog_info->expando_button, taskdialog_expando_subclass_proc, 0, (DWORD_PTR)dialog_info);
     SendMessageW(dialog_info->expando_button, WM_SETFONT, (WPARAM)dialog_info->font, 0);
 }
 
@@ -1102,19 +1152,38 @@ static void taskdialog_draw_expando_control(struct taskdialog_info *dialog_info,
     INT text_offset;
     UINT style = DFCS_FLAT;
     BOOL draw_focus;
+    BOOL themed;
 
     hdc = dis->hDC;
     hwnd = dis->hwndItem;
 
     SendMessageW(hwnd, WM_ERASEBKGND, (WPARAM)hdc, 0);
 
-    icon_width = DIALOG_EXPANDO_ICON_WIDTH;
-    icon_height = DIALOG_EXPANDO_ICON_HEIGHT;
-    taskdialog_du_to_px(dialog_info, &icon_width, &icon_height);
+    taskdialog_get_expando_icon_size(dialog_info, hdc, &icon_width, &icon_height);
     rect.right = icon_width;
     rect.bottom = icon_height;
-    style |= dialog_info->expanded ? DFCS_SCROLLUP : DFCS_SCROLLDOWN;
-    DrawFrameControl(hdc, &rect, DFC_SCROLL, style);
+
+    themed = FALSE;
+    if (dialog_info->theme && IsThemePartDefined(dialog_info->theme, TDLG_EXPANDOBUTTON, 0))
+    {
+        int state;
+
+        if (dis->itemState & ODS_DISABLED)
+            state = dialog_info->expanded ? TDLGEBS_EXPANDEDDISABLED : TDLGEBS_NORMALDISABLED;
+        else if (dis->itemState & ODS_SELECTED)
+            state = dialog_info->expanded ? TDLGEBS_EXPANDEDPRESSED : TDLGEBS_PRESSED;
+        else if (dialog_info->expando_hovered)
+            state = dialog_info->expanded ? TDLGEBS_EXPANDEDHOVER : TDLGEBS_HOVER;
+        else
+            state = dialog_info->expanded ? TDLGEBS_EXPANDEDNORMAL : TDLGEBS_NORMAL;
+        themed = SUCCEEDED(DrawThemeBackground(dialog_info->theme, hdc, TDLG_EXPANDOBUTTON, state, &rect, NULL));
+    }
+
+    if (!themed)
+    {
+        style |= dialog_info->expanded ? DFCS_SCROLLUP : DFCS_SCROLLDOWN;
+        DrawFrameControl(hdc, &rect, DFC_SCROLL, style);
+    }
 
     GetCharWidthW(hdc, '0', '0', &text_offset);
     text_offset /= 2;
@@ -1141,6 +1210,7 @@ static void taskdialog_init(struct taskdialog_info *dialog_info, HWND hwnd)
     memset(dialog_info, 0, sizeof(*dialog_info));
     dialog_info->taskconfig = taskconfig;
     dialog_info->hwnd = hwnd;
+    dialog_info->theme = OpenThemeData(hwnd, L"TaskDialog");
     dialog_info->font = CreateFontIndirectW(&ncm.lfMessageFont);
 
     hdc = GetDC(dialog_info->hwnd);
@@ -1200,6 +1270,11 @@ static void taskdialog_destroy(struct taskdialog_info *dialog_info)
     EnumChildWindows(dialog_info->hwnd, takdialog_destroy_control, 0);
 
     if (dialog_info->taskconfig->dwFlags & TDF_CALLBACK_TIMER) KillTimer(dialog_info->hwnd, ID_TIMER);
+    if (dialog_info->theme)
+    {
+        CloseThemeData(dialog_info->theme);
+        dialog_info->theme = NULL;
+    }
     if (dialog_info->font) DeleteObject(dialog_info->font);
     if (dialog_info->main_instruction_font) DeleteObject(dialog_info->main_instruction_font);
     Free(dialog_info->buttons);
@@ -1353,6 +1428,13 @@ static INT_PTR CALLBACK taskdialog_proc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
             }
             return FALSE;
         }
+        case WM_THEMECHANGED:
+            if (!dialog_info) return FALSE;
+            if (dialog_info->theme) CloseThemeData(dialog_info->theme);
+            dialog_info->theme = OpenThemeData(hwnd, L"TaskDialog");
+            taskdialog_layout(dialog_info);
+            InvalidateRect(hwnd, NULL, TRUE);
+            break;
         case WM_DESTROY:
             taskdialog_notify(dialog_info, TDN_DESTROYED, 0, 0);
             RemovePropW(hwnd, taskdialog_info_propnameW);

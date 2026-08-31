@@ -182,6 +182,9 @@ typedef struct
     INT      ihitoffset;  /* offset of hotspot from gripper.left */
     INT      ichevronhotBand; /* last band that had a hot chevron */
     INT      iGrabbedBand;/* band number of band whose gripper was grabbed */
+#ifdef __REACTOS__
+    INT      igrabberhotBand;
+#endif
 
     HDPA     bands;       /* pointer to the array of rebar bands */
 } REBAR_INFO;
@@ -584,6 +587,13 @@ REBAR_DrawChevron (HDC hdc, const REBAR_INFO *infoPtr, REBAR_BAND *lpBand)
     if (theme)
     {
         int stateId;
+#ifdef __REACTOS__
+        int partId = RP_CHEVRON;
+
+        if ((infoPtr->dwStyle & CCS_VERT) &&
+            IsThemePartDefined(theme, RP_CHEVRONVERT, 0))
+            partId = RP_CHEVRONVERT;
+#endif
 
         if (lpBand->fDraw & DRAW_CHEVRONPUSHED)
             stateId = CHEVS_PRESSED;
@@ -591,7 +601,11 @@ REBAR_DrawChevron (HDC hdc, const REBAR_INFO *infoPtr, REBAR_BAND *lpBand)
             stateId = CHEVS_HOT;
         else
             stateId = CHEVS_NORMAL;
+#ifdef __REACTOS__
+        DrawThemeBackground (theme, hdc, partId, stateId, &lpBand->rcChevron, NULL);
+#else
         DrawThemeBackground (theme, hdc, RP_CHEVRON, stateId, &lpBand->rcChevron, NULL);
+#endif
         return;
     }
 #endif
@@ -612,14 +626,26 @@ REBAR_DrawChevron (HDC hdc, const REBAR_INFO *infoPtr, REBAR_BAND *lpBand)
     }
 }
 
+#if defined(__REACTOS__) && __WINE_COMCTL32_VERSION == 6
+static void
+REBAR_DrawBandSeparator (HWND hwnd, HDC hdc, RECT *rect, UINT flags, int stateId)
+#else
 static void
 REBAR_DrawBandSeparator (HWND hwnd, HDC hdc, RECT *rect, UINT flags)
+#endif
 {
 #if __WINE_COMCTL32_VERSION == 6
     HTHEME theme = GetWindowTheme (hwnd);
 
     if (theme)
     {
+#ifdef __REACTOS__
+        int partId = (flags == BF_RIGHT) ? RP_SPLITTER : RP_SPLITTERVERT;
+
+        if (IsThemePartDefined(theme, partId, 0) &&
+            SUCCEEDED(DrawThemeBackground(theme, hdc, partId, stateId, rect, NULL)))
+            return;
+#endif
         DrawThemeEdge (theme, hdc, RP_BAND, 0, rect, EDGE_ETCHED, flags, NULL);
         return;
     }
@@ -1942,12 +1968,20 @@ static LRESULT REBAR_EraseBkGnd (const REBAR_INFO *infoPtr, HDC hdc)
 		if (infoPtr->dwStyle & CCS_VERT) {
 		    rcRowSep.right += SEP_WIDTH_SIZE;
 		    rcRowSep.bottom = infoPtr->calcSize.cx;
+#if defined(__REACTOS__) && __WINE_COMCTL32_VERSION == 6
+                    REBAR_DrawBandSeparator (infoPtr->hwndSelf, hdc, &rcRowSep, BF_RIGHT, SPLITS_NORMAL);
+#else
                     REBAR_DrawBandSeparator (infoPtr->hwndSelf, hdc, &rcRowSep, BF_RIGHT);
+#endif
 		}
 		else {
 		    rcRowSep.bottom += SEP_WIDTH_SIZE;
 		    rcRowSep.right = infoPtr->calcSize.cx;
+#if defined(__REACTOS__) && __WINE_COMCTL32_VERSION == 6
+                    REBAR_DrawBandSeparator (infoPtr->hwndSelf, hdc, &rcRowSep, BF_BOTTOM, SPLITS_NORMAL);
+#else
                     REBAR_DrawBandSeparator (infoPtr->hwndSelf, hdc, &rcRowSep, BF_BOTTOM);
+#endif
 		}
                 TRACE ("drawing band separator bottom (%s)\n",
                        wine_dbgstr_rect(&rcRowSep));
@@ -1957,16 +1991,32 @@ static LRESULT REBAR_EraseBkGnd (const REBAR_INFO *infoPtr, HDC hdc)
 	/* draw band separator between bands in a row */
         if (infoPtr->dwStyle & RBS_BANDBORDERS && lpBand->rcBand.left > 0) {
 	    RECT rcSep;
+#if defined(__REACTOS__) && __WINE_COMCTL32_VERSION == 6
+            int sepState = SPLITS_NORMAL;
+
+            if (infoPtr->iGrabbedBand == (INT)i)
+                sepState = SPLITS_PRESSED;
+            else if (infoPtr->igrabberhotBand == (INT)i)
+                sepState = SPLITS_HOT;
+#endif
 	    rcSep = rcBand;
 	    if (infoPtr->dwStyle & CCS_VERT) {
                 rcSep.bottom = rcSep.top;
 		rcSep.top -= SEP_WIDTH_SIZE;
+#if defined(__REACTOS__) && __WINE_COMCTL32_VERSION == 6
+                REBAR_DrawBandSeparator (infoPtr->hwndSelf, hdc, &rcSep, BF_BOTTOM, sepState);
+#else
                 REBAR_DrawBandSeparator (infoPtr->hwndSelf, hdc, &rcSep, BF_BOTTOM);
+#endif
 	    }
 	    else {
                 rcSep.right = rcSep.left;
 		rcSep.left -= SEP_WIDTH_SIZE;
+#if defined(__REACTOS__) && __WINE_COMCTL32_VERSION == 6
+                REBAR_DrawBandSeparator (infoPtr->hwndSelf, hdc, &rcSep, BF_RIGHT, sepState);
+#else
                 REBAR_DrawBandSeparator (infoPtr->hwndSelf, hdc, &rcSep, BF_RIGHT);
+#endif
 	    }
             TRACE("drawing band separator right (%s)\n",
                   wine_dbgstr_rect(&rcSep));
@@ -3080,6 +3130,9 @@ REBAR_LButtonDown (REBAR_INFO *infoPtr, LPARAM lParam)
 
         SetCapture (infoPtr->hwndSelf);
         infoPtr->iGrabbedBand = iHitBand;
+#ifdef __REACTOS__
+        InvalidateRect(infoPtr->hwndSelf, NULL, TRUE);
+#endif
 
         /* save off the LOWORD and HIWORD of lParam as initial x,y */
         infoPtr->dragStart.x = (short)LOWORD(lParam);
@@ -3136,6 +3189,13 @@ REBAR_MouseLeave (REBAR_INFO *infoPtr)
     }
     infoPtr->iOldBand = -1;
     infoPtr->ichevronhotBand = -2;
+#ifdef __REACTOS__
+    if (infoPtr->igrabberhotBand >= 0)
+    {
+        infoPtr->igrabberhotBand = -1;
+        InvalidateRect(infoPtr->hwndSelf, NULL, TRUE);
+    }
+#endif
 
     return TRUE;
 }
@@ -3194,6 +3254,19 @@ REBAR_MouseMove (REBAR_INFO *infoPtr, LPARAM lParam)
         TRACKMOUSEEVENT trackinfo;
 
         REBAR_InternalHitTest(infoPtr, &ptMove, &htFlags, &iHitBand);
+
+#if defined(__REACTOS__) && __WINE_COMCTL32_VERSION == 6
+        {
+            INT iGrabberHot = (htFlags == RBHT_GRABBER) ? iHitBand : -1;
+
+            if (iGrabberHot != infoPtr->igrabberhotBand &&
+                GetWindowTheme(infoPtr->hwndSelf))
+            {
+                infoPtr->igrabberhotBand = iGrabberHot;
+                InvalidateRect(infoPtr->hwndSelf, NULL, TRUE);
+            }
+        }
+#endif
 
         if (infoPtr->iOldBand >= 0 && infoPtr->iOldBand == infoPtr->ichevronhotBand)
         {
@@ -3290,6 +3363,9 @@ REBAR_NCCreate (HWND hwnd, const CREATESTRUCTW *cs)
     infoPtr->iOldBand = -1;
     infoPtr->ichevronhotBand = -2;
     infoPtr->iGrabbedBand = -1;
+#ifdef __REACTOS__
+    infoPtr->igrabberhotBand = -1;
+#endif
     infoPtr->hwndSelf = hwnd;
     infoPtr->DoRedraw = TRUE;
     infoPtr->hcurArrow = LoadCursorW (0, (LPWSTR)IDC_ARROW);

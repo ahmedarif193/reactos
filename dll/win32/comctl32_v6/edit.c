@@ -65,6 +65,9 @@ WINE_DEFAULT_DEBUG_CHANNEL(edit);
 					   wrapped line, instead of in front of the next character */
 #define EF_USE_SOFTBRK		0x0100	/* Enable soft breaks in text. */
 #define EF_DIALOGMODE           0x0200  /* Indicates that we are inside a dialog window */
+#ifdef __REACTOS__
+#define EF_HOT			0x0400
+#endif
 
 #define ID_CB_LISTBOX 1000
 
@@ -3654,6 +3657,45 @@ static void EDIT_WM_Paint(EDITSTATE *es, HDC hdc)
             EndPaint(es->hwndSelf, &ps);
 }
 
+#ifdef __REACTOS__
+static void EDIT_UpdateHot(EDITSTATE *es, BOOL nonclient)
+{
+    TRACKMOUSEEVENT tme;
+
+    if (!GetWindowTheme(es->hwndSelf))
+        return;
+
+    tme.cbSize = sizeof(tme);
+    tme.dwFlags = nonclient ? (TME_LEAVE | TME_NONCLIENT) : TME_LEAVE;
+    tme.hwndTrack = es->hwndSelf;
+    tme.dwHoverTime = HOVER_DEFAULT;
+    TrackMouseEvent(&tme);
+
+    if (!(es->flags & EF_HOT))
+    {
+        es->flags |= EF_HOT;
+        RedrawWindow(es->hwndSelf, NULL, NULL, RDW_FRAME | RDW_INVALIDATE);
+    }
+}
+
+static void EDIT_LeaveHot(EDITSTATE *es)
+{
+    RECT rc;
+    POINT pt;
+
+    if (!(es->flags & EF_HOT))
+        return;
+
+    GetCursorPos(&pt);
+    GetWindowRect(es->hwndSelf, &rc);
+    if (PtInRect(&rc, pt))
+        return;
+
+    es->flags &= ~EF_HOT;
+    RedrawWindow(es->hwndSelf, NULL, NULL, RDW_FRAME | RDW_INVALIDATE);
+}
+#endif
+
 static void EDIT_WM_NCPaint(HWND hwnd, HRGN region)
 {
     DWORD exStyle = GetWindowLongW(hwnd, GWL_EXSTYLE);
@@ -3666,16 +3708,48 @@ static void EDIT_WM_NCPaint(HWND hwnd, HRGN region)
         RECT r;
         int cxEdge = GetSystemMetrics(SM_CXEDGE),
             cyEdge = GetSystemMetrics(SM_CYEDGE);
+#ifdef __REACTOS__
+        int part = EP_EDITTEXT;
+#else
         const int part = EP_EDITTEXT;
+#endif
         int state = ETS_NORMAL;
         DWORD dwStyle = GetWindowLongW(hwnd, GWL_STYLE);
+#ifdef __REACTOS__
+        EDITSTATE *es = (EDITSTATE *)GetWindowLongPtrW(hwnd, 0);
+        BOOL hot = es && (es->flags & EF_HOT);
+        int borderPart = (dwStyle & WS_VSCROLL)
+            ? ((dwStyle & WS_HSCROLL) ? EP_EDITBORDER_HVSCROLL : EP_EDITBORDER_VSCROLL)
+            : ((dwStyle & WS_HSCROLL) ? EP_EDITBORDER_HSCROLL : EP_EDITBORDER_NOSCROLL);
 
+        if (IsThemePartDefined(theme, borderPart, 0))
+        {
+            part = borderPart;
+            if (!IsWindowEnabled(hwnd))
+                state = EPSN_DISABLED;
+            else if (GetFocus() == hwnd)
+                state = EPSN_FOCUSED;
+            else if (hot)
+                state = EPSN_HOT;
+            else
+                state = EPSN_NORMAL;
+        }
+        else if (!IsWindowEnabled(hwnd))
+            state = ETS_DISABLED;
+        else if (dwStyle & ES_READONLY)
+            state = ETS_READONLY;
+        else if (GetFocus() == hwnd)
+            state = ETS_FOCUSED;
+        else if (hot)
+            state = ETS_HOT;
+#else
         if (!IsWindowEnabled(hwnd))
             state = ETS_DISABLED;
         else if (dwStyle & ES_READONLY)
             state = ETS_READONLY;
         else if (GetFocus() == hwnd)
             state = ETS_FOCUSED;
+#endif
 
         GetWindowRect(hwnd, &r);
 
@@ -4918,8 +4992,24 @@ static LRESULT CALLBACK EDIT_WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
         break;
 
     case WM_MOUSEMOVE:
+#ifdef __REACTOS__
+        EDIT_UpdateHot(es, FALSE);
+#endif
         result = EDIT_WM_MouseMove(es, (short)LOWORD(lParam), (short)HIWORD(lParam));
         break;
+
+#ifdef __REACTOS__
+    case WM_NCMOUSEMOVE:
+        EDIT_UpdateHot(es, TRUE);
+        result = DefWindowProcW(hwnd, msg, wParam, lParam);
+        break;
+
+    case WM_MOUSELEAVE:
+    case WM_NCMOUSELEAVE:
+        EDIT_LeaveHot(es);
+        result = DefWindowProcW(hwnd, msg, wParam, lParam);
+        break;
+#endif
 
     case WM_PRINTCLIENT:
     case WM_PAINT:
