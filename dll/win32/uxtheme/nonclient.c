@@ -231,7 +231,7 @@ static void ThemeCalculateCaptionButtonsPosEx(WINDOWINFO* wi, HWND hWnd, HTHEME 
 {
     PWND_DATA pwndData;
     DWORD style;
-    INT captionBtnWidth, captionBtnHeight, iPartId, i;
+    INT captionBtnWidth, captionBtnHeight, iPartId, i, edgeRight;
     RECT rcCurrent;
     SIZE ButtonSize;
 
@@ -257,30 +257,55 @@ static void ThemeCalculateCaptionButtonsPosEx(WINDOWINFO* wi, HWND hWnd, HTHEME 
     rcCurrent.right = wi->rcWindow.right - wi->rcWindow.left - wi->cxWindowBorders - 1;
     rcCurrent.bottom = wi->rcWindow.bottom - wi->rcWindow.top;
     rcCurrent.left = wi->cxWindowBorders;
+    edgeRight = wi->rcWindow.right - wi->rcWindow.left;
 
     captionBtnHeight = buttonHeight - 4;
 
     for (i = CLOSEBUTTON; i <= HELPBUTTON; i++)
     {
         static const int rgPart[] = { WP_CLOSEBUTTON, WP_MAXBUTTON, WP_MINBUTTON, WP_HELPBUTTON };
+        INT btnTop, btnHeight2, btnScaleHeight, btnRight;
+        BOOL edgeAligned;
+        int valign;
 
         iPartId = rgPart[i - CLOSEBUTTON];
         if (i == CLOSEBUTTON && (wi->dwExStyle & WS_EX_TOOLWINDOW))
             iPartId = WP_SMALLCLOSEBUTTON;
 
+        /* A theme authoring VAlign = Top anchors its buttons to the frame edge */
+        edgeAligned = SUCCEEDED(GetThemeEnumValue(htheme, iPartId, 0, TMT_VALIGN, &valign)) &&
+                      valign == VA_TOP;
+        if (edgeAligned)
+        {
+            btnTop = 0;
+            btnHeight2 = buttonHeight + wi->cyWindowBorders;
+            btnScaleHeight = buttonHeight - 2;
+            btnRight = edgeRight;
+        }
+        else
+        {
+            btnTop = rcCurrent.top;
+            btnHeight2 = captionBtnHeight;
+            btnScaleHeight = btnHeight2;
+            btnRight = rcCurrent.right;
+        }
+
         if (FAILED(GetThemePartSize(htheme, NULL, iPartId, 0, NULL, TS_MIN, &ButtonSize)) ||
             ButtonSize.cy <= 0)
-            ButtonSize.cx = ButtonSize.cy = captionBtnHeight;
+            ButtonSize.cx = ButtonSize.cy = btnScaleHeight;
 
-        captionBtnWidth = MulDiv(ButtonSize.cx, captionBtnHeight, ButtonSize.cy);
+        captionBtnWidth = MulDiv(ButtonSize.cx, btnScaleHeight, ButtonSize.cy);
 
         SetRect(&pwndData->rcCaptionButtons[i],
-                rcCurrent.right - captionBtnWidth,
-                rcCurrent.top,
-                rcCurrent.right,
-                rcCurrent.top + captionBtnHeight);
+                btnRight - captionBtnWidth,
+                btnTop,
+                btnRight,
+                btnTop + btnHeight2);
 
-        rcCurrent.right -= captionBtnWidth;
+        if (edgeAligned)
+            edgeRight -= captionBtnWidth;
+        else
+            rcCurrent.right -= captionBtnWidth;
     }
 }
 
