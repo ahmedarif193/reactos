@@ -149,6 +149,8 @@ HRESULT WINAPI _CBandSite_CreateInstance(LPUNKNOWN pUnkOuter, REFIID riid, void 
 
 #define TWM_GETTASKSWITCH (WM_USER + 236)
 #define TWM_OPENSTARTMENU (WM_USER + 260)
+#define TWM_SHOWVOLUMEFLYOUT (WM_USER + 270)
+#define TWM_SHOWNETWORKFLYOUT (WM_USER + 271)
 #define TWM_SETTINGSCHANGED (WM_USER + 300)
 #define TWM_SETZORDER (WM_USER + 338)
 
@@ -369,6 +371,7 @@ UpdateStartMenu(IN OUT IMenuPopup *pMenuPopup,
                 IN BOOL bRefresh);
 
 #include "startmnu2.h"
+#include "trayflyouts.h"
 
 /*
  * startmnucust.cpp

@@ -293,8 +293,14 @@ HRESULT STDMETHODCALLTYPE Volume_Message(_In_ CSysTray * pSysTray, UINT uMsg, WP
         case WM_TIMER:
             if (wParam == VOLUME_TIMER_ID)
             {
+                HWND hwndTaskbar;
                 KillTimer(pSysTray->GetHWnd(), VOLUME_TIMER_ID);
-                _RunVolume(TRUE);
+                hwndTaskbar = FindWindowW(L"Shell_TrayWnd", NULL);
+                if (!hwndTaskbar ||
+                    !SendMessageW(hwndTaskbar, WM_USER + 270, 0, 0))
+                {
+                    _RunVolume(TRUE);
+                }
             }
             break;
 

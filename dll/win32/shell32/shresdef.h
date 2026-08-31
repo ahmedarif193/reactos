@@ -384,6 +384,12 @@
 #define IDS_SYSTEMFOLDER                            30540 // FIXME: "Show translucent selection rectangle"
 #define IDS_FOLDERTYPEBACKGROUNDIMAGE               30543
 
+/* Modern Computer folder view */
+#define IDS_COMPUTER_DEVICES_AND_DRIVES             60020
+#define IDS_COMPUTER_SYSTEM_LOCATIONS               60021
+#define IDS_COMPUTER_FREE_SPACE                     60022
+#define IDS_COMPUTER_FOLDERS                        60023
+
 #define IDS_LOG_OFF_DESC                            35000
 #define IDS_SWITCH_USER_DESC                        35001
 #define IDS_LOG_OFF_TITLE                           35010

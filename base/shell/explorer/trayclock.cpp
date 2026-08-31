@@ -51,6 +51,7 @@ class CTrayClockWnd :
     public IOleWindow
 {
     HFONT hFont;
+    HFONT hThemedFont;
     COLORREF textColor;
     RECT rcText;
     SYSTEMTIME LocalTime;
@@ -91,6 +92,7 @@ private:
     LRESULT OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnPaint(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     VOID SetFont(IN HFONT hNewFont, IN BOOL bRedraw);
+    HFONT GetClockFont();
     LRESULT DrawBackground(HDC hdc);
     LRESULT OnEraseBackground(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
@@ -101,6 +103,7 @@ private:
     LRESULT OnSize(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnTaskbarSettingsChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnLButtonDblClick(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+    LRESULT OnLButtonUp(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     VOID PaintLine(IN HDC hDC, IN OUT RECT *rcClient, IN UINT LineNumber, IN UINT szLinesIndex);
 
 public:
@@ -144,6 +147,7 @@ public:
         MESSAGE_HANDLER(TNWM_GETMINIMUMSIZE, OnGetMinimumSize)
         MESSAGE_HANDLER(TWM_SETTINGSCHANGED, OnTaskbarSettingsChanged)
         MESSAGE_HANDLER(WM_LBUTTONDBLCLK, OnLButtonDblClick)
+        MESSAGE_HANDLER(WM_LBUTTONUP, OnLButtonUp)
     END_MSG_MAP()
 
     HRESULT Initialize(IN HWND hWndParent);
@@ -157,6 +161,7 @@ public:
 
 CTrayClockWnd::CTrayClockWnd() :
         hFont(NULL),
+        hThemedFont(NULL),
         textColor(0),
         dwFlags(0),
         LineSpacing(0),
@@ -168,7 +173,12 @@ CTrayClockWnd::CTrayClockWnd() :
     ZeroMemory(LineSizes, sizeof(LineSizes));
     ZeroMemory(szLines, sizeof(szLines));
 }
-CTrayClockWnd::~CTrayClockWnd() { }
+
+CTrayClockWnd::~CTrayClockWnd()
+{
+    if (hThemedFont)
+        DeleteObject(hThemedFont);
+}
 
 LRESULT CTrayClockWnd::OnThemeChanged()
 {
@@ -209,11 +219,14 @@ BOOL CTrayClockWnd::MeasureLines()
     UINT c, i;
     BOOL bRet = TRUE;
 
+    if (IsThemeActive())
+        szLines[CLOCKWND_FORMAT_DAY][0] = L'\0';
+
     hDC = GetDC();
     if (hDC != NULL)
     {
         if (hFont)
-            hPrevFont = (HFONT) SelectObject(hDC, hFont);
+            hPrevFont = (HFONT) SelectObject(hDC, GetClockFont());
 
         for (i = 0; i < CLOCKWND_FORMAT_COUNT && bRet; i++)
         {
@@ -250,6 +263,9 @@ BOOL CTrayClockWnd::MeasureLines()
                 /* We want a spacing of 1/2 line */
                 LineSpacing = (LineSpacing / c) / 2;
             }
+
+            if (IsThemeActive() && LineSpacing > (DWORD)ShellScaleForDpi(2))
+                LineSpacing = ShellScaleForDpi(2);
 
             return TRUE;
         }
@@ -535,7 +551,7 @@ LRESULT CTrayClockWnd::OnPaint(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bH
 
         ::SetTextColor(hDC, textColor);
 
-        hPrevFont = (HFONT) SelectObject(hDC, hFont);
+        hPrevFont = (HFONT) SelectObject(hDC, GetClockFont());
 
         rcClient.top = (rcClient.bottom - CurrentSize.cy) / 2;
         rcClient.bottom = rcClient.top + CurrentSize.cy;
@@ -543,9 +559,10 @@ LRESULT CTrayClockWnd::OnPaint(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bH
         if (VisibleLines == 2)
         {
             /* Display either time and weekday (by default), or time and date (opt-in) */
+            UINT SecondLine = (g_TaskbarSettings.bPreferDate || IsThemeActive())
+                              ? CLOCKWND_FORMAT_DATE : CLOCKWND_FORMAT_DAY;
             PaintLine(hDC, &rcClient, 0, CLOCKWND_FORMAT_TIME);
-            PaintLine(hDC, &rcClient, 1,
-                      g_TaskbarSettings.bPreferDate ? CLOCKWND_FORMAT_DATE : CLOCKWND_FORMAT_DAY);
+            PaintLine(hDC, &rcClient, SecondLine, SecondLine);
         }
         else
         {
@@ -594,6 +611,23 @@ VOID CTrayClockWnd::SetFont(IN HFONT hNewFont, IN BOOL bRedraw)
     {
         InvalidateRect(NULL, TRUE);
     }
+}
+
+HFONT CTrayClockWnd::GetClockFont()
+{
+    if (IsThemeActive())
+    {
+        if (!hThemedFont)
+        {
+            hThemedFont = CreateFontW(-ShellScaleForDpi(12), 0, 0, 0, FW_NORMAL,
+                                      FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                      OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                      CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+        }
+        if (hThemedFont)
+            return hThemedFont;
+    }
+    return hFont;
 }
 
 LRESULT CTrayClockWnd::DrawBackground(HDC hdc)
@@ -758,6 +792,20 @@ LRESULT CTrayClockWnd::OnLButtonDblClick(UINT uMsg, WPARAM wParam, LPARAM lParam
     }
     return TRUE;
 }
+
+LRESULT CTrayClockWnd::OnLButtonUp(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+    if (IsWindowVisible() && IsThemeActive())
+    {
+        RECT rc;
+        GetWindowRect(&rc);
+        TrayCalendar_Toggle(m_hWnd, &rc);
+        return TRUE;
+    }
+    bHandled = FALSE;
+    return 0;
+}
+
 
 HRESULT CTrayClockWnd::Initialize(IN HWND hWndParent)
 {
