@@ -1677,12 +1677,6 @@ DxgkpExecuteCpuPresent(
     if (SourceAllocation == NULL || SourceAllocation->Adapter != Adapter)
         return STATUS_INVALID_HANDLE;
 
-    SourceAddress = DxgkpGetCpuAllocationAddress(SourceAllocation);
-    if (SourceAddress == NULL)
-        return STATUS_NOT_SUPPORTED;
-
-    *Handled = TRUE;
-
     if (!DxgkPresentCoreIsFullDestinationRegion(
              &Entry->DstRect,
              Entry->DstSubRects,
@@ -1691,24 +1685,32 @@ DxgkpExecuteCpuPresent(
         return STATUS_NOT_SUPPORTED;
     }
 
+    SourceAddress = DxgkpGetCpuAllocationAddress(SourceAllocation);
+    if (SourceAddress == NULL)
+    {
+        Status = DxgkVidMmMapAllocationCpu(SourceAllocation,
+                                           &SourceAddress);
+        if (!NT_SUCCESS(Status))
+            return STATUS_NOT_SUPPORTED;
+    }
+
+    *Handled = TRUE;
+
     if (Entry->hDestination != 0)
     {
         DestinationAllocation = Entry->DestinationAllocation;
         if (DestinationAllocation == NULL || DestinationAllocation->Adapter != Adapter)
             return STATUS_INVALID_HANDLE;
 
-        DestinationAddress = DxgkpGetCpuAllocationAddress(DestinationAllocation);
+        DestinationAddress =
+            DxgkpGetCpuAllocationAddress(DestinationAllocation);
         if (DestinationAddress == NULL)
         {
-            Status = DxgkVidMmEnsureAllocationApertureMapped(DestinationAllocation);
+            Status = DxgkVidMmMapAllocationCpu(DestinationAllocation,
+                                               &DestinationAddress);
             if (!NT_SUCCESS(Status))
                 return Status;
-
-            DestinationAddress = DxgkpGetCpuAllocationAddress(DestinationAllocation);
         }
-
-        if (DestinationAddress == NULL)
-            return STATUS_NOT_SUPPORTED;
 
         BytesToCopy = (SourceAllocation->Size < DestinationAllocation->Size) ?
                       SourceAllocation->Size : DestinationAllocation->Size;
