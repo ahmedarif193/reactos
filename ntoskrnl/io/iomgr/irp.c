@@ -487,7 +487,26 @@ IopCompleteRequest(IN PKAPC Apc,
          * Either we didn't return from the request, or we did return but this
          * request was synchronous.
          */
-        if ((Irp->PendingReturned) && (FileObject))
+        if (FileObject == NULL && Irp->UserEvent != NULL)
+        {
+            /* IoBuildDeviceIoControlRequest and IoBuildSynchronousFsdRequest
+             * use a caller-supplied event and status block without a file
+             * object. Complete that synchronous contract on errors too. */
+            if (Irp->UserIosb != NULL)
+            {
+                _SEH2_TRY
+                {
+                    *Irp->UserIosb = Irp->IoStatus;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    /* Ignore an invalid caller status block. */
+                }
+                _SEH2_END;
+            }
+            KeSetEvent(Irp->UserEvent, 0, FALSE);
+        }
+        else if ((Irp->PendingReturned) && (FileObject))
         {
             /* So we did return with a synch operation, was it the IRP? */
             if (Irp->Flags & IRP_SYNCHRONOUS_API)

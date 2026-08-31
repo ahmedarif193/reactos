@@ -1023,6 +1023,7 @@ EngDeviceIoControl(
     }
 
     KeInitializeEvent(&Event, SynchronizationEvent, FALSE);
+    RtlZeroMemory(&Iosb, sizeof(Iosb));
 
     DeviceObject = (PDEVICE_OBJECT) hDevice;
 
@@ -1039,11 +1040,11 @@ EngDeviceIoControl(
 
     Status = IoCallDriver(DeviceObject, Irp);
 
-    if (Status == STATUS_PENDING)
-    {
-        (VOID)KeWaitForSingleObject(&Event, Executive, KernelMode, TRUE, 0);
-        Status = Iosb.Status;
-    }
+    /* IoBuildDeviceIoControlRequest completes through a kernel APC even when
+     * the dispatch routine returns immediately. Wait for that completion
+     * before reading the caller's status block or buffered output. */
+    (VOID)KeWaitForSingleObject(&Event, Executive, KernelMode, TRUE, 0);
+    Status = Iosb.Status;
 
     TRACE("EngDeviceIoControl(): Returning %X/%X\n", Iosb.Status,
            Iosb.Information);
