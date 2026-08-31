@@ -212,11 +212,12 @@ SampleMenuItem(
     *Stable = FALSE;
 
     /* The CDD screen DC reads the GDI shadow primary, not necessarily the
-     * physical scanout. Inspect it only between completed paint transactions;
-     * otherwise this diagnostic observes an intermediate state that dxgkrnl
-     * is deliberately withholding from the display. */
+     * physical scanout. Inspect it only while no completed frame is pending;
+     * otherwise this diagnostic observes an intermediate state that CDD is
+     * deliberately withholding from the display. */
     HaveBefore = QueryPresentStats(&Before);
-    if (!HaveBefore || Before.PresentBatchDepth != 0)
+    if (!HaveBefore || Before.PendingDirtyRect != 0 ||
+        Before.PresentQueueDepth != 0)
         return TRUE;
 
     if (!GetMenuItemRect(NULL, Menu, Item, &Rect))
@@ -297,9 +298,9 @@ Cleanup:
 
     HaveAfter = QueryPresentStats(&After);
     if (Result && HaveAfter &&
-        After.PresentBatchDepth == 0 &&
-        After.PresentBatchBegins == Before.PresentBatchBegins &&
-        After.PresentBatchEnds == Before.PresentBatchEnds)
+        After.PendingDirtyRect == 0 &&
+        After.PresentQueueDepth == 0 &&
+        After.PresentCalls == Before.PresentCalls)
     {
         *Stable = TRUE;
     }
@@ -755,9 +756,10 @@ RunMenuHoverTest(
               "submenu_unstable_samples=%ld submenu_settle_fail=%ld "
               "submenu_selection_miss=%ld max_presents_per_submenu=%lu "
               "cursor_position_fail=%ld cursor_p95_us=%llu "
-              "dirty_delta=%lu scanout_delta=%lu pending=%lu "
-              "batch_begin_delta=%lu batch_end_delta=%lu "
-              "batch_defer_delta=%lu batch_max_depth=%lu batch_depth=%lu\n",
+              "dirty_delta=%lu scanout_delta=%lu present_delta=%lu "
+              "pending=%lu queue_depth=%lu queue_high=%lu "
+              "queued_delta=%lu completed_delta=%lu failed_delta=%lu "
+              "rejected_delta=%lu synchronous_delta=%lu\n",
               Context.CursorSampleCount,
               Context.BlankTextSamples,
               Context.UnstableSamples,
@@ -777,15 +779,21 @@ RunMenuHoverTest(
                   ? After.DirtyRectRequests - Before.DirtyRectRequests : 0,
               HaveBefore && HaveAfter
                   ? After.ScanoutCopies - Before.ScanoutCopies : 0,
+              HaveBefore && HaveAfter
+                  ? After.PresentCalls - Before.PresentCalls : 0,
               HaveAfter ? After.PendingDirtyRect : ~0UL,
+              HaveAfter ? After.PresentQueueDepth : ~0UL,
+              HaveAfter ? After.PresentQueueHighWatermark : 0,
               HaveBefore && HaveAfter
-                  ? After.PresentBatchBegins - Before.PresentBatchBegins : 0,
+                  ? After.PresentQueued - Before.PresentQueued : 0,
               HaveBefore && HaveAfter
-                  ? After.PresentBatchEnds - Before.PresentBatchEnds : 0,
+                  ? After.PresentCompleted - Before.PresentCompleted : 0,
               HaveBefore && HaveAfter
-                  ? After.PresentBatchFlushDeferrals - Before.PresentBatchFlushDeferrals : 0,
-              HaveAfter ? After.PresentBatchMaxDepth : 0,
-              HaveAfter ? After.PresentBatchDepth : ~0UL);
+                  ? After.PresentFailed - Before.PresentFailed : 0,
+              HaveBefore && HaveAfter
+                  ? After.PresentRejected - Before.PresentRejected : 0,
+              HaveBefore && HaveAfter
+                  ? After.PresentSynchronous - Before.PresentSynchronous : 0);
 
     /* ScanoutCopies is adapter-global and each 40 ms observation spans more
      * than two 60 Hz refreshes, so per-move counts are diagnostic rather than
@@ -1255,12 +1263,20 @@ main(VOID)
         return 1;
     }
 
-    TestPrint("WDDM_UI_TEST_BEGIN stats_dirty=%lu stats_scanout=%lu pending=%lu composition=%lu batch=%lu\n",
+    TestPrint("WDDM_UI_TEST_BEGIN stats_dirty=%lu stats_scanout=%lu "
+              "present_calls=%lu pending=%lu queue_depth=%lu queue_high=%lu "
+              "queued=%lu completed=%lu failed=%lu rejected=%lu synchronous=%lu\n",
               Stats.DirtyRectRequests,
               Stats.ScanoutCopies,
+              Stats.PresentCalls,
               Stats.PendingDirtyRect,
-              Stats.CompositionActive,
-              Stats.PresentBatchDepth);
+              Stats.PresentQueueDepth,
+              Stats.PresentQueueHighWatermark,
+              Stats.PresentQueued,
+              Stats.PresentCompleted,
+              Stats.PresentFailed,
+              Stats.PresentRejected,
+              Stats.PresentSynchronous);
     PrintGuiResources("owner_ready");
 
     MenuPassed = RunMenuHoverTest(Owner);
