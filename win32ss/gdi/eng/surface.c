@@ -67,7 +67,26 @@ NTAPI
 SURFACE_vCleanup(PVOID ObjectBody)
 {
     PSURFACE psurf = (PSURFACE)ObjectBody;
+    SURFOBJ *pso = &psurf->SurfObj;
     PVOID pvBits = psurf->SurfObj.pvBits;
+
+    if ((psurf->flags & DRIVER_CREATED_SURFACE) &&
+        (pso->dhsurf != NULL) && (pso->hdev != NULL))
+    {
+        PPDEVOBJ ppdev = (PPDEVOBJ)pso->hdev;
+
+        if ((psurf->flags & REDIRECTION_SURFACE) &&
+            (ppdev->DriverFunctions.DeleteDeviceBitmapEx != NULL))
+        {
+            ppdev->DriverFunctions.DeleteDeviceBitmapEx(pso->dhsurf);
+        }
+        else if (ppdev->DriverFunctions.DeleteDeviceBitmap != NULL)
+        {
+            ppdev->DriverFunctions.DeleteDeviceBitmap(pso->dhsurf);
+        }
+
+        pso->dhsurf = NULL;
+    }
 
     /* Check if the surface has bits */
     if (pvBits)
@@ -358,15 +377,13 @@ EngCreateBitmap(
     return hbmp;
 }
 
-/*
- * @implemented
- */
-HBITMAP
-APIENTRY
-EngCreateDeviceBitmap(
+static HBITMAP
+FASTCALL
+EngpCreateDeviceBitmap(
     _In_ DHSURF dhsurf,
     _In_ SIZEL sizl,
-    _In_ ULONG iFormat)
+    _In_ ULONG iFormat,
+    _In_ FLONG flSurface)
 {
     PSURFACE psurf;
     HBITMAP hbmp;
@@ -389,6 +406,7 @@ EngCreateDeviceBitmap(
 
     /* Set the device handle */
     psurf->SurfObj.dhsurf = dhsurf;
+    psurf->flags = DRIVER_CREATED_SURFACE | flSurface;
 
     /* Set public ownership */
     GDIOBJ_vSetObjectOwner(&psurf->BaseObject, GDI_OBJ_HMGR_PUBLIC);
@@ -399,6 +417,32 @@ EngCreateDeviceBitmap(
     /* Unlock the surface and return */
     SURFACE_UnlockSurface(psurf);
     return hbmp;
+}
+
+/*
+ * @implemented
+ */
+HBITMAP
+APIENTRY
+EngCreateDeviceBitmap(
+    _In_ DHSURF dhsurf,
+    _In_ SIZEL sizl,
+    _In_ ULONG iFormat)
+{
+    return EngpCreateDeviceBitmap(dhsurf, sizl, iFormat, 0);
+}
+
+/*
+ * @implemented
+ */
+HBITMAP
+APIENTRY
+EngCreateRedirectionDeviceBitmap(
+    _In_ DHSURF dhsurf,
+    _In_ SIZEL sizl,
+    _In_ ULONG iFormat)
+{
+    return EngpCreateDeviceBitmap(dhsurf, sizl, iFormat, REDIRECTION_SURFACE);
 }
 
 HSURF
