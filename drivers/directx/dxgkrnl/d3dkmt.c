@@ -8634,7 +8634,8 @@ DxgkpDispatchBufferedIoctl(
                 SystemBuffer == NULL)
                 return STATUS_BUFFER_TOO_SMALL;
 
-            Status = DxgkPresent((D3DKMT_PRESENT *)SystemBuffer);
+            Status = DxgkPresent((D3DKMT_PRESENT *)SystemBuffer,
+                                 InputLength);
             if (NT_SUCCESS(Status))
                 Irp->IoStatus.Information = min(InputLength, OutputLength);
             return Status;
@@ -10208,7 +10209,7 @@ DxgkpDispatchBufferedIoctl(
             RtlZeroMemory(pInterface, InterfaceSize);
 
             /* Populate the interface with dxgkrnl's D3DKMT handlers */
-            pInterface->RxgkIntPfnPresent            = (PDXGADAPTER_PRESENT)DxgkPresent;
+            pInterface->RxgkIntPfnPresent            = DxgkPresentCallback;
             pInterface->RxgkIntPfnQueryAdapterInfo    = (PDXGADAPTER_QUERYADAPTERINFO)DxgkQueryAdapterInfo;
             pInterface->RxgkIntPfnRender              = (PDXGADAPTER_RENDER)DxgkRender;
             pInterface->RxgkIntPfnCreateAllocation    = (PDXGADAPTER_CREATEALLOCATION)DxgkCreateAllocation;

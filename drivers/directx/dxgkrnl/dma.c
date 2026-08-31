@@ -570,7 +570,8 @@ Cleanup:
 NTSTATUS
 NTAPI
 DxgkPresent(
-    _Inout_ D3DKMT_PRESENT *pPresent)
+    _Inout_ D3DKMT_PRESENT *pPresent,
+    _In_ ULONG InputLength)
 {
     PDXGKRNL_ADAPTER         Adapter = NULL;
     PDXGKRNL_DEVICE          Device = NULL;
@@ -901,4 +902,12 @@ DxgkPresent(
     }
 
     return Status;
+}
+
+NTSTATUS
+NTAPI
+DxgkPresentCallback(
+    _Inout_ D3DKMT_PRESENT *pPresent)
+{
+    return DxgkPresent(pPresent, RXGK_D3DKMT_PRESENT_WIRE_SIZE);
 }
