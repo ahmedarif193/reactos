@@ -1583,6 +1583,7 @@ IopTranslateDeviceResources(
             case CmResourceTypeBusNumber:
             case CmResourceTypeDevicePrivate:
             case CmResourceTypeDeviceSpecific:
+            case CmResourceTypeConnection:
                /* Nothing to do */
                break;
             default:
