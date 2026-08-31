@@ -51,7 +51,7 @@ enum _SURFACEFLAGS
 //#define HOOK_LINETO               0x00000100
     SHAREACCESS_SURFACE       = 0x00000200,
 //#define HOOK_COPYBITS             0x00000400
-//#define REDIRECTION_SURFACE       0x00000800 // ?
+    REDIRECTION_SURFACE       = 0x00000800,
 //#define HOOK_MOVEPANNING          0x00000800
 //#define HOOK_SYNCHRONIZE          0x00001000
 //#define HOOK_STRETCHBLTROP        0x00002000
@@ -143,4 +143,3 @@ SURFACE_vSetPalette(
         GDIOBJ_vReferenceObjectByPointer((POBJ)ppal);
     *(PVOID*)&psurf->ppal = ppal;
 }
-

@@ -23,6 +23,7 @@
 @ stdcall EngCreateClip()
 @ stdcall EngCreateDeviceBitmap(ptr long long long)
 @ stdcall EngCreateDeviceSurface(ptr long long long)
+@ stdcall EngCreateRedirectionDeviceBitmap(ptr long long long)
 @ stdcall EngCreateDriverObj(ptr ptr ptr)
 @ stdcall EngCreateEvent(ptr)
 @ stdcall EngCreatePalette(long long long long long long)
