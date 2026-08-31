@@ -32,6 +32,14 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(theme_scroll);
 
+static BOOL scrollbar_has_state(HTHEME theme, int part, int state)
+{
+    int imagecount = 0;
+
+    return SUCCEEDED(GetThemeInt(theme, part, 0, TMT_IMAGECOUNT, &imagecount)) &&
+           imagecount >= state;
+}
+
 void WINAPI UXTHEME_ScrollBarDraw(HWND hwnd, HDC dc, INT bar, enum SCROLL_HITTEST hit_test,
                                   const struct SCROLL_TRACKING_INFO *tracking_info,
                                   BOOL draw_arrows, BOOL draw_interior, RECT *rect, UINT enable_flags,
@@ -107,6 +115,19 @@ void WINAPI UXTHEME_ScrollBarDraw(HWND hwnd, HDC dc, INT bar, enum SCROLL_HITTES
             /* Thumb is also shown as pressed when tracking */
             if (tracking_info->win == hwnd && tracking_info->bar == bar)
                 thumbstate = SCRBS_PRESSED;
+
+            if (hit_test != SCROLL_NOWHERE)
+            {
+                if (uppertrackstate == SCRBS_NORMAL &&
+                    scrollbar_has_state(theme, vertical ? SBP_UPPERTRACKVERT : SBP_UPPERTRACKHORZ, SCRBS_HOVER))
+                    uppertrackstate = SCRBS_HOVER;
+                if (lowertrackstate == SCRBS_NORMAL &&
+                    scrollbar_has_state(theme, vertical ? SBP_LOWERTRACKVERT : SBP_LOWERTRACKHORZ, SCRBS_HOVER))
+                    lowertrackstate = SCRBS_HOVER;
+                if (thumbstate == SCRBS_NORMAL &&
+                    scrollbar_has_state(theme, vertical ? SBP_THUMBBTNVERT : SBP_THUMBBTNHORZ, SCRBS_HOVER))
+                    thumbstate = SCRBS_HOVER;
+            }
         }
 
         if (vertical) {
@@ -133,6 +154,16 @@ void WINAPI UXTHEME_ScrollBarDraw(HWND hwnd, HDC dc, INT bar, enum SCROLL_HITTES
                         uparrowstate = ABS_UPHOT;
                     else if (hit_test == SCROLL_BOTTOM_ARROW)
                         downarrowstate = ABS_DOWNHOT;
+                }
+
+                if (hit_test != SCROLL_NOWHERE)
+                {
+                    if (uparrowstate == ABS_UPNORMAL &&
+                        scrollbar_has_state(theme, SBP_ARROWBTN, ABS_UPHOVER))
+                        uparrowstate = ABS_UPHOVER;
+                    if (downarrowstate == ABS_DOWNNORMAL &&
+                        scrollbar_has_state(theme, SBP_ARROWBTN, ABS_DOWNHOVER))
+                        downarrowstate = ABS_DOWNHOVER;
                 }
             }
 
@@ -205,6 +236,16 @@ void WINAPI UXTHEME_ScrollBarDraw(HWND hwnd, HDC dc, INT bar, enum SCROLL_HITTES
                         leftarrowstate = ABS_LEFTHOT;
                     else if (hit_test == SCROLL_BOTTOM_ARROW)
                         rightarrowstate = ABS_RIGHTHOT;
+                }
+
+                if (hit_test != SCROLL_NOWHERE)
+                {
+                    if (leftarrowstate == ABS_LEFTNORMAL &&
+                        scrollbar_has_state(theme, SBP_ARROWBTN, ABS_LEFTHOVER))
+                        leftarrowstate = ABS_LEFTHOVER;
+                    if (rightarrowstate == ABS_RIGHTNORMAL &&
+                        scrollbar_has_state(theme, SBP_ARROWBTN, ABS_RIGHTHOVER))
+                        rightarrowstate = ABS_RIGHTHOVER;
                 }
             }
 
