@@ -8456,6 +8456,10 @@ static BOOL LISTVIEW_SetColumnWidth(LISTVIEW_INFO *infoPtr, INT nColumn, INT cx)
     if(infoPtr->uView == LV_VIEW_LIST)
     {
 	infoPtr->nItemWidth = cx;
+#ifdef __REACTOS__
+        /* Windows preserves an explicit list width across the first paint. */
+        infoPtr->bNoItemMetrics = FALSE;
+#endif
 	LISTVIEW_InvalidateList(infoPtr);
 	return TRUE;
     }
