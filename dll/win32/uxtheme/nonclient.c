@@ -253,32 +253,34 @@ static void ThemeCalculateCaptionButtonsPosEx(WINDOWINFO* wi, HWND hWnd, HTHEME 
     }
 
     /* Calculate the area of the caption */
-    rcCurrent.top = rcCurrent.left = 0;
-    rcCurrent.right = wi->rcWindow.right - wi->rcWindow.left;
+    rcCurrent.top = wi->cyWindowBorders;
+    rcCurrent.right = wi->rcWindow.right - wi->rcWindow.left - wi->cxWindowBorders - 1;
     rcCurrent.bottom = wi->rcWindow.bottom - wi->rcWindow.top;
-
-    /* Add a padding around the objects of the caption */
-    InflateRect(&rcCurrent, -(int)wi->cyWindowBorders-BUTTON_GAP_SIZE,
-                            -(int)wi->cyWindowBorders-BUTTON_GAP_SIZE);
-
-    iPartId = wi->dwExStyle & WS_EX_TOOLWINDOW ? WP_SMALLCLOSEBUTTON : WP_CLOSEBUTTON;
-
-    GetThemePartSize(htheme, NULL, iPartId, 0, NULL, TS_MIN, &ButtonSize);
-
-    captionBtnWidth = MulDiv(ButtonSize.cx, buttonHeight, ButtonSize.cy);
+    rcCurrent.left = wi->cxWindowBorders;
 
     captionBtnHeight = buttonHeight - 4;
-    captionBtnWidth -= 4;
 
     for (i = CLOSEBUTTON; i <= HELPBUTTON; i++)
     {
+        static const int rgPart[] = { WP_CLOSEBUTTON, WP_MAXBUTTON, WP_MINBUTTON, WP_HELPBUTTON };
+
+        iPartId = rgPart[i - CLOSEBUTTON];
+        if (i == CLOSEBUTTON && (wi->dwExStyle & WS_EX_TOOLWINDOW))
+            iPartId = WP_SMALLCLOSEBUTTON;
+
+        if (FAILED(GetThemePartSize(htheme, NULL, iPartId, 0, NULL, TS_MIN, &ButtonSize)) ||
+            ButtonSize.cy <= 0)
+            ButtonSize.cx = ButtonSize.cy = captionBtnHeight;
+
+        captionBtnWidth = MulDiv(ButtonSize.cx, captionBtnHeight, ButtonSize.cy);
+
         SetRect(&pwndData->rcCaptionButtons[i],
                 rcCurrent.right - captionBtnWidth,
                 rcCurrent.top,
                 rcCurrent.right,
                 rcCurrent.top + captionBtnHeight);
 
-        rcCurrent.right -= captionBtnWidth + BUTTON_GAP_SIZE;
+        rcCurrent.right -= captionBtnWidth;
     }
 }
 
