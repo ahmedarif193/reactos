@@ -285,7 +285,8 @@ static void Test_ListView(void)
     SetWindowTheme(hLV, L"Explorer", NULL);
     PumpMessages();
 
-    theme = OpenThemeData(hLV, L"Explorer::ListView;ListView");
+    /* The subapp property set above resolves Explorer::ListView, like the control does */
+    theme = OpenThemeData(hLV, L"ListView");
     if (!theme || !IsThemePartDefined(theme, LVP_LISTITEM, 0))
     {
         skip("No themed LVP_LISTITEM (theme=%p)\n", theme);
@@ -309,6 +310,8 @@ static void Test_ListView(void)
     SendMessageW(hLV, LVM_GETITEMRECT, 0, (LPARAM)&rc);
 
     MouseOver(hLV, (rc.left + rc.right) / 2, (rc.top + rc.bottom) / 2);
+    /* Let a pending WM_MOUSELEAVE (real cursor elsewhere) clear hot BEFORE we set it */
+    PumpMessages();
     SendMessageW(hLV, LVM_SETHOTITEM, 0, 0);
     LogReset();
     FlushPaint(hLV);
@@ -335,6 +338,7 @@ static void Test_ListView(void)
 
     SetFocus(hLV);
     MouseOver(hLV, (rc.left + rc.right) / 2, (rc.top + rc.bottom) / 2);
+    PumpMessages();
     SendMessageW(hLV, LVM_SETHOTITEM, 0, 0);
     LogReset();
     FlushPaint(hLV);
@@ -364,7 +368,7 @@ static void Test_TreeView(void)
     SetWindowTheme(hTV, L"Explorer", NULL);
     PumpMessages();
 
-    theme = OpenThemeData(hTV, L"Explorer::TreeView;TreeView");
+    theme = OpenThemeData(hTV, L"TreeView");
     if (!theme || !IsThemePartDefined(theme, TVP_TREEITEM, 0))
     {
         skip("No themed TVP_TREEITEM (theme=%p)\n", theme);
@@ -521,7 +525,8 @@ static void Test_Combo(void)
 
     if (IsThemePartDefined(theme, CP_BORDER, 0))
     {
-        MouseOver(hCombo, 30, 10);
+        /* Hover the dropdown-button area: the child edit swallows moves over the text */
+        MouseOver(hCombo, 140, 10);
         LogReset();
         FlushPaint(hCombo);
         if (!LogHas(CP_BORDER, CBB_HOT)) DumpLog("combo border hot");
