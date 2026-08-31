@@ -544,11 +544,11 @@ MiPdeToPxe(PMMPDE PointerPde)
 }
 
 #define MiIsPteOnPdeBoundary(PointerPte) \
-    ((((ULONG_PTR)PointerPte) & (PAGE_SIZE - 1)) == 0)
+    ((((ULONG_PTR)(PointerPte)) & (PAGE_SIZE - 1)) == 0)
 #define MiIsPteOnPpeBoundary(PointerPte) \
-    ((((ULONG_PTR)PointerPte) & (PDE_PER_PAGE * PAGE_SIZE - 1)) == 0)
+    ((((ULONG_PTR)(PointerPte)) & (PDE_PER_PAGE * PAGE_SIZE - 1)) == 0)
 #define MiIsPteOnPxeBoundary(PointerPte) \
-    ((((ULONG_PTR)PointerPte) & (PPE_PER_PAGE * PDE_PER_PAGE * PAGE_SIZE - 1)) == 0)
+    ((((ULONG_PTR)(PointerPte)) & (PPE_PER_PAGE * PDE_PER_PAGE * PAGE_SIZE - 1)) == 0)
 
 FORCEINLINE
 BOOLEAN
