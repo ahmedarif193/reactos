@@ -78,6 +78,8 @@ struct LISTVIEW_SORT_INFO
 // For the context menu of the def view, the id of the items are based on 1 because we need
 // to call TrackPopupMenu and let it use the 0 value as an indication that the menu was canceled
 #define CONTEXT_MENU_BASE_ID 1
+#define DEFVIEW_ENUM_BATCH_ITEMS 16
+#define DEFVIEW_ENUM_BATCH_MS 4
 
 struct PERSISTCOLUMNS
 {
@@ -233,6 +235,7 @@ class CDefView :
 {
 private:
     CComPtr<IShellFolder>     m_pSFParent;
+    CComPtr<IEnumIDList>      m_pEnumIDList;
     CComPtr<IShellFolder2>    m_pSF2Parent;
     CComPtr<IShellDetails>    m_pSDParent;
     CComPtr<IShellFolderViewCB> m_pShellFolderViewCB;
@@ -282,6 +285,8 @@ private:
 
     CLSID m_Category;
     BOOL  m_Destroyed;
+    BOOL  m_FillListIsRefresh;
+    ULONG m_FillListGeneration;
     SFVM_CUSTOMVIEWINFO_DATA  m_viewinfo_data;
 
     HICON                     m_hMyComputerIcon;
@@ -295,6 +300,9 @@ private:
     void _HandleStatusBarResize(int width);
     void _ForceStatusBarResize();
     void _DoCopyToMoveToFolder(BOOL bCopy);
+    HRESULT ContinueFillList(ULONG Generation);
+    void FinishFillList();
+    void CancelFillList();
     BOOL IsDesktop() const { return m_FolderSettings.fFlags & FWF_DESKTOP; }
 
     inline BOOL IsSpecialFolder(int &csidl) const
@@ -623,7 +631,9 @@ CDefView::CDefView() :
     m_isFullStatusBar(true),
     m_ScheduledStatusbarUpdate(false),
     m_HasCutItems(false),
-    m_Destroyed(FALSE)
+    m_Destroyed(FALSE),
+    m_FillListIsRefresh(FALSE),
+    m_FillListGeneration(0)
 {
     ZeroMemory(&m_FolderSettings, sizeof(m_FolderSettings));
     ZeroMemory(&m_ptLastMousePos, sizeof(m_ptLastMousePos));
@@ -1524,17 +1534,127 @@ void CDefView::LV_RefreshItems()
 // - gets the objectlist from the shellfolder
 // - sorts the list
 // - fills the list into the view
+void CDefView::CancelFillList()
+{
+    if (++m_FillListGeneration == 0)
+        ++m_FillListGeneration;
+    m_pEnumIDList.Release();
+}
+
+void CDefView::FinishFillList()
+{
+    int sortCol = -1;
+
+    if (!m_FillListIsRefresh && !m_sortInfo.bLoadedFromViewState)
+    {
+        m_sortInfo.Direction = 0;
+        sortCol = 0;
+        if (m_pSF2Parent)
+        {
+            ULONG folderSortCol = sortCol, dummy;
+            HRESULT hr = m_pSF2Parent->GetDefaultColumn(NULL, &folderSortCol, &dummy);
+            if (SUCCEEDED(hr))
+                hr = MapFolderColumnToListColumn(folderSortCol);
+            if (SUCCEEDED(hr))
+                sortCol = (int)hr;
+        }
+    }
+    _Sort(sortCol);
+
+    if (m_viewinfo_data.hbmBack)
+    {
+        ::DeleteObject(m_viewinfo_data.hbmBack);
+        m_viewinfo_data.hbmBack = NULL;
+    }
+
+    m_viewinfo_data.cbSize = sizeof(m_viewinfo_data);
+    _DoFolderViewCB(SFVM_GET_CUSTOMVIEWINFO, 0, (LPARAM)&m_viewinfo_data);
+
+    UpdateListColors();
+    if (!(m_FolderSettings.fFlags & FWF_DESKTOP))
+        m_ListView.InvalidateRect(NULL, TRUE);
+
+    if (m_FillListIsRefresh)
+        UpdateStatusbarLocation();
+
+    _DoFolderViewCB(SFVM_LISTREFRESHED, 0, 0);
+}
+
+HRESULT CDefView::ContinueFillList(ULONG Generation)
+{
+    CComPtr<IEnumIDList> Enumerator;
+    PITEMID_CHILD pidl;
+    ULONG Fetched;
+    ULONG BatchCount = 0;
+    DWORD BatchStart;
+    HRESULT hr = S_OK;
+    BOOL Complete = FALSE;
+
+    if (Generation != m_FillListGeneration || !m_pEnumIDList ||
+        m_Destroyed || !m_ListView)
+    {
+        return E_ABORT;
+    }
+
+    Enumerator = m_pEnumIDList;
+    m_ListView.SetRedraw(FALSE);
+    BatchStart = GetTickCount();
+    do
+    {
+        pidl = NULL;
+        Fetched = 0;
+        hr = Enumerator->Next(1, &pidl, &Fetched);
+        if (hr != S_OK || Fetched == 0)
+        {
+            Complete = TRUE;
+            break;
+        }
+
+        if (IncludeObject(pidl) == S_OK && m_ListView)
+            LV_AddItem(pidl);
+        SHFree(pidl);
+        ++BatchCount;
+
+        if (Generation != m_FillListGeneration || m_Destroyed || !m_ListView)
+            break;
+    } while (BatchCount < DEFVIEW_ENUM_BATCH_ITEMS &&
+             GetTickCount() - BatchStart < DEFVIEW_ENUM_BATCH_MS);
+
+    if (m_ListView)
+    {
+        m_ListView.SetRedraw(TRUE);
+        m_ListView.InvalidateRect(NULL, FALSE);
+    }
+
+    if (Generation != m_FillListGeneration || m_Destroyed || !m_ListView)
+        return E_ABORT;
+
+    if (Complete)
+    {
+        m_pEnumIDList.Release();
+        FinishFillList();
+        return hr == S_FALSE ? S_OK : hr;
+    }
+
+    if (!PostMessage(SHV_FILL_LIST, 0, Generation))
+    {
+        m_pEnumIDList.Release();
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+    return S_OK;
+}
+
 HRESULT CDefView::FillList(BOOL IsRefreshCommand)
 {
-    CComPtr<IEnumIDList> pEnumIDList;
-    PITEMID_CHILD pidl;
-    DWORD         dwFetched;
-    HRESULT       hRes;
-    DWORD         dFlags = SHCONTF_NONFOLDERS | ((m_FolderSettings.fFlags & FWF_NOSUBFOLDERS) ? 0 : SHCONTF_FOLDERS);
-    DWORD         LastPaint;
-    UINT          BatchCount = 0;
+    CComPtr<IEnumIDList> Enumerator;
+    DWORD dFlags = SHCONTF_NONFOLDERS |
+        ((m_FolderSettings.fFlags & FWF_NOSUBFOLDERS) ? 0 : SHCONTF_FOLDERS);
+    HRESULT hr;
 
     TRACE("%p\n", this);
+
+    CancelFillList();
+    m_FillListIsRefresh = IsRefreshCommand;
 
     SHELLSTATE shellstate;
     SHGetSetSettings(&shellstate, SSF_SHOWALLOBJECTS | SSF_SHOWSUPERHIDDEN, FALSE);
@@ -1553,92 +1673,33 @@ HRESULT CDefView::FillList(BOOL IsRefreshCommand)
     }
 
     // get the itemlist from the shfolder
-    hRes = m_pSFParent->EnumObjects(m_hWnd, dFlags, &pEnumIDList);
-    if (hRes != S_OK)
+    hr = m_pSFParent->EnumObjects(m_hWnd, dFlags, &Enumerator);
+    if (hr != S_OK)
     {
-        if (hRes == S_FALSE)
-            return(NOERROR);
-        return(hRes);
-    }
-
-    m_ListView.SetRedraw(FALSE);
-    LastPaint = GetTickCount();
-    while((S_OK == pEnumIDList->Next(1, &pidl, &dwFetched)) && dwFetched)
-    {
-        if (IncludeObject(pidl) == S_OK && m_ListView)
+        if (hr == S_FALSE)
         {
-            LV_AddItem(pidl);
-            ++BatchCount;
+            FinishFillList();
+            return S_OK;
         }
-        SHFree(pidl);
-
-        if (BatchCount >= 64 || GetTickCount() - LastPaint >= 50)
-        {
-            m_ListView.SetRedraw(TRUE);
-            ::RedrawWindow(m_ListView,
-                           NULL,
-                           NULL,
-                           RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW |
-                               RDW_ALLCHILDREN);
-            m_ListView.SetRedraw(FALSE);
-            BatchCount = 0;
-            LastPaint = GetTickCount();
-        }
+        return hr;
     }
+    if (!Enumerator)
+        return E_UNEXPECTED;
 
-    /* sort the array */
-    int sortCol = -1;
-    if (!IsRefreshCommand && !m_sortInfo.bLoadedFromViewState) // Are we loading for the first time?
-    {
-        m_sortInfo.Direction = 0;
-        sortCol = 0; // In case the folder does not know/care
-        if (m_pSF2Parent)
-        {
-            ULONG folderSortCol = sortCol, dummy;
-            HRESULT hr = m_pSF2Parent->GetDefaultColumn(NULL, &folderSortCol, &dummy);
-            if (SUCCEEDED(hr))
-                hr = MapFolderColumnToListColumn(folderSortCol);
-            if (SUCCEEDED(hr))
-                sortCol = (int) hr;
-        }
-    }
-    _Sort(sortCol);
-
-    if (m_viewinfo_data.hbmBack)
-    {
-        ::DeleteObject(m_viewinfo_data.hbmBack);
-        m_viewinfo_data.hbmBack = NULL;
-    }
-
-    // load custom background image and custom text color
-    m_viewinfo_data.cbSize = sizeof(m_viewinfo_data);
-    _DoFolderViewCB(SFVM_GET_CUSTOMVIEWINFO, 0, (LPARAM)&m_viewinfo_data);
-
-    // turn listview's redrawing back on and force it to draw
-    m_ListView.SetRedraw(TRUE);
-
-    UpdateListColors();
-
-    if (!(m_FolderSettings.fFlags & FWF_DESKTOP))
-    {
-        // redraw now
-        m_ListView.InvalidateRect(NULL, TRUE);
-    }
-
-    if (IsRefreshCommand)
-        UpdateStatusbarLocation();
-
-    _DoFolderViewCB(SFVM_LISTREFRESHED, 0, 0);
-
+    m_pEnumIDList = Enumerator;
+    if (!PostMessage(SHV_FILL_LIST, 0, m_FillListGeneration))
+        return ContinueFillList(m_FillListGeneration);
     return S_OK;
 }
 
 LRESULT CDefView::OnFillList(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
 {
     UNREFERENCED_PARAMETER(uMsg);
-    UNREFERENCED_PARAMETER(lParam);
     bHandled = TRUE;
-    FillList((BOOL)wParam);
+    if (lParam != 0)
+        ContinueFillList((ULONG)lParam);
+    else
+        FillList((BOOL)wParam);
     return 0;
 }
 
@@ -1660,6 +1721,7 @@ LRESULT CDefView::OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHand
     if (!m_Destroyed)
     {
         m_Destroyed = TRUE;
+        CancelFillList();
         RevokeDragDrop(m_hWnd);
         SHChangeNotifyDeregister(m_hNotify);
         m_hNotify = NULL;
