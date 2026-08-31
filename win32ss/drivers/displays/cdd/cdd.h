@@ -90,7 +90,8 @@ typedef struct _RCDD_PDEV
    ULONG PendingRectCount;
    RECTL PendingRects[DXGK_PRESENT_DIRTY_MAX_RECTS];
    ULONG DrawSeq;              /* Bumped by every draw DDI entry              */
-   ULONG SentSeq;              /* DrawSeq of the last notification sent       */
+   ULONG PendingSeq;           /* DrawSeq current when a rect last accumulated */
+   ULONG SentSeq;              /* PendingSeq of the last notification sent    */
    RECTL SentRect;             /* Rect of the last notification sent          */
 
    /* PresentDisplayOnly is synchronous for the current display-only
