@@ -1276,6 +1276,7 @@ DxgkpPresentSourceRects(
     LONG ShadowPitch;
     LONG TraceSeq;
     BOOLEAN Handled;
+    PCSTR PresentPath;
     NTSTATUS Status;
 
     if (Adapter == NULL)
@@ -1354,9 +1355,28 @@ DxgkpPresentSourceRects(
     PresentArgs.pfnPresentDisplayOnlyProgress = NULL;
 
     Start100ns = DxgkpDisplayTraceNow100ns();
+    Handled = FALSE;
+    PresentPath = "none";
     Status = DxgkpCallMiniportShadowPresent(Adapter,
                                             &PresentArgs,
                                             &Handled);
+    if (Handled)
+    {
+        PresentPath = Adapter->MiniportContext->UseDodLayout
+                          ? "dod" : "full-query-interface";
+    }
+    else if (Status == STATUS_NOT_SUPPORTED)
+    {
+        Status = DxgkpPresentDisplayOnlyToSharedPrimary(
+                     Adapter,
+                     &SharedSurface,
+                     &PresentArgs);
+        if (Status != STATUS_NOT_SUPPORTED)
+        {
+            Handled = TRUE;
+            PresentPath = "full-shared-primary";
+        }
+    }
     ElapsedUs = DxgkpDisplayTraceElapsedUs(Start100ns);
     InterlockedIncrement(&g_PresentCallCount);
     InterlockedAdd64(&g_PresentCallTotalUs, (LONGLONG)ElapsedUs);
@@ -1388,8 +1408,7 @@ DxgkpPresentSourceRects(
                           "size=%ux%u pitch=%ld\n",
                           TraceReason,
                           TraceSeq,
-                          Adapter->MiniportContext->UseDodLayout
-                              ? "dod" : "full-query-interface",
+                          PresentPath,
                           Status,
                           ElapsedUs,
                           DirtyCount,
@@ -1989,6 +2008,16 @@ DxgkpDisplayDispatch(
                 {
                     Status = STATUS_DEVICE_NOT_READY;
                     break;
+                }
+
+                if (g_DisplayAdapter->MiniportContext != NULL &&
+                    !g_DisplayAdapter->MiniportContext->IsDisplayOnlyDriver)
+                {
+                    Status = DxgkpEnsureSharedDisplaySurfaces(
+                                 g_DisplayAdapter,
+                                 0);
+                    if (!NT_SUCCESS(Status))
+                        break;
                 }
 
                 Status = DxgkpAcquireSharedSurfaceSnapshot(g_DisplayAdapter, &SharedSurface);

@@ -2916,6 +2916,11 @@ NTSTATUS
 DxgkpDisplayCommitVidPnWhileSharedPrimaryLocked(
     _In_ PDXGKRNL_ADAPTER Adapter);
 
+NTSTATUS
+DxgkpEnsureSharedDisplaySurfaces(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId);
+
 VOID
 DxgkpStartPresentTimer(
     _In_ PDXGKRNL_ADAPTER Adapter);

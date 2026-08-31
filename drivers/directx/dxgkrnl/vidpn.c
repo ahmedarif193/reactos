@@ -4092,19 +4092,18 @@ DxgkpEnsureSharedShadowSurfaceLocked(
         goto Cleanup;
 
     /*
-     * ShadowFb remains a live CPU alias until the shared-surface generation is
-     * destroyed. Pin the placement before mapping it so VidMm cannot reuse the
-     * slab range behind that alias.
+     * A shadow surface is the CPU-rendered source, not a scan-out surface.
+     * Keep its authoritative storage in cached system memory so GDI and CDD
+     * never read back from a write-combined local segment. The shared primary
+     * remains resident in the miniport segment and receives the final dirty
+     * copy before scan-out is programmed.
      */
-    if (!Allocation->Resident)
+    if (Allocation->Resident)
     {
-        Status = DxgkVidMmMakeResident(Allocation, Adapter);
+        Status = DxgkVidMmEvict(Allocation);
         if (!NT_SUCCESS(Status))
             goto Cleanup;
     }
-    Status = DxgkVidMmAcquireDeviceResidencyReference(Allocation, NULL);
-    if (!NT_SUCCESS(Status))
-        goto Cleanup;
 
     Resource = DxgkVidMmCreateResourceWrapper(Adapter, NULL, MiniportResourceHandle, 0, TRUE, NULL, 0, ResourcePrivateData, ResourcePrivateDataSize);
     if (Resource == NULL)
@@ -4114,10 +4113,6 @@ DxgkpEnsureSharedShadowSurfaceLocked(
     }
 
     Status = DxgkVidMmAttachAllocationToResource(Resource, Allocation);
-    if (!NT_SUCCESS(Status))
-        goto Cleanup;
-
-    Status = DxgkVidMmEnsureAllocationApertureMapped(Allocation);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 
@@ -4466,6 +4461,36 @@ Cleanup:
     if (ResourcePrivateData != NULL)
         ExFreePoolWithTag(ResourcePrivateData, TAG_DXGK_DISPLAY);
 
+    return Status;
+}
+
+NTSTATUS
+DxgkpEnsureSharedDisplaySurfaces(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId)
+{
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (Adapter == NULL || Adapter->MiniportContext == NULL ||
+        Adapter->MiniportContext->IsDisplayOnlyDriver)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    (VOID)KeWaitForSingleObject(&Adapter->SharedPrimaryMutex,
+                                Executive,
+                                KernelMode,
+                                FALSE,
+                                NULL);
+    Status = DxgkpEnsureSharedPrimaryLocked(Adapter, VidPnSourceId);
+    if (NT_SUCCESS(Status))
+    {
+        Status = DxgkpEnsureSharedShadowSurfaceLocked(Adapter,
+                                                      VidPnSourceId);
+    }
+    KeReleaseMutex(&Adapter->SharedPrimaryMutex, FALSE);
     return Status;
 }
 
