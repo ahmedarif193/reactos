@@ -8695,6 +8695,11 @@ DxgkpVidMmMakeResidentOwned(
         Status = STATUS_INVALID_PARAMETER;
         goto Cleanup;
     }
+    if (InterlockedCompareExchange(&Allocation->UserModeMappingCount, 0, 0) != 0)
+    {
+        Status = STATUS_DEVICE_BUSY;
+        goto Cleanup;
+    }
     if (Adapter->Segments == NULL)
     {
         DPRINT1("DxgkVidMmMakeResident: adapter %p has no segment table\n", Adapter);
@@ -10735,7 +10740,6 @@ DxgkpVidMmBuildAllocationUserMdl(
     ULONG MappingSize;
     PMDL Mdl;
     ULONG i;
-    NTSTATUS Status;
 
     ASSERT(Allocation != NULL);
     ASSERT(OutMdl != NULL);
@@ -10752,24 +10756,9 @@ DxgkpVidMmBuildAllocationUserMdl(
     if (Allocation->Size == 0 || Allocation->Size > MAXULONG)
         return STATUS_INVALID_PARAMETER;
 
-    /*
-     * Pure system-memory allocations can be directly mapped into user mode
-     * via an MDL built over the nonpaged pool backing store.
-     *
-     * Resident aperture allocations also have SystemMemory backing, but they
-     * must establish MAP_APERTURE_SEGMENT first so the miniport can attach
-     * that backing to the GPU resource before user mode starts accessing it.
-     */
-    /* GPU-visible mappings must target the FINAL placement: a user map
-     * built over the pool backing goes permanently stale the moment the
-     * allocation is placed in a segment (the CPU then writes pages the
-     * GPU never reads).  Place first; pool mapping only if that fails. */
-    if (!Allocation->Resident && Allocation->Adapter != NULL &&
-        Allocation->Adapter->Segments != NULL)
-    {
-        (VOID)DxgkVidMmMakeResident(Allocation, Allocation->Adapter);
-    }
-
+    /* D3DKMTLock maps the current placement. UserModeMappingCount pins that
+     * placement until the matching unlock, so a system-memory mapping cannot
+     * become stale underneath the caller. */
     if (!Allocation->Resident)
     {
         if (Allocation->SystemMemory != NULL)
@@ -10810,12 +10799,6 @@ DxgkpVidMmBuildAllocationUserMdl(
         {
             if (Allocation->SystemMemory == NULL)
                 return STATUS_INVALID_PARAMETER;
-
-            Status = DxgkVidMmEnsureAllocationApertureMapped(Allocation);
-            if (!NT_SUCCESS(Status))
-                return Status;
-
-            ASSERT(Allocation->ApertureMapped);
 
             Mdl = IoAllocateMdl(Allocation->SystemMemory,
                                 (ULONG)Allocation->Size,
@@ -10895,6 +10878,7 @@ DxgkVidMmMapAllocationUser(
     PVOID UserVa;
     NTSTATUS Status;
     PEPROCESS Process;
+    BOOLEAN MappingPinHeld = FALSE;
 
     ASSERT(Allocation != NULL);
     ASSERT(OutVa != NULL);
@@ -10923,12 +10907,39 @@ DxgkVidMmMapAllocationUser(
     }
     RtlZeroMemory(Mapping, sizeof(*Mapping));
 
+    Status = DxgkpVidMmLockResidencyForExternalOperation(Allocation);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(Mapping, TAG_VIDMM_ALLOC);
+        KeReleaseMutex(&Allocation->UserModeLock, FALSE);
+        return Status;
+    }
+    if (InterlockedCompareExchange(&Allocation->UserModeMappingCount, 0, 0) == MAXLONG)
+    {
+        Status = STATUS_INTEGER_OVERFLOW;
+    }
+    else
+    {
+        InterlockedIncrement(&Allocation->UserModeMappingCount);
+        MappingPinHeld = TRUE;
+        Status = STATUS_SUCCESS;
+    }
+    KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(Mapping, TAG_VIDMM_ALLOC);
+        KeReleaseMutex(&Allocation->UserModeLock, FALSE);
+        return Status;
+    }
+
     Status = DxgkpVidMmBuildAllocationUserMdl(Allocation,
                                               &Mdl,
                                               &UserOffset,
                                               &CacheType);
     if (!NT_SUCCESS(Status))
     {
+        ASSERT(MappingPinHeld);
+        InterlockedDecrement(&Allocation->UserModeMappingCount);
         ExFreePoolWithTag(Mapping, TAG_VIDMM_ALLOC);
         KeReleaseMutex(&Allocation->UserModeLock, FALSE);
         return Status;
@@ -10955,6 +10966,8 @@ DxgkVidMmMapAllocationUser(
         if (NT_SUCCESS(Status))
             Status = STATUS_INSUFFICIENT_RESOURCES;
 
+        ASSERT(MappingPinHeld);
+        InterlockedDecrement(&Allocation->UserModeMappingCount);
         IoFreeMdl(Mdl);
         ExFreePoolWithTag(Mapping, TAG_VIDMM_ALLOC);
         KeReleaseMutex(&Allocation->UserModeLock, FALSE);
@@ -10971,7 +10984,7 @@ DxgkVidMmMapAllocationUser(
     Mapping->Process = Process;
     Mapping->LockCount = 1;
     InsertTailList(&Allocation->UserModeMappingList, &Mapping->Entry);
-    InterlockedIncrement(&Allocation->UserModeMappingCount);
+    ASSERT(MappingPinHeld);
 
     *OutVa = UserVa;
 
@@ -11187,8 +11200,6 @@ DxgkpVidMmUnmapAllocationUserProcess(
     }
 
     RemoveEntryList(&Mapping->Entry);
-    MappingCount = InterlockedDecrement(&Allocation->UserModeMappingCount);
-    ASSERT(MappingCount >= 0);
     UserMapBase = Mapping->MapBase;
     UserVa = Mapping->Address;
     Mdl = Mapping->Mdl;
@@ -11202,6 +11213,9 @@ DxgkpVidMmUnmapAllocationUserProcess(
     }
 
     MmUnmapLockedPages(UserMapBase, Mdl);
+
+    MappingCount = InterlockedDecrement(&Allocation->UserModeMappingCount);
+    ASSERT(MappingCount >= 0);
 
     if (Attached)
         KeUnstackDetachProcess(&ApcState);
