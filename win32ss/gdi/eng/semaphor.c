@@ -72,6 +72,32 @@ EngAcquireSemaphore(
 /*
  * @implemented
  */
+BOOL
+APIENTRY
+EngAcquireSemaphoreNoWait(
+    _In_ HSEMAPHORE hsem)
+{
+    PTHREADINFO W32Thread;
+
+    if (hsem == NULL)
+        return FALSE;
+
+    KeEnterCriticalRegion();
+    if (!ExAcquireResourceExclusiveLite((PERESOURCE)hsem, FALSE))
+    {
+        KeLeaveCriticalRegion();
+        return FALSE;
+    }
+
+    W32Thread = PsGetThreadWin32Thread(PsGetCurrentThread());
+    if (W32Thread) W32Thread->dwEngAcquireCount++;
+
+    return TRUE;
+}
+
+/*
+ * @implemented
+ */
 _Requires_lock_held_(*hsem)
 _Releases_lock_(*hsem)
 _Releases_lock_(_Global_critical_region_)

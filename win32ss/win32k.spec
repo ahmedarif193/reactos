@@ -6,6 +6,7 @@
 @ stdcall CLIPOBJ_cEnumStart(ptr long long long long)
 @ stdcall CLIPOBJ_ppoGetPath(ptr)
 @ stdcall EngAcquireSemaphore(ptr)
+@ stdcall EngAcquireSemaphoreNoWait(ptr)
 @ stdcall EngAllocMem(long long long)
 @ stdcall EngAllocPrivateUserMem(ptr ptr long)
 @ stdcall EngAllocSectionMem(ptr long ptr long)
