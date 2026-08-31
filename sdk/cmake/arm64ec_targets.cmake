@@ -84,6 +84,7 @@ set(ARM64EC_RUNTIME_MODULES
     samlib
     sechost
     secur32
+    sensapi
     shcore
     shell32
     shdocvw
