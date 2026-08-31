@@ -10,7 +10,7 @@ UnattendSetupEnabled = yes
 ; See hivesys.inf for available languages.
 LocaleID = 409
 
-; Enable this section to enable the default ReactOS theme.
+; Override the default Win8 visual style or select Classic with DefaultThemesOff = yes.
 ;[Shell]
 ;DefaultThemesOff = no
-;CustomDefaultThemeFile = "%WINDIR%\Resources\Themes\Lautus\lautus.msstyles"
+;CustomDefaultThemeFile = "%WINDIR%\Resources\Themes\Win8\win8.msstyles"
