@@ -1382,40 +1382,23 @@ SoftGpuScanoutStop(
         MmUnmapIoSpace(Mapping, MappingSize);
 }
 
-static VOID
-SoftGpuUnionPresentRect(
+static BOOLEAN
+SoftGpuClipPresentRect(
     _In_ PSOFTGPU_DEVICE Device,
     _In_ const RECT *Input,
-    _Inout_ RECT *Union)
+    _Out_ RECT *Output)
 {
-    RECT Clipped;
+    *Output = *Input;
+    if (Output->left < 0)
+        Output->left = 0;
+    if (Output->top < 0)
+        Output->top = 0;
+    if (Output->right > (LONG)Device->Width)
+        Output->right = (LONG)Device->Width;
+    if (Output->bottom > (LONG)Device->Height)
+        Output->bottom = (LONG)Device->Height;
 
-    Clipped = *Input;
-    if (Clipped.left < 0)
-        Clipped.left = 0;
-    if (Clipped.top < 0)
-        Clipped.top = 0;
-    if (Clipped.right > (LONG)Device->Width)
-        Clipped.right = (LONG)Device->Width;
-    if (Clipped.bottom > (LONG)Device->Height)
-        Clipped.bottom = (LONG)Device->Height;
-    if (Clipped.left >= Clipped.right || Clipped.top >= Clipped.bottom)
-        return;
-
-    if (Union->left >= Union->right || Union->top >= Union->bottom)
-    {
-        *Union = Clipped;
-        return;
-    }
-
-    if (Clipped.left < Union->left)
-        Union->left = Clipped.left;
-    if (Clipped.top < Union->top)
-        Union->top = Clipped.top;
-    if (Clipped.right > Union->right)
-        Union->right = Clipped.right;
-    if (Clipped.bottom > Union->bottom)
-        Union->bottom = Clipped.bottom;
+    return Output->left < Output->right && Output->top < Output->bottom;
 }
 
 NTSTATUS
@@ -1425,7 +1408,7 @@ SoftGpuDdiPresentDisplayOnly(
     _In_ const DXGKARG_PRESENT_DISPLAYONLY *PresentDisplayOnly)
 {
     PSOFTGPU_DEVICE Device = (PSOFTGPU_DEVICE)MiniportDeviceContext;
-    RECT Union = {0, 0, 0, 0};
+    RECT Rect;
     SIZE_T SourceSize;
     ULONG Index;
     NTSTATUS Status;
@@ -1457,23 +1440,11 @@ SoftGpuDdiPresentDisplayOnly(
     SourceSize =
         (SIZE_T)(ULONG)PresentDisplayOnly->Pitch * Device->Height;
 
-    for (Index = 0; Index < PresentDisplayOnly->NumMoves; ++Index)
+    if (PresentDisplayOnly->NumMoves == 0 &&
+        PresentDisplayOnly->NumDirtyRects == 0)
     {
-        SoftGpuUnionPresentRect(Device,
-                                &PresentDisplayOnly->pMoves[Index].DestRect,
-                                &Union);
-    }
-    for (Index = 0;
-         Index < PresentDisplayOnly->NumDirtyRects;
-         ++Index)
-    {
-        SoftGpuUnionPresentRect(Device,
-                                &PresentDisplayOnly->pDirtyRect[Index],
-                                &Union);
-    }
-
-    if (Union.left >= Union.right || Union.top >= Union.bottom)
         return STATUS_SUCCESS;
+    }
     if (!ExAcquireRundownProtection(&Device->ScanoutRundown))
         return STATUS_DELETE_PENDING;
 
@@ -1498,14 +1469,48 @@ SoftGpuDdiPresentDisplayOnly(
 
     (VOID)SoftGpuPlatformWaitForVerticalBlank(Device);
     SoftGpuPointerRestoreLocked(Device);
-    Status = SoftGpu2dCopyRect(PresentDisplayOnly->pSource,
-                               SourceSize,
-                               (ULONG)PresentDisplayOnly->Pitch,
-                               &Union,
-                               Device->Scanout,
-                               Device->ScanoutSize,
-                               Device->ScanoutPitch,
-                               &Union);
+    Status = STATUS_SUCCESS;
+    for (Index = 0; Index < PresentDisplayOnly->NumMoves; ++Index)
+    {
+        if (!SoftGpuClipPresentRect(
+                Device,
+                &PresentDisplayOnly->pMoves[Index].DestRect,
+                &Rect))
+        {
+            continue;
+        }
+
+        Status = SoftGpu2dCopyRect(PresentDisplayOnly->pSource,
+                                   SourceSize,
+                                   (ULONG)PresentDisplayOnly->Pitch,
+                                   &Rect,
+                                   Device->Scanout,
+                                   Device->ScanoutSize,
+                                   Device->ScanoutPitch,
+                                   &Rect);
+        if (!NT_SUCCESS(Status))
+            break;
+    }
+    for (Index = 0;
+         NT_SUCCESS(Status) && Index < PresentDisplayOnly->NumDirtyRects;
+         ++Index)
+    {
+        if (!SoftGpuClipPresentRect(Device,
+                                    &PresentDisplayOnly->pDirtyRect[Index],
+                                    &Rect))
+        {
+            continue;
+        }
+
+        Status = SoftGpu2dCopyRect(PresentDisplayOnly->pSource,
+                                   SourceSize,
+                                   (ULONG)PresentDisplayOnly->Pitch,
+                                   &Rect,
+                                   Device->Scanout,
+                                   Device->ScanoutSize,
+                                   Device->ScanoutPitch,
+                                   &Rect);
+    }
     SoftGpuPointerDrawLocked(Device);
     KeMemoryBarrier();
 
