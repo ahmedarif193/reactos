@@ -12,7 +12,13 @@
 
 typedef BOOLEAN (WINAPI *PRTL_IS_EC_CODE)(ULONG_PTR Address);
 typedef void *(__cdecl *PMEMCPY)(void *Destination, const void *Source, size_t Length);
+typedef char *(__cdecl *PSTRCHR)(const char *String, int Character);
+typedef char *(__cdecl *PSTRRCHR)(const char *String, int Character);
+typedef char *(__cdecl *PSTRSTR)(const char *String, const char *Substring);
 typedef size_t (__cdecl *PSTRLEN)(const char *String);
+typedef wchar_t *(__cdecl *PWCSSCHR)(const wchar_t *String, wchar_t Character);
+typedef wchar_t *(__cdecl *PWCSRCHR)(const wchar_t *String, wchar_t Character);
+typedef wchar_t *(__cdecl *PWCSSTR)(const wchar_t *String, const wchar_t *Substring);
 
 typedef struct _ARM64EC_METADATA
 {
@@ -171,9 +177,19 @@ main(void)
     PARM64EC_METADATA Metadata;
     PRTL_IS_EC_CODE RtlIsEcCode;
     PMEMCPY Memcpy;
+    PSTRCHR Strchr;
+    PSTRRCHR Strrchr;
+    PSTRSTR Strstr;
     PSTRLEN Strlen;
+    PWCSSCHR Wcschr;
+    PWCSRCHR Wcsrchr;
+    PWCSSTR Wcsstr;
     CHAR Source[32] = "arm64ec-ucrt-parity";
     CHAR Destination[32] = {0};
+    static const CHAR Loaded[] = "_LOADED";
+    static const CHAR SearchText[] = "arm64ec-ucrt-parity";
+    static const WCHAR WideLoaded[] = L"_LOADED";
+    static const WCHAR WideSearchText[] = L"arm64ec-ucrt-parity";
 
     setvbuf(stdout, NULL, _IONBF, 0);
     printf("CHPE_UCRT_THUNK_BEGIN\n");
@@ -193,13 +209,44 @@ main(void)
     report_export(UcrtBase, Metadata, NtHeader, RtlIsEcCode, "memcpy");
     report_export(UcrtBase, Metadata, NtHeader, RtlIsEcCode, "memmove");
     report_export(UcrtBase, Metadata, NtHeader, RtlIsEcCode, "memset");
+    report_export(UcrtBase, Metadata, NtHeader, RtlIsEcCode, "strchr");
+    report_export(UcrtBase, Metadata, NtHeader, RtlIsEcCode, "strrchr");
+    report_export(UcrtBase, Metadata, NtHeader, RtlIsEcCode, "strstr");
     report_export(UcrtBase, Metadata, NtHeader, RtlIsEcCode, "strlen");
+    report_export(UcrtBase, Metadata, NtHeader, RtlIsEcCode, "wcschr");
+    report_export(UcrtBase, Metadata, NtHeader, RtlIsEcCode, "wcsrchr");
+    report_export(UcrtBase, Metadata, NtHeader, RtlIsEcCode, "wcsstr");
 
     Memcpy = (PMEMCPY)GetProcAddress(UcrtBase, "memcpy");
+    Strchr = (PSTRCHR)GetProcAddress(UcrtBase, "strchr");
+    Strrchr = (PSTRRCHR)GetProcAddress(UcrtBase, "strrchr");
+    Strstr = (PSTRSTR)GetProcAddress(UcrtBase, "strstr");
     Strlen = (PSTRLEN)GetProcAddress(UcrtBase, "strlen");
-    if (!Memcpy || !Strlen || Memcpy(Destination, Source, sizeof(Source)) != Destination || lstrcmpA(Destination, Source) || Strlen(Destination) != strlen(Source))
+    Wcschr = (PWCSSCHR)GetProcAddress(UcrtBase, "wcschr");
+    Wcsrchr = (PWCSRCHR)GetProcAddress(UcrtBase, "wcsrchr");
+    Wcsstr = (PWCSSTR)GetProcAddress(UcrtBase, "wcsstr");
+    if (!Memcpy || !Strchr || !Strrchr || !Strstr || !Strlen || !Wcschr || !Wcsrchr || !Wcsstr ||
+        Memcpy(Destination, Source, sizeof(Source)) != Destination ||
+        lstrcmpA(Destination, Source) ||
+        Strchr(Loaded, '.') != NULL ||
+        Strchr(Loaded, 'D') != Loaded + 4 ||
+        Strchr(Loaded, '\0') != Loaded + 7 ||
+        Strrchr(Loaded, 'D') != Loaded + 6 ||
+        Strrchr(Loaded, '\0') != Loaded + 7 ||
+        Strstr(SearchText, "ucrt") != SearchText + 8 ||
+        Strstr(SearchText, "") != SearchText ||
+        Strstr(SearchText, "missing") != NULL ||
+        Wcschr(WideLoaded, L'.') != NULL ||
+        Wcschr(WideLoaded, L'D') != WideLoaded + 4 ||
+        Wcschr(WideLoaded, L'\0') != WideLoaded + 7 ||
+        Wcsrchr(WideLoaded, L'D') != WideLoaded + 6 ||
+        Wcsrchr(WideLoaded, L'\0') != WideLoaded + 7 ||
+        Wcsstr(WideSearchText, L"ucrt") != WideSearchText + 8 ||
+        Wcsstr(WideSearchText, L"") != WideSearchText ||
+        Wcsstr(WideSearchText, L"missing") != NULL ||
+        Strlen(Destination) != strlen(Source))
     {
-        printf("CHPE_UCRT_THUNK_FAIL call memcpy=%p strlen=%p error=%lu\n", Memcpy, Strlen, GetLastError());
+        printf("CHPE_UCRT_THUNK_FAIL call memcpy=%p strchr=%p strrchr=%p strstr=%p strlen=%p wcschr=%p wcsrchr=%p wcsstr=%p error=%lu\n", Memcpy, Strchr, Strrchr, Strstr, Strlen, Wcschr, Wcsrchr, Wcsstr, GetLastError());
         return 2;
     }
 
