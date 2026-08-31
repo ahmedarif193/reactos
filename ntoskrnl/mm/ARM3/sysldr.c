@@ -1065,6 +1065,7 @@ MiResolveImageReferences(IN PVOID ImageBase,
     PLOAD_IMPORTS LoadedImports, NewImports;
     ULONG i;
     BOOLEAN GdiLink, NormalLink;
+    BOOLEAN GdiImport;
     BOOLEAN ReferenceNeeded, Loaded;
     ANSI_STRING TempString;
     UNICODE_STRING NameString, DllName;
@@ -1130,16 +1131,24 @@ MiResolveImageReferences(IN PVOID ImageBase,
     {
         /* Get the name */
         ImportName = (PCHAR)((ULONG_PTR)ImageBase + ImportDescriptor->Name);
-        /* Check if this is a GDI driver */
+        /* Check if this is a GDI driver. */
         GdiLink = GdiLink ||
                   !(_strnicmp(ImportName, "win32k", sizeof("win32k") - 1));
 
-        /* We can also allow dxapi (for Windows compat, allow IRT and coverage) */
-        NormalLink = NormalLink ||
-                     ((_strnicmp(ImportName, "win32k", sizeof("win32k") - 1)) &&
-                      (_strnicmp(ImportName, "dxapi", sizeof("dxapi") - 1)) &&
-                      (_strnicmp(ImportName, "coverage", sizeof("coverage") - 1)) &&
-                      (_strnicmp(ImportName, "irt", sizeof("irt") - 1)));
+        /*
+         * Display drivers are allowed to use the kernel, HAL, and watchdog
+         * services in addition to the win32k display-driver interface. This
+         * is the dependency set used by the Windows CDD. Dxapi, IRT, and the
+         * coverage runtime are the other existing GDI-driver dependencies.
+         */
+        GdiImport = !(_strnicmp(ImportName, "win32k", sizeof("win32k") - 1)) ||
+                    !(_strnicmp(ImportName, "ntoskrnl", sizeof("ntoskrnl") - 1)) ||
+                    !(_strnicmp(ImportName, "hal", sizeof("hal") - 1)) ||
+                    !(_strnicmp(ImportName, "watchdog", sizeof("watchdog") - 1)) ||
+                    !(_strnicmp(ImportName, "dxapi", sizeof("dxapi") - 1)) ||
+                    !(_strnicmp(ImportName, "coverage", sizeof("coverage") - 1)) ||
+                    !(_strnicmp(ImportName, "irt", sizeof("irt") - 1));
+        NormalLink = NormalLink || !GdiImport;
 
         /* Check if this is a valid GDI driver */
         if (GdiLink && NormalLink)
