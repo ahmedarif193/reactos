@@ -7,6 +7,45 @@
 
 #include "cdd.h"
 
+static VOID
+RcddDeleteDisplayLocks(
+   PRCDD_PDEV ppdev)
+{
+   while (ppdev->DisplayTileLockCount != 0)
+   {
+      ULONG Index = --ppdev->DisplayTileLockCount;
+
+      EngDeleteSemaphore(ppdev->DisplayTileLocks[Index]);
+      ppdev->DisplayTileLocks[Index] = NULL;
+   }
+}
+
+static BOOL
+RcddInitDisplayLocks(
+   PRCDD_PDEV ppdev)
+{
+   ULONG Index;
+
+   ppdev->DisplayTileWidth = max(ppdev->ScreenWidth >> 3, 1);
+   ppdev->DisplayTileHeight = max(ppdev->ScreenHeight >> 3, 1);
+   KeInitializeSemaphore(&ppdev->DisplayLockWaitSemaphore, 0, MAXLONG);
+   KeInitializeMutex(&ppdev->DisplayLockWaitMutex, 0);
+
+   for (Index = 0; Index < RCDD_DISPLAY_TILE_COUNT; Index++)
+   {
+      ppdev->DisplayTileLocks[Index] = EngCreateSemaphore();
+      if (ppdev->DisplayTileLocks[Index] == NULL)
+      {
+         RcddDeleteDisplayLocks(ppdev);
+         return FALSE;
+      }
+
+      ppdev->DisplayTileLockCount++;
+   }
+
+   return TRUE;
+}
+
 /*
  * The GDI display DDI table. win32k retrieves this from RcddEnableDriver and
  * calls each hook by INDEX_*, so the C symbol names are private (Rcdd*). cdd is
@@ -125,8 +164,16 @@ RcddEnablePDEV(
       return NULL;
    }
 
+   if (!RcddInitDisplayLocks(ppdev))
+   {
+      RcddDisableHardwarePointer(ppdev);
+      EngFreeMem(ppdev);
+      return NULL;
+   }
+
    if (!RcddInitDefaultPalette(ppdev, &DevInfo))
    {
+      RcddDeleteDisplayLocks(ppdev);
       RcddDisableHardwarePointer(ppdev);
       EngFreeMem(ppdev);
       return NULL;
@@ -177,6 +224,7 @@ RcddDisablePDEV(
    }
 
    RcddDisableHardwarePointer(ppdev);
+   RcddDeleteDisplayLocks(ppdev);
 
    EngFreeMem(dhpdev);
 }
