@@ -1047,7 +1047,28 @@ BOOL ActivateThemeFile(LPCWSTR pwszFile)
 
     if (pwszFile)
     {
-        ret = FindOrAppendTheme(pThemes, pwszFile, NULL, NULL, &selection);
+        WCHAR szColor[100] = {0};
+        LPCWSTR pColor = NULL;
+        HKEY hKey;
+
+        if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\ThemeManager", 0, KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS)
+        {
+            DWORD dwType = 0;
+            DWORD cbData = sizeof(szColor);
+
+            if (RegQueryValueExW(hKey, L"ColorName", NULL, &dwType, (LPBYTE)szColor, &cbData) == ERROR_SUCCESS &&
+                dwType == REG_SZ &&
+                szColor[0])
+            {
+                pColor = szColor;
+            }
+
+            RegCloseKey(hKey);
+        }
+
+        ret = FindOrAppendTheme(pThemes, pwszFile, pColor, NULL, &selection);
+        if (!ret && pColor)
+            ret = FindOrAppendTheme(pThemes, pwszFile, NULL, NULL, &selection);
         if (!ret)
             goto cleanup;
 
