@@ -16,6 +16,7 @@ set(ARM64EC_RUNTIME_MODULES
     apphelp
     avrt
     bcrypt
+    bcryptprimitives
     browseui
     cabinet
     cfgmgr32
