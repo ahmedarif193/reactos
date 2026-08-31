@@ -313,6 +313,8 @@ dll/win32/xolehlp             # Synced to Wine-11.14
 dll/win32/comctl32           # Synced to Wine-11.14
 dll/win32/comctl32_v6        # Synced to Wine-11.14
 
+media/themes/Aero/aero.msstyles # Synced from Wine-11.14 dlls/aero.msstyles (UTF-16 windres adaptation generated at build time)
+
 dll/cpl/bthprops              # Synced to Wine-11.14
 dll/cpl/inetcpl               # Synced to Wine-11.14
 dll/cpl/joy                   # Synced to Wine-11.14
