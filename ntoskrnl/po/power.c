@@ -32,6 +32,8 @@ SYSTEM_POWER_CAPABILITIES PopCapabilities;
 #define POP_PROCESSOR_POWER_TAG 'pPoP'
 #define POP_PROCESSOR_PERF_PERIOD_MS 100
 #define POP_MAXIMUM_PERF_STATES 32
+#define POP_EXECUTION_AWAYMODE_REQUIRED 0x00000040
+#define POP_EXECUTION_VALID_FLAGS (ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED | POP_EXECUTION_AWAYMODE_REQUIRED)
 
 typedef struct _POP_POWER_REQUEST
 {
@@ -165,6 +167,61 @@ PopCreatePowerRequest(
     if (!NT_SUCCESS(Status)) return Status;
     *PowerRequestHandle = Handle;
     return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+PopCreateThreadPowerObject(
+    _Out_ PPOP_POWER_REQUEST *PowerObject)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    PPOP_POWER_REQUEST NewObject;
+    PPOP_POWER_REQUEST ReferencedObject;
+    HANDLE Handle;
+    NTSTATUS Status;
+
+    InitializeObjectAttributes(&ObjectAttributes, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ObCreateObject(KernelMode, PopPowerRequestObjectType, &ObjectAttributes, KernelMode, NULL, sizeof(*NewObject), 0, 0, (PVOID *)&NewObject);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    RtlZeroMemory(NewObject, sizeof(*NewObject));
+    Status = ObInsertObject(NewObject, NULL, 0, 1, (PVOID *)&ReferencedObject, &Handle);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    Status = ObCloseHandle(Handle, KernelMode);
+    if (!NT_SUCCESS(Status))
+    {
+        ObDereferenceObject(ReferencedObject);
+        return Status;
+    }
+
+    *PowerObject = ReferencedObject;
+    return STATUS_SUCCESS;
+}
+
+static
+EXECUTION_STATE
+PopReadThreadPowerState(
+    _In_opt_ PPOP_POWER_REQUEST PowerObject)
+{
+    EXECUTION_STATE State = ES_CONTINUOUS;
+
+    if (!PowerObject) return State;
+    if (PowerObject->RequestCount[PowerRequestSystemRequired] > 0) State |= ES_SYSTEM_REQUIRED;
+    if (PowerObject->RequestCount[PowerRequestDisplayRequired] > 0) State |= ES_DISPLAY_REQUIRED;
+    if (PowerObject->RequestCount[PowerRequestAwayModeRequired] > 0) State |= POP_EXECUTION_AWAYMODE_REQUIRED;
+    return State;
+}
+
+static
+VOID
+PopWriteThreadPowerState(
+    _Inout_ PPOP_POWER_REQUEST PowerObject,
+    _In_ EXECUTION_STATE State)
+{
+    InterlockedExchange((PLONG)&PowerObject->RequestCount[PowerRequestSystemRequired], BooleanFlagOn(State, ES_SYSTEM_REQUIRED));
+    InterlockedExchange((PLONG)&PowerObject->RequestCount[PowerRequestDisplayRequired], BooleanFlagOn(State, ES_DISPLAY_REQUIRED));
+    InterlockedExchange((PLONG)&PowerObject->RequestCount[PowerRequestAwayModeRequired], BooleanFlagOn(State, POP_EXECUTION_AWAYMODE_REQUIRED));
 }
 
 static
@@ -362,6 +419,13 @@ NTAPI
 PopCleanupPowerState(IN PPOWER_STATE PowerState)
 {
     //UNIMPLEMENTED;
+}
+
+VOID
+NTAPI
+PopReleaseThreadPowerObject(IN PVOID PowerObject)
+{
+    if (PowerObject) ObDereferenceObject(PowerObject);
 }
 
 NTSTATUS
@@ -1816,13 +1880,16 @@ NTAPI
 NtSetThreadExecutionState(IN EXECUTION_STATE esFlags,
                           OUT EXECUTION_STATE *PreviousFlags)
 {
-    PKTHREAD Thread = KeGetCurrentThread();
+    PETHREAD Thread = PsGetCurrentThread();
+    PPOP_POWER_REQUEST PowerObject = Thread->LegacyPowerObject;
     KPROCESSOR_MODE PreviousMode = KeGetPreviousMode();
     EXECUTION_STATE PreviousState;
+    NTSTATUS Status;
     PAGED_CODE();
 
     /* Validate flags */
-    if (esFlags & ~(ES_CONTINUOUS | ES_USER_PRESENT))
+    if ((esFlags & ~POP_EXECUTION_VALID_FLAGS) ||
+        ((esFlags & POP_EXECUTION_AWAYMODE_REQUIRED) && !(esFlags & ES_CONTINUOUS)))
     {
         /* Fail the request */
         return STATUS_INVALID_PARAMETER;
@@ -1845,17 +1912,21 @@ NtSetThreadExecutionState(IN EXECUTION_STATE esFlags,
         _SEH2_END;
     }
 
-    /* Save the previous state, always masking in the continous flag */
-#if (NTDDI_VERSION >= NTDDI_WIN7) || defined(_M_ARM64)
-    /* PowerState was renamed to LargeStack at Win7 (same byte overlay) */
-    PreviousState = Thread->LargeStack | ES_CONTINUOUS;
-    if (esFlags & ES_CONTINUOUS) Thread->LargeStack = (UCHAR)esFlags;
-#else
-    PreviousState = Thread->PowerState | ES_CONTINUOUS;
+    /* Save the previous state, always masking in the continuous flag */
+    PreviousState = PopReadThreadPowerState(PowerObject);
 
     /* Check if we need to update the power state */
-    if (esFlags & ES_CONTINUOUS) Thread->PowerState = (UCHAR)esFlags;
-#endif
+    if (esFlags & ES_CONTINUOUS)
+    {
+        if (!PowerObject)
+        {
+            Status = PopCreateThreadPowerObject(&PowerObject);
+            if (!NT_SUCCESS(Status)) return Status;
+            Thread->LegacyPowerObject = PowerObject;
+        }
+
+        PopWriteThreadPowerState(PowerObject, esFlags);
+    }
 
     /* Protect the write back to user mode */
     _SEH2_TRY

@@ -1514,12 +1514,24 @@ typedef struct _ETHREAD
         LIST_ENTRY LpcReplyChain;
         LIST_ENTRY KeyedWaitChain;
     };
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    union
+    {
+        LIST_ENTRY PostBlockList;
+        struct
+        {
+            PVOID ReservedPostBlockPointer;
+            PVOID StartAddress;
+        };
+    };
+#else
     union
     {
         NTSTATUS ExitStatus;
         PVOID OfsChain;
     };
     LIST_ENTRY PostBlockList;
+#endif
     union
     {
         struct _TERMINATION_PORT *TerminationPort;
@@ -1532,7 +1544,13 @@ typedef struct _ETHREAD
     KSPIN_LOCK ActiveTimerListLock;
     LIST_ENTRY ActiveTimerListHead;
     CLIENT_ID Cid;
-#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    union
+    {
+        KSEMAPHORE KeyedWaitSemaphore;
+        KSEMAPHORE AlpcWaitSemaphore;
+    };
+#elif (NTDDI_VERSION >= NTDDI_LONGHORN)
     KSEMAPHORE KeyedWaitSemaphore;
 #else
     union
@@ -1550,17 +1568,22 @@ typedef struct _ETHREAD
     LIST_ENTRY IrpList;
     ULONG_PTR TopLevelIrp;
     PDEVICE_OBJECT DeviceToVerify;
-#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    PVOID Win32StartAddress;
+    PVOID ReservedThreadPointer;
+    PVOID LegacyPowerObject;
+#elif (NTDDI_VERSION >= NTDDI_LONGHORN)
     PPSP_RATE_APC RateControlApc;
+    PVOID Win32StartAddress;
 #else
     struct _EPROCESS *ThreadsProcess;
-#endif
     PVOID Win32StartAddress;
     union
     {
         PKSTART_ROUTINE StartAddress;
         ULONG LpcReceivedMessageId;
     };
+#endif
     LIST_ENTRY ThreadListEntry;
     EX_RUNDOWN_REF RundownProtect;
     EX_PUSH_LOCK ThreadLock;
@@ -1647,7 +1670,19 @@ typedef struct _ETHREAD
 #endif
     UCHAR DisablePageFaultClustering;
     UCHAR ActiveFaultCount;
-#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    UCHAR ReservedThreadByte;
+    ULONG ReservedThreadState[2];
+    ULONG_PTR AlpcMessageId;
+    union
+    {
+        PVOID AlpcMessage;
+        ULONG AlpcReceiveAttributeSet;
+    };
+    LIST_ENTRY AlpcWaitListEntry;
+    NTSTATUS ExitStatus;
+    ULONG CacheManagerCount;
+#elif (NTDDI_VERSION >= NTDDI_LONGHORN)
     ULONG AlpcMessageId;
     union
     {
@@ -1667,6 +1702,10 @@ typedef struct _ETHREAD
     volatile LONG ExecutableWriteAllowed;
 #endif
 } ETHREAD;
+
+#if defined(_M_ARM64) && (NTDDI_VERSION >= NTDDI_WIN10)
+C_ASSERT(FIELD_OFFSET(ETHREAD, LegacyPowerObject) == 0x550);
+#endif
 
 //
 // Executive Process (EPROCESS)

@@ -333,6 +333,12 @@ PopCleanupPowerState(
     IN PPOWER_STATE PowerState
 );
 
+VOID
+NTAPI
+PopReleaseThreadPowerObject(
+    IN PVOID PowerObject
+);
+
 NTSTATUS
 NTAPI
 PopAddRemoveSysCapsCallback(
