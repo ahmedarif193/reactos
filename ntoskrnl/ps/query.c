@@ -2911,6 +2911,7 @@ NtSetInformationThread(
     KPRIORITY Priority = 0;
     PEPROCESS Process;
     PTEB Teb;
+    THREAD_POWER_THROTTLING_STATE PowerThrottling;
 #if defined(_M_ARM64)
     MANAGE_WRITES_TO_EXECUTABLE_MEMORY ManageWrites;
 #endif
@@ -3600,6 +3601,46 @@ NtSetInformationThread(
             Status = STATUS_NOT_SUPPORTED;
 #endif
             break;
+
+        case ThreadPowerThrottlingState:
+        {
+            _SEH2_TRY
+            {
+                PowerThrottling = *(PTHREAD_POWER_THROTTLING_STATE)ThreadInformation;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(break);
+            }
+            _SEH2_END;
+
+            if ((PowerThrottling.Version != THREAD_POWER_THROTTLING_CURRENT_VERSION) ||
+                ((PowerThrottling.ControlMask | PowerThrottling.StateMask) &
+                 ~THREAD_POWER_THROTTLING_VALID_FLAGS))
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            Status = ObReferenceObjectByHandle(ThreadHandle,
+                                               THREAD_SET_INFORMATION,
+                                               PsThreadType,
+                                               PreviousMode,
+                                               (PVOID*)&Thread,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            PspLockThreadSecurityExclusive(Thread);
+            Thread->PowerThrottlingControlMask = PowerThrottling.ControlMask;
+            Thread->PowerThrottlingStateMask = PowerThrottling.StateMask;
+            PspUnlockThreadSecurityExclusive(Thread);
+
+            ObDereferenceObject(Thread);
+            Status = STATUS_SUCCESS;
+            break;
+        }
 
 #if (NTDDI_VERSION >= NTDDI_WIN10_RS1) || defined(__REACTOS__)
         case ThreadNameInformation:
