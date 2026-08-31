@@ -1011,13 +1011,23 @@ DceResetActiveDCEs(PWND Window)
          bRedirected = !!(dc->fs & DC_REDIRECTION);
          if (bRedirected)
          {
-            /* Redirected DC: origin/VisRgn are backing-relative and stay valid
-             * across a pure move; never write screen-space values into it (a
-             * cross-thread draw would land smeared in the backing). Re-derive
-             * absolutely instead (covers resize → new backing). */
             DC_UnlockDc(dc);
-            IntCompositionRedirectDC(CurrentWindow, pDCE->hDC, pDCE->DCXFlags, pDCE->hrgnClip, TRUE);
-            IntGdiSetHookFlags(pDCE->hDC, DCHF_VALIDATEVISRGN);
+
+            /* Match the ordinary DCE path below: a window-position change
+             * affects only that window and its descendants. Redirected
+             * origins are relative to the top-level backing, so a pure
+             * top-level move is already valid. The non-forced redirect call
+             * returns immediately in that case, but rebuilds the DC when a
+             * resize replaced its backing or changed its relative origin. */
+            if (Window == CurrentWindow ||
+                IntIsChildWindow(Window, CurrentWindow))
+            {
+               IntCompositionRedirectDC(CurrentWindow,
+                                        pDCE->hDC,
+                                        pDCE->DCXFlags,
+                                        pDCE->hrgnClip,
+                                        FALSE);
+            }
             continue;
          }
          if (Window == CurrentWindow || IntIsChildWindow(Window, CurrentWindow))

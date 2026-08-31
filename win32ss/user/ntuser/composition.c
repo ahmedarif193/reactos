@@ -732,15 +732,11 @@ IntCompositionOnWindowResize(_In_ PWND Wnd)
 
         IntCompositionEnsureSurface(Wnd, &e->Redirect);
 
-        /* The backing was replaced: a long-held redirected DC (CS_OWNDC GL
-         * window -- Mesa keeps the SetPixelFormat DC for the context's
-         * lifetime) still references the ORPHANED old backing and would
-         * present into it invisibly from now on. Rebind every active DCE of
-         * this window to the new backing, exactly as a user move/size does. */
+        /* DceResetActiveDCEs, called by co_WinPosSetWindowPos immediately
+         * after this hook, rebinds long-held DCs if the backing changed. */
         if (e->Redirect.psurf != psurfOld)
         {
             InterlockedExchange(&e->BackComplete, FALSE);
-            DceResetActiveDCEs(Wnd);
             e->Damaged = TRUE;
         }
     }

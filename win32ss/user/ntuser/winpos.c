@@ -1813,8 +1813,10 @@ co_WinPosSetWindowPos(
    HDC Dc;
    RECTL CopyRect;
    PWND Ancestor;
+   PSURFACE CompositionSurfaceBefore = NULL;
    BOOL bPointerInWindow, PosChanged = FALSE;
    BOOL bComposited = FALSE;
+   BOOL bCompositedPureMove = FALSE;
    PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
 
    ASSERT_REFS_CO(Window);
@@ -1875,6 +1877,20 @@ co_WinPosSetWindowPos(
       return TRUE;
    }
 
+   CompositionSurfaceBefore = IntCompositionGetRedirectSurface(Window);
+   bCompositedPureMove =
+      CompositionSurfaceBefore != NULL &&
+      Window->spwndParent == UserGetDesktopWindow() &&
+      (WinPos.flags & SWP_NOZORDER) &&
+      !(WinPos.flags & (SWP_NOMOVE | SWP_HIDEWINDOW | SWP_SHOWWINDOW |
+                        SWP_FRAMECHANGED)) &&
+      (NewWindowRect.left != Window->rcWindow.left ||
+       NewWindowRect.top != Window->rcWindow.top) &&
+      NewWindowRect.right - NewWindowRect.left ==
+         Window->rcWindow.right - Window->rcWindow.left &&
+      NewWindowRect.bottom - NewWindowRect.top ==
+         Window->rcWindow.bottom - Window->rcWindow.top;
+
    Ancestor = UserGetAncestor(Window, GA_PARENT);
    if ( (WinPos.flags & (SWP_NOZORDER | SWP_HIDEWINDOW | SWP_SHOWWINDOW)) != SWP_NOZORDER &&
          Ancestor && UserHMGetHandle(Ancestor) == IntGetDesktopWindow() )
@@ -1882,7 +1898,7 @@ co_WinPosSetWindowPos(
       WinPos.hwndInsertAfter = WinPosDoOwnedPopups(Window, WinPos.hwndInsertAfter);
    }
 
-   if (!(WinPos.flags & SWP_NOREDRAW))
+   if (!(WinPos.flags & SWP_NOREDRAW) && !bCompositedPureMove)
    {
       /* Compute the visible region before the window position is changed */
       if (!(WinPos.flags & SWP_SHOWWINDOW) &&
@@ -2020,7 +2036,13 @@ co_WinPosSetWindowPos(
    IntCompositionOnWindowResize(Window);
    bComposited = (IntCompositionGetRedirectSurface(Window) != NULL);
 
-   DceResetActiveDCEs(Window); // For WS_VISIBLE changes.
+   /* A pure move of a redirected top-level window changes only compositor
+    * metadata. Its backing, DC surface, origin, and clip are unchanged. */
+   if (!bCompositedPureMove ||
+       IntCompositionGetRedirectSurface(Window) != CompositionSurfaceBefore)
+   {
+      DceResetActiveDCEs(Window); // For WS_VISIBLE changes.
+   }
 
    // Change or update, set send non-client paint flag.
    if ( Window->style & WS_VISIBLE &&
@@ -2030,8 +2052,9 @@ co_WinPosSetWindowPos(
       Window->state |= WNDS_SENDNCPAINT;
    }
 
-   if ((!(WinPos.flags & SWP_NOREDRAW) && ((WinPos.flags & SWP_AGG_STATUSFLAGS) != SWP_AGG_NOPOSCHANGE)) ||
-       ((WinPos.flags & SWP_NOZORDER) && (WinPos.flags & SWP_NOOWNERZORDER)))
+   if (!bCompositedPureMove &&
+       ((!(WinPos.flags & SWP_NOREDRAW) && ((WinPos.flags & SWP_AGG_STATUSFLAGS) != SWP_AGG_NOPOSCHANGE)) ||
+        ((WinPos.flags & SWP_NOZORDER) && (WinPos.flags & SWP_NOOWNERZORDER))))
    {
       /* Determine the new visible region */
       VisAfter = VIS_ComputeVisibleRegion(Window, FALSE, FALSE,
@@ -2383,9 +2406,10 @@ co_WinPosSetWindowPos(
    if(!(flags & SWP_DEFERERASE))
    {
        /* erase parent when hiding or resizing child */
-       if ((flags & SWP_HIDEWINDOW) ||
+       if (!bCompositedPureMove &&
+          ((flags & SWP_HIDEWINDOW) ||
          (!(flags & SWP_SHOWWINDOW) &&
-          (WinPos.flags & SWP_AGG_STATUSFLAGS) != SWP_AGG_NOGEOMETRYCHANGE))
+          (WinPos.flags & SWP_AGG_STATUSFLAGS) != SWP_AGG_NOGEOMETRYCHANGE)))
        {
            PWND Parent = Window->spwndParent;
            if (!Parent || UserIsDesktopWindow(Parent)) Parent = Window;

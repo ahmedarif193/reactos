@@ -609,18 +609,19 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
                      UserDrawMovingFrame( hdc, &newRect, thickframe );
                  else
                  {  // Moving the whole window now!
-                    BOOL PresentBatch;
-                    HRGN hrgnNew;
-                    HRGN hrgnOrig = GreCreateRectRgnIndirect(&pwnd->rcWindow);
+                    BOOL bRedirectedMove =
+                        hittest == HTCAPTION &&
+                        pwnd->spwndParent == UserGetDesktopWindow() &&
+                        IntCompositionGetRedirectSurface(pwnd) != NULL;
+                    HRGN hrgnNew = NULL;
+                    HRGN hrgnOrig = NULL;
 
-                    /* A full-window move repaints the exposed background,
-                     * non-client area, client area, and related windows as
-                     * one visual state. Keep CDD from publishing those
-                     * primitives individually while the move is assembled. */
-                    PresentBatch = IntCompositionPresentBatchBegin();
-
-                    if (pwnd->hrgnClip != NULL)
-                       NtGdiCombineRgn(hrgnOrig, hrgnOrig, pwnd->hrgnClip, RGN_AND);
+                    if (!bRedirectedMove)
+                    {
+                       hrgnOrig = GreCreateRectRgnIndirect(&pwnd->rcWindow);
+                       if (pwnd->hrgnClip != NULL)
+                          NtGdiCombineRgn(hrgnOrig, hrgnOrig, pwnd->hrgnClip, RGN_AND);
+                    }
 
                     //// This causes the mdi child window to jump up when it is moved.
                     //IntMapWindowPoints( 0, pWndParent, (POINT *)&rect, 2 );
@@ -633,36 +634,35 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
                                               newRect.top,
                                               newRect.right - newRect.left,
                                               newRect.bottom - newRect.top,
-                                              SWP_NOACTIVATE | SWP_DEFERERASE |
+                                              SWP_NOACTIVATE | SWP_NOZORDER |
+                                              SWP_DEFERERASE |
                                               ((hittest == HTCAPTION) ? SWP_NOSIZE : 0)))
                     {
                        ImeUiUpdatePending = TRUE;
                     }
-
-                    hrgnNew = GreCreateRectRgnIndirect(&pwnd->rcWindow);
-                    if (pwnd->hrgnClip != NULL)
-                       NtGdiCombineRgn(hrgnNew, hrgnNew, pwnd->hrgnClip, RGN_AND);
-
-                    if (hrgnNew)
+                    if (!bRedirectedMove)
                     {
-                       if (hrgnOrig)
-                          NtGdiCombineRgn(hrgnOrig, hrgnOrig, hrgnNew, RGN_DIFF);
-                    }
-                    else
-                    {
-                       if (hrgnOrig)
+                       hrgnNew = GreCreateRectRgnIndirect(&pwnd->rcWindow);
+                       if (pwnd->hrgnClip != NULL)
+                          NtGdiCombineRgn(hrgnNew, hrgnNew, pwnd->hrgnClip, RGN_AND);
+
+                       if (hrgnNew)
+                       {
+                          if (hrgnOrig)
+                             NtGdiCombineRgn(hrgnOrig, hrgnOrig, hrgnNew, RGN_DIFF);
+                       }
+                       else if (hrgnOrig)
                        {
                           GreDeleteObject(hrgnOrig);
-                          hrgnOrig = 0;
+                          hrgnOrig = NULL;
                        }
-                    }
 
-                    // Update all the windows after the move or size, including this window.
-                    UpdateThreadWindows(UserGetDesktopWindow()->spwndChild, pti, hrgnOrig);
+                       // Update all the windows after the move or size, including this window.
+                       UpdateThreadWindows(UserGetDesktopWindow()->spwndChild, pti, hrgnOrig);
+                    }
 
                     if (hrgnOrig) GreDeleteObject(hrgnOrig);
                     if (hrgnNew) GreDeleteObject(hrgnNew);
-                    IntCompositionPresentBatchEnd(PresentBatch);
                  }
               }
               sizingRect = newRect;
