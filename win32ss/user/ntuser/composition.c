@@ -816,7 +816,16 @@ IntCompositionDamageBacking(_In_opt_ PSURFACE psurf)
             {
                 InterlockedExchange(&g_Redirects[i].BackingDrawn, TRUE);
                 g_Redirects[i].Damaged = TRUE;
-                IntCompositionMarkDamage(FALSE);
+                /* A bounded GetDC/ReleaseDC or BeginPaint/EndPaint bracket
+                 * publishes the completed backing when it closes. Waking the
+                 * compositor for every primitive inside that bracket only
+                 * makes it repeatedly present the previous FRONT while BACK
+                 * is incomplete. */
+                if (InterlockedCompareExchange(&g_Redirects[i].PaintCount,
+                                               0, 0) == 0)
+                {
+                    IntCompositionMarkDamage(FALSE);
+                }
                 return;
             }
         }
@@ -1179,6 +1188,7 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
         REDIRECT_ENTRY *e = IntCompositionFind(w);
         BOOL wasDamaged;
         BOOL BackingDeferred = FALSE;
+        BOOL PaintDeferred = FALSE;
 
         if (e == NULL || e->Redirect.cx <= 0 || e->Redirect.cy <= 0)
             continue;
@@ -1237,7 +1247,10 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
             }
             else if (e->Damaged)
             {
-                DeferredDamage = TRUE;
+                if (bBusy || bFirstPaintPending)
+                    PaintDeferred = TRUE;
+                else
+                    DeferredDamage = TRUE;
             }
         }
 
@@ -1246,7 +1259,7 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
             (e->Redirect.FrontSection == NULL &&
              e->Redirect.FrontGlobalShare == 0))
         {
-            if (e->Damaged)
+            if (e->Damaged && !PaintDeferred)
                 DeferredDamage = TRUE;
             continue;
         }
