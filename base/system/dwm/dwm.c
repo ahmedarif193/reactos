@@ -13,8 +13,6 @@
 
 DWORD_PTR NTAPI NtUserCallOneParam(DWORD_PTR Param, DWORD Routine);
 
-#define DWM_BG_COLOR  0x003A6EA5u
-
 static void DwmLog(const char *s) { OutputDebugStringA(s); }
 
 static LONG g_originX, g_originY;
@@ -188,6 +186,8 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
 static HDC     g_hdcComp;
 static HBITMAP g_hbmComp;
 static void   *g_compBits;
+static HDC     g_hdcBackdrop;
+static HBITMAP g_hbmBackdrop;
 static BYTE   *g_buf;
 static ULONG   g_bufSize;
 static LONG    g_W, g_H;
@@ -197,8 +197,11 @@ DwmCreateSurfaces(HDC hdcScreen, LONG W, LONG H)
 {
     BITMAPINFO bmi;
     HDC hdcNew;
+    HDC hdcBackdropNew;
     HBITMAP hbmNew;
+    HBITMAP hbmBackdropNew;
     void *bitsNew = NULL;
+    void *backdropBitsNew = NULL;
 
     if (W <= 0 || H <= 0 || (ULONG)W > ((ULONG)-1) / sizeof(ULONG) ||
         (ULONG)H > ((ULONG)-1) / ((ULONG)W * sizeof(ULONG)))
@@ -230,6 +233,34 @@ DwmCreateSurfaces(HDC hdcScreen, LONG W, LONG H)
         return FALSE;
     }
 
+    hdcBackdropNew = CreateCompatibleDC(hdcScreen);
+    if (hdcBackdropNew == NULL)
+    {
+        DeleteDC(hdcNew);
+        DeleteObject(hbmNew);
+        return FALSE;
+    }
+
+    hbmBackdropNew = CreateDIBSection(hdcScreen, &bmi, DIB_RGB_COLORS,
+                                      &backdropBitsNew, NULL, 0);
+    if (hbmBackdropNew == NULL || backdropBitsNew == NULL)
+    {
+        if (hbmBackdropNew != NULL)
+            DeleteObject(hbmBackdropNew);
+        DeleteDC(hdcBackdropNew);
+        DeleteDC(hdcNew);
+        DeleteObject(hbmNew);
+        return FALSE;
+    }
+    if (SelectObject(hdcBackdropNew, hbmBackdropNew) == NULL)
+    {
+        DeleteObject(hbmBackdropNew);
+        DeleteDC(hdcBackdropNew);
+        DeleteDC(hdcNew);
+        DeleteObject(hbmNew);
+        return FALSE;
+    }
+
     if (g_buf == NULL)
     {
         g_bufSize = DWM_FRAME_BYTES;
@@ -237,6 +268,8 @@ DwmCreateSurfaces(HDC hdcScreen, LONG W, LONG H)
                                      PAGE_READWRITE);
         if (g_buf == NULL)
         {
+            DeleteDC(hdcBackdropNew);
+            DeleteObject(hbmBackdropNew);
             DeleteDC(hdcNew);
             DeleteObject(hbmNew);
             return FALSE;
@@ -247,9 +280,15 @@ DwmCreateSurfaces(HDC hdcScreen, LONG W, LONG H)
         DeleteDC(g_hdcComp);
     if (g_hbmComp != NULL)
         DeleteObject(g_hbmComp);
+    if (g_hdcBackdrop != NULL)
+        DeleteDC(g_hdcBackdrop);
+    if (g_hbmBackdrop != NULL)
+        DeleteObject(g_hbmBackdrop);
     g_hdcComp = hdcNew;
     g_hbmComp = hbmNew;
     g_compBits = bitsNew;
+    g_hdcBackdrop = hdcBackdropNew;
+    g_hbmBackdrop = hbmBackdropNew;
 
     g_W = W;
     g_H = H;
@@ -312,7 +351,7 @@ DwmComposeLoop(void)
         PDWM_FRAME_HEADER hdr = (PDWM_FRAME_HEADER)g_buf;
         PDWM_WIN wins;
         LONG st;
-        ULONG *p, n, i;
+        ULONG i;
 
         hdr->Magic = DWM_FRAME_MAGIC;
         hdr->BufBytes = g_bufSize;
@@ -360,8 +399,9 @@ DwmComposeLoop(void)
         }
 
         {
-            LONG pl, pt, pr, pb, y;
+            LONG pl, pt, pr, pb;
             BOOL completeFrame = TRUE;
+            BOOL refreshBackdrop = forceFull || hdr->FullDamage;
 
             if (forceFull || hdr->FullDamage ||
                 hdr->DmgR <= hdr->DmgL || hdr->DmgB <= hdr->DmgT)
@@ -379,15 +419,30 @@ DwmComposeLoop(void)
                 pr = (r < 0) ? 0 : (r > g_W ? g_W : (LONG)r);
                 pb = (b < 0) ? 0 : (b > g_H ? g_H : (LONG)b);
             }
+            if (pl == 0 && pt == 0 && pr == g_W && pb == g_H)
+                refreshBackdrop = TRUE;
             forceFull = FALSE;
 
             if (pr > pl && pb > pt)
             {
-                for (y = pt; y < pb; y++)
+                if (refreshBackdrop)
                 {
-                    p = (ULONG *)g_compBits + (SIZE_T)y * g_W + pl;
-                    n = (ULONG)(pr - pl);
-                    while (n--) *p++ = DWM_BG_COLOR;
+                    RECT fullBackdrop = {0, 0, g_W, g_H};
+
+                    if (!PaintDesktop(g_hdcBackdrop) &&
+                        !FillRect(g_hdcBackdrop, &fullBackdrop,
+                                  GetSysColorBrush(COLOR_DESKTOP)))
+                    {
+                        forceFull = TRUE;
+                        continue;
+                    }
+                }
+
+                if (!BitBlt(g_hdcComp, pl, pt, pr - pl, pb - pt,
+                            g_hdcBackdrop, pl, pt, SRCCOPY))
+                {
+                    forceFull = TRUE;
+                    continue;
                 }
 
                 wins = (PDWM_WIN)(g_buf + hdr->WinArrayBase);
