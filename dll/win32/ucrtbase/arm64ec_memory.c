@@ -1,7 +1,7 @@
 /*
  * PROJECT:     ReactOS Universal C Runtime
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
- * PURPOSE:     Native ARM64EC memory export entry points
+ * PURPOSE:     Native ARM64EC memory and string search export entry points
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
@@ -49,6 +49,127 @@ memcmp(const void *Buffer1,
         return 0;
 
     return Left[EqualLength] - Right[EqualLength];
+}
+
+char * __cdecl
+strchr(const char *String,
+       int Character)
+{
+    const char Value = (char)Character;
+
+    do
+    {
+        if (*String == Value)
+            return (char *)String;
+    }
+    while (*String++ != '\0');
+
+    return NULL;
+}
+
+char * __cdecl
+strrchr(const char *String,
+        int Character)
+{
+    const char Value = (char)Character;
+    const char *Result = NULL;
+
+    do
+    {
+        if (*String == Value)
+            Result = String;
+    }
+    while (*String++ != '\0');
+
+    return (char *)Result;
+}
+
+char * __cdecl
+strstr(const char *String,
+       const char *Substring)
+{
+    const char *Current;
+    const char *Candidate;
+
+    if (*Substring == '\0')
+        return (char *)String;
+
+    while (*String != '\0')
+    {
+        Current = String;
+        Candidate = Substring;
+        while (*Candidate != '\0' && *Current == *Candidate)
+        {
+            ++Current;
+            ++Candidate;
+        }
+
+        if (*Candidate == '\0')
+            return (char *)String;
+
+        ++String;
+    }
+
+    return NULL;
+}
+
+wchar_t * __cdecl
+wcschr(const wchar_t *String,
+       wchar_t Character)
+{
+    do
+    {
+        if (*String == Character)
+            return (wchar_t *)String;
+    }
+    while (*String++ != L'\0');
+
+    return NULL;
+}
+
+wchar_t * __cdecl
+wcsrchr(const wchar_t *String,
+        wchar_t Character)
+{
+    const wchar_t *Result = NULL;
+
+    do
+    {
+        if (*String == Character)
+            Result = String;
+    }
+    while (*String++ != L'\0');
+
+    return (wchar_t *)Result;
+}
+
+wchar_t * __cdecl
+wcsstr(const wchar_t *String,
+       const wchar_t *Substring)
+{
+    const wchar_t *Current;
+    const wchar_t *Candidate;
+
+    if (*Substring == L'\0')
+        return (wchar_t *)String;
+
+    while (*String != L'\0')
+    {
+        Current = String;
+        Candidate = Substring;
+        while (*Candidate != L'\0' && *Current == *Candidate)
+        {
+            ++Current;
+            ++Candidate;
+        }
+
+        if (*Candidate == L'\0')
+            return (wchar_t *)String;
+
+        ++String;
+    }
+
+    return NULL;
 }
 
 void * __cdecl
