@@ -188,9 +188,8 @@ typedef struct _SOFTGPU_DEVICE
 
     /*
      * Mode-sized write-combined contiguous framebuffer segment.
-     * MmAllocateContiguousMemorySpecifyCache with MmWriteCombined.
-     * FrameBufferPhys is the physical address for segment reporting.
-     * FrameBuffer     is the kernel-virtual mapping (always valid).
+     * FrameBufferPhys is the physical address for segment reporting and
+     * FrameBuffer is the matching kernel mapping.
      */
     PVOID               FrameBuffer;
     PHYSICAL_ADDRESS    FrameBufferPhys;
@@ -222,6 +221,16 @@ typedef struct _SOFTGPU_DEVICE
     BOOLEAN             TimingActive;
     volatile LONG       ScanoutVBlankAvailable;
 
+    /*
+     * A hardware platform may point its display engine directly at the
+     * allocation slab.  The shared present path still owns dirty-rectangle
+     * validation and CPU copies from a display-only shadow surface, while the
+     * platform owns atomic primary and cursor-plane programming.
+     */
+    PVOID               PlatformContext;
+    BOOLEAN             PlatformDirectScanout;
+    BOOLEAN             PlatformHardwarePointer;
+
     /* Software-emulated WDDM color-pointer plane. ScanoutMutex serializes
      * these fields with every write to the firmware scanout. */
     ULONG               PointerPixels[SOFTGPU_POINTER_PIXEL_COUNT];
@@ -230,6 +239,7 @@ typedef struct _SOFTGPU_DEVICE
     ULONG               PointerHeight;
     ULONG               PointerHotX;
     ULONG               PointerHotY;
+    ULONG               PointerShapeGeneration;
     LONG                PointerX;
     LONG                PointerY;
     RECT                PointerSavedRect;
@@ -317,6 +327,7 @@ typedef struct _SOFTGPU_PLATFORM_CONFIG
     PHYSICAL_ADDRESS    ScanoutPhysicalAddress;
     ULONG               ScanoutPitch;
     ULONGLONG           ScanoutSize;
+    PHYSICAL_ADDRESS    HighestFrameBufferAddress;
 } SOFTGPU_PLATFORM_CONFIG, *PSOFTGPU_PLATFORM_CONFIG;
 
 /*
@@ -333,6 +344,32 @@ SoftGpuPlatformQueryStart(
     _In_ PSOFTGPU_DEVICE Device,
     _In_ PDXGK_INTERFACE DxgkInterface,
     _Out_ PSOFTGPU_PLATFORM_CONFIG Config);
+
+NTSTATUS
+SoftGpuPlatformStartScanout(
+    _Inout_ PSOFTGPU_DEVICE Device);
+
+NTSTATUS
+SoftGpuPlatformStopScanout(
+    _Inout_ PSOFTGPU_DEVICE Device);
+
+NTSTATUS
+SoftGpuPlatformSetPrimary(
+    _Inout_ PSOFTGPU_DEVICE Device,
+    _In_ PHYSICAL_ADDRESS PrimaryAddress,
+    _In_ ULONG Pitch,
+    _In_ ULONG Width,
+    _In_ ULONG Height,
+    _In_ BOOLEAN Visible);
+
+NTSTATUS
+SoftGpuPlatformPresentDisplayOnly(
+    _Inout_ PSOFTGPU_DEVICE Device,
+    _In_ const DXGKARG_PRESENT_DISPLAYONLY *PresentDisplayOnly);
+
+NTSTATUS
+SoftGpuPlatformUpdatePointer(
+    _Inout_ PSOFTGPU_DEVICE Device);
 
 VOID
 SoftGpuPlatformFillNodeMetadata(

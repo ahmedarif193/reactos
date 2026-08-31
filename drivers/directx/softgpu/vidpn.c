@@ -1076,8 +1076,10 @@ typedef struct _SOFTGPU_SCANOUT_SNAPSHOT
     ULONG Width;
     ULONG Height;
     ULONG Generation;
+    PHYSICAL_ADDRESS PrimaryPhysicalAddress;
     BOOLEAN Valid;
     BOOLEAN Visible;
+    BOOLEAN Direct;
 } SOFTGPU_SCANOUT_SNAPSHOT, *PSOFTGPU_SCANOUT_SNAPSHOT;
 
 static NTSTATUS
@@ -1122,8 +1124,31 @@ SoftGpuCopyCurrentPrimaryToScanout(
         Snapshot.Valid = Device->CurrentPrimaryValid;
         Snapshot.Visible =
             Device->ScanoutVisible && Device->TimingActive;
+        Snapshot.Direct = Device->PlatformDirectScanout;
+        Snapshot.PrimaryPhysicalAddress.QuadPart =
+            Device->FrameBufferPhys.QuadPart +
+            Device->CurrentPrimaryOffset;
     }
     KeReleaseSpinLock(&Device->ScanoutLock, OldIrql);
+
+    if (Snapshot.Direct)
+    {
+        if (Snapshot.Valid)
+        {
+            Status = SoftGpuPlatformSetPrimary(
+                         Device,
+                         Snapshot.PrimaryPhysicalAddress,
+                         Snapshot.SourcePitch,
+                         Snapshot.Width,
+                         Snapshot.Height,
+                         Snapshot.Visible);
+        }
+        else
+        {
+            Status = STATUS_SUCCESS;
+        }
+        goto Complete;
+    }
 
     if (Snapshot.Destination == NULL)
     {
@@ -1408,9 +1433,14 @@ SoftGpuDdiPresentDisplayOnly(
     _In_ const DXGKARG_PRESENT_DISPLAYONLY *PresentDisplayOnly)
 {
     PSOFTGPU_DEVICE Device = (PSOFTGPU_DEVICE)MiniportDeviceContext;
+    PVOID Destination;
+    SIZE_T DestinationSize;
+    ULONG DestinationPitch;
+    ULONGLONG PrimaryOffset = 0;
     RECT Rect;
     SIZE_T SourceSize;
     ULONG Index;
+    BOOLEAN DirectPrimaryValid = FALSE;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -1461,14 +1491,64 @@ SoftGpuDdiPresentDisplayOnly(
         Status = STATUS_DELETE_PENDING;
         goto CleanupMutex;
     }
-    if (Device->Scanout == NULL)
+    if (Device->PlatformDirectScanout)
+    {
+        Status = SoftGpuPlatformPresentDisplayOnly(Device,
+                                                   PresentDisplayOnly);
+        if (Status != STATUS_NOT_SUPPORTED)
+            goto CleanupMutex;
+    }
+    if (Device->PlatformDirectScanout)
+    {
+        KIRQL OldIrql;
+
+        KeAcquireSpinLock(&Device->ScanoutLock, &OldIrql);
+        DirectPrimaryValid = Device->CurrentPrimaryValid;
+        if (DirectPrimaryValid)
+        {
+            PrimaryOffset = Device->CurrentPrimaryOffset;
+            DestinationPitch = Device->CurrentPrimaryPitch;
+        }
+        else
+        {
+            PrimaryOffset = 0;
+            DestinationPitch = Device->ScanoutPitch;
+        }
+        KeReleaseSpinLock(&Device->ScanoutLock, OldIrql);
+
+        if (DirectPrimaryValid)
+        {
+            if (PrimaryOffset > Device->FrameBufferSize)
+            {
+                Status = STATUS_DEVICE_NOT_READY;
+                goto CleanupMutex;
+            }
+
+            Destination = (PUCHAR)Device->FrameBuffer + PrimaryOffset;
+            DestinationSize =
+                Device->FrameBufferSize - (SIZE_T)PrimaryOffset;
+        }
+        else
+        {
+            Destination = Device->Scanout;
+            DestinationSize = Device->ScanoutSize;
+        }
+    }
+    else
+    {
+        Destination = Device->Scanout;
+        DestinationSize = Device->ScanoutSize;
+        DestinationPitch = Device->ScanoutPitch;
+    }
+
+    if (Destination == NULL)
     {
         Status = STATUS_SUCCESS;
         goto CleanupMutex;
     }
 
-    (VOID)SoftGpuPlatformWaitForVerticalBlank(Device);
-    SoftGpuPointerRestoreLocked(Device);
+    if (!Device->PlatformHardwarePointer)
+        SoftGpuPointerRestoreLocked(Device);
     Status = STATUS_SUCCESS;
     for (Index = 0; Index < PresentDisplayOnly->NumMoves; ++Index)
     {
@@ -1480,14 +1560,15 @@ SoftGpuDdiPresentDisplayOnly(
             continue;
         }
 
-        Status = SoftGpu2dCopyRect(PresentDisplayOnly->pSource,
-                                   SourceSize,
-                                   (ULONG)PresentDisplayOnly->Pitch,
-                                   &Rect,
-                                   Device->Scanout,
-                                   Device->ScanoutSize,
-                                   Device->ScanoutPitch,
-                                   &Rect);
+        Status = SoftGpu2dCopyRect(
+                     PresentDisplayOnly->pSource,
+                     SourceSize,
+                     (ULONG)PresentDisplayOnly->Pitch,
+                     &Rect,
+                     Destination,
+                     DestinationSize,
+                     DestinationPitch,
+                     &Rect);
         if (!NT_SUCCESS(Status))
             break;
     }
@@ -1502,16 +1583,19 @@ SoftGpuDdiPresentDisplayOnly(
             continue;
         }
 
-        Status = SoftGpu2dCopyRect(PresentDisplayOnly->pSource,
-                                   SourceSize,
-                                   (ULONG)PresentDisplayOnly->Pitch,
-                                   &Rect,
-                                   Device->Scanout,
-                                   Device->ScanoutSize,
-                                   Device->ScanoutPitch,
-                                   &Rect);
+        Status = SoftGpu2dCopyRect(
+                     PresentDisplayOnly->pSource,
+                     SourceSize,
+                     (ULONG)PresentDisplayOnly->Pitch,
+                     &Rect,
+                     Destination,
+                     DestinationSize,
+                     DestinationPitch,
+                     &Rect);
     }
-    SoftGpuPointerDrawLocked(Device);
+
+    if (!Device->PlatformHardwarePointer)
+        SoftGpuPointerDrawLocked(Device);
     KeMemoryBarrier();
 
 CleanupMutex:
@@ -1706,9 +1790,7 @@ SoftGpuDdiSetVidPnSourceAddress(
         KeReleaseSpinLock(&Device->ScanoutLock, OldIrql);
     }
 
-    return PrimaryAddress != 0 ?
-               SoftGpuScheduleScanout(Device) :
-               STATUS_SUCCESS;
+    return SoftGpuScheduleScanout(Device);
 }
 
 

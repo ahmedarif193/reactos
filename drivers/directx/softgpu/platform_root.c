@@ -132,6 +132,58 @@ SoftGpuPlatformQueryStart(
     return STATUS_SUCCESS;
 }
 
+NTSTATUS
+SoftGpuPlatformStartScanout(
+    _Inout_ PSOFTGPU_DEVICE Device)
+{
+    UNREFERENCED_PARAMETER(Device);
+    return STATUS_NOT_SUPPORTED;
+}
+
+NTSTATUS
+SoftGpuPlatformStopScanout(
+    _Inout_ PSOFTGPU_DEVICE Device)
+{
+    UNREFERENCED_PARAMETER(Device);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+SoftGpuPlatformSetPrimary(
+    _Inout_ PSOFTGPU_DEVICE Device,
+    _In_ PHYSICAL_ADDRESS PrimaryAddress,
+    _In_ ULONG Pitch,
+    _In_ ULONG Width,
+    _In_ ULONG Height,
+    _In_ BOOLEAN Visible)
+{
+    UNREFERENCED_PARAMETER(Device);
+    UNREFERENCED_PARAMETER(PrimaryAddress);
+    UNREFERENCED_PARAMETER(Pitch);
+    UNREFERENCED_PARAMETER(Width);
+    UNREFERENCED_PARAMETER(Height);
+    UNREFERENCED_PARAMETER(Visible);
+    return STATUS_NOT_SUPPORTED;
+}
+
+NTSTATUS
+SoftGpuPlatformPresentDisplayOnly(
+    _Inout_ PSOFTGPU_DEVICE Device,
+    _In_ const DXGKARG_PRESENT_DISPLAYONLY *PresentDisplayOnly)
+{
+    UNREFERENCED_PARAMETER(Device);
+    UNREFERENCED_PARAMETER(PresentDisplayOnly);
+    return STATUS_NOT_SUPPORTED;
+}
+
+NTSTATUS
+SoftGpuPlatformUpdatePointer(
+    _Inout_ PSOFTGPU_DEVICE Device)
+{
+    UNREFERENCED_PARAMETER(Device);
+    return STATUS_NOT_SUPPORTED;
+}
+
 VOID
 SoftGpuPlatformFillNodeMetadata(
     _Out_ DXGKARG_GETNODEMETADATA *GetNodeMetadata)
