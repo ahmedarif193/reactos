@@ -773,7 +773,12 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
         ICIF_SET
     ),
     /* ThreadPowerThrottlingState */
-    IQS_NONE,
+    IQS_SAME
+    (
+        THREAD_POWER_THROTTLING_STATE,
+        ULONG,
+        ICIF_SET
+    ),
     /* ThreadWorkloadClass */
     IQS_NONE,
     /* ThreadCreateStateChange */
