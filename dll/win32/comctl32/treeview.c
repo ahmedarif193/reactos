@@ -85,6 +85,7 @@ typedef struct tagTREEVIEW_INFO
   UINT          uIndent;        /* indentation in pixels */
   HTREEITEM     selectedItem;   /* handle to selected item or 0 if none */
   HTREEITEM     hotItem;        /* handle currently under cursor, 0 if none */
+  HTREEITEM     hotGlyphItem;
   HTREEITEM	focusedItem;    /* item that was under the cursor when WM_LBUTTONDOWN was received */
   HTREEITEM     editItem;       /* item being edited with builtin edit box */
 
@@ -1083,6 +1084,9 @@ TREEVIEW_FreeItem(TREEVIEW_INFO *infoPtr, TREEVIEW_ITEM *item)
         infoPtr->selectedItem = NULL;
     if (infoPtr->hotItem == item)
         infoPtr->hotItem = NULL;
+
+    if (infoPtr->hotGlyphItem == item)
+        infoPtr->hotGlyphItem = NULL;
     if (infoPtr->focusedItem == item)
         infoPtr->focusedItem = NULL;
     if (infoPtr->firstVisible == item)
@@ -2434,12 +2438,15 @@ static void TREEVIEW_DrawItemLineSigns(const TREEVIEW_INFO *infoPtr, HDC hdc,
 
     if (theme)
     {
+        int part = TVP_GLYPH;
         int state = (item->state & TVIS_EXPANDED) ? GLPS_OPENED : GLPS_CLOSED;
         RECT glyphRect = item->rect;
 
+        if (item == infoPtr->hotGlyphItem && IsThemePartDefined(theme, TVP_HOTGLYPH, 0))
+            part = TVP_HOTGLYPH;
         glyphRect.left = item->linesOffset;
         glyphRect.right = item->stateOffset;
-        DrawThemeBackground(theme, hdc, TVP_GLYPH, state, &glyphRect, NULL);
+        DrawThemeBackground(theme, hdc, part, state, &glyphRect, NULL);
         return;
     }
 #endif
@@ -2576,6 +2583,33 @@ TREEVIEW_DrawItemLines(const TREEVIEW_INFO *infoPtr, HDC hdc, const TREEVIEW_ITE
     DeleteObject(hbr);
 }
 
+#if __WINE_COMCTL32_VERSION == 6
+static int
+TREEVIEW_GetThemedItemState(const TREEVIEW_INFO *infoPtr, const TREEVIEW_ITEM *item, BOOL inFocus)
+{
+    HTHEME theme = GetWindowTheme(infoPtr->hwnd);
+    BOOL hot, selected;
+
+    if (!theme || !IsThemePartDefined(theme, TVP_TREEITEM, 0))
+        return 0;
+
+    hot = (item == infoPtr->hotItem);
+    selected = (item->state & TVIS_SELECTED) &&
+               (!infoPtr->focusedItem || item == infoPtr->focusedItem) &&
+               (inFocus || (infoPtr->dwStyle & TVS_SHOWSELALWAYS));
+
+    if (item->state & TVIS_DROPHILITED)
+        return TREIS_SELECTED;
+    if (selected && hot)
+        return TREIS_HOTSELECTED;
+    if (selected)
+        return inFocus ? TREIS_SELECTED : TREIS_SELECTEDNOTFOCUS;
+    if (hot)
+        return TREIS_HOT;
+    return 0;
+}
+#endif
+
 static void
 TREEVIEW_DrawItem(const TREEVIEW_INFO *infoPtr, HDC hdc, TREEVIEW_ITEM *item)
 {
@@ -2585,8 +2619,16 @@ TREEVIEW_DrawItem(const TREEVIEW_INFO *infoPtr, HDC hdc, TREEVIEW_ITEM *item)
     int centery;
     BOOL inFocus = (GetFocus() == infoPtr->hwnd);
     NMTVCUSTOMDRAW nmcdhdr;
+#if __WINE_COMCTL32_VERSION == 6
+    int themeState;
+    BOOL themedBg = FALSE;
+#endif
 
     TREEVIEW_UpdateDispInfo(infoPtr, item, CALLBACK_MASK_ALL);
+
+#if __WINE_COMCTL32_VERSION == 6
+    themeState = TREEVIEW_GetThemedItemState(infoPtr, item, inFocus);
+#endif
 
     /* - If item is drop target or it is selected and window is in focus -
      * use blue background (COLOR_HIGHLIGHT).
@@ -2594,6 +2636,20 @@ TREEVIEW_DrawItem(const TREEVIEW_INFO *infoPtr, HDC hdc, TREEVIEW_ITEM *item)
      * TVS_SHOWSELALWAYS - use grey background (COLOR_BTNFACE)
      * - Otherwise - use background color
      */
+#if __WINE_COMCTL32_VERSION == 6
+    if (themeState)
+    {
+	COLORREF themeColor;
+
+	nmcdhdr.clrTextBk = GETBKCOLOR(infoPtr->clrBk);
+	if (SUCCEEDED(GetThemeColor(GetWindowTheme(infoPtr->hwnd), TVP_TREEITEM,
+				    themeState, TMT_TEXTCOLOR, &themeColor)))
+	    nmcdhdr.clrText = themeColor;
+	else
+	    nmcdhdr.clrText = GETTXTCOLOR(infoPtr->clrText);
+    }
+    else
+#endif
     if ((item->state & TVIS_DROPHILITED) || ((item == infoPtr->focusedItem) && !(item->state & TVIS_SELECTED)) ||
 	((item->state & TVIS_SELECTED) && (!infoPtr->focusedItem || item == infoPtr->focusedItem) &&
 	 (inFocus || (infoPtr->dwStyle & TVS_SHOWSELALWAYS))))
@@ -2646,6 +2702,18 @@ TREEVIEW_DrawItem(const TREEVIEW_INFO *infoPtr, HDC hdc, TREEVIEW_ITEM *item)
     if (cditem & CDRF_NEWFONT)
 	TREEVIEW_ComputeTextWidth(infoPtr, item, hdc);
 
+#if __WINE_COMCTL32_VERSION == 6
+    if (themeState)
+    {
+        RECT rcItem = item->rect;
+
+        themedBg = SUCCEEDED(DrawThemeBackground(GetWindowTheme(infoPtr->hwnd), hdc,
+                                                 TVP_TREEITEM, themeState, &rcItem, NULL));
+    }
+    if (themedBg)
+        SetBkMode(hdc, TRANSPARENT);
+    else
+#endif
     if (TREEVIEW_IsFullRowSelect(infoPtr))
     {
         HBRUSH brush = CreateSolidBrush(nmcdhdr.clrTextBk);
@@ -2709,6 +2777,9 @@ TREEVIEW_DrawItem(const TREEVIEW_INFO *infoPtr, HDC hdc, TREEVIEW_ITEM *item)
             ImageList_DrawEx(infoPtr->himlNormal, imageIndex, hdc,
                          item->imageOffset, centery - infoPtr->normalImageHeight / 2,
                          0, 0,
+#if __WINE_COMCTL32_VERSION == 6
+                         themedBg ? CLR_NONE :
+#endif
                          TREEVIEW_IsFullRowSelect(infoPtr) ? nmcdhdr.clrTextBk : infoPtr->clrBk,
                          item->state & TVIS_CUT ? GETBKCOLOR(infoPtr->clrBk) : CLR_DEFAULT,
                          style);
@@ -2741,12 +2812,21 @@ TREEVIEW_DrawItem(const TREEVIEW_INFO *infoPtr, HDC hdc, TREEVIEW_ITEM *item)
 	    GetTextExtentPoint32W(hdc, item->pszText, lstrlenW(item->pszText), &sz);
 
 	    align = SetTextAlign(hdc, TA_LEFT | TA_TOP);
+#if __WINE_COMCTL32_VERSION == 6
+	    ExtTextOutW(hdc, rcText.left + 2, (rcText.top + rcText.bottom - sz.cy) / 2,
+		        themedBg ? ETO_CLIPPED : ETO_CLIPPED | ETO_OPAQUE,
+			&rcText,
+		        item->pszText,
+		        lstrlenW(item->pszText),
+			NULL);
+#else
 	    ExtTextOutW(hdc, rcText.left + 2, (rcText.top + rcText.bottom - sz.cy) / 2,
 		        ETO_CLIPPED | ETO_OPAQUE,
 			&rcText,
 		        item->pszText,
 		        lstrlenW(item->pszText),
 			NULL);
+#endif
 	    SetTextAlign(hdc, align);
 
 	    /* Draw focus box around the selected item */
@@ -2795,6 +2875,10 @@ TREEVIEW_DrawItem(const TREEVIEW_INFO *infoPtr, HDC hdc, TREEVIEW_ITEM *item)
     }
 
     /* Restore the hdc state */
+#if __WINE_COMCTL32_VERSION == 6
+    if (themedBg)
+        SetBkMode(hdc, OPAQUE);
+#endif
     SetTextColor(hdc, oldTextColor);
     SetBkColor(hdc, oldTextBkColor);
     SelectObject(hdc, hOldFont);
@@ -5264,6 +5348,7 @@ TREEVIEW_Create(HWND hwnd, const CREATESTRUCTW *lpcs)
     infoPtr->selectedItem = NULL;
     infoPtr->focusedItem = NULL;
     infoPtr->hotItem = NULL;
+    infoPtr->hotGlyphItem = NULL;
     infoPtr->editItem = NULL;
     infoPtr->firstVisible = NULL;
     infoPtr->maxVisibleOrder = 0;
@@ -5537,6 +5622,14 @@ TREEVIEW_MouseLeave (TREEVIEW_INFO * infoPtr)
     TREEVIEW_InvalidateItem(infoPtr, infoPtr->hotItem);
     infoPtr->hotItem = NULL;
 
+#if __WINE_COMCTL32_VERSION == 6
+    if (infoPtr->hotGlyphItem)
+    {
+        TREEVIEW_InvalidateItem(infoPtr, infoPtr->hotGlyphItem);
+        infoPtr->hotGlyphItem = NULL;
+    }
+#endif
+
     return 0;
 }
 
@@ -5547,8 +5640,15 @@ TREEVIEW_MouseMove (TREEVIEW_INFO * infoPtr, LPARAM lParam)
     TREEVIEW_ITEM * item;
     TVHITTESTINFO ht;
     BOOL item_hit;
+#if __WINE_COMCTL32_VERSION == 6
+    HTHEME theme = GetWindowTheme(infoPtr->hwnd);
+    BOOL themedItems = theme && IsThemePartDefined(theme, TVP_TREEITEM, 0);
+
+    if (!themedItems && !(infoPtr->dwStyle & TVS_TRACKSELECT)) return 0;
+#else
 
     if (!(infoPtr->dwStyle & TVS_TRACKSELECT)) return 0;
+#endif
 
     /* fill in the TRACKMOUSEEVENT struct */
     trackinfo.cbSize = sizeof(TRACKMOUSEEVENT);
@@ -5588,6 +5688,20 @@ TREEVIEW_MouseMove (TREEVIEW_INFO * infoPtr, LPARAM lParam)
             TREEVIEW_InvalidateItem(infoPtr, infoPtr->hotItem);
         }
     }
+
+#if __WINE_COMCTL32_VERSION == 6
+    {
+        HTREEITEM hotGlyph = (item && (ht.flags & TVHT_ONITEMBUTTON)) ? item : NULL;
+
+        if (hotGlyph != infoPtr->hotGlyphItem)
+        {
+            TREEVIEW_InvalidateItem(infoPtr, infoPtr->hotGlyphItem);
+            infoPtr->hotGlyphItem = hotGlyph;
+            if (hotGlyph)
+                TREEVIEW_InvalidateItem(infoPtr, hotGlyph);
+        }
+    }
+#endif
 
     return 0;
 }
