@@ -953,7 +953,7 @@ LoadSchemeFromTheme(OUT PCOLOR_SCHEME scheme, IN PTHEME_SELECTION pSelectedTheme
     HTHEMEFILE hThemeFile = 0;
     HRESULT hret;
     HTHEME hTheme;
-    int i;
+    int i, BorderWidth;
 
     hret = OpenThemeFile(pSelectedTheme->Theme->ThemeFileName,
                          pSelectedTheme->Color->StyleName,
@@ -974,7 +974,14 @@ LoadSchemeFromTheme(OUT PCOLOR_SCHEME scheme, IN PTHEME_SELECTION pSelectedTheme
 
     /* Load sizes */
     /* I wonder why GetThemeSysInt doesn't work here */
-    scheme->ncMetrics.iBorderWidth = GetThemeSysSize(hTheme, SM_CXFRAME);
+    BorderWidth = GetThemeSysSize(hTheme, SM_CXFRAME);
+    if (BorderWidth == GetSystemMetrics(SM_CXFRAME))
+    {
+        BorderWidth -= GetSystemMetrics(SM_CXDLGFRAME);
+        if (BorderWidth < 1)
+            BorderWidth = 1;
+    }
+    scheme->ncMetrics.iBorderWidth = BorderWidth;
     scheme->ncMetrics.iScrollWidth = GetThemeSysSize(hTheme, SM_CXVSCROLL);
     scheme->ncMetrics.iScrollHeight = GetThemeSysSize(hTheme, SM_CYHSCROLL);
     scheme->ncMetrics.iCaptionWidth = GetThemeSysSize(hTheme, SM_CXSIZE);
