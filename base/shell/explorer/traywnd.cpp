@@ -219,6 +219,9 @@ public:
 
         Size.cy = max(Size.cy, GetSystemMetrics(SM_CYCAPTION));
 
+        if (IsThemeActive())
+            Size.cy = max(ShellScaleForDpi(40), 2 * GetSystemMetrics(SM_CYCAPTION));
+
         /* Save the size of the start button */
         m_Size = Size;
     }
@@ -248,15 +251,18 @@ public:
 
         SetWindowTheme(m_hWnd, L"Start", NULL);
 
-        m_ImageList = ImageList_LoadImageW(hExplorerInstance,
-                                           MAKEINTRESOURCEW(IDB_START),
-                                           0, 0, 0,
-                                           IMAGE_BITMAP,
-                                           LR_LOADTRANSPARENT | LR_CREATEDIBSECTION);
+        if (!IsThemeActive())
+        {
+            m_ImageList = ImageList_LoadImageW(hExplorerInstance,
+                                               MAKEINTRESOURCEW(IDB_START),
+                                               0, 0, 0,
+                                               IMAGE_BITMAP,
+                                               LR_LOADTRANSPARENT | LR_CREATEDIBSECTION);
 
-        const INT Margin = ShellScaleForDpi(1);
-        BUTTON_IMAGELIST bil = {m_ImageList, {Margin, Margin, Margin, Margin}, BUTTON_IMAGELIST_ALIGN_LEFT};
-        SendMessageW(BCM_SETIMAGELIST, 0, (LPARAM) &bil);
+            const INT Margin = ShellScaleForDpi(1);
+            BUTTON_IMAGELIST bil = {m_ImageList, {Margin, Margin, Margin, Margin}, BUTTON_IMAGELIST_ALIGN_LEFT};
+            SendMessageW(BCM_SETIMAGELIST, 0, (LPARAM) &bil);
+        }
         UpdateSize();
     }
 
@@ -270,6 +276,9 @@ public:
         {
             wcscpy(szStartCaption, L"Start");
         }
+
+        if (IsThemeActive())
+            szStartCaption[0] = 0;
 
         DWORD dwStyle = WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | BS_PUSHBUTTON | BS_LEFT | BS_VCENTER;
 
@@ -300,8 +309,68 @@ public:
         return 0;
     }
 
+    VOID DrawFlagPane(HDC hdc, int x0, int x1, double t0, double t1, int yTop, int h, int skew, int w)
+    {
+        POINT pts[4];
+        pts[0].x = x0; pts[0].y = yTop + (int)(skew * (1.0 - t0));
+        pts[1].x = x1; pts[1].y = yTop + (int)(skew * (1.0 - t1));
+        pts[2].x = x1; pts[2].y = yTop + h - (int)(skew * (1.0 - t1));
+        pts[3].x = x0; pts[3].y = yTop + h - (int)(skew * (1.0 - t0));
+        Polygon(hdc, pts, 4);
+    }
+
+    VOID DrawWin8Flag(HDC hdc)
+    {
+        RECT rc;
+        GetClientRect(&rc);
+
+        int w = ShellScaleForDpi(22);
+        int h = ShellScaleForDpi(17);
+        int skew = ShellScaleForDpi(2);
+        int gap = ShellScaleForDpi(2);
+        int xBase = ((rc.right - w) / 2);
+        int yBase = ((rc.bottom - h) / 2);
+
+        HBRUSH hbr = CreateSolidBrush(RGB(255, 255, 255));
+        HGDIOBJ hbrOld = SelectObject(hdc, hbr);
+        HGDIOBJ hpenOld = SelectObject(hdc, GetStockObject(NULL_PEN));
+
+        int xm = w * 42 / 100;
+        double tm0 = (double)xm / w;
+        double tm1 = (double)(xm + gap) / w;
+
+        int hPane = (h - gap) / 2;
+
+        SetViewportOrgEx(hdc, xBase, yBase, NULL);
+        DrawFlagPane(hdc, 0, xm, 0.0, tm0, 0, hPane, skew, w);
+        DrawFlagPane(hdc, xm + gap, w, tm1, 1.0, 0, hPane, skew, w);
+        DrawFlagPane(hdc, 0, xm, 0.0, tm0, hPane + gap, hPane, skew, w);
+        DrawFlagPane(hdc, xm + gap, w, tm1, 1.0, hPane + gap, hPane, skew, w);
+        SetViewportOrgEx(hdc, 0, 0, NULL);
+
+        SelectObject(hdc, hpenOld);
+        SelectObject(hdc, hbrOld);
+        DeleteObject(hbr);
+    }
+
+    LRESULT OnPaint(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        LRESULT lr = DefWindowProc(uMsg, wParam, lParam);
+        if (IsThemeActive())
+        {
+            HDC hdc = GetDC();
+            if (hdc)
+            {
+                DrawWin8Flag(hdc);
+                ReleaseDC(hdc);
+            }
+        }
+        return lr;
+    }
+
     BEGIN_MSG_MAP(CStartButton)
         MESSAGE_HANDLER(WM_LBUTTONDOWN, OnLButtonDown)
+        MESSAGE_HANDLER(WM_PAINT, OnPaint)
     END_MSG_MAP()
 };
 
@@ -462,7 +531,8 @@ public:
 
     void RefreshStartMenuSettings()
     {
-        IUnknown_Exec(m_StartMenuPopup, CLSID_MenuBand, 0x10000000, 0, NULL, NULL);
+        if (m_StartMenuPopup)
+            IUnknown_Exec(m_StartMenuPopup, CLSID_MenuBand, 0x10000000, 0, NULL, NULL);
     }
 
     LRESULT DoExitWindows()
@@ -741,7 +811,10 @@ public:
 
     VOID HideStartMenu()
     {
-        m_StartMenuPopup->OnSelect(MPOS_CANCELLEVEL);
+        if (m_StartMenuPopup)
+            m_StartMenuPopup->OnSelect(MPOS_CANCELLEVEL);
+        else
+            StartMenu2_Hide();
     }
 
     VOID ShowFolder(INT csidl, BOOL bExplore)
@@ -1775,6 +1848,12 @@ ChangePos:
             StartSize.cy = HIWORD(size) + (m_Theme ? GetSystemMetrics(SM_CYEDGE) : 0);
         }
 
+        if (m_Theme && Horizontal)
+        {
+            StartSize.cy = rcClient.bottom;
+            StartSize.cx = MulDiv(StartSize.cy, 6, 5);
+        }
+
         if (m_StartButton.m_hWnd != NULL)
         {
             /* Resize and reposition the button */
@@ -1916,6 +1995,17 @@ ChangePos:
 
     void PopupStartMenu()
     {
+        if (m_StartMenuPopup == NULL)
+        {
+            RECT rcBtn;
+            if (m_StartButton.GetWindowRect(&rcBtn) &&
+                StartMenu2_Popup(&rcBtn, m_Position) == S_OK)
+            {
+                m_StartButton.SendMessageW(BM_SETSTATE, TRUE, 0);
+            }
+            return;
+        }
+
         if (m_StartMenuPopup != NULL)
         {
             POINTL pt;
@@ -2367,10 +2457,14 @@ ChangePos:
         /* Load the saved tray window settings */
         RegLoadSettings();
 
+#if 0
         /* Create and initialize the start menu */
         HBITMAP hbmBanner = LoadBitmapW(hExplorerInstance, MAKEINTRESOURCEW(IDB_STARTMENU));
         m_StartMenuPopup = CreateStartMenu(this, &m_StartMenuBand, hbmBanner,
                                            g_TaskbarSettings.sr.SmSmallIcons);
+#else
+        StartMenu2_Create(this, m_hWnd);
+#endif
 
         /* Create the task band */
         hRet = CTaskBand_CreateInstance(this, m_StartButton.m_hWnd, IID_PPV_ARG(IDeskBand, &m_TaskBand));
@@ -2450,6 +2544,7 @@ ChangePos:
 
     LRESULT OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
+        StartMenu2_Destroy();
         return 0;
     }
 
@@ -3053,6 +3148,15 @@ HandleTrayContextMenu:
 
     LRESULT OnOpenStartMenu(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
+        if (m_StartMenuPopup == NULL)
+        {
+            if (StartMenu2_IsVisible())
+                HideStartMenu();
+            else
+                PopupStartMenu();
+            return TRUE;
+        }
+
         HWND hwndStartMenu;
         HRESULT hr = IUnknown_GetWindow(m_StartMenuPopup, &hwndStartMenu);
         if (FAILED_UNEXPECTEDLY(hr))
