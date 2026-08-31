@@ -358,6 +358,7 @@ IntCompositionGetBufferSize(
  * dwm's mapped-view cache can never alias a recycled surface. */
 static ULONG g_FrontGeneration = 0;
 static ULONGLONG g_DxUpdateSequence = 0;
+static ULONGLONG g_GdiUpdateSequence = 0;
 static ULONGLONG g_BaseUpdateSequence = 0;
 
 /* FRONT buffer over a pageable section: win32k keeps a system-space view the
@@ -1996,6 +1997,52 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
             Request.SurfaceId = (ULONG)(Entry - g_Redirects);
             Request.Generation = Entry->Redirect.DxGeneration;
             Request.UpdateId = g_DxUpdateSequence;
+            break;
+
+        case DWM_DX_SURFACE_ISSUE_GDI:
+            if (IntCompositionEnsureSurface(Wnd, &Entry->Redirect) == NULL ||
+                Entry->Redirect.BackGlobalShare == 0)
+            {
+                return STATUS_NOT_SUPPORTED;
+            }
+            if (Entry->Redirect.GdiIssuedUpdateId >
+                Entry->Redirect.GdiConsumedUpdateId)
+            {
+                return STATUS_DEVICE_BUSY;
+            }
+
+            if (++g_GdiUpdateSequence == 0)
+                ++g_GdiUpdateSequence;
+            Entry->Redirect.GdiIssuedUpdateId = g_GdiUpdateSequence;
+            Entry->Redirect.GdiAdmittedUpdateId =
+                Entry->Redirect.GdiConsumedUpdateId;
+            Entry->Redirect.GdiPublishedUpdateId =
+                Entry->Redirect.GdiConsumedUpdateId;
+
+            Request.GlobalShare = Entry->Redirect.BackGlobalShare;
+            Request.SurfaceId = (ULONG)(Entry - g_Redirects);
+            Request.Generation = Entry->Redirect.BackGeneration;
+            Request.UpdateId = g_GdiUpdateSequence;
+            Request.Info.Magic = DWM_DX_SURFACE_INFO_MAGIC;
+            Request.Info.Version = DWM_DX_SURFACE_INFO_VERSION;
+            Request.Info.Width = (ULONG)Entry->Redirect.cx;
+            Request.Info.Height = (ULONG)Entry->Redirect.cy;
+            Request.Info.Pitch =
+                (ULONG)Entry->Redirect.psurf->SurfObj.lDelta;
+            Request.Info.Format = DWM_DX_FORMAT_B8G8R8A8_UNORM;
+            Request.UpdateRect = Entry->Redirect.rcClient;
+            break;
+
+        case DWM_DX_SURFACE_CANCEL_GDI:
+            if (Request.UpdateId == 0 ||
+                Request.UpdateId != Entry->Redirect.GdiIssuedUpdateId ||
+                Request.UpdateId <= Entry->Redirect.GdiConsumedUpdateId)
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+            if (Entry->Redirect.GdiAdmittedUpdateId == Request.UpdateId)
+                return STATUS_DEVICE_BUSY;
+            Entry->Redirect.GdiConsumedUpdateId = Request.UpdateId;
             break;
 
         case DWM_DX_SURFACE_UPDATE:

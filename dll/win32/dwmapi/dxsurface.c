@@ -316,6 +316,74 @@ DwmDxIssueSurface(const DWM_DX_SURFACE *Surface,
     return Status;
 }
 
+static VOID
+DwmDxCancelGdiSurface(HWND Window, ULONGLONG UpdateId)
+{
+    DWM_DX_SURFACE_EXCHANGE Exchange;
+
+    RtlZeroMemory(&Exchange, sizeof(Exchange));
+    Exchange.StructSize = sizeof(Exchange);
+    Exchange.Action = DWM_DX_SURFACE_CANCEL_GDI;
+    Exchange.Window = (ULONGLONG)(ULONG_PTR)Window;
+    Exchange.UpdateId = UpdateId;
+    (void)NtUserCallOneParam((DWORD_PTR)&Exchange, DWM_ROUTINE_DXSURFACE);
+}
+
+static NTSTATUS
+DwmDxIssueGdiSurface(HWND Window,
+                     const LUID *Luid,
+                     UINT *Format,
+                     HANDLE *SharedSurface,
+                     ULONGLONG *UpdateId)
+{
+    DWM_DX_SHARED_SURFACE_INFO RuntimeInfo;
+    DWM_DX_SURFACE_EXCHANGE Exchange;
+    D3DKMT_QUERYRESOURCEINFO Query;
+    ULONG DeviceIndex;
+    NTSTATUS Status;
+
+    RtlZeroMemory(&Exchange, sizeof(Exchange));
+    Exchange.StructSize = sizeof(Exchange);
+    Exchange.Action = DWM_DX_SURFACE_ISSUE_GDI;
+    Exchange.Window = (ULONGLONG)(ULONG_PTR)Window;
+    Status = (NTSTATUS)NtUserCallOneParam((DWORD_PTR)&Exchange,
+                                          DWM_ROUTINE_DXSURFACE);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = DwmDxGetDevice(Luid, &DeviceIndex);
+    if (NT_SUCCESS(Status))
+    {
+        RtlZeroMemory(&RuntimeInfo, sizeof(RuntimeInfo));
+        RtlZeroMemory(&Query, sizeof(Query));
+        Query.hDevice = g_DxDevices[DeviceIndex].hDevice;
+        Query.hGlobalShare = Exchange.GlobalShare;
+        Query.pPrivateRuntimeData = &RuntimeInfo;
+        Query.PrivateRuntimeDataSize = sizeof(RuntimeInfo);
+        Status = D3DKMTQueryResourceInfo(&Query);
+        if (NT_SUCCESS(Status) &&
+            (Query.NumAllocations != 1 ||
+             Query.PrivateRuntimeDataSize != sizeof(RuntimeInfo) ||
+             !RtlEqualMemory(&RuntimeInfo,
+                             &Exchange.Info,
+                             sizeof(RuntimeInfo))))
+        {
+            Status = STATUS_INVALID_PARAMETER;
+        }
+    }
+
+    if (!NT_SUCCESS(Status))
+    {
+        DwmDxCancelGdiSurface(Window, Exchange.UpdateId);
+        return Status;
+    }
+
+    *Format = D3DDDIFMT_A8R8G8B8;
+    *SharedSurface = (HANDLE)(ULONG_PTR)Exchange.GlobalShare;
+    *UpdateId = Exchange.UpdateId;
+    return STATUS_SUCCESS;
+}
+
 HRESULT WINAPI
 DwmpDxGetWindowSharedSurface(HWND Window,
                              LUID AdapterLuid,
@@ -334,7 +402,8 @@ DwmpDxGetWindowSharedSurface(HWND Window,
     UNREFERENCED_PARAMETER(Monitor);
 
     if (Format == NULL || SharedSurface == NULL || UpdateId == NULL ||
-        Window == NULL || (Flags & ~1u) != 0)
+        Window == NULL ||
+        (Flags & ~(1u | DWM_DX_REDIRECTION_GDI_SURFACE)) != 0)
     {
         return E_INVALIDARG;
     }
@@ -344,6 +413,19 @@ DwmpDxGetWindowSharedSurface(HWND Window,
     *UpdateId = 0;
     if (!InitOnceExecuteOnce(&g_DxInitOnce, DwmDxInitialize, NULL, NULL))
         return E_FAIL;
+
+    if ((Flags & DWM_DX_REDIRECTION_GDI_SURFACE) != 0)
+    {
+        EnterCriticalSection(&g_DxLock);
+        Status = DwmDxIssueGdiSurface(Window, &AdapterLuid,
+                                      Format, SharedSurface, UpdateId);
+        LeaveCriticalSection(&g_DxLock);
+        if (NT_SUCCESS(Status))
+            return DWM_S_GDI_REDIRECTION_SURFACE;
+        if (Status == STATUS_DEVICE_BUSY)
+            return S_FALSE;
+        return HRESULT_FROM_NT(Status);
+    }
 
     EnterCriticalSection(&g_DxLock);
     for (Index = 0; Index < DWM_DX_MAX_SURFACES; ++Index)
@@ -445,7 +527,7 @@ DwmpDxGetWindowSharedSurface(HWND Window,
         return DwmDxStatusToHresult(Status);
     }
 
-    *Format = DWM_DX_FORMAT_B8G8R8A8_UNORM;
+    *Format = D3DDDIFMT_A8R8G8B8;
     *SharedSurface = (HANDLE)(ULONG_PTR)Surface->hGlobalShare;
     LeaveCriticalSection(&g_DxLock);
     return S_OK;
