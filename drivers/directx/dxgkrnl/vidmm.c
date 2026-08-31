@@ -10258,24 +10258,11 @@ DxgkpVidMmTransferAllocationContent(
     if (VidMmSegmentIsAperture(Segment))
         return STATUS_SUCCESS;
 
-    /*
-     * Preferred path: a real TRANSFER paging packet built by the miniport and
-     * executed by the GPU engine.  The CPU copy below stays as the fallback
-     * for miniports whose BuildPagingBuffer does not describe transfers.
-     */
-    Status = DxgkpVidMmSubmitTransferPagingPacket(Adapter, Allocation, Segment, ToSegment);
-    if (NT_SUCCESS(Status))
-        return Status;
-    if (Status != STATUS_NOT_SUPPORTED)
-    {
-        DPRINT1("DxgkpVidMmTransferAllocationContent: paging transfer failed 0x%08lx alloc=%p\n", Status, Allocation);
-        return Status;
-    }
-    Status = STATUS_NOT_SUPPORTED;
-
+    /* A CPU-visible segment needs no paging-engine round trip.  Besides being
+     * cheaper, the direct copy remains available when the allocation has no
+     * owning device (standard kernel allocations are valid in that state). */
     if (VidMmSegmentIsCpuVisible(Segment))
     {
-        /* CPU copy through the segment's write-combined mapping. */
         if (NT_SUCCESS(VidMmMapSegmentCpu(Segment)) &&
             Allocation->SegmentOffset + Allocation->Size <= Segment->Size)
         {
@@ -10291,8 +10278,12 @@ DxgkpVidMmTransferAllocationContent(
             }
             Status = STATUS_SUCCESS;
         }
+        if (NT_SUCCESS(Status))
+            return Status;
     }
 
+    /* Non-CPU-visible memory requires a real TRANSFER packet and fence. */
+    Status = DxgkpVidMmSubmitTransferPagingPacket(Adapter, Allocation, Segment, ToSegment);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("DxgkpVidMmTransferAllocationContent: %s failed 0x%08lx "
