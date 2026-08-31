@@ -3560,8 +3560,6 @@ DxgkpAdapterDpcRoutine(
             if ((VsyncMask & (1UL << SourceId)) != 0)
                 DxgkpNotifyVSync(Adapter, (D3DDDI_VIDEO_PRESENT_SOURCE_ID)SourceId);
         }
-        if (VsyncMask != 0)
-            DxgkDisplayVsyncFlush(Adapter);
     }
 
     DxgkRetireCompletedDmaBuffers(Adapter);
@@ -9563,7 +9561,7 @@ DxgkAdapterStart(
             DXGKRNL_WARN("DxgkAdapterStart: VidSchInitialize failed "
                          "0x%08lX — continuing without scheduler\n",
                          VidSchStatus);
-            /* Non-fatal: present timer provides a fallback for DOD/basic. */
+            /* Non-fatal for display-only adapters, which do not use VidSch. */
         }
     }
 
@@ -9626,7 +9624,7 @@ DxgkAdapterStart(
             DXGKRNL_ERR("DxgkAdapterStart: DxgkPresentInit failed "
                         "0x%08lX — continuing without present queues\n",
                         PresentStatus);
-            /* Non-fatal: the timer-based present in display.c provides a fallback. */
+            /* Display-only adapters use DxgkDdiPresentDisplayOnly instead. */
         }
     }
 
@@ -11543,12 +11541,6 @@ DxgkpAddDeviceRegistered(
     DxgkPeriodicInterruptCoreInitialize(
         &Adapter->PeriodicInterruptCore);
     KeInitializeSpinLock(&Adapter->ChildListLock);
-    KeInitializeSpinLock(&Adapter->PresentLock);
-    ExInitializeRundownProtection(&Adapter->PresentPathRundown);
-    Adapter->PresentPathOpen = 1;
-    Adapter->PresentSnapshotReady = -1;
-    Adapter->PresentSnapshotReading = -1;
-    Adapter->PresentSnapshotWriting = -1;
     KeInitializeMutex(&Adapter->PresentLifecycleMutex, 0);
     KeInitializeSpinLock(&Adapter->SubmitDmaLock);
     KeInitializeSpinLock(&Adapter->TdrHistoryLock);

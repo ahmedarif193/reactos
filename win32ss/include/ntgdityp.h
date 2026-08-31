@@ -689,6 +689,18 @@ typedef struct _DRIVER_FUNCTIONS
     PVOID                          Reserved10;
     PVOID                          Reserved11; /* 92 */
 
+    /* Windows 7 canonical-display-driver entry points (93..102). */
+    PVOID                          RenderHint;
+    PFN_DrvCreateDeviceBitmapEx    CreateDeviceBitmapEx;
+    PFN_DrvDeleteDeviceBitmapEx    DeleteDeviceBitmapEx;
+    PFN_DrvAssociateSharedSurface  AssociateSharedSurface;
+    PFN_DrvSynchronizeRedirectionBitmaps SynchronizeRedirectionBitmaps;
+    PFN_DrvAccumulateD3DDirtyRect  AccumulateD3DDirtyRect;
+    PFN_DrvStartDxInterop          StartDxInterop;
+    PFN_DrvEndDxInterop            EndDxInterop;
+    PFN_DrvLockDisplayArea         LockDisplayArea;
+    PFN_DrvUnlockDisplayArea       UnlockDisplayArea;
+
     /* ReactOS specify */
     PFN_DrvEnableDriver            EnableDriver; //ReactOS Extra
 } DRIVER_FUNCTIONS, *PDRIVER_FUNCTIONS;
@@ -781,5 +793,14 @@ ASSERT_PFN(QueryGlyphAttrs);
 ASSERT_PFN(Notify);
 ASSERT_PFN(SynchronizeSurface);
 ASSERT_PFN(ResetDevice);
+ASSERT_PFN(CreateDeviceBitmapEx);
+ASSERT_PFN(DeleteDeviceBitmapEx);
+ASSERT_PFN(AssociateSharedSurface);
+ASSERT_PFN(SynchronizeRedirectionBitmaps);
+ASSERT_PFN(AccumulateD3DDirtyRect);
+ASSERT_PFN(StartDxInterop);
+ASSERT_PFN(EndDxInterop);
+ASSERT_PFN(LockDisplayArea);
+ASSERT_PFN(UnlockDisplayArea);
 
 #endif

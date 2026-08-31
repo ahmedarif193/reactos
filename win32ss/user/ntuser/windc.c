@@ -86,22 +86,6 @@ DceReleaseCompositionDc(HDC hdc)
     IntCompositionDcRelease(dce->pwndOrg, State);
 }
 
-/* BeginPaint is a bounded classic visual transaction, unlike an arbitrary
- * common-DC lifetime. Store the token on its DCE so EndPaint, teardown, and
- * error cleanup all close the exact batch that was opened. */
-VOID
-FASTCALL
-DceBeginPaintPresentBatch(HDC hdc)
-{
-    DCE *dce = DceGetDceFromDC(hdc);
-
-    if (dce == NULL || dce->CompositionDcState != COMPOSITION_DC_NONE)
-        return;
-
-    if (IntCompositionPresentBatchBegin())
-        dce->CompositionDcState = COMPOSITION_DC_CLASSIC;
-}
-
 static
 PREGION FASTCALL
 DceGetVisRgn(PWND Window, ULONG Flags, HWND hWndChild, ULONG CFlags)

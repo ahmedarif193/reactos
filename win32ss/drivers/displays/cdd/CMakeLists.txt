@@ -16,6 +16,6 @@ add_library(cdd MODULE
 set_module_type(cdd kerneldll ENTRYPOINT RcddEnableDriver 12)
 add_pch(cdd cdd.h SOURCE)
 target_link_libraries(cdd libcntpr)
-add_importlibs(cdd win32k)
+add_importlibs(cdd win32k ntoskrnl)
 add_dependencies(cdd psdk)
 add_cd_file(TARGET cdd DESTINATION reactos/system32 FOR all)
