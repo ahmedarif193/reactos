@@ -55,6 +55,7 @@ CsrpConnectToServer(
     PSID SystemSid = NULL;
     CSR_API_CONNECTINFO ConnectionInfo;
     ULONG ConnectionInfoLength = sizeof(ConnectionInfo);
+    OBJECT_HANDLE_ATTRIBUTE_INFORMATION HandleInfo;
 
     DPRINT("%s(%S)\n", __FUNCTION__, ObjectDirectory);
 
@@ -187,6 +188,23 @@ CsrpConnectToServer(
         NtClose(CsrApiPort);
         CsrApiPort = NULL;
         return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    /* The CSR connection is process infrastructure, not an application handle. */
+    HandleInfo.Inherit = FALSE;
+    HandleInfo.ProtectFromClose = TRUE;
+    Status = NtSetInformationObject(CsrApiPort,
+                                    ObjectHandleFlagInformation,
+                                    &HandleInfo,
+                                    sizeof(HandleInfo));
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("Couldn't protect CSR port handle (Status 0x%lx)\n", Status);
+        RtlDestroyHeap(CsrPortHeap);
+        CsrPortHeap = NULL;
+        NtClose(CsrApiPort);
+        CsrApiPort = NULL;
+        return Status;
     }
 
     /* Return success */
