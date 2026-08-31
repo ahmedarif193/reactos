@@ -177,11 +177,21 @@ SoftGpuDdiSetPointerPosition(
         goto CleanupMutex;
     }
 
-    SoftGpuPointerRestoreLocked(Device);
+    if (!Device->PlatformHardwarePointer)
+        SoftGpuPointerRestoreLocked(Device);
     Device->PointerX = SetPointerPosition->X;
     Device->PointerY = SetPointerPosition->Y;
     Device->PointerVisible = SetPointerPosition->Flags.Visible ? TRUE : FALSE;
-    SoftGpuPointerDrawLocked(Device);
+    if (Device->PlatformHardwarePointer)
+    {
+        Status = SoftGpuPlatformUpdatePointer(Device);
+        if (!NT_SUCCESS(Status))
+            goto CleanupMutex;
+    }
+    else
+    {
+        SoftGpuPointerDrawLocked(Device);
+    }
     KeMemoryBarrier();
     Status = STATUS_SUCCESS;
 
@@ -228,7 +238,8 @@ SoftGpuDdiSetPointerShape(
         goto CleanupMutex;
     }
 
-    SoftGpuPointerRestoreLocked(Device);
+    if (!Device->PlatformHardwarePointer)
+        SoftGpuPointerRestoreLocked(Device);
     RtlZeroMemory(Device->PointerPixels, sizeof(Device->PointerPixels));
     for (Y = 0; Y < SetPointerShape->Height; ++Y)
     {
@@ -241,7 +252,18 @@ SoftGpuDdiSetPointerShape(
     Device->PointerHotX = SetPointerShape->XHot;
     Device->PointerHotY = SetPointerShape->YHot;
     Device->PointerShapeValid = TRUE;
-    SoftGpuPointerDrawLocked(Device);
+    if (++Device->PointerShapeGeneration == 0)
+        ++Device->PointerShapeGeneration;
+    if (Device->PlatformHardwarePointer)
+    {
+        Status = SoftGpuPlatformUpdatePointer(Device);
+        if (!NT_SUCCESS(Status))
+            goto CleanupMutex;
+    }
+    else
+    {
+        SoftGpuPointerDrawLocked(Device);
+    }
     KeMemoryBarrier();
     Status = STATUS_SUCCESS;
 

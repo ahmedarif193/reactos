@@ -178,7 +178,8 @@ typedef struct _SOFTGPU_DIAGNOSTIC_PAYLOAD
 static NTSTATUS
 SoftGpuAllocateFrameBuffer(
     _Inout_ PSOFTGPU_DEVICE Device,
-    _In_ ULONGLONG RequiredSize)
+    _In_ ULONGLONG RequiredSize,
+    _In_ PHYSICAL_ADDRESS HighestAddress)
 {
     PHYSICAL_ADDRESS LowAddress;
     PHYSICAL_ADDRESS HighAddress;
@@ -209,14 +210,22 @@ SoftGpuAllocateFrameBuffer(
         return STATUS_DEVICE_CONFIGURATION_ERROR;
 
     if (Device->FrameBuffer != NULL &&
-        Device->FrameBufferSize >= AllocationSize)
+        Device->FrameBufferSize >= AllocationSize &&
+        (HighestAddress.QuadPart == 0 ||
+         ((ULONGLONG)Device->FrameBufferPhys.QuadPart <=
+              (ULONGLONG)HighestAddress.QuadPart &&
+          Device->FrameBufferSize - 1 <=
+              (ULONGLONG)HighestAddress.QuadPart -
+                  (ULONGLONG)Device->FrameBufferPhys.QuadPart)))
     {
         RtlZeroMemory(Device->FrameBuffer, Device->FrameBufferSize);
         return STATUS_SUCCESS;
     }
 
     LowAddress.QuadPart = 0;
-    HighAddress.QuadPart = (LONGLONG)-1;
+    HighAddress = HighestAddress;
+    if (HighAddress.QuadPart == 0)
+        HighAddress.QuadPart = (LONGLONG)-1;
     SkipBytes.QuadPart = 0;
     NewFrameBuffer = MmAllocateContiguousMemorySpecifyCache(
                          AllocationSize,
@@ -916,7 +925,7 @@ SoftGpuDdiStartDevice(
     {
         DPRINT1("SOFTGPU: platform display validation failed 0x%08lx\n",
                 Status);
-        return Status;
+        goto CleanupStart;
     }
 
     if (PlatformConfig.Width == 0 ||
@@ -928,7 +937,8 @@ SoftGpuDdiStartDevice(
         (PlatformConfig.Format != D3DDDIFMT_X8R8G8B8 &&
          PlatformConfig.Format != D3DDDIFMT_A8R8G8B8))
     {
-        return STATUS_DEVICE_CONFIGURATION_ERROR;
+        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        goto CleanupStart;
     }
 
     Status = SoftGpu2dComputeAllocationSlabSize(
@@ -938,7 +948,7 @@ SoftGpuDdiStartDevice(
                  SOFTGPU_MAX_ALLOCATION_SLAB_SIZE,
                  &RequiredFrameBufferSize);
     if (!NT_SUCCESS(Status))
-        return Status;
+        goto CleanupStart;
 
     Device->Width = PlatformConfig.Width;
     Device->Height = PlatformConfig.Height;
@@ -946,13 +956,20 @@ SoftGpuDdiStartDevice(
 
     Status = SoftGpuAllocateFrameBuffer(
                  Device,
-                 RequiredFrameBufferSize);
+                 RequiredFrameBufferSize,
+                 PlatformConfig.HighestFrameBufferAddress);
     if (!NT_SUCCESS(Status))
-        return Status;
+        goto CleanupStart;
 
     Status = SoftGpuScanoutStart(Device, &PlatformConfig);
     if (!NT_SUCCESS(Status))
-        return Status;
+        goto CleanupStart;
+
+    Status = SoftGpuPlatformStartScanout(Device);
+    if (Status == STATUS_NOT_SUPPORTED)
+        Status = STATUS_SUCCESS;
+    if (!NT_SUCCESS(Status))
+        goto CleanupStart;
 
     /*
      * Save only the prefix the OS advertised.  Older WDDM levels pass a
@@ -1138,6 +1155,11 @@ SoftGpuDdiStartDevice(
     DPRINT("SOFTGPU: StartDevice success: %lu source(s), %lu child(ren)\n",
            Device->NumSources, Device->NumChildren);
     return STATUS_SUCCESS;
+
+CleanupStart:
+    SoftGpuScanoutStop(Device);
+    (VOID)SoftGpuPlatformStopScanout(Device);
+    return Status;
 }
 
 
@@ -1153,6 +1175,7 @@ SoftGpuDdiStopDevice(
 {
     PSOFTGPU_DEVICE Device = (PSOFTGPU_DEVICE)MiniportDeviceContext;
     KIRQL OldIrql;
+    NTSTATUS Status;
 
     DPRINT("SOFTGPU: StopDevice Device=%p\n", Device);
 
@@ -1208,6 +1231,9 @@ SoftGpuDdiStopDevice(
         Device->DpcInitialized = FALSE;
     }
     SoftGpuScanoutStop(Device);
+    Status = SoftGpuPlatformStopScanout(Device);
+    if (!NT_SUCCESS(Status))
+        return Status;
     RtlZeroMemory(&Device->DxgkInterface, sizeof(Device->DxgkInterface));
 
     /*
