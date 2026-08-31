@@ -34,6 +34,9 @@
 #include <reactos/dwmframe.h>
 
 #define RCDD_PRESENT_SLOT_COUNT 3
+#define RCDD_DISPLAY_TILE_DIMENSION 9
+#define RCDD_DISPLAY_TILE_COUNT \
+   (RCDD_DISPLAY_TILE_DIMENSION * RCDD_DISPLAY_TILE_DIMENSION)
 
 typedef enum _RCDD_PRESENT_SLOT_STATE
 {
@@ -83,6 +86,15 @@ typedef struct _RCDD_PDEV
    BOOL PointerPositionValid;
    LONG PointerX;
    LONG PointerY;
+
+   /* Display-area exclusion follows the native CDD 9x9 tile layout. */
+   HSEMAPHORE DisplayTileLocks[RCDD_DISPLAY_TILE_COUNT];
+   ULONG DisplayTileLockCount;
+   ULONG DisplayTileWidth;
+   ULONG DisplayTileHeight;
+   KSEMAPHORE DisplayLockWaitSemaphore;
+   KMUTEX DisplayLockWaitMutex;
+   LONG DisplayLockWaiters;
 
    /* DWM cursor state (driven by DrvEscape, see escape.c) */
    BOOL CursorSuppressed;      /* Compositor owns the cursor                  */

@@ -737,15 +737,136 @@ RcddSynchronizeSurface(
                     ((fl & DSS_RESERVED) ? RCDD_PRESENT_SYNCHRONOUS : 0));
 }
 
-/* ReactOS does not create CDD device redirection bitmaps yet. Keep the Windows
- * DDI surface in place without aliasing these operations to the primary. */
+typedef struct _RCDD_DISPLAY_TILE_RANGE
+{
+   ULONG Left;
+   ULONG Top;
+   ULONG Right;
+   ULONG Bottom;
+} RCDD_DISPLAY_TILE_RANGE, *PRCDD_DISPLAY_TILE_RANGE;
+
+static BOOL
+RcddGetDisplayTileRange(
+   IN PRCDD_PDEV ppdev,
+   IN OPTIONAL RECTL *prcl,
+   OUT PRCDD_DISPLAY_TILE_RANGE Range)
+{
+   RECTL Rect;
+   LONG Temp;
+
+   if (ppdev == NULL ||
+       ppdev->DisplayTileLockCount != RCDD_DISPLAY_TILE_COUNT ||
+       ppdev->DisplayTileWidth == 0 || ppdev->DisplayTileHeight == 0)
+   {
+      return FALSE;
+   }
+
+   if (prcl != NULL)
+   {
+      Rect = *prcl;
+   }
+   else
+   {
+      Rect.left = 0;
+      Rect.top = 0;
+      Rect.right = ppdev->ScreenWidth;
+      Rect.bottom = ppdev->ScreenHeight;
+   }
+
+   if (Rect.left > Rect.right)
+   {
+      Temp = Rect.left;
+      Rect.left = Rect.right;
+      Rect.right = Temp;
+   }
+
+   if (Rect.top > Rect.bottom)
+   {
+      Temp = Rect.top;
+      Rect.top = Rect.bottom;
+      Rect.bottom = Temp;
+   }
+
+   Rect.left = max(Rect.left, 0);
+   Rect.top = max(Rect.top, 0);
+   Rect.right = min(Rect.right, (LONG)ppdev->ScreenWidth);
+   Rect.bottom = min(Rect.bottom, (LONG)ppdev->ScreenHeight);
+   if (Rect.left >= Rect.right || Rect.top >= Rect.bottom)
+      return FALSE;
+
+   Range->Left = min((ULONG)Rect.left / ppdev->DisplayTileWidth,
+                     RCDD_DISPLAY_TILE_DIMENSION - 1);
+   Range->Top = min((ULONG)Rect.top / ppdev->DisplayTileHeight,
+                    RCDD_DISPLAY_TILE_DIMENSION - 1);
+   Range->Right = min((ULONG)Rect.right / ppdev->DisplayTileWidth + 1,
+                      RCDD_DISPLAY_TILE_DIMENSION);
+   Range->Bottom = min((ULONG)Rect.bottom / ppdev->DisplayTileHeight + 1,
+                       RCDD_DISPLAY_TILE_DIMENSION);
+
+   return TRUE;
+}
+
 VOID APIENTRY
 RcddLockDisplayArea(
    IN DHPDEV dhpdev,
    IN OPTIONAL RECTL *prcl)
 {
-   UNREFERENCED_PARAMETER(dhpdev);
-   UNREFERENCED_PARAMETER(prcl);
+   PRCDD_PDEV ppdev = (PRCDD_PDEV)dhpdev;
+   RCDD_DISPLAY_TILE_RANGE Range;
+   BOOLEAN Acquired[RCDD_DISPLAY_TILE_COUNT];
+   ULONG X, Y, Index;
+   BOOL Contended;
+
+   if (!RcddGetDisplayTileRange(ppdev, prcl, &Range))
+      return;
+
+   for (;;)
+   {
+      KeWaitForSingleObject(&ppdev->DisplayLockWaitMutex,
+                            Executive,
+                            KernelMode,
+                            FALSE,
+                            NULL);
+      RtlZeroMemory(Acquired, sizeof(Acquired));
+      Contended = FALSE;
+
+      for (Y = Range.Top; Y < Range.Bottom && !Contended; Y++)
+      {
+         for (X = Range.Left; X < Range.Right; X++)
+         {
+            Index = Y * RCDD_DISPLAY_TILE_DIMENSION + X;
+            if (!EngAcquireSemaphoreNoWait(ppdev->DisplayTileLocks[Index]))
+            {
+               Contended = TRUE;
+               break;
+            }
+
+            Acquired[Index] = TRUE;
+         }
+      }
+
+      if (!Contended)
+      {
+         KeReleaseMutex(&ppdev->DisplayLockWaitMutex, FALSE);
+         return;
+      }
+
+      for (Index = RCDD_DISPLAY_TILE_COUNT; Index != 0; Index--)
+      {
+         if (Acquired[Index - 1])
+            EngReleaseSemaphore(ppdev->DisplayTileLocks[Index - 1]);
+      }
+
+      ASSERT(ppdev->DisplayLockWaiters != MAXLONG);
+      ppdev->DisplayLockWaiters++;
+      KeReleaseMutex(&ppdev->DisplayLockWaitMutex, FALSE);
+
+      KeWaitForSingleObject(&ppdev->DisplayLockWaitSemaphore,
+                            Executive,
+                            KernelMode,
+                            FALSE,
+                            NULL);
+   }
 }
 
 VOID APIENTRY
@@ -753,8 +874,40 @@ RcddUnlockDisplayArea(
    IN DHPDEV dhpdev,
    IN OPTIONAL RECTL *prcl)
 {
-   UNREFERENCED_PARAMETER(dhpdev);
-   UNREFERENCED_PARAMETER(prcl);
+   PRCDD_PDEV ppdev = (PRCDD_PDEV)dhpdev;
+   RCDD_DISPLAY_TILE_RANGE Range;
+   ULONG X, Y, Index;
+
+   if (!RcddGetDisplayTileRange(ppdev, prcl, &Range))
+      return;
+
+   for (Y = Range.Top; Y < Range.Bottom; Y++)
+   {
+      for (X = Range.Left; X < Range.Right; X++)
+      {
+         Index = Y * RCDD_DISPLAY_TILE_DIMENSION + X;
+         if (!EngIsSemaphoreOwnedByCurrentThread(ppdev->DisplayTileLocks[Index]))
+            continue;
+
+         EngReleaseSemaphore(ppdev->DisplayTileLocks[Index]);
+         ASSERT(!EngIsSemaphoreOwnedByCurrentThread(ppdev->DisplayTileLocks[Index]));
+      }
+   }
+
+   KeWaitForSingleObject(&ppdev->DisplayLockWaitMutex,
+                         Executive,
+                         KernelMode,
+                         FALSE,
+                         NULL);
+   if (ppdev->DisplayLockWaiters != 0)
+   {
+      KeReleaseSemaphore(&ppdev->DisplayLockWaitSemaphore,
+                         IO_NO_INCREMENT,
+                         ppdev->DisplayLockWaiters,
+                         FALSE);
+      ppdev->DisplayLockWaiters = 0;
+   }
+   KeReleaseMutex(&ppdev->DisplayLockWaitMutex, FALSE);
 }
 
 LONG APIENTRY
