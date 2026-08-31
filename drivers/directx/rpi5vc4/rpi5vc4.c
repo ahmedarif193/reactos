@@ -87,13 +87,15 @@ Rpi5Vc4IsRpi5Platform(VOID)
     return HalGetCachedAcpiTable(RPI5VC4_ACPI_FADT, NULL, "RPI5") != NULL;
 }
 
-/* Allocate the hardware cursor surface used by the HVS overlay plane. */
+/* Allocate two hardware cursor surfaces so a shape is never rewritten while
+ * the HVS is scanning it. */
 static VOID
 Rpi5Vc4InitCursor(
     _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
     PHYSICAL_ADDRESS Low, High, Boundary;
-    const SIZE_T Bytes = RPI5VC4_CURSOR_WIDTH * RPI5VC4_CURSOR_HEIGHT * sizeof(ULONG);
+    const SIZE_T BufferBytes = RPI5VC4_CURSOR_WIDTH * RPI5VC4_CURSOR_HEIGHT * sizeof(ULONG);
+    const SIZE_T AllocationBytes = BufferBytes * 2;
 
     if (DeviceExtension->CursorVa != NULL)
         return;
@@ -108,7 +110,7 @@ Rpi5Vc4InitCursor(
     Boundary.QuadPart = 0;
 
     DeviceExtension->CursorVa = MmAllocateContiguousMemorySpecifyCache(
-        Bytes, Low, High, Boundary, MmWriteCombined);
+        AllocationBytes, Low, High, Boundary, MmWriteCombined);
     if (DeviceExtension->CursorVa == NULL)
     {
         DPRINT1("RPI5VC4: cursor buffer alloc failed\n");
@@ -118,9 +120,10 @@ Rpi5Vc4InitCursor(
     DeviceExtension->CursorPhys = MmGetPhysicalAddress(DeviceExtension->CursorVa);
     DeviceExtension->CursorWidth = RPI5VC4_CURSOR_WIDTH;
     DeviceExtension->CursorHeight = RPI5VC4_CURSOR_HEIGHT;
+    DeviceExtension->CursorBufferIndex = 0;
     DeviceExtension->CursorVisible = FALSE;
     DeviceExtension->CursorShapeValid = FALSE;
-    RtlZeroMemory(DeviceExtension->CursorVa, Bytes);
+    RtlZeroMemory(DeviceExtension->CursorVa, AllocationBytes);
 #if defined(_M_ARM64)
     __dsb(_ARM64_BARRIER_SY);
 #endif
@@ -231,10 +234,11 @@ Rpi5Vc4FreeCursor(
     {
         MmFreeContiguousMemorySpecifyCache(
             DeviceExtension->CursorVa,
-            RPI5VC4_CURSOR_WIDTH * RPI5VC4_CURSOR_HEIGHT * sizeof(ULONG),
+            2 * RPI5VC4_CURSOR_WIDTH * RPI5VC4_CURSOR_HEIGHT * sizeof(ULONG),
             MmWriteCombined);
         DeviceExtension->CursorVa = NULL;
         DeviceExtension->CursorPhys.QuadPart = 0;
+        DeviceExtension->CursorBufferIndex = 0;
     }
     DeviceExtension->CursorVisible = FALSE;
     DeviceExtension->CursorShapeValid = FALSE;
@@ -376,7 +380,6 @@ Rpi5Vc4DdiAddDevice(
     RtlZeroMemory(DeviceExtension, sizeof(*DeviceExtension));
     DeviceExtension->PhysicalDeviceObject = PhysicalDeviceObject;
     ExInitializeFastMutex(&DeviceExtension->HvsMutex);
-    ExInitializeFastMutex(&DeviceExtension->PointerMutex);
     KeInitializeSpinLock(&DeviceExtension->ShadowPresentInterfaceLock);
     KeInitializeEvent(&DeviceExtension->ShadowPresentInterfaceZeroEvent,
                       NotificationEvent,
@@ -1144,6 +1147,9 @@ Rpi5Vc4DdiSetPointerShape(
     PUCHAR Destination;
     ULONG Row;
     ULONG CopyBytes;
+    ULONG NextBuffer;
+    const SIZE_T BufferBytes =
+        RPI5VC4_CURSOR_WIDTH * RPI5VC4_CURSOR_HEIGHT * sizeof(ULONG);
 
     if (DeviceExtension == NULL || SetPointerShape == NULL)
         return STATUS_INVALID_PARAMETER;
@@ -1166,13 +1172,15 @@ Rpi5Vc4DdiSetPointerShape(
         return STATUS_NOT_SUPPORTED;
     }
 
-    ExAcquireFastMutex(&DeviceExtension->PointerMutex);
+    ExAcquireFastMutex(&DeviceExtension->HvsMutex);
 
-    RtlZeroMemory(DeviceExtension->CursorVa,
-                  RPI5VC4_CURSOR_WIDTH * RPI5VC4_CURSOR_HEIGHT * sizeof(ULONG));
+    NextBuffer = DeviceExtension->CursorShapeValid
+                     ? DeviceExtension->CursorBufferIndex ^ 1u
+                     : 0;
+    Destination = (PUCHAR)DeviceExtension->CursorVa + NextBuffer * BufferBytes;
+    RtlZeroMemory(Destination, BufferBytes);
 
     Source = SetPointerShape->pPixels;
-    Destination = DeviceExtension->CursorVa;
     CopyBytes = SetPointerShape->Width * sizeof(ULONG);
 
     for (Row = 0; Row < SetPointerShape->Height; ++Row)
@@ -1185,45 +1193,21 @@ Rpi5Vc4DdiSetPointerShape(
 #if defined(_M_ARM64)
     __dsb(_ARM64_BARRIER_SY);
 #endif
+    KeMemoryBarrier();
 
-    /*
-     * The pixels were updated in place at the physical address the live
-     * overlay plane already scans, so a same-size shape swap needs no
-     * display-list touch at all. Only a size change updates the plane —
-     * in place when possible; a full rebuild rewrites the live element
-     * (context-word stomp) mid-frame and flickers the cursor.
-     */
-    if (DeviceExtension->CursorVisible &&
-        DeviceExtension->CursorShapeValid &&
-        (DeviceExtension->CursorWidth != SetPointerShape->Width ||
-         DeviceExtension->CursorHeight != SetPointerShape->Height))
-    {
-        DeviceExtension->CursorWidth = SetPointerShape->Width;
-        DeviceExtension->CursorHeight = SetPointerShape->Height;
-        DeviceExtension->CursorHotX = (LONG)SetPointerShape->XHot;
-        DeviceExtension->CursorHotY = (LONG)SetPointerShape->YHot;
-
-        if (!Rpi5HvsMoveCursor(DeviceExtension))
-            Rpi5HvsInstallScanout(DeviceExtension);
-        ExReleaseFastMutex(&DeviceExtension->PointerMutex);
-        return STATUS_SUCCESS;
-    }
-
+    DeviceExtension->CursorBufferIndex = NextBuffer;
+    DeviceExtension->CursorPhys = MmGetPhysicalAddress(Destination);
     DeviceExtension->CursorWidth = SetPointerShape->Width;
     DeviceExtension->CursorHeight = SetPointerShape->Height;
-    DeviceExtension->CursorHotX = (LONG)SetPointerShape->XHot;
-    DeviceExtension->CursorHotY = (LONG)SetPointerShape->YHot;
-
-    if (DeviceExtension->CursorVisible && !DeviceExtension->CursorShapeValid)
-    {
-        DeviceExtension->CursorShapeValid = TRUE;
-        Rpi5HvsInstallScanout(DeviceExtension);
-        ExReleaseFastMutex(&DeviceExtension->PointerMutex);
-        return STATUS_SUCCESS;
-    }
-
     DeviceExtension->CursorShapeValid = TRUE;
-    ExReleaseFastMutex(&DeviceExtension->PointerMutex);
+
+    /* The active list still references the other buffer. A visible shape
+     * change therefore installs a complete list in the inactive HVS slot and
+     * switches the head only after both pixels and list are complete. */
+    if (DeviceExtension->CursorVisible)
+        Rpi5HvsInstallScanoutLocked(DeviceExtension);
+
+    ExReleaseFastMutex(&DeviceExtension->HvsMutex);
     return STATUS_SUCCESS;
 }
 
@@ -1245,26 +1229,26 @@ Rpi5Vc4DdiSetPointerPosition(
     if (DeviceExtension->CursorVa == NULL)
         return STATUS_NOT_SUPPORTED;
 
-    ExAcquireFastMutex(&DeviceExtension->PointerMutex);
+    ExAcquireFastMutex(&DeviceExtension->HvsMutex);
     WasVisible = DeviceExtension->CursorVisible;
 
-    /* X/Y locate the hot spot; the HVS plane wants the top-left corner. */
-    DeviceExtension->CursorX = SetPointerPosition->X - DeviceExtension->CursorHotX;
-    DeviceExtension->CursorY = SetPointerPosition->Y - DeviceExtension->CursorHotY;
+    /* DXGKARG_SETPOINTERPOSITION X/Y are the cursor image's top-left. */
+    DeviceExtension->CursorX = SetPointerPosition->X;
+    DeviceExtension->CursorY = SetPointerPosition->Y;
     DeviceExtension->CursorVisible = SetPointerPosition->Flags.Visible &&
                                      DeviceExtension->CursorShapeValid;
 
     if (DeviceExtension->CursorVisible)
     {
-        if (!WasVisible || !Rpi5HvsMoveCursor(DeviceExtension))
-            Rpi5HvsInstallScanout(DeviceExtension);
+        if (!WasVisible || !Rpi5HvsMoveCursorLocked(DeviceExtension))
+            Rpi5HvsInstallScanoutLocked(DeviceExtension);
     }
     else if (WasVisible)
     {
         /* Rebuild the display list without the cursor overlay. */
-        Rpi5HvsInstallScanout(DeviceExtension);
+        Rpi5HvsInstallScanoutLocked(DeviceExtension);
     }
 
-    ExReleaseFastMutex(&DeviceExtension->PointerMutex);
+    ExReleaseFastMutex(&DeviceExtension->HvsMutex);
     return STATUS_SUCCESS;
 }

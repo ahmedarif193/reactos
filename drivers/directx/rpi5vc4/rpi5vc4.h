@@ -44,6 +44,7 @@
 
 #define RPI5VC4_CURSOR_WIDTH  64
 #define RPI5VC4_CURSOR_HEIGHT 64
+#define RPI5VC4_HVS_PRIVATE_SLOT_COUNT 8
 
 #define RPI5VC4_POOL_TAG '4cVR'
 
@@ -320,13 +321,15 @@ struct _RPI5VC4_DEVICE_EXTENSION
     ULONG HvsCursorHead;
     BOOLEAN HvsCursorFastValid;
 
-    /* HVS list and cursor writes are short, but pointer-position callbacks
-     * are intentionally allowed to run alongside long GPU escapes. */
+    /* HVS list and cursor state form one atomic display transaction. Pointer
+     * callbacks may run alongside GPU escapes, but serialize with presents. */
     FAST_MUTEX HvsMutex;
-    FAST_MUTEX PointerMutex;
 
-    /* Active private display-list slot (0 = scanning the firmware head). */
+    /* Private HVS display-list retirement follows the hardware frame count. */
     ULONG HvsActivePrivateSlot;
+    ULONG HvsPrivateSlotNext;
+    UCHAR HvsPrivateSlotRetireFrame[RPI5VC4_HVS_PRIVATE_SLOT_COUNT];
+    BOOLEAN HvsPrivateSlotRetireValid[RPI5VC4_HVS_PRIVATE_SLOT_COUNT];
 
     /* Silicon bring-up state: consecutive flip failures latch the flip
      * path off (stops per-present vblank spins swamping the work queue);
@@ -356,8 +359,7 @@ struct _RPI5VC4_DEVICE_EXTENSION
     ULONG CursorHeight;
     LONG CursorX;                     /* top-left, screen coordinates          */
     LONG CursorY;
-    LONG CursorHotX;
-    LONG CursorHotY;
+    ULONG CursorBufferIndex;          /* active half of the double buffer      */
     BOOLEAN CursorVisible;
     BOOLEAN CursorShapeValid;
 

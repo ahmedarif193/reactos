@@ -280,6 +280,7 @@ Rpi5HvsColdStartChannel(
         (Height - 1));
 
     DeviceExtension->HvsActivePrivateSlot = RPI5_HVS_PRIVATE_SLOT_A;
+    DeviceExtension->HvsPrivateSlotNext = 1;
     DeviceExtension->HvsLptrsReg = RPI5_HVS_LPTRS_D;
     DeviceExtension->HvsLptrsVal = RPI5_HVS_PRIVATE_SLOT_A;
     DeviceExtension->HvsCursorFastValid = FALSE;
@@ -381,8 +382,117 @@ Rpi5HvsSelectHead(
     return TRUE;
 }
 
+static BOOLEAN
+Rpi5HvsFrameReached(
+    _In_ UCHAR Target,
+    _In_ UCHAR Current)
+{
+    return (CHAR)((Target << 2) - (Current << 2)) <= 0;
+}
+
+static BOOLEAN
+Rpi5HvsChoosePrivateSlot(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ PVOID HvsBase,
+    _In_ ULONG LptrsReg,
+    _In_ ULONG LptrsVal,
+    _In_ ULONG RequiredDwords,
+    _Out_ PULONG SlotOut)
+{
+    ULONG StatusReg;
+    ULONG ActiveReg;
+    ULONG ActiveHead;
+    ULONG PendingHead;
+    ULONG DlistDwords;
+    ULONG Start;
+    ULONG Offset;
+    UCHAR Frame;
+
+    if (LptrsReg == RPI5_HVS_LPTRS_D)
+    {
+        StatusReg = RPI5_HVS_STATUS_D;
+        ActiveReg = RPI5_HVS_ACTIVE_DL_D;
+    }
+    else
+    {
+        StatusReg = RPI5_HVS_STATUS_C;
+        ActiveReg = RPI5_HVS_ACTIVE_DL_C;
+    }
+
+    Frame = (UCHAR)((READ_REGISTER_ULONG(
+        (PULONG)((PUCHAR)HvsBase + StatusReg)) >>
+        RPI5_HVS_STATUS_FRAME_SHIFT) & RPI5_HVS_STATUS_FRAME_MASK);
+    ActiveHead = READ_REGISTER_ULONG(
+        (PULONG)((PUCHAR)HvsBase + ActiveReg)) & RPI5_HVS_LPTRS_HEAD_MASK;
+    PendingHead = LptrsVal & RPI5_HVS_LPTRS_HEAD_MASK;
+    DlistDwords = Rpi5HvsGetDlistDwords(HvsBase);
+    Start = DeviceExtension->HvsPrivateSlotNext %
+            RPI5VC4_HVS_PRIVATE_SLOT_COUNT;
+
+    for (Offset = 0; Offset < RPI5VC4_HVS_PRIVATE_SLOT_COUNT; ++Offset)
+    {
+        ULONG Index = (Start + Offset) % RPI5VC4_HVS_PRIVATE_SLOT_COUNT;
+        ULONG Slot = RPI5_HVS_PRIVATE_SLOT(Index);
+
+        if (Slot == ActiveHead || Slot == PendingHead ||
+            Slot + RequiredDwords > DlistDwords)
+        {
+            continue;
+        }
+
+        if (DeviceExtension->HvsPrivateSlotRetireValid[Index] &&
+            !Rpi5HvsFrameReached(
+                DeviceExtension->HvsPrivateSlotRetireFrame[Index], Frame))
+        {
+            continue;
+        }
+
+        DeviceExtension->HvsPrivateSlotRetireValid[Index] = FALSE;
+        DeviceExtension->HvsPrivateSlotNext =
+            (Index + 1) % RPI5VC4_HVS_PRIVATE_SLOT_COUNT;
+        *SlotOut = Slot;
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
 static VOID
-Rpi5HvsInstallScanoutUnlocked(
+Rpi5HvsRetirePrivateSlot(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ PVOID HvsBase,
+    _In_ ULONG LptrsReg,
+    _In_ ULONG Slot)
+{
+    ULONG StatusReg;
+    ULONG Index;
+    UCHAR Frame;
+
+    if (Slot < RPI5_HVS_PRIVATE_SLOT_BASE ||
+        (Slot - RPI5_HVS_PRIVATE_SLOT_BASE) %
+            RPI5_HVS_PRIVATE_SLOT_STRIDE != 0)
+    {
+        return;
+    }
+
+    Index = (Slot - RPI5_HVS_PRIVATE_SLOT_BASE) /
+            RPI5_HVS_PRIVATE_SLOT_STRIDE;
+    if (Index >= RPI5VC4_HVS_PRIVATE_SLOT_COUNT)
+        return;
+
+    StatusReg = LptrsReg == RPI5_HVS_LPTRS_D
+                    ? RPI5_HVS_STATUS_D
+                    : RPI5_HVS_STATUS_C;
+    Frame = (UCHAR)((READ_REGISTER_ULONG(
+        (PULONG)((PUCHAR)HvsBase + StatusReg)) >>
+        RPI5_HVS_STATUS_FRAME_SHIFT) & RPI5_HVS_STATUS_FRAME_MASK);
+    DeviceExtension->HvsPrivateSlotRetireFrame[Index] =
+        (UCHAR)((Frame + 1) & 0x3f);
+    DeviceExtension->HvsPrivateSlotRetireValid[Index] = TRUE;
+}
+
+VOID
+Rpi5HvsInstallScanoutLocked(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
     if (DeviceExtension->Headless)
@@ -390,13 +500,12 @@ Rpi5HvsInstallScanoutUnlocked(
 
     volatile ULONG *Dlist;
     PVOID HvsBase;
-    ULONG LptrsC, LptrsD, LptrsReg, LptrsVal, Head, Control;
+    ULONG LptrsReg, LptrsVal, Head, Slot;
     ULONG Plane[RPI5_HVS_MAX_DLIST_DWORDS];
     ULONG Count = 0;
     ULONG i;
-    ULONG StartIndex = 0;
     ULONG CurCtl0, CurPtr1;
-    BOOLEAN HasCursor;
+    ULONG CursorAt = 0;
     ULONG Width  = DeviceExtension->ScreenWidth;
     ULONG Height = DeviceExtension->ScreenHeight;
     ULONG Pitch  = DeviceExtension->BytesPerScanLine;
@@ -423,8 +532,6 @@ Rpi5HvsInstallScanoutUnlocked(
         DbgPrint("RPI5VC4: InstallScanout: no usable HVS head - skip\n");
         return;
     }
-    (VOID)LptrsC; (VOID)LptrsD; (VOID)Control;
-
     /*
      * Only take over a head that is currently a VALID plane scanning out our
      * framebuffer (the firmware's plane, or our own from a previous install).
@@ -432,11 +539,6 @@ Rpi5HvsInstallScanoutUnlocked(
      */
     CurCtl0 = READ_REGISTER_ULONG((PULONG)&Dlist[Head + 0]);
     CurPtr1 = READ_REGISTER_ULONG((PULONG)&Dlist[Head + 6]);
-
-    HasCursor = DeviceExtension->CursorVisible &&
-                DeviceExtension->CursorPhys.QuadPart != 0 &&
-                DeviceExtension->CursorWidth != 0 &&
-                DeviceExtension->CursorHeight != 0;
 
     /*
      * Only take over a head holding a VALID plane that scans out our framebuffer
@@ -460,21 +562,7 @@ Rpi5HvsInstallScanoutUnlocked(
     Count += Rpi5HvsBuildPlane(&Plane[Count], TRUE, Phys, 0, 0, Width, Height, Pitch,
                                RPI5_HVS_PIXEL_FORMAT_RGBA8888, RPI5_HVS_PIXEL_ORDER_BGRA);
 
-    /*
-     * If the live head already holds exactly our scanout plane (same control
-     * word and framebuffer pointer), do NOT rewrite the scanout element: word 4
-     * of every element is the context/status word the HVS owns and updates as it
-     * scans, and stomping it on the *live* scanout plane mid-frame corrupts that
-     * frame's desktop - this is the icon-change flicker. Only (re)build the
-     * cursor overlay that follows it, exactly as Rpi5HvsMoveCursor leaves the
-     * scanout untouched. The full scanout plane is written only on the first
-     * take-over, when its control word still differs (the firmware's alpha
-     * plane), which initialises the context word once.
-     */
-    if (CurCtl0 == Plane[0] && CurPtr1 == Plane[6])
-        StartIndex = RPI5_HVS_PLANE_DWORDS;
-
-    if (HasCursor)
+    if (DeviceExtension->CursorVisible)
     {
         ULONG CursorX;
         ULONG CursorY;
@@ -489,6 +577,7 @@ Rpi5HvsInstallScanoutUnlocked(
                               &CursorHeight,
                               &CursorPhys))
         {
+            CursorAt = Count;
             Count += Rpi5HvsBuildPlane(&Plane[Count], FALSE,
                                        CursorPhys,
                                        CursorX, CursorY,
@@ -500,50 +589,46 @@ Rpi5HvsInstallScanoutUnlocked(
         }
     }
 
-    /* List terminator. */
     Plane[Count++] = RPI5_HVS_CTL0_END;
 
-    /*
-     * Rewriting a live in-place cursor element: keep the HVS-owned context
-     * word (word 4) — resetting it mid-scan corrupts the overlay for that
-     * frame, the same mechanism as the scanout icon-change flicker above.
-     */
-    if (StartIndex == RPI5_HVS_PLANE_DWORDS &&
-        Count > StartIndex + RPI5_HVS_PLANE_DWORDS &&
-        READ_REGISTER_ULONG((PULONG)&Dlist[Head + StartIndex]) == Plane[StartIndex] &&
-        READ_REGISTER_ULONG((PULONG)&Dlist[Head + StartIndex + 6]) == Plane[StartIndex + 6])
-    {
-        Plane[StartIndex + 4] =
-            READ_REGISTER_ULONG((PULONG)&Dlist[Head + StartIndex + 4]);
-    }
+    if (!Rpi5HvsChoosePrivateSlot(DeviceExtension,
+                                  HvsBase,
+                                  LptrsReg,
+                                  LptrsVal,
+                                  Count,
+                                  &Slot))
+        return;
 
-    /*
-     * Descending order: an element's CTL0 VALID bit is its lowest word and
-     * lands last, so a mid-frame list walk never sees a half-written element.
-     */
-    for (i = Count; i > StartIndex; i--)
-        WRITE_REGISTER_ULONG((PULONG)&Dlist[Head + i - 1], Plane[i - 1]);
+    /* Match the HVS atomic-commit model: build a complete inactive list, then
+     * switch LPTRS once. Never rewrite the HVS-owned context of a live list. */
+    for (i = 0; i < Count; ++i)
+        WRITE_REGISTER_ULONG((PULONG)&Dlist[Slot + i], Plane[i]);
 
 #if defined(_M_ARM64)
     __dsb(_ARM64_BARRIER_SY);
 #endif
     KeMemoryBarrier();
 
+    Rpi5HvsRetirePrivateSlot(DeviceExtension,
+                             HvsBase,
+                             LptrsReg,
+                             LptrsVal & RPI5_HVS_LPTRS_HEAD_MASK);
+    LptrsVal = (LptrsVal & ~RPI5_HVS_LPTRS_HEAD_MASK) | Slot;
     WRITE_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + LptrsReg), LptrsVal);
+    DeviceExtension->HvsActivePrivateSlot = Slot;
 
     RPI5_HVS_DIAG(DeviceExtension,
                   "RPI5VC4: takeover OK reg=0x%03lx head=%lu fb=%02lx:%08lx "
                   "cursor=%u start=%lu count=%lu\n",
                   LptrsReg, Head,
                   (ULONG)((Phys >> 32) & 0xff), (ULONG)(Phys & 0xffffffff),
-                  HasCursor, StartIndex, Count);
+                  CursorAt != 0, 0ul, Count);
 
-    /* Cache the cursor-plane location so moves can skip re-validation reads. */
-    if (Count == 2 * RPI5_HVS_PLANE_DWORDS + 1)
+    if (CursorAt != 0)
     {
         DeviceExtension->HvsLptrsReg = LptrsReg;
         DeviceExtension->HvsLptrsVal = LptrsVal;
-        DeviceExtension->HvsCursorHead = Head + RPI5_HVS_PLANE_DWORDS;
+        DeviceExtension->HvsCursorHead = Slot + CursorAt;
         DeviceExtension->HvsCursorFastValid = TRUE;
     }
 }
@@ -553,12 +638,12 @@ Rpi5HvsInstallScanout(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
     ExAcquireFastMutex(&DeviceExtension->HvsMutex);
-    Rpi5HvsInstallScanoutUnlocked(DeviceExtension);
+    Rpi5HvsInstallScanoutLocked(DeviceExtension);
     ExReleaseFastMutex(&DeviceExtension->HvsMutex);
 }
 
-static BOOLEAN
-Rpi5HvsMoveCursorUnlocked(
+BOOLEAN
+Rpi5HvsMoveCursorLocked(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
     if (DeviceExtension->Headless)
@@ -573,6 +658,9 @@ Rpi5HvsMoveCursorUnlocked(
     ULONG Width = DeviceExtension->CursorWidth;
     ULONG Height = DeviceExtension->CursorHeight;
     ULONGLONG CursorPhys = (ULONGLONG)DeviceExtension->CursorPhys.QuadPart;
+    ULONG Pos0;
+    ULONG Pos2;
+    ULONG Ptr0;
 
     /* Fall back to a full Rpi5HvsInstallScanout when no validated plane is live. */
     if (!DeviceExtension->HvsCursorFastValid)
@@ -603,30 +691,32 @@ Rpi5HvsMoveCursorUnlocked(
     Dlist = (volatile ULONG *)((PUCHAR)HvsBase + RPI5_HVS_DLIST_OFFSET);
     CursorHead = DeviceExtension->HvsCursorHead;
 
-    WRITE_REGISTER_ULONG((PULONG)&Dlist[CursorHead + 1], ((CursorY & 0x1fff) << RPI5_HVS_POS0_Y_SHIFT) | (CursorX & 0x1fff));
-    WRITE_REGISTER_ULONG((PULONG)&Dlist[CursorHead + 3], (((Height - 1) & 0x1fff) << RPI5_HVS_POS2_LINES_SHIFT) | ((Width - 1) & 0x1fff));
-    WRITE_REGISTER_ULONG((PULONG)&Dlist[CursorHead + 5], (RPI5_HVS_CURSOR_UPM_BASE << RPI5_HVS_PTR0_UPM_BASE_SHIFT) | (RPI5_HVS_CURSOR_UPM_HANDLE << RPI5_HVS_PTR0_UPM_HANDLE_SHIFT) | (ULONG)((CursorPhys >> 32) & 0xff));
-    WRITE_REGISTER_ULONG((PULONG)&Dlist[CursorHead + 6], (ULONG)(CursorPhys & 0xffffffff));
+    /* Linux restricts an HVS asynchronous plane update to POS0, POS2, and
+     * PTR0. A changed lower address needs a complete inactive display list. */
+    if (READ_REGISTER_ULONG((PULONG)&Dlist[CursorHead + 6]) !=
+        (ULONG)(CursorPhys & 0xffffffff))
+    {
+        return FALSE;
+    }
+
+    Pos0 = ((CursorY & 0x1fff) << RPI5_HVS_POS0_Y_SHIFT) |
+           (CursorX & 0x1fff);
+    Pos2 = (((Height - 1) & 0x1fff) << RPI5_HVS_POS2_LINES_SHIFT) |
+           ((Width - 1) & 0x1fff);
+    Ptr0 = (RPI5_HVS_CURSOR_UPM_BASE << RPI5_HVS_PTR0_UPM_BASE_SHIFT) |
+           (RPI5_HVS_CURSOR_UPM_HANDLE << RPI5_HVS_PTR0_UPM_HANDLE_SHIFT) |
+           (ULONG)((CursorPhys >> 32) & 0xff);
+
+    WRITE_REGISTER_ULONG((PULONG)&Dlist[CursorHead + 1], Pos0);
+    WRITE_REGISTER_ULONG((PULONG)&Dlist[CursorHead + 3], Pos2);
+    WRITE_REGISTER_ULONG((PULONG)&Dlist[CursorHead + 5], Ptr0);
 
 #if defined(_M_ARM64)
     __dsb(_ARM64_BARRIER_SY);
 #endif
     KeMemoryBarrier();
 
-    WRITE_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + DeviceExtension->HvsLptrsReg), LptrsVal);
     return TRUE;
-}
-
-BOOLEAN
-Rpi5HvsMoveCursor(
-    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
-{
-    BOOLEAN Result;
-
-    ExAcquireFastMutex(&DeviceExtension->HvsMutex);
-    Result = Rpi5HvsMoveCursorUnlocked(DeviceExtension);
-    ExReleaseFastMutex(&DeviceExtension->HvsMutex);
-    return Result;
 }
 
 static BOOLEAN
@@ -754,9 +844,15 @@ Rpi5HvsInstallPlaneListUnlocked(
         return FALSE;
     }
 
-    /* Double-buffer between the two private slots, then re-point the head. */
-    Slot = (DeviceExtension->HvsActivePrivateSlot == RPI5_HVS_PRIVATE_SLOT_A)
-               ? RPI5_HVS_PRIVATE_SLOT_B : RPI5_HVS_PRIVATE_SLOT_A;
+    if (!Rpi5HvsChoosePrivateSlot(DeviceExtension,
+                                  HvsBase,
+                                  LptrsReg,
+                                  LptrsVal,
+                                  Used,
+                                  &Slot))
+    {
+        return FALSE;
+    }
 
     for (i = 0; i < Used; i++)
         WRITE_REGISTER_ULONG((PULONG)&Dlist[Slot + i], List[i]);
@@ -766,6 +862,10 @@ Rpi5HvsInstallPlaneListUnlocked(
 #endif
     KeMemoryBarrier();
 
+    Rpi5HvsRetirePrivateSlot(DeviceExtension,
+                             HvsBase,
+                             LptrsReg,
+                             LptrsVal & RPI5_HVS_LPTRS_HEAD_MASK);
     LptrsVal = (LptrsVal & ~RPI5_HVS_LPTRS_HEAD_MASK) | Slot;
     WRITE_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + LptrsReg), LptrsVal);
     DeviceExtension->HvsActivePrivateSlot = Slot;
@@ -893,7 +993,6 @@ Rpi5HvsFlipScanoutExUnlocked(
 #endif
     KeMemoryBarrier();
 
-    WRITE_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + LptrsReg), LptrsVal);
     DeviceExtension->FrameBufferPhysical = FrameBufferPhysical;
 
     if (DeviceExtension->HvsFlipFailCount != 0)
