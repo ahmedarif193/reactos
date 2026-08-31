@@ -250,6 +250,9 @@ typedef struct tagLISTVIEW_INFO
 
   /* item metrics */
   BOOL bNoItemMetrics;		/* flags if item metrics are not yet computed */
+#ifdef __REACTOS__
+  BOOL bListWidthExplicit;
+#endif
   INT nItemHeight;
   INT nItemWidth;
 
@@ -3000,6 +3003,43 @@ static INT LISTVIEW_CalculateItemWidth(const LISTVIEW_INFO *infoPtr)
 
     return nItemWidth;
 }
+
+#ifdef __REACTOS__
+/* Keep the automatic list column width current as items arrive. Wine defers
+ * this work until the first paint and then measures the entire control in one
+ * blocking pass. Windows exposes the final widest-item width without making
+ * a dense callback-backed list unresponsive on its first paint. */
+static void LISTVIEW_UpdateListWidthForItem(LISTVIEW_INFO *infoPtr, INT nItem)
+{
+    WCHAR text[DISP_TEXT_SIZE] = { 0 };
+    LVITEMW item;
+    INT width;
+
+    if (infoPtr->uView != LV_VIEW_LIST)
+        return;
+    if (infoPtr->bListWidthExplicit)
+        return;
+
+    item.mask = LVIF_TEXT;
+    item.iItem = nItem;
+    item.iSubItem = 0;
+    item.pszText = text;
+    item.cchTextMax = ARRAY_SIZE(text);
+    if (!LISTVIEW_GetItemW(infoPtr, &item))
+        return;
+
+    width = LISTVIEW_GetStringWidthT(infoPtr, item.pszText, TRUE);
+    if (infoPtr->himlSmall)
+        width += infoPtr->iconSize.cx;
+    if (infoPtr->himlState)
+        width += infoPtr->iconStateSize.cx;
+    width = max(DEFAULT_COLUMN_WIDTH, width + WIDTH_PADDING);
+
+    if (width > infoPtr->nItemWidth)
+        infoPtr->nItemWidth = width;
+    infoPtr->bNoItemMetrics = FALSE;
+}
+#endif
 
 /***
  * DESCRIPTION:
@@ -7940,6 +7980,10 @@ static INT LISTVIEW_InsertItemT(LISTVIEW_INFO *infoPtr, const LVITEMW *lpLVItem,
     if (!IsWindow(hwndSelf))
 	return -1;
 
+#ifdef __REACTOS__
+    LISTVIEW_UpdateListWidthForItem(infoPtr, nItem);
+#endif
+
     /* align items (set position of each item) */
     if (infoPtr->uView == LV_VIEW_SMALLICON || infoPtr->uView == LV_VIEW_ICON)
     {
@@ -8458,6 +8502,7 @@ static BOOL LISTVIEW_SetColumnWidth(LISTVIEW_INFO *infoPtr, INT nColumn, INT cx)
 	infoPtr->nItemWidth = cx;
 #ifdef __REACTOS__
         /* Windows preserves an explicit list width across the first paint. */
+        infoPtr->bListWidthExplicit = TRUE;
         infoPtr->bNoItemMetrics = FALSE;
 #endif
 	LISTVIEW_InvalidateList(infoPtr);
@@ -9605,6 +9650,9 @@ static LRESULT LISTVIEW_NCCreate(HWND hwnd, WPARAM wParam, const CREATESTRUCTW *
   infoPtr->nHotItem = -1;
   infoPtr->redraw = TRUE;
   infoPtr->bNoItemMetrics = TRUE;
+#ifdef __REACTOS__
+  infoPtr->bListWidthExplicit = FALSE;
+#endif
   infoPtr->notify_mask = NOTIFY_MASK_UNMASK_ALL;
   infoPtr->autoSpacing = TRUE;
   infoPtr->iconSpacing.cx = GetSystemMetrics(SM_CXICONSPACING) - GetSystemMetrics(SM_CXICON);
