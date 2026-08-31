@@ -93,6 +93,8 @@ static PEPROCESS       g_DwmProcess = NULL;
 /* Scanout pacing event (referenced; also registered with the display path,
  * whose present timer signals it every period). */
 
+static BOOL IntCompositionTreeHasPendingPaint(_In_ PWND Root);
+
 /* Wake dwm after marking damage (no-op when no dwm is attached). */
 static VOID
 IntCompositionDwmWake(VOID)
@@ -1107,7 +1109,8 @@ IntCompositionPaintEnd(_In_ PWND Wnd)
         e->PaintCount = 0;
 
     e->Damaged = TRUE;
-    IntCompositionMarkDamage(FALSE);
+    if (!IntCompositionTreeHasPendingPaint(e->Wnd))
+        IntCompositionMarkDamage(FALSE);
 }
 
 /* Cache-DC hold bracket for redirected windows. A classic common DC may be
@@ -1131,6 +1134,7 @@ VOID
 IntCompositionDcRelease(_In_opt_ PWND Wnd, _In_ UCHAR State)
 {
     REDIRECT_ENTRY *e;
+    LONG PaintCount;
 
     if (State == COMPOSITION_DC_NONE)
         return;
@@ -1142,13 +1146,15 @@ IntCompositionDcRelease(_In_opt_ PWND Wnd, _In_ UCHAR State)
     if (e == NULL)
         return;
 
-    if (e->PaintCount > 0)
-        InterlockedDecrement(&e->PaintCount);
+    PaintCount = e->PaintCount;
+    if (PaintCount > 0)
+        PaintCount = InterlockedDecrement(&e->PaintCount);
 
     /* If the session drew, flag damage; the compose runs on the batch-done
      * commit, the throttled tick, or the pre-idle flush (not per release, so
      * a burst of small draws doesn't serialize behind a compose each). */
-    if (e->Damaged)
+    if (e->Damaged && PaintCount == 0 &&
+        !IntCompositionTreeHasPendingPaint(e->Wnd))
         IntCompositionMarkDamage(FALSE);
 }
 
@@ -1284,6 +1290,8 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
     LONGLONG now = (LONGLONG)KeQueryInterruptTime();
     LONG dirty, fullDamage;
     BOOL DeferredDamage = FALSE;
+    BOOL PaintDamageDeferred = FALSE;
+    BOOL ReadyDamage = FALSE;
     BOOL PositionDamageValid;
     RECTL PositionDamage;
     RECTL rcDmg = {0, 0, 0, 0};
@@ -1401,7 +1409,8 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
             BOOL bFirstPaintPending = !e->Redirect.FrontValid &&
                                       (!bBackingDrawn || bTreePending);
 
-            if ((fullDamage || e->Damaged) && !bBusy && !bFirstPaintPending &&
+            if ((fullDamage || e->Damaged) && !bBusy && !bTreePending &&
+                !bFirstPaintPending &&
                 e->Redirect.psurf != NULL && e->Redirect.psurfFront != NULL)
             {
                 BOOL BackingPublished = FALSE;
@@ -1459,7 +1468,7 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
             }
             else if (e->Damaged)
             {
-                if (bBusy || bFirstPaintPending)
+                if (bBusy || bTreePending || bFirstPaintPending)
                     PaintDeferred = TRUE;
                 else
                     DeferredDamage = TRUE;
@@ -1476,12 +1485,16 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
             continue;
         }
 
-        if (BackingDeferred)
+        if (BackingDeferred || PaintDeferred)
             wasDamaged = FALSE;
         else if (dirty || fullDamage)
             wasDamaged = InterlockedExchange((volatile LONG *)&e->Damaged, FALSE) != FALSE;
         else
             wasDamaged = FALSE;
+        if (wasDamaged)
+            ReadyDamage = TRUE;
+        if (PaintDeferred)
+            PaintDamageDeferred = TRUE;
         g_DwmFrameWindows[count].x = w->rcWindow.left;
         g_DwmFrameWindows[count].y = w->rcWindow.top;
         g_DwmFrameWindows[count].cx = e->Redirect.cx;
@@ -1530,16 +1543,18 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
 
     IntCompositionUnlockDevice(ppdev);
 
-    /* A window that was mid-paint deliberately kept its last complete FRONT.
-     * Re-arm the global flag after the snapshot so the next paced pull retries
-     * it; otherwise consuming the global damage above could strand that BACK
-     * forever if no later paint notification arrived. */
+    /* A deferred backing needs another compositor pass. Resource contention
+     * wakes DWM immediately. An incomplete paint tree only retains the dirty
+     * bit: its final EndPaint normally wakes DWM, while the idle poll remains
+     * a bounded fallback without spinning on a long-running paint. */
     if (DeferredDamage)
         IntCompositionMarkDamage(FALSE);
+    else if (PaintDamageDeferred)
+        InterlockedExchange(&g_CompositionDamaged, TRUE);
 
     Frame.Count = count;
     Frame.FullDamage = fullDamage ? 1 : 0;
-    Frame.Dirty = (dirty || fullDamage) ? 1 : 0;
+    Frame.Dirty = (fullDamage || PositionDamageValid || ReadyDamage) ? 1 : 0;
     Frame.DmgL = rcDmg.left;
     Frame.DmgT = rcDmg.top;
     Frame.DmgR = rcDmg.right;
