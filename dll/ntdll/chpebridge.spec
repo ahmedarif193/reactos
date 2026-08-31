@@ -28,6 +28,7 @@
 @ stdcall NtMapViewOfSectionEx(long long ptr ptr ptr long long ptr long) ChpeNtMapViewOfSectionEx
 @ stdcall NtOpenFile(ptr long ptr ptr long long) ChpeNtOpenFile
 @ stdcall NtProtectVirtualMemory(long ptr ptr long ptr) ChpeNtProtectVirtualMemory
+@ stdcall NtQueryDirectoryFile(long long ptr ptr ptr ptr long long long ptr long) ChpeNtQueryDirectoryFile
 @ stdcall NtQueryInformationFile(long ptr ptr long long) ChpeNtQueryInformationFile
 @ stdcall NtQueryObject(long long long long long) ChpeNtQueryObject
 @ stdcall NtQuerySystemInformation(long ptr long ptr) ChpeNtQuerySystemInformation
