@@ -333,7 +333,7 @@ CreateRemoteThread(IN HANDLE hProcess,
         Teb->SubProcessTag = NtCurrentTeb()->SubProcessTag;
     }
 
-    /* Notify CSR */
+    /* Notify CSR for ReactOS bookkeeping. */
     if (!BaseRunningInServerProcess)
     {
         Status = BasepNotifyCsrOfThread(hThread, &ClientId);
@@ -366,7 +366,7 @@ Quit:
             RtlFreeActivationContextStack(ActivationContextStack);
 
         NtTerminateThread(hThread, Status);
-        // FIXME: Wait for the thread to terminate?
+        NtWaitForSingleObject(hThread, FALSE, NULL);
         BaseFreeThreadStack(hProcess, &InitialTeb);
         NtClose(hThread);
 
