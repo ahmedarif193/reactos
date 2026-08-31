@@ -327,6 +327,45 @@ RcddQueryPresentWorkerStats(
    EngReleaseSemaphore(ppdev->PresentLock);
 }
 
+static VOID
+RcddAccumulateRect(
+   RECTL *Rects,
+   ULONG *RectCount,
+   const RECTL *prcl)
+{
+   RECTL Union;
+   ULONG Best = DXGK_PRESENT_DIRTY_MAX_RECTS;
+   LONGLONG BestGrowth = 0;
+   LONGLONG Area = RcddRectArea(prcl);
+   ULONG Index;
+
+   for (Index = 0; Index < *RectCount; Index++)
+   {
+      LONGLONG ExistingArea;
+      LONGLONG Growth;
+
+      Union = Rects[Index];
+      RcddRectUnion(&Union, prcl);
+      ExistingArea = RcddRectArea(&Rects[Index]);
+      Growth = RcddRectArea(&Union) - ExistingArea - Area;
+      if (Growth <= (ExistingArea + Area) / 4)
+      {
+         Rects[Index] = Union;
+         return;
+      }
+      if (Best == DXGK_PRESENT_DIRTY_MAX_RECTS || Growth < BestGrowth)
+      {
+         Best = Index;
+         BestGrowth = Growth;
+      }
+   }
+
+   if (*RectCount < DXGK_PRESENT_DIRTY_MAX_RECTS)
+      Rects[(*RectCount)++] = *prcl;
+   else if (Best != DXGK_PRESENT_DIRTY_MAX_RECTS)
+      RcddRectUnion(&Rects[Best], prcl);
+}
+
 static BOOL
 RcddQueuePresent(
    PRCDD_PDEV ppdev,
@@ -334,10 +373,12 @@ RcddQueuePresent(
    ULONG Count)
 {
    PRCDD_PRESENT_SLOT Slot = NULL;
+   PRCDD_PRESENT_SLOT Newest = NULL;
    ULONG BytesPerPixel;
    ULONG BytesPerRow;
    ULONG Index;
    LONG Y;
+   BOOL Coalesced = FALSE;
 
    if (ppdev == NULL || Rects == NULL || Count == 0 ||
        Count > DXGK_PRESENT_DIRTY_MAX_RECTS ||
@@ -354,16 +395,31 @@ RcddQueuePresent(
          if (ppdev->PresentSlots[Index].State == RcddPresentSlotFree)
          {
             Slot = &ppdev->PresentSlots[Index];
-            Slot->State = RcddPresentSlotCapturing;
-            if (++ppdev->PresentNextSequence == 0)
-               ++ppdev->PresentNextSequence;
-            Slot->Sequence = ppdev->PresentNextSequence;
-            ppdev->PresentPendingCount++;
-            if (ppdev->PresentPendingCount > ppdev->PresentQueueHighWatermark)
-               ppdev->PresentQueueHighWatermark = ppdev->PresentPendingCount;
-            EngClearEvent(ppdev->PresentDrainEvent);
             break;
          }
+         if (Newest == NULL ||
+             ppdev->PresentSlots[Index].Sequence > Newest->Sequence)
+         {
+            Newest = &ppdev->PresentSlots[Index];
+         }
+      }
+
+      if (Slot != NULL)
+      {
+         Slot->State = RcddPresentSlotCapturing;
+         if (++ppdev->PresentNextSequence == 0)
+            ++ppdev->PresentNextSequence;
+         Slot->Sequence = ppdev->PresentNextSequence;
+         ppdev->PresentPendingCount++;
+         if (ppdev->PresentPendingCount > ppdev->PresentQueueHighWatermark)
+            ppdev->PresentQueueHighWatermark = ppdev->PresentPendingCount;
+         EngClearEvent(ppdev->PresentDrainEvent);
+      }
+      else if (Newest != NULL && Newest->State == RcddPresentSlotQueued)
+      {
+         Slot = Newest;
+         Slot->State = RcddPresentSlotCapturing;
+         Coalesced = TRUE;
       }
    }
    if (Slot == NULL)
@@ -373,19 +429,28 @@ RcddQueuePresent(
       return FALSE;
 
    BytesPerPixel = (ppdev->BitsPerPixel + 7) / 8;
-   RtlCopyMemory(Slot->Rects, Rects, Count * sizeof(Rects[0]));
-   Slot->RectCount = Count;
-   for (Index = 0; Index < Count; Index++)
+   if (Coalesced)
    {
-      BytesPerRow = (Rects[Index].right - Rects[Index].left) * BytesPerPixel;
-      for (Y = Rects[Index].top; Y < Rects[Index].bottom; Y++)
+      for (Index = 0; Index < Count; Index++)
+         RcddAccumulateRect(Slot->Rects, &Slot->RectCount, &Rects[Index]);
+   }
+   else
+   {
+      RtlCopyMemory(Slot->Rects, Rects, Count * sizeof(Rects[0]));
+      Slot->RectCount = Count;
+   }
+   for (Index = 0; Index < Slot->RectCount; Index++)
+   {
+      BytesPerRow =
+         (Slot->Rects[Index].right - Slot->Rects[Index].left) * BytesPerPixel;
+      for (Y = Slot->Rects[Index].top; Y < Slot->Rects[Index].bottom; Y++)
       {
          RtlCopyMemory((PUCHAR)Slot->Buffer +
                           (SIZE_T)Y * ppdev->ScreenDelta +
-                          (SIZE_T)Rects[Index].left * BytesPerPixel,
+                          (SIZE_T)Slot->Rects[Index].left * BytesPerPixel,
                        (PUCHAR)ppdev->ScreenPtr +
                           (SIZE_T)Y * ppdev->ScreenDelta +
-                          (SIZE_T)Rects[Index].left * BytesPerPixel,
+                          (SIZE_T)Slot->Rects[Index].left * BytesPerPixel,
                        BytesPerRow);
       }
    }
@@ -395,7 +460,8 @@ RcddQueuePresent(
        Slot->State == RcddPresentSlotCapturing)
    {
       Slot->State = RcddPresentSlotQueued;
-      ppdev->PresentQueuedCount++;
+      if (!Coalesced)
+         ppdev->PresentQueuedCount++;
       EngReleaseSemaphore(ppdev->PresentLock);
       EngSetEvent(ppdev->PresentWakeEvent);
       return TRUE;
@@ -419,37 +485,9 @@ RcddAccumulateDirtyRect(
    PRCDD_PDEV ppdev,
    const RECTL *prcl)
 {
-   RECTL Union;
-   ULONG Best = DXGK_PRESENT_DIRTY_MAX_RECTS;
-   LONGLONG BestGrowth = 0;
-   LONGLONG Area = RcddRectArea(prcl);
-   ULONG Index;
-
-   for (Index = 0; Index < ppdev->PendingRectCount; Index++)
-   {
-      LONGLONG ExistingArea;
-      LONGLONG Growth;
-
-      Union = ppdev->PendingRects[Index];
-      RcddRectUnion(&Union, prcl);
-      ExistingArea = RcddRectArea(&ppdev->PendingRects[Index]);
-      Growth = RcddRectArea(&Union) - ExistingArea - Area;
-      if (Growth <= (ExistingArea + Area) / 4)
-      {
-         ppdev->PendingRects[Index] = Union;
-         return;
-      }
-      if (Best == DXGK_PRESENT_DIRTY_MAX_RECTS || Growth < BestGrowth)
-      {
-         Best = Index;
-         BestGrowth = Growth;
-      }
-   }
-
-   if (ppdev->PendingRectCount < DXGK_PRESENT_DIRTY_MAX_RECTS)
-      ppdev->PendingRects[ppdev->PendingRectCount++] = *prcl;
-   else if (Best != DXGK_PRESENT_DIRTY_MAX_RECTS)
-      RcddRectUnion(&ppdev->PendingRects[Best], prcl);
+   RcddAccumulateRect(ppdev->PendingRects,
+                      &ppdev->PendingRectCount,
+                      prcl);
 }
 
 static BOOL
