@@ -42,6 +42,8 @@ static const DRVFN gaRcddDriverFunctions[] =
    {INDEX_DrvAlphaBlend, (PFN)RcddAlphaBlend},
    {INDEX_DrvTransparentBlt, (PFN)RcddTransparentBlt},
    {INDEX_DrvGradientFill, (PFN)RcddGradientFill},
+   {INDEX_DrvCreateDeviceBitmapEx, (PFN)RcddCreateDeviceBitmapEx},
+   {INDEX_DrvDeleteDeviceBitmapEx, (PFN)RcddDeleteDeviceBitmapEx},
    {INDEX_DrvSynchronizeRedirectionBitmaps, (PFN)RcddSynchronizeRedirectionBitmaps},
    {INDEX_DrvAccumulateD3DDirtyRect, (PFN)RcddAccumulateD3DDirtyRect},
    {INDEX_DrvLockDisplayArea, (PFN)RcddLockDisplayArea},

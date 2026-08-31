@@ -11,5 +11,6 @@
 #include <reactos/dwmframe.h>
 
 const BYTE *DwmDxGetSurfaceSnapshot(const DWM_WIN *Window);
+const BYTE *DwmDxGetRedirectionSnapshot(const DWM_WIN *Window);
 void DwmDxAcknowledgeSurface(const DWM_WIN *Window);
 void DwmDxSweepSurfaces(ULONG FrameSequence);

@@ -45,10 +45,22 @@ typedef struct _DWM_D3DKMT_INVALIDATECACHE
 typedef NTSTATUS (APIENTRY *PFN_DWM_D3DKMT_INVALIDATECACHE)(
     const DWM_D3DKMT_INVALIDATECACHE *Invalidate);
 
+typedef struct _DWM_D3DKMT_GETSHAREDRESOURCEADAPTERLUID
+{
+    D3DKMT_HANDLE hGlobalShare;
+    HANDLE hNtHandle;
+    LUID AdapterLuid;
+} DWM_D3DKMT_GETSHAREDRESOURCEADAPTERLUID;
+
+typedef NTSTATUS (APIENTRY *PFN_DWM_D3DKMT_GETSHAREDRESOURCEADAPTERLUID)(
+    DWM_D3DKMT_GETSHAREDRESOURCEADAPTERLUID *Query);
+
 typedef struct _DWM_DX_VIEW
 {
     ULONG GlobalShare;
     ULONG Generation;
+    ULONG SurfaceId;
+    BOOL Redirection;
     ULONG DeviceIndex;
     ULONG LastSeenFrame;
     D3DKMT_HANDLE hResource;
@@ -59,11 +71,27 @@ typedef struct _DWM_DX_VIEW
     ULONGLONG LastUpdateId;
 } DWM_DX_VIEW;
 
+typedef struct _DWM_DX_SOURCE
+{
+    ULONG GlobalShare;
+    ULONG Generation;
+    ULONG SurfaceId;
+    BOOL Redirection;
+    const LUID *AdapterLuid;
+    ULONGLONG UpdateId;
+    ULONG Width;
+    ULONG Height;
+    ULONG Pitch;
+    ULONG Format;
+} DWM_DX_SOURCE;
+
 static DWM_DX_DEVICE g_Devices[DWM_DX_MAX_DEVICES];
 static DWM_DX_VIEW g_Views[DWM_DX_MAX_VIEWS];
 static ULONG g_CurrentFrame;
 static PFN_DWM_D3DKMT_INVALIDATECACHE g_InvalidateCache;
 static BOOL g_InvalidateCacheResolved;
+static PFN_DWM_D3DKMT_GETSHAREDRESOURCEADAPTERLUID g_GetSharedResourceAdapterLuid;
+static BOOL g_GetSharedResourceAdapterLuidResolved;
 
 static BOOL
 DwmDxLuidEqual(const LUID *Left, const LUID *Right)
@@ -162,7 +190,7 @@ DwmDxDropView(DWM_DX_VIEW *View)
 }
 
 static BOOL
-DwmDxOpenView(const DWM_WIN *Window, DWM_DX_VIEW *View)
+DwmDxOpenView(const DWM_DX_SOURCE *Source, DWM_DX_VIEW *View)
 {
     DWM_DX_SHARED_SURFACE_INFO RuntimeInfo;
     D3DKMT_QUERYRESOURCEINFO Query;
@@ -172,16 +200,49 @@ DwmDxOpenView(const DWM_WIN *Window, DWM_DX_VIEW *View)
     PVOID ResourcePrivate = NULL, TotalPrivate = NULL;
     ULONG DeviceIndex;
     ULONGLONG Bytes;
+    LUID AdapterLuid;
     NTSTATUS Status;
 
-    Status = DwmDxGetDevice(&Window->DxAdapterLuid, &DeviceIndex);
+    if (Source->AdapterLuid != NULL)
+    {
+        AdapterLuid = *Source->AdapterLuid;
+    }
+    else
+    {
+        DWM_D3DKMT_GETSHAREDRESOURCEADAPTERLUID QueryLuid;
+
+        if (!g_GetSharedResourceAdapterLuidResolved)
+        {
+            HMODULE Gdi32 = GetModuleHandleW(L"gdi32.dll");
+
+            if (Gdi32 != NULL)
+            {
+                g_GetSharedResourceAdapterLuid =
+                    (PFN_DWM_D3DKMT_GETSHAREDRESOURCEADAPTERLUID)
+                        GetProcAddress(Gdi32,
+                                       "D3DKMTGetSharedResourceAdapterLuid");
+            }
+            g_GetSharedResourceAdapterLuidResolved = TRUE;
+        }
+        if (g_GetSharedResourceAdapterLuid == NULL)
+            return FALSE;
+
+        RtlZeroMemory(&QueryLuid, sizeof(QueryLuid));
+        QueryLuid.hGlobalShare = Source->GlobalShare;
+        Status = g_GetSharedResourceAdapterLuid(&QueryLuid);
+        if (!NT_SUCCESS(Status))
+            return FALSE;
+        AdapterLuid = QueryLuid.AdapterLuid;
+    }
+
+    Status = DwmDxGetDevice(&AdapterLuid, &DeviceIndex);
     if (!NT_SUCCESS(Status))
         return FALSE;
 
     RtlZeroMemory(&RuntimeInfo, sizeof(RuntimeInfo));
     RtlZeroMemory(&Query, sizeof(Query));
     Query.hDevice = g_Devices[DeviceIndex].hDevice;
-    Query.hGlobalShare = Window->DxGlobalShare;
+    Query.hGlobalShare = Source->GlobalShare;
     Query.pPrivateRuntimeData = &RuntimeInfo;
     Query.PrivateRuntimeDataSize = sizeof(RuntimeInfo);
     Status = D3DKMTQueryResourceInfo(&Query);
@@ -191,10 +252,10 @@ DwmDxOpenView(const DWM_WIN *Window, DWM_DX_VIEW *View)
         Query.TotalPrivateDriverDataSize > DWM_DX_MAX_PRIVATE ||
         RuntimeInfo.Magic != DWM_DX_SURFACE_INFO_MAGIC ||
         RuntimeInfo.Version != DWM_DX_SURFACE_INFO_VERSION ||
-        RuntimeInfo.Width != Window->DxWidth ||
-        RuntimeInfo.Height != Window->DxHeight ||
-        RuntimeInfo.Pitch != Window->DxPitch ||
-        RuntimeInfo.Format != Window->DxFormat)
+        RuntimeInfo.Width != Source->Width ||
+        RuntimeInfo.Height != Source->Height ||
+        RuntimeInfo.Pitch != Source->Pitch ||
+        RuntimeInfo.Format != Source->Format)
     {
         return FALSE;
     }
@@ -221,7 +282,7 @@ DwmDxOpenView(const DWM_WIN *Window, DWM_DX_VIEW *View)
 
     RtlZeroMemory(&Open, sizeof(Open));
     Open.hDevice = g_Devices[DeviceIndex].hDevice;
-    Open.hGlobalShare = Window->DxGlobalShare;
+    Open.hGlobalShare = Source->GlobalShare;
     Open.NumAllocations = 1;
     Open.pOpenAllocationInfo = Allocations;
     Open.pPrivateRuntimeData = &RuntimeInfo;
@@ -270,8 +331,10 @@ DwmDxOpenView(const DWM_WIN *Window, DWM_DX_VIEW *View)
         goto Failure;
     }
 
-    View->GlobalShare = Window->DxGlobalShare;
-    View->Generation = Window->DxGeneration;
+    View->GlobalShare = Source->GlobalShare;
+    View->Generation = Source->Generation;
+    View->SurfaceId = Source->SurfaceId;
+    View->Redirection = Source->Redirection;
     View->DeviceIndex = DeviceIndex;
     View->hResource = Open.hResource;
     View->hAllocation = Allocations[0].hAllocation;
@@ -295,29 +358,40 @@ Failure:
     return FALSE;
 }
 
-const BYTE *
-DwmDxGetSurfaceSnapshot(const DWM_WIN *Window)
+static const BYTE *
+DwmDxGetSnapshot(const DWM_DX_SOURCE *Source)
 {
-    DWM_DX_VIEW *View = NULL, *FreeView = NULL, *Oldest = NULL;
+    DWM_DX_VIEW *View = NULL, *FreeView = NULL;
+    DWM_DX_VIEW *SameSurface = NULL, *Oldest = NULL;
     ULONG Index;
 
-    if (Window == NULL || Window->DxGlobalShare == 0 ||
-        Window->DxGeneration == 0 || Window->DxWidth == 0 ||
-        Window->DxHeight == 0)
+    if (Source == NULL || Source->GlobalShare == 0 ||
+        Source->Generation == 0 || Source->UpdateId == 0 ||
+        Source->Width == 0 || Source->Height == 0 ||
+        Source->Pitch == 0 || Source->Format == 0)
     {
         return NULL;
     }
 
     for (Index = 0; Index < DWM_DX_MAX_VIEWS; ++Index)
     {
-        if (g_Views[Index].GlobalShare == Window->DxGlobalShare &&
-            g_Views[Index].Generation == Window->DxGeneration)
+        if (g_Views[Index].GlobalShare == Source->GlobalShare &&
+            g_Views[Index].Generation == Source->Generation &&
+            g_Views[Index].Redirection == Source->Redirection)
         {
             View = &g_Views[Index];
             break;
         }
         if (g_Views[Index].GlobalShare == 0 && FreeView == NULL)
             FreeView = &g_Views[Index];
+        if (g_Views[Index].GlobalShare != 0 &&
+            g_Views[Index].SurfaceId == Source->SurfaceId &&
+            g_Views[Index].Redirection == Source->Redirection &&
+            (SameSurface == NULL ||
+             g_Views[Index].LastSeenFrame < SameSurface->LastSeenFrame))
+        {
+            SameSurface = &g_Views[Index];
+        }
         if (g_Views[Index].GlobalShare != 0 &&
             (Oldest == NULL ||
              g_Views[Index].LastSeenFrame < Oldest->LastSeenFrame))
@@ -328,18 +402,18 @@ DwmDxGetSurfaceSnapshot(const DWM_WIN *Window)
 
     if (View == NULL)
     {
-        View = FreeView != NULL ? FreeView : Oldest;
+        View = SameSurface != NULL ? SameSurface :
+               (FreeView != NULL ? FreeView : Oldest);
         if (View == NULL)
             return NULL;
         if (View->GlobalShare != 0)
             DwmDxDropView(View);
-        if (!DwmDxOpenView(Window, View))
+        if (!DwmDxOpenView(Source, View))
             return NULL;
     }
     View->LastSeenFrame = g_CurrentFrame;
 
-    if (Window->DxUpdateId != 0 &&
-        Window->DxUpdateId != View->LastUpdateId)
+    if (Source->UpdateId != View->LastUpdateId)
     {
         DWM_D3DKMT_INVALIDATECACHE Invalidate;
 
@@ -364,11 +438,53 @@ DwmDxGetSurfaceSnapshot(const DWM_WIN *Window)
             NT_SUCCESS(g_InvalidateCache(&Invalidate)))
         {
             RtlCopyMemory(View->Snapshot, View->Mapping, View->Bytes);
-            View->LastUpdateId = Window->DxUpdateId;
+            View->LastUpdateId = Source->UpdateId;
         }
     }
 
     return View->LastUpdateId != 0 ? View->Snapshot : NULL;
+}
+
+const BYTE *
+DwmDxGetSurfaceSnapshot(const DWM_WIN *Window)
+{
+    DWM_DX_SOURCE Source;
+
+    if (Window == NULL)
+        return NULL;
+
+    RtlZeroMemory(&Source, sizeof(Source));
+    Source.GlobalShare = Window->DxGlobalShare;
+    Source.Generation = Window->DxGeneration;
+    Source.SurfaceId = Window->SurfaceId;
+    Source.AdapterLuid = &Window->DxAdapterLuid;
+    Source.UpdateId = Window->DxUpdateId;
+    Source.Width = Window->DxWidth;
+    Source.Height = Window->DxHeight;
+    Source.Pitch = Window->DxPitch;
+    Source.Format = Window->DxFormat;
+    return DwmDxGetSnapshot(&Source);
+}
+
+const BYTE *
+DwmDxGetRedirectionSnapshot(const DWM_WIN *Window)
+{
+    DWM_DX_SOURCE Source;
+
+    if (Window == NULL)
+        return NULL;
+
+    RtlZeroMemory(&Source, sizeof(Source));
+    Source.GlobalShare = Window->BaseGlobalShare;
+    Source.Generation = Window->BaseGeneration;
+    Source.SurfaceId = Window->SurfaceId;
+    Source.Redirection = TRUE;
+    Source.UpdateId = Window->BaseUpdateId;
+    Source.Width = Window->BaseWidth;
+    Source.Height = Window->BaseHeight;
+    Source.Pitch = Window->BasePitch;
+    Source.Format = Window->BaseFormat;
+    return DwmDxGetSnapshot(&Source);
 }
 
 void

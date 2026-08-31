@@ -313,7 +313,11 @@ IntCompositionFreeSurface(_Inout_ PWND_REDIRECT r)
         r->FrontSection = NULL;
     }
     r->BackViewSize = 0;
+    r->BackGlobalShare = 0;
     r->FrontViewSize = 0;
+    r->FrontGlobalShare = 0;
+    r->BaseGeneration = 0;
+    r->BaseUpdateId = 0;
     r->FrontValid = FALSE;
     r->DxGlobalShare = 0;
     r->DxGeneration = 0;
@@ -350,6 +354,7 @@ IntCompositionGetBufferSize(
  * dwm's mapped-view cache can never alias a recycled surface. */
 static ULONG g_FrontGeneration = 0;
 static ULONGLONG g_DxUpdateSequence = 0;
+static ULONGLONG g_BaseUpdateSequence = 0;
 
 /* FRONT buffer over a pageable section: win32k keeps a system-space view the
  * GDI surface wraps; dwm maps the same section read-only in user space and
@@ -359,7 +364,8 @@ IntCompositionCreateSharedBuffer(_In_ LONG cx, _In_ LONG cy,
                                  _Out_ HBITMAP *phbmp,
                                  _Out_ PVOID *ppSection,
                                  _Out_ PVOID *ppView,
-                                 _Out_ SIZE_T *pcbView)
+                                 _Out_ SIZE_T *pcbView,
+                                 _Out_ PULONG pGlobalShare)
 {
     LARGE_INTEGER liSize;
     PVOID pSection = NULL, pView = NULL;
@@ -368,14 +374,55 @@ IntCompositionCreateSharedBuffer(_In_ LONG cx, _In_ LONG cy,
     HBITMAP hbmp;
     ULONG Stride, Bytes;
     NTSTATUS Status;
+    PPDEVOBJ ppdev;
 
     *phbmp = NULL;
     *ppSection = NULL;
     *ppView = NULL;
     *pcbView = 0;
+    *pGlobalShare = 0;
 
     if (!IntCompositionGetBufferSize(cx, cy, &Stride, &Bytes))
         return NULL;
+
+    ppdev = IntCompositionReferenceDevice();
+    if (ppdev != NULL && ppdev->DriverFunctions.CreateDeviceBitmapEx != NULL)
+    {
+        SIZEL Size = {cx, cy};
+        HANDLE SharedSurface = NULL;
+
+        hbmp = ppdev->DriverFunctions.CreateDeviceBitmapEx(
+            ppdev->dhpdev, Size, BMF_32BPP, CDBEX_REDIRECTION, NULL,
+            DWM_DX_FORMAT_B8G8R8A8_UNORM,
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+            0,
+#endif
+            &SharedSurface);
+        IntCompositionDereferenceDevice(ppdev);
+        if (hbmp != NULL && SharedSurface != NULL)
+        {
+            psurf = SURFACE_ShareLockSurface(hbmp);
+            if (psurf != NULL && psurf->SurfObj.pvScan0 != NULL &&
+                psurf->SurfObj.lDelta >= (LONG)Stride &&
+                psurf->SurfObj.cjBits >= Bytes)
+            {
+                *phbmp = hbmp;
+                *pGlobalShare = (ULONG)(ULONG_PTR)SharedSurface;
+                return psurf;
+            }
+            if (psurf != NULL)
+                SURFACE_ShareUnlockSurface(psurf);
+            EngDeleteSurface((HSURF)hbmp);
+        }
+        else if (hbmp != NULL)
+        {
+            EngDeleteSurface((HSURF)hbmp);
+        }
+    }
+    else
+    {
+        IntCompositionDereferenceDevice(ppdev);
+    }
 
     liSize.QuadPart = Bytes;
     Status = MmCreateSection(&pSection, SECTION_ALL_ACCESS, NULL, &liSize, PAGE_READWRITE, SEC_COMMIT, NULL, NULL);
@@ -431,6 +478,7 @@ IntCompositionEnsureSurface(_In_ PWND Wnd, _Inout_ PWND_REDIRECT r)
     PVOID pBackSectionNew = NULL, pBackViewNew = NULL;
     PVOID pFrontSectionNew = NULL, pFrontViewNew = NULL;
     SIZE_T cbBackViewNew = 0, cbFrontViewNew = 0;
+    ULONG BackGlobalShareNew = 0, FrontGlobalShareNew = 0;
     RECTL rcCopy;
     POINTL ptZero = {0, 0};
     PPDEVOBJ ppdev = NULL;
@@ -462,7 +510,8 @@ IntCompositionEnsureSurface(_In_ PWND Wnd, _Inout_ PWND_REDIRECT r)
     psurfNew = IntCompositionCreateSharedBuffer(cx, cy, &hbmpNew,
                                                 &pBackSectionNew,
                                                 &pBackViewNew,
-                                                &cbBackViewNew);
+                                                &cbBackViewNew,
+                                                &BackGlobalShareNew);
     if (psurfNew == NULL)
     {
         r->AllocFailTime = (LONGLONG)KeQueryInterruptTime();
@@ -473,13 +522,16 @@ IntCompositionEnsureSurface(_In_ PWND Wnd, _Inout_ PWND_REDIRECT r)
     psurfNewFront = IntCompositionCreateSharedBuffer(cx, cy, &hbmpNewFront,
                                                      &pFrontSectionNew,
                                                      &pFrontViewNew,
-                                                     &cbFrontViewNew);
+                                                     &cbFrontViewNew,
+                                                     &FrontGlobalShareNew);
     if (psurfNewFront == NULL)
     {
         SURFACE_ShareUnlockSurface(psurfNew);
         EngDeleteSurface((HSURF)hbmpNew);
-        MmUnmapViewInSystemSpace(pBackViewNew);
-        ObDereferenceObject(pBackSectionNew);
+        if (pBackViewNew != NULL)
+            MmUnmapViewInSystemSpace(pBackViewNew);
+        if (pBackSectionNew != NULL)
+            ObDereferenceObject(pBackSectionNew);
         r->AllocFailTime = (LONGLONG)KeQueryInterruptTime();
         return r->psurf;
     }
@@ -500,10 +552,12 @@ IntCompositionEnsureSurface(_In_ PWND Wnd, _Inout_ PWND_REDIRECT r)
             NewRedirect.hbmp = hbmpNew;
             NewRedirect.BackSection = pBackSectionNew;
             NewRedirect.BackView = pBackViewNew;
+            NewRedirect.BackGlobalShare = BackGlobalShareNew;
             NewRedirect.psurfFront = psurfNewFront;
             NewRedirect.hbmpFront = hbmpNewFront;
             NewRedirect.FrontSection = pFrontSectionNew;
             NewRedirect.FrontView = pFrontViewNew;
+            NewRedirect.FrontGlobalShare = FrontGlobalShareNew;
             IntCompositionFreeSurface(&NewRedirect);
             r->AllocFailTime = (LONGLONG)KeQueryInterruptTime();
             return r->psurf;
@@ -529,12 +583,18 @@ IntCompositionEnsureSurface(_In_ PWND Wnd, _Inout_ PWND_REDIRECT r)
         r->BackView = pBackViewNew;
         r->BackViewSize = cbBackViewNew;
         r->BackGeneration = ++g_FrontGeneration;
+        r->BackGlobalShare = BackGlobalShareNew;
         r->psurfFront = psurfNewFront;
         r->hbmpFront = hbmpNewFront;
         r->FrontSection = pFrontSectionNew;
         r->FrontView = pFrontViewNew;
         r->FrontViewSize = cbFrontViewNew;
         r->Generation = ++g_FrontGeneration;
+        r->FrontGlobalShare = FrontGlobalShareNew;
+        r->BaseGeneration = FrontGlobalShareNew != 0 ? r->Generation : 0;
+        r->BaseUpdateId = bFrontValid && FrontGlobalShareNew != 0
+                              ? ++g_BaseUpdateSequence
+                              : 0;
         r->FrontValid = bFrontValid;
     }
 
@@ -1151,7 +1211,9 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
                 }
                 else if (InterlockedCompareExchange(&e->BackComplete, FALSE, TRUE) &&
                          IntCompositionIsGLWindow(w) &&
-                         !IntCompositionHasVisibleChild(w))
+                         !IntCompositionHasVisibleChild(w) &&
+                         e->Redirect.BackGlobalShare == 0 &&
+                         e->Redirect.FrontGlobalShare == 0)
                 {
                     IntCompositionExchangeBuffers(&e->Redirect);
                 }
@@ -1167,7 +1229,11 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
                     InterlockedExchange(&e->BackComplete, FALSE);
                 }
                 if (ppdev != NULL)
+                {
                     e->Redirect.FrontValid = TRUE;
+                    if (e->Redirect.FrontGlobalShare != 0)
+                        e->Redirect.BaseUpdateId = ++g_BaseUpdateSequence;
+                }
             }
             else if (e->Damaged)
             {
@@ -1177,7 +1243,8 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
 
         /* Present the FRONT (a complete frame); skip until one exists. */
         if (!e->Redirect.FrontValid || e->Redirect.psurfFront == NULL ||
-            e->Redirect.FrontSection == NULL)
+            (e->Redirect.FrontSection == NULL &&
+             e->Redirect.FrontGlobalShare == 0))
         {
             if (e->Damaged)
                 DeferredDamage = TRUE;
@@ -1196,7 +1263,8 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
         g_DwmFrameWindows[count].cy = e->Redirect.cy;
         g_DwmFrameWindows[count].SurfaceId = (ULONG)(e - g_Redirects);
         g_DwmFrameWindows[count].Generation = e->Redirect.Generation;
-        g_DwmFrameWindows[count].Stride = (ULONG)e->Redirect.cx * sizeof(ULONG);
+        g_DwmFrameWindows[count].Stride =
+            (ULONG)e->Redirect.psurfFront->SurfObj.lDelta;
         g_DwmFrameWindows[count].Damaged = wasDamaged ? 1 : 0;
         g_DwmFrameWindows[count].DxGlobalShare = e->Redirect.DxGlobalShare;
         g_DwmFrameWindows[count].DxGeneration = e->Redirect.DxGeneration;
@@ -1208,6 +1276,18 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
         g_DwmFrameWindows[count].DxHeight = e->Redirect.DxInfo.Height;
         g_DwmFrameWindows[count].DxPitch = e->Redirect.DxInfo.Pitch;
         g_DwmFrameWindows[count].DxFormat = e->Redirect.DxInfo.Format;
+        g_DwmFrameWindows[count].BaseGlobalShare =
+            e->Redirect.FrontGlobalShare;
+        g_DwmFrameWindows[count].BaseGeneration =
+            e->Redirect.BaseGeneration;
+        g_DwmFrameWindows[count].BaseUpdateId =
+            e->Redirect.BaseUpdateId;
+        g_DwmFrameWindows[count].BaseWidth = (ULONG)e->Redirect.cx;
+        g_DwmFrameWindows[count].BaseHeight = (ULONG)e->Redirect.cy;
+        g_DwmFrameWindows[count].BasePitch =
+            (ULONG)e->Redirect.psurfFront->SurfObj.lDelta;
+        g_DwmFrameWindows[count].BaseFormat =
+            DWM_DX_FORMAT_B8G8R8A8_UNORM;
         {
             BYTE alpha = 255;
             COLORREF key = 0;

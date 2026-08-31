@@ -43,17 +43,22 @@ typedef struct _WND_REDIRECT
     LONG      cx;           /* buffer dimensions                              */
     LONG      cy;
     LONGLONG  AllocFailTime;/* last backing-alloc failure (backoff, 100ns)    */
-    /* Both buffers are section-backed. DWM maps FRONT read-only, while GL
-     * frame commits exchange the backing views without changing the SURFACE
-     * objects held by persistent window DCs. */
+    /* Full WDDM adapters provide CDD-owned shared allocations. Display-only
+     * and legacy paths retain section-backed buffers. Section-backed GL
+     * frames may exchange views; driver-owned surfaces retain fixed backing
+     * and publish through a completed BACK-to-FRONT copy. */
     PVOID     BackSection;
     PVOID     BackView;
     SIZE_T    BackViewSize;
     ULONG     BackGeneration;
+    ULONG     BackGlobalShare;
     PVOID     FrontSection; /* referenced section object                      */
     PVOID     FrontView;    /* kernel view the FRONT surface wraps            */
     SIZE_T    FrontViewSize;
     ULONG     Generation;   /* stable token for the current FRONT section     */
+    ULONG     FrontGlobalShare;
+    ULONG     BaseGeneration;
+    ULONGLONG BaseUpdateId;
     RECTL     rcClient;     /* client rectangle in backing coordinates         */
     ULONG     DxGlobalShare;
     ULONG     DxGeneration;

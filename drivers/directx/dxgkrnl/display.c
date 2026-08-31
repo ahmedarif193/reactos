@@ -2248,6 +2248,61 @@ DxgkpDisplayDispatch(
             break;
         }
 
+        case IOCTL_VIDEO_DXGK_CREATE_REDIRECTION_SURFACE:
+        {
+            PDXGK_REDIRECTION_SURFACE_CREATE Create =
+                (PDXGK_REDIRECTION_SURFACE_CREATE)Irp->AssociatedIrp.SystemBuffer;
+
+            if (Irp->RequestorMode != KernelMode)
+            {
+                Status = STATUS_ACCESS_DENIED;
+                break;
+            }
+            if (Create == NULL ||
+                Stack->Parameters.DeviceIoControl.InputBufferLength != sizeof(*Create) ||
+                Stack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(*Create))
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+            if (g_DisplayAdapter == NULL)
+            {
+                Status = STATUS_DEVICE_NOT_READY;
+                break;
+            }
+
+            Status = DxgkCreateRedirectionSurface(g_DisplayAdapter, Create);
+            if (NT_SUCCESS(Status))
+                BytesReturned = sizeof(*Create);
+            break;
+        }
+
+        case IOCTL_VIDEO_DXGK_DESTROY_REDIRECTION_SURFACE:
+        {
+            PDXGK_REDIRECTION_SURFACE_DESTROY Destroy =
+                (PDXGK_REDIRECTION_SURFACE_DESTROY)Irp->AssociatedIrp.SystemBuffer;
+
+            if (Irp->RequestorMode != KernelMode)
+            {
+                Status = STATUS_ACCESS_DENIED;
+                break;
+            }
+            if (Destroy == NULL ||
+                Stack->Parameters.DeviceIoControl.InputBufferLength != sizeof(*Destroy))
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+            if (g_DisplayAdapter == NULL)
+            {
+                Status = STATUS_DEVICE_NOT_READY;
+                break;
+            }
+
+            Status = DxgkDestroyRedirectionSurface(g_DisplayAdapter, Destroy);
+            break;
+        }
+
         case IOCTL_VIDEO_DXGK_GPU_ESCAPE:
         {
             /* Opaque display-driver -> miniport escape conduit: the buffered
