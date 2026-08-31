@@ -368,6 +368,8 @@ UpdateStartMenu(IN OUT IMenuPopup *pMenuPopup,
                 IN BOOL bSmallIcons,
                 IN BOOL bRefresh);
 
+#include "startmnu2.h"
+
 /*
  * startmnucust.cpp
  */
