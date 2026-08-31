@@ -5,6 +5,40 @@ Signature = "$Windows NT$"
 
 HKCU,"Control Panel",,0x00000012
 
+; Colors (dark scheme matching the Win8 default theme)
+HKCU,"Control Panel\Colors",,0x00000012
+HKCU,"Control Panel\Colors","ActiveBorder",2,"32 32 32"
+HKCU,"Control Panel\Colors","ActiveTitle",2,"32 32 32"
+HKCU,"Control Panel\Colors","AppWorkSpace",2,"24 24 24"
+HKCU,"Control Panel\Colors","Background",2,"16 16 16"
+HKCU,"Control Panel\Colors","ButtonAlternateFace",2,"43 43 43"
+HKCU,"Control Panel\Colors","ButtonDkShadow",2,"0 0 0"
+HKCU,"Control Panel\Colors","ButtonFace",2,"32 32 32"
+HKCU,"Control Panel\Colors","ButtonHilight",2,"64 64 64"
+HKCU,"Control Panel\Colors","ButtonLight",2,"48 48 48"
+HKCU,"Control Panel\Colors","ButtonShadow",2,"16 16 16"
+HKCU,"Control Panel\Colors","ButtonText",2,"240 240 240"
+HKCU,"Control Panel\Colors","GradientActiveTitle",2,"32 32 32"
+HKCU,"Control Panel\Colors","GradientInactiveTitle",2,"43 43 43"
+HKCU,"Control Panel\Colors","GrayText",2,"128 128 128"
+HKCU,"Control Panel\Colors","Hilight",2,"0 120 215"
+HKCU,"Control Panel\Colors","HilightText",2,"255 255 255"
+HKCU,"Control Panel\Colors","HotTrackingColor",2,"96 205 255"
+HKCU,"Control Panel\Colors","InactiveBorder",2,"43 43 43"
+HKCU,"Control Panel\Colors","InactiveTitle",2,"43 43 43"
+HKCU,"Control Panel\Colors","InactiveTitleText",2,"160 160 160"
+HKCU,"Control Panel\Colors","InfoText",2,"240 240 240"
+HKCU,"Control Panel\Colors","InfoWindow",2,"43 43 43"
+HKCU,"Control Panel\Colors","Menu",2,"32 32 32"
+HKCU,"Control Panel\Colors","MenuBar",2,"32 32 32"
+HKCU,"Control Panel\Colors","MenuHilight",2,"0 120 215"
+HKCU,"Control Panel\Colors","MenuText",2,"240 240 240"
+HKCU,"Control Panel\Colors","Scrollbar",2,"43 43 43"
+HKCU,"Control Panel\Colors","TitleText",2,"255 255 255"
+HKCU,"Control Panel\Colors","Window",2,"32 32 32"
+HKCU,"Control Panel\Colors","WindowFrame",2,"64 64 64"
+HKCU,"Control Panel\Colors","WindowText",2,"240 240 240"
+
 ; Accessibility
 HKCU,"Control Panel\Accessibility",,0x00000012
 HKCU,"Control Panel\Accessibility\Keyboard Preference",,0x00000012

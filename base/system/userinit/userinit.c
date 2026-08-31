@@ -435,6 +435,36 @@ SetUserSysColors(VOID)
 }
 
 static VOID
+ReapplyThemeColors(VOID)
+{
+    typedef HRESULT (WINAPI *PREAPPLYTHEMESYSMETRICS)(VOID);
+    PREAPPLYTHEMESYSMETRICS pReapply;
+    HMODULE hUxTheme;
+    HRESULT hr;
+
+    hUxTheme = LoadLibraryW(L"uxtheme.dll");
+    if (!hUxTheme)
+    {
+        ERR("THEMECOLORS: uxtheme load failed %lu\n", GetLastError());
+        return;
+    }
+
+    pReapply = (PREAPPLYTHEMESYSMETRICS)GetProcAddress(hUxTheme, "ReapplyThemeSysMetrics");
+    if (pReapply)
+    {
+        hr = pReapply();
+        ERR("THEMECOLORS: ReapplyThemeSysMetrics returned 0x%lx, WindowText now %06lx\n",
+            hr, GetSysColor(COLOR_WINDOWTEXT));
+    }
+    else
+    {
+        ERR("THEMECOLORS: ReapplyThemeSysMetrics export missing\n");
+    }
+
+    FreeLibrary(hUxTheme);
+}
+
+static VOID
 SetUserWallpaper(VOID)
 {
     HKEY hKey;
@@ -495,6 +525,7 @@ SetUserSettings(VOID)
 {
     UpdatePerUserSystemParameters(1, TRUE);
     SetUserSysColors();
+    ReapplyThemeColors();
     SetUserWallpaper();
 }
 

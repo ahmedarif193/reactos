@@ -1054,6 +1054,34 @@ HRESULT WINAPI ApplyTheme(HTHEMEFILE hThemeFile, char *unknown, HWND hWnd)
 }
 
 /**********************************************************************
+ *      ReapplyThemeSysMetrics                             (UXTHEME.@)
+ *
+ * Reapply the active theme's system colors to the live color table and
+ * persist the resulting metrics, without a full theme activation
+ */
+HRESULT WINAPI ReapplyThemeSysMetrics(VOID)
+{
+    struct system_metrics metrics;
+
+    if (!bThemeActive)
+    {
+        ERR("THEMECOLORS: no active theme, nothing to reapply\n");
+        return S_FALSE;
+    }
+
+    if (!MSSTYLES_ReapplyActiveThemeMetrics())
+    {
+        ERR("THEMECOLORS: active theme file not loaded\n");
+        return E_FAIL;
+    }
+
+    if (UXTHEME_GetSystemMetrics(&metrics))
+        UXTHEME_SaveSystemMetrics(&metrics, FALSE);
+
+    return S_OK;
+}
+
+/**********************************************************************
  *      GetThemeDefaults                                   (UXTHEME.7)
  *
  * Get the default color & size for a theme

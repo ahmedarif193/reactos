@@ -769,6 +769,12 @@ BEGIN
     IDS_SHV_COLUMN_LOCATION "Location"
     IDS_SHV_COLUMN_MODEL "Model"
 
+    /* modern Computer folder view */
+    IDS_COMPUTER_DEVICES_AND_DRIVES "Devices and drives (%u)"
+    IDS_COMPUTER_SYSTEM_LOCATIONS "System locations (%u)"
+    IDS_COMPUTER_FREE_SPACE "%s free of %s"
+    IDS_COMPUTER_FOLDERS "Folders (%u)"
+
     /* special folders */
     IDS_DESKTOP "Desktop"
     IDS_MYCOMPUTER "My Computer"

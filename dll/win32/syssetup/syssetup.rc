@@ -56,6 +56,13 @@ END
 
 IDR_GPL RT_TEXT "COPYING"
 
+/* Neutral fallbacks for the boot-status phase details. */
+STRINGTABLE
+BEGIN
+    IDS_STATUS_PREPARE_DEV "Preparing device configuration"
+    IDS_STATUS_START_DEV "Starting Plug and Play"
+END
+
 /*
  * Everything specific to any language goes in one of the specific
  * files. Note that you can and may override resources which also have

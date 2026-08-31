@@ -23,6 +23,6 @@ add_library(syssetup MODULE
 
 add_pch(syssetup precomp.h SOURCE)
 set_module_type(syssetup win32dll UNICODE)
-target_link_libraries(syssetup uuid wine tzlib ${PSEH_LIB})
+target_link_libraries(syssetup uuid wine tzlib bootstatus ${PSEH_LIB})
 add_importlibs(syssetup advapi32 gdi32 user32 samlib userenv comctl32 setupapi rpcrt4 ole32 shell32 shlwapi msvcrt kernel32 ntdll)
 add_cd_file(TARGET syssetup DESTINATION reactos/system32 FOR all)

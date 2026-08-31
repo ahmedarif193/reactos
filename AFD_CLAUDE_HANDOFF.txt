@@ -1,0 +1,326 @@
+ReactOS ARM64 Claude / AFD select crash handoff
+================================================
+
+Date: 2026-08-30 (Europe/Paris)
+Repository: /Users/mac/working_dir/reactos-dev4
+Build tree: /Users/mac/working_dir/reactos-dev4/output-Clang23-arm64-debug
+Branch: main-nt10
+HEAD at handoff: a534117af3252305e535e5a0ada29a25eaf2740e
+Origin branch was at the same commit when checked.
+
+USER REQUEST AND EXPECTATIONS
+-----------------------------
+
+Continue ordinary ReactOS bug fixing for the ARM64 Claude workload. Do not
+turn this into a security, cybersecurity, or broad provenance audit. For low
+level behavior, use existing Wine tests and run the focused behavior on clean
+Windows 11 ARM64 as black-box evidence, then fix ReactOS and rerun it.
+
+The user was frustrated by an unnecessary clean-room/provenance detour. Move
+directly through test, fix, build and runtime validation. Never access WRK or
+other non-public Windows source. Public Wine source, ReactOS source/history,
+public headers and native Windows black-box execution are allowed.
+
+Do not stage, commit, push, reset, stash or clean unless explicitly requested.
+Preserve unrelated dirty work. Normal VM limit requested earlier by the user:
+
+    ../scripts/vm_monitor.py --img --smp 4 --stall 4 --timeout 20
+
+Do not silently extend the timeout. A user-supplied diagnostic run used stall
+40 / timeout 500, but the established requested cap is stall 4 / timeout 20.
+
+CURRENT RESULT
+--------------
+
+The old job-object teardown crash is not the crash in the latest log.
+
+Latest serial log:
+
+    /tmp/freeldr_arm64.log
+
+The focused API probe completed first:
+
+    CLAUDE_API_PROBE_EXIT 0
+
+That includes the self-job-exit regression. The previous job failure was
+bugcheck 0x20 KERNEL_APC_PENDING_DURING_EXIT. It did not recur in this run.
+
+Claude then entered the real workload:
+
+    CLAUDE_INTERACTIVE_BEGIN
+
+After DNS reception and AFD receive completion/cancellation, ReactOS crashed:
+
+    *** Fatal System Error: 0x000000d1
+        (0x0000000000000240,
+         0x0000000000000002,
+         0x0000000000000000,
+         0xFFFF98DB164D8044)
+
+This is DRIVER_IRQL_NOT_LESS_OR_EQUAL: read address 0x240 at IRQL 2.
+
+PROVEN FAULT LOCATION
+---------------------
+
+The log loaded AFD at:
+
+    afd.sys base = FFFF98DB164CC000
+
+Bugcheck parameter 4 is:
+
+    FFFF98DB164D8044 = afd.sys + 0xC044
+
+That is exactly:
+
+    AfdSelect+0x234
+    drivers/network/afd/afd/select.c:326
+
+Source:
+
+    PollReq->Handles[i].Status =
+        PollReq->Handles[i].Events & FCB->PollState;
+
+Generated ARM64 instruction at afd.sys+0xC044:
+
+    ldr w9, [x22, #0x240]
+
+The instruction sequence loads x22 from FileObject->FsContext. DWARF confirms
+AFD_FCB.PollState is at offset 0x240. Since the fault address is exactly 0x240,
+FileObject->FsContext was NULL.
+
+The GDB fallback later showing EarlyUartGetc is not the original fault. It
+attached after the bugcheck while KDBG was polling the serial console. The
+trustworthy evidence is the bugcheck tuple, loaded AFD base, exact offset,
+generated instruction and KDBG AfdSelect frame.
+
+LIKELY ROOT CAUSE TO PROVE
+--------------------------
+
+drivers/network/afd/afd/lock.c:319 LockHandles currently calls:
+
+    ObReferenceObjectByHandle(..., FILE_ALL_ACCESS, NULL, KernelMode, ...)
+
+It accepts any kernel object type, stores it as a handle/object pointer, and
+AfdSelect later blindly casts it to PFILE_OBJECT and dereferences FsContext.
+It neither requires *IoFileObjectType nor verifies that the file object belongs
+to the AFD device and has a valid AFD context.
+
+A multithreaded socket close/handle-reuse race can therefore turn one handle in
+a select set into an event or another file object after user-mode validation.
+The first socket still dispatches IOCTL_AFD_SELECT to AFD; a later mixed handle
+is referenced as an arbitrary object and then treated as an AFD file object.
+
+Do not implement a bare `if (!FCB) continue` workaround. The correct direction
+is to validate and reject a non-AFD object before AfdSelect evaluates the set,
+returning the Windows-observed failure status and releasing all references.
+The exact NTSTATUS still needs the native discovery run described below.
+
+PERMITTED WINE / WINDOWS EVIDENCE
+---------------------------------
+
+Current local Wine test source:
+
+    /Users/mac/working_dir/wine/dlls/ws2_32/tests/sock.c
+
+Relevant tests:
+
+    lines about 4408-4420: closing a socket wakes a blocked select
+    lines about 4424-4458: invalid handles return SOCKET_ERROR/WSAENOTSOCK
+    lines about 4464-4499: valid non-socket file handles return
+                           SOCKET_ERROR/WSAENOTSOCK in mixed descriptor sets
+    lines about 4962 onward: select on a closed socket
+    lines about 4977 onward: close a socket currently selected by another thread
+
+The ReactOS in-tree Wine test copy is older:
+
+    modules/rostests/winetests/ws2_32/sock.c
+
+It has invalid-socket and close/select coverage, but the later close-selected
+block is under ROSTESTS_233_IS_FIXED and the newer valid non-socket cases are
+absent. Use the current local Wine test behavior as the clean-room test basis.
+
+NATIVE WINDOWS 11 HARNESS
+-------------------------
+
+Use:
+
+    /Users/mac/working_dir/winarm64-installed-reference/scripts/run-win11-payload.py
+
+Payload directories require launcher.txt. Successful transfer ends with:
+
+    raw-arm64-payload: DONE
+
+Results are copied beneath:
+
+    /Users/mac/working_dir/winarm64-installed-reference/out/qemu-full-win11-*/payload-logs
+
+Earlier exact ARM64 API probe evidence (job/SIO/pseudoconsole) is at:
+
+    /Users/mac/working_dir/winarm64-installed-reference/out/
+        qemu-full-win11-20260830-213940/payload-logs
+
+NEW DISCOVERY PROBE CREATED, NOT YET RUN
+----------------------------------------
+
+A build-local, ignored probe was just created:
+
+    output-Clang23-arm64-debug/afd-select-cleanroom-probe/probe.c
+    output-Clang23-arm64-debug/afd-select-cleanroom-probe/launcher.txt
+
+It does two checks:
+
+1. Public Winsock select() with an event handle, recording result/error and
+   whether the descriptor set is retained.
+2. Direct IOCTL_AFD_SELECT on a valid socket with a second event handle in the
+   AFD poll array, recording the native NTSTATUS/IO_STATUS_BLOCK.
+
+The direct case deterministically exercises the exact validation missing in
+LockHandles without needing to win the close/reuse race. The source uses only
+public Windows declarations plus the ReactOS/Wine-known AFD buffer layout.
+
+This probe has NOT been compiled and has NOT been run anywhere yet. The next
+agent must compile it for Windows ARM64 and run it on Windows 11 before deciding
+the returned ReactOS error status.
+
+Suggested compiler:
+
+    /Users/mac/.local/opt/rosbe/llvm-mingw/bin/
+        aarch64-w64-mingw32-clang
+
+It is Clang 23.1.0 targeting aarch64-w64-windows-gnu. A likely command is:
+
+    /Users/mac/.local/opt/rosbe/llvm-mingw/bin/aarch64-w64-mingw32-clang \
+        -O2 -Wall -Wextra \
+        afd-select-cleanroom-probe/probe.c \
+        -o afd-select-cleanroom-probe/probe.exe \
+        -lws2_32 -lntdll
+
+Verify the PE is ARM64 and inspect imports before native execution.
+
+REQUIRED NEXT STEPS
+-------------------
+
+1. Compile the discovery probe and run it on clean Windows 11 ARM64.
+2. Record exact public select result/WSA error and direct AFD NTSTATUS.
+3. Turn that observed result into final assertions for the focused test.
+4. Reproduce current ReactOS behavior with the same binary or a minimal AFD
+   apitest. Current unpatched ReactOS may bugcheck; keep that failure bounded.
+5. Implement narrow AFD validation. Expected design direction:
+   - require IoFileObjectType in ObReferenceObjectByHandle;
+   - verify each referenced file object belongs to the current AFD device;
+   - verify its FsContext is present before the spin-lock poll-state scan;
+   - unwind all acquired object references on the first invalid entry;
+   - propagate the Windows-observed NTSTATUS instead of misreporting OOM;
+   - keep output/IRP status coherent and complete the IRP once.
+6. Add focused regression coverage under modules/rostests/apitests/afd or sync
+   the relevant Wine ws2_32 test behavior as appropriate. Keep test and fix
+   scoped to select handle validation/lifetime.
+7. Build at least afd.sys, the focused test, reactosimg and verify the image
+   contains the new afd.sys.
+8. Run the same final test on ReactOS ARM64 and require its completion marker.
+9. Rerun real Claude using SMP 4, stall 4, timeout 20. Require
+   CLAUDE_INTERACTIVE_BEGIN and scan for any Fatal System Error. A short run
+   without a crash is a smoke result, not proof that all close/select races are
+   exhausted.
+10. Run git diff --check and report source build, native behavior, ReactOS
+    focused runtime, and Claude end-to-end runtime separately.
+
+POSSIBLE SOURCE SHAPE (NOT YET AUTHORIZED BY NATIVE STATUS)
+----------------------------------------------------------
+
+LockHandles currently returns only a pointer, conflating allocation failure and
+invalid handle. A clean implementation may need either:
+
+    NTSTATUS LockHandles(..., PAFD_HANDLE *LockedHandles)
+
+or an additional PNTSTATUS output. Pass the expected AFD PDEVICE_OBJECT into
+the helper so it can validate FileObject->DeviceObject before any FCB access.
+Do not accept a generic file object merely because FsContext is non-NULL.
+
+Also review UpdatePollWithFCB in select.c:505, which repeats the blind
+FileObject->FsContext dereference at DISPATCH_LEVEL. The initial validation and
+held file-object reference may make it safe, but cancellation/close ownership
+must be checked rather than patched independently by guessing.
+
+EXISTING CLAUDE / COMPATIBILITY WORK IN DIRTY TREE
+-------------------------------------------------
+
+These changes predate the new AFD crash and must be preserved:
+
+    dll/win32/fwpuclnt/                      Wine 11.14 user-mode module
+    dll/win32/CMakeLists.txt                 fwpuclnt wiring
+    media/doc/WINESYNC.txt                   Wine sync record
+    dll/win32/kernelbase/PseudoConsole.c     safe ConPTY stubs/validation
+    dll/win32/kernelbase/kernelbase_ros.spec exports
+    dll/win32/kernel32/kernel32.spec         forwards
+    dll/win32/msafd/misc/dllmain.c           synchronous SIO_BASE_HANDLE
+    modules/rostests/apitests/ws2_32/WSAIoctl.c
+    modules/rostests/apitests/kernel32/*      stack/pseudoconsole/job tests
+    ntoskrnl/ps/job.c                        skip already-exiting job member
+
+Earlier validation already completed:
+
+    ninja fwpuclnt
+    ninja kernelbase_ros kernel32
+    ninja msafd reactosimg
+    ninja ntkrnlmp reactosimg
+
+An ENABLE_ROSTESTS ARM64 Clang 23 tree exists at:
+
+    /tmp/reactos-arm64-rostests.ig26QE
+
+It previously built kernel32_apitest and ws2_32_apitest successfully. It may be
+reused for the new AFD apitest after confirming its CMake cache still matches
+ARM64/Clang 23.
+
+Claude payload:
+
+    output-Clang23-arm64-debug/
+        claude-arm64-artifact-2.1.251/package/claude.exe
+
+Official package:
+
+    @anthropic-ai/claude-code-win32-arm64@2.1.251
+
+Binary SHA256:
+
+    89e91fed2dc6f6278fa1e179e6401c0a1c252fe80c57ee47f17f10f7f7b4e99c
+
+The image is 1 GiB. The launcher/preinstall files are build-local. The tracked
+boot/bootdata/preinstall.ini is currently modified for payload selection; do
+not restore or rewrite it blindly.
+
+DIRTY STATUS AT LAST CHECK
+--------------------------
+
+    M boot/bootdata/preinstall.ini
+    M dll/win32/CMakeLists.txt
+    M dll/win32/kernel32/kernel32.spec
+    M dll/win32/kernelbase/PseudoConsole.c
+    M dll/win32/kernelbase/kernelbase_ros.spec
+    M dll/win32/msafd/misc/dllmain.c
+    M media/doc/WINESYNC.txt
+    M modules/rostests/apitests/kernel32/CMakeLists.txt
+    M modules/rostests/apitests/kernel32/JobObject.c
+    M modules/rostests/apitests/kernel32/ResizePseudoConsole.c
+    M modules/rostests/apitests/kernel32/testlist.c
+    M modules/rostests/apitests/ws2_32/WSAIoctl.c
+    M ntoskrnl/ps/job.c
+   ?? WDDM2_ROADMAP.md
+   ?? base/applications/cmdutils/rpi5audiotest/
+   ?? dll/win32/fwpuclnt/
+   ?? modules/rostests/apitests/kernel32/GetCurrentThreadStackLimits.c
+
+The new handoff file itself is untracked. The new discovery probe is inside the
+ignored output tree and may not appear in Git status.
+
+NOT DONE
+--------
+
+- No AFD source fix has been applied.
+- No AFD regression test has been added to the tracked test suite.
+- The new AFD discovery probe has not been compiled.
+- The new probe has not run on Windows 11 or ReactOS.
+- Claude has not been rerun after an AFD fix.
+- Nothing from this AFD task has been staged, committed or pushed.
+

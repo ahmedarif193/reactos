@@ -23,6 +23,7 @@
 #include <shobjidl.h>
 #include <rpcproxy.h>
 #include <ndk/cmfuncs.h>
+#include <reactos/bootstatus.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -38,15 +39,11 @@ SetupStartService(LPCWSTR lpServiceName, BOOL bWait);
 HINF hSysSetupInf = INVALID_HANDLE_VALUE;
 ADMIN_INFO AdminInfo;
 
-typedef struct _DLG_DATA
+typedef struct _STATUS_MESSAGE_THREAD_DATA
 {
-    HBITMAP hLogoBitmap;
-    HBITMAP hBarBitmap;
-    HWND hWndBarCtrl;
-    DWORD BarCounter;
-    DWORD BarWidth;
-    DWORD BarHeight;
-} DLG_DATA, *PDLG_DATA;
+    HANDLE ReadyEvent;
+    HWND Window;
+} STATUS_MESSAGE_THREAD_DATA, *PSTATUS_MESSAGE_THREAD_DATA;
 
 /* FUNCTIONS ****************************************************************/
 
@@ -691,218 +688,175 @@ cleanup:
     return bRet;
 }
 
-static VOID
-AdjustStatusMessageWindow(HWND hwndDlg, PDLG_DATA pDlgData)
-{
-    INT xOld, yOld, cxOld, cyOld;
-    INT xNew, yNew, cxNew, cyNew;
-    INT cxLabel, cyLabel, dyLabel;
-    RECT rc, rcBar, rcLabel, rcWnd;
-    BITMAP bmLogo, bmBar;
-    DWORD style, exstyle;
-    HWND hwndLogo = GetDlgItem(hwndDlg, IDC_ROSLOGO);
-    HWND hwndBar = GetDlgItem(hwndDlg, IDC_BAR);
-    HWND hwndLabel = GetDlgItem(hwndDlg, IDC_STATUSLABEL);
-
-    /* This adjustment is for CJK only */
-    switch (PRIMARYLANGID(GetUserDefaultLangID()))
-    {
-        case LANG_CHINESE:
-        case LANG_JAPANESE:
-        case LANG_KOREAN:
-            break;
-
-        default:
-            return;
-    }
-
-    if (!GetObjectW(pDlgData->hLogoBitmap, sizeof(BITMAP), &bmLogo) ||
-        !GetObjectW(pDlgData->hBarBitmap, sizeof(BITMAP), &bmBar))
-    {
-        return;
-    }
-
-    GetWindowRect(hwndBar, &rcBar);
-    MapWindowPoints(NULL, hwndDlg, (LPPOINT)&rcBar, 2);
-    dyLabel = bmLogo.bmHeight - rcBar.top;
-
-    GetWindowRect(hwndLabel, &rcLabel);
-    MapWindowPoints(NULL, hwndDlg, (LPPOINT)&rcLabel, 2);
-    cxLabel = rcLabel.right - rcLabel.left;
-    cyLabel = rcLabel.bottom - rcLabel.top;
-
-    MoveWindow(hwndLogo, 0, 0, bmLogo.bmWidth, bmLogo.bmHeight, TRUE);
-    MoveWindow(hwndBar, 0, bmLogo.bmHeight, bmLogo.bmWidth, bmBar.bmHeight, TRUE);
-    MoveWindow(hwndLabel, rcLabel.left, rcLabel.top + dyLabel, cxLabel, cyLabel, TRUE);
-
-    GetWindowRect(hwndDlg, &rcWnd);
-    xOld = rcWnd.left;
-    yOld = rcWnd.top;
-    cxOld = rcWnd.right - rcWnd.left;
-    cyOld = rcWnd.bottom - rcWnd.top;
-
-    GetClientRect(hwndDlg, &rc);
-    SetRect(&rc, 0, 0, bmLogo.bmWidth, rc.bottom - rc.top); /* new client size */
-
-    style = (DWORD)GetWindowLongPtrW(hwndDlg, GWL_STYLE);
-    exstyle = (DWORD)GetWindowLongPtrW(hwndDlg, GWL_EXSTYLE);
-    AdjustWindowRectEx(&rc, style, FALSE, exstyle);
-
-    cxNew = rc.right - rc.left;
-    cyNew = (rc.bottom - rc.top) + dyLabel;
-    xNew = xOld - (cxNew - cxOld) / 2;
-    yNew = yOld - (cyNew - cyOld) / 2;
-    MoveWindow(hwndDlg, xNew, yNew, cxNew, cyNew, TRUE);
-}
-
-static INT_PTR CALLBACK
-StatusMessageWindowProc(
-    IN HWND hwndDlg,
-    IN UINT uMsg,
-    IN WPARAM wParam,
-    IN LPARAM lParam)
-{
-    PDLG_DATA pDlgData;
-    UNREFERENCED_PARAMETER(wParam);
-
-    pDlgData = (PDLG_DATA)GetWindowLongPtrW(hwndDlg, GWLP_USERDATA);
-
-    /* pDlgData is required for each case except WM_INITDIALOG */
-    if (uMsg != WM_INITDIALOG && pDlgData == NULL) return FALSE;
-
-    switch (uMsg)
-    {
-        case WM_INITDIALOG:
-        {
-            BITMAP bm;
-            WCHAR szMsg[256];
-
-            /* Allocate pDlgData */
-            pDlgData = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*pDlgData));
-            if (pDlgData)
-            {
-                /* Set pDlgData to GWLP_USERDATA, so we can get it for new messages */
-                SetWindowLongPtrW(hwndDlg, GWLP_USERDATA, (LONG_PTR)pDlgData);
-
-                /* Load bitmaps */
-                pDlgData->hLogoBitmap = LoadImageW(hDllInstance,
-                                                    MAKEINTRESOURCEW(IDB_REACTOS), IMAGE_BITMAP,
-                                                    0, 0, LR_DEFAULTCOLOR);
-
-                pDlgData->hBarBitmap = LoadImageW(hDllInstance, MAKEINTRESOURCEW(IDB_LINE),
-                                                IMAGE_BITMAP, 0, 0, LR_DEFAULTCOLOR);
-                GetObject(pDlgData->hBarBitmap, sizeof(bm), &bm);
-                pDlgData->BarWidth = bm.bmWidth;
-                pDlgData->BarHeight = bm.bmHeight;
-
-                if (pDlgData->hLogoBitmap && pDlgData->hBarBitmap)
-                {
-                    if (SetTimer(hwndDlg, IDT_BAR, 20, NULL) == 0)
-                    {
-                        DPRINT1("SetTimer(IDT_BAR) failed: %lu\n", GetLastError());
-                    }
-
-                    /* Get the animation bar control */
-                    pDlgData->hWndBarCtrl = GetDlgItem(hwndDlg, IDC_BAR);
-                }
-            }
-
-            /* Get and set status text */
-            if (!LoadStringW(hDllInstance, IDS_STATUS_INSTALL_DEV, szMsg, ARRAYSIZE(szMsg)))
-                return FALSE;
-            SetDlgItemTextW(hwndDlg, IDC_STATUSLABEL, szMsg);
-
-            AdjustStatusMessageWindow(hwndDlg, pDlgData);
-            return TRUE;
-        }
-
-        case WM_TIMER:
-        {
-            if (pDlgData->hBarBitmap)
-            {
-                /*
-                 * Default rotation bar image width is 413 (same as logo)
-                 * We can divide 413 by 7 without remainder
-                 */
-                pDlgData->BarCounter = (pDlgData->BarCounter + 7) % pDlgData->BarWidth;
-                InvalidateRect(pDlgData->hWndBarCtrl, NULL, FALSE);
-                UpdateWindow(pDlgData->hWndBarCtrl);
-            }
-            return TRUE;
-        }
-
-        case WM_DRAWITEM:
-        {
-            LPDRAWITEMSTRUCT lpDis = (LPDRAWITEMSTRUCT)lParam;
-
-            if (lpDis->CtlID != IDC_BAR)
-            {
-                return FALSE;
-            }
-
-            if (pDlgData->hBarBitmap)
-            {
-                HDC hdcMem;
-                HGDIOBJ hOld;
-                DWORD off = pDlgData->BarCounter;
-                DWORD iw = pDlgData->BarWidth;
-                DWORD ih = pDlgData->BarHeight;
-
-                hdcMem = CreateCompatibleDC(lpDis->hDC);
-                hOld = SelectObject(hdcMem, pDlgData->hBarBitmap);
-                BitBlt(lpDis->hDC, off, 0, iw - off, ih, hdcMem, 0, 0, SRCCOPY);
-                BitBlt(lpDis->hDC, 0, 0, off, ih, hdcMem, iw - off, 0, SRCCOPY);
-                SelectObject(hdcMem, hOld);
-                DeleteDC(hdcMem);
-                return TRUE;
-            }
-            return FALSE;
-        }
-
-        case WM_DESTROY:
-        {
-            if (pDlgData->hBarBitmap)
-            {
-                KillTimer(hwndDlg, IDT_BAR);
-            }
-
-            DeleteObject(pDlgData->hLogoBitmap);
-            DeleteObject(pDlgData->hBarBitmap);
-            HeapFree(GetProcessHeap(), 0, pDlgData);
-            return TRUE;
-        }
-    }
-    return FALSE;
-}
-
 static DWORD WINAPI
 ShowStatusMessageThread(
     IN LPVOID lpParameter)
 {
+    PSTATUS_MESSAGE_THREAD_DATA ThreadData = lpParameter;
+    WCHAR StatusText[256];
     HWND hWnd;
     MSG Msg;
-    UNREFERENCED_PARAMETER(lpParameter);
 
-    hWnd = CreateDialogParam(hDllInstance,
-                             MAKEINTRESOURCE(IDD_STATUSWINDOW_DLG),
-                             GetDesktopWindow(),
-                             StatusMessageWindowProc,
-                             (LPARAM)NULL);
+    if (!LoadStringW(hDllInstance,
+                     IDS_STATUS_PREPARE_DEV,
+                     StatusText,
+                     ARRAYSIZE(StatusText)))
+    {
+        StatusText[0] = UNICODE_NULL;
+    }
+
+    hWnd = BootStatusCreate(StatusText);
+    ThreadData->Window = hWnd;
+    SetEvent(ThreadData->ReadyEvent);
     if (!hWnd)
         return 0;
 
-    ShowWindow(hWnd, SW_SHOW);
-
-    /* Message loop for the Status window */
-    while (GetMessage(&Msg, NULL, 0, 0))
+    while (GetMessageW(&Msg, NULL, 0, 0) > 0)
     {
         TranslateMessage(&Msg);
-        DispatchMessage(&Msg);
+        DispatchMessageW(&Msg);
     }
 
-    EndDialog(hWnd, 0);
+    BootStatusDestroy(hWnd);
 
     return 0;
+}
+
+static VOID
+UpdateDeviceBootStatus(
+    _In_opt_ HWND Window,
+    _In_ UINT PhaseId,
+    _In_opt_ UINT DetailId,
+    _In_ ULONG Completed,
+    _In_ ULONG Total)
+{
+    WCHAR PhaseText[256];
+    WCHAR DetailText[256];
+
+    PhaseText[0] = UNICODE_NULL;
+    DetailText[0] = UNICODE_NULL;
+    LoadStringW(hDllInstance, PhaseId, PhaseText, ARRAYSIZE(PhaseText));
+    if (DetailId)
+        LoadStringW(hDllInstance, DetailId, DetailText, ARRAYSIZE(DetailText));
+
+    BootStatusUpdate(Window,
+                     PhaseText,
+                     DetailText,
+                     Completed,
+                     Total);
+}
+
+static VOID
+HideDeviceBootStatus(
+    _In_opt_ HWND Window)
+{
+    if (Window)
+        ShowWindowAsync(Window, SW_HIDE);
+}
+
+static VOID
+CloseDeviceBootStatus(
+    _In_opt_ HWND Window)
+{
+    if (Window)
+        SendMessageW(Window, WM_CLOSE, 0, 0);
+}
+
+static BOOL
+QueryDeviceInstallProgress(
+    _Out_ PULONG InstalledDevices,
+    _Out_ PULONG TotalDevices)
+{
+    HDEVINFO DeviceInfoSet;
+    SP_DEVINFO_DATA DeviceInfoData;
+    WCHAR ClassName[MAX_PATH];
+    WCHAR DeviceInstanceId[MAX_DEVICE_ID_LEN];
+    DWORD RequiredSize;
+    DWORD Error;
+    DWORD Index;
+
+    *InstalledDevices = 0;
+    *TotalDevices = 0;
+    DeviceInfoSet = SetupDiGetClassDevsW(NULL,
+                                         NULL,
+                                         NULL,
+                                         DIGCF_ALLCLASSES);
+    if (DeviceInfoSet == INVALID_HANDLE_VALUE)
+        return FALSE;
+
+    DeviceInfoData.cbSize = sizeof(DeviceInfoData);
+    for (Index = 0;
+         SetupDiEnumDeviceInfo(DeviceInfoSet, Index, &DeviceInfoData);
+         ++Index)
+    {
+        if (SetupDiGetDeviceInstanceIdW(DeviceInfoSet,
+                                        &DeviceInfoData,
+                                        DeviceInstanceId,
+                                        ARRAYSIZE(DeviceInstanceId),
+                                        NULL) &&
+            !lstrcmpiW(DeviceInstanceId, L"HTREE\\ROOT\\0"))
+        {
+            continue;
+        }
+
+        ++*TotalDevices;
+        if (SetupDiGetDeviceRegistryPropertyW(DeviceInfoSet,
+                                              &DeviceInfoData,
+                                              SPDRP_CLASS,
+                                              NULL,
+                                              (PBYTE)ClassName,
+                                              sizeof(ClassName),
+                                              &RequiredSize))
+        {
+            ++*InstalledDevices;
+        }
+    }
+
+    Error = GetLastError();
+    SetupDiDestroyDeviceInfoList(DeviceInfoSet);
+    return Error == ERROR_NO_MORE_ITEMS;
+}
+
+static DWORD
+WaitForDeviceInstall(
+    _In_opt_ HWND StatusWindow,
+    _Out_ PULONG InstalledDevices,
+    _Out_ PULONG TotalDevices)
+{
+    ULONG LastInstalled = (ULONG)-1;
+    ULONG LastTotal = (ULONG)-1;
+    DWORD WaitResult;
+
+    *InstalledDevices = 0;
+    *TotalDevices = 0;
+    do
+    {
+        if (QueryDeviceInstallProgress(InstalledDevices, TotalDevices) &&
+            (*InstalledDevices != LastInstalled || *TotalDevices != LastTotal))
+        {
+            UpdateDeviceBootStatus(StatusWindow,
+                                   IDS_STATUS_INSTALL_DEV,
+                                   0,
+                                   *InstalledDevices,
+                                   *TotalDevices);
+            LastInstalled = *InstalledDevices;
+            LastTotal = *TotalDevices;
+        }
+
+        WaitResult = CMP_WaitNoPendingInstallEvents(150);
+    } while (WaitResult == WAIT_TIMEOUT);
+
+    if (WaitResult == WAIT_OBJECT_0 &&
+        QueryDeviceInstallProgress(InstalledDevices, TotalDevices))
+    {
+        UpdateDeviceBootStatus(StatusWindow,
+                               IDS_STATUS_INSTALL_DEV,
+                               0,
+                               *InstalledDevices,
+                               *TotalDevices);
+    }
+
+    return WaitResult;
 }
 
 static LONG
@@ -1069,7 +1023,42 @@ static BOOL
 CommonInstall(VOID)
 {
     HANDLE hThread = NULL;
+    HANDLE ReadyEvent = NULL;
+    STATUS_MESSAGE_THREAD_DATA ThreadData = {0};
+    HWND StatusWindow = NULL;
+    ULONG InstalledDevices = 0;
+    ULONG TotalDevices = 0;
     BOOL bResult = FALSE;
+
+    if (!IsConsoleBoot())
+    {
+        StatusWindow = BootStatusFind();
+        if (!StatusWindow)
+        {
+            ReadyEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+            if (ReadyEvent)
+            {
+                ThreadData.ReadyEvent = ReadyEvent;
+                hThread = CreateThread(NULL,
+                                       0,
+                                       ShowStatusMessageThread,
+                                       &ThreadData,
+                                       0,
+                                       NULL);
+                if (hThread)
+                {
+                    WaitForSingleObject(ReadyEvent, INFINITE);
+                    StatusWindow = ThreadData.Window;
+                }
+            }
+        }
+
+        UpdateDeviceBootStatus(StatusWindow,
+                               IDS_STATUS_PREPARE_DEV,
+                               0,
+                               0,
+                               0);
+    }
 
     hSysSetupInf = SetupOpenInfFileW(L"syssetup.inf",
                                      NULL,
@@ -1077,40 +1066,43 @@ CommonInstall(VOID)
                                      NULL);
     if (hSysSetupInf == INVALID_HANDLE_VALUE)
     {
+        HideDeviceBootStatus(StatusWindow);
         FatalError("SetupOpenInfFileW() failed to open 'syssetup.inf' (Error: %lu)\n", GetLastError());
-        return FALSE;
+        goto Exit;
     }
 
     if (!InstallSysSetupInfDevices())
     {
+        HideDeviceBootStatus(StatusWindow);
         FatalError("InstallSysSetupInfDevices() failed!\n");
         goto Exit;
     }
 
+    UpdateDeviceBootStatus(StatusWindow,
+                           IDS_STATUS_START_DEV,
+                           0,
+                           0,
+                           0);
+
     if (!InstallSysSetupInfComponents())
     {
+        HideDeviceBootStatus(StatusWindow);
         FatalError("InstallSysSetupInfComponents() failed!\n");
         goto Exit;
     }
 
-    if (!IsConsoleBoot())
-    {
-        hThread = CreateThread(NULL,
-                               0,
-                               ShowStatusMessageThread,
-                               NULL,
-                               0,
-                               NULL);
-    }
-
     if (!EnableUserModePnpManager())
     {
+        HideDeviceBootStatus(StatusWindow);
         FatalError("EnableUserModePnpManager() failed!\n");
         goto Exit;
     }
 
-    if (CMP_WaitNoPendingInstallEvents(INFINITE) != WAIT_OBJECT_0)
+    if (WaitForDeviceInstall(StatusWindow,
+                             &InstalledDevices,
+                             &TotalDevices) != WAIT_OBJECT_0)
     {
+        HideDeviceBootStatus(StatusWindow);
         FatalError("CMP_WaitNoPendingInstallEvents() failed!\n");
         goto Exit;
     }
@@ -1120,15 +1112,22 @@ CommonInstall(VOID)
 Exit:
     if (bResult == FALSE)
     {
-        SetupCloseInfFile(hSysSetupInf);
+        if (hSysSetupInf != INVALID_HANDLE_VALUE)
+            SetupCloseInfFile(hSysSetupInf);
+
     }
+
+    /* Device setup is the last phase in this path; reveal the desktop now. */
+    CloseDeviceBootStatus(StatusWindow);
 
     if (hThread != NULL)
     {
-        PostThreadMessage(GetThreadId(hThread), WM_QUIT, 0, 0);
         WaitForSingleObject(hThread, INFINITE);
         CloseHandle(hThread);
     }
+
+    if (ReadyEvent != NULL)
+        CloseHandle(ReadyEvent);
 
     return bResult;
 }

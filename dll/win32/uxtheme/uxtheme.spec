@@ -126,6 +126,7 @@
 @ stdcall OpenThemeData(ptr wstr)
 @ stdcall OpenThemeDataForDpi(ptr wstr long)
 @ stdcall SetThemeAppProperties(long)
+@ stdcall ReapplyThemeSysMetrics()
 @ stdcall SetWindowTheme(ptr wstr wstr)
 @ stdcall SetWindowThemeAttribute(ptr long ptr long)
 @ stdcall ThemeInitApiHook(long ptr)

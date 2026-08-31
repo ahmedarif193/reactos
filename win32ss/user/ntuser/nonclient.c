@@ -1196,6 +1196,30 @@ NC_DoNCPaint(PWND pWnd, HDC hDC, INT Flags)
    CurrentRect.right = WindowRect.right - WindowRect.left;
    CurrentRect.bottom = WindowRect.bottom - WindowRect.top;
 
+   if (pWnd->fnid == FNID_MENU)
+   {
+      BOOL flat_menu = FALSE;
+
+      UserSystemParametersInfo(SPI_GETFLATMENU, 0, &flat_menu, 0);
+      if (flat_menu)
+      {
+         COLORREF crMenu = IntGetSysColor(COLOR_MENU);
+         COLORREF crGray = IntGetSysColor(COLOR_GRAYTEXT);
+         HBRUSH hbrFrame = IntGdiCreateSolidBrush(
+            RGB((GetRValue(crMenu) + GetRValue(crGray)) / 2,
+                (GetGValue(crMenu) + GetGValue(crGray)) / 2,
+                (GetBValue(crMenu) + GetBValue(crGray)) / 2));
+
+         FillRect(hDC, &CurrentRect, IntGetSysColorBrush(COLOR_MENU));
+         if (hbrFrame)
+         {
+            FrameRect(hDC, &CurrentRect, hbrFrame);
+            GreDeleteObject(hbrFrame);
+         }
+         return 0;
+      }
+   }
+
    /* Draw outer edge */
    if (UserHasWindowEdge(pWnd->style, pWnd->ExStyle))
    {

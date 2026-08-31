@@ -445,6 +445,7 @@ WinMain(
     NTSTATUS Status;
 #endif
     ULONG HardErrorResponse;
+    DWORD SetupType;
     MSG Msg;
 
     UNREFERENCED_PARAMETER(hPrevInstance);
@@ -541,7 +542,11 @@ WinMain(
         ExitProcess(1);
     }
 
-    DisplayStatusMessage(WLSession, WLSession->WinlogonDesktop, IDS_REACTOSISSTARTINGUP);
+    SetupType = GetSetupType();
+    DisplayStatusMessage(WLSession,
+                         SetupType ? WLSession->ApplicationDesktop
+                                   : WLSession->WinlogonDesktop,
+                         IDS_REACTOSISSTARTINGUP);
 
 #if 0
     /* Connect to NetLogon service (lsass.exe) */
@@ -591,10 +596,9 @@ WinMain(
 
     /* Display logged out screen */
     WLSession->LogonState = STATE_INIT;
-    RemoveStatusMessage(WLSession);
 
     /* Check for pending setup */
-    if (GetSetupType() != 0)
+    if (SetupType != 0)
     {
         /* Run setup and reboot when done */
         TRACE("WL: Setup mode detected\n");

@@ -130,6 +130,19 @@ SM2SelectPalette(VOID)
     g_SM2EditBrush = CreateSolidBrush(g_SM2Pal.SearchBg);
 }
 
+VOID StartMenu2_GetFlyoutPalette(OUT SM2_FLYOUT_PALETTE *pPal)
+{
+    SM2SelectPalette();
+    pPal->PanelBg = g_SM2Pal.LeftBg;
+    pPal->PanelText = g_SM2Pal.LeftText;
+    pPal->DimText = g_SM2Pal.Cue;
+    pPal->HotFill = g_SM2Pal.HotFill;
+    pPal->HotBorder = g_SM2Pal.HotBorder;
+    pPal->Border = g_SM2Pal.Border;
+    pPal->AccentBg = GetSysColor(COLOR_HIGHLIGHT);
+    pPal->AccentText = RGB(255, 255, 255);
+}
+
 static COLORREF
 SM2Mix(COLORREF a, COLORREF b, int t)
 {

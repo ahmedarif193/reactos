@@ -1472,7 +1472,9 @@ void CSysPagerWnd::GetSize(IN BOOL IsHorizontal, IN PSIZE size)
 
     if (IsHorizontal)
     {
-        if (!g_TaskbarSettings.UseCompactTrayIcons())
+        if (IsThemeActive())
+            rows = 1;
+        else if (!g_TaskbarSettings.UseCompactTrayIcons())
             rows = max(size->cy / MulDiv(cyButton, 3, 2), 1);
         else
             rows = max(size->cy / cyButton, 1);
