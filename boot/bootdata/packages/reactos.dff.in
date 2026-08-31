@@ -82,6 +82,8 @@ Signature = "$Windows NT$"
 63 = 3rdParty
 64 = Resources\Themes\Lunar
 65 = Resources\Themes\Mizu
+70 = Resources\Themes\Aero
+86 = Resources\Themes\Win8
 83 = "\\Program Files\\Windows NT\\Accessories"
 
 ; Architecture-specific directories are inserted by CMake for this build only.

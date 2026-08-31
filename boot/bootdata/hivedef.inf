@@ -1907,6 +1907,12 @@ HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\CabinetState","FullPath
 HKCU,"SOFTWARE\Microsoft\Internet Explorer\Main","StatusBarOther",0x00010003,1
 HKCU,"SOFTWARE\Microsoft\Internet Explorer\Toolbar","Locked",0x00010003,1
 
+; Default visual style
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\ThemeManager","ThemeActive",2,"1"
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\ThemeManager","DllName",0x00020000,"%SystemRoot%\Resources\Themes\Win8\win8.msstyles"
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\ThemeManager","ColorName",2,"Normal Color"
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\ThemeManager","SizeName",2,"Normal Size"
+
 ; ComDlg32
 HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32",,0x00000012
 HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\LastVisitedMRU",,0x00000012
