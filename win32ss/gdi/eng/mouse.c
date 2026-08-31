@@ -92,10 +92,6 @@ MouseSafetyOnDrawStart(
         if ((ppdev->flFlags & PDEV_SOFTWARE_POINTER) &&
             IntCanBatchMousePointer(ppdev, &ppdev->pSurface->SurfObj))
         {
-            RECTL rcl = pgp->Exclude;
-
-            GDIDEVFUNCS(&ppdev->pSurface->SurfObj).SynchronizeSurface(
-                &ppdev->pSurface->SurfObj, &rcl, DSS_RESERVED);
             pgp->psoSafetyBatch = &ppdev->pSurface->SurfObj;
         }
 
@@ -249,7 +245,11 @@ IntBeginMousePointerBatch(
     _In_ const RECTL *prclNew,
     _In_ BOOL bNew)
 {
-    IntSynchronizeMousePointerRects(pso, prclOld, bOld, prclNew, bNew, DSS_RESERVED);
+    UNREFERENCED_PARAMETER(prclOld);
+    UNREFERENCED_PARAMETER(bOld);
+    UNREFERENCED_PARAMETER(prclNew);
+    UNREFERENCED_PARAMETER(bNew);
+
     ppdev->Pointer.psoCursorBatch = pso;
 }
 

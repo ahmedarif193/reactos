@@ -78,10 +78,6 @@ NTSTATUS IntCompositionDwmAttach(_In_ PVOID pUser);
  * pixels. See sdk/include/reactos/dwmframe.h for the layout. */
 NTSTATUS IntCompositionDwmGetFrame(_In_ PVOID pUser);
 
-/* CDD present bracket for dwm (ONEPARAM_ROUTINE_DWMPRESENTSYNC): value 1 opens
- * / 0 closes the present bracket around dwm's BitBlt to the primary. */
-BOOL IntCompositionDwmSync(_In_ LONG value);
-
 /* Open a window FRONT section into dwm's process (ONEPARAM_ROUTINE_
  * DWMOPENSURFACE); see DWM_OPEN_SURFACE in dwmframe.h. */
 NTSTATUS IntCompositionDwmOpenSurface(_In_ PVOID pUser);
@@ -147,17 +143,10 @@ VOID IntCompositionDamageFromGdi(VOID);
 VOID IntCompositionPaintBegin(_In_ PWND Wnd);
 VOID IntCompositionPaintEnd(_In_ PWND Wnd);
 
-/* Bounded classic-GDI visual transaction. Begin returns a token consumed by
- * End; unsupported and redirected displays return FALSE. Used by BeginPaint
- * and USER operations which update multiple windows as one visible state. */
-BOOL IntCompositionPresentBatchBegin(VOID);
-VOID IntCompositionPresentBatchEnd(_In_ BOOL Active);
-
 /* Cache-DC hold bracket for redirected windows. Classic common DCs are not
  * bracketed because applications may retain them indefinitely. */
 #define COMPOSITION_DC_NONE       0
-#define COMPOSITION_DC_CLASSIC    1
-#define COMPOSITION_DC_REDIRECTED 2
+#define COMPOSITION_DC_REDIRECTED 1
 UCHAR IntCompositionDcAcquire(_In_opt_ PWND Wnd);
 VOID IntCompositionDcRelease(_In_opt_ PWND Wnd, _In_ UCHAR State);
 

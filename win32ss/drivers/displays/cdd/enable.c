@@ -13,9 +13,7 @@
  * a non-accelerated driver: every draw hook punts straight to the GDI engine
  * rasterizer. The hooks exist ONLY to learn which rectangles changed and drive
  * an explicit WDDM dirty-rect present — every primitive that can touch the
- * primary is hooked, so nothing reaches the screen without a present (the
- * fallback timer is suppressed around dirty activity and must never be the
- * sole carrier of a primitive's output).
+ * primary is hooked, so every completed frame has explicit damage.
  */
 static const DRVFN gaRcddDriverFunctions[] =
 {
@@ -44,6 +42,10 @@ static const DRVFN gaRcddDriverFunctions[] =
    {INDEX_DrvAlphaBlend, (PFN)RcddAlphaBlend},
    {INDEX_DrvTransparentBlt, (PFN)RcddTransparentBlt},
    {INDEX_DrvGradientFill, (PFN)RcddGradientFill},
+   {INDEX_DrvSynchronizeRedirectionBitmaps, (PFN)RcddSynchronizeRedirectionBitmaps},
+   {INDEX_DrvAccumulateD3DDirtyRect, (PFN)RcddAccumulateD3DDirtyRect},
+   {INDEX_DrvLockDisplayArea, (PFN)RcddLockDisplayArea},
+   {INDEX_DrvUnlockDisplayArea, (PFN)RcddUnlockDisplayArea},
    {INDEX_DrvEscape, (PFN)RcddEscape},
 };
 
@@ -159,6 +161,8 @@ RcddDisablePDEV(
    IN DHPDEV dhpdev)
 {
    PRCDD_PDEV ppdev = (PRCDD_PDEV)dhpdev;
+
+   RcddStopPresentWorker(ppdev);
 
    if (ppdev->DefaultPalette)
    {

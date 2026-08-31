@@ -4291,7 +4291,6 @@ DxgkpEscapeCaptured(
         Status = STATUS_DEVICE_REMOVED;
         goto Cleanup;
     }
-    DxgkDisplayNotifyGpuActivity(Adapter);
     _SEH2_TRY
     {
         Status = DXGK_CB_FULL(Adapter, DxgkDdiEscape)(Adapter->MiniportDeviceContext, &EscapeArgs);
@@ -4302,7 +4301,6 @@ DxgkpEscapeCaptured(
         DXGKRNL_ERR("DxgkEscape: miniport faulted 0x%08lX\n", Status);
     }
     _SEH2_END;
-    DxgkDisplayNotifyGpuActivity(Adapter);
     if (MiniportCallbackAcquired)
         DxgkReleaseMiniportCallback(Adapter);
     else

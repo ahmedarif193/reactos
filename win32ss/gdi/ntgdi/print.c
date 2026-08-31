@@ -100,9 +100,7 @@ NtGdiExtEscape(
     * issue them can hide the cursor, suppress scan-out, or replace DWM's
     * vblank event. The compositor invokes the driver directly in
     * composition.c, so no legitimate user-mode caller needs this path. */
-   if (Escape == CDD_ESCAPE_SUPPRESS_CURSOR ||
-       Escape == CDD_ESCAPE_COMPOSITION_SYNC ||
-       Escape == CDD_ESCAPE_REGISTER_VBLANK)
+   if (Escape == CDD_ESCAPE_SUPPRESS_CURSOR)
    {
       EngSetLastError(ERROR_ACCESS_DENIED);
       return 0;

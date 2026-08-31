@@ -14,7 +14,6 @@ DBG_DEFAULT_CHANNEL(UserMisc);
 
 C_ASSERT(DWM_ROUTINE_ATTACH == ONEPARAM_ROUTINE_DWMATTACH);
 C_ASSERT(DWM_ROUTINE_GETFRAME == ONEPARAM_ROUTINE_DWMGETFRAME);
-C_ASSERT(DWM_ROUTINE_PRESENTSYNC == ONEPARAM_ROUTINE_DWMPRESENTSYNC);
 C_ASSERT(DWM_ROUTINE_OPENSURFACE == ONEPARAM_ROUTINE_DWMOPENSURFACE);
 C_ASSERT(DWM_ROUTINE_DXSURFACE == ONEPARAM_ROUTINE_DWMDXSURFACE);
 
@@ -362,13 +361,6 @@ NtUserCallOneParam(
              * buffer at Param; see IntCompositionDwmGetFrame. Returns an
              * NTSTATUS in Result. */
             Result = (DWORD_PTR)IntCompositionDwmGetFrame((PVOID)Param);
-            break;
-        }
-
-        case ONEPARAM_ROUTINE_DWMPRESENTSYNC:
-        {
-            /* CDD present bracket around dwm's BitBlt (Param: 1 open, 0 close). */
-            Result = IntCompositionDwmSync((LONG)Param);
             break;
         }
 

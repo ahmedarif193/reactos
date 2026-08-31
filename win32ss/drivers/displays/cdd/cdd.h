@@ -21,6 +21,7 @@
 #ifndef _CDD_PCH_
 #define _CDD_PCH_
 
+#include <ntddk.h>
 #include <stdarg.h>
 #include <windef.h>
 #include <wingdi.h>
@@ -31,6 +32,25 @@
 /* DWM composition contract (CDD_ESCAPE_*, IOCTL_VIDEO_DXGK_*): shared with
  * win32k and dxgkrnl. */
 #include <reactos/dwmframe.h>
+
+#define RCDD_PRESENT_SLOT_COUNT 3
+
+typedef enum _RCDD_PRESENT_SLOT_STATE
+{
+   RcddPresentSlotFree,
+   RcddPresentSlotCapturing,
+   RcddPresentSlotQueued,
+   RcddPresentSlotActive
+} RCDD_PRESENT_SLOT_STATE;
+
+typedef struct _RCDD_PRESENT_SLOT
+{
+   PVOID Buffer;
+   SIZE_T BufferSize;
+   RECTL Rects[DXGK_PRESENT_DIRTY_MAX_RECTS];
+   ULONG RectCount;
+   RCDD_PRESENT_SLOT_STATE State;
+} RCDD_PRESENT_SLOT, *PRCDD_PRESENT_SLOT;
 
 typedef struct _RCDD_PDEV
 {
@@ -63,20 +83,35 @@ typedef struct _RCDD_PDEV
    LONG PointerX;
    LONG PointerY;
 
-   /* DWM composition state (driven by DrvEscape, see escape.c) */
+   /* DWM cursor state (driven by DrvEscape, see escape.c) */
    BOOL CursorSuppressed;      /* Compositor owns the cursor                  */
-   BOOL CompositionActive;     /* Inside a compositor frame                   */
 
    /* Dirty-rect notification state (see present.c) */
-   ULONG SafetyHoldDepth;      /* nested atomic software-cursor transactions */
-   BOOL SafetyHoldNotified;    /* dxgkrnl owns a matching HOLD notification  */
-   ULONG PresentBatchDepth;    /* nested completed-paint transaction depth    */
    ULONG PendingRectCount;
-   RECTL PendingRects[DXGK_PRESENT_MAX_DIRTY_RECTS];
-   BOOL DirtyOutstanding;      /* dxgkrnl has dirty pixels awaiting a flush   */
+   RECTL PendingRects[DXGK_PRESENT_DIRTY_MAX_RECTS];
    ULONG DrawSeq;              /* Bumped by every draw DDI entry              */
    ULONG SentSeq;              /* DrawSeq of the last notification sent       */
    RECTL SentRect;             /* Rect of the last notification sent          */
+
+   /* Native CDD completes ordinary SynchronizeSurface requests through a
+    * worker. Each queued entry owns an immutable copy of its dirty pixels;
+    * the primary can therefore be painted again while PresentDisplayOnly is
+    * in progress. DSS_RESERVED requests retain the synchronous command path. */
+   HSEMAPHORE PresentLock;
+   PEVENT PresentWakeEvent;
+   PEVENT PresentExitEvent;
+   PEVENT PresentDrainEvent;
+   HANDLE PresentThread;
+   BOOL PresentWorkerActive;
+   BOOL PresentWorkerStop;
+   ULONG PresentPendingCount;
+   ULONG PresentQueueHighWatermark;
+   ULONG PresentQueuedCount;
+   ULONG PresentCompletedCount;
+   ULONG PresentFailedCount;
+   ULONG PresentRejectedCount;
+   ULONG PresentSynchronousCount;
+   RCDD_PRESENT_SLOT PresentSlots[RCDD_PRESENT_SLOT_COUNT];
 } RCDD_PDEV, *PRCDD_PDEV;
 
 #define DEVICE_NAME L"cdd"
@@ -232,6 +267,39 @@ RcddSynchronizeSurface(
    IN RECTL *prcl,
    IN FLONG fl);
 
+BOOL
+RcddStartPresentWorker(
+   IN PRCDD_PDEV ppdev);
+
+VOID
+RcddStopPresentWorker(
+   IN PRCDD_PDEV ppdev);
+
+VOID
+RcddQueryPresentWorkerStats(
+   IN PRCDD_PDEV ppdev,
+   IN OUT PDXGK_PRESENT_STATS Stats);
+
+LONG APIENTRY
+RcddSynchronizeRedirectionBitmaps(
+   IN DHPDEV dhpdev,
+   OUT UINT64 *puiFenceID);
+
+BOOL APIENTRY
+RcddAccumulateD3DDirtyRect(
+   IN SURFOBJ *psoSurf,
+   IN CDDDXGK_REDIRBITMAPPRESENTINFO *pDirty);
+
+VOID APIENTRY
+RcddLockDisplayArea(
+   IN DHPDEV dhpdev,
+   IN OPTIONAL RECTL *prcl);
+
+VOID APIENTRY
+RcddUnlockDisplayArea(
+   IN DHPDEV dhpdev,
+   IN OPTIONAL RECTL *prcl);
+
 BOOL APIENTRY
 RcddTextOut(
    IN SURFOBJ *pso,
@@ -380,12 +448,9 @@ RcddGradientFill(
 /*
  * RcddPresent - explicit present seam.
  *
- * Pushes the composed contents of the shadow surface (the rectangle prcl, or
- * the whole screen when prcl is NULL) to the WDDM scan-out. Today this is the
- * Option-A path (memcpy shadow -> the IOCTL_VIDEO_MAP_VIDEO_MEMORY mapping of
- * dxgkrnl's shadow framebuffer, which dxgkrnl's present timer scans to the
- * GOP). This is the single point that an Option-B upgrade (D3DKMTPresent /
- * SetVidPnSourceAddress) replaces.
+ * Records damage in the mapped primary. GDI synchronization publishes the
+ * completed pixels to dxgkrnl, which captures an immutable frame before
+ * dispatching the miniport present.
  */
 VOID
 RcddPresent(

@@ -98,6 +98,24 @@ FASTCALL
 SynchronizeDriver(
     _In_ FLONG Flags);
 
+VOID
+FASTCALL
+GreLockDisplayArea(
+    _In_ PMDEVOBJ pmdev,
+    _In_opt_ PRECTL prcl);
+
+VOID
+FASTCALL
+GreUnlockDisplayArea(
+    _In_ PMDEVOBJ pmdev,
+    _In_opt_ PRECTL prcl);
+
+LONG
+FASTCALL
+GreSynchronizeRedirectionBitmaps(
+    _In_ PMDEVOBJ pmdev,
+    _Out_ UINT64 *puiFenceId);
+
 NTSTATUS
 APIENTRY
 NtGdiFlushUserBatch(

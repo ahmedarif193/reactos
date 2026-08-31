@@ -17,7 +17,6 @@
  *   DWMATTACH       ~ NtUserDwmStartRedirection(TRUE/FALSE)
  *   DWMOPENSURFACE  ~ NtUserDwmGetDxSharedSurface (section vs DX alloc)
  *   DWMGETFRAME     ~ the DWM change-feed (window list + dirty regions)
- *   DWMPRESENTSYNC  ~ DWM's present serialization against the scanout
  */
 #pragma once
 
@@ -28,7 +27,6 @@
  * win32ss/include/ntuser.h, which owns the routine numbering). */
 #define DWM_ROUTINE_ATTACH       0xfffe0013
 #define DWM_ROUTINE_GETFRAME     0xfffe0014
-#define DWM_ROUTINE_PRESENTSYNC  0xfffe0015
 #define DWM_ROUTINE_OPENSURFACE  0xfffe0016
 #define DWM_ROUTINE_DXSURFACE    0xfffe0017
 
@@ -39,57 +37,25 @@
  * high bytes:
  *   SUPPRESS_CURSOR  - the compositor draws the cursor itself, so cdd stops
  *                      drawing the hardware/software cursor while suppressed.
- *   COMPOSITION_SYNC - present/vblank acknowledge: cdd flushes the composed
- *                      frame to the WDDM scan-out and acks so the compositor
- *                      can pace frames.
- *   REGISTER_VBLANK  - win32k hands dxgkrnl the compositor's event HANDLE
- *                      (ULONGLONG payload, 0 unregisters); dxgkrnl validates,
- *                      references and signals it for dwm frame pacing.
  *   PRESENT_STATS    - read-only present-path counters (DXGK_PRESENT_STATS in
  *                      the escape output buffer) so a test can measure how much
  *                      scan-out work a GDI/cursor operation costs.
- *   PRESENT_BATCH    - LONG in: non-zero opens a classic-GDI paint batch,
- *                      zero closes it. CDD defers scanout until the outermost
- *                      GetDC/ReleaseDC or BeginPaint/EndPaint pair completes.
  */
 #define CDD_ESCAPE_SUPPRESS_CURSOR  0x44574D01
-#define CDD_ESCAPE_COMPOSITION_SYNC 0x44574D02
-#define CDD_ESCAPE_REGISTER_VBLANK  0x44574D03
 #define CDD_ESCAPE_PRESENT_STATS    0x44574D04
-#define CDD_ESCAPE_PRESENT_BATCH    0x44574D05
 
 /*
  * cdd -> dxgkrnl present-path IOCTLs (kernel side of the same contract).
  *   PRESENT_DIRTY_RECT - dirty-rectangle notification: cdd draws straight
  *                        into the mapped DOD primary and records the rectangle
  *                        with dxgkrnl, which scans it out through the
- *                        miniport's DxgkDdiPresentDisplayOnly at a paced
- *                        cadence. Input: one RECTL, or a
- *                        DXGK_PRESENT_DIRTY_RECT_INPUT whose Flags bracket
- *                        a cursor-hidden drawing op (HOLD: the caller is
- *                        withholding rectangles and the timer must not scan
- *                        out; RELEASE: the bracket closed, Rect is the union;
- *                        FLUSH: GDI completed a batch and dxgkrnl may present
- *                        all accumulated rectangles synchronously).
- *   COMPOSITION_BEGIN/END - present bracket around a composed-frame blit so
- *                        the present worker never scans out a half-composed
- *                        primary; END flushes the dirty rects accumulated
- *                        during the composition.
- *   REGISTER_VBLANK    - forwards the CDD_ESCAPE_REGISTER_VBLANK event HANDLE
- *                        payload (ULONGLONG, 0 clears); dxgkrnl owns the object
- *                        reference while its present timer can signal it.
- *   PRESENT_BATCH_BEGIN/END - nested classic-GDI paint transaction. BEGIN
- *                        blocks new scanout and drains any copy already in
- *                        flight; END publishes on the outermost close.
+ *                        miniport's DxgkDdiPresentDisplayOnly. Input is a
+ *                        variable-length DXGK_PRESENT_DIRTY_RECTS_INPUT.
+ *                        Individual notifications accumulate damage; FLUSH
+ *                        publishes one completed GDI frame.
  */
 #define IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT \
     CTL_CODE(FILE_DEVICE_VIDEO, 0x920, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_VIDEO_DXGK_COMPOSITION_BEGIN \
-    CTL_CODE(FILE_DEVICE_VIDEO, 0x921, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_VIDEO_DXGK_COMPOSITION_END \
-    CTL_CODE(FILE_DEVICE_VIDEO, 0x922, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_VIDEO_DXGK_REGISTER_VBLANK \
-    CTL_CODE(FILE_DEVICE_VIDEO, 0x923, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_VIDEO_DXGK_PRESENT_STATS \
     CTL_CODE(FILE_DEVICE_VIDEO, 0x924, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
@@ -102,31 +68,22 @@
  */
 #define IOCTL_VIDEO_DXGK_GPU_ESCAPE \
     CTL_CODE(FILE_DEVICE_VIDEO, 0x925, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_VIDEO_DXGK_PRESENT_BATCH_BEGIN \
-    CTL_CODE(FILE_DEVICE_VIDEO, 0x926, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_VIDEO_DXGK_PRESENT_BATCH_END \
-    CTL_CODE(FILE_DEVICE_VIDEO, 0x927, METHOD_BUFFERED, FILE_ANY_ACCESS)
-
 #include <pshpack4.h>
-
-typedef struct _DXGK_PRESENT_DIRTY_RECT_INPUT
-{
-    RECTL Rect;
-    ULONG Flags;
-} DXGK_PRESENT_DIRTY_RECT_INPUT, *PDXGK_PRESENT_DIRTY_RECT_INPUT;
-
-#define DXGK_PRESENT_MAX_DIRTY_RECTS 8
 
 typedef struct _DXGK_PRESENT_DIRTY_RECTS_INPUT
 {
     ULONG StructSize;
     ULONG Flags;
     ULONG RectCount;
-    RECTL Rects[DXGK_PRESENT_MAX_DIRTY_RECTS];
+    ULONG SourcePitch;
+    ULONG SourceSize;
+    ULONG_PTR Source;
+    RECTL Rects[ANYSIZE_ARRAY];
 } DXGK_PRESENT_DIRTY_RECTS_INPUT, *PDXGK_PRESENT_DIRTY_RECTS_INPUT;
 
-#define DXGK_PRESENT_DIRTY_HOLD    0x00000001u
-#define DXGK_PRESENT_DIRTY_RELEASE 0x00000002u
+/* The core present packet has room for this many source subrectangles. */
+#define DXGK_PRESENT_DIRTY_MAX_RECTS 64u
+
 #define DXGK_PRESENT_DIRTY_FLUSH   0x00000004u
 
 /*
@@ -141,12 +98,20 @@ typedef struct _DXGK_PRESENT_STATS
     ULONG DirtyRectRequests;
     ULONG ScanoutCopies;
     ULONG PendingDirtyRect;    /* 1 = a recorded rect is not scanned out yet */
-    ULONG CompositionActive;   /* 1 = inside a compositor present bracket    */
-    ULONG PresentBatchDepth;
-    ULONG PresentBatchBegins;
-    ULONG PresentBatchEnds;
-    ULONG PresentBatchFlushDeferrals;
-    ULONG PresentBatchMaxDepth;
+    ULONG PresentCalls;
+    ULONGLONG PresentTotalUs;
+    ULONGLONG PresentMaxUs;
+    ULONG HardwarePointerSupported;
+    ULONG PointerShapeCalls;
+    ULONG PointerPositionCalls;
+    ULONG PointerFailures;
+    ULONG PresentQueueDepth;
+    ULONG PresentQueueHighWatermark;
+    ULONG PresentQueued;
+    ULONG PresentCompleted;
+    ULONG PresentFailed;
+    ULONG PresentRejected;
+    ULONG PresentSynchronous;
 } DXGK_PRESENT_STATS, *PDXGK_PRESENT_STATS;
 
 /* LayerFlags bits (match winuser LWA_*). */
@@ -199,16 +164,14 @@ typedef struct _DWM_OPEN_SURFACE
     HANDLE hSection;     /* out : SECTION_MAP_READ handle          */
 } DWM_OPEN_SURFACE, *PDWM_OPEN_SURFACE;
 
-/* DWMATTACH exchange. On attach the kernel returns two events in the caller's
- * handle table: hWake signals pending damage (dwm blocks on it when idle);
- * hVblank is signaled by the display path every scanout period (dwm paces
- * composed frames on it). hWake is mandatory; hVblank may be NULL and dwm
- * then falls back to timed pacing. */
+/* DWMATTACH exchange. On attach the kernel returns a damage event in the
+ * caller's handle table. hVblank is retained for compatibility with older
+ * ReactOS dwm binaries and is always NULL. */
 typedef struct _DWM_ATTACH
 {
     ULONG  Attach;       /* in  : 1 attach, 0 detach               */
     HANDLE hWake;        /* out : damage wake event                */
-    HANDLE hVblank;      /* out : scanout pacing event             */
+    HANDLE hVblank;      /* out : reserved, always NULL            */
 } DWM_ATTACH, *PDWM_ATTACH;
 
 /* Runtime-private metadata stored in the D3DKMT shared resource. This is an

@@ -39,35 +39,6 @@ IntCompositionDriverEscape(_In_ ULONG iEsc, _In_ PVOID pvIn, _In_ ULONG cjIn)
     return Result;
 }
 
-/* Bracket one bounded direct-to-primary CDD visual transaction while DWM
- * redirection is disabled. Return a token so the matching END is still sent
- * if composition state changes during a callback. */
-BOOL
-IntCompositionPresentBatchBegin(VOID)
-{
-    LONG Value = 1;
-
-    if (gbCompositionEnabled)
-        return FALSE;
-
-    return IntCompositionDriverEscape(CDD_ESCAPE_PRESENT_BATCH,
-                                      &Value,
-                                      sizeof(Value)) != 0;
-}
-
-VOID
-IntCompositionPresentBatchEnd(_In_ BOOL Active)
-{
-    LONG Value = 0;
-
-    if (!Active)
-        return;
-
-    IntCompositionDriverEscape(CDD_ESCAPE_PRESENT_BATCH,
-                               &Value,
-                               sizeof(Value));
-}
-
 /* OFF until dwm.exe attaches (Windows model: no compositor -> direct draw;
  * redirection exists only while a compositor owns the frame). */
 BOOL gbCompositionEnabled = FALSE;
@@ -113,10 +84,6 @@ static DWM_WIN         g_DwmFrameWindows[DWM_MAX_WINDOWS];
  * disables it and the desktop reverts to classic direct drawing. */
 volatile BOOL          g_DwmAttached = FALSE;
 volatile LONGLONG      g_DwmLastFrameTime = 0;
-/* The thread currently blitting dwm's composed frame to the primary — only
- * ITS drawing must not re-damage the composition (else an endless recompose);
- * damage from every other thread keeps landing normally. */
-static volatile PVOID  g_DwmPresentThread = NULL;
 /* Damage wake event for dwm (referenced from dwm's handle), so dwm blocks
  * instead of polling when the desktop is idle. */
 static PKEVENT         g_DwmWakeEvent = NULL;
@@ -125,7 +92,6 @@ static PKEVENT         g_DwmWakeEvent = NULL;
 static PEPROCESS       g_DwmProcess = NULL;
 /* Scanout pacing event (referenced; also registered with the display path,
  * whose present timer signals it every period). */
-static PKEVENT         g_DwmVblankEvent = NULL;
 
 /* Wake dwm after marking damage (no-op when no dwm is attached). */
 static VOID
@@ -777,10 +743,9 @@ IntCompositionDamageBacking(_In_opt_ PSURFACE psurf)
     if (!gbCompositionEnabled)
         return;
 
-    /* The compositor's final screen blit is publication, not new desktop
-     * damage. dclife.c reaches this surface-aware hook for that BitBlt, so it
-     * needs the same feedback-loop guard as IntCompositionDamageFromGdi. */
-    if (KeGetCurrentThread() == (PKTHREAD)g_DwmPresentThread)
+    /* A primary write by the attached compositor publishes its completed
+     * frame; it is not new desktop damage. */
+    if (PsGetCurrentProcess() == g_DwmProcess)
         return;
 
     if (psurf != NULL)
@@ -838,10 +803,9 @@ IntCompositionCommitOpenGLFrame(_In_opt_ PSURFACE psurf,
 VOID
 IntCompositionDamageFromGdi(VOID)
 {
-    /* dwm's own presenting thread must not re-damage (feedback loop);
-     * every other thread's primary write always does. */
+    /* The compositor's primary publication is not new desktop damage. */
     if (gbCompositionEnabled &&
-        KeGetCurrentThread() != (PKTHREAD)g_DwmPresentThread)
+        PsGetCurrentProcess() != g_DwmProcess)
     {
         IntCompositionMarkDamage(TRUE);
     }
@@ -920,12 +884,6 @@ IntCompositionDcRelease(_In_opt_ PWND Wnd, _In_ UCHAR State)
 
     if (State == COMPOSITION_DC_NONE)
         return;
-
-    if (State == COMPOSITION_DC_CLASSIC)
-    {
-        IntCompositionPresentBatchEnd(TRUE);
-        return;
-    }
 
     if (Wnd == NULL || State != COMPOSITION_DC_REDIRECTED)
         return;
@@ -1334,16 +1292,6 @@ IntCompositionCreateDwmEvent(_Out_ PKEVENT *ppEvent)
     return hEvent;
 }
 
-/* Register (or clear, EventHandle == NULL) dwm's vblank event with the display
- * path: the dxgkrnl present timer — the scanout cadence — signals it. */
-static BOOL
-IntCompositionRegisterVblank(_In_opt_ HANDLE EventHandle)
-{
-    ULONGLONG payload = (ULONGLONG)(ULONG_PTR)EventHandle;
-
-    return IntCompositionDriverEscape(CDD_ESCAPE_REGISTER_VBLANK, &payload, sizeof(payload)) != 0;
-}
-
 static BOOL
 IntCompositionIsDwmProcess(VOID)
 {
@@ -1387,34 +1335,24 @@ IntCompositionIsDwmProcess(VOID)
     return IsDwm;
 }
 
-/* Release the attached dwm: unregister the vblank event from the display path
- * (before its reference goes away), drop both event references, clear the
+/* Release the attached dwm, drop the wake-event reference, and clear the
  * compositor identity. */
 static VOID
 IntCompositionDwmTeardown(VOID)
 {
-    LONG value = 0;
     PEPROCESS Process;
     PKEVENT WakeEvent;
-    PPDEVOBJ ppdev;
 
     g_DwmAttached = FALSE;
-    InterlockedExchangePointer((PVOID volatile *)&g_DwmPresentThread, NULL);
-    IntCompositionDriverEscape(CDD_ESCAPE_COMPOSITION_SYNC, &value, sizeof(value));
-    IntCompositionRegisterVblank(NULL);
-
     /* Damage raised from the GDI finish path holds this same PDEV lock while
      * reading/signaling g_DwmWakeEvent. Clear it before dropping the object
      * reference so KeSetEvent can never race a freed event. */
-    ppdev = IntCompositionLockDevice();
-    WakeEvent = InterlockedExchangePointer((PVOID volatile *)&g_DwmWakeEvent, NULL);
-    IntCompositionUnlockDevice(ppdev);
-
-    if (g_DwmVblankEvent != NULL)
     {
-        ObDereferenceObject(g_DwmVblankEvent);
-        g_DwmVblankEvent = NULL;
+        PPDEVOBJ ppdev = IntCompositionLockDevice();
+        WakeEvent = InterlockedExchangePointer((PVOID volatile *)&g_DwmWakeEvent, NULL);
+        IntCompositionUnlockDevice(ppdev);
     }
+
     if (WakeEvent != NULL)
         ObDereferenceObject(WakeEvent);
 
@@ -1426,11 +1364,8 @@ IntCompositionDwmTeardown(VOID)
 
 /*
  * dwm.exe attach/detach (ONEPARAM_ROUTINE_DWMATTACH, DWM_ATTACH exchange).
- * On attach, creates two events in the caller's (dwm's) handle table and
- * keeps referenced pointers: the damage wake event (signaled by the damage
- * paths so dwm blocks instead of polling when idle) and the vblank event
- * (signaled by the display path every scanout period for frame pacing).
- * Detach/re-attach unregisters and releases the previous references.
+ * On attach, creates a damage wake event in the caller's handle table and
+ * keeps a referenced pointer so dwm can block instead of polling when idle.
  */
 NTSTATUS
 IntCompositionDwmAttach(_In_ PVOID pUser)
@@ -1441,8 +1376,8 @@ IntCompositionDwmAttach(_In_ PVOID pUser)
     return STATUS_NOT_SUPPORTED;
 #else
     DWM_ATTACH req;
-    HANDLE hWake = NULL, hVblank = NULL;
-    PKEVENT WakeEvent = NULL, VblankEvent = NULL;
+    HANDLE hWake = NULL;
+    PKEVENT WakeEvent = NULL;
     PEPROCESS CurrentProcess = PsGetCurrentProcess();
     NTSTATUS Status = STATUS_SUCCESS;
 
@@ -1472,28 +1407,17 @@ IntCompositionDwmAttach(_In_ PVOID pUser)
         hWake = IntCompositionCreateDwmEvent(&WakeEvent);
         if (hWake == NULL)
             return STATUS_INSUFFICIENT_RESOURCES;
-        hVblank = IntCompositionCreateDwmEvent(&VblankEvent);
-
         IntCompositionDwmTeardown();
         g_DwmWakeEvent = WakeEvent;
-        g_DwmVblankEvent = VblankEvent;
         ObReferenceObject(CurrentProcess);
         g_DwmProcess = CurrentProcess;
         g_DwmAttached = TRUE;
         g_DwmLastFrameTime = (LONGLONG)KeQueryInterruptTime();
 
-        if (hVblank != NULL && !IntCompositionRegisterVblank(hVblank))
-        {
-            ObDereferenceObject(g_DwmVblankEvent);
-            g_DwmVblankEvent = NULL;
-            ZwClose(hVblank);
-            hVblank = NULL;
-        }
-
         _SEH2_TRY
         {
             ((PDWM_ATTACH)pUser)->hWake = hWake;
-            ((PDWM_ATTACH)pUser)->hVblank = hVblank;
+            ((PDWM_ATTACH)pUser)->hVblank = NULL;
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
@@ -1505,8 +1429,6 @@ IntCompositionDwmAttach(_In_ PVOID pUser)
         {
             IntCompositionDwmTeardown();
             ZwClose(hWake);
-            if (hVblank != NULL)
-                ZwClose(hVblank);
             return Status;
         }
 
@@ -1820,30 +1742,6 @@ CopyOutput:
     _SEH2_END;
     return Status;
 }
-
-/*
- * CDD present bracket for dwm (ONEPARAM_ROUTINE_DWMPRESENTSYNC): value=1 opens
- * the bracket before dwm's BitBlt to the primary, value=0 closes it after — so
- * the dxgkrnl present worker never scans out a half-composed primary. Same
- * CDD_ESCAPE_COMPOSITION_SYNC the in-kernel BLIT pass uses.
- */
-BOOL
-IntCompositionDwmSync(_In_ LONG value)
-{
-    ULONG Result;
-
-    if (PsGetCurrentProcess() != g_DwmProcess || (value != 0 && value != 1))
-        return FALSE;
-
-    /* Suppress self-damage from dwm's presenting thread only. */
-    InterlockedExchangePointer((PVOID volatile *)&g_DwmPresentThread, value ? (PVOID)KeGetCurrentThread() : NULL);
-
-    Result = IntCompositionDriverEscape(CDD_ESCAPE_COMPOSITION_SYNC, &value, sizeof(value));
-    if (Result == 0 && value != 0)
-        InterlockedExchangePointer((PVOID volatile *)&g_DwmPresentThread, NULL);
-    return Result != 0;
-}
-
 
 /* Subtract pwnd's window rect (narrowed by its window region, if any) from
  * VisRgn — the sibling/child occlusion step of the classic DCE clipping. */

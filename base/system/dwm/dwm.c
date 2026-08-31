@@ -295,7 +295,6 @@ DwmComposeLoop(void)
         return;
     }
     hWake = att.hWake;
-    /* PRESENTSYNC queues immutable frames through the paced display path. */
     if (att.hVblank != NULL)
         CloseHandle(att.hVblank);
     if (hWake == NULL)
@@ -423,23 +422,19 @@ DwmComposeLoop(void)
                 {
                     forceFull = TRUE;
                 }
-                else if (NtUserCallOneParam(1, DWM_ROUTINE_PRESENTSYNC))
+                else
                 {
                     BOOL bltResult = BitBlt(hdcScreen, g_originX + pl, g_originY + pt,
                                             pr - pl, pb - pt, g_hdcComp, pl, pt,
                                             SRCCOPY);
-                    BOOL endResult = NtUserCallOneParam(0, DWM_ROUTINE_PRESENTSYNC) != 0;
-                    if (!bltResult || !endResult)
+                    BOOL flushResult = GdiFlush();
+                    if (!bltResult || !flushResult)
                         forceFull = TRUE;
                     else
                     {
                         for (i = 0; i < hdr->Count; ++i)
                             DwmDxAcknowledgeSurface(&wins[i]);
                     }
-                }
-                else
-                {
-                    forceFull = TRUE;
                 }
             }
         }

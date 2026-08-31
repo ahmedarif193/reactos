@@ -8,11 +8,11 @@
  * shadow surface; the BitBlt/CopyBits/SynchronizeSurface hooks below exist only
  * to learn which rectangles changed. Individual primitives accumulate damage;
  * a synchronized GDI flush publishes the completed batch to the WDDM scan-out.
- * RcddPresent is the single seam an Option-B upgrade (D3DKMTPresent /
- * SetVidPnSourceAddress) replaces; see surface.c.
  */
 
 #include "cdd.h"
+
+#define RCDD_PRESENT_SYNCHRONOUS 0x80000000u
 
 static BOOL
 RcddRectContains(
@@ -28,71 +28,52 @@ RcddRectContains(
 /*
  * RcddPresent
  *
- * Notify dxgkrnl that the rectangle prcl (or the whole screen when prcl is
- * NULL) of the mapped primary changed. GDI's engine drew straight into
- * ppdev->ScreenPtr, so there is nothing to copy here; dxgkrnl records the
- * rectangle. A later synchronized flush scans the accumulated batch out
- * through the WDDM display-only present path.
- *
- * While GDI has hidden the software cursor for a drawing operation
- * (DSS_RESERVED bracket from win32k's mouse safety, see RcddSynchronizeSurface)
- * the rectangle is only accumulated: the scan-out must never show the
- * cursor-less intermediate state. The bracket's closing flush sends the union.
+ * GDI's engine draws straight into ppdev->ScreenPtr. Drawing hooks accumulate
+ * damage locally; DrvSynchronizeSurface publishes that damage only after GDI
+ * declares the current update complete.
  */
-static BOOL
-RcddNotifyDirty(
-   PRCDD_PDEV ppdev,
-   const RECTL *prcl,
-   ULONG Flags)
-{
-   DXGK_PRESENT_DIRTY_RECTS_INPUT Input;
-   ULONG Ret;
-
-   RtlZeroMemory(&Input, sizeof(Input));
-   Input.StructSize = sizeof(Input);
-   Input.Flags = Flags;
-   if (prcl != NULL)
-   {
-      Input.RectCount = 1;
-      Input.Rects[0] = *prcl;
-   }
-
-   return EngDeviceIoControl(ppdev->hDriver,
-                             IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT,
-                             &Input,
-                             sizeof(Input),
-                             NULL,
-                             0,
-                             &Ret) == 0;
-}
-
 static BOOL
 RcddNotifyDirtyRects(
    PRCDD_PDEV ppdev,
+   PVOID Source,
+   ULONG SourcePitch,
+   ULONG SourceSize,
    const RECTL *prcl,
    ULONG Count,
    ULONG Flags)
 {
-   DXGK_PRESENT_DIRTY_RECTS_INPUT Input;
+   PDXGK_PRESENT_DIRTY_RECTS_INPUT Input;
+   SIZE_T HeaderSize;
+   SIZE_T InputSize;
    ULONG Ret;
+   BOOL Result;
 
-   if (Count > DXGK_PRESENT_MAX_DIRTY_RECTS)
+   HeaderSize = FIELD_OFFSET(DXGK_PRESENT_DIRTY_RECTS_INPUT, Rects);
+   if (Count > (~(ULONG)0 - HeaderSize) / sizeof(Input->Rects[0]))
+      return FALSE;
+   InputSize = HeaderSize + Count * sizeof(Input->Rects[0]);
+   Input = EngAllocMem(FL_ZERO_MEMORY, InputSize, ALLOC_TAG);
+   if (Input == NULL)
       return FALSE;
 
-   RtlZeroMemory(&Input, sizeof(Input));
-   Input.StructSize = sizeof(Input);
-   Input.Flags = Flags;
-   Input.RectCount = Count;
+   Input->StructSize = (ULONG)InputSize;
+   Input->Flags = Flags;
+   Input->RectCount = Count;
+   Input->SourcePitch = SourcePitch;
+   Input->SourceSize = SourceSize;
+   Input->Source = (ULONG_PTR)Source;
    if (Count != 0)
-      RtlCopyMemory(Input.Rects, prcl, Count * sizeof(Input.Rects[0]));
+      RtlCopyMemory(Input->Rects, prcl, Count * sizeof(Input->Rects[0]));
 
-   return EngDeviceIoControl(ppdev->hDriver,
-                             IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT,
-                             &Input,
-                             sizeof(Input),
-                             NULL,
-                             0,
-                             &Ret) == 0;
+   Result = EngDeviceIoControl(ppdev->hDriver,
+                               IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT,
+                               Input,
+                               (ULONG)InputSize,
+                               NULL,
+                               0,
+                               &Ret) == 0;
+   EngFreeMem(Input);
+   return Result;
 }
 
 static LONGLONG
@@ -115,12 +96,314 @@ RcddRectUnion(
 }
 
 static VOID
+NTAPI
+RcddPresentWorkerThread(
+   PVOID Context)
+{
+   PRCDD_PDEV ppdev = Context;
+   PRCDD_PRESENT_SLOT Slot;
+   ULONG Index;
+   BOOL Stop;
+   BOOL Result;
+
+   for (;;)
+   {
+      EngWaitForSingleObject(ppdev->PresentWakeEvent, NULL);
+
+      for (;;)
+      {
+         Slot = NULL;
+         EngAcquireSemaphore(ppdev->PresentLock);
+         for (Index = 0; Index < RCDD_PRESENT_SLOT_COUNT; Index++)
+         {
+            if (ppdev->PresentSlots[Index].State == RcddPresentSlotQueued)
+            {
+               Slot = &ppdev->PresentSlots[Index];
+               Slot->State = RcddPresentSlotActive;
+               break;
+            }
+         }
+         Stop = ppdev->PresentWorkerStop;
+         if (Slot == NULL && Stop && ppdev->PresentPendingCount == 0)
+         {
+            EngReleaseSemaphore(ppdev->PresentLock);
+            EngSetEvent(ppdev->PresentExitEvent);
+            PsTerminateSystemThread(STATUS_SUCCESS);
+            return;
+         }
+         EngReleaseSemaphore(ppdev->PresentLock);
+
+         if (Slot == NULL)
+            break;
+
+         Result = RcddNotifyDirtyRects(ppdev,
+                                       Slot->Buffer,
+                                       ppdev->ScreenDelta,
+                                       (ULONG)Slot->BufferSize,
+                                       Slot->Rects,
+                                       Slot->RectCount,
+                                       DXGK_PRESENT_DIRTY_FLUSH);
+
+         EngAcquireSemaphore(ppdev->PresentLock);
+         if (Result)
+            ppdev->PresentCompletedCount++;
+         else
+            ppdev->PresentFailedCount++;
+         Slot->RectCount = 0;
+         Slot->State = RcddPresentSlotFree;
+         ASSERT(ppdev->PresentPendingCount != 0);
+         if (ppdev->PresentPendingCount != 0)
+            ppdev->PresentPendingCount--;
+         if (ppdev->PresentPendingCount == 0)
+            EngSetEvent(ppdev->PresentDrainEvent);
+         EngReleaseSemaphore(ppdev->PresentLock);
+      }
+   }
+}
+
+static VOID
+RcddReleasePresentWorkerResources(
+   PRCDD_PDEV ppdev)
+{
+   ULONG Index;
+
+   for (Index = 0; Index < RCDD_PRESENT_SLOT_COUNT; Index++)
+   {
+      if (ppdev->PresentSlots[Index].Buffer != NULL)
+      {
+         EngFreeMem(ppdev->PresentSlots[Index].Buffer);
+         ppdev->PresentSlots[Index].Buffer = NULL;
+      }
+      ppdev->PresentSlots[Index].BufferSize = 0;
+      ppdev->PresentSlots[Index].RectCount = 0;
+      ppdev->PresentSlots[Index].State = RcddPresentSlotFree;
+   }
+
+   if (ppdev->PresentDrainEvent != NULL)
+   {
+      EngDeleteEvent(ppdev->PresentDrainEvent);
+      ppdev->PresentDrainEvent = NULL;
+   }
+   if (ppdev->PresentExitEvent != NULL)
+   {
+      EngDeleteEvent(ppdev->PresentExitEvent);
+      ppdev->PresentExitEvent = NULL;
+   }
+   if (ppdev->PresentWakeEvent != NULL)
+   {
+      EngDeleteEvent(ppdev->PresentWakeEvent);
+      ppdev->PresentWakeEvent = NULL;
+   }
+   if (ppdev->PresentLock != NULL)
+   {
+      EngDeleteSemaphore(ppdev->PresentLock);
+      ppdev->PresentLock = NULL;
+   }
+}
+
+BOOL
+RcddStartPresentWorker(
+   PRCDD_PDEV ppdev)
+{
+   OBJECT_ATTRIBUTES ObjectAttributes;
+   ULONGLONG BufferSize64;
+   ULONG BufferSize;
+   ULONG Index;
+   NTSTATUS Status;
+
+   if (ppdev == NULL || ppdev->ScreenPtr == NULL ||
+       ppdev->ScreenDelta == 0 || ppdev->ScreenHeight == 0 ||
+       ppdev->PresentWorkerActive)
+   {
+      return FALSE;
+   }
+
+   BufferSize64 = (ULONGLONG)ppdev->ScreenDelta * ppdev->ScreenHeight;
+   if (BufferSize64 == 0 || BufferSize64 > MAXULONG)
+      return FALSE;
+   BufferSize = (ULONG)BufferSize64;
+
+   ppdev->PresentLock = EngCreateSemaphore();
+   if (ppdev->PresentLock == NULL ||
+       !EngCreateEvent(&ppdev->PresentWakeEvent) ||
+       !EngCreateEvent(&ppdev->PresentExitEvent) ||
+       !EngCreateEvent(&ppdev->PresentDrainEvent))
+   {
+      RcddReleasePresentWorkerResources(ppdev);
+      return FALSE;
+   }
+
+   for (Index = 0; Index < RCDD_PRESENT_SLOT_COUNT; Index++)
+   {
+      ppdev->PresentSlots[Index].Buffer =
+         EngAllocMem(FL_NONPAGED_MEMORY, BufferSize, ALLOC_TAG);
+      if (ppdev->PresentSlots[Index].Buffer == NULL)
+      {
+         RcddReleasePresentWorkerResources(ppdev);
+         return FALSE;
+      }
+      ppdev->PresentSlots[Index].BufferSize = BufferSize;
+      ppdev->PresentSlots[Index].State = RcddPresentSlotFree;
+   }
+
+   EngSetEvent(ppdev->PresentDrainEvent);
+   ppdev->PresentWorkerStop = FALSE;
+   InitializeObjectAttributes(&ObjectAttributes,
+                              NULL,
+                              OBJ_KERNEL_HANDLE,
+                              NULL,
+                              NULL);
+   Status = PsCreateSystemThread(&ppdev->PresentThread,
+                                 THREAD_ALL_ACCESS,
+                                 &ObjectAttributes,
+                                 NULL,
+                                 NULL,
+                                 RcddPresentWorkerThread,
+                                 ppdev);
+   if (!NT_SUCCESS(Status))
+   {
+      ppdev->PresentThread = NULL;
+      RcddReleasePresentWorkerResources(ppdev);
+      return FALSE;
+   }
+
+   ppdev->PresentWorkerActive = TRUE;
+   return TRUE;
+}
+
+VOID
+RcddStopPresentWorker(
+   PRCDD_PDEV ppdev)
+{
+   if (ppdev == NULL || !ppdev->PresentWorkerActive)
+      return;
+
+   EngAcquireSemaphore(ppdev->PresentLock);
+   ppdev->PresentWorkerActive = FALSE;
+   ppdev->PresentWorkerStop = TRUE;
+   EngReleaseSemaphore(ppdev->PresentLock);
+   EngSetEvent(ppdev->PresentWakeEvent);
+   EngWaitForSingleObject(ppdev->PresentExitEvent, NULL);
+
+   if (ppdev->PresentThread != NULL)
+   {
+      ZwClose(ppdev->PresentThread);
+      ppdev->PresentThread = NULL;
+   }
+   RcddReleasePresentWorkerResources(ppdev);
+}
+
+VOID
+RcddQueryPresentWorkerStats(
+   PRCDD_PDEV ppdev,
+   PDXGK_PRESENT_STATS Stats)
+{
+   if (ppdev == NULL || Stats == NULL || ppdev->PresentLock == NULL)
+      return;
+
+   EngAcquireSemaphore(ppdev->PresentLock);
+   Stats->PresentQueueDepth = ppdev->PresentPendingCount;
+   Stats->PendingDirtyRect =
+      ppdev->PresentPendingCount != 0 || ppdev->PendingRectCount != 0;
+   Stats->PresentQueueHighWatermark = ppdev->PresentQueueHighWatermark;
+   Stats->PresentQueued = ppdev->PresentQueuedCount;
+   Stats->PresentCompleted = ppdev->PresentCompletedCount;
+   Stats->PresentFailed = ppdev->PresentFailedCount;
+   Stats->PresentRejected = ppdev->PresentRejectedCount;
+   Stats->PresentSynchronous = ppdev->PresentSynchronousCount;
+   EngReleaseSemaphore(ppdev->PresentLock);
+}
+
+static BOOL
+RcddQueuePresent(
+   PRCDD_PDEV ppdev,
+   const RECTL *Rects,
+   ULONG Count)
+{
+   PRCDD_PRESENT_SLOT Slot = NULL;
+   ULONG BytesPerPixel;
+   ULONG BytesPerRow;
+   ULONG Index;
+   LONG Y;
+
+   if (ppdev == NULL || Rects == NULL || Count == 0 ||
+       Count > DXGK_PRESENT_DIRTY_MAX_RECTS ||
+       ppdev->PresentLock == NULL)
+   {
+      return FALSE;
+   }
+
+   EngAcquireSemaphore(ppdev->PresentLock);
+   if (ppdev->PresentWorkerActive && !ppdev->PresentWorkerStop)
+   {
+      for (Index = 0; Index < RCDD_PRESENT_SLOT_COUNT; Index++)
+      {
+         if (ppdev->PresentSlots[Index].State == RcddPresentSlotFree)
+         {
+            Slot = &ppdev->PresentSlots[Index];
+            Slot->State = RcddPresentSlotCapturing;
+            ppdev->PresentPendingCount++;
+            if (ppdev->PresentPendingCount > ppdev->PresentQueueHighWatermark)
+               ppdev->PresentQueueHighWatermark = ppdev->PresentPendingCount;
+            EngClearEvent(ppdev->PresentDrainEvent);
+            break;
+         }
+      }
+   }
+   if (Slot == NULL)
+      ppdev->PresentRejectedCount++;
+   EngReleaseSemaphore(ppdev->PresentLock);
+   if (Slot == NULL)
+      return FALSE;
+
+   BytesPerPixel = (ppdev->BitsPerPixel + 7) / 8;
+   RtlCopyMemory(Slot->Rects, Rects, Count * sizeof(Rects[0]));
+   Slot->RectCount = Count;
+   for (Index = 0; Index < Count; Index++)
+   {
+      BytesPerRow = (Rects[Index].right - Rects[Index].left) * BytesPerPixel;
+      for (Y = Rects[Index].top; Y < Rects[Index].bottom; Y++)
+      {
+         RtlCopyMemory((PUCHAR)Slot->Buffer +
+                          (SIZE_T)Y * ppdev->ScreenDelta +
+                          (SIZE_T)Rects[Index].left * BytesPerPixel,
+                       (PUCHAR)ppdev->ScreenPtr +
+                          (SIZE_T)Y * ppdev->ScreenDelta +
+                          (SIZE_T)Rects[Index].left * BytesPerPixel,
+                       BytesPerRow);
+      }
+   }
+
+   EngAcquireSemaphore(ppdev->PresentLock);
+   if (ppdev->PresentWorkerActive && !ppdev->PresentWorkerStop &&
+       Slot->State == RcddPresentSlotCapturing)
+   {
+      Slot->State = RcddPresentSlotQueued;
+      ppdev->PresentQueuedCount++;
+      EngReleaseSemaphore(ppdev->PresentLock);
+      EngSetEvent(ppdev->PresentWakeEvent);
+      return TRUE;
+   }
+
+   Slot->RectCount = 0;
+   Slot->State = RcddPresentSlotFree;
+   ASSERT(ppdev->PresentPendingCount != 0);
+   if (ppdev->PresentPendingCount != 0)
+      ppdev->PresentPendingCount--;
+   if (ppdev->PresentPendingCount == 0)
+      EngSetEvent(ppdev->PresentDrainEvent);
+   EngReleaseSemaphore(ppdev->PresentLock);
+   EngSetEvent(ppdev->PresentWakeEvent);
+   return FALSE;
+}
+
+static VOID
 RcddAccumulateDirtyRect(
    PRCDD_PDEV ppdev,
    const RECTL *prcl)
 {
    RECTL Union;
-   ULONG Best = DXGK_PRESENT_MAX_DIRTY_RECTS;
+   ULONG Best = DXGK_PRESENT_DIRTY_MAX_RECTS;
    LONGLONG BestGrowth = 0;
    LONGLONG Area = RcddRectArea(prcl);
    ULONG Index;
@@ -139,35 +422,80 @@ RcddAccumulateDirtyRect(
          ppdev->PendingRects[Index] = Union;
          return;
       }
-      if (Best == DXGK_PRESENT_MAX_DIRTY_RECTS || Growth < BestGrowth)
+      if (Best == DXGK_PRESENT_DIRTY_MAX_RECTS || Growth < BestGrowth)
       {
          Best = Index;
          BestGrowth = Growth;
       }
    }
 
-   if (ppdev->PendingRectCount < DXGK_PRESENT_MAX_DIRTY_RECTS)
+   if (ppdev->PendingRectCount < DXGK_PRESENT_DIRTY_MAX_RECTS)
       ppdev->PendingRects[ppdev->PendingRectCount++] = *prcl;
-   else
+   else if (Best != DXGK_PRESENT_DIRTY_MAX_RECTS)
       RcddRectUnion(&ppdev->PendingRects[Best], prcl);
 }
 
-/* Publish the completed GDI batch. GDI calls this path with the device lock
- * held for both programmatic flushes and its periodic synchronization timer. */
-static VOID
-RcddFlushOutstanding(
-   PRCDD_PDEV ppdev)
+static BOOL
+RcddPublishPending(
+   PRCDD_PDEV ppdev,
+   ULONG Flags)
 {
-   if (ppdev->ScreenPtr == NULL ||
-       ppdev->SafetyHoldDepth != 0 ||
-       ppdev->PresentBatchDepth != 0 ||
-       !ppdev->DirtyOutstanding)
-   {
-      return;
-   }
+   RECTL SentRect;
+   BOOL Notified;
+   BOOL Synchronous;
+   ULONG Index;
 
-   if (RcddNotifyDirty(ppdev, NULL, DXGK_PRESENT_DIRTY_FLUSH))
-      ppdev->DirtyOutstanding = FALSE;
+   if (ppdev->ScreenPtr == NULL)
+      return FALSE;
+
+   if (ppdev->PendingRectCount == 0)
+      return TRUE;
+
+   SentRect = ppdev->PendingRects[0];
+   for (Index = 1; Index < ppdev->PendingRectCount; Index++)
+      RcddRectUnion(&SentRect, &ppdev->PendingRects[Index]);
+
+   Synchronous = (Flags & RCDD_PRESENT_SYNCHRONOUS) != 0;
+   Flags &= ~RCDD_PRESENT_SYNCHRONOUS;
+   if (Synchronous)
+   {
+      Notified = RcddNotifyDirtyRects(ppdev,
+                                      ppdev->ScreenPtr,
+                                      ppdev->ScreenDelta,
+                                      ppdev->ScreenDelta * ppdev->ScreenHeight,
+                                      ppdev->PendingRects,
+                                      ppdev->PendingRectCount,
+                                      Flags);
+      if (!Notified)
+      {
+         Notified = RcddNotifyDirtyRects(ppdev,
+                                         ppdev->ScreenPtr,
+                                         ppdev->ScreenDelta,
+                                         ppdev->ScreenDelta * ppdev->ScreenHeight,
+                                         &SentRect,
+                                         1,
+                                         Flags);
+      }
+      if (Notified)
+      {
+         EngAcquireSemaphore(ppdev->PresentLock);
+         ppdev->PresentSynchronousCount++;
+         EngReleaseSemaphore(ppdev->PresentLock);
+      }
+   }
+   else
+   {
+      Notified = RcddQueuePresent(ppdev,
+                                  ppdev->PendingRects,
+                                  ppdev->PendingRectCount);
+   }
+   if (!Notified)
+      return FALSE;
+
+   ppdev->PendingRectCount = 0;
+   ppdev->SentSeq = ppdev->DrawSeq;
+   ppdev->SentRect = SentRect;
+   return TRUE;
 }
 
 VOID
@@ -177,8 +505,6 @@ RcddPresentEx(
    ULONG Flags)
 {
    RECTL Dirty;
-   RECTL SentRect;
-   ULONG Index;
 
    if (ppdev->ScreenPtr == NULL)
       return;
@@ -196,10 +522,6 @@ RcddPresentEx(
    }
    else if (Flags == 0)
    {
-      /* A rectangle-less ordinary present means the whole surface. Control
-       * notifications such as RELEASE carry no new damage; treating those as
-       * full-screen invalidations turns every cursor-safety transaction into
-       * a complete framebuffer copy. */
       Dirty.left   = 0;
       Dirty.top    = 0;
       Dirty.right  = ppdev->ScreenWidth;
@@ -213,37 +535,8 @@ RcddPresentEx(
    if (Dirty.left < Dirty.right && Dirty.top < Dirty.bottom)
       RcddAccumulateDirtyRect(ppdev, &Dirty);
 
-   if (ppdev->SafetyHoldDepth != 0)
-      return;
-
-   if (ppdev->PresentBatchDepth != 0)
-      return;
-
-   if (ppdev->PendingRectCount == 0)
-   {
-      if (Flags != 0)
-         RcddNotifyDirty(ppdev, NULL, Flags);
-      return;
-   }
-
-   SentRect = ppdev->PendingRects[0];
-   for (Index = 1; Index < ppdev->PendingRectCount; Index++)
-      RcddRectUnion(&SentRect, &ppdev->PendingRects[Index]);
-
-   if (!RcddNotifyDirtyRects(ppdev,
-                             ppdev->PendingRects,
-                             ppdev->PendingRectCount,
-                             Flags))
-   {
-      return;
-   }
-
-   ppdev->PendingRectCount = 0;
-   ppdev->SentSeq = ppdev->DrawSeq;
-   ppdev->SentRect = SentRect;
-   ppdev->DirtyOutstanding =
-      (Flags & (DXGK_PRESENT_DIRTY_FLUSH |
-                DXGK_PRESENT_DIRTY_RELEASE)) == 0;
+   if (Flags & DXGK_PRESENT_DIRTY_FLUSH)
+      RcddPublishPending(ppdev, Flags);
 }
 
 VOID
@@ -399,8 +692,9 @@ RcddCopyBits(
 /*
  * RcddSynchronizeSurface
  *
- * GDI signals direct engine writes to the shadow with DSS_FLUSH_EVENT; notify
- * the affected rectangle. DSS_RESERVED brackets a cursor-hidden drawing op.
+ * Windows uses DSS_TIMER_EVENT and DSS_FLUSH_EVENT as completed-update
+ * boundaries. DSS_RESERVED selects the synchronous command form on the native
+ * CDD path; it is not a begin/end batching protocol.
  */
 VOID APIENTRY
 RcddSynchronizeSurface(
@@ -417,54 +711,61 @@ RcddSynchronizeSurface(
    if (pso->pvScan0 != ppdev->ScreenPtr)
       return;
 
-   /* These are GDI's native completed-batch boundaries. Unlike a per-primitive
-    * flush with a rectangle, publishing here cannot expose a menu highlight
-    * after its background paint but before its text paint. */
-   if ((fl & DSS_TIMER_EVENT) ||
-       ((fl & DSS_FLUSH_EVENT) && prcl == NULL))
-   {
-      RcddFlushOutstanding(ppdev);
-      return;
-   }
-
-   /*
-    * Win32k brackets both software-cursor motion and drawing which overlaps
-    * the cursor. These transactions can nest: mouse safety hides the cursor,
-    * performs a cursor move internally, draws, and restores it. Publish only
-    * when the outermost bracket closes so scanout never observes a hidden or
-    * partially redrawn sprite.
-    */
-   if (fl & DSS_RESERVED)
-   {
-      if (!(fl & DSS_FLUSH_EVENT))
-      {
-         if (ppdev->SafetyHoldDepth++ == 0)
-         {
-            ppdev->SafetyHoldNotified =
-               ppdev->PresentBatchDepth == 0 &&
-               RcddNotifyDirty(ppdev, NULL, DXGK_PRESENT_DIRTY_HOLD);
-         }
-         return;
-      }
-      if (ppdev->SafetyHoldDepth != 0)
-      {
-         RcddPresentEx(ppdev, prcl, 0);
-         if (--ppdev->SafetyHoldDepth == 0)
-         {
-            if (ppdev->SafetyHoldNotified)
-               RcddPresentEx(ppdev, NULL, DXGK_PRESENT_DIRTY_RELEASE);
-            else if (ppdev->PresentBatchDepth == 0)
-               RcddPresentEx(ppdev, NULL, DXGK_PRESENT_DIRTY_FLUSH);
-            ppdev->SafetyHoldNotified = FALSE;
-         }
-         return;
-      }
-   }
-
-   if (!(fl & DSS_FLUSH_EVENT))
+   if (!(fl & (DSS_TIMER_EVENT | DSS_FLUSH_EVENT)))
       return;
 
-   RcddPresent(ppdev, prcl);
+   RcddPresentEx(ppdev,
+                 prcl,
+                 DXGK_PRESENT_DIRTY_FLUSH |
+                    ((fl & DSS_RESERVED) ? RCDD_PRESENT_SYNCHRONOUS : 0));
+}
+
+/* ReactOS does not create CDD device redirection bitmaps yet. Keep the Windows
+ * DDI surface in place without aliasing these operations to the primary. */
+VOID APIENTRY
+RcddLockDisplayArea(
+   IN DHPDEV dhpdev,
+   IN OPTIONAL RECTL *prcl)
+{
+   UNREFERENCED_PARAMETER(dhpdev);
+   UNREFERENCED_PARAMETER(prcl);
+}
+
+VOID APIENTRY
+RcddUnlockDisplayArea(
+   IN DHPDEV dhpdev,
+   IN OPTIONAL RECTL *prcl)
+{
+   UNREFERENCED_PARAMETER(dhpdev);
+   UNREFERENCED_PARAMETER(prcl);
+}
+
+LONG APIENTRY
+RcddSynchronizeRedirectionBitmaps(
+   IN DHPDEV dhpdev,
+   OUT UINT64 *puiFenceID)
+{
+   if (dhpdev == NULL || puiFenceID == NULL)
+      return -1;
+
+   /* Native CDD leaves the output untouched when redirection is disabled. */
+   return 0;
+}
+
+BOOL APIENTRY
+RcddAccumulateD3DDirtyRect(
+   IN SURFOBJ *psoSurf,
+   IN CDDDXGK_REDIRBITMAPPRESENTINFO *pDirty)
+{
+   if (psoSurf == NULL || pDirty == NULL ||
+       (pDirty->NumDirtyRects != 0 && pDirty->DirtyRect == NULL))
+   {
+      return FALSE;
+   }
+
+   /* Native CDD dispatches only STYPE_DEVBITMAP objects to its redirection
+    * bitmap implementation and succeeds as a no-op for every other surface. */
+   return TRUE;
 }
 
 /* Bounding box of a path in pixels (PATHOBJ bounds are 28.4 fixed point);
@@ -487,8 +788,7 @@ RcddPathBounds(
  * The remaining draw DDIs. cdd implements no raster ops: every hook punts to
  * the GDI engine and then notifies the touched rectangle. They are hooked
  * ONLY so no drawing primitive can reach the primary without a dirty-rect
- * notification — otherwise text/line/path/gradient output would sit
- * unpresented until the fallback timer.
+ * notification.
  */
 BOOL APIENTRY
 RcddTextOut(

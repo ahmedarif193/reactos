@@ -67,6 +67,7 @@
 #include "device_work_core.h"
 #include "fence_core.h"
 #include "present_queue_core.h"
+#include "present_contract_core.h"
 #include "submit_reservation_core.h"
 #include "sync_wait_core.h"
 #include "tracked_work_core.h"
@@ -505,18 +506,7 @@ NTSTATUS NTAPI TdrResetFromTimeout(_In_ PVOID RecoveryContext);
 /* Aggregate initial admission cap across all devices of one process/adapter. */
 #define DXGK_PROCESS_MAX_INFLIGHT 512
 
-#define DXGKP_PRESENT_SNAPSHOT_COUNT 2
-#define DXGKP_PRESENT_RECT_COUNT 8
-
-typedef struct _DXGKRNL_PRESENT_SNAPSHOT
-{
-    PVOID Buffer;
-    SIZE_T BufferSize;
-    RECTL SyncRects[DXGKP_PRESENT_RECT_COUNT];
-    RECTL PresentRects[DXGKP_PRESENT_RECT_COUNT];
-    ULONG SyncRectCount;
-    ULONG PresentRectCount;
-} DXGKRNL_PRESENT_SNAPSHOT, *PDXGKRNL_PRESENT_SNAPSHOT;
+#define DXGKP_PRESENT_RECT_COUNT DXGK_PRESENT_CORE_MAX_SUBRECTS
 
 /* ========================================================================
  * DXGKRNL_ADAPTER
@@ -908,29 +898,11 @@ struct _DXGKRNL_ADAPTER
     PVOID                       PostDisplayVirtualAddress;
     SIZE_T                      PostDisplayMappingSize;
 
-    /*
-     * Periodic present timer.  Fires a DPC that queues completed-frame
-     * snapshots for DxgkDdiPresentDisplayOnly.
-     */
+    /* Software VBlank source used only by display-only miniports. */
     KTIMER                      PresentTimer;
     KDPC                        PresentDpc;
     BOOLEAN                     PresentTimerActive;
-    PIO_WORKITEM                PresentWorkItem;
     KMUTEX                      PresentLifecycleMutex;
-
-    /*
-     * Set by DWM via IOCTL while a composition BitBlt is in progress.
-     * The present worker skips/retries when this is non-zero to avoid
-     * copying a partially-drawn frame from the shadow framebuffer.
-     */
-    volatile LONG               DwmCompositionInProgress;
-
-    /*
-     * dwm's vblank pacing event, registered by handle through
-     * IOCTL_VIDEO_DXGK_REGISTER_VBLANK. dxgkrnl owns the reference and the
-     * PresentLock serializes replacement against the timer DPC.
-     */
-    PKEVENT                     DwmVblankEvent;
 
     /*
      * Hardware-pointer bridge state: the display driver's XPDM pointer
@@ -989,29 +961,10 @@ struct _DXGKRNL_ADAPTER
     PVOID                       TdrRecoveryContext;
 
     /*
-     * Vblank pacing: miniport CRTC_VSYNC notifications (enabled through
-     * highest compatible ControlInterrupt DDI at adapter start) set
-     * VsyncPending from the
-     * "ISR"; the adapter DPC turns each pulse into a pending-dirty-rect
-     * flush so presents pace to the scanout instead of the fallback timer.
+     * Miniport CRTC_VSYNC notifications are recorded by the ISR and consumed
+     * by the adapter DPC for the ordinary presentation queues.
      */
     volatile LONG               VsyncPending;
-
-    /*
-     * Serializes shadow-fb dirty-rect state shared by the display-control
-     * IOCTL path, present timer DPC, and present work item.
-     */
-    KSPIN_LOCK                  PresentLock;
-    EX_RUNDOWN_REF              PresentPathRundown;
-    volatile LONG               PresentPathOpen;
-    DXGKRNL_PRESENT_SNAPSHOT    PresentSnapshots[DXGKP_PRESENT_SNAPSHOT_COUNT];
-    ULONG                       PresentSnapshotWidth;
-    ULONG                       PresentSnapshotHeight;
-    ULONG                       PresentSnapshotPitch;
-    LONG                        PresentSnapshotReady;
-    LONG                        PresentSnapshotReading;
-    LONG                        PresentSnapshotWriting;
-    ULONG                       PresentSnapshotNext;
 
     /*
      * Tracks DMA buffers that remain owned by the miniport until it signals
@@ -2820,21 +2773,6 @@ DxgkCheckVidPnExclusiveOwnership(
 /* ========================================================================
  * Function prototypes — display.c  (WDDM ↔ win32ss display bridge)
  * ====================================================================== */
-
-/*
- * DxgkDisplayVsyncFlush
- *
- * Called from the adapter DPC when the miniport reported a CRTC_VSYNC
- * pulse: flushes pending dirty rects so presents pace to the scanout.
- * DISPATCH_LEVEL-safe.
- */
-VOID
-DxgkDisplayVsyncFlush(
-    _In_ PDXGKRNL_ADAPTER Adapter);
-
-VOID
-DxgkDisplayNotifyGpuActivity(
-    _In_ PDXGKRNL_ADAPTER Adapter);
 
 /*
  * DxgkDisplayRegister

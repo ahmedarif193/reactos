@@ -11,12 +11,6 @@
  *
  *   CDD_ESCAPE_SUPPRESS_CURSOR  - LONG in: non-zero = the compositor draws the
  *       cursor, so cdd stops drawing its own cursor; zero = resume. Returns 1.
- *   CDD_ESCAPE_COMPOSITION_SYNC - LONG in: non-zero = begin a composed frame,
- *       zero = end it. Either way cdd presents the current frame and acks so
- *       the compositor can pace itself. Returns 1.
- *   CDD_ESCAPE_PRESENT_BATCH - LONG in: non-zero = begin a classic-GDI paint
- *       batch, zero = end it. The outermost END publishes accumulated damage.
- *
  * Unknown escapes return 0 ("not supported").
  */
 
@@ -117,7 +111,6 @@ RcddEscape(
    OUT PVOID pvOut)
 {
    PRCDD_PDEV ppdev;
-   LONG value;
 
    if (pso == NULL || pso->dhpdev == NULL)
       return 0;
@@ -137,10 +130,7 @@ RcddEscape(
 
       RequestedEscape = *(PULONG)pvIn;
       if (RequestedEscape == CDD_ESCAPE_SUPPRESS_CURSOR ||
-          RequestedEscape == CDD_ESCAPE_COMPOSITION_SYNC ||
-          RequestedEscape == CDD_ESCAPE_REGISTER_VBLANK ||
-          RequestedEscape == CDD_ESCAPE_PRESENT_STATS ||
-          RequestedEscape == CDD_ESCAPE_PRESENT_BATCH)
+          RequestedEscape == CDD_ESCAPE_PRESENT_STATS)
       {
          return 1;
       }
@@ -274,6 +264,8 @@ RcddEscape(
          return 0;
       }
 
+      RcddQueryPresentWorkerStats(ppdev, pvOut);
+
       return 1;
    }
 
@@ -283,89 +275,9 @@ RcddEscape(
       if (pvIn == NULL || cjIn < sizeof(LONG))
          return 0;
 
-      value = *(const LONG *)pvIn;
-      RcddSetCursorSuppressed(ppdev, pso, value != 0);
-      return 1;
-   }
-
-   if (iEsc == CDD_ESCAPE_COMPOSITION_SYNC)
-   {
-      ULONG Ret;
-
-      if (pvIn == NULL || cjIn < sizeof(LONG))
-         return 0;
-
-      value = *(const LONG *)pvIn;
-
-      /* END flushes the dirty rects accumulated during the composition. */
-      if (EngDeviceIoControl(ppdev->hDriver,
-                             (value != 0) ? IOCTL_VIDEO_DXGK_COMPOSITION_BEGIN
-                                          : IOCTL_VIDEO_DXGK_COMPOSITION_END,
-                             NULL, 0, NULL, 0, &Ret))
-      {
-         return 0;
-      }
-
-      ppdev->CompositionActive = (value != 0);
-      return 1;
-   }
-
-   if (iEsc == CDD_ESCAPE_PRESENT_BATCH)
-   {
-      ULONG Ret;
-
-      if (pvIn == NULL || cjIn < sizeof(LONG))
-         return 0;
-
-      value = *(const LONG *)pvIn;
-      if (value != 0)
-      {
-         if (ppdev->PresentBatchDepth++ != 0)
-            return 1;
-
-         if (EngDeviceIoControl(ppdev->hDriver,
-                                IOCTL_VIDEO_DXGK_PRESENT_BATCH_BEGIN,
-                                NULL, 0, NULL, 0, &Ret))
-         {
-            ppdev->PresentBatchDepth = 0;
-            return 0;
-         }
-         return 1;
-      }
-
-      if (ppdev->PresentBatchDepth == 0)
-         return 0;
-      if (--ppdev->PresentBatchDepth != 0)
-         return 1;
-
-      /* Publish every primitive in the completed paint as one damage-list
-       * transaction while dxgkrnl still holds the outer batch. END then
-       * captures that completed state once. */
-      RcddPresentEx(ppdev, NULL, DXGK_PRESENT_DIRTY_FLUSH);
-      if (EngDeviceIoControl(ppdev->hDriver,
-                             IOCTL_VIDEO_DXGK_PRESENT_BATCH_END,
-                             NULL, 0, NULL, 0, &Ret))
-      {
-         return 0;
-      }
-      return 1;
-   }
-
-   if (iEsc == CDD_ESCAPE_REGISTER_VBLANK)
-   {
-      ULONG Ret;
-
-      if (pvIn == NULL || cjIn < sizeof(ULONGLONG))
-         return 0;
-
-      /* Opaque event handle in the compositor process (0 clears). dxgkrnl
-       * validates and references it before the present timer can signal it. */
-      if (EngDeviceIoControl(ppdev->hDriver,
-                             IOCTL_VIDEO_DXGK_REGISTER_VBLANK,
-                             pvIn, sizeof(ULONGLONG), NULL, 0, &Ret))
-      {
-         return 0;
-      }
+      RcddSetCursorSuppressed(ppdev,
+                              pso,
+                              *(const LONG *)pvIn != 0);
       return 1;
    }
 

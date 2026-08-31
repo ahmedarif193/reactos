@@ -2177,6 +2177,7 @@ co_WinPosSetWindowPos(
                    OldWindowRect.top != NewWindowRect.top ||
                   (WinPos.flags & SWP_FRAMECHANGED) )
          {
+             RECTL DisplayAreaRect;
              HRGN DcRgn = NtGdiCreateRectRgn(0, 0, 0, 0);
              PREGION DcRgnObj = REGION_LockRgn(DcRgn);
 
@@ -2195,6 +2196,8 @@ co_WinPosSetWindowPos(
             Dc = UserGetDCEx( Window,
                               DcRgn,
                               DCX_WINDOW|DCX_CACHE|DCX_INTERSECTRGN|DCX_CLIPSIBLINGS|DCX_KEEPCLIPRGN); // DCX_WINDOW will set first, go read WinDC.c.
+            RECTL_bUnionRect(&DisplayAreaRect, &OldWindowRect, &NewWindowRect);
+            GreLockDisplayArea(gpmdev, &DisplayAreaRect);
             NtGdiBitBlt( Dc,
                          CopyRect.left, CopyRect.top,
                          CopyRect.right - CopyRect.left,
@@ -2205,6 +2208,7 @@ co_WinPosSetWindowPos(
                          SRCCOPY,
                          CLR_INVALID,
                          0);
+            GreUnlockDisplayArea(gpmdev, &DisplayAreaRect);
 
             UserReleaseDC(Window, Dc, FALSE);
             IntValidateParent(Window, CopyRgn);

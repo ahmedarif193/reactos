@@ -70,6 +70,138 @@ SynchronizeDriver(FLONG Flags)
     PDEVOBJ_vRelease(Device);
 }
 
+static BOOL
+FASTCALL
+GreGetDisplayAreaRect(
+    _In_ PPDEVOBJ ppdev,
+    _In_opt_ PRECTL prcl,
+    _Out_ PRECTL prclDevice)
+{
+    RECTL DeviceRect;
+    SIZEL DeviceSize;
+
+    PDEVOBJ_sizl(ppdev, &DeviceSize);
+    RECTL_vSetRect(&DeviceRect,
+                   ppdev->ptlOrigion.x,
+                   ppdev->ptlOrigion.y,
+                   ppdev->ptlOrigion.x + DeviceSize.cx,
+                   ppdev->ptlOrigion.y + DeviceSize.cy);
+
+    if (prcl != NULL)
+    {
+        if (!RECTL_bIntersectRect(prclDevice, prcl, &DeviceRect))
+            return FALSE;
+    }
+    else
+    {
+        *prclDevice = DeviceRect;
+    }
+
+    RECTL_vOffsetRect(prclDevice,
+                      -ppdev->ptlOrigion.x,
+                      -ppdev->ptlOrigion.y);
+    return TRUE;
+}
+
+/* Windows 7 routes display-area serialization through the MDEV and invokes
+ * the canonical display driver's per-PDEV entry point with device-relative
+ * coordinates. This lock is intentionally distinct from hsemDevLock: the
+ * driver owns the presentation transaction and GDI drawing remains free to
+ * make progress inside it. */
+VOID
+FASTCALL
+GreLockDisplayArea(
+    _In_ PMDEVOBJ pmdev,
+    _In_opt_ PRECTL prcl)
+{
+    RECTL DeviceRect;
+    PPDEVOBJ ppdev;
+    ULONG Index;
+
+    if (pmdev == NULL)
+        return;
+
+    for (Index = 0; Index < pmdev->cDev; ++Index)
+    {
+        ppdev = pmdev->dev[Index].ppdev;
+        if (ppdev == NULL ||
+            (ppdev->flFlags & PDEV_DISABLED) ||
+            ppdev->DriverFunctions.LockDisplayArea == NULL ||
+            !GreGetDisplayAreaRect(ppdev, prcl, &DeviceRect))
+        {
+            continue;
+        }
+
+        ppdev->DriverFunctions.LockDisplayArea(ppdev->dhpdev, &DeviceRect);
+    }
+}
+
+VOID
+FASTCALL
+GreUnlockDisplayArea(
+    _In_ PMDEVOBJ pmdev,
+    _In_opt_ PRECTL prcl)
+{
+    RECTL DeviceRect;
+    PPDEVOBJ ppdev;
+    ULONG Index;
+
+    if (pmdev == NULL)
+        return;
+
+    for (Index = 0; Index < pmdev->cDev; ++Index)
+    {
+        ppdev = pmdev->dev[Index].ppdev;
+        if (ppdev == NULL ||
+            (ppdev->flFlags & PDEV_DISABLED) ||
+            ppdev->DriverFunctions.UnlockDisplayArea == NULL ||
+            !GreGetDisplayAreaRect(ppdev, prcl, &DeviceRect))
+        {
+            continue;
+        }
+
+        ppdev->DriverFunctions.UnlockDisplayArea(ppdev->dhpdev, &DeviceRect);
+    }
+}
+
+LONG
+FASTCALL
+GreSynchronizeRedirectionBitmaps(
+    _In_ PMDEVOBJ pmdev,
+    _Out_ UINT64 *puiFenceId)
+{
+    UINT64 DeviceFence;
+    LONG Result = 0;
+    LONG DeviceResult;
+    PPDEVOBJ ppdev;
+    ULONG Index;
+
+    if (pmdev == NULL || puiFenceId == NULL)
+        return -1;
+
+    *puiFenceId = 0;
+    for (Index = 0; Index < pmdev->cDev; ++Index)
+    {
+        ppdev = pmdev->dev[Index].ppdev;
+        if (ppdev == NULL ||
+            (ppdev->flFlags & PDEV_DISABLED) ||
+            ppdev->DriverFunctions.SynchronizeRedirectionBitmaps == NULL)
+        {
+            continue;
+        }
+
+        DeviceFence = 0;
+        DeviceResult = ppdev->DriverFunctions.SynchronizeRedirectionBitmaps(
+            ppdev->dhpdev, &DeviceFence);
+        if (DeviceResult != 0 && Result == 0)
+            Result = DeviceResult;
+        if (DeviceFence > *puiFenceId)
+            *puiFenceId = DeviceFence;
+    }
+
+    return Result;
+}
+
 //
 // Process the batch.
 //

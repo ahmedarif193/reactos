@@ -20,8 +20,8 @@
  *
  * GPU scanout pipeline:
  *   SET_CURRENT_MODE  -> CommitVidPn (creates GPU resource, sets scanout)
- *   MAP_VIDEO_MEMORY  -> Allocate shadow FB, start periodic present timer
- *   Timer DPC -> Work item -> DxgkDdiPresentDisplayOnly (push pixels to GPU)
+ *   MAP_VIDEO_MEMORY  -> Allocate the display-only system-memory source
+ *   CDD completed flush -> DxgkDdiPresentDisplayOnly (push pixels to GPU)
  *
  * This enables the existing win32ss EngpUpdateGraphicsDeviceList path to
  * discover the WDDM adapter without any changes to win32ss itself.
@@ -29,8 +29,7 @@
  * x86/amd64 notes
  * ---------------
  * All code in this file runs at PASSIVE_LEVEL (registry operations, IRP
- * handling) except the present timer DPC which runs at DISPATCH_LEVEL and
- * queues a work item for the actual present call.
+ * handling) except the display-only VBlank timer DPC.
  */
 
 #include "dxgkrnl_private.h"
@@ -103,147 +102,22 @@ DxgkpSelectDisplayDriver(
  */
 static ULONG g_DisplayDeviceNumber = 0;
 static volatile LONG g_PresentShadowTraceCount = 0;
-static volatile LONG g_PresentTimerTraceCount = 0;
 static volatile LONG g_PresentDirtyTraceCount = 0;
 static volatile LONG g_ScanoutCopyCount = 0;
-static volatile LONG g_PresentDispatchBusy = 0;
-static volatile LONGLONG g_LastDirtyNotify100ns = 0;
-static volatile LONGLONG g_LastPresentSubmit100ns = 0;
-static volatile LONGLONG g_LastGpuActivity100ns = 0;
+static volatile LONG g_PresentCallCount = 0;
+static volatile LONGLONG g_PresentCallTotalUs = 0;
+static volatile LONGLONG g_PresentCallMaxUs = 0;
+static volatile LONG g_PointerShapeCallCount = 0;
+static volatile LONG g_PointerPositionCallCount = 0;
+static volatile LONG g_PointerFailureCount = 0;
 #define DXGK_DIRTY_RECT_SLOTS DXGKP_PRESENT_RECT_COUNT
-C_ASSERT(DXGKP_PRESENT_RECT_COUNT == DXGK_PRESENT_MAX_DIRTY_RECTS);
-#define DXGK_PRESENT_PACE_100NS      (8ULL * 10000ULL)
-#define DXGK_PRESENT_QUIET_100NS     (4ULL * 10000ULL)
-#define DXGK_PRESENT_HOLD_STALE_100NS (500ULL * 10000ULL)
-#define DXGK_GDI_BATCH_STALE_100NS   (1000ULL * 10000ULL)
-#define DXGK_GPU_ACTIVITY_QUIET_100NS (250ULL * 10000ULL)
-static RECTL g_PresentDirtyRects[DXGK_DIRTY_RECT_SLOTS];
-static ULONG g_PresentDirtyRectCount = 0;
-static volatile LONG g_PresentHoldActive = 0;
-static volatile LONGLONG g_PresentHoldSince100ns = 0;
-static volatile LONG g_GdiPresentBatchDepth = 0;
-static volatile LONGLONG g_GdiPresentBatchSince100ns = 0;
-static volatile LONG g_GdiPresentBatchBeginCount = 0;
-static volatile LONG g_GdiPresentBatchEndCount = 0;
-static volatile LONG g_GdiPresentBatchFlushDeferrals = 0;
-static volatile LONG g_GdiPresentBatchMaxDepth = 0;
-static volatile LONG g_PointerReleasePresentPending = 0;
 static const GUID g_RxgkShadowPresentInterfaceGuid =
     RXGK_SHADOW_PRESENT_INTERFACE_GUID_INIT;
-
-/*
- * cdd is inside a cursor-hidden drawing bracket and withholds its dirty
- * rectangles; nothing may be scanned out until it releases (or the bracket
- * went stale because the closing flush never came).
- */
-static BOOLEAN
-DxgkpPresentHoldActive(
-    _In_ ULONGLONG Now100ns)
-{
-    ULONGLONG Since100ns;
-
-    if (InterlockedCompareExchange(&g_PresentHoldActive, 0, 0) == 0)
-        return FALSE;
-
-    Since100ns = (ULONGLONG)InterlockedCompareExchange64(&g_PresentHoldSince100ns, 0, 0);
-    if (Now100ns > Since100ns && (Now100ns - Since100ns) >= DXGK_PRESENT_HOLD_STALE_100NS)
-    {
-        InterlockedExchange(&g_PresentHoldActive, 0);
-        return FALSE;
-    }
-
-    return TRUE;
-}
-
-/* Direct CDD drawing is bracketed at Win32k's bounded BeginPaint/EndPaint and
- * multi-window USER transaction seams. A stale bracket is abandoned so a dead
- * painter cannot leave the display permanently frozen. */
-static BOOLEAN
-DxgkpGdiPresentBatchActive(
-    _In_ ULONGLONG Now100ns)
-{
-    LONG Depth;
-    ULONGLONG Since100ns;
-
-    Depth = InterlockedCompareExchange(&g_GdiPresentBatchDepth, 0, 0);
-    if (Depth <= 0)
-        return FALSE;
-
-    Since100ns = (ULONGLONG)InterlockedCompareExchange64(
-        &g_GdiPresentBatchSince100ns, 0, 0);
-    if (Since100ns != 0 && Now100ns > Since100ns &&
-        (Now100ns - Since100ns) >= DXGK_GDI_BATCH_STALE_100NS &&
-        Since100ns == (ULONGLONG)InterlockedCompareExchange64(
-            &g_GdiPresentBatchSince100ns, 0, 0) &&
-        InterlockedCompareExchange(&g_GdiPresentBatchDepth, 0, Depth) == Depth)
-    {
-        InterlockedExchange64(&g_GdiPresentBatchSince100ns, 0);
-        return FALSE;
-    }
-
-    return TRUE;
-}
-
-/*
- * Pending rectangles are scanned out asynchronously only once cdd is not
- * inside a cursor-hidden bracket, drawing has been quiet for
- * DXGK_PRESENT_QUIET_100NS and the last scan-out copy is at least
- * DXGK_PRESENT_PACE_100NS old.
- */
-static BOOLEAN
-DxgkpMayPresentPendingAsync(
-    _In_ ULONGLONG Now100ns)
-{
-    ULONGLONG LastDirty100ns = (ULONGLONG)InterlockedCompareExchange64(&g_LastDirtyNotify100ns, 0, 0);
-    ULONGLONG LastPresent100ns = (ULONGLONG)InterlockedCompareExchange64(&g_LastPresentSubmit100ns, 0, 0);
-
-    if (DxgkpPresentHoldActive(Now100ns))
-        return FALSE;
-    if (DxgkpGdiPresentBatchActive(Now100ns))
-        return FALSE;
-    if (Now100ns > LastDirty100ns && (Now100ns - LastDirty100ns) < DXGK_PRESENT_QUIET_100NS)
-        return FALSE;
-    if (Now100ns > LastPresent100ns && (Now100ns - LastPresent100ns) < DXGK_PRESENT_PACE_100NS)
-        return FALSE;
-
-    return TRUE;
-}
-
-/*
- * Timestamp (100ns) of the last IOCTL_VIDEO_DXGK_COMPOSITION_BEGIN.  The present
- * work item skips presenting while a DWM composition BitBlt is in progress, but
- * if COMPOSITION_END is never delivered (e.g. the compositing thread dies
- * mid-frame — seen as msgqueue "Receiving Thread woken up dead"), the
- * DwmCompositionInProgress flag would stick and freeze the display forever.
- * We treat a composition older than this threshold as abandoned and recover.
- */
-static volatile LONGLONG g_DwmCompositionBegin100ns = 0;
-/* win32k tears down a silent compositor after two seconds. Keep this fallback
- * comfortably beyond that watchdog: a valid full-screen CPU compose can take
- * well over 100 ms on software-rendered or low-end display-only hardware. */
-#define DXGK_DWM_COMPOSITION_STALE_100NS (5ULL * 10000000ULL) /* 5 seconds */
-
-typedef struct _DXGK_PRESENT_LOCK_STATE
-{
-    KIRQL OldIrql;
-    BOOLEAN AtDpcLevel;
-} DXGK_PRESENT_LOCK_STATE, *PDXGK_PRESENT_LOCK_STATE;
 
 FORCEINLINE ULONGLONG
 DxgkpDisplayTraceNow100ns(VOID)
 {
     return KeQueryInterruptTime();
-}
-
-VOID
-DxgkDisplayNotifyGpuActivity(
-    _In_ PDXGKRNL_ADAPTER Adapter)
-{
-    if (Adapter == NULL || Adapter != g_DisplayAdapter)
-        return;
-
-    InterlockedExchange64(&g_LastGpuActivity100ns,
-                          (LONGLONG)DxgkpDisplayTraceNow100ns());
 }
 
 FORCEINLINE ULONGLONG
@@ -258,61 +132,21 @@ DxgkpDisplayTraceElapsedUs(
     return (End100ns - Start100ns) / 10ULL;
 }
 
-FORCEINLINE VOID
-DxgkpAcquirePresentLock(
-    _In_ PDXGKRNL_ADAPTER Adapter,
-    _Out_ PDXGK_PRESENT_LOCK_STATE LockState)
+static VOID
+DxgkpUpdateMaximum64(
+    _Inout_ volatile LONGLONG *Maximum,
+    _In_ ULONGLONG Value)
 {
-    ASSERT(Adapter != NULL);
-    ASSERT(LockState != NULL);
+    LONGLONG Previous;
 
-    LockState->AtDpcLevel = (KeGetCurrentIrql() >= DISPATCH_LEVEL);
-    if (LockState->AtDpcLevel)
-        KeAcquireSpinLockAtDpcLevel(&Adapter->PresentLock);
-    else
-        KeAcquireSpinLock(&Adapter->PresentLock, &LockState->OldIrql);
-}
-
-FORCEINLINE VOID
-DxgkpReleasePresentLock(
-    _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_ const DXGK_PRESENT_LOCK_STATE *LockState)
-{
-    ASSERT(Adapter != NULL);
-    ASSERT(LockState != NULL);
-
-    if (LockState->AtDpcLevel)
-        KeReleaseSpinLockFromDpcLevel(&Adapter->PresentLock);
-    else
-        KeReleaseSpinLock(&Adapter->PresentLock, LockState->OldIrql);
-}
-
-static PKEVENT
-DxgkpReplaceDwmVblankEvent(
-    _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_opt_ PKEVENT NewEvent)
-{
-    DXGK_PRESENT_LOCK_STATE LockState;
-    PKEVENT OldEvent;
-
-    DxgkpAcquirePresentLock(Adapter, &LockState);
-    OldEvent = Adapter->DwmVblankEvent;
-    Adapter->DwmVblankEvent = NewEvent;
-    DxgkpReleasePresentLock(Adapter, &LockState);
-    return OldEvent;
-}
-
-static BOOLEAN
-DxgkpHasDwmVblankEvent(
-    _In_ PDXGKRNL_ADAPTER Adapter)
-{
-    DXGK_PRESENT_LOCK_STATE LockState;
-    BOOLEAN Present;
-
-    DxgkpAcquirePresentLock(Adapter, &LockState);
-    Present = (Adapter->DwmVblankEvent != NULL);
-    DxgkpReleasePresentLock(Adapter, &LockState);
-    return Present;
+    Previous = InterlockedCompareExchange64(Maximum, 0, 0);
+    while (Value > (ULONGLONG)Previous &&
+           InterlockedCompareExchange64(Maximum,
+                                        (LONGLONG)Value,
+                                        Previous) != Previous)
+    {
+        Previous = InterlockedCompareExchange64(Maximum, 0, 0);
+    }
 }
 
 /* ========================================================================
@@ -1291,8 +1125,6 @@ DxgkpBlitShadowToGop(
 
     InterlockedIncrement(&g_ScanoutCopyCount);
     DxgkPresentAccountFrame(Adapter, 0);
-    InterlockedExchange64(&g_LastPresentSubmit100ns,
-                          (LONGLONG)DxgkpDisplayTraceNow100ns());
     return STATUS_SUCCESS;
 }
 
@@ -1493,7 +1325,7 @@ DxgkpPresentSourceRects(
 
     if (DirtyCount == 0)
     {
-        /* Periodic fallback (or nothing usable): push the whole surface. */
+        /* No explicit damage means the caller requested the whole source. */
         DirtyRects[0].left   = 0;
         DirtyRects[0].top    = 0;
         DirtyRects[0].right  = (LONG)SharedSurface.CommittedWidth;
@@ -1525,6 +1357,10 @@ DxgkpPresentSourceRects(
     Status = DxgkpCallMiniportShadowPresent(Adapter,
                                             &PresentArgs,
                                             &Handled);
+    ElapsedUs = DxgkpDisplayTraceElapsedUs(Start100ns);
+    InterlockedIncrement(&g_PresentCallCount);
+    InterlockedAdd64(&g_PresentCallTotalUs, (LONGLONG)ElapsedUs);
+    DxgkpUpdateMaximum64(&g_PresentCallMaxUs, ElapsedUs);
     if (Status == STATUS_NOT_SUPPORTED && !Handled)
     {
         /* A full miniport without the private extension (or a DOD without
@@ -1543,7 +1379,6 @@ DxgkpPresentSourceRects(
     {
         InterlockedIncrement(&g_ScanoutCopyCount);
         DxgkPresentAccountFrame(Adapter, PresentArgs.VidPnSourceId);
-        ElapsedUs = DxgkpDisplayTraceElapsedUs(Start100ns);
         TraceSeq = InterlockedIncrement(&g_PresentShadowTraceCount);
         if (TraceSeq <= DXGK_PRESENT_TRACE_LOG_LIMIT ||
             ElapsedUs >= DXGK_PRESENT_TRACE_SLOW_US)
@@ -1566,8 +1401,6 @@ DxgkpPresentSourceRects(
                           SharedSurface.CommittedHeight,
                           PresentArgs.Pitch);
         }
-        InterlockedExchange64(&g_LastPresentSubmit100ns,
-                              (LONGLONG)DxgkpDisplayTraceNow100ns());
     }
 
 Cleanup:
@@ -1609,13 +1442,6 @@ DxgkpPresentShadowFbInternal(
     return DxgkpPresentShadowFbRects(Adapter, &Rect, 1, TraceReason);
 }
 
-static NTSTATUS
-DxgkpPresentShadowFb(
-    _In_ PDXGKRNL_ADAPTER Adapter)
-{
-    return DxgkpPresentShadowFbInternal(Adapter, NULL, "timer");
-}
-
 /*
  * Present a rectangle for the display-only execute path. A DOD miniport with
  * no DxgkDdiPresentDisplayOnly (softgpu) is not an error: the internal path
@@ -1630,885 +1456,6 @@ DxgkDisplayPresentRect(
     return DxgkpPresentShadowFbInternal(Adapter, DirtyRect, "dod");
 }
 
-static LONGLONG
-DxgkpRectArea(
-    _In_ const RECTL *Rect)
-{
-    return (LONGLONG)(Rect->right - Rect->left) * (Rect->bottom - Rect->top);
-}
-
-static VOID
-DxgkpRectUnion(
-    _Inout_ RECTL *Dest,
-    _In_ const RECTL *Src)
-{
-    if (Src->left < Dest->left)
-        Dest->left = Src->left;
-    if (Src->top < Dest->top)
-        Dest->top = Src->top;
-    if (Src->right > Dest->right)
-        Dest->right = Src->right;
-    if (Src->bottom > Dest->bottom)
-        Dest->bottom = Src->bottom;
-}
-
-static VOID
-DxgkpAccumulateRectList(
-    _Inout_updates_(DXGK_DIRTY_RECT_SLOTS) PRECTL Rects,
-    _Inout_ PULONG Count,
-    _In_ const RECTL *Rect)
-{
-    RECTL Union;
-    ULONG i;
-    ULONG Best = DXGK_DIRTY_RECT_SLOTS;
-    LONGLONG BestGrowth = 0;
-    LONGLONG RectArea = DxgkpRectArea(Rect);
-
-    for (i = 0; i < *Count; i++)
-    {
-        LONGLONG Growth;
-
-        Union = Rects[i];
-        DxgkpRectUnion(&Union, Rect);
-        Growth = DxgkpRectArea(&Union) -
-                 DxgkpRectArea(&Rects[i]) - RectArea;
-        if (Growth <= (DxgkpRectArea(&Rects[i]) + RectArea) / 4)
-        {
-            Rects[i] = Union;
-            return;
-        }
-        if (Best == DXGK_DIRTY_RECT_SLOTS || Growth < BestGrowth)
-        {
-            Best = i;
-            BestGrowth = Growth;
-        }
-    }
-
-    if (*Count < DXGK_DIRTY_RECT_SLOTS)
-    {
-        Rects[(*Count)++] = *Rect;
-    }
-    else
-    {
-        DxgkpRectUnion(&Rects[Best], Rect);
-    }
-}
-
-static VOID
-DxgkpAccumulateRectLists(
-    _Inout_updates_(DXGK_DIRTY_RECT_SLOTS) PRECTL Destination,
-    _Inout_ PULONG DestinationCount,
-    _In_reads_(SourceCount) const RECTL *Source,
-    _In_ ULONG SourceCount)
-{
-    ULONG Index;
-
-    for (Index = 0; Index < SourceCount; Index++)
-        DxgkpAccumulateRectList(Destination, DestinationCount, &Source[Index]);
-}
-
-static VOID
-DxgkpRecordDirtyRect(
-    _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_ const RECTL *DirtyRect)
-{
-    RECTL Clipped;
-    DXGK_PRESENT_LOCK_STATE LockState;
-    ULONG CommittedWidth;
-    ULONG CommittedHeight;
-
-    if (Adapter == NULL || DirtyRect == NULL)
-        return;
-
-    DxgkpSnapshotCommittedDisplayState(Adapter, &CommittedWidth, &CommittedHeight, NULL);
-    Clipped = *DirtyRect;
-
-    if (Clipped.left < 0)
-        Clipped.left = 0;
-    if (Clipped.top < 0)
-        Clipped.top = 0;
-    if (Clipped.right > (LONG)CommittedWidth)
-        Clipped.right = (LONG)CommittedWidth;
-    if (Clipped.bottom > (LONG)CommittedHeight)
-        Clipped.bottom = (LONG)CommittedHeight;
-
-    if (Clipped.left >= Clipped.right || Clipped.top >= Clipped.bottom)
-        return;
-
-    DxgkpAcquirePresentLock(Adapter, &LockState);
-    DxgkpAccumulateRectList(g_PresentDirtyRects,
-                            &g_PresentDirtyRectCount,
-                            &Clipped);
-
-    DxgkpReleasePresentLock(Adapter, &LockState);
-}
-
-static ULONG
-DxgkpConsumeDirtyRects(
-    _In_ PDXGKRNL_ADAPTER Adapter,
-    _Out_writes_(DXGK_DIRTY_RECT_SLOTS) PRECTL DirtyRects)
-{
-    ULONG Count;
-    DXGK_PRESENT_LOCK_STATE LockState;
-
-    if (Adapter == NULL || DirtyRects == NULL)
-        return 0;
-
-    DxgkpAcquirePresentLock(Adapter, &LockState);
-    Count = g_PresentDirtyRectCount;
-    if (Count != 0)
-    {
-        RtlCopyMemory(DirtyRects, g_PresentDirtyRects, Count * sizeof(RECTL));
-        g_PresentDirtyRectCount = 0;
-    }
-    DxgkpReleasePresentLock(Adapter, &LockState);
-
-    return Count;
-}
-
-static BOOLEAN
-DxgkpHasPendingDirtyRect(
-    _In_ PDXGKRNL_ADAPTER Adapter)
-{
-    BOOLEAN HasDirty;
-    DXGK_PRESENT_LOCK_STATE LockState;
-
-    if (Adapter == NULL)
-        return FALSE;
-
-    DxgkpAcquirePresentLock(Adapter, &LockState);
-    HasDirty = (g_PresentDirtyRectCount != 0);
-    DxgkpReleasePresentLock(Adapter, &LockState);
-
-    return HasDirty;
-}
-
-static VOID
-DxgkpClearPendingDirtyRects(
-    _In_ PDXGKRNL_ADAPTER Adapter)
-{
-    DXGK_PRESENT_LOCK_STATE LockState;
-
-    DxgkpAcquirePresentLock(Adapter, &LockState);
-    g_PresentDirtyRectCount = 0;
-    DxgkpReleasePresentLock(Adapter, &LockState);
-}
-
-static BOOLEAN
-DxgkpAcquirePresentPath(
-    _Inout_ PDXGKRNL_ADAPTER Adapter)
-{
-    if (InterlockedCompareExchange(&Adapter->PresentPathOpen, 0, 0) == 0)
-        return FALSE;
-
-    return ExAcquireRundownProtection(&Adapter->PresentPathRundown);
-}
-
-static VOID
-DxgkpReleasePresentPath(
-    _Inout_ PDXGKRNL_ADAPTER Adapter)
-{
-    ExReleaseRundownProtection(&Adapter->PresentPathRundown);
-}
-
-static NTSTATUS
-DxgkpInitializePresentSnapshots(
-    _Inout_ PDXGKRNL_ADAPTER Adapter)
-{
-    DXGKRNL_SHARED_SURFACE_SNAPSHOT SharedSurface;
-    PVOID Buffers[DXGKP_PRESENT_SNAPSHOT_COUNT] = {NULL, NULL};
-    DXGK_PRESENT_LOCK_STATE LockState;
-    SIZE_T SnapshotSize;
-    ULONG Index;
-    NTSTATUS Status;
-
-    Status = DxgkpAcquireSharedSurfaceSnapshot(Adapter, &SharedSurface);
-    if (!NT_SUCCESS(Status))
-        return Status;
-    if (SharedSurface.ShadowFb == NULL ||
-        !SharedSurface.VidPnCommitted ||
-        SharedSurface.CommittedWidth == 0 ||
-        SharedSurface.CommittedHeight == 0 ||
-        SharedSurface.ShadowFbPitch <
-            SharedSurface.CommittedWidth * sizeof(ULONG) ||
-        SharedSurface.CommittedHeight >
-            (SIZE_T)-1 / SharedSurface.ShadowFbPitch)
-    {
-        Status = STATUS_INVALID_BUFFER_SIZE;
-        goto Cleanup;
-    }
-
-    SnapshotSize = (SIZE_T)SharedSurface.CommittedHeight *
-                   SharedSurface.ShadowFbPitch;
-    if (SnapshotSize > SharedSurface.ShadowFbSize)
-    {
-        Status = STATUS_INVALID_BUFFER_SIZE;
-        goto Cleanup;
-    }
-
-    for (Index = 0; Index < DXGKP_PRESENT_SNAPSHOT_COUNT; Index++)
-    {
-        Buffers[Index] = ExAllocatePoolWithTag(NonPagedPool,
-                                                SnapshotSize,
-                                                TAG_DXGK_DISPLAY);
-        if (Buffers[Index] == NULL)
-        {
-            Status = STATUS_INSUFFICIENT_RESOURCES;
-            goto Cleanup;
-        }
-        RtlCopyMemory(Buffers[Index], SharedSurface.ShadowFb, SnapshotSize);
-    }
-
-    DxgkpAcquirePresentLock(Adapter, &LockState);
-    for (Index = 0; Index < DXGKP_PRESENT_SNAPSHOT_COUNT; Index++)
-    {
-        Adapter->PresentSnapshots[Index].Buffer = Buffers[Index];
-        Adapter->PresentSnapshots[Index].BufferSize = SnapshotSize;
-        Adapter->PresentSnapshots[Index].SyncRectCount = 0;
-        Adapter->PresentSnapshots[Index].PresentRectCount = 0;
-        Buffers[Index] = NULL;
-    }
-    Adapter->PresentSnapshotWidth = SharedSurface.CommittedWidth;
-    Adapter->PresentSnapshotHeight = SharedSurface.CommittedHeight;
-    Adapter->PresentSnapshotPitch = SharedSurface.ShadowFbPitch;
-    Adapter->PresentSnapshotReady = -1;
-    Adapter->PresentSnapshotReading = -1;
-    Adapter->PresentSnapshotWriting = -1;
-    Adapter->PresentSnapshotNext = 0;
-    DxgkpReleasePresentLock(Adapter, &LockState);
-    Status = STATUS_SUCCESS;
-
-Cleanup:
-    for (Index = 0; Index < DXGKP_PRESENT_SNAPSHOT_COUNT; Index++)
-    {
-        if (Buffers[Index] != NULL)
-            ExFreePoolWithTag(Buffers[Index], TAG_DXGK_DISPLAY);
-    }
-    DxgkpReleaseSharedSurfaceSnapshot(&SharedSurface);
-    return Status;
-}
-
-static VOID
-DxgkpReleasePresentSnapshots(
-    _Inout_ PDXGKRNL_ADAPTER Adapter)
-{
-    PVOID Buffers[DXGKP_PRESENT_SNAPSHOT_COUNT];
-    DXGK_PRESENT_LOCK_STATE LockState;
-    ULONG Index;
-
-    if (InterlockedExchange(&Adapter->PresentPathOpen, 0) != 0)
-        ExWaitForRundownProtectionRelease(&Adapter->PresentPathRundown);
-
-    DxgkpAcquirePresentLock(Adapter, &LockState);
-    for (Index = 0; Index < DXGKP_PRESENT_SNAPSHOT_COUNT; Index++)
-    {
-        Buffers[Index] = Adapter->PresentSnapshots[Index].Buffer;
-        RtlZeroMemory(&Adapter->PresentSnapshots[Index],
-                      sizeof(Adapter->PresentSnapshots[Index]));
-    }
-    Adapter->PresentSnapshotWidth = 0;
-    Adapter->PresentSnapshotHeight = 0;
-    Adapter->PresentSnapshotPitch = 0;
-    Adapter->PresentSnapshotReady = -1;
-    Adapter->PresentSnapshotReading = -1;
-    Adapter->PresentSnapshotWriting = -1;
-    Adapter->PresentSnapshotNext = 0;
-    DxgkpReleasePresentLock(Adapter, &LockState);
-
-    for (Index = 0; Index < DXGKP_PRESENT_SNAPSHOT_COUNT; Index++)
-    {
-        if (Buffers[Index] != NULL)
-            ExFreePoolWithTag(Buffers[Index], TAG_DXGK_DISPLAY);
-    }
-}
-
-static BOOLEAN
-DxgkpPresentSnapshotReady(
-    _In_ PDXGKRNL_ADAPTER Adapter)
-{
-    DXGK_PRESENT_LOCK_STATE LockState;
-    BOOLEAN Ready;
-
-    if (InterlockedCompareExchange(&Adapter->PresentPathOpen, 0, 0) == 0)
-        return FALSE;
-
-    DxgkpAcquirePresentLock(Adapter, &LockState);
-    Ready = Adapter->PresentSnapshotReady >= 0;
-    DxgkpReleasePresentLock(Adapter, &LockState);
-    return Ready;
-}
-
-static BOOLEAN
-DxgkpPresentSnapshotsAvailable(
-    _In_ PDXGKRNL_ADAPTER Adapter)
-{
-    DXGK_PRESENT_LOCK_STATE LockState;
-    BOOLEAN Available;
-
-    if (InterlockedCompareExchange(&Adapter->PresentPathOpen, 0, 0) == 0)
-        return FALSE;
-
-    DxgkpAcquirePresentLock(Adapter, &LockState);
-    Available = Adapter->PresentSnapshots[0].Buffer != NULL &&
-                Adapter->PresentSnapshots[1].Buffer != NULL;
-    DxgkpReleasePresentLock(Adapter, &LockState);
-    return Available;
-}
-
-/* Capture a completed CDD transaction while win32k still owns its device
- * lock. The worker later scans out only this immutable copy. Each of the two
- * slots tracks damage accumulated since that slot was last refreshed, so a
- * slot can be reused without copying the whole primary on every GDI flush. */
-static BOOLEAN
-DxgkpCapturePendingPresent(
-    _Inout_ PDXGKRNL_ADAPTER Adapter)
-{
-    DXGKRNL_SHARED_SURFACE_SNAPSHOT SharedSurface;
-    RECTL DirtyRects[DXGK_DIRTY_RECT_SLOTS];
-    RECTL CopyRects[DXGK_DIRTY_RECT_SLOTS];
-    RECTL PresentRects[DXGK_DIRTY_RECT_SLOTS];
-    DXGK_PRESENT_LOCK_STATE LockState;
-    PVOID Destination = NULL;
-    ULONG DestinationPitch = 0;
-    ULONG Count = 0;
-    ULONG CopyCount = 0;
-    ULONG PresentCount = 0;
-    ULONG Index;
-    ULONG SlotIndex = 0;
-    LONG ReadyIndex;
-    LONG ReadingIndex;
-    SIZE_T BytesPerRow;
-    LONG Y;
-    BOOLEAN Captured = FALSE;
-    NTSTATUS Status;
-
-    if (!DxgkpAcquirePresentPath(Adapter))
-        return FALSE;
-
-    Count = DxgkpConsumeDirtyRects(Adapter, DirtyRects);
-    if (Count == 0)
-        goto ReleasePath;
-
-    Status = DxgkpAcquireSharedSurfaceSnapshot(Adapter, &SharedSurface);
-    if (!NT_SUCCESS(Status))
-        goto RestoreDamage;
-
-    DxgkpAcquirePresentLock(Adapter, &LockState);
-    if (Adapter->PresentSnapshotWriting >= 0 ||
-        SharedSurface.ShadowFb == NULL ||
-        Adapter->PresentSnapshotWidth != SharedSurface.CommittedWidth ||
-        Adapter->PresentSnapshotHeight != SharedSurface.CommittedHeight ||
-        Adapter->PresentSnapshotPitch != SharedSurface.ShadowFbPitch ||
-        Adapter->PresentSnapshots[0].BufferSize >
-            SharedSurface.ShadowFbSize ||
-        Adapter->PresentSnapshots[0].Buffer == NULL ||
-        Adapter->PresentSnapshots[1].Buffer == NULL)
-    {
-        DxgkpReleasePresentLock(Adapter, &LockState);
-        goto ReleaseSurface;
-    }
-
-    for (Index = 0; Index < DXGKP_PRESENT_SNAPSHOT_COUNT; Index++)
-    {
-        DxgkpAccumulateRectLists(
-            Adapter->PresentSnapshots[Index].SyncRects,
-            &Adapter->PresentSnapshots[Index].SyncRectCount,
-            DirtyRects,
-            Count);
-    }
-
-    ReadyIndex = Adapter->PresentSnapshotReady;
-    ReadingIndex = Adapter->PresentSnapshotReading;
-    if (ReadyIndex >= 0)
-    {
-        SlotIndex = (ULONG)ReadyIndex;
-        PresentCount = Adapter->PresentSnapshots[SlotIndex].PresentRectCount;
-        RtlCopyMemory(PresentRects,
-                      Adapter->PresentSnapshots[SlotIndex].PresentRects,
-                      PresentCount * sizeof(PresentRects[0]));
-        DxgkpAccumulateRectLists(PresentRects,
-                                 &PresentCount,
-                                 DirtyRects,
-                                 Count);
-        Adapter->PresentSnapshotReady = -1;
-    }
-    else
-    {
-        SlotIndex = Adapter->PresentSnapshotNext %
-                    DXGKP_PRESENT_SNAPSHOT_COUNT;
-        if ((LONG)SlotIndex == ReadingIndex)
-            SlotIndex = (SlotIndex + 1) % DXGKP_PRESENT_SNAPSHOT_COUNT;
-        DxgkpAccumulateRectLists(PresentRects,
-                                 &PresentCount,
-                                 DirtyRects,
-                                 Count);
-    }
-
-    CopyCount = Adapter->PresentSnapshots[SlotIndex].SyncRectCount;
-    RtlCopyMemory(CopyRects,
-                  Adapter->PresentSnapshots[SlotIndex].SyncRects,
-                  CopyCount * sizeof(CopyRects[0]));
-    Adapter->PresentSnapshots[SlotIndex].SyncRectCount = 0;
-    Adapter->PresentSnapshots[SlotIndex].PresentRectCount = 0;
-    Adapter->PresentSnapshotWriting = (LONG)SlotIndex;
-    Destination = Adapter->PresentSnapshots[SlotIndex].Buffer;
-    DestinationPitch = Adapter->PresentSnapshotPitch;
-    DxgkpReleasePresentLock(Adapter, &LockState);
-
-    for (Index = 0; Index < CopyCount; Index++)
-    {
-        BytesPerRow = (SIZE_T)(CopyRects[Index].right -
-                               CopyRects[Index].left) * sizeof(ULONG);
-        for (Y = CopyRects[Index].top; Y < CopyRects[Index].bottom; Y++)
-        {
-            RtlCopyMemory((PUCHAR)Destination +
-                              (SIZE_T)Y * DestinationPitch +
-                              (SIZE_T)CopyRects[Index].left * sizeof(ULONG),
-                          (PUCHAR)SharedSurface.ShadowFb +
-                              (SIZE_T)Y * SharedSurface.ShadowFbPitch +
-                              (SIZE_T)CopyRects[Index].left * sizeof(ULONG),
-                          BytesPerRow);
-        }
-    }
-
-    DxgkpAcquirePresentLock(Adapter, &LockState);
-    if (Adapter->PresentSnapshotWriting == (LONG)SlotIndex &&
-        Adapter->PresentSnapshots[SlotIndex].Buffer == Destination)
-    {
-        RtlCopyMemory(Adapter->PresentSnapshots[SlotIndex].PresentRects,
-                      PresentRects,
-                      PresentCount * sizeof(PresentRects[0]));
-        Adapter->PresentSnapshots[SlotIndex].PresentRectCount = PresentCount;
-        Adapter->PresentSnapshotReady = (LONG)SlotIndex;
-        Adapter->PresentSnapshotNext =
-            (SlotIndex + 1) % DXGKP_PRESENT_SNAPSHOT_COUNT;
-        Captured = TRUE;
-    }
-    Adapter->PresentSnapshotWriting = -1;
-    DxgkpReleasePresentLock(Adapter, &LockState);
-
-ReleaseSurface:
-    DxgkpReleaseSharedSurfaceSnapshot(&SharedSurface);
-RestoreDamage:
-    if (!Captured)
-    {
-        if (PresentCount != 0)
-        {
-            for (Index = 0; Index < PresentCount; Index++)
-                DxgkpRecordDirtyRect(Adapter, &PresentRects[Index]);
-        }
-        else
-        {
-            for (Index = 0; Index < Count; Index++)
-                DxgkpRecordDirtyRect(Adapter, &DirtyRects[Index]);
-        }
-    }
-ReleasePath:
-    DxgkpReleasePresentPath(Adapter);
-    return Captured;
-}
-
-static BOOLEAN
-DxgkpPresentCapturedSnapshot(
-    _Inout_ PDXGKRNL_ADAPTER Adapter,
-    _In_ PCSTR TraceReason)
-{
-    DXGK_PRESENT_LOCK_STATE LockState;
-    PDXGKRNL_PRESENT_SNAPSHOT Snapshot;
-    RECTL PresentRects[DXGK_DIRTY_RECT_SLOTS];
-    PVOID Source;
-    SIZE_T SourceSize;
-    ULONG SourcePitch;
-    ULONG PresentCount;
-    ULONG Index;
-    LONG SlotIndex;
-    LONG ReadyIndex;
-    BOOLEAN Presented = FALSE;
-    NTSTATUS Status;
-
-    if (!DxgkpAcquirePresentPath(Adapter))
-        return FALSE;
-
-    DxgkpAcquirePresentLock(Adapter, &LockState);
-    SlotIndex = Adapter->PresentSnapshotReady;
-    if (SlotIndex < 0 ||
-        SlotIndex >= (LONG)DXGKP_PRESENT_SNAPSHOT_COUNT ||
-        Adapter->PresentSnapshotReading >= 0 ||
-        Adapter->PresentSnapshotWriting == SlotIndex)
-    {
-        DxgkpReleasePresentLock(Adapter, &LockState);
-        goto Cleanup;
-    }
-
-    Snapshot = &Adapter->PresentSnapshots[SlotIndex];
-    if (Snapshot->Buffer == NULL || Snapshot->PresentRectCount == 0)
-    {
-        Adapter->PresentSnapshotReady = -1;
-        DxgkpReleasePresentLock(Adapter, &LockState);
-        goto Cleanup;
-    }
-    Adapter->PresentSnapshotReady = -1;
-    Adapter->PresentSnapshotReading = SlotIndex;
-    Source = Snapshot->Buffer;
-    SourceSize = Snapshot->BufferSize;
-    SourcePitch = Adapter->PresentSnapshotPitch;
-    PresentCount = Snapshot->PresentRectCount;
-    RtlCopyMemory(PresentRects,
-                  Snapshot->PresentRects,
-                  PresentCount * sizeof(PresentRects[0]));
-    DxgkpReleasePresentLock(Adapter, &LockState);
-
-    Status = DxgkpPresentSourceRects(Adapter,
-                                     Source,
-                                     SourcePitch,
-                                     SourceSize,
-                                     PresentRects,
-                                     PresentCount,
-                                     TraceReason);
-    Presented = TRUE;
-
-    DxgkpAcquirePresentLock(Adapter, &LockState);
-    Snapshot = &Adapter->PresentSnapshots[SlotIndex];
-    if (Adapter->PresentSnapshotReading == SlotIndex)
-        Adapter->PresentSnapshotReading = -1;
-    if (NT_SUCCESS(Status))
-    {
-        Snapshot->PresentRectCount = 0;
-    }
-    else
-    {
-        ReadyIndex = Adapter->PresentSnapshotReady;
-        if (ReadyIndex >= 0)
-        {
-            for (Index = 0; Index < PresentCount; Index++)
-            {
-                DxgkpAccumulateRectList(
-                    Adapter->PresentSnapshots[ReadyIndex].PresentRects,
-                    &Adapter->PresentSnapshots[ReadyIndex].PresentRectCount,
-                    &PresentRects[Index]);
-            }
-        }
-        else
-        {
-            Adapter->PresentSnapshotReady = SlotIndex;
-        }
-    }
-    DxgkpReleasePresentLock(Adapter, &LockState);
-
-Cleanup:
-    DxgkpReleasePresentPath(Adapter);
-    return Presented;
-}
-
-/*
- * Serializes worker scan-out copies against each other AND lets
- * COMPOSITION_BEGIN drain an in-flight worker
- * copy before the compositor starts rewriting the shadow framebuffer — the
- * copy takes milliseconds into a write-combined scan-out on real hardware,
- * so an undrained overlap scans out a half-composed frame (visible as other
- * windows flickering during a drag on rpi5vc4; QEMU copies are too fast to
- * catch it).
- */
-static KMUTEX g_PresentMutex;
-static LONG g_PresentMutexInited = 0; /* 0 = no, -1 = initializing, 1 = ready */
-
-static VOID
-DxgkpEnsurePresentMutex(VOID)
-{
-    if (InterlockedCompareExchange(&g_PresentMutexInited, -1, 0) == 0)
-    {
-        KeInitializeMutex(&g_PresentMutex, 0);
-        InterlockedExchange(&g_PresentMutexInited, 1);
-    }
-}
-
-static VOID
-DxgkpBeginGdiPresentBatch(
-    _In_ PDXGKRNL_ADAPTER Adapter)
-{
-    LARGE_INTEGER DrainTimeout;
-    NTSTATUS DrainStatus;
-    LONG Depth;
-    LONG Maximum;
-
-    Depth = InterlockedIncrement(&g_GdiPresentBatchDepth);
-    InterlockedIncrement(&g_GdiPresentBatchBeginCount);
-    Maximum = InterlockedCompareExchange(&g_GdiPresentBatchMaxDepth, 0, 0);
-    while (Depth > Maximum &&
-           InterlockedCompareExchange(&g_GdiPresentBatchMaxDepth,
-                                      Depth,
-                                      Maximum) != Maximum)
-    {
-        Maximum = InterlockedCompareExchange(&g_GdiPresentBatchMaxDepth, 0, 0);
-    }
-    if (Depth == 1)
-    {
-        InterlockedExchange64(&g_GdiPresentBatchSince100ns,
-                              (LONGLONG)DxgkpDisplayTraceNow100ns());
-    }
-
-    /* Completed-frame snapshots are immutable. A scanout of the previous
-     * snapshot may overlap the next GDI transaction without observing any of
-     * its writes, so do not stall the UI thread behind the miniport copy. */
-    if (DxgkpPresentSnapshotsAvailable(Adapter))
-        return;
-
-    /* Set the hold before draining. A worker that reaches the mutex after us
-     * observes the batch and leaves without scanning the primary. */
-    DxgkpEnsurePresentMutex();
-    if (KeGetCurrentIrql() != PASSIVE_LEVEL ||
-        InterlockedCompareExchange(&g_PresentMutexInited, 0, 0) != 1)
-    {
-        return;
-    }
-
-    DrainTimeout.QuadPart = -(50LL * 10000LL);
-    DrainStatus = KeWaitForSingleObject(&g_PresentMutex,
-                                        Executive,
-                                        KernelMode,
-                                        FALSE,
-                                        &DrainTimeout);
-    if (DrainStatus == STATUS_SUCCESS)
-        KeReleaseMutex(&g_PresentMutex, FALSE);
-}
-
-static VOID
-NTAPI
-DxgkpPresentWorkItemRoutineEx(
-    _In_     PDEVICE_OBJECT DeviceObject,
-    _In_opt_ PVOID          Context);
-
-static BOOLEAN
-DxgkpQueuePresentWorkItem(
-    _In_ PDXGKRNL_ADAPTER Adapter)
-{
-    if (Adapter == NULL || Adapter->FunctionalDeviceObject == NULL)
-        return FALSE;
-
-    if (Adapter->PresentWorkItem == NULL)
-        Adapter->PresentWorkItem = IoAllocateWorkItem(Adapter->FunctionalDeviceObject);
-
-    if (Adapter->PresentWorkItem == NULL)
-        return FALSE;
-
-    IoQueueWorkItem(Adapter->PresentWorkItem, DxgkpPresentWorkItemRoutineEx,
-                    DelayedWorkQueue, Adapter);
-    return TRUE;
-}
-
-/*
- * Claim the single present-dispatch slot and queue the present worker,
- * rolling the claim back if the work item cannot be queued.  Returns TRUE
- * when the worker was queued (it owns releasing the slot).
- */
-static BOOLEAN
-DxgkpTryDispatchPresentWork(
-    _In_ PDXGKRNL_ADAPTER Adapter)
-{
-    if (!DxgkpAcquirePresentPath(Adapter))
-        return FALSE;
-
-    if (InterlockedCompareExchange(&g_PresentDispatchBusy, 1, 0) != 0)
-    {
-        DxgkpReleasePresentPath(Adapter);
-        return FALSE;
-    }
-
-    if (!DxgkpQueuePresentWorkItem(Adapter))
-    {
-        InterlockedExchange(&g_PresentDispatchBusy, 0);
-        DxgkpReleasePresentPath(Adapter);
-        return FALSE;
-    }
-
-    return TRUE;
-}
-
-static BOOLEAN
-DxgkpPresentPendingDirtyRects(
-    _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_ PCSTR TraceReason)
-{
-    RECTL DirtyRects[DXGK_DIRTY_RECT_SLOTS];
-    ULONG Count;
-    ULONG i;
-
-    Count = DxgkpConsumeDirtyRects(Adapter, DirtyRects);
-    if (Count == 0)
-        return FALSE;
-
-    /* A completed GDI transaction is one visual state. Presenting its
-     * background, glyph, and focus rectangles separately lets a live scanout
-     * observe an intermediate state even though all pixels are final in the
-     * shadow surface. Collapse the batch to one bounding copy. */
-    for (i = 1; i < Count; i++)
-        DxgkpRectUnion(&DirtyRects[0], &DirtyRects[i]);
-    Count = 1;
-
-    DxgkpPresentShadowFbRects(Adapter, DirtyRects, Count, TraceReason);
-    return TRUE;
-}
-
-/* Queue an explicit completed frame without running a miniport callback in
- * the caller. COMPOSITION_END arrives under win32k's device/USER lock; the
- * worker performs the potentially blocking scan-out copy after that lock is
- * released. */
-static VOID
-DxgkpQueueCompletedPresent(
-    _In_ PDXGKRNL_ADAPTER Adapter)
-{
-    if (Adapter == NULL || InterlockedCompareExchange(&Adapter->SharedSurfaceAvailable, 0, 0) == 0)
-        return;
-    if (InterlockedCompareExchange(&Adapter->PresentPathOpen, 0, 0) == 0)
-        return;
-    if (DxgkpGdiPresentBatchActive(DxgkpDisplayTraceNow100ns()))
-        return;
-
-    if (!DxgkpPresentSnapshotReady(Adapter) &&
-        !DxgkpHasPendingDirtyRect(Adapter))
-        return;
-
-    DxgkpTryDispatchPresentWork(Adapter);
-}
-
-static VOID
-DxgkpEndGdiPresentBatch(
-    _In_ PDXGKRNL_ADAPTER Adapter)
-{
-    LONG Depth;
-
-    for (;;)
-    {
-        Depth = InterlockedCompareExchange(&g_GdiPresentBatchDepth, 0, 0);
-        if (Depth <= 0)
-            break;
-        if (InterlockedCompareExchange(&g_GdiPresentBatchDepth,
-                                       Depth - 1,
-                                       Depth) == Depth)
-        {
-            InterlockedIncrement(&g_GdiPresentBatchEndCount);
-            break;
-        }
-    }
-
-    if (Depth <= 0 || Depth > 1)
-        return;
-
-    KeMemoryBarrier();
-    InterlockedExchange64(&g_GdiPresentBatchSince100ns, 0);
-    InterlockedExchange(&g_PointerReleasePresentPending, 0);
-
-    /* Freeze the completed transaction before releasing win32k's drawing
-     * serialization. Copy only its bounded damage list; the present worker
-     * must never sample the mutable CDD primary after another transaction has
-     * started writing it. */
-    if (DxgkpHasPendingDirtyRect(Adapter))
-    {
-        DxgkpCapturePendingPresent(Adapter);
-        InterlockedExchange64(&g_LastDirtyNotify100ns,
-                              (LONGLONG)DxgkpDisplayTraceNow100ns());
-        DxgkpQueueCompletedPresent(Adapter);
-    }
-}
-
-/* ========================================================================
- * DxgkpPresentTimerDpc
- *
- * DPC callback for the periodic present timer.  Queues a work item to
- * call DxgkDdiPresentDisplayOnly at PASSIVE_LEVEL.
- *
- * IRQL: DISPATCH_LEVEL
- * ====================================================================== */
-static VOID
-NTAPI
-DxgkpPresentWorkItemRoutineEx(
-    _In_     PDEVICE_OBJECT DeviceObject,
-    _In_opt_ PVOID          Context)
-{
-    PDXGKRNL_ADAPTER Adapter = (PDXGKRNL_ADAPTER)Context;
-    BOOLEAN SnapshotsAvailable;
-    BOOLEAN PresentMutexHeld = FALSE;
-
-    UNREFERENCED_PARAMETER(DeviceObject);
-
-    if (Adapter != NULL && InterlockedCompareExchange(&Adapter->SharedSurfaceAvailable, 0, 0) != 0)
-    {
-        SnapshotsAvailable = DxgkpPresentSnapshotsAvailable(Adapter);
-        if (!SnapshotsAvailable)
-        {
-            DxgkpEnsurePresentMutex();
-            KeWaitForSingleObject(&g_PresentMutex, Executive, KernelMode, FALSE, NULL);
-            PresentMutexHeld = TRUE;
-        }
-
-        if (DxgkpGdiPresentBatchActive(DxgkpDisplayTraceNow100ns()))
-        {
-            if (PresentMutexHeld)
-                KeReleaseMutex(&g_PresentMutex, FALSE);
-            goto Complete;
-        }
-
-        /* For the live-source fallback, check composition only after taking
-         * the mutex so COMPOSITION_BEGIN cannot miss an in-flight copy. An
-         * immutable snapshot needs no mutex, but composition still controls
-         * when that completed frame may be published. */
-        if (InterlockedCompareExchange(&Adapter->DwmCompositionInProgress, 0, 0) != 0)
-        {
-            ULONGLONG NowC   = (ULONGLONG)DxgkpDisplayTraceNow100ns();
-            ULONGLONG BeginC = (ULONGLONG)InterlockedCompareExchange64(
-                                   &g_DwmCompositionBegin100ns, 0, 0);
-            if (BeginC == 0 || NowC <= BeginC ||
-                (NowC - BeginC) < DXGK_DWM_COMPOSITION_STALE_100NS)
-            {
-                if (PresentMutexHeld)
-                    KeReleaseMutex(&g_PresentMutex, FALSE);
-                goto Complete;
-            }
-            InterlockedExchange(&Adapter->DwmCompositionInProgress, 0);
-            {
-                static volatile LONG s_StaleLogged = 0;
-                if (InterlockedIncrement(&s_StaleLogged) <= 5)
-                    DXGKRNL_WARN("DxgkpPresentWorkItem: stale DWM composition "
-                                 "(no COMPOSITION_END for >%lu ms) — clearing and "
-                                 "presenting\n",
-                                 (ULONG)(DXGK_DWM_COMPOSITION_STALE_100NS / 10000ULL));
-            }
-        }
-
-        if (SnapshotsAvailable)
-        {
-            DxgkpPresentCapturedSnapshot(Adapter, "snapshot");
-        }
-        else if (!DxgkpPresentPendingDirtyRects(Adapter, "dirty"))
-        {
-            /* Allocation failure fallback for targets which cannot retain two
-             * completed-frame snapshots. Keep the legacy idle refresh only in
-             * that degraded mode; it is unsafe while CDD is actively drawing. */
-            ULONGLONG NowW = DxgkpDisplayTraceNow100ns();
-            ULONGLONG LastDirtyW = (ULONGLONG)InterlockedCompareExchange64(&g_LastDirtyNotify100ns, 0, 0);
-            ULONGLONG LastPresentW = (ULONGLONG)InterlockedCompareExchange64(&g_LastPresentSubmit100ns, 0, 0);
-            ULONGLONG LastGpuW = (ULONGLONG)InterlockedCompareExchange64(&g_LastGpuActivity100ns, 0, 0);
-            BOOLEAN RecentActivity =
-                (LastDirtyW != 0 && NowW > LastDirtyW &&
-                 (NowW - LastDirtyW) < (250ULL * 10000ULL)) ||
-                (LastPresentW != 0 && NowW > LastPresentW &&
-                 (NowW - LastPresentW) < (250ULL * 10000ULL)) ||
-                (LastGpuW != 0 && NowW > LastGpuW &&
-                 (NowW - LastGpuW) < DXGK_GPU_ACTIVITY_QUIET_100NS);
-
-            if (!RecentActivity && !DxgkpPresentHoldActive(NowW))
-                DxgkpPresentShadowFb(Adapter);
-        }
-        if (PresentMutexHeld)
-            KeReleaseMutex(&g_PresentMutex, FALSE);
-    }
-
-Complete:
-    InterlockedExchange(&g_PresentDispatchBusy, 0);
-    if (Adapter != NULL)
-        DxgkpReleasePresentPath(Adapter);
-}
-
 static VOID
 NTAPI
 DxgkpPresentTimerDpc(
@@ -2518,10 +1465,6 @@ DxgkpPresentTimerDpc(
     _In_opt_ PVOID SystemArgument2)
 {
     PDXGKRNL_ADAPTER Adapter = (PDXGKRNL_ADAPTER)DeferredContext;
-    LONG TimerSeq;
-    BOOLEAN HasPendingFrame;
-    BOOLEAN SnapshotsAvailable;
-    ULONGLONG Now100ns;
 
     UNREFERENCED_PARAMETER(Dpc);
     UNREFERENCED_PARAMETER(SystemArgument1);
@@ -2535,135 +1478,13 @@ DxgkpPresentTimerDpc(
     if (Adapter->MiniportContext != NULL && Adapter->MiniportContext->IsDisplayOnlyDriver)
         DxgkpNotifyVSync(Adapter, 0);
 
-    /* Scanout heartbeat for dwm: this timer IS the display path's refresh. */
-    {
-        DXGK_PRESENT_LOCK_STATE LockState;
-        BOOLEAN Signaled = FALSE;
-
-        DxgkpAcquirePresentLock(Adapter, &LockState);
-        if (Adapter->DwmVblankEvent != NULL)
-        {
-            /*
-             * WDDM/DWM parity: while dwm.exe owns the frame it queues every
-             * composed frame itself at COMPOSITION_END. A
-             * periodic scanout copy racing dwm's shadow write is the tearing
-             * source, so this timer only PACES dwm (signals vblank) and never
-             * presents. The direct-draw fallback resumes when dwm detaches and
-             * the vblank event is cleared.
-             */
-            KeSetEvent(Adapter->DwmVblankEvent, IO_NO_INCREMENT, FALSE);
-            Signaled = TRUE;
-        }
-        DxgkpReleasePresentLock(Adapter, &LockState);
-        if (Signaled)
-            return;
-    }
-
-    TimerSeq = InterlockedIncrement(&g_PresentTimerTraceCount);
-    Now100ns = DxgkpDisplayTraceNow100ns();
-    SnapshotsAvailable = DxgkpPresentSnapshotsAvailable(Adapter);
-    HasPendingFrame = DxgkpHasPendingDirtyRect(Adapter) ||
-                      (SnapshotsAvailable &&
-                       DxgkpPresentSnapshotReady(Adapter));
-
-    if (HasPendingFrame)
-    {
-        if (!DxgkpMayPresentPendingAsync(Now100ns))
-            return;
-
-        if (DxgkpTryDispatchPresentWork(Adapter))
-        {
-            if (TimerSeq <= DXGK_PRESENT_TRACE_LOG_LIMIT)
-            {
-                DXGKRNL_TRACE("DxgkpPresentTimerDpc: seq=%ld queueing dirty present work item\n",
-                              TimerSeq);
-            }
-        }
-        else if (TimerSeq <= DXGK_PRESENT_TRACE_LOG_LIMIT)
-        {
-            DXGKRNL_TRACE("DxgkpPresentTimerDpc: seq=%ld skipping tick while present worker is busy\n",
-                          TimerSeq);
-        }
-        return;
-    }
-
-    /* With immutable snapshots, no completed frame means there is nothing to
-     * present. In particular, never turn an idle heartbeat into an unlocked
-     * read from CDD's live shadow framebuffer. */
-    if (SnapshotsAvailable)
-        return;
-
-    if ((ULONGLONG)InterlockedCompareExchange64(&g_LastDirtyNotify100ns, 0, 0) != 0)
-    {
-        ULONGLONG LastDirty100ns = (ULONGLONG)InterlockedCompareExchange64(&g_LastDirtyNotify100ns, 0, 0);
-
-        if (Now100ns > LastDirty100ns &&
-            (Now100ns - LastDirty100ns) < (50ULL * 10000ULL))
-        {
-            if (TimerSeq <= DXGK_PRESENT_TRACE_LOG_LIMIT)
-            {
-                DXGKRNL_TRACE("DxgkpPresentTimerDpc: seq=%ld skipping fallback due to recent dirty activity\n",
-                              TimerSeq);
-            }
-            return;
-        }
-    }
-
-    if ((ULONGLONG)InterlockedCompareExchange64(&g_LastPresentSubmit100ns, 0, 0) != 0)
-    {
-        ULONGLONG LastPresent100ns = (ULONGLONG)InterlockedCompareExchange64(&g_LastPresentSubmit100ns, 0, 0);
-
-        /* Pure safety net: completed GDI batches leave explicit dirty damage
-         * for the quiet-time path, so an idle desktop needs no periodic
-         * full-screen scan-out copy (a constant ~500 MB/s of write-combined
-         * traffic on rpi5vc4). */
-        if (Now100ns > LastPresent100ns &&
-            (Now100ns - LastPresent100ns) < (250ULL * 10000ULL))
-        {
-            if (TimerSeq <= DXGK_PRESENT_TRACE_LOG_LIMIT)
-            {
-                DXGKRNL_TRACE("DxgkpPresentTimerDpc: seq=%ld skipping fallback due to recent present\n",
-                              TimerSeq);
-            }
-            return;
-        }
-    }
-
-    if ((ULONGLONG)InterlockedCompareExchange64(&g_LastGpuActivity100ns, 0, 0) != 0)
-    {
-        ULONGLONG LastGpu100ns = (ULONGLONG)InterlockedCompareExchange64(&g_LastGpuActivity100ns, 0, 0);
-
-        /* A driver-private GPU escape may have rendered directly into the
-         * live scanout. Do not overwrite it with the idle GDI-shadow safety
-         * copy while that producer is active. Explicit dirty rectangles are
-         * still presented normally. */
-        if (Now100ns > LastGpu100ns &&
-            (Now100ns - LastGpu100ns) < DXGK_GPU_ACTIVITY_QUIET_100NS)
-        {
-            return;
-        }
-    }
-
-    if (DxgkpTryDispatchPresentWork(Adapter))
-    {
-        if (TimerSeq <= DXGK_PRESENT_TRACE_LOG_LIMIT)
-        {
-            DXGKRNL_TRACE("DxgkpPresentTimerDpc: seq=%ld queueing work item "
-                          "(periodic present active)\n", TimerSeq);
-        }
-    }
-    else if (TimerSeq <= DXGK_PRESENT_TRACE_LOG_LIMIT)
-    {
-        DXGKRNL_TRACE("DxgkpPresentTimerDpc: seq=%ld skipping fallback while present worker is busy\n",
-                      TimerSeq);
-    }
 }
 
 /* ========================================================================
  * DxgkpStartPresentTimer
  *
- * Starts the periodic timer that paces dirty presents and the idle scan-out
- * safety net through DxgkDdiPresentDisplayOnly.
+ * Starts the software VBlank source used by display-only miniports that do not
+ * expose a CRTC interrupt.
  *
  * IRQL: PASSIVE_LEVEL
  * ====================================================================== */
@@ -2672,7 +1493,7 @@ DxgkpStartPresentTimer(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
     LARGE_INTEGER DueTime;
-    LONG PeriodMs = 15; /* one kernel tick on the current clock, dirty-present paced */
+    const LONG PeriodMs = 16;
 
     (VOID)KeWaitForSingleObject(&Adapter->PresentLifecycleMutex,
                                 Executive,
@@ -2685,41 +1506,28 @@ DxgkpStartPresentTimer(
         return;
     }
 
-    /* Serialize restart against every capture and worker from the previous
-     * surface before resetting their shared dirty/pacing state. */
-    DxgkpReleasePresentSnapshots(Adapter);
+    if (Adapter->MiniportContext != NULL &&
+        Adapter->MiniportContext->IsDisplayOnlyDriver)
+    {
+        KeInitializeTimer(&Adapter->PresentTimer);
+        KeInitializeDpc(&Adapter->PresentDpc, DxgkpPresentTimerDpc, Adapter);
+        DueTime.QuadPart = -(LONGLONG)PeriodMs * 10000LL;
+        KeSetTimerEx(&Adapter->PresentTimer,
+                     DueTime,
+                     PeriodMs,
+                     &Adapter->PresentDpc);
+        Adapter->PresentTimerActive = TRUE;
+    }
 
-    DxgkpEnsurePresentMutex();
-    DxgkpClearPendingDirtyRects(Adapter);
-    InterlockedExchange(&g_PresentHoldActive, 0);
-    InterlockedExchange(&g_GdiPresentBatchDepth, 0);
-    InterlockedExchange(&g_PointerReleasePresentPending, 0);
-    InterlockedExchange64(&g_GdiPresentBatchSince100ns, 0);
-    InterlockedExchange64(&g_LastDirtyNotify100ns, 0);
-    InterlockedExchange64(&g_LastPresentSubmit100ns, 0);
-    InterlockedExchange64(&g_LastGpuActivity100ns, 0);
-    InterlockedExchange(&g_PresentDispatchBusy, 0);
-
-    ExReInitializeRundownProtection(&Adapter->PresentPathRundown);
-    (VOID)DxgkpInitializePresentSnapshots(Adapter);
-    InterlockedExchange(&Adapter->PresentPathOpen, 1);
-
-    KeInitializeTimer(&Adapter->PresentTimer);
-    KeInitializeDpc(&Adapter->PresentDpc, DxgkpPresentTimerDpc, Adapter);
-
-    /* First fire after 100ms to give the mode-set time to complete. */
-    DueTime.QuadPart = -100LL * 10000LL; /* 100ms in 100ns units, negative = relative */
-    KeSetTimerEx(&Adapter->PresentTimer, DueTime, PeriodMs, &Adapter->PresentDpc);
-    Adapter->PresentTimerActive = TRUE;
-
-    DXGKRNL_TRACE("DxgkpStartPresentTimer: started (%ld ms present period)\n", PeriodMs);
+    DXGKRNL_TRACE("DxgkpStartPresentTimer: display path started%s\n",
+                  Adapter->PresentTimerActive ? " with software VBlank" : "");
     KeReleaseMutex(&Adapter->PresentLifecycleMutex, FALSE);
 }
 
 /* ========================================================================
  * DxgkpStopPresentTimer
  *
- * Stops the periodic present timer.
+ * Stops and drains the software VBlank source.
  *
  * IRQL: PASSIVE_LEVEL
  * ====================================================================== */
@@ -2734,65 +1542,15 @@ DxgkpStopPresentTimer(
                                 NULL);
     if (Adapter->PresentTimerActive)
     {
-        /* Clear the active flag first: it gates the worker's self-requeue and
-         * the DPC, so no new present work starts while we tear down. */
+        /* Clear the active flag before draining an in-flight timer DPC. */
         Adapter->PresentTimerActive = FALSE;
         KeCancelTimer(&Adapter->PresentTimer);
 
-        /*
-         * A DPC may already be in flight and a present worker may be mid-
-         * PresentDisplayOnly on ShadowFb. Flush the DPC queues, then wait for
-         * the dispatch slot to clear — callers free or swap ShadowFb right
-         * after this returns, so returning with a live worker would hand the
-         * miniport a dangling source buffer.
-         */
         KeFlushQueuedDpcs();
     }
 
-    /* Closing rundown admission prevents a concurrent completed-frame flush
-     * from entering capture or queueing a new worker. The wait drains both
-     * already-queued workers and captures before their buffers are released. */
-    DxgkpReleasePresentSnapshots(Adapter);
-    DxgkpWaitForFlagClear(&g_PresentDispatchBusy);
-    DxgkpClearPendingDirtyRects(Adapter);
-    InterlockedExchange(&g_GdiPresentBatchDepth, 0);
-    InterlockedExchange(&g_PointerReleasePresentPending, 0);
-    InterlockedExchange64(&g_GdiPresentBatchSince100ns, 0);
-    InterlockedExchange64(&g_LastDirtyNotify100ns, 0);
-    InterlockedExchange64(&g_LastPresentSubmit100ns, 0);
-    InterlockedExchange64(&g_LastGpuActivity100ns, 0);
     DXGKRNL_TRACE("DxgkpStopPresentTimer: stopped\n");
     KeReleaseMutex(&Adapter->PresentLifecycleMutex, FALSE);
-}
-
-/* ========================================================================
- * DxgkDisplayVsyncFlush
- *
- * Called from the adapter DPC when the miniport delivered a CRTC_VSYNC
- * notification (enabled through the highest compatible ControlInterrupt DDI
- * at adapter start).
- * Flushes any dirty rects accumulated since the last vblank so presents
- * pace to the scanout instead of waiting for the fallback present timer.
- * The free-running timer stays armed as a safety net for adapters whose
- * vsync source stalls.
- *
- * IRQL: DISPATCH_LEVEL (adapter DPC)
- * ====================================================================== */
-VOID
-DxgkDisplayVsyncFlush(
-    _In_ PDXGKRNL_ADAPTER Adapter)
-{
-    if (Adapter == NULL || Adapter != g_DisplayAdapter)
-        return;
-
-    if (Adapter->PresentTimerActive &&
-        (DxgkpPresentSnapshotReady(Adapter) ||
-         DxgkpHasPendingDirtyRect(Adapter)) &&
-        InterlockedCompareExchange(&Adapter->DwmCompositionInProgress, 0, 0) == 0 &&
-        DxgkpMayPresentPendingAsync(DxgkpDisplayTraceNow100ns()))
-    {
-        DxgkpTryDispatchPresentWork(Adapter);
-    }
 }
 
 /* ========================================================================
@@ -2882,6 +1640,7 @@ DxgkpPointerBridgeSetPosition(
     PositionArgs.Flags.Visible = (Adapter->PointerVisible &&
                                   Adapter->PointerShapeValid) ? 1 : 0;
 
+    InterlockedIncrement(&g_PointerPositionCallCount);
     _SEH2_TRY
     {
         Status = PfnSetPosition(Adapter->MiniportDeviceContext, &PositionArgs);
@@ -2892,6 +1651,9 @@ DxgkpPointerBridgeSetPosition(
     }
     _SEH2_END;
     DxgkReleaseKmdCall(Adapter);
+
+    if (!NT_SUCCESS(Status))
+        InterlockedIncrement(&g_PointerFailureCount);
 
     return Status;
 }
@@ -2948,6 +1710,7 @@ DxgkpPointerBridgeSetShape(
 
     if (!DxgkAcquireMiniportCallback(Adapter))
         return STATUS_DELETE_PENDING;
+    InterlockedIncrement(&g_PointerShapeCallCount);
     _SEH2_TRY
     {
         Status = PfnSetShape(Adapter->MiniportDeviceContext, &ShapeArgs);
@@ -2961,6 +1724,7 @@ DxgkpPointerBridgeSetShape(
 
     if (!NT_SUCCESS(Status))
     {
+        InterlockedIncrement(&g_PointerFailureCount);
         Adapter->PointerShapeValid = FALSE;
         return Status;
     }
@@ -3196,9 +1960,9 @@ DxgkpDisplayDispatch(
              * command-based updates via VirtIO queues.  We allocate a
              * shadow framebuffer in system memory and return it.
              *
-             * DxgkDdiPresentDisplayOnly will be called periodically to
-             * copy from this shadow buffer to the GPU via virtio commands
-             * (TRANSFER_TO_HOST_2D + RESOURCE_FLUSH).
+             * Completed CDD updates are submitted through
+             * DxgkDdiPresentDisplayOnly. Display-only VBlank timing remains
+             * independent from framebuffer publication.
              */
             PVIDEO_MEMORY VideoMemory =
                 (PVIDEO_MEMORY)Irp->AssociatedIrp.SystemBuffer;
@@ -3246,9 +2010,8 @@ DxgkpDisplayDispatch(
                 FbSize = Width * Height * 4;
 
                 /*
-                 * Allocate a shadow framebuffer from NonPagedPool.
-                 * This is where framebuf.dll GDI rendering goes.
-                 * The periodic present timer copies from here to the GPU.
+                 * Allocate the system-memory primary from NonPagedPool. This
+                 * is where framebuf.dll and cdd render completed GDI updates.
                  */
                 FbVa = ExAllocatePoolZero(NonPagedPool, FbSize, TAG_DXGK_DISPLAY);
                 if (FbVa == NULL)
@@ -3349,12 +2112,16 @@ DxgkpDisplayDispatch(
         {
             PVOID InputBuffer = Irp->AssociatedIrp.SystemBuffer;
             const RECTL *DirtyRects;
-            RECTL LegacyRect;
+            SIZE_T HeaderSize;
+            SIZE_T RequiredSize;
             LONG TraceSeq;
-            ULONGLONG Now100ns;
-            ULONG Flags = 0;
-            ULONG RectCount = 0;
-            ULONG Index;
+            ULONG Flags;
+            ULONG RectCount;
+            ULONG SourcePitch;
+            ULONG SourceSize;
+            PVOID Source;
+
+            HeaderSize = FIELD_OFFSET(DXGK_PRESENT_DIRTY_RECTS_INPUT, Rects);
 
             if (Irp->RequestorMode != KernelMode)
             {
@@ -3363,44 +2130,53 @@ DxgkpDisplayDispatch(
             }
 
             if (InputBuffer == NULL ||
-                Stack->Parameters.DeviceIoControl.InputBufferLength < sizeof(RECTL))
+                Stack->Parameters.DeviceIoControl.InputBufferLength < HeaderSize)
             {
                 Status = STATUS_BUFFER_TOO_SMALL;
                 break;
             }
 
             if (g_DisplayAdapter == NULL ||
-                InterlockedCompareExchange(&g_DisplayAdapter->SharedSurfaceAvailable, 0, 0) == 0 ||
-                InterlockedCompareExchange(&g_DisplayAdapter->PresentPathOpen, 0, 0) == 0)
+                InterlockedCompareExchange(&g_DisplayAdapter->SharedSurfaceAvailable, 0, 0) == 0)
             {
                 Status = STATUS_DEVICE_NOT_READY;
                 break;
             }
 
-            if (Stack->Parameters.DeviceIoControl.InputBufferLength >=
-                    sizeof(DXGK_PRESENT_DIRTY_RECTS_INPUT) &&
-                ((PDXGK_PRESENT_DIRTY_RECTS_INPUT)InputBuffer)->StructSize ==
-                    sizeof(DXGK_PRESENT_DIRTY_RECTS_INPUT) &&
-                ((PDXGK_PRESENT_DIRTY_RECTS_INPUT)InputBuffer)->RectCount <=
-                    DXGK_PRESENT_MAX_DIRTY_RECTS)
             {
                 PDXGK_PRESENT_DIRTY_RECTS_INPUT Input =
                     (PDXGK_PRESENT_DIRTY_RECTS_INPUT)InputBuffer;
 
+                if (Input->RectCount > DXGK_PRESENT_DIRTY_MAX_RECTS ||
+                    Input->RectCount > (MAXULONG - HeaderSize) /
+                                           sizeof(Input->Rects[0]))
+                {
+                    Status = STATUS_NOT_SUPPORTED;
+                    break;
+                }
+                RequiredSize = HeaderSize +
+                    Input->RectCount * sizeof(Input->Rects[0]);
+                if (Input->StructSize != RequiredSize ||
+                    Stack->Parameters.DeviceIoControl.InputBufferLength !=
+                        RequiredSize ||
+                    (Input->Flags & ~DXGK_PRESENT_DIRTY_FLUSH) != 0)
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                    break;
+                }
                 Flags = Input->Flags;
                 RectCount = Input->RectCount;
+                SourcePitch = Input->SourcePitch;
+                SourceSize = Input->SourceSize;
+                Source = (PVOID)Input->Source;
                 DirtyRects = Input->Rects;
             }
-            else
+
+            if ((RectCount == 0 && Flags == 0) ||
+                Source == NULL || SourcePitch == 0 || SourceSize == 0)
             {
-                LegacyRect = *(PRECTL)InputBuffer;
-                DirtyRects = &LegacyRect;
-                RectCount = 1;
-                if (Stack->Parameters.DeviceIoControl.InputBufferLength >=
-                        sizeof(DXGK_PRESENT_DIRTY_RECT_INPUT))
-                {
-                    Flags = ((PDXGK_PRESENT_DIRTY_RECT_INPUT)InputBuffer)->Flags;
-                }
+                Status = STATUS_INVALID_PARAMETER;
+                break;
             }
 
             TraceSeq = InterlockedIncrement(&g_PresentDirtyTraceCount);
@@ -3416,95 +2192,24 @@ DxgkpDisplayDispatch(
                               RectCount != 0 ? DirtyRects[0].bottom : 0);
             }
 
-            Now100ns = DxgkpDisplayTraceNow100ns();
-            if (Flags & DXGK_PRESENT_DIRTY_HOLD)
+            /* CDD's worker owns this immutable source until the synchronous
+             * PresentDisplayOnly call returns. The ordinary GDI paint path is
+             * therefore no longer held behind the miniport's scan-out copy. */
+            if (Flags & DXGK_PRESENT_DIRTY_FLUSH)
             {
-                InterlockedExchange64(&g_PresentHoldSince100ns, (LONGLONG)Now100ns);
-                InterlockedExchange(&g_PresentHoldActive, 1);
-                InterlockedExchange64(&g_LastDirtyNotify100ns, (LONGLONG)Now100ns);
-                Status = STATUS_SUCCESS;
-                break;
-            }
-            if ((Flags & DXGK_PRESENT_DIRTY_RELEASE) || RectCount != 0)
-                KeMemoryBarrier();
-            if (Flags & DXGK_PRESENT_DIRTY_RELEASE)
-                InterlockedExchange(&g_PresentHoldActive, 0);
-
-            for (Index = 0; Index < RectCount; Index++)
-                DxgkpRecordDirtyRect(g_DisplayAdapter, &DirtyRects[Index]);
-            InterlockedExchange64(&g_LastDirtyNotify100ns, (LONGLONG)Now100ns);
-
-            /* Individual GDI primitives only accumulate damage. Publishing a
-             * background/highlight primitive here can expose it before the
-             * following text primitive, which is visible as menu hover flicker.
-             * CDD sets FLUSH only from GDI's completed-batch callbacks, both of
-             * which run with the win32k device lock held. */
-            if ((Flags & (DXGK_PRESENT_DIRTY_FLUSH |
-                          DXGK_PRESENT_DIRTY_RELEASE)) &&
-                InterlockedCompareExchange(&g_DisplayAdapter->DwmCompositionInProgress, 0, 0) == 0 &&
-                DxgkpGdiPresentBatchActive(Now100ns))
-            {
-                if ((Flags & DXGK_PRESENT_DIRTY_RELEASE) && DxgkpHasPendingDirtyRect(g_DisplayAdapter))
-                    InterlockedExchange(&g_PointerReleasePresentPending, 1);
-                InterlockedIncrement(&g_GdiPresentBatchFlushDeferrals);
-            }
-            else if ((Flags & (DXGK_PRESENT_DIRTY_FLUSH |
-                               DXGK_PRESENT_DIRTY_RELEASE)) &&
-                     InterlockedCompareExchange(&g_DisplayAdapter->DwmCompositionInProgress, 0, 0) == 0 &&
-                     !DxgkpPresentHoldActive(Now100ns))
-            {
-                /* Snapshot the completed pixels while CDD's caller still owns
-                 * the drawing serialization. The timer may defer scanout for
-                 * pacing, but the worker never reads the mutable primary. */
-                DxgkpCapturePendingPresent(g_DisplayAdapter);
-                if (!g_DisplayAdapter->PresentTimerActive ||
-                    (Flags & DXGK_PRESENT_DIRTY_RELEASE))
-                    DxgkpQueueCompletedPresent(g_DisplayAdapter);
-            }
-
-            Status = STATUS_SUCCESS;
-            break;
-        }
-
-        case IOCTL_VIDEO_DXGK_REGISTER_VBLANK:
-        {
-            PULONGLONG pValue = (PULONGLONG)Irp->AssociatedIrp.SystemBuffer;
-            PKEVENT NewEvent = NULL;
-            PKEVENT OldEvent;
-
-            if (Irp->RequestorMode != KernelMode)
-            {
-                Status = STATUS_ACCESS_DENIED;
-                break;
-            }
-
-            if (pValue == NULL ||
-                Stack->Parameters.DeviceIoControl.InputBufferLength < sizeof(ULONGLONG))
-            {
-                Status = STATUS_BUFFER_TOO_SMALL;
-                break;
-            }
-            if (g_DisplayAdapter == NULL)
-            {
-                Status = STATUS_DEVICE_NOT_READY;
-                break;
-            }
-
-            if (*pValue != 0)
-            {
-                Status = ObReferenceObjectByHandle((HANDLE)(ULONG_PTR)*pValue,
-                                                   EVENT_MODIFY_STATE,
-                                                   *ExEventObjectType,
-                                                   UserMode,
-                                                   (PVOID *)&NewEvent,
-                                                   NULL);
+                Status = DxgkpPresentSourceRects(g_DisplayAdapter,
+                                                 Source,
+                                                 SourcePitch,
+                                                 SourceSize,
+                                                 DirtyRects,
+                                                 RectCount,
+                                                 "cdd");
                 if (!NT_SUCCESS(Status))
+                {
                     break;
+                }
             }
 
-            OldEvent = DxgkpReplaceDwmVblankEvent(g_DisplayAdapter, NewEvent);
-            if (OldEvent != NULL)
-                ObDereferenceObject(OldEvent);
             Status = STATUS_SUCCESS;
             break;
         }
@@ -3512,7 +2217,6 @@ DxgkpDisplayDispatch(
         case IOCTL_VIDEO_DXGK_PRESENT_STATS:
         {
             PDXGK_PRESENT_STATS Stats = (PDXGK_PRESENT_STATS)Irp->AssociatedIrp.SystemBuffer;
-            LONG BatchDepth;
 
             if (Stats == NULL ||
                 Stack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(*Stats))
@@ -3530,53 +2234,16 @@ DxgkpDisplayDispatch(
             Stats->StructSize        = sizeof(*Stats);
             Stats->DirtyRectRequests = (ULONG)InterlockedCompareExchange(&g_PresentDirtyTraceCount, 0, 0);
             Stats->ScanoutCopies     = (ULONG)InterlockedCompareExchange(&g_ScanoutCopyCount, 0, 0);
-            Stats->PendingDirtyRect  = DxgkpHasPendingDirtyRect(g_DisplayAdapter) ? 1 : 0;
-            Stats->CompositionActive =
-                InterlockedCompareExchange(&g_DisplayAdapter->DwmCompositionInProgress, 0, 0) != 0 ? 1 : 0;
-            BatchDepth = InterlockedCompareExchange(&g_GdiPresentBatchDepth, 0, 0);
-            Stats->PresentBatchDepth = BatchDepth > 0 ? (ULONG)BatchDepth : 0;
-            Stats->PresentBatchBegins = (ULONG)InterlockedCompareExchange(&g_GdiPresentBatchBeginCount, 0, 0);
-            Stats->PresentBatchEnds = (ULONG)InterlockedCompareExchange(&g_GdiPresentBatchEndCount, 0, 0);
-            Stats->PresentBatchFlushDeferrals = (ULONG)InterlockedCompareExchange(&g_GdiPresentBatchFlushDeferrals, 0, 0);
-            Stats->PresentBatchMaxDepth = (ULONG)InterlockedCompareExchange(&g_GdiPresentBatchMaxDepth, 0, 0);
+            Stats->PendingDirtyRect  = 0;
+            Stats->PresentCalls = (ULONG)InterlockedCompareExchange(&g_PresentCallCount, 0, 0);
+            Stats->PresentTotalUs = (ULONGLONG)InterlockedCompareExchange64(&g_PresentCallTotalUs, 0, 0);
+            Stats->PresentMaxUs = (ULONGLONG)InterlockedCompareExchange64(&g_PresentCallMaxUs, 0, 0);
+            Stats->HardwarePointerSupported = g_DisplayAdapter->PointerHwSupported ? 1 : 0;
+            Stats->PointerShapeCalls = (ULONG)InterlockedCompareExchange(&g_PointerShapeCallCount, 0, 0);
+            Stats->PointerPositionCalls = (ULONG)InterlockedCompareExchange(&g_PointerPositionCallCount, 0, 0);
+            Stats->PointerFailures = (ULONG)InterlockedCompareExchange(&g_PointerFailureCount, 0, 0);
 
             BytesReturned = sizeof(*Stats);
-            Status = STATUS_SUCCESS;
-            break;
-        }
-
-        case IOCTL_VIDEO_DXGK_PRESENT_BATCH_BEGIN:
-        {
-            if (Irp->RequestorMode != KernelMode)
-            {
-                Status = STATUS_ACCESS_DENIED;
-                break;
-            }
-            if (g_DisplayAdapter == NULL)
-            {
-                Status = STATUS_DEVICE_NOT_READY;
-                break;
-            }
-
-            DxgkpBeginGdiPresentBatch(g_DisplayAdapter);
-            Status = STATUS_SUCCESS;
-            break;
-        }
-
-        case IOCTL_VIDEO_DXGK_PRESENT_BATCH_END:
-        {
-            if (Irp->RequestorMode != KernelMode)
-            {
-                Status = STATUS_ACCESS_DENIED;
-                break;
-            }
-            if (g_DisplayAdapter == NULL)
-            {
-                Status = STATUS_DEVICE_NOT_READY;
-                break;
-            }
-
-            DxgkpEndGdiPresentBatch(g_DisplayAdapter);
             Status = STATUS_SUCCESS;
             break;
         }
@@ -3623,7 +2290,6 @@ DxgkpDisplayDispatch(
                 Status = STATUS_DELETE_PENDING;
                 break;
             }
-            DxgkDisplayNotifyGpuActivity(EscapeAdapter);
             _SEH2_TRY
             {
                 Status = DXGK_CB_FULL(EscapeAdapter, DxgkDdiEscape)(EscapeAdapter->MiniportDeviceContext, &EscapeArgs);
@@ -3633,90 +2299,10 @@ DxgkpDisplayDispatch(
                 Status = _SEH2_GetExceptionCode();
             }
             _SEH2_END;
-            DxgkDisplayNotifyGpuActivity(EscapeAdapter);
             DxgkReleaseMiniportCallback(EscapeAdapter);
 
             if (NT_SUCCESS(Status))
                 BytesReturned = OutLen;
-            break;
-        }
-
-        case IOCTL_VIDEO_DXGK_COMPOSITION_BEGIN:
-        {
-            if (Irp->RequestorMode != KernelMode)
-            {
-                Status = STATUS_ACCESS_DENIED;
-                break;
-            }
-
-            if (g_DisplayAdapter != NULL)
-            {
-                NTSTATUS DrainStatus;
-                LARGE_INTEGER DrainTimeout;
-
-                InterlockedExchange64(&g_DwmCompositionBegin100ns,
-                                      (LONGLONG)DxgkpDisplayTraceNow100ns());
-                InterlockedExchange(&g_DisplayAdapter->DwmCompositionInProgress, 1);
-
-                /* An in-flight immutable snapshot is the previous completed
-                 * frame and cannot overlap the compositor's current writes. */
-                if (DxgkpPresentSnapshotsAvailable(g_DisplayAdapter))
-                {
-                    Status = STATUS_SUCCESS;
-                    break;
-                }
-
-                /*
-                 * Drain any in-flight worker copy BEFORE the compositor starts
-                 * rewriting the shadow framebuffer: the flag only stops future
-                 * presents, not one already scanning the surface out.
-                 *
-                 * Wait for an in-flight copy, but bound the wait because this
-                 * escape runs under win32k's USER lock. Continuing without the
-                 * drain lets that copy race the compositor's shadow write and
-                 * exposes a half-composed frame. On timeout, cancel BEGIN and
-                 * make dwm retry without touching the shadow framebuffer.
-                 */
-                DxgkpEnsurePresentMutex();
-                if (KeGetCurrentIrql() != PASSIVE_LEVEL ||
-                    InterlockedCompareExchange(&g_PresentMutexInited, 0, 0) != 1)
-                {
-                    InterlockedExchange(&g_DisplayAdapter->DwmCompositionInProgress, 0);
-                    Status = STATUS_DEVICE_BUSY;
-                    break;
-                }
-
-                DrainTimeout.QuadPart = -(50LL * 10000LL); /* 50 ms */
-                DrainStatus = KeWaitForSingleObject(&g_PresentMutex, Executive,
-                                                    KernelMode, FALSE,
-                                                    &DrainTimeout);
-                if (DrainStatus != STATUS_SUCCESS)
-                {
-                    InterlockedExchange(&g_DisplayAdapter->DwmCompositionInProgress, 0);
-                    Status = STATUS_DEVICE_BUSY;
-                    break;
-                }
-                KeReleaseMutex(&g_PresentMutex, FALSE);
-            }
-            Status = STATUS_SUCCESS;
-            break;
-        }
-
-        case IOCTL_VIDEO_DXGK_COMPOSITION_END:
-        {
-            if (Irp->RequestorMode != KernelMode)
-            {
-                Status = STATUS_ACCESS_DENIED;
-                break;
-            }
-
-            if (g_DisplayAdapter != NULL)
-            {
-                KeMemoryBarrier();
-                InterlockedExchange(&g_DisplayAdapter->DwmCompositionInProgress, 0);
-                DxgkpQueueCompletedPresent(g_DisplayAdapter);
-            }
-            Status = STATUS_SUCCESS;
             break;
         }
 
@@ -4073,8 +2659,6 @@ DxgkDisplayRegister(
 
     DXGKRNL_TRACE("DxgkDisplayRegister: Adapter=%p\n", Adapter);
 
-    DxgkpEnsurePresentMutex();
-
     /*
      * Anchor the POST display resolution to the real firmware GOP before we
      * write DefaultSettings below. A minimal miniport (softgpu) never calls
@@ -4360,7 +2944,6 @@ DxgkDisplayUnregister(VOID)
 {
     PDXGKRNL_ADAPTER Adapter;
     PVOID OldFb = NULL;
-    PKEVENT OldVblank = NULL;
 
     PAGED_CODE();
 
@@ -4368,14 +2951,6 @@ DxgkDisplayUnregister(VOID)
     if (Adapter != NULL)
     {
         DxgkpStopPresentTimer(Adapter);
-        OldVblank = DxgkpReplaceDwmVblankEvent(Adapter, NULL);
-        if (OldVblank != NULL)
-            ObDereferenceObject(OldVblank);
-        if (Adapter->PresentWorkItem != NULL)
-        {
-            IoFreeWorkItem(Adapter->PresentWorkItem);
-            Adapter->PresentWorkItem = NULL;
-        }
         (VOID)KeWaitForSingleObject(&Adapter->SharedPrimaryMutex, Executive, KernelMode, FALSE, NULL);
         DxgkpBeginSharedSurfaceMutationLocked(Adapter);
         if (Adapter->ShadowFbPoolOwned)
