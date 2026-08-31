@@ -291,7 +291,7 @@ void ThemeCalculateCaptionButtonsPos(HWND hWnd, HTHEME htheme)
 
     if (!GetWindowInfo(hWnd, &wi))
         return;
-    btnHeight = GetThemeSysSize(htheme, wi.dwExStyle & WS_EX_TOOLWINDOW ? SM_CYSMSIZE : SM_CYSIZE);
+    btnHeight = GetSystemMetrics(wi.dwExStyle & WS_EX_TOOLWINDOW ? SM_CYSMCAPTION : SM_CYCAPTION);
 
     ThemeCalculateCaptionButtonsPosEx(&wi, hWnd, htheme, btnHeight);
 }
@@ -748,6 +748,9 @@ ThemeHandleNCPaint(HWND hWnd, HRGN hRgn)
     RECT rcCurrent;
 
     ThemeInitDrawContext(&context, hWnd, hRgn);
+
+    ThemeCalculateCaptionButtonsPosEx(&context.wi, hWnd, context.theme,
+                                      context.CaptionHeight - context.wi.cyWindowBorders);
 
     rcCurrent = context.wi.rcWindow;
     OffsetRect( &rcCurrent, -context.wi.rcWindow.left, -context.wi.rcWindow.top);
