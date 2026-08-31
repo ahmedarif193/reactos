@@ -417,6 +417,14 @@ class CFileSysEnum :
     public CEnumIDListBase
 {
 private:
+    WCHAR m_sPathTarget[MAX_PATH];
+    WCHAR m_sFindPattern[MAX_PATH];
+    DWORD m_dwFlags;
+    HANDLE m_hFind;
+    WIN32_FIND_DATAW m_FindData;
+    BOOL m_FirstResultPending;
+    BOOL m_EnumerationComplete;
+
     HRESULT _AddFindResult(LPWSTR sParentDir, const WIN32_FIND_DATAW& FindData, DWORD dwFlags)
     {
 #define SUPER_HIDDEN (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)
@@ -510,18 +518,83 @@ private:
         return S_OK;
     }
 
-public:
-    CFileSysEnum()
+    HRESULT AddNextResult()
     {
+        ENUMLIST *PreviousLast;
+        BOOL HaveResult;
+        DWORD Error;
+        HRESULT hr;
 
+        while (!m_EnumerationComplete)
+        {
+            if (m_hFind == INVALID_HANDLE_VALUE)
+            {
+                m_hFind = FindFirstFileW(m_sFindPattern, &m_FindData);
+                if (m_hFind == INVALID_HANDLE_VALUE)
+                {
+                    Error = GetLastError();
+                    m_EnumerationComplete = TRUE;
+                    return Error == ERROR_FILE_NOT_FOUND ? S_FALSE : HRESULT_FROM_WIN32(Error);
+                }
+                m_FirstResultPending = TRUE;
+            }
+
+            if (m_FirstResultPending)
+            {
+                m_FirstResultPending = FALSE;
+                HaveResult = TRUE;
+            }
+            else
+            {
+                HaveResult = FindNextFileW(m_hFind, &m_FindData);
+            }
+
+            if (!HaveResult)
+            {
+                Error = GetLastError();
+                FindClose(m_hFind);
+                m_hFind = INVALID_HANDLE_VALUE;
+                m_EnumerationComplete = TRUE;
+                return Error == ERROR_NO_MORE_FILES ? S_FALSE : HRESULT_FROM_WIN32(Error);
+            }
+
+            PreviousLast = mpLast;
+            hr = _AddFindResult(m_sPathTarget, m_FindData, m_dwFlags);
+            if (FAILED(hr))
+                return hr;
+
+            if (mpLast != PreviousLast)
+            {
+                if (!mpCurrent)
+                    mpCurrent = PreviousLast ? PreviousLast->pNext : mpFirst;
+                return S_OK;
+            }
+        }
+
+        return S_FALSE;
+    }
+
+public:
+    CFileSysEnum() :
+        m_dwFlags(0),
+        m_hFind(INVALID_HANDLE_VALUE),
+        m_FirstResultPending(FALSE),
+        m_EnumerationComplete(FALSE)
+    {
+        m_sPathTarget[0] = UNICODE_NULL;
+        m_sFindPattern[0] = UNICODE_NULL;
     }
 
     ~CFileSysEnum()
     {
+        if (m_hFind != INVALID_HANDLE_VALUE)
+            FindClose(m_hFind);
     }
 
     HRESULT WINAPI Initialize(LPWSTR sPathTarget, DWORD dwFlags)
     {
+        SIZE_T Length;
+
         TRACE("(%p)->(path=%s flags=0x%08x)\n", this, debugstr_w(sPathTarget), dwFlags);
 
         if (!sPathTarget || !sPathTarget[0])
@@ -530,45 +603,92 @@ public:
             return S_FALSE;
         }
 
-        WCHAR szFindPattern[MAX_PATH];
-        HRESULT hr = StringCchCopyW(szFindPattern, _countof(szFindPattern), sPathTarget);
+        HRESULT hr = StringCchCopyW(m_sPathTarget, _countof(m_sPathTarget), sPathTarget);
         if (FAILED_UNEXPECTEDLY(hr))
             return hr;
 
-        /* FIXME: UNSAFE CRAP */
-        PathAddBackslashW(szFindPattern);
-
-        hr = StringCchCatW(szFindPattern, _countof(szFindPattern), L"*.*");
+        hr = StringCchCopyW(m_sFindPattern, _countof(m_sFindPattern), sPathTarget);
         if (FAILED_UNEXPECTEDLY(hr))
             return hr;
 
-
-        WIN32_FIND_DATAW FindData;
-        HANDLE hFind = FindFirstFileW(szFindPattern, &FindData);
-        if (hFind == INVALID_HANDLE_VALUE)
-            return HRESULT_FROM_WIN32(GetLastError());
-
-        do
+        Length = wcslen(m_sFindPattern);
+        if (Length && m_sFindPattern[Length - 1] != L'\\' &&
+            m_sFindPattern[Length - 1] != L'/')
         {
-            hr = _AddFindResult(sPathTarget, FindData, dwFlags);
-
-            if (FAILED_UNEXPECTEDLY(hr))
-                break;
-
-        } while(FindNextFileW(hFind, &FindData));
-
-        if (SUCCEEDED(hr))
-        {
-            DWORD dwError = GetLastError();
-            if (dwError != ERROR_NO_MORE_FILES)
-            {
-                hr = HRESULT_FROM_WIN32(dwError);
-                FAILED_UNEXPECTEDLY(hr);
-            }
+            if (Length + 1 >= _countof(m_sFindPattern))
+                return STRSAFE_E_INSUFFICIENT_BUFFER;
+            m_sFindPattern[Length++] = L'\\';
+            m_sFindPattern[Length] = UNICODE_NULL;
         }
-        TRACE("(%p)->(hr=0x%08x)\n", this, hr);
-        FindClose(hFind);
-        return hr;
+        hr = StringCchCatW(m_sFindPattern, _countof(m_sFindPattern), L"*.*");
+        if (FAILED_UNEXPECTEDLY(hr))
+            return hr;
+
+        m_dwFlags = dwFlags;
+        return S_OK;
+    }
+
+    STDMETHOD(Next)(ULONG celt, LPITEMIDLIST *rgelt, ULONG *pceltFetched) override
+    {
+        ULONG Fetched = 0;
+        HRESULT hr = S_OK;
+
+        if (!rgelt || (celt > 1 && !pceltFetched))
+            return E_INVALIDARG;
+        if (pceltFetched)
+            *pceltFetched = 0;
+
+        while (Fetched < celt)
+        {
+            if (!mpCurrent)
+            {
+                hr = AddNextResult();
+                if (hr != S_OK)
+                    break;
+            }
+
+            rgelt[Fetched] = ILClone(mpCurrent->pidl);
+            if (!rgelt[Fetched])
+            {
+                hr = E_OUTOFMEMORY;
+                break;
+            }
+
+            mpCurrent = mpCurrent->pNext;
+            ++Fetched;
+        }
+
+        if (pceltFetched)
+            *pceltFetched = Fetched;
+        if (Fetched == celt)
+            return S_OK;
+        return Fetched ? S_FALSE : hr;
+    }
+
+    STDMETHOD(Skip)(ULONG celt) override
+    {
+        ULONG Skipped;
+
+        for (Skipped = 0; Skipped < celt; ++Skipped)
+        {
+            CComHeapPtr<ITEMIDLIST> Item;
+            HRESULT hr = Next(1, &Item, NULL);
+            if (hr != S_OK)
+                return hr;
+        }
+        return S_OK;
+    }
+
+    STDMETHOD(Reset)() override
+    {
+        mpCurrent = mpFirst;
+        return S_OK;
+    }
+
+    STDMETHOD(Clone)(IEnumIDList **ppEnum) override
+    {
+        UNREFERENCED_PARAMETER(ppEnum);
+        return E_NOTIMPL;
     }
 
     BEGIN_COM_MAP(CFileSysEnum)
