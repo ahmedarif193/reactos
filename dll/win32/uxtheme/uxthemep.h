@@ -67,6 +67,7 @@ typedef struct _WND_DATA
 {
     HTHEME hthemeWindow;
     HTHEME hthemeScrollbar;
+    HTHEME hthemeTab;
 
     RECT rcCaptionButtons[4];
     UINT lastHitTest;
