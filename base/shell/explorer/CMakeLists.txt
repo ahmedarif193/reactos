@@ -14,6 +14,7 @@ list(APPEND SOURCE
     shellservice.cpp
     startctxmnu.cpp
     startmnu.cpp
+    startmnu2.cpp
     startmnucust.cpp
     startmnusite.cpp
     startup.cpp

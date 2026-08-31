@@ -573,15 +573,26 @@ public:
         /* FIXME: Implement */
     }
 
+    BOOL IsWin7Bar()
+    {
+        return m_Theme != NULL || IsThemeActive();
+    }
+
+    BOOL UseSmallTaskIcons()
+    {
+        return g_TaskbarSettings.bSmallIcons && !IsWin7Bar();
+    }
+
     HICON GetWndIcon(HWND hwnd)
     {
         HICON hIcon = NULL;
+        BOOL bSmall = UseSmallTaskIcons();
 
         /* Retrieve icon by sending a message */
 #define GET_ICON(type) \
     SendMessageTimeout(hwnd, WM_GETICON, (type), 0, SMTO_NOTIMEOUTIFNOTHUNG, 100, (PDWORD_PTR)&hIcon)
 
-        LRESULT bAlive = GET_ICON(g_TaskbarSettings.bSmallIcons ? ICON_SMALL2 : ICON_BIG);
+        LRESULT bAlive = GET_ICON(bSmall ? ICON_SMALL2 : ICON_BIG);
         if (hIcon)
             return hIcon;
 
@@ -594,18 +605,18 @@ public:
 
         if (bAlive)
         {
-            GET_ICON(g_TaskbarSettings.bSmallIcons ? ICON_BIG : ICON_SMALL2);
+            GET_ICON(bSmall ? ICON_BIG : ICON_SMALL2);
             if (hIcon)
                 return hIcon;
         }
 #undef GET_ICON
 
         /* If we failed, retrieve icon from the window class */
-        hIcon = (HICON)GetClassLongPtr(hwnd, g_TaskbarSettings.bSmallIcons ? GCLP_HICONSM : GCLP_HICON);
+        hIcon = (HICON)GetClassLongPtr(hwnd, bSmall ? GCLP_HICONSM : GCLP_HICON);
         if (hIcon)
             return hIcon;
 
-        return (HICON)GetClassLongPtr(hwnd, g_TaskbarSettings.bSmallIcons ? GCLP_HICON : GCLP_HICONSM);
+        return (HICON)GetClassLongPtr(hwnd, bSmall ? GCLP_HICON : GCLP_HICONSM);
     }
 
     INT UpdateTaskItemButton(IN PTASK_ITEM TaskItem)
@@ -633,7 +644,12 @@ public:
             tbbi.fsState |= TBSTATE_WRAP;
         }
 
-        if (GetWndTextFromTaskItem(TaskItem, windowText, _countof(windowText)) > 0)
+        if (IsWin7Bar())
+        {
+            windowText[0] = 0;
+            tbbi.pszText = windowText;
+        }
+        else if (GetWndTextFromTaskItem(TaskItem, windowText, _countof(windowText)) > 0)
         {
             tbbi.pszText = windowText;
         }
@@ -793,7 +809,12 @@ public:
         tbBtn.fsStyle = BTNS_CHECK | BTNS_NOPREFIX | BTNS_SHOWTEXT;
         tbBtn.dwData = TaskItem->Index;
 
-        if (GetWndTextFromTaskItem(TaskItem, windowText, _countof(windowText)) > 0)
+        if (IsWin7Bar())
+        {
+            windowText[0] = 0;
+            tbBtn.iString = (DWORD_PTR) windowText;
+        }
+        else if (GetWndTextFromTaskItem(TaskItem, windowText, _countof(windowText)) > 0)
         {
             tbBtn.iString = (DWORD_PTR) windowText;
         }
@@ -1347,13 +1368,14 @@ public:
 
         /* Update the size of the image list if needed */
         int cx, cy;
+        BOOL bSmall = UseSmallTaskIcons();
         ImageList_GetIconSize(m_ImageList, &cx, &cy);
-        if (cx != GetSystemMetrics(g_TaskbarSettings.bSmallIcons ? SM_CXSMICON : SM_CXICON) ||
-            cy != GetSystemMetrics(g_TaskbarSettings.bSmallIcons ? SM_CYSMICON : SM_CYICON))
+        if (cx != GetSystemMetrics(bSmall ? SM_CXSMICON : SM_CXICON) ||
+            cy != GetSystemMetrics(bSmall ? SM_CYSMICON : SM_CYICON))
         {
             ImageList_SetIconSize(m_ImageList,
-                                  GetSystemMetrics(g_TaskbarSettings.bSmallIcons ? SM_CXSMICON : SM_CXICON),
-                                  GetSystemMetrics(g_TaskbarSettings.bSmallIcons ? SM_CYSMICON : SM_CYICON));
+                                  GetSystemMetrics(bSmall ? SM_CXSMICON : SM_CXICON),
+                                  GetSystemMetrics(bSmall ? SM_CYSMICON : SM_CYICON));
 
             /* SetIconSize removes all icons so we have to reinsert them */
             PTASK_ITEM TaskItem = m_TaskItems;
@@ -1409,7 +1431,7 @@ public:
                 uiMin = GetSystemMetrics(SM_CXSIZE) + (2 * GetSystemMetrics(SM_CXEDGE));
                 if (Horizontal)
                 {
-                    uiMax = GetSystemMetrics(SM_CXMINIMIZED);
+                    uiMax = IsWin7Bar() ? (UINT)ShellScaleForDpi(62) : GetSystemMetrics(SM_CXMINIMIZED);
 
                     /* Calculate the ideal width and make sure it's within the allowed range */
                     NewBtnSize = (rcClient.right - (uiBtnsPerLine * cxButtonSpacing)) / uiBtnsPerLine;
@@ -1522,8 +1544,8 @@ public:
 
         SetWindowTheme(m_TaskBar.m_hWnd, L"TaskBand", NULL);
 
-        m_ImageList = ImageList_Create(GetSystemMetrics(g_TaskbarSettings.bSmallIcons ? SM_CXSMICON : SM_CXICON),
-                                       GetSystemMetrics(g_TaskbarSettings.bSmallIcons ? SM_CYSMICON : SM_CYICON),
+        m_ImageList = ImageList_Create(GetSystemMetrics(UseSmallTaskIcons() ? SM_CXSMICON : SM_CXICON),
+                                       GetSystemMetrics(UseSmallTaskIcons() ? SM_CYSMICON : SM_CYICON),
                                        ILC_COLOR32 | ILC_MASK, 0, 1000);
         m_TaskBar.SetImageList(m_ImageList);
 
@@ -1824,6 +1846,59 @@ public:
     }
 
 
+    static VOID DrawVertGradient(HDC hdc, const RECT *prc, COLORREF top, COLORREF bottom)
+    {
+        int h = prc->bottom - prc->top;
+        if (h <= 0)
+            return;
+        for (int y = 0; y < h; y++)
+        {
+            RECT rcLine = { prc->left, prc->top + y, prc->right, prc->top + y + 1 };
+            COLORREF clr = RGB(GetRValue(top) + MulDiv(GetRValue(bottom) - GetRValue(top), y, h),
+                               GetGValue(top) + MulDiv(GetGValue(bottom) - GetGValue(top), y, h),
+                               GetBValue(top) + MulDiv(GetBValue(bottom) - GetBValue(top), y, h));
+            HBRUSH hbr = CreateSolidBrush(clr);
+            FillRect(hdc, &rcLine, hbr);
+            DeleteObject(hbr);
+        }
+    }
+
+    LRESULT DrawWin7TaskButton(IN OUT NMTBCUSTOMDRAW *nmtbcd, IN PTASK_ITEM TaskItem)
+    {
+        HDC hdc = nmtbcd->nmcd.hdc;
+        RECT rc = nmtbcd->nmcd.rc;
+        UINT uState = nmtbcd->nmcd.uItemState;
+        BOOL bChecked = (uState & CDIS_CHECKED);
+        BOOL bHot = (uState & CDIS_HOT);
+        BOOL bPressed = (uState & CDIS_SELECTED);
+
+        if (bPressed || bChecked)
+        {
+            DrawVertGradient(hdc, &rc, RGB(26, 29, 32), RGB(44, 49, 54));
+            HBRUSH hbrEdge = CreateSolidBrush(RGB(88, 95, 102));
+            FrameRect(hdc, &rc, hbrEdge);
+            DeleteObject(hbrEdge);
+        }
+        else if (bHot)
+        {
+            DrawVertGradient(hdc, &rc, RGB(78, 84, 90), RGB(46, 51, 56));
+            HBRUSH hbrEdge = CreateSolidBrush(RGB(102, 110, 118));
+            FrameRect(hdc, &rc, hbrEdge);
+            DeleteObject(hbrEdge);
+        }
+
+        if (TaskItem->IconIndex >= 0 && m_ImageList)
+        {
+            int cx, cy;
+            ImageList_GetIconSize(m_ImageList, &cx, &cy);
+            int x = rc.left + ((rc.right - rc.left) - cx) / 2;
+            int y = rc.top + ((rc.bottom - rc.top) - cy) / 2;
+            ImageList_Draw(m_ImageList, TaskItem->IconIndex, hdc, x, y, ILD_TRANSPARENT);
+        }
+
+        return CDRF_SKIPDEFAULT;
+    }
+
     LRESULT HandleItemPaint(IN OUT NMTBCUSTOMDRAW *nmtbcd)
     {
         LRESULT Ret = CDRF_DODEFAULT;
@@ -1858,6 +1933,9 @@ public:
                     nmtbcd->clrText = GetSysColor(COLOR_HIGHLIGHTTEXT);
                     return Ret;
                 }
+
+                if (IsWin7Bar())
+                    return DrawWin7TaskButton(nmtbcd, TaskItem);
             }
         }
         else if (TaskGroup != NULL)
@@ -1873,6 +1951,15 @@ public:
 
         switch (nmh->code)
         {
+        case TBN_GETINFOTIPW:
+        {
+            LPNMTBGETINFOTIPW pTip = (LPNMTBGETINFOTIPW) nmh;
+            PTASK_ITEM TaskItem = FindTaskItemByIndex(pTip->iItem);
+            if (TaskItem != NULL && pTip->pszText != NULL && pTip->cchTextMax > 0)
+                GetWndTextFromTaskItem(TaskItem, pTip->pszText, pTip->cchTextMax);
+            break;
+        }
+
         case NM_CUSTOMDRAW:
         {
             LPNMTBCUSTOMDRAW nmtbcd = (LPNMTBCUSTOMDRAW) nmh;
