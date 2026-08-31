@@ -35,13 +35,19 @@
 #define RPI5_HVS_PRI_MAP1_D             0x3C
 #define RPI5_HVS_CONTROL_HVS_EN         (1u << 31)
 #define RPI5_HVS_LPTRS_C                0x3c    /* SCALER6_DISP0_LPTRS  (C-step) */
+#define RPI5_HVS_STATUS_C               0x44    /* SCALER6_DISP0_STATUS */
+#define RPI5_HVS_ACTIVE_DL_C            0x48    /* SCALER6_DISP0_DL */
 #define RPI5_HVS_LPTRS_D                0x110   /* SCALER6D_DISP0_LPTRS (D-step) */
+#define RPI5_HVS_STATUS_D               0x118   /* SCALER6D_DISP0_STATUS */
+#define RPI5_HVS_ACTIVE_DL_D            0x11c   /* SCALER6D_DISP0_DL */
 #define RPI5_HVS_LPTRS_HEAD_MASK        0xfffu  /* HEADE: dword index of list head */
+#define RPI5_HVS_STATUS_FRAME_SHIFT     16
+#define RPI5_HVS_STATUS_FRAME_MASK      0x3fu
 
 /* SCALER6D channel 0 registers and control fields. */
 #define RPI5_HVS_D0_CTRL0               0x100
 #define RPI5_HVS_D0_CTRL1               0x104
-#define RPI5_HVS_D0_STATUS              0x118
+#define RPI5_HVS_D0_STATUS              RPI5_HVS_STATUS_D
 #define RPI5_HVS_D0_CTRL0_EN            (1u << 31)
 #define RPI5_HVS_D0_CTRL0_RESET         (1u << 30)
 #define RPI5_HVS_D0_CTRL0_WIDTH_SHIFT   16
@@ -106,15 +112,20 @@
 /*
  * Private display-list slots for multi-plane composition.  SCALER6 exposes
  * the list capacity through CXM_SIZE, while LPTRS addresses at most 4096
- * dwords.  Keep two double-buffered slots near the top of that addressable
- * window, away from the firmware's low entries.  The runtime paths validate
- * CXM_SIZE before using either slot.
+ * dwords. Keep a ring of private slots near the top of that addressable
+ * window, away from the firmware's low entries. The slot ring keeps retired
+ * lists immutable until the hardware frame counter has advanced, and runtime
+ * paths validate CXM_SIZE before using a slot.
  */
 #define RPI5_HVS_DLIST_DWORDS           (RPI5_HVS_LPTRS_HEAD_MASK + 1)
 #define RPI5_HVS_MPO_MAX_PLANES         3
 #define RPI5_HVS_PRIVATE_SLOT_DWORDS    ((RPI5_HVS_MPO_MAX_PLANES + 1) * RPI5_HVS_PLANE_DWORDS + 1)
-#define RPI5_HVS_PRIVATE_SLOT_A         (RPI5_HVS_DLIST_DWORDS - 0x100)
-#define RPI5_HVS_PRIVATE_SLOT_B         (RPI5_HVS_DLIST_DWORDS - 0x200)
+#define RPI5_HVS_PRIVATE_SLOT_BASE      (RPI5_HVS_DLIST_DWORDS - 0x400)
+#define RPI5_HVS_PRIVATE_SLOT_STRIDE    0x40
+#define RPI5_HVS_PRIVATE_SLOT(Index)    (RPI5_HVS_PRIVATE_SLOT_BASE + \
+                                         (Index) * RPI5_HVS_PRIVATE_SLOT_STRIDE)
+#define RPI5_HVS_PRIVATE_SLOT_A         RPI5_HVS_PRIVATE_SLOT(0)
+#define RPI5_HVS_PRIVATE_SLOT_B         RPI5_HVS_PRIVATE_SLOT(1)
 
 /*
  * One SCALER6 plane element:
@@ -157,6 +168,11 @@ VOID
 Rpi5HvsInstallScanout(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension);
 
+/* Internal display transaction helpers. The caller holds HvsMutex. */
+VOID
+Rpi5HvsInstallScanoutLocked(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension);
+
 BOOLEAN
 Rpi5HvsColdStartChannel(
     _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
@@ -164,7 +180,7 @@ Rpi5HvsColdStartChannel(
     _In_ ULONG Height);
 
 BOOLEAN
-Rpi5HvsMoveCursor(
+Rpi5HvsMoveCursorLocked(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension);
 
 BOOLEAN
