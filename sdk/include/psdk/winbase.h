@@ -1853,6 +1853,9 @@ HANDLE WINAPI GetCurrentProcess(void);
 DWORD WINAPI GetCurrentProcessId(void);
 HANDLE WINAPI GetCurrentThread(void);
 DWORD WINAPI GetCurrentThreadId(void);
+#if (_WIN32_WINNT >= 0x0602)
+VOID WINAPI GetCurrentThreadStackLimits(_Out_ PULONG_PTR, _Out_ PULONG_PTR);
+#endif
 #define GetCurrentTime GetTickCount
 
 BOOL
