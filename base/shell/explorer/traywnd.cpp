@@ -184,10 +184,13 @@ class CStartButton
     SIZE       m_Size;
     HFONT      m_Font;
 
+    BOOL m_bOrbIcon;
+
 public:
     CStartButton()
         : m_ImageList(NULL),
-          m_Font(NULL)
+          m_Font(NULL),
+          m_bOrbIcon(FALSE)
     {
         m_Size.cx = 0;
         m_Size.cy = 0;
@@ -251,7 +254,26 @@ public:
 
         SetWindowTheme(m_hWnd, L"Start", NULL);
 
-        if (!IsThemeActive())
+        if (IsThemeActive())
+        {
+            const INT cxIcon = ShellScaleForDpi(32);
+            HICON hIcon = (HICON)LoadImageW(hExplorerInstance,
+                                            MAKEINTRESOURCEW(IDI_STARTORB),
+                                            IMAGE_ICON, cxIcon, cxIcon, 0);
+            if (hIcon)
+            {
+                m_ImageList = ImageList_Create(cxIcon, cxIcon, ILC_COLOR32 | ILC_MASK, 1, 1);
+                if (m_ImageList && ImageList_AddIcon(m_ImageList, hIcon) >= 0)
+                {
+                    const INT Margin = ShellScaleForDpi(1);
+                    BUTTON_IMAGELIST bil = {m_ImageList, {Margin, Margin, Margin, Margin}, BUTTON_IMAGELIST_ALIGN_CENTER};
+                    SendMessageW(BCM_SETIMAGELIST, 0, (LPARAM) &bil);
+                    m_bOrbIcon = TRUE;
+                }
+                DestroyIcon(hIcon);
+            }
+        }
+        else
         {
             m_ImageList = ImageList_LoadImageW(hExplorerInstance,
                                                MAKEINTRESOURCEW(IDB_START),
@@ -356,7 +378,7 @@ public:
     LRESULT OnPaint(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
         LRESULT lr = DefWindowProc(uMsg, wParam, lParam);
-        if (IsThemeActive())
+        if (IsThemeActive() && !m_bOrbIcon)
         {
             HDC hdc = GetDC();
             if (hdc)
@@ -2544,6 +2566,7 @@ ChangePos:
 
     LRESULT OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
+        TrayFlyouts_Destroy();
         StartMenu2_Destroy();
         return 0;
     }
@@ -3170,6 +3193,26 @@ HandleTrayContextMenu:
         return TRUE;
     }
 
+    LRESULT OnShowVolumeFlyout(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        RECT rcAnchor;
+        if (!IsThemeActive() || !m_TrayNotify)
+            return FALSE;
+        ::GetWindowRect(m_TrayNotify, &rcAnchor);
+        TrayVolume_Toggle(m_hWnd, &rcAnchor);
+        return TRUE;
+    }
+
+    LRESULT OnShowNetworkFlyout(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        RECT rcAnchor;
+        if (!IsThemeActive() || !m_TrayNotify)
+            return FALSE;
+        ::GetWindowRect(m_TrayNotify, &rcAnchor);
+        TrayNetwork_Toggle(m_hWnd, &rcAnchor);
+        return TRUE;
+    }
+
     LRESULT OnDoExitWindows(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
         /*
@@ -3577,6 +3620,8 @@ HandleTrayContextMenu:
         MESSAGE_HANDLER(WM_GETMINMAXINFO, OnGetMinMaxInfo)
         MESSAGE_HANDLER(TWM_SETTINGSCHANGED, OnTaskbarSettingsChanged)
         MESSAGE_HANDLER(TWM_OPENSTARTMENU, OnOpenStartMenu)
+        MESSAGE_HANDLER(TWM_SHOWVOLUMEFLYOUT, OnShowVolumeFlyout)
+        MESSAGE_HANDLER(TWM_SHOWNETWORKFLYOUT, OnShowNetworkFlyout)
         MESSAGE_HANDLER(TWM_DOEXITWINDOWS, OnDoExitWindows)
         MESSAGE_HANDLER(TWM_GETTASKSWITCH, OnGetTaskSwitch)
         MESSAGE_HANDLER(TWM_SETZORDER, OnSetZOrder)

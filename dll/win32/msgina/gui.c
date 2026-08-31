@@ -11,6 +11,7 @@
 #include <wingdi.h>
 #include <winnls.h>
 #include <ndk/exfuncs.h>
+#include <reactos/bootstatus.h>
 
 typedef struct _DISPLAYSTATUSMSG
 {
@@ -28,22 +29,14 @@ typedef struct _LEGALNOTICEDATA
     LPWSTR pszText;
 } LEGALNOTICEDATA, *PLEGALNOTICEDATA;
 
-// Timer ID for the animated dialog bar.
-#define IDT_BAR 1
-
 #define ISKEYDOWN(x) (GetKeyState(x) & 0x8000)
 
 typedef struct _DLG_DATA
 {
     PGINA_CONTEXT pgContext;
     HBITMAP hLogoBitmap;
-    HBITMAP hBarBitmap;
-    HWND hWndBarCtrl;
-    DWORD BarCounter;
     DWORD LogoWidth;
     DWORD LogoHeight;
-    DWORD BarWidth;
-    DWORD BarHeight;
 } DLG_DATA, *PDLG_DATA;
 
 static PDLG_DATA
@@ -78,14 +71,6 @@ DlgData_LoadBitmaps(_Inout_ PDLG_DATA pDlgData)
         pDlgData->LogoHeight = bm.bmHeight;
     }
 
-    pDlgData->hBarBitmap = LoadImageW(hDllInstance, MAKEINTRESOURCEW(IDI_BAR),
-                                      IMAGE_BITMAP, 0, 0, LR_DEFAULTCOLOR);
-    if (pDlgData->hBarBitmap)
-    {
-        GetObject(pDlgData->hBarBitmap, sizeof(bm), &bm);
-        pDlgData->BarWidth = bm.bmWidth;
-        pDlgData->BarHeight = bm.bmHeight;
-    }
 }
 
 static VOID
@@ -100,11 +85,6 @@ DlgData_Destroy(_Inout_ HWND hwndDlg)
     }
 
     SetWindowLongPtrW(hwndDlg, GWLP_USERDATA, (LONG_PTR)NULL);
-
-    if (pDlgData->hBarBitmap)
-    {
-        DeleteObject(pDlgData->hBarBitmap);
-    }
 
     if (pDlgData->hLogoBitmap)
     {
@@ -181,180 +161,13 @@ done:
     RegCloseKey(hKey);
 }
 
-static VOID
-AdjustStatusMessageWindow(HWND hwndDlg, PDLG_DATA pDlgData)
-{
-    INT xOld, yOld, cxOld, cyOld;
-    INT xNew, yNew, cxNew, cyNew;
-    INT cxLabel, cyLabel, dyLabel;
-    RECT rc, rcBar, rcLabel, rcWnd;
-    BITMAP bmLogo, bmBar;
-    DWORD style, exstyle;
-    HWND hwndLogo = GetDlgItem(hwndDlg, IDC_ROSLOGO);
-    HWND hwndBar = GetDlgItem(hwndDlg, IDC_BAR);
-    HWND hwndLabel = GetDlgItem(hwndDlg, IDC_STATUS_MESSAGE);
-
-    /* This adjustment is for CJK only */
-    switch (PRIMARYLANGID(GetUserDefaultLangID()))
-    {
-        case LANG_CHINESE:
-        case LANG_JAPANESE:
-        case LANG_KOREAN:
-            break;
-
-        default:
-            return;
-    }
-
-    if (!GetObjectW(pDlgData->hLogoBitmap, sizeof(BITMAP), &bmLogo) ||
-        !GetObjectW(pDlgData->hBarBitmap, sizeof(BITMAP), &bmBar))
-    {
-        return;
-    }
-
-    GetWindowRect(hwndBar, &rcBar);
-    MapWindowPoints(NULL, hwndDlg, (LPPOINT)&rcBar, 2);
-    dyLabel = bmLogo.bmHeight - rcBar.top;
-
-    GetWindowRect(hwndLabel, &rcLabel);
-    MapWindowPoints(NULL, hwndDlg, (LPPOINT)&rcLabel, 2);
-    cxLabel = rcLabel.right - rcLabel.left;
-    cyLabel = rcLabel.bottom - rcLabel.top;
-
-    MoveWindow(hwndLogo, 0, 0, bmLogo.bmWidth, bmLogo.bmHeight, TRUE);
-    MoveWindow(hwndBar, 0, bmLogo.bmHeight, bmLogo.bmWidth, bmBar.bmHeight, TRUE);
-    MoveWindow(hwndLabel, rcLabel.left, rcLabel.top + dyLabel, cxLabel, cyLabel, TRUE);
-
-    GetWindowRect(hwndDlg, &rcWnd);
-    xOld = rcWnd.left;
-    yOld = rcWnd.top;
-    cxOld = rcWnd.right - rcWnd.left;
-    cyOld = rcWnd.bottom - rcWnd.top;
-
-    GetClientRect(hwndDlg, &rc);
-    SetRect(&rc, 0, 0, bmLogo.bmWidth, rc.bottom - rc.top); /* new client size */
-
-    style = (DWORD)GetWindowLongPtrW(hwndDlg, GWL_STYLE);
-    exstyle = (DWORD)GetWindowLongPtrW(hwndDlg, GWL_EXSTYLE);
-    AdjustWindowRectEx(&rc, style, FALSE, exstyle);
-
-    cxNew = rc.right - rc.left;
-    cyNew = (rc.bottom - rc.top) + dyLabel;
-    xNew = xOld - (cxNew - cxOld) / 2;
-    yNew = yOld - (cyNew - cyOld) / 2;
-    MoveWindow(hwndDlg, xNew, yNew, cxNew, cyNew, TRUE);
-}
-
-static INT_PTR CALLBACK
-StatusDialogProc(
-    IN HWND hwndDlg,
-    IN UINT uMsg,
-    IN WPARAM wParam,
-    IN LPARAM lParam)
-{
-    PDLG_DATA pDlgData;
-    UNREFERENCED_PARAMETER(wParam);
-
-    pDlgData = (PDLG_DATA)GetWindowLongPtrW(hwndDlg, GWLP_USERDATA);
-
-    switch (uMsg)
-    {
-        case WM_INITDIALOG:
-        {
-            PDISPLAYSTATUSMSG msg = (PDISPLAYSTATUSMSG)lParam;
-            if (!msg)
-                return FALSE;
-
-            msg->Context->hStatusWindow = hwndDlg;
-
-            if (msg->pTitle)
-                SetWindowTextW(hwndDlg, msg->pTitle);
-            SetDlgItemTextW(hwndDlg, IDC_STATUS_MESSAGE, msg->pMessage);
-            SetEvent(msg->StartupEvent);
-
-            pDlgData = DlgData_Create(hwndDlg, msg->Context);
-            if (pDlgData == NULL)
-                return FALSE;
-
-            DlgData_LoadBitmaps(pDlgData);
-            if (pDlgData->hBarBitmap)
-            {
-                if (SetTimer(hwndDlg, IDT_BAR, 20, NULL) == 0)
-                {
-                    ERR("SetTimer(IDT_BAR) failed: %d\n", GetLastError());
-                }
-                else
-                {
-                    /* Get the animation bar control */
-                    pDlgData->hWndBarCtrl = GetDlgItem(hwndDlg, IDC_BAR);
-                }
-            }
-
-            AdjustStatusMessageWindow(hwndDlg, pDlgData);
-            return TRUE;
-        }
-
-        case WM_TIMER:
-        {
-            if (pDlgData && pDlgData->hBarBitmap)
-            {
-                /*
-                 * Default rotation bar image width is 413 (same as logo)
-                 * We can divide 413 by 7 without remainder
-                 */
-                pDlgData->BarCounter = (pDlgData->BarCounter + 7) % pDlgData->BarWidth;
-                InvalidateRect(pDlgData->hWndBarCtrl, NULL, FALSE);
-                UpdateWindow(pDlgData->hWndBarCtrl);
-            }
-            return TRUE;
-        }
-
-        case WM_DRAWITEM:
-        {
-            LPDRAWITEMSTRUCT lpDis = (LPDRAWITEMSTRUCT)lParam;
-
-            if (lpDis->CtlID != IDC_BAR)
-            {
-                return FALSE;
-            }
-
-            if (pDlgData && pDlgData->hBarBitmap)
-            {
-                HDC hdcMem;
-                HGDIOBJ hOld;
-                DWORD off = pDlgData->BarCounter;
-                DWORD iw = pDlgData->BarWidth;
-                DWORD ih = pDlgData->BarHeight;
-
-                hdcMem = CreateCompatibleDC(lpDis->hDC);
-                hOld = SelectObject(hdcMem, pDlgData->hBarBitmap);
-                BitBlt(lpDis->hDC, off, 0, iw - off, ih, hdcMem, 0, 0, SRCCOPY);
-                BitBlt(lpDis->hDC, 0, 0, off, ih, hdcMem, iw - off, 0, SRCCOPY);
-                SelectObject(hdcMem, hOld);
-                DeleteDC(hdcMem);
-
-                return TRUE;
-            }
-            return FALSE;
-        }
-
-        case WM_DESTROY:
-        {
-            if (pDlgData && pDlgData->hBarBitmap)
-            {
-                KillTimer(hwndDlg, IDT_BAR);
-            }
-            DlgData_Destroy(hwndDlg);
-            return TRUE;
-        }
-    }
-    return FALSE;
-}
-
 static DWORD WINAPI
 StartupWindowThread(LPVOID lpParam)
 {
-    HDESK hDesk;
+    HDESK hDesk = NULL;
+    HWND Window = NULL;
+    MSG Message;
+    BOOL ReadySignaled = FALSE;
     PDISPLAYSTATUSMSG msg = (PDISPLAYSTATUSMSG)lpParam;
 
     /* When SetThreadDesktop is called the system closes the desktop handle when needed
@@ -368,26 +181,40 @@ StartupWindowThread(LPVOID lpParam)
                             DUPLICATE_SAME_ACCESS))
     {
         ERR("Duplicating handle failed!\n");
-        HeapFree(GetProcessHeap(), 0, lpParam);
-        return FALSE;
+        goto cleanup;
     }
 
-    if(!SetThreadDesktop(hDesk))
+    if (!SetThreadDesktop(hDesk))
     {
         ERR("Setting thread desktop failed!\n");
-        HeapFree(GetProcessHeap(), 0, lpParam);
-        return FALSE;
+        CloseDesktop(hDesk);
+        goto cleanup;
     }
 
-    DialogBoxParamW(
-        hDllInstance,
-        MAKEINTRESOURCEW(IDD_STATUS),
-        GetDesktopWindow(),
-        StatusDialogProc,
-        (LPARAM)lpParam);
+    Window = BootStatusCreate(msg->pMessage);
+    msg->Context->hStatusWindow = Window;
+    SetEvent(msg->StartupEvent);
+    ReadySignaled = TRUE;
 
+    if (Window)
+    {
+        while (GetMessageW(&Message, NULL, 0, 0) > 0)
+        {
+            TranslateMessage(&Message);
+            DispatchMessageW(&Message);
+        }
+
+        BootStatusDestroy(Window);
+    }
+
+cleanup:
+    if (!ReadySignaled)
+    {
+        msg->Context->hStatusWindow = NULL;
+        SetEvent(msg->StartupEvent);
+    }
     HeapFree(GetProcessHeap(), 0, lpParam);
-    return TRUE;
+    return Window != NULL;
 }
 
 static BOOL
@@ -400,9 +227,10 @@ GUIDisplayStatusMessage(
 {
     PDISPLAYSTATUSMSG msg;
     HANDLE Thread;
-    DWORD ThreadId;
+    HANDLE StartupEvent;
 
     TRACE("GUIDisplayStatusMessage(%ws)\n", pMessage);
+    UNREFERENCED_PARAMETER(pTitle);
 
     if (!pgContext->hStatusWindow)
     {
@@ -429,21 +257,22 @@ GUIDisplayStatusMessage(
             HeapFree(GetProcessHeap(), 0, msg);
             return FALSE;
         }
+        StartupEvent = msg->StartupEvent;
 
         Thread = CreateThread(NULL,
                               0,
                               StartupWindowThread,
                               (PVOID)msg,
                               0,
-                              &ThreadId);
+                              NULL);
         if (Thread)
         {
             /* 'msg' will be freed by 'StartupWindowThread' */
 
             CloseHandle(Thread);
-            WaitForSingleObject(msg->StartupEvent, INFINITE);
-            CloseHandle(msg->StartupEvent);
-            return TRUE;
+            WaitForSingleObject(StartupEvent, INFINITE);
+            CloseHandle(StartupEvent);
+            return pgContext->hStatusWindow != NULL;
         }
         else
         {
@@ -451,18 +280,14 @@ GUIDisplayStatusMessage(
              * The 'StartupWindowThread' thread couldn't be created,
              * so we need to free the allocated 'msg'.
              */
+            CloseHandle(StartupEvent);
             HeapFree(GetProcessHeap(), 0, msg);
         }
 
         return FALSE;
     }
 
-    if (pTitle)
-        SetWindowTextW(pgContext->hStatusWindow, pTitle);
-
-    SetDlgItemTextW(pgContext->hStatusWindow, IDC_STATUS_MESSAGE, pMessage);
-
-    return TRUE;
+    return BootStatusSetText(pgContext->hStatusWindow, pMessage);
 }
 
 static BOOL
@@ -471,7 +296,7 @@ GUIRemoveStatusMessage(
 {
     if (pgContext->hStatusWindow)
     {
-        EndDialog(pgContext->hStatusWindow, 0);
+        SendMessageW(pgContext->hStatusWindow, WM_CLOSE, 0, 0);
         pgContext->hStatusWindow = NULL;
     }
 

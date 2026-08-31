@@ -37,6 +37,7 @@ TODO:
 
 #include <atlwin.h>
 #include <ui/rosctrls.h>
+#include <vssym32.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(shell);
 
@@ -282,6 +283,11 @@ private:
     bool                      m_isFullStatusBar;
     bool                      m_ScheduledStatusbarUpdate;
     bool                      m_HasCutItems;
+    bool                      m_IsComputerFolder;
+    bool                      m_ComputerNeedsFinalArrange;
+    RECT                      m_ComputerFoldersHeader;
+    RECT                      m_ComputerDrivesHeader;
+    RECT                      m_ComputerLocationsHeader;
 
     CLSID m_Category;
     BOOL  m_Destroyed;
@@ -303,6 +309,14 @@ private:
     HRESULT ContinueFillList(ULONG Generation);
     void FinishFillList();
     void CancelFillList();
+    bool IsComputerTileView() const;
+    UINT ComputerViewDpi() const;
+    COLORREF ComputerViewBackgroundColor() const;
+    HICON GetComputerItemIcon(PCUITEMID_CHILD pidl, INT size, INT &drawWidth, INT &drawHeight);
+    void ArrangeComputerView();
+    INT ComputerItemFromPoint(POINT point);
+    void DrawComputerHeader(HDC hdc, const RECT &rect, UINT id, UINT count);
+    void DrawComputerItem(NMLVCUSTOMDRAW *pDraw);
     BOOL IsDesktop() const { return m_FolderSettings.fFlags & FWF_DESKTOP; }
 
     inline BOOL IsSpecialFolder(int &csidl) const
@@ -514,6 +528,7 @@ public:
     LRESULT OnChangeNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnUpdateStatusbar(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnFillList(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
+    LRESULT OnArrangeComputer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnMenuMessage(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnSettingChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnInitMenuPopup(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
@@ -565,6 +580,7 @@ public:
     MESSAGE_HANDLER(SHV_CHANGE_NOTIFY, OnChangeNotify)
     MESSAGE_HANDLER(SHV_UPDATESTATUSBAR, OnUpdateStatusbar)
     MESSAGE_HANDLER(SHV_FILL_LIST, OnFillList)
+    MESSAGE_HANDLER(SHV_ARRANGE_COMPUTER, OnArrangeComputer)
     MESSAGE_HANDLER(WM_CONTEXTMENU, OnContextMenu)
     MESSAGE_HANDLER(WM_DRAWITEM, OnMenuMessage)
     MESSAGE_HANDLER(WM_MEASUREITEM, OnMenuMessage)
@@ -631,6 +647,8 @@ CDefView::CDefView() :
     m_isFullStatusBar(true),
     m_ScheduledStatusbarUpdate(false),
     m_HasCutItems(false),
+    m_IsComputerFolder(false),
+    m_ComputerNeedsFinalArrange(false),
     m_Destroyed(FALSE),
     m_FillListIsRefresh(FALSE),
     m_FillListGeneration(0)
@@ -638,6 +656,9 @@ CDefView::CDefView() :
     ZeroMemory(&m_FolderSettings, sizeof(m_FolderSettings));
     ZeroMemory(&m_ptLastMousePos, sizeof(m_ptLastMousePos));
     ZeroMemory(&m_Category, sizeof(m_Category));
+    SetRectEmpty(&m_ComputerFoldersHeader);
+    SetRectEmpty(&m_ComputerDrivesHeader);
+    SetRectEmpty(&m_ComputerLocationsHeader);
     m_viewinfo_data.clrText = CLR_INVALID;
     m_viewinfo_data.clrTextBack = CLR_INVALID;
     m_viewinfo_data.hbmBack = NULL;
@@ -671,11 +692,391 @@ CDefView::~CDefView()
 
 HRESULT WINAPI CDefView::Initialize(IShellFolder *shellFolder)
 {
+    CLSID clsid;
+
     m_pSFParent = shellFolder;
     shellFolder->QueryInterface(IID_PPV_ARG(IShellFolder2, &m_pSF2Parent));
     shellFolder->QueryInterface(IID_PPV_ARG(IShellDetails, &m_pSDParent));
+    m_IsComputerFolder = SUCCEEDED(IUnknown_GetClassID(shellFolder, &clsid)) && IsEqualCLSID(clsid, CLSID_MyComputer);
+    m_ComputerNeedsFinalArrange = m_IsComputerFolder;
 
     return S_OK;
+}
+
+bool CDefView::IsComputerTileView() const
+{
+    return m_IsComputerFolder && m_FolderSettings.ViewMode == FVM_ICON;
+}
+
+static bool IsComputerDriveItem(PCUITEMID_CHILD pidl)
+{
+    return _ILIsDrive(pidl) && _ILIsPidlSimple(pidl);
+}
+
+static bool IsComputerFolderItem(PCUITEMID_CHILD pidl)
+{
+    return _ILIsDrive(pidl) && !_ILIsPidlSimple(pidl);
+}
+
+UINT CDefView::ComputerViewDpi() const
+{
+    HDC hdc = ::GetDC(m_ListView);
+    UINT dpi = hdc ? GetDeviceCaps(hdc, LOGPIXELSX) : 96;
+    if (hdc)
+        ::ReleaseDC(m_ListView, hdc);
+    return dpi ? dpi : 96;
+}
+
+COLORREF CDefView::ComputerViewBackgroundColor() const
+{
+    COLORREF color = GetViewColor(m_viewinfo_data.clrTextBack, COLOR_WINDOW);
+    if (!IsComputerTileView())
+        return color;
+
+    HIGHCONTRASTW highContrast = { sizeof(highContrast) };
+    if (SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(highContrast), &highContrast, 0) &&
+        (highContrast.dwFlags & HCF_HIGHCONTRASTON))
+    {
+        return color;
+    }
+
+    const INT brightness = GetRValue(color) + GetGValue(color) + GetBValue(color);
+    if (brightness < 128 * 3)
+    {
+        COLORREF workspace = GetSysColor(COLOR_APPWORKSPACE);
+        const INT workspaceBrightness = GetRValue(workspace) + GetGValue(workspace) + GetBValue(workspace);
+        if (workspaceBrightness < brightness)
+            return workspace;
+
+        return RGB(max(0, GetRValue(color) - 8), max(0, GetGValue(color) - 8), max(0, GetBValue(color) - 8));
+    }
+
+    return color;
+}
+
+HICON CDefView::GetComputerItemIcon(PCUITEMID_CHILD pidl, INT size, INT &drawWidth, INT &drawHeight)
+{
+    CComPtr<IExtractIconW> extractIcon;
+    HICON icon = NULL;
+    WCHAR location[MAX_PATH];
+    INT iconIndex;
+    UINT flags;
+
+    drawWidth = drawHeight = size;
+    HRESULT hr = m_pSFParent->GetUIObjectOf(m_ListView, 1, &pidl, IID_NULL_PPV_ARG(IExtractIconW, &extractIcon));
+    if (SUCCEEDED(hr))
+        hr = extractIcon->GetIconLocation(GIL_FORSHELL, location, _countof(location), &iconIndex, &flags);
+    if (SUCCEEDED(hr))
+    {
+        HRESULT extractHr = extractIcon->Extract(location, iconIndex, &icon, NULL, MAKELONG(size, GetSystemMetrics(SM_CXSMICON)));
+        if (!icon || extractHr != S_OK)
+        {
+            if (icon)
+                DestroyIcon(icon);
+            icon = NULL;
+            if (!(flags & GIL_NOTFILENAME))
+                SHDefExtractIconW(location, iconIndex, flags, &icon, NULL, MAKELONG(size, GetSystemMetrics(SM_CXSMICON)));
+        }
+    }
+    if (icon)
+        return icon;
+
+    const INT image = SHMapPIDLToSystemImageListIndex(m_pSFParent, pidl, 0);
+    HIMAGELIST imageList = ListView_GetImageList(m_ListView, LVSIL_NORMAL);
+    if (imageList && image >= 0)
+    {
+        ImageList_GetIconSize(imageList, &drawWidth, &drawHeight);
+        icon = ImageList_GetIcon(imageList, image, ILD_TRANSPARENT);
+    }
+    return icon;
+}
+
+void CDefView::ArrangeComputerView()
+{
+    if (!IsComputerTileView() || !m_ListView)
+        return;
+
+    const UINT dpi = ComputerViewDpi();
+    const INT margin = MulDiv(16, dpi, 96);
+    const INT headerHeight = MulDiv(28, dpi, 96);
+    const INT headerGap = MulDiv(10, dpi, 96);
+    const INT tileWidth = MulDiv(270, dpi, 96);
+    const INT tileHeight = MulDiv(76, dpi, 96);
+    const INT groupGap = MulDiv(16, dpi, 96);
+    RECT client;
+    ::GetClientRect(m_ListView, &client);
+
+    const INT columns = max(1, (client.right - (margin * 2)) / tileWidth);
+    INT listIconWidth = GetSystemMetrics(SM_CXICON);
+    INT listIconHeight;
+    HIMAGELIST imageList = ListView_GetImageList(m_ListView, LVSIL_NORMAL);
+    if (imageList)
+        ImageList_GetIconSize(imageList, &listIconWidth, &listIconHeight);
+    const INT itemPositionOffset = (tileWidth - listIconWidth) / 2;
+    INT folderCount = 0, driveCount = 0, locationCount = 0;
+    const INT itemCount = m_ListView.GetItemCount();
+    for (INT i = 0; i < itemCount; ++i)
+    {
+        PCUITEMID_CHILD pidl = _PidlByItem(i);
+        if (IsComputerFolderItem(pidl))
+            ++folderCount;
+        else if (IsComputerDriveItem(pidl))
+            ++driveCount;
+        else
+            ++locationCount;
+    }
+
+    m_ListView.ModifyStyle(LVS_AUTOARRANGE, 0);
+    m_ListView.SetRedraw(FALSE);
+    ListView_SetIconSpacing(m_ListView, tileWidth, tileHeight);
+    SetRectEmpty(&m_ComputerFoldersHeader);
+    SetRectEmpty(&m_ComputerDrivesHeader);
+    SetRectEmpty(&m_ComputerLocationsHeader);
+
+    INT y = margin;
+    if (folderCount)
+    {
+        SetRect(&m_ComputerFoldersHeader, margin, y, client.right - margin, y + headerHeight);
+        y += headerHeight + headerGap;
+        INT slot = 0;
+        for (INT i = 0; i < itemCount; ++i)
+        {
+            if (!IsComputerFolderItem(_PidlByItem(i)))
+                continue;
+            POINT point = { margin + ((slot % columns) * tileWidth) + itemPositionOffset, y + ((slot / columns) * tileHeight) + 2 };
+            m_ListView.SetItemPosition(i, &point);
+            ++slot;
+        }
+        y += (((folderCount + columns - 1) / columns) * tileHeight) + groupGap;
+    }
+
+    if (driveCount)
+    {
+        SetRect(&m_ComputerDrivesHeader, margin, y, client.right - margin, y + headerHeight);
+        y += headerHeight + headerGap;
+        INT slot = 0;
+        for (INT i = 0; i < itemCount; ++i)
+        {
+            if (!IsComputerDriveItem(_PidlByItem(i)))
+                continue;
+            POINT point = { margin + ((slot % columns) * tileWidth) + itemPositionOffset, y + ((slot / columns) * tileHeight) + 2 };
+            m_ListView.SetItemPosition(i, &point);
+            ++slot;
+        }
+        y += (((driveCount + columns - 1) / columns) * tileHeight) + groupGap;
+    }
+
+    if (locationCount)
+    {
+        SetRect(&m_ComputerLocationsHeader, margin, y, client.right - margin, y + headerHeight);
+        y += headerHeight + headerGap;
+        INT slot = 0;
+        for (INT i = 0; i < itemCount; ++i)
+        {
+            PCUITEMID_CHILD pidl = _PidlByItem(i);
+            if (IsComputerFolderItem(pidl) || IsComputerDriveItem(pidl))
+                continue;
+            POINT point = { margin + ((slot % columns) * tileWidth) + itemPositionOffset, y + ((slot / columns) * tileHeight) + 2 };
+            m_ListView.SetItemPosition(i, &point);
+            ++slot;
+        }
+    }
+
+    m_ListView.SetRedraw(TRUE);
+}
+
+INT CDefView::ComputerItemFromPoint(POINT point)
+{
+    if (!IsComputerTileView())
+        return -1;
+
+    const UINT dpi = ComputerViewDpi();
+    const INT tileWidth = MulDiv(270, dpi, 96);
+    const INT tileHeight = MulDiv(76, dpi, 96);
+    INT iconWidth = GetSystemMetrics(SM_CXICON);
+    INT iconHeight;
+    HIMAGELIST imageList = ListView_GetImageList(m_ListView, LVSIL_NORMAL);
+    if (imageList)
+        ImageList_GetIconSize(imageList, &iconWidth, &iconHeight);
+    const INT itemPositionOffset = (tileWidth - iconWidth) / 2;
+
+    for (INT i = 0; i < m_ListView.GetItemCount(); ++i)
+    {
+        POINT position;
+        if (!m_ListView.GetItemPosition(i, &position))
+            continue;
+        RECT tile = { position.x - itemPositionOffset, position.y - 2,
+                      position.x - itemPositionOffset + tileWidth, position.y - 2 + tileHeight };
+        if (PtInRect(&tile, point))
+            return i;
+    }
+    return -1;
+}
+
+void CDefView::DrawComputerHeader(HDC hdc, const RECT &rect, UINT id, UINT count)
+{
+    if (IsRectEmpty(&rect))
+        return;
+
+    WCHAR format[80], text[96];
+    if (!LoadStringW(shell32_hInstance, id, format, _countof(format)))
+        return;
+    StringCchPrintfW(text, _countof(text), format, count);
+
+    HFONT font = (HFONT)m_ListView.SendMessage(WM_GETFONT);
+    LOGFONTW logFont;
+    HFONT headingFont = NULL;
+    if (font && ::GetObjectW(font, sizeof(logFont), &logFont))
+    {
+        logFont.lfWeight = FW_SEMIBOLD;
+        headingFont = CreateFontIndirectW(&logFont);
+    }
+    HGDIOBJ oldFont = headingFont ? SelectObject(hdc, headingFont) : NULL;
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, GetViewColor(m_viewinfo_data.clrText, COLOR_WINDOWTEXT));
+
+    RECT textRect = rect;
+    DrawTextW(hdc, text, -1, &textRect, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_CALCRECT);
+    const INT textHeight = textRect.bottom - textRect.top;
+    textRect.top = rect.top + ((rect.bottom - rect.top - textHeight) / 2);
+    textRect.bottom = textRect.top + textHeight;
+    DrawTextW(hdc, text, -1, &textRect, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+
+    RECT lineRect = rect;
+    lineRect.left = min(textRect.right + MulDiv(10, ComputerViewDpi(), 96), rect.right);
+    lineRect.top = rect.top + ((rect.bottom - rect.top) / 2);
+    lineRect.bottom = lineRect.top + 1;
+    FillRect(hdc, &lineRect, GetSysColorBrush(COLOR_3DSHADOW));
+
+    if (oldFont)
+        SelectObject(hdc, oldFont);
+    if (headingFont)
+        DeleteObject(headingFont);
+}
+
+void CDefView::DrawComputerItem(NMLVCUSTOMDRAW *pDraw)
+{
+    const INT item = (INT)pDraw->nmcd.dwItemSpec;
+    PCUITEMID_CHILD pidl = _PidlByItem(item);
+    if (!pidl)
+        return;
+
+    const UINT dpi = ComputerViewDpi();
+    const INT padding = MulDiv(6, dpi, 96);
+    const INT iconSize = MulDiv(48, dpi, 96);
+    const INT textGap = MulDiv(10, dpi, 96);
+    RECT itemRect = pDraw->nmcd.rc;
+    InflateRect(&itemRect, -padding, -padding);
+
+    const BOOL selected = !!(pDraw->nmcd.uItemState & CDIS_SELECTED);
+    const BOOL hot = !!(pDraw->nmcd.uItemState & CDIS_HOT);
+    HIGHCONTRASTW highContrast = { sizeof(highContrast) };
+    const BOOL isHighContrast = SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(highContrast), &highContrast, 0) &&
+                                (highContrast.dwFlags & HCF_HIGHCONTRASTON);
+    if (selected || hot)
+    {
+        const COLORREF background = ComputerViewBackgroundColor();
+        COLORREF fillColor, borderColor;
+        if (isHighContrast && selected)
+        {
+            fillColor = GetSysColor(COLOR_HIGHLIGHT);
+            borderColor = GetSysColor(COLOR_HIGHLIGHTTEXT);
+        }
+        else
+        {
+            const BOOL darkView = GetRValue(background) + GetGValue(background) + GetBValue(background) < (128 * 3);
+            const INT delta = selected && hot ? 32 : selected ? 24 : 14;
+            const INT direction = darkView ? 1 : -1;
+            fillColor = RGB(max(0, min(255, GetRValue(background) + direction * delta)), max(0, min(255, GetGValue(background) + direction * delta)), max(0, min(255, GetBValue(background) + direction * delta)));
+            borderColor = RGB(max(0, min(255, GetRValue(fillColor) + direction * 16)), max(0, min(255, GetGValue(fillColor) + direction * 16)), max(0, min(255, GetBValue(fillColor) + direction * 16)));
+        }
+
+        HBRUSH fillBrush = CreateSolidBrush(fillColor);
+        HPEN borderPen = CreatePen(PS_SOLID, 1, borderColor);
+        HGDIOBJ oldBrush = SelectObject(pDraw->nmcd.hdc, fillBrush);
+        HGDIOBJ oldPen = SelectObject(pDraw->nmcd.hdc, borderPen);
+        const INT radius = max(4, MulDiv(6, dpi, 96));
+        RoundRect(pDraw->nmcd.hdc, itemRect.left, itemRect.top, itemRect.right, itemRect.bottom, radius, radius);
+        SelectObject(pDraw->nmcd.hdc, oldPen);
+        SelectObject(pDraw->nmcd.hdc, oldBrush);
+        DeleteObject(borderPen);
+        DeleteObject(fillBrush);
+    }
+
+    INT drawWidth, drawHeight;
+    HICON icon = GetComputerItemIcon(pidl, iconSize, drawWidth, drawHeight);
+    const INT iconLeft = itemRect.left + ((iconSize - drawWidth) / 2);
+    const INT iconTop = itemRect.top + ((itemRect.bottom - itemRect.top - drawHeight) / 2);
+    if (icon)
+    {
+        DrawIconEx(pDraw->nmcd.hdc, iconLeft, iconTop, icon, drawWidth, drawHeight, 0, NULL, DI_NORMAL);
+        DestroyIcon(icon);
+    }
+
+    WCHAR name[MAX_PATH] = L"";
+    SHELLDETAILS details;
+    if (SUCCEEDED(GetDetailsByFolderColumn(pidl, 0, details)))
+        StrRetToStrNW(name, _countof(name), &details.str, NULL);
+
+    RECT textRect = itemRect;
+    textRect.left += iconSize + textGap;
+    SetBkMode(pDraw->nmcd.hdc, TRANSPARENT);
+    SetTextColor(pDraw->nmcd.hdc, isHighContrast && selected ? GetSysColor(COLOR_HIGHLIGHTTEXT) : GetViewColor(m_viewinfo_data.clrText, COLOR_WINDOWTEXT));
+
+    RECT nameRect = textRect;
+    if (!IsComputerDriveItem(pidl))
+        nameRect.top += ((nameRect.bottom - nameRect.top) - MulDiv(20, dpi, 96)) / 2;
+    nameRect.bottom = nameRect.top + MulDiv(20, dpi, 96);
+    DrawTextW(pDraw->nmcd.hdc, name, -1, &nameRect, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+
+    if (IsComputerDriveItem(pidl))
+    {
+        WCHAR drive[MAX_PATH];
+        ULARGE_INTEGER freeBytes, totalBytes;
+        if (_ILGetDrive(pidl, drive, _countof(drive)) && GetDiskFreeSpaceExW(drive, &freeBytes, &totalBytes, NULL) && totalBytes.QuadPart)
+        {
+            RECT barRect = textRect;
+            barRect.top += MulDiv(24, dpi, 96);
+            barRect.bottom = barRect.top + max(4, MulDiv(10, dpi, 96));
+            barRect.right -= padding;
+            const COLORREF viewColor = ComputerViewBackgroundColor();
+            const BOOL darkView = GetRValue(viewColor) + GetGValue(viewColor) + GetBValue(viewColor) < (128 * 3);
+            HBRUSH borderBrush = CreateSolidBrush(darkView ? RGB(145, 145, 145) : RGB(112, 112, 112));
+            HBRUSH remainingBrush = CreateSolidBrush(darkView ? RGB(68, 68, 68) : RGB(226, 226, 226));
+            FrameRect(pDraw->nmcd.hdc, &barRect, borderBrush);
+            InflateRect(&barRect, -1, -1);
+            FillRect(pDraw->nmcd.hdc, &barRect, remainingBrush);
+
+            const ULONGLONG usedBytes = totalBytes.QuadPart - min(totalBytes.QuadPart, freeBytes.QuadPart);
+            RECT usedRect = barRect;
+            usedRect.right = usedRect.left + (INT)((usedBytes * (barRect.right - barRect.left)) / totalBytes.QuadPart);
+            const BOOL lowSpace = freeBytes.QuadPart <= totalBytes.QuadPart / 10;
+            HBRUSH usedBrush = CreateSolidBrush(lowSpace ? RGB(203, 52, 52) : RGB(42, 130, 218));
+            FillRect(pDraw->nmcd.hdc, &usedRect, usedBrush);
+            if (usedRect.right > barRect.left && usedRect.right < barRect.right)
+            {
+                RECT boundaryRect = { usedRect.right, barRect.top, usedRect.right + 1, barRect.bottom };
+                FillRect(pDraw->nmcd.hdc, &boundaryRect, borderBrush);
+            }
+            DeleteObject(usedBrush);
+            DeleteObject(remainingBrush);
+            DeleteObject(borderBrush);
+
+            WCHAR freeText[32], totalText[32], format[80], capacityText[128];
+            StrFormatByteSizeW(freeBytes.QuadPart, freeText, _countof(freeText));
+            StrFormatByteSizeW(totalBytes.QuadPart, totalText, _countof(totalText));
+            if (LoadStringW(shell32_hInstance, IDS_COMPUTER_FREE_SPACE, format, _countof(format)))
+                StringCchPrintfW(capacityText, _countof(capacityText), format, freeText, totalText);
+            else
+                StringCchPrintfW(capacityText, _countof(capacityText), L"%s / %s", freeText, totalText);
+            RECT capacityRect = textRect;
+            capacityRect.top = barRect.bottom + MulDiv(3, dpi, 96);
+            DrawTextW(pDraw->nmcd.hdc, capacityText, -1, &capacityRect, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        }
+    }
+
+    if ((pDraw->nmcd.uItemState & CDIS_FOCUS) && (pDraw->nmcd.uItemState & CDIS_SELECTED))
+        DrawFocusRect(pDraw->nmcd.hdc, &itemRect);
 }
 
 // ##### helperfunctions for communication with ICommDlgBrowser #####
@@ -853,6 +1254,14 @@ LRESULT CDefView::OnUpdateStatusbar(UINT uMsg, WPARAM wParam, LPARAM lParam, BOO
     return 0;
 }
 
+LRESULT CDefView::OnArrangeComputer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+{
+    ArrangeComputerView();
+    if (IsComputerTileView())
+        m_ListView.InvalidateRect(NULL, TRUE);
+    return 0;
+}
+
 
 // ##### helperfunctions for initializing the view #####
 
@@ -863,9 +1272,13 @@ BOOL CDefView::CreateList()
     TRACE("%p\n", this);
 
     dwStyle = WS_TABSTOP | WS_VISIBLE | WS_CHILDWINDOW | WS_CLIPSIBLINGS | WS_CLIPCHILDREN |
-              LVS_SHAREIMAGELISTS | LVS_EDITLABELS | LVS_AUTOARRANGE; // FIXME: Remove LVS_AUTOARRANGE when the view is able to save ItemPos
+              LVS_SHAREIMAGELISTS | LVS_EDITLABELS;
     dwExStyle = (m_FolderSettings.fFlags & FWF_NOCLIENTEDGE) ? 0 : WS_EX_CLIENTEDGE;
     ListExStyle = LVS_EX_INFOTIP | LVS_EX_LABELTIP;
+
+    // FIXME: Remove LVS_AUTOARRANGE globally when the view is able to save ItemPos.
+    if (!IsComputerTileView())
+        dwStyle |= LVS_AUTOARRANGE;
 
     if (m_FolderSettings.fFlags & FWF_DESKTOP)
     {
@@ -901,7 +1314,7 @@ BOOL CDefView::CreateList()
             break;
     }
 
-    if (m_FolderSettings.fFlags & FWF_AUTOARRANGE)
+    if ((m_FolderSettings.fFlags & FWF_AUTOARRANGE) && !IsComputerTileView())
         dwStyle |= LVS_AUTOARRANGE;
 
     if (m_FolderSettings.fFlags & FWF_SNAPTOGRID)
@@ -980,7 +1393,7 @@ void CDefView::UpdateListColors()
     }
     else
     {
-        m_ListView.SetTextBkColor(GetViewColor(m_viewinfo_data.clrTextBack, COLOR_WINDOW));
+        m_ListView.SetTextBkColor(ComputerViewBackgroundColor());
         m_ListView.SetTextColor(GetViewColor(m_viewinfo_data.clrText, COLOR_WINDOWTEXT));
 
         // Background is painted by the parent via WM_PRINTCLIENT
@@ -1593,6 +2006,8 @@ void CDefView::FinishFillList()
         UpdateStatusbarLocation();
 
     _DoFolderViewCB(SFVM_LISTREFRESHED, 0, 0);
+
+    ArrangeComputerView();
 }
 
 HRESULT CDefView::ContinueFillList(ULONG Generation)
@@ -1674,6 +2089,8 @@ HRESULT CDefView::FillList(BOOL IsRefreshCommand)
 
     CancelFillList();
     m_FillListIsRefresh = IsRefreshCommand;
+    if (IsComputerTileView())
+        m_ComputerNeedsFinalArrange = true;
 
     SHELLSTATE shellstate;
     SHGetSetSettings(&shellstate, SSF_SHOWALLOBJECTS | SSF_SHOWSUPERHIDDEN, FALSE);
@@ -1813,7 +2230,7 @@ LRESULT CDefView::OnPrintClient(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &b
     }
     else
     {
-        SHFillRectClr(hDC, &rc, GetViewColor(m_viewinfo_data.clrTextBack, COLOR_WINDOW));
+        SHFillRectClr(hDC, &rc, ComputerViewBackgroundColor());
     }
 
     bHandled = TRUE;
@@ -2516,6 +2933,7 @@ LRESULT CDefView::OnSize(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled
 
     /* Resize the ListView to fit our window */
     ::MoveWindow(m_ListView, 0, 0, wWidth, wHeight, TRUE);
+    ArrangeComputerView();
 
     _DoFolderViewCB(SFVM_SIZE, 0, 0);
 
@@ -2771,18 +3189,84 @@ LRESULT CDefView::OnNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
             break;
         case NM_CUSTOMDRAW:
             TRACE("-- NM_CUSTOMDRAW %p\n", this);
+            if (lpnmh->hwndFrom == m_ListView && IsComputerTileView())
+            {
+                NMLVCUSTOMDRAW *pDraw = (NMLVCUSTOMDRAW *)lpnmh;
+                if (pDraw->nmcd.dwDrawStage == CDDS_PREPAINT)
+                {
+                    if (m_ComputerNeedsFinalArrange)
+                    {
+                        m_ComputerNeedsFinalArrange = false;
+                        PostMessage(SHV_ARRANGE_COMPUTER, 0, 0);
+                        return CDRF_SKIPDEFAULT;
+                    }
+
+                    UINT folderCount = 0, driveCount = 0, locationCount = 0;
+                    for (INT i = 0; i < m_ListView.GetItemCount(); ++i)
+                    {
+                        PCUITEMID_CHILD pidl = _PidlByItem(i);
+                        if (IsComputerFolderItem(pidl))
+                            ++folderCount;
+                        else if (IsComputerDriveItem(pidl))
+                            ++driveCount;
+                        else
+                            ++locationCount;
+                    }
+                    RECT foldersHeader = m_ComputerFoldersHeader;
+                    RECT drivesHeader = m_ComputerDrivesHeader;
+                    RECT locationsHeader = m_ComputerLocationsHeader;
+                    const INT scrollX = ::GetScrollPos(m_ListView, SB_HORZ);
+                    const INT scrollY = ::GetScrollPos(m_ListView, SB_VERT);
+                    OffsetRect(&foldersHeader, -scrollX, -scrollY);
+                    OffsetRect(&drivesHeader, -scrollX, -scrollY);
+                    OffsetRect(&locationsHeader, -scrollX, -scrollY);
+                    DrawComputerHeader(pDraw->nmcd.hdc, foldersHeader, IDS_COMPUTER_FOLDERS, folderCount);
+                    DrawComputerHeader(pDraw->nmcd.hdc, drivesHeader, IDS_COMPUTER_DEVICES_AND_DRIVES, driveCount);
+                    DrawComputerHeader(pDraw->nmcd.hdc, locationsHeader, IDS_COMPUTER_SYSTEM_LOCATIONS, locationCount);
+                    return CDRF_NOTIFYITEMDRAW;
+                }
+                if (pDraw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT)
+                {
+                    DrawComputerItem(pDraw);
+                    return CDRF_SKIPDEFAULT;
+                }
+            }
             return CDRF_DODEFAULT;
         case NM_RELEASEDCAPTURE:
             TRACE("-- NM_RELEASEDCAPTURE %p\n", this);
             break;
         case NM_CLICK:
             TRACE("-- NM_CLICK %p\n", this);
+            if (lpnmh->hwndFrom == m_ListView && IsComputerTileView())
+            {
+                NMITEMACTIVATE *activate = (NMITEMACTIVATE *)lpnmh;
+                INT item = ComputerItemFromPoint(activate->ptAction);
+                if (item >= 0 && item != activate->iItem)
+                    SelectItem(item, SVSI_DESELECTOTHERS | SVSI_SELECT | SVSI_FOCUSED);
+            }
             break;
         case NM_RCLICK:
             TRACE("-- NM_RCLICK %p\n", this);
+            if (lpnmh->hwndFrom == m_ListView && IsComputerTileView())
+            {
+                NMITEMACTIVATE *activate = (NMITEMACTIVATE *)lpnmh;
+                INT item = ComputerItemFromPoint(activate->ptAction);
+                if (item >= 0 && item != activate->iItem)
+                    SelectItem(item, SVSI_DESELECTOTHERS | SVSI_SELECT | SVSI_FOCUSED);
+            }
             break;
         case NM_DBLCLK:
             TRACE("-- NM_DBLCLK %p\n", this);
+            if (lpnmh->hwndFrom == m_ListView && IsComputerTileView())
+            {
+                NMITEMACTIVATE *activate = (NMITEMACTIVATE *)lpnmh;
+                INT item = ComputerItemFromPoint(activate->ptAction);
+                if (item >= 0 && activate->iItem < 0)
+                {
+                    SelectItem(item, SVSI_DESELECTOTHERS | SVSI_SELECT | SVSI_FOCUSED);
+                    OpenSelectedItems(NULL);
+                }
+            }
             break;
         case NM_RETURN:
             TRACE("-- NM_RETURN %p\n", this);
@@ -3104,6 +3588,8 @@ LRESULT CDefView::OnChangeNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &
             UpdateStatusbar();
             break;
     }
+
+    ArrangeComputerView();
 
     SHChangeNotification_Unlock(hLock);
     return TRUE;
@@ -3726,11 +4212,23 @@ HRESULT STDMETHODCALLTYPE CDefView::SetCurrentViewMode(UINT ViewMode)
             break;
     }
 
-    m_ListView.ModifyStyle(LVS_TYPEMASK, dwStyle);
-
     /* This will not necessarily be the actual mode set above.
        This mimics the behavior of Windows XP. */
     m_FolderSettings.ViewMode = ViewMode;
+    m_ListView.ModifyStyle(LVS_TYPEMASK, dwStyle);
+    if (IsComputerTileView())
+    {
+        m_ComputerNeedsFinalArrange = true;
+        m_ListView.ModifyStyle(LVS_AUTOARRANGE, 0);
+        ArrangeComputerView();
+    }
+    else
+    {
+        m_ListView.ModifyStyle(0, LVS_AUTOARRANGE);
+        ListView_SetIconSpacing(m_ListView, -1, -1);
+        m_ListView.Arrange(LVA_DEFAULT);
+        m_ListView.InvalidateRect(NULL, TRUE);
+    }
     CheckToolbar();
     return S_OK;
 }

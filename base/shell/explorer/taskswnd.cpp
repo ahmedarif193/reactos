@@ -150,6 +150,8 @@ typedef struct _TASK_GROUP
     DWORD dwTaskCount;
     DWORD dwProcessId;
     INT Index;
+    INT IconIndex;
+    WCHAR szExePath[MAX_PATH];
     union
     {
         DWORD dwFlags;
@@ -555,22 +557,269 @@ public:
     }
 
 
+    PTASK_ITEM FirstTaskOfGroup(IN PTASK_GROUP TaskGroup)
+    {
+        PTASK_ITEM TaskItem, LastItem;
+
+        TaskItem = m_TaskItems;
+        LastItem = TaskItem + m_TaskItemCount;
+        while (TaskItem != LastItem)
+        {
+            if (TaskItem->Group == TaskGroup)
+                return TaskItem;
+            TaskItem++;
+        }
+        return NULL;
+    }
+
+    BOOL GroupContainsActive(IN PTASK_GROUP TaskGroup)
+    {
+        return m_ActiveTaskItem != NULL && m_ActiveTaskItem->Group == TaskGroup;
+    }
+
+    BOOL GroupHasFlash(IN PTASK_GROUP TaskGroup)
+    {
+        PTASK_ITEM TaskItem, LastItem;
+
+        TaskItem = m_TaskItems;
+        LastItem = TaskItem + m_TaskItemCount;
+        while (TaskItem != LastItem)
+        {
+            if (TaskItem->Group == TaskGroup && TaskItem->RenderFlashed)
+                return TRUE;
+            TaskItem++;
+        }
+        return FALSE;
+    }
+
+    HICON GetGroupIcon(IN PTASK_GROUP TaskGroup)
+    {
+        PTASK_ITEM First = FirstTaskOfGroup(TaskGroup);
+        HICON icon = First ? GetWndIcon(First->hWnd) : NULL;
+        if (!icon)
+            icon = static_cast<HICON>(LoadImageW(NULL, MAKEINTRESOURCEW(OIC_SAMPLE), IMAGE_ICON, 0, 0, LR_SHARED | LR_DEFAULTSIZE));
+        return icon;
+    }
+
     INT UpdateTaskGroupButton(IN PTASK_GROUP TaskGroup)
     {
+        TBBUTTONINFO tbbi;
+        WCHAR szText[2];
+
         ASSERT(TaskGroup->Index >= 0);
 
-        /* FIXME: Implement */
+        szText[0] = 0;
+
+        tbbi.cbSize = sizeof(tbbi);
+        tbbi.dwMask = TBIF_BYINDEX | TBIF_STATE | TBIF_TEXT | TBIF_IMAGE;
+        tbbi.fsState = TBSTATE_ENABLED;
+        if (GroupContainsActive(TaskGroup))
+            tbbi.fsState |= TBSTATE_CHECKED;
+        if (GroupHasFlash(TaskGroup))
+            tbbi.fsState |= TBSTATE_MARKED;
+        if (!m_Tray->IsHorizontal() || (m_ButtonsPerLine != 0 &&
+            (TaskGroup->Index + 1) % m_ButtonsPerLine == 0))
+        {
+            tbbi.fsState |= TBSTATE_WRAP;
+        }
+        tbbi.pszText = szText;
+
+        TaskGroup->IconIndex = ImageList_ReplaceIcon(m_ImageList, TaskGroup->IconIndex,
+                                                     GetGroupIcon(TaskGroup));
+        tbbi.iImage = TaskGroup->IconIndex;
+
+        if (!m_TaskBar.SetButtonInfo(TaskGroup->Index, &tbbi))
+        {
+            TaskGroup->Index = -1;
+            return -1;
+        }
 
         return TaskGroup->Index;
     }
 
+    VOID RemoveGroupIcon(IN PTASK_GROUP TaskGroup)
+    {
+        TBBUTTONINFO tbbi;
+        PTASK_ITEM currentTaskItem, LastItem;
+        PTASK_GROUP currentGroup;
+
+        if (TaskGroup->IconIndex == -1)
+            return;
+
+        tbbi.cbSize = sizeof(tbbi);
+        tbbi.dwMask = TBIF_IMAGE;
+
+        currentTaskItem = m_TaskItems;
+        LastItem = currentTaskItem + m_TaskItemCount;
+        while (currentTaskItem != LastItem)
+        {
+            if (currentTaskItem->IconIndex > TaskGroup->IconIndex)
+            {
+                currentTaskItem->IconIndex--;
+                if (currentTaskItem->Index >= 0)
+                {
+                    tbbi.iImage = currentTaskItem->IconIndex;
+                    m_TaskBar.SetButtonInfo(currentTaskItem->Index, &tbbi);
+                }
+            }
+            currentTaskItem++;
+        }
+
+        currentGroup = m_TaskGroups;
+        while (currentGroup != NULL)
+        {
+            if (currentGroup != TaskGroup &&
+                currentGroup->IconIndex > TaskGroup->IconIndex)
+            {
+                currentGroup->IconIndex--;
+                if (currentGroup->IsCollapsed && currentGroup->Index >= 0)
+                {
+                    tbbi.iImage = currentGroup->IconIndex;
+                    m_TaskBar.SetButtonInfo(currentGroup->Index, &tbbi);
+                }
+            }
+            currentGroup = currentGroup->Next;
+        }
+
+        ImageList_Remove(m_ImageList, TaskGroup->IconIndex);
+        TaskGroup->IconIndex = -1;
+    }
+
+    VOID CollapseTaskGroup(IN PTASK_GROUP TaskGroup)
+    {
+        PTASK_ITEM TaskItem, LastItem;
+        TBBUTTON tbBtn = { 0 };
+        WCHAR szText[2];
+        INT iIndex = -1;
+
+        if (TaskGroup->IsCollapsed)
+            return;
+
+        szText[0] = 0;
+
+        m_TaskBar.BeginUpdate();
+
+        LastItem = m_TaskItems + m_TaskItemCount;
+        for (TaskItem = m_TaskItems; TaskItem != LastItem; TaskItem++)
+        {
+            if (TaskItem->Group == TaskGroup && TaskItem->Index >= 0 &&
+                (iIndex < 0 || TaskItem->Index < iIndex))
+            {
+                iIndex = TaskItem->Index;
+            }
+        }
+        if (iIndex < 0)
+            iIndex = m_ButtonCount;
+
+        for (;;)
+        {
+            PTASK_ITEM Highest = NULL;
+            for (TaskItem = m_TaskItems; TaskItem != LastItem; TaskItem++)
+            {
+                if (TaskItem->Group == TaskGroup && TaskItem->Index >= 0 &&
+                    (Highest == NULL || TaskItem->Index > Highest->Index))
+                {
+                    Highest = TaskItem;
+                }
+            }
+            if (Highest == NULL)
+                break;
+            DeleteTaskItemButton(Highest);
+        }
+
+        TaskGroup->IsCollapsed = TRUE;
+
+        TaskGroup->IconIndex = ImageList_ReplaceIcon(m_ImageList, TaskGroup->IconIndex,
+                                                     GetGroupIcon(TaskGroup));
+
+        tbBtn.iBitmap = TaskGroup->IconIndex;
+        tbBtn.fsState = TBSTATE_ENABLED | TBSTATE_ELLIPSES;
+        if (GroupContainsActive(TaskGroup))
+            tbBtn.fsState |= TBSTATE_CHECKED;
+        tbBtn.fsStyle = BTNS_CHECK | BTNS_NOPREFIX | BTNS_SHOWTEXT;
+        tbBtn.iString = (DWORD_PTR)szText;
+        tbBtn.idCommand = iIndex;
+
+        if (m_TaskBar.InsertButton(iIndex, &tbBtn))
+        {
+            UpdateIndexesAfter(iIndex, TRUE);
+            TaskGroup->Index = iIndex;
+            m_ButtonCount++;
+            UpdateButtonsSize(TRUE);
+        }
+        else
+        {
+            TaskGroup->Index = -1;
+            TaskGroup->IsCollapsed = FALSE;
+        }
+
+        m_TaskBar.EndUpdate();
+    }
+
     VOID ExpandTaskGroup(IN PTASK_GROUP TaskGroup)
     {
-        ASSERT(TaskGroup->dwTaskCount > 0);
-        ASSERT(TaskGroup->IsCollapsed);
-        ASSERT(TaskGroup->Index >= 0);
+        PTASK_ITEM TaskItem, LastItem;
+        INT iInsert;
 
-        /* FIXME: Implement */
+        if (!TaskGroup->IsCollapsed)
+            return;
+
+        m_TaskBar.BeginUpdate();
+
+        iInsert = TaskGroup->Index;
+        if (iInsert >= 0 && m_TaskBar.DeleteButton(iInsert))
+        {
+            m_ButtonCount--;
+            UpdateIndexesAfter(iInsert, FALSE);
+        }
+        if (iInsert < 0)
+            iInsert = m_ButtonCount;
+        RemoveGroupIcon(TaskGroup);
+        TaskGroup->Index = -1;
+        TaskGroup->IsCollapsed = FALSE;
+
+        LastItem = m_TaskItems + m_TaskItemCount;
+        for (TaskItem = m_TaskItems; TaskItem != LastItem; TaskItem++)
+        {
+            TBBUTTON tbBtn = { 0 };
+            WCHAR windowText[255];
+            HICON icon;
+
+            if (TaskItem->Group != TaskGroup || TaskItem->Index >= 0)
+                continue;
+
+            icon = GetWndIcon(TaskItem->hWnd);
+            if (!icon)
+                icon = static_cast<HICON>(LoadImageW(NULL, MAKEINTRESOURCEW(OIC_SAMPLE), IMAGE_ICON, 0, 0, LR_SHARED | LR_DEFAULTSIZE));
+            TaskItem->IconIndex = ImageList_ReplaceIcon(m_ImageList, -1, icon);
+
+            tbBtn.iBitmap = TaskItem->IconIndex;
+            tbBtn.fsState = TBSTATE_ENABLED | TBSTATE_ELLIPSES;
+            tbBtn.fsStyle = BTNS_CHECK | BTNS_NOPREFIX | BTNS_SHOWTEXT;
+            windowText[0] = 0;
+            if (!IsWin7Bar())
+                GetWndTextFromTaskItem(TaskItem, windowText, _countof(windowText));
+            tbBtn.iString = (DWORD_PTR)windowText;
+            tbBtn.idCommand = iInsert;
+
+            if (m_TaskBar.InsertButton(iInsert, &tbBtn))
+            {
+                UpdateIndexesAfter(iInsert, TRUE);
+                TaskItem->Index = iInsert;
+                m_ButtonCount++;
+                UpdateTaskItemButton(TaskItem);
+                iInsert++;
+            }
+        }
+
+        UpdateButtonsSize(TRUE);
+        m_TaskBar.EndUpdate();
+    }
+
+    BOOL ShouldCombine(IN PTASK_GROUP TaskGroup)
+    {
+        return m_IsGroupingEnabled && IsWin7Bar() &&
+               TaskGroup != NULL && TaskGroup->dwTaskCount > 1;
     }
 
     BOOL IsWin7Bar()
@@ -688,11 +937,28 @@ public:
             if (currentTaskItem->IconIndex > TaskItem->IconIndex)
             {
                 currentTaskItem->IconIndex--;
-                tbbi.iImage = currentTaskItem->IconIndex;
-
-                m_TaskBar.SetButtonInfo(currentTaskItem->Index, &tbbi);
+                if (currentTaskItem->Index >= 0)
+                {
+                    tbbi.iImage = currentTaskItem->IconIndex;
+                    m_TaskBar.SetButtonInfo(currentTaskItem->Index, &tbbi);
+                }
             }
             currentTaskItem++;
+        }
+
+        PTASK_GROUP currentGroup = m_TaskGroups;
+        while (currentGroup != NULL)
+        {
+            if (currentGroup->IconIndex > TaskItem->IconIndex)
+            {
+                currentGroup->IconIndex--;
+                if (currentGroup->IsCollapsed && currentGroup->Index >= 0)
+                {
+                    tbbi.iImage = currentGroup->IconIndex;
+                    m_TaskBar.SetButtonInfo(currentGroup->Index, &tbbi);
+                }
+            }
+            currentGroup = currentGroup->Next;
         }
 
         ImageList_Remove(m_ImageList, TaskItem->IconIndex);
@@ -793,6 +1059,13 @@ public:
         }
 
         if (TaskItem->Group != NULL &&
+            !TaskItem->Group->IsCollapsed &&
+            ShouldCombine(TaskItem->Group))
+        {
+            CollapseTaskGroup(TaskItem->Group);
+        }
+
+        if (TaskItem->Group != NULL &&
             TaskItem->Group->IsCollapsed)
         {
             /* The task group is collapsed, we only need to update the group button */
@@ -880,10 +1153,31 @@ public:
         return FALSE;
     }
 
+    BOOL GetTaskExePath(IN DWORD dwProcessId, OUT LPWSTR pszPath, IN DWORD cchPath)
+    {
+        HANDLE hProcess;
+        DWORD cch = cchPath;
+
+        pszPath[0] = 0;
+
+        hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, dwProcessId);
+        if (!hProcess)
+            hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, dwProcessId);
+        if (!hProcess)
+            return FALSE;
+
+        if (!QueryFullProcessImageNameW(hProcess, 0, pszPath, &cch))
+            pszPath[0] = 0;
+
+        CloseHandle(hProcess);
+        return pszPath[0] != 0;
+    }
+
     PTASK_GROUP AddToTaskGroup(IN HWND hWnd)
     {
         DWORD dwProcessId;
         PTASK_GROUP TaskGroup, *PrevLink;
+        WCHAR szExePath[MAX_PATH];
 
         if (!GetWindowThreadProcessId(hWnd,
             &dwProcessId))
@@ -892,12 +1186,17 @@ public:
             return NULL;
         }
 
+        GetTaskExePath(dwProcessId, szExePath, _countof(szExePath));
+
         /* Try to find an existing task group */
         TaskGroup = m_TaskGroups;
         PrevLink = &m_TaskGroups;
         while (TaskGroup != NULL)
         {
-            if (TaskGroup->dwProcessId == dwProcessId)
+            if ((szExePath[0] && TaskGroup->szExePath[0] &&
+                 _wcsicmp(TaskGroup->szExePath, szExePath) == 0) ||
+                (!szExePath[0] && !TaskGroup->szExePath[0] &&
+                 TaskGroup->dwProcessId == dwProcessId))
             {
                 TaskGroup->dwTaskCount++;
                 return TaskGroup;
@@ -916,6 +1215,8 @@ public:
             TaskGroup->dwTaskCount = 1;
             TaskGroup->dwProcessId = dwProcessId;
             TaskGroup->Index = -1;
+            TaskGroup->IconIndex = -1;
+            StringCchCopyW(TaskGroup->szExePath, _countof(TaskGroup->szExePath), szExePath);
 
             /* Add the task group to the list */
             *PrevLink = TaskGroup;
@@ -932,6 +1233,7 @@ public:
         if (TaskGroup != NULL)
         {
             DWORD dwNewTaskCount = --TaskGroup->dwTaskCount;
+            TaskItem->Group = NULL;
             if (dwNewTaskCount == 0)
             {
                 /* Find the previous pointer in the chain */
@@ -953,11 +1255,11 @@ public:
                     TaskGroup);
             }
             else if (TaskGroup->IsCollapsed &&
-                TaskGroup->Index >= 0)
+                TaskGroup->Index >= 0 &&
+                !m_IsDestroying)
             {
                 if (dwNewTaskCount > 1)
                 {
-                    /* FIXME: Check if we should expand the group */
                     /* Update the task group button */
                     UpdateTaskGroupButton(TaskGroup);
                 }
@@ -1115,57 +1417,41 @@ public:
 
     VOID CheckActivateTaskItem(IN OUT PTASK_ITEM TaskItem)
     {
-        PTASK_ITEM CurrentTaskItem;
-        PTASK_GROUP TaskGroup = NULL;
+        PTASK_ITEM OldTaskItem = m_ActiveTaskItem;
+        PTASK_GROUP OldGroup = OldTaskItem != NULL ? OldTaskItem->Group : NULL;
+        PTASK_GROUP NewGroup = TaskItem != NULL ? TaskItem->Group : NULL;
 
-        CurrentTaskItem = m_ActiveTaskItem;
-
-        if (TaskItem != NULL)
-            TaskGroup = TaskItem->Group;
-
-        if (m_IsGroupingEnabled &&
-            TaskGroup != NULL &&
-            TaskGroup->IsCollapsed)
-        {
-            /* FIXME */
+        if (OldTaskItem == TaskItem)
             return;
-        }
-
-        if (CurrentTaskItem != NULL)
-        {
-            PTASK_GROUP CurrentTaskGroup;
-
-            if (CurrentTaskItem == TaskItem)
-                return;
-
-            CurrentTaskGroup = CurrentTaskItem->Group;
-
-            if (m_IsGroupingEnabled &&
-                CurrentTaskGroup != NULL &&
-                CurrentTaskGroup->IsCollapsed)
-            {
-                if (CurrentTaskGroup == TaskGroup)
-                    return;
-
-                /* FIXME */
-            }
-            else
-            {
-                m_ActiveTaskItem = NULL;
-                if (CurrentTaskItem->Index >= 0)
-                {
-                    UpdateTaskItemButton(CurrentTaskItem);
-                }
-            }
-        }
 
         m_ActiveTaskItem = TaskItem;
 
-        if (TaskItem != NULL && TaskItem->Index >= 0)
+        if (OldTaskItem != NULL)
         {
-            UpdateTaskItemButton(TaskItem);
+            if (OldGroup != NULL && OldGroup->IsCollapsed)
+            {
+                if (OldGroup != NewGroup && OldGroup->Index >= 0)
+                    UpdateTaskGroupButton(OldGroup);
+            }
+            else if (OldTaskItem->Index >= 0)
+            {
+                UpdateTaskItemButton(OldTaskItem);
+            }
         }
-        else if (TaskItem == NULL)
+
+        if (TaskItem != NULL)
+        {
+            if (NewGroup != NULL && NewGroup->IsCollapsed)
+            {
+                if (NewGroup->Index >= 0)
+                    UpdateTaskGroupButton(NewGroup);
+            }
+            else if (TaskItem->Index >= 0)
+            {
+                UpdateTaskItemButton(TaskItem);
+            }
+        }
+        else
         {
             TRACE("Active TaskItem now NULL\n");
         }
@@ -1302,7 +1588,15 @@ public:
     VOID FlashTaskItem(IN OUT PTASK_ITEM TaskItem)
     {
         TaskItem->RenderFlashed = 1;
-        UpdateTaskItemButton(TaskItem);
+        if (TaskItem->Group != NULL && TaskItem->Group->IsCollapsed)
+        {
+            if (TaskItem->Group->Index >= 0)
+                UpdateTaskGroupButton(TaskItem->Group);
+        }
+        else if (TaskItem->Index >= 0)
+        {
+            UpdateTaskItemButton(TaskItem);
+        }
     }
 
     BOOL FlashTask(IN HWND hWnd)
@@ -1383,9 +1677,20 @@ public:
             while (TaskItem != LastTaskItem)
             {
                 TaskItem->IconIndex = -1;
-                UpdateTaskItemButton(TaskItem);
+                if (TaskItem->Index >= 0)
+                    UpdateTaskItemButton(TaskItem);
 
                 TaskItem++;
+            }
+
+            PTASK_GROUP TaskGroup = m_TaskGroups;
+            while (TaskGroup != NULL)
+            {
+                TaskGroup->IconIndex = -1;
+                if (TaskGroup->IsCollapsed && TaskGroup->Index >= 0)
+                    UpdateTaskGroupButton(TaskGroup);
+
+                TaskGroup = TaskGroup->Next;
             }
             m_TaskBar.SetImageList(m_ImageList);
         }
@@ -1475,10 +1780,18 @@ public:
                         tbbi.fsState |= TBSTATE_WRAP;
                     }
 
-                    if (m_ActiveTaskItem != NULL &&
-                        m_ActiveTaskItem->Index == (INT)ui)
+                    if (m_ActiveTaskItem != NULL)
                     {
-                        tbbi.fsState |= TBSTATE_CHECKED;
+                        PTASK_GROUP ActiveGroup = m_ActiveTaskItem->Group;
+                        if (ActiveGroup != NULL && ActiveGroup->IsCollapsed)
+                        {
+                            if (ActiveGroup->Index == (INT)ui)
+                                tbbi.fsState |= TBSTATE_CHECKED;
+                        }
+                        else if (m_ActiveTaskItem->Index == (INT)ui)
+                        {
+                            tbbi.fsState |= TBSTATE_CHECKED;
+                        }
                     }
 
                     m_TaskBar.SetButtonInfo(ui, &tbbi);
@@ -1530,6 +1843,18 @@ public:
             m_Theme = OpenThemeData(m_hWnd, L"TaskBand");
         else
             m_Theme = NULL;
+
+        m_IsGroupingEnabled = g_TaskbarSettings.bGroupButtons || IsWin7Bar();
+        if (m_IsGroupingEnabled && IsWin7Bar())
+        {
+            PTASK_GROUP TaskGroup = m_TaskGroups;
+            while (TaskGroup != NULL)
+            {
+                if (!TaskGroup->IsCollapsed && TaskGroup->dwTaskCount > 1)
+                    CollapseTaskGroup(TaskGroup);
+                TaskGroup = TaskGroup->Next;
+            }
+        }
 
         UpdateButtonsSize(FALSE);
         InvalidateRect(NULL, TRUE);
@@ -1765,7 +2090,32 @@ public:
 
     VOID HandleTaskGroupClick(IN OUT PTASK_GROUP TaskGroup)
     {
-        /* TODO: Show task group menu */
+        PTASK_ITEM TaskItem, LastItem;
+        HWND ahWnd[16];
+        UINT cWindows = 0;
+        RECT rcBtn;
+
+        if (TaskPreview_IsVisibleFor((INT_PTR)TaskGroup))
+        {
+            TaskPreview_Hide();
+            return;
+        }
+
+        LastItem = m_TaskItems + m_TaskItemCount;
+        for (TaskItem = m_TaskItems; TaskItem != LastItem && cWindows < _countof(ahWnd); TaskItem++)
+        {
+            if (TaskItem->Group == TaskGroup && ::IsWindow(TaskItem->hWnd))
+                ahWnd[cWindows++] = TaskItem->hWnd;
+        }
+
+        if (cWindows == 0 || TaskGroup->Index < 0)
+            return;
+
+        if (!m_TaskBar.SendMessage(TB_GETITEMRECT, TaskGroup->Index, (LPARAM)&rcBtn))
+            return;
+        ::MapWindowPoints(m_TaskBar.m_hWnd, NULL, (LPPOINT)&rcBtn, 2);
+
+        TaskPreview_Show(m_TaskBar.m_hWnd, &rcBtn, ahWnd, cWindows, (INT_PTR)TaskGroup);
     }
 
     BOOL HandleButtonClick(IN WORD wIndex)
@@ -1863,7 +2213,7 @@ public:
         }
     }
 
-    LRESULT DrawWin7TaskButton(IN OUT NMTBCUSTOMDRAW *nmtbcd, IN PTASK_ITEM TaskItem)
+    LRESULT DrawWin7TaskButtonWorker(IN OUT NMTBCUSTOMDRAW *nmtbcd, IN INT IconIndex, IN INT nLayers)
     {
         HDC hdc = nmtbcd->nmcd.hdc;
         RECT rc = nmtbcd->nmcd.rc;
@@ -1871,32 +2221,67 @@ public:
         BOOL bChecked = (uState & CDIS_CHECKED);
         BOOL bHot = (uState & CDIS_HOT);
         BOOL bPressed = (uState & CDIS_SELECTED);
+        INT nStep = ShellScaleForDpi(2);
+        RECT rcFace = rc;
+        COLORREF crEdge = 0;
+        BOOL bFill = FALSE;
+
+        if (nLayers > 3)
+            nLayers = 3;
+        if (nLayers > 1)
+            rcFace.right -= nStep * (nLayers - 1);
 
         if (bPressed || bChecked)
         {
-            DrawVertGradient(hdc, &rc, RGB(26, 29, 32), RGB(44, 49, 54));
-            HBRUSH hbrEdge = CreateSolidBrush(RGB(88, 95, 102));
-            FrameRect(hdc, &rc, hbrEdge);
-            DeleteObject(hbrEdge);
+            DrawVertGradient(hdc, &rcFace, RGB(26, 29, 32), RGB(44, 49, 54));
+            crEdge = RGB(88, 95, 102);
+            bFill = TRUE;
         }
         else if (bHot)
         {
-            DrawVertGradient(hdc, &rc, RGB(78, 84, 90), RGB(46, 51, 56));
-            HBRUSH hbrEdge = CreateSolidBrush(RGB(102, 110, 118));
-            FrameRect(hdc, &rc, hbrEdge);
+            DrawVertGradient(hdc, &rcFace, RGB(78, 84, 90), RGB(46, 51, 56));
+            crEdge = RGB(102, 110, 118);
+            bFill = TRUE;
+        }
+
+        if (bFill)
+        {
+            HBRUSH hbrEdge = CreateSolidBrush(crEdge);
+            FrameRect(hdc, &rcFace, hbrEdge);
             DeleteObject(hbrEdge);
         }
 
-        if (TaskItem->IconIndex >= 0 && m_ImageList)
+        if (nLayers > 1)
+        {
+            HBRUSH hbrPage = CreateSolidBrush(bFill ? crEdge : RGB(88, 95, 102));
+            INT i;
+            for (i = 1; i < nLayers; i++)
+            {
+                RECT rcPage;
+                rcPage.left = rcFace.right + i * nStep - 1;
+                rcPage.right = rcPage.left + 1;
+                rcPage.top = rc.top + (i * nStep) / 2;
+                rcPage.bottom = rc.bottom - (i * nStep) / 2;
+                FillRect(hdc, &rcPage, hbrPage);
+            }
+            DeleteObject(hbrPage);
+        }
+
+        if (IconIndex >= 0 && m_ImageList)
         {
             int cx, cy;
             ImageList_GetIconSize(m_ImageList, &cx, &cy);
-            int x = rc.left + ((rc.right - rc.left) - cx) / 2;
-            int y = rc.top + ((rc.bottom - rc.top) - cy) / 2;
-            ImageList_Draw(m_ImageList, TaskItem->IconIndex, hdc, x, y, ILD_TRANSPARENT);
+            int x = rcFace.left + ((rcFace.right - rcFace.left) - cx) / 2;
+            int y = rcFace.top + ((rcFace.bottom - rcFace.top) - cy) / 2;
+            ImageList_Draw(m_ImageList, IconIndex, hdc, x, y, ILD_TRANSPARENT);
         }
 
         return CDRF_SKIPDEFAULT;
+    }
+
+    LRESULT DrawWin7TaskButton(IN OUT NMTBCUSTOMDRAW *nmtbcd, IN PTASK_ITEM TaskItem)
+    {
+        return DrawWin7TaskButtonWorker(nmtbcd, TaskItem->IconIndex, 1);
     }
 
     LRESULT HandleItemPaint(IN OUT NMTBCUSTOMDRAW *nmtbcd)
@@ -1940,7 +2325,9 @@ public:
         }
         else if (TaskGroup != NULL)
         {
-            /* FIXME: Implement painting for task groups */
+            if (IsWin7Bar())
+                return DrawWin7TaskButtonWorker(nmtbcd, TaskGroup->IconIndex,
+                                                (INT)TaskGroup->dwTaskCount);
         }
         return Ret;
     }
@@ -1955,7 +2342,22 @@ public:
         {
             LPNMTBGETINFOTIPW pTip = (LPNMTBGETINFOTIPW) nmh;
             PTASK_ITEM TaskItem = FindTaskItemByIndex(pTip->iItem);
-            if (TaskItem != NULL && pTip->pszText != NULL && pTip->cchTextMax > 0)
+            if (TaskItem == NULL)
+            {
+                PTASK_GROUP TaskGroup = FindTaskGroupByIndex(pTip->iItem);
+                if (TaskGroup != NULL)
+                    TaskItem = FirstTaskOfGroup(TaskGroup);
+                if (TaskItem != NULL && pTip->pszText != NULL && pTip->cchTextMax > 0)
+                {
+                    WCHAR szTitle[255];
+                    szTitle[0] = 0;
+                    GetWndTextFromTaskItem(TaskItem, szTitle, _countof(szTitle));
+                    StringCchPrintfW(pTip->pszText, pTip->cchTextMax, L"%s (%lu)",
+                                     szTitle, TaskGroup->dwTaskCount);
+                }
+                break;
+            }
+            if (pTip->pszText != NULL && pTip->cchTextMax > 0)
                 GetWndTextFromTaskItem(TaskItem, pTip->pszText, pTip->cchTextMax);
             break;
         }
@@ -2194,7 +2596,7 @@ public:
         {
             bSettingsChanged = TRUE;
             g_TaskbarSettings.bGroupButtons = newSettings->bGroupButtons;
-            m_IsGroupingEnabled = g_TaskbarSettings.bGroupButtons;
+            m_IsGroupingEnabled = g_TaskbarSettings.bGroupButtons || IsWin7Bar();
         }
 
         if (newSettings->bSmallIcons != g_TaskbarSettings.bSmallIcons)
@@ -2330,7 +2732,7 @@ public:
     HRESULT Initialize(IN HWND hWndParent, IN OUT ITrayWindow *tray)
     {
         m_Tray = tray;
-        m_IsGroupingEnabled = g_TaskbarSettings.bGroupButtons;
+        m_IsGroupingEnabled = g_TaskbarSettings.bGroupButtons || IsWin7Bar();
         Create(hWndParent, 0, szRunningApps, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_TABSTOP);
         if (!m_hWnd)
             return E_FAIL;

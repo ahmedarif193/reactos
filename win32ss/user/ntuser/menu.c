@@ -356,38 +356,65 @@ IntDestroyMenuObject(PMENU Menu, BOOL bRecurse)
 }
 
 BOOL
-MenuInit(VOID)
+MenuUpdateFont(VOID)
 {
   NONCLIENTMETRICSW ncm;
+  HFONT hMenuFont, hMenuFontBold;
+  HFONT hOldMenuFont, hOldMenuFontBold;
 
-  /* get the menu font */
+  ncm.cbSize = sizeof(ncm);
+  if (!UserSystemParametersInfo(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0))
+  {
+    ERR("MenuUpdateFont(): SystemParametersInfo(SPI_GETNONCLIENTMETRICS) failed!\n");
+    return FALSE;
+  }
+
+  hMenuFont = GreCreateFontIndirectW(&ncm.lfMenuFont);
+  if (hMenuFont == NULL)
+  {
+    ERR("MenuUpdateFont(): CreateFontIndirectW(hMenuFont) failed!\n");
+    return FALSE;
+  }
+
+  ncm.lfMenuFont.lfWeight = min(ncm.lfMenuFont.lfWeight + (FW_BOLD - FW_NORMAL), FW_HEAVY);
+  hMenuFontBold = GreCreateFontIndirectW(&ncm.lfMenuFont);
+  if (hMenuFontBold == NULL)
+  {
+    ERR("MenuUpdateFont(): CreateFontIndirectW(hMenuFontBold) failed!\n");
+    GreDeleteObject(hMenuFont);
+    return FALSE;
+  }
+
+  GreSetObjectOwner(hMenuFont, GDI_OBJ_HMGR_PUBLIC);
+  GreSetObjectOwner(hMenuFontBold, GDI_OBJ_HMGR_PUBLIC);
+
+  hOldMenuFont = ghMenuFont;
+  hOldMenuFontBold = ghMenuFontBold;
+  ghMenuFont = hMenuFont;
+  ghMenuFontBold = hMenuFontBold;
+
+  if (hOldMenuFont)
+  {
+    GreSetObjectOwner(hOldMenuFont, GDI_OBJ_HMGR_POWNED);
+    GreDeleteObject(hOldMenuFont);
+  }
+
+  if (hOldMenuFontBold)
+  {
+    GreSetObjectOwner(hOldMenuFontBold, GDI_OBJ_HMGR_POWNED);
+    GreDeleteObject(hOldMenuFontBold);
+  }
+
+  return TRUE;
+}
+
+BOOL
+MenuInit(VOID)
+{
   if (!ghMenuFont || !ghMenuFontBold)
   {
-    ncm.cbSize = sizeof(ncm);
-    if(!UserSystemParametersInfo(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0))
-    {
-      ERR("MenuInit(): SystemParametersInfo(SPI_GETNONCLIENTMETRICS) failed!\n");
+    if (!MenuUpdateFont())
       return FALSE;
-    }
-
-    ghMenuFont = GreCreateFontIndirectW(&ncm.lfMenuFont);
-    if (ghMenuFont == NULL)
-    {
-      ERR("MenuInit(): CreateFontIndirectW(hMenuFont) failed!\n");
-      return FALSE;
-    }
-    ncm.lfMenuFont.lfWeight = min(ncm.lfMenuFont.lfWeight + (FW_BOLD - FW_NORMAL), FW_HEAVY);
-    ghMenuFontBold = GreCreateFontIndirectW(&ncm.lfMenuFont);
-    if (ghMenuFontBold == NULL)
-    {
-      ERR("MenuInit(): CreateFontIndirectW(hMenuFontBold) failed!\n");
-      GreDeleteObject(ghMenuFont);
-      ghMenuFont = NULL;
-      return FALSE;
-    }
-    
-    GreSetObjectOwner(ghMenuFont, GDI_OBJ_HMGR_PUBLIC);
-    GreSetObjectOwner(ghMenuFontBold, GDI_OBJ_HMGR_PUBLIC);
 
     co_IntSetupOBM();
   }
@@ -2201,6 +2228,43 @@ static void MENU_DrawScrollArrows(PMENU lppop, HDC hdc)
  *
  * Draw a single menu item.
  */
+static COLORREF FASTCALL MENU_OffsetColor(COLORREF base, INT delta)
+{
+    INT r = GetRValue(base) + delta;
+    INT g = GetGValue(base) + delta;
+    INT b = GetBValue(base) + delta;
+    if (r < 0) r = 0; if (r > 255) r = 255;
+    if (g < 0) g = 0; if (g > 255) g = 255;
+    if (b < 0) b = 0; if (b > 255) b = 255;
+    return RGB(r, g, b);
+}
+
+static void FASTCALL MENU_FillFlatPopupBack(HDC hdc, const RECT *prc, INT cyTotal)
+{
+    COLORREF base = IntGetSysColor(COLOR_MENU);
+    HPEN oldPen;
+    INT y;
+
+    if (cyTotal <= 0)
+        cyTotal = prc->bottom > 0 ? prc->bottom : 1;
+
+    oldPen = NtGdiSelectPen(hdc, NtGdiGetStockObject(DC_PEN));
+    if (!oldPen)
+    {
+        FillRect(hdc, prc, IntGetSysColorBrush(COLOR_MENU));
+        return;
+    }
+
+    for (y = prc->top; y < prc->bottom; y++)
+    {
+        INT delta = 18 - (24 * y) / cyTotal;
+        IntSetDCPenColor(hdc, MENU_OffsetColor(base, delta));
+        GreMoveTo(hdc, prc->left, y, NULL);
+        NtGdiLineTo(hdc, prc->right, y);
+    }
+    NtGdiSelectPen(hdc, oldPen);
+}
+
 static void FASTCALL MENU_DrawMenuItem(PWND Wnd, PMENU Menu, PWND WndOwner, HDC hdc,
                  PITEM lpitem, UINT Height, BOOL menuBar, UINT odaction)
 {
@@ -2338,7 +2402,12 @@ static void FASTCALL MENU_DrawMenuItem(PWND Wnd, PMENU Menu, PWND WndOwner, HDC 
         }
     }
     else
-        FillRect( hdc, &rect, IntGetSysColorBrush(bkgnd) );
+    {
+        if (flat_menu && !menuBar)
+            MENU_FillFlatPopupBack(hdc, &rect, Height);
+        else
+            FillRect( hdc, &rect, IntGetSysColorBrush(bkgnd) );
+    }
 
     IntGdiSetBkMode( hdc, TRANSPARENT );
 
@@ -2535,14 +2604,14 @@ static void FASTCALL MENU_DrawMenuItem(PWND Wnd, PMENU Menu, PWND WndOwner, HDC 
 
         if(lpitem->fState & MF_GRAYED)
         {
-            if (!(lpitem->fState & MF_HILITE) )
+            if (!flat_menu && !(lpitem->fState & MF_HILITE) )
             {
                 ++rect.left; ++rect.top; ++rect.right; ++rect.bottom;
                 IntGdiSetTextColor(hdc, IntGetSysColor(COLOR_BTNHIGHLIGHT));
                 DrawTextW( hdc, Text, i, &rect, uFormat );
                 --rect.left; --rect.top; --rect.right; --rect.bottom;
             }
-            IntGdiSetTextColor(hdc, IntGetSysColor(COLOR_BTNSHADOW));
+            IntGdiSetTextColor(hdc, IntGetSysColor(flat_menu ? COLOR_GRAYTEXT : COLOR_BTNSHADOW));
         }
         DrawTextW( hdc, Text, i, &rect, uFormat);
 
@@ -2562,14 +2631,14 @@ static void FASTCALL MENU_DrawMenuItem(PWND Wnd, PMENU Menu, PWND WndOwner, HDC 
 
             if (lpitem->fState & MF_GRAYED)
             {
-                if (!(lpitem->fState & MF_HILITE) )
+                if (!flat_menu && !(lpitem->fState & MF_HILITE) )
                 {
                     ++rect.left; ++rect.top; ++rect.right; ++rect.bottom;
                     IntGdiSetTextColor(hdc, IntGetSysColor(COLOR_BTNHIGHLIGHT));
                     DrawTextW( hdc, Text + i + 1, -1, &rect, uFormat);
                     --rect.left; --rect.top; --rect.right; --rect.bottom;
                 }
-                IntGdiSetTextColor(hdc, IntGetSysColor(COLOR_BTNSHADOW));
+                IntGdiSetTextColor(hdc, IntGetSysColor(flat_menu ? COLOR_GRAYTEXT : COLOR_BTNSHADOW));
             }
             DrawTextW( hdc, Text + i + 1, -1, &rect, uFormat );
         }
@@ -2600,10 +2669,13 @@ static void FASTCALL MENU_DrawPopupMenu(PWND wnd, HDC hdc, PMENU menu )
 {
     HBRUSH hPrevBrush = 0, brush = IntGetSysColorBrush(COLOR_MENU);
     RECT rect;
+    BOOL flat_menu = FALSE;
 
     TRACE("DPM wnd=%p dc=%p menu=%p\n", wnd, hdc, menu);
 
     IntGetClientRect( wnd, &rect );
+
+    UserSystemParametersInfo(SPI_GETFLATMENU, 0, &flat_menu, 0);
 
     if (menu && menu->hbrBack) brush = menu->hbrBack;
     if((hPrevBrush = NtGdiSelectBrush( hdc, brush ))
@@ -2612,7 +2684,10 @@ static void FASTCALL MENU_DrawPopupMenu(PWND wnd, HDC hdc, PMENU menu )
         HPEN hPrevPen;
 
         /* FIXME: Maybe we don't have to fill the background manually */
-        FillRect(hdc, &rect, brush);
+        if (flat_menu && !(menu && menu->hbrBack))
+            MENU_FillFlatPopupBack(hdc, &rect, rect.bottom - rect.top);
+        else
+            FillRect(hdc, &rect, brush);
 
         hPrevPen = NtGdiSelectPen( hdc, NtGdiGetStockObject( NULL_PEN ) );
         if ( hPrevPen )
@@ -2636,6 +2711,7 @@ static void FASTCALL MENU_DrawPopupMenu(PWND wnd, HDC hdc, PMENU menu )
                    MENU_DrawScrollArrows(menu, hdc);
                 }
             }
+
         }
         else
         {

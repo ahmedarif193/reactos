@@ -84,6 +84,31 @@ static bool IsRegItem(PCUITEMID_CHILD pidl, REFCLSID clsid)
     return pClass && *pClass == clsid;
 }
 
+static bool IsSimpleDriveItem(PCUITEMID_CHILD pidl)
+{
+    return _ILIsDrive(pidl) && _ILIsPidlSimple(pidl);
+}
+
+static bool IsFileSystemFolderItem(PCUITEMID_CHILD pidl)
+{
+    return _ILIsDrive(pidl) && !_ILIsPidlSimple(pidl);
+}
+
+static HRESULT GetFileSystemFolderUIObject(PCIDLIST_ABSOLUTE root, HWND hwndOwner, PCUITEMID_CHILD pidl,
+                                           REFIID riid, UINT *reserved, void **object)
+{
+    CComHeapPtr<ITEMIDLIST> absolute(ILCombine(root, pidl));
+    if (!absolute)
+        return E_OUTOFMEMORY;
+
+    CComPtr<IShellFolder> parent;
+    PCUITEMID_CHILD child;
+    HRESULT hr = SHBindToParent(absolute, IID_PPV_ARG(IShellFolder, &parent), &child);
+    if (FAILED(hr))
+        return hr;
+    return parent->GetUIObjectOf(hwndOwner, 1, &child, riid, reserved, object);
+}
+
 static INT8 GetDriveNumber(PCUITEMID_CHILD pidl)
 {
     if (!_ILIsDrive(pidl))
@@ -630,12 +655,51 @@ HRESULT CDrivesExtractIcon_CreateInstance(IShellFolder * psf, LPCITEMIDLIST pidl
 class CDrivesFolderEnum :
     public CEnumIDListBase
 {
+    HRESULT AddKnownFolder(HWND hwndOwner, CDrivesFolder *folder, REFKNOWNFOLDERID folderId)
+    {
+        PIDLIST_ABSOLUTE absolute = NULL;
+        HRESULT hr = SHGetKnownFolderIDList(folderId, KF_FLAG_CREATE, NULL, &absolute);
+        if (FAILED(hr))
+            return hr;
+
+        WCHAR path[MAX_PATH];
+        if (!SHGetPathFromIDListW(absolute, path))
+        {
+            ILFree(absolute);
+            return E_FAIL;
+        }
+        ILFree(absolute);
+
+        PIDLIST_RELATIVE pidl = NULL;
+        hr = folder->ParseDisplayName(hwndOwner, NULL, path, NULL, &pidl, NULL);
+        if (FAILED(hr))
+            return hr;
+        if (!AddToEnumList(pidl))
+        {
+            ILFree(pidl);
+            return E_OUTOFMEMORY;
+        }
+        return S_OK;
+    }
+
     public:
-        HRESULT WINAPI Initialize(HWND hwndOwner, DWORD dwFlags, IEnumIDList* pRegEnumerator)
+        HRESULT WINAPI Initialize(HWND hwndOwner, DWORD dwFlags, IEnumIDList* pRegEnumerator, CDrivesFolder *folder)
         {
             /* enumerate the folders */
             if (dwFlags & SHCONTF_FOLDERS)
             {
+                const KNOWNFOLDERID *folderIds[] =
+                {
+                    &FOLDERID_Desktop,
+                    &FOLDERID_Documents,
+                    &FOLDERID_Downloads,
+                    &FOLDERID_Music,
+                    &FOLDERID_Pictures,
+                    &FOLDERID_Videos,
+                };
+                for (UINT i = 0; i < _countof(folderIds); ++i)
+                    AddKnownFolder(hwndOwner, folder, *folderIds[i]);
+
                 WCHAR wszDriveName[] = {'A', ':', '\\', '\0'};
                 DWORD dwDrivemap = GetLogicalDrives() & ~SHRestricted(REST_NODRIVES);
                 for (; wszDriveName[0] <= 'Z'; wszDriveName[0]++)
@@ -787,7 +851,7 @@ HRESULT WINAPI CDrivesFolder::EnumObjects(HWND hwndOwner, DWORD dwFlags, LPENUMI
     CComPtr<IEnumIDList> pRegEnumerator;
     m_regFolder->EnumObjects(hwndOwner, dwFlags, &pRegEnumerator);
 
-    return ShellObjectCreatorInit<CDrivesFolderEnum>(hwndOwner, dwFlags, pRegEnumerator, IID_PPV_ARG(IEnumIDList, ppEnumIDList));
+    return ShellObjectCreatorInit<CDrivesFolderEnum>(hwndOwner, dwFlags, pRegEnumerator, this, IID_PPV_ARG(IEnumIDList, ppEnumIDList));
 }
 
 /**************************************************************************
@@ -854,24 +918,26 @@ HRESULT WINAPI CDrivesFolder::CompareIDs(LPARAM lParam, PCUIDLIST_RELATIVE pidl1
         return E_INVALIDARG;
     }
 
-    CHAR* pszDrive1 = _ILIsDrive(pidl1) ? _ILGetDataPointer(pidl1)->u.drive.szDriveName : NULL;
-    if (!pszDrive1 && !IsRegItem(pidl1) && FAILED_UNEXPECTEDLY(E_INVALIDARG))
+    const INT type1 = IsFileSystemFolderItem(pidl1) ? 0 : IsSimpleDriveItem(pidl1) ? 1 : IsRegItem(pidl1) ? 2 : -1;
+    const INT type2 = IsFileSystemFolderItem(pidl2) ? 0 : IsSimpleDriveItem(pidl2) ? 1 : IsRegItem(pidl2) ? 2 : -1;
+    if (type1 < 0 && FAILED_UNEXPECTEDLY(E_INVALIDARG))
         return E_INVALIDARG;
-    CHAR* pszDrive2 = _ILIsDrive(pidl2) ? _ILGetDataPointer(pidl2)->u.drive.szDriveName : NULL;
-    if (!pszDrive2 && !IsRegItem(pidl2) && FAILED_UNEXPECTEDLY(E_INVALIDARG))
+    if (type2 < 0 && FAILED_UNEXPECTEDLY(E_INVALIDARG))
         return E_INVALIDARG;
+    if (type1 != type2)
+        return MAKE_COMPARE_HRESULT(type1 - type2);
+    if (type1 != 1)
+        return SHELL32_CompareDetails(this, lParam, pidl1, pidl2);
+
+    CHAR* pszDrive1 = _ILGetDataPointer(pidl1)->u.drive.szDriveName;
+    CHAR* pszDrive2 = _ILGetDataPointer(pidl2)->u.drive.szDriveName;
 
     int result;
     switch (MyComputerSFHeader[iColumn].colnameid)
     {
         case IDS_SHV_COLUMN_NAME:
         {
-            if (!pszDrive1 && !pszDrive2)
-                return SHELL32_CompareDetails(this, lParam, pidl1, pidl2);
-            else if (pszDrive1 && pszDrive2)
-                result = _stricmp(pszDrive1, pszDrive2);
-            else
-                result = (int)!pszDrive1 - (int)!pszDrive2; // Sort drives first
+            result = _stricmp(pszDrive1, pszDrive2);
             hres = MAKE_COMPARE_HRESULT(result);
             break;
         }
@@ -879,12 +945,6 @@ HRESULT WINAPI CDrivesFolder::CompareIDs(LPARAM lParam, PCUIDLIST_RELATIVE pidl1
         case IDS_SHV_COLUMN_DISK_CAPACITY:
         case IDS_SHV_COLUMN_DISK_AVAILABLE:
         {
-            if (!pszDrive1 || !pszDrive2)
-            {
-                hres = MAKE_COMPARE_HRESULT((int)!pszDrive1 - (int)!pszDrive2);
-                break;
-            }
-
             ULARGE_INTEGER Drive1Available, Drive1Total, Drive2Available, Drive2Total;
             BOOL bValid1 = FALSE, bValid2 = FALSE;
 
@@ -981,7 +1041,19 @@ HRESULT WINAPI CDrivesFolder::GetAttributesOf(UINT cidl, PCUITEMID_CHILD_ARRAY a
     {
         for (UINT i = 0; i < cidl; ++i)
         {
-            if (_ILIsDrive(apidl[i]))
+            if (IsFileSystemFolderItem(apidl[i]))
+            {
+                CComHeapPtr<ITEMIDLIST> absolute(ILCombine(pidlRoot, apidl[i]));
+                CComPtr<IShellFolder> parent;
+                PCUITEMID_CHILD child;
+                HRESULT hr = absolute ? SHBindToParent(absolute, IID_PPV_ARG(IShellFolder, &parent), &child) : E_OUTOFMEMORY;
+                if (SUCCEEDED(hr))
+                    hr = parent->GetAttributesOf(1, &child, rgfInOut);
+                if (FAILED(hr))
+                    *rgfInOut = 0;
+                *rgfInOut &= ~(SFGAO_CANDELETE | SFGAO_CANRENAME);
+            }
+            else if (IsSimpleDriveItem(apidl[i]))
             {
                 *rgfInOut &= dwDriveAttributes;
 
@@ -1039,19 +1111,25 @@ HRESULT WINAPI CDrivesFolder::GetUIObjectOf(HWND hwndOwner,
 
     if (IsEqualIID (riid, IID_IContextMenu) && (cidl >= 1))
     {
-        if (_ILIsDrive(apidl[0]))
+        if (cidl == 1 && IsFileSystemFolderItem(apidl[0]))
+            hr = GetFileSystemFolderUIObject(pidlRoot, hwndOwner, apidl[0], riid, prgfInOut, &pObj);
+        else if (IsSimpleDriveItem(apidl[0]))
             hr = CDrivesContextMenu_CreateInstance(pidlRoot, hwndOwner, cidl, apidl, static_cast<IShellFolder*>(this), (IContextMenu**)&pObj);
         else
             hr = m_regFolder->GetUIObjectOf(hwndOwner, cidl, apidl, riid, prgfInOut, &pObj);
     }
     else if (IsEqualIID (riid, IID_IDataObject) && (cidl >= 1))
     {
-        hr = IDataObject_Constructor(hwndOwner,
-                                     pidlRoot, apidl, cidl, TRUE, (IDataObject **)&pObj);
+        if (cidl == 1 && IsFileSystemFolderItem(apidl[0]))
+            hr = GetFileSystemFolderUIObject(pidlRoot, hwndOwner, apidl[0], riid, prgfInOut, &pObj);
+        else
+            hr = IDataObject_Constructor(hwndOwner, pidlRoot, apidl, cidl, TRUE, (IDataObject **)&pObj);
     }
     else if ((IsEqualIID (riid, IID_IExtractIconA) || IsEqualIID (riid, IID_IExtractIconW)) && (cidl == 1))
     {
-        if (_ILIsDrive(apidl[0]))
+        if (IsFileSystemFolderItem(apidl[0]))
+            hr = GetFileSystemFolderUIObject(pidlRoot, hwndOwner, apidl[0], riid, prgfInOut, &pObj);
+        else if (IsSimpleDriveItem(apidl[0]))
             hr = CDrivesExtractIcon_CreateInstance(this, apidl[0], riid, &pObj);
         else
             hr = m_regFolder->GetUIObjectOf(hwndOwner, cidl, apidl, riid, prgfInOut, &pObj);
@@ -1182,7 +1260,7 @@ HRESULT WINAPI CDrivesFolder::GetDisplayNameOf(PCUITEMID_CHILD pidl, DWORD dwFla
 HRESULT WINAPI CDrivesFolder::SetNameOf(HWND hwndOwner, PCUITEMID_CHILD pidl,
                                         LPCOLESTR lpName, DWORD dwFlags, PITEMID_CHILD *pPidlOut)
 {
-    if (_ILIsDrive(pidl))
+    if (IsSimpleDriveItem(pidl))
     {
         WCHAR szDrive[8];
         HRESULT hr = GetDrivePath(pidl, szDrive) >= 0 ? SetDriveLabel(hwndOwner, szDrive, lpName) : E_FAIL;
@@ -1190,6 +1268,8 @@ HRESULT WINAPI CDrivesFolder::SetNameOf(HWND hwndOwner, PCUITEMID_CHILD pidl,
             *pPidlOut = SUCCEEDED(hr) ? _ILCreateDrive(szDrive) : NULL;
         return hr;
     }
+    if (IsFileSystemFolderItem(pidl))
+        return E_ACCESSDENIED;
     return m_regFolder->SetNameOf(hwndOwner, pidl, lpName, dwFlags, pPidlOut);
 }
 
@@ -1239,6 +1319,8 @@ HRESULT WINAPI CDrivesFolder::GetDefaultColumnState(UINT iColumn, SHCOLSTATEF * 
 HRESULT WINAPI CDrivesFolder::GetDetailsEx(PCUITEMID_CHILD pidl, const SHCOLUMNID *pscid, VARIANT *pv)
 {
     const CLSID *pCLSID = IsRegItem(pidl);
+    if (IsFileSystemFolderItem(pidl))
+        return SH32_GetDetailsOfPKeyAsVariant(this, pidl, pscid, pv, FALSE);
     if (pscid->fmtid == FMTID_ShellDetails)
     {
         switch (pscid->pid)
@@ -1280,7 +1362,21 @@ HRESULT WINAPI CDrivesFolder::GetDetailsOf(PCUITEMID_CHILD pidl, UINT iColumn, S
         psd->cxChar = MyComputerSFHeader[iColumn].cxChar;
         return SHSetStrRet(&psd->str, MyComputerSFHeader[iColumn].colnameid);
     }
-    else if (!_ILIsDrive(pidl))
+    else if (IsFileSystemFolderItem(pidl))
+    {
+        switch (MyComputerSFHeader[iColumn].colnameid)
+        {
+            case IDS_SHV_COLUMN_NAME:
+                return GetDisplayNameOf(pidl, SHGDN_NORMAL | SHGDN_INFOLDER, &psd->str);
+            case IDS_SHV_COLUMN_TYPE:
+            case IDS_SHV_COLUMN_DISK_CAPACITY:
+            case IDS_SHV_COLUMN_DISK_AVAILABLE:
+            case IDS_SHV_COLUMN_COMMENTS:
+                return SHSetStrRetEmpty(&psd->str);
+            DEFAULT_UNREACHABLE;
+        }
+    }
+    else if (!IsSimpleDriveItem(pidl))
     {
         switch (MyComputerSFHeader[iColumn].colnameid)
         {

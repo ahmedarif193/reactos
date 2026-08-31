@@ -228,6 +228,8 @@ void MSSTYLES_CloseThemeFile(PTHEME_FILE tf)
     }
 }
 
+static void MSSTYLES_ApplyStoredMetrics(PTHEME_FILE tf);
+
 /***********************************************************************
  *      MSSTYLES_SetActiveTheme
  *
@@ -243,6 +245,8 @@ HRESULT MSSTYLES_SetActiveTheme(PTHEME_FILE tf, BOOL setMetrics)
         InterlockedIncrement(&tfActiveTheme->refcount);
 	if(!tfActiveTheme->classes)
 	    MSSTYLES_ParseThemeIni(tfActiveTheme, setMetrics);
+	else if (setMetrics)
+	    MSSTYLES_ApplyStoredMetrics(tfActiveTheme);
     }
     return S_OK;
 }
@@ -614,6 +618,58 @@ static inline PTHEME_PROPERTY MSSTYLES_PSFindProperty(PTHEME_PARTSTATE ps, int i
 static inline PTHEME_PROPERTY MSSTYLES_FFindMetric(PTHEME_FILE tf, int iPropertyPrimitive, int iPropertyId)
 {
     return MSSTYLES_LFindProperty(tf->metrics, iPropertyPrimitive, iPropertyId);
+}
+
+/***********************************************************************
+ *      MSSTYLES_ApplyStoredMetrics
+ *
+ * Push the color and flat-menu system metrics of an already parsed
+ * theme file into the live system settings
+ */
+static void MSSTYLES_ApplyStoredMetrics(PTHEME_FILE tf)
+{
+    int elements[TMT_LASTCOLOR - TMT_FIRSTCOLOR + 1];
+    COLORREF colors[TMT_LASTCOLOR - TMT_FIRSTCOLOR + 1];
+    int i, count = 0;
+    PTHEME_PROPERTY tp;
+
+    for (i = 0; i <= TMT_LASTCOLOR - TMT_FIRSTCOLOR; i++)
+    {
+        COLORREF color;
+        tp = MSSTYLES_FFindMetric(tf, TMT_COLOR, TMT_FIRSTCOLOR + i);
+        if (tp && SUCCEEDED(MSSTYLES_GetPropertyColor(tp, &color)))
+        {
+            elements[count] = i;
+            colors[count++] = color;
+        }
+    }
+
+    ERR("THEMECOLORS: applying %d theme colors (WindowText metric %s)\n", count,
+        MSSTYLES_FFindMetric(tf, TMT_COLOR, TMT_WINDOWTEXT) ? "present" : "MISSING");
+    if (count > 0)
+        SetSysColors(count, elements, colors);
+
+    tp = MSSTYLES_FFindMetric(tf, TMT_BOOL, TMT_FLATMENUS);
+    if (tp)
+    {
+        BOOL flatMenus;
+        if (SUCCEEDED(MSSTYLES_GetPropertyBool(tp, &flatMenus)))
+            SystemParametersInfoW(SPI_SETFLATMENU, 0, (PVOID)(INT_PTR)flatMenus, 0);
+    }
+}
+
+/***********************************************************************
+ *      MSSTYLES_ReapplyActiveThemeMetrics
+ *
+ * Push the active theme's stored color metrics into the live system
+ * settings again
+ */
+BOOL MSSTYLES_ReapplyActiveThemeMetrics(void)
+{
+    if (!tfActiveTheme)
+        return FALSE;
+    MSSTYLES_ApplyStoredMetrics(tfActiveTheme);
+    return TRUE;
 }
 
 /***********************************************************************

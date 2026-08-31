@@ -93,6 +93,7 @@ typedef struct _UXINI_FILE *PUXINI_FILE;
 HRESULT MSSTYLES_OpenThemeFile(LPCWSTR lpThemeFile, LPCWSTR pszColorName, LPCWSTR pszSizeName, PTHEME_FILE *tf);
 void MSSTYLES_CloseThemeFile(PTHEME_FILE tf);
 HRESULT MSSTYLES_SetActiveTheme(PTHEME_FILE tf, BOOL setMetrics);
+BOOL MSSTYLES_ReapplyActiveThemeMetrics(void);
 PTHEME_CLASS MSSTYLES_OpenThemeClass(LPCWSTR pszAppName, LPCWSTR pszClassList, UINT dpi);
 #ifdef __REACTOS__
 PTHEME_CLASS MSSTYLES_OpenThemeClassFromFile(PTHEME_FILE tf, LPCWSTR pszAppName,

@@ -1093,6 +1093,9 @@ SpiNotifyNCMetricsChanged(VOID)
     USER_REFERENCE_ENTRY Ref;
     int i;
 
+    if (!MenuUpdateFont())
+        return FALSE;
+
     pwndDesktop = UserGetDesktopWindow();
     ASSERT(pwndDesktop);
 

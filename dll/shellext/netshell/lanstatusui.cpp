@@ -983,6 +983,14 @@ LANStatusDlg(
             switch (LOWORD(lParam))
             {
                 case WM_LBUTTONUP:
+                {
+                    HWND hwndTaskbar = FindWindowW(L"Shell_TrayWnd", NULL);
+                    if (hwndTaskbar &&
+                        SendMessageW(hwndTaskbar, WM_USER + 271, 0, 0))
+                    {
+                        break;
+                    }
+
                     if (pContext->hwndDlg)
                     {
                         HWND hwndSheet = GetParent(pContext->hwndDlg);
@@ -998,6 +1006,7 @@ LANStatusDlg(
                         ShowStatusPropertyDialog(pContext, hwndDlg);
                     }
                     break;
+                }
 
                 if (pContext->hwndDlg)
                 {

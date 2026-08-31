@@ -1358,6 +1358,7 @@ DispatchSAS(
             {
                 case STATE_INIT:
                     Session->LogonState = STATE_LOGGED_OFF;
+                    RemoveStatusMessage(Session);
                     Session->Gina.Functions.WlxDisplaySASNotice(Session->Gina.Context);
                     return;
 
