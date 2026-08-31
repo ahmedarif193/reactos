@@ -602,7 +602,10 @@ void App_ApplyTheme(void)
         }
     }
     if (g_app.hFrame)
+    {
+        DwmSetWindowAttribute(g_app.hFrame, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
         InvalidateRect(g_app.hFrame, NULL, TRUE);
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1009,6 +1012,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPWSTR lpCmdLine, int 
         x, y, w, h, NULL, NULL, hInstance, NULL);
     if (!g_app.hFrame)
         return 1;
+
+    DwmSetWindowAttribute(g_app.hFrame, DWMWA_USE_IMMERSIVE_DARK_MODE, &g_t.dark, sizeof(g_t.dark));
 
     s_search = Search_Create(g_app.hFrame, L"Type a name, publisher, or PID to search");
 
