@@ -167,7 +167,7 @@ ThemeInitDrawContext(PDRAW_CONTEXT pcontext,
     pcontext->scrolltheme = GetNCScrollbarTheme(hWnd, pcontext->wi.dwStyle);
 
     pcontext->CaptionHeight = pcontext->wi.cyWindowBorders;
-    pcontext->CaptionHeight += GetSystemMetrics(pcontext->wi.dwExStyle & WS_EX_TOOLWINDOW ? SM_CYSMCAPTION : SM_CYCAPTION );
+    pcontext->CaptionHeight += GetThemeSysSize(pcontext->theme, pcontext->wi.dwExStyle & WS_EX_TOOLWINDOW ? SM_CYSMSIZE : SM_CYSIZE);
 
     if (hRgn <= (HRGN)1)
     {
@@ -278,7 +278,7 @@ void ThemeCalculateCaptionButtonsPos(HWND hWnd, HTHEME htheme)
 
     if (!GetWindowInfo(hWnd, &wi))
         return;
-    btnHeight = GetSystemMetrics(wi.dwExStyle & WS_EX_TOOLWINDOW ? SM_CYSMSIZE : SM_CYSIZE);
+    btnHeight = GetThemeSysSize(htheme, wi.dwExStyle & WS_EX_TOOLWINDOW ? SM_CYSMSIZE : SM_CYSIZE);
 
     ThemeCalculateCaptionButtonsPosEx(&wi, hWnd, htheme, btnHeight);
 }
@@ -1226,12 +1226,17 @@ HRESULT WINAPI DrawNCPreview(HDC hDC,
                              COLORREF* lpaRgbValues)
 {
     WNDCLASSEXW DummyPreviewWindowClass;
-    HWND hwndDummy;
+    HWND hwndDummy = NULL;
     HRESULT hres;
-    HTHEMEFILE hThemeFile;
+    HTHEMEFILE hThemeFile = NULL;
     DRAW_CONTEXT context;
     LPWSTR szText;
     int len;
+    HFONT textFont = NULL;
+    HGDIOBJ oldFont = NULL;
+    HTHEME hBtnTheme = NULL;
+
+    ZeroMemory(&context, sizeof(context));
 
     /* Create a dummy window that will be used to trick the paint funtions */
     memset(&DummyPreviewWindowClass, 0, sizeof(DummyPreviewWindowClass));
@@ -1241,28 +1246,50 @@ HRESULT WINAPI DrawNCPreview(HDC hDC,
     DummyPreviewWindowClass.hInstance = hDllInst;
     DummyPreviewWindowClass.lpfnWndProc = DefWindowProcW;
     if (!RegisterClassExW(&DummyPreviewWindowClass))
+    {
+        ERR("NCPREVIEW: RegisterClassExW failed %lu\n", GetLastError());
         return E_FAIL;
+    }
 
     hwndDummy = CreateWindowExW(WS_EX_DLGMODALFRAME, L"DummyPreviewWindowClass", NULL, WS_OVERLAPPEDWINDOW | WS_VSCROLL, 30, 30, 300, 150, 0, 0, hDllInst, NULL);
     if (!hwndDummy)
-        return E_FAIL;
+    {
+        ERR("NCPREVIEW: CreateWindowExW failed %lu\n", GetLastError());
+        hres = E_FAIL;
+        goto cleanup;
+    }
 
     hres = OpenThemeFile(pszThemeFileName, pszColorName, pszSizeName, &hThemeFile,0);
     if (FAILED(hres))
-        return hres;
+    {
+        ERR("NCPREVIEW: OpenThemeFile %s %s %s failed %#lx\n", debugstr_w(pszThemeFileName), debugstr_w(pszColorName), debugstr_w(pszSizeName), hres);
+        goto cleanup;
+    }
 
     /* Initialize the special draw context for the preview */
     context.hDC = hDC;
     context.hWnd = hwndDummy;
     context.theme = OpenThemeDataFromFile(hThemeFile, hwndDummy, L"WINDOW", 0);
     if (!context.theme)
-        return E_FAIL;
+    {
+        ERR("NCPREVIEW: OpenThemeDataFromFile WINDOW failed\n");
+        hres = E_FAIL;
+        goto cleanup;
+    }
     context.scrolltheme = OpenThemeDataFromFile(hThemeFile, hwndDummy, L"SCROLLBAR", 0);
     if (!context.scrolltheme)
-        return E_FAIL;
+    {
+        ERR("NCPREVIEW: OpenThemeDataFromFile SCROLLBAR failed\n");
+        hres = E_FAIL;
+        goto cleanup;
+    }
     context.wi.cbSize = sizeof(context.wi);
     if (!GetWindowInfo(hwndDummy, &context.wi))
-        return E_FAIL;
+    {
+        ERR("NCPREVIEW: GetWindowInfo failed %lu\n", GetLastError());
+        hres = E_FAIL;
+        goto cleanup;
+    }
     context.wi.dwStyle |= WS_VISIBLE;
 
     context.hRgn = CreateRectRgnIndirect(&context.wi.rcWindow);
@@ -1283,14 +1310,13 @@ HRESULT WINAPI DrawNCPreview(HDC hDC,
     RECT rcWindowClient;
     DrawWindowForNCPreview(hDC, &context, rcAdjPreview.left + 10, rcAdjPreview.top + 22, rcAdjPreview.right, rcAdjPreview.bottom, COLOR_WINDOW, &rcWindowClient);
     LOGFONTW lfText;
-    HFONT textFont = NULL;
     if (SUCCEEDED(GetThemeSysFont(context.theme, TMT_MSGBOXFONT, &lfText)))
         textFont = CreateFontIndirectW(&lfText);
 
     if (textFont)
-        SelectFont(hDC, textFont);
+        oldFont = SelectFont(hDC, textFont);
 
-    HTHEME hBtnTheme = OpenThemeDataFromFile(hThemeFile, hwndDummy, L"BUTTON", OTD_NONCLIENT);
+    hBtnTheme = OpenThemeDataFromFile(hThemeFile, hwndDummy, L"BUTTON", OTD_NONCLIENT);
     len = LoadStringW(hDllInst, IDS_WINTEXT, (LPWSTR)&szText, 0);
     if (len > 0)
     {
@@ -1307,7 +1333,11 @@ HRESULT WINAPI DrawNCPreview(HDC hDC,
     SetWindowLongPtr(hwndDummy, GWL_STYLE, dwStyleNew);
 
     if (!GetWindowInfo(hwndDummy, &context.wi))
-        return E_FAIL;
+    {
+        ERR("NCPREVIEW: GetWindowInfo msgbox failed %lu\n", GetLastError());
+        hres = E_FAIL;
+        goto cleanup;
+    }
 
     context.wi.dwStyle = WS_VISIBLE | dwStyleNew;
 
@@ -1341,17 +1371,28 @@ HRESULT WINAPI DrawNCPreview(HDC hDC,
         len = LoadStringW(hDllInst, IDS_OK, (LPWSTR)&szText, 0);
         if (len > 0)
             DrawThemeText(hBtnTheme, hDC, btnPart, btnState, szText, len, DT_CENTER | DT_VCENTER | textDrawFlags, 0, &rcBtn);
-        CloseThemeData(hBtnTheme);
     }
 
-    context.hDC = NULL;
-    CloseThemeData (context.theme);
-    CloseThemeData (context.scrolltheme);
-    ThemeCleanupDrawContext(&context);
+    hres = S_OK;
 
-    /* Cleanup */
-    DestroyWindow(hwndDummy);
+cleanup:
+    if (hBtnTheme)
+        CloseThemeData(hBtnTheme);
+    if (oldFont)
+        SelectFont(hDC, oldFont);
+    if (textFont)
+        DeleteObject(textFont);
+    if (context.theme)
+        CloseThemeData(context.theme);
+    if (context.scrolltheme)
+        CloseThemeData(context.scrolltheme);
+    if (context.hRgn)
+        DeleteObject(context.hRgn);
+    if (hThemeFile)
+        CloseThemeFile(hThemeFile);
+    if (hwndDummy)
+        DestroyWindow(hwndDummy);
     UnregisterClassW(L"DummyPreviewWindowClass", hDllInst);
 
-    return S_OK;
+    return hres;
 }

@@ -629,10 +629,12 @@ static inline PTHEME_PROPERTY MSSTYLES_FFindMetric(PTHEME_FILE tf, int iProperty
  * RETURNS
  *  The property found, or NULL
  */
-PTHEME_PROPERTY MSSTYLES_FindMetric(int iPropertyPrimitive, int iPropertyId)
+PTHEME_PROPERTY MSSTYLES_FindMetric(PTHEME_CLASS tc, int iPropertyPrimitive, int iPropertyId)
 {
-    if(!tfActiveTheme) return NULL;
-    return MSSTYLES_FFindMetric(tfActiveTheme, iPropertyPrimitive, iPropertyId);
+    PTHEME_FILE tf = (tc && tc->tf) ? tc->tf : tfActiveTheme;
+
+    if(!tf) return NULL;
+    return MSSTYLES_FFindMetric(tf, iPropertyPrimitive, iPropertyId);
 }
 
 /***********************************************************************
@@ -1119,6 +1121,8 @@ PTHEME_CLASS MSSTYLES_OpenThemeClass(LPCWSTR pszAppName, LPCWSTR pszClassList, U
 PTHEME_CLASS MSSTYLES_OpenThemeClassFromFile(PTHEME_FILE tf, LPCWSTR pszAppName,
                                              LPCWSTR pszClassList, UINT dpi)
 {
+    if (tf && !tf->classes)
+        MSSTYLES_ParseThemeIni(tf, FALSE);
     return open_theme_class(tf, pszAppName, pszClassList, dpi);
 }
 #endif
