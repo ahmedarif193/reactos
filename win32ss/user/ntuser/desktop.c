@@ -1882,10 +1882,8 @@ IntPaintDesktop(HDC hDC)
             int scaledWidth, scaledHeight;
             int wallpaperX, wallpaperY, wallpaperWidth, wallpaperHeight;
             HDC hWallpaperDC;
-#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
             INT OldStretchMode = 0;
             BOOL RestoreStretchMode = FALSE;
-#endif
 
             sz.cx = WndDesktop->rcWindow.right - WndDesktop->rcWindow.left;
             sz.cy = WndDesktop->rcWindow.bottom - WndDesktop->rcWindow.top;
@@ -1974,13 +1972,13 @@ IntPaintDesktop(HDC hDC)
                 /* Do not fill the background after it is painted no matter the size of the picture */
                 doPatBlt = FALSE;
 
-#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
-                if (gspv.bEarlySplashWallpaper && gspv.WallpaperMode != wmTile)
+                if (gspv.WallpaperMode == wmStretch ||
+                    gspv.WallpaperMode == wmFit ||
+                    gspv.WallpaperMode == wmFill)
                 {
                     OldStretchMode = GreSetStretchBltMode(hDC, HALFTONE);
                     RestoreStretchMode = TRUE;
                 }
-#endif
                 hOldBitmap = NtGdiSelectBitmap(hWallpaperDC, gspv.hbmWallpaper);
 
                 if (gspv.WallpaperMode == wmStretch)
@@ -2070,10 +2068,8 @@ IntPaintDesktop(HDC hDC)
                                 CLR_INVALID,
                                 0);
                 }
-#ifdef ENABLE_EXPERIMENTAL_EARLY_SPLASH
                 if (RestoreStretchMode)
                     GreSetStretchBltMode(hDC, OldStretchMode);
-#endif
                 NtGdiSelectBitmap(hWallpaperDC, hOldBitmap);
                 NtGdiDeleteObjectApp(hWallpaperDC);
             }
