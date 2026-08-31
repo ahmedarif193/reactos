@@ -6,6 +6,12 @@
 
 [AddReg]
 
+; The RPi3 UEFI publishes VC4 V3D, HVS, PixelValve and HDMI resources under
+; the physical display adapter ACPI\BCM2850. Bind the profile-owned WDDM
+; miniport to that device.
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2850","Service",0x00000000,"rpi3vc4"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2850","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
+
 ; The RPi3 UEFI ACPI tables expose the Arasan SDHCI controller as BCM2847.
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2847","Service",0x00000000,"sdbus"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BCM2847","ClassGUID",0x00000000,"{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}"
