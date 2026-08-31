@@ -188,6 +188,11 @@ add_library(msvcrt MODULE
     msvcrt.rc
 )
 
+if(ARCH STREQUAL "arm64" AND ARM64EC_RUNTIME)
+    target_sources(msvcrt PRIVATE arm64ec_memory.c)
+    set_source_files_properties(arm64ec_memory.c PROPERTIES COMPILE_OPTIONS "-fno-builtin")
+endif()
+
 target_compile_definitions(msvcrt PRIVATE _MSVCR_VER=0)
 set_module_type(msvcrt win32dll ENTRYPOINT DllMain 12)
 target_link_libraries(msvcrt msvcrt_static crtmath dbgrpt vcruntime wine chkstk ${PSEH_LIB})
