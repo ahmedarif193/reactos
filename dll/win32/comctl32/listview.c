@@ -1088,12 +1088,54 @@ static inline DWORD notify_customdraw (const LISTVIEW_INFO *infoPtr, DWORD dwDra
     return result;
 }
 
+#if __WINE_COMCTL32_VERSION == 6
+static int LISTVIEW_GetThemedItemState(const LISTVIEW_INFO *infoPtr, UINT uItemState)
+{
+    HTHEME theme = GetWindowTheme(infoPtr->hwndSelf);
+    BOOL hot = (uItemState & CDIS_HOT) != 0;
+    BOOL selected = (uItemState & CDIS_SELECTED) != 0;
+
+    if (!theme || !IsThemePartDefined(theme, LVP_LISTITEM, 0))
+        return 0;
+    if (selected && !infoPtr->bFocus && !(infoPtr->dwStyle & LVS_SHOWSELALWAYS))
+        selected = FALSE;
+    if (selected && hot)
+        return LISS_HOTSELECTED;
+    if (selected)
+        return infoPtr->bFocus ? LISS_SELECTED : LISS_SELECTEDNOTFOCUS;
+    if (hot)
+        return LISS_HOT;
+    return 0;
+}
+#endif
+
 static void prepaint_setup (const LISTVIEW_INFO *infoPtr, HDC hdc, const NMLVCUSTOMDRAW *cd, BOOL SubItem)
 {
     COLORREF backcolor, textcolor;
 
     backcolor = cd->clrTextBk;
     textcolor = cd->clrText;
+
+#if __WINE_COMCTL32_VERSION == 6
+    if (!SubItem)
+    {
+        int themeState = LISTVIEW_GetThemedItemState(infoPtr, cd->nmcd.uItemState);
+
+        if (themeState)
+        {
+            COLORREF themeColor;
+
+            if (textcolor == CLR_DEFAULT)
+                textcolor = comctl32_color.clrWindowText;
+            if (SUCCEEDED(GetThemeColor(GetWindowTheme(infoPtr->hwndSelf), LVP_LISTITEM,
+                                        themeState, TMT_TEXTCOLOR, &themeColor)))
+                textcolor = themeColor;
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, textcolor);
+            return;
+        }
+    }
+#endif
 
     /* apparently, for selected items, we have to override the returned values */
     if (!SubItem)
@@ -4200,6 +4242,44 @@ static LRESULT LISTVIEW_MouseMove(LISTVIEW_INFO *infoPtr, WORD fwKeys, INT x, IN
         }
     }
 
+#if __WINE_COMCTL32_VERSION == 6
+    if (!infoPtr->bLButtonDown)
+    {
+        HTHEME theme = GetWindowTheme(infoPtr->hwndSelf);
+
+        if (theme && IsThemePartDefined(theme, LVP_LISTITEM, 0))
+        {
+            TRACKMOUSEEVENT tme;
+            INT nNewHot;
+
+            ht.pt = pt;
+            LISTVIEW_HitTest(infoPtr, &ht, TRUE, TRUE);
+            nNewHot = (ht.flags & LVHT_ONITEM) ? ht.iItem : -1;
+            if (nNewHot != infoPtr->nHotItem)
+            {
+                INT nOldHot = infoPtr->nHotItem;
+
+                infoPtr->nHotItem = nNewHot;
+                if (nOldHot != -1)
+                    LISTVIEW_InvalidateItem(infoPtr, nOldHot);
+                if (nNewHot != -1)
+                    LISTVIEW_InvalidateItem(infoPtr, nNewHot);
+            }
+
+            tme.cbSize = sizeof(tme);
+            tme.dwFlags = TME_QUERY;
+            _TrackMouseEvent(&tme);
+            if (!(tme.dwFlags & TME_LEAVE) || tme.hwndTrack != infoPtr->hwndSelf)
+            {
+                tme.cbSize = sizeof(tme);
+                tme.dwFlags = TME_LEAVE;
+                tme.hwndTrack = infoPtr->hwndSelf;
+                _TrackMouseEvent(&tme);
+            }
+        }
+    }
+#endif
+
     /* see if we are supposed to be tracking mouse hovering */
     if (LISTVIEW_IsHotTracking(infoPtr)) {
         TRACKMOUSEEVENT trackinfo;
@@ -4238,6 +4318,23 @@ static LRESULT LISTVIEW_MouseMove(LISTVIEW_INFO *infoPtr, WORD fwKeys, INT x, IN
     return 0;
 }
 
+
+#if __WINE_COMCTL32_VERSION == 6
+static LRESULT LISTVIEW_MouseLeave(LISTVIEW_INFO *infoPtr)
+{
+    HTHEME theme = GetWindowTheme(infoPtr->hwndSelf);
+
+    if (theme && IsThemePartDefined(theme, LVP_LISTITEM, 0) && infoPtr->nHotItem != -1)
+    {
+        INT nOldHot = infoPtr->nHotItem;
+
+        infoPtr->nHotItem = -1;
+        LISTVIEW_InvalidateItem(infoPtr, nOldHot);
+    }
+
+    return 0;
+}
+#endif
 
 /***
  * Tests whether the item is assignable to a list with style lStyle
@@ -4676,6 +4773,18 @@ static void LISTVIEW_DrawItemPart(LISTVIEW_INFO *infoPtr, LVITEMW *item, const N
     HIMAGELIST himl;
     UINT format;
     RECT *focus;
+#if __WINE_COMCTL32_VERSION == 6
+    BOOL themedBg = FALSE;
+    int themeState;
+    UINT themeItemState = 0;
+
+    if (item->state & LVIS_SELECTED)
+        themeItemState |= CDIS_SELECTED;
+    if (item->iItem == infoPtr->nHotItem &&
+        (item->iSubItem == 0 || (infoPtr->dwLvExStyle & LVS_EX_FULLROWSELECT)))
+        themeItemState |= CDIS_HOT;
+    themeState = LISTVIEW_GetThemedItemState(infoPtr, themeItemState);
+#endif
 
     /* now check if we need to update the focus rectangle */
     focus = infoPtr->bFocus && (item->state & LVIS_FOCUSED) ? &infoPtr->rcFocus : 0;
@@ -4715,7 +4824,43 @@ static void LISTVIEW_DrawItemPart(LISTVIEW_INFO *infoPtr, LVITEMW *item, const N
     else
         background = &rcSelect;
 
+#if __WINE_COMCTL32_VERSION == 6
+    if (themeState)
+    {
+        HTHEME theme = GetWindowTheme(infoPtr->hwndSelf);
+
+        if (infoPtr->uView == LV_VIEW_DETAILS && (infoPtr->dwLvExStyle & LVS_EX_FULLROWSELECT))
+        {
+            if (item->iSubItem == 0)
+            {
+                RECT rcRow = rcBox;
+
+                if (DPA_GetPtrCount(infoPtr->hdpaColumns) > 0)
+                {
+                    INT leftmost = SendMessageW(infoPtr->hwndHeader, HDM_ORDERTOINDEX, 0, 0);
+                    INT rightmost = SendMessageW(infoPtr->hwndHeader, HDM_ORDERTOINDEX,
+                                                 DPA_GetPtrCount(infoPtr->hdpaColumns) - 1, 0);
+                    INT Originx = pos->x - LISTVIEW_GetColumnInfo(infoPtr, leftmost)->rcHeader.left;
+
+                    rcRow.left = LISTVIEW_GetColumnInfo(infoPtr, leftmost)->rcHeader.left + Originx;
+                    rcRow.right = LISTVIEW_GetColumnInfo(infoPtr, rightmost)->rcHeader.right + Originx;
+                }
+                themedBg = SUCCEEDED(DrawThemeBackground(theme, nmlvcd->nmcd.hdc, LVP_LISTITEM,
+                                                         themeState, &rcRow, NULL));
+            }
+            else
+                themedBg = TRUE;
+        }
+        else
+        {
+            themedBg = SUCCEEDED(DrawThemeBackground(theme, nmlvcd->nmcd.hdc, LVP_LISTITEM,
+                                                     themeState, background, NULL));
+        }
+    }
+    if (!themedBg && nmlvcd->clrTextBk != CLR_NONE)
+#else
     if (nmlvcd->clrTextBk != CLR_NONE)
+#endif
         ExtTextOutW(nmlvcd->nmcd.hdc, background->left, background->top, ETO_OPAQUE, background, NULL, 0, NULL);
 
     if (item->state & LVIS_FOCUSED)
@@ -4767,6 +4912,11 @@ static void LISTVIEW_DrawItemPart(LISTVIEW_INFO *infoPtr, LVITEMW *item, const N
 
         TRACE("iImage=%d\n", item->iImage);
 
+#if __WINE_COMCTL32_VERSION == 6
+        if (themeState)
+            style = ILD_NORMAL;
+        else
+#endif
         if (item->state & (LVIS_SELECTED | LVIS_CUT) && infoPtr->bFocus)
             style = ILD_SELECTED;
         else
@@ -11931,6 +12081,11 @@ LISTVIEW_WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
   case WM_MOUSEHOVER:
     return LISTVIEW_MouseHover(infoPtr, (SHORT)LOWORD(lParam), (SHORT)HIWORD(lParam));
+
+#if __WINE_COMCTL32_VERSION == 6
+  case WM_MOUSELEAVE:
+    return LISTVIEW_MouseLeave(infoPtr);
+#endif
 
   case WM_NCDESTROY:
     return LISTVIEW_NCDestroy(infoPtr);

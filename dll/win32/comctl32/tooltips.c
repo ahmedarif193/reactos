@@ -125,6 +125,9 @@ typedef struct
 typedef struct
 {
     HWND     hwndSelf;
+#ifdef __REACTOS__
+    HTHEME   hTheme;
+#endif
     WCHAR      szTipText[INFOTIPSIZE];
     BOOL     bActive;
     BOOL     bTrackActive;
@@ -215,6 +218,25 @@ TOOLTIPS_InitSystemSettings (TOOLTIPS_INFO *infoPtr)
     infoPtr->hFont = infoPtr->hStatusFont;
 }
 
+#ifdef __REACTOS__
+static HTHEME
+TOOLTIPS_GetTheme (const TOOLTIPS_INFO *infoPtr, DWORD dwStyle, int *pPart)
+{
+    int part;
+
+    if (!infoPtr->hTheme)
+        return NULL;
+    if (infoPtr->clrBk != comctl32_color.clrInfoBk ||
+        infoPtr->clrText != comctl32_color.clrInfoText)
+        return NULL;
+    part = (dwStyle & TTS_BALLOON) ? TTP_BALLOON : TTP_STANDARD;
+    if (!IsThemePartDefined(infoPtr->hTheme, part, 0))
+        return NULL;
+    *pPart = part;
+    return infoPtr->hTheme;
+}
+#endif
+
 /* Custom draw routines */
 static void
 TOOLTIPS_customdraw_fill(const TOOLTIPS_INFO *infoPtr, NMTTCUSTOMDRAW *lpnmttcd,
@@ -262,6 +284,10 @@ TOOLTIPS_Refresh (const TOOLTIPS_INFO *infoPtr, HDC hdc)
     DWORD dwStyle = GetWindowLongW(infoPtr->hwndSelf, GWL_STYLE);
     NMTTCUSTOMDRAW nmttcd;
     DWORD cdmode;
+#ifdef __REACTOS__
+    int themePart = 0;
+    HTHEME hTheme = TOOLTIPS_GetTheme(infoPtr, dwStyle, &themePart);
+#endif
 
     if (infoPtr->nMaxTipWidth > -1)
 	uFlags |= DT_WORDBREAK;
@@ -288,17 +314,93 @@ TOOLTIPS_Refresh (const TOOLTIPS_INFO *infoPtr, HDC hdc)
 
         GetWindowRgn(infoPtr->hwndSelf, hRgn);
 
+#ifdef __REACTOS__
+        if (hTheme)
+        {
+            RECT rcBody = rc;
+
+            if (IsThemeBackgroundPartiallyTransparent(hTheme, themePart, TTBS_NORMAL))
+            {
+                FillRgn(hdc, hRgn, hBrush);
+                DrawThemeParentBackground(infoPtr->hwndSelf, hdc, &rc);
+            }
+            if (infoPtr->bToolBelow)
+                rcBody.top += BALLOON_STEMHEIGHT;
+            else
+                rcBody.bottom -= BALLOON_STEMHEIGHT;
+            DrawThemeBackground(hTheme, hdc, themePart, TTBS_NORMAL, &rcBody, NULL);
+            if (IsThemePartDefined(hTheme, TTP_BALLOONSTEM, 0))
+            {
+                HRGN hrgnStem;
+                RECT rcStem;
+                int stemState;
+
+                if (infoPtr->bToolBelow)
+                    hrgnStem = CreateRectRgn(rc.left, rc.top, rc.right,
+                                             rc.top + BALLOON_STEMHEIGHT);
+                else
+                    hrgnStem = CreateRectRgn(rc.left,
+                                             rc.bottom - BALLOON_STEMHEIGHT + 1,
+                                             rc.right, rc.bottom);
+                if (CombineRgn(hrgnStem, hrgnStem, hRgn, RGN_AND) > NULLREGION &&
+                    GetRgnBox(hrgnStem, &rcStem) > NULLREGION)
+                {
+                    if (infoPtr->bToolBelow)
+                        rcStem.bottom = rc.top + BALLOON_STEMHEIGHT;
+                    else
+                        rcStem.top = rc.bottom - BALLOON_STEMHEIGHT;
+                    if (rcStem.left <= rc.left + BALLOON_STEMINDENT)
+                        stemState = infoPtr->bToolBelow ? TTBSS_POINTINGUPLEFTWALL
+                                                        : TTBSS_POINTINGDOWNLEFTWALL;
+                    else if (rcStem.right >= rc.right - BALLOON_STEMINDENT)
+                        stemState = infoPtr->bToolBelow ? TTBSS_POINTINGUPRIGHTWALL
+                                                        : TTBSS_POINTINGDOWNRIGHTWALL;
+                    else
+                        stemState = infoPtr->bToolBelow ? TTBSS_POINTINGUPCENTERED
+                                                        : TTBSS_POINTINGDOWNCENTERED;
+                    DrawThemeBackground(hTheme, hdc, TTP_BALLOONSTEM, stemState,
+                                        &rcStem, NULL);
+                }
+                DeleteObject(hrgnStem);
+            }
+            DeleteObject(hBrush);
+            hBrush = NULL;
+        }
+        else
+        {
+#endif
         /* fill the background */
         FillRgn(hdc, hRgn, hBrush);
         DeleteObject(hBrush);
         hBrush = NULL;
+#ifdef __REACTOS__
+        }
+#endif
     }
     else
     {
+#ifdef __REACTOS__
+        if (hTheme)
+        {
+            if (IsThemeBackgroundPartiallyTransparent(hTheme, themePart, TTSS_NORMAL))
+            {
+                FillRect(hdc, &rc, hBrush);
+                DrawThemeParentBackground(infoPtr->hwndSelf, hdc, &rc);
+            }
+            DrawThemeBackground(hTheme, hdc, themePart, TTSS_NORMAL, &rc, NULL);
+            DeleteObject(hBrush);
+            hBrush = NULL;
+        }
+        else
+        {
+#endif
         /* fill the background */
         FillRect(hdc, &rc, hBrush);
         DeleteObject(hBrush);
         hBrush = NULL;
+#ifdef __REACTOS__
+        }
+#endif
     }
 
     if ((dwStyle & TTS_BALLOON) || infoPtr->pszTitle)
@@ -328,6 +430,26 @@ TOOLTIPS_Refresh (const TOOLTIPS_INFO *infoPtr, HDC hdc)
 
             /* draw title text */
             prevFont = SelectObject (hdc, infoPtr->hTitleFont);
+#ifdef __REACTOS__
+            height = 0;
+            if (hTheme)
+            {
+                RECT rcExtent;
+                int titlePart = (themePart == TTP_BALLOON) ? TTP_BALLOONTITLE
+                                                           : TTP_STANDARDTITLE;
+
+                if (SUCCEEDED(GetThemeTextExtent(hTheme, hdc, titlePart, TTSS_NORMAL,
+                                                 infoPtr->pszTitle, -1,
+                                                 DT_SINGLELINE | DT_NOPREFIX,
+                                                 NULL, &rcExtent)) &&
+                    SUCCEEDED(DrawThemeText(hTheme, hdc, titlePart, TTSS_NORMAL,
+                                            infoPtr->pszTitle, -1,
+                                            DT_BOTTOM | DT_SINGLELINE | DT_NOPREFIX,
+                                            0, &rcTitle)))
+                    height = rcExtent.bottom - rcExtent.top;
+            }
+            if (!height)
+#endif
             height = DrawTextW(hdc, infoPtr->pszTitle, -1, &rcTitle, DT_BOTTOM | DT_SINGLELINE | DT_NOPREFIX);
             SelectObject (hdc, prevFont);
             rc.top += height + BALLOON_TITLE_TEXT_SPACING;
@@ -345,6 +467,9 @@ TOOLTIPS_Refresh (const TOOLTIPS_INFO *infoPtr, HDC hdc)
     /* draw text */
 #ifdef __REACTOS__
     uFlags |= DT_EXPANDTABS;
+    if (!hTheme ||
+        FAILED(DrawThemeText(hTheme, hdc, themePart, TTSS_NORMAL,
+                             infoPtr->szTipText, -1, uFlags, 0, &rc)))
 #endif
     DrawTextW (hdc, infoPtr->szTipText, -1, &rc, uFlags);
 
@@ -357,7 +482,11 @@ TOOLTIPS_Refresh (const TOOLTIPS_INFO *infoPtr, HDC hdc)
     SelectObject (hdc, hOldFont);
     SetBkMode (hdc, oldBkMode);
 
+#ifdef __REACTOS__
+    if ((dwStyle & TTS_BALLOON) && !hTheme)
+#else
     if (dwStyle & TTS_BALLOON)
+#endif
     {
         /* frame region because default window proc doesn't do it */
         INT width = GetSystemMetrics(SM_CXDLGFRAME) - GetSystemMetrics(SM_CXEDGE);
@@ -536,6 +665,10 @@ TOOLTIPS_CalcTipSize (const TOOLTIPS_INFO *infoPtr, LPSIZE lpSize)
     UINT uFlags = DT_EXTERNALLEADING | DT_CALCRECT;
     RECT rc = {0, 0, 0, 0};
     SIZE title = {0, 0};
+#ifdef __REACTOS__
+    int themePart = 0;
+    HTHEME hTheme = TOOLTIPS_GetTheme(infoPtr, style, &themePart);
+#endif
 
     if (infoPtr->nMaxTipWidth > -1) {
 	rc.right = infoPtr->nMaxTipWidth;
@@ -557,6 +690,14 @@ TOOLTIPS_CalcTipSize (const TOOLTIPS_INFO *infoPtr, LPSIZE lpSize)
         }
         if (title.cx != 0) title.cx += BALLOON_ICON_TITLE_SPACING;
         hOldFont = SelectObject (hdc, infoPtr->hTitleFont);
+#ifdef __REACTOS__
+        if (!hTheme ||
+            FAILED(GetThemeTextExtent(hTheme, hdc,
+                                      (themePart == TTP_BALLOON) ? TTP_BALLOONTITLE
+                                                                 : TTP_STANDARDTITLE,
+                                      TTSS_NORMAL, infoPtr->pszTitle, -1,
+                                      DT_SINGLELINE | DT_NOPREFIX, NULL, &rcTitle)))
+#endif
         DrawTextW(hdc, infoPtr->pszTitle, -1, &rcTitle, DT_SINGLELINE | DT_NOPREFIX | DT_CALCRECT);
         SelectObject (hdc, hOldFont);
         title.cy = max(title.cy, rcTitle.bottom - rcTitle.top) + BALLOON_TITLE_TEXT_SPACING;
@@ -565,6 +706,10 @@ TOOLTIPS_CalcTipSize (const TOOLTIPS_INFO *infoPtr, LPSIZE lpSize)
     hOldFont = SelectObject (hdc, infoPtr->hFont);
 #ifdef __REACTOS__
     uFlags |= DT_EXPANDTABS;
+    if (!hTheme ||
+        FAILED(GetThemeTextExtent(hTheme, hdc, themePart, TTSS_NORMAL,
+                                  infoPtr->szTipText, -1, uFlags,
+                                  (infoPtr->nMaxTipWidth > -1) ? &rc : NULL, &rc)))
 #endif
     DrawTextW (hdc, infoPtr->szTipText, -1, &rc, uFlags);
     SelectObject (hdc, hOldFont);
@@ -1898,6 +2043,9 @@ TOOLTIPS_Create (HWND hwnd)
     infoPtr->nCurrentTool = -1;
     infoPtr->nTrackTool = -1;
     infoPtr->hwndSelf = hwnd;
+#ifdef __REACTOS__
+    infoPtr->hTheme = OpenThemeData (hwnd, L"Tooltip");
+#endif
 
     /* initialize colours and fonts */
     TOOLTIPS_InitSystemSettings(infoPtr);
@@ -1935,6 +2083,10 @@ TOOLTIPS_Destroy (TOOLTIPS_INFO *infoPtr)
     /* delete fonts */
     DeleteObject (infoPtr->hStatusFont);
     DeleteObject (infoPtr->hTitleFont);
+
+#ifdef __REACTOS__
+    CloseThemeData (infoPtr->hTheme);
+#endif
 
     /* free tool tips info data */
     SetWindowLongPtrW(infoPtr->hwndSelf, 0, 0);
@@ -2345,6 +2497,14 @@ TOOLTIPS_WindowProc (HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	case WM_SYSCOLORCHANGE:
 	    COMCTL32_RefreshSysColors();
 	    return 0;
+
+#ifdef __REACTOS__
+	case WM_THEMECHANGED:
+	    CloseThemeData (infoPtr->hTheme);
+	    infoPtr->hTheme = OpenThemeData (hwnd, L"Tooltip");
+	    InvalidateRect (hwnd, NULL, TRUE);
+	    return 0;
+#endif
 
 	case WM_TIMER:
 	    return TOOLTIPS_Timer (infoPtr, (INT)wParam);

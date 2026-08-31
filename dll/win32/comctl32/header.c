@@ -283,6 +283,44 @@ static void HEADER_GetHotDividerRect(const HEADER_INFO *infoPtr, RECT *r)
     }
 }
 
+#ifdef __REACTOS__
+static int
+HEADER_GetThemeItemState(HTHEME theme, const HEADER_ITEM *item, BOOL hottrack)
+{
+    int state = item->bDown ? HIS_PRESSED : (hottrack ? HIS_HOT : HIS_NORMAL);
+    int count = 0;
+
+    if ((item->fmt & (HDF_SORTUP | HDF_SORTDOWN)) &&
+        SUCCEEDED(GetThemeInt(theme, HP_HEADERITEM, state, TMT_IMAGECOUNT, &count)) &&
+        count >= HIS_SORTEDPRESSED)
+        state += HIS_SORTEDNORMAL - HIS_NORMAL;
+
+    return state;
+}
+
+static BOOL
+HEADER_DrawThemeSortArrow(const HEADER_INFO *infoPtr, HDC hdc, const RECT *r, const HEADER_ITEM *item)
+{
+    HTHEME theme = GetWindowTheme(infoPtr->hwndSelf);
+    int stateId = (item->fmt & HDF_SORTUP) ? HSAS_SORTEDUP : HSAS_SORTEDDOWN;
+    SIZE size;
+    RECT rcArrow;
+
+    if (!theme || !IsThemePartDefined(theme, HP_HEADERSORTARROW, 0))
+        return FALSE;
+
+    if (FAILED(GetThemePartSize(theme, hdc, HP_HEADERSORTARROW, stateId, NULL, TS_TRUE, &size)))
+        return FALSE;
+
+    rcArrow.left = r->left + (r->right - r->left - size.cx) / 2;
+    rcArrow.top = r->top;
+    rcArrow.right = rcArrow.left + size.cx;
+    rcArrow.bottom = rcArrow.top + size.cy;
+
+    return SUCCEEDED(DrawThemeBackground(theme, hdc, HP_HEADERSORTARROW, stateId, &rcArrow, NULL));
+}
+#endif
+
 static void
 HEADER_FillItemFrame(HEADER_INFO *infoPtr, HDC hdc, RECT *r, const HEADER_ITEM *item, BOOL hottrack)
 {
@@ -292,7 +330,11 @@ HEADER_FillItemFrame(HEADER_INFO *infoPtr, HDC hdc, RECT *r, const HEADER_ITEM *
     HTHEME theme = GetWindowTheme (infoPtr->hwndSelf);
 
     if (theme) {
+#ifdef __REACTOS__
+        int state = HEADER_GetThemeItemState(theme, item, hottrack);
+#else
         int state = (item->bDown) ? HIS_PRESSED : (hottrack ? HIS_HOT : HIS_NORMAL);
+#endif
         DrawThemeBackground (theme, hdc, HP_HEADERITEM, state, r, NULL);
         GetThemeBackgroundContentRect (theme, hdc, HP_HEADERITEM, state, r, r);
         return;
@@ -371,7 +413,11 @@ static void HEADER_GetItemTextRect(const HEADER_ITEM *item, HWND hwnd, HDC hdc, 
 
     if (theme)
     {
+#ifdef __REACTOS__
+        int state = HEADER_GetThemeItemState(theme, item, hot_track);
+#else
         int state = item->bDown ? HIS_PRESSED : (hot_track ? HIS_HOT : HIS_NORMAL);
+#endif
         GetThemeTextExtent(theme, hdc, HP_HEADERITEM, state, item->pszText, -1,
                            DT_LEFT | DT_VCENTER | DT_SINGLELINE, NULL, rect);
         return;
@@ -388,7 +434,11 @@ static void HEADER_DrawItemText(const HEADER_ITEM *item, HWND hwnd, HDC hdc, BOO
 
     if (theme)
     {
+#ifdef __REACTOS__
+        int state = HEADER_GetThemeItemState(theme, item, hot_track);
+#else
         int state = item->bDown ? HIS_PRESSED : (hot_track ? HIS_HOT : HIS_NORMAL);
+#endif
         DrawThemeText(theme, hdc, HP_HEADERITEM, state, item->pszText, -1,
                       DT_LEFT | DT_END_ELLIPSIS | DT_VCENTER | DT_SINGLELINE, 0, rect);
         return;
@@ -569,11 +619,16 @@ HEADER_DrawItem (HEADER_INFO *infoPtr, HDC hdc, INT iItem, BOOL bHotTrack, LRESU
 	    SelectClipRgn(hClipDC, hClipRgn);
 	    
             if (sort_w) {
-                HRGN arrow = create_sort_arrow( sort_x, r.top + (rh - sort_h) / 2,
-                                                sort_h, phdi->fmt & HDF_SORTUP );
-                if (arrow) {
-                    FillRgn( hClipDC, arrow, GetSysColorBrush( COLOR_GRAYTEXT ) );
-                    DeleteObject( arrow );
+#ifdef __REACTOS__
+                if (!HEADER_DrawThemeSortArrow(infoPtr, hClipDC, &r, phdi))
+#endif
+                {
+                    HRGN arrow = create_sort_arrow( sort_x, r.top + (rh - sort_h) / 2,
+                                                    sort_h, phdi->fmt & HDF_SORTUP );
+                    if (arrow) {
+                        FillRgn( hClipDC, arrow, GetSysColorBrush( COLOR_GRAYTEXT ) );
+                        DeleteObject( arrow );
+                    }
                 }
             }
 
