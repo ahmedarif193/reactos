@@ -67,6 +67,7 @@ set(ARM64EC_RUNTIME_MODULES
     ncrypt
     netapi32
     newdev
+    nfs41_np
     normaliz
     nsi
     ntdll_chpe
