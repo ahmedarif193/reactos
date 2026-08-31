@@ -20,6 +20,7 @@
 @ stdcall NtClose(long) ChpeNtClose
 @ stdcall NtContinue(ptr long) ChpeNtContinue
 @ stdcall -version=0xA00+ NtContinueEx(ptr ptr) ChpeNtContinueEx
+@ stdcall NtCreateNamedPipeFile(ptr long ptr ptr long long long long long long long long long ptr) ChpeNtCreateNamedPipeFile
 @ stdcall -version=0x600+ NtFlushProcessWriteBuffers() ChpeNtFlushProcessWriteBuffers
 @ stdcall NtFlushInstructionCache(long ptr long) ChpeNtFlushInstructionCache
 @ stdcall NtFreeVirtualMemory(long ptr ptr long) ChpeNtFreeVirtualMemory
