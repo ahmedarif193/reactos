@@ -122,6 +122,7 @@ extern const GUID SHELL32_AdvtShortcutComponent;
 
 #define SHV_CHANGE_NOTIFY   (WM_USER + 0x1111)
 #define SHV_UPDATESTATUSBAR (WM_USER + 0x1112)
+#define SHV_FILL_LIST       (WM_USER + 0x1113)
 
 extern inline
 BOOL

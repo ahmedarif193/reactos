@@ -338,7 +338,6 @@ public:
     BOOL LV_UpdateItem(PCUITEMID_CHILD pidl);
     void LV_RefreshItem(INT iItem);
     void LV_RefreshItems();
-    static INT CALLBACK fill_list(LPVOID ptr, LPVOID arg);
     HRESULT FillList(BOOL IsRefreshCommand = TRUE);
     HRESULT FillFileMenu();
     HRESULT FillEditMenu();
@@ -506,6 +505,7 @@ public:
     LRESULT OnNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnChangeNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnUpdateStatusbar(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
+    LRESULT OnFillList(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnMenuMessage(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnSettingChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnInitMenuPopup(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
@@ -556,6 +556,7 @@ public:
     MESSAGE_HANDLER(WM_COMMAND, OnCommand)
     MESSAGE_HANDLER(SHV_CHANGE_NOTIFY, OnChangeNotify)
     MESSAGE_HANDLER(SHV_UPDATESTATUSBAR, OnUpdateStatusbar)
+    MESSAGE_HANDLER(SHV_FILL_LIST, OnFillList)
     MESSAGE_HANDLER(WM_CONTEXTMENU, OnContextMenu)
     MESSAGE_HANDLER(WM_DRAWITEM, OnMenuMessage)
     MESSAGE_HANDLER(WM_MEASUREITEM, OnMenuMessage)
@@ -1519,19 +1520,6 @@ void CDefView::LV_RefreshItems()
     }
 }
 
-INT CALLBACK CDefView::fill_list(LPVOID ptr, LPVOID arg)
-{
-    PITEMID_CHILD pidl = static_cast<PITEMID_CHILD>(ptr);
-    CDefView *pThis = static_cast<CDefView *>(arg);
-
-    // in a commdlg this works as a filemask
-    if (pThis->IncludeObject(pidl) == S_OK && pThis->m_ListView)
-        pThis->LV_AddItem(pidl);
-
-    SHFree(pidl);
-    return TRUE;
-}
-
 ///
 // - gets the objectlist from the shellfolder
 // - sorts the list
@@ -1542,8 +1530,9 @@ HRESULT CDefView::FillList(BOOL IsRefreshCommand)
     PITEMID_CHILD pidl;
     DWORD         dwFetched;
     HRESULT       hRes;
-    HDPA          hdpa;
     DWORD         dFlags = SHCONTF_NONFOLDERS | ((m_FolderSettings.fFlags & FWF_NOSUBFOLDERS) ? 0 : SHCONTF_FOLDERS);
+    DWORD         LastPaint;
+    UINT          BatchCount = 0;
 
     TRACE("%p\n", this);
 
@@ -1572,24 +1561,30 @@ HRESULT CDefView::FillList(BOOL IsRefreshCommand)
         return(hRes);
     }
 
-    // create a pointer array
-    hdpa = DPA_Create(16);
-    if (!hdpa)
-        return(E_OUTOFMEMORY);
-
-    // copy the items into the array
+    m_ListView.SetRedraw(FALSE);
+    LastPaint = GetTickCount();
     while((S_OK == pEnumIDList->Next(1, &pidl, &dwFetched)) && dwFetched)
     {
-        if (DPA_AppendPtr(hdpa, pidl) == -1)
+        if (IncludeObject(pidl) == S_OK && m_ListView)
         {
-            SHFree(pidl);
+            LV_AddItem(pidl);
+            ++BatchCount;
+        }
+        SHFree(pidl);
+
+        if (BatchCount >= 64 || GetTickCount() - LastPaint >= 50)
+        {
+            m_ListView.SetRedraw(TRUE);
+            ::RedrawWindow(m_ListView,
+                           NULL,
+                           NULL,
+                           RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW |
+                               RDW_ALLCHILDREN);
+            m_ListView.SetRedraw(FALSE);
+            BatchCount = 0;
+            LastPaint = GetTickCount();
         }
     }
-
-    // turn listview's redrawing off
-    m_ListView.SetRedraw(FALSE);
-
-    DPA_DestroyCallback( hdpa, fill_list, this);
 
     /* sort the array */
     int sortCol = -1;
@@ -1636,6 +1631,15 @@ HRESULT CDefView::FillList(BOOL IsRefreshCommand)
     _DoFolderViewCB(SFVM_LISTREFRESHED, 0, 0);
 
     return S_OK;
+}
+
+LRESULT CDefView::OnFillList(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+{
+    UNREFERENCED_PARAMETER(uMsg);
+    UNREFERENCED_PARAMETER(lParam);
+    bHandled = TRUE;
+    FillList((BOOL)wParam);
+    return 0;
 }
 
 LRESULT CDefView::OnShowWindow(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
@@ -1786,7 +1790,8 @@ LRESULT CDefView::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
     {
         if (InitList())
         {
-            FillList(FALSE);
+            if (!PostMessage(SHV_FILL_LIST, FALSE, 0))
+                FillList(FALSE);
         }
     }
 
