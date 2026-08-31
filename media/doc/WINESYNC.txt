@@ -24,6 +24,7 @@ sdk/tools/wpp                   # Synced to Wine-11.14 (Module was moved into wr
 The following headers are shared with Wine.
 sdk/include/psdk/rpcproxy.h     # Synced to Wine-11.14
 sdk/include/psdk/netioapi.h     # Synced to Wine-11.14 (mirrors sdk/include/wine/netioapi.h)
+sdk/include/psdk/winevt.h       # Synced to Wine-11.14
 
 The following libraries are shared with Wine.
 
@@ -299,6 +300,7 @@ dll/win32/wmvcore             # Synced to Wine-11.14
 dll/win32/wsdapi              # Synced to Wine-11.14
 dll/win32/wshom.ocx           # Synced to Wine-11.14
 dll/win32/wtsapi32            # Synced to Wine-11.14
+dll/win32/wevtapi             # Synced to Wine-11.14
 dll/win32/wuapi               # Synced to Wine-11.14
 dll/win32/xinput1_1           # Synced to Wine-11.14
 dll/win32/xinput1_2           # Synced to Wine-11.14
