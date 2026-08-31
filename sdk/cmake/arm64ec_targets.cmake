@@ -99,6 +99,7 @@ set(ARM64EC_RUNTIME_MODULES
     usp10
     uxtheme
     version
+    win32u
     windowscodecs
     winhttp
     wininet
