@@ -30,10 +30,18 @@
 
 #define AUXSPI_TRACING_DEFAULT 0x00000001
 
-#define TraceEvents(_Level, _Flags, _Format, ...) \
-    DbgPrint("RPi3: %s\n", (_Format))
-#define Trace(_Level, _Flags, _Format, ...) \
-    DbgPrint("RPi3: %s\n", (_Format))
+#define TraceEvents(_Level, _Flags, _Format, ...)                       \
+    do                                                                  \
+    {                                                                   \
+        if ((_Level) <= TRACE_LEVEL_WARNING)                            \
+            DbgPrint("RPi3: " _Format "\n", ##__VA_ARGS__);             \
+    } while (0)
+#define Trace(_Level, _Flags, _Format, ...)                             \
+    do                                                                  \
+    {                                                                   \
+        if ((_Level) <= TRACE_LEVEL_WARNING)                            \
+            DbgPrint("RPi3: " _Format "\n", ##__VA_ARGS__);             \
+    } while (0)
 #define TraceMessage(_Level, _Flags, _Message) \
     do { DbgPrint _Message; DbgPrint("\n"); } while (0)
 #define FuncEntry(...) do { } while (0)
