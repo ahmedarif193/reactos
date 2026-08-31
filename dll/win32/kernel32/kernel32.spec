@@ -1289,11 +1289,11 @@
 @ stdcall WaitNamedPipeW(wstr long)
 @ stdcall -version=0x600+ WakeAllConditionVariable(ptr) ntdll.RtlWakeAllConditionVariable
 @ stdcall -version=0x600+ WakeConditionVariable(ptr) ntdll.RtlWakeConditionVariable
-@ stub -version=0x600+ WerGetFlags
+@ stdcall -version=0x600+ WerGetFlags(ptr ptr) kernelbase.WerGetFlags
 @ stub -version=0x600+ WerRegisterFile
 @ stub -version=0x600+ WerRegisterMemoryBlock
 @ stdcall -version=0x601+ WerRegisterRuntimeExceptionModule(wstr ptr) kernelbase.WerRegisterRuntimeExceptionModule
-@ stub -version=0x600+ WerSetFlags
+@ stdcall -version=0x600+ WerSetFlags(long) kernelbase.WerSetFlags
 @ stub -version=0x600+ WerUnregisterFile
 @ stub -version=0x600+ WerUnregisterMemoryBlock
 @ stdcall -version=0x601+ WerUnregisterRuntimeExceptionModule(wstr ptr) kernelbase.WerUnregisterRuntimeExceptionModule
