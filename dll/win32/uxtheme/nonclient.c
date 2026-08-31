@@ -12,6 +12,9 @@
 #define NC_PREVIEW_MSGBOX_OFFSET_X -29
 #define NC_PREVIEW_MSGBOX_OFFSET_Y 71
 
+/* Shared with DwmSetWindowAttribute in dwmapi.dll. */
+static const WCHAR immersive_dark_mode_propW[] = L"ReactOS.Dwm.ImmersiveDarkMode";
+
 static BOOL
 IsWindowActive(HWND hWnd, DWORD ExStyle)
 {
@@ -88,6 +91,7 @@ UserGetWindowIcon(PDRAW_CONTEXT pcontext)
 HRESULT WINAPI ThemeDrawCaptionText(PDRAW_CONTEXT pcontext, RECT* pRect, int iPartId, int iStateId)
 {
     HRESULT hr;
+    DTTOPTS options = { sizeof(options) };
     HFONT hFont = NULL;
     HGDIOBJ oldFont = NULL;
     LOGFONTW logfont;
@@ -122,7 +126,10 @@ HRESULT WINAPI ThemeDrawCaptionText(PDRAW_CONTEXT pcontext, RECT* pRect, int iPa
     if (hFont)
         oldFont = SelectObject(pcontext->hDC, hFont);
 
-    textColor = GetThemeSysColor(pcontext->theme, pcontext->Active ? COLOR_CAPTIONTEXT : COLOR_INACTIVECAPTIONTEXT);
+    if (pcontext->DarkMode)
+        textColor = pcontext->Active ? RGB(255, 255, 255) : RGB(160, 160, 160);
+    else
+        textColor = GetThemeSysColor(pcontext->theme, pcontext->Active ? COLOR_CAPTIONTEXT : COLOR_INACTIVECAPTIONTEXT);
 
     GetThemeEnumValue(pcontext->theme, iPartId, iStateId, TMT_CONTENTALIGNMENT, &align);
     if (align == CA_CENTER)
@@ -131,15 +138,18 @@ HRESULT WINAPI ThemeDrawCaptionText(PDRAW_CONTEXT pcontext, RECT* pRect, int iPa
         drawStyles |= DT_RIGHT;
 
     oldTextColor = SetTextColor(pcontext->hDC, textColor);
-    DrawThemeText(pcontext->theme,
-                  pcontext->hDC,
-                  iPartId,
-                  iStateId,
-                  pszText,
-                  len - 1,
-                  drawStyles,
-                  0,
-                  pRect);
+    if (pcontext->DarkMode)
+    {
+        options.dwFlags = DTT_TEXTCOLOR;
+        options.crText = textColor;
+        DrawThemeTextEx(pcontext->theme, pcontext->hDC, iPartId, iStateId,
+                        pszText, len - 1, drawStyles, pRect, &options);
+    }
+    else
+    {
+        DrawThemeText(pcontext->theme, pcontext->hDC, iPartId, iStateId,
+                      pszText, len - 1, drawStyles, 0, pRect);
+    }
     SetTextColor(pcontext->hDC, oldTextColor);
 
     if (hFont)
@@ -163,11 +173,12 @@ ThemeInitDrawContext(PDRAW_CONTEXT pcontext,
     GetWindowInfo(hWnd, &pcontext->wi);
     pcontext->hWnd = hWnd;
     pcontext->Active = IsWindowActive(hWnd, pcontext->wi.dwExStyle);
+    pcontext->DarkMode = GetPropW(hWnd, immersive_dark_mode_propW) != NULL;
     pcontext->theme = GetNCCaptionTheme(hWnd, pcontext->wi.dwStyle);
     pcontext->scrolltheme = GetNCScrollbarTheme(hWnd, pcontext->wi.dwStyle);
 
     pcontext->CaptionHeight = pcontext->wi.cyWindowBorders;
-    pcontext->CaptionHeight += GetThemeSysSize(pcontext->theme, pcontext->wi.dwExStyle & WS_EX_TOOLWINDOW ? SM_CYSMSIZE : SM_CYSIZE);
+    pcontext->CaptionHeight += GetSystemMetrics(pcontext->wi.dwExStyle & WS_EX_TOOLWINDOW ? SM_CYSMCAPTION : SM_CYCAPTION);
 
     if (hRgn <= (HRGN)1)
     {
@@ -283,6 +294,101 @@ void ThemeCalculateCaptionButtonsPos(HWND hWnd, HTHEME htheme)
     ThemeCalculateCaptionButtonsPosEx(&wi, hWnd, htheme, btnHeight);
 }
 
+static COLORREF
+ThemeDarkCaptionColor(PDRAW_CONTEXT pcontext)
+{
+    return pcontext->Active ? RGB(32, 32, 32) : RGB(43, 43, 43);
+}
+
+static void
+ThemeFillSolidRect(HDC hDC, const RECT *rect, COLORREF color)
+{
+    HBRUSH brush = CreateSolidBrush(color);
+
+    if (brush)
+    {
+        FillRect(hDC, rect, brush);
+        DeleteObject(brush);
+    }
+}
+
+static void
+ThemeDrawDarkCaptionButton(PDRAW_CONTEXT pcontext,
+                           CAPTIONBUTTON buttonId,
+                           INT iStateId,
+                           const RECT *rect)
+{
+    COLORREF background = ThemeDarkCaptionColor(pcontext);
+    COLORREF foreground;
+    HPEN pen, oldPen;
+    HBRUSH oldBrush;
+    INT centerX, centerY, radius;
+
+    if (iStateId == BUTTON_HOT || iStateId == BUTTON_INACTIVE_HOT)
+        background = buttonId == CLOSEBUTTON ? RGB(196, 43, 28) : RGB(55, 55, 55);
+    else if (iStateId == BUTTON_PRESSED || iStateId == BUTTON_INACTIVE_PRESSED)
+        background = buttonId == CLOSEBUTTON ? RGB(153, 32, 21) : RGB(67, 67, 67);
+
+    ThemeFillSolidRect(pcontext->hDC, rect, background);
+
+    if (iStateId == BUTTON_DISABLED || iStateId == BUTTON_INACTIVE_DISABLED)
+        foreground = RGB(105, 105, 105);
+    else if (!pcontext->Active && iStateId != BUTTON_INACTIVE_HOT &&
+             iStateId != BUTTON_INACTIVE_PRESSED)
+        foreground = RGB(160, 160, 160);
+    else
+        foreground = RGB(255, 255, 255);
+
+    centerX = (rect->left + rect->right) / 2;
+    centerY = (rect->top + rect->bottom) / 2;
+    radius = min(rect->right - rect->left, rect->bottom - rect->top) / 5;
+    if (radius < 3)
+        radius = 3;
+
+    pen = CreatePen(PS_SOLID, 1, foreground);
+    if (!pen)
+        return;
+    oldPen = SelectObject(pcontext->hDC, pen);
+    oldBrush = SelectObject(pcontext->hDC, GetStockObject(NULL_BRUSH));
+
+    switch (buttonId)
+    {
+    case CLOSEBUTTON:
+        MoveToEx(pcontext->hDC, centerX - radius, centerY - radius, NULL);
+        LineTo(pcontext->hDC, centerX + radius + 1, centerY + radius + 1);
+        MoveToEx(pcontext->hDC, centerX + radius, centerY - radius, NULL);
+        LineTo(pcontext->hDC, centerX - radius - 1, centerY + radius + 1);
+        break;
+
+    case MAXBUTTON:
+        if (pcontext->wi.dwStyle & WS_MAXIMIZE)
+        {
+            Rectangle(pcontext->hDC, centerX - radius + 2, centerY - radius - 1,
+                       centerX + radius + 2, centerY + radius - 1);
+            Rectangle(pcontext->hDC, centerX - radius - 2, centerY - radius + 2,
+                       centerX + radius - 2, centerY + radius + 2);
+        }
+        else
+        {
+            Rectangle(pcontext->hDC, centerX - radius, centerY - radius,
+                       centerX + radius + 1, centerY + radius + 1);
+        }
+        break;
+
+    case MINBUTTON:
+        MoveToEx(pcontext->hDC, centerX - radius, centerY + radius / 2, NULL);
+        LineTo(pcontext->hDC, centerX + radius + 1, centerY + radius / 2);
+        break;
+
+    default:
+        break;
+    }
+
+    SelectObject(pcontext->hDC, oldBrush);
+    SelectObject(pcontext->hDC, oldPen);
+    DeleteObject(pen);
+}
+
 static void
 ThemeDrawCaptionButton(PDRAW_CONTEXT pcontext,
                        RECT* prcCurrent,
@@ -341,7 +447,12 @@ ThemeDrawCaptionButton(PDRAW_CONTEXT pcontext,
     if (prcCurrent)
         prcCurrent->right = pwndData->rcCaptionButtons[buttonId].left;
 
-    DrawThemeBackground(pcontext->theme, pcontext->hDC, iPartId, iStateId, &pwndData->rcCaptionButtons[buttonId], NULL);
+    if (pcontext->DarkMode)
+        ThemeDrawDarkCaptionButton(pcontext, buttonId, iStateId,
+                                   &pwndData->rcCaptionButtons[buttonId]);
+    else
+        DrawThemeBackground(pcontext->theme, pcontext->hDC, iPartId, iStateId,
+                            &pwndData->rcCaptionButtons[buttonId], NULL);
 }
 
 static DWORD
@@ -375,7 +486,7 @@ static void
 ThemeDrawCaption(PDRAW_CONTEXT pcontext, RECT* prcCurrent)
 {
     RECT rcPart;
-    int iPart, iState;
+    int iPart, iState, iButtonState;
     HICON hIcon;
 
     // See also win32ss/user/ntuser/nonclient.c!UserDrawCaptionBar
@@ -401,7 +512,10 @@ ThemeDrawCaption(PDRAW_CONTEXT pcontext, RECT* prcCurrent)
     rcPart = *prcCurrent;
     rcPart.bottom = rcPart.top + pcontext->CaptionHeight;
     prcCurrent->top = rcPart.bottom;
-    DrawThemeBackground(pcontext->theme, pcontext->hDC,iPart,iState,&rcPart,NULL);
+    if (pcontext->DarkMode)
+        ThemeFillSolidRect(pcontext->hDC, &rcPart, ThemeDarkCaptionColor(pcontext));
+    else
+        DrawThemeBackground(pcontext->theme, pcontext->hDC, iPart, iState, &rcPart, NULL);
 
     /* Add a padding around the objects of the caption */
     InflateRect(&rcPart, -(int)pcontext->wi.cyWindowBorders-BUTTON_GAP_SIZE,
@@ -410,12 +524,12 @@ ThemeDrawCaption(PDRAW_CONTEXT pcontext, RECT* prcCurrent)
     /* Draw the caption buttons */
     if (pcontext->wi.dwStyle & WS_SYSMENU)
     {
-        iState = pcontext->Active ? BUTTON_NORMAL : BUTTON_INACTIVE;
+        iButtonState = pcontext->Active ? BUTTON_NORMAL : BUTTON_INACTIVE;
 
-        ThemeDrawCaptionButton(pcontext, &rcPart, CLOSEBUTTON, iState);
-        ThemeDrawCaptionButton(pcontext, &rcPart, MAXBUTTON, iState);
-        ThemeDrawCaptionButton(pcontext, &rcPart, MINBUTTON, iState);
-        ThemeDrawCaptionButton(pcontext, &rcPart, HELPBUTTON, iState);
+        ThemeDrawCaptionButton(pcontext, &rcPart, CLOSEBUTTON, iButtonState);
+        ThemeDrawCaptionButton(pcontext, &rcPart, MAXBUTTON, iButtonState);
+        ThemeDrawCaptionButton(pcontext, &rcPart, MINBUTTON, iButtonState);
+        ThemeDrawCaptionButton(pcontext, &rcPart, HELPBUTTON, iButtonState);
     }
 
     rcPart.top += 3 ;
@@ -445,19 +559,28 @@ ThemeDrawBorders(PDRAW_CONTEXT pcontext, RECT* prcCurrent)
     rcPart = *prcCurrent;
     rcPart.top = rcPart.bottom - pcontext->wi.cyWindowBorders;
     prcCurrent->bottom = rcPart.top;
-    DrawThemeBackground(pcontext->theme, pcontext->hDC, WP_FRAMEBOTTOM, iState, &rcPart, NULL);
+    if (pcontext->DarkMode)
+        ThemeFillSolidRect(pcontext->hDC, &rcPart, ThemeDarkCaptionColor(pcontext));
+    else
+        DrawThemeBackground(pcontext->theme, pcontext->hDC, WP_FRAMEBOTTOM, iState, &rcPart, NULL);
 
     /* Draw the left border */
     rcPart = *prcCurrent;
     rcPart.right = rcPart.left + pcontext->wi.cxWindowBorders ;
     prcCurrent->left = rcPart.right;
-    DrawThemeBackground(pcontext->theme, pcontext->hDC,WP_FRAMELEFT, iState, &rcPart, NULL);
+    if (pcontext->DarkMode)
+        ThemeFillSolidRect(pcontext->hDC, &rcPart, ThemeDarkCaptionColor(pcontext));
+    else
+        DrawThemeBackground(pcontext->theme, pcontext->hDC, WP_FRAMELEFT, iState, &rcPart, NULL);
 
     /* Draw the right border */
     rcPart = *prcCurrent;
     rcPart.left = rcPart.right - pcontext->wi.cxWindowBorders;
     prcCurrent->right = rcPart.left;
-    DrawThemeBackground(pcontext->theme, pcontext->hDC,WP_FRAMERIGHT, iState, &rcPart, NULL);
+    if (pcontext->DarkMode)
+        ThemeFillSolidRect(pcontext->hDC, &rcPart, ThemeDarkCaptionColor(pcontext));
+    else
+        DrawThemeBackground(pcontext->theme, pcontext->hDC, WP_FRAMERIGHT, iState, &rcPart, NULL);
 }
 
 static void

@@ -97,6 +97,7 @@ typedef struct _DRAW_CONTEXT
     HTHEME hPrevTheme;
     WINDOWINFO wi;
     BOOL Active; /* wi.dwWindowStatus isn't correct for mdi child windows */
+    BOOL DarkMode;
     HRGN hRgn;
     int CaptionHeight;
 
