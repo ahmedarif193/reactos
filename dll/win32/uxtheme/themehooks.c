@@ -60,8 +60,6 @@ void ThemeDestroyWndData(HWND hWnd)
 
     if (pwndData->hTabBackgroundBrush != NULL)
     {
-        CloseThemeData(GetWindowTheme(hWnd));
-
         DeleteObject(pwndData->hTabBackgroundBrush);
     }
 
@@ -78,6 +76,11 @@ void ThemeDestroyWndData(HWND hWnd)
     if (pwndData->hthemeScrollbar)
     {
         CloseThemeData(pwndData->hthemeScrollbar);
+    }
+
+    if (pwndData->hthemeTab)
+    {
+        CloseThemeData(pwndData->hthemeTab);
     }
 
     HeapFree(GetProcessHeap(), 0, pwndData);
@@ -504,6 +507,7 @@ ThemeDlgPostWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, ULONG_
             HWND hwndTarget = (HWND)lParam;
             HDC hdc = (HDC)wParam;
             HBRUSH* phbrush = (HBRUSH*)ret;
+            PWND_DATA pwndData;
             HTHEME hTheme;
 
             if(!IsAppThemed() || !(GetThemeAppProperties() & STAP_ALLOW_NONCLIENT))
@@ -512,10 +516,14 @@ ThemeDlgPostWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, ULONG_
             if (!IsThemeDialogTextureEnabled (hWnd))
                 break;
 
-            hTheme = GetWindowTheme(hWnd);
-            if (!hTheme)
-                hTheme = OpenThemeData(hWnd, L"TAB");
+            pwndData = ThemeGetWndData(hWnd);
+            if (pwndData == NULL)
+                break;
 
+            if (!pwndData->hthemeTab)
+                pwndData->hthemeTab = OpenThemeData(NULL, L"TAB");
+
+            hTheme = pwndData->hthemeTab;
             if (!hTheme)
                 break;
 
