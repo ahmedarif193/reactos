@@ -124,6 +124,17 @@ static enum SCROLL_HITTEST SCROLL_HitTest( HWND hwnd, SCROLLBARINFO* psbi, BOOL 
     return SCROLL_THUMB;
 }
 
+static BOOL SCROLL_ThemeHasState(HTHEME theme, int iPartId, int iStateId)
+{
+    int imagecount = 0;
+
+    if (MSSTYLES_FindPartState((PTHEME_CLASS)theme, iPartId, iStateId, NULL))
+        return TRUE;
+
+    return SUCCEEDED(GetThemeInt(theme, iPartId, 0, TMT_IMAGECOUNT, &imagecount)) &&
+           imagecount >= iStateId;
+}
+
 static void SCROLL_ThemeDrawPart(PDRAW_CONTEXT pcontext, int iPartId,int iStateId,  SCROLLBARINFO* psbi, int htCurrent, int htDown, int htHot, RECT* r)
 {
     if (r->right <= r->left || r->bottom <= r->top)
@@ -135,6 +146,18 @@ static void SCROLL_ThemeDrawPart(PDRAW_CONTEXT pcontext, int iPartId,int iStateI
         iStateId += BUTTON_HOT - BUTTON_NORMAL;
     else if (htDown == htCurrent)
         iStateId += BUTTON_PRESSED - BUTTON_NORMAL;
+    else if (htHot != SCROLL_NOWHERE || htDown != SCROLL_NOWHERE)
+    {
+        int hover;
+
+        if (iPartId == SBP_ARROWBTN)
+            hover = ABS_UPHOVER + (iStateId - ABS_UPNORMAL) / 4;
+        else
+            hover = SCRBS_HOVER;
+
+        if (SCROLL_ThemeHasState(pcontext->scrolltheme, iPartId, hover))
+            iStateId = hover;
+    }
 
     DrawThemeBackground(pcontext->scrolltheme, pcontext->hDC, iPartId, iStateId, r, NULL);
 }
