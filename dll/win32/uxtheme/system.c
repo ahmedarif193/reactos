@@ -1211,8 +1211,9 @@ HRESULT WINAPI EnumThemeColors(LPWSTR pszThemeFileName, LPWSTR pszSizeName,
     if(!dwColorNum && *tmp) {
         TRACE("%s\n", debugstr_w(tmp));
         lstrcpyW(pszColorNames->szName, tmp);
-        LoadStringW(pt->hTheme, resourceId, pszColorNames->szDisplayName,
-            ARRAY_SIZE(pszColorNames->szDisplayName));
+        if (!LoadStringW(pt->hTheme, resourceId, pszColorNames->szDisplayName,
+            ARRAY_SIZE(pszColorNames->szDisplayName)))
+            lstrcpyW(pszColorNames->szDisplayName, tmp);
         LoadStringW(pt->hTheme, resourceId+1000, pszColorNames->szTooltip,
             ARRAY_SIZE(pszColorNames->szTooltip));
     }
@@ -1269,8 +1270,9 @@ HRESULT WINAPI EnumThemeSizes(LPWSTR pszThemeFileName, LPWSTR pszColorName,
     if(!dwSizeNum && *tmp) {
         TRACE("%s\n", debugstr_w(tmp));
         lstrcpyW(pszSizeNames->szName, tmp);
-        LoadStringW(pt->hTheme, resourceId, pszSizeNames->szDisplayName,
-            ARRAY_SIZE(pszSizeNames->szDisplayName));
+        if (!LoadStringW(pt->hTheme, resourceId, pszSizeNames->szDisplayName,
+            ARRAY_SIZE(pszSizeNames->szDisplayName)))
+            lstrcpyW(pszSizeNames->szDisplayName, tmp);
         LoadStringW(pt->hTheme, resourceId+1000, pszSizeNames->szTooltip,
             ARRAY_SIZE(pszSizeNames->szTooltip));
     }
