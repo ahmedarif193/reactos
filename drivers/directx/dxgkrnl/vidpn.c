@@ -3943,6 +3943,14 @@ DxgkDestroyRedirectionSurface(
     }
     else
     {
+        (VOID)KeWaitForSingleObject(&Allocation->ResidencyLock,
+                                    Executive, KernelMode, FALSE, NULL);
+        InterlockedExchangePointer(
+            (PVOID volatile *)&Allocation->RedirectionSurfaceHandle,
+            NULL);
+        RtlZeroMemory(Allocation->RedirectionSubmittedFenceId,
+                      sizeof(Allocation->RedirectionSubmittedFenceId));
+        KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
         Status = STATUS_SUCCESS;
     }
     DxgkVidMmDereferenceAllocation(Allocation);

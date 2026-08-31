@@ -362,6 +362,7 @@ DxgkpKmtIoctlMinimumConfiguredLevel(
         case IOCTL_D3DKMT_FLIPOVERLAY:
         case IOCTL_D3DKMT_UPDATEOVERLAY:
         case IOCTL_DXGKRNL_EXCHANGE_INTERFACE:
+        case IOCTL_DXGKRNL_REGISTER_WIN32K_CDD_INTERFACE:
         case IOCTL_DXGKRNL_GET_LEGACY_FULL_INIT_ENTRY:
         case IOCTL_DXGKRNL_GET_FULL_INIT_ENTRY:
             return DXGK_CAPS_CORE_LEVEL_WDDM_1_0;
@@ -10129,6 +10130,30 @@ DxgkpDispatchBufferedIoctl(
             return DxgkWaitForSynchronizationObjectFromCpu((CONST D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU *)SystemBuffer, EmbeddedBufferMode);
         }
 
+        case IOCTL_DXGKRNL_REGISTER_WIN32K_CDD_INTERFACE:
+        {
+            PDXGKRNL_WIN32K_CDD_INTERFACE Interface;
+
+            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL ||
+                Irp->RequestorMode != KernelMode)
+            {
+                return STATUS_ACCESS_DENIED;
+            }
+            if (SystemBuffer == NULL ||
+                InputLength < RTL_SIZEOF_THROUGH_FIELD(
+                                  DXGKRNL_WIN32K_CDD_INTERFACE,
+                                  Version) ||
+                OutputLength != 0)
+            {
+                return STATUS_INFO_LENGTH_MISMATCH;
+            }
+
+            Interface = (PDXGKRNL_WIN32K_CDD_INTERFACE)SystemBuffer;
+            if (Interface->Size != InputLength)
+                return STATUS_INFO_LENGTH_MISMATCH;
+            return DxgkRegisterWin32kCddInterface(Interface);
+        }
+
         case IOCTL_DXGKRNL_EXCHANGE_INTERFACE:
         {
             /*
@@ -10809,6 +10834,7 @@ DxgkDispatchDeviceControl(
         case IOCTL_D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU:
         case IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU:
         case IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2:
+        case IOCTL_DXGKRNL_REGISTER_WIN32K_CDD_INTERFACE:
         case IOCTL_DXGKRNL_EXCHANGE_INTERFACE:
         {
             if (Stack->MajorFunction == IRP_MJ_DEVICE_CONTROL && Irp->RequestorMode == UserMode)

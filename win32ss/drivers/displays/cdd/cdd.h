@@ -96,6 +96,12 @@ typedef struct _RCDD_PDEV
    KMUTEX DisplayLockWaitMutex;
    LONG DisplayLockWaiters;
 
+   /* Redirection bitmaps are linked for one per-PDEV synchronization
+    * command. RedirectionLock also protects each bitmap's pending damage. */
+   HSEMAPHORE RedirectionLock;
+   LIST_ENTRY RedirectionBitmapList;
+   ULONG RedirectionBitmapCount;
+
    /* DWM cursor state (driven by DrvEscape, see escape.c) */
    BOOL CursorSuppressed;      /* Compositor owns the cursor                  */
 
@@ -131,10 +137,16 @@ typedef struct _RCDD_PDEV
 
 typedef struct _RCDD_BITMAP
 {
+   LIST_ENTRY ListEntry;
    PRCDD_PDEV Pdev;
    ULONGLONG AllocationHandle;
    ULONG ResourceHandle;
    ULONG GlobalShare;
+   ULONG Pitch;
+   ULONG Width;
+   ULONG Height;
+   BOOL Dirty;
+   RECTL DirtyRect;
 } RCDD_BITMAP, *PRCDD_BITMAP;
 
 #define DEVICE_NAME L"cdd"

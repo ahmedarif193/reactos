@@ -156,6 +156,16 @@ typedef struct _DXGKRNL_PRESENT_ENTRY
     RECT                           *DstSubRects;
     UINT                            DstSubRectCount;
 
+    /* Filled when a full-WDDM present reaches scheduler submission. */
+    ULONG                           SubmissionFenceId;
+    ULONG                           SubmissionNodeOrdinal;
+
+    /* Win7 redirected-BLT presents carry the CDD BACK resource identity and
+     * the update issued by DWM. Admission validates this tuple in win32k;
+     * completion may publish damage only for that same immutable tuple. */
+    DXGKRNL_REDIRECTED_BLT_PRESENT  RedirectedBltPresent;
+    BOOLEAN                         RedirectedBltPresentAdmitted;
+
     /* Colour value for colour-fill presents (ARGB 32-bit). */
     UINT                            Color;
 

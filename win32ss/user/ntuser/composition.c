@@ -325,6 +325,10 @@ IntCompositionFreeSurface(_Inout_ PWND_REDIRECT r)
     r->DxIssuedUpdateId = 0;
     r->DxPublishedUpdateId = 0;
     r->DxConsumedUpdateId = 0;
+    r->GdiIssuedUpdateId = 0;
+    r->GdiAdmittedUpdateId = 0;
+    r->GdiPublishedUpdateId = 0;
+    r->GdiConsumedUpdateId = 0;
     RtlZeroMemory(&r->DxInfo, sizeof(r->DxInfo));
     r->cx = r->cy = 0;
 }
@@ -869,6 +873,182 @@ IntCompositionCommitOpenGLFrame(_In_opt_ PSURFACE psurf,
     }
 }
 
+static NTSTATUS
+IntCompositionLookupRedirectedBltPresent(
+    _In_ const DXGKRNL_REDIRECTED_BLT_PRESENT *Present,
+    _Out_ REDIRECT_ENTRY **RedirectEntry)
+{
+    REDIRECT_ENTRY *Entry;
+    PWND Wnd;
+
+    if (RedirectEntry == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *RedirectEntry = NULL;
+
+    if (Present == NULL || Present->Size != sizeof(*Present) ||
+        Present->Flags != 0 || Present->Reserved != 0 ||
+        Present->WindowHandle == 0 || Present->SurfaceHandle == 0 ||
+        Present->OwnerProcess == NULL || Present->GlobalShare == 0 ||
+        Present->UpdateId == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Wnd = UserGetWindowObject((HWND)(ULONG_PTR)Present->WindowHandle);
+    Wnd = IntCompositionTopLevel(Wnd);
+    if (Wnd == NULL || Wnd->head.pti == NULL || Wnd->head.pti->ppi == NULL ||
+        Wnd->head.pti->ppi->peProcess != Present->OwnerProcess)
+    {
+        return STATUS_ACCESS_DENIED;
+    }
+
+    Entry = IntCompositionFind(Wnd);
+    if (Entry == NULL ||
+        Entry->Redirect.hbmp !=
+            (HBITMAP)(ULONG_PTR)Present->SurfaceHandle ||
+        Entry->Redirect.BackGlobalShare != Present->GlobalShare)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    *RedirectEntry = Entry;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+IntCompositionValidateRedirectedBltRect(
+    _In_ const REDIRECT_ENTRY *Entry,
+    _In_ const DXGKRNL_REDIRECTED_BLT_PRESENT *Present)
+{
+    if (Present->DestinationRect.left < Entry->Redirect.rcClient.left ||
+        Present->DestinationRect.top < Entry->Redirect.rcClient.top ||
+        Present->DestinationRect.right > Entry->Redirect.rcClient.right ||
+        Present->DestinationRect.bottom > Entry->Redirect.rcClient.bottom ||
+        Present->DestinationRect.left >= Present->DestinationRect.right ||
+        Present->DestinationRect.top >= Present->DestinationRect.bottom)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+IntCompositionAdmitRedirectedBltPresent(
+    _In_ const DXGKRNL_REDIRECTED_BLT_PRESENT *Present)
+{
+    REDIRECT_ENTRY *Entry;
+    NTSTATUS Status;
+
+    Status = IntCompositionLookupRedirectedBltPresent(Present, &Entry);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = IntCompositionValidateRedirectedBltRect(Entry, Present);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (Entry->Redirect.GdiIssuedUpdateId != Present->UpdateId ||
+        Present->UpdateId <= Entry->Redirect.GdiConsumedUpdateId ||
+        Entry->Redirect.GdiAdmittedUpdateId >= Present->UpdateId ||
+        Entry->Redirect.GdiPublishedUpdateId >= Present->UpdateId)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Entry->Redirect.GdiAdmittedUpdateId = Present->UpdateId;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+IntCompositionValidateRedirectedBltPresent(
+    _In_ const DXGKRNL_REDIRECTED_BLT_PRESENT *Present)
+{
+    REDIRECT_ENTRY *Entry;
+    NTSTATUS Status;
+
+    Status = IntCompositionLookupRedirectedBltPresent(Present, &Entry);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = IntCompositionValidateRedirectedBltRect(Entry, Present);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (Entry->Redirect.GdiIssuedUpdateId != Present->UpdateId ||
+        Entry->Redirect.GdiAdmittedUpdateId != Present->UpdateId ||
+        Present->UpdateId <= Entry->Redirect.GdiConsumedUpdateId ||
+        Entry->Redirect.GdiPublishedUpdateId >= Present->UpdateId)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+IntCompositionCancelRedirectedBltPresent(
+    _In_ const DXGKRNL_REDIRECTED_BLT_PRESENT *Present)
+{
+    REDIRECT_ENTRY *Entry;
+    NTSTATUS Status;
+
+    Status = IntCompositionLookupRedirectedBltPresent(Present, &Entry);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (Entry->Redirect.GdiIssuedUpdateId != Present->UpdateId ||
+        Entry->Redirect.GdiAdmittedUpdateId != Present->UpdateId ||
+        Present->UpdateId <= Entry->Redirect.GdiConsumedUpdateId ||
+        Entry->Redirect.GdiPublishedUpdateId >= Present->UpdateId)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Entry->Redirect.GdiAdmittedUpdateId =
+        Entry->Redirect.GdiConsumedUpdateId;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+IntCompositionCompleteRedirectedBltPresent(
+    _In_ const DXGKRNL_REDIRECTED_BLT_PRESENT *Present,
+    _In_reads_(DirtyRectCount) const RECT *DirtyRects,
+    _In_ UINT DirtyRectCount,
+    _In_reads_(ContextCount) const HANDLE *Contexts,
+    _In_ UINT ContextCount)
+{
+    REDIRECT_ENTRY *Entry;
+    PWND Wnd;
+    NTSTATUS Status;
+
+    UNREFERENCED_PARAMETER(DirtyRects);
+    UNREFERENCED_PARAMETER(DirtyRectCount);
+    UNREFERENCED_PARAMETER(Contexts);
+    UNREFERENCED_PARAMETER(ContextCount);
+
+    Status = IntCompositionValidateRedirectedBltPresent(Present);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Wnd = IntCompositionTopLevel(
+              UserGetWindowObject(
+                  (HWND)(ULONG_PTR)Present->WindowHandle));
+    Entry = IntCompositionFind(Wnd);
+    ASSERT(Entry != NULL);
+
+    Entry->Redirect.GdiPublishedUpdateId = Present->UpdateId;
+    InterlockedExchange(&Entry->BackingDrawn, TRUE);
+    if (Present->DestinationRect.left == Entry->Redirect.rcClient.left &&
+        Present->DestinationRect.top == Entry->Redirect.rcClient.top &&
+        Present->DestinationRect.right == Entry->Redirect.rcClient.right &&
+        Present->DestinationRect.bottom == Entry->Redirect.rcClient.bottom)
+    {
+        InterlockedExchange(&Entry->BackComplete, TRUE);
+    }
+    Entry->Damaged = TRUE;
+    IntCompositionMarkDamage(FALSE);
+    return STATUS_SUCCESS;
+}
+
 VOID
 IntCompositionDamageFromGdi(VOID)
 {
@@ -1170,6 +1350,18 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
             s_stack[n++] = pwndChild;
     }
 
+    /* A D3D present may have written a CDD redirection bitmap through the
+     * GPU after GDI last touched it. Complete those writes and make their
+     * system backing CPU-visible before BACK is copied into the published
+     * FRONT snapshot. */
+    if (gpmdev != NULL)
+    {
+        UINT64 RedirectionFence;
+
+        if (GreSynchronizeRedirectionBitmaps(gpmdev, &RedirectionFence) != 0)
+            return STATUS_GRAPHICS_ALLOCATION_BUSY;
+    }
+
     /* Consume only the damage that existed before this snapshot. A GDI draw
      * cannot enter while the PDEV is locked; a later draw sets the flags again
      * after unlock and therefore cannot be lost by this frame. */
@@ -1211,6 +1403,8 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
             if ((fullDamage || e->Damaged) && !bBusy && !bFirstPaintPending &&
                 e->Redirect.psurf != NULL && e->Redirect.psurfFront != NULL)
             {
+                BOOL BackingPublished = FALSE;
+
                 if (ppdev == NULL)
                     ppdev = IntCompositionLockDevice();
 
@@ -1226,6 +1420,7 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
                          e->Redirect.FrontGlobalShare == 0)
                 {
                     IntCompositionExchangeBuffers(&e->Redirect);
+                    BackingPublished = TRUE;
                 }
                 else
                 {
@@ -1235,14 +1430,30 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
                     rcBuf.top = 0;
                     rcBuf.right = e->Redirect.cx;
                     rcBuf.bottom = e->Redirect.cy;
-                    IntEngBitBlt(&e->Redirect.psurfFront->SurfObj, &e->Redirect.psurf->SurfObj, NULL, NULL, NULL, &rcBuf, &ptZero, NULL, NULL, NULL, ROP4_SRCCOPY);
-                    InterlockedExchange(&e->BackComplete, FALSE);
+                    BackingPublished = IntEngBitBlt(
+                        &e->Redirect.psurfFront->SurfObj,
+                        &e->Redirect.psurf->SurfObj,
+                        NULL, NULL, NULL, &rcBuf, &ptZero,
+                        NULL, NULL, NULL, ROP4_SRCCOPY);
+                    if (BackingPublished)
+                        InterlockedExchange(&e->BackComplete, FALSE);
                 }
-                if (ppdev != NULL)
+                if (BackingPublished)
                 {
                     e->Redirect.FrontValid = TRUE;
                     if (e->Redirect.FrontGlobalShare != 0)
                         e->Redirect.BaseUpdateId = ++g_BaseUpdateSequence;
+                    if (e->Redirect.GdiPublishedUpdateId >
+                        e->Redirect.GdiConsumedUpdateId)
+                    {
+                        e->Redirect.GdiConsumedUpdateId =
+                            e->Redirect.GdiPublishedUpdateId;
+                    }
+                }
+                else if (ppdev != NULL)
+                {
+                    BackingDeferred = TRUE;
+                    DeferredDamage = TRUE;
                 }
             }
             else if (e->Damaged)

@@ -65,6 +65,34 @@ static volatile LONG g_WddmBridgeLockState = 0;
 static EX_RUNDOWN_REF g_WddmBridgeRundown;
 static BOOLEAN g_WddmBridgeRundownInitialized = FALSE;
 
+BOOLEAN
+NTAPI
+DxgkEngAddRedirBitmapD3DDirtyRgn(
+    _In_ ULONG_PTR SurfaceHandle,
+    _In_reads_(DirtyRectCount) const RECT *DirtyRects,
+    _In_ UINT DirtyRectCount,
+    _In_reads_(ContextCount) const HANDLE *Contexts,
+    _In_ UINT ContextCount);
+
+NTSTATUS
+NTAPI
+DxgkEngAdmitRedirectedBltPresent(
+    _In_ const DXGKRNL_REDIRECTED_BLT_PRESENT *Present);
+
+NTSTATUS
+NTAPI
+DxgkEngCancelRedirectedBltPresent(
+    _In_ const DXGKRNL_REDIRECTED_BLT_PRESENT *Present);
+
+NTSTATUS
+NTAPI
+DxgkEngCompleteRedirectedBltPresent(
+    _In_ const DXGKRNL_REDIRECTED_BLT_PRESENT *Present,
+    _In_reads_(DirtyRectCount) const RECT *DirtyRects,
+    _In_ UINT DirtyRectCount,
+    _In_reads_(ContextCount) const HANDLE *Contexts,
+    _In_ UINT ContextCount);
+
 typedef struct _WDDM_BRIDGE_COMPLETION_CONTEXT
 {
     ULONG OutputSize;
@@ -471,6 +499,38 @@ WddmBridgeInit(VOID)
         return Status;
     }
 
+    {
+        DXGKRNL_WIN32K_CDD_INTERFACE CddInterface;
+
+        RtlZeroMemory(&CddInterface, sizeof(CddInterface));
+        CddInterface.Size = sizeof(CddInterface);
+        CddInterface.Version =
+            DXGKRNL_WIN32K_CDD_INTERFACE_VERSION_CURRENT;
+        CddInterface.AddRedirectionDirtyRegion =
+            DxgkEngAddRedirBitmapD3DDirtyRgn;
+        CddInterface.AdmitRedirectedBltPresent =
+            DxgkEngAdmitRedirectedBltPresent;
+        CddInterface.CompleteRedirectedBltPresent =
+            DxgkEngCompleteRedirectedBltPresent;
+        CddInterface.CancelRedirectedBltPresent =
+            DxgkEngCancelRedirectedBltPresent;
+        Status = WddmBridgeSendIoctlToDevice(
+                     DeviceObject,
+                     IOCTL_DXGKRNL_REGISTER_WIN32K_CDD_INTERFACE,
+                     &CddInterface,
+                     sizeof(CddInterface),
+                     NULL,
+                     0,
+                     NULL);
+        if (!NT_SUCCESS(Status))
+        {
+            ObDereferenceObject(FileObject);
+            g_WddmBridgeStatus = Status;
+            WddmBridgeReleaseLock();
+            return Status;
+        }
+    }
+
     if (g_WddmBridgeRundownInitialized)
         ExReInitializeRundownProtection(&g_WddmBridgeRundown);
     else
@@ -689,11 +749,28 @@ WddmBridgeSendIoctlToDevice(
 VOID
 WddmBridgeCleanup(VOID)
 {
+    DXGKRNL_WIN32K_CDD_INTERFACE CddInterface;
+
     ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
     if (KeGetCurrentIrql() > APC_LEVEL)
         return;
 
     WddmBridgeAcquireLock();
+    if (g_DxgkrnlDeviceObject != NULL)
+    {
+        RtlZeroMemory(&CddInterface, sizeof(CddInterface));
+        CddInterface.Size = sizeof(CddInterface);
+        CddInterface.Version =
+            DXGKRNL_WIN32K_CDD_INTERFACE_VERSION_CURRENT;
+        (VOID)WddmBridgeSendIoctlToDevice(
+                  g_DxgkrnlDeviceObject,
+                  IOCTL_DXGKRNL_REGISTER_WIN32K_CDD_INTERFACE,
+                  &CddInterface,
+                  sizeof(CddInterface),
+                  NULL,
+                  0,
+                  NULL);
+    }
     g_WddmBridgeStatus = STATUS_DEVICE_NOT_CONNECTED;
     g_DxgkrnlDeviceObject = NULL;
     if (g_WddmBridgeRundownInitialized)

@@ -48,6 +48,7 @@ RcddCreateDeviceBitmapEx(
    PRCDD_PDEV ppdev = (PRCDD_PDEV)dhpdev;
    PRCDD_BITMAP Bitmap;
    DXGK_REDIRECTION_SURFACE_CREATE Create;
+   DXGK_REDIRECTION_SURFACE_ASSOCIATE Associate;
    HBITMAP hBitmap;
    ULONG BytesReturned, ControlStatus;
 
@@ -94,9 +95,13 @@ RcddCreateDeviceBitmapEx(
    }
 
    Bitmap->Pdev = ppdev;
+   InitializeListHead(&Bitmap->ListEntry);
    Bitmap->AllocationHandle = Create.AllocationHandle;
    Bitmap->ResourceHandle = Create.ResourceHandle;
    Bitmap->GlobalShare = Create.GlobalShare;
+   Bitmap->Pitch = Create.Pitch;
+   Bitmap->Width = Create.Width;
+   Bitmap->Height = Create.Height;
    RtlZeroMemory((PVOID)(ULONG_PTR)Create.CpuAddress,
                  (SIZE_T)Create.Pitch * Create.Height);
 
@@ -106,8 +111,26 @@ RcddCreateDeviceBitmapEx(
                         (DHSURF)Bitmap, (PVOID)(ULONG_PTR)Create.CpuAddress,
                         (LONG)Create.Pitch, NULL))
    {
-      *phSharedSurface = (HANDLE)(ULONG_PTR)Create.GlobalShare;
-      return hBitmap;
+      RtlZeroMemory(&Associate, sizeof(Associate));
+      Associate.StructSize = sizeof(Associate);
+      Associate.AllocationHandle = Create.AllocationHandle;
+      Associate.ResourceHandle = Create.ResourceHandle;
+      Associate.GlobalShare = Create.GlobalShare;
+      Associate.SurfaceHandle = (ULONGLONG)(ULONG_PTR)hBitmap;
+      ControlStatus = EngDeviceIoControl(
+                         ppdev->hDriver,
+                         IOCTL_VIDEO_DXGK_ASSOCIATE_REDIRECTION_SURFACE,
+                         &Associate, sizeof(Associate),
+                         NULL, 0, &BytesReturned);
+      if (ControlStatus == 0)
+      {
+         EngAcquireSemaphore(ppdev->RedirectionLock);
+         InsertTailList(&ppdev->RedirectionBitmapList, &Bitmap->ListEntry);
+         ppdev->RedirectionBitmapCount++;
+         EngReleaseSemaphore(ppdev->RedirectionLock);
+         *phSharedSurface = (HANDLE)(ULONG_PTR)Create.GlobalShare;
+         return hBitmap;
+      }
    }
 
    if (hBitmap != NULL)
@@ -134,6 +157,17 @@ RcddDeleteDeviceBitmapEx(
 
    if (Bitmap == NULL)
       return;
+
+   EngAcquireSemaphore(Bitmap->Pdev->RedirectionLock);
+   if (!IsListEmpty(&Bitmap->ListEntry))
+   {
+      RemoveEntryList(&Bitmap->ListEntry);
+      InitializeListHead(&Bitmap->ListEntry);
+      ASSERT(Bitmap->Pdev->RedirectionBitmapCount != 0);
+      if (Bitmap->Pdev->RedirectionBitmapCount != 0)
+         Bitmap->Pdev->RedirectionBitmapCount--;
+   }
+   EngReleaseSemaphore(Bitmap->Pdev->RedirectionLock);
 
    RtlZeroMemory(&Destroy, sizeof(Destroy));
    Destroy.StructSize = sizeof(Destroy);

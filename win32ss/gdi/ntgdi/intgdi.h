@@ -1,5 +1,7 @@
 #pragma once
 
+#include <reactos/rddm/rxgkinterface.h>
+
 /* Convert WIN32 ROP into an ENG ROP */
 #define WIN32_ROP3_TO_ENG_ROP4(dwRop4) ((((dwRop4) & 0x00FF0000) >> 16) | (((dwRop4) & 0x00FF0000) >> 8))
 #define WIN32_ROP4_TO_ENG_ROP4(dwRop4) ((dwRop4) >> 16)
@@ -115,6 +117,34 @@ FASTCALL
 GreSynchronizeRedirectionBitmaps(
     _In_ PMDEVOBJ pmdev,
     _Out_ UINT64 *puiFenceId);
+
+BOOLEAN
+NTAPI
+DxgkEngAddRedirBitmapD3DDirtyRgn(
+    _In_ ULONG_PTR SurfaceHandle,
+    _In_reads_(DirtyRectCount) const RECT *DirtyRects,
+    _In_ UINT DirtyRectCount,
+    _In_reads_(ContextCount) const HANDLE *Contexts,
+    _In_ UINT ContextCount);
+
+NTSTATUS
+NTAPI
+DxgkEngAdmitRedirectedBltPresent(
+    _In_ const DXGKRNL_REDIRECTED_BLT_PRESENT *Present);
+
+NTSTATUS
+NTAPI
+DxgkEngCancelRedirectedBltPresent(
+    _In_ const DXGKRNL_REDIRECTED_BLT_PRESENT *Present);
+
+NTSTATUS
+NTAPI
+DxgkEngCompleteRedirectedBltPresent(
+    _In_ const DXGKRNL_REDIRECTED_BLT_PRESENT *Present,
+    _In_reads_(DirtyRectCount) const RECT *DirtyRects,
+    _In_ UINT DirtyRectCount,
+    _In_reads_(ContextCount) const HANDLE *Contexts,
+    _In_ UINT ContextCount);
 
 NTSTATUS
 APIENTRY

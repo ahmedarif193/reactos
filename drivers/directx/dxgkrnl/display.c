@@ -2303,6 +2303,69 @@ DxgkpDisplayDispatch(
             break;
         }
 
+        case IOCTL_VIDEO_DXGK_ASSOCIATE_REDIRECTION_SURFACE:
+        {
+            PDXGK_REDIRECTION_SURFACE_ASSOCIATE Associate =
+                (PDXGK_REDIRECTION_SURFACE_ASSOCIATE)
+                    Irp->AssociatedIrp.SystemBuffer;
+
+            if (Irp->RequestorMode != KernelMode)
+            {
+                Status = STATUS_ACCESS_DENIED;
+                break;
+            }
+            if (Associate == NULL ||
+                Stack->Parameters.DeviceIoControl.InputBufferLength !=
+                    sizeof(*Associate) ||
+                Stack->Parameters.DeviceIoControl.OutputBufferLength != 0)
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+            if (g_DisplayAdapter == NULL)
+            {
+                Status = STATUS_DEVICE_NOT_READY;
+                break;
+            }
+
+            Status = DxgkAssociateRedirectionSurface(
+                         g_DisplayAdapter, Associate);
+            break;
+        }
+
+        case IOCTL_VIDEO_DXGK_SYNCHRONIZE_REDIRECTION_SURFACES:
+        {
+            PDXGK_REDIRECTION_SURFACES_SYNC Sync =
+                (PDXGK_REDIRECTION_SURFACES_SYNC)
+                    Irp->AssociatedIrp.SystemBuffer;
+            ULONG InputLength =
+                Stack->Parameters.DeviceIoControl.InputBufferLength;
+
+            if (Irp->RequestorMode != KernelMode)
+            {
+                Status = STATUS_ACCESS_DENIED;
+                break;
+            }
+            if (Sync == NULL ||
+                Stack->Parameters.DeviceIoControl.OutputBufferLength !=
+                    InputLength)
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+            if (g_DisplayAdapter == NULL)
+            {
+                Status = STATUS_DEVICE_NOT_READY;
+                break;
+            }
+
+            Status = DxgkSynchronizeRedirectionSurfaces(
+                         g_DisplayAdapter, Sync, InputLength);
+            if (NT_SUCCESS(Status))
+                BytesReturned = Sync->StructSize;
+            break;
+        }
+
         case IOCTL_VIDEO_DXGK_GPU_ESCAPE:
         {
             /* Opaque display-driver -> miniport escape conduit: the buffered

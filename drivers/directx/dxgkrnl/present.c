@@ -552,6 +552,11 @@ DxgkpReleasePresentEntry(
 {
     if (Entry == NULL)
         return;
+    if (Entry->RedirectedBltPresentAdmitted)
+    {
+        DxgkCancelRedirectedBltPresent(&Entry->RedirectedBltPresent);
+        Entry->RedirectedBltPresentAdmitted = FALSE;
+    }
     if (Entry->PresentLimitReservationOwned)
     {
         ASSERT(Entry->Device != NULL);
@@ -590,6 +595,48 @@ DxgkpReleasePresentEntry(
     Entry->SourceIsSharedShadow = FALSE;
     Entry->DestinationIsSharedPrimary = FALSE;
     Entry->DestinationIsSharedShadow = FALSE;
+}
+
+static NTSTATUS
+DxgkpCompleteRedirectedBltPresent(
+    _Inout_ PDXGKRNL_PRESENT_ENTRY Entry,
+    _In_ NTSTATUS ExecutionStatus)
+{
+    const RECT *DirtyRects;
+    UINT DirtyRectCount;
+    NTSTATUS Status;
+
+    if (!NT_SUCCESS(ExecutionStatus) ||
+        !Entry->RedirectedBltPresentAdmitted)
+    {
+        return ExecutionStatus;
+    }
+
+    if (Entry->DestinationAllocation == NULL)
+        return STATUS_INVALID_DEVICE_STATE;
+
+    if (Entry->DstSubRectCount != 0)
+    {
+        DirtyRects = Entry->DstSubRects;
+        DirtyRectCount = Entry->DstSubRectCount;
+    }
+    else
+    {
+        DirtyRects = &Entry->DstRect;
+        DirtyRectCount = 1;
+    }
+
+    DxgkPublishRedirectionPresent(Entry->DestinationAllocation,
+                                  Entry->SubmissionNodeOrdinal,
+                                  Entry->SubmissionFenceId);
+    Status = DxgkCompleteRedirectedBltPresent(
+                 &Entry->RedirectedBltPresent,
+                 DirtyRects,
+                 DirtyRectCount,
+                 Entry->Context);
+    if (NT_SUCCESS(Status))
+        Entry->RedirectedBltPresentAdmitted = FALSE;
+    return Status;
 }
 
 NTSTATUS DxgkPresentSetQueuedLimit(_In_ PDXGKRNL_DEVICE Device, _In_ ULONG RequestedLimit)
@@ -2370,6 +2417,11 @@ PresentSubmissionDone:
             DxgkCancelTrackedDmaBuffer(Reservation);
             Reservation = NULL;
         }
+        if (NT_SUCCESS(Status) && SubmissionFenceId != 0)
+        {
+            Entry->SubmissionFenceId = SubmissionFenceId;
+            Entry->SubmissionNodeOrdinal = PresentNode;
+        }
         if (NT_SUCCESS(Status) && RefreshSharedPrimaryOnRetire)
         {
             TraceSeq = InterlockedIncrement(&g_SharedPrimaryPresentTraceCount);
@@ -2578,6 +2630,7 @@ DxgkpQueuePresent(
         *OutPresentId = Entry->PresentId;
 
         Status = DxgkpExecuteDodPresent(Adapter, Entry);
+        Status = DxgkpCompleteRedirectedBltPresent(Entry, Status);
         DxgkpReleasePresentEntry(Entry);
         DxgkpReleasePresentQueues(Adapter);
         return Status;
@@ -2648,6 +2701,7 @@ DxgkpQueuePresent(
     Entry->SharedSurface.RundownHeld = FALSE;
     Entry->DstSubRects = NULL;
     Entry->DstSubRectCount = 0;
+    Entry->RedirectedBltPresentAdmitted = FALSE;
     Queue->Tail = (Queue->Tail + 1) % DXGKRNL_PRESENT_QUEUE_DEPTH;
     Queue->Count++;
 
@@ -2786,6 +2840,8 @@ DxgkpProcessPresentQueue(
             Status = DxgkpExecuteDodPresent(Adapter, &Entry);
         }
     }
+
+    Status = DxgkpCompleteRedirectedBltPresent(&Entry, Status);
 
     if (NT_SUCCESS(Status))
         InterlockedIncrement(&Queue->PresentedFrameCount);

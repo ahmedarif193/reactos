@@ -47,6 +47,7 @@ list(APPEND SOURCE
     context_order.c
     dma.c
     present.c
+    redirection.c
     sync.c
     keyedmutex.c
     trimnotify.c

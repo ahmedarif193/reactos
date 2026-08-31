@@ -567,6 +567,77 @@ Cleanup:
  *
  * IRQL: PASSIVE_LEVEL
  * ====================================================================== */
+static NTSTATUS
+DxgkpCaptureRedirectedBltPresent(
+    _In_ const D3DKMT_PRESENT *Present,
+    _In_ ULONG InputLength,
+    _In_ ULONG_PTR SurfaceHandle,
+    _In_ PEPROCESS OwnerProcess,
+    _In_ ULONG GlobalShare,
+    _In_ const RECT *DestinationRect,
+    _Out_ DXGKRNL_REDIRECTED_BLT_PRESENT *RedirectedPresent)
+{
+    const UCHAR *Token;
+    ULONG TokenOffset;
+    ULONG UnionOffset;
+    ULONG RequiredLength;
+    ULONG Model;
+    ULONG TokenSize;
+    ULONGLONG PhysicalSurface;
+    ULONGLONG EventId;
+
+    if (Present == NULL || SurfaceHandle == 0 || OwnerProcess == NULL ||
+        GlobalShare == 0 || DestinationRect == NULL ||
+        RedirectedPresent == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    TokenOffset = FIELD_OFFSET(D3DKMT_PRESENT, PresentHistoryToken);
+#if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
+    UnionOffset = 16;
+#else
+    UnionOffset = 8;
+#endif
+    RequiredLength = TokenOffset + UnionOffset +
+                     FIELD_OFFSET(D3DKMT_BLTMODEL_PRESENTHISTORYTOKEN,
+                                  EventId) +
+                     sizeof(EventId);
+    if (InputLength < RequiredLength)
+        return STATUS_BUFFER_TOO_SMALL;
+
+    Token = (const UCHAR *)Present + TokenOffset;
+    RtlCopyMemory(&Model, Token, sizeof(Model));
+    RtlCopyMemory(&TokenSize, Token + sizeof(Model), sizeof(TokenSize));
+    RtlCopyMemory(&PhysicalSurface,
+                  Token + UnionOffset +
+                      FIELD_OFFSET(D3DKMT_BLTMODEL_PRESENTHISTORYTOKEN,
+                                   hPhysicalSurface),
+                  sizeof(PhysicalSurface));
+    RtlCopyMemory(&EventId,
+                  Token + UnionOffset +
+                      FIELD_OFFSET(D3DKMT_BLTMODEL_PRESENTHISTORYTOKEN,
+                                   EventId),
+                  sizeof(EventId));
+
+    if (Model != D3DKMT_PM_REDIRECTED_BLT || TokenSize != 0 ||
+        PhysicalSurface == 0 || PhysicalSurface > MAXULONG ||
+        (ULONG)PhysicalSurface != GlobalShare || EventId == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    RtlZeroMemory(RedirectedPresent, sizeof(*RedirectedPresent));
+    RedirectedPresent->Size = sizeof(*RedirectedPresent);
+    RedirectedPresent->SurfaceHandle = SurfaceHandle;
+    RedirectedPresent->WindowHandle = (ULONG_PTR)Present->hWindow;
+    RedirectedPresent->OwnerProcess = OwnerProcess;
+    RedirectedPresent->GlobalShare = GlobalShare;
+    RedirectedPresent->UpdateId = EventId;
+    RedirectedPresent->DestinationRect = *DestinationRect;
+    return DxgkAdmitRedirectedBltPresent(RedirectedPresent);
+}
+
 NTSTATUS
 NTAPI
 DxgkPresent(
@@ -868,6 +939,43 @@ DxgkPresent(
                 DxgkpReleasePresentEntry(&Entry);
                 return Status;
             }
+        }
+    }
+
+    if (Entry.DestinationAllocation != NULL)
+    {
+        ULONG_PTR SurfaceHandle;
+
+        SurfaceHandle = (ULONG_PTR)InterlockedCompareExchangePointer(
+            (PVOID volatile *)&Entry.DestinationAllocation
+                                  ->RedirectionSurfaceHandle,
+            NULL, NULL);
+        if (SurfaceHandle != 0)
+        {
+            PDXGKVMM_RESOURCE Resource =
+                Entry.DestinationAllocation->Resource;
+
+            if (Entry.Type != DxgkPresentTypeBlt ||
+                Resource == NULL || Resource->GlobalShareHandle == 0)
+            {
+                DxgkpReleasePresentEntry(&Entry);
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            Status = DxgkpCaptureRedirectedBltPresent(
+                         pPresent,
+                         InputLength,
+                         SurfaceHandle,
+                         Device->OwnerProcess,
+                         Resource->GlobalShareHandle,
+                         &Entry.DstRect,
+                         &Entry.RedirectedBltPresent);
+            if (!NT_SUCCESS(Status))
+            {
+                DxgkpReleasePresentEntry(&Entry);
+                return Status;
+            }
+            Entry.RedirectedBltPresentAdmitted = TRUE;
         }
     }
 

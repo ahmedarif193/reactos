@@ -114,6 +114,8 @@
 
 struct _DXGK_REDIRECTION_SURFACE_CREATE;
 struct _DXGK_REDIRECTION_SURFACE_DESTROY;
+struct _DXGK_REDIRECTION_SURFACE_ASSOCIATE;
+struct _DXGK_REDIRECTION_SURFACES_SYNC;
 
 /* MmSystemRangeStart is a kernel global (user/kernel VA split boundary). It is
  * declared in the XDK arch mm.h, which the WDM include subset used here does not
@@ -987,6 +989,7 @@ struct _DXGKRNL_ADAPTER
     volatile ULONG              LastCompletedSubmissionFenceId;
     volatile ULONG              NodeLastSubmittedFenceId[DXGK_MAX_TRACKED_NODES];
     volatile ULONG              NodeLastCompletedFenceId[DXGK_MAX_TRACKED_NODES];
+    volatile LONG64             NextRedirectionFenceId;
     volatile LONG64             SubmittedFenceIdentities[DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY];
 
     /*
@@ -2759,6 +2762,45 @@ NTSTATUS
 DxgkDestroyRedirectionSurface(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ CONST struct _DXGK_REDIRECTION_SURFACE_DESTROY *Destroy);
+
+VOID
+DxgkRedirectionInitialize(VOID);
+
+NTSTATUS
+DxgkRegisterWin32kCddInterface(
+    _In_ const DXGKRNL_WIN32K_CDD_INTERFACE *Interface);
+
+NTSTATUS
+DxgkAssociateRedirectionSurface(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ const struct _DXGK_REDIRECTION_SURFACE_ASSOCIATE *Associate);
+
+NTSTATUS
+DxgkSynchronizeRedirectionSurfaces(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Inout_ struct _DXGK_REDIRECTION_SURFACES_SYNC *Sync,
+    _In_ ULONG BufferLength);
+
+VOID
+DxgkPublishRedirectionPresent(
+    _Inout_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ ULONG NodeOrdinal,
+    _In_ ULONG SubmissionFenceId);
+
+NTSTATUS
+DxgkAdmitRedirectedBltPresent(
+    _In_ const DXGKRNL_REDIRECTED_BLT_PRESENT *Present);
+
+VOID
+DxgkCancelRedirectedBltPresent(
+    _In_ const DXGKRNL_REDIRECTED_BLT_PRESENT *Present);
+
+NTSTATUS
+DxgkCompleteRedirectedBltPresent(
+    _In_ const DXGKRNL_REDIRECTED_BLT_PRESENT *Present,
+    _In_reads_(DirtyRectCount) const RECT *DirtyRects,
+    _In_ UINT DirtyRectCount,
+    _In_opt_ PDXGKRNL_CONTEXT Context);
 
 NTSTATUS
 NTAPI

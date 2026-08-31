@@ -7801,7 +7801,6 @@ DxgkVidMmEvict(
     return Status;
 }
 
-#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
 /*
  * Flush at most this much with one temporary MDL.  The public range is
  * SIZE_T-wide, but an MDL's ByteCount and IoAllocateMdl length are ULONG.
@@ -7811,14 +7810,12 @@ DxgkVidMmEvict(
 #define DXGKP_VIDMM_CACHE_FLUSH_CHUNK_MAX (16U * 1024U * 1024U)
 
 NTSTATUS
-DxgkVidMmInvalidateAllocationCache(
-    _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_ PDXGKRNL_DEVICE Device,
-    _In_ D3DKMT_HANDLE Handle,
+DxgkVidMmInvalidateReferencedAllocationCache(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
     _In_ ULONGLONG Offset,
     _In_ ULONGLONG Length)
 {
-    PDXGKVMM_ALLOCATION Allocation = NULL;
+    PDXGKRNL_ADAPTER Adapter;
     PDXGKRNL_SEGMENT Segment = NULL;
     ULONGLONG CurrentOffset;
     ULONGLONG Remaining;
@@ -7828,16 +7825,9 @@ DxgkVidMmInvalidateAllocationCache(
 
     PAGED_CODE();
 
-    if (Adapter == NULL || Device == NULL || Handle == 0 || Length == 0)
+    if (Allocation == NULL || Allocation->Adapter == NULL || Length == 0)
         return STATUS_INVALID_PARAMETER;
-
-    Status = DxgkVidMmReferenceAllocation(
-                 (HANDLE)(ULONG_PTR)Handle,
-                 Adapter,
-                 Device,
-                 &Allocation);
-    if (!NT_SUCCESS(Status))
-        return STATUS_INVALID_HANDLE;
+    Adapter = Allocation->Adapter;
 
     /*
      * A queued paging transfer leaves the old placement authoritative until
@@ -7852,7 +7842,7 @@ DxgkVidMmInvalidateAllocationCache(
     {
         Status = DxgkpVidMmLockResidencyForExternalOperation(Allocation);
         if (!NT_SUCCESS(Status))
-            goto CleanupReference;
+            return Status;
         if (DxgkPagingSyncPlacement(Allocation))
             break;
 
@@ -7866,7 +7856,7 @@ DxgkVidMmInvalidateAllocationCache(
         {
             if (Status == STATUS_TIMEOUT)
                 Status = STATUS_GRAPHICS_ALLOCATION_BUSY;
-            goto CleanupReference;
+            return Status;
         }
     }
     if (Allocation->ContentLost)
@@ -8012,7 +8002,36 @@ DxgkVidMmInvalidateAllocationCache(
 
 CleanupLock:
     KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
-CleanupReference:
+    return Status;
+}
+
+#if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+NTSTATUS
+DxgkVidMmInvalidateAllocationCache(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ D3DKMT_HANDLE Handle,
+    _In_ ULONGLONG Offset,
+    _In_ ULONGLONG Length)
+{
+    PDXGKVMM_ALLOCATION Allocation = NULL;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (Adapter == NULL || Device == NULL || Handle == 0 || Length == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = DxgkVidMmReferenceAllocation(
+                 (HANDLE)(ULONG_PTR)Handle,
+                 Adapter,
+                 Device,
+                 &Allocation);
+    if (!NT_SUCCESS(Status))
+        return STATUS_INVALID_HANDLE;
+
+    Status = DxgkVidMmInvalidateReferencedAllocationCache(
+                 Allocation, Offset, Length);
     DxgkVidMmDereferenceAllocation(Allocation);
     return Status;
 }
