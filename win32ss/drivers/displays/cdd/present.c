@@ -102,6 +102,7 @@ RcddPresentWorkerThread(
 {
    PRCDD_PDEV ppdev = Context;
    PRCDD_PRESENT_SLOT Slot;
+   PRCDD_PRESENT_SLOT Oldest;
    ULONG Index;
    BOOL Stop;
    BOOL Result;
@@ -113,15 +114,22 @@ RcddPresentWorkerThread(
       for (;;)
       {
          Slot = NULL;
+         Oldest = NULL;
          EngAcquireSemaphore(ppdev->PresentLock);
          for (Index = 0; Index < RCDD_PRESENT_SLOT_COUNT; Index++)
          {
-            if (ppdev->PresentSlots[Index].State == RcddPresentSlotQueued)
+            if ((ppdev->PresentSlots[Index].State == RcddPresentSlotCapturing ||
+                 ppdev->PresentSlots[Index].State == RcddPresentSlotQueued) &&
+                (Oldest == NULL ||
+                 ppdev->PresentSlots[Index].Sequence < Oldest->Sequence))
             {
-               Slot = &ppdev->PresentSlots[Index];
-               Slot->State = RcddPresentSlotActive;
-               break;
+               Oldest = &ppdev->PresentSlots[Index];
             }
+         }
+         if (Oldest != NULL && Oldest->State == RcddPresentSlotQueued)
+         {
+            Slot = Oldest;
+            Slot->State = RcddPresentSlotActive;
          }
          Stop = ppdev->PresentWorkerStop;
          if (Slot == NULL && Stop && ppdev->PresentPendingCount == 0)
@@ -149,7 +157,11 @@ RcddPresentWorkerThread(
             ppdev->PresentCompletedCount++;
          else
             ppdev->PresentFailedCount++;
+         ASSERT(Slot->Sequence != 0);
+         ASSERT(Slot->Sequence > ppdev->PresentLastCompletedSequence);
+         ppdev->PresentLastCompletedSequence = Slot->Sequence;
          Slot->RectCount = 0;
+         Slot->Sequence = 0;
          Slot->State = RcddPresentSlotFree;
          ASSERT(ppdev->PresentPendingCount != 0);
          if (ppdev->PresentPendingCount != 0)
@@ -176,6 +188,7 @@ RcddReleasePresentWorkerResources(
       }
       ppdev->PresentSlots[Index].BufferSize = 0;
       ppdev->PresentSlots[Index].RectCount = 0;
+      ppdev->PresentSlots[Index].Sequence = 0;
       ppdev->PresentSlots[Index].State = RcddPresentSlotFree;
    }
 
@@ -342,6 +355,9 @@ RcddQueuePresent(
          {
             Slot = &ppdev->PresentSlots[Index];
             Slot->State = RcddPresentSlotCapturing;
+            if (++ppdev->PresentNextSequence == 0)
+               ++ppdev->PresentNextSequence;
+            Slot->Sequence = ppdev->PresentNextSequence;
             ppdev->PresentPendingCount++;
             if (ppdev->PresentPendingCount > ppdev->PresentQueueHighWatermark)
                ppdev->PresentQueueHighWatermark = ppdev->PresentPendingCount;
@@ -386,6 +402,7 @@ RcddQueuePresent(
    }
 
    Slot->RectCount = 0;
+   Slot->Sequence = 0;
    Slot->State = RcddPresentSlotFree;
    ASSERT(ppdev->PresentPendingCount != 0);
    if (ppdev->PresentPendingCount != 0)

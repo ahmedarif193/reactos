@@ -49,6 +49,7 @@ typedef struct _RCDD_PRESENT_SLOT
    SIZE_T BufferSize;
    RECTL Rects[DXGK_PRESENT_DIRTY_MAX_RECTS];
    ULONG RectCount;
+   ULONGLONG Sequence;
    RCDD_PRESENT_SLOT_STATE State;
 } RCDD_PRESENT_SLOT, *PRCDD_PRESENT_SLOT;
 
@@ -111,6 +112,8 @@ typedef struct _RCDD_PDEV
    ULONG PresentFailedCount;
    ULONG PresentRejectedCount;
    ULONG PresentSynchronousCount;
+   ULONGLONG PresentNextSequence;
+   ULONGLONG PresentLastCompletedSequence;
    RCDD_PRESENT_SLOT PresentSlots[RCDD_PRESENT_SLOT_COUNT];
 } RCDD_PDEV, *PRCDD_PDEV;
 
