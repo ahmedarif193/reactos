@@ -2479,6 +2479,12 @@ DxgkRender(
 NTSTATUS
 NTAPI
 DxgkPresent(
+    _Inout_ D3DKMT_PRESENT *pPresent,
+    _In_ ULONG InputLength);
+
+NTSTATUS
+NTAPI
+DxgkPresentCallback(
     _Inout_ D3DKMT_PRESENT *pPresent);
 
 /* ========================================================================

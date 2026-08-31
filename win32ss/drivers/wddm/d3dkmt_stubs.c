@@ -1866,6 +1866,7 @@ D3DKMTPresent(
     _Inout_ D3DKMT_PRESENT *pData)
 {
     D3DKMT_PRESENT Captured;
+    const ULONG PresentSize = RXGK_D3DKMT_PRESENT_WIRE_SIZE;
     CONST RECT *UserSubRects;
     RECT *CapturedSubRects = NULL;
     SIZE_T SubRectBytes = 0;
@@ -1875,7 +1876,8 @@ D3DKMTPresent(
     if (pData == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    RtlZeroMemory(&Captured, sizeof(Captured));
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, PresentSize);
     if (!NT_SUCCESS(Status))
         return WddmBridgeRejectBadBuffer(Status);
 
@@ -1898,22 +1900,22 @@ D3DKMTPresent(
     }
 
     Captured.pSrcSubRects = CapturedSubRects;
-    Status = WddmBridgeSafeProbeForWrite(pData, sizeof(*pData));
+    Status = WddmBridgeSafeProbeForWrite(pData, PresentSize);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
     Status = WddmBridgeSendIoctlWithInformation(
                  IOCTL_D3DKMT_PRESENT,
                  &Captured,
-                 sizeof(Captured),
+                 PresentSize,
                  &Captured,
-                 sizeof(Captured),
+                 PresentSize,
                  &Information);
-    if (NT_SUCCESS(Status) && Information != sizeof(Captured))
+    if (NT_SUCCESS(Status) && Information != PresentSize)
         Status = STATUS_INFO_LENGTH_MISMATCH;
     if (NT_SUCCESS(Status))
     {
         Captured.pSrcSubRects = UserSubRects;
-        Status = WddmBridgeSafeCopyTo(pData, &Captured, sizeof(Captured));
+        Status = WddmBridgeSafeCopyTo(pData, &Captured, PresentSize);
     }
 
 Cleanup:

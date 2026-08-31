@@ -834,13 +834,16 @@ APIENTRY
 NtGdiDdDDIPresent(_In_ D3DKMT_PRESENT* unnamedParam1)
 {
     D3DKMT_PRESENT Captured;
+    const SIZE_T PresentSize = RXGK_D3DKMT_PRESENT_WIRE_SIZE;
+    CONST RECT *UserSubRects;
     RECT *CapturedSubRects = NULL;
     SIZE_T SubRectBytes;
     NTSTATUS Status;
 
+    RtlZeroMemory(&Captured, sizeof(Captured));
     Status = D3dkmtCaptureUserStructure(
                  unnamedParam1,
-                 sizeof(Captured),
+                 PresentSize,
                  &Captured);
     if (!NT_SUCCESS(Status))
     {
@@ -855,6 +858,7 @@ NtGdiDdDDIPresent(_In_ D3DKMT_PRESENT* unnamedParam1)
     if (DxgAdapterCallbacks.RxgkIntPfnPresent == NULL)
         return STATUS_PROCEDURE_NOT_FOUND;
 
+    UserSubRects = Captured.pSrcSubRects;
     if (Captured.SubRectCnt != 0)
     {
         if (Captured.pSrcSubRects == NULL ||
@@ -897,7 +901,21 @@ NtGdiDdDDIPresent(_In_ D3DKMT_PRESENT* unnamedParam1)
     }
 
     Status = DxgAdapterCallbacks.RxgkIntPfnPresent(&Captured);
-    if (!NT_SUCCESS(Status))
+    if (NT_SUCCESS(Status))
+    {
+        Captured.pSrcSubRects = UserSubRects;
+        _SEH2_TRY
+        {
+            if (ExGetPreviousMode() != KernelMode)
+                ProbeForWrite(unnamedParam1, PresentSize, 1);
+            RtlCopyMemory(unnamedParam1, &Captured, PresentSize);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+    }
 
 Cleanup:
     if (CapturedSubRects != NULL)
