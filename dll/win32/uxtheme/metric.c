@@ -46,7 +46,7 @@ BOOL WINAPI GetThemeSysBool(HTHEME hTheme, int iBoolID)
     TRACE("(%p, %d)\n", hTheme, iBoolID);
     SetLastError(0);
     if(hTheme) {
-        if((tp = MSSTYLES_FindMetric(TMT_BOOL, iBoolID))) {
+        if((tp = MSSTYLES_FindMetric(hTheme, TMT_BOOL, iBoolID))) {
             hr = MSSTYLES_GetPropertyBool(tp, &ret);
             if(SUCCEEDED(hr))
                 return ret;
@@ -76,7 +76,7 @@ COLORREF WINAPI GetThemeSysColor(HTHEME hTheme, int iColorID)
     TRACE("(%p, %d)\n", hTheme, iColorID);
     SetLastError(0);
     if(hTheme) {
-        if((tp = MSSTYLES_FindMetric(TMT_COLOR, iColorID))) {
+        if((tp = MSSTYLES_FindMetric(hTheme, TMT_COLOR, iColorID))) {
             COLORREF color;
             hr = MSSTYLES_GetPropertyColor(tp, &color);
             if(SUCCEEDED(hr))
@@ -107,7 +107,7 @@ HRESULT WINAPI GetThemeSysFont(HTHEME hTheme, int iFontID, LOGFONTW *plf)
 
     TRACE("(%p, %d)\n", hTheme, iFontID);
     if(hTheme) {
-        if((tp = MSSTYLES_FindMetric(TMT_FONT, iFontID))) {
+        if((tp = MSSTYLES_FindMetric(hTheme, TMT_FONT, iFontID))) {
             HDC hdc = GetDC(NULL);
             hr = MSSTYLES_GetPropertyFont(tp, hdc, plf);
             ReleaseDC(NULL, hdc);
@@ -153,7 +153,7 @@ HRESULT WINAPI GetThemeSysInt(HTHEME hTheme, int iIntID, int *piValue)
         WARN("Unknown IntID: %d\n", iIntID);
         return STG_E_INVALIDPARAMETER;
     }
-    if((tp = MSSTYLES_FindMetric(TMT_INT, iIntID)))
+    if((tp = MSSTYLES_FindMetric(hTheme, TMT_INT, iIntID)))
         return MSSTYLES_GetPropertyInt(tp, piValue);
     return E_PROP_ID_UNSUPPORTED;
 }
@@ -187,7 +187,7 @@ int WINAPI GetThemeSysSize(HTHEME hTheme, int iSizeID)
         }
         SetLastError(0);
         if(id != -1) {
-            if((tp = MSSTYLES_FindMetric(TMT_SIZE, id))) {
+            if((tp = MSSTYLES_FindMetric(hTheme, TMT_SIZE, id))) {
                 if(SUCCEEDED(MSSTYLES_GetPropertyInt(tp, &i))) {
                     return i;
                 }
@@ -217,7 +217,7 @@ HRESULT WINAPI GetThemeSysString(HTHEME hTheme, int iStringID,
         WARN("Unknown StringID: %d\n", iStringID);
         return STG_E_INVALIDPARAMETER;
     }
-    if((tp = MSSTYLES_FindMetric(TMT_STRING, iStringID)))
+    if((tp = MSSTYLES_FindMetric(hTheme, TMT_STRING, iStringID)))
         return MSSTYLES_GetPropertyString(tp, pszStringBuff, cchMaxStringChars);
     return E_PROP_ID_UNSUPPORTED;
 }

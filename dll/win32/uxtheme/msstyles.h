@@ -107,7 +107,7 @@ UINT MSSTYLES_GetThemeDPI(PTHEME_CLASS tc);
 PTHEME_PARTSTATE MSSTYLES_FindPart(PTHEME_CLASS tc, int iPartId);
 PTHEME_PARTSTATE MSSTYLES_FindPartState(PTHEME_CLASS tc, int iPartId, int iStateId, PTHEME_CLASS *tcNext);
 PTHEME_PROPERTY MSSTYLES_FindProperty(PTHEME_CLASS tc, int iPartId, int iStateId, int iPropertyPrimitive, int iPropertyId);
-PTHEME_PROPERTY MSSTYLES_FindMetric(int iPropertyPrimitive, int iPropertyId);
+PTHEME_PROPERTY MSSTYLES_FindMetric(PTHEME_CLASS tc, int iPropertyPrimitive, int iPropertyId);
 HBITMAP MSSTYLES_LoadBitmap(PTHEME_CLASS tc, LPCWSTR lpFilename, BOOL* hasAlpha, BOOL *hasDefaultTransparentColour);
 
 #if defined(__REACTOS__) && defined(ENABLE_PNG_SUPPORT)
