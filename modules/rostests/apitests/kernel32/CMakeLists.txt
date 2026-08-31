@@ -59,6 +59,7 @@ list(APPEND SOURCE
     SetWaitableTimerEx.c
     SystemFirmware.c
     TerminateProcess.c
+    ThreadPowerThrottling.c
     TunnelCache.c
     UEFIFirmware.c
     WideCharToMultiByte.c
