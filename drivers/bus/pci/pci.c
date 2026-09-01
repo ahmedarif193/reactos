@@ -285,12 +285,14 @@ PciCloseAcpiInterface(VOID)
  * @return STATUS_NOT_FOUND if the ACPI interface or device is not available
  * @return Other NTSTATUS error codes on failure
  */
-NTSTATUS
-PciAcpiEvalMethod(
+static NTSTATUS
+PciAcpiEvalMethodInternal(
     _In_ ULONG Segment,
     _In_ ULONG Bus,
     _In_ ULONG Device,
     _In_ ULONG Function,
+    _In_ BOOLEAN ChildRequest,
+    _In_ ULONG ChildAcpiUid,
     _In_ PACPI_EVAL_INPUT_BUFFER InputBuffer,
     _In_ ULONG InputBufferSize,
     _Out_writes_bytes_opt_(OutputBufferSize) PACPI_EVAL_OUTPUT_BUFFER OutputBuffer,
@@ -298,8 +300,10 @@ PciAcpiEvalMethod(
     _Out_opt_ PULONG BytesReturned)
 {
     NTSTATUS Status;
-    PACPI_PCI_EVAL_INPUT_BUFFER PciBuffer = NULL;
+    PVOID PciBuffer = NULL;
     ULONG PciBufferSize;
+    ULONG HeaderSize;
+    ULONG IoControlCode;
     KEVENT Event;
     IO_STATUS_BLOCK IoStatusBlock;
     PIRP Irp;
@@ -319,7 +323,13 @@ PciAcpiEvalMethod(
      * Validate and compute buffer size using safe arithmetic.
      * Prevent integer overflow when computing total buffer size.
      */
-    Status = RtlULongAdd(sizeof(ACPI_PCI_EVAL_INPUT_BUFFER), InputBufferSize, &PciBufferSize);
+    HeaderSize = ChildRequest
+                     ? sizeof(ACPI_PCI_CHILD_EVAL_INPUT_BUFFER)
+                     : sizeof(ACPI_PCI_EVAL_INPUT_BUFFER);
+    IoControlCode = ChildRequest
+                        ? IOCTL_ACPI_EVAL_METHOD_FOR_PCI_CHILD
+                        : IOCTL_ACPI_EVAL_METHOD_FOR_PCI;
+    Status = RtlULongAdd(HeaderSize, InputBufferSize, &PciBufferSize);
     if (!NT_SUCCESS(Status))
     {
         DPRINT("PCI: Input buffer size too large (overflow)\n");
@@ -340,27 +350,50 @@ PciAcpiEvalMethod(
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    PciBuffer->Signature = ACPI_PCI_EVAL_INPUT_BUFFER_SIGNATURE;
-    PciBuffer->Segment = Segment;
-    PciBuffer->Bus = Bus;
-    PciBuffer->Device = Device;
-    PciBuffer->Function = Function;
-    PciBuffer->TotalSize = PciBufferSize;
-    PciBuffer->InputBufferOffset = sizeof(ACPI_PCI_EVAL_INPUT_BUFFER);
-    PciBuffer->InputBufferSize = InputBufferSize;
+    if (ChildRequest)
+    {
+        PACPI_PCI_CHILD_EVAL_INPUT_BUFFER ChildBuffer = PciBuffer;
 
-    /* Copy the embedded ACPI input buffer */
-    RtlCopyMemory(
-        (PUCHAR)PciBuffer + PciBuffer->InputBufferOffset,
-        InputBuffer,
-        InputBufferSize);
+        ChildBuffer->Signature =
+            ACPI_PCI_CHILD_EVAL_INPUT_BUFFER_SIGNATURE;
+        ChildBuffer->Segment = Segment;
+        ChildBuffer->Bus = Bus;
+        ChildBuffer->Device = Device;
+        ChildBuffer->Function = Function;
+        ChildBuffer->ChildAcpiUid = ChildAcpiUid;
+        ChildBuffer->TotalSize = PciBufferSize;
+        ChildBuffer->InputBufferOffset = HeaderSize;
+        ChildBuffer->InputBufferSize = InputBufferSize;
+        RtlCopyMemory(
+            ACPI_PCI_CHILD_EVAL_GET_INPUT_BUFFER(ChildBuffer),
+            InputBuffer,
+            InputBufferSize);
+    }
+    else
+    {
+        PACPI_PCI_EVAL_INPUT_BUFFER AdapterBuffer = PciBuffer;
+
+        AdapterBuffer->Signature =
+            ACPI_PCI_EVAL_INPUT_BUFFER_SIGNATURE;
+        AdapterBuffer->Segment = Segment;
+        AdapterBuffer->Bus = Bus;
+        AdapterBuffer->Device = Device;
+        AdapterBuffer->Function = Function;
+        AdapterBuffer->TotalSize = PciBufferSize;
+        AdapterBuffer->InputBufferOffset = HeaderSize;
+        AdapterBuffer->InputBufferSize = InputBufferSize;
+        RtlCopyMemory(
+            ACPI_PCI_EVAL_GET_INPUT_BUFFER(AdapterBuffer),
+            InputBuffer,
+            InputBufferSize);
+    }
 
     /* Initialize event for synchronous IRP */
     KeInitializeEvent(&Event, NotificationEvent, FALSE);
 
     /* Build the IOCTL IRP */
     Irp = IoBuildDeviceIoControlRequest(
-        IOCTL_ACPI_EVAL_METHOD_FOR_PCI,
+        IoControlCode,
         AcpiInterfaceDeviceObject,
         PciBuffer,
         PciBufferSize,
@@ -397,6 +430,37 @@ PciAcpiEvalMethod(
            Status, (ULONG)IoStatusBlock.Information);
 
     return Status;
+}
+
+NTSTATUS
+PciAcpiEvalMethod(
+    _In_ ULONG Segment,
+    _In_ ULONG Bus,
+    _In_ ULONG Device,
+    _In_ ULONG Function,
+    _In_ PACPI_EVAL_INPUT_BUFFER InputBuffer,
+    _In_ ULONG InputBufferSize,
+    _Out_writes_bytes_opt_(OutputBufferSize) PACPI_EVAL_OUTPUT_BUFFER OutputBuffer,
+    _In_ ULONG OutputBufferSize,
+    _Out_opt_ PULONG BytesReturned)
+{
+    return PciAcpiEvalMethodInternal(Segment, Bus, Device, Function, FALSE, 0, InputBuffer, InputBufferSize, OutputBuffer, OutputBufferSize, BytesReturned);
+}
+
+NTSTATUS
+PciAcpiEvalMethodForChild(
+    _In_ ULONG Segment,
+    _In_ ULONG Bus,
+    _In_ ULONG Device,
+    _In_ ULONG Function,
+    _In_ ULONG ChildAcpiUid,
+    _In_ PACPI_EVAL_INPUT_BUFFER InputBuffer,
+    _In_ ULONG InputBufferSize,
+    _Out_writes_bytes_opt_(OutputBufferSize) PACPI_EVAL_OUTPUT_BUFFER OutputBuffer,
+    _In_ ULONG OutputBufferSize,
+    _Out_opt_ PULONG BytesReturned)
+{
+    return PciAcpiEvalMethodInternal(Segment, Bus, Device, Function, TRUE, ChildAcpiUid, InputBuffer, InputBufferSize, OutputBuffer, OutputBufferSize, BytesReturned);
 }
 
 NTSTATUS
@@ -503,6 +567,71 @@ PciDispatchDeviceControl(
                 /* ACPI returns a valid fixed header on STATUS_BUFFER_OVERFLOW;
                  * preserve its byte count so METHOD_BUFFERED completion copies
                  * OutputBuffer->Length back to the display miniport. */
+                Irp->IoStatus.Information = BytesReturned;
+                break;
+            }
+
+            case IOCTL_ACPI_EVAL_METHOD_FOR_PCI_CHILD:
+            {
+                PPDO_DEVICE_EXTENSION PdoExtension;
+                PFDO_DEVICE_EXTENSION FdoExtension;
+                PACPI_PCI_CHILD_EVAL_INPUT_BUFFER ChildInput;
+                PACPI_EVAL_INPUT_BUFFER InputBuffer;
+                ULONG InputLength;
+                ULONG OutputLength;
+                ULONG Segment = 0;
+                ULONG BytesReturned;
+
+                InputLength =
+                    IrpSp->Parameters.DeviceIoControl.InputBufferLength;
+                OutputLength =
+                    IrpSp->Parameters.DeviceIoControl.OutputBufferLength;
+                if (InputLength < sizeof(*ChildInput) ||
+                    Irp->AssociatedIrp.SystemBuffer == NULL)
+                {
+                    Status = STATUS_INFO_LENGTH_MISMATCH;
+                    break;
+                }
+
+                ChildInput = Irp->AssociatedIrp.SystemBuffer;
+                if (ChildInput->Signature !=
+                        ACPI_PCI_CHILD_EVAL_INPUT_BUFFER_SIGNATURE ||
+                    ChildInput->TotalSize != InputLength ||
+                    ChildInput->InputBufferOffset < sizeof(*ChildInput) ||
+                    ChildInput->InputBufferOffset > InputLength ||
+                    ChildInput->InputBufferSize >
+                        InputLength - ChildInput->InputBufferOffset ||
+                    ChildInput->InputBufferSize <
+                        sizeof(ACPI_EVAL_INPUT_BUFFER_COMPLEX))
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                    break;
+                }
+
+                PdoExtension =
+                    (PPDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
+                if (PdoExtension->Fdo != NULL)
+                {
+                    FdoExtension =
+                        (PFDO_DEVICE_EXTENSION)
+                            PdoExtension->Fdo->DeviceExtension;
+                    Segment = FdoExtension->BusSegment;
+                }
+
+                InputBuffer = (PACPI_EVAL_INPUT_BUFFER)
+                    ACPI_PCI_CHILD_EVAL_GET_INPUT_BUFFER(ChildInput);
+                Status = PciAcpiEvalMethodForChild(
+                    Segment,
+                    PdoExtension->PciDevice->BusNumber,
+                    PdoExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
+                    PdoExtension->PciDevice->SlotNumber.u.bits.FunctionNumber,
+                    ChildInput->ChildAcpiUid,
+                    InputBuffer,
+                    ChildInput->InputBufferSize,
+                    (PACPI_EVAL_OUTPUT_BUFFER)
+                        Irp->AssociatedIrp.SystemBuffer,
+                    OutputLength,
+                    &BytesReturned);
                 Irp->IoStatus.Information = BytesReturned;
                 break;
             }
