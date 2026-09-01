@@ -19,7 +19,7 @@
 #ifndef _MINGW_FLOAT_H_
 #define _MINGW_FLOAT_H_
 
-#if defined(__GNUC__)
+#if defined(__GNUC__) || defined(__clang__)
 #include "mingw32/gcc_float.h"
 #elif defined(_MSC_VER)
 #include "msc/msc_float.h"
