@@ -2929,6 +2929,12 @@ NTSTATUS
 DxgkDisplayCommitVidPn(
     _In_ PDXGKRNL_ADAPTER Adapter);
 
+NTSTATUS
+DxgkVidPnResolveTargetForSource(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _Out_ D3DDDI_VIDEO_PRESENT_TARGET_ID *VidPnTargetId);
+
 typedef struct _DXGKP_DISPLAY_COMMIT_RESULT
 {
     ULONG CommittedWidth;

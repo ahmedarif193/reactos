@@ -4618,10 +4618,12 @@ DxgkpQueryScanLine(
     GetScanLine = DXGK_CB_FULL(Adapter, DxgkDdiGetScanLine);
     if (GetScanLine == NULL)
         return STATUS_NOT_SUPPORTED;
+    RtlZeroMemory(&GetScanLineArgs, sizeof(GetScanLineArgs));
+    Status = DxgkVidPnResolveTargetForSource(Adapter, pData->VidPnSourceId, &GetScanLineArgs.VidPnTargetId);
+    if (!NT_SUCCESS(Status))
+        return Status;
     if (!DxgkAcquireKmdCall(Adapter))
         return STATUS_DEVICE_REMOVED;
-    RtlZeroMemory(&GetScanLineArgs, sizeof(GetScanLineArgs));
-    GetScanLineArgs.VidPnSourceId = pData->VidPnSourceId;
     _SEH2_TRY
     {
         Status = GetScanLine(Adapter->MiniportDeviceContext, &GetScanLineArgs);
