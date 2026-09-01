@@ -245,6 +245,8 @@ list(APPEND KMTEST_DRV_SOURCE
     ${COMMON_SOURCE}
 
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/gpuva_core.c
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/adapter_map_core.c
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/adapter_start_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/fence_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/dma_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/residency_core.c
