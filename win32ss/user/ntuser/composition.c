@@ -65,6 +65,9 @@ typedef struct _REDIRECT_ENTRY
     BOOL         Damaged;      /* this window's backing changed since compose  */
     volatile LONG BackingDrawn;/* at least one GDI operation reached backing   */
     volatile LONG BackComplete;/* a complete GL client frame reached BACK      */
+    PRECTL       BlurRects;     /* window-relative DwmEnableBlur region         */
+    ULONG        BlurRectCount;
+    ULONG        BlurFlags;     /* DWM_BLUR_*                                    */
 } REDIRECT_ENTRY;
 
 static REDIRECT_ENTRY  g_Redirects[COMPOSITION_MAX_WINDOWS];
@@ -77,6 +80,7 @@ static volatile LONG   g_CompositionFullDamage = FALSE;
 static RECTL           g_CompositionPositionDamage;
 static BOOL            g_CompositionPositionDamageValid = FALSE;
 static DWM_WIN         g_DwmFrameWindows[DWM_MAX_WINDOWS];
+static RECTL           g_DwmFrameBlurRects[DWM_MAX_BLUR_RECTS];
 
 /* dwm.exe is the ONLY compositor (Windows model — win32k tracks redirection
  * and damage, never composes). Attach enables redirection; detach or a
@@ -242,6 +246,16 @@ IntCompositionAlloc(_In_ PWND Wnd)
         }
     }
     return NULL;
+}
+
+static VOID
+IntCompositionFreeBlur(_Inout_ REDIRECT_ENTRY *Entry)
+{
+    if (Entry->BlurRects != NULL)
+        ExFreePoolWithTag(Entry->BlurRects, 'rBwD');
+    Entry->BlurRects = NULL;
+    Entry->BlurRectCount = 0;
+    Entry->BlurFlags = 0;
 }
 
 /* A window is composited only if it is a visible top-level window. */
@@ -716,6 +730,7 @@ IntCompositionOnWindowDestroy(_In_ PWND Wnd)
         IntCompositionMarkDamage(FALSE);
     }
     IntCompositionFreeSurface(&e->Redirect);
+    IntCompositionFreeBlur(e);
     e->Wnd = NULL;
     e->WindowRectValid = FALSE;
 }
@@ -1286,7 +1301,7 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
     PWND pwndDesktop, pwndChild;
     PPDEVOBJ ppdev;
     SIZEL sizl = {0, 0};
-    ULONG count = 0, n = 0, i, OutputBytes;
+    ULONG count = 0, blurRectCount = 0, n = 0, i, OutputBytes;
     LONGLONG now = (LONGLONG)KeQueryInterruptTime();
     LONG dirty, fullDamage;
     BOOL DeferredDamage = FALSE;
@@ -1342,6 +1357,7 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
     Frame.ScreenW = (ULONG)sizl.cx;
     Frame.ScreenH = (ULONG)sizl.cy;
     Frame.WinArrayBase = DWM_WINARRAY_BASE;
+    Frame.BlurRectArrayBase = DWM_BLURRECTARRAY_BASE;
 
     /* Keep returning the current FRONT metadata even on an idle pull. DWM may
      * need to retry a full compose after OPENSURFACE raced a resize or a
@@ -1526,11 +1542,46 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
             (ULONG)e->Redirect.psurfFront->SurfObj.lDelta;
         g_DwmFrameWindows[count].BaseFormat =
             DWM_DX_FORMAT_B8G8R8A8_UNORM;
+        g_DwmFrameWindows[count].BlurFlags = e->BlurFlags;
+        g_DwmFrameWindows[count].BlurRectBase = blurRectCount;
+        g_DwmFrameWindows[count].BlurRectCount = 0;
+        if ((e->BlurFlags & DWM_BLUR_ENABLE) &&
+            !(e->BlurFlags & DWM_BLUR_REGION_ENTIRE_WINDOW) &&
+            e->BlurRectCount != 0 && e->BlurRects != NULL)
+        {
+            ULONG CopyCount = e->BlurRectCount;
+
+            if (CopyCount > DWM_MAX_BLUR_RECTS - blurRectCount)
+                CopyCount = DWM_MAX_BLUR_RECTS - blurRectCount;
+            if (CopyCount != 0)
+            {
+                RtlCopyMemory(&g_DwmFrameBlurRects[blurRectCount],
+                              e->BlurRects,
+                              (SIZE_T)CopyCount * sizeof(RECTL));
+                g_DwmFrameWindows[count].BlurRectCount = CopyCount;
+                blurRectCount += CopyCount;
+            }
+        }
         {
             BYTE alpha = 255;
             COLORREF key = 0;
             DWORD lf = 0;
             IntCompositionGetLayered(w, &alpha, &key, &lf);
+            if (!(w->style & (WS_MINIMIZE | WS_MAXIMIZE)) &&
+                UserHasWindowEdge(w->style, w->ExStyle))
+            {
+                lf |= DWM_WINDOW_NC_SHADOW;
+                if (gpqForeground != NULL &&
+                    gpqForeground->spwndActive == w)
+                {
+                    lf |= DWM_WINDOW_ACTIVE;
+                }
+                if (AtomDwmDarkMode != 0 &&
+                    UserGetProp(w, AtomDwmDarkMode, FALSE) != NULL)
+                {
+                    lf |= DWM_WINDOW_DARK;
+                }
+            }
             g_DwmFrameWindows[count].Alpha = alpha;
             g_DwmFrameWindows[count].ColorKey = (ULONG)key;
             g_DwmFrameWindows[count].LayerFlags = lf;
@@ -1559,7 +1610,9 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
     Frame.DmgT = rcDmg.top;
     Frame.DmgR = rcDmg.right;
     Frame.DmgB = rcDmg.bottom;
-    OutputBytes = DWM_WINARRAY_BASE + count * sizeof(DWM_WIN);
+    Frame.BlurRectCount = blurRectCount;
+    OutputBytes = DWM_BLURRECTARRAY_BASE +
+                  blurRectCount * sizeof(RECTL);
 
     _SEH2_TRY
     {
@@ -1567,6 +1620,10 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
         *(PDWM_FRAME_HEADER)pUser = Frame;
         if (count != 0)
             RtlCopyMemory((PUCHAR)pUser + DWM_WINARRAY_BASE, g_DwmFrameWindows, count * sizeof(DWM_WIN));
+        if (blurRectCount != 0)
+            RtlCopyMemory((PUCHAR)pUser + DWM_BLURRECTARRAY_BASE,
+                          g_DwmFrameBlurRects,
+                          blurRectCount * sizeof(RECTL));
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -2109,6 +2166,110 @@ CopyOutput:
     return Status;
 }
 
+NTSTATUS
+IntCompositionDwmSetBlur(_In_ PVOID pUser)
+{
+    DWM_BLUR_REQUEST Request;
+    REDIRECT_ENTRY *Entry;
+    PRECTL NewRects = NULL;
+    ULONG NewRectCount = 0;
+    PWND Wnd;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    _SEH2_TRY
+    {
+        ProbeForRead(pUser, sizeof(Request), sizeof(ULONG));
+        Request = *(PDWM_BLUR_REQUEST)pUser;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    if (Request.StructSize != sizeof(Request) ||
+        Request.Flags == 0 ||
+        (Request.Flags & ~DWM_BLUR_REQUEST_VALID_FLAGS) != 0 ||
+        Request.Window == 0 || Request.Window > (ULONGLONG)MAXULONG_PTR ||
+        Request.Region > (ULONGLONG)MAXULONG_PTR)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (!gbCompositionEnabled)
+        return STATUS_DEVICE_NOT_READY;
+
+    Wnd = UserGetWindowObject((HWND)(ULONG_PTR)Request.Window);
+    if (Wnd == NULL)
+        return STATUS_INVALID_HANDLE;
+
+    if ((Request.Flags & DWM_BLUR_REQUEST_REGION) && Request.Region != 0)
+    {
+        PREGION Region = REGION_LockRgn((HRGN)(ULONG_PTR)Request.Region);
+        SIZE_T Bytes;
+
+        if (Region == NULL)
+            return STATUS_INVALID_HANDLE;
+        NewRectCount = Region->rdh.nCount;
+        if (NewRectCount > DWM_MAX_BLUR_RECTS)
+        {
+            Status = STATUS_BUFFER_OVERFLOW;
+        }
+        else if (NewRectCount != 0)
+        {
+            Bytes = (SIZE_T)NewRectCount * sizeof(*NewRects);
+            NewRects = ExAllocatePoolWithTag(PagedPool, Bytes, 'rBwD');
+            if (NewRects == NULL)
+                Status = STATUS_NO_MEMORY;
+            else
+                RtlCopyMemory(NewRects, Region->Buffer, Bytes);
+        }
+        REGION_UnlockRgn(Region);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+
+    Entry = IntCompositionFind(Wnd);
+    if (Entry == NULL)
+        Entry = IntCompositionAlloc(Wnd);
+    if (Entry == NULL)
+    {
+        if (NewRects != NULL)
+            ExFreePoolWithTag(NewRects, 'rBwD');
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    if (Request.Flags & DWM_BLUR_REQUEST_ENABLE)
+    {
+        if (Request.Enable)
+            Entry->BlurFlags |= DWM_BLUR_ENABLE;
+        else
+            Entry->BlurFlags &= ~DWM_BLUR_ENABLE;
+    }
+    if (Request.Flags & DWM_BLUR_REQUEST_TRANSITION)
+    {
+        if (Request.TransitionOnMaximized)
+            Entry->BlurFlags |= DWM_BLUR_TRANSITION_ON_MAXIMIZED;
+        else
+            Entry->BlurFlags &= ~DWM_BLUR_TRANSITION_ON_MAXIMIZED;
+    }
+    if (Request.Flags & DWM_BLUR_REQUEST_REGION)
+    {
+        if (Entry->BlurRects != NULL)
+            ExFreePoolWithTag(Entry->BlurRects, 'rBwD');
+        Entry->BlurRects = NewRects;
+        Entry->BlurRectCount = NewRectCount;
+        if (Request.Region == 0)
+            Entry->BlurFlags |= DWM_BLUR_REGION_ENTIRE_WINDOW;
+        else
+            Entry->BlurFlags &= ~DWM_BLUR_REGION_ENTIRE_WINDOW;
+        NewRects = NULL;
+    }
+
+    Entry->Damaged = TRUE;
+    IntCompositionMarkDamage(TRUE);
+    return STATUS_SUCCESS;
+}
+
 /* Subtract pwnd's window rect (narrowed by its window region, if any) from
  * VisRgn — the sibling/child occlusion step of the classic DCE clipping. */
 static VOID
@@ -2523,6 +2684,7 @@ IntCompositionSetEnabled(_In_ BOOL bEnable)
             if (g_Redirects[i].Wnd != NULL)
             {
                 IntCompositionFreeSurface(&g_Redirects[i].Redirect);
+                IntCompositionFreeBlur(&g_Redirects[i]);
                 g_Redirects[i].Wnd = NULL;
             }
         }

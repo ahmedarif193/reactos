@@ -111,6 +111,7 @@ NTSTATUS NTAPI LdrpInitializeProcess(IN PCONTEXT Context, IN PVOID SystemArgumen
 VOID NTAPI LdrpInitFailure(NTSTATUS Status);
 VOID NTAPI LdrpValidateImageForMp(IN PLDR_DATA_TABLE_ENTRY LdrDataTableEntry);
 VOID NTAPI LdrpEnsureLoaderLockIsHeld(VOID);
+NTSTATUS NTAPI LdrpInitializeGuard(IN PLDR_DATA_TABLE_ENTRY LdrEntry);
 
 /* ldrpe.c */
 NTSTATUS

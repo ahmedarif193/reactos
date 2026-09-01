@@ -23,6 +23,7 @@ extern ATOM gaGuiConsoleWndClass;
 extern ATOM AtomDDETrack;
 extern ATOM AtomQOS;
 extern ATOM AtomImeLevel;
+extern ATOM AtomDwmDarkMode;
 extern ERESOURCE UserLock;
 
 CODE_SEG("INIT") NTSTATUS NTAPI InitUserImpl(VOID);

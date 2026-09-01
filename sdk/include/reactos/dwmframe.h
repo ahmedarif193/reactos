@@ -27,8 +27,10 @@
  * win32ss/include/ntuser.h, which owns the routine numbering). */
 #define DWM_ROUTINE_ATTACH       0xfffe0013
 #define DWM_ROUTINE_GETFRAME     0xfffe0014
+#define DWM_ROUTINE_ISENABLED    0xfffe0015
 #define DWM_ROUTINE_OPENSURFACE  0xfffe0016
 #define DWM_ROUTINE_DXSURFACE    0xfffe0017
+#define DWM_ROUTINE_SETBLUR      0xfffe0018
 
 /*
  * Internal win32k control channel to the canonical display driver (DrvEscape).
@@ -184,6 +186,21 @@ typedef struct _DXGK_REDIRECTION_SURFACES_SYNC
 #define DWM_LWA_COLORKEY 0x00000001u
 #define DWM_LWA_ALPHA    0x00000002u
 
+/* Compositor-owned attributes carried in the unused high LayerFlags bits. */
+#define DWM_WINDOW_DARK      0x20000000u
+#define DWM_WINDOW_ACTIVE    0x40000000u
+#define DWM_WINDOW_NC_SHADOW 0x80000000u
+
+/* DwmEnableBlurBehindWindow state carried to the user-mode compositor. */
+#define DWM_BLUR_ENABLE                  0x00000001u
+#define DWM_BLUR_REGION_ENTIRE_WINDOW    0x00000002u
+#define DWM_BLUR_TRANSITION_ON_MAXIMIZED 0x00000004u
+#define DWM_BLUR_REQUEST_ENABLE          0x00000001u
+#define DWM_BLUR_REQUEST_REGION          0x00000002u
+#define DWM_BLUR_REQUEST_TRANSITION      0x00000004u
+#define DWM_BLUR_REQUEST_VALID_FLAGS     0x00000007u
+#define DWM_MAX_BLUR_RECTS               4096u
+
 typedef struct _DWM_WIN
 {
     LONG  x, y;          /* window top-left in screen coords    */
@@ -194,7 +211,7 @@ typedef struct _DWM_WIN
     ULONG Damaged;       /* window changed since last frame     */
     ULONG Alpha;         /* constant alpha 0-255 (255 = opaque) */
     ULONG ColorKey;      /* BGRX colorkey when LWA_COLORKEY set */
-    ULONG LayerFlags;    /* DWM_LWA_* (0 = fully opaque)         */
+    ULONG LayerFlags;    /* DWM_LWA_* | DWM_WINDOW_*              */
     ULONG DxGlobalShare; /* D3DKMT shared client surface, or 0   */
     ULONG DxGeneration;  /* changes when the shared resource does */
     LUID  DxAdapterLuid;
@@ -212,6 +229,9 @@ typedef struct _DWM_WIN
     ULONG BaseHeight;
     ULONG BasePitch;
     ULONG BaseFormat;
+    ULONG BlurFlags;
+    ULONG BlurRectBase;  /* index in the frame's RECTL blur array */
+    ULONG BlurRectCount;
 } DWM_WIN, *PDWM_WIN;
 
 typedef struct _DWM_FRAME_HEADER
@@ -226,7 +246,21 @@ typedef struct _DWM_FRAME_HEADER
     ULONG WinArrayBase;  /* out : byte offset of DWM_WIN[0]         */
     LONG  DmgL, DmgT;    /* out : changed-region union, screen px   */
     LONG  DmgR, DmgB;    /*       (present only this; empty if R<=L) */
+    ULONG BlurRectArrayBase; /* out: byte offset of RECTL[0]          */
+    ULONG BlurRectCount;     /* out: total blur rectangles in frame  */
 } DWM_FRAME_HEADER, *PDWM_FRAME_HEADER;
+
+/* DwmEnableBlurBehindWindow exchange. The HRGN is consumed synchronously in
+ * the caller's GDI handle table and copied into kernel-owned window state. */
+typedef struct _DWM_BLUR_REQUEST
+{
+    ULONG StructSize;
+    ULONG Flags;         /* DWM_BB_*: only bits 0..2 are accepted */
+    ULONGLONG Window;
+    ULONGLONG Region;
+    ULONG Enable;
+    ULONG TransitionOnMaximized;
+} DWM_BLUR_REQUEST, *PDWM_BLUR_REQUEST;
 
 /* DWMOPENSURFACE exchange: dwm names a surface from the frame metadata; the
  * kernel opens a read-only section handle for it in dwm's process. */
@@ -297,7 +331,10 @@ typedef struct _DWM_DX_SURFACE_EXCHANGE
 
 #include <poppack.h>
 
-/* Fixed layout: window array right after the header; the buffer carries only
- * header + descriptors (pixels live in the per-window sections). */
+/* Fixed layout: window descriptors followed by bounded variable region data;
+ * pixels continue to live in the per-window sections. */
 #define DWM_WINARRAY_BASE  ((ULONG)sizeof(DWM_FRAME_HEADER))
-#define DWM_FRAME_BYTES    (DWM_WINARRAY_BASE + DWM_MAX_WINDOWS * (ULONG)sizeof(DWM_WIN))
+#define DWM_BLURRECTARRAY_BASE \
+    (DWM_WINARRAY_BASE + DWM_MAX_WINDOWS * (ULONG)sizeof(DWM_WIN))
+#define DWM_FRAME_BYTES \
+    (DWM_BLURRECTARRAY_BASE + DWM_MAX_BLUR_RECTS * (ULONG)sizeof(RECTL))

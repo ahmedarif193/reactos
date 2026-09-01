@@ -1,0 +1,58 @@
+#include <asm.h>
+
+    .text
+    .align 4
+
+    .extern LdrpValidateUserCallTarget
+
+    .global LdrpGuardCheckIcall
+    .seh_proc LdrpGuardCheckIcall
+LdrpGuardCheckIcall:
+    stp     x29, x30, [sp, #-160]!
+    .seh_save_fplr_x 160
+    mov     x29, sp
+    .seh_set_fp
+    .seh_endprologue
+    stp     x0, x1, [sp, #16]
+    stp     x2, x3, [sp, #32]
+    stp     x4, x5, [sp, #48]
+    stp     x6, x7, [sp, #64]
+    stp     x8, x9, [sp, #80]
+    stp     x10, x11, [sp, #96]
+    stp     x12, x13, [sp, #112]
+    stp     x14, x15, [sp, #128]
+    stp     x16, x17, [sp, #144]
+
+    mov     x0, x15
+    bl      LdrpValidateUserCallTarget
+    cbnz    w0, 1f
+    mov     w0, #10
+    brk     #0xf003
+
+1:
+    ldp     x0, x1, [sp, #16]
+    ldp     x2, x3, [sp, #32]
+    ldp     x4, x5, [sp, #48]
+    ldp     x6, x7, [sp, #64]
+    ldp     x8, x9, [sp, #80]
+    ldp     x10, x11, [sp, #96]
+    ldp     x12, x13, [sp, #112]
+    ldp     x14, x15, [sp, #128]
+    ldp     x16, x17, [sp, #144]
+    .seh_startepilogue
+    ldp     x29, x30, [sp], #160
+    .seh_save_fplr_x 160
+    .seh_endepilogue
+    ret
+    .seh_endproc
+
+    .global LdrpGuardDispatchIcall
+    .seh_proc LdrpGuardDispatchIcall
+LdrpGuardDispatchIcall:
+    .seh_endprologue
+    mov     x17, x30
+    mov     x15, x16
+    bl      LdrpGuardCheckIcall
+    mov     x30, x17
+    br      x16
+    .seh_endproc

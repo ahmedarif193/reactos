@@ -351,3 +351,6 @@ if(DLL_EXPORT_VERSION GREATER_EQUAL 0x600)
     add_subdirectory(bcryptprimitives)
     add_subdirectory(dwmapi)
 endif()
+
+add_subdirectory(dwmcore)
+add_subdirectory(udwm)

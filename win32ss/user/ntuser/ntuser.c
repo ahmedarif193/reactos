@@ -26,6 +26,7 @@ HINSTANCE hModClient = NULL;
 BOOL ClientPfnInit = FALSE;
 ATOM gaGuiConsoleWndClass;
 ATOM AtomImeLevel;
+ATOM AtomDwmDarkMode;
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
@@ -137,6 +138,7 @@ InitUserAtoms(VOID)
     AtomDDETrack = IntAddGlobalAtom(L"SysDT", TRUE);
     AtomQOS      = IntAddGlobalAtom(L"SysQOS", TRUE);
     AtomImeLevel = IntAddGlobalAtom(L"SysIMEL", TRUE);
+    AtomDwmDarkMode = IntAddUserPropertyAtom(L"ReactOS.Dwm.ImmersiveDarkMode");
 
     /*
      * FIXME: AddPropW uses the global kernel atom table, thus leading to conflicts if we use

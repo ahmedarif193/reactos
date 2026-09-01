@@ -14,8 +14,10 @@ DBG_DEFAULT_CHANNEL(UserMisc);
 
 C_ASSERT(DWM_ROUTINE_ATTACH == ONEPARAM_ROUTINE_DWMATTACH);
 C_ASSERT(DWM_ROUTINE_GETFRAME == ONEPARAM_ROUTINE_DWMGETFRAME);
+C_ASSERT(DWM_ROUTINE_ISENABLED == ONEPARAM_ROUTINE_DWMISENABLED);
 C_ASSERT(DWM_ROUTINE_OPENSURFACE == ONEPARAM_ROUTINE_DWMOPENSURFACE);
 C_ASSERT(DWM_ROUTINE_DXSURFACE == ONEPARAM_ROUTINE_DWMDXSURFACE);
+C_ASSERT(DWM_ROUTINE_SETBLUR == ONEPARAM_ROUTINE_DWMSETBLUR);
 
 /* Registered logon process ID */
 HANDLE gpidLogon = 0;
@@ -190,6 +192,7 @@ NtUserCallOneParam(
         case ONEPARAM_ROUTINE_ENUMCLIPBOARDFORMATS:
         case ONEPARAM_ROUTINE_GETCURSORPOS:
         case ONEPARAM_ROUTINE_GETPROCDEFLAYOUT:
+        case ONEPARAM_ROUTINE_DWMISENABLED:
             UserEnterShared();
             break;
         default:
@@ -364,6 +367,11 @@ NtUserCallOneParam(
             break;
         }
 
+        case ONEPARAM_ROUTINE_DWMISENABLED:
+            UNREFERENCED_PARAMETER(Param);
+            Result = IntCompositionIsEnabled();
+            break;
+
         case ONEPARAM_ROUTINE_DWMOPENSURFACE:
         {
             /* Open a window FRONT section into dwm's process; Param points at
@@ -375,6 +383,12 @@ NtUserCallOneParam(
         case ONEPARAM_ROUTINE_DWMDXSURFACE:
         {
             Result = (DWORD_PTR)IntCompositionDwmDxSurface((PVOID)Param);
+            break;
+        }
+
+        case ONEPARAM_ROUTINE_DWMSETBLUR:
+        {
+            Result = (DWORD_PTR)IntCompositionDwmSetBlur((PVOID)Param);
             break;
         }
 
