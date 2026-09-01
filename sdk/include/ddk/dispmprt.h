@@ -4229,6 +4229,160 @@ typedef struct _DXGKDDI_FLEXIOV_DEVICE_INTERFACE
 
 #endif
 
+DEFINE_GUID(GUID_DXGK_MIPI_DSI_INTERFACE,
+            0x14f9db8b, 0x85e1, 0x4aa5, 0x8d, 0xaf, 0xff, 0x4a, 0x78, 0x06, 0xd5, 0xe9);
+
+#define DXGK_MIPI_DSI_INTERFACE_VERSION_1 0x1
+
+typedef struct _DXGK_DSI_CAPS
+{
+    BYTE DSITypeMajor;
+    BYTE DSITypeMinor;
+    BYTE SpecVersionMajor;
+    BYTE SpecVersionMinor;
+    BYTE SpecVersionPatch;
+    WORD TargetMaximumReturnPacketSize;
+    BYTE ResultCodeFlags;
+    BYTE ResultCodeStatus;
+    BYTE Revision;
+    BYTE Level;
+    BYTE DeviceClassHi;
+    BYTE DeviceClassLo;
+    BYTE ManufacturerHi;
+    BYTE ManufacturerLo;
+    BYTE ProductHi;
+    BYTE ProductLo;
+    BYTE LengthHi;
+    BYTE LengthLo;
+} DXGK_DSI_CAPS, *PDXGK_DSI_CAPS;
+
+typedef NTSTATUS DXGKDDI_DSICAPS(
+    HANDLE Context,
+    D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId,
+    PDXGK_DSI_CAPS pArgs);
+typedef DXGKDDI_DSICAPS *PDXGKDDI_DSICAPS;
+
+typedef enum _DXGK_DSI_CONTROL_TRANSMISSION_MODE
+{
+    DXGK_DCT_DEFAULT = 0,
+    DXGK_DCT_FORCE_LOW_POWER,
+    DXGK_DCT_FORCE_HIGH_SPEED,
+} DXGK_DSI_CONTROL_TRANSMISSION_MODE;
+
+#define DXGK_DSI_PACKET_EMBEDDED_PAYLOAD_SIZE 8
+
+typedef struct _DXGK_DSI_PACKET
+{
+    union
+    {
+        BYTE DataId;
+        struct
+        {
+            BYTE DataType : 6;
+            BYTE VirtualChannel : 2;
+        };
+    };
+    union
+    {
+        struct
+        {
+            BYTE Data0;
+            BYTE Data1;
+        };
+        WORD LongWriteWordCount;
+    };
+    BYTE EccFiller;
+    BYTE Payload[DXGK_DSI_PACKET_EMBEDDED_PAYLOAD_SIZE];
+} DXGK_DSI_PACKET, *PDXGK_DSI_PACKET;
+
+typedef struct _DXGK_DSI_TRANSMISSION
+{
+    UINT TotalBufferSize;
+    BYTE PacketCount;
+    BYTE FailedPacket;
+    struct
+    {
+        WORD TransmissionMode : 2;
+        WORD ReportMipiErrors : 1;
+        WORD ClearMipiErrors : 1;
+        WORD SecondaryPort : 1;
+        WORD ManufacturingMode : 1;
+        WORD Reserved : 10;
+    };
+    WORD ReadWordCount;
+    WORD FinalCommandExtraPayload;
+    WORD MipiErrors;
+    WORD HostErrors;
+    DXGK_DSI_PACKET Packets[1];
+} DXGK_DSI_TRANSMISSION, *PDXGK_DSI_TRANSMISSION;
+
+#define DXGK_MAX_PACKET_COUNT 0x80
+#define DXGK_DSI_INVALID_PACKET_INDEX 0xFF
+#define DXGK_DSI_SOT_ERROR 0x0001
+#define DXGK_DSI_SOT_SYNC_ERROR 0x0002
+#define DXGK_DSI_EOT_SYNC_ERROR 0x0004
+#define DXGK_DSI_ESCAPE_MODE_ENTRY_COMMAND_ERROR 0x0008
+#define DXGK_DSI_LOW_POWER_TRANSMIT_SYNC_ERROR 0x0010
+#define DXGK_DSI_PERIPHERAL_TIMEOUT_ERROR 0x0020
+#define DXGK_DSI_FALSE_CONTROL_ERROR 0x0040
+#define DXGK_DSI_CONTENTION_DETECTED 0x0080
+#define DXGK_DSI_CHECKSUM_ERROR_CORRECTED 0x0100
+#define DXGK_DSI_CHECKSUM_ERROR_NOT_CORRECTED 0x0200
+#define DXGK_DSI_LONG_PACKET_PAYLOAD_CHECKSUM_ERROR 0x0400
+#define DXGK_DSI_DSI_DATA_TYPE_NOT_RECOGNIZED 0x0800
+#define DXGK_DSI_DSI_VC_ID_INVALID 0x1000
+#define DXGK_DSI_INVALID_TRANSMISSION_LENGTH 0x2000
+#define DXGK_DSI_DSI_PROTOCOL_VIOLATION 0x8000
+#define DXGK_HOST_DSI_DEVICE_NOT_READY 0x0001
+#define DXGK_HOST_DSI_INTERFACE_RESET 0x0002
+#define DXGK_HOST_DSI_DEVICE_RESET 0x0004
+#define DXGK_HOST_DSI_TRANSMISSION_CANCELLED 0x0010
+#define DXGK_HOST_DSI_TRANSMISSION_DROPPED 0x0020
+#define DXGK_HOST_DSI_TRANSMISSION_TIMEOUT 0x0040
+#define DXGK_HOST_DSI_INVALID_TRANSMISSION 0x0100
+#define DXGK_HOST_DSI_OS_REJECTED_PACKET 0x0200
+#define DXGK_HOST_DSI_DRIVER_REJECTED_PACKET 0x0400
+#define DXGK_HOST_DSI_BAD_TRANSMISSION_MODE 0x1000
+
+typedef NTSTATUS DXGKDDI_DSITRANSMISSION(
+    HANDLE Context,
+    D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId,
+    PDXGK_DSI_TRANSMISSION pArgs);
+typedef DXGKDDI_DSITRANSMISSION *PDXGKDDI_DSITRANSMISSION;
+
+typedef struct _DXGK_DSI_RESET
+{
+    UINT Flags;
+    union
+    {
+        struct
+        {
+            UINT MipiErrors : 16;
+            UINT ResetFailed : 1;
+            UINT NeedModeSet : 1;
+        };
+        UINT Results;
+    };
+} DXGK_DSI_RESET, *PDXGK_DSI_RESET;
+
+typedef NTSTATUS DXGKDDI_DSIRESET(
+    HANDLE Context,
+    D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId,
+    PDXGK_DSI_RESET pArgs);
+typedef DXGKDDI_DSIRESET *PDXGKDDI_DSIRESET;
+
+typedef struct _DXGK_MIPI_DSI_INTERFACE
+{
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    PDXGKDDI_DSICAPS DxgkDdiDsiCaps;
+    PDXGKDDI_DSITRANSMISSION DxgkDdiDsiTransmission;
+    PDXGKDDI_DSIRESET DxgkDdiDsiReset;
+} DXGK_MIPI_DSI_INTERFACE, *PDXGK_MIPI_DSI_INTERFACE;
+
 /* =========================================================================
  * DxgkInitialize / DxgkInitializeEx
  *
