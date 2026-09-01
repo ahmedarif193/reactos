@@ -268,7 +268,7 @@ SoftGpuPlatformQueryScanLine(
     _Inout_ PDXGKARG_GETSCANLINE GetScanLine)
 {
     if (Device == NULL || GetScanLine == NULL ||
-        GetScanLine->VidPnSourceId != 0)
+        GetScanLine->VidPnTargetId != 0)
     {
         return STATUS_INVALID_PARAMETER;
     }

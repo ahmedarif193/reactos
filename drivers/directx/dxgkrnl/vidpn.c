@@ -178,6 +178,41 @@ static CONST DXGK_VIDPN_INTERFACE g_VidPnInterface =
     VidPn_AssignTargetModeSet,
 };
 
+NTSTATUS
+DxgkVidPnResolveTargetForSource(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _Out_ D3DDDI_VIDEO_PRESENT_TARGET_ID *VidPnTargetId)
+{
+    PDXGKP_VIDPN VidPn;
+    SIZE_T Index;
+    NTSTATUS Status = STATUS_GRAPHICS_SOURCE_NOT_IN_TOPOLOGY;
+
+    if (Adapter == NULL || VidPnTargetId == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    *VidPnTargetId = D3DDDI_ID_UNINITIALIZED;
+    (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
+    VidPn = (PDXGKP_VIDPN)Adapter->VidPn;
+    if (VidPn == NULL || VidPn->Signature != DXGKP_VIDPN_SIGNATURE || VidPnSourceId >= VidPn->NumSources)
+    {
+        Status = STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE;
+    }
+    else
+    {
+        for (Index = 0; Index < VidPn->NumPaths; ++Index)
+        {
+            if (VidPn->Paths[Index].VidPnSourceId != VidPnSourceId)
+                continue;
+            *VidPnTargetId = VidPn->Paths[Index].VidPnTargetId;
+            Status = STATUS_SUCCESS;
+            break;
+        }
+    }
+    KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
+    return Status;
+}
+
 static CONST DXGK_MONITOR_INTERFACE g_MonitorInterfaceV1 =
 {
     DXGK_MONITOR_INTERFACE_VERSION_V1,
