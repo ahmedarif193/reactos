@@ -176,8 +176,6 @@ C_ASSERT(sizeof(QUERY_INTERFACE) == 0x10);
 typedef struct _LINKED_DEVICE          LINKED_DEVICE;
 typedef struct _LINKED_DEVICE         *PLINKED_DEVICE;
 
-typedef _In_ CONST PDEVICE_OBJECT      IN_CONST_PDEVICE_OBJECT;
-
 /* =========================================================================
  * Interface version constants
  *
@@ -2660,6 +2658,23 @@ C_ASSERT(sizeof(DXGKRNL_INTERFACE) == 0x124);
 #endif
 #endif
 
+/*
+ * SAL-decorated aliases used by the public WDK function-type declarations.
+ * They intentionally carry no runtime state; keeping the canonical names lets
+ * unmodified display miniports compile against the ReactOS DDK.
+ */
+typedef _In_ CONST PDEVICE_OBJECT IN_CONST_PDEVICE_OBJECT;
+typedef _Inout_ PLINKED_DEVICE INOUT_PLINKED_DEVICE;
+typedef _Inout_ PDXGK_CHILD_DESCRIPTOR INOUT_PDXGK_CHILD_DESCRIPTOR;
+typedef _In_ PDXGK_CHILD_STATUS IN_PDXGK_CHILD_STATUS;
+typedef _Inout_ PDXGK_CHILD_STATUS INOUT_PDXGK_CHILD_STATUS;
+typedef _Inout_ PDXGK_DEVICE_DESCRIPTOR INOUT_PDXGK_DEVICE_DESCRIPTOR;
+typedef _In_ DXGK_EVENT_TYPE IN_DXGK_EVENT_TYPE;
+typedef _In_ PDXGK_START_INFO IN_PDXGK_START_INFO;
+typedef _In_ PDXGKRNL_INTERFACE IN_PDXGKRNL_INTERFACE;
+typedef _In_ PQUERY_INTERFACE IN_PQUERY_INTERFACE;
+typedef _In_ PVIDEO_REQUEST_PACKET IN_PVIDEO_REQUEST_PACKET;
+
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
 /* Forward-declare KMDDOD_INITIALIZATION_DATA — defined after DRIVER_INITIALIZATION_DATA */
 typedef struct _KMDDOD_INITIALIZATION_DATA  KMDDOD_INITIALIZATION_DATA;
@@ -2696,367 +2711,213 @@ DxgkUnInitialize(
 
 /* ---- PnP / power lifecycle -------------------------------------------- */
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_ADD_DEVICE)(
+typedef NTSTATUS APIENTRY DXGKDDI_ADD_DEVICE(
     _In_  PDEVICE_OBJECT    PhysicalDeviceObject,
     _Out_ PVOID            *MiniportDeviceContext);
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_START_DEVICE)(
+typedef NTSTATUS APIENTRY DXGKDDI_START_DEVICE(
     _In_  PVOID             MiniportDeviceContext,
     _In_  PDXGK_START_INFO  DxgkStartInfo,
     _In_  PDXGK_INTERFACE   DxgkInterface,
     _Out_ PULONG            NumberOfVideoPresentSources,
     _Out_ PULONG            NumberOfChildren);
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_STOP_DEVICE)(
+typedef NTSTATUS APIENTRY DXGKDDI_STOP_DEVICE(
     _In_ PVOID MiniportDeviceContext);
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_REMOVE_DEVICE)(
+typedef NTSTATUS APIENTRY DXGKDDI_REMOVE_DEVICE(
     _In_ PVOID MiniportDeviceContext);
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_DISPATCH_IO_REQUEST)(
+typedef NTSTATUS APIENTRY DXGKDDI_DISPATCH_IO_REQUEST(
     _In_ PVOID                  MiniportDeviceContext,
     _In_ ULONG                  VidPnSourceId,
     _In_ PVIDEO_REQUEST_PACKET  VideoRequestPacket);
 
-typedef BOOLEAN
-(APIENTRY *PDXGKDDI_INTERRUPT_ROUTINE)(
+typedef BOOLEAN APIENTRY DXGKDDI_INTERRUPT_ROUTINE(
     _In_ PVOID  MiniportDeviceContext,
     _In_ ULONG  MessageNumber);
 
-typedef VOID
-(APIENTRY *PDXGKDDI_DPC_ROUTINE)(
+typedef VOID APIENTRY DXGKDDI_DPC_ROUTINE(
     _In_ PVOID MiniportDeviceContext);
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_QUERY_CHILD_RELATIONS)(
+typedef NTSTATUS APIENTRY DXGKDDI_QUERY_CHILD_RELATIONS(
     _In_  PVOID                     MiniportDeviceContext,
     _Out_ PDXGK_CHILD_DESCRIPTOR    ChildRelations,
     _In_  ULONG                     ChildRelationsSize);
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_QUERY_CHILD_STATUS)(
+typedef NTSTATUS APIENTRY DXGKDDI_QUERY_CHILD_STATUS(
     _In_    PVOID               MiniportDeviceContext,
     _Inout_ PDXGK_CHILD_STATUS  ChildStatus,
     _In_    BOOLEAN             NonDestructiveOnly);
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_QUERY_DEVICE_DESCRIPTOR)(
+typedef NTSTATUS APIENTRY DXGKDDI_QUERY_DEVICE_DESCRIPTOR(
     _In_    PVOID                       MiniportDeviceContext,
     _In_    ULONG                       ChildUid,
     _Inout_ PDXGK_DEVICE_DESCRIPTOR     DeviceDescriptor);
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_SET_POWER_STATE)(
+typedef NTSTATUS APIENTRY DXGKDDI_SET_POWER_STATE(
     _In_ PVOID              MiniportDeviceContext,
     _In_ ULONG              DeviceUid,
     _In_ DEVICE_POWER_STATE DevicePowerState,
     _In_ POWER_ACTION       ActionType);
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_NOTIFY_ACPI_EVENT)(
+typedef NTSTATUS APIENTRY DXGKDDI_NOTIFY_ACPI_EVENT(
     _In_      PVOID             MiniportDeviceContext,
     _In_      DXGK_EVENT_TYPE   EventType,
     _In_      ULONG             Event,
     _In_      PVOID             Argument,
     _Out_opt_ PULONG            AcpiFlags);
 
-typedef VOID
-(APIENTRY *PDXGKDDI_RESET_DEVICE)(
+typedef VOID APIENTRY DXGKDDI_RESET_DEVICE(
     _In_ PVOID MiniportDeviceContext);
 
-typedef VOID
-(APIENTRY *PDXGKDDI_UNLOAD)(VOID);
+typedef VOID APIENTRY DXGKDDI_UNLOAD(VOID);
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_QUERY_INTERFACE)(
+typedef NTSTATUS APIENTRY DXGKDDI_QUERY_INTERFACE(
     _In_ PVOID              MiniportDeviceContext,
     _In_ PQUERY_INTERFACE   QueryInterface);
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_CONTROL_ETW_LOGGING)(
+typedef VOID APIENTRY DXGKDDI_CONTROL_ETW_LOGGING(
     _In_ BOOLEAN    Enable,
     _In_ ULONG      Flags,
     _In_ UCHAR      Level);
 
+typedef DXGKDDI_CONTROL_ETW_LOGGING *PDXGKDDI_CONTROL_ETW_LOGGING;
+typedef DXGKDDI_ADD_DEVICE *PDXGKDDI_ADD_DEVICE;
+typedef DXGKDDI_START_DEVICE *PDXGKDDI_START_DEVICE;
+typedef DXGKDDI_STOP_DEVICE *PDXGKDDI_STOP_DEVICE;
+typedef DXGKDDI_REMOVE_DEVICE *PDXGKDDI_REMOVE_DEVICE;
+typedef DXGKDDI_DISPATCH_IO_REQUEST *PDXGKDDI_DISPATCH_IO_REQUEST;
+typedef DXGKDDI_INTERRUPT_ROUTINE *PDXGKDDI_INTERRUPT_ROUTINE;
+typedef DXGKDDI_DPC_ROUTINE *PDXGKDDI_DPC_ROUTINE;
+typedef DXGKDDI_QUERY_CHILD_RELATIONS *PDXGKDDI_QUERY_CHILD_RELATIONS;
+typedef DXGKDDI_QUERY_CHILD_STATUS *PDXGKDDI_QUERY_CHILD_STATUS;
+typedef DXGKDDI_QUERY_DEVICE_DESCRIPTOR *PDXGKDDI_QUERY_DEVICE_DESCRIPTOR;
+typedef DXGKDDI_SET_POWER_STATE *PDXGKDDI_SET_POWER_STATE;
+typedef DXGKDDI_NOTIFY_ACPI_EVENT *PDXGKDDI_NOTIFY_ACPI_EVENT;
+typedef DXGKDDI_RESET_DEVICE *PDXGKDDI_RESET_DEVICE;
+typedef DXGKDDI_UNLOAD *PDXGKDDI_UNLOAD;
+typedef DXGKDDI_QUERY_INTERFACE *PDXGKDDI_QUERY_INTERFACE;
+
 /* ---- Adapter information / capabilities -------------------------------- */
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_QUERY_ADAPTER_INFO)(
-    _In_ PVOID                              MiniportDeviceContext,
-    _In_ CONST DXGKARG_QUERYADAPTERINFO    *QueryAdapterInfo);
+typedef PDXGKDDI_QUERYADAPTERINFO PDXGKDDI_QUERY_ADAPTER_INFO;
 
 /* ---- Device / allocation management ------------------------------------ */
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_CREATE_DEVICE)(
-    _In_    PVOID                   MiniportDeviceContext,
-    _Inout_ PDXGKARG_CREATEDEVICE   CreateDevice);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_CREATE_ALLOCATION)(
-    _In_    PVOID                       MiniportDeviceContext,
-    _Inout_ PDXGKARG_CREATEALLOCATION   CreateAllocation);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_DESTROY_ALLOCATION)(
-    _In_ PVOID                           MiniportDeviceContext,
-    _In_ CONST DXGKARG_DESTROYALLOCATION *DestroyAllocation);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_DESCRIBE_ALLOCATION)(
-    _In_    PVOID                       MiniportDeviceContext,
-    _Inout_ PDXGKARG_DESCRIBEALLOCATION DescribeAllocation);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_GET_STDALLOC_UPDATEFLAGS)(
-    _In_    PVOID  MiniportDeviceContext,
-    _Inout_ PDXGKARG_GETSTANDARDALLOCATIONDRIVERDATA StandardAllocationDriverData);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_ACQUIRE_SWIZZLING_RANGE)(
-    _In_    PVOID                           MiniportDeviceContext,
-    _Inout_ PDXGKARG_ACQUIRESWIZZLINGRANGE  AcquireSwizzlingRange);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_RELEASE_SWIZZLING_RANGE)(
-    _In_ PVOID                          MiniportDeviceContext,
-    _In_ PDXGKARG_RELEASESWIZZLINGRANGE ReleaseSwizzlingRange);
+typedef PDXGKDDI_CREATEDEVICE PDXGKDDI_CREATE_DEVICE;
+typedef PDXGKDDI_CREATEALLOCATION PDXGKDDI_CREATE_ALLOCATION;
+typedef PDXGKDDI_DESTROYALLOCATION PDXGKDDI_DESTROY_ALLOCATION;
+typedef PDXGKDDI_DESCRIBEALLOCATION PDXGKDDI_DESCRIBE_ALLOCATION;
+typedef PDXGKDDI_GETSTANDARDALLOCATIONDRIVERDATA PDXGKDDI_GET_STDALLOC_UPDATEFLAGS;
+typedef PDXGKDDI_ACQUIRESWIZZLINGRANGE PDXGKDDI_ACQUIRE_SWIZZLING_RANGE;
+typedef PDXGKDDI_RELEASESWIZZLINGRANGE PDXGKDDI_RELEASE_SWIZZLING_RANGE;
 
 /* ---- DMA command buffer submission ------------------------------------- */
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_PATCH)(
-    _In_ PVOID                 MiniportDeviceContext,
-    _In_ CONST DXGKARG_PATCH  *Patch);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_SUBMIT_COMMAND)(
-    _In_ PVOID                        MiniportDeviceContext,
-    _In_ CONST DXGKARG_SUBMITCOMMAND *SubmitCommand);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_PREEMPT_COMMAND)(
-    _In_ PVOID                         MiniportDeviceContext,
-    _In_ CONST DXGKARG_PREEMPTCOMMAND *PreemptCommand);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_BUILD_PAGING_BUFFER)(
-    _In_    PVOID                       MiniportDeviceContext,
-    _Inout_ PDXGKARG_BUILDPAGINGBUFFER  BuildPagingBuffer);
+typedef PDXGKDDI_SUBMITCOMMAND PDXGKDDI_SUBMIT_COMMAND;
+typedef PDXGKDDI_PREEMPTCOMMAND PDXGKDDI_PREEMPT_COMMAND;
+typedef PDXGKDDI_BUILDPAGINGBUFFER PDXGKDDI_BUILD_PAGING_BUFFER;
 
 /* ---- Palette / pointer / present --------------------------------------- */
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_SET_PALETTE)(
-    _In_ PVOID                   MiniportDeviceContext,
-    _In_ CONST DXGKARG_SETPALETTE *SetPalette);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_SET_POINTER_POSITION)(
-    _In_ PVOID                            MiniportDeviceContext,
-    _In_ CONST DXGKARG_SETPOINTERPOSITION *SetPointerPosition);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_SET_POINTER_SHAPE)(
-    _In_ PVOID                         MiniportDeviceContext,
-    _In_ CONST DXGKARG_SETPOINTERSHAPE *SetPointerShape);
+typedef PDXGKDDI_SETPALETTE PDXGKDDI_SET_PALETTE;
+typedef PDXGKDDI_SETPOINTERPOSITION PDXGKDDI_SET_POINTER_POSITION;
+typedef PDXGKDDI_SETPOINTERSHAPE PDXGKDDI_SET_POINTER_SHAPE;
 
 /* ---- TDR (Timeout Detection and Recovery) ------------------------------ */
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_RESETFROMTIMEOUT)(
-    _In_ PVOID MiniportDeviceContext);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_RESTARTFROMTIMEOUT)(
-    _In_ PVOID MiniportDeviceContext);
-
 /* ---- Escape / debug ---------------------------------------------------- */
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_ESCAPE)(
-    _In_ PVOID                  MiniportDeviceContext,
-    _In_ CONST DXGKARG_ESCAPE  *Escape);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_COLLECT_DB_ENGINE_INFO)(
-    _In_  PVOID                               MiniportDeviceContext,
-    _In_  CONST DXGKARG_COLLECTDBGINFO       *CollectDbEngineInfo);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_QUERY_CURRENT_FENCE)(
-    _In_    PVOID                       MiniportDeviceContext,
-    _Inout_ PDXGKARG_QUERYCURRENTFENCE  CurrentFence);
+typedef PDXGKDDI_COLLECTDBGINFO PDXGKDDI_COLLECT_DB_ENGINE_INFO;
+typedef PDXGKDDI_QUERYCURRENTFENCE PDXGKDDI_QUERY_CURRENT_FENCE;
 
 /* ---- VidPN management -------------------------------------------------- */
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_IS_SUPPORTED_VIDPN)(
-    _In_    PVOID                       MiniportDeviceContext,
-    _Inout_ PDXGKARG_ISSUPPORTEDVIDPN   IsSupportedVidPn);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_RECOMMEND_FUNCTIONAL_VIDPN)(
-    _In_ PVOID                                  MiniportDeviceContext,
-    _In_ CONST DXGKARG_RECOMMENDFUNCTIONALVIDPN *RecommendFunctionalVidPn);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_ENUM_VIDPN_COFUNC_MODALITY)(
-    _In_ PVOID                                 MiniportDeviceContext,
-    _In_ CONST DXGKARG_ENUMVIDPNCOFUNCMODALITY *EnumCofuncModality);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_SET_VIDPN_SOURCE_ADDRESS)(
-    _In_ PVOID                              MiniportDeviceContext,
-    _In_ CONST DXGKARG_SETVIDPNSOURCEADDRESS *SetVidPnSourceAddress);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_SET_VIDPN_SOURCE_VISIBILITY)(
-    _In_ PVOID                                 MiniportDeviceContext,
-    _In_ CONST DXGKARG_SETVIDPNSOURCEVISIBILITY *SetVidPnSourceVisibility);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_COMMIT_VIDPN)(
-    _In_ PVOID                      MiniportDeviceContext,
-    _In_ CONST DXGKARG_COMMITVIDPN *CommitVidPn);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_UPDATE_ACTIVE_VIDPN_PRESENT_PATH)(
-    _In_ PVOID                                      MiniportDeviceContext,
-    _In_ CONST DXGKARG_UPDATEACTIVEVIDPNPRESENTPATH *UpdateActiveVidPnPresentPath);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_RECOMMEND_MONITORMODES)(
-    _In_ PVOID                              MiniportDeviceContext,
-    _In_ CONST DXGKARG_RECOMMENDMONITORMODES *RecommendMonitorModes);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_RECOMMEND_VIDPN_TOPOLOGY)(
-    _In_ PVOID                                  MiniportDeviceContext,
-    _In_ CONST DXGKARG_RECOMMENDVIDPNTOPOLOGY *RecommendVidPnTopology);
+typedef PDXGKDDI_ISSUPPORTEDVIDPN PDXGKDDI_IS_SUPPORTED_VIDPN;
+typedef PDXGKDDI_RECOMMENDFUNCTIONALVIDPN PDXGKDDI_RECOMMEND_FUNCTIONAL_VIDPN;
+typedef PDXGKDDI_ENUMVIDPNCOFUNCMODALITY PDXGKDDI_ENUM_VIDPN_COFUNC_MODALITY;
+typedef PDXGKDDI_SETVIDPNSOURCEADDRESS PDXGKDDI_SET_VIDPN_SOURCE_ADDRESS;
+typedef PDXGKDDI_SETVIDPNSOURCEVISIBILITY PDXGKDDI_SET_VIDPN_SOURCE_VISIBILITY;
+typedef PDXGKDDI_COMMITVIDPN PDXGKDDI_COMMIT_VIDPN;
+typedef PDXGKDDI_UPDATEACTIVEVIDPNPRESENTPATH PDXGKDDI_UPDATE_ACTIVE_VIDPN_PRESENT_PATH;
+typedef PDXGKDDI_RECOMMENDMONITORMODES PDXGKDDI_RECOMMEND_MONITORMODES;
+typedef PDXGKDDI_RECOMMENDVIDPNTOPOLOGY PDXGKDDI_RECOMMEND_VIDPN_TOPOLOGY;
 
 /* ---- Scan-line / interrupt control ------------------------------------- */
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_GET_SCAN_LINE)(
-    _In_    PVOID                   MiniportDeviceContext,
-    _Inout_ PDXGKARG_GETSCANLINE    GetScanLine);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_STOP_CAPTURE)(
-    _In_ PVOID  MiniportDeviceContext,
-    _In_ PVOID  StopCapture);       /* PDXGKARG_STOPCAPTURE placeholder */
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_CONTROL_INTERRUPT)(
-    _In_ PVOID                      MiniportDeviceContext,
-    _In_ CONST DXGK_INTERRUPT_TYPE  InterruptType,
-    _In_ BOOLEAN                    EnableInterrupt);
+typedef PDXGKDDI_GETSCANLINE PDXGKDDI_GET_SCAN_LINE;
+typedef PDXGKDDI_STOPCAPTURE PDXGKDDI_STOP_CAPTURE;
+typedef PDXGKDDI_CONTROLINTERRUPT PDXGKDDI_CONTROL_INTERRUPT;
 
 /* ---- Overlay ----------------------------------------------------------- */
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_CREATE_OVERLAY)(
-    _In_    PVOID                   MiniportDeviceContext,
-    _Inout_ PDXGKARG_CREATEOVERLAY  CreateOverlay);
+typedef PDXGKDDI_CREATEOVERLAY PDXGKDDI_CREATE_OVERLAY;
 
 /* ---- Per-device/context/allocation callbacks (device-level DDIs) ------- */
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_DESTROY_DEVICE)(
-    _In_ PVOID MiniportDeviceContext);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_OPEN_ALLOCATION)(
-    _In_ PVOID                           MiniportDeviceContext,
-    _In_ CONST DXGKARG_OPENALLOCATION   *OpenAllocation);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_CLOSE_ALLOCATION)(
-    _In_ PVOID                            MiniportDeviceContext,
-    _In_ CONST DXGKARG_CLOSEALLOCATION   *CloseAllocation);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_RENDER)(
-    _In_    PVOID           MiniportDeviceContext,
-    _Inout_ PDXGKARG_RENDER Render);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_PRESENT)(
-    _In_    PVOID               MiniportDeviceContext,
-    _Inout_ PDXGKARG_PRESENT    Present);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_UPDATE_OVERLAY)(
-    _In_ PVOID                       MiniportDeviceContext,
-    _In_ CONST DXGKARG_UPDATEOVERLAY *UpdateOverlay);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_FLIP_OVERLAY)(
-    _In_ PVOID                     MiniportDeviceContext,
-    _In_ CONST DXGKARG_FLIPOVERLAY *FlipOverlay);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_DESTROY_OVERLAY)(
-    _In_ PVOID                        MiniportDeviceContext,
-    _In_ CONST DXGKARG_DESTROYOVERLAY *DestroyOverlay);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_CREATE_CONTEXT)(
-    _In_    PVOID                   MiniportDeviceContext,
-    _Inout_ PDXGKARG_CREATECONTEXT  CreateContext);
-
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_DESTROY_CONTEXT)(
-    _In_ PVOID MiniportDeviceContext);
+typedef PDXGKDDI_DESTROYDEVICE PDXGKDDI_DESTROY_DEVICE;
+typedef PDXGKDDI_OPENALLOCATIONINFO PDXGKDDI_OPEN_ALLOCATION;
+typedef PDXGKDDI_CLOSEALLOCATION PDXGKDDI_CLOSE_ALLOCATION;
+typedef PDXGKDDI_UPDATEOVERLAY PDXGKDDI_UPDATE_OVERLAY;
+typedef PDXGKDDI_FLIPOVERLAY PDXGKDDI_FLIP_OVERLAY;
+typedef PDXGKDDI_DESTROYOVERLAY PDXGKDDI_DESTROY_OVERLAY;
+typedef PDXGKDDI_CREATECONTEXT PDXGKDDI_CREATE_CONTEXT;
+typedef PDXGKDDI_DESTROYCONTEXT PDXGKDDI_DESTROY_CONTEXT;
 
 /* ---- Multi-GPU linked adapter ----------------------------------------- */
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_LINK_DEVICE)(
+typedef NTSTATUS APIENTRY DXGKDDI_LINK_DEVICE(
     _In_    CONST PDEVICE_OBJECT    PhysicalDeviceObject,
     _In_    CONST PVOID             MiniportDeviceContext,
     _Inout_ PLINKED_DEVICE          LinkedDevice);
 
+typedef DXGKDDI_LINK_DEVICE *PDXGKDDI_LINK_DEVICE;
+
 /* ---- Private display driver format ------------------------------------- */
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_SET_DISPLAY_PRIVATE_DRIVER_FORMAT)(
-    _In_ PVOID                                       MiniportDeviceContext,
-    _In_ CONST DXGKARG_SETDISPLAYPRIVATEDRIVERFORMAT *SetDisplayPrivateDriverFormat);
+typedef PDXGKDDI_SETDISPLAYPRIVATEDRIVERFORMAT PDXGKDDI_SET_DISPLAY_PRIVATE_DRIVER_FORMAT;
 
-/* ---- WDDM 1.1 (Win7) per-engine TDR callbacks ------------------------- */
+/* ---- VidPN hardware capabilities ------------------------------------- */
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_QUERY_ENGINE_STATUS)(
-    _In_    PVOID                       MiniportDeviceContext,
-    _Inout_ PDXGKARG_QUERYENGINESTATUS  QueryEngineStatus);
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN7)
+typedef PDXGKDDI_QUERYVIDPNHWCAPABILITY PDXGKDDI_QUERY_VIDPN_HW_CAPABILITY;
+#endif
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_RESET_ENGINE)(
-    _In_    PVOID                   MiniportDeviceContext,
-    _Inout_ PDXGKARG_RESETENGINE    ResetEngine);
+/* ---- Win8 per-engine TDR callbacks ----------------------------------- */
 
-/* ---- WDDM 1.1 (Win7) VidPN hardware capabilities --------------------- */
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
+typedef PDXGKDDI_QUERYENGINESTATUS PDXGKDDI_QUERY_ENGINE_STATUS;
+typedef PDXGKDDI_RESETENGINE PDXGKDDI_RESET_ENGINE;
+#endif
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_QUERY_VIDPN_HW_CAPABILITY)(
-    _In_    PVOID                           MiniportDeviceContext,
-    _Inout_ PDXGKARG_QUERYVIDPNHWCAPABILITY QueryVidPnHwCapability);
+typedef NTSTATUS APIENTRY DXGKDDI_STOP_DEVICE_AND_RELEASE_POST_DISPLAY_OWNERSHIP(
+    _In_ PVOID MiniportDeviceContext,
+    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId,
+    _Out_ PDXGK_DISPLAY_INFORMATION DisplayInfo);
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_STOP_DEVICE_AND_RELEASE_POST_DISPLAY_OWNERSHIP)(
-    _In_ PVOID                           MiniportDeviceContext,
-    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID  TargetId,
-    _Out_ PDXGK_DISPLAY_INFORMATION      DisplayInfo);
+typedef DXGKDDI_STOP_DEVICE_AND_RELEASE_POST_DISPLAY_OWNERSHIP
+    *PDXGKDDI_STOP_DEVICE_AND_RELEASE_POST_DISPLAY_OWNERSHIP;
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_SYSTEM_DISPLAY_ENABLE)(
+typedef struct _DXGK_CHILD_CONTAINER_ID
+{
+    GUID ContainerId;
+    struct
+    {
+        ULONG64 PortId;
+        USHORT ManufacturerName;
+        USHORT ProductCode;
+    } EldInfo;
+} DXGK_CHILD_CONTAINER_ID, *PDXGK_CHILD_CONTAINER_ID;
+
+typedef NTSTATUS APIENTRY DXGKDDI_GET_CHILD_CONTAINER_ID(
+    _In_ PVOID MiniportDeviceContext,
+    _In_ ULONG ChildUid,
+    _Inout_ PDXGK_CHILD_CONTAINER_ID ContainerId);
+
+typedef DXGKDDI_GET_CHILD_CONTAINER_ID *PDXGKDDI_GET_CHILD_CONTAINER_ID;
+
+typedef NTSTATUS APIENTRY DXGKDDI_SYSTEM_DISPLAY_ENABLE(
     _In_  PVOID                              MiniportDeviceContext,
     _In_  D3DDDI_VIDEO_PRESENT_TARGET_ID     TargetId,
     _In_  PDXGKARG_SYSTEM_DISPLAY_ENABLE_FLAGS Flags,
@@ -3064,8 +2925,7 @@ typedef NTSTATUS
     _Out_ PUINT                              Height,
     _Out_ D3DDDIFORMAT                      *ColorFormat);
 
-typedef VOID
-(APIENTRY *PDXGKDDI_SYSTEM_DISPLAY_WRITE)(
+typedef VOID APIENTRY DXGKDDI_SYSTEM_DISPLAY_WRITE(
     _In_ PVOID  MiniportDeviceContext,
     _In_ PVOID  Source,
     _In_ UINT   SourceWidth,
@@ -3074,10 +2934,10 @@ typedef VOID
     _In_ UINT   PositionX,
     _In_ UINT   PositionY);
 
-typedef NTSTATUS
-(APIENTRY *PDXGKDDI_CANCEL_COMMAND)(
-    _In_ PVOID                        MiniportDeviceContext,
-    _In_ CONST DXGKARG_CANCELCOMMAND *CancelCommand);
+typedef DXGKDDI_SYSTEM_DISPLAY_ENABLE *PDXGKDDI_SYSTEM_DISPLAY_ENABLE;
+typedef DXGKDDI_SYSTEM_DISPLAY_WRITE *PDXGKDDI_SYSTEM_DISPLAY_WRITE;
+
+typedef PDXGKDDI_CANCELCOMMAND PDXGKDDI_CANCEL_COMMAND;
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
 typedef NTSTATUS
@@ -3374,28 +3234,28 @@ typedef struct _DRIVER_INITIALIZATION_DATA
 
     /* ---- WDDM 1.2 / Win8 additions -------------------------------------- */
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
-    PVOID                                       DxgkDdiSetPowerComponentFState;
-    PVOID                                       DxgkDdiQueryDependentEngineGroup;
+    PDXGKDDISETPOWERCOMPONENTFSTATE             DxgkDdiSetPowerComponentFState;
+    PDXGKDDI_QUERYDEPENDENTENGINEGROUP           DxgkDdiQueryDependentEngineGroup;
     PDXGKDDI_QUERY_ENGINE_STATUS                DxgkDdiQueryEngineStatus;
     PDXGKDDI_RESET_ENGINE                       DxgkDdiResetEngine;
     PDXGKDDI_STOP_DEVICE_AND_RELEASE_POST_DISPLAY_OWNERSHIP DxgkDdiStopDeviceAndReleasePostDisplayOwnership;
     PDXGKDDI_SYSTEM_DISPLAY_ENABLE              DxgkDdiSystemDisplayEnable;
     PDXGKDDI_SYSTEM_DISPLAY_WRITE               DxgkDdiSystemDisplayWrite;
     PDXGKDDI_CANCEL_COMMAND                     DxgkDdiCancelCommand;
-    PVOID                                       DxgkDdiGetChildContainerId;
-    PVOID                                       DxgkDdiPowerRuntimeControlRequest;
+    PDXGKDDI_GET_CHILD_CONTAINER_ID              DxgkDdiGetChildContainerId;
+    PDXGKDDIPOWERRUNTIMECONTROLREQUEST           DxgkDdiPowerRuntimeControlRequest;
     PDXGKDDI_SETVIDPNSOURCEADDRESSWITHMULTIPLANEOVERLAY DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay;
     PDXGKDDI_NOTIFY_SURPRISE_REMOVAL            DxgkDdiNotifySurpriseRemoval;
 #endif
 
     /* ---- WDDM 1.3 / Win8.1 additions ------------------------------------ */
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM1_3)
-    PDXGKDDI_GET_NODE_METADATA                  DxgkDdiGetNodeMetadata;
-    PVOID                                       DxgkDdiSetPowerPState;           /* reserved, set to zero */
+    PDXGKDDI_GETNODEMETADATA                    DxgkDdiGetNodeMetadata;
+    PDXGKDDISETPOWERPSTATE                      DxgkDdiSetPowerPState;
     PDXGKDDI_CONTROLINTERRUPT2                   DxgkDdiControlInterrupt2;
     PDXGKDDI_CHECKMULTIPLANEOVERLAYSUPPORT      DxgkDdiCheckMultiPlaneOverlaySupport;
-    PVOID                                       DxgkDdiCalibrateGpuClock;
-    PVOID                                       DxgkDdiFormatHistoryBuffer;
+    PDXGKDDI_CALIBRATEGPUCLOCK                  DxgkDdiCalibrateGpuClock;
+    PDXGKDDI_FORMATHISTORYBUFFER                DxgkDdiFormatHistoryBuffer;
 #endif
 
     /* ---- WDDM 2.0 / Win10 additions ------------------------------------- */
@@ -3812,14 +3672,14 @@ struct _KMDDOD_INITIALIZATION_DATA
     PDXGKDDI_QUERY_VIDPN_HW_CAPABILITY          DxgkDdiQueryVidPnHWCapability;
 
     /* Win8+ display-only callbacks */
-    PVOID                                       DxgkDdiPresentDisplayOnly;
+    PDXGKDDI_PRESENTDISPLAYONLY                 DxgkDdiPresentDisplayOnly;
     PDXGKDDI_STOP_DEVICE_AND_RELEASE_POST_DISPLAY_OWNERSHIP DxgkDdiStopDeviceAndReleasePostDisplayOwnership;
     PDXGKDDI_SYSTEM_DISPLAY_ENABLE              DxgkDdiSystemDisplayEnable;
     PDXGKDDI_SYSTEM_DISPLAY_WRITE               DxgkDdiSystemDisplayWrite;
-    PVOID                                       DxgkDdiGetChildContainerId;
+    PDXGKDDI_GET_CHILD_CONTAINER_ID              DxgkDdiGetChildContainerId;
     PDXGKDDI_CONTROL_INTERRUPT                  DxgkDdiControlInterrupt;
-    PVOID                                       DxgkDdiSetPowerComponentFState;
-    PVOID                                       DxgkDdiPowerRuntimeControlRequest;
+    PDXGKDDISETPOWERCOMPONENTFSTATE             DxgkDdiSetPowerComponentFState;
+    PDXGKDDIPOWERRUNTIMECONTROLREQUEST           DxgkDdiPowerRuntimeControlRequest;
     PDXGKDDI_NOTIFY_SURPRISE_REMOVAL            DxgkDdiNotifySurpriseRemoval;
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
     PDXGKDDI_POWERRUNTIMESETDEVICEHANDLE        DxgkDdiPowerRuntimeSetDeviceHandle;
