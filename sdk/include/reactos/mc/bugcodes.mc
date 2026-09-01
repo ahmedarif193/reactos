@@ -1745,3 +1745,19 @@ SymbolicName=KERNEL_SECURITY_CHECK_FAILURE
 Language=English
 A critical kernel security check failed.
 .
+
+MessageId=0x117
+Severity=Success
+Facility=System
+SymbolicName=VIDEO_TDR_TIMEOUT_DETECTED
+Language=English
+The display driver failed to recover from a timeout.
+.
+
+MessageId=0x141
+Severity=Success
+Facility=System
+SymbolicName=VIDEO_ENGINE_TIMEOUT_DETECTED
+Language=English
+A display engine failed to respond within the permitted interval.
+.
