@@ -86,7 +86,7 @@ NTKERNELAPI
 VOID
 NTAPI
 READ_REGISTER_BUFFER_UCHAR(
-  IN PUCHAR Register,
+  IN volatile UCHAR *Register,
   IN PUCHAR Buffer,
   IN ULONG Count);
 
@@ -94,7 +94,7 @@ NTKERNELAPI
 VOID
 NTAPI
 READ_REGISTER_BUFFER_ULONG(
-  IN PULONG Register,
+  IN volatile ULONG *Register,
   IN PULONG Buffer,
   IN ULONG Count);
 
@@ -102,7 +102,7 @@ NTKERNELAPI
 VOID
 NTAPI
 READ_REGISTER_BUFFER_USHORT(
-  IN PUSHORT Register,
+  IN volatile USHORT *Register,
   IN PUSHORT Buffer,
   IN ULONG Count);
 
@@ -110,19 +110,19 @@ NTKERNELAPI
 UCHAR
 NTAPI
 READ_REGISTER_UCHAR(
-  IN PUCHAR Register);
+  IN volatile UCHAR *Register);
 
 NTKERNELAPI
 ULONG
 NTAPI
 READ_REGISTER_ULONG(
-  IN PULONG Register);
+  IN volatile ULONG *Register);
 
 NTKERNELAPI
 USHORT
 NTAPI
 READ_REGISTER_USHORT(
-  IN PUSHORT Register);
+  IN volatile USHORT *Register);
 #endif
 
 NTHALAPI
@@ -175,7 +175,7 @@ NTKERNELAPI
 VOID
 NTAPI
 WRITE_REGISTER_BUFFER_UCHAR(
-  IN PUCHAR Register,
+  IN volatile UCHAR *Register,
   IN PUCHAR Buffer,
   IN ULONG Count);
 
@@ -183,7 +183,7 @@ NTKERNELAPI
 VOID
 NTAPI
 WRITE_REGISTER_BUFFER_ULONG(
-  IN PULONG Register,
+  IN volatile ULONG *Register,
   IN PULONG Buffer,
   IN ULONG Count);
 
@@ -191,7 +191,7 @@ NTKERNELAPI
 VOID
 NTAPI
 WRITE_REGISTER_BUFFER_USHORT(
-  IN PUSHORT Register,
+  IN volatile USHORT *Register,
   IN PUSHORT Buffer,
   IN ULONG Count);
 
@@ -199,21 +199,21 @@ NTKERNELAPI
 VOID
 NTAPI
 WRITE_REGISTER_UCHAR(
-  IN PUCHAR Register,
+  IN volatile UCHAR *Register,
   IN UCHAR Value);
 
 NTKERNELAPI
 VOID
 NTAPI
 WRITE_REGISTER_ULONG(
-  IN PULONG Register,
+  IN volatile ULONG *Register,
   IN ULONG Value);
 
 NTKERNELAPI
 VOID
 NTAPI
 WRITE_REGISTER_USHORT(
-  IN PUSHORT Register,
+  IN volatile USHORT *Register,
   IN USHORT Value);
 #endif
 
@@ -439,7 +439,7 @@ READ_REGISTER_ULONG(
 FORCEINLINE
 VOID
 READ_REGISTER_BUFFER_UCHAR(
-  IN PUCHAR Register,
+  IN volatile UCHAR *Register,
   IN PUCHAR Buffer,
   IN ULONG Count)
 {
@@ -452,7 +452,7 @@ READ_REGISTER_BUFFER_UCHAR(
 FORCEINLINE
 VOID
 READ_REGISTER_BUFFER_USHORT(
-  IN PUSHORT Register,
+  IN volatile USHORT *Register,
   IN PUSHORT Buffer,
   IN ULONG Count)
 {
@@ -465,7 +465,7 @@ READ_REGISTER_BUFFER_USHORT(
 FORCEINLINE
 VOID
 READ_REGISTER_BUFFER_ULONG(
-  IN PULONG Register,
+  IN volatile ULONG *Register,
   IN PULONG Buffer,
   IN ULONG Count)
 {
@@ -508,7 +508,7 @@ WRITE_REGISTER_ULONG(
 FORCEINLINE
 VOID
 WRITE_REGISTER_BUFFER_UCHAR(
-  IN PUCHAR Register,
+  IN volatile UCHAR *Register,
   IN PUCHAR Buffer,
   IN ULONG Count)
 {
@@ -521,7 +521,7 @@ WRITE_REGISTER_BUFFER_UCHAR(
 FORCEINLINE
 VOID
 WRITE_REGISTER_BUFFER_USHORT(
-  IN PUSHORT Register,
+  IN volatile USHORT *Register,
   IN PUSHORT Buffer,
   IN ULONG Count)
 {
@@ -534,7 +534,7 @@ WRITE_REGISTER_BUFFER_USHORT(
 FORCEINLINE
 VOID
 WRITE_REGISTER_BUFFER_ULONG(
-  IN PULONG Register,
+  IN volatile ULONG *Register,
   IN PULONG Buffer,
   IN ULONG Count)
 {
@@ -604,31 +604,31 @@ READ_PORT_USHORT(
 FORCEINLINE
 VOID
 READ_REGISTER_BUFFER_UCHAR(
-  IN PUCHAR Register,
+  IN volatile UCHAR *Register,
   IN PUCHAR Buffer,
   IN ULONG Count)
 {
-  __movsb(Register, Buffer, Count);
+  __movsb(Buffer, (const UCHAR *)Register, Count);
 }
 
 FORCEINLINE
 VOID
 READ_REGISTER_BUFFER_ULONG(
-  IN PULONG Register,
+  IN volatile ULONG *Register,
   IN PULONG Buffer,
   IN ULONG Count)
 {
-  __movsd(Register, Buffer, Count);
+  __movsd(Buffer, (const ULONG *)Register, Count);
 }
 
 FORCEINLINE
 VOID
 READ_REGISTER_BUFFER_USHORT(
-  IN PUSHORT Register,
+  IN volatile USHORT *Register,
   IN PUSHORT Buffer,
   IN ULONG Count)
 {
-  __movsw(Register, Buffer, Count);
+  __movsw(Buffer, (const USHORT *)Register, Count);
 }
 
 FORCEINLINE
@@ -733,37 +733,34 @@ WRITE_PORT_USHORT(
 FORCEINLINE
 VOID
 WRITE_REGISTER_BUFFER_UCHAR(
-  IN PUCHAR Register,
+  IN volatile UCHAR *Register,
   IN PUCHAR Buffer,
   IN ULONG Count)
 {
-  LONG Synch;
-  __movsb(Register, Buffer, Count);
-  InterlockedOr(&Synch, 1);
+  __movsb((UCHAR *)Register, Buffer, Count);
+  KeMemoryBarrier();
 }
 
 FORCEINLINE
 VOID
 WRITE_REGISTER_BUFFER_ULONG(
-  IN PULONG Register,
+  IN volatile ULONG *Register,
   IN PULONG Buffer,
   IN ULONG Count)
 {
-  LONG Synch;
-  __movsd(Register, Buffer, Count);
-  InterlockedOr(&Synch, 1);
+  __movsd((ULONG *)Register, Buffer, Count);
+  KeMemoryBarrier();
 }
 
 FORCEINLINE
 VOID
 WRITE_REGISTER_BUFFER_USHORT(
-  IN PUSHORT Register,
+  IN volatile USHORT *Register,
   IN PUSHORT Buffer,
   IN ULONG Count)
 {
-  LONG Synch;
-  __movsw(Register, Buffer, Count);
-  InterlockedOr(&Synch, 1);
+  __movsw((USHORT *)Register, Buffer, Count);
+  KeMemoryBarrier();
 }
 
 FORCEINLINE
