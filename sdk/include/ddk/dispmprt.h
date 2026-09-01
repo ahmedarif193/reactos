@@ -2171,6 +2171,18 @@ NTSTATUS
     IN_CONST_DXGK_MONITOR_INTERFACE_VERSION MonitorInterfaceVersion,
     DEREF_OUT_CONST_PPDXGK_MONITOR_INTERFACE ppMonitorInterface);
 
+typedef struct _DXGK_INTERFACESPECIFICDATA
+{
+    HANDLE hAdapter;
+    DXGKCB_GETHANDLEDATA pfnGetHandleDataCb;
+    DXGKCB_GETHANDLEPARENT pfnGetHandleParentCb;
+    DXGKCB_ENUMHANDLECHILDREN pfnEnumHandleChildrenCb;
+    DXGKCB_NOTIFY_INTERRUPT pfnNotifyInterruptCb;
+    DXGKCB_NOTIFY_DPC pfnNotifyDpcCb;
+    DXGKCB_QUERYVIDPNINTERFACE pfnQueryVidPnInterfaceCb;
+    DXGKCB_GETCAPTUREADDRESS pfnGetCaptureAddressCb;
+} DXGK_INTERFACESPECIFICDATA;
+
 typedef union _DXGKARG_SYSTEM_DISPLAY_ENABLE_FLAGS
 {
     struct
@@ -2405,7 +2417,7 @@ C_ASSERT(FIELD_OFFSET(DXGK_DIAGNOSTIC_SYNCLOCK_ENABLESYNC, Value) == 0x14);
  *   0xb8+: Win8 and later additions
  * =========================================================================
  */
-typedef struct _DXGK_INTERFACE
+typedef struct _DXGKRNL_INTERFACE
 {
     ULONG   Size;                                       /* 0x00 */
     ULONG   Version;                                    /* 0x04 */
@@ -2532,11 +2544,10 @@ typedef struct _DXGK_INTERFACE
     /* --- WDDM 3.1 --- */
     DXGKCB_DISCONNECTDOORBELL DxgkCbDisconnectDoorbell; /* 0x238 */
 #endif
-} DXGK_INTERFACE, *PDXGK_INTERFACE;
+} DXGKRNL_INTERFACE, *PDXGKRNL_INTERFACE;
 
-/* Windows WDK uses DXGKRNL_INTERFACE as the official name */
-typedef DXGK_INTERFACE  DXGKRNL_INTERFACE;
-typedef DXGK_INTERFACE *PDXGKRNL_INTERFACE;
+typedef DXGKRNL_INTERFACE DXGK_INTERFACE;
+typedef PDXGKRNL_INTERFACE PDXGK_INTERFACE;
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_3) && \
     (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WDDM2_4)
