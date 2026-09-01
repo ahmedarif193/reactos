@@ -3005,14 +3005,11 @@ static INT LISTVIEW_CalculateItemWidth(const LISTVIEW_INFO *infoPtr)
 }
 
 #ifdef __REACTOS__
-/* Keep the automatic list column width current as items arrive. Wine defers
- * this work until the first paint and then measures the entire control in one
- * blocking pass. Windows exposes the final widest-item width without making
- * a dense callback-backed list unresponsive on its first paint. */
-static void LISTVIEW_UpdateListWidthForItem(LISTVIEW_INFO *infoPtr, INT nItem)
+/* Keep the automatic list column width current when the inserted text is
+ * already available. Windows does not request callback text during insertion. */
+static void LISTVIEW_UpdateListWidthForItem(LISTVIEW_INFO *infoPtr,
+        const LVITEMW *item, BOOL isW)
 {
-    WCHAR text[DISP_TEXT_SIZE] = { 0 };
-    LVITEMW item;
     INT width;
 
     if (infoPtr->uView != LV_VIEW_LIST)
@@ -3020,15 +3017,20 @@ static void LISTVIEW_UpdateListWidthForItem(LISTVIEW_INFO *infoPtr, INT nItem)
     if (infoPtr->bListWidthExplicit)
         return;
 
-    item.mask = LVIF_TEXT;
-    item.iItem = nItem;
-    item.iSubItem = 0;
-    item.pszText = text;
-    item.cchTextMax = ARRAY_SIZE(text);
-    if (!LISTVIEW_GetItemW(infoPtr, &item))
+    if (!infoPtr->redraw)
+    {
+        infoPtr->bNoItemMetrics = TRUE;
         return;
+    }
 
-    width = LISTVIEW_GetStringWidthT(infoPtr, item.pszText, TRUE);
+    if ((item->mask & LVIF_TEXT) && !is_text(item->pszText))
+    {
+        infoPtr->bNoItemMetrics = TRUE;
+        return;
+    }
+
+    width = LISTVIEW_GetStringWidthT(infoPtr,
+            item->mask & LVIF_TEXT ? item->pszText : NULL, isW);
     if (infoPtr->himlSmall)
         width += infoPtr->iconSize.cx;
     if (infoPtr->himlState)
@@ -3037,7 +3039,8 @@ static void LISTVIEW_UpdateListWidthForItem(LISTVIEW_INFO *infoPtr, INT nItem)
 
     if (width > infoPtr->nItemWidth)
         infoPtr->nItemWidth = width;
-    infoPtr->bNoItemMetrics = FALSE;
+    if (infoPtr->nItemCount == 1)
+        infoPtr->bNoItemMetrics = FALSE;
 }
 #endif
 
@@ -7981,7 +7984,7 @@ static INT LISTVIEW_InsertItemT(LISTVIEW_INFO *infoPtr, const LVITEMW *lpLVItem,
 	return -1;
 
 #ifdef __REACTOS__
-    LISTVIEW_UpdateListWidthForItem(infoPtr, nItem);
+    LISTVIEW_UpdateListWidthForItem(infoPtr, &item, isW);
 #endif
 
     /* align items (set position of each item) */
