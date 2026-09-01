@@ -1,0 +1,76 @@
+/*
+ * PROJECT:     ReactOS SDK
+ * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * PURPOSE:     Direct3D 10 user-mode display driver shared allocation types
+ * COPYRIGHT:   Copyright 2026 ReactOS WDDM Team
+ *
+ * These structures are shared with a display miniport through its private
+ * allocation data. Keep their values and field order aligned with the public
+ * Windows 11 24H2 WDK contract. The wider D3D10 UMD callback surface remains
+ * to be added as consumers require it.
+ */
+
+#pragma once
+
+#include <windef.h>
+#include <dxgicommon.h>
+#include <dxgiddi.h>
+
+typedef enum D3D10DDIRESOURCE_TYPE
+{
+    D3D10DDIRESOURCE_BUFFER = 1,
+    D3D10DDIRESOURCE_TEXTURE1D = 2,
+    D3D10DDIRESOURCE_TEXTURE2D = 3,
+    D3D10DDIRESOURCE_TEXTURE3D = 4,
+    D3D10DDIRESOURCE_TEXTURECUBE = 5,
+    D3D11DDIRESOURCE_BUFFEREX = 6,
+} D3D10DDIRESOURCE_TYPE;
+
+typedef enum D3D10_DDI_RESOURCE_USAGE
+{
+    D3D10_DDI_USAGE_DEFAULT = 0,
+    D3D10_DDI_USAGE_IMMUTABLE = 1,
+    D3D10_DDI_USAGE_DYNAMIC = 2,
+    D3D10_DDI_USAGE_STAGING = 3,
+} D3D10_DDI_RESOURCE_USAGE;
+
+typedef enum D3D10_DDI_RESOURCE_BIND_FLAG
+{
+    D3D10_DDI_BIND_VERTEX_BUFFER = 0x00000001L,
+    D3D10_DDI_BIND_INDEX_BUFFER = 0x00000002L,
+    D3D10_DDI_BIND_CONSTANT_BUFFER = 0x00000004L,
+    D3D10_DDI_BIND_SHADER_RESOURCE = 0x00000008L,
+    D3D10_DDI_BIND_STREAM_OUTPUT = 0x00000010L,
+    D3D10_DDI_BIND_RENDER_TARGET = 0x00000020L,
+    D3D10_DDI_BIND_DEPTH_STENCIL = 0x00000040L,
+    D3D10_DDI_BIND_PIPELINE_MASK = 0x0000007FL,
+    D3D10_DDI_BIND_PRESENT = 0x00000080L,
+    D3D10_DDI_BIND_MASK = 0x000000FFL,
+} D3D10_DDI_RESOURCE_BIND_FLAG;
+
+typedef enum D3D10_DDI_RESOURCE_MISC_FLAG
+{
+    D3D10_DDI_RESOURCE_AUTO_GEN_MIP_MAP = 0x00000001L,
+    D3D10_DDI_RESOURCE_MISC_SHARED = 0x00000002L,
+    D3D10_DDI_RESOURCE_MISC_DISCARD_ON_PRESENT = 0x00000008L,
+    D3D10_DDI_RESOURCE_MISC_REMOTE = 0x00000400L,
+} D3D10_DDI_RESOURCE_MISC_FLAG;
+
+typedef enum D3D10_DDI_MAP
+{
+    D3D10_DDI_MAP_READ = 1,
+    D3D10_DDI_MAP_WRITE = 2,
+    D3D10_DDI_MAP_READWRITE = 3,
+    D3D10_DDI_MAP_WRITE_DISCARD = 4,
+    D3D10_DDI_MAP_WRITE_NOOVERWRITE = 5,
+} D3D10_DDI_MAP;
+
+typedef struct D3D10DDI_MIPINFO
+{
+    UINT TexelWidth;
+    UINT TexelHeight;
+    UINT TexelDepth;
+    UINT PhysicalWidth;
+    UINT PhysicalHeight;
+    UINT PhysicalDepth;
+} D3D10DDI_MIPINFO;
