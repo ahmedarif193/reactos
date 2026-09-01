@@ -118,10 +118,11 @@ Rpi3Vc4BusAddress(
            ((ULONG)Physical.QuadPart & RPI3VC4_GPU_ADDRESS_MASK);
 }
 
-struct drm_gem_cma_object *
-drm_gem_cma_create(
+static struct drm_gem_cma_object *
+Rpi3Vc4CreateCmaObject(
     _In_ struct drm_device *Device,
-    _In_ size_t Size)
+    _In_ size_t Size,
+    _In_ BOOLEAN Zero)
 {
     PRPI3VC4_VALIDATION_CONTEXT Validation;
     struct drm_vc4_bo *Wrapper;
@@ -158,9 +159,26 @@ drm_gem_cma_create(
     Wrapper->base.vaddr = Validation->Arena + Start;
     Physical.QuadPart = Validation->ArenaPhysical.QuadPart + Start;
     Wrapper->base.paddr = Rpi3Vc4BusAddress(Validation->Platform, Physical);
-    RtlZeroMemory(Wrapper->base.vaddr, Size);
+    if (Zero)
+        RtlZeroMemory(Wrapper->base.vaddr, Size);
     Validation->ArenaCursor = Start + Size;
     return &Wrapper->base;
+}
+
+struct drm_gem_cma_object *
+drm_gem_cma_create(
+    _In_ struct drm_device *Device,
+    _In_ size_t Size)
+{
+    return Rpi3Vc4CreateCmaObject(Device, Size, TRUE);
+}
+
+struct drm_gem_cma_object *
+drm_gem_cma_create_uninitialized(
+    _In_ struct drm_device *Device,
+    _In_ size_t Size)
+{
+    return Rpi3Vc4CreateCmaObject(Device, Size, FALSE);
 }
 
 static VOID

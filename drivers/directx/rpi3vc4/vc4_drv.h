@@ -253,6 +253,13 @@ drm_gem_cma_create(
     _In_ struct drm_device *Device,
     _In_ size_t Size);
 
+#ifdef __REACTOS__
+struct drm_gem_cma_object *
+drm_gem_cma_create_uninitialized(
+    _In_ struct drm_device *Device,
+    _In_ size_t Size);
+#endif
+
 int
 vc4_validate_bin_cl(
     struct drm_device *Device,
