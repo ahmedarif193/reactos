@@ -4110,25 +4110,6 @@ typedef struct _DXGKARG_DESTROYOVERLAY
 
 
 /* =========================================================================
- * DXGK_PRESENT_DISPLAYONLY_PROGRESS_ID constants
- * =========================================================================
- */
-#define DXGK_PRESENT_DISPLAYONLY_PROGRESS_ID_COMPLETE   0
-#define DXGK_PRESENT_DISPLAYONLY_PROGRESS_ID_FAILED     1
-
-
-/* =========================================================================
- * WDDM version constants (WDDMVersion field of DXGK_DRIVERCAPS)
- * =========================================================================
- */
-#ifndef DXGKDDI_WDDMv1
-#define DXGKDDI_WDDMv1      0x1000
-#define DXGKDDI_WDDMv1_2    0x1200
-#define DXGKDDI_WDDMv1_3    0x1300
-#define DXGKDDI_WDDMv2_0    0x2000
-#endif
-
-/* =========================================================================
  * DXGK_DISPLAY_DRIVERCAPS_EXTENSION
  *
  * Returned by DxgkDdiQueryAdapterInfo(DXGKQAITYPE_DISPLAY_DRIVERCAPS_EXTENSION).
