@@ -246,7 +246,7 @@ typedef enum _DXGK_CHILD_DEVICE_TYPE
     TypeVideoOutput     = 1,
     TypeOther           = 2,
     TypeIntegratedDisplay = 3,
-} DXGK_CHILD_DEVICE_TYPE;
+} DXGK_CHILD_DEVICE_TYPE, *PDXGK_CHILD_DEVICE_TYPE;
 
 
 /*
@@ -271,7 +271,7 @@ typedef struct _DXGK_VIDEO_OUTPUT_CAPABILITIES
     D3DKMDT_VIDEO_OUTPUT_TECHNOLOGY     InterfaceTechnology;
     D3DKMDT_MONITOR_ORIENTATION_AWARENESS MonitorOrientationAwareness;
     BOOLEAN                             SupportsSdtvModes;
-} DXGK_VIDEO_OUTPUT_CAPABILITIES;
+} DXGK_VIDEO_OUTPUT_CAPABILITIES, *PDXGK_VIDEO_OUTPUT_CAPABILITIES;
 
 typedef struct _DXGK_INTEGRATED_DISPLAY_CHILD
 {
@@ -291,7 +291,7 @@ typedef struct _DXGK_CHILD_CAPABILITIES
         DXGK_INTEGRATED_DISPLAY_CHILD IntegratedDisplayChild;
     } Type;
     DXGK_CHILD_DEVICE_HPD_AWARENESS HpdAwareness;
-} DXGK_CHILD_CAPABILITIES;
+} DXGK_CHILD_CAPABILITIES, *PDXGK_CHILD_CAPABILITIES;
 
 
 /* =========================================================================
@@ -324,7 +324,7 @@ typedef enum _DXGK_CHILD_STATUS_TYPE
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM1_3)
     StatusMiracastConnection = 3,
 #endif
-} DXGK_CHILD_STATUS_TYPE;
+} DXGK_CHILD_STATUS_TYPE, *PDXGK_CHILD_STATUS_TYPE;
 
 typedef struct _DXGK_CHILD_STATUS
 {
@@ -367,6 +367,17 @@ typedef struct _DXGK_DEVICE_DESCRIPTOR
     ULONG   DescriptorLength;
     PVOID   DescriptorBuffer;
 } DXGK_DEVICE_DESCRIPTOR, *PDXGK_DEVICE_DESCRIPTOR;
+
+#define DXGK_MAX_STRING_LEN 50
+#define DXGK_MAX_REG_SZ_LEN (DXGK_MAX_STRING_LEN + 1)
+
+typedef struct _DXGK_GENERIC_DESCRIPTOR
+{
+    WCHAR HardwareId[DXGK_MAX_REG_SZ_LEN];
+    WCHAR InstanceId[DXGK_MAX_REG_SZ_LEN];
+    WCHAR CompatibleId[DXGK_MAX_REG_SZ_LEN];
+    WCHAR DeviceText[DXGK_MAX_REG_SZ_LEN];
+} DXGK_GENERIC_DESCRIPTOR, *PDXGK_GENERIC_DESCRIPTOR;
 
 
 /* =========================================================================
@@ -676,7 +687,7 @@ typedef enum _DXGK_EVENT_TYPE
     DpEventTypeAcpiEvent        = 4,
     DpEventTypeResumeEvent      = 5,
     DpEventTypeDPCRoutineEvent  = 6,
-} DXGK_EVENT_TYPE;
+} DXGK_EVENT_TYPE, *PDXGK_EVENT_TYPE;
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
 /* WDDM 1.2 surprise-removal notification type.  PnP notification support
