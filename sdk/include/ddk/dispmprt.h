@@ -230,51 +230,7 @@ typedef _In_ CONST PDEVICE_OBJECT      IN_CONST_PDEVICE_OBJECT;
 #define DXGK_EXCLUDE_D3_STATE_TRANSITION  0x00000040
 #define DXGK_EXCLUDE_EVICT_DFX_STANDBY    0x00000080
 
-/* =========================================================================
- * GPU interrupt type constants
- *
- * These #define macros are integer values that match the corresponding
- * DXGK_INTERRUPT_TYPE enum members in d3dkmddi.h.  Legacy code and
- * dxgkrnl's interrupt dispatch path use the integer form.
- * =========================================================================
- */
-#define DXGK_INTERRUPT_DMA_COMPLETED                        1
-#define DXGK_INTERRUPT_DMA_PREEMPTED                        2
-#define DXGK_INTERRUPT_CRTC_VSYNC                           3
-#define DXGK_INTERRUPT_DMA_FAULTED                          4
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
-#define DXGK_INTERRUPT_DISPLAYONLY_VSYNC                    5
-#define DXGK_INTERRUPT_DISPLAYONLY_PRESENT_PROGRESS         6
-#define DXGK_INTERRUPT_CRTC_VSYNC_WITH_MULTIPLANE_OVERLAY   7
-#endif
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM1_3)
-#define DXGK_INTERRUPT_MICACAST_CHUNK_PROCESSING_COMPLETE   8
-#endif
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
-#define DXGK_INTERRUPT_DMA_PAGE_FAULTED                     9
-#endif
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_1)
-#define DXGK_INTERRUPT_CRTC_VSYNC_WITH_MULTIPLANE_OVERLAY2 10
-#endif
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
-#define DXGK_INTERRUPT_MONITORED_FENCE_SIGNALED             11
-#define DXGK_INTERRUPT_HWQUEUE_PAGE_FAULTED                 12
-#define DXGK_INTERRUPT_HWCONTEXTLIST_SWITCH_COMPLETED       13
-#define DXGK_INTERRUPT_PERIODIC_MONITORED_FENCE_SIGNALED    14
-#define DXGK_INTERRUPT_PERIODICED_MONITORED_FENCE_SIGNALED  DXGK_INTERRUPT_PERIODIC_MONITORED_FENCE_SIGNALED
-#endif
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
-#define DXGK_INTERRUPT_SCHEDULING_LOG_INTERRUPT             15
-#define DXGK_INTERRUPT_GPU_ENGINE_TIMEOUT                   16
-#define DXGK_INTERRUPT_SUSPEND_CONTEXT_COMPLETED            17
-#endif
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
-#define DXGK_INTERRUPT_CRTC_VSYNC_WITH_MULTIPLANE_OVERLAY3  18
-#endif
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
-#define DXGK_INTERRUPT_NATIVE_FENCE_SIGNALED                19
-#define DXGK_INTERRUPT_GPU_ENGINE_STATE_CHANGE              20
-#endif
+/* DXGK_INTERRUPT_TYPE and its typed enumerators are declared by d3dkmddi.h. */
 
 
 /* =========================================================================
