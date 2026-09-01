@@ -95,6 +95,28 @@ _CRT_RESTORE_GCC_WARNINGS
     _In_reads_bytes_(_MaxCount) const void *_Src,
     _In_ size_t _MaxCount);
 
+#if __STDC_WANT_SECURE_LIB__
+  _Check_return_wat_
+  _CRTIMP
+  errno_t
+  __cdecl
+  memcpy_s(
+    _Out_writes_bytes_to_opt_(_DstSize, _MaxCount) void *_Dst,
+    _In_ size_t _DstSize,
+    _In_reads_bytes_opt_(_MaxCount) const void *_Src,
+    _In_ size_t _MaxCount);
+
+  _Check_return_wat_
+  _CRTIMP
+  errno_t
+  __cdecl
+  memmove_s(
+    _Out_writes_bytes_to_opt_(_DstSize, _MaxCount) void *_Dst,
+    _In_ size_t _DstSize,
+    _In_reads_bytes_opt_(_MaxCount) const void *_Src,
+    _In_ size_t _MaxCount);
+#endif
+
   _Post_equal_to_(_Dst)
   _At_buffer_((unsigned char*)_Dst,
               _Iter_,
@@ -174,6 +196,17 @@ _CRT_RESTORE_GCC_WARNINGS
   strnlen(
     _In_reads_or_z_(_MaxCount) const char *_Str,
     _In_ size_t _MaxCount);
+
+#if __STDC_WANT_SECURE_LIB__ && !defined(__midl)
+  _Check_return_
+  static __inline size_t __cdecl
+  strnlen_s(
+    _In_reads_or_z_(_MaxCount) const char *_Str,
+    _In_ size_t _MaxCount)
+  {
+    return _Str == NULL ? 0 : strnlen(_Str, _MaxCount);
+  }
+#endif
 
   _CRT_INSECURE_DEPRECATE_MEMORY(memmove_s)
   void*

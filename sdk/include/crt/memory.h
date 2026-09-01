@@ -79,6 +79,28 @@ extern "C" {
     _In_reads_bytes_(_MaxCount) const void *_Src,
     _In_ size_t _MaxCount);
 
+#if __STDC_WANT_SECURE_LIB__
+  _Check_return_wat_
+  _CRTIMP
+  errno_t
+  __cdecl
+  memcpy_s(
+    _Out_writes_bytes_to_opt_(_DstSize, _MaxCount) void *_Dst,
+    _In_ size_t _DstSize,
+    _In_reads_bytes_opt_(_MaxCount) const void *_Src,
+    _In_ size_t _MaxCount);
+
+  _Check_return_wat_
+  _CRTIMP
+  errno_t
+  __cdecl
+  memmove_s(
+    _Out_writes_bytes_to_opt_(_DstSize, _MaxCount) void *_Dst,
+    _In_ size_t _DstSize,
+    _In_reads_bytes_opt_(_MaxCount) const void *_Src,
+    _In_ size_t _MaxCount);
+#endif
+
   _Post_equal_to_(_Dst)
   _At_buffer_((unsigned char*)_Dst,
               _Iter_,
