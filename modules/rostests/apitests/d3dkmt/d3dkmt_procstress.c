@@ -102,7 +102,7 @@ static BOOL ProcStressSpawn(HANDLE *OutProcess)
     *OutProcess = NULL;
     if (!GetModuleFileNameW(NULL, Path, ARRAYSIZE(Path)))
         return FALSE;
-    _snwprintf(Command, ARRAYSIZE(Command), L"\"%s\" %S", Path, PROCSTRESS_CHILD_ARG);
+    _snwprintf(Command, ARRAYSIZE(Command), L"\"%s\" procstress %S", Path, PROCSTRESS_CHILD_ARG);
 
     memset(&si, 0, sizeof(si));
     si.cb = sizeof(si);
