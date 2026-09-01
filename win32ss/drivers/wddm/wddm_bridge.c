@@ -515,6 +515,7 @@ WddmBridgeInit(VOID)
             DxgkEngCompleteRedirectedBltPresent;
         CddInterface.CancelRedirectedBltPresent =
             DxgkEngCancelRedirectedBltPresent;
+        CddInterface.DispatchNtGdi = DxgkEngDispatchNtGdiDdDDI;
         Status = WddmBridgeSendIoctlToDevice(
                      DeviceObject,
                      IOCTL_DXGKRNL_REGISTER_WIN32K_CDD_INTERFACE,

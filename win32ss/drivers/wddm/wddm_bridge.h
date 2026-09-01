@@ -18,6 +18,16 @@ BOOLEAN  WddmBridgeIsReady(VOID);
 ULONG    WddmBridgeGetInterfaceVersion(VOID);
 NTSTATUS WddmBridgeGetInterface(_Out_ PREACTOS_WIN32K_DXGKRNL_INTERFACE Interface);
 
+ULONG_PTR
+NTAPI
+DxgkEngDispatchNtGdiDdDDI(
+    _In_ ULONG NativeOrdinal,
+    _In_ ULONG_PTR Argument0,
+    _In_ ULONG_PTR Argument1,
+    _In_ ULONG_PTR Argument2,
+    _In_ ULONG_PTR Argument3,
+    _In_ ULONG_PTR Argument4);
+
 /* Kernel-to-kernel IOCTL helper */
 NTSTATUS
 WddmBridgeSendIoctl(

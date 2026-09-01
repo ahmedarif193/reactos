@@ -9,6 +9,7 @@
 #include "drivers/wddm/wddm_bridge.h"
 #include <reactos/rddm/rxgkinterface.h>
 #include <reactos/rddm/rxgkioctl.h>
+#include <reactos/rddm/rxgkntgdi.h>
 #include <debug.h>
 
 #define IOCTL_RXGK_OPENADAPTERFROMDEVICENAME CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x112, METHOD_BUFFERED, FILE_ANY_ACCESS)
@@ -2458,4 +2459,37 @@ NtGdiDdDDIShareObjects(_In_ UINT cObjects,
         return STATUS_INVALID_PARAMETER;
 
     return STATUS_NOT_IMPLEMENTED;
+}
+
+ULONG_PTR
+NTAPI
+DxgkEngDispatchNtGdiDdDDI(
+    _In_ ULONG NativeOrdinal,
+    _In_ ULONG_PTR Argument0,
+    _In_ ULONG_PTR Argument1,
+    _In_ ULONG_PTR Argument2,
+    _In_ ULONG_PTR Argument3,
+    _In_ ULONG_PTR Argument4)
+{
+    switch (NativeOrdinal)
+    {
+#define RXGK_DISPATCH_NTGDI_0(Ordinal, Name) \
+        case Ordinal: return (ULONG_PTR)NtGdiDdDDI##Name();
+        RXGK_NTGDI_EXPORTS_0(RXGK_DISPATCH_NTGDI_0)
+#undef RXGK_DISPATCH_NTGDI_0
+
+#define RXGK_DISPATCH_NTGDI_1(Ordinal, Name) \
+        case Ordinal: return (ULONG_PTR)NtGdiDdDDI##Name((PVOID)Argument0);
+        RXGK_NTGDI_EXPORTS_1(RXGK_DISPATCH_NTGDI_1)
+#undef RXGK_DISPATCH_NTGDI_1
+
+        case 183:
+            return (ULONG_PTR)NtGdiDdDDIGetProcessSchedulingPriorityClass((HANDLE)Argument0, (D3DKMT_SCHEDULINGPRIORITYCLASS *)Argument1);
+        case 267:
+            return (ULONG_PTR)NtGdiDdDDISetProcessSchedulingPriorityClass((HANDLE)Argument0, (D3DKMT_SCHEDULINGPRIORITYCLASS)Argument1);
+        case 275:
+            return (ULONG_PTR)NtGdiDdDDIShareObjects((UINT)Argument0, (const D3DKMT_HANDLE *)Argument1, (PVOID)Argument2, (DWORD)Argument3, (HANDLE *)Argument4);
+        default:
+            return (ULONG_PTR)STATUS_PROCEDURE_NOT_FOUND;
+    }
 }

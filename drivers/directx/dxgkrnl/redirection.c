@@ -73,6 +73,12 @@ DxgkRegisterWin32kCddInterface(
     else if (Interface->Version ==
              DXGKRNL_WIN32K_CDD_INTERFACE_VERSION_3)
     {
+        RequiredSize = FIELD_OFFSET(DXGKRNL_WIN32K_CDD_INTERFACE,
+                                    DispatchNtGdi);
+    }
+    else if (Interface->Version ==
+             DXGKRNL_WIN32K_CDD_INTERFACE_VERSION_4)
+    {
         RequiredSize = sizeof(*Interface);
     }
     else
@@ -90,6 +96,28 @@ DxgkRegisterWin32kCddInterface(
     ExfReleasePushLockExclusive(&DxgkpWin32kCddInterfaceLock);
     KeLeaveCriticalRegion();
     return STATUS_SUCCESS;
+}
+
+ULONG_PTR
+DxgkDispatchWin32kNtGdi(
+    _In_ ULONG NativeOrdinal,
+    _In_ ULONG_PTR Argument0,
+    _In_ ULONG_PTR Argument1,
+    _In_ ULONG_PTR Argument2,
+    _In_ ULONG_PTR Argument3,
+    _In_ ULONG_PTR Argument4)
+{
+    PDXGKENG_DISPATCH_NTGDI Callback;
+
+    KeEnterCriticalRegion();
+    ExfAcquirePushLockShared(&DxgkpWin32kCddInterfaceLock);
+    Callback = DxgkpWin32kCddInterface.DispatchNtGdi;
+    ExfReleasePushLockShared(&DxgkpWin32kCddInterfaceLock);
+    KeLeaveCriticalRegion();
+
+    if (Callback == NULL)
+        return (ULONG_PTR)STATUS_DEVICE_NOT_READY;
+    return Callback(NativeOrdinal, Argument0, Argument1, Argument2, Argument3, Argument4);
 }
 
 NTSTATUS
