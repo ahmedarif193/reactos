@@ -1,3 +1,10 @@
+/*
+ * PROJECT:     ReactOS NT Layer DLL
+ * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:     ARM64 Control Flow Guard check and dispatch targets
+ */
+
 #include <asm.h>
 
     .text
@@ -22,6 +29,10 @@ LdrpGuardCheckIcall:
     stp     x12, x13, [sp, #112]
     stp     x14, x15, [sp, #128]
     stp     x16, x17, [sp, #144]
+
+    /* Let the processor report a naturally misaligned branch target. */
+    tst     x15, #3
+    b.ne    1f
 
     mov     x0, x15
     bl      LdrpValidateUserCallTarget
