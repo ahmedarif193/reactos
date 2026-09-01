@@ -310,7 +310,7 @@ if(REACTOS_USE_WDDM)
             "REACTOS_WDDM_LEVEL must be 3.2; pre-WDDM 2 miniport contracts were removed")
     endif()
     set(REACTOS_WDDM_TARGET_LEVEL 3200)
-    set(REACTOS_WDDM_TARGET_INTERFACE_VERSION 0x11008)
+    set(REACTOS_WDDM_TARGET_INTERFACE_VERSION 0x11007)
     set(REACTOS_WDDM_TARGET_UMD_INTERFACE_VERSION 0x11000)
 
     # Runtime callbacks currently complete the WDDM 2.1 tail. This is an

@@ -12,7 +12,7 @@
  * of the OS-wide legacy default used by unrelated kmtests.
  */
 #undef DXGKDDI_INTERFACE_VERSION
-#define DXGKDDI_INTERFACE_VERSION 0x11008
+#define DXGKDDI_INTERFACE_VERSION 0x11007
 #include <dispmprt.h>
 #include "adapter_map_core.h"
 #include "adapter_start_core.h"
@@ -117,7 +117,7 @@ START_TEST(DxgkWddmAbi)
     ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM2_9, 0xE003);
     ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM3_0, 0xF003);
     ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM3_1, 0x10004);
-    ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM3_2, 0x11008);
+    ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM3_2, 0x11007);
 
     ok_eq_ulong(DXGKDDI_WDDMv2_4_ENUM, 0x2400);
     ok_eq_ulong(DXGKDDI_WDDMv2_5_ENUM, 0x2500);
@@ -197,8 +197,7 @@ START_TEST(DxgkWddmAbi)
 #endif
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
-    /* WDK 28000 changed the official selector from 0x11007 to 0x11008 but
-     * retained the WDDM 3.2 append-only initialization-table boundary. */
+    /* WDK 26100 defines the WDDM 3.2 selector as 0x11007. */
 #ifdef _WIN64
     ok_eq_ulong(FIELD_OFFSET(DRIVER_INITIALIZATION_DATA,
                              DxgkDdiResetDisplayEngine),
