@@ -59,6 +59,7 @@ list(APPEND SOURCE
     d3dkmt_privateioctl.c
     d3dkmt_fseblock.c
     d3dkmt_terminalstubs.c
+    d3dkmt_public27.c
     d3dkmt_cle.c
     d3dkmt_v3dsmoke.c
     d3dkmt_parity.c

@@ -654,6 +654,8 @@ WddmBridgeIsExpectedControlStatus(
 {
     if (Status == STATUS_DEVICE_BUSY || Status == STATUS_NOT_SUPPORTED)
         return TRUE;
+    if (IoControlCode == IOCTL_D3DKMT_PUBLIC_OPERATION && (Status == STATUS_INVALID_HANDLE || Status == STATUS_INVALID_PARAMETER || Status == STATUS_GRAPHICS_VAIL_STATE_CHANGED))
+        return TRUE;
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
     if (Status == STATUS_NOT_IMPLEMENTED &&
         (IoControlCode == IOCTL_D3DKMT_CREATEHWCONTEXT ||

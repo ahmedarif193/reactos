@@ -36,6 +36,9 @@
 
 C_ASSERT(sizeof(RXGK_CREATECONTEXTVIRTUAL_PACKET) == RXGK_CREATECONTEXTVIRTUAL_PACKET_V1_SIZE);
 C_ASSERT(sizeof(RXGK_SUBMITCOMMAND_PACKET) == RXGK_SUBMITCOMMAND_PACKET_V1_SIZE);
+C_ASSERT(sizeof(RXGK_PUBLIC_OPERATION_PACKET) == RXGK_PUBLIC_OPERATION_PACKET_V1_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_PUBLIC_OPERATION_PACKET, Pointer0) == 32);
+C_ASSERT(FIELD_OFFSET(RXGK_PUBLIC_OPERATION_PACKET, Value0) == 40);
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
 C_ASSERT(sizeof(RXGK_ISFEATUREENABLED_PACKET) == RXGK_ISFEATUREENABLED_PACKET_SIZE);
 #endif
@@ -308,6 +311,7 @@ DxgkpKmtIoctlMinimumConfiguredLevel(
         case IOCTL_D3DKMT_OPENADAPTERFROMHDC:
         case IOCTL_D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME:
         case IOCTL_D3DKMT_OPENADAPTERFROMDEVICENAME:
+        case IOCTL_D3DKMT_PUBLIC_OPERATION:
         case IOCTL_D3DKMT_CREATEDEVICE:
         case IOCTL_D3DKMT_DESTROYDEVICE:
         case IOCTL_D3DKMT_CREATEALLOCATION:
@@ -7900,6 +7904,131 @@ DxgkpValidateWddmPrivatePacket(
     return STATUS_SUCCESS;
 }
 
+static volatile LONG DxgkpHwProtectionTeardownRecovered;
+
+static NTSTATUS
+DxgkpReferencePublicOperationProcess(_In_ ULONGLONG HandleValue)
+{
+    PEPROCESS Process;
+    NTSTATUS Status;
+
+    Status = ObReferenceObjectByHandle((HANDLE)(ULONG_PTR)HandleValue, PROCESS_QUERY_INFORMATION, *PsProcessType, UserMode, (PVOID *)&Process, NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    ObDereferenceObject(Process);
+    return STATUS_NOT_SUPPORTED;
+}
+
+static NTSTATUS
+DxgkpReferencePublicOperationNtObject(_In_ ULONGLONG HandleValue)
+{
+    PVOID Object;
+    NTSTATUS Status;
+
+    Status = ObReferenceObjectByHandle((HANDLE)(ULONG_PTR)HandleValue, 0, NULL, UserMode, &Object, NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    ObDereferenceObject(Object);
+    return STATUS_NOT_SUPPORTED;
+}
+
+static NTSTATUS
+DxgkpDispatchPublicOperation(_Inout_ PRXGK_PUBLIC_OPERATION_PACKET Packet)
+{
+    PDXGKRNL_ADAPTER Adapter;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+    DXGKARG_GETPOSTCOMPOSITIONCAPS Caps;
+#endif
+    NTSTATUS Status;
+
+    if (Packet == NULL || Packet->Size != sizeof(*Packet) || Packet->Version != RXGK_WDDM_PACKET_VERSION_1 || Packet->Reserved != 0 || Packet->Operation < RxgkPublicAdjustFullscreenGamma || Packet->Operation > RxgkPublicRegisterVailProcess)
+        return STATUS_INVALID_PARAMETER;
+
+    switch ((RXGK_PUBLIC_OPERATION)Packet->Operation)
+    {
+        case RxgkPublicSetHwProtectionTeardownRecovery:
+            InterlockedExchange(&DxgkpHwProtectionTeardownRecovered, (Packet->Flags & 1U) != 0);
+            return STATUS_SUCCESS;
+
+        case RxgkPublicRegisterVailProcess:
+            return STATUS_GRAPHICS_VAIL_STATE_CHANGED;
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+        case RxgkPublicGetPostCompositionCaps:
+            Status = DxgkpValidateAdapterVidPnSourceForIoctl(Packet->Handle0, Packet->Handle1, &Adapter);
+            if (!NT_SUCCESS(Status))
+                return Status;
+            if (!DxgkCapsCoreInterfaceVersionAtLeast(Adapter->MiniportContext->InitData.s.Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_2) || DXGK_CB_FULL(Adapter, DxgkDdiGetPostCompositionCaps) == NULL)
+            {
+                DxgkDereferenceAdapter(Adapter);
+                return STATUS_NOT_SUPPORTED;
+            }
+            RtlZeroMemory(&Caps, sizeof(Caps));
+            Caps.VidPnSourceId = Packet->Handle1;
+            if (!DxgkBeginKmdTransaction(Adapter))
+            {
+                DxgkDereferenceAdapter(Adapter);
+                return STATUS_DELETE_PENDING;
+            }
+            Status = DXGK_CB_FULL(Adapter, DxgkDdiGetPostCompositionCaps)(Adapter->MiniportDeviceContext, &Caps);
+            DxgkEndKmdTransaction(Adapter);
+            if (NT_SUCCESS(Status))
+                RtlCopyMemory(&Packet->Value0, &Caps.MaxStretchFactor, 2 * sizeof(float));
+            DxgkDereferenceAdapter(Adapter);
+            return Status;
+#endif
+
+        case RxgkPublicAdjustFullscreenGamma:
+        case RxgkPublicSetVidPnSourceHwProtection:
+            Status = DxgkpValidateAdapterVidPnSourceForIoctl(Packet->Handle0, Packet->Handle1, NULL);
+            return NT_SUCCESS(Status) ? STATUS_NOT_SUPPORTED : Status;
+
+        case RxgkPublicFlushHeapTransitions:
+            Status = DxgkReferenceAdapterByHandle(Packet->Handle0, PsGetCurrentProcess(), &Adapter);
+            if (!NT_SUCCESS(Status))
+                return Status;
+            DxgkDereferenceAdapter(Adapter);
+            return STATUS_NOT_SUPPORTED;
+
+        case RxgkPublicConfigureSharedResource:
+        case RxgkPublicCreateProtectedSession:
+        case RxgkPublicCreateNativeFence:
+        case RxgkPublicOpenNativeFenceFromNtHandle:
+        case RxgkPublicMarkDeviceAsError:
+        case RxgkPublicPresentRedirected:
+            Status = DxgkpValidateDeviceHandleForIoctl(Packet->Handle0, NULL, NULL);
+            return NT_SUCCESS(Status) ? STATUS_NOT_SUPPORTED : Status;
+
+        case RxgkPublicConnectDoorbell:
+        case RxgkPublicCreateDoorbell:
+        case RxgkPublicDestroyDoorbell:
+        case RxgkPublicGetNativeFenceLogDetail:
+        case RxgkPublicNotifyWorkSubmission:
+        case RxgkPublicOutputDuplPresentToHwQueue:
+            return STATUS_INVALID_PARAMETER;
+
+        case RxgkPublicGetProcessDeviceRemovalSupport:
+        case RxgkPublicQueryProcessOfferInfo:
+        case RxgkPublicTrimProcessCommitment:
+            return DxgkpReferencePublicOperationProcess(Packet->Pointer0);
+
+        case RxgkPublicOpenKeyedMutexFromNtHandle:
+        case RxgkPublicOpenProtectedSessionFromNtHandle:
+        case RxgkPublicQueryProtectedSessionInfoFromNtHandle:
+            return DxgkpReferencePublicOperationNtObject(Packet->Pointer0);
+
+        case RxgkPublicDestroyProtectedSession:
+        case RxgkPublicQueryProtectedSessionStatus:
+            return STATUS_INVALID_PARAMETER;
+
+        case RxgkPublicQueryRemoteVidPnSourceFromGdiDisplayName:
+            return STATUS_NOT_SUPPORTED;
+
+        default:
+            return STATUS_NOT_SUPPORTED;
+    }
+}
+
 /* ========================================================================
  * DxgkpDispatchBufferedIoctl
  *
@@ -8033,6 +8162,18 @@ DxgkpDispatchBufferedIoctl(
             return Stack->MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL ? STATUS_NOT_SUPPORTED : STATUS_ACCESS_DENIED;
         }
 #endif
+
+        case IOCTL_D3DKMT_PUBLIC_OPERATION:
+        {
+            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL)
+                return STATUS_ACCESS_DENIED;
+            if (InputLength < sizeof(RXGK_PUBLIC_OPERATION_PACKET) || OutputLength < sizeof(RXGK_PUBLIC_OPERATION_PACKET) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            Status = DxgkpDispatchPublicOperation((PRXGK_PUBLIC_OPERATION_PACKET)SystemBuffer);
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = sizeof(RXGK_PUBLIC_OPERATION_PACKET);
+            return Status;
+        }
 
         case IOCTL_D3DKMT_GETDISPLAYMODELIST:
         {
@@ -10871,6 +11012,7 @@ DxgkDispatchDeviceControl(
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2300)
         case IOCTL_D3DKMT_SETMONITORCOLORSPACETRANSFORM:
 #endif
+        case IOCTL_D3DKMT_PUBLIC_OPERATION:
         case IOCTL_D3DKMT_SETVIDPNSOURCEOWNER:
         case IOCTL_D3DKMT_GETDEVICESTATE:
         case IOCTL_DXGKRNL_PREPAREMAPGPUVIRTUALADDRESS:

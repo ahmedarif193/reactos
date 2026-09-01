@@ -242,6 +242,33 @@ NTSTATUS APIENTRY D3DKMTQueryFSEBlock(_Inout_ struct _D3DKMT_QUERYFSEBLOCK *pDat
 NTSTATUS APIENTRY D3DKMTCreateHwContext(_Inout_ struct _D3DKMT_CREATEHWCONTEXT *pData);
 NTSTATUS APIENTRY D3DKMTDestroyHwContext(_In_ CONST struct _D3DKMT_DESTROYHWCONTEXT *pData);
 NTSTATUS APIENTRY D3DKMTSetMonitorColorSpaceTransform(_In_ struct _D3DKMT_SET_COLORSPACE_TRANSFORM *pData);
+NTSTATUS APIENTRY D3DKMTAdjustFullscreenGamma(_In_ D3DKMT_ADJUSTFULLSCREENGAMMA *pData);
+NTSTATUS APIENTRY D3DKMTConfigureSharedResource(_In_ const D3DKMT_CONFIGURESHAREDRESOURCE *pData);
+NTSTATUS APIENTRY D3DKMTCreateProtectedSession(_Inout_ D3DKMT_CREATEPROTECTEDSESSION *pData);
+NTSTATUS APIENTRY D3DKMTDestroyProtectedSession(_Inout_ D3DKMT_DESTROYPROTECTEDSESSION *pData);
+NTSTATUS APIENTRY D3DKMTFlushHeapTransitions(_In_ D3DKMT_FLUSHHEAPTRANSITIONS *pData);
+NTSTATUS APIENTRY D3DKMTGetPostCompositionCaps(_Inout_ D3DKMT_GET_POST_COMPOSITION_CAPS *pData);
+NTSTATUS APIENTRY D3DKMTGetProcessDeviceRemovalSupport(_Inout_ D3DKMT_GETPROCESSDEVICEREMOVALSUPPORT *pData);
+NTSTATUS APIENTRY D3DKMTMarkDeviceAsError(_In_ D3DKMT_MARKDEVICEASERROR *pData);
+NTSTATUS APIENTRY D3DKMTOpenKeyedMutexFromNtHandle(_Inout_ D3DKMT_OPENKEYEDMUTEXFROMNTHANDLE *pData);
+NTSTATUS APIENTRY D3DKMTOpenProtectedSessionFromNtHandle(_Inout_ D3DKMT_OPENPROTECTEDSESSIONFROMNTHANDLE *pData);
+NTSTATUS APIENTRY D3DKMTPresentRedirected(_In_ D3DKMT_PRESENT_REDIRECTED *pData);
+NTSTATUS APIENTRY D3DKMTQueryProcessOfferInfo(_Inout_ D3DKMT_QUERYPROCESSOFFERINFO *pData);
+NTSTATUS APIENTRY D3DKMTQueryProtectedSessionInfoFromNtHandle(_Inout_ D3DKMT_QUERYPROTECTEDSESSIONINFOFROMNTHANDLE *pData);
+NTSTATUS APIENTRY D3DKMTQueryProtectedSessionStatus(_Inout_ D3DKMT_QUERYPROTECTEDSESSIONSTATUS *pData);
+NTSTATUS APIENTRY D3DKMTQueryRemoteVidPnSourceFromGdiDisplayName(_Inout_ D3DKMT_QUERYREMOTEVIDPNSOURCEFROMGDIDISPLAYNAME *pData);
+NTSTATUS APIENTRY D3DKMTSetHwProtectionTeardownRecovery(_In_ D3DKMT_SETHWPROTECTIONTEARDOWNRECOVERY *pData);
+NTSTATUS APIENTRY D3DKMTSetVidPnSourceHwProtection(_In_ D3DKMT_SETVIDPNSOURCEHWPROTECTION *pData);
+NTSTATUS APIENTRY D3DKMTTrimProcessCommitment(_Inout_ D3DKMT_TRIMPROCESSCOMMITMENT *pData);
+NTSTATUS APIENTRY D3DKMTConnectDoorbell(_In_ D3DKMT_CONNECT_DOORBELL *pData);
+NTSTATUS APIENTRY D3DKMTCreateDoorbell(_In_ D3DKMT_CREATE_DOORBELL *pData);
+NTSTATUS APIENTRY D3DKMTCreateNativeFence(_Inout_ D3DKMT_CREATENATIVEFENCE *pData);
+NTSTATUS APIENTRY D3DKMTDestroyDoorbell(_In_ D3DKMT_DESTROY_DOORBELL *pData);
+NTSTATUS APIENTRY D3DKMTGetNativeFenceLogDetail(_Inout_ D3DKMT_GETNATIVEFENCELOGDETAIL *pData);
+NTSTATUS APIENTRY D3DKMTNotifyWorkSubmission(_In_ D3DKMT_NOTIFY_WORK_SUBMISSION *pData);
+NTSTATUS APIENTRY D3DKMTOpenNativeFenceFromNtHandle(_Inout_ D3DKMT_OPENNATIVEFENCEFROMNTHANDLE *pData);
+NTSTATUS APIENTRY D3DKMTOutputDuplPresentToHwQueue(_In_ const D3DKMT_OUTPUTDUPLPRESENTTOHWQUEUE *pData);
+NTSTATUS APIENTRY D3DKMTRegisterVailProcess(_In_ GUID *Guid);
 NTSTATUS APIENTRY D3DKMTCreateKeyedMutex2(_Inout_ struct _D3DKMT_CREATEKEYEDMUTEX2 *pData);
 NTSTATUS APIENTRY D3DKMTOpenKeyedMutex(_Inout_ D3DKMT_OPENKEYEDMUTEX *pData);
 NTSTATUS APIENTRY D3DKMTOpenKeyedMutex2(_Inout_ struct _D3DKMT_OPENKEYEDMUTEX2 *pData);
@@ -1187,8 +1214,7 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIConfigureSharedResource(_In_ const D3DKMT_CONFIGURESHAREDRESOURCE* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    return D3DKMTConfigureSharedResource(unnamedParam1);
 }
 
 NTSTATUS
@@ -2228,6 +2254,188 @@ APIENTRY
 NtGdiDdDDISetMonitorColorSpaceTransform(_In_ struct _D3DKMT_SET_COLORSPACE_TRANSFORM* unnamedParam1)
 {
     return D3DKMTSetMonitorColorSpaceTransform(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDIAdjustFullscreenGamma(_In_ D3DKMT_ADJUSTFULLSCREENGAMMA *unnamedParam1)
+{
+    return D3DKMTAdjustFullscreenGamma(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDICreateProtectedSession(_Inout_ D3DKMT_CREATEPROTECTEDSESSION *unnamedParam1)
+{
+    return D3DKMTCreateProtectedSession(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDIDestroyProtectedSession(_Inout_ D3DKMT_DESTROYPROTECTEDSESSION *unnamedParam1)
+{
+    return D3DKMTDestroyProtectedSession(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDIFlushHeapTransitions(_In_ D3DKMT_FLUSHHEAPTRANSITIONS *unnamedParam1)
+{
+    return D3DKMTFlushHeapTransitions(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDIGetPostCompositionCaps(_Inout_ D3DKMT_GET_POST_COMPOSITION_CAPS *unnamedParam1)
+{
+    return D3DKMTGetPostCompositionCaps(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDIGetProcessDeviceRemovalSupport(_Inout_ D3DKMT_GETPROCESSDEVICEREMOVALSUPPORT *unnamedParam1)
+{
+    return D3DKMTGetProcessDeviceRemovalSupport(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDIMarkDeviceAsError(_In_ D3DKMT_MARKDEVICEASERROR *unnamedParam1)
+{
+    return D3DKMTMarkDeviceAsError(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDIOpenKeyedMutexFromNtHandle(_Inout_ D3DKMT_OPENKEYEDMUTEXFROMNTHANDLE *unnamedParam1)
+{
+    return D3DKMTOpenKeyedMutexFromNtHandle(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDIOpenProtectedSessionFromNtHandle(_Inout_ D3DKMT_OPENPROTECTEDSESSIONFROMNTHANDLE *unnamedParam1)
+{
+    return D3DKMTOpenProtectedSessionFromNtHandle(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDIPresentRedirected(_In_ D3DKMT_PRESENT_REDIRECTED *unnamedParam1)
+{
+    return D3DKMTPresentRedirected(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDIQueryProcessOfferInfo(_Inout_ D3DKMT_QUERYPROCESSOFFERINFO *unnamedParam1)
+{
+    return D3DKMTQueryProcessOfferInfo(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDIQueryProtectedSessionInfoFromNtHandle(_Inout_ D3DKMT_QUERYPROTECTEDSESSIONINFOFROMNTHANDLE *unnamedParam1)
+{
+    return D3DKMTQueryProtectedSessionInfoFromNtHandle(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDIQueryProtectedSessionStatus(_Inout_ D3DKMT_QUERYPROTECTEDSESSIONSTATUS *unnamedParam1)
+{
+    return D3DKMTQueryProtectedSessionStatus(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDIQueryRemoteVidPnSourceFromGdiDisplayName(_Inout_ D3DKMT_QUERYREMOTEVIDPNSOURCEFROMGDIDISPLAYNAME *unnamedParam1)
+{
+    return D3DKMTQueryRemoteVidPnSourceFromGdiDisplayName(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDISetHwProtectionTeardownRecovery(_In_ D3DKMT_SETHWPROTECTIONTEARDOWNRECOVERY *unnamedParam1)
+{
+    return D3DKMTSetHwProtectionTeardownRecovery(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDISetVidPnSourceHwProtection(_In_ D3DKMT_SETVIDPNSOURCEHWPROTECTION *unnamedParam1)
+{
+    return D3DKMTSetVidPnSourceHwProtection(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDITrimProcessCommitment(_Inout_ D3DKMT_TRIMPROCESSCOMMITMENT *unnamedParam1)
+{
+    return D3DKMTTrimProcessCommitment(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDIConnectDoorbell(_In_ D3DKMT_CONNECT_DOORBELL *unnamedParam1)
+{
+    return D3DKMTConnectDoorbell(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDICreateDoorbell(_In_ D3DKMT_CREATE_DOORBELL *unnamedParam1)
+{
+    return D3DKMTCreateDoorbell(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDICreateNativeFence(_Inout_ D3DKMT_CREATENATIVEFENCE *unnamedParam1)
+{
+    return D3DKMTCreateNativeFence(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDIDestroyDoorbell(_In_ D3DKMT_DESTROY_DOORBELL *unnamedParam1)
+{
+    return D3DKMTDestroyDoorbell(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDIGetNativeFenceLogDetail(_Inout_ D3DKMT_GETNATIVEFENCELOGDETAIL *unnamedParam1)
+{
+    return D3DKMTGetNativeFenceLogDetail(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDINotifyWorkSubmission(_In_ D3DKMT_NOTIFY_WORK_SUBMISSION *unnamedParam1)
+{
+    return D3DKMTNotifyWorkSubmission(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDIOpenNativeFenceFromNtHandle(_Inout_ D3DKMT_OPENNATIVEFENCEFROMNTHANDLE *unnamedParam1)
+{
+    return D3DKMTOpenNativeFenceFromNtHandle(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDIOutputDuplPresentToHwQueue(_In_ const D3DKMT_OUTPUTDUPLPRESENTTOHWQUEUE *unnamedParam1)
+{
+    return D3DKMTOutputDuplPresentToHwQueue(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDIRegisterVailProcess(_In_ GUID *unnamedParam1)
+{
+    return D3DKMTRegisterVailProcess(unnamedParam1);
 }
 
 /*
