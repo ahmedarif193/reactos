@@ -31,6 +31,7 @@
 #include <windef.h>
 #include <d3dkmthk.h>
 #include <reactos/rddm/rxgkinterface.h>
+#include <reactos/rddm/rxgkioctl.h>
 #include "wddm_bridge.h"
 #define NDEBUG
 #include <debug.h>
@@ -646,6 +647,26 @@ WddmBridgeSendIoctlWithInformation(
     return Status;
 }
 
+static BOOLEAN
+WddmBridgeIsExpectedControlStatus(
+    _In_ ULONG IoControlCode,
+    _In_ NTSTATUS Status)
+{
+    if (Status == STATUS_DEVICE_BUSY || Status == STATUS_NOT_SUPPORTED)
+        return TRUE;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+    if (Status == STATUS_NOT_IMPLEMENTED &&
+        (IoControlCode == IOCTL_D3DKMT_CREATEHWCONTEXT ||
+         IoControlCode == IOCTL_D3DKMT_DESTROYHWCONTEXT))
+    {
+        return TRUE;
+    }
+#else
+    UNREFERENCED_PARAMETER(IoControlCode);
+#endif
+    return FALSE;
+}
+
 static NTSTATUS
 WddmBridgeSendIoctlToDevice(
     _In_ PDEVICE_OBJECT DeviceObject,
@@ -721,10 +742,9 @@ WddmBridgeSendIoctlToDevice(
     if (Information != NULL)
         *Information = IoStatus.Information;
 
-    /* STATUS_DEVICE_BUSY is queue backpressure and STATUS_NOT_SUPPORTED is
-     * the documented result for unavailable public D3DKMT contracts.  Both
-     * are expected control flow; keep diagnostics for other failures. */
-    if (!NT_SUCCESS(Status) && Status != STATUS_DEVICE_BUSY && Status != STATUS_NOT_SUPPORTED)
+    /* Queue backpressure and verified terminal public contracts are expected
+     * control flow; keep diagnostics for other failures. */
+    if (!NT_SUCCESS(Status) && !WddmBridgeIsExpectedControlStatus(IoControlCode, Status))
     {
         DPRINT1("WddmBridgeSendIoctl: IOCTL 0x%08lX failed with 0x%08lX\n",
                 IoControlCode, Status);

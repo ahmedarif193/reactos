@@ -861,5 +861,8 @@
     SVC_(GdiDdDDISubmitPresentToHwQueue, 1)
     SVC_(GdiDdDDISetFSEBlock, 1)
     SVC_(GdiDdDDIQueryFSEBlock, 1)
+    SVC_(GdiDdDDICreateHwContext, 1)
+    SVC_(GdiDdDDIDestroyHwContext, 1)
+    SVC_(GdiDdDDISetMonitorColorSpaceTransform, 1)
     SVC_(UserAddClipboardFormatListener, 1)
     SVC_(UserRemoveClipboardFormatListener, 1)
