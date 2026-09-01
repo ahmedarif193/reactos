@@ -143,6 +143,9 @@ C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS3_PACKET, Reserved) == 28);
 C_ASSERT(FIELD_OFFSET(RXGK_RECLAIMALLOCATIONS3_PACKET, PagingFenceValue) == 32);
 #endif
 C_ASSERT(sizeof(BOOL) == sizeof(ULONG));
+C_ASSERT(sizeof(RXGK_PUBLIC_OPERATION_PACKET) == RXGK_PUBLIC_OPERATION_PACKET_V1_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_PUBLIC_OPERATION_PACKET, Pointer0) == 32);
+C_ASSERT(FIELD_OFFSET(RXGK_PUBLIC_OPERATION_PACKET, Value0) == 40);
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3200) && \
     (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
 C_ASSERT(sizeof(DXGK_ISFEATUREENABLED_RESULT) == 4);
@@ -5301,5 +5304,500 @@ D3DKMTSetMonitorColorSpaceTransform(_In_ struct _D3DKMT_SET_COLORSPACE_TRANSFORM
     return WddmBridgeSendIoctl(IOCTL_D3DKMT_SETMONITORCOLORSPACETRANSFORM, NULL, 0, NULL, 0);
 #endif
 }
+
+static NTSTATUS
+D3dkmtSendPublicOperation(_In_ RXGK_PUBLIC_OPERATION Operation, _In_ ULONG Handle0, _In_ ULONG Handle1, _In_ ULONG Flags, _In_ ULONG DataSize, _In_ ULONGLONG Pointer0, _In_ ULONGLONG Value0, _Out_opt_ PRXGK_PUBLIC_OPERATION_PACKET Result)
+{
+    RXGK_PUBLIC_OPERATION_PACKET Packet;
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+
+    RtlZeroMemory(&Packet, sizeof(Packet));
+    Packet.Size = sizeof(Packet);
+    Packet.Version = RXGK_WDDM_PACKET_VERSION_1;
+    Packet.Operation = Operation;
+    Packet.Handle0 = Handle0;
+    Packet.Handle1 = Handle1;
+    Packet.Flags = Flags;
+    Packet.DataSize = DataSize;
+    Packet.Pointer0 = Pointer0;
+    Packet.Value0 = Value0;
+    Status = WddmBridgeSendIoctlWithInformation(IOCTL_D3DKMT_PUBLIC_OPERATION, &Packet, sizeof(Packet), &Packet, sizeof(Packet), &Information);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Information != sizeof(Packet))
+        return STATUS_INFO_LENGTH_MISMATCH;
+    if (Result != NULL)
+        *Result = Packet;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTConfigureSharedResource(_In_ const D3DKMT_CONFIGURESHAREDRESOURCE *pData)
+{
+    D3DKMT_CONFIGURESHAREDRESOURCE Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.hDevice == 0 || Captured.hResource == 0 || Captured.IsDwm > TRUE || Captured.AllowAccess > TRUE || (!Captured.IsDwm && Captured.hProcess == NULL))
+        return STATUS_INVALID_PARAMETER;
+    return D3dkmtSendPublicOperation(RxgkPublicConfigureSharedResource, Captured.hDevice, Captured.hResource, (Captured.IsDwm ? 1U : 0U) | (Captured.AllowAccess ? 2U : 0U), 0, (ULONGLONG)(ULONG_PTR)Captured.hProcess, 0, NULL);
+}
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+
+NTSTATUS
+APIENTRY
+D3DKMTAdjustFullscreenGamma(_In_ D3DKMT_ADJUSTFULLSCREENGAMMA *pData)
+{
+    D3DKMT_ADJUSTFULLSCREENGAMMA Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.hAdapter == 0)
+        return STATUS_INVALID_PARAMETER;
+    return D3dkmtSendPublicOperation(RxgkPublicAdjustFullscreenGamma, Captured.hAdapter, Captured.VidPnSourceId, 0, 0, 0, 0, NULL);
+}
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2300)
+
+NTSTATUS
+APIENTRY
+D3DKMTCreateProtectedSession(_Inout_ D3DKMT_CREATEPROTECTEDSESSION *pData)
+{
+    D3DKMT_CREATEPROTECTEDSESSION Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.hDevice == 0 || Captured.hSyncObject == 0 || Captured.PrivateDriverDataSize > D3DKMT_BRIDGE_MAX_PRIVATE_BYTES || Captured.PrivateRuntimeDataSize > D3DKMT_BRIDGE_MAX_PRIVATE_BYTES || (Captured.PrivateDriverDataSize != 0 && Captured.pPrivateDriverData == NULL) || (Captured.PrivateRuntimeDataSize != 0 && Captured.pPrivateRuntimeData == NULL))
+        return STATUS_INVALID_PARAMETER;
+    return D3dkmtSendPublicOperation(RxgkPublicCreateProtectedSession, Captured.hDevice, Captured.hSyncObject, 0, Captured.PrivateDriverDataSize, (ULONGLONG)(ULONG_PTR)Captured.pPrivateDriverData, Captured.PrivateRuntimeDataSize, NULL);
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTDestroyProtectedSession(_Inout_ D3DKMT_DESTROYPROTECTEDSESSION *pData)
+{
+    D3DKMT_DESTROYPROTECTEDSESSION Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.hHandle == 0)
+        return STATUS_INVALID_PARAMETER;
+    return D3dkmtSendPublicOperation(RxgkPublicDestroyProtectedSession, Captured.hHandle, 0, 0, 0, 0, 0, NULL);
+}
+
+#endif
+
+NTSTATUS
+APIENTRY
+D3DKMTFlushHeapTransitions(_In_ D3DKMT_FLUSHHEAPTRANSITIONS *pData)
+{
+    D3DKMT_FLUSHHEAPTRANSITIONS Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.hAdapter == 0)
+        return STATUS_INVALID_PARAMETER;
+    return D3dkmtSendPublicOperation(RxgkPublicFlushHeapTransitions, Captured.hAdapter, 0, 0, 0, 0, 0, NULL);
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTMarkDeviceAsError(_In_ D3DKMT_MARKDEVICEASERROR *pData)
+{
+    D3DKMT_MARKDEVICEASERROR Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.hDevice == 0 || (Captured.Reason != D3DKMT_DEVICE_ERROR_REASON_GENERIC && Captured.Reason != D3DKMT_DEVICE_ERROR_REASON_DRIVER_ERROR))
+        return STATUS_INVALID_PARAMETER;
+    return D3dkmtSendPublicOperation(RxgkPublicMarkDeviceAsError, Captured.hDevice, 0, (ULONG)Captured.Reason, 0, 0, 0, NULL);
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTSetHwProtectionTeardownRecovery(_In_ D3DKMT_SETHWPROTECTIONTEARDOWNRECOVERY *pData)
+{
+    D3DKMT_SETHWPROTECTIONTEARDOWNRECOVERY Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    return D3dkmtSendPublicOperation(RxgkPublicSetHwProtectionTeardownRecovery, Captured.hAdapter, 0, Captured.Recovered ? 1U : 0U, 0, 0, 0, NULL);
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTSetVidPnSourceHwProtection(_In_ D3DKMT_SETVIDPNSOURCEHWPROTECTION *pData)
+{
+    D3DKMT_SETVIDPNSOURCEHWPROTECTION Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.hAdapter == 0 || (Captured.HwProtected != FALSE && Captured.HwProtected != TRUE))
+        return STATUS_INVALID_PARAMETER;
+    return D3dkmtSendPublicOperation(RxgkPublicSetVidPnSourceHwProtection, Captured.hAdapter, Captured.VidPnSourceId, Captured.HwProtected ? 1U : 0U, 0, 0, 0, NULL);
+}
+
+#endif
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2100)
+
+NTSTATUS
+APIENTRY
+D3DKMTQueryProcessOfferInfo(_Inout_ D3DKMT_QUERYPROCESSOFFERINFO *pData)
+{
+    D3DKMT_QUERYPROCESSOFFERINFO Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.cbSize == 0)
+        return STATUS_INVALID_PARAMETER;
+    if (Captured.hProcess == NULL)
+        return STATUS_INVALID_HANDLE;
+    return D3dkmtSendPublicOperation(RxgkPublicQueryProcessOfferInfo, 0, 0, 0, Captured.cbSize, (ULONGLONG)(ULONG_PTR)Captured.hProcess, 0, NULL);
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTTrimProcessCommitment(_Inout_ D3DKMT_TRIMPROCESSCOMMITMENT *pData)
+{
+    D3DKMT_TRIMPROCESSCOMMITMENT Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.cbSize == 0 || Captured.Flags.Reserved != 0)
+        return STATUS_INVALID_PARAMETER;
+    if (Captured.hProcess == NULL)
+        return STATUS_INVALID_HANDLE;
+    return D3dkmtSendPublicOperation(RxgkPublicTrimProcessCommitment, 0, 0, Captured.Flags.Value, Captured.cbSize, (ULONGLONG)(ULONG_PTR)Captured.hProcess, Captured.DecommitRequested, NULL);
+}
+
+#endif
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+
+NTSTATUS
+APIENTRY
+D3DKMTGetPostCompositionCaps(_Inout_ D3DKMT_GET_POST_COMPOSITION_CAPS *pData)
+{
+    D3DKMT_GET_POST_COMPOSITION_CAPS Captured;
+    RXGK_PUBLIC_OPERATION_PACKET Result;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.hAdapter == 0)
+        return STATUS_INVALID_PARAMETER;
+    Status = D3dkmtSendPublicOperation(RxgkPublicGetPostCompositionCaps, Captured.hAdapter, Captured.VidPnSourceId, 0, 0, 0, 0, &Result);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    return WddmBridgeSafeCopyTo((PUCHAR)pData + FIELD_OFFSET(D3DKMT_GET_POST_COMPOSITION_CAPS, MaxStretchFactor), &Result.Value0, 2 * sizeof(float));
+}
+
+#endif
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2300)
+
+NTSTATUS
+APIENTRY
+D3DKMTGetProcessDeviceRemovalSupport(_Inout_ D3DKMT_GETPROCESSDEVICEREMOVALSUPPORT *pData)
+{
+    D3DKMT_GETPROCESSDEVICEREMOVALSUPPORT Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.hProcess == NULL)
+        return STATUS_INVALID_HANDLE;
+    return D3dkmtSendPublicOperation(RxgkPublicGetProcessDeviceRemovalSupport, 0, 0, 0, 0, (ULONGLONG)(ULONG_PTR)Captured.hProcess, (ULONGLONG)Captured.AdapterLuid.LowPart | ((ULONGLONG)(ULONG)Captured.AdapterLuid.HighPart << 32), NULL);
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTOpenKeyedMutexFromNtHandle(_Inout_ D3DKMT_OPENKEYEDMUTEXFROMNTHANDLE *pData)
+{
+    D3DKMT_OPENKEYEDMUTEXFROMNTHANDLE Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.hNtHandle == NULL)
+        return STATUS_INVALID_HANDLE;
+    Status = D3dkmtSendPublicOperation(RxgkPublicOpenKeyedMutexFromNtHandle, 0, 0, 0, Captured.PrivateRuntimeDataSize, (ULONGLONG)(ULONG_PTR)Captured.hNtHandle, 0, NULL);
+    if (Status == STATUS_INVALID_HANDLE)
+        return Status;
+    if (Captured.PrivateRuntimeDataSize > D3DKMT_BRIDGE_MAX_PRIVATE_BYTES || (Captured.PrivateRuntimeDataSize != 0 && Captured.pPrivateRuntimeData == NULL))
+        return STATUS_INVALID_PARAMETER;
+    return Status;
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTOpenProtectedSessionFromNtHandle(_Inout_ D3DKMT_OPENPROTECTEDSESSIONFROMNTHANDLE *pData)
+{
+    D3DKMT_OPENPROTECTEDSESSIONFROMNTHANDLE Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.hNtHandle == NULL)
+        return STATUS_INVALID_HANDLE;
+    return D3dkmtSendPublicOperation(RxgkPublicOpenProtectedSessionFromNtHandle, 0, 0, 0, 0, (ULONGLONG)(ULONG_PTR)Captured.hNtHandle, 0, NULL);
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTPresentRedirected(_In_ D3DKMT_PRESENT_REDIRECTED *pData)
+{
+    D3DKMT_PRESENT_REDIRECTED Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.hSyncObj == 0 || Captured.hDevice == 0 || Captured.hSource == 0 || Captured.PrivateDriverDataSize > D3DKMT_BRIDGE_MAX_PRIVATE_BYTES || (Captured.PrivateDriverDataSize != 0 && Captured.pPrivateDriverData == NULL))
+        return STATUS_INVALID_PARAMETER;
+    return D3dkmtSendPublicOperation(RxgkPublicPresentRedirected, Captured.hDevice, Captured.hSyncObj, Captured.Flags.Value, Captured.PrivateDriverDataSize, (ULONGLONG)(ULONG_PTR)Captured.pPrivateDriverData, Captured.WaitedFenceValue, NULL);
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTQueryProtectedSessionInfoFromNtHandle(_Inout_ D3DKMT_QUERYPROTECTEDSESSIONINFOFROMNTHANDLE *pData)
+{
+    D3DKMT_QUERYPROTECTEDSESSIONINFOFROMNTHANDLE Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.hNtHandle == NULL)
+        return STATUS_INVALID_HANDLE;
+    Status = D3dkmtSendPublicOperation(RxgkPublicQueryProtectedSessionInfoFromNtHandle, 0, 0, 0, Captured.PrivateDriverDataSize, (ULONGLONG)(ULONG_PTR)Captured.hNtHandle, Captured.PrivateRuntimeDataSize, NULL);
+    if (Status == STATUS_INVALID_HANDLE)
+        return Status;
+    if (Captured.PrivateDriverDataSize > D3DKMT_BRIDGE_MAX_PRIVATE_BYTES || Captured.PrivateRuntimeDataSize > D3DKMT_BRIDGE_MAX_PRIVATE_BYTES || (Captured.PrivateDriverDataSize != 0 && Captured.pPrivateDriverData == NULL) || (Captured.PrivateRuntimeDataSize != 0 && Captured.pPrivateRuntimeData == NULL))
+        return STATUS_INVALID_PARAMETER;
+    return Status;
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTQueryProtectedSessionStatus(_Inout_ D3DKMT_QUERYPROTECTEDSESSIONSTATUS *pData)
+{
+    D3DKMT_QUERYPROTECTEDSESSIONSTATUS Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.hHandle == 0)
+        return STATUS_INVALID_PARAMETER;
+    return D3dkmtSendPublicOperation(RxgkPublicQueryProtectedSessionStatus, Captured.hHandle, 0, 0, 0, 0, 0, NULL);
+}
+
+#endif
+
+NTSTATUS
+APIENTRY
+D3DKMTQueryRemoteVidPnSourceFromGdiDisplayName(_Inout_ D3DKMT_QUERYREMOTEVIDPNSOURCEFROMGDIDISPLAYNAME *pData)
+{
+    D3DKMT_QUERYREMOTEVIDPNSOURCEFROMGDIDISPLAYNAME Captured;
+    ULONG Index;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    for (Index = 0; Index < RTL_NUMBER_OF(Captured.DeviceName) && Captured.DeviceName[Index] != UNICODE_NULL; ++Index)
+    {
+    }
+    if (Index == 0 || Index == RTL_NUMBER_OF(Captured.DeviceName))
+        return STATUS_INVALID_PARAMETER;
+    return D3dkmtSendPublicOperation(RxgkPublicQueryRemoteVidPnSourceFromGdiDisplayName, 0, 0, 0, 0, 0, 0, NULL);
+}
+
+static BOOLEAN
+D3dkmtFixedBufferIsZero(_In_reads_bytes_(Size) const BYTE *Buffer, _In_ SIZE_T Size)
+{
+    SIZE_T Index;
+
+    for (Index = 0; Index < Size; ++Index)
+    {
+        if (Buffer[Index] != 0)
+            return FALSE;
+    }
+    return TRUE;
+}
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3100)
+
+NTSTATUS
+APIENTRY
+D3DKMTCreateNativeFence(_Inout_ D3DKMT_CREATENATIVEFENCE *pData)
+{
+    D3DKMT_CREATENATIVEFENCE Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.hDevice == 0 || Captured.Flags.Value != 0 || !D3dkmtFixedBufferIsZero(Captured.Reserved, sizeof(Captured.Reserved)))
+        return STATUS_INVALID_PARAMETER;
+    return D3dkmtSendPublicOperation(RxgkPublicCreateNativeFence, Captured.hDevice, 0, Captured.Flags.Value, 0, 0, 0, NULL);
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTOpenNativeFenceFromNtHandle(_Inout_ D3DKMT_OPENNATIVEFENCEFROMNTHANDLE *pData)
+{
+    D3DKMT_OPENNATIVEFENCEFROMNTHANDLE Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.hNtHandle == NULL || Captured.hDevice == 0 || Captured.Flags.Value != 0 || !D3dkmtFixedBufferIsZero(Captured.Reserved, sizeof(Captured.Reserved)))
+        return STATUS_INVALID_PARAMETER;
+    return D3dkmtSendPublicOperation(RxgkPublicOpenNativeFenceFromNtHandle, Captured.hDevice, 0, Captured.Flags.Value, 0, (ULONGLONG)(ULONG_PTR)Captured.hNtHandle, Captured.EngineAffinity, NULL);
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTGetNativeFenceLogDetail(_Inout_ D3DKMT_GETNATIVEFENCELOGDETAIL *pData)
+{
+    D3DKMT_GETNATIVEFENCELOGDETAIL Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.hHwQueue == 0 || Captured.Flags.Value != 0 || !D3dkmtFixedBufferIsZero(Captured.Reserved, sizeof(Captured.Reserved)))
+        return STATUS_INVALID_PARAMETER;
+    return D3dkmtSendPublicOperation(RxgkPublicGetNativeFenceLogDetail, Captured.hHwQueue, 0, Captured.Flags.Value, 0, 0, 0, NULL);
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTCreateDoorbell(_In_ D3DKMT_CREATE_DOORBELL *pData)
+{
+    D3DKMT_CREATE_DOORBELL Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.hHwQueue == 0 || Captured.hRingBuffer == 0 || (Captured.Flags.Value & ~3U) != 0 || Captured.PrivateDriverDataSize > D3DDDI_DOORBELL_PRIVATEDATA_MAX_BYTES_WDDM3_1 || (Captured.PrivateDriverDataSize != 0 && Captured.PrivateDriverData == NULL))
+        return STATUS_INVALID_PARAMETER;
+    return D3dkmtSendPublicOperation(RxgkPublicCreateDoorbell, Captured.hHwQueue, Captured.hRingBuffer, Captured.Flags.Value, Captured.PrivateDriverDataSize, (ULONGLONG)(ULONG_PTR)Captured.PrivateDriverData, Captured.hRingBufferControl, NULL);
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTConnectDoorbell(_In_ D3DKMT_CONNECT_DOORBELL *pData)
+{
+    D3DKMT_CONNECT_DOORBELL Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.hDoorbell == 0 || Captured.Flags.Value != 0)
+        return STATUS_INVALID_PARAMETER;
+    return D3dkmtSendPublicOperation(RxgkPublicConnectDoorbell, Captured.hDoorbell, 0, Captured.Flags.Value, 0, 0, 0, NULL);
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTDestroyDoorbell(_In_ D3DKMT_DESTROY_DOORBELL *pData)
+{
+    D3DKMT_DESTROY_DOORBELL Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.hDoorbell == 0)
+        return STATUS_INVALID_PARAMETER;
+    return D3dkmtSendPublicOperation(RxgkPublicDestroyDoorbell, Captured.hDoorbell, 0, 0, 0, 0, 0, NULL);
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTNotifyWorkSubmission(_In_ D3DKMT_NOTIFY_WORK_SUBMISSION *pData)
+{
+    D3DKMT_NOTIFY_WORK_SUBMISSION Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.hDoorbell == 0 || Captured.Flags.Value != 0)
+        return STATUS_INVALID_PARAMETER;
+    return D3dkmtSendPublicOperation(RxgkPublicNotifyWorkSubmission, Captured.hDoorbell, 0, Captured.Flags.Value, 0, 0, 0, NULL);
+}
+
+#endif
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2600)
+
+NTSTATUS
+APIENTRY
+D3DKMTOutputDuplPresentToHwQueue(_In_ const D3DKMT_OUTPUTDUPLPRESENTTOHWQUEUE *pData)
+{
+    D3DKMT_OUTPUTDUPLPRESENTTOHWQUEUE Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    if (Captured.hSource == 0 || Captured.BroadcastHwQueueCount == 0 || Captured.BroadcastHwQueueCount > D3DDDI_MAX_BROADCAST_CONTEXT || Captured.hHwQueues == NULL)
+        return STATUS_INVALID_PARAMETER;
+    return D3dkmtSendPublicOperation(RxgkPublicOutputDuplPresentToHwQueue, Captured.hSource, Captured.hIndirectHwQueue, Captured.Flags.Value, Captured.BroadcastHwQueueCount, (ULONGLONG)(ULONG_PTR)Captured.hHwQueues, 0, NULL);
+}
+
+#endif
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2400)
+
+NTSTATUS
+APIENTRY
+D3DKMTRegisterVailProcess(_In_ GUID *Guid)
+{
+    GUID Captured;
+    NTSTATUS Status;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, Guid, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return WddmBridgeRejectBadBuffer(Status);
+    return D3dkmtSendPublicOperation(RxgkPublicRegisterVailProcess, 0, 0, 0, 0, 0, 0, NULL);
+}
+
+#endif
 
 /* EOF */

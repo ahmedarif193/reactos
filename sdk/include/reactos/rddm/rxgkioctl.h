@@ -69,8 +69,11 @@
 #define IOCTL_D3DKMT_SETMONITORCOLORSPACETRANSFORM \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1D0, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #endif
+#define IOCTL_D3DKMT_PUBLIC_OPERATION \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1D1, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #define RXGK_WDDM_PACKET_VERSION_1            1U
+#define RXGK_PUBLIC_OPERATION_PACKET_V1_SIZE  48U
 #define RXGK_WDDM_MAX_PRIVATE_DRIVER_DATA      (1024U * 1024U)
 #define RXGK_CREATECONTEXTVIRTUAL_PACKET_V1_SIZE 44U
 #define RXGK_SUBMITCOMMAND_PACKET_V1_SIZE       48U
@@ -91,6 +94,51 @@
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
 #define RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET_V1_SIZE 48U
 #endif
+
+typedef enum _RXGK_PUBLIC_OPERATION
+{
+    RxgkPublicAdjustFullscreenGamma = 1,
+    RxgkPublicConfigureSharedResource,
+    RxgkPublicCreateProtectedSession,
+    RxgkPublicDestroyProtectedSession,
+    RxgkPublicFlushHeapTransitions,
+    RxgkPublicGetPostCompositionCaps,
+    RxgkPublicGetProcessDeviceRemovalSupport,
+    RxgkPublicMarkDeviceAsError,
+    RxgkPublicOpenKeyedMutexFromNtHandle,
+    RxgkPublicOpenProtectedSessionFromNtHandle,
+    RxgkPublicPresentRedirected,
+    RxgkPublicQueryProcessOfferInfo,
+    RxgkPublicQueryProtectedSessionInfoFromNtHandle,
+    RxgkPublicQueryProtectedSessionStatus,
+    RxgkPublicQueryRemoteVidPnSourceFromGdiDisplayName,
+    RxgkPublicSetHwProtectionTeardownRecovery,
+    RxgkPublicSetVidPnSourceHwProtection,
+    RxgkPublicTrimProcessCommitment,
+    RxgkPublicConnectDoorbell,
+    RxgkPublicCreateDoorbell,
+    RxgkPublicCreateNativeFence,
+    RxgkPublicDestroyDoorbell,
+    RxgkPublicGetNativeFenceLogDetail,
+    RxgkPublicNotifyWorkSubmission,
+    RxgkPublicOpenNativeFenceFromNtHandle,
+    RxgkPublicOutputDuplPresentToHwQueue,
+    RxgkPublicRegisterVailProcess
+} RXGK_PUBLIC_OPERATION;
+
+typedef struct _RXGK_PUBLIC_OPERATION_PACKET
+{
+    ULONG Size;
+    ULONG Version;
+    ULONG Operation;
+    ULONG Handle0;
+    ULONG Handle1;
+    ULONG Flags;
+    ULONG DataSize;
+    ULONG Reserved;
+    ULONGLONG Pointer0;
+    ULONGLONG Value0;
+} RXGK_PUBLIC_OPERATION_PACKET, *PRXGK_PUBLIC_OPERATION_PACKET;
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
 #define RXGK_ISFEATUREENABLED_RESULT_VALID_MASK 0x000FU
 #endif
