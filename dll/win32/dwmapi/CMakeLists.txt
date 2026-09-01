@@ -15,9 +15,7 @@ add_library(dwmapi MODULE
 
 set_module_type(dwmapi win32dll UNICODE)
 if(CMAKE_C_COMPILER_ID MATCHES "Clang")
-    target_compile_options(dwmapi PRIVATE -mguard=cf)
     target_link_options(dwmapi PRIVATE
-        -Wl,--guard-cf
         -Wl,-Xlink=/version:10.0
         -Wl,--major-subsystem-version,10
         -Wl,--minor-subsystem-version,0)
