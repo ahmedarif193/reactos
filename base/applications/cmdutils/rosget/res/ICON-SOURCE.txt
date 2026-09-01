@@ -1,0 +1,16 @@
+RosGet application icon source notice
+=====================================
+
+The artwork in rosget.png was supplied directly by the user for use as the
+RosGet application icon. It was copied without modification from:
+
+    /Users/mac/Downloads/pngegg.png
+
+Original SHA-256:
+
+    70fbf16131a2513db05af5967f168132284be46a830dbd2732a9880d3e716299
+
+rosget.ico contains mechanically downscaled copies of that image at standard
+Windows icon sizes. No license or original-author information accompanied the
+supplied image. Do not describe this artwork as MIT-licensed unless its license
+is independently established.
