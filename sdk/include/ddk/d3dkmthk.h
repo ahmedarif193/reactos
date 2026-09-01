@@ -5398,6 +5398,23 @@ typedef struct _D3DKMT_CREATESYNCFILE
 	D3DKMT_ALIGN64 UINT64   hSyncFile;	            // out: File descriptor on Android or a NT handle on Windows (when implemented)
 } D3DKMT_CREATESYNCFILE;
 
+typedef struct _D3DKMT_WAITSYNCFILE
+{
+    D3DKMT_ALIGN64 UINT64 hSyncFile;
+    D3DKMT_HANDLE hContext;
+    UINT Reserved;
+} D3DKMT_WAITSYNCFILE;
+
+typedef struct _D3DKMT_OPENSYNCOBJECTFROMSYNCFILE
+{
+    D3DKMT_ALIGN64 UINT64 hSyncFile;
+    D3DKMT_HANDLE hDevice;
+    D3DKMT_HANDLE hSyncObject;
+    D3DKMT_ALIGN64 UINT64 FenceValue;
+    D3DKMT_PTR(VOID*, FenceValueCPUVirtualAddress);
+    D3DKMT_ALIGN64 D3DGPU_VIRTUAL_ADDRESS FenceValueGPUVirtualAddress;
+} D3DKMT_OPENSYNCOBJECTFROMSYNCFILE;
+
 typedef struct _D3DKMT_TRIMNOTIFICATION
 {
     D3DKMT_PTR(VOID*,                  Context);        // In: context at Register
@@ -6068,6 +6085,8 @@ typedef _Check_return_ NTSTATUS (APIENTRY* PFND3DKMT_ISFEATUREENABLED)(_Inout_ D
 #if !defined(__REACTOS__) || (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
 EXTERN_C _Check_return_ NTSTATUS APIENTRY D3DKMTShareObjectWithHost(_Inout_ D3DKMT_SHAREOBJECTWITHHOST*);
 EXTERN_C _Check_return_ NTSTATUS APIENTRY D3DKMTCreateSyncFile(_Inout_ D3DKMT_CREATESYNCFILE*);
+EXTERN_C _Check_return_ NTSTATUS APIENTRY D3DKMTWaitSyncFile(_In_ CONST D3DKMT_WAITSYNCFILE*);
+EXTERN_C _Check_return_ NTSTATUS APIENTRY D3DKMTOpenSyncObjectFromSyncFile(_Inout_ D3DKMT_OPENSYNCOBJECTFROMSYNCFILE*);
 
 // Used in WSL to close the internal file descriptor to /dev/dxg
 EXTERN_C VOID APIENTRY D3DKMTCloseDxCoreDevice(VOID);
