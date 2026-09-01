@@ -695,6 +695,7 @@ static void Test_VirtualAddressingSubmission(void)
     map.OffsetInPages = 0;
     map.SizeInPages = 1;
     map.Protection.Write = 1;
+    map.Protection.Execute = 1;
     Status = pMap(&map);
     if (!NT_SUCCESS(Status) || map.VirtualAddress == 0)
     {
