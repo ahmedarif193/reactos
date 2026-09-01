@@ -971,6 +971,8 @@ static void Test_GetSharedPrimaryHandle_Positive(void)
 {
     D3DKMT_GETSHAREDPRIMARYHANDLE Data;
     D3DKMT_HANDLE hAdapter;
+    D3DKMT_HANDLE hSourceZero = 0;
+    NTSTATUS SourceZeroStatus = STATUS_UNSUCCESSFUL;
     NTSTATUS Status;
     UINT src;
 
@@ -1003,11 +1005,29 @@ static void Test_GetSharedPrimaryHandle_Positive(void)
         _SEH2_END;
 
         if (NT_SUCCESS(Status))
+        {
             trace("GetSharedPrimaryHandle(src=%u) -> 0x%08lX (handle 0x%08lX)\n",
                   src, (long)Status, (unsigned long)Data.hSharedPrimary);
+            if (src == 0)
+            {
+                SourceZeroStatus = Status;
+                hSourceZero = Data.hSharedPrimary;
+            }
+        }
         else
             trace("GetSharedPrimaryHandle(src=%u) refused 0x%08lX\n",
                   src, (long)Status);
+    }
+
+    if (NT_SUCCESS(SourceZeroStatus) && hSourceZero != 0)
+    {
+        memset(&Data, 0, sizeof(Data));
+        Data.hAdapter = hAdapter;
+        Data.VidPnSourceId = 0;
+        Status = pGet(&Data);
+        ok_succeeded(Status, "Source zero failed after invalid-source queries: 0x%08lX\n", (long)Status);
+        if (NT_SUCCESS(Status))
+            ok(Data.hSharedPrimary == hSourceZero, "Invalid-source queries replaced source zero: 0x%08lX / 0x%08lX\n", (unsigned long)hSourceZero, (unsigned long)Data.hSharedPrimary);
     }
 
     CloseAdapter(hAdapter);
