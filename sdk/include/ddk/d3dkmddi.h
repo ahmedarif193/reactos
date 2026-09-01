@@ -3410,6 +3410,165 @@ typedef struct _DXGKARG_RENDER
     PHYSICAL_ADDRESS            DmaBufferPhysicalAddress;
 } DXGKARG_RENDER, *PDXGKARG_RENDER;
 
+typedef _Inout_ DXGKARG_RENDER *INOUT_PDXGKARG_RENDER;
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN7)
+typedef enum _DXGK_GDIROP_BITBLT
+{
+    DXGK_GDIROP_INVALID = 0,
+    DXGK_GDIROP_SRCCOPY = 1,
+    DXGK_GDIROP_SRCINVERT = 2,
+    DXGK_GDIROP_SRCAND = 3,
+    DXGK_GDIROP_SRCOR = 4,
+    DXGK_GDIROP_ROP3 = 5,
+} DXGK_GDIROP_BITBLT;
+
+typedef struct _DXGK_GDIARG_BITBLT
+{
+    RECT SrcRect;
+    RECT DstRect;
+    UINT SrcAllocationIndex;
+    UINT DstAllocationIndex;
+    UINT NumSubRects;
+    RECT *pSubRects;
+    WORD Rop;
+    WORD Rop3;
+    UINT SrcPitch;
+    UINT DstPitch;
+} DXGK_GDIARG_BITBLT;
+
+typedef enum _DXGK_GDIROP_COLORFILL
+{
+    DXGK_GDIROPCF_INVALID = 0,
+    DXGK_GDIROPCF_PATCOPY = 1,
+    DXGK_GDIROPCF_PATINVERT = 2,
+    DXGK_GDIROPCF_PDXN = 3,
+    DXGK_GDIROPCF_DSTINVERT = 4,
+    DXGK_GDIROPCF_PATAND = 5,
+    DXGK_GDIROPCF_PATOR = 6,
+    DXGK_GDIROPCF_ROP3 = 7,
+} DXGK_GDIROP_COLORFILL;
+
+typedef struct _DXGK_GDIARG_STRETCHBLT
+{
+    RECT SrcRect;
+    RECT DstRect;
+    UINT DstAllocationIndex;
+    UINT SrcAllocationIndex;
+    UINT NumSubRects;
+    RECT *pSubRects;
+    union
+    {
+        struct
+        {
+            UINT Mode : 16;
+            UINT MirrorX : 1;
+            UINT MirrorY : 1;
+        };
+        UINT Flags;
+    };
+    UINT SrcPitch;
+} DXGK_GDIARG_STRETCHBLT;
+
+typedef struct _DXGK_GDIARG_COLORFILL
+{
+    RECT DstRect;
+    UINT DstAllocationIndex;
+    UINT NumSubRects;
+    RECT *pSubRects;
+    UINT Color;
+    WORD Rop;
+    WORD Rop3;
+} DXGK_GDIARG_COLORFILL;
+
+typedef struct _DXGK_GDIARG_ALPHABLEND
+{
+    RECT SrcRect;
+    RECT DstRect;
+    UINT SrcAllocationIndex;
+    UINT DstAllocationIndex;
+    UINT NumSubRects;
+    RECT *pSubRects;
+    BYTE SourceConstantAlpha;
+    BOOLEAN SourceHasAlpha;
+    UINT SrcPitch;
+} DXGK_GDIARG_ALPHABLEND;
+
+typedef struct _D3DKM_TRANSPARENTBLTFLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT HonorAlpha : 1;
+        };
+        UINT Value;
+    };
+} D3DKM_TRANSPARENTBLTFLAGS;
+
+typedef struct _DXGK_GDIARG_TRANSPARENTBLT
+{
+    RECT SrcRect;
+    RECT DstRect;
+    UINT SrcAllocationIndex;
+    UINT DstAllocationIndex;
+    UINT Color;
+    UINT NumSubRects;
+    RECT *pSubRects;
+    D3DKM_TRANSPARENTBLTFLAGS Flags;
+    UINT SrcPitch;
+} DXGK_GDIARG_TRANSPARENTBLT;
+
+#define D3DKM_INVALID_GAMMA_INDEX 0xFFFFFFFF
+
+typedef struct _DXGK_GDIARG_CLEARTYPEBLEND
+{
+    RECT DstRect;
+    UINT TmpSurfAllocationIndex;
+    UINT GammaSurfAllocationIndex;
+    UINT AlphaSurfAllocationIndex;
+    UINT DstAllocationIndex;
+    INT DstToAlphaOffsetX;
+    INT DstToAlphaOffsetY;
+    UINT Color;
+    UINT Gamma;
+    UINT NumSubRects;
+    RECT *pSubRects;
+    UINT AlphaSurfPitch;
+    UINT Color2;
+} DXGK_GDIARG_CLEARTYPEBLEND;
+
+typedef enum _DXGK_RENDERKM_OPERATION
+{
+    DXGK_GDIOP_BITBLT = 1,
+    DXGK_GDIOP_COLORFILL = 2,
+    DXGK_GDIOP_ALPHABLEND = 3,
+    DXGK_GDIOP_STRETCHBLT = 4,
+    DXGK_GDIOP_ESCAPE = 5,
+    DXGK_GDIOP_TRANSPARENTBLT = 6,
+    DXGK_GDIOP_CLEARTYPEBLEND = 7,
+} DXGK_RENDERKM_OPERATION;
+
+typedef struct _DXGK_RENDERKM_COMMAND
+{
+    DXGK_RENDERKM_OPERATION OpCode;
+    UINT CommandSize;
+    union
+    {
+        DXGK_GDIARG_BITBLT BitBlt;
+        DXGK_GDIARG_COLORFILL ColorFill;
+        DXGK_GDIARG_ALPHABLEND AlphaBlend;
+        DXGK_GDIARG_STRETCHBLT StretchBlt;
+        DXGK_GDIARG_TRANSPARENTBLT TransparentBlt;
+        DXGK_GDIARG_CLEARTYPEBLEND ClearTypeBlend;
+    } Command;
+} DXGK_RENDERKM_COMMAND;
+
+typedef NTSTATUS APIENTRY DXGKDDI_RENDERKM(
+    IN_CONST_HANDLE hContext,
+    INOUT_PDXGKARG_RENDER pRenderKmArgs);
+#endif
+
 
 /* =========================================================================
  * DXGKARG_ACQUIRESWIZZLINGRANGE / DXGKARG_RELEASESWIZZLINGRANGE
