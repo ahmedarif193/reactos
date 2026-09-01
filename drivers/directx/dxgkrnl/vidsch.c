@@ -14,9 +14,9 @@
  *   4. Processing completions in DPC context and retiring finished packets.
  *   5. Providing idle-wait capability for adapter teardown.
  *
- * On Windows 8.1 this is implemented as the separate dxgmms1.sys binary.
- * This ReactOS implementation provides the engine state machine, command
- * submission, interrupt/DPC completion, and fence tracking used by dxgkrnl.
+ * Windows 11 routes this work through dxgmms2.sys. This ReactOS implementation
+ * provides the engine state machine, command submission, interrupt/DPC
+ * completion, and fence tracking used by dxgkrnl.
  *
  * Architecture notes (amd64/x86):
  *
@@ -1762,7 +1762,7 @@ VidSchInitialize(
     Ctx->EngineCount = Adapter->NodeCount;
     ExInitializeFastMutex(&Ctx->LifecycleMutex);
     Ctx->LifecycleState = (LONG)VidSchSchedulerRunning;
-    Ctx->CallbacksEnabled = TRUE;
+    Ctx->CallbackState = 1;
 
     /* Allocate the per-engine array. */
     Ctx->Engines = ExAllocatePoolWithTag(
@@ -3084,154 +3084,6 @@ VidSchFlipPresent(
 }
 
 /* ========================================================================
- * VidSchGetInterface — fill the interface function pointer table
- *
- * This is the ReactOS equivalent of the dxgmms1.sys VidSchInterface
- * export (ordinal 2).  On Windows, dxgkrnl calls this export during
- * adapter init to receive the function pointer table.  In ReactOS the
- * scheduler is built inline, so this simply wires up the local functions.
- * ====================================================================== */
-
-/*
- * Internal thunk wrappers — adapt the generic PVOID-based interface
- * signatures to the typed internal functions.
- */
-static NTSTATUS NTAPI
-VidSchpIfInitialize(PVOID Adapter)
-{
-    return VidSchInitialize((PDXGKRNL_ADAPTER)Adapter);
-}
-
-static NTSTATUS NTAPI
-VidSchpIfStartScheduler(PVOID Adapter)
-{
-    return VidSchStartScheduler((PDXGKRNL_ADAPTER)Adapter);
-}
-
-static NTSTATUS NTAPI
-VidSchpIfSubmitCommand(PVOID Adapter, PVOID SubmitArgs)
-{
-    UNREFERENCED_PARAMETER(SubmitArgs);
-    /*
-     * Typed callers use VidSchSubmitCommand directly.  The generic PVOID
-     * interface has no defined packet contract to unpack here.
-     */
-    UNREFERENCED_PARAMETER(Adapter);
-    return STATUS_NOT_IMPLEMENTED;
-}
-
-static VOID NTAPI
-VidSchpIfNotifyInterrupt(PVOID Adapter, CONST DXGKARGCB_NOTIFY_INTERRUPT_DATA *NotifyData)
-{
-    PDXGKRNL_ADAPTER DxgkAdapter = (PDXGKRNL_ADAPTER)Adapter;
-
-    if (!VidSchpAcquireCall(DxgkAdapter))
-        return;
-    VidSchNotifyInterrupt(DxgkAdapter, NotifyData);
-    VidSchpReleaseCall(DxgkAdapter);
-}
-
-static VOID NTAPI
-VidSchpIfNotifyDpc(PVOID Adapter)
-{
-    VidSchNotifyDpc((PDXGKRNL_ADAPTER)Adapter);
-}
-
-static NTSTATUS NTAPI
-VidSchpIfPreemptEngine(PVOID Adapter, ULONG EngineOrdinal)
-{
-    return VidSchPreemptEngine((PDXGKRNL_ADAPTER)Adapter, EngineOrdinal, 0, NULL);
-}
-
-static NTSTATUS NTAPI
-VidSchpIfSuspendScheduler(PVOID Adapter)
-{
-    return VidSchSuspendScheduler((PDXGKRNL_ADAPTER)Adapter);
-}
-
-static NTSTATUS NTAPI
-VidSchpIfResumeScheduler(PVOID Adapter)
-{
-    return VidSchResumeScheduler((PDXGKRNL_ADAPTER)Adapter);
-}
-
-static NTSTATUS NTAPI
-VidSchpIfSetEngineState(PVOID Adapter, ULONG EngineOrdinal, LONG NewState)
-{
-    return VidSchSetEngineState((PDXGKRNL_ADAPTER)Adapter, EngineOrdinal, (VIDSCH_ENGINE_STATE)NewState);
-}
-
-static NTSTATUS NTAPI
-VidSchpIfResetEngine(PVOID Adapter, ULONG EngineOrdinal)
-{
-    return VidSchResetEngine((PDXGKRNL_ADAPTER)Adapter, EngineOrdinal);
-}
-
-static NTSTATUS NTAPI
-VidSchpIfFlipPresent(PVOID Adapter, PVOID FlipArgs)
-{
-    UNREFERENCED_PARAMETER(FlipArgs);
-    UNREFERENCED_PARAMETER(Adapter);
-    /*
-     * Typed callers use VidSchFlipPresent directly.  The generic PVOID
-     * interface has no defined flip contract to unpack here.
-     */
-    return STATUS_NOT_IMPLEMENTED;
-}
-
-static NTSTATUS NTAPI
-VidSchpIfWaitForIdle(PVOID Adapter, ULONG TimeoutMs)
-{
-    return VidSchWaitForIdle((PDXGKRNL_ADAPTER)Adapter, TimeoutMs);
-}
-
-static NTSTATUS NTAPI
-VidSchpIfQueryEngineStatus(PVOID Adapter, ULONG EngineOrdinal, PVOID OutStatus)
-{
-    UNREFERENCED_PARAMETER(OutStatus);
-    UNREFERENCED_PARAMETER(EngineOrdinal);
-    UNREFERENCED_PARAMETER(Adapter);
-    return STATUS_NOT_IMPLEMENTED;
-}
-
-static NTSTATUS NTAPI
-VidSchpIfSetSchedulerCallback(PVOID Adapter, PVOID CallbackContext)
-{
-    return VidSchSetSchedulerCallback((PDXGKRNL_ADAPTER)Adapter, CallbackContext);
-}
-
-static NTSTATUS NTAPI
-VidSchpIfGetEngineTdrInfo(PVOID Adapter, ULONG EngineOrdinal, PVOID TdrInfo)
-{
-    return VidSchGetEngineTdrInfo((PDXGKRNL_ADAPTER)Adapter, EngineOrdinal, TdrInfo);
-}
-
-VOID
-VidSchGetInterface(
-    _Out_ PVIDSCH_INTERFACE Interface)
-{
-    PAGED_CODE();
-
-    RtlZeroMemory(Interface, sizeof(*Interface));
-
-    Interface->Initialize           = VidSchpIfInitialize;
-    Interface->StartScheduler       = VidSchpIfStartScheduler;
-    Interface->SubmitCommand        = VidSchpIfSubmitCommand;
-    Interface->NotifyInterrupt      = VidSchpIfNotifyInterrupt;
-    Interface->NotifyDpc            = VidSchpIfNotifyDpc;
-    Interface->PreemptEngine        = VidSchpIfPreemptEngine;
-    Interface->SuspendScheduler     = VidSchpIfSuspendScheduler;
-    Interface->ResumeScheduler      = VidSchpIfResumeScheduler;
-    Interface->SetEngineState       = VidSchpIfSetEngineState;
-    Interface->ResetEngine          = VidSchpIfResetEngine;
-    Interface->FlipPresent          = VidSchpIfFlipPresent;
-    Interface->WaitForIdle          = VidSchpIfWaitForIdle;
-    Interface->QueryEngineStatus    = VidSchpIfQueryEngineStatus;
-    Interface->SetSchedulerCallback = VidSchpIfSetSchedulerCallback;
-    Interface->GetEngineTdrInfo     = VidSchpIfGetEngineTdrInfo;
-}
-
-/* ========================================================================
  * Preemption, reset, and recovery
  * ====================================================================== */
 
@@ -3778,52 +3630,53 @@ VidSchSetSchedulerCallback(
     return STATUS_NOT_SUPPORTED;
 }
 
-NTSTATUS
+ULONG
 VidSchGetSchedulerCallbackState(
-    _In_ PDXGKRNL_ADAPTER Adapter,
-    _Out_ PBOOLEAN Enabled)
+    _In_ PDXGKRNL_ADAPTER Adapter)
 {
     PVIDSCH_CONTEXT Ctx;
-
-    if (Adapter == NULL || Enabled == NULL)
-        return STATUS_INVALID_PARAMETER;
-    if (!VidSchpAcquireCall(Adapter))
-        return STATUS_DELETE_PENDING;
-
-    Ctx = (PVIDSCH_CONTEXT)Adapter->VidSchContext;
-    if (Ctx == NULL || !Ctx->Initialized)
-    {
-        VidSchpReleaseCall(Adapter);
-        return STATUS_NOT_SUPPORTED;
-    }
-
-    *Enabled = (InterlockedCompareExchange(&Ctx->CallbacksEnabled, 0, 0) != 0);
-    VidSchpReleaseCall(Adapter);
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS
-VidSchSetSchedulerCallbackState(
-    _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_ BOOLEAN Enabled)
-{
-    PVIDSCH_CONTEXT Ctx;
+    ULONG State;
 
     if (Adapter == NULL)
-        return STATUS_INVALID_PARAMETER;
+        return 0;
     if (!VidSchpAcquireCall(Adapter))
-        return STATUS_DELETE_PENDING;
+        return 0;
 
     Ctx = (PVIDSCH_CONTEXT)Adapter->VidSchContext;
     if (Ctx == NULL || !Ctx->Initialized)
     {
         VidSchpReleaseCall(Adapter);
-        return STATUS_NOT_SUPPORTED;
+        return 0;
     }
 
-    InterlockedExchange(&Ctx->CallbacksEnabled, Enabled ? TRUE : FALSE);
+    State = (ULONG)InterlockedCompareExchange(&Ctx->CallbackState, 0, 0);
     VidSchpReleaseCall(Adapter);
-    return STATUS_SUCCESS;
+    return State;
+}
+
+ULONG
+VidSchSetSchedulerCallbackState(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG State)
+{
+    PVIDSCH_CONTEXT Ctx;
+    ULONG PreviousState;
+
+    if (Adapter == NULL)
+        return 0;
+    if (!VidSchpAcquireCall(Adapter))
+        return 0;
+
+    Ctx = (PVIDSCH_CONTEXT)Adapter->VidSchContext;
+    if (Ctx == NULL || !Ctx->Initialized)
+    {
+        VidSchpReleaseCall(Adapter);
+        return 0;
+    }
+
+    PreviousState = (ULONG)InterlockedExchange(&Ctx->CallbackState, (LONG)State);
+    VidSchpReleaseCall(Adapter);
+    return PreviousState;
 }
 
 NTSTATUS
@@ -4025,32 +3878,4 @@ VidSchGetEngineTdrInfo(
         return STATUS_INVALID_PARAMETER;
 
     return STATUS_NOT_SUPPORTED;
-}
-
-/* ========================================================================
- * VidSchInterface — Exported entry point (dxgkrnl.spec)
- *
- * On Windows 8.1, dxgmms1.sys exports this as ordinal 2.  The caller
- * (dxgkrnl) passes a pointer to a VIDSCH_INTERFACE structure which this
- * function fills with the scheduler's function pointer table.
- *
- * In ReactOS, this is exported directly from dxgkrnl.sys since the
- * scheduler is compiled inline.  The export exists for ABI compatibility
- * with any code that expects to call VidSchInterface by name.
- *
- * IRQL: PASSIVE_LEVEL
- * ====================================================================== */
-NTSTATUS
-NTAPI
-VidSchInterface(
-    _Out_ PVIDSCH_INTERFACE Interface)
-{
-    PAGED_CODE();
-
-    if (Interface == NULL)
-        return STATUS_INVALID_PARAMETER;
-
-    VidSchGetInterface(Interface);
-
-    return STATUS_SUCCESS;
 }

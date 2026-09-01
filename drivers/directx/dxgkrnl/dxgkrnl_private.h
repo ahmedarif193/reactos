@@ -1645,14 +1645,6 @@ extern volatile LONG    GDxgControlDeviceState;
 NTSTATUS
 DxgkpEnsureControlDevice(VOID);
 
-/*
- * GDxgmms1Interface
- *
- * Pointer to the dxgmms1 function table, set when dxgmms1 registers
- * itself through the private interface.  NULL until then.
- */
-extern PVOID    GDxgmms1Interface;
-
 /* ========================================================================
  * Function prototypes — dxgkrnl.c  (module entry point and exports)
  * ====================================================================== */

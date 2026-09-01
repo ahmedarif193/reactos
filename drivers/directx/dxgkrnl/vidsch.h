@@ -15,8 +15,8 @@
  *   - ISR-level interrupt notification and DPC-level completion processing
  *   - VSync-synchronized flip/present operations
  *
- * On Windows this is implemented as a separate dxgmms1.sys binary; in
- * ReactOS it is compiled inline into dxgkrnl.sys for simplicity.
+ * Windows 11 routes scheduling through dxgmms2.sys. ReactOS keeps it inline
+ * in dxgkrnl.sys so scheduler state shares the adapter lifetime.
  */
 
 #ifndef _VIDSCH_H_
@@ -326,61 +326,13 @@ typedef struct _VIDSCH_CONTEXT
     FAST_MUTEX                  LifecycleMutex;
     volatile LONG               LifecycleState;
 
-    /* Typed DpiGet/SetSchedulerCallbackState contract. */
-    volatile LONG               CallbacksEnabled;
+    /* Typed DpiGet/SetSchedulerCallbackState bit-mask contract. */
+    volatile LONG               CallbackState;
 
     /* TRUE once VidSchInitialize has completed successfully. */
     BOOLEAN                     Initialized;
 
 } VIDSCH_CONTEXT, *PVIDSCH_CONTEXT;
-
-/* ========================================================================
- * VIDSCH_INTERFACE — Function pointer table exported to dxgkrnl
- *
- * This is a ReactOS-private, versioned table. It is not a Windows 11 export
- * contract: the Windows 11 26100 dxgkrnl.sys export directory has no
- * VidSchInterface symbol. Slot order is defined solely by the declarations
- * below and its ReactOS callers.
- * ====================================================================== */
-
-/* Function pointer typedefs for the interface table. */
-typedef NTSTATUS (NTAPI *PFNVIDSCH_INITIALIZE)(PVOID Adapter);
-typedef NTSTATUS (NTAPI *PFNVIDSCH_START_SCHEDULER)(PVOID Adapter);
-typedef NTSTATUS (NTAPI *PFNVIDSCH_SUBMIT_COMMAND)(PVOID Adapter, PVOID SubmitArgs);
-typedef VOID     (NTAPI *PFNVIDSCH_NOTIFY_INTERRUPT)(PVOID Adapter, CONST DXGKARGCB_NOTIFY_INTERRUPT_DATA *NotifyData);
-typedef VOID     (NTAPI *PFNVIDSCH_NOTIFY_DPC)(PVOID Adapter);
-typedef NTSTATUS (NTAPI *PFNVIDSCH_PREEMPT_ENGINE)(PVOID Adapter, ULONG EngineOrdinal);
-typedef NTSTATUS (NTAPI *PFNVIDSCH_SUSPEND_SCHEDULER)(PVOID Adapter);
-typedef NTSTATUS (NTAPI *PFNVIDSCH_RESUME_SCHEDULER)(PVOID Adapter);
-typedef NTSTATUS (NTAPI *PFNVIDSCH_SET_ENGINE_STATE)(PVOID Adapter, ULONG EngineOrdinal, LONG NewState);
-typedef NTSTATUS (NTAPI *PFNVIDSCH_RESET_ENGINE)(PVOID Adapter, ULONG EngineOrdinal);
-typedef NTSTATUS (NTAPI *PFNVIDSCH_FLIP_PRESENT)(PVOID Adapter, PVOID FlipArgs);
-typedef NTSTATUS (NTAPI *PFNVIDSCH_WAIT_FOR_IDLE)(PVOID Adapter, ULONG TimeoutMs);
-typedef NTSTATUS (NTAPI *PFNVIDSCH_QUERY_ENGINE_STATUS)(PVOID Adapter, ULONG EngineOrdinal, PVOID OutStatus);
-typedef NTSTATUS (NTAPI *PFNVIDSCH_SET_SCHEDULER_CALLBACK)(PVOID Adapter, PVOID CallbackContext);
-typedef NTSTATUS (NTAPI *PFNVIDSCH_GET_ENGINE_TDR_INFO)(PVOID Adapter, ULONG EngineOrdinal, PVOID TdrInfo);
-
-typedef struct _VIDSCH_INTERFACE
-{
-    /* Slot  0 */ PFNVIDSCH_INITIALIZE             Initialize;
-    /* Slot  1 */ PFNVIDSCH_START_SCHEDULER         StartScheduler;
-    /* Slot  2 */ PFNVIDSCH_SUBMIT_COMMAND          SubmitCommand;
-    /* Slot  3 */ PFNVIDSCH_NOTIFY_INTERRUPT         NotifyInterrupt;
-    /* Slot  4 */ PFNVIDSCH_NOTIFY_DPC               NotifyDpc;
-    /* Slot  5 */ PFNVIDSCH_PREEMPT_ENGINE           PreemptEngine;
-    /* Slot  6 */ PFNVIDSCH_SUSPEND_SCHEDULER        SuspendScheduler;
-    /* Slot  7 */ PFNVIDSCH_RESUME_SCHEDULER         ResumeScheduler;
-    /* Slot  8 */ PFNVIDSCH_SET_ENGINE_STATE         SetEngineState;
-    /* Slot  9 */ PFNVIDSCH_RESET_ENGINE             ResetEngine;
-    /* Slot 10 */ PFNVIDSCH_FLIP_PRESENT             FlipPresent;
-    /* Slot 11 */ PFNVIDSCH_WAIT_FOR_IDLE            WaitForIdle;
-    /* Slot 12 */ PFNVIDSCH_QUERY_ENGINE_STATUS      QueryEngineStatus;
-    /* Slot 13 */ PFNVIDSCH_SET_SCHEDULER_CALLBACK   SetSchedulerCallback;
-    /* Slot 14 */ PFNVIDSCH_GET_ENGINE_TDR_INFO      GetEngineTdrInfo;
-} VIDSCH_INTERFACE, *PVIDSCH_INTERFACE;
-
-/* Number of function pointer slots in the interface. */
-#define VIDSCH_INTERFACE_SLOT_COUNT  15
 
 /* ========================================================================
  * VidSch public interface — called by adapter.c, dma.c, present.c
@@ -579,19 +531,6 @@ VidSchFlipPresent(
     _In_opt_ PVOID                         Context,
     _Out_ ULONG                           *OutFenceId);
 
-/*
- * VidSchGetInterface
- *
- * Fills the VIDSCH_INTERFACE function pointer table.  This is the
- * equivalent of the dxgmms1.sys ordinal 2 export.  Called once per
- * adapter during initialization.
- *
- * IRQL: PASSIVE_LEVEL
- */
-VOID
-VidSchGetInterface(
-    _Out_ PVIDSCH_INTERFACE Interface);
-
 /* ========================================================================
  * Scheduler lifecycle and recovery interfaces
  * ====================================================================== */
@@ -635,15 +574,14 @@ VidSchSetSchedulerCallback(
     _In_ struct _DXGKRNL_ADAPTER *Adapter,
     _In_ PVOID                    CallbackContext);
 
-NTSTATUS
+ULONG
 VidSchGetSchedulerCallbackState(
-    _In_ struct _DXGKRNL_ADAPTER *Adapter,
-    _Out_ PBOOLEAN                Enabled);
+    _In_ struct _DXGKRNL_ADAPTER *Adapter);
 
-NTSTATUS
+ULONG
 VidSchSetSchedulerCallbackState(
     _In_ struct _DXGKRNL_ADAPTER *Adapter,
-    _In_ BOOLEAN                  Enabled);
+    _In_ ULONG                    State);
 
 NTSTATUS
 VidSchPrepareAdapterReset(

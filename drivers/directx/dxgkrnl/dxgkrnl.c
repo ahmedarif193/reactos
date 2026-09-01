@@ -185,24 +185,15 @@ DxgkpEnsureControlDevice(VOID)
     return State == 2 ? STATUS_SUCCESS : GDxgControlDeviceStatus;
 }
 
-/*
- * GDxgmms1Interface
- *
- * Function table registered by dxgmms1.sys at load time.  NULL until then.
- */
-PVOID GDxgmms1Interface = NULL;
-
 /* ========================================================================
- * DxgCoreInterface — static callback table exported for dxgmms1.sys
+ * DxgCoreInterface — static callback table consumed by dxgmms2.sys
  *
- * This is a 184-byte structure (8-byte header + 22 function pointers)
- * matching the Win7 dxgkrnl.sys layout.  dxgmms1.sys imports this data
- * symbol to access dxgkrnl's DxgkCb* callbacks without holding an
- * adapter handle.
+ * The provider imports this data symbol to access adapter-independent
+ * dxgkrnl callbacks without holding an adapter handle.
  *
  * The table is populated with stubs initially; the per-adapter version
  * in DxgkpFillInterface (adapter.c) sets adapter-aware callbacks at
- * StartDevice time.  dxgmms1 uses this global table for adapter-
+ * StartDevice time.  dxgmms2 uses this global table for adapter-
  * independent operations.
  *
  * Layout (all pointers are non-paged / DISPATCH_LEVEL safe):
@@ -1001,7 +992,7 @@ TdrUpdateDbgReport(
 /*
  * DxgkVidMmAllowFailOnOfferReclaimErrors
  *
- * Queried by dxgmms1.sys VidMm to determine whether offer/reclaim
+ * Queried by the Windows 11 dxgmms2 VidMm path to determine whether offer/reclaim
  * allocation failures should be treated as errors or silently ignored.
  * Returns TRUE (allow failures) when no adapter is present or when
  * the adapter policy permits it.
@@ -1011,10 +1002,10 @@ NTAPI
 DxgkVidMmAllowFailOnOfferReclaimErrors(VOID)
 {
     /*
-     * Win8.1 queries the current adapter and calls a VidMm policy callback.
-     * In ReactOS we return TRUE (permissive) because the VidMm scheduler
-     * integration is not yet complete and we want offer/reclaim failures
-     * to be non-fatal.
+     * Windows 11 returns TRUE when no current adapter exists and otherwise
+     * evaluates an adapter policy. ReactOS has no corresponding public policy
+     * input yet, so keep the no-fail permissive result without importing a
+     * private native layout.
      */
     return TRUE;
 }
@@ -1022,7 +1013,7 @@ DxgkVidMmAllowFailOnOfferReclaimErrors(VOID)
 /* ========================================================================
  * Display Port / Scheduler bridge exports
  *
- * Provide the bridge between dxgkrnl and dxgmms1.sys's scheduler.
+ * Provide the private bridge consumed by the Windows 11 dxgmms2 architecture.
  * ====================================================================== */
 
 /*
@@ -1064,10 +1055,12 @@ NTAPI
 DpiGetDriverVersion(
     _In_ PVOID AdapterContext)
 {
-    UNREFERENCED_PARAMETER(AdapterContext);
+    PDXGKRNL_ADAPTER Adapter = (PDXGKRNL_ADAPTER)AdapterContext;
 
-    /* Full WDDM miniports are capped to the Win7/WDDM 1.1 contract. */
-    return DXGKDDI_INTERFACE_VERSION_WIN7;
+    if (Adapter == NULL || Adapter->MiniportContext == NULL || Adapter->MiniportContext->UseDodLayout)
+        return 0;
+
+    return Adapter->MiniportContext->InitData.s.Version;
 }
 
 /*
@@ -1086,29 +1079,28 @@ DpiGetDxgAdapter(
 /*
  * DpiGetSchedulerCallbackState
  *
- * Queries whether scheduler callbacks are enabled.
+ * Returns the current scheduler callback-state bit mask.
  */
-NTSTATUS
+ULONG
 NTAPI
 DpiGetSchedulerCallbackState(
-    _In_  PVOID AdapterContext,
-    _Out_ PBOOLEAN Enabled)
+    _In_ PVOID AdapterContext)
 {
-    return VidSchGetSchedulerCallbackState((PDXGKRNL_ADAPTER)AdapterContext, Enabled);
+    return VidSchGetSchedulerCallbackState((PDXGKRNL_ADAPTER)AdapterContext);
 }
 
 /*
  * DpiSetSchedulerCallbackState
  *
- * Sets the scheduler callback state (enable/disable).
+ * Exchanges the scheduler callback-state bit mask and returns its old value.
  */
-NTSTATUS
+ULONG
 NTAPI
 DpiSetSchedulerCallbackState(
     _In_ PVOID AdapterContext,
-    _In_ BOOLEAN Enable)
+    _In_ ULONG State)
 {
-    return VidSchSetSchedulerCallbackState((PDXGKRNL_ADAPTER)AdapterContext, Enable);
+    return VidSchSetSchedulerCallbackState((PDXGKRNL_ADAPTER)AdapterContext, State);
 }
 
 /* ========================================================================
