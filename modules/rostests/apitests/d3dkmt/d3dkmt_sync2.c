@@ -477,7 +477,6 @@ Test_KmdCpuEvent_FeatureNegotiation(void)
     Query.hAdapter = hAdapter;
     Query.FeatureId = DXGK_FEATURE_KMD_SIGNAL_CPU_EVENT;
     Status = pIsFeatureEnabled(&Query);
-#if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
     ok_succeeded(Status,
                  "KMD CPU-event feature query failed 0x%08lX\n",
                  (long)Status);
@@ -540,9 +539,6 @@ Test_KmdCpuEvent_FeatureNegotiation(void)
         ok_eq_ulong(Query.Result.Version, 0);
         ok_eq_ulong(Query.Result.Value, 0);
     }
-#else
-    ok_eq_hex(Status, STATUS_NOT_SUPPORTED);
-#endif
 
     CloseAdapter(hAdapter);
 }
