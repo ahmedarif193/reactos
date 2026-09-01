@@ -371,9 +371,18 @@ DxgkpLoadTdrConfig(VOID)
 }
 
 /*
+ * Exported build and bugcheck state consumed as data by dxgmms2. The Windows
+ * 11 public symbols and consumer accesses define the widths; retail ReactOS
+ * is neither an internal nor a checked Microsoft build.
+ */
+ULONG g_DxgMmsBugcheckExportIndex = 2;
+UCHAR g_IsInternalRelease = FALSE;
+UCHAR g_IsInternalReleaseOrDbg = FALSE;
+
+/*
  * g_TdrForceTimeout — controls forced timeout for testing/debugging.
  */
-ULONG g_TdrForceTimeout = 0;
+volatile LONG g_TdrForceTimeout = 0;
 
 /*
  * g_TdrForceDodPresentTimeout — forced DOD present timeout override.
