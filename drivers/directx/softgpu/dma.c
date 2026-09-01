@@ -1255,7 +1255,14 @@ APIENTRY
 SoftGpuDdiDpcRoutine(
     _In_ PVOID MiniportDeviceContext)
 {
+#if defined(SOFTGPU_PLATFORM_HARDWARE_3D)
+    PSOFTGPU_DEVICE Device = MiniportDeviceContext;
+
+    if (Device != NULL && Device->Magic == SOFTGPU_DEVICE_MAGIC)
+        SoftGpuPlatformDpcRoutine(Device);
+#else
     UNREFERENCED_PARAMETER(MiniportDeviceContext);
+#endif
 }
 
 
@@ -1279,8 +1286,16 @@ SoftGpuDdiInterruptRoutine(
     _In_ PVOID MiniportDeviceContext,
     _In_ ULONG MessageNumber)
 {
+#if defined(SOFTGPU_PLATFORM_HARDWARE_3D)
+    PSOFTGPU_DEVICE Device = MiniportDeviceContext;
+
+    UNREFERENCED_PARAMETER(MessageNumber);
+    if (Device != NULL && Device->Magic == SOFTGPU_DEVICE_MAGIC)
+        return SoftGpuPlatformInterruptRoutine(Device);
+#else
     UNREFERENCED_PARAMETER(MiniportDeviceContext);
     UNREFERENCED_PARAMETER(MessageNumber);
+#endif
     return FALSE;
 }
 
@@ -1351,6 +1366,18 @@ SoftGpuDdiSubmitCommand(
     {
         KeReleaseSpinLock(&Device->FenceLock, OldIrql);
         return STATUS_INVALID_HANDLE;
+    }
+#endif
+#if defined(SOFTGPU_PLATFORM_HARDWARE_3D)
+    {
+        NTSTATUS PlatformStatus =
+            SoftGpuPlatformSubmitCommand(Device, SubmitCommand);
+
+        if (PlatformStatus != STATUS_NOT_SUPPORTED)
+        {
+            KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+            return PlatformStatus;
+        }
     }
 #endif
     if (!SubmitCommand->Flags.NullRendering &&
@@ -1689,6 +1716,12 @@ SoftGpuDdiRender(
         pRender->pCommand == NULL ||
         pRender->pDmaBuffer == NULL)
         return STATUS_INVALID_PARAMETER;
+
+#if defined(SOFTGPU_PLATFORM_HARDWARE_3D)
+    Status = SoftGpuPlatformRender(Device, KmdDevice, pRender);
+    if (Status != STATUS_NOT_SUPPORTED)
+        return Status;
+#endif
     if (pRender->CommandLength == 0 || pRender->CommandLength > pRender->DmaSize)
         return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
     if (pRender->PatchLocationListInSize > pRender->PatchLocationListOutSize)

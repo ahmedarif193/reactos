@@ -1267,6 +1267,7 @@ SoftGpuScanoutInitializeDevice(
 {
     KeInitializeSpinLock(&Device->ScanoutLock);
     KeInitializeMutex(&Device->ScanoutMutex, 0);
+    KeInitializeMutex(&Device->PointerMutex, 0);
     ExInitializeRundownProtection(&Device->ScanoutRundown);
     ExInitializeWorkItem(&Device->ScanoutWorkItem,
                          SoftGpuScanoutWorker,
