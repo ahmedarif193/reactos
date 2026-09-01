@@ -402,6 +402,18 @@ volatile LONG g_TdrForceDodVSyncTimeout = 0;
 BOOLEAN g_bVSyncEnabledForLogging = FALSE;
 
 /*
+ * The native dxgmms2 consumer treats a false result as a request to skip its
+ * optional telemetry event. ReactOS has no equivalent provider or rate-limit
+ * policy, so keep the ABI available while declining every event.
+ */
+BOOLEAN
+CDECL
+DxgKrnlTelemetryGlobal_LogTelemetryEvent(VOID)
+{
+    return FALSE;
+}
+
+/*
  * Windows 11 build 26100 maps the two FSE-block system services and monitor
  * color-space transform service to one terminal entry point. It neither reads
  * the caller buffer nor changes it before returning STATUS_NOT_SUPPORTED.

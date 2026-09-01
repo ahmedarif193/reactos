@@ -27,6 +27,7 @@ NTSTATUS NTAPI NtGdiDdDDISetMonitorColorSpaceTransform(_In_opt_ PVOID Data);
 BOOLEAN NTAPI TdrIsEnabled(VOID);
 BOOLEAN NTAPI TdrIsTimeoutForcedFlip(VOID);
 DECLSPEC_IMPORT extern volatile LONG g_TdrForceTimeout;
+BOOLEAN CDECL DxgKrnlTelemetryGlobal_LogTelemetryEvent(VOID);
 
 typedef struct _DXGK_TEST_RESOURCE_LIST
 {
@@ -131,6 +132,7 @@ START_TEST(DxgkWddmAbi)
     InterlockedExchange(&g_TdrForceTimeout, 1);
     ok_bool_true(TdrIsTimeoutForcedFlip(), "forced timeout is consumed");
     ok_bool_false(TdrIsTimeoutForcedFlip(), "forced timeout remains cleared");
+    ok_bool_false(DxgKrnlTelemetryGlobal_LogTelemetryEvent(), "telemetry remains disabled");
 
     ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM2_4, 0x9006);
     ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM2_5, 0xA00B);

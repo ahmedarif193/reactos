@@ -5,6 +5,9 @@
 ; Miniport initialization is resolved through the displib control-device
 ; protocol and is intentionally not exported.
 
+; --- Optional telemetry admission ---
+2 cdecl DxgKrnlTelemetryGlobal_LogTelemetryEvent()
+
 ; --- Display Port / Scheduler bridge ---
 38 stdcall DpSynchronizeExecution(ptr ptr ptr long ptr)
 39 stdcall DpiGetDriverVersion(ptr)
