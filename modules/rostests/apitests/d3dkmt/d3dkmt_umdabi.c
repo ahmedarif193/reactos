@@ -11,8 +11,8 @@
  * runtime reaches that entry.
  *
  * So what is pinned here is position and count, not behaviour. The counts *are*
- * the ABI at D3D_UMD_INTERFACE_VERSION_WDDM2_0; anything that shifts a slot
- * changes one of these numbers.
+ * the ABI at the image's selected interface version; anything that shifts a
+ * slot changes one of these numbers.
  */
 
 #include "precomp.h"
@@ -36,11 +36,11 @@ static void Test_TableSlotCounts(void)
 {
     /*
      * This ABI-freeze test is compiled at the image's effective UMD version,
-     * exactly like d3dumdrt and the in-tree UMDs.  The WDDM 2.0 table prefix
-     * remains frozen at these counts through the current 0x6003 ceiling.
+     * exactly like d3dumdrt and the in-tree UMDs.  Windows 11 build 26100 and
+     * the 0x6003 SDK layout expose these complete table lengths.
      */
-    ok_eq_ulong((ULONG)UMD_DEVICEFUNC_SLOTS, 140UL);
-    ok_eq_ulong((ULONG)UMD_DEVICECALLBACK_SLOTS, 50UL);
+    ok_eq_ulong((ULONG)UMD_DEVICEFUNC_SLOTS, 142UL);
+    ok_eq_ulong((ULONG)UMD_DEVICECALLBACK_SLOTS, 55UL);
     /* These are the slice the *effective* version selects, traced below. */
     ok_eq_ulong((ULONG)(sizeof(D3DDDI_ADAPTERFUNCS) / sizeof(void *)), 3UL);
     ok_eq_ulong((ULONG)(sizeof(D3DDDI_ADAPTERCALLBACKS) / sizeof(void *)), 2UL);
