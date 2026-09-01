@@ -377,9 +377,20 @@ typedef struct _WGL_PRESENTBUFFERS
     LUID AdapterLuid;
     ULONGLONG PresentToken;
     PVOID PrivateData;
-    UINT Version;
-    HANDLE CompletionEvent;
 } WGL_PRESENTBUFFERS, *PWGL_PRESENTBUFFERS;
+
+#define WGL_PRESENTBUFFERS2_VERSION 1
+
+typedef struct _WGL_PRESENTBUFFERS2
+{
+    UINT Size;
+    UINT Version;
+    HANDLE hSurface;
+    LUID AdapterLuid;
+    ULONGLONG PresentToken;
+    PVOID PrivateData;
+    HANDLE CompletionEvent;
+} WGL_PRESENTBUFFERS2, *PWGL_PRESENTBUFFERS2;
 
 struct ICD_Data
 {
@@ -406,6 +417,7 @@ struct ICD_Data
     BOOL      (WINAPI *DrvSwapBuffers)( HDC );
     BOOL      (WINAPI *DrvSwapLayerBuffers)( HDC, UINT );
     BOOL      (WINAPI *DrvPresentBuffers)( HDC, PWGL_PRESENTBUFFERS );
+    BOOL      (WINAPI *DrvPresentBuffers2)( HDC, PWGL_PRESENTBUFFERS2 );
 
     /* Make this a linked list */
     struct ICD_Data* next;
