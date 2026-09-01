@@ -33,6 +33,43 @@ static void test_DwmIsCompositionEnabled(void)
     ok(enabled == TRUE || enabled == FALSE, "Got unexpected %#x.\n", enabled);
 }
 
+static void test_DwmWindowMetadata(void)
+{
+    MARGINS margins = { 1, 2, 3, 4 };
+    BOOL disabled = TRUE;
+    HWND hwnd;
+    HRESULT hr;
+
+    hwnd = CreateWindowW(L"static", L"dwm metadata test", WS_OVERLAPPEDWINDOW,
+                         0, 0, 100, 100, NULL, NULL, NULL, NULL);
+    ok(hwnd != NULL, "Failed to create the metadata test window, error %lu.\n",
+       GetLastError());
+    if (hwnd == NULL)
+        return;
+
+    hr = DwmExtendFrameIntoClientArea(NULL, &margins);
+    ok(hr == E_HANDLE, "Expected E_HANDLE for a NULL window, got %#lx.\n", hr);
+    hr = DwmExtendFrameIntoClientArea(hwnd, NULL);
+    ok(hr == E_INVALIDARG, "Expected E_INVALIDARG for NULL margins, got %#lx.\n", hr);
+    hr = DwmExtendFrameIntoClientArea(hwnd, &margins);
+    ok(hr == S_OK, "Expected S_OK for valid frame margins, got %#lx.\n", hr);
+
+    hr = DwmSetWindowAttribute(NULL, DWMWA_TRANSITIONS_FORCEDISABLED,
+                               &disabled, sizeof(disabled));
+    ok(hr == E_HANDLE, "Expected E_HANDLE for a NULL window, got %#lx.\n", hr);
+    hr = DwmSetWindowAttribute(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED,
+                               NULL, sizeof(disabled));
+    ok(hr == E_INVALIDARG, "Expected E_INVALIDARG for a NULL value, got %#lx.\n", hr);
+    hr = DwmSetWindowAttribute(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED,
+                               &disabled, sizeof(disabled) - 1);
+    ok(hr == E_INVALIDARG, "Expected E_INVALIDARG for a short value, got %#lx.\n", hr);
+    hr = DwmSetWindowAttribute(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED,
+                               &disabled, sizeof(disabled));
+    ok(hr == S_OK, "Expected S_OK for valid metadata, got %#lx.\n", hr);
+
+    DestroyWindow(hwnd);
+}
+
 static void test_DwmGetCompositionTimingInfo(void)
 {
     LARGE_INTEGER performance_frequency;
@@ -173,6 +210,7 @@ static void test_DwmFlush(void)
 START_TEST(dwmapi)
 {
     test_DwmIsCompositionEnabled();
+    test_DwmWindowMetadata();
     test_DwmGetCompositionTimingInfo();
     test_DWMWA_EXTENDED_FRAME_BOUNDS();
     test_DwmFlush();
