@@ -18,6 +18,36 @@
 
 #include <d3dkmdt.h>
 
+#ifndef DXGK_ALLOCATIONINFOFLAGS_EXT
+#define DXGK_ALLOCATIONINFOFLAGS_EXT
+#define DXGK_ALLOC_RESERVED0 Reserved0
+#define DXGK_ALLOC_RESERVED1 Reserved1
+#define DXGK_ALLOC_RESERVED2 Reserved2
+#define DXGK_ALLOC_RESERVED3 Reserved3
+#define DXGK_ALLOC_RESERVED4 Reserved4
+#define DXGK_ALLOC_RESERVED5 Reserved5
+#define DXGK_ALLOC_RESERVED6 Reserved6
+#define DXGK_ALLOC_RESERVED7 Reserved7
+#define DXGK_ALLOC_RESERVED8 Reserved8
+#define DXGK_ALLOC_RESERVED9 Reserved9
+#define DXGK_ALLOC_RESERVED10 Reserved10
+#define DXGK_ALLOC_RESERVED11 Reserved11
+#define DXGK_ALLOC_RESERVED12 Reserved12
+#define DXGK_ALLOC_RESERVED13 Reserved13
+#define DXGK_ALLOC_RESERVED14 Reserved14
+#define DXGK_ALLOC_RESERVED15 Reserved15
+#endif
+
+#ifndef DXGK_DEVICEFLAGS_EXT
+#define DXGK_DEVICEFLAGS_EXT
+#define DXGK_DEVICE_RESERVED0 Reserved0
+#endif
+
+#define DXGK_KEYWORD_LOG_FLAGS_STABLE_POWER 0x1000
+#define DXGK_KEYWORD_LOG_FLAGS_STABLE_POWER2 0x2000
+#define DXGK_TEXTURE_SIZE_SHIFT 11
+#define DXGK_SECONDARY_BUCKETING_TAG ((DWORD)'bSsM')
+
 #ifndef _Function_class_DXGK_
 #ifdef ENABLE_DXGK_SAL
 #define _Function_class_DXGK_(param) _Function_class_(param)
@@ -281,6 +311,24 @@ typedef struct _DXGK_ALLOCATIONINFO
 #endif
 #endif
 } DXGK_ALLOCATIONINFO;
+
+typedef struct _DXGK_ALLOCATIONINFO_TEST
+{
+    UINT Alignment;
+    UINT64 Size;
+    UINT64 PitchAlignedSize;
+    DXGK_SEGMENTBANKPREFERENCE HintedBank;
+    DXGK_SEGMENTPREFERENCE PreferredSegment;
+    UINT SupportedReadSegmentSet;
+    UINT SupportedWriteSegmentSet;
+    UINT EvictionSegmentSet;
+    UINT PhysicalAdapterIndex;
+    DXGK_ALLOCATIONINFOFLAGS_WDDM2_0 FlagsWddm2;
+    UINT AllocationPriority;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
+    DXGK_ALLOCATIONINFOFLAGS2 Flags2;
+#endif
+} DXGK_ALLOCATIONINFO_TEST;
 
 #ifdef _WIN64
 /* Flags2 occupies the 64-bit tail hole after AllocationPriority, so the
