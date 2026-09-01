@@ -722,14 +722,18 @@ CsrApiRequestThread(IN PVOID Parameter)
             /* Check if this was an exception */
             if (MessageType == LPC_EXCEPTION)
             {
+                NTSTATUS ExceptionStatus;
+
+                DebugMessage = (PDBGKM_MSG)&ReceiveMsg;
+                ExceptionStatus = DebugMessage->Exception.ExceptionRecord.ExceptionCode;
+
                 /* Kill the process */
-                NtTerminateProcess(CsrProcess->ProcessHandle, STATUS_ABANDONED);
+                NtTerminateProcess(CsrProcess->ProcessHandle, ExceptionStatus);
 
                 /* Destroy it from CSR */
-                CsrDestroyProcess(&ReceiveMsg.Header.ClientId, STATUS_ABANDONED);
+                CsrDestroyProcess(&ReceiveMsg.Header.ClientId, ExceptionStatus);
 
                 /* Return a Debug Message */
-                DebugMessage = (PDBGKM_MSG)&ReceiveMsg;
                 DebugMessage->ReturnedStatus = DBG_CONTINUE;
                 ReplyMsg = &ReceiveMsg;
                 ReplyPort = CsrApiPort;
