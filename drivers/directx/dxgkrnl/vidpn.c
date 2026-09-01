@@ -4198,6 +4198,14 @@ DxgkpEnsureSharedPrimaryLocked(
     if (Adapter == NULL)
         return STATUS_INVALID_PARAMETER;
 
+    /*
+     * An invalid source is a pure query failure.  Reject it before touching
+     * the adapter-owned primary/shadow pair: CDD may still have the current
+     * source mapped as its GDI surface.
+     */
+    if (VidPnSourceId >= Adapter->NumberOfVideoPresentSources)
+        return STATUS_INVALID_PARAMETER;
+
     DXGKRNL_TRACE("DxgkpEnsureSharedPrimary: Adapter=%p Committed=%ux%u "
                   "ExistingAlloc=%p VidPnSourceId=%u\n",
                   Adapter,
