@@ -2509,6 +2509,13 @@ SoftGpuDdiOpenAllocation(
 
             Open->Size = LinearSize;
         }
+        else if (pInfo->PrivateDriverDataSize == 0)
+        {
+            /* CreateAllocation gives opaque allocations this same default.
+             * They are valid for generic DMA patching, but remain ineligible
+             * for BLT/FILL until a surface geometry record is supplied. */
+            Open->Size = PAGE_SIZE;
+        }
         pInfo->hDeviceSpecificAllocation = (HANDLE)Open;
         Open = NULL;
     }

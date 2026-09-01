@@ -1546,21 +1546,37 @@ SoftGpuResolveDmaOwner(
 }
 
 static NTSTATUS
-SoftGpuValidateSurfaceOpen(
+SoftGpuValidateAllocationOpen(
     _In_ PSOFTGPU_KMD_DEVICE KmdDevice,
     _In_ PSOFTGPU_OPENALLOC Open)
 {
-    ULONGLONG RequiredSize;
-
     if (KmdDevice == NULL ||
+        KmdDevice->Magic != SOFTGPU_KMD_DEVICE_MAGIC ||
+        KmdDevice->Adapter == NULL ||
+        KmdDevice->Adapter->Magic != SOFTGPU_DEVICE_MAGIC ||
         Open == NULL ||
         Open->Magic != SOFTGPU_OPENALLOC_MAGIC ||
         Open->Device != KmdDevice)
     {
         return STATUS_INVALID_HANDLE;
     }
-    if (Open->Size == 0 ||
-        Open->Width == 0 ||
+    if (Open->Size == 0 || Open->Size > KmdDevice->Adapter->FrameBufferSize)
+        return STATUS_INVALID_BUFFER_SIZE;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+SoftGpuValidateSurfaceOpen(
+    _In_ PSOFTGPU_KMD_DEVICE KmdDevice,
+    _In_ PSOFTGPU_OPENALLOC Open)
+{
+    ULONGLONG RequiredSize;
+    NTSTATUS Status;
+
+    Status = SoftGpuValidateAllocationOpen(KmdDevice, Open);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Open->Width == 0 ||
         Open->Height == 0 ||
         Open->Width > SOFTGPU_MAX_DISPLAY_WIDTH ||
         Open->Height > SOFTGPU_MAX_DISPLAY_HEIGHT ||
@@ -1767,7 +1783,7 @@ SoftGpuDdiRender(
             &pRender->pAllocationList[Patch->AllocationIndex];
         Open = (PSOFTGPU_OPENALLOC)
             Allocation->hDeviceSpecificAllocation;
-        Status = SoftGpuValidateSurfaceOpen(KmdDevice, Open);
+        Status = SoftGpuValidateAllocationOpen(KmdDevice, Open);
         if (!NT_SUCCESS(Status))
             return Status;
         Status = SoftGpuResolveRenderPlacement(Device,
@@ -1799,7 +1815,31 @@ SoftGpuDdiRender(
         switch (Cmd->Op)
         {
             case SOFTGPU_CMD_OP_NOP:
+            {
+                ULONG NopPatchMask = 0;
+                UINT PatchIndex;
+
+                /* A NOP may still carry allocation references for residency
+                 * and generic address patching.  Accept each address slot at
+                 * most once without imposing the 2D surface contract. */
+                for (PatchIndex = 0; PatchIndex < pRender->PatchLocationListInSize; ++PatchIndex)
+                {
+                    CONST D3DDDI_PATCHLOCATIONLIST *Patch = &pRender->pPatchLocationListIn[PatchIndex];
+                    ULONG PatchMask;
+
+                    if (Patch->PatchOffset < Offset ||
+                        Patch->PatchOffset >= Offset + sizeof(SOFTGPU_CMD))
+                    {
+                        continue;
+                    }
+                    PatchMask = Patch->PatchOffset - Offset == FIELD_OFFSET(SOFTGPU_CMD, SrcAddress) ? 1 : 2;
+                    if ((NopPatchMask & PatchMask) != 0 || ExpectedPatches == MAXULONG)
+                        return STATUS_INVALID_PARAMETER;
+                    NopPatchMask |= PatchMask;
+                    ExpectedPatches++;
+                }
                 break;
+            }
 
             case SOFTGPU_CMD_OP_BLT:
                 if (ExpectedPatches > MAXULONG - 2)
@@ -2255,7 +2295,7 @@ SoftGpuDdiPatch(
         Allocation = &Patch->pAllocationList[Entry->AllocationIndex];
         Open = (PSOFTGPU_OPENALLOC)
             Allocation->hDeviceSpecificAllocation;
-        Status = SoftGpuValidateSurfaceOpen(KmdDevice, Open);
+        Status = SoftGpuValidateAllocationOpen(KmdDevice, Open);
         if (!NT_SUCCESS(Status))
             return Status;
         if (Allocation->SegmentId == 0)
