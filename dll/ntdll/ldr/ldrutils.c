@@ -1264,13 +1264,6 @@ SkipCheck:
     /* Insert this entry */
     LdrpInsertMemoryTableEntry(LdrEntry);
 
-#if (_WIN32_WINNT >= _WIN32_WINNT_VISTA) || (DLL_EXPORT_VERSION >= _WIN32_WINNT_VISTA)
-    LdrpSendDllNotifications(LdrEntry, LDR_DLL_NOTIFICATION_REASON_LOADED);
-#if (_WIN32_WINNT >= _WIN32_WINNT_WIN8)
-    LdrEntry->Flags |= LDRP_LOAD_NOTIFICATIONS_SENT; /* LdrEntry->LoadNotificationsSent = TRUE; */
-#endif
-#endif
-
     /* Check for invalid CPU Image */
     if (Status == STATUS_IMAGE_MACHINE_TYPE_MISMATCH)
     {
@@ -1545,6 +1538,23 @@ RelocDone:;
 
     // FIXME: LdrpCheckCorImage() is missing
 
+    if (NT_SUCCESS(Status) && LdrEntry)
+    {
+        Status = LdrpInitializeGuard(LdrEntry);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("LDR: CFG initialization failed for %wZ, Status = 0x%08lx\n", &LdrEntry->BaseDllName, Status);
+
+            RemoveEntryList(&LdrEntry->InLoadOrderLinks);
+            RemoveEntryList(&LdrEntry->InMemoryOrderLinks);
+            RemoveEntryList(&LdrEntry->HashLinks);
+
+            NtUnmapViewOfSection(NtCurrentProcess(), LdrEntry->DllBase);
+            LdrEntry = NULL;
+            *DataTableEntry = NULL;
+        }
+    }
+
 #if defined(_M_ARM64)
     if (NT_SUCCESS(Status) && LdrEntry && ChpeIsChpeProcess() && !ChpeRegisterImageCodeRanges(LdrEntry->DllBase))
     {
@@ -1558,6 +1568,16 @@ RelocDone:;
         LdrEntry = NULL;
         *DataTableEntry = NULL;
         Status = STATUS_INVALID_IMAGE_FORMAT;
+    }
+#endif
+
+#if (_WIN32_WINNT >= _WIN32_WINNT_VISTA) || (DLL_EXPORT_VERSION >= _WIN32_WINNT_VISTA)
+    if (NT_SUCCESS(Status) && LdrEntry)
+    {
+        LdrpSendDllNotifications(LdrEntry, LDR_DLL_NOTIFICATION_REASON_LOADED);
+#if (_WIN32_WINNT >= _WIN32_WINNT_WIN8)
+        LdrEntry->Flags |= LDRP_LOAD_NOTIFICATIONS_SENT; /* LdrEntry->LoadNotificationsSent = TRUE; */
+#endif
     }
 #endif
 

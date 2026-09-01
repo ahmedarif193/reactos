@@ -56,6 +56,7 @@ elseif(${ARCH} STREQUAL "arm64")
     )
     list(APPEND VCRT_SETJMP_ASM_SOURCES
         arm64/__longjmp_noframe.s
+        arm64/guardcf.S
         arm64/_setjmp.s
     )
 endif()

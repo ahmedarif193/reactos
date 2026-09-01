@@ -39,6 +39,7 @@ list(APPEND SOURCE
     rtl/capability.c
     dbg/dbgui.c
     ldr/ldrapi.c
+    ldr/ldrguard.c
     ldr/ldrinit.c
     ldr/ldrpe.c
     ldr/ldrutils.c
@@ -70,7 +71,9 @@ elseif(ARCH STREQUAL "amd64")
 elseif(ARCH STREQUAL "arm")
     list(APPEND ASM_SOURCE dispatch/arm/stubs_asm.s)
 elseif(ARCH STREQUAL "arm64")
-    list(APPEND ASM_SOURCE dispatch/arm64/dispatch.S)
+    list(APPEND ASM_SOURCE
+        dispatch/arm64/dispatch.S
+        ldr/arm64/guardcheck.S)
     list(APPEND SOURCE dispatch/dispatch.c)
 else()
     list(APPEND SOURCE dispatch/dispatch.c)

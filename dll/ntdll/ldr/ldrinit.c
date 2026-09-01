@@ -2855,6 +2855,20 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     LdrpNtDllDataTableEntry = NtLdrEntry;
     LdrpInsertMemoryTableEntry(NtLdrEntry);
 
+    Status = LdrpInitializeGuard(LdrpImageEntry);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("LDR: CFG initialization failed for process image, Status = 0x%08lx\n", Status);
+        return Status;
+    }
+
+    Status = LdrpInitializeGuard(NtLdrEntry);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("LDR: CFG initialization failed for ntdll, Status = 0x%08lx\n", Status);
+        return Status;
+    }
+
 #if defined(_M_ARM64)
     if (IsChpe)
     {

@@ -93,6 +93,7 @@ NTSTATUS IntCompositionDwmOpenSurface(_In_ PVOID pUser);
 
 /* Register, publish and retire a D3DKMT window redirection surface. */
 NTSTATUS IntCompositionDwmDxSurface(_In_ PVOID pUser);
+NTSTATUS IntCompositionDwmSetBlur(_In_ PVOID pUser);
 
 /* Layered-window alpha/colorkey for the dwm frame descriptor (layered.c). */
 BOOL FASTCALL IntCompositionGetLayered(PWND pWnd, BYTE *pAlpha, COLORREF *pKey, DWORD *pFlags);
