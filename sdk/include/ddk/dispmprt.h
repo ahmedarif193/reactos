@@ -1612,39 +1612,6 @@ NTSTATUS
     IN_CONST_DXGK_MONITOR_INTERFACE_VERSION MonitorInterfaceVersion,
     DEREF_OUT_CONST_PPDXGK_MONITOR_INTERFACE ppMonitorInterface);
 
-/* =========================================================================
- * DOD-specific types (DXGKARG_PRESENT_DISPLAYONLY, etc.)
- * =========================================================================
- */
-typedef union _D3DKMT_PRESENT_DISPLAY_ONLY_FLAGS
-{
-    struct
-    {
-        UINT Rotate : 1;
-        UINT Reserved : 31;
-    };
-    UINT Value;
-} D3DKMT_PRESENT_DISPLAY_ONLY_FLAGS, *PD3DKMT_PRESENT_DISPLAY_ONLY_FLAGS;
-
-typedef VOID
-(APIENTRY *DXGKCB_PRESENT_DISPLAYONLY_PROGRESS)(
-    _In_ HANDLE hAdapter,
-    _In_ CONST DXGKARGCB_PRESENT_DISPLAYONLY_PROGRESS *Progress);
-
-typedef struct _DXGKARG_PRESENT_DISPLAYONLY
-{
-    D3DDDI_VIDEO_PRESENT_SOURCE_ID               VidPnSourceId;
-    VOID*                                        pSource;
-    ULONG                                        BytesPerPixel;
-    LONG                                         Pitch;
-    D3DKMT_PRESENT_DISPLAY_ONLY_FLAGS            Flags;
-    ULONG                                        NumMoves;
-    D3DKMT_MOVE_RECT*                            pMoves;
-    ULONG                                        NumDirtyRects;
-    RECT*                                        pDirtyRect;
-    DXGKCB_PRESENT_DISPLAYONLY_PROGRESS          pfnPresentDisplayOnlyProgress;
-} DXGKARG_PRESENT_DISPLAYONLY;
-
 typedef union _DXGKARG_SYSTEM_DISPLAY_ENABLE_FLAGS
 {
     struct
