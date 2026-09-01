@@ -4566,6 +4566,143 @@ typedef struct _DXGK_DISPLAY_DIAGNOSTICS_INTERFACE
     DXGKDDI_GETDISPLAYSTATEINTRUSIVE DxgkDdiGetDisplayStateIntrusive;
 } DXGK_DISPLAY_DIAGNOSTICS_INTERFACE, *PDXGK_DISPLAY_DIAGNOSTICS_INTERFACE;
 
+DEFINE_GUID(GUID_DXGK_DP_INTERFACE,
+            0x2d09818e, 0xdfeb, 0x4173, 0xb5, 0xe9, 0xae, 0xfd, 0x66, 0xb2, 0x02, 0xf3);
+
+#define DXGK_DP_INTERFACE_VERSION_1 0x1
+
+typedef struct _DXGKARG_QUERYDPCAPS
+{
+    UINT NumRootPorts;
+    BYTE DPVersionMajor;
+    BYTE DPVersionMinor;
+} DXGKARG_QUERYDPCAPS, *PDXGKARG_QUERYDPCAPS;
+
+typedef NTSTATUS DXGKDDI_QUERYDPCAPS(
+    HANDLE Context,
+    PDXGKARG_QUERYDPCAPS pArgs);
+typedef DXGKDDI_QUERYDPCAPS *PDXGKDDI_QUERYDPCAPS;
+
+#define MAX_DP_ADDRESS_SIZE 15
+
+typedef struct _DXGKARG_GETDPADDRESS
+{
+    D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId;
+    UINT DPNativeError;
+    UINT RootPortIndex;
+    BYTE NumLinks;
+    BYTE RelAddress[MAX_DP_ADDRESS_SIZE];
+} DXGKARG_GETDPADDRESS, *PDXGKARG_GETDPADDRESS;
+
+typedef NTSTATUS DXGKDDI_GETDPADDRESS(
+    HANDLE Context,
+    PDXGKARG_GETDPADDRESS pArgs);
+typedef DXGKDDI_GETDPADDRESS *PDXGKDDI_GETDPADDRESS;
+
+#define MAX_DP_NATIVE_AUX_IO_SIZE 16
+
+typedef struct _DXGKARG_DPAUXIOTRANSMISSION
+{
+    struct
+    {
+        UINT Write : 1;
+        UINT CanUseCachedData : 1;
+        UINT Reserved : 30;
+    };
+    UINT RootPortIndex;
+    UINT DPCDAddress;
+    BYTE NumBytesRequested;
+    UINT DPNativeError;
+    BYTE NumBytesDone;
+    BYTE Data[MAX_DP_NATIVE_AUX_IO_SIZE];
+} DXGKARG_DPAUXIOTRANSMISSION, *PDXGKARG_DPAUXIOTRANSMISSION;
+
+typedef NTSTATUS DXGKDDI_DPAUXIOTRANSMISSION(
+    HANDLE Context,
+    PDXGKARG_DPAUXIOTRANSMISSION pArgs);
+typedef DXGKDDI_DPAUXIOTRANSMISSION *PDXGKDDI_DPAUXIOTRANSMISSION;
+
+typedef enum _DXGK_I2C_ADDRESS_TYPE
+{
+    DXGK_I2C_ADDRESS_EDDC_SEGMENT_POINT = 0x60,
+    DXGK_I2C_ADDRESS_MCCS = 0x6E,
+    DXGK_I2C_ADDRESS_DDC = 0xA0,
+    DXGK_I2C_ADDRESS_MAX = 0x7F,
+} DXGK_I2C_ADDRESS_TYPE;
+
+typedef struct _DXGKARG_DPI2CIOTRANSMISSION
+{
+    struct
+    {
+        UINT Read : 1;
+        UINT Write : 1;
+        UINT EDDCMode : 1;
+        UINT OffsetSizeInBytes : 3;
+        UINT CanUseCachedData : 1;
+        UINT Reserved : 25;
+    };
+    UINT RootPortIndex;
+    UINT I2CAddress;
+    union
+    {
+        struct
+        {
+            UINT WordOffset : 8;
+            UINT SegmentPointer : 7;
+            UINT Reserved1 : 17;
+        };
+        UINT Offset;
+    };
+    UINT BufferSizeSupplied;
+    UINT BytesToWrite;
+    UINT BytesToRead;
+    UINT DPNativeError;
+    UINT BytesWritten;
+    UINT BytesRead;
+    BYTE Data[1];
+} DXGKARG_DPI2CIOTRANSMISSION, *PDXGKARG_DPI2CIOTRANSMISSION;
+
+typedef NTSTATUS DXGKDDI_DPI2CIOTRANSMISSION(
+    HANDLE Context,
+    PDXGKARG_DPI2CIOTRANSMISSION pArgs);
+typedef DXGKDDI_DPI2CIOTRANSMISSION *PDXGKDDI_DPI2CIOTRANSMISSION;
+
+typedef struct _DXGKARG_DPSBMTRANSMISSION
+{
+    struct
+    {
+        UINT CanUseCachedData : 1;
+        UINT Reserved : 31;
+    };
+    UINT RootPortIndex;
+    UINT BufferSizeSupplied;
+    UINT RequestLength;
+    UINT MaxReplyLength;
+    UINT DPNativeError;
+    UINT ActualReplyLength;
+    BYTE Data[1];
+} DXGKARG_DPSBMTRANSMISSION, *PDXGKARG_DPSBMTRANSMISSION;
+
+typedef NTSTATUS DXGKDDI_DPSBMTRANSMISSION(
+    HANDLE Context,
+    PDXGKARG_DPSBMTRANSMISSION pArgs);
+typedef DXGKDDI_DPSBMTRANSMISSION *PDXGKDDI_DPSBMTRANSMISSION;
+
+typedef struct _DXGK_DP_INTERFACE
+{
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    PDXGKDDI_QUERYDPCAPS DxgkDdiQueryDPCaps;
+    PDXGKDDI_GETDPADDRESS DxgkDdiGetDPAddress;
+    PDXGKDDI_DPAUXIOTRANSMISSION DxgkDdiDPAuxIoTransmission;
+    PDXGKDDI_DPI2CIOTRANSMISSION DxgkDdiDPI2CIoTransmission;
+    PDXGKDDI_DPSBMTRANSMISSION DxgkDdiDPSBMTransmission;
+} DXGK_DP_INTERFACE, *PDXGK_DP_INTERFACE;
+
+
 /* =========================================================================
  * DxgkInitialize / DxgkInitializeEx
  *
