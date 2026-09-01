@@ -8,6 +8,78 @@
 #include "rpi3vc4.h"
 
 NTSTATUS
+SoftGpuPlatformEscape(
+    _Inout_ PSOFTGPU_DEVICE Device,
+    _In_ CONST DXGKARG_ESCAPE *Escape)
+{
+    PSOFTGPU_KMD_DEVICE KmdDevice;
+    PRPI3VC4_CONTEXT Context;
+    PRPI3VC4_ESCAPE_INFO Info;
+    NTSTATUS Status;
+    ULONG Caps;
+
+    if (Device == NULL || Escape == NULL ||
+        Escape->hDevice == NULL || Escape->hContext != NULL ||
+        Escape->pPrivateDriverData == NULL ||
+        Escape->PrivateDriverDataSize < sizeof(RPI3VC4_ESCAPE_INFO) ||
+        Escape->Flags.DriverKnownEscape)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    Info = (PRPI3VC4_ESCAPE_INFO)Escape->pPrivateDriverData;
+    if (Info->Magic != RPI3VC4_ESCAPE_MAGIC ||
+        Info->Op != RPI3VC4_ESCAPE_OP_QUERY_INFO)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    KmdDevice = (PSOFTGPU_KMD_DEVICE)Escape->hDevice;
+    if (KmdDevice->Magic != SOFTGPU_KMD_DEVICE_MAGIC ||
+        KmdDevice->Adapter != Device)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Context = (PRPI3VC4_CONTEXT)Device->PlatformContext;
+    if (Context == NULL)
+        return STATUS_DEVICE_NOT_READY;
+
+    Status = Rpi3Vc4EnsureV3dReady(Context);
+    Caps = RPI3VC4_CAP_POWER_CONTROL;
+    if (Context->V3dReady)
+        Caps |= RPI3VC4_CAP_IDENT_VALID;
+    if (Context->DirectScanoutReady)
+        Caps |= RPI3VC4_CAP_LINEAR_SCANOUT;
+    if (NT_SUCCESS(Context->V3dRenderTestStatus))
+    {
+        Caps |= RPI3VC4_CAP_RENDER_THREAD |
+                RPI3VC4_CAP_VALIDATED_CL_SUBMIT |
+                RPI3VC4_CAP_MONITORED_FENCE |
+                RPI3VC4_CAP_OPENGL_20;
+    }
+
+    RtlZeroMemory(Info, sizeof(*Info));
+    Info->Magic = RPI3VC4_ESCAPE_MAGIC;
+    Info->Op = RPI3VC4_ESCAPE_OP_QUERY_INFO;
+    Info->Size = sizeof(*Info);
+    Info->AbiVersion = RPI3VC4_ESCAPE_INFO_ABI_VERSION;
+    Info->InitializationStatus = Status;
+    Info->Caps = Caps;
+    Info->V3dReady = Context->V3dReady ? 1 : 0;
+    Info->V3dIdent0 = Context->V3dIdent0;
+    Info->V3dIdent1 = Context->V3dIdent1;
+    Info->V3dIdent2 = Context->V3dIdent2;
+    Info->V3dPhysical = Context->V3dPhysical.QuadPart;
+    Info->ScreenWidth = Device->Width;
+    Info->ScreenHeight = Device->Height;
+    Info->ScreenPitch = Context->PrimaryPitch;
+    Info->RenderTestStatus = Context->V3dRenderTestStatus;
+    Info->RenderTestPixel = Context->V3dRenderTestPixel;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
 SoftGpuPlatformValidatePdo(
     _In_ PDEVICE_OBJECT PhysicalDeviceObject)
 {
@@ -23,6 +95,37 @@ SoftGpuPlatformQueryStart(
     _Out_ PSOFTGPU_PLATFORM_CONFIG Config)
 {
     return Rpi3Vc4QueryPlatform(Device, DxgkInterface, Config);
+}
+
+NTSTATUS
+SoftGpuPlatformRender(
+    _Inout_ PSOFTGPU_DEVICE Device,
+    _In_ PSOFTGPU_KMD_DEVICE KmdDevice,
+    _Inout_ PDXGKARG_RENDER Render)
+{
+    return Rpi3Vc4ValidateRender(Device, KmdDevice, Render);
+}
+
+NTSTATUS
+SoftGpuPlatformSubmitCommand(
+    _Inout_ PSOFTGPU_DEVICE Device,
+    _In_ const DXGKARG_SUBMITCOMMAND *SubmitCommand)
+{
+    return Rpi3Vc4SubmitCommand(Device, SubmitCommand);
+}
+
+BOOLEAN
+SoftGpuPlatformInterruptRoutine(
+    _Inout_ PSOFTGPU_DEVICE Device)
+{
+    return Rpi3Vc4Interrupt(Device);
+}
+
+VOID
+SoftGpuPlatformDpcRoutine(
+    _Inout_ PSOFTGPU_DEVICE Device)
+{
+    Rpi3Vc4Dpc(Device);
 }
 
 NTSTATUS

@@ -10,6 +10,9 @@ HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4","Start",0x00010001,0x00000003
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4","Type",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4","UserModeDriverName",0x00010000,"softgpuum.dll","softgpuum.dll","softgpuum.dll","softgpuum.dll"
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4","UserModeDriverNameWow",0x00010000,"softgpuum.dll","softgpuum.dll","softgpuum.dll","softgpuum.dll"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4","OpenGLDriverName",0x00000000,"rpi3vc4ogl.dll"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4","OpenGLVersion",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4","OpenGLFlags",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4\Video","Service",0x00000000,"rpi3vc4"
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4\Device0","InstalledDisplayDrivers",0x00010000,"framebuf"
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4\Device0","DefaultSettings.VRefresh",0x00010001,0x00000001
