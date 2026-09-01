@@ -301,6 +301,13 @@ NTAPI
 PsGetProcessCreateTimeQuadPart(
   _In_ PEPROCESS Process);
 
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsGetProcessExitStatus(
+  _In_ PEPROCESS Process);
+
 #if (NTDDI_VERSION >= NTDDI_WIN10_RS2)
 _IRQL_requires_max_(DISPATCH_LEVEL)
 NTKERNELAPI

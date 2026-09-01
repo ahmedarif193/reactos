@@ -14,6 +14,18 @@ $if (_WDMDDK_)
 
 #define ExInitializeSListHead InitializeSListHead
 
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+ExGetFirmwareEnvironmentVariable(
+  _In_ PUNICODE_STRING VariableName,
+  _In_ LPGUID VendorGuid,
+  _Out_writes_bytes_opt_(*ValueLength) PVOID Value,
+  _Inout_ PULONG ValueLength,
+  _Out_opt_ PULONG Attributes);
+#endif
+
 NTKERNELAPI
 PSLIST_ENTRY
 FirstEntrySList(

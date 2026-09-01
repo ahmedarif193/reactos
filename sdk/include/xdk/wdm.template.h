@@ -199,7 +199,7 @@ typedef struct _ETHREAD *PETHREAD;
 typedef struct _EJOB *PESILO;
 typedef struct _IO_TIMER *PIO_TIMER;
 typedef struct _KINTERRUPT *PKINTERRUPT;
-typedef struct _KPROCESS *PKPROCESS;
+typedef struct _KPROCESS *PKPROCESS, *PRKPROCESS;
 typedef struct _KTHREAD *PKTHREAD, *PRKTHREAD;
 typedef struct _CONTEXT *PCONTEXT;
 
