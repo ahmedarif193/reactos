@@ -9160,6 +9160,28 @@ static void shader_glsl_ffp_vertex_lighting(struct wined3d_string_buffer *buffer
         shader_addline(buffer, "ffp_varying_specular = ffp_attrib_specular;\n");
 }
 
+#ifdef __REACTOS__
+static uint32_t shader_glsl_ffp_vertex_input_mask(const struct wined3d_ffp_vs_settings *settings)
+{
+    uint32_t mask = (1u << (WINED3D_FFP_SPECULAR + 1)) - 1;
+    unsigned int coord_idx, i;
+
+    mask &= ~(1u << WINED3D_FFP_BLENDINDICES);
+    for (i = 0; i < WINED3D_MAX_FFP_TEXTURES; ++i)
+    {
+        if (!(settings->texcoords & (1u << i))
+                || (settings->texgen[i] & 0xffff0000) != WINED3DTSS_TCI_PASSTHRU)
+            continue;
+
+        coord_idx = settings->texgen[i] & 0x0000ffff;
+        if (coord_idx < WINED3D_MAX_FFP_TEXTURES)
+            mask |= 1u << (WINED3D_FFP_TEXCOORD0 + coord_idx);
+    }
+
+    return mask;
+}
+#endif
+
 /* Context activation is done by the caller. */
 static GLuint shader_glsl_generate_ffp_vertex_shader(struct shader_glsl_priv *priv,
         const struct wined3d_ffp_vs_settings *settings, const struct wined3d_gl_info *gl_info)
@@ -9184,6 +9206,9 @@ static GLuint shader_glsl_generate_ffp_vertex_shader(struct shader_glsl_priv *pr
     struct wined3d_string_buffer *buffer = &priv->shader_buffer;
     BOOL output_legacy_fogcoord = legacy_syntax;
     BOOL legacy_lighting = priv->legacy_lighting;
+#ifdef __REACTOS__
+    uint32_t input_mask = shader_glsl_ffp_vertex_input_mask(settings);
+#endif
     GLuint shader_obj;
     unsigned int i;
 
@@ -9200,6 +9225,10 @@ static GLuint shader_glsl_generate_ffp_vertex_shader(struct shader_glsl_priv *pr
     {
         const char *type = i < ARRAY_SIZE(attrib_info) ? attrib_info[i].type : "vec4";
 
+#ifdef __REACTOS__
+        if (!(input_mask & (1u << i)))
+            continue;
+#endif
         if (shader_glsl_use_explicit_attrib_location(gl_info))
             shader_addline(buffer, "layout(location = %u) ", i);
         shader_addline(buffer, "%s %s vs_in%u;\n", get_attribute_keyword(gl_info), type, i);
@@ -10562,7 +10591,14 @@ static void set_glsl_shader_program(const struct wined3d_context_gl *context_gl,
     }
     else
     {
+#ifdef __REACTOS__
+        struct wined3d_ffp_vs_settings settings;
+
+        wined3d_ffp_get_vs_settings(state, &context_gl->c.stream_info, d3d_info, &settings);
+        attribs_map = shader_glsl_ffp_vertex_input_mask(&settings);
+#else
         attribs_map = (1u << WINED3D_FFP_ATTRIBS_COUNT) - 1;
+#endif
     }
 
     if (!shader_glsl_use_explicit_attrib_location(gl_info))
