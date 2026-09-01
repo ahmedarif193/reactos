@@ -25,6 +25,11 @@ list(APPEND SOURCE
     ${SOFTGPU_SOURCE_DIR}/dma.c
     ${SOFTGPU_SOURCE_DIR}/wddm2.c
     rpi3vc4_hvs.c
+    rpi3vc4_v3d.c
+    rpi3vc4_validate.c
+    vc4_validate.c
+    vc4_validate_shaders.c
+    vc4_render_cl.c
     platform_rpi3.c)
 
 add_library(rpi3vc4 MODULE
@@ -33,6 +38,8 @@ add_library(rpi3vc4 MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/rpi3vc4.def)
 
 target_compile_definitions(rpi3vc4 PRIVATE
+    SOFTGPU_PLATFORM_HARDWARE_3D=1
+    SOFTGPU_PLATFORM_PRIVATE_ESCAPE=1
     REACTOS_WDDM_TARGET_LEVEL=${REACTOS_WDDM_TARGET_LEVEL}
     REACTOS_WDDM_TARGET_INTERFACE_VERSION=${REACTOS_WDDM_TARGET_INTERFACE_VERSION})
 

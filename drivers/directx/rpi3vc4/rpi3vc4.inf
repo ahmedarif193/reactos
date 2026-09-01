@@ -30,6 +30,9 @@ rpi3vc4.sys
 [Rpi3Vc4_SoftwareSettings]
 HKR,,InstalledDisplayDrivers,%REG_MULTI_SZ%,framebuf
 HKR,,VgaCompatible,%REG_DWORD%,0
+HKR,,OpenGLDriverName,%REG_SZ%,rpi3vc4ogl.dll
+HKR,,OpenGLVersion,%REG_DWORD%,1
+HKR,,OpenGLFlags,%REG_DWORD%,0
 HKR,,DefaultSettings.VRefresh,%REG_DWORD%,1
 HKR,,DefaultSettings.BitsPerPel,%REG_DWORD%,32
 HKR,,DefaultSettings.XResolution,%REG_DWORD%,1024

@@ -90,6 +90,16 @@ Rpi3Vc4MapResources(
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
 
+    if (Rpi3Vc4FindMemoryResource(Resources,
+                                  RPI3VC4_V3D_PHYSICAL_BASE,
+                                  RPI3VC4_V3D_LENGTH,
+                                  &Context->V3dPhysical))
+    {
+        Context->V3dBase = MmMapIoSpace(Context->V3dPhysical,
+                                        RPI3VC4_V3D_LENGTH,
+                                        MmNonCached);
+    }
+
     Context->HvsBase = MmMapIoSpace(Context->HvsPhysical,
                                     RPI3VC4_HVS_LENGTH,
                                     MmNonCached);
@@ -168,6 +178,10 @@ Rpi3Vc4QueryPlatform(
         return STATUS_INSUFFICIENT_RESOURCES;
 
     RtlZeroMemory(Context, sizeof(*Context));
+    KeInitializeMutex(&Context->V3dPowerMutex, 0);
+    KeInitializeSpinLock(&Context->V3dQueueLock);
+    Context->Device = Device;
+    Context->V3dStatus = STATUS_DEVICE_NOT_READY;
     Device->PlatformContext = Context;
 
     Status = Rpi3Vc4MapResources(Context, DxgkInterface);
@@ -197,6 +211,7 @@ Rpi3Vc4QueryPlatform(
     Config->ScanoutSize = VisibleLength;
     Config->HighestFrameBufferAddress.QuadPart =
         RPI3VC4_HIGHEST_SCANOUT_ADDRESS;
+    Config->MinimumAllocationSlabSize = SOFTGPU_MAX_ALLOCATION_SLAB_SIZE;
     return STATUS_SUCCESS;
 }
 
@@ -281,11 +296,6 @@ static VOID
 Rpi3Vc4ReleaseScanoutBuffers(
     _Inout_ PRPI3VC4_CONTEXT Context)
 {
-    if (Context->PresentShadow != NULL)
-    {
-        ExFreePoolWithTag(Context->PresentShadow, RPI3VC4_POOL_TAG);
-        Context->PresentShadow = NULL;
-    }
     if (Context->ScanoutBuffers != NULL)
     {
         MmFreeContiguousMemorySpecifyCache(Context->ScanoutBuffers,
@@ -296,7 +306,6 @@ Rpi3Vc4ReleaseScanoutBuffers(
     Context->ScanoutSurfaceSize = 0;
     Context->ScanoutBufferStride = 0;
     Context->ScanoutAllocationSize = 0;
-    Context->PresentShadowSize = 0;
 }
 
 static NTSTATUS
@@ -343,18 +352,8 @@ Rpi3Vc4AllocateScanoutBuffers(
     Context->ScanoutSurfaceSize = SurfaceSize;
     Context->ScanoutBufferStride = BufferStride;
     Context->ScanoutAllocationSize = AllocationSize;
-    Context->PresentShadow = ExAllocatePoolWithTag(NonPagedPool,
-                                                   SurfaceSize,
-                                                   RPI3VC4_POOL_TAG);
-    if (Context->PresentShadow == NULL)
-    {
-        Rpi3Vc4ReleaseScanoutBuffers(Context);
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-    Context->PresentShadowSize = SurfaceSize;
     Context->FrontBufferIndex = 0;
     RtlZeroMemory(Context->ScanoutBuffers, AllocationSize);
-    RtlZeroMemory(Context->PresentShadow, SurfaceSize);
     for (Index = 0; Index < RPI3VC4_SCANOUT_BUFFER_COUNT; ++Index)
     {
         Context->ScanoutPhysical[Index] = MmGetPhysicalAddress(
@@ -1018,6 +1017,9 @@ Rpi3Vc4StopScanout(
                                            MmWriteCombined);
     }
     Rpi3Vc4ReleaseScanoutBuffers(Context);
+    Rpi3Vc4StopV3d(Context);
+    if (Context->V3dBase != NULL)
+        MmUnmapIoSpace(Context->V3dBase, RPI3VC4_V3D_LENGTH);
     if (Context->Pv2Base != NULL)
         MmUnmapIoSpace(Context->Pv2Base, RPI3VC4_PV2_LENGTH);
     if (Context->HvsBase != NULL)
@@ -1046,14 +1048,7 @@ Rpi3Vc4SetPrimary(
     if (Context == NULL || !Context->DirectScanoutReady)
         return STATUS_DEVICE_NOT_READY;
 
-    if (!Visible)
-    {
-        Context->PrimaryConfigured = PrimaryAddress.QuadPart != 0;
-        if (!Context->PrimaryVisible)
-            return STATUS_SUCCESS;
-        Context->PrimaryVisible = FALSE;
-    }
-    else
+    if (Visible)
     {
         if (PrimaryAddress.QuadPart < 0 ||
             (ULONGLONG)PrimaryAddress.QuadPart >
@@ -1075,13 +1070,36 @@ Rpi3Vc4SetPrimary(
             return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
         }
 
+    }
+
+    Status = KeWaitForSingleObject(&Device->PointerMutex,
+                                   Executive,
+                                   KernelMode,
+                                   FALSE,
+                                   NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (!Visible)
+    {
+        Context->PrimaryConfigured = PrimaryAddress.QuadPart != 0;
+        if (!Context->PrimaryVisible)
+        {
+            Status = STATUS_SUCCESS;
+            goto Cleanup;
+        }
+        Context->PrimaryVisible = FALSE;
+    }
+    else
+    {
         if (Context->PrimaryVisible &&
             Context->SourcePrimaryPhysical.QuadPart ==
                 PrimaryAddress.QuadPart &&
             Context->PrimaryWidth == Width &&
             Context->PrimaryHeight == Height)
         {
-            return STATUS_SUCCESS;
+            Status = STATUS_SUCCESS;
+            goto Cleanup;
         }
 
         Context->SourcePrimaryPhysical = PrimaryAddress;
@@ -1095,53 +1113,24 @@ Rpi3Vc4SetPrimary(
     }
 
     Status = Rpi3Vc4CommitDisplayList(Device);
+Cleanup:
+    KeReleaseMutex(&Device->PointerMutex, FALSE);
     return Status;
 }
 
-static NTSTATUS
-Rpi3Vc4ApplyPresentRect(
+static VOID
+Rpi3Vc4AccumulatePresentRect(
     _Inout_ PSOFTGPU_DEVICE Device,
-    _In_ PVOID Source,
-    _In_ SIZE_T SourceSize,
-    _In_ ULONG SourcePitch,
     _In_ const RECT *Input,
-    _Inout_ PRPI3VC4_CONTEXT Context,
-    _In_ ULONG BackBufferIndex,
-    _Inout_ RECT *IncomingDamage,
-    _Inout_ PBOOLEAN IncomingDamageValid)
+    _Inout_ RECT *Damage,
+    _Inout_ PBOOLEAN DamageValid)
 {
     RECT Rect;
-    NTSTATUS Status;
 
     if (!Rpi3Vc4ClipDamageRect(Device, Input, &Rect))
-        return STATUS_SUCCESS;
+        return;
 
-    Status = Rpi3Vc4CopyDamageRect(Source,
-                                   SourceSize,
-                                   SourcePitch,
-                                   &Rect,
-                                   Context->PresentShadow,
-                                   Context->PresentShadowSize,
-                                   Context->PrimaryPitch);
-    if (!NT_SUCCESS(Status))
-        return Status;
-
-    Status = Rpi3Vc4CopyDamageRect(
-                 Source,
-                 SourceSize,
-                 SourcePitch,
-                 &Rect,
-                 (PUCHAR)Context->ScanoutBuffers +
-                     BackBufferIndex * Context->ScanoutBufferStride,
-                 Context->ScanoutSurfaceSize,
-                 Context->PrimaryPitch);
-    if (!NT_SUCCESS(Status))
-        return Status;
-
-    Rpi3Vc4UnionDamageRect(IncomingDamage,
-                           IncomingDamageValid,
-                           &Rect);
-    return STATUS_SUCCESS;
+    Rpi3Vc4UnionDamageRect(Damage, DamageValid, &Rect);
 }
 
 NTSTATUS
@@ -1226,66 +1215,66 @@ Rpi3Vc4PresentDisplayOnly(
         CopyDamage = Context->PendingDamage[Back];
         CopyDamageValid = TRUE;
     }
-    if (CopyDamageValid)
-    {
-        Status = Rpi3Vc4CopyDamageRect(
-                     Context->PresentShadow,
-                     Context->PresentShadowSize,
-                     Context->PrimaryPitch,
-                     &CopyDamage,
-                     (PUCHAR)Context->ScanoutBuffers +
-                         Back * Context->ScanoutBufferStride,
-                     Context->ScanoutSurfaceSize,
-                     Context->PrimaryPitch);
-        if (!NT_SUCCESS(Status))
-            return Status;
-    }
-
     for (Index = 0; Index < PresentDisplayOnly->NumMoves; ++Index)
     {
-        Status = Rpi3Vc4ApplyPresentRect(
-                     Device,
-                     PresentDisplayOnly->pSource,
-                     SourceSize,
-                     (ULONG)PresentDisplayOnly->Pitch,
-                     &PresentDisplayOnly->pMoves[Index].DestRect,
-                     Context,
-                     Back,
-                     &IncomingDamage,
-                     &IncomingDamageValid);
-        if (!NT_SUCCESS(Status))
-            return Status;
+        Rpi3Vc4AccumulatePresentRect(
+            Device,
+            &PresentDisplayOnly->pMoves[Index].DestRect,
+            &IncomingDamage,
+            &IncomingDamageValid);
     }
     for (Index = 0; Index < PresentDisplayOnly->NumDirtyRects; ++Index)
     {
-        Status = Rpi3Vc4ApplyPresentRect(
-                     Device,
-                     PresentDisplayOnly->pSource,
-                     SourceSize,
-                     (ULONG)PresentDisplayOnly->Pitch,
-                     &PresentDisplayOnly->pDirtyRect[Index],
-                     Context,
-                     Back,
-                     &IncomingDamage,
-                     &IncomingDamageValid);
-        if (!NT_SUCCESS(Status))
-            return Status;
+        Rpi3Vc4AccumulatePresentRect(
+            Device,
+            &PresentDisplayOnly->pDirtyRect[Index],
+            &IncomingDamage,
+            &IncomingDamageValid);
     }
     if (!IncomingDamageValid)
         return STATUS_SUCCESS;
+
+    /*
+     * ReactOS gives display-only miniports the complete shared primary in
+     * pSource. Merge this frame's damage with the damage missed by the chosen
+     * scanout buffer and upload the final pixels once. This preserves an
+     * immutable active HVS buffer without maintaining and copying through a
+     * second full-frame shadow inside the miniport.
+     */
+    Rpi3Vc4UnionDamageRect(&CopyDamage,
+                           &CopyDamageValid,
+                           &IncomingDamage);
+    Status = Rpi3Vc4CopyDamageRect(
+                 PresentDisplayOnly->pSource,
+                 SourceSize,
+                 (ULONG)PresentDisplayOnly->Pitch,
+                 &CopyDamage,
+                 (PUCHAR)Context->ScanoutBuffers +
+                     Back * Context->ScanoutBufferStride,
+                 Context->ScanoutSurfaceSize,
+                 Context->PrimaryPitch);
+    if (!NT_SUCCESS(Status))
+        return Status;
 
 #if defined(_M_ARM64)
     __dsb(_ARM64_BARRIER_SY);
 #endif
     KeMemoryBarrier();
+    Status = KeWaitForSingleObject(&Device->PointerMutex,
+                                   Executive,
+                                   KernelMode,
+                                   FALSE,
+                                   NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
     PreviousPrimary = Context->PrimaryPhysical;
     Context->PrimaryPhysical = Context->ScanoutPhysical[Back];
     Status = Rpi3Vc4CommitDisplayList(Device);
     if (!NT_SUCCESS(Status))
-    {
         Context->PrimaryPhysical = PreviousPrimary;
+    KeReleaseMutex(&Device->PointerMutex, FALSE);
+    if (!NT_SUCCESS(Status))
         return Status;
-    }
 
     Context->FrontBufferIndex = Back;
     Context->FullDamage[Back] = FALSE;

@@ -8,6 +8,7 @@
 #pragma once
 
 #include "softgpu.h"
+#include <reactos/rpi3vc4_umd.h>
 
 #define RPI3VC4_POOL_TAG                  '3cVR'
 
@@ -15,6 +16,41 @@
 #define RPI3VC4_HVS_LENGTH                0x00006000UL
 #define RPI3VC4_PV2_PHYSICAL_BASE         0x3f807000ULL
 #define RPI3VC4_PV2_LENGTH                0x00000100UL
+#define RPI3VC4_V3D_PHYSICAL_BASE         0x3fc00000ULL
+#define RPI3VC4_V3D_LENGTH                0x00001000UL
+
+#define RPI3VC4_V3D_IDENT0                0x0000UL
+#define RPI3VC4_V3D_IDENT1                0x0004UL
+#define RPI3VC4_V3D_IDENT2                0x0008UL
+#define RPI3VC4_V3D_EXPECTED_IDENT0       0x02443356UL
+#define RPI3VC4_V3D_INTCTL                0x0030UL
+#define RPI3VC4_V3D_INTENA                0x0034UL
+#define RPI3VC4_V3D_INTDIS                0x0038UL
+#define RPI3VC4_V3D_INTERRUPT_MASK        0x0000000fUL
+#define RPI3VC4_V3D_INT_FRDONE            (1UL << 0)
+#define RPI3VC4_V3D_INT_FLDONE            (1UL << 1)
+#define RPI3VC4_V3D_INT_OUTOMEM           (1UL << 2)
+#define RPI3VC4_V3D_L2CACTL               0x0020UL
+#define RPI3VC4_V3D_SLCACTL               0x0024UL
+#define RPI3VC4_V3D_L2CCLR                (1UL << 2)
+#define RPI3VC4_V3D_SLCACTL_ALL           0x0f0f0f0fUL
+#define RPI3VC4_V3D_SLCACTL_TEXTURE       0x0f0f0000UL
+#define RPI3VC4_V3D_CT0CS                 0x0100UL
+#define RPI3VC4_V3D_CT1CS                 0x0104UL
+#define RPI3VC4_V3D_CT0EA                 0x0108UL
+#define RPI3VC4_V3D_CT1EA                 0x010cUL
+#define RPI3VC4_V3D_CT0CA                 0x0110UL
+#define RPI3VC4_V3D_CT1CA                 0x0114UL
+#define RPI3VC4_V3D_PCS                   0x0130UL
+#define RPI3VC4_V3D_BFC                   0x0134UL
+#define RPI3VC4_V3D_RFC                   0x0138UL
+#define RPI3VC4_V3D_ERRSTAT               0x0f20UL
+#define RPI3VC4_V3D_CTRSTA                (1UL << 15)
+#define RPI3VC4_V3D_CTRUN                 (1UL << 5)
+#define RPI3VC4_V3D_CTERR                 (1UL << 3)
+#define RPI3VC4_V3D_BPOA                  0x0308UL
+#define RPI3VC4_V3D_BPOS                  0x030cUL
+#define RPI3VC4_V3D_VPMBASE               0x0504UL
 
 #define RPI3VC4_GPU_ADDRESS_MASK          0x3fffffffUL
 #define RPI3VC4_GPU_ALIAS_MASK            0xc0000000UL
@@ -75,13 +111,51 @@
 #define RPI3VC4_CURSOR_SIZE               \
     (RPI3VC4_CURSOR_PITCH * SOFTGPU_POINTER_MAX_HEIGHT)
 #define RPI3VC4_SCANOUT_BUFFER_COUNT      3UL
+#define RPI3VC4_V3D_SUBMIT_RING_SIZE      64UL
+#define RPI3VC4_V3D_BIN_OVERFLOW_SLOT_SIZE (512UL * 1024UL)
+#define RPI3VC4_V3D_BIN_OVERFLOW_SIZE      (16UL * 1024UL * 1024UL)
+
+typedef struct _RPI3VC4_V3D_SUBMIT
+{
+    RPI3VC4_DMA_PACKET Packet;
+    ULONG Fence;
+    ULONGLONG StartTime100ns;
+    BOOLEAN RenderStarted;
+    BOOLEAN SnapshotLogged;
+} RPI3VC4_V3D_SUBMIT, *PRPI3VC4_V3D_SUBMIT;
 
 typedef struct _RPI3VC4_CONTEXT
 {
     PVOID HvsBase;
     PVOID Pv2Base;
+    PVOID V3dBase;
     PHYSICAL_ADDRESS HvsPhysical;
     PHYSICAL_ADDRESS Pv2Physical;
+    PHYSICAL_ADDRESS V3dPhysical;
+
+    ULONG V3dIdent0;
+    ULONG V3dIdent1;
+    ULONG V3dIdent2;
+    NTSTATUS V3dStatus;
+    NTSTATUS V3dRenderTestStatus;
+    KMUTEX V3dPowerMutex;
+    BOOLEAN V3dReady;
+    BOOLEAN V3dPowerOwned;
+    BOOLEAN V3dRenderTestRan;
+    ULONG V3dRenderTestPixel;
+    PSOFTGPU_DEVICE Device;
+    KSPIN_LOCK V3dQueueLock;
+    RPI3VC4_V3D_SUBMIT V3dSubmitRing[RPI3VC4_V3D_SUBMIT_RING_SIZE];
+    ULONG V3dSubmitHead;
+    ULONG V3dSubmitTail;
+    ULONG V3dInterruptPending;
+    BOOLEAN V3dEngineActive;
+    PVOID V3dBinOverflow;
+    PHYSICAL_ADDRESS V3dBinOverflowPhysical;
+    ULONG V3dBinOverflowCursor;
+    KTIMER V3dPollTimer;
+    KDPC V3dPollDpc;
+    BOOLEAN V3dPollInitialized;
 
     ULONG OriginalDisplayList;
     ULONG LastSubmittedDisplayList;
@@ -99,8 +173,6 @@ typedef struct _RPI3VC4_CONTEXT
     SIZE_T ScanoutSurfaceSize;
     SIZE_T ScanoutBufferStride;
     SIZE_T ScanoutAllocationSize;
-    PVOID PresentShadow;
-    SIZE_T PresentShadowSize;
     ULONG FrontBufferIndex;
     BOOLEAN FullDamage[RPI3VC4_SCANOUT_BUFFER_COUNT];
     BOOLEAN PendingDamageValid[RPI3VC4_SCANOUT_BUFFER_COUNT];
@@ -120,6 +192,37 @@ Rpi3Vc4QueryPlatform(
     _Inout_ PSOFTGPU_DEVICE Device,
     _In_ PDXGK_INTERFACE DxgkInterface,
     _Out_ PSOFTGPU_PLATFORM_CONFIG Config);
+
+NTSTATUS
+Rpi3Vc4InitializeV3d(
+    _Inout_ PRPI3VC4_CONTEXT Context);
+
+NTSTATUS
+Rpi3Vc4EnsureV3dReady(
+    _Inout_ PRPI3VC4_CONTEXT Context);
+
+NTSTATUS
+Rpi3Vc4ValidateRender(
+    _Inout_ PSOFTGPU_DEVICE Device,
+    _In_ PSOFTGPU_KMD_DEVICE KmdDevice,
+    _Inout_ PDXGKARG_RENDER Render);
+
+NTSTATUS
+Rpi3Vc4SubmitCommand(
+    _Inout_ PSOFTGPU_DEVICE Device,
+    _In_ const DXGKARG_SUBMITCOMMAND *SubmitCommand);
+
+BOOLEAN
+Rpi3Vc4Interrupt(
+    _Inout_ PSOFTGPU_DEVICE Device);
+
+VOID
+Rpi3Vc4Dpc(
+    _Inout_ PSOFTGPU_DEVICE Device);
+
+VOID
+Rpi3Vc4StopV3d(
+    _Inout_ PRPI3VC4_CONTEXT Context);
 
 NTSTATUS
 Rpi3Vc4StartScanout(
