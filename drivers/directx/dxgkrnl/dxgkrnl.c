@@ -388,13 +388,13 @@ volatile LONG g_TdrForceTimeout = 0;
  * g_TdrForceDodPresentTimeout — forced DOD present timeout override.
  * Read atomically via XCHG by the timeout check path.
  */
-LONG g_TdrForceDodPresentTimeout = 0;
+volatile LONG g_TdrForceDodPresentTimeout = 0;
 
 /*
  * g_TdrForceDodVSyncTimeout — forced DOD VSync timeout override.
  * Read atomically via XCHG by the timeout check path.
  */
-LONG g_TdrForceDodVSyncTimeout = 0;
+volatile LONG g_TdrForceDodVSyncTimeout = 0;
 
 /*
  * g_bVSyncEnabledForLogging — VSync logging flag for ETW tracing.
