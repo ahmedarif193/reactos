@@ -402,11 +402,9 @@ GetSystemVersionString(OUT PWSTR pwszzVersion,
         /* String for Safe Mode */
         Status = RtlStringCchPrintfW(pwszzVersion,
                                      cchDest,
-                                     L"ReactOS Version %S %wZ (NT %u.%u Build %u%s)\n",
+                                     L"ReactOS Version %S %wZ (Target: Windows 11 24H2 build %u%s)\n",
                                      KERNEL_VERSION_STR,
                                      &BuildLabString,
-                                     SharedUserData->NtMajorVersion,
-                                     SharedUserData->NtMinorVersion,
                                      (VerInfo.dwBuildNumber & 0xFFFF),
                                      VersionBuffer);
 
@@ -444,11 +442,9 @@ GetSystemVersionString(OUT PWSTR pwszzVersion,
                                      cchDest,
                                      L"ReactOS Version %S\n"
                                      L"Build %wZ\n"
-                                     L"Reporting NT %u.%u (Build %u%s)\n",
+                                     L"Target: Windows 11 24H2 build %u%s\n",
                                      KERNEL_VERSION_STR,
                                      &BuildLabString,
-                                     SharedUserData->NtMajorVersion,
-                                     SharedUserData->NtMinorVersion,
                                      (VerInfo.dwBuildNumber & 0xFFFF),
                                      VersionBuffer);
 
