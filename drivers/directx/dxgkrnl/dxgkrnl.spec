@@ -17,6 +17,7 @@
 
 ; --- Layout-free TDR policy ---
 23 stdcall TdrIsEnabled()
+25 stdcall TdrIsTimeoutForcedFlip()
 
 ; --- dxgmms2 build, bugcheck, and timeout state ---
 30 extern g_DxgMmsBugcheckExportIndex

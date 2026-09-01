@@ -427,6 +427,14 @@ TdrIsEnabled(VOID)
     return g_TdrConfig.TdrLevel != DXGKP_TDR_LEVEL_OFF;
 }
 
+/* Atomically consumes the one-shot forced-flip timeout control. */
+BOOLEAN
+NTAPI
+TdrIsTimeoutForcedFlip(VOID)
+{
+    return InterlockedExchange(&g_TdrForceTimeout, 0) != 0;
+}
+
 /*
  * The private TDR export ABI is intentionally excluded. Its public PDB names
  * do not define recovery-context sizes, field offsets, ownership, or calling
@@ -693,21 +701,6 @@ TdrIsRecoveryRequired(
         return FALSE;  /* concurrent recovery in progress */
 
     return TRUE;
-}
-
-/*
- * TdrIsTimeoutForcedFlip
- *
- * Checks whether the current timeout is a forced-flip scenario.
- * Matches Win8.1 behavior: always returns FALSE.
- */
-BOOLEAN
-NTAPI
-TdrIsTimeoutForcedFlip(
-    _In_ PVOID RecoveryContext)
-{
-    UNREFERENCED_PARAMETER(RecoveryContext);
-    return FALSE;
 }
 
 static DECLSPEC_NORETURN VOID
