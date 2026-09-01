@@ -61,7 +61,7 @@ Dxgmms2SchedCoreInitialize(
         Dxgmms2SchedCoreInitializeEngine(&Core->Engines[Index]);
     InitializeListHead(&Core->RetirementList);
     InitializeListHead(&Core->FreeList);
-    Core->NextFenceId = 0;
+    Core->NextDispatchSequence = 0;
     Core->AdmissionOpen = FALSE;
     Core->Started = FALSE;
 }
@@ -75,7 +75,7 @@ Dxgmms2SchedCoreStart(
         return STATUS_INVALID_PARAMETER;
     if (Core->Started)
         return STATUS_INVALID_DEVICE_STATE;
-    Core->NextFenceId = 0;
+    Core->NextDispatchSequence = 0;
     Core->EngineCount = EngineCount;
     Core->Started = TRUE;
     Core->AdmissionOpen = TRUE;
@@ -143,7 +143,7 @@ Dxgmms2SchedCoreAdmit(
     {
         do
         {
-            FenceId = (ULONG)InterlockedIncrement(&Core->NextFenceId);
+            FenceId = (ULONG)InterlockedIncrement(&Engine->NextFenceId);
         } while (FenceId == 0);
     }
 
@@ -151,12 +151,15 @@ Dxgmms2SchedCoreAdmit(
     if (Engine->PendingPacketCount != 0 && (LONG)(FenceId - Engine->LastSubmittedFenceId) <= 0 &&
         Engine->LastSubmittedFenceId != 0)
         return STATUS_INVALID_PARAMETER;
+    if ((Info->Flags & DXGMMS2_SCHEDULER_ADMIT_PREFENCED) != 0)
+        Engine->NextFenceId = (LONG)FenceId;
 
     Packet->PacketCookie = Info->PacketCookie;
     Packet->OwnerCookie = Info->OwnerCookie;
     Packet->SubmissionFenceId = FenceId;
     Packet->Flags = Info->Flags;
     Packet->Priority = Info->Priority;
+    Packet->DispatchSequence = 0;
     Packet->Dispatched = FALSE;
     Packet->Claimed = FALSE;
     Packet->ClaimToken = 0;
@@ -254,6 +257,9 @@ Dxgmms2SchedCorePublishDispatch(
     if (Packet->Dispatched)
         return STATUS_INVALID_DEVICE_STATE;
     Packet->Dispatched = TRUE;
+    Packet->DispatchSequence = ++Core->NextDispatchSequence;
+    if (Packet->DispatchSequence == 0)
+        Packet->DispatchSequence = ++Core->NextDispatchSequence;
     return STATUS_SUCCESS;
 }
 
@@ -291,6 +297,7 @@ Dxgmms2SchedCoreCompleteDispatch(
         Engine->PendingPacketCount--;
         Core->TotalPackets--;
         Packet->Dispatched = FALSE;
+        Packet->DispatchSequence = 0;
         *OutFailed = Packet;
         /* Only the dispatch's own state may be retired here.  Reset, preempt
          * and suspend take the engine away from the submitter, and committing
@@ -522,6 +529,7 @@ Dxgmms2SchedCoreResetDispatched(
         if (!Packet->Dispatched || Packet->Claimed)
             continue;
         Packet->Dispatched = FALSE;
+        Packet->DispatchSequence = 0;
         Packets[Count++] = Packet;
     }
     return Count;
@@ -555,6 +563,7 @@ Dxgmms2SchedCoreGetOldestDispatched(
     _Out_ PULONG FenceId,
     _Out_ PULONGLONG PacketCookie)
 {
+    ULONGLONG OldestDispatchSequence = 0;
     ULONG Index;
 
     *EngineOrdinal = 0;
@@ -571,8 +580,9 @@ Dxgmms2SchedCoreGetOldestDispatched(
 
             if (!Packet->Dispatched)
                 continue;
-            if (*FenceId == 0 || (LONG)(Packet->SubmissionFenceId - *FenceId) < 0)
+            if (OldestDispatchSequence == 0 || Packet->DispatchSequence < OldestDispatchSequence)
             {
+                OldestDispatchSequence = Packet->DispatchSequence;
                 *EngineOrdinal = Index;
                 *FenceId = Packet->SubmissionFenceId;
                 *PacketCookie = Packet->PacketCookie;
